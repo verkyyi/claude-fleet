@@ -428,7 +428,7 @@ run() { if [ "$DRY" = 1 ]; then say "    would: $*"; return 0; fi; "$@" >/dev/nu
 # cleared its own heartbeat. The install-sync daemon never reaches here under a
 # FRESH mark (it defers before the switch, issue #2062), so a fresh mark — any
 # batch on this login, one mark each — is a hand sync under a batch that is
-# still running: a worker /fleet-claim told not to, or a hub that skipped the
+# still running: a worker told not to, or a hub that skipped the
 # clear. Say so; the operator decides. An older version's lib has no reader → quiet.
 if [ -f "$ROOT/bin/fleet-lib.sh" ] \
    && er=$( . "$ROOT/bin/fleet-lib.sh" >/dev/null 2>&1 && fleet_epic_running 2>/dev/null ); then
@@ -989,9 +989,9 @@ fi   # BUNDLE = 0
 
 # --- plugin -------------------------------------------------------------------
 PLUGIN=0 COPY=1
-if [ "$BUNDLE" = 0 ] && ls -d "$CDIR"/plugins/cache/*/fleet/*/commands/fleet-claim.md >/dev/null 2>&1; then PLUGIN=1; fi
+if [ "$BUNDLE" = 0 ] && ls -d "$CDIR"/plugins/cache/*/fleet/*/commands/fleet-handoff.md >/dev/null 2>&1; then PLUGIN=1; fi
 if [ "$PLUGIN" = 1 ]; then
-  is_command "$CDIR/commands/fleet-claim.md" || COPY=0
+  is_command "$CDIR/commands/fleet-handoff.md" || COPY=0
   if printf '%s\n' "$CHANGED" | grep -qE '^(commands/|skills/|hooks/settings-hooks\.json$|\.claude-plugin/)'; then
     if [ "$DRY" = 1 ]; then say "plugin: would run $CLAUDE plugin update fleet"
     elif "$CLAUDE" plugin update fleet >/dev/null 2>&1; then say 'plugin: updated (takes effect in the next session)'

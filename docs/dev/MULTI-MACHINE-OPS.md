@@ -11,7 +11,7 @@
 | **计划下线** mac-b | 运营者，在 mac-b 的任意一个 fleet 窗格 | ① `fleet-node-maintenance.sh enter --reason '升级'` ② 每个登录 `fleet-evacuate.sh` ③ 看 `/nodes`：mac-b 会话数降到 0 或只剩「工作中」 ④ 关机 |
 | 期间 | 每位同事，在自己电脑 | `fleet` ——入口自动选 mac-a；`fleet mac-a` 指名也行 |
 | **恢复** | 运营者，在 mac-b | 开机 → agent 自己回连，`/nodes` 上 mac-b 从「失联」回到「维护中」→ 确认 `fleet-doctor` 全绿 → `fleet-node-maintenance.sh leave` |
-| **意外下线** mac-b | 每位同事 | 什么都不用做：`fleet` 会落到 mac-a；mac-b 上的会话入口标「失联」，30 分钟后它们的认领释放，**不自动重派**——你在 mac-a 上 `fleet-history`/重新 `/fleet-claim` 把要紧的接着做 |
+| **意外下线** mac-b | 每位同事 | 什么都不用做：`fleet` 会落到 mac-a；mac-b 上的会话入口标「失联」，30 分钟后它们的认领释放，**不自动重派**——你在 mac-a 上 `fleet-history` / 重新派把要紧的接着做 |
 | 意外下线后 mac-b 回来 | 运营者 | 先 `fleet-node-maintenance.sh enter`（别让入口立刻往上派活）→ 检查 → `leave` |
 
 三条命令都在 `~/.claude/fleet/bin/`，都要在 fleet 窗格（或 `CCQUOTA_FLEET=1` 的 shell）里跑；入口模块没开（单机 fleet）时它们什么都不做，退出码 10。

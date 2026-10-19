@@ -113,14 +113,15 @@ session (issue #571) and emits nothing.
 Codex also emits this event through the shared hook table. Its Claude-only
 handoff-latch handler is excluded by `hooks/codex-map.json`.
 
-### `session.bind` — `bin/fleet-bind.sh`
+### `session.bind` — retired (issue #4898)
 
 ```json
 {"event":"session.bind","ts":"…","session":"…","repo":"…","issue":625,
  "branch":"issue-625","from_branch":"scratch-7"}
 ```
 
-A scratch became the worker for issue N. **This transition must be emitted** or
+Nothing emits it since the scratch→worker promotion left with issue #4898; the
+channel still accepts it. It said: a scratch became the worker for issue N. **This transition had to be emitted** or
 every scratch that turned into real work is attributed to nothing: the session
 spent its tokens under `scratch-7` and landed a PR under `issue-625`, and only
 this line joins the two.
@@ -201,6 +202,5 @@ how many events are waiting.
 | `bin/fleet-emit.sh` | the ONE outbound channel: filter → spool → detached drain |
 | `bin/fleet-emit-selftest.sh` | hermetic tests (off-is-off, the allowlist, injection, the cap, 4xx, the prmap diff, the wiring) |
 | `hooks/settings-hooks.json` | `session.start` on SessionStart, `session.end --via hook` on SessionEnd |
-| `bin/fleet-bind.sh` | `session.bind` |
 | `bin/fleet-lib.sh` (`fleet_reap_record`) | `session.end --via reap` |
 | `bin/tmux-pr-refresh.sh` (`emit_pr_transitions`) | `session.pr` |

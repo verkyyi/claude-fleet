@@ -42,7 +42,7 @@ bridge and the migrator all agree on:
 | `@worktree` | the git worktree the window owns (survives the pane `cd`-ing away) |
 | `@repo` | the hosted repo (`owner/name`) the window belongs to — stamped at spawn, derived once from `@worktree` for an older window (#789) |
 | `@norepo` | `1` ⇒ a session that deliberately belongs to no repo: runs in `$HOME`, no worktree, never reaped automatically (#789) |
-| `@origin` | spawn provenance — `issue-<N>` / `scratch-<N>` / `autofill` / … — and, since #574, an **address**: `fleet_win_for_key` resolves it back to the parent's live window. The parent's key also names its children ledger (`$FLEET_STATE/children/<key>.ndjson`, #937), which `bin/fleet-children.sh` reads — the one command a parent uses to check its children (#940); `bin/fleet-report-stats.sh` reads every ledger plus the delivered reports in the transcripts back into EPIC #935's five report-quality metrics (#941) |
+| `@origin` | spawn provenance — `issue-<N>` / `scratch-<N>` / `autofill` / … — and, since #574, an **address**: `fleet_win_for_key` resolves it back to the parent's live window. The parent's key also names its children ledger (`$FLEET_STATE/children/<key>.ndjson`, #937), which `bin/fleet-children.sh` reads — the one command a parent uses to check its children (#940) |
 | `@reported` | `1` ⇒ this window already pushed its outcome to its `@origin` parent (the reap-time backstop skips it) |
 | `@expand` | `1` ⇒ this window's `@origin` children are UNFOLDED on the dash. Absent ⇒ folded, which is the default: the dash shows one line per parent and `←`/`→` open and shut the block. Inverted against `@pin` on purpose — a window nobody has touched must start collapsed |
 | `@repo_fold` | the one **session** option in this table (issue #1037): the space-separated slugs of the repo groups FOLDED on the dash (`o-tokenledger none`), set by `←` on a repo heading and unset once `→` opens the last one. Absent ⇒ every group open, the list as it always was. A session option so it is per-fleet for free, dies with the fleet, and — because tmux resolves `#{@repo_fold}` through a window's session — rides the renderer's one `list-windows` call with no extra fork |
@@ -509,8 +509,7 @@ Every row action passes the row's repo on as `--repo=` (`{4}` in the fzf binds):
 the preview, ⌃x close, ⌃y priority, comment, ⌃o open, and Enter/⌃g spawn
 (`dash-issue-session.sh --repo`). `fleet_backlog_repo` resolves an action's repo:
 the row's (it must be hosted), else `CF_REPO` through a popup, else nothing — the
-caller refuses. A new issue has no row: `fleet-issue-file.sh` takes the calling
-window's repo and refuses without `--repo` when there is none; the hub's ⌃n takes
+caller refuses. A new task has no row: the hub's ⌃n takes
 the highlighted row's or heading's repo, and with neither asks first with
 `fleet-repo-ask.sh` (repo rows only, in the same popup). A one-repo
 fleet takes none of these branches: three-field rows, the per-session cache, and
@@ -543,7 +542,7 @@ Claude Code asks "Quick safety check: Is this a project you created or one you
 trust?" once per project root and keys the answer in `~/.claude.json` as
 `projects[<root>].hasTrustDialogAccepted` — an **exact** lookup on the resolved
 root, where a linked git worktree resolves to its **main checkout** (that is why a
-machine with only `FLEET_MAIN` trusted spawns workers straight into `/fleet-claim`
+machine with only `FLEET_MAIN` trusted spawns workers straight into their first turn
 with no `…-issue-<N>` entries at all). A fleet pane has nobody to press Enter, so
 an untrusted `FLEET_MAIN` parks every dispatched worker on that dialog — slot
 counted, nothing running, nothing logged (mac-c, 2026-09-12). `bin/fleet-claude.sh`,

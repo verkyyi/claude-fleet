@@ -108,7 +108,7 @@ mkfake "$WORK/claude-old" 'Options:  --model <model>'
 fc() { env -u TMUX -u TMUX_PANE -u FLEET_CRED_SID -u FLEET_CRED_PROXY FLEET_CLAUDE_BIN="${FCBIN:-$WORK/claude}" FLEET_MCP=0 \
          FLEET_AGENT_CFG=0 FLEET_MOD=0 FLEET_STATUS_7501=0 FLEET_AGENT=claude FLEET_PRETRUST=0 "$@" 2>"$WORK/fc.err" | paste -sd' ' -; }
 cd "$WORK" || exit 2
-eq "C: no --as — byte for byte as before" "$(fc bash "$BIN/fleet-claude.sh" /fleet-claim)" "--model opus /fleet-claim"
+eq "C: no --as — byte for byte as before" "$(fc bash "$BIN/fleet-claude.sh" /fleet-history)" "--model opus /fleet-history"
 eq "C: --as doc-only ⇒ --agent doc-only, its model the default" "$(fc bash "$BIN/fleet-claude.sh" --as doc-only x)" "--model sonnet --agent doc-only x"
 eq "C: --as=doc-only" "$(fc bash "$BIN/fleet-claude.sh" --as=doc-only x)" "--model sonnet --agent doc-only x"
 eq "C: a fleet's FLEET_MODEL still wins" "$(fc env FLEET_MODEL=fable bash "$BIN/fleet-claude.sh" --as doc-only x)" "--model fable --agent doc-only x"

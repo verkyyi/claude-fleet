@@ -20,9 +20,8 @@
 #                  `source` included: a /fleet-handoff cycle ends one session id and
 #                  starts another on the SAME issue, and both halves of that spend
 #                  belong to the issue.
-#   session.bind   a scratch became the worker for issue N (bin/fleet-bind.sh). This
-#                  transition MUST be emitted or every scratch that turned into real
-#                  work is attributed to nothing.
+#   session.bind   a scratch became the worker for issue N — nothing emits it since
+#                  the scratch→worker promotion left (issue #4898); still accepted.
 #   session.pr     a PR for a session's branch was opened / merged / closed —
 #                  diffed off the prmap the PR refresher already maintains.
 #   session.end    how it ended. Two `via` values because two different things end:
@@ -214,7 +213,7 @@ fi
 # inherits the pane's TMUX/TMUX_PANE *and* the global hooks, so its SessionStart /
 # SessionEnd land here too. Only the TUI owns the pane; anything else would emit a
 # phantom session against this issue. Unset (an older CLI, a selftest's `env -i`,
-# or a non-hook caller like fleet-bind) ⇒ TUI.
+# or a non-hook caller) ⇒ TUI.
 case "${CLAUDE_CODE_ENTRYPOINT:-cli}" in cli) : ;; *) exit 0 ;; esac
 
 # The Claude Code hook payload, when we were handed one. Read BEFORE the conf load
@@ -245,7 +244,7 @@ URL="${FLEET_EMIT_URL:-}"
 if [ -n "${TMUX_PANE:-}" ]; then
   [ -z "$A_ISSUE" ] && A_ISSUE=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}' 2>/dev/null)
   # A scratch has no @issue, and its branch is the `scratch-<K>` slug its worktree
-  # is named after — the same resolution fleet-bind.sh and the SessionEnd hook use.
+  # is named after — the same resolution the SessionEnd hook uses.
   if [ -z "$A_BRANCH" ] && [ -z "$(_f_num "$A_ISSUE")" ]; then
     _wt=$(tmux display-message -p -t "$TMUX_PANE" '#{@worktree}' 2>/dev/null)
     [ -z "$_wt" ] && _wt=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_current_path}' 2>/dev/null)

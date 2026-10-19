@@ -62,8 +62,8 @@ extras takes nothing from the Mac's. ⌃] ⌃] always sends one ⌃] on.
 The old client was removed in #3008 after every row below was ✅. One row per row of the EPIC page's 「侧栏的每一件去哪」
 (17 rows covering the sidebar's 24 jobs — the 11 menu items share row 7), no more,
 no fewer; a job found later gets a row here and a member issue. Evidence lives
-under `$FLEET_CONF_DIR/fleets/fleet/epic/3178/evidence/3186/` (`fleet-evidence.sh`,
-never committed) — `panel` · `menus` · `rows` are the mac-c 看台's own
+under `$FLEET_CONF_DIR/fleets/fleet/epic/3178/evidence/3186/` (the evidence store
+of the time, retired with #4898; never committed) — `panel` · `menus` · `rows` are the mac-c 看台's own
 `fleet-quickopen.py view-panel | view-menu | view-rows` output. 「点头」 = 发起人
 @dave 2026-10-11 确认方案（「需要你定的事」全部按建议）.
 
@@ -99,7 +99,7 @@ never committed) — `panel` · `menus` · `rows` are the mac-c 看台's own
 | 音量键能不能设成 F12 | 可以（发起人 2026-10-11 真机演练：MacBook + iPhone 全过） |
 | ⌃\ 在面板里能按出（开 shell） | 可以（发起人 2026-10-11 真机演练：MacBook + iPhone 全过） |
 
-**真机演练**（MacBook iTerm2 一遍、iPhone Termius 一遍）：开面板（⌘P / ⌃空格 / F12）→ 派一件新任务 → 开 shell 并回来 → Tab 回收一个 → 回答一个 → 在别的机器上做一个 → 让列表过期看红字。每一步一张截图进 `fleet-evidence.sh`。
+**真机演练**（MacBook iTerm2 一遍、iPhone Termius 一遍）：开面板（⌘P / ⌃空格 / F12）→ 派一件新任务 → 开 shell 并回来 → Tab 回收一个 → 回答一个 → 在别的机器上做一个 → 让列表过期看红字。每一步一张截图（当时进证据库，#4898 起附在 PR 里）。
 
 全部 ✅ 后在 #3008 留「侧栏下线清单已全绿，可删」。
 

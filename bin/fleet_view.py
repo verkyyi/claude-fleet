@@ -3053,7 +3053,7 @@ def bolt_argv(qo, vid, client, st, query):
     """Open a scratch and leave the typed words as an unsubmitted draft.
 
     Repo drafts keep hub placement; otherwise use the local new-session path.
-    Neither route files an issue, invokes fleet-claim, or submits a model turn.
+    Neither route files an issue or submits a model turn.
     """
     repo, agent = bolt_repo(st, query), bolt_agent(st)
     extra = ["--agent", agent]

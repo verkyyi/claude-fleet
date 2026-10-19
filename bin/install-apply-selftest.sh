@@ -174,8 +174,8 @@ printf '[Service]\nExecStart=__HOME__/.claude/fleet/bin/collect.sh\n' > "$R/syst
 printf '[Timer]\nOnUnitActiveSec=60\n' > "$R/systemd/claude-fleet-collect.timer"
 printf '[Service]\nExecStart=__HOME__/x\n' > "$R/systemd/claude-fleet-oldie.service"
 printf '[Timer]\nOnUnitActiveSec=30\n' > "$R/systemd/claude-fleet-oldie.timer"
-cat > "$R/commands/fleet-claim.md" <<'EOF'
-# /fleet-claim
+cat > "$R/commands/fleet-history.md" <<'EOF'
+# /fleet-history
 
 <!-- fleet skill · owner: worker -->
 v1
@@ -211,7 +211,7 @@ C0=$(git -C "$R" rev-parse HEAD)
 # a personal command, the skill, and a README.md an older sync installed (#858)
 render() { sed -e "s|__HOME__|$H|g" -e 's|__BREW_PREFIX__|/opt/homebrew|g' "$1"; }
 for u in collect spinner oldie; do render "$R/launchd/com.claude-fleet.$u.plist.tmpl" > "$H/Library/LaunchAgents/com.claude-fleet.$u.plist"; done
-cp "$R/commands/fleet-claim.md" "$R/commands/fleet-old.md" "$R/commands/README.md" "$H/.claude/commands/"
+cp "$R/commands/fleet-history.md" "$R/commands/fleet-old.md" "$R/commands/README.md" "$H/.claude/commands/"
 echo 'mine' > "$H/.claude/commands/personal.md"
 mkdir -p "$H/.claude/skills/sk" && cp -p "$R/skills/sk/"* "$H/.claude/skills/sk/"
 
@@ -285,7 +285,7 @@ contains 'D Python-only change kicked' "$OUT" 'daemons: kicked spinner'
 C4=$C4PY
 
 # --- E. commands (#858) -----------------------------------------------------------
-sed -i.bak 's/^v1$/v2/' "$R/commands/fleet-claim.md"; rm -f "$R/commands/"*.bak
+sed -i.bak 's/^v1$/v2/' "$R/commands/fleet-history.md"; rm -f "$R/commands/"*.bak
 printf '\nmore docs\n' >> "$R/commands/README.md"
 printf '\nmore\n' >> "$R/commands/_template.md"
 printf '# /fleet-new\n\n<!-- fleet skill · owner: either -->\n' > "$R/commands/fleet-new.md"
@@ -293,14 +293,14 @@ git -C "$R" rm -q "$R/commands/fleet-old.md"
 C5=$(commit 'commands')
 run_ap --from "$C4" --to "$C5"
 eq 'E exit' 0 "$RC"
-ok 'E claim updated' "grep -qx v2 '$H/.claude/commands/fleet-claim.md'"
+ok 'E claim updated' "grep -qx v2 '$H/.claude/commands/fleet-history.md'"
 ok 'E new installed' "[ -f '$H/.claude/commands/fleet-new.md' ]"
 ok 'E README not installed' "[ ! -f '$H/.claude/commands/README.md' ]"
 ok 'E _template not installed' "[ ! -f '$H/.claude/commands/_template.md' ]"
 ok 'E retired removed' "[ ! -f '$H/.claude/commands/fleet-old.md' ]"
 ok 'E personal untouched' "grep -qx mine '$H/.claude/commands/personal.md'"
 contains 'E summary' "$OUT" 'commands: installed 2 · removed 1'
-ok 'E codex command skill installed in default home' "grep -q '^name: fleet-claim$' '$H/.codex/skills/fleet-claim/SKILL.md' && grep -qx v2 '$H/.codex/skills/fleet-claim/SKILL.md'"
+ok 'E codex command skill installed in default home' "grep -q '^name: fleet-history$' '$H/.codex/skills/fleet-history/SKILL.md' && grep -qx v2 '$H/.codex/skills/fleet-history/SKILL.md'"
 ok 'E codex command skill installed in registered home with spaces' "grep -q '<!-- fleet codex command skill -->' '$H/codex account/skills/fleet-new/SKILL.md'"
 contains 'E codex summary' "$OUT" 'codex-skills: installed 4'
 bash "$AP" --is-command "$R/commands/fleet-new.md"; eq 'E gate accepts a command' 0 $?
@@ -309,7 +309,7 @@ bash "$AP" --is-command "$R/commands/_template.md"; eq 'E gate rejects the place
 # the real repo's docs, when this runs from a checkout that has them
 if [ -f "$BIN/../commands/README.md" ]; then
   bash "$AP" --is-command "$BIN/../commands/README.md"; eq 'E repo README rejected' 1 $?
-  bash "$AP" --is-command "$BIN/../commands/fleet-claim.md"; eq 'E repo fleet-claim accepted' 0 $?
+  bash "$AP" --is-command "$BIN/../commands/fleet-history.md"; eq 'E repo fleet-history accepted' 0 $?
 fi
 
 # --- F. skills --------------------------------------------------------------------
@@ -526,7 +526,7 @@ not_contains 'P no daemon action' "$OUT" 'daemons: added'
 ok 'P no launchctl' "! grep -q '^launchctl' '$LOG'"
 eq 'P no plist written' "$snapA" "$(ls "$H/Library/LaunchAgents" | sort | tr '\n' ' ')"
 contains 'P the commands step still runs' "$OUT" 'commands:'
-ok 'P the command landed' "[ -f '$H/.claude/commands/fleet-claim.md' ]"
+ok 'P the command landed' "[ -f '$H/.claude/commands/fleet-history.md' ]"
 ok 'P the hooks still merge' "grep -q '^fleet-hooks-merge.py merge' '$LOG'"
 contains 'P the skills step still runs' "$OUT" 'skills: installed'
 contains 'P apply ok' "$OUT" 'apply: ok'
@@ -731,7 +731,7 @@ fi
 # the trees. The old one here a plain copy (a checkout's files), the new one
 # links to a "runtime" copy; epic-pages/ (a .shared link) and tools/ are not the version's.
 T0=$(git -C "$R" rev-parse HEAD)
-sed -i.bak 's/^v2$/v3/' "$R/commands/fleet-claim.md"; rm -f "$R/commands/"*.bak
+sed -i.bak 's/^v2$/v3/' "$R/commands/fleet-history.md"; rm -f "$R/commands/"*.bak
 printf '# /fleet-tree\n\n<!-- fleet skill · owner: either -->\n' > "$R/commands/fleet-tree.md"
 git -C "$R" rm -q "$R/commands/fleet-new.md"
 printf 'bind a run tree\n' > "$R/conf/tmux-attention.conf"
@@ -751,7 +751,7 @@ run_ap --tree-from "$TF" --tree-to "$TT" --root "$TL"
 eq 'T exit' 0 "$RC"
 contains 'T range names the versions' "$OUT" "range: ${T0:0:7}..${T1:0:7}"
 contains 'T the same paths as git diff (not epic-pages/, tools/, .release)' "$OUT" "range: $TPLAIN path(s) changed"
-ok 'T command updated through the links' "grep -qx v3 '$H/.claude/commands/fleet-claim.md'"
+ok 'T command updated through the links' "grep -qx v3 '$H/.claude/commands/fleet-history.md'"
 ok 'T new command installed' "[ -f '$H/.claude/commands/fleet-tree.md' ]"
 ok 'T retired command removed' "[ ! -f '$H/.claude/commands/fleet-new.md' ]"
 ok 'T the conf reload gets --tree-from conf as its before-file' "grep -qx 'bind a run x' '$WORK/seen-before.conf' || grep -q 'bind b run y' '$WORK/seen-before.conf'"

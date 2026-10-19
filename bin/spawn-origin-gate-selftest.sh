@@ -15,7 +15,6 @@
 #      exit 1 here — the sandbox has no checkout).
 #   D  dash-raw-session.sh: no $TMUX_PANE → exit 4, no window; `--origin hub`
 #      passes the gate.
-#   E  fleet-issue-file.sh --spawn from a lost pane → exit 4 BEFORE any gh call.
 #   F  who may spawn at all (issue #4591 lifted #2960): there is no seat check
 #      left to ask (fleet_spawn_refused is gone, #4790). And the grant itself (which agent files
 #      mount the dispatch group), off real files: bin/fleet-agent-def.py
@@ -122,12 +121,6 @@ ok; [ "$rc" = 4 ] && grep -q '上级 acme-app:scratch-88' "$WORK/raw.err" || fai
 TMUX="$INTMUX" TMUX_PANE='' bash "$BIN/dash-raw-session.sh" --name x --origin hub "$L" >/dev/null 2>"$WORK/raw.err"; rc=$?
 ok; [ "$rc" != 4 ] || fail "D: --origin hub passes the gate" "rc=$rc $(cat "$WORK/raw.err")"
 ok; grep -q -- "--origin='\${ORIGIN:-hub}'" "$BIN/dash-raw-session.sh" || fail "D: the --bg re-exec always states its origin (run-shell -b has no pane)"
-
-# --- E: fleet-issue-file.sh --spawn from a lost pane ------------------------------
-: > "$WORK/gh.log"
-TMUX="$INTMUX" TMUX_PANE='' bash "$BIN/fleet-issue-file.sh" --title t --repo acme/app --spawn >/dev/null 2>"$WORK/fif.err"; rc=$?
-ok; [ "$rc" = 4 ] || fail "E: --spawn from a lost pane → exit 4" "rc=$rc $(cat "$WORK/fif.err")"
-ok; [ ! -s "$WORK/gh.log" ] || fail "E: … before filing anything" "$(cat "$WORK/gh.log")"
 
 # --- F: who may spawn ----------------------------------------------------------------
 ok; bash -c '. "$1/fleet-lib.sh"; type fleet_spawn_refused' _ "$BIN" >/dev/null 2>&1 \

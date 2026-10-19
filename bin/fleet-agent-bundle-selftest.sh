@@ -103,7 +103,7 @@ files=$("$PY" "$REPO/bin/fleet-agent-bundle.py" files --root "$REPO"); rc=$?
 [ "$rc" = 0 ] && [ -n "$files" ] && ok "A the manifest expands ($(printf '%s\n' "$files" | wc -l | tr -d ' ') files)" || bad "A files rc=$rc"
 miss=''
 for c in hooks/settings-hooks.json bin/fleet-hook-run.sh conf/agent-defaults/claude/mcp.default.json \
-         bin/mcp-github.sh bin/fleet-codex-rpc.py mod/fleet/.claude-plugin/plugin.json skills/fleet-open/SKILL.md commands/fleet-claim.md; do
+         bin/mcp-github.sh bin/fleet-codex-rpc.py mod/fleet/.claude-plugin/plugin.json skills/fleet-open/SKILL.md commands/fleet-context.md; do
   printf '%s\n' "$files" | grep -xF >/dev/null "$c" || miss="$miss $c"
 done
 for h in $(grep -o '\.claude/fleet/hooks/[^ "]*' "$REPO/hooks/settings-hooks.json" | sed 's#^\.claude/fleet/##' | sort -u); do
@@ -212,23 +212,22 @@ case "$nh" in 0/*|'') bad "B hooks: $chk" ;; *) [ "${nh%/*}" = "${nh#*/}" ] && o
 printf '%s\n' "$chk" | grep -x >/dev/null 'mcp context7,fetch,github,playwright' && ok "B Claude MCP: context7 · fetch · github · playwright" || bad "B mcp: $chk"
 printf '%s\n' "$chk" | grep >/dev/null "^github .*\$HOME/.claude/fleet/bin/mcp-github.sh" && [ -x "$R/bin/mcp-github.sh" ] \
   && ok "B github MCP runs the package's bin/mcp-github.sh" || bad "B github args: $chk"
-[ -f "$H/.claude/skills/fleet-open/SKILL.md" ] && [ -f "$H/.claude/commands/fleet-claim.md" ] \
+[ -f "$H/.claude/skills/fleet-open/SKILL.md" ] && [ -f "$H/.claude/commands/fleet-context.md" ] \
   && ok "B Claude skills + commands" || bad "B claude skills: $(ls "$H/.claude/skills" "$H/.claude/commands" 2>&1 | tr '\n' ' ')"
-[ -f "$H/.codex/skills/fleet-open/SKILL.md" ] && [ -f "$H/.codex/skills/fleet-claim/SKILL.md" ] \
+[ -f "$H/.codex/skills/fleet-open/SKILL.md" ] && [ -f "$H/.codex/skills/fleet-context/SKILL.md" ] \
   && ok "B Codex skills (repo skills + command skills)" || bad "B codex skills: $(ls "$H/.codex/skills" 2>&1 | tr '\n' ' ')"
 # #4325: inspect the fresh HOME's generated content, not just source/existence.
-"$PY" - "$REPO/commands/fleet-claim.md" "$H" <<'PYCLAIM'
+"$PY" - "$REPO/commands/fleet-context.md" "$H" <<'PYCLAIM'
 from pathlib import Path
 import sys
 source = Path(sys.argv[1]).read_text()
 home = Path(sys.argv[2])
-claude = (home / ".claude/commands/fleet-claim.md").read_text()
-codex = (home / ".codex/skills/fleet-claim/SKILL.md").read_text()
-assert claude == source, "Claude's installed claim drifted from the command"
-assert codex.endswith(source.replace("$ARGUMENTS", "the text after this skill name")), "Codex's generated claim is stale or incomplete"
-assert len(source.encode()) <= 13000, "installed worker command exceeds its reading budget"
+claude = (home / ".claude/commands/fleet-context.md").read_text()
+codex = (home / ".codex/skills/fleet-context/SKILL.md").read_text()
+assert claude == source, "Claude's installed command drifted from the source"
+assert codex.endswith(source.replace("$ARGUMENTS", "the text after this skill name")), "Codex's generated skill is stale or incomplete"
 PYCLAIM
-[ "$?" = 0 ] && ok "B fresh HOME: Claude and generated Codex claim carry the complete slim command" || bad "B claim content drift"
+[ "$?" = 0 ] && ok "B fresh HOME: Claude and generated Codex skill carry the complete command" || bad "B command content drift"
 n=$(grep -c '^\[mcp_servers\.' "$H/.codex/config.toml" 2>/dev/null)
 [ "$n" = 4 ] && grep -q '\.claude/fleet/bin/mcp-fetch.sh' "$H/.codex/config.toml" && ok "B Codex MCP: 4 servers, fetch at the package's bin/" || bad "B codex mcp: $n $(cat "$H/.codex/config.toml" 2>&1)"
 [ -f "$R/mod/fleet/.claude-plugin/plugin.json" ] && ok "B the mod (mod/fleet/.claude-plugin/plugin.json) is in the package" || bad "B no mod"

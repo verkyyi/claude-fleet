@@ -101,15 +101,12 @@ set.
 ## 2. Read the backlog inside the theme
 
 ```sh
-T=~/.claude/fleet/bin/fleet-ticket.sh      # the ONE door to a ticket (EPIC #3570)
-"$T" list --repo "$FLEET_REPO" --state open --limit 100 |
-  while IFS=$'\t' read -r id _; do "$T" read "$id" --json number,title,labels,createdAt,body; done
+gh issue list --repo "$FLEET_REPO" --state open --limit 100 \
+  --json number,title,labels,createdAt,body,assignees
 ```
 
-The door answers for every repo the same way — GitHub's issues, or the hub's
-tickets for a repo whose `FLEET_TICKETS=hub` (issue #3599) — so nothing below
-spells `gh issue`: an id is `gh:<repo>#N` / `hub:<repo>#N`, and
-`"$T" id <repo> <N>` mints it from the repo's home.
+An EPIC's issues are GitHub issues (the hub's ticket store and the fleet's ticket
+door left with issue #4898): `gh issue` reads and writes them directly.
 
 A theme that reaches into another hosted repo (`fleet_repos "$S"` lists them —
 *"活页里显示 fleet 状态"* touches claude-fleet and the monorepo at once) reads
@@ -122,7 +119,7 @@ Select the ones the theme actually covers. Two rules:
   (`bug`, `robustness`), not batch. Read the titles and enough of each body to
   know what the work IS.
 - **Exclude anything already claimed.** An issue with an assignee, or with an
-  open PR, is someone's live work — `"$T" read <id> --json assignees` and the
+  open PR, is someone's live work — `gh issue view <N> --repo <repo> --json assignees` and the
   repo-wide open-PR list (`gh pr list`, a repo on GitHub only). Re-planning live work is how two workers implement the
   same fix.
 
@@ -350,9 +347,8 @@ The sections, as the template lays them out:
      `capture-pane`. E.g. *`tmux capture-pane -p` of the dash after `⌃r`, showing
      the `rNm` marker*; *截图 `/solutions/space` 首屏 (匿名态)*; *`curl -s …/api/x |
      jq .count` 的输出*. This line is `/fleet-epic-report`'s input (issue #810):
-     the worker reads it with `bin/fleet-evidence.sh line` and captures 改动前 /
-     改动后 along it before landing, the report shows those side by side in the
-     member's card. Write it so neither has to ask.
+     the worker captures 改动后 along it and puts it in its PR, and the report
+     follows the same line. Write it so neither has to ask.
 
    **Reserve items left untouched do not count as unfinished** — they exist so a
    batch that runs faster than expected does not idle, not to inflate the scope.
@@ -388,7 +384,7 @@ bounded choice — an `AskUserQuestion` menu of *照页面建单 / 改清单 / �
 right shape; keep free text for what they want changed.
 
 Then **stop and wait**. No issue is created, no label is seeded, no worker is
-spawned until the operator answers — `"$T" list` must show nothing new. If
+spawned until the operator answers — `gh issue list` must show nothing new. If
 they change the list, **edit the same file** — the same address, they reload
 it. Never a second copy for a revision: the operator ends up with three tabs of
 the same plan. The loop here is cheap and the alternative is a batch nobody
@@ -463,12 +459,11 @@ the bodies they always did. Only now, and in this order:
    `/fleet-epic-run` parses.
 
    ```sh
-   ~/.claude/fleet/bin/fleet-issue-file.sh --repo "$FLEET_REPO" --label epic --no-breakage \
-     --title "EPIC: <theme>" --body "$(cat <charter.md>)"
+   gh issue create --repo "$FLEET_REPO" --label epic \
+     --title "EPIC: <theme>" --body-file <charter.md>
    ```
 
-   The filer files through the ticket door: a GitHub issue, or a hub ticket for
-   a `FLEET_TICKETS=hub` repo — its URL either way, the number its last segment.
+   It prints the issue's URL; the number is its last segment.
 
    The `fleet:epic repo=` marker records which repo the PARENT is in
    (issue #803): `/fleet-epic-run` and `/fleet-epic-report` check it against the
@@ -535,38 +530,34 @@ the bodies they always did. Only now, and in this order:
    `<!-- fleet:epic-member epic=<owner/name>#<P> key=C2 -->`.
 
    Two shapes that are load-bearing, not cosmetic:
-   - **Write `上线证据` as a LABELLED LINE, not a heading.** `bin/fleet-evidence.sh
-     line` reads `上线证据：…` / `evidence: …` (the label, then a colon, then the
-     line) first; since #841 it also falls back to a `## 上线证据` heading with the
-     text underneath, so bodies filed in the old shape still read — but the fallback
-     is a compatibility path for what is already on GitHub, not a second format to
-     write. One line, one label, one colon.
+   - **Write `上线证据` as a LABELLED LINE, not a heading**: `上线证据：…` /
+     `evidence: …` (the label, then a colon, then the line). One line, one label,
+     one colon.
    - **A visual member's prototype link rides next to its 上线证据** (rule 24,
      issue #1754): the `**交互原型**：<url>` line right under it, so the worker
      builds to the prototype and shoots its 改动后 against it. Its own line,
-     never folded into the 上线证据 text — `fleet-evidence.sh line` reads that
-     label alone.
+     never folded into the 上线证据 text.
    - **Keep the blank lines around the `<details>` tags.** GitHub renders
      `<details>` in an issue body, but without a blank line after `<summary>` the
      markdown inside stops being parsed as markdown.
 
    - A **proposed split** (`new`) is created with this body **in its card's repo**
-     (`fleet-issue-file.sh --repo <the member's repo> --no-breakage`; titles in the repo's own
+     (`gh issue create --repo <the member's repo>`; titles in the repo's own
      language — CJK titles survive into window names, issue #579 — and the
      title is the card's 名称: the member's use from the person's side, ≤ 20 汉字,
      no script names or flags, the mechanism in the body — issue #2545), then its
-     number replaces `#new` in the parent's list (`"$T" edit <the parent's id>
-     --body-file <f>`) — as `owner/name#N` when that repo is not the parent's.
+     number replaces `#new` in the parent's list (`gh issue edit <parent> --repo
+     "$PREPO" --body-file <f>`) — as `owner/name#N` when that repo is not the parent's.
    - An **existing issue** keeps its own body: **append** the section below it
-     (`"$T" read <its id> --json body`, append, `"$T" edit <its id> --body-file <f>`). The `<!-- fleet:epic-member … -->` marker makes a second
+     (`gh issue view <N> --repo <repo> --json body`, append, `gh issue edit <N> --repo <repo> --body-file <f>`). The `<!-- fleet:epic-member … -->` marker makes a second
      round replace the section rather than stack another one — never overwrite
      an issue somebody else wrote.
-5. **Link every member** under the parent — on GitHub a real sub-issue (the door
-   reads the child's database id itself, across repos too, issue #1942), on the
-   hub the member's parent field:
+5. **Link every member** under the parent as a real GitHub sub-issue (by the
+   child's database id, across repos too, issue #1942):
 
    ```sh
-   "$T" link "$("$T" id "$PREPO" <parent>)" "$("$T" id <the member's repo> <child>)"
+   cid=$(gh api "repos/<the member's repo>/issues/<child>" -q .id)
+   gh api -X POST "repos/$PREPO/issues/<parent>/sub_issues" -F sub_issue_id="$cid"
    ```
 
    **GitHub refuses a cross-repo link** (an Enterprise without it, a repo in an

@@ -188,7 +188,7 @@ def check(root):
     # wiring until the part that runs sessions (fleet-up.sh) is there
     client = (os.path.abspath(root) != node_root()
               or not os.path.isfile(os.path.join(root, "bin", "fleet-up.sh")))
-    plugin = any(os.path.isfile(os.path.join(cdir, "plugins", "cache", m, "fleet", v, "commands", "fleet-claim.md"))
+    plugin = any(os.path.isfile(os.path.join(cdir, "plugins", "cache", m, "fleet", v, "commands", "fleet-handoff.md"))
                  for m in _ls(os.path.join(cdir, "plugins", "cache"))
                  for v in _ls(os.path.join(cdir, "plugins", "cache", m, "fleet")))
 

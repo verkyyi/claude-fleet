@@ -3,8 +3,8 @@
 # compaction (issue #1266, EPIC #1262 C6). Wired to the Claude Code `SessionStart`
 # hook with matcher `compact`.
 #
-# THE GAP. A worker learns what it is for exactly once: the /fleet-claim seed
-# prints the brief (which issue, which repo, which branch, one-issue-one-PR, how
+# THE GAP. A worker learns what it is for exactly once: its start flow and the
+# `brief` tool print it (which issue, which repo, which branch, one-issue-one-PR, how
 # to land). A long worker gets auto-compacted, and the summary that replaces its
 # history is free to drop that opening brief — after which the session drifts
 # out of scope, or forgets to ship the fleet's way (PR → verdict → merge →
@@ -16,14 +16,13 @@
 # WHAT IT EMITS. A ≤1.5 KB block that opens `[fleet charter] #<N>` (so a human,
 # a selftest or a later hook — R1 reuses this one — can spot it): the issue +
 # repo + title, worktree + branch + base, the PR the dash's prmap knows for that
-# branch, who spawned it, and the rails. For the full thread it points at
-# bin/fleet-claim-brief.sh — the one preamble read — rather than inlining it: the
-# brief is many KB and costs a gh round-trip, and a SessionStart hook must stay
+# branch, who spawned it, and the rails. For the full read it points at the `brief`
+# tool (bin/fleet-brief.sh) rather than inlining it: a SessionStart hook must stay
 # small and offline. So this hook makes ZERO gh calls: tmux options, git, and
 # the dash's on-disk caches (prmap for the PR, issues for the title).
 #
-# WHO GETS IT. Only a WORKER (fleet_seat, with the same issue-<N> worktree
-# fallback fleet-claim-brief.sh uses) gets the charter. A scratch session (@raw=1)
+# WHO GETS IT. Only a WORKER (fleet_seat, with the issue-<N> worktree fallback
+# fleet-brief.sh uses) gets the charter. A scratch session (@raw=1)
 # gets its recovery map back instead, and only after a FLEET compaction (#1318) or
 # a native one bin/precompact-hook.sh saved a map for (#1321).
 # The hub has neither ⇒ zero output, as does a pane outside tmux, a headless `claude -p` child
@@ -223,15 +222,15 @@ elif e("REFOCUS_NATIVE") and e("REFOCUS_MAP"):
 lines += [
     "- worktree %s · branch %s → base %s · PR: %s"
         % (e("REFOCUS_CWD"), e("REFOCUS_BRANCH"), e("REFOCUS_BASE"), e("REFOCUS_PR")),
-    "- One issue, one worktree, one PR: work ONLY on #%s here. Adjacent work → "
-    "fleet-issue-file.sh --parent %s (add --spawn to start it now), never in this worktree." % (n, n),
-    "- Base checkout %s is read-only; talk on the issue via fleet-comment.sh." % e("REFOCUS_MAIN"),
+    "- One task, one worktree, one PR: work ONLY on #%s here. Adjacent work → "
+    "the fleet tool `task` (a new record; add spawn to start it now), never in this worktree." % n,
+    "- Base checkout %s is read-only; nothing is written to the issue — ask / report / send." % e("REFOCUS_MAIN"),
     "- Done = verify → push → PR with `Closes #%s` → fleet-pr-verdict.sh <PR> "
     "(--wait in background) → on READY `gh pr merge --%s --delete-branch` → "  # no-gh-ok: a message
     "confirm MERGED → report → stop. Never /fleet-sync-install." % (n, e("REFOCUS_MERGE")),
-    "- Blocked → `⛔ blocked:` comment + set-claude-state.sh blocked, report, stop.",
+    "- Blocked → the fleet tool `ask`, then report (state: blocked), stop.",
     "- %s" % e("REFOCUS_ORIGIN"),
-    "- Full brief (issue thread + charter): ~/.claude/fleet/bin/fleet-claim-brief.sh",
+    "- Full brief: the fleet tool `brief`.",
 ]
 ctx = "\n".join(lines)
 b = ctx.encode("utf-8")

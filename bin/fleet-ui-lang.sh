@@ -1048,10 +1048,6 @@ fleet_ui_t() {
     zh:compose_agent_default)   printf '默认' ;;
     en:compose_agent_default)   printf 'default' ;;
     # the desk ticket of a no-code session (issue #2676, dash-raw-session.sh)
-    zh:desk_body_fmt)           printf '%s\n\n来源会话：%s\n\n没有代码要改的活（设计页、调研、发布……）的单子：会话绑在这张单上，不开工作区。在这里评论会送到会话里。' "${1:-}" "${2:-}" ;;
-    en:desk_body_fmt)           printf '%s\n\nOpened by: %s\n\nThe ticket of a task with no code to change (a design page, research, a release): the session is bound to it, with no workspace. A comment here reaches the session.' "${1:-}" "${2:-}" ;;
-    zh:desk_seed_note_fmt)      printf '（这个会话的单子是 %s：进展、证据和结论都写回这张单——fleet 的 comment / evidence 工具会自动落到它上面；单上的评论会作为你的下一轮送到。）' "${1:-}" ;;
-    en:desk_seed_note_fmt)      printf '(This session'"'"'s ticket is %s: write progress, evidence and the outcome back to it — the fleet comment / evidence tools land on it by themselves; a comment on it arrives as your next turn.)' "${1:-}" ;;
     zh:compose_sent_fmt)        printf '已发出：%s · 开工中…' "${1:-}" ;;
     en:compose_sent_fmt)        printf 'sent: %s · starting…' "${1:-}" ;;
     zh:compose_empty)           printf '先写一行再 ↵' ;;

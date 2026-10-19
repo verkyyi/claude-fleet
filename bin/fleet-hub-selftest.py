@@ -50,7 +50,7 @@ class Sandbox:
         (repos / ".order").write_text("example-project\n")
         for filename in ("fleet-control.py", "fleet_control.py", "fleet_hub_common.py", "fleet_config_write.py",
                          "fleet-lib.sh", "fleet-client-core.sh", "fleet-control-read.sh", "fleet-hub.py", "fleet_hub.py", "fleet_hub_mcp.py",
-                         "fleet-gh.sh", "fleet-gh-lib.sh", "fleet-issue-cache.py", "fleet_loop_mark.py", "fleet_iso.py",
+                         "fleet-gh.sh", "fleet-gh-lib.sh", "fleet_loop_mark.py", "fleet_iso.py",
                          "fleet-reap-policy.sh", "fleet_reap_policy.py", "fleet-orphan-reports.py"):
             shutil.copy2(BIN / filename, self.bin / filename)
         self.tools = self.root / "tools"
@@ -213,13 +213,7 @@ printf '@13\\tscratch-3\\t/fixture/project-scratch-3\\n'
         # Lifecycle fakes (issue #834): each records its argv, acts on the
         # window table the fake tmux serves, and answers with the real script's
         # result token / exit status so the controller's mapping is exercised.
-        self.script(self.bin / "fleet-comment.sh", '''#!/bin/bash
-[ ! -f "$FLEET_CONF_DIR/gh-down" ] || { echo 'gh: connection reset' >&2; exit 1; }
-printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/comment.calls"
-cat > "$FLEET_CONF_DIR/comment.body"
-echo "https://github.com/example/project/issues/$1#issuecomment-42"
-''')
-        # The no-bridge path (issue #1554): fleet-peer-send.sh, the local inbox
+        # worker_message's road (issues #1554, #4898): fleet-peer-send.sh, the local inbox
         # channel — its `sent →` line on stdout, one stderr reason on a refusal.
         self.script(self.bin / "fleet-peer-send.sh", '''#!/bin/bash
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/peer.calls"
@@ -925,14 +919,16 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         code, out, _ = self.node.controller.adapter("reappol", "demo", "@12", ident, "keep")
         self.assertEqual((code, out.decode().split(" ")[0]), (0, "reap_policy=keep"))
 
-    def test_message_goes_through_the_issue_bridge(self):
+    def test_message_goes_straight_to_the_live_session(self):
+        # issue #1554, #4898: the node delivers to the live session itself, through
+        # the peer channel — no issue comment, whatever the issue bridge says.
         self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@13", None, True, "/fixture/project-scratch-4"))
         done = self.lifecycle("worker_message", text="继续：先跑 selftest 再开 PR\n第二行")
         self.assertEqual(done["status"], "succeeded")
-        self.assertEqual(done["result"]["channel"], "issue-bridge")
-        self.assertIn("issuecomment-42", done["result"]["comment_url"])
-        self.assertEqual(self.node.calls("comment"), ["123 --repo example/project --to-worker --from hub --body-file -"])
-        self.assertEqual((self.node.conf / "comment.body").read_text(), "继续：先跑 selftest 再开 PR\n第二行")
+        self.assertEqual(done["result"]["channel"], "direct")
+        self.assertIn("sent → pid 4242", done["result"]["how"])
+        self.assertRegex(self.node.calls("peer")[0], r"^-L \S+ --repo example/project issue:123 -$")
+        self.assertEqual((self.node.conf / "peer.body").read_text(), "继续：先跑 selftest 再开 PR\n第二行")
         scratch = self.lifecycle("worker_message", "scratch-4", text="hi")
         self.assertEqual((scratch["status"], scratch["result"]["error"]["code"]), ("failed", "INVALID_ARGUMENT"))
         for text in ("", " ", "x" * 4001, "<!-- fleet:no-relay -->", "a\x1b[Ab", 5):
@@ -943,17 +939,6 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
         self.assertNotIn("token", gone["result"]["error"])
         self.node.windows(("@12", 123, False, "/fixture/issue-123"))
-        self.node.fleet_conf.write_text(self.node.fleet_conf.read_text().replace("FLEET_ISSUE_BRIDGE=1\n", ""))
-        # No issue bridge (issue #1554): the node delivers to the live session
-        # itself, through the peer channel — no comment, no UNAVAILABLE.
-        off = self.lifecycle("worker_message", idem="msg-off", text="anyone?\n第二行")
-        self.assertEqual(off["status"], "succeeded")
-        self.assertEqual(off["result"]["channel"], "direct")
-        self.assertIn("sent → pid 4242", off["result"]["how"])
-        self.assertEqual(len(self.node.calls("comment")), 1)
-        self.assertEqual(len(self.node.calls("peer")), 1)
-        self.assertRegex(self.node.calls("peer")[0], r"^-L \S+ --repo example/project issue:123 -$")
-        self.assertEqual((self.node.conf / "peer.body").read_text(), "anyone?\n第二行")
         (self.node.conf / "peer-down").touch()
         down = self.lifecycle("worker_message", idem="msg-peer-down", text="anyone?")
         self.assertEqual((down["status"], down["result"]["error"]["code"]), ("failed", "EXECUTION_FAILED"))
@@ -964,11 +949,6 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         two = self.lifecycle("worker_message", idem="msg-two", text="anyone?")
         self.assertEqual((two["status"], two["result"]["error"]["code"]), ("failed", "AMBIGUOUS"))
         self.assertEqual(len(self.node.calls("peer")), 2)
-        self.node.windows(("@12", 123, False, "/fixture/issue-123"))
-        self.node.fleet_conf.write_text(self.node.fleet_conf.read_text() + "FLEET_ISSUE_BRIDGE=1\n")
-        (self.node.conf / "gh-down").touch()
-        lost = self.lifecycle("worker_message", idem="msg-lost", text="anyone?")
-        self.assertEqual((lost["status"], lost["result"]["error"]["code"]), ("unknown", "UNKNOWN_OUTCOME"))
 
     def gh_grant(self, *scopes):
         return self.hub.grant("ipad", [self.fleet], ["fleet:read", *scopes])["token"]
@@ -1012,36 +992,18 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         with self.assertRaises(Fault):
             self.call("gh_issue_view", {"fleet_id": str(uuid.uuid4()), "number": 7}, reader)
 
-    def test_gh_comment_goes_through_the_write_queue(self):
-        # fleet-comment.sh posts through the ticket door (issue #3595)
-        for f in ("fleet-comment.sh", "fleet-ticket.sh", "fleet_ticket.py"):
-            shutil.copy2(BIN / f, self.node.bin / f)
+    def test_gh_comment_is_refused_on_the_node(self):
+        # issue #4898: the fleet writes no GitHub comment; an older hub's
+        # gh_comment is refused on the node and nothing reaches gh.
         request = dict(fleet_id=self.fleet, idempotency_key="ipad-1", params={"issue": 7, "body": "从 iPad 发的评论"})
         with self.assertRaises(Fault) as refused:
             self.call("gh_comment", request, self.gh_grant("gh:read"))
         self.assertEqual(refused.exception.code, "FORBIDDEN")
-        writer = self.gh_grant("gh:comment")
-        started = self.call("gh_comment", request, writer)
+        started = self.call("gh_comment", request, self.gh_grant("gh:comment"))
         done = self.node.wait(started["operation_id"])
-        self.assertEqual(done["status"], "succeeded", done)
-        self.assertEqual(done["result"]["channel"], "record")
-        self.assertIn("issuecomment-77", done["result"]["comment_url"])
-        posted = self.node.calls("gh")
-        self.assertEqual(len(posted), 1)
-        self.assertTrue(posted[0].startswith("issue comment 7 --repo example/project --body 从 iPad 发的评论"), posted)
-        self.assertIn("fleet:no-relay", posted[0])
-        self.assertTrue(list((self.node.conf / "global").glob("gh-write.*.last")), "the post skipped the write queue")
-        again = self.call("gh_comment", request, writer)
-        self.assertEqual(again["operation_id"], started["operation_id"])
-        self.assertEqual(len(self.node.calls("gh")), 1)
-        for body in ("", " ", "x" * 4001, "<!-- fleet:from role=worker -->", "a\x1b[Ab", 5):
-            with self.subTest(body=body), self.assertRaises(Fault):
-                self.call("gh_comment", dict(request, idempotency_key="bad", params={"issue": 7, "body": body}), writer)
-        elsewhere = self.call("gh_comment", dict(request, idempotency_key="ipad-2",
-                                                  params={"issue": 7, "body": "x", "repo": "someone/else"}), writer)
-        elsewhere = self.node.wait(elsewhere["operation_id"])
-        self.assertEqual((elsewhere["status"], elsewhere["result"]["error"]["code"]), ("failed", "INVALID_ARGUMENT"))
-        self.assertEqual(len(self.node.calls("gh")), 1)
+        self.assertEqual((done["status"], done["result"]["error"]["code"]), ("failed", "INVALID_ARGUMENT"), done)
+        self.assertIn("4898", done["result"]["error"]["message"])
+        self.assertEqual(self.node.calls("gh"), [])
 
     def test_resume_reuses_history_and_refuses_a_live_worker(self):
         self.node.windows()
@@ -1358,8 +1320,8 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
 
     def test_task_record_on_a_start_and_task_issue(self):
         # issue #3325: the hub's task record T<n> rides a new / scratch start
-        # (FLEET_CONTROL_TASK to the adapter, never an argv word), and task_issue
-        # files a record's issue here — the URL first, the session's address beside.
+        # (FLEET_CONTROL_TASK to the adapter, never an argv word); task_issue is
+        # refused on the node since #4898.
         validate_write("worker_start", {"kind": "scratch", "no_repo": True, "task": "T218"})
         validate_write("worker_start", {"kind": "new", "title": "加一个 /healthz", "repo": "acme/web", "task": "T9"})
         for bad in ({"kind": "scratch", "task": "218"}, {"kind": "scratch", "task": "T0"},
@@ -1374,31 +1336,23 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
             with self.assertRaises(Fault):
                 validate_write("task_issue", bad)
         self.assertEqual(SCOPE_OF["task_issue"], "gh:comment")
-        real_popen, real_adapter = control.subprocess.Popen, self.node.controller.adapter
+        # issue #4898: the record is the only ticket — task_issue files nothing.
+        real_popen = control.subprocess.Popen
 
         def no_executor(argv, *args, **kwargs):
             return MagicMock() if "execute" in argv else real_popen(argv, *args, **kwargs)
 
-        calls = []
-
-        def adapter(mode, *a, **k):
-            if mode != "taskissue":
-                return real_adapter(mode, *a, **k)
-            calls.append((mode, *a, k.get("payload")))
-            return 0, b"https://github.com/acme/web/issues/3312\n", b""
         op_id = str(uuid.uuid4())
         with patch.object(control.subprocess, "Popen", side_effect=no_executor):
             self.node.rpc("submit", {"operation_id": op_id, "fleet_id": self.fleet, "action": "task_issue",
                                      "params": {"repo": "acme/web", "task": "T218", "title": "整理账单",
                                                 "body": "整理账单\n\nhub 任务 T218 补建的单。", "worker_id": wid},
                                      "actor": "operator"})
-        with patch.object(self.node.controller, "adapter", side_effect=adapter):
+        with patch.object(self.node.controller, "adapter") as adapter:
             self.node.controller.execute(op_id)
+        adapter.assert_not_called()
         got = self.node.rpc("operation_get", {"operation_id": op_id})
-        self.assertEqual((got["status"], got["result"].get("issue_url")),
-                         ("succeeded", "https://github.com/acme/web/issues/3312"), got)
-        self.assertEqual(calls, [("taskissue", "demo", "acme/web", "T218", wid.split("/", 1)[1], "整理账单",
-                                  "整理账单\n\nhub 任务 T218 补建的单。".encode())])
+        self.assertEqual((got["status"], got["result"]["error"]["code"]), ("failed", "INVALID_ARGUMENT"), got)
 
     def test_start_names_the_repo_in_a_multi_repo_fleet(self):
         # issue #984: two repos can both have an issue-123, so the spawn needs --repo.
@@ -1552,16 +1506,12 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.assertRegex(calls[0], r"^demo --origin hub --print --agent claude --no-repo --test-identity$")
         self.assertRegex(calls[1], r"^demo --origin hub --print --agent claude --no-repo --reap keep --test-identity$")
 
-    def test_new_issue_start_files_then_spawns(self):
-        # issue #1953: the client's writing area — kind=new carries a title and a
-        # body; the node files the issue through the one filer channel (the body
-        # on its stdin, never an argv the controller builds), reads the number
-        # off the URL, then spawns as an issue start does.
-        self.node.script(self.node.bin / "fleet-issue-file.sh", '''#!/bin/bash
-printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/file.calls"
-[ ! -f "$FLEET_CONF_DIR/file-fail" ] || { echo 'fleet-issue-file: gh issue create failed' >&2; exit 1; }
-echo "https://github.com/example/project/issues/128"
-''')
+    def test_new_task_start_opens_on_its_record(self):
+        # issue #1953, #4898: the client's writing area — kind=new carries a title
+        # and a body, and its hub task record (`task`). Nothing is filed: the
+        # session opens in a worktree of the repo bound to T<n>
+        # (dash-raw-session.sh --repo --task), its first turn the body (stdin,
+        # never an argv the controller builds). No record ⇒ nothing opened (7).
         for bad in ({"kind": "new"}, {"kind": "new", "title": " "}, {"kind": "new", "title": "a\nb"},
                     {"kind": "new", "title": "x" * 257}, {"kind": "new", "title": "x", "issue": 3},
                     {"kind": "new", "title": "x", "name": "n"}, {"kind": "new", "title": "<!-- x -->"},
@@ -1569,34 +1519,29 @@ echo "https://github.com/example/project/issues/128"
                     {"issue": 1, "body": "x"}):
             with self.subTest(bad=bad), self.assertRaises(Fault):
                 validate_write("worker_start", bad)
-        validate_write("worker_start", {"kind": "new", "title": "侧栏的名字太长", "body": "两行\n正文"})
+        validate_write("worker_start", {"kind": "new", "title": "侧栏的名字太长", "body": "两行\n正文", "task": "T9"})
         started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="new-1",
-                                                 params={"kind": "new", "title": "侧栏的名字太长", "body": "两行\n正文"}))
+                                                 params={"kind": "new", "title": "侧栏的名字太长", "body": "两行\n正文",
+                                                         "task": "T9"}))
         op = self.node.wait(started["operation_id"])
-        self.assertEqual((op["status"], op["result"]["exit"]), ("succeeded", 0))
-        self.assertEqual(op["result"]["workers"][0]["issue"], 128)
-        self.assertEqual((self.node.conf / "file.calls").read_text(),
-                         "--repo example/project --from hub --title 侧栏的名字太长 --body 两行\n正文\n")
-        self.assertEqual((self.node.conf / "spawn.calls").read_text(),
-                         "128 demo --print --agent claude --origin hub --repo example/project"
-                         " --words-file <两行\n正文>\n")
-        # a filing that fails opens nothing
-        (self.node.conf / "file-fail").touch()
+        self.assertEqual((op["status"], op["result"]["exit"]), ("succeeded", 0), op)
+        call = (self.node.conf / "scratch.calls").read_text()
+        self.assertTrue(call.startswith("demo --origin hub --print --agent claude --repo example/project"
+                                        " --name 侧栏的名字太长 --reap merged --task T9 --prompt-file="), call)
+        self.assertEqual((self.node.conf / "scratch.seed").read_text(), "两行\n正文\n")
+        self.assertEqual(self.node.calls("spawn"), [])
+        # no record: nothing opens
         failed = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="new-2",
                                                                params={"kind": "new", "title": "y"}))["operation_id"])
         self.assertEqual((failed["status"], failed["result"]["error"]["exit"]), ("failed", 7))
-        self.assertEqual((self.node.conf / "spawn.calls").read_text().count(" --print "), 1)
+        self.assertEqual(len(self.node.calls("scratch")), 1)
 
-    def test_new_issue_start_names_its_attachments_here(self):
+    def test_new_task_start_names_its_attachments_here(self):
         # issue #2393: the writing area's files — the agent downloaded each to
         # $FLEET_CONF_DIR/attachments/<id>/<name> before the start, so the issue
-        # the node files names THIS machine's path where the client's stood
+        # the session's first turn names THIS machine's path where the client's stood
         # (the drop's backslash-quoted form too); a file that is not here is
         # said, never left as a path the session cannot read.
-        self.node.script(self.node.bin / "fleet-issue-file.sh", '''#!/bin/bash
-printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/file.calls"
-echo "https://github.com/example/project/issues/129"
-''')
         sha = "f" * 64
         ids = ("a" * 32, "b" * 32, "c" * 32)
         frm = ("/var/folders/mw/T/shot 1.png", "/Users/me/log.txt", "/Users/me/gone.png")
@@ -1612,11 +1557,11 @@ echo "https://github.com/example/project/issues/129"
                 validate_write("worker_start", bad)
         body = "看这张 /var/folders/mw/T/shot\\ 1.png\n\n附件:\n- /var/folders/mw/T/shot 1.png\n- /Users/me/gone.png"
         op = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="att-1", params={
-            "kind": "new", "title": "看这张", "body": body, "attachments": atts}))["operation_id"])
+            "kind": "new", "title": "看这张", "body": body, "attachments": atts, "task": "T10"}))["operation_id"])
         self.assertEqual((op["status"], op["result"]["exit"]), ("succeeded", 0))
         here = [str(self.node.conf / "attachments" / i / n) for i, n in zip(ids[:2], ("shot 1.png", "log.txt"))]
-        filed = (self.node.conf / "file.calls").read_text()
-        self.assertEqual(filed, "--repo example/project --from hub --title 看这张 --body 看这张 %s\n\n附件:\n- %s\n"
+        filed = (self.node.conf / "scratch.seed").read_text()
+        self.assertEqual(filed, "看这张 %s\n\n附件:\n- %s\n"
                                 "- /Users/me/gone.png（附件没带过去）\n\n附件:\n- %s\n"
                          % (here[0], here[0], here[1]))
         self.assertNotIn("/var/folders/mw", filed)
@@ -1629,11 +1574,8 @@ echo "https://github.com/example/project/issues/129"
         for bad in ({"issue": 1, "agent": "gpt"}, {"issue": 1, "agent": "codex; rm -rf ~"}, {"issue": 1, "agent": 1}):
             with self.subTest(bad=bad), self.assertRaises(Fault):
                 validate_write("worker_start", bad)
-        self.node.script(self.node.bin / "fleet-issue-file.sh", '''#!/bin/bash
-echo "https://github.com/example/project/issues/131"
-''')
         for key, params in (("a-issue", {"issue": 130, "agent": "codex"}),
-                            ("a-new", {"kind": "new", "title": "在 mac-a 上用 codex", "agent": "codex"}),
+                            ("a-new", {"kind": "new", "title": "在 mac-a 上用 codex", "agent": "codex", "task": "T11"}),
                             ("a-scratch", {"kind": "scratch", "name": "codex 试试", "agent": "codex"}),
                             ("a-none", {"issue": 132})):
             op = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key=key,
@@ -1641,11 +1583,11 @@ echo "https://github.com/example/project/issues/131"
             self.assertEqual(op["status"], "succeeded", key)
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
                          "130 demo --print --agent codex --origin hub --repo example/project\n"
-                         "131 demo --print --agent codex --origin hub --repo example/project"
-                         " --words-file <在 mac-a 上用 codex>\n"
                          "132 demo --print --agent claude --origin hub --repo example/project\n")
-        self.assertEqual((self.node.conf / "scratch.calls").read_text(),
-                         "demo --origin hub --print --agent codex --repo example/project --name codex 试试\n")
+        scratch = self.node.calls("scratch")
+        self.assertTrue(scratch[0].startswith("demo --origin hub --print --agent codex --repo example/project"
+                                              " --name 在 mac-a 上用 codex --reap merged --task T11 --prompt-file="), scratch)
+        self.assertEqual(scratch[1], "demo --origin hub --print --agent codex --repo example/project --name codex 试试")
 
     def test_move_in_runs_the_target_half_and_maps_its_outcome(self):
         # issue #1426: a session moved here through the hub. Every value is held

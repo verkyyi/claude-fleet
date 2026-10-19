@@ -228,9 +228,10 @@ ok "a trailing-slash TMPDIR yields a shadow path spelled as its own \$BIN sees i
 # ============================================================================
 # D. END TO END — the runner, from an install root that HAS a conf
 # ============================================================================
-# The three tests #660 traced to three different conf keys. Named explicitly (not
+# The three tests #660 traced to three different conf keys (the claim brief's place
+# is taken by fleet-brief since #4898). Named explicitly (not
 # the whole suite) so this stays a bounded check and never recurses into itself.
-SUBSET='fleet-quotaguard fleet-context fleet-claim-brief'
+SUBSET='fleet-quotaguard fleet-context fleet-brief'
 out=''
 # shellcheck disable=SC2086  # intentional: $SUBSET is a list of arguments
 if ! out="$(clean_env sh "$FAKE/bin/run-selftests.sh" $SUBSET </dev/null 2>&1)"; then

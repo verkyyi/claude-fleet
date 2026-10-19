@@ -7,7 +7,7 @@
 #      warm-pool window carrying it never answers; two windows carrying one →
 #      rc 2 AMBIGUOUS, never a pick; fleet_win_for_addr takes a key or an identity.
 #   B  THE RENAME (the issue's 完成判据 + 上线证据): a child spawned by scratch-5
-#      reports to it — then scratch-5 is bound to an issue (fleet-bind.sh's
+#      reports to it — then scratch-5's key changes to an issue's (a
 #      re-mark: @issue set, @raw unset), so its key is issue-99 — and the child's
 #      next report still reaches the SAME window, `reported → …` both times, two
 #      frames in its inbox, the second booked under issue-99 and the child's
@@ -140,7 +140,7 @@ rp 'first: before the rename'
 ok; [ "$rc" = 0 ] && case "$out" in "reported → ${Q}scratch-5 ($P)"*) true ;; *) false ;; esac \
   || fail "B: before the rename the child reports to scratch-5" "rc=$rc out=$out err=$err"
 R1=$out
-# fleet-bind.sh's re-mark: the scratch becomes the worker for #99.
+# a re-mark: the scratch becomes the worker for #99 (its key changes).
 tf set-window-option -t "$P" @issue 99; tf set-window-option -u -t "$P" @raw
 ok; [ "$(lib fleet_window_okey "$L" "$P")" = "${Q}issue-99" ] || fail "B: after the bind the parent's key is issue-99"
 rp 'second: after the rename'
@@ -228,7 +228,7 @@ ok; grep -q '\$sid.fleet-id' "$BIN/fleet-move-remote.sh" && grep -q '@fleet_id "
 for f in dash-issue-session.sh dash-raw-session.sh; do
   ok; grep -q 'fleet_window_fid "$SESS" "$win" "$SOCK"' "$BIN/$f" || fail "E: $f mints the identity at spawn"
 done
-for f in fleet-bind.sh fleet-cleanup-daemon.sh; do
+for f in fleet-cleanup-daemon.sh; do
   ok; grep -q 'fleet_origin_heal ' "$BIN/$f" || fail "E: $f heals children's @origin after a key change"
 done
 

@@ -673,8 +673,8 @@ def validate_write(action, params):
         if action == "worker_answer":
             check_answer(params["answer"])
     elif action == "task_issue":
-        # issue #3325: file a hub task record's issue here (fleet-issue-file.sh),
-        # binding the task's session when it is this fleet's and has none.
+        # issue #3325: a hub task record's issue — the node refuses it since
+        # #4898 (the record is the ticket); still validated for an older hub.
         fields(params, ("repo", "task", "title"), ("body", "worker_id"))
         check_repo(params)
         if "/" not in params["repo"]:

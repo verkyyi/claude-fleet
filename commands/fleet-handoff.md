@@ -7,13 +7,8 @@ pane**: it stores a full handoff doc (delegating to the repo-shipped base `hando
 skill), then arms a detached helper that waits for this turn to end, `/clear`s
 the pane, and types `/fleet-handoff pickup` so the emptied session resumes from
 the handoff — the self-clear the arming session can't do to itself. Runs from
-**either** seat. When the pane is **issue-bound** the handoff is stored as a
-durable `<!-- fleet:handoff -->`-marked **issue comment** (issue #275) — it
-outlives the worktree teardown a committed doc does not, and pickup self-resolves
-it from the pane's `@issue`; a raw/no-issue pane falls back to a local file
-(`FLEET_HANDOFF_DEST=file` forces file-only for a sensitive repo). It mutates only
-the bound issue (one comment) and local files, and never touches branches, PRs, or
-another fleet.
+**either** seat. The handoff is a local file outside the repo (issue #4898); it
+mutates only local files, and never touches branches, PRs, issues or another fleet.
 
 Explicit **`--to claude` or `--to codex`** transfers this one session to the named
 Coding Agent in the same worktree. The same base skill composes the notes; `fleet-transfer.sh`
@@ -26,8 +21,8 @@ Transfer notes and conversation evidence stay in private local files (§T).
   worktree, carrying the source agent, session ID and original transcript path.
   Both directions and Codex context cycling support an issue worker or linked raw scratch; the hub remains outside this controller.
 - **`pickup [<source>]`** → **pickup mode**: resume from an existing handoff. The
-  `<source>` is OPTIONAL (a file path, comment URL, or issue number) — omitted, it
-  self-resolves from the pane's `@issue` (§P). This is what the detached helper
+  `<source>` is OPTIONAL (a file path) — omitted, it self-resolves to this pane's
+  newest handoff file (§P). This is what the detached helper
   types into the cleared session; you can also run it by hand if an auto-cycle
   didn't complete.
 
@@ -42,8 +37,7 @@ reuse the literal values its `window` line prints (`issue=` · `repo=`):
   in one line: *"not inside a fleet — run this from a fleet session."* Never guess
   a repo.
 - **Seat** — `owner: either`, so a worker pane and the operator hub pane may both
-  run it. Only the **doc path** differs by seat (below): a pane with an `issue=`
-  stores against its bound issue, anything else stores to a local file.
+  run it; both store to a local file (C2).
 
 Route exactly: empty → **§C**; `pickup [<source>]` → **§P**; `--to claude|codex` → **§T**.
 For unknown arguments or unsupported targets, report the supported forms and
@@ -113,104 +107,42 @@ prints a line, store the doc anyway.
 
 Hold the composed doc text; **where** it is stored is C2's job.
 
-### C2. Store the handoff durably — comment when issue-bound, else file
+### C2. Store the handoff durably — a local file
 
-The handoff must land somewhere a *cleared* session can recover it. Resolve the
-destination once, store it, and **verify** before arming anything.
+The handoff must land somewhere a *cleared* session can recover it. Store it, and
+**verify** before arming anything. It is always a local FILE (issue #4898: the
+fleet no longer writes GitHub comments), **OUTSIDE the repo**, same convention for
+every seat: the path `mcp__fleet__handoff` (`action: path`) prints — that is `DOC`
+(create the dir). **Never commit it.** Pass `slug` when a session hands off more
+than one task. `mcp__fleet__handoff` with `action: repo` prints the doc's `Repo:`
+line value.
 
-**Resolve the destination.** `ISSUE` is the `issue=` §0's `status` printed (the
-hub pane has none — it always takes the file path below); `DEST` is the
-operator's knob:
+A one-repo fleet gets `~/.claude/handoff/<session>-<YYYY-MM-DD>[-<slug>].md`. A
+fleet hosting 2+ repos puts this pane's repo in the name —
+`<session>-<owner-name>-<YYYY-MM-DD>[-<slug>].md` — because every repo's file
+handoffs share one directory and pickup must not resume another repo's (issue
+#992). Either way, fill the skeleton's `Repo:` line with the `repo` action's output.
+
+> A handoff written *into* the repo is **retired** — committed scaffolding never
+> gets removed, it just gets cited. If the content is durable *project* knowledge,
+> it is not a handoff — write it as a normal repo doc and say so.
 
 ```sh
-echo "dest=${FLEET_HANDOFF_DEST:-comment}"   # comment (default) | file
+echo "DOC=$DOC"
+test -s "$DOC" && echo "doc OK (non-empty)" || echo "DOC MISSING/EMPTY — do not arm"
 ```
-
-Then take the FIRST matching case:
-
-1. **`DEST=comment` AND `$ISSUE` non-empty** → **COMMENT storage** (the primary
-   case — a worker's `@issue`). Post the
-   SCRUBBED doc (see the scrub rule below) as a comment carrying the pickup marker
-   `<!-- fleet:handoff -->`, via `mcp__fleet__comment` (`mode: note`, the default)
-   so it also gets the `<!-- fleet:no-relay -->` marker (the issue-bridge must NOT
-   relay a handoff back into the worker as a turn) and the per-role footer:
-   `issue: <ISSUE>`, `body:` the scrubbed doc text, a blank line, then
-   `<!-- fleet:handoff -->` on its own last line — the marker is how pickup finds it.
-
-   The tool returns the created comment URL on success. **If it fails / prints
-   no URL, DO NOT arm comment-mode** — fall through to file storage (case 3) so the
-   handoff is never lost.
-
-2. **`DEST=comment` but the pane is NOT issue-bound** (the hub pane, a raw scratch,
-   any pane with no `@issue`) → **file storage** (case 3). Comment mode
-   needs a thread to post to; without one, fall back to a local file.
-
-3. **`DEST=file`, OR any fall-through from above** → **FILE storage**, always
-   **OUTSIDE the repo**, same convention for every seat:
-   the path `mcp__fleet__handoff` (`action: path`) prints — that is `DOC` (create
-   the dir). **Never commit it.** Pass `slug` when a session hands off more than
-   one task. `mcp__fleet__handoff` with `action: repo` prints the doc's `Repo:` line
-   value.
-
-   A one-repo fleet gets `~/.claude/handoff/<session>-<YYYY-MM-DD>[-<slug>].md`, as
-   always. A fleet hosting 2+ repos puts this pane's repo in the name —
-   `<session>-<owner-name>-<YYYY-MM-DD>[-<slug>].md` — because every repo's file
-   handoffs share one directory and pickup must not resume another repo's (issue
-   #992). Either way, fill the skeleton's `Repo:` line with the `repo` action's
-   output.
-
-   > A handoff written *into* the repo used to be the worker path
-   > (`doc/handoff/<slug>.md`, committed in the `issue-<N>` worktree). It is
-   > **retired** — measured on acme-monorepo (its issue #2656): 20 committed
-   > handoffs, **24 citations from production code comments**, 2 of them pointing at
-   > files deleted months earlier. A handoff is scaffolding; committed scaffolding
-   > never gets removed, it just gets cited. That repo now fails CI on any tracked
-   > file under `doc/handoff/` or `docs/handoff/`, and others may too. If the content
-   > is durable *project* knowledge, it is not a handoff — write it as a normal repo
-   > doc under that repo's own convention and say so.
-
-   ```sh
-   echo "DOC=$DOC"
-   test -s "$DOC" && echo "doc OK (non-empty)" || echo "DOC MISSING/EMPTY — do not arm"
-   ```
-
-> **Scrub before COMMENT storage — a HARD rule at any repo visibility.**
-> Never assume the fleet's repo is public or private. If a decision turns on it,
-> read it: `gh repo view <repo from §0> --json visibility`. (An earlier revision of
-> this file asserted "this repo is public" as fact; that was wrong for at least one
-> fleet, and an agent that trusted it mis-rated a routine hygiene finding as an
-> urgent public-credential leak.) The scrub below stands either way — a comment is
-> readable by everyone with repo access, is retained indefinitely, and travels into
-> clones, CI logs and exports.
-> Before posting, scrub the base skeleton's "How to operate" / "Live state" /
-> environment sections: **NO credential values or their locations, NO internal
-> hostnames (including tailnet names like `*.ts.net`), and prefer repo-relative
-> paths** over absolute machine paths. Any line you cannot safely scrub does NOT go
-> in the comment — keep it in the local **file fallback** instead and have the
-> comment link it as `(local: <path>)`. This scrub applies to comment storage only;
-> a private local file needs no scrub.
-> **`## Active /loop` is a scrub surface too** — a loop prompt is standing operator
-> instruction and often carries internal detail. It must stay VERBATIM to be
-> re-armable, so it does not get edited down: if it isn't safe to publish, write it to
-> the local file and have the comment carry `(local: <path>)` in that section instead.
 
 ### C3. Arm the detached clear+resume — the LAST tool call of this turn
 
-**Only if the handoff is verifiably stored** (a posted comment URL, or a non-empty
-DOC). Never arm around a missing store. The helper waits for THIS turn to end
+**Only if the handoff is verifiably stored** (a non-empty DOC). Never arm around a missing store. The helper waits for THIS turn to end
 (Stop hook → `@claude_state` leaves `working`) before it touches anything, so
 arming it as the final tool call is what lets it clear the pane you're still in.
-Arm with the mode that matches how you stored it — **`mcp__fleet__handoff`
-with `action: arm`**, which starts the helper detached and returns at once:
-
-- **COMMENT storage** → `issue: <ISSUE>` (+ `repo` from §0 in a fleet hosting
-  several): the helper re-confirms the marked comment on the issue, then injects
-  an ARGUMENT-FREE pickup (the cleared pane's `@issue` self-resolves it);
-- **FILE storage** → `doc: <DOC>`: the helper gates on the doc + injects
-  `pickup <DOC>`.
+Arm it — **`mcp__fleet__handoff` with `action: arm`** and `doc: <DOC>` — which
+starts the helper detached and returns at once: it gates on the doc and injects
+`pickup <DOC>`.
 
 The helper is fail-safe by construction (see `bin/fleet-handoff-cycle.sh`): it
-re-validates the store (marked comment fetchable, or doc non-empty) BEFORE the
+re-validates the store (the doc non-empty) BEFORE the
 first keystroke, refuses a double-arm, aborts *without clearing* if the turn never
 goes idle, and withholds the pickup keystrokes if it can't confirm a fresh
 session — every failure degrades to *"handoff stored, context not cleared"*, and a
@@ -230,7 +162,7 @@ deadline it aborts without clearing and says so on the status line (issue #571).
 Emit exactly one line and **do not call another tool** (a later tool call would
 keep `@claude_state` at `working` and stall the helper's wait-idle):
 
-> Handoff stored (comment on #`<ISSUE>` / `<DOC>`). This pane will auto-`/clear`
+> Handoff stored (`<DOC>`). This pane will auto-`/clear`
 > and resume from it in a moment — or run `/fleet-handoff pickup` yourself.
 
 ---
@@ -241,7 +173,7 @@ This mode runs from the **source Claude or Codex** in its issue/scratch worktree
 Use the operator-selected target as `TARGET` below (`claude` or `codex`). The hub
 may use the operator CLI described in `~/.claude/fleet/docs/dev/SESSION-TRANSFER.md`
 to select a different window, but this skill never guesses another source pane.
-Do not use C2–C4: no issue comment, `/clear`, or clear-cycle helper in this mode.
+Do not use C2–C4: no `/clear` or clear-cycle helper in this mode.
 
 1. **Resolve the exact source before writing notes.** Call
    `mcp__fleet__transfer` with `action: check`, `to: <TARGET>` (it passes this
@@ -305,15 +237,9 @@ The argument is **optional** (the auto-cycle injects it bare). Resolve the
 handoff SOURCE in this order and **announce the chosen source on its own line**
 before reading it:
 
-1. **Explicit `<source>` argument** — a local file path, a comment URL, or a bare
-   issue number. Use it directly.
-2. **Newest `<!-- fleet:handoff -->`-marked comment** on this pane's `@issue`.
-   This is what an argument-free pickup resolves to after a comment-mode cycle:
-
-   `mcp__fleet__gh` with `kind: issue`, `number: <issue= from mcp__fleet__status>`,
-   `fields: comments`, `max_age: 0` — then take the LAST comment whose body
-   contains `<!-- fleet:handoff -->`.
-3. **File-fallback search**, when neither above resolves — ask
+1. **Explicit `<source>` argument** — a local file path (an older handoff left as
+   a marked issue comment: its URL — read it with `gh`). Use it directly.
+2. **File search**, when no argument is given — ask
    `mcp__fleet__handoff` (`action: find`), never `ls -t` the directory yourself:
 
    - **exit 0** → the path it printed is this pane's handoff. A one-repo fleet gets
@@ -375,8 +301,7 @@ plain `claude` session, and this pickup arrives as its first user turn.
 No `fleet` tool in this session (`FLEET_MCP=0`, a session older than the tool
 service): docs/dev/FLEET-MCP.md lists the exact script each call above runs, from
 `~/.claude/fleet/bin/` — the arm is
-`nohup ~/.claude/fleet/bin/fleet-handoff-cycle.sh --pane "$TMUX_PANE" --doc "$DOC" >/dev/null 2>&1 &`
-(or `--issue "$ISSUE"` for comment storage), detached exactly as the tool does.
+`nohup ~/.claude/fleet/bin/fleet-handoff-cycle.sh --pane "$TMUX_PANE" --doc "$DOC" >/dev/null 2>&1 &`, detached exactly as the tool does.
 
 Rails: operate on YOUR fleet's repo only — never another fleet's repo,
 sessions, or ledgers. The base checkout is read-only (hook-enforced): a worker

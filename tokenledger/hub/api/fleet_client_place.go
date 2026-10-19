@@ -431,7 +431,7 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		what = "scratch"
 	case "new":
 		// The writing area (claude-fleet#1953): the issue does not exist yet —
-		// the chosen machine files it (fleet-issue-file.sh) and opens its
+		// the chosen machine opens it as a task record and its
 		// worker, so there is no number to lease here; the node's own spawn
 		// takes the lease as any spawn there does.
 		if req.Issue != 0 || req.Key != "" || req.Name != "" {
@@ -806,7 +806,7 @@ func (s *Server) clientPlaceStatus(w http.ResponseWriter, r *http.Request, p fle
 
 // restoreTarget is the fleet whose /fleet-history row key is: the machine
 // named, else the one whose reaped worker of that key the hub holds the
-// history record of (fleet-worker-records.sh push, claude-fleet#1609) — the
+// history record of (pushed by the node's worker-records road, claude-fleet#1609; gone with #4898) — the
 // newest, among the fleets this person may see that host repo.
 func (s *Server) restoreTarget(p fleetPrincipal, repo, key, node string, now time.Time) (Placement, store.FleetRow, error) {
 	pl := Placement{Requested: node, Repo: repo, Candidates: []Candidate{}, At: now.UTC()}

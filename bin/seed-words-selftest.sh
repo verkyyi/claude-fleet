@@ -1,24 +1,25 @@
 #!/bin/bash
-# seed-words-selftest.sh — a worker whose first turn is the person's words still
-# claims first (issue #3331, EPIC #3178 ⑧, D2 = ①).
+# seed-words-selftest.sh — a worker whose first turn is the person's words is given
+# its flow by a hook (issue #3331, EPIC #3178 ⑧, D2 = ①; no claim since #4898).
 #
 # The spawn half (dash-issue-session.sh writes the words AND stamps
-# `@seed_words <claim command>`, or neither) is dash-issue-session-prompt-selftest
+# `@seed_words`, or neither) is dash-issue-session-prompt-selftest
 # A / W. This is the other half — bin/fleet-worker-start-hook.sh, the only road
 # the flow has into a fleet-worker (its body is empty) — on an isolated tmux
 # socket, plus the hook table wiring it:
 #
 #   T  hooks/settings-hooks.json runs it on SessionStart with no matcher (startup)
 #   S  a stamped worker window at `startup` ⇒ JSON: additionalContext tells the
-#      agent to invoke the claim skill BEFORE anything else, naming the issue and
-#      repo; systemMessage is the person's one grey line
-#   P  the plugin form of the command (/fleet:fleet-claim) names that skill
+#      agent to read `brief` FIRST, then PR (`Closes #N`) → pr_verdict / pr_merge →
+#      report, naming the issue and repo — no claim skill (issue #4898);
+#      systemMessage is the person's one grey line. An old stamp (/fleet-history)
+#      counts the same.
 #   N  nothing printed: resume / compact, no stamp (a scratch, a no-repo session,
 #      an old window), a desk ticket, no pane, a broken event — exit 0 every time
 #   L  the line follows the interface language (en)
 #   K  a development task with no issue (@task T<n> + @task_flow 1, issue #4897)
 #      ⇒ the task flow: read the record with `brief`, PR, pr_verdict / pr_merge,
-#      report merged — never the claim skill; @task alone (no flow) ⇒ nothing
+#      report merged; @task alone (no flow) ⇒ nothing
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
@@ -55,25 +56,21 @@ hook() { # <source> — run the hook as the pane's own process would
 }
 field() { python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print(eval(sys.argv[1]))' "$1"; }
 
-# ===== S: a stamped worker window ⇒ claim first ================================
-setw @seed_words /fleet-claim; setw @issue 3312; setw @repo acme/tokenledger; setw @agent_def fleet-worker
+# ===== S: a stamped worker window ⇒ brief first, then the flow ================
+setw @seed_words 1; setw @issue 3312; setw @repo acme/tokenledger; setw @agent_def fleet-worker
 out=$(hook startup); rc=$?
 [ "$rc" = 0 ] || fail "S the hook must exit 0" "$out"
 ctx=$(printf '%s' "$out" | field 'd["hookSpecificOutput"]["additionalContext"]') || fail "S no additionalContext" "$out"
 ev=$(printf '%s' "$out" | field 'd["hookSpecificOutput"]["hookEventName"]')
 [ "$ev" = SessionStart ] || fail "S hookEventName must be SessionStart" "$out"
-case "$ctx" in *"Before anything else"*'`fleet-claim` skill'*) ;; *) fail "S the context must make the claim skill the FIRST step" "$ctx" ;; esac
+case "$ctx" in *"Before anything else"*'the fleet tool `brief`'*'Closes #3312'*'`pr_merge`'*'`state: merged`'*) ;; *) fail "S the context: brief first, then PR → merge → report" "$ctx" ;; esac
+case "$ctx" in *fleet-claim-*|*"claim skill"*) fail "S no claim skill any more (issue #4898)" "$ctx" ;; esac
 case "$ctx" in *"#3312"*"acme/tokenledger"*) ;; *) fail "S the context must name the issue and the repo" "$ctx" ;; esac
 line=$(printf '%s' "$out" | field 'd["systemMessage"]')
 [ "$line" = "fleet-worker · tokenledger · 单 #3312 · 做完开 PR，门绿了自己合" ] || fail "S the person's grey line" "$line"
-ok "S startup on a stamped window: claim first + one grey line"
-
-# ===== P: the plugin-installed command names its own skill =====================
-setw @seed_words /fleet:fleet-claim
-ctx=$(hook startup | field 'd["hookSpecificOutput"]["additionalContext"]')
-case "$ctx" in *'`fleet:fleet-claim` skill'*) ;; *) fail "P a plugin install's skill is fleet:fleet-claim" "$ctx" ;; esac
-setw @seed_words /fleet-claim
-ok "P /fleet:fleet-claim names the fleet:fleet-claim skill"
+setw @seed_words /fleet-history
+case "$(hook startup | field 'd["hookSpecificOutput"]["additionalContext"]')" in *'the fleet tool `brief`'*) ;; *) fail "S an old stamp gets the same flow" ;; esac
+ok "S startup on a stamped window: brief first, the flow, one grey line; an old stamp the same"
 
 # ===== L: the line follows the interface language ==============================
 line=$(LANG_UI=en hook startup | field 'd["systemMessage"]')
@@ -86,7 +83,7 @@ for s in resume compact clear; do
 done
 setw @desk 1; [ -z "$(hook startup)" ] || fail "N a desk ticket gets no flow"; unsetw @desk
 unsetw @seed_words; [ -z "$(hook startup)" ] || fail "N no @seed_words (scratch / no-repo / old window) ⇒ nothing"
-setw @seed_words /fleet-claim; unsetw @issue; [ -z "$(hook startup)" ] || fail "N no @issue ⇒ nothing"
+setw @seed_words /fleet-history; unsetw @issue; [ -z "$(hook startup)" ] || fail "N no @issue ⇒ nothing"
 setw @issue 3312
 [ -z "$(printf 'not json' | env TMUX="$SP,1,0" TMUX_PANE="$PANE" bash "$HOOK")" ] || fail "N a broken event ⇒ nothing"
 [ -z "$(printf '{"source":"startup"}' | env -u TMUX -u TMUX_PANE bash "$HOOK")" ] || fail "N no pane ⇒ nothing"
@@ -101,7 +98,7 @@ out=$(hook startup); rc=$?
 ctx=$(printf '%s' "$out" | field 'd["hookSpecificOutput"]["additionalContext"]') || fail "K no additionalContext" "$out"
 case "$ctx" in *"T42"*"acme/tokenledger"*"NOT to a GitHub issue"*) ;; *) fail "K the context must name the record and the repo, and no issue" "$ctx" ;; esac
 case "$ctx" in *'the fleet tool `brief`'*'`pr_verdict`'*'`pr_merge`'*'`state: merged`'*) ;; *) fail "K the flow: brief → PR → pr_verdict/pr_merge → report merged" "$ctx" ;; esac
-case "$ctx" in *fleet-claim*) fail "K a task session must not be sent to the claim skill" "$ctx" ;; esac
+case "$ctx" in *"Closes #"[0-9]*) fail "K a task's PR carries no Closes" "$ctx" ;; esac
 line=$(printf '%s' "$out" | field 'd["systemMessage"]')
 [ "$line" = "fleet-worker · tokenledger · 任务 T42 · 做完开 PR，门绿了自己合" ] || fail "K the person's grey line" "$line"
 line=$(LANG_UI=en hook startup | field 'd["systemMessage"]')
@@ -109,8 +106,8 @@ case "$line" in "fleet-worker · tokenledger · task T42 · "*merges*) ;; *) fai
 unsetw @task_flow; [ -z "$(hook startup)" ] || fail "K @task without @task_flow (a no-repo task, ⌘P) ⇒ nothing"
 setw @task_flow 1; setw @task bogus; [ -z "$(hook startup)" ] || fail "K a malformed @task ⇒ nothing"
 setw @task T42; [ -z "$(hook resume)" ] || fail "K resume ⇒ nothing"
-setw @issue 3312; setw @seed_words /fleet-claim
-case "$(hook startup | field 'd["hookSpecificOutput"]["additionalContext"]')" in *'`fleet-claim` skill'*) ;; *) fail "K an issue worker that carries @task keeps the claim flow (the old road, until 批 1)" ;; esac
-ok "K a task session (@task + @task_flow, no issue): read the record, PR, merge, report merged — no claim"
+setw @issue 3312; setw @seed_words /fleet-history
+case "$(hook startup | field 'd["hookSpecificOutput"]["additionalContext"]')" in *'Closes #3312'*) ;; *) fail "K an issue window that carries @task gets the issue flow" ;; esac
+ok "K a task session (@task + @task_flow, no issue): read the record, PR, merge, report merged"
 
-printf '\nselftest OK: %s assertions passed (words first ⇒ claim next)\n' "$pass"
+printf '\nselftest OK: %s assertions passed (words first ⇒ brief next)\n' "$pass"

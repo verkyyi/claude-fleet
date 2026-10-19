@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-macos-watch.sh --repo <owner/name> [--session <fleet>] [--dry-run] [--now]
-#   — a red BSD half on master becomes ONE breakage issue and one alert (issues #2286, #3120).
+#   — a red BSD half on master becomes one alert (issues #2286, #3120, #4898).
 #
 # Since #2286 the macOS selftests no longer run on a pull request; since #4663 they
 # hold no release either: there is one release line (#4671), every Mac follows
@@ -15,23 +15,17 @@
 #      one failed / timed out ⇒ red, all green ⇒ green, none or cancelled ⇒ no
 #      verdict (a follow with nothing to follow, one cancelled). A run red for
 #      another step is not the BSD half's;
-#   2. green → forgets what it filed, prints `green`, exit 0;
+#   2. green → forgets what it alerted, prints `green`, exit 0;
 #   3. red → names what is red (the failed job, the FAIL/TIMEOUT tests in its log)
 #      and since which commit (the red streak walked back to the last green run;
 #      a run's head commit — a train boards master's head when it starts, at or
-#      past it), and files it through the ONE filer road with
-#      `--breakage-key macos-<the red tests>` (bin/fleet-issue-file.sh, issues
-#      #2078, #4232): one issue per red test set across every machine, login and
-#      new stable — no commit in the key; `--fault-sha` / `--fault-link` name the
-#      run (issue #4271): one already open gets ONE 「同一故障」 comment per new
-#      sha and comes back exit 5, a closed one is reopened when the red run's
-#      commit contains its fix. A NEW or REOPENED issue raises ONE `breakage`
-#      alert (fleet-alerts.sh event) on --session's fleet (a red run on an issue
-#      already open raises none — the issue is the reminder) — and spawns NOTHING: since
-#      #3120 (EPIC #3111 C9) no session starts by itself; sending a fixer is the
-#      person's, or a session's they opened for it.
-#   4. remembers the run id it filed for, so the same red run is never re-filed
-#      (nor re-commented 「同一故障」) on every tick;
+#      past it), and raises ONE `breakage` alert (fleet-alerts.sh event) on
+#      --session's fleet naming the red tests and the run — no issue is filed
+#      (issue #4898) — and spawns NOTHING: since #3120 (EPIC #3111 C9) no session
+#      starts by itself; sending a fixer is the person's, or a session's they
+#      opened for it.
+#   4. remembers the run id it alerted for, so the same red run is never said
+#      again on every tick;
 #   5. a long red (issue #3869): when the red streak began more than
 #      FLEET_MACOS_STALE_SECS ago (7200, 2 hours — the streak's first red run's
 #      created_at) with nothing green since, ONE more `breakage` alert says macOS
@@ -43,11 +37,11 @@
 # daemon's until #3120) for every hosted repo whose base checkout carries both the
 # watched workflow and bin/fleet-stable.sh — so a business repo is never read. Throttled to one read
 # per FLEET_MACOS_WATCH_SECS (default 600) per repo; --now ignores the throttle.
-# FLEET_MACOS_WATCH=0 turns it off. --dry-run reads and prints the filing it
-# would make, files nothing and remembers nothing.
+# FLEET_MACOS_WATCH=0 turns it off. --dry-run reads and prints the alert it
+# would raise, raises nothing and remembers nothing.
 #
 # State: $FLEET_CONF_DIR/global/macos-watch/<slug>.{stamp,filed,stale}.
-# Exit: 0 green / filed / nothing to do · 1 the filing failed · 2 usage / unread.
+# Exit: 0 green / alerted / nothing to do · 1 the alert failed · 2 usage / unread.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -87,7 +81,7 @@ if [ "$now" = 0 ] && [ "$dry" = 0 ]; then
   [ $((t - last)) -lt "$every" ] && exit 0
 fi
 # GitHub unreachable (issue #4841): no stamp, so the first tick after it answers
-# reads the runs — and nothing is filed or alerted meanwhile.
+# reads the runs — and nothing is alerted meanwhile.
 if command -v fleet_gh_ready >/dev/null 2>&1 && ! fleet_gh_ready; then
   log "GitHub 不通 — skip"; exit 0
 fi
@@ -169,7 +163,7 @@ if [ -n "$t0" ] && [ $((t - t0)) -ge "$held" ] && [ "$(cat "$stale" 2>/dev/null)
   fi
 fi
 
-[ "$(cat "$memo" 2>/dev/null)" = "$rid" ] && { printf 'filed\t%s\t%.7s\t(already, for this run)\n' "$rid" "$rsha"; exit 0; }
+[ "$(cat "$memo" 2>/dev/null)" = "$rid" ] && { printf 'alerted\t%s\t%.7s\t(already, for this run)\n' "$rid" "$rsha"; exit 0; }
 
 # What is red: the failed shards, and the FAIL / TIMEOUT tests in the first one's log.
 jid=$(printf '%s\n' "$jobs" | awk -F'\t' 'NF { print $1; exit }')
@@ -177,7 +171,7 @@ jnames=$(printf '%s\n' "$jobs" | cut -f2 | grep . | paste -sd ',' - | sed 's/,/,
 tests=''
 if [ -n "$jid" ]; then
   # over REST (#4238): `gh run view --log-failed` printed nothing for these jobs,
-  # so every filing said «no FAIL line» — and the key below needs the names
+  # so every alert said «no FAIL line»
   u="repos/$repo/actions/jobs/$jid/logs"
   tests=$({ fleet_gh api "$u" --allow-escape-sequences 2>/dev/null || fleet_gh api "$u" 2>/dev/null; } \
             | grep -aoE '(FAIL|TIMEOUT) +[A-Za-z0-9_.-]*selftest[A-Za-z0-9_.-]*' | awk '{print $2}')
@@ -186,53 +180,17 @@ fi
 what="${tests:-${jnames:-$WF}}"
 s7=$(printf '%.7s' "$start")
 title="macOS 检查红了、Mac 停在上一版：${what}（${jnames:-$WF}）自 ${s7} 起"
-body="## master 上的 BSD 半边红了（issue #2286 的自动开单）
-
-- 工作流：\`$WF\` · 最新完成的一次：run ${rid}（$(printf '%.7s' "$rsha")）— https://github.com/$repo/actions/runs/$rid
-- 红的检查：${jnames:-（未能读出失败的 job）}
-- 红的测试：${tests:-（日志里没有读出 FAIL/TIMEOUT 行，看上面的 run）}
-- 从哪个提交开始红：\`$s7\`（往回找到最后一次绿之后的第一个红）
-
-macOS 全量检查每晚跑（\`selftests-macos.yml\`）。#4663 起它不再挡发布：Mac 通道随 stable 一起移动，每台 Mac 装上新版后由自己的 machine doctor 验证，新出现 FAIL 就整机回滚。所以这里的红，是 Mac 上会遇到的问题，要尽快修。
-修法：在 \`bin/run-selftests.sh <name>\` 里复现那个测试（最常见的是 BSD sed / bash 3.2 的差别，见 CLAUDE.md「The gate has a BSD half」），修好后合并，下一趟列车就把修复带到 Mac。"
-
 if [ "$dry" = 1 ]; then
-  printf 'would-file\t%s\t%s\n' "$rid" "$title"; exit 0
+  printf 'would-alert\t%s\t%s\n' "$rid" "$title"; exit 0
 fi
 
-# ONE issue per red test (issue #4232): the filer's own fingerprint carries the
-# commit, so every new stable with the same red test opened another issue (21 for
-# one red, #3975 … #4191). The key is the red tests (else the red shards) — the
-# filer finds the open issue under it, comments 「同一故障」 there and exits 5.
-bkey=$(printf '%s\n' "${tests:-$jnames}" | tr ',' '\n' | sed 's/^ *//; s/\.sh$//; s/[^A-Za-z0-9._-]\{1,\}/-/g' \
-         | grep . | LC_ALL=C sort -u | paste -sd '_' -)
-case "$bkey" in ''|*[!A-Za-z0-9._-]*) bkey=$(printf '%s' "$what" | cksum | cut -d' ' -f1) ;; esac
-bkey="macos-$bkey"
-[ "${#bkey}" -le 80 ] || bkey="macos-$(printf '%s' "$bkey" | cksum | cut -d' ' -f1)"
-filer="${FLEET_MACOS_FILE_CMD:-$BIN/fleet-issue-file.sh}"
-ferr=$(mktemp "${TMPDIR:-/tmp}/fleet-macos-file.XXXXXX") || ferr=/dev/null
-url=$(bash "$filer" --breakage-key "$bkey" --fault-sha "$rsha" --fault-link "https://github.com/$repo/actions/runs/$rid" \
-        --repo "$repo" --priority p1 --from macos-watch --title "$title" --body "$body" 2>"$ferr"); rc=$?
-reopened=0; grep -q ': reopened ' "$ferr" 2>/dev/null && reopened=1
-[ "$ferr" = /dev/null ] || { cat "$ferr" >&2; rm -f "$ferr"; }
-case "$rc" in
-  0|5) printf '%s\n' "$rid" > "$memo" ;;
-  *)   log "filing failed (rc $rc) — retried next tick"; exit 1 ;;
-esac
-if [ "$reopened" = 1 ]; then
-  printf 'filed\t%s\t%s\t(reopened)\n' "$rid" "$url"
-elif [ "$rc" = 5 ]; then
-  printf 'filed\t%s\t%s\t(already open)\n' "$rid" "$url"
-else
-  printf 'filed\t%s\t%s\n' "$rid" "$url"
-fi
-# The reminder: one alert when the issue is NEW or REOPENED (issue #4271) — a
-# red run on an issue already open is one comment there, not another alert: the
-# open issue is the reminder, and the stale-lane alert (5.) still fires once per
+# One alert per red run (issue #4898: the issue filer left with the ticket
+# layer — a red BSD half is said, not filed): the memo keeps the same red run from
+# being said again every tick; the stale-lane alert (5.) still fires once per
 # streak. Nobody is spawned for it (issue #3120).
-if [ "$rc" = 0 ] || [ "$reopened" = 1 ]; then
-  bash "$alert" event ${sock:+-L "$sock"} breakage \
-    "fleet: macOS is red since ${s7}, and every Mac runs it — ${url:-$repo} (nobody fixes it on their own; open a session on it)" \
-    >/dev/null 2>&1 || log "filed ${url:-the breakage} but the alert failed"
-fi
+printf '%s\n' "$rid" > "$memo"
+printf 'alerted\t%s\t%s\n' "$rid" "$title"
+bash "$alert" event ${sock:+-L "$sock"} breakage \
+  "fleet: macOS is red since ${s7} ($what), and every Mac runs it — https://github.com/$repo/actions/runs/$rid (nobody fixes it on their own; open a session on it)" \
+  >/dev/null 2>&1 || { log "the alert for run $rid failed — retried next tick"; rm -f "$memo"; exit 1; }
 exit 0

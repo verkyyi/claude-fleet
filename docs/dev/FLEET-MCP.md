@@ -75,28 +75,24 @@ are the dispatch group's — listed by `fleet-orch`, answered by `fleet` as lega
 | `children` | — | `fleet-children.sh --json` | the script's |
 | `repos` | — | `fleet-repo.sh list` (`structuredContent.repos` = the parsed `owner/name` list) | the script's |
 | `agents` | — | `tmux list-windows` of this fleet, `fleet-children.sh --json`, `fleet_origin_key` | read-only; each row `key · issue · agent · state · is_self/is_parent/is_child` |
-| `spawn` | `issue` (int ≥ 1), `repo`?, `reap`?, `agent`?, `coding_agent`?, `draft`? \| `pr_note`? | `dash-issue-session.sh <issue> [--repo R] [--reap P]` — `draft` / `pr_note` first run `fleet-draft.sh mark <issue> [--pr-note T]` (issue #3715; a failed mark spawns nothing) | 0 spawned / window exists · 2 at capacity · 3 already claimed · 1 infrastructure |
+| `spawn` | `issue` (int ≥ 1), `repo`?, `reap`?, `agent`?, `coding_agent`? | `dash-issue-session.sh <issue> [--repo R] [--reap P]` | 0 spawned / window exists · 2 at capacity · 3 already claimed · 1 infrastructure |
 | `set_reap` | `policy` (`merged[:<dur>]` · `done[:<dur>]` · `loop-end` · `at:<HH:MM\|ISO>` · `keep`) | `fleet-reap-policy.sh set <policy>` — this window's `@reap_policy` (issue #1902) | 0 set · 2 not a policy · 1 no window |
 | `await` | `issue` or `task` (`T<n>`, issue #3330), `repo`?, `timeout`? (1–570 s, default 540) | `fleet-await.sh <issue\|T<n>> --timeout T [--repo R]` — an accepted task reads its authoritative outcome; an issue number whose window is an accepted launch waits on that window's `T<n>` (no `@task`: NO-WORKER), and a hub-authority repo never spawns by number (NO-WORKER — use `task`, issue #4398); legacy records wait on their issue worker (no issue: NO-WORKER) | accepted T: 0 SUCCEEDED · 1 FAILED · 2 CANCELLED/REFUSED · 3 WAITING/UNKNOWN; legacy: 0 MERGED · 3 TIMEOUT |
-| `task` 派 | `title`, `body`?, `repo`?, `spawn`?, `reap`?, `agent`?, `coding_agent`?, `draft`? \| `pr_note`? | `fleet-task-record.sh dispatch --title T --body-file - [--repo R] [--spawn] [--reap P] [--as A] [--agent claude|codex] [--draft\|--pr-note T]` (draft needs `repo`, issue #3715) — the hub's task record FIRST (`T<n>`, `POST /v1/node/tasks` with the node token, issue #3330), then a repo task's session bound to the record alone (issue #4897: `dash-raw-session.sh --repo R --task T<n> --reap merged`, no issue — its SessionStart flow reads the record with `brief`, it lands its PR and `report merged` closes the record; reaped once the record is closed), or a no-repo session given the words (`dash-raw-session.sh --no-repo --task T<n>`). Still an issue (`fleet-issue-file.sh --task T<n>`) for `draft` and `FLEET_TASK_ISSUE=1`, until 批 1. No hub: a repo task files exactly as `file_issue`; a no-repo one exits 3 | 0 · 1 the hub refused · 2 usage · 3 no hub (no-repo) · the filer's / spawner's own |
+| `task` 派 | `title`, `body`?, `repo`?, `spawn`?, `reap`?, `agent`?, `coding_agent`? | `fleet-task-record.sh dispatch --title T --body-file - [--repo R] [--spawn] [--reap P] [--as A] [--agent claude|codex]` — the hub's task record FIRST (`T<n>`, `POST /v1/node/tasks` with the node token, issue #3330), then a repo task's session bound to the record alone (issue #4897: `dash-raw-session.sh --repo R --task T<n> --reap merged`, no issue — its SessionStart flow reads the record with `brief`, it lands its PR and `report merged` closes the record; reaped once the record is closed), or a no-repo session given the words (`dash-raw-session.sh --no-repo --task T<n>`). Nothing is filed as an issue (#4898). No hub: exit 3 | 0 · 1 the hub refused · 2 usage · 3 no hub (no-repo) · the filer's / spawner's own |
 | `send` | `to` (`issue:<N>` · `scratch-<N>` · `orchestrator` · `parent`), `text` | `fleet-peer-send.sh <target> -` (text on stdin) | `{delivered}` · `{queued}` (exit 3) · `{ended}` (exit 2 + stdout) |
 
 ### 报 问 记 合 (issue #1808, EPIC #1813 C6)
 
-The rest of a worker's day — the commands `commands/fleet-claim.md` used to have
-it type. Each argument is one flag of the script; a body or a doc travels on
+The rest of a worker's day — the commands the old claim skill had it type. Each argument is one flag of the script; a body or a doc travels on
 **stdin**, never through argv. Arguments that only make sense together are checked
-together (refused, nothing ran): `evidence before|after` takes exactly one of
-`file` / `text` / `pane`; `post` / `line` take none; `mv` needs a `file`; `slug` is
+together (refused, nothing ran): `slug` is
 `path`'s, `doc` / `issue` are `check`'s; `until_merged` / `timeout` need `wait`.
 
 | tool | arguments | runs | exit codes |
 |---|---|---|---|
 | `report` 报 | `state` (`merged` · `blocked` · `failed` · `stopped` · `waiting`), `pr`?, `summary`?, `outcome`? (`succeeded` · `failed`, accepted tasks), `dry_run`? | `fleet-report-parent.sh --state S [--pr N] [--summary T] [--outcome O] [--dry-run]` | 0 reported / no parent · 3 queued (delivered later — don't resend) · 1 refused; `merged` is checked against the PR's real state |
-| `ask` 问 | `question`, `kind`? (`question` · `permission`), `suggest`? `default`? `due`? (hints, written under the question off the `ask_hint_*` strings — nothing acts on them), `class`? (accepted and unused since #4337), `issue`? (default the window's `@issue`; none → refused) | `fleet-comment.sh <issue> --note --body-file -` with `⛔ blocked: <question>` (`⛔ blocked — needs authorization: …` for `permission`) + the hint lines, **then** `set-claude-state.sh blocked` — stamped even if the comment failed — **then** a copy to the parent session over `send` to: `parent` (fid first, `wid:` on another machine; issue #4337) | the comment's; `structuredContent.state` is the stamp's, `.parent` the send's (`delivered` / `queued`, or `why` it could not be told — never an error). Nobody answers at a deadline (EPIC #4333); the answer arrives as the next turn by the existing channels (issue-bridge, the parent's send, a prompt) |
+| `ask` 问 | `question`, `kind`? (`question` · `permission`), `suggest`? `default`? `due`? (hints, written under the question off the `ask_hint_*` strings — nothing acts on them), `class`? (accepted and unused since #4337), `issue`? (accepted and unused since #4898) | the question goes on the window's task record (`fleet-task-record.sh`, 「问过你」) when it has one, `set-claude-state.sh blocked` turns the window red, and a copy goes to the parent session — no GitHub comment (issue #4898) | 0 asked |
 | `answer_dialog` 答 | `window` (`@<id>` / `%<pane>`), `fp` (the dialog's fingerprint), `picks` (labels verbatim; `N=<label>` with several questions), `by`? (`person` · `session` · `default`), `basis`?, `issue`? (where the trail goes) | `fleet-dialog-answer.sh <window> --fp F --pick L … [--by B] [--basis T] [--issue R#N]` — reads the open AskUserQuestion off that window's transcript, refuses unless it is the one named (fingerprint + labels), refuses over a person typing / a draft, presses once through `fleet-answer.sh` and confirms in the transcript, leaves one line in the answer log (代答记录, `fleets/<session>/answers/answers-<day>.md`) + a record-only comment (issue #2958) | 0 answered · 1 no window / transcript · 2 usage · 3 refused, nothing sent · 4 pressed, unconfirmed (never pressed again) · 5 a person is typing |
-| `comment` 记 | `issue`, `body`, `mode`? (`note` default · `to-worker`), `close`?, `repo`? | `fleet-comment.sh <issue> --note\|--to-worker [--close] [--repo R] --body-file -` | the script's. `note` is RECORD-ONLY |
-| `evidence` 记 | `action` (`line` · `before` · `after` · `post`), `file` \| `text` \| `pane`, `name`?, `note`?, `mv`?, `issue`? | `fleet-evidence.sh <action> [--issue M] [--note …] [--name F] [--mv] [--pane T] [<file> \| -]` (`text` on stdin as `-`) | 0 ok · 1 none / failure · 2 usage · 4 no issue |
 | `handoff` 记 | `action` (`path` · `find` · `repo` · `check`), `slug`?, `doc`?, `issue`? | `fleet-handoff-file.sh <action> [--slug S]` · `check - [--issue N]` (doc on stdin) | 0 · 1 none · 3 check findings (advice) · 4 ambiguous |
 | `pr_verdict` 合 | `pr`?, `repo`?, `wait`?, `until_merged`?, `timeout`? (1–570 s, default 540 with `wait`) | `fleet-pr-verdict.sh <PR> [--repo R] [--wait --timeout T [--until-merged]]` | 0 READY · 1 any other verdict · 2 error · 3 TIMEOUT (call again) |
 | `pr_merge` 合 | `pr`?, `repo`? | `fleet-pr-merge.sh <PR> [--repo R]` (the fleet's merge method) | 0 MERGED · 1 not READY / refused · 2 error |
@@ -105,16 +101,14 @@ together (refused, nothing ran): `evidence before|after` takes exactly one of
 
 ### The rest of a worker skill (issue #1811, EPIC #1813 C9)
 
-What `commands/fleet-claim.md`, `fleet-handoff.md`, `fleet-compact-resume.md` and
+What `commands/fleet-handoff.md`, `fleet-compact-resume.md` and
 `fleet-context.md` still had a session type by path. With these the worker-run
 steps of every skill name a **tool**, never a script (`bin/skill-tools-selftest.sh`
 lints it): a script path appears only under a heading marked `运营者` or `排障`.
 
 | tool | arguments | runs | exit codes |
 |---|---|---|---|
-| `brief` | `kind`? (`claim` default · `resume`), `issue`?, `repo`?, `no_comments`? (claim only) | `fleet-claim-brief.sh [--issue N] [--repo R] [--no-comments]` · `fleet-compact-resume.sh --brief` | claim: 0 go · 2 not in a fleet · 3 wrong seat · 4 no issue · 5 the read failed |
-| `file_issue` | `title`, `body`?, `labels`? (comma list), `priority`? (`p0`–`p3`), `parent`?, `spawn`? \| `bind`?, `breakage`? \| `breakage_key`?, `task`? (`T<n>`, issue #3330), `draft`? \| `pr_note`? (issue #3715), `repo`? | `fleet-issue-file.sh --title T [--body B] [--label L]… [--priority P] [--parent N] [--task T<n>] [--draft\|--pr-note T] [--repo R] [--spawn\|--bind] [--breakage\|--breakage-key K\|--no-breakage]` — `breakage: false` → `--no-breakage` (a no-op); left out = an ordinary issue whatever the text says (issue #4271 removed #2175's auto road); a closed issue under the key is reopened when the red version contains its fix; `rule` → `--rule N`, accepted and ignored (issue #4340) | 0 · 2 usage · 3 unknown label · 4 spawn with no live parent · 5 the breakage already has an open issue (its URL on stdout, a 「同一故障」 comment left on it; issue #2078) · 1 failure |
-| `gh` | `kind` (`issue` · `pr` · `checks`), `number`, `fields`?, `max_age`? (≥ 0), `repo`? | `fleet-gh.sh issue view\|pr view\|pr checks <N> [--repo R] [--json F] [--max-age S]` | the script's |
+| `brief` | `kind`? (`task` default · `claim` the same · `resume`), `repo`? (`issue` / `no_comments` accepted and ignored) | `fleet-brief.sh [--repo R]` · `fleet-compact-resume.sh --brief` | 0 go · 2 not in a fleet · 4 nothing bound · 5 the record could not be read |
 | `context` | `json`? | `fleet-context.sh [--json]` | 0 OK · 1 another verdict · 2 nothing to read |
 | `transfer` | `action` (`check` · `arm` · `export_loop`); `to` (`claude` · `codex`) for check/arm; `handoff` + `loop`? for arm; `transcript` + `output` for export_loop | `fleet-transfer.sh --session S --window $TMUX_PANE --to T --dry-run` · `… --handoff DOC [--loop L] --after-turn` · `fleet-loop.py from-claude --transcript F --output F` | the script's |
 | `handoff` `arm` | `doc` (a stored file's path) \| `issue` (+ `repo`?) | `fleet-handoff-cycle.sh --pane $TMUX_PANE --doc D \| --issue N [--repo R]`, **detached** — the call returns at once with its pid; it must be the turn's last call | 0 armed |
@@ -122,8 +116,7 @@ lints it): a script path appears only under a heading marked `运营者` or `排
 | `show` | `file`, `inline`? | `fleet-show.sh [--inline] -- <file>` | 0 `saved:<path>` / `unconfirmed` · 4 `failed:<why>` · 2 PATH + `failed:` (say the path) |
 | `open` | `target` (URL · `:port[/path]` · file) | `fleet-open.sh -- <target>` — waits for the far side's receipt (issue #3538) | 0 `opened` / `unconfirmed` · 4 `failed:<why>` · 2 a file not sent (say the path) |
 
-`file_issue`'s body goes as `--body` (the script takes no stdin); it never passes
-through a shell. `--` before a file / target keeps a name starting with `-` a name.
+Nothing passes through a shell. `--` before a file / target keeps a name starting with `-` a name.
 
 ### In a skill
 
@@ -736,7 +729,7 @@ is already on the hub runs on the hub from its first task.
 The cutover is five stages, each its own command on one of the person's logins
 (`fleet-repo.sh authority [<owner/repo>] …` = `fleet_repo_authority.py`; the
 repo is optional and only narrows the lists; `--session` is ignored). Every
-call goes to `/v1/fleet/authority` (`fleet_ticket.api` routes `/authority*`
+call goes to `/v1/fleet/authority` (`fleet_hub_rest.api` routes `/authority*`
 there). Save a fresh dry-run between stages; an exact retry reuses the same
 operation key (`owner-<sha256(owner, action, revision)>`), so a repeated stage
 replays its first answer.
@@ -1025,10 +1018,10 @@ for you (#2068 B).
 |---|---|
 | `fleet-children.sh` · `fleet-repo.sh list` | `children` · `repos` |
 | `dash-issue-session.sh` · `fleet-await.sh` · `fleet-peer-send.sh` | `spawn` · `await` · `send` |
-| `fleet-report-parent.sh` · `set-claude-state.sh blocked` · `fleet-comment.sh` | `report` · `ask` · `comment` |
-| `fleet-evidence.sh` · `fleet-handoff-file.sh` | `evidence` · `handoff` |
+| `fleet-report-parent.sh` · `set-claude-state.sh blocked` | `report` · `ask` |
+| `fleet-handoff-file.sh` | `handoff` |
 | `fleet-pr-verdict.sh` · `fleet-pr-merge.sh` | `pr_verdict` · `pr_merge` |
-| `fleet-claim-brief.sh` · `fleet-issue-file.sh` · `fleet-gh.sh` | `brief` · `file_issue` · `gh` |
+| `fleet-brief.sh` | `brief` |
 | `fleet-dialog-answer.sh` | `answer_dialog` |
 | `fleet-task-record.sh dispatch` | `task` |
 
@@ -1085,6 +1078,11 @@ list, so the server keeps answering them for one version — never listed, every
 call refused with the reason (`RETIRED` in `fleet-mcp.py`), and `--probe` names
 them so the release gate's replay counts them as handled.
 
+The same holds for `comment` · `evidence` · `file_issue` · `gh` (issue #4898): the
+GitHub issue layer — claim, comment, evidence, filing, the ticket cache — left with
+EPIC #4895 批 1; the hub task record `T<n>` is the only ticket. Each answers
+`removed (claude-fleet#4898): …` naming the road that replaced it.
+
 ## Protocol
 
 Newline-delimited JSON-RPC 2.0 on stdin/stdout, stdlib only (macOS python 3.9):
@@ -1097,14 +1095,13 @@ one notification of its own: `notifications/tools/list_changed`, after a reload.
 `bin/fleet-mcp-selftest.sh` — the list, every refusal (nothing ran), each tool once
 against fake scripts, no-hub degenerate, the legacy shim, the Codex mount; for 报问记合
 (G–I) every new tool's refusals, its exact argv + stdin, and script ≡ tool through the
-REAL `fleet-comment.sh` (the byte-identical comment) and `fleet-report-parent.sh
---dry-run` (the same envelope, on an isolated tmux server); L the C9 tools the same way,
+REAL `fleet-report-parent.sh --dry-run` (the same envelope, on an isolated tmux server); L the C9 tools the same way,
 and `handoff arm` answering before its detached helper ends.
 `bin/skill-tools-selftest.sh` — no worker-run skill step names a `~/.claude/fleet/bin`
 script, and every `mcp__fleet__<tool>` / `mcp__fleet-orch__<tool>` a skill names is a
 tool THAT server lists.
 `bin/fleet-mcp-selftest.sh` Q — the two groups: `fleet-orch` lists the dispatch group,
-`fleet` answers it `road=legacy`, a pre-group takeover keeps all 25, `file_issue`
+`fleet` answers it `road=legacy`, a pre-group takeover keeps all 21,
 spawn follows the group, one server definition for Codex and the plugin.
 `bin/fleet-mcp-selftest.sh` J — the credential: valid / expired / forged /
 tampered / another pane / another fleet / revoked, migration, renewal, no leak.

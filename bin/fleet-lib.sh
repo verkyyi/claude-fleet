@@ -505,8 +505,8 @@ fleet_is_view_session() { case "${1:-}" in *@view-*) return 0 ;; esac; return 1;
 # reads an empty target as "the current pane", which from a hook or a subshell
 # that lost TMUX_PANE is whichever pane the operator happens to be looking at — a
 # sender's @issue / @worktree read off someone else's window. Every read of the
-# caller's own binding (fleet_seat, fleet_from_marker, fleet-comment.sh,
-# fleet-claim-brief.sh, fleet-evidence.sh) goes through here.
+# caller's own binding (fleet_seat, fleet-brief.sh, the report road) goes through
+# here.
 fleet_pane_fmt() {
   [ -n "${TMUX_PANE:-}" ] || return 1
   tmux display-message -p -t "$TMUX_PANE" "$1" 2>/dev/null
@@ -853,11 +853,7 @@ fleet_bridge_rows() {
     fleet_repos "$s" | while IFS= read -r rp; do
       [ -n "$rp" ] || continue
       ( fleet_load_repo_conf "$s" "$rp" >/dev/null 2>&1 || exit 0
-        # A repo whose tickets live on the hub is bridged unless it says
-        # FLEET_ISSUE_BRIDGE=0 (issue #3597): only its person and the people added
-        # to it can comment there, so the public-repo reason for "off" is gone.
-        _bon=0; [ "${FLEET_TICKETS:-}" = hub ] && _bon=1
-        [ "${FLEET_ISSUE_BRIDGE:-$_bon}" = 1 ] && [ "${FLEET_SEED:-0}" != 1 ] && printf '%s\t%s\t%s\n' "$rp" \
+        [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ "${FLEET_SEED:-0}" != 1 ] && printf '%s\t%s\t%s\n' "$rp" \
           "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$fl}" "${FLEET_ISSUE_BRIDGE_REVIVE:-$rv}" )
     done
   done <<EOF
@@ -868,10 +864,8 @@ EOF
 
 # fleet_bridge_covers <repo> → 0 iff the issue-bridge's poll relays <repo>'s
 # comments: the global switch with FLEET_REPO = <repo>, or a fleet hosting it with
-# the bridge on (fleet_bridge_rows; a FLEET_TICKETS=hub repo is on unless it says
-# 0 — issue #3597). 1 = an unmarked comment there reaches no
-# worker through the bridge — `fleet-comment.sh --to-worker` says so and sends it
-# over the peer channel instead (issue #2059).
+# the bridge on (fleet_bridge_rows). 1 = an unmarked comment there reaches no
+# worker through the bridge (issue #2059).
 fleet_bridge_covers() {
   local want rows
   want=$(fleet_norm_repo "${1:-}"); [ -n "$want" ] || return 1
@@ -992,7 +986,7 @@ fleet_load_repo_conf() {
 # repo first — fleet_window_repo / fleet_worktree_repo — then asks
 # fleet_repo_conf_get, or loads fleet_load_repo_conf itself. A fleet with no
 # repos/ overlay answers with the fleet conf's value, byte for byte.
-_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED FLEET_TICKETS"
+_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED"
 
 # fleet_task_authority [<sess> <repo>] → who runs this LOGIN's tasks (issue #4901):
 # legacy | frozen | hub as its fleet.conf [node] says — the hub answers it per
@@ -1101,155 +1095,23 @@ fleet_repo_conf_get() {
     eval "printf '%s' \"\${$3:-}\"" )
 }
 
-# ---- where a person reads a ticket (issue #3596, EPIC #3570 C3) -------------
-# fleet_ticket_url <repo> <N> [<sess>] → the ONE answer to "which page shows ticket
-# N of <repo>": the hub's 我的单子 page (<hub>/fleet/tickets/<repo>/<N>) when the
-# repo's tickets live on the hub (its conf says FLEET_TICKETS=hub), else its GitHub
-# page — byte for byte the link every caller spelled before. <sess> defaults to
-# $FLEET_SESSION, else the fleet that answers for <repo> first. A hub repo on a
-# computer with no hub address prints nothing, rc 1 (never a GitHub page that is
-# not there); rc 2 on a bad <repo> / <N>. The sidebar, the top bar, the batch row
-# and the pane menu ask it (python: bin/fleet_ticket_url.py, which asks this).
+# ---- where a person reads an issue (issue #3596) -----------------------------
+# fleet_ticket_url <repo> <N> → issue N's GitHub page — the ONE spelling the
+# sidebar, the top bar, the batch row and the pane menu read (python:
+# bin/fleet_ticket_url.py). The hub ticket pages left with issue #4898; rc 2 on a
+# bad <repo> / <N>.
 fleet_ticket_url() {
-  local repo="${1:-}" n="${2:-}" sess="${3:-${FLEET_SESSION:-}}" home='' hub d
+  local repo="${1:-}" n="${2:-}"
   case "$repo" in */*) ;; *) return 2 ;; esac
   case "$n" in ''|0*|*[!0-9]*) return 2 ;; esac
-  if [ -n "$sess" ]; then
-    home=$(fleet_repo_conf_get "$sess" "$repo" FLEET_TICKETS 2>/dev/null) || home=''
-  else
-    [ -n "${ZSH_VERSION:-}" ] && setopt local_options null_glob
-    for d in "$FLEET_CONF_DIR"/fleets/*/; do
-      [ -d "$d" ] || continue
-      d=${d%/}; d=${d##*/}
-      [ -f "$(fleet_repo_conf_file "$d" "$repo")" ] || continue
-      home=$(fleet_repo_conf_get "$d" "$repo" FLEET_TICKETS 2>/dev/null) || home=''
-      break
-    done
-  fi
-  [ -z "$home" ] && [ "$(fleet_repo_forge "$repo" "$sess")" = none ] && home=hub   # no GitHub ⇒ the hub (#3605)
-  if [ "$home" = hub ]; then
-    hub="${FLEET_HUB_URL:-${CCQUOTA_HUB_URL:-}}"
-    [ -n "$hub" ] || hub=$(sed -n 's/^[[:space:]]*\(export[[:space:]]*\)\{0,1\}FLEET_HUB_URL=["'"'"']\{0,1\}\([^"'"'"']*\).*/\2/p' "$FLEET_CONF_DIR/fleet.conf" 2>/dev/null | head -n 1)
-    [ -n "$hub" ] || hub=$(_fleet_node_env_val CCQUOTA_HUB_URL 2>/dev/null)
-    [ -n "$hub" ] || return 1
-    printf '%s/fleet/tickets/%s/%s\n' "${hub%/}" "$repo" "$n"
-    return 0
-  fi
   printf 'https://github.com/%s/issues/%s\n' "$repo" "$n"
 }
 
-# fleet_ticket_home <repo> [sess] → `hub` or `github`: where <repo>'s tickets live
-# (issue #3595, EPIC #3570 共同约定 1). The repo conf's FLEET_TICKETS — its overlay,
-# else the fleet conf — read in a subshell; no session given ⇒ the caller's, else
-# the one fleet (one per login) whose repos/ holds the repo. Anything but `hub`
-# (unset, empty, a typo) is `github`: today's every repo, byte for byte. One repo
-# has ONE home — never two numberings in one repo. A per-repo key
-# (_FLEET_REPO_OVERRIDABLE), so one repo's value never leaks onto another's.
-fleet_ticket_home() {
-  local repo sess="${2:-}" v='' d
-  repo=$(fleet_norm_repo "${1:-}")
-  [ -n "$repo" ] || { printf 'github'; return 0; }
-  [ -n "$sess" ] || sess=$(fleet_current_session 2>/dev/null)
-  if [ -z "$sess" ] && [ -d "$FLEET_CONF_DIR/fleets" ]; then
-    [ -n "${ZSH_VERSION:-}" ] && setopt local_options null_glob
-    for d in "$FLEET_CONF_DIR"/fleets/*/repos/"$(fleet_slug "$repo")".conf; do
-      [ -f "$d" ] || continue
-      d=${d%/repos/*}; sess=${d##*/}; break
-    done
-  fi
-  # Inside a fleet only the repo's conf answers; outside any, the environment's.
-  if [ -n "$sess" ]; then
-    v=$(fleet_repo_conf_get "$sess" "$repo" FLEET_TICKETS 2>/dev/null) || v=''
-    # A repo with no GitHub has nowhere else to keep them (issue #3605): a conf
-    # written before FLEET_TICKETS was, says hub all the same.
-    [ -z "$v" ] && [ "$(fleet_repo_forge "$repo" "$sess")" = none ] && v=hub
-  else
-    v="${FLEET_TICKETS:-}"
-  fi
-  case "$v" in hub) printf 'hub' ;; *) printf 'github' ;; esac
-}
-
-# fleet_ticket_hub <repo> [sess] → rc 0 ⇔ <repo>'s tickets live on the hub (issue
-# #3598, EPIC #3570 C5). The dispatch / claim / panel scripts branch on it: a hub
-# repo goes through the door (bin/fleet-ticket.sh), every other repo keeps the gh
-# call it always made, byte for byte (共同约定 4).
-fleet_ticket_hub() { [ "$(fleet_ticket_home "${1:-}" "${2:-}")" = hub ]; }
-
-# Resolve THIS ticket, preserving an accepted worker's immutable qualified ref.
-# The repository's default remains unchanged for new tickets and other workers.
-# A background reader supplies its resolved @window; ambiguity refuses.
-fleet_ticket_ref() {
-  local repo n="${2:-}" sess="${3:-${FLEET_SESSION:-}}" win="${4:-}" row='' wr='' wn='' context='' home tab
-  repo=$(fleet_norm_repo "${1:-}")
-  case "$n" in ''|0|*[!0-9]*) return 2 ;; esac
-  if [ -n "$win" ]; then
-    case "$win" in @*) case "${win#@}" in ''|*[!0-9]*) return 2 ;; esac ;; *) return 2 ;; esac
-    if [ -n "${TMUX:-}" ]; then
-      row=$(tmux display-message -p -t "$win" '#{@repo}	#{@issue}	#{@launch}') || return 1
-    else
-      row=$(tmux -L "$(fleet_socket "$sess")" display-message -p -t "$win" '#{@repo}	#{@issue}	#{@launch}') || return 1
-    fi
-  else
-    row=$(fleet_pane_fmt '#{@repo}	#{@issue}	#{@launch}')
-  fi
-  tab=$(printf '\t')
-  case "$row" in *"$tab"*"$tab"*) wr=${row%%"$tab"*}; row=${row#*"$tab"}; wn=${row%%"$tab"*}; context=${row#*"$tab"} ;; esac
-  if [ -n "$win" ] && [ -n "$context" ] && { [ "$(fleet_norm_repo "$wr")" != "$repo" ] || [ "$wn" != "$n" ]; }; then return 1; fi
-  if [ -n "$context" ] && [ "$(fleet_norm_repo "$wr")" = "$repo" ] && [ "$wn" = "$n" ]; then
-    printf '%s' "$context" | python3 "$_FLEET_LIB_DIR/fleet_repo_authority.py" --ticket-ref "$repo" "$n"
-    return $?
-  fi
-  home=$(fleet_ticket_home "$repo" "$sess") || return 1
-  [ "$home" = hub ] || home=gh
-  printf '%s:%s#%s\n' "$home" "$repo" "$n"
-}
-
-# fleet_ticket_hub_ready → rc 0 when this login reaches a hub its tickets could live
-# on (issue #3739): a hub address and a node token — a separated login's
-# node.pub.env address counts (its token is the broker's). The default a NEW repo
-# takes (fleet_repo_register); never a reader — a repo's home is its conf alone.
-fleet_ticket_hub_ready() {
-  if [ ! -r "$(fleet_node_env_file)" ] && _fleet_node_separated; then
-    [ -n "$(sed -n 's/^CCQUOTA_HUB_URL=//p' "$FLEET_CONF_DIR/node.pub.env" 2>/dev/null | head -n 1)" ]
-    return
-  fi
-  ! _fleet_hub_creds_missing >/dev/null
-}
-
-# fleet_ticket_view <repo> <num> <fields> [jq-filter] → a hub ticket read through
-# the door, in gh issue view's field names; with a filter, what `gh … --jq` would
-# print (jq -r). rc = the door's (4 = the hub is not reachable).
-fleet_ticket_view() {
-  local repo="${1:-}" n="${2:-}" f="${3:-}" q="${4:-}" out
-  out=$(bash "$_FLEET_LIB_DIR/fleet-ticket.sh" read "hub:$(fleet_norm_repo "$repo")#$n" --json "$f" 2>/dev/null) || return $?
-  [ -n "$out" ] || return 1
-  if [ -n "$q" ]; then printf '%s\n' "$out" | jq -r "$q"; else printf '%s\n' "$out"; fi
-}
-
-# fleet_ticket_claimant → who takes a hub ticket (the claim's `by`): this login on
-# this machine, `<login>@<host>` — the same answer at the claim and its release
-# (the hub releases only the holder's). FLEET_TICKET_BY overrides it (a selftest's
-# second machine).
-fleet_ticket_claimant() {
-  printf '%s' "${FLEET_TICKET_BY:-$(id -un 2>/dev/null)@$(hostname -s 2>/dev/null || hostname)}"
-}
-
 # fleet_ticket_state <repo> <N> → `STATE<TAB>REASON<TAB>label,label`, read fresh —
-# GitHub's words (OPEN / CLOSED, REOPENED / COMPLETED / …) wherever the ticket
-# lives (issue #3597). A hub-ticket repo is read through the ticket door; a GitHub
-# one with the very `gh` read the reapers always made (共同约定 4: byte for byte).
-# Nothing printed = it could not be read (no gh, the hub down, no such ticket).
+# GitHub's words (OPEN / CLOSED, REOPENED / COMPLETED / …), the very `gh` read the
+# reapers always made. Nothing printed = it could not be read (no gh, no such issue).
 fleet_ticket_state() {
-  local repo="${1:-}" n="${2:-}" b="${_FLEET_LIB_DIR:-$HOME/.claude/fleet/bin}" ref
-  ref=$(fleet_ticket_ref "$repo" "$n") || return 1
-  if [ "$ref" = "hub:$(fleet_norm_repo "$repo")#$n" ]; then
-    bash "$b/fleet-ticket.sh" read "hub:$(fleet_norm_repo "$repo")#$n" --json state,stateReason,labels 2>/dev/null \
-      | python3 -c 'import json,sys
-d = json.load(sys.stdin)
-print("%s\t%s\t%s" % (d.get("state") or "", d.get("stateReason") or "",
-                      ",".join(l.get("name", "") for l in d.get("labels") or [])))' 2>/dev/null
-    return 0
-  fi
+  local repo="${1:-}" n="${2:-}"
   command -v gh >/dev/null 2>&1 || return 0
   fleet_gh -R "$repo" issue view "$n" --json state,stateReason,labels \
     -q '"\(.state)\t\(.stateReason // "")\t\([.labels[].name] | join(","))"' 2>/dev/null
@@ -1533,7 +1395,7 @@ EOF
 # what a spawn stamps into @origin — see fleet_okey_prefix.)
 
 # fleet_target_repo <sess> [<repo>] → the ONE repo a repo-wide command (the EPIC
-# trio, fleet-epic-preflight.sh, fleet-evidence.sh, the PR / comment wrappers;
+# trio, fleet-epic-preflight.sh, the PR wrappers;
 # issues #803, #1938) acts on — ONE rule, however many repos the fleet hosts:
 #   1. <repo>, when given — it must be hosted (exit 1 otherwise);
 #   2. the caller pane's own window repo (a worker, a scratch bound to a repo);
@@ -1575,18 +1437,7 @@ fleet_issue_key() {
 
 # fleet_sub_issues <repo> <N> → one `<owner/name>\t<num>\t<state>` line per
 # sub-issue of <repo>#<N>, each with the repo it lives in. rc ≠ 0 = gh failed.
-# A FLEET_TICKETS=hub repo's members are the hub's children, read through the
-# ticket door (issue #3599) — the same three columns, never GitHub.
 fleet_sub_issues() {
-  if [ "$(fleet_ticket_home "${1:-}")" = hub ]; then
-    local _subs
-    _subs=$(bash "${_FLEET_LIB_DIR:-$HOME/.claude/fleet/bin}/fleet-ticket.sh" children \
-              "hub:$(fleet_norm_repo "${1:-}")#${2:-}" 2>/dev/null) || return 1
-    [ -n "$_subs" ] || return 0
-    printf '%s\n' "$_subs" | awk -F'\t' 'NF >= 2 { id = $1; sub(/^(hub|gh):/, "", id)
-      n = id; sub(/^.*#/, "", n); r = id; sub(/#[0-9]+$/, "", r); printf "%s\t%s\t%s\n", r, n, $2 }'
-    return 0
-  fi
   fleet_gh api "repos/${1:-}/issues/${2:-}/sub_issues" --paginate \
     --jq '.[] | "\(.repository_url | sub("^.*/repos/"; ""))\t\(.number)\t\(.state)"' 2>/dev/null
 }
@@ -1703,14 +1554,9 @@ EOF
   return 0
 }
 
-# Resolve the operator-facing BODY of an implementing worker's seed prompt
-# (issue #234). A spawned worker is seeded (in dash-issue-session.sh) with:
-#   Work GitHub issue #<n> in this repo. <run /fleet-claim …> <BODY><ship+stop tail>
-# The head (issue binding), the /fleet-claim ritual (which since issue #283 carries
-# the whole lifecycle), and the "open the PR, land it on green, then STOP" tail are
-# STRUCTURAL — the machinery depends on them, so they are always kept. Only <BODY>
-# is operator-customizable per fleet, letting different fleets seed workers
-# differently. Resolution (highest precedence
+# Resolve the operator-facing implementation directive of a worker (issue #234):
+# bin/fleet-brief.sh prints it under the flow, which is structural. Only this
+# directive is operator-customizable per fleet. Resolution (highest precedence
 # first), from the ALREADY-SOURCED conf env (per-fleet ▸ global ▸ default — the
 # caller runs fleet_load_conf first):
 #   1. FLEET_WORKER_PROMPT_FILE — the RETIRED twin of the @path form below (issue
@@ -1756,7 +1602,7 @@ fleet_worker_prompt_body() {
 }
 
 # The merge strategy this fleet lands with (issues #283, #441). A worker's
-# /fleet-claim ship+land step runs `gh pr merge --<method> --delete-branch` once
+# pr_merge runs `gh pr merge --<method> --delete-branch` once
 # bin/fleet-pr-verdict.sh reads READY. Reads FLEET_MERGE_METHOD from the
 # already-sourced conf env (fleet_load_conf first).
 # squash (default) | merge | rebase — an unset/typo'd value falls back to squash
@@ -1766,68 +1612,6 @@ fleet_merge_method() {
     squash|merge|rebase) printf '%s' "$FLEET_MERGE_METHOD" ;;
     *)                    printf 'squash' ;;
   esac
-}
-
-# The shared "tap-first" charter block (issue #328) — the ONE canonical source,
-# appended to the worker charter (fleet_worker_charter below) so a second consumer
-# is a one-line call. Emits the block ONLY when FLEET_TAP_FIRST=1 (default OFF); with the
-# flag unset/0 it is a silent no-op, so the default charter stays byte-identical.
-# It steers HOW a needed decision is asked (a tappable AskUserQuestion menu, cheap
-# on a soft keyboard) — guidance, never a mandate, and never about asking MORE.
-# Needs the fleet conf already sourced (FLEET_TAP_FIRST); costs no extra tokens
-# beyond the charter text itself.
-fleet_tap_first_block() {
-  [ "${FLEET_TAP_FIRST:-0}" = 1 ] || return 0
-  cat <<'EOF'
-===== tap-first input · machine-global (FLEET_TAP_FIRST=1) =====
-The operator often drives this fleet from an iPad / Termius soft keyboard, where
-composing prose is the real friction. When you genuinely need a decision from them
-and it is BOUNDED / enumerable, PREFER an `AskUserQuestion` menu of 2–4 concrete
-options — recommended option FIRST and clearly labelled — over an open-ended prose
-question: picking is ~one keystroke and the auto "Other" gives a free-text escape,
-so it collapses most operator input.
-Judgment, not a mandate: keep free text for genuinely open input, do NOT manufacture
-trivial questions, and when you would normally just proceed, still just proceed. This
-steers HOW you ask, not how OFTEN — it must not increase how often you interrupt the
-operator. It is about input latency, nothing else.
-EOF
-}
-
-# Print the LAYERED worker charter for /fleet-claim to load into a worker's
-# context (issue #283). The built-in contract lives in the skill TEXT (the base
-# layer); this emits the two FILE layers that override it, LOW→HIGH precedence so
-# "later wins on conflict" reads top-to-bottom for the worker:
-#   1. repo charter  $FLEET_MAIN/.fleet/worker.md — an INJECTION SURFACE: PRs
-#      auto-merge on green CI with no human review, so a PR could rewrite the
-#      charter every future worker then obeys. GATED behind FLEET_REPO_CHARTER=1
-#      (default OFF, fail-closed); skipped silently when the gate is off or the
-#      file is absent/unreadable.
-#   2. fleet overlay $FLEET_CONF_DIR/fleets/<session>/worker.md — operator-owned
-#      and machine-local (~/.config, only the operator writes it), so it needs no
-#      gate and is always trusted; skipped silently when absent.
-# Then appends the shared machine-global tap-first block (fleet_tap_first_block,
-# issue #328) — emitted only when FLEET_TAP_FIRST=1. Emits NOTHING when no file
-# layer applies AND the flag is off (the worker then runs on the built-in defaults
-# == today's behaviour). Needs the fleet conf already sourced (FLEET_MAIN /
-# FLEET_CONF_DIR / FLEET_TAP_FIRST). Arg: $1 = session name (for the overlay path).
-fleet_worker_charter() {
-  local sess="${1:-}" repo_md overlay_md
-  repo_md="${FLEET_MAIN:-}/.fleet/worker.md"
-  overlay_md="$FLEET_CONF_DIR/fleets/$sess/worker.md"
-  # Repo tier (gated, lower precedence) FIRST so the overlay printed after it wins.
-  if [ "${FLEET_REPO_CHARTER:-0}" = 1 ] && [ -r "$repo_md" ]; then
-    printf '===== repo charter · %s (lower precedence) =====\n' ".fleet/worker.md"
-    cat "$repo_md"
-    printf '\n'
-  fi
-  if [ -n "$sess" ] && [ -r "$overlay_md" ]; then
-    printf '===== fleet overlay charter · operator (wins on conflict) =====\n'
-    cat "$overlay_md"
-    printf '\n'
-  fi
-  # Machine-global tap-first steer, from the one shared source; a silent no-op
-  # unless FLEET_TAP_FIRST=1.
-  fleet_tap_first_block
 }
 
 # ---- base branch: the repo's TRUNK, never "the branch you happened to be on" --
@@ -2123,17 +1907,14 @@ fleet_repo_trust_warn() {
 # the same shape as dash-reap.sh's; everything human goes to stderr:
 #   added:<slug>              0  overlay written, daemons woken
 #   refused:invalid-repo      1  not owner/name
-#   refused:invalid-tickets   1  --tickets is neither hub nor github
 #   refused:hosted            1  the fleet already hosts it
 #   refused:origin-mismatch   1  <dir> is a checkout of another repo
 #   refused:not-a-checkout    1  <dir> exists and is not a git checkout
 #   failed:clone              1  the clone failed
 #   failed:write              1  the overlay could not be written
 # Nothing is written unless the token is added:*.
-# Where its tickets live (issue #3739): `--tickets hub|github` says it; left out, a
-# login that reaches a hub (fleet_ticket_hub_ready) writes FLEET_TICKETS="hub", one
-# that does not writes nothing (unset = github, the conf byte for byte as before).
-# A repo registered before this has no line and `fleet-conf.sh migrate` pins it.
+# `--tickets` (issue #3739) is read one version and only said: the ticket layer
+# left with issue #4898 and a repo writes no FLEET_TICKETS line. # compat-1v: 下一批删
 # Who runs its tasks is not the repo's (issue #4901): it is this login's person's,
 # fleet.conf [node]'s FLEET_TASK_AUTHORITY (fleet_task_authority) — a new repo
 # writes no line and asks the hub nothing. `--authority` (#4885's per-repo default)
@@ -2160,10 +1941,10 @@ fleet_repo_register() {
     repo=$(fleet_repo_name_of "$remote")
   fi
   [ -n "$as" ] && repo="$as"
-  case "$tickets" in
-    ''|hub|github) : ;;
-    *) echo "fleet-repo: --tickets takes hub or github, not '$tickets'" >&2; echo "refused:invalid-tickets"; return 1 ;;
-  esac
+  if [ -n "$tickets" ]; then
+    echo "fleet-repo: --tickets is ignored — the hub task record is the only ticket (issue #4898)" >&2
+    tickets=''
+  fi
   if [ -n "$authority" ]; then
     echo "fleet-repo: --authority is ignored — who runs tasks is this login's, not a repo's (issue #4901): \`fleet-repo.sh authority --dry-run\`" >&2
     authority=''
@@ -2212,7 +1993,6 @@ fleet_repo_register() {
          echo "fleet-repo: WARNING — could not read $repo's default branch from $remote; using '$base' ($base_src) — verify it is the trunk." >&2
        fi ;;
   esac
-  [ -n "$tickets" ] || { fleet_ticket_hub_ready && tickets=hub; }
   f=$(fleet_repo_conf_file "$sess" "$repo")
   if ! mkdir -p "$(dirname "$f")" 2>/dev/null || ! {
       printf "# claude-fleet: repo '%s' hosted by fleet '%s' — written by fleet-repo.sh %s\n" \
@@ -2228,11 +2008,7 @@ fleet_repo_register() {
       if [ "$forge" != github ]; then
         printf 'FLEET_REMOTE=%s\n' "$(_fleet_conf_q "$remote")"
         printf 'FLEET_FORGE="none"\nFLEET_LAND="fleet"\n'
-        # …and its tickets can only live on the hub (issue #3605, 共同约定 1).
-        printf 'FLEET_TICKETS="hub"\n'
       fi
-      # Its tickets' home (issue #3739): written only when it is the hub or was asked.
-      [ -n "$tickets" ] && printf 'FLEET_TICKETS="%s"\n' "$tickets"
       # The seed only looks (issue #1167): marked in the same write, so no daemon
       # tick ever reads it unmarked; its switches are its own, never the fleet's.
       if [ "$seed" = 1 ]; then
@@ -2243,7 +2019,7 @@ fleet_repo_register() {
   fi
   fleet_repo_order_put "$sess" "$repo" \
     || echo "fleet-repo: WARNING — could not record $repo in $(dirname "$f")/.order (it lists after the others)" >&2
-  echo "fleet-repo: $sess now hosts $repo (main=$dir base=$base$( [ "$forge" = github ] || printf ' remote=%s forge=%s' "$remote" "$forge" )${tickets:+ tickets=$tickets}) — $f" >&2
+  echo "fleet-repo: $sess now hosts $repo (main=$dir base=$base$( [ "$forge" = github ] || printf ' remote=%s forge=%s' "$remote" "$forge" )) — $f" >&2
   [ "$seed" = 1 ] && echo "fleet-repo: $repo is this fleet's seed repo — no issue-bridge (FLEET_SEED=1)" >&2
   # --- the follow-through ---
   fleet_repo_trust_warn "$dir" fleet-repo
@@ -3239,7 +3015,7 @@ EOF
 # TWO worktree shapes count, because a worker can be born either way:
 #   * SPAWNED  — dash-issue-session.sh puts it in an `issue-<N>` directory, which
 #                the cwd glob below recognises on its own.
-#   * BOUND IN PLACE — fleet-bind.sh (issue #520) promotes a SCRATCH: it renames
+#   * BOUND IN PLACE — an older bind (issue #520, gone with #4898) promoted a SCRATCH: it renamed
 #                the branch to `issue-<N>` but deliberately leaves the DIRECTORY
 #                named `<repo>-scratch-<K>` (moving it would strand a running
 #                Claude's cwd), so the glob cannot see it. That window carries
@@ -3564,32 +3340,6 @@ fleet_landed() {
   printf '%s\n' "$hit"
   case "$hit" in landed\ *) return 0 ;; esac
   return 1
-}
-
-# Release the claim on an issue whose work did not land (issue #1842): drop this
-# login's assignee — the assignee IS the claim (#283), so the dispatcher sees the
-# issue as free again — and leave one record-only line saying why. The ONE copy:
-# dash ⌃x (dash-reap.sh settle_issue) and the recovery page's q
-# (session-end-hook.sh --recycle) both call it. The caller decides the issue is
-# OPEN and unlanded. Args: <repo> <issue> <what happened, one clause>
-fleet_issue_release_claim() {
-  local repo="${1:-}" iss="${2:-}" what="${3:-}" tid
-  [ -n "$repo" ] && [ -n "$iss" ] || return 0
-  # A hub repo's claim is the hub's (issue #3598): released by its holder, the
-  # line posted through the door — no gh.
-  if fleet_ticket_hub "$repo"; then
-    tid="hub:$(fleet_norm_repo "$repo")#$iss"
-    bash "$_FLEET_LIB_DIR/fleet-ticket.sh" claim "$tid" --by "$(fleet_ticket_claimant)" --release >/dev/null 2>&1 || true
-    bash "$_FLEET_LIB_DIR/fleet-ticket.sh" post "$tid" --body "$what. The ticket stays OPEN and the claim is released, so it can be picked up again.
-
-<!-- fleet:no-relay -->" >/dev/null 2>&1 || true
-    return 0
-  fi
-  command -v gh >/dev/null 2>&1 || return 0
-  fleet_gh_write -R "$repo" issue edit "$iss" --remove-assignee @me >/dev/null 2>&1 || true
-  fleet_gh_write -R "$repo" issue comment "$iss" --body "$what. The issue stays OPEN and the claim is released, so it can be picked up again.
-
-<!-- fleet:no-relay -->" >/dev/null 2>&1 || true
 }
 
 # Locate the worktree checked out on <branch> in <repo-root>. Prints
@@ -6176,7 +5926,7 @@ _fleet_identity_write() {
 
 # ---- a session's lifelong identity: @fleet_id (issue #1646, EPIC #1645 C1) ------
 # A key (`issue-<N>` / `scratch-<N>`) is a NAME a window wears, and it changes under
-# the session: a scratch bound to an issue (`fleet-issue-file.sh --bind`) stops
+# the session: a scratch once bound to an issue (the retired bind, #4898) stopped
 # answering to `scratch-<N>`, so every child whose @origin said so lost its parent —
 # reports ledgered into a book nobody reads, sidebar rows sunk to the top level.
 # @fleet_id is a UUID minted ONCE per session — at spawn (dash-issue-session.sh /
@@ -6753,15 +6503,15 @@ fleet_hub_lease() {
   cmd="${FLEET_HUB_LEASE_CMD:-}"
   if [ -z "$cmd" ]; then
     if command -v ccquota >/dev/null 2>&1; then cmd='ccquota lease'
-    else printf 'fleet: hub lease unavailable (no FLEET_HUB_LEASE_CMD, no ccquota on PATH) — only the GitHub claim guards #%s\n' "$num" >&2; return 1; fi
+    else printf 'fleet: hub lease unavailable (no FLEET_HUB_LEASE_CMD, no ccquota on PATH) — no lease guards #%s\n' "$num" >&2; return 1; fi
     # ccquota acts as the agent: without its token it exits 1 「no hub configured」,
     # which read as 「hub unreachable」 until issue #1491. Say what is actually missing.
     if why=$(_fleet_hub_creds_missing); then
-      printf 'fleet: %s — only the GitHub claim guards #%s\n' "$why" "$num" >&2; return 1
+      printf 'fleet: %s — no lease guards #%s\n' "$why" "$num" >&2; return 1
     fi
   fi
   u=$(fleet_uuid "$sess") && [ -n "$u" ] || {
-    printf 'fleet: hub lease unavailable (no fleet UUID for %s on this machine) — only the GitHub claim guards #%s\n' "$sess" "$num" >&2; return 1; }
+    printf 'fleet: hub lease unavailable (no fleet UUID for %s on this machine) — no lease guards #%s\n' "$sess" "$num" >&2; return 1; }
   pre=$(fleet_okey_prefix "$sess" "$repo")
   ef=$(mktemp "${TMPDIR:-/tmp}/fleet-hub-err.XXXXXX" 2>/dev/null) || ef=/dev/null
   out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" lease "$act" ${force:+"$force"} "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>"$ef"); rc=$?
@@ -6775,7 +6525,7 @@ fleet_hub_lease() {
   case "$rc" in
     0|3) [ "$ef" = /dev/null ] || rm -f "$ef"; printf '%s\n' "$out"; return "$rc" ;;
   esac
-  printf 'fleet: %s — no lease on #%s, falling back to the GitHub claim only\n' "$(_fleet_hub_fail lease "$cmd" "$rc" "$ef")" "$num" >&2
+  printf 'fleet: %s — no lease on #%s\n' "$(_fleet_hub_fail lease "$cmd" "$rc" "$ef")" "$num" >&2
   [ "$ef" = /dev/null ] || rm -f "$ef"
   return 1
 }
@@ -7172,7 +6922,7 @@ fleet_restore_map_prune() {
 # fleet_origin_heal <sess> [<sock>] — keep every child's @origin the key its
 # parent answers to NOW (issue #1646). The parent is found by the child's
 # @origin_fid; when that window's key is no longer what @origin says (a scratch
-# bound to an issue, fleet-bind.sh / the dash's rebind), @origin — and its
+# bound to an issue by an older bind, or the dash's rebind), @origin — and its
 # @origin_gen, which belonged to the old key — are rewritten. So every reader that
 # joins on keys (the sidebar's nesting, the k/N badge, fleet-children.sh, the
 # report digest) follows the parent without learning about identities. A child
@@ -7707,13 +7457,6 @@ fleet_reap_record() {
         --title "$title" --origin "$origin" >/dev/null 2>&1 || return 0
       ;;
   esac
-  # Hand what the worker left — its evidence files and the row just written — to
-  # the hub (issue #1609), so the machine that spawned it sees them when this one
-  # is not that machine. Not a hub node (no node token) → exit 3, nothing sent.
-  if [ -f "$_bin/fleet-worker-records.sh" ] && [ -n "$repo" ]; then
-    bash "$_bin/fleet-worker-records.sh" push --session "$sess" --repo "$repo" \
-      --key "$key" ${win:+--win "$win"} >/dev/null 2>&1 || :
-  fi
   return 0
 }
 
@@ -7730,47 +7473,6 @@ fleet_slug() {
   esac
 }
 
-# --- fleet provenance: role + the `<!-- fleet:from … -->` marker (issue #224) --
-# The ONE canonical source for "which fleet actor did this and from where". Born
-# in bin/fleet-comment.sh's per-role footer; extracted here so the single
-# issue-filer channel (bin/fleet-issue-file.sh, #332) stamps the SAME marker on a
-# new issue's body that a comment carries — reuse, not a second copy.
-#
-# fleet_from_role [<explicit>] — resolve the posting role: an explicit value wins
-# (a caller can force it), else the durable FLEET_HUB env (hub-session.sh exports
-# it, surviving a Bash-tool subshell) ⇒ 'operator', else fleet_seat() ⇒ 'worker',
-# else the generic word 'fleet' (no session wears a role's name, issue #4341). Pure env — only the WORD carries identity (the
-# charter scrub: never $(hostname) / $USER).
-fleet_from_role() {
-  local explicit="${1:-}"
-  [ -n "$explicit" ] && { printf '%s' "$explicit"; return; }
-  [ "${FLEET_HUB:-}" = 1 ] && { printf 'operator'; return; }
-  local seat
-  seat=$(fleet_seat 2>/dev/null)
-  case "$seat" in
-    worker)  printf 'worker';  return ;;
-  esac
-  printf 'fleet'
-}
-
-# fleet_from_marker <role> [<repo>] — build the invisible machine marker that
-# records the SENDER's binding: role + this fleet's session (fallback: the repo
-# slug) + the window's @issue when issue-bound. session/issue are omitted when
-# empty, matching bin/fleet-comment.sh byte-for-byte so its footer selftest stays
-# green. Repo-derived only, so nothing private leaks (the charter scrub).
-fleet_from_marker() {
-  local role="$1" repo="${2:-}" f_issue f_session mk
-  f_issue=$(fleet_pane_fmt '#{@issue}')     # the caller's own pane, never `-t ""` (#1537)
-  f_issue="${f_issue//[^0-9]/}"
-  f_session=$(fleet_current_session 2>/dev/null)
-  [ -z "$f_session" ] && [ -n "$repo" ] && f_session=$(fleet_slug "$repo" 2>/dev/null)
-  mk="<!-- fleet:from role=$role"
-  [ -n "$f_session" ] && mk="$mk session=$f_session"
-  [ -n "$f_issue" ]   && mk="$mk issue=$f_issue"
-  mk="$mk -->"
-  printf '%s' "$mk"
-}
-
 # --- breakage fingerprint: one issue per broken base branch (issue #2078) ------
 # On 2026-10-07 04:26Z master went red on one duplicate route and three sessions
 # filed three issues (#2039 #2040 #2041) and three fixes inside 16 seconds. The
@@ -7785,7 +7487,8 @@ fleet_from_marker() {
 # master tends to come with.
 #
 # EVERY automatic filer goes through the same fingerprint road (issue #4271):
-# `fleet-issue-file.sh --breakage-key <channel>-<failed step>` — the master probe
+# `--breakage-key <channel>-<failed step>` (the issue filer left with #4898; the
+# watchers alert instead) — the master probe
 # (`ci-…`), fleet-macos-watch.sh (`macos-…`), fleet-nightly-miss.sh (`nightly-…` / `flaky-…`) and
 # fleet-train-quarantine.sh (`selftest-quarantine.…` / `flaky-…`) — with
 # `--fault-sha` / `--fault-link` naming where it is red THIS time. An open issue
@@ -7827,8 +7530,8 @@ fleet_from_marker() {
 # fleet_breakage_text_runs <text> → the run ids it names.
 # fleet_breakage_key <repo> [<branch>] → the first row's key alone (same rc).
 # fleet_breakage_pick <text> [<base>] → the row a filing's text is about (rc 1 none).
-# fleet_breakage_marker <key> → the invisible body marker bin/fleet-issue-file.sh
-#   stamps on the issue it files and fleet_breakage_find greps for.
+# fleet_breakage_marker <key> → the invisible body marker a breakage issue carries
+#   and fleet_breakage_find greps for.
 # fleet_breakage_find <repo> <key> → the URL of the newest OPEN issue whose body
 #   carries the marker (rc 1 = none). The REST issue list, NOT `gh search issues`:
 #   the search index lags a fresh issue by seconds to minutes — exactly the window
@@ -8113,12 +7816,6 @@ fleet_breakage_text_says_red() {
 fleet_breakage_find() {
   local repo="$1" mk owner name rows n
   mk=$(fleet_breakage_marker "$2")
-  if [ "$(fleet_ticket_home "$repo")" = hub ]; then   # issue #3599: the hub's open tickets
-    rows=$(bash "${_FLEET_LIB_DIR:-$HOME/.claude/fleet/bin}/fleet-ticket.sh" find --repo "$repo" --marker "$mk" 2>/dev/null) \
-      || return 1
-    [ -n "${rows#*	}" ] || return 1
-    printf '%s\n' "${rows#*	}"; return 0
-  fi
   owner="${repo%%/*}"; name="${repo#*/}"
   rows=$(fleet_gh api "repos/$owner/$name/issues?state=open&per_page=100&sort=created&direction=desc" \
            --jq '.[] | select(.pull_request == null) | "\(.number)\t\(.body // "" | gsub("[\r\n]"; " "))"' 2>/dev/null) || return 1
@@ -8195,10 +7892,9 @@ fleet_fault_seen() {
 # The ONE canonical label taxonomy for a fleet repo — the curated labels this
 # repo already uses, NOT a parallel `type:*` namespace. Two consumers share this
 # single source of truth so they can never drift:
-#   • bin/fleet-labels-seed.sh `gh label create`s every row (name/color/desc) so
-#     a fresh-repo install ends up with the full set (nothing seeds labels at
-#     install otherwise — `gh label` starts empty on a new repo).
-#   • the issue-filer channel (bin/fleet-issue-file.sh, #332) validates a
+#   • (the label seeder and the issue filer —
+#     left with issue #4898; the readers below remain.)
+#   • the EPIC preflight and the doctor validate a
 #     requested label against fleet_labels_allowed — the FIXED set, not the live
 #     `gh label list` — so no filer can file against an
 #     off-taxonomy label even if one has been minted in the repo out of band.
@@ -8239,41 +7935,6 @@ desk|C5DEF5|No code to change (design page, research, release) — claude-fleet 
 flaky|FBCA04|A selftest the release train saw red, then green on its one rerun — claude-fleet files one per test
 selection-miss|C2E0C6|A test or check red in a nightly full run that the train or the PR gate never ran — names the merge and the file
 EOF
-}
-
-# ---- the desk: a ticket for work with no code to change (issue #2676) --------
-# A session another session (or the person, `--origin hub`) opens with no repo
-# gets a ticket all the same: filed in the desk repo with the `desk` label, the
-# window stamped `@issue N` `@repo <desk>` `@desk 1` and still `@norepo 1` — no
-# workspace. So the bridge (which matches a window by its own @repo + @issue)
-# relays a comment on that ticket into it, and report / evidence / comment work
-# as for any worker.
-
-# fleet_desk_repo [<sess>] → the desk repo, when the desk is on AND this fleet
-# hosts it; nothing (rc 1) otherwise. On follows FLEET_DESK, else FLEET_HOST
-# (the old seat's FLEET_STEWARD / FLEET_ORCHESTRATOR left with it, issue #3118).
-# The repo is FLEET_DESK_REPO (default verkyyi/claude-fleet) —
-# a fleet that does not host it has no desk, never a ticket in a stranger's repo.
-fleet_desk_repo() {
-  local r
-  case "${FLEET_DESK:-${FLEET_HOST:-0}}" in
-    1|on|yes|true) ;;
-    *) return 1 ;;
-  esac
-  r=$(fleet_norm_repo "${FLEET_DESK_REPO:-verkyyi/claude-fleet}")
-  [ -n "$r" ] || return 1
-  # a whole-line match on the list, never `| grep -q` (it leaves early, and under
-  # pipefail the writer's SIGPIPE fails the test) nor a here-string (fleet-lib.sh
-  # is sourced by plain `sh` too, where `<<<` does not parse)
-  case "
-$(fleet_repos "${1:-}")
-" in
-    *"
-$r
-"*) ;;
-    *) return 1 ;;
-  esac
-  printf '%s\n' "$r"
 }
 
 # fleet_labels_allowed — just the label NAMES from the canonical taxonomy, one
@@ -8486,13 +8147,7 @@ EOF_CHARTER
 # nothing. rc 1 = the parent could not be read.
 fleet_epic_agent() {
   local body
-  if [ "$(fleet_ticket_home "${1:-}")" = hub ]; then   # issue #3599: the door reads it
-    body=$(bash "${_FLEET_LIB_DIR:-$HOME/.claude/fleet/bin}/fleet-ticket.sh" read \
-             "hub:$(fleet_norm_repo "${1:-}")#${2:-}" --json body 2>/dev/null \
-           | python3 -c 'import json,sys; print(json.load(sys.stdin).get("body") or "")' 2>/dev/null) || return 1
-  else
-    body=$(fleet_gh issue view "${2:-}" --repo "${1:-}" --json body -q .body 2>/dev/null) || return 1
-  fi
+  body=$(fleet_gh issue view "${2:-}" --repo "${1:-}" --json body -q .body 2>/dev/null) || return 1
   fleet_epic_charter_agent "${1:-}" "$body" "${3:-}" "${4:-}"
 }
 
@@ -8594,9 +8249,7 @@ fleet_issue_plain_name() {
 # machine's issue cache; nothing at all ⇒ the plain name.
 fleet_issue_win_name() {
   local repo="${1:-}" num="${2:-}" t="${3:-}" b="${4:-}" ref er en f sh='' et eb js now ts
-  if [ -z "$b" ] && [ -n "$repo" ] && [ -n "$num" ] && fleet_ticket_hub "$repo"; then
-    b=$(fleet_ticket_view "$repo" "$num" body .body) || b=''   # a hub ticket: the door (#3598)
-  elif [ -z "$b" ] && [ -n "$repo" ] && [ -n "$num" ] && command -v gh >/dev/null 2>&1; then
+  if [ -z "$b" ] && [ -n "$repo" ] && [ -n "$num" ] && command -v gh >/dev/null 2>&1; then
     b=$(fleet_gh issue view "$num" --repo "$repo" --json body -q .body 2>/dev/null) || b=''
   fi
   ref=$(fleet_epic_member_ref "$b")
@@ -8609,8 +8262,7 @@ fleet_issue_win_name() {
       IFS= read -r sh < "$f"
     else
       js=''
-      if fleet_ticket_hub "$er"; then js=$(fleet_ticket_view "$er" "$en" title,body) || js=''
-      elif command -v gh >/dev/null 2>&1; then
+      if command -v gh >/dev/null 2>&1; then
         js=$(fleet_gh issue view "$en" --repo "$er" --json title,body 2>/dev/null)
       fi
       if [ -n "$js" ]; then
@@ -11068,12 +10720,12 @@ fleet_wid_target() {
 # --- fleet commands: bare vs. plugin-namespaced (issue #611) ------------------
 # The fleet's slash commands reach a session by ONE of two install paths:
 #
-#   copy install   `commands/*.md` → ~/.claude/commands/   → typed `/fleet-claim`
-#   plugin install fleet@claude-fleet via /plugin          → typed `/fleet:fleet-claim`
+#   copy install   `commands/*.md` → ~/.claude/commands/   → typed `/fleet-handoff`
+#   plugin install fleet@claude-fleet via /plugin          → typed `/fleet:fleet-handoff`
 #
 # Claude Code NAMESPACES every plugin-provided command as `/<plugin>:<command>`
 # (that is why the built-ins show up as `superpowers:brainstorming`,
-# `frontend-design:frontend-design`, …). A bare `/fleet-claim` therefore does NOT
+# `frontend-design:frontend-design`, …). A bare `/fleet-handoff` therefore does NOT
 # resolve in a plugin-only install — and the spawn seed is exactly that bare slash
 # (bin/dash-issue-session.sh, issue #299), so every spawn would land on an
 # unexpanded literal. `fleet_cmd` is the one place that knows which form to type.

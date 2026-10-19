@@ -14,15 +14,11 @@ see the same tools (Claude shows them as mcp__fleet__<action>):
   await     issue [+ repo, timeout] → bin/fleet-await.sh
   send      to + text               → bin/fleet-peer-send.sh
   report    state [+ pr, summary]   → bin/fleet-report-parent.sh        (报, issue #1808)
-  ask       question [+ kind, suggest, default, due, class] → bin/fleet-comment.sh + set-claude-state.sh blocked  (问)
-  comment   issue + body [+ mode]   → bin/fleet-comment.sh              (记)
-  evidence  action [+ file|text|pane, note] → bin/fleet-evidence.sh     (记)
+  ask       question [+ kind, suggest, default, due, class] → bin/fleet-task-record.sh + set-claude-state.sh blocked  (问)
   handoff   action [+ slug|doc]     → bin/fleet-handoff-file.sh         (记)
   pr_verdict [pr, repo, wait]       → bin/fleet-pr-verdict.sh           (合)
   pr_merge  [pr, repo]              → bin/fleet-pr-merge.sh             (合)
-  brief     [kind, issue, repo]     → bin/fleet-claim-brief.sh | fleet-compact-resume.sh --brief  (issue #1811)
-  file_issue title [+ body, parent, spawn|bind, …] → bin/fleet-issue-file.sh
-  gh        kind + number [+ fields, max_age, repo] → bin/fleet-gh.sh
+  brief     [kind, repo]            → bin/fleet-brief.sh | fleet-compact-resume.sh --brief  (issues #1811, #4898)
   context   [json]                  → bin/fleet-context.sh
   transfer  action [+ to, handoff, loop, …] → bin/fleet-transfer.sh | fleet-loop.py from-claude
   where / show / open               → bin/fleet-client-where.sh / fleet-show.sh / fleet-open.sh
@@ -33,19 +29,19 @@ Two groups (issue #3113, EPIC #3111 C2). The default server `fleet` LISTS the to
 a session works with; the dispatch group — spawn · await · children · answer_dialog ·
 send — is listed by the same script started as `fleet-mcp.py --group orch`, the
 server `fleet-orch` (conf/mcp-orch.json), which the core's launchers mount for EVERY
-session (issue #4703, after #4591: any session may spawn; caps and claim dedup are the
+session (issue #4703, after #4591: any session may spawn; caps and dedup are the
 bounds, in the scripts). `@agent_spawn` gates nothing. No plugin mounts it. For at least one version (#2068) `fleet`
 still ANSWERS a dispatch-group call under its old name (logged road=legacy), and a
 server that took over from a pre-group version keeps listing everything, so a
 session that started with the old list never loses a tool mid-conversation. A session
 with no `fleet-orch` beside it (FLEET_MCP_ORCH unset: launched before #4703) gets the
-dispatch group listed on `fleet` itself. `file_issue` with spawn: true always spawns.
+dispatch group listed on `fleet` itself.
 
 The rule (EPIC #1813 decision 4, the one the retired mod tools kept): a tool only
 CHECKS its arguments — an unknown or missing argument, a wrong type, a repo this
 fleet does not host is refused with the reason and NOTHING runs — then runs the
 existing script unchanged and hands back its exit code, stdout and stderr as they
-came. Caps, claim dedup and guards live in the scripts, once.
+came. Caps, dedup and guards live in the scripts, once.
 
   fleet-mcp.py                 serve on stdin/stdout (the server `fleet`)
   fleet-mcp.py --group orch    serve the dispatch group (the server `fleet-orch`)
@@ -861,11 +857,6 @@ def tool_spawn(args):
     repo = repo_or_caller(args)   # no repo: the caller window's own (issue #4761)
     reap = ["--reap", args["reap"]] if args.get("reap") else []   # issue #1902
     as_ = ["--as", args["agent"]] if args.get("agent") else []    # issue #3122
-    if args.get("draft") or args.get("pr_note"):   # issue #3715: mark the ticket draft-only first
-        mark = script([str(BIN / "fleet-draft.sh"), "mark", str(args["issue"])] + repo
-                      + (["--pr-note", args["pr_note"]] if args.get("pr_note") else []), WRITE_TIMEOUT_S)
-        if mark["exit"] != 0:
-            return mark
     return script([str(BIN / "dash-issue-session.sh"), str(args["issue"])] + repo + reap + as_ + (["--agent", args["coding_agent"]] if args.get("coding_agent") else []), SPAWN_TIMEOUT_S,
                   env=hub_env(ASSERT_TTL_S))
 
@@ -887,24 +878,10 @@ def tool_await(args):
                   t + AWAIT_SLACK_S, env=hub_env(ASSERT_TTL_S))
 
 
-def draft_argv(args):
-    """draft / pr_note (issue #3715) → the filer's --draft / --pr-note."""
-    if args.get("pr_note"):
-        return ["--pr-note", args["pr_note"]]
-    return ["--draft"] if args.get("draft") else []
-
-
-DRAFT = {"type": "boolean", "description": "Draft-only (issue #3715): its worker opens a DRAFT PR, reports "
-                                           "waiting and stops; it lands only after `fleet-draft.sh approve <N>` "
-                                           "(reject: `fleet-draft.sh reject <N> --reason …`)."}
-PR_NOTE = {"type": "string", "description": "Draft-only, plus what the PR body must carry (e.g. 「日报回复 "
-                                            "<日期>#<n>」 and <!-- daily-plan -->). Implies draft."}
-
-
 def tool_task(args):
     """A dispatch, record first (issue #3330): fleet-task-record.sh
-    dispatch — the hub's T<n>, then a repo task's issue (+ worker), or a no-repo
-    session given the words."""
+    dispatch — the hub's T<n>, then (+ spawn) its session: a repo task's worktree
+    bound to the record, or a no-repo session given the words."""
     argv = [str(BIN / "fleet-task-record.sh"), "dispatch", "--title", args["title"], "--body-file", "-"]
     if args.get("repo"):
         argv += ["--repo", args["repo"]]
@@ -916,7 +893,6 @@ def tool_task(args):
         argv += ["--as", args["agent"]]
     if args.get("coding_agent"):
         argv += ["--agent", args["coding_agent"]]
-    argv += draft_argv(args)
     r = run(argv, input_text=args.get("body", ""), check=False, timeout=FILE_TIMEOUT_S + SPAWN_TIMEOUT_S,
             env=hub_env(ASSERT_TTL_S))
     return {"command": "fleet-task-record.sh", "exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
@@ -1020,34 +996,28 @@ def ask_parent(where, head, hints):
 
 
 def tool_ask(args):
-    issue = str(args["issue"]) if "issue" in args else pane_issue()
-    # A session's hub task record (issue #3330): with no issue the question goes on
-    # the record ALONE (「问过你」); with one it is mirrored there. Neither ⇒ as before.
-    task = pane_task() if "issue" not in args else ""
+    # The question goes on this window's hub task record (「问过你」, issue #3330);
+    # with no record it is the red stamp and the parent's copy alone — the fleet
+    # writes no GitHub comment (issue #4898). `issue` is accepted from old callers
+    # and unused.
+    task = pane_task()
     head = ASK_HEAD[args.get("kind", "question")] + args["question"]
     hints = ask_hints(args)
-    if not issue and task:
+    out = {"body": "\n".join([head, ""] + hints) if hints else head}
+    if task:
         rec = task_asked(task, head)
         if rec["exit"] != 0:
             raise Refused("this window's record %s could not take the question (%s) — ask in your reply"
                           % (task, (rec.get("stderr") or "no hub here").strip() or "exit %d" % rec["exit"]))
-        red = stdin_script(["sh", str(BIN / "set-claude-state.sh"), "blocked"], "", STATUS_TIMEOUT_S)
-        red["command"] = "set-claude-state.sh"
-        return dict(rec, task=task, body=head, state=red, parent=ask_parent("task " + task, head, hints))
-    if not issue:
-        raise Refused("this window has no bound issue to ask on — pass issue, or ask in your reply")
-    body = "\n".join([head, ""] + hints) if hints else head
-    said = stdin_script([str(BIN / "fleet-comment.sh"), issue, "--note", "--body-file", "-"], body,
-                        WRITE_TIMEOUT_S)
-    # The red stamp goes on whether or not the comment posted: the session IS
-    # blocked either way, and a blocker nobody can see is the failure this exists
-    # to prevent. stdin pinned shut — `blocked` reads no hook payload.
+        out.update(rec, task=task)
+    else:
+        out.update(command="ask", exit=0, stdout=out["body"] + "\n", stderr="")
+    # stdin pinned shut — `blocked` reads no hook payload.
     red = stdin_script(["sh", str(BIN / "set-claude-state.sh"), "blocked"], "", STATUS_TIMEOUT_S)
     red["command"] = "set-claude-state.sh"
-    out = dict(said, issue=int(issue), body=body, state=red, parent=ask_parent("issue #" + issue, head, hints))
-    mirror = task_asked(task, head)
-    if mirror is not None:
-        out["task"], out["record"] = task, mirror
+    iss = "" if task else pane_issue()
+    where = ("task " + task) if task else ("issue #" + iss) if iss else "this session"
+    out.update(state=red, parent=ask_parent(where, head, hints))
     return out
 
 
@@ -1061,51 +1031,6 @@ def tool_answer_dialog(args):
         if args.get(k):
             argv += ["--" + k, args[k]]
     return script(argv, WRITE_TIMEOUT_S + 90)
-
-
-def tool_comment(args):
-    argv = [str(BIN / "fleet-comment.sh"), str(args["issue"]),
-            "--to-worker" if args.get("mode") == "to-worker" else "--note"]
-    if args.get("close"):
-        argv.append("--close")
-    argv += check_repo(args)
-    return stdin_script(argv + ["--body-file", "-"], args["body"], WRITE_TIMEOUT_S)
-
-
-EVIDENCE_SOURCES = ("file", "text", "pane")
-
-
-def tool_evidence(args):
-    action = args["action"]
-    given = [k for k in EVIDENCE_SOURCES if k in args]
-    if action in ("before", "after"):
-        if len(given) != 1:
-            raise Refused("%s takes exactly one of file, text, pane (got %s)"
-                          % (action, ", ".join(given) if given else "none"))
-    else:
-        extra = [k for k in EVIDENCE_SOURCES + ("name", "mv") if k in args]
-        if extra:
-            raise Refused("%s takes no %s" % (action, ", ".join(extra)))
-    if "mv" in args and "file" not in args:
-        raise Refused("mv applies to a file only")
-    if "name" in args and "file" in args:
-        raise Refused("name applies to text or pane only (a file keeps its own name)")
-    argv = [str(BIN / "fleet-evidence.sh"), action]
-    if "issue" in args:
-        argv += ["--issue", str(args["issue"])]
-    if "note" in args:
-        argv += ["--note", args["note"]]
-    if "name" in args:
-        argv += ["--name", args["name"]]
-    if args.get("mv"):
-        argv.append("--mv")
-    if "pane" in args:
-        argv += ["--pane", args["pane"]]
-    if "file" in args:
-        return script(argv + [args["file"]], WRITE_TIMEOUT_S)
-    if "text" in args:
-        return stdin_script(argv + ["-"], args["text"], WRITE_TIMEOUT_S)
-    return script(argv, WRITE_TIMEOUT_S)
 
 
 def tool_handoff(args):
@@ -1161,46 +1086,13 @@ def tool_pr_merge(args):
 
 def tool_brief(args):
     if args.get("kind") == "resume":
-        extra = [k for k in ("issue", "repo", "no_comments") if k in args]
+        extra = [k for k in ("repo",) if k in args]
         if extra:
             raise Refused("resume takes no %s" % ", ".join(extra))
         return script([str(BIN / "fleet-compact-resume.sh"), "--brief"], STATUS_TIMEOUT_S)
-    argv = [str(BIN / "fleet-claim-brief.sh")]
-    if "issue" in args:
-        argv += ["--issue", str(args["issue"])]
-    argv += check_repo(args)
-    if args.get("no_comments"):
-        argv.append("--no-comments")
-    return script(argv, BRIEF_TIMEOUT_S)
-
-
-def tool_file_issue(args):
-    if args.get("spawn") and args.get("bind"):
-        raise Refused("spawn and bind are exclusive (bind makes THIS scratch session the worker)")
-    argv = [str(BIN / "fleet-issue-file.sh"), "--title", args["title"]]
-    if "body" in args:
-        argv += ["--body", args["body"]]
-    for label in [x.strip() for x in args.get("labels", "").split(",") if x.strip()]:
-        argv += ["--label", label]
-    if "priority" in args:
-        argv += ["--priority", args["priority"]]
-    if "parent" in args:
-        argv += ["--parent", str(args["parent"])]
-    argv += check_repo(args)
-    if args.get("spawn"):   # any session may spawn (issues #4591, #4703): no group asked
-        argv.append("--spawn")
-    if args.get("bind"):
-        argv.append("--bind")
-    if args.get("breakage") is True:
-        argv.append("--breakage")
-    elif args.get("breakage") is False:
-        argv.append("--no-breakage")
-    if "breakage_key" in args:
-        argv += ["--breakage-key", args["breakage_key"]]
-    if "task" in args:
-        argv += ["--task", args["task"]]
-    argv += draft_argv(args)
-    return script(argv, FILE_TIMEOUT_S)
+    # kind task (default; `claim` is an old session's word for it): the record —
+    # issue #4898. `issue` / `no_comments` are accepted from old callers, unused.
+    return script([str(BIN / "fleet-brief.sh")] + check_repo(args), BRIEF_TIMEOUT_S)
 
 
 # --- the dispatch group (issue #3113, EPIC #3111 C2) -------------------------------
@@ -1210,18 +1102,6 @@ def bridge_seat():
     #4591): the dispatch group is mounted for every session and `@agent_spawn` is no
     gate — read for nothing here. Outside tmux there is no pane to dispatch from."""
     return bool(os.environ.get("TMUX") and os.environ.get("TMUX_PANE"))
-
-
-GH_KIND = {"issue": ["issue", "view"], "pr": ["pr", "view"], "checks": ["pr", "checks"]}
-
-
-def tool_gh(args):
-    argv = [str(BIN / "fleet-gh.sh")] + GH_KIND[args["kind"]] + [str(args["number"])] + check_repo(args)
-    if "fields" in args:
-        argv += ["--json", args["fields"]]
-    if "max_age" in args:
-        argv += ["--max-age", str(args["max_age"])]
-    return script(argv, VERDICT_TIMEOUT_S)
 
 
 def tool_context(args):
@@ -1321,10 +1201,12 @@ TOOLS = {
                        "whether each is this session, its parent or its child.",
         "inputSchema": NO_ARGS}),
     "spawn": (tool_spawn, {
-        "description": "Start a fleet worker session on a GitHub issue (its own worktree + window; it claims, "
-                       "implements and lands the issue itself). Runs bin/dash-issue-session.sh, so the session "
-                       "caps and the claim dedup apply. Exit 0 spawned (or the window already exists), 2 at "
-                       "capacity, 3 already claimed, 1 infrastructure. Returns at once — await waits for it. "
+        "description": "Start a fleet worker session on an existing GitHub issue (its own worktree + window; "
+                       "the issue's words are its first turn, it implements and lands a PR that closes it — "
+                       "nothing claims or comments on the issue, issue #4898). New work: the task tool. Runs "
+                       "bin/dash-issue-session.sh, so the session caps apply. Exit 0 spawned (or the window "
+                       "already exists), 2 at capacity, 3 closed or already has a PR, 1 infrastructure. "
+                       "Returns at once — await waits for it. "
                        "Any session may spawn, a worker too (issue #4591); the child reports back to this one.",
         "inputSchema": {"type": "object", "properties": {
             "issue": ISSUE, "repo": REPO,
@@ -1336,7 +1218,7 @@ TOOLS = {
                                      "— the repo's .claude/agents > ~/.claude/agents > a plugin; its model, "
                                      "tools and body. Default: fleet-worker when it is there. Not found = "
                                      "refused, naming where it looked."},
-            "draft": DRAFT, "pr_note": PR_NOTE},
+},
             "required": ["issue"], "additionalProperties": False}}),
     "set_reap": (tool_set_reap, {
         "description": "When the fleet may close THIS session on its own (bin/fleet-reap-policy.sh set; issue "
@@ -1366,11 +1248,9 @@ TOOLS = {
                        "dispatch): the hub writes task record T<n> (first stdout line); with repo — a "
                        "development task — the record is its ticket, no issue (issue #4897): + spawn, its "
                        "session opens in a worktree of that repo bound to T<n>, reads the record, opens its "
-                       "PR, merges it on a green gate and closes the record with its report (draft: still an "
-                       "issue, for one batch); without repo + spawn a no-repo session is opened with "
-                       "the words. No hub here: a repo task is filed "
-                       "exactly as file_issue would (no T line); a no-repo one exits 3 — file an issue instead. "
-                       "await takes the T<n>.",
+                       "PR, merges it on a green gate and closes the record with its report; without repo + "
+                       "spawn a no-repo session is opened with the words. No hub here: exit 3, nothing made "
+                       "(issue #4898). await takes the T<n>.",
         "inputSchema": {"type": "object", "properties": {
             "title": {"type": "string", "description": "The task in one line (the person's words)."},
             "body": {"type": "string", "description": "The rest of the words (the issue body / the session's "
@@ -1381,7 +1261,7 @@ TOOLS = {
             "coding_agent": {"type": "string", "enum": ["claude", "codex"], "description": "CLI provider; independent of the agent definition."},
             "agent": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
                       "description": "The agent file a no-repo session starts as (issue #3122)."},
-            "draft": dict(DRAFT, description=DRAFT["description"] + " Needs repo."), "pr_note": PR_NOTE},
+},
             "required": ["title"], "additionalProperties": False}}),
     "send": (tool_send, {
         "description": "Send text to a live fleet peer as its next turn (bin/fleet-peer-send.sh). "
@@ -1413,11 +1293,10 @@ TOOLS = {
             "required": ["state"], "additionalProperties": False}}),
     "ask": (tool_ask, {
         "description": "问 — you are blocked on the operator: a question only they can answer, or an "
-                       "authorization you cannot grant yourself. Posts the question on the bound issue "
-                       "(bin/fleet-comment.sh --note, as `⛔ blocked: …`) and turns this window red on the dash "
-                       "(set-claude-state.sh blocked) until the next prompt arrives. A session with no issue but "
-                       "a hub task record (@task) puts the question on the record instead (「问过你」, "
-                       "bin/fleet-task-record.sh — issue #3330); one with both mirrors it there. The answer comes back as "
+                       "authorization you cannot grant yourself. Puts the question on this window's hub task "
+                       "record (「问过你」, bin/fleet-task-record.sh — issue #3330) and turns this window red on "
+                       "the dash (set-claude-state.sh blocked) until the next prompt arrives; no GitHub comment "
+                       "is written (issue #4898). The answer comes back as "
                        "your next turn, by the existing channels. A copy goes to the session that spawned this "
                        "one (send to: parent, issue #4337); no parent ⇒ the question waits for the person. Then "
                        "end your turn — do not spin. suggest / default / due are written under the question as "
@@ -1433,7 +1312,7 @@ TOOLS = {
                     "description": "A hint: by when you need the answer (written as given; nothing fires at it)."},
             "class": {"type": "string", "enum": ["normal", "never:rule", "never:money", "never:publish"],
                       "description": "Accepted for old callers and unused: nothing is decided by default any more."},
-            "issue": dict(ISSUE, description="Ask on this issue instead of the window's bound one.")},
+            "issue": dict(ISSUE, description="Accepted for old callers and unused (issue #4898).")},
             "required": ["question"], "additionalProperties": False}}),
     "answer_dialog": (tool_answer_dialog, {
         "description": "答 — answer another session's open choice dialog (AskUserQuestion) for its person, through "
@@ -1458,33 +1337,6 @@ TOOLS = {
             "issue": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+$",
                       "description": "Where the trail goes (default: the window's @epic, else its issue)."}},
             "required": ["window", "fp", "picks"], "additionalProperties": False}}),
-    "comment": (tool_comment, {
-        "description": "记 — comment on an issue through bin/fleet-comment.sh (the marker + sender footer). "
-                       "mode note (the DEFAULT) is RECORD-ONLY: the issue's worker never sees it. mode to-worker "
-                       "is relayed into that issue's worker as its next turn (to just tell a peer something, "
-                       "send is direct). close closes the issue after the comment (a no-PR wrap-up). GitHub not "
-                       "answering: exit 0 and 「已记下」 in stderr — kept, and made in order once it answers.",
-        "inputSchema": {"type": "object", "properties": {
-            "issue": ISSUE, "body": {"type": "string", "description": "The comment, Markdown."},
-            "mode": {"type": "string", "enum": ["note", "to-worker"], "description": "note (default) or to-worker."},
-            "close": {"type": "boolean", "description": "Close the issue after posting."},
-            "repo": REPO},
-            "required": ["issue", "body"], "additionalProperties": False}}),
-    "evidence": (tool_evidence, {
-        "description": "记 — store before/after evidence for the EPIC report (bin/fleet-evidence.sh). "
-                       "line prints the issue's 上线证据 line (exit 1 = none); before (prior to touching code) "
-                       "and after (PR open, not landed) store ONE capture: a file path, text (a command's "
-                       "output), or a tmux pane; post leaves ONE record-only comment listing every capture.",
-        "inputSchema": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["line", "before", "after", "post"]},
-            "file": {"type": "string", "description": "Path of the capture (before / after)."},
-            "text": {"type": "string", "description": "The capture's text, e.g. a command's output (before / after)."},
-            "pane": {"type": "string", "description": "A tmux target to capture (before / after)."},
-            "name": {"type": "string", "description": "File name for a text or pane capture."},
-            "note": {"type": "string", "description": "One line: what the capture shows."},
-            "mv": {"type": "boolean", "description": "Move the file instead of copying (a .playwright-mcp/ shot)."},
-            "issue": dict(ISSUE, description="The member issue (default: this window's).")},
-            "required": ["action"], "additionalProperties": False}}),
     "handoff": (tool_handoff, {
         "description": "记 — where a file handoff goes and which one a pickup resumes (bin/fleet-handoff-file.sh). "
                        "path: the file to write (slug optional); find: the one to resume (exit 1 none, 4 "
@@ -1524,64 +1376,18 @@ TOOLS = {
             "pr": PR_NUM, "repo": REPO},
             "additionalProperties": False}}),
     "brief": (tool_brief, {
-        "description": "The one opening read (issue #1811). kind claim (default): bin/fleet-claim-brief.sh — fleet, "
-                       "seat, the bound issue with every comment, the claim, the charter layers, the directive, "
-                       "origin. Exit 0 go · 2 not in a fleet · 3 wrong seat · 4 no issue bound · 5 the issue read "
-                       "failed. kind resume: bin/fleet-compact-resume.sh --brief — the recovery map after an "
-                       "in-place compaction.",
+        "description": "The one opening read (issues #1811, #4898). kind task (default): bin/fleet-brief.sh — "
+                       "fleet, repo, base, merge method, origin, this window's hub task record (or the issue "
+                       "number it was opened on), the flow and the directive. Exit 0 go · 2 not in a fleet · 4 "
+                       "nothing bound · 5 the record could not be read. kind resume: bin/fleet-compact-resume.sh "
+                       "--brief — the recovery map after an in-place compaction.",
         "inputSchema": {"type": "object", "properties": {
-            "kind": {"type": "string", "enum": ["claim", "resume"], "description": "claim (default) or resume."},
-            "issue": dict(ISSUE, description="claim: read this issue instead of the window's bound one."),
+            "kind": {"type": "string", "enum": ["task", "claim", "resume"],
+                     "description": "task (default; claim is its old name) or resume."},
+            "issue": dict(ISSUE, description="Accepted for old callers and unused (issue #4898)."),
             "repo": REPO,
-            "no_comments": {"type": "boolean", "description": "claim: skip the comment thread."}},
+            "no_comments": {"type": "boolean", "description": "Accepted for old callers and unused."}},
             "additionalProperties": False}}),
-    "file_issue": (tool_file_issue, {
-        "description": "File a GitHub issue through the ONE filer channel (bin/fleet-issue-file.sh): the "
-                       "provenance marker, the label taxonomy, the default milestone. parent links it as a "
-                       "sub-issue; spawn hands it to a new worker (caps + dedup apply; a cap refusal leaves it "
-                       "filed); bind makes THIS scratch session its worker (refused from a worker). breakage: the "
-                       "base branch is RED and this is its fix — the filer fingerprints the breakage (the first failed check · "
-                       "its first error line, never the commit) and files ONE issue per "
-                       "fingerprint: one already open gets a 「同一故障」 comment and comes back as exit 5 + its URL, "
-                       "nothing filed or spawned — wait for that issue (await), never file a second (issue #2078); "
-                       "a closed one is reopened when the red version contains its fix (issue #4271). "
-                       "Left out, the filing is an ordinary issue whatever its text says (issue #4271: the auto "
-                       "road of #2175 is gone) — say breakage: true for a red base. "
-                       "Prints the issue URL. Exit 0 ok · 2 usage · 3 unknown label · 4 spawn with no live parent · "
-                       "5 the breakage already has an open issue (URL printed) · 6 GitHub unreachable: nothing opened, never kept for later — file it later or as a hub ticket · 1 failure. A breakage a worker files "
-                       "without spawn is filed, the person alerted and the parent session told — nobody "
-                       "spawns its fixer by itself (issue #4337).",
-        "inputSchema": {"type": "object", "properties": {
-            "title": {"type": "string"},
-            "body": {"type": "string", "description": "The issue body, Markdown."},
-            "labels": {"type": "string", "description": "Comma-separated labels (the fleet's fixed taxonomy)."},
-            "priority": {"type": "string", "enum": ["p0", "p1", "p2", "p3"]},
-            "parent": dict(ISSUE, description="File it as a sub-issue of this issue."),
-            "spawn": {"type": "boolean", "description": "Start a worker on it now (any session, a worker too — issue #4591)."},
-            "bind": {"type": "boolean", "description": "Scratch only: become its worker in place."},
-            "breakage": {"type": "boolean", "description": "The base branch is red and this issue is its fix: "
-                         "fingerprint it and file one issue per breakage (exit 5 + the URL when one is open). "
-                         "Omitted or false = an ordinary issue (no auto road since issue #4271)."},
-            "breakage_key": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$",
-                             "description": "A fingerprint already computed (fleet_breakage_key) instead of probing."},
-            "task": dict(TASK_REF, description="The hub task record this issue is filed FOR (issue #3330): "
-                                               "hung on it, and a spawn's worker carries it."),
-            "draft": DRAFT, "pr_note": PR_NOTE,
-            "repo": REPO},
-            "required": ["title"], "additionalProperties": False}}),
-    "gh": (tool_gh, {
-        "description": "Read an issue, a PR or a PR's checks from the fleet's local copy first, GitHub only when "
-                       "it is too old (bin/fleet-gh.sh) — one JSON object with the gh --json field names plus "
-                       "_source (cache|gh|rest) and _age. Use it instead of a bare gh view; the merge gate is "
-                       "pr_verdict.",
-        "inputSchema": {"type": "object", "properties": {
-            "kind": {"type": "string", "enum": ["issue", "pr", "checks"]},
-            "number": {"type": "integer", "minimum": 1, "description": "The issue / PR number."},
-            "fields": {"type": "string", "description": "Comma-separated gh --json fields, e.g. title,state."},
-            "max_age": {"type": "integer", "minimum": 0,
-                        "description": "Oldest cached copy to accept, seconds (0 = always ask GitHub)."},
-            "repo": REPO},
-            "required": ["kind", "number"], "additionalProperties": False}}),
     "context": (tool_context, {
         "description": "How full is THIS session's context window (bin/fleet-context.sh): the percentage and "
                        "context bands — OK · WATCH · HANDOFF. With auto_handoff_pct=0 (default), bands are "
@@ -1642,6 +1448,12 @@ RETIRED = {
     "debug_bundle": "removed with the debug desk (claude-fleet#4904): `fleet doctor` reads this computer",
     "debug_publish": "removed with the debug desk (claude-fleet#4904)",
     "debug_propose": "removed with the debug desk (claude-fleet#4904)",
+    "comment": "removed (claude-fleet#4898): the fleet writes no GitHub comments — a question is `ask`, "
+               "an outcome is `report`, a peer is `send`",
+    "evidence": "removed (claude-fleet#4898): put what you verified in the PR body and the `report` summary",
+    "file_issue": "removed (claude-fleet#4898): new work is the `task` tool (a hub task record); a red base "
+                  "is said in your `report`",
+    "gh": "removed (claude-fleet#4898): read a PR with `gh pr view` yourself; the merge gate is `pr_verdict`",  # no-gh-ok: a message
 }
 
 # The pre-#1807 fleet-peer server, for a config that still mounts it (one version).

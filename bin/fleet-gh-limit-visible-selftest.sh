@@ -38,10 +38,10 @@ now=$(date +%s)
 . "$BIN/fleet-gh-lib.sh"
 fleet_gh_limit_rows >/dev/null && fail "R1 no marker must read as not limited"
 fleet_gh_limit_until >/dev/null && fail "R1 no marker has no until"
-mark graphql $((now + 600)); mark core $((now + 1800)) fleet-comment; mark secondary 5
+mark graphql $((now + 600)); mark core $((now + 1800)) fleet-gh; mark secondary 5
 rows=$(fleet_gh_limit_rows) || fail "R2 a live marker must read as limited"
 [ "$(printf '%s\n' "$rows" | grep -c .)" -eq 2 ] || fail "R2 two live buckets, the expired one dropped" "$rows"
-printf '%s\n' "$rows" | grep -qx "core	$((now + 1800))	fleet-comment" || fail "R2 a row is bucket/reset/source" "$rows"
+printf '%s\n' "$rows" | grep -qx "core	$((now + 1800))	fleet-gh" || fail "R2 a row is bucket/reset/source" "$rows"
 [ "$(fleet_gh_limit_until)" = $((now + 1800)) ] || fail "R3 until is the LAST bucket to lift" "$(fleet_gh_limit_until)"
 rm -f "$FLEET_STATE_DIR"/gh-limit.*
 [ "$(FLEET_GH_FAKE_LIMIT=graphql fleet_gh_limit_until)" = fake ] || fail "R4 an injected limit reads as fake"

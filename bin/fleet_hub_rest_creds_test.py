@@ -8,7 +8,7 @@ import unittest
 import urllib.error
 from unittest.mock import patch
 
-import fleet_ticket as ticket
+import fleet_hub_rest as ticket
 
 
 class CredentialPairTests(unittest.TestCase):

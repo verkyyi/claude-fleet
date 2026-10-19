@@ -172,13 +172,13 @@ eq "G without perl a CJK title degrades to empty (caller takes its slug)" "" "$n
 noperl_ascii=$(PATH="$WORK/noperl:$PATH" bash -c '. "$1" 2>/dev/null; fleet_win_name "$2"' _ "$LIB" 'Fix The Widget Cache')
 eq "G …while ASCII titles are unaffected" "fix-the-widget-cache" "$noperl_ascii"
 
-# ===== H: structural — one derivation, four call sites, no second copy ========
+# ===== H: structural — one derivation, three call sites, no second copy ========
 defs=$(grep -c '^fleet_win_name()' "$LIB")
 eq "H exactly one fleet_win_name definition" "1" "$defs"
-# The four call points #579 lists. They must all go through the function — a
+# The call points #579 lists (the bind script left with #4898). They must all go through the function — a
 # hand-rolled slugify anywhere else would be a second, byte-wise copy that
 # re-introduces the bug on whichever path grew it.
-for f in dash-issue-session.sh dash-restore-session.sh fleet-history.sh fleet-bind.sh; do
+for f in dash-issue-session.sh dash-restore-session.sh fleet-history.sh; do
   CHECKS=$((CHECKS + 1))
   grep -q 'fleet_win_name\|fleet_issue_win_name' "$BIN/$f" \
     || fail "H $f no longer derives its window name through fleet_win_name"
@@ -234,8 +234,8 @@ eq "J use: a （aside） is dropped" "测试身份开出来的home会话" \
    "$(fleet_issue_plain_name '测试身份（fleet --test-identity claude）开出来的 home 会话落在人的侧栏里当 norepo，没有回收策略')"
 eq "J use: no hyphen beside a CJK glyph" "入口把home会话放进mac-c" \
    "$(fleet_issue_plain_name '入口把 home 会话放进 mac-c 上另一个登录（dave）的旧 fleet')"
-eq "J use: fleet- prefix, .sh suffix, --flag, under_score come off" "issue-file对超长标题给提" \
-   "$(fleet_issue_plain_name 'fleet-issue-file.sh --hint 对超长标题给提示 fleet_title_use')"
+eq "J use: fleet- prefix, .sh suffix, --flag, under_score come off" "pr-merge对超长标题给提示" \
+   "$(fleet_issue_plain_name 'fleet-pr-merge.sh --hint 对超长标题给提示 fleet_title_use')"
 eq "J use: an ASCII-only title still slugs" "add-a-hint" "$(fleet_issue_plain_name 'Add a hint --flag fleet_x')"
 eq "J use: a short plain title is itself" "每日推送没跑成" "$(fleet_issue_plain_name '每日推送没跑成')"
 got=$(fleet_issue_plain_name '托管机器上旧版 fleet host on 以登录身份重登记：入口换发令牌')

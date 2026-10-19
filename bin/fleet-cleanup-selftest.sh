@@ -98,14 +98,18 @@ GITFAKE
 # --- fake gh: pr_fields TSV per scenario --------------------------------------
 cat > "$WORK/fakebin/gh" <<GHFAKE
 #!/bin/bash
-sub="\${1:-}"; action="\${2:-}"; num="\${3:-}"
-# issue view (issue #1156): the bound-issue gate's one read. FAKE_ISSUE_STATE
-# defaults to CLOSED so every pre-#1156 scenario reaps as it always did.
-if [ "\$sub" = issue ]; then
+# issue view (issue #1156): the bound-issue gate's one read — fleet_ticket_state's
+# `-R <repo> issue view <N> --json state,… -q …` (state, reason, labels; a TAB line).
+# FAKE_ISSUE_STATE defaults to CLOSED so every pre-#1156 scenario reaps as it always did.
+if [ "\${1:-}" = -R ] && [ "\${3:-}" = issue ]; then
   printf 'issue %s\n' "\$*" >> "$WORK/gh-issue.log"
-  [ "\$action" = view ] || exit 0
+  [ "\${4:-}" = view ] || exit 0
   [ "\${FAKE_ISSUE_FAIL:-0}" = 1 ] && exit 1
-  printf '{"id":"I_42","number":42,"url":"https://github.com/acme/widgets/issues/42","state":"%s"}\n' "\${FAKE_ISSUE_STATE:-CLOSED}"; exit 0
+  printf '%s\t\t\n' "\${FAKE_ISSUE_STATE:-CLOSED}"; exit 0
+fi
+sub="\${1:-}"; action="\${2:-}"; num="\${3:-}"
+if [ "\$sub" = issue ]; then
+  printf 'issue %s\n' "\$*" >> "$WORK/gh-issue.log"; exit 0
 fi
 [ "\$sub" = pr ] || exit 0
 case "\$action" in
@@ -490,7 +494,7 @@ for closes in 'acme/widgets#43' 'other/repo#42' '-' 'acme/widgets#420,acme/widge
   [ "$tok" = skip:issue-open ] || fail "(1156-2) closes='$closes' + #42 OPEN must defer, got '$tok'" "$(cat "$WORK/err")"
   [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
     && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail "(1156-2) closes='$closes' mutated the worker"
-  grep -q 'issue view 42 --repo acme/widgets' "$WORK/gh-issue.log" || fail '(1156-2) issue read not on (repo, issue)' "$(cat "$WORK/gh-issue.log")"
+  grep -q -- '-R acme/widgets issue view 42 ' "$WORK/gh-issue.log" || fail '(1156-2) issue read not on (repo, issue)' "$(cat "$WORK/gh-issue.log")"
   grep -q 'issue close' "$WORK/gh-issue.log" && fail '(1156-2) cleanup must never close an issue'
 done
 grep -q '@reap_due hold' "$WORK/tmux-set.log" && grep -q '@reap_hold PR #42 merged · #42 still open' "$WORK/tmux-set.log" \

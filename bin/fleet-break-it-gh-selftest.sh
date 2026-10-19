@@ -15,8 +15,6 @@
 #
 #   gh-blackhole-hang   bin/gh-blackhole-selftest.sh, conf/gh-blackhole.rows,
 #                       bin/gh_blackhole.py, bin/fleet-gh.sh, bin/fleet-pr-verdict.sh
-#   gh-outbox-write-lost  bin/gh-outbox-selftest.sh, bin/fleet_gh_outbox.py,
-#                       bin/fleet-ticket.sh, bin/fleet-issue-bridge.sh (issue #4844)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -35,19 +33,6 @@ drill_gh_blackhole_hang() {
   n=$(awk -F'\t' 'NR > 1 && $3 == "hang"' "$d/table.tsv" | wc -l | tr -d ' ')
   [ "$(awk -F'\t' 'NR > 1' "$d/table.tsv" | wc -l | tr -d ' ')" = 2 ] || { WHY="want 2 cells, got: $(cat "$d/table.tsv")"; return 1; }
   WHAT="GitHub 连上不回：读单、合并门两格限时放手（$n/2 格仍卡；C2 #4841 起这两格读 fail，不再挂）"
-}
-
-# GitHub ticket writes made while GitHub does not answer (issue #4844, EPIC #4839
-# C5): kept in the outbox, made in order once it answers, never twice.
-drill_gh_outbox_write_lost() {
-  CAP=120
-  local d="$WORK/ghob" t0 rc
-  mkdir -p "$d"
-  t0=$(now)
-  bash "$BIN/gh-outbox-selftest.sh" > "$d/out" 2>&1; rc=$?
-  SECS=$(since "$t0")
-  [ "$rc" = 0 ] || { WHY="a write was lost, doubled or reordered (exit $rc): $(grep FAIL "$d/out" | head -n 6)"; return 1; }
-  WHAT="GitHub 不通时的 8 次写：全部记下、恢复后按序补上，重放两次不出第二份（$(tail -n 1 "$d/out")）"
 }
 
 cred_run_drills "$0"

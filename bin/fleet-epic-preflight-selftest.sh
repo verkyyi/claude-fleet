@@ -2,9 +2,9 @@
 # fleet-epic-preflight-selftest.sh — hermetic tests for bin/fleet-epic-preflight.sh,
 # the "can this repo run an EPIC?" gate (issue #678).
 #
-# No network, no real repo, and NO tmux server: `gh` is faked, and so are the two
-# scripts the preflight shells out to (fleet-labels-seed.sh, fleet-account.sh), so
-# C3 uses the real seeder with a fake gh label store; no run reaches GitHub.
+# No network, no real repo, and NO tmux server: `gh` is faked (its `label create`
+# is the --fix path), and so is the account pool (fleet-account.sh); C3 keeps a
+# fake gh label store on disk; no run reaches GitHub.
 # The preflight runs
 # from a temp bin/ beside a copy of the real fleet-lib.sh, with no ../fleet.conf —
 # every input arrives as an env var. That is strictly more isolated than a scratch
@@ -15,7 +15,7 @@
 # than none:
 #   A. everything clear                        → READY,   exit 0
 #   B. labels missing, nothing else wrong      → FIXABLE, exit 1  (read-only!)
-#   C. --fix seeds them                        → READY,   exit 0, seeder invoked
+#   C. --fix creates them                      → READY,   exit 0, gh label create
 #   D. gh unauthed                             → BLOCKED, exit 3
 #   E. read-only permission                    → BLOCKED, exit 3
 #   F. the sub-issues API 404s                 → BLOCKED, exit 3
@@ -62,8 +62,8 @@ SEED_LOG="$WORK/seedlog"
 # --- fake gh -------------------------------------------------------------------
 # Knobs (env): GH_AUTH=0 unauthed · GH_PERM=<viewerPermission> · GH_ISSUES=false
 # · GH_SUBISSUE=404|err · GH_LABELS=<space-separated> · GH_NOISSUES=1 (nothing to
-# probe). Writes nothing anywhere — the `label create` path is not even reachable
-# from here, because the preflight only seeds through fleet-labels-seed.sh.
+# probe). `label create` (the --fix path) is logged to $SEED_LOG and touches
+# $SEED_MARKER (exit $SEED_RC); nothing is written anywhere.
 cat > "$WORK/fakebin/gh" <<'GHFAKE'
 #!/bin/bash
 case "$1 $2" in
@@ -75,6 +75,8 @@ case "$1 $2" in
     printf '%s\n' "${GH_PROBE:-42}"; exit 0 ;;
   "label list")
     for l in ${GH_LABELS-epic autofill blocked bug}; do printf '%s\n' "$l"; done; exit 0 ;;
+  "label create")
+    printf '%s\n' "$*" >> "$SEED_LOG"; [ -n "${SEED_MARKER:-}" ] && : > "$SEED_MARKER"; exit "${SEED_RC:-0}" ;;
 esac
 # `gh api .../sub_issues` — the capability probe
 case "$*" in
@@ -99,16 +101,6 @@ exit 0
 TMUXFAKE
 chmod +x "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
 
-# --- fake seeder: log the invocation; make the labels "appear" via a marker file
-# the fake gh cannot see, so the test drives the post-seed re-read explicitly with
-# SEED_MAKES (the set the preflight should observe on its second `label list`).
-cat > "$WORK/bin/fleet-labels-seed.sh" <<'SEEDFAKE'
-#!/bin/bash
-printf '%s\n' "$*" >> "$SEED_LOG"
-[ -n "${SEED_MARKER:-}" ] && : > "$SEED_MARKER"
-exit "${SEED_RC:-0}"
-SEEDFAKE
-
 # --- fake account pool: TSV rows exactly like fleet-account.sh quota --cached ---
 # (label, 5h%, 7d%, headroom, …), and its exit (issue #2588): no row ⇒ 4 when
 # no hub is configured (no pool at all), 3 when one is (configured, unreadable).
@@ -120,7 +112,7 @@ printf '%b' "${QUOTA_ROWS:-}"
 [ -n "${CCQUOTA_HUB_URL:-}" ] && exit 3
 exit 4
 ACCTFAKE
-chmod +x "$WORK/bin/fleet-labels-seed.sh" "$WORK/bin/fleet-account.sh"
+chmod +x "$WORK/bin/fleet-account.sh"
 
 # run_pf [args…] — env knobs pass through from the caller. Records $RC.
 run_pf() {
@@ -151,7 +143,7 @@ $(cat "$WORK/err")"
 printf '%s' "$OUT" | grep -q 'READY'          || fail "A must say READY" "$OUT"
 printf '%s' "$OUT" | grep -q 'PASS  *labels'  || fail "A labels must PASS" "$OUT"
 printf '%s' "$OUT" | grep -q 'PASS  *subissue' || fail "A subissue must PASS" "$OUT"
-[ -s "$SEED_LOG" ] && fail "A a clean run must never invoke the seeder" "$(cat "$SEED_LOG")"
+[ -s "$SEED_LOG" ] && fail "A a clean run must never create a label" "$(cat "$SEED_LOG")"
 ok "A every gate clear → READY, exit 0, nothing written"
 
 # ============================ B: missing labels → FIXABLE / 1 ==============
@@ -177,8 +169,8 @@ printf '%s' "$OUT" | grep -qE 'FIX .*labels.*epic' || fail "B2 must name epic as
 ok "B2 a repo seeded before \`epic\` existed is caught as FIXABLE"
 
 # ============================ C: --fix seeds, then re-reads ================
-# The fake gh flips to the full set once the seeder has run (SEED_MARKER), so this
-# proves the preflight RE-READS rather than trusting the seeder's exit code.
+# The fake gh flips to the full set once a label was created (SEED_MARKER), so this
+# proves the preflight RE-READS rather than trusting gh's exit code.
 cat > "$WORK/fakebin/gh" <<'GHFAKE2'
 #!/bin/bash
 case "$1 $2" in
@@ -191,6 +183,8 @@ case "$1 $2" in
     else
       for l in ${GH_LABELS-bug}; do printf '%s\n' "$l"; done
     fi; exit 0 ;;
+  "label create")
+    printf '%s\n' "$*" >> "$SEED_LOG"; [ -n "${SEED_MARKER:-}" ] && : > "$SEED_MARKER"; exit "${SEED_RC:-0}" ;;
 esac
 case "$*" in *sub_issues*) echo '[]'; exit 0 ;; esac
 exit 0
@@ -201,9 +195,9 @@ rm -f "$WORK/marker"
 SEED_MARKER="$WORK/marker" GH_LABELS='bug' clean_env run_pf --fix
 [ "$RC" -eq 0 ] || fail "C --fix must clear the gap → READY (exit 0, got $RC)" "$OUT
 $(cat "$WORK/err")"
-grep -q -- '--repo acme/widgets' "$SEED_LOG" || fail "C the seeder must be called for the resolved repo" "$(cat "$SEED_LOG")"
+grep -q -- 'label create epic.*--repo acme/widgets' "$SEED_LOG" || fail "C the missing label must be created in the resolved repo" "$(cat "$SEED_LOG")"
 printf '%s' "$OUT" | grep -q 'PASS  *labels' || fail "C labels must PASS after the re-read" "$OUT"
-ok "C --fix seeds through fleet-labels-seed.sh and re-reads the repo (READY, exit 0)"
+ok "C --fix creates the missing labels and re-reads the repo (READY, exit 0)"
 
 # ============================ C2: --fix that does NOT help is a blocker ====
 # Seeder ran, labels still absent ⇒ a human has to look. Never a silent READY.
@@ -213,11 +207,9 @@ SEED_MARKER='' GH_LABELS='bug' clean_env run_pf --fix
 printf '%s' "$OUT" | grep -qE 'FAIL .*labels' || fail "C2 the labels row must FAIL" "$OUT"
 ok "C2 a --fix that leaves the labels missing escalates to BLOCKED (never a silent pass)"
 
-# C3: exercise --fix with the REAL seeder in a fresh HOME (#4326). The fake gh
-# keeps a sandbox repo's labels on disk, so the re-read sees only actual creates.
+# C3: exercise --fix in a fresh HOME (#4326). The fake gh keeps a sandbox repo's
+# labels on disk, so the re-read sees only actual creates.
 cp "$WORK/fakebin/gh" "$WORK/fakebin/gh-preflight"
-cp "$WORK/bin/fleet-labels-seed.sh" "$WORK/bin/seed-fake"
-cp "$BIN/fleet-labels-seed.sh" "$WORK/bin/fleet-labels-seed.sh"
 cat > "$WORK/fakebin/gh" <<'GHREAL-SEED'
 #!/bin/bash
 case "$1 $2" in
@@ -230,15 +222,14 @@ mkdir -p "$WORK/home/.config/claude-fleet"
 : > "$WORK/labels"
 HOME="$WORK/home" FLEET_CONF_DIR="$WORK/home/.config/claude-fleet" \
   LABEL_DB="$WORK/labels" clean_env run_pf --fix
-[ "$RC" -eq 0 ] || fail "C3 real seeder must make a fresh repo READY" "$OUT
+[ "$RC" -eq 0 ] || fail "C3 --fix must make a fresh repo READY" "$OUT
 $(cat "$WORK/err")"
 for retired in autoland autofill; do
   grep -Fxq "$retired" "$WORK/labels" && fail "C3 --fix must not create $retired" "$(cat "$WORK/labels")"
 done
 grep -Fxq epic "$WORK/labels" && grep -Fxq blocked "$WORK/labels" \
   || fail "C3 --fix must create active EPIC labels" "$(cat "$WORK/labels")"
-ok "C3 fresh-HOME preflight --fix with real seeder creates no retired labels"
-mv "$WORK/bin/seed-fake" "$WORK/bin/fleet-labels-seed.sh"
+ok "C3 fresh-HOME preflight --fix creates the EPIC labels and no retired ones"
 
 # restore the plain fake gh for the remaining cases
 cat > "$WORK/fakebin/gh" <<'GHFAKE3'
@@ -460,7 +451,7 @@ done
 ok "L the EPIC trio's spawn / preflight / evidence calls all name the resolved repo"
 
 # ============================ I: the taxonomy actually carries the labels ==
-# The preflight checks for three labels; fleet-labels-seed.sh can only create what
+# The preflight checks for its labels and --fix creates them off what
 # fleet_labels_canonical lists. If those two drift, --fix promises a fix it cannot
 # deliver — so pin the join here, against the REAL lib.
 allowed=$(. "$WORK/bin/fleet-lib.sh"; fleet_labels_allowed)

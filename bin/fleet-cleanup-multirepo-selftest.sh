@@ -43,6 +43,7 @@ cat > "$WORK/bin/gh" <<'EOF'
 #!/bin/bash
 repo=""; prev=""
 for a in "$@"; do [ "$prev" = --repo ] || [ "$prev" = -R ] && repo="$a"; prev="$a"; done
+[ "$1" = -R ] && shift 2   # fleet_ticket_state's `-R <repo> issue view …`
 case "$1 $2" in
   "pr view")
     [ "$repo" = o/a ] && [ "$3" = 101 ] || exit 1
@@ -50,7 +51,7 @@ case "$1 $2" in
   "pr list") printf '[]\n' ;;
   "issue view")   # the bound-issue gate (issue #1156) — logged so the leg can check the join
     printf '%s %s\n' "$repo" "$3" >> "$GH_ISSUE_LOG"
-    printf '%s\n' "${GH_ISSUE_STATE:-CLOSED}" ;;
+    printf '%s\t\t\n' "${GH_ISSUE_STATE:-CLOSED}" ;;
   *) exit 1 ;;
 esac
 EOF

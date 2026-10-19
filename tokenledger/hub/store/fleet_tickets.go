@@ -22,7 +22,7 @@ import (
 // It grows out of the registry of #2676 (`fleet_ticket_index`, one row per
 // GitHub ticket a node opened): those rows are copied in once as `gh` tickets
 // — backend gh, the GitHub page as url, no body — and /register writes here
-// (bin/fleet-ticket.sh); the index table is still read by the repo authority
+// (the node ticket script, gone since claude-fleet#4898); the index table is still read by the repo authority
 // and the task record's ticket checks.
 //
 // A ticket is not a task record (fleet_tasks.go): T<n> is who asked for what;

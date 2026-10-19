@@ -34,7 +34,7 @@ Hub 的精确确认后，用同一份已验证的原始本地身份快照作为 
 `@authority_receipt`、`@codex_identity`、`@codex_session_id`。已有 model/transcript
 等身份附加字段保留。提交后再次核验原执行与 Hub。
 
-所有 authority HTTP 请求复用 `fleet_ticket.creds` 的整对 URL/token 选择。
+所有 authority HTTP 请求复用 `fleet_hub_rest.creds` 的整对 URL/token 选择。
 调用者只有 URL 时，当前 resolver 重新取得一整对合法来源；不要求现场手动 unset，
 也不改变原 native 环境。旧 Hub/proxy 不支持新只读入口时，明确拒绝。
 

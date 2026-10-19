@@ -11,8 +11,6 @@
 #            on BOTH paths with no merge call at all.
 #   REAP     fleet_gh_merged_heads (dash-reap's merged check) finds a MERGED PR
 #            over REST, and skips a closed-unmerged one.
-#   COMMENT  fleet-comment.sh posts the identical marked body via
-#            `issues/N/comments -F body=@file`; --close closes via PATCH.
 #   HEALTHY  GraphQL answering → the exact pre-#1042 argv, zero REST calls, same
 #            stdout (the single-repo degenerate case, byte for byte).
 #
@@ -233,21 +231,5 @@ run ready ok "$WORK/reap.sh"
 [ "$(grep -c 'fleet_gh_merged_heads' "$BIN/dash-reap.sh")" = 2 ] || fail "dash-reap uses fleet_gh_merged_heads at both merged checks"
 grep -q 'gh -R .* pr list' "$BIN/dash-reap.sh" && fail "dash-reap still has a bare gh pr list merged check"
 ok "reap's merged check: REST finds a MERGED PR under the limit (not 'unmerged'); healthy argv unchanged"
-
-# ===== COMMENT =================================================================
-FCS="$BIN/fleet-comment.sh"
-run ready ok "$FCS" 5 --repo o/r --note --body 'tick 3'
-cp "$WORK/posted" "$WORK/posted.gql"; gout="$OUT"
-[ "$gout" = 'https://github.com/o/r/issues/5#issuecomment-gql' ] || fail "healthy comment URL" "$gout"
-grep -q '^api|' "$GHLOG" && fail "healthy comment must make no REST call" "$(cat "$GHLOG")"
-run ready limited "$FCS" 5 --repo o/r --note --body 'tick 3'
-[ "$OUT" = 'https://github.com/o/r/issues/5#issuecomment-rest' ] && [ "$RC" = 0 ] || fail "REST comment URL" "$OUT/$RC $(cat "$WORK/err")"
-cmp -s "$WORK/posted" "$WORK/posted.gql" || fail "REST body must equal the GraphQL body (marker + footer)" "$(diff "$WORK/posted.gql" "$WORK/posted")"
-grep -q 'fleet:no-relay' "$WORK/posted" || fail "no-relay marker kept on the REST path"
-grep -q 'via REST' "$WORK/err" || fail "comment says via REST"
-run ready limited "$FCS" 5 --repo o/r --close --body 'done'
-[ "$RC" = 0 ] && [ -e "$WORK/closed" ] || fail "REST close" "$RC $(cat "$WORK/err") $(cat "$GHLOG")"
-grep -q '^api|-X|PATCH|repos/o/r/issues/5|-f|state=closed' "$GHLOG" || fail "close via PATCH state=closed" "$(cat "$GHLOG")"
-ok "comment / --close: the same marked body over REST when GraphQL is limited; healthy path no REST"
 
 printf 'PASS fleet-gh-fallback-selftest (%d checks)\n' "$pass"

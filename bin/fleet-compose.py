@@ -25,8 +25,8 @@ Who writes the payload: a thin client's 派一件事 (fleet-quick-dispatch.py, t
 (issue #3008). The payload sits beside the switch state
 ($XDG_STATE_HOME/claude-fleet/compose-send.json; FLEET_SWITCH_STATE overrides the
 directory); a send that did not open keeps it as compose-failed.json. Nothing on
-the way spends a token: the issue is filed by fleet-issue-file.sh on the machine,
-the worker opened by its spawn.
+the way spends a token: the hub records the task, the machine opens its session
+bound to that record (no issue is filed since #4898).
 """
 import json
 import os

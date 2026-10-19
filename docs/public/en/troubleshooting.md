@@ -928,7 +928,7 @@ From `fleet doctor`.
 From `fleet doctor`.
 
 - **What it is**: whether the repository has the issue labels fleet uses.
-- **On WARN / FAIL**: add them with the explanation's `fleet-labels-seed.sh --repo <repo>`.
+- **On WARN / FAIL**: add each missing one with `gh label create <name> --repo <repo>`.
 
 #### `tickets`
 

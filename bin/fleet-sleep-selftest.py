@@ -84,7 +84,7 @@ class SleepTest(unittest.TestCase):
                      'fleet-session-wrap.sh','fleet-session-page.py',
                      # The real wrapper always enters the repo supervisor in tmux
                      # (#4467); its imports are needed even for this no-repo worker.
-                     'fleet_repo_authority.py','fleet_ticket.py','fleet_launch.py'):
+                     'fleet_repo_authority.py','fleet_hub_rest.py','fleet_launch.py'):
             shutil.copyfile(BIN/name,cls.bin/name)
         (cls.bin/'fleet-session-wrap.sh').chmod(0o755)   # a wake relaunches through it (issue #1784)
         cls.wt=cls.root/'scratch-1'; cls.wt.mkdir()

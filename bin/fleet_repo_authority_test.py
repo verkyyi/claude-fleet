@@ -80,21 +80,21 @@ class PoolAuthorityTests(unittest.TestCase):
             elif action == "begin":
                 self.assertEqual(fields["worker_id"], worker)
                 if refuse:
-                    raise migration.ticket.Fail(4, "worker belongs to another node")
+                    raise migration.hubrest.Fail(4, "worker belongs to another node")
             elif action == "stopped":
                 self.assertEqual(fields["native_identity"], native)
                 self.assertTrue(fields["execution_stopped"])
             elif action == "unobserved":
                 self.assertEqual(fields, dict(worker_id=worker))
                 if old_hub:
-                    raise migration.ticket.Fail(4, "HTTP 409: invalid")
+                    raise migration.hubrest.Fail(4, "HTTP 409: invalid")
             phase = dict(begin='starting', unobserved='abandoned').get(action, action)
             return dict(repo=repo, reservation=key, worker_id=worker, owner='owner',
                         endpoint_id='node', phase=phase)
 
         with patch.dict(os.environ, environment, clear=True), \
                 patch.object(migration, "start_call", side_effect=start), \
-                patch.object(migration.ticket, 'api', side_effect=lambda method, path, query: dict(
+                patch.object(migration.hubrest, 'api', side_effect=lambda method, path, query: dict(
                     repo=query['repo'], reservation=query['reservation'], owner='owner', endpoint_id='node', phase='reserved')), \
                 patch.object(migration.signal, "signal"), \
                 patch.object(migration.launch, "option", side_effect=lambda pane,key,*args:
@@ -102,7 +102,7 @@ class PoolAuthorityTests(unittest.TestCase):
                 patch.object(migration, "prove_stopped", return_value=native), \
                 patch("sys.stderr", new_callable=io.StringIO) as err:
             if refuse:
-                with self.assertRaisesRegex(migration.ticket.Fail, "another node"):
+                with self.assertRaisesRegex(migration.hubrest.Fail, "another node"):
                     migration.supervise([self.native_program])
             else:
                 self.assertEqual(migration.supervise([self.native_program]), 0)
@@ -161,7 +161,7 @@ class RepoAuthorityTests(unittest.TestCase):
         with patch.dict(os.environ, FLEET_AUTHORITY_START='new', FLEET_AUTHORITY_EXPECTED=json.dumps(source), TMUX_PANE='%1'), \
                 patch.object(migration.launch, 'option', return_value=''), \
                 patch.object(migration.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'org/a\tfleet/session', '')), \
-                patch.object(migration.ticket, 'api', return_value=different), \
+                patch.object(migration.hubrest, 'api', return_value=different), \
                 patch.object(migration, 'start_call') as post, patch.object(migration.subprocess, 'Popen') as child:
             with self.assertRaises(ValueError):
                 migration.supervise(['fixture-native'])
@@ -178,7 +178,7 @@ class RepoAuthorityTests(unittest.TestCase):
                     patch.dict(os.environ, FLEET_AUTHORITY_START='start', TMUX_PANE='%1'), \
                     patch.object(migration.launch, 'option', return_value=''), \
                     patch.object(migration.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'org/a\tfleet/session', '')), \
-                    patch.object(migration.ticket, 'api', return_value=original) as get, \
+                    patch.object(migration.hubrest, 'api', return_value=original) as get, \
                     patch.object(migration, 'start_call', return_value=wrong) as post, \
                     patch.object(migration.subprocess, 'Popen') as child:
                 with self.assertRaises(ValueError):
@@ -194,7 +194,7 @@ class RepoAuthorityTests(unittest.TestCase):
             if method == "GET":
                 return dict(mode="legacy", revision=0)
             return dict(reservation="fixture-start", mode="legacy")
-        with patch.object(migration.ticket, "api", side_effect=api), contextlib.redirect_stdout(io.StringIO()):
+        with patch.object(migration.hubrest, "api", side_effect=api), contextlib.redirect_stdout(io.StringIO()):
             migration.gate("org/a", True)
         self.assertTrue(any(method == "POST" and body.get("action") == "reserve"
                             for method, _, body in calls), "last gate must leave a durable reservation before any window exists")
@@ -272,7 +272,7 @@ class RepoAuthorityTests(unittest.TestCase):
             env = dict(os.environ, FLEET_CONF_DIR=str(conf), FLEET_SKIP_GLOBAL_CONF="1")
             for key in ("TMUX", "TMUX_PANE", "FLEET_SESSION", "FLEET_REPO", "FLEET_TASK_AUTHORITY"):
                 env.pop(key, None)
-            with patch.dict(os.environ, env, clear=True), patch.object(migration.ticket, "api", side_effect=api):
+            with patch.dict(os.environ, env, clear=True), patch.object(migration.hubrest, "api", side_effect=api):
                 baseline = {str(p): p.read_bytes() for p in conf.rglob("*") if p.is_file()}
                 doc = run("--dry-run")
                 self.assertEqual(baseline, {str(p): p.read_bytes() for p in conf.rglob("*") if p.is_file()})
@@ -335,7 +335,7 @@ class RepoAuthorityTests(unittest.TestCase):
             def effective(host):
                 return run(host, "--dry-run")["local"]["settings"]["FLEET_TASK_AUTHORITY"]
 
-            with patch.object(migration.ticket, "api", side_effect=api):
+            with patch.object(migration.hubrest, "api", side_effect=api):
                 untouched = run("node-b", "org/a", "--sync")
                 self.assertEqual(untouched["changed"], [])
                 self.assertFalse((root / "node-b/fleet.conf").exists())
@@ -353,7 +353,7 @@ class RepoAuthorityTests(unittest.TestCase):
                     self.assertEqual(overlays[host].read_text(), original)
                 self.assertFalse((root / "login-c/fleet.conf").exists())
                 self.assertEqual(rows["bob"], dict(owner="bob", mode="legacy", revision=0))
-            with patch.object(migration.ticket, "api", return_value=dict(mode="unknown")):
+            with patch.object(migration.hubrest, "api", return_value=dict(mode="unknown")):
                 before = (root / "node-b/fleet.conf").read_bytes()
                 with self.assertRaises(ValueError):
                     run("node-b", "--sync")
@@ -370,7 +370,7 @@ class RepoAuthorityTests(unittest.TestCase):
             (repos / "org-a.conf").write_text('FLEET_REPO="org/a"\nFLEET_TASK_AUTHORITY="hub"\n')
             out = io.StringIO()
             with patch.dict(os.environ, dict(FLEET_CONF_DIR=str(conf))), \
-                    patch.object(migration.ticket, "api", return_value=dict(owner="alice", mode="legacy", revision=0)), \
+                    patch.object(migration.hubrest, "api", return_value=dict(owner="alice", mode="legacy", revision=0)), \
                     contextlib.redirect_stdout(out):
                 migration.main(["--sync"])
             self.assertEqual(json.loads(out.getvalue())["changed"], ["fleet.conf"])
@@ -378,16 +378,16 @@ class RepoAuthorityTests(unittest.TestCase):
 
     def test_forge_none_manifest_and_unknown_gate(self):
         with patch.object(migration, "login_settings", return_value=(dict(settings=dict(FLEET_TASK_AUTHORITY="")), Path("fleet.conf"))), \
-                patch.object(migration.ticket, "api", return_value=dict(authority=dict(owner="alice", mode="legacy", revision=0))) as api:
+                patch.object(migration.hubrest, "api", return_value=dict(authority=dict(owner="alice", mode="legacy", revision=0))) as api:
             doc = migration.manifest("Org/A")
             self.assertEqual((doc["owner"], doc["repo"]), ("alice", "org/a"))
             api.assert_called_once_with("GET", "/authority", query={"rollback": "1", "repo": "org/a"})
         for mode in ("frozen", "hub", "unknown"):
-            with patch.object(migration.ticket, "api", return_value=dict(mode=mode)), patch.dict(os.environ, {"FLEET_LAUNCH": ""}):
+            with patch.object(migration.hubrest, "api", return_value=dict(mode=mode)), patch.dict(os.environ, {"FLEET_LAUNCH": ""}):
                 with self.assertRaises(ValueError):
                     migration.gate("org/a", True)
-        with patch.object(migration.ticket, "api", side_effect=migration.ticket.Fail(4, "unavailable")):
-            with self.assertRaises(migration.ticket.Fail):
+        with patch.object(migration.hubrest, "api", side_effect=migration.hubrest.Fail(4, "unavailable")):
+            with self.assertRaises(migration.hubrest.Fail):
                 migration.gate("org/a", False)
 
     def test_native_hook_cannot_bind_a_nested_or_wrong_process(self):
@@ -414,8 +414,8 @@ class RepoAuthorityTests(unittest.TestCase):
                     patch.object(migration.launch, "native_parent", return_value=native), \
                     patch.object(migration.launch, "root_native", return_value=True), \
                     patch.object(migration, "start_call",
-                                 side_effect=migration.ticket.Fail(4, "reached observe")) as write:
-                with self.assertRaisesRegex((ValueError, migration.ticket.Fail),
+                                 side_effect=migration.hubrest.Fail(4, "reached observe")) as write:
+                with self.assertRaisesRegex((ValueError, migration.hubrest.Fail),
                                             "reached observe" if observed else "admission context differs"):
                     migration.observe_native(dict(hook_event_name="SessionStart", session_id=sid))
                 self.assertEqual(write.called, observed)
@@ -433,7 +433,7 @@ class RepoAuthorityTests(unittest.TestCase):
                 return dict(repo=r, reservation=k, worker_id='fleet/session',
                             owner='owner', endpoint_id='node', phase='starting')
             with patch.dict(os.environ, {"FLEET_AUTHORITY_START": "start", "TMUX_PANE": "%1"}), \
-                    patch.object(migration.ticket, 'api', return_value=dict(repo='org/a', reservation='start',
+                    patch.object(migration.hubrest, 'api', return_value=dict(repo='org/a', reservation='start',
                         owner='owner', endpoint_id='node', phase='reserved')), \
                     patch.object(migration.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "org/a\tfleet/session", "")), \
                     patch.object(migration.subprocess, "Popen") as child, \

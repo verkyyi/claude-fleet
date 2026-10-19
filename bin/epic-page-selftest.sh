@@ -60,7 +60,7 @@ done
 hasF "$T" 'class="none"' "template: a stage nobody captured is a .none cell"
 hasF "$REPORT" '.proof' "report: fills the frame's .proof grid, no page-local styling"
 hasF "$REPORT" '无证据' "report: a missing stage is written 无证据"
-hasF "$REPORT" 'fleet-evidence.sh' "report: collects evidence through bin/fleet-evidence.sh"
+hasF "$REPORT" "members' PRs" "report: collects evidence from the members' PRs (the evidence store left with #4898)"
 
 # 3. artifact-design contract for a page served byte-for-byte
 hasF "$T" '<title>' "template: has a <title> (the tab is titled from it)"

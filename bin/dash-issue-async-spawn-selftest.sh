@@ -4,7 +4,7 @@
 #
 # The backlog Enter used to run the spawn synchronously, so the multi-second
 # `git worktree add` full checkout froze the fzf popup on a big monorepo. --async
-# keeps the synchronous GATE (cap / dedup / claim-at-spawn — so refusals are
+# keeps the synchronous GATE (cap / dedup / lease — so refusals are
 # immediate) but hands the slow tail (worktree add + `new-window`) to the tmux
 # server via `run-shell -b`, returning at once. The detached helper is a TAIL-ONLY
 # re-invocation of THIS script (FLEET_SPAWN_TAIL carries the session + selects
@@ -12,14 +12,13 @@
 # and LOG their calls so we can assert exactly which ops ran where. The real
 # dash-issue-session.sh + its sibling fleet-lib.sh run unmodified.
 #
-#   REFUSE  --async + a CLAIMED issue → refuse IMMEDIATELY, no run-shell, no spawn.
 #   CAP     --async + the global session cap reached → refuse, no run-shell, no spawn.
-#   DISPATCH --async + FREE issue → returns fast, draws NO line (issue #1618), claims AT SPAWN
-#            (synchronous, authoritative), dispatches `run-shell -b` re-invoking the
+#   DISPATCH --async + an issue → returns fast, draws NO line (issue #1618), writes nothing
+#            to GitHub (issue #4898: no claim), dispatches `run-shell -b` re-invoking the
 #            tail (FLEET_SPAWN_TAIL + --title) and does NOT worktree-add / new-window
 #            in the foreground.
 #   TAIL    the tail-only re-entry materializes: worktree add + new-window NAMED from
-#            --title + @issue bound; it neither re-claims (gate skipped) nor re-dispatches.
+#            --title + @issue bound; it never re-dispatches.
 #   TAILFAIL a backgrounded worktree-add failure emits "spawn failed for #N: …".
 #   SYNC    NO --async → today's synchronous behavior (worktree add + new-window
 #            inline, no run-shell dispatch) is unchanged.
@@ -135,20 +134,7 @@ git_has()     { grep -qF -- "$1" "$GIT_LOG"; }
 runshell_has(){ grep -qF -- "$1" "$RUNSHELL_LOG"; }
 display_has() { grep -qiF -- "$1" "$DISPLAY_LOG"; }
 
-# The pre-spawn dedup default is ON: make sure a stray value can't mask that.
-unset FLEET_PRESPAWN_DEDUP FLEET_SPAWN_TAIL FLEET_SPAWN_FOCUS
-
-# ===== REFUSE: --async + a CLAIMED issue ⇒ refuse in the foreground, no dispatch ====
-CLAIM_STATE=$'1\tOPEN' run_spawn 303 --async
-[ "$(rc)" != 0 ]                        || fail "REFUSE a claimed issue must refuse (non-zero) even with --async"
-runshell_has 'run-shell'                && fail "REFUSE must NOT dispatch the background tail for a claimed issue"
-git_has 'worktree add'                  && fail "REFUSE must NOT create a worktree for a claimed issue"
-tmux_has 'new-window'                   && fail "REFUSE must NOT spawn a window for a claimed issue"
-display_has 'already claimed elsewhere' || fail "REFUSE should announce 'already claimed elsewhere'"
-display_has ',bold]'                    || fail "REFUSE toast must be STICKY (palette red + bold) so it isn't missed (issue #331)"
-display_has '✗ '                        || fail "REFUSE goes through fleet_ui_fail — its one '✗ <reason>' line (issue #1618)"
-[ "$(wc -l < "$DISPLAY_LOG" | tr -d ' ')" = 1 ] || fail "REFUSE draws EXACTLY one line — the reason, no 'checking…' ack before it (issue #1618)" "$(cat "$DISPLAY_LOG")"
-ok "REFUSE --async + claimed → immediate refuse, no run-shell / worktree / window, sticky red toast + gate ack"
+unset FLEET_SPAWN_TAIL FLEET_SPAWN_FOCUS
 
 # ===== CAP: --async + the global session cap reached ⇒ refuse before dispatch =======
 # Configure one live fleet (legacy flat conf) so fleet_sockets yields it, and make
@@ -166,10 +152,10 @@ grep -qi 'at capacity' "$WORK/spawn.err" || fail "CAP the refusal reason must re
 rm -f "$WORK/conf/testsess.conf"
 ok "CAP --async + cap reached → immediate refuse, no run-shell / worktree / window, sticky red toast"
 
-# ===== DISPATCH: --async + FREE issue ⇒ fast return, claim SYNC, tail backgrounded ==
-CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 FLEET_PRESPAWN_DEDUP=1 run_spawn 303 --async
-[ "$(rc)" = 0 ]                         || fail "DISPATCH a free issue should return 0 fast under --async" "$(cat "$WORK/spawn.err")"
-gh_has '--add-assignee'                 || fail "DISPATCH must still claim AT SPAWN synchronously (the anti-collision rail stays sync)"
+# ===== DISPATCH: --async ⇒ fast return, nothing written to GitHub, tail backgrounded ==
+CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 run_spawn 303 --async
+[ "$(rc)" = 0 ]                         || fail "DISPATCH an issue should return 0 fast under --async" "$(cat "$WORK/spawn.err")"
+gh_has '--add-assignee'                 && fail "DISPATCH must write no GitHub claim (issue #4898)"
 [ -s "$DISPLAY_LOG" ]                   && fail "DISPATCH a spawn that works draws NO line — the window is the answer (issue #1618)" "$(cat "$DISPLAY_LOG")"
 runshell_has 'run-shell'                || fail "DISPATCH must hand the slow tail to run-shell -b"
 runshell_has '-b'                       || fail "DISPATCH must background the tail (run-shell -b)"
@@ -179,7 +165,7 @@ runshell_has '--title'                  || fail "DISPATCH must pass --title so t
 runshell_has '>/dev/null 2>&1'          || fail "DISPATCH's tail must redirect its output — run-shell DISPLAYS tail stdout as an Esc-to-dismiss view (issue #401)"
 git_has 'worktree add'                  && fail "DISPATCH must NOT run the worktree add in the FOREGROUND (that is the frozen tail)"
 tmux_has 'new-window'                   && fail "DISPATCH must NOT run new-window in the FOREGROUND"
-ok "DISPATCH --async + free → fast rc0, claim sync, run-shell -b re-invokes the tail (FLEET_SPAWN_TAIL + --title), no foreground checkout"
+ok "DISPATCH --async → fast rc0, no claim, run-shell -b re-invokes the tail (FLEET_SPAWN_TAIL + --title), no foreground checkout"
 
 # A failed run-shell submission must not acknowledge a spawn that never started.
 TMUX_DISPATCH_FAIL=1 TMUX_TOAST_FAIL=1 run_spawn 303 --async
@@ -192,17 +178,17 @@ ok "DISPATCHFAIL reports rc1 + stderr even with no working tmux toast (#683)"
 
 # ===== TAIL: the tail-only re-entry materializes the worktree + named window ========
 # FLEET_SPAWN_TAIL both selects tail-only mode and names the fleet; --title flows to
-# the window name. The gate (cap/dedup/claim) is SKIPPED — this ran in the foreground.
+# the window name. The gate (cap/dedup) is SKIPPED — this ran in the foreground.
 FLEET_SPAWN_TAIL=testsess run_spawn 303 --title 'Async Spawn Rocks'
 [ "$(rc)" = 0 ]                         || fail "TAIL the re-entry should materialize + exit 0" "$(cat "$WORK/spawn.err")"
 git_has 'worktree add'                  || fail "TAIL must run the (backgrounded) git worktree add"
 tmux_has 'new-window'                   || fail "TAIL must create the window"
 tmux_has 'async-spawn-rocks'            || fail "TAIL must name the window from --title (kebab of 'Async Spawn Rocks')"
 tmux_has '@issue 303'                   || fail "TAIL must bind the window to the issue (@issue 303)"
-gh_has '--add-assignee'                 && fail "TAIL must NOT re-claim — the gate already claimed in the foreground"
+gh_has '--add-assignee'                 && fail "TAIL must write no GitHub claim"
 runshell_has 'run-shell'                && fail "TAIL must NOT re-dispatch (no nested run-shell)"
 [ -s "$DISPLAY_LOG" ]                   && fail "TAIL a spawn that works draws NO line — its window is the answer (issue #1618)" "$(cat "$DISPLAY_LOG")"
-ok "TAIL re-entry → worktree add + new-window named from --title + @issue bound, no re-claim / re-dispatch / gate ack"
+ok "TAIL re-entry → worktree add + new-window named from --title + @issue bound, no claim / re-dispatch / gate ack"
 
 # ===== TAILFAIL: a backgrounded worktree-add failure reports the failure ============
 FLEET_SPAWN_TAIL=testsess GIT_WT_FAIL=1 run_spawn 303 --title 'Boom'
@@ -227,8 +213,8 @@ tmux_has 'set-window-option'            && fail "WINDOWFAIL must not bind a none
 ok "headless worktree/window failures report rc1 + stderr and stop spawning (#683)"
 
 # ===== SYNC: NO --async ⇒ today's synchronous behavior is unchanged =================
-CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 FLEET_PRESPAWN_DEDUP=1 run_spawn 303
-[ "$(rc)" = 0 ]                         || fail "SYNC a free issue should spawn synchronously (exit 0)" "$(cat "$WORK/spawn.err")"
+CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 run_spawn 303
+[ "$(rc)" = 0 ]                         || fail "SYNC an issue should spawn synchronously (exit 0)" "$(cat "$WORK/spawn.err")"
 git_has 'worktree add'                  || fail "SYNC must run the worktree add inline"
 tmux_has 'new-window'                   || fail "SYNC must spawn the window inline"
 tmux_has '@issue 303'                   || fail "SYNC must bind @issue inline"

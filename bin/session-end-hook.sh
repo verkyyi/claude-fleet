@@ -27,7 +27,7 @@
 # reapers (dash-reap.sh, worktree-autoclean.sh, fleet-cleanup.sh).
 #
 # Decision table (the crux: committed ≠ merged) — verdict from the shared gate:
-#   merged-pr  reap: record landed         → remove wt+branch → close issue*→ close window
+#   merged-pr  reap: record landed         → remove wt+branch →               close window
 #   ancestor   reap: record closed-unlanded→ remove wt+branch →               close window
 #   landed     reap: record landed         → remove wt+branch →               close window
 #              (git saw a squash / rebase merge with no merged-PR answer, #3601)
@@ -36,11 +36,9 @@
 #   dirty      keep: record closed-unlanded, keep wt (git refuses --forceless),close window
 # Only a merged PR / strict ancestor-of-base is reaped; committed-but-unmerged and dirty
 # work is KEPT for resume. Equivalent to auto-firing the dash ⌃x one-key rule on exit.
-# NB (matches #403's table, not the other reapers): only a MERGED PR closes the issue;
-# a bare ancestor-of-base has no landed work, so its issue is kept OPEN for re-pickup.
-# * and only when the merged PR says it closes the issue, the issue was not reopened
-#   and is not `blocked` (issue_done_by_merge, #2949). A park's stop (@parking) acts
-#   on no verdict: row recorded, issue + worktree + branch kept.
+# The issue is never closed or commented on here (issue #4898): a merged PR's own
+# `Closes #N` closes it. A park's stop (@parking) acts on no verdict: row recorded,
+# worktree + branch kept.
 #
 # reason gate (only a GENUINE walk-away acts): prompt_input_exit | logout act; clear
 # (`/clear`, and every `/fleet-handoff` cycle), resume, bypass_permissions_disabled,
@@ -109,29 +107,6 @@ transfer_holds_window() {
   [ -n "$wt" ] && fleet_rotate_lease_held "$wt" >/dev/null
 }
 
-# A merged PR is not a finished issue (issue #2949): one issue can take several
-# PRs, and a PR can be an intermediate step ("演练脚本的修补" while the issue's bar
-# is "the drill PASSes"). So an exit closes the issue only when a merged PR of
-# this branch SAYS it closes it — GitHub's closingIssuesReferences, or a
-# close/fix/resolve #N keyword in its body (a base that is not the default branch
-# links none) — and nobody has said otherwise since: an issue someone REOPENED, or
-# one labelled `blocked` (a park, a question), stays open. Prints nothing and
-# returns 0 when the issue may close; else prints why it stays open, rc 1.
-issue_done_by_merge() {  # <repo> <issue> <branch>
-  local repo="$1" n="$2" br="$3" st reason labels says
-  st=$(fleet_ticket_state "$repo" "$n")      # through the ticket door (#3597)
-  [ -n "$st" ] || { printf 'issue state unknown'; return 1; }
-  reason=$(printf '%s' "$st" | cut -f2); labels=$(printf '%s' "$st" | cut -f3)
-  [ "$(printf '%s' "$st" | cut -f1)" = OPEN ] || { printf 'not open'; return 1; }
-  [ "$reason" = REOPENED ] && { printf 'reopened'; return 1; }
-  case ",$labels," in *,blocked,*) printf 'blocked'; return 1 ;; esac
-  says=$(fleet_gh -R "$repo" pr list --state merged --head "$br" --json closingIssuesReferences,body \
-    -q '.[] | (.closingIssuesReferences[] | "closes #\(.number)"), .body' 2>/dev/null)
-  printf '%s\n' "$says" | grep -Eiq "(^|[^[:alnum:]])(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#$n([^0-9]|\$)" \
-    || { printf 'no merged PR closes it'; return 1; }
-  return 0
-}
-
 # ============================================================================
 # --exec MODE — the DETACHED, server-side reap the in-pane gate dispatches via
 # `tmux run-shell -b`. It runs in the tmux server (not the dying pane), so it
@@ -148,9 +123,9 @@ if [ "${1:-}" = "--exec" ]; then
   # $5 is kind-dependent: the issue number for a worker, the scratch-<N> key for a
   # raw one (#466) — so it is read raw here and interpreted per branch below.
   kind="${2:-}"; sess="${3:-}"; win="${4:-}"; iss=$(strip_num "${5:-}")
-  # $6 = recycle: the recovery page's q (issue #1842) — an unlanded issue's claim
-  # is released (fleet_issue_release_claim, dash ⌃x's copy), not left held.
-  how="${6:-}"
+  # $6 = recycle: the recovery page's q (issue #1842) — read for an older caller;
+  # nothing is released any more (issue #4898: no GitHub claim).
+  how="${6:-}"; : "$how"
   transfer_holds_window "$win" && exit 0
   # The window waits on this job (issue #4842, EPIC #4839 C3): every GitHub read
   # below goes through the layer (fleet_gh — timed, and instant while the shared
@@ -222,7 +197,7 @@ if [ "${1:-}" = "--exec" ]; then
       worigin=$(tmux display-message -p -t "$win" '#{@origin}' 2>/dev/null)
       [ -n "$REPO" ] && fleet_reap_record "$verdict" "$REPO" "$MAIN" "" "$wtdir" "$win" "$sess" "" "$key" "$wname" "$worigin"
 
-      # Child-report BACKSTOP (issue #574). The ship path in /fleet-claim reports the
+      # Child-report BACKSTOP (issue #574). The worker's ship path reports the
       # outcome to the spawning session itself and stamps @reported, so --only-once
       # makes this fire ONLY for a session that never got there — a crash, a hand
       # ⌃d on unfinished work. Must run BEFORE the kill below: the script reads
@@ -327,24 +302,8 @@ if [ "${1:-}" = "--exec" ]; then
           && git -C "$MAIN" branch -D "$branch" >/dev/null 2>&1
         git -C "$MAIN" worktree prune 2>/dev/null || true
       fi
-      # Close the issue ONLY on a merged PR (a bare ancestor-of-base has no merged
-      # PR evidence — so keep its issue OPEN for re-pickup, per the #403 decision
-      # table), and only when that PR says it closes it and nothing since says
-      # otherwise (issue #2949, issue_done_by_merge). Idempotent: a merge may have
-      # closed it already.
-      # The receipt and the close: a hub-ticket repo's through the ticket door
-      # (issue #3597), a GitHub one's exactly as before.
-      if [ "$verdict" = merged-pr ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1 \
-         && issue_done_by_merge "$REPO" "$iss" "$branch" >/dev/null; then
-        rcpt="Closed on manual worker exit: merged PR reaped, worktree cleaned."
-        if [ "$(fleet_ticket_home "$REPO")" = hub ]; then
-          tid="hub:$(fleet_norm_repo "$REPO")#$iss"
-          bash "$BIN/fleet-ticket.sh" post "$tid" --body "$rcpt" >/dev/null 2>&1 \
-            && bash "$BIN/fleet-ticket.sh" close "$tid" >/dev/null 2>&1 || true
-        else
-          fleet_gh_write -R "$REPO" issue close "$iss" --comment "$rcpt" >/dev/null 2>&1 || true
-        fi
-      fi
+      # The issue is the PR's to close (its `Closes #N`): the fleet writes nothing
+      # to GitHub on an exit (issue #4898).
       ;;
     parking) : ;;   # parked: issue OPEN, worktree + branch kept (the park book's)
     *)  # unmerged | dirty → KEEP the worktree + issue (resumable); window already closed.
@@ -354,18 +313,6 @@ if [ "${1:-}" = "--exec" ]; then
       # sweep's judgement.
       [ -n "${wtdir:-}" ] && fleet_reap_worktree_listeners "$wtdir" >/dev/null 2>&1
       : ;;
-  esac
-  # q on an issue whose work did not land: release the claim so it can be
-  # dispatched again (issue #1842). A merged PR closed it above; `live` is a
-  # window still working it — neither is released.
-  case "$act" in merged-pr|landed|live|parking) ;; *)
-    if [ "$how" = recycle ] && [ -n "$REPO" ] && [ "${FLEET_FORGE:-github}" != none ] && command -v gh >/dev/null 2>&1 \
-       && [ "$(fleet_ticket_state "$REPO" "$iss" | cut -f1)" = OPEN ]; then   # the ticket door (#3597)
-      what="its work did not land"
-      [ "$verdict" = dirty ] && what="$what; its dirty worktree is kept"
-      [ "$verdict" = unmerged ] && [ -n "$wtdir" ] && what="$what; its worktree and branch $branch are kept"
-      fleet_issue_release_claim "$REPO" "$iss" "Recycled from the recovery page (q) — $what"
-    fi ;;
   esac
   exit 0
 fi

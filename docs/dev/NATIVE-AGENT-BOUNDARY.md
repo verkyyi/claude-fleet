@@ -1065,7 +1065,7 @@ Codex 本身提供自动压缩阈值，未设置使用模型默认值，见
 否则 Token-only 配置会被新默认值错误显示为 OFF。只读工具不使用猜测的 200k 窗口激活策略。
 
 源码候选验证：`context-ladder-defaults-selftest.sh` 17 项、`fleet-codex-session-selftest.sh` 15 项、
-`fleet-mcp-selftest.sh` 35 项、`refocus-hook-selftest.sh` 8 项、`fleet-claim-brief-selftest.sh` 26 项通过；
+`fleet-mcp-selftest.sh` 35 项、`refocus-hook-selftest.sh` 8 项、当时的认领简报自测 26 项通过（#4898 起换成 `fleet-brief-selftest.sh`）；
 `auto-handoff-selftest.sh`、`compact-prep-selftest.sh`、`ctx-token-line-selftest.sh`、
 `fleet-context-selftest.sh` 与 `statusline-selftest.sh` 也通过。
 默认路径在 55% / 80% / 99% 不启动 Fleet 压缩或交接，旧计数不重新启用它；

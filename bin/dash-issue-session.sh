@@ -1,8 +1,8 @@
 #!/bin/bash
 # dash-issue-session.sh <issue-number> [<target-session>] [--repo <owner/name>] [--title <t>] [--agent <a>] — spawn a
 # Claude session to work a GitHub issue: a git worktree issue-<N> off the base
-# branch + a tmux window running `claude` seeded to read, claim, and implement the
-# issue. The window is NAMED after the issue CONTENT (a short kebab of its title,
+# branch + a tmux window running `claude` given the issue's words, to implement it
+# and land a PR that closes it (nothing claims or comments on the issue — #4898). The window is NAMED after the issue CONTENT (a short kebab of its title,
 # falling back to issue-<N>) and bound to the issue via the @issue window option
 # (both shown in the dash and backlog). Pass --title when you already know the
 # title (a create-then-spawn caller) so the window is named descriptively without
@@ -20,7 +20,8 @@
 #   1  infrastructure — bad conf / worktree add / new-window / dispatch failed;
 #      or this node is a client (the hub's type, issue #4886) and nothing placed it
 #   2  at capacity — the global or per-fleet session cap (retry later)
-#   3  already claimed — assignee / not OPEN / open PR (pick another, or --force)
+#   3  already held — the hub's lease on (repo, issue) is another machine's
+#      (pick another, or --force over a stale lease)
 #   4  no live parent — inside tmux with no $TMUX_PANE and no --origin, or an
 #      --origin key no live session answers to (issue #1355); `--origin hub` = you
 # Every refusal ALSO prints its one-line reason on stderr, `dash-issue-session: …`,
@@ -36,15 +37,13 @@ set -uo pipefail
 # the title it JUST wrote so the window is named after the WORK — not the bare
 # issue-<N> slug it otherwise falls back to when the brand-new issue isn't in the
 # collector cache yet and a post-create `gh issue view` lags or fails.
-# --force (alias --reclaim) is the manual escape hatch past the cross-machine
-# pre-spawn GitHub-claim dedup (issue #258): it spawns despite a live claim (a
-# dead/abandoned peer worker that left the issue assigned+marked forever), skipping
-# the claim check + claim-at-spawn entirely.
+# --force (alias --reclaim) takes the hub's lease from a stale holder (a dead
+# machine's spawn) — the hub records that.
 # --async (alias --detach-spawn) makes the SLOW tail — the multi-second `git
 # worktree add` full checkout + the window spawn — run detached via
 # `tmux run-shell -b`, so the caller (the fzf backlog Enter) returns instantly
 # instead of freezing the popup on a big monorepo (issue #303). The synchronous
-# GATE (cap / dedup / claim) still runs + refuses in the foreground; only its slow
+# GATE (cap / dedup / lease) still runs + refuses in the foreground; only its slow
 # tail is backgrounded. Opt-in, interactive-only (a headless TARGET_SESS caller
 # that needs the window id back stays synchronous).
 num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WORDS_FILE=""; FORCE_FLAG=0; ASYNC_FLAG=0; PRINT_FLAG=0; _pos=0; _want=""
@@ -137,8 +136,7 @@ for _a in "$@"; do
     # session coming back (a park's wake; the parker left with #4339). The window opens on the same
     # conversation (`--resume <sid>`, Claude only, and only while its transcript is
     # still in the worktree's project dir) and its first turn is the file's text —
-    # read the handoff, go on — instead of /fleet-claim. No transcript ⇒ the plain
-    # /fleet-claim seed (the park comment names the handoff). Always on this
+    # read the handoff, go on. No transcript ⇒ the plain seed. Always on this
     # machine: the worktree and the transcript are here.
     --resume) _want=resume ;;
     --resume=*) RESUME_SID="${_a#--resume=}" ;;
@@ -147,7 +145,7 @@ for _a in "$@"; do
     # --words-file <f> (issue #3331, EPIC #3178 ⑧): the person's own words — a task
     # someone typed (⌘P's `new` start). They are the session's FIRST TURN, shown as
     # typed; the flow comes from the SessionStart hook (fleet-worker-start-hook.sh),
-    # never a visible /fleet-claim. No file ⇒ the issue's title is the first turn.
+    # never a visible command. No file ⇒ the issue's title is the first turn.
     # The caller owns the file.
     --words-file) _want=words-file ;;
     --words-file=*) WORDS_FILE="${_a#--words-file=}" ;;
@@ -236,11 +234,11 @@ shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 # headless caller — the bridge's revive, an agent
 # spawning from another pane — never sees it: the toast lands on SOMEONE ELSE's
 # screen, and all the caller gets back is `1`, which cannot tell "retry later"
-# (cap) from "pick another issue / --remove-assignee first" (claimed) from
+# (cap) from "pick another issue / --force a stale lease" (held) from
 # "something is broken" (infra). So every refusal ALSO prints its reason on
 # stderr — the one channel a pipe / log / `$( )` capture can read — and the exit
 # code names the class (header: 1 infra · 2 cap · 3 claimed). stderr is the
-# record; the status line is the glance (the same split as fleet-bind.sh's die).
+# record; the status line is the glance.
 RC_INFRA=1; RC_CAP=2; RC_CLAIMED=3; RC_ORPHAN=4
 REFUSE_MS="${FLEET_REFUSE_MS:-4000}"
 case "$REFUSE_MS" in ''|*[!0-9]*) REFUSE_MS=4000;; esac
@@ -406,22 +404,12 @@ fleet_repo_authority_guard "$REPO" --gate "$SESS" >/dev/null || { refuse "$FLEET
 AUTHORITY=$FLEET_AUTHORITY_RESULT
 AUTH_MODE=''
 [ -z "$AUTHORITY" ] || AUTH_MODE=$(printf '%s' "$AUTHORITY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')
-# A repo whose tickets live on the hub (FLEET_TICKETS=hub, issue #3598, EPIC #3570
-# C5): every read, claim and release below goes through the ticket door and never
-# runs gh; an open-PR probe runs only where the repo has GitHub (FLEET_FORGE). Any
-# other repo: TK_HUB=0 and each step is the gh call it always was, byte for byte.
-TK_HUB=0; [ -n "$REPO" ] && fleet_ticket_hub "$REPO" "$SESS" && TK_HUB=1
-TK_ID="hub:$(fleet_norm_repo "$REPO")#$num"
+# An accepted start names the issue it was accepted for; a mismatch is refused.
 if [ -n "$AUTHORITY" ]; then
   _accepted_ref=$(printf '%s' "$AUTHORITY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ticket_ref", ""))')
   if [ -n "$_accepted_ref" ]; then
-    _accepted_backend=$(python3 "$BIN/fleet_repo_authority.py" --match-ticket-ref "$REPO" "$num" "$_accepted_ref") \
+    python3 "$BIN/fleet_repo_authority.py" --match-ticket-ref "$REPO" "$num" "$_accepted_ref" >/dev/null \
       || { refuse "accepted ticket reference does not match this issue"; exit "$RC_INFRA"; }
-    case "$_accepted_backend" in
-      hub) TK_HUB=1; TK_ID="$_accepted_ref" ;;
-      gh) TK_HUB=0; TK_ID="$_accepted_ref" ;;
-      *) refuse "accepted ticket reference does not match this issue"; exit "$RC_INFRA" ;;
-    esac
   fi
 fi
 
@@ -433,11 +421,6 @@ fi
 # copy only (a create-then-spawn filer hands its label over as --agent instead).
 # Both labels ⇒ refused: the issue does not say which. Foreground only — the
 # --async tail and a hub-placed start carry the agent this pass resolved.
-# When the pre-spawn gate below will read the issue anyway, that ONE read happens
-# here and the labels come out of it (issue #2638: spawn reads the issue once for
-# dedup, title, snapshot and agent — #459); the gate then reuses it. Hub off
-# only: with the hub on, the lease below is checked before GitHub is read at all.
-GATE_CS=''; GATE_AT=0
 _lbl_names='import json,sys
 try: d=json.load(sys.stdin)
 except Exception: sys.exit(0)
@@ -445,22 +428,6 @@ for l in d.get("labels") or []:
     print(l.get("name","") if isinstance(l,dict) else l)'
 if [ "$TAIL_ONLY" != 1 ] && [ -z "$AGENT" ] && [ -n "$REPO" ]; then
   if [ -n "$WIN_TITLE" ]; then _lbl=$(fleet_cached_labels "$REPO" "$num")
-  elif [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] \
-       && { [ "$TK_HUB" = 1 ] || { [ "${CCQUOTA_FLEET:-0}" != 1 ] && command -v gh >/dev/null 2>&1; }; }; then
-    GATE_AT=$(date +%s)
-    if [ "$TK_HUB" = 1 ]; then
-      GATE_CS=$(fleet_ticket_view "$REPO" "$num" assignees,state,number,title,url,body,labels,comments \
-            '"\(.assignees|length)\t\(.state)", tojson') || GATE_CS=''
-    else
-      GATE_CS=$(fleet_gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
-            --jq '"\(.assignees|length)\t\(.state)", tojson' 2>/dev/null) || GATE_CS=''
-    fi
-    case "$GATE_CS" in
-      *$'\n'*) _lbl=$(printf '%s\n' "${GATE_CS#*$'\n'}" | python3 -c "$_lbl_names" 2>/dev/null) ;;
-      *) GATE_CS=''; _lbl='' ;;
-    esac
-  elif [ "$TK_HUB" = 1 ]; then
-    _lbl=$(fleet_ticket_view "$REPO" "$num" labels | python3 -c "$_lbl_names" 2>/dev/null)
   else
     _lbl=$(bash "$BIN/fleet-gh.sh" issue view "$num" --repo "$REPO" --json labels 2>/dev/null \
            | python3 -c "$_lbl_names" 2>/dev/null)
@@ -490,12 +457,10 @@ if [ "$TAIL_ONLY" != 1 ] && [ "$PLACING" != 1 ] && [ "${AGENT:-${FLEET_AGENT:-cl
 fi
 
 # --- Hub issue lease (issue #1422, EPIC #1419 C3; only when CCQUOTA_FLEET=1) ---
-# The GitHub claim below is not a mutex (no compare-and-swap on an issue), so two
-# machines that spawn the same issue within a second can both pass it. With the
-# cross-machine hub on, take the hub's lease on (repo, issue) FIRST: the hub
-# grants it to exactly one node, and the loser refuses here with the class code
-# for "claimed" (3) and the holder's name. The GitHub check stays as the second
-# guard. The lease renews itself off the node's heartbeats while the window lives
+# Two machines that spawn the same issue at once: the hub grants its lease on
+# (repo, issue) to exactly one node, and the loser refuses here with the class code
+# for "claimed" (3) and the holder's name. Nothing is written to GitHub (issue
+# #4898: the assignee claim is gone). The lease renews itself off the node's heartbeats while the window lives
 # and is released when the window goes (or 30 min after the node goes silent);
 # a refusal AFTER the grant gives it back at once (the EXIT trap). --force takes
 # it from a live holder — the hub records that. A hub that cannot be asked
@@ -503,28 +468,11 @@ fi
 # path runs unchanged; CCQUOTA_FLEET unset runs none of this. Sync-only: the
 # --async tail already holds the lease the foreground took.
 LEASE_HELD=0
-# CLAIMED_HERE (issue #1606, #1610): this spawn assigned @me on GitHub and no
-# window holds the issue yet — a non-zero exit takes the assignee back, so a
-# failed spawn leaves no dead claim that only --force gets past (hub on only).
-# The --async
-# tail inherits it from the foreground that claimed (FLEET_SPAWN_CLAIMED).
-CLAIMED_HERE=0
-[ "$TAIL_ONLY" = 1 ] && [ "${FLEET_SPAWN_CLAIMED:-0}" = 1 ] && CLAIMED_HERE=1
-_spawn_back() {  # EXIT: a non-zero exit gives back what this spawn took
+_spawn_back() {  # EXIT: a non-zero exit gives back the lease this spawn took
   local rc=$?
-  if [ "$rc" != 0 ]; then
-    [ "$LEASE_HELD" = 1 ] && fleet_hub_lease release "$SESS" "$REPO" "$num" >/dev/null 2>&1
-    if [ "$CLAIMED_HERE" = 1 ] && [ "$TK_HUB" = 1 ]; then
-      bash "$BIN/fleet-ticket.sh" claim "$TK_ID" --by "$(fleet_ticket_claimant)" --release >/dev/null 2>&1 \
-        && printf 'dash-issue-session: #%s 的认领已撤回 — 再派不用 --force\n' "$num" >&2
-    elif [ "$CLAIMED_HERE" = 1 ] && [ -n "$REPO" ] \
-       && fleet_gh issue edit "$num" --repo "$REPO" --remove-assignee @me >/dev/null 2>&1; then
-      printf 'dash-issue-session: #%s 的 GitHub 认领已撤回 — 再派不用 --force\n' "$num" >&2
-    fi
-  fi
+  [ "$rc" != 0 ] && [ "$LEASE_HELD" = 1 ] && fleet_hub_lease release "$SESS" "$REPO" "$num" >/dev/null 2>&1
   exit "$rc"
 }
-[ "$CLAIMED_HERE" = 1 ] && trap _spawn_back EXIT
 if [ "$TAIL_ONLY" != 1 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "$REPO" ] && [ "$AUTH_MODE" != hub ] && [ -z "$DISPATCH_TASK" ]; then
   _lf=''; [ "$FORCE_FLAG" = 1 ] && _lf=--force
   lease_out=$(fleet_hub_lease acquire "$SESS" "$REPO" "$num" $_lf); lease_rc=$?
@@ -561,15 +509,13 @@ fi
 # there is 1 too), and the lease — the hub gave it back — released by the EXIT
 # trap, so a re-send needs no --force. No final state in time ⇒ unknown: exit 1,
 # never a success, and (issue #1606) the hub gave the lease back here as well.
-# Refused for any reason but "claimed" with the issue unassigned before we
-# asked ⇒ the GitHub claim that machine may have taken is withdrawn too (#1610).
 # --async asks without waiting and leaves the operation id for fleet-children.sh.
 # Every REMOTE answer is written to the parent's `children/<key>.dispatch`.
 # Issue #1610: an auto send a machine declined was already tried on the next
 # one by the hub, this machine last (answered LOCAL) — the line's `after …`
 # field names the machines that said no first, each written to the dispatch
 # book as its own refused row before the answer's. Every machine declining is
-# `REFUSED ALL_DECLINED`: refused here too, lease and claim given back, never
+# `REFUSED ALL_DECLINED`: refused here too, the lease given back, never
 # opened here on the hub's no.
 _place_note() {  # <state> <machine> <op> [<window>] [<exit>] [<line>]
   case "$ORIGIN" in issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*|*:scratch-[0-9]*) ;; *) return 0 ;; esac
@@ -578,23 +524,6 @@ _place_note() {  # <state> <machine> <op> [<window>] [<exit>] [<line>]
   python3 "$BIN/fleet-children.py" dispatch \
     --file "$(fleet_state_dir "$SESS")/children/$(printf '%s' "$ORIGIN" | LC_ALL=C tr -cd 'A-Za-z0-9._:-').dispatch" \
     --child "$ck" --state "$1" --node "$2" --op "$3" --window "${4:-}" --exit "${5:-}" --line "${6:-}" >/dev/null 2>&1 || :
-}
-# _stale_claim (issue #1610): the parent's book says this issue's last send was
-# never seen open — accepted / unknown, long enough ago, no window, no report and
-# no session in the hub's table (fleet-children.py `claim: stale`). Its GitHub
-# claim is then nobody's, and the send withdraws it rather than need --force.
-_stale_claim() {
-  case "$ORIGIN" in issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*|*:scratch-[0-9]*) ;; *) return 1 ;; esac
-  local ck
-  ck="$(fleet_okey_prefix "$SESS" "$REPO")issue-$num"
-  fleet_timebox 20 bash "$BIN/fleet-children.sh" "$ORIGIN" --json 2>/dev/null | python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin)
-except ValueError:
-    sys.exit(1)
-sys.exit(0 if any(k.get("child") == sys.argv[1] and k.get("claim") == "stale" for k in d.get("children") or []) else 1)
-' "$ck"
 }
 if [ "$PLACING" = 1 ]; then
   if [ "${CCQUOTA_FLEET:-0}" != 1 ] || [ -z "$REPO" ]; then
@@ -607,26 +536,6 @@ if [ "$PLACING" = 1 ]; then
       _pw=$(fleet_key_wid "$SESS" "$ORIGIN") || _pw=''   # by identity (#1646)
     fi
     _wait=''; [ "$ASYNC_FLAG" = 1 ] && _wait=0
-    # Was the issue unassigned before we asked (issue #1610)? Only then may a
-    # refused start's claim be withdrawn: an assignee that predates us is not
-    # ours to take. Sync only — an --async ask hears no refusal to act on.
-    _pre_asg=''
-    if [ "$ASYNC_FLAG" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$TK_HUB" = 1 ]; then
-      _pre_asg=$(fleet_ticket_view "$REPO" "$num" assignees '.assignees|length')
-      if [ "${_pre_asg:-0}" != 0 ] && [ "$FORCE_FLAG" != 1 ] && _stale_claim \
-         && bash "$BIN/fleet-ticket.sh" claim "$TK_ID" --by "$(fleet_ticket_claimant)" --release >/dev/null 2>&1; then
-        printf 'dash-issue-session: #%s 的认领是上次派活留下的死认领（没开成、哪台都没有会话）— 已收回，不用 --force\n' "$num" >&2
-        _pre_asg=0
-      fi
-    elif [ "$ASYNC_FLAG" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && command -v gh >/dev/null 2>&1; then
-      _pre_asg=$(fleet_gh issue view "$num" --repo "$REPO" --json assignees --jq '.assignees|length' 2>/dev/null)
-      # A claim an earlier send left with no session behind it (issue #1610).
-      if [ "${_pre_asg:-0}" != 0 ] && [ "$FORCE_FLAG" != 1 ] && _stale_claim \
-         && fleet_gh issue edit "$num" --repo "$REPO" --remove-assignee @me >/dev/null 2>&1; then
-        printf 'dash-issue-session: #%s 的认领是上次派活留下的死认领（没开成、哪台都没有会话）— 已收回，不用 --force\n' "$num" >&2
-        _pre_asg=0
-      fi
-    fi
     python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
     _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
     place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
@@ -664,15 +573,13 @@ if [ "$PLACING" = 1 ]; then
         # so the EXIT trap (LEASE_HELD=1) releases it: the next send needs no --force.
         read -r _ _m _op _x <<<"$_pv"
         _place_note refused "$_m" "$_op" '' "$_x" "$_why"
-        [ "$_x" != 3 ] && [ "$_pre_asg" = 0 ] && CLAIMED_HERE=1
         refuse "#$num 被 $_m 拒绝 (exit $_x): ${_why:-no reason given}"
         case "$_x" in 2) exit "$RC_CAP" ;; 3) exit "$RC_CLAIMED" ;; esac
         exit "$RC_INFRA" ;;
       6:UNKNOWN\ *)
         # Sent, but still running there when the wait ran out — not a success.
         # The hub gave the lease back (issue #1606): the EXIT trap releases it,
-        # so nothing outlives a start nobody saw open. The GitHub claim stays —
-        # should that machine open it after all, the claim keeps a second one off.
+        # so nothing outlives a start nobody saw open.
         read -r _ _m _op <<<"$_pv"
         _place_note unknown "$_m" "$_op" '' '' "$_why"
         refuse "#$num 已派到 $_m (hub operation $_op)，但没等到结果 — 未知，不当成功: ${_why:-no final state}"
@@ -683,9 +590,7 @@ if [ "$PLACING" = 1 ]; then
         refuse "#$num 已被 ${_pv#HELD } 认领 (${_why}) — not spawning"; exit "$RC_CLAIMED" ;;
       4:REFUSED\ ALL_DECLINED)
         # Every machine that could take it said no (issue #1610): the hub gave
-        # the lease back — the EXIT trap releases it — and the GitHub claim a
-        # machine may have taken is withdrawn, so the next send needs no --force.
-        [ "$_pre_asg" = 0 ] && CLAIMED_HERE=1
+        # the lease back — the EXIT trap releases it — so the next send needs no --force.
         refuse "#$num 每台机器都拒绝了: ${_why:-no reason given}"
         for _a in $(printf '%s' "$_after" | tr ',' ' '); do   # all full ⇒ 2, else 1
           [ "${_a##*:}" = 2 ] || exit "$RC_INFRA"
@@ -706,7 +611,7 @@ if [ "$PLACING" = 1 ]; then
         python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --placement-code "$place_rc" >/dev/null || exit "$RC_INFRA"
         [ "$place_rc" = 4 ] && printf 'dash-issue-session: 没有机器能接 #%s (%s) — 开在本机\n' "$num" "$_why" >&2 ;;
     esac
-    unset _pw _u _pv _why _wait _pre_asg _after _a _am _aop _ax
+    unset _pw _u _pv _why _wait _after _a _am _aop _ax
   fi
 fi
 # Opening here after all: this machine's cap verdict, held above, now applies.
@@ -717,130 +622,16 @@ if [ "$TAIL_ONLY" != 1 ] && fleet_client_refuse "开 #$num" --kept 2>/dev/null; 
   refuse "#$num: 这台是客户端，任务在托管节点上跑"; exit "$RC_INFRA"
 fi
 
-# --- Cross-machine pre-spawn dedup (issue #258; ON by default, FLEET_PRESPAWN_DEDUP=0 opts out) ---
-# The local-tmux dedup above only sees THIS fleet's server. When two fleets run on
-# DIFFERENT machines against the same repo, a peer's worker is invisible — both can
-# spawn issue-<N> (duplicate worktrees, a non-fast-forward push race, competing PRs).
-# This is the cross-machine backstop: consult the shared GitHub issue as the claim
-# ledger, then claim AT SPAWN (assign @me — not on the worker's first /fleet-claim
-# turn — that gap WAS the race) so a peer sees the assignee within ~1s. It is NOT a
-# mutex (GitHub has no compare-and-swap on an issue), so a sub-second cross-machine
-# overlap can still let two peers both pass — this shrinks the window, it does not
-# eliminate it (there is no longer a comment-id tie-break; see issue #283). ON by
-# default: the cross-machine safety is the right default and the marginal cost is a
-# few gh READS per spawn — claim-at-spawn only MOVES the worker's own /fleet-claim
-# assign earlier (same write; /fleet-claim then no-ops), and a gh outage/absence
-# degrades to spawn-anyway (never a false refusal). A single-machine fleet that wants
-# the zero-gh fast path opts out with FLEET_PRESPAWN_DEDUP=0. --force/--reclaim is the
-# manual escape hatch past a stale claim.
-# Sync-only ([ "$TAIL_ONLY" != 1 ]): the READ gates the refusal and the WRITE
-# (claim-at-spawn) is the anti-collision rail — both stay in the foreground so a
-# refusal is immediate and the claim lands within ~1s (issue #303 keeps the gating
-# synchronous + authoritative; only the slow worktree/window tail goes async). On
-# the tail re-entry this already ran, and re-reading would see OUR OWN assignee and
-# false-refuse.
-# The base branch's fetch runs BESIDE the gate's GitHub reads (issue #2237): it
-# was the first step of the tail, ~0.5 s on its own; the tail waits for it before
-# the worktree is made. Not on the --async dispatch (its tail fetches for itself).
-# Its streams go nowhere: a headless caller reads this script's stdout to EOF.
+# The base branch's fetch runs beside the rest of the gate (issue #2237): the tail
+# waits for it before the worktree is made. Not on the --async dispatch (its tail
+# fetches for itself). Its streams go nowhere: a headless caller reads this
+# script's stdout to EOF. (The GitHub assignee claim that ran here — issues #258,
+# #283 — left with issue #4898: the hub lease above is the cross-machine guard.)
 FETCH_PID=''
 if ! { [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; }; then
   git -C "$MAIN" fetch origin "$BASE" --quiet </dev/null >/dev/null 2>&1 &
   FETCH_PID=$!
 fi
-issue_json=''; issue_fetched_at=0
-if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] \
-   && [ -n "$REPO" ] && { [ "$TK_HUB" = 1 ] || command -v gh >/dev/null 2>&1; }; then
-  # One issue read (assignee count · state) + one cheap open-PR probe. THE ASSIGNEE
-  # IS THE CLAIM (issue #283): we no longer read or write a "▶ claiming" comment — its
-  # substring match false-fired on any comment that merely MENTIONED the marker string
-  # (e.g. this very issue's design comment tripped the dedup). Same-account caveat:
-  # every worker assigns the SAME gh account, so we cannot tell "assigned to someone
-  # else" — assigned AT ALL ⇒ taken. An empty read (gh down / missing issue) leaves
-  # the counter 0 and state blank → NOT taken, so a gh outage degrades to today's
-  # spawn-anyway behaviour, never a false refusal.
-  # Keep the same gate header, followed by compact JSON from the SAME read (#459).
-  # A failed pre-claim must never cache the pre-edit empty assignee as authoritative.
-  issue_fetched_at=$(date +%s)
-  [ -n "$GATE_CS" ] && issue_fetched_at=$GATE_AT
-  # The open-PR probe runs beside the issue read (issue #2237): two reads, one wait.
-  _prf=$(mktemp "${TMPDIR:-/tmp}/dis-pr.XXXXXX") || _prf=''
-  _prp=''
-  # A repo with no GitHub has no PR to look for (FLEET_FORGE=none, issue #3598).
-  _nopr=0; [ "$(fleet_repo_forge "$REPO" "$SESS")" = none ] && _nopr=1
-  if [ "$_nopr" = 1 ]; then rm -f "$_prf"; _prf=''; fi
-  if [ -n "$_prf" ]; then
-    fleet_gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' </dev/null >"$_prf" 2>/dev/null &
-    _prp=$!
-  fi
-  if [ -n "$GATE_CS" ]; then cs=$GATE_CS
-  elif [ "$TK_HUB" = 1 ]; then
-    cs=$(fleet_ticket_view "$REPO" "$num" assignees,state,number,title,url,body,labels,comments \
-          '"\(.assignees|length)\t\(.state)", tojson') || cs=''
-  else
-    cs=$(fleet_gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
-          --jq '"\(.assignees|length)\t\(.state)", tojson' 2>/dev/null) || cs=''
-  fi
-  case "$cs" in
-    *$'\n'*) issue_json=${cs#*$'\n'}; cs=${cs%%$'\n'*} ;;
-  esac
-  n_assignee=${cs%%$'\t'*}; st=${cs#*$'\t'}
-  n_assignee="${n_assignee//[^0-9]/}"
-  if [ -n "$_prp" ]; then wait "$_prp" 2>/dev/null; n_open_pr=$(cat "$_prf" 2>/dev/null)
-  elif [ "$_nopr" = 1 ]; then n_open_pr=0
-  else n_open_pr=$(fleet_gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' 2>/dev/null); fi
-  [ -n "$_prf" ] && rm -f "$_prf"
-  unset _prf _prp _nopr
-  n_open_pr="${n_open_pr//[^0-9]/}"
-  why=''
-  if [ "$TK_HUB" = 1 ]; then
-    # The hub's claim is atomic (C1): no assignee test here — the claim below
-    # answers it, and our own earlier claim is ours again, not a conflict.
-    if [ -n "$st" ] && [ "$st" != OPEN ]; then why="state $st"
-    elif [ "${n_open_pr:-0}" -gt 0 ]; then why="open PR on $slug"
-    fi
-  elif [ "${n_assignee:-0}" -gt 0 ]; then why='assigned'
-  elif [ -n "$st" ] && [ "$st" != OPEN ]; then why="state $st"
-  elif [ "${n_open_pr:-0}" -gt 0 ]; then why="open PR on $slug"
-  fi
-  if [ -n "$why" ]; then
-    # Refuse and DO NOT spawn. Exit RC_CLAIMED (3) so a headless caller records an
-    # honest FAIL, not a false spawn — mirroring the cap check — and can tell
-    # "taken" from "at capacity". The reason names WHICH ledger read tripped: a
-    # dangling assignee left by a killed worker (#631) needs `--remove-assignee`
-    # or --force, a state/PR hit needs a different issue (issue #683). Sticky (#331).
-    refuse "#$num already claimed elsewhere ($why) — not spawning; --force overrides a stale claim"
-    exit "$RC_CLAIMED"
-  fi
-  # Free → claim NOW by assigning @me so a peer's check sees it within ~1s.
-  # /fleet-claim stays and no-ops idempotently when it finds this pre-claim.
-  if [ "$TK_HUB" = 1 ]; then
-    _co=$(bash "$BIN/fleet-ticket.sh" claim "$TK_ID" --by "$(fleet_ticket_claimant)" 2>&1); _crc=$?
-    case "$_crc" in
-      0) [ "${n_assignee:-0}" = 0 ] && { CLAIMED_HERE=1; trap _spawn_back EXIT; } ;;
-      3) refuse "#$num already claimed elsewhere (${_co#fleet-ticket: }) — not spawning; --force overrides a stale claim"
-         exit "$RC_CLAIMED" ;;
-      *) issue_json='' ;;   # the hub did not answer: spawn anyway, as a gh outage does
-    esac
-    unset _co _crc
-  else
-    fleet_gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1; _arc=$?
-    if [ "$_arc" = 0 ]; then
-      # Hub off ⇒ today's path, byte for byte (EPIC #1645 rule 6): no take-back.
-      [ "${CCQUOTA_FLEET:-0}" = 1 ] && { CLAIMED_HERE=1; trap _spawn_back EXIT; }
-    else
-      issue_json=''
-      # GitHub not answering (issue #4844): the hub lease is the claim, the
-      # assignee is kept for the outbox under the session's own key — the drain
-      # drops it when no window answers to that key (the spawn failed, or ended).
-      [ "$_arc" = 75 ] && python3 "$BIN/fleet_gh_outbox.py" put --repo "$REPO" --verb claim \
-          --session "$(fleet_okey_prefix "$SESS" "$REPO")issue-$num" -- "gh:$(fleet_norm_repo "$REPO")#$num" >/dev/null 2>&1 \
-        && printf 'dash-issue-session: GitHub 不通 — #%s 的 assignee 已记下，通了补上（认领以入口租约为准）\n' "$num" >&2
-    fi
-    unset _arc
-  fi
-fi
-
 # The ONE path exit (issue #886): FLEET_WORKTREE_ROOT, else a sibling of the base.
 wt="$(fleet_worktree_dir "$MAIN" "$slug")"
 
@@ -848,34 +639,32 @@ wt="$(fleet_worktree_dir "$MAIN" "$slug")"
 # order (issue #216): an explicit --title wins — the create-then-spawn caller just
 # wrote the issue and KNOWS its title, so it needs no network and can't miss the
 # way a brand-new issue does in the not-yet-refreshed collector cache. Else fall
-# back to the issue JSON just read by the gate (#459), then THIS fleet's cached
-# issues (a backlog pick is already collected; the
+# back to THIS fleet's cached issues (a backlog pick is already collected; the
 # dash writes an optimistic row before spawning), then to a `gh issue view`
-# round-trip (which can lag/fail right after create). The git branch/worktree stay
+# round-trip (which can lag/fail right after create) — and then its body names an
+# EPIC member's batch below. The git branch/worktree stay
 # "issue-<N>" (the PR map keys off the branch) — only the display name changes.
 # CJK and other non-latin titles name the window in their own script (issue #579);
 # only a title with no LETTERS at all (emoji/punctuation-only) falls back to the slug.
 title="$WIN_TITLE"
-if [ -z "$title" ] && [ -n "$issue_json" ]; then
-  title=$(printf '%s\n' "$issue_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])' 2>/dev/null) || title=''
-fi
+title_read=0
 if [ -z "$title" ]; then
   ISSUES=$(fleet_cache issues "$SESS")
   title=$(awk -F'\t' -v n="#$num" '$2==n{print $4; exit}' "$ISSUES" 2>/dev/null)
-  if [ -z "$title" ] && [ "$TK_HUB" = 1 ]; then title=$(fleet_ticket_view "$REPO" "$num" title .title) || title=''
-  elif [ -z "$title" ]; then title=$(fleet_gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null); fi
+  if [ -z "$title" ] && [ "$TAIL_ONLY" != 1 ]; then
+    title=$(fleet_gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null); title_read=1
+  fi
 fi
 # An EPIC member's window wears its batch's 简称 first — 托管·一个节点… (issue
-# #2355): fleet_issue_win_name reads it off the body the gate just read, one
+# #2355): fleet_issue_win_name reads it off the issue's body, one
 # parent read per batch an hour; any other issue is named by its use
-# (fleet_issue_plain_name, issue #2545). No body in hand (no gate ran) ⇒ no read: --title promises no
-# round-trip (#216). The async tail is handed the name the gate's pass derived
+# (fleet_issue_plain_name, issue #2545). No body in hand ⇒ no read: --title promises no
+# round-trip (#216). The async tail is handed the name the first pass derived
 # (FLEET_SPAWN_WNAME), so it never re-derives one without the body.
 if [ "$TAIL_ONLY" = 1 ] && [ -n "${FLEET_SPAWN_WNAME:-}" ]; then
   wname=$FLEET_SPAWN_WNAME
-elif [ -n "$issue_json" ]; then
-  _ibody=$(printf '%s\n' "$issue_json" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin).get("body") or "")' 2>/dev/null)
-  wname=$(fleet_issue_win_name "$REPO" "$num" "$title" "${_ibody:-.}")
+elif [ "$title_read" = 1 ]; then
+  wname=$(fleet_issue_win_name "$REPO" "$num" "$title")   # no body given: it reads one
 else
   wname=$(fleet_issue_plain_name "$title")
 fi
@@ -886,8 +675,8 @@ fi
 # reads a legacy `tl·issue-12` window until it closes.
 
 # --- issue #303: --async backgrounds the SLOW tail (worktree add + new-window) ----
-# The synchronous gate above has already run + passed (cap / dedup / claim-at-spawn),
-# so any refusal has ALREADY surfaced and the issue is claimed. Now hand the
+# The synchronous gate above has already run + passed (cap / dedup / lease),
+# so any refusal has ALREADY surfaced. Now hand the
 # multi-second `git worktree add` (a full checkout on a big monorepo is what froze
 # the fzf backlog popup) plus the window spawn to the tmux SERVER via `run-shell -b`
 # — the fleet's established detached-work idiom, which survives the popup closing
@@ -903,7 +692,6 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # selects tail-only mode + names the fleet; FLEET_SPAWN_FOCUS is carried through
   # so "focus the new worker when ready" still works (default no-focus otherwise).
   _bg="FLEET_SPAWN_TAIL=$(shq "$SESS") FLEET_DISPATCH=$(shq "$DISPATCH") FLEET_LAUNCH=$(shq "${FLEET_LAUNCH:-}")"
-  [ "$CLAIMED_HERE" = 1 ] && _bg="$_bg FLEET_SPAWN_CLAIMED=1"
   [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && _bg="$_bg FLEET_SPAWN_FOCUS=1"
   # >/dev/null 2>&1 on the detached tail (belt-and-suspenders for issue #401):
   # `tmux run-shell` DISPLAYS its command's stdout in an Esc-to-dismiss view, so
@@ -924,53 +712,31 @@ fi
 # repos) → fleets/<repo-slug>/ so two fleets spawning the same issue# never collide
 # (issue #181).
 tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
-# Lifecycle (issues #277, #283, #299, #441): /fleet-claim is the SINGLE SOURCE OF
-# TRUTH for the whole worker lifecycle — claim → load charter → ground → implement
-# (weaving in the per-fleet FLEET_WORKER_PROMPT body ITSELF) → open a PR closing #N
-# → merge it once the gate reads READY → STOP; a blocker → comment + stop.
-# So the seed COLLAPSES to a bare `/fleet-claim` (issue #299): no #<N>, no claim
-# line, no per-fleet body (issue #234) and no ship tail are duplicated here — the
-# skill self-discovers its issue from the window's @issue binding set just below
-# (fallback: the issue-<N> worktree name), reads FLEET_WORKER_PROMPT itself via
-# fleet_worker_prompt_body, and owns the steps that used to live in the separate
-# /fleet-ship and /fleet-blocked prompts. The claim stays native (assign @me).
-#
-# SLASH on purpose: claude EXPANDS a slash command supplied as the initial prompt
-# (verified — it injects the skill's text deterministically), which is more
-# reliable than seeding a prose "Run /fleet-claim" and hoping the model chooses to
-# invoke it. If a future claude ever stops expanding an initial-prompt slash
-# command, the documented fallback is to seed `Run /fleet-claim` instead. Scouts
-# keep their OWN seed (read-only, never ship) and never route through this spawn.
-#
-# NOT hardcoded (issue #611): a plugin-installed fleet serves the SAME command
-# namespaced — `/fleet:fleet-claim` — and a bare slash does not resolve there, so
-# the seed would land as literal text and the worker would never claim. fleet_cmd
-# probes which install path this machine has and types the form that resolves.
-#
 # THE PERSON'S WORDS FIRST (issue #3331, EPIC #3178 ⑧, D2 = ①): a Claude session's
 # first turn is what the person typed (--words-file), else the issue's title — the
 # ticket's own one line, for a spawn nobody typed words for (an EPIC member, a
-# backlog pick) — shown exactly as written. The flow does not ride the first turn
-# any more: the window is stamped `@seed_words <the claim command>` before its
-# agent starts, and the SessionStart hook (bin/fleet-worker-start-hook.sh) reads it
-# — a grey line for the person, and an instruction for the agent to run the claim
-# skill before anything else (fleet-worker's body is empty on purpose, so the hook
-# is the only road in). The stamp and the words go together or not at all:
-# no words (no file, no title), a Codex session (no SessionStart context road it
-# reads the same way — it keeps the slash seed, fleet-codex.sh expands it) or
-# FLEET_SEED_WORDS=0 ⇒ the bare claim command, byte for byte as before.
-CLAIM_CMD=$(fleet_cmd fleet-claim)
+# backlog pick) — shown exactly as written. The flow does not ride the first turn:
+# the window is stamped `@seed_words 1` before its agent starts, and the
+# SessionStart hook (bin/fleet-worker-start-hook.sh) reads it — a grey line for the
+# person, and the flow for the agent (brief → implement → PR `Closes #N` →
+# pr_verdict / pr_merge → report). The stamp and the words go together or not at
+# all. No words, a Codex session (no SessionStart context road it reads the same
+# way) or FLEET_SEED_WORDS=0 ⇒ the flow rides the first turn as plain words. There
+# is no claim command any more (issue #4898): the fleet keeps no issue state.
+FLOW_SEED="Issue #$num of $REPO: call the fleet tool \`brief\`, implement in this worktree, open a PR whose body carries \`Closes #$num\`, land it with \`pr_verdict\` then \`pr_merge\` once READY, then \`report\` (state: merged). Never claim, comment on or close the issue yourself."
 SEED_WORDS=''
-if [ "${FLEET_SEED_WORDS:-1}" != 0 ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" != codex ]; then
-  _words=''
-  [ -n "$WORDS_FILE" ] && [ -s "$WORDS_FILE" ] && _words=$(cat "$WORDS_FILE")
-  [ -n "${_words//[[:space:]]/}" ] || _words=$title
-  if [ -n "${_words//[[:space:]]/}" ]; then
-    printf '%s' "$_words" > "$tf" && SEED_WORDS=$CLAIM_CMD
-  fi
-  unset _words
+_words=''
+[ -n "$WORDS_FILE" ] && [ -s "$WORDS_FILE" ] && _words=$(cat "$WORDS_FILE")
+[ -n "${_words//[[:space:]]/}" ] || _words=$title
+if [ "${FLEET_SEED_WORDS:-1}" != 0 ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" != codex ] \
+   && [ -n "${_words//[[:space:]]/}" ]; then
+  printf '%s' "$_words" > "$tf" && SEED_WORDS=1
 fi
-[ -n "$SEED_WORDS" ] || printf '%s' "$CLAIM_CMD" > "$tf"
+if [ -z "$SEED_WORDS" ]; then
+  if [ -n "${_words//[[:space:]]/}" ]; then printf '%s\n\n%s' "$_words" "$FLOW_SEED" > "$tf"
+  else printf '%s' "$FLOW_SEED" > "$tf"; fi
+fi
+unset _words
 # A parked session's return (--resume, issue #2671): the same conversation, its
 # own first turn — only when the transcript is still there and the agent is Claude.
 RESUME_ARG=''
@@ -1013,14 +779,6 @@ if [ ! -d "$wt" ]; then
     fleet_worktree_create "$MAIN" "$slug" "$BASE" --reuse >/dev/null \
       || { refuse "spawn failed for #$num: worktree add"; exit "$RC_INFRA"; }
   fi
-fi
-# Machine-local, per-worktree Git metadata, never repo/charter content (#459).
-# Clear on EVERY spawn (including force/opt-out/tail-only) so an old snapshot
-# cannot survive a reuse. Async tails deliberately fall back to a fresh gh read.
-python3 "$BIN/fleet-issue-cache.py" clear "$wt" 2>/dev/null || :
-if [ -n "$issue_json" ]; then
-  printf '%s\n' "$issue_json" | python3 "$BIN/fleet-issue-cache.py" write \
-    "$wt" "$REPO" "$num" "$issue_fetched_at" 2>/dev/null || :
 fi
 # Capture the new window-id and drive every follow-up op through it — the window
 # name is now the issue-title slug (not a unique handle), so targeting by
@@ -1085,7 +843,6 @@ win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:"
        fleet_socket_wedged "$SOCK" && _why=" — this fleet's tmux server is gone: its socket $(fleet_socket_path "$SOCK") is held by a dying server that drops every client (tmux says \"server exited unexpectedly\"); fleet-up.sh clears it and brings the fleet back"  # issue #1729
        refuse "spawn failed for #$num: new-window$_why"; exit "$RC_INFRA"; }
 fleet_admit_confirm >/dev/null   # the window is open: its admission holds on its own (#2502)
-[ -n "$FILL_PID" ] || CLAIMED_HERE=0   # a window holds the issue now: its claim is the worker's
 # A session is on its way: wake the idle-gated daemons so the dash is fresh on
 # their very next tick, not up to FLEET_DAEMON_IDLE_AFTER later (issue #1077).
 [ -f "$BIN/fleet-daemon-lib.sh" ] && ( . "$BIN/fleet-daemon-lib.sh" && fleet_daemon_wake "$BIN/.." ) 2>/dev/null || true
@@ -1156,10 +913,6 @@ if [ -z "$ORIGIN_WID" ] && [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS"
 # another machine (ORIGIN_WID) has no generation here.
 [ -n "$ORIGIN" ] && [ -z "$ORIGIN_WID" ] && fleet_stamp_origin_gen "$SESS" "$win" "$ORIGIN" "$SOCK"
 
-# (The sub-second cross-machine tie-break that re-read the ▶ claiming comment ids
-# was retired with the claiming marker in issue #283 — the assignee is now the
-# claim, and workers share one gh account so a per-attempt tie token no longer
-# exists. Claim-at-spawn still shrinks the race window; it was never a mutex.)
 # Non-invasive by default: leave the active window put — the new window and its
 # list row are the confirmation, so a success draws no line (issue #1618). Only
 # jump to the new worker when the user opted in (FLEET_SPAWN_FOCUS=1) on an
@@ -1167,7 +920,7 @@ if [ -z "$ORIGIN_WID" ] && [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS"
 # The tree the agent is starting in is whole before this says it opened (issue
 # #2237). A fill that failed takes its window and worktree with it — a session
 # with half a checkout is no session — and the exit gives the issue back (the
-# EXIT trap: lease, and the GitHub claim this spawn took).
+# EXIT trap: the lease this spawn took).
 if [ -n "$FILL_PID" ]; then
   wait "$FILL_PID" 2>/dev/null; _frc=$?
   if [ "$_frc" != 0 ]; then
@@ -1177,7 +930,6 @@ if [ -n "$FILL_PID" ]; then
     git -C "$MAIN" worktree remove --force "$wt" >/dev/null 2>&1
     refuse "spawn failed for #$num: worktree checkout"; exit "$RC_INFRA"
   fi
-  CLAIMED_HERE=0   # a window holds the issue now: its claim is the worker's
 fi
 if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then
   TM select-window -t "$win"

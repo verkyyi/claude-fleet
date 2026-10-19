@@ -307,10 +307,9 @@ fi
 # on issue-9206 shipped side-fix PR #9208 (closing #9207), and --auto reaped the
 # live window mid-EPIC-plan. So an AUTOMATIC reap of an issue head must prove the
 # task is over, one of two ways:
-#   A. for GitHub tickets ONLY, the MERGED PR's closingIssuesReferences names
-#      (repo, issue); forge refs cannot close a same-number Hub ticket (#4464); or
-#   B. the ticket door's fresh read of the explicit provider/repo/number returns
-#      the matching ticket CLOSED. MERGED is a PR state, never task completion.
+#   A. the MERGED PR's closingIssuesReferences names (repo, issue); or
+#   B. a fresh read of that issue on GitHub returns it CLOSED. MERGED is a PR
+#      state, never task completion.
 # Unknown (including missing/mismatched identity) reads as OPEN: deferring costs
 # a window until the next tick,
 # reaping costs a session. Manual cleanup and non-issue heads never get here. Runs
@@ -319,7 +318,7 @@ fi
 issue_open_gate() {
   [ "$AUTO" = 1 ] || return 0
   { [ -n "$WT" ] || [ -n "$WIN" ]; } || return 0
-  local want c ist='' verb ticket_home tid='' doc wtask='' tv
+  local want c ist='' verb tid='' wtask='' tv
   # Keep #4464's refusal ordering: duplicate windows are refused by the shared
   # liveness gate below, before cleanup. They are not a ticket selector.
   case "$WIN" in *$'\n'*) return 0 ;; esac
@@ -350,41 +349,22 @@ issue_open_gate() {
   fi
   [ -n "$ISSUE" ] || return 0
   want=$(printf '%s#%s' "$(fleet_norm_repo "$REPO")" "$ISSUE" | tr '[:upper:]' '[:lower:]')
-  # Preserve the door's legacy unset=github default, but an invalid configured
-  # provider or an ambiguous branch must not silently select GitHub. Window
-  # ambiguity remains the downstream liveness gate's skip:live, in its order.
-  ticket_home=$(fleet_repo_conf_get "$FLEET_SESSION" "$REPO" FLEET_TICKETS) || ticket_home=unknown
-  case "$ticket_home" in
-    ''|github|hub) tid=$(FLEET_SESSION="$FLEET_SESSION" bash "$BIN/fleet-ticket.sh" id "$REPO" "$ISSUE" --window "$WIN" 2>/dev/null) || tid='' ;;
-  esac
   # After an explicit authority migration, a vanished window leaves no accepted
-  # task identity to disambiguate an adopted hub number from a legacy GH number.
-  # Keep the worktree until that identity is reconciled, including after rollback.
-  # The migration is this login's person's (issue #4901), not the repo's.
-  if [ -z "$WIN" ] && [ -n "$(fleet_task_authority "$FLEET_SESSION" "$REPO")" ]; then tid=''; fi
-  [ "$href" = "$BRANCH" ] || tid=''
-  if [ "$tid" = "gh:$want" ] && [ "$st" = MERGED ]; then
+  # task identity to say which issue a number is: keep the worktree until that
+  # is reconciled, including after rollback (issue #4901: the person's).
+  local known=1
+  if [ -z "$WIN" ] && [ -n "$(fleet_task_authority "$FLEET_SESSION" "$REPO")" ]; then known=0; fi
+  [ "$href" = "$BRANCH" ] || known=0
+  if [ "$known" = 1 ] && [ "$st" = MERGED ]; then
     for c in $(printf '%s' "${closes:--}" | tr ',' ' ' | tr '[:upper:]' '[:lower:]'); do
       [ "$c" = "$want" ] && return 0
     done
   fi
-  if [ -n "$tid" ] && doc=$(FLEET_SESSION="$FLEET_SESSION" bash "$BIN/fleet-ticket.sh" read "$tid" \
-      --json id,number,url,state --max-age 0 2>/dev/null); then
-    ist=$(printf '%s' "$doc" | python3 -c '
-import json,sys
-d = json.load(sys.stdin)
-tid, number = sys.argv[1:]
-if d.get("number") != int(number):
-    raise ValueError("ticket number mismatch")
-if tid.startswith("hub:"):
-    valid = d.get("_source") == "hub" and d.get("id") == tid
-else:
-    repo = tid[3:].rsplit("#", 1)[0]
-    valid = d.get("_source") != "hub" and (d.get("url") or "").lower() == f"https://github.com/{repo}/issues/{number}".lower()
-if not valid:
-    raise ValueError("ticket identity mismatch")
-print(d.get("state") or "")' "$tid" "$ISSUE" 2>/dev/null) || ist=''
+  # B. a fresh read of the issue on GitHub (fleet_ticket_state) says CLOSED.
+  if [ "$known" = 1 ]; then
+    ist=$(fleet_ticket_state "$REPO" "$ISSUE" | cut -f1)
   fi
+  tid="gh:$want"
   [ "$ist" = CLOSED ] && return 0
   verb=merged; [ "$st" = CLOSED ] && verb=closed
   note "  #$PR $verb but bound ticket ${tid:-unknown:$want} is ${ist:-unknown}; no authoritative completion — automatic cleanup deferred until #$ISSUE closes."

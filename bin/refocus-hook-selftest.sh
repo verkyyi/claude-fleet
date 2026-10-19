@@ -96,7 +96,7 @@ C=$(ctx) || fail "output must be a SessionStart hookSpecificOutput JSON object" 
 case "$C" in '[fleet charter] #12 · acme/widgets — RESTATE-TITLE after compaction'*) : ;;
   *) fail "context must open with the [fleet charter] #12 line" "$C" ;; esac
 for want in 'branch issue-12 → base trunk' 'PR: #345 OPEN ci✓' 'work ONLY on #12' \
-            'Closes #12' 'gh pr merge --rebase' 'spawned by issue-7' 'fleet-claim-brief.sh' \
+            'Closes #12' 'gh pr merge --rebase' 'spawned by issue-7' 'the fleet tool `brief`' \
             "Base checkout $WORK/widgets is read-only"; do
   case "$C" in *"$want"*) : ;; *) fail "context must carry: $want" "$C" ;; esac
 done

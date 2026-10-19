@@ -1,23 +1,18 @@
 #!/bin/bash
-# dash-issue-session-prompt-selftest.sh — hermetic tests for the COLLAPSED worker
-# seed (issues #234, #283, #299). Since issue #299 the seed the spawn writes is a
-# BARE `/fleet-claim`: claude expands the slash command on the initial prompt and
-# the skill carries the WHOLE lifecycle (claim → charter → ground → implement →
-# open PR + arm auto-merge → STOP), self-discovering its issue from @issue. So the
-# seed no longer embeds the issue-binding head, a claim line, the per-fleet body,
-# or a ship tail — all of that moved INTO /fleet-claim.
+# dash-issue-session-prompt-selftest.sh — hermetic tests for a worker's seed
+# (issues #234, #299, #3331, #4898). The spawn writes the issue's words (the
+# person's, else the title) as the first turn and stamps `@seed_words 1`; the
+# SessionStart hook brings the flow. With no words, a Codex worker or
+# FLEET_SEED_WORDS=0 the flow rides the first turn as plain words (there is no
+# claim command any more — issue #4898).
 #
-# Two layers, tested where they now live:
+# Two layers, tested where they live:
 #   SEED — drive the real spawn (git/gh/tmux faked on PATH, temp dirs, no network)
-#          and assert the task file it writes is EXACTLY `/fleet-claim`, is STABLE
-#          under a FLEET_WORKER_PROMPT override (the body no longer rides the seed),
-#          and carries NONE of the retired paragraph pieces or retired skills.
-#   BODY — the per-fleet customizable implementation directive (FLEET_WORKER_PROMPT
-#          / _FILE) is now woven in by the skill at runtime via
-#          fleet_worker_prompt_body, so we test that FUNCTION directly: default,
-#          override, trailing-ender strip, {issue}/{repo} substitution, a prompt
-#          FILE winning + carrying multi-line content, and an unreadable file
-#          warning + falling back to the default.
+#          and assert the task file it writes, stable under a FLEET_WORKER_PROMPT
+#          override (the directive rides the brief, not the seed), with none of the
+#          retired paragraph pieces or skills.
+#   BODY — the per-fleet implementation directive (FLEET_WORKER_PROMPT / _FILE),
+#          printed by the brief via fleet_worker_prompt_body, tested directly.
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -91,13 +86,9 @@ chmod +x "$WORK/fakebin/git" "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
 # path to the seed task file it wrote. Extra FLEET_* overrides come in via env.
 run_spawn() { # $@ = args to dash-issue-session.sh
   rm -rf "$WORK/dash/.claude-dash/fleets"
-  # This test is about the SEED, not the cross-machine claim dedup (issue #258, on
-  # by default) — opt out so the fake gh (which returns a title for any `issue
-  # view`) isn't parsed as a claim ledger and the spawn refuses. Its own selftest
-  # covers the dedup.
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
-  FLEET_PRESPAWN_DEDUP=0 NEWWIN_LOG="$WORK/newwin" FLEET_CODEX_READY_CHECK=0 \
+  NEWWIN_LOG="$WORK/newwin" FLEET_CODEX_READY_CHECK=0 \
     "$SPAWN" "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
 }
 # The seed is written to $TMPDIR/.claude-dash/fleets/<slug>/task_issue-<N>.txt.
@@ -108,23 +99,24 @@ has()      { case "$(seed)" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 # ===== SEED A: the first turn is the issue's own words, the flow rides a stamp ==
 # Since issue #3331 (EPIC #3178 ⑧) a Claude worker's first turn is the person's
 # words — none typed for a plain issue spawn, so the issue's title — and the
-# window is stamped `@seed_words /fleet-claim` before its agent starts: the
-# SessionStart hook (fleet-worker-start-hook.sh) carries the claim from there.
-# FLEET_SEED_WORDS=0 = the bare /fleet-claim, no stamp, byte for byte as before.
-stamped() { grep -qF -- "@seed_words '/fleet-claim'" "$WORK/newwin"; }
+# window is stamped `@seed_words 1` before its agent starts: the SessionStart hook
+# (fleet-worker-start-hook.sh) brings the flow. FLEET_SEED_WORDS=0 / no words ⇒
+# the flow rides the first turn as words (issue #4898: no claim command).
+FLOW='Issue #234 of acme/widgets: call the fleet tool `brief`'
+stamped() { grep -qF -- "@seed_words '1'" "$WORK/newwin"; }
 : > "$WORK/newwin"; run_spawn 234
 [ -n "$(seedfile)" ] || fail "A no seed task file was written" "$(cat "$WORK/spawn.err")"
 [ "$(seed)" = "Some Issue Title" ] \
   || fail "A with no words the first turn must be the issue's title" "$(seed)"
 stamped || fail "A a words seed must stamp @seed_words before the agent starts" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"; FLEET_SEED_WORDS=0 run_spawn 234
-[ "$(seed)" = "/fleet-claim" ] \
-  || fail "A FLEET_SEED_WORDS=0 must keep the bare slash command /fleet-claim" "$(seed)"
+case "$(seed)" in "Some Issue Title"*"$FLOW"*'Closes #234'*) ;; *) fail "A FLEET_SEED_WORDS=0: the title, then the flow as words" "$(seed)" ;; esac
 stamped && fail "A FLEET_SEED_WORDS=0 must stamp no @seed_words" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"; GH_TITLE='' run_spawn 234
-[ "$(seed)" = "/fleet-claim" ] || fail "A no words and no title: the bare /fleet-claim" "$(seed)"
+case "$(seed)" in "$FLOW"*) ;; *) fail "A no words and no title: the flow alone" "$(seed)" ;; esac
 stamped && fail "A no words: no @seed_words" "$(cat "$WORK/newwin")"
-ok "A the first turn is the issue's words + @seed_words; off / no words = bare /fleet-claim"
+has '/fleet-' && fail "A no claim command anywhere (#4898)" "$(seed)"
+ok "A the first turn is the issue's words + @seed_words; off / no words = the flow as words"
 
 # ===== SEED W: --words-file — the person's words, verbatim (issue #3331) =======
 printf '给 hub 加一个 /healthz\n\n要返回 "ok"，别用 $HOME' > "$WORK/words.txt"
@@ -136,17 +128,16 @@ grep -qF 'healthz' "$WORK/newwin" && fail "W the words must never ride the new-w
 [ "$(seed)" = "Some Issue Title" ] || fail "W an empty words file falls back to the title" "$(seed)"
 printf 'do it' > "$WORK/words.txt"
 : > "$WORK/newwin"; run_spawn 234 --words-file "$WORK/words.txt" --agent codex
-[ "$(seed)" = "/fleet-claim" ] || fail "W a Codex worker keeps the slash seed" "$(seed)"
+case "$(seed)" in "do it"*"$FLOW"*) ;; *) fail "W a Codex worker: the words, then the flow as words" "$(seed)" ;; esac
 stamped && fail "W a Codex worker gets no @seed_words" "$(cat "$WORK/newwin")"
-ok "W --words-file is the first turn verbatim; Codex keeps /fleet-claim"
+ok "W --words-file is the first turn verbatim; Codex gets the words + the flow"
 
 # ===== SEED B: the seed is STABLE under FLEET_WORKER_PROMPT (body left the seed) =
 FLEET_WORKER_PROMPT='Follow CONTRIBUTING and add coverage' run_spawn 234
 [ "$(seed)" = "Some Issue Title" ] \
-  || fail "B FLEET_WORKER_PROMPT must NOT change the seed — the body moved into the skill" "$(seed)"
+  || fail "B FLEET_WORKER_PROMPT must NOT change the seed — the directive rides the brief" "$(seed)"
 FLEET_WORKER_PROMPT_FILE="$WORK/whatever.txt" FLEET_SEED_WORDS=0 run_spawn 234
-[ "$(seed)" = "/fleet-claim" ] \
-  || fail "B FLEET_WORKER_PROMPT_FILE must NOT change the seed either" "$(seed)"
+has 'Follow CONTRIBUTING' && fail "B FLEET_WORKER_PROMPT_FILE must NOT change the seed either" "$(seed)"
 ok "B the seed is stable regardless of the per-fleet body override"
 
 # ===== SEED C: the collapsed seed drops the retired paragraph + retired skills ==
@@ -167,10 +158,10 @@ ok "C the collapsed seed carries none of the retired paragraph pieces or skills"
 # A worker launch names the agent file it starts as (`--as fleet-worker`, issue
 # #3122) only when that file is there — none in this sandbox, so none here. A per-spawn `--agent codex` reaches bin/fleet-claude.sh as its own flag INSIDE
 # the new-window command (the launcher consumes it and execs fleet-codex.sh); the
-# seed file stays the bare `/fleet-claim` (fleet-codex.sh expands it). A default
-# spawn freezes its default provider. An unknown token is refused before work.
+# seed file is the words + the flow. A default spawn freezes its default
+# provider. An unknown token is refused before work.
 : > "$WORK/newwin"; run_spawn 234 --agent codex
-[ "$(seed)" = "/fleet-claim" ] || fail "D a Codex seed stays the bare /fleet-claim" "$(seed)"
+case "$(seed)" in *"$FLOW"*) ;; *) fail "D a Codex seed carries the flow as words" "$(seed)" ;; esac
 sed 's/ --as fleet-worker//g' "$WORK/newwin" | grep -qF -- "fleet-session-wrap.sh' --agent codex \"\$(cat '" \
   || fail "D --agent codex must sit between the launcher and the seed in the new-window command" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"; run_spawn 234
@@ -183,7 +174,7 @@ ok "D --agent codex rides the launch command; default is frozen; unknown is refu
 # ===== SEED R: a PARKED session's return (--resume + --seed-file, issue #2671) ===
 # The same conversation (`--resume <sid>` between the launcher and the seed) and
 # the seed file's text as its first turn — only while the transcript is still in
-# the worktree's project dir; without it the plain /fleet-claim, no --resume.
+# the worktree's project dir; without it the plain seed, no --resume.
 SID=0f0e0d0c-1111-2222-3333-444455556666
 printf '[fleet park] read the handoff' > "$WORK/park.seed"
 : > "$WORK/newwin"
@@ -205,9 +196,9 @@ CLAUDE_PROJECTS_DIR="$WORK/projects" run_spawn 234 --resume "$SID" --seed-file "
 grep -q -- '--resume' "$WORK/newwin" && fail "R a Codex return carries no Claude --resume" "$(cat "$WORK/newwin")"
 ok "R a parked session comes back on the same conversation with its own first turn (#2671)"
 
-# ===== BODY: fleet_worker_prompt_body (the per-fleet directive the skill weaves in)
-# The skill (/fleet-claim step 4) now calls this at runtime instead of the spawn
-# baking it into the seed — so its behaviour is tested directly here.
+# ===== BODY: fleet_worker_prompt_body (the per-fleet directive the brief prints)
+# bin/fleet-brief.sh calls this at runtime instead of the spawn baking it into
+# the seed — so its behaviour is tested directly here.
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 unset FLEET_WORKER_PROMPT FLEET_WORKER_PROMPT_FILE
@@ -266,5 +257,5 @@ got=$(FLEET_WORKER_PROMPT="@$WORK/tmpl.txt" FLEET_WORKER_PROMPT_FILE="$WORK/lega
 [ "$got" = 'legacy file body' ] || fail "I the retired _FILE key must still win when set" "$got"
 ok "I @path form reads the file; unreadable → default; retired _FILE still honored"
 
-printf '\nselftest OK: %s assertions passed (collapsed /fleet-claim seed + per-fleet body)\n' "$pass"
+printf '\nselftest OK: %s assertions passed (the words seed + per-fleet body)\n' "$pass"
 exit 0

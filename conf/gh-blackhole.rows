@@ -12,22 +12,22 @@
 #   dns=…  hang=…  limit=…   each one of ok · fail · slow · hang · skip
 # (ok = exit 0 within 15 s · fail = exit ≠ 0 within 15 s · slow = done after 15 s ·
 #  hang = still running at the 20 s cut).
-# A cell whose reading depends on the machine's speed names both (`hang=ok hang=hang`):
-# row 7 under hang spends C2's 15 s on its first call, then four local writes —
-# 17 s on a Linux runner, 21–28 s on a Mac, so it is cut there (#4844). The selftest is red when a row does
+# A cell whose reading depends on the machine's speed names both (`hang=ok hang=hang`).
+# Row 7 (the claim · comment · evidence · close writes) and G3 (filing an issue)
+# left with the issue layer (#4898): the fleet writes nothing to GitHub there any
+# more. The selftest is red when a row does
 # anything else — a member that fixes a row flips its 期望 here (hang → ok), so
 # the count of rows that work only goes up. Members change 期望 only; a new way
 # to reach GitHub gets a new row.
 #
-# Targets (the EPIC's 演练清单): rows 1–12 must read ok in all three ways, G1–G3
+# Targets (the EPIC's 演练清单): rows 1–12 must read ok in all three ways, G1–G2
 # must never hang (a fast, clear «在等 GitHub» failure is their target).
 1	安装：新电脑经入口加入节点（入口给的加入命令）	curl -fsSL "$JOIN_URL" -o "$CELL/join.sh"	dns=ok hang=ok limit=ok
 2	更新：没有入口的登录跟 stable（install-sync 一拍）	bash "$BIN/fleet-install-sync.sh" --dry-run --root "$CELL/install"	dns=ok hang=ok limit=ok
 3	登录入口网页（只绑了 GitHub 的人）	- 入口侧（Go，tokenledger）：只在现场版读，C10 #4849 自带 Go 测试	dns=skip hang=skip limit=skip
-4	开会话：GitHub 单仓库的认领简报	bash "$BIN/fleet-claim-brief.sh" --issue "$ISSUE"	dns=fail hang=fail limit=fail
+4	开会话：GitHub 单仓库的开场简报（只读字，不读 GitHub — #4898）	bash "$BIN/fleet-brief.sh"	dns=ok hang=ok limit=ok
 5	派活并等结果：派单前读单（fleet-gh.sh issue view）	bash "$BIN/fleet-gh.sh" issue view "$ISSUE" --repo "$REPO" --json title,state,body	dns=fail hang=fail limit=fail
 6	子会话回报：merged 回报核对 PR	bash "$BIN/fleet-report-parent.sh" --state merged --pr "$PR" --summary drill --dry-run	dns=ok hang=hang limit=ok
-7	认领 · 评论 · 证据 · 关单（四次写，写不上的记进 $CELL/writes.lost）	for op in claim comment evidence close; do echo "$op" >> "$CELL/writes"; case $op in claim) bash "$BIN/fleet-ticket.sh" claim "gh:$REPO#$ISSUE" ;; comment) bash "$BIN/fleet-comment.sh" "$ISSUE" --note --body drill ;; evidence) echo drill | bash "$BIN/fleet-evidence.sh" before --issue "$ISSUE" --epic none --note drill --name drill.txt --post - ;; close) bash "$BIN/fleet-comment.sh" "$ISSUE" --note --close --body drill ;; esac || echo "$op" >> "$CELL/writes.lost"; done; [ ! -s "$CELL/writes.lost" ]	dns=ok hang=ok hang=hang limit=ok
 8	回收：会话退出后的收尾（SessionEnd hook 的 --exec）	bash "$BIN/session-end-hook.sh" --exec worker "$SESS" @1 "$ISSUE" -	dns=ok hang=ok limit=ok
 9	面板：任务列表的单子预览	- 节点上的单子面板已去掉（#4902），没有可演的命令	dns=skip hang=skip limit=skip
 10	历史、恢复：落地记一行再列出	bash "$BIN/fleet-history.sh" record --repo "$REPO" --pr "$PR" --key "issue-$ISSUE" --worktree "$PWD" && bash "$BIN/fleet-history.sh" list	dns=ok hang=ok limit=ok
@@ -35,4 +35,3 @@
 12	入口：版本、安装包（自托管入口问 stable）	- 入口侧（Go，tokenledger）：只在现场版读，C8 #4847 自带 Go 测试	dns=skip hang=skip limit=skip
 G1	推送分支	git push -u origin "issue-$ISSUE"	dns=fail hang=hang limit=fail
 G2	PR 检查、合并门	bash "$BIN/fleet-pr-verdict.sh" "$PR" --repo "$REPO"	dns=fail hang=fail limit=fail
-G3	开新的 GitHub 单	bash "$BIN/fleet-issue-file.sh" --title "drill: a new ticket" --body "drill"	dns=fail hang=fail limit=fail

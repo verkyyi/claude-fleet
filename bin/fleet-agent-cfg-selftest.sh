@@ -113,10 +113,10 @@ team() {   # team <args…> — the composer as the launcher runs it, in the tes
 
 # --- A: stable fingerprint; equals expected ------------------------------------
 fresh_home
-launch new fleet-claude.sh -- '/fleet-claim' >/dev/null
+launch new fleet-claude.sh -- '/fleet-history' >/dev/null
 fp1=$(stamp @agent_cfg); src1=$(stamp @agent_cfg_src)
 printf '%s' "$fp1" | grep -Eq '^[0-9a-f]{12}$' || fail "A: @agent_cfg is not 12 hex" "$(cat "$WORK/stamps" "$WORK/err" 2>/dev/null)"
-launch new fleet-claude.sh -- '/fleet-claim' >/dev/null
+launch new fleet-claude.sh -- '/fleet-history' >/dev/null
 [ "$(stamp @agent_cfg)" = "$fp1" ] || fail "A: two launches of one configuration differ" "$fp1 vs $(stamp @agent_cfg)"
 exp=$(team expected --write --root "$WORK/new")
 [ "$(printf '%s\n' "$exp" | awk '$1=="claude"{print $2}')" = "$fp1" ] || fail "A: expected ≠ the launch's fingerprint" "$exp / $fp1"
@@ -127,22 +127,22 @@ ok "A same configuration → same @agent_cfg ($fp1), = expected, cached by --wri
 
 # --- B: a team change moves the fingerprint ------------------------------------
 printf '{"version":7,"bundle":{"claude_settings":{"cleanupPeriodDays":30}}}\n' > "$WORK/cfg/team-bundle.json"
-launch new fleet-claude.sh -- '/fleet-claim' >/dev/null
+launch new fleet-claude.sh -- '/fleet-history' >/dev/null
 fp2=$(stamp @agent_cfg)
 [ -n "$fp2" ] && [ "$fp2" != "$fp1" ] || fail "B: a team-layer change left the fingerprint at $fp1"
 case "$(stamp @agent_cfg_src)" in *" team:v7 "*) : ;; *) fail "B: @agent_cfg_src does not name team v7" "$(stamp @agent_cfg_src)" ;; esac
 printf '{"version":7,"bundle":{"claude_settings":{"cleanupPeriodDays":31}}}\n' > "$WORK/cfg/team-bundle.json"
-launch new fleet-claude.sh -- '/fleet-claim' >/dev/null
+launch new fleet-claude.sh -- '/fleet-history' >/dev/null
 [ "$(stamp @agent_cfg)" != "$fp2" ] || fail "B: a changed team VALUE left the fingerprint"
 rm -f "$WORK/cfg/team-bundle.json"
 ok "B a team-layer change → a new fingerprint; src names the team version"
 
 # --- C: hand only what is missing ------------------------------------------------
 fresh_home
-argv=$(launch new fleet-claude.sh -- '/fleet-claim')
+argv=$(launch new fleet-claude.sh -- '/fleet-history')
 sf=$(flagfile "$argv" settings); mf=$(flagfile "$argv" mcp-config)
 [ -f "$sf" ] && [ -f "$mf" ] || fail "C: a fresh login got no --settings / --mcp-config file" "$argv"
-[ "$(printf '%s\n' "$argv" | tail -1)" = '[/fleet-claim]' ] || fail "C: the seed prompt is no longer last" "$argv"
+[ "$(printf '%s\n' "$argv" | tail -1)" = '[/fleet-history]' ] || fail "C: the seed prompt is no longer last" "$argv"
 python3 - "$sf" "$mf" "$ROOT" <<'PY' || fail "C: the handed files are not the fleet's table/defaults" "$(cat "$sf" "$mf")"
 import json, sys
 s, m, root = json.load(open(sys.argv[1])), json.load(open(sys.argv[2])), sys.argv[3]
@@ -160,24 +160,24 @@ json.dump(s, open(home + "/.claude/settings.json", "w"))
 json.dump({"mcpServers": m["mcpServers"]}, open(home + "/.claude.json", "w"))
 PY
 fpc=$(stamp @agent_cfg)
-argv=$(launch new fleet-claude.sh -- '/fleet-claim')
+argv=$(launch new fleet-claude.sh -- '/fleet-history')
 case "$argv" in *'[--settings='*|*'[--mcp-config='*) fail "C: a login with everything still got a handed file" "$argv" ;; esac
 [ "$(stamp @agent_cfg)" = "$fpc" ] || fail "C: filled-by-launch vs filled-by-sync fingerprint differ" "$fpc vs $(stamp @agent_cfg)"
 # a project key: drop agentPushNotifEnabled from the login, set it in the project → not filled
 python3 - "$WORK/home/.claude/settings.json" <<'PY'
 import json, sys; p = sys.argv[1]; d = json.load(open(p)); d.pop("agentPushNotifEnabled"); json.dump(d, open(p, "w"))
 PY
-argv=$(launch new fleet-claude.sh -- '/fleet-claim'); sf=$(flagfile "$argv" settings)
+argv=$(launch new fleet-claude.sh -- '/fleet-history'); sf=$(flagfile "$argv" settings)
 grep -q '"agentPushNotifEnabled"' "$sf" 2>/dev/null || fail "C: a key the login lacks was not filled" "$argv"
 mkdir -p "$WORK/proj/.claude"; printf '{"agentPushNotifEnabled":false}\n' > "$WORK/proj/.claude/settings.json"
-argv=$(launch new fleet-claude.sh -- '/fleet-claim')
+argv=$(launch new fleet-claude.sh -- '/fleet-history')
 case "$argv" in *'[--settings='*) fail "C: --settings filled a key the project sets" "$argv" ;; esac
 rm -rf "$WORK/proj/.claude"
 # an allowlist governs: no --mcp-config from the composer (only the allowlist's)
 python3 - "$WORK/home/.claude.json" <<'PY'
 import json, sys; p = sys.argv[1]; d = json.load(open(p)); d["mcpServers"].pop("context7"); json.dump(d, open(p, "w"))
 PY
-argv=$(launch new fleet-claude.sh FLEET_MCP_CONFIG=none -- '/fleet-claim')
+argv=$(launch new fleet-claude.sh FLEET_MCP_CONFIG=none -- '/fleet-history')
 [ "$(printf '%s\n' "$argv" | grep -c '^\[--mcp-config=')" = 1 ] || fail "C: under an allowlist the composer added an --mcp-config" "$argv"
 ok "C hands only what the login lacks (hooks/keys/servers); none when synced; never a project's key; allowlist governs"
 
@@ -188,22 +188,22 @@ import json, sys
 json.dump({"mcpServers": {"github": {"type": "stdio", "command": "my-github", "args": []},
                           "context7": {"type": "stdio", "command": "my-c7", "args": []}}}, open(sys.argv[1], "w"))
 PY
-argv=$(launch new fleet-claude.sh -- '/fleet-claim'); fpw=$(stamp @agent_cfg)
+argv=$(launch new fleet-claude.sh -- '/fleet-history'); fpw=$(stamp @agent_cfg)
 grep -q 'claude.mcp.github used' "$WORK/err" || fail "D: warn did not name the overridden locked server" "$(cat "$WORK/err")"
 grep -q 'context7' "$WORK/err" && fail "D: an UNLOCKED override was reported as a lock" "$(cat "$WORK/err")"
 mf=$(flagfile "$argv" mcp-config)
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["mcpServers"]; assert "github" not in m and "context7" not in m, m' "$mf" \
   || fail "D: warn handed a server the login has its own of" "$(cat "$mf")"
 team check --root "$WORK/new" >/dev/null; [ $? = 1 ] || fail "D: check did not exit 1 on a locked override"
-argv=$(launch new fleet-claude.sh FLEET_AGENT_LOCK=enforce -- '/fleet-claim'); fpe=$(stamp @agent_cfg)
+argv=$(launch new fleet-claude.sh FLEET_AGENT_LOCK=enforce -- '/fleet-history'); fpe=$(stamp @agent_cfg)
 grep -q 'claude.mcp.github ignored' "$WORK/err" || fail "D: enforce did not say it ignored the override" "$(cat "$WORK/err")"
 mf=$(flagfile "$argv" mcp-config)
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["mcpServers"]; assert "mcp-github.sh" in json.dumps(m["github"]) and "context7" not in m, m' "$mf" \
   || fail "D: enforce did not hand the fleet's github (or handed the unlocked context7)" "$(cat "$mf")"
 [ "$fpe" != "$fpw" ] || fail "D: enforce and warn fingerprint alike although the effective github differs"
-argv=$(launch new fleet-claude.sh FLEET_MOD=0 -- '/fleet-claim')
+argv=$(launch new fleet-claude.sh FLEET_MOD=0 -- '/fleet-history')
 case "$argv" in *'[--plugin-dir='*) fail "D: warn + FLEET_MOD=0 still loaded the mod" "$argv" ;; esac
-argv=$(launch new fleet-claude.sh FLEET_MOD=0 FLEET_AGENT_LOCK=enforce -- '/fleet-claim')
+argv=$(launch new fleet-claude.sh FLEET_MOD=0 FLEET_AGENT_LOCK=enforce -- '/fleet-history')
 case "$argv" in *'[--plugin-dir='*) : ;; *) fail "D: enforce + FLEET_MOD=0 did not load the locked mod" "$argv" ;; esac
 ok "D locked override: warn uses + names it (check exit 1), enforce hands the fleet's; mod lock honoured"
 
@@ -224,9 +224,9 @@ ok "E Codex launch stamps @agent_cfg ($fpx, mod=na), hands missing keys/servers 
 
 # --- F: degenerate --------------------------------------------------------------------
 fresh_home
-old=$(launch old fleet-claude.sh -- '/fleet-claim' | sed "s#/old/mod/fleet#/new/mod/fleet#")
+old=$(launch old fleet-claude.sh -- '/fleet-history' | sed "s#/old/mod/fleet#/new/mod/fleet#")
 [ -s "$WORK/stamps" ] && grep -q '^@agent_cfg' "$WORK/stamps" && fail "F: a composer-less install stamped @agent_cfg"
-off=$(launch new fleet-claude.sh FLEET_AGENT_CFG=0 -- '/fleet-claim')
+off=$(launch new fleet-claude.sh FLEET_AGENT_CFG=0 -- '/fleet-history')
 grep -q '^@agent_cfg' "$WORK/stamps" 2>/dev/null && fail "F: FLEET_AGENT_CFG=0 still stamped"
 [ "$old" = "$off" ] || fail "F: FLEET_AGENT_CFG=0 changed the argv" "$(printf 'old:\n%s\noff:\n%s' "$old" "$off")"
 oldx=$(launch old fleet-codex.sh FLEET_AGENT=codex -- 'hello' | sed "s#/old/mod/fleet#/new/mod/fleet#")
@@ -249,7 +249,7 @@ nshow=$( ( unset FLEET_AGENT_LOCK FLEET_MOD CLAUDE_CONFIG_DIR CODEX_HOME
            cd "$WORK/proj" && HOME="$WORK/home" FLEET_CONF_DIR="$WORK/cfg" python3 "$WORK/new/bin/fleet-config.py" show ) \
          | grep -c '^[a-z][^ ]*  *本机 ')
 [ -n "$nloc" ] && [ "$nloc" = "$nshow" ] && [ "$nloc" -ge 2 ] || fail "G: 本机独有 $nloc ≠ fleet config show's 本机 rows ($nshow)"
-launch new fleet-claude.sh -- '/fleet-claim' >/dev/null
+launch new fleet-claude.sh -- '/fleet-history' >/dev/null
 grep -qxF "fleet-claude: 配置 $line" "$WORK/err" || fail "G: the Claude launch did not reprint the line" "$(cat "$WORK/err")"
 launch new fleet-codex.sh FLEET_AGENT=codex -- 'hello' >/dev/null
 grep -qxF "fleet-codex: 配置 $line" "$WORK/err" || fail "G: the Codex launch did not reprint the line" "$(cat "$WORK/err")"
@@ -265,14 +265,14 @@ ok "G with a personal layer: launch (Claude + Codex), client doctor and status -
 # stamps @agent_ver = that sha's 12 hex and `expected` carries `ver <sha>`; the
 # sandbox root of A–G (no versions layout, no checkout) stamps none and writes none.
 fresh_home
-launch new fleet-claude.sh -- '/fleet-claim' >/dev/null
+launch new fleet-claude.sh -- '/fleet-history' >/dev/null
 [ -z "$(stamp @agent_ver)" ] || fail "H: a root with no version stamped @agent_ver" "$(cat "$WORK/stamps")"
 team expected --write --root "$WORK/new" | grep -q '^ver ' && fail "H: a root with no version wrote a ver line"
 H40=0123456789abcdef0123456789abcdef01234567
 VD="$WORK/vh.versions/$H40"; mkdir -p "$VD"
 for f in bin conf hooks mod fleet.conf; do ln -s "$WORK/new/$f" "$VD/$f"; done
 ln -s "$VD" "$WORK/vh"
-launch vh fleet-claude.sh -- '/fleet-claim' >/dev/null
+launch vh fleet-claude.sh -- '/fleet-history' >/dev/null
 [ "$(stamp @agent_ver)" = "${H40:0:12}" ] || fail "H: the Claude launch did not stamp @agent_ver ${H40:0:12}" "$(cat "$WORK/stamps" "$WORK/err" 2>/dev/null)"
 fph=$(stamp @agent_cfg)
 launch vh fleet-codex.sh FLEET_AGENT=codex -- 'hello' >/dev/null

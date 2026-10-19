@@ -928,7 +928,7 @@ fleet doctor --json
 来自 `fleet doctor`。
 
 - **是什么**：仓库里有没有 fleet 用的 issue 标签。
-- **WARN / FAIL 怎么办**：照说明里的 `fleet-labels-seed.sh --repo <仓库>` 补上。
+- **WARN / FAIL 怎么办**：每个缺的跑 `gh label create <名字> --repo <仓库>` 补上。
 
 #### `tickets`
 

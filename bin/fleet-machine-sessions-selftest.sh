@@ -155,7 +155,7 @@ ok "C machine ceiling refuses with each login's share; stale frees; default 0 un
 # ===== D: dash-issue-session.sh ================================================
 : > "$NEWWIN_LOG"
 as carol 1 env FLEET_MACHINE_MAX_SESSIONS=6 FLEET_GLOBAL_MAX_SESSIONS=0 \
-  FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master FLEET_PRESPAWN_DEDUP=0 \
+  FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master \
   "$BIN/dash-issue-session.sh" 77 --title "Machine cap probe" >"$WORK/spawn.out" 2>"$WORK/spawn.err"; rc=$?
 [ "$rc" = 2 ] || fail "D at the machine ceiling dash-issue-session.sh must exit RC_CAP=2 (got $rc)" "$(cat "$WORK/spawn.err")"
 grep -q '全机会话已满: 6/6.*carol 1 · alice 3 · bob 2' "$WORK/spawn.err" || fail "D the refusal must list every login's share" "$(cat "$WORK/spawn.err")"

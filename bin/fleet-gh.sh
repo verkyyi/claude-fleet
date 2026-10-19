@@ -22,9 +22,7 @@
 # the source. Order of attempts:
 #   1. cache — served only when EVERY requested field is in it and it is no older
 #      than --max-age (default 120s for an issue, 30s for a PR / checks; 0 = skip):
-#        issue  the spawn snapshot of THIS worktree's issue (fleet-issue-cache.py:
-#               number title state url body labels comments; ≤120s by design), else
-#               the collector's open-issue list (fleets/<slug>/issues + labels:
+#        issue  the collector's open-issue list (fleets/<slug>/issues + labels:
 #               number title state labels milestone, assignees unless clipped).
 #               An issue missing from the list (closed, never existed) is a miss,
 #               never a guess.
@@ -44,7 +42,7 @@
 # Keyed by (repo, N), never a bare number: the cache dir is the repo's slug, so a
 # 2-repo fleet never answers repo A's #5 with repo B's. Repo: --repo, else
 # $CF_REPO, else (a 2+ repo fleet) the calling window's repo, else this fleet's
-# cached repo, else FLEET_REPO — as bin/fleet-issue-file.sh resolves it.
+# cached repo, else FLEET_REPO.
 #
 # `pr checks`: no --json → {bucket} (pass | fail | pending | none — the rollup, same
 # fold as the dash's CI glyph). With --json → also `checks`, one row per check with
@@ -106,12 +104,6 @@ fi
 [ -n "$repo" ] || die "no repo resolved (set --repo or FLEET_REPO)"
 repo=$(fleet_norm_repo "$repo")
 
-# An issue of a FLEET_TICKETS=hub repo is a hub ticket (issue #3599): the ticket
-# door answers it in the same field names, never GitHub.
-if [ "$kind" = issue ] && [ "$(fleet_ticket_home "$repo" "$_fs")" = hub ]; then
-  exec bash "$BIN/fleet-ticket.sh" read "hub:$repo#$N" ${fields:+--json "$fields"}
-fi
-
 if ! command -v jq >/dev/null 2>&1; then
   command -v gh >/dev/null 2>&1 || die "gh not on PATH"
   set -- "$sub1" "$sub2" "$N" --repo "$repo"
@@ -147,15 +139,7 @@ emit() {
 
 # --- 1. the cache -------------------------------------------------------------
 cache_issue() {
-  local snap age line mil asg title labels have
-  # the spawn snapshot — only THIS worktree's own issue, ≤120s old by construction
-  if has_all "number title state url body labels comments" \
-     && snap=$(python3 "$BIN/fleet-issue-cache.py" json "$PWD" "$repo" "$N" 2>/dev/null); then
-    age=$(printf '%s' "$snap" | jq -r .age)
-    if [ "$age" -le "$max_age" ]; then
-      printf '%s' "$snap" | jq -c '.issue' | emit cache "$age"; return 0
-    fi
-  fi
+  local age line mil asg title labels have
   [ -f "$FD/issues" ] || return 1
   age=$(( NOW - $(mtime "$FD/issues") )); [ "$age" -lt 0 ] && age=0
   [ "$age" -le "$max_age" ] || return 1

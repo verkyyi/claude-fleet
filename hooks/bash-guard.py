@@ -8,8 +8,8 @@ Claude Code never prompts before a Bash call. For the handful of commands that
 are genuinely irreversible, this deny-list is the only thing between a stray
 token and a destroyed working tree. It ships GENERIC rails only — the ones that
 are dangerous in ANY repo (rm -rf on / ~ .git; a force-push onto the base
-branch) — plus the fleet messaging rails (raw `tmux` send-keys, issue #437; a
-raw `gh` issue-comment from a fleet pane, issue #483) and the fleet-delete rail
+branch) — plus the fleet messaging rail (raw `tmux` send-keys, issue #437; the
+raw-`gh`-comment rail of #483 left with the comment wrapper, #4898) and the fleet-delete rail
 (a `tmux` kill-server / kill-session / session kill-window aimed at a FLEET's
 server, issue #1841 — judged by bin/tmux-shim/tmux), which self-scope to fleet
 context. Operator-specific rails (prod hosts, DB/k8s guards) live in a local
@@ -31,9 +31,9 @@ call. Every messaging-rail block observed in the fleet's transcripts (56 of
 them) hit a COMPOUND command — median 1.2 KB, up to 34 statements — so a batch
 that commits, probes, writes files and only THEN posts a report lost all of it,
 including hand-authored report bodies that had to be regenerated. Claude Code
-lets a PreToolUse hook return `updatedInput` instead, so the messaging rails now
-REWRITE the one offending statement onto the sanctioned wrapper and let the
-other 33 run. A rail that can repair the command has no reason to throw work
+lets a PreToolUse hook return `updatedInput` instead, so a rail that can repair
+a statement (the heavy-job queue, the deps rails) REWRITES that one statement and
+lets the other 33 run. A rail that can repair the command has no reason to throw work
 away; the genuinely irreversible rails (rm -rf, force-push) still deny.
 
 FALSE-POSITIVE DISCIPLINE — the hard-won engineering this skeleton keeps:
@@ -53,10 +53,8 @@ FALSE-POSITIVE DISCIPLINE — the hard-won engineering this skeleton keeps:
     dangerous ARGUMENT is read from the raw text so quoting can't hide it.
   * Short-option bundles are matched as whole flag tokens (-rf, -Rf), so a
     dangerous letter inside `-print0` or a path does NOT trip a flag rule.
-  * The messaging rails self-scope to the ACTUAL hazard: the issue-comment rail
-    fires only when the target issue has a LIVE BOUND WORKER to be relayed
-    into, and the send-keys rail only when the target tmux server is a FLEET
-    server (an isolated `-L scratch` / `-S /tmp/...` test socket — the idiom
+  * The messaging rail self-scopes to the ACTUAL hazard: the send-keys rail
+    fires only when the target tmux server is a FLEET server (an isolated `-L scratch` / `-S /tmp/...` test socket — the idiom
     CLAUDE.md prescribes for testing tmux tooling — is not a hazard).
   * The guard fails OPEN on any internal error — a deny-list bug must never take
     every session down with it.
@@ -66,9 +64,6 @@ import sys, re, json, os, shlex, subprocess
 # The rewritten command, if a rail repaired one; emitted as updatedInput.
 _TOOL_INPUT = {}
 _REWRITE_NOTES = []
-
-WRAPPER = "~/.claude/fleet/bin/fleet-comment.sh"
-
 
 def allow():
     sys.exit(0)
@@ -343,41 +338,6 @@ def _in_fleet_pane():
     return _is_fleet_session(_current_session())
 
 
-# Does <issue> have a LIVE BOUND WORKER on this fleet's repo — i.e. is there
-# anything for an unmarked comment to be relayed INTO? This is the actual hazard
-# the rail guards (issue #483); without a bound worker a raw comment is inert.
-# Reuses the bridge's own resolver so the guard and the relay agree on what
-# "bound" means. Any failure ⇒ True (assume the hazard and rewrite: the rewrite
-# is lossless, so guessing wrong costs nothing).
-def _issue_has_live_worker(issue):
-    lib = os.path.expanduser(
-        os.environ.get("FLEET_LIB", "~/.claude/fleet/bin/fleet-lib.sh")
-    )
-    bridge = os.path.join(os.path.dirname(lib), "fleet-issue-bridge.sh")
-    if not (os.path.exists(lib) and os.path.exists(bridge)):
-        return True
-    # Resolve the repo via fleet-lib, then ask the BRIDGE ITSELF (a read-only
-    # side door — sourcing the bridge would run its dispatch and fire a poll tick).
-    script = (
-        'source "$1" >/dev/null 2>&1 || exit 9\n'
-        'S=$(fleet_current_session 2>/dev/null)\n'
-        'R=$(fleet_repo_cached "$S" 2>/dev/null)\n'
-        '[ -n "$R" ] || R="${FLEET_REPO:-}"\n'
-        '[ -n "$R" ] || exit 9\n'
-        'bash "$2" --find-window "$3" "$R" 2>/dev/null\n'
-    )
-    try:
-        out = subprocess.run(
-            ["bash", "-c", script, "_", lib, bridge, str(issue)],
-            capture_output=True, text=True, timeout=10,
-        )
-    except Exception:
-        return True
-    if out.returncode == 9:
-        return True
-    return bool(out.stdout.strip())
-
-
 # --- RULES -------------------------------------------------------------------
 def check_segment(masked_seg, raw_seg, orig_seg, span, masked_cmd):
     """One statement. `masked_seg` is the lower-cased MASKED text (command
@@ -441,8 +401,8 @@ def check_segment(masked_seg, raw_seg, orig_seg, span, masked_cmd):
     if cmd_is(masked_seg, "tmux") and re.search(r"(?:^|\s)send-keys(?=\s|$)", masked_seg):
         if not _hatched(masked_cmd, "FLEET_ALLOW_SENDKEYS") and _sendkeys_targets_fleet(masked_seg):
             block(
-                "inter-agent messaging must go through `fleet-comment.sh "
-                "--to-worker` (the issue-bridge), not a raw tmux send-keys into a "
+                "inter-agent messaging must go through the `send` tool "
+                "(fleet-peer-send.sh), not a raw tmux send-keys into a "
                 "LIVE FLEET pane (bracketed-paste eats the Enter). An isolated "
                 "test socket (-S <path>, or -L <label> with no fleet conf) is not "
                 "guarded. Set FLEET_ALLOW_SENDKEYS=1 (env or inline, anywhere in "
@@ -466,41 +426,6 @@ def check_segment(masked_seg, raw_seg, orig_seg, span, masked_cmd):
         why = _tmux_destroy_refused(orig_seg)
         if why:
             block(why)
-
-    # 4) A raw `gh` issue-comment from a FLEET pane is REWRITTEN onto
-    #    fleet-comment.sh (issue #483, repaired-not-denied in #528). Every fleet
-    #    actor comments as the SAME gh account, so the issue-bridge cannot tell a
-    #    worker's own unmarked comment from a real human handback — an unmarked
-    #    comment on a bound issue passes the trust gate and is relayed BACK into
-    #    that worker as a spurious self-turn. The wrapper stamps the no-relay /
-    #    provenance markers the bridge filters on, so provenance must be stamped
-    #    at the SOURCE.
-    #
-    #    Two changes make that cost nothing. (a) SCOPE: the rail fires only when
-    #    the target issue actually has a live bound worker — of the 43 blocks it
-    #    produced, 36 came from scratch panes with no binding at all and only ONE
-    #    was the pane's own issue, so it was denying overwhelmingly inert
-    #    commands. (b) REPAIR: instead of killing a 34-statement batch, the one
-    #    offending statement is rewritten onto the wrapper (defaulting to --note,
-    #    the record-only mode) and everything else runs untouched.
-    m = re.match(r"\s*(?:sudo\s+|\w+=\S+\s+)*gh\b((?:\s+(?:-\S+|\S+=\S+))*)\s+issue\s+comment\b",
-                 masked_seg)
-    if m:
-        if _hatched(masked_cmd, "FLEET_ALLOW_RAW_COMMENT") or not _in_fleet_pane():
-            return
-        issue = _comment_issue_number(masked_seg[m.end():])
-        if issue is None:
-            block(
-                "raw gh issue-comment from a fleet pane, and the issue could not "  # no-gh-ok: a message
-                "be read as a plain number to rewrite it. Post through "
-                "`~/.claude/fleet/bin/fleet-comment.sh <issue> --note --body …` "
-                "(or --to-worker to deliberately drive the bound worker)"
-            )
-        if not _issue_has_live_worker(issue):
-            return          # nothing bound to relay into ⇒ the comment is inert
-        _rewrite(span, _wrapper_form(orig_seg, masked_seg),
-                 "#%s has a live bound worker; stamped --note (no-relay) so it "
-                 "cannot relay back as a spurious turn" % issue)
 
     # 5) A pkill that would sweep up other sessions' processes. Every fleet pane
     #    runs as the same user, so a loose pattern is a fleet-wide kill: on
@@ -686,38 +611,6 @@ def _sendkeys_targets_fleet(masked_seg):
     if m:
         return _is_fleet_session(m.group(1).strip("'\""))
     return _in_fleet_pane()               # the ambient server ($TMUX)
-
-
-def _comment_issue_number(rest):
-    """The issue positional of a gh `issue comment …`, or None if it is not a bare
-    number (a URL would be mangled by the wrapper's digit-strip, so refuse)."""
-    toks = rest.split()
-    skip_val = {"--body", "-b", "--body-file", "-f", "--repo", "-r", "--editor"}
-    i = 0
-    while i < len(toks):
-        t = toks[i]
-        if t.startswith("-"):
-            if "=" not in t and t.lower() in skip_val:
-                i += 2
-            else:
-                i += 1
-            continue
-        return t if t.isdigit() else None
-    return None
-
-
-def _wrapper_form(orig_seg, masked_seg):
-    """`gh [flags] issue comment …` → `<wrapper> --note …`, arguments untouched.
-
-    Spliced from `orig_seg` (original case, original quoting) so the body survives
-    verbatim; the match offsets come from the masked text, which is the same
-    length. gh's own flags on the `gh` command itself (`gh --repo …`) are dropped
-    with the head — the wrapper takes `--repo` as its own flag, which the argument
-    tail already carries when it was written that way."""
-    m = re.match(r"(\s*)((?:sudo\s+|\w+=\S+\s+)*)gh\b(?:\s+(?:-\S+|\S+=\S+))*\s+issue\s+comment\b",
-                 masked_seg)
-    lead, prefix = m.group(1), orig_seg[m.end(1):m.end(2)]
-    return "%s%s%s --note%s" % (lead, prefix, WRAPPER, orig_seg[m.end():])
 
 
 _REWRITES = []
@@ -1088,15 +981,11 @@ _DIRECT_TOOLS = {
     "fleet-await.sh": ("await", None),
     "fleet-peer-send.sh": ("send", None),
     "fleet-report-parent.sh": ("report", None),
-    "fleet-comment.sh": ("comment", None),
     "set-claude-state.sh": ("ask", ("blocked",)),
-    "fleet-evidence.sh": ("evidence", None),
     "fleet-handoff-file.sh": ("handoff", None),
     "fleet-pr-verdict.sh": ("pr_verdict", None),
     "fleet-pr-merge.sh": ("pr_merge", None),
-    "fleet-claim-brief.sh": ("brief", None),
-    "fleet-issue-file.sh": ("file_issue", None),
-    "fleet-gh.sh": ("gh", None),
+    "fleet-brief.sh": ("brief", None),
     "fleet-reap-policy.sh": ("set_reap", ("set",)),
     "fleet-dialog-answer.sh": ("answer_dialog", None),
     "fleet-task-record.sh": ("task", ("dispatch",)),

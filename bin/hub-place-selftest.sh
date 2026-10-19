@@ -295,7 +295,7 @@ place_has()   { grep -qF -- "$1" "$PLACE_LOG"; }
 # (issue #2237), so their order is not part of what "nothing changed" means.
 snap()        { cat "$WORK/spawn.rc" "$WORK/spawn.err"; sort "$GH_LOG"; cat "$TMUX_LOG" "$GIT_LOG"; }
 
-unset FLEET_PRESPAWN_DEDUP CCQUOTA_FLEET FLEET_HUB_LEASE_CMD FLEET_HUB_PLACE_CMD FLEET_HUB_STATUS_CMD FLEET_NODE_ALIASES
+unset CCQUOTA_FLEET FLEET_HUB_LEASE_CMD FLEET_HUB_PLACE_CMD FLEET_HUB_STATUS_CMD FLEET_NODE_ALIASES
 unset CCQUOTA_TOKEN CCQUOTA_HUB_URL   # a pane under the pre-#1491 stop-gap exports the token
 LEASE="$WORK/fakebin/fake-lease"; PLACE="$WORK/fakebin/fake-place"
 # A configured fleet (an empty conf; its repo is the overlay): the UUID is frozen

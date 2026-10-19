@@ -99,7 +99,7 @@ launch() {   # launch <box> [VAR=val …] -- [launcher args …] → the argv li
 }
 
 # --- A: FLEET_MOD=0 ≡ the pre-mod launch, byte for byte ------------------------
-for args in '' '/fleet-claim' '--model haiku' ; do
+for args in '' '/fleet-history' '--model haiku' ; do
   # shellcheck disable=SC2086  # word-split on purpose: each case is a small argv
   old=$(launch old -- $args)
   # shellcheck disable=SC2086
@@ -109,21 +109,21 @@ for args in '' '/fleet-claim' '--model haiku' ; do
 done
 printf 'FLEET_MODEL="opus"\nFLEET_MCP_CONFIG="none"\n' > "$WORK/old/conf/fleets/f1/conf"
 cp "$WORK/old/conf/fleets/f1/conf" "$WORK/new/conf/fleets/f1/conf"
-old=$(launch old -- '/fleet-claim')
-new0=$(launch new FLEET_MOD=0 -- '/fleet-claim')
+old=$(launch old -- '/fleet-history')
+new0=$(launch new FLEET_MOD=0 -- '/fleet-history')
 [ "$old" = "$new0" ] || fail "A: FLEET_MOD=0 changed the argv with an MCP flag in play" "$(printf 'old:\n%s\nnew:\n%s' "$old" "$new0")"
 ok "A FLEET_MOD=0: argv byte-identical to a pre-mod install (bare, seed prompt, --model, MCP)"
 
 # --- B: on by default, exactly one --plugin-dir=… ------------------------------
-on=$(launch new -- '/fleet-claim')
-want=$(printf '%s\n' "$old" | awk -v m="[--plugin-dir=$NEWMOD]" '$0 == "[/fleet-claim]" { print m } { print }')
+on=$(launch new -- '/fleet-history')
+want=$(printf '%s\n' "$old" | awk -v m="[--plugin-dir=$NEWMOD]" '$0 == "[/fleet-history]" { print m } { print }')
 [ "$on" = "$want" ] || fail "B: the default launch is not the old argv + one --plugin-dir before the prompt" "$(printf 'want:\n%s\ngot:\n%s' "$want" "$on")"
-[ "$(printf '%s\n' "$on" | tail -1)" = '[/fleet-claim]' ] || fail "B: the seed prompt is no longer the last positional" "$on"
-on1=$(launch new FLEET_MOD=1 -- '/fleet-claim')
+[ "$(printf '%s\n' "$on" | tail -1)" = '[/fleet-history]' ] || fail "B: the seed prompt is no longer the last positional" "$on"
+on1=$(launch new FLEET_MOD=1 -- '/fleet-history')
 [ "$on1" = "$on" ] || fail "B: FLEET_MOD=1 differs from the default" "$on1"
 ok "B FLEET_MOD on (default): exactly one --plugin-dir=<install>/mod/fleet, seed prompt kept last"
 
-nomod=$(launch old FLEET_MOD=1 -- '/fleet-claim')
+nomod=$(launch old FLEET_MOD=1 -- '/fleet-history')
 [ "$nomod" = "$old" ] || fail "B: no plugin folder beside bin/ must add nothing" "$nomod"
 ok "B no mod/fleet beside bin/ (pre-#1335 install): nothing added even with FLEET_MOD=1"
 

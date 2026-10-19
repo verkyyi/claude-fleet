@@ -147,7 +147,7 @@ they repaint instantly:
   book). `bin/fleet-children.sh` merges that ledger with each child's live state
   into one line per child plus the same `3/5 ✓ · 1!` summary the dash draws —
   one command instead of a `gh pr` + capture-pane per report — the check
-  `/fleet-claim` and `/fleet-epic-run` prescribe on a report (#940). Since #938
+  `/fleet-epic-run` prescribes on a report (#940). Since #938
   each event also carries a **tier** (`report_tier`): **loud** (someone must act —
   BLOCKED, FAILED not being fixed, REAPED unmerged/dirty, a true STOPPED, a child
   in `needs`) and **quiet** (MERGED, FAILED while fixing) are delivered; **silent**

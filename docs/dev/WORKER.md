@@ -1,6 +1,6 @@
 # Worker lifecycle — background and troubleshooting
 
-The executable instructions are [commands/fleet-claim.md](../../commands/fleet-claim.md). This document holds their rationale, incident references and troubleshooting, indexed by the same section titles. It is reference material, not another charter to preload. Issue #4325 (EPIC #4322) separates the two without changing the workflow, tool names, heading anchors or guards; the command stays at most 13,000 bytes. Codex's native skill continues to be generated from that command and `conf/codex-preamble.md` through `conf/agent-bundle.manifest`; do not maintain a second instruction copy.
+The executable flow is no longer a command: since issue #4898 a worker's flow (`brief` → implement → PR → `pr_verdict` / `pr_merge` → `report`) rides its SessionStart hook (`bin/fleet-worker-start-hook.sh`), and the GitHub-issue claim, comment, evidence and filing steps are gone (EPIC #4895 批 1). This document keeps the rationale, incident references and troubleshooting of the old lifecycle skill under its section titles — reference material, not a charter to preload.
 
 A worker is a full agent, not a deckhand (#441): it owns the implementation and landing. The rails protect shared state; they do not make the operator a routine approval gate. One worker owns one issue, one worktree and one PR. Work finishes with a confirmed merge and a report, or an explicit blocker.
 
@@ -64,7 +64,6 @@ Base breakage is one issue for the fleet (#2078): three workers once filed three
 
 A report is unconditional after merge (#574). `reported` means arrived; `queued` means delivery will retry when the parent wakes or reconnects (#1647); `orphaned` becomes a reminder when the parent is gone (#3117); `undelivered` means neither arrival nor queue and must be disclosed (#3439). Reports use the same hub path for a parent on another machine. This reporting cannot undo a successful merge.
 
-**A draft-only ticket stops at the draft.** The draft gate (#3715) changes the finish line: the brief supplies body markers; worker reports waiting and stops. Approval through `fleet-draft.sh approve` is delivered as the next turn, while rejection closes the PR. `@reap_policy merged` keeps an open draft's window from being reaped. See [DRAFT-PR.md](DRAFT-PR.md).
 
 **Merged is not live, and making it live is not yours.** In EPIC #883 a worker synced immediately after its own merge and swapped scripts and a daemon under the rest of the batch (#953). The live install is every session's floor. Workers take branch evidence; the driver takes the 已上线 column after batch-end synchronization, and install-sync follows stable when the operator moves it. A live-only evidence request never grants a worker permission to install.
 

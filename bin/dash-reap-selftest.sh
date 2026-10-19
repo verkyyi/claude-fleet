@@ -432,12 +432,12 @@ PATH="$WORK/fakepath:$PATH" \
 [ -d "$WORK/wt8" ] && fail "a verdict-less --exec must still reap the worktree"
 [ "$(srows 8)" = 0 ] || fail "a verdict-less --exec must record NO row (no invented state)" "$(cat "$LEDGER")"
 
-# B5: confirm y on dirty (issue-3) → KEEP worktree, kill; issue OPEN, claim released (#1542)
+# B5: confirm y on dirty (issue-3) → KEEP worktree, kill; issue untouched (#4898: no claim to release)
 : > "$TMLOG"; : > "$GHLOG"
 printf 'y' | run_reap "3" "@9" confirm
 [ -d "$WORK/wt3" ] || fail "confirmed reap on dirty must KEEP the worktree"
 grep -q 'CLOSE' "$GHLOG" && fail "confirmed reap on dirty must leave the issue OPEN (#867)"
-grep -q 'EDIT .*--remove-assignee @me' "$GHLOG" || fail "confirmed reap on dirty must release the claim (#1542)" "$(cat "$GHLOG")"
+grep -q 'EDIT' "$GHLOG" && fail "confirmed reap on dirty writes nothing to the issue (#4898)" "$(cat "$GHLOG")"
 grep -q 'KILL' "$TMLOG" || fail "confirmed reap on dirty should kill the window"
 # #471: the confirm path threads its verdict too — a KEPT dirty worktree is exactly
 # the resumable case the ledger row exists for.
@@ -451,7 +451,7 @@ printf 'y' | run_reap "2" "@9" confirm
 [ -d "$WORK/wt2" ] && fail "confirmed reap on clean+unmerged should remove the worktree"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-2 && fail "issue-2 branch should be deleted"
 grep -q 'CLOSE' "$GHLOG" && fail "confirmed unmerged reap must leave the issue OPEN (#867)"
-grep -q 'COMMENT .*did not land' "$GHLOG" || fail "confirmed unmerged reap must say what happened (#1542)" "$(cat "$GHLOG")"
+grep -q 'COMMENT' "$GHLOG" && fail "a reap writes no comment on the issue (#4898)" "$(cat "$GHLOG")"
 # #471: a force-reaped unmerged worker is indexed WITH its sha before the removal.
 # (That sha lives only until git gc prunes the now-unreachable commit — documented
 # in dash-reap.sh's reap_record; the row is still strictly better than none.)
@@ -847,16 +847,14 @@ grep -q 'dash-reap.sh <window-target>' "$BIN/../plugins/fleet-epic/commands/flee
 grep -q 'dash-reap.sh <slug>:issue-<N>' "$BIN/../plugins/fleet-epic/commands/fleet-epic-run.md" \
   || fail "fleet-epic-run.md must name dash-reap.sh <slug>:issue-<N> (#869, #1942)"
 
-# F5 (#867): a worker that never started is reaped, but its issue stays OPEN,
-# the claim is released and the note says "never started" — no false COMPLETED.
+# F5 (#867, #4898): a worker that never started is reaped and its issue is left
+# alone — no claim to release, no comment, no false COMPLETED.
 : > "$TMLOG"; : > "$GHLOG"
 run_reap_tok 33 @9 --yes
 [ "$TOK" = reaped:full ] && [ "$RC" = 0 ] || fail "--yes on a zero-commit worker must reap (got [$TOK] rc $RC)"
 [ -d "$WORK/wt33" ] && fail "the zero-commit worktree must be removed"
 grep -q CLOSE "$GHLOG" && fail "a never-started issue must stay OPEN (#867)"
-grep -q 'EDIT .*--remove-assignee @me' "$GHLOG" || fail "the claim must be released (#867)" "$(cat "$GHLOG")"
-grep -q 'COMMENT .*never started' "$GHLOG" || fail "the note must say it never started (#867)" "$(cat "$GHLOG")"
-grep -q 'fleet:no-relay' "$GHLOG" || fail "the reap note must carry the no-relay marker"
+grep -qE 'EDIT|COMMENT' "$GHLOG" && fail "a reap writes nothing to the issue (#4898)" "$(cat "$GHLOG")"
 kill "$AG" 2>/dev/null; wait "$AG" 2>/dev/null
 AG_WAIT_RC=$?
 AG_WAITED=1

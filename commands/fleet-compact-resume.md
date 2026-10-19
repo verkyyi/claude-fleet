@@ -21,7 +21,7 @@ session's map check), the recovery map you wrote before the compaction, and
 ## 2. Check, then continue
 
 Compare the map with what the brief shows — and, when it names a PR, its state
-(`mcp__fleet__gh` with `kind: pr`, `number`, `fields: state,mergeStateStatus`).
+(`mcp__fleet__pr_verdict` with its `pr`: one read, the merge gate's own word).
 Fix any drift in the map's favour of reality, then carry on with its **next step**
 in this same turn. Do not stop to ask whether to continue, and do not restate the
 map back — the operator has seen it.

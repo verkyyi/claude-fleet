@@ -128,7 +128,7 @@ eq "seat: @issue set while sitting in base checkout" "" \
 eq "seat: worker without FLEET_MAIN in env" worker \
   "$( cd "$WORK/issue-111" && unset FLEET_MAIN; FAKE_ISSUE=111 fleet_seat )"
 
-# 8–10. A scratch BOUND in place (issue #520, fleet-bind.sh): the branch became
+# 8–10. A scratch BOUND in place (issue #520, a since-retired bind): the branch became
 #    `issue-<N>` but the DIRECTORY is still `<repo>-scratch-<K>`, so the cwd glob
 #    can't see it. The window carries @issue + @worktree, and the seat is `worker`
 #    when cwd is inside that @worktree. The fake answers the whole

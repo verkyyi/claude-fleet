@@ -197,7 +197,7 @@ grep -qF 'sneaky' "$INJECT"         && fail "c102 (NONE assoc) must be suppresse
 grep -qF 'for the busy one' "$INJECT" && fail "c103 (worker WORKING) must be queued, not injected"
 # c105 carries `<!-- fleet:from role=worker issue=10 -->` on ITS OWN issue (#10) but
 # NO no-relay flag — the self-authored backstop (issue #425) must suppress it, so a
-# worker comment that skipped fleet-comment.sh isn't relayed back into itself. It is
+# worker comment that skipped the marker isn't relayed back into itself. It is
 # OWNER (passes the assoc gate), proving it's the self-ID check — not the gate — that
 # stops it. Without the backstop it would be a THIRD injection into @1.
 grep -qF 'worker self note' "$INJECT" && fail "c105 (self-authored, fleet:from issue=10) must be suppressed"

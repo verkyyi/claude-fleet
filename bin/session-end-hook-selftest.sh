@@ -286,7 +286,8 @@ grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "a panel row must not dispatch" "$(cat
 ok "panel (no @issue/@raw) → never touched"
 
 # ============================ ACTING PATHS ===================================
-# T6: MERGED worker → reap worktree+branch, close issue, landed row (PR resolved), window gone.
+# T6: MERGED worker → reap worktree+branch, landed row (PR resolved), window gone; the
+# issue is GitHub's to close (a PR's Closes #N — issue #4898), never the hook's.
 clr; REASON=prompt_input_exit ISS=1 WID='@1' GH_MERGED_HEAD=issue-1 GH_MERGED_PR=111 GH_CLOSES='closes #1' run_hook
 grep -q 'RUNSHELL' "$TMLOG" || fail "merged exit must dispatch the reap" "$(cat "$TMLOG")"
 grep -q 'KILL' "$TMLOG" || fail "merged exit must close the window"
@@ -295,8 +296,8 @@ git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-1 && fail "issue-1 branc
 [ "$(rows 1 landed)" = 1 ] || fail "merged exit must write ONE landed row for #1" "$(cat "$LEDGER")"
 lp="$(awk -F'\t' '$2==1{print $4}' "$LEDGER")"
 [ "$lp" = 111 ] || fail "landed #1 row must carry the resolved PR 111 (got [$lp])"
-grep -q 'CLOSE' "$GHLOG" || fail "merged exit must close the issue"
-ok "prompt_input_exit on MERGED → wt+branch reaped, issue closed, landed row (PR 111), window gone"
+grep -q 'CLOSE' "$GHLOG" && fail "the hook never closes an issue (#4898: the PR's Closes does)" "$(cat "$GHLOG")"
+ok "prompt_input_exit on MERGED → wt+branch reaped, landed row (PR 111), window gone, issue left to GitHub"
 
 # T6b-e (issue #2949): a merged PR is not a finished issue.
 # A merged PR that only REFERS to the issue (an intermediate fix) → reaped, issue open.

@@ -14,14 +14,8 @@
 #   2. ESCALATABLE FOR FREE — a scratch that turns real just pushes its branch and
 #      opens a PR (`fixes #N` optional). The prmap is repo-wide, so the janitor
 #      reaps a merged `scratch-<N>` like any worker on merge — zero new machinery.
-#      Or escalate it PROPERLY (issue #520): once the requirement is clear, file
-#      the issue and BIND this same session to it —
-#      `fleet-issue-file.sh --title "…" --bind`, or `fleet-bind.sh <N>` for an
-#      issue that already exists. That renames the branch `scratch-<K>` →
-#      `issue-<N>` in place (the DIRECTORY keeps its name, so the running Claude's
-#      cwd never moves), stamps @issue, drops @raw, and claims the issue — so the
-#      session that holds all the context becomes the worker, instead of spawning
-#      a second one to re-ground from zero.
+#      (Binding a scratch to an issue in place — issue #520 — left
+#      with issue #4898.)
 #   3. RESOLVABLE TRANSCRIPTS — the unique cwd fixes the "can't resolve the
 #      transcript from the shared base checkout" limit (#214): a scratch's own
 #      transcript is findable, and (issue #466) it is now CAPTURED in the
@@ -84,13 +78,10 @@
 # one launches with `--session-id <uuid>`, stamped as @norepo_sid, so fleet-restore
 # resumes THAT conversation in $HOME, not whatever else ran there last. No ledger
 # row (nothing lands).
-# A seeded no-repo session the person or a keyless session opens gets a DESK ticket
-# (issue #2676): `desk`-labelled in the desk repo (fleet_desk_repo), the window
-# stamped `@desk 1` `@issue N` `@repo <desk>` beside `@norepo 1` — still no
-# worktree — so a comment on it reaches the session. --desk[=<owner/name>] asks for
-# one from any caller (in that repo), --no-desk never files one.
 # A session the hub's task record owns (`--task T<n>`, issue #3325 — the hub's
-# start passes it) files none: the record is its ticket, stamped `@task T<n>`.
+# start passes it) is stamped `@task T<n>`: the record is its ticket. (The desk
+# ticket of #2676 — a GitHub issue filed for a no-code session — left with issue
+# #4898; --desk / --no-desk are accepted and do nothing. # compat-1v: 下一批删)
 #
 # --resume <sid> + --seed-file <f> [+ --worktree <dir>] (issue #3387): a PARKED
 # session with no issue coming back (a park's wake; the parker left with #4339) — the scratch
@@ -132,7 +123,7 @@ set_agent() {
   [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-raw-session: contradictory --agent values\n' >&2; exit 2; }
   AGENT=$1
 }
-NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; DESK_ARG=""; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; NATIVE_WT=0
+NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; NATIVE_WT=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -213,17 +204,10 @@ while [ "$#" -gt 0 ]; do
     # closed once done 10 minutes unless a --reap says otherwise; the person's
     # list hides it and `fleet ls` marks it.
     --test-identity) TEST_ID=1; shift ;;
-    # --desk[=<owner/name>] / --no-desk (issue #2676): a no-repo session's ticket.
-    # By default one the person (`--origin hub`) or a keyless session opens with a
-    # seed and no repo gets a desk ticket (fleet_desk_repo); --desk asks for one
-    # whoever opens it — in <owner/name> when named (a private project's no-code
-    # work is ticketed in ITS repo, 发起人拍板 6) — and --no-desk never files one.
-    --desk)        DESK_ARG=on; shift ;;
-    --desk=*)      DESK_ARG="${1#--desk=}"; shift ;;
-    --no-desk)     DESK_ARG=off; shift ;;
+    --desk|--desk=*|--no-desk) shift ;;   # the retired desk ticket (#4898)
     # --task T<n> (issue #3325): the hub's task record this session belongs to —
     # stamped @task (the top bar's number when there is no issue); the record is
-    # its ticket, so no desk ticket is filed (unless --desk asks for one).
+    # its ticket.
     --task)        TASK_REF="${2:-}"; shift 2 ;;
     --task=*)      TASK_REF="${1#--task=}"; shift ;;
     # --resume <sid> / --seed-file <f> / --worktree <dir> (issue #3387): see above.
@@ -243,16 +227,12 @@ if [ -n "$DRAFT" ] && [ -n "$PROMPT$SEED_FILE$RESUME_SID$TASK_REF$AS_ARG" ]; the
 fi
 case "$ORIGIN_WID" in ''|*[!A-Za-z0-9/:._-]*) ORIGIN_WID='' ;; esac
 case "$TASK_REF" in T[1-9]*) case "${TASK_REF#T}" in *[!0-9]*) TASK_REF='' ;; esac ;; *) TASK_REF='' ;; esac
-[ -n "$TASK_REF" ] && [ -z "$DESK_ARG" ] && DESK_ARG=off
 case "$RESUME_SID" in *[!0-9a-fA-F-]*) RESUME_SID='' ;; esac
-# A parked session's return (issue #3387): its seed is the first turn, and it never
-# files a desk ticket — whatever it had, it had before the park.
+# A parked session's return (issue #3387): its seed is the first turn.
 if [ -n "$RESUME_SID" ] || [ -n "$SEED_FILE" ] || [ -n "$WT_ARG" ]; then
-  [ -z "$DESK_ARG" ] && DESK_ARG=off
   [ -z "$NODE_ARG" ] && NODE_ARG=local          # its transcript and worktree are here
   if [ -z "$PROMPT" ] && [ -n "$SEED_FILE" ] && [ -s "$SEED_FILE" ]; then PROMPT=$(cat "$SEED_FILE"); fi
 fi
-case "$DESK_ARG" in ''|on|off) ;; */*/*|*[!A-Za-z0-9/._-]*|/*|*/) DESK_ARG=on ;; */*) ;; *) DESK_ARG=on ;; esac
 # Trim the seed; a whitespace-only prompt is no prompt (plain scratch).
 PROMPT="${PROMPT#"${PROMPT%%[![:space:]]*}"}"; PROMPT="${PROMPT%"${PROMPT##*[![:space:]]}"}"
 case "$AS_ARG" in
@@ -505,10 +485,6 @@ if [ "$BG" = 1 ]; then
   [ -n "$RESUME_SID" ] && owarg="$owarg --resume=$RESUME_SID"   # hex + dashes, checked above
   case "$WT_ARG" in '') ;; *"'"*) refuse "raw: --worktree path has a quote"; exit 1 ;;
     *) owarg="$owarg --worktree='$WT_ARG'" ;; esac
-  case "$DESK_ARG" in
-    '') ;; on) owarg="$owarg --desk" ;; off) owarg="$owarg --no-desk" ;;
-    *) owarg="$owarg --desk='$DESK_ARG'" ;;   # sanitized to owner/name below
-  esac
   _dispatch_q=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$DISPATCH") || exit 2
   _launch_q=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "${FLEET_LAUNCH:-}") || exit 2
   fleet_bg "FLEET_LAUNCH=$_launch_q FLEET_DISPATCH=$_dispatch_q FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$dfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
@@ -778,64 +754,6 @@ while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n 
 # subscription account + the fleet's default model (transparent when single-account).
 # On a new-window failure, roll back the just-created worktree + branch so a failed
 # spawn leaves no orphan (the janitor would otherwise inherit it).
-# --- the desk ticket (issue #2676, EPIC #2668 C8) -----------------------------
-# A no-code session the person or a keyless session opens — a design page, a piece
-# of research, a release — gets a ticket all the same, so a comment has somewhere
-# to reach it and its outcome somewhere to stay: filed in the desk repo with the
-# `desk` label (fleet-ticket.sh new — the one filer channel, plus one registry row
-# on the hub), the window stamped `@issue N` `@repo <desk>` `@desk 1` and still
-# `@norepo 1`: no workspace, $HOME as before. The bridge matches a window by its
-# own @repo + @issue, so a comment on the ticket becomes its next turn. Filed
-# before the window, cold path only — a failed open closes it again (not planned).
-# Off (fleet_desk_repo: FLEET_DESK →
-# FLEET_HOST, and the desk repo hosted here), --no-desk, a test identity, or no
-# seed ⇒ nothing filed, byte for byte as before.
-DESK_REPO=''; DESK_ID=''; DESK_N=''
-_desk_clip() {   # <chars> <text> — by character, never a cut UTF-8 byte
-  python3 -c 'import sys; n = int(sys.argv[1]); t = sys.argv[2]; print(t if len(t) <= n else t[:n - 1] + "…")' "$1" "$2"
-}
-if [ "$NOREPO" = 1 ] && [ "$warm" = 0 ] && [ "$TEST_ID" != 1 ] && [ "$DESK_ARG" != off ] && [ -n "$PROMPT" ]; then
-  case "$DESK_ARG" in
-    '') # the person (`--origin hub`), or a session with no key of its own (named by
-        # its identity, issue #4341 — a session template opened bare)
-        if [ "$ORIGIN_RAW" = hub ] || { [ -z "$ORIGIN_WID" ] && fleet_is_fid "$ORIGIN"; }; then
-          DESK_REPO=$(fleet_desk_repo "$SESS") || DESK_REPO=''
-        fi ;;
-    on) DESK_REPO=$(fleet_norm_repo "${FLEET_DESK_REPO:-verkyyi/claude-fleet}") ;;
-    *)  DESK_REPO=$(fleet_norm_repo "$DESK_ARG") ;;
-  esac
-  if [ -n "$DESK_REPO" ] && ! grep -qxF -- "$DESK_REPO" <<<"$(fleet_repos "$SESS")"; then
-    printf 'dash-raw-session: no desk ticket — %s is not a repo this fleet hosts\n' "$DESK_REPO" >&2
-    DESK_REPO=''
-  fi
-  if [ -n "$DESK_REPO" ]; then
-    _dl=$(printf '%s\n' "$PROMPT" | awk 'NF { print; exit }')
-    _dtitle=${custom:-$_dl}
-    _dtitle=$(_desk_clip 80 "$_dtitle"); _dl=$(_desk_clip 300 "$_dl")
-    _dbody=$(fleet_ui_t desk_body_fmt "$_dl" "${ORIGIN:-hub}")
-    _dbody="$_dbody
-<!-- fleet:desk origin=${ORIGIN:-hub} -->"
-    _dt=$(bash "$BIN/fleet-ticket.sh" new --repo "$DESK_REPO" --title "$_dtitle" --body "$_dbody" \
-            --origin "${ORIGIN:-hub}" | head -1)
-    DESK_ID=${_dt%%	*}; DESK_N=${DESK_ID##*#}
-    case "$DESK_ID:$DESK_N" in
-      gh:*:[0-9]*) case "$DESK_N" in *[!0-9]*) DESK_ID='' ;; esac ;;
-      *) DESK_ID='' ;;
-    esac
-    if [ -z "$DESK_ID" ]; then
-      printf 'dash-raw-session: no desk ticket — filing in %s failed; the session opens without one\n' "$DESK_REPO" >&2
-      DESK_REPO=''; DESK_N=''
-    else
-      # The session reads its own ticket in its seed — not a slash command's,
-      # whose trailing words would become its arguments.
-      case "$PROMPT" in /*) ;; *) PROMPT="$PROMPT
-
-$(fleet_ui_t desk_seed_note_fmt "$DESK_ID")" ;; esac
-    fi
-    unset _dl _dtitle _dbody _dt
-  fi
-fi
-
 if [ "$warm" = 1 ]; then
   # already spawned + already warm: it only needs this fleet's name on it. @raw /
   # @worktree were stamped when it was warmed; the @pool_* marks were cleared by
@@ -868,8 +786,7 @@ else
       nsid=$(printf '%s' "$nsid" | tr 'A-F' 'a-f' | LC_ALL=C tr -cd '0-9a-f-')
       [ -n "$nsid" ] && launch="$launch --session-id $nsid"
     fi
-    stamp=$(fleet_win_stamp_cmd @norepo 1 ${nsid:+@norepo_sid "$nsid"} \
-              ${DESK_N:+@desk 1 @issue "$DESK_N" @repo "$DESK_REPO"})
+    stamp=$(fleet_win_stamp_cmd @norepo 1 ${nsid:+@norepo_sid "$nsid"})
   elif [ -n "$REPO_ARG" ]; then
     if [ "$NATIVE_WT" = 1 ]; then
       stamp=$(fleet_win_stamp_cmd @repo "$REPO_ARG" @native_worktree "$native_intent")
@@ -905,7 +822,6 @@ else
   launch_dir=$wt; [ "$NATIVE_WT" = 0 ] || launch_dir=$MAIN
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$launch_dir" "$stamp$launch; exec \$SHELL") \
     || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || [ "$NATIVE_WT" = 1 ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
-         [ -n "$DESK_ID" ] && bash "$BIN/fleet-ticket.sh" state "$DESK_ID" closed --reason not_planned >/dev/null 2>&1
          # Say WHY when it is the server (issue #2477): the line rides into
          # the hub's DECLINED / UNKNOWN answer as the refusal.
          _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"
@@ -921,11 +837,6 @@ fleet_admit_confirm >/dev/null   # the window is open: its admission holds on it
   if [ "$NOREPO" = 1 ]; then
     TM set-window-option -t "$win" @norepo 1 2>/dev/null    # deliberately no repo, no worktree
     [ -n "$nsid" ] && TM set-window-option -t "$win" @norepo_sid "$nsid" 2>/dev/null
-    if [ -n "$DESK_N" ]; then                                 # its desk ticket (#2676)
-      TM set-window-option -t "$win" @desk 1 2>/dev/null
-      TM set-window-option -t "$win" @issue "$DESK_N" 2>/dev/null
-      TM set-window-option -t "$win" @repo "$DESK_REPO" 2>/dev/null
-    fi
   else
     TM set-window-option -t "$win" @raw 1 2>/dev/null        # mark: raw/scratch, NOT issue-bound
     [ "$NATIVE_WT" = 1 ] || TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null

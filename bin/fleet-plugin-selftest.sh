@@ -27,8 +27,8 @@
 #      `<sha>`), so every merged commit is a new version and `/plugin update`
 #      always lands. A hand-pinned semver would freeze updates behind a manual
 #      bump — exactly the drift #611 removes.
-#   7. BOTH INSTALL SHAPES ARE TYPEABLE — fleet_cmd resolves the bare `/fleet-claim`
-#      of a copy install and the namespaced `/fleet:fleet-claim` of a plugin one,
+#   7. BOTH INSTALL SHAPES ARE TYPEABLE — fleet_cmd resolves the bare `/fleet-history`
+#      of a copy install and the namespaced `/fleet:fleet-history` of a plugin one,
 #      so the spawn seed lands as a command either way.
 #
 # Hermetic: reads the repo, writes only to a temp dir; no network, no tmux, and it
@@ -219,26 +219,26 @@ fi
 command -v fleet_cmd >/dev/null 2>&1 || fail "fleet-lib.sh does not define fleet_cmd — the spawn seed cannot adapt"
 
 mkdir -p "$WORK/copy/commands" "$WORK/plug/plugins/cache/claude-fleet/fleet/deadbeef/commands"
-: > "$WORK/copy/commands/fleet-claim.md"
-: > "$WORK/plug/plugins/cache/claude-fleet/fleet/deadbeef/commands/fleet-claim.md"
+: > "$WORK/copy/commands/fleet-history.md"
+: > "$WORK/plug/plugins/cache/claude-fleet/fleet/deadbeef/commands/fleet-history.md"
 
-got="$(CLAUDE_COMMANDS_DIR="$WORK/copy/commands" CLAUDE_CONFIG_DIR="$WORK/none" fleet_cmd fleet-claim)"
-[ "$got" = "/fleet-claim" ] || fail "a copy install must seed the bare command, got: $got"
-got="$(CLAUDE_COMMANDS_DIR="$WORK/none" CLAUDE_CONFIG_DIR="$WORK/plug" fleet_cmd fleet-claim)"
-[ "$got" = "/fleet:fleet-claim" ] || fail "a plugin-only install must seed the namespaced command, got: $got"
-got="$(CLAUDE_COMMANDS_DIR="$WORK/copy/commands" CLAUDE_CONFIG_DIR="$WORK/plug" fleet_cmd fleet-claim)"
-[ "$got" = "/fleet-claim" ] || fail "with BOTH installed the bare form must win (it still resolves), got: $got"
-got="$(CLAUDE_COMMANDS_DIR="$WORK/none" CLAUDE_CONFIG_DIR="$WORK/none" fleet_cmd fleet-claim)"
-[ "$got" = "/fleet-claim" ] || fail "with neither installed the bare form is the unchanged default, got: $got"
+got="$(CLAUDE_COMMANDS_DIR="$WORK/copy/commands" CLAUDE_CONFIG_DIR="$WORK/none" fleet_cmd fleet-history)"
+[ "$got" = "/fleet-history" ] || fail "a copy install must seed the bare command, got: $got"
+got="$(CLAUDE_COMMANDS_DIR="$WORK/none" CLAUDE_CONFIG_DIR="$WORK/plug" fleet_cmd fleet-history)"
+[ "$got" = "/fleet:fleet-history" ] || fail "a plugin-only install must seed the namespaced command, got: $got"
+got="$(CLAUDE_COMMANDS_DIR="$WORK/copy/commands" CLAUDE_CONFIG_DIR="$WORK/plug" fleet_cmd fleet-history)"
+[ "$got" = "/fleet-history" ] || fail "with BOTH installed the bare form must win (it still resolves), got: $got"
+got="$(CLAUDE_COMMANDS_DIR="$WORK/none" CLAUDE_CONFIG_DIR="$WORK/none" fleet_cmd fleet-history)"
+[ "$got" = "/fleet-history" ] || fail "with neither installed the bare form is the unchanged default, got: $got"
 got="$(FLEET_CMD_PREFIX=fleet CLAUDE_COMMANDS_DIR="$WORK/copy/commands" fleet_cmd fleet-handoff pickup /tmp/h.md)"
 [ "$got" = "/fleet:fleet-handoff pickup /tmp/h.md" ] || fail "FLEET_CMD_PREFIX must override and keep args, got: $got"
-got="$(FLEET_CMD_PREFIX='' CLAUDE_CONFIG_DIR="$WORK/plug" CLAUDE_COMMANDS_DIR="$WORK/none" fleet_cmd fleet-claim)"
-[ "$got" = "/fleet-claim" ] || fail "an EMPTY FLEET_CMD_PREFIX must force the bare form, got: $got"
+got="$(FLEET_CMD_PREFIX='' CLAUDE_CONFIG_DIR="$WORK/plug" CLAUDE_COMMANDS_DIR="$WORK/none" fleet_cmd fleet-history)"
+[ "$got" = "/fleet-history" ] || fail "an EMPTY FLEET_CMD_PREFIX must force the bare form, got: $got"
 ok "fleet_cmd seeds the form that resolves on each install shape, with an operator override"
 
 # --- 8. the seed site actually uses it ----------------------------------------
-grep -q 'fleet_cmd fleet-claim' "$BIN/dash-issue-session.sh" \
-  || fail "bin/dash-issue-session.sh no longer seeds through fleet_cmd — a plugin-only install would seed a literal that never expands"
-ok "the spawn seed goes through fleet_cmd, not a hardcoded slash command"
+grep -q 'fleet_cmd fleet-handoff pickup' "$BIN/fleet-handoff-cycle.sh" \
+  || fail "bin/fleet-handoff-cycle.sh no longer types its pickup through fleet_cmd — a plugin-only install would type a literal that never expands"
+ok "the handoff pickup goes through fleet_cmd, not a hardcoded slash command"
 
 printf '\nfleet-plugin-selftest: %d checks passed\n' "$pass"

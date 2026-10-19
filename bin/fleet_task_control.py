@@ -234,11 +234,14 @@ def report(pane, state, summary, pr, dry, socket="", outcome=""):
     # Keep the existing code-landing gate. Work outcome and code landing can be
     # reported independently using `fleet-task-record.sh report` with a result.
     if state == "merged":
-        if not pr or outcome not in ("", "succeeded"):
-            raise ValueError("merged report requires a PR and a success outcome")
-        gate = subprocess.run(["bash", str(BIN / "fleet-pr-verdict.sh"), pr], capture_output=True, text=True, timeout=20)
+        if outcome not in ("", "succeeded"):
+            raise ValueError("merged report requires a success outcome")
+        # No PR: a repo the fleet lands itself (FLEET_LAND=fleet, issue #3602) —
+        # the gate reads the window's own branch, as pr_verdict with no pr does.
+        gate = subprocess.run(["bash", str(BIN / "fleet-pr-verdict.sh")] + ([pr] if pr else []),
+                              capture_output=True, text=True, timeout=20)
         if gate.stdout.strip() != "MERGED":
-            raise ValueError("PR merge is unconfirmed; task result not recorded")
+            raise ValueError("the merge is unconfirmed; task result not recorded")
     outcome = outcome or "succeeded"
     if outcome not in ("succeeded", "failed") or not summary.strip():
         raise ValueError("explicit completion needs succeeded/failed and a summary")

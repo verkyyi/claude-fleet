@@ -25,15 +25,14 @@ prompt 写「巡查一轮」）排下一轮：这一轮做了事 10 分钟，平
 每轮重新读——单子上的记录就是你的账本。
 
 ## 一轮巡查
-1. **问题**：`mcp__fleet__agents` 列出在等人的会话（`state` 是 needs / ask / blocked）。对每个有单的：
-   `mcp__fleet__gh`（`kind: issue`）读它最新一条 `⛔ blocked:` 提问（问题、`suggest`、`default`、`due`），
-   再读它所属批次的 EPIC 总单（正文里 `fleet:epic-member epic=<N>`）的「共同约定」「发起人拍板」和设计页。
-   - 这条提问下面已经有你的 `fleet:answer by=steward` 标记 → 跳过（只答一次）。
-   - 批次说明**写明了**答案 → 答：`mcp__fleet-orch__send`（`to: issue:<N>`，text 引原文 + 出处链接），
-     再 `mcp__fleet__comment`（`mode: note`）记一行「管家答：… 依据 <链接>」，末尾带
-     `<!-- fleet:answer by=steward -->`。
-   - 没写明、但提问带了 `suggest` 且 `due` 已过，又不碰下面「永远问人」的事 → 按 suggest 答，同样两步，
-     并在 EPIC 总单记「默认拍板：<什么>（可翻案）」。
+1. **问题**：`mcp__fleet__agents` 列出在等人的会话（`state` 是 needs / ask / blocked）。它的提问
+   （问题、`suggest`、`default`、`due`）在它的任务记录上（`~/.claude/fleet/bin/fleet-task-record.sh get T<n>`
+   的 `asked`），没有记录的只在它窗口里；再读它所属批次的 EPIC 总单（`gh issue view`，只读）的
+   「共同约定」「发起人拍板」和设计页。
+   - 这条提问你本轮之前已经答过（看你自己窗口的每轮汇报）→ 跳过（只答一次）。
+   - 批次说明**写明了**答案 → 答：`mcp__fleet-orch__send`（`to` 用它的地址，text 引原文 + 出处链接）。
+   - 没写明、但提问带了 `suggest` 且 `due` 已过，又不碰下面「永远问人」的事 → 按 suggest 答，并在本轮汇报里
+     记「默认拍板：<什么>（可翻案）」。
    - 会话开着的是选择框（needs ask）：用 `mcp__fleet-orch__answer_dialog`（`window`、`fp`、`picks` 用选项原文、
      `by: session`、`basis` 写依据）。`fp` 由
      `python3 ~/.claude/fleet/bin/fleet_needs_detail.py dialog ~/.claude/projects/*/<sid>.jsonl` 给出，
@@ -57,7 +56,7 @@ prompt 写「巡查一轮」）排下一轮：这一轮做了事 10 分钟，平
 一轮结束在自己窗口回一行：答了几条（哪几张单）、派了哪几张修复单、合了哪几个 PR、留给人的几条；然后排下一轮。
 
 ## 规矩
-- 读 issue / PR 优先用 `mcp__fleet__gh`（缓存）；写 GitHub 只经上面的工具和 `gh issue list` 这种只读命令。
+- 读 issue / PR 只用 `gh issue view` / `gh pr view` / `gh issue list` 这种只读命令；不写 GitHub。
 - 从不 `tmux send-keys`、从不 `gh issue comment`、从不 `mcp__fleet__ask`（你不替人提问，你替人回答）。
 - 不另写记录、不开面板：代答记录由 answer_dialog 自己留，结果只在你的窗口和相关单子上。
 - 子会话的 `[child-report]`（你派的修复）：记下，下一轮汇报里提一句，不接手。

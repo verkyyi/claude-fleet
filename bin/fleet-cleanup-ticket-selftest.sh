@@ -1,19 +1,18 @@
 #!/bin/bash
-# Hermetic #4464 regression: run the production bound-ticket gate through the
-# real ticket door, with a loopback hub and a fake forge. No live tmux or writes.
-# selftest-deps: bin/fleet-cleanup.sh bin/fleet-ticket.sh bin/fleet_ticket.py bin/fleet-lib.sh
-# A task session (issue #4897): the worktree's record T<n> decides, no issue read.
+# Hermetic #4464 regression: run the production bound-issue gate of
+# bin/fleet-cleanup.sh (issue_open_gate) against a fake forge. No live tmux or writes.
+# selftest-deps: bin/fleet-cleanup.sh bin/fleet-lib.sh
+# Since issue #4898 there is no ticket store: an issue session's issue is read on
+# GitHub (fleet_ticket_state); a task session (issue #4897) is decided by its
+# worktree's record T<n>, and no issue is read.
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 python3 - "$BIN" <<'PY'
-import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 bin_dir = Path(sys.argv[1])
 # Exercise the actual gate in isolation; downstream destructive gates stay in
@@ -26,6 +25,7 @@ with tempfile.TemporaryDirectory(prefix='cleanup-ticket-') as tmp:
     repos = conf / 'fleets/fs/repos'
     repos.mkdir(parents=True)
     (conf / 'fs.conf').write_text('FLEET_SESSION=fs\n')
+    (repos / 'acme-widgets.conf').write_text('FLEET_REPO=acme/widgets\n')
     (root / 'home').mkdir()
     (root / 'fake').mkdir()
     ghlog = root / 'gh.log'
@@ -33,34 +33,12 @@ with tempfile.TemporaryDirectory(prefix='cleanup-ticket-') as tmp:
     gh.write_text('''#!/bin/bash
 echo "$*" >> "$GHLOG"
 [ "${GH_FAIL:-0}" != 1 ] || exit 1
-case "$*" in
-  *'--jq .state'*) echo "${GH_STATE:-CLOSED}" ;;
-  *) printf '{"id":"I_42","number":42,"url":"https://github.com/acme/widgets/issues/42","state":"%s"}\n' "${GH_STATE:-CLOSED}" ;;
-esac
+printf '%s\\t\\t\\n' "${GH_STATE:-CLOSED}"
 ''')
     gh.chmod(0o755)
     tmux = root / 'fake/tmux'
     tmux.write_text('#!/bin/sh\nexit 1\n')
     tmux.chmod(0o755)
-    response = {}
-    requests = []
-
-    class Hub(BaseHTTPRequestHandler):
-        def log_message(self, *args):
-            pass
-
-        def do_GET(self):
-            requests.append(self.path)
-            raw = json.dumps(response.get('body', {})).encode()
-            self.send_response(response.get('status', 200))
-            self.end_headers()
-            self.wfile.write(raw)
-
-    server = HTTPServer(('127.0.0.1', 0), Hub)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    (conf / 'node.env').write_text(
-        f'CCQUOTA_HUB_URL=http://127.0.0.1:{server.server_port}\nCCQUOTA_TOKEN=fixture\n')
     env = {k: v for k, v in os.environ.items() if not k.startswith(('FLEET_', 'CCQUOTA_', 'TMUX', 'CF_'))}
     env.update(HOME=str(root / 'home'), FLEET_CONF_DIR=str(conf), FLEET_SESSION='fs',
                PATH=str(root / 'fake') + ':' + os.environ['PATH'], GHLOG=str(ghlog),
@@ -75,64 +53,37 @@ note() { echo "$*" >&2; }
 done_token() { echo "$*"; }
 ''' + gate + '\nif issue_open_gate; then echo passed; fi\n')
 
-    def run(name, home='hub', state='open', expected='skip:issue-open', ticket=None, status=200, **extra):
-        (repos / 'acme-widgets.conf').write_text(f'FLEET_REPO=acme/widgets\nFLEET_TICKETS={home}\n')
-        response.clear()
-        response.update(status=status, body={'ticket': ticket if ticket is not None else {
-            'id': 'hub:acme/widgets#42', 'repo': 'acme/widgets', 'number': 42, 'state': state}})
-        requests.clear()
+    def run(name, expected='skip:issue-open', **extra):
         ghlog.write_text('')
         p = subprocess.run(['bash', str(harness)], env=dict(env, **extra), text=True, capture_output=True, timeout=15)
         assert p.returncode == 0 and p.stdout.strip() == expected, (name, p.returncode, p.stdout, p.stderr)
-        if home == 'hub':
-            assert not ghlog.read_text(), (name, 'hub read fell through to gh', ghlog.read_text())
-            assert all(x == '/v1/fleet/tickets/acme/widgets/42' for x in requests), (name, requests)
         print('ok', name)
 
-    try:
-        run('Hub OPEN + same-number merged forge closing ref stays open', GH_STATE='MERGED')
-        run('Hub CLOSED + merged PR advances to later gates', state='closed', expected='passed')
-        run('Hub OPEN + side-fix PR cannot finish current task', TEST_CLOSES='acme/widgets#43')
-        run('Hub CLOSED + side-fix still needs authoritative completion', state='closed', TEST_CLOSES='acme/widgets#43', expected='passed')
-        run('Hub MERGED is not a ticket terminal state', state='merged')
-        run('missing ticket fails closed', ticket={})
-        run('missing identity fails closed', ticket={'state': 'closed', 'number': 42})
-        for key, value in [('id', 'gh:acme/widgets#42'), ('id', 'hub:other/repo#42'),
-                           ('id', 'hub:acme/widgets#43'), ('number', 43)]:
-            t = {'id': 'hub:acme/widgets#42', 'number': 42, 'state': 'closed'}
-            t[key] = value
-            run('mismatched ' + str((key, value)), ticket=t)
-        run('hub unavailable has no forge fallback', status=503)
-        run('unknown provider refuses even matching forge refs', home='typo')
-        run('ambiguous branch refuses', state='closed', TEST_HEAD='issue-42-sidefix')
-        run('GitHub matching closing refs preserve fast path', home='github', state='open', expected='passed', GH_STATE='OPEN')
-        assert not ghlog.read_text(), 'GitHub fast path did an unnecessary read'
-        run('GitHub OPEN + side-fix refuses', home='github', GH_STATE='OPEN', TEST_CLOSES='acme/widgets#43')
-        run('GitHub CLOSED advances', home='github', expected='passed', TEST_CLOSES='acme/widgets#43')
-        run('GitHub MERGED is a PR, not closed issue', home='github', GH_STATE='MERGED', TEST_CLOSES='acme/widgets#43')
-        run('GitHub read failure refuses', home='github', GH_FAIL='1', TEST_CLOSES='acme/widgets#43')
-        # A session that carries a hub task record (issue #4897): the worktree's
-        # mark names T<n>, and the RECORD's word decides — the issue is never read.
-        main = root / 'main'
-        subprocess.run(['git', 'init', '-q', str(main)], check=True)
-        subprocess.run(['git', '-C', str(main), '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'b',
-                        '--allow-empty'], check=True)
-        wt = root / 'main-issue-42'
-        subprocess.run(['git', '-C', str(main), 'worktree', 'add', '-qb', 'issue-42', str(wt)], check=True)
-        gitdir = subprocess.run(['git', '-C', str(wt), 'rev-parse', '--absolute-git-dir'], check=True,
-                                text=True, capture_output=True).stdout.strip()
-        Path(gitdir, 'fleet-task').write_text('T42\n')
-        seam = root / 'task-closed'
-        seam.write_text('#!/bin/sh\necho "$1" >> "$GHLOG.task"\ncase "$TASK_ANSWER" in 0) echo SUCCEEDED ;; 1) echo WAITING ;; esac\n'
-                        'exit "$TASK_ANSWER"\n')
-        seam.chmod(0o755)
-        for answer, expected in (('0', 'passed'), ('1', 'skip:task-open'), ('3', 'skip:task-open')):
-            run('task record answer %s decides, no issue read' % answer, state='closed', expected=expected,
-                WT=str(wt), FLEET_TASK_CLOSED_CMD=str(seam), TASK_ANSWER=answer)
-            assert not requests, ('a task session read its issue', requests)
-            assert Path(str(ghlog) + '.task').read_text().split()[-1] == 'T42'
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
+    run('matching closing ref on a merged PR: the fast path, no read', expected='passed', GH_STATE='OPEN')
+    assert not ghlog.read_text(), 'the fast path did an unnecessary read'
+    run('OPEN + side-fix refuses', GH_STATE='OPEN', TEST_CLOSES='acme/widgets#43')
+    run('CLOSED advances', expected='passed', TEST_CLOSES='acme/widgets#43')
+    run('a merged PR is not a closed issue', GH_STATE='MERGED', TEST_CLOSES='acme/widgets#43')
+    run('a read failure refuses', GH_FAIL='1', TEST_CLOSES='acme/widgets#43')
+    run('an ambiguous branch refuses', TEST_HEAD='issue-42-sidefix')
+    # A session that carries a hub task record (issue #4897): the worktree's
+    # mark names T<n>, and the RECORD's word decides — the issue is never read.
+    main = root / 'main'
+    subprocess.run(['git', 'init', '-q', str(main)], check=True)
+    subprocess.run(['git', '-C', str(main), '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'b',
+                    '--allow-empty'], check=True)
+    wt = root / 'main-issue-42'
+    subprocess.run(['git', '-C', str(main), 'worktree', 'add', '-qb', 'issue-42', str(wt)], check=True)
+    gitdir = subprocess.run(['git', '-C', str(wt), 'rev-parse', '--absolute-git-dir'], check=True,
+                            text=True, capture_output=True).stdout.strip()
+    Path(gitdir, 'fleet-task').write_text('T42\n')
+    seam = root / 'task-closed'
+    seam.write_text('#!/bin/sh\necho "$1" >> "$GHLOG.task"\ncase "$TASK_ANSWER" in 0) echo SUCCEEDED ;; 1) echo WAITING ;; esac\n'
+                    'exit "$TASK_ANSWER"\n')
+    seam.chmod(0o755)
+    for answer, expected in (('0', 'passed'), ('1', 'skip:task-open'), ('3', 'skip:task-open')):
+        run('task record answer %s decides, no issue read' % answer, expected=expected,
+            WT=str(wt), FLEET_TASK_CLOSED_CMD=str(seam), TASK_ANSWER=answer)
+        assert not ghlog.read_text(), ('a task session read its issue', ghlog.read_text())
+        assert Path(str(ghlog) + '.task').read_text().split()[-1] == 'T42'
 PY

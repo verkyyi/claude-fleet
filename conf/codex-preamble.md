@@ -10,15 +10,15 @@ the task record and report (`report`, `state: merged`). Two kinds of binding:
   read it first with the `brief` tool (no arguments). There is no GitHub issue —
   never claim, comment on, close or file one for this work; the record is the
   ticket, and `report merged` closes it.
-- **An older GitHub issue** (until the issue road is removed): what follows the
-  rule is the fleet's `/fleet-claim` skill — the whole worker lifecycle — written
-  for Claude Code.
+- **A GitHub issue** (#N, opened on an existing issue): its words are your first
+  turn. Read them with `brief`, implement, open a PR whose body carries
+  `Closes #N`, land it with `pr_verdict` → `pr_merge`, then `report merged`. Never
+  claim, comment on or close the issue yourself (issue #4898).
 
 Follow it as written, with these translations (they are the only differences):
 
 - **Fleet slash commands are Codex skills here.** Claude spells them `/fleet-*`;
-  Codex spells the same installed skills `$fleet-*` (for example `$fleet-claim`
-  or `$fleet-context`). If this prompt contains an expanded command body, follow
+  Codex spells the same installed skills `$fleet-*` (for example `$fleet-context`). If this prompt contains an expanded command body, follow
   that body directly; otherwise use the native skill. For a context handoff,
   write private notes outside the worktree (goal, decisions, changes, tests,
   running jobs and next action), then call the fleet tool `transfer` with

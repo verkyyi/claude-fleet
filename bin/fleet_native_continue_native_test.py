@@ -326,7 +326,7 @@ def main():
         checkenv.pop('CCQUOTA_TOKEN', None)
         checkenv.pop('FLEET_WRAP_LAUNCH', None)
         with mock.patch.dict(os.environ, checkenv, clear=True):
-            observe.authority.ticket._CREDS = None
+            observe.authority.hubrest._CREDS = None
             plan = observe.inspect(pane, socket, pid, sid)
             assert plan['hooks']['state'] == 'missing' and plan['hub']['phase'] == 'observed', plan['hooks']
             step('legacy-observed', 'hooks missing, hub phase observed')

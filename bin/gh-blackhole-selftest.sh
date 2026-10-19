@@ -2,7 +2,7 @@
 # gh-blackhole-selftest.sh — the GitHub black-hole drill, sandbox half (issue
 # #4840, EPIC #4839 C1). GitHub has gone down a few times and each time all we
 # knew was «a lot of things spin». This drill cuts GitHub off three ways and runs
-# every row of conf/gh-blackhole.rows (the EPIC's 演练清单 1–12 + G1–G3) in a
+# every row of conf/gh-blackhole.rows (the EPIC's 演练清单 1–12 without 7 + G1–G2) in a
 # sandbox fleet, and prints, per row and way: what it did, how long it took and
 # how many times it went looking for GitHub — the EPIC's first reading.
 #
@@ -34,16 +34,16 @@
 # Output: the table (TSV, fixed columns `row mode result secs gh_tries note`,
 # gh_tries = gh calls + other GitHub connections, note = `cli=N net=M rc=R` and
 # the row's first stderr line), then the EPIC's metric line:
-#   核心照常 X/12 · G 行不卡 Y/3 · 卡住 Z 格 · GitHub 尝试 T 次
+#   核心照常 X/11 · G 行不卡 Y/2 · 卡住 Z 格 · GitHub 尝试 T 次
 #
 # Hermetic: a sandbox HOME / FLEET_CONF_DIR / TMPDIR per row, a fake tmux (no
 # server), a stand-in hub serving only the join script, every listener on 127.0.0.1, all leftovers killed with their row.
 #
 # Drives: bin/gh_blackhole.py, conf/gh-blackhole.rows, bin/fleet-install-sync.sh,
-# bin/fleet-claim-brief.sh, bin/fleet-gh.sh, bin/fleet-report-parent.sh,
-# bin/fleet-comment.sh, bin/session-end-hook.sh,
+# bin/fleet-brief.sh, bin/fleet-gh.sh, bin/fleet-report-parent.sh,
+# bin/session-end-hook.sh,
 # bin/fleet-history.sh, bin/fleet-codex.sh, bin/fleet-pr-verdict.sh,
-# bin/fleet-issue-file.sh, bin/fleet-gh-lib.sh, bin/fleet-lib.sh,
+# bin/fleet-gh-lib.sh, bin/fleet-lib.sh,
 # tokenledger/hub/api/fleet_join.go (the join line's script path), bin/fleet-node-join.sh.
 set -uo pipefail
 
@@ -304,22 +304,6 @@ i=0; while [ "$i" -lt "$N" ]; do
 done
 printf '\n核心照常 %s/%s · G 行不卡 %s/%s · 卡住 %s 格 · GitHub 尝试 %s 次 · 挡法 %s · %ss\n' \
   "$core" "$corerun" "$g" "$grun" "$HANGS" "$TRIES" "$(printf "%s," $MODES | sed "s/,$//")" "$(( $(date +%s) - START ))"
-
-# 写丢的认领 / 评论 / 证据 (the EPIC's metric): row 7's writes, made while GitHub
-# is cut off. Nothing reaches GitHub during the drill, so a write is kept only if
-# it waits in the retry queue ($FLEET_CONF_DIR/gh-outbox, EPIC #4839 C5); the
-# rest are lost — `报了成功` counts the ones whose command still exited 0.
-for m in $MODES; do
-  c="$WORK/$m/7"; [ -s "$c/writes" ] || continue
-  w=$(wc -l < "$c/writes" | tr -d ' ')
-  said=0; [ -f "$c/writes.lost" ] && said=$(wc -l < "$c/writes.lost" | tr -d ' ')
-  q=0; [ -d "$c/conf/gh-outbox" ] && q=$(find "$c/conf/gh-outbox" -type f | wc -l | tr -d ' ')
-  [ "$q" -gt "$w" ] && q=$w
-  silent=$((w - said - q)); [ "$silent" -lt 0 ] && silent=0
-  note=''
-  [ "$(cut -f1 "$c/verdict" 2>/dev/null)" = hang ] && { silent=0; note=' (cut at the cap: the write in flight and the rest never ran)'; }
-  printf '写丢（%s）%s/%s · 记下待补 %s · 报了成功却没写上 %s%s\n' "$m" "$((w - q))" "$w" "$q" "$silent" "$note"
-done
 
 case " $PICK ${IDS[*]-} " in *" 3 "*|*,3,*) printf '登不进入口的人：入口侧（row 3），沙箱读不了 — 现场版读入口库里只挂 GitHub 一种登录的人数\n' ;; esac
 

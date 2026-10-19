@@ -186,7 +186,7 @@ spawn() {
   local n=$1; shift
   rm -f "$WORK/spawn.out" "$WORK/spawn.err"
   T0=$(now)
-  env "$@" PATH="$WORK/fakebin:$PATH" FLEET_ORIGIN_GATE=0 FLEET_PRESPAWN_DEDUP=0 \
+  env "$@" PATH="$WORK/fakebin:$PATH" FLEET_ORIGIN_GATE=0 \
     FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master \
     FLEET_WORKTREE_ROOT="$WORK/wt" \
     "$SPAWN" "$n" "$SESS" --title "task $n" --origin hub --print \

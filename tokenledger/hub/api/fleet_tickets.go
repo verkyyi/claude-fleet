@@ -40,7 +40,7 @@ import (
 // owner's connected nodes that listed CapTicket (pushTicket).
 const (
 	FleetTicketsPath = "/v1/fleet/tickets"
-	// FleetTicketRegisterPath is #2676's registry road (bin/fleet-ticket.sh
+	// FleetTicketRegisterPath is #2676's registry road (the node ticket script, gone since claude-fleet#4898
 	// new): a GitHub ticket a node opened, now written as a gh ticket here.
 	FleetTicketRegisterPath = "/v1/fleet/tickets/register"
 
@@ -624,7 +624,7 @@ func (s *Server) pushTicket(owner string, ev control.Ticket) {
 	})
 }
 
-// --- the registry of #2676 (bin/fleet-ticket.sh's road) --------------------
+// --- the registry of #2676 (the node ticket script's road, gone since claude-fleet#4898) --------------------
 
 // FleetTicketRegisterRequest is the body: the registry fields, nothing else.
 type FleetTicketRegisterRequest struct {

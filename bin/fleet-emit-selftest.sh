@@ -346,8 +346,6 @@ ok; grep -q 'fleet-emit.sh session.start --stdin-json' "$BIN/../hooks/settings-h
   || fail "session.start must hang off the SessionStart hook"
 ok; grep -q 'fleet-emit.sh session.end --via hook --stdin-json' "$BIN/../hooks/settings-hooks.json" \
   || fail "session.end (via=hook) must hang off the SessionEnd hook"
-ok; grep -q 'fleet-emit\.sh" session\.bind' "$BIN/fleet-bind.sh" \
-  || fail "session.bind must be emitted by the scratch→worker promotion"
 ok; grep -q 'session\.end --via reap' "$BIN/fleet-lib.sh" \
   || fail "session.end (via=reap) must ride fleet_reap_record, the one reap choke point"
 

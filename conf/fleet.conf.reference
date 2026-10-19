@@ -178,19 +178,6 @@ FLEET_BASE_BRANCH="main"
 # off for that repo. `fleet-repo.sh get <KEY> <owner/repo>` prints what a repo sees.
 # A fleet with no repos/ overlay reads every key exactly as it always has.
 
-# Where a repo's tickets live (issue #3595, EPIC #3570): `hub` keeps them on the
-# hub (/v1/fleet/tickets — opened, read, commented, claimed and closed without
-# GitHub; ids read `hub:<owner/name>#<N>`), anything else (unset) on GitHub. Only
-# the tickets move — code and PRs stay on the repo's forge. A repo added on a login
-# that reaches a hub (`fleet-repo.sh add`, fleet-up) is written `hub`; on one that
-# does not, nothing; `add --tickets hub|github` says it outright (issue #3739). A
-# repo hosted before that is pinned to its current home by `fleet-conf.sh migrate`.
-# Set it in the repo's overlay before its first ticket: ONE repo has ONE home,
-# never two numberings. bin/fleet-ticket.sh is the door that reads it
-# (fleet_ticket_home); `fleet doctor`'s tickets row shows each repo's.
-# @label=Where tickets live @group=bridge @tier=internal @scope=fleet @edit=no
-#FLEET_TICKETS=github
-
 # Who runs this login's tasks: legacy | frozen | hub (issue #4901). It is the
 # PERSON's, not a repo's — the hub keeps one row per person (#4896) and every
 # gate asks whose action it is; a repo is only a field on a task. This login's
@@ -378,16 +365,6 @@ FLEET_CTX_WINDOW=200000
 # templates, EPIC #4333) to open one. FLEET_ORCHESTRATOR, FLEET_STEWARD and the FLEET_ORCH_* /
 # FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL|REVIVE_SECS knobs are gone with it.
 
-# Desk tickets (issue #2676): a session the orchestrator or you open with no repo
-# (a design page, research, a release) gets a `desk`-labelled ticket of its own in
-# FLEET_DESK_REPO, bound to the window like an issue (no workspace), so a comment
-# there reaches it and its outcome stays there. Default: on where this computer
-# hosts sessions (FLEET_HOST=1); 0 = never. The desk repo must be one this fleet hosts, else no ticket is filed.
-# @label=Desk tickets @group=spawn @tier=internal @scope=fleet @edit=bool
-#FLEET_DESK=1
-# @label=Desk repo @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_DESK_REPO="verkyyi/claude-fleet"
-
 # Keys (issue #3185, EPIC #3178 C7): a new install takes ONE key — the panel.
 # The CLIENT's two ([client] section): FLEET_KEY_PANEL is the panel's chord (cmd+p;
 # another, e.g. cmd+' · off = none); FLEET_KEYS_EXTRA brings back any other, one
@@ -525,9 +502,9 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #            argv is byte-for-byte unchanged.
 #   codex    OpenAI Codex CLI (`codex`, 0.154+), via bin/fleet-codex.sh. Modern
 #            Codex reads native skills from $CODEX_HOME/skills, so a bare
-#            `/fleet-claim` seed becomes `$fleet-claim` when that home has been
+#            `/fleet-<cmd>` seed becomes `$fleet-<cmd>` when that home has been
 #            synced; old Codex / unsynced homes still fall back to the prose
-#            prompt (conf/codex-preamble.md + commands/fleet-claim.md). The
+#            prompt (conf/codex-preamble.md + commands/<cmd>.md). The
 #            fleet's Stop / PostToolUse / PreToolUse hooks ride inline as `-c hooks.*`
 #            (dash state + the bash-guard and base-checkout guard — Codex's hook
 #            schema is Claude Code's); CLAUDE.md is read as the project doc; and
@@ -763,7 +740,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 
 # --- Child → parent outcome reports (bin/fleet-report-parent.sh, issue #574) -----
 # ON by default. When a worker that was SPAWNED BY ANOTHER SESSION (`@origin` names
-# an `issue-<N>` / `scratch-<N>` window — a `fleet-issue-file.sh --spawn` follow-up,
+# an `issue-<N>` / `scratch-<N>` window — a spawned follow-up,
 # a scratch escalation) merges its PR, hits a blocker, or is reaped, it PUSHES a
 # fixed four-line report to that session over the peer channel (fleet_peer_send, the
 # SendMessage inbox socket — never send-keys). Before this, the parent's only option
@@ -809,19 +786,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Stalled child escalation interval @group=spawn @tier=internal @scope=fleet @edit=int @unit=seconds
 #FLEET_AWAIT_STALL_SECS=1200
 
-# --- Default milestone for filed issues (bin/fleet-issue-file.sh, issue #433) ----
-# Guarantee EVERY filed issue gets a milestone so nothing lands unsorted. When set,
-# the one issue-filer channel (⌃n, the dash new-session box, the hub's file+spawn
-# — all route through bin/fleet-issue-file.sh, #332) defaults a filing that passes no
-# --milestone to THIS milestone; you re-bucket it to a proper theme during
-# triage. The milestone is AUTO-CREATED if absent (idempotent), and it is BEST-EFFORT
-# (issue #297): if the milestone plumbing fails the issue still files WITHOUT one, so
-# ⌃n never fails to file. An explicit --milestone always wins. Empty/unset = OFF
-# (current behaviour — filings stay milestone-less). Per-fleet: e.g. verkyyi/claude-fleet
-# already has a `Triage` milestone; set it here to auto-sort every filing into Triage.
-# @label=Default milestone for filed issues @group=backlog @tier=common @scope=fleet @edit=str
-#FLEET_DEFAULT_MILESTONE=""
-
 # --- Issue-bridge: issue comments → the bound worker's next turn (issue #132) ---
 # OFF by default. When enabled for a fleet, the issue-bridge daemon
 # (com.claude-fleet.issue-bridge, ~15s poll — or a webhook, see docs/dev/ISSUE-BRIDGE.md)
@@ -834,7 +798,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # the headline control; un-gated relay on a PUBLIC repo is unsafe. Loop-safety: the
 # bridge relays every comment from a trusted author UNLESS it carries the marker
 # `<!-- fleet:no-relay -->` — fleet-internal comments (worker progress, an operator
-# record) MUST be posted via bin/fleet-comment.sh (which stamps the marker), so
+# record) MUST carry that marker, so
 # nothing the fleet writes loops back in. See docs/dev/ISSUE-BRIDGE.md.
 # @label=Relay issue comments to worker @group=bridge @tier=common @scope=fleet @edit=bool
 #FLEET_ISSUE_BRIDGE=0
@@ -850,7 +814,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Bridge: webhook HMAC secret @group=bridge @tier=advanced @scope=global @edit=str
 #FLEET_ISSUE_BRIDGE_SECRET=""
 # Revive a DORMANT issue: when a trusted comment lands on an OPEN issue whose
-# worker window is gone, re-spawn the worker (its /fleet-claim re-reads the issue,
+# worker window is gone, re-spawn the worker (its brief re-reads the issue,
 # comment and all). OFF by default — turn on once you trust the gate. A closed/
 # landed issue is left alone (resume via #130 is a follow-up).
 # @label=Bridge: revive dormant issues @group=bridge @tier=advanced @scope=fleet @edit=bool
@@ -1047,7 +1011,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # `FLEET_WEBHOOK_DEBOUNCE` seconds that coalesces a CI event storm (default 3; 0
 # disables). See docs/dev/WEBHOOK.md.
 
-
 # ── session lifecycle emitter (issue #625) ────────────────────────────────────
 # OFF unless FLEET_EMIT_URL is set — and OFF means OFF: no spool file, no socket,
 # no behaviour change anywhere. The fleet's value is that it works on a laptop with
@@ -1082,7 +1045,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # in events (default 500 — on overflow the OLDEST are dropped, so a permanently
 # dead endpoint costs bounded disk and keeps the fresh tail), and
 # `FLEET_EMIT_TIMEOUT`, the per-POST curl timeout in seconds (default 5).
-
 
 # Seconds the backlog panel's issue preview (⌃p) caches each issue's detail
 # before re-fetching from gh. Lower = fresher body/comments, more API chatter.
@@ -1312,7 +1274,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # ledger-watch / quotawatch got ZERO — each having last run at a hand-kick
 # minutes earlier. So cleanup stops reaping workers, dispatch stops autofilling,
 # base-sync stops fast-forwarding the base, issue-bridge stops relaying comments
-# (`fleet-comment.sh --to-worker` silently reaches nobody), ledger-watch stops
+# (a comment for the worker silently reaches nobody), ledger-watch stops
 # indexing closed sessions — none of it visible, because nothing errors.
 #
 # bin/fleet-daemon-watch.sh watches all of them off a per-unit scheduling stamp,
@@ -1565,13 +1527,11 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Degenerate-output ⟲ mark @group=status @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_DEGENERATE_MARK_SECS=1800
 
-
 # Language for tmux UI labels and fleet-facing toasts. `auto` follows this
 # login's locale (zh* => Chinese, en* => English; C/unset keeps existing Chinese);
 # set en or zh to force.
 # @label=Tmux UI language @group=status @tier=common @scope=fleet @edit=enum @options=auto,en,zh
 #FLEET_UI_LANG=auto
-
 
 # The notification when a session needs you (issues #1951, #2759, #3005):
 # 在问你 (a question, an approval, a sign-in) and 卡住 with a sound, 做完
@@ -1621,9 +1581,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # F9 / ⌂ / prefix g are never rewritten. 0 = today's behaviour exactly.
 # @label=Closing a task lands on the next task @group=status @tier=common @scope=fleet @edit=bool
 #FLEET_CLOSE_LANDS_NEXT=1
-
-
-
 
 
 
@@ -2809,81 +2766,22 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=In-flight spawn TTL (s) @group=spawn @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_INFLIGHT_TTL=180
 
-# --- Cross-machine pre-spawn dedup (bin/dash-issue-session.sh, issue #258) --------
-# ON by default (set to 0 to opt out). The local spawn dedup only sees THIS machine's
-# tmux server. When two fleets run on DIFFERENT machines against the SAME repo, a
-# peer's worker is invisible, so both can spawn issue-<N> — duplicate worktrees, a
-# non-fast-forward push race, and competing PRs. With this on, every spawn first
-# consults the shared GitHub issue as the claim ledger (assignee · state · a ▶
-# claiming comment · an open PR); if the issue is already claimed it refuses. If free
-# it claims AT SPAWN (assignee + marker) — not on the worker's first /fleet-claim
-# turn, which was the race — then a best-effort tie-break (earliest ▶ claiming
-# comment wins) rolls back and refuses if a peer claimed in the same sub-second overlap.
-#
-# NOT a mutex: GitHub has no compare-and-swap on an issue, so this SHRINKS the
-# duplicate-spawn window to a sub-second race, it does not eliminate it. COST: a few
-# gh READS per spawn (latency + a little rate limit) — claim-at-spawn only moves the
-# worker's own /fleet-claim writes earlier (same write count; /fleet-claim then
-# no-ops), and a gh outage/absence degrades to spawn-anyway, never a false refusal. A
-# single-machine fleet that wants the zero-gh fast path can set this to 0. Same-account
-# caveat: all workers assign the SAME gh account, so a HUMAN self-assigning an issue
-# they aren't fleet-working reads as taken and is skipped (arguably correct). Stale
-# claim from a dead worker? Spawn past it with `dash-issue-session.sh <N> --force`
-# (alias --reclaim).
-# @label=Cross-machine pre-spawn dedup @group=spawn @tier=common @scope=fleet @edit=bool
-#FLEET_PRESPAWN_DEDUP=1
-
 # --- Auto-merge strategy (issue #283) ---------------------------------------
 # The GitHub auto-merge strategy the fleet ARMS. THE FLEET NEVER MERGES — the
-# worker's /fleet-claim ship step (and the dash ⌃l arm) run
+# worker's ship step (and the dash ⌃l arm) run
 # `gh pr merge --auto --<method>`; GitHub performs the merge when the PR is green.
 # squash (default) | merge | rebase. An unset/typo'd value falls back to squash so
 # arming never breaks on a bad key. Per-fleet ▸ global ▸ default.
 # @label=Auto-merge method @group=spawn @tier=common @scope=fleet @edit=enum
 #FLEET_MERGE_METHOD="squash"
 
-# --- Repo charter gate (issue #283) -----------------------------------------
-# When 1, /fleet-claim loads the repo-shipped worker CHARTER from
-# $FLEET_MAIN/.fleet/worker.md and layers it UNDER the fleet overlay (operator)
-# charter.
-# OFF by default (fail-closed): a .fleet/*.md is an INJECTION SURFACE — a PR that
-# lands without human review could rewrite the charter every future worker then
-# obeys. Opt in ONLY on a repo where you trust what
-# lands, and on a public repo protect .fleet/ with CODEOWNERS + required review.
-# The fleet OVERLAY charter (~/.config/.../fleets/<session>/worker.md)
-# needs no gate — only the operator writes it, and it wins on conflict.
-# @label=Load repo charters @group=spawn @tier=advanced @scope=fleet @edit=bool
-#FLEET_REPO_CHARTER=0
-
-# --- Tap-first input steer (issue #328) -------------------------------------
-# When 1, the worker charter gains a shared "tap-first" block that steers a
-# session to OFFER a tappable AskUserQuestion menu (2–4 concrete options,
-# recommended-first) instead of an open-ended prose question when it needs a
-# BOUNDED decision from the operator — /fleet-claim appends it at worker charter
-# load (via fleet_worker_charter).
-# OFF by default — most operators are on a real keyboard. Turn it on per machine
-# for an operator who drives the fleet from an iPad / Termius soft keyboard, where
-# picking an option is ~one keystroke and composing prose is the real friction.
-# GUIDANCE, never enforcement: it must not force a menu where free text is correct,
-# and must not make sessions ask MORE — it steers HOW a needed question is asked,
-# not how often. Spends no extra tokens (charter text only). Per-fleet ▸ global ▸
-# default like any @scope=fleet key.
-# @label=Tap-first option menus @group=spawn @tier=common @scope=fleet @edit=bool
-#FLEET_TAP_FIRST=0
-
 # --- Worker seed prompt (issue #234) ----------------------------------------
-# The operator-facing BODY of the one-shot prompt a newly spawned IMPLEMENTING
-# worker is seeded with. Since issue #283 the seed COLLAPSES to essentially "run
-# /fleet-claim" (the skill carries the whole lifecycle: claim → charter → ground →
-# implement → open PR + arm auto-merge). The full seed is STRUCTURAL + body:
-#   Work GitHub issue #<n> in this repo. <run /fleet-claim …> <BODY><ship+stop tail>
-# Only <BODY> is customizable — the issue-binding head, the /fleet-claim ritual,
-# and the "open the PR + arm auto-merge, then STOP" tail are kept intact so the
-# fleet machinery still works. (For richer per-fleet standing orders, prefer the
-# fleet overlay worker charter — see FLEET_REPO_CHARTER above.) Unset ⇒ the
-# built-in default below. Placeholders {issue} and {repo} are substituted; a
-# trailing sentence-ender is stripped so the body flows into the tail. Per-fleet ▸
-# global ▸ default like any @scope=fleet key.
+# The operator-facing implementation directive a development session reads in its
+# brief (bin/fleet-brief.sh, the `brief` tool — issue #4898): the per-fleet HOW,
+# beside the flow the fleet fixes (implement → PR → pr_verdict / pr_merge →
+# report). Unset ⇒ the built-in default below. Placeholders {issue} (the task
+# T<n> or the issue number) and {repo} are substituted; a trailing sentence-ender
+# is stripped. Per-fleet ▸ global ▸ default like any @scope=fleet key.
 # A value of the form "@<path>" names a FILE whose contents are the body instead —
 # for a long or multi-line template the single-line modal editor can't hold (a
 # leading ~/ is expanded; unreadable ⇒ the spawn warns and uses the default). The

@@ -12,7 +12,7 @@
 #                            cannot press a key; the prompt is mid-turn for its whole
 #                            life, so the message waits for the answer that waits for
 #                            the message. (The same deadlock fleet-answer.sh measured.)
-#   fleet-comment --to-worker the issue-bridge daemon was dead — and a relayed comment
+#   a --to-worker comment     the issue-bridge daemon was dead — and a relayed comment
 #                            is still only a message.
 #   fleet-answer.sh          refused: no pending AskUserQuestion. Correctly.
 #   tmux send-keys           hook-blocked (#437), which points you back at the bridge.

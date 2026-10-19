@@ -56,12 +56,9 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
   PARENT's; a member's own repo is `$MREPO` (§1 «Members are (repo, issue)»).
   Every `gh` call names its repo with `--repo` — the hub pane of a multi-repo
   fleet sits in `$HOME`, where a bare `gh` has no repo to infer.
-  A **ticket** (the parent, a member, its state, labels, comments) is read and
-  written through the ticket door only — `~/.claude/fleet/bin/fleet-ticket.sh
-  read|edit|label|children|comment <id>`, the id from `fleet-ticket.sh id
-  <repo> <N>` (issue #3599): `gh:<repo>#N` for a repo on GitHub, `hub:<repo>#N`
-  for a `FLEET_TICKETS=hub` repo, which has no GitHub issue at all; the
-  `mcp__fleet__gh` tool's `kind: issue` and `fleet_sub_issues` answer for both.
+  The parent and its members are GitHub issues, read and written with `gh issue
+  view|edit|comment --repo <repo>` (the fleet's ticket door left with issue
+  #4898); `fleet_sub_issues` lists the members.
 - **The charter's `<!-- fleet:epic repo=… -->` marker** (an EPIC planned since
   #803 has one) must equal `$FLEET_REPO`; a mismatch means this run resolved the
   wrong repo — stop and say so, spawn nothing. No marker: an older EPIC; go on.
@@ -169,10 +166,8 @@ that dies at the boundary. Therefore:
   report: <pending | the report's URL>      ← closing tick only (step 4)
   ```
 
-  Post it through `~/.claude/fleet/bin/fleet-comment.sh <parent> --repo "$FLEET_REPO" --note --body-file -`,
-  never a bare `gh issue comment`: when the account's GraphQL budget is spent the
-  wrapper posts the same marked body over REST (issue #1042), where a bare call
-  just fails and the tick goes unrecorded.
+  Post it with `gh issue comment <parent> --repo "$FLEET_REPO" --body-file -`
+  (the fleet's comment wrapper left with issue #4898).
 
   The `report:` line appears on the **closing** tick and nowhere else. It is the
   one piece of state that outlives the core going empty, so a session that picks
@@ -245,8 +240,7 @@ multi-repo fleet, from its `repos/<slug>.conf` — #805), a member counts as
 complete only when its deploy state goes green. With neither set, merged ≡ done.
 Do **not** run `/fleet-sync-install` mid-batch — the loop runs on the live install,
 and swapping the floor under running workers is how one bad merge takes the batch
-with it. Sync once, at the end (step 4). The same rule binds the workers through
-`/fleet-claim` (issue #953: on EPIC #883 one synced right after its own merge and
+with it. Sync once, at the end (step 4). The same rule binds the workers (issue #953: on EPIC #883 one synced right after its own merge and
 reloaded a daemon under the rest of the batch). The install-sync daemon itself
 follows stable even mid-batch (issue #2934) — a stable move is the operator's,
 and it stops no running session.
@@ -397,7 +391,7 @@ treatment:
 
 - **A failed worker** (PR red, conflicted, or the window died) → **retry once**,
   seeding the new worker with what went wrong. Second failure: label the member
-  `blocked` (`~/.claude/fleet/bin/fleet-ticket.sh label add "$(~/.claude/fleet/bin/fleet-ticket.sh id "$MREPO" <N>)" blocked`), write the
+  `blocked` (`gh issue edit <N> --repo "$MREPO" --add-label blocked`), write the
   reason on the parent, free the slot.
 
 One caution on red: a red check is not always the code's fault. This suite carries
@@ -407,14 +401,9 @@ change. Before spending the retry, re-read the failing check: if it is unrelated
 to the member's diff, say so on the parent and re-run the check rather than
 burning the one retry on a flake. And if the base branch itself is red (the same
 check fails on `master`'s head), it is ONE breakage for every member and every
-loop: file it once through `~/.claude/fleet/bin/fleet-issue-file.sh --title …
---breakage --spawn --repo "$MREPO"` (issue #2078) — exit 5 + a URL means someone
-already did, and a 「同一故障」 comment was left there — then wait for that issue
-before retrying any member. A member that filed it WITHOUT `--spawn` only got
-the issue filed and the person alerted (nobody spawns its fixer by itself, EPIC
-#4333 C4): if that issue has no live worker, spawn its fixer yourself
-(`mcp__fleet-orch__spawn` with its number — the claim dedup makes a second spawn
-a no-op), then wait for it the same way. Three issues and three conflicting fixes for one
+loop: dispatch its fix once as a task (`mcp__fleet-orch__task` with `repo` and
+`spawn: true` — the issue filer left with issue #4898), then wait for that record
+(`mcp__fleet-orch__await` with its `T<n>`) before retrying any member. Three issues and three conflicting fixes for one
 duplicate route (2026-10-07, #2039 #2040 #2041) is what this replaces.
 
 ### e. Quota

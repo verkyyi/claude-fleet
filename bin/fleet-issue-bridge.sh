@@ -18,18 +18,8 @@
 #     Wire it behind `gh webhook forward` / a cloudflared tunnel for sub-second
 #     latency. See docs/dev/ISSUE-BRIDGE.md.
 #
-# A repo whose tickets live on the hub (FLEET_TICKETS=hub, issue #3597, EPIC #3570
-# C4) never asks GitHub for its comments:
-#   • --event <repo> <N> <cid> — the node agent's push: the hub said ticket N got
-#     comment <cid> (control TypeTicket, CapTicket). Read through the ticket door
-#     (fleet_ticket.py relay), relayed by the same core, delivered ONLY to a worker
-#     window on THIS machine — every node of the person hears the same event, so a
-#     node without the window says `elsewhere` and leaves it to the backstop.
-#   • the poll's backstop for such a repo lists the hub's tickets moved since the
-#     watermark (GET /v1/fleet/tickets?since=) through the same door instead of
-#     `gh api …/comments` — what an event missed while the hub or this node was
-#     down arrives on the next tick. A comment the fleet wrote (source=fleet: a
-#     worker's note, a receipt) comes as assoc FLEET and is never sent back.
+# (The hub-ticket road of issue #3597 — `--event`, the hub's relay list — left with
+# issue #4898: `--event` is said and ignored.)
 #
 # One write door for another machine's bridge (issue #1649):
 #   • --apply-forward <repo> <issue> <cid> — a comment whose worker lives HERE,
@@ -47,7 +37,7 @@
 #                   poll/webhook overlap). GitHub redelivers on any non-2xx.
 #   2. self/marker — SUPPRESS a fleet-internal comment, by EITHER signal. (a) the
 #                   body carries `<!-- fleet:no-relay -->` (the intent flag
-#                   bin/fleet-comment.sh --note stamps). (b) it is the bound worker
+#                   the fleet's record-only comments carried). (b) it is the bound worker
 #                   talking to ITSELF — a `<!-- fleet:from role=worker … issue=<N> -->`
 #                   provenance marker whose issue equals THIS comment's issue (the
 #                   positive-self-ID backstop, issue #425) — or whose marker carries
@@ -81,7 +71,7 @@
 #                   send-keys/bracketed-paste gotcha for multi-line bodies.
 #   5. revive     — (opt-in FLEET_ISSUE_BRIDGE_REVIVE=1) if the issue is OPEN but its
 #                   worker window is gone, re-spawn it via dash-issue-session.sh; the
-#                   fresh worker's /fleet-claim reads the issue, comment and all.
+#                   fresh worker's brief reads the issue, comment and all.
 #
 # OFF BY DEFAULT — a fleet opts in with FLEET_ISSUE_BRIDGE=1. Un-gated relay on a
 # PUBLIC repo is unsafe; the association gate is the headline control.
@@ -100,7 +90,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # this unit's StartInterval; without it, a pended unit is silent (issue #639:
 # launchd stopped scheduling EVERY interval unit in this user domain and the only
 # daemon anyone noticed was the one collector heartbeat #638 had instrumented).
-# Only the UNIT's own mode counts: the webhook and fleet-comment.sh drive the
+# Only the UNIT's own mode counts: the webhook drives the
 # DELIVER path directly, and crediting those would keep this stamp fresh while
 # the `--poll` backstop unit was never scheduled.
 # The source is GUARDED and the stamp is a side errand: liveness instrumentation
@@ -164,7 +154,7 @@ bridge_marked() { case "$1" in *"$MARKER"*) return 0;; *) return 1;; esac; }
 # issue equals <route_issue> (the issue this comment is being relayed TO). This is
 # the positive-self-ID BACKSTOP for the no-relay marker — a worker's own comment
 # posted WITHOUT the loop-safety flag (e.g. a raw `gh issue comment` that bypassed
-# bin/fleet-comment.sh) would otherwise pass the OWNER gate and be injected back
+# the fleet's own comment road) would otherwise pass the OWNER gate and be injected back
 # into that worker once (dedup only stops the SECOND relay, never the first). The
 # operator's `--to-worker` (role=operator, and the hub pane has no @issue so the
 # marker carries no issue=) and an external human (no fleet:from at all) are NOT
@@ -172,7 +162,7 @@ bridge_marked() { case "$1" in *"$MARKER"*) return 0;; *) return 1;; esac; }
 # never matches issue=100. A role=worker marker with NO issue= field at all is
 # ALSO suppressed (issue #483): it can't prove it is NOT the bound worker's own
 # comment, and a genuine cross-worker message always carries the sender's issue=
-# (fleet-comment.sh stamps the sender's @issue binding) — so an unattributable
+# (the fleet's comment road stamped the sender's @issue binding) — so an unattributable
 # worker comment must never drive a worker. Suppression is the SAFE direction —
 # like the no-relay marker, a spoofed fleet:from can only make a comment more
 # suppressed, never bypass the assoc gate to get relayed — so this runs before
@@ -576,11 +566,7 @@ bridge_relay() {
   # No live window. Revive (opt-in) if the issue is OPEN and a fleet serves it.
   if [ "$REVIVE" = 1 ]; then
     local state target why
-    if [ "$(fleet_ticket_home "$repo")" = hub ]; then   # the ticket door (#3597)
-      state=$(fleet_ticket_state "$repo" "$issue" | cut -f1)
-    else
-      state=$(fleet_gh issue view "$issue" --repo "$repo" --json state -q .state 2>/dev/null)
-    fi
+    state=$(fleet_gh issue view "$issue" --repo "$repo" --json state -q .state 2>/dev/null)
     if [ "$state" = OPEN ]; then
       target=$(bridge_fleet_for_repo "$repo")
       if [ -n "$target" ]; then
@@ -685,40 +671,11 @@ EOF
 }
 
 # ======================== ingress: --event (hub tickets) =======================
-# The node agent heard TypeTicket{repo, number, kind=comment, comment_id} from the
-# hub (issue #3597) and runs this once per event. Exit 0 = done (relayed,
-# suppressed, a dup, or elsewhere — another node's window); 75 = not now (the
-# worker busy / typing, tmux down, the lease held) — the backstop poll retries it;
-# 4 = the hub did not answer; 2 = usage / not a hub-ticket repo.
+# The node agent's push for a hub ticket's comment (issue #3597). The hub tickets
+# left with issue #4898: an older agent's call is said and ignored (exit 2).
 event() {
-  local repo n cid slug lease row rc out assoc author num b64 body
-  repo=$(fleet_norm_repo "${1:-}"); n="${2:-}"; cid="${3:-}"
-  case "$n$cid" in ''|*[!0-9]*) printf 'fleet-issue-bridge: --event needs <repo> <N> <comment id>\n' >&2; exit 2 ;; esac
-  [ -n "$repo" ] || { printf 'fleet-issue-bridge: --event: %s is not owner/name\n' "${1:-}" >&2; exit 2; }
-  [ "$(fleet_ticket_home "$repo")" = hub ] \
-    || { log "event $repo#$n c$cid: not a hub-ticket repo here — ignored"; exit 2; }
-  fleet_bridge_covers "$repo" || { log "event $repo#$n c$cid: the bridge is off for $repo — ignored"; exit 0; }
-  [ -n "$(fleet_sockets)" ] || { log "event $repo#$n c$cid: no live fleet — the backstop will see it"; exit 75; }
-  slug=$(fleet_slug "$repo")
-  lease=$(bridge_lease_path "$slug")
-  bridge_lease_acquire "$lease" || { log "event $repo#$n c$cid: bridge busy (lease held) — the backstop will see it"; exit 75; }
-  trap 'rm -rf "$lease" 2>/dev/null' EXIT
-  if bridge_seen_has "$slug" "$cid"; then log "event $repo#$n c$cid: dup"; exit 0; fi
-  row=$(python3 "$BIN/fleet_ticket.py" --backend hub relay --repo "$repo" --number "$n" --comment "$cid" 2>&1); rc=$?
-  [ "$rc" -eq 0 ] || { log "event $repo#$n c$cid: ${row##*$'\n'}"; exit 4; }
-  [ -n "$row" ] || { log "event $repo#$n c$cid: no such comment on the hub"; exit 0; }
-  IFS=$'\t' read -r cid assoc author num _ b64 <<<"$row"
-  body=$(bridge_b64d "$b64")
-  ASSOC_FLOOR=OWNER                   # a hub ticket's person is its owner (relay_row)
-  out=$(BRIDGE_LOCAL_ONLY=1 bridge_relay "$repo" "$slug" "$n" "$cid" "$assoc" "$author" "$body"); rc=$?
-  log "event $slug #$n c$cid: $out"
-  case "$rc" in
-    3) exit 75 ;;
-    4) exit 0 ;;                       # elsewhere: left unseen for this node's backstop
-  esac
-  bridge_seen_add "$slug" "$cid"
-  bridge_typing_reset "$slug" "$cid"
-  exit 0
+  log "event ${1:-?}#${2:-?} c${3:-?}: hub tickets are gone (#4898) — ignored"
+  exit 2
 }
 
 # =========================== ingress: poll (default) ===========================
@@ -782,17 +739,7 @@ poll_worker_channel() {
     fleet_poll_backoff_due "$bof" "$BRIDGE_INT" "$(now)" || return 0
   fi
 
-  # A repo whose tickets live on the hub (issue #3597): the backstop asks the hub
-  # through the ticket door, never GitHub — the rows come in the same shape, the
-  # watermark is the newest ticket time the hub showed (`#max`). The hub down ⇒
-  # nothing listed and the watermark held: the next tick picks up what it missed.
-  local hubmax=''
-  if [ "$(fleet_ticket_home "$repo")" = hub ]; then
-    rows=$(python3 "$BIN/fleet_ticket.py" --backend hub relay --repo "$repo" --since "$since" 2>&1) \
-      || { log "$slug: 入口不通 — ${rows##*$'\n'} — skip this tick"; return 0; }
-    hubmax=$(printf '%s\n' "$rows" | sed -n '1s/^#max //p')
-    rows=$(printf '%s\n' "$rows" | sed '1{/^#max /d;}')
-  elif ! command -v gh >/dev/null 2>&1; then
+  if ! command -v gh >/dev/null 2>&1; then
     log "$slug: gh not on PATH — nothing to poll"; return 0
   # GitHub unreachable (issue #4841): the watermark is held, the next tick after
   # it answers picks up what this one missed.
@@ -837,7 +784,6 @@ EOF
   # is pending we leave the watermark untouched (at its pre-tick value): next tick
   # re-lists everything since then, the already-relayed ones are skipped by the
   # seen-set, and the queued one is retried. When all clear, jump past the newest.
-  [ -n "$hubmax" ] && max_ts="$hubmax"     # the hub's own newest time (#3597)
   if [ -z "$pending" ] && [ -n "$max_ts" ]; then
     printf '%s\n' "$max_ts" > "$sincef"
   fi
@@ -850,24 +796,7 @@ EOF
   return 0
 }
 
-# outbox_drain — the ticket writes GitHub could not take (issue #4844, EPIC #4839
-# C5): made now, oldest first, by bin/fleet_gh_outbox.py, once the one gh-down
-# marker is closed (fleet_gh_ready probes when one is due). Before the fleet
-# checks below: a write kept while every fleet was down still goes out. An empty
-# outbox costs one glob, no process.
-outbox_drain() {
-  local f
-  for f in "${FLEET_GH_OUTBOX_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/gh-outbox}"/*.json; do
-    [ -f "$f" ] || return 0
-    break
-  done
-  fleet_gh_ready || { log "gh-outbox: GitHub still down — the kept writes wait"; return 0; }
-  python3 "$BIN/fleet_gh_outbox.py" drain 2>&1 | while IFS= read -r l; do log "$l"; done
-  return 0
-}
-
 poll() {
-  outbox_drain
   # gh is asked per repo now (issue #3597): a hub-ticket repo never needs it.
   # Each fleet is its own tmux server now (issue #159) — "is tmux up" means "is any
   # fleet live", which fleet_sockets answers without a single shared server.
@@ -896,8 +825,7 @@ poll() {
   # A fleet queues EVERY repo it hosts (issues #798, #1941) — each through its own
   # view (fleet conf + that repo's overlay), so an overlay can turn the bridge off
   # (FLEET_ISSUE_BRIDGE=0) or retune its gate for its repo alone.
-  # fleet_bridge_rows (fleet-lib.sh) is the ONE reader of that set — fleet-comment's
-  # --to-worker asks fleet_bridge_covers the same question (issue #2059).
+  # fleet_bridge_rows (fleet-lib.sh) is the ONE reader of that set (issue #2059).
   local rp fl rv
   while IFS=$'\t' read -r rp fl rv; do
     [ -n "$rp" ] && queue "$rp" "$fl" "$rv"

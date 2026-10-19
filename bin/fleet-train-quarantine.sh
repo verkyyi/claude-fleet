@@ -49,8 +49,8 @@
 #   record --results DIR --list FILE --prev-run ID --run ID --sha S --repo R --out DIR
 #          [--issue N] [--now T] [--flaky-hist FILE] [--drill-flaky TEST]
 #                               after the tests: every `QUARANTINE <test>` a shard printed
-#                               gets its breakage issue (fleet-issue-file.sh
-#                               --breakage-key, one per test; --issue N files nothing and
+#                               gets its breakage issue (the filer, --breakage-key, one
+#                               per test; said, not filed, by default; --issue N files nothing and
 #                               uses N — the drill) and an entry; every `FLAKY <test>` its
 #                               flaky issue (above; a filing that fails is said, never
 #                               reds the train) and a sighting — --drill-flaky's is filed
@@ -58,7 +58,8 @@
 #                               DIR/{list,fails,sha,run,flaky} is the state the next
 #                               train fetches, DIR/flaky-now this train's flaky tests
 #
-# Env: FLEET_TQ_FILER   the issue filer (default bin/fleet-issue-file.sh) — a selftest seam
+# Env: FLEET_TQ_FILER   the filer (default bin/fleet-ci-say.sh: said in the run summary, no
+#                       issue — issue #4898; an entry then names `-` for its issue) — a selftest seam
 #      FLEET_TQ_HOURS   how long an entry holds (default 48 — the decision's cap)
 #      FLEET_TQ_FLAKY_DAYS / FLEET_TQ_FLAKY_MAX   the flaky window (7) and the sightings
 #                       in it that quarantine (3)
@@ -69,7 +70,7 @@ ME=fleet-train-quarantine
 die() { printf '%s: %s\n' "$ME" "$*" >&2; exit 2; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 file_issue() {
-  if [ -n "${FLEET_TQ_FILER:-}" ]; then "$FLEET_TQ_FILER" "$@"; else bash "$BIN/fleet-issue-file.sh" "$@"; fi
+  if [ -n "${FLEET_TQ_FILER:-}" ]; then "$FLEET_TQ_FILER" "$@"; else bash "$BIN/fleet-ci-say.sh" "$@"; fi
 }
 
 # record_flaky <this train's verdict lines> — the FLAKY half of record (issue #3866):
@@ -278,6 +279,8 @@ case "$cmd" in
                 --body "$t 在连续两趟发布列车上红（run ${prev_run:-?} 与 run ${run}，TRAIN_SHA ${sha}），这趟的改动没碰它，也没碰它点名的文件，所以列车隔离它最多 ${hours} 小时（issue #3243）。PR 与夜里的全量照跑它；碰到它的列车也照跑。修好它，隔离就失效；到期自动恢复。
 https://github.com/$repo/actions/runs/$run") ; frc=$?
         num=$(printf '%s\n' "$url" | sed -n 's|.*/issues/\([0-9][0-9]*\).*|\1|p' | tail -1)
+        # said, not filed (the default since #4898): no issue to name
+        [ -z "$num" ] && [ -z "${FLEET_TQ_FILER:-}" ] && [ "$frc" -eq 0 ] && num=-
         if [ -z "$num" ] || { [ "$frc" -ne 0 ] && [ "$frc" -ne 5 ]; }; then
           printf '%s: could not file the breakage issue for %s (filer exit %s) — not quarantined\n' "$ME" "$t" "$frc" >&2
           rc=1; continue

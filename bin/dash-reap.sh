@@ -1,10 +1,9 @@
 #!/bin/bash
 # dash-reap.sh <window-target> [confirm] — reap a finished worker row from the
 # dash on ONE key (⌃x, issue #289 merged the old ⌃x/⌥x pair): close its tmux
-# window and remove its git worktree (when clean). The bound GitHub issue is NOT
-# closed by a reap (issue #1542, from #1309/#867): a landed one is the PR's /
-# worker's to close, an unlanded one stays OPEN with its claim released — see
-# settle_issue().
+# window and remove its git worktree (when clean). The bound GitHub issue is not
+# touched by a reap (issues #1542, #4898): a landed one is the PR's to close, an
+# unlanded one stays as it is.
 # The gate is the SHARED fleet_reap_ok() (same guarantees as the
 # worktree-autoclean.sh janitor).
 #
@@ -19,8 +18,8 @@
 #
 #   Row state            ⌃x
 #   clean + merged       record row, reap wt+branch+window, issue untouched (no confirm)
-#   clean + NOT merged   confirm → record row, reap wt+branch+window; issue OPEN, claim released
-#   dirty (any)          confirm → record row, close window, KEEP wt; issue OPEN, claim released
+#   clean + NOT merged   confirm → record row, reap wt+branch+window; issue untouched
+#   dirty (any)          confirm → record row, close window, KEEP wt; issue untouched
 #   raw scratch, merged  record row, dispose wt+branch, close window (no confirm)
 #   raw scratch, else    confirm → record row, dispose (dirty KEEPs the wt), close window
 #   raw scratch, no wt   close window (ephemeral, pre-#290 / hermetic — nothing to record)
@@ -176,33 +175,6 @@ describe_target() {
     "$target" "$name" "${issue:--}" "${state:--}" "${2:--}" "$1" >&2
 }
 
-# Settle the bound issue (issue #1542). A reap disposes of a WINDOW and a
-# WORKTREE; whether the issue is done is not its call:
-#   landed (merged-pr | ancestor | landed) → untouched. A merged PR's `Closes #N` already
-#       closed it; one still OPEN is a worker that said "keep open until the
-#       read-back" (#1309), and the cleanup daemon never closed issues either.
-#   not landed (unmerged | dirty) → stays OPEN, the claim is released and one
-#       no-relay note says what happened. Closing it read as CLOSED/COMPLETED — a
-#       false "done" the EPIC report counts (#867), worst for a worker that
-#       never started (zero commits of its own: tip == base).
-#   no verdict (a pre-#471 dispatch in flight) → untouched: never guess.
-settle_issue() {
-  command -v gh >/dev/null 2>&1 || return 0
-  [ "${FLEET_FORGE:-github}" != none ] || return 0   # no GitHub: no gh (issue #3601)
-  case "${reason:-}" in unmerged|dirty) ;; *) return 0 ;; esac
-  local st; st="$(fleet_gh -R "$REPO" issue view "$iss" --json state -q .state 2>/dev/null)"
-  [ "$st" = OPEN ] || return 0
-  local what="its work did not land" base n
-  if [ -n "${whead:-}" ] && [ -n "${MAIN:-}" ]; then
-    base="$(git -C "$MAIN" rev-parse --verify -q "origin/${FLEET_BASE_BRANCH:-main}" 2>/dev/null \
-      || git -C "$MAIN" rev-parse --verify -q "${FLEET_BASE_BRANCH:-main}" 2>/dev/null)"
-    n="$(git -C "$MAIN" rev-list --count "$base..$whead" 2>/dev/null)"
-    [ -n "$base" ] && [ "$n" = 0 ] && what="it never started (no commits of its own)"
-  fi
-  [ "$reason" = dirty ] && what="$what; its dirty worktree is kept"
-  fleet_issue_release_claim "$REPO" "$iss" "Reaped from the fleet: window closed — $what"
-}
-
 # RECORD this reap into the /fleet-history ledger (issue #471). ⌃x used to be the
 # one reaper that wrote nothing — see the header note — so a ⌃x'd worker was only
 # indexed later, worktree-less and therefore unresumable.
@@ -279,17 +251,15 @@ reap_full() {
       && git -C "$MAIN" branch -D "$branch" >/dev/null 2>&1
     git -C "$MAIN" worktree prune 2>/dev/null || true
   fi
-  settle_issue
 }
 
-# dirty force reap: KEEP the worktree, settle issue + kill window only
+# dirty force reap: KEEP the worktree, kill window only
 reap_keep() {
   guard_live
   reap_kill                                            # drop the row first (#313)
   reap_record                                          # the KEPT worktree is resumable (#471)
   # kept tree, but its detached LISTENERS go now — a `*` bind serves it to the LAN (#1154)
   [ -n "${wtdir:-}" ] && fleet_reap_worktree_listeners "$wtdir" >/dev/null 2>&1
-  settle_issue
   printf 'reap: #%s window closed — worktree kept (dirty)\n' "$iss" >&2
 }
 
@@ -749,9 +719,9 @@ fi
 
 # running inside the confirm popup
 if [ "$reason" = dirty ]; then
-  msg="Force-reap #$iss? Worktree is DIRTY — it will be KEPT; window closes. Issue stays open, claim released."
+  msg="Force-reap #$iss? Worktree is DIRTY — it will be KEPT; window closes. Issue untouched."
 else
-  msg="Force-reap #$iss? Removes worktree + branch, closes the window. Issue stays open, claim released."
+  msg="Force-reap #$iss? Removes worktree + branch, closes the window. Issue untouched."
 fi
 printf '\n  %s\n\n  [y] reap    [n] cancel ' "$msg"
 read -rsn1 ans; echo

@@ -146,12 +146,12 @@ carries bin/fleet-children-flush.sh FLEET_LANG_RULE_NOTICE '^  msg=.*no reply ne
         'children-digest envelope'
 # The brief's language section is a heading + the rule beneath it, so the check is
 # a small window rather than one line: the heading must exist AND the rule must be
-# printed under it. (fleet-claim-brief-selftest.sh pins the REAL rendered output;
+# printed under it. (fleet-brief-selftest.sh pins the REAL rendered output;
 # this is the cheap structural half.)
-blk=$(grep -A3 '===== language' "$ROOT/bin/fleet-claim-brief.sh" | head -4)
+blk=$(grep -A3 '===== language' "$ROOT/bin/fleet-brief.sh" | head -4)
 case "$blk" in
-  *'$FLEET_LANG_RULE_SEED'*) ok "bin/fleet-claim-brief.sh: the worker seed language section prints \$FLEET_LANG_RULE_SEED" ;;
-  *) fail "bin/fleet-claim-brief.sh: the language section must print \$FLEET_LANG_RULE_SEED — without it the Claude seed path has no equivalent of conf/codex-preamble.md's rule (issue #620)" "$blk" ;;
+  *'$FLEET_LANG_RULE_SEED'*) ok "bin/fleet-brief.sh: the worker seed language section prints \$FLEET_LANG_RULE_SEED" ;;
+  *) fail "bin/fleet-brief.sh: the language section must print \$FLEET_LANG_RULE_SEED — without it the Claude seed path has no equivalent of conf/codex-preamble.md's rule (issue #620)" "$blk" ;;
 esac
 
 # The seed rule must reach BOTH agents. Codex has had it since #547 via its

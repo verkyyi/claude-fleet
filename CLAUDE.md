@@ -59,7 +59,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   migration moves *windows* so a subagent that hits the limit dies mid-edit,
   several can write one worktree, and there is no one-worker-one-PR, no
   `/fleet-history` row, no handoff. Hand implementation to a worker
-  (`dash-issue-session.sh <N>`, `fleet-issue-file.sh --spawn`,
+  (`dash-issue-session.sh <N>`, the `task` tool,
   `dash-raw-session.sh`) — and when you need its result BACK the way a subagent
   returns one, `fleet-await.sh <N>` spawns it and blocks on the outcome off the
   child-report ledger (issue #812); a subagent is for READ-ONLY fan-out only —
@@ -67,15 +67,13 @@ one-off drill / audit records do not go in the repo (issue #3576).
   (a fork worktree is edit-blocked by the base guard). `FLEET_ALLOW_SUBAGENT=1`
   is the operator's escape hatch.
 - **Any session spawns, a worker too** (issue #4591 lifted #2960's
-  one-level rule). The filer's `--spawn`, the `spawn` / `task` tools and
+  one-level rule). The `spawn` / `task` tools and
   `fleet-await.sh` ask no seat; the session caps and the claim dedup are the only
   bounds (`fleet_spawn_refused` is gone, #4790). The dispatch group (`fleet-orch`) mounts for EVERY
   session (issue #4703 undid #4334's `@agent_spawn 1` gate); `@agent_spawn` gates
   nothing, and a group-less older session sees the group on `fleet`. A grandchild reports to the worker
   that spawned it; a reaped worker's reports climb to the nearest live ancestor
-  (`fleet_live_ancestor`, #1352), else the person's reminder (#3117). A red base
-  a worker files WITHOUT `--spawn` is filed, the person alerted and the parent
-  told — nobody spawns its fixer by itself (issue #4337). `fleet-issue-file-selftest.sh` W,
+  (`fleet_live_ancestor`, #1352), else the person's reminder (#3117).
   `fleet-await-selftest.sh` SEAT, `fleet-mcp-selftest.sh` P,
   `spawn-origin-gate-selftest.sh` F.
 - **A fleet hosts zero or more GitHub repos** (issue #788, switched on in #795),
@@ -124,7 +122,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   keypress. A pane reads ITS OWN binding through
   `fleet_pane_fmt`, never `-t "${TMUX_PANE:-}"`: an empty target is "the pane
   the operator is looking at", so inside tmux with no `TMUX_PANE` the read is
-  nothing (and `fleet-comment.sh` refuses to post) — a popup has `$TMUX` but no
+  nothing (and `fleet-brief.sh` sees no binding) — a popup has `$TMUX` but no
   `TMUX_PANE`, which is why `dash-popup.sh` hands it ours. An `@wid` handle no
   live window carries is refused by `fleet_wid_target` (nothing, rc 1) and every
   caller checks the rc. `bin/worker-locate-selftest.sh` F pins all of it.
@@ -136,7 +134,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   spawn stamps the parent's as `@origin_fid` beside `@origin`; resolve a parent
   through `fleet_origin_win` / `fleet_win_for_addr` (identity first, key second),
   never a bare `@origin` scan. `fleet_origin_heal` re-points `@origin` when a
-  parent's key moves (`fleet-bind.sh`, dash rebind, the cleanup tick), so
+  parent's key moves (dash rebind, the cleanup tick), so
   key-joined readers need no change. worker_id is `<fleet UUID>/<fleet_id>`
   (`fleet_worker_id`); `<fleet UUID>/<key>` stays a readable alias for one
   version (`fleet_worker_id_key` — a relay's `from`, a lease). `worker-identity-selftest.sh`
@@ -305,35 +303,16 @@ one-off drill / audit records do not go in the repo (issue #3576).
   one `drill_<id>` (the test reds on either side missing); a way fixed in another
   repo is `登记：<ticket>`, listed, never drilled. Found a new one: add the row
   + drill, watch it go red, then fix.
-- **A fault is ONE issue, whatever commit it is red on** (issues #2078, #4271;
-  EPIC #2074 C7). Every automatic filer — the master probe, `fleet-macos-watch.sh`,
-  `fleet-nightly-miss.sh`, `fleet-train-quarantine.sh` —
-  goes through `fleet-issue-file.sh --breakage[-key <channel>-<failed step>]`, and
-  the key NEVER carries a sha (`ci-<job · error line>`, `macos-<tests>`,
-  `cn-path-<layer>`, `nightly-<test>`, `flaky-<test>`, `selftest-quarantine.<test>`).
-  `--breakage` alone (the `file_issue` tool's `breakage: true`) fingerprints the
-  base first — `fleet_breakage_probe` (`bin/fleet-lib.sh`): red per workflow on its
-  last FINISHED run (never the head's check-runs — issue #2175), that streak's
-  first run's first failed job and its first error line sans `:<digits>`, REST
-  only. `--fault-sha` / `--fault-link` say where it is red THIS time (the probe's
-  own: the streak's first commit and run). One issue per key: a `<key>/` lock
-  under `$FLEET_CONF_DIR/global/breakage` (2 min) holds the same-second filers on
-  one machine, the `<!-- fleet:breakage key=… -->` marker in the body is what
-  another machine finds (`fleet_breakage_find`, the REST open-issue list, never
-  `gh search` — its index lags). An open one gets ONE record-only 「同一故障」
-  comment per new sha (`<!-- fleet:fault sha=… -->`; a sha on record adds none);
-  only a closed one (not «not planned», `fleet_fault_find_closed`) ⇒ reopened when
-  the red version contains the commit that closed it (`fleet_fault_contains`;
-  closed by hand: a newer commit), else only noted there. Its URL on stdout and
-  **exit 5** either way; the caller waits for it (`await`), never files or spawns a
-  second. **Only the flag makes a breakage** (issue #4271 removed #2175's auto
-  road): an ordinary filing whose text says 「红」 is an ordinary issue, no probe
-  — #4268 was taken as macOS' breakage and swallowed the next ticket.
-  `docs/dev/BREAK-IT.md` `breakage-three-filers` / `breakage-no-flag` /
-  `breakage-new-sha` + `fleet-issue-file-selftest.sh` O–T, Y pin it.
+- **A red CI check is SAID, never filed** (issue #4898, EPIC #4895; it replaced
+  #2078's one-issue-per-fault filer). The automatic reporters — `fleet-macos-watch.sh`,
+  `fleet-nightly-miss.sh`, `fleet-train-quarantine.sh`, `fleet-durations-drift.sh` —
+  run `bin/fleet-ci-say.sh` (a `FLEET_*_FILER` seam of the same argv): the title and
+  body on the run's summary page and one `::warning::` under the key a filing used
+  (never a sha: `nightly-<test>`, `flaky-<test>`, `selftest-quarantine.<test>`), no
+  issue, no URL. A fix is dispatched as a task (`task` tool) by whoever decides to.
   **One patrol** (issue #4271, docs/dev/PATROLS.md): the diskguard tick's watchers
-  only PRODUCE (macos-watch — it files, and alerts only on a new or
-  reopened issue, plus macOS' once-per-streak held-back alert); the patrol is ONE
+  only PRODUCE (macos-watch — one alert per red run, plus macOS' once-per-streak
+  held-back alert); the patrol is ONE
   steward session's `/loop` (`spawn agent:steward`), opened by a person, never a
   second beside it; an orchestrator does not patrol.
 - **Stable moves only past the old-session replay** (issue #2075, EPIC #2074 C2).
@@ -373,17 +352,15 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `unknown` window. The `oldcfg:` step NAMES the broken and the looping stale
   sessions (window · repo · issue · state) and reopens none (#2068 B). BREAK-IT
   row `oldcfg-broken-unmarked`; `fleet-oldcfg-check-selftest.sh`.
-- **A person's task is a hub record first, an issue only when it needs one**
-  (issue #3325, EPIC #3178). ⌘P's words go out as a task (`fleet-compose.py` →
+- **A person's task is a hub record, never an issue** (issue #3325, EPIC #3178;
+  #4898). ⌘P's words go out as a task (`fleet-compose.py` →
   `fleet-client-place.sh --task --via ⌘P`): the hub writes `T<n>` in `fleet_tasks`
   (`hub/store/fleet_tasks.go`) BEFORE it places the start, then fills it from
   the answer (machine · login · worker_id · key · state). A task that chose a repo
-  is a `new` start, so its issue hangs on the record; a task with no repo is the
-  record alone — a node that says `CapTask` is sent `task: T<n>`, stamps `@task`
-  and files no desk ticket (`dash-raw-session.sh --task`). 「建 GitHub 单」 is the
-  hub's `task_issue` (`POST /v1/fleet/tasks/<T>/issue`, the client's
-  `fleet-client-place.sh <repo|-> task-issue:T<n>`) — reached only through the
-  record, never a generic tool road. The top bar shows `#N`, else `T<n>`; the
+  is a `new` start that opens on the record (`dash-raw-session.sh --repo --task`); a
+  task with no repo is the record alone — a node that says `CapTask` is sent
+  `task: T<n>` and stamps `@task`. The node refuses an older hub's `task_issue`
+  (「建 GitHub 单」, #4898). The top bar shows `#N`, else `T<n>`; the
   hub's 任务 page (`/tasks`) lists them. No `task` asked, or a node without
   `CapTask`, or no hub ⇒ byte for byte as before (`TestTaskOffAddsNothing`).
   **The fleet's coordinators write the same record from a machine** (issue #3330):
@@ -398,8 +375,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   reads «over» as the record closed (`fleet_task_closed`, `fleet_task_control.py
   closed`): fleet-cleanup-idle.py's task route (`merged` = record closed),
   fleet-cleanup.sh's completion gate and worktree-autoclean.sh for any session
-  that carries a record. Still filed as an issue (`fleet-issue-file.sh --task
-  T<n>`) until 批 1: `--draft`, `FLEET_TASK_ISSUE=1`, no hub. A child report carries `task`, `await` takes `T<n>`, a session's
+  that carries a record. Nothing is filed as an issue (issue #4898, 批 1): no hub ⇒
+  `fleet-task-record.sh dispatch` exits 3. A child report carries `task`, `await` takes `T<n>`, a session's
   `ask` and a park write 「问过你」 / 「停放」 on the record (no issue: only there),
   and an EPIC member gets a read-only record (`epic-member`). No hub ⇒ the script
   exits 3 and every caller is byte for byte as before. **A session with no issue
@@ -411,18 +388,18 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `T<n>` (a Claude row fills 12–14 with `-`), its title the `@task_line` words, and
   `list` / `rows` mark the row `T<n>` — resume stays by the session key.
 - **A session's first turn is the person's own words; the flow rides a hook**
-  (issue #3331, EPIC #3178 ⑧, D2 = ①). `dash-issue-session.sh` seeds a Claude
-  worker with `--words-file` (⌘P's cold `new` start hands the body, else the
-  title), else the issue's title — shown as typed, never `/fleet-claim` — and
-  stamps the window `@seed_words <the claim command>` before its agent starts:
-  the words and the stamp go together or not at all. `bin/fleet-worker-start-hook.sh`
-  (SessionStart, `startup` only) reads the stamp and answers one grey
-  `systemMessage` line (「fleet-worker · <repo> · 单 #N · 做完开 PR，门绿了自己合」)
-  + an `additionalContext` that makes the claim skill the agent's first step —
-  fleet-worker's body stays empty, so this is the flow's only road in. A no-repo
-  task, a scratch, a desk ticket, a Codex worker (keeps the slash seed),
-  `FLEET_SEED_WORDS=0` ⇒ no stamp, no flow. `seed-words-selftest.sh` +
-  `dash-issue-session-prompt-selftest.sh` A/W pin «words first ⇒ claim next».
+  (issue #3331, EPIC #3178 ⑧, D2 = ①; the claim left with #4898). `dash-issue-session.sh`
+  seeds a Claude worker with `--words-file` (else the issue's title) — shown as typed —
+  and stamps the window `@seed_words` before its agent starts: the words and the
+  stamp go together or not at all. `bin/fleet-worker-start-hook.sh` (SessionStart,
+  `startup` only) reads the stamp and answers one grey `systemMessage` line
+  (「fleet-worker · <repo> · 单 #N · 做完开 PR，门绿了自己合」) + an `additionalContext`
+  with the flow: `brief`, implement, a PR carrying `Closes #N`, `pr_verdict` →
+  `pr_merge`, `report merged` — never a claim, comment or close (a task record's
+  session gets the same flow off `@task_flow`). fleet-worker's body stays empty, so
+  this is the flow's only road in. A no-repo task, a scratch, a Codex worker or
+  `FLEET_SEED_WORDS=0` ⇒ no stamp: the flow rides the first turn as plain words.
+  `seed-words-selftest.sh` + `dash-issue-session-prompt-selftest.sh` pin it.
 - **A session says when it may be closed: `@reap_policy`** (issue #1902). Chosen
   at spawn (`--reap` on both spawners, the `spawn` tool, the client's new-session
   question 「什么时候回收？」 → hub `reap` → the node's `worker_start`), changed by
@@ -435,15 +412,6 @@ one-off drill / audit records do not go in the repo (issue #3576).
   carries it as a `REAP<TAB><fleet_id><TAB><policy>` row, the inventory as
   `reap=`. **No @reap_policy = the kind's old rule, byte for byte** —
   `fleet-cleanup-idle-selftest.py` (`ReapPolicy`, `PolicyGrammar`) pins both.
-- **A draft-only ticket lands only after an approval** (issue #3715,
-  docs/dev/DRAFT-PR.md). `<!-- fleet:draft-only -->` in the issue body (the filer's
-  `--draft` / `--pr-note`, the `file_issue` · `task` · `spawn` tools' `draft` /
-  `pr_note`, `fleet-draft.sh mark`) makes the brief print a `draft-only` section:
-  the worker opens a DRAFT PR, reports `waiting` and stops; `fleet-pr-merge.sh`
-  asks `fleet-draft.sh gate` after a READY verdict and refuses (`DRAFT-ONLY`, exit
-  1) until `fleet-draft.sh approve <N>` (ready + stamp + the worker told);
-  `reject <N> --reason` closes the PR. `bin/fleet-draft.sh` is the mark's one
-  reader / writer; no mark ⇒ byte for byte as before. `fleet-draft-selftest.sh`.
 - **A custom session is ONE standard agent file** (issue #3122, EPIC #3111 C11).
   A spawn names it — `--as <name>` on `dash-issue-session.sh` / `dash-raw-session.sh`,
   the `spawn` tool's `agent` — and `bin/fleet-agent-def.py` (the one reader) finds
@@ -763,9 +731,8 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   `FLEET_NODE_UPDATE_BACKWARD=1` is the hatch). `mac-follow.yml` is a dispatch only
   (it leaves `mac follow: macOS` on the commit, moves nothing). The
   BSD half is the nightly full `selftests-macos.yml`: a red one (its macOS shard
-  jobs) is filed once as a breakage by `bin/fleet-macos-watch.sh` (diskguard tick →
-  `fleet-issue-file.sh --breakage`) and raised as one `breakage` alert, plus one
-  more when the red streak is older than `FLEET_MACOS_STALE_SECS` (2 h) — no fixer
+  jobs) is raised as one `breakage` alert per red run by `bin/fleet-macos-watch.sh`
+  (diskguard tick; nothing filed since #4898), plus one more when the red streak is older than `FLEET_MACOS_STALE_SECS` (2 h) — no fixer
   is spawned (issue #3120). Gate 9 (the China path) is retired with its probe
   (#4904). A problem that ships is taken back by ONE command,
   `bin/fleet-release-rollback.sh <PR|sha> [--hub-tag prod-<sha7>]` (a revert PR

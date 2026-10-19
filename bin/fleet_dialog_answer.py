@@ -41,8 +41,8 @@ Exit: 0 answered and confirmed · 1 no such window / transcript · 2 usage ·
 
 Seams (selftest): FLEET_DIALOG_PROJECTS (the transcripts' root, default
 ~/.claude/projects), FLEET_DIALOG_ANSWER_CMD (argv run instead of fleet-answer.sh),
-FLEET_DIALOG_POST_CMD (argv `<repo> <N> note`, the body on stdin, instead of
-fleet-comment.sh for the issue comment).
+FLEET_DIALOG_POST_CMD (argv `<repo> <N> note`, the body on stdin: a note on the
+batch's issue — none is posted without it since issue #4898).
 
 `--by session` is a session answering on the charter's word (an older caller's old
 name for it is read as session for one version).
@@ -181,10 +181,13 @@ def issue_ref(a, w):
 
 
 def post(repo, number, body):
-    """One record-only comment on repo#number (fleet-comment.sh — fleet_gh_write)."""
+    """One record-only note on repo#number through FLEET_DIALOG_POST_CMD. No
+    command ⇒ nothing posted (issue #4898: the fleet writes no GitHub comment —
+    the 代答记录 file is the trail)."""
     seam = os.environ.get("FLEET_DIALOG_POST_CMD")
-    argv = (seam.split() + [repo, str(number), "note"]) if seam else \
-        ["bash", str(BIN / "fleet-comment.sh"), str(number), "--repo", repo, "--note", "--body-file", "-"]
+    if not seam:
+        return ""
+    argv = seam.split() + [repo, str(number), "note"]
     r = subprocess.run(argv, input=body, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        universal_newlines=True, timeout=60)
     if r.returncode != 0:

@@ -53,7 +53,7 @@ CI 自测引用链读到的数据文件（基线、夹具、表）。没人按�
 | 压缩后任务恢复（`bin/refocus-hook.sh`） | 核心 | 2 |
 | 宿主清理与保护（memguard / diskguard / cleanup / worktree-autoclean） | 核心 | 63 |
 | 执行会话与跨会话协作 MCP（claim / issue / PR / evidence / spawn / await / children / send / report / file_issue / ask） | 核心 | 63 |
-| 执行会话（`fleet-claim` / worker start hook） | 核心 | 46 |
+| 执行会话（worker start hook） | 核心 | 46 |
 | 承载节点（managed-node） | 核心 | 84 |
 | 接入中继（cred-relay / gh-relay） | 核心 | 10 |
 | 操作者终端集成（iterm2 / laptop-url-opener.sh） | 按需 | 2 |
@@ -86,14 +86,12 @@ CI 自测引用链读到的数据文件（基线、夹具、表）。没人按�
 | 文件 | 组件 | 谁在用 |
 |---|---|---|
 | `bin/fleet-bin-inventory.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | 维护者重生成 docs/dev/BIN-INVENTORY.md（--markdown），见 COMPONENTS.md |
-| `bin/fleet-claim-grounding-measure.sh` | 构建与验证（ci-runner / workflows / 默认安装审计） | 认领/落地测量，docs/dev/CLAIM-MEASUREMENT.md |
 | `bin/fleet-hub-service.py` | Hub（`tokenledger`） | 管理员装 hub 的 launchd 服务，docs/dev/FLEET-HUB.md · INSTALL.md |
 | `bin/fleet-list.sh` | 终端看台与薄客户端 | 列出 fleet，README「bin/fleet-list.sh」 |
 | `bin/fleet-machine-policy.sh` | 承载节点（managed-node） | 管理员设每人可用机器，docs/public/*/admin/machines.md |
 | `bin/fleet-native-plugin-cli-selftest.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | 显式运行的原生插件探针，docs/dev/NATIVE-AGENT-BOUNDARY.md |
-| `bin/fleet-report-stats.sh` | 收集与账本观察（collect / ledger-watch） | EPIC #935 回报质量指标，docs/dev/ARCHITECTURE.md |
 | `bin/fleet-whats-new.sh` | 更新说明（`bin/fleet-whats-new.sh`） | 旧会话 hook 表里的静默兼容入口（#4324），下一批删 |
-| `bin/fleet_native_continue.py` | 执行会话（`fleet-claim` / worker start hook） | 旧 Codex 会话一次续接（#4775），docs/dev/NATIVE-OBSERVE.md |
+| `bin/fleet_native_continue.py` | 执行会话（worker start hook） | 旧 Codex 会话一次续接（#4775），docs/dev/NATIVE-OBSERVE.md |
 | `bin/nogh_live_driver.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | C9 实测由 owner 手动跑（它的镜像与文档随 #4904 去掉） |
 
 ## 未归类

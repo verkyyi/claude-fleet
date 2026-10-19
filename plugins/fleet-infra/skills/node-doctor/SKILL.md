@@ -128,7 +128,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `ingress` | node | [runbook-door-down] | 系统 sshd 的公网转发探不通：查路由器转发与远程登录 |
 | `install` | node · machine | [release-rules] | 安装落后 / 有本地提交 / 分叉 stable：让 install-sync 跟上，不在会话里手同步 |
 | `key` | machine | [release-rules] [mac-node-enroll] | 发布签名钥匙没钉 / 对不上：`sudo fleet node install --release-key <file>` |
-| `labels` | node | [node-doctor] | 仓库缺 fleet 标签：`fleet-labels-seed.sh --repo <repo>` |
+| `labels` | node | [node-doctor] | 仓库缺 fleet 标签：每个缺的跑 `gh label create <name> --repo <repo>` |
 | `laptop` | node | [node-doctor] | 笔记本上的 iTerm2 插件缺 / 旧：在那台重跑 extras/iterm2/install.sh |
 | `launchd` | node | [mac-node-prep] | launchd 的 gui 域坏了：机器层面——注销重登或重启 |
 | `ledger` | node | [mac-node-enroll] | 守护没装上：重跑 `sudo fleet node install` |

@@ -347,7 +347,7 @@ if [ -n "${FLEET_MCP_CONFIG:-}" ]; then
       # whatever positional follows it. Every issue-bound spawn passes the seed
       # prompt positionally (dash-issue-session.sh: `fleet-claude.sh "$(cat …)"`),
       # so the separated form read the PROMPT as a second config path and every
-      # worker died at launch with `MCP config file not found: /fleet-claim`. The
+      # worker died at launch with `MCP config file not found: <the seed>`. The
       # =form binds the value to the flag and cannot reach past it, whatever
       # follows. Do not "tidy" it back into two words.
       mcp_flag=(--strict-mcp-config "--mcp-config=$_fc_mcp")

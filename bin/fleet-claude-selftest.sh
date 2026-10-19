@@ -21,7 +21,7 @@
 #          swallows the following positional. Every issue-bound spawn passes the
 #          seed prompt positionally (`fleet-claude.sh "$(cat …)"`), so #473 shipped
 #          with every worker dying at launch on `MCP config file not found:
-#          /fleet-claim` — while a raw ⌃s scratch, which passes NO positional, kept
+#          /fleet-history` — while a raw ⌃s scratch, which passes NO positional, kept
 #          working. That asymmetry is why it got through: the pre-landing check and
 #          this selftest both exercised the no-positional path only. The fix is the
 #          =form (`--mcp-config=<v>`), which cannot reach past the flag.
@@ -170,11 +170,11 @@ if git -C "$BIN/.." rev-parse --git-dir >/dev/null 2>&1; then
     || fail "conf/mcp-worker.json is not tracked — /fleet-sync-install would never deliver it"
 fi
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="%s"\n' "$WORKER_MCP" > "$WORK/conf/fleets/f1/conf"
-argv="$(run /fleet-claim)"
+argv="$(run /fleet-history)"
 has "$argv" "--strict-mcp-config" || fail "FLEET_MCP_CONFIG=conf/mcp-worker.json did not launch strict" "$argv"
 has "$argv" "--mcp-config=$WORKER_MCP" || fail "conf/mcp-worker.json was not the ONLY config passed" "$argv"
 [ "$(printf '%s\n' "$argv" | grep -c -- '--mcp-config')" = 1 ] || fail "more than one --mcp-config alongside mcp-worker.json" "$argv"
-has "$argv" "/fleet-claim" || fail "the seed prompt was swallowed with mcp-worker.json" "$argv"
+has "$argv" "/fleet-history" || fail "the seed prompt was swallowed with mcp-worker.json" "$argv"
 ok "conf/mcp-worker.json ships (tracked, the fleet server only) and FLEET_MCP_CONFIG→it launches strict with only that file"
 
 # an explicit caller flag wins over the conf
@@ -192,7 +192,7 @@ ok "an explicit --strict-mcp-config from the caller is left alone"
 # `--mcp-config <v>` (separated) is variadic and ate the positional that follows —
 # which is the seed prompt on every issue-bound spawn. Assert the prompt arrives
 # intact, and that the flag is emitted in the =form that makes that structural.
-SEED='/fleet-claim'
+SEED='/fleet-history'
 for cfg in none '{"mcpServers":{}}' "$WORK/mcp.json"; do
   printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG=%s\n' "'$cfg'" > "$WORK/conf/fleets/f1/conf"
   argv="$(run "$SEED")"
@@ -357,10 +357,10 @@ exit 0
 EOF
 chmod +x "$WORK/fakebin/claude"
 printf 'FLEET_MODEL="fable"\n' > "$WORK/conf/fleets/f1/conf"
-argv="$(run /fleet-claim)"
+argv="$(run /fleet-history)"
 has "$argv" "--mcp-config=$MW" || fail "#1807 the default launch did not mount conf/mcp-worker.json" "$argv"
 case "$argv" in *--strict-mcp-config*) fail "#1807 the mount alone made the launch strict" "$argv" ;; esac
-has "$argv" "/fleet-claim" || fail "#1807 the seed prompt was swallowed by the mount" "$argv"
+has "$argv" "/fleet-history" || fail "#1807 the seed prompt was swallowed by the mount" "$argv"
 [ "$(cat "$WORK/mcpenv")" = "$(cd "$WORK/bin" && pwd)|1" ] || fail "#1807 FLEET_MCP_BIN / FLEET_MCP_SERVER not exported" "$(cat "$WORK/mcpenv")"
 ok "#1807 default: --mcp-config=conf/mcp-worker.json (additive, =form, seed intact), FLEET_MCP_BIN + FLEET_MCP_SERVER set"
 
@@ -374,12 +374,12 @@ both() { # both <what> <argv>
     || fail "#4703 $1 did not mount the dispatch group" "$2 / $(cat "$WORK/mcporch")"
 }
 both "a plain launch" "$argv"
-argv="$( (export FLEET_MCP_ORCH=0; run /fleet-claim) )"; both "a worker (FLEET_MCP_ORCH=0 inherited)" "$argv"
+argv="$( (export FLEET_MCP_ORCH=0; run /fleet-history) )"; both "a worker (FLEET_MCP_ORCH=0 inherited)" "$argv"
 mkdir -p "$WORK/ccfg/agents"
 printf -- '---\nname: epic-driver\ndescription: d\n---\nbody\n' > "$WORK/ccfg/agents/epic-driver.md"
 argv="$( (export CLAUDE_CONFIG_DIR="$WORK/ccfg"; run --as epic-driver '/fleet-epic-run 1') )"; both "an EPIC driver" "$argv"
 printf -- '---\nname: fleet-worker\ndescription: w\ndisallowedTools: mcp__fleet-orch__spawn\n---\nbody\n' > "$WORK/ccfg/agents/fleet-worker.md"
-argv="$( (export CLAUDE_CONFIG_DIR="$WORK/ccfg"; run --as fleet-worker /fleet-claim) )"; both "a worker file that takes spawn away" "$argv"
+argv="$( (export CLAUDE_CONFIG_DIR="$WORK/ccfg"; run --as fleet-worker /fleet-history) )"; both "a worker file that takes spawn away" "$argv"
 for v in 0 1; do
   printf '%s\n' "$v" > "$WORK/spawnopt"
   argv="$(run)"; both "a pane stamped @agent_spawn $v" "$argv"

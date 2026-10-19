@@ -2,7 +2,7 @@
 # fleet-repo.sh — the repos a fleet hosts (issue #788).
 #
 #   fleet-repo.sh list   [--session <sess>]
-#   fleet-repo.sh add    [--session <sess>] <owner/repo | git address> [<checkout-dir>] [--base <branch>] [--as <ns/name>] [--tickets hub|github]
+#   fleet-repo.sh add    [--session <sess>] <owner/repo | git address> [<checkout-dir>] [--base <branch>] [--as <ns/name>]
 #   fleet-repo.sh remove [--session <sess>] <owner/repo> [--force]
 #   fleet-repo.sh get    [--session <sess>] <KEY> [<owner/repo> | --window <w> | --worktree <dir>] [--tsv]
 #   fleet-repo.sh fold   <from-session> --into <session> [--dry-run] [--wait]
@@ -21,16 +21,14 @@
 # `add` is fleet_repo_register (fleet-lib.sh, issue #1104) — the one implementation
 # fleet-up.sh shares: reuse the checkout if it already is that repo, else clone it;
 # resolve the base branch (#603); write the overlay; then the follow-through —
-# trust warning, daemon wake, collector kick. Where its tickets (issues, comments,
-# labels, EPIC records — never its code or PRs) live (issue #3739): a login that
-# reaches a hub writes FLEET_TICKETS="hub", one that does not writes nothing
-# (github); `--tickets hub|github` says it outright. Who runs its tasks is not
+# trust warning, daemon wake, collector kick. `--tickets` (issue #3739) is read one
+# version and only said: the ticket layer left with issue #4898. Who runs its tasks is not
 # the repo's (issue #4901): it is the login's (fleet.conf [node]
 # FLEET_TASK_AUTHORITY), so `add` writes no authority line; `--authority` is read
 # one version and only said (# compat-1v: 下一批删).
 # Its stdout is ONE result token (added:<slug> · refused:hosted ·
 # refused:origin-mismatch · refused:not-a-checkout · refused:invalid-repo ·
-# refused:invalid-tickets · failed:clone · failed:write);
+# failed:clone · failed:write);
 # every human line goes to stderr.
 #
 # `remove` deletes a repo's overlay — any repo, the last one too: one command, no
@@ -376,9 +374,7 @@ PLAN
   if [ "$hosted" = 0 ]; then
     # No collector kick (fleet_repo_register): its restore snapshot would race the
     # side-store archive below. Its stdout token is for scripts.
-    # Its tickets stay where they were (issue #3739): never the new-repo default.
-    _FLEET_REGISTER_NO_KICK=1 bash "$0" add --session "$SESS" "$SRC_REPO" "$src_main" --base "$src_base" \
-      --tickets "$(fleet_ticket_home "$SRC_REPO" "$FROM")" >/dev/null \
+    _FLEET_REGISTER_NO_KICK=1 bash "$0" add --session "$SESS" "$SRC_REPO" "$src_main" --base "$src_base" >/dev/null \
       || die "add failed"
     if [ -n "$carry" ]; then
       local f; f=$(fleet_repo_conf_file "$SESS" "$SRC_REPO")

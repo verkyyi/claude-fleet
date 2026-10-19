@@ -950,10 +950,11 @@ class Updater(object):
                                                  iso(h["since"]))
 
     def note_release(self, marks, target, held, cap):
-        """One record-only comment on each holding batch's EPIC, posted AS the
-        login whose mark it is (its own gh, its own fleet-comment.sh), so the
-        driver learns the floor moved. A comment that cannot be posted is logged;
-        the release stands either way."""
+        """One record-only note on each holding batch's EPIC, posted AS the login
+        whose mark it is through FLEET_EPIC_HOLD_NOTE_CMD, so the driver learns
+        the floor moved. No command (the default since issue #4898 — the fleet
+        writes no GitHub comment) ⇒ the log line is the record. A note that
+        cannot be posted is logged; the release stands either way."""
         cur = link_sha(self.p.current) or "?"
         seen = set()
         for login, ident, mark in marks:
@@ -975,8 +976,10 @@ class Updater(object):
                 # posted AS the login, which the seat cannot be (#3670): logged only
                 self.log("hold note on %s#%s: not posted — the seated updater does not run as %s" % (repo, n, login))
                 continue
-            cmd = env("FLEET_EPIC_HOLD_NOTE_CMD", "") or "/bin/bash %s" % os.path.join(
-                home, ".claude", "fleet", "bin", "fleet-comment.sh")
+            cmd = env("FLEET_EPIC_HOLD_NOTE_CMD", "")
+            if not cmd:
+                self.log("hold released on %s#%s (no note command: logged only, #4898)" % (repo, n))
+                continue
             try:
                 # root's own TMPDIR is not the login's to read
                 fd, bf = tempfile.mkstemp(prefix="fleet-hold-note.", dir="/tmp" if os.geteuid() == 0 else None)

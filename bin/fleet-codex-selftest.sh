@@ -18,10 +18,10 @@
 #     bash-guard / base-readonly-guard on PreToolUse; working; done) as TOML that
 #     actually parses; NO --model / --mcp-config / CLAUDE_CODE_SUBAGENT_MODEL leak;
 #     FLEET_CODEX_MODEL → -m (caller -m wins); @cc_agent codex (+ @cc_model) stamped.
-#   * SEED SKILLS — a bare `/fleet-claim` seed becomes Codex's native
-#     `$fleet-claim` skill when $CODEX_HOME has it and Codex exposes skills;
+#   * SEED SKILLS — a bare `/fleet-history` seed becomes Codex's native
+#     `$fleet-history` skill when $CODEX_HOME has it and Codex exposes skills;
 #     older Codex or an unsynced home falls back to the historic prose expansion:
-#     conf/codex-preamble.md + commands/fleet-claim.md with $ARGUMENTS
+#     conf/codex-preamble.md + commands/fleet-history.md with $ARGUMENTS
 #     substituted. Non-slash prompts and unknown skills pass through verbatim;
 #     the prompt stays the LAST argument; no prompt → no positional.
 #   * cwd is the worktree (codex runs where the pane runs); `codex` missing from
@@ -35,7 +35,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
 for f in "$BIN/fleet-claude.sh" "$BIN/fleet-codex.sh" "$BIN/fleet-lib.sh" "$BIN/set-claude-state.sh" \
-         "$ROOT/commands/fleet-claim.md" "$ROOT/conf/codex-preamble.md" \
+         "$ROOT/commands/fleet-history.md" "$ROOT/conf/codex-preamble.md" \
          "$ROOT/hooks/bash-guard.py" "$ROOT/hooks/base-readonly-guard.py"; do
   [ -f "$f" ] || { printf 'selftest: %s missing\n' "$f" >&2; exit 2; }
 done
@@ -131,7 +131,7 @@ printf 'FLEET_MODEL="opus"\n' > "$WORK/install/fleet.conf"     # the global conf
 export CODEX_HOME="$WORK/codexhome"; mkdir -p "$CODEX_HOME" "$WORK/wt/repo"
 FAKE_MAIN="$(cd "$WORK/wt/repo" && pwd -P)"
 printf 'model = "x"\n\n[projects."%s"]\ntrust_level = "trusted"\n' "$FAKE_MAIN" > "$CODEX_HOME/config.toml"
-for s in fleet-claim fleet-handoff; do
+for s in fleet-history fleet-handoff; do
   mkdir -p "$CODEX_HOME/skills/$s"
   printf -- '---\nname: %s\ndescription: fake %s\n---\n\n<!-- fleet codex command skill -->\n' "$s" "$s" > "$CODEX_HOME/skills/$s/SKILL.md"
 done
@@ -161,22 +161,22 @@ hasprefix(){ argv1l | grep -- "^$1" >/dev/null; }
 # ============================================================================
 if [ "${1:-}" != --resume-defaults ]; then
 : > "$WORK/conf/fleets/f1/conf"
-run '/fleet-claim'
+run '/fleet-history'
 [ "$(ran)" = claude ] || fail "A default must exec claude" "$(cat "$WORK/err")"
-[ "$(argv1l | paste -sd' ' -)" = "--model opus /fleet-claim" ] || fail "A default argv changed" "$(argv1l)"
+[ "$(argv1l | paste -sd' ' -)" = "--model opus /fleet-history" ] || fail "A default argv changed" "$(argv1l)"
 grep -q '@cc_agent' "$WORK/tmuxlog" 2>/dev/null && fail "A a claude launch must not stamp @cc_agent" "$(cat "$WORK/tmuxlog")"
 ok "A FLEET_AGENT unset → claude, argv byte-for-byte unchanged, no @cc_agent"
 
 printf 'FLEET_AGENT="claude"\n' > "$WORK/conf/fleets/f1/conf"
-run '/fleet-claim'
-[ "$(ran)" = claude ] && [ "$(argv1l | paste -sd' ' -)" = "--model opus /fleet-claim" ] || fail "A FLEET_AGENT=claude must be identical to unset" "$(argv1l)"
+run '/fleet-history'
+[ "$(ran)" = claude ] && [ "$(argv1l | paste -sd' ' -)" = "--model opus /fleet-history" ] || fail "A FLEET_AGENT=claude must be identical to unset" "$(argv1l)"
 ok "A FLEET_AGENT=claude ≡ unset"
 
 # ============================================================================
 # B. FLEET_AGENT=codex (per-fleet) → codex, with the rails; conf precedence
 # ============================================================================
 printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f1/conf"
-run '/fleet-claim'
+run '/fleet-history'
 [ "$(ran)" = codex ] || fail "B per-fleet FLEET_AGENT=codex must exec codex" "$(cat "$WORK/err")"
 hasarg --dangerously-bypass-approvals-and-sandbox || fail "B codex must run full-access (hooks are the rails)" "$(argv1l)"
 hasarg --dangerously-bypass-hook-trust            || fail "B codex must bypass hook trust (fleet-vetted hooks)" "$(argv1l)"
@@ -215,9 +215,9 @@ fi
 # the per-fleet value beats a global one, and a second fleet keeps its own
 printf 'FLEET_AGENT="codex"\n' > "$WORK/install/fleet.conf"
 printf 'FLEET_AGENT="claude"\n' > "$WORK/conf/fleets/f2/conf"
-printf 'f2' > "$SESS_FILE"; run '/fleet-claim'
+printf 'f2' > "$SESS_FILE"; run '/fleet-history'
 [ "$(ran)" = claude ] || fail "B a per-fleet claude must beat a global codex" "$(ran)"
-: > "$WORK/conf/fleets/f2/conf"; run '/fleet-claim'
+: > "$WORK/conf/fleets/f2/conf"; run '/fleet-history'
 [ "$(ran)" = codex ] || fail "B an empty per-fleet conf falls through to the global codex" "$(ran)"
 printf 'FLEET_MODEL="opus"\n' > "$WORK/install/fleet.conf"; printf 'f1' > "$SESS_FILE"
 ok "B per-fleet FLEET_AGENT overlays the global one (#472 precedence)"
@@ -226,17 +226,17 @@ ok "B per-fleet FLEET_AGENT overlays the global one (#472 precedence)"
 # C. --agent from the caller wins, either spelling, and is consumed
 # ============================================================================
 : > "$WORK/conf/fleets/f1/conf"                       # claude fleet
-run --agent codex '/fleet-claim'
+run --agent codex '/fleet-history'
 [ "$(ran)" = codex ] || fail "C --agent codex on a claude fleet must exec codex" "$(ran)"
 hasarg --agent && fail "C --agent must be consumed, never passed on" "$(argv1l)"
 hasarg codex   && fail "C the --agent VALUE must be consumed too" "$(argv1l)"
-run --agent=codex '/fleet-claim'
+run --agent=codex '/fleet-history'
 [ "$(ran)" = codex ] || fail "C --agent=codex spelling must work" "$(ran)"
 printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f1/conf"   # codex fleet
-run --agent claude '/fleet-claim'
+run --agent claude '/fleet-history'
 [ "$(ran)" = claude ] || fail "C --agent claude on a codex fleet must exec claude" "$(ran)"
-[ "$(argv1l | paste -sd' ' -)" = "--model opus /fleet-claim" ] || fail "C the claude path after --agent claude must be the plain claude argv" "$(argv1l)"
-run --agent gemini '/fleet-claim'
+[ "$(argv1l | paste -sd' ' -)" = "--model opus /fleet-history" ] || fail "C the claude path after --agent claude must be the plain claude argv" "$(argv1l)"
+run --agent gemini '/fleet-history'
 [ "$(ran)" = claude ] || fail "C an unknown --agent must fall back to claude" "$(ran)"
 grep -q 'unknown agent gemini' "$WORK/err" || fail "C an unknown agent should be reported on stderr" "$(cat "$WORK/err")"
 ok "C caller --agent (both spellings) beats the conf, is consumed; unknown → claude + a stderr note"
@@ -265,24 +265,24 @@ ln -s "$BIN/fleet-codex-posture.py" "$IBIN/fleet-codex-posture.py"
 cp "$CODEX_HOME/config.toml" "$WORK/codex.d2"
 printf 'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n' > "$WORK/posture"
 cat "$WORK/posture" "$WORK/codex.d2" > "$CODEX_HOME/config.toml"
-run '/fleet-claim'
+run '/fleet-history'
 [ "$(ran)" = codex ] || fail "D2 codex must run" "$(cat "$WORK/err")"
 hasarg --dangerously-bypass-approvals-and-sandbox && fail "D2 config.toml already gives full access — no CLI permission override" "$(argv1l)"
 argv1l | grep -E '^(approval_policy|sandbox_mode)=' >/dev/null && fail "D2 no -c permission override either" "$(argv1l)"
 hasarg --dangerously-bypass-hook-trust || fail "D2 hook-trust bypass stays" "$(argv1l)"
-FLEET_CODEX_POSTURE_FROM_CONFIG=0 run '/fleet-claim'
+FLEET_CODEX_POSTURE_FROM_CONFIG=0 run '/fleet-history'
 hasarg --dangerously-bypass-approvals-and-sandbox || fail "D2 FLEET_CODEX_POSTURE_FROM_CONFIG=0 keeps the old flag" "$(argv1l)"
-run -s read-only '/fleet-claim'
+run -s read-only '/fleet-history'
 hasarg --dangerously-bypass-approvals-and-sandbox || fail "D2 a caller permission flag keeps the old launch" "$(argv1l)"
 printf 'approval_policy = "never"\nsandbox_mode = "workspace-write"\n' | cat - "$WORK/codex.d2" > "$CODEX_HOME/config.toml"
-run '/fleet-claim'
+run '/fleet-history'
 hasarg --dangerously-bypass-approvals-and-sandbox || fail "D2 config.toml without full access keeps the flag" "$(argv1l)"
 printf 'approval_policy = "never"\nsandbox_mode = "danger-full-access"\nprofile = "p"\n' | cat - "$WORK/codex.d2" > "$CODEX_HOME/config.toml"
-run '/fleet-claim'
+run '/fleet-history'
 hasarg --dangerously-bypass-approvals-and-sandbox || fail "D2 a profile can move the posture — keep the flag" "$(argv1l)"
 cat "$WORK/posture" "$WORK/codex.d2" > "$CODEX_HOME/config.toml"
 mkdir -p "$WORK/wt/repo-issue-42/.codex"; printf 'sandbox_mode = "read-only"\n' > "$WORK/wt/repo-issue-42/.codex/config.toml"
-run '/fleet-claim'
+run '/fleet-history'
 hasarg --dangerously-bypass-approvals-and-sandbox || fail "D2 a project .codex/config.toml above the user's keeps the flag" "$(argv1l)"
 rm -f "$WORK/wt/repo-issue-42/.codex/config.toml"; rmdir "$WORK/wt/repo-issue-42/.codex"
 run --agent codex --resume abc
@@ -294,14 +294,14 @@ ok "D2 config.toml full access ⇒ no CLI permission override (in-TUI /resume wo
 # E. FLEET_CODEX_MODEL → -m (+ @cc_model); caller -m wins; empty = no -m
 # ============================================================================
 printf 'FLEET_AGENT="codex"\nFLEET_CODEX_MODEL="gpt-5.5"\n' > "$WORK/conf/fleets/f1/conf"
-run '/fleet-claim'
+run '/fleet-history'
 argv1l | paste -sd' ' - | grep -- '-m gpt-5.5' >/dev/null || fail "E FLEET_CODEX_MODEL must become -m" "$(argv1l)"
 grep -q '@cc_model gpt-5.5' "$WORK/tmuxlog" || fail "E the codex model must be stamped as @cc_model" "$(cat "$WORK/tmuxlog")"
-run -m o3 '/fleet-claim'
+run -m o3 '/fleet-history'
 argv1l | paste -sd' ' - | grep -- '-m gpt-5.5' >/dev/null && fail "E a caller -m must win over FLEET_CODEX_MODEL" "$(argv1l)"
 hasarg o3 || fail "E the caller's -m value must pass through" "$(argv1l)"
 printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f1/conf"
-run '/fleet-claim'
+run '/fleet-history'
 hasarg -m && fail "E no FLEET_CODEX_MODEL → no -m (codex's own default)" "$(argv1l)"
 hasarg 'features.hooks=true' || fail "E fleet guard hooks must be enabled even in a fresh CODEX_HOME"
 hasarg 'check_for_update_on_startup=false' || fail "E a fresh CODEX_HOME opens on an update picker nobody answers (#2401)" "$(argv1l)"
@@ -310,25 +310,24 @@ grep -q 'set-option -wu -t %0 @cc_model' "$WORK/tmuxlog" || fail "E new launch m
 ok "E FLEET_CODEX_MODEL → -m + @cc_model; caller -m wins; empty defers to codex"
 
 # ============================================================================
-# F. seed skill: /fleet-claim → native $fleet-claim when installed, else fallback
+# F. seed skill: /fleet-history → native $fleet-history when installed, else fallback
 # ============================================================================
-run '/fleet-claim'
+run '/fleet-history'
 p="$(last)"
-case "$p" in '$fleet-claim') : ;; *) fail "F the bare slash seed must become the native Codex skill trigger" "$(argv1l)" ;; esac
-ok "F /fleet-claim becomes native \$fleet-claim, as the last argument"
+case "$p" in '$fleet-history') : ;; *) fail "F the bare slash seed must become the native Codex skill trigger" "$(argv1l)" ;; esac
+ok "F /fleet-history becomes native \$fleet-history, as the last argument"
 
-FLEET_CODEX_NATIVE_SKILLS=0 run '/fleet-claim'
+FLEET_CODEX_NATIVE_SKILLS=0 run '/fleet-history'
 p="$(last)"
-case "$p" in /fleet-claim|'$fleet-claim') fail "F old-Codex fallback must expand the slash seed into prose" ;; esac
+case "$p" in /fleet-history|'$fleet-history') fail "F old-Codex fallback must expand the slash seed into prose" ;; esac
 case "$p" in *'running on OpenAI Codex CLI'*) : ;; *) fail "F the expanded seed must start with the Codex preamble" "$(printf '%s' "$p" | head -5)" ;; esac
-case "$p" in *'mcp__fleet__brief'*) : ;; *) fail "F the expanded seed must carry the /fleet-claim skill body (the brief tool, #1811)" "$(printf '%s' "$p" | head -20)" ;; esac
-case "$p" in *'mcp__fleet__pr_verdict'*) : ;; *) fail "F the expanded seed must carry the ship+land step" ;; esac
+case "$p" in *'browse & resume closed sessions'*) : ;; *) fail "F the expanded seed must carry the /fleet-history skill body" "$(printf '%s' "$p" | head -20)" ;; esac
 case "$p" in *'$ARGUMENTS'*) fail "F \$ARGUMENTS must be substituted (empty here)" ;; esac
 # preamble first, skill body after it
 pre_at=$(printf '%s' "$p" | grep -n 'running on OpenAI Codex CLI' | head -1 | cut -d: -f1)
-body_at=$(printf '%s' "$p" | grep -n '^# /fleet-claim' | head -1 | cut -d: -f1)
+body_at=$(printf '%s' "$p" | grep -n '^# /fleet-history' | head -1 | cut -d: -f1)
 [ "$pre_at" -lt "$body_at" ] || fail "F the preamble must precede the skill body" "pre=$pre_at body=$body_at"
-ok "F old-Codex /fleet-claim fallback expands to preamble + skill prose"
+ok "F old-Codex /fleet-history fallback expands to preamble + skill prose"
 
 # /name args → $ARGUMENTS substituted
 run '/fleet-handoff pickup /tmp/h.md'
@@ -401,7 +400,7 @@ ok "F3 private runtime is default inside a pane; embedded opt-out and explicit r
 # ~/.local/bin or /opt/homebrew can't be found once the fake is gone (this test
 # must never launch a real agent).
 rm -f "$WORK/fakebin/codex"
-PATH="$WORK/fakebin:/usr/bin:/bin" run '/fleet-claim'
+PATH="$WORK/fakebin:/usr/bin:/bin" run '/fleet-history'
 [ "$(cat "$WORK/rc")" = 127 ] || fail "G missing codex must exit 127" "rc=$(cat "$WORK/rc") err=$(cat "$WORK/err")"
 [ -z "$(ran)" ] || fail "G missing codex must NOT silently launch claude" "$(ran)"
 grep -q 'not on PATH' "$WORK/err" || fail "G the missing-codex error should say so" "$(cat "$WORK/err")"
@@ -418,24 +417,24 @@ ok "G codex missing → exit 127 with a clear error, no silent claude fallback"
 # (G removed the fake codex — put a minimal one back: records that it ran + argv.)
 printf '#!/bin/sh\nif [ "${1:-}" = debug ] && [ "${2:-}" = prompt-input ]; then printf "%%s\\n" "<skills_instructions>"; exit 0; fi\nprintf "%%s\\n" codex > "%s/ran"\n: > "%s/argv"; for a in "$@"; do printf "%%s\\036" "$a" >> "%s/argv"; done\nexit 0\n' "$WORK" "$WORK" "$WORK" > "$WORK/fakebin/codex"; chmod +x "$WORK/fakebin/codex"
 printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f1/conf"
-run '/fleet-claim'
+run '/fleet-history'
 [ "$(ran)" = codex ] || fail "H (setup) codex must run" "$(cat "$WORK/err")"
 grep -q 'not trusted' "$WORK/err" && fail "H a trusted base must not be flagged" "$(cat "$WORK/err")"
 grep -q '@claude_state needs' "$WORK/tmuxlog" 2>/dev/null && fail "H a trusted base must not stamp needs" "$(cat "$WORK/tmuxlog")"
 before=$(cat "$CODEX_HOME/config.toml")
 printf 'model = "x"\n' > "$CODEX_HOME/config.toml"                  # no trust table at all
-run '/fleet-claim'
+run '/fleet-history'
 [ "$(ran)" = codex ] || fail "H codex must still be exec'd when the base is untrusted (Codex is the authority)" "$(cat "$WORK/err")"
 grep -q "not trusted" "$WORK/err" || fail "H an untrusted base must be reported in the pane" "$(cat "$WORK/err")"
 grep -q 'set-window-option -t %0 @claude_state needs' "$WORK/tmuxlog" || fail "H an untrusted base must stamp needs on THIS window" "$(cat "$WORK/tmuxlog" 2>/dev/null)"
 [ "$(cat "$CODEX_HOME/config.toml")" = 'model = "x"' ] || fail "H the launcher must never write the operator's codex config" "$(cat "$CODEX_HOME/config.toml")"
 printf 'model = "x"\n\n[projects."%s"]\ntrust_level = "untrusted"\n' "$FAKE_MAIN" > "$CODEX_HOME/config.toml"
-run '/fleet-claim'
+run '/fleet-history'
 grep -q "not trusted" "$WORK/err" || fail "H an explicitly UNtrusted base must be reported too" "$(cat "$WORK/err")"
 printf 'model = "x"\n\n[projects."%s"]\ntrust_level = "trusted"\n[projects."/elsewhere"]\ntrust_level = "untrusted"\n' "$FAKE_MAIN" > "$CODEX_HOME/config.toml"
-run '/fleet-claim'
+run '/fleet-history'
 grep -q "not trusted" "$WORK/err" && fail "H a trusted table followed by another project's table must still read trusted" "$(cat "$WORK/err")"
-rm -f "$CODEX_HOME/config.toml"; run '/fleet-claim'
+rm -f "$CODEX_HOME/config.toml"; run '/fleet-history'
 grep -q "not trusted" "$WORK/err" && fail "H no codex config at all → skip the check quietly" "$(cat "$WORK/err")"
 printf '%s\n' "$before" > "$CODEX_HOME/config.toml"
 ok "H untrusted base checkout → pane note + needs stamp, codex still runs, config never written; trusted → silent"
@@ -447,7 +446,7 @@ ok "H untrusted base checkout → pane note + needs stamp, codex still runs, con
 mkdir -p "$FLEET_CONF_DIR/cred-proxy"
 printf '{"trust":"trusted","why":"selftest","ts":%s}\n' "$(date +%s)" > "$FLEET_CONF_DIR/cred-proxy/trust.json"
 printf 'model = "x"\n' > "$CODEX_HOME/config.toml"
-run '/fleet-claim'
+run '/fleet-history'
 [ "$(ran)" = codex ] || fail "H2 codex must run" "$(cat "$WORK/err")"
 grep -q "not trusted" "$WORK/err" && fail "H2 a trusted node must answer the trust question, not report it" "$(cat "$WORK/err")"
 grep -q 'pre-trusted' "$WORK/err" || fail "H2 the pre-trust is not said in the pane" "$(cat "$WORK/err")"
@@ -455,7 +454,7 @@ grep -q 'pre-trusted' "$WORK/err" || fail "H2 the pre-trust is not said in the p
   || fail "H2 codex-grant did not append exactly the base's table" "$(cat "$CODEX_HOME/config.toml")"
 printf 'model = "x"\n\n[projects."%s"]\ntrust_level = "untrusted"\n' "$FAKE_MAIN" > "$CODEX_HOME/config.toml"
 cp "$CODEX_HOME/config.toml" "$WORK/codex.own"
-run '/fleet-claim'
+run '/fleet-history'
 cmp -s "$CODEX_HOME/config.toml" "$WORK/codex.own" || fail "H2 a login's own untrusted answer was overwritten" "$(cat "$CODEX_HOME/config.toml")"
 grep -q "not trusted" "$WORK/err" || fail "H2 the login's own untrusted base must still be reported" "$(cat "$WORK/err")"
 rm -f "$FLEET_CONF_DIR/cred-proxy/trust.json"
@@ -503,18 +502,18 @@ ok "H3 managed HOME trust persists across proxy homes; arbitrary cwd, opt-out an
 cp "$ROOT/conf/mcp-worker.json" "$WORK/install/conf/mcp-worker.json"
 ln -s "$BIN/fleet-mcp.py" "$IBIN/fleet-mcp.py"
 printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f1/conf"
-run '/fleet-claim'
+run '/fleet-history'
 [ "$(ran)" = codex ] || fail "I codex must run" "$(cat "$WORK/err")"
 m=$(argv1l | grep '^mcp_servers\.fleet=' || true)
 case "$m" in
   'mcp_servers.fleet={command="bash",args=["-c",'*'fleet-mcp.py'*'env_vars=["TMUX","TMUX_PANE",'*'tool_timeout_sec='*'}') : ;;
   *) fail "I a Codex launch did not mount the fleet tool service" "$(argv1l)" ;;
 esac
-case "$(last)" in *fleet-claim) : ;; *) fail "I the seed prompt is no longer last" "$(argv1l)" ;; esac
-( export FLEET_MCP=0; run '/fleet-claim' )
+case "$(last)" in *fleet-history) : ;; *) fail "I the seed prompt is no longer last" "$(argv1l)" ;; esac
+( export FLEET_MCP=0; run '/fleet-history' )
 argv1l | grep '^mcp_servers\.fleet=' >/dev/null && fail "I FLEET_MCP=0 still mounted it" "$(argv1l)"
 : > "$WORK/conf/fleets/f1/conf"
-run '/fleet-claim'
+run '/fleet-history'
 [ "$(ran)" = claude ] && hasprefix '--mcp-config=.*/conf/mcp-worker\.json$' || fail "I the Claude launch lacks the same server" "$(argv1l)"
 ok "I Codex: -c mcp_servers.fleet (from conf/mcp-worker.json, TMUX env forwarded); Claude: --mcp-config of that file; FLEET_MCP=0 off"
 fi
@@ -557,12 +556,12 @@ ok 'J resume preserves saved permissions; fresh defaults, explicit/locked policy
 # its own fake: an earlier leg replaced the shared one with a recorder of argv only
 printf '#!/bin/sh\nprintf codex > "%s/ran"\nprintf "%%s\\n" "${FLEET_CODEX_NATIVE_USAGE-unset}" > "%s/nusage"\nexit 0\n' "$WORK" "$WORK" > "$WORK/fakebin/codex"; chmod +x "$WORK/fakebin/codex"
 printf 'FLEET_AGENT="codex"\nFLEET_CODEX_NATIVE_USAGE=1\n' > "$WORK/conf/fleets/f1/conf"
-rm -f "$WORK/nusage"; run '/fleet-claim'
+rm -f "$WORK/nusage"; run '/fleet-history'
 [ "$(ran)" = codex ] && [ "$(cat "$WORK/nusage")" = 1 ] || fail "J conf 1 did not reach the Codex launch" "$(cat "$WORK/nusage" 2>/dev/null) $(cat "$WORK/err")"
 printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f1/conf"
-rm -f "$WORK/nusage"; run '/fleet-claim'
+rm -f "$WORK/nusage"; run '/fleet-history'
 [ "$(cat "$WORK/nusage")" = unset ] || fail "J the pilot must be off by default" "$(cat "$WORK/nusage")"
-rm -f "$WORK/nusage"; FLEET_CODEX_NATIVE_USAGE=0 run '/fleet-claim'
+rm -f "$WORK/nusage"; FLEET_CODEX_NATIVE_USAGE=0 run '/fleet-history'
 [ "$(cat "$WORK/nusage")" = unset ] || fail "J a 0 must not reach the runtime" "$(cat "$WORK/nusage")"
 ok "J FLEET_CODEX_NATIVE_USAGE=1 in the fleet conf reaches the Codex launch; default and 0 reach it as unset"
 
@@ -586,31 +585,31 @@ chmod +x "$WORK/fakebin/codex"
 mkdir -p "$WORK/conf/fleets/f3/repos"; printf 'f3' > "$SESS_FILE"
 printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f3/conf"
 printf 'FLEET_REPO="local/demo"\nFLEET_MAIN="%s"\nFLEET_FORGE="none"\n' "$FAKE_MAIN" > "$WORK/conf/fleets/f3/repos/local-demo.conf"
-TEST_REPO=local/demo run '/fleet-claim'
+TEST_REPO=local/demo run '/fleet-history'
 [ "$(ran)" = codex ] && hasarg 'features.plugins=false' \
   || fail "K forge none: Codex must start with features.plugins=false (#4696)" "$(argv1l; cat "$WORK/err")"
 printf 'FLEET_REPO="local/demo"\nFLEET_MAIN="%s"\n' "$FAKE_MAIN" > "$WORK/conf/fleets/f3/repos/local-demo.conf"
-TEST_REPO=local/demo run '/fleet-claim'
+TEST_REPO=local/demo run '/fleet-history'
 [ "$(ran)" = codex ] && hasarg 'features.plugins=false' \
   || fail "K a GitHub repo: Codex must start with features.plugins=false (#4848)" "$(argv1l)"
-TEST_NOREPO=1 run '/fleet-claim'
+TEST_NOREPO=1 run '/fleet-history'
 [ "$(ran)" = codex ] && hasarg 'features.plugins=false' \
   || fail "K a no-repo window: Codex must start with features.plugins=false (#4848)" "$(argv1l)"
 printf '{"codex_plugins": "on"}\n' > "$FLEET_CONF_DIR/agent-overrides.json"
-TEST_REPO=local/demo run '/fleet-claim'
+TEST_REPO=local/demo run '/fleet-history'
 [ "$(ran)" = codex ] && ! hasarg 'features.plugins=false' \
   || fail "K codex_plugins on in agent-overrides.json must keep Codex's plugins" "$(argv1l)"
 printf '["playwright", "codex_plugins:on"]\n' > "$FLEET_CONF_DIR/agent-overrides.json"
-TEST_REPO=local/demo run '/fleet-claim'
+TEST_REPO=local/demo run '/fleet-history'
 [ "$(ran)" = codex ] && ! hasarg 'features.plugins=false' \
   || fail "K the array form codex_plugins:on must keep Codex's plugins" "$(argv1l)"
 printf '{"codex_plugins": "off"}\n' > "$FLEET_CONF_DIR/agent-overrides.json"
-TEST_REPO=local/demo run '/fleet-claim'
+TEST_REPO=local/demo run '/fleet-history'
 [ "$(ran)" = codex ] && hasarg 'features.plugins=false' \
   || fail "K codex_plugins off keeps the plugins off" "$(argv1l)"
 rm -f "$FLEET_CONF_DIR/agent-overrides.json"
 printf 'FLEET_AGENT="claude"\n' > "$WORK/conf/fleets/f3/conf"
-TEST_REPO=local/demo run '/fleet-claim'
+TEST_REPO=local/demo run '/fleet-history'
 [ "$(ran)" = claude ] && ! hasarg 'features.plugins=false' \
   || fail "K a Claude launch carries no Codex flag" "$(ran) $(argv1l)"
 printf 'f1' > "$SESS_FILE"

@@ -16,9 +16,10 @@
 #      and opens nothing — never a quiet Claude. Issue #3097 (⌘T in a 看台): from
 #      a run-shell's context ($TMUX set, no $TMUX_PANE) on a separated login with
 #      no_credentials, a Codex spawn opens Codex and a Claude spawn opens Claude.
-#   E  bin/fleet-issue-file.sh --spawn --label agent:codex hands the spawn
-#      `--agent codex` (no read of the brand-new issue); both labels exit 2 and
-#      file nothing.
+#   E  a new task (fleet-control-read.sh start … new codex, its record T<n>) opens
+#      through dash-raw-session.sh with `--agent codex --task T<n>` on a
+#      central-only credential login, and refuses (4) with no endpoint before
+#      opening anything; nothing is filed on GitHub (issue #4898).
 #
 # Exit 0 = pass; non-zero = fail.
 set -uo pipefail
@@ -141,7 +142,7 @@ run_spawn() { # GH_LABELS / CODEX_CMD from env; $@ = spawn args
   rm -rf "$WORK/dash/.claude-dash/fleets"; : > "$WORK/newwin"
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
-  FLEET_PRESPAWN_DEDUP=0 NEWWIN_LOG="$WORK/newwin" FLEET_CODEX_READY_CMD="${CODEX_CMD:-$READY}" \
+  NEWWIN_LOG="$WORK/newwin" FLEET_CODEX_READY_CMD="${CODEX_CMD:-$READY}" \
     "$SPAWN" 77 --origin hub "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
 }
 # ⌘T in a 看台 (issue #3097): the popup runs under `tmux run-shell` — $TMUX set,
@@ -153,7 +154,7 @@ run_shell_spawn() {
   ( unset TMUX_PANE
     PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/sepconf" TMUX="$WORK/tt-sock,1,0" \
     FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
-    FLEET_PRESPAWN_DEDUP=0 NEWWIN_LOG="$WORK/newwin" FLEET_CODEX_READY_CMD="$NOLOGIN" GH_LABELS='[]' \
+    NEWWIN_LOG="$WORK/newwin" FLEET_CODEX_READY_CMD="$NOLOGIN" GH_LABELS='[]' \
       "$SPAWN" 77 --origin hub --print "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err" )
 }
 
@@ -188,7 +189,7 @@ run_title() {
   printf '77\tbug,agent:%s\n' "${CACHED_AGENT:-codex}" > "$WORK/dash/.claude-dash/fleets/$(fleet_slug acme/widgets)/labels"
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" GH_LOG="$WORK/gh.log" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
-  FLEET_PRESPAWN_DEDUP=0 NEWWIN_LOG="$WORK/newwin" FLEET_CODEX_READY_CMD="$READY" \
+  NEWWIN_LOG="$WORK/newwin" FLEET_CODEX_READY_CMD="$READY" \
     "$SPAWN" 77 --origin hub --title 'Known Title' "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
 }
 run_title
@@ -216,16 +217,16 @@ grep -qF -- "fleet-session-wrap.sh' --agent claude" "$WORK/newwin" \
   || fail "D #3097: …it must open Claude" "$(cat "$WORK/newwin") $(cat "$WORK/spawn.err")"
 ok "D agent:codex opens Codex; no label = fleet default; --agent wins; both / no login refused; --title reads the cache only; run-shell + separated opens both agents"
 
-# ===== E: the filer hands the label to the spawn =============================
+# ===== E: a new task opens on its record =====================================
 SB="$WORK/sb"; mkdir -p "$SB"
-cp "$BIN/fleet-issue-file.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$SB/"
+cp "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$SB/"
 for f in "$BIN"/*.sh "$BIN"/*.py; do [ -e "$SB/$(basename "$f")" ] || ln -s "$f" "$SB/$(basename "$f")"; done
-rm -f "$SB/dash-issue-session.sh"
-cat > "$SB/dash-issue-session.sh" <<FAKE
+rm -f "$SB/dash-raw-session.sh"
+cat > "$SB/dash-raw-session.sh" <<FAKE
 #!/bin/bash
 printf '%s\n' "\$*" > "$WORK/spawn-args"
 FAKE
-chmod +x "$SB/dash-issue-session.sh"
+chmod +x "$SB/dash-raw-session.sh"
 rm "$SB/fleet-diskguard.sh"
 printf '#!/bin/bash\nexit 0\n' > "$SB/fleet-diskguard.sh"
 printf 'CCQUOTA_FLEET_CREDS=0\n' > "$WORK/central/node.env"
@@ -236,33 +237,17 @@ run_new() {
   : > "$WORK/spawn-args"; : > "$WORK/gh.log"
   PATH="$WORK/fakebin:$PATH" GH_LOG="$WORK/gh.log" FLEET_CONF_DIR="$WORK/central" TMUX='' TMUX_PANE='' \
   FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master FLEET_START_WARM=0 \
-  FLEET_CRED_PROXY=1 FLEET_CRED_CENTRAL_URL="$1" FLEET_CODEX_READY_CMD=false \
+  FLEET_CRED_PROXY=1 FLEET_CRED_CENTRAL_URL="$1" FLEET_CODEX_READY_CMD=false FLEET_CONTROL_TASK=T9 \
     bash "$SB/fleet-control-read.sh" start testsess new codex acme/widgets '' '' 'Central Codex task' \
     <<< 'Reply OK' > "$WORK/new.out" 2> "$WORK/new.err"
 }
 run_new https://proxy.example; rc=$?
-[ "$rc" = 0 ] && grep -q -- '--agent codex' "$WORK/spawn-args" \
-  || fail "E central-only new task reaches the Codex spawner" "$(cat "$WORK/new.err")"
-grep -q 'issue create' "$WORK/gh.log" || fail "E central-only new task files its issue"
+[ "$rc" = 0 ] && grep -q -- '--agent codex' "$WORK/spawn-args" && grep -q -- '--task T9' "$WORK/spawn-args" \
+  || fail "E central-only new task reaches the Codex spawner on its record" "$(cat "$WORK/new.err" "$WORK/spawn-args")"
+grep -q 'issue create' "$WORK/gh.log" && fail "E a new task files no issue" "$(cat "$WORK/gh.log")"
 run_new ''; rc=$?
 [ "$rc" = 4 ] && [ ! -s "$WORK/spawn-args" ] && [ ! -s "$WORK/gh.log" ] \
-  || fail "E missing central endpoint refuses before filing or spawning" "$(cat "$WORK/new.err")"
-ok "E new-task adapter accepts central-only credentials and refuses missing credentials before filing"
-file_it() {
-  : > "$WORK/spawn-args"; : > "$WORK/gh.log"
-  PATH="$WORK/fakebin:$PATH" GH_LOG="$WORK/gh.log" FLEET_CONF_DIR="$WORK/conf" TMUX='' TMUX_PANE='' \
-  FLEET_REPO="acme/widgets" FLEET_MILESTONE=none \
-    bash "$SB/fleet-issue-file.sh" --title 'mechanical rename' --repo acme/widgets --no-breakage "$@" \
-    >"$WORK/file.out" 2>"$WORK/file.err"
-}
-file_it --label agent:codex --spawn; rc=$?
-[ "$rc" = 0 ] || fail "E the filing exited $rc" "$(cat "$WORK/file.err")"
-grep -q -- '--agent codex' "$WORK/spawn-args" || fail "E --label agent:codex --spawn must hand the spawn --agent codex" "$(cat "$WORK/spawn-args")"
-file_it --spawn
-grep -q -- '--agent' "$WORK/spawn-args" && fail "E no agent label ⇒ the spawn gets no --agent" "$(cat "$WORK/spawn-args")"
-file_it --label agent:codex,agent:claude --spawn; rc=$?
-[ "$rc" = 2 ] || fail "E both agent labels must exit 2 (got $rc)" "$(cat "$WORK/file.err")"
-grep -q 'issue create' "$WORK/gh.log" && fail "E both agent labels must file nothing" "$(cat "$WORK/gh.log")"
-ok "E the filer passes agent:codex to its spawn as --agent; both labels file nothing"
+  || fail "E missing central endpoint refuses before opening anything" "$(cat "$WORK/new.err")"
+ok "E a new task opens Codex on its record with central-only credentials; no endpoint refuses before opening"
 
 printf 'fleet-agent-route-selftest: %d passed\n' "$pass"

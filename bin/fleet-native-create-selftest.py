@@ -322,7 +322,7 @@ class NativeCreation(unittest.TestCase):
                 mock.patch.object(authority, 'subprocess', process_api), \
                 mock.patch.object(authority.signal, 'signal'), \
                 mock.patch.object(authority, 'start_call', side_effect=start), \
-                mock.patch.object(authority.ticket, 'api', side_effect=reserved_read), \
+                mock.patch.object(authority.hubrest, 'api', side_effect=reserved_read), \
                 mock.patch.object(authority, 'prove_stopped', side_effect=lambda proof: proof), \
                 mock.patch.object(launch, 'same_process', return_value=False):
             self.assertEqual(authority.supervise(['launcher', '--agent', 'claude']), 0)
@@ -386,7 +386,7 @@ class NativeCreation(unittest.TestCase):
         with mock.patch.dict(os.environ, {'TMUX_PANE': '%1', 'FLEET_AUTHORITY_START': reservation}), \
                 mock.patch.object(authority, 'subprocess', process_api), \
                 mock.patch.object(authority, 'start_call', side_effect=start), \
-                mock.patch.object(authority.ticket, 'api', side_effect=reserved_read), \
+                mock.patch.object(authority.hubrest, 'api', side_effect=reserved_read), \
                 self.assertRaisesRegex(ValueError, 'frozen fixture'):
             authority.supervise(['launcher'])
         self.assertEqual(actions, ['begin', 'cancel'])

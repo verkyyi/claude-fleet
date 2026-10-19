@@ -113,7 +113,7 @@ children_wake_state() {
 #           done — unshipped work nobody is carrying); any child whose own
 #           @claude_state is `needs`.
 #   quiet   an outcome worth knowing, nothing to do: MERGED; FAILED while the child
-#           says it is fixing it (fleet-claim's `RED: … fixing it`); any other reap.
+#           says it is fixing it (the worker's `RED: … fixing it`); any other reap.
 #   silent  a turn boundary, not an outcome: WAITING (bg job / open PR — #864's
 #           busy verdict) and IDLE (the gate could not be read). Ledger only.
 # An unknown state is loud: a band this function does not know must fail toward

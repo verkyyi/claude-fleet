@@ -1060,7 +1060,6 @@
 0.00	hub/api.TestTargetKey
 0.37	hub/api.TestTaskCollaborationAPIAuthority
 0.46	hub/api.TestTaskDispatchCLI
-33.11	hub/api.TestTaskDispatchRecoveryChain
 0.38	hub/api.TestTaskIssueOnDemand
 0.25	hub/api.TestTaskLastKnownInventoryEvidence
 0.28	hub/api.TestTaskNoRepoIsARecordOnly

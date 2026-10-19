@@ -60,12 +60,9 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 - From here on **every** `$FLEET_REPO` below is the resolved repo, and every
   `gh` call names it with `--repo` — the hub pane of a multi-repo fleet sits in
   `$HOME`, where a bare `gh` has no repo to infer.
-  A **ticket** (the parent, a member, its state, labels, comments) is read and
-  written through the ticket door only — `~/.claude/fleet/bin/fleet-ticket.sh
-  read|edit|label|children|comment <id>`, the id from `fleet-ticket.sh id
-  <repo> <N>` (issue #3599): `gh:<repo>#N` for a repo on GitHub, `hub:<repo>#N`
-  for a `FLEET_TICKETS=hub` repo, which has no GitHub issue at all; the
-  `mcp__fleet__gh` tool's `kind: issue` and `fleet_sub_issues` answer for both.
+  The parent and its members are GitHub issues, read with `gh issue view
+  --repo <repo>` (the fleet's ticket door left with issue #4898);
+  `fleet_sub_issues` lists the members.
 - **The charter's `<!-- fleet:epic repo=… -->` marker**, when present, must equal
   `$FLEET_REPO` — else stop: a report built from the wrong repo's issue #N is
   a page about someone else's batch.
@@ -101,24 +98,12 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
   (recorded by `/fleet-epic-run` at each spawn). Spanning versions is allowed,
   never a defect; `versions: 0` = nothing recorded (a batch from before #2934) —
   say so, never guess.
-- **The evidence**: what each member looks like live, as its own worker captured
-  it (issue #810) — `~/.claude/fleet/bin/fleet-evidence.sh list --repo "$FLEET_REPO" --epic <N>`
-  prints one row per capture (`member · stage · ts · path · note`) and a `none`
-  row for a member with nothing — a member of the parent's repo as `N`, one filed
-  in another repo as `owner/name#N` (its worker stored it under this EPIC's tree,
-  issue #1942). The stages are `before` / `after` — the
-  worker's, taken at the same URL / command / pane the member's `上线证据:` line
-  named, before touching code and after the PR was open — and `live`, which is
-  yours (step 2). **Collect, never create**: a missing before/after is not
-  re-shot and not staged; the member is reported as **无证据**, in those words.
-  A member that ran on **another machine** (hub placement) is read back from the
-  hub — its machine uploaded the captures at its ship report / reap (issue #1609,
-  `bin/fleet-worker-records.sh`): such a row's note starts `[@<machine>]`. A `none`
-  row whose note says 「在 <machine> 上跑过，没拍」 means the worker ran there and
-  took nothing — write **无证据（在 <machine> 上跑过，没拍）**; 「别机未查（入口不可达）」
-  means the hub could not be asked — write that, not a bare 无证据. The same rows
-  reach `/fleet-history list` (summary `@<machine> …`), so 占用时长 for a remote
-  member comes from its row there, not the tick log.
+- **The evidence**: what each member looks like, as its own worker showed it in
+  its merged PR (the PR body, its screenshots) along the member's `上线证据:`
+  line. The fleet's evidence store left with issue #4898: **collect, never
+  create** — a member whose PR shows nothing is reported as **无证据**, in those
+  words. 占用时长 comes from the member's `/fleet-history list` row, not the
+  tick log.
 
 **A hard limit to state plainly in the page, not to paper over:** this fleet
 cannot attribute tokens to an issue. There is no session→spend join yet
@@ -288,30 +273,21 @@ Item 3 in detail — the evidence grid (issue #810):
   right form for a fleet-side change — one form among several, not the
   definition of "graphically": this skill ships to web products too, and a report
   on one that shows only the dash has shown nothing.
-  - **改动前 / 改动后** come from the workers through `fleet-evidence.sh` (step 1).
-    A missing stage is a `.none` cell reading **无证据**. Do not take a "before"
-    now — the change has landed, and the picture would be fiction.
+  - **改动前 / 改动后** come from the members' PRs (step 1). A missing stage is a
+    `.none` cell reading **无证据**. Do not take a "before" now — the change has
+    landed, and the picture would be fiction.
   - **已上线** is yours, once. When the member's repo has a deploy signal
     (`FLEET_DEPLOY_REF` / `FLEET_DEPLOY_CHECK`, #541 — per repo in a multi-repo
     fleet, from its `repos/<slug>.conf`, #805) and the member's deploy state
-    is green, capture ONE shot from prod along the same line the worker followed,
-    and store it where a re-run of this report finds it again:
-    `~/.claude/fleet/bin/fleet-evidence.sh live --repo "$FLEET_REPO" --issue <M> --epic <N> --note '…' <file>`
-    — for a member filed in another repo, `--repo <its repo> --epic "$FLEET_REPO#<N>"`
-    (issue #1942), so the shot lands beside its worker's before/after
-    (`-` for a command's output on stdin, `--pane <t>` for a TUI). No deploy
+    is green, capture ONE shot from prod along the same line the worker followed
+    and save it beside the report page (`<dir>/evidence/<M>/live-….png`, a member
+    in another repo under `<dir>/evidence/<owner>-<name>.<M>/`). No deploy
     signal, not yet green, or prod unreachable from this machine → a `.none` cell
-    reading **未取到** and the reason. Reachability is an egress fact, not a
-    constant: the monorepo's smoke suite says prod needs a China-reachable host,
-    while a 2026-09-19 probe from the macbook got HTTP 200 — try once, report what
-    happened.
-  - **Getting the files into the page**:
-    `~/.claude/fleet/bin/fleet-evidence.sh export --repo "$FLEET_REPO" --epic <N> <dir-of-the-report-html>`
-    copies every file to `<dir>/evidence/<M>/…` (`<dir>/evidence/<owner>-<name>.<M>/…`
-    for a member in another repo) and prints the same rows with
-    RELATIVE paths — reference those (`<img src="evidence/42/after-….png">`).
-    The page is served from that directory, so the pictures ride along. A playwright-MCP screenshot lands under the worktree (`.playwright-mcp/`):
-    that is a source to hand to `fleet-evidence.sh live`, not a path to reference.
+    reading **未取到** and the reason — try once, report what happened.
+  - **Getting the files into the page**: copy each PR's images into
+    `<dir>/evidence/<M>/…` and reference them by RELATIVE path
+    (`<img src="evidence/42/after.png">`); the page is served from that
+    directory, so the pictures ride along.
 
 ## 3. Publish
 

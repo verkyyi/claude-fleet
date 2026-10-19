@@ -190,8 +190,8 @@ case "${1:-}" in
     fi
     ;;
   blocked)
-    # The worker's OWN red (issue #704): `/fleet-claim`'s blocked rail — "post a
-    # `⛔ blocked:` comment, then set the window red". Not a hook verb: the worker
+    # The worker's OWN red (issue #704): the `ask` tool's blocked rail — "put the
+    # question on the record, then set the window red". Not a hook verb: the worker
     # runs it from its Bash tool, and that is exactly why it needs its own subtype.
     # A plain `needs` here lived for ONE hook edge (measured on an isolated socket):
     # the same Bash call's PostToolUse wrote `working` over it, Stop wrote `done`,

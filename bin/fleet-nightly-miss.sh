@@ -39,16 +39,16 @@
 # `bin/ci-plan.sh <check> <M^>` — those that skipped it are the suspects
 # (`selection-miss`, each named), none skipped ⇒ `picked`.
 #
-# One issue per red, through the ONE filer road (bin/fleet-issue-file.sh
-# --breakage-key, never a sha — 共同约定 6): nightly-<test> · nightly-go-<pkg>.<Test>
-# · nightly-pg-<pkg>.<Test> · nightly-check-<check>; a flaky one flaky-<…> (the
-# train's own key for a selftest). The same red the next night is a 「同一故障」
-# comment (exit 5), never a second issue. Labels: selection-miss · bug · flaky.
+# Each red is SAID, not filed (issue #4898: the issue filer left with the ticket
+# layer): bin/fleet-ci-say.sh writes it to the run's summary page and one warning,
+# under the key a filing used (never a sha): nightly-<test> · nightly-go-<pkg>.<Test>
+# · nightly-pg-<pkg>.<Test> · nightly-check-<check>; a flaky one flaky-<…>.
+# FLEET_NM_FILER is a filer of the same argv (a selftest's seam; exit 5 = already open).
 # Prints a Markdown table (one row per red) on stdout for the run's summary page.
 # Bisects at most --max tests (default 5, FLEET_NM_MAX); the rest are listed and
-# filed without a bisect.
+# said without a bisect.
 #
-# Env: FLEET_NM_FILER   the issue filer (default bin/fleet-issue-file.sh) — a selftest seam
+# Env: FLEET_NM_FILER   the filer (default bin/fleet-ci-say.sh: says it) — a selftest seam
 #      FLEET_NM_RUN     runs ONE selftest in a checkout: `$FLEET_NM_RUN <checkout> <test>`,
 #                       exit 0 green (default: <checkout>/bin/run-selftests.sh <test>)
 #      FLEET_NM_GO_RUN  runs ONE Go test: `$FLEET_NM_GO_RUN <checkout> <go|pg> <pkg> <Test>`,
@@ -92,7 +92,7 @@ git -C "$dir" rev-parse -q --verify "$sha^{commit}" >/dev/null || die "$sha is n
 sha=$(git -C "$dir" rev-parse "$sha^{commit}")
 
 file_issue() {
-  if [ -n "${FLEET_NM_FILER:-}" ]; then "$FLEET_NM_FILER" "$@"; else bash "$BIN/fleet-issue-file.sh" "$@"; fi
+  if [ -n "${FLEET_NM_FILER:-}" ]; then "$FLEET_NM_FILER" "$@"; else bash "$BIN/fleet-ci-say.sh" "$@"; fi
 }
 
 # The reds, one unit a line: st|<test> · go|<pkg>|<Test> · pg|<pkg>|<Test> (<Test>
@@ -453,7 +453,7 @@ ${flist:-（没有读出改动的文件）}"
     url=$(file_issue --repo "$repo" --breakage-key "$key" --fault-sha "$sha" ${runurl:+--fault-link "$runurl"} --label "$label" --priority p1 \
             --title "$title" --body "$body"); frc=$?
     case "$frc" in
-      0|5) url=$(printf '%s\n' "$url" | tail -1) ;;
+      0|5) url=$(printf '%s\n' "$url" | tail -1); url=${url:-said} ;;
       *)   say "could not file $disp (filer exit $frc)"; rc=1; url="(filing failed, exit $frc)" ;;
     esac
   fi

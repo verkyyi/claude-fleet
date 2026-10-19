@@ -18,13 +18,11 @@
 #      the env Codex withholds and a per-call timeout an await fits in
 #   G  报问记合 (issue #1808) refusals: each new tool's bad enum, bad combination,
 #      wrong type — answered isError with the reason, and NOTHING ran
-#   H  report · ask · comment · evidence · handoff · pr_verdict · pr_merge each run
-#      their script with exactly the documented argv, a body / doc on STDIN, and the
-#      exit code passes through; ask posts `⛔ blocked:` THEN stamps the window red
-#   I  script ≡ tool: the same inputs through the REAL fleet-comment.sh (by hand vs
-#      the comment tool) post the byte-identical comment, the REAL
-#      fleet-report-parent.sh --dry-run prints the same, and every new tool's argv +
-#      stdin is what the hand-typed contract command (commands/fleet-claim.md) runs
+#   H  report · ask · handoff · pr_verdict · pr_merge each run their script with
+#      exactly the documented argv, a body / doc on STDIN, and the exit code passes
+#      through; ask writes no comment (issue #4898), it stamps the window red
+#   I  script ≡ tool: the same inputs through the REAL fleet-report-parent.sh
+#      --dry-run print the same envelope by hand and by tool
 #   J  the worker credential (issue #1809): minted for the pane's session, a valid
 #      one runs the tool and the call log names its worker_id; expired, forged,
 #      tampered, another session's pane, another fleet, revoked → refused, nothing
@@ -38,7 +36,7 @@
 #      traps every Python socket; curl and ccquota are tripwires); the real
 #      fleet_hub_put carries it as the relay's `worker`, and without it the outbox
 #      file is byte for byte as before
-#   L  the rest of a worker skill (issue #1811): brief · file_issue · gh · context ·
+#   L  the rest of a worker skill (issue #1811): brief · context ·
 #      transfer · where · show · open · handoff arm — refusals run nothing, each runs
 #      its script with exactly the documented argv, and handoff arm returns at once
 #      with the cycle helper DETACHED (it outlives the call)
@@ -65,15 +63,14 @@
 #      `fleet-orch` listing exactly spawn · await · children · answer_dialog · send · task
 #      `--list` prints each server's list; `fleet` still answers a dispatch-group
 #      call (an old session's, road=legacy in the call log); a server that took over
-#      from a pre-group version keeps listing all 28 and hands that on; a session with
+#      from a pre-group version keeps listing all of them and hands that on; a session with
 #      no fleet-orch beside it (FLEET_MCP_ORCH unset) gets the dispatch group listed on
-#      `fleet` (issue #4703); file_issue spawn:true always spawns — with or without the
-#      group, whatever @agent_spawn or a plugin says (issues #4591, #4703); --mount codex
+#      `fleet` (issue #4703); --mount codex
 #      --group orch derives from conf/mcp-orch.json and no plugin registers the server;
 #      --bridge-seat is 0 in any fleet pane, never by role or @agent_spawn (#3118, #4703)
 #   Q2 the dispatch group ships with the core (issue #4334); @agent_spawn gates nothing
-#      (issue #4703): unset / 0 / 1 ⇒ --bridge-seat 0 and file_issue spawns; the spawn
-#      tool hands back the spawner's cap (2) and claim (3) exits
+#      (issue #4703): unset / 0 / 1 ⇒ --bridge-seat 0; the spawn tool hands back the
+#      spawner's cap (2) and dedup (3) exits
 set -u
 
 BIN=$(cd "$(dirname "$0")" && pwd)
@@ -119,18 +116,14 @@ fakein() { # fakein <name> <body>
 $2"
 }
 fake fleet-report-parent.sh 'echo "queued → parent issue-77"; exit 3'
-fakein fleet-comment.sh 'echo "https://github.com/acme/app/issues/$1#c1"'
 fake set-claude-state.sh 'exit 0'
-fakein fleet-evidence.sh 'echo "/ev/$1"'
 fakein fleet-handoff-file.sh 'echo "/h/$1"; [ "$1" = check ] && exit 3; exit 0'
 fake fleet-pr-verdict.sh 'echo PENDING; exit 1'
 fakein fleet-task-record.sh 'echo T7'
 fake fleet-pr-merge.sh 'echo MERGED'
 # the rest of a worker skill (issue #1811)
-fake fleet-claim-brief.sh 'echo "===== fleet ====="'
+fake fleet-brief.sh 'echo "===== fleet ====="'
 fake fleet-compact-resume.sh 'echo map'
-fake fleet-issue-file.sh 'echo "https://github.com/acme/app/issues/900"'
-fake fleet-gh.sh 'echo "{}"'
 fake fleet-context.sh 'echo "ctx 41% OK"'
 fake fleet-transfer.sh 'echo /req/1'
 fake fleet-client-where.sh 'echo "mac-b iTerm2"; exit 3'
@@ -191,21 +184,20 @@ assert rows[0]["result"]["serverInfo"]["name"] == "fleet", rows[0]
 assert rows[0]["result"]["protocolVersion"] == "2025-06-18", rows[0]
 tools = {t["name"]: t for t in rows[1]["result"]["tools"]}
 assert set(tools) == {"status", "repos", "agents",
-                      "report", "ask", "comment", "evidence", "handoff", "pr_verdict", "pr_merge",
-                      "brief", "file_issue", "gh", "context", "transfer", "where", "show", "open",
+                      "report", "ask", "handoff", "pr_verdict", "pr_merge",
+                      "brief", "context", "transfer", "where", "show", "open",
                       "set_reap"}, sorted(tools)
 for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
     assert t["description"], t
-assert tools["comment"]["inputSchema"]["required"] == ["issue", "body"]
 assert tools["ask"]["inputSchema"]["required"] == ["question"]
-for n in ("report", "evidence", "handoff"):
+for n in ("report", "handoff"):
     assert len(tools[n]["inputSchema"]["required"]) == 1, n
 for n in ("pr_verdict", "pr_merge"):       # pr is optional since #3602 (FLEET_LAND=fleet)
     assert "required" not in tools[n]["inputSchema"], n
     assert tools[n]["inputSchema"]["properties"]["pr"]["minimum"] == 1, n
 PY
-ok "A server \`fleet\`, the nineteen core tools, every schema closed"
+ok "A server \`fleet\`, the fifteen core tools, every schema closed"
 
 # --- B: refusals — nothing runs -----------------------------------------------
 : > "$LOG"
@@ -299,12 +291,12 @@ ok "C status · children · repos · agents · spawn · await · send each ran i
 python3 - "$WORK/d" <<'PY' || fail "D: with no hub a tool was missing or failed" "$(cat "$WORK/d")"
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
-assert len(rows[1]["tools"]) == 19, rows[1]
+assert len(rows[1]["tools"]) == 15, rows[1]
 assert rows[40]["structuredContent"]["exit"] == 2 and not rows[40].get("isError"), rows[40]
 assert rows[41]["structuredContent"]["exit"] == 0, rows[41]
 PY
 grep -qx 'fleet-await.sh 3 --timeout 540' "$LOG" || fail "D: await's default timeout is not 540" "$(cat "$LOG")"
-ok "D no hub configured: all nineteen core tools listed, spawn/await run locally (await default 540s)"
+ok "D no hub configured: all fifteen core tools listed, spawn/await run locally (await default 540s)"
 
 # --- E: the legacy fleet-peer shim --------------------------------------------
 env -u FLEET_WORKER_CRED PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 python3 "$WORK/bin/fleet-peer-mcp.py" > "$WORK/e" <<'EOF'
@@ -344,14 +336,10 @@ ok "F conf/mcp-worker.json = server \`fleet\` only; --mount codex derives the -c
   call 53 report '{"state":"merged","win":"@3"}'
   call 54 ask '{}'
   call 55 ask '{"question":"may I?","kind":"later"}'
-  call 56 comment '{"issue":5}'
-  call 57 comment '{"issue":5,"body":"x","mode":"relay"}'
-  call 58 comment '{"issue":5,"body":"x","repo":"other/repo"}'
-  call 59 evidence '{"action":"live","text":"x"}'
-  call 60 evidence '{"action":"before"}'
-  call 61 evidence '{"action":"after","file":"a.png","text":"x"}'
-  call 62 evidence '{"action":"post","file":"a.png"}'
-  call 63 evidence '{"action":"before","text":"x","mv":true}'
+  call 56 comment '{"issue":5,"body":"x"}'
+  call 59 evidence '{"action":"line"}'
+  call 60 file_issue '{"title":"x"}'
+  call 61 gh '{"kind":"pr","number":5}'
   call 64 handoff '{"action":"check"}'
   call 65 handoff '{"action":"find","slug":"x"}'
   call 66 handoff '{"action":"remove"}'
@@ -359,19 +347,17 @@ ok "F conf/mcp-worker.json = server \`fleet\` only; --mount codex derives the -c
   call 68 pr_verdict '{"pr":12,"wait":true,"timeout":9999}'
   call 69 pr_merge '{"pr":12,"method":"rebase"}'
   call 70 pr_merge '{"pr":0}'
-  call 71 comment '{"issue":5,"body":"   "}'
 } | serve "$WORK/g"
 python3 - "$WORK/g" <<'PY' || fail "G: a bad 报问记合 call was not refused with its reason" "$(cat "$WORK/g")"
 import json, sys
 rows = {r["id"]: r for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 want = {50: "merged · blocked · failed · stopped · waiting", 51: "must be an integer", 52: "true or false",
         53: 'unknown argument "win"', 54: 'missing required argument "question"', 55: "question · permission",
-        56: 'missing required argument "body"', 57: "note · to-worker", 58: "not hosted by this fleet",
-        59: "line · before · after · post", 60: "exactly one of file, text, pane (got none)",
-        61: "exactly one of file, text, pane (got file, text)", 62: "post takes no file",
-        63: "mv applies to a file only", 64: "check needs doc", 65: "slug applies to path only",
+        56: "removed (claude-fleet#4898)", 59: "removed (claude-fleet#4898)",
+        60: "removed (claude-fleet#4898)", 61: "removed (claude-fleet#4898)",
+        64: "check needs doc", 65: "slug applies to path only",
         66: "path · find · repo · check", 67: "apply with wait only", 68: "≤ 570",
-        69: 'unknown argument "method"', 70: "≥ 1", 71: "non-empty string"}
+        69: 'unknown argument "method"', 70: "≥ 1"}
 for i, why in want.items():
     res = rows[i]["result"]
     assert res.get("isError") is True, (i, res)
@@ -380,7 +366,7 @@ for i, why in want.items():
 PY
 ran=$(grep -v '^fleet-repo.sh list$' "$LOG")
 [ -z "$ran" ] || fail "G: a refused 报问记合 call ran a script" "$ran"
-ok "G report · ask · comment · evidence · handoff · pr_verdict · pr_merge: bad enum / combination / type refused, nothing ran"
+ok "G report · ask · handoff · pr_verdict · pr_merge: bad enum / combination / type refused; comment · evidence · file_issue · gh retired (#4898) — nothing ran"
 
 # --- H: each new tool runs its script, argv exact, text on stdin --------------
 : > "$LOG"
@@ -388,13 +374,6 @@ ok "G report · ask · comment · evidence · handoff · pr_verdict · pr_merge:
   call 80 report '{"state":"merged","pr":42,"summary":"landed it"}'
   call 81 ask '{"question":"which repo owns this?"}'
   call 82 ask '{"question":"push to prod?","kind":"permission","issue":77}'
-  call 83 comment '{"issue":1808,"body":"line one\nline \"two\" $HOME `x`"}'
-  call 84 comment '{"issue":5,"body":"go","mode":"to-worker","close":true,"repo":"acme/lib"}'
-  call 85 evidence '{"action":"line"}'
-  call 86 evidence '{"action":"before","text":"7 tools","name":"tools.txt","note":"before"}'
-  call 87 evidence '{"action":"after","file":".playwright-mcp/a.png","mv":true,"note":"after"}'
-  call 88 evidence '{"action":"after","pane":"%3","name":"dash.txt"}'
-  call 89 evidence '{"action":"post"}'
   call 90 handoff '{"action":"path","slug":"c6"}'
   call 91 handoff '{"action":"check","doc":"# handoff\nRepo: acme/app","issue":1808}'
   call 92 pr_verdict '{"pr":42}'
@@ -411,41 +390,24 @@ def sc(i): return rows[i]["structuredContent"]
 assert (sc(80)["command"], sc(80)["exit"]) == ("fleet-report-parent.sh", 3), sc(80)     # queued is data
 assert rows[80]["content"][0]["text"].startswith("exit 3 · fleet-report-parent.sh\nqueued"), rows[80]
 a = sc(81)
-assert (a["command"], a["exit"], a["issue"]) == ("fleet-comment.sh", 0, 1807), a          # the pane's @issue
+assert (a["command"], a["exit"]) == ("ask", 0), a          # no record: no script, no GitHub comment
 assert a["body"] == "⛔ blocked: which repo owns this?", a
 assert (a["state"]["command"], a["state"]["exit"]) == ("set-claude-state.sh", 0), a
 assert "set-claude-state.sh" in rows[81]["content"][0]["text"], rows[81]
 # the parent gets a copy (issue #4337): sent over send to: parent, the receipt in the result
 assert a["parent"]["delivered"] and a["parent"]["receipt"].startswith("sent -> @77 ([ask] issue #1807 — ⛔ blocked: which repo owns this?"), a
 assert "parent: sent -> @77" in rows[81]["content"][0]["text"], rows[81]
-assert sc(82)["issue"] == 77 and sc(82)["body"] == "⛔ blocked — needs authorization: push to prod?", sc(82)
-assert sc(83)["stdout"].startswith("https://github.com/acme/app/issues/1808"), sc(83)
+assert sc(82)["body"] == "⛔ blocked — needs authorization: push to prod?", sc(82)
 assert sc(91)["exit"] == 3, sc(91)                                                     # check findings = data
 assert (sc(92)["exit"], sc(92)["stdout"]) == (1, "PENDING\n"), sc(92)
 assert sc(94)["stdout"] == "MERGED\n", sc(94)
 PY
 cat > "$WORK/h.want" <<'EOF'
 fleet-report-parent.sh --state merged --pr 42 --summary landed it
-fleet-comment.sh 1807 --note --body-file -
-<<<⛔ blocked: which repo owns this?>
 set-claude-state.sh blocked
 fleet-peer-send.sh @77 -
-fleet-comment.sh 77 --note --body-file -
-<<<⛔ blocked — needs authorization: push to prod?>
 set-claude-state.sh blocked
 fleet-peer-send.sh @77 -
-fleet-comment.sh 1808 --note --body-file -
-<<<line one
-line "two" $HOME `x`>
-fleet-repo.sh list
-fleet-comment.sh 5 --to-worker --close --repo acme/lib --body-file -
-<<<go>
-fleet-evidence.sh line
-fleet-evidence.sh before --note before --name tools.txt -
-<<<7 tools>
-fleet-evidence.sh after --note after --mv .playwright-mcp/a.png
-fleet-evidence.sh after --name dash.txt --pane %3
-fleet-evidence.sh post
 fleet-handoff-file.sh path --slug c6
 fleet-handoff-file.sh check - --issue 1808
 <<<# handoff
@@ -457,13 +419,12 @@ fleet-pr-merge.sh 42
 fleet-report-parent.sh --state blocked --summary need a token --dry-run
 EOF
 diff "$WORK/h.want" "$LOG" > "$WORK/h.diff" || fail "H: a 报问记合 tool ran the wrong argv / stdin" "$(cat "$WORK/h.diff")"
-ok "H report · ask · comment · evidence · handoff · pr_verdict · pr_merge: exact argv, text on stdin, exit passes through"
+ok "H report · ask · handoff · pr_verdict · pr_merge: exact argv, text on stdin, exit passes through; ask writes no comment"
 
 # --- I: script ≡ tool, through the REAL scripts --------------------------------
-# A second sandbox with the real fleet-comment.sh / fleet-report-parent.sh and
-# their libraries; only gh is fake (it records what would be posted).
+# A second sandbox with the real fleet-report-parent.sh and its libraries.
 R="$WORK/real"; mkdir -p "$R/bin" "$R/conf" "$R/gh"
-for f in fleet-mcp.py fleet-comment.sh fleet-ticket.sh fleet_ticket.py fleet-report-parent.sh fleet-lib.sh fleet-client-core.sh fleet-gh-lib.sh; do
+for f in fleet-mcp.py fleet-report-parent.sh fleet-lib.sh fleet-client-core.sh fleet-gh-lib.sh; do
   cp "$BIN/$f" "$R/bin/$f"
 done
 for f in "$BIN"/fleet-*lib.sh; do cp "$f" "$R/bin/" 2>/dev/null; done
@@ -479,16 +440,6 @@ real() { # real <log> <cmd…> — no tmux, no hub, a sandbox conf; gh records
   env -u TMUX -u TMUX_PANE -u CCQUOTA_FLEET -u FLEET_HUB_URL -u FLEET_REPO -u CF_REPO \
     FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$R/conf" GH_LOG="$log" PATH="$R/gh:$PATH" "$@"
 }
-body='a note — with "quotes", $VARS, `ticks` and
-a second line'
-real "$R/by-hand" bash "$R/bin/fleet-comment.sh" 5 --note --repo acme/app --body "$body" >/dev/null 2>"$R/by-hand.err" \
-  || fail "I: the real fleet-comment.sh failed by hand" "$(cat "$R/by-hand.err")"
-req=$(python3 -c 'import json,sys; print(json.dumps({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"comment","arguments":{"issue":5,"body":sys.argv[1],"repo":"acme/app"}}}))' "$body")
-printf '%s\n' "$req" | real "$R/by-tool" python3 "$R/bin/fleet-mcp.py" > "$R/tool.out"
-[ -s "$R/by-hand" ] || fail "I: the hand-typed comment posted nothing" "$(cat "$R/by-hand.err")"
-cmp -s "$R/by-hand" "$R/by-tool" || fail "I: the comment tool posted a different comment than the script by hand" \
-  "$(diff "$R/by-hand" "$R/by-tool"; cat "$R/tool.out")"
-grep -q 'fleet:no-relay' "$R/by-tool" || fail "I: the tool's comment lost the no-relay marker" "$(cat "$R/by-tool")"
 # The report: a child window with a parent, on an ISOLATED tmux server (-S, never
 # the live one) — the dry run resolves the parent and prints the exact envelope.
 SOCK="$WORK/s"
@@ -500,7 +451,7 @@ tmux -S "$SOCK" set-window-option -t tf:issue-77 @issue 77
 tmux -S "$SOCK" set-window-option -t tf:issue-1808 @issue 1808
 tmux -S "$SOCK" set-window-option -t tf:issue-1808 @origin issue-77
 CP=$(tmux -S "$SOCK" display-message -p -t tf:issue-1808 '#{pane_id}')
-# real() unsets TMUX for the comment leg; this leg puts the isolated pane back.
+# real() unsets TMUX; this leg puts the isolated pane back.
 hand=$(real /dev/null sh -c 'TMUX=$0 TMUX_PANE=$1; export TMUX TMUX_PANE; shift 2; exec "$@"' \
   "$SOCK,1,0" "$CP" bash "$R/bin/fleet-report-parent.sh" --state blocked --summary 'need a token' --dry-run 2>&1; echo "rc=$?")
 case "$hand" in *'[child-report] issue #1808'*'summary: need a token'*) : ;;
@@ -511,7 +462,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"r
 tool=$(python3 -c 'import json,sys; d=json.loads(open(sys.argv[1]).read())["result"]["structuredContent"]; print(d["stdout"]+d["stderr"]+"rc=%d" % d["exit"])' "$R/report.out")
 [ "$hand" = "$tool" ] || fail "I: report --dry-run differs between the script and the tool" "by hand: $hand
 by tool: $tool"
-ok "I the same inputs: real fleet-comment.sh posts the byte-identical comment by hand and by tool; real report --dry-run (isolated tmux, parent resolved) prints the same envelope"
+ok "I the same inputs: real report --dry-run (isolated tmux, parent resolved) prints the same envelope by hand and by tool"
 # --- J: the worker credential (issue #1809) -----------------------------------
 G="$WORK/cred"; mkdir -p "$G/conf" "$G/sbin"
 cat >> "$WORK/bin/fleet-lib.sh" <<'SH'
@@ -748,10 +699,8 @@ ok "K fleet_hub_put: the relay carries it as \`worker\`; with none, the file is 
 # --- L: the rest of a worker skill (issue #1811) --------------------------------
 : > "$LOG"
 {
-  call 100 brief '{"kind":"resume","issue":5}'
-  call 101 file_issue '{"title":"x","spawn":true,"bind":true}'
-  call 102 gh '{"kind":"pull","number":5}'
-  call 103 gh '{"kind":"pr","number":5,"max_age":-1}'
+  call 100 brief '{"kind":"resume","repo":"acme/app"}'
+  call 101 brief '{"kind":"later"}'
   call 104 transfer '{"action":"arm","to":"codex"}'
   call 105 transfer '{"action":"check","to":"codex","handoff":"/n.md"}'
   call 106 transfer '{"action":"arm","to":"gemini","handoff":"/n.md"}'
@@ -759,15 +708,14 @@ ok "K fleet_hub_put: the relay carries it as \`worker\`; with none, the file is 
   call 108 handoff '{"action":"arm","doc":"/d.md","issue":5}'
   call 109 handoff '{"action":"arm","doc":"/d.md","slug":"x"}'
   call 110 handoff '{"action":"path","repo":"acme/app"}'
-  call 111 file_issue '{"title":"x","repo":"acme/zzz"}'
+  call 111 brief '{"repo":"acme/zzz"}'
   call 112 show '{"inline":true}'
   call 113 open '{"target":""}'
 } | serve "$WORK/j1"
 python3 - "$WORK/j1" <<'PY' || fail "L: a C9 refusal is wrong" "$(cat "$WORK/j1")"
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
-want = {100: "resume takes no issue", 101: "spawn and bind are exclusive", 102: "must be one of",
-        103: "must be ≥ 0", 104: "arm needs handoff", 105: "check takes no handoff", 106: "must be one of",
+want = {100: "resume takes no repo", 101: "must be one of", 104: "arm needs handoff", 105: "check takes no handoff", 106: "must be one of",
         107: "exactly one of doc", 108: "exactly one of doc", 109: "arm takes no slug",
         110: "repo applies to arm only", 111: "not hosted by this fleet", 112: 'missing required argument "file"',
         113: "non-empty string"}
@@ -784,14 +732,7 @@ grep -v '^fleet-repo.sh list$' "$LOG" > "$WORK/j1.ran"
   call 120 brief '{}'
   call 121 brief '{"issue":5,"repo":"acme/lib","no_comments":true}'
   call 122 brief '{"kind":"resume"}'
-  call 123 file_issue '{"title":"follow-up","body":"why now","labels":"bug, area:dash","priority":"p2","parent":1811,"spawn":true}'
-  call 124 file_issue '{"title":"scratch req","bind":true,"repo":"acme/lib"}'
-  call 1241 file_issue '{"title":"master red","breakage":true,"spawn":true}'
-  call 1242 file_issue '{"title":"same red","breakage_key":"aaaa111-0123456789ab"}'
-  call 1243 file_issue '{"title":"master red, other bug","breakage":false}'
-  call 125 gh '{"kind":"issue","number":5,"fields":"title,state"}'
-  call 126 gh '{"kind":"pr","number":42,"fields":"state,mergeStateStatus","max_age":0}'
-  call 127 gh '{"kind":"checks","number":42,"repo":"acme/app"}'
+  call 123 brief '{"kind":"claim"}'
   call 128 context '{}'
   call 129 context '{"json":true}'
   call 130 transfer '{"action":"check","to":"codex"}'
@@ -818,20 +759,11 @@ PY
 i=0; while [ ! -f "$LOG.cycle" ] && [ "$i" -lt 60 ]; do sleep 0.1; i=$((i + 1)); done
 [ -f "$LOG.cycle" ] || fail "L: the detached cycle helper never finished" "$(cat "$LOG")"
 cat > "$WORK/j.want" <<'WANT'
-fleet-claim-brief.sh
+fleet-brief.sh
 fleet-repo.sh list
-fleet-claim-brief.sh --issue 5 --repo acme/lib --no-comments
+fleet-brief.sh --repo acme/lib
 fleet-compact-resume.sh --brief
-fleet-issue-file.sh --title follow-up --body why now --label bug --label area:dash --priority p2 --parent 1811 --spawn
-fleet-repo.sh list
-fleet-issue-file.sh --title scratch req --repo acme/lib --bind
-fleet-issue-file.sh --title master red --spawn --breakage
-fleet-issue-file.sh --title same red --breakage-key aaaa111-0123456789ab
-fleet-issue-file.sh --title master red, other bug --no-breakage
-fleet-gh.sh issue view 5 --json title,state
-fleet-gh.sh pr view 42 --json state,mergeStateStatus --max-age 0
-fleet-repo.sh list
-fleet-gh.sh pr checks 42 --repo acme/app
+fleet-brief.sh
 fleet-context.sh
 fleet-context.sh --json
 fleet-transfer.sh --session tf --window %1 --to codex --dry-run
@@ -845,7 +777,7 @@ fleet-handoff-cycle.sh --pane %1 --doc /d.md
 WANT
 sed 's/ $//' "$LOG" > "$WORK/j.got"   # a no-argument run logs "<name> "
 diff "$WORK/j.want" "$WORK/j.got" > "$WORK/j.diff" || fail "L: a C9 tool ran the wrong argv" "$(cat "$WORK/j.diff")"
-ok "L brief · file_issue · gh · context · transfer · where · show · open · handoff arm: refusals run nothing, exact argv, arm detaches"
+ok "L brief · context · transfer · where · show · open · handoff arm: refusals run nothing, exact argv, arm detaches"
 
 # --- M: a new version, taken between calls (issue #1898) --------------------------
 M="$WORK/reload"; mkdir -p "$M/tmp"
@@ -1061,10 +993,10 @@ rm -f "$WORK/bin/fleet-ui-lang.sh"
 ok "O ask: hints are plain lines (no marker, class ignored), no field ⇒ the bare question; the parent gets a copy; an unreachable parent is said, not fatal"
 
 # --- R: the hub task record (issue #3330) -------------------------------------
-# ask in a window with no issue but a record ⇒ the question on the RECORD only (no
-# comment), red all the same; with both ⇒ the comment, then the record mirrors it;
-# neither ⇒ refused as before. task ⇒ fleet-task-record.sh dispatch, the words on
-# stdin; await takes a T<n> instead of an issue (exactly one); file_issue --task.
+# ask in a window with a record ⇒ the question on the RECORD (no comment, issue
+# #4898), red all the same, issue or not; neither ⇒ the red stamp and the parent's
+# copy alone. task ⇒ fleet-task-record.sh dispatch, the words on stdin; await takes
+# a T<n> instead of an issue (exactly one).
 : > "$LOG"
 { call 130 ask '{"question":"which one?"}'; } | FAKE_NOISSUE=1 FAKE_TASK=T7 serve "$WORK/r1"
 { call 131 ask '{"question":"push?"}'; } | FAKE_TASK=T7 serve "$WORK/r2"
@@ -1074,7 +1006,6 @@ ok "O ask: hints are plain lines (no marker, class ignored), no field ⇒ the ba
   call 134 await '{"task":"T7","timeout":30}'
   call 135 await '{"issue":3,"task":"T7"}'
   call 136 await '{}'
-  call 137 file_issue '{"title":"x","task":"T7","repo":"acme/app"}'
 } | serve "$WORK/r4"
 python3 - "$WORK/r1" "$WORK/r2" "$WORK/r3" "$WORK/r4" <<'PY' || fail "R: the task record's tools" "$(cat "$WORK/r1" "$WORK/r2" "$WORK/r3" "$WORK/r4")"
 import json, sys
@@ -1084,8 +1015,8 @@ for f in sys.argv[1:]:
 sc = lambda i: rows[i]["structuredContent"]
 assert (sc(130)["command"], sc(130)["task"], sc(130)["body"]) == ("fleet-task-record.sh", "T7", "⛔ blocked: which one?"), sc(130)
 assert sc(130)["state"]["command"] == "set-claude-state.sh" and "issue" not in sc(130), sc(130)
-assert sc(131)["issue"] == 1807 and sc(131)["task"] == "T7" and sc(131)["record"]["exit"] == 0, sc(131)
-assert rows[132].get("isError") and "no bound issue" in rows[132]["content"][0]["text"], rows[132]
+assert (sc(131)["command"], sc(131)["task"]) == ("fleet-task-record.sh", "T7"), sc(131)
+assert (sc(132)["command"], sc(132)["exit"]) == ("ask", 0) and "task" not in sc(132), sc(132)
 assert sc(133)["stdout"] == "T7\n", sc(133)
 assert sc(134)["command"] == "fleet-await.sh", sc(134)
 for i in (135, 136):
@@ -1095,19 +1026,17 @@ cat > "$WORK/r.want" <<'EOF'
 fleet-task-record.sh set T7 --asked ⛔ blocked: which one?
 set-claude-state.sh blocked
 fleet-peer-send.sh @77 -
-fleet-comment.sh 1807 --note --body-file -
-<<<⛔ blocked: push?>
+fleet-task-record.sh set T7 --asked ⛔ blocked: push?
 set-claude-state.sh blocked
 fleet-peer-send.sh @77 -
-fleet-task-record.sh set T7 --asked ⛔ blocked: push?
+set-claude-state.sh blocked
+fleet-peer-send.sh @77 -
 fleet-task-record.sh dispatch --title 看看风扇 --body-file - --spawn
 <<<为什么一直转>
 fleet-await.sh T7 --timeout 30
-fleet-repo.sh list
-fleet-issue-file.sh --title x --repo acme/app --task T7
 EOF
 diff "$WORK/r.want" "$LOG" > "$WORK/r.diff" || fail "R: the task record's tools ran the wrong argv" "$(cat "$WORK/r.diff")"
-ok "R ask → the record (no issue) / mirrored (issue); task → dispatch, words on stdin; await by T<n>; file_issue --task"
+ok "R ask → the record, else the red stamp alone (no comment); task → dispatch, words on stdin; await by T<n>"
 
 # --- P: any seat spawns, a worker's too (issue #4591 lifted #2960) ----------
 # Even a lib whose fleet_spawn_refused still refused (an older one) gates nothing:
@@ -1144,7 +1073,7 @@ for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
 PY
 cli "$WORK/q.l0" --list && cli "$WORK/q.l1" --group orch --list || fail "Q: --list exited non-zero" "$(cat "$WORK/q.l0.err" "$WORK/q.l1.err")"
-[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 19 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|task' "$WORK/q.l0" \
+[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 15 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|task' "$WORK/q.l0" \
   && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog await children send spawn task " ] \
   || fail "Q: --list is not each server's list" "$(cat "$WORK/q.l0"; echo ---; cat "$WORK/q.l1")"
 cli "$WORK/q.bad" --group zz --list && fail "Q: --group zz was accepted"
@@ -1182,7 +1111,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
 python3 - "$WORK/q4" <<'PY' || fail "Q: a takeover from a pre-group server dropped tools from its session's list" "$(cat "$WORK/q4")"
 import json, sys
 lists = [r["result"]["tools"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip()) if "id" in r]
-assert [len(x) for x in lists] == [25, 19, 25, 25], [len(x) for x in lists]   # + task (#3330), − #4904's four
+assert [len(x) for x in lists] == [21, 15, 21, 21], [len(x) for x in lists]   # + task (#3330), − #4904's four, − #4898's four
 assert "spawn" in {t["name"] for t in lists[0]}
 names = {t["name"] for t in lists[3]}
 assert {"spawn", "await", "children", "answer_dialog", "send", "task"} <= names, sorted(names)
@@ -1190,21 +1119,6 @@ PY
 grep -q '"list": "all" if SERVING\["list_all"\]' "$WORK/bin/fleet-mcp.py" \
   && grep -q 'SELF\] + sys.argv\[1:\]' "$WORK/bin/fleet-mcp.py" \
   || fail "Q: the handover no longer carries the list mode / the server's --group"
-# file_issue spawn:true spawns whatever is mounted or enabled (issues #4591, #4703).
-: > "$LOG"
-call 150 file_issue '{"title":"a","spawn":true}' | FAKE_ORCH='' serve "$WORK/q5"
-call 151 file_issue '{"title":"b","spawn":true}' | serve "$WORK/q6"
-printf '{"enabledPlugins":{"fleet-orchestrate@claude-fleet":false}}\n' > "$WORK/claude/settings.json"
-call 153 file_issue '{"title":"d","spawn":true}' | FAKE_ORCH='' serve "$WORK/q8"
-rm -f "$WORK/claude/settings.json"
-grep -qx 'fleet-issue-file.sh --title a --spawn' "$LOG" && grep -qx 'fleet-issue-file.sh --title b --spawn' "$LOG" \
-  && grep -qx 'fleet-issue-file.sh --title d --spawn' "$LOG" \
-  || fail "Q: file_issue spawn:true did not spawn in every session" "$(cat "$LOG")"
-python3 - "$WORK/q5" <<'PY' || fail "Q: a filing still says this session may not spawn" "$(cat "$WORK/q5")"
-import json, sys
-r5 = json.loads(open(sys.argv[1]).readline())["result"]
-assert not r5.get("isError") and "may not spawn" not in r5["content"][0]["text"], r5
-PY
 # The Codex mount is the one server, and no plugin registers it (issue #4334).
 m=$(python3 "$WORK/bin/fleet-mcp.py" --mount codex --group orch) || fail "Q: --mount codex --group orch failed"
 case "$m" in
@@ -1227,22 +1141,16 @@ PY
 ! env -u TMUX python3 "$WORK/bin/fleet-mcp.py" --bridge-seat epic-driver \
   && ! env -u TMUX python3 "$WORK/bin/fleet-mcp.py" --bridge-seat \
   || fail "Q: --bridge-seat answers outside tmux"
-ok "Q fleet-orch lists the dispatch group; fleet answers it road=legacy; a pre-group takeover keeps all 28; a group-less session sees it on fleet; file_issue always spawns; one server definition, no plugin's"
+ok "Q fleet-orch lists the dispatch group; fleet answers it road=legacy; a pre-group takeover keeps them all; a group-less session sees it on fleet; one server definition, no plugin's"
 
 # --- Q2: the dispatch group ships with the core (issue #4334) -------------------
 # @agent_spawn gates nothing (issue #4703, after #4591): unset, 0 or 1 ⇒ --bridge-seat 0
-# and file_issue spawns; the spawn tool hands the spawner's own refusals back — at the
-# session cap it exits 2, an issue already claimed 3 — so caps and the claim dedup stay
-# the only bounds.
+# the spawn tool hands the spawner's own refusals back — at the session cap it exits 2,
+# an issue closed or already carrying a PR 3 — so those stay the only bounds.
 rm -f "$WORK/claude/settings.json"
 seat() { env PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 FAKE_SPAWN="$1" python3 "$WORK/bin/fleet-mcp.py" --bridge-seat; }
 seat 1 && seat '' && seat 0 || fail "Q2: --bridge-seat still follows @agent_spawn"
-: > "$LOG"
-call 160 file_issue '{"title":"e","spawn":true}' | FAKE_ORCH='' FAKE_SPAWN=1 serve "$WORK/q9"
-call 161 file_issue '{"title":"f","spawn":true}' | FAKE_ORCH='' FAKE_SPAWN=0 serve "$WORK/q10"
-grep -qx 'fleet-issue-file.sh --title e --spawn' "$LOG" && grep -qx 'fleet-issue-file.sh --title f --spawn' "$LOG" \
-  || fail "Q2: file_issue spawn:true still follows @agent_spawn" "$(cat "$LOG")"
-ok "Q2 @agent_spawn unset / 0 / 1 ⇒ the session may spawn (--bridge-seat, file_issue --spawn)"
+ok "Q2 @agent_spawn unset / 0 / 1 ⇒ the session may spawn (--bridge-seat)"
 for rc in 2 3; do
   fake dash-issue-session.sh "echo refused >&2; exit $rc"
   call 163 spawn '{"issue":7}' | FAKE_ORCH='' FAKE_SPAWN=0 serve "$WORK/q.rc$rc" --group orch
@@ -1252,7 +1160,7 @@ r = json.loads(open(sys.argv[1]).readline())["result"]
 assert r["structuredContent"]["exit"] == int(sys.argv[2]), r
 PY
 done
-ok "Q2 spawn hands back the cap (exit 2) and the claim dedup (exit 3) as the spawner said"
+ok "Q2 spawn hands back the cap (exit 2) and the dedup (exit 3) as the spawner said"
 # …and the spawners of a session the person opens (no agent file, no issue) stamp it
 # BEFORE the launch: dash-raw-session.sh (cold + warm claim), scratch-pool.sh, fleet-restore.sh.
 for f in dash-raw-session.sh scratch-pool.sh fleet-restore.sh; do
