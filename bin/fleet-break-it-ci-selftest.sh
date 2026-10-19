@@ -764,7 +764,7 @@ drill_train_call_permissions() {
   out=$(python3 "$BIN/fleet-workflow-perms.py" 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="the repo's own workflows ask more than their callers grant ($rc): $out"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/train-perms.XXXXXX"); mkdir -p "$d/.github/workflows"
-  cp "$wfd/release-train.yml" "$wfd/hub-deploy.yml" "$wfd/selftests-shards.yml" "$d/.github/workflows/"
+  cp "$wfd/release-train.yml" "$wfd/hub-deploy.yml" "$wfd/hub-deploy-check.yml" "$wfd/selftests-shards.yml" "$d/.github/workflows/"
   # #3893's grant: hub-build without issues: write (hub-deploy's deploy asks it)
   awk '/^  hub-build:/{b=1} /^  release-stage:/{b=0} !(b && /^      issues: write/)' \
     "$wfd/release-train.yml" > "$d/.github/workflows/release-train.yml"
