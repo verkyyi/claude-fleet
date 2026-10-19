@@ -87,7 +87,10 @@ print("200")
             self.assertTrue(all(url.startswith("https://hub.test/") for url in (root/"calls").read_text().splitlines()))
             print("fixture shell: gh=0, GitHub HTTP=0; T7 success, children=1, outage UNKNOWN")
 
-    def test_receive_duplicate_reconnect_and_parent_generation(self):
+    def test_receive_duplicate_reconnect_and_parent_id(self):
+        # EPIC T497 C4: the parent is its session's ID. A new parent generation (a
+        # re-launch) or a /clear does not retire it; only a closed ID with nobody to
+        # take over (77) or an ID its fleet does not know (76) goes to the person.
         with tempfile.TemporaryDirectory() as temp:
             r = dict(task="T8", owner="alice", generation=1, worker_id="child/session", ticket_ref="gh:two/repo#7",
                      parent_task="T7", parent_session="parent/session", parent_generation=2,
@@ -99,13 +102,13 @@ print("200")
             sends = []
             def run(args, **kwargs):
                 if args[-2:] == [str(control.BIN), "parent/session"]:
-                    return subprocess.CompletedProcess(args,0,"socket\n@7\n"+temp+"\n","")
-                self.assertEqual(json.loads(kwargs["env"]["FLEET_LAUNCH_CONTEXT"]), dict(task="T7", generation=2, worker_id="parent/session"))
-                self.assertEqual(json.loads(kwargs["env"]["FLEET_LAUNCH_DELIVERY"]), dict(actual_provider="codex"))
+                    return subprocess.CompletedProcess(args,0,"socket\n@7\n"+temp+"\nself\n","")
+                self.assertNotIn("FLEET_LAUNCH_DELIVERY", kwargs["env"])  # no native proof gates it
+                self.assertIn("children_send", args[2])
                 sends.append(kwargs.get("input")); return subprocess.CompletedProcess(args,0,"","")
             def call(action, task, *args, **kwargs):
                 return dict(task=parent if task == "T7" else t)
-            with patch.object(control,"call",side_effect=call), patch.object(control,"context",return_value=dict(task="T7", generation=2, worker_id="parent/session")), patch.object(control.launch,"inspect",return_value=dict(actual_provider="codex")), patch.object(control.subprocess,"run",side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+            with patch.object(control,"call",side_effect=call), patch.object(control.subprocess,"run",side_effect=run), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(control.receive(f),0)
                 self.assertEqual(control.receive(f),0)  # lost acknowledgement/reconnect
                 envelope = json.loads(f.read_text()); envelope["id"] += "-different-transport"
@@ -117,13 +120,18 @@ print("200")
                 with patch.object(control.subprocess, "run", return_value=subprocess.CompletedProcess([],76,"","")), patch.object(control,"orphan") as orphan:
                     self.assertEqual(control.receive(f),0)
                     orphan.assert_called_once()  # known absent stable identity
-                parent["generation"]=3
-                with patch.dict(os.environ, {"FLEET_CONF_DIR":temp}):
+                with patch.object(control.subprocess, "run", return_value=subprocess.CompletedProcess([],77,"","")), patch.object(control,"orphan") as orphan:
                     self.assertEqual(control.receive(f),0)
+                    orphan.assert_called_once()  # closed ID, no successor / parent
             self.assertEqual(len(sends),1)
             self.assertEqual(len((Path(temp)/"T7-g2.ndjson").read_text().splitlines()),1)
-            self.assertTrue((Path(temp)/"global/orphan-reports.ndjson").exists())
-            print("fixture report: event=done, reconnect rows=1, deliveries=1; parent g3 rejected")
+            # a new parent generation (re-launch, /clear) still takes it: same ID
+            r2 = dict(r, event_id="again"); parent["generation"] = 3
+            f.write_text(json.dumps(dict(id="child/session#again", **{"from":"child/session", "to":"parent/session"}, payload=dict(task_report=r2))))
+            with patch.object(control,"call",side_effect=call), patch.object(control.subprocess,"run",side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(control.receive(f),0)
+            self.assertEqual(len(sends),2)
+            print("fixture report: event=done, reconnect rows=1, deliveries=1; parent g3 still the same ID → delivered")
 
     def test_completion_report_delivered_and_awaited_with_retained_native(self):
         # The native fixture really remains alive across explicit report ->

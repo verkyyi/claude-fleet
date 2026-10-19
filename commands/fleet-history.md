@@ -158,6 +158,21 @@ Notes:
   non-invasive (the window surfaces in the dash without yanking you over), and is
   driven by `bin/dash-restore-session.sh`, which calls the same `resume --exec`.
 
+## 3b. By ID (EPIC T497 C4)
+
+Every window has one ID (`T-<code>`); its results, native segments and close are
+on its ledger. `$ARGUMENTS` starting with `ids` lists by ID instead of by key:
+
+```sh
+bash ~/.claude/fleet/bin/fleet-history.sh ids [filter]        # code · 状态 · result · closed at · title
+bash ~/.claude/fleet/bin/fleet-history.sh show T-k3f9q        # its segments (agent · native id · span · trigger)
+bash ~/.claude/fleet/bin/fleet-history.sh continue T-k3f9q --seg 2 --exec   # 从这一段继续: new window, new ID, prev T-k3f9q
+bash ~/.claude/fleet/bin/fleet-history.sh reopen T-k3f9q --exec             # 恢复这个窗口: the same ID, its newest segment
+```
+
+`continue` leaves the old ID closed; `reopen` refuses an ID still open in a window.
+Without `--exec` both print the plan (native id, agent, worktree) and open nothing.
+
 ## 4. Report — keep it short
 
 For a **list**: relay the rows (or "nothing landed yet"). For a **resume**: name

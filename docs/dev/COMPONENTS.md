@@ -150,7 +150,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 压缩后任务恢复 | `refocus-hook*` | 压缩恢复 |
 | 登录说明规则块 | `fleet-agent-defaults*` | 已退出默认，保留显式清理 |
 | 会话状态钩子 | `set-claude-state*` | 状态写入 |
-| 会话恢复与事件记录 | `classify-* fleet-codex-session* fleet-id.sh fleet-id-selftest* fleet_id.py fleet-emit* handoff-latch-reset-hook* fleet_loop_mark* precompact-hook* session-end-hook* fleet-restore* .fleet-restore* fleet-state-* fleet-status* fleet-sessions-snapshot* fleet-transcript* fleet-idle-* fleet-loop* fleet_cron* fleet_sample* fleet_timing* fleet_runtime.py fleet-compat* fleet-stream-resume*` | 状态、历史与恢复；mod 的 lifecycle/state 钩子通过 fleet_runtime.py 记录原生运行态观察 |
+| 会话恢复与事件记录 | `classify-* fleet-codex-session* fleet-id.sh fleet-id-selftest* fleet-id-results-selftest* fleet_id.py fleet-emit* handoff-latch-reset-hook* fleet_loop_mark* precompact-hook* session-end-hook* fleet-restore* .fleet-restore* fleet-state-* fleet-status* fleet-sessions-snapshot* fleet-transcript* fleet-idle-* fleet-loop* fleet_cron* fleet_sample* fleet_timing* fleet_runtime.py fleet-compat* fleet-stream-resume*` | 状态、历史与恢复；mod 的 lifecycle/state 钩子通过 fleet_runtime.py 记录原生运行态观察 |
 | 上下文连续性 | `fleet-ladder-log* fleet-context* fleet-compact* fleet-handoff* fleet-transfer* .fleet-transfer* fleet_transfer*` | 上下文与代理交接 |
 | 会话迁移与历史 | `fleet-move* fleet-history* fleet-migrate* dash-migrate* dash-restore-session*` | 迁移与恢复历史 |
 | 首次使用 | `fleet-onboard* fleet-guide* fleet-doctor-onboard*` | 新人入口与验收 |

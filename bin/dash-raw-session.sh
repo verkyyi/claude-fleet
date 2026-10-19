@@ -122,7 +122,7 @@ set_agent() {
   [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-raw-session: contradictory --agent values\n' >&2; exit 2; }
   AGENT=$1
 }
-NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; NATIVE_WT=0
+NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; NATIVE_WT=0; PREV_ID=""; REOPEN_FID=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -212,6 +212,13 @@ while [ "$#" -gt 0 ]; do
     --worktree)    WT_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --worktree=*)  WT_ARG="${1#--worktree=}"; shift ;;
     --native-worktree) NATIVE_WT=1; shift ;;
+    # --prev <ID> / --fid <ID> (EPIC T497 C4, design §4.4): 「从这一段继续」 opens a
+    # NEW ID whose prev is that one; 「恢复这个窗口」 reopens the SAME ID (fleet-id.sh
+    # continue / reopen --exec). Both go with --resume.
+    --prev)        PREV_ID="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --prev=*)      PREV_ID="${1#--prev=}"; shift ;;
+    --fid)         REOPEN_FID="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --fid=*)       REOPEN_FID="${1#--fid=}"; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
@@ -222,6 +229,8 @@ fi
 case "$ORIGIN_WID" in ''|*[!A-Za-z0-9/:._-]*) ORIGIN_WID='' ;; esac
 case "$TASK_REF" in T[1-9]*) case "${TASK_REF#T}" in *[!0-9]*) TASK_REF='' ;; esac ;; *) TASK_REF='' ;; esac
 case "$RESUME_SID" in *[!0-9a-fA-F-]*) RESUME_SID='' ;; esac
+case "$PREV_ID" in *[!0-9a-f-]*) PREV_ID='' ;; esac
+case "$REOPEN_FID" in *[!0-9a-f-]*) REOPEN_FID='' ;; esac
 # A parked session's return (issue #3387): its seed is the first turn.
 if [ -n "$RESUME_SID" ] || [ -n "$SEED_FILE" ] || [ -n "$WT_ARG" ]; then
   [ -z "$NODE_ARG" ] && NODE_ARG=local          # its transcript and worktree are here
@@ -794,12 +803,26 @@ fleet_admit_confirm >/dev/null   # the window is open: its admission holds on it
 # The session's lifelong identity (issue #1646). Minted once; restore / migrate /
 # move carry it.
 [ -z "${_launch_fid:-}" ] || TM set-window-option -t "$win" @fleet_id "$_launch_fid" 2>/dev/null
+# 「恢复这个窗口」 (EPIC T497 C4): the same ID goes on here — its ledger says
+# `reopened`, and the fleet's earlier close is no longer one restore must honour.
+if [ -z "${_launch_fid:-}" ] && fleet_is_fid "$REOPEN_FID"; then
+  TM set-window-option -t "$win" @fleet_id "$REOPEN_FID" 2>/dev/null
+  rm -f "$(fleet_retired_dir)/$REOPEN_FID" 2>/dev/null
+  python3 "$BIN/fleet_id.py" reopen "$REOPEN_FID" --window "$win" >/dev/null 2>&1 || :
+fi
 fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
 # The ID's ledger opens with the spawn (EPIC T497 C1) — agent, repo, what it is for;
 # the short code lands as @task_short. Backgrounded: the hook fills a missing `opened`.
+# C4: its parent (the spawning session's ID), its prev (the ID it continues — given,
+# or the one whose segment --resume picks up) and its worktree ride along.
+_idpar=${ORIGIN_WID#*/}; fleet_is_fid "$_idpar" || _idpar=''
+_idwt=''; [ -n "${wt:-}" ] && [ "$NOREPO" != 1 ] && _idwt=$wt
 fleet_is_fid "$fid" && ( bash "$BIN/fleet-id.sh" open "$fid" --window "$win" --socket "$SOCK" \
   --agent "${AGENT:-claude}" ${REPO_ARG:+--repo "$REPO_ARG"} ${NAME:+--title "$NAME"} \
-  ${TASK_REF:+--task "$TASK_REF"} >/dev/null 2>&1 & )
+  ${TASK_REF:+--task "$TASK_REF"} ${_idpar:+--parent "$_idpar"} ${PREV_ID:+--prev "$PREV_ID"} \
+  ${RESUME_SID:+--from-native "$RESUME_SID"} ${_idwt:+--worktree "$_idwt"} >/dev/null 2>&1 & )
+# The worktree remembers its ID beside its record (C4): `fleet-id` in its git dir.
+[ -n "$_idwt" ] && fleet_is_fid "$fid" && fleet_worktree_id_mark "$_idwt" "$fid"
 fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on the list (#1750)
 fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844)
 # The agent file it starts as, before its agent starts (fleet-claude.sh stamps it

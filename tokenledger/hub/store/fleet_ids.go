@@ -491,6 +491,12 @@ func (s *Store) applyIDEvent(tx *sql.Tx, r *idRow, ev map[string]any, seq int, t
 				return err
 			}
 		}
+	case "reopened":
+		// 「恢复这个窗口」 (EPIC T497 C4): the same ID goes on in a new window.
+		r.ClosedAt, r.CloseReason = 0, ""
+		if w := evStr(ev, "window", 32); w != "" {
+			r.Window = w
+		}
 	case "short":
 		// The node writing down the code the hub gave it: only ever longer.
 		if c := NormIDCode(evStr(ev, "short", 32)); len(c) > len(r.Short) && strings.HasPrefix(r.code, c) {

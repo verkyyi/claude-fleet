@@ -184,3 +184,24 @@ func TestFleetIDCloneRefused(t *testing.T) {
 		t.Fatalf("the old machine after the move = %v; want refused", err)
 	}
 }
+
+// C4 (EPIC T497): 「恢复这个窗口」 reopens a closed ID in a new window — the
+// mirror forgets the close, and a later close ends it again.
+func TestFleetIDReopened(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	evs := append(sampleLedger(t, idA), ledger(t,
+		`{"ev":"reopened","window":"@9","id":"`+idA+`","seq":8,"ts":1010}`)...)
+	if _, err := push(t, st, "e1", idA, evs); err != nil {
+		t.Fatal(err)
+	}
+	a, err := st.FleetIDOf("operator", idA)
+	if err != nil || a.ClosedAt != 0 || a.CloseReason != "" || a.Window != "@9" {
+		t.Fatalf("reopened = %+v %v", a, err)
+	}
+	if _, err := push(t, st, "e1", idA, ledger(t, `{"ev":"closed","reason":"exited","id":"`+idA+`","seq":9,"ts":1020}`)); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ = st.FleetIDOf("operator", idA); a.ClosedAt != 1020 || a.CloseReason != "exited" {
+		t.Fatalf("closed again = %+v", a)
+	}
+}

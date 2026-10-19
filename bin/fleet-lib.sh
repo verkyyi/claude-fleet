@@ -1026,6 +1026,27 @@ fleet_worktree_task() {
   case "$t" in T[1-9]*) case "${t#T}" in *[!0-9]*) return 1 ;; esac ;; *) return 1 ;; esac
   printf '%s\n' "$t"
 }
+# …and its window's ID beside it (EPIC T497 C4: `fleet-id` in the same git dir) —
+# the identity a worktree's reader joins on once the window is gone; the T record
+# above is still written (双写) until the switch.
+#   fleet_worktree_id_mark <dir> <ID>   (best effort, rc 1 on a bad ID / dir)
+#   fleet_worktree_id <dir>             → the ID on stdout, rc 1 when none
+fleet_worktree_id_mark() {
+  local gd
+  fleet_is_fid "${2:-}" || return 1
+  gd=$(git -C "${1:-/nonexistent}" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+  case "$gd" in /*) [ -d "$gd" ] || return 1 ;; *) return 1 ;; esac
+  printf '%s\n' "$2" > "$gd/fleet-id" 2>/dev/null
+}
+fleet_worktree_id() {
+  local gd t
+  gd=$(git -C "${1:-/nonexistent}" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+  case "$gd" in /*) ;; *) return 1 ;; esac
+  [ -f "$gd/fleet-id" ] || return 1
+  t=$(head -n 1 "$gd/fleet-id" 2>/dev/null)
+  fleet_is_fid "$t" || return 1
+  printf '%s\n' "$t"
+}
 # fleet_task_closed <T<n>> — is the record closed (收口)? rc 0 closed (its verdict
 # — SUCCEEDED / FAILED / CANCELLED / REFUSED — on stdout), 1 still open, 3 unknown
 # (no hub, no answer). Unknown never reads as closed: a reaper keeps on 3.
@@ -2230,7 +2251,7 @@ fleet_guide_respawn() {
     [ "$pin" = 1 ] || return 1
     if [ -n "$nsid" ]; then
       rm -f "$FLEET_CONF_DIR/global/onboard.shown"   # our own reopen, no one's close (#4852)
-      fleet_win_retire "$wid" "$sess"
+      fleet_win_retire "$wid" "$sess" closed
       tmux -L "$sess" kill-window -t "$wid" >/dev/null 2>&1 || return 1
       TMUX='' bash "$bin/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin --no-repo "$sess" || return 1
     else
@@ -2485,7 +2506,7 @@ fleet_guide_tick() {
     local wid
     for sock in $sockets; do
       wid=$(fleet_guide_wid "$sock") || continue
-      fleet_win_retire "$wid" "$sock"
+      fleet_win_retire "$wid" "$sock" closed
       tmux -L "$sock" kill-window -t "$wid" >/dev/null 2>&1
     done
     rm -f "$g/onboard.shown" "$g/onboard.stuck" "$g/onboard.stuck.ts" "$g/onboard.openfail"
@@ -3662,8 +3683,8 @@ EOF
             --socket-name "$(fleet_socket "$sess")" >/dev/null 2>&1 || ok=0
         fi
         [ "$ok" = 1 ] || continue
-        if [ -n "${TMUX:-}" ]; then fleet_win_retire "$wid"
-        else fleet_win_retire "$wid" "$(fleet_socket "$sess")"; fi
+        if [ -n "${TMUX:-}" ]; then fleet_win_retire "$wid" "" reaped
+        else fleet_win_retire "$wid" "$(fleet_socket "$sess")" reaped; fi
         _fleet_tmux "$sess" kill-window -t "$wid" 2>/dev/null && printf 'helper:%s\n' "$wid"
       done
   return 0
@@ -6023,8 +6044,9 @@ fleet_window_fid() {
 # kill-window must not excuse it). FLEET_PULLBACK_RETIRED_DIR is the test seam.
 fleet_retired_dir() { printf '%s' "${FLEET_PULLBACK_RETIRED_DIR:-$FLEET_CONF_DIR/global/retired}"; }
 
-# fleet_win_retire <window> [<sock>] — mark that window's session as closed by the
-# fleet. Never fails; a window with no @fleet_id has nothing to mark.
+# fleet_win_retire <window> [<sock>] [<why>] — mark that window's session as closed by
+# the fleet. Never fails; a window with no @fleet_id has nothing to mark. <why> (a
+# reap, a stop, an exit) also ends its ID — fleet_id_close, below.
 # --- which login a fleet runs under, on the CLIENT (issue #2430) ---------------
 # One person may hold two logins on one machine (mac-b: erin + dave, #2210), each
 # with its own fleet. The hub places a session in either; the client must ssh in
@@ -6056,7 +6078,7 @@ fleet_fleet_login_put() {
 }
 
 fleet_win_retire() {
-  local w="${1:-}" sock="${2:-}" f d
+  local w="${1:-}" sock="${2:-}" why="${3:-}" f d
   [ -n "$w" ] || return 0
   if [ -n "$sock" ]; then f=$(tmux -L "$sock" show-options -wqv -t "$w" @fleet_id 2>/dev/null)
   else f=$(tmux show-options -wqv -t "$w" @fleet_id 2>/dev/null); fi
@@ -6064,6 +6086,46 @@ fleet_win_retire() {
   d=$(fleet_retired_dir)
   [ -d "$d" ] || mkdir -p "$d" 2>/dev/null
   : > "$d/$f" 2>/dev/null
+  # A third word — why — is a close that ENDS the window's ID (EPIC T497 C4, S7): its
+  # ledger says `closed`, so a window that never reported reads 已退出 and a report
+  # or message for it goes to its successor / parent. A move, a park or a migrate
+  # retires without one: the ID goes on in the next window.
+  [ -n "$why" ] && fleet_id_close "$f" "$why"
+  return 0
+}
+# fleet_id_window <ID> — the live window carrying that @fleet_id on any of this
+# login's fleets: `<socket>\t<window>`; rc 1 none (EPIC T497 C4).
+fleet_id_window() {
+  local s w
+  fleet_is_fid "${1:-}" || return 1
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    w=$(fleet_win_for_fid "$1" "$s" 2>/dev/null) || continue
+    [ -n "$w" ] && { printf '%s\t%s\n' "$s" "$w"; return 0; }
+  done <<EOF
+$(fleet_sockets 2>/dev/null)
+EOF
+  return 1
+}
+# fleet_id_take <ID> — who takes a report / message meant for that ID, by the ID
+# ledger (fleet-id.sh route: itself while open, else its successor down the prev
+# chain, else up its parent): `<ID>\t<how>\t<socket>\t<window>`. rc 1 nobody here
+# (the person's reminder), rc 2 the ledger does not know it (the caller's old road).
+fleet_id_take() {
+  local r t how loc
+  fleet_is_fid "${1:-}" || return 2
+  r=$(bash "$_FLEET_LIB_DIR/fleet-id.sh" route "$1" 2>/dev/null)
+  t=${r%%$'\t'*}; how=${r#*$'\t'}
+  [ "$how" = unknown ] && return 2
+  fleet_is_fid "$t" || return 1
+  loc=$(fleet_id_window "$t") || return 1
+  printf '%s\t%s\t%s\n' "$t" "$how" "$loc"
+}
+# fleet_id_close <ID> <reason> — the ledger's `closed` (idempotent; never fails).
+fleet_id_close() {
+  fleet_is_fid "${1:-}" || return 0
+  [ -f "$_FLEET_LIB_DIR/fleet_id.py" ] || return 0
+  python3 "$_FLEET_LIB_DIR/fleet_id.py" close "$1" --reason "${2:-closed}" >/dev/null 2>&1 || :
   return 0
 }
 

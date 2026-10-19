@@ -137,6 +137,8 @@
 #   reap-other-repo-clears / reap-stale-stamp       bin/fleet-cleanup-idle.py, fleet_reap_notice.py, fleet-reap-live.py
 #   reap-reopen-restarts-clock                      fleet_cfg_restart_why (fleet-lib.sh), fleet-cfg-restart.sh
 #   stop-bare-path                                  bin/fleet-worker-stop.sh (fleet_path_fill)
+#   report-parent-cleared                           bin/fleet-report-parent.sh + fleet_task_control.py receive
+#                                                   (the parent by its ID: fleet_id_take, fleet-id.sh route)
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
 #   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
@@ -6157,6 +6159,46 @@ drill_stop_bare_path() {
   TMUX_TMPDIR="$d/tt" "$REAL_TMUX" -L sbp kill-server 2>/dev/null
   [ "$out" = stopped:shell ] || { WHY="a bare-PATH stop answered [$out], want stopped:shell"; return 1; }
   WHAT="裸 PATH（ssh / peerlink）下 fleet-worker-stop.sh 照样找到 fleet 上的窗口并停掉"
+}
+
+# A parent that /clear-ed (or handed off, or was re-launched) lost its children's
+# reports (EPIC T497 C4): the accepted-task road gated delivery on the parent's
+# task generation and its native process, both of which a clear / handoff / restart
+# change. The parent is its window's ID now: a report after the parent's /clear
+# names the same window, and a parent ID that closed hands it to its successor.
+drill_report_parent_cleared() {
+  CAP=20; local d="$WORK/rpc" L="rpc$$" sp spid pa ch su wpa pch wch wsu t0 out1 out2
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  mkdir -p "$d/conf/fleets/$L" "$d/tt"; : > "$d/conf/fleets/$L/conf"
+  fx_repo "$d/conf" "$L" acme/app FLEET_MAIN="$d"
+  rtm() { TMUX_TMPDIR="$d/tt" FLEET_ALLOW_TMUX_DESTROY=1 "$REAL_TMUX" -L "$L" "$@"; }
+  rtm -f /dev/null new-session -d -s "$L" -n home 'sleep 120' || { WHY="cannot start the isolated tmux server"; return 1; }
+  sp=$(rtm display-message -p '#{socket_path}'); spid=$(rtm display-message -p '#{pid}')
+  pa=$(python3 -c 'import uuid; print(uuid.uuid4())'); ch=$(python3 -c 'import uuid; print(uuid.uuid4())')
+  su=$(python3 -c 'import uuid; print(uuid.uuid4())')
+  wpa=$(rtm new-window -d -P -F '#{window_id}' 'sleep 120'); rtm set-option -w -t "$wpa" @fleet_id "$pa"
+  wch=$(rtm new-window -d -P -F '#{window_id}' 'sleep 120')
+  rtm set-option -w -t "$wch" @fleet_id "$ch"; rtm set-option -w -t "$wch" @origin "$pa"; rtm set-option -w -t "$wch" @origin_fid "$pa"
+  pch=$(rtm display-message -p -t "$wch" '#{pane_id}')
+  rpe() { (cd "$d" && env TMUX_TMPDIR="$d/tt" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_ID_PUSH=0 \
+            TMUX="$sp,$spid,0" "$@"); }
+  rpe python3 "$BIN/fleet_id.py" open "$pa" --agent claude >/dev/null
+  rpe python3 "$BIN/fleet_id.py" open "$ch" --parent "$pa" >/dev/null
+  rpe python3 "$BIN/fleet_id.py" native "$pa" --native p0001 --source startup >/dev/null
+  rpe python3 "$BIN/fleet_id.py" native "$pa" --native p0002 --source clear >/dev/null   # the parent clears
+  t0=$(now)
+  out1=$(rpe env TMUX_PANE="$pch" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary done 2>&1)
+  rpe bash -c '. "$1/fleet-lib.sh"; fleet_win_retire "$2" "$3" exited' _ "$BIN" "$wpa" "$L"; rtm kill-window -t "$wpa"
+  wsu=$(rtm new-window -d -P -F '#{window_id}' 'sleep 120'); rtm set-option -w -t "$wsu" @fleet_id "$su"
+  rpe python3 "$BIN/fleet_id.py" open "$su" --prev "$pa" >/dev/null
+  out2=$(rpe env TMUX_PANE="$pch" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary done 2>&1)
+  SECS=$(since "$t0")
+  rtm kill-server 2>/dev/null
+  case "$out1" in *"($wpa"*) ;; *) WHY="after the parent's /clear the report names [$out1], want its window $wpa"; return 1 ;; esac
+  case "$out2" in *"($wsu"*) ;; *) WHY="a closed parent ID's report went to [$out2], want its successor $wsu"; return 1 ;; esac
+  grep -q 'parent_matches(r, parent)' "$BIN/fleet_task_control.py" \
+    && { WHY="the accepted-task road still gates delivery on the parent's generation"; return 1; }
+  WHAT="父会话 /clear 后子会话回报照样找到父窗口（按 ID）；父 ID 已关闭时交给接班的 ID"
 }
 
 # ================================================================ run ====}

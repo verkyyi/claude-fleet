@@ -87,6 +87,8 @@ FLEET_CLIENT_VER                   handoff: the thin client's .client-version ve
 FLEET_HUB_CLIENT_VERSION           seam: the hub's client_version in place of asking /version (fleet-client-behind.py, #3826)
 FLEET_HUB_PAUSE_RETRY_SECS         test seam: pause between the three label reads of fleet-hub-pause.sh (3 s; the drill sets 0, #4621)
 FLEET_ID_HUB_POST                  seam: the hub transport `fleet-id.sh push` calls (METHOD PATH, body on stdin → code + body; the selftest's stand-in hub; EPIC T497 C2)
+FLEET_ID_LIVE_CMD                  seam: a command printing the live window IDs in place of fleet-id.sh's tmux scan (status / route; EPIC T497 C4)
+FLEET_ID_SPAWN                     seam: the spawner `fleet-id.sh continue|reopen --exec` runs in place of dash-raw-session.sh (fleet-id-results-selftest.sh; EPIC T497 C4)
 FLEET_ID_PUSH                      knob: 0 = the spawn, the SessionStart hook and result/close do not push the ID ledger to the hub (an explicit push still does; EPIC T497 C2)
 FLEET_KEEP_DEVICE_SECS             knob: fleet-login.py keep — a managed login renews at least this often (default 172800, #4594)
 FLEET_KEEP_WALLPAPER               knob: 1 = fleet-wallpaper.sh leaves a headless managed Mac's dynamic desktop as it is (the environment or <state>/machine.env, #4362)

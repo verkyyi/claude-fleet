@@ -217,7 +217,7 @@ reap_kill() {
     fleet_ui_fail "reap failed: $target — sleep record could not be retired"
     exit 5
   fi
-  fleet_win_retire "$target"   # a reap is the fleet's close, never one to pull back (#1840)
+  fleet_win_retire "$target" "" reaped   # a reap is the fleet's close, never one to pull back (#1840); its ID ends (C4)
   tmux kill-window -t "$target" 2>/dev/null || true
   if tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null | grep -qxF "$target"; then
     emit failed:kill-window
@@ -442,7 +442,7 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   if [ -z "$sbranch" ]; then
     guard_live
     describe_target ephemeral "$swt"
-    fleet_win_retire "$target"
+    fleet_win_retire "$target" "" reaped
     tmux kill-window -t "$target" 2>/dev/null || true
     emit reaped:full
     exit 0
@@ -505,7 +505,7 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
     scratch_record
     guard_live
     [ "$sreason" = dirty ] || scratch_remove
-    fleet_win_retire "$target"
+    fleet_win_retire "$target" "" reaped
     tmux kill-window -t "$target" 2>/dev/null || true
     if [ "$sreason" = dirty ]; then
       printf 'reap: scratch closed — worktree kept (dirty)\n' >&2

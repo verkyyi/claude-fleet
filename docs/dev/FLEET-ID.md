@@ -51,7 +51,36 @@ fleet-id.sh resolve <ID | T-code>        → 完整 ID；rc 1 没有，rc 2 有�
 fleet-id.sh short <ID>
 fleet-id.sh open|native|result|close …   见脚本头
 fleet-id.sh push [<ID>…]                 把账本推给 hub 镜像（C2）
+fleet-id.sh status|route|children|await|history|continue|reopen …   结果、父子、接班（C4，下节）
 ```
+
+## 结果、父子、通信（C4，§4.3–§4.5）
+
+- **结果挂在 ID 上**：会话自己的 `report`（`fleet-report-parent.sh`，没有 `--win`；已接任务那条路在
+  `fleet_task_control.py report` 里）在 ID 账本上写一条 `result`（state · summary · pr · agent），
+  可以多次，**最新的算**（S2）；合并检查改判的状态（armed ⇒ waiting）照实写。仍双写旧 T 记录。
+- **关窗即结束**：fleet 有意关窗（回收 `dash-reap.sh`、合并后 `fleet-cleanup.sh`、`fleet-worker-stop.sh`、
+  agent 退出 `session-end-hook.sh`、闲置回收）走 `fleet_win_retire <win> <sock> <why>`，第三个词让账本记 `closed`；
+  move / migrate / park 不给 why，ID 在下一个窗口接着用。关了没报过结果 = **已退出**（S7）。
+- **状态**（`fleet-id.sh status`）：冲突（等你）＞ 最新结果（已完成 / 失败 / 等你）＞ 活着 = 运行中 ＞ 已退出。
+  **冲突**：两个活着的 ID 当前段是同一个原生会话；关掉一个，另一个恢复（S9）。
+- **接班与转交**（`fleet-id.sh route`，`fleet_id_take`）：发给一个 ID 的回报 / 消息——它开着就给它；
+  关了就顺「谁的 prev 是它」找最新的活 ID（接班）；没有就交给它的 `parent`（同样规则往上）；
+  再没有 ⇒ 你的提醒（`global/orphan-reports.ndjson`）。本机账本不认识的 ID 走旧路（hub、键）。
+  `fleet-report-parent.sh`、`fleet_task_control.py receive`、`fleet-peer-send.sh T-<code>` 都按它走；
+  已接任务的回报**不再核父任务代次与原生进程**——/clear、交接、换 Agent、重开都不换 ID（BREAK-IT `report-parent-cleared`）。
+- **父子**：两个派单入口开账本时记 `--parent`（派它的会话的 ID）；`fleet-id.sh children <ID>` /
+  `fleet-children.sh --ids` 列出 parent 是它的 ID。
+- **等待**：`fleet-await.sh T-<code> | fid:<ID> | <ID>` → `fleet-id.sh await`：有不是回合边界（waiting / idle）的
+  结果就答（MERGED / SUCCEEDED 0，其余 1），关了没结果 EXITED 4，超时 3；本机没有账本时读 hub 镜像那一条。
+- **历史**（`fleet-history.sh ids|show|continue|reopen`）：按 ID 一行（短码 · 状态 · 结果 · 关闭时间 · 标题），
+  `show` 展开原生段。「从这一段继续」= `continue <ID> --seg N --exec`：新窗口、新 ID、`prev` = 它，它保持已关（S8）；
+  「恢复这个窗口」= `reopen <ID> --exec`：同一个 ID 续最新一段，账本记 `reopened`（hub 同样清掉关闭）。
+  开窗经 `dash-raw-session.sh --resume <原生 id> --prev <ID> | --fid <ID>`；一个 `--resume` 的开窗（以及别的窗口里手动
+  `claude --resume`）自动把被续那一段的 ID 记成 prev。
+- **worktree 记 ID**：`fleet_worktree_id_mark` 在 worktree 的 git 目录写 `fleet-id`（旁边的 `fleet-task` 照旧）。
+
+`bin/fleet-id-results-selftest.sh` 钉住 S2、S7、S8、S9、接班 / parent / 提醒、父 /clear 后回报照常送达。
 
 ## hub 镜像（C2）
 
