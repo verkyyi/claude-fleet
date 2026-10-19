@@ -171,7 +171,7 @@ codex-cli 0.154 实测）：
 
 > [#608](https://github.com/verkyyi/claude-fleet/issues/608) → PR #615 已合并并同步上线。
 > README 现有完整矩阵，且**由 CI 守着不漂**：表是从 `bin/fleet-codex.sh` 旁的
-> `MATRIX` 块生成的，`bin/codex-matrix.sh --check` 在 CI 里失败于任何漂移。
+> `MATRIX` 块生成的（渲染器与它的 CI 检查随 #4904 去掉，表改为手工对齐）。
 >
 > 矩阵还区分了两类 ❌，这个区分很重要：
 > - **Codex 的限制** —— 例如无 `Notification` 事件、`SessionEnd` 永远 `reason=other`
@@ -384,7 +384,7 @@ Fleet PR #747 已记录准确的 Codex UUID/home/rollout 并支持恢复及上�
   **也有** `fleet-autofill-armed`、`fleet-deploy-state-confs`（这台机器的 armed
   状态，共享出去就是错的）
 - `type: feedback` 里既有 `operator-ipad-tap-first`（纯个人偏好），
-  **也有** `artifact-blocked-use-doc-preview`（普适工具约束，全队适用）
+  **也有** `artifact-blocked-use-show`（普适工具约束，全队适用）
 
 粗数约 **60% 可共享 / 40% 不能**。
 

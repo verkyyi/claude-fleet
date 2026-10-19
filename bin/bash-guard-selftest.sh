@@ -397,8 +397,8 @@ edit_json() { printf '{"tool_name":"%s","tool_input":{"%s":%s}}' "$1" "$2" "$(js
 # An Artifact page is scoped to the claude.ai account that published it; with the
 # multi-account pool rotating tokens under sessions (#513/#515/#524) the operator
 # cannot tell which account a session used, so the page is invisible from the
-# wrong login. The fleet ships doc-preview (a fixed tailnet URL, any device, no
-# login) — the guard turns every publish into a pointer at it, and leaves reading /
+# wrong login. The fleet's road is `show` / `open` (the operator's own computer) —
+# the guard turns every publish into a pointer at it, and leaves reading /
 # listing / commenting on artifacts others shared alone.
 ARTGUARD="$BIN/../hooks/artifact-guard.py"
 if [ ! -f "$ARTGUARD" ]; then printf 'FAIL: %s not found\n' "$ARTGUARD" >&2; fails=$((fails + 1)); fi
@@ -408,9 +408,9 @@ art_json() { printf '{"tool_name":"Artifact","tool_input":%s}' "$1"; }
   assert_exit 2 "artifact publish (default action)"   "$ARTGUARD" "$(art_json '{"file_path":"/tmp/report.html","favicon":"📊"}')"
   assert_exit 2 "artifact publish (explicit)"         "$ARTGUARD" "$(art_json '{"action":"publish","file_path":"/tmp/report.html"}')"
   assert_exit 2 "artifact publish (redeploy to url)"  "$ARTGUARD" "$(art_json '{"file_path":"/tmp/r.html","url":"https://claude.ai/artifacts/x"}')"
-  # the refusal must TELL the model what to do instead — the doc-preview share line
+  # the refusal must TELL the model what to do instead — the show / open tools
   msg=$(printf '%s' "$(art_json '{"action":"publish","file_path":"/tmp/r.html"}')" | "$PY" "$ARTGUARD" 2>&1 >/dev/null)
-  case "$msg" in *doc-preview/share.sh*) ;; *) printf 'FAIL: refusal must point at doc-preview/share.sh (got: %s)\n' "$msg" >&2; fails=$((fails + 1)) ;; esac
+  case "$msg" in *fleet-show.sh*) ;; *) printf 'FAIL: refusal must point at fleet-show.sh (got: %s)\n' "$msg" >&2; fails=$((fails + 1)) ;; esac
   # ALLOW: reading / listing / commenting on artifacts others shared
   for a in read list comments reply resolve status watch unwatch read_db list_assets read_asset; do
     assert_exit 0 "artifact $a allowed" "$ARTGUARD" "$(art_json "{\"action\":\"$a\",\"url\":\"https://claude.ai/artifacts/x\"}")"

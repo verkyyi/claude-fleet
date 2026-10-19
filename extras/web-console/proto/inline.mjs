@@ -1,5 +1,5 @@
 // inline.mjs — fold the review build (dist-proto, `vite build --mode proto`)
-// into ONE html file for doc-preview (EPIC #3923 rule 14): the app's script,
+// into ONE html file to review (EPIC #3923 rule 14): the app's script,
 // styles, fonts and icon inlined, then framed twice — dark and light — under a
 // bar that picks the page, who is looking, the state and the width. Writes
 // proto/out/prototype.html. Never packed into the hub.

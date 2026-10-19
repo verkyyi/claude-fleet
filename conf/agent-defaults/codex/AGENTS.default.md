@@ -13,8 +13,7 @@ fleet's hooks are its rails. Whatever the project:
   is another live session. Test tmux tooling on an isolated socket (`tmux -L scratch`).
 - **The operator's screen is their own computer**, reached over SSH. `open <url|file>`
   here shows it to nobody — in a fleet session use the `fleet` tools `open` /
-  `show` (`fleet-open.sh` / `fleet-show.sh` outside one), or the doc-preview
-  skill for a document.
+  `show` (`fleet-open.sh` / `fleet-show.sh` outside one) — a document too.
 - **Where the operator is right now** — which device, system and terminal, and
   what it can do (open a page, take a file, a link only) — is the `fleet` tool
   `where` (`fleet-client-where.sh` outside a session): the one reader. Never

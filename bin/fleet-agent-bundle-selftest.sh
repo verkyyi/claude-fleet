@@ -103,7 +103,7 @@ files=$("$PY" "$REPO/bin/fleet-agent-bundle.py" files --root "$REPO"); rc=$?
 [ "$rc" = 0 ] && [ -n "$files" ] && ok "A the manifest expands ($(printf '%s\n' "$files" | wc -l | tr -d ' ') files)" || bad "A files rc=$rc"
 miss=''
 for c in hooks/settings-hooks.json bin/fleet-hook-run.sh conf/agent-defaults/claude/mcp.default.json \
-         bin/mcp-github.sh bin/fleet-codex-rpc.py mod/fleet/.claude-plugin/plugin.json skills/doc-preview/SKILL.md commands/fleet-claim.md; do
+         bin/mcp-github.sh bin/fleet-codex-rpc.py mod/fleet/.claude-plugin/plugin.json skills/fleet-open/SKILL.md commands/fleet-claim.md; do
   printf '%s\n' "$files" | grep -xF >/dev/null "$c" || miss="$miss $c"
 done
 for h in $(grep -o '\.claude/fleet/hooks/[^ "]*' "$REPO/hooks/settings-hooks.json" | sed 's#^\.claude/fleet/##' | sort -u); do
@@ -114,7 +114,7 @@ v1=$("$PY" "$REPO/bin/fleet-agent-bundle.py" version --root "$REPO"); v2=$("$PY"
 case "$v1" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) [ "$v1" = "$v2" ] && ok "A version $v1, stable" || bad "A version moves: $v1 $v2" ;; *) bad "A version: $v1" ;; esac
 if [ -x "$REPO/bin/fleet-client-mirror.sh" ] && [ -d "$REPO/tokenledger/hub/api/fleetclient" ]; then
   out=$(bash "$REPO/bin/fleet-client-mirror.sh" --check 2>&1) && ok "A the hub's client manifest is current (mirror --check)" || bad "A mirror: $out"
-  # (fleet_redact.py is the client's too: `fleet doctor --bundle` redacts with it)
+  # (fleet_redact.py is the client's too: its config scan reads it)
   inman=$(awk '!/^[[:space:]]*#/ && NF { print $1 }' "$REPO/tokenledger/hub/api/fleetclient/manifest" | grep -xF -f <(printf '%s\n' "$files") | grep -vx 'bin/fleet_redact.py')
   [ -z "$inman" ] && ok "A the client package carries none of it (承载's, #4826)" || bad "A the client manifest still lists: $(printf '%s' "$inman" | tr '\n' ' ')"
 fi
@@ -212,9 +212,9 @@ case "$nh" in 0/*|'') bad "B hooks: $chk" ;; *) [ "${nh%/*}" = "${nh#*/}" ] && o
 printf '%s\n' "$chk" | grep -x >/dev/null 'mcp context7,fetch,github,playwright' && ok "B Claude MCP: context7 · fetch · github · playwright" || bad "B mcp: $chk"
 printf '%s\n' "$chk" | grep >/dev/null "^github .*\$HOME/.claude/fleet/bin/mcp-github.sh" && [ -x "$R/bin/mcp-github.sh" ] \
   && ok "B github MCP runs the package's bin/mcp-github.sh" || bad "B github args: $chk"
-[ -f "$H/.claude/skills/doc-preview/SKILL.md" ] && [ -x "$H/.claude/skills/doc-preview/share.sh" ] && [ -f "$H/.claude/commands/fleet-claim.md" ] \
-  && ok "B Claude skills + commands (a skill's script executable)" || bad "B claude skills: $(ls "$H/.claude/skills" "$H/.claude/commands" 2>&1 | tr '\n' ' ')"
-[ -f "$H/.codex/skills/doc-preview/SKILL.md" ] && [ -f "$H/.codex/skills/fleet-claim/SKILL.md" ] \
+[ -f "$H/.claude/skills/fleet-open/SKILL.md" ] && [ -f "$H/.claude/commands/fleet-claim.md" ] \
+  && ok "B Claude skills + commands" || bad "B claude skills: $(ls "$H/.claude/skills" "$H/.claude/commands" 2>&1 | tr '\n' ' ')"
+[ -f "$H/.codex/skills/fleet-open/SKILL.md" ] && [ -f "$H/.codex/skills/fleet-claim/SKILL.md" ] \
   && ok "B Codex skills (repo skills + command skills)" || bad "B codex skills: $(ls "$H/.codex/skills" 2>&1 | tr '\n' ' ')"
 # #4325: inspect the fresh HOME's generated content, not just source/existence.
 "$PY" - "$REPO/commands/fleet-claim.md" "$H" <<'PYCLAIM'

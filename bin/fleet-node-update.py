@@ -283,7 +283,7 @@ def check_release(spec):
     return spec
 
 
-DRILL_FAIL = "conf/drill-fail"   # fleet-node-drill.sh's rollback release (issue #2336)
+DRILL_FAIL = "conf/drill-fail"   # the rollback drill's release (issue #2336)
 
 
 def platform_id():

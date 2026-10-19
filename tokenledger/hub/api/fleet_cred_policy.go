@@ -296,42 +296,11 @@ func (s *Server) credPolicyFor(endpointID, principal string) (credPolicy, error)
 		machine = s.policyMachine(endpointID)
 	}
 	pol := credPolicyOf(settings, machine, principal)
-	if err := s.drillUserAllow(settings, &pol); err != nil {
-		return credPolicy{}, err
-	}
 	if err := s.userPodNodeAllow(settings, &pol); err != nil {
 		return credPolicy{}, err
 	}
 	s.trialUserAllow(settings, &pol) // a trial person: fleet.trial.cred_allow (#4260)
 	return pol, nil
-}
-
-// drillUserAllow gives a drill person (claude-fleet#2010) with no list of its
-// own its CREATOR's person allowance (claude-fleet#3440): its ID is minted
-// fresh for every drill, so no operator can list it ahead of time, and in
-// strict mode «no list» denied every subscription — a 200 lease with no
-// account, the new login «not ready: creds». It never gets more than the admin
-// who minted it; one minted with the operator's own token (created_by
-// "operator") is the operator's stand-in and reads as all. The machine's list
-// still applies. A list written for the drill itself wins.
-func (s *Server) drillUserAllow(settings map[string]string, p *credPolicy) error {
-	if p.Principal == "" || !p.User.Set || p.User.All {
-		return nil
-	}
-	if _, own := settings[credUserKey(p.Principal)]; own {
-		return nil
-	}
-	d, err := s.Store.Drill(p.Principal)
-	if err != nil || d == nil {
-		return err
-	}
-	switch c := d.CreatedBy; {
-	case c == "operator":
-		p.User = credAllow{Set: true, All: true}
-	case c != "" && !s.Store.IsDrill(c):
-		p.User = credAllowOf(settings, credUserKey(c))
-	}
-	return nil
 }
 
 // userPodNodeAllow gives a person's own pod (u-<nonce>, claude-fleet#4290) with
@@ -340,8 +309,7 @@ func (s *Server) drillUserAllow(settings map[string]string, p *credPolicy) error
 // and in strict mode «no list» denied every subscription — every Codex turn on
 // a fresh pod was 403 until someone listed the machine by hand. The owner is the
 // person the pod is recorded for (fleet_cluster_pods), else the login the hub
-// opened there; the one asking wins when it is one of them. A drill owner reads
-// its creator's list (drillUserAllow). The person half still applies, and a list
+// opened there; the one asking wins when it is one of them. The person half still applies, and a list
 // written for the pod itself wins.
 func (s *Server) userPodNodeAllow(settings map[string]string, p *credPolicy) error {
 	if p.Machine == "" || !p.Node.Set || p.Node.All || !isUserPodName(p.Machine) {
@@ -377,9 +345,6 @@ func (s *Server) userPodNodeAllow(settings map[string]string, p *credPolicy) err
 		return nil
 	}
 	op := credPolicy{Principal: owner, User: credUserAllowOf(settings, owner)}
-	if err := s.drillUserAllow(settings, &op); err != nil {
-		return err
-	}
 	if op.User.Set {
 		p.Node = op.User
 	}
@@ -541,10 +506,6 @@ func (s *Server) credPolicyGet(w http.ResponseWriter, r *http.Request) {
 	byEndpoint := q.Get("endpoint_id") != ""
 	if machine != "" || principal != "" || byEndpoint {
 		pol := credPolicyOf(settings, strings.ToLower(firstLabel(machine)), principal)
-		if err := s.drillUserAllow(settings, &pol); err != nil {
-			httpError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
 		if byEndpoint && principal == "" {
 			pol.User = credAllow{Set: true, Bad: "no active owner"}
 		}

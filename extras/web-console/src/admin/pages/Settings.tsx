@@ -41,7 +41,6 @@ type Group = "public" | "pool" | "people" | "team" | "deploy";
 // The settings this page edits — the old page's, in its order.
 const EDITABLE: { key: string; type: Type; group: Group }[] = [
   { key: "hub.public_meter", type: "onoff", group: "public" },
-  { key: "hub.public_badges", type: "onoff", group: "public" },
   { key: "pool.skip_pct", type: "pct", group: "pool" },
   { key: "pool.move_when_full", type: "onoff", group: "pool" },
   { key: "fleet.auto_assign", type: "hosts", group: "people" },

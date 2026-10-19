@@ -251,7 +251,7 @@ func (s *Server) tryClaimAs(pid, name string, resume bool, now time.Time) (tryAn
 	if err != nil {
 		return tryAnswer{}, err
 	}
-	host, noSpare := s.trialMachine(now, s.drillComputer(pid)...)
+	host, noSpare := s.trialMachine(now)
 	why := s.trialHold(host, now)
 	if why == trialWaitBusyNoHost && noSpare {
 		why = trialWaitNoSpare

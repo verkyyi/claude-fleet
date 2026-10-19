@@ -60,10 +60,10 @@ On a computer with only the client installed (it watches sessions, runs none), `
 ### Sending diagnostics to your admin
 
 ```sh
-fleet debug report
+fleet doctor --json
 ```
 
-It packs this computer's check-up and logs, sends them to the hub, and gives you a short link — send the link to your admin; no screenshots, no pasted logs. Without a hub, `fleet doctor --bundle <directory>` saves the same thing to a local directory.
+Send the output to your admin — every row's level, name and message is in it.
 
 ## Every row of the check-up
 
@@ -184,13 +184,6 @@ From `fleet doctor`.
 
 - **What it is**: the result of the machine updater's last round.
 - **On WARN / FAIL**: read `/var/log/fleet-node/update.log` and `sudo fleet doctor --machine`. When a switch adds a FAIL, the updater goes back to the previous version by itself — no rollback by hand. A `refused` result means the hub named a target older than the running release (its stable was rolled back): a machine only moves forward and stays where it is — wait for the next release, or set `FLEET_NODE_UPDATE_BACKWARD=1` on that machine if you really mean to go back.
-
-#### `cnpath`
-
-From `fleet doctor`; it appears only on the machine that walks the China real-user path.
-
-- **What it is**: the verdict of the last walk of a real user's road from a client in China (connect to the test pod, open the view with a bare `fleet`, ask a new Codex session one sentence, file a task), and how long ago it ran.
-- **On WARN / FAIL**: not through: the explanation names the layer it stopped at and the breakage ticket it filed; stable does not move until that ticket is closed or the next walk is green. Not walked for over 12 hours: check that this machine's diskguard daemon is still running.
 
 #### `install`
 
@@ -662,14 +655,6 @@ From `fleet doctor`.
 - **What it is**: the whole machine's load, any runaway orphan processes, the total number of sessions.
 - **On WARN / FAIL**: load too high: `fleet-diskguard.sh --orphans` names the runaway processes; stop them.
 
-#### `idle-cost`
-
-From `fleet doctor` (machines hosting sessions).
-
-- **What it is**: new processes per second, fleet CPU usage and the largest sources while the machine is idle. Sampling requires no working session or CI job, except the measuring session itself. Missing or stale state from another login means no measurement.
-- **On WARN / FAIL**: WARN above 50 processes per second by default. Run `bash ~/.claude/fleet/bin/fleet-idle-cost.sh` for a 60-second reading; `--json` is for reports, `--idle` checks eligibility, and `--last` prints the saved reading. Source ranking uses 0.2-second snapshots; source rates are estimates and very short-lived processes can be missed. Wait for active work to finish naturally before measuring.
-- **Once a day**: a hosting machine takes one reading a day while idle into `~/.config/claude-fleet/global/idle-cost.ndjson` (kept 30 days; a day that was never idle gets one "unmeasured" line) — the line's 「每日读数近 7 天 …」 tail reads it. Over the threshold, one issue a machine a day names the three biggest sources. `python3 ~/.claude/fleet/bin/fleet-idle-daily.py show` lists the last 7 days.
-
 #### `memory`
 
 From `fleet doctor`.
@@ -704,13 +689,6 @@ From `fleet doctor`.
 
 - **What it is**: the system's default per-process open-file limit. It only reports.
 - **On WARN / FAIL**: nothing to do: fleet's services raise it themselves.
-
-#### `last-crash`
-
-From `fleet doctor`.
-
-- **What it is**: whether this machine crashed and restarted within the last day.
-- **On WARN / FAIL**: read the crash summary in the explanation; check memory, temperature and what was installed recently.
 
 #### `reap`
 
@@ -831,20 +809,6 @@ From `fleet doctor`.
 - **What it is**: where a new session's first message comes from. It only reports.
 - **On WARN / FAIL**: nothing to do.
 
-#### `feedback`
-
-From `fleet doctor`.
-
-- **What it is**: whether `/fleet-feedback` (telling the maintainers what you think) is on. It only reports.
-- **On WARN / FAIL**: to use it, `fleet feedback on`.
-
-#### `compose`
-
-From `fleet doctor`.
-
-- **What it is**: how long from pressing Enter on a task in ⌘P until you can start typing.
-- **On WARN / FAIL**: over 3 seconds: `fleet-compose-latency.sh --last 20` shows which part is slow; send it to your admin.
-
 #### `timing`
 
 From `fleet doctor`.
@@ -914,13 +878,6 @@ From `fleet doctor`.
 
 - **What it is**: whether the small plugin on the iTerm2 side of your laptop is installed and up to date.
 - **On WARN / FAIL**: reinstall it once on that laptop as the explanation says.
-
-#### `docprev`
-
-From `fleet doctor`.
-
-- **What it is**: the document preview service: old processes, leftover routes, expired public links.
-- **On WARN / FAIL**: clean up with the `share.sh` command in the explanation.
 
 #### `listen`
 

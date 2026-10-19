@@ -228,7 +228,7 @@ out=$(bash "$BIN/fleet-repo.sh" add --session "$S" o/beta "$MB" 2>/dev/null); rc
 [ "$out:$rc" = "refused:hosted:1" ] && ok "setup: a repeat add is refused:hosted, non-zero" || fail "setup: repeat add [$out:$rc]"
 # Only the repository rows are under test here. The idle-cost row has its own
 # selftest; do not start a real 60-second machine sample in this sandbox.
-FLEET_DOCTOR_IDLE_COST=0 sh "$BIN/fleet-doctor.sh" 2>/dev/null | sed $'s/\x1b\\[[0-9;]*m//g' | grep -E '^ +(PASS|WARN) +repos ' > "$WORK/doctor.repos"
+sh "$BIN/fleet-doctor.sh" 2>/dev/null | sed $'s/\x1b\\[[0-9;]*m//g' | grep -E '^ +(PASS|WARN) +repos ' > "$WORK/doctor.repos"
 grep -Eq 'repos +2 hosted \(ft\): o/alpha . .*· o/beta .' "$WORK/doctor.repos" \
   && ok "setup: doctor's repos row lists both repos (#1104)" || fail "setup: doctor repos rows: $(cat "$WORK/doctor.repos")"
 grep -Eq 'repos +1 hosted \(fd\): o/solo .' "$WORK/doctor.repos" \

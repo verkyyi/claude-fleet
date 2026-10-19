@@ -35,9 +35,8 @@
 #             install NOTHING, except carry-over: a part that moved into a
 #             plugin and is still installed here (its GONE path) installs that
 #             plugin; update an installed one behind the runtime
-#             (bin/fleet-plugins.py ensure); a managed login also gets
-#             fleet-feedback installed + enabled once (issue #3360,
-#             plugins-defaulted.json). Before the passes that remove the
+#             (bin/fleet-plugins.py ensure); uninstall a retired one
+#             (fleet-feedback, issue #4904). Before the passes that remove the
 #             moved copies. claude.plugins in the override file = skip.
 #   hooks     settings-hooks.json changed -> fleet-hooks-merge.py merge
 #   settings  every apply that moved -> fleet-hooks-merge.py defaults (issue
@@ -66,11 +65,6 @@
 #             _template.md placeholder `worker|hub|either`) is not a command.
 #   skills    mirror added/changed skills/<name>/ dirs, remove retired ones;
 #             never clobber a personal (unmarked, divergent) skill
-#   docprev   every apply (issue #2415): doc-preview's share.sh --upgrade restarts
-#             a running server.py that is older than the installed copy, on the
-#             same port, and ends an untracked one — a server started before an
-#             install keeps the old rules until restarted (one from before #1153
-#             listed every share without a code for a day). No server = nothing.
 #   codex     mirror the same fleet commands as native Codex skills under each
 #             known $CODEX_HOME/skills/<command>/SKILL.md, and mirror repo skills
 #             there too. Old Codex homes that do not exist are ignored.
@@ -1023,13 +1017,8 @@ if [ "$BUNDLE" = 0 ] && [ -f "$ROOT/.claude-plugin/marketplace.json" ] && [ -f "
   else
     gonef=$(mktemp "${TMPDIR:-/tmp}/fleet-plugins-gone.XXXXXX")
     printf '%s\n' "$GONE" > "$gonef"
-    # a managed login (the machine daemon runs it) gets /fleet-feedback on by
-    # default, ONCE — plugins-defaulted.json remembers, a person's off stays off
-    # (issue #3360; docs/dev/MANAGED-NODE.md §18). Anyone else's computer: nothing.
-    pdef=()
-    fleet_node_manages "$LOGIN" && pdef=(--default fleet-feedback)
     if out=$(python3 "$ROOT/bin/fleet-plugins.py" ensure --root "$ROOT" --claude "$CLAUDE" \
-               --claude-dir "$CDIR" --gone "$gonef" ${pdef[@]+"${pdef[@]}"} ${DRYFLAG:+"$DRYFLAG"} 2>&1); then
+               --claude-dir "$CDIR" --gone "$gonef" ${DRYFLAG:+"$DRYFLAG"} 2>&1); then
       printf '%s\n' "$out"
     else
       printf '%s\n' "$out" | grep -v ': FAIL ' || true
@@ -1277,26 +1266,6 @@ elif [ "$COPY" = 1 ]; then
   fi
 fi
 
-# --- docprev (issue #2415) -----------------------------------------------------
-# Not gated on skills/ changing: the mac-a server outlived the install that replaced it.
-dp_sh="$CDIR/skills/doc-preview/share.sh"
-if [ -x "$dp_sh" ] && [ -d "$HOME/.cache/claude-doc-preview" ]; then
-  if [ "$DRY" = 1 ]; then
-    if dp_out=$("$dp_sh" --upgrade --check 2>&1); then say 'docprev: server.py current'
-    else say "docprev: would restart — $(printf '%s' "$dp_out" | tr '\n' ';')"; fi
-  elif dp_out=$("$dp_sh" --upgrade 2>&1); then
-    say "docprev: $(printf '%s' "$dp_out" | sed 's/^doc-preview: //' | tr '\n' ';' | sed 's/;$//')"
-  else
-    say "docprev: WARN $(printf '%s' "$dp_out" | tr '\n' ' ')"
-  fi
-  # Docs shared but no server (it died with a session, issue #3988): bring it back.
-  if [ "$DRY" != 1 ] && dp_out=$("$dp_sh" --ensure 2>&1) && [ -n "$dp_out" ]; then
-    say "docprev: $(printf '%s' "$dp_out" | sed 's/^doc-preview: //' | tr '\n' ';' | sed 's/;$//')"
-  elif [ "$DRY" != 1 ] && [ -n "$dp_out" ]; then
-    say "docprev: WARN $(printf '%s' "$dp_out" | tr '\n' ' ')"
-  fi
-fi
-
 # --- agents (issue #1559; EPIC #1524 C12) ------------------------------------------
 # conf/agent-defaults/ is the ONE default package for BOTH agents on a managed
 # login: the user-scope MCP servers (context7 · playwright · github · fetch) into
@@ -1345,8 +1314,8 @@ if [ "$BUNDLE" = 0 ] && [ -f "$ROOT/bin/fleet-codex-plugins.py" ] && command -v 
   fi
 fi
 # The agent files the core ships (issue #3122, EPIC #3111 C11): fleet-worker — the
-# issue-bound session a spawn starts as by default — and, until its own plugin
-# carries it, fleet-debugger, into ~/.claude/agents. Written once, kept up while
+# issue-bound session a spawn starts as by default — orchestrator and steward,
+# into ~/.claude/agents. Written once, kept up while
 # still the fleet's bytes, never touched once the person edits (their override) or
 # deletes one (a spawn is then a plain session). One the core no longer ships
 # (epic-driver rides the fleet-epic plugin — issue #3116) is retired while still

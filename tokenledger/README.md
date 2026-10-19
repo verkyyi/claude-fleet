@@ -1,10 +1,5 @@
 # TokenLedger
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/badge-dark.svg">
-  <img alt="tokens counted by this hub" src="docs/img/badge-light.svg">
-</picture>
-
 **Books for a team account pool.** A small team buys N Claude subscriptions
 centrally and schedules its work against whichever of them still has headroom.
 That is markedly cheaper per unit of quota than buying a seat per person — and
@@ -368,7 +363,7 @@ iterations, rather than user messages.
 
 The local report includes **By source**. The dashboard is one continuous page
 with a single source selector; accounts follow that selection. (The top nav
-bar anchors within that one page — see [The dashboard](#the-dashboard).) Usage, quota history, findings,
+bar anchors within that one page — see [The dashboard](#the-dashboard).) Usage, quota history,
 Live/SSE, machine lists and MCP accept `source=codex`. The all-time headline
 follows the selected account/source; project and machine chips narrow details.
 
@@ -625,12 +620,11 @@ process, and they do not share a credential.
 | `/v1/...` | the viewer token, as a bearer header | the same figures as JSON |
 | `POST /mcp` | the same viewer token again | the read tools, for an agent |
 | `/v1/ingest`, `/v1/live/report`, … | each agent's own enrollment token | write: push Claude and Codex usage |
-| `/badge/…`, `/embed/…` | nothing while the setting `hub.public_badges` is on, an admin's sign-in otherwise | one number, for a README |
 | `ccquota enroll / team / plan / name` | a shell on the hub machine | the only door that can change who gets in |
 
 That table is the software. The half it cannot tell you is *your* hub — whether
-GitHub sign-in is wired up, how many admins the deploy names, whether badges are
-public, how many agents are enrolled. The hub answers that itself:
+GitHub sign-in is wired up, how many admins the deploy names, whether the
+public counter is on, how many agents are enrolled. The hub answers that itself:
 
     https://<your hub>/access          # the page
     https://<your hub>/v1/access       # the same thing as JSON
@@ -1020,7 +1014,6 @@ is one `hub_audit` row: who, when, old → new.
 | key | default | replaces |
 |---|---|---|
 | `hub.public_meter` | on | — |
-| `hub.public_badges` | off | `--public-badges` (no longer read, claude-fleet#2087) |
 | `pool.skip_pct` | 85 | a node's `FLEET_ACCOUNT_CEILING` (served at `/v1/fleet/client-settings` → `pool`) |
 | `pool.move_when_full` | off | a node's `FLEET_FAILOVER` (same) |
 | `fleet.auto_assign` | — | `CCQUOTA_FLEET_AUTO_ASSIGN`, no longer read (`none` = no machines; `least-busy` = the hub picks, claude-fleet#2069) |
@@ -1574,8 +1567,7 @@ decrypted for anything else.
   touched.
 - **KMS unreachable = vault LOCKED, never a fallback.** The hub starts locked and
   stays so until a `Decrypt` succeeds (retrying 15s → 5min): leases and stores
-  answer `503 vault_locked` (each lease refusal an audit row), and the live
-  findings carry a **critical** `cred_vault_locked` at the top. Revocation and
+  answer `503 vault_locked` (each lease refusal an audit row). Revocation and
   the audit keep working. Machines keep the access tokens they already have, so
   a short KMS outage costs nothing until those run out.
 
@@ -1982,115 +1974,6 @@ or loopback is closed at accept, before TLS begins. HTTPS must be enabled on the
 tailnet (admin console → DNS → HTTPS Certificates); the hub says so and refuses
 to start otherwise.
 
-## Badges
-
-Render your totals as a badge. Entirely local — no server, no account, nothing
-submitted anywhere:
-
-```bash
-ccquota badge --out ccquota.svg --theme dark --period all
-ccquota badge --size compact --out ccquota-sm.svg   # 20px, sits beside shields badges
-ccquota badge --style flat --out ccquota-flat.svg   # static, shields-shaped
-ccquota badge --json --out ccquota.json             # shields.io endpoint schema
-```
-
-The default badge is **tokenman**: a character eats a stream of dots, and an
-odometer rolls up to the **exact** count — every digit, not "69.8B". The dots
-*are* tokens, so the animation carries the meaning rather than decorating it.
-
-**It animates inside a README.** An `<img>`-loaded SVG cannot run scripts, but
-it does run CSS keyframes and SMIL — measured, not assumed. Everything here is
-CSS inside the SVG's own `<style>`: no script, no font, no fetch. Readers with
-`prefers-reduced-motion` get the finished figure statically — the resting state
-*is* the final value, and the roll animates *from* zero, so nothing is ever
-wrong with animation off.
-
-The compact size is 20px tall and sits in a row of shields badges without
-looking like a visitor. `--style flat` is the plain two-tone badge for anyone
-who wants no motion at all.
-
-### Fitting the host
-
-- **`theme=auto`** — one SVG carrying both palettes, switched by
-  `prefers-color-scheme`. An `<img>`-loaded SVG *does* evaluate it (measured),
-  and follows the reader's OS/browser scheme. The one place that is not
-  enough is GitHub, whose own dark/light toggle can disagree with the OS —
-  there, keep the `<picture>` pattern above.
-- **`bg=transparent`** — no ground; the host's own background shows through.
-  With `theme=auto`, the badge sits on anything.
-- **Colours** — `pac=`, `dot=`, `fg=`, `bg=` take a hex value without `#`.
-  A bad value is ignored, never an error badge.
-
-### Is it live?
-
-Depends on the embed, and the reason is structural:
-
-| Embed | You get |
-|---|---|
-| `<img>` — README, Markdown, anywhere that only allows images | **Current at fetch time**, refreshed by the cache TTL (`max-age=300`, the same as shields.io; GitHub's camo re-pulls within minutes). It does **not** tick while you watch: an image is a snapshot and cannot re-fetch itself. |
-| `<iframe>` — your site, a docs page, a wiki, a wallboard | **Truly live.** `/embed/u/<login>` polls the raw figure (every 30s; `?every=`) and, only when it has actually *changed*, swaps in a badge rendered `?from=<the previous value>` — so the wheels roll the real difference, position by position, as many turns as each one carried. |
-
-```html
-<iframe src="https://hub.example/embed/u/frank?theme=auto&bg=transparent"
-        width="400" height="60" frameborder="0" title="Claude Code tokens"></iframe>
-```
-
-Nothing is extrapolated. If the hub has not measured a new number, nothing
-moves except the character. `?from=` works on the plain SVG too — a wallboard
-that re-fetches the badge every minute can pass the last value it showed.
-
-`/badge/u/<login>.json?format=raw` is the figure the embed polls:
-`{"tokens":…,"turns":…,"period":"30d"}`, never cached, behind the same
-`hub.public_badges` gate as everything else here.
-
-**Publishing is up to you, and every route is serverless.** Which one works is
-decided by the content-type the host serves, so these were measured rather than
-assumed:
-
-| URL | Content-Type | Usable as a README image |
-|---|---|---|
-| `raw.githubusercontent.com/<you>/<you>/main/ccquota.svg` | `image/svg+xml` | yes |
-| `gist.githubusercontent.com/.../raw` | `text/plain` | no — fine as shields *data*, not as the image |
-| `img.shields.io/endpoint?url=<your json>` | `image/svg+xml` | yes, from a URL you supply |
-
-So: commit the SVG to your profile repo and link it, or write the JSON to a gist
-and point shields at that.
-
-**Light and dark take two URLs**, not one adaptive badge. An SVG loaded through
-`<img>` is a sandboxed context — no scripts, no external fonts, no CSS, no
-network — `prefers-color-scheme` inside one is inconsistently supported, and
-GitHub's camo proxy caches a single copy for every reader. So the theme is an
-explicit flag and READMEs use the `<picture>` pattern:
-
-```html
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset=".../ccquota-dark.svg">
-  <img alt="ccquota" src=".../ccquota-light.svg">
-</picture>
-```
-
-**A badge is not live.** camo caches it, so it carries a period label (`all`,
-`30d`) and never a timestamp — a timestamp would sit on your profile being
-wrong for a week.
-
-### Serving badges from your own hub
-
-`fleet hub set hub.public_badges on` makes the hub serve `/badge/u/<login>.svg` and
-`/badge/team/<team>.svg` (`?theme=dark|light|auto`, `?period=all|30d|7d`,
-`?size=full|compact`, `?style=tokenman|flat`, `?bg=transparent`, `?from=`,
-colour overrides; `.json` for shields data, `.json?format=raw` for the bare
-figure) and the live `/embed/u/<login>` page without a viewer token, which is what makes them usable
-in an internal README: a README image sends no credential, and camo strips
-cookies.
-
-It is **off by default**, and it exposes the badge routes only. `/v1/user`, the
-dashboard, the query API and MCP all stay behind the viewer token — turning this
-on does not publish per-person cost data, only the two figures a badge shows.
-
-An unknown handle returns 404 with a badge that says so, never a zeroed one:
-"0 tokens" reads as "this person spent nothing", which is a different claim
-from "there is no such person here", and a false one.
-
 ## Teams
 
 Allocate a machine's spend to a team:
@@ -2237,13 +2120,13 @@ Point any MCP client at `https://your-hub/mcp` with the viewer token as a bearer
 }}}
 ```
 
-Twenty-seven read-only tools: `list_accounts`, `get_limits`, `get_limits_history`,
+Twenty-six read-only tools: `list_accounts`, `get_limits`, `get_limits_history`,
 `list_endpoints`, `usage_by_source`,
 `usage_by_account`, `list_account_switches`, `list_endpoint_accounts`,
 `usage_by_endpoint`, `usage_by_user`, `usage_by_project`, `usage_by_session`,
 `usage_by_model`, `usage_by_team`, `usage_by_branch`, `usage_by_effort`, `usage_by_entrypoint`,
 `usage_history`, `usage_summary`, `list_sessions`, `get_session`, `get_user`,
-`get_findings`, `get_collectors`, `get_account_usage`, `get_live`, `quota_history`.
+`get_collectors`, `get_account_usage`, `get_live`, `quota_history`.
 
 **Every axis the HTTP API can group by, MCP can group by too.** They went out of
 step once: `team`, `branch`, `model`, `effort` and `entrypoint` were reachable as
@@ -2262,57 +2145,10 @@ utilization series to get at them. `/v1/limits/history` keeps its folded copy:
 the dashboard draws both on one axis, and splitting that into two round-trips
 would let the halves straddle a refresh.
 
-What stays deliberately one-sided: `/badge/*` and `/embed/*` are public-facing
-renderings and have no MCP tools; and `/v1/live/stream` is a stream,
-which this server does not open (see the GET handler). MCP is read-only
-throughout — the hub's two viewer-facing writes, `POST /v1/accounts/label` and
-`POST /v1/findings/mutes`, have no tools and will not grow any. The second one
-is why that matters more than it used to: an agent that could silence the
-fleet's alerts on its own initiative is not a capability anyone asked for.
-`get_findings` reports a finding's `id` and its `muted` state, so an agent can
-*see* what a person silenced and say it should be lifted — the lifting is a
-person's click.
-
-### Saying "I know" about an alert
-
-A `critical` finding used to come back on every page load, for as long as the
-window contained it, with no way to acknowledge it. It could not be otherwise:
-findings are recomputed on every read and had no names, so there was nothing to
-attach an acknowledgement to.
-
-Every finding now carries a stable `id` — the same problem computes the same id
-on every request — and `POST /v1/findings/mutes` records the one thing that
-cannot be recomputed: the operator's judgement.
-
-```sh
-curl -s https://your-hub/v1/findings/mutes \
-  -H "Authorization: Bearer $VIEWER_TOKEN" \
-  -d '{"id":"3f9a1c04be21","kind":"stale_agent","hours":24,"note":"box is in the shop"}'
-```
-
-Three rules make the silence safe to give out:
-
-**It expires.** There is no permanent mute, and `hours` is clamped to 30 days.
-A permanently muted alert is a deleted alert nobody remembers deleting: the
-condition stays true, the card stays quiet, and months later no one can say why
-that rule never fires. The worst case of an expiry is being told again about
-something already handled, which costs one click.
-
-**It is still visible.** Muted findings are not dropped from the response or
-from the page — they are ranked after the live ones and folded, with the time
-remaining and who silenced them. An alert that vanished when silenced would be
-indistinguishable from one that cleared.
-
-**An escalation breaks through it.** Severity is part of the identity, so a
-5-hour window silenced at 78% speaks up again when it crosses 90%, and a mute
-on the "80% of the free allowance" warning does not cover the "allowance is
-gone" critical. "I know it is warm" is not consent to be surprised by it
-running out.
-
-The `maxFindings = 8` cap now applies per tier: the live findings are capped as
-before — a muted finding gives up its slot, which is what silencing it was for
-— and the muted ones follow under their own cap. So muting makes room without
-deleting anything.
+What stays deliberately one-sided: `/v1/live/stream` is a stream, which this
+server does not open (see the GET handler). MCP is read-only throughout — the
+hub's viewer-facing write, `POST /v1/accounts/label`, has no tool and will not
+grow one.
 
 Read-only is deliberate. A monitor that could also pause endpoints or change
 quotas needs a control channel back to every machine — a far larger security
@@ -2533,8 +2369,6 @@ The console is `extras/web-console` (its committed build packed into `web/consol
 by `bin/web-console-pack.sh` before an image is built), embedded via `embed.FS`
 with the website and docs; the old hand-written dashboard under `web/dist` was
 taken down (claude-fleet#3939) — `web/dist` keeps only the tab icons.
-
-Design notes are in `docs/superpowers/specs/`.
 
 ### Trunk and CI
 

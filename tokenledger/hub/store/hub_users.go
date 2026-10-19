@@ -49,11 +49,9 @@ func KnownIdentityKind(kind string) bool {
 	return false
 }
 
-// SignInKind reports whether kind may sign a person in: one of
-// IdentityKinds, or DrillKind — a drill trier's (claude-fleet#4215), which no
-// page lists and nobody adds by hand; only an admin's exchange code makes one.
+// SignInKind reports whether kind may sign a person in: one of IdentityKinds.
 func SignInKind(kind string) bool {
-	return KnownIdentityKind(kind) || kind == DrillKind
+	return KnownIdentityKind(kind)
 }
 
 // HubUser is one person on the list. PrincipalID is who they are; GitHubID is

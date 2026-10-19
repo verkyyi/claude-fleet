@@ -7,7 +7,7 @@
      /fleet-epic-report (batch report) render into, so the operator reads the
      pair as one document (issue #809). Copy this file, keep the <style> and the
      section ids, replace every slot marked ⟨…⟩. Nothing here is fetched from a
-     CDN except the font — doc-preview serves the page byte-for-byte.
+     CDN except the font — the page is served byte-for-byte.
 
      ONE PAGE, TWO LAYERS (issue #839). The same URL serves two readers:
        上层 — 发起人 / stakeholder: 用例 · 目标 · 指标. Two minutes, no fleet
@@ -45,7 +45,7 @@
        · 为谁 = a person or role WITH a count; never 所有 Agent / 维护团队
        · no implementation nouns upstairs (接口 注入 渲染 埋点 回执 域名 SDK CSP 404 …)
        · 有空再做 = the same theme only; 需要你定的事 = real either/or, no code, no 不做
-       · before share.sh: bin/epic-page-surface.sh --lint <page.html> -->
+       · before opening it: bin/epic-page-surface.sh --lint <page.html> -->
 <title>⟨theme · 2–4 words⟩</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
@@ -319,8 +319,8 @@
 
      PLAN, VISUAL members only (issue #1754): a member that changes something the user SEES
      (侧栏 / 状态栏 / 弹出菜单 / 网页 / 小程序页面 / 报告页样式) carries ONE p.proto link in the
-     upper layer — under the four fields, never in the fold — to its clickable prototype, hosted
-     by doc-preview share.sh. A non-visual member drops the line. --lint WARNs `prototype` when
+     upper layer — under the four fields, never in the fold — to its clickable prototype, served
+     beside the page. A non-visual member drops the line. --lint WARNs `prototype` when
      a visual card has none. -->
 <section id="members">
 <h2>要做的事</h2>
@@ -335,10 +335,10 @@
   <dt>解决什么</dt><dd>⟨what goes wrong for them today, as they experience it — not the code's shortcoming⟩</dd>
   <dt>怎么算成功</dt><dd>⟨what the decider would look at to believe it worked — names the #metrics row by its 指标 name⟩</dd>
 </dl>
-<p class="proto"><a href="⟨原型 URL — share.sh 的 READY 地址⟩">▶ 打开可交互原型</a></p>
+<p class="proto"><a href="⟨原型地址 — 与本页同目录的相对路径⟩">▶ 打开可交互原型</a></p>
 <!-- report only (issue #810) — the plan page drops this block. What the member looks like live, from
-     `fleet-evidence.sh export --epic N <dir>`: each cell is an <img> (relative path — doc-preview copies
-     it beside the page), a <pre> (a command's output / a capture-pane), or a .none cell — 无证据 when the
+     `fleet-evidence.sh export --epic N <dir>`: each cell is an <img> (relative path — served from
+     beside the page), a <pre> (a command's output / a capture-pane), or a .none cell — 无证据 when the
      worker left nothing, 未取到 + why when the hub could not take the live shot. Never re-shot, never staged. -->
 <div class="proof">
   <figure><div class="stage">改动前</div><img src="evidence/⟨M⟩/before-⟨UTC⟩-⟨name⟩.png" alt="改动前"><figcaption>⟨note⟩ · ⟨UTC⟩</figcaption></figure>
@@ -533,7 +533,7 @@
 </section>
 
 <footer>
-⟨plan: 「本页在 tailnet 内可达，重启即失效；点头后全部内容写回 parent 与各子单，页面失效不丢信息。」 ·
+⟨plan: 「本页由这台机器提供，会话结束即失效；点头后全部内容写回 parent 与各子单，页面失效不丢信息。」 ·
 report: 「durable 半份在 EPIC issue 的收尾评论里。」⟩
 </footer>
 

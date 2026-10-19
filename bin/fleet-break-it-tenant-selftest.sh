@@ -11,10 +11,6 @@
 #   tenant-other-home   another login's home, tmux dir, shared-dir file readable
 #   preview-no-code     a preview page opened without its code (#1153)
 #   bootstrap-abroad    the bootstrap cache missing: opening a login reaches abroad (#2297)
-#   docprev-gone-with-session  a worker's teardown takes the login's doc-preview server
-#                       (its cwd was the worktree), every shared page 502s (#3988):
-#                       share.sh starts it from its own dir, the diskguard tick's
-#                       --docprev-watch brings a dead one back on its old port
 #
 # Root (whom chmod 000 does not refuse) → SKIP.
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
@@ -79,8 +75,8 @@ drill_preview_no_code() {
   i=0; until curl -s -o /dev/null "http://127.0.0.1:$p2/" 2>/dev/null || [ "$i" -ge 50 ]; do sleep 0.1; i=$((i + 1)); done
   tenant_round "$d" preview sh -c "printf '%s %s\n' '$TS_PORT' '$p2' > '$d/ports'" -- sh -c "printf '%s\n' '$TS_PORT' > '$d/ports'" || return 1
   printf '%s' "$HITROW" | grep -q ":$p2/" || { WHY="red, but not on the open server's port: $HITROW"; return 1; }
-  printf '%s' "$HITROW" | grep -q ":$TS_PORT" && { WHY="doc-preview's server.py answered without a code: $HITROW"; return 1; }
-  WHAT="同机一个匿名可读的 http.server：preview 项变红、给出端口和标题；doc-preview 的 server.py 不带码一律 404"
+  printf '%s' "$HITROW" | grep -q ":$TS_PORT" && { WHY="the coded server answered without a code: $HITROW"; return 1; }
+  WHAT="同机一个匿名可读的 http.server：preview 项变红、给出端口和标题；只认随机码的服务不带码一律 404"
 }
 
 drill_bootstrap_abroad() {
@@ -97,41 +93,6 @@ drill_bootstrap_abroad() {
   printf '%s' "$HITROW" | grep -q 'github.com' \
     && { WHY="still asks the retired claude-fleet mirror (github.com): $HITROW"; return 1; }
   WHAT="本机没有开号缓存：bootstrap 项变红、记 claude.ai（claude-fleet 不再从缓存取，#2775）；缓存放回后变绿"
-}
-
-drill_docprev_gone_with_session() {
-  CAP=30
-  local d="$WORK/dprev" h wt sh port pid i t0 code
-  h="$d/home" wt="$d/proj-issue-1"
-  mkdir -p "$h/.claude/skills" "$h/.cache/claude-doc-preview/entries" "$wt" "$d/conf"
-  cp -R "$BIN/../skills/doc-preview" "$h/.claude/skills/"
-  sh="$h/.claude/skills/doc-preview/share.sh"
-  port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
-  printf 'local\n' > "$h/.cache/claude-doc-preview/mode"
-  printf '%s\n' "$port" > "$h/.cache/claude-doc-preview/served.ports"
-  printf '{"id":"x","expires":0}\n' > "$h/.cache/claude-doc-preview/entries/x.json"
-  # a worker's session starts it from its worktree
-  (cd "$wt" && HOME="$h" bash "$sh" --ensure) >/dev/null 2>&1
-  pid=$(cat "$h/.cache/claude-doc-preview/server.pid" 2>/dev/null)
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || { WHY="share.sh --ensure started no server: $(cat "$h/.cache/claude-doc-preview/server.log" 2>/dev/null)"; return 1; }
-  TS_PIDS="$TS_PIDS $pid"
-  # the worker is reaped: its worktree's processes go
-  HOME="$h" bash -c '. "$1/fleet-lib.sh" && fleet_reap_worktree_procs "$2" kill 1' _ "$BIN" "$wt" >/dev/null 2>&1
-  kill -0 "$pid" 2>/dev/null || { WHY="the worktree teardown took the doc-preview server with it"; return 1; }
-  # it dies anyway (a kill, a reboot): the tick brings it back on the same port
-  kill "$pid" 2>/dev/null; i=0; while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
-  t0=$(now)
-  HOME="$h" FLEET_CONF_DIR="$d/conf" bash "$BIN/fleet-diskguard.sh" --docprev-watch >/dev/null 2>&1
-  i=0; code=000
-  while [ "$i" -lt 50 ]; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/" 2>/dev/null) && [ "$code" != 000 ] && break
-    sleep 0.1; i=$((i + 1))
-  done
-  SECS=$(since "$t0")
-  pid=$(cat "$h/.cache/claude-doc-preview/server.pid" 2>/dev/null); TS_PIDS="$TS_PIDS $pid"
-  [ "$code" != 000 ] || { WHY="no server on :$port after the tick: $(cat "$d/conf/diskguard/docprev.log" 2>/dev/null)"; return 1; }
-  grep -q "started server.py on :$port" "$d/conf/diskguard/docprev.log" 2>/dev/null || { WHY="the tick logged no restart: $(cat "$d/conf/diskguard/docprev.log" 2>/dev/null)"; return 1; }
-  WHAT="worker 的 worktree 回收不再带走 doc-preview 的 server.py；它被杀后 diskguard tick 在原端口 :$port 拉起"
 }
 
 cred_run_drills "$0"

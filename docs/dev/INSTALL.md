@@ -19,7 +19,7 @@ login is one fleet; a shared login gives everyone one quota record.
 | Piece | What | Requires |
 |---|---|---|
 | Attention layer | hooks → window colors/spinner/urgency-sort; the spinner daemon also demotes stuck-`working` windows (missed Stop hook) via a marker-agnostic `window_activity`-staleness check (`FLEET_STUCK_WORKING_SECS`) | tmux ≥ 3.2 |
-| Bypass-permissions guards (issue #355) | `PreToolUse` hooks — the last line of defense once workers run `bypassPermissions` (CC never prompts). `hooks/bash-guard.py` (matcher `Bash`): a GENERIC deny-list (`rm -rf` on `/` `~` `.git`; force-push onto the base branch) with statement-segment splitting + git-subcommand matching for near-zero false positives, plus a never-shipped local overlay (`~/.claude/hooks/bash-guard-local.py`) for operator-specific rails. `hooks/base-readonly-guard.py` (matcher `Edit\|Write\|MultiEdit\|NotebookEdit`): makes the base checkout edit-read-only for **every** seat by denying writes inside `FLEET_MAIN` (worktree siblings stay writable) — closes the gap for the worker seat, which had no base-checkout protection at all. `hooks/artifact-guard.py` (matcher `Artifact`, #526): a fleet session never *publishes* an Artifact (account-scoped; use doc-preview). `hooks/agent-guard.py` (matcher `Agent`, #811): in a fleet pane only the read-only `Explore` / `Plan` / `claude-code-guide` subagents may start — code-writing work is a fleet WORKER (`dash-issue-session.sh` / `fleet-issue-file.sh --spawn`), since a subagent gets none of the fleet's rails; `FLEET_ALLOW_SUBAGENT=1` overrides. All **fail OPEN** (a guard bug or a non-fleet session → allow) | python3 |
+| Bypass-permissions guards (issue #355) | `PreToolUse` hooks — the last line of defense once workers run `bypassPermissions` (CC never prompts). `hooks/bash-guard.py` (matcher `Bash`): a GENERIC deny-list (`rm -rf` on `/` `~` `.git`; force-push onto the base branch) with statement-segment splitting + git-subcommand matching for near-zero false positives, plus a never-shipped local overlay (`~/.claude/hooks/bash-guard-local.py`) for operator-specific rails. `hooks/base-readonly-guard.py` (matcher `Edit\|Write\|MultiEdit\|NotebookEdit`): makes the base checkout edit-read-only for **every** seat by denying writes inside `FLEET_MAIN` (worktree siblings stay writable) — closes the gap for the worker seat, which had no base-checkout protection at all. `hooks/artifact-guard.py` (matcher `Artifact`, #526): a fleet session never *publishes* an Artifact (account-scoped; use the `show` / `open` tools). `hooks/agent-guard.py` (matcher `Agent`, #811): in a fleet pane only the read-only `Explore` / `Plan` / `claude-code-guide` subagents may start — code-writing work is a fleet WORKER (`dash-issue-session.sh` / `fleet-issue-file.sh --spawn`), since a subagent gets none of the fleet's rails; `FLEET_ALLOW_SUBAGENT=1` overrides. All **fail OPEN** (a guard bug or a non-fleet session → allow) | python3 |
 | Dashboard (legacy, `bin/tmux-dashboard.sh`) | the old full-screen fzf list of sessions. Retired as the default (issue #1533) — a fleet rests on its `home` window and the task list is the client view's (`fleet_view.py`); only `FLEET_DASH_WINDOW=1` still builds a `dash` window for it, and no node key opens it since #1714 | fzf ≥ 0.61 — `--no-input` (0.59) and `--ghost` (0.61); `fleet doctor` WARNs below 0.61 |
 | Backlog (`bin/tmux-issues.sh`; no node key since #1714) | GitHub issues panel, Enter = spawn issue-bound session. Each row tags its `priority:pN` (from `labels_<slug>`, no extra gh call) and issues sort by priority within a milestone; `⌃y` cycles a row's priority label (none→p2→p1→p0, `bin/dash-issue-priority.sh`, no popup). `⌃n` files a one-line issue | gh (authed), fzf ≥ 0.59 (`--no-input`; `fleet doctor` FAILs below) |
 | Config modal (`bin/tmux-config.sh`; no node key since #1714) | fzf popup to view/edit `FLEET_*` config in two layers — this fleet (the login's `fleet.settings` + the fleet `conf`, one layer to you) ▸ a hosted repo's overlay — over the code default; the install's `fleet.conf` is still read as a read-only legacy layer, never written (#1102); internal pacing knobs stay under a collapsed INTERNAL "show all" header; ⌃s toggles the write scope (this fleet ⇄ repo), enter edits a key (typed validation, backup-first) | fzf ≥ 0.59 |
@@ -58,7 +58,7 @@ login is one fleet; a shared login gives everyone one quota record.
 | SSH opens the client (optional) | `shell/fleet-login.zsh` — the one `~/.zshrc` line for the login (issues #1166, #1711): shows the banner, then an interactive SSH login runs `bin/fleet` — the client, here reading this machine, never a direct attach to the node's session; detaching returns to the shell. Never in a non-interactive shell (scp / rsync / `ssh host cmd`), never inside tmux, never without `$SSH_TTY`, **never on a managed machine** (`/var/db/fleet-node/machine.env`, issue #2702 — there `fleet` says to run it on your own device, and `fleet-node-shell-retire.sh --login <l>` takes an old client + this line out). `~/.hushfleet` = no banner + no client; `~/.hushfleet-attach` = banner only. Opt-in: an existing `~/.zshrc` is never rewritten | zsh |
 | Several repos per fleet (`bin/fleet-repo.sh`, issue #788/#795) | `fleet-repo.sh add <owner/repo> [<checkout>] [--base <b>]` registers another repo with a fleet (clone-or-reuse, overlay at `fleets/<sess>/repos/<slug>.conf`); its tickets (issues · comments · labels · EPIC records — code and PRs stay on GitHub) go to the hub (`FLEET_TICKETS="hub"`) when this login reaches one, else GitHub; `--tickets hub|github` picks it, a repo hosted before #3739 is pinned to GitHub by `fleet-conf.sh migrate`, and `fleet doctor`'s `tickets` row shows each repo's; who runs its tasks is not the repo's but the login's person's (`FLEET_TASK_AUTHORITY` in fleet.conf [node], switched by `fleet-repo.sh authority`, issue #4901), so `add` writes no authority line; from inside the fleet the dash's ⌃z / the sidebar menu's `g` open `dash-repo-add.sh`, a popup over the same `add` that asks only `owner/name` (#1103); `list` / `remove [--force]`; `fold <old-fleet> --into <fleet> [--dry-run] [--wait]` moves a whole one-repo fleet in and archives its conf (#796). Nothing to install and no switch to set — a fleet with no overlay behaves exactly as before. Once 2+ repos are hosted, the fleet picker gains repo rows, sessions carry `@repo` (the dash badges it; window names stay bare), and the hub opens in `$HOME`. Proven by `bin/multirepo-e2e-selftest.sh` | git (+ gh to clone) |
 | Fleet commands (optional) | repo-shipped `/skill`s (`commands/`) — fleet-aware slash commands, appended to `~/.claude/commands/` | claude |
-| Fleet skills (optional) | repo-shipped base **skills** (`skills/<name>/` dirs — SKILL.md plus any supporting files) a fleet command or the agent delegates to — e.g. `/fleet-handoff` runs the base `handoff` skill verbatim; `doc-preview` ships `share.sh`/`server.py`/`render.mjs` beside its SKILL.md (issues #311, #354) and serves in one of two modes — `https` (loopback server behind `tailscale serve`) or, for a login that is not the machine's one tailscale operator, `http-direct` (server bound on the tailscale IPv4, plain http, tailnet-only; issue #1093) — `fleet-doctor`'s `docprev` row says which this login gets and the one-time `sudo tailscale serve …` for HTTPS, `epic-page` ships the `template.html` both EPIC pages render into (issue #809); installed into `~/.claude/skills/` and mirrored into each known `$CODEX_HOME/skills/` whole-dir, marker-gated (`<!-- fleet skill -->` in the SKILL.md) so a personal skill is never clobbered | claude / codex |
+| Fleet skills (optional) | repo-shipped base **skills** (`skills/<name>/` dirs — SKILL.md plus any supporting files) a fleet command or the agent delegates to — e.g. `/fleet-handoff` runs the base `handoff` skill verbatim; `epic-page` ships the `template.html` both EPIC pages render into (issue #809); installed into `~/.claude/skills/` and mirrored into each known `$CODEX_HOME/skills/` whole-dir, marker-gated (`<!-- fleet skill -->` in the SKILL.md) so a personal skill is never clobbered | claude / codex |
 | Status line (optional) | `conf/statusline.sh` — the Claude Code status line as the fleet's measurement bus (issue #1452): it prints nothing, and stamps the context % + window size (`@ctx_pct` / `@ctx_limit` / `@ctx_band` — the auto-handoff nudge, `fleet-context.sh`), the model + effort level (`@model` / `@effort`) and the account's rate limits (`@rl*`) onto the pane's tmux window on every render; the client's top line shows `剩余 62% · Opus 5.5 · high` on its right from those stamps (`bin/fleet-topbar.py`, issue #2717). Wired **install-time only** by pointing `settings.json`'s `statusLine` at the **live-install** path `~/.claude/fleet/conf/statusline.sh`, so improvements flow through `land → /fleet-sync-install` with no copy step. jq-gated — inert without `jq`. NOT auto-wired on sync; opt-in per install (see step 8b). The fleet mod feeds the same script from inside the session (`--from mod`, issue #1459), so once every window carries the mod the key can be dropped — `bin/fleet-statusline.sh off`, step 8c — and the blank bottom row goes with it | jq (soft) |
 
 ### 纯客户端装哪些后台（issue #3534）
@@ -356,7 +356,7 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    - `hooks/artifact-guard.py` (matcher `Artifact`, issue #526) — a fleet
      session never *publishes* an Artifact: the page is scoped to the claude.ai
      account that published it and the fleet rotates accounts under sessions, so
-     the refusal points at the `doc-preview` share instead. Reading / listing /
+     the refusal points at the `show` / `open` tools instead. Reading / listing /
      commenting stays allowed; `FLEET_ALLOW_ARTIFACT=1` overrides.
    - `hooks/agent-guard.py` (matcher `Agent`, issue #811) — in a fleet pane,
      **code-writing work goes to a fleet worker, never a subagent**. Only the
@@ -745,8 +745,8 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    skill **directory** `skills/<name>/` → `~/.claude/skills/<name>/`. Follow
    **steps 5 and 5b of `commands/fleet-sync-install.md`** rather than a second
    copy of the rules here — they are the same passes (append-never-clobber, the
-   `<!-- fleet skill -->` marker gate, whole dirs with `cp -p` so
-   `skills/doc-preview/`'s scripts land beside its SKILL.md), and every later
+   `<!-- fleet skill -->` marker gate, whole dirs with `cp -p` so a skill's
+   supporting files land beside its SKILL.md), and every later
    update runs them anyway.
 
    `fleet-doctor.sh` reports which path is in use (or warns if neither — they're
@@ -872,11 +872,10 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
 ## 新同事第一次（issue #1901）
 
 A colleague gets ONE line from the operator — `curl -fsSL https://<入口>/install | sh` — and
-nothing else. What they then see, press and wait for, as
-`bin/fleet-onboard-drill.sh` recorded it on a throwaway login on mac-a — final run
-2026-10-07, stable `644641e`, hub `prod-56a4d57`, a DRILL PERSON confirming the scan
-(`fleet drill invite`), the client on the test identity; paste → list in 137 s
-(「要人帮」 = a step they would have had to ask someone about):
+nothing else. What they then see, press and wait for, as the onboarding drill recorded
+it on a throwaway login on mac-a — final run 2026-10-07, stable `644641e`, hub
+`prod-56a4d57`, the client on the test identity; paste → list in 137 s (「要人帮」 = a
+step they would have had to ask someone about):
 
 | # | 看到什么 | 按了什么 | 用时 | 要人帮 |
 |---|---|---|---|---|
@@ -935,82 +934,23 @@ yet given them a login on any machine — the hub's page says so; that one IS th
 (`fleet_accounts.go`: only the operator assigns logins), so give the colleague a login BEFORE
 sending the line.
 
-**Re-run the drill after any change to the install path** (on a machine meant for drills — it
-opens a real OS login and runs sudo, so it needs an admin login — the preflight refuses
-「需要管理员登录（有 sudo）」 on a taken-over login, which is where every fleet worker runs; the
-orchestrator runs it over an admin's ssh, issue #2842):
-
-```sh
-sudo -v
-~/.claude/fleet/bin/fleet drill invite              # a DRILL PERSON: prints its login + approve code
-~/.claude/fleet/bin/fleet-onboard-drill.sh --login <login> --invite <code>   # the line it printed
-~/.claude/fleet/bin/fleet-onboard-drill.sh --teardown <login> --invite <code>   # a run left up with --keep
-~/.claude/fleet/bin/fleet-onboard-drill.sh --home linux-a   # pick the machine (issue #3432)
-```
-
-**Pick the machine the newcomer lands on** (issue #3432): `--home <machine>` mints the run's
-own drill person with `fleet drill invite --login drill<MMDDHHMM> --home <machine>`, and the
-hub opens its login THERE — no placement asked (only a drill person carries a home; a real
-newcomer is always placed). Step 8 checks the session's row is on it, and step 10 restarts
-that machine's tmux as the session's login over the login's own client (`fleet-thin.py --run
---home <machine>`), so `--home mac-d` and `--home linux-a` both run from one drill
-machine — any machine but `--home` itself (the drill's own login is there). Steps 8–10 run in a
-sandbox first: `bin/fleet-onboard-drill-steps-selftest.sh` (`FLEET_DRILL_ONLY=8-10`).
-
-**Confirm as a drill person, never as yourself** (issue #2010). Without `--invite`, whoever
-opens the QR's page confirms it — on 2026-10-06 that was the operator's own browser, so the
-run signed the drill's login as him and walked "his second computer", not a new colleague's
-first time. `fleet drill invite [--ttl 2h] [--login drill<x>] [--host <machine>]` (an admin,
-signed with your own connection certificate; else `CCQUOTA_VIEWER_TOKEN`) has the hub mint a
-`kind=drill` person — its one login is the drill's throwaway OS login on this machine, it
-borrows no credential, gets no session pass, sees only its own sessions — and a one-time
-approve code. The drill's scan step then confirms with that code (`fleet drill approve`,
-`POST /fleet/login/approve`: the code is the only credential sent), and its teardown has the
-drill person delete itself with its device and node (`DELETE /v1/self`, signed by the login's
-own certificate) — no operator token needed. The hub deletes it anyway when its life ends.
-
-It opens a bare login (no fleet clone, no daemons — a colleague's computer), types the line,
-answers every question with Enter, waits for the scan, opens a scratch session from the list,
-then revokes the device, retires the node (`FLEET_DRILL_RETIRE_CMD <ep_id>`, until #1928) — or,
-with `--invite`, has the drill person delete itself — and deletes the login; one PASS/FAIL line a step, `steps.md` (the table above) and one
-`screen-NN-<step>.txt` per screen in its log dir. Its selftest
-(`fleet-onboard-drill-selftest.sh`) drives only the refusals and the `--invite` teardown's hub
-half, against PATH shims; `fleet-drill-selftest.sh` pins `fleet drill`.
+**Re-walk it after any change to the install path**, on a throwaway login of a machine meant
+for it (it opens a real OS login, so it needs an admin login). The drill tools that recorded
+the table above — the onboarding drill, its stand-in drill persons and their hub doors — left
+with #4904; the walk is by hand now.
 
 ### The 60-second standard (60 秒上手，EPIC #2259)
 
-`fleet-onboard-drill.sh --hub prod --runs 3` (= `bin/fleet-onboard-clock.sh`, issue #2267)
-times the NEW road — no OS login is made: each run is a sandbox HOME on this computer (no
-`~/.config/claude-fleet`, no `~/.local`, no Homebrew on PATH, its own TMPDIR / TMUX_TMPDIR),
-driven in a terminal of its own. It pastes `curl -fsSL <hub>/i/<invite> | sh`, lets the
-installer run `fleet`, takes the authorize page with a stand-in browser and — after a fixed
-10-second hand — confirms it with a drill person's code, waits for the first HOME session, and
-types one letter until the agent keeps it. Per run it mints the drill person (`fleet drill
-invite`) and an invite (`fleet hub invite`) as you, and deletes the person at the end.
+The standard is EPIC #2259's five readings — paste → first key (≤ 60 s), the person's own
+steps (2), admin on the spot (0), fleet words on the screen before the first key (0) — and the
+eight known pits. Its stopwatch (the onboarding clock, issue #2267) left with #4904.
 
-The table it prints (also `report.md`, `clock.tsv` and every screen in its out dir, codes
-blanked) is EPIC #2259's five readings — paste → first key (the max of the runs, ≤ 60 s), the
-person's own steps (2), admin on the spot (0), fleet words on the screen before the first key
-(0) — and the eight known pits, PASS/FAIL each; the segments (安装 · 浏览器授权 · 拿到电脑 · 进会话 ·
-第一键) use `t_enter … t_key`, EPIC #2230's naming. Exit 0 only when all five are on target.
-
-A real hub places that session on a real machine **as the drill person's login**, so the login
-must exist there — a spare (#2263); preparing one is the operator's call (EPIC #2259 共同约定 6).
-CI runs it on every PR inside `bin/newcomer-e2e.sh` (the `clock` step, a hub built from the
-checkout, a fake node and a stand-in agent that drops keys while it mounts) with `--gate pits`:
-there the eight pits and the first key are held, the seconds and words only printed.
-`fleet-onboard-clock-selftest.sh` pins the refusals, the concept scan and the scrub.
-
-**The website's seconds are this drill's** (issue #3589, EPIC #3569 C19). After a prod run,
-`bin/site-drill.py <out dir> [--rename <session name>=<example task>]` writes `site/drill.json`
-— per run the three steps the page shows (点试用，登录 = paste → certificate · 领到你的机器 =
-certificate → first session placed · 说第一句话 = placed → first key), the total and the screen
-captured at each step's end, every name in it made neutral (the drill login, the sandbox
-computer, the hub address, `conf/oss-scan.rules`). A run that never reached the first key is
-no measurement: nothing is written. Commit the file; `bin/site-build.sh` shows the slowest
-run's seconds, stopwatch, date and three screens together, says the measured time in place of
-「60 秒」 past 60 s, and prints `RED:` for that, for a drill older than 7 days (no seconds then)
-and for a drill with no screens. `site-drill-selftest.sh` feeds it 47 s, 130 s and 8-day-old runs.
+**The website's seconds** (issue #3589, EPIC #3569 C19) are `site/drill.json` — per run the
+three steps the page shows (点试用，登录 · 领到你的机器 · 说第一句话), the total and the screen
+captured at each step's end, every name in it neutral. Written by hand from a measured run and
+committed; `bin/site-build.sh` shows the slowest run's seconds, stopwatch, date and three
+screens together, says the measured time in place of 「60 秒」 past 60 s, and prints `RED:` for
+that, for a drill older than 7 days (no seconds then) and for a drill with no screens.
 
 ## Publishing to installs — the `stable` tag (发布到各安装)
 
@@ -1157,7 +1097,7 @@ included), delete `~/.claude/fleet/`, remove any fleet commands
 you copied into `~/.claude/commands/` (the ones with a `<!-- fleet skill … -->`
 marker — leave your personal commands) and any fleet skills you copied into
 `~/.claude/skills/` (each `<name>/` dir whose `SKILL.md` carries the
-`<!-- fleet skill -->` marker — e.g. `handoff`, `doc-preview` — removing the
+`<!-- fleet skill -->` marker — e.g. `handoff`, `fleet-open` — removing the
 whole dir so supporting scripts go with it; leave your personal skills), and
 clear per-window state. Each fleet
 runs on its own tmux socket now (issue #159), so per-window state lives per

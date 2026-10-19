@@ -361,14 +361,6 @@ type Server struct {
 	// accountKey signs the admin seat's account tickets (claude-fleet#3557;
 	// CCQUOTA_FLEET_ACCOUNT_KEY, SetAccountKey). Nil: no ticket, no seat.
 	accountKey ed25519.PrivateKey
-	// Debug issues the tickets a computer that never signed in sends its
-	// diagnostics up with (claude-fleet#2891; CCQUOTA_FLEET_DEBUG_DIR +
-	// CCQUOTA_FLEET_DEBUG_KEY). Nil: no /v1/fleet/debug/ route exists.
-	Debug *DebugTickets
-	// Feedback takes what people on managed machines send with
-	// /fleet-feedback (claude-fleet#3355; CCQUOTA_FLEET_FEEDBACK_DIR). Nil: no
-	// feedback route exists.
-	Feedback *FeedbackDesk
 	// joinClock replaces the join-code clock in tests.
 	joinClock func() time.Time
 
@@ -692,10 +684,6 @@ func (s *Server) routes() *routeMux {
 		mux.Handle(TermClientPath+"/actions", s.stateRouteFunc(s.handleFleetClientActions))
 		// The 60-second trial (claude-fleet#3590): each 404s while fleet.trial is off.
 		mux.HandleFunc(TryStartPath, s.handleTryStart)
-		// Drill triers (claude-fleet#4215): an admin's code, once, into the
-		// same trial sign-in; both 404 while fleet.trial is off.
-		mux.HandleFunc(DrillTrialPath, s.handleAdminDrillTrial)
-		mux.HandleFunc(DrillTrialRedeemPath, s.handleDrillTrialRedeem)
 		mux.Handle(TryClaimPath, s.viewerOnly(http.HandlerFunc(s.handleTryClaim)))
 		mux.Handle(TryStatePath, s.viewerOnly(http.HandlerFunc(s.handleTryState)))
 		mux.Handle(TryTimingPath, s.viewerOnly(http.HandlerFunc(s.handleTryTiming)))
@@ -748,12 +736,6 @@ func (s *Server) routes() *routeMux {
 		// A sign-in refused while a `fleet login` waits (claude-fleet#2261):
 		// a signed note, so the terminal hears why — public, like start/poll.
 		mux.Handle(LoginRefusedPath, s.stateRouteFunc(s.handleLoginRefused))
-		// Drill people (claude-fleet#2010): an approve code confirms a scan
-		// as the drill person — it is the whole credential, so outside the
-		// viewer gate; the invite authenticates itself (cert or gate).
-		mux.Handle(LoginApprovePath, s.stateRouteFunc(s.handleLoginApprove))
-		mux.HandleFunc(DrillPath, s.handleAdminDrill)
-		mux.HandleFunc(DrillSelfPath, s.handleSelf)
 		// Registered devices (claude-fleet#1470): a renewal is proven by the
 		// device's own key, so it authenticates itself, outside the viewer
 		// gate — like start/poll, it is what `fleet` runs before it holds a
@@ -873,36 +855,6 @@ func (s *Server) routes() *routeMux {
 		// itself, outside the viewer gate.
 		mux.HandleFunc(control.RoutesPath, s.handleFleetRoutes)
 		mux.Handle("/v1/fleet/ssh-relays", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleSSHRelayAudit))))
-		// Debug tickets (claude-fleet#2891): a computer whose sign-in failed
-		// asks for one with nothing in hand (rate limited), and every
-		// /v1/fleet/debug/ door checks it itself; the list and the re-issue
-		// are the admin's. Off: not registered at all.
-		if s.Debug != nil {
-			mux.HandleFunc(DebugTicketPath, s.handleDebugTicket)
-			mux.Handle(DebugTicketsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleDebugTickets))))
-			// the stand-alone fleet-debug (claude-fleet#2892): public like /install
-			mux.HandleFunc(DebugScriptPath, s.handleDebugScript)
-			mux.HandleFunc(DebugScriptSumPath, s.handleDebugScript)
-			// Debug reports (claude-fleet#2893): the bundle door takes an
-			// upload use of the ticket; a report's status answers its own
-			// computer's ticket or an admin; the page answers the same or
-			// 404; the node doors take the node token of the login the
-			// report was sent to.
-			mux.HandleFunc(DebugBundlePath, s.debugTicketAuth(DebugUseUpload, s.debugUpload))
-			mux.Handle(DebugReportsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleDebugReports))))
-			mux.HandleFunc(debugReportsPfx, s.handleDebugReport)
-			mux.HandleFunc(DebugShortPrefix, s.handleDebugShort)
-			mux.HandleFunc(NodeDebugPrefix, s.handleNodeDebug)
-		}
-		// Feedback (claude-fleet#3355): the node door takes the login's own
-		// token; a person reads only their own. Off: not registered at all.
-		if s.Feedback != nil {
-			mux.HandleFunc(NodeFeedbackPath, s.handleNodeFeedback)
-			mux.Handle(FeedbackMinePath, s.viewerOnly(http.HandlerFunc(s.handleFeedbackMine)))
-			// The admin's page and its doors (claude-fleet#3357).
-			mux.Handle(AdminFeedbackPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminFeedback))))
-			mux.Handle(adminFeedbackPrefix, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminFeedback))))
-		}
 	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -966,11 +918,6 @@ func (s *Server) routes() *routeMux {
 	// for the dashboard, which draws both series on one axis; this is for a
 	// caller that wants only the windows -- see handleQuotaHistory.
 	mux.Handle("/v1/quota/history", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleQuotaHistory))))
-	mux.Handle("/v1/findings", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFindings))))
-	// The hub's second viewer-facing WRITE, behind the same gate as the
-	// first (/v1/accounts/label) and deliberately not behind a new one --
-	// see internal/api/finding_mutes.go on the trust boundary.
-	mux.Handle("/v1/findings/mutes", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFindingMutes))))
 
 	if s.MCP != nil {
 		mux.Handle("/mcp", s.viewerOnly(s.MCP))
@@ -990,32 +937,10 @@ func (s *Server) routes() *routeMux {
 	mux.Handle(AdminOverviewPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminOverview))))
 	mux.Handle(AdminUsagePath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminUsage))))
 
-	// Badges are the one surface that may be unauthenticated, and only on
-	// purpose. Everything else on this hub stays behind the viewer token.
-	badges := http.NewServeMux()
-	badges.HandleFunc("/badge/u/", s.handleUserBadge)
-	badges.HandleFunc("/badge/team/", s.handleTeamBadge)
-	// The live embed exposes exactly what a badge does, so it shares the gate.
-	badges.HandleFunc("/embed/u/", s.serveEmbed)
-	badges.HandleFunc("/embed/team/", s.serveEmbed)
-	// hub.public_badges (claude-fleet#1986) is read per request, so an
-	// admin's switch applies at once.
-	gatedBadges := s.viewerOnly(s.adminOnly(badges))
-	badgeGate := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.publicBadges() {
-			badges.ServeHTTP(w, r)
-			return
-		}
-		gatedBadges.ServeHTTP(w, r)
-	})
-	mux.Handle("/badge/", badgeGate)
-	mux.Handle("/embed/", badgeGate)
-
 	// The public counter (claude-fleet#1988): the hub's one lifetime total,
 	// readable by anyone while hub.public_meter is on, so example.com's
 	// homepage takes it straight from here instead of through a token.
 	mux.HandleFunc("/meter.json", s.handleMeter)
-	mux.HandleFunc("/odometer.svg", s.handleOdometer)
 
 	// The tab icon (claude-fleet#3946): the site's own logo, copied into
 	// web/dist, for everyone -- the sign-in page and a self-hoster's hub with

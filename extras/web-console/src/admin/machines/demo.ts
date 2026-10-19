@@ -54,7 +54,7 @@ function machines(): DemoMachine[] {
       login_cap: 8,
       door: { state: "open", port: 22022 },
       services: [
-        svc("zhouning", "doc-preview", "service", "running", "GET /d/0d734e 200 12ms"),
+        svc("zhouning", "notes-site", "service", "running", "GET /d/0d734e 200 12ms"),
         svc("zhouning", "daily-report", "task", "ok", "published 2026-10-13 · 18 items", { last_run: ago(60 * 9), next_run: new Date(now + 15 * 3600_000).toISOString() }),
         svc("linxiao", "webchat", "service", "idle", "idle 2h, exited 75"),
       ],

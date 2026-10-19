@@ -14,7 +14,6 @@ issue #4271（发起人 2026-10-14 确认的「减法」第 3 条）。这一页
 |---|---|---|---|
 | master 红（执行会话、编排报红主干） | `ci-<失败的 job · 报错首行>` | 人 / 会话显式 `--breakage` | 红的那段起点的提交 + 那次运行 |
 | `bin/fleet-macos-watch.sh` | `macos-<红的测试>` | diskguard 每拍（10 分钟节流） | 红的 run 的提交 + run 链接 |
-| `bin/fleet-cn-probe-watch.sh` | `cn-path-<卡住的那层>` | diskguard 每拍（绿 6 小时、红 1 小时） | 它测的 stable |
 | `bin/fleet-nightly-miss.sh` | `nightly-<测试>` / `flaky-<测试>` | `selftests-nightly.yml` | 夜间全量测的 stable + run |
 | `bin/fleet-train-quarantine.sh` | `selftest-quarantine.<测试>` / `flaky-<测试>` | `release-train.yml` 的「隔离」 | TRAIN_SHA + run |
 
@@ -29,7 +28,6 @@ issue #4271（发起人 2026-10-14 确认的「减法」第 3 条）。这一页
 ## 提醒：只在单子新开或重开时
 
 - macos-watch：新开或重开的单一条 `breakage` 提醒；同一张开着的单再红只留评论，不再提醒（以前每个红 run 一条）。保留：红了超过 `FLEET_MACOS_STALE_SECS`（2 小时）「每台 Mac 停在上一版」一条，每段红一次。
-- cn-probe：每张单一条提醒（`global/cn-probe/filed` 记着），绿了忘掉。
 
 ## 定时巡检：一处
 
@@ -39,5 +37,5 @@ issue #4271（发起人 2026-10-14 确认的「减法」第 3 条）。这一页
 |---|---|---|
 | 管家会话的 `/loop`（`spawn agent:steward`，只用通用工具） | **保留，唯一**，只挂一条 | 人起一个 steward 会话才有，从不自己起；关掉就没了。节奏由它自己的 `ScheduleWakeup` 定（模板 `steward.md`）。巡查程序（tick / 待答清单 / 面板 / 停放）已删（#4339）。代码里没有常驻的残留可删：#3118 / #3115 起常驻管家窗口、diskguard 拉起的 beat 都没有了，不要加回来 |
 | 编排会话的自巡检 | 已收掉 | 编排模板不巡检；压缩后也没有角色状态叫它重建定时任务（#4340） |
-| diskguard 的 macos-watch / cn-probe | 保留 | 是**探针**：开单（上面的指纹）和提醒（上一节），不替人巡检、不派人 |
+| diskguard 的 macos-watch | 保留 | 是**探针**：开单（上面的指纹）和提醒（上一节），不替人巡检、不派人 |
 | 各 watch 里每个红 run 一条的提醒 | 已收掉 | macos-watch 改成只在单子新开 / 重开时提醒 |

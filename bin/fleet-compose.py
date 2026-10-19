@@ -104,8 +104,7 @@ def compose_log(ev, **fields):
                state, secs since sent — the task list writes it
       ready    that row first read a state the person can type into: id, session,
                state, t_ready — the task list writes it (issue #2238)
-    Every t_* is epoch ms, named by EPIC #2230 共同约定 3;
-    fleet-compose-latency.sh reads them back.
+    Every t_* is epoch ms, named by EPIC #2230 共同约定 3.
     Append-only, one write per line; a failure to write never stops a send."""
     row = {"ev": ev, "ts": int(time.time())}
     row.update({k: v for k, v in fields.items() if v not in (None, "")})

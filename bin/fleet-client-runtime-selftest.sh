@@ -57,7 +57,7 @@ done
 # C — parse a synthetic strace -ff run
 R="$T/root"; mkdir -p "$R/bin/__pycache__" "$R/hooks" "$R/conf"
 printf '#!/bin/sh\n' > "$R/bin/fleet"   # a #! script: its process is a sh
-for f in bin/fleet-thin.py bin/fleet_tls.py bin/fleet-lib.sh bin/fleet-redact.awk bin/fleet-connect.py hooks/bash-guard.py conf/secret-shapes.list bin/fleet-login.py; do
+for f in bin/fleet-thin.py bin/fleet_tls.py bin/fleet-lib.sh bin/fleet-shape.awk bin/fleet-connect.py hooks/bash-guard.py conf/secret-shapes.list bin/fleet-login.py; do
   : > "$R/$f"
 done
 P="$T/view.strace"
@@ -79,7 +79,7 @@ openat(AT_FDCWD, "$R/conf/secret-shapes.list", O_RDONLY|O_CLOEXEC) = 3
 openat(AT_FDCWD, "$R/bin/fleet-connect.py", O_RDONLY|O_CLOEXEC) = 3
 EOF
 cat > "$P.102" <<EOF
-execve("/usr/bin/awk", ["awk", "-v", "table=x", "-f", "$R/bin/fleet-redact.awk"], 0x7ffd /* 9 vars */) = 0
+execve("/usr/bin/awk", ["awk", "-v", "table=x", "-f", "$R/bin/fleet-shape.awk"], 0x7ffd /* 9 vars */) = 0
 EOF
 cat > "$P.103" <<EOF
 execve("/usr/bin/cp", ["cp", "$R/bin/fleet-connect.py", "/tmp/x"], 0x7ffd /* 9 vars */) = 0
@@ -87,7 +87,7 @@ openat(AT_FDCWD, "$R/bin/fleet-connect.py", O_RDONLY) = 3
 EOF
 got=$(bash "$RT" parse "$P" "$R" view | sort)
 want=$(printf '%s\n' "bin/fleet${tab}view" "bin/fleet-lib.sh${tab}view" "bin/fleet-login.py${tab}view" \
-  "bin/fleet-redact.awk${tab}view" "bin/fleet-thin.py${tab}view" "bin/fleet_tls.py${tab}view" \
+  "bin/fleet-shape.awk${tab}view" "bin/fleet-thin.py${tab}view" "bin/fleet_tls.py${tab}view" \
   "bin/fleet-connect.py${tab}view:read" "conf/secret-shapes.list${tab}view:read" "hooks/bash-guard.py${tab}view:read" | sort)
 [ "$got" = "$want" ] && ok "C parse: ran · imported · sourced · awk -f; data reads :read; tools / failures / dirs / outside nothing" \
   || { no "C parse"; diff <(printf '%s\n' "$want") <(printf '%s\n' "$got"); }

@@ -150,24 +150,12 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 		// its claim, in line order, and only into a ready spare.
 		return nil
 	}
-	own := s.drillComputer(principal) // never where a drill's login is opened (#2549)
-	var hosts []string
-	if home := s.drillHome(principal); home != "" {
-		// A drill that named its machine (claude-fleet#3432): opened there,
-		// placement is not asked. Only a drill person carries a home — a
-		// real newcomer always goes through placement below.
-		hosts = []string{home}
-	} else {
-		hosts = s.autoAssign()
-	}
-	for _, h := range own {
-		hosts = dropHost(hosts, h)
-	}
+	hosts := s.autoAssign()
 	if len(hosts) == 0 && s.invitedPrincipal(principal) {
 		// Came in on an invite (claude-fleet#2261): their login is opened
 		// whatever fleet.auto_assign says — on the least-busy machine when
 		// the setting names none.
-		if h := s.leastBusyMachine(now, own...); h != "" {
+		if h := s.leastBusyMachine(now); h != "" {
 			hosts = []string{h}
 		}
 	}
@@ -458,38 +446,6 @@ func noLoginOpenerWhy(snap NodesSnapshot) string {
 	return noLoginOpener + "（管理员节点太旧，开的登录拿不到加入码：" + strings.Join(stale, "、") + " —— 把它的 ccquota 换成发布版）"
 }
 
-// drillComputer is the machine a drill person's own computer is on — the
-// bare login `fleet drill invite --host` named (claude-fleet#2549) — while its
-// row still holds that machine: one row per person per machine (PRIMARY KEY
-// (principal_id, hostname)), so the login opened for the drill goes to
-// another. None for anyone else, or once that row is gone.
-func (s *Server) drillComputer(principal string) []string {
-	d, err := s.Store.Drill(principal)
-	if err != nil || d == nil {
-		return nil
-	}
-	accts, err := s.Store.FleetAccounts(principal)
-	if err != nil {
-		return nil
-	}
-	for _, a := range accts {
-		if strings.EqualFold(a.Hostname, d.Hostname) {
-			return []string{d.Hostname}
-		}
-	}
-	return nil
-}
-
-// drillHome is the machine drill person principal named for its login
-// (claude-fleet#3432, `fleet drill invite --home`); "" for anyone else.
-func (s *Server) drillHome(principal string) string {
-	d, err := s.Store.Drill(principal)
-	if err != nil || d == nil {
-		return ""
-	}
-	return d.Home
-}
-
 func hasFold(list []string, v string) bool {
 	for _, x := range list {
 		if strings.EqualFold(x, v) {
@@ -773,10 +729,6 @@ func (s *Server) accountOpFor(a store.FleetAccount, kind string) (control.Accoun
 	op := control.AccountOp{Op: control.AccountCreate, Login: a.Login}
 	if kind == control.AccountRemove || kind == control.AccountReset {
 		op.Op = kind
-		// A drill person's login is throwaway: no archive (#2652).
-		if d, err := s.Store.Drill(a.PrincipalID); err == nil && d != nil && !d.OwnComputer(a) {
-			op.DropHome = true
-		}
 		if kind == control.AccountReset {
 			op.JoinCode = s.loginJoinCode(a, time.Now())
 		}

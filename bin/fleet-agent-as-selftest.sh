@@ -12,7 +12,7 @@
 #   C  fleet-claude.sh: `--as <name>` ⇒ the argv carries `--agent <name>` and the
 #      file's model is the FLEET_MODEL default (a fleet's FLEET_MODEL still wins);
 #      no --as ⇒ no agent / role argument at all, byte for byte as before; the
-#      shipped fleet-worker / fleet-debugger and the plugin's epic-driver answer
+#      shipped fleet-worker / steward and the plugin's epic-driver answer
 #      --as; a file gone at launch ⇒ a plain session and one stderr line
 #   D  a Claude Code with no `--agent` (its --help says so): the same file rides
 #      --tools / --disallowedTools / --append-system-prompt-file instead; one that
@@ -123,7 +123,7 @@ eq "C: --as=epic-driver" "$(fc bash "$BIN/fleet-claude.sh" --as=epic-driver x)" 
 eq "C: --as epic-driver (fleet-epic installed) ⇒ --agent epic-driver, the bare name Claude Code finds" \
   "$(fc bash "$BIN/fleet-claude.sh" --as epic-driver '/fleet-epic-run 1')" "--model opus --agent epic-driver /fleet-epic-run 1"
 eq "C: …its fleet.reap is loop-end" "$(kv epic-driver --dir "$WORK" | field reap)" loop-end
-eq "C: --as fleet-debugger" "$(fc bash "$BIN/fleet-claude.sh" --as fleet-debugger x)" "--model opus --agent fleet-debugger x"
+eq "C: --as steward" "$(fc bash "$BIN/fleet-claude.sh" --as steward x)" "--model opus --agent steward x"
 eq "C: a file gone at launch ⇒ a plain session" "$(fc bash "$BIN/fleet-claude.sh" --as gone-now x)" "--model opus x"
 orch() { env -u TMUX -u TMUX_PANE -u FLEET_CRED_SID -u FLEET_CRED_PROXY -u FLEET_MCP_CONFIG FLEET_CLAUDE_BIN="$WORK/claude" \
            FLEET_AGENT_CFG=0 FLEET_MOD=0 FLEET_STATUS_7501=0 FLEET_AGENT=claude FLEET_PRETRUST=0 \
@@ -167,10 +167,10 @@ out=$(AD ship); n=$(ls "$WORK/cc/agents" 2>/dev/null | wc -l | tr -d ' ')
 [ "$n" -ge 2 ] && [ ! -e "$WORK/cc/agents/epic-driver.md" ] && cmp -s "$WORK/cc/agents/fleet-worker.md" "$ROOT/conf/agent-defaults/claude/agents/fleet-worker.md" \
   && ok "F: ship writes the core's agent files ($n)" || bad "F: first ship [$out]"
 eq "F: a second ship changes nothing" "$(AD ship | grep -c '^wrote')" 0
-printf '\nextra: 1\n' >> "$WORK/cc/agents/fleet-debugger.md"
+printf '\nextra: 1\n' >> "$WORK/cc/agents/steward.md"
 rm -f "$WORK/cc/agents/fleet-worker.md"
 out=$(AD ship)
-printf '%s\n' "$out" | grep -q '^theirs   fleet-debugger' && grep -q '^extra: 1' "$WORK/cc/agents/fleet-debugger.md" \
+printf '%s\n' "$out" | grep -q '^theirs   steward' && grep -q '^extra: 1' "$WORK/cc/agents/steward.md" \
   && ok "F: an edited file is the person's — kept" || bad "F: edited [$out]"
 printf '%s\n' "$out" | grep -q '^deleted  fleet-worker' && [ ! -f "$WORK/cc/agents/fleet-worker.md" ] \
   && ok "F: a deleted one stays deleted" || bad "F: deleted [$out]"

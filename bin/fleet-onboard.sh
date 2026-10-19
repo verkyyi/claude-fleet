@@ -3,7 +3,7 @@
 # EPIC #1163 C5). The wizard itself is commands/fleet-onboard.md; this is the
 # part of it that has to survive the conversation.
 #
-#   fleet-onboard.sh brief [--session <sess>] [--dev] [--no-gh]  # everything step 0 needs
+#   fleet-onboard.sh brief [--session <sess>]             # everything step 0 needs
 #   fleet-onboard.sh look  [--mark]                       # the session the newcomer started
 #   fleet-onboard.sh get   [<key>]                        # the saved progress
 #   fleet-onboard.sh set   <key>=<value>…                 # record progress (merges)
@@ -13,7 +13,7 @@
 # WHY A FILE. A newcomer does not finish in one sitting: they close the laptop
 # while the worker runs, or the window is reaped, or they call the wizard back a
 # day later (R1 #1171). The wizard must pick up at the step it left — never
-# re-ask which repo, never re-file the issue it already filed. So progress lives
+# re-ask what it already asked. So progress lives
 # on disk, not in the transcript: $FLEET_CONF_DIR/global/onboard.state. Global,
 # not per-fleet, because a login has exactly ONE fleet (EPIC #977) and the
 # newcomer is the login, not a session name.
@@ -24,19 +24,16 @@
 # a later wizard version may add some.
 #
 # STEPS, in order (`step=` holds the one the wizard is ON, i.e. not finished).
-# The default walk is for someone who never wrote code (issue #3332, EPIC #3178
-# C20): one key, one thing done, two or three minutes — no repo, no issue, no PR.
+# The walk is for someone who never wrote code (issue #3332, EPIC #3178 C20): one
+# key, one session opened with their words, two or three minutes — no repo, no
+# issue, no PR. The developer walk (repo → issue → PR) left with #4904.
 #   key     say hello, teach the one key (⌘P · phone ⌃Space) → `look --mark`
 #   try     they write one thing on ⌘P's ⚡ row and press ↵   → records task= once seen
 #   see     they watch that session work and finish
-#   done    finished — calling the wizard back offers one more, or the developer walk
-# The developer walk is optional, entered only when they ask for it (path=dev):
-#   repo    pick / add their own repo (GitHub login lives here, nowhere else)
-#   issue   the same ⚡ row, its 仓库 cell set to that repo → the hub files it
-#   watch   the session works, opens a PR               → records pr= once one opens
-#   merge   look at the merged PR together
+#   done    finished — calling the wizard back offers one more
 # `set step=<x>` refuses anything else (exit 2), so a typo can't strand the resume.
-# An older walk's saved `handoff` (the step #3332 retired) resumes as `done`.
+# An older walk's saved step it no longer has (`handoff`, #3332; the developer
+# walk's repo / issue / watch / merge, #4904) resumes as `done`.
 #
 # THE LANGUAGE (issue #3329). `brief` prints `lang=` — the saved one, else
 # fleet_ui_lang (the person's hub choice, the 看台's @view_lang, the locale) —
@@ -58,14 +55,6 @@
 # record `onboarded` over it and the collector reopens it instead. Written here
 # ONLY, read everywhere else; `reset` forgets the progress, not that it spoke.
 #
-# THE STARTER REPO. A newcomer's fleet is started on claude-fleet itself
-# (`fleet-up.sh --seed`, C4 #1167), marked by FLEET_SEED=1 in its repo overlay and
-# read ONLY through fleet_repo_is_seed — it marks that repo, never another.
-# `brief` tags it `[seed]` so the wizard can say plainly
-# «this is the tool itself, not your repo» and never offer it as a place to work.
-# Once another repo is hosted the tag also names the way out — `fleet-repo.sh
-# remove <seed>` (issue #1172), which the wizard offers right after the add.
-#
 # Exit: 0 ok · 1 no such key (get) / write failed · 2 usage.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -74,7 +63,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-ui-lang.sh"
 
-STEPS="key try see done repo issue watch merge"
+STEPS="key try see done"
 
 usage() { sed -n '5,9p' "$0" | sed 's/^# //' >&2; exit 2; }
 
@@ -83,7 +72,7 @@ spoke_file() { printf '%s/global/guide.spoke' "$FLEET_CONF_DIR"; }
 seen_file()  { printf '%s/global/onboard.seen' "$FLEET_CONF_DIR"; }
 
 # the walk's fixed lines, in the order the skill says them (fleet-ui-lang.sh onboard_*)
-SAY="hello key try sent done more dev"
+SAY="hello key try sent done more"
 
 # The wizard reached step 0: record it once (the first time it spoke stays).
 # Best effort — a brief that could not leave the marker is still a brief.
@@ -143,12 +132,11 @@ state_set() {
 }
 
 brief() {
-  local sess="" gh="" dev=0 conf r tag me="" step seat lang n
+  local sess="" conf step seat lang n
   while [ $# -gt 0 ]; do
     case "$1" in
       --session) shift; sess="${1:-}" ;;
-      --dev)     dev=1 ;;
-      --no-gh)   gh=0 ;;
+      --dev|--no-gh) ;;   # an older skill's words: the developer walk left (#4904)
       *) usage ;;
     esac
     shift
@@ -161,8 +149,6 @@ brief() {
   fleet_load_conf "$sess"
   seat=$(fleet_seat)
   mark_spoke
-  [ "$(state_get path 2>/dev/null)" = dev ] && dev=1
-  [ -n "$gh" ] || gh=$dev
 
   # One language for the whole walk: what they chose here, else what the fleet
   # draws for this person (fleet_ui_lang).
@@ -170,52 +156,17 @@ brief() {
   case "$lang" in zh|en) ;; *) lang=$(fleet_ui_lang) ;; esac
 
   echo "===== fleet ====="
-  echo "session=$sess seat=${seat:-none} lang=$lang path=$([ "$dev" = 1 ] && echo dev || echo plain)"
+  echo "session=$sess seat=${seat:-none} lang=$lang"
   echo "===== say ($lang) ====="
   for n in $SAY; do
     printf 'say.%s: %s\n' "$n" "$(_FLEET_UI_L=$lang fleet_ui_t "onboard_$n")"
   done
 
-  # The plain walk never names a repo, GitHub or an issue (issue #3320 gaps 1, 6):
-  # the repos and the GitHub login are the developer walk's only.
-  if [ "$dev" = 1 ]; then
-    echo "===== developer walk ====="
-    # The GitHub login is asked for only when a repo is GitHub's (issue #3600): a
-    # fleet whose repos all came from other git addresses never needs gh.
-    if [ "$gh" = 1 ] && [ -n "$(fleet_repos "$sess")" ]; then
-      gh=0
-      while IFS= read -r r; do
-        [ -n "$r" ] && [ "$(fleet_repo_forge "$r" "$sess")" = github ] && { gh=1; break; }
-      done <<EOF
-$(fleet_repos "$sess")
-EOF
-      [ "$gh" = 0 ] && echo "gh=not-needed (no repo on GitHub)"
-    fi
-    if [ "$gh" = 1 ]; then
-      me=$(fleet_gh api user --jq .login 2>/dev/null)
-      echo "gh=${me:-NOT-LOGGED-IN}"
-    fi
-    echo "repos:"
-    local nrepos; nrepos=$(fleet_repos "$sess" | grep -c .)
-    while IFS= read -r r; do
-      [ -n "$r" ] || continue
-      tag=""
-      if fleet_repo_is_seed "$sess" "$r"; then
-        tag="  [seed] 起步仓库 = 工具本身，不是新人的仓库 · 不提、不让人处理"
-        [ "$nrepos" -gt 1 ] && tag="$tag · 人要拿掉才: fleet-repo.sh remove $r"
-      fi
-      [ -n "$me" ] && [ -z "$tag" ] && [ "${r%%/*}" = "$me" ] && tag="  [mine]"
-      echo "  $r$tag"
-    done <<EOF
-$(fleet_repos "$sess")
-EOF
-  fi
-
   echo "===== progress ($(state_file)) ====="
   if [ -s "$(state_file)" ]; then
     state_dump
     step=$(state_get step 2>/dev/null)
-    valid_step "${step:-key}" || step="done"   # an older walk's handoff (#3332)
+    valid_step "${step:-key}" || step="done"   # an older walk's step (#3332, #4904)
     echo "resume: ${step:-key}"
   else
     echo "(none — a fresh start)"

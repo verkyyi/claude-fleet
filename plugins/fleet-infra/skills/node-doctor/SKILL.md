@@ -80,7 +80,6 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `cache` | machine | [release-rules] | 装机缓存的 claude 不是 release.json 的：更新器下一轮补 |
 | `ccquota` | machine | [hub-deploy] [release-rules] | 发布版带错了 ccquota：按 stable 重新部署入口镜像，再让列车发下一版 |
 | `cert` | node | [mac-node-enroll] | 托管登录（`account adopt` 接管的）：运维自动续期（diskguard 一拍的 `fleet-login.py keep`，#4594），设备钥匙也续不了是运维的 breakage，**从不叫人 `fleet login`**；其它登录入口不认：`fleet login` 重签，或重跑 `fleet node install --join` |
-| `cnpath` | node | [release-rules] | 国内真实用户路径（深圳客户端 → 门/中转 → 测试 pod）上次巡检不通或超过 12 小时没走：看 `~/.config/claude-fleet/global/cn-probe/last.txt` 卡在哪层和它开的 breakage 单；stable 前移在单关掉或复测转绿前被拦（docs/dev/CN-PROBE.md） |
 | `checkout` | node | [node-doctor] | 基础 checkout 不在 base 分支：照行内命令移走占着它的 worktree |
 | `child` | machine | [mac-node-enroll] | 守护的子进程挂了：看 `fleet-node-supervisor.py status` 与它的日志，重跑 `fleet node install` |
 | `ci-runner` | node | [runbook-train-stuck] | 自家测试机：`fleet-node-supervisor.py status` 的 ci-runner 行与 ci-runner.log |
@@ -90,7 +89,6 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `codex` | node · machine | [mac-node-prep] [release-rules] | Codex CLI 版本 / 安装：照行内修；托管机器由更新器装 |
 | `collect` | node | [node-doctor] | 采集守护卡住或超时：看 collect 日志里最慢的阶段 |
 | `commands` | node | [release-rules] | fleet 的 /命令 没装：下一次同步补，或装 fleet 插件 |
-| `compose` | node | [node-doctor] | ⌘P 慢：`fleet-compose-latency.sh --last 20` 看哪一段 |
 | `timing` | node | [node-doctor] | ⌘P 面板或新会话慢：`fleet_timing.py table` 看哪一段；新会话全是冷启 = 预热池空了（`scratch-pool.sh status`） |
 | `compute` | node | [node-doctor] | 这台能不能接入口派的会话：node.env 的 `CCQUOTA_FLEET_COMPUTE` |
 | `config` | node | [release-rules] | 安装不完整（缺 fleet.conf.example）：下一次同步补 |
@@ -107,14 +105,12 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `deploy` | node | [node-doctor] | 仓库配置：`FLEET_DEPLOY_REF` / `FLEET_DEPLOY_CHECK` 写错了 |
 | `deps` | node | [node-doctor] | 基础 checkout 的依赖：照行内 `fleet-deps-link.sh --prime-base` |
 | `dist` | node | [release-rules] | 这个登录的新版本不是从入口来的：照行内改回入口 |
-| `docprev` | node | [node-doctor] | doc-preview 旧进程 / 残留路由 / 过期公开链接：照行内的 share.sh 命令 |
 | `drill` | machine | [release-rules] | 演练标记（故意失败）：更新器会回滚，不用动 |
 | `emit` | node | [node-doctor] | 事件外发：装 curl，或修 `FLEET_EMIT_URL` 的接收端 |
 | `entry` | node | [runbook-door-down] | 入口端口：名单落后 / 配置被拒 / 有人却没在听 |
 | `epic` | node | [node-doctor] | 批次没人在跑：在一个不绑单的会话里重新 `/fleet-epic-run <N>` |
 | `failover` | node | [login-lifecycle] | 账号切换状态：`fleet-account.sh failover-status` |
 | `failover-stuck` | node | [login-lifecycle] | 迁移卡住：照行内 `fleet-account.sh migrate --stuck` |
-| `feedback` | node | [node-doctor] | 只报状态，从不 WARN |
 | `files` | node | [mac-node-prep] | 打开文件数快满：找出谁开的，必要时调高系统上限 |
 | `firstrun` | node | [mac-node-prep] | 首次运行检查没过：照行内修 |
 | `fleet` | node | [release-rules] | 常驻服务还跑切换前的版本：照行内重启；客户端落后：`fleet update` |
@@ -131,13 +127,11 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `hubauth` | node | [mac-node-enroll] [login-lifecycle] | 入口不认这台的令牌：查 node.env，或 `fleet login` |
 | `icloud` | node | [mac-node-prep] | 退出 iCloud 或关同步 |
 | `ingress` | node | [runbook-door-down] | 系统 sshd 的公网转发探不通：查路由器转发与远程登录 |
-| `idle-cost` | node | [node-doctor] | 空闲时每秒起多少进程和主要来源；忙或状态不明显示未量，超过默认 50/s 时用 `bash ~/.claude/fleet/bin/fleet-idle-cost.sh` 查全表 |
 | `install` | node · machine | [release-rules] | 安装落后 / 有本地提交 / 分叉 stable：让 install-sync 跟上，不在会话里手同步 |
 | `key` | machine | [release-rules] [mac-node-enroll] | 发布签名钥匙没钉 / 对不上：`sudo fleet node install --release-key <file>` |
 | `keys` | node | [node-doctor] | 面板键与 tmux prefix 撞了：改 prefix2 或那个键 |
 | `labels` | node | [node-doctor] | 仓库缺 fleet 标签：`fleet-labels-seed.sh --repo <repo>` |
 | `laptop` | node | [node-doctor] | 笔记本上的 iTerm2 插件缺 / 旧：在那台重跑 extras/iterm2/install.sh |
-| `last-crash` | node | [mac-node-prep] | 机器一天内崩过：看崩溃摘要，查内存 / 温度 |
 | `launchd` | node | [mac-node-prep] | launchd 的 gui 域坏了：机器层面——注销重登或重启 |
 | `ledger` | node | [mac-node-enroll] | 守护没装上：重跑 `sudo fleet node install` |
 | `listen` | node | [node-doctor] | 有 fleet 进程监听在局域网：改成 127.0.0.1，或停掉它 |

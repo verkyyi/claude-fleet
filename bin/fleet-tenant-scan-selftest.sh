@@ -2,7 +2,7 @@
 # fleet-tenant-scan-selftest.sh — the sandbox half of bin/fleet-tenant-scan.sh
 # (issue #2298, EPIC #2293 C7): every item, refused AND let through, on a fake
 # machine under one temp dir — fake homes / tmux dirs / credential stores /
-# LaunchDaemons / bootstrap cache, a real doc-preview server.py and a real
+# LaunchDaemons / bootstrap cache, a page server that answers only with its code and a real
 # bin/fleet-cred-scan.py. The real-machine half is the same script run AS a new
 # ordinary login (EPIC #2293 convention 5).
 #
@@ -17,7 +17,7 @@
 #   7  homes         another home listable → ③
 #   8  tmux          another uid's tmux dir listable → ③
 #   9  shared        another login's file in the shared dir readable → ③
-#  10  preview       an anonymous http.server → ③ (doc-preview's server.py stays 404;
+#  10  preview       an anonymous http.server → ③ (the coded server stays 404;
 #                    tailscaled's PeerAPI greeting is named, not counted)
 #  11  bootstrap     no Claude Code in the cache → ④; a login cloned from the
 #                    network → ④; the retired claude-fleet mirror is not asked
@@ -32,7 +32,7 @@ ROOT="$(cd "$BIN/.." && pwd)"
 SCAN="$BIN/fleet-tenant-scan.sh"
 TS_PIDS=''
 
-# ts_build <dir> — a clean fake machine in <dir>; sets TS_PORT (doc-preview's port)
+# ts_build <dir> — a clean fake machine in <dir>; sets TS_PORT (a coded server's port)
 ts_build() {
   local d="$1"
   mkdir -p "$d"/Users/{me,alice,bob,Shared} "$d/Users/me/.config/claude-fleet" "$d/tmp/tmux-99998" "$d/tmp/tmux-12345" \
@@ -76,9 +76,18 @@ PY
   git clone -q "$d/ro/cache/claude-fleet.git" "$d/Users/me/.claude/fleet"
   printf '1.0.0\n' > "$d/ro/cache/claude/current"
   printf '#!/bin/sh\n' > "$d/ro/cache/claude/1.0.0/claude"
-  # the doc-preview server, as a login runs it: nothing without a code
+  # a page server that answers only with its code: nothing without one (404)
   TS_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
-  python3 "$ROOT/skills/doc-preview/server.py" "$TS_PORT" "$d/serve" "$ROOT/skills/doc-preview" >"$d/srv.log" 2>&1 &
+  cat > "$d/coded.py" <<'PY'
+import http.server, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(404); self.end_headers()
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+  python3 "$d/coded.py" "$TS_PORT" >"$d/srv.log" 2>&1 &
   TS_PIDS="$TS_PIDS $!"
   local i=0
   until curl -s -o /dev/null "http://127.0.0.1:$TS_PORT/" 2>/dev/null || [ "$i" -ge 50 ]; do sleep 0.1; i=$((i + 1)); done
@@ -247,8 +256,8 @@ i=0; until curl -s -o /dev/null "http://127.0.0.1:$P2/" 2>/dev/null || [ "$i" -g
 printf '%s %s\n' "$TS_PORT" "$P2" > "$D/ports"
 ts_scan "$D" --only preview
 expect preview HIT "10: an anonymous http.server → HIT"
-printf '%s' "$(ts_row preview)" | grep -q ":$TS_PORT" && bad "10: doc-preview's server.py answered without a code" \
-  || ok "10: doc-preview's server.py stays 404 beside it"
+printf '%s' "$(ts_row preview)" | grep -q ":$TS_PORT" && bad "10: the coded server answered without a code" \
+  || ok "10: the coded server stays 404 beside it"
 mkdir -p "$WORK/ts" && printf '<h1>Hello</h1>This is my Tailscale device. Your device is m.\n' > "$WORK/ts/index.html"
 P3=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
 (cd "$WORK/ts" && exec python3 -m http.server --bind 127.0.0.1 "$P3") >/dev/null 2>&1 &

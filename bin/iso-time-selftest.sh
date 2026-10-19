@@ -6,8 +6,8 @@
 # (`2026-10-07T05:47:35.272044642Z`; Go also trims trailing zeros, so 1–9
 # fraction digits all occur). `datetime.fromisoformat` reads neither the `Z` nor
 # anything but 3 or 6 digits before python 3.11 — and macOS's own
-# /usr/bin/python3 is 3.9. `fleet drill invite` lost its one-time code to it on
-# the operator's MacBook. bin/fleet_iso.py is the one reader; this test:
+# /usr/bin/python3 is 3.9. A hub one-time code was lost to it on the
+# operator's MacBook. bin/fleet_iso.py is the one reader; this test:
 #   1. lints bin/: no `fromisoformat(` outside fleet_iso.py and the selftests
 #      (`# iso-ok: <why>` excepts a line);
 #   2. runs the cases under every python3 on the box (PATH's, /usr/bin's, any

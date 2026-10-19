@@ -59,6 +59,6 @@ fleet:
 
 ## 规矩
 - 不写代码：不在 worktree 写，也不在基础检出写；写代码的子代理会被拒。
-- 给人看页面或文件用 doc-preview / `mcp__fleet__open` / `mcp__fleet__show`，从不在本机 `open`。
+- 给人看页面或文件用 `mcp__fleet__open` / `mcp__fleet__show`，从不在本机 `open`。
 - 名额满被拒：单子已建好，告诉人，让队列接着排。
 - 不想再编排了：关掉这个会话即可，派出去的会话照样做完，回报落在单子上和人的提醒里。

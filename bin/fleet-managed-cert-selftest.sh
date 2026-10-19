@@ -4,18 +4,14 @@
 # its connection certificate included, and nobody on it is ever asked to run
 # `fleet login`. Hermetic: a sandbox HOME, a fake hub on 127.0.0.1 that signs
 # with a REAL throwaway CA and refuses a device idle past seven days (its clock
-# is the device's last use, kept in a file), a curl shim for the drill's door.
+# is the device's last use, kept in a file).
 #
 #   A. the idle node: certificate expired, device last used 6 days 23 hours ago —
 #      the diskguard tick's step (managed_cert_watch → bin/fleet-login.py keep)
 #      renews by the device key, why=keep, and the hub's last use moves to now
-#   B. the cn probe's identity step (bin/fleet-drill.sh invite) on that login
-#      then takes the certificate door: no token, no person
-#   C. an expired certificate the drill itself meets is renewed on use first
-#      (--on-use drill), then signs
 #   D. a device already idle past seven days: keep exits 3, the tick raises ONE
 #      breakage alert in the ops service's words (not again on the next tick),
-#      and no output — keep, renew, status, the drill, the doctor's cert row —
+#      and no output — keep, renew, status, the doctor's cert row —
 #      tells the person to run `fleet login`
 #   E. not managed: the tick's step does nothing, asks nothing
 set -u
@@ -82,6 +78,7 @@ cat > "$SB/shim/fleet-alerts.sh" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$SB/alerts"
 EOF
+chmod +x "$SB/shim/fleet-alerts.sh"
 tick() {
   rm -f "$FLEET_CONF_DIR/diskguard/last-managed-cert"
   FLEET_MANAGED_CERT_ALERT_CMD="$SB/shim/fleet-alerts.sh" bash -c '
@@ -107,28 +104,6 @@ used=$(cat "$SB/last_used"); python3 -c 'import sys,time; sys.exit(0 if time.tim
   && ok "A the hub's last use moved to now: the 7-day window starts again" || bad "A last use still $used"
 [ ! -e "$SB/alerts" ] && ok "A no alert" || bad "A alerted: $(cat "$SB/alerts")"
 
-# ── B — the cn probe's identity step takes the certificate door ──
-cat > "$SB/shim/curl" <<'EOF'
-#!/bin/bash
-out=''; hdr=''
-while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2 ;; -H) [ "$2" = @- ] && hdr=$(cat); shift 2 ;; --data-binary) [ "$2" = @- ] && cat >/dev/null; shift 2 ;; *) shift ;; esac; done
-printf 'HDR %s\n' "$hdr" >> "$CURL_LOG"
-printf '{"person_id":"drill-ab12","kind":"drill","login":"drillx1","host":"mac-a","approve_code":"fd_abcdefghijklmnopqrstuvwxyz","expires_at":"2026-10-07T14:00:00Z"}' > "$out"; printf 200
-EOF
-chmod +x "$SB/shim/curl" "$SB/shim/fleet-alerts.sh"
-out=$(PATH="$SB/shim:$PATH" CURL_LOG="$SB/curl.log" bash "$BIN/fleet-drill.sh" invite --host mac-a --login drillx1 2>&1); rc=$?
-ALL="$ALL$out"
-[ "$rc" = 0 ] && ! grep -q 'Authorization' "$SB/curl.log" && ok "B the drill signs with the kept certificate, no token" || bad "B drill rc=$rc: $out"
-
-# ── C — the drill meets an expired certificate: renewed on use, then signs ──
-ssh-keygen -q -s "$SB/ca" -I gh:Alice -n alice -V 20260101000000:20260101120000 -z 1 "$HOME/.ssh/fleet-cert.pub"
-: > "$SB/curl.log"
-out=$(PATH="$SB/shim:$PATH" CURL_LOG="$SB/curl.log" bash "$BIN/fleet-drill.sh" invite --host mac-a --login drillx1 2>&1); rc=$?
-ALL="$ALL$out"
-read -r _ urc uwhy < "$LAST" 2>/dev/null
-[ "$rc" = 0 ] && [ "${uwhy:-}" = drill ] && ! grep -q 'Authorization' "$SB/curl.log" \
-  && ok "C an expired certificate is renewed on use (why=drill) before the drill decides" || bad "C rc=$rc last=$(cat "$LAST"): $out"
-
 # ── D — the device already lapsed: an ops alert, never a scan for the person ──
 python3 -c 'import time; print(time.time() - 8 * 86400)' > "$SB/last_used"
 ssh-keygen -q -s "$SB/ca" -I gh:Alice -n alice -V 20260101000000:20260101120000 -z 1 "$HOME/.ssh/fleet-cert.pub"
@@ -139,14 +114,13 @@ grep -q 'rc=3 keep: ops' "$FLEET_CONF_DIR/diskguard/managed-cert.log" && ok "D k
 [ "$(grep -c . "$SB/alerts" 2>/dev/null)" = 1 ] && grep -q 'event .*breakage .*ops service .*nobody on this login is asked to log in' "$SB/alerts" \
   && ok "D ONE breakage alert per streak, in the ops service's words" || bad "D alerts: $(cat "$SB/alerts" 2>/dev/null)"
 ALL="$ALL$(python3 "$BIN/fleet-login.py" keep 2>&1)$(python3 "$BIN/fleet-login.py" renew 2>&1)$(python3 "$BIN/fleet-login.py" status 2>&1)"
-ALL="$ALL$(PATH="$SB/shim:$PATH" CURL_LOG="$SB/curl.log" bash "$BIN/fleet-drill.sh" invite --host mac-a 2>&1)"
 ALL="$ALL$(python3 "$BIN/fleet-connect.py" --cert-check 2>&1)"
 rm -f "$HOME/.ssh/fleet-cert-cert.pub"
-ALL="$ALL$(python3 "$BIN/fleet-login.py" status 2>&1)$(PATH="$SB/shim:$PATH" CURL_LOG="$SB/curl.log" bash "$BIN/fleet-drill.sh" invite --host mac-a 2>&1)"
+ALL="$ALL$(python3 "$BIN/fleet-login.py" status 2>&1)"
 # «fleet login: » is the program naming itself; any other mention is an instruction
 TOLD=$(printf '%s' "$ALL" | sed 's/fleet login: //g' | grep 'fleet login')
 if [ -n "$TOLD" ]; then bad "D a managed login was told to run fleet login: $(printf '%s' "$TOLD" | head -3)"
-else ok "D nothing — keep, renew, status, the drill, the cert row — tells the person to run fleet login"; fi
+else ok "D nothing — keep, renew, status, the cert row — tells the person to run fleet login"; fi
 printf '%s' "$ALL" | grep -q '运维' && ok "D they say the ops service has it" || bad "D no ops word: $ALL"
 
 # ── E — not managed: the step does nothing ──

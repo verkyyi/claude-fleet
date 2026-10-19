@@ -11,7 +11,7 @@ installed: to know, it asks `claude plugin list --json`, and this file is the ON
 place that asks.
 
   ensure  --root R [--source S] [--claude C] [--claude-dir D] [--gone F]
-          [--default NAME …] [--defaulted J] [--dry-run]
+          [--dry-run]
           fleet-install-apply.sh's `plugins` pass on a hosting login:
           · add the marketplace from S (default: market_source(R)) when it is
             not added yet, or re-point it when it was added from elsewhere.
@@ -34,16 +34,9 @@ place that asks.
             none: a new install has no plugin;
           · update an installed plugin of ours whose version is behind the
             runtime's (`version` != `folderVersion` — Claude Code's own reading);
-          · --default NAME (issue #3360, EPIC #3354 C6): on a MANAGED login
-            (fleet_node_manages — install-apply decides, this file never asks)
-            NAME is installed + enabled ONCE. J (default
-            $FLEET_CONF_DIR/plugins-defaulted.json) is the one record of «the
-            default was applied here»: only ever added to, never pruned. A
-            name J holds is never touched again — a person who disabled or
-            uninstalled it keeps it that way through every upgrade. A name the
-            login already had installed is recorded and left as it is.
-            NEVER_DEFAULT (fleet-infra, issue #3586 — the admins' runbook) is
-            refused as a --default: installed by hand only.
+          · uninstall a RETIRED plugin of ours still installed here (its
+            marketplace entry is gone — fleet-feedback, issue #4904): its
+            commands would run scripts this runtime no longer has.
           Never installs anything else. Exit 0 ok · 1 a step failed · 2 usage.
   doctor  --root R [--claude C]
           one line for fleet-doctor's `plugins` row: each of our plugins installed
@@ -58,7 +51,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 
 TIMEOUT = 60
 
@@ -197,43 +189,9 @@ def carried(root, plugs, gone, cdir):
     return sorted(want)
 
 
-# A plugin no managed login gets by default (issue #3586): fleet-infra is the
-# machine admins' runbook, installed by hand where one is wanted.
-NEVER_DEFAULT = ("fleet-infra",)
-
-
-def defaulted_path(a):
-    if a.defaulted:
-        return a.defaulted
-    conf = os.environ.get("FLEET_CONF_DIR") or os.path.join(os.path.expanduser("~"), ".config", "claude-fleet")
-    return os.path.join(conf, "plugins-defaulted.json")
-
-
-def defaulted_load(path):
-    try:
-        with open(path) as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def defaulted_add(path, name, how):
-    """Add one name to the record (only ever added to — issue #3360)."""
-    d = defaulted_load(path)
-    if name in d:
-        return True
-    d[name] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "how": how}
-    try:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        tmp = "%s.%d.tmp" % (path, os.getpid())
-        with open(tmp, "w") as f:
-            json.dump(d, f, indent=1, sort_keys=True)
-            f.write("\n")
-        os.replace(tmp, path)
-        return True
-    except OSError:
-        return False
+# Plugins this marketplace once listed and no longer does (issue #4904): an
+# installed one is taken out — its commands name scripts the runtime lost.
+RETIRED = ("fleet-feedback",)
 
 
 def behind(e):
@@ -289,38 +247,19 @@ def cmd_ensure(a):
         else:
             fails += 1
             print("plugins: FAIL install %s: %s" % (pid, (err or out).strip().splitlines()[-1:]))
-    # the managed default (issue #3360): once per login, then the person's choice
-    if a.default:
-        dpath = defaulted_path(a)
-        done = defaulted_load(dpath)
-        for name in a.default:
-            if name in NEVER_DEFAULT:
-                print("plugins: %s is never a managed default — installed by hand only (#3586)" % name)
-                continue
-            if name not in plugs or name in done:
-                continue
-            pid = "%s@%s" % (name, mname)
-            if name in have:
-                if a.dry_run:
-                    print("plugins: would record %s as defaulted (already installed — left as it is)" % pid)
-                elif defaulted_add(dpath, name, "already"):
-                    print("plugins: %s already installed here — recorded as defaulted, left as it is" % pid)
-                continue
-            if a.dry_run:
-                print("plugins: would install + enable %s — managed login, on by default (once)" % pid)
-                continue
-            rc, out, err = run(a.claude, "install", pid)
-            if rc == 0:
-                run(a.claude, "enable", pid)
-                if defaulted_add(dpath, name, "installed"):
-                    print("plugins: installed + enabled %s — managed login, on by default (once; "
-                          "off: fleet %s off, never turned back on)" % (pid, name[len("fleet-"):] if name.startswith("fleet-") else name))
-                else:
-                    fails += 1
-                    print("plugins: FAIL record %s in %s" % (pid, dpath))
-            else:
-                fails += 1
-                print("plugins: FAIL install %s (managed default): %s" % (pid, (err or out).strip().splitlines()[-1:]))
+    for name in RETIRED:
+        if name not in have or name in plugs:
+            continue
+        pid = "%s@%s" % (name, mname)
+        if a.dry_run:
+            print("plugins: would uninstall %s — retired (claude-fleet#4904)" % pid)
+            continue
+        rc, out, err = run(a.claude, "uninstall", pid)
+        if rc == 0:
+            print("plugins: uninstalled %s — retired (claude-fleet#4904)" % pid)
+        else:
+            fails += 1
+            print("plugins: FAIL uninstall %s: %s" % (pid, (err or out).strip().splitlines()[-1:]))
     for name, e in sorted(have.items()):
         if name in plugs and behind(e):
             pid = "%s@%s" % (name, mname)
@@ -386,8 +325,6 @@ def main(argv):
             p.add_argument("--source", default="")
             p.add_argument("--claude-dir", default=os.environ.get("CLAUDE_CONFIG_DIR", os.path.join(home, ".claude")))
             p.add_argument("--gone", default="")
-            p.add_argument("--default", action="append", default=[])
-            p.add_argument("--defaulted", default="")
             p.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     if a.cmd == "ensure":

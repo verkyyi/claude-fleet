@@ -8,10 +8,10 @@
 #      strands an instruction.
 #   2. the member card carries the six fields, 上线证据 included — that line is
 #      the seam with /fleet-epic-report (#810).
-#   3. the frame honours the artifact-design contract doc-preview serves as-is:
+#   3. the frame honours the artifact-design contract a page served as-is needs:
 #      a <title>, tokens on :root, the dark-mode guard, a body background.
 #   4. BOTH commands point at the frame (plan renders it, report reuses it), and
-#      plan re-renders a revision with --refresh instead of re-sharing.
+#      plan re-renders a revision in the same file it opened (no second copy).
 #   5. the skill registers: SKILL.md frontmatter name matches the dir and the
 #      copy-install marker is present (fleet-plugin-selftest checks the tree
 #      generically; this pins THIS skill's supporting file).
@@ -62,8 +62,8 @@ hasF "$REPORT" '.proof' "report: fills the frame's .proof grid, no page-local st
 hasF "$REPORT" '无证据' "report: a missing stage is written 无证据"
 hasF "$REPORT" 'fleet-evidence.sh' "report: collects evidence through bin/fleet-evidence.sh"
 
-# 3. artifact-design contract for a page doc-preview serves byte-for-byte
-hasF "$T" '<title>' "template: has a <title> (doc-preview titles the entry from it)"
+# 3. artifact-design contract for a page served byte-for-byte
+hasF "$T" '<title>' "template: has a <title> (the tab is titled from it)"
 hasF "$T" ':root{' "template: colour tokens live on :root"
 hasF "$T" ':root:not([data-theme="light"])' "template: dark mode is guarded by the light override"
 hasF "$T" ':root[data-theme="dark"]' "template: explicit dark theme selector"
@@ -73,10 +73,10 @@ hasF "$T" 'name="viewport"' "template: phone-width viewport"
 # 4. both commands render into the frame; revisions refresh, never re-share
 hasF "$PLAN"   'plugins/fleet-epic/skills/epic-page/template.html' "plan renders from the shared frame"
 hasF "$REPORT" 'plugins/fleet-epic/skills/epic-page/template.html' "report reuses the shared frame"
-hasF "$PLAN"   'share.sh --refresh' "plan re-renders a revision in place"
-hasF "$PLAN"   'doc-preview/share.sh' "plan hosts via doc-preview"
+hasF "$PLAN"   'edit the same file' "plan re-renders a revision in place"
+hasF "$PLAN"   'http.server --bind 127.0.0.1' "plan serves the page on loopback"
 hasF "$PLAN"   'fleet:epic-member' "plan: member write-back carries the idempotency marker"
-hasF "$PLAN"   '重启即失效' "plan: the pinned URL says the tailnet page dies on reboot"
+hasF "$PLAN"   '会话结束即失效' "plan: the pinned URL says the page dies with the session"
 
 # 5. the skill registers, on both install paths
 CHECKS=$((CHECKS + 1)); head -1 "$SK" | grep -q '^---$' || fail "SKILL.md has no frontmatter"

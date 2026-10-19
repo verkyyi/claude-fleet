@@ -111,10 +111,6 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	out := Me{Via: doorOf(r.Context()), Role: roleOf(r.Context())}
 	out.Pages = pagesFor(out.Role)
-	if s.Feedback != nil && s.Fleet && !memberRole(out.Role) && out.Role != "" {
-		// 反馈 (claude-fleet#3357): an admin's, only with the feature on.
-		out.Pages = append(out.Pages, feedbackPageID)
-	}
 	if s.Fleet && !memberRole(out.Role) && out.Role != "" {
 		// 发布列车 (claude-fleet#3870): the release ledger is the fleet module's.
 		out.Pages = append(out.Pages, trainsPageID)

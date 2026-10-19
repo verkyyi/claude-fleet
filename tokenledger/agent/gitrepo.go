@@ -13,9 +13,8 @@ import (
 
 // The repository a turn was spent in, declared at the source.
 //
-// Design: docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md §6.
-//
-// §5 of that design left cost-per-issue gated behind a refusal: a spend row
+// §5 of the cost-per-issue design (2026-09-19, its notes left the repo with
+// claude-fleet#4904) left cost-per-issue gated behind a refusal: a spend row
 // carries an issue NUMBER and no repository, every repository starts its issues
 // at #1, and `owner/name` appears nowhere on the spend side because the hub was
 // never told which repository a `cwd` is. So the read could only answer while

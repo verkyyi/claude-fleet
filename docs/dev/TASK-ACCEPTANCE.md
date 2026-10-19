@@ -132,7 +132,7 @@ Save positive-control counts, then start new per-row counters. Do not alter a
 shared machine's firewall or assume an HTTPS proxy blocks bypasses. If the
 selected test network cannot enforce this, live acceptance remains NOT RUN.
 
-The explicit [C9 isolation entry](C9-ISOLATION.md) supplies the test-only G3/G4
+The explicit C9 isolation entry (its image and page left with #4904) supplied the test-only G3/G4
 boundary and per-endpoint counters for fresh, exclusive test resources. Its
 configuration, installed guard and observed execution states remain separate;
 its CI checks do not establish live acceptance. Follow its owner preparation,

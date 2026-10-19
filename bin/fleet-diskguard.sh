@@ -56,20 +56,10 @@
 #   --listen-watch    run only the orphaned-listener sweep (what --watch also does)
 #   --tree-watch      run only the closed-window orphan-tree backstop (what --watch
 #                     also does, issue #4360)
-#   --idle-daily      run only the daily idle reading's try (what --watch also does,
-#                     issue #4361): bin/fleet-idle-daily.py tick, detached, when due
-#   --docprev-watch   run only the doc-preview revive: docs shared but its server.py
-#                     gone ⇒ share.sh --ensure (what --watch also does, issue #3988)
 #   --brew-watch      run only the Homebrew keg-permission pass (what --watch also
 #                     does, throttled by FLEET_BREW_PERMS_EVERY) — issue #2283
 #   --probe           capture an incident right now regardless of free space
 #   --metrics         print one machine-metrics row (what --watch appends, issue #1294)
-#   --harvest-crash [--since <iso>]
-#                     summarize the system's panic-* / JetsamEvent-* reports newer
-#                     than <iso> (default: the last harvest) to stdout; reports not
-#                     harvested before are also written to machine/incident-*.md.
-#                     Exit 1 = no report in range. --watch runs it on its own when
-#                     the boot session changes (a reboot), and notifies.
 #   --help
 #
 # Config (fleet.conf; all optional):
@@ -102,8 +92,6 @@
 #   FLEET_FSEVENTSD_WARN_CPU fseventsd %CPU that counts as pegged (default 90)
 #   FLEET_METRICS           0 = no per-minute machine-metrics row (default 1) — #1294
 #   FLEET_METRICS_KEEP_DAYS metrics-YYYYMMDD.tsv retention in days (default 7)
-#   FLEET_CRASH_REPORT_DIR  where the system writes crash reports
-#                           (default /Library/Logs/DiagnosticReports)
 #   FLEET_FILES_WARN_PCT    file table % used that counts as over (default 80)
 #   FLEET_PTY_WARN_PCT      pty table % used that counts as over  (default 80)
 #   FLEET_MEM_NOTIFY_COOLDOWN min seconds between two notices of one kind
@@ -569,44 +557,6 @@ tree_watch() {
   return 0
 }
 
-# idle_daily_watch — the idle reading in the daily check-up (issue #4361, EPIC #4354
-# C7): once a day, while the machine is idle (fleet_idle_now), bin/fleet-idle-daily.py
-# takes one fleet-idle-cost.sh reading into global/idle-cost.ndjson and files ONE
-# ordinary issue a machine a day when it is over FLEET_IDLE_COST_WARN; a day never
-# idle gets a 「未量」 line. Until its gate file's epoch the tick reads that file and
-# the clock, nothing else — the gate is closed all day once today has its reading. The issue goes to the
-# first hosted repo whose base checkout carries bin/fleet-idle-cost.sh and
-# bin/fleet-stable.sh (business repos never); none ⇒ measured, not filed. Detached:
-# a reading is a 60 s window. FLEET_IDLE_DAILY=0 turns it off.
-idle_daily_watch() {
-  [ "${FLEET_IDLE_DAILY:-}" = 0 ] && return 0
-  [ -f "$BIN/fleet-idle-daily.py" ] && [ -f "$BIN/fleet-idle-cost.sh" ] || return 0
-  local gate="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/idle-cost.gate" g='' nowt s r repo=''
-  [ -f "$gate" ] && read -r g < "$gate" 2>/dev/null
-  case "$g" in ''|*[!0-9]*) g=0 ;; esac
-  nowt="$(now)"
-  [ "$nowt" -ge "$g" ] 2>/dev/null || return 0
-  if type fleet_load_conf >/dev/null 2>&1; then
-    for s in $(fleet_sockets 2>/dev/null); do
-      [ -f "$(fleet_conf_file "$s")" ] || continue
-      repo=$( fleet_load_conf "$s" >/dev/null 2>&1
-        fleet_repos "$s" | while IFS= read -r r; do
-          [ -n "$r" ] || continue
-          ( fleet_load_repo_conf "$s" "$r" >/dev/null 2>&1
-            [ -n "${FLEET_MAIN:-}" ] && [ -f "$FLEET_MAIN/bin/fleet-idle-cost.sh" ] && [ -f "$FLEET_MAIN/bin/fleet-stable.sh" ] ) && { echo "$r"; break; }
-        done )
-      [ -n "$repo" ] && break
-    done
-  fi
-  mkdir -p "$GDIR" 2>/dev/null
-  # the knobs a sourced conf set but did not export
-  ( FLEET_IDLE_COST_WARN="${FLEET_IDLE_COST_WARN:-}" FLEET_IDLE_DAILY="${FLEET_IDLE_DAILY:-}" \
-    FLEET_IDLE_DAILY_EVERY="${FLEET_IDLE_DAILY_EVERY:-}" FLEET_IDLE_DAILY_SECS="${FLEET_IDLE_DAILY_SECS:-}" \
-    FLEET_IDLE_DAILY_KEEP_DAYS="${FLEET_IDLE_DAILY_KEEP_DAYS:-}" python3 "$BIN/fleet-idle-daily.py" tick ${repo:+--repo "$repo"} 2>/dev/null \
-      | sed "s/^/$(date '+%Y-%m-%dT%H:%M:%S') /" >> "$GDIR/idle-daily.log" 2>/dev/null & ) 2>/dev/null
-  return 0
-}
-
 listen_watch() {
   { [ "$LISTEN_SECS" -gt 0 ]; } 2>/dev/null || return 0
   type fleet_reap_orphan_listeners >/dev/null 2>&1 || return 0
@@ -626,7 +576,7 @@ A detached server from a closed fleet/Claude session was still listening $((LIST
 \`\`\`
 $out
 \`\`\`
-Bind temp servers to 127.0.0.1; share with the operator through doc-preview."
+Bind temp servers to 127.0.0.1; show the operator a page with the fleet `open` tool."
   return 0
 }
 
@@ -774,89 +724,13 @@ restarts it immediately. Reported once a day; the fleet never kills it."
   return 0
 }
 
-# --- crash forensics: the record a reboot leaves behind (issue #1294) ----------
-# The machine froze and rebooted on 2026-09-27 and 2026-10-03, and both times the
-# cause was dug out of /Library/Logs/DiagnosticReports by hand. Two halves:
-#   1. every --watch tick appends one machine-metrics row (fleet_metrics_append;
-#      memguard adds one every 10s under pressure) — the curve before the freeze;
-#   2. a tick that sees a NEW boot session (kern.bootsessionuuid, or Linux's
-#      boot_id) harvests the reports written since the last harvest into
-#      machine/incident-*.md and notifies. A report is harvested once, ever
-#      (machine/crash-harvested); the summary is bin/fleet-crash-harvest.py's.
-# Linux has no report dir: the previous boot's kernel OOM lines stand in.
-MDIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/machine"
-CRASH_DIR="${FLEET_CRASH_REPORT_DIR:-/Library/Logs/DiagnosticReports}"
-
-boot_id() {
-  if [ -n "${FLEET_BOOT_ID_CMD:-}" ]; then sh -c "$FLEET_BOOT_ID_CMD" 2>/dev/null | head -1; return 0; fi
-  sysctl -n kern.bootsessionuuid 2>/dev/null || cat /proc/sys/kernel/random/boot_id 2>/dev/null
-}
-
-# The local ISO time an hour before this boot — the first harvest's lower bound
-# (the reports describing the crash that caused this boot are written around it).
-boot_since_iso() {
-  local bt
-  bt="$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/^{ *sec = \([0-9]*\).*/\1/p')"
-  [ -n "$bt" ] || bt="$(awk '/^btime/{print $2}' /proc/stat 2>/dev/null)"
-  case "$bt" in ''|*[!0-9]*) bt=$(( $(now) - 86400 )) ;; esac
-  bt=$((bt - 3600))
-  date -r "$bt" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -d "@$bt" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null  # portable-ok: BSD/GNU both-ways
-}
-
-# harvest_crash <since-iso> <auto:0|1> → summary on stdout; rc 0 = reports found.
-# auto=1 selects only never-harvested reports (the boot tick); a manual run shows
-# everything in range. Both record what is new, so neither repeats the other.
-# Sets HARVEST_INCIDENT to the incident file written, if any.
-harvest_crash() {
-  local since="$1" auto="$2" pf rc host newonly=''
-  [ "$auto" = 1 ] && newonly=--new-only
-  mkdir -p "$MDIR" 2>/dev/null || return 1
-  pf="$MDIR/.incident-path.$$"; rm -f "$pf"; host="$(hostname 2>/dev/null)"
-  if [ -d "$CRASH_DIR" ] && command -v python3 >/dev/null 2>&1; then
-    python3 "$BIN/fleet-crash-harvest.py" --dir "$CRASH_DIR" --since "$since" \
-      --seen "$MDIR/crash-harvested" --record --machine-dir "$MDIR" --metrics-dir "$MDIR" \
-      --path-file "$pf" --host "$host" ${newonly:+"$newonly"}
-    rc=$?
-  elif [ -n "${FLEET_CRASH_JOURNAL_CMD:-}" ] || command -v journalctl >/dev/null 2>&1; then
-    local oom f
-    oom="$( { if [ -n "${FLEET_CRASH_JOURNAL_CMD:-}" ]; then sh -c "$FLEET_CRASH_JOURNAL_CMD"
-      else journalctl -k -b -1 --no-pager 2>/dev/null; fi; } \
-      | grep -iE 'out of memory|oom-kill|killed process' | tail -20)"
-    [ -n "$oom" ] || return 1
-    f="$MDIR/incident-$(date '+%Y%m%d-%H%M').md"
-    # the previous boot's journal is one fixed set: once harvested, never again
-    if [ "$auto" = 1 ] && [ "$(boot_id)" = "$(cat "$MDIR/journal-harvested" 2>/dev/null)" ]; then return 1; fi
-    printf '# 死机报告摘要 · %s · previous boot\n\nheadline: kernel OOM — %s\n\n```\n%s\n```\n' \
-      "$host" "$(printf '%s\n' "$oom" | tail -1 | cut -c1-120)" "$oom" | tee "$f"
-    boot_id > "$MDIR/journal-harvested" 2>/dev/null
-    printf '%s\n' "$f" > "$pf"; rc=0
-  else
-    return 1
-  fi
-  [ -s "$pf" ] && HARVEST_INCIDENT="$(cat "$pf")"
-  rm -f "$pf"
-  return "$rc"
-}
-
-# The --watch share: a metrics row every tick, a harvest on a boot change.
+# --- the record a reboot leaves behind (issue #1294) ----------------------------
+# Every --watch tick appends one machine-metrics row (fleet_metrics_append;
+# memguard adds one every 10s under pressure) — the curve before a freeze.
 crash_watch() {
   if [ "${FLEET_METRICS:-1}" != 0 ] && command -v fleet_metrics_append >/dev/null 2>&1; then
     fleet_metrics_append diskguard
   fi
-  mkdir -p "$MDIR" 2>/dev/null || return 0
-  local bid last since
-  bid="$(boot_id)"; [ -n "$bid" ] || return 0
-  last="$(cat "$MDIR/boot-id" 2>/dev/null)"
-  [ "$bid" = "$last" ] && return 0
-  since="$(cat "$MDIR/last-harvest" 2>/dev/null)"; [ -n "$since" ] || since="$(boot_since_iso)"
-  HARVEST_INCIDENT=''
-  harvest_crash "$since" 1 >/dev/null 2>&1
-  printf '%s\n' "$bid" > "$MDIR/boot-id" 2>/dev/null
-  date '+%Y-%m-%dT%H:%M:%S' > "$MDIR/last-harvest" 2>/dev/null
-  { [ -n "$HARVEST_INCIDENT" ] && [ -f "$HARVEST_INCIDENT" ]; } || return 0
-  notify "# ⚠ this machine crashed and rebooted
-$(sed -n 's/^headline: //p' "$HARVEST_INCIDENT" | head -1)
-Summary (the system's reports + the fleet's own metrics before it): \`$HARVEST_INCIDENT\`"
   return 0
 }
 
@@ -999,34 +873,6 @@ macos_watch() {
   return 0
 }
 
-# cn_probe_watch — the China real-user path, walked every few hours (issue #4180):
-# bin/fleet-cn-probe-watch.sh for each hosted repo whose base checkout carries it
-# and bin/fleet-stable.sh (business repos never). It runs only where the China
-# client's key is (the probe's own default; every other machine and login skips
-# it), throttles itself (FLEET_CN_PROBE_SECS / _RED_SECS) and takes ~5 min, so
-# detached; FLEET_CN_PROBE=0 turns it off.
-cn_probe_watch() {
-  [ "${FLEET_CN_PROBE:-1}" = 0 ] && return 0
-  [ -r "${FLEET_CN_PROBE_KEY:-$HOME/fleet-secrets/oss-drill/id_oss_drill}" ] || return 0
-  type fleet_load_conf >/dev/null 2>&1 || return 0
-  local s
-  for s in $(fleet_sockets 2>/dev/null); do
-    [ -f "$(fleet_conf_file "$s")" ] || continue
-    ( ( fleet_load_conf "$s" >/dev/null 2>&1
-      [ "${FLEET_CN_PROBE:-1}" = 0 ] && exit 0
-      fleet_repos "$s" | while IFS= read -r r; do
-        [ -n "$r" ] || continue
-        ( fleet_load_repo_conf "$s" "$r" >/dev/null 2>&1
-          main="${FLEET_MAIN:-}"
-          [ -n "$main" ] && [ -f "$main/bin/fleet-cn-probe.sh" ] && [ -f "$main/bin/fleet-stable.sh" ] || exit 0
-          out=$(bash "$BIN/fleet-cn-probe-watch.sh" --repo "$r" --session "$s" 2>&1)
-          [ -z "$out" ] || { mkdir -p "$GDIR" 2>/dev/null
-            printf '%s %s %s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$s" "$r" "${out//$'\n'/ | }" >> "$GDIR/cn-probe.log" 2>/dev/null; } )
-      done ) & ) 2>/dev/null
-  done
-  return 0
-}
-
 # batch_green_watch — a batch nobody drives still has green PRs (issue #3369):
 # bin/fleet-batch-green.sh counts each stale batch's READY member PRs (prmap, one
 # REST sub-issue read per batch per FLEET_BATCH_GREEN_SECS) and says the count once
@@ -1039,22 +885,6 @@ batch_green_watch() {
   return 0
 }
 
-# feedback_watch — send what /fleet-feedback kept while the hub was away (issue
-# #3358, EPIC #3354 C4): bin/fleet-feedback.sh outbox posts each kept entry once and
-# tells its session the F number. Nothing kept ⇒ no process. Detached: a post is
-# network; the outbox's own lock keeps two ticks from sending one entry twice.
-feedback_watch() {
-  [ "${FLEET_FEEDBACK_TICK:-1}" = 0 ] && return 0
-  [ -f "$BIN/fleet-feedback.sh" ] || return 0
-  local d="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/feedback-outbox" e
-  for e in "$d"/*; do
-    [ -d "$e" ] || continue
-    ( bash "$BIN/fleet-feedback.sh" outbox >/dev/null 2>&1 & ) 2>/dev/null
-    return 0
-  done
-  return 0
-}
-
 # node_role_watch — keep the hub's word on what this node is (issue #4886):
 # fleet_node_role asks GET /v1/node/self at most once an hour and keeps the answer
 # in $FLEET_CONF_DIR/node-role, which a spawn reads without asking. No hub / no
@@ -1063,24 +893,6 @@ node_role_watch() {
   [ "${FLEET_NODE_ROLE_TICK:-1}" = 0 ] && return 0
   command -v fleet_node_role >/dev/null 2>&1 || return 0
   fleet_node_role >/dev/null 2>&1
-  return 0
-}
-
-# docprev_watch — this login's doc-preview server died (its session was reaped, the
-# machine rebooted) while docs are still shared: every link answers 502 until the
-# next share. share.sh --ensure starts it again on its old port (issue #3988);
-# nothing shared, or the skill not installed ⇒ nothing. FLEET_DOCPREV_TICK=0 off.
-docprev_watch() {
-  [ "${FLEET_DOCPREV_TICK:-1}" = 0 ] && return 0
-  local sh="${DOC_PREVIEW_SHARE:-$HOME/.claude/skills/doc-preview/share.sh}"
-  local root="$HOME/.cache/claude-doc-preview" pid out
-  [ -x "$sh" ] || return 0
-  ls "$root"/entries/*.json >/dev/null 2>&1 || return 0
-  pid="$(cat "$root/server.pid" 2>/dev/null || true)"
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
-  mkdir -p "$GDIR" 2>/dev/null || return 0
-  out="$("$sh" --ensure 2>&1)"
-  [ -n "$out" ] && printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$(printf '%s' "$out" | tr '\n' ' ')" >> "$GDIR/docprev.log" 2>/dev/null
   return 0
 }
 
@@ -1148,15 +960,6 @@ case "${1:-}" in
   --metrics)
     fleet_metrics_row diskguard
     ;;
-  --harvest-crash)
-    hsince=''
-    [ "${2:-}" = --since ] && hsince="${3:-}"
-    [ -n "$hsince" ] || hsince="$(cat "$MDIR/last-harvest" 2>/dev/null)"
-    [ -n "$hsince" ] || hsince="$(boot_since_iso)"
-    HARVEST_INCIDENT=''
-    harvest_crash "$hsince" 0 || { echo "fleet-diskguard: no crash report since $hsince in $CRASH_DIR" >&2; exit 1; }
-    [ -n "$HARVEST_INCIDENT" ] && printf '\n(new — recorded in %s)\n' "$HARVEST_INCIDENT"
-    ;;
   --orphan-watch)
     orphan_watch
     ;;
@@ -1182,12 +985,6 @@ case "${1:-}" in
     ;;
   --tree-watch)
     tree_watch
-    ;;
-  --idle-daily)
-    idle_daily_watch
-    ;;
-  --docprev-watch)
-    docprev_watch
     ;;
   --orphans)
     # No sustain filter and no state: "what is hot RIGHT NOW". A human (or the
@@ -1215,8 +1012,7 @@ EOF2
     inbox_watch                                   # what clients sent gone sessions (#2757), throttled
     selftest_watch                                # selftests' tmux debris + processes (#2970, #4360), hourly
     tree_watch                                    # a closed window's trees its hook missed (#4360)
-    idle_daily_watch                              # one idle reading a day, over ⇒ one issue (#4361)
-    crash_watch                                   # metrics row + reboot harvest (#1294)
+    crash_watch                                   # a metrics row every tick (#1294)
     mem_watch                                     # memory / files / pty edges (#1293), notify-only
     transcript_watch                              # daily transcript archive (#1299), budgeted
     home_watch                                    # a home pane left dead: respawn it (#1801)
@@ -1225,11 +1021,8 @@ EOF2
     brew_watch                                    # a keg other logins cannot read: repair it (#2283)
     pool_watch                                    # warm-pool slots topped back up (#2233)
     macos_watch                                   # red macOS on master: file + alert, no spawn (#3120)
-    cn_probe_watch                                # the China real-user path, every few hours (#4180)
     managed_cert_watch                            # a managed login's cert + device kept alive by ops (#4594)
     batch_green_watch                             # a driverless batch's green PRs: say how many (#3369)
-    feedback_watch                                # /fleet-feedback's outbox: send what waited (#3358)
-    docprev_watch                                 # doc-preview's server gone with docs shared: restart it (#3988)
     node_role_watch                               # the hub's client/managed word, kept an hour (#4886)
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet

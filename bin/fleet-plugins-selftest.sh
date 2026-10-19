@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-plugins-selftest.sh — this repo is a plugin marketplace of optional
 # plugins (issue #3112, EPIC #3111 C1): fleet-epic,
-# fleet-browser (issue #3236), fleet-feedback (#3360) and fleet-infra (#3586) under plugins/, beside the core `fleet` plugin (the repo root).
+# fleet-browser (issue #3236) and fleet-infra (#3586) under plugins/, beside the core `fleet` plugin (the repo root).
 #
 #   A  manifests: the marketplace lists exactly the plugins/ dirs, each entry's
 #      source is its dir and its name the dir's plugin.json name; epic
@@ -40,21 +40,14 @@
 #      release shipped epic-driver into gets fleet-epic (carry-over, D); it names
 #      no steward and no /fleet-orchestrate, and the driver mounts fleet-orch itself
 #      (EPIC #4333 C5, issue #4338: a batch runs with only fleet-epic installed)
-#   J  the managed default (issue #3360, EPIC #3354 C6): ensure --default
-#      fleet-feedback installs + enables it ONCE and records it in
-#      plugins-defaulted.json; the person disables / uninstalls it => the next
-#      apply leaves it so; installed already => recorded, its switch untouched;
-#      no --default (anyone's own computer) => no install, no record, the output
-#      as before; after `account release` (no --default) nothing is disabled or
-#      uninstalled; --dry-run runs nothing; install-apply passes --default only
-#      under fleet_node_manages; `fleet feedback on|off|status` is the switch
-#      (fleet-feedback-switch.sh) and the doctor has a never-WARN `feedback` row
+#   J  a retired plugin (fleet-feedback, issue #4904): installed here ⇒ ensure
+#      uninstalls it (--dry-run only says so); not installed ⇒ nothing runs;
+#      the marketplace no longer lists it
 #   K  fleet-infra (issues #3586 / #3587, EPIC #3569 C16 / C17): its eleven runbooks each carry
 #      什么时候用 · 先查什么 · 步骤 · 怎么验收 · 怎么回滚 and an evals/<skill>-triggers
 #      case; no hooks, no MCP; every row `fleet doctor` (+ --machine) can print
 #      (bin/fleet-doctor-rows.py names) is in node-doctor's row → skill table;
-#      oss-scan over it = 0; --default fleet-infra is refused, install-apply
-#      never defaults it, the team bundle refuses to hand it out
+#      oss-scan over it = 0; the team bundle refuses to hand it out
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -78,7 +71,7 @@ m = json.load(open(os.path.join(root, ".claude-plugin", "marketplace.json")))
 entries = {p["name"]: p for p in m["plugins"]}
 dirs = sorted(d for d in os.listdir(os.path.join(root, "plugins"))
               if os.path.isdir(os.path.join(root, "plugins", d)))
-want = ["fleet-browser", "fleet-epic", "fleet-feedback", "fleet-infra"]
+want = ["fleet-browser", "fleet-epic", "fleet-infra"]
 if dirs != want:
     bad.append("A plugins/ holds %s, expected %s" % (dirs, want))
 ours = sorted(n for n, p in entries.items() if str(p.get("source", "")).startswith("./plugins/"))
@@ -182,7 +175,7 @@ missing=$(python3 "$BIN/fleet-agent-defaults.py" check --root "$ROOT" --claude-c
 for s in fleet-orchestrate epic-page; do
   hasnt "skill $s" "$missing" "C fleet-agent-defaults.py still counts $s as a default skill"
 done
-[ "$(python3 "$PL" names --root "$ROOT" | paste -sd, -)" = "fleet-browser,fleet-epic,fleet-feedback,fleet-infra" ] && ok \
+[ "$(python3 "$PL" names --root "$ROOT" | paste -sd, -)" = "fleet-browser,fleet-epic,fleet-infra" ] && ok \
   || fail "C names" "$(python3 "$PL" names --root "$ROOT")"
 
 # ---- D: ensure, against a fake claude ----------------------------------------
@@ -371,95 +364,29 @@ printf '[]\n' > "$AE/plugins.json"; rm -rf "$AE/conf/agents/plugins.json"
 out=$(adef launch epic-driver --dir "$AE"); rc=$?
 [ "$rc" = 1 ] && ok || fail "I not installed: there is no epic-driver (rc=$rc)" "$out"
 
-# ---- J: the managed default (issue #3360) ------------------------------------------
-REC="$WORK/defaulted.json"; FB=fleet-feedback@claude-fleet
-rm -f "$REC" "$ST/installed.json"; echo /home/x/.claude/fleet > "$ST/market"; : > "$WORK/gone"
+# ---- J: a retired plugin (issue #4904) ---------------------------------------------
+FB=fleet-feedback@claude-fleet
+rm -f "$ST/installed.json"; echo /home/x/.claude/fleet > "$ST/market"; : > "$WORK/gone"
 fbstate() { python3 - "$ST/installed.json" "$FB" <<'PY'
 import json, sys, os
 l = json.load(open(sys.argv[1])) if os.path.exists(sys.argv[1]) else []
-e = [x for x in l if x["id"] == sys.argv[2]]
-print("absent" if not e else ("on" if e[0].get("enabled") else "off"))
+print("present" if [x for x in l if x["id"] == sys.argv[2]] else "absent")
 PY
 }
-jens() { FLEET_CONF_DIR="$WORK/jconf" ens "$@"; }
-# anyone's own computer: no --default ⇒ nothing installed, no record, no word of a default
-: > "$ST/calls"; out=$(jens --gone "$WORK/gone")
-grep -qE '^plugin (install|enable)' "$ST/calls" && fail "J own computer: an install ran" "$(cat "$ST/calls")"; ok
-[ ! -e "$WORK/jconf/plugins-defaulted.json" ] && ok || fail "J own computer: a record was written"
-hasnt "default" "$out" "J own computer: the output names no default"
-# dry-run: says what it would do, runs and records nothing
-: > "$ST/calls"; out=$(jens --gone "$WORK/gone" --default fleet-feedback --dry-run)
-has "would install + enable $FB" "$out" "J dry-run names the managed default"
-grep -qE '^plugin (install|enable)' "$ST/calls" && fail "J --dry-run installed" "$(cat "$ST/calls")"; ok
-[ ! -e "$WORK/jconf/plugins-defaulted.json" ] && ok || fail "J --dry-run wrote the record"
-# managed: installed + enabled once, recorded under $FLEET_CONF_DIR
-: > "$ST/calls"; out=$(jens --gone "$WORK/gone" --default fleet-feedback); rc=$?
-[ "$rc" = 0 ] && ok || fail "J managed ensure rc=$rc" "$out"
-has "installed + enabled $FB" "$out" "J managed: fleet-feedback installed + enabled"
-grep -q "^plugin install $FB" "$ST/calls" && grep -q "^plugin enable $FB" "$ST/calls" && ok \
-  || fail "J managed: install + enable not both run" "$(cat "$ST/calls")"
-[ "$(fbstate)" = on ] && ok || fail "J managed: not on after the apply" "$(fbstate)"
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("fleet-feedback",{}).get("how")=="installed" else 1)' \
-  "$WORK/jconf/plugins-defaulted.json" && ok || fail "J managed: plugins-defaulted.json lacks fleet-feedback" "$(cat "$WORK/jconf/plugins-defaulted.json" 2>&1)"
-# the person turns it off ⇒ the next apply (an upgrade) leaves it off
-"$FK" plugin disable "$FB"; : > "$ST/calls"
-out=$(jens --gone "$WORK/gone" --default fleet-feedback)
-grep -qE "^plugin (install|enable) $FB" "$ST/calls" && fail "J a person's off was turned back on" "$(cat "$ST/calls")"; ok
-[ "$(fbstate)" = off ] && ok || fail "J off did not stay off" "$(fbstate)"
-# … or uninstalls it ⇒ never reinstalled
-"$FK" plugin uninstall "$FB"; : > "$ST/calls"
-out=$(jens --gone "$WORK/gone" --default fleet-feedback)
-[ "$(fbstate)" = absent ] && ok || fail "J an uninstalled default came back" "$(cat "$ST/calls")"
-# account release: the login is no longer managed (no --default) ⇒ nothing taken away
+# not installed ⇒ nothing runs
+: > "$ST/calls"; out=$(ens --gone "$WORK/gone")
+grep -qE '^plugin uninstall' "$ST/calls" && fail "J not installed: an uninstall ran" "$(cat "$ST/calls")"; ok
+# installed ⇒ --dry-run says so and runs nothing; a real apply uninstalls it
 "$FK" plugin install "$FB"; : > "$ST/calls"
-out=$(jens --gone "$WORK/gone")
-grep -qE '^plugin (disable|uninstall)' "$ST/calls" && fail "J release took the plugin away" "$(cat "$ST/calls")"; ok
-[ "$(fbstate)" = on ] && ok || fail "J release changed the plugin" "$(fbstate)"
-# installed already by the person (no record yet) ⇒ recorded, its switch untouched
-REC2="$WORK/defaulted2.json"; "$FK" plugin disable "$FB"; : > "$ST/calls"
-out=$(ens --gone "$WORK/gone" --default fleet-feedback --defaulted "$REC2")
-has "already installed here — recorded as defaulted" "$out" "J already installed: recorded"
-grep -q "^plugin enable $FB" "$ST/calls" && fail "J already installed: its switch was flipped" "$(cat "$ST/calls")"; ok
-[ "$(fbstate)" = off ] && ok || fail "J already installed + off: turned on" "$(fbstate)"
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d["fleet-feedback"]["how"]=="already" else 1)' "$REC2" \
-  && ok || fail "J already installed: record" "$(cat "$REC2" 2>&1)"
-# install-apply: --default only for a managed login, inside the plugins pass's ensure
-grep -q 'fleet_node_manages "$LOGIN" && pdef=(--default fleet-feedback)' "$AP" \
-  && sed -n '/fleet-plugins.py" ensure/,/2>&1); then/p' "$AP" | grep -q 'pdef\[@\]' && ok \
-  || fail "J install-apply does not pass --default fleet-feedback under fleet_node_manages"
-# the switch: fleet feedback on|off|status
-SW="$BIN/fleet-feedback-switch.sh"; SS="$WORK/sw-settings.json"; FC2="$WORK/fakeclaude-sw"
-cat > "$FC2" <<'SH'
-#!/bin/bash
-# `claude plugin enable|disable|install <id>` writing enabledPlugins in $SW_SETTINGS
-python3 - "$SW_SETTINGS" "$2" "${3:-}" <<'PY'
-import json, sys, os
-p, verb, pid = sys.argv[1:4]
-d = json.load(open(p)) if os.path.exists(p) else {}
-if verb in ("enable", "disable"):
-    d.setdefault("enabledPlugins", {})[pid] = (verb == "enable")
-json.dump(d, open(p, "w"))
-PY
-SH
-chmod +x "$FC2"
-sw() { env SW_SETTINGS="$SS" FLEET_FEEDBACK_PLUGIN_SETTINGS="$SS" FLEET_FEEDBACK_CLAUDE="$FC2" \
-         FLEET_CONF_DIR="$WORK/swconf" bash "$SW" "$@" 2>&1; }
-rm -f "$SS"
-out=$(FLEET_FEEDBACK_MANAGED=0 sw status); has "fleet-feedback: 关 · 自己的电脑" "$out" "J switch: own computer, nothing installed → 关"
-out=$(FLEET_FEEDBACK_MANAGED=0 sw on); rc=$?
-[ "$rc" = 0 ] && ok || fail "J switch on rc=$rc" "$out"
-FLEET_FEEDBACK_MANAGED=0 sw enabled >/dev/null && ok || fail "J switch: on → enabled"
-out=$(FLEET_FEEDBACK_MANAGED=1 sw status); has "fleet-feedback: 开" "$out" "J switch: on → status 开"
-has "托管登录" "$out" "J switch: managed status names it"
-has "还没装过" "$out" "J switch: managed, no record → says the next sync installs it"
-out=$(FLEET_FEEDBACK_MANAGED=1 sw off); has "升级也不会再打开它" "$out" "J switch: managed off says it stays off"
-FLEET_FEEDBACK_MANAGED=1 sw enabled >/dev/null && fail "J switch: off → still enabled"; ok
-sw bogus >/dev/null; [ $? = 2 ] && ok || fail "J switch: an unknown word is usage (2)"
-grep -q '  feedback)' "$BIN/fleet" && grep -q 'on|off|status|enabled) .*fleet-feedback-switch.sh' "$BIN/fleet" && ok \
-  || fail "J bin/fleet does not dispatch fleet feedback on|off|status to the switch"
-grep -q 'pass feedback' "$BIN/fleet-doctor.sh" && grep -q 'info feedback' "$BIN/fleet-doctor.sh" \
-  && ! grep -q 'warn feedback' "$BIN/fleet-doctor.sh" && ok \
-  || fail "J fleet-doctor.sh: a feedback row that is PASS / INFO, never WARN"
+out=$(ens --gone "$WORK/gone" --dry-run)
+has "would uninstall $FB — retired" "$out" "J dry-run names the retired plugin"
+grep -qE '^plugin uninstall' "$ST/calls" && fail "J --dry-run uninstalled" "$(cat "$ST/calls")"; ok
+: > "$ST/calls"; out=$(ens --gone "$WORK/gone"); rc=$?
+[ "$rc" = 0 ] && ok || fail "J ensure rc=$rc" "$out"
+has "uninstalled $FB — retired" "$out" "J the retired plugin is uninstalled"
+grep -q "^plugin uninstall $FB" "$ST/calls" && ok || fail "J no uninstall ran" "$(cat "$ST/calls")"
+[ "$(fbstate)" = absent ] && ok || fail "J still installed after the apply" "$(fbstate)"
+grep -q 'fleet-feedback' "$ROOT/.claude-plugin/marketplace.json" && fail "J the marketplace still lists fleet-feedback"; ok
 
 # ---- K: fleet-infra, the admins' runbooks (issue #3586, EPIC #3569 C16) ------------
 FI="$ROOT/plugins/fleet-infra"
@@ -497,11 +424,7 @@ has "missing row \`beta\`" "$out" "K check reads a # doctor-rows: declaration"
 # no internal name or address in it — the ONE rule table (EPIC #3569 共同约定 1)
 out=$(bash "$BIN/oss-scan.sh" --root "$ROOT" -- plugins/fleet-infra 2>&1); rc=$?
 [ "$rc" = 0 ] && ok || fail "K oss-scan over plugins/fleet-infra found something (rc=$rc)" "$out"
-# never a managed default, never handed out by the hub
-: > "$ST/calls"; out=$(FLEET_CONF_DIR="$WORK/kconf" ens --gone "$WORK/gone" --default fleet-infra)
-grep -qE '^plugin (install|enable) fleet-infra' "$ST/calls" && fail "K --default fleet-infra installed it" "$(cat "$ST/calls")"; ok
-has "never a managed default" "$out" "K --default fleet-infra is refused out loud"
-grep -q 'pdef=(--default [^)]*fleet-infra' "$AP" && fail "K install-apply defaults fleet-infra"; ok
+# never handed out by the hub
 grep -q '"fleet-infra"' "$BIN/fleet-agent-team.py" && ok || fail "K fleet-agent-team.py does not refuse fleet-infra"
 
 # ---- A (cont.) + H: the real CLI ----------------------------------------------------

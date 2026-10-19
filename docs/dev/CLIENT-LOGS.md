@@ -7,7 +7,7 @@
 > «stuck at 正在连接», the answer is read here instead of asking them to run it
 > again with `-v` and send a screenshot.
 
-This page is the contract. C1's bundle (`fleet doctor --bundle`) takes its
+This page is the contract. C1's bundle (retired with #4904) took its
 whitelist from it; C3 and C4 read what C1 packs. **Fields are only ever added,
 never changed or removed.**
 
@@ -143,9 +143,8 @@ The ONE ruler for the client's three stability readings (issue #4824, EPIC
 
     bin/fleet-client-stats.py [--json] [--days N] [--now ISO] <dir>…
 
-Each `<dir>` is one computer: its cache (`~/.cache/claude-fleet`), a diagnosis
-bundle (`fleet doctor --bundle` — it packs `thin.log`'s last 5000 lines as
-`logs/thin.log` since #4824) or a bare log dir; `.1` is read first.
+Each `<dir>` is one computer: its cache (`~/.cache/claude-fleet`), a copied
+set (`logs/thin.log` + `logs/*.log`) or a bare log dir; `.1` is read first.
 
 | reading | from |
 |---|---|

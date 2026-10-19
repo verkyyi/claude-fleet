@@ -264,13 +264,12 @@ func TestFleetOffHasNoCredentialRoutes(t *testing.T) {
 }
 
 // KMS unavailable (claude-fleet#1417): the vault is locked, so the hub
-// refuses every lease and store with 503 vault_locked, records each refusal,
-// and raises a critical finding — while revocation and the audit still work.
+// refuses every lease and store with 503 vault_locked and records each refusal,
+// while revocation and the audit still work.
 // It never falls back to issuing from anything else.
-func TestLockedVaultRefusesAndAlerts(t *testing.T) {
+func TestLockedVaultRefuses(t *testing.T) {
 	h, tok, ref := newVaultHarness(t)
 	putCred(t, h, credvault.Claude, "main", credvault.Secret{RefreshToken: "rt-1"})
-	key := h.srv.Vault.Sealer
 	h.srv.Vault.SetLocked("kms Decrypt: kms 503 ServiceUnavailable", time.Now().Add(-2*time.Minute))
 
 	code, ok, refusal := lease(t, h, tok)
@@ -294,25 +293,6 @@ func TestLockedVaultRefusesAndAlerts(t *testing.T) {
 	}
 	if code, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "mac-c"}); code != http.StatusOK {
 		t.Fatalf("revoke while locked: %d %v", code, out)
-	}
-
-	var now findingsEnvelope
-	h.getJSON(t, "/v1/findings?account=all&view=now", &now)
-	if len(now.Findings) == 0 || now.Findings[0].Kind != "cred_vault_locked" || now.Findings[0].Severity != "critical" {
-		t.Fatalf("no critical vault finding first: %+v", now.Findings)
-	}
-
-	// Unlocked again: the finding clears and leases flow (the revocation
-	// above aside — lift it).
-	h.srv.Vault.Unlock(key)
-	if code, _ := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "mac-c", Lift: true}); code != http.StatusOK {
-		t.Fatal("lift")
-	}
-	h.getJSON(t, "/v1/findings?account=all&view=now", &now)
-	for _, f := range now.Findings {
-		if f.Kind == "cred_vault_locked" {
-			t.Fatalf("finding outlived the lock: %+v", f)
-		}
 	}
 }
 
@@ -421,29 +401,6 @@ func TestPoolSetupTokenLeasedByEveryActivePrincipal(t *testing.T) {
 	access, err := h.srv.Vault.Lease(context.Background(), store.PoolPrincipal, credvault.Claude, "unknown-expiry")
 	if err != nil || access.ExpiresAt != nil {
 		t.Fatalf("unknown expiry leased: %+v %v", access, err)
-	}
-
-	// Expiring within a month: the hub's own page carries the reminder.
-	soon := time.Now().Add(20 * 24 * time.Hour).UTC()
-	if code, out := h.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: store.PoolPrincipal,
-		Provider: credvault.Claude, Account: "gmail", Secret: credvault.Secret{SetupToken: "sk-ant-oat01-SOON", ExpiresAt: &soon}}); code != http.StatusOK {
-		t.Fatalf("put soon: %d %v", code, out)
-	}
-	var now struct {
-		Findings []struct{ Kind, Severity, Title string }
-	}
-	h.getJSON(t, "/v1/findings?account=all&view=now", &now)
-	found := false
-	for _, f := range now.Findings {
-		if f.Kind == "cred_setup_token" && strings.Contains(f.Title, "gmail") && f.Severity == "warning" {
-			found = true
-		}
-		if f.Kind == "cred_setup_token" && strings.Contains(f.Title, "icloud") {
-			t.Fatalf("a token a year out raised a finding: %+v", f)
-		}
-	}
-	if !found {
-		t.Fatalf("no setup-token reminder: %+v", now.Findings)
 	}
 }
 

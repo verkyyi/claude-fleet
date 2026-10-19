@@ -20,7 +20,7 @@
 #                 started is still a candidate — lsof keeps reporting the old path.
 #   • AGE GATE    nothing younger than minage is taken.
 #   • SCOPE       a listener in a plain dir (not fleet-anchored), and an exempt
-#                 one (doc-preview's server.py), are never candidates.
+#                 one (a tunnel: cloudflared), are never candidates.
 #   • REAP        the sweep kills both candidates and their PORTS ARE RELEASED;
 #                 the unanchored and exempt ones survive.
 #   • TEARDOWN    fleet_reap_worktree_listeners kills a listener in the worktree's
@@ -105,7 +105,7 @@ probe "$FLEET_CLAUDE_TMP_ROOT" 0.0.0.0;           p_root="$PROBE_PID"; port_root
 probe "$WORK/app-issue-77/dist" 127.0.0.1;        p_del="$PROBE_PID";  port_del="$PROBE_PORT"
 rm -rf "$WORK/app-issue-77"                       # the worktree is gone; the server is not
 probe "$WORK/plain/site" 127.0.0.1;               p_plain="$PROBE_PID"
-probe "$FLEET_CLAUDE_TMP_ROOT/x" 127.0.0.1 /skills/doc-preview/server.py; p_exempt="$PROBE_PID"
+probe "$FLEET_CLAUDE_TMP_ROOT/x" 127.0.0.1 /opt/bin/cloudflared; p_exempt="$PROBE_PID"
 
 # --- ROOT / DELETED / SCOPE ----------------------------------------------------
 cand="$(fleet_reap_orphan_listeners dry 0)"
@@ -114,7 +114,7 @@ has_pid "$p_root" "$cand" && ok "a listener whose cwd IS the scratchpad root is 
 has_pid "$p_del" "$cand" && ok "a listener in a REMOVED worktree is still a candidate" \
   || fail "deleted-worktree listener $p_del not a candidate" "$cand"
 has_pid "$p_plain" "$cand" && fail "an unanchored listener $p_plain was made a candidate" "$cand"
-has_pid "$p_exempt" "$cand" && fail "doc-preview's server ($p_exempt) was made a candidate" "$cand"
+has_pid "$p_exempt" "$cand" && fail "the exempt tunnel ($p_exempt) was made a candidate" "$cand"
 ok "unanchored and exempt listeners are never candidates"
 case "$cand" in *"$p_root lan "*) ok "a 0.0.0.0 bind is classified lan" ;;
   *) fail "the 0.0.0.0 probe was not classified lan" "$cand" ;; esac

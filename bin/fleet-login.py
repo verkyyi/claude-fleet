@@ -354,9 +354,9 @@ def post(url, body, timeout=20, headers=None):
 
 def device_name():
     """This computer's short hostname — the device record's display name.
-    FLEET_DEVICE_NAME names it instead: the 60-second drill's sandbox
-    (fleet-onboard-clock.sh, claude-fleet#2267) runs on a machine the hub
-    already knows, and a newcomer's computer is never named like one."""
+    FLEET_DEVICE_NAME names it instead: a sandbox that runs on a machine the
+    hub already knows (claude-fleet#2267), so a newcomer's computer is never
+    named like one."""
     want = re.sub(r"[^A-Za-z0-9._-]", "", os.environ.get("FLEET_DEVICE_NAME", ""))[:64]
     if want:
         return want

@@ -90,17 +90,9 @@ if [ "${1:-}" = --installs ]; then
   exec sh "$(dirname "$0")/fleet-installs.sh" "$@"
 fi
 
-# `fleet doctor --bundle <dir>` (issue #2890, EPIC #2889 C1): this doctor in full
-# plus the system, the tools, the route to the hub and the client's logs, every
-# credential taken out — bin/fleet-doctor-bundle.sh (the client-only `fleet`
-# execs it too). Exit 0 bundled · 3 a credential survived, nothing written.
-if [ "${1:-}" = --bundle ]; then
-  exec sh "$(dirname "$0")/fleet-doctor-bundle.sh" "$@"
-fi
-
 # `fleet doctor --json` (issue #2674): the same run, its rows as one JSON object —
 # {"v":1,"rc":N,"fails":N,"warns":N,"rows":[{"level","row","msg"}…]} — for a
-# reader that wants the rows (fleet-doctor-bundle.sh keeps a copy). It runs the doctor once,
+# reader that wants the rows. It runs the doctor once,
 # off a tty (no color), and parses the `  LEVEL  label  msg` lines; a line indented
 # past the label column continues the row above. Exit = the doctor's.
 if [ "${1:-}" = --json ]; then
@@ -774,74 +766,6 @@ skills_dir="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
 if [ "$plug" = 0 ] && [ -f "$cmd_dir/fleet-handoff.md" ] && [ ! -f "$skills_dir/handoff/SKILL.md" ]; then
   warn skills "/fleet-handoff installed but its base skill $skills_dir/handoff/SKILL.md is missing — handoff will have nothing to delegate to (run /fleet-sync-install to install skills/*)"
 fi
-# doc-preview is a soft/opt dep on tailscale: it hosts Markdown docs on the
-# machine's tailnet, so with the skill installed but tailscale absent it's a
-# no-op (share.sh exits "tailscale is not running / logged out"), not a broken
-# install. Warn, never fail — the fleet runs fine without it (issue #354).
-if [ -f "$skills_dir/doc-preview/SKILL.md" ] && ! command -v tailscale >/dev/null 2>&1; then
-  warn skills "doc-preview skill installed but tailscale not on PATH — the skill is a no-op without it (it serves docs over the tailnet); install/enable Tailscale to use it"
-fi
-
-# Can THIS login `tailscale serve`? Only the machine's ONE tailscale operator (or
-# root) can; any other login's doc-preview falls back to plain http bound on the
-# tailscale IPv4 ("http-direct", issue #1093). That is a supported mode, not a
-# fault — the operator can't be shared, and moving it would break the login that
-# holds it — so it is INFO, with the one-time root command for anyone who wants
-# HTTPS for this login instead. The ports in it are bind-probed the way share.sh
-# picks them (loopback server port from DOC_PREVIEW_PORT; a tailnet HTTPS port no
-# serve route and no listener holds). Operator unreadable/unset → no row, never a guess.
-if [ -f "$skills_dir/doc-preview/SKILL.md" ] && command -v tailscale >/dev/null 2>&1; then
-  _dp_me="$(id -un 2>/dev/null || echo "${USER:-}")"
-  _dp_op="$(tailscale debug prefs 2>/dev/null | python3 -c 'import sys,json
-try: print(json.load(sys.stdin).get("OperatorUser") or "")
-except Exception: pass' 2>/dev/null || true)"
-  if [ "$(id -u 2>/dev/null)" = 0 ] || { [ -n "$_dp_op" ] && [ "$_dp_op" = "$_dp_me" ]; }; then
-    pass docprev "this login ($_dp_me) can tailscale serve — doc-preview shares over tailnet HTTPS"
-  elif [ -n "$_dp_op" ]; then
-    _dp_ports="$(tailscale serve status --json 2>/dev/null | python3 -c 'import sys,json,socket
-def free(a,p):
-    s=socket.socket()
-    try: s.bind((a,p)); return True
-    except OSError: return False
-    finally: s.close()
-try: used=set(((json.load(sys.stdin) or {}).get("TCP") or {}).keys())
-except Exception: used=set()
-ip=sys.argv[2]; p=int(sys.argv[1])
-while p < int(sys.argv[1])+50 and not free("127.0.0.1",p): p+=1
-h=8443
-while h < 8543 and (str(h) in used or (ip and not free(ip,h))): h+=1
-print(h, p)' "${DOC_PREVIEW_PORT:-8765}" "$(tailscale ip -4 2>/dev/null | head -1)" 2>/dev/null || echo "8443 ${DOC_PREVIEW_PORT:-8765}")"
-    _dp_hp="${_dp_ports% *}"; _dp_lp="${_dp_ports#* }"
-    info docprev "this login ($_dp_me) is not tailscale's operator ($_dp_op), so it cannot tailscale serve — doc-preview falls back to http-direct: plain http on the tailscale IP, reachable only inside the tailnet (WireGuard-encrypted). For HTTPS instead, once: sudo tailscale serve --bg --https=$_dp_hp http://127.0.0.1:$_dp_lp, then share.sh --stop and re-share (it adopts that route). Don't move the operator — that breaks $_dp_op's doc-preview"
-  fi
-fi
-
-# What doc-preview has OUT there (issue #1153): public (Funnel) links, how long the oldest
-# has been up, one that never expires; tailscale serve routes stacked on one backend or
-# left pointing at a dead port (one machine had ~260). share.sh --health is the one
-# reader — it judges with the same expiry rule the server enforces. Nothing shared → no row.
-if [ -x "$skills_dir/doc-preview/share.sh" ] && [ -d "$HOME/.cache/claude-doc-preview/entries" ]; then
-  _dp_h="$("$skills_dir/doc-preview/share.sh" --health 2>/dev/null | tail -1)"
-  _dp_v() { printf '%s\n' "$_dp_h" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
-  _dp_pub="$(_dp_v public)"; _dp_old="$(_dp_v oldest_public_secs)"; _dp_inf="$(_dp_v unexpiring_public)"
-  _dp_dup="$(_dp_v serve_dup)"; _dp_dead="$(_dp_v serve_dead)"; _dp_rt="$(_dp_v serve_routes)"
-  # A server.py older than the installed copy keeps the old rules (issue #2415: one from
-  # before #1153 listed every share without a code for a day after the install moved).
-  if [ "$(_dp_v server_stale)" -gt 0 ] 2>/dev/null; then
-    warn docprev "$(_dp_v server_stale) running doc-preview server.py older than the installed copy — it still serves the old rules: $skills_dir/doc-preview/share.sh --upgrade"
-  fi
-  if [ -n "$_dp_pub" ]; then
-    _dp_msg="public links: ${_dp_pub} (oldest $(( ${_dp_old:-0} / 3600 ))h, never-expiring ${_dp_inf:-0}); serve routes to loopback: ${_dp_rt:-0} (stacked ${_dp_dup:-0}, dead ${_dp_dead:-0})"
-    if [ "${_dp_dup:-0}" -gt 0 ] || [ "${_dp_dead:-0}" -gt 0 ]; then
-      warn docprev "$_dp_msg — extra tailscale serve routes are left behind; the next share.sh run drops this login's (or: tailscale serve status, then tailscale serve --https=<port> off)"
-    elif [ "${_dp_inf:-0}" -gt 0 ] || [ "${_dp_old:-0}" -gt 604800 ]; then
-      warn docprev "$_dp_msg — a public link that never expires or is over 7 days old: share.sh --list, then share.sh --unpublish <id>"
-    elif [ "${_dp_pub:-0}" -gt 0 ]; then
-      info docprev "$_dp_msg"
-    fi
-  fi
-fi
-
 # --- live install freshness: is THIS machine's ~/.claude/fleet current? (#635) ---
 # The commands/skills checks above answer "is it installed". This answers "is it
 # CURRENT", which nothing used to. `/fleet-sync-install` is per-machine and
@@ -962,39 +886,6 @@ if [ -d "$live_dir" ]; then
     elif [ -n "$flo" ]; then
       info install "other logins on this machine: $flo (\`?\` = unreadable without passwordless sudo; $(dirname "$0")/fleet-install-follow.sh for the table)"
     fi
-  fi
-  # The China real-user path (issue #4180): bin/fleet-cn-probe-watch.sh's last walk,
-  # on the one machine that walks it (where its last.json is). Green a PASS; red a
-  # WARN naming the layer and its breakage issue (never a FAIL — the install's own
-  # post-update doctor compares FAILs, and a red path is not this install's);
-  # a last walk older than 12 h (two green intervals) is a WARN too.
-  cnj="$conf_dir/global/cn-probe/last.json"
-  if [ -f "$cnj" ]; then
-    cnl=$(python3 - "$cnj" <<'PY2' 2>/dev/null
-import json, sys, time
-d = json.load(open(sys.argv[1]))
-age = int(time.time()) - int(d.get("ts") or 0)
-h = "%dh%02dm" % (age // 3600, age % 3600 // 60)
-st = (d.get("stable") or "")[:7] or "?"
-if age > 12 * 3600:
-    print("WARN\tthe last walk was %s ago (stable %s) — is the diskguard tick running? `bin/fleet-cn-probe-watch.sh --repo <repo> --now`" % (h, st))
-elif d.get("verdict") == "green":
-    print("PASS\t通 — walked %s ago against stable %s" % (h, st))
-else:
-    # issue #4303: whose failure (product / env / probe), why, and the run's result
-    cls = {"env": "环境无效", "probe": "检测出错"}.get(d.get("class") or "", "不通")
-    why = " · %s" % d["reason_code"] if d.get("reason_code") else ""
-    run = "; result %s" % d["result"] if d.get("result") else ""
-    print("WARN\t%s%s：卡在 %s — %s (%s ago, stable %s%s%s); stable cannot move past it" % (
-        cls, why, d.get("stuck") or "?", (d.get("detail") or "")[:120], h, st,
-        ", " + d["issue"] if d.get("issue") else "", run))
-PY2
-)
-    case "$cnl" in
-      PASS*) pass cnpath "${cnl#*	}" ;;
-      WARN*) warn cnpath "${cnl#*	}" ;;
-      *)     warn cnpath "$cnj unreadable" ;;
-    esac
   fi
   # The OTHER MACHINES (issue #644, EPIC #1524 R4). The install that is old is on
   # the machine you are not logged into: on 2026-09-14 the Mac mini sat 28 commits
@@ -2032,65 +1923,6 @@ else
   pass machine "load $mload on $mcores cores (${mper}/core), no orphaned runaways"
 fi
 
-# --- idle-cost (issue #4355, EPIC #4354 C1): what the fleet costs this machine
-# when nobody is working — processes started a second and who starts them, by
-# bin/fleet-idle-cost.sh (idle = fleet_idle_now: no working worker window, no CI
-# job). A host only (承载; FLEET_DOCTOR_IDLE_COST=1 forces it, =0 silences it).
-# Busy ⇒ INFO 「有会话在干活，未量」, never a number taken under load. Idle ⇒ the
-# kept reading when younger than FLEET_IDLE_COST_MAX_AGE (3600 s), else one
-# FLEET_DOCTOR_IDLE_COST_SECS (60) window now. Over FLEET_IDLE_COST_WARN (50 a
-# second, 发起人拍板 8) ⇒ WARN naming the three biggest sources; never FAIL.
-icchk="${FLEET_DOCTOR_IDLE_COST:-$(_gconf_val FLEET_DOCTOR_IDLE_COST)}"
-_ict="$(dirname "$0")/fleet-idle-cost.sh"
-if [ "$icchk" != 0 ] && [ -f "$_ict" ] && { [ "${_ho_on:-0}" = 1 ] || [ "$icchk" = 1 ]; }; then
-  icwarn="${FLEET_IDLE_COST_WARN:-$(_gconf_val FLEET_IDLE_COST_WARN)}"
-  case "$icwarn" in ''|*[!0-9.]*) icwarn=50 ;; esac
-  icage="${FLEET_IDLE_COST_MAX_AGE:-$(_gconf_val FLEET_IDLE_COST_MAX_AGE)}"; case "$icage" in ''|*[!0-9]*) icage=3600 ;; esac
-  icsecs="${FLEET_DOCTOR_IDLE_COST_SECS:-$(_gconf_val FLEET_DOCTOR_IDLE_COST_SECS)}"; case "$icsecs" in ''|*[!0-9]*) icsecs=60 ;; esac
-  iclast="$conf_dir/idle-cost/last.json"
-  # the daily readings (issue #4361): global/idle-cost.ndjson, the one file the
-  # daily tick writes and the batch report reads
-  icday=''
-  if icds=$(FLEET_CONF_DIR="$conf_dir" python3 "$(dirname "$0")/fleet-idle-daily.py" summary --days 7 2>/dev/null); then
-    icday=$(printf '%s' "$icds" | awk -F'\t' '{ printf "；每日读数近 7 天 %s 天已量、%s 天未量", $1, $2 }')
-  fi
-  # rate · age (s) · the three biggest sources, from a kept reading
-  _ic_sum() {
-    python3 - "$iclast" <<'EOF_IC' 2>/dev/null
-import json, sys, time
-r = json.load(open(sys.argv[1]))
-assert r["state"] == "idle"
-top = "；".join("%s %s/s" % (x["who"], x["rate"]) for x in r.get("spawn_top", [])[:3])
-print("%s\t%d\t%s\t%s\t%s" % (r["rate"], int(time.time()) - int(r["ts"]), r["secs"], top or "-", r["fleet_cpu_pct"]))
-EOF_IC
-  }
-  if ! icwhy=$(FLEET_CONF_DIR="$conf_dir" bash "$_ict" --idle 2>/dev/null); then
-    icprev=''
-    [ -f "$iclast" ] && icprev=$(_ic_sum | awk -F'\t' 'NF { printf "；上次空闲读数 %s 个/秒（%d 分钟前）", $1, $2/60 }')
-    info idle-cost "未量（${icwhy:-无法确认整机空闲}）$icprev — 空闲时 \`bash bin/fleet-idle-cost.sh\`${icday}"
-  else
-    icfresh=''
-    [ -f "$iclast" ] && [ -n "$(find "$iclast" -mmin "-$(( (icage + 59) / 60 ))" 2>/dev/null)" ] && icfresh=1
-    icrc=0
-    [ -n "$icfresh" ] || { FLEET_CONF_DIR="$conf_dir" bash "$_ict" --secs "$icsecs" >/dev/null 2>&1; icrc=$?; }
-    if [ "$icrc" = 3 ]; then
-      info idle-cost "有会话在干活，未量（量的时候有会话开始干活）${icday}"
-    elif [ "$icrc" != 0 ] || ! icline=$(_ic_sum) || [ -z "$icline" ]; then
-      warn idle-cost "量不出来：\`bash bin/fleet-idle-cost.sh\` 没有留下读数（${iclast}）"
-    else
-      icr=$(printf '%s' "$icline" | cut -f1); ica=$(printf '%s' "$icline" | cut -f2)
-      icw=$(printf '%s' "$icline" | cut -f3); ictop=$(printf '%s' "$icline" | cut -f4)
-      iccpu=$(printf '%s' "$icline" | cut -f5)
-      ictxt="空闲时每秒新起 ${icr} 个进程，fleet CPU ${iccpu}%（${icw} 秒窗口，$(( ica / 60 )) 分钟前）"
-      if awk -v r="$icr" -v w="$icwarn" 'BEGIN{ exit !(r > w) }'; then
-        warn idle-cost "${ictxt}，超过 ${icwarn} 个/秒 — 最多: ${ictop}。全表: \`bash bin/fleet-idle-cost.sh\`${icday}"
-      else
-        pass idle-cost "${ictxt}，阈值 ${icwarn} — 最多: ${ictop}${icday}"
-      fi
-    fi
-  fi
-fi
-
 # --- CPU throttling (issue #3514) ------------------------------------------------
 # A container with a CPU limit (a Kubernetes pod) is not loaded, it is THROTTLED:
 # linux-a ran at its 2-core limit with 83% of its CFS periods throttled —
@@ -2268,7 +2100,7 @@ lsn=''
 [ -f "$_dg" ] && lsn="$(bash "$_dg" --listeners 2>/dev/null)"
 lsnn=$(printf '%s' "$lsn" | awk 'NF{n++} END{print n+0}')
 if [ "$lsnn" -gt 0 ]; then
-  warn listen "$lsnn fleet process(es) listening on the LAN — a temp server bound to \`*\` serves its cwd to anyone on the network (issue #1154). Bind 127.0.0.1 (\`python3 -m http.server --bind 127.0.0.1\`); share with the operator through doc-preview. Orphans are reaped after \${FLEET_ORPHAN_LISTEN_SECS:-21600}s by the diskguard tick; \`bin/fleet-diskguard.sh --orphan-listeners\` lists them"
+  warn listen "$lsnn fleet process(es) listening on the LAN — a temp server bound to \`*\` serves its cwd to anyone on the network (issue #1154). Bind 127.0.0.1 (\`python3 -m http.server --bind 127.0.0.1\`); show the operator a page with the fleet `open` tool. Orphans are reaped after \${FLEET_ORPHAN_LISTEN_SECS:-21600}s by the diskguard tick; \`bin/fleet-diskguard.sh --orphan-listeners\` lists them"
   printf '%s\n' "$lsn" | head -5 | while IFS="$(printf '\t')" read -r lpid laddr lage lcwd largv; do
     [ -n "$lpid" ] || continue
     lup=$(awk -v s="$lage" 'BEGIN{ s+=0; d=int(s/86400); h=int(s%86400/3600); m=int(s%3600/60)
@@ -2560,26 +2392,10 @@ if [ -n "$_ep_run" ]; then
   else pass epic "批次 $_ep_run 在跑 — 有活的批次挡住 install-sync（最多 $((_ep_cap / 60)) 分钟），空转的不挡"; fi
 fi
 
-# --- last crash + the record a crash would leave (issue #1294) -----------------
-# The diskguard tick harvests the system's panic / Jetsam reports into
-# machine/incident-*.md the first tick after a reboot (bin/fleet-crash-harvest.py),
-# and appends a machine-metrics row every minute. This names the last crash (WARN
-# for a day, so the reboot is seen; INFO after) and WARNs when the metrics stopped
-# — a crash then would leave nothing to read.
+# --- the record a crash would leave (issue #1294) -------------------------------
+# The diskguard tick appends a machine-metrics row every minute; WARN when they
+# stopped — a crash then would leave nothing to read.
 mdir_m="$conf_dir/machine"
-lc="$(ls "$mdir_m"/incident-*.md 2>/dev/null | sort | tail -1)"
-if [ -n "$lc" ]; then
-  lch="$(sed -n 's/^headline: //p' "$lc" 2>/dev/null | head -1)"
-  lcn="${lc##*/incident-}"; lcn="${lcn%.md}"
-  lcut="$(date -v-1d '+%Y%m%d-%H%M' 2>/dev/null || date -d '-1 day' '+%Y%m%d-%H%M' 2>/dev/null)"  # portable-ok: BSD/GNU both-ways
-  if [ -n "$lcut" ] && awk -v a="$lcn" -v b="$lcut" 'BEGIN { exit !(a > b) }'; then
-    warn last-crash "this machine crashed in the last day: ${lch:-see the summary} — summary: $lc"
-  else
-    info last-crash "${lch:-$lcn} — $lc"
-  fi
-else
-  pass last-crash "no crash harvested (bin/fleet-diskguard.sh --harvest-crash --since <date> reads the system's reports on demand)"
-fi
 if [ -d "$mdir_m" ]; then
   mf="$(find "$mdir_m" -name 'metrics-*.tsv' -mmin -5 2>/dev/null | head -1)"
   if [ -n "$mf" ]; then
@@ -3218,25 +3034,6 @@ if [ -f "$_plg" ] && command -v python3 >/dev/null 2>&1 && command -v "${FLEET_I
     0) pass plugins "$_pline" ;;
     1) warn plugins "$_pline" ;;
   esac
-fi
-
-# --- feedback: /fleet-feedback on this login (issue #3360, EPIC #3354 C6) ---
-# On by default on a MANAGED login (install-apply installs + enables it once,
-# plugins-defaulted.json), off on anyone's own computer. Never a WARN: a person
-# may turn it off. On ⇒ PASS; a managed login with it off ⇒ one INFO line; own
-# computer with it off ⇒ no row (byte for byte as before). Whether the hub turns
-# a feedback into a GitHub issue is the hub's side (its GitHub App) — not read here.
-_fbs="$(dirname "$0")/fleet-feedback-switch.sh"
-if [ -f "$_fbs" ] && command -v python3 >/dev/null 2>&1; then
-  if bash "$_fbs" enabled >/dev/null 2>&1; then
-    pass feedback "开 · /fleet-feedback 可用$(fleet_node_manages 2>/dev/null && echo '（托管默认开）')"
-  elif fleet_node_manages 2>/dev/null; then
-    if grep -q '"fleet-feedback"' "$conf_dir/plugins-defaulted.json" 2>/dev/null; then
-      info feedback "关 · 托管登录默认开，这里被关掉了（人的选择，升级不会再开；要用：fleet feedback on）"
-    else
-      info feedback "关 · 托管登录默认开，还没装过：下次同步（install-apply 的 plugins 一步）装上并打开"
-    fi
-  fi
 fi
 
 # --- team: the hub's team version vs this login's (issue #1899) ---
@@ -4251,27 +4048,6 @@ if [ -n "$_ol" ]; then
     esac
   else
     info laptop "? $_ol unreachable over ssh (asleep / off-network) — fleet_open.py not checked"
-  fi
-fi
-
-# --- compose: ↵ → 能打字 over the last 20 sends (issue #2238, EPIC #2230) ----------
-# fleet-compose-latency.sh's one-line summary. No send recorded yet (or none that
-# reached 能打字) is no warning — the bar is the batch's 3 s, and only a max past
-# it is one. The breakdown is `fleet-compose-latency.sh --last 20`.
-if _cs=$(bash "$(dirname "$0")/fleet-compose-latency.sh" --last 20 --summary 2>/dev/null) && [ -n "$_cs" ]; then
-  _cn=$(printf '%s' "$_cs" | sed -n 's/.*n=\([0-9]*\).*/\1/p')
-  _cr=$(printf '%s' "$_cs" | sed -n 's/.*ready=\([0-9]*\).*/\1/p')
-  _cp=$(printf '%s' "$_cs" | sed -n 's/.*p50=\([0-9-]*\).*/\1/p')
-  _cm=$(printf '%s' "$_cs" | sed -n 's/.*max=\([0-9-]*\).*/\1/p')
-  if [ "${_cr:-0}" -eq 0 ] || [ "$_cm" = - ]; then
-    info compose "↵ → 能打字: no measured send yet (${_cn:-0} recorded) — fleet-compose-latency.sh"
-  else
-    _cmsg=$(awk -v n="$_cr" -v p="$_cp" -v m="$_cm" 'BEGIN { printf "↵ → 能打字 over %d sends: p50 %.1fs · max %.1fs", n, p / 1000, m / 1000 }')
-    if [ "$_cm" -gt 3000 ]; then
-      warn compose "$_cmsg (> 3s) — fleet-compose-latency.sh --last 20 shows which segment"
-    else
-      pass compose "$_cmsg"
-    fi
   fi
 fi
 

@@ -10,7 +10,7 @@ import (
 
 func TestRunPlan_RecordsAPriceAndItsChange(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "ccquota.db")
-	seedBadgeDB(t, db)
+	seedTestDB(t, db)
 
 	if err := runPlan([]string{"--db", db, "--set", "max", "--monthly", "200",
 		"--from", "2026-01-01T00:00:00Z"}); err != nil {
@@ -51,7 +51,7 @@ func TestRunPlan_RecordsAPriceAndItsChange(t *testing.T) {
 // than defaulted to 0.
 func TestRunPlan_RefusesAnAmountlessOrMalformedPrice(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "ccquota.db")
-	seedBadgeDB(t, db)
+	seedTestDB(t, db)
 
 	if err := runPlan([]string{"--db", db, "--set", "max"}); err == nil {
 		t.Error("--set with no --monthly was accepted")

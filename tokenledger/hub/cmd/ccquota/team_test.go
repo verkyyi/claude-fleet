@@ -10,7 +10,7 @@ import (
 func TestRunTeam_AssignsAndRefusesUnknown(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "ccquota.db")
-	seedBadgeDB(t, db) // enrolls ep-1
+	seedTestDB(t, db) // enrolls ep-1
 
 	if err := runTeam([]string{"--db", db, "--endpoint", "ep-1", "--set", "platform"}); err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestRunTeam_AssignsAndRefusesUnknown(t *testing.T) {
 func TestRunTeam_RequiresSomethingToDo(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "ccquota.db")
-	seedBadgeDB(t, db)
+	seedTestDB(t, db)
 	if err := runTeam([]string{"--db", db}); err == nil {
 		t.Error("runTeam with no flags did nothing and reported success")
 	}

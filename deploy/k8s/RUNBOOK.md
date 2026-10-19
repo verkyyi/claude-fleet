@@ -330,11 +330,11 @@ MCP、`/v1/fleet/*` 的管理员口都认它。泄露过（进过 argv、日志�
 | Secret `new-deploy/ccquota` 的 `viewer-token` | 下面的命令换 |
 | 仓库密钥 `FLEET_HUB_VIEWER_TOKEN`（`mac-follow.yml` 的 `fleet-train-macos.sh pick` 读 `/v1/fleet/ci-runners`） | 同一管道 `gh secret set` |
 | 「从 hub pod 环境现读」的脚本 / 文档（`kubectl exec … printenv CCQUOTA_VIEWER_TOKEN` 一类） | 换完自然跟上 |
-| 个人电脑上的 `~/.ccquota/viewer-token` / `CCQUOTA_VIEWER_TOKEN`（fleet-hub-sessions / fleet-release / fleet-drill 等操作者脚本读它） | 谁有谁从 Secret 重取 |
+| 个人电脑上的 `~/.ccquota/viewer-token` / `CCQUOTA_VIEWER_TOKEN`（fleet-hub-sessions / fleet-release 等操作者脚本读它） | 谁有谁从 Secret 重取 |
 | 浏览器里 `?token=` 换来的 cookie | 失效，用 GitHub 登录 |
 
-官网里程表的发布器（monorepo `tools/ccquota-publish.sh`）自 monorepo #11768 起只读公开的 `/meter.json` +
-`/odometer.svg`，**不要任何令牌**；`fleet-drill` 命名空间的演练入口是另一把，不跟着换。
+官网里程表的发布器（monorepo `tools/ccquota-publish.sh`）自 monorepo #11768 起只读公开的 `/meter.json`，
+**不要任何令牌**（`/odometer.svg` 随 #4904 去掉）。
 
 全程不打印、不落盘、不进 argv（`--patch-file=/dev/stdin`、curl `-K -`、`gh secret set` 读 stdin）：
 
@@ -439,59 +439,23 @@ kubectl -n new-deploy get pvc ccquota-releases     # Bound 之后才合并带挂
 - 公钥：`curl -fsS https://hub.example.com/v1/fleet/release/key`。换钥匙 = 新 keygen、
   `kubectl create secret … --dry-run=client -o yaml | kubectl replace -f -`、滚一次；已装机器钉的旧公钥要跟着换。
 
-## 远端调试（#2891 代码，#2940 接上）
+## 入口读 GitHub 用的 App（#4881）
 
-入口发调试票（`/v1/fleet/debug/*`、`GET /debug`、`/install` 里的领票逻辑），诊断包收在
-同一个 OSS 桶 `haowan24-fleet-releases` 的 `debug/` 下，两个副本同时挂在 `/debug`。
-诊断包是 7 天即删的敏感数据，**不进 `/releases`**（那是对外发布目录），所以有自己的 PV。
+远端调试（#2891）和反馈建单（#3356）随 #4904 去掉；`CCQUOTA_FLEET_DEBUG_*` 不再读，诊断包的 PV
+（Retain）留着无害，`deployment-debug.yaml` 可以从 overlay 里删掉。
 
-| 东西 | 谁建 | 内容 |
-|---|---|---|
-| Secret `ccquota-debug-key` | 人 | 键 `debug-key`：64 字节 hex（票的 HMAC 钥匙，≥ 32 字节）；只读挂到 `/etc/ccquota-debug`（0440，fsGroup 10001） |
-| Secret `ccquota-release-oss` | 已有 | 与发布包共用（同一桶、同一 RAM 用户） |
-| PV `ccquota-debug-oss` + PVC `ccquota-debug` | 人，一次 | `overlays/prod/debug-volume.yaml`（桶内 `path: /debug`，umask 077）——部署 Role 建不了 PV / PVC |
-| 环境变量 + 两个挂载 | hub-deploy | `overlays/prod/deployment-debug.yaml`（`CCQUOTA_FLEET_DEBUG_DIR=/debug`、`CCQUOTA_FLEET_DEBUG_KEY=<文件路径>`） |
-
-```sh
-kubectl apply -n new-deploy -f deploy/k8s/overlays/prod/debug-volume.yaml
-kubectl -n new-deploy get pvc ccquota-debug        # Bound 之后才合并带挂载的那次发布
-```
-
-- 桶里的 `debug/` 前缀要先有（OSS CSI 挂子目录前要求它存在）：在挂着 `/releases` 的 pod 里
-  `mkdir -p /releases/debug` 一次即可，之后入口只经 `/debug` 读写它。
-- 上线后入口日志：`fleet: debug tickets on, bundles in /debug; debugger (none)`；
-  `curl -s -o /dev/null -w '%{http_code}' https://hub.example.com/v1/fleet/debug/ticket` 是 401（无票），
-  不再是 404。
-- `CCQUOTA_FLEET_DEBUG_LOGIN` / `_NOTIFY`（`<machine>/<login>`）等诊断员登录建好后再配；
-  不配 = 诊断单「没看完」转管理员，发票和收包照常。
-- 发布前的 `--check`：钥匙文件在 `/etc/ccquota-debug`，只有新渲染挂它，hub-deploy 把它写进
-  `CCQUOTA_CHECK_UNMOUNTED`，`--check` 报告而不拒绝。
-- 关掉：删 `deployment-debug.yaml` 和 kustomization 里它那一行；PV 是 Retain，留着无害。
-
-## 反馈建单（#3356，EPIC #3354 C2）
-
-入口把收下的 `/fleet-feedback` 反馈写成 `verkyyi/claude-fleet` 里一张带 `feedback` 标签的单子，
-身份是现有的 GitHub App（ID 5271651，installation 170195053，Issues: Read and write）：每轮现签
-JWT、换一小时的 installation token，用完即弃。
+反馈建单留下的 GitHub App 还在用：入口读 issue 状态（旧式 T 记录收口）和「我的用量」的标题时带它的
+installation token（`issueMetaViaApp`）——匿名读共用集群出口，一小时 60 次很快用完。
 
 | 东西 | 谁建 | 内容 |
 |---|---|---|
-| Secret `ccquota-feedback-github`（`new-deploy`） | 管理员，从集群里已有的那份 App 私钥建 | 键 `app-id`（`5271651`）、`installation-id`（`170195053`）、`private-key`（App 的 PEM）；只读挂到 `/etc/ccquota-feedback-github`（0440） |
-| 环境变量 + 挂载 | hub-deploy | `overlays/prod/deployment-feedback.yaml`（`CCQUOTA_FLEET_FEEDBACK_GH_DIR`、`CCQUOTA_FLEET_FEEDBACK_REPO`；卷 `optional: true`） |
+| Secret `ccquota-feedback-github`（`new-deploy`，名字沿用） | 管理员，从集群里已有的那份 App 私钥建 | 键 `app-id`（`5271651`）、`installation-id`（`170195053`）、`private-key`（App 的 PEM）；只读挂到 `/etc/ccquota-feedback-github`（0440） |
+| 环境变量 + 挂载 | hub-deploy | `overlays/prod/deployment-feedback.yaml`（`CCQUOTA_FLEET_FEEDBACK_GH_DIR`；`CCQUOTA_FLEET_FEEDBACK_REPO` 不再读；卷 `optional: true`） |
 
-```sh
-kubectl -n new-deploy create secret generic ccquota-feedback-github \
-  --from-literal=app-id=5271651 --from-literal=installation-id=170195053 \
-  --from-file=private-key=<App 私钥的 PEM 文件>
-```
-
-- 没有这个 Secret（或少一个键）：入口照常起、照收反馈，状态「待转」，什么都不往 GitHub 发；
-  日志 `fleet: feedback filing off — no GitHub App credentials …`。有了以后日志是
-  `fleet: feedback filed as issues in verkyyi/claude-fleet (GitHub App 5271651)`。Secret 是挂成文件的，
+- 没有这个 Secret（或少一个键）：入口照常起，GitHub 读走匿名；有了以后日志是
+  `fleet: GitHub issue reads carry the App's installation token (GitHub App 5271651)`。Secret 是挂成文件的，
   建好后要等下一次发布（或滚一次 pod）才读到。
-- GitHub 连不上：反馈留在「待转」，1 分钟起翻倍到 1 小时重试；同一个 F 号靠正文末行
-  `<!-- fleet:feedback id=F<n> -->` 认领已有的单，不建第二张。
-- 私钥、令牌不进日志、单子、配置、仓库。关掉建单：删这个 Secret 再滚 pod。
+- 私钥、令牌不进日志、单子、配置、仓库。
 
 ## GitHub 登录换令牌走新加坡中转（#3392）
 

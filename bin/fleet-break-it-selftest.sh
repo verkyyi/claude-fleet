@@ -88,8 +88,6 @@
 #   login-sandbox-real-conf                         bin/fleet-login.py (conf_dir_env)
 #   opening-never-ends                              tokenledger/hub/api fleet_opening.go
 #                                                   (openingStuck, openingETAFor; go test, when a toolchain is here)
-#   drill-login-orphaned                            tokenledger/hub/api fleet_drill.go + bin/fleet-login-remove.sh
-#                                                   (closeDrillLogins, exit 4; go test, when a toolchain is here)
 #   opening-eta-climbs                              tokenledger/hub/api fleet_opening.go (openingETALeft)
 #   opened-login-fleet-silent                       tokenledger/hub/api fleet_opening.go (settling, settleWhy,
 #                                                   openingNotes, openingOver; go test); client first-open coverage is in the thin drills
@@ -119,19 +117,6 @@
 #   newcomer-login-hosts-repo                       bin/fleet-control-read.sh ready (a seed repo needs no gh — but a repo start does, #3424)
 #   login-remove-dscl-denied                        bin/fleet-node-supervisor.py (fda reading, status --check 4), bin/fleet-login-remove-ssh.sh
 #                                                   + bin/fleet-login-remove.sh (says Full Disk Access)
-#   drill-login-handed-silently                     tokenledger/hub/api fleet_drill.go (closeDrillLogins
-#                                                   handed) + store DeleteDrill (keeps the handed rows)
-#   drill-expiry-user-pod                           tokenledger/hub/api fleet_drill.go (closeDrillLogins
-#                                                   podKept / handMadePod: a pod's own login settled, its
-#                                                   endpoints kept) + store DeleteDrillKeeping
-#   cn-probe-wait-past-terminal                     bin/fleet-cn-probe.sh codex step (the new session's own terminal error)
-#   cn-probe-coarse-verdict                         bin/fleet-cn-probe.sh stages + bin/fleet-cn-probe-result.py (one result)
-#                                                   + bin/fleet-cn-probe-diag.sh (read-only, redacted)
-#   cn-probe-env-masked                             bin/fleet-cn-probe-watch.sh (a failed ensure is the run's env verdict)
-#   cn-probe-silent-stall                           bin/fleet-cn-probe-watch.sh (history.ndjson: every walk, each distinct skip;
-#                                                   a dead holder's lock taken over)
-#   cn-recover-miscount                             bin/fleet-cn-probe-recover.py (the bounded recovery round)
-#   cn-probe-sessions-left                          bin/fleet-cn-probe.sh (stop_left / left_sweep: the pod's stop by fleet id)
 #   machine-lane-reissued                           tokenledger/hub/api fleet_login_node.go (deviceNode, machineServing)
 #                                                   + store EndpointByTokenHash (prev_token_hash) + node_machine.go
 #                                                   (staleLoginTokenWhy), tokenledger/agent lane_state.go,
@@ -142,9 +127,6 @@
 #   pretrust-norepo                                 bin/fleet-trust.sh (node, grant --home), bin/fleet-claude.sh
 #   cross-send-refused-unseen                       bin/fleet-peer-send.sh (hub_send: identity sender, fleet_hub_refused,
 #                                                   receipt_watch), fleet-lib.sh fleet_hub_refused
-#   debug-bundle-leaks-secret                       bin/fleet-doctor-bundle.sh, bin/fleet_redact.py, bin/fleet-redact.awk,
-#                                                   conf/secret-shapes.list, conf/debug-collect.list
-#   debug-upload-no-python-ca                       bin/fleet-debug (report: C1's bundle, /usr/bin/curl upload)
 #   status-agent-not-up / status-perm-overwritten / status-migrated-looping / status-question-lost
 #                                                   bin/set-claude-state.sh (the primary-source rule),
 #                                                   fleet-status-7501.py pipe,
@@ -2462,76 +2444,6 @@ PY2
   SECS=$(since "$t0"); WHAT="执行会话的客户端只拿测试身份：运营者租约不变，要运营者租约被拒（403 + 原因），守卫拦没写 --test-identity 的启动"
 }
 
-# The drill's scan confirmed as the operator (issue #2010, EPIC #1906 C16): on
-# 2026-10-06 (#1901) the QR's confirm page opened in the operator's browser and
-# confirmed the drill's login AS HIM — the run walked "his second computer",
-# never a new colleague's first time. Now the drill confirms with the approve
-# code `fleet drill invite` minted (bin/fleet-drill.sh approve): a fake hub
-# keeping the real one's rule (a request carrying a session / token / cert is
-# the signed-in admin; POST /fleet/login/approve with the code is the drill
-# person — TestDrillApproveIsTheDrillPerson pins the hub's own), the operator's
-# token AND a certificate sitting right there: the confirmer must be the drill
-# person, and a used code must not confirm a second time.
-drill_drill_confirms_as_operator() {
-  CAP=60; local t0 hub out
-  t0=$(now)
-  hub="$WORK/drillhub-$$"; mkdir -p "$hub/home/.ssh"
-  printf 'k\n' > "$hub/home/.ssh/fleet-cert"; printf 'ssh-ed25519-cert-v01@openssh.com AAAA admin\n' > "$hub/home/.ssh/fleet-cert-cert.pub"
-  cat > "$hub/drive.py" <<'PY2'
-import json, os, signal, subprocess, sys, threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-signal.alarm(int(sys.argv[2]))
-DRILL, HOME = sys.argv[1], sys.argv[3]
-CODE = "fd_abcdefghijklmnopqrstuvwxyz"
-used, confirmed, log = [False], {}, []
-class H(BaseHTTPRequestHandler):
-    def log_message(self, *a): pass
-    def do_POST(self):
-        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-        admin = bool(self.headers.get("Authorization") or self.headers.get("Cookie") or body.get("cert"))
-        log.append("%s admin=%s code=%s" % (self.path, admin, "yes" if body.get("approve_code") else "no"))
-        out, st = {"error": "no such door"}, 404
-        if self.path in ("/fleet/login", "/fleet/login/approve"):
-            if body.get("approve_code"):
-                if body["approve_code"] != CODE or used[0]:
-                    out, st = {"error": "approve code unknown, already used or expired"}, 403
-                else:
-                    used[0] = True
-                    confirmed[body.get("code")] = "drill-person"
-                    out, st = {"status": "approved", "person_id": "drill-1", "kind": "drill"}, 200
-            elif admin:
-                confirmed[body.get("code")] = "admin"
-                out, st = {"status": "approved", "person_id": "admin"}, 200
-            else:
-                out, st = {"error": "nothing to confirm"}, 400
-        b = json.dumps(out).encode()
-        self.send_response(st); self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
-srv = HTTPServer(("127.0.0.1", 0), H)
-threading.Thread(target=srv.serve_forever, daemon=True).start()
-def approve(ucode):
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("FLEET_", "CCQUOTA_"))}
-    env.update(HOME=HOME, FLEET_HUB_URL="http://127.0.0.1:%d" % srv.server_address[1],
-               CCQUOTA_VIEWER_TOKEN="admin-token", FLEET_DRILL_INVITE=CODE)
-    r = subprocess.run(["bash", DRILL, "approve", ucode], env=env, capture_output=True, text=True, timeout=20)
-    return r.returncode, (r.stdout + r.stderr).strip()
-def die(why):
-    print("WHY=" + why + " | hub saw: " + " ; ".join(log)); sys.exit(1)
-rc, out = approve("ABCD-EFGH")
-if rc or confirmed.get("ABCD-EFGH") != "drill-person":
-    die("the drill's login was confirmed as %s (rc %d): %s" % (confirmed.get("ABCD-EFGH"), rc, out))
-if any("admin=True" in l for l in log):
-    die("the approve carried the operator's token / cookie / certificate")
-rc, out = approve("WXYZ-WXYZ")
-if rc != 1 or "WXYZ-WXYZ" in confirmed:
-    die("a used approve code confirmed a second login (rc %d): %s" % (rc, out))
-print("OK")
-PY2
-  out=$(python3 "$hub/drive.py" "$BIN/fleet-drill.sh" "$((CAP + 10))" "$hub/home" 2>&1)
-  [ "$out" = OK ] || { WHY=${out#WHY=}; WHY="${WHY:-the drive died}"; return 1; }
-  SECS=$(since "$t0"); WHAT="演练的扫码以演练同事确认：入口上确认人是 drill person，不带运营者的 token / 证书，确认码只能用一次"
-}
-
 # A login's wait with no answer (issue #2262, EPIC #2259 约定 5/8): the browser
 # will not open, or opens and nobody confirms (a company network blocking
 # GitHub). Before, the terminal drew a QR and waited out the code's ten minutes
@@ -2617,77 +2529,6 @@ drill_login_sandbox_real_conf() {
   case "$out" in *'belongs to'*) ;; *) WHY="it did not say it ignored the carried FLEET_CONF_DIR: [$out]"; return 1 ;; esac
   WHAT="沙箱 HOME 下带着真的 FLEET_CONF_DIR 登录：真 fleet.conf 一字不动，地址写进沙箱，并说一句为什么"
 }
-
-# `fleet drill invite` on a client-only computer (issue #2024, EPIC #1906 C17):
-# the MacBook keeps its hub in fleet.conf's guarded [client] section, which a
-# column-0 sed never saw ("no hub"); and macOS's own /usr/bin/python3 is 3.9,
-# whose datetime.fromisoformat rejects the hub's nanosecond `…Z` — the invite was
-# made on the hub and its one-time code died in a ValueError before it printed.
-# The drill: a client HOME (hub only in [client]), a hub answering a nanosecond
-# expires_at, PATH=/usr/bin:/bin — or a python3 that refuses what 3.9 refuses
-# when this box's /usr/bin/python3 is newer.
-drill_hub_time_py39() {
-  CAP=90; local t0 d py out rc   # a macOS runner's cold /usr/bin/python3 took 36s once
-  t0=$(now)
-  d="$WORK/py39-$$"; mkdir -p "$d/home/.config/claude-fleet" "$d/pybin" "$d/strict"
-  py=/usr/bin/python3
-  if ! "$py" -c 'import sys; sys.exit(0 if sys.version_info < (3, 11) else 1)' 2>/dev/null; then
-    # a python3 whose fromisoformat takes only what 3.9's does
-    cat > "$d/strict/sitecustomize.py" <<'PY2'
-import datetime as _d, re as _re
-class _D(_d.datetime):
-    @classmethod
-    def fromisoformat(cls, s):
-        if not isinstance(s, str) or s.endswith(("Z", "z")) or _re.search(r"\.(\d{1,2}|\d{4,5}|\d{7,})(?!\d)", s):
-            raise ValueError("Invalid isoformat string: %r" % (s,))
-        return super().fromisoformat(s)
-_d.datetime = _D
-PY2
-    printf '#!/bin/sh\nPYTHONPATH="%s" exec "%s" "$@"\n' "$d/strict" "$(command -v python3)" > "$d/pybin/python3"
-    chmod +x "$d/pybin/python3"
-  else
-    ln -s "$py" "$d/pybin/python3"
-  fi
-  cat > "$d/drive.py" <<'PY2'
-import json, os, signal, subprocess, sys, threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-signal.alarm(int(sys.argv[2]))
-DRILL, HOME, PYBIN = sys.argv[1], sys.argv[3], sys.argv[4]
-CODE = "fd_abcdefghijklmnopqrstuvwxyz"
-class H(BaseHTTPRequestHandler):
-    def log_message(self, *a): pass
-    def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        out, st = {"error": "no such door"}, 404
-        if self.path == "/v1/admin/drill" and self.headers.get("Authorization"):
-            out, st = {"person_id": "drill-7", "kind": "drill", "login": "drill10070547", "host": "mbp",
-                       "approve_code": CODE, "expires_at": "2026-10-07T05:47:35.272044642Z"}, 200
-        b = json.dumps(out).encode()
-        self.send_response(st); self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
-srv = HTTPServer(("127.0.0.1", 0), H)
-threading.Thread(target=srv.serve_forever, daemon=True).start()
-conf = os.path.join(HOME, ".config", "claude-fleet", "fleet.conf")
-with open(conf, "w") as f:
-    f.write('# ---- [common] ----\nFLEET_HOST=0\n\n# ---- [client] ----\n'
-            'if [ "${FLEET_SHELL:-0}" = 1 ]; then\n  CCQUOTA_HUB_URL="http://127.0.0.1:%d"\nfi\n'
-            '\n# ---- [node] ----\nif [ "${FLEET_SHELL:-0}" != 1 ]; then\n:\nfi\n' % srv.server_address[1])
-env = {k: v for k, v in os.environ.items() if not k.startswith(("FLEET_", "CCQUOTA_", "XDG_", "PYTHON"))}
-env.update(HOME=HOME, PATH=PYBIN + ":/usr/bin:/bin", TZ="UTC", CCQUOTA_VIEWER_TOKEN="admin-token")
-r = subprocess.run(["bash", DRILL, "invite", "--ttl", "5m"], env=env, capture_output=True, text=True, timeout=80)
-out = (r.stdout + r.stderr).strip()
-if r.returncode != 0 or CODE not in r.stdout:
-    print("WHY=no code printed (rc %d): %s" % (r.returncode, out.replace("\n", " | ")[:300])); sys.exit(1)
-if not any(l.startswith("到期") and "10-07 05:47" in l for l in r.stdout.splitlines()):
-    print("WHY=no expiry printed: %s" % out.replace("\n", " | ")[:300]); sys.exit(1)
-print("OK")
-PY2
-  out=$(python3 "$d/drive.py" "$BIN/fleet-drill.sh" "$((CAP + 10))" "$d/home" "$d/pybin" 2>&1); rc=$?
-  [ "$rc" = 0 ] && [ "$out" = OK ] || { WHY=${out#WHY=}; WHY="${WHY:-the drive died}"; return 1; }
-  SECS=$(since "$t0"); WHAT="客户端（入口只写在 [client] 段）用 python 3.9 跑 fleet drill invite：找到入口，纳秒时间照样打出确认码和到期"
-}
-
-
 
 # ---- phone-squeezes-window (#1933): two clients of one fleet, 160 and 50 columns,
 # each through its own view session (#1489) on the same window, under the node
@@ -4248,28 +4089,6 @@ drill_opening_never_ends() {
   SECS=$(since "$t0")
 }
 
-# ---- drill-login-orphaned (#2696): a drill whose create failed half-way (or
-# whose remove failed) was deleted at once and left its OS login on the
-# machine; a remove of a login that is not there exited 3 and read failed.
-drill_drill_login_orphaned() {
-  CAP=120; local t0 rm="$ROOT/bin/fleet-login-remove.sh" out rc
-  t0=$(now)
-  grep -q 'case store.AccountFailed:' "$ROOT/tokenledger/hub/api/fleet_drill.go" \
-    || { WHY="closeDrillLogins no longer removes a failed drill login before the person goes"; return 1; }
-  grep -q 'control.RemoveExitNoLogin' "$ROOT/tokenledger/hub/api/fleet_accounts.go" \
-    || { WHY="the hub no longer reads a remove of a missing login as removed"; return 1; }
-  # the script half, for real: a login this machine does not have → exit 4
-  # (as root the script refuses before it looks — exit 3 — so only the greps there)
-  if [ "$(id -u)" != 0 ]; then
-    out=$(bash "$rm" "zz$(date +%s)nologin" --apply 2>&1); rc=$?
-    [ "$rc" = 4 ] || { WHY="fleet-login-remove.sh on a missing login: exit $rc (want 4): $out"; return 1; }
-  fi
-  _drill_go_tests 'TestDrillFailedCreateIsRemovedBeforeItGoes TestDrillFailedRemoveIsRetriedExistingIsLeft' \
-    "$ROOT/tokenledger/hub/api/fleet_drill_test.go" \
-    '开号失败 / 收号失败的演练登录先收掉才删人，机器上没有这个登录 → 退 4 → removed；撞上已有登录的不碰（go test + 真跑一次 remove）' || return 1
-  SECS=$(since "$t0")
-}
-
 # ---- opening-eta-climbs (#2728): past the machine's median the ETA switched to
 # the time left until the give-up — a number that jumps UP (313 s, then 858 s).
 # Now one countdown that starts at the median and only goes down.
@@ -4674,88 +4493,6 @@ drill_spare_wash_respawn() {
   WHAT='停完之后、洗号之前 launchd 又给该 uid 拉起 distnoted → 洗号记时钟前再 bootout + 杀一轮、旧家挪走后再一轮：reset: clean（沙盒真跑检查器，旧脚本此处报 dirty processes）'
   SECS=$(since "$t0")
 }
-
-# ---- drill-login-handed-silently (#2728): a drill whose login could not be
-# closed (a create nobody answered, a remove an hour stuck, a name already
-# there) was deleted with every account row — the OS login stayed on its
-# machine and the hub forgot it. Now an unanswered create is waited out, and a
-# login handed to the operator keeps its rows and is named in the 200.
-drill_drill_login_handed_silently() {
-  CAP=120; local t0
-  t0=$(now)
-  grep -q 'handed = append(handed, a)' "$ROOT/tokenledger/hub/api/fleet_drill.go" \
-    || { WHY="closeDrillLogins no longer names the logins it hands to the operator"; return 1; }
-  grep -q 'keepHosts' "$ROOT/tokenledger/hub/store/fleet_drill.go" \
-    || { WHY="DeleteDrill no longer keeps the rows of a login left on a machine"; return 1; }
-  _drill_go_tests 'TestDrillUnknownCreateIsWaitedThenHanded' "$ROOT/tokenledger/hub/api/fleet_drill_test.go" \
-    '开号没回音的演练登录先等、一小时后交还运营者：200 带 left_for_operator，账户行留着（go test）' || return 1
-  SECS=$(since "$t0")
-}
-
-# ---- drill-expiry-user-pod (#4297): the China probe's drill person lived on a
-# person's pod made by hand (u-drillcn4150). At expiry the hub sent its login a
-# remove; the pod refused it for good (rc 2 「pod keeps its one login」), and the
-# hub re-sent it every minute for an hour — the row failed, the pod off the
-# person's list, a new invite of the same login refused. Now a login on a pod
-# the hub did not make is settled with no remove, and that refusal is final.
-drill_drill_expiry_user_pod() {
-  CAP=120; local t0
-  t0=$(now)
-  grep -q 'podKeepsLogin = "pod keeps its one login"' "$ROOT/tokenledger/hub/api/fleet_drill.go" \
-    || { WHY="closeDrillLogins no longer knows the pod's final refusal"; return 1; }
-  grep -q 'DeleteDrillKeeping(d.PrincipalID, actor, now, hosts, s.handMadePod)' "$ROOT/tokenledger/hub/api/fleet_drill.go" \
-    || { WHY="deleteDrill retires a hand-made pod's endpoints again — the pod falls off the hub"; return 1; }
-  grep -q "pod keeps its one login" "$ROOT/bin/fleet-node-linux.py" \
-    || { WHY="fleet-node-linux's pod refusal changed its words — closeDrillLogins would retry it again"; return 1; }
-  _drill_go_tests 'TestDrillLoginOnUserPodIsSettledNotRetried' "$ROOT/tokenledger/hub/api/fleet_drill_test.go" \
-    '个人 pod 上的演练登录到期即结清：不发 remove、rc 2 不重试，人立即删、同名登录马上能再邀、pod 不掉线（go test）' || return 1
-  SECS=$(since "$t0")
-}
-
-# ---- cn-probe-* (#4303): the China probe waited 300 s past a 403 the new Codex
-# session had already shown (#4290), compressed every cause into one coarse layer
-# (#4301: «no logins to serve» while the account opener was off), and walked on
-# past a failed ensure. Each drill runs its leg of bin/fleet-cn-probe-selftest.sh:
-# the REAL probe and diagnosis against stub ssh / tmux / fleet in a sandbox HOME.
-cnprobe_leg() {   # cnprobe_leg <leg> <cap> <what>
-  CAP=$2; local t0 out
-  [ -f "$BIN/fleet-cn-probe-diag.sh" ] && [ -f "$BIN/fleet-cn-probe-result.py" ] \
-    || { WHY="no bin/fleet-cn-probe-diag.sh / fleet-cn-probe-result.py — the probe has one coarse verdict and no diagnosis"; return 1; }
-  t0=$(now)
-  out=$(CNP_LEG=$1 bash "$BIN/fleet-cn-probe-selftest.sh" 2>&1) \
-    || { WHY="$(printf '%s\n' "$out" | grep -E 'selftest FAIL|rror' | head -3 | tr '\n' ' ')"; return 1; }
-  SECS=$(since "$t0")
-  WHAT=$3
-}
-drill_cn_probe_wait_past_terminal() { cnprobe_leg H 120 "新会话屏上 403「no upstream credential」⇒ 10 s 内失败、reason upstream_no_credential；重试中的 429、历史日志和别的窗口里的旧错误不算；慢回答照通，不答照样等到时限"; }
-drill_cn_probe_coarse_verdict() {
-  cnprobe_leg J 120 "x" || return 1
-  local s1=$SECS
-  cnprobe_leg K 120 "x" || return 1
-  SECS=$(python3 -c 'import sys; print("%.1f" % (float(sys.argv[1]) + float(sys.argv[2])))' "$s1" "$SECS")
-  WHAT="诊断写明真实拒绝者与读数（1.51 of 1.00 cores, 59% throttled）、开号器为何关（运行时组可写）、身份过期判 env；0600、无凭据；文本与退出码出自 result.json，阶段带起止 / 耗时 / reason_code / 证据"
-}
-drill_cn_probe_env_masked() { cnprobe_leg I 60 "ensure 失败 ⇒ 本轮 env · ensure:identity，不跑探针、不开会话，原话留证，单标题「国内探针环境无效」"; }
-# ---- cn-probe-silent-stall / cn-recover-miscount (#4304): the patrol left no
-# trace of a manual run or of why a tick did not walk, and a fix waited the
-# throttle (6 h after a green) before anyone could count three greens.
-drill_cn_probe_silent_stall() { cnprobe_leg M 60 "手动 --now 的绿也进 history.ndjson；节流 / 锁占用按理由只记一次；主人已死的锁当场接管并记下；--recover 之后每个 tick 是一轮恢复验证，3 次通过即止，回到节流"; }
-drill_cn_probe_sessions_left() { cnprobe_leg N 120 "客户端 fleet close 失败 ⇒ pod 上按 fleet id 停掉（fleet-worker-stop.sh fid:）；两条路都不行 ⇒ 记进 .left-sessions，下一轮先收"; }
-# ---- cn-probe-relays-left (#4283): the deleted two-pane client kept running on
-# the drill login; its warm loop held ~120 ssh lines, each a hub relay on the
-# relay route, and the hub said TOO_MANY. The thin client retires an unattended
-# old client, retire stops its warm lines and ignores the stage's own viewer, and
-# the probe leaves no line open on the client.
-drill_cn_probe_relays_left() {
-  cnprobe_leg O 120 "x" || return 1
-  local s1=$SECS t0 out
-  t0=$(now)
-  out=$(bash "$BIN/fleet-client-retire-selftest.sh" 2>&1) \
-    || { WHY="$(printf '%s\n' "$out" | grep -E 'selftest FAIL' | head -2 | tr '\n' ' ')"; return 1; }
-  SECS=$(python3 -c 'import sys; print("%.1f" % (float(sys.argv[1]) + float(sys.argv[2])))' "$s1" "$(since "$t0")")
-  WHAT="旧客户端（warm 循环 + 它的 ssh 主连接）在探针前被退役、本轮留下的 fleet-connect 线路在探针后被关，别的登录的线路不碰；stage 上旧 viewer 自己的 attach 不算有人在看；薄客户端起来时在后台退役没人看的旧客户端"
-}
-drill_cn_recover_miscount() { cnprobe_leg L 60 "重复触发只一轮；崩掉的一轮 abandoned 不计；红 / env / 半截 / 版本读不到或不符 / 时钟倒退都不计；换向量从 1 重数；3 次独立完整通过才 done；6 轮 / 时限到即 exhausted"; }
 
 # ---- heartbeat-sys-blocked (#2798): the beat ran the fleet probe before it
 # read the load, under one observed_at, and the hub folded a machine's load from
@@ -5287,98 +5024,6 @@ drill_cross_send_refused_unseen() {
     || { WHY="the delivery book does not say FAILED: $(tail -1 "$c/conf/fleets/xs/delivery.ndjson" 2>/dev/null)"; return 1; }
   SECS=$(since "$t0")
   WHAT="没有键的会话用身份发、入口收下；被拒的当场退出 1，账本记 FAILED、原因在 stderr"
-}
-
-# debug-bundle-leaks-secret (issue #2890, EPIC #2889 C1): a diagnosis bundle is
-# built on a computer whose whitelisted logs carry one credential of every kind
-# 共同约定第 1 条 names, and whose ~/.ssh / hub.json / secrets.env hold more.
-# The check is LITERAL — each planted value grepped in the bundle, never through
-# conf/secret-shapes.list — so a new kind planted here that the table does not
-# cover turns this red. Both redactors (python, awk) build a bundle.
-drill_debug_bundle_leaks_secret() {
-  CAP=60; local d="$WORK/dbl" t0 r v left='' lg
-  mkdir -p "$d/home/.cache/claude-fleet/shell/logs" "$d/home/.ssh" "$d/conf"
-  lg="$d/home/.cache/claude-fleet/shell/logs"
-  set -- ghp_FAKEaaaaaaaaaaaaaaaaaaaaaaaa1 github_pat_11FAKEbbbbbbbbbbbbbbbbbbbbb sk-ant-api03-FAKEcccccccccccc \
-         b3BlbnNzaC1rZXktdjEFAKEdddddddddd MIIEowIBAAKCAQEAFAKEeeeeeeeeeee Zm9vOkZBS0VhdXRoaGVhZGVy \
-         sid_FAKEcookieggggg FAKEurlsighhhhh FAKEenvpasswordiii FAKEhubjsontokenjjj fdt.FAKEticketkkk \
-         eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJGQUtFbGxsbGxsIn0.FAKEsig NOTLISTED_cert NOTLISTED_hubjson NOTLISTED_secrets
-  { printf 'connect mac-b relay token %s\nclone with %s\nkey %s\n' "$1" "$2" "$3"
-    printf -- '-----BEGIN OPENSSH PRIVATE KEY-----\n%s\n-----END OPENSSH PRIVATE KEY-----\n' "$4"
-    printf -- '-----BEGIN RSA PRIVATE KEY-----\n%s\n-----END RSA PRIVATE KEY-----\n' "$5"
-    printf '> Authorization: Basic %s\n< Set-Cookie: sid=%s; Path=/\n' "$6" "$7"
-    printf 'GET https://hub.example/v1/x?a=1&sig=%s\nexport DB_PASSWORD=%s\n' "$8" "$9"
-    printf '{"url": "https://hub.example", "token": "%s"}\nfleet-debug ticket %s\njwt %s\n' "${10}" "${11}" "${12}"
-  } > "$lg/connect.log"
-  printf 'place mac-b → No machine can take it\n' > "$lg/place.log"
-  printf '%s\n' "${13}" > "$d/home/.ssh/fleet-cert"
-  printf '{"token": "%s"}\n' "${14}" > "$d/conf/hub.json"
-  printf 'FLEET_X=%s\n' "${15}" > "$d/conf/secrets.env"
-  t0=$(now)
-  for r in python awk; do
-    ( unset FLEET_HUB_URL HTTPS_PROXY https_proxy
-      export HOME="$d/home" FLEET_CONF_DIR="$d/conf" TMPDIR="$WORK" FLEET_REDACT=$r FLEET_BUNDLE_NET=0 \
-             FLEET_BUNDLE_DOCTOR_CMD="printf '  FAIL  cert     GITHUB_TOKEN=$1\n'; exit 1"
-      sh "$BIN/fleet-doctor.sh" --bundle "$d/b-$r" >/dev/null 2>&1 ) \
-      || { WHY="the $r bundle was not built (exit $?)"; return 1; }
-    [ -s "$d/b-$r/logs/connect.log" ] || { WHY="the $r bundle has no logs/connect.log"; return 1; }
-    for v in "$@"; do
-      grep -rqF -e "$v" "$d/b-$r" && left="$left $r:$v"
-    done
-  done
-  SECS=$(since "$t0")
-  [ -z "$left" ] || { WHY="credentials left in the bundle:$left"; return 1; }
-  WHAT="十二类假凭据 + 白名单外三个文件：两种去密码实现打出的包里一处不剩"
-}
-
-# debug-upload-no-python-ca (issue #2892, EPIC #2889 C3): the sender runs on a
-# computer whose only python3 dies on `import ssl` (#2878's python.org Python with
-# no CA store, at its worst) and whose fleet never installed — the copy GET /debug
-# serves, from stdin. It must still pack, upload over curl and print the short
-# link; a sender that leans on Python anywhere on that road turns this red.
-drill_debug_upload_no_python_ca() {
-  CAP=60; local d="$WORK/dnp" t0 f n py out rc
-  py=$(command -v python3) || { WHY="the fake hub needs a python3"; return 1; }
-  [ -f "$BIN/fleet-debug" ] || { WHY="no bin/fleet-debug"; return 1; }
-  mkdir -p "$d/nopy" "$d/home/conf" "$d/home/.cache/claude-fleet/shell/logs"
-  for f in /bin/* /usr/bin/* /usr/sbin/* /sbin/*; do
-    n=${f##*/}; case $n in python*|pydoc*) continue ;; esac
-    [ -e "$d/nopy/$n" ] || ln -s "$f" "$d/nopy/$n" 2>/dev/null
-  done
-  printf '#!/bin/sh\necho "No module named _ssl" >&2\nexit 1\n' > "$d/nopy/python3"; chmod +x "$d/nopy/python3"
-  printf 'fdt1.eyJpZCI6ImRucCJ9.c2ln\n' > "$d/home/conf/debug-ticket"
-  printf 'relay-end\tmac-b\tclosed by hub\n' > "$d/home/.cache/claude-fleet/shell/logs/connect.log"
-  cat > "$d/hub.py" <<'PY'
-import http.server, json, os, sys
-d = sys.argv[1]
-class H(http.server.BaseHTTPRequestHandler):
-    def log_message(self, *a): pass
-    def do_POST(self):
-        b = self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        ok = self.path == "/v1/fleet/debug/bundle" and self.headers.get("Authorization", "").startswith("FleetDebug ") \
-             and b'name="bundle"' in b
-        out = json.dumps({"id": "dnp2345a", "url": "http://hub.test/s/dnp2345a"}).encode() if ok else b"bad\n"
-        self.send_response(200 if ok else 400); self.send_header("Content-Length", str(len(out))); self.end_headers()
-        self.wfile.write(out)
-s = http.server.HTTPServer(("127.0.0.1", 0), H)
-open(os.path.join(d, "port.tmp"), "w").write(str(s.server_address[1])); os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
-s.serve_forever()
-PY
-  "$py" "$d/hub.py" "$d" & local hub=$!
-  for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$d/port" ] && break; sleep 0.2; done
-  [ -s "$d/port" ] || { kill "$hub" 2>/dev/null; WHY="the fake hub did not start"; return 1; }
-  # the copy GET /debug serves: the kit spliced in (fleet_debug_script.go)
-  awk -v root="$BIN/.." -v hub="http://127.0.0.1:$(cat "$d/port")" '
-    index($0, "__FLEET_DEBUG_EMB__ ") == 1 { f = root "/" substr($0, 21); while ((getline l < f) > 0) print l; close(f); next }
-    { gsub(/__FLEET_HUB_URL__/, hub); print }' "$BIN/fleet-debug" > "$d/served.sh"
-  t0=$(now)
-  out=$(env -i HOME="$d/home" PATH="$d/nopy" TMPDIR="$WORK" FLEET_CONF_DIR="$d/home/conf" \
-          FLEET_DEBUG_HWID=drill-hw FLEET_DEBUG_CACHE="$d/pkgs" FLEET_BUNDLE_NET=0 sh -s report < "$d/served.sh" 2>&1); rc=$?
-  SECS=$(since "$t0")
-  kill "$hub" 2>/dev/null; wait "$hub" 2>/dev/null
-  [ "$rc" = 0 ] || { WHY="fleet-debug report exited $rc: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')"; return 1; }
-  printf '%s\n' "$out" | grep -q 'http://hub.test/s/dnp2345a' || { WHY="no short link printed: $(printf '%s\n' "$out" | tail -n 1)"; return 1; }
-  WHAT="唯一的 python3 连 import ssl 都失败、没装 fleet：curl … | sh -s report 照样打包、用 curl 送上、打出短链接"
 }
 
 # A migrate opened the new window with its identity but not its @fleet_role /
@@ -6382,15 +6027,6 @@ print(" ".join(a["id"] for a, _ in fv.menu_of(r)))' "$BIN" 2>&1)
   [ "$(grep -vc -- --dry-run "$d/calls")" = 1 ] && grep -qx -- "--session fa --window $win --to codex --from-panel" "$d/calls" \
     || { WHY="the transfer was not dispatched exactly once: $(cat "$d/calls")"; return 1; }
   WHAT="别的机器上的会话也能换 Codex：菜单有这一项；那台机器上回合中 / 窗口换人 / 已是该 agent 一行拒绝、什么都不派，空闲的派一次 fleet-transfer.sh"
-}
-
-drill_idle_activity_between_probes() {
-  CAP=60; local t0 out
-  t0=$(now)
-  out=$(bash "$BIN/fleet-idle-edges-selftest.sh" 2>&1) \
-    || { WHY="short-lived worker activity certified idle: $out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='真实 hook 同秒往返、创建后回收均拒绝空闲；只排除调用者，并发观察不吞活动'
 }
 
 drill_hubsess_unwatched_poll() {

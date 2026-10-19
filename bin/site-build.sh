@@ -74,8 +74,8 @@
 #                                         the stopwatch and the drill's date
 #   slowest of the runs > 60 s          → the measured time in place of "60 秒"
 #                                         (e.g. "75 秒", "约 3 分钟"), and a RED: line
-# The drill file: bin/site-drill.py writes it from a `fleet-onboard-drill.sh
-# --hub prod --runs 3 --out <dir>` run (issue #3589, C19 — see its header):
+# The drill file (issue #3589, C19; the drill tools that wrote it left with
+# #4904 — a file written by hand from a measured run reads the same):
 #   {"date": "YYYY-MM-DD", "runs": [{"total": 46.2,
 #     "steps": {"login": 8.1, "machine": 6.0, "first": 32.1},
 #     "screens": {"login": "…", "machine": "…", "first": "…"}}, …]}
@@ -155,8 +155,7 @@ if os.path.isfile(DRILL):
             if total > 60:
                 reds.append('slowest drill run took %.1f s (> 60): the page says the measured time, not 60' % total)
             if not drill['screens']:
-                reds.append('the slowest drill run carries no screens: the steps keep the design\'s pictures '
-                            '(bin/site-drill.py writes them)')
+                reds.append('the slowest drill run carries no screens: the steps keep the design\'s pictures')
     except Exception as e:   # a broken file is no measurement
         why = 'drill result unreadable: %s' % e
         reds.append(why)

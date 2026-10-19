@@ -8,7 +8,7 @@ import (
 )
 
 // The spend side's issue number: where it comes from, and what it refuses to
-// guess. Design: docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md
+// guess.
 //
 // A branch name is the only issue signal the hub already holds -- it arrives on
 // every event from both sources (shared/scan/parse.go:27,

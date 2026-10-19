@@ -18,8 +18,8 @@
 #                own disowned job — a live pane in the anchor spares every orphan.
 #   • SCRATCHPAD a window's orphan whose cwd is its SESSION scratchpad (the
 #                mangled-cwd dir under the claude root) dies with the window.
-#   • SCOPE      an orphan in a plain dir, and an exempt one (doc-preview's
-#                server.py), survive a sweep.
+#   • SCOPE      an orphan in a plain dir, and an exempt one (a tunnel,
+#                cloudflared), survive a sweep.
 #   • LEASE      an orphan in a worktree under a rotation lease (#550) survives.
 #   • OFF        FLEET_WINDOW_REAP=0 makes --hook a no-op.
 #   • AGED       fleet-diskguard.sh --tree-watch (the tick's backstop, issue #4360)
@@ -105,12 +105,12 @@ ok "CONF: window-unlinked / pane-exited / after-kill-pane run the sweeper"
 
 # ── SCOPE / LEASE (direct sweeps, no tmux) ──────────────────────────────────────
 orphan "$PLAIN"; P_PLAIN="$ORPHAN"
-orphan "$WT3" /x/skills/doc-preview/server.py; P_EXEMPT="$ORPHAN"
+orphan "$WT3" /x/bin/cloudflared; P_EXEMPT="$ORPHAN"
 mkdir -p "$WORK/wt/repo-issue-904"; orphan "$WORK/wt/repo-issue-904"; P_LEASE="$ORPHAN"
 fleet_rotate_lease_take "$WORK/wt/repo-issue-904" selftest 600 || fail "LEASE: could not take a lease"
 dry="$(fleet_reap_orphan_trees dry)"
 printf '%s\n' "$dry" | grep -q "would reap $P_PLAIN " && fail "SCOPE: an orphan in a plain dir is a candidate" "$dry"
-printf '%s\n' "$dry" | grep -q "would reap $P_EXEMPT " && fail "SCOPE: doc-preview's server is a candidate" "$dry"
+printf '%s\n' "$dry" | grep -q "would reap $P_EXEMPT " && fail "SCOPE: the exempt tunnel is a candidate" "$dry"
 printf '%s\n' "$dry" | grep -q "would reap $P_LEASE " && fail "LEASE: an orphan under a rotation lease is a candidate" "$dry"
 bash "$BIN/fleet-window-reap.sh" --once >/dev/null
 alive "$P_PLAIN" && alive "$P_EXEMPT" && alive "$P_LEASE" || fail "SCOPE/LEASE: a spared orphan was killed"

@@ -32,7 +32,6 @@
 - [DRAFT-PR.md](dev/DRAFT-PR.md) — 草稿单：worker 只开草稿 PR，批准后再合
 - [WORKER.md](dev/WORKER.md) — 执行会话说明书的规则背景与排障（开工只读 `/fleet-claim`）
 - [TASK-ACCEPTANCE.md](dev/TASK-ACCEPTANCE.md) — 无 GitHub 任务控制：12 项夹具验收与独立的 live 演练单
-- [C9-ISOLATION.md](dev/C9-ISOLATION.md) — C9 测试专用访问隔离、整树观察与逐端点计数入口
 - [TASK-BLOCKERS.md](dev/TASK-BLOCKERS.md) — 显式 blocker 的身份、依赖事件、授权与只读消费契约
 - [REAP-SHADOW.md](dev/REAP-SHADOW.md) — 同源回收证据聚合、影子差异和 not-actionable 边界
 - [WORKER-SLEEP.md](dev/WORKER-SLEEP.md) — worker 休眠与唤醒
@@ -59,10 +58,8 @@
 - [HOST.md](dev/HOST.md) — 只跑会话的 Mac 怎么设
 - [SHARED-MACHINE.md](dev/SHARED-MACHINE.md) — 一台机器一人一个登录
 - [MULTI-MACHINE-OPS.md](dev/MULTI-MACHINE-OPS.md) — 多机运维手册
-- [CN-PROBE.md](dev/CN-PROBE.md) — 国内真实用户路径巡检：探针、定时巡检、挡 stable 前移
 - [MULTI-ACCOUNT.md](dev/MULTI-ACCOUNT.md) — 多个订阅账号与自动切换
 - [CRED-SEPARATE.md](dev/CRED-SEPARATE.md) · [CRED-RELAY.md](dev/CRED-RELAY.md) — 凭据隔离、凭据转发
-- [PHONE-MCP.md](dev/PHONE-MCP.md) — 手机 MCP
 
 **记录与计划**
 

@@ -307,7 +307,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   + drill, watch it go red, then fix.
 - **A fault is ONE issue, whatever commit it is red on** (issues #2078, #4271;
   EPIC #2074 C7). Every automatic filer — the master probe, `fleet-macos-watch.sh`,
-  `fleet-cn-probe-watch.sh`, `fleet-nightly-miss.sh`, `fleet-train-quarantine.sh` —
+  `fleet-nightly-miss.sh`, `fleet-train-quarantine.sh` —
   goes through `fleet-issue-file.sh --breakage[-key <channel>-<failed step>]`, and
   the key NEVER carries a sha (`ci-<job · error line>`, `macos-<tests>`,
   `cn-path-<layer>`, `nightly-<test>`, `flaky-<test>`, `selftest-quarantine.<test>`).
@@ -332,7 +332,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `docs/dev/BREAK-IT.md` `breakage-three-filers` / `breakage-no-flag` /
   `breakage-new-sha` + `fleet-issue-file-selftest.sh` O–T, Y pin it.
   **One patrol** (issue #4271, docs/dev/PATROLS.md): the diskguard tick's watchers
-  only PRODUCE (macos-watch, cn-probe — they file, and alert only on a new or
+  only PRODUCE (macos-watch — it files, and alerts only on a new or
   reopened issue, plus macOS' once-per-streak held-back alert); the patrol is ONE
   steward session's `/loop` (`spawn agent:steward`), opened by a person, never a
   second beside it; an orchestrator does not patrol.
@@ -454,8 +454,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   found or unreadable ⇒ the spawn refuses before any window, naming the file
   (BREAK-IT `agent-file-broken`). No `--as` ⇒ the shipped `fleet-worker` when it
   is there, else a plain session given the ticket. The core ships
-  `conf/agent-defaults/claude/agents/` (fleet-worker, and until its plugin
-  carries it fleet-debugger) into `~/.claude/agents` through
+  `conf/agent-defaults/claude/agents/` (fleet-worker, orchestrator, steward)
+  into `~/.claude/agents` through
   install-apply's `agent files` step (`fleet-agent-def.py ship`): written once,
   following the release while still the fleet's bytes, never touched once edited
   (the person's override) or deleted (`agents-shipped.json` remembers); one the
@@ -475,8 +475,9 @@ one-off drill / audit records do not go in the repo (issue #3576).
 - **This repo is a plugin marketplace; EPIC batches and the other optional parts
   are its plugins** (issue #3112, EPIC #3111 C1).
   `.claude-plugin/marketplace.json` lists the core `fleet` (source `./`) and
-  `plugins/fleet-epic` · `fleet-browser` · `fleet-feedback` · `fleet-infra`
-  (fleet-orchestrate and fleet-steward are gone, issues #4340 / #4339 / #4790),
+  `plugins/fleet-epic` · `fleet-browser` · `fleet-infra`
+  (fleet-orchestrate, fleet-steward and the feedback plugin are gone, issues
+  #4340 / #4339 / #4790 / #4904),
   each a standard plugin (skills ·
   commands · agents · hooks/hooks.json · .mcp.json). **Nothing installs them but
   Claude Code's `/plugin`** (`claude plugin install|uninstall|enable|disable`);
@@ -755,8 +756,8 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   jobs) is filed once as a breakage by `bin/fleet-macos-watch.sh` (diskguard tick →
   `fleet-issue-file.sh --breakage`) and raised as one `breakage` alert, plus one
   more when the red streak is older than `FLEET_MACOS_STALE_SECS` (2 h) — no fixer
-  is spawned (issue #3120). Gate 9 (`cn:`) refuses only on the product's red: a
-  China-path status of class env / probe is said and passes. A problem that ships is taken back by ONE command,
+  is spawned (issue #3120). Gate 9 (the China path) is retired with its probe
+  (#4904). A problem that ships is taken back by ONE command,
   `bin/fleet-release-rollback.sh <PR|sha> [--hub-tag prod-<sha7>]` (a revert PR
   merged at once in a clone of its own, the train ships it; `--hub-tag` puts the
   hub back on that image now). **The selection's backstop is a nightly full run**
@@ -902,7 +903,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   `&`, an MCP server's headless browser die seconds after the close, not days
   later. tmux cannot say which worktree the closed window had and macOS has no
   session id, so the liveness of the anchor is the whole rail: another window in
-  the same worktree spares everything there. Exempt argv (doc-preview, the
+  the same worktree spares everything there. Exempt argv (a tunnel, the
   fleet's own detached scripts) anywhere in the tree spares it; a rotation lease
   spares the worktree; `FLEET_WINDOW_REAP=0` turns it off; reaps are logged in
   `diskguard/window-reap.log`.

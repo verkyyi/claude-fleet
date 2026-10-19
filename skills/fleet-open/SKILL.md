@@ -1,6 +1,6 @@
 ---
 name: fleet-open
-description: Open a page, report, PR, local dev server or file on the OPERATOR's own computer (the iTerm2 they SSH in from) — never on this machine. Use whenever the operator should look at something in a browser — a doc-preview page, a GitHub PR or issue, a `localhost`/`127.0.0.1` dev server or preview running here, a report — or open a file. Never run `open <url>` / `open <file>` from a fleet session: it opens on the Mac mini's own screen, where nobody is sitting.
+description: Open a page, report, PR, local dev server or file on the OPERATOR's own computer (the iTerm2 they SSH in from) — never on this machine. Use whenever the operator should look at something in a browser — a GitHub PR or issue, a `localhost`/`127.0.0.1` dev server or preview running here, a report — or open a file. Never run `open <url>` / `open <file>` from a fleet session: it opens on the Mac mini's own screen, where nobody is sitting.
 ---
 
 # fleet-open — show the operator a page on THEIR computer
@@ -26,8 +26,6 @@ opens it in their browser. It is a call to the fleet's tool service (issue #1811
 | `:5173/` | a server HERE, by port |
 | `http://localhost:3000/dashboard` | same thing |
 | `report.pdf` | a file → their ~/Downloads |
-
-A doc to host and open in one step: `~/.claude/skills/doc-preview/share.sh --open report.md`.
 
 A page served on THIS machine (`:port`, `localhost`, `127.0.0.1`, or this machine's own
 tailnet name) is opened through an SSH port forward the operator's side sets up — so a dev
@@ -56,8 +54,8 @@ too, whose link to this one carries it.
   (the client runs on their computer), `给链接` only (a phone / iPad at the far end of an
   ssh: give them a link they can tap, tailnet address first), `iTerm2`. Never guess it.
 - **Never `open`** a URL or file from a fleet session. Use `fleet-open`.
-- **Docs to READ** (Markdown / HTML) still go through doc-preview — `share.sh --open <file>`
-  hosts it and opens it in one step (add `--local` when there is no tailnet).
+- **Docs to READ** (Markdown / HTML): open the file itself (`fleet-open.sh <file>` hands it
+  to `fleet-show.sh`), or serve the folder on 127.0.0.1 and open `:port/<file>`.
 - **Images / PDFs to LOOK at** can also go through `mcp__fleet__show` (`inline: true` draws
   an image in the terminal); `open` with a file is the same download. Its answer (issue #3541):
   `saved:<path>` — on THEIR computer, tell them where · `unconfirmed` — handed over, no

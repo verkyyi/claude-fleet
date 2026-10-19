@@ -5,7 +5,7 @@ description: >-
   /fleet-epic-plan hosts before the operator confirms a batch, and the batch
   report /fleet-epic-report hosts after it ends — so the operator reads the pair
   as one document. Use when either command builds its page: copy template.html,
-  keep the <style> and the section ids, fill the ⟨slots⟩, share via doc-preview.
+  keep the <style> and the section ids, fill the ⟨slots⟩, open it on the operator's computer.
 ---
 
 # epic-page — the shared frame for the EPIC trio's pages
@@ -23,8 +23,8 @@ shared source: one `template.html`, one `<style>`, one set of section ids.
 
 ```sh
 cat ~/.claude/fleet/plugins/fleet-epic/skills/epic-page/template.html     # read the frame, then write your page
-~/.claude/skills/doc-preview/share.sh <page.html> # host it; relay the READY URL
-~/.claude/skills/doc-preview/share.sh --refresh   # after editing the SAME file — URL unchanged
+(cd <scratchpad> && python3 -m http.server --bind 127.0.0.1 <port> >/dev/null 2>&1 &)   # once; dies with the session
+# then the fleet `open` tool, target `:<port>/<page.html>` (fleet-open.sh outside a session)
 ```
 
 - **Keep** the `<style>` block verbatim and every `id=` on `<section>` /
@@ -34,11 +34,10 @@ cat ~/.claude/fleet/plugins/fleet-epic/skills/epic-page/template.html     # read
   (the fixed Chinese labels are this fleet's default — translate them if the
   theme is in another language; keep the ids).
 - **Drop** the sections the other page owns — each is marked PLAN ONLY /
-  REPORT ONLY / BOTH in the file. Never add UX chrome — doc-preview's viewer is
+  REPORT ONLY / BOTH in the file. Never add UX chrome — the page is
   reading/print-first by design.
-- **Re-render, don't re-share.** `share.sh <file>` APPENDS a new row with a new
-  URL every time; edit the same file and run `share.sh --refresh` so the operator's
-  open tab and the URL you already relayed stay valid.
+- **Re-render, don't re-send.** Edit the same file under the same server: the
+  address you already opened stays valid, the operator reloads it.
 
 ## One page, two layers (issue #839)
 
@@ -92,15 +91,14 @@ difference; `/fleet-epic-plan` step 4 numbers them 0 and 16–23, same wording.
    the new format and read it with every fold closed, before you write a word:
 
    ```sh
-   ~/.claude/skills/doc-preview/share.sh --list | grep -i epic      # the header line is the base URL
-   ~/.claude/fleet/bin/epic-page-surface.sh <base-url>/d/<id>/      # its surface, folds stripped
+   ~/.claude/fleet/bin/epic-page-surface.sh <an approved page.html>   # its surface, folds stripped
    ```
 
    The current 样例页 is **EPIC #787 「Multi-repo fleet」** (the `Multi-repo fleet`
    row). Read how its subtitle stops, how its metrics count known failures, how
-   its 为谁 names one person — then write yours to that bar. A tailnet page dies
-   on reboot: if #787's row is gone, pick the newest approved plan page, and
-   update this line when a better one exists.
+   its 为谁 names one person — then write yours to that bar. If you have no copy
+   of #787's page, pick the newest approved plan page, and update this line when
+   a better one exists.
 - **When the theme is a question, the surface answers it first — 先回答.** A theme
   like 「别人怎么做、我们该怎么做、价值在哪」 is answered at the top of `#charter`,
   not in a fold: the frame's optional 先回答 slot — a 3–4 row plain table 别人怎么做
@@ -125,14 +123,14 @@ difference; `/fleet-epic-plan` step 4 numbers them 0 and 16–23, same wording.
 - **A visual member ships a clickable prototype** (issue #1754; rule 24 in
   `/fleet-epic-plan`). A member that changes something the user sees — dash /
   侧栏 rows, 状态栏, 弹出菜单, 网页, 小程序 pages, a report page's 样式 — gets a
-  single-file HTML prototype in the scratchpad, hosted by `share.sh`, linked
+  single-file HTML prototype in the scratchpad, served beside the page, linked
   from the card's **upper layer** with the frame's
   `<p class="proto"><a href="…">▶ 打开可交互原型</a></p>` (under 怎么算成功,
   never in the fold). It uses the real data shape (no lorem), switches the key
   scenarios (another device, 失联, 空态, 出错), compares 现在 / 改后, answers
   clicks AND keys, works at phone width, and explains itself without the design
   page. An ASCII sketch or a still is not a delivery. Edit the design → edit the
-  prototype, `share.sh --refresh` (same URL). At filing the link rides in the
+  prototype (same address). At filing the link rides in the
   member's body as `**交互原型**：<url>` beside 上线证据. A non-visual member
   drops the `.proto` line.
 - **需要你定的事 is real decisions only** — each row a genuine either/or with one
@@ -184,7 +182,7 @@ line a worker can follow before landing and the report can collect afterwards �
 a URL to screenshot, a command whose output to keep, a pane to `capture-pane`.
 Write it so both can act on it without asking.
 
-Artifact publishing is hook-blocked inside fleet sessions (issue #526); doc-preview
-is the host, and its URL is tailnet-only and dies with the next reboot — which is
-why the plan writes the page's content back into the issues, and the report posts
-its durable half as a comment.
+Artifact publishing is hook-blocked inside fleet sessions (issue #526); the page
+is served on this machine's loopback and opened on the operator's computer, and
+its address dies with the session — which is why the plan writes the page's
+content back into the issues, and the report posts its durable half as a comment.

@@ -80,9 +80,6 @@ func (s *Store) RekeyPrincipal(from, to, displayName, actor string, at time.Time
 	if strings.EqualFold(from, to) {
 		return nil, errors.New("rekey: the two principal ids are the same person")
 	}
-	if s.IsDrill(from) || s.IsDrill(to) {
-		return nil, errors.New("rekey: a drill person is not re-keyed — delete the drill instead")
-	}
 	tx, err := s.write.Begin()
 	if err != nil {
 		return nil, err

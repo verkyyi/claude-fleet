@@ -1,19 +1,12 @@
 package api
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/json"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
 
-	"golang.org/x/crypto/ssh"
-
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
-	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 
 // claude-fleet#3509 (EPIC #3500 R3): a machine or cluster whose spares have
@@ -228,75 +221,5 @@ func TestSpareAlertsOffAddsNothing(t *testing.T) {
 	}
 	if au := audits(t, h, "spare.alert"); len(au) != 0 {
 		t.Fatalf("audit with spares off: %+v", au)
-	}
-}
-
-// #2947: a drill identity's first sign-in is handed the machine's ready
-// spare (no create, nothing made), and deleting itself washes that login
-// back into a ready spare (a reset, never a remove) — the machine keeps its
-// OS user and its spare.
-func TestDrillTakesASpareAndGivesItBackWashed(t *testing.T) {
-	h := newFleetHarness(t)
-	enablePeople(t, h)
-	h.srv.FleetAdmins = []string{"bob"}
-	admin := connectCaps(t, h, "m8-op", "m8", "bob", true, control.CapCredsep, control.CapRecycle)
-	beatCount(t, admin, "m8", "bob", 1)
-	connectCaps(t, h, "m9-op", "m9", "carol", false)
-	setHubSetting(t, h.srv, AutoAssignKey, "least-busy")
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	signer, _ := ssh.NewSignerFromKey(priv)
-	h.srv.SSHCA = sshca.New(signer)
-	sparesOn(t, h, "1")
-	spare := openSpares(t, admin, 1, control.CredsepSeparated)[0]
-	waitFor(t, 3*time.Second, "m8's spare to be ready", func() bool { return h.srv.spareReadyHosts()["m8"] == 1 })
-
-	code, body := drillReq(t, h, http.MethodPost, DrillPath, "viewer-secret", map[string]any{"host": "m9", "home": "m8"})
-	if code != 200 {
-		t.Fatalf("invite: %d %s", code, body)
-	}
-	var inv DrillInviteResponse
-	json.Unmarshal(body, &inv)
-	key, _ := drillKey(t)
-	st := startLogin(t, h, key, nil)
-	if code, body := drillReq(t, h, http.MethodPost, LoginApprovePath, "", approveRequest{Code: st.UserCode, ApproveCode: inv.ApproveCode}); code != 200 {
-		t.Fatalf("approve: %d %s", code, body)
-	}
-	a := waitState(t, h, inv.PersonID, "m8", store.AccountActive)
-	if a.Login != spare {
-		t.Fatalf("drill's login on m8 = %+v; want the spare %s handed over", a, spare)
-	}
-	// The pool refills behind the claim.
-	openSpares(t, admin, 1, control.CredsepSeparated)
-	waitFor(t, 3*time.Second, "the refill to be ready", func() bool { return h.srv.spareReadyHosts()["m8"] == 1 })
-
-	code, body = drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode})
-	if code != http.StatusAccepted {
-		t.Fatalf("self-delete with the spare held: %d %s; want 202", code, body)
-	}
-	m, op := expectAccountOp(t, admin.tnode)
-	if op.Op != control.AccountReset || op.Login != spare || op.JoinCode == "" {
-		t.Fatalf("op = %+v; want a reset (wash) of %s, never a remove", op, spare)
-	}
-	if code, _ := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode}); code != http.StatusAccepted {
-		t.Fatalf("self-delete mid-wash: %d; want 202 (the wash in flight is waited on)", code)
-	}
-	sendResult(t, admin.c, m.OpID, control.AccountResult{Op: control.AccountReset, Login: spare, OK: true,
-		Reset: control.ResetClean, Credsep: control.CredsepSeparated})
-	waitFor(t, 3*time.Second, "the washed login to be recycled", func() bool {
-		return hubAuditHas(t, h, "spare.recycle", spare) != nil
-	})
-	if code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode}); code != 200 {
-		t.Fatalf("self-delete after the wash: %d %s", code, body)
-	}
-	if _, err := h.srv.Store.Principal(inv.PersonID); err == nil {
-		t.Fatal("the drill is still there")
-	}
-	// The count is where the drill found it: one over is closed by the
-	// refill's own shrink, never left above the machine's target.
-	waitFor(t, 3*time.Second, "m8 back to 1 ready spare, as before the drill", func() bool {
-		return h.srv.spareReadyHosts()["m8"] == 1
-	})
-	if e := hubAuditHas(t, h, "spare.recycle", spare); e == nil {
-		t.Fatal("no spare.recycle line for the drill's login")
 	}
 }

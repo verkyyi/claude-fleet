@@ -7,7 +7,7 @@ often the line drops, how fast it comes back, how often opening it draws nothing
 
 Each <dir> is ONE computer's logs, in any of three layouts:
   · a client cache       ~/.cache/claude-fleet           thin.log + shell/logs/*.log
-  · a diagnosis bundle   `fleet doctor --bundle <dir>`   logs/thin.log + logs/*.log
+  · a copied set         <dir>/logs (+ manifest.json)    logs/thin.log + logs/*.log
   · a bare log dir       …/shell/logs (or a copy)        thin.log? + connect.log + place.log
 A rotated `<name>.1` is read before `<name>`. Only the last N days (default 7,
 counted back from --now, default now) are read. The fields are
@@ -236,7 +236,7 @@ def main(argv):
         ts = thin_stats(window(read_lines(thin), lo, hi) if thin else [])
         home, place = shell_stats(logs, lo, hi)
         name = os.path.basename(os.path.normpath(d))
-        try:   # a bundle names its computer
+        try:   # a copied set names its computer
             with open(os.path.join(d, "manifest.json")) as m:
                 name = json.load(m).get("host") or name
         except (OSError, ValueError, AttributeError):

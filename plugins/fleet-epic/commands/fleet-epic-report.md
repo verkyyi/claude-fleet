@@ -7,8 +7,8 @@ description: What the batch actually did, as a page you can read — 改动前 /
 <!-- fleet skill · owner: hub -->
 
 PHASE 3 of the EPIC trio. Reconstructs a finished (or abandoned) EPIC from
-GitHub and the fleet's own records, renders a reader-friendly HTML page, hosts it
-on this machine's tailnet, and posts a durable summary back onto the EPIC issue.
+GitHub and the fleet's own records, renders a reader-friendly HTML page, opens it
+on the operator's computer, and posts a durable summary back onto the EPIC issue.
 Read-only against the repo except for that one closing comment.
 
 **Argument** (`$ARGUMENTS`): the EPIC issue number. Optional — with none, resolve
@@ -314,21 +314,19 @@ Item 3 in detail — the evidence grid (issue #810):
     copies every file to `<dir>/evidence/<M>/…` (`<dir>/evidence/<owner>-<name>.<M>/…`
     for a member in another repo) and prints the same rows with
     RELATIVE paths — reference those (`<img src="evidence/42/after-….png">`).
-    doc-preview copies a relative `<img src>` file beside the served page (as it
-    already did for Markdown images), so the pictures ride along to the tailnet
-    URL. A playwright-MCP screenshot lands under the worktree (`.playwright-mcp/`):
+    The page is served from that directory, so the pictures ride along. A playwright-MCP screenshot lands under the worktree (`.playwright-mcp/`):
     that is a source to hand to `fleet-evidence.sh live`, not a path to reference.
 
 ## 3. Publish
 
 **Artifact publishing is hook-blocked inside fleet sessions** (issue #526/#527) —
-use doc-preview, which is the repo-shipped skill for exactly this:
+serve the report's directory on loopback and open it on the operator's computer:
 
 ```sh
-~/.claude/skills/doc-preview/share.sh <report.html>
+(cd <dir-of-the-report-html> && python3 -m http.server --bind 127.0.0.1 <port> >/dev/null 2>&1 &)   # dies with the session
 ```
 
-Relay the READY tailnet URL to the operator.
+then the fleet `open` tool, target `:<port>/<report.html>`.
 
 Then post the **durable half** as one comment on the EPIC issue, **in the page's
 order** (issue #839): 交付了什么 · 指标（filled, 「还读不出来 ⟨date⟩ 再看」, or
@@ -336,8 +334,8 @@ order** (issue #839): 交付了什么 · 指标（filled, 「还读不出来 ⟨
 printed one） · the fleet-side issues filed
 (their numbers — the one place they appear) — then the counts, the completed/unfinished/blocked lists, the run
 figures with their caveat, the URL, and per member which evidence exists — the
-`dir:` path from its worker's 📎 comment, or **无证据**. The tailnet URL dies with
-the next reboot; the comment is what survives, so it must stand on its own without
+`dir:` path from its worker's 📎 comment, or **无证据**. The page's address dies with
+the session; the comment is what survives, so it must stand on its own without
 the page — including the sentence telling the operator to re-run this command on
 ⟨date⟩ when the metrics can be read. `gh` cannot attach an
 image to a comment, so the paths ARE the evidence's durable half; the files stay

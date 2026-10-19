@@ -86,13 +86,12 @@ type HubFacts struct {
 	Email  bool `json:"email"`
 	// ViewerAuth is "token" or "off (--no-auth)". The token itself never
 	// appears, here or anywhere else this package writes.
-	ViewerAuth   string         `json:"viewer_auth"`
-	PublicBadges bool           `json:"public_badges"`
-	PublicMeter  bool           `json:"public_meter"`
-	MCP          bool           `json:"mcp"`
-	Dashboard    bool           `json:"dashboard"`
-	Listeners    ListenerFacts  `json:"listeners"`
-	Enrollments  map[string]int `json:"enrollments"`
+	ViewerAuth  string         `json:"viewer_auth"`
+	PublicMeter bool           `json:"public_meter"`
+	MCP         bool           `json:"mcp"`
+	Dashboard   bool           `json:"dashboard"`
+	Listeners   ListenerFacts  `json:"listeners"`
+	Enrollments map[string]int `json:"enrollments"`
 }
 
 // AccessMap is the whole answer to "how do I get in, and what does that let me
@@ -129,13 +128,12 @@ func (s *Server) handleAccess(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) hubFacts() HubFacts {
 	f := HubFacts{
-		ViewerAuth:   "token",
-		PublicBadges: s.publicBadges(),
-		PublicMeter:  s.publicMeter(),
-		MCP:          s.MCP != nil,
-		Dashboard:    s.consoleBuilt("app"),
-		Listeners:    s.Listeners,
-		Enrollments:  map[string]int{},
+		ViewerAuth:  "token",
+		PublicMeter: s.publicMeter(),
+		MCP:         s.MCP != nil,
+		Dashboard:   s.consoleBuilt("app"),
+		Listeners:   s.Listeners,
+		Enrollments: map[string]int{},
 	}
 	if s.ViewerToken == "" {
 		f.ViewerAuth = "off (--no-auth)"
@@ -264,27 +262,15 @@ func (s *Server) doors(f HubFacts) []Door {
 			Note:  "Here: " + plural(f.enrolled("agent"), "agent", "agents") + " enrolled.",
 		},
 		{
-			ID: "badges", Name: "Badges and embeds", Via: "http",
-			Where:      []string{"/badge/u/<login>.svg", "/badge/team/<team>.json", "/embed/u/…", "/embed/team/…"},
-			Credential: pick(f.PublicBadges, "nothing — "+PublicBadgesKey+" is on", "the viewer token, like everything else"),
-			Can: "Render one number as an SVG or a small live embed, for a README. This is the only surface " +
-				"that may be unauthenticated, and only deliberately: a README image sends no credential and " +
-				"the proxy in front of it strips cookies.",
-			State: pick(f.PublicBadges, "public", "open"),
-			Note: pick(f.PublicBadges,
-				"Here: PUBLIC. Anything that can reach this hub can read these numbers with no credential.",
-				"Here: behind the viewer token — the default. An operator who upgrades never starts serving without auth by surprise."),
-		},
-		{
 			ID: "meter", Name: "Front page and public counter", Via: "http",
-			Where:      []string{"/ (signed out)", "/meter.json", "/odometer.svg"},
+			Where:      []string{"/ (signed out)", "/meter.json"},
 			Credential: "nothing",
 			Can: "Read what claudefleet is, and the hub's one lifetime token total with its last replay window. " +
 				"No person, machine, account or repository is named; a signed-out \"/\" is the front page, every other path still asks.",
 			State: pick(f.PublicMeter, "public", "off"),
 			Note: pick(f.PublicMeter,
 				"Here: PUBLIC — "+MeterKey+" is on (the default). A site named in "+MeterOriginsEnv+" reads /meter.json from the browser.",
-				"Here: "+MeterKey+" is off, so /meter.json and /odometer.svg answer 404; the front page shows no figure."),
+				"Here: "+MeterKey+" is off, so /meter.json answers 404; the front page shows no figure."),
 		},
 		{
 			ID: "healthz", Name: "Liveness", Via: "http",

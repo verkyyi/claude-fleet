@@ -328,7 +328,7 @@ printf '100\t/dev/ttys901\n' > "$STATE/clients"
 road() {  # [--browser] — fleet-open.sh on the thin road
   PATH="$WORK/bin:$PATH" TMUX="/x/sock,1,0" TMUX_PANE="%1" FLEET_OPEN_WHERE_CMD="$WORK/bin/where" \
     FLEET_OPEN_URL_BIN="$WORK/bin/open-url" FLEET_THIN_OPEN_OUT="$WORK/thin.out" FLEET_SHOW_OUT="$WORK/show.out" \
-    FLEET_OPEN_SECRET_FILE="$WORK/open.secret" FLEET_OPEN_DOCPREV_ROOT="$WORK/none" FLEET_OPEN_ACK_WAIT=1 \
+    FLEET_OPEN_SECRET_FILE="$WORK/open.secret" FLEET_OPEN_ACK_WAIT=1 \
     bash "$BIN/fleet-open.sh" "$@" 2>"$WORK/road.err"
 }
 rm -f "$WORK/thin.out"

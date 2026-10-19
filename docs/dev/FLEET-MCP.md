@@ -29,7 +29,7 @@ The same script serves two servers. Every session mounts the **core**, `fleet`
 (`conf/mcp-worker.json`): what a session works with — `status` · `repos` · `agents` ·
 `brief` · `gh` · `comment` · `file_issue` · `ask` · `report` · `pr_verdict` ·
 `pr_merge` · `evidence` · `handoff` · `context` · `transfer` · `where` · `open` ·
-`show` · `set_reap` · `whats_new` · the debugger's `debug_*`. The **dispatch group** —
+`show` · `set_reap`. The **dispatch group** —
 `spawn` · `await` · `children` · `answer_dialog` · `send` · `task` — is listed only by
 `fleet-mcp.py --group orch`, the server **`fleet-orch`** (`conf/mcp-orch.json`). It
 ships with the core (issue #4334): no plugin registers it. Claude shows its tools as
@@ -119,12 +119,8 @@ lints it): a script path appears only under a heading marked `运营者` or `排
 | `transfer` | `action` (`check` · `arm` · `export_loop`); `to` (`claude` · `codex`) for check/arm; `handoff` + `loop`? for arm; `transcript` + `output` for export_loop | `fleet-transfer.sh --session S --window $TMUX_PANE --to T --dry-run` · `… --handoff DOC [--loop L] --after-turn` · `fleet-loop.py from-claude --transcript F --output F` | the script's |
 | `handoff` `arm` | `doc` (a stored file's path) \| `issue` (+ `repo`?) | `fleet-handoff-cycle.sh --pane $TMUX_PANE --doc D \| --issue N [--repo R]`, **detached** — the call returns at once with its pid; it must be the turn's last call | 0 armed |
 | `where` | `json`? | `fleet-client-where.sh [--json]` | 0 named · 3 nobody connected · 1 could not tell |
-| `whats_new` | `from`?, `to`? (shas; default this session's `@agent_ver` → the current version) | `fleet-whats-new.sh --full [<from> [<to>]]` | 0 printed · 1 nothing changed / no version |
 | `show` | `file`, `inline`? | `fleet-show.sh [--inline] -- <file>` | 0 `saved:<path>` / `unconfirmed` · 4 `failed:<why>` · 2 PATH + `failed:` (say the path) |
 | `open` | `target` (URL · `:port[/path]` · file) | `fleet-open.sh -- <target>` — waits for the far side's receipt (issue #3538) | 0 `opened` / `unconfirmed` · 4 `failed:<why>` · 2 a file not sent (say the path) |
-| `debug_bundle` | `id` (a debug report, `[a-z2-7]{8}`) | `fleet-debug-desk.py fetch <id>` — the debugger's (issue #2893): the bundle + the hub's `hub.json`, unpacked into `$TMPDIR/fleet-debug/<id>/` | 0 · 3 no hub / node token · 4 the hub refused (not this login's report) · 1 no answer |
-| `debug_publish` | `id`, `result` (JSON text: `cause`, `evidence[]`, `steps[{why, cmd, system?}]` 1–3, `ours[]`) | `fleet-debug-desk.py publish <id> -` (result on stdin) — the page at `/s/<id>`, the report 已出结论 | 0 · 2 a section missing / > 3 steps / credential-shaped · 3 · 4 · 1 |
-| `debug_propose` | `id`, `text` | `fleet-debug-desk.py propose <id> <text>` — one thing to change, a line for the orchestrator to nod at (the steward's beat says it), never an issue | 0 · 2 · 3 · 4 · 1 |
 
 `file_issue`'s body goes as `--body` (the script takes no stdin); it never passes
 through a shell. `--` before a file / target keeps a name starting with `-` a name.
@@ -1069,22 +1065,13 @@ A version that fails its probe is refused (`tool=(reload) verdict=refused` in
 `verdict=exec` and `verdict=resumed` under the one pid. `FLEET_MCP_RELOAD=0` turns
 it off. The legacy `fleet-peer` shim never reloads.
 
-## What changed, on demand (issue #4324)
+## Retired tools (issue #4904)
 
-`whats_new` prints the changes when requested. By default it compares this
-session's launch version (`@agent_ver`) with the expected version
-(`agent-cfg.expected`'s `ver` line); `from` and `to` select an explicit range.
-The tool runs `fleet-whats-new.sh --full`, which lists every relevant change.
-The script's `<old> <new>` form remains available for a brief of at most five lines.
-
-Relevant = a tool added or retired (`TOOLS` of the two versions), a commit that
-touches `docs/dev/FLEET-MCP.md`, a worker-owned skill (`owner: worker`) or a guard
-(`hooks/*guard.py`, `bin/tmux-shim/`, the hook table); everything else is counted.
-A rollback is one line.
-
-The default hook table no longer registers a whats-new hook, for either Claude
-or Codex, and the script has no `--hook` entry any more (#4790). Device-location context and compact-time worker refocus
-remain core; see [COMPONENTS.md](COMPONENTS.md).
+`whats_new` and the debugger's `debug_bundle` · `debug_publish` · `debug_propose`
+are gone with their scripts. A session launched before still has them in its
+list, so the server keeps answering them for one version — never listed, every
+call refused with the reason (`RETIRED` in `fleet-mcp.py`), and `--probe` names
+them so the release gate's replay counts them as handled.
 
 ## Protocol
 
@@ -1105,17 +1092,13 @@ and `handoff arm` answering before its detached helper ends.
 script, and every `mcp__fleet__<tool>` / `mcp__fleet-orch__<tool>` a skill names is a
 tool THAT server lists.
 `bin/fleet-mcp-selftest.sh` Q — the two groups: `fleet-orch` lists the dispatch group,
-`fleet` answers it `road=legacy`, a pre-group takeover keeps all 28, `file_issue`
+`fleet` answers it `road=legacy`, a pre-group takeover keeps all 25, `file_issue`
 spawn follows the group, one server definition for Codex and the plugin.
 `bin/fleet-mcp-selftest.sh` J — the credential: valid / expired / forged /
 tampered / another pane / another fleet / revoked, migration, renewal, no leak.
 `bin/fleet-mcp-selftest.sh` M — a new version between calls: the in-flight call
 finishes on the old code, exec keeps pid + connection + credential, `list_changed`,
 the new tool listed, a broken version refused, the quiet poll, `FLEET_MCP_RELOAD=0`.
-`bin/whats-new-selftest.sh` — on-demand summaries: ≤ 5 lines, unrelated-only =
-one line, overflow, rollback, the `whats_new` tool, silent old-hook compatibility,
-and fresh sandbox installation / upgrade without whats-new injection. Claude
-and Codex retain device-location context and compact-time refocus.
 `bin/fleet-mcp-selftest.sh` K — the hub route: assertion only with hub + token +
 credential, its signature and claims, zero network with no hub, `fleet_hub_put`'s
 `worker`. Hub: `TestWorkerAssertion*` (`hub/api/fleet_worker_assert_test.go`)

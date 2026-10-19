@@ -33,11 +33,6 @@ READY_WATCH_SECS = 120
 # words are not queued behind a turn (EPIC #2230 共同约定 4).
 READY_STATES = ("done", "idle", "ready")
 OPS_LOG_MAX = 1 << 20
-# A feedback's reply (issue #3359): a worker_message from the hub's feedback
-# desk whose text starts with this goes to the session's inbox whatever kind of
-# session it is — a scratch, a no-repo one — never through the issue bridge.
-FEEDBACK_PREFIX = "[fleet-feedback]"
-FEEDBACK_ACTOR = "feedback"
 # The heartbeat's reads (issue #3514): ccquota's agent asks `discover` and every
 # fleet's `fleet_status` every 5 s per login, and each answer ran the adapter
 # (inventory twice, capacity, workers) — ~0.7 s of CPU and ~250 processes a beat,
@@ -595,8 +590,6 @@ class Control:
             return self.execute_transfer(fleet, key, params["to"])
         if action == "worker_reap":
             return self.execute_reap(fleet, key)
-        if action == "worker_message" and actor == FEEDBACK_ACTOR and params["text"].startswith(FEEDBACK_PREFIX):
-            return self.execute_feedback(fleet, key, params["worker_id"], params["text"])
         if is_identity(key):
             # An identity-form worker_id (issue #1646): the session it names, under
             # the key it answers to NOW — every adapter below speaks keys.
@@ -678,24 +671,6 @@ class Control:
         if listed:
             body = (body + "\n\n" if body else "") + "附件:\n" + "\n".join(listed)
         return body
-
-    def execute_feedback(self, fleet, key, worker_id, text):
-        """A feedback's reply (issue #3359): to the ONE live window holding the
-        worker_id — by key or lifelong identity, any kind of session — through
-        fleet-peer-send.sh wid:<worker_id> (the local inbox channel: queued if
-        it is mid-turn, wake-delivered to a sleeper). No window ⇒ NOT_FOUND, a
-        clean failure the hub answers by waiting for the person's next session."""
-        matches, snapshot = self.find_workers(fleet, key)
-        if not matches:
-            raise Unattempted("NOT_FOUND", "No live session holds this identity on the fleet")
-        if len(matches) > 1:
-            raise Unattempted("AMBIGUOUS", "Several live windows hold this identity; resolve them on the fleet first")
-        code, output, err = self.adapter("feedback", fleet["name"], worker_id,
-                                         payload=text.encode("utf-8"), timeout=60)
-        if code:
-            raise Unattempted("EXECUTION_FAILED", "The session's inbox refused the reply: " + last_line(err))
-        return {"channel": "direct", "how": last_line(output), "delivery": "straight to the session's inbox",
-                "workers": matches, "observed_at": snapshot["observed_at"]}
 
     def execute_inject(self, fleet, matches, text):
         """worker_message on a fleet without the issue bridge (issue #1554): this
@@ -990,10 +965,6 @@ class Control:
                     # the adapter's $10 (its $9, the policy, said or empty); with
                     # none the argv is exactly what it was.
                     test_arg = [(reap_arg or [""])[0], "test"] if params.get("test") is True else reap_arg
-                    # issue #2893: the hub's debugger for a report — `debug:<id>` in
-                    # the same $10 slot (validate_write keeps it apart from `test`).
-                    if params.get("debug"):
-                        test_arg = [(reap_arg or [""])[0], "debug:" + params["debug"]]
                     code, output, err = self.adapter("start", fleet["name"], "scratch", params.get("agent", ""),
                                                      "-" if params.get("no_repo") else params.get("repo", ""),
                                                      params.get("origin_wid", ""),

@@ -765,8 +765,7 @@ and `fleet connect` runs `ssh -o ProxyCommand='ssh -W %h:%p -l fleet-jump <door>
 `fleet-<pod>-pod`, never TOFU. An older client ignores the fields and takes the
 per-login road. The console's 设备 shows the copyable line for a phone's Jump host
 or a bare ssh (`EntryDoor.jump`): `ssh -J fleet-jump@<name>.<zone>:22022
-<login>@u-<nonce>.<ns>.svc.cluster.local`. `bin/fleet-cn-probe.sh --jump` fails
-when the entry route still took the old road. BREAK-IT `door-jump-other-pod` ·
+<login>@u-<nonce>.<ns>.svc.cluster.local`. BREAK-IT `door-jump-other-pod` ·
 `door-jump-shell` · `door-jump-unlisted` · `pod-foreign-key`.
 
 DNS: a person whose home is a pod gets the door's address — the hub's entry-dns

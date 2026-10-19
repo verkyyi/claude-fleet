@@ -1,9 +1,9 @@
-// demo-entry.ts — the prototype's hub for 入口设置 · 审计 · 反馈 (EPIC #3923
+// demo-entry.ts — the prototype's hub for 入口设置 · 审计 (EPIC #3923
 // C15): the real reads' shapes with made-up rows, answering in memory, so a
 // setting changed and changed back leaves its two audit rows, and a team
 // version restored is a new version plus one. demo.ts asks it first; only a
 // VITE_DEMO=1 build reaches either.
-import type { AuditEvent, Feedback, FeedbackDetail, HubSetting, TeamBundle, TeamVersion } from "./api";
+import type { AuditEvent, HubSetting, TeamBundle, TeamVersion } from "./api";
 
 const now = Date.now();
 const ago = (min: number) => new Date(now - min * 60_000).toISOString();
@@ -15,7 +15,6 @@ const settings: HubSetting[] = [
   { key: "fleet.machine_names", value: "mac-mini.local=mac-mini, mac-studio.local=mac-studio", source: "set" },
   { key: "fleet.spare_max", value: "2", source: "default" },
   { key: "fleet.spares", value: "on", source: "set" },
-  { key: "hub.public_badges", value: "off", source: "default" },
   { key: "hub.public_meter", value: "on", source: "set" },
   { key: "pool.move_when_full", value: "on", source: "set" },
   { key: "pool.skip_pct", value: "90", source: "set" },
@@ -49,7 +48,7 @@ const bundles: Record<number, Record<string, any>> = {
   12: {
     mcp: { context7: {}, playwright: {}, github: {} },
     hooks: { PreToolUse: [{ matcher: "Bash", command: "~/.claude/fleet/bin/fleet-hook-run.sh bash-guard" }] },
-    skills: { "doc-preview": {} },
+    skills: { "fleet-open": {} },
     codex_config: { model_reasoning_effort: "high" },
   },
 };
@@ -57,16 +56,6 @@ let history: TeamVersion[] = [
   { version: 12, prev: 11, actor: ME, note: "Published team-v12.json", created: ago(60 * 24 * 2) },
   { version: 11, prev: 10, actor: ME, note: "Published team-v11.json", created: ago(60 * 24 * 9) },
   { version: 10, prev: 0, actor: "deploy", note: "first team layer", created: ago(60 * 24 * 40) },
-];
-
-const feedback: (Feedback & { ctx?: Record<string, string>; attach?: FeedbackDetail["attach"] })[] = [
-  { id: "F14", text: "手机上回答问题时，键盘挡住了选项", state: "received", who: "林晓", principal: "p:7c1e", login: "linxiao", host: "mac-mini", machine_kind: "managed-mac", agent: "claude", attachments: 1, created_at: ago(40),
-    ctx: { window: "issue-88", cc_session: "6f1c…a20e", worker_id: "c3f1…/9b2e", fleet_version: "fa76175" }, attach: [{ name: "screen.png", size: 184_320, url: "/v1/admin/feedback/F14/attach/screen.png" }] },
-  { id: "F13", text: "用量页想按项目看", state: "filed", who: "阿梅", principal: "p:9a2d", login: "amei", host: "mac-studio", machine_kind: "managed-mac", agent: "claude", attachments: 0, gh_number: 4012, gh_url: "https://github.com/verkyyi/claude-fleet/issues/4012", filed_at: ago(60 * 23), created_at: ago(60 * 24),
-    ctx: { window: "scratch-3", fleet_version: "fa76175" } },
-  { id: "F12", text: "重新连上以后会话列表空了一下", state: "closed", who: "chenyu-dev", principal: "gh:2002", login: "chenyu", host: "linux-01", machine_kind: "managed-linux", agent: "codex", attachments: 1, gh_number: 3990, gh_url: "https://github.com/verkyyi/claude-fleet/issues/3990",
-    reply: "已在 fa76175 修好：重连时先留着旧的列表。", replied_at: ago(60 * 30), filed_at: ago(60 * 24 * 3), closed_at: ago(60 * 30), created_at: ago(60 * 24 * 3),
-    ctx: { window: "issue-77", worker_id: "c3f1…/77aa", fleet_version: "e3ccdc1" }, attach: [{ name: "session.log", size: 3_480, url: "/v1/admin/feedback/F12/attach/session.log" }] },
 ];
 
 const scenario = () => (window as any).__DEMO_SCENARIO || new URLSearchParams(location.search).get("demo") || "";
@@ -118,25 +107,6 @@ export function entryDemo(method: string, u: URL, body: Record<string, any>): un
       const kind = u.searchParams.get("kind");
       return { events: rows.filter((e) => !kind || kind === "all" || e.kind === kind), counts, days: 60, total: rows.length };
     }
-    case "GET /v1/admin/feedback": {
-      const rows = empty ? [] : feedback;
-      const counts: Record<string, number> = {};
-      for (const f of rows) counts[f.state] = (counts[f.state] || 0) + 1;
-      return { feedback: rows.map(({ ctx: _c, attach: _a, ...f }) => f), counts };
-    }
-  }
-  const m = /^\/v1\/admin\/feedback\/(F\d+)(\/duplicate)?$/.exec(u.pathname);
-  if (m) {
-    const f = feedback.find((x) => x.id === m[1]);
-    if (!f) throw Object.assign(new Error(`没有这条反馈：${m[1]}`), { status: 404 });
-    if (m[2] && method === "POST") {
-      const of = String(body.of || "").toUpperCase();
-      if (!feedback.some((x) => x.id === of)) throw Object.assign(new Error(`没有这条反馈：${of}`), { status: 404 });
-      Object.assign(f, { state: "closed", reply: `和 ${of} 是同一件事，跟进在那一条。`, closed_at: new Date().toISOString(), replied_at: ZERO });
-      return { reply: f.reply };
-    }
-    const { ctx, attach, ...row } = f;
-    return { ...row, ctx: ctx || {}, attach: attach || [] };
   }
   return undefined;
 }

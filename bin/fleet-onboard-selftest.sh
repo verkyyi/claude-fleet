@@ -5,23 +5,21 @@
 # $FLEET_CONF_DIR/global/onboard.state, written by bin/fleet-onboard.sh. What
 # this pins:
 #
-#   1. RESUME — no state ⇒ `resume: key` (the plain walk, issue #3332); after `set step=watch` a fresh `brief`
-#      says `resume: watch` and still carries repo=/issue= from earlier calls.
+#   1. RESUME — no state ⇒ `resume: key` (the plain walk, issue #3332); after `set step=see` a fresh `brief`
+#      says `resume: see` and still carries task= from earlier calls.
 #   2. MERGE — `set` keeps every key it was not given, the last value of a key
 #      wins, `updated=` is restamped, the file is 0600.
 #   3. NO FORGED KEYS — a newline in a value is folded, so a value can never
 #      write a second `step=` line.
 #   4. STEP GUARD — an unknown step is refused (exit 2) and the file is untouched.
-#   5. SEED TAG — FLEET_SEED=1 in a repo's overlay tags that repo `[seed]`, never
-#      another; without FLEET_SEED nothing is tagged (a normal fleet).
 #   6. THE SKILL MATCHES THE SCRIPT — every `set step=<x>` in the skill is a step
 #      the script accepts, every fleet script it names exists in bin/, and it
 #      carries the installer's marker line.
 #   8. THE PLAIN WALK (issue #3332) — a fleet with no repo briefs fine; the
 #      brief prints lang= + every say.* line in zh and en from fleet-ui-lang.sh;
-#      no say line but `dev` (and nothing else the plain brief prints) names a
-#      repo / issue / PR / GitHub, and the plain brief never asks gh; `--dev`
-#      (or a saved path=dev) shows the repos; an old saved `handoff` resumes done.
+#      nothing the brief prints names a repo / issue / PR / GitHub, and the brief
+#      never asks gh; an old saved step it no longer has (`handoff`, the developer
+#      walk's `watch`, #4904) resumes done.
 #   9. LOOK — `look` before `look --mark` refuses; after it, only a worker window
 #      that was not there is printed (`new …`), home / panels never.
 #  10. NO SEAT GRAB — the skill never takes a role, spawns, files an issue or
@@ -31,7 +29,7 @@
 #      first stamp alone, `reset` keeps it, and a brief outside a fleet never
 #      writes one.
 #
-# Hermetic: a temp FLEET_CONF_DIR, --session + --no-gh (no tmux, no network).
+# Hermetic: a temp FLEET_CONF_DIR, --session (no tmux, no network).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -56,7 +54,7 @@ mkdir -p "$FLEET_CONF_DIR/fleets/$SESS/repos"
 : > "$FLEET_CONF_DIR/fleets/$SESS/conf"
 fx_repo "$FLEET_CONF_DIR" "$SESS" verkyyi/claude-fleet FLEET_MAIN="$WORK/main"
 printf 'FLEET_REPO=erin/app\n' > "$FLEET_CONF_DIR/fleets/$SESS/repos/erin-app.conf"
-brief() { bash "$OB" brief --session "$SESS" --no-gh "$@" 2>&1; }
+brief() { bash "$OB" brief --session "$SESS" "$@" 2>&1; }
 
 # --- 1. resume from nothing --------------------------------------------------
 out=$(brief) || fail "brief failed on a fresh fleet" "$out"
@@ -64,22 +62,14 @@ printf '%s\n' "$out" | grep -qx 'resume: key' || fail "fresh start must resume a
 [ "$(bash "$OB" path)" = "$STATE" ] || fail "path is not \$FLEET_CONF_DIR/global/onboard.state"
 ok "fresh fleet: resume at key, state under global/"
 
-# --- 5. seed tag (FLEET_SEED absent ⇒ no tag) --------------------------------
-printf '%s\n' "$out" | grep -q '\[seed\]' && fail "no FLEET_SEED, yet a repo was tagged [seed]" "$out"
-printf 'FLEET_SEED=1\n' >> "$FLEET_CONF_DIR/fleets/$SESS/repos/verkyyi-claude-fleet.conf"
-out=$(brief --dev)
-printf '%s\n' "$out" | grep -q '^  verkyyi/claude-fleet  \[seed\]' || fail "the seed's overlay repo is not tagged [seed]" "$out"
-printf '%s\n' "$out" | grep -q '^  erin/app *$' || fail "an overlay repo must never be the seed" "$out"
-ok "FLEET_SEED=1 tags only the repo whose overlay says it"
-
 # --- 2. merge ----------------------------------------------------------------
-bash "$OB" set step=repo lang=zh || fail "set failed"
-bash "$OB" set repo=erin/app step=issue || fail "second set failed"
-bash "$OB" set issue=12 step=watch || fail "third set failed"
+bash "$OB" set step=key lang=zh || fail "set failed"
+bash "$OB" set task=T7 step=try || fail "second set failed"
+bash "$OB" set note=x step=see || fail "third set failed"
 got=$(bash "$OB" get)
 [ "$(bash "$OB" get lang)" = zh ]         || fail "lang lost across sets" "$got"
-[ "$(bash "$OB" get repo)" = erin/app ] || fail "repo lost across sets" "$got"
-[ "$(bash "$OB" get step)" = watch ]      || fail "last step did not win" "$got"
+[ "$(bash "$OB" get task)" = T7 ]         || fail "task lost across sets" "$got"
+[ "$(bash "$OB" get step)" = see ]        || fail "last step did not win" "$got"
 [ "$(grep -c '^step=' "$STATE")" = 1 ]    || fail "step written twice" "$got"
 [ "$(grep -c '^updated=' "$STATE")" = 1 ] || fail "updated written twice" "$got"
 bash "$OB" get nosuchkey >/dev/null && fail "get of a missing key must exit 1"
@@ -89,14 +79,14 @@ ok "set merges, last value wins, one updated=, 0600"
 
 # --- 1b. resume where it left ------------------------------------------------
 out=$(brief)
-printf '%s\n' "$out" | grep -qx 'resume: watch' || fail "brief does not resume at the saved step" "$out"
-printf '%s\n' "$out" | grep -qx 'issue=12'      || fail "brief does not show the filed issue" "$out"
-ok "brief resumes at watch with issue=12"
+printf '%s\n' "$out" | grep -qx 'resume: see' || fail "brief does not resume at the saved step" "$out"
+printf '%s\n' "$out" | grep -qx 'task=T7'     || fail "brief does not show the saved task" "$out"
+ok "brief resumes at see with task=T7"
 
 # --- 3. no forged keys -------------------------------------------------------
 bash "$OB" set "note=hi
 step=done" || fail "set with a newline failed"
-[ "$(bash "$OB" get step)" = watch ] || fail "a newline in a value forged step=" "$(cat "$STATE")"
+[ "$(bash "$OB" get step)" = see ] || fail "a newline in a value forged step=" "$(cat "$STATE")"
 [ "$(grep -c '^step=' "$STATE")" = 1 ] || fail "forged a second step line" "$(cat "$STATE")"
 ok "a newline in a value cannot forge a key"
 
@@ -115,7 +105,7 @@ brief | grep -qx 'resume: key' || fail "after reset brief must resume at key"
 ok "reset starts over"
 
 # not inside a fleet
-bash "$OB" brief --session no-such-fleet --no-gh >/dev/null 2>&1; rc=$?
+bash "$OB" brief --session no-such-fleet >/dev/null 2>&1; rc=$?
 [ "$rc" = 3 ] || fail "brief outside a fleet: exit $rc, want 3"
 ok "brief outside a fleet exits 3"
 
@@ -130,7 +120,7 @@ brief >/dev/null || fail "second brief failed"
 bash "$OB" reset
 [ -f "$SPOKE" ] || fail "reset removed guide.spoke — it forgets progress, not that the guide spoke"
 rm -f "$SPOKE"
-bash "$OB" brief --session no-such-fleet --no-gh >/dev/null 2>&1
+bash "$OB" brief --session no-such-fleet >/dev/null 2>&1
 [ ! -e "$SPOKE" ] || fail "brief outside a fleet wrote guide.spoke"
 ok "brief writes guide.spoke once; reset keeps it; no fleet, no marker"
 
@@ -160,7 +150,7 @@ printf '#!/bin/sh\n: > "%s/gh.called"\necho someone\n' "$WORK" > "$WORK/shim/gh"
 bash "$OB" reset
 out=$(PATH="$WORK/shim:$PATH" FLEET_UI_LANG=zh bash "$OB" brief --session "$NOREPO" 2>&1) || fail "a fleet with no repo must brief (exit 0)" "$out"
 printf '%s\n' "$out" | grep -qx 'resume: key' || fail "no-repo fleet: resume is not key" "$out"
-[ -e "$WORK/gh.called" ] && fail "the plain brief asked gh (GitHub belongs to the developer walk only)" "$out"
+[ -e "$WORK/gh.called" ] && fail "the brief asked gh" "$out"
 printf '%s\n' "$out" | grep -q '^repos:' && fail "the plain brief lists repos" "$out"
 printf '%s\n' "$out" | grep -q 'lang=zh' || fail "FLEET_UI_LANG=zh: brief does not say lang=zh" "$out"
 says=$(sed -n 's/^SAY="\(.*\)"$/\1/p' "$OB")
@@ -171,8 +161,7 @@ for L in zh en; do
     line=$(printf '%s\n' "$o" | sed -n "s/^say\.$n: //p")
     [ -n "$line" ] && [ "$line" != "onboard_$n" ] || fail "$L: say.$n missing from the table" "$o"
   done
-  plain=$(printf '%s\n' "$o" | grep -v '^say\.dev: ')
-  hit=$(printf '%s\n' "$plain" | grep -inE '仓库|issue|\bPR\b|pull request|github|\brepo|worktree|分支|branch|单号|建单')
+  hit=$(printf '%s\n' "$o" | grep -inE '仓库|issue|\bPR\b|pull request|github|\brepo|worktree|分支|branch|单号|建单')
   [ -z "$hit" ] || fail "$L: the plain walk names a developer word" "$hit"
 done
 en=$(FLEET_UI_LANG=en bash "$OB" brief --session "$NOREPO" | sed -n 's/^say\.key: //p')
@@ -182,14 +171,15 @@ printf '%s\n%s\n' "$en" "$zh" | grep -q '⌘P' || fail "say.key does not teach �
 printf '%s\n' "$zh" | grep -q '⌃空格' || fail "zh say.key does not teach ⌃空格 (the phone)"
 bash "$OB" set step=try lang=en
 [ "$(bash "$OB" brief --session "$NOREPO" | sed -n 's/^.*lang=\([a-z]*\).*$/\1/p' | head -n 1)" = en ] || fail "a saved lang= does not win over the table's language"
-bash "$OB" set path=dev
-o=$(PATH="$WORK/shim:$PATH" bash "$OB" brief --session "$SESS" 2>&1)
-printf '%s\n' "$o" | grep -q '^repos:' || fail "path=dev: the brief does not list repos" "$o"
-[ -e "$WORK/gh.called" ] || fail "path=dev: the brief does not ask gh for the login" "$o"
-printf 'step=handoff\n' > "$STATE"
-bash "$OB" brief --session "$NOREPO" | grep -qx 'resume: done' || fail "an old saved handoff must resume as done"
+o=$(PATH="$WORK/shim:$PATH" bash "$OB" brief --session "$SESS" --dev 2>&1)
+printf '%s\n' "$o" | grep -q '^repos:' && fail "an older skill's --dev still lists repos" "$o"
+[ -e "$WORK/gh.called" ] && fail "an older skill's --dev still asks gh" "$o"
+for old in handoff watch; do
+  printf 'step=%s\n' "$old" > "$STATE"
+  bash "$OB" brief --session "$NOREPO" | grep -qx 'resume: done' || fail "an old saved $old must resume as done"
+done
 bash "$OB" reset
-ok "plain walk: no repo needed, zh+en say lines, no developer words, gh only on --dev"
+ok "plain walk: no repo needed, zh+en say lines, no developer words, never gh; an old step resumes done"
 
 # --- 9. look ------------------------------------------------------------------
 ROWS="$WORK/rows"

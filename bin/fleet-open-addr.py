@@ -7,8 +7,8 @@ Prints ONE line, TAB-separated:
   <kind> <TAB> <payload JSON> <TAB> <fallback url> <TAB> <tailnet link>
 or exits 1 with the reason on stderr. The tailnet link (issue #1717) is the
 address a device on the tailnet can tap for a page on this machine's loopback —
-the tailnet URL it was given, or the one `tailscale serve` / doc-preview fronts
-the port with — and empty when there is none (or the address is not a page here).
+the tailnet URL it was given, or the one `tailscale serve` fronts the port
+with — and empty when there is none (or the address is not a page here).
 
   forward  the page lives on THIS machine: the operator's side opens a local port
            that it forwards over its SSH connection to 127.0.0.1:<rport> here.
@@ -16,9 +16,7 @@ the port with — and empty when there is none (or the address is not a page her
              http://localhost:3000 / 127.0.0.1 / [::1] / 0.0.0.0 → that port
              https://<this machine's tailnet name or IP>[:P]/…  → the loopback port
                `tailscale serve` proxies P to (longest mount first); failing that,
-               doc-preview's own record (~/.cache/claude-doc-preview: https.port →
-               server.port; http-direct: its own port, bound on 127.0.0.1 too — #3538);
-               failing that, an http port something accepts on at 127.0.0.1 here.
+               an http port something accepts on at 127.0.0.1 here (#3538).
                No loopback port found → sent as a plain `url`.
   url      anything else, as is — the operator's browser opens it.
 
@@ -48,7 +46,6 @@ from urllib.parse import parse_qs, urlsplit
 
 LOCAL = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 DEFAULT_PORT = {"http": 80, "https": 443}
-DOCPREV = os.path.expanduser(os.environ.get("FLEET_OPEN_DOCPREV_ROOT", "~/.cache/claude-doc-preview"))
 
 
 def die(msg):
@@ -115,19 +112,6 @@ def via_serve(dns, port, path):
     return None
 
 
-def via_docpreview(port, path):
-    """doc-preview's record: its tailnet HTTPS port fronts its loopback server.py;
-    in http-direct the tailnet port IS the server's, which binds 127.0.0.1 too
-    (issue #3538)."""
-    hp, sp = read(f"{DOCPREV}/https.port") or "", read(f"{DOCPREV}/server.port")
-    mode = read(f"{DOCPREV}/mode") or ("https" if hp else "")
-    if mode == "https" and sp.isdigit() and str(port) == (hp or "443"):
-        return int(sp), "http", path
-    if mode == "http-direct" and sp.isdigit() and str(port) == sp:
-        return int(sp), "http", path
-    return None
-
-
 def loopback_listens(port):
     """Something accepts on 127.0.0.1:<port> here (issue #3538): a page this machine
     serves on its tailnet name AND loopback is forwarded, never sent as a tailnet URL."""
@@ -147,7 +131,7 @@ def loopback_listens(port):
 def tailnet_link(dns, rport, path):
     """The tailnet URL that reaches 127.0.0.1:<rport><path> here, '' if none:
     a `tailscale serve` handler proxying to that port (its mount + the rest of
-    the path under the proxy's base), else doc-preview's https port."""
+    the path under the proxy's base)."""
     if not dns:
         return ""
     web = (tailscale_json("serve", "status") or {}).get("Web") or {}
@@ -166,13 +150,6 @@ def tailnet_link(dns, rport, path):
             rest = path[len(base):]
             tpath = mount.rstrip("/") + "/" + rest.lstrip("/")
             return f"https://{dns}{'' if port == '443' else ':' + port}{tpath}"
-    hp, sp = read(f"{DOCPREV}/https.port") or "", read(f"{DOCPREV}/server.port")
-    mode = read(f"{DOCPREV}/mode") or ("https" if hp else "")
-    if mode == "https" and sp == str(rport):
-        port = hp or "443"
-        return f"https://{dns}{'' if port == '443' else ':' + port}{path}"
-    if mode == "http-direct" and sp == str(rport):
-        return f"http://{dns}:{sp}{path}"
     return ""
 
 
@@ -227,14 +204,14 @@ def main():
 
     dns, names = self_names()
     if host in names:
-        hit = via_serve(dns, port, path) or via_docpreview(port, path)
+        hit = via_serve(dns, port, path)
         if not hit and scheme == "http" and loopback_listens(port):
             hit = port, "http", path
         if hit:
             rport, fscheme, fpath = hit
             return emit(forward(rport, fpath, fscheme), raw, raw)
         print(f"fleet-open: {host}:{port} is this machine on the tailnet, but no loopback "
-              "port serves it (tailscale serve / doc-preview) — sending the URL as is",
+              "port serves it (tailscale serve) — sending the URL as is",
               file=sys.stderr)
     return emit(plain_url(raw, u, host_hint, ts), raw)
 

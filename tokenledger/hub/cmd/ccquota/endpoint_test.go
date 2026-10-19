@@ -39,7 +39,7 @@ func captureStdout(t *testing.T, fn func()) string {
 // to push, and its spend is still there.
 func TestRunEndpoint_RetireKillsTheTokenAndKeepsTheRow(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "ccquota.db")
-	seedBadgeDB(t, db) // enrolls ep-1 (token hash "hash-1") and gives it an event
+	seedTestDB(t, db) // enrolls ep-1 (token hash "hash-1") and gives it an event
 
 	if err := runEndpoint([]string{"--db", db, "retire", "ep-1"}); err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestRunEndpoint_RetireKillsTheTokenAndKeepsTheRow(t *testing.T) {
 // historical totals honest.
 func TestRunEndpoint_DeleteRefusesAnEndpointWithHistory(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "ccquota.db")
-	seedBadgeDB(t, db)
+	seedTestDB(t, db)
 
 	err := runEndpoint([]string{"--db", db, "delete", "ep-1"})
 	if err == nil {
@@ -104,7 +104,7 @@ func TestRunEndpoint_DeleteRefusesAnEndpointWithHistory(t *testing.T) {
 // case from issue #42 — the only one delete is for.
 func TestRunEndpoint_DeleteRemovesAnUnusedEnrollment(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "ccquota.db")
-	seedBadgeDB(t, db)
+	seedTestDB(t, db)
 
 	st, err := store.Open(db)
 	if err != nil {
@@ -140,7 +140,7 @@ func TestRunEndpoint_DeleteRemovesAnUnusedEnrollment(t *testing.T) {
 // way for this to fail.
 func TestRunEndpoint_AllFlagWorksAfterTheVerb(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "ccquota.db")
-	seedBadgeDB(t, db)
+	seedTestDB(t, db)
 
 	st, err := store.Open(db)
 	if err != nil {
@@ -179,7 +179,7 @@ func TestRunEndpoint_AllFlagWorksAfterTheVerb(t *testing.T) {
 
 func TestRunEndpoint_RejectsBadInvocations(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "ccquota.db")
-	seedBadgeDB(t, db)
+	seedTestDB(t, db)
 
 	for _, args := range [][]string{
 		{"--db", db},                         // no verb
