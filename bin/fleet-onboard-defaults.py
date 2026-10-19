@@ -32,19 +32,10 @@ import tempfile
 # blocks from that file and checks every executable line against these rules.
 ALLOW = [
     "Bash(~/.claude/fleet/bin/fleet-onboard.sh brief)",
-    "Bash(~/.claude/fleet/bin/fleet-onboard.sh brief --dev)",
     "Bash(~/.claude/fleet/bin/fleet-onboard.sh look)",
     "Bash(~/.claude/fleet/bin/fleet-onboard.sh look --mark)",
     "Bash(~/.claude/fleet/bin/fleet-onboard.sh reset)",
     "Bash(~/.claude/fleet/bin/fleet-onboard.sh set *)",
-    "Bash(~/.claude/fleet/bin/fleet-repo.sh add *)",
-    "Bash(~/.claude/fleet/bin/fleet-repo.sh remove *)",
-    "Bash(~/.claude/fleet/bin/fleet-pr-verdict.sh *)",
-    "Bash(gh repo list *)",  # no-gh-ok: a permission rule
-    "Bash(gh repo create *)",  # no-gh-ok: a permission rule
-    "Bash(gh pr list *)",  # no-gh-ok: a permission rule
-    "Bash(gh pr view *)",  # no-gh-ok: a permission rule
-    "Bash(gh pr diff *)",  # no-gh-ok: a permission rule
 ]
 
 
