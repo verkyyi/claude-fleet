@@ -66,8 +66,6 @@
 #   breakage-three-filers                           bin/fleet-issue-file.sh --breakage, fleet_breakage_probe /
 #                                                   fleet_breakage_find (fleet-lib.sh)
 #   breakage-no-flag                                bin/fleet-issue-file.sh (no auto road, #4271), fleet-mcp.py file_issue
-#   gh-blackhole-hang                               bin/fleet-gh-lib.sh (_fleet_gh_call / _fleet_gh_timed /
-#                                                   fleet_gh_ready / fleet_gh_down, #4841)
 #   breakage-new-sha                                bin/fleet-issue-file.sh --fault-sha, fleet_fault_find_closed /
 #                                                   fleet_fault_fix_commit / fleet_fault_contains / fleet_fault_seen (fleet-lib.sh)
 #   breakage-wrong-red                              bin/fleet-issue-file.sh --breakage, fleet_breakage_probe /
@@ -3010,51 +3008,6 @@ EOF
   [ "$c" = 0 ] && [ "$c2" = 5 ] && [ "$created" = 3 ] && [ -n "$n0" ] \
     || { WHY="explicit --breakage: exit $c / $c2, $created issues, marker [${n0:-none}] (want 0, 5, 3, a ci- key): $(cat "$d/err3" "$d/err4" | tr '\n' ' ' | cut -c1-300)"; return 1; }
   WHAT="正文写了「master 红」的两张普通单都按普通单开、一次探针都不跑、互不吞并；显式 --breakage 才按指纹开，第二个退出码 5"
-}
-
-# GitHub connects but never answers (issue #4841, EPIC #4839 C2): fleet_gh was a
-# bare `gh` — every caller hung on its own, the daemons till their watchdog, the
-# tools for ever, and nothing told the next caller. Now each call is timed (its
-# process group killed), two connection failures open the shared gh-down marker,
-# the next call returns 75 at once, and a probe that gets an answer closes it.
-drill_gh_blackhole_hang() {
-  CAP=20; local d="$WORK/ghbh" t0 t1 r1 r2 r3 calls left
-  mkdir -p "$d/fp" "$d/state" "$d/tmp"
-  cat > "$d/fp/gh" <<'EOF'
-#!/bin/bash
-printf '%s\n' "$*" >> "$GHBH_LOG"
-if [ "$1 $2" = "api zen" ] && [ -e "$GHBH_UP" ]; then echo 'Keep it logically awesome.'; exit 0; fi
-sleep 3187 &           # a grandchild that must not outlive the timeout
-sleep 3188; exit 0
-EOF
-  chmod +x "$d/fp/gh"
-  bh() { env PATH="$d/fp:$PATH" FLEET_STATE_DIR="$d/state" FLEET_GH_LOG="$d/gh.log" TMPDIR="$d/tmp" \
-           FLEET_GH_TIMEOUT=2 FLEET_GH_TIMEOUT_KEY=1 GHBH_LOG="$d/calls" GHBH_UP="$d/up" "$@"; }
-  t0=$(now)
-  bh bash -c '. "$1"; fleet_gh issue view 1 --repo o/w >/dev/null 2>&1 & a=$!
-              fleet_gh issue view 2 --repo o/w >/dev/null 2>&1; b=$?; wait "$a"; echo "$? $b"' _ "$BIN/fleet-gh-lib.sh" > "$d/r1"
-  t1=$(since "$t0"); r1=$(cat "$d/r1")
-  [ "$r1" = "75 75" ] || { WHY="two concurrent calls under a blackhole: rc [$r1] (want 75 75)"; return 1; }
-  awk -v t="$t1" 'BEGIN{ exit !(t <= 6) }' || { WHY="the timed calls took ${t1}s (budget 2s each)"; return 1; }
-  [ -f "$d/state/gh-down" ] || { WHY="two connection failures did not open gh-down"; return 1; }
-  calls=$(wc -l < "$d/calls" | tr -d ' ')
-  t0=$(now)
-  bh bash -c '. "$1"; fleet_gh issue view 3 --repo o/w >/dev/null 2>&1; echo $?' _ "$BIN/fleet-gh-lib.sh" > "$d/r2"
-  r2=$(cat "$d/r2"); t1=$(since "$t0")
-  [ "$r2" = 75 ] && [ "$(wc -l < "$d/calls" | tr -d ' ')" = "$calls" ] \
-    || { WHY="with gh-down open the next call ran gh or did not answer 75 (rc $r2)"; return 1; }
-  awk -v t="$t1" 'BEGIN{ exit !(t <= 2) }' || { WHY="the call behind an open marker took ${t1}s"; return 1; }
-  sleep 1   # the KILL half of the group kill
-  left=$(ps -A -o command= | grep -c '^sleep 318[78]$')
-  [ "$left" = 0 ] || { WHY="$left gh (grand)child(ren) outlived the timeout"; return 1; }
-  : > "$d/up"
-  bh bash -c '. "$1"; FLEET_GH_DOWN_PROBE_SECS=0 fleet_gh_ready; echo $?' _ "$BIN/fleet-gh-lib.sh" > "$d/r3"
-  r3=$(cat "$d/r3")
-  [ "$r3" = 0 ] && [ ! -f "$d/state/gh-down" ] || { WHY="a probe that got an answer: rc $r3, marker left=$([ -f "$d/state/gh-down" ] && echo yes || echo no)"; return 1; }
-  grep -q 'gh-down open' "$d/gh.log" && grep -q 'gh-down close how=probe' "$d/gh.log" \
-    || { WHY="gh-limit.log lacks the open/close lines"; return 1; }
-  SECS=$(since "$t0")
-  WHAT="连上不回：两次各 2 秒放手（rc 75，进程组整个杀掉，孙进程不留），全机 gh-down 打开后下一次立即 75、不跑 gh；探测拿到回答即关"
 }
 
 # One fingerprint red on every new sha (issue #4271): fleet-macos-watch.sh opened

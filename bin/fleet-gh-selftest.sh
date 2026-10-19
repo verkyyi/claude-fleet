@@ -15,8 +15,8 @@
 #   DOWN    issue #4841 (bin/fleet-gh-lib.sh _fleet_gh_call / _fleet_gh_timed /
 #           fleet_gh_ready / fleet_gh_down / fleet_gh_down_line): a gh that never
 #           answers is given up at FLEET_GH_TIMEOUT with rc 75 and its process group
-#           killed (no grandchild left); two connection failures open gh-down, the
-#           next call is 75 at once without gh; a probe that gets an answer closes
+#           killed (no grandchild left) and gh-down opens; two fast connection
+#           errors open it too; the next call is 75 at once without gh; a probe that gets an answer closes
 #           it; an HTTP error is an answer (rc kept, count reset); a healthy call is
 #           gh's stdout / stderr / rc / stdin byte for byte. With a real gh, a
 #           connect-but-never-answer proxy: `fleet_gh issue view` ≤ 16 s → 75.
@@ -249,18 +249,21 @@ dg hang 'fleet_gh issue view 1 --repo o/r; echo "rc=$?"'
 sleep 1
 [ "$OUT" = rc=75 ] && [ "$DT" -le 4 ] || fail "a hung gh must be given up at the timeout with 75 (took ${DT}s)" "out=[$OUT] err=[$ERR]"
 [ "$(leftover)" = 0 ] || fail "gh's grandchild outlived the timeout" "$(ps -A -o pid=,command= | grep 'sleep 329[12]$')"
-[ -f "$WORK/dstate/gh-fail" ] && [ ! -f "$WORK/dstate/gh-down" ] || fail "one failure counts, does not open" "$(ls "$WORK/dstate")"
-# A fast connection error is the second failure: gh-down opens.
+[ -f "$WORK/dstate/gh-down" ] || fail "a timeout opens gh-down at once (a fallback behind it must not wait again)" "$(ls "$WORK/dstate")"
+# A fast connection error: the first counts, the second in a row opens.
+rm -f "$WORK/dstate"/gh-*
 dg conn 'fleet_gh pr list --repo o/r; echo "rc=$?"'
-[ "$OUT" = rc=75 ] && [ -f "$WORK/dstate/gh-down" ] || fail "the second connection failure opens gh-down" "out=[$OUT] $(ls "$WORK/dstate")"
+[ "$OUT" = rc=75 ] && [ -f "$WORK/dstate/gh-fail" ] && [ ! -f "$WORK/dstate/gh-down" ] || fail "one fast connection error counts, does not open" "out=[$OUT] $(ls "$WORK/dstate")"
 case "$ERR" in *'error connecting to api.github.com'*) ;; *) fail "gh's own words are replayed" "$ERR" ;; esac
+dg conn 'fleet_gh pr list --repo o/r & fleet_gh pr list --repo o/r; wait'
+[ -f "$WORK/dstate/gh-down" ] || fail "the next fast connection errors open gh-down (concurrent ones all counted)" "$(cat "$WORK/dstate/gh-fail" 2>&1)"
 n=$(grep -c . "$WORK/dlog")
 dg ok 'fleet_gh issue view 1 --repo o/r; echo "rc=$?"; fleet_gh_down >/dev/null && echo down; fleet_gh_down_line'
 [ "$(grep -c . "$WORK/dlog")" = "$n" ] && [ "$DT" -le 1 ] || fail "an open gh-down must skip gh at once" "$(tail -2 "$WORK/dlog")"
 case "$OUT" in rc=75$'\n'down$'\n''GitHub 不通 · '*'下次探测 '*) ;; *) fail "rc 75 + the reader + the doctor line" "$OUT" ;; esac
 dg ok 'fleet_gh auth token; echo "rc=$?"'
 [ "$OUT" = $'out:auth token\nrc=3' ] || fail "a local subcommand never sees the marker" "$OUT"
-ok "never answers: given up at the timeout (rc 75, group killed); 2 connection failures open gh-down; then 75 at once, no gh"
+ok "never answers: given up at the timeout (rc 75, group killed), gh-down opens; 2 fast connection errors open it too; then 75 at once, no gh"
 # The probe: not due ⇒ 75 without gh; due and failing ⇒ still down; answered ⇒ closed, the call runs.
 dg ok 'fleet_gh_ready; echo "rc=$?"'
 [ "$OUT" = rc=75 ] || fail "probe not due yet" "$OUT"
@@ -289,11 +292,11 @@ while time.time() < end:
   rm -rf "$WORK/rstate"; t0=$SECONDS
   OUT=$(env -u GH_HOST HTTPS_PROXY="http://127.0.0.1:$(cat "$WORK/bh.port")" HTTP_PROXY='' NO_PROXY='' \
         GH_TOKEN=selftest-not-a-token GH_CONFIG_DIR="$WORK/ghconf" TMPDIR="$WORK/tmp" FLEET_STATE_DIR="$WORK/rstate" \
-        FLEET_GH_DOWN_AFTER=1 bash -c '. "$1"; fleet_gh issue view 4841 --repo verkyyi/claude-fleet --json state; echo "rc=$?"' \
+        bash -c '. "$1"; fleet_gh issue view 4841 --repo verkyyi/claude-fleet --json state; echo "rc=$?"' \
         _ "$BIN/fleet-gh-lib.sh" 2>"$WORK/rerr")
   DT=$((SECONDS - t0)); kill "$BH" 2>/dev/null; wait "$BH" 2>/dev/null
   [ "$OUT" = rc=75 ] && [ "$DT" -le 16 ] || fail "real gh behind a blackhole: ≤ 16 s, rc 75 (took ${DT}s)" "out=[$OUT] $(cat "$WORK/rerr")"
-  [ -f "$WORK/rstate/gh-down" ] || fail "real gh: the timeout opens gh-down (FLEET_GH_DOWN_AFTER=1 here)" "$(ls "$WORK/rstate" 2>&1)"
+  [ -f "$WORK/rstate/gh-down" ] || fail "real gh: the timeout opens gh-down" "$(ls "$WORK/rstate" 2>&1)"
   t0=$SECONDS
   OUT=$(TMPDIR="$WORK/tmp" FLEET_STATE_DIR="$WORK/rstate" bash -c '. "$1"; fleet_gh issue view 4841 --repo verkyyi/claude-fleet --json state; echo "rc=$?"' _ "$BIN/fleet-gh-lib.sh" 2>/dev/null)
   [ "$OUT" = rc=75 ] && [ $((SECONDS - t0)) -le 1 ] || fail "real gh: the third call is 75 at once" "$OUT"

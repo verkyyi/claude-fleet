@@ -180,8 +180,11 @@ fleet_gh_run() {  # fleet_gh_run <bucket> <source> <gh args…>
 #     kill takes gh's children too. A timeout, or gh's own connection error (DNS,
 #     refused, i/o timeout, TLS handshake), is a CONNECTION failure; an HTTP answer
 #     — 404, 422, a rate limit — is GitHub answering and resets the count.
-#   * FLEET_GH_DOWN_AFTER (2) connection failures in a row (within
-#     FLEET_GH_DOWN_WINDOW, 300s) open the marker $FLEET_STATE_DIR/gh-down — one
+#   * a TIMEOUT (FLEET_GH_TIMEOUT seconds of silence) opens the marker at once —
+#     the next caller, a REST fallback right behind it, must not wait again; a FAST
+#     connection error (DNS, refused) opens it on the FLEET_GH_DOWN_AFTER-th (2)
+#     in a row (within FLEET_GH_DOWN_WINDOW, 300s), a blip being cheap. The marker
+#     is $FLEET_STATE_DIR/gh-down — one
 #     line `<epoch> <reason>`, beside gh-limit.<bucket>, shared by the login (and by
 #     the machine where FLEET_STATE_DIR is shared). While it is open every call
 #     returns $FLEET_GH_LIMITED_RC (75, "GitHub 暂时不可用" — the code callers
@@ -311,8 +314,9 @@ _fleet_gh_down_close() {  # _fleet_gh_down_close <how>
   fleet_gh_log "gh-down close how=$1 secs=$(( $(date +%s) - $(_fleet_gh_num "$since" "$(date +%s)") )) source=${0##*/}"
 }
 
-# _fleet_gh_conn_failed <reason> — count one connection failure; the
-# FLEET_GH_DOWN_AFTER-th in a row (inside FLEET_GH_DOWN_WINDOW) opens the marker.
+# _fleet_gh_conn_failed <reason> [now] — count one connection failure; the
+# FLEET_GH_DOWN_AFTER-th in a row (inside FLEET_GH_DOWN_WINDOW) opens the marker,
+# `now` (a timeout) opens it at once.
 _fleet_gh_conn_failed() {
   local d f n now win after
   d=$(fleet_gh_state_dir); f="$d/gh-fail"; now=$(date +%s)
@@ -325,7 +329,7 @@ _fleet_gh_conn_failed() {
   n=$(awk -v c=$(( now - win )) '$1 >= c { n++ } END { print n + 0 }' "$f" 2>/dev/null)
   n=$(_fleet_gh_num "$n" 1)
   fleet_gh_log "gh-conn-fail n=$n reason=${1// /_} source=${0##*/}"
-  [ "$n" -ge "$after" ] && _fleet_gh_down_open "$1"
+  { [ "$n" -ge "$after" ] || [ "${2:-}" = now ]; } && _fleet_gh_down_open "$1"
   return 0
 }
 
@@ -379,7 +383,7 @@ _fleet_gh_call() {
   if [ "$rc" -eq 124 ]; then
     rm -f "$err"
     printf 'fleet_gh: GitHub did not answer in %ss — gh %s given up, rc %s\n' "$(fleet_gh_timeout)" "${1:-}" "$FLEET_GH_LIMITED_RC" >&2
-    _fleet_gh_conn_failed "timeout ${1:-} ${2:-}"
+    _fleet_gh_conn_failed "timeout ${1:-} ${2:-}" now
     return "$FLEET_GH_LIMITED_RC"
   fi
   txt=$(cat "$err" 2>/dev/null)
@@ -409,7 +413,10 @@ fleet_gh_git() {
     git -c http.lowSpeedLimit=1 -c "http.lowSpeedTime=$t" "$@" 2>"$err"; rc=$?
   [ "$err" = /dev/null ] && return "$rc"
   txt=$(cat "$err" 2>/dev/null); cat "$err" >&2; rm -f "$err"
-  if [ "$rc" -eq 124 ] || { [ "$rc" -ne 0 ] && fleet_gh_conn_fail "$txt"; }; then
+  if [ "$rc" -eq 124 ]; then
+    _fleet_gh_conn_failed "git-timeout ${1:-}" now; return "$FLEET_GH_LIMITED_RC"
+  fi
+  if [ "$rc" -ne 0 ] && fleet_gh_conn_fail "$txt"; then
     _fleet_gh_conn_failed "git ${1:-}"
     return "$FLEET_GH_LIMITED_RC"
   fi
@@ -426,7 +433,8 @@ fleet_gh_curl() {
   fleet_gh_ready || return "$FLEET_GH_LIMITED_RC"
   curl --connect-timeout "$(fleet_gh_timeout_key)" --speed-limit 1 --speed-time "$(fleet_gh_timeout)" "$@"; rc=$?
   case "$rc" in
-    6|7|28|35) _fleet_gh_conn_failed "curl rc=$rc"; return "$FLEET_GH_LIMITED_RC" ;;
+    28) _fleet_gh_conn_failed "curl rc=28" now; return "$FLEET_GH_LIMITED_RC" ;;
+    6|7|35) _fleet_gh_conn_failed "curl rc=$rc"; return "$FLEET_GH_LIMITED_RC" ;;
     0) [ -f "$(fleet_gh_state_dir)/gh-fail" ] && _fleet_gh_down_close curl ;;
   esac
   return "$rc"
