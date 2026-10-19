@@ -18,6 +18,10 @@ import (
 
 // Real CLI -> authenticated HTTP -> store -> unified filer. Only GitHub and
 // process launch are fixtures; no production credentials or tmux are reachable.
+// Both tests pin the issue road (FLEET_TASK_ISSUE=1): since claude-fleet#4897 a
+// repo task the hub accepts is the record alone, and this road stays for a
+// draft, no hub and FLEET_TASK_ISSUE=1 until 批 1 removes it.
+// drives: bin/fleet-task-record.sh bin/fleet-issue-file.sh bin/dash-issue-session.sh
 func TestTaskDispatchCLI(t *testing.T) {
 	h, _, nodes := peerHarness(t)
 	h.srv.FleetAdmins = []string{"frank"}
@@ -45,7 +49,7 @@ func TestTaskDispatchCLI(t *testing.T) {
 			env = append(env, v)
 		}
 	}
-	env = append(env, "HOME="+dir, "PATH="+bin+":"+os.Getenv("PATH"), "FLEET_CONF_DIR="+dir+"/conf", "FLEET_SKIP_GLOBAL_CONF=1", "FLEET_GH_WRITE_DIRECT=1", "CCQUOTA_FLEET=1", "CCQUOTA_HUB_URL="+h.http.URL, "CCQUOTA_TOKEN="+nodes["bob4"].token)
+	env = append(env, "HOME="+dir, "PATH="+bin+":"+os.Getenv("PATH"), "FLEET_CONF_DIR="+dir+"/conf", "FLEET_SKIP_GLOBAL_CONF=1", "FLEET_GH_WRITE_DIRECT=1", "FLEET_TASK_ISSUE=1", "CCQUOTA_FLEET=1", "CCQUOTA_HUB_URL="+h.http.URL, "CCQUOTA_TOKEN="+nodes["bob4"].token)
 	if err = os.MkdirAll(filepath.Join(dir, "conf"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +149,7 @@ exec python3 -c 'import json,os; print(json.dumps(dict(task=os.environ.get("FLEE
 					env = append(env, v)
 				}
 			}
-			env = append(env, "HOME="+dir, "PATH="+fake+":"+os.Getenv("PATH"), "FLEET_CONF_DIR="+dir+"/conf", "FLEET_SKIP_GLOBAL_CONF=1", "FLEET_GH_WRITE_DIRECT=1", "FIXTURE_DIR="+dir, "FIXTURE_REPO="+writeRepo, "FIXTURE_SOURCE="+source.FleetID, "FIXTURE_BIN="+bin)
+			env = append(env, "HOME="+dir, "PATH="+fake+":"+os.Getenv("PATH"), "FLEET_CONF_DIR="+dir+"/conf", "FLEET_SKIP_GLOBAL_CONF=1", "FLEET_GH_WRITE_DIRECT=1", "FLEET_TASK_ISSUE=1", "FIXTURE_DIR="+dir, "FIXTURE_REPO="+writeRepo, "FIXTURE_SOURCE="+source.FleetID, "FIXTURE_BIN="+bin)
 			if failure == "mcp" {
 				// The full source spawner, including authority/cap/placement gates.
 				// Only its external tmux, git fixture and ccquota transport are local.
