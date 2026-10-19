@@ -221,7 +221,9 @@ if leg F; then
   change deploy/k8s/base/hub.yaml;              eq "F a manifest runs the drill only" "false true" "$(two)"
   change tokenledger/hub/cmd/ccquota/hub.go;    eq "F the hub's start runs the drill only" "false true" "$(two)"
   change tokenledger/hub/store/migrations.go;   eq "F a migration runs the drill only" "false true" "$(two)"
-  change tokenledger/hub/api/server.go;         eq "F the hub's server runs both" "true true" "$(two)"
+  change tokenledger/hub/api/server.go;         eq "F the hub's server runs the drill only" "false true" "$(two)"
+  change tokenledger/shared/control/cluster_reading.go; eq "F another control message runs neither" "false false" "$(two)"
+  change tokenledger/shared/control/term_relay.go; eq "F the terminal's control message runs the browser check" "true false" "$(two)"
   change tokenledger/hub/go.sum;                eq "F a module's dependencies run both" "true true" "$(two)"
   change tokenledger/brand-new/x.go;            eq "F an unknown tokenledger/ path runs both (unsure)" "true true" "$(two)"
 fi

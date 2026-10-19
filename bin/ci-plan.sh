@@ -75,15 +75,16 @@ check_rules() {
       # browseracceptance) drive the attachment / terminal / chat roads, and their
       # test binary imports hub/apitest (all of hub/api) and agent (one package), so
       # `go list -deps` cannot narrow it: these are the files those roads live in,
-      # the wire they speak, the harness, and every module's dependencies
+      # the wire they speak, the harness, and every module's dependencies (a route
+      # or the node loop around them is the Go e2e block's attachment tests')
       gounsure=1
-      globs="$GO_DEPS_GLOBS tokenledger/e2e/*browser* tokenledger/e2e/harness_test.go tokenledger/e2e/main_test.go tokenledger/hub/apitest/* tokenledger/hub/api/*attach* tokenledger/hub/api/*chat* tokenledger/hub/api/*term* tokenledger/hub/api/app_mount.go tokenledger/hub/api/server.go tokenledger/hub/api/nodes.go tokenledger/hub/store/fleet_attachments.go tokenledger/agent/*attach* tokenledger/agent/*chat* tokenledger/agent/*term* tokenledger/agent/pty* tokenledger/agent/relay.go tokenledger/agent/node.go tokenledger/agent/agent.go tokenledger/shared/control/* tokenledger/shared/attachment/* tokenledger/shared/hubwire/* bin/fleet-webterm.py bin/fleet-term-attach.sh bin/fleet_view.py extras/browser-transport/* extras/web-console/* extras/web-chat/ui/* .github/workflows/browser-attachment.yml" ;;
+      globs="$GO_DEPS_GLOBS tokenledger/e2e/*browser* tokenledger/e2e/harness_test.go tokenledger/e2e/main_test.go tokenledger/hub/apitest/* tokenledger/hub/api/*attach* tokenledger/hub/api/*chat* tokenledger/hub/api/*term* tokenledger/hub/api/app_mount.go tokenledger/hub/store/fleet_attachments.go tokenledger/agent/*attach* tokenledger/agent/*chat* tokenledger/agent/*term* tokenledger/agent/pty* tokenledger/agent/relay.go tokenledger/shared/control/control.go tokenledger/shared/control/*attach* tokenledger/shared/control/*chat* tokenledger/shared/control/*term* tokenledger/shared/attachment/* tokenledger/shared/hubwire/* bin/fleet-webterm.py bin/fleet-term-attach.sh bin/fleet_view.py extras/browser-transport/* extras/web-console/* extras/web-chat/ui/* .github/workflows/browser-attachment.yml" ;;
     hub_rolling)
       # issue #4919: what a release is made of — the manifests, the release scripts,
       # the image (its Dockerfile, the client it embeds, the hub's dependencies) and
       # the hub's start: its command, readiness / shutdown, leader, migrations
       gounsure=1
-      globs="$GO_DEPS_GLOBS deploy/k8s/* .github/actions/hub-release/* .github/workflows/hub-rolling.yml tokenledger/Dockerfile tokenledger/.dockerignore bin/fleet-client-pack.sh tokenledger/hub/api/fleetclient/* tokenledger/hub/cmd/* tokenledger/hub/leader/* tokenledger/hub/api/server.go tokenledger/hub/api/deploy_probe.go tokenledger/hub/api/access.go tokenledger/hub/api/roles.go tokenledger/hub/store/migrations.go tokenledger/hub/store/schema.sql tokenledger/hub/store/pg*.go tokenledger/hub/store/store.go" ;;
+      globs="$GO_DEPS_GLOBS deploy/k8s/* .github/actions/hub-release/* .github/workflows/hub-rolling.yml tokenledger/Dockerfile tokenledger/.dockerignore bin/fleet-client-pack.sh tokenledger/hub/api/fleetclient/* tokenledger/hub/cmd/* tokenledger/hub/leader/* tokenledger/hub/api/server.go tokenledger/hub/api/deploy_probe.go tokenledger/hub/store/migrations.go tokenledger/hub/store/schema.sql tokenledger/hub/store/pg*.go tokenledger/hub/store/store.go" ;;
     hub_deploy_check)
       globs='deploy/k8s/* .github/actions/hub-* .github/workflows/hub-deploy.yml .github/workflows/hub-deploy-check.yml' ;;
     cluster_perms)
