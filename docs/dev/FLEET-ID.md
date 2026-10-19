@@ -1,6 +1,6 @@
 # 一个窗口一个 ID：节点账本与原生段
 
-EPIC T497 的 C1（节点账本）与 C2（hub 镜像）。设计页：「会话与 hub 任务（T）的关系 · 设计稿」第 6 版（§3、§4.1、§4.2、§4.6）。
+EPIC T497 的 C1（节点账本）、C2（hub 镜像）与 C3（⌘P 面板的编号列）。设计页：「会话与 hub 任务（T）的关系 · 设计稿」第 6 版（§3、§4.1、§4.2、§4.6）。
 这一层目前**只双写**：旧 T 记录与执行权照旧，谁都不读这里做决定，直到 C7 打开切换开关。
 
 ## ID 与短码
@@ -77,5 +77,23 @@ issues · body · parent · prev · aliases · asked · parked · opened_at · c
 
 `bin/fleet-id-hub-selftest.sh` 钉节点这一半的 S10、S12、S13；hub 那一半是
 `hub/store/fleet_ids_test.go`、`hub/api/fleet_node_ids_test.go`。
+
+## 面板（C3）
+
+⌘P 每一行的编号列就是窗口自己的短码（`fleet_view.py` 的 `id_*`，读的是这本账，不另存一份）：
+本地行取窗口的 `@fleet_id`，别的机器的行取 worker_id 的后半；账本的 `short`（hub 加长过的那个）与本机已知 ID
+算出的最短前缀取较长者。没有 ID 的窗口编号列留空——不显示 issue 号、不显示前任、不写 `T?`；hub 任务的
+`T<n>` 只当别名，搜得到、行上不画（保留一个版本）。
+
+| 列 / 状态 | 从哪来 |
+|---|---|
+| Agent | 最新原生段的 agent；没有段取 `opened` 的；都没有写灰色「未知」。没有账本的旧窗口照旧读 `@cc_agent` |
+| 状态 | 活着的窗口：在干活 / 等你照 tmux；空闲时最新一条结果说了算（`failed` ⇒ ✗，`merged`/`succeeded`/`done` ⇒ ✓，`blocked` ⇒ 等你，S2）。已回收的行：账本 `closed` 且没结果 ⇒ ◌ 已退出（S7） |
+| 冲突 | 两个活着的窗口最新段是同一个原生 id ⇒ 两行都进「等你」、红 `!`，操作页写原因；关掉一个另一个就恢复（S9） |
+| 搜索 | 行自己的 issue + 账本的 issues（opened 的 issue / ticket_ref / `issue-<N>` 键、result 的 issues、派单原话里的 `#N`），整数精确匹配；短码、完整 ID、别名也搜得到 |
+
+Tab 操作页在动作下面列出：编号 + 完整 ID、别名、每一段（agent · 起止 · trigger · 压缩次数）；
+`ids/.hub/<ID>.seq` 还没有 ⇒「未登记到 hub」，`.refused` ⇒ 红字「hub 拒收」（S13）。离线时这些都照常，
+只是读本机账本。`bin/fleet-view-id-selftest.sh` 钉住它。
 
 `bin/fleet-id-selftest.sh` 钉住 §4.6 的 S1、S3–S6、S11 与短码/寻址/钩子的规矩。

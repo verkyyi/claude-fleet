@@ -84,8 +84,9 @@ the list's session order as last drawn — ⌘↓ ⌘↑ read it (a press never 
 WORDS (#2752): no row says `merged` or `done:15m` — the reap policy is
 「合并后关」 / 「空闲 2 小时关」, available in the row's actions;
 ROWS — plan B (T486 v14, T493): every session line is the same columns, glyph(1)
-· ID(8, bold: its hub task T<n> until T488's window ID; none ⇒ blank) · Agent(7:
-Claude / Codex, a grey 未知) · short name (short_name: no envelope, issue prefix,
+· ID(8, bold: the window's own short code T-xxxxx — EPIC T497 C3, id_apply; no
+ID ⇒ blank, a hub task's T<n> only an alias) · Agent(7: Claude / Codex — the
+ID's newest native segment, else opened, else a grey 未知) · short name (short_name: no envelope, issue prefix,
 brackets or paths; cut at punctuation) · repo(13, its own, blank when none). A
 state is ONE glyph (↻ running · ! needs · ✓ done · ✗ failed · ◌ exited, only
 under 已结束 · ∙ idle · ☾ asleep · ? lost); only ! and ✗ are coloured — red,
@@ -928,8 +929,8 @@ def short_name(text):
 
 
 def row_cols(e, tid, agent, title, name):
-    """Fill a session line's plan-B columns: `id` (its hub task T<n> — T488's
-    window ID comes later; none ⇒ blank), `agent` ('' ⇒ 未知) and its short
+    """Fill a session line's plan-B columns: `id` (its hub task T<n> — id_apply
+    turns it into an alias and puts the window's short code there), `agent` ('' ⇒ 未知) and its short
     `text` — the title cell (a name given, the issue's title, the first sentence)
     else the window name, the first that leaves a name."""
     tid = (tid or "").strip()
@@ -942,6 +943,222 @@ def row_cols(e, tid, agent, title, name):
             break
     e["id"] = tid if re.fullmatch(r"T\d+", tid) else found
     e["agent"] = agent.strip() if (agent or "").strip() in AGENTS else ""
+
+
+# --- a window's ID (EPIC T497 C3, design page §8) --------------------------------
+# The ID column is the window's own short code `T-xxxxx` (bin/fleet_id.py: its
+# @fleet_id, the ledger's `short`, else the shortest prefix this login knows no
+# other ID to share) — never a hub task's T<n>, never a `T?`, never the issue or
+# a predecessor. A row's ledger ($FLEET_CONF_DIR/ids/<ID>.ndjson) also gives its
+# Agent (the newest native segment's, else the one it was opened with, else 未知),
+# its latest result (S2: the newest one wins), its closing (no result ⇒ 已退出,
+# S7), the issues it is linked to (searched, never drawn) and, on the actions
+# page, its segments, aliases and whether the hub has it. Two live rows on the
+# same native segment are a conflict (S9): both red 「等你」, the reason on the
+# page. A ledger that cannot be read changes nothing: the row is drawn as before.
+_ID_CACHE = {}
+RESULT_STATE = {"failed": "failed", "error": "failed", "merged": "done", "succeeded": "done", "done": "done",
+                "blocked": "needs"}
+ISSUE_REF_RE = re.compile(r"(?:^|[^\w/#])(?:[\w.-]+/[\w.-]+)?#(\d+)\b")
+
+
+def fleet_id_mod():
+    """bin/fleet_id.py, loaded once (None when it cannot be)."""
+    if "mod" not in _ID_CACHE:
+        try:
+            import fleet_id as mod   # noqa: E402 — the ledger's one reader (C1)
+        except Exception:
+            mod = None
+        _ID_CACHE["mod"] = mod
+    return _ID_CACHE["mod"]
+
+
+def id_record(fid):
+    """The ledger of `fid` folded (fleet_id.fold), kept until the file changes; None
+    without one."""
+    fi = fleet_id_mod()
+    if fi is None or not fi.is_fid(fid):
+        return None
+    path = fi.ledger_path(fid)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    stamp = (st.st_mtime_ns, st.st_size)
+    hit = _ID_CACHE.get(path)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    try:
+        rec = fi.fold(fi.read(fid))
+    except Exception:
+        return None
+    _ID_CACHE[path] = (stamp, rec)
+    return rec
+
+
+def id_known(extra=()):
+    fi = fleet_id_mod()
+    try:
+        return fi.known_ids(extra) if fi else set()
+    except Exception:
+        return set()
+
+
+def id_short(fid, rec, known):
+    fi = fleet_id_mod()
+    if fi is None or not fi.is_fid(fid):
+        return ""
+    have = ((rec or {}).get("opened") or {}).get("short") or ""
+    try:
+        mine = fi.short_for(fid, known | {fid})
+    except Exception:
+        mine = ""
+    # the longer one: the hub may have lengthened it (S12), a newer ID may share it now
+    return have if len(have) >= len(mine) else mine
+
+
+def id_issues(rec):
+    """The issue numbers a ledger links (§3.5): opened's issue / ticket_ref /
+    `issue-<N>` key, results' issues, and every #N in the words it was opened with."""
+    out = set()
+    o = (rec or {}).get("opened") or {}
+    for k in ("issue", "ticket_ref"):
+        m = re.search(r"(\d+)$", str(o.get(k) or ""))
+        if m:
+            out.add(m.group(1))
+    m = re.fullmatch(r"issue-(\d+)", str(o.get("key") or ""))
+    if m:
+        out.add(m.group(1))
+    for r in (rec or {}).get("results") or ():
+        for ref in r.get("issues") or ():
+            m = re.search(r"#?(\d+)$", str(ref))
+            if m:
+                out.add(m.group(1))
+    for k in ("title", "body", "words"):
+        out.update(ISSUE_REF_RE.findall(str(o.get(k) or "")))
+    return out
+
+
+def id_hub(fid):
+    """'' registered · 'unhubbed' never acknowledged · 'refused' (S13)."""
+    fi = fleet_id_mod()
+    if fi is None:
+        return ""
+    base = os.path.join(fi.hub_dir(), fid)
+    if os.path.exists(base + ".refused"):
+        return "refused"
+    try:
+        with open(base + ".seq", encoding="utf-8") as fh:
+            seq = fh.read().split()
+        return "" if seq and seq[0].isdigit() and int(seq[0]) > 0 else "unhubbed"
+    except OSError:
+        return "unhubbed"
+
+
+def id_apply(e, fid, known, live=True):
+    """Lay one row's ID over it (see above). `fid` empty or unknown ⇒ the ID column
+    is blank and the row is otherwise as T493 drew it."""
+    alias = e.pop("id", "") or ""
+    e["aliases"] = [alias] if alias else []
+    e["id"] = ""
+    fi = fleet_id_mod()
+    if fi is None or not fi.is_fid(fid or ""):
+        return
+    rec = id_record(fid)
+    e["fid"] = fid
+    e["id"] = id_short(fid, rec, known)
+    if rec is None:
+        return
+    o = rec.get("opened") or {}
+    if o.get("task") and o["task"] not in e["aliases"]:
+        e["aliases"].append(o["task"])
+    segs = rec.get("segments") or []
+    e["agent"] = (segs[-1].get("agent") if segs else "") or o.get("agent") or ""
+    if e["agent"] not in AGENTS:
+        e["agent"] = ""
+    e["segs"] = segs
+    e["issues"] = sorted(id_issues(rec))
+    e["hub"] = id_hub(fid)
+    e["native"] = segs[-1].get("native", "") if segs and live and not rec.get("closed") else ""
+    res = (rec.get("results") or [{}])[-1].get("state", "") if rec.get("results") else ""
+    st = RESULT_STATE.get(res, "")
+    if live and st and e.get("state") not in ("working", "looping", "needs", "exited") and not e.get("lost"):
+        # S2: the newest result says how a live window ended its last piece of work
+        e["state"] = st
+        e["sym"] = sym_of(st)
+        e["word"] = state_words(st)
+    if not live and rec.get("closed"):
+        # S7: a closed ID with no result exited; else its newest result
+        e["sym"] = "exited" if not res else ("fail" if st == "failed" else "done")
+        e["word"] = say("view_legend_exited") if not res else e.get("word", "")
+
+
+def id_conflicts(rows):
+    """S9: live rows sharing one native segment — each marked with the others' codes."""
+    by = {}
+    for e in rows:
+        if e.get("native") and not e.get("far"):
+            by.setdefault(e["native"], []).append(e)
+    for native, es in by.items():
+        if len(es) < 2:
+            continue
+        for e in es:
+            e["conflict"] = ", ".join(x["id"] for x in es if x is not e)
+            e["state"], e["sym"], e["group"] = "needs", "needs", "ask"
+            e["word"] = say("view_id_conflict")
+
+
+def id_gone_index():
+    """{opened key: fid} over the closed ledgers, newest opening first — a reaped
+    row (fleet-history's `landed:issue:<N>` / `landed:scratch:<key>`) finds its ID."""
+    fi = fleet_id_mod()
+    out = {}
+    for fid in (fi.ledger_ids() if fi else []):
+        rec = id_record(fid)
+        if not rec or not rec.get("closed"):
+            continue
+        o = rec.get("opened") or {}
+        key = o.get("key") or ""
+        if key and (key not in out or (o.get("ts") or 0) > out[key][1]):
+            out[key] = (fid, o.get("ts") or 0)
+    return {k: v[0] for k, v in out.items()}
+
+
+def gone_key(target):
+    m = re.match(r"landed:(issue|scratch):([^@]+)", target or "")
+    if not m:
+        return ""
+    return ("issue-" + m.group(2)) if m.group(1) == "issue" else m.group(2)
+
+
+def id_page(e, w):
+    """The actions page's ID block (§8): the code and the full ID, its aliases, every
+    native segment (agent · start–end · trigger · compactions), the hub's word and
+    a conflict's reason. [(text, style)]."""
+    if not e.get("fid"):
+        return []
+    out = [("", ())]
+    out.append(("  " + say("view_id_head_fmt", e.get("id") or "", e["fid"]), ("dim",)))
+    if e.get("aliases"):
+        out.append(("  " + say("view_id_aliases_fmt", " ".join(e["aliases"])), ("dim",)))
+    segs = e.get("segs") or []
+    for s in segs:
+        fi = fleet_id_mod()
+        span = "%s–%s" % (fi.hhmm(s.get("start")), fi.hhmm(s["end"]) if s.get("end") else "")
+        tail = s.get("trigger") or ""
+        if s.get("compactions"):
+            tail += "  " + say("view_id_compact_fmt", s["compactions"])
+        out.append(("  " + say("view_id_seg_fmt", s.get("n", "?"), (s.get("agent") or "?").capitalize(), span, tail),
+                    ("dim",)))
+    if not segs and "segs" in e:
+        out.append(("  " + say("view_id_no_segs"), ("dim",)))
+    if e.get("hub") == "unhubbed":
+        out.append(("  " + say("view_id_unhubbed"), ("dim",)))
+    elif e.get("hub") == "refused":
+        out.append(("  " + say("view_id_hub_refused"), ("red",)))
+    if e.get("conflict"):
+        out.append(("  " + say("view_id_conflict_fmt", e["conflict"], e.get("native") or ""), ("red",)))
+    return out
 
 
 def entries(vid, now=None, hub=True):
@@ -984,6 +1201,7 @@ def entries(vid, now=None, hub=True):
     ended, repos, anc = [], [], {}
     section, repo = "", ""
     seen = set()
+    known = id_known(v[0] for v in wins.values())
     # the repo a row sits under, as the ask book's key (issue #4225): a heading's
     # owner/name; with no heading at all (a one-repo list) the fleet's one repo
     only = fleet_only_slug(fleet) if fleet else ""
@@ -1117,6 +1335,10 @@ def entries(vid, now=None, hub=True):
         # a window here with no agent word (an older producer) is Claude — the
         # spawners' convention; another machine's says its own or 未知
         row_cols(e, f[21], f[22] or ("claude" if local else ""), title, name)
+        # the window's own ID (EPIC T497 C3): its short code, ledger agent and result
+        id_apply(e, wins.get(target, ("", "", 0))[0] if local else target.rpartition("/")[2], known)
+        if e["state"] != state:
+            grp = e["group"] = group_of(e["state"], section == "pin", landed, section == "ended", bool(pend), stage)
         if grp == "ended":
             why =say("view_ended_merged") if f[10].strip() in MERGED_PR else \
                 say("view_ended_exited") if state == "exited" else say("view_ended_done")
@@ -1141,6 +1363,7 @@ def entries(vid, now=None, hub=True):
     # FLEET_VIEW_CLOSED_HOURS of them listed, the older ones a count that opens
     # /fleet-history; a row whose age cannot be read counts as older
     gone, older, keep = [], 0, closed_secs()
+    gidx = None
     for target, glyph, label, name, title, act, pr, when in gone_rows(gone_text(fleet)):
         if label.startswith("#") and label in open_issues:
             continue
@@ -1158,8 +1381,20 @@ def entries(vid, now=None, hub=True):
                      "foot": " · ".join(x for x in (title or name, label, say("view_pr_fmt", pr) if pr.startswith("#") else "",
                                                     word, say("view_gone_hint")) if x)})
         row_cols(gone[-1], label, "", title, name)
+        if gidx is None:
+            gidx = id_gone_index()
+        id_apply(gone[-1], gidx.get(gone_key(target), ""), known, live=False)
     if held != held0:
         names_save(fleet, held)
+    # S9: two live windows on one conversation — both to 等你
+    id_conflicts([e for g in GROUPS for e in groups[g]])
+    for g in GROUPS:
+        if g != "ask":
+            moved = [e for e in groups[g] if e.get("conflict")]
+            groups[g] = [e for e in groups[g] if not e.get("conflict")]
+            for e in moved:
+                e["depth"] = 0
+            groups["ask"] += moved
     multi = len(set(repos)) >= 2
     out = []
     for g in GROUPS:
@@ -1307,12 +1542,21 @@ def fuzzy(token, text):
     return score, pos
 
 
-def issue_hit(token, e):
-    """A word that is a number or `#number` equal to the row's linked issue (plan B,
-    T493: the issue is never drawn on the row, but it is searched — exactly)."""
+def row_issues(e):
+    """The row's linked issue numbers: its own, and its ID's (EPIC T497 C3 — the
+    ledger's issues and every #N in the words it was dispatched with)."""
     issue = (e.get("issue") or "").lstrip("#")
-    return bool(issue) and issue.isdigit() and re.fullmatch(r"#?\d+", token) is not None \
-        and token.lstrip("#") == issue
+    out = [issue] if issue.isdigit() else []
+    return out + [n for n in e.get("issues") or () if n not in out]
+
+
+def issue_hit(token, e):
+    """The linked issue a word that is a number or `#number` names exactly (plan B,
+    T493: an issue is never drawn on the row, but it is searched), or ''."""
+    if re.fullmatch(r"#?\d+", token) is None:
+        return ""
+    n = token.lstrip("#")
+    return n if n in row_issues(e) else ""
 
 
 def score_token(token, e):
@@ -1324,7 +1568,7 @@ def score_token(token, e):
     i = name.lower().find(token)
     if i >= 0:
         return 3000 - i + (200 if word_start(name, i) else 0)
-    hay = " ".join(str(x) for x in (e.get("name"), e.get("id")) if x).lower()
+    hay = " ".join(str(x) for x in [e.get("name"), e.get("id"), e.get("fid")] + list(e.get("aliases") or ()) if x).lower()
     i = hay.find(token)
     if i >= 0:
         return 2000 - i
@@ -1339,8 +1583,10 @@ def match_why(e, query):
     its linked issue is what matched (a name hit explains itself)."""
     words = query.lower().split()
     name = (e.get("text") or "").lower()
-    if words and any(issue_hit(w, e) and w not in name for w in words):
-        return say("view_match_issue_fmt", "#" + (e.get("issue") or "").lstrip("#"))
+    for w in words:
+        n = issue_hit(w, e)
+        if n and w not in name:
+            return say("view_match_issue_fmt", "#" + n)
     return ""
 
 
@@ -3795,6 +4041,9 @@ def _popup(screen, qo, vid, client, forward=""):
                         continue
                     n += 1
                     lines.append(("  %s  %s" % (n if n < 10 else " ", label), ("lit",) if i == mat else ()))
+                if mode == "menu" and head and head.get("kind") == "sess":
+                    # the window's ID under its actions (EPIC T497 C3): segments, aliases, hub
+                    lines.extend(id_page(head, w))
                 selected = mat
                 keys = say("view_page_keys_fmt", "1–%d" % min(9, max(1, n))) if mode == "menu" else \
                     say("view_choice_keys_fmt", "1–%d" % min(9, max(1, n)))
