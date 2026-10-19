@@ -858,6 +858,7 @@ FLEET_TRAIN_GH                     seam: the gh command fleet-train-macos.sh wat
 FLEET_IMAGETOOLS                   seam: the `docker buildx imagetools` fleet-train-prebuild.sh runs (the BREAK-IT drill's fake; #3867)
 FLEET_TRAIN_RUNNER                 handoff: the release train's linux-pick job hands the repo variable of that name (empty | fleet-ack) to fleet-train-runner.sh pick (CI only, never a conf; #3864)
 FLEET_TRAIN_RUNNER_TOKEN           handoff: the runner app's installation token linux-pick mints in environment fleet-ack-probe, read by fleet-train-runner.sh pick for the repo's runner list (CI only, never a conf; #3864)
+FLEET_PR_RUNNER                    handoff: ci.yml's plan and fleet-ack-status.yml hand the repo variable of that name (empty | fleet-ack) to fleet-train-runner.sh pr-pick / pick — where this repo's own PRs run their heavy checks (CI only, never a conf; #4821)
 FLEET_TRAIN_GIT_MIRROR             handoff: the repo variable naming the cluster's git mirror, which pick passes on to the Linux shards on fleet-ack (CI only, never a conf; #3864)
 FLEET_BROWSER                      seam: fleet-browser.sh `enabled`'s answer (0|1) over the plugin's state (selftest, #3236)
 FLEET_BROWSER_CLAUDE               seam: the claude binary fleet-browser.sh on/off runs (selftest, #3236)
