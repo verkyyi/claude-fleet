@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -23,9 +24,14 @@ import (
 type GitHubIssueMeta struct {
 	APIBase string // default https://api.github.com
 	Token   string
-	TTL     time.Duration // default 6h
-	FailTTL time.Duration // default 30m
-	Client  *http.Client
+	// TokenSource, when set, answers the token a request carries ahead of
+	// Token: the hub's GitHub App installation token (claude-fleet#4881) —
+	// anonymous reads share the cluster's address and run out of GitHub's
+	// 60 an hour. Its failure falls back to Token, else anonymous.
+	TokenSource func(context.Context) (string, error)
+	TTL         time.Duration // default 6h
+	FailTTL     time.Duration // default 30m
+	Client      *http.Client
 
 	mu    sync.Mutex
 	cache map[string]issueMetaEntry
@@ -101,21 +107,13 @@ func (g *GitHubIssueMeta) fetch(ctx context.Context, repo string, issue int) (ti
 	if err != nil {
 		return "", "", err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	if g.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+g.Token)
-	}
-	c := g.Client
-	if c == nil {
-		c = &http.Client{Timeout: 5 * time.Second}
-	}
-	resp, err := c.Do(req)
+	resp, err := g.do(ctx, req)
 	if err != nil {
 		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("github %s#%d: HTTP %d", repo, issue, resp.StatusCode)
+		return "", "", fmt.Errorf("github %s#%d: %w", repo, issue, ghStatusErr(resp))
 	}
 	var body struct {
 		Title     string `json:"title"`
@@ -128,6 +126,51 @@ func (g *GitHubIssueMeta) fetch(ctx context.Context, repo string, issue int) (ti
 		parent = m[1] + "#" + m[2]
 	}
 	return body.Title, parent, nil
+}
+
+// do sends one GitHub request with the reader's token.
+func (g *GitHubIssueMeta) do(ctx context.Context, req *http.Request) (*http.Response, error) {
+	req.Header.Set("Accept", "application/vnd.github+json")
+	tok := g.Token
+	if g.TokenSource != nil {
+		if t, err := g.TokenSource(ctx); err == nil && t != "" {
+			tok = t
+		}
+	}
+	if tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	c := g.Client
+	if c == nil {
+		c = &http.Client{Timeout: 5 * time.Second}
+	}
+	return c.Do(req)
+}
+
+// ghTransportErr names why no answer came: timed out or unreachable — never
+// the URL or a header.
+func ghTransportErr(err error) error {
+	var te interface{ Timeout() bool }
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &te) && te.Timeout()) {
+		return errors.New("GitHub timed out")
+	}
+	if errors.Is(err, context.Canceled) {
+		return errors.New("cancelled")
+	}
+	return errors.New("GitHub unreachable")
+}
+
+// ghStatusErr names a non-200: its status and the start of GitHub's own
+// message ("HTTP 403 rate limit exceeded", "HTTP 401 Bad credentials").
+func ghStatusErr(resp *http.Response) error {
+	var m struct {
+		Message string `json:"message"`
+	}
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&m)
+	if msg := strings.TrimSpace(clipRunes(m.Message, 80)); msg != "" {
+		return fmt.Errorf("HTTP %d %s", resp.StatusCode, msg)
+	}
+	return fmt.Errorf("HTTP %d", resp.StatusCode)
 }
 
 func orDur(d, def time.Duration) time.Duration {
@@ -148,21 +191,13 @@ func (g *GitHubIssueMeta) IssueState(ctx context.Context, repo string, issue int
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	if g.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+g.Token)
-	}
-	c := g.Client
-	if c == nil {
-		c = &http.Client{Timeout: 5 * time.Second}
-	}
-	resp, err := c.Do(req)
+	resp, err := g.do(ctx, req)
 	if err != nil {
-		return "", err
+		return "", ghTransportErr(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("github %s#%d: HTTP %d", repo, issue, resp.StatusCode)
+		return "", ghStatusErr(resp)
 	}
 	var body struct {
 		State string `json:"state"`

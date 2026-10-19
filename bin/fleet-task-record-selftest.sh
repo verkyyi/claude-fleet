@@ -115,6 +115,7 @@ L = open(sys.argv[1]).read().splitlines()
 assert L[0].endswith("https://hub.test/v1/node/tasks/settle"), L[0]
 b = json.loads([l for l in L if l.startswith("body: ")][0][6:])
 assert b == {"repo": "o/r", "apply": False}, b
+assert "--max-time 90" in L[0], L[0]   # issue #4881: outlasts the hub's 60 s GitHub budget
 PY
 : > "$CURL_LOG"
 bash "$R" settle --repo o/r --apply >/dev/null 2>&1 && grep -q '^body: {"repo": "o/r", "apply": true}' "$CURL_LOG" \

@@ -77,6 +77,35 @@ type FeedbackGitHub struct {
 
 	mu    sync.Mutex
 	retry map[int64]feedbackRetry
+
+	// The issue reader's token (Token, claude-fleet#4881): one installation
+	// token kept in memory, never written anywhere.
+	tokMu sync.Mutex
+	tok   string
+	tokAt time.Time
+}
+
+// feedbackTokenKeep is how long Token reuses one installation token (GitHub
+// gives an hour).
+const feedbackTokenKeep = 50 * time.Minute
+
+// Token is an installation token for the hub's other GitHub reads — the
+// legacy task settle's issue states and 我的用量's titles (claude-fleet#4881):
+// the cluster's anonymous reads share one address and run out of GitHub's 60
+// an hour. Reused for feedbackTokenKeep, held only in memory.
+func (g *FeedbackGitHub) Token(ctx context.Context) (string, error) {
+	g.tokMu.Lock()
+	defer g.tokMu.Unlock()
+	now := time.Now()
+	if g.tok != "" && now.Sub(g.tokAt) < feedbackTokenKeep {
+		return g.tok, nil
+	}
+	t, err := g.installationToken(ctx, now)
+	if err != nil {
+		return "", err
+	}
+	g.tok, g.tokAt = t, now
+	return t, nil
 }
 
 type feedbackRetry struct {

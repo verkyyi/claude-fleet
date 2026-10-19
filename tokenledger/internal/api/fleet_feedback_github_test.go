@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -89,6 +90,8 @@ func (f *fakeIssuesGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		out := append([]map[string]any{}, f.comments[n]...)
 		f.mu.Unlock()
 		writeJSON(w, http.StatusOK, out)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/repos/o/r/issues/") && !strings.Contains(strings.TrimPrefix(r.URL.Path, "/repos/o/r/issues/"), "/"):
+		writeJSON(w, http.StatusOK, map[string]any{"state": "closed", "title": "done"})
 	case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/issues":
 		if fail && !createThen {
 			http.Error(w, `{"message":"Server Error"}`, http.StatusInternalServerError)
@@ -316,5 +319,39 @@ func TestFeedbackFilingOffSendsNothing(t *testing.T) {
 	}
 	if r := feedbackRows(t, h)[0]; r.State != store.FeedbackReceived || r.GHNumber != 0 {
 		t.Fatalf("row: %+v", r)
+	}
+}
+
+// claude-fleet#4881: the hub's issue reads carry the App's installation token,
+// minted once and reused; without it the same GitHub answers 401, and the
+// reason travels in the error.
+func TestIssueStateViaAppToken(t *testing.T) {
+	h, _, _, gh, _, _ := feedbackGHHarness(t)
+	g := h.srv.Feedback.GitHub
+	im := &GitHubIssueMeta{APIBase: g.API, TokenSource: g.Token}
+	ctx := context.Background()
+	for n := 1; n <= 3; n++ {
+		if st, err := im.IssueState(ctx, "o/r", n); err != nil || st != "closed" {
+			t.Fatalf("o/r#%d = %q, %v", n, st, err)
+		}
+	}
+	calls, _ := gh.snapshot()
+	mint := 0
+	for _, c := range calls {
+		if strings.HasSuffix(c, "/access_tokens") {
+			mint++
+		}
+	}
+	if mint != 1 {
+		t.Errorf("%d installation tokens minted for 3 reads; want 1: %v", mint, calls)
+	}
+	anon := &GitHubIssueMeta{APIBase: g.API}
+	if _, err := anon.IssueState(ctx, "o/r", 1); err == nil || err.Error() != "HTTP 401 Bad credentials" {
+		t.Errorf("anonymous = %v; want HTTP 401 Bad credentials", err)
+	}
+	// A token source that fails falls back to the static token.
+	fb := &GitHubIssueMeta{APIBase: g.API, Token: fakeInstTok, TokenSource: func(context.Context) (string, error) { return "", errors.New("down") }}
+	if st, err := fb.IssueState(ctx, "o/r", 1); err != nil || st != "closed" {
+		t.Errorf("fallback = %q, %v", st, err)
 	}
 }
