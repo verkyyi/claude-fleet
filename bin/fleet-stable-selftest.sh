@@ -358,8 +358,8 @@ eq "Q: nothing dispatched" no "$([ -f "$WORK/dispatched" ] && echo yes || echo n
 commit twentyfour >/dev/null; push
 C25=$(commit twentyfive); push
 printf '%s\tcompleted\tfailure\tpush\t32\tselftests (macOS)\n' "$C25" > "$WORK/macos"; printf 'failure\n' > "$WORK/statuses"
-run move "$C25" --ref stable
-eq "Q: --ref stable moves stable past a red macOS" 0 "$RC"; eq "Q: stable at C25" "$C25" "$(tag)"
+run move "$C25"
+eq "Q: stable moves past a red macOS" 0 "$RC"; eq "Q: stable at C25" "$C25" "$(tag)"
 
 # --- S. gate 9, the China real-user path (issue #4180) -------------------------------------------
 # bin/fleet-cn-probe-watch.sh leaves `cn path` on the stable it walked; red holds stable while

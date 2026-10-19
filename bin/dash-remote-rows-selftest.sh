@@ -447,7 +447,7 @@ def s(fleet, host, user, key, avail="online", wid=True, seen="2026-10-04T10:00:0
     return dict(worker_id=(fleet + "/" + key) if wid else None, machine_name=host, os_user=user,
                 fleet_id=fleet, fleet_name="x", availability=avail, worker=w, observed_at=seen)
 sessions = [
-    s(u, "elsewhere", me, "issue-1420", issue=1420, name="local-one"),           # this fleet: dropped
+    s(u, "elsewhere", me, "acme-app:issue-1420", issue=1420, name="local-one"),  # this fleet: dropped
     s(f, "mac-d.local", me, "issue-1423", issue=1423, name="侧边栏", origin_wid=u + "/issue-1419"),
     s(f, "mac-d.local", me, "issue-1500", issue=1500, name="孙", origin_wid=f + "/issue-1423", seen="2026-10-04T10:05:00Z"),
     s(f, "mac-d.local", me, "issue-1600", issue=1600, name="epic-kid", busy="bg"),  # sub-issue of local 1419; #1607 busy
@@ -501,7 +501,7 @@ eq   "E: what the window needs rides along (field 10)" "mac-a|online|needs|asker
 eq   "E: a lost machine's row is kept, marked lost" "mac-a|lost|working|草稿||" "$(rrow scratch-4)"
 eq   "E: this fleet's own session is a LOCAL row (#1480): local=1, this machine's label, no window here → empty wid" \
      "local-one|1||$MYHOST|online" \
-     "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $8 "|" $11 "|" $12 "|" $2 "|" $3 }')"
+     "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$U/acme-app:issue-1420" '$1 == w { print $8 "|" $11 "|" $12 "|" $2 "|" $3 }')"
 eq   "E: a row on another machine says local=0, no wid" "0|" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1423" '$1 == w { print $11 "|" $12 }')"
 # (a needs row that says what it asks runs on to fields 27-28 — #2538)
@@ -1028,11 +1028,11 @@ print(",".join(sorted("%s:%s" % (x["name"], x.get("test", False)) for x in ws if
   "$REAL_TMUX" -L "$S" set-window-option -t "$wl" @issue 1420
   CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>"$WORK/err" || fail "G: --refresh (real server) failed" "$(cat "$WORK/err")"
   eq "G: a local row's wid is the live window of its worker_id" "1|$wl" \
-     "$(LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $11 "|" $12 }' "$G/remote_$S")"
+     "$(LC_ALL=C awk -F"$US" -v w="wid:$U/acme-app:issue-1420" '$1 == w { print $11 "|" $12 }' "$G/remote_$S")"
   "$REAL_TMUX" -L "$S" kill-window -t "$wl" 2>/dev/null
   CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null
   eq "G: …and empty again once that window is gone" "1|" \
-     "$(LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $11 "|" $12 }' "$G/remote_$S")"
+     "$(LC_ALL=C awk -F"$US" -v w="wid:$U/acme-app:issue-1420" '$1 == w { print $11 "|" $12 }' "$G/remote_$S")"
   # The driver wears its batch (issue #2544): fleet-epic-heartbeat.sh --short
   # renames ITS OWN pane's window `<简称>·批次` beside the @epic stamp — only from a
   # name the fleet gave it; a person's name stays, and no --short renames nothing.

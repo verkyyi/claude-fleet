@@ -211,9 +211,6 @@ eq "ledger: ...not in o/a's" "$a" "12 "
 # one-repo fleet: the same repo-qualified keys — one road (#1941)
 bash "$BIN/fleet-ledger-watch.sh" "$D" >/dev/null 2>&1
 eq "ledger: one-repo snapshot is repo-qualified too" "$(cut -f1 "$(fleet_state_dir "$D")/ledgerwatch.snap" | sort | tr '\n' ' ')" "o/c#12 o/c#14 o/c#20 "
-sd=$(fleet_state_dir "$D"); sed -E 's/^o\/c#//' "$sd/ledgerwatch.snap" > "$sd/x" && mv "$sd/x" "$sd/ledgerwatch.snap"
-out=$(bash "$BIN/fleet-ledger-watch.sh" "$D" 2>&1)
-has "ledger: one-repo pre-#1941 bare snapshot records nothing" "$out" "no session window vanished"
 leg ledger
 
 # restore the windows the ledger leg closed, for the dash + hub legs

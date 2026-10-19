@@ -382,7 +382,7 @@ def main():
             install = ['bash', str(runtime / 'bin/fleet-node-install.sh'), '--hub', args.hub,
                        '--join-file', str(code), '--login', login, '--login-join-file', str(code),
                        '--release-key', str(pub), '--service', 'foreground']
-            result = subprocess.run(install)
+            result = subprocess.run(install, env=dict(os.environ, FLEET_NODE_UID='31022'))
             if result.returncode:
                 raise RuntimeError('installer failed: ' + (d / 'sshd-check.log').read_text())
             assert (sshdir / 'fleet_user_ca.pub').read_bytes() == Hub.ca
@@ -407,7 +407,8 @@ def main():
             token_path = d / 'cred' / login / 'node.env'
             original = token_path.read_bytes()
             code.unlink()  # restart after the one-time Secret has been removed
-            m.prepare(args)
+            args.name, args.full_name, args.start = login, '', False
+            m.login_open(args)
             assert Hub.joins == 2, 'restart enrolled another endpoint (one machine + one tenant expected)'
             assert token_path.read_bytes() == original, 'node token changed on retry'
             assert not (d / 'units/claude-fleet-cred-proxy-shared.service').exists(), 'duplicate proxy service was installed'
