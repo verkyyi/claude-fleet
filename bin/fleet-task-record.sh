@@ -316,7 +316,7 @@ case "$cmd" in
     to=${FLEET_HUB_TIMEOUT:-10}
     case "$to" in ''|*[!0-9]*) to=90 ;; esac
     [ "$to" -ge 90 ] || to=90
-    FLEET_HUB_TIMEOUT=$to call POST /v1/node/tasks/settle "$(python3 -c 'import json,sys; print(json.dumps({"repo":sys.argv[1],"apply":sys.argv[2]=="true","drained":sys.argv[3]=="true"}))' "$repo" "$apply" "$drained")" || exit 1 ;;
+    FLEET_HUB_TIMEOUT=$to call POST /v1/node/tasks/settle "$(python3 -c 'import json,sys; d={"repo":sys.argv[1],"apply":sys.argv[2]=="true"}; d.update({"drained":True} if sys.argv[3]=="true" else {}); print(json.dumps(d))' "$repo" "$apply" "$drained")" || exit 1 ;;
   set)
     is_tref "${1:-}" || usage
     t="$1"; shift

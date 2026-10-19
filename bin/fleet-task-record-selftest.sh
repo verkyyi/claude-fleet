@@ -117,6 +117,8 @@ PY
 : > "$CURL_LOG"
 bash "$R" settle --repo o/r --apply >/dev/null 2>&1 && grep -q '^body: {"repo": "o/r", "apply": true}' "$CURL_LOG" \
   && ok "S settle --apply sends apply" || bad "S --apply: $(cat "$CURL_LOG")"
+bash "$R" settle --repo o/r --drained --apply >/dev/null 2>&1 && grep -q '^body: {"repo": "o/r", "apply": true, "drained": true}' "$CURL_LOG" \
+  && ok "S settle --drained sends drained (T479)" || bad "S --drained: $(cat "$CURL_LOG")"
 bash "$R" settle >/dev/null 2>&1; [ "$?" = 2 ] && ok "S settle without --repo is usage" || bad "S no --repo accepted"
 
 # --- C: set / get ------------------------------------------------------------------
