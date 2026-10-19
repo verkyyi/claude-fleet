@@ -207,6 +207,9 @@ func TestNodeTaskSettleRepoCaseAndNoRepo(t *testing.T) {
 	h.srv.FleetAdmins = []string{"frank"}
 	h.srv.IssueMeta = fakeIssueStates{"Org/Repo#1": "closed", "org/repo#1": "closed", "Org/Epic#7": "closed"}
 	gone := wrFleetM4 + "/" + wrFid
+	if _, err := h.srv.Store.RecordFleetSnapshot(nodes["verk4"].id, "verk4", "frank", "verk4", []store.FleetReport{{FleetID: wrFleetM4, Name: "fleet", Repo: "org/repo", WorkersJSON: `[]`}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	tok := nodes["verk4"].token
 	mk := func(token, repo, issue string) {
 		t.Helper()
