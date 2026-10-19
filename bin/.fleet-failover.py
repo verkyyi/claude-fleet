@@ -504,18 +504,12 @@ def stuck_attempts():
     except ValueError: return 5
 
 
-def migrate_glyph():
-    """The dash key that migrates the highlighted row (#873), as the operator's
-    terminal will deliver it — the keymap resolver dodges a colliding prefix."""
-    try: return run(['bash', BIN / 'dash-keymap.sh', 'glyph', 'migrate'], timeout=5).strip() or '⌃l'
-    except (OSError, subprocess.SubprocessError): return '⌃l'
-
-
 def unstick_hint(source):
     # Name the tap-first action first (#873): the operator reading this page is
     # usually on a phone, one key + one confirm away from the fix.
-    return 'dash %s on the row (DASH_KEY_MIGRATE), or fleet-account.sh migrate --session %s --force-bg %s' % (
-        migrate_glyph(), source.get('session','?'), source.get('window','?'))
+    # (the dash's ⌃l went with the dash, issue #4902: ⌘P's row menu is the tap)
+    return '⌘P → the row → Switch account, or fleet-account.sh migrate --session %s --force-bg %s' % (
+        source.get('session','?'), source.get('window','?'))
 
 
 def notify_stuck(r):

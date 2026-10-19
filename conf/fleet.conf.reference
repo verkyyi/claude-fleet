@@ -18,8 +18,7 @@
 #           but the modal never writes it.
 #   @tier   modal visibility:     common (default view) · advanced (collapsed) ·
 #           internal (pacing/budget/timeout knobs, issue #1101: NOT listed by the
-#           modal or `fcfg_table` unless you open "show all" — the modal's
-#           INTERNAL header, or FLEET_CONFIG_SHOW_INTERNAL=1. Still read at
+#           config panel unless you open "show all". Still read at
 #           runtime, still hand-overridable in any conf; defaults stay here).
 #   @edit   editor + validation:  no · bool · int · enum · path · str · regex.
 # @label is the friendly name shown in the modal; @group buckets rows into
@@ -1624,15 +1623,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_CLOSE_LANDS_NEXT=1
 
 
-# The full-screen list window (issue #1533). 0 (default): there is none — the
-# task list on the left is the only list; ⌂ / F9 / prefix g all land on it, focused
-# (shown and switched on if needed; F9 a third time hides it), and a fleet's
-# resting window is `home`, a plain shell the list draws beside.
-# 1 = the old `plan` hub window
-# running the dash, and the old ⌂ / F9 / prefix g — kept one batch as the way
-# back; the next batch deletes it.
-# @label=Full-screen list window (old hub) @group=status @tier=internal @scope=fleet @edit=bool
-#FLEET_DASH_WINDOW=0
 
 
 
@@ -1841,7 +1831,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # refuses to launch rather than fall back to the login's own subscription.
 # Off the default config-panel face (@tier=internal, issue #1101 — the face is at
 # its 120-row cap, and the per-session flag is the usual way to say this); the
-# panel's `--all` / FLEET_CONFIG_SHOW_INTERNAL=1 edits it.
+# panel's `--all` edits it.
 # @label=Account class @group=accounts @tier=internal @scope=fleet @edit=enum
 #FLEET_ACCOUNT_CLASS=any
 # Unified per-session subscription failover. Existing account/quota, transfer and
@@ -2811,17 +2801,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=New session limit (ms) @group=spawn @tier=internal @scope=fleet @edit=int
 #FLEET_TIMING_SESSION_MS=3000
 
-# --- Dash prompt-line paste guard (bin/dash-enter.sh, issue #531) -----------------
-# The dash's always-visible prompt line ("type a task, ↵ → scratch session") is an
-# fzf input, and a terminal delivers a MULTI-LINE PASTE as one Enter PER LINE (fzf
-# has no bracketed-paste awareness on the input line). Pasting a ~250-line stack
-# trace once fired 250 seeded spawns — 244 concurrent `git worktree add`s, the
-# global session cap bypassed, disk 30→6 GB. So a typed Enter is DEBOUNCED: an
-# Enter that trails the previous one by less than this many ms is treated as a
-# paste line and dropped; an isolated Enter defers this long, then spawns. Raising
-# it drops more of a fast-typed second task; lowering it lets a slow paste through.
-# @label=Prompt-line debounce (ms) @group=spawn @tier=internal @scope=global @edit=int @unit=ms
-#FLEET_SPAWN_GUARD_MS=1000
 
 # How long an in-progress scratch spawn (issue #531) counts against the session cap
 # before its window exists — so a flood of spawns can't all pass the cap check

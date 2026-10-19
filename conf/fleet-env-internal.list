@@ -245,17 +245,13 @@ FLEET_COMPACT_RESUME_TIMEOUT       knob: how long fleet-compact-resume.sh holds 
 FLEET_COMPACT_RESUME_WATCH         knob: how long fleet-compact-resume.sh watches a stale `working` for the pane to settle before skip:stale (600, #1572)
 FLEET_COMPACT_SEND_TIMEOUT         knob: how long fleet-compact-send.sh holds for an idle, untyped-at pane before giving up (90)
 FLEET_CONF_REFERENCE               seam: fleet-conf-example.sh reads another reference file (#3576) — tests only
-FLEET_CONFIG_SHOW_INTERNAL         knob: fcfg_table lists @tier=internal rows too (#1101) — a per-call switch, not a conf setting
 FLEET_CONTEXT_LIMIT                alias: retired twin of FLEET_CTX_WINDOW (#1101) — still read, wins when set
 FLEET_DAEMON_IDLE_PROBE_BUDGET     knob: internal pacing/limit, safe in-code default (fleet-daemon-lib.sh)
 FLEET_DAEMON_ROOT                  path: state/log location override (fleet-daemon-lib.sh)
 FLEET_DAEMON_WEDGED_MULT           knob: internal pacing/limit, safe in-code default (fleet-daemon-lib.sh)
-FLEET_DASH_LAUNCHER                seam: an injectable command/path for tests (fleet-ui-refresh.sh)
 FLEET_DASH_MANUAL_SUB_BIN           seam: fake manual quota gate for picker tests (dash-migrate.sh)
 FLEET_DASH_MIGRATE_BIN             seam: an injectable command/path for tests (dash-migrate.sh)
 FLEET_DASH_TOAST                   handoff: dash-migrate.sh `to` run from a confirm-before also shows its refusal (#1620)
-FLEET_DASH_POPUP_MAX_AGE           knob: internal pacing/limit, safe in-code default (dash-popup-wait.sh)
-FLEET_DASH_POPUP_POLL              knob: internal pacing/limit, safe in-code default (dash-popup-wait.sh)
 FLEET_DELIVERY_SIG                 handoff: the webhook delivery signature the bridge verifies
 FLEET_DEPLOY_PROBE_MAX             knob: internal pacing/limit, safe in-code default (tmux-pr-refresh.sh)
 FLEET_DEPLOY_TTL                   knob: internal pacing/limit, safe in-code default (tmux-pr-refresh.sh)
@@ -533,7 +529,6 @@ FLEET_SMOKE_SSH_PORT               seam: the sshd port the smoke run connects to
 FLEET_SMOKE_TIMEOUT                knob: internal pacing/limit, safe in-code default; --timeout is the operator's face (fleet-login-smoke.sh)
 FLEET_SPAWN_FILL_CMD               seam: replaces the cold start's background checkout, run as `sh -c "$cmd" fill <wt>` (dash-issue-cold-overlap-selftest.sh, #2237)
 FLEET_SPAWN_OVERLAP                knob: 0 = the cold start checks the whole tree out before the agent starts (the old order); default 1 overlaps them (#2237)
-FLEET_SPAWN_GUARD_SLEEP            knob: internal pacing/limit, safe in-code default (dash-enter.sh)
 FLEET_SPAWN_CLAIMED                handoff: the --async tail inherits the foreground's GitHub claim, taken back on failure (#1606)
 FLEET_SPAWN_WNAME                  handoff: the --async tail takes the window name the gate pass derived (an EPIC member's 简称·…, #2355)
 FLEET_SPAWN_TAIL                   handoff: spawn only the seed tail (used by the handoff/resume path)
@@ -554,8 +549,6 @@ FLEET_SYSTEMD_USER_DIR             path: systemd user unit dir override (fleet-i
 FLEET_TEAM_BUNDLE_CMD              seam: fleet-agent-team.py prints the hub's team-bundle answer from this command (#1726)
 FLEET_TEAM_TIMEOUT                 knob: seconds fleet-agent-team.py waits on the hub's team-bundle read (8, #1726)
 FLEET_TMUX_BIN                     path: the tmux binary fleet_find_tool tries first (issue #1774)
-FLEET_TMUX_PREFIX                  handoff: the operator's tmux prefix, read by fleet-up into the keymap
-FLEET_TMUX_PREFIX2                 handoff: the operator's second tmux prefix, read by fleet-up into the keymap
 FLEET_TOKEN_PROBE                  seam: a fake token-probe command
 FLEET_TOOL_DIRS                    path: where fleet_find_tool / fleet_path_fill look after PATH (~/.local/bin /opt/homebrew/bin /usr/local/bin)
 FLEET_TRANSFER_BOOT_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
@@ -565,7 +558,7 @@ FLEET_TRANSFER_ROLLBACK_HOLD       knob: internal pacing/limit, safe in-code def
 FLEET_TRANSFER_RETRYING            handoff: fleet-transfer.sh --retry tells its child run not to record a retry of its own (#1669)
 FLEET_TRASH_PURGE_URGENT           handoff: the cleanup daemon marks an urgent trash purge (skips the load cap)
 FLEET_TRASH_SWEEP_BUDGET           knob: internal pacing/limit, safe in-code default (fleet-cleanup-daemon.sh)
-FLEET_UI_QUIET                     handoff: 1 = fleet_ui_fail draws nothing — the caller re-says the failure in its own one line (dash-issue-new.sh, issue #1618)
+FLEET_UI_QUIET                     handoff: 1 = fleet_ui_fail draws nothing — the caller re-says the failure in its own one line (issue #1618)
 FLEET_UPDATE_ROOT                  path: the install fleet-update.sh reports on (default its own ../, #1805)
 FLEET_WEBHOOK_DEBOUNCE             knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
 FLEET_WEBHOOK_EVENTS               knob: the GitHub events the webhook forwarder subscribes to (fleet-webhook.sh)
@@ -686,6 +679,7 @@ FLEET_VIEW_LANG                    handoff: the language a 看台's client broug
 FLEET_UI_PERSON_FILE               seam: the person-bundle.json fleet-ui-lang.sh reads the person's ui_lang from (default $FLEET_CONF_DIR/person-bundle.json, #3329)
 FLEET_VIEW_FIRST_CMD               seam: replaces `fleet-quickopen.py` when attach --thin lands a 看台 with no orchestrator here on ⌘N's road (`do new`) (fleet-remote-view.sh, #3007)
 FLEET_VIEW_KEEP_SECS               knob: seconds a thin client's 看台 (attach --thin) outlives its client for --resume before prune takes it (600, #2763)
+FLEET_VIEW_PR_TIMEOUT              knob: seconds ⌘P's row menu waits on the hub for a task record's PR (fleet_view.py task_pr, #4902)
 FLEET_VIEW_ROWS_CMD                seam: a shell command printing the 看台 switcher's rows instead of tmux-dashboard-rows.sh --rows (fleet_view.py, #3000)
 FLEET_HUB_SESSIONS_USER            knob: whose sessions on the other machines the dash shows (os_user; default `id -un`, `*` = every login the hub shows; #1423)
 FLEET_CERT                         handoff: the connection-certificate key pair a sidebar / `fleet connect` signs with — the key; `<key>-cert.pub` beside it (default ~/.ssh/fleet-cert, what `fleet login` wrote; fleet-hub-sessions.sh, fleet-connect.py, #1475)

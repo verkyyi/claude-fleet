@@ -36,7 +36,6 @@ bin/mcp-github.sh
 bin/dash-keymap.sh
 bin/fleet-quickopen.py
 bin/fleet_view.py
-bin/tmux-dashboard.sh
 bin/tmux-dashboard-rows.sh
 # the daemons pass kicks the spinner when one of these moved (spinner_changed)
 bin/tmux-spinner.sh

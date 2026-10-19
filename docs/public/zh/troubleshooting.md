@@ -96,7 +96,7 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：节点上的旧版面板（待办列表、仓库选择）要 fzf 0.59 以上；开着旧全屏列表（`FLEET_DASH_WINDOW=1`）要 0.61 以上，低于 0.61 只给 WARN。
+- **是什么**：节点上还会打开的选择框（换账号、添加仓库）要 fzf 0.59 以上。
 - **WARN / FAIL 怎么办**：`brew install fzf`（或包管理器）。只用新客户端（⌘P）的话不影响会话本身。
 
 #### `perl`
@@ -191,13 +191,6 @@ fleet doctor --json
 
 - **是什么**：这个登录的 fleet 是不是稳定版、有没有本地改动；托管机器上还查它是否链到当前发布版。
 - **WARN / FAIL 怎么办**：落后：等自动同步，或 `fleet update`。有本地提交或分叉：说明里写着哪些提交，挪走后同步才会继续。不要在会话里手动同步安装。
-
-#### `config`
-
-来自 `fleet doctor`。
-
-- **是什么**：安装里的配置键说明表在不在（设置面板靠它列出每个键）。
-- **WARN / FAIL 怎么办**：缺了 = 安装不完整：等下一次同步，或 `fleet update`。
 
 #### `login-tree`
 
@@ -850,13 +843,6 @@ fleet doctor --json
 
 - **是什么**：tmux 服务器载入的 fleet 配置是不是当前这一版。
 - **WARN / FAIL 怎么办**：照说明里的 `fleet-ui-refresh.sh` 命令重载；同步后也会自动重载。
-
-#### `keys`
-
-来自 `fleet doctor`。
-
-- **是什么**：面板的按键有没有和你的 tmux 前缀键撞上。
-- **WARN / FAIL 怎么办**：改 tmux 的第二前缀键，或那个面板键。
 
 #### `rview`
 

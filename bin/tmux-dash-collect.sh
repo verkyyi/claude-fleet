@@ -11,11 +11,11 @@
 #   global/sessmap        — session<TAB>slug<TAB>repo  (one row per live tmux session)
 #   fleets/<slug>/issues  — milestone<TAB>#num<TAB>assignee<TAB>title per repo (gh, ≥90s)
 #   fleets/<slug>/labels  — #num<TAB>comma-joined-labels per repo, split from the SAME
-#                           issues fetch (no extra gh call). Read by the dash's
-#                           priority sort (bin/dash-issue-priority.sh)
+#                           issues fetch (no extra gh call). Read by fleet-gh.sh's
+#                           issue view and the spawn's priority read (fleet-lib.sh)
 #   fleets/<slug>/parents — child<TAB>parent per repo for sub-issues (issue #335), from
 #                           a small separate GraphQL pass (parent isn't in `gh issue
-#                           list --json`). Lets the backlog nest a child under its parent
+#                           list --json`). Read by fleet-hub-sessions.sh (an EPIC's members)
 #   global/git_<key>      — branch<TAB>  per live worktree (budgeted, round-robin —
 #                           issue #552). Keyed by a globally-unique worktree path, so it
 #                           lives in global/ (not per-fleet) — the reader resolves it
@@ -169,8 +169,7 @@ cache_key() {
 # shifting the label column and dropping the issue. We then derive:
 #   issues_<slug>  — the 4-column backlog (milestone, #num, assignee, title), keeping
 #                    its contract EXACTLY (readers `cut`/`read` fields 1-4).
-#   labels_<slug>  — #num<TAB>labels for EVERY open issue, read by the dash's
-#                    priority sort (bin/dash-issue-priority.sh).
+#   labels_<slug>  — #num<TAB>labels for EVERY open issue (fleet-gh.sh, fleet-lib.sh).
 # Deriving both from one fetch keeps the labels cache zero-extra-token. The raw temp
 # is <name>.$$, so the EXIT trap sweeps it if we die mid-split.
 fetch_issues_for() {
@@ -226,8 +225,7 @@ fetch_issues_for() {
     # SEPARATE GraphQL pass — number + parent.number only, one paginated call per
     # repo per TTL. Best-effort + fail-closed: an old gh, a GraphQL error, or a
     # repo without the sub-issues API just leaves parents_<slug> stale/absent and
-    # the backlog renders FLAT (bin/tmux-issues-rows.sh degrades to today's
-    # behaviour). Sibling of issues/labels under fleets/<slug>/ (no own .ts —
+    # its readers see no link. Sibling of issues/labels under fleets/<slug>/ (no own .ts —
     # fleet_cache's new-layout fallback serves it exactly like labels). Writes
     # child<TAB>parent for every open issue that HAS a parent; the reader nests a
     # child under its parent row. The <name>.$$ temp is swept by the EXIT trap.

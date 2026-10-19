@@ -34,11 +34,11 @@ trap 'rm -rf "$WORK"' EXIT
 find -L "$BIN" "$ROOT/hooks" -maxdepth 1 -type f ! -name '*selftest*' 2>/dev/null | sort > "$WORK/scripts"
 [ -s "$WORK/scripts" ] || fail 'found no scripts to scan'
 # Readers for A also include the skills/commands (a key read only by a slash
-# command's markdown is still read), minus the modal plumbing, which names keys
+# command's markdown is still read), minus the config writer, which names keys
 # generically.
 { cat "$WORK/scripts"
   find -L "$ROOT/commands" "$ROOT/skills" "$ROOT/plugins" "$ROOT/conf" "$ROOT/extras" "$ROOT/shell" -type f 2>/dev/null
-} | grep -vE '/(fleet-config-lib\.sh|tmux-config\.sh|dash-config-edit\.sh|fleet_config_write\.py|fleet-env-internal\.list)$' \
+} | grep -vE '/(fleet_config_write\.py|fleet-env-internal\.list)$' \
   | grep -vE '/[^/]*selftest[^/]*$' > "$WORK/readers"   # basename only: the shadow root's own path says "selftest"
 
 grep -oE '^#?[[:space:]]*FLEET_[A-Z0-9_]+=' "$EX" | sed -E 's/^#?[[:space:]]*//; s/=$//' | sort -u > "$WORK/example"
@@ -70,7 +70,6 @@ ok
 tr '\n' '\0' < "$WORK/readers" | xargs -0 grep -ohwE 'FLEET_[A-Z0-9_]+' 2>/dev/null | sort -u > "$WORK/mentioned"
 dead=$(comm -23 "$WORK/example" "$WORK/mentioned")
 [ -z "$dead" ] || fail "in conf/fleet.conf.reference but read by nothing (a dead row): $dead"; ok
-# (a listed name may be read by the modal plumbing itself — FLEET_CONFIG_SHOW_INTERNAL)
 cat "$WORK/scripts" "$WORK/readers" | tr '\n' '\0' | xargs -0 grep -ohwE 'FLEET_[A-Z0-9_]+' 2>/dev/null \
   | sort -u > "$WORK/mentioned.all"
 stale=$(comm -23 "$WORK/listed.u" "$WORK/mentioned.all")
@@ -79,9 +78,30 @@ stale=$(comm -23 "$WORK/listed.u" "$WORK/mentioned.all")
 # --- the short sample at the root is generated from the reference (issue #3576) ---
 bash "$BIN/fleet-conf-example.sh" --check || fail "fleet.conf.example is stale — bin/fleet-conf-example.sh > fleet.conf.example"; ok
 
-# --- the face stays small ------------------------------------------------------
-n=$(bash -c '. "$1/fleet-config-lib.sh"; fcfg_table | grep -c .' _ "$BIN")
-[ "$n" -le 120 ] || fail "the config modal's default view has $n rows (cap 120) — tag pacing knobs @tier=internal"; ok
+# --- the global-only list == the @scope=global tags (issue #237) -------------
+# fleet_load_conf strips exactly fleet-lib's $_FLEET_GLOBAL_ONLY from a per-fleet
+# overlay, so that list MUST equal the keys the reference tags @scope=global (each
+# key's tag line is the @label= comment in its block, directly above it). Drift
+# makes a global-only key per-fleet-overridable again, or strips a per-fleet one.
+# (Held by the config modal's selftest until the modal went, issue #4902.)
+ex_global=$(awk '
+  { L[NR] = $0 }
+  END {
+    for (n = 1; n <= NR; n++) {
+      if (L[n] !~ /^#?[[:space:]]*FLEET_[A-Z0-9_]+=/) continue
+      k = L[n]; sub(/^#?[[:space:]]*/, "", k); sub(/=.*/, "", k)
+      for (i = n - 1; i >= 1; i--) {
+        if (L[i] ~ /^[[:space:]]*$/ || L[i] !~ /^[[:space:]]*#/) break
+        if (L[i] ~ /@label=/) { if (L[i] ~ /@scope=global([[:space:]]|$)/) print k; break }
+      }
+    }
+  }' "$EX" | sort -u | tr '\n' ' ')
+lib_global=$( . "$BIN/fleet-lib.sh" >/dev/null 2>&1; printf '%s' "$_FLEET_GLOBAL_ONLY" | tr ' ' '\n' | grep . | sort -u | tr '\n' ' ' )
+[ "$ex_global" = "$lib_global" ] || fail "_FLEET_GLOBAL_ONLY (bin/fleet-lib.sh) != the @scope=global keys of conf/fleet.conf.reference:
+  only in the lib:       $(comm -23 <(tr ' ' '\n' <<< "$lib_global" | grep .) <(tr ' ' '\n' <<< "$ex_global" | grep .) | tr '\n' ' ')
+  only in the reference: $(comm -13 <(tr ' ' '\n' <<< "$lib_global" | grep .) <(tr ' ' '\n' <<< "$ex_global" | grep .) | tr '\n' ' ')"
+ok
+n=$(printf '%s' "$ex_global" | wc -w | tr -d ' ')
 
-printf 'conf-surface selftest PASS: %d assertions (%s keys · %s listed · %s reads · face %s rows)\n' \
+printf 'conf-surface selftest PASS: %d assertions (%s keys · %s listed · %s reads · %s global-only)\n' \
   "$pass" "$(grep -c . "$WORK/example")" "$(grep -c . "$WORK/listed.u")" "$(grep -c . "$WORK/read")" "$n"

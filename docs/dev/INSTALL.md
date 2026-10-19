@@ -20,9 +20,6 @@ login is one fleet; a shared login gives everyone one quota record.
 |---|---|---|
 | Attention layer | hooks → window colors/spinner/urgency-sort; the spinner daemon also demotes stuck-`working` windows (missed Stop hook) via a marker-agnostic `window_activity`-staleness check (`FLEET_STUCK_WORKING_SECS`) | tmux ≥ 3.2 |
 | Bypass-permissions guards (issue #355) | `PreToolUse` hooks — the last line of defense once workers run `bypassPermissions` (CC never prompts). `hooks/bash-guard.py` (matcher `Bash`): a GENERIC deny-list (`rm -rf` on `/` `~` `.git`; force-push onto the base branch) with statement-segment splitting + git-subcommand matching for near-zero false positives, plus a never-shipped local overlay (`~/.claude/hooks/bash-guard-local.py`) for operator-specific rails. `hooks/base-readonly-guard.py` (matcher `Edit\|Write\|MultiEdit\|NotebookEdit`): makes the base checkout edit-read-only for **every** seat by denying writes inside `FLEET_MAIN` (worktree siblings stay writable) — closes the gap for the worker seat, which had no base-checkout protection at all. `hooks/artifact-guard.py` (matcher `Artifact`, #526): a fleet session never *publishes* an Artifact (account-scoped; use the `show` / `open` tools). `hooks/agent-guard.py` (matcher `Agent`, #811): in a fleet pane only the read-only `Explore` / `Plan` / `claude-code-guide` subagents may start — code-writing work is a fleet WORKER (`dash-issue-session.sh` / `fleet-issue-file.sh --spawn`), since a subagent gets none of the fleet's rails; `FLEET_ALLOW_SUBAGENT=1` overrides. All **fail OPEN** (a guard bug or a non-fleet session → allow) | python3 |
-| Dashboard (legacy, `bin/tmux-dashboard.sh`) | the old full-screen fzf list of sessions. Retired as the default (issue #1533) — a fleet rests on its `home` window and the task list is the client view's (`fleet_view.py`); only `FLEET_DASH_WINDOW=1` still builds a `dash` window for it, and no node key opens it since #1714 | fzf ≥ 0.61 — `--no-input` (0.59) and `--ghost` (0.61); `fleet doctor` WARNs below 0.61 |
-| Backlog (`bin/tmux-issues.sh`; no node key since #1714) | GitHub issues panel, Enter = spawn issue-bound session. Each row tags its `priority:pN` (from `labels_<slug>`, no extra gh call) and issues sort by priority within a milestone; `⌃y` cycles a row's priority label (none→p2→p1→p0, `bin/dash-issue-priority.sh`, no popup). `⌃n` files a one-line issue | gh (authed), fzf ≥ 0.59 (`--no-input`; `fleet doctor` FAILs below) |
-| Config modal (`bin/tmux-config.sh`; no node key since #1714) | fzf popup to view/edit `FLEET_*` config in two layers — this fleet (the login's `fleet.settings` + the fleet `conf`, one layer to you) ▸ a hosted repo's overlay — over the code default; the install's `fleet.conf` is still read as a read-only legacy layer, never written (#1102); internal pacing knobs stay under a collapsed INTERNAL "show all" header; ⌃s toggles the write scope (this fleet ⇄ repo), enter edits a key (typed validation, backup-first) | fzf ≥ 0.59 |
 | Label taxonomy (`bin/fleet-labels-seed.sh`) | the fleet's **fixed** canonical label set (`bug`, `enhancement`, `cleanup`, `robustness`, `portability`, `ci`, `docs-truth`, `scout`, `priority:p0\|p1\|p2`, `blocked`, `epic`, `agent:codex`, `agent:claude`, `desk`, `flaky`, `selection-miss` — issues #333, #421, #678). ONE source of truth, `fleet_labels_canonical`/`fleet_labels_allowed` in `bin/fleet-lib.sh`. The install seed step (`gh label create --force`, **idempotent**) installs it into a fresh repo; the issue-filer channel (`bin/fleet-issue-file.sh`) validates every requested label against `fleet_labels_allowed` — the FIXED set, not the live `gh label list` — so no filer can file against an off-taxonomy label even if one is minted out of band (**fixed seed, no minting**). A fleet can also opt into a **default milestone** so nothing lands unsorted: set `FLEET_DEFAULT_MILESTONE` (e.g. `Triage`) and every filing that passes no `--milestone` auto-lands there for you to re-bucket — the milestone is **auto-created if absent** (idempotent) and it's best-effort, so a milestone hiccup never blocks a filing (issue #433). Retired automation labels `autoland` and `autofill` are neither seeded nor accepted by the filer (#4326); `epic` marks the tracking parent of a batch planned and run together (issue #678). **The descriptions are written for strangers** — this set is seeded into TEAM repos too, where these labels show up in the picker of people who have never heard of claude-fleet, so each one names what it means and who acts on it. Check a repo before planning a batch with `bash bin/fleet-epic-preflight.sh` (next row) rather than seeding blind | gh (authed, label-admin) |
 | Cross-machine pre-spawn dedup | every spawn (`bin/dash-issue-session.sh`, the one choke point) consults the shared GitHub issue as a claim ledger before spawning, so two fleets on **different machines / same repo** don't both spawn `issue-<N>` (duplicate worktrees + push race + competing PRs) — the local tmux dedup only sees one machine. **The assignee IS the claim** (issue #283): taken (assignee · non-open state · open PR) ⇒ **refuse**; free ⇒ **claim AT SPAWN** by assigning `@me` (not on the worker's first `/fleet-claim` turn — that gap was the race) so a peer sees the assignee within ~1s. **NOT a mutex** (GitHub has no CAS on an issue) — it shrinks the race window, doesn't eliminate it; the old sub-second REST-comment-id tie-break was retired with the `▶ claiming` marker (workers share one gh account, so no per-attempt tie token exists). `--force`/`--reclaim` spawns past a stale claim. **ON by default** — the cost is a few gh reads/spawn (claim-at-spawn just moves `/fleet-claim`'s assign earlier; a gh outage degrades to spawn-anyway) and it self-disables when gh is absent; a single-machine fleet wanting the zero-gh fast path sets `FLEET_PRESPAWN_DEDUP=0`. `/fleet-claim` stays but no-ops when it finds the pre-claim | gh (authed) |
 | EPIC preflight (`bin/fleet-epic-preflight.sh`) | **can this repo run a batch?** (issue #678) — the check `/fleet-epic plan` opens with, in `fleet-doctor.sh`'s `TAG STATE detail` shape: `gh` authed · `viewerPermission` ≥ WRITE · the **sub-issues API** answers for this repo · the `epic` / `blocked` labels exist · `FLEET_BASE_BRANCH` is the repo's real trunk (#603) · what *done* means here (`FLEET_DEPLOY_REF` / `FLEET_DEPLOY_CHECK`, #541, neither ⇒ merged ≡ done) · the effective concurrent-session cap, stated only — it is the operator's setting, never warned about or advised on (#881) · how many pool accounts sit under `FLEET_ACCOUNT_CEILING`. Three-way verdict so the caller can branch: **0 READY · 1 FIXABLE · 3 BLOCKED** (2 = usage). It exists to put "this repo can't do that" in front of the operator during planning, while they are awake — not at 03:00 when the batch is half-spawned. **Read-only by default**: `--fix` is the only writing path and it writes exactly one thing, `fleet-labels-seed.sh` against this repo — opt-in because seeding is not surgical (it reconciles the WHOLE canonical set, and a team repo sprouting a dozen unexplained labels overnight is how you lose the room). `--session <fleet>` preflights ANOTHER fleet — repo **and** conf knobs together, so the screen never describes two fleets at once; a bare `--repo` that disagrees with the loaded conf says so on its own line. `bin/fleet-epic-preflight-selftest.sh` pins all three verdicts on a faked `gh` | gh (authed) |
@@ -93,7 +90,7 @@ in the dashboard while releasing their agent processes. Existing sessions pick
 up the native Stop evidence writer through `set-claude-state.sh` without restart.
 
 1. **Preflight.** Run `sh ~/.claude/fleet/bin/fleet-doctor.sh` (or from the repo
-   before copying) — it checks tmux ≥ 3.2 · fzf ≥ 0.59 (0.61 for the legacy dash) · gh (+ auth) · python3 ·
+   before copying) — it checks tmux ≥ 3.2 · fzf ≥ 0.59 · gh (+ auth) · python3 ·
    claude · perl `Time::HiRes` and prints pass/warn/fail. Offer to
    `brew install` anything that fails. On a machine that already has a live
    install its `install` line answers the question nothing used to (issue #635):
@@ -598,18 +595,11 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    after any upgrade that adds a daemon: an agent added upstream is NOT installed
    retroactively on a machine that installed the fleet before it existed.
 
-7. **Shell helpers.** Offer to add `source ~/.claude/fleet/shell/cw.zsh` to
-   `~/.zshrc` (bash users: the functions are zsh-flavored; port on request).
-   Sourcing it also installs a `tmux()` **destroy-guard** (issue #158): from a
-   worker shell it refuses `kill-server` and any `kill-session`/`kill-window`
-   aimed at a sibling — one stray kill on the shared `default` socket would take
-   down every fleet at once. It's an accident rail, not a security boundary
-   (bypass-perms can always `pkill`); self-teardown, isolated sockets (`-L`/`-S`),
-   and `FLEET_ALLOW_TMUX_DESTROY=1` all pass through. Tell the user so a
-   deliberate live-server destroy isn't a surprise.
-   It also wraps `brew` in `umask 022` (issue #2283): Homebrew pours kegs with
-   the caller's umask, and an owner on 077 leaves kegs no other login can read.
-   The shell's own umask is not changed — only brew's run is.
+7. **Shell helpers.** (The old `shell/cw.zsh` — `cf` / `cw` / `cwrm`, its zsh
+   `tmux()` guard and `brew()` umask wrapper — is gone, issue #4902: the
+   delete guard is `bin/tmux-shim/tmux` on every agent's PATH, and `fleet` is the
+   way in. For one version the file is an empty stub, so a `~/.zshrc` line that
+   still sources it starts quietly; take the line out.)
 
    **Not on a managed machine** (issue #2702): a machine `fleet node install`
    joined (`/var/db/fleet-node/machine.env`) is no one's client — skip both
@@ -620,7 +610,7 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    `fleet doctor --machine`).
 
    **Optional — login banner + SSH opens the client** (issues #1068, #1166, #1711). Offer
-   to add this line to `~/.zshrc`, after the `cw.zsh` line above:
+   to add this line to `~/.zshrc`:
 
    ```zsh
    # claude-fleet login: banner, then an SSH login opens the fleet client
@@ -635,8 +625,7 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    inside tmux (worker and client panes source `.zshrc` too), and the client only with
    `$SSH_TTY` set (a local terminal gets the banner alone). Two opt-outs:
    `touch ~/.hushfleet` turns off both, `touch ~/.hushfleet-attach` keeps the
-   banner and leaves `fleet` for you to type. `cf` is folded into `fleet`: for
-   one version it says so and runs `bin/fleet`. It replaces any hand-written
+   banner and leaves `fleet` for you to type. It replaces any hand-written
    per-account `~/.config/claude-fleet/intro.sh` — delete that copy.
 
    **The `fleet` client** uses one foreground Python loop and a connection

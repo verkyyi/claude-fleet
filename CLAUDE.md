@@ -120,8 +120,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `<sess>:<idx>` position and a bare window NAME are not addresses:
   `fleet-peer-send.sh`, `fleet-answer.sh`, `fleet-permission.sh` refuse them
   (exit 2) — a closing window renumbers the index, tmux prefix-matches the name
-  (`scratch-1` → `scratch-12`); the dash pins a row to its `@id` at the
-  keypress (`dash-answer.sh`). A pane reads ITS OWN binding through
+  (`scratch-1` → `scratch-12`); ⌘P pins a row to its `@id` at the
+  keypress. A pane reads ITS OWN binding through
   `fleet_pane_fmt`, never `-t "${TMUX_PANE:-}"`: an empty target is "the pane
   the operator is looking at", so inside tmux with no `TMUX_PANE` the read is
   nothing (and `fleet-comment.sh` refuses to post) — a popup has `$TMUX` but no
@@ -611,19 +611,18 @@ one-off drill / audit records do not go in the repo (issue #3576).
 - **Navigate by name, not index.** The hub/dashboard is placed at the lowest
   index once, at spawn; numbers still shift when a window closes
   (`renumber-windows on`).
-- **A dash key is never a literal ctrl chord.** tmux swallows its prefix before
-  any pane sees it, so every dash `--bind` goes through `bin/dash-keymap.sh`
-  (issue #556): add the action to its table, bind `$DASH_KEY_<ACTION>` in
-  `tmux-dashboard.sh`, list it in `fleet-keys.sh` via `dg`. Pick a default that
-  is unbound in fzf and no one's prefix; `fleet-keys-selftest.sh` holds the three
-  in lockstep.
+- **The 看台's keys have ONE table, `bin/dash-keymap.sh`** (`--panel switch`):
+  each ⌘ chord's private code and the ⌃] letters; `conf/tmux-view.conf`,
+  `fleet_view.py`'s key tables and the iTerm2 profile (`fleet-iterm-profile.py`)
+  are built from it, `fleet-keys-selftest.sh` holds them together. The local fzf
+  dash / backlog / config panels and their ⌃-key tables are gone (issue #4902).
 - **Never run destructive tmux on the live server**, and test tmux tooling on an
   **isolated socket** — `tmux -L scratch …`, or the `-S <sock>` PATH-shim pattern
-  the selftests use (`bin/dash-marker-selftest.sh`). A delete aimed at a FLEET's
+  the selftests use (`bin/hub-session-selftest.sh`). A delete aimed at a FLEET's
   server (kill-server / kill-session / a session's kill-window, on `-L <fleet>`
   or the ambient one) is refused by ONE rule, `bin/tmux-shim/tmux` (issue #1841):
-  `fleet-session-wrap.sh` puts it first on every agent's PATH, `shell/cw.zsh`'s
-  `tmux()` hands it any `-L`/`-S` call, and `hooks/bash-guard.py` asks it
+  `fleet-session-wrap.sh` puts it first on every agent's PATH, and
+  `hooks/bash-guard.py` asks it
   (`FLEET_TMUX_SHIM_CHECK=1`) before a Bash statement runs — a login shell's
   path_helper reorders PATH. A test server and the fleet's own scripts pass;
   `FLEET_ALLOW_TMUX_DESTROY=1` passes a deliberate destroy through.

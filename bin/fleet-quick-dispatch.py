@@ -36,7 +36,7 @@ it — from any window of a thin client's 看台: a worker's, a no-repo session'
 The popup: 标题 (one line), 仓库 (every repo the hub says this person's machines
 host — the one the last send went to first; ←→ picks, shown only when there is
 more than one) and 用哪个 Coding Agent (issue #1834: ←→ / ⌃X picks; the default
-is the fleet's effective FLEET_AGENT — dash-agent-prompt.sh `agent`, the one
+is the fleet's effective FLEET_AGENT — fleet_load_conf's, the one
 resolution — and ↵ on it sends with no --agent at all; another one rides the
 send as `--agent` for this one session only). In a 看台 (--view) the session
 opens on this machine, so an agent it has not installed is grey with why
@@ -133,11 +133,15 @@ AGENTS = ("claude", "codex")
 
 
 def agent_default(session=""):
-    """The fleet's effective agent — dash-agent-prompt.sh `agent`, the one
-    resolution (the fleet's conf when a session is named)."""
+    """The fleet's effective agent — FLEET_AGENT as fleet_load_conf resolves it
+    for the session (the current one when none is named), the one resolution
+    every spawn path walks."""
     env = dict(os.environ, **({"FLEET_SESSION": session} if session else {}))
+    script = ('[ -f "$1/../fleet.conf" ] && . "$1/../fleet.conf"; . "$1/fleet-lib.sh"; '
+              's="${FLEET_SESSION:-}"; [ -n "$s" ] || s=$(fleet_current_session 2>/dev/null); '
+              '[ -n "$s" ] && fleet_load_conf "$s"; printf "%s" "${FLEET_AGENT:-claude}"')
     try:
-        out = subprocess.run(["bash", str(BIN / "dash-agent-prompt.sh"), "agent"], env=env, stdin=subprocess.DEVNULL,
+        out = subprocess.run(["bash", "-c", script, "_", str(BIN)], env=env, stdin=subprocess.DEVNULL,
                              capture_output=True, text=True, timeout=10).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         out = ""

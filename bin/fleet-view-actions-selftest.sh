@@ -54,14 +54,15 @@ to() { tmux -S "$OUT" "$@"; }
 LOG="$W/calls.log"; : > "$LOG"
 
 # --- the stubs: one line per call, `name|arg|arg|…` ----------------------------------
-for s in dash-open-pr.sh fleet-permission.sh fleet-answer.sh fleet-peer-send.sh dash-pin-toggle.sh \
+for s in fleet-task-record.sh open-url.sh fleet-permission.sh fleet-answer.sh fleet-peer-send.sh dash-pin-toggle.sh \
          fleet-reap-policy.sh fleet-worker-stop.sh fleet-sleep.sh fleet-manual-sub.sh dash-migrate.sh \
          fleet-transfer.sh dash-reap.sh dash-rename.sh fleet-row-remote.sh; do
   cat > "$W/stub/$s" <<EOF
 #!/bin/bash
 { printf '%s' "$s"; for a in "\$@"; do printf '|%s' "\$a"; done; printf '\n'; } >> "$LOG"
 case "$s:\$*" in
-  dash-open-pr.sh:*--probe*) printf '#41\n' ;;
+  fleet-task-record.sh:get\ T5) printf '{"task":{"id":"T5","pr":"acme/app#41"},"live":{}}\n' ;;
+  fleet-task-record.sh:get\ T6) exit 1 ;;
   fleet-manual-sub.sh:list*) printf 'account\t5h\t7d\tstate\nacct1\t20%%\t40%%\t可迁入\nacct2\t5%%\t9%%\t可迁入\n' ;;
   dash-rename.sh:*) exec bash "$BIN/dash-rename.sh" "\$@" ;;
   fleet-row-remote.sh:*) exec bash "$BIN/fleet-row-remote.sh" "\$@" ;;
@@ -71,7 +72,7 @@ exit 0
 EOF
 done
 export FLEET_VIEW_ACT_BIN="$W/stub"
-calls() { grep -v -e '--probe' -e '^fleet-manual-sub.sh|list' "$LOG"; }
+calls() { grep -v -e '^fleet-task-record.sh|get|' -e '^fleet-manual-sub.sh|list' "$LOG"; }
 reset() { : > "$LOG"; }
 
 # --- the fleet, its 看台 and the rows --------------------------------------------------
@@ -83,6 +84,8 @@ W4=$(ti new-window -d -P -F '#{window_id}' -t fl -n delta "sh -c 'exec cat > \"$
 W5=$(ti new-window -d -P -F '#{window_id}' -t fl -n eps "sh -c 'exec cat > \"$W/p5.in\"'")
 ti set-option -w -t "$W1" @fleet_id f1; ti set-option -w -t "$W2" @fleet_id f2; ti set-option -w -t "$W3" @fleet_id f3
 ti set-option -w -t "$W4" @fleet_id f4; ti set-option -w -t "$W5" @fleet_id f5
+# the PR off each row's hub task record (issue #4902): T5 names one, T6's hub is down
+ti set-option -w -t "$W1" @task T5; ti set-option -w -t "$W4" @task T6
 ti set-option -w -t "$W2" @claude_needs perm; ti set-option -w -t "$W4" @claude_needs ask
 ti set-option -w -t "$W3" @wrap_exit_rc 0; ti set-option -w -t "$W5" @worker_lifecycle sleeping
 UU=11111111-2222-3333-4444-555555555555; MU=22222222-3333-4444-5555-666666666666
@@ -148,6 +151,8 @@ for a in enter shell pr message rename pin reappol stop awake sub agent reap; do
 done
 for a in answer wake resume; do case " $m1 " in *" $a "*) fail "B: done row has $a: $m1" ;; esac; done
 qo view-menu --view fl@view-v1 "$W1" | grep -q $'^pr\t打开 PR #41' || fail "B: PR label: $(qo view-menu --view fl@view-v1 "$W1")"
+qo view-menu --view fl@view-v1 "$W4" | grep -q $'^pr\tPR ?（入口没响应）' || fail "B: a hub that does not answer reads PR ?: $(qo view-menu --view fl@view-v1 "$W4")"
+case " $(ids "$W2") " in *" pr "*) fail "B: a row with no task record offers a PR" ;; esac
 case " $(ids "$W2") " in *" answer "*) ;; *) fail "B: asking row lacks answer" ;; esac
 case " $(ids "$W5") " in *" wake "*) ;; *) fail "B: sleeping row lacks wake" ;; esac
 case " $(ids "$W5") " in *" stop "*) fail "B: a sleeping row offers stop" ;; esac
@@ -173,7 +178,10 @@ one() {   # <id> <expected line> [view-act args…]
   got=$(calls)
   [ "$got" = "$want" ] || fail "C: $id ran «${got}», want «${want}»"
 }
-one pr "dash-open-pr.sh|--wid|$W1" "$W1" pr
+one pr "open-url.sh|https://github.com/acme/app/pull/41" "$W1" pr
+reset; out=$(qo view-act --view fl@view-v1 "$W4" pr 2>&1)
+case "$out" in *'PR ?'*) ;; *) fail "C: pr on a PR ? row should say it, not open: $out" ;; esac
+[ -z "$(calls)" ] || fail "C: pr on a PR ? row ran «$(calls)»"
 one answer "fleet-permission.sh|--allow|$W2|--session|fl|--by|$ME" "$W2" answer --text y
 one answer-n "fleet-permission.sh|--deny|$W2|--session|fl|--by|$ME" "$W2" answer --text n
 one answer-pick "fleet-answer.sh|--answer|$W4|--session|fl|2" "$W4" answer --text 2

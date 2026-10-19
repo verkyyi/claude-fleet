@@ -6,7 +6,7 @@
 # --severity=warning; this mirrors both. .github/workflows/shellcheck.yml RUNS this
 # script, so the two cannot drift.
 #
-#   - The file set: every *.sh under bin hooks shell extras (shell/cw.zsh is not
+#   - The file set: every *.sh under bin hooks shell extras (a *.zsh is not
 #     linted — shellcheck has no zsh), each checked with --severity=warning.
 #   - -x: each file follows what it sources itself. The old single full call
 #     followed a sourced file only because it happened to be one of the inputs

@@ -15,8 +15,8 @@
 #      name fall back to owner/name for those two only.
 #   B. ROWS — the same groups in the --rows frame, its headings bare
 #      (`tokenledger (2)`, no `── `, like the hub list: issue #998).
-#   C. INERT — every dash bind target (enter, ⌃x reap, ⌃p PR, ⌃o restore, fold
-#      ←/→, pin, rename, answer, migrate) is a no-op on a heading row's `hdr` keys:
+#   C. INERT — every row script (reap, restore, pin, rename, migrate) is a no-op
+#      on a heading row's `hdr` keys:
 #      no window selected, set, renamed, killed or restored, and no status nag.
 #   D. DEGENERATE — a one-repo fleet renders BYTE-IDENTICAL to a producer with the
 #      grouping switched off (both frames, hub + sidebar); a stale current-repo
@@ -168,7 +168,7 @@ s=$(side)
 eq    "B: sidebar groups the same way" "$(printf '%s\n' "$s" | awk -F'|' '{ print $4 }' | tr '\n' ' ')" \
       "claude-fleet (2) issue-1 issue-3 tokenledger (2) issue-2 no repo (1) 我的会话 "
 eq    "B: sidebar headings carry five fields" "$(printf '%s\n' "$s" | grep '^hdr|' | awk -F'|' '{ print NF }' | sort -u)" "5"
-# --- C. every bind target is inert on a heading ---------------------------------
+# --- C. every row script is inert on a heading ---------------------------------
 mut='select-window|set-window-option|set-option|set -w|rename-window|kill-|new-window|respawn|swap-|move-|join-pane|display-message [^-]|display-message -[^p]'
 inert() {   # $1 = label, rest = the command → $out; asserts no tmux mutation, no nag
   : > "$WORK/tmux.log"
@@ -176,20 +176,13 @@ inert() {   # $1 = label, rest = the command → $out; asserts no tmux mutation,
   CHECKS=$((CHECKS+1))
   if grep -Eq "$mut" "$WORK/tmux.log"; then fail "C: $1 touched tmux on a heading" "$(cat "$WORK/tmux.log")"; fi
 }
-inert enter   bash "$BIN/dash-enter.sh" hdr '';            eq  "C: enter only clears the query" "$out" "clear-query"
 inert reap    bash "$BIN/dash-reap.sh" hdr;                has "C: ⌃x reap refuses quietly" "$out" "refused:no-target"
-inert pr      bash "$BIN/dash-open-pr.sh" hdr;             eq  "C: ⌃p PR opens nothing" "$out" ""
 inert restore bash "$BIN/dash-restore-session.sh" hdr;     eq  "C: ⌃o restore restores nothing" "$out" ""
-inert fold-l  bash "$BIN/dash-fold-toggle.sh" collapse hdr ''; eq "C: ← fold" "$out" ""
-inert fold-r  bash "$BIN/dash-fold-toggle.sh" expand hdr '';   eq "C: → fold" "$out" ""
 inert pin     bash "$BIN/dash-pin-toggle.sh" hdr;          eq  "C: pin" "$out" ""
 inert rename  bash "$BIN/dash-rename.sh" hdr;              eq  "C: rename arms nothing" "$out" ""
-inert answer  bash "$BIN/dash-answer.sh" hdr;              eq  "C: answer" "$out" ""
 inert migrate bash "$BIN/dash-migrate.sh" hdr;             eq  "C: migrate" "$out" ""
-# every --bind in the dash that hands a row field to a script is covered above
-binds=$(grep -oE 'dash-[a-z-]+\.sh( (collapse|expand))? \{[12]\}' "$BIN/tmux-dashboard.sh" | sed -E 's/ \{[12]\}//; s/ (collapse|expand)//' | sort -u | tr '\n' ' ')
-eq  "C: the bind targets under test are the dash's" "$binds" \
-    "dash-answer.sh dash-enter.sh dash-fold-toggle.sh dash-migrate.sh dash-open-pr.sh dash-pin-toggle.sh dash-reap.sh dash-rename.sh dash-restore-session.sh "
+# (the dash's enter / PR / fold / answer binds went with the dash, issue #4902;
+# these are the row scripts ⌘P still runs)
 
 # --- D. degenerate frames are byte-identical to grouping switched off -----------
 mkdir -p "$WORK/nogrp"
@@ -228,7 +221,7 @@ eq    "E: sidebar headings carry their repo" \
 tmux kill-window -t 'alpha:issue-1'
 r=$(rows)
 eq    "E: all, no sessions — the hint, then every hosted heading at 0" "$(printf '%s\n' "$r" | tr '\n' '/')" \
-      "hdr|  No sessions — type a name to start one · ⌃n new task/hdr|claude-fleet (0)/hdr|tokenledger (0)/"
+      "hdr|  No sessions — start one from ⌘P/hdr|claude-fleet (0)/hdr|tokenledger (0)/"
 has   "E: …under the column header" "$(FLEET_SESSION=alpha bash "$ROWS" | head -n1 | strip)" "window"
 s=$(side)
 eq    "E: sidebar, no sessions" "$(printf '%s\n' "$s" | awk -F'|' '{ print $1 ":" $4 }' | tr '\n' '/')" \
@@ -238,7 +231,7 @@ eq    "E: a stale current-repo file keeps every heading (#1034)" "$(rows)" "$r"
 rm -f "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 mv "$FLEET_CONF_DIR/fleets/alpha/repos" "$WORK/repos.off"
 eq    "E: one-repo fleet, no sessions — the bare hint" "$(rows)" \
-      "hdr|  No sessions — type a name to start one · ⌃n new task"
+      "hdr|  No sessions — start one from ⌘P"
 eq    "E: …and in the sidebar" "$(side)" "hdr|||No sessions — ⌘N new session| "
 win 'issue-1' @repo o/claude-fleet @issue 1
 hasnt "E: one-repo fleet with a session — no hint" "$(rows)" "No sessions"

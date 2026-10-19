@@ -211,7 +211,7 @@ grep -q 'self.idle_t0 = None' "$SP" || fail "spinner: a live fleet must reset th
 python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SP" || fail "spinner: syntax"; ok   # no __pycache__ in a read-only bin/ (#4668)
 
 # --- 11. who wakes -------------------------------------------------------------
-for f in bin/fleet-up.sh bin/dash-issue-session.sh bin/dash-raw-session.sh shell/cw.zsh; do
+for f in bin/fleet-up.sh bin/dash-issue-session.sh bin/dash-raw-session.sh; do
   grep -q 'fleet_daemon_wake' "$BIN/../$f" || fail "wakers: $f must touch the wake marker"; ok
 done
 

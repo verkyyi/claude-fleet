@@ -27,12 +27,6 @@ held at least **15 concurrent task directories for 14.46 minutes**. These count
 overlapping CLI processing turns, not simultaneous server-side token generation
 or a throughput multiplier. [Evidence and counting method](docs/dev/USAGE-EVIDENCE.md).
 
-![dashboard](docs/public/img/dashboard.svg)
-![status bar](docs/public/img/statusbar.svg)
-
-<sub>Screenshots are the real UI captured from a live tmux server, staged with
-demo repo data.</sub>
-
 ## What you get
 
 - **Subscription-driven parallel work for small teams.** Give independent tasks
@@ -80,22 +74,6 @@ demo repo data.</sub>
   the window, 0.30s to the first keystroke) instead of one that spends ~7s
   booting — the last second of which paints a `❯` box that silently swallows
   whatever you type.
-
-![backlog](docs/public/img/backlog.svg)
-
-- **GitHub backlog panel** (`bin/tmux-issues.sh`; its `prefix+b` door left the node
-  with #1714 — #1739 decides the client's): open issues grouped by milestone
-  (roadmap | unplanned panes). `Enter` on an issue creates a worktree
-  `issue-<N>` off your base branch and starts `claude` seeded to read, claim,
-  and implement it. Issues being worked show `▶ <window>`. Manage issues
-  without leaving tmux: the modal is **list-only by default**, and `Space`
-  toggles a **preview pane** showing the highlighted issue's body,
-  labels, milestone, assignees, and recent comments — word-wrapped to the pane
-  so nothing splits mid-word. `/` turns on type-to-filter; `Ctrl-X` closes
-  (triages) an issue after a y/n confirm; `Ctrl-O` opens it on the web.
-  **Priority** shows as a `p0`/`p1`/`p2` tag on each row and orders issues within
-  a milestone; `Ctrl-Y` cycles a highlighted issue's priority (none→p2→p1→p0).
-  `Ctrl-N` files a **one-line issue** fast.
 
 - **Background collectors** keep it all instant: a 45-second daemon caches
   each worktree's branch, the repo's PR/CI map, open issues, per-session
@@ -314,10 +292,9 @@ own session (issue #1711). scp / rsync / `ssh host cmd` are never touched;
 [docs/dev/INSTALL.md](docs/dev/INSTALL.md) step 7 for the one `~/.zshrc` line,
 `source ~/.claude/fleet/shell/fleet-login.zsh`.
 
-**Several repos in one fleet.** From inside the fleet, **⌃z on the dash** or the
-task sidebar's row menu (`.`) item **`g` ＋ 仓库…** opens a popup that asks just
-`owner/name` (a GitHub URL is fine) and adds it — `bin/dash-repo-add.sh`, the same
-script behind both, issue #1103 — so on an iPad nothing leaves the screen: the
+**Several repos in one fleet.** From inside the fleet, `bin/dash-repo-add.sh`
+(issue #1103) opens a popup that asks just `owner/name` (a GitHub URL is fine) and
+adds it — so on an iPad nothing leaves the screen: the
 checkout is `~/projects/<name>` (reused if it already is that repo, cloned if
 missing, the clone's progress in the popup), the verdict stays up until you dismiss
 it, and the new repo's heading is on the dash's next frame — no restart. The shell
@@ -357,11 +334,8 @@ fleet is refused. A repo you want isolated needs a second login. A brand-new fle
 is named `fleet`; an existing one keeps its name.
 
 `fleet` is your one way into a fleet (issue #1711, EPIC #1710): the client, on
-your own computer or after an ssh login. `cf` (from `shell/cw.zsh`) is folded into
-it — for one version it prints `cf 已并入 fleet` and runs `bin/fleet`
-(`cf --guide` → `fleet guide`; `cf <owner/repo>` → `fleet-up.sh <owner/repo>
---no-attach`, which adds that repo to your fleet, then the client), and then it
-goes. `bin/fleet-attach.sh` — a direct attach to the node's own session — still
+your own computer or after an ssh login (the old `cf` helper, `shell/cw.zsh`,
+is gone — issue #4902). `bin/fleet-attach.sh` — a direct attach to the node's own session — still
 works for a script or a person who types it, but is no longer advertised.
 
 Each fleet keeps its durable state in **one directory per fleet** —
@@ -374,7 +348,7 @@ still works as a one-fleet default. **One settings file per login** (issue #979)
 `FLEET_REPO`/`FLEET_MAIN`/`FLEET_BASE_BRANCH`; the old files stay as
 `*.pre-merge`). Read order is install `fleet.conf` < `fleet.settings` < the
 fleet `conf`, so an unmerged login loads exactly as before. The config
-modal (`bin/tmux-config.sh`) writes only the two layers you can tell apart — **this fleet** (a
+panel writes only the two layers you can tell apart — **this fleet** (a
 global-only key goes to `fleet.settings`, any other to the fleet `conf`) and **a
 hosted repo** — and never the install's `fleet.conf`, which it reads as legacy
 (issue #1102). Every fleet gets a **`plan` hub** window holding

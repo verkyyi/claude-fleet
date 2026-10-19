@@ -294,8 +294,6 @@ run bash "$BIN/fleet-answer.sh" -L "$L" --show "$L:1";        ok; [ "$rc" = 2 ] 
 run bash "$BIN/fleet-answer.sh" -L "$L" --show plan;          ok; [ "$rc" = 2 ] || fail "F5: fleet-answer a window NAME → exit 2" "rc=$rc $err"
 run bash "$BIN/fleet-permission.sh" -L "$L" --show "$L:1";    ok; [ "$rc" = 2 ] || fail "F5: fleet-permission <sess>:<idx> → exit 2" "rc=$rc $err"
 loc "$L:1" "$L";    ok; [ "$out" = unknown ] && [ "$rc" = 2 ] || fail "F5: fleet_worker_locate <sess>:<idx> → unknown rc 2" "$out rc=$rc"
-ok; grep -q "display-message -p -t \"\$target\" '#{window_id}'" "$BIN/dash-answer.sh" \
-  || fail "F5: dash-answer.sh must pin its <sess>:<idx> row to the window id before calling fleet-answer"
 
 # F6 the caller's own pane or nothing: inside tmux with no TMUX_PANE, fleet-comment
 #    refuses before any gh call; a daemon (no \$TMUX) posts as before
@@ -319,7 +317,7 @@ tf new-window -d -n z9 'while :; do sleep 300; done'
 out=$(lib fleet_wid_target z9 "$L" 2>"$WORK/err"); rc=$?
 ok; [ "$rc" = 1 ] && [ -z "$out" ] || fail "F7: an unstamped handle → nothing, rc 1 (never the window NAMED z9)" "rc=$rc out=$out"
 ok; [ "$(lib fleet_wid_target "$w7" "$L")" = "$w7" ] || fail "F7: a window id still passes through"
-for f in dash-migrate.sh fleet-migrate.sh fleet-transfer.sh fleet-move.sh dash-fold-toggle.sh dash-pin-toggle.sh; do
+for f in dash-migrate.sh fleet-migrate.sh fleet-transfer.sh fleet-move.sh dash-pin-toggle.sh; do
   ok; grep -Eq 'fleet_wid_target .*\)"? && \[ -n ' "$BIN/$f" || fail "F7: $f must check fleet_wid_target's rc (an empty target is -t \"\", the current window)"
 done
 

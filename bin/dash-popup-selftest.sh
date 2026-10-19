@@ -40,7 +40,6 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 HELPER="$BIN/dash-popup.sh"
-DASH="$BIN/tmux-dashboard.sh"
 [ -f "$HELPER" ] || { printf 'selftest: %s not found\n' "$HELPER" >&2; exit 2; }
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
@@ -276,9 +275,6 @@ untitled=$(grep -n 'dash-popup\.sh' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 
   | grep -E 'dash-popup\.sh(["'"'"')]| --| -w| -h)' | grep -Ev 'Path\(.*"dash-popup\.sh"\)' | grep -v -- '--title')
 [ -z "$untitled" ] || fail "one frame: a popup without --title:
 $untitled"
-for f in tmux-dashboard.sh tmux-issues.sh; do
-  grep -q 'dash-popup' "$BIN/$f" || fail "one door: $f opens no popup through dash-popup.sh"
-done
 echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh, titled"
 
 # --- 6d. ONLY THE POPUPS THAT NEED A SCREEN (issue #1620, EPIC #1615 C5) -------
@@ -302,41 +298,23 @@ echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh,
 # Issue #3375 adds the seventh, repo_add (⌘P's 添加仓库…): a typed owner/name or
 # link, then the clone's progress and the verdict held on screen.
 # Issue #3732 deleted the task picker (fleet-task-pick.sh) with the ⌂ chain.
+# Issue #4902 deleted the last one, the keys sheet, with the dash and the
+# backlog: no script opens a popup_* popup any more — ⌘P draws its own
+# (fleet_view.py, --title view_title).
 kept=$(grep -ho -- '--title["'"'"', ]*popup_[a-z_]*' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
   | grep -v '^$' | sed 's/.*\(popup_[a-z_]*\)$/\1/' | sort -u | paste -sd ' ' -)
 kept_hub=$(grep -lE -- '--title["'"'"', ]*popup_' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
-  | grep -v -- '-selftest\.' | grep -v '/tmux-dashboard\.sh$' \
+  | grep -v -- '-selftest\.' \
   | xargs grep -ho -- '--title["'"'"', ]*popup_[a-z_]*' | sed 's/.*\(popup_[a-z_]*\)$/\1/' | sort -u | paste -sd ' ' -)
-[ "$kept_hub" = 'popup_keys' ] \
-  || fail "kept popups: want keys (1), got: $kept_hub (all, the hub too: $kept)"
+[ -z "$kept_hub" ] \
+  || fail "kept popups: want none, got: $kept_hub (all: $kept)"
 # the one-field popups that moved onto a line open no popup at all
-for f in fleet-restore-pick.sh dash-issue-close.sh dash-issue-new.sh dash-reap.sh \
+for f in fleet-restore-pick.sh dash-reap.sh \
          dash-migrate.sh open-url.sh dash-repo-add.sh fleet-row-remote.sh; do
   grep -Ev '^[[:space:]]*#' "$BIN/$f" | grep -q 'dash-popup\.sh\|fleet_popup ' \
     && fail "kept popups: $f still opens a popup"
 done
-echo "ok: one popup kept outside the hub (the backlog's keys sheet); one-field ones ask on a line"
-
-# --- 7. STATIC GUARD: the binds route through the helper ---------------------
-[ -f "$DASH" ] || fail "static guard: $DASH not found"
-grep -q 'dash-popup\.sh --size L --title popup_keys -- bash \$BIN/fleet-keys\.sh --context dash' "$DASH" \
-  || fail "static guard: the dash '?' bind does not route through dash-popup.sh"
-grep -q 'dash-popup\.sh --size S --title popup_new_task -- bash \$BIN/dash-issue-new\.sh confirm --spawn' "$DASH" \
-  || fail "static guard: the dash ⌃n bind does not route through dash-popup.sh"
-# No fzf --bind may call display-popup directly any more — that is the whole bug.
-if grep -n -- '--bind' "$DASH" | grep -q 'display-popup'; then
-  fail "static guard: an fzf --bind still calls 'tmux display-popup' directly"
-fi
-# The backlog panel's WINDOWED `?` is the same bind in the other panel — it runs
-# from a pane process too, so it must route through the helper as well. (Its POPUP
-# mode is unaffected: there `?` drops a 'keys' sentinel and the gap dispatcher runs
-# the sheet inline, since tmux cannot nest a popup inside a popup — #123/#122.)
-ISSUES="$BIN/tmux-issues.sh"
-[ -f "$ISSUES" ] || fail "static guard: $ISSUES not found"
-grep -q 'dash-popup\.sh --size L --title popup_keys -- bash \$BIN/fleet-keys\.sh --context backlog' "$ISSUES" \
-  || fail "static guard: the backlog windowed '?' bind does not route through dash-popup.sh"
-grep -q 'K_BIND="?:execute(tmux display-popup' "$ISSUES" \
-  && fail "static guard: the backlog '?' bind still calls 'tmux display-popup' directly"
+echo "ok: no script opens a popup_* popup; one-field ones ask on a line"
 
 # Exercise the remaining real action scripts with no client AND rc=0 refusal.
 # All input cancels, and gh is a tripwire: no test can send a real issue mutation.
@@ -359,42 +337,16 @@ FAKE
 chmod +x "$ACTIONS/gh" "$ACTIONS/nc" "$ACTIONS/fzf"
 export ACTION_LOG="$WORK/action-log" INPUT_LOG="$WORK/input-log"
 for popup_path in "$WORK/bin" "$REFUSE"; do
-  # close asks in the terminal it runs in — no popup of its own (issue #1620)
-  out=$(printf 'n\n' | PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" \
-    CF_REPO='fake/repo' bash "$BIN/dash-issue-close.sh" 42)
-  case "$out" in *'#42'*'fake/repo'*) ;; *) fail "close did not ask about the issue/repo" ;; esac
-  [ ! -s "$ACTION_LOG" ] || fail "close cancellation invoked gh"
-  : > "$INPUT_LOG"
-  PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" CF_REPO='fake/repo' \
-    bash "$BIN/dash-issue-new.sh" --spawn
-  grep -q 'New issue + worker in fake/repo' "$INPUT_LOG" \
-    || fail "new issue fallback lost its repo or --spawn argument"
   # the URL fallback (issue #1620): no popup — outside tmux the terminal gets
   # the URL (+ OSC 52); inside, it goes to the client's clipboard buffer
   url='https://example.invalid/a?q=two words&literal=$(false)'
   out=$(env -u TMUX PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" sh "$BIN/open-url.sh" "$url" </dev/null)
   case "$out" in *"$url"*) ;; *) fail "URL fallback lost its literal argument" ;; esac
-  out=$(env -u TMUX PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" \
-    FLEET_REPO='fake/repo' bash "$BIN/dash-open-pr.sh" landed:42 </dev/null)
-  case "$out" in *'https://github.com/fake/repo/pull/42'*) ;; *)
-    fail "PR URL action lost its fallback" ;; esac
   out=$(TMUX="$SOCK,1,0" PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" OPEN_URL_REPORT=1 sh "$BIN/open-url.sh" "$url" </dev/null)
   [ "$out" = fallback:copied ] && [ "$(PATH="$WORK/bin:$PATH" tmux show-buffer 2>/dev/null)" = "$url" ] \
     || fail "URL fallback in tmux did not copy the literal URL: $out / $(PATH="$WORK/bin:$PATH" tmux show-buffer 2>/dev/null)"
   [ ! -s "$ACTION_LOG" ] || fail "cancelled input invoked gh"
 done
-
-# Interactive fallback requires execute(), including the indirect PR URL opener.
-for spec in 'tmux-dashboard.sh REAP' 'tmux-dashboard.sh PR' 'tmux-dashboard.sh REPO_ADD' 'tmux-issues.sh OPEN'; do
-  read -r script action <<< "$spec"
-  grep -Fq "\$DASH_KEY_$action:execute(" "$BIN/$script" \
-    || fail "$script $action does not hand the terminal to the fallback"
-done
-grep -Fq '$DASH_KEY_CLOSE:execute(' "$ISSUES" \
-  || fail "windowed backlog close does not hand the terminal to the confirm"
-if grep 'open-url.sh' "$BIN/dash-open-pr.sh" | grep -Eq '(&[[:space:]]*\)?[[:space:]]*$|/dev/null)'; then
-  fail "PR opener backgrounds or redirects the interactive URL fallback"
-fi
 
 printf 'dash-popup-selftest: OK\n'
 exit 0

@@ -653,7 +653,7 @@ class StuckRequest(unittest.TestCase):
         self.veto(20)                                  # still stuck: never a second page
         self.assertEqual(len(self.sent()),1)
         msg=self.sent()[0]
-        for part in ('fleet-x','@7','claude/work','npm run dev','DASH_KEY_MIGRATE',
+        for part in ('fleet-x','@7','claude/work','npm run dev','⌘P → the row',
                      'fleet-account.sh migrate --session fleet-x --force-bg @7'):
             self.assertIn(part,msg)
 

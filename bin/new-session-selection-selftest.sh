@@ -18,16 +18,12 @@
 #      still wins — there is no filtered view any more.
 #   E. a one-repo fleet: the resolver runs the same rule (#1938); a spawn there
 #      lands in its only repo whatever the selection.
-#   F. the hub's ⌃s / ⌃n / Enter binds pass `{2}:{4}` — a session row's WINDOW
-#      ID (field 1 is its `sess:idx` jump target, which the resolver cannot read,
-#      issue #1010) + a heading's spawn target; ⌃n resolves the highlighted repo
-#      instead of asking which repo.
-#   G. the binds' field shape applied to the REAL hub rows (issue #1010 — #997's
+#   G. the selection's field shape, `{2}:{4}` (the dash's binds passed it until
+#      they went with the dash, issue #4902), applied to the REAL hub rows (issue #1010 — #997's
 #      legs fed `@<wid>` by hand and only grepped the bind text, so ⌃s on a
 #      session row spawned a no-repo window while every leg was green): the beta
 #      row's fields → o/beta and a real spawn off them lands in beta; beta's
 #      heading → o/beta; the no-repo row → none; the column header → nothing.
-#      ⌃s, ⌃n and Enter carry one shape.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -172,34 +168,11 @@ eq "E: one-repo fleet — an unhosted heading names nothing" "$(fleet_selection_
 eq "E: one-repo fleet — a selection changes nothing" \
    "$(spawned "$D" --name e1 --selection hdr:o/beta)" "$(spawned "$D" --name e2)"
 
-# ==== F. the hub binds ==============================================================
-dash=$(cat "$BIN/tmux-dashboard.sh")
-has "F: ⌃s passes the highlighted row"    "$dash" 'dash-raw-session.sh --bg --selection={2}:{4})'
-has "F: ⌃n passes the highlighted row"    "$dash" 'dash-issue-new.sh confirm --spawn --selection={2}:{4})'
-has "F: Enter passes the highlighted row" "$dash" 'dash-enter.sh {1} {q} {2}:{4})'
-# ⌃n: fzf is shimmed to record its header and cancel, so the popup's repo shows.
-mkdir -p "$WORK/fz"
-cat > "$WORK/fz/fzf" <<EOF
-#!/bin/sh
-for a in "\$@"; do case "\$a" in --header=*) printf '%s\n' "\${a#--header=}" > "$WORK/fzf.header" ;; esac; done
-exit 130
-EOF
-chmod +x "$WORK/fz/fzf"
-newi() { rm -f "$WORK/fzf.header"; TMUX="$SOCK,1,0" TMUX_PANE="$(opt "$S:plan" pane_id)" PATH="$WORK/fz:$PATH" \
-  bash "$BIN/dash-issue-new.sh" confirm --spawn "$@" </dev/null >/dev/null 2>&1; cat "$WORK/fzf.header" 2>/dev/null; }
-has "F: ⌃n on beta's heading files in o/beta" "$(newi --selection=hdr:o/beta)" "in o/beta"
-has "F: ⌃n on a beta row files in o/beta"     "$(newi --selection="$wB:")" "in o/beta"
-
 # ==== G. the binds' shape against the REAL rows (issue #1010) ========================
-# Read the shape off the ⌃s bind itself — `{A}:{B}` — and compose the selection the
-# way fzf does, from the producer's own fields, so a renumbered field, or a field A
-# that is not a window id (#1010: `{1}` is the `sess:idx` jump target), fails HERE
-# and not on the operator's dash. ⌃n and Enter must carry the identical shape.
-shape=$(printf '%s\n' "$dash" | sed -n 's/.*dash-raw-session\.sh --bg --selection=\({[0-9]}:{[0-9]}\)).*/\1/p' | head -1)
-if [ -n "$shape" ]; then ok "G: ⌃s selection is two fzf fields: $shape"
-else fail "G: could not read a {A}:{B} selection off the ⌃s bind"; shape='{2}:{4}'; fi
-has "G: ⌃n carries the same shape"   "$dash" "dash-issue-new.sh confirm --spawn --selection=$shape)"
-has "G: Enter carries the same shape" "$dash" "dash-enter.sh {1} {q} $shape)"
+# The dash's ⌃s / ⌃n / Enter binds passed `{2}:{4}` (issue #1010); they went with
+# the dash (issue #4902), the shape stays the selection's contract: field 2 a
+# window id, field 4 a heading's spawn target.
+shape='{2}:{4}'
 fa=${shape#\{}; fa=${fa%%\}*}; fb=${shape##*\{}; fb=${fb%\}}
 hub=$(FLEET_SESSION=$S bash "$BIN/tmux-dashboard-rows.sh" 2>/dev/null | sed $'s/\x1b\\[[0-9;]*m//g')
 # row_sel <text> → `<field A>:<field B>` of the first hub row whose text has <text>;

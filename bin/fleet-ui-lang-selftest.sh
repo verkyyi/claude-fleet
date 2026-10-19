@@ -14,19 +14,14 @@ eq 'auto follows zh locale' "$(LC_ALL='' LC_MESSAGES='' LC_CTYPE='' FLEET_UI_LAN
 eq 'auto follows en locale' "$(LC_ALL='' LC_MESSAGES='' LC_CTYPE='' FLEET_UI_LANG=auto LANG=en_US.UTF-8 "$BIN/fleet-ui-lang.sh" lang)" en
 eq 'auto preserves Chinese in C locale' "$(LC_ALL='' LC_MESSAGES='' LC_CTYPE='' FLEET_UI_LANG=auto LANG=C "$BIN/fleet-ui-lang.sh" lang)" zh
 
-eq 'ghost English' "$(FLEET_UI_LANG=en FLEET_SESSION='' "$BIN/dash-agent-prompt.sh" ghost 2>/dev/null)" '↵ new scratch (prefilled, unsent) · switch agent: ⌃v'
-eq 'ghost Chinese' "$(FLEET_UI_LANG=zh FLEET_SESSION='' "$BIN/dash-agent-prompt.sh" ghost 2>/dev/null)" '↵ 新开 scratch（预填不发送） · 切换 agent: ⌃v'
+eq 'empty list English' "$(FLEET_UI_LANG=en "$BIN/fleet-ui-lang.sh" t empty_dash 2>/dev/null)" 'No sessions — start one from ⌘P'
+eq 'empty list Chinese' "$(FLEET_UI_LANG=zh "$BIN/fleet-ui-lang.sh" t empty_dash 2>/dev/null)" '暂无会话 — ⌘P 里新开一个'
 
 # --- ONE TABLE (issue #1535, EPIC #1529 E6) ---------------------------------
-# fleet-ui-lang.sh is THE table. What it replaced stays gone: fleet-keys.sh's
-# whole zh sheet — and no script grows a zh/en branch of its own. (The old
-# client's sidebar and row menu had their own tables once; they went with it,
-# issue #3008.)
+# fleet-ui-lang.sh is THE table: no script grows a zh/en branch of its own. (The
+# old client's sidebar and row menu had their own tables once; they went with it,
+# issue #3008 — and fleet-keys.sh's zh sheet with the sheet, issue #4902.)
 ROOT="$(cd "$BIN/.." && pwd)"
-grep -q 'print_sheet_zh' "$BIN/fleet-keys.sh" && fail 'fleet-keys.sh has a zh sheet of its own again'
-# a row's text is a lookup ("$(fleet_ui_t …)"), never a literal in either language
-grep -E '^ *s?key "[^"]*" "[^$]' "$BIN/fleet-keys.sh" | grep -qv '# ui-lang-ok:' && fail 'fleet-keys.sh writes a row literally instead of through fleet_ui_t'
-ok 'fleet-keys.sh reads every row from the table'
 branchy=$(grep -nE '(case "\$\(fleet_ui_lang\)"|"\$\(fleet_ui_lang\)" = (zh|en))' "$BIN"/*.sh | grep -v '/fleet-ui-lang\.sh:' | grep -v -- '-selftest\.sh:')
 [ -z "$branchy" ] || fail 'a script branches on the language instead of using fleet_ui_t' "$branchy"
 ok 'no script branches on the language itself'

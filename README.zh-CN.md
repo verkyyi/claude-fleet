@@ -14,24 +14,16 @@ claude-fleet 把 **Claude Code / Codex CLI、tmux、Git worktree 和 GitHub Issu
 
 项目来自一台常开 Mac mini 上的持续开发实践。本机 Transcript 核算记录到：**历史峰值 25 个 Claude 主 Session，在 25 份独立任务目录中并行处理任务**（2026 年 9 月 1 日）；另一次记录中，至少 **15 个任务连续并行约 14.46 分钟**。统计的是 CLI 处理轮次重叠，详见[实证数据与统计口径](docs/dev/USAGE-EVIDENCE.md#中文说明)。
 
-![claude-fleet 任务看板：集中查看会话状态、Issue、模型和上下文用量](docs/public/img/dashboard.svg)
-![tmux 状态栏：快速识别正在工作、已完成和等待你处理的会话](docs/public/img/statusbar.svg)
-
-<sub>截图来自真实 tmux 界面，使用演示仓库数据。界面中的部分标签和提示仍为英文。</sub>
-
 [快速上手](#快速上手) · [小团队并行工作流](#小团队并行工作流) · [实证数据](docs/dev/USAGE-EVIDENCE.md#中文说明) · [常用快捷键](#常用快捷键) · [配置与多仓库](#配置与多仓库) · [订阅与额度](#订阅账号池与额度管理) · [更多文档](#更多文档)
 
 ## 它能帮你做什么
 
 - **并行推进多个任务。** 每个 worker（执行任务的 AI 会话）使用独立的 Git worktree，也就是同一仓库的一份独立工作目录；不同任务的未提交修改互不混在一起。
 - **一眼看出谁需要你。** 青色转动符号表示正在工作，绿色 `✓` 表示一轮对话结束，红色 `!` 和铃声表示等待你处理，靛蓝色表示 `/loop` 正在等待下一轮。窗口按紧急程度排序。
-- **从 Issue 直接开工。** 在 backlog（待办面板）选中 GitHub Issue，按回车即可创建 `issue-<编号>` 工作目录并启动 worker。面板支持预览、筛选和优先级调整。
 - **集中查看进度。** dashboard（任务看板）展示会话状态、关联 Issue、模型、PR/CI 状态和可用的上下文用量信息。后台采集器维护缓存，看板读取缓存展示。
 - **随时开一个探索会话。** 不确定需求时，先用 scratch（临时会话）讨论、实验；明确后可将同一会话绑定到 Issue，保留已有上下文继续实现。
 - **把订阅额度纳入调度。** 注册多个 Claude 账号后，可在账号限额时迁移会话；接入 TokenLedger（`ccquota`）后，还能按账号余量分配新任务、提前预警和轮换、安排窗口错峰，并按需暂停入口远程开会话。详见[订阅与额度管理](#订阅账号池与额度管理)。
 - **管理收尾和长期运行。** worker 通过 PR 交付；后台清理符合条件的已结束任务。Claude Code 会话可通过 `/fleet-handoff` 保存交接信息，跨上下文窗口继续工作。
-
-![GitHub 待办面板：按里程碑组织 Issue，并显示正在处理的任务](docs/public/img/backlog.svg)
 
 ## 快速上手
 
@@ -80,7 +72,7 @@ sh ~/.claude/fleet/bin/fleet-doctor.sh
 
 一个 **fleet 对应一个 GitHub 仓库、一个 tmux session，以及一个独立的 tmux socket**。进入后看到的 `plan` 是承载看板的 hub（控制中心）；从这里打开任务会话。
 
-安装好 `shell/cw.zsh` 中的快捷函数后，日常用 `cf` 返回已有 fleet：只有一个就直接进入，有多个则显示选择器。没有运行中的 fleet 时，它才会根据当前目录的仓库启动一个。
+日常用 `fleet` 回到已有的 fleet（旧的 `cf` 快捷函数 `shell/cw.zsh` 已去掉，#4902）。
 
 <a id="中文团队工作流"></a>
 

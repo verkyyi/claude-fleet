@@ -1130,8 +1130,9 @@ def banner(items, now=None):
     """The red line on top of the popup (issue #3184, EPIC #3178 C6): hub_ok older
     than FLEET_HUB_SESSIONS_STALE and another machine's rows on the list ⇒ 「<机器们>
     的会话 N 分钟没更新（连不上入口）· 正在重连」 — the list's own refresh calls
-    hub_fresh's --ensure meanwhile. Nothing else is judged here: the hub fresh, or
-    no hub_ok at all ⇒ no line."""
+    hub_fresh's --ensure meanwhile; with no such row 「入口 N 分钟没响应」 alone (a
+    row's PR is read off the hub, issue #4902). Nothing else is judged here: the
+    hub fresh, or no hub_ok at all ⇒ no line."""
     age = hub_age(now)
     if age is None or age <= fenv("FLEET_HUB_SESSIONS_STALE", 60):
         return ""
@@ -1140,7 +1141,9 @@ def banner(items, now=None):
         if e["kind"] == "sess" and e.get("lost") and e.get("machine") and e["machine"] not in names:
             names.append(e["machine"])
     if not names:
-        return ""
+        # no other machine's row to name (issue #4902): the hub is still what the
+        # rows' PR is read off — say how long it has not answered, never a spinner
+        return say("view_hub_down_banner_fmt", max(1, int(age) // 60))
     return say("view_stale_banner_fmt", "、".join(names), max(1, int(age) // 60))
 
 
@@ -2291,19 +2294,52 @@ def facts(fleet, e):
     if not t.startswith("@"):
         return {}
     rc, out = tm("display-message", "-p", "-t", t, "#{window_id}|#{@pin}|#{@worker_lifecycle}|#{@sleep_keep_awake}|"
-                 "#{@cc_agent}|#{@claude_needs}|#{@fleet_id}|#{window_name}|#{@wrap_exit_rc}|#{pane_id}")
-    f = (out.split("|") + [""] * 10)[:10] if rc == 0 else [""] * 10
+                 "#{@cc_agent}|#{@claude_needs}|#{@fleet_id}|#{window_name}|#{@wrap_exit_rc}|#{pane_id}|#{@task}")
+    f = (out.split("|") + [""] * 11)[:11] if rc == 0 else [""] * 11
     if f[0] != t:     # tmux answers a gone id with another window's format
         return {"gone": True}
-    pr = ""
-    try:
-        pr = subprocess.run(sh("dash-open-pr.sh", "--wid", t, "--probe"), capture_output=True, text=True, timeout=3,
-                            env=act_env(fleet), stdin=subprocess.DEVNULL).stdout.strip().splitlines()
-        pr = pr[-1] if pr else ""
-    except (OSError, subprocess.TimeoutExpired):
-        pr = ""
+    pr, pr_url = task_pr(fleet, f[10])
     return {"pin": f[1] == "1", "life": f[2], "keep": f[3] == "1", "agent": f[4] or "claude", "needs": f[5],
-            "fid": f[6], "wname": f[7], "page": f[8] != "", "pane": f[9], "pr": pr}
+            "fid": f[6], "wname": f[7], "page": f[8] != "", "pane": f[9], "pr": pr, "pr_url": pr_url}
+
+
+PR_REF = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$")
+
+
+def task_pr(fleet, task):
+    """A session's PR, off its hub task record (issue #4902): (`#N`, its URL), or
+    ("?", "") when the hub did not answer — the row says it does not know, it
+    never asks GitHub — or ("", "") for no record, no PR on it, or no hub here
+    (fleet-task-record.sh exit 3). FLEET_VIEW_PR_TIMEOUT (3 s) bounds the read."""
+    if not re.match(r"^T[1-9][0-9]*$", task or ""):
+        return "", ""
+    secs = fenv("FLEET_VIEW_PR_TIMEOUT", 3)
+    env = dict(act_env(fleet), FLEET_HUB_TIMEOUT=str(secs))
+    try:
+        p = subprocess.run(sh("fleet-task-record.sh", "get", task), capture_output=True, text=True,
+                           timeout=secs + 1, env=env, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return "?", ""
+    if p.returncode == 3:
+        return "", ""
+    try:
+        rec = json.loads(p.stdout) if p.returncode == 0 else None
+    except ValueError:
+        rec = None
+    if not isinstance(rec, dict):
+        return "?", ""
+    m = PR_REF.match(str((rec.get("task") or {}).get("pr") or ""))
+    if not m:
+        return "", ""
+    return "#" + m.group(2), "https://github.com/%s/pull/%s" % (m.group(1), m.group(2))
+
+
+def pr_label(r):
+    if r.get("pr") == "?":
+        age = hub_age()
+        return say("view_act_pr_unknown_fmt", max(1, int(age) // 60)) if age is not None and age > 60 \
+            else say("view_act_pr_unknown")
+    return say("view_act_pr_fmt", r.get("pr"))
 
 
 def evidence_command(fleet, argv, payload=None):
@@ -2460,10 +2496,12 @@ ACTIONS = [
     {"id": "shell", "label": lambda r: say("view_act_shell"),
      "when": lambda r: not r.get("gone") and not r.get("lost") and r.get("state") != "exited",
      "local": lambda r, a, f: "shell", "far": lambda r, a, f: "shell", "ask": None},
-    {"id": "pr", "label": lambda r: say("view_act_pr_fmt", r.get("pr")), "when": lambda r: bool(r.get("pr")),
-     # far None (issue #4184): a far row carries no PR — the PR is found off the
-     # window's branch in its node's prmap; it needs an inventory column first
-     "local": lambda r, a, f: sh("dash-open-pr.sh", "--wid", r["target"]), "far": None, "ask": None},
+    # the ONE place a row's PR shows (issue #4902): its hub task record's, read
+    # when the menu opens (facts); `?` when the hub did not answer. far None
+    # (issue #4184): another machine's row carries no task record here
+    {"id": "pr", "label": pr_label, "when": lambda r: bool(r.get("pr")),
+     "local": lambda r, a, f: "pr-unknown" if r.get("pr") == "?" else sh("open-url.sh", r.get("pr_url") or ""),
+     "far": None, "ask": None},
     # 消息
     {"id": "answer", "label": lambda r: say("view_act_answer"),
      "when": lambda r: (live(r) or far_live(r)) and r.get("state") == "needs",
@@ -2621,6 +2659,8 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
         observed = dict(r)
         observed["evidence_identity"] = fleet_status_evidence.delivery_identity(observation)
         return 0, "\n".join(evidence_lines(observed, observation.get("proof"))), False
+    if argv == "pr-unknown":
+        return 1, pr_label(r), False
     if argv in ("go", "shell") and lost_msg(r):
         return 1, lost_msg(r), False
     if argv == "go":

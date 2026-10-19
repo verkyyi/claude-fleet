@@ -14,13 +14,12 @@
 #      @login.
 #   C. ALWAYS ALL — fleet_current_repo is gone (#1038): nothing in bin/ reads the
 #      retired picker's current-repo file, and fleet-up.sh deletes it.
-#   D. PER-SPAWN ASK — fleet-repo-ask.sh (the ⌃n "which repo?" prompt) lists the
-#      hosted repos only, prints the pick, exits 1 on esc; fleet-list.sh shows a
-#      fleet's further repos as ↳ rows and a one-repo fleet as its single row.
+#   D. fleet-list.sh shows a fleet's further repos as ↳ rows and a one-repo fleet as
+#      its single row. (The ⌃n "which repo?" prompt went with the dash, issue #4902.)
 #   E. DASH — `all` groups the rows under a heading naming each repo (issue #995:
 #      no per-row tag), puts no-repo sessions in their own group at the foot; a
 #      child whose @origin is repo-qualified (`<slug>:issue-N`, #789) folds under
-#      its parent in the rows AND the fold toggle; a one-repo fleet ignores a stale
+#      its parent in the rows and goes when its block is shut; a one-repo fleet ignores a stale
 #      current-repo file.
 #   F. NAMES — fleet_repo_short and its collision fallback.
 # fzf is shimmed (records its input, answers with the row a test names); tmux runs
@@ -28,9 +27,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-ASK="$BIN/fleet-repo-ask.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
-FOLD="$BIN/dash-fold-toggle.sh"
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 
@@ -90,11 +87,6 @@ fconf "$FLEET_CONF_DIR/fleets/gamma/repos/o-gee.conf" o/gee gee; printf 'o-gee\n
 tmux new-session -d -s beta -x 200 -y 40
 tmux new-session -d -s gamma -x 200 -y 40
 
-ask() {    # $1 = current fleet, $2 = FZF_PICK pattern ('' = esc)
-  : > "$WORK/tmux.log"; rm -f "$WORK/fzf.in"
-  env TMUX=/fake,1,0 FAKE_CUR="$1" FZF_PICK="$2" bash "$ASK" >"$WORK/ask.out" 2>&1
-}
-keys() { awk -F '\037' '{ print $1 }' "$WORK/fzf.in"; }
 ROOT="$BIN/.."
 CONF="$ROOT/conf/tmux-attention.conf"
 
@@ -109,10 +101,7 @@ eq    "A: nothing in bin/conf/hooks/commands names the picker" "$refs" ""
 for fn in fleet_current_repo_set fleet_repo_label fleet_repo_label_sync fleet_current_repo; do
   CHECKS=$((CHECKS+1)); declare -F "$fn" >/dev/null && fail "A: fleet-lib.sh still defines $fn"
 done
-hasnt "A: the dash keymap has no pick action" "$(bash "$BIN/dash-keymap.sh" env 2>/dev/null)" "PICK"
-# ctrl-z was freed with the picker; #1103 gave it to repo-add (the one dash key that
-# touches a fleet's repo list) — assert it is that and nothing pick-shaped.
-eq    "A: ctrl-z on the dash is repo-add (#1103), not pick" "$(bash "$BIN/dash-keymap.sh" key repo-add 2>/dev/null)" "ctrl-z"
+hasnt "A: the 看台's key table has no pick action" "$(bash "$BIN/dash-keymap.sh" --panel switch actions 2>/dev/null)" "pick"
 
 # --- B. the footer -------------------------------------------------------------
 # Render status-left's TEXT (style/range markup stripped: it draws nothing) on a
@@ -167,21 +156,7 @@ refs=$(grep -l 'current-repo' "$BIN"/*.sh 2>/dev/null \
 eq    "C: fleet-up.sh is the only script that names current-repo" "$refs" "fleet-up.sh "
 has   "C: …to delete the stale file" "$(cat "$BIN/fleet-up.sh")" 'rm -f "$FLEET_CONF_DIR/fleets/$NAME/current-repo"'
 
-# --- D. the per-spawn ask ------------------------------------------------------
-ask alpha ''
-eq    "D: ask lists each hosted repo, no all" "$(keys | tr '\n' ' ')" "o/claude-fleet o/tokenledger "
-hasnt "D: …and no other fleet's repo" "$(keys)" "o/cee"
-has   "D: header asks which repo" "$(cat "$WORK/fzf.args")" "which repo"
-has   "D: display only (key hidden)" "$(cat "$WORK/fzf.args")" "--with-nth=2"
-eq    "D: esc prints nothing" "$(cat "$WORK/ask.out")" ""
-ask alpha 'tokenledger'
-eq    "D: a pick prints the repo" "$(cat "$WORK/ask.out")" "o/tokenledger"
-CHECKS=$((CHECKS+1)); [ -e "$FLEET_CONF_DIR/fleets/alpha/current-repo" ] && fail "D: …and sets nothing (a current-repo file was written)"
-hasnt "D: …nor touches the footer" "$(cat "$WORK/tmux.log")" "set-option"
-: > "$WORK/tmux.log"
-env TMUX=/fake,1,0 FAKE_CUR=beta FZF_PICK='tokenledger' bash "$ASK" alpha >"$WORK/ask.out" 2>&1
-eq    "D: an explicit session wins over the pane's" "$(cat "$WORK/ask.out")" "o/tokenledger"
-has   "D: dash-issue-new.sh asks through it" "$(cat "$BIN/dash-issue-new.sh")" 'fleet-repo-ask.sh" "$FLEET_SESSION"'
+# --- D. fleet-list ---------------------------------------------------------------
 # fleet-list.sh shows the fleet and its repos: a ↳ row per further hosted repo
 fl=$(bash "$BIN/fleet-list.sh")
 has   "D: fleet-list lists alpha's second repo under it" "$(printf '%s\n' "$fl" | grep -A1 ' alpha ')" "↳"
@@ -212,9 +187,9 @@ has   "E: its parent carries the subtree badge" "$(printf '%s\n' "$r" | grep 'is
 # a stale current-repo file naming a hosted repo filters nothing any more
 printf 'o/tokenledger\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 eq    "E: a stale current-repo file changes no row" "$(rows)" "$r"
-# the fold toggle agrees: ← from the child shuts its repo-qualified parent's block
-FLEET_SESSION=alpha bash "$FOLD" collapse 'alpha:kid' '' >/dev/null 2>&1
-eq    "E: fold toggle reaches the qualified parent" "$(tmux show -wv -t 'alpha:issue-2' @expand 2>/dev/null)" ""
+# the parent's block shut (its @expand off — ⌘P's fold; the dash's ←/→ went with
+# the dash, issue #4902): the repo-qualified child goes with it
+tmux set -wu -t 'alpha:issue-2' @expand
 hasnt "E: collapsed child hidden" "$(rows)" "kid"
 # degenerate: no overlay → a stale current-repo file changes nothing
 mv "$FLEET_CONF_DIR/fleets/alpha/repos" "$WORK/repos.off"

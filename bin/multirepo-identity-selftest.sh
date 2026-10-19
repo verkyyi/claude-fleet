@@ -14,11 +14,10 @@
 # One leg per join the issue names:
 #   keys       fleet_repos / fleet_issue_key / fleet_window_key /
 #              fleet_bound_windows / fleet_repo_for_slug / fleet_okey_prefix
-#   backlog    the ACTIVE map (tmux-issues-rows.sh)
 #   reap       fleet-reap-target.py: bare #12 refused as ambiguous, <repo>#12 exact
 #   bridge     bridge_find_window (fleet-issue-bridge.sh --find-window)
 #   ledger     fleet-ledger-watch.sh: key (repo, N), row to its own repo's ledger
-#   dash       okey grouping (tmux-dashboard-rows.sh) + fold (dash-fold-toggle.sh)
+#   dash       okey grouping (tmux-dashboard-rows.sh)
 #   landed     the landed view's origin join + per-repo fold file (fleet-history.sh)
 #   hub        fleet-control-read.sh message/resume use the WINDOW's repo
 #
@@ -150,25 +149,6 @@ eq "keys: okey prefix, multi" "$(fleet_okey_prefix "$M" o/b)" "o-b:"
 eq "keys: okey prefix, one-repo" "$(fleet_okey_prefix "$D" o/c)" "o-c:"
 leg keys
 
-# --- backlog: the ACTIVE map -------------------------------------------------------
-# The list is o/a's issues (its cache). Bound rows are hidden by default: o/a#12 is
-# bound (A12); #14 is bound only in o/b — so it must SHOW.
-for sl in o-a o-c; do
-  mkdir -p "$FLEET_C/fleets/$sl"
-  printf 'v1\t#12\t\tt12\nv1\t#14\t\tt14\nv1\t#18\t\tt18\n' > "$FLEET_C/fleets/$sl/issues"
-  : > "$FLEET_C/fleets/$sl/issues.ts"
-done
-# field1 of a row is the bare issue number
-rows=" $(in_pane "$M" "$M:plan" env FLEET_SESSION="$M" bash "$BIN/tmux-issues-rows.sh" all | cut -d$'\x1f' -f1 | tr '\n' ' ')"
-hasnt "backlog: o/a#12 bound → hidden"         "$rows" " 12 "
-has   "backlog: o/b#14 does not bind o/a#14"   "$rows" " 14 "
-has   "backlog: free #18"                      "$rows" " 18 "
-rows=" $(in_pane "$D" "$D:plan" env FLEET_SESSION="$D" bash "$BIN/tmux-issues-rows.sh" all | cut -d$'\x1f' -f1 | tr '\n' ' ')"
-hasnt "backlog: one-repo #12 hidden" "$rows" " 12 "
-hasnt "backlog: one-repo #14 hidden" "$rows" " 14 "
-has   "backlog: one-repo #18 shows"  "$rows" " 18 "
-leg backlog
-
 # --- reap: a destructive target never guesses ---------------------------------------
 reap() { in_pane "$M" "$M:plan" python3 "$BIN/fleet-reap-target.py" "$1" 2>&1; }
 out=$(reap '#12'); has "reap: bare #12 is ambiguous" "$out" "matched 2"
@@ -230,10 +210,6 @@ has "dash: CB under B12" "$o" "B12 CB "
 has "dash: CA under A12" "$o" "A12 CA "
 o=$(order "$D")
 has "dash: one-repo child under its issue-12 parent" "$o" "D12 DC "
-# fold: ← from INSIDE A12's block (on CA) shuts A12's block — and only A12's
-in_pane "$M" "$CA" env FLEET_SESSION="$M" bash "$BIN/dash-fold-toggle.sh" collapse "$CA" >/dev/null
-eq "dash: fold from CA shut A12" "$(tmx "$M" display-message -p -t "$A12" '#{@expand}')" ""
-eq "dash: fold left B12 open" "$(tmx "$M" display-message -p -t "$B12" '#{@expand}')" "1"
 leg dash
 
 # --- landed: the ledger's own <slug>: origins join; the fold file is per repo ----------
