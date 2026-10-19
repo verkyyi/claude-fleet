@@ -155,10 +155,11 @@ block_of() {
     tokenledger/e2e/*)    echo e2e ;;
     tokenledger/go.work|tokenledger/go.work.sum|tokenledger/Dockerfile|tokenledger/Makefile|tokenledger/test-quarantine.txt|tokenledger/.gitignore)
       echo all ;;
-    tokenledger/README.md|tokenledger/LICENSE|tokenledger/docs/*|tokenledger/notify/*) echo none ;;
+    # the cost tables only deal the shards (issue #4817): the tests are the same
+    tokenledger/README.md|tokenledger/LICENSE|tokenledger/docs/*|tokenledger/notify/*|tokenledger/test-durations*.txt) echo none ;;
     tokenledger/*) echo unknown ;;
     # what builds or gates the Go tests from outside tokenledger/
-    .github/workflows/tokenledger.yml|bin/tokenledger-quarantine.sh|bin/tokenledger-modules-selftest.sh)
+    .github/workflows/tokenledger.yml|bin/tokenledger-quarantine.sh|bin/tokenledger-modules-selftest.sh|bin/go-test-shard.sh)
       echo all ;;
     bin/fleet-client-pack.sh) echo hub ;;   # packs the client the hub embeds
     *) echo '' ;;
@@ -293,9 +294,25 @@ go_narrow() {
   GO_PKGNOTE='packages: narrowed by go list -test'
 }
 
+# api_shards <table> → how many shards hub/api's tests take on that leg: its
+# recorded seconds ÷ GO_SHARD_SECS (240 — four minutes a shard), 1..GO_SHARD_MAX
+# (8, the runners' headroom), 3 (the old fixed count) with no row (issue #4817)
+api_shards() {
+  bash "$bin/go-test-shard.sh" count --table "$root/tokenledger/$1" --pkg hub/api \
+    --per "${GO_SHARD_SECS:-240}" --max "${GO_SHARD_MAX:-8}" --default 3 2>/dev/null || echo 3
+}
+
+# api_parts <n> → `"api-1", …, "api-<n>",`
+api_parts() {
+  local i=1 out=''
+  while [ "$i" -le "$1" ]; do out="$out \"api-$i\","; i=$((i + 1)); done
+  printf '%s' "$out"
+}
+
 # go_outputs — the matrices tokenledger.yml takes
 go_outputs() {
-  local k parts='' pg='' build='' pk ap=0 st=0 rest=0
+  local k parts='' pg='' build='' pk ap=0 st=0 rest=0 an pn
+  an=$(api_shards test-durations.txt) pn=$(api_shards test-durations-pg.txt)
   case " $GO_SELECTED " in *" hub "*)
     if [ "$GO_PKGS_hub" = ./... ]; then ap=1 st=1 rest=1
     else
@@ -309,7 +326,7 @@ go_outputs() {
     fi
     build="$build hub"
     [ "$rest" = 1 ] && parts="$parts \"rest\","
-    [ "$ap" = 1 ] && { parts="$parts \"api-1\", \"api-2\", \"api-3\","; pg="$pg \"api-1\", \"api-2\", \"api-3\","; }
+    [ "$ap" = 1 ] && { parts="$parts$(api_parts "$an")"; pg="$pg$(api_parts "$pn")"; }
     [ "$st" = 1 ] && pg="\"store\",$pg" ;;
   esac
   for k in shared agent e2e; do
@@ -322,6 +339,8 @@ go_outputs() {
   printf 'go_pg_parts=[%s]\n' "${pg# }"
   printf 'go_build=%s\n' "${build# }"
   printf 'go_modules=%s\n' "$GO_SELECTED"
+  printf 'go_api_shards=%s\n' "$an"
+  printf 'go_pg_api_shards=%s\n' "$pn"
   for k in shared agent hub e2e; do eval "printf 'go_pkgs_%s=%s\n' \"$k\" \"\$GO_PKGS_$k\""; done
 }
 

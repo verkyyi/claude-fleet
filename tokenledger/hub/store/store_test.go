@@ -8,9 +8,20 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
+// newStore is a fresh store — on the Postgres leg a copy of the migrated
+// template database (PGTemplate, claude-fleet#4817), else an empty file.
 func newStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	return newStoreFrom(t, "base", nil)
+}
+
+func newStoreFrom(t *testing.T, name string, prep func(*Store) error) *Store {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+	if _, err := PGTemplate(path, name, prep); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}

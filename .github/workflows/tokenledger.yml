@@ -44,6 +44,14 @@ on:
         description: 'the modules vet runs in (go_modules)'
         type: string
         default: 'shared agent hub e2e'
+      api_shards:
+        description: 'how many api-K parts the -race leg has (go_api_shards — off tokenledger/test-durations.txt)'
+        type: string
+        default: '3'
+      pg_api_shards:
+        description: 'how many api-K parts the Postgres leg has (go_pg_api_shards — off test-durations-pg.txt)'
+        type: string
+        default: '3'
       pkgs_shared:
         description: 'import paths to test, or ./... (go_pkgs_shared)'
         type: string
@@ -67,16 +75,23 @@ env:
   GOWORK: 'off'
 
 jobs:
-  # Sharded like the Postgres leg below (claude-fleet#4067): hub/api ran
-  # ~570-600s under -race on a runner (go test's 10m default timed it out,
-  # claude-fleet#3146), then grew past the 20m cap on a slow one (1200s on
-  # dd2107b2). `rest` runs every selected hub package but hub/api; each
-  # `api-K` runs every API_SHARDS-th test of `go test -list` (sorted,
-  # round-robin, so the union is the whole package by construction). Adding a
-  # shard = one more `api-K` in bin/ci-plan.sh's go_parts (and the default
-  # above) AND API_SHARDS raised to match. `shared`, `agent` and `e2e` are the
-  # other three modules, their selected packages. gofmt / vet / the modules
-  # selftest are `lint`'s.
+  # hub/api's tests are dealt into API_SHARDS parts by their recorded cost
+  # (claude-fleet#4817): bin/ci-plan.sh sizes the count off
+  # tokenledger/test-durations.txt (recorded seconds ÷ 240, 1..8), each
+  # `api-K` lists the package (`go test -list`) and keeps its deal from
+  # bin/go-test-shard.sh — longest first into the lightest part, so the union is
+  # the whole package by construction. `rest` runs every selected hub package
+  # but hub/api; `shared`, `agent` and `e2e` are the other three modules, their
+  # selected packages. Every part prints its predicted load against what it
+  # took; refresh the table with bin/go-test-durations.sh --run <run>, off the
+  # go-log-* artifacts (`go test -v`). gofmt / vet / the modules selftest are
+  # `lint`'s.
+  # Each job's Go caches (claude-fleet#4817): restored on a PR only (its
+  # previous push, else the newest of the same part), so an unchanged package's
+  # test result and the -race build of everything it compiles come back; any
+  # other caller (dispatch, a nightly) starts empty and runs -count=1. Before the
+  # save bin/go-ci-cache.py drops what this job did not use — the repo's cache
+  # is capped at 10 GB — and the summary prints what was reused.
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -84,21 +99,41 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
-          cache: true
-          cache-dependency-path: |
-            tokenledger/hub/go.sum
-            tokenledger/shared/go.sum
-            tokenledger/agent/go.sum
-            tokenledger/e2e/go.sum
+          cache: false
+      - name: Go caches (restore — a PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-lint-lint-${{ hashFiles('tokenledger/*/go.sum') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            go-${{ runner.os }}-lint-lint-${{ hashFiles('tokenledger/*/go.sum') }}-
+            go-${{ runner.os }}-lint-lint-
+            go-${{ runner.os }}-lint-
+            go-${{ runner.os }}-
+      - run: python3 ../bin/go-ci-cache.py mark
       - run: ../bin/fleet-client-pack.sh
       - run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
-      - env:
+      - id: gotest
+        env:
           MODULES: ${{ inputs.modules || 'shared agent hub e2e' }}
         run: for m in $MODULES; do (cd "$m" && go vet ./...) || exit 1; done
       # the blocks' dependency direction (EPIC #4810 共同约定 3): shared/ names no
       # other block, agent/ and hub/ only shared/ (hub/ not even in a test), e2e/
       # any of the three, and neither build has the other's package
       - run: ../bin/tokenledger-modules-selftest.sh
+      - name: Go caches (save what this job used)
+        if: always() && steps.gotest.outcome != 'skipped'
+        run: python3 ../bin/go-ci-cache.py prune
+      - if: always() && steps.gotest.outcome != 'skipped'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-lint-lint-${{ hashFiles('tokenledger/*/go.sum') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   test:
     runs-on: ubuntu-latest
@@ -107,7 +142,8 @@ jobs:
       matrix:
         part: ${{ fromJSON(inputs.parts || '["rest", "api-1", "api-2", "api-3", "shared", "agent", "e2e"]') }}
     env:
-      API_SHARDS: 3
+      API_SHARDS: ${{ inputs.api_shards || '3' }}
+      TABLE: test-durations.txt
       PKGS_SHARED: ${{ inputs.pkgs_shared || './...' }}
       PKGS_AGENT: ${{ inputs.pkgs_agent || './...' }}
       PKGS_HUB: ${{ inputs.pkgs_hub || './...' }}
@@ -117,12 +153,21 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
-          cache: true
-          cache-dependency-path: |
-            tokenledger/hub/go.sum
-            tokenledger/shared/go.sum
-            tokenledger/agent/go.sum
-            tokenledger/e2e/go.sum
+          cache: false
+      - name: Go caches (restore — a PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-race-${{ matrix.part }}-${{ hashFiles('tokenledger/*/go.sum') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            go-${{ runner.os }}-race-${{ matrix.part }}-${{ hashFiles('tokenledger/*/go.sum') }}-
+            go-${{ runner.os }}-race-${{ matrix.part }}-
+            go-${{ runner.os }}-race-
+            go-${{ runner.os }}-
+      - run: python3 ../bin/go-ci-cache.py mark
       # The client /install serves lives once, in the repo's bin/ conf/ …
       # (claude-fleet#1803); a build packs it into fleetclient/pack/ first.
       - run: ../bin/fleet-client-pack.sh
@@ -138,6 +183,7 @@ jobs:
             echo "quarantined (tokenledger/test-quarantine.txt): $skip"
             echo "GOFLAGS=-skip=$skip" >> "$GITHUB_ENV"
           fi
+          echo 'PRED=' >> "$GITHUB_ENV"
           case "$PART" in
             rest)
               # the plan's hub packages (./... = all of them), hub/api left to api-K
@@ -150,9 +196,15 @@ jobs:
             api-*)
               k=${PART#api-}
               [ "$k" -ge 1 ] && [ "$k" -le "$API_SHARDS" ] || { echo "::error::$PART is outside API_SHARDS=$API_SHARDS"; exit 1; }
+              # by recorded cost (claude-fleet#4817): longest first, into the lightest
+              # shard — every part deals the same list the same way, so the union is
+              # the whole package; a test with no row costs the package's median
               (cd hub && go test -race -list '.*' ./api/) > /tmp/list.txt
-              grep -E '^(Test|Example|Fuzz)' /tmp/list.txt | sort | awk -v n="$API_SHARDS" -v k="$k" 'NR % n == k % n' > /tmp/mine.txt
-              echo "$PART: $(wc -l < /tmp/mine.txt) of $(grep -cE '^(Test|Example|Fuzz)' /tmp/list.txt) hub/api tests"
+              grep -E '^(Test|Example|Fuzz)' /tmp/list.txt > /tmp/all.txt
+              ../bin/go-test-shard.sh deal --table "$TABLE" --pkg hub/api --shard "$k/$API_SHARDS" < /tmp/all.txt > /tmp/mine.txt 2> /tmp/pred.txt
+              cat /tmp/pred.txt
+              ../bin/go-test-shard.sh loads --table "$TABLE" --pkg hub/api --shards "$API_SHARDS" < /tmp/all.txt
+              echo "PRED=$(sed -nE 's/.*, ~([0-9]+)s \(all.*/\1/p' /tmp/pred.txt)" >> "$GITHUB_ENV"
               [ -s /tmp/mine.txt ] || { echo "::error::$PART picked no test"; exit 1; }
               echo "MOD=hub" >> "$GITHUB_ENV"
               echo 'PKGS=./api/' >> "$GITHUB_ENV"
@@ -166,8 +218,66 @@ jobs:
             *) echo "::error::unknown part $PART"; exit 1 ;;
           esac
           echo "$PART tests: $(grep '^PKGS=' "$GITHUB_ENV" | tail -1)"
+      # -v so every test's seconds are in the log (the go-log-* artifact feeds the
+      # table); the console keeps the package lines, the whole log only when red
       - name: tests (${{ matrix.part }})
-        run: cd "$MOD" && go test -race -timeout 20m ${RUN:+-run "$RUN"} $PKGS
+        id: gotest
+        env:
+          COUNT: ${{ github.event_name != 'pull_request' && '-count=1' || '' }}
+        run: |
+          t0=$(date +%s)
+          rc=0
+          (cd "$MOD" && go test -race -v $COUNT -timeout 20m ${RUN:+-run "$RUN"} $PKGS) > /tmp/go.log 2>&1 || rc=$?
+          echo "WALL=$(( $(date +%s) - t0 ))" >> "$GITHUB_ENV"
+          grep -E '^(ok|FAIL|--- FAIL|panic:)' /tmp/go.log || true
+          if [ "$rc" != 0 ]; then
+            echo '::group::go test output (red)'; cat /tmp/go.log; echo '::endgroup::'
+          fi
+          exit "$rc"
+      - name: upload go test log
+        if: always() && steps.gotest.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-log-${{ matrix.part }}
+          path: /tmp/go.log
+          if-no-files-found: ignore
+      - name: summary
+        if: always() && steps.gotest.outcome != 'skipped'
+        env:
+          PART: ${{ matrix.part }}
+          LEG: test
+        run: |
+          set +e
+          log=/tmp/go.log
+          act=$(sed -nE 's/^--- (PASS|FAIL): [A-Za-z0-9_]+ \(([0-9.]+)s\)$/\2/p' "$log" | awk '{ s += $1 } END { printf "%.0f", s }')
+          n=$(grep -cE '^--- (PASS|FAIL): ' "$log")
+          if [ -z "$PRED" ]; then
+            # a whole-package part: its packages' rows (import paths → under tokenledger/)
+            short=$(sed -nE 's#^(ok|FAIL)[[:space:]]+github\.com/verkyyi/claude-fleet/tokenledger/([^[:space:]]+).*#\2#p' "$log" | sort -u | tr '\n' ' ')
+            PRED=$(../bin/go-test-shard.sh sum --table "$TABLE" --pkg "$short")
+          fi
+          drift=$(awk -v p="$PRED" -v a="$act" 'BEGIN { if (p > 0) printf "%+.0f%%", (a - p) * 100 / p; else print "—" }')
+          cache=$(python3 ../bin/go-ci-cache.py report --log "$log")
+          echo "$cache"
+          {
+            echo "### $LEG ($PART)"
+            echo
+            echo '| 片 | 测试数 | 预测 | 实际（测试合计） | 偏差 | go test 墙钟 |'
+            echo '|---|---|---|---|---|---|'
+            echo "| $PART | $n | ${PRED:-0}s | ${act}s | $drift | ${WALL:-?}s |"
+            echo
+            echo "$cache"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Go caches (save what this job used)
+        if: always() && steps.gotest.outcome != 'skipped'
+        run: python3 ../bin/go-ci-cache.py prune
+      - if: always() && steps.gotest.outcome != 'skipped'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-race-${{ matrix.part }}-${{ hashFiles('tokenledger/*/go.sum') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   # The Postgres leg (claude-fleet#2120, #2121; EPIC #2119): the same
   # hub/store AND hub/api tests (and since claude-fleet#4814 the联调 tests in
@@ -183,13 +293,13 @@ jobs:
   # postgres:16 comes from mirror.gcr.io (Google's cache of Docker Hub): an
   # unauthenticated Docker Hub pull hit its rate limit (claude-fleet#2734).
   #
-  # Sharded (claude-fleet#3856): hub/api is ~1000 serial tests, each
-  # paying ~1.3s for its own schema + migrations on Postgres under -race, so
-  # the package alone ran 650-1220s by the runner — past the 20m cap on a slow
-  # one. `store` runs store + leader + the migrate timing; each `api-K` runs
-  # every API_SHARDS-th test of `go test -list` (sorted, round-robin, so the
-  # union is the whole package by construction). Adding a shard = one more
-  # `api-K` in `part` AND API_SHARDS raised to match.
+  # Sharded (claude-fleet#3856): hub/api is ~1200 serial tests, each of which
+  # paid ~1.3s for its own schema + migrations on Postgres under -race — until
+  # claude-fleet#4817 made a test's store a `CREATE DATABASE … TEMPLATE` copy of
+  # one migrated database (store.PGTemplate; the log's `pg leg: … per test` line
+  # is the cost). `store` runs store + leader + the migrate timing; each `api-K`
+  # keeps its deal of `go test -list` by tokenledger/test-durations-pg.txt
+  # (bin/go-test-shard.sh), PG_API_SHARDS of them as the plan sized it.
   tokenledger-pg:
     if: github.event_name == 'workflow_dispatch' || inputs.pg_parts != '[]'
     runs-on: ubuntu-latest
@@ -207,19 +317,29 @@ jobs:
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
     env:
       CCQUOTA_DB_URL: postgres://postgres:ci-only@localhost:5432/postgres?sslmode=disable
-      API_SHARDS: 3
+      API_SHARDS: ${{ inputs.pg_api_shards || '3' }}
+      TABLE: test-durations-pg.txt
       PKGS_E2E: ${{ inputs.pkgs_e2e || './...' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
-          cache: true
-          cache-dependency-path: |
-            tokenledger/hub/go.sum
-            tokenledger/shared/go.sum
-            tokenledger/agent/go.sum
-            tokenledger/e2e/go.sum
+          cache: false
+      - name: Go caches (restore — a PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-pg-${{ matrix.part }}-${{ hashFiles('tokenledger/*/go.sum') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            go-${{ runner.os }}-pg-${{ matrix.part }}-${{ hashFiles('tokenledger/*/go.sum') }}-
+            go-${{ runner.os }}-pg-${{ matrix.part }}-
+            go-${{ runner.os }}-pg-
+            go-${{ runner.os }}-
+      - run: python3 ../bin/go-ci-cache.py mark
       - run: ../bin/fleet-client-pack.sh
       - name: pick this part's tests
         env:
@@ -233,6 +353,7 @@ jobs:
             echo "quarantined (tokenledger/test-quarantine.txt): $skip"
             echo "GOFLAGS=-skip=$skip" >> "$GITHUB_ENV"
           fi
+          echo 'PRED=' >> "$GITHUB_ENV"
           case "$PART" in
             store)
               echo "MOD=hub" >> "$GITHUB_ENV"
@@ -241,9 +362,15 @@ jobs:
             api-*)
               k=${PART#api-}
               [ "$k" -ge 1 ] && [ "$k" -le "$API_SHARDS" ] || { echo "::error::$PART is outside API_SHARDS=$API_SHARDS"; exit 1; }
+              # by recorded cost (claude-fleet#4817): longest first, into the lightest
+              # shard — every part deals the same list the same way, so the union is
+              # the whole package; a test with no row costs the package's median
               (cd hub && go test -race -list '.*' ./api/) > /tmp/list.txt
-              grep -E '^(Test|Example|Fuzz)' /tmp/list.txt | sort | awk -v n="$API_SHARDS" -v k="$k" 'NR % n == k % n' > /tmp/mine.txt
-              echo "$PART: $(wc -l < /tmp/mine.txt) of $(grep -cE '^(Test|Example|Fuzz)' /tmp/list.txt) hub/api tests"
+              grep -E '^(Test|Example|Fuzz)' /tmp/list.txt > /tmp/all.txt
+              ../bin/go-test-shard.sh deal --table "$TABLE" --pkg hub/api --shard "$k/$API_SHARDS" < /tmp/all.txt > /tmp/mine.txt 2> /tmp/pred.txt
+              cat /tmp/pred.txt
+              ../bin/go-test-shard.sh loads --table "$TABLE" --pkg hub/api --shards "$API_SHARDS" < /tmp/all.txt
+              echo "PRED=$(sed -nE 's/.*, ~([0-9]+)s \(all.*/\1/p' /tmp/pred.txt)" >> "$GITHUB_ENV"
               [ -s /tmp/mine.txt ] || { echo "::error::$PART picked no test"; exit 1; }
               echo "MOD=hub" >> "$GITHUB_ENV"
               echo 'PKGS=./api/' >> "$GITHUB_ENV"
@@ -257,9 +384,20 @@ jobs:
       # claude-fleet#2640 / #2479: hub/api alone ran 420-600s, then up to
       # 1220s (#3856), against go test's cap — hence the 20m and the shards.
       - name: tests on Postgres (${{ matrix.part }})
+        id: gotest
+        env:
+          COUNT: ${{ github.event_name != 'pull_request' && '-count=1' || '' }}
         run: |
           set -o pipefail
-          cd "$MOD" && go test -race -count=1 -v -timeout 20m ${RUN:+-run "$RUN"} $PKGS 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)|leader_test.go:[0-9]+: (handover|job )'
+          t0=$(date +%s)
+          rc=0
+          (cd "$MOD" && go test -race $COUNT -v -timeout 20m ${RUN:+-run "$RUN"} $PKGS) > /tmp/pg.log 2>&1 || rc=$?
+          echo "WALL=$(( $(date +%s) - t0 ))" >> "$GITHUB_ENV"
+          grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)|leader_test.go:[0-9]+: (handover|job )' /tmp/pg.log || true
+          if [ "$rc" != 0 ]; then
+            echo '::group::go test output (red)'; cat /tmp/pg.log; echo '::endgroup::'
+          fi
+          exit "$rc"
       # claude-fleet#2216: `ccquota db migrate` on a million usage_events
       # rows, without -race, each table's and phase's time in the summary.
       - name: db migrate timing (1M rows)
@@ -285,7 +423,7 @@ jobs:
             echo '::error::the Postgres leg skipped a test (above) — claude-fleet#2121 keeps it at 0'
             exit 1
           fi
-      - name: summary
+      - name: pg summary
         if: always()
         run: |
           {
@@ -303,35 +441,90 @@ jobs:
             sed -nE 's/^--- (PASS|FAIL): ([^ ]+) \(([0-9.]+)s\)$/\3s \2/p' /tmp/pg.log | sort -rn | head -15 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: summary
+        if: always() && steps.gotest.outcome != 'skipped'
+        env:
+          PART: ${{ matrix.part }}
+          LEG: tokenledger-pg
+        run: |
+          set +e
+          log=/tmp/pg.log
+          act=$(sed -nE 's/^--- (PASS|FAIL): [A-Za-z0-9_]+ \(([0-9.]+)s\)$/\2/p' "$log" | awk '{ s += $1 } END { printf "%.0f", s }')
+          n=$(grep -cE '^--- (PASS|FAIL): ' "$log")
+          if [ -z "$PRED" ]; then
+            # a whole-package part: its packages' rows (import paths → under tokenledger/)
+            short=$(sed -nE 's#^(ok|FAIL)[[:space:]]+github\.com/verkyyi/claude-fleet/tokenledger/([^[:space:]]+).*#\2#p' "$log" | sort -u | tr '\n' ' ')
+            PRED=$(../bin/go-test-shard.sh sum --table "$TABLE" --pkg "$short")
+          fi
+          drift=$(awk -v p="$PRED" -v a="$act" 'BEGIN { if (p > 0) printf "%+.0f%%", (a - p) * 100 / p; else print "—" }')
+          cache=$(python3 ../bin/go-ci-cache.py report --log "$log")
+          echo "$cache"
+          {
+            echo "### $LEG ($PART)"
+            echo
+            echo '| 片 | 测试数 | 预测 | 实际（测试合计） | 偏差 | go test 墙钟 |'
+            echo '|---|---|---|---|---|---|'
+            echo "| $PART | $n | ${PRED:-0}s | ${act}s | $drift | ${WALL:-?}s |"
+            echo
+            echo "$cache"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Go caches (save what this job used)
+        if: always() && steps.gotest.outcome != 'skipped'
+        run: python3 ../bin/go-ci-cache.py prune
+      - if: always() && steps.gotest.outcome != 'skipped'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-pg-${{ matrix.part }}-${{ hashFiles('tokenledger/*/go.sum') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
+  # The whole adoption story is "download one binary", so a platform that stops
+  # building is a release-blocking bug, not a nice-to-have. The plan builds the
+  # hub when its block is selected, the node when agent's is. ONE job for the
+  # four platforms (claude-fleet#4817): each build took under a minute, but as
+  # four matrix jobs each waited 2-11 minutes for a runner of its own.
   cross-compile:
-    # The whole adoption story is "download one binary", so a platform that
-    # stops building is a release-blocking bug, not a nice-to-have. The plan
-    # builds the hub when its block is selected, the node when agent's is.
     if: github.event_name == 'workflow_dispatch' || inputs.build != ''
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - { goos: linux,   goarch: amd64 }
-          - { goos: linux,   goarch: arm64 }
-          - { goos: darwin,  goarch: arm64 }
-          - { goos: windows, goarch: amd64 }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
-          cache: true
-          cache-dependency-path: |
-            tokenledger/hub/go.sum
-            tokenledger/shared/go.sum
-            tokenledger/agent/go.sum
-      # the hub's build (claude-fleet#4814)
-      - if: contains(inputs.build || 'hub agent', 'hub')
-        working-directory: tokenledger/hub
-        run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./cmd/ccquota
-      # the node's own build (claude-fleet#4812) — what C3 ships to machines
-      - if: contains(inputs.build || 'hub agent', 'agent')
-        working-directory: tokenledger/agent
-        run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./cmd/ccquota
+          cache: false
+      - name: Go caches (restore — a PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-xc-all-${{ hashFiles('tokenledger/*/go.sum') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            go-${{ runner.os }}-xc-all-${{ hashFiles('tokenledger/*/go.sum') }}-
+            go-${{ runner.os }}-xc-all-
+            go-${{ runner.os }}-xc-
+            go-${{ runner.os }}-
+      - run: python3 ../bin/go-ci-cache.py mark
+      - name: build ccquota for every platform
+        id: gotest
+        env:
+          BUILD: ${{ inputs.build || 'hub agent' }}
+        run: |
+          set -eo pipefail
+          # the hub's build (claude-fleet#4814), the node's own (claude-fleet#4812 —
+          # what C3 ships to machines): two at a time, every one must build
+          for b in $BUILD; do
+            for t in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do echo "$b $t"; done
+          done | xargs -P 2 -L 1 sh -c 'cd "$0" && CGO_ENABLED=0 GOOS=${1%/*} GOARCH=${1#*/} go build -o /dev/null ./cmd/ccquota && echo "built $0 $1"'
+      - name: Go caches (save what this job used)
+        if: always() && steps.gotest.outcome != 'skipped'
+        run: python3 ../bin/go-ci-cache.py prune
+      - if: always() && steps.gotest.outcome != 'skipped'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-xc-all-${{ hashFiles('tokenledger/*/go.sum') }}-${{ github.run_id }}-${{ github.run_attempt }}

@@ -64,6 +64,10 @@ type Store struct {
 // Postgres database instead and path is not touched (claude-fleet#2120); unset,
 // it is SQLite at path exactly as it always was.
 func Open(path string) (*Store, error) {
+	if leg := pgLegNow; leg != nil {
+		t0 := time.Now()
+		defer func() { leg.openedFrom(path, time.Since(t0)) }()
+	}
 	if url := dbURL(path); url != "" {
 		if !isPostgresURL(url) {
 			return nil, fmt.Errorf("%s must be a postgres:// connection string", envDBURL)

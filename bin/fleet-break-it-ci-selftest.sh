@@ -85,6 +85,9 @@
 #                       shared change skips the node's and the 联调 tests and 「CI 结论」
 #                       reads green — bin/ci-plan-selftest.sh B reds on the broken plan
 #                       and is green on ours (#4815)
+#   go-shard-drops-test the Go tests' cost-dealt shards (#4817) lose a test (the
+#                       heaviest one goes to no shard): bin/go-test-shard-selftest.sh
+#                       A reds on the broken dealer and is green on ours
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -1103,6 +1106,27 @@ drill_module_skip_wrong() {
     || { WHY="the real plan reds its own selftest: $(printf '%s' "$out" | grep '^FAIL' | head -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="Go 映射漏一块（shared ⇒ 只剩 hub）：计划自测 B 当场红、点名「shared ⇒ all four」；真计划绿——漏选不会悄悄变成「CI 结论」的绿"
+}
+
+# ---- go-shard-drops-test (#4817, EPIC #4810 C7): every api-K part deals the same
+# `go test -list` by the cost table and keeps its own share, so the N shares must be
+# the whole package. A dealer that drops one test (here: the first, heaviest one goes
+# nowhere) leaves it unrun on every PR, and 「CI 结论」 reads green.
+drill_go_shard_drops_test() {
+  CAP=60
+  local t0 d out rc
+  [ -f "$BIN/go-test-shard-selftest.sh" ] || { WHY="no bin/go-test-shard-selftest.sh — nothing pins the Go shards' union"; return 1; }
+  grep -q 'if (best == k) print \$2' "$BIN/go-test-shard.sh" \
+    || { WHY="bin/go-test-shard.sh no longer deals with 'if (best == k) print \$2'"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/goshard.XXXXXX"); t0=$(now)
+  sed 's/if (best == k) print \$2/if (best == k \&\& NR > 1) print $2/' "$BIN/go-test-shard.sh" > "$d/go-test-shard.sh"
+  out=$(GO_SHARD_UNDER_TEST="$d/go-test-shard.sh" bash "$BIN/go-test-shard-selftest.sh" 2>&1); rc=$?
+  [ "$rc" != 0 ] && printf '%s' "$out" | grep -q '^FAIL A .*the union is the list' \
+    || { WHY="a dealer that drops the heaviest test passed the shard selftest (rc $rc)"; rm -rf "$d"; return 1; }
+  out=$(bash "$BIN/go-test-shard-selftest.sh" 2>&1) \
+    || { WHY="the real dealer reds its own selftest: $(printf '%s' "$out" | grep '^FAIL' | head -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="分片发牌丢了最重的测试：分片自测 A 当场红、点名「the union is the list」；真发牌绿——没有哪个测试会悄悄没人跑"
 }
 
 # ---- the train's critical path (issue #4818, EPIC #4810 R1) -----------------------

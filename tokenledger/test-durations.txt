@@ -1,0 +1,7 @@
+# Go tests' recorded cost, the -race leg (tokenledger.yml `test`) — one row per test,
+# `<seconds>\t<package>.<Test>`, <package> the import path under tokenledger/.
+# bin/go-test-shard.sh deals a package's tests into shards by it (longest first,
+# into the lightest shard) and bin/ci-plan.sh sizes hub/api's shard count off it
+# (recorded seconds ÷ 240); a test with no row costs the package's median.
+# Refresh: bin/go-test-durations.sh --run <a ci.yml run that ran the Go tests>
+# (issue #4817, EPIC #4810 C7)

@@ -62,6 +62,8 @@ jobs:
       go_pg_parts: ${{ steps.plan.outputs.go_pg_parts }}
       go_build: ${{ steps.plan.outputs.go_build }}
       go_modules: ${{ steps.plan.outputs.go_modules }}
+      go_api_shards: ${{ steps.plan.outputs.go_api_shards }}
+      go_pg_api_shards: ${{ steps.plan.outputs.go_pg_api_shards }}
       go_pkgs_shared: ${{ steps.plan.outputs.go_pkgs_shared }}
       go_pkgs_agent: ${{ steps.plan.outputs.go_pkgs_agent }}
       go_pkgs_hub: ${{ steps.plan.outputs.go_pkgs_hub }}
@@ -121,6 +123,8 @@ jobs:
       pg_parts: ${{ needs.plan.outputs.go_pg_parts }}
       build: ${{ needs.plan.outputs.go_build }}
       modules: ${{ needs.plan.outputs.go_modules }}
+      api_shards: ${{ needs.plan.outputs.go_api_shards }}
+      pg_api_shards: ${{ needs.plan.outputs.go_pg_api_shards }}
       pkgs_shared: ${{ needs.plan.outputs.go_pkgs_shared }}
       pkgs_agent: ${{ needs.plan.outputs.go_pkgs_agent }}
       pkgs_hub: ${{ needs.plan.outputs.go_pkgs_hub }}

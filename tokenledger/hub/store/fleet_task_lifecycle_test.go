@@ -12,9 +12,12 @@ import (
 
 func taskStore(t *testing.T) *Store {
 	t.Helper()
-	s := newStore(t)
-	if err := s.EnsureNodes(); err != nil {
-		t.Fatal(err)
+	ensure := func(s *Store) error { return s.EnsureNodes() }
+	s := newStoreFrom(t, "fleet", ensure)
+	if pgLegNow == nil { // on the Postgres leg the template already has it
+		if err := ensure(s); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return s
 }
