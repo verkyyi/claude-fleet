@@ -81,7 +81,7 @@ echo '{"v":1,"host":"cn-box"}' > "$T/b/manifest.json"
   # the process goes with no line (a crash); a new start's view: vanished, new start
   line 2026-10-01T09:30:00Z drawn m2 entry '' 300 900
   # it drops and the client is killed before redrawing: unrecovered
-  line 2026-10-01T10:00:00Z connect m2 entry 100 300 900 255 up
+  line 2026-10-01T10:00:00Z connect m2 entry 100 300 900 255 up '' end=timeout
   line 2026-10-01T10:00:02Z connect m2 entry 100 300 '' 255 'never up'
   line 2026-10-01T10:00:09Z end m2 '' '' '' '' 129 'signal 1'
   # a start where the first session does not open (first rc 1) → failed
@@ -107,6 +107,7 @@ eq "A computer-days: a 2 + b 1 + c 0" 3 "$(get "$J" 'j["computer_days"]')"
 eq "A drops: a 3 (lan,lan,lan) + b 1 (entry)" 4 "$(get "$J" 'j["drops"]')"
 eq "A drops per computer-day" 1.33 "$(get "$J" 'j["drops_per_computer_day"]')"
 eq "A by route" "{'entry': 1, 'lan': 3}" "$(get "$J" 'dict(sorted(j["drops_by_route"].items()))')"
+eq "A by what ssh said (end=, #4828; '-' before it)" "{'-': 3, 'timeout': 1}" "$(get "$J" 'dict(sorted(j["drops_by_end"].items()))')"
 eq "A the bundle names its computer" cn-box "$(get "$J" 'j["per_computer"][1]["computer"]')"
 
 # B — reconnect

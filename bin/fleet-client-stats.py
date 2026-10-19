@@ -20,7 +20,9 @@ The three readings (EPIC #4823 «读数口径»):
       connection ended) whose NEXT lifecycle event is not `quit` / `end` — the
       person did not end it, the line did (ssh 255, cut). Divided by
       computer-days: the UTC days on which that computer's thin client logged
-      anything (an unused day does not dilute it).
+      anything (an unused day does not dilute it). Broken down by route and by
+      what ssh said last (the line's `end=`, issue #4828; `-` on a line
+      written before it).
   reconnect (median / p90)
       from a drop's `connect` line to the next `drawn` line (the view drawn
       again) — the backoff, the pick (pick_ms) and the far end's first view
@@ -94,6 +96,7 @@ def thin_stats(rows):
     days, starts, drops, gaps = set(), [], 0, []
     unrecovered = vanished = 0
     by_route = {}       # drops by the route that was up
+    by_end = {}         # drops by what ssh said last (thin.log `end=`, issue #4828; "-" before it)
     online_gaps = []    # gaps with no `offline` inside: this computer's own line was up
     cur = None          # the start being read: {"first_connect": fs|None, "first_rc1": bool, "drawn": bool}
     pending = None      # a drop's (time, offline seen since), waiting for the next drawn
@@ -134,6 +137,8 @@ def thin_stats(rows):
                 if nxt is None or nxt[1] not in TERMINAL:
                     drops += 1
                     by_route[f(fs, 3) or "-"] = by_route.get(f(fs, 3) or "-", 0) + 1
+                    e = f(fs, 10)[4:] if f(fs, 10).startswith("end=") else "-"
+                    by_end[e] = by_end.get(e, 0) + 1
                     if pending is not None:   # dropped again before it was drawn
                         unrecovered += 1
                     pending = (t, False)
@@ -162,7 +167,7 @@ def thin_stats(rows):
             fail_by[k] = fail_by.get(k, 0) + 1
     return {
         "days": sorted(days), "starts": len(starts), "open_failed": sum(1 for s in starts if failed(s)),
-        "open_fail_by": fail_by, "drops_by_route": by_route,
+        "open_fail_by": fail_by, "drops_by_route": by_route, "drops_by_end": by_end,
         "never_drawn": sum(1 for s in starts if not s["drawn"]),
         "drops": drops, "gaps": gaps, "online_gaps": online_gaps, "unrecovered": unrecovered,
         "vanished": vanished,
@@ -221,7 +226,7 @@ def main(argv):
     hi = now if now is not None else int(time.time())
     lo = hi - days * 86400
     per, agg = [], {"drops": 0, "computer_days": 0, "gaps": [], "online_gaps": [], "unrecovered": 0,
-                    "vanished": 0, "drops_by_route": {}, "open_fail_by": {}, "starts": 0,
+                    "vanished": 0, "drops_by_route": {}, "drops_by_end": {}, "open_fail_by": {}, "starts": 0,
                     "open_failed": 0, "never_drawn": 0, "home": {}, "place_asks": 0, "place_nonzero": 0}
     for d in dirs:
         thin, logs = locate(d)
@@ -244,7 +249,8 @@ def main(argv):
                     "reconnect_online_median_s": pct(ts["online_gaps"], 50),
                     "reconnect_online_p90_s": pct(ts["online_gaps"], 90),
                     "reconnects": len(ts["gaps"]), "unrecovered": ts["unrecovered"], "vanished": ts["vanished"],
-                    "drops_by_route": ts["drops_by_route"], "open_fail_by": ts["open_fail_by"],
+                    "drops_by_route": ts["drops_by_route"], "drops_by_end": ts["drops_by_end"],
+                    "open_fail_by": ts["open_fail_by"],
                     "starts": ts["starts"], "open_failed": ts["open_failed"], "never_drawn": ts["never_drawn"],
                     "home_fail": home, "place_asks": place["asks"], "place_nonzero": place["nonzero"],
                     "place_by": place["by"]})
@@ -253,7 +259,7 @@ def main(argv):
         agg["gaps"] += ts["gaps"]
         agg["online_gaps"] += ts["online_gaps"]
         agg["vanished"] += ts["vanished"]
-        for key in ("drops_by_route", "open_fail_by"):
+        for key in ("drops_by_route", "drops_by_end", "open_fail_by"):
             for k, v in ts[key].items():
                 agg[key][k] = agg[key].get(k, 0) + v
         agg["unrecovered"] += ts["unrecovered"]
@@ -276,7 +282,7 @@ def main(argv):
         "reconnect_median_s": pct(agg["gaps"], 50), "reconnect_p90_s": pct(agg["gaps"], 90),
         "reconnect_online_median_s": pct(agg["online_gaps"], 50),
         "reconnect_online_p90_s": pct(agg["online_gaps"], 90), "reconnects_online": len(agg["online_gaps"]),
-        "drops_by_route": agg["drops_by_route"], "open_fail_by": agg["open_fail_by"], "vanished": agg["vanished"],
+        "drops_by_route": agg["drops_by_route"], "drops_by_end": agg["drops_by_end"], "open_fail_by": agg["open_fail_by"], "vanished": agg["vanished"],
         "starts": agg["starts"], "open_failed": agg["open_failed"],
         "open_fail_rate": round(agg["open_failed"] / agg["starts"], 4) if agg["starts"] else None,
         "never_drawn": agg["never_drawn"], "home_fail": agg["home"],
@@ -300,6 +306,8 @@ def main(argv):
     top = lambda d: " · ".join("%s %d" % kv for kv in sorted(d.items(), key=lambda kv: (-kv[1], kv[0])))
     if out["drops_by_route"]:
         print("    断线按线路        " + top(out["drops_by_route"]))
+    if any(k != "-" for k in out["drops_by_end"]):
+        print("    断线按 ssh 的话   " + top(out["drops_by_end"]))
     rate = out["open_fail_rate"]
     print("  打开失败          %s（%d / %d 次启动；%d 次启动一直没画出界面）" % (
         "—" if rate is None else "%.1f%%" % (rate * 100), out["open_failed"], out["starts"], out["never_drawn"]))

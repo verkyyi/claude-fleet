@@ -71,7 +71,26 @@ case \$prev in 127.0.0.1) host=m1 ;; 127.0.0.2) host=m2 ;; *) host=\$prev ;; esa
 [ -e "$R/net.down" ] && { sleep 1.5; echo "ssh: connect to host \$prev: Network is unreachable" >&2; exit 255; }
 [ -e "$R/down.\$host" ] && { echo "ssh: connect to host \$prev: Connection refused" >&2; exit 255; }
 mkdir -p "$R/home/\$host"
-cd "$R/home/\$host" && HOME="$R/home/\$host" HOST_NAME=\$host exec sh -c "\$last"
+cd "$R/home/\$host" || exit 255
+[ -e "$R/stall-rig" ] || HOME="$R/home/\$host" HOST_NAME=\$host exec sh -c "\$last"
+# thin-stall-drops: the line goes silent for \$(cat stall) seconds — ssh's own rule
+# for it, off the argv it was given: ServerAliveCountMax keepalives in a row
+# unanswered, one every ServerAliveInterval, and it gives the line up (255)
+ai=0 am=3
+for a; do case \$a in ServerAliveInterval=*) ai=\${a#*=} ;; ServerAliveCountMax=*) am=\${a#*=} ;; esac; done
+HOME="$R/home/\$host" HOST_NAME=\$host sh -c "\$last" 0<&0 &
+c=\$!
+while kill -0 \$c 2>/dev/null; do
+  if [ -e "$R/stall" ]; then
+    d=\$(cat "$R/stall"); rm -f "$R/stall"; b=\$((ai * am))
+    if [ "\$ai" -gt 0 ] && [ "\$d" -gt "\$b" ]; then
+      sleep "\$b"; echo "Timeout, server \$prev not responding." >&2; kill \$c 2>/dev/null; exit 255
+    fi
+    echo "stalled \$d s, within \$b s" >> "$R/stalls"
+  fi
+  sleep 0.1
+done
+wait \$c
 EOF
   local m
   for m in m1 m2; do
@@ -338,6 +357,89 @@ drill_thin_view_lost_on_drop() {
   grep -aq '35;10;5M\|JUNKTYPED' "$R/term.out" && { WHY="input during the drop reached the screen or the session: $(grep -ao '.\{0,20\}JUNKTYPED.\{0,10\}\|.\{0,10\}35;10;5M' "$R/term.out" | head -2 | cat -v)"; tc_done; return 1; }
   tc_done; wait 2>/dev/null
   WHAT="网断到连续 $(grep -c '	connect	' "$R/thin.log") 次连不上（入口也连不上）：不换家，其间动鼠标、打字不回显也不送进会话；网回来 ${SECS}s 内回到 m1 同一个看台（--resume）的 s1"
+}
+
+drill_thin_stall_drops() {
+  CAP=12   # an 8 s stall of the line → the session still there, no reconnect
+  local t0 n bud
+  tc_rig; touch "$R/stall-rig"
+  ( THIN_ARGS='["--home", "m1", "s1"]' tc_drive st '[["expect", "VIEW s1 ON m1"], ["linger", 40]]' & ) 2>/dev/null
+  until_ok 10 grep -q 'True' "$R/res.st" || { WHY="the view never came up: $(cat "$R/res.st")"; tc_done; return 1; }
+  # the keepalive the loop gave ssh: never so long a real cut goes unnoticed
+  bud=$(python3 -c '
+import json, sys
+a = json.loads(open(sys.argv[1]).readline()); o = {}
+for x in a:
+    if "=" in x: k, v = x.split("=", 1); o[k] = v
+print(int(o.get("ServerAliveInterval", 0)) * int(o.get("ServerAliveCountMax", 3)))' "$R/ssh.ndjson")
+  [ "$bud" -ge 1 ] && [ "$bud" -le 30 ] || { WHY="the view's ssh keepalive gives a dead line up after ${bud}s (want 1..30): $(head -n 1 "$R/ssh.ndjson")"; tc_done; return 1; }
+  # the hotspot / the Wi-Fi scan: 8 s of silence, then the line is back
+  t0=$(now); echo 8 > "$R/stall"
+  until_ok 10 test -s "$R/stalls" || n=dropped
+  sleep 1
+  if grep -aq '	connect	' "$R/thin.log" || [ -n "${n:-}" ]; then
+    WHY="an 8 s stall dropped the live session (keepalive ${bud}s): $(grep -a '	connect	' "$R/thin.log" | tail -n 1 | tr '\t' ' ')"; tc_done; return 1
+  fi
+  [ "$(grep -c . "$R/rv.log")" = 1 ] || { WHY="the view was attached again: $(cat "$R/rv.log")"; tc_done; return 1; }
+  SECS=$(since "$t0")
+  tc_done; wait 2>/dev/null
+  # a real cut is still given up — and the drop says why (thin.log end=)
+  tc_rig; touch "$R/stall-rig"
+  ( THIN_ARGS='["--home", "m1", "s1"]' FLEET_THIN_ALIVE_SECS=1 FLEET_THIN_ALIVE_MAX=2 \
+      tc_drive sc '[["expect", "VIEW s1 ON m1"], ["linger", 20]]' & ) 2>/dev/null
+  until_ok 10 grep -q 'True' "$R/res.sc" || { WHY="the view never came up (2): $(cat "$R/res.sc")"; tc_done; return 1; }
+  echo 60 > "$R/stall"
+  until_ok 8 sh -c '[ "$(grep -ac "VIEW s1 ON m1" "$1/term.out")" -ge 2 ]' _ "$R" \
+    || { WHY="a dead line was never given up and reconnected: $(tail -n 2 "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
+  grep -aq '	connect	m1	.*	255	up	.*end=timeout' "$R/thin.log" \
+    || { WHY="the drop's connect line does not say end=timeout: $(grep -a '	connect	' "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
+  tc_done; wait 2>/dev/null
+  WHAT="看台 ssh 的保活 ${bud}s：线路静默 8 s 再恢复，会话不断、不重连；真断（knob 1×2）照样判死、重连回 s1，thin.log 的断线行末尾记 end=timeout"
+}
+
+drill_thin_reconnect_slow_pick() {
+  CAP=5   # remembered line dark, another LAN line up, a dead public one: not 2 + 3 × 2 s
+  local D="$WORK/slow-pick" t0 out port
+  mkdir -p "$D/home/.ssh" "$D/home/.cache/claude-fleet"
+  python3 - "$D" <<'PY' &
+import socket, sys
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", 0)); s.listen(8)
+open(sys.argv[1] + "/port", "w").write(str(s.getsockname()[1]))
+s.settimeout(30)
+try:
+    while True:
+        c, _ = s.accept(); c.sendall(b"SSH-2.0-fake\r\n"); c.close()
+except Exception:
+    pass
+PY
+  until_ok 5 test -s "$D/port" || { WHY="the fake sshd never listened"; return 1; }
+  port=$(cat "$D/port")
+  # m1's lines: lan (answers — loopback stands in for the LAN address), lan-4
+  # (remembered, gone dark: a v6 address that changed), public (a TEST-NET address nothing answers)
+  printf 'Host m1 fleet-m1 fleet-m1-lan\n  HostName 127.0.0.1\n  Port %s\n  User me\nHost fleet-m1-lan-4\n  HostName 192.0.2.44\n  User me\nHost fleet-m1-public\n  HostName 198.51.100.7\n  User me\n' "$port" > "$D/home/.ssh/fleet-ssh-config"
+  python3 - "$D" "$port" <<'PY'
+import json, sys, time
+d, port = sys.argv[1], int(sys.argv[2])
+lan = {"name": "lan", "kind": "direct", "host": "127.0.0.1", "port": port}
+lan4 = {"name": "lan-4", "kind": "direct", "host": "192.0.2.44", "port": 22}
+pub = {"name": "public", "kind": "direct", "host": "198.51.100.7", "port": 22}
+m = {"hostname": "", "alias": "m1", "relay": False, "routes": [lan, lan4, pub], "login": "me"}
+now = time.time() - 60
+ent = {"at": now, "hub": "", "label": "m1", "machine": m, "login": "me", "route": lan4, "routes": [lan, lan4, pub],
+       "by_net": {"192.0.2.1@192.0.2.0/24": {"route": lan4, "at": now}}}
+json.dump({"last": "m1", "machines": {"m1": ent}}, open(d + "/home/.cache/claude-fleet/connect.json", "w"))
+PY
+  t0=$(now)
+  out=$(env -u FLEET_HUB_URL -u FLEET_HUB_TOKEN HOME="$D/home" XDG_CACHE_HOME="$D/home/.cache" \
+        XDG_CONFIG_HOME="$D/home/.config" FLEET_CONF_DIR="$D/home/.config/claude-fleet" FLEET_CLIENT_LOG=0 \
+        FLEET_CONNECT_TIMEOUT=2 FLEET_CONNECT_RETEST=last \
+        FLEET_CONNECT_LOCAL_ADDRS="192.0.2.5/24" FLEET_CONNECT_NET_KEY="192.0.2.1@192.0.2.0/24" \
+        python3 "$BIN/fleet-connect.py" m1 --print 2>"$D/err")
+  SECS=$(since "$t0")
+  case $out in *"-p $port 127.0.0.1"*) ;;
+    *) WHY="not the lan line: '$out' $(head -c 300 "$D/err")"; return 1 ;; esac
+  le "$SECS" "$CAP" || { WHY="the pick took ${SECS}s: it waited out the dead lines (remembered lan-4 2 s, public 3 × 2 s)"; return 1; }
+  WHAT="重连时记住的 lan-4 不通（2 s 超时），另一条 lan 通、public 是死线（3 × 2 s）：${SECS}s 选中 lan，没等 public 测完"
 }
 
 drill_thin_home_down() {

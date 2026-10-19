@@ -253,7 +253,7 @@ view=$(printf '%s\n' "$l1" | sed -n 's/.*--view \([^ ]*\).*/\1/p')
 case $l1 in "m1 attach --thin --view $view --want s1 --device "*" --route lan --token "*) ok "B: first attach — --view, --want s1, --device, --route, --token" ;;
   *) fail "B: first attach: $l1" ;; esac
 s1=$(sed -n 1p "$T/ssh.log")
-case $s1 in *"-o X=1 -tt -o ControlMaster=no -o ControlPath=none -o ServerAliveInterval=2 -o ServerAliveCountMax=3 m1 FLEET_CLIENT_CAPS=show bash .claude/fleet/bin/fleet-remote-view.sh attach --thin"*)
+case $s1 in *"-o X=1 -tt -o ControlMaster=no -o ControlPath=none -o ServerAliveInterval=5 -o ServerAliveCountMax=3 m1 FLEET_CLIENT_CAPS=show bash .claude/fleet/bin/fleet-remote-view.sh attach --thin"*)
   ok "B: -tt, ControlMaster=no, ControlPath=none, ServerAlive before the host; the view's command after (caps=show rides it, #3541)" ;;
   *) fail "B: ssh argv: $s1" ;; esac
 case $out in *7502*) fail "B: an OSC 7502 reached the terminal" ;; *) ok "B: no OSC 7502 reaches the terminal (ours and the bad-token one)" ;; esac

@@ -37,7 +37,9 @@ gateway forwards to it, and the relay through the hub itself (#1413) —
 measures each with FLEET_CONNECT_PROBES (3) TCP + SSH-banner handshakes, and
 ssh's in over the winner: most handshakes answered first, then the class (lan <
 entry < tailnet < another direct line < relay — EPIC #3067 共同约定 8), lowest
-median latency next. A `lan` route is measured only when one of this
+median latency next — the moment a route has answered every handshake and no
+route of a better class is still in the race, it is taken: a dark line is not
+waited for (issue #4828). A `lan` route is measured only when one of this
 computer's interfaces is on its network, the tailnet only when this computer
 has a Tailscale address (100.64/10); FLEET_CONNECT_PREFER_TAILNET=0 is latency
 alone. The `entry` route is the home's entry port at your
@@ -1010,9 +1012,26 @@ def route_rows(machine, hub):
     return rows
 
 
+def decided(rows, probes):
+    """In the class order, once a route has answered every handshake the pick is
+    made unless a route of a strictly better class is still being measured and
+    has not failed a handshake yet (one that has can no longer answer them all,
+    so it ranks below — rank_routes). A dark line (a `public` address timing out
+    3 × FLEET_CONNECT_TIMEOUT, a LAN address that changed) is not waited for —
+    issue #4828: 13–35 s of a reconnect went there. A route of the same class
+    still running is not waited for either: it could only win by milliseconds."""
+    if route_mode() != "class":
+        return False
+    best = [route_class(r) for r in rows if r.get("done") and len(r["ms"]) >= probes]
+    return bool(best) and not any(route_class(r) < min(best) and not r["errors"]
+                                  for r in rows if not r.get("done"))
+
+
 def measure(rows, hub, token, probes, timeout):
     """Fill each row's ms / errors: routes in parallel, a route's handshakes in
-    sequence (so the relay never holds more than one stream open)."""
+    sequence (so the relay never holds more than one stream open). Returns as
+    soon as the ranking is decided (decided); a route still being measured then
+    is ranked on what it has so far and marked `pending`."""
     def run(r):
         for _ in range(probes):
             try:
@@ -1022,12 +1041,17 @@ def measure(rows, hub, token, probes, timeout):
                     r["ms"].append(probe_direct(r["host"], r["port"], timeout))
             except (Refused, OSError, EOFError, ValueError) as e:
                 r["errors"].append(str(e) or e.__class__.__name__)
-    threads = [threading.Thread(target=run, args=(r,), daemon=True) for r in rows if not r.get("skip")]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(probes * (timeout + 1) + 5)
-    return rank_routes([r for r in rows if not r.get("skip")]) + [r for r in rows if r.get("skip")]
+        r["done"] = True
+    live = [r for r in rows if not r.get("skip")]
+    for r in live:
+        r.pop("done", None)
+        threading.Thread(target=run, args=(r,), daemon=True).start()
+    end = time.monotonic() + probes * (timeout + 1) + 5
+    while time.monotonic() < end and not all(r.get("done") for r in live) and not decided(live, probes):
+        time.sleep(0.01)
+    # a snapshot: a probe still running must not change the rows once ranked
+    got = [r if r.get("done") else dict(r, ms=list(r["ms"]), errors=list(r["errors"]), pending=True) for r in live]
+    return rank_routes(got) + [r for r in rows if r.get("skip")]
 
 
 # ── a pinned route (claude-fleet#2886) ──────────────────────────────────────
@@ -1158,7 +1182,7 @@ def print_table(label, rows, chosen, probes, hub):
             med = median(r["ms"])
             ok = "%d/%d" % (len(r["ms"]), probes)
             lat = ("%.0fms" if med >= 10 else "%.1fms") % med if med is not None else "—"
-            note = r["errors"][-1] if r["errors"] else ""
+            note = r["errors"][-1] if r["errors"] else ("没等它（已选出）" if r.get("pending") else "")
         w(mark + " " + pad(r["name"], 10) + pad(addr(r, hub), 40) + pad(ok, 6) + pad(lat, 10) + note + "\n")
     w("→ %s\n" % (("选中 " + chosen["name"]) if chosen else "没有一条线能连通"))
 
@@ -1477,7 +1501,8 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
          median(best["ms"]) if best else "", "ok" if best else "fail",
          "; ".join("%s %d/%d%s" % (r["name"], len(r["ms"]), probes,
                                    (" " + r["errors"][-1]) if not r["ms"] and r.get("errors") else
-                                   (" skip " + str(r["skip"])) if r.get("skip") else "")
+                                   (" skip " + str(r["skip"])) if r.get("skip") else
+                                   " not waited for" if r.get("pending") else "")
                    for r in rows) + net_note())
     if best is None:
         die("%s: 没有一条线能连通" % label, 1)
