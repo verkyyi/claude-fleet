@@ -481,16 +481,15 @@ survives a context boundary the same way everything else here does:
    names again; no other session reads or runs them (EPIC #4333 C5):
 
    ```
-   <!-- fleet:followup kind=stable what=挪稳定版到 <sha> -->
    <!-- fleet:followup kind=hub-deploy what=重部署入口：C8 的 /v1/fleet/tickets -->
    <!-- fleet:followup kind=human due=2026-10-12 what=iPad 上真环境走一遍 -->
    ```
 
-   `stable` — the person runs `fleet-stable.sh move` (its own gates decide);
    `hub-deploy` — the person's call, always; `human` — with its due date. No
-   followup, no line.
-   The report's 挪稳定版 row prints its own `mark:` (step 2 of
-   `/fleet-epic-report`); write the others here. Never run the move yourself.
+   followup, no line. **No followup for stable** (issue #4917): the release
+   train moves it on its own; the report's 列车结果 line (step 2 of
+   `/fleet-epic-report`) says 已随列车上线 / 列车在跑 / 卡在红车 <run>, and only
+   a red train adds its own `kind=human` `mark:`. Never run a move yourself.
 2. **Run `/fleet-epic-report <N> --repo "$FLEET_REPO"` right here** (its page
    carries 「本批跨了 K 个版本」 from `fleet-epic-floor.sh show <N> --repo "$FLEET_REPO"`). Not «hand off to», not «suggest
    the operator run» — execute it, this tick. It gathers, builds the page, hosts
@@ -503,14 +502,13 @@ survives a context boundary the same way everything else here does:
 4. **Clear the heartbeat** — `bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh --clear <N>`
    (issue #953) — `<N>` is this EPIC: it removes THIS batch's mark and no other's
    (issue #2062: a bare `--clear` once took the file every batch on the login
-   shared). The batch's own followups (`move stable`) are the person's, never
-   this loop's; the installs follow stable on their own tick whether a batch runs
+   shared). The batch's own followups are the person's, never this loop's; the installs follow stable on their own tick whether a batch runs
    or not (issue #2934). A loop that never reaches this line leaves a mark that
    expires on its own, 45 min after its last tick.
 5. **Report to whoever started this driver** (issue #2623) — one call, the last
    of the run: `mcp__fleet__report` with `state: merged` and a `summary` that
    carries the report page's URL and what the batch leaves for the person
-   (`move stable`, a hub redeploy, a member still blocked — the same things the
+   (the 列车结果 line, a hub redeploy, a member still blocked — the same things the
    closing tick's followup markers name). The session that started this
    driver (an orchestrator, or the person's own) gets it as a `[child-report]`;
    a parent that is gone turns it into the person's reminder, and with no

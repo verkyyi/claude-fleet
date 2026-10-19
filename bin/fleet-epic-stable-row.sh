@@ -1,17 +1,16 @@
 #!/bin/sh
 # fleet-epic-stable-row.sh --repo <owner/name> --main <checkout> (--epic <N> | --merged <sha> ...)
 #                          [--base <trunk>] [--remote <name>] [--timeout <s>]
-#   — the 「挪稳定版」 row for /fleet-epic-report's 还差什么 table (issue #1124,
-#     EPIC #1117 R2). Prints the row; NEVER moves the tag.
+#   — the 列车结果 line for /fleet-epic-report (issue #4917; it was #1124's
+#     「挪稳定版」 row). Reads only; NEVER moves the tag.
 #
-# The stable mark (fleet-stable.sh, #1118) is what every login follows, and the
-# operator has to remember to move it. The natural moment is the one this skill
-# already owns: a batch just finished and its report is being written. So the
-# report asks ONE question — does `stable` already contain this batch's last
-# merge? — and when it does not, the 还差什么 table gets one more row: what is
-# missing (stable trails the batch) and the exact command that fixes it.
+# stable is moved by the release train on its own (#3141); a person moving it by
+# hand is the repair road only (release-rules «真等不了列车»). So a batch's report
+# no longer asks anyone to move it: it says where the batch's last merge stands —
+# 已随列车上线 (stable contains it), 列车在跑, or 卡在红车 <run> — read off
+# `refs/tags/stable` and the repo's last release-train runs.
 #
-# Only the repo that carries the convention gets the row: <main>/bin/fleet-stable.sh
+# Only the repo that carries the convention answers: <main>/bin/fleet-stable.sh
 # must exist, else `kind: skip` — a team repo's own `stable` tag (if any) means
 # something else, and this skill ships to team repos too.
 #
@@ -26,16 +25,18 @@
 # parent's.
 #
 # Output, line-anchored `key: value` (like fleet-stable.sh show):
-#   kind:    behind|none|offtrunk|unknown  → a row is due (exit 0)
-#            current|skip|nomerge          → no row (exit 1)
+#   kind:    current                       → 已随列车上线, no row (exit 1)
+#            running|red|waiting|trainunknown|none|offtrunk|unknown
+#                                          → a 还差什么 row (exit 0)
+#            skip|nomerge                  → nothing to say (exit 1)
 #   stable:  <short>|none|?     target:  <short> <subject>     behind:  <n>
-#   cmd:     the fleet-stable.sh move command, as the operator would paste it
+#   train:   <status/conclusion> <run url>  — the last release-train run read
+#   line:    the 列车结果 sentence for 交付了什么 / the durable comment
 #   row:     <还差什么><TAB><建议下一步>   — the two cells, one clause each (#929)
 #   tr:      the same row as a <tr> for the page
-#   mark:    the followup marker for the parent's closing comment (issue #2672;
-#            `<!-- fleet:followup kind=… what=… -->`, a note for the person): `kind=stable` when a move is all it takes
-#            (behind / none) — the person runs it (EPIC #4333 C5: no session picks it up) —
-#            `kind=human` when a person must look first (offtrunk / unknown)
+#   mark:    a `<!-- fleet:followup kind=human what=… -->` for the parent's
+#            closing comment (issue #2672) — only when a person must look
+#            (red / offtrunk / unknown); never a move to run
 # Exit: 0 row due · 1 no row · 2 usage / could not read (gh, git)
 #
 # Reads only: `fleet-stable.sh show` (a remote-tracking fetch in <main>, nothing
@@ -46,7 +47,7 @@ BIN_DIR=$(cd "$(dirname "$0")" && pwd)
 repo="" main="" epic="" epic_repo="" merged="" base=master remote=origin timeout=15
 
 die() { printf 'fleet-epic-stable-row: %s\n' "$*" >&2; exit 2; }
-usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'; }
 
 [ "$#" -gt 0 ] || { usage; exit 2; }
 while [ "$#" -gt 0 ]; do
@@ -74,11 +75,10 @@ git -C "$main" rev-parse --git-dir >/dev/null 2>&1 || die "$main is not a git ch
 
 # ── 1. the convention gate ────────────────────────────────────────────────────
 if [ ! -f "$main/bin/fleet-stable.sh" ]; then
-  printf 'kind:    skip\nnote:    %s carries no bin/fleet-stable.sh — no stable mark to move here\n' "$repo"
+  printf 'kind:    skip\nnote:    %s carries no bin/fleet-stable.sh — no release train here\n' "$repo"
   exit 1
 fi
 ST="$BIN_DIR/fleet-stable.sh"; [ -f "$ST" ] || ST="$main/bin/fleet-stable.sh"
-case "$ST" in "$HOME"/*) st_disp="~${ST#"$HOME"}" ;; *) st_disp="$ST" ;; esac
 
 # ── 2. where stable points (fetches trunk + the stable commit into <main>) ────
 show=$(sh "$ST" show --dir "$main" --repo "$repo" --remote "$remote" --branch "$base" --timeout "$timeout" 2>/dev/null)
@@ -116,7 +116,7 @@ for s in $merged; do
   else printf 'fleet-epic-stable-row: skipping %s — not a commit %s knows\n' "$s" "$remote" >&2; fi
 done
 if [ -z "$have" ]; then
-  printf 'kind:    nomerge\nstable:  %s\nnote:    no merged member PR to compare stable against — nothing to move for\n' "${st_short:-?}"
+  printf 'kind:    nomerge\nstable:  %s\nnote:    no merged member PR to compare stable against — no train result to give\n' "${st_short:-?}"
   exit 1
 fi
 # the last merge = the candidate every other candidate is an ancestor of (trunk is
@@ -127,50 +127,91 @@ for s in $have; do
 done
 target=$(g rev-parse --verify "$target^{commit}" 2>/dev/null) || die "could not resolve the merge commits in $main"
 t_short=$(short "$target"); t_subj=$(g log -1 --format=%s "$target" 2>/dev/null)
-cmd="$st_disp move $t_short"
 
-# ── 4. compare, and say it as a row ───────────────────────────────────────────
-kind="" what="" next=""
+# the last release-train runs (newest first): one TAB row each —
+# status, conclusion, head sha, url. Unreadable ⇒ empty.
+train_runs() {
+  bash "$BIN_DIR/fleet-gh.sh" run api "repos/$repo/actions/workflows/release-train.yml/runs?per_page=10" \
+    --jq '.workflow_runs[] | "\(.status)\t\(.conclusion // "-")\t\(.head_sha)\t\(.html_url)"' 2>/dev/null
+}
+
+# ── 4. compare, and say it as the train's result ──────────────────────────────
+kind="" what="" next="" line="" train="" mwhat=""
 case "$verdict" in
   NONE)
     kind=none
-    what="还没有稳定版标记（refs/tags/stable），各 login 无从跟起"
-    next="标稳定版到 ${t_short}（本批最后一次合并）：\`$cmd\`" ;;
+    line="还没有稳定版标记（refs/tags/stable），列车尚未发过版"
+    what="还没有稳定版标记，本批最后一次合并 $t_short 无处上线"
+    next="看 release-train 为何没发版（runbook-train-stuck）" ;;
   CURRENT|BEHIND|OFFTRUNK)
     st_full=$(g rev-parse -q --verify "$st_short^{commit}" 2>/dev/null) || st_full=""
     if [ -z "$st_full" ]; then
       kind=unknown
     elif g merge-base --is-ancestor "$target" "$st_full" 2>/dev/null; then
       kind=current
+      line="已随列车上线（stable = ${st_short}）"
     elif [ "$verdict" = OFFTRUNK ]; then
       kind=offtrunk
+      line="未上线：稳定版 $st_short 不在 $remote/$base 上"
       what="稳定版 $st_short 不在 $remote/$base 上，本批最后一次合并 $t_short 不在其中"
-      next="先看 \`$st_disp show\` 弄清它为何离开主干；\`fleet-stable.sh move\` 只进不退，不会自动纠正"
+      next="先看 \`fleet-stable.sh show\` 弄清它为何离开主干（release-rules 修复一节）"
     else
-      kind=behind
       n=$(g rev-list --count "$st_full..$target" 2>/dev/null || echo '?')
-      what="稳定版还停在 ${st_short}，落后本批最后一次合并 $t_short ${n} 个提交，各 login 还没跟上"
-      next="挪稳定版到 ${t_short}：\`$cmd\`"
+      runs=$(train_runs)
+      live=$(printf '%s\n' "$runs" | awk -F '\t' 'NF >= 4 && $1 != "completed" { print; exit }')
+      done1=$(printf '%s\n' "$runs" | awk -F '\t' 'NF >= 4 && $1 == "completed" { print; exit }')
+      if [ -z "$runs" ]; then
+        kind=trainunknown
+        line="还没进稳定版（停在 ${st_short}），列车结论读不出来"
+        what="本批最后一次合并 $t_short 还没进稳定版 ${st_short}，列车结论读不出来"
+        next="看 \`gh run list --workflow release-train.yml\`"
+      elif [ -n "$live" ]; then
+        kind=running url=$(printf '%s' "$live" | cut -f4)
+        train="$(printf '%s' "$live" | cut -f1) $url"
+        line="列车在跑（${url}）"
+        what="本批最后一次合并 $t_short 还没进稳定版 ${st_short}，列车在跑"
+        next="等它跑完，不用动手；卡住照 runbook-train-stuck"
+      else
+        concl=$(printf '%s' "$done1" | cut -f2) rsha=$(printf '%s' "$done1" | cut -f3) url=$(printf '%s' "$done1" | cut -f4)
+        train="$concl $url"
+        boarded=0
+        [ -n "$rsha" ] && have_commit "$rsha" && g merge-base --is-ancestor "$target" "$rsha" 2>/dev/null && boarded=1
+        case "$concl" in success|skipped|neutral) red=0 ;; *) red=1 ;; esac
+        if [ "$red" = 1 ] && [ "$boarded" = 1 ]; then
+          kind=red
+          line="卡在红车 $url"
+          what="本批最后一次合并 $t_short 卡在红车，稳定版停在 $st_short"
+          next="照 runbook-train-stuck 修红；修好后下一趟列车自己带上"
+          mwhat="列车红在 ${url}，本批没上线"
+        else
+          kind=waiting
+          line="等下一趟列车（稳定版停在 ${st_short}）"
+          what="本批最后一次合并 $t_short 还没上车，稳定版停在 $st_short"
+          next="等下一趟（每小时 41 分兜底），急就 \`gh workflow run release-train.yml\`"
+        fi
+      fi
     fi ;;
   *) kind=unknown ;;
 esac
 if [ "$kind" = unknown ]; then
+  line="上线与否读不出来（$remote 不可达或 refs/tags/stable 读失败）"
   what="稳定版位置读不出来（$remote 不可达或 refs/tags/stable 读失败），落后多少未知——不是 0"
-  next="联网后 \`$st_disp show\`；落后本批最后一次合并 $t_short 就 \`$cmd\`"
+  next="联网后 \`fleet-stable.sh show\` 再看"
 fi
+case "$kind" in offtrunk|unknown) mwhat=$what ;; esac
 
 printf 'kind:    %s\nstable:  %s\ntarget:  %s %s\n' "$kind" "${st_short:-?}" "$t_short" "$t_subj"
-case "$kind" in
-  behind)  printf 'behind:  %s\n' "$n" ;;
-  current) printf 'behind:  0\nnote:    stable already contains %s — no row\n' "$t_short"; exit 1 ;;
-esac
-printf 'cmd:     %s\n' "$cmd"
+case "$kind" in running|red|waiting|trainunknown) printf 'behind:  %s\n' "$n" ;; esac
+[ -n "$train" ] && printf 'train:   %s\n' "$train"
+printf 'line:    %s\n' "$line"
+[ "$kind" = current ] && { printf 'note:    stable already contains %s — no row\n' "$t_short"; exit 1; }
 printf 'row:     %s\t%s\n' "$what" "$next"
 # the <tr>: backticks become <code>; the cells carry no other markup-significant char
 tr_what=$(printf '%s' "$what" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
 tr_next=$(printf '%s' "$next" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/`\([^`]*\)`/<code>\1<\/code>/g')
 printf 'tr:      <tr><td>%s</td><td>%s</td></tr>\n' "$tr_what" "$tr_next"
-case "$kind" in behind|none) mkind=stable mwhat="挪稳定版到 $t_short" ;; *) mkind=human mwhat=$what ;; esac
-mwhat=$(printf '%s' "$mwhat" | sed 's/-->/—>/g' | tr -s '[:space:]' ' ' | cut -c1-200)
-printf 'mark:    <!-- fleet:followup kind=%s what=%s -->\n' "$mkind" "$mwhat"
+if [ -n "$mwhat" ]; then
+  mwhat=$(printf '%s' "$mwhat" | sed 's/-->/—>/g' | tr -s '[:space:]' ' ' | cut -c1-200)
+  printf 'mark:    <!-- fleet:followup kind=human what=%s -->\n' "$mwhat"
+fi
 exit 0

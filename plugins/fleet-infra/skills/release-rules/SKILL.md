@@ -53,7 +53,7 @@ fleet doctor --installs                                      # 每份安装离 s
 1. **正常发版**：合进 master，什么都不做。看列车 run 的摘要：上车的 `TRAIN_SHA`、测试、`hub plan`、`release`。
 2. **急修**：修复走普通 PR 合进 master，然后手动开一趟列车（上一节最后一条）——列车上车时现读 master 的头，
    正在跑的那趟不会被取消，新的一趟排在它后面。
-3. **真等不了列车**（入口或机器在坏、列车本身坏了）：
+3. **修复：真等不了列车**（入口或机器在坏、列车本身坏了）——手动 `fleet-stable.sh move` 只在这一步；EPIC 收尾不留这条跟进（#4917）：
    - 先 `--dry-run`：`sh ~/.claude/fleet/bin/fleet-stable.sh move <SHA> --dry-run`，8 道门逐条说结果。
    - `<SHA>` 必须 ≥ 正在跑的列车的 `TRAIN_SHA`（是它本身或它的后代）：`git merge-base --is-ancestor <TRAIN_SHA> <SHA>`。
    - 入口先跟上同一个提交：`gh workflow run hub-deploy.yml --repo verkyyi/claude-fleet`（见 [hub-deploy]），门 8
