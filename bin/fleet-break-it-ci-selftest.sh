@@ -88,6 +88,13 @@
 #   go-shard-drops-test the Go tests' cost-dealt shards (#4817) lose a test (the
 #                       heaviest one goes to no shard): bin/go-test-shard-selftest.sh
 #                       A reds on the broken dealer and is green on ours
+#   ci-ack-pr-fork      the PR gate's heavy checks on fleet-ack (#4821): the job gate
+#                       takes a pull request only from THIS repo's branch, of a
+#                       workflow in CI_GATE_PR_WORKFLOWS — a fork's, a bot's, another
+#                       workflow's or one with no event file never runs a step
+#   pr-ack-down         FLEET_PR_RUNNER=fleet-ack but the cluster's last word is old,
+#                       missing or «down», or the PR is a fork's: its checks run on
+#                       ubuntu-latest, never queued for a day on fleet-ack (#4821)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -1259,6 +1266,99 @@ drill_release_bad_spreads() {
   out=$(bash "$BIN/fleet-release-rollback-selftest.sh" 2>&1) || { WHY="the whole-version rollback: $(printf '%s' "$out" | grep '^FAIL' | head -2 | tr '\n' '|')"; return 1; }
   SECS=$(since "$t0")
   WHAT="坏版本：金丝雀先拿、拒了其余不换（入口 fleet.release_canary）；发布后入口 5xx / 机器回滚 / 金丝雀拦住 / healthz 连挂 ⇒ release-watch 一次整版回退（--since 上一版，一个新提交）+ 入口回镜像 + 列车补发 + 通知；已回退不重复，回退失败通知请手动"
+}
+
+# ---- ci-ack-pr-fork (#4821, EPIC #4810 C18): the PR gate's heavy checks moved onto
+# fleet-ack, a set that took no pull request at all (#3144). GitHub hands a job to
+# whatever runner carries its label — a fork's PR can name `fleet-ack` too — so the
+# job gate is still the rule: with CI_GATE_PR_WORKFLOWS set it admits a
+# pull_request whose event says the head is THIS repo (not a fork), its base
+# master, its workflow one listed, its author no bot; anything else, or no event
+# file to read, refuses. Unset (our Macs, an older scale set) ⇒ no PR, as before.
+drill_ci_ack_pr_fork() {
+  CAP=30
+  local t0 d rc out k
+  d=$(mktemp -d "${TMPDIR:-/tmp}/ack-pr.XXXXXX"); t0=$(now)
+  ev() { printf '{"pull_request":{"head":{"repo":{"full_name":"%s","fork":%s}},"base":{"ref":"%s"},"user":{"login":"%s"}}}' "$1" "$2" "$3" "$4" > "$d/$5.json"; }
+  ev o/r false master alice own;  ev evil/r true master evil fork
+  ev o/r true master alice flagged; ev o/r false release alice base
+  ev o/r false master 'dependabot[bot]' bot
+  gate() {  # <event file|-> [VAR=value …]
+    local f=$1; shift
+    env -i PATH=/usr/bin:/bin CI_GATE_REPO=o/r CI_GATE_WORKFLOWS='release-train.yml' \
+      CI_GATE_PR_WORKFLOWS='ci.yml' GITHUB_REPOSITORY=o/r GITHUB_EVENT_NAME=pull_request \
+      GITHUB_REF=refs/pull/7/merge GITHUB_HEAD_REF=issue-7 GITHUB_BASE_REF=master GITHUB_ACTOR=alice \
+      GITHUB_WORKFLOW_REF=o/r/.github/workflows/ci.yml@refs/pull/7/merge \
+      ${f:+GITHUB_EVENT_PATH=$d/$f.json} "$@" /bin/bash "$BIN/fleet-ci-job-gate.sh" 2>&1
+  }
+  out=$(gate own); rc=$?
+  [ "$rc" = 0 ] || { WHY="this repo's own PR of ci.yml was refused: $out"; rm -rf "$d"; return 1; }
+  for k in fork flagged base bot; do
+    out=$(gate "$k"); rc=$?
+    [ "$rc" = 1 ] || { WHY="($k) a PR the gate must refuse ran (exit $rc): $out"; rm -rf "$d"; return 1; }
+  done
+  for k in 'GITHUB_WORKFLOW_REF=o/r/.github/workflows/selftests.yml@refs/pull/7/merge' \
+           'GITHUB_REF=refs/heads/issue-7' 'GITHUB_EVENT_NAME=pull_request_target' \
+           'GITHUB_EVENT_PATH=/nonexistent' 'CI_GATE_PR_WORKFLOWS=' 'GITHUB_REPOSITORY=evil/r' \
+           'GITHUB_ACTOR=dependabot[bot]'; do
+    out=$(gate own "$k"); rc=$?
+    [ "$rc" = 1 ] || { WHY="($k) a PR the gate must refuse ran (exit $rc): $out"; rm -rf "$d"; return 1; }
+  done
+  out=$(gate ''); rc=$?
+  [ "$rc" = 1 ] || { WHY="a PR with no event file ran: $out"; rm -rf "$d"; return 1; }
+  # the train's master push still runs with the PR list set
+  out=$(env -i PATH=/usr/bin:/bin CI_GATE_REPO=o/r CI_GATE_WORKFLOWS='release-train.yml' CI_GATE_PR_WORKFLOWS='ci.yml' \
+        GITHUB_REPOSITORY=o/r GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/master \
+        GITHUB_WORKFLOW_REF=o/r/.github/workflows/release-train.yml@refs/heads/master /bin/bash "$BIN/fleet-ci-job-gate.sh" 2>&1) \
+    || { WHY="the train's push was refused once the PR list is set: $out"; rm -rf "$d"; return 1; }
+  grep -q 'CI_GATE_PR_WORKFLOWS' "$BIN/../deploy/k8s/runners/fleet-ack.example.yaml" \
+    || { WHY="the scale set's shape never names CI_GATE_PR_WORKFLOWS"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="fleet-ack 收 PR 后：只收本仓库分支、base master、CI_GATE_PR_WORKFLOWS 里的 workflow、非机器人的 PR；fork / 机器人 / 别的 workflow / 没有事件文件一步不跑；不设名单照旧一个 PR 都不收"
+}
+
+# ---- pr-ack-down (#4821): the PR gate cannot read the runner list (the runner app's
+# key is master-only, environment fleet-ack-probe), and a job labelled fleet-ack
+# while the set is gone waits a day. So fleet-ack-status.yml (schedule, master) asks
+# the list every 10 minutes and leaves its answer in the Actions cache; the gate's
+# plan (fleet-train-runner.sh pr-pick) sends a PR's heavy checks to fleet-ack only on
+# a fresh «up» for THIS repo's own branch — old, missing, down or a fork ⇒ ubuntu-latest.
+drill_pr_ack_down() {
+  CAP=30
+  local t0 d out c ci wf st
+  ci="$BIN/../.github/workflows/ci.yml"; wf="$BIN/../.github/workflows/tokenledger.yml"
+  st="$BIN/../.github/workflows/fleet-ack-status.yml"
+  grep -q 'fleet-train-runner.sh pr-pick' "$ci" || { WHY="ci.yml's plan never picks the PR's runner"; return 1; }
+  grep -q 'head.repo.fork' "$ci" || { WHY="ci.yml's pick is not told the PR is a fork's"; return 1; }
+  grep -q 'fleet-ack-status-' "$ci" && grep -q 'fleet-ack-status-' "$st" 2>/dev/null \
+    || { WHY="no fleet-ack-status.yml leaving the cluster's last word where ci.yml reads it"; return 1; }
+  grep -q "runs-on: \${{ startsWith(inputs.runs_on, '\[') && fromJSON(inputs.runs_on) || 'ubuntu-latest' }}" "$wf" \
+    || { WHY="tokenledger.yml's jobs do not fall back to ubuntu-latest without a pick"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/pr-ack.XXXXXX"); t0=$(now)
+  printf 'ts=%s\nlinux_where=fleet-ack\nlinux_why=fleet-ack: 2 online (0 busy)\n' "$(date +%s)" > "$d/up"
+  printf 'ts=%s\nlinux_where=fleet-ack\nlinux_why=fleet-ack: 2 online (0 busy)\n' "$(( $(date +%s) - 7200 ))" > "$d/old"
+  printf 'ts=%s\nlinux_where=github\nlinux_why=no fleet-ack runner online (0 registered)\n' "$(date +%s)" > "$d/down"
+  pick() { GITHUB_OUTPUT="$d/out" GITHUB_REPOSITORY=o/r bash "$BIN/fleet-train-runner.sh" pr-pick "$@" 2>/dev/null; }
+  out=$(FLEET_PR_RUNNER='' pick --status "$d/up" --head-repo o/r --fork false)
+  case "$out" in *'pr_runs_on=ubuntu-latest'*'pr_where=github'*) ;;
+    *) WHY="the variable empty, the pick was not ubuntu-latest: $out"; rm -rf "$d"; return 1 ;; esac
+  out=$(FLEET_PR_RUNNER=fleet-ack pick --status "$d/up" --head-repo o/r --fork false)
+  case "$out" in *'pr_runs_on=["fleet-ack"]'*'pr_where=fleet-ack'*) ;;
+    *) WHY="a fresh «up», this repo's branch: the pick was not fleet-ack: $out"; rm -rf "$d"; return 1 ;; esac
+  for c in old down missing fork flagged; do
+    case "$c" in
+      old)     out=$(FLEET_PR_RUNNER=fleet-ack pick --status "$d/old" --head-repo o/r --fork false) ;;
+      down)    out=$(FLEET_PR_RUNNER=fleet-ack pick --status "$d/down" --head-repo o/r --fork false) ;;
+      missing) out=$(FLEET_PR_RUNNER=fleet-ack pick --status "$d/none" --head-repo o/r --fork false) ;;
+      fork)    out=$(FLEET_PR_RUNNER=fleet-ack pick --status "$d/up" --head-repo evil/r --fork true) ;;
+      flagged) out=$(FLEET_PR_RUNNER=fleet-ack pick --status "$d/up" --head-repo o/r --fork true) ;;
+    esac
+    case "$out" in *'pr_runs_on=ubuntu-latest'*'pr_where=github'*) ;;
+      *) WHY="($c) the PR's checks were not sent to ubuntu-latest: $out"; rm -rf "$d"; return 1 ;; esac
+  done
+  grep -q '^pr_runs_on=' "$d/out" || { WHY="the pick wrote nothing to GITHUB_OUTPUT"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="PR 的重检查：集群最近一句是「在」且不超过 30 分钟、本仓库分支 ⇒ fleet-ack；过期 / 没有 / 不在 / fork ⇒ ubuntu-latest；变量空什么都不读"
 }
 
 cred_run_drills "$0"

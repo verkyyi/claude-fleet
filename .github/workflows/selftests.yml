@@ -36,6 +36,13 @@ on:
   # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
   # the change reaches it — its old `paths:` live there now
   workflow_call:
+    inputs:
+      # issue #4821: this repo's own PR on the Shenzhen cluster (ci.yml's plan,
+      # fleet-train-runner.sh pr-pick) — the shards only; the plan stays on GitHub's
+      runs_on:
+        description: 'runner labels: ubuntu-latest, or a JSON list (["fleet-ack"])'
+        type: string
+        default: ubuntu-latest
   # The full suite on a runner set of our own, by hand (issue #3864): e.g. runs_on
   # ["fleet-ack"] + the cluster mirror, before the release train is pointed there.
   workflow_dispatch:
@@ -149,7 +156,8 @@ jobs:
       # dispatch has none and runs the full suite.
       base: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
       # a dispatch (issue #3864) names its runners, mirror and width; the PR gate
-      # keeps ubuntu-latest and the 18 below
+      # names its runners (issue #4821: fleet-ack for this repo's own PR when the
+      # cluster is up) and keeps the 18 below
       sha: ${{ github.event_name == 'workflow_dispatch' && github.sha || '' }}
       runs_on: ${{ inputs.runs_on || 'ubuntu-latest' }}
       mirror: ${{ inputs.mirror || '' }}

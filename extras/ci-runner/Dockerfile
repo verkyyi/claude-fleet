@@ -14,8 +14,9 @@
 #
 # The job gate (bin/fleet-ci-job-gate.sh, as on our Macs) is the runner's
 # job-started hook: only this repo's master push / dispatch / schedule runs of the
-# named workflows, never a pull request — the scale set sets CI_GATE_REPO and
-# CI_GATE_WORKFLOWS.
+# named workflows — the scale set sets CI_GATE_REPO and CI_GATE_WORKFLOWS — and,
+# with CI_GATE_PR_WORKFLOWS (claude-fleet#4821), a pull request of those from THIS
+# repo's own branch; never a fork's.
 #
 # Built from the REPO ROOT by extras/ci-runner/build.sh, tagged by
 # extras/ci-runner/tag.sh: the same text ⇒ the same tag ⇒ nothing rebuilt.
@@ -92,9 +93,12 @@ USER runner
 # only; the tag does not follow it — a stale cache is only a slower first build.
 COPY --chown=runner:runner tokenledger/ /tmp/tl/
 # One module a directory (hub · agent · shared · e2e, claude-fleet#4814), each
-# built on its own as CI builds them (GOWORK=off).
+# built on its own as CI builds them (GOWORK=off). The -race test binaries too
+# (claude-fleet#4821): this repo's own PRs run tokenledger's -race tests here, and
+# the image is their resident cache — compiled, none run (-run '^$').
 RUN set -eux; for m in hub agent shared e2e; do ( cd /tmp/tl/$m; export GOWORK=off; go mod download; \
-      go build ./... || true; go vet ./... >/dev/null 2>&1 || true ); done; \
+      go build ./... || true; go vet ./... >/dev/null 2>&1 || true; \
+      go test -race -count=1 -run '^$' ./... >/dev/null 2>&1 || true ); done; \
     cd /; rm -rf /tmp/tl; du -sh "$GOCACHE" "$GOMODCACHE"
 
 # The actions a shard names (the runner looks here by owner_repo/<sha>.tar.gz

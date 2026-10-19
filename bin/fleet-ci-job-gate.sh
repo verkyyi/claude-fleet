@@ -2,7 +2,8 @@
 # fleet-ci-job-gate.sh — the test runner's job-started hook (claude-fleet#3144,
 # EPIC #3139 C5 · 共同约定 7): a job runs on this machine only when it is the
 # merged train's, or the macOS follow after it (mac-follow.yml, issue #3869) —
-# never a pull request's.
+# never a pull request's, unless the runner set names CI_GATE_PR_WORKFLOWS (below:
+# this repo's own branches only, issue #4821).
 #
 # bin/fleet-ci-runner.py starts the runner with ACTIONS_RUNNER_HOOK_JOB_STARTED
 # pointing here (a root-owned file the test login cannot change). The runner
@@ -16,6 +17,21 @@
 #   GITHUB_REF         = CI_GATE_REF             (refs/heads/master)
 #   GITHUB_HEAD_REF    empty                     (set only on a pull request)
 #   GITHUB_WORKFLOW_REF = <repo>/.github/workflows/<w>@<ref>, w ∈ CI_GATE_WORKFLOWS
+#
+# One more door, for a runner set that names it (issue #4821, EPIC #4810 C18 — the
+# Shenzhen cluster's fleet-ack, which runs this repo's own PRs' heavy checks):
+# with CI_GATE_PR_WORKFLOWS set, a pull request is taken when
+#
+#   GITHUB_EVENT_NAME  = pull_request            (never pull_request_target)
+#   GITHUB_REF         = refs/pull/<N>/merge, GITHUB_BASE_REF = master
+#   GITHUB_EVENT_PATH  says pull_request.head.repo.full_name = CI_GATE_REPO,
+#                      .head.repo.fork false, .base.ref master, the author no bot
+#   GITHUB_ACTOR       no bot
+#   GITHUB_WORKFLOW_REF = <repo>/.github/workflows/<w>@<GITHUB_REF>, w ∈ CI_GATE_PR_WORKFLOWS
+#
+# — so a fork's PR (whatever label its workflow names), a bot's, or another
+# workflow's never runs a step. Same-repo branches are pushed only by those who may
+# merge to master anyway. Unset (our Macs, an older scale set) ⇒ no PR, as before.
 #
 # Anything missing refuses: a hook that cannot tell is a hook that says no.
 # Exit 0 = the job may run · 1 = refused (one `::error::` line says why).
@@ -35,6 +51,36 @@ wfs="${CI_GATE_WORKFLOWS:-}"
 [ -n "$repo" ] || refuse "no CI_GATE_REPO"
 [ -n "$wfs" ] || refuse "no CI_GATE_WORKFLOWS"
 [ "${GITHUB_REPOSITORY:-}" = "$repo" ] || refuse "repository '${GITHUB_REPOSITORY:-}'"
+prwfs="${CI_GATE_PR_WORKFLOWS:-}"
+if [ -n "$prwfs" ] && [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
+  base=${ref#refs/heads/}
+  case "${GITHUB_REF:-}" in refs/pull/[0-9]*/merge) ;; *) refuse "pull request ref '${GITHUB_REF:-}'" ;; esac
+  [ "${GITHUB_BASE_REF:-}" = "$base" ] || refuse "pull request base '${GITHUB_BASE_REF:-}'"
+  case "${GITHUB_ACTOR:-}" in ''|*'[bot]') refuse "pull request actor '${GITHUB_ACTOR:-}'" ;; esac
+  [ -r "${GITHUB_EVENT_PATH:-}" ] || refuse "a pull request with no event file to read"
+  head=$(REPO="$repo" BASE="$base" python3 -c '
+import json, os, sys
+try:
+    pr = json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]
+    h = pr["head"]["repo"]
+    if h.get("fork") is not False or h.get("full_name") != os.environ["REPO"]:
+        print("head %s%s" % (h.get("full_name"), " (a fork)" if h.get("fork") is not False else ""))
+    elif pr["base"]["ref"] != os.environ["BASE"]:
+        print("base %s" % pr["base"]["ref"])
+    elif str((pr.get("user") or {}).get("login") or "").endswith("[bot]") or not (pr.get("user") or {}).get("login"):
+        print("author %s" % (pr.get("user") or {}).get("login"))
+    else:
+        print("ok")
+except Exception as e:
+    print("unreadable event (%s)" % type(e).__name__)
+' 2>/dev/null)
+  [ "$head" = ok ] || refuse "a pull request: ${head:-unreadable event}"
+  ok=0
+  for w in $prwfs; do [ "${GITHUB_WORKFLOW_REF:-}" = "$repo/.github/workflows/$w@$GITHUB_REF" ] && ok=1; done
+  [ "$ok" = 1 ] || refuse "pull request workflow '${GITHUB_WORKFLOW_REF:-}'"
+  printf 'fleet-ci: pull_request %s on %s (head %s) — taken\n' "${GITHUB_WORKFLOW_REF##*/}" "$GITHUB_REF" "${GITHUB_HEAD_REF:-}"
+  exit 0
+fi
 [ -z "${GITHUB_HEAD_REF:-}" ] || refuse "a pull request (head ${GITHUB_HEAD_REF})"
 ok=0
 for e in $events; do [ "${GITHUB_EVENT_NAME:-}" = "$e" ] && ok=1; done

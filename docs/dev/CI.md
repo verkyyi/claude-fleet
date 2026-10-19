@@ -98,6 +98,14 @@ pkgs agent: github.com/verkyyi/claude-fleet/tokenledger/agent/cli
 - **store 包自己的测试**：`newStore` / `taskStore` 同样从模板起——SQLite 是一份迁移好的文件按字节复制（store 包不能引 storetest），Postgres 是模板库。
 - **交叉编译**：一个 job 编四个平台（两个一组并行），不再四个 job 各排一次队。
 
+### 本仓库自己的 PR 上深圳集群（#4821，EPIC #4810 C18）
+
+- **跑哪些**：tokenledger 的 lint、`-race` 测试各片、交叉编译，和自测分片。Postgres 腿留在 GitHub（服务容器要 Docker，runner pod 里没有）。
+- **谁上**：只有 head 是本仓库分支的 PR（不是 fork）；fork 的、机器人的永远在 `ubuntu-latest`。`ci.yml` 的 plan 里 `bin/fleet-train-runner.sh pr-pick` 决定，输出 `runs_on` 传给两个被调用的工作流；摘要写为什么。
+- **集群在不在**：PR 读不到 runner 列表（runner 应用的密钥只给 master 的环境 `fleet-ack-probe`），所以 `fleet-ack-status.yml` 每 10 分钟在 master 上跑列车同一个 `pick`，把答案（`ts=` + pick 的几行）存进 Actions 缓存 `fleet-ack-status-<run>`；plan 恢复最新那份，30 分钟内说「在」才上 fleet-ack，否则 `ubuntu-latest`（BREAK-IT `pr-ack-down`）。
+- **机器那头**：任务开始钩子 `bin/fleet-ci-job-gate.sh` 设了 `CI_GATE_PR_WORKFLOWS=ci.yml` 才收 PR，且从事件文件核对 head 是本仓库、非 fork、base master、作者非 `[bot]`（BREAK-IT `ci-ack-pr-fork`）。镜像就是常驻的 Go 缓存：Go、模块和 `-race` 的编译产物都烤在 `fleet-ci-runner` 里，fleet-ack 上不跑 `setup-go`、不读写 Actions 缓存。
+- **开关**：仓库变量 `FLEET_PR_RUNNER=fleet-ack`；空 ⇒ 什么都不读、全在 `ubuntu-latest`，和以前一字不差。打开前先把伸缩组换到带新钩子的镜像、加上 `CI_GATE_PR_WORKFLOWS`（`deploy/k8s/runners/README.md`），否则 PR 的 job 会被旧钩子拒掉。
+
 ## 怎么加一个新检查
 
 1. 工作流的 `on:` 写 `workflow_call:`（要定时 / 手动跑再加 `schedule` / `workflow_dispatch`），**不要**写 `pull_request:`；它的 `concurrency` 组名写死自己的名字，不能用 `${{ github.workflow }}`（被调用时那是 `CI`）。它要的权限不能超过 `ci.yml` 顶上给的（`contents: read`、`actions: read`）。

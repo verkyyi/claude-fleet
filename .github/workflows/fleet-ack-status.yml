@@ -1,0 +1,60 @@
+name: fleet-ack status
+
+# Is the Shenzhen cluster's runner set up right now? — asked for the PR gate
+# (issue #4821, EPIC #4810 C18). This repo's own PRs run their heavy checks
+# (tokenledger, the selftest shards) on fleet-ack when the repo variable
+# FLEET_PR_RUNNER names the set; a job labelled fleet-ack while the set is gone
+# waits a day, so the gate must know first. It cannot ask: the runner list needs
+# the runner app's key, and its environment (fleet-ack-probe) admits master only.
+#
+# So this asks for it, every 10 minutes on master: bin/fleet-train-runner.sh pick
+# (the train's own pick: an online fleet-ack runner or not) and leaves the answer —
+# `ts=<epoch>` + pick's lines — in the Actions cache as fleet-ack-status-<run id>.
+# A pull request may restore a cache its base branch saved: ci.yml's plan restores
+# the newest and `fleet-train-runner.sh pr-pick` takes fleet-ack only on a fresh
+# (≤ 30 min) «up» for a PR from this repo's own branch; anything else, or this
+# workflow not running at all, is ubuntu-latest (BREAK-IT pr-ack-down).
+#
+# FLEET_PR_RUNNER unset ⇒ the job is skipped and the gate reads nothing.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: fleet-ack-status
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    name: fleet-ack 在不在
+    if: vars.FLEET_PR_RUNNER != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: fleet-ack-probe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: bin
+      - name: the runner app's token
+        id: app
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.FLEET_RUNNERS_APP_ID }}
+          private-key: ${{ secrets.FLEET_RUNNERS_APP_KEY }}
+      - name: fleet-train-runner.sh pick
+        env:
+          FLEET_TRAIN_RUNNER: ${{ vars.FLEET_PR_RUNNER }}
+          FLEET_TRAIN_RUNNER_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          { echo "ts=$(date +%s)"; GITHUB_OUTPUT= bash bin/fleet-train-runner.sh pick 2> pick.err; } > fleet-ack-status.txt
+          cat fleet-ack-status.txt pick.err
+          echo "### $(cat pick.err)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/cache/save@v4
+        with:
+          path: fleet-ack-status.txt
+          key: fleet-ack-status-${{ github.run_id }}-${{ github.run_attempt }}
