@@ -71,8 +71,8 @@ func TestNodeTaskAuthorityBoundary(t *testing.T) {
 	if !found {
 		t.Fatalf("task missing from viewer: %v", rows)
 	}
-	if st, _ = taskPost(t, h, FleetTasksPath+"/"+ref+"/issue", map[string]any{"repo": "org/repo"}); st != 409 {
-		t.Fatalf("unfenced ticket side effect: %d", st)
+	if st, _ = taskPost(t, h, FleetTasksPath+"/"+ref+"/issue", map[string]any{"repo": "org/repo"}); st != 404 {
+		t.Fatalf("a record files no issue: %d", st)
 	}
 	end := map[string]any{"kind": "transition", "idempotency_key": "done", "generation": 1, "expected_worker": worker, "state": "succeeded", "execution_stopped": true, "evidence": "fixture stopped + result"}
 	rec = command(node.token, 200, end)

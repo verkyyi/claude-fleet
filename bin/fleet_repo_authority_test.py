@@ -213,12 +213,12 @@ class RepoAuthorityTests(unittest.TestCase):
     def test_accepted_ticket_reference_survives_work_completion(self):
         c = dict(task="T9", owner="alice", generation=1, worker_id="fleet/session")
         task = dict(owner="alice", generation=1, execution_owner="fleet/session",
-                    ticket_ref="hub:org/a#8", outcome="succeeded")
+                    ticket_ref="gh:org/a#8", outcome="succeeded")
         with patch.object(migration.launch, "validate_context", return_value=c), \
                 patch.object(migration.launch, "task_call", return_value=task):
             with patch.object(migration.sys, "stdin", io.StringIO("{}")), contextlib.redirect_stdout(io.StringIO()) as out:
                 migration.ticket_ref("org/a", "8")
-            self.assertEqual(out.getvalue().strip(), "hub:org/a#8")
+            self.assertEqual(out.getvalue().strip(), "gh:org/a#8")
             for repo, number in (("org/b", "8"), ("org/a", "7")):
                 with patch.object(migration.sys, "stdin", io.StringIO("{}")), self.assertRaises(ValueError):
                     migration.ticket_ref(repo, number)
@@ -253,7 +253,7 @@ class RepoAuthorityTests(unittest.TestCase):
                     if query.get("gate"):
                         return copy.deepcopy(authority)
                     return dict(authority=copy.deepcopy(authority), nodes=[], legacy_owners=[],
-                                tickets=[], blockers=[], dry_run=True, live_acceptance="unverified")
+                                blockers=[], dry_run=True, live_acceptance="unverified")
                 key = body["idempotency_key"]
                 if key in history:
                     return copy.deepcopy(history[key])
@@ -318,7 +318,7 @@ class RepoAuthorityTests(unittest.TestCase):
                     if query.get("gate"):
                         return copy.deepcopy(a)
                     return dict(authority=copy.deepcopy(a), nodes=[], legacy_owners=[],
-                                tickets=[], blockers=[], dry_run=True, live_acceptance="unverified")
+                                blockers=[], dry_run=True, live_acceptance="unverified")
                 a.update(mode={"freeze": "frozen", "apply": "hub", "rollback": "legacy"}[body["action"]],
                          revision=a["revision"] + 1)
                 return copy.deepcopy(a)

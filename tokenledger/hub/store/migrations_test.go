@@ -397,3 +397,59 @@ func TestMigration3_RemovesTheSpotNodes(t *testing.T) {
 		t.Fatalf("a database with no fleet tables: %v", err)
 	}
 }
+
+// Migration 4 (claude-fleet#4898, T477) on a hub that held tickets: the four
+// ticket tables go with their rows counted, the task records stay, and a
+// second run changes nothing.
+func TestMigration4_RemovesTheHubTickets(t *testing.T) {
+	s := newStore(t)
+	if err := s.EnsureNodes(); err != nil {
+		t.Fatal(err)
+	}
+	db := s.DB()
+	rec, err := s.CreateFleetTask(FleetTask{Owner: "alice", Title: "kept"}, "kept", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE fleet_tickets (repo TEXT NOT NULL, num INTEGER NOT NULL, owner TEXT NOT NULL, PRIMARY KEY (repo, num))`,
+		`INSERT INTO fleet_tickets VALUES ('o/r', 1, 'alice'), ('o/r', 2, 'bob')`,
+		`CREATE TABLE fleet_ticket_comments (id INTEGER PRIMARY KEY, repo TEXT, num INTEGER, body TEXT)`,
+		`INSERT INTO fleet_ticket_comments (repo, num, body) VALUES ('o/r', 1, 'hi')`,
+		`CREATE TABLE fleet_ticket_seq (repo TEXT PRIMARY KEY, next_n INTEGER)`,
+		`CREATE TABLE fleet_ticket_index (id TEXT PRIMARY KEY, owner TEXT)`,
+		`DELETE FROM hub_migrations WHERE id = 4`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if err := runMigrations(db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tb := range ticketTables {
+		if ok, err := dialectOf(db).tableExists(db, tb); err != nil || ok {
+			t.Fatalf("%s still there (%v)", tb, err)
+		}
+	}
+	if got, err := s.FleetTask(rec.ID); err != nil || got.Title != "kept" {
+		t.Fatalf("a task record went with the tickets: %+v %v", got, err)
+	}
+	ms, err := s.Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail string
+	for _, m := range ms {
+		if m.ID == 4 {
+			detail = m.Detail
+		}
+	}
+	for _, want := range []string{`"dropped.fleet_tickets":2`, `"dropped.fleet_ticket_comments":1`, `"dropped.fleet_ticket_index":0`} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("migration 4 detail %s lacks %s", detail, want)
+		}
+	}
+}

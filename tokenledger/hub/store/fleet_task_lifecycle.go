@@ -34,16 +34,17 @@ func taskTerminal(state string) bool {
 	return state == TaskSucceeded || state == TaskFailed || state == TaskCancelled || state == TaskRefused
 }
 
+// TicketGitHub is the one backend a task's ticket_ref names: a GitHub issue,
+// `gh:<repo>#<N>`. The hub's own tickets are gone (claude-fleet#4898, T477).
+const TicketGitHub = "gh"
+
 // taskTicket parses a fully qualified backlog reference; never a bare number.
-// Both backends retain the existing lease key so legacy claimants cannot
-// bypass a task. The full backend reference stays on the task; a collision
-// with a registered local ticket is refused, never reinterpreted. Explicit
-// repo migration must allocate distinct local ticket numbers (C5).
+// It retains the issue's lease key so legacy claimants cannot bypass a task.
 func taskTicket(ref string) (repo string, number int64, err error) {
 	backend, rest, ok := strings.Cut(ref, ":")
 	r, n, has := strings.Cut(rest, "#")
 	num, e := strconv.ParseInt(n, 10, 64)
-	if !ok || !has || e != nil || num <= 0 || strconv.FormatInt(num, 10) != n || r == "" || strings.ContainsAny(r, "# \t\n:") || (backend != TicketHub && backend != TicketGitHub) {
+	if !ok || !has || e != nil || num <= 0 || strconv.FormatInt(num, 10) != n || r == "" || strings.ContainsAny(r, "# \t\n:") || backend != TicketGitHub {
 		return "", 0, ErrTaskInvalid
 	}
 	r = NormRepo(r)
@@ -144,26 +145,6 @@ func (s *Store) acceptFleetTask(t FleetTask, token string, now time.Time) (Fleet
 	if err = s.ownerStartTx(tx, t.Owner, true); err != nil {
 		return FleetTask{}, err
 	}
-	if t.TicketRef != "" {
-		backend, _, _ := strings.Cut(t.TicketRef, ":")
-		r, n, _ := taskTicket(t.TicketRef)
-		var ticketOwner, ticketBackend string
-		err = tx.QueryRow(`SELECT owner, backend FROM fleet_tickets WHERE repo = ? AND num = ? AND backend = ?`, strings.TrimPrefix(r, "hub:"), n, backend).Scan(&ticketOwner, &ticketBackend)
-		if errors.Is(err, sql.ErrNoRows) && backend == TicketGitHub {
-			// A colliding hub number cannot hide the original GH reference's
-			// owner in the full-ID registry retained by selective adoption.
-			err = tx.QueryRow(`SELECT owner, backend FROM fleet_ticket_index WHERE id = ?`, t.TicketRef).Scan(&ticketOwner, &ticketBackend)
-		}
-		if err == nil && (ticketOwner != t.Owner || ticketBackend != backend) {
-			return FleetTask{}, ErrTaskFence
-		}
-		if errors.Is(err, sql.ErrNoRows) && backend == TicketHub {
-			return FleetTask{}, ErrTaskInvalid
-		}
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return FleetTask{}, err
-		}
-	}
 	if t.ParentTask != "" {
 		var owner string
 		if err = tx.QueryRow(`SELECT owner FROM fleet_tasks WHERE id = ?`, ParseTaskRef(t.ParentTask)).Scan(&owner); err != nil || owner != t.Owner {
@@ -257,15 +238,13 @@ type TaskMutation struct {
 	SessionKey       string              `json:"session_key,omitempty"`
 	CancelRequest    string              `json:"cancel_request,omitempty"`
 	Blocker          *TaskBlockerCommand `json:"blocker,omitempty"`
-	TicketRef        string              `json:"ticket_ref,omitempty"` // ticket_link only; accepted input remains immutable
-	FilingID         string              `json:"filing_id,omitempty"`  // durable local filing incarnation, prepare/link only
 }
 
 func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time.Time) (FleetTask, error) {
 	// A start is its owner's (claude-fleet#4896): take that person's authority
 	// lock before the task row lock, in the same order as acceptance/cutover;
 	// lifecycle reports remain open. The row's owner is fenced below.
-	starts := m.Kind == "claim" || m.Kind == "retry" || m.Kind == "transfer" || m.Kind == "ticket_prepare" || m.Kind == "ticket_link"
+	starts := m.Kind == "claim" || m.Kind == "retry" || m.Kind == "transfer"
 	// Refuse fields that this command cannot apply, rather than silently
 	// accepting a requested provider/owner change on a transition.
 	if m.CancelRequest != "" && m.Kind != "cancel_ack" {
@@ -274,30 +253,7 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 	if (m.Kind == "blocker") != (m.Blocker != nil) {
 		return FleetTask{}, ErrTaskInvalid
 	}
-	if m.TicketRef != "" && m.Kind != "ticket_link" {
-		return FleetTask{}, ErrTaskInvalid
-	}
-	if m.FilingID != "" && m.Kind != "ticket_prepare" && m.Kind != "ticket_link" {
-		return FleetTask{}, ErrTaskInvalid
-	}
 	switch m.Kind {
-	case "ticket_prepare", "ticket_link":
-		if !taskFilingIDRE.MatchString(m.FilingID) {
-			return FleetTask{}, ErrTaskInvalid
-		}
-		if m.ExpectedWorker != "" || m.WorkerID != "" || m.State != "" || m.ActualAgent != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" || m.Observation != "" || m.SessionKey != "" || m.ExecutionStopped || m.Evidence != "" {
-			return FleetTask{}, ErrTaskInvalid
-		}
-		key := fmt.Sprintf("ticket-file:g%d", m.Generation)
-		if m.Kind == "ticket_link" {
-			key = fmt.Sprintf("ticket-link:g%d", m.Generation)
-			if m.TicketRef == "" {
-				return FleetTask{}, ErrTaskInvalid
-			}
-		}
-		if m.Key != key {
-			return FleetTask{}, ErrTaskInvalid
-		}
 	case "blocker":
 		if m.WorkerID != "" || m.State != "" || m.ActualAgent != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" || m.Observation != "" || m.SessionKey != "" || m.ExecutionStopped || m.Evidence != "" {
 			return FleetTask{}, ErrTaskInvalid
@@ -379,10 +335,6 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 	}
 	eventID := fmt.Sprintf("task-event:%x", sha256.Sum256([]byte(owner+"\x00"+idem)))
 	switch m.Kind {
-	case "ticket_prepare", "ticket_link":
-		if err = s.linkTaskTicketTx(tx, &t, m); err != nil {
-			return FleetTask{}, err
-		}
 	case "blocker":
 		if err = s.applyTaskBlockerTx(tx, t, m.EndpointID, eventID, *m.Blocker, now); err != nil {
 			return FleetTask{}, err

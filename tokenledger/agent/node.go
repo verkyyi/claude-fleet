@@ -360,8 +360,6 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 				a.handlePerson(ctx, m)
 			case control.TypeRelease:
 				a.handleRelease(ctx, m)
-			case control.TypeTicket:
-				// the ticket bridge left with the issue layer (claude-fleet#4898): ignored
 			case control.TypeRepoAuthority:
 				if relayOK && rp.authoritySync {
 					a.handleRepoAuthority(ctx, rp.script, m)

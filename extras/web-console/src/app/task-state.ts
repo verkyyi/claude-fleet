@@ -44,23 +44,20 @@ export function agentMismatch(t: Task): boolean {
     || (t.requested_agent && t.resolved_agent && t.requested_agent !== t.resolved_agent));
 }
 
-type RegisteredTicket = { backend: string; repo: string; number: number };
-export function taskTicket(t: Task, registered: readonly RegisteredTicket[] = []): { backend: string; repo: string; n: number } | null {
+// A task's ticket is a GitHub issue (claude-fleet#4898, T477: the hub's own
+// tickets are gone): its accepted ticket_ref `gh:<repo>#<N>`, else the issue the
+// record carries.
+export function taskTicket(t: Task): { repo: string; n: number } | null {
   if (t.ticket_ref) {
-    const m = /^(hub|gh):([^\s:#]+)#([1-9][0-9]*)$/.exec(t.ticket_ref);
-    return m ? { backend: m[1], repo: m[2], n: Number(m[3]) } : null;
+    const m = /^gh:([^\s:#]+)#([1-9][0-9]*)$/.exec(t.ticket_ref);
+    return m ? { repo: m[1], n: Number(m[2]) } : null;
   }
   const m = /^([^\s:#]+)#([1-9][0-9]*)$/.exec(t.issue || "");
-  if (!m) return null;
-  const matches = registered.filter((r) => r.repo.toLowerCase() === m[1].toLowerCase() && r.number === Number(m[2]));
-  // Legacy placement never recorded the backend. An absent/failed ticket
-  // read or a colliding reference must not turn a hub ticket into GitHub.
-  const backend = matches.length === 1 && ["hub", "gh"].includes(matches[0].backend) ? matches[0].backend : "";
-  return { backend, repo: m[1], n: Number(m[2]) };
+  return m ? { repo: m[1], n: Number(m[2]) } : null;
 }
 
 // PR numbers in the committed report are scoped by the task's repository.
-// Never send a hub ticket (or an arbitrary URL in a response) to GitHub.
+// Never send an arbitrary URL in a response to GitHub.
 export function taskPR(t: Task): { repo: string; n: string; url: string } | null {
   const raw = t.pr || "";
   const m = /^(?:https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/|([\w.-]+\/[\w.-]+)#)?([1-9][0-9]*)$/.exec(raw);

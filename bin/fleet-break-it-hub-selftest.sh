@@ -2071,8 +2071,8 @@ drill_account_gh_only_check() {
   done
   grep -q '^func isPerson(principal string) bool' "$tl/api/person.go" 2>/dev/null \
     || { WHY="there is no one isPerson any more"; return 1; }
-  # "gh:" outside tests, ticket ids (共同约定 1) and comments
-  out=$(grep -n '"gh:"' "$tl"/api/*.go | grep -v '_test.go:' | grep -v 'fleet_tickets.go:' | grep -v '^[^:]*:[0-9]*:[[:space:]]*//')
+  # "gh:" outside tests and comments
+  out=$(grep -n '"gh:"' "$tl"/api/*.go | grep -v '_test.go:' | grep -v '^[^:]*:[0-9]*:[[:space:]]*//')
   [ -z "$out" ] || { WHY="a principal is judged by its gh: spelling again: $(printf '%s' "$out" | head -2 | sed "s|$tl/||" | tr '\n' ' ')"; return 1; }
   WHAT='没有 GitHub 的人：邀请（绑邮箱）→ 登录 → 绑机器 → 发证书 → 自己的 /v1/me；老 GitHub 人迁移前后快照一致；「是不是一个人」只问 isPerson（测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then

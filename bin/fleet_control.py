@@ -893,10 +893,10 @@ class Control:
             params = req["params"]
             if req["action"] in WORKER_ACTIONS:
                 result = self.execute_worker(fleet, req["action"], params, req.get("actor", ""))
-            elif req["action"] in ("gh_comment", "task_issue"):
+            elif req["action"] == "gh_comment":
                 # The fleet writes no GitHub issue or comment any more (issue
                 # #4898): the hub task record is the only ticket. An older hub
-                # may still send these — refused, nothing done.
+                # may still send it — refused, nothing done.
                 raise Unattempted("INVALID_ARGUMENT", "%s was removed (claude-fleet#4898): the hub task record is "
                                   "the ticket; reach a worker with worker_message" % req["action"])
             elif req["action"] == "worker_start":

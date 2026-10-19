@@ -25,7 +25,6 @@ type OwnerAuthority struct {
 	Revision int64             `json:"revision"`
 	FrozenAt time.Time         `json:"frozen_at,omitempty"`
 	Owners   []RepoLegacyOwner `json:"legacy_owners,omitempty"` // the executions to drain
-	Mappings []RepoTicketMap   `json:"mappings,omitempty"`
 }
 
 type RepoLegacyOwner struct {
@@ -50,13 +49,6 @@ func (n *RepoNativeIdentity) Valid() bool {
 }
 
 func sameRepoNative(a, b *RepoNativeIdentity) bool { return a.Valid() && b.Valid() && *a == *b }
-
-type RepoTicketMap struct {
-	From       string `json:"from"`
-	To         string `json:"to"`
-	SourceURL  string `json:"source_url"`
-	PayloadSHA string `json:"payload_sha"`
-}
 
 type OwnerAuthorityChange struct {
 	Action     string            `json:"action"` // freeze | apply | rollback | stop_ack
@@ -507,93 +499,4 @@ func repoOfStart(o FleetOperation) (string, bool) {
 		return "", false
 	}
 	return NormRepo(r.Params.Repo), r.Params.Dispatch != nil && strings.HasPrefix(r.Params.Dispatch.Task, "T")
-}
-
-// AdoptRepoTicket copies only an explicitly selected backlog item. It never
-// takes over a running executor, imports its number, or writes to GitHub.
-// The mapping and independently allocated hub ticket commit together.
-// The mapping is kept on owner's authority, and owner's cutover must be
-// drained (endpoints: the owner's own, as for OwnerAuthorityBlockers).
-func (s *Store) AdoptRepoTicket(repo, owner string, endpoints []string, source, title, body string, revision int64, now time.Time) (RepoTicketMap, error) {
-	repo = NormRepo(repo)
-	r, n, ok := splitGHID(source)
-	if !ok || r != repo || title == "" {
-		return RepoTicketMap{}, ErrTaskInvalid
-	}
-	source = TicketRef(TicketGitHub, repo, n)
-	payload, _ := json.Marshal([]string{source, title, body})
-	sum := sha256.Sum256(payload)
-	digest := fmt.Sprintf("%x", sum[:])
-	tx, err := s.write.Begin()
-	if err != nil {
-		return RepoTicketMap{}, err
-	}
-	defer tx.Rollback()
-	if err = s.lockOwnerAuthority(tx, owner); err != nil {
-		return RepoTicketMap{}, err
-	}
-	a, err := readOwnerAuthority(tx, owner)
-	if err != nil {
-		return RepoTicketMap{}, err
-	}
-	for _, m := range a.Mappings {
-		if m.From == source {
-			if m.PayloadSHA != digest {
-				return RepoTicketMap{}, ErrTaskConflict
-			}
-			return m, tx.Commit()
-		}
-	}
-	if a.Revision != revision || (a.Mode != "hub" && a.Mode != "frozen") {
-		return RepoTicketMap{}, ErrRepoAuthority
-	}
-	blockers, _, err := ownerAuthorityBlockers(tx, owner, endpoints, false)
-	if err != nil {
-		return RepoTicketMap{}, err
-	}
-	if len(blockers) > 0 {
-		return RepoTicketMap{}, ErrRepoAuthority
-	}
-	for _, o := range a.Owners {
-		if o.Stopped == "" {
-			return RepoTicketMap{}, ErrRepoAuthority
-		}
-	}
-	if len(a.Mappings) >= 1000 {
-		return RepoTicketMap{}, errors.New("selective adoption limit reached")
-	}
-	var previousOwner string
-	err = tx.QueryRow(`SELECT owner FROM fleet_tickets WHERE repo = ? AND num = ? AND backend = 'gh'`, repo, n).Scan(&previousOwner)
-	if err == nil && previousOwner != owner {
-		return RepoTicketMap{}, ErrTaskFence
-	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return RepoTicketMap{}, err
-	}
-	// The original reference registry is keyed by full ID, so gh:r#7 and
-	// hub:r#7 retain independent identities even if the local row is occupied.
-	err = tx.QueryRow(`SELECT owner FROM fleet_ticket_index WHERE id = ?`, source).Scan(&previousOwner)
-	if err == nil && previousOwner != owner {
-		return RepoTicketMap{}, ErrTaskFence
-	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return RepoTicketMap{}, err
-	}
-	url := "https://github.com/" + repo + "/issues/" + fmt.Sprint(n)
-	ts := now.UTC().Format(rfc)
-	_, err = tx.Exec(`INSERT INTO fleet_ticket_index (id,owner,title,state,backend,url,origin,endpoint_id,created_at,updated_at) VALUES (?, ?, ?, 'open', 'gh', ?, '', '', ?, ?) ON CONFLICT(id) DO NOTHING`, source, owner, title, url, ts, ts)
-	if err != nil {
-		return RepoTicketMap{}, err
-	}
-	allocated, err := s.createFleetTicketTx(tx, FleetTicket{Repo: repo, Owner: owner, Title: title, Body: body}, 0, now)
-	if err != nil {
-		return RepoTicketMap{}, err
-	}
-	m := RepoTicketMap{From: source, To: TicketRef(TicketHub, repo, allocated), SourceURL: url, PayloadSHA: digest}
-	a.Mappings = append(a.Mappings, m)
-	a.Revision++
-	if err = saveOwnerAuthority(tx, a, now); err != nil {
-		return RepoTicketMap{}, err
-	}
-	return m, tx.Commit()
 }

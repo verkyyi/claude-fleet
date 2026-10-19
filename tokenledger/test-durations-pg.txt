@@ -402,7 +402,6 @@
 0.41	hub/api.TestFleetSummaryByCertificate
 0.34	hub/api.TestFleetSummaryCarriesHostedRepos
 0.41	hub/api.TestFleetSummaryCarriesMachineFleetVersion
-0.24	hub/api.TestFleetTicketRegister
 0.65	hub/api.TestFleetUnknownOpFailsAfterGiveUp
 0.30	hub/api.TestFleetUnmappedSignInLeavesNoRow
 0.52	hub/api.TestFleetUsersAndAccountsListEveryLogin
@@ -719,7 +718,6 @@
 0.36	hub/api.TestNodeTaskBlockerContract
 0.27	hub/api.TestNodeTaskRecordRoad
 0.31	hub/api.TestNodeTaskSettleLegacy
-0.66	hub/api.TestNodeTaskTicketBoundary
 0.26	hub/api.TestNodesCarryMachineInstalls
 0.18	hub/api.TestNotListedEveryWayLandsOnApply
 0.50	hub/api.TestNotListedTrialInviteAndForm
@@ -1060,7 +1058,6 @@
 0.00	hub/api.TestTargetKey
 0.37	hub/api.TestTaskCollaborationAPIAuthority
 0.46	hub/api.TestTaskDispatchCLI
-0.38	hub/api.TestTaskIssueOnDemand
 0.25	hub/api.TestTaskLastKnownInventoryEvidence
 0.28	hub/api.TestTaskNoRepoIsARecordOnly
 0.39	hub/api.TestTaskOffAddsNothing
@@ -1075,12 +1072,6 @@
 0.34	hub/api.TestTerminalBrowserLease
 0.76	hub/api.TestTerminalConsoleRoutes
 0.18	hub/api.TestThemeServed
-0.23	hub/api.TestTicketListCommentCount
-1.85	hub/api.TestTicketPushOwnerOnly
-0.95	hub/api.TestTicketRefBackendChecked
-0.23	hub/api.TestTicketRefOfAnotherOwnerIsForbidden
-0.32	hub/api.TestTicketRoad
-1.44	hub/api.TestTicketsOffAddsNothing
 0.00	hub/api.TestTimeRange_RejectsInvertedRange
 0.00	hub/api.TestTimeRange_RelativeAndAbsolute
 0.00	hub/api.TestTokens_HashIsNotThePlaintext
@@ -1286,7 +1277,6 @@
 0.24	hub/store.TestRebuildRollupKeepsIssueNumber
 0.34	hub/store.TestRebuildRollupKeepsTheDeclaration
 0.15	hub/store.TestRebuildRollupRefusesToDestroyPrunedHistory
-0.42	hub/store.TestRepoAuthorityCollisionAndSelectiveMapping
 1.25	hub/store.TestRepoAuthorityExpiredOwnerAndNativeStop
 0.18	hub/store.TestRepoAuthorityFreezeSerializesClaim
 0.29	hub/store.TestRepoAuthorityLandingAfterWorkCompleted
@@ -1369,10 +1359,6 @@
 0.22	hub/store.TestTaskChildReportsFenced
 1.28	hub/store.TestTaskCompletionRetainsExecutionFence
 0.21	hub/store.TestTaskParentGenerationAndRetainedSession
-0.20	hub/store.TestTaskTicketLinkContract
-1.44	hub/store.TestTaskTicketScopeAndConcurrentWriters
-0.90	hub/store.TestTicketIndexCarriedOver
-0.66	hub/store.TestTicketNumbersConcurrent
 0.15	hub/store.TestTouchDeployProbeIsOneRow
 0.14	hub/store.TestTouchEndpoint_BatchWithoutFleetVersionKeepsTheLastReading
 0.14	hub/store.TestTouchEndpoint_CannotSetOrClearTeam

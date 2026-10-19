@@ -37,10 +37,7 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
             "worker_pin": "worker:message",
             # worker_transfer (issue #4184) closes the session and continues its
             # task in the other agent, in the same pane: a switch's authority.
-            "worker_transfer": "worker:stop",
-            # task_issue (issue #3325): a hub task record's 「建 GitHub 单」 —
-            # filing an issue is a GitHub write of a comment's weight.
-            "task_issue": "gh:comment"}
+            "worker_transfer": "worker:stop"}
 # The tools that name a WORKER (a worker_id), not a fleet. worker_answer and
 # worker_reap (issue #1487, EPIC #1479 C8) are what a sidebar on another machine
 # runs on a row here: answer the pane's open prompt (fleet-answer.sh /
@@ -526,9 +523,8 @@ def validate_write(action, params):
                             "account_class", "reap", "attachments", "test", "task", "dispatch", "launch", "ticket_ref"))
         if "ticket_ref" in params:
             ref = params["ticket_ref"]
-            if not params.get("dispatch") or ref not in (
-                    "gh:%s#%s" % (params.get("repo"), params.get("issue")),
-                    "hub:%s#%s" % (params.get("repo"), params.get("issue"))):
+            # a GitHub issue only: the hub's own tickets are gone (T477)
+            if not params.get("dispatch") or ref != "gh:%s#%s" % (params.get("repo"), params.get("issue")):
                 raise Fault("INVALID_ARGUMENT", "ticket_ref must match the accepted repo/issue")
         if "dispatch" in params:
             from fleet_dispatch import resolve
@@ -672,20 +668,6 @@ def validate_write(action, params):
             check_text(params.get("text"))
         if action == "worker_answer":
             check_answer(params["answer"])
-    elif action == "task_issue":
-        # issue #3325: a hub task record's issue — the node refuses it since
-        # #4898 (the record is the ticket); still validated for an older hub.
-        fields(params, ("repo", "task", "title"), ("body", "worker_id"))
-        check_repo(params)
-        if "/" not in params["repo"]:
-            raise Fault("INVALID_ARGUMENT", "repo must be owner/name")
-        if not (isinstance(params["task"], str) and TASK_REF_RE.fullmatch(params["task"])):
-            raise Fault("INVALID_ARGUMENT", "task is a task record's number (T<n>)")
-        check_issue_title(params["title"])
-        if params.get("body", "") != "":
-            check_text(params["body"], "body")
-        if "worker_id" in params:
-            parse_worker_id(params["worker_id"])
     elif action == "config_set":
         fields(params, ("key", "value", "expected_revision"))
         key, value = params["key"], params["value"]

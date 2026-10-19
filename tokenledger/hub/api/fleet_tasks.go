@@ -1,10 +1,8 @@
 package api
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"log"
 	"net/http"
 	"regexp"
@@ -20,26 +18,20 @@ import (
 // The task record (claude-fleet#3325, EPIC #3178): what a person asked for, as
 // the hub keeps it — T<n>, written before the session is placed
 // (fleet_client_place.go, a place with `task`), filled from the start's answer,
-// read by the 任务 page (/tasks) and, through 「建 GitHub 单」, given an issue
-// on demand. A task that chose a repo is a `new` start, so its issue comes
-// with it; a task with no repo has none until a person asks for one.
+// read by the 任务 page (/tasks). A task that chose a repo is a `new` start, so
+// its issue comes with it; a task with no repo has none — the record is its
+// ticket (claude-fleet#4898: 「建 GitHub 单」 is gone).
 //
 //	GET  /v1/fleet/tasks                 the viewer's records, newest first, each
 //	                                     with its session's live word (`live`)
 //	                                     off the inventory; ?all=1 an admin's view
 //	                                     of everyone's
-//	POST /v1/fleet/tasks/<T>/issue       {repo?} file its GitHub issue now and
-//	                                     hang it on the record
-//
-// The client reaches the second through its signed place road
-// (`action: task_issue`), the same lease that opened the session.
+//	GET  /v1/fleet/tasks/<T>             one of them
 const (
 	FleetTasksPath = "/v1/fleet/tasks"
 	TasksPagePath  = "/tasks"
 	// taskTitleMax bounds a record's title: the words' first line, clipped.
 	taskTitleMax = 200
-	// taskIssueWait is how long a 「建 GitHub 单」 waits on the machine.
-	taskIssueWait = 60 * time.Second
 )
 
 var taskIssueKeyRE = regexp.MustCompile(`(?:^|:)issue-([1-9][0-9]{0,9})$`)
@@ -243,31 +235,7 @@ func (s *Server) handleFleetTasks(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, views[0])
 			return
 		}
-		if what != "issue" || r.Method != http.MethodPost {
-			httpError(w, http.StatusNotFound, "POST "+FleetTasksPath+"/<T>/issue")
-			return
-		}
-		var req struct {
-			Repo string `json:"repo"`
-		}
-		if r.ContentLength != 0 {
-			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
-				httpError(w, http.StatusBadRequest, "the body is {repo?}")
-				return
-			}
-		}
-		t, err := s.ownTask(p, ref)
-		if err != nil {
-			httpError(w, http.StatusNotFound, "no such task of yours")
-			return
-		}
-		rec, err := s.taskFileIssue(r.Context(), p, t, req.Repo, time.Now())
-		if err != nil {
-			e := errorObject(err)
-			writeJSON(w, faultStatus(e["code"]), map[string]any{"error": e})
-			return
-		}
-		writeJSON(w, http.StatusOK, rec)
+		httpError(w, http.StatusNotFound, "GET "+FleetTasksPath+"/<T>")
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -326,66 +294,6 @@ func (s *Server) ownTask(p fleetPrincipal, ref string) (store.FleetTask, error) 
 	return t, nil
 }
 
-// taskFileIssue is 「建 GitHub 单」: the record's issue, filed now in repo (the
-// task's own when none is named) by a machine of the person's that hosts it —
-// the task's session's own fleet first, so it can bind it there — and hung on
-// the record. A record that already has one answers it unchanged.
-func (s *Server) taskFileIssue(ctx context.Context, p fleetPrincipal, t store.FleetTask, repo string, now time.Time) (store.FleetTask, error) {
-	if t.AuthorityVersion != 0 {
-		return store.FleetTask{}, fault("CONFLICT", "authoritative tasks require a fenced ticket link")
-	}
-	if t.Issue != "" {
-		return t, nil
-	}
-	if repo == "" {
-		repo = t.Repo
-	}
-	repo = strings.TrimSpace(repo)
-	if !leaseRepoRE.MatchString(repo) {
-		return t, fault("INVALID_ARGUMENT", "name the repo to file it in (owner/name)")
-	}
-	body := t.Title + "\n\n" + "hub 任务 " + t.Ref + " 补建的单"
-	if t.Machine != "" {
-		body += "（会话在 " + t.Machine + "）"
-	}
-	body += "。"
-	title, err := checkIssueTitle(t.Title)
-	if err != nil {
-		return t, err
-	}
-	args := map[string]any{"repo": repo, "task": t.Ref, "title": title, "body": body,
-		"idempotency_key": "task-issue:" + t.Ref + ":" + strconv.FormatInt(now.UnixNano(), 36)}
-	if fid, _, err := fleetid.ParseWorkerID(t.WorkerID); err == nil {
-		if f, err := s.Store.Fleet(fid); err == nil && f.Present && fleetHosts(f, repo) && s.canTask(ctx, f.EndpointID) {
-			args["fleet_id"], args["worker_id"] = fid, t.WorkerID
-		}
-	}
-	op, err := s.submitWrite(ctx, p, "task_issue", args, nil)
-	if err != nil {
-		return t, err
-	}
-	op, _ = s.awaitOperation(ctx, op, time.Now().Add(taskIssueWait))
-	var res struct {
-		IssueURL string `json:"issue_url"`
-		Error    struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if raw, ok := op["result"].(json.RawMessage); ok {
-		_ = json.Unmarshal(raw, &res)
-	}
-	m := issueURLRE.FindStringSubmatch(strings.TrimSpace(res.IssueURL))
-	if asString(op["status"]) != "succeeded" || m == nil {
-		why := res.Error.Message
-		if why == "" {
-			why = "the machine did not say the issue was filed (operation " + asString(op["operation_id"]) + ", " + asString(op["status"]) + ")"
-		}
-		return t, fault("EXECUTION_FAILED", why)
-	}
-	return s.Store.UpdateFleetTask(t.ID, store.FleetTaskUpdate{Issue: m[1] + "#" + m[2]}, time.Now())
-}
-
 // fleetHosts reports whether f hosts repo.
 func fleetHosts(f store.FleetRow, repo string) bool {
 	n := store.NormRepo(repo)
@@ -398,28 +306,4 @@ func fleetHosts(f store.FleetRow, repo string) bool {
 		}
 	}
 	return false
-}
-
-// clientTaskIssue is the client's 「建 GitHub 单」 (the session row's Tab menu):
-// the signed place road's `action: task_issue`, answered as a place line —
-// `FILED <owner/name#N>` (exit 0), or REFUSED.
-func (s *Server) clientTaskIssue(w http.ResponseWriter, r *http.Request, p fleetPrincipal, req clientPlaceRequest) {
-	t, err := s.ownTask(p, req.TaskRef)
-	if err != nil {
-		writeJSON(w, http.StatusOK, ClientPlaceResponse{Line: "REFUSED NOT_FOUND\tno task " + req.TaskRef + " of yours",
-			Exit: 4, State: "refused"})
-		return
-	}
-	rec, err := s.taskFileIssue(r.Context(), p, t, req.Repo, time.Now())
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			err = fault("NOT_FOUND", "no such task")
-		}
-		e := errorObject(err)
-		writeJSON(w, http.StatusOK, ClientPlaceResponse{Line: "REFUSED " + e["code"] + "\t" + oneLine(e["message"]),
-			Exit: 4, State: "refused", Task: t.Ref})
-		return
-	}
-	writeJSON(w, http.StatusOK, ClientPlaceResponse{Line: "FILED " + rec.Issue + "\t" + rec.Ref, Exit: 0, State: "done",
-		Task: rec.Ref, Filed: rec.Issue, Machine: rec.Machine})
 }

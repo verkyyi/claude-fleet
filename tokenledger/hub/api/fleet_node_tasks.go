@@ -51,9 +51,6 @@ import (
 //	execution_stopped:true. Retry requires release or fresh stopped evidence.
 //
 // Same key/input returns the original response; changed input returns 409.
-// ticket_prepare (key ticket-file:g<N>) pins the filing node before create;
-// ticket_link (key ticket-link:g<N>, ticket_ref) attaches the resulting ticket
-// only while accepted/unclaimed. These do not rewrite accepted request input.
 // Expected worker and generation fence each write. The node's authenticated
 // endpoint must own that worker's fleet. Actual process evidence is supplied
 // by the receipt boundary, not inferred from inventory or a successful RPC.

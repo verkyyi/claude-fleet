@@ -339,7 +339,7 @@ exit 0
     def test_accepted_identity_keeps_generation_owner_and_reference(self):
         c = dict(task="T9", owner="alice", generation=1, worker_id="fleet/session")
         task = dict(repo=CANONICAL, owner="alice", generation=1, execution_owner="fleet/session",
-                    ticket_ref="hub:ExampleOrg/Space#7")
+                    ticket_ref="gh:ExampleOrg/Space#7")
         with patch.dict(os.environ, {"FLEET_LAUNCH": "{}"}), \
                 patch.object(authority.hubrest, "api", return_value=dict(mode="hub")), \
                 patch.object(authority.launch, "validate_context", return_value=c), \

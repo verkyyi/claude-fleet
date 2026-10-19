@@ -115,13 +115,6 @@ const (
 	// still only moves forward. The node answers nothing; a push it misses is
 	// caught by its own clock (5 / 30 minutes). No stable → never sent.
 	TypeRelease = "release"
-	// TypeTicket is the hub's word that one of a person's hub tickets moved
-	// (claude-fleet#2677, EPIC #3570 C1): a comment, a state change, a claim
-	// or an edit. Sent the moment it happens to every connected node that
-	// listed CapTicket and whose login belongs to the ticket's owner — never
-	// to anyone else's. The payload names the ticket and the change, never its
-	// words: the node reads them by number. Nothing moves → never sent.
-	TypeTicket = "ticket"
 	// TypeRepoAuthority is the hub's word that a repo's task authority moved
 	// (claude-fleet#4730): a freeze, apply or rollback, sent to every
 	// connected host of that repo whose hello listed CapRepoAuthority, and on
@@ -166,10 +159,6 @@ const CapTeam = "team"
 // and keeps reading the personal layer on install-sync's tick.
 const CapPerson = "person"
 
-// CapTicket is the hello capability a node lists when it follows TypeTicket
-// (claude-fleet#2677). An older agent never says it and is never sent one.
-const CapTicket = "ticket"
-
 // CapCreds is the hello capability a node lists when it leases again on
 // TypeCreds (claude-fleet#3744). An older agent never says it, is never sent
 // one, and keeps leasing on its own clock.
@@ -204,12 +193,10 @@ const CapAttach = "attach"
 const CapTestIdentity = "test_identity"
 
 // CapTask is the hello capability a node lists when its claude-fleet takes
-// `task` on a worker_start and runs `task_issue` (claude-fleet#3325): the start
-// belongs to the hub's task record T<n> — the window is stamped @task, and a
-// no-repo one files no desk ticket (the record is its ticket) — and a record's
-// 「建 GitHub 单」 files the issue on the machine that holds its session. The
-// hub names `task` only to a node that said it — an older one would refuse the
-// unknown field, and its start opens as before.
+// `task` on a worker_start (claude-fleet#3325): the start belongs to the hub's
+// task record T<n> — the window is stamped @task, and the record is its ticket.
+// The hub names `task` only to a node that said it — an older one would refuse
+// the unknown field, and its start opens as before.
 const CapTask = "task"
 
 // CapLaunch requires process/native-session verification before initial input.
@@ -506,14 +493,6 @@ type Team struct {
 type Person struct {
 	Principal string `json:"principal"`
 	Version   int    `json:"version"`
-}
-
-// Ticket is the payload of TypeTicket: which ticket, and what happened to it.
-type Ticket struct {
-	Repo      string `json:"repo"`
-	Number    int64  `json:"number"`
-	Kind      string `json:"kind"` // comment | state | claim | edit
-	CommentID int64  `json:"comment_id,omitempty"`
 }
 
 // RepoAuthority is the payload of TypeRepoAuthority.

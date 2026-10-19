@@ -69,6 +69,13 @@ func resolveDispatch(coding, legacy string, raw any, key string) (*dispatchChoic
 	return d, nil
 }
 
+// ticketRefMatches says ref is the GitHub issue (repo, number): `gh:<repo>#<N>`,
+// the one backend a task's ticket_ref names since the hub's own tickets left
+// (claude-fleet#4898, T477).
+func ticketRefMatches(ref, repo, number string) bool {
+	return ref == store.TicketGitHub+":"+repo+"#"+number
+}
+
 // acceptDispatch attaches the C1 identity before journalling/sending. An
 // existing legacy T record is never adopted. Replays compare the full original
 // input, while a task supplied by the authority must still name its generation.
@@ -76,10 +83,8 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 	if err := s.ownerDispatchGate(p.taskOwner(), w.params["dispatch"] != nil); err != nil {
 		return err
 	}
-	if ref := asString(w.params["ticket_ref"]); ref != "" {
-		if err := s.checkTicketBackend(ref, w.repo, fmt.Sprint(w.params["issue"])); err != nil {
-			return err
-		}
+	if ref := asString(w.params["ticket_ref"]); ref != "" && !ticketRefMatches(ref, w.repo, fmt.Sprint(w.params["issue"])) {
+		return fault("INVALID_ARGUMENT", "ticket_ref must explicitly match the accepted repo and issue")
 	}
 	if _, draft := w.params["draft"]; draft {
 		return nil

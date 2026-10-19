@@ -33,19 +33,11 @@ assert.equal(taskPR({ pr: 'https://github.com/team/app/pull/51' }).n, '51');
 for (const pr of ['51', 'javascript:alert(1)', 'https://other.test/team/app/pull/51', 'hub:team/app#51']) {
   assert.equal(taskPR({ pr }), null);
 }
-assert.deepEqual(taskTicket({ ticket_ref: 'hub:forge/repo#42', issue: 'wrong/repo#42' }), { backend: 'hub', repo: 'forge/repo', n: 42 });
-const hub = { backend: 'hub', repo: 'team/app', number: 42 }, gh = { ...hub, backend: 'gh' };
-const legacy = { issue: 'team/app#42' };
-const unknownRef = { backend: '', repo: 'team/app', n: 42 };
-assert.deepEqual(taskTicket(legacy), unknownRef); // failed ticket read
-assert.deepEqual(taskTicket(legacy, []), unknownRef); // empty ticket read
-assert.deepEqual(taskTicket(legacy, [{ ...hub, repo: 'other/repo' }]), unknownRef); // zero match
-assert.deepEqual(taskTicket(legacy, [hub, gh]), unknownRef); // same repo/number, ambiguous home
-assert.deepEqual(taskTicket(legacy, [hub]), { backend: 'hub', repo: 'team/app', n: 42 });
-assert.deepEqual(taskTicket(legacy, [gh]), { backend: 'gh', repo: 'team/app', n: 42 });
-assert.deepEqual(taskTicket({ ...legacy, ticket_ref: 'gh:team/app#42' }, [hub]), { backend: 'gh', repo: 'team/app', n: 42 });
-assert.deepEqual(taskTicket({ ...legacy, ticket_ref: 'hub:team/app#42' }, [hub, gh]), { backend: 'hub', repo: 'team/app', n: 42 });
-assert.equal(taskTicket({ ticket_ref: 'unknown:team/app#42', issue: 'wrong/repo#42' }), null);
+// a task's ticket is a GitHub issue: its ticket_ref first, else the record's issue (T477)
+assert.deepEqual(taskTicket({ ticket_ref: 'gh:team/app#42', issue: 'wrong/repo#42' }), { repo: 'team/app', n: 42 });
+assert.deepEqual(taskTicket({ issue: 'team/app#42' }), { repo: 'team/app', n: 42 });
+assert.equal(taskTicket({ ticket_ref: 'hub:team/app#42', issue: 'wrong/repo#42' }), null);
+assert.equal(taskTicket({}), null);
 
 const initial = { data: null, failed: false };
 const read = taskRead(initial, { tasks: [running], observed_at: '2026-10-16T06:20:00Z' }, 'later');

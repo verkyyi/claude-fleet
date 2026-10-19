@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"time"
 
@@ -23,15 +22,6 @@ const EntryPagePath = "/fleet/keys"
 
 // EntryConnPath is where 我的连接 was (claude-fleet#3199).
 const EntryConnPath = "/fleet/connection"
-
-// TicketsPagePath is where 我的单子 was (claude-fleet#3596): the list, and a
-// ticket at TicketsPagePath/<owner>/<name>/<N>. Both are 任务's now
-// (claude-fleet#3928); the addresses only move on.
-const TicketsPagePath = "/fleet/tickets"
-
-// ticketPageReturnRe is every ticket address the sign-in may send a browser
-// back to (entryReturnTo): the list or one ticket, nothing else.
-var ticketPageReturnRe = regexp.MustCompile(`^/fleet/tickets(/[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}/[1-9][0-9]{0,9})?$`)
 
 // entryReturnCookie remembers, across the GitHub sign-in, where the browser
 // was on its way to (loginReturn reads it; the trial and an admin request's page set it).
@@ -277,7 +267,7 @@ func entryReturnTo(w http.ResponseWriter, r *http.Request) string {
 	case EntryPagePath, EntryConnPath, ChatPagePath, TryPagePath:
 		return c.Value
 	}
-	if ticketPageReturnRe.MatchString(c.Value) || adminRequestPageRe.MatchString(c.Value) {
+	if adminRequestPageRe.MatchString(c.Value) {
 		return c.Value
 	}
 	return ""

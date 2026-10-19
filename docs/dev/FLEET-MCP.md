@@ -233,35 +233,15 @@ it does not claim a lifecycle transition or populate execution receipts.
 Actual process verification and lifecycle receipts belong to
 C3; source merge is not evidence of deployment or live acceptance.
 
-### Filing after acceptance (#4506)
+### A task's ticket (#4506, T477)
 
 `task` / `fleet-task-record.sh dispatch` keep `request_payload.rule` (empty since
 the rule table left, issue #4340) in the immutable payload; v1 still rejects legacy top-level `rule`
-and `issue` setters. A repo task's unified filer uses two v1 mutations:
-`ticket_prepare` (`ticket-file:g<N>`) pins the authenticated filing endpoint and
-durable local `filing_id`; `ticket_link` (`ticket-link:g<N>`) attaches a full
-`gh:repo#N` or `hub:repo#N` only to that accepted, unclaimed generation. Owner,
-repo, endpoint, filing incarnation and registered ticket ownership are checked.
-The original accepted response, payload, provider and parent remain unchanged.
-
-The node's existing operation journal records filing intent before create.
-Retry the same dispatch with the same input: it reuses the accepted T and ticket.
-A read-only GitHub quota preflight can refuse before any create is sent; natural
-quota recovery then permits the first send. After sending, **every error is
-uncertain**, including rate-limit text, partial success and an empty response.
-This create retains the write queue and gap but disables its automatic retry.
-Only marker reconciliation can recover it; a miss never authorizes another
-create. Lookup includes closed tickets, bounded to 500 rows (five GitHub pages);
-truncation/unavailability and ambiguous markers are explicit failures. Lost local
-journal state cannot authorize a new filing incarnation on the prepared task.
-
-Link failure retains the task and known ticket URL and refuses spawn. Once
-linked, placement uses the authoritative task claim for the issue lease. The
-validated accepted envelope supplies the spawner's task binding; launch admission
-must succeed before the task/launch stamp and native start. An unreadable task is
-never treated as legacy; positively read v0 records retain the legacy filer path.
-Hub tickets and tasks without tickets do not require GitHub for task control.
-These are source contracts, not a backfill of existing worker metadata.
+and `issue` setters. The hub task record is the ticket: nothing files one after
+acceptance (the filer left with #4898, the hub's `ticket_prepare` / `ticket_link`
+mutations and its own tickets with T477). A task's `ticket_ref`, when its caller
+names one, is a GitHub issue `gh:<repo>#<N>` matching the start's repo and issue
+— it keys the issue lease; `hub:` is refused.
 
 ### Task children and results (#4394)
 
@@ -684,36 +664,31 @@ their own fleet rows (retired and superseded ones listed apart, as before) —
 another person's host is theirs, never "foreign" — and every session on those
 hosts that is not an accepted task's execution is a legacy execution, whatever
 repo it works in. A task carries a `ticket_ref` only when its caller names one:
-dispatch no longer makes one up from a repo's ticket home, and
-`checkTicketBackend` reads the ticket rows alone.
+dispatch makes none up, and it must be `gh:<repo>#<N>` of the start.
 
 The road (a node's token speaks for its login's person, a person's sign-in for
 that person; only a caller who sees every owner — an admin, the operator's
 door — may add `?owner=<owner>`, never a node, and each such read or change is
-audited `task_authority_read|freeze|apply|rollback|stop_ack|adopt` with
+audited `task_authority_read|freeze|apply|rollback|stop_ack` with
 fleet_id `owner:<owner>`):
 
 | Request | Answer |
 |---|---|
 | `GET /v1/fleet/authority?gate=1` | the authority alone — a node's pre-start read |
-| `GET /v1/fleet/authority[?repo=][&rollback=1]` | the dry-run manifest: `authority`, `nodes`, `retired_hosts`, `superseded_hosts`, `legacy_owners`, `blockers`, `starts`, `tasks`, `tickets` (`repo=` narrows the three lists, never the hosts or blockers); writes nothing |
+| `GET /v1/fleet/authority[?repo=][&rollback=1]` | the dry-run manifest: `authority`, `nodes`, `retired_hosts`, `superseded_hosts`, `legacy_owners`, `blockers`, `starts`, `tasks` (`repo=` narrows the two lists, never the hosts or blockers); writes nothing |
 | `POST /v1/fleet/authority` `{action, expected_revision, idempotency_key, worker_id?, evidence?}` | `freeze` · `stop_ack` (its node only; `evidence` is the native stop receipt) · `apply` · `rollback`: CAS on the revision, 409 + `blockers` while any remain; the same key with the same body replays the first answer, with another body 409 |
 | `GET\|POST /v1/fleet/authority/start?repo=` | a node's local start, as before: `reserve` · `begin` · `observe` · `recover-observe` · `stopped` · `cancel` · `unobserved`; `GET reservation=` · `list=1` — fenced by its node's person's mode |
-| `POST /v1/fleet/authority/adopt?repo=` `{source, title, body, expected_revision}` | selective adoption onto a hub ticket; the mapping is kept on the person's authority |
 
 After a freeze / apply / rollback the hub sends `repo_authority` (`{repo, mode,
 revision}` — the person's mode and revision) to each of the person's capable
 hosts, once per repo that host's fleets host, and on such a host's first beat
 when the person's revision is past 0; another person's hosts hear nothing.
 
-The old road, `/v1/fleet/tickets/authority[/start|/adopt]?repo=<repo>`, stays one
-version (`# compat-1v`) and answers the same per-person semantics for its
-caller: the gate read is the person's authority with `repo` echoed, the manifest
-the person's (its lists narrowed to the repo), `legacy_tickets` in a body is
-accepted and ignored, and `action: init` is refused 409 — a new repo selects
-nothing, and `fleet_repo_authority.py --init-new`'s fallback gate read then
-writes the person's own mode. The node half is #4901 (below): the node reads
-and writes only this road.
+An older node's `action: init` is refused 409 — a new repo selects nothing, and
+`fleet_repo_authority.py --init-new`'s fallback gate read then writes the
+person's own mode; `legacy_tickets` in a body is accepted and ignored. The old
+per-repo road under `/v1/fleet/tickets` left with the hub's tickets (T477). The
+node half is #4901 (below): the node reads and writes only this road.
 
 ### A person's authority cutover (#4395, per person since #4896 / #4901)
 

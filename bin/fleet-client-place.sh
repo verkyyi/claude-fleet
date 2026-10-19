@@ -6,18 +6,12 @@
 #                         [--title <t>] [--name <n>] [--agent claude|codex]
 #                         [--reap <policy>] [--body-file <f>] [--attach <file>]…
 #                         [--new] [--task [--via <words>]]
-#   fleet-client-place.sh <repo|-> task-issue:T<n>
 #
 # --task (issue #3325, new or a no-repo scratch): the start is a person's task —
 # the hub writes its record T<n> first, then places it as before; the record's
 # number comes back on stderr (`task: T<n>`) and in FLEET_PLACE_RESULT's `task`.
 # --via names where it was asked (⌘P). A hub older than it, or no hub at all,
 # opens it exactly as without.
-#
-# `task-issue:T<n>` (issue #3325): 「建 GitHub 单」 — the hub has a machine of
-# yours file the record's issue (in <repo>, `-` = the task's own) and hangs it
-# on the record: `FILED <owner/name#N>\tT<n>` (exit 0), else REFUSED (4). It
-# needs the hub: without one, exit 1.
 #
 # --attach (issue #2393, EPIC #2482 C1; new or scratch, repeatable): a file the
 # writing area's text names. Its bytes go with the request (≤ 10 MiB each and
@@ -144,10 +138,8 @@ case "$AGENT" in ''|claude|codex) ;; *) printf 'fleet-client-place: --agent is c
 if [ -n "$REAP" ]; then
   REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$REAP") || exit 2
 fi
-KIND=''; ISSUE=''; KEY=''; HOME_ASK=''; TASKREF=''
+KIND=''; ISSUE=''; KEY=''; HOME_ASK=''
 case "$WHAT" in
-  task-issue:T[1-9]*) KIND=task_issue; TASKREF=${WHAT#task-issue:}
-                      case "${TASKREF#T}" in *[!0-9]*) KIND='' ;; esac ;;
   scratch) KIND=scratch ;;
   home) [ "$REPO" = - ] || { printf 'fleet-client-place: a home session belongs to no repo (-)\n' >&2; exit 2; }
         KIND=scratch; HOME_ASK=1 ;;
@@ -157,7 +149,7 @@ case "$WHAT" in
   [1-9]*) KIND=issue; ISSUE=$WHAT ;;
 esac
 case "$ISSUE" in *[!0-9]*) KIND='' ;; esac
-[ -n "$KIND" ] || { printf 'fleet-client-place: %s is not an issue number, scratch, home, restore:<key>, new or task-issue:T<n>\n' "$WHAT" >&2; exit 2; }
+[ -n "$KIND" ] || { printf 'fleet-client-place: %s is not an issue number, scratch, home, restore:<key> or new\n' "$WHAT" >&2; exit 2; }
 if [ -n "$TASK" ]; then
   { [ "$KIND" = new ] || { [ "$KIND" = scratch ] && [ "$REPO" = - ] && [ -z "$HOME_ASK" ]; }; } \
     || { printf 'fleet-client-place: --task goes with new, or a no-repo scratch\n' >&2; exit 2; }
@@ -167,7 +159,7 @@ fi
 if [ "$KIND" = new ]; then
   [ -n "$TITLE" ] || { printf 'fleet-client-place: new needs --title\n' >&2; exit 2; }
 fi
-[ "$REPO" != - ] || [ "$KIND" = scratch ] || [ "$KIND" = task_issue ] || { printf 'fleet-client-place: only a scratch belongs to no repo (-)\n' >&2; exit 2; }
+[ "$REPO" != - ] || [ "$KIND" = scratch ] || { printf 'fleet-client-place: only a scratch belongs to no repo (-)\n' >&2; exit 2; }
 [ -z "$BODYF" ] || [ "$KIND" = new ] || [ "$KIND" = scratch ] || { printf 'fleet-client-place: --body-file is for new or scratch\n' >&2; exit 2; }
 [ -z "$BODYF" ] || [ -r "$BODYF" ] || { printf 'fleet-client-place: cannot read %s\n' "$BODYF" >&2; exit 2; }
 if [ -n "$DRAFTF" ]; then
@@ -180,11 +172,11 @@ fi
 # ask_hub <retry 0|1> — rc 10 = not applicable here (no hub URL, or no lease / key
 # to sign with); rc 11 (only with retry 1) = 401 not your client.
 ask_hub() {
-python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" "$1" "$HOME_ASK" "$NEW" "$TASK" "$VIA" "$TASKREF" "$DRAFTF" ${ATTACH[@]+"${ATTACH[@]}"} <<'PY'
+python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" "$1" "$HOME_ASK" "$NEW" "$TASK" "$VIA" "$DRAFTF" ${ATTACH[@]+"${ATTACH[@]}"} <<'PY'
 import os, sys
 
-here, repo, kind, issue, key, node, title, name, agent, reap, bodyf, retry, home, new, task, via, taskref, draftf = sys.argv[1:19]
-files = sys.argv[19:]
+here, repo, kind, issue, key, node, title, name, agent, reap, bodyf, retry, home, new, task, via, draftf = sys.argv[1:18]
+files = sys.argv[18:]
 if files:
     import base64, hashlib
 body = ""
@@ -311,12 +303,7 @@ def rnd():
 
 
 req = {"action": "place", "kind": kind, "node": node, "idempotency_key": idem, "wait": rnd()}
-if kind == "task_issue":
-    # issue #3325: 「建 GitHub 单」 on a task record — no start, no placement
-    req = {"action": "task_issue", "task_ref": taskref}
-    if repo != "-":
-        req["repo"] = repo
-elif repo == "-":
+if repo == "-":
     req["no_repo"] = True   # issue #1956: a scratch of no repo
 else:
     req["repo"] = repo
@@ -329,7 +316,7 @@ if home:
 for k, v in (("key", key), ("title", title), ("name", name), ("agent", agent), ("reap", reap), ("body", body), ("draft", draft)):
     if v:
         req[k] = v
-if kind not in ("restore", "task_issue"):
+if kind != "restore":
     sys.path.insert(0, here)
     from fleet_dispatch import resolve
     req["dispatch"] = resolve([agent] if agent else [], request_id=req["idempotency_key"])
@@ -563,11 +550,6 @@ else
 fi
 [ "$ef" = /dev/null ] || rm -f "$ef"
 [ "$rc" = 10 ] || exit "$rc"
-if [ "$KIND" = task_issue ]; then
-  # the record lives on the hub: nothing here can file it onto one
-  printf 'fleet-client-place: 建 GitHub 单 needs the hub (no hub URL or lease here)\n' >&2
-  exit 1
-fi
 
 # --- no hub: this computer's own fleet, if it has one -------------------------------
 # the client's library (issue #4825): fleet_login_fleet / fleet_node_is_self — a

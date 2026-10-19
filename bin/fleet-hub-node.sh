@@ -281,8 +281,8 @@ case "${1:-}" in
   paths)
     # test (issue #2505): this claude-fleet marks the test identity's scratch —
     # the agent lists CapTestIdentity, and only then does the hub send `test`;
-    # task (issue #3325): it takes the hub's task record on a start and runs
-    # task_issue — the agent lists CapTask, and only then does the hub send them
+    # task (issue #3325): it takes the hub's task record on a start — the agent
+    # lists CapTask, and only then does the hub send it
     printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\ntask\t1\nlaunch_v1\t1\nrepo_authority_v1\t1\nrepo_authority_sync\t1\ntask_recovery_v1\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
     exit 0 ;;
   replay) exec python3 "$BIN/fleet_task_recovery.py" replay ;;

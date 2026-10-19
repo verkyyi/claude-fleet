@@ -30,7 +30,6 @@ async function fixture(route) {
   if (path.startsWith('/v1/')) {
     if (path === '/v1/fleet/tasks' && offline) { await route.fulfill({ status: 503, json: {} }); return; }
     const data = path === '/v1/fleet/tasks' ? { tasks, observed_at: observed }
-      : path === '/v1/fleet/tickets' ? { tickets: [] }
       : path === '/v1/me' ? { name: 'Fixture', login: 'fixture', role: 'user' } : {};
     await route.fulfill({ json: data }); return;
   }

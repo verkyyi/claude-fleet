@@ -1318,46 +1318,15 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.assertFalse((self.node.conf / "spawn.calls").exists())
         self.assertIn("worker_start %s failed EXPIRED" % op_id, (self.node.conf / "control" / "ops.log").read_text())
 
-    def test_task_record_on_a_start_and_task_issue(self):
+    def test_task_record_on_a_start(self):
         # issue #3325: the hub's task record T<n> rides a new / scratch start
-        # (FLEET_CONTROL_TASK to the adapter, never an argv word); task_issue is
-        # refused on the node since #4898.
+        # (FLEET_CONTROL_TASK to the adapter, never an argv word).
         validate_write("worker_start", {"kind": "scratch", "no_repo": True, "task": "T218"})
         validate_write("worker_start", {"kind": "new", "title": "加一个 /healthz", "repo": "acme/web", "task": "T9"})
         for bad in ({"kind": "scratch", "task": "218"}, {"kind": "scratch", "task": "T0"},
                     {"kind": "scratch", "task": "T1; rm -rf ~"}, {"issue": 3, "task": "T1"}):
             with self.assertRaises(Fault):
                 validate_write("worker_start", bad)
-        wid = self.fleet + "/" + str(uuid.uuid4())
-        validate_write("task_issue", {"repo": "acme/web", "task": "T218", "title": "整理账单", "worker_id": wid})
-        for bad in ({"repo": "web", "task": "T1", "title": "x"}, {"repo": "acme/web", "task": "1", "title": "x"},
-                    {"repo": "acme/web", "task": "T1", "title": "a\nb"}, {"repo": "acme/web", "task": "T1"},
-                    {"repo": "acme/web", "task": "T1", "title": "x", "worker_id": "issue-7; rm"}):
-            with self.assertRaises(Fault):
-                validate_write("task_issue", bad)
-        self.assertEqual(SCOPE_OF["task_issue"], "gh:comment")
-        # issue #4898: the record is the only ticket — task_issue files nothing.
-        real_popen = control.subprocess.Popen
-
-        def no_executor(argv, *args, **kwargs):
-            return MagicMock() if "execute" in argv else real_popen(argv, *args, **kwargs)
-
-        op_id = str(uuid.uuid4())
-        with patch.object(control.subprocess, "Popen", side_effect=no_executor):
-            self.node.rpc("submit", {"operation_id": op_id, "fleet_id": self.fleet, "action": "task_issue",
-                                     "params": {"repo": "acme/web", "task": "T218", "title": "整理账单",
-                                                "body": "整理账单\n\nhub 任务 T218 补建的单。", "worker_id": wid},
-                                     "actor": "operator"})
-        real_adapter, modes = self.node.controller.adapter, []
-
-        def adapter(mode, *a, **k):
-            modes.append(mode)
-            return real_adapter(mode, *a, **k)
-        with patch.object(self.node.controller, "adapter", side_effect=adapter):
-            self.node.controller.execute(op_id)
-        self.assertNotIn("taskissue", modes)
-        got = self.node.rpc("operation_get", {"operation_id": op_id})
-        self.assertEqual((got["status"], got["result"]["error"]["code"]), ("failed", "INVALID_ARGUMENT"), got)
 
     def test_start_names_the_repo_in_a_multi_repo_fleet(self):
         # issue #984: two repos can both have an issue-123, so the spawn needs --repo.

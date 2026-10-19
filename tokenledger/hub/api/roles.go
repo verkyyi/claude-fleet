@@ -142,10 +142,7 @@ var routeAccess = map[string]string{
 	AdminRequestsPath: accessAdmin, adminRequestsPrefix: accessAdmin,
 	// 管理侧「发通知」(claude-fleet#4063): 404 to a member, as the requests
 	AdminNoticesPath: accessAdmin,
-	// The ticket registry (claude-fleet#2676): a node registers with its token.
-	FleetTicketRegisterPath: accessSelf,
-	// Hub tickets (claude-fleet#2677): a node token or a person's own sign-in.
-	FleetTicketsPath: accessSelf, FleetTicketsPath + "/": accessSelf,
+	// A person's task authority (claude-fleet#4896): a node token or a person's own sign-in.
 	FleetAuthorityPath: accessSelf, FleetAuthorityPath + "/": accessSelf,
 	control.RoutesPath: accessSelf,
 
@@ -211,8 +208,6 @@ var routeAccess = map[string]string{
 	"/fleet/login": accessUser,
 	// 我的 (claude-fleet#3926): a page of the new console only, each person their own
 	mePagePath: accessUser,
-	// one ticket under 任务 (claude-fleet#3928): the new console's, read off /v1/fleet/tickets
-	ticketPagesPrefix: accessUser,
 	// 设备 (claude-fleet#3930): a page of the new console only, each person their own
 	devicesPagePath: accessUser,
 	// 设置 (claude-fleet#3931): reads /v1/me, /v1/me/identities and their own

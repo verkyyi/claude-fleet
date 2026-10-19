@@ -151,6 +151,7 @@ kubectl -n new-deploy logs deploy/ccquota-hub -c ccquota | grep 'store: migratio
 | 1 | `remove-company-business`（#1987） | 删 `usage_events` / `usage_hourly` / `accounts` / `subscription_plans` 等带 `source` 列的表里 **source = gateway / vendor_bill / voice** 的行（Claude、Codex 的行一行不动）；丢掉 `growth_facts`、`repo_*`、`share_links`、`finding_notices` 这些表；把 repo / growth 的上报令牌标成已退役 | 镜像换回迁移前的 tag + 用 `hub-deploy` 在这次发布前拍的快照恢复（上面「恢复」一节） |
 | 2 | `hub-users-principal`（#3603） | `hub_users` 改以账号（principal）为键，每人补一条 github 登录方式 | 同上 |
 | 3 | `remove-spot-nodes`（#4797） | SPOT 执行节点下线：丢掉 `fleet_spot_nodes` 表；删掉只有它读的设置 `fleet.spot` / `fleet.spot_weight` / `hub.legacy_migrated.fleet.spot` / `spot.want`；`detail` 另记还标着 `node_kind=ephemeral` 的端点数（原样保留，已无人读） | 镜像换回迁移前的 tag：旧镜像启动时 `CREATE TABLE IF NOT EXISTS` 把空表建回来，设置读回默认（`fleet.spot` = off）；要原来的行就用这次发布前的快照恢复（上面「恢复」一节）。上线时表里是 0 行 |
+| 4 | `remove-hub-tickets`（T477，#4898 续） | hub 自己的单据下线：丢掉 `fleet_tickets` / `fleet_ticket_comments` / `fleet_ticket_seq` / `fleet_ticket_index` 四张表，`detail` 记每张表丢掉的行数；任务记录 `fleet_tasks` 不动 | 镜像换回迁移前的 tag：旧镜像启动时 `CREATE TABLE IF NOT EXISTS` 把空表建回来；要原来的行就用这次发布前的快照恢复（上面「恢复」一节） |
 
 **发布前演练**（#2050）：`hub-deploy` 拍完快照、apply 之前，把新镜像作为临时容器（ephemeral
 container）塞进正在跑的 hub pod，挂 `/data`，对快照的一份拷贝跑 `ccquota hub --migrate-only`。
