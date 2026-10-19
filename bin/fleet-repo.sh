@@ -2,11 +2,12 @@
 # fleet-repo.sh — the repos a fleet hosts (issue #788).
 #
 #   fleet-repo.sh list   [--session <sess>]
-#   fleet-repo.sh add    [--session <sess>] <owner/repo | git address> [<checkout-dir>] [--base <branch>] [--as <ns/name>] [--tickets hub|github] [--authority hub|legacy]
+#   fleet-repo.sh add    [--session <sess>] <owner/repo | git address> [<checkout-dir>] [--base <branch>] [--as <ns/name>] [--tickets hub|github]
 #   fleet-repo.sh remove [--session <sess>] <owner/repo> [--force]
 #   fleet-repo.sh get    [--session <sess>] <KEY> [<owner/repo> | --window <w> | --worktree <dir>] [--tsv]
 #   fleet-repo.sh fold   <from-session> --into <session> [--dry-run] [--wait]
-#   fleet-repo.sh authority <owner/repo> --session <sess> [--dry-run | --freeze | --apply | --rollback] [--manifest FILE]
+#   fleet-repo.sh authority [<owner/repo>] [--dry-run | --freeze | --apply | --rollback] [--manifest FILE]
+#                                        this LOGIN's person's task authority (issue #4901); a repo only narrows the lists
 #
 # A fleet hosts zero or more repos, every one put the same way: an overlay at
 # $FLEET_CONF_DIR/fleets/<sess>/repos/<slug>.conf, in repos/.order (see fleet_repos
@@ -23,15 +24,13 @@
 # trust warning, daemon wake, collector kick. Where its tickets (issues, comments,
 # labels, EPIC records — never its code or PRs) live (issue #3739): a login that
 # reaches a hub writes FLEET_TICKETS="hub", one that does not writes nothing
-# (github); `--tickets hub|github` says it outright. Who runs its tasks (issue
-# #4885): a login that reaches a hub starts a repo the hub has NEVER seen on the
-# hub — FLEET_TASK_AUTHORITY="hub", the hub's selection made in the same step —
-# and one any login already used stays legacy (no line; `authority` switches it);
-# `--authority hub|legacy` says it outright (hub refuses a repo that is not new).
+# (github); `--tickets hub|github` says it outright. Who runs its tasks is not
+# the repo's (issue #4901): it is the login's (fleet.conf [node]
+# FLEET_TASK_AUTHORITY), so `add` writes no authority line; `--authority` is read
+# one version and only said (# compat-1v: 下一批删).
 # Its stdout is ONE result token (added:<slug> · refused:hosted ·
 # refused:origin-mismatch · refused:not-a-checkout · refused:invalid-repo ·
-# refused:invalid-tickets · refused:invalid-authority · refused:authority ·
-# failed:clone · failed:write);
+# refused:invalid-tickets · failed:clone · failed:write);
 # every human line goes to stderr.
 #
 # `remove` deletes a repo's overlay — any repo, the last one too: one command, no
@@ -58,7 +57,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 die()   { echo "fleet-repo: $*" >&2; exit 1; }
-usage() { sed -n '4,9p' "$0" | sed 's/^# //' >&2; exit 2; }
+usage() { sed -n '4,10p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 cmd="${1:-}"; [ -n "$cmd" ] || usage; shift
 if [ "$cmd" = authority ]; then exec python3 "$BIN/fleet_repo_authority.py" "$@"; fi

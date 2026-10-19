@@ -198,7 +198,7 @@ def main():
                 self.send_response(404)
                 self.end_headers()
                 return
-            if self.path.startswith('/v1/fleet/tickets/authority/start?'):
+            if self.path.startswith('/v1/fleet/authority/start?'):
                 # The independent reserved read the supervisor takes before begin.
                 query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                 key = query.get('reservation', [''])[0]
@@ -218,10 +218,11 @@ def main():
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            valid = (arguments.raw_entrypoint and self.path.startswith('/v1/fleet/tickets/authority?')
+            # The gate read is the person's (issue #4901): no repo on it.
+            valid = (arguments.raw_entrypoint and self.path.startswith('/v1/fleet/authority?')
                      and self.headers.get('Authorization') == 'Bearer fixture-authority-only'
                      and urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-                     == {'repo': [context['repo']], 'gate': ['1']})
+                     == {'gate': ['1']})
             if not valid:
                 admission_errors.append('unexpected authority gate request: ' + self.path)
             body = json.dumps({'mode': 'legacy'} if valid else {'error': 'unexpected gate'}).encode()
@@ -234,7 +235,7 @@ def main():
         def do_POST(self):
             nonlocal intent, worktree
             payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
-            if self.path.startswith('/v1/fleet/tickets/authority/start'):
+            if self.path.startswith('/v1/fleet/authority/start'):
                 try:
                     if not arguments.local_authority or self.headers.get('Authorization') != 'Bearer fixture-authority-only':
                         raise ValueError('unexpected authority credential or mode')

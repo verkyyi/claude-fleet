@@ -141,7 +141,7 @@ sys.exit(37)
         self.assertEqual(self.reads[0][1:], ('Bearer fixture-node',
                          {'repo': ['org/a'], 'reservation': [self.reservation]}))
         self.assertEqual(self.requests[0][2]['reservation'], self.requests[1][2]['reservation'])
-        self.assertTrue(all(r[0].startswith('/v1/fleet/tickets/authority/start?repo=org%2Fa') and
+        self.assertTrue(all(r[0].startswith('/v1/fleet/authority/start?repo=org%2Fa') and
                             r[1] == 'Bearer fixture-node' for r in self.requests))
         # A fake native has no hook receipt: admission may succeed, but uncertainty
         # must NOT turn into a fabricated stopped/observe report.

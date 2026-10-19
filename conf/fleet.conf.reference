@@ -173,7 +173,7 @@ FLEET_BASE_BRANCH="main"
 # FLEET_AGENT / FLEET_MCP_CONFIG), these keys are honored PER REPO — set one in a
 # repo's overlay and that repo's windows, worktrees and daemons passes use it; leave
 # it unset there and the repo gets the fleet conf's value (then this file's):
-#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED FLEET_TICKETS FLEET_TASK_AUTHORITY
+#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED FLEET_TICKETS
 # (That line is kept in lockstep with _FLEET_REPO_OVERRIDABLE in bin/fleet-lib.sh
 # by bin/repo-settings-selftest.sh.) Setting one to "" in an overlay switches it
 # off for that repo. `fleet-repo.sh get <KEY> <owner/repo>` prints what a repo sees.
@@ -192,15 +192,17 @@ FLEET_BASE_BRANCH="main"
 # @label=Where tickets live @group=bridge @tier=internal @scope=fleet @edit=no
 #FLEET_TICKETS=github
 
-# Per-repo task authority is changed through `fleet-repo.sh authority`, using a
-# dry-run manifest and the hub's revision/owner gate. legacy | frozen | hub.
-# A NEW repo added on a login that reaches a hub (`fleet-repo.sh add`, fleet-up)
-# starts as `hub` — the hub selects it in the same step — when the hub has never
-# seen it (no fleet row, start, task, lease or ticket of any login); one another
-# login already used stays legacy and is switched as above. No hub ⇒ nothing
-# written (legacy); `add --authority hub|legacy` says it outright (issue #4885).
-# Ticket home, forge and landing remain independent; do not hand-edit cutover.
-# @label=Task authority @group=bridge @tier=internal @scope=fleet @edit=no
+# Who runs this login's tasks: legacy | frozen | hub (issue #4901). It is the
+# PERSON's, not a repo's — the hub keeps one row per person (#4896) and every
+# gate asks whose action it is; a repo is only a field on a task. This login's
+# value lives in fleet.conf [node] and is written only by the cutover
+# (`fleet-repo.sh authority --dry-run | --freeze | --apply | --rollback`, a saved
+# dry-run manifest and the hub's revision gate) and by the authority sync when
+# the hub says it moved. Two logins of one machine each cut over on their own.
+# Unset = legacy, byte for byte as before. A repo overlay's old line is read one
+# version and commented out by `fleet-conf.sh migrate`. Ticket home, forge and
+# landing remain per repo; do not hand-edit it.
+# @label=Task authority @group=bridge @tier=internal @scope=global @edit=no
 #FLEET_TASK_AUTHORITY=legacy
 
 # Branches the worktree janitor must never touch (extended regex).

@@ -149,7 +149,10 @@ def creds():
 
 def api(method, path, body=None, query=None):
     url, tok = creds()
-    full = url + '/v1/fleet/tickets' + path
+    # A task authority is a person's (issue #4901): /authority[/start|/adopt] is
+    # the hub's /v1/fleet/authority road (#4896), never the per-repo one under
+    # /v1/fleet/tickets; a repo= on it only names the start or narrows the lists.
+    full = url + ('/v1/fleet' if path == '/authority' or path.startswith('/authority/') else '/v1/fleet/tickets') + path
     if query:
         full += '?' + urllib.parse.urlencode({k: v for k, v in query.items() if v not in (None, '')})
     data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None

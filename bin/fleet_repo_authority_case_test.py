@@ -128,6 +128,18 @@ exit 0
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
 
+    def assert_person_road(self):
+        # Every read is the person's road (issue #4901); a repo travels only
+        # where it names a start or narrows a list, and then canonically.
+        self.assertTrue(self.requests)
+        for path, _ in self.requests:
+            self.assertTrue(path.startswith("/v1/fleet/authority"), path)
+            self.assertTrue("repo=" not in path or "repo=exampleorg%2Fspace" in path, path)
+            if "gate=1" in path:
+                self.assertNotIn("repo=", path)
+        starts = [path for path, _ in self.requests if path.startswith("/v1/fleet/authority/start")]
+        self.assertTrue(all("repo=exampleorg%2Fspace" in path for path in starts))
+
     def cli(self, repo, *args):
         return self.run_command("python3", str(BIN / "fleet_repo_authority.py"), repo,
                                 "--session", "fixture", *args)
@@ -142,8 +154,9 @@ exit 0
                 self.assertEqual(result.returncode, 0, result.stderr)
                 doc = json.loads(result.stdout)
                 self.assertEqual(doc["repo"], CANONICAL)
-                self.assertEqual(doc["local"]["settings"]["FLEET_TICKETS"], "github")
-        self.assertTrue(all("repo=exampleorg%2Fspace" in path for path, _ in self.requests))
+                self.assertEqual(doc["scope"], "owner")
+                self.assertEqual(doc["local"]["settings"], dict(FLEET_TASK_AUTHORITY=""))
+        self.assert_person_road()
         self.assertEqual(before, self.overlay.read_bytes())
         self.assertEqual(sorted(p.name for p in self.repos.iterdir()), [".order", "ExampleOrg-Space.conf"])
 
@@ -162,7 +175,7 @@ exit 0
                 self.assertEqual(before, self.overlay.read_bytes())
         reserves = [body for _, body in self.requests if body and body.get("action") == "reserve"]
         self.assertEqual(len(reserves), 2 * len(REPO_CASES))
-        self.assertTrue(all("repo=exampleorg%2Fspace" in path for path, _ in self.requests))
+        self.assert_person_road()
 
     def panel_new(self, repo):
         with patch.dict(os.environ, self.env, clear=True), \
@@ -219,7 +232,7 @@ exit 0
             argv, _, _ = fleet_view.bolt_argv(None, "test", "", state, "fixture draft")
         self.command(*argv)
         self.assertTrue(any(body and body.get("action") == "reserve" for _, body in self.requests))
-        self.assertTrue(all("repo=exampleorg%2Fspace" in path for path, _ in self.requests))
+        self.assert_person_road()
         self.assertIn(str(self.root / "Space-scratch-1"), self.windows.read_text())
         before = self.windows.read_bytes()
         self.mode = "frozen"
@@ -233,8 +246,6 @@ exit 0
         for repo in ("../space", "exampleorg/..", "exampleorg/space/extra", " exampleorg/space", "https://github.com/exampleorg/space"):
             self.assertNotEqual(self.cli(repo, "--gate").returncode, 0, repo)
         self.assertEqual(self.requests, [])
-        self.assertNotEqual(self.cli("other/space", "--dry-run").returncode, 0)
-        self.assertNotEqual(self.cli("other/space", "--gate").returncode, 0)
         c = dict(task="T9", owner="alice", generation=1, worker_id="fleet/session")
         with patch.object(authority.ticket, "api", return_value=dict(mode="hub")), \
                 patch.dict(os.environ, {"FLEET_LAUNCH": "{}"}), \
@@ -261,17 +272,22 @@ exit 0
         self.assertEqual(before, self.command("bash", "-c", script, "_", str(BIN), CANONICAL))
         # A duplicate identity never picks an arbitrary overlay, even an exact spelling.
         other.write_text('FLEET_REPO="EXAMPLEORG/SPACE"\n')
-        self.assertNotEqual(self.cli(REGISTERED, "--dry-run").returncode, 0)
+        self.assertNotEqual(self.run_command("bash", "-c", script, "_", str(BIN), REGISTERED).returncode, 0)
 
     def test_mixed_manifest_cas_repeat_and_repo_isolation(self):
-        state = dict(repo=CANONICAL, mode="legacy", revision=0)
+        # The cutover is this login's person's (issue #4901): any spelling of a
+        # repo, or none, moves the same row and writes fleet.conf [node] only —
+        # every repo overlay stays byte for byte.
+        state = dict(owner="alice", mode="legacy", revision=0)
         history, writes = {}, []
         other = self.repos / "Other-Repo.conf"
         other.write_text('FLEET_REPO="Other/Repo"\nFLEET_MAIN="/unused"\n')
         saved_other, saved_local = other.read_bytes(), self.overlay.read_bytes()
+        login = self.conf / "fleet.conf"
 
         def api(method, path, body=None, query=None):
-            self.assertEqual(query["repo"], CANONICAL)
+            if method == "POST":
+                self.assertNotIn("repo", query or {})
             if method == "GET":
                 return copy.deepcopy(state) if query.get("gate") else dict(authority=copy.deepcopy(state))
             writes.append(body)
@@ -284,36 +300,41 @@ exit 0
                 history[key] = copy.deepcopy(state)
             return history[key]
 
-        def run(repo, *args):
+        def run(*args):
             with contextlib.redirect_stdout(io.StringIO()) as out:
-                authority.main([repo, "--session", "fixture", *args])
+                authority.main(list(args))
             return json.loads(out.getvalue())
+
+        def login_mode():
+            return authority.login_settings()[0]["settings"]["FLEET_TASK_AUTHORITY"]
 
         with patch.dict(os.environ, self.env, clear=True), patch.object(authority.ticket, "api", side_effect=api):
             file = self.root / "manifest.json"
-            for action in ("freeze", "apply", "freeze", "rollback"):
-                file.write_text(json.dumps(run(REGISTERED, "--dry-run")))
+            for action, spelled in (("freeze", REGISTERED), ("apply", None), ("freeze", CANONICAL), ("rollback", None)):
+                file.write_text(json.dumps(run(*([spelled] if spelled else []), "--dry-run")))
                 first = run(CANONICAL, "--" + action, "--manifest", str(file))
-                self.assertEqual(first, run(REGISTERED.upper(), "--" + action, "--manifest", str(file)))
+                self.assertEqual(first["result"], run("--" + action, "--manifest", str(file))["result"])
+                self.assertEqual(login_mode(), state["mode"])
                 self.assertEqual(other.read_bytes(), saved_other)
-                self.assertTrue(self.overlay.read_bytes().startswith(saved_local))
-            doc = run(REGISTERED, "--dry-run")
+                self.assertEqual(self.overlay.read_bytes(), saved_local)
+            doc = run("--dry-run")
             file.write_text(json.dumps(doc))
-            self.overlay.write_text(self.overlay.read_text() + '# concurrent edit\n')
+            saved_login = login.read_bytes()
+            login.write_text(login.read_text() + 'FLEET_CONCURRENT_EDIT=1\n')
             count = len(writes)
             with self.assertRaisesRegex(ValueError, "settings changed"):
-                run(CANONICAL, "--freeze", "--manifest", str(file))
+                run("--freeze", "--manifest", str(file))
             self.assertEqual(len(writes), count)
-            self.overlay.write_bytes(saved_local)
-            file.write_text(json.dumps(run(REGISTERED, "--dry-run")))
+            login.write_bytes(saved_login)
+            file.write_text(json.dumps(run("--dry-run")))
             state["revision"] += 1
             with self.assertRaisesRegex(authority.ticket.Fail, "stale revision"):
-                run(CANONICAL, "--freeze", "--manifest", str(file))
-            self.assertEqual(self.overlay.read_bytes(), saved_local)
-            doc["repo"] = "other/repo"
-            file.write_text(json.dumps(doc))
-            with self.assertRaisesRegex(ValueError, "different repo"):
-                run(CANONICAL, "--apply", "--manifest", str(file))
+                run("--freeze", "--manifest", str(file))
+            self.assertEqual(login.read_bytes(), saved_login)
+            for field, value in (("conf", str(self.root / "other-login/fleet.conf")), ("version", 1), ("scope", "repo")):
+                file.write_text(json.dumps(dict(doc, **{field: value})))
+                with self.assertRaisesRegex(ValueError, "fresh dry-run"):
+                    run("--apply", "--manifest", str(file))
 
     def test_accepted_identity_keeps_generation_owner_and_reference(self):
         c = dict(task="T9", owner="alice", generation=1, worker_id="fleet/session")

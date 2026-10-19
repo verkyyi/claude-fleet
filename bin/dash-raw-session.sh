@@ -446,12 +446,12 @@ if [ "$NATIVE_WT" = 1 ]; then
       && python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null \
       || { refuse "raw: native worktree requires the accepted task dispatch"; exit 2; }
   else
-    { [ "${CCQUOTA_FLEET:-0}" = 1 ] || [ -n "${FLEET_TASK_AUTHORITY:-}" ]; } \
+    { [ "${CCQUOTA_FLEET:-0}" = 1 ] || [ -n "$(fleet_task_authority "$SESS" "${REPO_ARG:-${FLEET_REPO:-}}")" ]; } \
       && [ -z "$PROMPT$SEED_FILE" ] \
       || { refuse "raw: native local creation requires repository admission and an unsubmitted draft"; exit 2; }
   fi
 fi
-[ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" >/dev/null \
+[ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --gate "$SESS" >/dev/null \
   || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
 
 # Backgrounded spawn (issues #304, #444): the cheap/authoritative checks above (session
@@ -675,7 +675,7 @@ fi
 if [ -n "$TASK_REF" ]; then
   printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
 fi
-[ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish >/dev/null \
+[ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish "$SESS" >/dev/null \
   || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
 warm=0; win=""; slug=""; wt=""
 claimed=""

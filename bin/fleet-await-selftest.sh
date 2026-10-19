@@ -256,15 +256,23 @@ bash "$AW" 408 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/ou
 eq "an accepted launch with no task exits 5" 5 "$?"
 has "…saying no issue-number wait" 'no issue-number wait' "$(cat "$WORK/out")"
 TM kill-window -t "$A"
+# Who runs tasks is the LOGIN's (issue #4901): fleet.conf [node]'s line, which
+# the lib hands every reader as FLEET_TASK_AUTHORITY — a fleet conf cannot set it.
 printf 'FLEET_TASK_AUTHORITY=hub\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
 fx_repo "$FLEET_CONF_DIR" "$LBL" acme/app
-bash "$AW" 409 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
-eq "a hub-authority repo: no spawn by issue number (exit 5)" 5 "$?"
+FLEET_TASK_AUTHORITY=hub bash "$AW" 409 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
+eq "a hub-authority login: no spawn by issue number (exit 5)" 5 "$?"
 has "…pointing at the task tool" 'hub-authoritative' "$(cat "$WORK/out")"
 eq "…and nothing spawned" "$n" "$(wc -l < "$STUB_LOG" | tr -d ' ')"
-printf 'FLEET_TASK_AUTHORITY=legacy\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
-fx_repo "$FLEET_CONF_DIR" "$LBL" acme/app
+# compat-1v: 下一批删 — an overlay's old line still fills the login's gap.
+fx_repo "$FLEET_CONF_DIR" "$LBL" acme/app FLEET_TASK_AUTHORITY=hub
+bash "$AW" 409 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
+eq "an old overlay line is read one version (exit 5)" 5 "$?"
+eq "…nothing spawned" "$n" "$(wc -l < "$STUB_LOG" | tr -d ' ')"
+fx_repo "$FLEET_CONF_DIR" "$LBL" acme/app FLEET_TASK_AUTHORITY=hub
+export FLEET_TASK_AUTHORITY=legacy   # the login's line wins over that overlay
 await 410 --timeout 30
+unset FLEET_TASK_AUTHORITY
 W=$(until_win 410); [ -n "$W" ] || fail "a legacy repo still spawns by issue number" "$(cat "$WORK/err")"
 TM kill-window -t "$W"; collect
 eq "…a legacy repo: spawned once, as before" $((n + 1)) "$(wc -l < "$STUB_LOG" | tr -d ' ')"
