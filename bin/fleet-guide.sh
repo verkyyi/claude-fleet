@@ -1,6 +1,7 @@
 #!/bin/bash
 # fleet guide (was `cf --guide`): recall the pinned onboarding guide in this
-# login's fleet. Outside tmux it then opens the CLIENT (bin/fleet, issue #1711) —
+# login's fleet. `fleet guide --arrive` only marks that a person is here (issue
+# #4852) and opens a pending guide in the background. Outside tmux it then opens the CLIENT (bin/fleet, issue #1711) —
 # the one way in — never an attach to the node's own session.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -35,6 +36,10 @@ fi
 # A person asking for the guide lifts a stop or a dismissal (issue #2424): a fresh
 # try budget, and the collector confirms it again. A login that never had a
 # pending guide is not opted in by this.
+# Asking is a person arriving (issue #4852): the guide no longer waits for one.
+# `--arrive` only says so — no open, no focus, no client (a drill's first login).
+[ "${1:-}" = --arrive ] && { fleet_guide_arrive "$sess" guide; exit 0; }
+fleet_guide_person_mark guide
 for _g in onboard.stuck onboard.dismissed onboard.pending; do
   [ -e "$FLEET_CONF_DIR/global/$_g" ] && { fleet_guide_rearm; break; }
 done

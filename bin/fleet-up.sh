@@ -287,11 +287,19 @@ tmux -L "$SOCK" kill-window -t "$workwin" 2>/dev/null || true
 # guide has SPOKEN — fleet-onboard.sh brief left global/guide.spoke — and is still
 # up. A claude that only printed `Unknown command` is left for the collector,
 # which confirms a late speaker or reopens a silent one (fleet_guide_tick).
+# Only for a PERSON (issue #4852): every login is bootstrapped with a fleet
+# (--no-attach, no terminal) — a spare, a service login, a drill account — so the
+# guide is left pending there and opens when someone first arrives
+# (fleet_guide_arrive at the attach, or the collector seeing their terminal). A
+# fleet-up a person runs on a terminal, to attach, is that arrival.
 ONBOARDED="$FLEET_CONF_DIR/global/onboarded"
 if [ "$NEWFLEET" = 1 ] && [ "${FLEET_ONBOARD:-1}" != 0 ] && [ ! -e "$ONBOARDED" ]; then
   mkdir -p "${ONBOARDED%/*}"
   fleet_guide_rearm   # pending + a fresh try budget (issue #2424)
-  if fleet_guide_open "$NAME" >/dev/null 2>&1 && fleet_guide_wait "$NAME" "${FLEET_GUIDE_WAIT_SECS:-30}"; then
+  [ "$NOATTACH" = 1 ] || [ ! -t 0 ] || fleet_guide_person_mark fleet-up
+  if ! fleet_guide_person_seen; then
+    echo "fleet-up: onboarding guide waits for a person — it opens on the first attach (or fleet guide)"
+  elif fleet_guide_open "$NAME" >/dev/null 2>&1 && fleet_guide_wait "$NAME" "${FLEET_GUIDE_WAIT_SECS:-30}"; then
     date '+%Y-%m-%d %H:%M:%S' > "$ONBOARDED"
     rm -f "$FLEET_CONF_DIR/global/onboard.pending"
     echo "fleet-up: opened the onboarding guide (/fleet-onboard), pinned to the top"

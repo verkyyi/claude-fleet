@@ -873,6 +873,7 @@ rv_attach_thin() {
   sock=$(fleet_socket "$s")
   rv_prune
   rv_legacy_undo "$s"
+  fleet_guide_arrive "$s" attach >/dev/null 2>&1   # a person is here: a pending guide opens (#4852)
   f="$VIEWS/$view"; g="$s@view-$view"
   cur=''; [ -n "$resume" ] && cur=$(rv_row_get "$f" cur)
   # The last connection of this id: its attach goes, its 看台 stays to be resumed.
@@ -1478,6 +1479,7 @@ attach)
   # A row a SIGKILLed proxy left behind; what an older version's rule left (#1713).
   rv_prune
   rv_legacy_undo "$s"
+  fleet_guide_arrive "$s" attach >/dev/null 2>&1   # a person is here: a pending guide opens (#4852)
   # Register this client (issue #1485): `--shell` = a shell client; a <view> id =
   # a proxy view, with the spool its `watch` drains (no id → no spool: a request
   # nobody drains would read as sent).

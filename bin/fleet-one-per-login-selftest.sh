@@ -240,6 +240,8 @@ leg "6 one settings file per login (dual-read)"
 
 # ---- 7. the first fleet on a login opens the guide, pinned (issue #1169) ----
 export FLEET_CONF_DIR="$WORK/conf7"; unset FLEET_ONBOARD
+person() { mkdir -p "$FLEET_CONF_DIR/global"; printf 'test selftest\n' > "$FLEET_CONF_DIR/global/onboard.person"; }
+person   # a person is here: the guide opens only for one (issue #4852, leg 13)
 # The guide is a real scratch: it needs a checkout with a commit + origin/master,
 # and its agent is a stub that records its seed, runs the wizard's step 0 (the
 # brief — that is what makes it ALIVE, issue #1215) and sleeps.
@@ -291,7 +293,7 @@ hasnt "7 off: silent" "$out3" "guide"
 leg "7 first fleet opens the pinned guide, once"
 
 # ---- 8. a guide that never spoke stays unmarked; ticks restart it (#1204/#1215) ----
-export FLEET_CONF_DIR="$WORK/conf8"; unset FLEET_ONBOARD
+export FLEET_CONF_DIR="$WORK/conf8"; unset FLEET_ONBOARD; person
 export FLEET_GUIDE_MAX_TRIES=9   # this leg restarts four times; leg 10 is the budget
 launches="$WORK/guide-launches"
 # #1210 ③ verbatim: claude comes up, the command is not installed, it prints
@@ -475,7 +477,7 @@ leg "9 cf --guide opens, focuses, and repairs the guide"
 # reopened every minute, forever. Three opens is the budget: the fourth tick
 # writes onboard.stuck (the reason read off the pane), reopens nothing, and the
 # guide window wears the reason; a person's `fleet guide` lifts it.
-export FLEET_CONF_DIR="$WORK/conf10"; unset FLEET_ONBOARD FLEET_GUIDE_MAX_TRIES
+export FLEET_CONF_DIR="$WORK/conf10"; unset FLEET_ONBOARD FLEET_GUIDE_MAX_TRIES; person
 : > "$launches"
 cat > "$SB/fleet-claude.sh" <<EOF
 #!/bin/bash
@@ -556,6 +558,63 @@ eq "12 nothing launched" "$(wc -l < "$launches" | tr -d ' ')" 0
 [ ! -e "$gdir/onboard.pending" ] || fail "12: pending left behind a dismissal"
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
 leg "12 a guide the person closed stays closed"
+
+# ---- 13. the guide is for a person, not a login (issue #4852) ----
+# Every login is bootstrapped with a fleet (fleet-up --no-attach, no terminal): a
+# spare, a service login, a drill account. Its guide stays pending until a person
+# arrives (an attach, `fleet guide`), a pinned guide an older version left open
+# there is closed, and once shown and closed it is dismissed — whatever the try
+# count (a service login, 2026-10-19: closed, back at once as a new window).
+export FLEET_CONF_DIR="$WORK/conf13"; unset FLEET_ONBOARD
+gdir="$FLEET_CONF_DIR/global"
+: > "$launches"
+cat > "$SB/fleet-claude.sh" <<EOF
+#!/bin/bash
+printf 'attempt\n' >> "$launches"
+printf 'test guide: /fleet-onboard\n'
+exec sleep 3600
+EOF
+chmod +x "$SB/fleet-claude.sh"
+out=$(bash "$UP" o/g "$g" --base master --no-attach </dev/null 2>&1); eq "13 up rc" "$?" 0
+has "13 says it waits" "$out" "waits for a person"
+eq "13 no guide on a login nobody has reached" "$(wins '#{window_name}' | grep -cx guide)" 0
+[ -f "$gdir/onboard.pending" ] || fail "13: the guide is not left pending"
+[ ! -e "$gdir/onboard.person" ] || fail "13: a --no-attach fleet-up counted as a person"
+printf '0\n' > "$gdir/onboard.retry"
+FLEET_GUIDE_COOLDOWN=0 FLEET_GUIDE_SPEAK_SECS=0 lib 'fleet_guide_tick fleet'
+sleep 0.4
+eq "13 the tick opens nothing without a person" "$(wc -l < "$launches" | tr -d ' ')" 0
+# the residue: a pinned guide an older version opened on a spare is closed
+TMUX='' bash "$SB/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin --no-repo fleet >/dev/null 2>&1
+eq "13 residue guide up" "$(wins '#{window_name}|#{@pin}' | grep -c '^guide|1$')" 1
+FLEET_GUIDE_COOLDOWN=0 FLEET_GUIDE_SPEAK_SECS=0 lib 'fleet_guide_tick fleet'
+eq "13 residue closed" "$(wins '#{window_name}' | grep -cx guide)" 0
+[ ! -e "$gdir/onboard.dismissed" ] || fail "13: closing the residue counted as a no"
+[ -f "$gdir/onboard.pending" ] || fail "13: closing the residue dropped the pending guide"
+# a person arrives (the attach roads call this): the guide opens now, once
+: > "$launches"
+lib 'fleet_guide_arrive fleet attach'
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$launches" ] && break; sleep 0.2; done
+eq "13 arrival opens the guide" "$(wins '#{window_name}|#{@pin}' | grep -c '^guide|1$')" 1
+eq "13 one launch" "$(wc -l < "$launches" | tr -d ' ')" 1
+has "13 person marked" "$(cat "$gdir/onboard.person" 2>/dev/null)" "attach"
+lib 'fleet_guide_arrive fleet attach'
+sleep 0.4
+eq "13 a second arrival opens nothing" "$(wc -l < "$launches" | tr -d ' ')" 1
+FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
+[ -e "$gdir/onboard.shown" ] || fail "13: the tick did not note the guide shown"
+# fleet-worker-stop closes it; a stop's lift had reset the tries to 0
+wid=$(lib 'fleet_guide_wid fleet')
+lib "fleet_win_retire '$wid' fleet"; "$REAL_TMUX" -S "$SOCKD/fleet" kill-window -t "$wid" 2>/dev/null
+printf '0\n' > "$gdir/onboard.tries"; printf '0\n' > "$gdir/onboard.retry"
+FLEET_GUIDE_COOLDOWN=0 FLEET_GUIDE_SPEAK_SECS=0 lib 'fleet_guide_tick fleet'
+FLEET_GUIDE_COOLDOWN=0 FLEET_GUIDE_SPEAK_SECS=0 lib 'fleet_guide_tick fleet'
+sleep 0.4
+eq "13 closed stays closed" "$(wins '#{window_name}' | grep -cx guide)" 0
+eq "13 never relaunched" "$(wc -l < "$launches" | tr -d ' ')" 1
+[ -e "$gdir/onboard.dismissed" ] || fail "13: a shown-then-closed guide was not dismissed"
+"$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
+leg "13 the guide waits for a person, a spare's leftover closes, closed stays closed"
 
 [ "$FAILS" = 0 ] && { echo "fleet-one-per-login-selftest: all passed"; exit 0; }
 echo "fleet-one-per-login-selftest: $FAILS failure(s)"; exit 1

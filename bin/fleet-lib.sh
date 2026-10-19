@@ -2556,6 +2556,7 @@ fleet_guide_respawn() {
     [ "$name" = guide ] || continue
     [ "$pin" = 1 ] || return 1
     if [ -n "$nsid" ]; then
+      rm -f "$FLEET_CONF_DIR/global/onboard.shown"   # our own reopen, no one's close (#4852)
       fleet_win_retire "$wid" "$sess"
       tmux -L "$sess" kill-window -t "$wid" >/dev/null 2>&1 || return 1
       TMUX='' bash "$bin/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin --no-repo "$sess" || return 1
@@ -2606,13 +2607,65 @@ fleet_guide_tried() {
 fleet_guide_rearm() {
   local g="$FLEET_CONF_DIR/global"
   [ -d "$g" ] || mkdir -p "$g" 2>/dev/null || return 0
-  rm -f "$g/onboard.stuck" "$g/onboard.stuck.ts" "$g/onboard.dismissed" "$g/onboard.openfail"
+  rm -f "$g/onboard.stuck" "$g/onboard.stuck.ts" "$g/onboard.dismissed" "$g/onboard.openfail" "$g/onboard.shown"
   printf '0\n' > "$g/onboard.tries"
   if [ ! -e "$g/onboarded" ] && [ "${FLEET_ONBOARD:-1}" != 0 ]; then
     : > "$g/onboard.pending"
     date +%s > "$g/onboard.retry"
   fi
   return 0
+}
+
+# ---- a person, not a login (issue #4852) -------------------------------------
+# global/onboard.person   «<when> <via>»: a PERSON has reached this login — the
+#                         first client attach (fleet-remote-view.sh attach /
+#                         attach --thin, the entry door and a browser terminal go
+#                         through them), `fleet guide`, a fleet-up a person ran on
+#                         a terminal, or the tick seeing a terminal client on the
+#                         fleet's server. Written once, never removed.
+# Every login is bootstrapped with a fleet (fleet-login-bootstrap.sh runs fleet-up
+# --no-attach) — a spare waiting to be handed out, a service login that only
+# coordinates, a drill account — and none of them has anyone to guide. So the
+# guide is pending from the first fleet, but it OPENS only once this marker is
+# there; until then the tick opens nothing and closes a pinned guide an older
+# version left open (the residue a spare carried, issue #4852).
+# global/onboard.shown    the tick saw the pinned guide window up. A guide that
+#                         was shown and is gone (closed by the person, a q on
+#                         its page, fleet-worker-stop) is onboard.dismissed — on
+#                         its own, whatever the try count (a stop's lift resets
+#                         it to 0 and the closed guide used to come back).
+fleet_guide_person_file() { printf '%s/global/onboard.person' "$FLEET_CONF_DIR"; }
+fleet_guide_person_seen() { [ -e "$(fleet_guide_person_file)" ]; }
+fleet_guide_person_mark() {
+  local f; f=$(fleet_guide_person_file)
+  [ -e "$f" ] && return 0
+  mkdir -p "${f%/*}" 2>/dev/null || return 0
+  printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "${1:-?}" > "$f" 2>/dev/null
+  return 0
+}
+# fleet_guide_terminal_client <socket> — a person's terminal is attached to this
+# fleet's server: a client with a tty that is not control mode.
+fleet_guide_terminal_client() {
+  tmux -L "$1" list-clients -F '#{client_control} #{client_tty}' 2>/dev/null \
+    | awk '$1 == "0" && $2 != "" { ok = 1 } END { exit !ok }'
+}
+# fleet_guide_arrive <session> [<via>] — a person reached this login: mark it and,
+# when a guide is pending and none is up or on its way, open it now (detached, the
+# tick's open) rather than at the next tick. Cheap once marked and nothing pends:
+# the attach roads call it on every connection.
+fleet_guide_arrive() {
+  local sess="$1" g="$FLEET_CONF_DIR/global" first=0
+  fleet_guide_person_seen || first=1
+  fleet_guide_person_mark "${2:-?}"
+  [ "$first" = 1 ] || return 0
+  [ "${FLEET_ONBOARD:-1}" != 0 ] || return 0
+  [ -f "$g/onboard.pending" ] && [ ! -e "$g/onboarded" ] && [ ! -e "$g/onboard.dismissed" ] || return 0
+  [ ! -s "$g/onboard.stuck" ] && [ ! -s "$g/onboard.opening" ] || return 0
+  [ -n "$sess" ] || return 0
+  fleet_guide_running "$sess" && return 0
+  date +%s > "$g/onboard.retry"
+  fleet_guide_tried
+  fleet_guide_open_detached "$sess"
 }
 
 # fleet_guide_wid <session> → the pinned guide window's id (rc 1: none).
@@ -2746,14 +2799,33 @@ fleet_guide_tick() {
   [ "${FLEET_ONBOARD:-1}" != 0 ] || return 0
   [ -f "$g/onboard.pending" ] || return 0
   [ ! -e "$g/onboarded" ] || return 0
+  [ -n "$sockets" ] || return 0
+  # No person yet (issue #4852): a terminal on the server is one; otherwise the
+  # guide waits, and a pinned guide left open on this login is closed — a spare,
+  # a service login, a drill account has nobody to walk through it.
+  if ! fleet_guide_person_seen; then
+    for sock in $sockets; do
+      fleet_guide_terminal_client "$sock" && { fleet_guide_person_mark tick-client; break; }
+    done
+  fi
+  if ! fleet_guide_person_seen; then
+    local wid
+    for sock in $sockets; do
+      wid=$(fleet_guide_wid "$sock") || continue
+      fleet_win_retire "$wid" "$sock"
+      tmux -L "$sock" kill-window -t "$wid" >/dev/null 2>&1
+    done
+    rm -f "$g/onboard.shown" "$g/onboard.stuck" "$g/onboard.stuck.ts" "$g/onboard.openfail"
+    printf '0\n' > "$g/onboard.tries"
+    return 0
+  fi
   for sock in $sockets; do
     if fleet_guide_confirmed "$sock"; then
       date '+%Y-%m-%d %H:%M:%S' > "$g/onboarded"
-      rm -f "$g/onboard.pending" "$g/onboard.stuck" "$g/onboard.tries"
+      rm -f "$g/onboard.pending" "$g/onboard.stuck" "$g/onboard.tries" "$g/onboard.shown"
       return 0
     fi
   done
-  [ -n "$sockets" ] || return 0
   sock=${sockets%%$'\n'*}
   stamp=$(date +%s)
   # Stopped: keep the reason on the window, reopen nothing — until the stop is
@@ -2783,6 +2855,15 @@ fleet_guide_tick() {
     rm -f "$g/onboard.opening"
   fi
   tries=$(fleet_guide_tries)
+  # Shown and gone (issue #4852): the person — or a stop the fleet ran for them —
+  # closed it. That is the «no», whatever the try count says.
+  if fleet_guide_wid "$sock" >/dev/null; then
+    : > "$g/onboard.shown"
+  elif [ -e "$g/onboard.shown" ] && tmux -L "$sock" has-session -t "$sock" 2>/dev/null; then
+    date '+%Y-%m-%d %H:%M:%S' > "$g/onboard.dismissed"
+    rm -f "$g/onboard.pending" "$g/onboard.tries" "$g/onboard.shown"
+    return 0
+  fi
   # The person closed the guide we opened (q on its page, a kill-window): that is
   # a «no», not a failure — stop asking. An open that FAILED left no window
   # either, and that is no «no» (onboard.openfail, issue #3320).
