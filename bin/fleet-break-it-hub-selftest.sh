@@ -743,10 +743,10 @@ drill_cred_user_pod_unlisted() {
     || { WHY="credPolicyFor does not give a person's pod its owner's list"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^(TestCredPolicyStrictUserPodUsesOwnersList|TestCredPolicyStrictDrillUsesCreatorsList)$' ./hub/api 2>&1); rc=$?
+          go test -count=1 -run '^(TestCredPolicyStrictUserPodUsesOwnersList)$' ./hub/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='严格模式下没单独列的个人 pod 用主人的个人白名单（演练人用创建者的），pod 自己的列表优先，普通机器不变（go test）' ;;
+      0:*) WHAT='严格模式下没单独列的个人 pod 用主人的个人白名单，pod 自己的列表优先，普通机器不变（go test）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
         WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它；测试按名核对在' ;;
       *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
@@ -951,29 +951,26 @@ drill_invite_expired() {
 # fleet up; a drill's remove drops the home.
 drill_opened_login_no_fleet() {
   CAP=120; local t0 out rc s="$ROOT/bin/fleet-login-new.sh"
-  local api='TestDrillGoesOnlyAfterItsLoginIsRemoved' agent='TestAdminAgentHandsJoinCodeInEnv|TestAdminAgentDropHomeDeletesHome'
+  local agent='TestAdminAgentHandsJoinCodeInEnv|TestAdminAgentDropHomeDeletesHome'
   t0=$(now)
   grep -q 'op.JoinCode = s.loginJoinCode(a' "$ROOT/tokenledger/hub/api/fleet_accounts.go" \
     || { WHY="the hub's create op no longer carries the login's join code"; return 1; }
-  grep -q 'op.DropHome = true' "$ROOT/tokenledger/hub/api/fleet_accounts.go" \
-    || { WHY="a drill's remove no longer drops the home"; return 1; }
   grep -q '"FLEET_LOGIN_JOIN_CODE="' "$ROOT/tokenledger/agent/node_accounts.go" \
     || { WHY="the admin agent no longer hands the join code to fleet-login-new.sh in its environment"; return 1; }
   grep -q '^  node_join_step$' "$s" && grep -q 'fleet_up_step$' "$s" \
     || { WHY="fleet-login-new.sh no longer joins an opened login / brings its fleet up"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($api)\$" ./hub/api 2>&1 \
-          && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local go test -count=1 -run "^($agent)\$" github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
+          go test -count=1 -run "^($agent)\$" github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go half's tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='入口开号带一次性加入码、管理节点只经环境交给 fleet-login-new.sh；演练身份收号 --delete-home（go test 三条；脚本一半是 fleet-login-new-selftest O）' ;;
+      0:*) WHAT='入口开号带一次性加入码、管理节点只经环境交给 fleet-login-new.sh；收号带 --delete-home 时删家目录（go test 两条；脚本一半是 fleet-login-new-selftest O）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
         WHAT='Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；脚本一半是 fleet-login-new-selftest O' ;;
       *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   else
-    WHAT='没有 go：标记按名核对在，Go 门（tokenledger.yml）跑三条测试；脚本一半是 fleet-login-new-selftest O'
+    WHAT='没有 go：标记按名核对在，Go 门（tokenledger.yml）跑两条测试；脚本一半是 fleet-login-new-selftest O'
   fi
   SECS=$(since "$t0")
 }
@@ -2692,7 +2689,7 @@ drill_trial_host_no_spare() {
   t0=$(now)
   grep -q 'if spareOnly && !c.spare {' "$tl/api/fleet_accounts.go" 2>/dev/null \
     || { WHY="a trial's machine pick no longer skips machines without a ready spare (fleet_accounts.go pickMachine)"; return 1; }
-  grep -q 's.trialMachine(now, s.drillComputer(pid)...)' "$tl/api/fleet_try.go" 2>/dev/null \
+  grep -q 's.trialMachine(now)' "$tl/api/fleet_try.go" 2>/dev/null \
     || { WHY="the trial claim no longer picks through trialMachine (fleet_try.go)"; return 1; }
   grep -q 'AlertTrialNoSpare = "trial_no_spare"' "$tl/store/fleet_alerts.go" 2>/dev/null \
     || { WHY="no trial_no_spare alert kind (store/fleet_alerts.go)"; return 1; }
