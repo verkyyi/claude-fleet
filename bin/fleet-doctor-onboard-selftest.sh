@@ -78,6 +78,10 @@ printf 'ssh-ed25519 AAAA temporary-key\n' > "$WORK/home/.ssh/authorized_keys"
 needs 'replace temporary SSH key'
 printf 'ssh-ed25519 AAAA normal-key\n' > "$WORK/home/.ssh/authorized_keys"
 rm "$WORK/conf/global/onboarded"
+# nobody has reached this login yet (a spare, a service login — issue #4852): the
+# guide waits for a person, so it is not a missing step
+ready
+printf 'x attach\n' > "$WORK/conf/global/onboard.person"
 needs 'onboarding guide'
 # A running guide that never spoke (no guide.spoke — `Unknown command`, #1215)
 # is not a guide; one that spoke and is still running is; one that spoke and
@@ -94,7 +98,7 @@ needs 'onboarding guide stopped: 账号额度用尽（usage limit） · 连续 3
 rm "$WORK/conf/global/onboard.stuck"
 touch "$WORK/conf/global/onboard.dismissed"
 ready
-rm "$WORK/conf/global/onboard.dismissed"
+rm "$WORK/conf/global/onboard.dismissed" "$WORK/conf/global/onboard.person"
 touch "$WORK/conf/global/onboarded"
 
 # Exercise the real doctor dispatch as well as the helper: enrollment controls

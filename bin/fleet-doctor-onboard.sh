@@ -84,6 +84,8 @@ if [ ! -e "$conf_dir/global/onboarded" ]; then
   if [ "$guide" = 1 ]; then :
   elif [ -n "$stuck" ]; then add "onboarding guide stopped: $stuck (fleet guide to retry)"
   elif [ -e "$conf_dir/global/onboard.dismissed" ]; then :
+  # nobody has come yet (issue #4852): it opens on the first attach — not missing
+  elif [ ! -e "$conf_dir/global/onboard.person" ]; then :
   else add 'onboarding guide'; fi
 fi
 

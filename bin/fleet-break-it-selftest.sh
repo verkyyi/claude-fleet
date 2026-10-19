@@ -3867,6 +3867,7 @@ drill_guide_retry_forever() {
   nt new-window -d -t gd: -n guide "$d/agent"
   nt set-option -w -t gd:guide @pin 1
   : > "$d/conf/global/onboard.pending"; printf '1\n' > "$d/conf/global/onboard.tries"   # fleet-up's open
+  printf 'drill\n' > "$d/conf/global/onboard.person"   # a person is here (issue #4852)
   t0=$(now)
   for i in 1 2 3 4 5 6; do
     printf '0\n' > "$d/conf/global/onboard.retry"
@@ -3901,6 +3902,7 @@ drill_guide_killed_midopen() {
   nt -f /dev/null new-session -d -s gk -n home -x 100 -y 20 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
   # the stop the admission gate left on linux-a, written 2 h ago
   : > "$d/conf/global/onboard.pending"; printf '0\n' > "$d/conf/global/onboard.tries"
+  printf 'drill\n' > "$d/conf/global/onboard.person"   # a person is here (issue #4852)
   printf '引导窗口没能重开 · 第 1 次 · 2026-10-11 12:38\n' > "$d/conf/global/onboard.stuck"
   printf '%s\n' "$(( $(date +%s) - 7200 ))" > "$d/conf/global/onboard.stuck.ts"
   t0=$(now)
@@ -3913,6 +3915,50 @@ drill_guide_killed_midopen() {
   [ ! -e "$d/conf/global/onboard.stuck" ] || { WHY="the 2 h old stop is still there"; return 1; }
   [ "$(cat "$d/conf/global/onboard.tries" 2>/dev/null)" = 1 ] || { WHY="the open was not counted: tries=$(cat "$d/conf/global/onboard.tries" 2>/dev/null)"; return 1; }
   WHAT="打开要 2 s、阶段只给 1 s：开窗的那一步不在阶段的进程组里，引导照样开出来（无仓库）、算一次；2 小时前的「没能重开」停止自己解除"
+}
+
+# guide-spare-login (issue #4852, macmini/fleetsvc1 2026-10-19): every login is
+# bootstrapped with a fleet, and fleet-up opened the onboarding guide on each — a
+# spare waiting to be handed out, a service login that only coordinates. Closed by
+# hand it came straight back (a stop's lift had reset the try count to 0, and the
+# «closed ⇒ dismissed» rule asked for tries ≥ 1). For real on an isolated server:
+# with nobody arrived the tick opens nothing and closes the pinned guide left
+# there; a person's arrival opens it at once; shown and then closed (tries 0) it is
+# dismissed, never reopened.
+drill_guide_spare_login() {
+  CAP=15; BREAK_SOCK="$WORK/sock-gs"; local d="$WORK/gs" t0 f g wid
+  mkdir -p "$d/conf/global" "$d/home" "$d/bin"; g="$d/conf/global"
+  for f in "$BIN"/*; do ln -s "$f" "$d/bin/${f##*/}"; done
+  rm -f "$d/bin/dash-raw-session.sh"
+  printf '#!/bin/sh\nprintf x >> "%s/opens"\ntmux new-window -d -t gs: -n guide "exec sleep 600"\ntmux set-option -w -t gs:guide @pin 1\n' "$d" > "$d/bin/dash-raw-session.sh"
+  chmod +x "$d/bin/dash-raw-session.sh"
+  gl() { ( PATH="$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_GUIDE_COOLDOWN=0 FLEET_GUIDE_SPEAK_SECS=0
+           export PATH HOME FLEET_CONF_DIR BREAK_SOCK FLEET_GUIDE_COOLDOWN FLEET_GUIDE_SPEAK_SECS
+           . "$d/bin/fleet-lib.sh"; "$@" ) 2>/dev/null; until_ok 5 test ! -e "$g/onboard.opening"; }
+  guides() { nt list-windows -t gs -F '#{window_name} #{@pin}' 2>/dev/null | grep -c '^guide 1$'; }
+  opens() { wc -c 2>/dev/null < "$d/opens" | tr -d ' '; }
+  nt -f /dev/null new-session -d -s gs -n home -x 100 -y 20 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  # what an older fleet-up left on a spare: pending, opened once, the guide up
+  nt new-window -d -t gs: -n guide 'exec sleep 600'; nt set-option -w -t gs:guide @pin 1
+  : > "$g/onboard.pending"; printf '1\n' > "$g/onboard.tries"; printf '0\n' > "$g/onboard.retry"
+  t0=$(now)
+  gl fleet_guide_tick gs; gl fleet_guide_tick gs
+  [ "$(guides)" = 0 ] || { WHY="a pinned guide on a login nobody has reached is still open"; return 1; }
+  [ -z "$(opens)" ] || [ "$(opens)" = 0 ] || { WHY="the tick opened a guide with no person: opens=$(opens)"; return 1; }
+  [ -f "$g/onboard.pending" ] && [ ! -e "$g/onboard.dismissed" ] || { WHY="closing the spare's leftover was taken as a person's no"; return 1; }
+  gl fleet_guide_arrive gs attach
+  until_ok 5 sh -c "[ \"\$('$REAL_TMUX' -S '$BREAK_SOCK' list-windows -t gs -F '#{window_name} #{@pin}' | grep -c '^guide 1\$')\" = 1 ]" \
+    || { WHY="a person's first attach did not open the guide: opens=$(opens) person=[$(cat "$g/onboard.person" 2>/dev/null)]"; return 1; }
+  gl fleet_guide_tick gs
+  wid=$(nt list-windows -t gs -F '#{window_name} #{window_id}' | sed -n 's/^guide //p' | head -n 1)
+  nt kill-window -t "$wid"
+  printf '0\n' > "$g/onboard.tries"; printf '0\n' > "$g/onboard.retry"   # a stop's lift
+  gl fleet_guide_tick gs; gl fleet_guide_tick gs
+  SECS=$(since "$t0")
+  [ "$(guides)" = 0 ] || { WHY="the guide the person closed came back (tries 0)"; return 1; }
+  [ "$(opens)" = 1 ] || { WHY="the closed guide was reopened: opens=$(opens)"; return 1; }
+  [ -e "$g/onboard.dismissed" ] || { WHY="a shown-then-closed guide was not recorded as dismissed"; return 1; }
+  WHAT="没人来过的登录：节拍不开引导、把旧版留下的置顶 guide 关掉（不算「不要」）；人第一次 attach 立刻开；开过又被关（tries 已清零）记 dismissed，不再拉回"
 }
 
 # A warm-pool entry started before an upgrade (its @agent_cfg / @agent_ver no longer

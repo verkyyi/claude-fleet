@@ -155,6 +155,7 @@
 0.4 guide-admission-room
 3.4 guide-killed-midopen
 2.3 guide-retry-forever
+3.0 guide-spare-login
 1.2 health-silent-pass
 0.1 heartbeat-sys-blocked
 0.2 home-pool-claim-unkeyed

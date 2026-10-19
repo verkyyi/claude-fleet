@@ -1475,6 +1475,7 @@ drill_guide_admission_room() {
     || { WHY="dash-raw-session does not ask the waiver for the pinned /fleet-onboard guide"; return 1; }
   # the third try that never spoke: the stop is written and said
   : > "$d/conf/global/onboard.pending"; printf '3\n' > "$d/conf/global/onboard.tries"; printf '0\n' > "$d/conf/global/onboard.retry"
+  printf 'drill\n' > "$d/conf/global/onboard.person"   # a person is here (issue #4852)
   printf '引导窗口没能打开：dash-raw-session: machine memory tight · x\n' > "$d/conf/global/onboard.openfail"
   adm "fleet_guide_tick gar-nosuch-$$" >/dev/null
   [ -s "$d/conf/global/onboard.stuck" ] || { WHY="three tries did not write onboard.stuck"; return 1; }

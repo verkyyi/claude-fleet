@@ -283,6 +283,9 @@ step_guide() {
   t0=$SECONDS
   # the login step failed: one look, no wait — the guide had its chance
   if [ -n "$BOOT_AT" ]; then deadline=$((t0 + ONBOARD_SECS)); else deadline=$t0; fi
+  # the guide opens only for a person (issue #4852): this run IS the person, and
+  # its ssh login attaches nothing — say so, the way a first attach would
+  [ -z "$BOOT_AT" ] || as_login env HOME="$H" bash "$H/.claude/fleet/bin/fleet-guide.sh" --arrive >/dev/null 2>&1 </dev/null
   while :; do
     keep_sudo
     if [ "$spoke" = 0 ] && login_has "$G/guide.spoke"; then spoke=1; SPOKE_AT=$((SECONDS - t0)); fi
