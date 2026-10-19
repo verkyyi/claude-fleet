@@ -6515,6 +6515,24 @@ drill_repo_start_unobserved() {
   WHAT='没被 observe 就退出的启动：supervise 报 unobserved，Hub 只把无 native 的 starting 结成 abandoned，迟到的 observe 被拒'
 }
 
+# ---- authority-retired-endpoint-blocks (#4831): a retired endpoint's open
+# local starts and fleet rows held a repo off the hub forever — only its own
+# (now dead) token could settle them. Retire now ends them retired, releases
+# its leases and lists its fleet rows apart; another repo stays byte for byte.
+drill_authority_retired_endpoint_blocks() {
+  CAP=120;  # a cold go test build is ~40 s on a CI runner
+  local t0 f="$ROOT/tokenledger/internal/store/retire.go" a="$ROOT/tokenledger/internal/api/fleet_repo_authority.go"
+  t0=$(now)
+  grep -q 's.settleRetiredTx(tx, endpointID' "$f" \
+    || { WHY="RetireEndpointAs no longer settles the endpoint's local starts and leases"; return 1; }
+  grep -q '"retired_hosts": retired' "$a" \
+    || { WHY="the authority manifest no longer lists a retired endpoint's fleet rows apart"; return 1; }
+  _drill_go_tests 'TestRetireSettlesLocalStarts' "$ROOT/tokenledger/internal/store/retire_settle_test.go" x ./internal/store || return 1
+  _drill_go_tests 'TestRepoAuthorityRetiredHostBlocksNothing' "$ROOT/tokenledger/internal/api/fleet_repo_authority_test.go" \
+    '退役端点：它没收口的 local start 结成 retired、legacy lease 放掉、fleet 行列进 retired_hosts 不再挡；没退役的离线端点照旧挡，另一个仓库一字不变（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
 drill_native_continue_once() {
   CAP=15; local t0 out
   t0=$(now)

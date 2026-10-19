@@ -173,7 +173,20 @@ func endpointRetire(st *store.Store, id string) error {
 	if err != nil {
 		return err
 	}
+	settled := func() {
+		if n := res.Settled.Starts; n > 0 {
+			fmt.Printf("%d local start(s) it left open were ended retired (%v).\n", n, res.Settled.Repos)
+		}
+		if n := len(res.Settled.Leases); n > 0 {
+			fmt.Printf("%d legacy lease(s) it held were released.\n", n)
+		}
+	}
 	if !res.Retired {
+		if res.Settled.Starts > 0 || len(res.Settled.Leases) > 0 {
+			fmt.Printf("%s was already retired; settled what it left open.\n", id)
+			settled()
+			return nil
+		}
 		return fmt.Errorf("%s was already retired (%s)", id,
 			ep.RetiredAt.Local().Format(time.RFC3339))
 	}
@@ -185,6 +198,7 @@ func endpointRetire(st *store.Store, id string) error {
 	if res.Passes > 0 {
 		fmt.Printf("%d session pass(es) it issued were revoked with it.\n", res.Passes)
 	}
+	settled()
 
 	// Say plainly what was kept. An operator who wanted the row gone should
 	// find out now, from the machine that did the thing, rather than later

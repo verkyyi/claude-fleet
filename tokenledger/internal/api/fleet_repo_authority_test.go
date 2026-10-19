@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -314,5 +315,54 @@ func TestRepoAuthorityStartsAsFields(t *testing.T) {
 	}
 	if starts, _ := m["starts"].([]any); len(starts) != 2 {
 		t.Fatal("manifest starts", m["starts"])
+	}
+}
+
+// claude-fleet#4831: a retired endpoint can never launch or observe again, so
+// its fleet row is no host of the repo — listed under retired_hosts, never a
+// blocker — while a live host's row and owners stay exactly as they were.
+func TestRepoAuthorityRetiredHostBlocksNothing(t *testing.T) {
+	h, _, _, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
+	auth := func(h http.Header) { h.Set("Authorization", "Bearer "+viewerToken) }
+	path := FleetTicketsPath + "/authority?repo=" + writeRepo
+	row, _ := h.srv.Store.Fleet(f4.FleetID)
+	if _, err := h.srv.Store.RepoLocalStart(writeRepo, "operator", row.EndpointID, "left-open", "reserve", "", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	mentions := func(m map[string]any, s string) bool {
+		b, _ := json.Marshal(map[string]any{"b": m["blockers"], "o": m["legacy_owners"], "n": m["nodes"]})
+		return strings.Contains(string(b), s)
+	}
+	code, before := ticketCall(t, h, auth, http.MethodGet, path, nil)
+	if code != 200 || !mentions(before, f4.FleetID) || !mentions(before, "left-open") || len(before["retired_hosts"].([]any)) != 0 {
+		t.Fatalf("before: %d %v", code, before)
+	}
+	res, err := h.srv.Store.RetireEndpointAs(row.EndpointID, "operator", "drill", time.Now())
+	if err != nil || !res.Retired || res.Settled.Starts != 1 {
+		t.Fatal(res, err)
+	}
+	code, after := ticketCall(t, h, auth, http.MethodGet, path, nil)
+	if code != 200 || mentions(after, f4.FleetID) || mentions(after, row.EndpointID) || mentions(after, "left-open") {
+		t.Fatalf("a retired host still blocks: %d %v", code, after)
+	}
+	retired := after["retired_hosts"].([]any)
+	if len(retired) != 1 || retired[0].(map[string]any)["fleet_id"] != f4.FleetID {
+		t.Fatalf("retired_hosts: %v", retired)
+	}
+	if !mentions(after, f5.FleetID) {
+		t.Fatalf("the live host vanished: %v", after)
+	}
+	strip := func(m map[string]any) string {
+		var keep []any
+		for _, o := range m["legacy_owners"].([]any) {
+			if o.(map[string]any)["endpoint_id"] != row.EndpointID {
+				keep = append(keep, o)
+			}
+		}
+		b, _ := json.Marshal(keep)
+		return string(b)
+	}
+	if strip(before) != strip(after) {
+		t.Fatalf("the live host's owners changed:\n%s\n%s", strip(before), strip(after))
 	}
 }

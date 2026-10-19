@@ -182,6 +182,10 @@ func (s *Store) RetireEndpoint(endpointID string) (bool, error) {
 type RetireResult struct {
 	Retired bool // false: it was already retired, nothing changed
 	Passes  int  // session passes (fleet_session_creds) this endpoint issued, revoked with it
+	// Settled: the local starts and legacy leases only this endpoint could
+	// have closed (claude-fleet#4831) -- on a first retire, or on a re-run
+	// against one an older hub retired without settling.
+	Settled RetiredSettle
 }
 
 // RetireEndpointAs is RetireEndpoint with who did it and why, and the rest
@@ -190,12 +194,14 @@ type RetireResult struct {
 //   - every live session pass the endpoint's node issued (claude-fleet#1969)
 //     is revoked with it — a pass is the node's word that a session is its
 //     own, and the node's word is exactly what was just withdrawn;
-//   - one fleet_audit row: actor, node_revoke, endpoint:<id>, the outcome.
+//   - one fleet_audit row: actor, node_revoke, endpoint:<id>, the outcome;
+//   - its open repo_local_start rows end `retired` and its legacy leases go,
+//     with their own audit row (settleRetiredTx, claude-fleet#4831).
 //
-// Both tables exist only with the fleet module on (EnsureNodes); on a hub
-// without it (`ccquota endpoint retire` against a plain ledger) the retire
-// alone happens, exactly as before. A no-op retire changes and records
-// nothing.
+// The fleet tables exist only with the fleet module on (EnsureNodes); on a hub
+// without them (`ccquota endpoint retire` against a plain ledger) the retire
+// alone happens, exactly as before. A re-run against a retired endpoint only
+// settles what is still open, and changes and records nothing when nothing is.
 func (s *Store) RetireEndpointAs(endpointID, actor, reason string, at time.Time) (RetireResult, error) {
 	var out RetireResult
 	tx, err := s.write.Begin()
@@ -210,6 +216,23 @@ func (s *Store) RetireEndpointAs(endpointID, actor, reason string, at time.Time)
 		return out, fmt.Errorf("retire endpoint: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		var retired sql.NullString
+		err := tx.QueryRow(`SELECT retired_at FROM endpoints WHERE endpoint_id = ?`, endpointID).Scan(&retired)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && !retired.Valid) {
+			return out, nil
+		}
+		if err != nil {
+			return out, fmt.Errorf("retire endpoint: %w", err)
+		}
+		if out.Settled, err = s.settleRetiredTx(tx, endpointID, actor, reason, at); err != nil {
+			return out, fmt.Errorf("retire endpoint: %w", err)
+		}
+		if out.Settled.empty() {
+			return out, nil
+		}
+		if err := tx.Commit(); err != nil {
+			return RetireResult{}, fmt.Errorf("retire endpoint: %w", err)
+		}
 		return out, nil
 	}
 	out.Retired = true
@@ -239,6 +262,9 @@ func (s *Store) RetireEndpointAs(endpointID, actor, reason string, at time.Time)
 			VALUES (?, '', '', 'node_revoke', ?, ?, '', ?)`, actor, "endpoint:"+endpointID, outcome, at.UTC().Format(rfc)); err != nil {
 			return out, fmt.Errorf("retire endpoint: audit: %w", err)
 		}
+	}
+	if out.Settled, err = s.settleRetiredTx(tx, endpointID, actor, reason, at); err != nil {
+		return out, fmt.Errorf("retire endpoint: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return RetireResult{}, fmt.Errorf("retire endpoint: %w", err)
