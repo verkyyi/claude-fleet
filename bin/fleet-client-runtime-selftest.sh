@@ -16,6 +16,8 @@
 #      that ran (fleet-host.sh → fleet-host-install.sh), none from a static file;
 #      nothing followed out of fleet-client-core.sh; the list it writes passes --check
 #   E  usage → 2
+#   G  (issue #4826) --check's reference rule: a file an installed script names
+#      and the package forgot → exit 1 with its file:line; NOT_HERE is excused
 #   F  (issue #4826) --check the other way: a file the manifest installs and
 #      the list lacks → exit 1, named; a `served` one off the list is fine; the
 #      hand-written `agent` / `dispatch` uses survive a rebuild (leg D)
@@ -123,6 +125,15 @@ out=$(bash "$RT" --check "$T/short.list" 2>&1); rc=$?
 grep -v '^#' "$BIN/../conf/client-runtime.list" | grep -v "^bin/fleet-node-join.sh${tab}" > "$T/served.list"
 grep -q '^bin/fleet-node-join.sh[[:space:]]\{1,\}served$' "$BIN/../tokenledger/internal/api/fleetclient/manifest" \
   && bash "$RT" --check "$T/served.list" >/dev/null 2>&1 && ok "F a served file off the list is fine" || no "F served: $(bash "$RT" --check "$T/served.list" 2>&1)"
+
+# G — what the installed scripts name (issue #4826, BREAK-IT client-pack-file-missing):
+# a file the package forgot is named; one of NOT_HERE (fleet-hub-sessions.sh) is not
+grep -v '^bin/fleet_iso.py$' "$BIN/../tokenledger/internal/api/fleetclient/manifest" > "$T/forgot.manifest"
+grep -v "^bin/fleet_iso.py${tab}" "$BIN/../conf/client-runtime.list" > "$T/forgot.list"
+out=$(bash "$RT" --check "$T/forgot.list" "$T/forgot.manifest" 2>&1); rc=$?
+[ "$rc" = 1 ] && case $out in *'bin/fleet-services.py:'*'names bin/fleet_iso.py, which the client package neither installs nor serves'*) true ;; *) false ;; esac \
+  && ok "G a forgotten file a client script names → exit 1, file:line named" || no "G rc=$rc $out"
+printf '%s' "$out" | grep -q 'fleet-hub-sessions.sh' && no "G a NOT_HERE file was reported" || ok "G a home-side file (NOT_HERE) is not reported"
 
 # E — usage
 bash "$RT" >/dev/null 2>&1; [ $? = 2 ] && ok "E no command → 2" || no "E usage rc"

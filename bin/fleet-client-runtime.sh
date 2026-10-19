@@ -11,7 +11,10 @@
 #       INSTALLS (all but its `served` lines, issue #4826) is on the list, every
 #       line `<path> TAB <use>[,<use>…]`, no path twice, each use a known
 #       action, `<action>:read` or `static`; exit 0 · 1 a finding (one line
-#       each) · 2 usage
+#       each) · 2 usage. And every repo bin/ file an installed script names in a
+#       code line is installed, served, or excused in NOT_HERE (below) — the
+#       package never forgets a file a client road runs (BREAK-IT
+#       client-pack-file-missing)
 #   fleet-client-runtime.sh trace <out dir> [--live-user <login>] [--machine <m>]
 #       (Linux, strace, root when --live-user) installs THIS tree's client into
 #       a sandbox with bin/fleet-install.sh (FLEET_INSTALL_SRC=file://, no hub
@@ -76,13 +79,37 @@ ACTIONS="install help status update doctor login logout host-on view ls show ans
 
 usage() { sed -n '/^#   fleet-client-runtime.sh --check/,/the list (or writes it)$/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
+# NOT_HERE — bin/ files a client package script NAMES but a client-only computer
+# never runs (issue #4826): --check's reference rule excuses exactly these.
+#   on the home machine — run there over the thin loop, or that machine's code:
+#     fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_view.py
+#     tmux-dashboard-rows.sh fleet_thin_lease.py fleet-window-reap.sh
+#     fleet-peerlink.py fleet-node-supervisor.py
+#   words fleet-ui-lang.sh only prints (a hint naming a machine's command):
+#     dash-reap.sh fleet-account.sh fleet-migrate.sh fleet-repo.sh
+#   承载's, each behind a presence test that says so or takes the client road:
+#     fleet-lib.sh fleet-doctor.sh fleet-up.sh fleet-install-sync.sh
+#     fleet-login-bootstrap.sh fleet-dev-mode.sh fleet-run.sh fleet-agent-bundle.py
+#     fleet-agent-team.py fleet-daemon-lib.sh fleet-cred-proxy.sh fleet-credsep.sh
+#     fleet-peer-cert.sh fleet-feedback-switch.sh fleet-node-shell-retire.sh
+#     fleet_sidefx.py fleet-browser.sh fleet-onboard-clock.sh fleet-control-read.sh
+NOT_HERE="fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_view.py
+  tmux-dashboard-rows.sh fleet_thin_lease.py fleet-window-reap.sh fleet-peerlink.py
+  fleet-node-supervisor.py
+  dash-reap.sh fleet-account.sh fleet-migrate.sh fleet-repo.sh
+  fleet-lib.sh fleet-doctor.sh fleet-up.sh fleet-install-sync.sh fleet-login-bootstrap.sh
+  fleet-dev-mode.sh fleet-run.sh fleet-agent-bundle.py fleet-agent-team.py fleet-daemon-lib.sh
+  fleet-cred-proxy.sh fleet-credsep.sh fleet-peer-cert.sh fleet-feedback-switch.sh
+  fleet-node-shell-retire.sh fleet_sidefx.py fleet-browser.sh fleet-onboard-clock.sh fleet-control-read.sh"
+
 check() {
   local list=${1:-$LIST_DEF} man=${2:-$MANIFEST_DEF}
   [ -f "$list" ] || { echo "client-runtime: no list at $list" >&2; return 2; }
   [ -f "$man" ] || { echo "client-runtime: no manifest at $man" >&2; return 2; }
-  python3 - "$list" "$man" "$ACTIONS" <<'PY'
-import sys
-lst, man, known = sys.argv[1], sys.argv[2], set(sys.argv[3].split())
+  python3 - "$list" "$man" "$ACTIONS" "$REPO" "$NOT_HERE" <<'PY'
+import os, re, sys
+lst, man, known, repo = sys.argv[1], sys.argv[2], set(sys.argv[3].split()), sys.argv[4]
+not_here = set(sys.argv[5].split())
 inman, installs = set(), []
 for line in open(man, encoding="utf-8"):
     s = line.split("#", 1)[0].split()
@@ -112,6 +139,32 @@ for n, line in enumerate(open(lst, encoding="utf-8"), 1):
 for p in installs:
     if p not in seen:
         print("%s: %s is installed by the client manifest but on no line of %s — serve it (`served`) or drop it" % (man, p, lst)); bad = 1
+# what the installed scripts name (issue #4826, BREAK-IT client-pack-file-missing):
+# a bin/ file of the repo named in a code line is installed, served, or one of
+# NOT_HERE — never a file the package simply forgot
+here = {os.path.basename(p) for p in inman}
+rbin = os.path.join(repo, "bin")
+names = {n for n in os.listdir(rbin) if os.path.isfile(os.path.join(rbin, n)) and "selftest" not in n
+         and n not in here and n not in not_here} if os.path.isdir(rbin) else set()
+TOKEN = re.compile(r"[A-Za-z0-9_.-]+")
+for p in installs:
+    if not p.startswith("bin/"):
+        continue
+    try:
+        text = open(os.path.join(repo, p), encoding="utf-8", errors="replace").read().splitlines()
+    except OSError:
+        continue
+    for i, l in enumerate(text, 1):
+        st = l.strip()
+        if st.startswith("#") or st.startswith("//") or st.startswith('"""'):
+            continue
+        code = l.split(" # ", 1)[0]
+        imp = "import " in code   # `import fleet_iso` names bin/fleet_iso.py
+        for t in TOKEN.findall(code):
+            t = t.rstrip(".")
+            for n in (t, t + ".py") if imp else (t,):
+                if n in names:
+                    print("%s:%d: names bin/%s, which the client package neither installs nor serves — add it, or say in NOT_HERE why a client never runs it" % (p, i, n)); bad = 1
 sys.exit(bad)
 PY
 }
