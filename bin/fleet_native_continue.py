@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Guarded prototype for one-shot legacy Codex continuation.
+"""One-shot continuation of a legacy Codex session whose fixed hooks are gone.
 
-Automatic preflight/apply return unavailable before any target read or effect:
-the native continuous-execution gate and the missing-config/MCP stop contract
-are still missing. The isolated controller saves intent before each effect;
-replay never retries one. The original message is not a resume prompt: once the
-new lifetime is bound it goes through the runtime's idle accept under its own
-operation id, and only an independently re-read receipt counts as consumed.
+--preflight reads (never writes) the idle original and prints a manifest with
+the original message; --apply stops it, resumes the SAME SID through the current
+standard launcher and hands the message over as the new lifetime's first turn.
+Intent is saved before each effect; replay never retries one, and only the
+message stages may be re-entered, settling by receipt (docs/dev/NATIVE-OBSERVE.md).
 """
 import argparse
 import hashlib
@@ -23,6 +22,8 @@ import time
 import uuid
 
 import fleet_native_observe as observe
+import fleet_sleep_mcp as MCP
+from fleet_sleep_argv import process_env
 
 BIN = Path(__file__).resolve().parent
 require = observe.require
@@ -36,11 +37,18 @@ ROUTING = ('@fleet_id', '@repo', '@issue', '@raw', '@worktree', '@task', '@origi
 CONFLICTS = ('@handoff_armed', '@agent_transfer_request', '@worker_lifecycle', '@loop')
 UNCONFIRMED = {'preflight': 'source-retained', 'stop': 'stop-unconfirmed',
                'stopped': 'stop-unconfirmed', 'reserve': 'admission-unconfirmed',
-               'launch': 'launch-unconfirmed', 'bound': 'target-unconfirmed',
-               'deliver': 'delivery-unconfirmed', 'consumed': 'consumption-unconfirmed'}
-# A message stage may be re-entered: the runtime's per-delivery journal settles
-# an earlier attempt by its receipt before any new native write (#4617).
-MESSAGE_RESUMABLE = ('bound', 'delivery-rejected', 'delivery-unconfirmed', 'consumption-unconfirmed')
+               'launch': 'launch-unconfirmed', 'started': 'target-unconfirmed',
+               'deliver': 'delivery-unconfirmed', 'bound': 'binding-unconfirmed',
+               'consumed': 'consumption-unconfirmed'}
+SOURCE_STAGES = ('preflight', 'stop', 'stopped', 'reserve', 'launch', 'started')
+# A resumed Codex thread runs SessionStart (source=resume) only when its first
+# turn starts (measured on 0.162.1, #4775), so the new lifetime is bound to its
+# reservation by the original message's own turn. These stages may be re-entered:
+# deliver settles an earlier attempt by its receipt before any new native write,
+# bound and consumed only read.
+TARGET_STAGES = ('deliver', 'bound', 'consumed')
+RESUME_FROM = {'started': 'deliver', 'delivery-rejected': 'deliver', 'delivery-unconfirmed': 'deliver',
+               'binding-unconfirmed': 'bound', 'consumption-unconfirmed': 'consumed'}
 
 
 class Rejected(ValueError):
@@ -74,18 +82,29 @@ def read(path):
         return json.load(stream)
 
 
+def message(plan):
+    """The original message: its operation id and text. Required — without a
+    first turn the resumed lifetime never binds to its reservation."""
+    m = plan.get('message')
+    require(isinstance(m, dict) and set(m) == {'operation', 'text'}
+            and isinstance(m['operation'], str) and str(uuid.UUID(m['operation'])) == m['operation']
+            and isinstance(m['text'], str) and 0 < len(m['text']) <= 65536,
+            'original message needs exactly an operation UUID and its text')
+    return m
+
+
 def execute(path, plan, backend, transition=None):
     """Called under the target lock. Never retry an unacknowledged effect."""
     if path.exists():
         record = read(path)
         require(record.get('plan') == plan, 'operation already belongs to another source')
         return record
-    message(plan)   # a malformed original message refuses before any effect
-    record = dict(version=1, plan=plan, reservation=str(uuid.uuid4()), state='prepared',
+    message(plan)   # a missing or malformed original message refuses before any effect
+    record = dict(version=2, plan=plan, reservation=str(uuid.uuid4()), state='prepared',
                   message_consumption_verified=False, new_kernel_lifetime_requested=True,
                   new_kernel_lifetime_verified=False)
     save(path, record)
-    for stage in ('preflight', 'stop', 'stopped', 'reserve', 'launch', 'bound'):
+    for stage in SOURCE_STAGES:
         if stage == 'stop' and transition is not None:
             # The existing transition lock's durable request marker survives an
             # unknown outcome/controller exit. No TTL can authorize cleanup.
@@ -95,7 +114,7 @@ def execute(path, plan, backend, transition=None):
         save(path, record)
         try:
             method = getattr(backend, stage)
-            result = method(plan, record['reservation']) if stage in ('reserve', 'launch', 'bound') else method(plan)
+            result = method(plan, record['reservation']) if stage in ('reserve', 'launch', 'started') else method(plan)
             record[stage] = result
             save(path, record)
         except Exception:
@@ -104,46 +123,36 @@ def execute(path, plan, backend, transition=None):
             record['state'] = UNCONFIRMED[stage]
             save(path, record)
             return record
-    record['state'] = 'bound'
-    record['new_kernel_lifetime_verified'] = True
+    record['state'] = 'started'
     save(path, record)
-    if transition is not None:
-        (transition / 'request').unlink()
-    return deliver(path, record, backend)
+    return deliver(path, record, backend, transition)
 
 
-def message(plan):
-    """The original message's operation, or None for a continuation without one."""
-    m = plan.get('message')
-    if m is None:
-        return None
-    require(isinstance(m, dict) and set(m) == {'operation', 'text'}
-            and isinstance(m['operation'], str) and str(uuid.UUID(m['operation'])) == m['operation']
-            and isinstance(m['text'], str) and 0 < len(m['text']) <= 65536,
-            'original message needs exactly an operation UUID and its text')
-    return m
+def deliver(path, record, backend, transition=None):
+    """The original message as the resumed lifetime's first turn, then its proof.
 
-
-def deliver(path, record, backend):
-    """Hand the original message to the bound lifetime, then verify consumption.
-
-    Never before the new lifetime is bound: the original writer is stopped and
-    the target is confirmed first, so the message cannot reach the old process.
-    The operation id is the runtime's delivery_id (Codex clientUserMessageId), so
-    a lost ACK or a repeated call settles the earlier attempt instead of sending
-    again. Rejected = provably not started (still owed); unknown is never consumed.
+    Only after `started`: the original writer is stopped and the target is the
+    standard launcher's resume of the same SID, idle, so the message cannot reach
+    the old process (whose missing Stop hook would loop it, #4775). deliver uses
+    the native start-if-idle (thread/queue + clientUserMessageId = operation): a
+    lost ACK or a repeated call settles the earlier attempt by its receipt and is
+    never resent; rejected = provably not started (still owed). The turn's own
+    SessionStart binds the lifetime (bound, read-only); consumed re-reads the
+    persisted thread on a fresh connection. Unknown is never consumed.
     """
-    if message(record['plan']) is None or record.get('state') not in MESSAGE_RESUMABLE:
+    first = RESUME_FROM.get(record.get('state'))
+    if first is None:
         return record
-    require(record.get('new_kernel_lifetime_verified') is True and 'bound' in record,
-            'original message waits for a confirmed new lifetime')
-    # A delivery already accepted is only re-verified, never handed over again.
-    stages = ('consumed',) if record.get('state') == 'consumption-unconfirmed' else ('deliver', 'consumed')
-    for stage in stages:
+    require('started' in record and record['started'].get('native_identity'),
+            'original message waits for a started new lifetime')
+    for stage in TARGET_STAGES[TARGET_STAGES.index(first):]:
         record.update(state=stage + '-requested', stage=stage)
         save(path, record)
         try:
-            record[stage] = getattr(backend, stage)(record['plan'], record)
+            if stage == 'deliver':
+                record[stage] = backend.deliver(record['plan'], record, commit=lambda: save(path, record))
+            else:
+                record[stage] = getattr(backend, stage)(record['plan'], record)
             save(path, record)
         except Rejected:
             record['state'] = 'delivery-rejected'
@@ -153,32 +162,56 @@ def deliver(path, record, backend):
             record['state'] = UNCONFIRMED[stage]
             save(path, record)
             return record
+        if stage == 'bound':
+            record['new_kernel_lifetime_verified'] = True
     record.update(state='consumed', message_consumption_verified=True)
     save(path, record)
+    if transition is not None and (transition / 'request').exists():
+        (transition / 'request').unlink()
     return record
 
 
 def protected_execute(path, plan, backend):
     """Same atomic lock as rotate/transfer/cleanup, held across every stage."""
+    if path.exists():
+        record = read(path)
+        require(record.get('plan') == plan, 'operation already belongs to another source')
+        if record.get('state') in RESUME_FROM:
+            # An unconfirmed message stage kept the lock (its request names this
+            # journal); only this operation may re-enter it, to settle by receipt.
+            request = dict(kind='native-continuation', journal=str(path), source=plan['proof'])
+            with TRANSFER['adopt_transition'](plan['binding']['@worktree'], request) as lock:
+                return deliver(path, read(path), backend, transition=lock)
     with TRANSFER['transition_lock'](plan['binding']['@worktree']) as lock:
         if path.exists():
             record = read(path)
             require(record.get('plan') == plan, 'operation already belongs to another source')
-            if record.get('stage') in ('stop', 'stopped', 'reserve', 'launch', 'bound') and record.get('state') != 'bound':
+            if record.get('stage') not in (None, 'preflight') and record.get('state') != 'consumed':
                 save(lock / 'request', dict(kind='native-continuation', journal=str(path), source=plan['proof']))
-            return deliver(path, record, backend)
+            return deliver(path, record, backend, transition=lock)
         return execute(path, plan, backend, transition=lock)
 
 
 def automatic_capability():
-    # Normal returned-error hooks are not a fail-closed native execution gate,
-    # and a missing-config/MCP-not-ready source has no supported drain/stop proof
-    # (the strict gate's refusal stays, #4537). The original message rides idle
-    # accept after binding (deliver/consumed), but counts only once a real Codex
-    # run shows it. No environment override: isolated probes cannot enable product.
-    return dict(state='unavailable', reason='native-continuation-capability-missing',
-                missing_capabilities=['continuous-execution-gate', 'missing-config-mcp-stop'],
-                pending_native_evidence=['original-message-operation'],
+    """The three contracts #4775 required, each shown on a real Codex
+    (0.162.1, bin/fleet_native_continue_native_test.py — isolated HOME/tmux/
+    socket, fixture hub and Responses):
+
+    - original-message-operation: the message is the resumed lifetime's first
+      turn through native start-if-idle (thread/queue + clientUserMessageId),
+      journaled before the write, settled by receipt, re-read on its own;
+    - continuous-execution-gate: nothing is ever handed to the original (a
+      missing `python3 <deleted>` Stop hook exits 2 and loops every new turn —
+      the drill's --loop-control); it is stopped only idle with no queue,
+      request or goal, and the message runs under the CURRENT hooks;
+    - missing-config-mcp-stop: the fleet's own MCP services are remounted by the
+      resumed lifetime, so their old config path and readiness do not matter —
+      identity and an empty tree beneath them still do; strict is unchanged.
+    No environment override: a probe cannot change what this says.
+    """
+    return dict(state='available', reason='', version=2, missing_capabilities=[],
+                min_native_version='%d.%d' % observe.runtime.CODEX_ACCEPT_MIN,
+                evidence='bin/fleet_native_continue_native_test.py',
                 stop_submitted=False, new_admission_requested=False,
                 message_consumption_verified=False)
 
@@ -192,11 +225,12 @@ def reconcile(record, backend):
         result.update(state='consumed', new_kernel_lifetime_verified=True,
                       message_consumption_verified=True, consumed=record.get('consumed'))
         return result
-    if not all(k in record for k in ('stopped', 'reserve')) or record.get('stage') not in ('launch', 'bound', 'deliver', 'consumed'):
+    if 'deliver' not in record:
+        # Not bindable before the message's turn: the journal's own state stands.
         result['state'] = record['state']
         return result
     try:
-        result['bound'] = backend.bound(record['plan'], record['reservation'], seconds=0)
+        result['bound'] = backend.bound(record['plan'], record, seconds=0)
         result.update(state='bound', new_kernel_lifetime_verified=True)
     except (ValueError, OSError, subprocess.SubprocessError, KeyError, TypeError, EOFError):
         pass
@@ -246,6 +280,33 @@ def source_process(plan):
                 session=session)
 
 
+def fleet_mounts():
+    """The MCP services the CURRENT standard launcher mounts, as it spells them.
+
+    fleet-codex.sh writes exactly `fleet-mcp.py --mount codex` (and the orch
+    group's); a service whose effective native config equals one of these is
+    mounted afresh by the resumed lifetime from this install (issue #4775).
+    """
+    mounts = {}
+    for group in ([], ['--group', 'orch']):
+        out = subprocess.run([sys.executable, str(BIN / 'fleet-mcp.py'), '--mount', 'codex', *group],
+                             capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+        require(out.returncode == 0 and out.stdout.strip(), 'current fleet MCP mount is unavailable')
+        key, value = observe.inline_override(out.stdout.strip())
+        require(key.startswith('mcp_servers.') and isinstance(value, dict), 'current fleet MCP mount is unreadable')
+        mounts[key.split('.', 1)[1]] = value
+    return mounts
+
+
+def remounted(configured):
+    """Configured services the resumed lifetime remounts: same command, args, env."""
+    fields = ('command', 'args', 'env_vars', 'env')
+    current = fleet_mounts()
+    return sorted(name for name, conf in configured.items()
+                  if name in current and isinstance(conf, dict) and conf.get('enabled', True)
+                  and all(conf.get(k) == current[name].get(k) for k in fields))
+
+
 def native_ready(plan):
     """Fresh observations, NOT an atomic compare-and-accept primitive.
 
@@ -278,14 +339,23 @@ def native_ready(plan):
         require(isinstance(goal, dict) and 'goal' in goal and goal['goal'] is None,
                 'native goal requires its own lifecycle contract')
         require(client.call('thread/loaded/list', {}).get('data') == [proof['native_session']], 'other native threads exist')
+        # A queued input would start on THIS lifetime the moment it is idle,
+        # through hooks that no longer run. Nothing may wait there.
+        queued = client.call('thread/queue/list', dict(threadId=proof['native_session'], limit=1))
+        require(queued.get('data') == [] and not queued.get('nextCursor'), 'native has queued input')
         require(not any('id' in e and 'method' in e for e in client.events), 'native has a pending server request')
+        configured, _ = MCP.inventory(client)
         source = source_process(plan)
-        SLEEP['quiet_processes'](source)
+        mounts = remounted(configured)
+        # The fleet's own servers are mounted afresh by the resumed lifetime, so
+        # their old config path and readiness do not matter: identity and an
+        # empty process tree beneath them still do (fleet_sleep_mcp.classify).
+        SLEEP['quiet_processes'](source, remounted=mounts)
         require(observe.kernel(proof['pid']) == plan['processes']['native'], 'native kernel lifetime changed')
         # Config hashes prove unchanged effective config. shell-exec is only
         # the dependency's measured exec-target basis, never historical code.
         return dict(mode='idle', turn_id=turn['id'], mcp_config=source.get('sleep_mcp', {}),
-                    mcp_basis=source.get('sleep_mcp_basis', {}))
+                    mcp_basis=source.get('sleep_mcp_basis', {}), mcp_remounted=mounts)
     finally:
         client.close()
 
@@ -307,6 +377,25 @@ def inspect(pane, socket, pid, sid):
     plan['readiness'] = native_ready(plan)
     plan['continuation_version'] = 1
     return plan
+
+
+def descendants(pid):
+    found, todo = [], [pid]
+    while todo:
+        out = subprocess.run(['pgrep', '-P', str(todo.pop())], capture_output=True, text=True, timeout=5).stdout
+        children = [int(v) for v in out.split()]
+        found.extend(children)
+        todo.extend(children)
+    return found
+
+
+def is_app_server(pid):
+    try:
+        argv = observe.process_argv(pid)
+        return ('app-server' in argv and '--listen' in argv
+                and Path(observe.kernel(pid)['executable']).name == 'codex')
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
 
 
 def wait_for(fn, seconds):
@@ -341,7 +430,7 @@ def unavailable(error):
 class Native:
     def preflight(self, plan):
         require(automatic_capability()['state'] == 'available',
-                'automatic continuation unavailable: native execution gate and message operation missing')
+                'automatic continuation unavailable')
         require(plan.get('continuation_version') == 1, 'not a continuation manifest')
         row, proof = plan['binding'], plan['proof']
         current = inspect(row['pane'], row['socket'], proof['pid'], proof['native_session'])
@@ -361,7 +450,7 @@ class Native:
         require(routing(row) == plan['routing'], 'routing changed before exit')
         require(observe.kernel(proof['pid']) == plan['processes']['native'], 'native changed before exit')
         require(INPUT['snapshot'](row['socket'], row['pane'], 'codex')['state'] == 'empty', 'input changed before exit')
-        SLEEP['quiet_processes'](source_process(plan))
+        SLEEP['quiet_processes'](source_process(plan), remounted=plan['readiness'].get('mcp_remounted'))
         launch.tmux('set-option', '-w', '-t', row['pane'], '@wrap_quiet', '1', socket=row['socket'])
         launch.tmux('send-keys', '-t', row['pane'], '-l', '\x1b[200~/exit\x1b[201~', socket=row['socket'])
         launch.tmux('send-keys', '-t', row['pane'], 'Enter', socket=row['socket'])
@@ -412,8 +501,119 @@ class Native:
         return dict(standard_wrapper=str(BIN / 'fleet-session-wrap.sh'), reservation=reservation,
                     native_session=plan['proof']['native_session'])
 
-    def bound(self, plan, reservation, seconds=30):
-        row = plan['binding']
+    def started(self, plan, reservation):
+        """The standard launcher's resume of the same SID: a new kernel under a new
+        launcher and supervisor, admitted with the new reservation, its private
+        thread loaded and idle. Everything but the registration, which only the
+        first turn's SessionStart writes (bound)."""
+        row, sid = plan['binding'], plan['proof']['native_session']
+        def check():
+            authority.prove_stopped(dict(plan['proof']))
+            require(routing(row) == plan['routing'], 'target routing differs')
+            require(launch.option(row['pane'], 'pane_dead', row['socket']) != '1', 'target launcher exited')
+            owner = launch.option(row['pane'], '@cc_launcher_pid', row['socket'])
+            require(owner.isdigit() and int(owner) != plan['processes']['launcher']['pid'], 'target launcher not yet stamped')
+            # A resume names its thread as @codex_pending until its SessionStart
+            # writes @codex_identity (fleet-codex.sh, #4728) — on 0.162.1 that is
+            # the first turn's; a release that runs it at resume time says so here.
+            pending = json.loads(launch.option(row['pane'], '@codex_pending', row['socket'])
+                                 or launch.option(row['pane'], '@codex_identity', row['socket']) or '{}')
+            require(pending.get('session_id') == sid and pending.get('owner') == owner, 'target does not resume the original SID')
+            servers = [pid for pid in descendants(int(owner)) if is_app_server(pid)]
+            require(len(servers) == 1, 'target native server is unknown or ambiguous')
+            native = observe.kernel(servers[0])
+            scope = observe.process_scope(native['pid'])
+            context = json.loads(scope.get('FLEET_AUTHORITY_CONTEXT', '{}'))
+            require(context.get('reservation') == reservation and context.get('repo') == plan['context']['repo']
+                    and context.get('worker_id') == plan['context']['worker_id']
+                    and scope.get('FLEET_CODEX_LAUNCHER_PID') == owner, 'target authority scope differs')
+            supervisor = observe.kernel(context['supervisor'])
+            require(observe.kernel(int(owner))['ppid'] == supervisor['pid'] and launch.root_native(native, supervisor['pid'])
+                    and launch.descendant(supervisor['pid'], int(launch.option(row['pane'], 'pane_pid', row['socket']))),
+                    'target process ancestry is unproven')
+            expected = dict({k: plan['hub'][k] for k in observe.START_KEYS}, reservation=reservation)
+            admitted = process_env(native['pid'], {'FLEET_AUTHORITY_ADMISSION'})['values']
+            authority.check_start_ack(expected, json.loads(admitted.get('FLEET_AUTHORITY_ADMISSION', '{}')), 'starting')
+            remote = scope.get('FLEET_CODEX_REMOTE', '')
+            require(remote.startswith('unix:///') and observe.process_argv(native['pid'])[-3:] == ['app-server', '--listen', remote],
+                    'target private RPC is unproven')
+            proof = dict({k: native[k] for k in ('pid', 'birth', 'executable')},
+                         worker_id=plan['context']['worker_id'], native_session=sid)
+            require(proof['pid'] != plan['proof']['pid'], 'target is the original lifetime')
+            client = observe.runtime.RPC(remote, timeout=5, peer_pid=native['pid'])
+            try:
+                require(client.call('thread/loaded/list', {}).get('data') == [sid], 'target root thread is unknown')
+                thread = client.call('thread/read', dict(threadId=sid, includeTurns=True))['thread']
+                require(thread.get('status', {}).get('type') == 'idle' and Path(thread.get('cwd', '')).resolve()
+                        == Path(row['@worktree']).resolve(), 'target thread is not idle in its worktree')
+                anchor = (thread.get('turns') or [{}])[-1].get('id')
+                require(anchor == plan['readiness']['turn_id'], 'target history differs from the stopped original')
+            finally:
+                client.close()
+            require(workspace(row['@worktree']) == plan['workspace'], 'worktree changed during resume')
+            return dict(native_identity=proof, remote=remote, owner=int(owner),
+                        supervisor=supervisor['pid'], anchor_turn_id=anchor)
+        return wait_for(check, 45)
+
+    def target(self, plan, record):
+        """The started lifetime, unchanged; the original still stopped."""
+        st, row = record['started'], plan['binding']
+        authority.prove_stopped(dict(plan['proof']))
+        native = observe.kernel(st['native_identity']['pid'])
+        require(all(native[k] == st['native_identity'][k] for k in ('pid', 'birth', 'executable')),
+                'target lifetime changed')
+        require(routing(row) == plan['routing'], 'target routing changed')
+        return st
+
+    def deliver(self, plan, record, commit=lambda: None):
+        m, st, row = message(plan), self.target(plan, record), plan['binding']
+        sid, op, anchor = plan['proof']['native_session'], m['operation'], record['started']['anchor_turn_id']
+        rt = observe.runtime
+        client = rt.RPC(st['remote'], timeout=30, peer_pid=st['native_identity']['pid'])
+        try:
+            version = rt.codex_version(client)
+            require(version is not None and version[:2] >= rt.CODEX_ACCEPT_MIN, 'native start-if-idle is unverified here')
+            if record.get('delivery_attempt'):
+                # Settle the earlier attempt before anything new: never a blind resend.
+                qid = rt.codex_queued(client, sid, op)
+                if qid is not None:
+                    state, why, tid, _ = rt.codex_settle(client, sid, qid, op, anchor)
+                else:
+                    found, tid, _ = rt.codex_receipt(client, sid, op, anchor)
+                    state, why = (('accepted', 'native_receipt') if found else
+                                  ('unknown', 'receipt_scan_incomplete') if found is None else ('absent', ''))
+                if state == 'absent':
+                    idle = client.call('thread/read', dict(threadId=sid))['thread']['status']['type'] == 'idle'
+                    require(idle, 'earlier delivery attempt unsettled')
+                    state = 'retry'
+            else:
+                state = 'retry'
+            if state == 'retry':
+                thread = client.call('thread/read', dict(threadId=sid))['thread']
+                if thread['status']['type'] != 'idle':
+                    raise Rejected('precheck_not_idle')
+                require(workspace(row['@worktree']) == plan['workspace'], 'worktree changed before delivery')
+                record['delivery_attempt'] = dict(operation=op, anchor_turn_id=anchor, at=time.time())
+                commit()   # written before the native write, so a retry settles it
+                try:
+                    q = client.call('thread/queue/add', dict(threadId=sid, clientUserMessageId=op,
+                                                             input=[dict(type='text', text=m['text'])]))['queuedSubmission']
+                except ValueError:
+                    raise Rejected('native_add_refused') from None
+                require(q.get('clientUserMessageId') == op, 'native receipt mismatch')
+                state, why, tid, _ = rt.codex_settle(client, sid, q.get('id'), op, anchor, wait=10.0)
+            if state == 'rejected':
+                raise Rejected(why)
+            require(state == 'accepted' and isinstance(tid, str) and tid, 'original message delivery unconfirmed')
+            return dict(operation=op, turn_id=tid, anchor_turn_id=anchor, method='thread/queue', reason=why,
+                        native_identity=st['native_identity'])
+        finally:
+            client.close()
+
+    def bound(self, plan, record, seconds=30):
+        """The first turn's SessionStart registered the started lifetime."""
+        row, reservation = plan['binding'], record['reservation']
+        started = record['started']['native_identity']
         def check():
             authority.prove_stopped(dict(plan['proof']))
             require(routing(row) == plan['routing'], 'target routing differs')
@@ -423,8 +623,7 @@ class Native:
                     and receipt.get('worker_id') == plan['context']['worker_id'], 'target admission not yet bound')
             expected = dict(plan['hub'], reservation=reservation)
             observe.check_ack(expected, proof, receipt.get('hub_confirmation'))
-            require(proof.get('native_session') == plan['proof']['native_session'] and proof != plan['proof'],
-                    'target did not resume the original SID with a new lifetime')
+            require(proof == started, 'target bound a lifetime other than the started one')
             native = observe.kernel(proof['pid'])
             require(all(native[k] == proof[k] for k in ('pid', 'birth', 'executable'))
                     and launch.root_native(native, receipt['supervisor']), 'target kernel differs from its authority receipt')
@@ -448,52 +647,26 @@ class Native:
             try:
                 thread = observe.runtime.thread(client, proof, row['@worktree'])
                 require(thread['status']['type'] in ('active', 'idle'), 'target native thread not loaded')
+                # What the continuation let go of must be back, from this install.
+                mounts = plan['readiness'].get('mcp_remounted', [])
+                if mounts:
+                    configured, statuses = MCP.inventory(client)
+                    require(remounted(configured) == mounts
+                            and all(MCP.runtime_ready(statuses.get(name, {})) for name in mounts),
+                            'target has not remounted the fleet MCP services yet')
             finally:
                 client.close()
-            require(workspace(row['@worktree']) == plan['workspace'], 'worktree changed before continuation confirmed')
-            return dict(authority_receipt=receipt, native_identity=proof, workspace=plan['workspace'])
+            return dict(authority_receipt=receipt, native_identity=proof)
         return check() if seconds == 0 else wait_for(check, seconds)
-
-    def target(self, plan, record):
-        """The bound lifetime, read fresh: same SID, the bound PID/birth, never the original."""
-        row, bound = plan['binding'], record['bound']['native_identity']
-        snap = observe.runtime.read(row['pane'], socket=row['socket'])
-        ident = snap.get('identity') or {}
-        require(ident.get('native_session') == plan['proof']['native_session']
-                and all(ident.get(k) == bound.get(k) for k in ('pid', 'birth', 'executable'))
-                and ident.get('pid') != plan['proof']['pid'], 'message target is not the bound new lifetime')
-        require(routing(row) == plan['routing'], 'target routing changed before delivery')
-        return snap
-
-    def deliver(self, plan, record):
-        m = message(plan)
-        snap = self.target(plan, record)
-        # The continuation hands over the same tree it stopped; the turn may change it.
-        require(workspace(plan['binding']['@worktree']) == plan['workspace'], 'worktree changed before delivery')
-        result = observe.runtime.accept_if_idle(plan['binding']['pane'], snap, m['operation'], m['text'],
-                                                plan['binding']['socket'])
-        if result.get('state') == 'rejected':
-            raise Rejected(result.get('reason') or 'rejected')
-        receipt = result.get('receipt') or {}
-        require(result.get('state') == 'accepted' and result.get('delivery_id') == m['operation']
-                and receipt.get('delivery_id') == m['operation']
-                and receipt.get('native_session') == plan['proof']['native_session']
-                and isinstance(receipt.get('turn_id'), str) and receipt['turn_id'],
-                'original message delivery unconfirmed')
-        return dict(operation=m['operation'], receipt=receipt,
-                    native_identity={k: snap['identity'].get(k) for k in observe.runtime.NATIVE})
 
     def consumed(self, plan, record):
         """An independent read of the bound thread: the accepted turn carries the
         operation as its userMessage clientId. The delivery's own answer is not it."""
-        m, accepted = message(plan), record['deliver']['receipt']
-        self.target(plan, record)
-        row, sid = plan['binding'], plan['proof']['native_session']
-        data = observe.runtime.CODEX['identity'](row['pane'], row['socket'])
-        require(data.get('session_id') == sid, 'target native identity changed')
-        client = observe.runtime.RPC(data['remote'], timeout=5, peer_pid=record['bound']['native_identity']['pid'])
+        m, accepted, st = message(plan), record['deliver'], self.target(plan, record)
+        sid = plan['proof']['native_session']
+        client = observe.runtime.RPC(st['remote'], timeout=5, peer_pid=st['native_identity']['pid'])
         try:
-            found, turn, _ = observe.runtime.codex_receipt(client, sid, m['operation'], accepted.get('anchor_turn_id'))
+            found, turn, _ = observe.runtime.codex_receipt(client, sid, m['operation'], accepted['anchor_turn_id'])
         finally:
             client.close()
         require(found is True and turn == accepted['turn_id'], 'original message consumption unconfirmed')
@@ -511,17 +684,23 @@ def main():
     parser.add_argument('--socket', default='')
     parser.add_argument('--pid', type=int)
     parser.add_argument('--sid')
+    parser.add_argument('--message-file', type=Path, help='--preflight: the original message (UTF-8 text)')
+    parser.add_argument('--operation', help='--preflight: its operation id (default: a new UUID)')
     args = parser.parse_args()
-    if args.preflight or args.apply:
+    if (args.preflight or args.apply) and automatic_capability()['state'] != 'available':
         print(json.dumps(automatic_capability(), indent=2))
         return 1
     if args.preflight:
-        require(args.pane and args.pid and args.sid, 'explicit pane/PID/SID required')
+        require(args.pane and args.pid and args.sid and args.message_file,
+                'explicit pane/PID/SID and the original message are required')
+        text = args.message_file.read_text(encoding='utf-8')
         try:
             plan = inspect(args.pane, args.socket, args.pid, args.sid)
         except (ValueError, OSError, subprocess.SubprocessError, KeyError, TypeError, EOFError) as error:
             print(json.dumps(unavailable(error), indent=2))
             return 1
+        plan['message'] = dict(operation=args.operation or str(uuid.uuid4()), text=text)
+        message(plan)
         print(json.dumps(plan, indent=2))
         return 0
     if args.status:
@@ -530,7 +709,7 @@ def main():
     if args.reconcile:
         result = reconcile(read(args.reconcile), Native())
         print(json.dumps(result, indent=2))
-        return 0 if result['state'] in ('bound', 'consumed') else 1
+        return 0 if result['state'] == 'consumed' else 1
     plan = read(args.apply)
     with observe.target_lock(plan):
         root = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet'))) / 'native-continuations'
@@ -543,7 +722,7 @@ def main():
                               new_kernel_lifetime_requested=True,
                               new_kernel_lifetime_verified=record.get('new_kernel_lifetime_verified', False),
                               message_consumption_verified=record.get('message_consumption_verified', False)), indent=2))
-        return 0 if record['state'] == ('consumed' if message(plan) else 'bound') else 1
+        return 0 if record['state'] == 'consumed' else 1
 
 
 if __name__ == '__main__':

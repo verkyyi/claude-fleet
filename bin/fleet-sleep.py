@@ -988,7 +988,7 @@ def codex_busy_binding(w, source):
             data.get('remote'), process(source['pid']), receipt)
 
 
-def quiet_processes(source,config_home=None,background=None,strict=True):
+def quiet_processes(source,config_home=None,background=None,strict=True,remounted=None):
     # background=None is hibernation's contract: any unverified child vetoes.
     # A list collects those pids instead (still walking their descendants) —
     # failover's hard-wall grace passes one (#871), and so does child_busy (#864);
@@ -1001,6 +1001,11 @@ def quiet_processes(source,config_home=None,background=None,strict=True):
     rows=TRANSFER['process_rows']()
     pending=[source['pid']]; seen=set()
     lenient={} if strict else {'strict':False}   # hibernation's call shape unchanged
+    if remounted:
+        # The continuation's proven remount (issue #4775, fleet_sleep_mcp.classify);
+        # strict only, and only Codex reports the services it names.
+        if not strict or source['agent']!='codex': raise ValueError('remounted MCP services need a strict Codex walk')
+        lenient['remounted']=frozenset(remounted)
     if not strict:
         pid=os.getpid()
         while pid in rows and pid not in seen and pid!=source['pid']:

@@ -1679,6 +1679,31 @@ class McpRestartTest(unittest.TestCase):
         self.source={'agent':'codex'}
         self.assertEqual(self.shell_classify(strict=False),{2})
 
+    def test_remounted_skips_only_contract_and_readiness(self):
+        # Issue #4775: the continuation proves the next lifetime mounts the
+        # fleet's own service afresh from the current install. That replaces the
+        # sleep contract and readiness for it — never identity or the job check.
+        self.shell_exec_case()
+        self.status={'data':[{'name':'fleet','runtimeStatus':None,'toolsError':'MCP startup failed'}]}
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE=''):
+            with self.assertRaisesRegex(ValueError,'no restartability contract'):self.shell_classify()
+            classify=lambda **k:LIB['MCP']['classify'](self.source,LIB['MCP']['inventory'](self.client),self.rows,1,
+                lambda pid:self.argv[pid],lambda pid:self.exes[pid],env_reader=self.env_reader,**k)
+            self.assertEqual(classify(remounted=frozenset({'fleet'})),{2})
+            self.assertEqual(self.source['sleep_mcp_basis'],{'fleet':'shell-exec+remounted'})
+            # Another name does not cover it; identity still has to hold.
+            with self.assertRaisesRegex(ValueError,'no restartability contract'):classify(remounted=frozenset({'other'}))
+            self.env=dict(FLEET_MCP_BIN='/another/bin')
+            self.assertEqual(classify(remounted=frozenset({'fleet'})),set())
+            self.env=dict(HOME='/home/x',FLEET_MCP_BIN='/gone/old/bin',PATH='/nowhere')
+            self.rows[3]=(2,'python');self.argv[3]=['python3','-c','job'];self.exes[3]=self.FRAMEWORK
+            with self.assertRaisesRegex(ValueError,'unverified child'):classify(remounted=frozenset({'fleet'}))
+        # The walk takes it for a strict Codex source only.
+        quiet=LIB['quiet_processes']
+        for source in ({'agent':'claude','pid':1},):
+            with self.assertRaisesRegex(ValueError,'strict Codex walk'):quiet(dict(source),remounted=['fleet'])
+        with self.assertRaisesRegex(ValueError,'strict Codex walk'):quiet({'agent':'codex','pid':1},strict=False,remounted=['fleet'])
+
     def test_shell_exec_refuses_what_the_started_environment_cannot_prove(self):
         self.shell_exec_case()
         with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='fleet'):
@@ -1813,7 +1838,9 @@ class McpRestartTest(unittest.TestCase):
         pick=LIB['MCP']['shell_exec_reader']
         client=lambda agent:type('C',(),{'initialized':{'userAgent':agent}})()
         self.assertIs(pick(client('claude_fleet/0.160.1 (Mac OS 27.0.0; arm64) unknown (claude_fleet; 1)'),reader),reader)
-        for agent in ('claude_fleet/0.161.0 (Mac OS)','claude_fleet/0.160.10','codex/0.160.1-alpha','0.160.1',None,7):
+        # 0.162.1: measured by bin/fleet_native_continue_native_test.py (#4775).
+        self.assertIs(pick(client('claude_fleet/0.162.1 (Mac OS 27.0.0; arm64)'),reader),reader)
+        for agent in ('claude_fleet/0.161.0 (Mac OS)','claude_fleet/0.160.10','claude_fleet/0.162.10','codex/0.160.1-alpha','0.160.1',None,7):
             self.assertIsNone(pick(client(agent),reader),agent)
         self.assertIsNone(pick(object(),reader))
         self.assertNotIn('process_env',[l for l in src.splitlines() if "MCP['verify_resume']" in l][0])

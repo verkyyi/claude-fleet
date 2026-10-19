@@ -114,19 +114,37 @@ Codex→Codex 切换是新 conversation，内部 `--native-resume` 目前仅支�
    hook 不覆盖新身份，以及同 SID 的正常消息确已消费；只有现场 owner 按新的明确授权
    执行后才能报告业务恢复。#4510 的发布/live 仍只归 #4486。
 
-续接控制器（`bin/fleet_native_continue.py`，#4536 落护栏，#4775 接原消息）的原消息
-**不再作为 resume 首条普通字符串**：计划可带 `message {operation, text}`，只在新
-lifetime 已 `bound`（原 writer 已停、新 PID/birth 与同 SID 已确认）之后，经
-`fleet_runtime.accept_if_idle` 以 `operation` 作 delivery_id（Codex 的
-`clientUserMessageId`）投递；之后另开连接按该 id 重读持久 thread，找到同一 turn 才记
-`consumed`、`message_consumption_verified`。丢 ACK / 重复调用 / `delivery-unconfirmed`
-再次 apply 时由 runtime 的逐投递 journal 按回执结清，绝不新发；`delivery-rejected`
-是原生未启动、仍欠；已 accepted 但重读未确认（`consumption-unconfirmed`）只重读不再投。
-自动入口仍返回 unavailable：缺 `continuous-execution-gate`（旧固定 hook 失效后的
-timeout/kill、precompaction、非普通输入/goal 的 fail-closed 门）与
-`missing-config-mcp-stop`（missing-config-path / MCP-not-ready 的受支持 drain/stop，
-`strict` 拒绝不变，#4537）；原消息一项列在 `pending_native_evidence`，待真实 Codex 隔离
-演练取证后才算数。
+### 一次续接（#4775）
+
+`bin/fleet_native_continue.py` 把一个固定 hooks 已随安装删除的旧 Codex 会话接到当前
+安装上，保留同 SID、worktree、未提交文件和 worker/FID。`--preflight --message-file`
+只读原会话并打印清单（含原消息及其 operation id），`--apply <清单>` 执行；每次副作用
+之前先写续接 journal，副作用从不重放。
+
+真实 Codex 0.162.1 实测的三件事决定了它的形状：
+
+- **旧会话不能再跑任何回合。** 固定的 Stop hook 写成 `python3 <已删路径>`，退出码 2
+  被 Codex 当作拦停，回合自我回灌：隔离演练里 10 秒上百次模型请求，永不 idle。所以
+  续接只在原生 idle、没有排队输入 / 待答请求 / goal 时停原会话（`/exit`，不起回合），
+  忙或循环中的原会话一律拒绝、不停不投；原消息绝不投给原会话。
+- **续起的 thread 在第一轮才跑 SessionStart（`source=resume`）。** 所以先证明
+  `started`：同 SID、新 kernel、新 launcher / supervisor、以新 reservation 获准入、
+  thread idle、历史末轮等于停下前的那一轮；再把原消息作为它的**第一轮**投递
+  （`thread/queue` + `clientUserMessageId = operation`，原生 start-if-idle；投递前先记
+  journal，丢 ACK / 重复调用按回执结清、绝不重发，被拒 = 原生未启动、仍欠）；这一轮
+  在**当前** hooks 下跑 SessionStart 登记 → UserPromptSubmit 门，`bound` 读这份登记；
+  `consumed` 另开连接按 clientId 重读持久 thread，找到同一 turn 才算消费。续起的会话
+  没有 `@launch`（authority 路径），所以不经 `accept_if_idle` 的 C3 外壳，直接用 runtime
+  的同一组 settle / receipt 函数。
+- **fleet 自己的 MCP 服务配置路径随安装消失，native 报 not ready。** 0.162.1 的 MCP 子
+  进程环境实测仍是白名单 + `env_vars`（`SHELL_EXEC_CODEX` 加入 0.162.1），身份可证；
+  对当前标准 launcher 原样挂载的服务（command/args/env_vars/env 全同）免续接方的重启
+  契约与就绪，身份核对与“其下无作业”照旧，续起后新 lifetime 必须报这些服务 ready。
+  sleep 的 `strict` 门不变（`remounted` 只给 strict 的 Codex 走查）。
+
+只有 `deliver` / `bound` / `consumed` 可以重入：它们的 transition lock 请求写着这份
+journal，`--apply` 再次执行时只有这一操作能接回（`adopt_transition`：请求完全相同、原
+持有进程已不在），按回执结清。`--reconcile` 只读。
 
 ## 隔离验证
 
@@ -148,3 +166,17 @@ python3 bin/fleet_native_observe_native_test.py --codex /absolute/path/to/codex 
 丢 ACK/部分登记重试，并单独报告消息消费是否取得原生证据；旧 hook 缺失不算已修复。
 第二种保留旧安装作正常消息对照：同 SID 的唯一 userMessage/turn 和测试上游收到
 预置测试消息才通过。演练只关闭自己创建的 socket 与进程。
+
+续接的真实 Codex 演练（同样只有 authority 与 Responses 是 fixture）：
+
+```sh
+python3 bin/fleet_native_continue_native_test.py --codex /absolute/path/to/codex
+python3 bin/fleet_native_continue_native_test.py --codex /absolute/path/to/codex --loop-control
+```
+
+第一种：原会话 idle 时删掉它的安装，外来 SID / PID 与带草稿的停止都拒绝且不动原执行，
+续接后同 SID 新 lifetime、fleet MCP 重新 ready、原消息丢 ACK 后按回执结清且只消费一次、
+所有新模型请求都带这条消息（原会话没起回合）、续起回合在当前 Stop hook 下正常结束、
+重复 apply 无副作用、迟到的旧 stop proof 不改新身份、dirty 文件与工作树 hash 不变。
+第二种：工具运行中删安装，续接拒绝忙会话；工具结束后 Stop hook 循环，续接始终拒绝、
+不停、不预约、不投。

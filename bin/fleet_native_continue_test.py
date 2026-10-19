@@ -16,6 +16,11 @@ from unittest.mock import patch
 import fleet_native_continue as continuation
 
 
+OP = "0b9d7f3e-6a0e-4c8f-9a51-6f0c2b1d4e77"
+SOURCE = ["preflight", "stop", "stopped", "reserve", "launch", "started"]
+ALL = SOURCE + ["deliver", "bound", "consumed"]
+
+
 class Backend:
     def __init__(self, fail=""):
         self.fail, self.calls = fail, []
@@ -31,12 +36,17 @@ class Backend:
     def stopped(self, plan): return self.step("stopped")
     def reserve(self, plan, reservation): return self.step("reserve")
     def launch(self, plan, reservation): return self.step("launch")
-    def bound(self, plan, reservation): return self.step("bound")
-    def deliver(self, plan, record):
+    def started(self, plan, reservation):
+        self.step("started")
+        return {"native_identity": {"pid": 43, "native_session": "original"}, "anchor_turn_id": "t8"}
+    def deliver(self, plan, record, commit=lambda: None):
         if self.fail == "deliver-rejected":
             self.calls.append("deliver")
             raise continuation.Rejected("precheck_active")
+        record["delivery_attempt"] = {"operation": plan["message"]["operation"]}
+        commit()
         return self.step("deliver")
+    def bound(self, plan, record, seconds=30): return self.step("bound")
     def consumed(self, plan, record): return self.step("consumed")
 
 
@@ -45,12 +55,16 @@ class Journal(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "operation.json"
-        self.plan = {"version": 1, "proof": {"native_session": "original"}}
+        self.plan = {"version": 1, "proof": {"native_session": "original"},
+                     "message": {"operation": OP, "text": "继续"}}
 
     def test_product_entry_refuses_known_missing_capabilities_before_any_action(self):
         for args in (['--apply', str(self.path)], ['--preflight', '--pane', '%0', '--pid', '42', '--sid', 'original']):
             with patch.object(continuation.sys, 'argv', ['continue', *args]), \
                     patch.dict(os.environ, HOME=self.tmp.name, FLEET_CONF_DIR=self.tmp.name), \
+                    patch.object(continuation, 'automatic_capability', return_value=dict(
+                        state='unavailable', reason='x', missing_capabilities=['continuous-execution-gate'],
+                        stop_submitted=False, new_admission_requested=False, message_consumption_verified=False)), \
                     patch.object(continuation, 'inspect') as inspect, \
                     patch.object(continuation, 'read') as read, \
                     patch.object(continuation, 'execute') as execute, \
@@ -60,33 +74,30 @@ class Journal(unittest.TestCase):
             self.assertEqual(result['state'], 'unavailable')
             self.assertFalse(result['stop_submitted'])
             self.assertFalse(result['new_admission_requested'])
-            self.assertIn('continuous-execution-gate', result['missing_capabilities'])
-            self.assertIn('missing-config-mcp-stop', result['missing_capabilities'])
-            # Wired after binding, but real Codex evidence is still owed (#4775).
-            self.assertIn('original-message-operation', result['pending_native_evidence'])
             inspect.assert_not_called(); read.assert_not_called(); execute.assert_not_called()
             self.assertFalse(self.path.exists())
 
     def test_success_and_lost_ack_never_repeat_effects(self):
         backend = Backend()
         first = continuation.execute(self.path, self.plan, backend)
-        self.assertEqual(first["state"], "bound")
-        self.assertFalse(first["message_consumption_verified"])
+        self.assertEqual(first["state"], "consumed")
+        self.assertTrue(first["message_consumption_verified"])
         self.assertTrue(first["new_kernel_lifetime_verified"])
         calls = backend.calls[:]
         self.assertEqual(continuation.execute(self.path, self.plan, backend), first)
+        self.assertEqual(continuation.deliver(self.path, first, backend), first)
         self.assertEqual(backend.calls, calls)
-        self.assertEqual(calls, ["preflight", "stop", "stopped", "reserve", "launch", "bound"])
+        self.assertEqual(calls, ALL)
 
     def test_failure_never_advances_or_retries_a_side_effect(self):
-        for failing in ("preflight", "stop", "stopped", "reserve", "launch", "bound"):
+        expected = {'preflight': 'source-retained', 'stop': 'stop-unconfirmed',
+                    'stopped': 'stop-unconfirmed', 'reserve': 'admission-unconfirmed',
+                    'launch': 'launch-unconfirmed', 'started': 'target-unconfirmed'}
+        for failing in SOURCE:
             with self.subTest(failing=failing):
                 path = self.path.with_name(failing + ".json")
                 backend = Backend(failing)
                 result = continuation.execute(path, self.plan, backend)
-                expected = {'preflight': 'source-retained', 'stop': 'stop-unconfirmed',
-                            'stopped': 'stop-unconfirmed', 'reserve': 'admission-unconfirmed',
-                            'launch': 'launch-unconfirmed', 'bound': 'target-unconfirmed'}
                 self.assertEqual(result["state"], expected[failing])
                 self.assertFalse(result["new_kernel_lifetime_verified"])
                 self.assertFalse(result["message_consumption_verified"])
@@ -94,55 +105,47 @@ class Journal(unittest.TestCase):
                 self.assertEqual(backend.calls[-1], failing)
                 calls = backend.calls[:]
                 self.assertEqual(continuation.execute(path, self.plan, backend), result)
+                self.assertEqual(continuation.deliver(path, result, backend), result)
                 self.assertEqual(backend.calls, calls)
+                self.assertNotIn("deliver", calls)
                 if failing in ("preflight", "stop", "stopped"):
                     self.assertNotIn("launch", calls)
                     self.assertNotIn("reserve", calls)
 
-    def message_plan(self):
-        return dict(self.plan, message={"operation": "0b9d7f3e-6a0e-4c8f-9a51-6f0c2b1d4e77", "text": "继续"})
-
-    def test_original_message_goes_after_binding_and_is_verified_once(self):
-        plan, backend = self.message_plan(), Backend()
-        first = continuation.execute(self.path, plan, backend)
-        self.assertEqual(first["state"], "consumed")
-        self.assertTrue(first["message_consumption_verified"])
-        self.assertEqual(backend.calls, ["preflight", "stop", "stopped", "reserve", "launch", "bound",
-                                         "deliver", "consumed"])
-        calls = backend.calls[:]
-        self.assertEqual(continuation.execute(self.path, plan, backend), first)
-        self.assertEqual(continuation.deliver(self.path, first, backend), first)
-        self.assertEqual(backend.calls, calls)
-
-    def test_message_never_reaches_an_unbound_or_unconfirmed_target(self):
-        for failing in ("stop", "stopped", "reserve", "launch", "bound"):
-            with self.subTest(failing=failing):
-                backend = Backend(failing)
-                record = continuation.execute(self.path.with_name(failing + ".json"), self.message_plan(), backend)
-                self.assertNotIn("deliver", backend.calls)
-                self.assertFalse(record["message_consumption_verified"])
-                self.assertEqual(continuation.deliver(self.path.with_name(failing + ".json"), record, backend), record)
-                self.assertNotIn("deliver", backend.calls)
+    def test_message_is_the_resumed_lifetimes_first_turn_and_binds_it(self):
+        # Codex 0.162.1 runs a resumed thread's SessionStart only when its first
+        # turn starts: binding waits for the delivery, never the other way round.
+        backend = Backend()
+        continuation.execute(self.path, self.plan, backend)
+        self.assertLess(backend.calls.index("started"), backend.calls.index("deliver"))
+        self.assertLess(backend.calls.index("deliver"), backend.calls.index("bound"))
+        record = continuation.execute(self.path.with_name("b.json"), self.plan, Backend("bound"))
+        self.assertEqual(record["state"], "binding-unconfirmed")
+        self.assertFalse(record["new_kernel_lifetime_verified"])
+        again = Backend()
+        record = continuation.deliver(self.path.with_name("b.json"), record, again)
+        self.assertEqual(again.calls, ["bound", "consumed"])   # never delivered twice
+        self.assertTrue(record["new_kernel_lifetime_verified"])
 
     def test_lost_delivery_ack_settles_by_the_same_operation_never_a_new_one(self):
-        plan = self.message_plan()
-        record = continuation.execute(self.path, plan, Backend("deliver"))
+        record = continuation.execute(self.path, self.plan, Backend("deliver"))
         self.assertEqual(record["state"], "delivery-unconfirmed")
+        # The attempt was journaled before the native write it describes.
+        self.assertEqual(continuation.read(self.path)["delivery_attempt"], {"operation": OP})
         self.assertFalse(record["message_consumption_verified"])
         seen = []
         class Settle(Backend):
-            def deliver(self, plan, record):
-                seen.append(plan["message"]["operation"])
+            def deliver(self, plan, record, commit=lambda: None):
+                seen.append((plan["message"]["operation"], record.get("delivery_attempt")))
                 return self.step("deliver")
         backend = Settle()
         again = continuation.deliver(self.path, continuation.read(self.path), backend)
         self.assertEqual(again["state"], "consumed")
-        self.assertEqual(seen, [plan["message"]["operation"]])
-        self.assertEqual(backend.calls, ["deliver", "consumed"])
+        self.assertEqual(seen, [(OP, {"operation": OP})])
+        self.assertEqual(backend.calls, ["deliver", "bound", "consumed"])
 
     def test_rejected_delivery_is_still_owed_and_consumption_only_reverified(self):
-        plan = self.message_plan()
-        record = continuation.execute(self.path, plan, Backend("deliver-rejected"))
+        record = continuation.execute(self.path, self.plan, Backend("deliver-rejected"))
         self.assertEqual(record["state"], "delivery-rejected")
         self.assertFalse(record["message_consumption_verified"])
         record = continuation.deliver(self.path, record, Backend("consumed"))
@@ -155,21 +158,25 @@ class Journal(unittest.TestCase):
         self.assertEqual(result["state"], "consumed")
         self.assertTrue(result["message_consumption_verified"])
 
-    def test_malformed_original_message_refuses_before_any_effect(self):
-        for bad in ({"operation": "not-a-uuid", "text": "x"}, {"operation": "0b9d7f3e-6a0e-4c8f-9a51-6f0c2b1d4e77", "text": ""},
-                    {"operation": "0b9d7f3e-6a0e-4c8f-9a51-6f0c2b1d4e77", "text": "x", "extra": 1}):
+    def test_missing_or_malformed_original_message_refuses_before_any_effect(self):
+        for bad in (None, {"operation": "not-a-uuid", "text": "x"}, {"operation": OP, "text": ""},
+                    {"operation": OP, "text": "x", "extra": 1}):
             with self.subTest(bad=bad):
                 backend = Backend()
+                plan = dict(self.plan, message=bad)
+                if bad is None:
+                    del plan["message"]
                 with self.assertRaises(ValueError):
-                    continuation.execute(self.path, dict(self.plan, message=bad), backend)
+                    continuation.execute(self.path, plan, backend)
                 self.assertEqual(backend.calls, [])
                 self.assertFalse(self.path.exists())
 
     def test_crashed_launch_intent_cannot_start_second_writer(self):
-        record = {"version": 1, "plan": self.plan, "state": "launch-requested"}
+        record = {"version": 2, "plan": self.plan, "state": "launch-requested"}
         continuation.save(self.path, record)
         backend = Backend()
         self.assertEqual(continuation.execute(self.path, self.plan, backend), record)
+        self.assertEqual(continuation.deliver(self.path, record, backend), record)
         self.assertEqual(backend.calls, [])
 
     def test_same_operation_cannot_change_source(self):
@@ -183,94 +190,213 @@ class Journal(unittest.TestCase):
         record = continuation.execute(self.path, self.plan, Backend('bound'))
         before = self.path.read_bytes()
         class Reader:
-            def bound(self, plan, reservation, seconds=30):
-                self_checked = (plan == record['plan'] and reservation == record['reservation'] and seconds == 0)
-                if not self_checked:
+            def bound(self, plan, rec, seconds=30):
+                if not (plan == record['plan'] and rec == record and seconds == 0):
                     raise AssertionError('wrong reconciliation scope')
-                return {'native_identity': {'pid': 42}}
+                return {'native_identity': {'pid': 43}}
         result = continuation.reconcile(record, Reader())
         self.assertEqual(result['state'], 'bound')
         self.assertFalse(result['message_consumption_verified'])
         self.assertEqual(self.path.read_bytes(), before)
-        self.assertEqual(continuation.execute(self.path, self.plan, Backend()), record)
+        unstarted = continuation.execute(self.path.with_name('u.json'), self.plan, Backend('launch'))
+        self.assertEqual(continuation.reconcile(unstarted, Reader())['state'], 'launch-unconfirmed')
 
-    def test_trust_attention_never_claims_native_binding_or_relaunches(self):
-        backend = Backend('bound')
+    def test_unproven_target_never_gets_the_message_or_relaunches(self):
+        backend = Backend('started')
         result = continuation.execute(self.path, self.plan, backend)
         self.assertEqual(result['state'], 'target-unconfirmed')
-        self.assertIn('stopped', result)
-        self.assertIn('reserve', result)
-        self.assertIn('launch', result)
-        self.assertNotIn('bound', result)
+        for key in ('stopped', 'reserve', 'launch'):
+            self.assertIn(key, result)
+        self.assertNotIn('started', result)
+        self.assertNotIn('deliver', backend.calls)
         self.assertFalse(result['new_kernel_lifetime_verified'])
         count = len(backend.calls)
         continuation.execute(self.path, self.plan, backend)
+        continuation.deliver(self.path, result, backend)
         self.assertEqual(len(backend.calls), count)
 
 
+class Entry(unittest.TestCase):
+    def test_preflight_carries_the_original_message_into_the_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = Path(tmp) / 'message.txt'
+            text.write_text('继续做完这一步', encoding='utf-8')
+            plan = {'proof': {'native_session': 'original'}}
+            argv = ['continue', '--preflight', '--pane', '%3', '--pid', '42', '--sid', 'original',
+                    '--message-file', str(text), '--operation', OP]
+            with patch.object(continuation.sys, 'argv', argv), \
+                    patch.object(continuation, 'inspect', return_value=dict(plan)) as inspect, \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(continuation.main(), 0)
+            inspect.assert_called_once_with('%3', '', 42, 'original')
+            self.assertEqual(json.loads(output.getvalue())['message'], {'operation': OP, 'text': '继续做完这一步'})
+            with patch.object(continuation.sys, 'argv', argv[:-4]), patch.object(continuation, 'inspect') as inspect:
+                with self.assertRaises(ValueError):
+                    continuation.main()
+                inspect.assert_not_called()
+
+
+class Adopt(unittest.TestCase):
+    """protected_execute re-enters a kept lock only for its own message stages."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "operation.json"
+        self.plan = {"binding": {"@worktree": self.tmp.name}, "proof": {"native_session": "original"},
+                     "message": {"operation": OP, "text": "继续"}}
+
+    def test_only_a_resumable_message_stage_adopts_and_never_redoes_the_source(self):
+        adopted, plain = [], []
+        @contextlib.contextmanager
+        def adopt(worktree, request):
+            adopted.append(request)
+            yield Path(self.tmp.name)
+        @contextlib.contextmanager
+        def lock(worktree):
+            plain.append(worktree)
+            yield Path(self.tmp.name)
+        with patch.dict(continuation.TRANSFER, adopt_transition=adopt, transition_lock=lock):
+            record = continuation.protected_execute(self.path, self.plan, Backend("deliver"))
+            self.assertEqual(record["state"], "delivery-unconfirmed")
+            backend = Backend()
+            record = continuation.protected_execute(self.path, self.plan, backend)
+        self.assertEqual(record["state"], "consumed")
+        self.assertEqual(backend.calls, ["deliver", "bound", "consumed"])
+        self.assertEqual(adopted, [dict(kind='native-continuation', journal=str(self.path), source=self.plan['proof'])])
+        self.assertEqual(len(plain), 1)
+
+
+class AdoptLock(unittest.TestCase):
+    """The real .fleet-transfer.py lock: only the operation that kept it re-enters."""
+    def test_adoption_needs_the_exact_request_and_no_live_other_owner(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, FLEET_CONF_DIR=tmp):
+            transfer, work = continuation.TRANSFER, Path(tmp) / 'work'
+            work.mkdir()
+            request = dict(kind='native-continuation', journal='/j', source={'pid': 1})
+            with transfer['transition_lock'](str(work)) as lock:
+                (lock / 'request').write_text(json.dumps(request))
+            self.assertTrue((lock / 'request').exists())      # kept: unknown completion
+            with self.assertRaisesRegex(ValueError, 'another transition'):
+                with transfer['transition_lock'](str(work)): pass
+            for wrong in (dict(request, journal='/other'), dict(request, kind='transfer')):
+                with self.assertRaisesRegex(ValueError, 'another transition'):
+                    with transfer['adopt_transition'](str(work), wrong): pass
+            child = subprocess.Popen(['sleep', '30'])
+            self.addCleanup(child.kill)
+            (lock / 'pid').write_text(str(child.pid))
+            with self.assertRaisesRegex(ValueError, 'live owner'):
+                with transfer['adopt_transition'](str(work), request): pass
+            child.kill(); child.wait()
+            with transfer['adopt_transition'](str(work), request) as adopted:
+                self.assertEqual(adopted, lock)
+                self.assertEqual((lock / 'pid').read_text(), str(os.getpid()))
+                (lock / 'request').unlink()                     # the operation finished
+            self.assertFalse(lock.exists())
+            with transfer['transition_lock'](str(work)): pass  # free again
+
+
 class OriginalMessage(unittest.TestCase):
-    """Native.deliver/consumed against a stubbed runtime: identity fence, answers, re-read."""
-    OP = "0b9d7f3e-6a0e-4c8f-9a51-6f0c2b1d4e77"
+    """Native.deliver/consumed against a stubbed native: identity fence, journal-first, re-read."""
 
     def setUp(self):
         self.plan = {"binding": {"pane": "%7", "socket": "/tmp/s", "@worktree": "/w"},
                      "proof": {"native_session": "sid", "pid": 41}, "routing": {"r": 1},
-                     "workspace": {"files_sha256": "x"}, "message": {"operation": self.OP, "text": "继续"}}
-        self.record = {"bound": {"native_identity": {"pid": 42, "birth": "b", "executable": "e"}}}
-        self.ident = {"native_session": "sid", "pid": 42, "birth": "b", "executable": "e", "native_remote": "r"}
+                     "workspace": {"files_sha256": "x"}, "message": {"operation": OP, "text": "继续"}}
+        self.native = {"pid": 43, "birth": "b", "executable": "e"}
+        self.record = {"started": {"native_identity": dict(self.native, native_session="sid", worker_id="w"),
+                                   "remote": "unix:///r", "anchor_turn_id": "t8"}}
+        self.calls, self.thread_status, self.added = [], "idle", []
+        test = self
+        class RPC:
+            initialized = {"userAgent": "claude_fleet/0.162.1 (Mac OS)"}
+            def __init__(self, *a, **k): test.rpc_kwargs = k
+            def close(self): pass
+            def call(self, method, params):
+                test.calls.append(method)
+                if method == "thread/read": return {"thread": {"status": {"type": test.thread_status}}}
+                if method == "thread/queue/add":
+                    test.added.append(params)
+                    return {"queuedSubmission": {"id": "q1", "clientUserMessageId": params["clientUserMessageId"]}}
+                raise AssertionError(method)
         rt = continuation.observe.runtime
-        for target, value in ((continuation, "routing"), (continuation, "workspace")):
-            patcher = patch.object(target, value, return_value=self.plan[value])
-            patcher.start(); self.addCleanup(patcher.stop)
-        self.read = patch.object(rt, "read", side_effect=lambda *a, **k: {"version": 1, "identity": dict(self.ident)})
-        self.read.start(); self.addCleanup(self.read.stop)
+        for context in (patch.object(rt, "RPC", RPC),
+                        patch.object(continuation.authority, "prove_stopped", return_value={}),
+                        patch.object(continuation.observe, "kernel", side_effect=lambda pid: dict(test.native)),
+                        patch.object(continuation, "routing", return_value={"r": 1}),
+                        patch.object(continuation, "workspace", return_value={"files_sha256": "x"})):
+            context.start()
+            self.addCleanup(context.stop)
 
-    def accept(self, answer):
-        return patch.object(continuation.observe.runtime, "accept_if_idle", return_value=answer)
+    def settle(self, answer):
+        return patch.object(continuation.observe.runtime, "codex_settle", return_value=answer)
 
-    def test_original_lifetime_or_another_sid_never_gets_the_message(self):
-        for change in ({"pid": 41}, {"native_session": "other"}, {"birth": "older"}):
-            with self.subTest(change=change):
-                self.ident.update(change)
-                with self.accept({}) as accept, self.assertRaises(ValueError):
-                    continuation.Native().deliver(self.plan, self.record)
-                accept.assert_not_called()
-                self.ident.update(native_session="sid", pid=42, birth="b")
-
-    def test_rejected_is_owed_unknown_is_never_consumed(self):
-        with self.accept({"state": "rejected", "reason": "precheck_active"}), self.assertRaises(continuation.Rejected):
+    def test_another_lifetime_never_gets_the_message(self):
+        self.native = {"pid": 43, "birth": "older", "executable": "e"}
+        with self.settle(("accepted", "native_started", "t9", "t8")), self.assertRaises(ValueError):
             continuation.Native().deliver(self.plan, self.record)
-        for answer in ({"state": "unknown", "reason": "receipt_unconfirmed"},
-                       {"state": "accepted", "delivery_id": self.OP, "receipt": {"delivery_id": "other", "native_session": "sid", "turn_id": "t"}},
-                       {"state": "accepted", "delivery_id": self.OP, "receipt": {"delivery_id": self.OP, "native_session": "sid"}}):
-            with self.subTest(answer=answer), self.accept(answer), self.assertRaises(ValueError) as caught:
+        self.assertEqual(self.added, [])
+
+    def test_attempt_is_journaled_before_the_add_and_answers_map(self):
+        committed = []
+        commit = lambda: committed.append((dict(self.record.get("delivery_attempt", {})), len(self.added)))
+        with self.settle(("accepted", "native_started", "t9", "t8")) as settle:
+            out = continuation.Native().deliver(self.plan, self.record, commit=commit)
+        self.assertEqual(committed[0][1], 0)              # written before the native add
+        self.assertEqual(committed[0][0]["operation"], OP)
+        self.assertEqual(self.added[0]["clientUserMessageId"], OP)
+        self.assertEqual(settle.call_args.args[1:5], ("sid", "q1", OP, "t8"))
+        self.assertEqual((out["turn_id"], out["anchor_turn_id"]), ("t9", "t8"))
+        self.assertEqual(self.rpc_kwargs["peer_pid"], 43)
+        for answer, error in ((("rejected", "native_not_idle", None, None), continuation.Rejected),
+                              (("unknown", "receipt_unconfirmed", None, None), ValueError)):
+            self.record.pop("delivery_attempt", None)
+            with self.subTest(answer=answer), self.settle(answer), self.assertRaises(ValueError) as caught:
                 continuation.Native().deliver(self.plan, self.record)
-            self.assertNotIsInstance(caught.exception, continuation.Rejected)
-        receipt = {"delivery_id": self.OP, "native_session": "sid", "turn_id": "t9", "anchor_turn_id": "t8"}
-        with self.accept({"state": "accepted", "delivery_id": self.OP, "receipt": receipt}) as accept:
-            out = continuation.Native().deliver(self.plan, self.record)
-        self.assertEqual(accept.call_args.args[2:4], (self.OP, "继续"))
-        self.assertEqual(out["receipt"]["turn_id"], "t9")
+            self.assertIs(type(caught.exception) is continuation.Rejected, error is continuation.Rejected)
+
+    def test_busy_target_is_rejected_before_any_write(self):
+        self.thread_status = "active"
+        with self.assertRaises(continuation.Rejected):
+            continuation.Native().deliver(self.plan, self.record)
+        self.assertNotIn("delivery_attempt", self.record)
+        self.assertEqual(self.added, [])
+
+    def test_earlier_attempt_settles_by_receipt_never_resends(self):
+        rt = continuation.observe.runtime
+        self.record["delivery_attempt"] = {"operation": OP}
+        cases = ((("q1", None), ("accepted", "native_idle_dispatch", "t9", "t8"), "settle"),
+                 ((None, (True, "t9", "t8")), None, "receipt"),
+                 ((None, (None, None, None)), None, "unknown"))
+        for (queued, receipt), settled, kind in cases:
+            with self.subTest(kind=kind), patch.object(rt, "codex_queued", return_value=queued), \
+                    patch.object(rt, "codex_receipt", return_value=receipt), self.settle(settled):
+                if kind == "unknown":
+                    with self.assertRaises(ValueError):
+                        continuation.Native().deliver(self.plan, self.record)
+                else:
+                    self.assertEqual(continuation.Native().deliver(self.plan, self.record)["turn_id"], "t9")
+            self.assertEqual(self.added, [])
+        # Provably absent and idle: the one owed delivery may be made, once.
+        with patch.object(rt, "codex_queued", return_value=None), \
+                patch.object(rt, "codex_receipt", return_value=(False, None, None)), \
+                self.settle(("accepted", "native_started", "t9", "t8")):
+            continuation.Native().deliver(self.plan, self.record)
+        self.assertEqual(len(self.added), 1)
 
     def test_consumption_is_an_independent_reread_of_the_same_turn(self):
         rt = continuation.observe.runtime
-        record = dict(self.record, deliver={"receipt": {"turn_id": "t9", "anchor_turn_id": "t8"}})
-        client = unittest.mock.MagicMock()
+        record = dict(self.record, deliver={"turn_id": "t9", "anchor_turn_id": "t8"})
         for found, ok in (((True, "t9", "t8"), True), ((True, "t10", "t9"), False),
                           ((None, None, None), False), ((False, None, None), False)):
-            with self.subTest(found=found), \
-                    patch.dict(rt.CODEX, identity=lambda *a: {"session_id": "sid", "remote": "r"}), \
-                    patch.object(rt, "RPC", return_value=client) as rpc, \
-                    patch.object(rt, "codex_receipt", return_value=found) as receipt:
+            with self.subTest(found=found), patch.object(rt, "codex_receipt", return_value=found) as receipt:
                 if ok:
                     out = continuation.Native().consumed(self.plan, record)
                     self.assertEqual(out["turn_id"], "t9")
-                    self.assertEqual(rpc.call_args.kwargs["peer_pid"], 42)
-                    self.assertEqual(receipt.call_args.args[1:], ("sid", self.OP, "t8"))
+                    self.assertEqual(self.rpc_kwargs["peer_pid"], 43)
+                    self.assertEqual(receipt.call_args.args[1:], ("sid", OP, "t8"))
                 else:
                     with self.assertRaises(ValueError):
                         continuation.Native().consumed(self.plan, record)
-                client.close.assert_called()
 
 
 class Readiness(unittest.TestCase):
@@ -282,6 +408,9 @@ class Readiness(unittest.TestCase):
         self.pending = False
         self.closed = False
         self.calls = []
+        self.queue = []
+        self.mount = {'command': 'bash', 'args': ['-c', 'exec python3 x/fleet-mcp.py'], 'env_vars': ['TMUX']}
+        self.configured = {}
         test = self
 
         class RPC:
@@ -296,12 +425,16 @@ class Readiness(unittest.TestCase):
                     return {'thread': test.thread}
                 if method == 'thread/goal/get': return test.goal
                 if method == 'thread/loaded/list': return {'data': ['source']}
+                if method == 'thread/queue/list': return {'data': test.queue, 'nextCursor': None}
+                if method == 'config/read': return {'config': {'mcp_servers': test.configured}}
+                if method == 'mcpServerStatus/list': return {'data': [], 'nextCursor': None}
                 raise AssertionError('unexpected native mutation: ' + method)
 
         for context in (patch.object(continuation.observe.runtime, 'RPC', RPC),
                         patch.object(continuation.observe, 'kernel', return_value={'pid': 42}),
                         patch.object(continuation.launch, 'option', return_value='isolated'),
-                        patch.dict(continuation.SLEEP, quiet_processes=lambda source: None)):
+                        patch.object(continuation, 'fleet_mounts', side_effect=lambda: {'fleet': dict(self.mount)}),
+                        patch.dict(continuation.SLEEP, quiet_processes=lambda source, remounted=None: None)):
             context.start()
             self.addCleanup(context.stop)
         self.plan = dict(binding={'@worktree': '/fixture', 'pane': '%1', 'socket': '/fixture/tmux', 'window': '@1'}, proof=dict(pid=42, native_session='source'),
@@ -309,11 +442,35 @@ class Readiness(unittest.TestCase):
 
     def test_completed_idle_is_observation_only(self):
         self.assertEqual(continuation.native_ready(self.plan),
-                         {'mode': 'idle', 'turn_id': 'turn', 'mcp_config': {}, 'mcp_basis': {}})
+                         {'mode': 'idle', 'turn_id': 'turn', 'mcp_config': {}, 'mcp_basis': {}, 'mcp_remounted': []})
         self.assertTrue(self.closed)
 
+    def test_queued_input_refuses_before_any_stop(self):
+        # It would start on the original lifetime, through hooks that no longer run.
+        self.queue = [{'id': 'q1'}]
+        with self.assertRaises(ValueError):
+            continuation.native_ready(self.plan)
+        self.assertTrue(self.closed)
+
+    def test_only_the_current_launchers_exact_mount_is_remounted(self):
+        seen = []
+        def quiet(source, remounted=None):
+            seen.append(remounted)
+        exact = dict(self.mount, enabled=True, environment_id='local', tool_timeout_sec=600.0)
+        for configured, expected in (({'fleet': exact}, ['fleet']),
+                                     ({'fleet': dict(exact, args=['-c', 'exec python3 other.py'])}, []),
+                                     ({'fleet': dict(exact, env={'BASH_ENV': '/x'})}, []),
+                                     ({'fleet': dict(exact, enabled=False)}, []),
+                                     ({'context7': dict(exact)}, [])):
+            with self.subTest(configured=configured):
+                self.configured = configured
+                with patch.dict(continuation.SLEEP, quiet_processes=quiet):
+                    result = continuation.native_ready(self.plan)
+                self.assertEqual(seen[-1], expected)
+                self.assertEqual(result['mcp_remounted'], expected)
+
     def test_mcp_uses_source_repo_contract_and_keeps_basis(self):
-        def quiet(source):
+        def quiet(source, remounted=None):
             self.assertEqual((source['session'], source['worktree']), ('isolated', '/fixture'))
             self.assertNotIn('window', source)
             source['sleep_mcp'] = {'fleet': 'effective-config-digest'}
@@ -386,10 +543,18 @@ class Capability(unittest.TestCase):
         result = continuation.unavailable(ValueError('MCP service fleet is not ready or has unknown runtime status'))
         self.assertEqual(result, dict(state='unavailable', reason='mcp-not-ready',
             stop_submitted=False, new_admission_requested=False, message_consumption_verified=False))
-        with patch.object(continuation, 'inspect') as inspect:
+        with patch.object(continuation, 'inspect') as inspect, \
+                patch.object(continuation, 'automatic_capability', return_value=dict(state='unavailable')):
             with self.assertRaisesRegex(ValueError, 'automatic continuation unavailable'):
                 continuation.Native().stop({})
             inspect.assert_not_called()
+
+    def test_available_only_with_its_evidence_and_no_override(self):
+        cap = continuation.automatic_capability()
+        self.assertEqual((cap['state'], cap['missing_capabilities']), ('available', []))
+        self.assertTrue((continuation.BIN.parent / cap['evidence']).is_file())
+        with patch.dict(os.environ, FLEET_NATIVE_CONTINUE='0'):
+            self.assertEqual(continuation.automatic_capability(), cap)
 
 
 class AuthorityAck(unittest.TestCase):

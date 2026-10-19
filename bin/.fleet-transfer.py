@@ -4,6 +4,7 @@
 import argparse
 from contextlib import contextmanager
 import datetime
+import fcntl
 import hashlib
 import json
 import os
@@ -45,6 +46,42 @@ def transition_lock(worktree):
         # library: unknown completion retains ownership for explicit recovery.
         if not (path/'request').exists() and owner.exists() and owner.read_text().strip()==str(os.getpid()):
             owner.unlink(); path.rmdir()
+
+
+@contextmanager
+def adopt_transition(worktree, request):
+    """Re-enter a lock that an unknown completion kept (issue #4775).
+
+    Only the operation that wrote it: its durable request must equal <request>
+    exactly, and the process recorded as owner must be gone or be this one —
+    never a live other controller. Ownership then moves here; the request, and so
+    the lock, stays until that operation itself removes it.
+    """
+    lib=str(Path(__file__).with_name('fleet-lib.sh'))
+    lease=run('bash','-c','. "$1"; fleet_rotate_lease_file "$2"','fleet-transition',lib,worktree)
+    path=Path(lease+'.transfer-lock')
+    marker=path/'request'
+    try: held=json.loads(marker.read_text())
+    except (OSError,ValueError): raise ValueError('no retained transition to adopt') from None
+    if held!=request: raise ValueError('another transition owns this worktree')
+    owner=path/'pid'
+    try: pid=int(owner.read_text().strip())
+    except (OSError,ValueError): pid=0
+    if pid and pid!=os.getpid():
+        try:
+            os.kill(pid,0)
+            raise ValueError('the retained transition still has a live owner')
+        except ProcessLookupError: pass
+        except PermissionError: raise ValueError('the retained transition still has a live owner') from None
+    # One adopter at a time: the request marker itself is the gate (no new file).
+    with open(marker) as gate:
+        try: fcntl.flock(gate,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: raise ValueError('another controller is adopting this transition') from None
+        owner.write_text(str(os.getpid()))
+        try: yield path
+        finally:
+            if not marker.exists() and owner.exists() and owner.read_text().strip()==str(os.getpid()):
+                owner.unlink(); path.rmdir()
 
 
 def resolve(registry, projects, worktree, exact=False):
