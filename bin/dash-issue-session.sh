@@ -713,7 +713,7 @@ fi
 if [ -n "$CAP_HELD" ]; then refuse "$CAP_HELD"; exit "$RC_CAP"; fi
 # Opening here: a node the hub typed client runs no task (issue #4886) — the
 # placement above may still have sent it to a managed node.
-if [ "$TAIL_ONLY" != 1 ] && fleet_client_refuse "开 #$num" 2>/dev/null; then
+if [ "$TAIL_ONLY" != 1 ] && fleet_client_refuse "开 #$num" --kept 2>/dev/null; then
   refuse "#$num: 这台是客户端，任务在托管节点上跑"; exit "$RC_INFRA"
 fi
 

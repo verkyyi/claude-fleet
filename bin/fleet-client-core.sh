@@ -359,20 +359,23 @@ fleet_hub_auth_note() {
 # row the operator never typed. Unknown is NEVER client: every caller then does
 # what it did before, byte for byte. --fresh asks the hub whatever the age (a
 # rare road that turns a node into a host: repo add, host on), falling back to
-# the kept word when the hub cannot be asked. FLEET_NODE_ROLE
+# the kept word when the hub cannot be asked; --kept never asks, whatever the age
+# (a spawn: the diskguard tick keeps the word fresh — node_role_watch). FLEET_NODE_ROLE
 # (managed|client|unknown) answers for a test; FLEET_HUB_CURL is the transport.
 fleet_node_role() {
-  local f="$FLEET_CONF_DIR/node-role" role='' at='' kept='' now tok url resp fresh=''
-  [ "${1:-}" = --fresh ] && fresh=1
+  local f="$FLEET_CONF_DIR/node-role" role='' at='' kept='' now tok url resp fresh='' only=''
+  case "${1:-}" in --fresh) fresh=1 ;; --kept) only=1 ;; esac
   case "${FLEET_NODE_ROLE:-}" in
     managed|client) printf '%s\n' "$FLEET_NODE_ROLE"; return 0 ;;
     unknown) return 1 ;;
   esac
   now=$(date +%s)
+  [ -z "$only" ] || [ -r "$f" ] || return 1
   if [ -r "$f" ]; then
     read -r kept at < "$f" 2>/dev/null || true
     case "$at" in ''|*[!0-9]*) at=0 ;; esac
     case "$kept" in managed|client) ;; *) kept='' ;; esac
+    if [ -n "$only" ]; then [ -n "$kept" ] || return 1; printf '%s\n' "$kept"; return 0; fi
     if [ -z "$fresh" ] && [ $((now - at)) -lt "${FLEET_NODE_ROLE_TTL:-3600}" ]; then
       [ -n "$kept" ] || return 1
       printf '%s\n' "$kept"; return 0
@@ -403,7 +406,7 @@ except Exception: pass' 2>/dev/null)
   printf '%s\n' "$role"
 }
 
-# fleet_client_refuse <what> [--fresh] — rc 0 (and the one line on stderr) when
+# fleet_client_refuse <what> [--fresh|--kept] — rc 0 (and the one line on stderr) when
 # the hub typed this node a client: <what> would make it run tasks. rc 1
 # otherwise — managed or unknown go on as before. FLEET_ALLOW_CLIENT_TASKS=1 is
 # the hatch.

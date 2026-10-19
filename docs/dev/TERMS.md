@@ -199,8 +199,10 @@ client, so everything reads as before. A client is passed over by placement,
 skipped by the repo-authority check (listed under `client_hosts`, blocks
 nothing), may not reserve a local start, and refuses on its own side —
 `fleet-client-core.sh`'s `fleet_client_refuse` (the hub's word through
-`GET /v1/node/self`, kept an hour in `$FLEET_CONF_DIR/node-role`) in
-`fleet-repo.sh add`, `fleet host on` and a spawn that would open here:
+`GET /v1/node/self`, kept an hour in `$FLEET_CONF_DIR/node-role` and refreshed
+by the diskguard tick's `node_role_watch`) in `fleet-repo.sh add` and
+`fleet host on` (asked fresh) and a spawn that would open here (the kept word
+only — a spawn never asks the hub):
 「这台是客户端，任务在托管节点上跑」. `FLEET_ALLOW_CLIENT_TASKS=1` is the hatch.
 No hub, no node token ⇒ unknown ⇒ byte for byte as before.
 `fleet-node-role-selftest.sh`, `TestRepoAuthorityClientHostBlocksNothing`,

@@ -8,7 +8,8 @@
 # opening here. Unknown is never client — no token, no hub, an untyped row: every
 # road as before.
 #
-#   A  fleet_node_role: the hub's word, kept; the TTL; --fresh; unknown cases
+#   A  fleet_node_role: the hub's word, kept; the TTL; --fresh; --kept; unknown
+#      cases; the diskguard tick (fleet-diskguard.sh node_role_watch) refreshes it
 #   B  fleet_client_refuse: client ⇒ the one line; managed / unknown ⇒ nothing;
 #      FLEET_ALLOW_CLIENT_TASKS=1 is the hatch
 #   C  fleet-repo.sh add on a client: refused with the reason, before any fleet
@@ -66,6 +67,13 @@ out=$(FAKE_SELF='{"role":"client"}' run "$c2" 'fleet_node_role'); rc=$?
 c3="$T/a3"; mkdir -p "$c3"; cp "$c/node.env" "$c3/"; : > "$T/calls"
 out=$(FAKE_RC=7 run "$c3" 'fleet_node_role; fleet_node_role'); rc=$?
 [ -z "$out" ] && [ "$(calls)" = 1 ] && ok "A8 hub unreachable, nothing kept: unknown, one ask per TTL" || bad "A8 out=$out calls=$(calls)"
+c4="$T/a4"; mkdir -p "$c4"; cp "$c/node.env" "$c4/"; : > "$T/calls"
+out=$(FAKE_SELF='{"role":"client"}' run "$c4" 'fleet_node_role --kept'); rc=$?
+[ "$rc" = 1 ] && [ "$(calls)" = 0 ] && ok "A10 --kept with nothing kept: unknown, the hub never asked" || bad "A10 rc=$rc calls=$(calls)"
+printf 'client %s\n' "$(( $(date +%s) - 99999 ))" > "$c4/node-role"
+out=$(FAKE_SELF='{"role":"managed"}' run "$c4" 'fleet_node_role --kept')
+[ "$out" = client ] && [ "$(calls)" = 0 ] && ok "A11 --kept: the kept word, whatever its age, never asking" || bad "A11 out=$out calls=$(calls)"
+grep -q '^    node_role_watch ' "$BIN/fleet-diskguard.sh" && ok "A12 the diskguard tick keeps the word fresh" || bad "A12 no node_role_watch on the tick"
 out=$(env -i PATH=/usr/bin:/bin FLEET_CONF_DIR="$c2" FLEET_NODE_ROLE=client bash -c ". '$BIN/fleet-client-core.sh'; fleet_node_role")
 [ "$out" = client ] && ok "A9 FLEET_NODE_ROLE answers for a test" || bad "A9 out=$out"
 
@@ -88,8 +96,8 @@ err=$(env -u TMUX FLEET_CONF_DIR="$T/c" FLEET_NODE_ROLE=unknown bash "$BIN/fleet
 printf '%s' "$err" | grep -q '这台是客户端' && bad "C2 unknown refused as a client: $err" || ok "C2 unknown: the old answer ($(printf '%s' "$err" | head -n 1))"
 
 # ---- D: the roads carry it ----
-grep -q 'fleet_client_refuse "开 #$num"' "$BIN/dash-issue-session.sh" && ok "D1 dash-issue-session.sh refuses opening here" || bad "D1"
-grep -q "fleet_client_refuse '开会话'" "$BIN/dash-raw-session.sh" && ok "D2 dash-raw-session.sh refuses opening here" || bad "D2"
+grep -q 'fleet_client_refuse "开 #$num" --kept' "$BIN/dash-issue-session.sh" && ok "D1 dash-issue-session.sh refuses opening here" || bad "D1"
+grep -q "fleet_client_refuse '开会话' --kept" "$BIN/dash-raw-session.sh" && ok "D2 dash-raw-session.sh refuses opening here" || bad "D2"
 err=$(env -i HOME="$T" PATH=/usr/bin:/bin FLEET_CONF_DIR="$T/d" FLEET_NODE_ROLE=client bash "$BIN/fleet-host.sh" on --yes 2>&1); rc=$?
 [ "$rc" = 1 ] && printf '%s' "$err" | grep -q '这台是客户端' && ok "D3 fleet-host.sh on refused on a client" || bad "D3 rc=$rc err=$err"
 

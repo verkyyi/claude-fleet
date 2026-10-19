@@ -1055,6 +1055,17 @@ feedback_watch() {
   return 0
 }
 
+# node_role_watch — keep the hub's word on what this node is (issue #4886):
+# fleet_node_role asks GET /v1/node/self at most once an hour and keeps the answer
+# in $FLEET_CONF_DIR/node-role, which a spawn reads without asking. No hub / no
+# node token ⇒ nothing asked. FLEET_NODE_ROLE_TICK=0 off.
+node_role_watch() {
+  [ "${FLEET_NODE_ROLE_TICK:-1}" = 0 ] && return 0
+  command -v fleet_node_role >/dev/null 2>&1 || return 0
+  fleet_node_role >/dev/null 2>&1
+  return 0
+}
+
 # docprev_watch — this login's doc-preview server died (its session was reaped, the
 # machine rebooted) while docs are still shared: every link answers 502 until the
 # next share. share.sh --ensure starts it again on its old port (issue #3988);
@@ -1219,6 +1230,7 @@ EOF2
     batch_green_watch                             # a driverless batch's green PRs: say how many (#3369)
     feedback_watch                                # /fleet-feedback's outbox: send what waited (#3358)
     docprev_watch                                 # doc-preview's server gone with docs shared: restart it (#3988)
+    node_role_watch                               # the hub's client/managed word, kept an hour (#4886)
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet
     [ "$free" -ge "$WARN_GB" ] && exit 0          # healthy
