@@ -4,7 +4,7 @@
 # and after the hub lease (issue-lease-selftest.sh) it asks the hub which machine
 # opens it. The place command is faked through FLEET_HUB_PLACE_CMD (the seam
 # fleet_hub_place runs; in production `ccquota place`, whose hub side is
-# tokenledger/internal/api/fleet_place.go — the mac-b-busy→mac-a integration lives in
+# tokenledger/hub/api/fleet_place.go — the mac-b-busy→mac-a integration lives in
 # its fleet_place_test.go); the lease through FLEET_HUB_LEASE_CMD; git/gh/tmux on
 # PATH as in issue-lease-selftest.sh. The real dash-issue-session.sh +
 # fleet-lib.sh run unmodified.

@@ -19,7 +19,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$BIN/.." && pwd)"
 LIST="$REPO/conf/client-runtime.list"
-MANIFEST="$REPO/tokenledger/internal/api/fleetclient/manifest"
+MANIFEST="$REPO/tokenledger/hub/api/fleetclient/manifest"
 CORE="$BIN/fleet-client-core.sh"
 LIB="$BIN/fleet-lib.sh"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/client-core-st.XXXXXX")

@@ -112,10 +112,10 @@ done
 [ -z "$miss" ] && ok "A every category's anchor + every wired hooks/ script is in the package" || bad "A missing:$miss"
 v1=$("$PY" "$REPO/bin/fleet-agent-bundle.py" version --root "$REPO"); v2=$("$PY" "$REPO/bin/fleet-agent-bundle.py" version --root "$REPO")
 case "$v1" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) [ "$v1" = "$v2" ] && ok "A version $v1, stable" || bad "A version moves: $v1 $v2" ;; *) bad "A version: $v1" ;; esac
-if [ -x "$REPO/bin/fleet-client-mirror.sh" ] && [ -d "$REPO/tokenledger/internal/api/fleetclient" ]; then
+if [ -x "$REPO/bin/fleet-client-mirror.sh" ] && [ -d "$REPO/tokenledger/hub/api/fleetclient" ]; then
   out=$(bash "$REPO/bin/fleet-client-mirror.sh" --check 2>&1) && ok "A the hub's client manifest is current (mirror --check)" || bad "A mirror: $out"
   # (fleet_redact.py is the client's too: `fleet doctor --bundle` redacts with it)
-  inman=$(awk '!/^[[:space:]]*#/ && NF { print $1 }' "$REPO/tokenledger/internal/api/fleetclient/manifest" | grep -xF -f <(printf '%s\n' "$files") | grep -vx 'bin/fleet_redact.py')
+  inman=$(awk '!/^[[:space:]]*#/ && NF { print $1 }' "$REPO/tokenledger/hub/api/fleetclient/manifest" | grep -xF -f <(printf '%s\n' "$files") | grep -vx 'bin/fleet_redact.py')
   [ -z "$inman" ] && ok "A the client package carries none of it (承载's, #4826)" || bad "A the client manifest still lists: $(printf '%s' "$inman" | tr '\n' ' ')"
 fi
 

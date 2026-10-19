@@ -54,7 +54,7 @@ NODE_V=$(clipval "$REPO/conf/tmux-attention.conf")
 NODE_PT=$(awk '$1=="set" && $2=="-g" && $3=="allow-passthrough" {v=$4} END {print v}' "$REPO/conf/tmux-attention.conf")
 [ "$NODE_V" = on ] && ok "A conf/tmux-attention.conf: set-clipboard on" || bad "A conf/tmux-attention.conf: set-clipboard '${NODE_V}', want on"
 # the hub serves these very files (one copy, packed at build time — #1803)
-if [ -d "$REPO/tokenledger/internal/api/fleetclient" ]; then
+if [ -d "$REPO/tokenledger/hub/api/fleetclient" ]; then
   if out=$(bash "$BIN/fleet-client-mirror.sh" --check 2>&1); then ok "A fleet-client-mirror.sh --check"
   else bad "A fleet-client-mirror.sh --check: $out"; fi
 fi

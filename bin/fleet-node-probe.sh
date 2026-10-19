@@ -39,7 +39,7 @@
 #   answers (the proxy's router reads them); loc and verdict are the route's
 #   verdict: ok | unsupported_region | unreachable
 #
-# What the verdict does is the hub's (tokenledger/internal/api/fleet_compute.go):
+# What the verdict does is the hub's (tokenledger/hub/api/fleet_compute.go):
 # unsupported_region closes a login that runs sessions and raises an alert;
 # ok opens one only when the team policy fleet.compute_auto is on — otherwise
 # it is this one line:  可以打开：fleet host on  (承载, issue #1806 — `fleet node compute on` inside)

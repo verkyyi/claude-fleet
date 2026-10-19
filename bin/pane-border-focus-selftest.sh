@@ -51,7 +51,7 @@ for rel in $CONFS; do
   [ "$got" = "$ps|$ps|off" ] || fail "$rel: as tmux reads it [$got], want [$ps|$ps|off]"
 done
 
-if [ -x "$BIN/fleet-client-mirror.sh" ] && [ -d "$ROOT/tokenledger/internal/api/fleetclient" ]; then
+if [ -x "$BIN/fleet-client-mirror.sh" ] && [ -d "$ROOT/tokenledger/hub/api/fleetclient" ]; then
   "$BIN/fleet-client-mirror.sh" --check >/dev/null || fail "fleet-client-mirror.sh --check: the client manifest drifted"
 fi
 

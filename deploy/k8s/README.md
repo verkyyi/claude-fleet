@@ -143,7 +143,7 @@ the tag already live has nothing to go back to; the job says so and goes red.
 
 **The summary** (the run's page, every run): live tag → new tag, the commits
 between (`git log --oneline <old>..<new> -- tokenledger deploy/k8s`; a deploy of
-an older tag lists what comes off instead), whether `tokenledger/internal/store`
+an older tag lists what comes off instead), whether `tokenledger/hub/store`
 added schema-changing lines (a heuristic — it says 可能有, read the diff), the
 ccquota container's env before → after, the manifests' diff, the snapshot path,
 and whether it rolled back. The logic lives in

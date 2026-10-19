@@ -171,7 +171,7 @@ print('mode=' + mode)
 PY
 )
 
-# Lines a diff of tokenledger/internal/store adds that change the schema: the
+# Lines a diff of tokenledger/hub/store adds that change the schema: the
 # embedded schema.sql and the ALTER list in store.go's migrate() are where it
 # lives. A heuristic — it says "maybe", the diff is the truth.
 schema_lines() { # git diff on stdin → the added schema-changing lines
@@ -216,15 +216,15 @@ cmd_changes() {
   echo
   echo "### 数据库 migration"
   echo
-  mig=$(git diff "$range" -- tokenledger/internal/store | schema_lines)
+  mig=$(git diff "$range" -- tokenledger/hub/store | schema_lines)
   if [ -n "$mig" ]; then
-    echo "⚠️ **可能有** — 这之间 \`tokenledger/internal/store\` 加了改表结构的行。回退时只回镜像，数据库不自动恢复；要恢复快照照 deploy/k8s/RUNBOOK.md 手工做。"
+    echo "⚠️ **可能有** — 这之间 \`tokenledger/hub/store\` 加了改表结构的行。回退时只回镜像，数据库不自动恢复；要恢复快照照 deploy/k8s/RUNBOOK.md 手工做。"
     echo
     echo '```diff'
     printf '%s\n' "$mig" | cap 40
     echo '```'
   else
-    echo "没有 — \`tokenledger/internal/store\` 这之间没有改表结构的行。"
+    echo "没有 — \`tokenledger/hub/store\` 这之间没有改表结构的行。"
   fi
   echo
   echo "### 清单（deploy/k8s）"
@@ -386,11 +386,11 @@ envFrom {"secretRef":{"name":"hub"}}' ] && ok "env: ccquota only, sorted, secret
     set -euo pipefail
     cd "$repo"
     git init -q . && git config user.email t@t && git config user.name t
-    mkdir -p deploy/k8s tokenledger/internal/store
+    mkdir -p deploy/k8s tokenledger/hub/store
     echo base > deploy/k8s/a.yaml; git add -A; git commit -qm base
     for i in $(seq 1 120); do echo "c$i" >> tokenledger/x; git add -A; git commit -qm "c$i"; done
     seq 1 20000 | sed 's/^/line: /' > deploy/k8s/a.yaml
-    seq 1 500 | sed 's/^/CREATE TABLE t/' > tokenledger/internal/store/s.sql
+    seq 1 500 | sed 's/^/CREATE TABLE t/' > tokenledger/hub/store/s.sql
     git add -A; git commit -qm big
     out=$(bash "$self" changes HEAD~121 HEAD) || exit   # an `if` ignores errexit: check by hand
     printf '%s' "$out" | grep -q '还有 21 条' && printf '%s' "$out" | grep -q '### 清单'

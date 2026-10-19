@@ -115,8 +115,8 @@ done
 
 # --- C2 check, merged but not deployed: GAP lines only, exit 3 --------------------------------
 fake_hub off
-mkdir -p "$T/root/bin" "$T/root/tokenledger/internal/api"
-for f in bin/fleet-debug bin/fleet-debug-prompt.sh tokenledger/internal/api/fleet_debug_ticket.go tokenledger/internal/api/fleet_debug.go; do
+mkdir -p "$T/root/bin" "$T/root/tokenledger/hub/api"
+for f in bin/fleet-debug bin/fleet-debug-prompt.sh tokenledger/hub/api/fleet_debug_ticket.go tokenledger/hub/api/fleet_debug.go; do
   : > "$T/root/$f"
 done
 out=$(FLEET_DEBUG_DRILL_ROOT="$T/root" bash "$D" check --hub "http://127.0.0.1:$port" 2>&1); rc=$?

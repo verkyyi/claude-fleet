@@ -74,7 +74,7 @@
 set -uo pipefail
 BIN=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$BIN/.." && pwd)
-MANIFEST_DEF="$REPO/tokenledger/internal/api/fleetclient/manifest"
+MANIFEST_DEF="$REPO/tokenledger/hub/api/fleetclient/manifest"
 LIST_DEF="$REPO/conf/client-runtime.list"
 ACTIONS="install help status update doctor login logout host-on view ls show answer connect doctor-live bundle update-live agent dispatch static"
 
@@ -265,8 +265,8 @@ trace() {
   rm -rf "${W:?}"; mkdir -p "$W"; chmod 755 "$out" "$W"
   SRC="$W/src"; ROOT="$W/root"; SB="$W/home"
   # the tree as a file:// source in the repo's layout: the manifest + its files
-  mkdir -p "$SRC/tokenledger/internal/api/fleetclient" "$SB"
-  cp "$MANIFEST_DEF" "$SRC/tokenledger/internal/api/fleetclient/manifest"
+  mkdir -p "$SRC/tokenledger/hub/api/fleetclient" "$SB"
+  cp "$MANIFEST_DEF" "$SRC/tokenledger/hub/api/fleetclient/manifest"
   awk '!/^[[:space:]]*#/ && NF { print $1 }' "$MANIFEST_DEF" | while read -r p; do
     mkdir -p "$SRC/$(dirname "$p")"; cp -p "$REPO/$p" "$SRC/$p"
   done

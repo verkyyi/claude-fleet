@@ -2,7 +2,7 @@
 # fleet-release-publish-selftest.sh — bin/fleet-release-publish.sh, the CI half of
 # «stable is pushed to the hub» (issue #2772, EPIC #2770 C2). The hub half —
 # hashing the archive into the commit's tree, the OIDC check, forward only — is
-# Go's (tokenledger internal/api fleet_publish_test.go); this pins what is SENT.
+# Go's (tokenledger hub/api fleet_publish_test.go); this pins what is SENT.
 #
 # Pinned, against a fake hub on 127.0.0.1 that records each POST:
 #   A. the first publish (the hub has no stable: 404): prev empty, the commits

@@ -393,10 +393,10 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
 
      ```sh
      git clone --depth 1 https://github.com/verkyyi/claude-fleet.git   # needs Go 1.25+
-     (cd claude-fleet/tokenledger && go build -o ~/.local/bin/ccquota ./cmd/ccquota)
+     (cd claude-fleet/tokenledger/agent && go build -o ~/.local/bin/ccquota ./cmd/ccquota)
      ```
 
-     (`go install …/cmd/ccquota@latest` no longer works: `tokenledger/go.mod`
+     (`go install …/cmd/ccquota@latest` no longer works: the node's `tokenledger/agent/go.mod`
      replaces its `shared/` module with the directory beside it — issue #4811 —
      and `go install <pkg>@<version>` refuses a module with a replace.)
 
@@ -898,7 +898,7 @@ What the drill found and where it went:
   hub's cluster while `api.github.com` and `codeload.github.com` answer, so every
   `/install/stable/<sha>/<path>` waited 15 s and answered 502. The hub now loads a commit's
   client files from ONE codeload tarball (raw per file only as the fallback,
-  `tokenledger/internal/api/fleet_stable.go`), and the installer stops asking the hub after its
+  `tokenledger/hub/api/fleet_stable.go`), and the installer stops asking the hub after its
   first failed file and takes the rest from GitHub quietly (`bin/fleet-install.sh` `fetch`).
 - **The install's last step never opened the client.** `exec fleet </dev/tty` hands tmux a stdin
   whose `ttyname()` is `/dev/tty`, which tmux refuses; the installer now hands it the terminal's

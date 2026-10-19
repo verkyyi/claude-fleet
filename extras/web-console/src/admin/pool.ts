@@ -1,6 +1,6 @@
 // pool.ts — what the subscription pool page computes from the hub's answers,
 // with no DOM (EPIC #3923 C12): the old console's join, carried over as it was
-// (tokenledger/web/dist/lib/admin.js · subscriptions / poolRows / leaseRows /
+// (tokenledger/hub/web/dist/lib/admin.js · subscriptions / poolRows / leaseRows /
 // switchRows, lib/cred-policy.js · who may use one), so the new page shows the
 // same subscriptions with the same numbers.
 import type { Credential, HubUser, PolicyEntry, PolicyView } from "./api";

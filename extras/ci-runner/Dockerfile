@@ -91,7 +91,10 @@ USER runner
 # on one of these cores took a drill from 13 s to 53 s). The source is the build's
 # only; the tag does not follow it — a stale cache is only a slower first build.
 COPY --chown=runner:runner tokenledger/ /tmp/tl/
-RUN set -eux; cd /tmp/tl; go mod download; go build ./... || true; go vet ./... >/dev/null 2>&1 || true; \
+# One module a directory (hub · agent · shared · e2e, claude-fleet#4814), each
+# built on its own as CI builds them (GOWORK=off).
+RUN set -eux; for m in hub agent shared e2e; do ( cd /tmp/tl/$m; export GOWORK=off; go mod download; \
+      go build ./... || true; go vet ./... >/dev/null 2>&1 || true ); done; \
     cd /; rm -rf /tmp/tl; du -sh "$GOCACHE" "$GOMODCACHE"
 
 # The actions a shard names (the runner looks here by owner_repo/<sha>.tar.gz

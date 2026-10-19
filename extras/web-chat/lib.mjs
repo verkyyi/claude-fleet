@@ -146,7 +146,7 @@ export function personName(h) {
 
 // ---- the browser's context (issue #4034) -------------------------------------
 // What the page says of itself (browser.ts) + where the entry saw it come from
-// (X-Fleet-Client, written by the entry — tokenledger/internal/api/chat_client.go)
+// (X-Fleet-Client, written by the entry — tokenledger/hub/api/chat_client.go)
 // → ONE short line for the model, put before the person's words on the first
 // turn and again only when it changes (another device, city or day) — never in
 // the system prompt, which would break its cache — and the full details for

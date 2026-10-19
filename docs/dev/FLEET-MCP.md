@@ -882,7 +882,7 @@ hub) can sign. Claims: `v` 1 · `worker_id` (`<fleet UUID>/<fid>`) · `fleet_uui
 `fid` · `key` (the session's key **now** — a relay's `from` names it by that) ·
 `repo` · `issue` · `origin` · `node` (this host's short name) · `iat` · `exp`.
 
-**The hub** (`tokenledger/internal/api/fleet_worker_assert.go`) adds a caller
+**The hub** (`tokenledger/hub/api/fleet_worker_assert.go`) adds a caller
 kind, the 执行会话 — a node's call made for one of its sessions:
 
 | the assertion | answer |
@@ -1043,7 +1043,7 @@ and fresh sandbox installation / upgrade without whats-new injection. Claude
 and Codex retain device-location context and compact-time refocus.
 `bin/fleet-mcp-selftest.sh` K — the hub route: assertion only with hub + token +
 credential, its signature and claims, zero network with no hub, `fleet_hub_put`'s
-`worker`. Hub: `TestWorkerAssertion*` (`internal/api/fleet_worker_assert_test.go`)
+`worker`. Hub: `TestWorkerAssertion*` (`hub/api/fleet_worker_assert_test.go`)
 — valid → placed + audited + journalled, forged → 401, out of scope → 404, the
 relay; `TestPlaceCarriesWorkerAssertion` (`agent/cli`).
 `bin/session-wrap-selftest.sh` B' — the wrapper mints per launch and revokes on exit.

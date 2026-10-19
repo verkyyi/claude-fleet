@@ -182,7 +182,7 @@ eq "G: FLEET_ALERTS_SERVICES=0 turns it off" "" "$(fa list --plain 2>/dev/null |
 # ------------------------------------------------------------------------- H ----
 grep -q 'fleet-services.py' "$BIN/fleet-doctor.sh" && grep -q 'fail services' "$BIN/fleet-doctor.sh" &&
   grep -q 'info services' "$BIN/fleet-doctor.sh" || fail "H: fleet-doctor.sh has no services row"; ok
-grep -qx 'bin/fleet-services.py' "$BIN/../tokenledger/internal/api/fleetclient/manifest" ||
+grep -qx 'bin/fleet-services.py' "$BIN/../tokenledger/hub/api/fleetclient/manifest" ||
   fail "H: fleet-services.py is not on the client manifest (fleet ls --services runs there)"; ok
 
 echo "fleet-services-selftest: OK ($CHECKS checks)"

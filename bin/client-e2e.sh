@@ -2,7 +2,7 @@
 # client-e2e.sh — install a FRESH client from the install line and use it,
 # against a hub built from this same checkout (issue #1724, EPIC #1718 C6).
 #
-#   bin/client-e2e.sh --ccquota <ccquota binary built from tokenledger/>
+#   bin/client-e2e.sh --ccquota <the hub's ccquota, built from tokenledger/hub> [--node-ccquota <the node's, tokenledger/agent>]
 #
 # The one way in is `curl -fsSL <hub>/install | sh` and then `fleet`; when either
 # breaks, nobody gets in — and until this ran on every merge, that breakage was
@@ -41,16 +41,22 @@
 # the logs are printed); 2 = usage.
 set -uo pipefail
 
-CCQ=''
+CCQ=''; CCQN=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --ccquota) CCQ=${2:-}; shift 2 ;;
+    --node-ccquota) CCQN=${2:-}; shift 2 ;;
     -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'client-e2e: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
 done
 [ -n "$CCQ" ] && [ -x "$CCQ" ] || { printf 'client-e2e: --ccquota <built ccquota binary> is required\n' >&2; exit 2; }
 CCQ=$(cd "$(dirname "$CCQ")" && pwd -P)/$(basename "$CCQ")
+# The node is its own build since claude-fleet#4814 (the hub's answers a node
+# command with exit 2): --node-ccquota, else ccquota-node beside the hub's,
+# else the same binary (a build from before the split runs both).
+[ -n "${CCQN:-}" ] || CCQN=$(dirname "$CCQ")/ccquota-node
+[ -x "$CCQN" ] || CCQN=$CCQ
 for c in curl python3 ssh-keygen; do
   command -v "$c" >/dev/null 2>&1 || { printf 'client-e2e: %s is required\n' "$c" >&2; exit 2; }
 done
@@ -170,7 +176,7 @@ chmod +x "$NH/.claude/fleet/bin/fleet-control.py"
 # ssh never dials it — the shim below stands in for the node's sshd.
 ( cd "$NH" && exec env HOME="$NH" CCQUOTA_HUB_URL="$HUB" CCQUOTA_TOKEN="$NTOK" CCQUOTA_FLEET=1 \
     CCQUOTA_FLEET_NODE_ROUTES=lan=127.0.0.1:22 CCQUOTA_FLEET_NODE_TAILNET=0 \
-    "$CCQ" agent --hub "$HUB" --home "$NH" --state "$NH/state" ) >"$WORK/agent.log" 2>&1 &
+    "$CCQN" agent --hub "$HUB" --home "$NH" --state "$NH/state" ) >"$WORK/agent.log" 2>&1 &
 AGENT_PID=$!
 has_rows() {
   api "$HUB/v1/fleet/fleet_sessions" >"$WORK/sessions.json" 2>/dev/null &&

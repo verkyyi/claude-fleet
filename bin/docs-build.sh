@@ -1,7 +1,7 @@
 #!/bin/bash
 # docs-build.sh — render the public docs to static HTML (issue #3575, EPIC #3569 C5).
 #
-#   docs-build.sh                 docs/public/{zh,en}/**/*.md → tokenledger/web/docs/
+#   docs-build.sh                 docs/public/{zh,en}/**/*.md → tokenledger/hub/web/docs/
 #   docs-build.sh --out <dir>     the same, into <dir> (the selftest's sandbox)
 #
 # docs/public/ is the ONE home of the documentation for people who USE fleet
@@ -56,7 +56,7 @@ while [ -L "$real" ]; do
 done
 REPO="$(cd "$(dirname "$real")/.." && pwd)"
 SRC="$REPO/docs/public"
-OUT="$REPO/tokenledger/web/docs"
+OUT="$REPO/tokenledger/hub/web/docs"
 MODE="build"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -460,7 +460,7 @@ if MODE == 'write':
 
 if os.path.isdir(OUT):
     shutil.rmtree(OUT)
-# the hub embeds this directory (tokenledger/web/embed.go): its committed .gitkeep
+# the hub embeds this directory (tokenledger/hub/web/embed.go): its committed .gitkeep
 # keeps that compiling in a checkout that never built the docs (issue #3584)
 os.makedirs(OUT)
 open(os.path.join(OUT, '.gitkeep'), 'w').close()

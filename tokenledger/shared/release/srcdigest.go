@@ -31,15 +31,18 @@ import (
 //     fleet-stable.sh's ccquota gate and a managed machine's ccquota row. A
 //     change to the hub alone does not move it — stable need not wait for a hub
 //     image no machine runs.
-//   - the hub IMAGE's — ImageSourceDigest: tokenledger/'s go.mod, go.sum and
-//     everything under cmd/, internal/, shared/ and agent/ — what the image
-//     compiles. bin/fleet-train-hub.sh reads it to decide whether a train
+//   - the hub IMAGE's — ImageSourceDigest: everything under hub/ (the hub's
+//     module since claude-fleet#4814; not hub/web/, which was never an input,
+//     nor hub/apitest/, the e2e tests' harness no build links), shared/ and
+//     agent/ — what the image compiles — and the paths the hub had before it
+//     was a module (tokenledger/'s go.mod, go.sum, cmd/, internal/), so an
+//     older commit hashes as it always did. bin/fleet-train-hub.sh reads it to decide whether a train
 //     redeploys the hub, and it is the one digest an image built before the split
 //     stamped (compat-1v: 下一批删 — the hub and the stable gate accept it as the
 //     node's for one version).
 //
 // Both leave out tests (*_test.go, testdata/), Markdown and the client's file
-// list and pack (internal/api/fleetclient/manifest and pack/: the client follows
+// list and pack (hub/api/fleetclient/manifest and pack/, internal/ before #4814: the client follows
 // stable, not the image — claude-fleet#1805 — and pack/ is gitignored, packed
 // before a build; a new client file must not hold stable for a hub redeploy);
 // go.work is a developer's convenience the image builds without (GOWORK=off).
@@ -64,8 +67,11 @@ func ImageSourceInput(p string) bool {
 	if p == "go.mod" || p == "go.sum" {
 		return true
 	}
-	if !strings.HasPrefix(p, "cmd/") && !strings.HasPrefix(p, "internal/") && !strings.HasPrefix(p, "shared/") &&
-		!strings.HasPrefix(p, "agent/") {
+	if strings.HasPrefix(p, "hub/web/") || strings.HasPrefix(p, "hub/apitest/") {
+		return false
+	}
+	if !strings.HasPrefix(p, "hub/") && !strings.HasPrefix(p, "cmd/") && !strings.HasPrefix(p, "internal/") &&
+		!strings.HasPrefix(p, "shared/") && !strings.HasPrefix(p, "agent/") {
 		return false
 	}
 	return buildFile(p)
@@ -74,6 +80,7 @@ func ImageSourceInput(p string) bool {
 // buildFile: not a test, a doc or the client's list / pack.
 func buildFile(p string) bool {
 	if strings.HasSuffix(p, "_test.go") || strings.HasSuffix(p, ".md") ||
+		p == "hub/api/fleetclient/manifest" || strings.HasPrefix(p, "hub/api/fleetclient/pack/") ||
 		p == "internal/api/fleetclient/manifest" || strings.HasPrefix(p, "internal/api/fleetclient/pack/") {
 		return false
 	}

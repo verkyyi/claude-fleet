@@ -72,9 +72,9 @@
 #                                                   fleet_breakage_run_rows / fleet_breakage_pick (the red this time, #4774)
 #   place-declined-not-retried                      fleet_hub_place (fleet-lib.sh: the `after` field, each try's
 #                                                   stderr), fleet-children.py (claim: stale); the hub half is
-#                                                   tokenledger/internal/api fleet_place.go (go test, when here)
+#                                                   tokenledger/hub/api fleet_place.go (go test, when here)
 #                                                   (exit 8), fleet_control.py (UNAVAILABLE); the hub half is
-#                                                   tokenledger/internal/api pickNodeAfter (go test, when here)
+#                                                   tokenledger/hub/api pickNodeAfter (go test, when here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
 #   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage filing), fleet-stable.sh move (no macos gate), .github/workflows/mac-follow.yml
 #   train-push-cancels                              .github/workflows/release-train.yml (concurrency), bin/fleet-train-board.sh,
@@ -83,23 +83,23 @@
 #                                                   fleet-node-update.py pinned-artifacts, the hub's build refusal
 #   release-ccquota-behind                          bin/fleet-stable.sh move (the ccquota gate)
 #   release-ccquota-stale                           bin/fleet-stable.sh move (the ccquota gate), fleet-src-digest.py;
-#                                                   the hub half is tokenledger/internal/api (go test, held by name)
+#                                                   the hub half is tokenledger/hub/api (go test, held by name)
 #   login-browser-silent                            bin/fleet-login.py (scan: open_browser, KeyWatch, nudge, timeout)
 #   login-sandbox-real-conf                         bin/fleet-login.py (conf_dir_env)
-#   opening-never-ends                              tokenledger/internal/api fleet_opening.go
+#   opening-never-ends                              tokenledger/hub/api fleet_opening.go
 #                                                   (openingStuck, openingETAFor; go test, when a toolchain is here)
-#   drill-login-orphaned                            tokenledger/internal/api fleet_drill.go + bin/fleet-login-remove.sh
+#   drill-login-orphaned                            tokenledger/hub/api fleet_drill.go + bin/fleet-login-remove.sh
 #                                                   (closeDrillLogins, exit 4; go test, when a toolchain is here)
-#   opening-eta-climbs                              tokenledger/internal/api fleet_opening.go (openingETALeft)
-#   opened-login-fleet-silent                       tokenledger/internal/api fleet_opening.go (settling, settleWhy,
+#   opening-eta-climbs                              tokenledger/hub/api fleet_opening.go (openingETALeft)
+#   opened-login-fleet-silent                       tokenledger/hub/api fleet_opening.go (settling, settleWhy,
 #                                                   openingNotes, openingOver; go test); client first-open coverage is in the thin drills
-#   stale-admin-opens-login                         tokenledger/internal/api nodes.go (openerFor, CapLoginJoin) +
+#   stale-admin-opens-login                         tokenledger/hub/api nodes.go (openerFor, CapLoginJoin) +
 #                                                   fleet_accounts.go (dispatchAccounts, noLoginOpenerWhy); go test
 #   heartbeat-sys-blocked                           tokenledger/agent beat_parts.go (sysSampler, asyncReading,
-#                                                   fleetBeatBudget) + internal/api nodes.go (foldSys); go test
+#                                                   fleetBeatBudget) + hub/api nodes.go (foldSys); go test
 #   login-remove-record-left                        bin/fleet-login-remove.sh (step 6 checks the record is gone)
 #   spare-reuse-leaks                               bin/fleet-login-reset-check.py (the category table), its selftest
-#   spare-recycle-dirty                             tokenledger/internal/api fleet_recycle.go (recycleClear,
+#   spare-recycle-dirty                             tokenledger/hub/api fleet_recycle.go (recycleClear,
 #                                                   recycleLeftovers, applyReset) + store RecycleAccount; go test
 #   home-template-leak                              bin/fleet-home-template.py (build from the runtime only, refuse credentials), its selftest
 #   spare-wash-resume                               bin/fleet-login-reset.sh (stop · wash · rejoin · check, the op file), its selftest
@@ -119,9 +119,9 @@
 #   newcomer-login-hosts-repo                       bin/fleet-control-read.sh ready (a seed repo needs no gh — but a repo start does, #3424)
 #   login-remove-dscl-denied                        bin/fleet-node-supervisor.py (fda reading, status --check 4), bin/fleet-login-remove-ssh.sh
 #                                                   + bin/fleet-login-remove.sh (says Full Disk Access)
-#   drill-login-handed-silently                     tokenledger/internal/api fleet_drill.go (closeDrillLogins
+#   drill-login-handed-silently                     tokenledger/hub/api fleet_drill.go (closeDrillLogins
 #                                                   handed) + store DeleteDrill (keeps the handed rows)
-#   drill-expiry-user-pod                           tokenledger/internal/api fleet_drill.go (closeDrillLogins
+#   drill-expiry-user-pod                           tokenledger/hub/api fleet_drill.go (closeDrillLogins
 #                                                   podKept / handMadePod: a pod's own login settled, its
 #                                                   endpoints kept) + store DeleteDrillKeeping
 #   cn-probe-wait-past-terminal                     bin/fleet-cn-probe.sh codex step (the new session's own terminal error)
@@ -132,7 +132,7 @@
 #                                                   a dead holder's lock taken over)
 #   cn-recover-miscount                             bin/fleet-cn-probe-recover.py (the bounded recovery round)
 #   cn-probe-sessions-left                          bin/fleet-cn-probe.sh (stop_left / left_sweep: the pod's stop by fleet id)
-#   machine-lane-reissued                           tokenledger/internal/api fleet_login_node.go (deviceNode, machineServing)
+#   machine-lane-reissued                           tokenledger/hub/api fleet_login_node.go (deviceNode, machineServing)
 #                                                   + store EndpointByTokenHash (prev_token_hash) + node_machine.go
 #                                                   (staleLoginTokenWhy), tokenledger/agent lane_state.go,
 #                                                   bin/fleet-node-supervisor.py (lanes, account adopt --rejoin)
@@ -200,7 +200,7 @@
 #                                                   bin/fleet-diskguard.sh macos_watch, fleet-macos-watch.sh
 #   release-push-lost                               bin/fleet-node-supervisor.py (task_due: update-now + the
 #                                                   update clock), fleet-install-sync.sh --now; the Go half is
-#                                                   tokenledger/{internal/api,agent} *release_push / node_release
+#                                                   tokenledger/{hub/api,agent} *release_push / node_release
 #
 # tmux / python3 absent → SKIP (exit 0). BREAK_KEEP=1 keeps the work dir.
 # BREAK_ONLY="<id> <id>" runs only those drills (the lockstep lint always runs);
@@ -3435,8 +3435,8 @@ drill_selection_miss_silent() {
 # fake gh.
 drill_train_hub_stable_split() {
   CAP=60; local t0 d out rc c1 c2 c3 c4 wf hd job v
-  grep -q 'TestPublishAcceptsReleaseTrain(' "$ROOT/tokenledger/internal/api/fleet_publish_test.go" 2>/dev/null \
-    || { WHY="TestPublishAcceptsReleaseTrain is not in tokenledger/internal/api/fleet_publish_test.go — the hub would 401 the train's publish"; return 1; }
+  grep -q 'TestPublishAcceptsReleaseTrain(' "$ROOT/tokenledger/hub/api/fleet_publish_test.go" 2>/dev/null \
+    || { WHY="TestPublishAcceptsReleaseTrain is not in tokenledger/hub/api/fleet_publish_test.go — the hub would 401 the train's publish"; return 1; }
   wf="$ROOT/.github/workflows/release-train.yml" hd="$ROOT/.github/workflows/hub-deploy.yml"
   [ -x "$BIN/fleet-train-hub.sh" ] || { WHY="no bin/fleet-train-hub.sh — the train cannot tell whether the hub needs a new image"; return 1; }
   # hub-deploy.yml is callable with the train's sha, and builds/checks THAT commit
@@ -3464,13 +3464,13 @@ drill_train_hub_stable_split() {
   ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
     export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
     git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
-    mkdir -p "$d/seed/bin" "$d/seed/tokenledger/internal/x" "$d/seed/deploy/k8s"
-    printf 'module x\n' > "$d/seed/tokenledger/go.mod"; printf 'package x\n' > "$d/seed/tokenledger/internal/x/x.go"
+    mkdir -p "$d/seed/bin" "$d/seed/tokenledger/hub/x" "$d/seed/deploy/k8s"
+    printf 'module x\n' > "$d/seed/tokenledger/hub/go.mod"; printf 'package x\n' > "$d/seed/tokenledger/hub/x/x.go"
     printf 'a: 1\n' > "$d/seed/deploy/k8s/k.yaml"; printf 'echo\n' > "$d/seed/bin/s.sh"
     git -C "$d/seed" add -A && git -C "$d/seed" commit -qm hub && git -C "$d/seed" rev-parse HEAD > "$d/c1"
-    printf 'echo 2\n' > "$d/seed/bin/s.sh"; printf 'package x\n// a test-only note\n' > "$d/seed/tokenledger/internal/x/x_test.go"
+    printf 'echo 2\n' > "$d/seed/bin/s.sh"; printf 'package x\n// a test-only note\n' > "$d/seed/tokenledger/hub/x/x_test.go"
     git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'scripts only' && git -C "$d/seed" rev-parse HEAD > "$d/c2"
-    printf 'package x\n\nconst Y = 1\n' > "$d/seed/tokenledger/internal/x/x.go"
+    printf 'package x\n\nconst Y = 1\n' > "$d/seed/tokenledger/hub/x/x.go"
     git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'go' && git -C "$d/seed" rev-parse HEAD > "$d/c3"
     printf 'a: 2\n' > "$d/seed/deploy/k8s/k.yaml"
     git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'k8s' && git -C "$d/seed" rev-parse HEAD > "$d/c4"
@@ -3532,7 +3532,7 @@ drill_train_hub_stable_split() {
 # A file:// hub; a real bare repo + tag; fake gh.
 drill_release_artifact_missing() {
   CAP=30; local t0 d out rc c1 c2 f
-  f="$ROOT/tokenledger/internal/api/fleet_release_test.go"
+  f="$ROOT/tokenledger/hub/api/fleet_release_test.go"
   grep -q '^func TestReleaseBuildRefusesMissingPinned(' "$f" 2>/dev/null \
     || { WHY="the hub half's test TestReleaseBuildRefusesMissingPinned is not in ${f#$ROOT/}"; return 1; }
   d="$WORK/relart"; mkdir -p "$d/shim" "$d/seed" "$d/conf" "$d/hub/v1/fleet/release"
@@ -3633,8 +3633,8 @@ drill_release_ccquota_behind() {
 # rollback are their tests, held by name. A file:// hub; a real bare repo + tag.
 drill_release_ccquota_stale() {
   CAP=30; local t0 d out rc c1 c2 f t pins
-  for t in tokenledger/internal/api/fleet_release_test.go:TestReleaseRefusesStaleCCQuota \
-           tokenledger/internal/api/fleet_publish_test.go:TestPublishRefusesStaleCCQuota \
+  for t in tokenledger/hub/api/fleet_release_test.go:TestReleaseRefusesStaleCCQuota \
+           tokenledger/hub/api/fleet_publish_test.go:TestPublishRefusesStaleCCQuota \
            bin/fleet-node-update-selftest.py:test_ccquota_not_the_releases_is_rolled_back; do
     f="$ROOT/${t%%:*}"
     grep -q "${t#*:}(" "$f" 2>/dev/null || { WHY="${t#*:} is not in ${t%%:*}"; return 1; }
@@ -3645,7 +3645,7 @@ drill_release_ccquota_stale() {
     export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
     git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
     mkdir -p "$d/seed/bin" "$d/seed/tokenledger/agent/x"; printf '#!/usr/bin/env python3\n' > "$d/seed/bin/fleet-node-update.py"
-    printf 'module x\n' > "$d/seed/tokenledger/go.mod"; printf 'package x\n' > "$d/seed/tokenledger/agent/x/x.go"
+    printf 'module x\n' > "$d/seed/tokenledger/hub/go.mod"; printf 'package x\n' > "$d/seed/tokenledger/agent/x/x.go"
     cp "$ROOT/release.json" "$d/seed/release.json"
     git -C "$d/seed" add -A && git -C "$d/seed" commit -qm old && git -C "$d/seed" push -q origin HEAD:master || exit 1
     git -C "$d/seed" rev-parse HEAD > "$d/c1"
@@ -4209,13 +4209,13 @@ FAKE
 
 # ---- the hub-half drills of #2696 share one runner: the named Go tests must
 # exist, the greps must hold, and with a toolchain they must pass.
-_drill_go_tests() {  # <tests> <test file> <what> [<package>, default ./internal/api]
-  local tests=$1 f=$2 what=$3 pkg=${4:-./internal/api} t out rc
+_drill_go_tests() {  # <tests> <test file> <what> [<package>, default ./hub/api]
+  local tests=$1 f=$2 what=$3 pkg=${4:-./hub/api} t out rc
   for t in $tests; do
     grep -q "^func $t(" "$f" 2>/dev/null || { WHY="the hub half's test $t is not in ${f#$ROOT/}"; return 1; }
   done
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" "$pkg" 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -4234,13 +4234,13 @@ _drill_go_tests() {  # <tests> <test file> <what> [<package>, default ./internal
 # pending / creating / unknown. Now: the machine's measured ETA, and failed +
 # why + who to ask past openingGiveUp or with no admin node to run it.
 drill_opening_never_ends() {
-  CAP=120; local t0 f="$ROOT/tokenledger/internal/api/fleet_opening.go"
+  CAP=120; local t0 f="$ROOT/tokenledger/hub/api/fleet_opening.go"
   t0=$(now)
   grep -q 's.openingStuck(\*opening, now)' "$f" \
     || { WHY="accountStateOf no longer ends an opening nobody can finish"; return 1; }
   grep -q 's.openingETAFor(opening.Hostname)' "$f" \
     || { WHY="accountStateOf's ETA is no longer the machine's measured one"; return 1; }
-  _drill_go_tests 'TestOpeningHasAnHonestETAAndAnEnd' "$ROOT/tokenledger/internal/api/fleet_opening_test.go" \
+  _drill_go_tests 'TestOpeningHasAnHonestETAAndAnEnd' "$ROOT/tokenledger/hub/api/fleet_opening_test.go" \
     '开号预计时长取这台机器的中位数、超时改说离放弃多久；20 分钟没回音或没有管理节点 → failed + why + 找谁（go test）' || return 1
   SECS=$(since "$t0")
 }
@@ -4251,9 +4251,9 @@ drill_opening_never_ends() {
 drill_drill_login_orphaned() {
   CAP=120; local t0 rm="$ROOT/bin/fleet-login-remove.sh" out rc
   t0=$(now)
-  grep -q 'case store.AccountFailed:' "$ROOT/tokenledger/internal/api/fleet_drill.go" \
+  grep -q 'case store.AccountFailed:' "$ROOT/tokenledger/hub/api/fleet_drill.go" \
     || { WHY="closeDrillLogins no longer removes a failed drill login before the person goes"; return 1; }
-  grep -q 'control.RemoveExitNoLogin' "$ROOT/tokenledger/internal/api/fleet_accounts.go" \
+  grep -q 'control.RemoveExitNoLogin' "$ROOT/tokenledger/hub/api/fleet_accounts.go" \
     || { WHY="the hub no longer reads a remove of a missing login as removed"; return 1; }
   # the script half, for real: a login this machine does not have → exit 4
   # (as root the script refuses before it looks — exit 3 — so only the greps there)
@@ -4262,7 +4262,7 @@ drill_drill_login_orphaned() {
     [ "$rc" = 4 ] || { WHY="fleet-login-remove.sh on a missing login: exit $rc (want 4): $out"; return 1; }
   fi
   _drill_go_tests 'TestDrillFailedCreateIsRemovedBeforeItGoes TestDrillFailedRemoveIsRetriedExistingIsLeft' \
-    "$ROOT/tokenledger/internal/api/fleet_drill_test.go" \
+    "$ROOT/tokenledger/hub/api/fleet_drill_test.go" \
     '开号失败 / 收号失败的演练登录先收掉才删人，机器上没有这个登录 → 退 4 → removed；撞上已有登录的不碰（go test + 真跑一次 remove）' || return 1
   SECS=$(since "$t0")
 }
@@ -4271,14 +4271,14 @@ drill_drill_login_orphaned() {
 # the time left until the give-up — a number that jumps UP (313 s, then 858 s).
 # Now one countdown that starts at the median and only goes down.
 drill_opening_eta_climbs() {
-  CAP=120; local t0 f="$ROOT/tokenledger/internal/api/fleet_opening.go"
+  CAP=120; local t0 f="$ROOT/tokenledger/hub/api/fleet_opening.go"
   t0=$(now)
   grep -q 'openingETALeft(s.openingETAFor(opening.Hostname), took)' "$f" \
     || { WHY="accountStateOf's ETA is no longer the one countdown (openingETALeft)"; return 1; }
   if grep -q 'eta = int((openingGiveUp - took).Seconds())' "$f"; then
     WHY="past the median the ETA still jumps to the time until the give-up"; return 1
   fi
-  _drill_go_tests 'TestOpeningETANeverClimbs' "$ROOT/tokenledger/internal/api/fleet_opening_test.go" \
+  _drill_go_tests 'TestOpeningETANeverClimbs' "$ROOT/tokenledger/hub/api/fleet_opening_test.go" \
     '开号预计剩余从中位数起只减不增，到放弃时限归零（go test）' || return 1
   SECS=$(since "$t0")
 }
@@ -4291,18 +4291,18 @@ drill_opening_eta_climbs() {
 # the missing step; the refusal names the login; past ETA × 3 is failed; the
 # client's first session waits on the hub's opening.
 drill_opened_login_fleet_silent() {
-  CAP=120; local t0 f="$ROOT/tokenledger/internal/api/fleet_opening.go"
+  CAP=120; local t0 f="$ROOT/tokenledger/hub/api/fleet_opening.go"
   t0=$(now)
   grep -q 'reported\[\[2\]string{a.Hostname, a.Login}\]' "$f" \
     || { WHY="accountStateOf reads an opened login as done before its fleet reported"; return 1; }
-  grep -q 's.openingNotes(p.Person)' "$ROOT/tokenledger/internal/api/fleet_write.go" \
+  grep -q 's.openingNotes(p.Person)' "$ROOT/tokenledger/hub/api/fleet_write.go" \
     || { WHY="a refused placement no longer names the login being opened"; return 1; }
   grep -q 'took > openingOver(est)' "$f" \
     || { WHY="an opening far past its machine's ETA no longer fails"; return 1; }
   grep -q 'FLEET_HOME_FIRST_OPENING_MAX' "$ROOT/bin/fleet-thin.py" \
     || { WHY="the thin client's first session no longer waits while the hub says opening"; return 1; }
   _drill_go_tests 'TestOpenedLoginWithoutFleetIsNotDone TestOpeningPastItsOwnETAFails' \
-    "$ROOT/tokenledger/internal/api/fleet_opening_test.go" \
+    "$ROOT/tokenledger/hub/api/fleet_opening_test.go" \
     '开好的登录要等它的 fleet 报上来才算好：之前 opening(stage fleet)，10 分钟后 failed 说缺哪步；放置点名；超过预计 ×3 failed（go test）' || return 1
   SECS=$(since "$t0")
 }
@@ -4314,7 +4314,7 @@ drill_opened_login_fleet_silent() {
 # on; a create goes only to one that said it, placement skips a machine
 # without one, and the words name the stale admin.
 drill_stale_admin_opens_login() {
-  CAP=120; local t0 a="$ROOT/tokenledger/internal/api"
+  CAP=120; local t0 a="$ROOT/tokenledger/hub/api"
   t0=$(now)
   grep -q 'c.canLoginJoin' "$a/nodes.go" \
     || { WHY="openerFor no longer needs the admin's CapLoginJoin"; return 1; }
@@ -4384,14 +4384,14 @@ drill_home_template_leak() {
 # Now: cleared before the reset is sent, checked again before the spare is
 # recorded, and anything unclean leaves the row failed, never handed out.
 drill_spare_recycle_dirty() {
-  CAP=120; local t0 f="$ROOT/tokenledger/internal/api/fleet_recycle.go"
+  CAP=120; local t0 f="$ROOT/tokenledger/hub/api/fleet_recycle.go"
   t0=$(now)
   grep -Eq 'recycleLeftovers(As)?\(\*a, now' "$f" \
     || { WHY="applyReset no longer checks the hub's half before recording the spare"; return 1; }
   grep -q 'case res.Reset != control.ResetClean:' "$f" \
     || { WHY="applyReset no longer refuses a wash that did not say reset: clean"; return 1; }
   _drill_go_tests 'TestRemoveRecyclesLoginIntoSpare TestRecycleNeverHandsOutAnUncleanWash TestRecycleLeftoversNamesEachHubPiece TestRecycleNoAnswerFailsAfterThirtyMinutes TestRemoveOldRoadWhenNotRecycling' \
-    "$ROOT/tokenledger/internal/api/fleet_recycle_test.go" \
+    "$ROOT/tokenledger/hub/api/fleet_recycle_test.go" \
     '删号发 reset、洗净且隔离才成备用（spare.recycle）；dirty / 没隔离 / 没结论 / 跑失败 / 30 分钟无回音都 failed 不发出；入口侧节点令牌·中转·租约·家·未用 join code 先清后查；delete / 备用关 / 老 admin 走老路（go test）' || return 1
   SECS=$(since "$t0")
 }
@@ -4438,7 +4438,7 @@ drill_recycle_rejoins() {
   printf '%s\n' "$out" | grep -q '^ok   K not served by the machine daemon' \
     || { WHY="fleet-login-reset-selftest.sh has no keep leg (K)"; return 1; }
   _drill_go_tests 'TestRecycleKeepsRootHeldNode TestRecycleKeptNodeAmbiguousFails' \
-    "$ROOT/tokenledger/internal/api/fleet_recycle_keep_test.go" \
+    "$ROOT/tokenledger/hub/api/fleet_recycle_keep_test.go" \
     '机器守护代管的登录令牌回收时留在 root（不再 [7a] join）、入口只改归属（spare）并作废旧人的通行证·租约·连接·证书；令牌旧人碰得到过照旧重新入网；留下的节点说不清是哪个就失败（沙盒真跑洗号 + go test）' || return 1
   SECS=$(since "$t0")
 }
@@ -4450,14 +4450,14 @@ drill_recycle_rejoins() {
 # the revocation list (refused within 10 s), and recycleLeftovers reds on one
 # not there.
 drill_recycle_old_cert() {
-  CAP=90; local t0 f="$ROOT/tokenledger/internal/api/fleet_recycle.go"
+  CAP=90; local t0 f="$ROOT/tokenledger/hub/api/fleet_recycle.go"
   t0=$(now)
   grep -q 'recycleRevokePerson(a, now' "$f" \
     || { WHY="recycleClear no longer revokes the last person's certificates"; return 1; }
   grep -q '"cert"' "$f" \
     || { WHY="recycleLeftovers no longer checks the last person's certificates are on the list"; return 1; }
   _drill_go_tests 'TestRecycleRevokesOldCertsWhenRejoining TestRecycleKeepsRootHeldNode' \
-    "$ROOT/tokenledger/internal/api/fleet_recycle_keep_test.go" \
+    "$ROOT/tokenledger/hub/api/fleet_recycle_keep_test.go" \
     '回收时旧人在这台的范围吊销 + 每张仍有效、写着这个登录的 SSH 证书上吊销名单（ssh:<serial>），留号与重新入网两条路都是；审计 spare.revoke（go test）' || return 1
   SECS=$(since "$t0")
 }
@@ -4680,11 +4680,11 @@ drill_spare_wash_respawn() {
 drill_drill_login_handed_silently() {
   CAP=120; local t0
   t0=$(now)
-  grep -q 'handed = append(handed, a)' "$ROOT/tokenledger/internal/api/fleet_drill.go" \
+  grep -q 'handed = append(handed, a)' "$ROOT/tokenledger/hub/api/fleet_drill.go" \
     || { WHY="closeDrillLogins no longer names the logins it hands to the operator"; return 1; }
-  grep -q 'keepHosts' "$ROOT/tokenledger/internal/store/fleet_drill.go" \
+  grep -q 'keepHosts' "$ROOT/tokenledger/hub/store/fleet_drill.go" \
     || { WHY="DeleteDrill no longer keeps the rows of a login left on a machine"; return 1; }
-  _drill_go_tests 'TestDrillUnknownCreateIsWaitedThenHanded' "$ROOT/tokenledger/internal/api/fleet_drill_test.go" \
+  _drill_go_tests 'TestDrillUnknownCreateIsWaitedThenHanded' "$ROOT/tokenledger/hub/api/fleet_drill_test.go" \
     '开号没回音的演练登录先等、一小时后交还运营者：200 带 left_for_operator，账户行留着（go test）' || return 1
   SECS=$(since "$t0")
 }
@@ -4698,13 +4698,13 @@ drill_drill_login_handed_silently() {
 drill_drill_expiry_user_pod() {
   CAP=120; local t0
   t0=$(now)
-  grep -q 'podKeepsLogin = "pod keeps its one login"' "$ROOT/tokenledger/internal/api/fleet_drill.go" \
+  grep -q 'podKeepsLogin = "pod keeps its one login"' "$ROOT/tokenledger/hub/api/fleet_drill.go" \
     || { WHY="closeDrillLogins no longer knows the pod's final refusal"; return 1; }
-  grep -q 'DeleteDrillKeeping(d.PrincipalID, actor, now, hosts, s.handMadePod)' "$ROOT/tokenledger/internal/api/fleet_drill.go" \
+  grep -q 'DeleteDrillKeeping(d.PrincipalID, actor, now, hosts, s.handMadePod)' "$ROOT/tokenledger/hub/api/fleet_drill.go" \
     || { WHY="deleteDrill retires a hand-made pod's endpoints again — the pod falls off the hub"; return 1; }
   grep -q "pod keeps its one login" "$ROOT/bin/fleet-node-linux.py" \
     || { WHY="fleet-node-linux's pod refusal changed its words — closeDrillLogins would retry it again"; return 1; }
-  _drill_go_tests 'TestDrillLoginOnUserPodIsSettledNotRetried' "$ROOT/tokenledger/internal/api/fleet_drill_test.go" \
+  _drill_go_tests 'TestDrillLoginOnUserPodIsSettledNotRetried' "$ROOT/tokenledger/hub/api/fleet_drill_test.go" \
     '个人 pod 上的演练登录到期即结清：不发 remove、rc 2 不重试，人立即删、同名登录马上能再邀、pod 不掉线（go test）' || return 1
   SECS=$(since "$t0")
 }
@@ -4762,7 +4762,7 @@ drill_cn_recover_miscount() { cnprobe_leg L 60 "重复触发只一轮；崩掉�
 # the last completed read with its own fleet_at, and the machine row takes the
 # newest timed reading of any heard row, the machine link's included.
 drill_heartbeat_sys_blocked() {
-  CAP=180; local t0 w1 ag="$ROOT/tokenledger/agent" api="$ROOT/tokenledger/internal/api"
+  CAP=180; local t0 w1 ag="$ROOT/tokenledger/agent" api="$ROOT/tokenledger/hub/api"
   t0=$(now)
   grep -q 'fillSys(&hb, processSys)' "$ag/node.go" \
     || { WHY="nodeHeartbeat no longer takes the sampler's load"; return 1; }
@@ -4895,21 +4895,21 @@ drill_machine_lane_reissued() {
   sup="$ROOT/bin/fleet-node-supervisor-selftest.py"
   t0=$(now)
   for out in $api; do
-    grep -q "^func $out(" "$ROOT"/tokenledger/internal/api/*_test.go 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
+    grep -q "^func $out(" "$ROOT"/tokenledger/hub/api/*_test.go 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
   done
   grep -q "^func $agt(" "$ROOT/tokenledger/agent/lane_state_test.go" 2>/dev/null \
     || { WHY="the node half's test $agt is gone"; return 1; }
-  grep -q 'machineServing(id)' "$ROOT/tokenledger/internal/api/fleet_login_node.go" \
+  grep -q 'machineServing(id)' "$ROOT/tokenledger/hub/api/fleet_login_node.go" \
     || { WHY="deviceNode reissues a login its machine's node program serves"; return 1; }
-  grep -q 'prev_token_hash' "$ROOT/tokenledger/internal/store/store.go" \
+  grep -q 'prev_token_hash' "$ROOT/tokenledger/hub/store/store.go" \
     || { WHY="a reissued token has no grace (EndpointByTokenHash)"; return 1; }
   out=$(cd "$ROOT/bin" && python3 -W ignore::ResourceWarning -m unittest -q \
         'fleet-node-supervisor-selftest.H_Accounts.test_refused_lane_is_named_and_rejoin_renews_the_token' 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="the supervisor half is red: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   [ -f "$sup" ] || { WHY="${sup#$ROOT/} is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./internal/api github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./hub/api github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='机器连接服务着的登录重登记：入口不换发（409 machine_managed）；换发了的旧令牌宽限 10 分钟、过后 WRONG_LOGIN 说明重登记与修法；被拒账号写 lane.json、机器心跳带 logins_refused、Machines 卡片红字；守护 status 名出 lane、--check 3；account adopt --rejoin 不要管理员换回新令牌' ;;
@@ -5129,8 +5129,8 @@ drill_place_declined_not_retried() {
   case "$out" in *'"claim": "stale"'*) ;; *) WHY="fleet-children does not call a claim with no session stale: $out"; return 1 ;; esac
   gohalf='hub half: the Go gate (tokenledger.yml) runs the next-machine tests'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run 'TestNodePlace(DeclinedTriesNextMachine|AllDeclinedRefuses|AskerIsTriedLast|NamedOrClaimedIsTriedOnce)$|TestClientPlaceDeclinedTriesNextMachine$' ./internal/api 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run 'TestNodePlace(DeclinedTriesNextMachine|AllDeclinedRefuses|AskerIsTriedLast|NamedOrClaimedIsTriedOnce)$|TestClientPlaceDeclinedTriesNextMachine$' ./hub/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
       0:*) gohalf='hub half: go test 换下一台 / 全拒 / 本机最后 / 指名不换 / client ok' ;;
@@ -5934,7 +5934,7 @@ drill_forge_none_gh_call() {
 drill_cred_migration_client() {
   CAP=120; local t0
   t0=$(now)
-  _drill_go_tests 'TestCredPolicyMigrationSkipsClients' "$ROOT/tokenledger/internal/api/fleet_cred_policy_test.go" \
+  _drill_go_tests 'TestCredPolicyMigrationSkipsClients' "$ROOT/tokenledger/hub/api/fleet_cred_policy_test.go" \
     '迁移排除纯客户端、保留离线及混合执行节点，角色变化重审且旧授权不变' || return 1
   SECS=$(since "$t0")
 }
@@ -5945,14 +5945,14 @@ drill_cred_migration_client() {
 # under it says X-Robots-Tag: noindex, the old addresses 301 there, and "/" is
 # the site (signed out) or /app (signed in) — the client's paths untouched.
 drill_site_console_indexed() {
-  CAP=120; local t0 f="$ROOT/tokenledger/internal/api/app_mount.go"
+  CAP=120; local t0 f="$ROOT/tokenledger/hub/api/app_mount.go"
   t0=$(now)
   grep -q 'X-Robots-Tag", "noindex' "$f" \
     || { WHY="app_mount.go no longer marks the console noindex"; return 1; }
-  grep -q 's.appMount(s.routes())' "$ROOT/tokenledger/internal/api/server.go" \
+  grep -q 's.appMount(s.routes())' "$ROOT/tokenledger/hub/api/server.go" \
     || { WHY="the router is no longer behind appMount: the console is back at the root"; return 1; }
   _drill_go_tests 'TestAppIsNoindex TestAppOldPathsMoveUnderApp TestAppRoot TestClientPathsUnchanged' \
-    "$ROOT/tokenledger/internal/api/app_mount_test.go" \
+    "$ROOT/tokenledger/hub/api/app_mount_test.go" \
     '控制台在 /app、每页 noindex；旧地址 301 过去；/ 未登录是官网、登录了 302 /app；客户端路径逐字节不变（go test）' || return 1
   SECS=$(since "$t0")
 }
@@ -5960,8 +5960,8 @@ drill_site_console_indexed() {
 drill_db_move_policy_seed() {
   CAP=120; local t0
   t0=$(now)
-  _drill_go_tests 'TestMoveDatabasePolicySeed' "$ROOT/tokenledger/internal/store/dbmove_test.go" \
-    'Postgres 门验证新库可迁移、已有授权拒绝覆盖、源库 legacy 模式保留' ./internal/store || return 1
+  _drill_go_tests 'TestMoveDatabasePolicySeed' "$ROOT/tokenledger/hub/store/dbmove_test.go" \
+    'Postgres 门验证新库可迁移、已有授权拒绝覆盖、源库 legacy 模式保留' ./hub/store || return 1
   [ -n "${CCQUOTA_DB_URL:-}" ] || WHAT='没有测试 Postgres：按名核对搬迁回归测试在，tokenledger-pg 门执行'
   SECS=$(since "$t0")
 }
@@ -6057,7 +6057,7 @@ print(" ".join(out))' 2>&1)
   bash "$BIN/fleet-install-sync.sh" --now --status >/dev/null 2>&1; [ $? -le 1 ] \
     || { WHY="fleet-install-sync.sh does not take --now"; return 1; }
   _drill_go_tests 'TestReleasePushOnPromoteBeatAndReconnect TestReleasePushOffAddsNothing TestReleasePromoteCallsOnPromote' \
-    "$ROOT/tokenledger/internal/api/fleet_release_push_test.go" \
+    "$ROOT/tokenledger/hub/api/fleet_release_push_test.go" \
     '推送丢了：机器的 update 定时（300 秒）照样切到；推送到了：update-now 当拍就跑、跑时消掉；入口在发布、每条连接第一拍发 release，重复 / 旧的 seq 不发，不带能力的节点什么都不收（go test）' || return 1
   local what=$WHAT
   _drill_go_tests 'TestReleasePushWritesUpdateNow TestReleaseMachineHelloCapability TestReleasePushRunsInstallSync' \
@@ -6577,7 +6577,7 @@ drill_repo_start_unobserved() {
           PoolAuthorityTests.test_missing_receipt_says_why \
           PoolAuthorityTests.test_missing_receipt_with_an_older_hub_is_said 2>&1) || { WHY="$out"; return 1; }
   if command -v go >/dev/null 2>&1; then
-    out=$(cd "$BIN/../tokenledger" && go test ./internal/store/ -run TestRepoStartUnobservedCloses -count=1 2>&1) \
+    out=$(cd "$BIN/../tokenledger" && go test ./hub/store/ -run TestRepoStartUnobservedCloses -count=1 2>&1) \
       || { WHY="$out"; return 1; }
   fi
   SECS=$(since "$t0")
@@ -6590,14 +6590,14 @@ drill_repo_start_unobserved() {
 # its leases and lists its fleet rows apart; another repo stays byte for byte.
 drill_authority_retired_endpoint_blocks() {
   CAP=120;  # a cold go test build is ~40 s on a CI runner
-  local t0 f="$ROOT/tokenledger/internal/store/retire.go" a="$ROOT/tokenledger/internal/api/fleet_repo_authority.go"
+  local t0 f="$ROOT/tokenledger/hub/store/retire.go" a="$ROOT/tokenledger/hub/api/fleet_repo_authority.go"
   t0=$(now)
   grep -q 's.settleRetiredTx(tx, endpointID' "$f" \
     || { WHY="RetireEndpointAs no longer settles the endpoint's local starts and leases"; return 1; }
   grep -q '"retired_hosts": retired' "$a" \
     || { WHY="the authority manifest no longer lists a retired endpoint's fleet rows apart"; return 1; }
-  _drill_go_tests 'TestRetireSettlesLocalStarts' "$ROOT/tokenledger/internal/store/retire_settle_test.go" x ./internal/store || return 1
-  _drill_go_tests 'TestRepoAuthorityRetiredHostBlocksNothing' "$ROOT/tokenledger/internal/api/fleet_repo_authority_test.go" \
+  _drill_go_tests 'TestRetireSettlesLocalStarts' "$ROOT/tokenledger/hub/store/retire_settle_test.go" x ./hub/store || return 1
+  _drill_go_tests 'TestRepoAuthorityRetiredHostBlocksNothing' "$ROOT/tokenledger/hub/api/fleet_repo_authority_test.go" \
     '退役端点：它没收口的 local start 结成 retired、legacy lease 放掉、fleet 行列进 retired_hosts 不再挡；没退役的离线端点照旧挡，另一个仓库一字不变（go test）' || return 1
   SECS=$(since "$t0")
 }
@@ -6608,14 +6608,14 @@ drill_authority_retired_endpoint_blocks() {
 # holds nothing; an open issue or a live worker still blocks.
 drill_authority_legacy_task_unclosable() {
   CAP=120;  # a cold go test build is ~40 s on a CI runner
-  local t0 f="$ROOT/tokenledger/internal/store/fleet_repo_authority.go" b="$BIN/fleet-task-record.sh"
+  local t0 f="$ROOT/tokenledger/hub/store/fleet_repo_authority.go" b="$BIN/fleet-task-record.sh"
   t0=$(now)
   grep -q "state NOT IN (?, ?)\`, repo, TaskClosed, TaskRefused" "$f" \
     || { WHY="the legacy-owner blocker query no longer honours TaskClosed"; return 1; }
   grep -q 'call POST /v1/node/tasks/settle' "$b" \
     || { WHY="fleet-task-record.sh has no settle command"; return 1; }
-  _drill_go_tests 'TestSettleLegacyTaskWorkerLive' "$ROOT/tokenledger/internal/store/fleet_task_settle_test.go" x ./internal/store || return 1
-  _drill_go_tests 'TestNodeTaskSettleLegacy' "$ROOT/tokenledger/internal/api/fleet_task_settle_test.go" \
+  _drill_go_tests 'TestSettleLegacyTaskWorkerLive' "$ROOT/tokenledger/hub/store/fleet_task_settle_test.go" x ./hub/store || return 1
+  _drill_go_tests 'TestNodeTaskSettleLegacy' "$ROOT/tokenledger/hub/api/fleet_task_settle_test.go" \
     '旧式 T 记录：issue 已关且 worker 不占 lease / local start / inventory 才结成 closed 不再挡；issue 还开着或 worker 还活着照样挡；默认 dry，迟到的写不重开（go test）' || return 1
   SECS=$(since "$t0")
 }
@@ -6631,8 +6631,8 @@ drill_authority_orphan_worker_start() {
   grep -q 'not spawner_refused(err)' "$BIN/fleet_control.py" \
     || { WHY="fleet_control.py files a spawner's own refusal as attempted (unknown) again"; return 1; }
   out=$(python3 "$BIN/fleet-hub-selftest.py" -k test_start_scratch_opens_a_raw_session 2>&1) || { WHY="$out"; return 1; }
-  _drill_go_tests 'TestRetireFailsOrphanWorkerStarts' "$ROOT/tokenledger/internal/store/retire_settle_test.go" x ./internal/store || return 1
-  _drill_go_tests 'TestFleetWriteRefusedStartSettles' "$ROOT/tokenledger/internal/api/fleet_write_test.go" \
+  _drill_go_tests 'TestRetireFailsOrphanWorkerStarts' "$ROOT/tokenledger/hub/store/retire_settle_test.go" x ./hub/store || return 1
+  _drill_go_tests 'TestFleetWriteRefusedStartSettles' "$ROOT/tokenledger/hub/api/fleet_write_test.go" \
     '孤儿 worker_start：spawner 的 refuse 记 failed（崩溃仍 unknown），Hub 送达/对账/读日志同规则结清；退役端点的 start 结成 failed；节点说没收过的过宽限结成 failed（go test）' || return 1
   SECS=$(since "$t0")
 }
@@ -6643,13 +6643,13 @@ drill_authority_orphan_worker_start() {
 # now lists it in superseded_hosts; a row with no successor still blocks.
 drill_authority_superseded_fleet_row() {
   CAP=120;  # a cold go test build is ~40 s on a CI runner
-  local t0 a="$ROOT/tokenledger/internal/api/fleet_repo_authority.go"
+  local t0 a="$ROOT/tokenledger/hub/api/fleet_repo_authority.go"
   t0=$(now)
   grep -q 'supersededBy(f, a.Repo, fs, eps)' "$a" \
     || { WHY="repoAuthorityInventory no longer skips a superseded fleet row"; return 1; }
   grep -q '"superseded_hosts": superseded' "$a" \
     || { WHY="the authority manifest no longer lists superseded fleet rows apart"; return 1; }
-  _drill_go_tests 'TestSupersededByRules TestRepoAuthoritySupersededFleetRowBlocksNothing' "$ROOT/tokenledger/internal/api/fleet_repo_authority_test.go" \
+  _drill_go_tests 'TestSupersededByRules TestRepoAuthoritySupersededFleetRowBlocksNothing' "$ROOT/tokenledger/hub/api/fleet_repo_authority_test.go" \
     '被取代的旧 fleet 行：同一台机器（fleet machine / endpoint / 硬件 machine_id + os_user）之后报过 present 行，它列进 superseded_hosts 不再挡；没有后继的 absent 行、present 而不 capable 的行照旧挡，另一个仓库一字不变（go test）' || return 1
   SECS=$(since "$t0")
 }
@@ -6940,7 +6940,7 @@ drill_chat_home_moved() {
 # login's token hash, for this login and this relay, unexpired — anything else
 # closes it and the login's socket never sees a byte; nothing the hub sends can
 # change the target; an agent without CapChat is never sent an open. All of it is
-# Go (tokenledger/internal/api chat_relay_test.go, a real agent, a real unix
+# Go (tokenledger/e2e chat_relay_test.go, a real agent, a real unix
 # socket): held by name, run when a toolchain is here.
 drill_chat_relay_wrong_person() {
   CAP=180; local t0 out rc api ctl agt
@@ -6948,7 +6948,7 @@ drill_chat_relay_wrong_person() {
   ctl='TestChatPerson'; agt='TestChatPipe'
   t0=$(now)
   for out in $api; do
-    grep -q "^func $out(" "$ROOT/tokenledger/internal/api/chat_relay_test.go" 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
+    grep -q "^func $out(" "$ROOT/tokenledger/e2e/chat_relay_test.go" 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
   done
   grep -q "^func $ctl(" "$ROOT/tokenledger/shared/control/chat_relay_test.go" 2>/dev/null || { WHY="the statement's test $ctl is gone"; return 1; }
   grep -q "^func $agt(" "$ROOT/tokenledger/agent/node_chat_relay_test.go" 2>/dev/null || { WHY="the helper's test $agt is gone"; return 1; }
@@ -6956,8 +6956,8 @@ drill_chat_relay_wrong_person() {
   out=$(awk '/^type ChatRelayOpen struct/,/^}/' "$ROOT/tokenledger/shared/control/chat_relay.go" | grep -c 'json:"')
   [ "$out" = 3 ] || { WHY="ChatRelayOpen has $out wire fields, want 3 (relay_id, secret, login)"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s %s %s' "$api" "$ctl" "$agt" | tr ' ' '|'))\$" ./internal/api github.com/verkyyi/claude-fleet/tokenledger/shared/control github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s %s %s' "$api" "$ctl" "$agt" | tr ' ' '|'))\$" ./e2e github.com/verkyyi/claude-fleet/tokenledger/shared/control github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='签错 / 过期 / 给别的转发 / 给别的登录 / 寿命过长 / 没有声明 / 先发字节 → 节点断开，socket 0 连接 0 字节；给别的登录的 open 不回拨；请求里塞 target/path/addr/port 只到本登录自己的 socket；没报 CapChat 的节点不收 open（NO_CHAT）' ;;
@@ -6985,7 +6985,7 @@ drill_chat_first_open_cold() {
   grep -q 'a.chatSockOrEnsure(ctx, dctx, login' "$f" 2>/dev/null \
     || { WHY="openChatRelay dials the socket without chatSockOrEnsure: a cold home never starts"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestChatSockEnsuresOnDemand$' github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go test is not there (go test ran none)"; return 1 ;;
@@ -7006,14 +7006,14 @@ drill_chat_first_open_cold() {
 # the relay, was verified THERE first — its FleetSig nonce spent — and then
 # refused as a replay by the holder (401). Now a chat request is handed whole to
 # the holder (chatRelayPeer) and a data half is handed on BEFORE it is verified
-# (claimedEndpoint). Go (internal/api chat_relay_replica_test.go: two replicas, a
+# (claimedEndpoint). Go (hub/api + e2e chat_relay_replica_test.go: two replicas, a
 # front splitting the halves, a real signing agent), run when a toolchain is here.
 drill_chat_relay_replica_hop() {
-  CAP=180; local t0 out rc tests f="$ROOT/tokenledger/internal/api/ssh_relay.go"
+  CAP=180; local t0 out rc tests f="$ROOT/tokenledger/hub/api/ssh_relay.go"
   tests='TestChatRelayReplicaHop TestChatRelayReplicaNobodyHolds TestChatRelayReplicaSingleNeverProxies TestSSHRelayDataHalfOnOtherReplica'
   t0=$(now)
   for out in $tests; do
-    grep -q "^func $out(" "$ROOT"/tokenledger/internal/api/*_test.go 2>/dev/null || { WHY="the test $out is gone"; return 1; }
+    grep -q "^func $out(" "$ROOT"/tokenledger/hub/api/*_test.go "$ROOT"/tokenledger/e2e/*_test.go 2>/dev/null || { WHY="the test $out is gone"; return 1; }
   done
   # the data half is handed on before nodeEndpoint verifies (and spends) its signature
   local cl vl
@@ -7021,11 +7021,11 @@ drill_chat_relay_replica_hop() {
   vl=$(awk '/^func \(s \*Server\) attachRelayData/,/^}/' "$f" | grep -n 's.nodeEndpoint(w, r)' | head -1 | cut -d: -f1)
   [ -n "$cl" ] && [ -n "$vl" ] && [ "$cl" -lt "$vl" ] \
     || { WHY="attachRelayData verifies before it hands a data half on (a replica spends the nonce the holder needs)"; return 1; }
-  grep -q 's.chatRelayPeer(r, home.Machine, home.Login)' "$ROOT/tokenledger/internal/api/fleet_chat.go" 2>/dev/null \
+  grep -q 's.chatRelayPeer(r, home.Machine, home.Login)' "$ROOT/tokenledger/hub/api/fleet_chat.go" 2>/dev/null \
     || { WHY="the chat routes never hand a request to the replica holding the login's link"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='两副本：人的 /chat 落在不持链的副本 → 整个请求交给持链副本；节点签名的回拨落在另一副本 → 验签前转过去，nonce 只花一次；没人持链照答 home_down；单入口不转' ;;
@@ -7044,12 +7044,12 @@ drill_chat_relay_replica_hop() {
 term_go() {
   local tests="$1" pkgs="$2" ok="$3" out rc t
   for t in $tests; do
-    grep -q "^func $t(" "$ROOT"/tokenledger/internal/api/*_test.go "$ROOT"/tokenledger/agent/*_test.go \
+    grep -q "^func $t(" "$ROOT"/tokenledger/hub/api/*_test.go "$ROOT"/tokenledger/e2e/*_test.go "$ROOT"/tokenledger/agent/*_test.go \
       "$ROOT"/tokenledger/shared/control/*_test.go "$ROOT"/tokenledger/shared/attachment/*_test.go 2>/dev/null || { WHY="the test $t is gone"; return 1; }
   done
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     # shellcheck disable=SC2086 # pkgs is a word list
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" $pkgs 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -7084,7 +7084,7 @@ drill_chat_late_history() {
 drill_chat_direct_admission() {
   CAP=180; local t0
   t0=$(now)
-  term_go 'TestChatAttachmentAdmission TestChatAttachmentRequests' './internal/api' \
+  term_go 'TestChatAttachmentAdmission TestChatAttachmentRequests' './e2e' \
     '直连与回退共用聊天准入；单条请求单次执行、节点回执单次退额；断线不重放' || return 1
   SECS=$(since "$t0")
 }
@@ -7107,10 +7107,10 @@ drill_term_other_person() {
   t0=$(now)
   out=$(awk '/^type TermOpen struct/,/^}/' "$ROOT/tokenledger/shared/control/term_relay.go" | grep -c 'json:"')
   [ "$out" = 3 ] || { WHY="TermOpen has $out wire fields, want 3 (relay_id, secret, login)"; return 1; }
-  grep -q 'viewAsAsked(r) != ""' "$ROOT/tokenledger/internal/api/term_relay.go" 2>/dev/null \
+  grep -q 'viewAsAsked(r) != ""' "$ROOT/tokenledger/hub/api/term_relay.go" 2>/dev/null \
     || { WHY="termPerson does not refuse a view-as"; return 1; }
   term_go 'TestTermRelayOtherPersonNeverReachesIt TestTermRelayBadGrantNeverOpensATerminal TestTermRelayReachesOwnWorker TestTermGrant TestAttachmentGrant TestAttachmentRejectsBeforeTarget TestAttachmentGrantReplayAndWrongService' \
-    './internal/api github.com/verkyyi/claude-fleet/tokenledger/shared/control' \
+    './e2e github.com/verkyyi/claude-fleet/tokenledger/shared/control' \
     '别人 / 管理员本人 / 以他视角 / 运营门 / 别的 Origin / 两个或没有选择器 / 路径当目标 / 不存在的 worker → 拒，命令 0 次启动；签错 / 过期 / 给别的转发 / 别的登录 / 对话的声明 / 命令当目标 / 重放 → 节点断开，不开终端；本人能开（对照）' \
     || return 1
   SECS=$(since "$t0")
@@ -7123,10 +7123,10 @@ drill_term_other_person() {
 drill_term_relay_orphan() {
   CAP=240; local t0
   t0=$(now)
-  grep -q 'defer s.termRelays.closeNode(nc)' "$ROOT/tokenledger/internal/api/nodes.go" 2>/dev/null \
+  grep -q 'defer s.termRelays.closeNode(nc)' "$ROOT/tokenledger/hub/api/nodes.go" 2>/dev/null \
     || { WHY="a dropped control link does not end its terminals (no termRelays.closeNode)"; return 1; }
   term_go 'TestTermRelayOrphanReleasesEverything TestTermRelayAgentLinkDrop TestTermRelayDoesNotInterruptChat TestTermPtyRunsTheOneCommand TestTermControlFrames TestAttachmentLogoutRevokesDirect TestAttachmentLeaseAndEpoch TestAttachmentReplacementFence TestAttachmentRelayAndLateSelection TestAttachmentBackpressureAndEarlyData TestAttachmentSDPLimits' \
-    './internal/api github.com/verkyyi/claude-fleet/tokenledger/agent github.com/verkyyi/claude-fleet/tokenledger/shared/control github.com/verkyyi/claude-fleet/tokenledger/shared/attachment' \
+    './e2e github.com/verkyyi/claude-fleet/tokenledger/agent github.com/verkyyi/claude-fleet/tokenledger/shared/control github.com/verkyyi/claude-fleet/tokenledger/shared/attachment' \
     '半开 / 畸形帧 / 超大帧 / 撤销登录 / 接到一半走了 / 控制链路断：30 秒内伪终端和命令进程归零、转发表空；终端饱和、关、发垃圾都不打断同登录的对话，反之亦然' \
     || return 1
   SECS=$(since "$t0")

@@ -1,7 +1,7 @@
 // Command ccquota, the node's build (claude-fleet#4812, EPIC #4810 C2): every
 // subcommand a machine, a pod or bin/ runs (agent/cli; commands.txt is the
 // list) and none of the hub's — no database, dashboard or MCP server compiled
-// in. The combined tokenledger/cmd/ccquota runs the same agent/cli first, so a
+// in. The combined tokenledger/hub/cmd/ccquota runs the same agent/cli first, so a
 // node command behaves the same whichever binary a machine has.
 package main
 

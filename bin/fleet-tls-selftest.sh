@@ -126,7 +126,7 @@ for f in fleet-login.py fleet-connect.py fleet-hub-admin.py fleet-client-lease.p
          fleet-agent-team.py fleet-cred-scan.py fleet-cred-proxy.py; do
   grep -q 'fleet_tls.install()' "$BIN/$f" && ok "E: $f installs fleet_tls" || bad "E: $f installs fleet_tls"
 done
-grep -qx 'bin/fleet_tls.py' "$ROOT/tokenledger/internal/api/fleetclient/manifest" \
+grep -qx 'bin/fleet_tls.py' "$ROOT/tokenledger/hub/api/fleetclient/manifest" \
   && ok "E: the client manifest ships fleet_tls.py" || bad "E: the client manifest ships fleet_tls.py"
 has "E: fleet puts pybin first" 'claude-fleet}/pybin"' "$(cat "$BIN/fleet")"
 has "E: the install line records the python" '$CONF/pybin/python3' "$(cat "$BIN/fleet-install.sh")"

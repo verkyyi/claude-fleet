@@ -113,8 +113,8 @@ check "D mac-follow posts its stage" "grep -q 'fleet-train-ledger.py build --mac
 
 # ---- E: one list of what is never the bottleneck ----
 py=$(python3 -c "import importlib.util as u; s=u.spec_from_file_location('l','$L'); m=u.module_from_spec(s); s.loader.exec_module(m); print(' '.join(sorted(m.OFF_PATH, key=lambda x: x.encode())))")
-go=$(awk '/^var stageOffPath/{on=1} on{print} on&&/^}/{exit}' "$ROOT/tokenledger/internal/api/fleet_release_runs.go" |
-  grep -o '"[^"]*": true' | sed 's/": true//; s/^"//'; grep -q 'stageMacFollow: true' "$ROOT/tokenledger/internal/api/fleet_release_runs.go" && echo 'mac follow')
+go=$(awk '/^var stageOffPath/{on=1} on{print} on&&/^}/{exit}' "$ROOT/tokenledger/hub/api/fleet_release_runs.go" |
+  grep -o '"[^"]*": true' | sed 's/": true//; s/^"//'; grep -q 'stageMacFollow: true' "$ROOT/tokenledger/hub/api/fleet_release_runs.go" && echo 'mac follow')
 go=$(printf '%s\n' "$go" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
 eq "E off-path stages: script = hub" "$py" "$go"
 

@@ -9,7 +9,7 @@
 # deleted pod is 0 seconds down — hub-deploy measures it (downtime_seconds).
 # The two replicas share the database (CCQUOTA_DB_URL) and find each other for
 # the node links each holds (CCQUOTA_REPLICA*, claude-fleet#2124); background
-# work runs once (internal/leader, #2123). No disk: nothing here mounts a volume
+# work runs once (hub/leader, #2123). No disk: nothing here mounts a volume
 # that can get stuck attaching.
 #
 # Secret `ccquota-db` (made by a person, never in this repo — ../RUNBOOK.md

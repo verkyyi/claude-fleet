@@ -2,7 +2,7 @@
 # site-build.sh — build the public website, 中文 at / and English at /en/
 # (issue #3584, EPIC #3569 C14; the design is the site design v2, decided 2026-10-12).
 #
-#   site-build.sh                 site/ + docs/public FAQ → tokenledger/web/site/
+#   site-build.sh                 site/ + docs/public FAQ → tokenledger/hub/web/site/
 #   site-build.sh --out <dir>     the same, into <dir> (the selftest's sandbox)
 #   site-build.sh --drill <file>  the live drill's result (default site/drill.json)
 #   site-build.sh --now <YYYY-MM-DD>   judge the drill's age against this day (tests)
@@ -96,7 +96,7 @@ while [ -L "$real" ]; do
 done
 REPO="$(cd "$(dirname "$real")/.." && pwd)"
 SITE="$REPO/site"
-OUT="$REPO/tokenledger/web/site"
+OUT="$REPO/tokenledger/hub/web/site"
 DOCS="$REPO/docs/public"
 DRILL=""
 NOW=""

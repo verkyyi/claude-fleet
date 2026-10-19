@@ -20,7 +20,7 @@
 # (/v1/relay/revocations + /v1/node/revocations, held while ?since is current);
 # a revocation is a new version of <dir>/list.json. The hub's own list — what
 # writes it, the long poll waking, off adds nothing — is pinned by
-# tokenledger/internal/api/fleet_revocations_test.go, run here when a Go
+# tokenledger/hub/api/fleet_revocations_test.go, run here when a Go
 # toolchain is present and BREAK_GO != 0, otherwise by tokenledger.yml.
 # The door: a sandbox sshd on 127.0.0.1 trusting a throwaway CA
 # with RevokedKeys = the KRL the supervisor writes; no sshd that starts here ⇒
@@ -228,13 +228,13 @@ drill_relay_revocations_hub_down() {
   # Keep the independent Go gate's exact coverage visible even on shell-only CI.
   local test
   for test in OffAddsNothing RelayCred LongPollWakes CredRevokeAndLift Cert Prune; do
-    grep -q "^func TestRevocations${test}(" "$ROOT/tokenledger/internal/api/fleet_revocations_test.go" \
+    grep -q "^func TestRevocations${test}(" "$ROOT/tokenledger/hub/api/fleet_revocations_test.go" \
       || { WHY="the hub half's TestRevocations${test} is gone"; return 1; }
   done
   gohalf="；六条 TestRevocations 测试按名核对在，由 Go 门（tokenledger.yml）独立执行"
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1 && [ -d "$ROOT/tokenledger" ]; then
     local gout
-    gout=$(cd "$ROOT/tokenledger" && go test -count=1 -run '^TestRevocations' ./internal/api 2>&1)
+    gout=$(cd "$ROOT/tokenledger" && go test -count=1 -run '^TestRevocations' ./hub/api 2>&1)
     case "$?:$gout" in
       0:*'no tests to run'*) WHY="the hub half's TestRevocations tests did not run"; return 1 ;;
       0:*) gohalf="；入口半边 go test -run TestRevocations 通过" ;;
@@ -434,12 +434,12 @@ drill_key_rotation_breaks_sessions() {
   # The hub half (renew re-signs with the new key; no PREV ⇒ 403) and the
   # cluster credential proxy's (it follows the key the hub names)
   local gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestKeyRotation*" out rc
-  grep -q '^func TestKeyRotationSessionPassH1(' "$ROOT/tokenledger/internal/api/fleet_key_rotation_test.go" 2>/dev/null \
+  grep -q '^func TestKeyRotationSessionPassH1(' "$ROOT/tokenledger/hub/api/fleet_key_rotation_test.go" 2>/dev/null \
     && grep -q '^func TestPass2KeyRotation(' "$ROOT/tokenledger/shared/credproxy/pass2_test.go" 2>/dev/null \
     || { WHY="the hub half's tests TestKeyRotation* / TestPass2KeyRotation are gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run 'KeyRotation|LoadKeysPrev' ./internal/api github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run 'KeyRotation|LoadKeysPrev' ./hub/api github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests did not run"; return 1 ;;
       0:*) gohalf="入口一半：go test 旧钥签的 fcp-h1 / fcp-h2 / frl2 / frh1 在 PREV 下验得过、续签成新钥签的同一张，没 PREV 403；中心代理跟上入口换的钥" ;;

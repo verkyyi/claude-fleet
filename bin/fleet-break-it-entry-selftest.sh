@@ -538,12 +538,12 @@ drill_entry_public_unreachable() {
   # nothing listens; reachable(machine) holds the first alone, and drops it once
   # the host key no longer matches or the check goes stale.
   gohalf="hub half: no go toolchain here — the Go gate (tokenledger.yml) runs TestEntryReachUnreachableNotRecorded"
-  grep -q '^func TestEntryReachUnreachableNotRecorded(' "$ROOT/tokenledger/internal/api/fleet_entry_reach_test.go" 2>/dev/null \
+  grep -q '^func TestEntryReachUnreachableNotRecorded(' "$ROOT/tokenledger/hub/api/fleet_entry_reach_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestEntryReachUnreachableNotRecorded is gone"; edown; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && FLEET_DRILL_ENTRY="$EPORT $E/db/entry/ssh_host_ed25519_key.pub" \
-          GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestEntryReachUnreachableNotRecorded$' ./internal/api 2>&1); rc=$?
+          GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestEntryReachUnreachableNotRecorded$' ./hub/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; edown; return 1 ;;
       0:*) gohalf="hub half: go test against this entry sshd ok" ;;
@@ -865,11 +865,11 @@ PY
   [ "$(grep -c '^fleet-u-aaaa1 ' "$kh")" = 1 ] && ! grep -q ssh-rsa "$kh" \
     || { WHY="the old line was not replaced: $(cat "$kh")"; ddown; return 1; }
   gohalf="hub half: no go toolchain here — the Go gate runs TestDoorRouteListHandsOutTheDoorsHostKey"
-  grep -q '^func TestDoorRouteListHandsOutTheDoorsHostKey(' "$ROOT/tokenledger/internal/api/fleet_door_test.go" 2>/dev/null \
+  grep -q '^func TestDoorRouteListHandsOutTheDoorsHostKey(' "$ROOT/tokenledger/hub/api/fleet_door_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestDoorRouteListHandsOutTheDoorsHostKey is gone"; ddown; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestDoorRouteListHandsOutTheDoorsHostKey$' ./internal/api 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestDoorRouteListHandsOutTheDoorsHostKey$' ./hub/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; ddown; return 1 ;;
       0:*) gohalf="hub half: go test ok" ;;
@@ -884,14 +884,14 @@ PY
 }
 
 # the hub half of a drill: one Go test, when a toolchain is here (else the note)
-gotest() {  # gotest <TestName> <file under internal/api> → GOHALF, rc 1 = red
+gotest() {  # gotest <TestName> <file under hub/api> → GOHALF, rc 1 = red
   GOHALF="hub half: no go toolchain here — the Go gate runs $1"
-  grep -q "^func $1(" "$ROOT/tokenledger/internal/api/$2" 2>/dev/null \
+  grep -q "^func $1(" "$ROOT/tokenledger/hub/api/$2" 2>/dev/null \
     || { WHY="the hub half's test $1 is gone"; return 1; }
   [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1 || return 0
   local out rc
-  out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-        go test -count=1 -run "^$1\$" ./internal/api 2>&1); rc=$?
+  out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+        go test -count=1 -run "^$1\$" ./hub/api 2>&1); rc=$?
   case "$rc:$out" in
     0:*'no tests to run'*) WHY="the hub half's Go test $1 did not run"; return 1 ;;
     0:*) GOHALF="hub half: go test $1 ok" ;;
@@ -904,7 +904,7 @@ gotest() {  # gotest <TestName> <file under internal/api> → GOHALF, rc 1 = red
 drill_door_reach_stale() {
   CAP=60   # the Go test dials a real in-process sshd
   local t0; t0=$(now)
-  grep -q 's.doorReachKeep(host, time.Now())' "$ROOT/tokenledger/internal/api/fleet_door.go" \
+  grep -q 's.doorReachKeep(host, time.Now())' "$ROOT/tokenledger/hub/api/fleet_door.go" \
     || { WHY="handleNodeEntryRoutes no longer re-checks the pulling door"; return 1; }
   gotest TestDoorPullKeepsItsReachFresh fleet_door_reach_test.go || return 1
   SECS=$(since "$t0")

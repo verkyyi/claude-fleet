@@ -4,7 +4,7 @@
 # lease on (repo, issue) BEFORE its GitHub claim check, so two machines opening
 # the same issue at once cannot both pass. The lease command is faked through
 # FLEET_HUB_LEASE_CMD (the seam fleet_hub_lease runs; in production it is
-# `ccquota lease`, whose hub side is tokenledger/internal/api/fleet_leases.go);
+# `ccquota lease`, whose hub side is tokenledger/hub/api/fleet_leases.go);
 # git/gh/tmux are faked on PATH as in dash-issue-prespawn-dedup-selftest.sh, and
 # the real dash-issue-session.sh + fleet-lib.sh run unmodified.
 #

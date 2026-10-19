@@ -366,7 +366,7 @@ sudo grep -rEc 'sk-ant-|eyJhbGci|Bearer ' /var/log/caddy/ /etc/caddy/ ; sudo gre
 
 ## 自检
 
-- Go：`tokenledger/internal/api/fleet_relay_cred_test.go` —— 领证只给可信、有账号、未撤销的机器；
+- Go：`tokenledger/hub/api/fleet_relay_cred_test.go` —— 领证只给可信、有账号、未撤销的机器；
   伪造 / 篡改 / 节点令牌 / 放在 `Authorization` / 被替换 / 撤销 / 不可信一律 403；`fcp-h1.` 只放它覆盖的那家、
   改过声明的和撤销的拒绝；
   路径不在白名单 403；设置接口不露哈希；同机多登录各一张；没领过证时什么都不多（退化）。

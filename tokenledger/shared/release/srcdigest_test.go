@@ -116,6 +116,46 @@ func TestImageSourceDigest(t *testing.T) {
 	}
 }
 
+// The hub as its own module (claude-fleet#4814): hub/ is the image's input like
+// cmd/ and internal/ were — less hub/web/ (never an input) and hub/apitest/ (the
+// e2e tests' harness, linked into no build) — and still not the node's; e2e/ is
+// neither's.
+func TestImageSourceDigestHubModule(t *testing.T) {
+	tree := map[string][]byte{
+		"tokenledger/hub/go.mod":                      []byte("module h\n"),
+		"tokenledger/hub/cmd/ccquota/main.go":         []byte("package main\n"),
+		"tokenledger/hub/api/a.go":                    []byte("package api\n"),
+		"tokenledger/shared/go.mod":                   []byte("module y\n"),
+		"tokenledger/agent/go.mod":                    []byte("module z\n"),
+		"tokenledger/hub/api/fleetclient/manifest":    []byte("bin/fleet\n"),
+		"tokenledger/hub/api/fleetclient/pack/bin/fl": []byte("#!/bin/sh\n"),
+	}
+	img, node := ImageSourceDigest(tree), SourceDigest(tree)
+	for _, p := range []string{"tokenledger/hub/api/a.go", "tokenledger/hub/cmd/ccquota/main.go", "tokenledger/hub/go.mod"} {
+		edit := map[string][]byte{}
+		for k, v := range tree {
+			edit[k] = v
+		}
+		edit[p] = append([]byte(nil), append(tree[p], ' ')...)
+		if ImageSourceDigest(edit) == img {
+			t.Errorf("an edit to %s did not move the image's digest", p)
+		}
+		if SourceDigest(edit) != node {
+			t.Errorf("an edit to %s moved the node's digest", p)
+		}
+	}
+	for _, p := range []string{"tokenledger/hub/web/embed.go", "tokenledger/hub/apitest/apitest.go", "tokenledger/e2e/x_test.go",
+		"tokenledger/e2e/go.mod", "tokenledger/hub/api/a_test.go", "tokenledger/hub/api/fleetclient/pack/bin/x"} {
+		add := map[string][]byte{p: []byte("x\n")}
+		for k, v := range tree {
+			add[k] = v
+		}
+		if ImageSourceDigest(add) != img || SourceDigest(add) != node {
+			t.Errorf("%s moved a digest", p)
+		}
+	}
+}
+
 // The docker build's side (a checkout on disk) and the hub's (a commit's
 // files) agree.
 func TestSourceDigestDirMatches(t *testing.T) {

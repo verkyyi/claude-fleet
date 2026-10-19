@@ -524,15 +524,15 @@ pglog() {  # pglog <time> → the tokenledger-pg job log
   printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.0413598Z shell: /usr/bin/bash -e {0}\n' "$1"
   printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.0414807Z ##[endgroup]\n' "$1"
   printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.7563648Z pg leg: 0 test(s) not run on Postgres\n' "$1"
-  printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.7564433Z ok  \tgithub.com/verkyyi/claude-fleet/tokenledger/internal/store\t151.640s\n' "$1"
+  printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.7564433Z ok  \tgithub.com/verkyyi/claude-fleet/tokenledger/hub/store\t151.640s\n' "$1"
   printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.7565667Z --- FAIL: TestFleetUsers_MachineLoginTakesOverAnOldIdentitysKey (%s)\n' "$1" "$2"
   printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.7566367Z --- FAIL: TestDropLegacyMachineLogins (%s)\n' "$1" "$3"
-  printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.7567287Z FAIL\tgithub.com/verkyyi/claude-fleet/tokenledger/internal/api\t442.700s\n' "$1"
+  printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.7567287Z FAIL\tgithub.com/verkyyi/claude-fleet/tokenledger/hub/api\t442.700s\n' "$1"
   printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.7581745Z ##[error]Process completed with exit code 1.\n' "$1"
 }
 pglog 11:14:03 1.12s 0.92s > "$FX/logs/112763377741"     # c902bf83's run
 pglog 11:24:40 1.31s 0.88s > "$FX/logs/112766631835"     # bb7da505's run
-printf 'test\tRun go test -race ./...\t2026-10-07T11:21:08.0158841Z --- FAIL: TestNodePlaceIdleNodeStaysLocal (1.19s)\ntest\tRun go test -race ./...\t2026-10-07T11:21:08.0495450Z FAIL\tgithub.com/verkyyi/claude-fleet/tokenledger/internal/api\t342.280s\n' > "$FX/logs/112763377674"
+printf 'test\tRun go test -race ./...\t2026-10-07T11:21:08.0158841Z --- FAIL: TestNodePlaceIdleNodeStaysLocal (1.19s)\ntest\tRun go test -race ./...\t2026-10-07T11:21:08.0495450Z FAIL\tgithub.com/verkyyi/claude-fleet/tokenledger/hub/api\t342.280s\n' > "$FX/logs/112763377674"
 sed 's/(1.19s)/(1.27s)/' "$FX/logs/112763377674" > "$FX/logs/112766631871"   # bb7da505's `test`: still red
 printf '112763377674\ttest\n112763377741\ttokenledger-pg\n' > "$FX/jobs/37611916613"
 printf '112766631871\ttest\n112766631835\ttokenledger-pg\n' > "$FX/jobs/37613311153"

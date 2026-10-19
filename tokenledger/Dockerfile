@@ -20,21 +20,21 @@ WORKDIR /src
 #   direct 兜底，所以在能直连的环境里行为不变。
 ARG GOPROXY=https://goproxy.cn,direct
 ENV GOPROXY=$GOPROXY
-# Three modules: the root, shared/ (what the hub and the node both build in,
-# claude-fleet#4811) and agent/ (the node, claude-fleet#4812), joined by the
-# go.mods' replaces — go.work is a developer's convenience, never what an image
-# builds from.
+# Three modules build here: hub/ (the hub, claude-fleet#4814), shared/ (what the
+# hub and the node both build in, #4811) and agent/ (the node, #4812), joined by
+# the go.mods' replaces — go.work is a developer's convenience, never what an
+# image builds from. e2e/ (the联调 tests) is in the context, never built.
 ENV GOWORK=off
-COPY go.mod go.sum ./
+COPY hub/go.mod hub/go.sum ./hub/
 COPY shared/go.mod shared/go.sum ./shared/
 COPY agent/go.mod agent/go.sum ./agent/
-RUN go mod download && cd agent && go mod download
+RUN cd hub && go mod download && cd ../agent && go mod download
 COPY . .
 # The client /install serves is packed from the repo before the build
 # (claude-fleet#1803): bin/fleet-client-pack.sh && docker build … tokenledger/.
 # An image without it would serve no client — refuse to build one.
-RUN test -f internal/api/fleetclient/pack/bin/fleet || { \
-      echo "no client in internal/api/fleetclient/pack/ — run bin/fleet-client-pack.sh before docker build" >&2; exit 1; }
+RUN test -f hub/api/fleetclient/pack/bin/fleet || { \
+      echo "no client in hub/api/fleetclient/pack/ — run bin/fleet-client-pack.sh before docker build" >&2; exit 1; }
 # End VERSION with the commit (`prod-$(git rev-parse --short HEAD)`): the hub
 # serves it on GET /version and fleet-doctor's hub-image row compares that
 # commit with refs/tags/stable (claude-fleet#1696). `docker` names none.
@@ -46,8 +46,11 @@ ARG TARGETARCH
 # only from a commit whose node source hashes the same, so a release never
 # carries a ccquota older (or newer) than its commit. The hub binary carries the
 # same stamp: it is the DistSrc the hub vouches for (`ccquota version`'s src).
-RUN go run github.com/verkyyi/claude-fleet/tokenledger/shared/cmd/ccquota-srcdigest . > /tmp/srcdigest
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+RUN cd shared && go run ./cmd/ccquota-srcdigest .. > /tmp/srcdigest
+# The hub's own build (hub/cmd/ccquota, claude-fleet#4814): no node code inside —
+# a node command answers that it is the node's and exits 2; credproxy and
+# version run here as on a node (the credproxy Deployment runs this image).
+RUN cd hub && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -ldflags "-s -w -X main.Version=${VERSION} -X main.SrcDigest=$(cat /tmp/srcdigest)" -o /out/ccquota ./cmd/ccquota
 # The agent binaries a joining machine downloads from this hub
 # (/v1/node/dist/<os>-<arch>, claude-fleet#1418) — there are no tagged releases,

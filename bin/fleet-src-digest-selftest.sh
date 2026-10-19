@@ -72,6 +72,20 @@ printf '// edit\n' >> "$WORK/r/tokenledger/agent/cli/run.go"
 git -C "$WORK/r" commit -qam agent
 [ "$(sd)" != "$prev" ] && [ "$(isd)" != "$iprev" ] && ok "an agent/ edit moves both" || bad "an edit under agent/ did not move both digests"
 
+# the hub as its own module (#4814): hub/ is the image's input — not hub/web/,
+# hub/apitest/ (no build links it), the client pack, nor e2e/ — and never the node's
+mkdir -p "$WORK/r/tokenledger/hub/api/fleetclient" "$WORK/r/tokenledger/hub/web" "$WORK/r/tokenledger/hub/apitest" "$WORK/r/tokenledger/e2e"
+printf 'module h\n' > "$WORK/r/tokenledger/hub/go.mod"; printf 'package api\n' > "$WORK/r/tokenledger/hub/api/a.go"
+git -C "$WORK/r" add -A && git -C "$WORK/r" commit -qm hubmod
+prev=$(sd); iprev=$(isd)
+printf 'package web\n' > "$WORK/r/tokenledger/hub/web/embed.go"; printf 'package apitest\n' > "$WORK/r/tokenledger/hub/apitest/a.go"
+printf 'bin/x\n' > "$WORK/r/tokenledger/hub/api/fleetclient/manifest"; printf 'module e\n' > "$WORK/r/tokenledger/e2e/go.mod"
+git -C "$WORK/r" add -A && git -C "$WORK/r" commit -qm hubnoise
+[ "$(sd)" = "$prev" ] && [ "$(isd)" = "$iprev" ] && ok "hub/web, hub/apitest, the client manifest and e2e/ are not inputs" || bad "a hub/ non-input moved a digest"
+printf '// edit\n' >> "$WORK/r/tokenledger/hub/api/a.go"
+git -C "$WORK/r" commit -qam hubedit
+[ "$(sd)" = "$prev" ] && [ "$(isd)" != "$iprev" ] && ok "a hub/ edit moves the image's digest, not the node's" || bad "a hub/ edit: node ${prev}→$(sd), image ${iprev}→$(isd)"
+
 # no Go source: empty, exit 0; an unknown rev: exit 2
 git -C "$WORK/r" rm -rq tokenledger/shared tokenledger/agent && git -C "$WORK/r" commit -qm node-gone
 out=$(sd); rc=$?

@@ -102,19 +102,19 @@ if command -v git >/dev/null 2>&1; then
   T=$(mktemp -d "${TMPDIR:-/tmp}/fleet-selftest-tokenledger.XXXXXX") || exit 1
   trap 'rm -rf "$T"' EXIT
   R="$T/repo"
-  mkdir -p "$R/bin" "$R/tokenledger/cmd/ccquota"
+  mkdir -p "$R/bin" "$R/tokenledger/hub/cmd/ccquota"
   cp "$BIN/run-selftests.sh" "$BIN/selftest-shadow-root.sh" "$R/bin/"
   mk_test() { printf '#!/bin/sh\n# %s\nexit 0\n' "$2" > "$R/bin/$1-selftest.sh"; }
   mk_test portability 'lint: scans the whole tree'
   mk_test alpha       'reads hub.go and README.md and Makefile'
   mk_test beta        'drives tool-b.sh'
   printf '#!/bin/sh\n' > "$R/bin/tool-b.sh"
-  echo 'package main' > "$R/tokenledger/cmd/ccquota/hub.go"
+  echo 'package main' > "$R/tokenledger/hub/cmd/ccquota/hub.go"
   echo '# tl' > "$R/tokenledger/README.md"
   echo 'all:' > "$R/tokenledger/Makefile"
   g() { git -C "$R" -c user.name=t -c user.email=t@example.invalid "$@"; }
   g init -q && g add -A && g commit -qm base && g tag base
-  echo '// edit' >> "$R/tokenledger/cmd/ccquota/hub.go"
+  echo '// edit' >> "$R/tokenledger/hub/cmd/ccquota/hub.go"
   echo more >> "$R/tokenledger/README.md"
   echo '	true' >> "$R/tokenledger/Makefile"
   g add -A && g commit -qm tl

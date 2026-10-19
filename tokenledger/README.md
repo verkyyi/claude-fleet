@@ -134,8 +134,12 @@ week", and Anthropic [closed the request for it as not planned](https://github.c
 Download a binary from Releases, or:
 
 ```bash
-go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest   # needs Go 1.25+
+git clone --depth 1 https://github.com/verkyyi/claude-fleet.git   # needs Go 1.25+
+(cd claude-fleet/tokenledger/agent && go build -o ~/.local/bin/ccquota ./cmd/ccquota)   # the node's build
 ```
+
+(`go install …@latest` does not work: each module replaces the shared one with
+the directory beside it, and Go refuses `go install` of a module with a replace.)
 
 > TokenLedger now lives in the [claude-fleet](https://github.com/verkyyi/claude-fleet)
 > monorepo, under `tokenledger/` (claude-fleet issue #1391), with its full
@@ -225,7 +229,7 @@ What each replica keeps in its own memory, and why that is acceptable:
 
 **Two hubs on one Postgres** (claude-fleet#2123): each background loop — the
 daily prune, node alerts — runs only on the replica holding
-its Postgres advisory lock (`internal/leader`); the lock goes with that
+its Postgres advisory lock (`hub/leader`); the lock goes with that
 replica's connection, and the other takes it within 5 s. A credential refresh
 takes a per-account lock across replicas, so one account is never refreshed
 twice at once. Log lines and refresh audit rows carry `replica=<name>`
@@ -815,7 +819,7 @@ verdict `ok | unsupported_region | unreachable`: the egress region from
 Cloudflare's trace crossed with ipinfo, and one credential-less request to each
 provider's API), and the agent carries it in its hello and every heartbeat with
 `node.env`'s compute word, both re-read live — `fleet node compute on|off`
-needs no restart. The hub decides in one place (`internal/api/fleet_compute.go`):
+needs no restart. The hub decides in one place (`hub/api/fleet_compute.go`):
 `unsupported_region` closes a login that asked to run (placement skips it, its
 lease is refused) and raises the `compute_region` finding, unless the person
 forced it on (`fleet node compute on --force`, written to `fleet_audit`
@@ -828,7 +832,7 @@ auto-open — it never closes a running login. No probe and no setting =
 **A person's own computer** (claude-fleet#1721). `fleet node compute on
 --personal` — a laptop's default, `--shared` to say no — writes
 `CCQUOTA_FLEET_PERSONAL=1`; the agent carries `personal` in its hello and every
-beat, and `/v1/nodes` shows it. Placement (`internal/api/fleet_personal.go`)
+beat, and `/v1/nodes` shows it. Placement (`hub/api/fleet_personal.go`)
 takes a personal login only for a start asked FROM it: its own fleet's
 `/v1/node/place` / `/v1/node/move`, or a person's door while that person's
 client lease (claude-fleet#1715) says the client runs on it. Anything else —
@@ -1464,7 +1468,7 @@ provider serves:
   form re-sent after a lost answer would get `invalid_grant` and strand the
   account — the same reason the direct path never retries.
 
-Three outcomes are pinned in `internal/api/fleet_oauth_refresh_test.go` with a
+Three outcomes are pinned in `hub/api/fleet_oauth_refresh_test.go` with a
 real agent against a fake provider: the node relays and the vault saves the
 rotated token; no node is online; the provider refuses. Importing a Codex
 account is `fleet-creds-import.sh --codex` (below). The hub half needs the
@@ -1587,7 +1591,7 @@ curl -fsSL https://<hub>/install | sh
 `GET /install` is `bin/fleet-install.sh` with this hub's URL filled in; it
 downloads `fleet`, `fleet-login.py` and `fleet-connect.py` from
 `/install/<name>` (the copies this image was built from — embedded from
-`internal/api/fleetclient/pack/`, packed from the repo's `bin/` at build time
+`hub/api/fleetclient/pack/`, packed from the repo's `bin/` at build time
 by `bin/fleet-client-pack.sh`, claude-fleet#1803; the list pinned by
 `TestFleetClientMatchesBin` and `bin/fleet-install-selftest.sh`; each file's
 SHA-256 rides in `X-Ccquota-Sha256` and a mismatch is refused) into
@@ -2535,12 +2539,12 @@ Design notes are in `docs/superpowers/specs/`.
 ### Trunk and CI
 
 TokenLedger lives in [claude-fleet](https://github.com/verkyyi/claude-fleet)
-under `tokenledger/`; claude-fleet's `master` is the trunk, and it is what
-`go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest`
-resolves to (there are no `tokenledger/v*` tags, so `@latest` follows the
-default branch). Every Go / npm command in this README runs from inside
-`tokenledger/` — it is its own Go module (`go.mod` is here, not at the repo
-root).
+under `tokenledger/`; claude-fleet's `master` is the trunk. `tokenledger/` holds
+four Go modules (claude-fleet EPIC #4810): `hub/` (the hub and its build,
+`hub/cmd/ccquota`), `agent/` (the node and its build, `agent/cmd/ccquota`),
+`shared/` (what both build in) and `e2e/` (the联调 tests: a real node against a
+real hub, through `hub/apitest`); `go.work` joins them for an editor, and every
+Go command runs in its module's directory (CI builds each `GOWORK=off`).
 
 `.github/workflows/tokenledger.yml` runs `test`, `web` and the four
 `cross-compile` legs on a pull request or a `master` push **only when it
@@ -2553,7 +2557,7 @@ The image builds from this directory — the Dockerfile's context is
 `tokenledger/`, exactly as it was the old repo's root — after packing the client
 `/install` serves (claude-fleet#1803: the repo keeps one copy of each client
 file in `bin/` `conf/` …; `bin/fleet-client-pack.sh` copies the manifest's into
-the gitignored `internal/api/fleetclient/pack/`, and the build refuses an empty
+the gitignored `hub/api/fleetclient/pack/`, and the build refuses an empty
 pack). Always pack in the same command, so an image never carries a stale one:
 
 ```bash

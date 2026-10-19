@@ -1,0 +1,569 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"log"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
+)
+
+// Node-to-node relays (claude-fleet#1421, EPIC #1419 C2).
+//
+// A worker's parent, or the worker a message is for, may live on another
+// machine. Neither machine can reach the other; both reach the hub. So the
+// sending node hands the relay to the hub over its own control channel, the
+// hub STORES it (keyed by the sender's idempotency id, so a resend is a no-op)
+// and acks, and only then pushes it down the target node's channel. The
+// target's agent applies it through claude-fleet's own script — a child
+// report lands in the parent's ledger on the parent's machine and wakes the
+// parent; a message lands in the worker's inbox — and answers. A target that
+// is not connected gets it when it reconnects; nothing is ever pushed twice
+// within relayResendAfter, and an applied relay is never pushed again.
+//
+// Who may relay to whom: the sender's worker_id must belong to a fleet on the
+// SENDING node (the hub checks, a node's claim is not enough) — or, for a
+// message from a shell or daemon with no pane, be that fleet's
+// `<fleet UUID>/operator@<login>` with <login> the one the fleet runs under
+// (claude-fleet#1649) — and the target
+// fleet must belong to the same owner — the operator's logins with each other,
+// a person's logins with each other — never across people. Anything else is
+// NOT_FOUND, the same answer as a worker that does not exist.
+//
+// The same channel carries the other half routing needs: after heartbeats the
+// hub pushes the node owner's worker map (TypeWorkers) — every worker on every
+// machine of that owner, with its machine and its parent — which the agent
+// keeps as claude-fleet's local cache. claude-fleet never asks the network
+// where a worker is; it reads that file.
+
+// relayResendAfter is how long a pushed, unanswered relay waits before the
+// hub pushes it again (a lost frame, a node that restarted mid-apply).
+var relayResendAfter = newDurKnob(60 * time.Second)
+
+// relayTTL is how long a relay may wait for its target node; past it the
+// relay is expired, never delivered late.
+var relayTTL = newDurKnob(7 * 24 * time.Hour)
+
+// workersPushEvery bounds the worker-map push to one per node per interval:
+// claude-fleet trusts the cache for 30 s, so this keeps it fresh with room.
+var workersPushEvery = newDurKnob(10 * time.Second)
+
+// durKnob is a duration tests may change while a server's node goroutines
+// read it: atomic, so a test's Cleanup restoring it never races a goroutine
+// still running from that test's server (issue #2612).
+type durKnob struct{ v atomic.Int64 }
+
+func newDurKnob(d time.Duration) *durKnob {
+	k := &durKnob{}
+	k.Set(d)
+	return k
+}
+
+func (k *durKnob) Get() time.Duration { return time.Duration(k.v.Load()) }
+
+func (k *durKnob) Set(d time.Duration) { k.v.Store(int64(d)) }
+
+// relaySuffixRE is the part of a relay id after `<from worker_id>#`.
+var relaySuffixRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// relayOwner is who a login belongs to, for "only between your own":
+// "operator" for the hub's admin logins (and for every login when the hub
+// names no admins — a one-operator hub), a person for a login assigned to
+// them, else the endpoint alone.
+func (s *Server) relayOwner(endpointID, hostname, osUser string, accounts []store.FleetAccount) string {
+	if len(s.FleetAdmins) == 0 || s.isFleetAdmin(osUser) {
+		return "operator"
+	}
+	for _, a := range accounts {
+		if a.State == store.AccountActive && a.Hostname == hostname && a.Login == osUser {
+			return "person:" + a.PrincipalID
+		}
+	}
+	return "endpoint:" + endpointID
+}
+
+// relayOwners is every owner a login answers to: relayOwner's, plus the person
+// whose managed account it is (claude-fleet#3520). An admin login that is also
+// a person's account answers "operator" AND that person, so the person's
+// orchestrator on an admin login and a worker placed on another of their
+// logins — which /v1/node/place already allows (nodePrincipal) — relay to each
+// other. Before, the two were "operator" and "person:X": the hub answered
+// NOT_FOUND to every message and left the worker off the parent's map.
+func (s *Server) relayOwners(endpointID, hostname, osUser string, accounts []store.FleetAccount) []string {
+	out := []string{s.relayOwner(endpointID, hostname, osUser, accounts)}
+	for _, a := range accounts {
+		if a.State == store.AccountActive && a.Hostname == hostname && a.Login == osUser {
+			if o := "person:" + a.PrincipalID; o != out[0] {
+				out = append(out, o)
+			}
+			break
+		}
+	}
+	return out
+}
+
+// sameRelayOwner reports whether two logins share an owner (relayOwners).
+func sameRelayOwner(a, b []string) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Server) activeAccounts() []store.FleetAccount {
+	if len(s.FleetAdmins) == 0 {
+		return nil
+	}
+	accts, err := s.Store.FleetAccountsInState(store.AccountActive)
+	if err != nil {
+		log.Printf("fleet relay: read accounts: %v", err)
+		return nil
+	}
+	out := accts[:0]
+	for _, a := range accts {
+		if a.Managed() { // a login-recorded computer is no relay route (#2212)
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// shortNode is the machine as claude-fleet names it: the roster hostname's
+// first label ("mac-a" for "mac-a.local").
+func shortNode(hostname string) string {
+	if i := strings.IndexByte(hostname, '.'); i > 0 {
+		return hostname[:i]
+	}
+	return hostname
+}
+
+// acceptRelay is a node handing the hub one relay. It answers the sender at
+// once — TypeAck when the relay is stored (or was already), TypeError when it
+// is refused for good — and then pushes it on.
+//
+// tokenHash is the sender's HashToken, what its worker assertion — the session
+// that sent the relay (claude-fleet#1810) — is checked against.
+func (s *Server) acceptRelay(ctx context.Context, wire nodeWire, ep store.Endpoint, tokenHash string, m control.Message) {
+	r, err := s.checkRelay(ep, m)
+	var wk *workerClaims
+	if err == nil {
+		wk, err = relayWorker(m, r, tokenHash, time.Now())
+	}
+	if err != nil {
+		e := errorObject(err)
+		_ = s.Store.FleetAuditWorker("node:"+ep.ID, wk.id(), wk.label(), "relay", "", "refused:"+e["code"], "", time.Now())
+		refuse(ctx, wire, m.OpID, e["code"], e["message"])
+		return
+	}
+	skip, err := s.prepareTaskReportRelay(ep, &r)
+	if err != nil {
+		// Storage unavailability is retriable: no acknowledgement, keep outbox.
+		var permanent *FleetFault
+		if errors.As(err, &permanent) {
+			e := errorObject(err)
+			refuse(ctx, wire, m.OpID, e["code"], e["message"])
+		} else if errors.Is(err, store.ErrTaskFence) || errors.Is(err, store.ErrTaskConflict) || errors.Is(err, store.ErrTaskInvalid) {
+			refuse(ctx, wire, m.OpID, "CONFLICT", err.Error())
+		}
+		return
+	}
+	if skip {
+		// Keep an explicit undelivered receipt; a retired generation must not
+		// look queued forever after its outbox file is acknowledged.
+		if _, err := s.Store.InsertFleetRelay(r); err != nil {
+			return
+		}
+		if err := s.Store.FinishFleetRelay(r.ID, store.RelayFailed, "historical task/parent generation", time.Now()); err != nil {
+			return
+		}
+		wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_ = wire.write(wctx, control.Message{Type: control.TypeAck, OpID: m.OpID, Proto: control.Proto})
+		cancel()
+		return
+	}
+	inserted, err := s.Store.InsertFleetRelay(r)
+	if err != nil {
+		// Not stored: the sender keeps it and sends it again. An error
+		// frame would make it drop the relay for good, so say nothing.
+		log.Printf("fleet relay %s: store: %v", r.ID, err)
+		return
+	}
+	if inserted {
+		_ = s.Store.FleetAuditWorker("node:"+ep.ID, wk.id(), wk.label(), "relay:"+r.Kind, fleetOf(r.ToWID), "stored", r.ID, time.Now())
+		s.progressReport(r) // the parent's stream (claude-fleet#1648)
+	}
+	ack := control.Message{Type: control.TypeAck, OpID: m.OpID, Proto: control.Proto}
+	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	_ = wire.write(wctx, ack)
+	cancel()
+	go s.dispatchRelays(r.TargetEndpoint)
+}
+
+// relayWorker checks a relay's worker assertion, if it carries one
+// (claude-fleet#1810): it must verify against the sending node's token
+// (UNAUTHENTICATED otherwise) and name the session the relay is from
+// (NOT_FOUND otherwise — a session speaks only as itself). nil, nil = no
+// assertion: the node's own relay, as before. A refused assertion's claims
+// still come back, so the audit names who was refused.
+func relayWorker(m control.Message, r store.FleetRelay, tokenHash string, now time.Time) (*workerClaims, error) {
+	var in control.Relay
+	if json.Unmarshal(m.Payload, &in) != nil || in.Worker == "" {
+		return nil, nil
+	}
+	c, err := verifyWorkerAssertion(in.Worker, tokenHash, now)
+	if err != nil {
+		return nil, err
+	}
+	if c.FleetUUID != fleetOf(r.FromWID) || !c.speaksAs(r.FromWID) {
+		return c, fault("NOT_FOUND", "from: no such session on this node")
+	}
+	return c, nil
+}
+
+func fleetOf(wid string) string {
+	fid, _, err := fleetid.ParseWorkerID(wid)
+	if err != nil {
+		fid, _, _ = fleetid.ParseOperatorSender(wid)
+	}
+	return fid
+}
+
+// checkRelay validates one node relay and resolves its target.
+func (s *Server) checkRelay(ep store.Endpoint, m control.Message) (store.FleetRelay, error) {
+	var in control.Relay
+	if err := json.Unmarshal(m.Payload, &in); err != nil {
+		return store.FleetRelay{}, fault(control.CodeBadMessage, "malformed relay")
+	}
+	switch in.Kind {
+	case control.RelayChildReport, control.RelayMessage:
+	default:
+		return store.FleetRelay{}, fault("INVALID_ARGUMENT", "unknown relay kind "+in.Kind)
+	}
+	// A message may come from the person at the sending login rather than a
+	// worker (claude-fleet#1649) — `<fleet UUID>/operator@<login>`, checked
+	// below against the login that fleet runs under. A child report is a
+	// worker's by definition.
+	fromFleet, _, err := fleetid.ParseWorkerID(in.From)
+	opLogin := ""
+	if err != nil {
+		fid, login, ok := fleetid.ParseOperatorSender(in.From)
+		if !ok || in.Kind != control.RelayMessage {
+			return store.FleetRelay{}, fault("INVALID_ARGUMENT", "from: "+fleetid.ErrBadWorkerID.Error())
+		}
+		fromFleet, opLogin = fid, login
+	}
+	toFleet, _, err := fleetid.ParseWorkerID(in.To)
+	if err != nil {
+		return store.FleetRelay{}, fault("INVALID_ARGUMENT", "to: "+fleetid.ErrBadWorkerID.Error())
+	}
+	// The id is the sender's idempotency key, scoped to the sending worker:
+	// no node can collide with — or pre-empt — another worker's ids.
+	if !strings.HasPrefix(in.ID, in.From+"#") || !relaySuffixRE.MatchString(in.ID[len(in.From)+1:]) {
+		return store.FleetRelay{}, fault("INVALID_ARGUMENT", "relay id must be <from worker_id>#<1-64 of A-Za-z0-9._->")
+	}
+	payload := bytes.TrimSpace(in.Payload)
+	var obj map[string]json.RawMessage
+	if len(payload) > control.MaxRelayPayload || json.Unmarshal(payload, &obj) != nil || obj == nil {
+		return store.FleetRelay{}, fault("INVALID_ARGUMENT", "a relay's payload must be one JSON object of at most 16 KiB")
+	}
+	from, err := s.Store.Fleet(fromFleet)
+	if err != nil || from.EndpointID != ep.ID {
+		// A node speaks only for its own workers.
+		return store.FleetRelay{}, fault("FORBIDDEN", "from names a fleet this node does not report")
+	}
+	if opLogin != "" && opLogin != from.OSUser {
+		// The operator is the login the fleet runs under, never a name the
+		// sender picks: a node cannot sign a message as another person.
+		return store.FleetRelay{}, fault("FORBIDDEN", "from: operator@"+opLogin+" is not the login this fleet runs under")
+	}
+	to, err := s.Store.Fleet(toFleet)
+	if err != nil || !to.Present {
+		return store.FleetRelay{}, fault("NOT_FOUND", "no such fleet on any machine")
+	}
+	accts := s.activeAccounts()
+	if !sameRelayOwner(s.relayOwners(ep.ID, from.Hostname, from.OSUser, accts), s.relayOwners(to.EndpointID, to.Hostname, to.OSUser, accts)) {
+		return store.FleetRelay{}, fault("NOT_FOUND", "no such fleet on any machine")
+	}
+	now := time.Now()
+	return store.FleetRelay{ID: in.ID, Kind: in.Kind, FromWID: in.From, ToWID: in.To, FromEndpoint: ep.ID,
+		TargetEndpoint: to.EndpointID, Payload: string(payload), Created: now, Updated: now}, nil
+}
+
+func (s *Server) relayLock(endpointID string) *sync.Mutex {
+	l, _ := s.relayLocks.LoadOrStore(endpointID, &sync.Mutex{})
+	return l.(*sync.Mutex)
+}
+
+// dispatchRelays pushes every pending relay for endpointID down its channel,
+// except one pushed less than relayResendAfter ago. Without an open,
+// relay-capable channel it does nothing: the relays wait for the next hello.
+func (s *Server) dispatchRelays(endpointID string) {
+	l := s.relayLock(endpointID)
+	if !l.TryLock() {
+		return // another trigger is pushing this node's relays right now
+	}
+	defer l.Unlock()
+	now := time.Now()
+	if last := s.relayExpiredAt.Load(); now.UnixNano()-last > int64(time.Minute) &&
+		s.relayExpiredAt.CompareAndSwap(last, now.UnixNano()) {
+		if n, err := s.Store.ExpireFleetRelays(relayTTL.Get(), now); err == nil && n > 0 {
+			log.Printf("fleet relay: %d expired undelivered after %s", n, relayTTL.Get())
+		}
+	}
+	c := s.nodes.get(endpointID)
+	if c == nil {
+		// Held by another replica (claude-fleet#2124): it pushes them now
+		// rather than at the node's next beat.
+		if peer, ok := s.peerOf(context.Background(), endpointID); ok && peer.HasCap(control.CapRelay) {
+			if _, err := s.forward(context.Background(), peer, nodeForward{Kind: "relays", Endpoint: endpointID}, 5*time.Second); err != nil {
+				log.Printf("fleet relay: hand %s's relays to replica %s: %v (its next beat sends them)", endpointID, peer.Replica, err)
+			}
+		}
+		return
+	}
+	if !c.canRelay {
+		return
+	}
+	rels, err := s.Store.PendingFleetRelays(endpointID)
+	if err != nil {
+		log.Printf("fleet relay: read pending for %s: %v", endpointID, err)
+		return
+	}
+	nodeOf := map[string]string{}
+	live := map[string]map[string]bool{}
+	for _, r := range rels {
+		current, err := s.taskRelayStillCurrent(r)
+		if err != nil {
+			continue
+		} // unavailable authority is not retirement
+		if !current {
+			// Leave history visible and settle as undelivered, never delivered.
+			_ = s.Store.FinishFleetRelay(r.ID, store.RelayFailed, "historical task/parent generation", now)
+			continue
+		}
+		// The first push always goes: a child report is ledgered on the
+		// parent's machine even when the parent itself is not there. A
+		// relay already pushed waits for its RECIPIENT (claude-fleet#1647):
+		// it goes again only once the target fleet's inventory — every
+		// heartbeat — lists that worker live, by key or by identity.
+		if !r.SentAt.IsZero() && (now.Sub(r.SentAt) < relayResendAfter.Get() || !s.relayTargetLive(r.ToWID, live)) {
+			continue
+		}
+		fid := fleetOf(r.FromWID)
+		if _, ok := nodeOf[fid]; !ok {
+			if f, err := s.Store.Fleet(fid); err == nil {
+				nodeOf[fid] = shortNode(f.Hostname)
+			}
+		}
+		msg, err := control.New(control.TypeRelay, control.Relay{ID: r.ID, Kind: r.Kind, From: r.FromWID,
+			To: r.ToWID, Payload: json.RawMessage(r.Payload), FromNode: nodeOf[fid]})
+		if err != nil {
+			continue
+		}
+		msg.OpID = r.ID
+		wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err = s.SendNodeWrite(wctx, endpointID, msg)
+		cancel()
+		if err != nil {
+			return // the channel is gone; the next hello resumes
+		}
+		if err := s.Store.MarkFleetRelaySent(r.ID, now); err != nil {
+			log.Printf("fleet relay %s: mark sent: %v", r.ID, err)
+		}
+	}
+	s.dispatchReceipts(endpointID, now)
+}
+
+// relayTargetLive reports whether the worker a relay is for is in its
+// fleet's last inventory, as `<fleet>/<key>` or `<fleet>/<identity>`. A fleet
+// whose inventory carries no worker list at all is not second-guessed (live);
+// one that lists its workers and not this one is not live. cache is per call.
+func (s *Server) relayTargetLive(toWID string, cache map[string]map[string]bool) bool {
+	fid := fleetOf(toWID)
+	ws, ok := cache[fid]
+	if !ok {
+		ws = nil
+		if f, err := s.Store.Fleet(fid); err == nil && f.Present && strings.TrimSpace(f.WorkersJSON) != "" {
+			var rows []struct {
+				WorkerID string  `json:"worker_id"`
+				Identity *string `json:"identity"`
+			}
+			if json.Unmarshal([]byte(f.WorkersJSON), &rows) == nil {
+				ws = map[string]bool{}
+				for _, w := range rows {
+					ws[w.WorkerID] = true
+					if w.Identity != nil && fleetid.IsUUID(*w.Identity) {
+						ws[fid+"/"+*w.Identity] = true
+					}
+				}
+			}
+		} else if err != nil || !f.Present {
+			ws = map[string]bool{} // the fleet is gone: nobody there is live
+		}
+		cache[fid] = ws
+	}
+	return ws == nil || ws[toWID]
+}
+
+// dispatchReceipts pushes, down endpointID's channel, the receipt owed for
+// every settled relay that node sent (claude-fleet#1647). The node writes it
+// into the sender's book and answers; an unanswered one goes again after
+// relayResendAfter.
+func (s *Server) dispatchReceipts(endpointID string, now time.Time) {
+	due, err := s.Store.DueFleetRelayReceipts(endpointID, relayResendAfter.Get(), now)
+	if err != nil {
+		log.Printf("fleet relay: read receipts for %s: %v", endpointID, err)
+		return
+	}
+	for _, r := range due {
+		body, _ := json.Marshal(control.RelayReceiptBody{RID: r.ID, Kind: r.Kind, To: r.ToWID, Status: r.Status, Detail: r.Detail})
+		msg, err := control.New(control.TypeRelay, control.Relay{ID: r.ID, Kind: control.RelayReceipt, From: r.ToWID,
+			To: r.FromWID, Payload: body})
+		if err != nil {
+			continue
+		}
+		msg.OpID = control.ReceiptOpPrefix + r.ID
+		wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err = s.SendNodeWrite(wctx, endpointID, msg)
+		cancel()
+		if err != nil {
+			return
+		}
+		if err := s.Store.MarkFleetRelayReceipt(r.ID, store.ReceiptSent, now); err != nil {
+			log.Printf("fleet relay %s: mark receipt sent: %v", r.ID, err)
+		}
+	}
+}
+
+// relayResult records a target node's answer to a pushed relay.
+func (s *Server) relayResult(endpointID string, m control.Message) {
+	var res control.RelayResult
+	if json.Unmarshal(m.Payload, &res) != nil || res.ID == "" {
+		return
+	}
+	if strings.HasPrefix(m.OpID, control.ReceiptOpPrefix) {
+		// The sender's node answering a receipt: whatever it said, the
+		// receipt is done — a node too old to know the kind refuses it, and
+		// pushing it again would only be refused again.
+		if r, err := s.Store.FleetRelay(res.ID); err == nil && r.FromEndpoint == endpointID {
+			_ = s.Store.MarkFleetRelayReceipt(r.ID, store.ReceiptDone, time.Now())
+		}
+		return
+	}
+	r, err := s.Store.FleetRelay(res.ID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("fleet relay %s: read: %v", res.ID, err)
+		}
+		return
+	}
+	if r.TargetEndpoint != endpointID {
+		return // only the node it was sent to may settle it
+	}
+	status := store.RelayFailed
+	switch {
+	case res.OK:
+		status = store.RelayDelivered
+	case res.Retry:
+		return // stays pending; pushed again after relayResendAfter
+	}
+	detail := res.Detail
+	if len(detail) > 500 {
+		detail = detail[:500]
+	}
+	if err := s.Store.FinishFleetRelay(r.ID, status, detail, time.Now()); err != nil {
+		log.Printf("fleet relay %s: record %s: %v", r.ID, status, err)
+		return
+	}
+	_ = s.Store.FleetAudit("node:"+endpointID, "relay:"+r.Kind, fleetOf(r.ToWID), status, r.ID, time.Now())
+}
+
+// workerMap is every worker the owner of endpointID has on any machine.
+func (s *Server) workerMap(endpointID, hostname, osUser string, now time.Time) []control.WorkerLoc {
+	rows, err := s.Store.Fleets()
+	if err != nil {
+		return nil
+	}
+	accts := s.activeAccounts()
+	owner := s.relayOwners(endpointID, hostname, osUser, accts)
+	avail := s.nodeAvailability(now)
+	out := []control.WorkerLoc{}
+	for _, r := range rows {
+		if !r.Present || !sameRelayOwner(s.relayOwners(r.EndpointID, r.Hostname, r.OSUser, accts), owner) {
+			continue
+		}
+		var ws []struct {
+			WorkerID  string  `json:"worker_id"`
+			OriginWID *string `json:"origin_wid"`
+			Identity  *string `json:"identity"`
+		}
+		if json.Unmarshal([]byte(r.WorkersJSON), &ws) != nil {
+			continue
+		}
+		node := shortNode(r.Hostname)
+		if avail[r.EndpointID] == "lost" {
+			// Last known, marked: claude-fleet routes a report there (it
+			// waits on the hub) but never counts it as a live child.
+			node += ":lost"
+		}
+		for _, w := range ws {
+			if fid, _, err := fleetid.ParseWorkerID(w.WorkerID); err != nil || fid != r.FleetID {
+				continue // an id that does not belong to its fleet is not routable
+			}
+			loc := control.WorkerLoc{WorkerID: w.WorkerID, Node: node}
+			if w.OriginWID != nil {
+				if _, _, err := fleetid.ParseWorkerID(*w.OriginWID); err == nil {
+					loc.OriginWID = *w.OriginWID
+				}
+			}
+			out = append(out, loc)
+			// The session's lifelong identity (claude-fleet#1646): it answers as
+			// <fleet UUID>/<identity> too — the worker_id its children hold.
+			if w.Identity != nil && fleetid.IsUUID(*w.Identity) {
+				alias := loc
+				alias.WorkerID = r.FleetID + "/" + *w.Identity
+				out = append(out, alias)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].WorkerID < out[j].WorkerID })
+	return out
+}
+
+// pushWorkers sends the node its owner's worker map, at most once per
+// workersPushEvery.
+func (s *Server) pushWorkers(ep store.Endpoint, nc *nodeConn) {
+	if !nc.canRelay {
+		return
+	}
+	now := time.Now()
+	last := nc.workersAt.Load()
+	if last != 0 && now.Sub(time.Unix(0, last)) < workersPushEvery.Get() {
+		return
+	}
+	if !nc.workersAt.CompareAndSwap(last, now.UnixNano()) {
+		return
+	}
+	msg, err := control.New(control.TypeWorkers, control.Workers{Rows: s.workerMap(ep.ID, nc.hostname(), ep.OSUser, now)})
+	if err != nil {
+		return
+	}
+	wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.SendNodeWrite(wctx, ep.ID, msg)
+}

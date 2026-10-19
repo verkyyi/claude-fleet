@@ -253,7 +253,7 @@ class Harness:
         # a test binary runs in its package's directory (the node is its own
         # module at tokenledger/agent since claude-fleet#4812)
         self.run(name, [self.work/(package+".test"), "-test.v", "-test.timeout=60s",
-                        "-test.run=^("+"|".join(tests)+")$"], "go", tests, cwd=GO_DIRS.get(package, ROOT/"tokenledger/internal"/package))
+                        "-test.run=^("+"|".join(tests)+")$"], "go", tests, cwd=GO_DIRS.get(package, ROOT/"tokenledger/hub"/package))
 
     def python(self, name, script, *tests):
         self.run(name, [sys.executable, ROOT/"bin"/script, "-v", *tests], "python", timeout=90)

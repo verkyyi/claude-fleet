@@ -32,7 +32,7 @@ EPIC #2329 共同约定 1：**机器的期望状态在入口。** 入口为每�
 加入时记下的机器（`enrolled_host`）：码里写了机器就用码的；否则用加入时报的名字；
 没报名字记 `?`（谁也不随）。旧的按 endpoint 的信任（`endpoints.trust`，加入码 / 旧的期望状态写）
 入口启动后一次性迁到机器（`fleet.node_trust_machines_migrated`；同一台既有可信又有操作者
-标的不可信 ⇒ 不可信），之后不再读。判定只在一处：`internal/api/fleet_trust.go` `nodeTrust`。
+标的不可信 ⇒ 不可信），之后不再读。判定只在一处：`hub/api/fleet_trust.go` `nodeTrust`。
 
 ## 2. 加入码
 
@@ -130,7 +130,7 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 
 **错账号一律拒**（BREAK-IT `machine-agent-wrong-login`）：入口只认令牌所属的登录名
 （`os_user`；从没上报过的照 hello 记）、同一台机器、不是机器自己的令牌
-（`internal/api/node_machine.go` `loginEndpoint`，唯一一处），否则答 `WRONG_LOGIN`、
+（`hub/api/node_machine.go` `loginEndpoint`，唯一一处），否则答 `WRONG_LOGIN`、
 那个账号不上线、审计记 `machine_login REFUSED`；发给这条线上没有的账号的消息两端都答
 `WRONG_LOGIN`，不交给任何账号。
 
@@ -696,11 +696,11 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 
 ### 你的地址指向你的家（EPIC #3067 C7，#3073）
 
-- **只有入口写记录**：`tokenledger/internal/dns`（provider 接口 List · Upsert · Delete、DNSPod 实现、测试用假实现）。
+- **只有入口写记录**：`tokenledger/hub/dns`（provider 接口 List · Upsert · Delete、DNSPod 实现、测试用假实现）。
   记录建在 DNSPod 上已有的 example.com 里（`<名字>.cf`，A / AAAA，TTL 600），不委托、不另开 zone。
   DNSPod 用旧版 token API（`https://dnsapi.cn/`：`Record.List` / `Record.Create` + `Record.Remark` / `Record.Modify` /
   `Record.Remove`）；建时在备注里打 `fleet`，List 只认带它、且在 `cf` 下的——别的记录一条不碰；打不上备注的新记录当场删掉。
-- **一个循环**：入口上 `RunEntryDNS`（`internal/leader` 选主 `entry-dns`，只一个副本写）每分钟：每个在用的地址名
+- **一个循环**：入口上 `RunEntryDNS`（`hub/leader` 选主 `entry-dns`，只一个副本写）每分钟：每个在用的地址名
   （改名后的旧名留 7 天）的目标 = 它的人的家机器的 `reachable(machine)`（上一节）；与记录现状比对，只写差异
   （每拍至多 40 次写），每写一条记一行入口审计（kind `dns`，「A carol.cf 旧 → 新」）。家从外面连不上（或 15 分钟没新结果）
   ⇒ 一条不改，记录留着最后的地址，钥匙页写「从外面连不上」；手动换家 ⇒ 下一拍改指新家；有人在控制台手改 ⇒ 下一拍改回，
@@ -1002,7 +1002,7 @@ BREAK-IT：`node-program-seat`；`bin/fleet-node-core-selftest.py` 的 O；Go
   不签、不派给座位、`/v1/fleet/account-key` 404）。
 
 BREAK-IT：`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；Go
-`shared/control/account_ticket_test.go`、`internal/api/fleet_account_ticket_test.go`。
+`shared/control/account_ticket_test.go`、`hub/api/fleet_account_ticket_test.go`。
 
 ### 23.1 座位的机器半边和 agent 的座位模式（C15·b，#3696）
 

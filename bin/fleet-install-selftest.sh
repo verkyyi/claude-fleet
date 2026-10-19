@@ -114,7 +114,7 @@ while [ -L "$real" ]; do
   case "$link" in /*) real="$link" ;; *) real="$(dirname "$real")/$link" ;; esac
 done
 REPO="$(cd "$(dirname "$real")/.." && pwd)"
-CLIENT="$REPO/tokenledger/internal/api/fleetclient"
+CLIENT="$REPO/tokenledger/hub/api/fleetclient"
 MANIFEST="$CLIENT/manifest"
 [ -f "$MANIFEST" ] || { echo "FAIL no manifest at $MANIFEST"; exit 1; }
 # the download list: every manifest path but the installer's and the served
@@ -131,7 +131,7 @@ if selftest_section 1; then
 if out=$(bash "$BIN/fleet-client-mirror.sh" --check 2>&1); then ok "A every manifest path is in the repo, no copy under fleetclient/"
 else bad "A fleet-client-mirror.sh --check: $out"; fi
 # the pack (#1803), in a sandbox copy of the repo — never the live tree's pack/
-SB="$WORK/packrepo"; SBC="$SB/tokenledger/internal/api/fleetclient"
+SB="$WORK/packrepo"; SBC="$SB/tokenledger/hub/api/fleetclient"
 mkdir -p "$SB/bin" "$SBC/pack"
 cp "$REPO/bin/fleet-client-pack.sh" "$SB/bin/"; cp "$MANIFEST" "$SBC/manifest"; printf 'package pack\n' > "$SBC/pack/doc.go"
 for f in $(awk '!/^[[:space:]]*#/ && NF { print $1 }' "$MANIFEST"); do mkdir -p "$SB/$(dirname "$f")"; cp "$REPO/$f" "$SB/$f"; done
@@ -761,7 +761,7 @@ if selftest_section 6; then
 # ── K — the whole client in one go, and a tmux that needs no Homebrew (#2260) ─
 # Its own fake hub: /install/bundle.tar.gz is the manifest + every file it lists
 # + vendor/tmux (a fake static tmux) as one tar, SHA-256 in the header, like the
-# real one (tokenledger/internal/api/fleet_bundle.go); every request is logged.
+# real one (tokenledger/hub/api/fleet_bundle.go); every request is logged.
 # $K/corrupt → the body no longer matches its header; $K/novendor → no tmux in it.
 K="$WORK/k"; mkdir -p "$K/vt"
 cat > "$K/vt/tmux" <<EOT

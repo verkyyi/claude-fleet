@@ -141,7 +141,7 @@ python3 bin/fleet-release-fetch.py --hub $UP --pubkey upstream-release.pub \
 |---|---|---|
 | `codex-<版本>-<系统>-<架构>` | Codex 官方发布页 `github.com/openai/codex/releases/tag/rust-v<版本>` 的 `codex-<triple>.tar.gz` | 解压，里面只有一个文件 `codex-<triple>`，改名 |
 | `codex-code-mode-host-<版本>-<系统>-<架构>` | 同一页的 `codex-code-mode-host-<triple>.tar.gz` | 同上：解出 `codex-code-mode-host-<triple>`，改名 |
-| `tmux-<版本>-<系统>-<架构>` | §1.1 的 `fleet-client-pack.sh` 已按 `conf/vendor-tmux.lock` 下载并核过 sha256，放在 `tokenledger/internal/api/fleetclient/pack/vendor/tmux-<平台>` | 直接复制改名，不用自己构建 |
+| `tmux-<版本>-<系统>-<架构>` | §1.1 的 `fleet-client-pack.sh` 已按 `conf/vendor-tmux.lock` 下载并核过 sha256，放在 `tokenledger/hub/api/fleetclient/pack/vendor/tmux-<平台>` | 直接复制改名，不用自己构建 |
 | `claude-<版本>-<系统>-<架构>` | 不用放：入口自己从 npm 拉 | — |
 
 系统 / 架构和两边名字的对应（用 Codex 的 musl 版：静态链接，哪个 Linux 都能跑）：
@@ -166,7 +166,7 @@ while read -r plat triple tplat; do
       "https://github.com/openai/codex/releases/download/rust-v$CX/$n-$triple.tar.gz" &&
     tar xzf "$T/$n.tar.gz" -C "$T" && install -m 0755 "$T/$n-$triple" "$A/$n-$CX-$plat" || echo "失败：$n $plat"
   done
-  install -m 0755 "tokenledger/internal/api/fleetclient/pack/vendor/tmux-$tplat" "$A/tmux-$TM-$plat" || echo "失败：tmux $plat"
+  install -m 0755 "tokenledger/hub/api/fleetclient/pack/vendor/tmux-$tplat" "$A/tmux-$TM-$plat" || echo "失败：tmux $plat"
 done <<'EOF'
 darwin-arm64 aarch64-apple-darwin      macos-arm64
 linux-amd64  x86_64-unknown-linux-musl linux-x86_64

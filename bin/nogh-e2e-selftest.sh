@@ -5,7 +5,7 @@
 # fleet's whole road — each step 1 when it passes, and the line at the end says
 # `steps: N/7 · gh calls: 0 · github http: 0`.
 #
-#   bin/nogh-e2e-selftest.sh [--ccquota <ccquota built from tokenledger/>]
+#   bin/nogh-e2e-selftest.sh [--ccquota <the hub's ccquota, built from tokenledger/hub>] [--node-ccquota <the node's, tokenledger/agent>]
 #
 #   0. install  `curl <hub>/install | sh` into a clean HOME (C12, #2862): the
 #               client lands from the hub, never from GitHub
@@ -57,10 +57,11 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd -P)"
-CCQ="${NOGH_E2E_CCQUOTA:-}"
+CCQ="${NOGH_E2E_CCQUOTA:-}"; CCQN="${NOGH_E2E_NODE_CCQUOTA:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --ccquota) CCQ=${2:-}; shift 2 ;;
+    --node-ccquota) CCQN=${2:-}; shift 2 ;;
     -h|--help) sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'nogh-e2e: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -86,6 +87,11 @@ if [ -z "$CCQ" ] || [ ! -x "$CCQ" ]; then
   exit 0
 fi
 CCQ=$(cd "$(dirname "$CCQ")" && pwd -P)/$(basename "$CCQ")
+# The node is its own build since claude-fleet#4814 (the hub's answers a node
+# command with exit 2): --node-ccquota, else ccquota-node beside the hub's,
+# else the same binary (a build from before the split runs both).
+[ -n "${CCQN:-}" ] || CCQN=$(dirname "$CCQ")/ccquota-node
+[ -x "$CCQN" ] || CCQN=$CCQ
 
 START=$(date +%s)
 DEADLINE=${NOGH_E2E_DEADLINE:-240}
@@ -302,7 +308,7 @@ PY
 chmod +x "$NH/.claude/fleet/bin/fleet-control.py"
 ( cd "$NH" && exec env -i PATH="$WORK/shim:$PATH" HOME="$NH" CCQUOTA_HUB_URL="$HUB" CCQUOTA_TOKEN="$NTOK" CCQUOTA_FLEET=1 \
     CCQUOTA_FLEET_NODE_ROUTES=lan=127.0.0.1:22 CCQUOTA_FLEET_NODE_TAILNET=0 \
-    "$CCQ" agent --hub "$HUB" --home "$NH" --state "$NH/state" ) >"$WORK/agent.log" 2>&1 &
+    "$CCQN" agent --hub "$HUB" --home "$NH" --state "$NH/state" ) >"$WORK/agent.log" 2>&1 &
 AGENT_PID=$!
 on_roster() { api "$HUB/v1/nodes" 2>/dev/null | grep -q "\"$L\""; }
 waitfor 60 on_roster || die "the machine's agent never reached the roster as $L" "$(api "$HUB/v1/nodes" 2>&1 | head -c 600; tail -n 5 "$WORK/agent.log")"

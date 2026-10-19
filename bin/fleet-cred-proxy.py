@@ -206,7 +206,7 @@ HUB_TAGS = (HUB_TAG, "fcp-h2")
 def is_hub_pass(tok):
     return "." in tok and tok.split(".", 1)[0] in HUB_TAGS
 # how long past its newest expiry the hub still renews a never-revoked pass —
-# SessionCredRenewGrace in tokenledger/internal/api/fleet_session_cred.go (#2012)
+# SessionCredRenewGrace in tokenledger/hub/api/fleet_session_cred.go (#2012)
 HUB_RENEW_GRACE = 7 * 86400
 # the relay pass (issue #3561): renewed when used with < 1/RELAY_RENEW_LEFT of
 # its life left, or past RELAY_RENEW_AT of it; a request unanswered is made

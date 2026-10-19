@@ -112,7 +112,7 @@
 # pins a source as it is (FLEET_INSTALL_VERSION names its version; none = no
 # .client-version, the selftests' seam).
 # fleet-install: stable-aware — the hub serves this installer from stable only
-# while it carries this line (tokenledger/internal/api/fleet_stable.go).
+# while it carries this line (tokenledger/hub/api/fleet_stable.go).
 set -eu
 T0=$(date +%s)
 
@@ -170,7 +170,7 @@ SRC="${SRC%/}"
 RAW="${FLEET_STABLE_RAW:-https://raw.githubusercontent.com/verkyyi/claude-fleet}"  # dist-ok: 不接 only
 RAW="${RAW%/}"
 API="${FLEET_STABLE_API:-https://api.github.com/repos/verkyyi/claude-fleet/commits/stable}"  # dist-ok: 不接 only
-MANIFEST_PATH=tokenledger/internal/api/fleetclient/manifest
+MANIFEST_PATH=tokenledger/hub/api/fleetclient/manifest
 
 say() { printf '%s\n' "$*" >&2; }
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
@@ -525,7 +525,13 @@ PYV
   fi
   # the manifest first (its `installer` line is this very script, not a
   # download), then every file on it
-  [ "$BUNDLED" = 1 ] || fetch manifest "$MPATH"
+  if [ "$BUNDLED" != 1 ]; then
+    # a stable from before the hub was its own module (claude-fleet#4814) keeps
+    # the manifest where the hub's code was: tokenledger/internal/api/fleetclient/manifest  # compat-1v: 下一批删
+    [ "$MPATH" = "$MANIFEST_PATH" ] && ! curl -fsS -o /dev/null "$FROM/$MPATH" 2>/dev/null \
+      && MPATH=tokenledger/internal/api/fleetclient/manifest  # compat-1v: 下一批删
+    fetch manifest "$MPATH"
+  fi
   # a `served` line (issue #4826) is the hub's to hand out on first use, never installed
   FILES="$(awk '!/^[[:space:]]*#/ && NF && $2 != "installer" && $2 != "served" { print $1 }' "$tmp/manifest" | tr '\n' ' ')"
   [ -n "${FILES% }" ] || { say "fleet-install: $FROM 的 manifest 里没有文件"; exit 1; }

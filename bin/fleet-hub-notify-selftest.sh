@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-hub-notify-selftest.sh — the hub image's FLEET_NOTIFY_CMD (issue #4086):
 # tokenledger/notify/fleet-hub-notify.sh is one path that execs `ccquota notify`
-# (its logic and tests: tokenledger/cmd/ccquota/notify.go, notify_test.go).
+# (its logic and tests: tokenledger/hub/cmd/ccquota/notify.go, notify_test.go).
 #
 #   A. delegate  it execs `ccquota notify -- <the message>` unchanged (a stub
 #                ccquota on PATH records its argv)

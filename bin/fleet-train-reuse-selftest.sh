@@ -45,12 +45,12 @@ export FLEET_HEAVY=0 FLEET_SELFTEST_NO_SHADOW=1 FLEET_SELFTEST_SLOWEST=0
 
 # ---- the sandbox repo ----------------------------------------------------------
 R="$WORK/repo"
-mkdir -p "$R/bin" "$R/conf" "$R/docs" "$R/tokenledger"
+mkdir -p "$R/bin" "$R/conf" "$R/docs" "$R/tokenledger/hub"
 cp "$BIN/run-selftests.sh" "$BIN/ci-plan.sh" "$BIN/fleet-train-reuse.sh" "$R/bin/"
 printf 'ok\n' > "$R/conf/named.txt"
 printf 'ok\n' > "$R/conf/steady.txt"
 printf 'ok\n' > "$R/conf/other.txt"
-printf 'x\n' > "$R/tokenledger/go.mod"
+printf 'x\n' > "$R/tokenledger/hub/go.mod"
 cat > "$R/bin/named-selftest.sh" <<'SH'
 #!/bin/bash
 grep -qx ok "$(dirname "$0")/../conf/named.txt"
@@ -108,7 +108,7 @@ if leg C; then
   eq "C unrelated ⇒ skipped" "run=false" "$(bash "$R/bin/ci-plan.sh" client-e2e "$S" | head -1)"
   printf 'no\n' > "$R/conf/named.txt"; commit named >/dev/null
   eq "C named ⇒ runs" "run=true" "$(bash "$R/bin/ci-plan.sh" client-e2e "$S" | head -1)"
-  git -C "$R" checkout -q -B c "$S"; echo y >> "$R/tokenledger/go.mod"; commit tl >/dev/null
+  git -C "$R" checkout -q -B c "$S"; echo y >> "$R/tokenledger/hub/go.mod"; commit tl >/dev/null
   out=$(bash "$R/bin/ci-plan.sh" client-e2e "$S")
   eq "C glob ⇒ runs" "run=true" "$(printf '%s\n' "$out" | head -1)"
   contains "C glob named, not expanded" "$out" "(tokenledger/*)"

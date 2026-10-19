@@ -71,7 +71,7 @@ while [ -L "$real" ]; do
   case "$link" in /*) real="$link" ;; *) real="$(dirname "$real")/$link" ;; esac
 done
 REPO="$(cd "$(dirname "$real")/.." && pwd)"
-MANIFEST="$REPO/tokenledger/internal/api/fleetclient/manifest"
+MANIFEST="$REPO/tokenledger/hub/api/fleetclient/manifest"
 [ -f "$MANIFEST" ] || { echo "FAIL no manifest at $MANIFEST"; exit 1; }
 
 cat >"$WORK/ccquota" <<'EOF'

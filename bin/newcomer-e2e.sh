@@ -3,7 +3,7 @@
 # them to a working client, against a hub built from this checkout (issue
 # #2096, EPIC #1982).
 #
-#   bin/newcomer-e2e.sh --ccquota <ccquota binary built from tokenledger/>
+#   bin/newcomer-e2e.sh --ccquota <the hub's ccquota, built from tokenledger/hub> [--node-ccquota <the node's, tokenledger/agent>]
 #
 # client-e2e.sh proves the installed client works — as the OPERATOR (a viewer
 # token, no scan). Every way a newcomer got stuck on 2026-10-07 was before
@@ -47,16 +47,22 @@
 # (its name and the logs are printed); 2 = usage.
 set -uo pipefail
 
-CCQ=''
+CCQ=''; CCQN=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --ccquota) CCQ=${2:-}; shift 2 ;;
+    --node-ccquota) CCQN=${2:-}; shift 2 ;;
     -h|--help) sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'newcomer-e2e: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
 done
 [ -n "$CCQ" ] && [ -x "$CCQ" ] || { printf 'newcomer-e2e: --ccquota <built ccquota binary> is required\n' >&2; exit 2; }
 CCQ=$(cd "$(dirname "$CCQ")" && pwd -P)/$(basename "$CCQ")
+# The node is its own build since claude-fleet#4814 (the hub's answers a node
+# command with exit 2): --node-ccquota, else ccquota-node beside the hub's,
+# else the same binary (a build from before the split runs both).
+[ -n "${CCQN:-}" ] || CCQN=$(dirname "$CCQ")/ccquota-node
+[ -x "$CCQN" ] || CCQN=$CCQ
 for c in curl python3 ssh-keygen; do
   command -v "$c" >/dev/null 2>&1 || { printf 'newcomer-e2e: %s is required\n' "$c" >&2; exit 2; }
 done
@@ -223,7 +229,7 @@ EOF
 chmod +x "$NH/.claude/fleet/bin/fleet-control.py"
 ( cd "$NH" && exec env HOME="$NH" CCQUOTA_HUB_URL="$HUB" CCQUOTA_TOKEN="$NTOK" CCQUOTA_FLEET=1 \
     CCQUOTA_FLEET_NODE_ROUTES=lan=127.0.0.1:22 CCQUOTA_FLEET_NODE_TAILNET=0 \
-    "$CCQ" agent --hub "$HUB" --home "$NH" --state "$NH/state" ) >"$WORK/$1" 2>&1 &
+    "$CCQN" agent --hub "$HUB" --home "$NH" --state "$NH/state" ) >"$WORK/$1" 2>&1 &
 FAKE_PID=$!
 }
 

@@ -32,7 +32,7 @@ while [ -L "$real" ]; do
   case "$link" in /*) real="$link" ;; *) real="$(dirname "$real")/$link" ;; esac
 done
 REPO="$(cd "$(dirname "$real")/.." && pwd)"
-CLIENT="$REPO/tokenledger/internal/api/fleetclient"
+CLIENT="$REPO/tokenledger/hub/api/fleetclient"
 MANIFEST="$CLIENT/manifest"
 [ -f "$MANIFEST" ] || { echo "fleet-client-mirror: no manifest at $MANIFEST" >&2; exit 2; }
 

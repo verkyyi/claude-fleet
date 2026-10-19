@@ -242,11 +242,11 @@ drill_fleetadmin_token_misissued() {
   [ "$rc" = 4 ] || { WHY="a linked token file was used (rc $rc: $out)"; return 1; }
   # the hub half
   gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestNodeAdminToken"
-  grep -q '^func TestNodeAdminToken(' "$ROOT/tokenledger/internal/api/fleet_admin_token_test.go" 2>/dev/null \
+  grep -q '^func TestNodeAdminToken(' "$ROOT/tokenledger/hub/api/fleet_admin_token_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestNodeAdminToken is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestNodeAdminToken$' ./internal/api 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestNodeAdminToken$' ./hub/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
       0:*) gohalf="入口一半：go test 登录的令牌 · 个人登录名 · 没认作管理员的名字都拒、请求体里的机器名不认、一次一行审计" ;;

@@ -1,36 +1,35 @@
-# ccquota — one binary.
+# ccquota — two builds of one name: the hub's (hub/cmd/ccquota) and the node's
+# (agent/cmd/ccquota). Four modules: hub · agent · shared · e2e (claude-fleet#4814).
 #
-# The console, the website and its docs are packed into web/ before an image is
+# The console, the website and its docs are packed into hub/web/ before an image is
 # built (bin/web-console-pack.sh · site-build.sh · docs-build.sh) and embedded by
 # `go build`; a plain `go build` serves the API, the way-in pages and the tab
-# icons (web/dist), and no console.
+# icons (hub/web/dist), and no console.
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-SRCDIGEST ?= $(shell GOWORK=off go run github.com/verkyyi/claude-fleet/tokenledger/shared/cmd/ccquota-srcdigest . 2>/dev/null)
+SRCDIGEST ?= $(shell cd shared && GOWORK=off go run ./cmd/ccquota-srcdigest .. 2>/dev/null)
 LDFLAGS := -s -w -X main.Version=$(VERSION) -X main.SrcDigest=$(SRCDIGEST)
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
 .PHONY: build test vet fmt lint dist clean run-hub
 
+MODULES := hub agent shared e2e
+
 build:
-	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/ccquota ./cmd/ccquota
+	cd hub && CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o ../bin/ccquota ./cmd/ccquota
 
 test:
-	go test ./...
-	cd shared && go test ./...
-	cd agent && go test ./...
-	@command -v node >/dev/null && node --test web/test/*.test.mjs || echo "node not found: skipping web tests"
+	for m in $(MODULES); do (cd $$m && GOWORK=off go test ./...) || exit 1; done
+	@command -v node >/dev/null && node --test hub/web/test/*.test.mjs || echo "node not found: skipping web tests"
 
 vet:
-	go vet ./...
-	cd shared && go vet ./...
-	cd agent && go vet ./...
+	for m in $(MODULES); do (cd $$m && GOWORK=off go vet ./...) || exit 1; done
 
 fmt:
 	gofmt -l -w .
 
 lint: vet
-	@test -z "$$(gofmt -l . | grep -v '^web/')" || (echo "gofmt needed:"; gofmt -l .; exit 1)
+	@test -z "$$(gofmt -l . | grep -v '^hub/web/')" || (echo "gofmt needed:"; gofmt -l .; exit 1)
 
 # Cross-compiles every supported endpoint platform — the node's build
 # (agent/cmd/ccquota, claude-fleet#4813), stamped with the node's source digest.
