@@ -69,7 +69,7 @@ doctor `agentcfg` 行分开数，`fleet-cfg-restart.sh` 两种一样闲时重开
 团队 v12 · 个人 v3 · 本机独有 2 项（fleet config promote 可带走）
 ```
 
-- `fleet doctor`（承载机 `fleet-doctor.sh` 的 `agents` 行；客户端 `fleet-agent-bundle.py doctor`）
+- `fleet doctor`（承载机 `fleet-doctor.sh` 的 `agents` 行；纯客户端不装 Agent 配置包，没有这一行——#4826）
 - 开会话时的启动行（`fleet-claude: 配置 …` / `fleet-codex: 配置 …`）
 - `fleet config show` 的第一行
 

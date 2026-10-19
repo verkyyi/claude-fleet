@@ -1,7 +1,8 @@
 # conf/agent-bundle.manifest — the fleet's Agent configuration as ONE package
 # (issue #1725, EPIC #1718 C7): what a full install (~/.claude/fleet, a git
-# checkout) and a client-only computer (~/.local/share/claude-fleet, from the
-# hub's /install or GitHub's stable) both get, from the same files.
+# checkout) gets. A client-only computer got the same until issue #4826 — it is
+# 承载's now: `fleet host on` installs it with the whole tree, and the client
+# package carries none of it (EPIC #4823 decision 1).
 #
 #   <repo-relative path>  <category>
 #
@@ -13,12 +14,11 @@
 #
 # Read in three places, maintained here only:
 #   · bin/fleet-agent-bundle.py   files / version / check — the expansion
-#   · bin/fleet-client-mirror.sh  writes the expansion into the hub's client
-#                                 manifest (its generated `agent bundle` block);
-#                                 bin/fleet-client-pack.sh packs the files into
-#                                 a hub build (#1803)
-#   · bin/fleet-install-apply.sh  --bundle: the apply a client runs (fill only;
-#                                 the override files always win)
+#   · bin/fleet-client-mirror.sh  --check reds the client manifest carrying it
+#                                 again (its old generated block, #4826)
+#   · bin/fleet-install-apply.sh  the apply (fill only; the override files
+#                                 always win); --bundle is the old client road,
+#                                 kept until it is deleted
 # Version = a digest of these files' bytes (`fleet-agent-bundle.py version`),
 # so a checkout at stable and a client installed from it print the same one.
 
@@ -64,15 +64,14 @@ bin/fleet_redact.py                 tool
 bin/fleet-config.py                 tool
 bin/fleet-daemon-lib.sh             tool
 
-# the credential proxy every session reaches its subscription through (#1970):
-# a client-only computer runs it too (`fleet-cred-proxy.sh ensure`)
+# the credential proxy every session reaches its subscription through (#1970)
 bin/fleet-cred-proxy.sh             tool
 bin/fleet-cred-proxy.py             tool
 # its pass for the Singapore relay, minted when the relay road is configured (#1974)
 bin/fleet-relay-cred.sh             tool
-# a session on a client-only computer, through that proxy (#2136): `fleet run
-# claude|codex` mints the hub pass with fleet-session-cred.sh; `fleet cred-scan`
-# counts what a session there can reach
+# a session on THIS computer, through that proxy (#2136 — 承载's since #4826):
+# `fleet run claude|codex` mints the hub pass with fleet-session-cred.sh;
+# `fleet cred-scan` counts what a session there can reach
 bin/fleet-run.sh                    tool
 bin/fleet-session-cred.sh           tool
 bin/fleet-cred-scan.py              tool
