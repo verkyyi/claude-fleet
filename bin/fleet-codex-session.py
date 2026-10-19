@@ -217,7 +217,7 @@ def hook():
     payload = None
     if os.environ.get("FLEET_AUTHORITY_CONTEXT"):
         from fleet_repo_authority import observe_native
-        from fleet_ticket import Fail
+        from fleet_hub_rest import Fail
         try:
             payload = json.load(sys.stdin)
             if not isinstance(payload, dict):

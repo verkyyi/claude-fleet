@@ -40,7 +40,7 @@ class CaseAuthorityTests(unittest.TestCase):
         self.windows = self.root / "windows"
         self.env = dict(HOME=str(self.root), PATH=str(self.fakebin) + ":" + os.environ["PATH"],
                         TMPDIR=str(self.root), FLEET_CONF_DIR=str(self.conf), FLEET_SKIP_GLOBAL_CONF="1",
-                        FLEET_SESSION="fixture", FLEET_PRESPAWN_DEDUP="0", FLEET_TASK_AUTHORITY="legacy",
+                        FLEET_SESSION="fixture", FLEET_TASK_AUTHORITY="legacy",
                         FLEET_MAX_SESSIONS="0", FLEET_GLOBAL_MAX_SESSIONS="0", FLEET_START_WARM="0",
                         FLEET_SCRATCH_POOL="0", FLEET_CODEX_READY_CHECK="0", FLEET_SPAWN_NODE="local",
                         FLEET_SPAWN_OVERLAP="0",
@@ -247,7 +247,7 @@ exit 0
             self.assertNotEqual(self.cli(repo, "--gate").returncode, 0, repo)
         self.assertEqual(self.requests, [])
         c = dict(task="T9", owner="alice", generation=1, worker_id="fleet/session")
-        with patch.object(authority.ticket, "api", return_value=dict(mode="hub")), \
+        with patch.object(authority.hubrest, "api", return_value=dict(mode="hub")), \
                 patch.dict(os.environ, {"FLEET_LAUNCH": "{}"}), \
                 patch.object(authority.launch, "validate_context", return_value=c), \
                 patch.object(authority.launch, "current_task", return_value=dict(repo="other/space")):
@@ -294,7 +294,7 @@ exit 0
             key = body["idempotency_key"]
             if key not in history:
                 if body["expected_revision"] != state["revision"]:
-                    raise authority.ticket.Fail(1, "stale revision")
+                    raise authority.hubrest.Fail(1, "stale revision")
                 state.update(revision=state["revision"] + 1,
                              mode={"freeze": "frozen", "apply": "hub", "rollback": "legacy"}[body["action"]])
                 history[key] = copy.deepcopy(state)
@@ -308,7 +308,7 @@ exit 0
         def login_mode():
             return authority.login_settings()[0]["settings"]["FLEET_TASK_AUTHORITY"]
 
-        with patch.dict(os.environ, self.env, clear=True), patch.object(authority.ticket, "api", side_effect=api):
+        with patch.dict(os.environ, self.env, clear=True), patch.object(authority.hubrest, "api", side_effect=api):
             file = self.root / "manifest.json"
             for action, spelled in (("freeze", REGISTERED), ("apply", None), ("freeze", CANONICAL), ("rollback", None)):
                 file.write_text(json.dumps(run(*([spelled] if spelled else []), "--dry-run")))
@@ -328,7 +328,7 @@ exit 0
             login.write_bytes(saved_login)
             file.write_text(json.dumps(run("--dry-run")))
             state["revision"] += 1
-            with self.assertRaisesRegex(authority.ticket.Fail, "stale revision"):
+            with self.assertRaisesRegex(authority.hubrest.Fail, "stale revision"):
                 run("--freeze", "--manifest", str(file))
             self.assertEqual(login.read_bytes(), saved_login)
             for field, value in (("conf", str(self.root / "other-login/fleet.conf")), ("version", 1), ("scope", "repo")):
@@ -341,7 +341,7 @@ exit 0
         task = dict(repo=CANONICAL, owner="alice", generation=1, execution_owner="fleet/session",
                     ticket_ref="hub:ExampleOrg/Space#7")
         with patch.dict(os.environ, {"FLEET_LAUNCH": "{}"}), \
-                patch.object(authority.ticket, "api", return_value=dict(mode="hub")), \
+                patch.object(authority.hubrest, "api", return_value=dict(mode="hub")), \
                 patch.object(authority.launch, "validate_context", return_value=c), \
                 patch.object(authority.launch, "current_task", return_value=task), \
                 patch.object(authority.launch, "task_call", return_value=task):
@@ -353,7 +353,7 @@ exit 0
                     with self.assertRaisesRegex(ValueError, "owner/generation"):
                         authority.ticket_ref(REGISTERED, "7")
         for ref in ("gh:other/space#7", "gh:exampleorg/space#8", "gh:exampleorg/space#07", "GH:exampleorg/space#7", "gh:../space#7"):
-            with self.assertRaises((ValueError, authority.ticket.Fail)):
+            with self.assertRaises((ValueError, authority.hubrest.Fail)):
                 authority.match_ticket_ref(REGISTERED, "7", ref)
         self.assertEqual(authority.match_ticket_ref(REGISTERED, "7", "gh:exampleorg/space#7"), "gh")
 
@@ -370,7 +370,7 @@ exit 0
         self.assertIn("入口不通", fleet_view.new_why(result.stderr, result.returncode))
         self.assertNotIn("frozen", result.stderr)
         self.assertFalse(self.windows.exists())
-        with patch.object(authority.ticket, "api", return_value=[]):
+        with patch.object(authority.hubrest, "api", return_value=[]):
             with self.assertRaisesRegex(ValueError, "unknown"):
                 authority.gate(REGISTERED, True)
 

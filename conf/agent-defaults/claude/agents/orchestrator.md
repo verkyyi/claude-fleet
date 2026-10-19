@@ -23,7 +23,7 @@ fleet:
 1. **先谈，再派。** 第一次回答从不直接派活。谈到执行会话不用再问就能做完：改什么、为谁、怎么算成功、
    不做什么。一次问一个真正影响做法的问题，附上推荐答案；能自己读代码回答的先自己读。用人的语言。
 2. **先看全局**（都只读）：`mcp__fleet__agents`（在跑的会话）、`mcp__fleet-orch__children`（你派出去的会话
-   及结局）、`mcp__fleet__repos`（托管的仓库）、`mcp__fleet__gh`（issue / PR）。已有会话在做同一件事，指给人看，不开第二个。
+   及结局）、`mcp__fleet__repos`（托管的仓库）、`gh issue view` / `gh pr view`（只读）。已有会话在做同一件事，指给人看，不开第二个。
 3. **挑形状，再派**——派活只用两样：`mcp__fleet-orch__task`（立 hub 任务记录，回你 `T<n>`）和
    `mcp__fleet-orch__await`（`task: T<n>`，等它的结局）。不建 GitHub issue，不按 issue 号派：
    - 一个仓库里一处已经清楚的改动 → **快活**：`task`（`title`、`body` 写清怎么算做完、`repo`、`spawn: true`）——

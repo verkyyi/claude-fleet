@@ -212,76 +212,11 @@ assert_exit 0 "tmux list-windows"   "$GUARD" "$(bash_json "$(jstr 'tmux list-win
 # ALLOW: send-keys as a quoted literal to another subcommand isn't the subcommand
 assert_exit 0 "send-keys quoted lit" "$GUARD" "$(bash_json "$(jstr 'tmux set-buffer -- "send-keys demo"')")"
 
-# REWRITE (not deny, since #528): a raw gh issue-comment from a FLEET pane is
-# repaired onto fleet-comment.sh so the issue-bridge's markers are stamped at the
-# source (issue #483) WITHOUT throwing the rest of the command away. Every block
-# this rail ever produced hit a compound command (median 1.2 KB, up to 34
-# statements), so a deny cost the whole batch to fix one statement.
-#
-# Fleet context is pinned hermetically via FLEET_MAIN (env is authoritative, no
-# tmux consulted). FLEET_LIB points at nothing, so the "does this issue have a
-# live bound worker" probe cannot resolve and takes its conservative branch
-# (assume yes → rewrite); the rewrite is lossless, so guessing wrong costs
-# nothing. The narrow case — a resolvable fleet that reports NO bound worker —
-# is covered by the stub-lib block further down.
-( fails=0; export FLEET_MAIN="$TMP/repo" FLEET_LIB="$TMP/nope/fleet-lib.sh"; unset TMUX
-  assert_rewrite "gh comment -> wrapper"    "$GUARD" "$(bash_json "$(jstr 'gh issue comment 483 --body "done"')")" \
-    'fleet-comment.sh --note 483 --body "done"'
-  assert_rewrite "gh --repo= comment"       "$GUARD" "$(bash_json "$(jstr 'gh --repo=o/r issue comment 483 -F body.md')")" \
-    'fleet-comment.sh --note 483 -F body.md'
-  assert_rewrite "gh comment in 2nd stmt"   "$GUARD" "$(bash_json "$(jstr 'echo hi && gh issue comment 12 --body x')")" \
-    'echo hi && ~/.claude/fleet/bin/fleet-comment.sh --note 12 --body x'
-  # The whole point: the OTHER statements survive untouched, including a body
-  # that must not be re-typed and must not be case-folded.
-  assert_rewrite "batch keeps its work"     "$GUARD" "$(bash_json "$(jstr 'git commit -m WIP ; gh issue comment 7 --body "Done: See PR" ; echo TAIL')")" \
-    'git commit -m WIP ; ~/.claude/fleet/bin/fleet-comment.sh --note 7 --body "Done: See PR" ; echo TAIL'
-  # ALLOW verbatim: the FLEET_ALLOW_RAW_COMMENT=1 hatch, inline or in the env,
-  # anywhere in the command (command-wide since #528).
-  assert_no_rewrite "gh comment + hatch"    "$GUARD" "$(bash_json "$(jstr 'FLEET_ALLOW_RAW_COMMENT=1 gh issue comment 483 --body x')")"
-  assert_no_rewrite "hatch on stmt 1 of 2"  "$GUARD" "$(bash_json "$(jstr 'FLEET_ALLOW_RAW_COMMENT=1 echo go ; gh issue comment 483 --body x')")"
-  # BLOCK: an issue the wrapper cannot address (its digit-strip would mangle a
-  # URL into a different issue number) — refuse rather than post to the wrong one.
-  assert_exit 2 "gh comment by URL"         "$GUARD" "$(bash_json "$(jstr 'gh issue comment https://github.com/o/r/issues/483 --body x')")"
-  # ALLOW: the sanctioned wrapper (its internal gh runs in a subprocess this
-  # layer never sees), and non-comment gh issue verbs
-  # shellcheck disable=SC2088  # the tilde is a literal test payload, as typed in a pane
-  assert_exit 0 "fleet-comment wrapper"     "$GUARD" "$(bash_json "$(jstr '~/.claude/fleet/bin/fleet-comment.sh 483 --note --body "progress"')")"
-  assert_exit 0 "gh issue view"             "$GUARD" "$(bash_json "$(jstr 'gh issue view 483 --json state')")"
-  assert_exit 0 "gh pr comment"             "$GUARD" "$(bash_json "$(jstr 'gh pr comment 484 --body "verified"')")"
-  # FALSE-POSITIVE discipline: `issue comment` inside a quoted body / another
-  # command's args must not trip the anchored rule
-  assert_exit 0 "issue comment in body"     "$GUARD" "$(bash_json "$(jstr 'gh issue create --title x --body "never run gh issue comment raw"')")"
-  assert_exit 0 "issue comment in echo"     "$GUARD" "$(bash_json "$(jstr 'echo gh issue comment')")"
-  exit $fails ); rc=$?; fails=$((fails + rc))
-
-# ALLOW verbatim: a fleet whose bridge reports NO live worker bound to that issue.
-# This is the scope fix (#528) — the rail exists so an unmarked comment cannot be
-# relayed back into a bound worker as a spurious self-turn, and with nothing bound
-# the comment is inert. It was denying overwhelmingly inert commands: of the 43
-# blocks it produced, 36 came from scratch panes with no binding at all, and
-# exactly ONE was the pane's own issue. Stub lib + bridge so the probe resolves
-# without a live fleet.
-mkdir -p "$TMP/stub"
-cat > "$TMP/stub/fleet-lib.sh" <<'STUB'
-fleet_current_session() { printf 'fleet-x'; }
-fleet_repo_cached()     { printf 'o/r'; }
-STUB
-cat > "$TMP/stub/fleet-issue-bridge.sh" <<'STUB'
-#!/bin/bash
-# --find-window <issue> <repo>: issue 999 is bound to a live worker, nothing else is.
-[ "${1:-}" = "--find-window" ] || exit 2
-[ "${2:-}" = "999" ] && printf 'fleet-x\t@9\tdone'
-exit 0
-STUB
-( fails=0; export FLEET_MAIN="$TMP/repo" FLEET_LIB="$TMP/stub/fleet-lib.sh"; unset TMUX
-  assert_no_rewrite "unbound issue verbatim" "$GUARD" "$(bash_json "$(jstr 'gh issue comment 483 --body x')")"
-  assert_rewrite "bound issue rewritten"     "$GUARD" "$(bash_json "$(jstr 'gh issue comment 999 --body x')")" \
-    'fleet-comment.sh --note 999 --body x'
-  exit $fails ); rc=$?; fails=$((fails + rc))
-
-# ALLOW: the same raw comment OUTSIDE a fleet (no FLEET_MAIN, no TMUX)
-( fails=0; unset FLEET_MAIN; unset TMUX
-  assert_exit 0 "gh comment (no fleet)"     "$GUARD" "$(bash_json "$(jstr 'gh issue comment 483 --body "done"')")"
+# A raw gh issue-comment passes untouched (issue #4898): the rewrite onto
+# comment wrapper left (#4898).
+( fails=0; export FLEET_MAIN="$TMP/repo"; unset TMUX
+  assert_no_rewrite "gh comment verbatim"   "$GUARD" "$(bash_json "$(jstr 'gh issue comment 483 --body x')")"
+  assert_exit 0 "gh comment allowed"        "$GUARD" "$(bash_json "$(jstr 'gh issue comment 483 --body "done"')")"
   exit $fails ); rc=$?; fails=$((fails + rc))
 
 # fail OPEN on malformed input, and no-op on a non-Bash tool
@@ -479,20 +414,20 @@ logged() {   # logged <label> <want-lines> <grep-pattern>
   local n; n=$(grep -c -- "$3" "$DLOG" 2>/dev/null); n=${n:-0}
   [ "$n" = "$2" ] || { printf 'FAIL: direct: %s — %s log line(s) matching %s, want %s\n' "$1" "$n" "$3" "$2" >&2; fails=$((fails + 1)); }
 }
-CMT="$LIVE/fleet-comment.sh 1812 --note --body secret-body-text"
+CMT="$LIVE/fleet-report-parent.sh --state merged --summary secret-body-text"
 # Log mode (the default): allowed, one line per call naming script + tool, never the command.
 : > "$DLOG"
-direct 0 "log mode: fleet-comment.sh allowed" "$(bash_json "$(jstr "$CMT")")"
-logged "log mode writes the line" 1 $'logged\tissue=1812\tscript=fleet-comment.sh\ttool=mcp__fleet__comment'
+direct 0 "log mode: fleet-report-parent.sh allowed" "$(bash_json "$(jstr "$CMT")")"
+logged "log mode writes the line" 1 $'logged\tissue=1812\tscript=fleet-report-parent.sh\ttool=mcp__fleet__report'
 logged "the log never carries the command text" 0 'secret-body'
-direct 0 "log mode: X=\$(fleet-gh.sh …)"  "$(bash_json "$(jstr "PR=\$($LIVE/fleet-gh.sh pr view 3 --json state)")")"
-logged "a \$(…) call is seen" 1 'script=fleet-gh.sh'
+direct 0 "log mode: X=\$(fleet-pr-verdict.sh …)"  "$(bash_json "$(jstr "V=\$($LIVE/fleet-pr-verdict.sh 3)")")"
+logged "a \$(…) call is seen" 1 'script=fleet-pr-verdict.sh'
 direct 0 "log mode: bash \$HOME/…/set-claude-state.sh blocked" "$(bash_json "$(jstr 'bash $HOME/.claude/fleet/bin/set-claude-state.sh blocked')")"
 logged "set-claude-state.sh blocked → ask" 1 'tool=mcp__fleet__ask'
 # Block mode: refused, naming the tool.
 : > "$DLOG"
-for c in "$CMT" "$LIVE/fleet-pr-merge.sh 9" "cd /tmp && $LIVE/fleet-children.sh --json" "fleet-claim-brief.sh" \
-         "$LIVE/fleet-repo.sh list" "sh $LIVE/set-claude-state.sh blocked" "$LIVE/fleet-evidence.sh post"; do
+for c in "$CMT" "$LIVE/fleet-pr-merge.sh 9" "cd /tmp && $LIVE/fleet-children.sh --json" "fleet-brief.sh" \
+         "$LIVE/fleet-repo.sh list" "sh $LIVE/set-claude-state.sh blocked" "$LIVE/fleet-handoff-file.sh path"; do
   direct 2 "block mode: $c" "$(bash_json "$(jstr "$c")")" block
 done
 logged "every refusal is logged" 7 $'\tblocked\t'
@@ -514,11 +449,11 @@ logged "both hatches logged as hatch" 2 $'\thatch\t'
 STUB_SEAT='' direct 0 "operator/scratch seat passes" "$(bash_json "$(jstr "$CMT")")" block
 DIRECT_ENV=FLEET_HUB=1 direct 0 "hub pane (FLEET_HUB=1) passes" "$(bash_json "$(jstr "$CMT")")" block
 # Not a call: a read of the script, the worktree's own bin/, another subcommand, mode off.
-direct 0 "grep of the script"          "$(bash_json "$(jstr "grep -n x $LIVE/fleet-comment.sh")")" block
-direct 0 "a worktree's own bin/ (testing)" "$(bash_json "$(jstr "$TMP/direct-wt/bin/fleet-comment.sh 3")")" block
+direct 0 "grep of the script"          "$(bash_json "$(jstr "grep -n x $LIVE/fleet-report-parent.sh")")" block
+direct 0 "a worktree's own bin/ (testing)" "$(bash_json "$(jstr "$TMP/direct-wt/bin/fleet-report-parent.sh --state merged")")" block
 direct 0 "set-claude-state.sh working" "$(bash_json "$(jstr "sh $LIVE/set-claude-state.sh working")")" block
 direct 0 "fleet-repo.sh add"           "$(bash_json "$(jstr "$LIVE/fleet-repo.sh add o/r")")" block
-direct 0 "a script in a commit message" "$(bash_json "$(jstr "git commit -m 'drop fleet-comment.sh 3'")")" block
+direct 0 "a script in a commit message" "$(bash_json "$(jstr "git commit -m 'drop fleet-report-parent.sh 3'")")" block
 direct 0 "mode off"                    "$(bash_json "$(jstr "$CMT")")" off
 logged "nothing above is logged" 0 'script='
 # The MCP road — the same table: the mod's old tools by their MCP name, in a

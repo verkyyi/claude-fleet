@@ -66,10 +66,8 @@ or a throughput multiplier. [Evidence and counting method](docs/dev/USAGE-EVIDEN
   `claude`, no issue — but
   in its own writable `scratch-N` worktree, so an experiment can push a branch and
   open a PR like any worker). Once a scratch has talked its way to a real
-  requirement it can **become** the worker for it, in place: filing with
-  `fleet-issue-file.sh --title "…" --bind` (or `fleet-bind.sh <N>` for an existing
-  issue) renames its branch `scratch-N` → `issue-N`, binds the window and claims
-  the issue — no second session re-grounding from zero (#520). Set `FLEET_SCRATCH_POOL=1` to keep one pre-started and
+  requirement, dispatch it as a task (the `task` tool) — its session opens on the
+  hub's record `T<n>` (#4898: the fleet files and claims no issue). Set `FLEET_SCRATCH_POOL=1` to keep one pre-started and
   ready: `⌃s` then hands you a session you can type into immediately (0.46s to
   the window, 0.30s to the first keystroke) instead of one that spends ~7s
   booting — the last second of which paints a `❯` box that silently swallows
@@ -188,12 +186,12 @@ claude plugin install fleet@claude-fleet --scope user --yes
 That replaces the copy-and-merge passes above for those three, and
 `/plugin update fleet` keeps them current — so on a second machine, or a
 teammate's, nobody has to remember `/fleet-sync-install` for them. Plugin
-commands are namespaced (`/fleet:fleet-claim`); the fleet detects which install
+commands are namespaced (`/fleet:fleet-history`); the fleet detects which install
 path a machine has and seeds the form that resolves, so spawns work either way.
 Codex does not consume Claude plugin commands directly; `/fleet-sync-install`
 generates native Codex skills from `commands/*.md` under each known
-`$CODEX_HOME/skills/<name>/SKILL.md`, so the same worker seed becomes
-`$fleet-claim` there.
+`$CODEX_HOME/skills/<name>/SKILL.md`, so the same command becomes
+`$fleet-history` there.
 
 It does **not** replace the playbook: `bin/`, `conf/`, the tmux layer and the
 daemons are machine-level and stay at `~/.claude/fleet`. A plugin's install path
@@ -523,21 +521,15 @@ bar and doctor expose both failures. Full policies and recovery commands:
 
 Optional repo-shipped Claude Code slash commands that operate on the current
 fleet (its `$FLEET_REPO` only), installed either as [the plugin](#the-claude-code-side-ships-as-a-plugin)
-(typed `/fleet:fleet-claim`) or by appending `commands/*.md` into
-`~/.claude/commands/` (typed `/fleet-claim`). The same files are generated as
-Codex skills under `$CODEX_HOME/skills/` and invoked as `$fleet-claim`,
+(typed `/fleet:fleet-history`) or by appending `commands/*.md` into
+`~/.claude/commands/` (typed `/fleet-history`). The same files are generated as
+Codex skills under `$CODEX_HOME/skills/` and invoked as `$fleet-history`,
 `$fleet-context`, and so on. Each declares an owner seat (`worker` / `hub` /
 `either`) and refuses from the wrong one. Live so far:
 
-- **`/fleet-claim`** (worker) — the whole worker lifecycle, and the one skill a
-  freshly-spawned worker runs. Its whole preamble is ONE call
-  (`bin/fleet-claim-brief.sh`, issue #458): fleet + seat + the bound issue read
-  once (thread, comments and the **assignee** that IS the claim) + the layered
-  worker charter + this fleet's implementation directive, in a single `gh`
-  round-trip — atomic, so no half of it can be skipped. Then ground in the issue +
-  code and implement under a standing contract that ends by **opening a PR and
-  landing it** once the gate reads green (`bin/fleet-pr-verdict.sh` → `READY`);
-  the cleanup daemon reaps afterwards (see [docs/dev/CLEANUP.md](docs/dev/CLEANUP.md)).
+- A worker runs no command to start: its flow (the `brief` tool, a PR, `pr_verdict` →
+  `pr_merge`, `report`) rides its SessionStart hook (`bin/fleet-worker-start-hook.sh`,
+  issue #4898); the cleanup daemon reaps afterwards (see [docs/dev/CLEANUP.md](docs/dev/CLEANUP.md)).
 - **`/fleet-history`** (hub) — browse & resume closed sessions (landed + unlanded,
   workers **and** `scratch-<N>` sessions) from the history ledger, reconstructing a
   reaped worktree off the recorded SHA so `claude --resume` still works.
@@ -684,12 +676,12 @@ degrading to a pane-content heuristic.
 | worktree per task · `@issue` binding · claim-at-spawn · PR/CI map · cleanup · session caps | ✅ | ✅ | Not agent code at all — `git`, `gh` and tmux window options. The whole worker path is agent-agnostic. |
 | hook state signals → dash colours (busy / working / done) | ✅ | ✅ | Codex's hook system *is* Claude Code's schema — same event names, same stdin JSON, `exit 2` blocks, `$TMUX_PANE` inherited (measured on codex-cli 0.154). This launcher inlines the fleet's own hooks as `-c hooks.<Event>=[…]`. |
 | bypass-permissions guardrails (bash-guard · base-checkout read-only) | ✅ | ✅ | full access from config.toml (else `--dangerously-bypass-approvals-and-sandbox`, issue #4724) + `--dangerously-bypass-hook-trust`; the base-checkout guard matches `apply_patch` on Codex where Claude matches Edit/Write/MultiEdit. |
-| session keeps ONE language (non-English sessions stay non-English) | ✅ | ✅ | `bin/fleet-claim-brief.sh` ends every worker's preamble with the seed rule, and every text the fleet injects later (resume nudge, quota warning, child report, auto-handoff directive) carries its own — one English sentence per injection point instead of a translated nudge per language (issue #620, `bin/fleet-lang.sh`). Codex additionally has the rule in `conf/codex-preamble.md`, where it originated. |
+| session keeps ONE language (non-English sessions stay non-English) | ✅ | ✅ | `bin/fleet-brief.sh` ends every worker's brief with the seed rule, and every text the fleet injects later (resume nudge, quota warning, child report, auto-handoff directive) carries its own — one English sentence per injection point instead of a translated nudge per language (issue #620, `bin/fleet-lang.sh`). Codex additionally has the rule in `conf/codex-preamble.md`, where it originated. |
 | project instructions file | `CLAUDE.md` | `AGENTS.md` | `-c project_doc_fallback_filenames=["CLAUDE.md"]` makes a Codex worker read this repo's `CLAUDE.md` when it has no `AGENTS.md`. |
 | worker model pinned at spawn | `FLEET_MODEL` | `FLEET_CODEX_MODEL` | Two knobs on purpose: Codex model names are not Claude aliases, so `FLEET_MODEL` never reaches a Codex pane. |
 | transferred recurring loop | Fleet adapter / native `/loop` | Fleet adapter | Active Fleet loops keep their ID, cadence and ownership generation across agent/account transfers. Codex uses private RPC; Claude inbox delivery requires transcript acknowledgement. Exact crash restore can reattach active owners; stopped or ambiguous deliveries never replay. Managed HOME transfers can preserve verified session-only calendar jobs, including one-shots. |
 | optional plugins (fleet-epic · fleet-browser · …) | ✅ `/plugin` | ⚠️ partial | Legacy bridge pending native plugin migration: `bin/fleet-codex-plugins.py sync` follows what the Claude side installed and enabled before every launch: skills linked as `$CODEX_HOME/skills/fleet-plugin-*`, plugin commands as adapter skills, the `.mcp.json` servers as one marked block in `config.toml`, hooks merged by `fleet-hooks-emit.sh --plugin-dir`. Not carried by this bridge: mod interface modules (/qd), PreCompact, an agent file's `tools` limits, native plugin ownership (issue #3123; docs/dev/NATIVE-AGENT-BOUNDARY.md). |
-| fleet command seed (`/fleet-claim`) | native | native | Claude Code expands `/fleet-claim`; Codex invokes the installed `$fleet-claim` skill from `$CODEX_HOME/skills/fleet-claim/SKILL.md`. If an old Codex build has no skills, or that home has not been synced, the launcher falls back to the prose expansion. |
+| fleet command seed (`/fleet-<cmd>`) | native | native | Claude Code expands `/fleet-<cmd>`; Codex invokes the installed `$fleet-<cmd>` skill from `$CODEX_HOME/skills/fleet-<cmd>/SKILL.md`. If an old Codex build has no skills, or that home has not been synced, the launcher falls back to the prose expansion. |
 | directory trust prompt | pre-granted | trusted-node pre-grant | `bin/fleet-trust.sh` fills missing trust for the fleet checkout and a managed no-repo launch in physical HOME on a trusted node. Codex entries persist through proxy config symlinks; explicit untrusted and pre-trust opt-out remain unchanged. Transfer checks readiness before source exit. |
 | red `needs` + bell when a session is blocked on you | ✅ | ✅ | The private-server monitor reads native waitingOnUserInput/waitingOnApproval flags and marks the exact launcher/thread. No Notification hook is needed. Resolved native attention clears only its own subtype; explicit worker blockers survive. |
 | `AskUserQuestion` + the dash’s answer key | ✅ | ✅ | Codex has native request_user_input. The dashboard replies to the replayed server request, including choices and free text; exact launcher/thread/request fingerprints prevent stale answers. Esc sends nothing; native resolution confirms completion. |

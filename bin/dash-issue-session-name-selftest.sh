@@ -98,7 +98,7 @@ run_spawn() { # $@ = args to dash-issue-session.sh ; env GH_TITLE controls gh vi
   # claim ledger and the spawn proceeds. The dedup has its own selftest.
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_C="$WORK/dash" FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" \
-  FLEET_BASE_BRANCH="master" FLEET_PRESPAWN_DEDUP=0 \
+  FLEET_BASE_BRANCH="master" \
     "$SPAWN" "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
 }
 

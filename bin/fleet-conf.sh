@@ -7,7 +7,6 @@
 #   fleet-conf.sh migrate [--dry-run] [--quiet]   fold the old files into it (each kept as .bak);
 #                                        fills CCQUOTA_FLEET / FLEET_HUB_URL from node.env (#2116);
 #                                        moves the role knobs into the person's layer (#2788);
-#                                        pins every hosted repo's FLEET_TICKETS (#3739);
 #                                        comments out a repo overlay's FLEET_TASK_AUTHORITY (#4901)
 #   fleet-conf.sh set-hub <url> [--host] write FLEET_HUB_URL (+ FLEET_HOST=1 with --host)
 #   fleet-conf.sh line <KEY>             print KEY's assignment line(s) as written (exit 1 = none)
@@ -744,42 +743,6 @@ EOF
   return 0
 }
 
-# ---- every repo's ticket home is written down (issue #3739) ----------------------
-# A NEW repo's tickets default to the hub on a login that reaches one
-# (fleet_repo_register), while an unset FLEET_TICKETS still reads github. So every
-# repo registered before that — a repos/<slug>.conf with no FLEET_TICKETS line — is
-# pinned to where its tickets live now (its fleet conf's value, else github): one
-# appended comment + line, the rest of the file byte for byte, and one line out.
-# Runs after migrate_repos, so an old-layout conf's repo is in repos/ by then.
-# Idempotent: a conf that has the line is never touched.
-TICKETS_RE='^[[:space:]]*(export[[:space:]]+)?FLEET_TICKETS[[:space:]]*='
-migrate_tickets() {
-  local DRY="$1" QUIET="$2" s c f r home pinned=''
-  [ -n "$(fleet_each_conf)" ] && _host_lib || return 0   # no fleet here: no repo to pin
-  while IFS=$'\t' read -r s c; do
-    [ -n "$s" ] || continue
-    while IFS= read -r r; do
-      [ -n "$r" ] || continue
-      f=$(fleet_repo_conf_file "$s" "$r")
-      [ -f "$f" ] && ! grep -Eq "$TICKETS_RE" "$f" || continue
-      home=$(fleet_ticket_home "$r" "$s")
-      if [ "$DRY" = 1 ]; then
-        printf 'fleet-conf: would pin %s'\''s tickets to %s in %s\n' "$r" "$home" "${f#$CD/}"; continue
-      fi
-      { printf '# pinned by fleet-conf.sh migrate %s (issue #3739): hosted before new repos took the hub\n' \
-          "$(date '+%Y-%m-%d %H:%M:%S')"
-        printf 'FLEET_TICKETS="%s"\n' "$home"; } >> "$f" || die "cannot write $f"
-      pinned="$pinned $r=$home"
-    done <<REPOS
-$(fleet_repos "$s")
-REPOS
-  done <<EOF
-$(fleet_each_conf)
-EOF
-  [ -n "$pinned" ] && [ "$QUIET" = 0 ] && echo "fleet-conf: ticket home pinned for every existing repo:$pinned"
-  return 0
-}
-
 # ---- retired keys are commented out (issues #3120, #3008) -----------------------
 # A key nothing reads any more — in fleet.conf, a fleet conf or a repo overlay —
 # is kept as a comment saying so (`# retired #<issue>: <the line>`), never
@@ -869,7 +832,6 @@ case "$cmd" in
     rescue_stranded "$DRY" "$QUIET"
     hub_fill "$DRY" "$QUIET"
     migrate_repos "$DRY" "$QUIET"
-    migrate_tickets "$DRY" "$QUIET"
     migrate_retired "$DRY" "$QUIET"
     migrate_authority "$DRY" "$QUIET" ;;
   add-role)

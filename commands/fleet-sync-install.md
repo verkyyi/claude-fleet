@@ -139,8 +139,8 @@ actually moved. One line per step (`<step>: …`), in this order:
   bits); a personal skill that diverges is warned about and left alone.
 - **codex-skills** — the same fleet commands are generated as native Codex
   skills under every known `$CODEX_HOME/skills/<name>/SKILL.md`, and repo
-  `skills/<name>/` dirs are mirrored there too. This is how a Codex worker starts
-  from `$fleet-claim` instead of a prose-expanded seed.
+  `skills/<name>/` dirs are mirrored there too. This is how a Codex session runs a
+  `$fleet-*` command natively instead of a prose-expanded seed.
 - **ui** — dash launcher or `conf/tmux-attention.conf` changed →
   `fleet-ui-refresh.sh --all` on every live fleet, with `--from`'s conf as the
   before-file for the unbind diff (#248, #295).

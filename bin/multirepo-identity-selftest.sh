@@ -19,7 +19,7 @@
 #   ledger     fleet-ledger-watch.sh: key (repo, N), row to its own repo's ledger
 #   dash       okey grouping (tmux-dashboard-rows.sh)
 #   landed     the landed view's origin join + per-repo fold file (fleet-history.sh)
-#   hub        fleet-control-read.sh message/resume use the WINDOW's repo
+#   hub        fleet-control-read.sh resume/start use the WINDOW's repo
 #
 # tmux: a PATH shim maps every `-L <label>` to a private socket under $WORK, and a
 # bare call made outside a pane to a socket nothing listens on — never the live
@@ -233,7 +233,6 @@ leg landed
 # --- hub adapter: the WINDOW's repo, not the fleet conf's ------------------------------
 HB="$WORK/hubbin"; mkdir -p "$HB"
 cp "$BIN/fleet-control-read.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$HB/"
-printf '#!/bin/bash\nprintf "comment %%s\\n" "$*"\n' > "$HB/fleet-comment.sh"
 printf '#!/bin/bash\nexit 0\n' > "$HB/fleet-diskguard.sh"; cp "$HB/fleet-diskguard.sh" "$HB/fleet-quotaguard.sh"
 printf '#!/bin/bash\nprintf "restore %%s\\n" "$*"\n' > "$HB/dash-restore-session.sh"
 printf '#!/bin/bash\nprintf "spawn %%s\\n" "$*"\n' > "$HB/dash-issue-session.sh"
@@ -244,16 +243,10 @@ repo=''; while [ "$#" -gt 1 ]; do case "$1" in --repo) repo=$2; shift ;; esac; s
 case "$repo:$1" in o/a:12|o/b:12|o/b:40|o/c:12) printf 'RESUME\tx\n' ;; *) printf 'REVIEW-ONLY\n' ;; esac
 EOF
 hub() { bash "$HB/fleet-control-read.sh" "$@" </dev/null 2>&1; }
-out=$(hub message "$M" 12); rc=$?
-eq "hub: bare 12 in two repos is refused" "$rc" 2
-out=$(hub message "$M" o-b:issue-12); has "hub: o-b:issue-12 → o/b" "$out" "comment 12 --repo o/b"
-out=$(hub message "$M" 14);          has "hub: bare 14 → its window's repo o/b" "$out" "comment 14 --repo o/b"
-hub message "$M" 16 >/dev/null;      eq "hub: unknown-repo 16 is refused" "$?" 2
 out=$(hub resume "$M" issue-12); rc=$?
 eq "hub: resume 12 resumable in two repos is refused" "$rc" 5
 out=$(hub resume "$M" o-a:issue-12); has "hub: resume o-a:issue-12 → o/a" "$out" "restore landed:issue:12 $M --repo o/a"
 out=$(hub resume "$M" issue-40);    has "hub: resume 40 → the one repo that has it" "$out" "restore landed:issue:40 $M --repo o/b"
-out=$(hub message "$D" 12);          has "hub: one-repo message unchanged" "$out" "comment 12 --repo o/c"
 out=$(hub resume "$D" issue-12);     eq "hub: one-repo resume names its only repo (#1938)" "$out" "restore landed:issue:12 $D --repo o/c"
 # start (issue #984): a 2+ repo fleet needs the repo, resolved before any gate
 hub start "$M" 12 claude >/dev/null; eq "hub: start with no repo in a 2-repo fleet is refused" "$?" 6

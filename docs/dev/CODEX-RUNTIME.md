@@ -410,7 +410,7 @@ The hook's state label is not proof that the native turn has completed.
 
 The terminal panel's new-task row opens its composer. Activating **Open with
 draft** opens a scratch with the typed text as an **unsent draft**. It does not
-file an issue, invoke `fleet-claim`, or press Enter.
+file an issue, start a worker flow, or press Enter.
 Repository drafts retain hub placement and a dedicated `draft` field preserves
 the text independently of the shorter window label. The client uses the `draft`
 placement action so an older hub refuses instead of silently losing the text;

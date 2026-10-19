@@ -4,7 +4,6 @@
 #
 #   CACHE   a fresh collector issues/labels cache or pr-refresh prmap answers with
 #           ZERO gh calls (a PATH shim counts them), `_source: cache` + `_age`.
-#   SNAP    the spawn snapshot of this worktree's issue serves body/comments.
 #   MISS    stale (file mtime past --max-age), a field the cache lacks, an issue
 #           not in the open list, a clipped assignee, --max-age 0 → exactly ONE
 #           gh call, `_source: gh`.
@@ -122,22 +121,6 @@ run ok pr checks 10 --repo o/r
 [ "$CALLS" = 0 ] && [ "$(j .bucket)" = pending ] || fail "checks rollup from prmap …" "$OUT"
 ok "fresh prmap: pr view (state/headRefName/mergeCommit) and the checks rollup with zero gh calls"
 
-# ===== SNAP ====================================================================
-if command -v python3 >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
-  git init -q "$WORK/base" && git -C "$WORK/base" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
-    && git -C "$WORK/base" worktree add -q "$WORK/wt" -b issue-11 2>/dev/null || fail "worktree setup"
-  jq -nc '{number:11,title:"Snap",state:"OPEN",url:"u",body:"snap body",labels:[],assignees:[],comments:[{author:{login:"x"},body:"c1",createdAt:"t"}]}' \
-    | python3 "$BIN/fleet-issue-cache.py" write "$WORK/wt" o/r 11 "$(date +%s)" || fail "snapshot write"
-  : > "$GHLOG"
-  OUT=$(cd "$WORK/wt" && PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" bash "$BIN/fleet-gh.sh" issue view 11 --repo o/r --json title,body,comments 2>"$WORK/err")
-  [ "$(grep -c . "$GHLOG")" = 0 ] && [ "$(j .body)/$(j '.comments[0].body')/$(j ._source)" = "snap body/c1/cache" ] \
-    || fail "spawn snapshot serves body+comments" "$OUT $(cat "$WORK/err")"
-  OUT=$(cd "$WORK/wt" && PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" bash "$BIN/fleet-gh.sh" issue view 11 --repo o/r --json title,assignees 2>"$WORK/err")
-  [ "$(grep -c . "$GHLOG")" = 1 ] || fail "snapshot assignees predate the claim — must go to gh" "$OUT"
-  ok "the spawn snapshot answers its own issue's body/comments; never its pre-claim assignees"
-else
-  printf 'skip SNAP: no python3/git\n'
-fi
 
 # ===== MISS ====================================================================
 run ok issue view 5 --repo o/r --json title,body

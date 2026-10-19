@@ -125,7 +125,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # inline fallback intact.
 cmd=$(printf '%q ' "$@")
 # tmux gives a popup $TMUX but NO $TMUX_PANE. Every pane-identity read in the
-# fleet (fleet_pane_fmt: fleet-comment.sh's sender, fleet_seat, …) refuses
+# fleet (fleet_pane_fmt: the brief, fleet_seat, …) refuses
 # rather than fall back to "the current pane" (issue #1537 ④), so the popup
 # inherits THIS pane's id — the dash pane the popup was opened from, which is the
 # identity its command is acting as.

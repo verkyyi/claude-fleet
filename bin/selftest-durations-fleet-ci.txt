@@ -30,7 +30,6 @@
 1.9 dash-ended-group-selftest.sh
 1.9 dash-issue-async-spawn-selftest.sh
 7.4 dash-issue-cold-overlap-selftest.sh
-0.9 dash-issue-prespawn-dedup-selftest.sh
 0.9 dash-issue-session-name-selftest.sh
 3.3 dash-issue-session-prompt-selftest.sh
 3.7 dash-migrate-selftest.sh
@@ -51,7 +50,6 @@
 0.7 dash-wid-selftest.sh
 0.9 deploy-multirepo-selftest.sh
 3.7 deploy-state-selftest.sh
-3.5 desk-ticket-selftest.sh
 8.8 dist-no-github-selftest.sh
 2.0 dist-source-selftest.sh
 6.3 doctor-resident-selftest.sh
@@ -75,7 +73,6 @@
 62.7 fleet-await-stall-selftest.sh
 0.1 fleet-base-branch-selftest.sh
 3.1 fleet-base-sync-selftest.sh
-0.9 fleet-bind-selftest.sh
 144.7 fleet-break-it-2-selftest.sh
 24.3 fleet-break-it-cred-selftest.sh
 5.1 fleet-break-it-cred-sep-selftest.sh
@@ -84,11 +81,8 @@
 46.2 fleet-break-it-node-selftest.sh
 107.1 fleet-break-it-selftest.sh
 1.9 fleet-break-it-tenant-selftest.sh
-0.0 fleet-charter-selftest.sh
 7.8 fleet-children-flush-selftest.sh
 8.1 fleet-children-selftest.sh
-1.8 fleet-claim-brief-selftest.sh
-0.5 fleet-claim-grounding-measure-selftest.sh
 1.4 fleet-claude-selftest.sh
 0.4 fleet-claude-stamp-selftest.sh
 6.1 fleet-cleanup-daemon-selftest.sh
@@ -121,7 +115,6 @@
 3.0 fleet-collect-quotawatch-gate-selftest.sh
 1.0 fleet-collect-sessmap-guard-selftest.sh
 2.7 fleet-collect-stale-selftest.sh
-2.6 fleet-comment-selftest.sh
 49.1 fleet-compose-selftest.sh
 58.7 fleet-conf-selftest.sh
 6.3 fleet-config-selftest.sh
@@ -155,7 +148,6 @@
 0.3 fleet-epic-floor-selftest.sh
 2.3 fleet-epic-preflight-selftest.sh
 1.0 fleet-epic-stable-row-selftest.sh
-3.5 fleet-evidence-selftest.sh
 1.5 fleet-failover-selftest.sh
 6.2 fleet-fold-selftest.sh
 3.2 fleet-gh-fallback-selftest.sh
@@ -186,10 +178,7 @@
 1.8 fleet-installs-selftest.sh
 0.4 fleet-intro-selftest.sh
 7.2 fleet-issue-bridge-selftest.sh
-4.5 fleet-issue-cache-selftest.sh
-9.7 fleet-issue-file-selftest.sh
 9.9 fleet-keys-selftest.sh
-0.3 fleet-labels-seed-selftest.sh
 0.1 fleet-lang-selftest.sh
 17.1 fleet-launchd-probe-selftest.sh
 1.1 fleet-ledger-watch-selftest.sh
@@ -259,7 +248,6 @@
 1.7 fleet-repo-selftest.sh
 13.0 fleet-repo-session-selftest.sh
 15.1 fleet-report-parent-selftest.sh
-0.3 fleet-report-stats-selftest.sh
 1.4 fleet-restore-helper-selftest.sh
 5.6 fleet-restore-outcome-selftest.sh
 10.3 fleet-restore-pick-selftest.sh
@@ -301,7 +289,6 @@
 11.1 fleet-wait-webhook-selftest.sh
 2.9 fleet-webhook-selftest.sh
 2.5 fleet-win-name-selftest.sh
-2.0 fleet-worker-records-selftest.sh
 38.2 fleet-worker-stop-selftest.sh
 0.2 fleet-worktree-drop-selftest.sh
 0.6 fleet-worktree-root-selftest.sh

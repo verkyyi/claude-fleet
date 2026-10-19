@@ -143,7 +143,7 @@
   .kv dd{margin:0;color:var(--ink-2)}
   .kv dd.evidence{font-family:var(--mono);font-size:.8rem;color:var(--ink)}
   /* report only — the member LIVE, in three columns 改动前 · 改动后 · 已上线 (issue #810). Filled from
-     `fleet-evidence.sh export`; a stage nobody captured stays a .none cell (无证据 / 未取到 + why) — never staged */
+     the members' PRs (copied under evidence/); a stage nobody captured stays a .none cell (无证据 / 未取到 + why) — never staged */
   .proof{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
   .proof figure{min-width:0}
   .proof .stage{font-family:var(--mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);margin-bottom:6px}
@@ -337,7 +337,7 @@
 </dl>
 <p class="proto"><a href="⟨原型地址 — 与本页同目录的相对路径⟩">▶ 打开可交互原型</a></p>
 <!-- report only (issue #810) — the plan page drops this block. What the member looks like live, from
-     `fleet-evidence.sh export --epic N <dir>`: each cell is an <img> (relative path — served from
+     copied under <dir>/evidence/<M>/: each cell is an <img> (relative path — served from
      beside the page), a <pre> (a command's output / a capture-pane), or a .none cell — 无证据 when the
      worker left nothing, 未取到 + why when the hub could not take the live shot. Never re-shot, never staged. -->
 <div class="proof">

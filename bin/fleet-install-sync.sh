@@ -686,7 +686,10 @@ epic_release() {
   body="⏱ install-sync 放行：本批次的心跳已连续挡住 **${LOGIN}@${HOST}** 的升级 $(($3 / 60)) 分钟（封顶 $((HOLD_CAP / 60)) 分钟，\`FLEET_EPIC_HOLD_CAP_SECS\`），$(utc) 起照常切换 \`$(short "$HEAD_SHA")\` → \`$(short "$STABLE_SHA")\`（stable）。
 
 批次之后的成员与 \`/fleet-epic-run\` 正文都在新版本上跑。心跳写上 \`--live 0 --inflight 0\` 的空转批次本来就不挡（#2247）。"
-  cmd="${FLEET_EPIC_HOLD_NOTE_CMD:-bash $BIN/fleet-comment.sh}"
+  # No default since issue #4898 (the fleet writes no GitHub comment): the log line
+  # above is the record; a seam (FLEET_EPIC_HOLD_NOTE_CMD) still posts one.
+  cmd="${FLEET_EPIC_HOLD_NOTE_CMD:-}"
+  [ -n "$cmd" ] || return 0
   # a file, not stdin: fleet_timebox runs the command in the background, where
   # a non-interactive shell hands it /dev/null for stdin
   bf=$(mktemp "${TMPDIR:-/tmp}/fleet-epic-release.XXXXXX") || { say "epic: no temp file — no comment on $r#$n"; return 0; }

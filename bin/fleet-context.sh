@@ -4,7 +4,7 @@
 # Claude Code shows the context meter to the HUMAN (the /context command, the
 # statusline bar) but gives the model no way to ask "how full am I?" about
 # itself. A worker is nonetheless told to `/fleet-handoff` *before* it runs out
-# (the standing charter in commands/fleet-claim.md), and the auto-handoff nudge
+# (its flow says so), and the auto-handoff nudge
 # (issue #330) only fires at a clean Stop — so mid-task, a worker deciding
 # whether to start one more expensive sweep is flying blind. This is the read
 # that closes that gap: ONE command, run from inside the pane, printing what

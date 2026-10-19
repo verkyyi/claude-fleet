@@ -928,20 +928,13 @@ fleet doctor --json
 来自 `fleet doctor`。
 
 - **是什么**：仓库里有没有 fleet 用的 issue 标签。
-- **WARN / FAIL 怎么办**：照说明里的 `fleet-labels-seed.sh --repo <仓库>` 补上。
-
-#### `tickets`
-
-来自 `fleet doctor`。
-
-- **是什么**：每个仓库的单子（issue、评论、标签）放在入口还是 GitHub；代码和 PR 不受影响。新加的仓库在连着入口的机器上默认放入口，之前就有的仓库保持 GitHub。
-- **WARN / FAIL 怎么办**：只有值写错（既不是 `hub` 也不是 `github`）才 WARN：改那个仓库设置里的 `FLEET_TICKETS`。
+- **WARN / FAIL 怎么办**：每个缺的跑 `gh label create <名字> --repo <仓库>` 补上。
 
 #### `overrides`
 
 来自 `fleet doctor`。
 
-- **是什么**：这个仓库自己改过的设置——它那份仓库设置（`repos/<slug>.conf`）里除仓库名、检出位置、主干分支、单子位置之外写下的每个键和值；覆盖了 fleet 级的值时，括号里写出原来的 `fleet:` 值。像凭据的键或值只显示 `<hidden>`。只写了身份时写「no setting of its own」。
+- **是什么**：这个仓库自己改过的设置——它那份仓库设置（`repos/<slug>.conf`）里除仓库名、检出位置、主干分支之外写下的每个键和值；覆盖了 fleet 级的值时，括号里写出原来的 `fleet:` 值。像凭据的键或值只显示 `<hidden>`。只写了身份时写「no setting of its own」。
 - **WARN / FAIL 怎么办**：只报状态，不会 WARN / FAIL。要改哪个设置，就改行尾点名的那个文件。
 
 #### `webhook`

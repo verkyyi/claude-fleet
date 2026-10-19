@@ -223,12 +223,6 @@ hasnt 'cleanup e runs'       "$out" "[o/e] cleanup off"
 hasnt 'fleet not skipped'    "$out" "$M: cleanup off"
 out=$(bash "$BIN/fleet-cleanup-daemon.sh" --dry-run $D 2>&1)
 has   'cleanup one repo'     "$out" "$D: [o/c] cleanup off (FLEET_CLEANUP=0) — skip"   # one road (#1941)
-printf 'hi\n' | bash "$BIN/fleet-control-read.sh" message $M o-b:issue-5 >/dev/null 2>&1
-eq 'bridge b off → 5' "$?" 5
-printf 'hi\n' | bash "$BIN/fleet-control-read.sh" message $M o-e:issue-5 >/dev/null 2>&1; rc=$?
-[ "$rc" != 5 ] || fail 'bridge e (fleet value 1) refused as off'
-printf 'hi\n' | bash "$BIN/fleet-control-read.sh" message $D issue-5 >/dev/null 2>&1
-eq 'bridge degenerate off → 5' "$?" 5
 has 'pool a (fleet)'   "$(bash "$BIN/scratch-pool.sh" status $M 2>&1)" "want=2"
 printf 'FLEET_REPO="o/a"\nFLEET_SCRATCH_POOL=0\n' > "$(fleet_repo_conf_file $M o/a)"
 has 'pool a (own overlay off)' "$(bash "$BIN/scratch-pool.sh" status $M 2>&1)" "want=0"

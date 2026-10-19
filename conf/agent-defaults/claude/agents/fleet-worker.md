@@ -6,5 +6,5 @@ model: opus
 # 正文故意留空：`claude --agent` 的正文会顶替 Claude Code 自己的系统提示，空正文则原样保留
 # （Claude Code ≥ 2.1.281）。怎么干活由 bin/fleet-worker-start-hook.sh 在 SessionStart 用
 # additionalContext 给出：带仓库的任务（@task T<n> + @task_flow，issue #4897）先用 brief 读记录，
-# 做完 report merged 收口；老的 issue 会话（批 1 删）仍先跑 /fleet-claim（issue #3331）。
+# 做完 report merged 收口；开在 GitHub issue 上的会话也走同一条路：brief → PR（`Closes #N`）→ 合 → report（issue #4898）。
 ---

@@ -45,9 +45,9 @@ opens on this machine, so an agent it has not installed is grey with why
 There is no second road (EPIC #2230 共同约定 1, issue #2618's rule): a ↵ writes
 the payload fleet-compose.py payload() makes — its compose-send.json, its
 compose-state.json for 「上次用的仓库」 — and calls fleet-compose.py's send() →
-fleet-client-place.sh <repo> new (the machine that takes it files the issue
-through fleet-issue-file.sh and opens its worker; with no lease it opens through
-this machine's own adapter), and the result goes on the 看台's client as a
+fleet-client-place.sh <repo> new (the machine that takes it opens the session
+bound to the hub's task record; with no lease it opens through this machine's own
+adapter), and the result goes on the 看台's client as a
 message. Nothing on the way calls a model or waits behind another session's
 turn.
 

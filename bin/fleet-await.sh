@@ -43,7 +43,7 @@
 # FLEET_AWAIT_STALL_SECS (default 1200; 0 = off) is escalated one rung at a time,
 # each rung FLEET_AWAIT_STALL_SECS after the last:
 #   1, 2  a short wake to the child                   (fleet-peer-send.sh)
-#   3     its task again: re-run fleet-claim-brief.sh  (C6's brief once it lands)
+#   3     its task again: re-read the `brief`        (fleet-peer-send.sh)
 #   4     the parent is told the child is stuck        (fleet-peer-send.sh)
 #   5     the operator: a `● #N · stalled` alert       (fleet-alerts.sh stall)
 # Every rung is a `wake` row in the parent's ledger (fleet-children.py), so a
@@ -374,9 +374,9 @@ ladder_fire() {
   idle=$(fmt_age "$(( $(date +%s) - L_ANCHOR ))")
   [ -n "$SOCK" ] && r+=(-L "$SOCK")
   case "$lv" in
-    1|2) msg="[fleet-await] #$NUM: no progress for $idle (state: $P_STATE) — wake $lv/5. Carry on with your task; if you are stuck, say why on the issue (⛔ blocked) instead of waiting."
+    1|2) msg="[fleet-await] #$NUM: no progress for $idle (state: $P_STATE) — wake $lv/5. Carry on with your task; if you are stuck, say why with the ask tool (⛔ blocked) instead of waiting."
          out=$(bash "$BIN/fleet-peer-send.sh" ${r[@]+"${r[@]}"} ${REPO_ARG:+--repo "$REPO_ARG"} "issue:$NUM" "$msg" 2>&1); rc=$? ;;
-    3)   msg="[fleet-await] #$NUM: still no progress after 2 wakes — wake 3/5. Re-read your task: run $BIN/fleet-claim-brief.sh (the issue + every comment), then continue, or post ⛔ blocked with the reason."
+    3)   msg="[fleet-await] #$NUM: still no progress after 2 wakes — wake 3/5. Re-read your task: call the fleet tool \`brief\`, then continue, or say ⛔ blocked with the ask tool."
          out=$(bash "$BIN/fleet-peer-send.sh" ${r[@]+"${r[@]}"} ${REPO_ARG:+--repo "$REPO_ARG"} "issue:$NUM" "$msg" 2>&1); rc=$? ;;
     4)   pw=$(fleet_win_for_key "$LEDGER" "$SOCK" 2>/dev/null | head -1)
          msg="[fleet-await] your child #$NUM${P_TITLE:+ ($P_TITLE)} has made no progress for $idle through 3 wakes (state: $P_STATE) — wake 4/5. Look at it: unblock it or make the call; the operator is alerted next."

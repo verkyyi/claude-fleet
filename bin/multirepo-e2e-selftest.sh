@@ -20,8 +20,7 @@
 #                                window + worktree, B's #12 window + worktree live.
 #   (c) issue-number collisions  spawn dedup and the
 #                                ledger row are keyed on (repo, 12); a worker's
-#                                fleet-comment.sh with no (or an empty) --repo
-#                                posts on its window's repo (issue #1461).
+#                                brief resolves its window's repo (issue #1461).
 #   (d) scratch/origin keys      origin keys are repo-qualified and resolve back
 #                                to the right repo's window.
 #   (e) one MAIN per reaper      the cleanup tick runs a pass per hosted repo.
@@ -109,8 +108,6 @@ case "$1 $2" in
       o/solo)  printf '[%s,%s]' "$(iss 12 'SOLO twelve')" "$(iss 5 'SOLO five')" | out ;;
       *)       printf '[]' | out ;;
     esac ;;
-  # fleet-comment.sh (issue #1461): the URL names the repo the comment went to.
-  "issue comment") printf 'https://github.com/%s/issues/%s#issuecomment-1\n' "$repo" "$3" ;;
   *) exit 1 ;;
 esac
 EOF
@@ -136,7 +133,7 @@ trap 'exit 130' INT TERM HUP
 
 export PATH="$WORK/bin:$PATH" HOME="$WORK/home" CLAUDE_CONFIG_DIR="$WORK/cc"
 export FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$WORK/tmp"
-export FLEET_GLOBAL_MAX_SESSIONS=999 FLEET_PRESPAWN_DEDUP=0 FLEET_SCRATCH_POOL=0
+export FLEET_GLOBAL_MAX_SESSIONS=999 FLEET_SCRATCH_POOL=0
 export FLEET_DISPATCH_LEASE_DIR="$WORK/leases" FLEET_LAND_LEASE_DIR="$WORK/leases"
 export FLEET_TRASH_SWEEP_BUDGET=0 GIT_ALLOW_PROTOCOL=file GIT_TERMINAL_PROMPT=0
 export GH_LOG="$WORK/gh.log" GH_SHA_A="$WORK/sha-a"
@@ -201,7 +198,8 @@ collect() {
 }
 
 
-cmt() { local w="$1"; shift; inpane "$w" env -u FLEET_REPO FLEET_GH_WRITE_GAP=0 bash "$BIN/fleet-comment.sh" "$@" --note --body hi 2>"$WORK/cmt.err"; }
+# brf <win> — the repo the pane's brief resolves (bin/fleet-brief.sh's `repo=`).
+brf() { local w="$1"; shift; inpane "$w" env -u FLEET_REPO bash "$BIN/fleet-brief.sh" "$@" 2>"$WORK/cmt.err" | sed -n 's/.*  repo=\([^ ]*\) .*/\1/p' | head -1; }
 
 if selftest_section 1; then
 # ==== setup: the second repo, with no gate ==========================================
@@ -299,18 +297,13 @@ chk d "o-beta:issue-12 resolves to B's window" "$(fleet_win_for_key o-beta:issue
 chk d "o-alpha:issue-12 resolves to A's window" "$(fleet_win_for_key o-alpha:issue-12 "$S")" "$wA"
 chk d "B's scratch key resolves to B's scratch" "$(fleet_win_for_key "$kS" "$S")" "$sB"
 
-# ==== (c) issue-number collisions: a comment lands on the WINDOW's repo (#1461) ============
-# The pane's env carries no FLEET_REPO (the claim brief resolves it from @repo, never
-# exports it), so `--repo "$FLEET_REPO"` is `--repo ""`; fleet.conf's FLEET_REPO is the
-# fleet's FIRST repo, and falling back to it posted B's #12 onto A's #12.
-chk c "B#12's bare comment lands on B" "$(cmt "$wB" 12)" "https://github.com/o/beta/issues/12#issuecomment-1"
-chk c "B#12's --repo \"\" comment lands on B" "$(cmt "$wB" 12 --repo '')" "https://github.com/o/beta/issues/12#issuecomment-1"
-chk c "A#12's bare comment lands on A" "$(cmt "$wA" 12)" "https://github.com/o/alpha/issues/12#issuecomment-1"
-chk c "an explicit --repo still wins in B's pane" "$(cmt "$wB" 12 --repo o/alpha)" "https://github.com/o/alpha/issues/12#issuecomment-1"
-out=$(cmt "$wN" 12); rc=$?
-[ "$rc" = 1 ] && [ -z "$out" ] && grep -q 'pass --repo' "$WORK/cmt.err" \
-  && ok "(c) a no-repo pane's bare comment refuses and asks for --repo" \
-  || leak c "a no-repo pane's bare comment [$rc] [$out] $(cat "$WORK/cmt.err")"
+# ==== (c) issue-number collisions: a pane resolves the WINDOW's repo (#1461) ===============
+# The pane's env carries no FLEET_REPO (the brief resolves it from @repo, never
+# exports it); fleet.conf's FLEET_REPO is the fleet's FIRST repo, and falling back
+# to it once posted B's #12 onto A's #12.
+chk c "B#12's brief names B" "$(brf "$wB")" "o/beta"
+chk c "A#12's brief names A" "$(brf "$wA")" "o/alpha"
+chk c "an explicit --repo still wins in B's pane" "$(brf "$wB" --repo o/alpha)" "o/alpha"
 
 fi
 
@@ -457,7 +450,7 @@ if [ -n "$wD" ]; then
   case "$(opt "$wD" @worktree)" in "$WORK/d/solo-issue-12") ok "(z) one-repo worktree in the sibling layout" ;;
     *) fail "(z) one-repo worktree: $(opt "$wD" @worktree)" ;; esac
 else fail "(z) no one-repo #12 window"; fi
-chk z "a one-repo worker's bare comment lands on its repo" "$(cmt "$wD" 12)" "https://github.com/o/solo/issues/12#issuecomment-1"
+chk z "a one-repo worker's brief names its repo" "$(brf "$wD")" "o/solo"
 bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1
 chk z "one-repo restore rows carry their repo, as in a 2-repo fleet" "$(awk -F'\t' '$1=="WIN" {print $16}' "$FLEET_CONF_DIR/fleets/$D/restore.map" 2>/dev/null | sort -u)" o/solo
 [ "$(ls "$FLEET_CONF_DIR/fleets/$D/repos")" = o-solo.conf ] && ok "(z) the one-repo fleet's repos/ still holds its one overlay" \

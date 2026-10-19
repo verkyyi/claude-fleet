@@ -61,7 +61,7 @@ from the hub and hands implementation to a worker. That hand-off is a worker
 spawn, never a writing subagent: `hooks/agent-guard.py` lets only the read-only
 `Explore` / `Plan` / `claude-code-guide` subagents through in a fleet pane
 (issue #811) — anything that writes code goes to `dash-issue-session.sh <N>` /
-`fleet-issue-file.sh --spawn` / `dash-raw-session.sh`, which is the only way it
+the `task` tool / `dash-raw-session.sh`, which is the only way it
 gets the dash, quota migration, one-worker-one-PR, history and handoff rails.
 When the result must come back before you go on — what a subagent gave for free —
 `fleet-await.sh <N>` spawns the worker and blocks on its outcome (issue #812).

@@ -67,7 +67,7 @@ agent_json() { printf '{"tool_name":"Agent","tool_input":%s}' "$1"; }
   # issue #4897: hand it to a TASK — the `task` tool (spawn: true) and `await` on its T<n>.
   case "$msg" in *'Fleet TASK'*'task (title'*'spawn: true'*) ;; *) printf 'FAIL: refusal must point at the task tool with spawn (got: %s)\n' "$msg" >&2; fails=$((fails + 1)) ;; esac
   case "$msg" in *'await (task: T<n>)'*) ;; *) printf 'FAIL: refusal must point at await on the T<n> — the synchronous hand-off (got: %s)\n' "$msg" >&2; fails=$((fails + 1)) ;; esac
-  case "$msg" in *dash-issue-session.sh*|*fleet-issue-file.sh*) printf 'FAIL: refusal must not send the work to a GitHub issue any more\n' >&2; fails=$((fails + 1)) ;; esac
+  case "$msg" in *dash-issue-session.sh*|*issue-file*) printf 'FAIL: refusal must not send the work to a GitHub issue any more\n' >&2; fails=$((fails + 1)) ;; esac
   case "$msg" in *Explore*) ;; *) printf 'FAIL: refusal must name Explore for read-only fan-out\n' >&2; fails=$((fails + 1)) ;; esac
   case "$msg" in *FLEET_ALLOW_SUBAGENT=1*) ;; *) printf 'FAIL: refusal must name the FLEET_ALLOW_SUBAGENT escape hatch\n' >&2; fails=$((fails + 1)) ;; esac
   # --- 4: fail-open

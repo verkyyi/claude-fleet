@@ -205,10 +205,9 @@ case "$mode" in
     # not a window's, and a batch nobody drives has no window to ride on, so every
     # row carries the same cell (the hub keeps only windows); the reader takes it
     # off any of them. Empty when there is none — the common case.
-    # Column 23 (issue #2235): `backfill=failed` on a session that started from the
-    # warm pool whose paperwork (fleet-start-backfill.sh: file the issue, bind the
-    # window) failed every try — @backfill; the sidebars mark the row
-    # 「单子没建上」. Empty on every other window, and while it is still filing.
+    # Column 23 (issue #2235): `backfill=failed` on a window an older warm start's
+    # paperwork (file the issue, bind the window — retired with #4898) left
+    # @backfill; the sidebars mark the row 「单子没建上」. Empty on every other window.
     # Columns 24-28 (issue #2431): the measurement bus, so `fleet ls` on any
     # computer shows each session's context LEFT · model · effort the way its
     # header does — `ctxleft=` (% left: @ctx_left, else 100 - @ctx_pct on a
@@ -495,8 +494,8 @@ case "$mode" in
   start)
     fleet_load_conf "$sess"
     # The one line a warm start's first turn carries after the person's words
-    # (issue #2234): its issue and branch come later (fleet-start-backfill.sh).
-    FLEET_START_NOTE='（单子和分支稍后会补给你，先开始。）'
+    # (issue #2234): its task record is the ticket (issue #4898).
+    FLEET_START_NOTE='（这件事记在 hub 的任务记录上，先开始。）'
     agent="${4:-${FLEET_AGENT:-claude}}"
     [ -n "$agent" ] || agent="${FLEET_AGENT:-claude}"
     case "$agent" in claude|codex) ;; *) printf 'start: unknown coding agent\n' >&2; exit 2 ;; esac
@@ -615,38 +614,25 @@ case "$mode" in
     fi
     num="${3:-}"
     if [ "$num" = new ]; then
-      # The client's writing area (issue #1953): the issue does not exist yet.
-      # $8 is its title (validated by the controller), the body is stdin. File
-      # it through the one filer channel AFTER the gates above (a refused start
-      # files nothing), print its URL first — the controller reads the number
-      # off it — then spawn exactly as an issue start does. A spawn refused after
-      # the filing leaves the issue on the backlog, and says so last; a filing
-      # that fails opens nothing (exit 7).
-      [ -n "$srepo" ] || { printf 'start: no repo to file the new issue in\n' >&2; exit 6; }
+      # The client's writing area (issue #1953): a new task. Since issue #4898 no
+      # issue is filed — the session opens in a worktree of the repo bound to the
+      # hub's task record (the start's --task), its first turn the person's words
+      # (the body, else $8, the title), reaped once the record is closed. No record
+      # ⇒ nothing opened (exit 7). With a ready window in this repo × agent's warm
+      # slot (发出即开, issue #2234) the start is answered from it: stdout is ONE
+      # line, `warm\t` + the receipt; an empty slot (exit 3) takes the cold path.
+      # FLEET_START_WARM=0 turns the warm path off.
+      [ -n "$srepo" ] || { printf 'start: no repo for the new task\n' >&2; exit 6; }
+      [ -n "$taskarg" ] || { printf 'start: a new task needs its hub record (--task T<n>) — nothing opened (#4898)\n' >&2; exit 7; }
       nbody=$(cat)
-      # 发出即开 (issue #2234, EPIC #2230 C4): with a ready window in this repo ×
-      # agent's warm slot, the start is answered from it — the person's words (the
-      # body, else the title) plus one line are SUBMITTED as its first turn, and
-      # the issue is filed and bound to that window afterwards, detached
-      # (fleet-start-backfill.sh). stdout is ONE line, `warm\t` + the receipt
-      # `<window_id>\t<name>\t<worktree>\t<fleet_id>\t<t_window>\t<t_ready>\t<t_prompt>`
-      # — no URL: nothing is filed yet. An empty slot (exit 3) takes the cold path
-      # below, byte for byte today's; FLEET_START_WARM=0 turns this off.
+      first=$nbody; [ -n "${first//[[:space:]]/}" ] || first=${8:-}
       if [ "${FLEET_START_WARM:-1}" != 0 ]; then
-        first=$nbody; [ -n "${first//[[:space:]]/}" ] || first=${8:-}
         wseed=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") || wseed=''
         if [ -n "$wseed" ] && printf '%s\n\n%s\n' "$first" "$FLEET_START_NOTE" > "$wseed"; then
-          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" --repo "$srepo" ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} --name "${8:-}" --reap "${9:-merged}" ${taskarg:+--task "$taskarg"} "--prompt-file=$wseed")
+          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" --repo "$srepo" ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} --name "${8:-}" --reap "${9:-merged}" --task "$taskarg" "--prompt-file=$wseed")
           wrc=$?; rm -f "$wseed"
           if [ "$wrc" = 0 ]; then
             rcpt=$(printf '%s\n' "$out" | awk 'NF { l = $0 } END { print l }')
-            win=${rcpt%%	*}
-            tf=$(mktemp "${TMPDIR:-/tmp}/fcr-title.XXXXXX") && printf '%s' "${8:-}" > "$tf"
-            bf=$(mktemp "${TMPDIR:-/tmp}/fcr-body.XXXXXX") && printf '%s' "$nbody" > "$bf"
-            # The controller's operation id (issue #2235): the paperwork stamps
-            # t_filed / t_bound on it. Anything not a UUID's characters is dropped.
-            op="${FLEET_CONTROL_OP:-}"; case "$op" in *[!0-9a-f-]*) op='' ;; esac
-            nohup bash "$BIN/fleet-start-backfill.sh" "$sess" "$win" "$srepo" "$tf" "$bf" ${op:+"$op"} </dev/null >/dev/null 2>&1 &
             printf 'warm\t%s\n' "$rcpt"
             exit 0
           fi
@@ -655,31 +641,9 @@ case "$mode" in
           [ -n "$wseed" ] && rm -f "$wseed"
         fi
       fi
-      url=$(FLEET_SESSION="$sess" bash "$BIN/fleet-issue-file.sh" --repo "$srepo" --from hub --title "${8:-}" ${nbody:+--body "$nbody"}) \
-        || { printf 'start: filing the new issue in %s failed\n' "$srepo" >&2; exit 7; }
-      printf '%s\n' "$url"
-      num="${url##*/}"; num="${num//[^0-9]/}"
-      [ -n "$num" ] || { printf 'start: the filed issue has no number: %s\n' "$url" >&2; exit 1; }
-      # its stderr is kept too (issue #3097): a caller reads only our LAST line,
-      # so a refusal's own reason rides in it rather than vanish above it
-      serr=$(mktemp "${TMPDIR:-/tmp}/fcr-spawn.XXXXXX" 2>/dev/null) || serr=/dev/null
-      # The person's words are the session's first turn (issue #3331): the body
-      # they wrote, else the title — handed over as a file, never an argv.
-      wordsf=$(mktemp "${TMPDIR:-/tmp}/fcr-words.XXXXXX" 2>/dev/null) || wordsf=''
-      if [ -n "$wordsf" ]; then
-        if [ -n "${nbody//[[:space:]]/}" ]; then printf '%s' "$nbody" > "$wordsf"; else printf '%s' "${8:-}" > "$wordsf"; fi
-      fi
-      bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${9:+--reap "$9"} ${taskarg:+--task "$taskarg"} ${wordsf:+--words-file "$wordsf"} 2>"$serr"
-      rc=$?
-      [ -n "$wordsf" ] && rm -f "$wordsf"
-      cat "$serr" >&2 2>/dev/null
-      if [ "$rc" != 0 ]; then
-        swhy=$(awk 'NF { l = $0 } END { print l }' "$serr" 2>/dev/null | tr '\t' ' ')
-        swhy=${swhy#dash-issue-session: }
-        printf 'start: filed #%s but its session did not open%s — it is on the backlog\n' "$num" "${swhy:+ ($swhy)}" >&2
-      fi
-      [ "$serr" = /dev/null ] || rm -f "$serr"
-      exit "$rc"
+      wordsf=$(mktemp "${TMPDIR:-/tmp}/fcr-words.XXXXXX") || { printf 'start: no temp file\n' >&2; exit 1; }
+      printf '%s\n' "$first" > "$wordsf"
+      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" --repo "$srepo" ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} --name "${8:-}" --reap "${9:-merged}" --task "$taskarg" "--prompt-file=$wordsf"
     fi
     # --print (issue #2237): the window it opened, last on stdout — the controller
     # reads that one window's row back instead of the whole fleet's.
@@ -689,34 +653,8 @@ case "$mode" in
   # $3 is issue-<N> / scratch-<N>; the window is re-resolved on the fleet at
   # action time (fleet-worker-stop.sh / dash-restore-session.sh), never taken
   # from the caller — a window number is an observation, not an address.
-  message)
-    # Body on stdin. Relayed by the issue bridge (fleet-issue-bridge.sh), never
-    # send-keys: the comment is the durable record AND the delivery. Exit 5 when
-    # the fleet has not opted into the bridge — a post would look delivered and
-    # reach nobody (issue #489).
-    fleet_load_conf "$sess"
-    key_repo_split "${3:-}"; n=${kbare#issue-}
-    case "$n" in ''|*[!0-9]*) exit 2 ;; esac
-    # The repo (issue #1938, one rule): the key's own, else the fleet's only repo,
-    # else the repo of the live window(s) bound to a bare N when they agree; none,
-    # two repos, or an unknown repo (`#N`) → refuse, never a guess.
-    repo=$krepo
-    [ -n "$repo" ] || repo=$( unset TMUX TMUX_PANE; fleet_target_repo "$sess" ) || repo=''
-    if [ -z "$repo" ]; then
-      repo=$(fleet_bound_windows "$sess" | awk -F'\t' -v s="#$n" '
-        { k = $1; if (substr(k, length(k) - length(s) + 1) != s) next
-          r = substr(k, 1, length(k) - length(s)); if (!(r in seen)) { seen[r] = 1; c++; last = r } }
-        END { if (c == 1 && last != "") print last }')
-      [ -n "$repo" ] || { printf 'message: #%s is not live in exactly one repo; name it <repo>:issue-%s\n' "$n" "$n" >&2; exit 2; }
-    fi
-    # The bridge is switched per repo (issue #978): the target repo's own value.
-    [ "$(fleet_repo_conf_get "$sess" "$repo" FLEET_ISSUE_BRIDGE)" = 1 ] || exit 5
-    set -- "$1" "$2" "$n"
-    case "${3:-}" in ''|*[!0-9]*) exit 2 ;; esac
-    exec bash "$BIN/fleet-comment.sh" "$3" --repo "$repo" --to-worker --from hub --body-file -
-    ;;
   # --- inject <sess> <key> (issue #1554) ---------------------------------------
-  # The hub's worker_message where `message` exited 5 (no issue bridge): hand the
+  # The hub's worker_message (the only road since #4898 took the issue-comment one): hand the
   # text, on stdin, to the live session directly through fleet-peer-send.sh — the
   # same local inbox channel SendMessage uses (queued if the worker is mid-turn,
   # wake-delivered to a sleeper, a Codex queue for Codex), never raw send-keys
@@ -733,19 +671,19 @@ case "$mode" in
     ;;
   # --- GitHub through the fleet's own rails (issue #1274) ----------------------
   # gh <sess> issue|pr|checks <N> [<repo>] [<fields>] — fleet-gh.sh: the daemons'
-  # local copy first, gh/REST only when it is too old. comment <sess> <N> [<repo>]
-  # — body on stdin, record-only (--note), through the per-token write queue.
-  # <repo> must be one this fleet hosts; with none, the fleet's only repo — a
-  # fleet hosting several must name it (6; fleet_target_repo, issue #1938).
-  gh|comment)
+  # local copy first, gh/REST only when it is too old. <repo> must be one this
+  # fleet hosts; with none, the fleet's only repo — a fleet hosting several must
+  # name it (6; fleet_target_repo, issue #1938). (`comment` left with #4898: exit 2.)
+  comment)
+    printf 'comment: removed (#4898) — the fleet writes no GitHub comments\n' >&2
+    exit 2
+    ;;
+  gh)
     fleet_load_conf "$sess"
-    if [ "$mode" = gh ]; then n=${4:-}; want=${5:-}; fields=${6:-}; else n=${3:-}; want=${4:-}; fi
+    n=${4:-}; want=${5:-}; fields=${6:-}
     case "$n" in ''|*[!0-9]*) exit 2 ;; esac
     if [ -n "$want" ]; then repo=$(fleet_repo_for_slug "$sess" "$want") || exit 6
     else repo=$( unset TMUX TMUX_PANE; fleet_target_repo "$sess" ) || exit 6
-    fi
-    if [ "$mode" = comment ]; then
-      exec bash "$BIN/fleet-comment.sh" "$n" --repo "$repo" --note --from hub --body-file -
     fi
     # TMPDIR: set at the top for every mode (issue #2355).
     case "${3:-}" in
@@ -756,31 +694,11 @@ case "$mode" in
     esac
     exec bash "$BIN/fleet-gh.sh" "$1" "$2" "$n" --repo "$repo" ${fields:+--json "$fields"}
     ;;
-  # --- taskissue <sess> <repo> <T<n>> <addr> <title> (issue #3325): a hub task
-  # record's 「建 GitHub 单」 — the body on stdin. Filed through the one filer
-  # channel (fleet-issue-file.sh, the URL printed first); then, when <addr> (the
-  # task's session: a key or its lifelong identity) is a window of this fleet
-  # that is bound to no issue, it is stamped `@issue N @repo <repo>` so a comment
-  # on the issue reaches it (the bridge matches a window by its @repo + @issue)
-  # and its top bar says #N. 6 = a repo this fleet does not host; 7 = not filed.
+  # --- taskissue (issue #3325): a task record's 「建 GitHub 单」 — removed with
+  # issue #4898 (the record is the only ticket): exit 7, nothing filed.
   taskissue)
-    fleet_load_conf "$sess"
-    trepo=$(fleet_repo_for_slug "$sess" "${3:-}") || { printf 'taskissue: %s is not a repo this fleet hosts\n' "${3:-}" >&2; exit 6; }
-    tref=${4:-}; taddr=${5:-}; ttitle=${6:-}
-    case "$tref" in T[1-9]*) case "${tref#T}" in *[!0-9]*) exit 2 ;; esac ;; *) exit 2 ;; esac
-    [ -n "$ttitle" ] || exit 2
-    tbody=$(cat)
-    url=$(FLEET_SESSION="$sess" bash "$BIN/fleet-issue-file.sh" --repo "$trepo" --from hub --title "$ttitle" ${tbody:+--body "$tbody"}) \
-      || { printf 'taskissue: filing in %s failed\n' "$trepo" >&2; exit 7; }
-    url=$(printf '%s\n' "$url" | awk '/\/issues\/[0-9]+$/ { u = $0 } END { print u }')
-    [ -n "$url" ] || { printf 'taskissue: the filer printed no issue URL\n' >&2; exit 7; }
-    printf '%s\n' "$url"
-    case "$taddr" in ''|*[!A-Za-z0-9:._-]*) exit 0 ;; esac
-    tsock=$(fleet_socket "$sess")
-    twin=$(fleet_win_for_addr "$taddr" "$tsock" 2>/dev/null) || exit 0
-    [ -n "$(tmux -L "$tsock" show-options -wqv -t "$twin" @issue 2>/dev/null)" ] && exit 0
-    tmux -L "$tsock" set-option -w -t "$twin" @repo "$trepo" \; set-option -w -t "$twin" @issue "${url##*/}" 2>/dev/null
-    exit 0
+    printf 'taskissue: removed (#4898) — the hub task record is the ticket\n' >&2
+    exit 7
     ;;
   stop)
     fleet_load_conf "$sess"

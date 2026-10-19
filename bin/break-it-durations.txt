@@ -24,13 +24,9 @@
 0.1 apply-reaches-app
 1.8 attach-cross-machine
 0.3 batch-green-unsaid
-1.7 bind-after-start-fails
 0.4 bootstrap-abroad
 3.9 bootstrap-reaches-github
 0.9 break-pane
-1.1 breakage-new-sha
-0.8 breakage-no-flag
-2.5 breakage-three-filers
 0.3 brew-keg-700
 0.1 browser-import-access-crossed
 0.1 burst-lands-on-one
@@ -47,7 +43,6 @@
 0.6 chat-socket-other-login
 1.7 ci-runner-hogs
 1.0 ci-runner-pr-code
-5.0 cleanup-ticket-home
 0.4 client-other-login-empty-list
 0.9 client-update-silent-fail
 0.7 client-verify-no-ccquota
@@ -285,7 +280,7 @@
 1.0 probe-ignores-relay
 0.7 probe-stale-after-release
 2.9 provisioner-off-template
-0.6 q-releases-claim
+0.6 q-leaves-issue
 0.2 quarantine-expired
 0.3 quarantine-one-red
 0.2 quarantine-pr-skips
@@ -404,8 +399,6 @@
 2.7 thin-notify-two-views
 2.4 thin-open-no-loop
 8.5 thin-view-lost-on-drop
-0.2 ticket-credential-pair
-2.6 ticket-hub-down
 0.2 tmpdir-foreign-owner
 0.2 tmpdir-shared-root
 1.2 tool-wait-idle
@@ -472,5 +465,4 @@
 0.3 rm-empty-var-prompt
 1.5 spare-ready-unverified
 6.0 codex-thread-lost
-0.9 breakage-wrong-red
 7.1 module-skip-wrong

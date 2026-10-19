@@ -236,7 +236,7 @@ cfg_update_nudge() {
     why="fleet 的会话配置已更新 (the fleet's session configuration changed: hooks, skills, MCP or settings)."
   fi
   if [ -n "$pr" ]; then
-    printf '%s' "$why This session was idle, so the fleet reopened it on the new version, same conversation. Your PR $pr is still open, and any wait you had running on it ended with the old process: continue the /fleet-claim ship — read the verdict (pr_verdict, wait on PENDING), merge on READY, then report to whoever spawned you.${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
+    printf '%s' "$why This session was idle, so the fleet reopened it on the new version, same conversation. Your PR $pr is still open, and any wait you had running on it ended with the old process: continue the ship — read the verdict (pr_verdict, wait on PENDING), merge on READY, then report to whoever spawned you.${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
     return 0
   fi
   printf '%s' "$why This session was idle, so the fleet reopened it on the new version, same conversation. Nothing to act on: if your task is finished, just stop; otherwise carry on.${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"

@@ -123,7 +123,7 @@ done
 
 note() { [ "$quiet" = 1 ] || printf 'fleet-pr-verdict: %s\n' "$1" >&2; }
 
-# Repo resolution mirrors bin/fleet-comment.sh: an explicit --repo wins (an EMPTY
+# Repo resolution: an explicit --repo wins (an EMPTY
 # one is no repo — `--repo "$FLEET_REPO"` from a multi-repo pane), else $CF_REPO
 # (passed through a popup); else fleet_target_repo — the pane's window repo (@repo),
 # the fleet's only repo, or a refusal, the same however many repos it hosts (issue

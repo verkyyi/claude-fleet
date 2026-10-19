@@ -39,10 +39,10 @@
 # `all` exits 2 listing the choices.
 #
 # DEFAULT IS READ-ONLY. `--fix` is the only thing that writes, and it writes
-# exactly one thing: bin/fleet-labels-seed.sh against this repo. That is opt-in
-# because seeding is not surgical — it creates the WHOLE canonical set, and a
-# team repo sprouting a dozen unexplained labels overnight is how an operator
-# loses the room. So the labels row reports, and the operator nods in PHASE1.
+# exactly one thing: the MISSING EPIC labels (`gh label create`, each with its
+# canonical colour and description — fleet_labels_canonical) in this repo. Opt-in,
+# because a team repo sprouting unexplained labels is how an operator loses the
+# room. So the labels row reports, and the operator nods in PHASE1.
 #
 # Exit codes — the three-way verdict the skill branches on:
 #   0  READY    every gate clear; plan away
@@ -133,17 +133,14 @@ if [ -n "$repo_arg" ] && [ -n "$conf_repo" ] && [ "$repo_arg" != "$conf_repo" ];
   note "--repo overrides the repo only: base/deploy/slots/quota below are still fleet $sess's (conf repo $conf_repo). Use --session for the other fleet's own knobs."
 fi
 
-# Where the repo's tickets live and whether it has a forge (issue #3599, EPIC
-# #3570 共同约定 1/3): a FLEET_TICKETS=hub repo's EPIC is hub tickets (parent field,
-# free labels) — read through the ticket door below, never `gh`; a FLEET_FORGE=none
-# repo has no GitHub at all, so no row below asks it. Both unset ⇒ today's rows.
-tk_home=$(fleet_ticket_home "$repo" "$sess")
+# Whether the repo has a forge (issue #3599): a FLEET_FORGE=none repo has no
+# GitHub at all, so no row below asks it.
 forge=$(fleet_repo_forge "$repo" "$sess")
 
 # --- gh: everything downstream is a gh call ------------------------------------
 gh_ok=0
 if [ "$forge" = none ]; then
-  pass gh "not needed — $repo has no forge (FLEET_FORGE=none): tickets on the hub, landing by fleet"
+  pass gh "not needed — $repo has no forge (FLEET_FORGE=none): landing by fleet"
 elif ! command -v gh >/dev/null 2>&1; then
   fail gh "not on PATH — an EPIC is issues, sub-issues and PRs end to end; none of it works without gh"
 elif ! fleet_gh auth status >/dev/null 2>&1; then
@@ -195,19 +192,12 @@ if [ "$gh_ok" = 1 ]; then
 fi
 
 # --- sub-issues API: the one capability with no workaround ---------------------
-# The EPIC shape IS parent→child (bin/fleet-issue-file.sh --parent). Where the API
+# The EPIC shape IS parent→child (a sub-issue per member). Where the API
 # is absent the batch degrades to a flat checklist in one issue body — workable,
 # but a different plan, so the operator has to agree to it. Hence: blocker.
 # Probing read-only means probing against an issue that already exists; the POST
 # side is covered by `perm` above.
-if [ "$tk_home" = hub ]; then
-  # The hub's tickets: one read through the door answers reachability + scope.
-  if tk_err=$(bash "$BIN/fleet-ticket.sh" list --repo "$repo" --state all --limit 1 2>&1 >/dev/null); then
-    pass subissue "$repo's tickets live on the hub — the EPIC and its members are hub tickets, linked by the parent field"
-  else
-    fail subissue "$repo's tickets live on the hub, and the hub did not answer (${tk_err##*fleet-ticket: }) — no EPIC can be filed or read until it does"
-  fi
-elif [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
+if [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
   if [ "$hasissues" = false ]; then
     fail subissue "$repo has ISSUES DISABLED — an EPIC is one parent issue plus a sub-issue per slice; turn issues on first"
   else
@@ -240,10 +230,6 @@ fi
 # fleet_labels_canonical, so the seeder installs them; the check is whether
 # THIS repo has been seeded at all.
 EPIC_LABELS='epic blocked'
-# The desk repo also needs `desk` (issue #2676): a no-code session of the batch
-# is ticketed there with it (fleet-ticket.sh new).
-[ "$(fleet_norm_repo "$repo")" = "$(fleet_norm_repo "${FLEET_DESK_REPO:-verkyyi/claude-fleet}")" ] \
-  && EPIC_LABELS="$EPIC_LABELS desk"
 labels_missing() {  # rc 1 = the label list could not be read under a GraphQL limit
   local have miss='' l
   if [ -n "$gql_limited" ]; then
@@ -257,26 +243,26 @@ labels_missing() {  # rc 1 = the label list could not be read under a GraphQL li
   done
   printf '%s' "${miss# }"
 }
-if [ "$tk_home" = hub ]; then
-  pass labels "$(printf '%s' "$EPIC_LABELS" | sed 's/ / · /g') — a hub ticket's labels are free text, nothing to seed"
-elif [ "$gh_ok" = 1 ] && [ -n "$perm" ] && ! missing=$(labels_missing); then
+if [ "$gh_ok" = 1 ] && [ -n "$perm" ] && ! missing=$(labels_missing); then
   warn labels "GitHub rate-limited$(gh_until) — could not list $repo's labels over REST either; $(printf '%s' "$EPIC_LABELS" | sed 's/ / · /g') unverified"
 elif [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
   if [ -n "$missing" ] && [ "$do_fix" = 1 ]; then
-    # The seeder is idempotent (`gh label create --force`) and reconciles the WHOLE
-    # canonical set, not just the missing three — that breadth is exactly why this
-    # needs --fix. Re-read afterwards rather than trusting its exit code.
-    n_canon=$(fleet_labels_allowed | grep -c .)
-    note "--fix: seeding this repo's canonical label set ($n_canon labels) via fleet-labels-seed.sh …"
-    bash "$BIN/fleet-labels-seed.sh" --repo "$repo" >/dev/null 2>&1
+    # Only the missing ones, each with its canonical colour + description; re-read
+    # afterwards rather than trusting gh's exit code.
+    note "--fix: creating the missing label(s)$missing in $repo …"
+    for l in $missing; do
+      row=$(fleet_labels_canonical | awk -F'|' -v n="$l" '$1 == n { print; exit }')
+      IFS='|' read -r _ lcolor ldesc <<<"$row"
+      fleet_gh label create "$l" ${lcolor:+--color "$lcolor"} ${ldesc:+--description "$ldesc"} --force --repo "$repo" >/dev/null 2>&1
+    done
     missing=$(labels_missing)
   fi
   if [ -z "$missing" ]; then
     pass labels "$(printf '%s' "$EPIC_LABELS" | sed 's/ / · /g') all present in $repo"
   elif [ "$do_fix" = 1 ]; then
-    fail labels "still missing after --fix:$missing — \`gh label create\` failed (rerun \`bash $BIN/fleet-labels-seed.sh --repo $repo\` to see why)"  # no-gh-ok: a hint
+    fail labels "still missing after --fix:$missing — \`gh label create\` failed (run \`gh label create <name> --repo $repo\` by hand to see why)"  # no-gh-ok: a hint
   else
-    fixme labels "missing in $repo: $missing — rerun with --fix to seed them (that seeds the FULL canonical set, so on a team repo get the nod first)"
+    fixme labels "missing in $repo: $missing — rerun with --fix to create them (on a team repo get the nod first)"
   fi
 fi
 

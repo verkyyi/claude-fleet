@@ -666,18 +666,8 @@ _gh_hour="${_gh_hour}${_gh_share:+${_gh_hour:+ · }$_gh_share}"
 _gh_down=''
 # shellcheck disable=SC2016
 [ -f "$_gh_lib" ] && _gh_down=$(bash -c '. "$1" || exit 1; fleet_gh_down_line' _ "$_gh_lib" 2>/dev/null)
-# Ticket writes kept while GitHub did not answer (issue #4844): 「待补 N 条，最早 X 分钟前」,
-# and a WARN for any that could not be made for 24 h (gh-outbox/stuck/).
-_gh_ob='' _gh_stuck=0
-if [ -f "$_gh_lib" ] && [ -f "$(dirname "$0")/fleet_gh_outbox.py" ]; then
-  _gh_ob=$(python3 "$(dirname "$0")/fleet_gh_outbox.py" line 2>/dev/null)
-  _gh_stuck=$(python3 "$(dirname "$0")/fleet_gh_outbox.py" count 2>/dev/null | awk '{ print $3 + 0 }')
-fi
-_gh_hour="${_gh_ob:+$_gh_ob${_gh_hour:+ · }}${_gh_hour}"
 if [ -n "$_gh_down" ]; then
   warn github "$_gh_down — GitHub calls return at once (rc 75) until a probe gets an answer; the background keeps its last copies${_gh_hour:+ · $_gh_hour}"
-elif [ "${_gh_stuck:-0}" -gt 0 ]; then
-  warn github "some kept ticket writes GitHub refused for 24 h; read them with \`python3 bin/fleet_gh_outbox.py list\`, redo by hand, then delete${_gh_hour:+ · $_gh_hour}"
 elif [ -n "$_gh_rows" ]; then
   _gh_msg=$(printf '%s\n' "$_gh_rows" | awk 'NF { printf "%s%s", (n++ ? "; " : ""), $0 }')
   warn github "$_gh_msg — the shared account limit, not a permission problem: GraphQL calls fall back to REST until then${_gh_hour:+ · $_gh_hour}"
@@ -713,9 +703,9 @@ fi
 #
 #   plugin  `/plugin install fleet@claude-fleet` — commands, skills and the hook
 #           table together, updated by `/plugin update`. Typed NAMESPACED:
-#           `/fleet:fleet-claim`.
+#           `/fleet:fleet-handoff`.
 #   copy    commands/*.md → ~/.claude/commands/ (the historic path, still
-#           supported). Typed bare: `/fleet-claim`.
+#           supported). Typed bare: `/fleet-handoff`.
 #
 # Each fleet skill carries a `fleet skill · owner:` marker just under its title
 # (see commands/README.md); count how many landed in the copy dir. Match only the
@@ -736,12 +726,12 @@ fi
 # moves on EVERY update, so glob it rather than remembering one.
 plug=0
 for _d in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/fleet/*/; do
-  [ -f "$_d/commands/fleet-claim.md" ] && { plug=1; break; }
+  [ -f "$_d/commands/fleet-handoff.md" ] && { plug=1; break; }
 done
 if [ "$n" -gt 0 ] && [ "$plug" = 1 ]; then
-  pass commands "$n fleet command(s) in $cmd_dir + the fleet plugin (both resolve; the bare /fleet-claim wins)"
+  pass commands "$n fleet command(s) in $cmd_dir + the fleet plugin (both resolve; the bare /fleet-handoff wins)"
 elif [ "$plug" = 1 ]; then
-  pass commands "fleet plugin installed — commands are namespaced (/fleet:fleet-claim), updated by /plugin update"
+  pass commands "fleet plugin installed — commands are namespaced (/fleet:fleet-handoff), updated by /plugin update"
 elif [ "$n" -gt 0 ]; then
   pass commands "$n fleet command(s) in $cmd_dir (copy install; \`/plugin install fleet@claude-fleet\` replaces the copying)"
 elif [ -d "$cmd_dir" ]; then
@@ -1515,7 +1505,7 @@ fi
 
 # --- cleanup daemon (reaps worktrees + records the resume ledger after merges) ---
 # ON by default per fleet (opt out with FLEET_CLEANUP=0). THIS DAEMON NEVER MERGES:
-# the worker's /fleet-claim ship+land step merges its own PR (#441); this daemon reaps
+# the worker's pr_merge step merges its own PR (#441); this daemon reaps
 # the leftover worktree/window/branch once a PR is final. It merges nothing, so there's no approval-gate warning
 # — but it needs gh to read PR state, and it needs com.claude-fleet.cleanup installed.
 if [ -d "$conf_dir" ]; then
@@ -3851,7 +3841,7 @@ EOF
     pass deploy "$r: no deploy state configured — MERGED ≡ done"
   fi
 
-  # labels — the filer rejects any label outside the canonical set, and gh starts empty
+  # labels — the EPIC driver labels members from the canonical set, and gh starts empty
   if [ -n "$canon_labels" ] && [ -n "$bdef" ] && [ "$rforge" != none ]; then
     have=$(printf '%s\n' "$gh_out" | sed 1d)
     # `repo view` returns the first 100 labels only; page the full list past that
@@ -3864,20 +3854,9 @@ EOF
     if [ -z "$missing" ]; then
       pass labels "$r: every fleet label is seeded"
     else
-      warn labels "$r: missing fleet labels:$missing — filing an issue with one fails; fix: $(dirname "$0")/fleet-labels-seed.sh --repo $r"
+      warn labels "$r: missing fleet labels:$missing — an EPIC filed with one fails; fix: \`gh label create <name> --repo $r\` for each"  # no-gh-ok: a hint
     fi
   fi
-
-  # tickets — where this repo's issues / comments / labels live (issue #3739): the
-  # hub or GitHub (its code and PRs stay on its forge either way). Unset = github,
-  # which `fleet-conf.sh migrate` writes down for a repo hosted before the default.
-  rtk=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" FLEET_TICKETS)
-  case "$rtk" in
-    hub)    pass tickets "$r: tickets on the hub (FLEET_TICKETS=hub) — change: FLEET_TICKETS in $rb_src" ;;
-    github) pass tickets "$r: tickets on GitHub (FLEET_TICKETS=github) — change: FLEET_TICKETS in $rb_src" ;;
-    '')     pass tickets "$r: tickets on GitHub (FLEET_TICKETS unset; \`fleet-conf.sh migrate\` writes it down)" ;;
-    *)      warn tickets "$r: FLEET_TICKETS=\"$rtk\" is neither hub nor github — read as github; fix it in $rb_src" ;;
-  esac
 
   # settings — what THIS repo changed on its own (issue #1944): every key its
   # overlay assigns beyond the identity the rows above already show, its value
@@ -3886,7 +3865,7 @@ EOF
   if [ -n "$rb_ov" ]; then
     rb_set=''
     for rb_k in $(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)=.*/\2/p' "$rb_ov" | awk '!s[$0]++'); do
-      case "$rb_k" in FLEET_REPO|FLEET_MAIN|FLEET_BASE_BRANCH|FLEET_TICKETS) continue ;; esac
+      case "$rb_k" in FLEET_REPO|FLEET_MAIN|FLEET_BASE_BRANCH|FLEET_TICKETS) continue ;; esac   # FLEET_TICKETS: an old overlay's, read by nothing (#4898)
       rb_v=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" "$rb_k")
       rb_fv=$(_conf_val "$rb_cf" "$rb_k"); [ -n "$rb_fv" ] || rb_fv=$(_gconf_val "$rb_k")
       case "$rb_k" in *TOKEN*|*SECRET*|*PASSW*|*CRED*|*_KEY|*APIKEY*) rb_v='<hidden>'; rb_fv='' ;; esac

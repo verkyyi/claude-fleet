@@ -116,10 +116,6 @@ class Control:
         env.pop("FLEET_CONTROL_DRAFT", None)
         if draft:
             env["FLEET_CONTROL_DRAFT"] = "1"
-        if op_id:
-            # The operation a start belongs to (issue #2235): its detached
-            # paperwork (fleet-start-backfill.sh) stamps t_filed / t_bound on it.
-            env["FLEET_CONTROL_OP"] = op_id
         if dispatch:
             env["FLEET_DISPATCH"] = json.dumps(dispatch, separators=(",", ":"))
         if launch:
@@ -603,18 +599,9 @@ class Control:
             if not key.rsplit(":", 1)[-1].startswith("issue-"):
                 raise Unattempted("INVALID_ARGUMENT", "A scratch session has no issue channel to message")
             matches, _ = self.target(fleet, key, action)
-            # A repo-qualified key goes whole: the adapter resolves its repo (#1018).
-            code, output, err = self.adapter("message", fleet["name"], key if ":" in key else key[len("issue-"):],
-                                             payload=params["text"].encode("utf-8"), timeout=60)
-            if code == 5:
-                return self.execute_inject(fleet, matches, params["text"])
-            if code == 2:
-                raise Unattempted("EXECUTION_FAILED", "Fleet refused the message; inspect local Fleet logs")
-            if code:
-                raise Fault("UNKNOWN_OUTCOME", "Comment post did not confirm; inspect the issue before retrying")
-            return {"channel": "issue-bridge", "comment_url": output.decode("utf-8").strip(),
-                    "delivery": "relayed by the fleet's issue bridge on its next idle tick",
-                    "workers": matches, "observed_at": now()}
+            # Straight to the live session (issue #4898: the comment road that the
+            # issue bridge relayed left with the issue layer).
+            return self.execute_inject(fleet, matches, params["text"])
         if action == "worker_stop":
             matches, _ = self.target(fleet, key, action)
             if matches[0]["lifecycle"] != "awake":
@@ -673,22 +660,19 @@ class Control:
         return body
 
     def execute_inject(self, fleet, matches, text):
-        """worker_message on a fleet without the issue bridge (issue #1554): this
-        node IS the worker's machine, so the text goes to the live session
-        directly — fleet-peer-send.sh, the local inbox channel SendMessage uses,
-        never keystrokes. No comment means no GitHub record, so this needs
-        exactly ONE live window: the bridge path may post to an issue several
-        windows share, a direct send must pick none of them on a guess."""
+        """worker_message (issue #1554; the only road since #4898): this node IS
+        the worker's machine, so the text goes to the live session directly —
+        fleet-peer-send.sh, the local inbox channel SendMessage uses, never
+        keystrokes. It needs exactly ONE live window: a direct send picks none of
+        several on a guess."""
         if len(matches) > 1:
-            raise Unattempted("AMBIGUOUS", "Several live windows hold this identity and the fleet has no issue bridge; "
-                                           "resolve them on the fleet first")
+            raise Unattempted("AMBIGUOUS", "Several live windows hold this identity; resolve them on the fleet first")
         code, output, err = self.adapter("inject", fleet["name"], matches[0]["key"],
                                          payload=text.encode("utf-8"), timeout=60)
         if code:
-            raise Unattempted("EXECUTION_FAILED", "No issue bridge on this fleet, and direct delivery was refused: "
-                              + last_line(err))
+            raise Unattempted("EXECUTION_FAILED", "Direct delivery was refused: " + last_line(err))
         return {"channel": "direct", "how": last_line(output),
-                "delivery": "straight to the live session (no issue bridge on this fleet, so no issue comment)",
+                "delivery": "straight to the live session",
                 "workers": matches, "observed_at": now()}
 
     # The two answer scripts' exit codes, both the same shape (fleet-answer.sh /
@@ -909,35 +893,12 @@ class Control:
             params = req["params"]
             if req["action"] in WORKER_ACTIONS:
                 result = self.execute_worker(fleet, req["action"], params, req.get("actor", ""))
-            elif req["action"] == "gh_comment":
-                # Record-only (fleet-comment.sh --note) through the per-token
-                # write queue; reaching a live worker is worker_message's job.
-                attempted = True
-                code, output, err = self.adapter("comment", fleet["name"], str(params["issue"]), params.get("repo", ""),
-                                                 payload=params["body"].encode("utf-8"), timeout=900)
-                if code == 6:
-                    raise Unattempted("INVALID_ARGUMENT", "Name a repo this fleet hosts (owner/name)")
-                if code:
-                    raise Fault("UNKNOWN_OUTCOME", "Comment post did not confirm; inspect the issue before retrying")
-                result = {"comment_url": output.decode("utf-8").strip(), "channel": "record",
-                          "delivery": "record only; a live worker on this issue does not see it (use worker_message)",
-                          "observed_at": now()}
-            elif req["action"] == "task_issue":
-                # issue #3325: a hub task record's 「建 GitHub 单」 — the issue filed
-                # here through the one filer channel (fleet-issue-file.sh), and the
-                # task's session bound to it when it is this fleet's and has none.
-                # Prints the issue URL first; the binding is best effort.
-                attempted = True
-                wid = params.get("worker_id", "")
-                code, output, err = self.adapter("taskissue", fleet["name"], params["repo"], params["task"],
-                                                 wid.split("/", 1)[1] if "/" in wid else "", params["title"].strip(),
-                                                 payload=(params.get("body") or "").encode("utf-8"), timeout=120)
-                url = output.decode("utf-8", "replace").split("\n", 1)[0].strip()
-                if code == 6:
-                    raise Unattempted("INVALID_ARGUMENT", "Name a repo this fleet hosts (owner/name)")
-                if code or not re.fullmatch(r"https://[^/\s]+/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*", url):
-                    raise Fault("EXECUTION_FAILED", "The issue was not filed: " + last_line(err if (err or b"").strip() else output))
-                result = {"issue_url": url, "observed_at": now()}
+            elif req["action"] in ("gh_comment", "task_issue"):
+                # The fleet writes no GitHub issue or comment any more (issue
+                # #4898): the hub task record is the only ticket. An older hub
+                # may still send these — refused, nothing done.
+                raise Unattempted("INVALID_ARGUMENT", "%s was removed (claude-fleet#4898): the hub task record is "
+                                  "the ticket; reach a worker with worker_message" % req["action"])
             elif req["action"] == "worker_start":
                 # No --force, arbitrary argv, paths, environment or shell input.
                 attempted = True
@@ -973,10 +934,11 @@ class Control:
                                                      timeout=180, dispatch=params.get("dispatch"), launch=params.get("launch"), task=params.get("task"), draft="draft" in params)
                 elif filed:
                     # issue #1953: the client's writing area — the adapter's start
-                    # with `new` for the issue and the title (validated above) where
-                    # a scratch has its name; the body rides stdin, never an argv.
-                    # It files the issue, prints its URL first, then spawns as an
-                    # issue start does.
+                    # with `new` and the title (validated above) where a scratch
+                    # has its name; the body rides stdin, never an argv. Since
+                    # issue #4898 nothing is filed: the session opens bound to the
+                    # hub's task record (dash-raw-session.sh --repo --task) and its
+                    # receipt reads like a scratch's.
                     code, output, err = self.adapter("start", fleet["name"], "new", params.get("agent", ""),
                                                      params.get("repo", ""), params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params["title"].strip(),
@@ -986,14 +948,9 @@ class Control:
                     if not code and first.startswith("warm\t"):
                         # 发出即开 (issue #2234, EPIC #2230 C4): answered from the warm
                         # pool — the window is a scratch already working on the
-                        # person's words; its issue is filed and bound afterwards.
+                        # person's words.
                         warm = True
                         output = first[len("warm\t"):].encode("utf-8")
-                    elif not code:
-                        number = re.search(r"/issues/([1-9][0-9]*)$", first)
-                        if not number:
-                            raise Fault("UNKNOWN_OUTCOME", "The issue was filed but its number did not come back")
-                        params = dict(params, issue=int(number.group(1)))
                 else:
                     code, output, err = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""),
                                                      params.get("repo", ""), params.get("origin_wid", ""),
@@ -1001,7 +958,7 @@ class Control:
                                                      timeout=180, task=params.get("task"), dispatch=params.get("dispatch"), launch=params.get("launch"))
                 if code:
                     # 6 = no repo named in a fleet hosting several, or one it does not host (#984).
-                    # 7 = a new issue (issue #1953) that could not be filed: nothing was opened.
+                    # 7 = a new start with no task record (issue #4898): nothing was opened.
                     # 8 = the fleet's tmux server is not running (issue #2477): nothing was opened.
                     reasons = {2: "AT_CAPACITY", 3: "ALREADY_CLAIMED", 4: "RESOURCE_GATE", 6: "INVALID_ARGUMENT",
                                7: "EXECUTION_FAILED", 8: "UNAVAILABLE"}
@@ -1044,7 +1001,7 @@ class Control:
                 # alone is read. No id (an older spawn), or the window it names is
                 # not the worker: the whole fleet, as before.
                 lines = output.decode("utf-8", "replace").split("\n")
-                receipt = (lines[0] if scratch or warm else ([l for l in lines if l.strip()] or [""])[-1]).split("\t")
+                receipt = (lines[0] if scratch or warm or filed else ([l for l in lines if l.strip()] or [""])[-1]).split("\t")
                 window = receipt[0].strip()
                 # Its 4th field is the window's @fleet_id (issue #1873): identity
                 # first (issue #2339) — a no-repo session (`fleet claude`) has no
@@ -1054,7 +1011,7 @@ class Control:
                 fid = fid if is_identity(fid) else ""
 
                 def started(snapshot):
-                    if scratch or warm:
+                    if scratch or warm or filed:
                         if fid:
                             return [w for w in snapshot["workers"] if w.get("identity") == fid]
                         # The receipt names the window: that row, and only that row.
@@ -1107,14 +1064,12 @@ class Control:
                 # `<t_window> <t_ready> <t_prompt>` after the four fields — the
                 # claim, the input seen idle, the first turn submitted. Its window
                 # and key ride at the top for the client to switch to at once
-                # (共同约定 3); `filed: pending` = the issue is still being made.
+                # (共同约定 3).
                 stamps = dict(zip(("t_window", "t_ready", "t_prompt"),
                                   (f.strip() for f in receipt[4:7])))
                 warmed = {k: int(v) for k, v in stamps.items() if v.isdigit()}
                 if warmed:
                     result["timing"].update(warmed)
-                    if warm:
-                        result["filed"] = "pending"
             elif req["action"] == "worker_move_in":
                 result = self.execute_move_in(fleet, params)
                 attempted = True
@@ -1130,7 +1085,7 @@ class Control:
             self.finish(op_id, "succeeded", result)
             if req["action"] == "worker_start" and result.get("window"):
                 # A start without a seed is ready the moment its agent is up; a
-                # seeded one (an issue's /fleet-claim, a scratch's text) first
+                # seeded one (an issue's words, a scratch's text) first
                 # runs that turn — its `t_prompt` is when the turn began.
                 # Never the start's outcome: it is already written, and an error
                 # here must not reach the `unknown` below.
@@ -1186,10 +1141,6 @@ class Control:
         raise Fault("INVALID_ARGUMENT", "Unsupported control method")
 
 
-# The points a start's paperwork stamps after its operation finished (issue #2235).
-STAMP_POINTS = ("t_filed", "t_bound")
-
-
 def ms(seconds):
     """Epoch seconds → the integer epoch milliseconds a timing point is (issue #2238)."""
     return int(round(seconds * 1000))
@@ -1224,11 +1175,8 @@ def refusal_line(err):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--conf-dir")
-    parser.add_argument("command", choices=("rpc", "execute", "stamp"))
+    parser.add_argument("command", choices=("rpc", "execute"))
     parser.add_argument("operation_id", nargs="?")
-    # stamp (issue #2235): `<name>=<epoch ms>` points a start's detached paperwork
-    # adds to its finished operation — only the names 共同约定 3 fixed.
-    parser.add_argument("points", nargs="*")
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
@@ -1236,17 +1184,6 @@ def main(argv=None):
         if args.command == "execute":
             controller.execute(args.operation_id)
             return 0
-        if args.command == "stamp":
-            points = {}
-            for word in args.points:
-                key, _, value = word.partition("=")
-                if key not in STAMP_POINTS or not value.isdigit():
-                    raise Fault("INVALID_ARGUMENT", "Expected t_filed=<ms> / t_bound=<ms>")
-                points[key] = int(value)
-            if not points:
-                raise Fault("INVALID_ARGUMENT", "Nothing to stamp")
-            # 1 = no such operation, or its result is not written yet: try again.
-            return 0 if controller.stamp_timing(identifier(args.operation_id or ""), **points) else 1
         result = controller.dispatch(read_request(sys.stdin.buffer))
         print(canonical({"protocol": PROTOCOL, "machine_id": controller.machine_id, "result": result}))
     except Fault as exc:

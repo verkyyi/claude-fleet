@@ -18,8 +18,8 @@
 # move under a running batch — between two ticks the loop's own pane is idle and
 # its workers sit idle while CI runs, so no busy gate can see the batch. EPIC #883
 # already lost a batch this way by hand: C5's worker ran /fleet-sync-install after
-# its own merge and reloaded a daemon under the other workers. /fleet-claim now
-# tells a worker not to; this mark is the same rule for the automatic path.
+# its own merge and reloaded a daemon under the other workers. The worker's flow
+# tells it not to; this mark is the same rule for the automatic path.
 #
 # ONE MARK PER BATCH (issue #2062). On 2026-10-07 two loops (#1935, #1982) ran on
 # one login and shared ONE file: whichever wrote last was the only batch anyone

@@ -1546,7 +1546,7 @@ def fleet_plugin_wires_hooks():
     itself — KEEP IN SYNC with fleet_plugin_installed / fleet-doctor's glob."""
     import glob
     cdir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
-    return bool(glob.glob(os.path.join(cdir, "plugins", "cache", "*", "fleet", "*", "commands", "fleet-claim.md")))
+    return bool(glob.glob(os.path.join(cdir, "plugins", "cache", "*", "fleet", "*", "commands", "fleet-handoff.md")))
 
 
 class Session:

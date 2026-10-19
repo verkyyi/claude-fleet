@@ -34,7 +34,7 @@
 #      fleet → rc 2, and fleet-await --repo B waits on B's #N, never A's; a
 #      `<sess>:<idx>` position and a window NAME are refused by fleet-peer-send.sh,
 #      fleet-answer.sh, fleet-permission.sh and fleet_worker_locate (exit 2); inside
-#      tmux with no TMUX_PANE fleet-comment.sh refuses before any gh call, and the
+#      tmux with no TMUX_PANE a script reads its pane through fleet_pane_fmt, and the
 #      five pane-identity reads go through fleet_pane_fmt; an unstamped @wid handle
 #      is refused by fleet_wid_target and every caller checks its rc.
 #      F6 (issue #1939): a ONE-repo fleet's keys carry the repo too
@@ -295,21 +295,11 @@ run bash "$BIN/fleet-answer.sh" -L "$L" --show plan;          ok; [ "$rc" = 2 ] 
 run bash "$BIN/fleet-permission.sh" -L "$L" --show "$L:1";    ok; [ "$rc" = 2 ] || fail "F5: fleet-permission <sess>:<idx> → exit 2" "rc=$rc $err"
 loc "$L:1" "$L";    ok; [ "$out" = unknown ] && [ "$rc" = 2 ] || fail "F5: fleet_worker_locate <sess>:<idx> → unknown rc 2" "$out rc=$rc"
 
-# F6 the caller's own pane or nothing: inside tmux with no TMUX_PANE, fleet-comment
-#    refuses before any gh call; a daemon (no \$TMUX) posts as before
-SB="$WORK/sbin"; mkdir -p "$SB"
-printf '#!/bin/sh\ntouch "%s/gh-called"; exit 0\n' "$WORK" > "$SB/gh"; chmod +x "$SB/gh"
-sp=$(tf display-message -p '#{socket_path}')
-out=$(PATH="$SB:$PATH" TMUX="$sp,1,0" env -u TMUX_PANE bash "$BIN/fleet-comment.sh" 7 --repo acme/app --body hi 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err")
-ok; [ "$rc" = 2 ] && case "$err" in *TMUX_PANE*) true ;; *) false ;; esac || fail "F6: fleet-comment inside tmux with no TMUX_PANE → exit 2" "rc=$rc $err"
-ok; [ ! -e "$WORK/gh-called" ] || fail "F6: nothing posted — gh must never be called"
-out=$(PATH="$SB:$PATH" env -u TMUX -u TMUX_PANE bash "$BIN/fleet-comment.sh" 7 --repo acme/app --body hi 2>"$WORK/err"); rc=$?
-ok; [ -e "$WORK/gh-called" ] || fail "F6: a daemon with no \$TMUX still posts" "rc=$rc $(cat "$WORK/err")"
-for f in fleet-comment.sh fleet-claim-brief.sh fleet-evidence.sh; do
+# F6 the caller's own pane or nothing: a script reads its pane through fleet_pane_fmt
+for f in fleet-brief.sh fleet-report-parent.sh; do
   ok; grep -q 'display-message -p -t "\${TMUX_PANE:-}"' "$BIN/$f" && fail "F6: $f still reads -t \"\${TMUX_PANE:-}\" — use fleet_pane_fmt"
 done
 ok; sed -n '/^fleet_seat()/,/^}/p' "$BIN/fleet-lib.sh" | grep -q fleet_pane_fmt || fail "F6: fleet_seat must read its pane through fleet_pane_fmt"
-ok; sed -n '/^fleet_from_marker()/,/^}/p' "$BIN/fleet-lib.sh" | grep -q fleet_pane_fmt || fail "F6: fleet_from_marker must read its pane through fleet_pane_fmt"
 ok; grep -q 'TMUX_PANE=' "$BIN/dash-popup.sh" || fail "F6: dash-popup.sh must hand its TMUX_PANE to the popup (a popup has none)"
 
 # F7 an unstamped @wid handle is refused — never handed to tmux as a window NAME

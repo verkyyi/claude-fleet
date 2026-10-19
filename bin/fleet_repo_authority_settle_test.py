@@ -46,7 +46,7 @@ class FakeHub:
         elif a == "stopped" and s["phase"] == "observed" and body.get("native_identity") == s["native_identity"] and body.get("execution_stopped"):
             s["phase"] = "stopped"
         else:
-            raise migration.ticket.Fail(1, "HTTP 409 fence token=SECRET-X")
+            raise migration.hubrest.Fail(1, "HTTP 409 fence token=SECRET-X")
         return {k: v for k, v in s.items() if k != "updated"}
 
     def open(self, repo):
@@ -73,7 +73,7 @@ class SettleTests(unittest.TestCase):
 
     def run_settle(self, hub, held, apply):
         out = io.StringIO()
-        with patch.object(migration.ticket, "api", side_effect=hub.api), \
+        with patch.object(migration.hubrest, "api", side_effect=hub.api), \
                 patch.object(migration, "held_text", return_value=held), contextlib.redirect_stdout(out):
             migration.main(["org/a", "--settle"] + (["--apply"] if apply else []))
         return json.loads(out.getvalue())
@@ -120,7 +120,7 @@ class SettleTests(unittest.TestCase):
         real = hub.api
         def refusing(method, path, body=None, query=None):
             if method == "POST":
-                raise migration.ticket.Fail(1, "HTTP 409 fence token=SECRET-X")
+                raise migration.hubrest.Fail(1, "HTTP 409 fence token=SECRET-X")
             return real(method, path, body, query)
         hub.api = refusing
         out = self.run_settle(hub, "", True)
@@ -130,13 +130,13 @@ class SettleTests(unittest.TestCase):
         self.assertNotIn("SECRET-X", log + json.dumps(out))
 
     def test_old_hub_says_so(self):
-        with patch.object(migration.ticket, "api", side_effect=migration.ticket.Fail(1, "HTTP 400 one explicit reservation is required")):
+        with patch.object(migration.hubrest, "api", side_effect=migration.hubrest.Fail(1, "HTTP 400 one explicit reservation is required")):
             with self.assertRaisesRegex(ValueError, "issue #4832"):
                 migration.main(["org/a", "--settle"])
-        with patch.object(migration.ticket, "api", side_effect=migration.ticket.Fail(1, "HTTP 503 down")):
-            with self.assertRaises(migration.ticket.Fail):
+        with patch.object(migration.hubrest, "api", side_effect=migration.hubrest.Fail(1, "HTTP 503 down")):
+            with self.assertRaises(migration.hubrest.Fail):
                 migration.main(["org/a", "--settle"])
-        with patch.object(migration.ticket, "api", return_value=dict(phase="reserved")):
+        with patch.object(migration.hubrest, "api", return_value=dict(phase="reserved")):
             with self.assertRaisesRegex(ValueError, "issue #4832"):
                 migration.main(["org/a", "--settle"])
 

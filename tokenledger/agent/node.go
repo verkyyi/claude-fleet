@@ -231,10 +231,6 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		// A changed subscription is leased at once (claude-fleet#3744).
 		caps = append(caps, control.CapCreds)
 	}
-	if a.ticketCapable() {
-		// A hub ticket's comment reaches its session at once (claude-fleet#3597).
-		caps = append(caps, control.CapTicket)
-	}
 	if a.releaseCapable() {
 		// A new stable wakes install-sync at once (claude-fleet#3146).
 		caps = append(caps, control.CapRelease)
@@ -365,7 +361,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			case control.TypeRelease:
 				a.handleRelease(ctx, m)
 			case control.TypeTicket:
-				a.handleTicket(ctx, m)
+				// the ticket bridge left with the issue layer (claude-fleet#4898): ignored
 			case control.TypeRepoAuthority:
 				if relayOK && rp.authoritySync {
 					a.handleRepoAuthority(ctx, rp.script, m)

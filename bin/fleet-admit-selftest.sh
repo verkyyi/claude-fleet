@@ -172,7 +172,7 @@ run_spawn() { # <mem-stub> [VAR=val …]
   local m="$1"; shift
   : > "$NEWWIN_LOG"
   env PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/c" FLEET_CONF_DIR="$WORK/conf" FLEET_C="$WORK/c" \
-    FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master FLEET_PRESPAWN_DEDUP=0 \
+    FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master \
     FLEET_MEM_PROBE_CMD="$m" FLEET_LOAD_PROBE_CMD='echo 0.5' "$@" \
     "$SPAWN" 77 --title "Admission probe" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
 }

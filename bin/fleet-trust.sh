@@ -31,7 +31,7 @@
 # start it resolves the cwd to its project root — a linked git WORKTREE resolves to
 # its MAIN checkout (the git common dir's parent), which is why the MacBook's
 # ~/.claude.json had no `…-issue-<N>` entries yet every spawned worker went straight
-# to /fleet-claim — then does an EXACT-KEY lookup, no ancestor walk:
+# to work — then does an EXACT-KEY lookup, no ancestor walk:
 #   projects[<root>].hasTrustDialogAccepted === true
 # If that is not true it shows "Quick safety check: Is this a project you created
 # or one you trust?" and waits. A fleet pane has nobody to press Enter: on

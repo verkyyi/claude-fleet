@@ -3,7 +3,7 @@
 # (com.claude-fleet.cleanup, ~60s; issue #277, closes #260).
 #
 # THIS DAEMON NEVER MERGES — it cleans up AFTER merges and keeps sessions resumable.
-# The worker's /fleet-claim ship+land step merges its own PR on a green gate (#441) —
+# The worker's pr_merge step merges its own PR on a green gate (#441) —
 # or a human on the web, or a collaborator, does; this daemon is what reaps the
 # leftover worktree + window + branch and records the resume ledger once the PR is
 # final. It runs OUTSIDE every window, so reaping the window whose worker just

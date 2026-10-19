@@ -245,7 +245,7 @@ def main():
                 checkenv = dict(env, TMUX=socket + ',0,0', TMUX_PANE=pane, CCQUOTA_HUB_URL='https://url-only.invalid')
                 checkenv.pop('CCQUOTA_TOKEN', None)
                 with __import__('unittest.mock', fromlist=['patch']).patch.dict(os.environ, checkenv, clear=True):
-                    observe.authority.ticket._CREDS = None
+                    observe.authority.hubrest._CREDS = None
                     plan = observe.inspect(pane, socket, pid, sid)
                     assert plan['hooks']['state'] == ('paths-present' if args.keep_install else 'missing')
                     # Negative identities are exercised against this same live

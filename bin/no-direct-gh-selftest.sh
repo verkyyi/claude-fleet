@@ -1,7 +1,7 @@
 #!/bin/bash
 # no-direct-gh-selftest.sh — who still talks to GitHub directly (issue #3595, EPIC
-# #3570 共同约定 2: 一扇门). A ticket is touched only through the ticket door
-# (bin/fleet-ticket.sh, bin/fleet_ticket.py); a forge (branches, PRs, checks) only
+# #3570 共同约定 2: 一扇门). The ticket door left with issue #4898 (the hub task
+# record is the only ticket); a forge (branches, PRs, checks) is reached only
 # through the GitHub layer. Everything else that spells a `gh issue|pr|api|search|
 # label|repo|run|auth` call is counted here, and the count only goes DOWN:
 #
@@ -15,8 +15,7 @@
 # command without running it). This refines the EPIC's 读数口径 grep — which
 # counts comments too — to code; the same files, the same regex.
 #
-# WHITELIST — the two layers that ARE the road, never counted:
-#   the door           fleet-ticket.sh fleet_ticket.py
+# WHITELIST — the layer that IS the road, never counted:
 #   the GitHub layer   fleet-gh-lib.sh fleet-gh.sh fleet-pr-verdict.sh fleet-pr-merge.sh mcp-github.sh
 #                      fleet_gh.py (#4842: the same layer for a Python caller)
 #   fleet's own release fleet-release.sh fleet-stable.sh fleet-train-failfast.sh
@@ -39,7 +38,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="${NO_DIRECT_GH_ROOT:-$BIN/..}"
 BASE="${NO_DIRECT_GH_BASELINE:-$BIN/no-direct-gh.baseline}"
-WHITELIST=' bin/fleet-ticket.sh bin/fleet_ticket.py bin/fleet-gh-lib.sh bin/fleet-gh.sh bin/fleet-pr-verdict.sh bin/fleet-pr-merge.sh bin/mcp-github.sh bin/fleet-release.sh bin/fleet-stable.sh bin/fleet-train-failfast.sh bin/fleet-train-macos.sh bin/fleet-train-quarantine.sh bin/fleet-macos-watch.sh bin/fleet-train-runner.sh bin/fleet-train-reuse.sh bin/tokenledger-flaky.sh bin/fleet_gh.py bin/fleet-release-rollback.sh bin/fleet-hub-pause.sh bin/fleet-gh-blackhole.sh bin/go-test-durations.sh bin/nogh-task-deny-probe.py bin/fleet-node-join.sh '
+WHITELIST=' bin/fleet-gh-lib.sh bin/fleet-gh.sh bin/fleet-pr-verdict.sh bin/fleet-pr-merge.sh bin/mcp-github.sh bin/fleet-release.sh bin/fleet-stable.sh bin/fleet-train-failfast.sh bin/fleet-train-macos.sh bin/fleet-train-quarantine.sh bin/fleet-macos-watch.sh bin/fleet-train-runner.sh bin/fleet-train-reuse.sh bin/tokenledger-flaky.sh bin/fleet_gh.py bin/fleet-release-rollback.sh bin/fleet-hub-pause.sh bin/fleet-gh-blackhole.sh bin/go-test-durations.sh bin/nogh-task-deny-probe.py bin/fleet-node-join.sh '
 # What counts as a call (issue #4842, EPIC #4839 C3 — the old regex saw only a bare
 # `gh <sub>`):
 #   RE_GH   gh <sub>, also with gh's own -R / --repo first (`gh -R "$repo" issue …`)
@@ -120,7 +119,7 @@ rc=0
 if [ -n "$new" ]; then
   printf 'no-direct-gh: FAIL — a new direct gh call outside the door (EPIC #3570 共同约定 2):\n' >&2
   printf '  %s\n' $new >&2
-  printf '  touch a ticket through bin/fleet-ticket.sh / bin/fleet_ticket.py; a branch, PR or check through the GitHub layer\n' >&2
+  printf '  reach a branch, PR or check through the GitHub layer (bin/fleet-gh-lib.sh)\n' >&2
   rc=1
 fi
 if [ -n "$gone" ]; then

@@ -27,17 +27,15 @@
 #   fleet-task-record.sh attach T<n> [<window>]
 #                     → the record names the window's session (its key + worker_id)
 #   fleet-task-record.sh dispatch --title T [--body-file F|-] [--repo o/n]
-#                     [--spawn] [--reap P] [--agent A] [--draft] [--pr-note TEXT]
+#                     [--spawn] [--reap P] [--agent A]
 #                     → the `task` tool: the record FIRST (`T<n>` on
 #                       stdout), then — a repo named, i.e. a development task —
 #                       + --spawn: its session in a worktree of that repo, bound
 #                       to the record alone (no issue: dash-raw-session.sh --repo
 #                       --task, reaped `merged` = the record closed — issue
 #                       #4897); no repo + --spawn: a no-repo session given the
-#                       words, stamped @task. Still filed as an issue
-#                       (fleet-issue-file.sh --task T<n>, the URL after the T):
-#                       --draft, FLEET_TASK_ISSUE=1, and no hub (no T line —
-#                       a no-repo one is refused there, exit 3).
+#                       words, stamped @task. No hub: exit 3, nothing made — the
+#                       record is the only ticket (issue #4898).
 #   fleet-task-record.sh epic-member <epic> <owner/name> <N> [<title>]
 #                     → an EPIC member's read-only record (`T<n>` on stdout): its
 #                       issue on it, `via` EPIC #<epic>, one per member (the token is
@@ -46,8 +44,7 @@
 #   fleet-task-record.sh of [<window>]     → the window's @task (T<n>), rc 1 when none
 #   fleet-task-record.sh find-issue o/n#N  → … the live window's @task working that issue
 #
-# Who calls it: the `task` tool (a record first, an issue only for
-# a development task — fleet-issue-file.sh --task), the spawners (`--task`
+# Who calls it: the `task` tool (the record is the ticket), the spawners (`--task`
 # attaches the new window), a session's ask / park (a question or a park on the
 # record: a session with no issue writes them ONLY here, one with an issue mirrors
 # them), an EPIC driver (each member's read-only record, fleet-epic-floor.sh), and
@@ -148,7 +145,7 @@ EOF
 esac
 
 if [ "$cmd" = dispatch ]; then
-  title='' bodyf='' repo='' spawn=0 reap='' agent='' as_agent='' draft='' pr_note=''
+  title='' bodyf='' repo='' spawn=0 reap='' agent='' as_agent=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --title) title="${2:-}"; shift ;;
@@ -161,14 +158,12 @@ if [ "$cmd" = dispatch ]; then
         case "${2:-}" in claude|codex) agent=$2 ;; *) die 2 "--agent must be claude or codex; use --as for an agent definition" ;; esac
         shift ;;
       --as) as_agent="${2:-}"; shift ;;
-      --draft) draft=--draft ;;   # issue #3715: a draft-only development task
-      --pr-note) pr_note="${2:-}"; draft=--draft; shift ;;
       *) usage ;;
     esac
     shift
   done
   [ -n "$title" ] || usage
-  [ -z "$draft" ] || [ -n "$repo" ] || die 2 "--draft needs --repo: a draft PR lives in a repo"
+  applicable || die 3 "no hub here: a task has nowhere to be recorded (issue #4898)"
   body=''
   if [ "$bodyf" = - ]; then body=$(cat); elif [ -n "$bodyf" ]; then body=$(cat "$bodyf") || die 2 "cannot read $bodyf"; fi
   # One token per (caller, words): a session asking twice is one record.
@@ -177,7 +172,7 @@ if [ "$cmd" = dispatch ]; then
   # A development task's session starts as the worker template, as
   # dash-issue-session.sh gives an issue worker (#3122): the shipped fleet-worker
   # when this login has it, else a plain session (issue #4897).
-  if [ -n "$repo" ] && [ -z "$as_agent" ] && [ -z "$draft" ] && [ "$spawn" = 1 ] && [ "${FLEET_TASK_ISSUE:-0}" != 1 ] \
+  if [ -n "$repo" ] && [ -z "$as_agent" ] && [ "$spawn" = 1 ] \
      && python3 "$BIN/fleet-agent-def.py" launch fleet-worker --dir "${FLEET_MAIN:-$PWD}" \
           --for "${agent:-${FLEET_AGENT:-claude}}" >/dev/null 2>&1; then
     as_agent=fleet-worker
@@ -192,7 +187,7 @@ if [ "$cmd" = dispatch ]; then
   fi
   dispatch=$(python3 "$BIN/fleet_dispatch.py" ${agent:+--agent "$agent"} --template "$template" --default "${FLEET_AGENT:-}" --request-id "$tok") || exit 2
   t=''
-  if applicable; then
+  {
     parent_wid=''; parent_task=''
     task_win=$(fleet_pane_fmt '#{window_id}')
     if [ -n "$task_win" ]; then
@@ -200,7 +195,7 @@ if [ "$cmd" = dispatch ]; then
       parent_wid=$(fleet_worker_id "$task_sess" "$task_win")
       parent_task=$(fleet_pane_fmt '#{@task}')
     fi
-    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "" "$draft" "$pr_note" "$parent_wid" "$parent_task" <<'JSON'
+    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "" "" "" "$parent_wid" "$parent_task" <<'JSON'
 import json,sys
 d,title,body,repo,reap,template,rule,draft,note,parent_session,parent_task=sys.argv[1:]
 d=json.loads(d)
@@ -223,29 +218,20 @@ print(json.dumps(d,separators=(",", ":")))
 JSON
     ) || exit 1
     printf '%s\n' "$t"
-  elif [ -z "$repo" ]; then
-    die 3 "no hub here: a task with no repo has nowhere to be recorded — file an issue instead (file_issue)"
-  fi
+  }
   export FLEET_DISPATCH="$dispatch"
   # A development task the hub accepted is the record alone (issue #4897, EPIC
   # #4895 批 0): no GitHub issue — the session opens in its own worktree of the
   # repo, bound to T<n> (dash-raw-session.sh --repo --task stamps @task_flow), reads
   # the record, opens its PR, merges it on a green gate and closes the record with
   # its report; it is reaped once the record is closed (`merged`). Not --spawn: the
-  # record waits (await T<n> names it). Kept on the issue road for one batch: a
-  # draft-only task (its mark lives in an issue body, #3715), no hub (no T), and
-  # FLEET_TASK_ISSUE=1 — the old road, deleted in 批 1.
-  if [ -n "$repo" ] && [ -n "$t" ] && [ -z "$draft" ] && [ "${FLEET_TASK_ISSUE:-0}" != 1 ]; then
+  # record waits (await T<n> names it).
+  if [ -n "$repo" ]; then
     [ "$spawn" = 1 ] || exit 0
     pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
     if [ -n "$body" ]; then printf '%s\n\n%s\n' "$title" "$body" > "$pf"; else printf '%s\n' "$title" > "$pf"; fi
     exec bash "$BIN/dash-raw-session.sh" --repo "$repo" --task "$t" --name "$title" --reap "${reap:-merged}" \
       ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} "--prompt-file=$pf"
-  fi
-  if [ -n "$repo" ]; then   # a development task: its issue, hung on the record
-    sp=''; [ "$spawn" = 1 ] && sp=--spawn
-    exec bash "$BIN/fleet-issue-file.sh" --title "$title" ${body:+--body "$body"} --repo "$repo" \
-      ${t:+--task "$t"} ${sp:+"$sp"} ${draft:+"$draft"} ${pr_note:+--pr-note "$pr_note"}
   fi
   [ "$spawn" = 1 ] || exit 0
   pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"

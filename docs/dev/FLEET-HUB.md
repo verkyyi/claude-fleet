@@ -90,7 +90,7 @@ operation journal. Spec: [FLEET-MCP.md](FLEET-MCP.md) «The hub route».
   verbatim by every restore, migration and move (local or through the hub, in
   the transcript bundle as `<sid>.fleet-id`); never re-minted, untouched by
   `/clear` and a handoff. A key can change under a live session — a scratch bound
-  to an issue (`fleet-bind.sh`) stops answering to `scratch-<N>` — the identity
+  to an issue stops answering to `scratch-<N>` — the identity
   cannot. `<fleet UUID>/<identity>` is a worker_id too, accepted wherever one is
   (`worker_*`, relays, `origin_wid`), and the worker map lists every worker
   under both. A spawn records its parent's as `@origin_fid` (and
@@ -941,7 +941,7 @@ too. `ccquota place … <repo> scratch <fleet UUID>` is the CLI form.
 | `gh_issue_view(fleet_id, number, repo?, fields?)` | One Issue through the node's `fleet-gh.sh`: the daemons' local copy when fresh, else `gh`, else REST — the `gh --json` fields plus `_source` (`cache`/`gh`/`rest`) and `_age` seconds (#1274) | `gh:read` on that Fleet |
 | `gh_pr_view(fleet_id, number, repo?, fields?)` | One PR, same path and shape | `gh:read` on that Fleet |
 | `gh_pr_checks(fleet_id, number, repo?, fields?)` | A PR's CI rollup `bucket`; `fields` (e.g. `name,state`) adds per-check rows, which the cache does not hold | `gh:read` on that Fleet |
-| `gh_comment(fleet_id, issue, body, idempotency_key, repo?)` | Post a **record-only** comment (`fleet-comment.sh --note --from hub`) through the per-token write queue (#1264); a live worker on that issue does NOT see it — `worker_message` is the channel for that. No merge, close or label tool exists | `gh:comment` on that Fleet |
+| `gh_comment(fleet_id, issue, body, idempotency_key, repo?)` | Refused on the node since #4898 (`INVALID_ARGUMENT`): the fleet writes no GitHub comment — `worker_message` is the channel | `gh:comment` on that Fleet |
 
 All callers need `fleet:read`. Each lifecycle tool has its own scope; none of
 them is implied by `worker:start`. Tools do not expose shell commands, raw tmux
@@ -1291,10 +1291,8 @@ with a code, never `unknown`:
   never keystrokes. That send leaves no GitHub record, so it needs exactly one
   live window (`AMBIGUOUS` otherwise) and a refused send is `EXECUTION_FAILED`
   with peer-send's reason; a confirmed one is `succeeded` with `channel:
-  "direct"` and peer-send's `sent →` line as `how`. With the bridge on, it posts through `fleet-comment.sh --to-worker --from
-  hub`, so the comment is both the audit record and the delivery: the bridge
-  relays it as the worker's next idle turn (subject to the bridge's association
-  gate), typically within its ~15 s tick. A scratch session has no Issue and
+  "direct"` and peer-send's `sent →` line as `how` — the only road since #4898
+  took the issue-comment one. A scratch session has no Issue and
   cannot be messaged. Text is limited to 4000 characters and may not contain
   HTML comments or control characters — a forged `<!-- fleet:… -->` marker
   could suppress or misattribute the relay. A confirmed post is `succeeded`

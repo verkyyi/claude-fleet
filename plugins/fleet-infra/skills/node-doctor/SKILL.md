@@ -128,7 +128,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `ingress` | node | [runbook-door-down] | 系统 sshd 的公网转发探不通：查路由器转发与远程登录 |
 | `install` | node · machine | [release-rules] | 安装落后 / 有本地提交 / 分叉 stable：让 install-sync 跟上，不在会话里手同步 |
 | `key` | machine | [release-rules] [mac-node-enroll] | 发布签名钥匙没钉 / 对不上：`sudo fleet node install --release-key <file>` |
-| `labels` | node | [node-doctor] | 仓库缺 fleet 标签：`fleet-labels-seed.sh --repo <repo>` |
+| `labels` | node | [node-doctor] | 仓库缺 fleet 标签：每个缺的跑 `gh label create <name> --repo <repo>` |
 | `laptop` | node | [node-doctor] | 笔记本上的 iTerm2 插件缺 / 旧：在那台重跑 extras/iterm2/install.sh |
 | `launchd` | node | [mac-node-prep] | launchd 的 gui 域坏了：机器层面——注销重登或重启 |
 | `ledger` | node | [mac-node-enroll] | 守护没装上：重跑 `sudo fleet node install` |
@@ -181,7 +181,6 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `team` | node | [release-rules] | 团队层没同步：`fleet-agent-team.py sync` |
 | `tenants` | node | [login-lifecycle] | 接管的登录有管理员 / sudo：移出 admin 组与 sudoers |
 | `testtmux` | node | [node-doctor] | 自测没清掉的 tmux 服务器：照行内清 |
-| `tickets` | node | [node-doctor] | 只是说明仓库的单子在入口还是 GitHub；值写错（既不是 hub 也不是 github）时改那个仓库 conf 里的 `FLEET_TICKETS` |
 | `overrides` | node | [node-doctor] | 只报状态：列出这个仓库在 `repos/<slug>.conf` 里自己改过的设置（凭据样的值不显示）；要改就改行尾点名的文件 |
 | `tls` | node | [mac-node-prep] | python 验不了入口证书：装 CA（certifi），或换系统 python |
 | `tmux` | node · machine | [mac-node-prep] [release-rules] | 装 tmux ≥ 3.2；托管机器由更新器装 |

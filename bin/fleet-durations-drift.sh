@@ -21,15 +21,13 @@
 # FLEET_DD_PCT); a shard where both are under --floor seconds (default 30) is too
 # small to judge.
 #
-# Drifted ⇒ one issue through the ONE filer road (bin/fleet-issue-file.sh
-# --breakage-key durations-<name>): a later night while it is open adds a
-# 「同一故障」 comment, never a second issue; a night after the refresh closed it
-# reopens it only when the table drifted again. The issue names the run and the
-# one command that refreshes the table off it (bin/selftest-durations.sh --run <id>)
-# — a worker opens the PR; nothing here pushes.
+# Drifted ⇒ it is SAID (issue #4898: the issue filer left with the ticket layer):
+# bin/fleet-ci-say.sh writes the run and the one command that refreshes the table
+# off it (bin/selftest-durations.sh --run <id>) to the run's summary page, under the
+# key durations-<name> — a worker opens the PR; nothing here pushes.
 #
 # Prints a Markdown table (one row per shard) on stdout for the run's summary page.
-# Env: FLEET_DD_FILER  the issue filer (default bin/fleet-issue-file.sh) — a selftest seam
+# Env: FLEET_DD_FILER  the filer (default bin/fleet-ci-say.sh: said, not filed) — a selftest seam
 # Exit: 0 judged (drifted and filed, or within bounds, or nothing to judge)
 #       1 the filing failed · 2 usage.
 set -u
@@ -145,13 +143,13 @@ if [ -n "${FLEET_DD_FILER:-}" ]; then
   url=$("$FLEET_DD_FILER" --repo "$repo" --breakage-key "durations-$name" ${sha:+--fault-sha "$sha"} \
           ${runurl:+--fault-link "$runurl"} --label ci --priority p2 --title "$title" --body "$body"); frc=$?
 else
-  url=$(bash "$BIN/fleet-issue-file.sh" --repo "$repo" --breakage-key "durations-$name" ${sha:+--fault-sha "$sha"} \
+  url=$(bash "$BIN/fleet-ci-say.sh" --repo "$repo" --breakage-key "durations-$name" ${sha:+--fault-sha "$sha"} \
           ${runurl:+--fault-link "$runurl"} --label ci --priority p2 --title "$title" --body "$body"); frc=$?
 fi
 case "$frc" in
   0|5) url=$(printf '%s\n' "$url" | tail -1)
        echo
-       echo "更新单：$url"
+       echo "更新单：${url:-（没开单：写在本次运行的摘要页里）}"
        exit 0 ;;
   *)   say "could not file the refresh (filer exit $frc)"; exit 1 ;;
 esac

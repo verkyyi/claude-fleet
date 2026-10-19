@@ -15,22 +15,21 @@
 #               by itself — wechat-first-scan-autocreate), /v1/me says wechat; the
 #               operator maps the person to this machine's login; `fleet login`
 #               in the terminal confirmed by that browser — the certificate lands
-#   2. 开单     an EPIC and its member filed through the one filer channel into a
-#               repo at ssh://mac-a/~/repos/demo.git (a bare repo here, C7);
-#               they are the person's: their browser lists them (我的单子)
-#   3. 派活     dash-issue-session.sh opens the member on a private tmux server:
-#               the hub's claim is taken, the worktree and window are there, the
-#               agent (a recorder) starts with the ticket's own words
-#   4. 执行     in the worker's pane: the claim brief reads the ticket off the hub,
-#               a 改动前 capture, a commit, a comment, a 改动后 capture
+#   2. 开单     a hub task record (issue #4898: no issue anywhere) for a repo at
+#               ssh://mac-a/~/repos/demo.git (a bare repo here, C7); it is the
+#               person's: their browser lists it (任务)
+#   3. 派活     dash-raw-session.sh --repo --task opens it on a private tmux
+#               server: the worktree remembers the record, the window is bound to
+#               it, the agent (a recorder) starts with the person's words
+#   4. 执行     in the session's pane: the brief reads the record off the hub; a commit
 #   5. 落地     pr_verdict → READY, pr_merge → MERGED (bin/fleet-land.sh, C9): the
 #               repo's check ran, the bare repo's master carries the commit, git
-#               says landed (fleet_landed, C8), the ticket is closed with 落地, and
-#               the worker's `merged` report is taken with no PR
+#               says landed (fleet_landed, C8), and the session's `merged` report
+#               is taken with no PR and closes the record
 #   6. 回收     the collector's git prmap + one cleanup-daemon tick: the window,
 #               the worktree and the branch go, the history ledger has the row
-#   7. 报告     what /fleet-epic-report reads: the EPIC's member closed, both
-#               captures listed, the landing record (the check passed)
+#   7. 报告     what the person reads: the record closed in their list, the landing
+#               record (the check passed)
 #
 # Throughout: `gh` on PATH is a stand-in that records every call and fails; the
 # hub's GitHub API base and the stable API point at a recorder; git's github.com
@@ -48,12 +47,11 @@
 # from EPIC #4390's twelve rows; neither is live provider/deployment evidence.
 #
 # Drives: bin/fleet-install.sh (served), bin/fleet-login.py, bin/fleet-hub-admin.py,
-# bin/fleet-repo.sh, bin/fleet-issue-file.sh, bin/fleet-ticket.sh, bin/fleet_ticket.py,
-# bin/dash-issue-session.sh, bin/fleet-claim-brief.sh, bin/fleet-comment.sh,
-# bin/fleet-evidence.sh, bin/fleet-pr-verdict.sh, bin/fleet-pr-merge.sh,
+# bin/fleet-repo.sh, bin/fleet-task-record.sh, bin/dash-raw-session.sh,
+# bin/fleet-brief.sh, bin/fleet-pr-verdict.sh, bin/fleet-pr-merge.sh,
 # bin/fleet-land.sh, bin/tmux-pr-refresh.sh, bin/fleet-cleanup-daemon.sh,
 # bin/fleet-cleanup.sh, bin/fleet-report-parent.sh, fleet_landed /
-# fleet_ticket_home / fleet_repo_register (bin/fleet-lib.sh).
+# fleet_task_closed / fleet_repo_register (bin/fleet-lib.sh).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd -P)"
@@ -68,7 +66,7 @@ while [ $# -gt 0 ]; do
 done
 # Nothing of the caller's fleet comes along (a pane's FLEET_CRED_PROXY, a hub URL …)
 for v in $(compgen -e | grep -E '^(FLEET_|CCQUOTA_)'); do unset "$v"; done
-for c in git python3 curl jq ssh-keygen; do
+for c in git python3 curl jq ssh-keygen go; do
   command -v "$c" >/dev/null 2>&1 || { printf 'nogh-e2e: %s not installed — SKIP\n' "$c" >&2; exit 0; }
 done
 # the real tmux, past the fleet's own guard shim (bin/tmux-shim) when a pane put it first
@@ -287,16 +285,21 @@ J=$(curl -fsS -m 10 -H 'Content-Type: application/json' -X POST \
 NTOK=$(printf '%s' "$J" | jget token 2>/dev/null)
 [ -n "$NTOK" ] || die 'the join answer had no token' "$J"
 # Its agent is the real one (it puts the machine on the roster as $L); the fleet
-# it reports is a stub — nothing here needs the hub to place a session.
+# it reports is a stub: none until the test writes fleets.json (the fleet the
+# sandbox login below hosts, so the hub knows the repo is here — #4898's task road).
 NH="$WORK/node"; mkdir -p "$NH/.claude/fleet/bin" "$NH/state"
 cat > "$NH/.claude/fleet/bin/fleet-control.py" <<'PY'
 #!/usr/bin/env python3
-import json, sys, time
+import json, os, sys, time
 req = json.load(sys.stdin); m = req.get("method")
+try:
+    FLEETS = json.load(open(os.path.join(os.environ["HOME"], "fleets.json")))
+except (OSError, ValueError):
+    FLEETS = []
 now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 if m == "discover":
     r = {"machine_id": "7e2e0000-0000-4000-8000-000000003605", "hostname": "mac-a", "protocol": 1,
-         "observed_at": now, "fleets": []}
+         "observed_at": now, "fleets": FLEETS}
 elif m == "ready":
     r = {"ready": True, "gh": False, "creds": True, "checkouts": True, "missing": [], "observed_at": now}
 elif m == "fleet_status":
@@ -366,13 +369,81 @@ cat > "$WORK/shim/tmux" <<EOF
 while [ "\${1:-}" = -L ] || [ "\${1:-}" = -S ]; do shift 2; done
 exec "$REAL_TMUX" -S "$SOCK" "\$@"
 EOF
-cat > "$WORK/shim/claude" <<EOF
-#!/bin/bash
-w=\$(tmux display-message -p -t "\$TMUX_PANE" '#{window_id}')
-printf '%s\n' "\$*" > "$WORK/rec/\$w.args"
-exec sleep 600
-EOF
-chmod +x "$WORK/shim/tmux" "$WORK/shim/claude"
+# The agent is a NATIVE stand-in (a few lines of Go, built here): the launch's
+# receipt is only ever written for a process whose kernel executable is named
+# claude and answers `--version` as Claude Code, with the SessionStart hooks run
+# by that process — so the record's claim, and the merged report that closes it,
+# go through the real proof (fleet_launch.py hook / check_receipt), never a stub.
+mkdir -p "$WORK/fakeclaude"
+cat > "$WORK/fakeclaude/main.go" <<'GO'
+package main
+
+import (
+	"crypto/rand"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+func main() {
+	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "--version" {
+		fmt.Println("9.9.9 (Claude Code)")
+		return
+	}
+	if len(args) > 1 && args[0] == "plugin" {
+		fmt.Println("[]")
+		return
+	}
+	w, _ := exec.Command("tmux", "display-message", "-p", "-t", os.Getenv("TMUX_PANE"), "#{window_id}").Output()
+	os.WriteFile(os.Getenv("FAKE_CLAUDE_REC")+"/"+strings.TrimSpace(string(w))+".args", []byte(strings.Join(args, " ")+"\n"), 0o644)
+	b := make([]byte, 16)
+	rand.Read(b)
+	b[6], b[8] = b[6]&0x0f|0x40, b[8]&0x3f|0x80
+	sid := fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	cwd, _ := os.Getwd()
+	// the transcript where the fleet looks for it (fleet_transcript_dir): a session the history ledger can resume
+	dir := os.Getenv("HOME") + "/.claude/projects/" + strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '-'
+	}, cwd)
+	os.MkdirAll(dir, 0o755)
+	tr := dir + "/" + sid + ".jsonl"
+	os.WriteFile(tr, []byte(`{"type":"summary"}`+"\n"), 0o644)
+	ev, _ := json.Marshal(map[string]string{"hook_event_name": "SessionStart", "source": "startup", "session_id": sid, "cwd": cwd, "transcript_path": tr})
+	for _, a := range args {
+		if !strings.HasPrefix(a, "--settings=") {
+			continue
+		}
+		var st struct {
+			Hooks map[string][]struct {
+				Hooks []struct{ Command string } `json:"hooks"`
+			} `json:"hooks"`
+		}
+		raw, _ := os.ReadFile(strings.TrimPrefix(a, "--settings="))
+		json.Unmarshal(raw, &st)
+		for _, m := range st.Hooks["SessionStart"] {
+			for _, h := range m.Hooks {
+				c := exec.Command("/bin/sh", "-c", h.Command)
+				c.Stdin = strings.NewReader(string(ev))
+				c.Run()
+			}
+		}
+	}
+	time.Sleep(600 * time.Second)
+}
+GO
+(cd "$WORK/fakeclaude" && GOTOOLCHAIN=local GOFLAGS="" GO111MODULE=off go build -o "$WORK/shim/claude" main.go) 2>"$WORK/err" \
+  || die 'could not build the native stand-in for claude (go)' "$(cat "$WORK/err")"
+export FAKE_CLAUDE_REC="$WORK/rec"
+# the hooks the agent runs name ~/.claude/fleet/bin/…: this login's install is this tree
+mkdir -p "$WORK/home/.claude" && ln -sfn "$(cd "$BIN/.." && pwd -P)" "$WORK/home/.claude/fleet"
+chmod +x "$WORK/shim/tmux"
 mkdir -p "$WORK/srv/repos"
 export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_NOSYSTEM=1
 cat > "$GIT_CONFIG_GLOBAL" <<EOF
@@ -402,93 +473,91 @@ export FLEET_DISPATCH_LEASE_DIR="$WORK/leases" FLEET_LAND_LEASE_DIR="$WORK/lease
 export GIT_ALLOW_PROTOCOL=file GIT_TERMINAL_PROMPT=0 FLEET_STATUS_7501=0 FLEET_HEAVY=0 FLEET_MCP=0 FLEET_ADMIT=0
 export FLEET_STABLE_API="http://127.0.0.1:$GHPORT" FLEET_STABLE_RAW="http://127.0.0.1:$GHPORT"
 unset TMUX TMUX_PANE FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_MODEL FLEET_AGENT FLEET_SESSION CF_REPO \
-      CCQUOTA_HUB_URL CCQUOTA_TOKEN FLEET_TICKETS FLEET_FORGE FLEET_LAND FLEET_HUB_URL
+      CCQUOTA_HUB_URL CCQUOTA_TOKEN FLEET_FORGE FLEET_LAND FLEET_HUB_URL
 mkdir -p "$HOME" "$FLEET_CONF_DIR" "$CLAUDE_CONFIG_DIR" "$TMPDIR"
-# The login's node token (C1's ticket API reads it in a subshell, #1491) — the
-# machine's, whose login the person now holds.
+# The login's node token (the task record's API reads it in a subshell, #1491) —
+# the machine's, whose login the person now holds.
 printf 'CCQUOTA_TOKEN=%s\nCCQUOTA_HUB_URL=%s\nCCQUOTA_FLEET=1\n' "$NTOK" "$HUB" > "$FLEET_CONF_DIR/node.env"
 chmod 600 "$FLEET_CONF_DIR/node.env"
 S=nogh
 mkdir -p "$FLEET_CONF_DIR/fleets/$S/repos"
-printf 'FLEET_SESSION=%s\nFLEET_CLEANUP_MERGED_GRACE=0\nFLEET_REAP_MIN_AGE=0\n' "$S" > "$FLEET_CONF_DIR/fleets/$S/conf"
+printf 'FLEET_SESSION=%s\nCCQUOTA_FLEET=1\nFLEET_CLEANUP_MERGED_GRACE=0\nFLEET_REAP_MIN_AGE=0\n' "$S" > "$FLEET_CONF_DIR/fleets/$S/conf"
 "$REAL_TMUX" -S "$SOCK" -f /dev/null new-session -d -s "$S" -n home -x 200 -y 50 || die 'could not start the private tmux server'
 tmux set-option -w -t "$S:home" @fleet_role home >/dev/null 2>&1
 ADDR='ssh://mac-a/~/repos/demo.git'
-# --authority legacy: this run walks the person's own road (dash-issue-session.sh
-# on a ticket); a new repo would otherwise start on the hub (issue #4885), where a
-# start needs the hub's accepted task.
-tok=$(bash "$BIN/fleet-repo.sh" add --session "$S" "$ADDR" --authority legacy 2>"$WORK/err") || die 'fleet repo add refused the ssh address' "$tok $(cat "$WORK/err")"
+tok=$(bash "$BIN/fleet-repo.sh" add --session "$S" "$ADDR" 2>"$WORK/err") || die 'fleet repo add refused the ssh address' "$tok $(cat "$WORK/err")"
 R=mac-a/demo
 . "$BIN/fleet-lib.sh"
 [ "$tok" = "added:$(fleet_slug "$R")" ] || die 'fleet repo add named the repo otherwise' "$tok"
 RCONF=$(fleet_repo_conf_file "$S" "$R")
-grep -q 'FLEET_TICKETS="hub"' "$RCONF" || die 'a repo with no GitHub was not given the hub as its tickets'"'"' home' "$(cat "$RCONF")"
-printf 'FLEET_CHECK_CMD="./check.sh"\n' >> "$RCONF"
+# The fleet's identity (fleet_uuid), minted as fleet-control.py mints it from the
+# machine id and (session, repo, checkout), frozen in the fleet's identity file —
+# and reported by the machine's (stub) node, so the hub knows this fleet hosts $R.
 MAIN=$(fleet_repo_conf_get "$S" "$R" FLEET_MAIN)
+FID=$(python3 -c 'import json,sys,uuid; print(uuid.uuid5(uuid.UUID(sys.argv[1]), json.dumps(sys.argv[2:5], ensure_ascii=False, sort_keys=True, separators=(",", ":"))))' \
+        7e2e0000-0000-4000-8000-000000003605 "$S" "$R" "$MAIN")
+printf '%s\n' "$FID" > "$(fleet_identity_file "$S")"
+python3 -c 'import json,sys; json.dump([dict(fleet_id=sys.argv[1], machine_id="7e2e0000-0000-4000-8000-000000003605", name=sys.argv[2], repo=sys.argv[3], repos=[sys.argv[3]], checkout=sys.argv[4], agent="claude")], open(sys.argv[5], "w"))' \
+  "$FID" "$S" "$R" "$MAIN" "$NH/fleets.json"
+hosted() { api "$HUB/v1/fleet/fleet_list" 2>/dev/null | grep -q "$FID"; }
+printf 'FLEET_CHECK_CMD="./check.sh"\n' >> "$RCONF"
 [ "$(git -C "$MAIN" config --get remote.origin.url)" = "$ADDR" ] || die 'the checkout is not a clone of the address' "$MAIN"
-ok "repo $R ← $ADDR: FLEET_FORGE=none · FLEET_LAND=fleet · FLEET_TICKETS=hub · check ./check.sh"
+ok "repo $R ← $ADDR: FLEET_FORGE=none · FLEET_LAND=fleet · check ./check.sh"
 WT=$MAIN
 inpane() { local w="$1"; shift; ( cd "$WT" && TMUX="$SOCK,1,0" TMUX_PANE="$(tmux display-message -p -t "$w" '#{pane_id}')" "$@" ); }
-tj() { bash "$BIN/fleet-ticket.sh" read "hub:$R#$1" --json "$2" --max-age 0 2>/dev/null; }
 
 # =============================================================================
-step 2 '开单: the EPIC and its member, filed into a repo with no GitHub'
-EURL=$(bash "$BIN/fleet-issue-file.sh" --repo "$R" --title 'EPIC: 演示不碰 GitHub' --label epic \
-         --body $'演示批次。\n\n## Core\n- [ ] 加一行 hello' --no-breakage 2>"$WORK/err") \
-  || die 'the filer refused the EPIC' "$EURL $(cat "$WORK/err")"
-E=${EURL##*/}
-case "$EURL" in "$HUB/fleet/tickets/$R/"[0-9]*) ;; *) die 'the EPIC was not filed on the hub' "$EURL" ;; esac
-MURL=$(bash "$BIN/fleet-issue-file.sh" --repo "$R" --title '在 NOTES 里加一行 hello' --parent "$E" --no-breakage \
-         --body $'在 NOTES 里加一行 hello。\n\n上线证据：`cat NOTES` 的输出' 2>"$WORK/err") \
-  || die 'the filer refused the member' "$MURL $(cat "$WORK/err")"
-N=${MURL##*/}
-[ "$(bash "$BIN/fleet-ticket.sh" parent "hub:$R#$N" 2>/dev/null)" = "hub:$R#$E" ] || die "#$N is not hung under the EPIC #$E" "$(bash "$BIN/fleet-ticket.sh" parent "hub:$R#$N" 2>&1)"
-mine=$(browse get "$HUB/v1/fleet/tickets?repo=$R" | tail -n +2)
-for x in "$E" "$N"; do
-  [ "$(printf '%s' "$mine" | jq -r --argjson n "$x" '[.tickets[] | select(.number == $n)] | length' 2>/dev/null)" = 1 ] \
-    || die "the person's own browser does not list #$x (我的单子)" "$mine"
-done
-[ "$(ghcalls)" = 0 ] || die 'filing asked gh' "$(cat "$GHLOG")"
-ok "EPIC #$E and member #$N on the hub ($MURL), hung together, in the WeChat person's own list · gh 0"
+step 2 '开单: the task record, for a repo with no GitHub'
+T=$(printf '在 NOTES 里加一行 hello。\n\n上线证据：`cat NOTES` 的输出\n' \
+      | bash "$BIN/fleet-task-record.sh" dispatch --title '在 NOTES 里加一行 hello' --body-file - --repo "$R" 2>"$WORK/err") \
+  || die 'the hub refused the task record' "$T $(cat "$WORK/err")"
+T=$(printf '%s\n' "$T" | head -1)
+case "$T" in T[1-9]*) ;; *) die 'the dispatch named no record' "$T $(cat "$WORK/err")" ;; esac
+trec() { browse get "$HUB/v1/fleet/tasks" | tail -n +2 | jq -c --arg t "$T" '.tasks[] | select(.id == $t)' 2>/dev/null; }
+[ "$(trec | jq -r .repo 2>/dev/null)" = "$R" ] || die "the person's own browser does not list $T for $R (任务)" "$(browse get "$HUB/v1/fleet/tasks")"
+[ "$(ghcalls)" = 0 ] || die 'recording asked gh' "$(cat "$GHLOG")"
+ok "task $T for $R on the hub, in the WeChat person's own list · no issue filed · gh 0"
 passed
 
 # =============================================================================
-step 3 '派活: a worker opens on the member'
-bash "$BIN/dash-issue-session.sh" "$N" "$S" --repo "$R" --origin hub >"$WORK/out" 2>"$WORK/err" \
-  || die "dash-issue-session.sh refused #$N" "$(cat "$WORK/out" "$WORK/err")"
-W=$(tmux list-windows -t "$S" -F '#{window_id} #{@repo} #{@issue}' | awk -v r="$R" -v n="$N" '$2==r && $3==n {print $1; exit}')
-[ -n "$W" ] || die "no window bound to $R#$N" "$(tmux list-windows -t "$S" -F '#{window_id} #{window_name} #{@repo} #{@issue}')"
+step 3 '派活: a session opens on the record'
+# The same words again with --spawn: the same record (one per caller + words), and
+# its session opens here bound to it (dash-raw-session.sh --repo --task, a local
+# launch that claims the record) — once the hub has heard this machine host $R.
+waitfor 60 hosted || die "the hub never heard this machine host $R" "$(api "$HUB/v1/fleet/fleet_list" 2>&1 | head -c 600)"
+T2=$(printf '在 NOTES 里加一行 hello。\n\n上线证据：`cat NOTES` 的输出\n' \
+      | FLEET_SESSION="$S" bash "$BIN/fleet-task-record.sh" dispatch --title '在 NOTES 里加一行 hello' --body-file - --repo "$R" --spawn \
+        2>"$WORK/err" | head -1)
+[ "$T2" = "$T" ] || die "the same words named another record ($T2, not $T)" "$(cat "$WORK/err")"
+W=$(tmux list-windows -t "$S" -F '#{window_id} #{@repo} #{@task}' | awk -v r="$R" -v t="$T" '$2==r && $3==t {print $1; exit}')
+[ -n "$W" ] || die "no window bound to $T" "$(tmux list-windows -t "$S" -F '#{window_id} #{window_name} #{@repo} #{@task}'; cat "$WORK/err")"
 WT=$(tmux display-message -p -t "$W" '#{@worktree}')
-[ -d "$WT" ] && [ "$(git -C "$WT" symbolic-ref --short HEAD)" = "issue-$N" ] || die 'the worktree is not on issue-<N>' "$WT"
+BR=$(git -C "$WT" symbolic-ref --short HEAD 2>/dev/null)
+[ -d "$WT" ] && [ -n "$BR" ] || die 'the session has no worktree of its own' "$WT"
+[ "$(fleet_worktree_task "$WT")" = "$T" ] || die 'the worktree does not remember its record' "$(fleet_worktree_task "$WT")"
 seen() { [ -s "$WORK/rec/$W.args" ]; }
 waitfor 20 seen || die 'the agent never started in the window' "$(tmux capture-pane -p -t "$W" | tail -20)"
-grep -q 'NOTES' "$WORK/rec/$W.args" || die "the agent's first turn is not the ticket's own words" "$(cat "$WORK/rec/$W.args")"
-who=$(tj "$N" assignees | jq -r '[.assignees[]?.login] | join(",")')
-[ -n "$who" ] || die 'the hub holds no claim on the member' "$(tj "$N" assignees)"
+# an accepted launch (the record's claim) hands its first turn over once the agent
+# is ready — the words wait in its @launch_seed, never on the command line
+LS=$(tmux display-message -p -t "$W" '#{@launch_seed}')
+grep -q 'NOTES' "$LS" 2>/dev/null || die "the session's first turn is not the person's words" "$(cat "$LS" 2>&1)"
+[ -n "$(tmux display-message -p -t "$W" '#{@launch}')" ] || die 'the session holds no launch of its record'
 [ "$(ghcalls)" = 0 ] || die 'the dispatch asked gh' "$(cat "$GHLOG")"
-ok "window $W · worktree $(basename "$WT") on issue-$N · claimed by $who · the agent started with the ticket's words · gh 0"
+ok "window $W · worktree $(basename "$WT") on $BR · bound to $T by its launch · its first turn the words · gh 0"
 passed
 
 # =============================================================================
-step 4 '执行: the worker reads, captures, changes and says so'
-inpane "$W" bash "$BIN/fleet-claim-brief.sh" >"$WORK/out" 2>"$WORK/err" || die "the claim brief exited $?" "$(cat "$WORK/out" "$WORK/err")"
-grep -q '在 NOTES 里加一行 hello' "$WORK/out" || die 'the brief did not read the ticket off the hub' "$(head -c 1500 "$WORK/out")"
-printf '(no NOTES yet)\n' | inpane "$W" bash "$BIN/fleet-evidence.sh" before --repo "$R" --issue "$N" --note '改动前：没有 NOTES' \
-  --name before.txt - >"$WORK/out" 2>"$WORK/err" || die 'the before capture failed' "$(cat "$WORK/out" "$WORK/err")"
+step 4 '执行: the session reads its record and changes the repo'
+inpane "$W" bash "$BIN/fleet-brief.sh" >"$WORK/out" 2>"$WORK/err" || die "the brief exited $?" "$(cat "$WORK/out" "$WORK/err")"
+grep -q '在 NOTES 里加一行 hello' "$WORK/out" || die 'the brief did not read the record off the hub' "$(head -c 1500 "$WORK/out")"
 printf 'hello\n' > "$WT/NOTES"
-git -C "$WT" add NOTES && git -C "$WT" commit -qm "NOTES: hello (#$N)" || die 'could not commit in the worktree'
-inpane "$W" bash "$BIN/fleet-comment.sh" "$N" --body '加好了，等落地。' >"$WORK/out" 2>"$WORK/err" \
-  || die 'the worker could not comment on its ticket' "$(cat "$WORK/out" "$WORK/err")"
-inpane "$W" bash "$BIN/fleet-evidence.sh" after --repo "$R" --issue "$N" --note '改动后：NOTES 一行 hello' \
-  --name after.txt - <"$WT/NOTES" >"$WORK/out" 2>"$WORK/err" || die 'the after capture failed' "$(cat "$WORK/out" "$WORK/err")"
-cm=$(tj "$N" comments | jq -r '[.comments[]?.body] | join("\n")')
-case "$cm" in *'加好了，等落地。'*) ;; *) die "the comment is not on the hub ticket" "$cm" ;; esac
+git -C "$WT" add NOTES && git -C "$WT" commit -qm "NOTES: hello ($T)" || die 'could not commit in the worktree'
 [ "$(ghcalls)" = 0 ] || die 'the work asked gh' "$(cat "$GHLOG")"
-ok "brief read #$N off the hub · before/after captured · committed $(git -C "$WT" rev-parse --short HEAD) · comment on the ticket · gh 0"
+ok "brief read $T off the hub · committed $(git -C "$WT" rev-parse --short HEAD) · gh 0"
 passed
 
 # =============================================================================
-step 5 '落地: the fleet lands it — no pull request'
+step 5 '落地: the fleet lands it — no pull request — and the report closes the record'
 v=$(inpane "$W" bash "$BIN/fleet-pr-verdict.sh" 2>"$WORK/err"); rc=$?
 [ "$v" = READY ] && [ "$rc" = 0 ] || die "pr_verdict said ${v:-nothing} (exit $rc)" "$(cat "$WORK/err")"
 v=$(inpane "$W" bash "$BIN/fleet-pr-merge.sh" 2>"$WORK/err"); rc=$?
@@ -496,15 +565,14 @@ v=$(inpane "$W" bash "$BIN/fleet-pr-merge.sh" 2>"$WORK/err"); rc=$?
 grep -q 'check passed' "$WORK/err" || die "the landing does not say the repo's check passed" "$(cat "$WORK/err")"
 [ "$("$REAL_GIT" --git-dir="$WORK/srv/repos/demo.git" show master:NOTES 2>/dev/null)" = hello ] \
   || die "the bare repo's master does not carry the change" "$("$REAL_GIT" --git-dir="$WORK/srv/repos/demo.git" log --oneline master)"
-fleet_landed "$R" "issue-$N" "$MAIN" master >/dev/null || die 'git does not say issue-<N> landed (fleet_landed)'
-st=$(tj "$N" state,comments)
-[ "$(printf '%s' "$st" | jq -r .state)" = CLOSED ] || die 'the ticket is still open after the landing' "$st"
-case "$(printf '%s' "$st" | jq -r '[.comments[]?.body] | join("\n")')" in *落地*) ;; *) die 'the ticket carries no 落地 line' "$st" ;; esac
+fleet_landed "$R" "$BR" "$MAIN" master >/dev/null || die "git does not say $BR landed (fleet_landed)"
 inpane "$W" bash "$BIN/fleet-report-parent.sh" --state merged --summary 'NOTES 加了一行 hello' >"$WORK/out" 2>"$WORK/err" \
-  || die "the worker's merged report was refused (exit $?)" "$(cat "$WORK/out" "$WORK/err")"
+  || die "the session's merged report was refused (exit $?)" "$(cat "$WORK/out" "$WORK/err")"
 grep -q 'NOT reporting MERGED' "$WORK/err" && die "the merged report with no PR was re-filed as not merged" "$(cat "$WORK/err")"
+closed() { fleet_task_closed "$T" >/dev/null; }
+waitfor 15 closed || die "the record $T is still open after the merged report" "$(trec; cat "$WORK/err")"
 [ "$(ghcalls)" = 0 ] || die 'landing asked gh' "$(cat "$GHLOG")"
-ok "READY → MERGED: master at $("$REAL_GIT" --git-dir="$WORK/srv/repos/demo.git" rev-parse --short master) · check passed · fleet_landed · #$N closed with 落地 · gh 0"
+ok "READY → MERGED: master at $("$REAL_GIT" --git-dir="$WORK/srv/repos/demo.git" rev-parse --short master) · check passed · fleet_landed · $T closed by the report · gh 0"
 passed
 
 # =============================================================================
@@ -516,32 +584,32 @@ bash "$BIN/fleet-cleanup-daemon.sh" "$S" >"$WORK/out" 2>"$WORK/err" || die "the 
 # The first tick only shows the window its notice (a minute, #565); the next one,
 # that minute later, reaps — the minute is moved, not waited.
 due=$(tmux display-message -p -t "$W" '#{@reap_due}' 2>/dev/null)
-case "$due" in ''|*[!0-9]*) die 'the first cleanup tick did not put up its notice' "$(cat "$WORK/err")" ;; esac
+case "$due" in ''|*[!0-9]*) die 'the first cleanup tick did not put up its notice' "$(cat "$WORK/out" "$WORK/err")" ;; esac
 tmux set-option -w -t "$W" @reap_due "$(( $(date +%s) - 1 ))"
 bash "$BIN/fleet-cleanup-daemon.sh" "$S" >"$WORK/out" 2>"$WORK/err" || die "the second cleanup tick exited $?" "$(cat "$WORK/err")"
 gone() { ! tmux list-windows -a -F '#{window_id}' | grep -qxF "$W"; }
-waitfor 20 gone || die 'the window is still there after the cleanup tick' "$(cat "$WORK/err")"
-[ ! -d "$WT" ] || die 'the worktree is still there' "$(cat "$WORK/err")"
-! git -C "$MAIN" rev-parse --verify -q "refs/heads/issue-$N" >/dev/null || die 'the branch issue-<N> is still there' "$(cat "$WORK/err")"
-# the resume ledger (fleet-history.sh): key N, state landed, the landing commit git named
+waitfor 20 gone || die 'the window is still there after the cleanup tick' "$(cat "$WORK/out" "$WORK/err")"
+# the cleanup tick closes the window (history first) and keeps the worktree for
+# the janitor, which prunes a closed record's clean worktree and its branch (#4897)
+bash "$BIN/worktree-autoclean.sh" >"$WORK/out" 2>"$WORK/err" || die "the worktree janitor exited $?" "$(cat "$WORK/out" "$WORK/err")"
+[ ! -d "$WT" ] || die 'the worktree is still there after the janitor' "$(cat "$WORK/out" "$WORK/err")"
+! git -C "$MAIN" rev-parse --verify -q "refs/heads/$BR" >/dev/null || die "the branch $BR is still there" "$(cat "$WORK/err")"
+# the resume ledger (fleet-history.sh): the session's key, its record, the native session, the commit
 LEDGER="$FLEET_CONF_DIR/logs/landed_$(fleet_slug "$R").tsv"   # the login's records, never the install (#4668)
-awk -F'\t' -v n="$N" '$2 == n && $10 == "landed" && $5 ~ /^[0-9a-f]{40}$/' "$LEDGER" 2>/dev/null | grep -q . \
+awk -F'\t' -v k="$BR" -v t="$T" '$2 == k && $15 == t && $8 ~ /^[0-9a-f-]{36}$/ && $5 ~ /^[0-9a-f]{40}$/' "$LEDGER" 2>/dev/null | grep -q . \
   || die 'no landed row for the reaped session in the history ledger' "$(cat "$LEDGER" 2>&1; cat "$WORK/err")"
 [ "$(ghcalls)" = 0 ] || die 'the cleanup asked gh' "$(cat "$GHLOG")"
-ok "window, worktree and branch gone; the history ledger has the row · gh 0"
+ok "window closed by its record, worktree and branch pruned; the history ledger has the resumable row · gh 0"
 passed
 
 # =============================================================================
-step 7 '报告: what the batch report reads'
-kids=$(bash "$BIN/fleet-ticket.sh" children "hub:$R#$E" 2>"$WORK/err") || die "the EPIC's members could not be read" "$(cat "$WORK/err")"
-printf '%s\n' "$kids" | grep -qiE "^hub:$R#$N	closed" || die "the EPIC does not list #$N closed" "$kids"
-ev=$(bash "$BIN/fleet-evidence.sh" list --session "$S" --repo "$R" --epic "$E" 2>"$WORK/err") || die 'the evidence list failed' "$(cat "$WORK/err")"
-case "$ev" in *before*after*|*after*before*) ;; *) die "the report would show 无证据 for #$N" "$ev" ;; esac
+step 7 '报告: what the person reads'
+[ "$(trec | jq -r '.outcome // .state')" != open ] || die "the person's list still shows $T open" "$(trec)"
 LREC="$FLEET_CONF_DIR/landed/$(fleet_slug "$R").ndjson"
-jq -e --arg b "issue-$N" 'select(.branch == $b and .check == "pass")' "$LREC" >/dev/null 2>&1 \
+jq -e --arg b "$BR" 'select(.branch == $b and .check == "pass")' "$LREC" >/dev/null 2>&1 \
   || die 'no landing record that says the check passed' "$(cat "$LREC" 2>&1)"
 [ "$(ghcalls)" = 0 ] && [ "$(ghhttp)" = 0 ] || die 'the report asked GitHub' "$(cat "$GHLOG" "$WORK/ghapi.log")"
-ok "EPIC #$E: member #$N closed · evidence before + after · landing record (check pass) · gh 0"
+ok "$T: $(trec | jq -r '.outcome // .state') in the person's list · landing record (check pass) · gh 0"
 passed
 
 printf '\nnogh-e2e: steps: %s/7 · gh calls: %s · github http: %s\n' "$STEPS" "$(ghcalls)" "$(ghhttp)"

@@ -29,8 +29,7 @@
 - [FLEET-MCP.md](dev/FLEET-MCP.md) — 会话用的 `fleet` 工具服务
 - [STATE.md](dev/STATE.md) — 窗口上的 Claude 状态怎么刷新
 - [CLEANUP.md](dev/CLEANUP.md) · [REAP-SAFETY.md](dev/REAP-SAFETY.md) — 合并后的回收与回收安全
-- [DRAFT-PR.md](dev/DRAFT-PR.md) — 草稿单：worker 只开草稿 PR，批准后再合
-- [WORKER.md](dev/WORKER.md) — 执行会话说明书的规则背景与排障（开工只读 `/fleet-claim`）
+- [WORKER.md](dev/WORKER.md) — 执行会话的规则背景与排障（流程由 SessionStart hook 给出）
 - [TASK-ACCEPTANCE.md](dev/TASK-ACCEPTANCE.md) — 无 GitHub 任务控制：12 项夹具验收与独立的 live 演练单
 - [TASK-BLOCKERS.md](dev/TASK-BLOCKERS.md) — 显式 blocker 的身份、依赖事件、授权与只读消费契约
 - [REAP-SHADOW.md](dev/REAP-SHADOW.md) — 同源回收证据聚合、影子差异和 not-actionable 边界
@@ -67,6 +66,5 @@
 - [OSS-INVENTORY.md](dev/OSS-INVENTORY.md) — 仓库里的内部名字和地址 · 清单（`bin/oss-scan.sh`）
 - [OSS-DRILL.md](dev/OSS-DRILL.md) — 外人照对外文档从零装一遍的演练单（自托管 · 托管管理员）
 - [USAGE-EVIDENCE.md](dev/USAGE-EVIDENCE.md) — 使用实证
-- [CLAIM-MEASUREMENT.md](dev/CLAIM-MEASUREMENT.md) — 认领与摸底的测量方法
 
 新文档放进上面两处之一，链接用相对路径；`bin/docs-links-selftest.sh` 在每个 PR 上读一遍所有链接。

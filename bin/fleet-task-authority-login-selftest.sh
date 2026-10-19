@@ -20,7 +20,7 @@
 # Drives bin/fleet_repo_authority.py, bin/fleet-repo.sh (authority),
 # bin/fleet-lib.sh (fleet_repo_authority_guard, fleet_task_authority),
 # bin/fleet-conf.sh (set-node), bin/fleet-hub-node.sh (authority-sync),
-# bin/fleet_ticket.py.
+# bin/fleet_hub_rest.py.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 

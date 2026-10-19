@@ -2,27 +2,27 @@
 # fleet-worker-start-hook.sh — the flow of a session whose first turn is the
 # person's own words (issue #3331, EPIC #3178 ⑧, D2 = ①).
 #
-# A repo session's first turn used to be `/fleet-claim`, with the person's words
-# hidden in the ticket. Now dash-issue-session.sh seeds the words themselves (or
-# the issue's title when nobody typed any) and stamps the window
-# `@seed_words <the claim command>` before its agent starts. This SessionStart
+# dash-issue-session.sh seeds a repo session with the person's words (or the
+# issue's title when nobody typed any) and stamps the window `@seed_words` (any
+# non-empty value — an older spawn wrote its claim command) before its agent starts. This SessionStart
 # hook (the ONE hook table, hooks/settings-hooks.json) reads that stamp and prints
 # SessionStart JSON:
 #
 #   systemMessage      one grey line for the person —
 #                      「fleet-worker · tokenledger · 单 #3312 · 做完开 PR，门绿了自己合」
-#   additionalContext  the agent's instruction: run the claim skill FIRST, then
-#                      treat the words as the request the ticket records.
+#   additionalContext  the agent's instruction: read the `brief`, then the flow —
+#                      implement, PR, pr_verdict / pr_merge, report (issue #4898:
+#                      no claim skill, nothing written to the issue).
 #
 # fleet-worker's body is empty on purpose (a body replaces Claude Code's own
 # system prompt), so this is the only road the flow has in; the words and the
 # stamp go together (the spawn writes both or neither), which is what
-# seed-words-selftest.sh pins: words first ⇒ the claim is the next step.
+# seed-words-selftest.sh pins: words first ⇒ the brief is the next step.
 #
 # A development task with no issue (issue #4897) is stamped `@task T<n>` +
 # `@task_flow 1` instead: its context is the task flow — read the record with the
 # `brief` tool, implement, PR, merge on green, `report merged` (closes the record)
-# — and it never names the claim skill or a GitHub issue.
+# — and it never names a GitHub issue.
 #
 # Only on `startup`: a resume / compact already has the conversation. A window
 # with no @seed_words (and no @task_flow) — a scratch, a no-repo session, a desk ticket, a Codex
@@ -51,13 +51,13 @@ EOF
 # A development task with no issue (issue #4897, EPIC #4895 批 0): the window
 # carries the hub's record (@task T<n>) and @task_flow 1 (dash-raw-session.sh
 # --repo --task, stamped before its agent starts). Its flow reads the RECORD —
-# never a GitHub issue — so the claim skill is not run.
+# never a GitHub issue.
 case "$task" in T[1-9]*) case "${task#T}" in *[!0-9]*) task='' ;; esac ;; *) task='' ;; esac
-mode=claim
+mode=issue
 if [ -z "$num" ] && [ -n "$task" ] && [ "${tflow:-}" = 1 ] && [ -n "$repo" ]; then
   mode=task
 else
-  case "$cmd" in /*) ;; *) exit 0 ;; esac
+  [ -n "$cmd" ] || exit 0
   case "$num" in ''|*[!0-9]*) exit 0 ;; esac
   [ "${desk:-}" = 1 ] && exit 0
 fi
@@ -70,53 +70,41 @@ case "${FLEET_UI_LANG:-}" in
 esac
 [ "$lang" = en ] || lang=zh
 
-SW_MODE="$mode" SW_TASK="$task" SW_CMD="$cmd" SW_NUM="$num" SW_REPO="$repo" SW_AGENT="${adef:-fleet-worker}" SW_LANG="${lang:-zh}" python3 -c '
-import json, os, sys
-cmd, num, repo = os.environ["SW_CMD"], os.environ["SW_NUM"], os.environ["SW_REPO"]
+SW_MODE="$mode" SW_TASK="$task" SW_NUM="$num" SW_REPO="$repo" SW_AGENT="${adef:-fleet-worker}" SW_LANG="${lang:-zh}" python3 -c '
+import json, os
+num, repo = os.environ["SW_NUM"], os.environ["SW_REPO"]
 name = repo.rsplit("/", 1)[-1] or repo
 agent = os.environ["SW_AGENT"]
+en = os.environ["SW_LANG"] == "en"
 if os.environ["SW_MODE"] == "task":
     task = os.environ["SW_TASK"]
-    if os.environ["SW_LANG"] == "en":
-        line = "%s · %s · task %s · opens a PR when done, merges itself once the gate is green" % (agent, name, task)
-    else:
-        line = "%s · %s · 任务 %s · 做完开 PR，门绿了自己合" % (agent, name, task)
-    ctx = (
-        "# This session is a fleet worker on a hub task\n"
-        "It is bound to the hub task record %s (repo %s) — NOT to a GitHub issue. The first user "
-        "message is the person\x27s own words: the request that record holds.\n"
-        "Before anything else, read the record: call the fleet tool `brief` with no arguments "
-        "(it prints the fleet, repo, base, merge method, origin and the record). Then:\n"
-        "1. Implement in this worktree (never the base checkout), and verify per the repo\x27s rules.\n"
-        "2. Commit, push this branch, open the PR (`gh pr create --fill`); its body names %s and "  # no-gh-ok: a message
-        "carries no `Closes #N`.\n"
-        "3. Land it: the fleet tool `pr_verdict` (`wait: true` while PENDING), then `pr_merge` on "
-        "READY; never merge red.\n"
-        "4. Close the record and report: the fleet tool `report` (`state: merged`, `pr`, `summary`) "
-        "right after the merge — that closes %s and tells whoever dispatched it. Blocked: `ask`, "
-        "then `report` (`state: blocked`). Then stop.\n"
-        "Never claim, comment on or close a GitHub issue for this work, and never file one for it: "
-        "the record is the ticket. Do it yourself; never ask the person to run anything."
-    ) % (task, repo, task, task)
-    print(json.dumps({"systemMessage": line,
-                      "hookSpecificOutput": {"hookEventName": "SessionStart",
-                                             "additionalContext": ctx}}, ensure_ascii=False))
-    sys.exit(0)
-skill = cmd.lstrip("/").split()[0]
-if os.environ["SW_LANG"] == "en":
-    line = "%s · %s · #%s · opens a PR when done, merges itself once the gate is green" % (agent, name, num)
+    line = ("%s · %s · task %s · opens a PR when done, merges itself once the gate is green" if en
+            else "%s · %s · 任务 %s · 做完开 PR，门绿了自己合") % (agent, name, task)
+    head = ("# This session is a fleet worker on a hub task\n"
+            "It is bound to the hub task record %s (repo %s) — NOT to a GitHub issue. The first user "
+            "message is the person\x27s own words: the request that record holds.\n") % (task, repo)
+    names = "its body names %s and carries no `Closes #N`" % task
+    closes = "that closes %s and tells whoever dispatched it" % task
 else:
-    line = "%s · %s · 单 #%s · 做完开 PR，门绿了自己合" % (agent, name, num)
-ctx = (
-    "# This session is a fleet worker\n"
-    "It is bound to issue #%s of %s. The first user message is the person\x27s own words "
-    "(or the issue\x27s title) — the request that issue records.\n"
-    "Before anything else — before reading code, before answering — invoke the `%s` skill "
-    "(the Skill tool, skill `%s`; typed it is `%s`). It claims the issue and carries the "
-    "whole lifecycle: ground, implement, open the PR, merge it once the gate is green, report "
-    "to whoever spawned you. Do it yourself; never ask the person to type it, and never "
-    "mention it as a slash command they should run."
-) % (num, repo or "this repo", skill, skill, cmd)
+    line = ("%s · %s · #%s · opens a PR when done, merges itself once the gate is green" if en
+            else "%s · %s · 单 #%s · 做完开 PR，门绿了自己合") % (agent, name, num)
+    head = ("# This session is a fleet worker\n"
+            "It was opened on issue #%s of %s. The first user message is the person\x27s own words "
+            "(or the issue\x27s title) — the request that issue records.\n") % (num, repo or "this repo")
+    names = "its body carries `Closes #%s`" % num
+    closes = "that tells whoever spawned you"
+ctx = head + (
+    "Before anything else, call the fleet tool `brief` with no arguments (it prints the fleet, repo, "
+    "base, merge method, origin and the request). Then:\n"
+    "1. Implement in this worktree (never the base checkout), and verify per the repo\x27s rules.\n"
+    "2. Commit, push this branch, open the PR (`gh pr create --fill`); %s.\n"  # no-gh-ok: a message
+    "3. Land it: the fleet tool `pr_verdict` (`wait: true` while PENDING), then `pr_merge` on "
+    "READY; never merge red.\n"
+    "4. Report: the fleet tool `report` (`state: merged`, `pr`, `summary`) right after the merge — "
+    "%s. Blocked: `ask`, then `report` (`state: blocked`). Then stop.\n"
+    "Never claim, comment on or close a GitHub issue yourself, and never file one: the fleet keeps "
+    "no issue state (issue #4898). Do it yourself; never ask the person to run anything."
+) % (names, closes)
 print(json.dumps({"systemMessage": line,
                   "hookSpecificOutput": {"hookEventName": "SessionStart",
                                          "additionalContext": ctx}}, ensure_ascii=False))

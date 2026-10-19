@@ -885,8 +885,8 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       cfgf="$US$_c13$US$wittl$US$wreap" ;;
     esac
     # field 16 (issue #2235): `failed` — this session started from the warm pool
-    # and its issue could not be filed / bound (fleet-start-backfill.sh's
-    # @backfill); the view marks the row 「单子没建上」. Fields 13-15 stay, empty,
+    # and its issue could not be filed / bound (an older warm start's
+    # @backfill, retired with #4898); the view marks the row 「单子没建上」. Fields 13-15 stay, empty,
     # before it; no mark ⇒ no field, byte for byte as before.
     if [ "$wbf" = failed ]; then
       _c13=''; [ "$cfgst" = unknown ] || _c13=$cfgst

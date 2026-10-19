@@ -13,8 +13,6 @@
 #            head sha, then the head branch deleted — only after GitHub says
 #            merged). No more parking a green PR until the GraphQL reset (#954,
 #            #1042: a worker waited ~50 min).
-#    A PR whose ticket is DRAFT-ONLY and not approved (issue #3715,
-#    bin/fleet-draft.sh gate) is refused after the gate: prints DRAFT-ONLY, exit 1.
 # 3. CONFIRM — re-read the verdict; MERGED is the only success. gh's own exit code
 #            is not trusted: it can fail AFTER merging (deleting the local branch
 #            a worktree stands on).
@@ -94,11 +92,6 @@ case "$v" in
   READY)  ;;
   *)      printf '%s\n' "$v"; note "#$PR is $v, not READY — refusing to merge"; exit 1 ;;
 esac
-# A draft-only ticket (issue #3715) lands only once approved: green is not enough.
-# FLEET_DRAFT_GATE=0 is the operator's hatch.
-if [ "${FLEET_DRAFT_GATE:-1}" != 0 ] && ! bash "$BIN/fleet-draft.sh" gate "$PR" --repo "$repo"; then
-  printf 'DRAFT-ONLY\n'; exit 1
-fi
 
 fleet_gh_run graphql pr-merge pr merge "$PR" --repo "$repo" "--$method" --delete-branch >/dev/null; mrc=$?
 if [ "$mrc" -eq "$FLEET_GH_LIMITED_RC" ]; then

@@ -187,7 +187,7 @@ codex-cli 0.154 实测）：
 | hook 状态信号 → dash 上色 | ✅ | ✅ | 同 schema；`-c hooks.<Event>=[…]` 内联到本 install 路径 |
 | 两条 bypass-permissions 护栏 | ✅ | ✅ | `--dangerously-bypass-approvals-and-sandbox` + `--dangerously-bypass-hook-trust` |
 | 项目文档 | CLAUDE.md | AGENTS.md | `project_doc_fallback_filenames` 让 Codex 读 CLAUDE.md |
-| fleet command 种子 | 原生展开 | 原生 skill | Codex 从 `$CODEX_HOME/skills/<name>/SKILL.md` 触发 `$fleet-claim`；旧版/未同步 home 才回退到 `conf/codex-preamble.md` + `commands/<name>.md` |
+| fleet command 种子 | 原生展开 | 原生 skill | Codex 从 `$CODEX_HOME/skills/<name>/SKILL.md` 触发 `$fleet-<cmd>`；旧版/未同步 home 才回退到 `conf/codex-preamble.md` + `commands/<name>.md` |
 | SessionEnd 关窗 | ✅ | ✅ | Codex thread end 仍不关窗；launcher 等 CLI 成功退出后走共享 close-on-exit |
 | `/fleet-handoff` + 自动 nudge | ✅ | ✅ | Codex 直接跑 transfer/controller 脚本；自动 nudge 走同一条 native handoff path |
 | `/fleet-context` + dash ctx % | ✅ | ✅ | SessionStart 记录 Codex UUID/CODEX_HOME，rollout token telemetry 提供读数 |
@@ -812,9 +812,7 @@ worker 自己 rebase 掉了，没浪费一轮。
 **→ 派工前先查文件重叠，重叠就串行；若已并行，落地后立刻给后者精确指令。**
 
 **② fleet pane 里不能直接 `gh issue comment`。**
-`bash-guard.py` 会拦，必须走 `bin/fleet-comment.sh <issue> --note|--to-worker`。
-且对**正在跑**的 worker 要用 `--to-worker` —— `--note` 只落在 issue 上，
-已经读过 issue 的 worker 看不到。
+（#4898 起 fleet 不再写 issue 评论；对**正在跑**的 worker 说话用 `send` 工具。）
 
 ### 并行策略:哪些能丢给 autofill
 
@@ -932,7 +930,7 @@ monorepo worktree 要跑几分钟，拖长整个 tick）→ [#653](https://githu
    两条线是互补的，不是替代。
 4. **得有低摩擦的归档渠道，「被咬到」才会变成 issue。** 这批东西几乎都是在**别的活
    干到一半**时冒出来的 —— 能当场 file 掉，它才会存在。fleet 里这是一条命令
-   （`bin/fleet-issue-file.sh`，可 `--parent` 挂成子任务、`--spawn` 直接起 worker），
+   （当时是 issue 建单命令，#4898 起是 `task` 工具：立 hub 任务记录、可直接起会话），
    而且**不只操作员能用**：[#552](https://github.com/verkyyi/claude-fleet/issues/552)
    就是 worker 在做别的事时顺手 file 的，上表里至少 7 条带着 fleet filer 的来源标记。
    如果 file 一条 issue 要切窗口、要想标题、要等操作员批，它们里的大多数只会变成

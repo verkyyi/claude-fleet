@@ -11,7 +11,7 @@ name: client-e2e
 # headless on its own tmux socket, the node's sessions in its list, and one row
 # opened in the right pane. Any step red = this job red, with the logs.
 # bin/nogh-e2e-selftest.sh (issue #3605) walks the road with no
-# GitHub at all: WeChat sign-in, a repo at an ssh address, ticket → session →
+# GitHub at all: WeChat sign-in, a repo at an ssh address, task record → session →
 # fleet's own landing → cleanup → report, with a `gh` that must never be called.
 #
 # ubuntu on every PR (no master push re-run since issue #4663: its PR ran it on

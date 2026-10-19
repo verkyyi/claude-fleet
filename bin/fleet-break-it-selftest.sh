@@ -18,7 +18,7 @@
 #   session-ctrl-z                                  bin/fleet-session-wrap.sh (the TSTP guard)
 #   resume-fails-fast / codex-no-id                 bin/fleet-session-wrap.sh, fleet-session-page.py
 #   codex-resume-override                           bin/fleet-codex.sh, fleet-codex-posture.py
-#   merged-then-commit / q-releases-claim           bin/session-end-hook.sh --recycle, fleet_reap_ok
+#   merged-then-commit / q-leaves-issue             bin/session-end-hook.sh --recycle, fleet_reap_ok
 #   last-window                                     fleet_server_resident (fleet-up.sh)
 #   kill-server / disk-full                         bin/fleet-restore.sh --auto, fleet-diskguard.sh --gate
 #   wedged-socket                                   fleet_socket_heal (fleet-restore.sh, fleet-up.sh)
@@ -63,20 +63,13 @@
 #                                                   bin/fleet-migrate.sh (cfg_update_nudge, the /loop rearm)
 #   fleet-down-confirm                              bin/fleet-down.sh (confirm, --yes), fleet-up.sh --undo,
 #                                                   fleet-restore.sh --undo
-#   breakage-three-filers                           bin/fleet-issue-file.sh --breakage, fleet_breakage_probe /
-#                                                   fleet_breakage_find (fleet-lib.sh)
-#   breakage-no-flag                                bin/fleet-issue-file.sh (no auto road, #4271), fleet-mcp.py file_issue
-#   breakage-new-sha                                bin/fleet-issue-file.sh --fault-sha, fleet_fault_find_closed /
-#                                                   fleet_fault_fix_commit / fleet_fault_contains / fleet_fault_seen (fleet-lib.sh)
-#   breakage-wrong-red                              bin/fleet-issue-file.sh --breakage, fleet_breakage_probe /
-#                                                   fleet_breakage_run_rows / fleet_breakage_pick (the red this time, #4774)
 #   place-declined-not-retried                      fleet_hub_place (fleet-lib.sh: the `after` field, each try's
 #                                                   stderr), fleet-children.py (claim: stale); the hub half is
 #                                                   tokenledger/hub/api fleet_place.go (go test, when here)
 #                                                   (exit 8), fleet_control.py (UNAVAILABLE); the hub half is
 #                                                   tokenledger/hub/api pickNodeAfter (go test, when here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
-#   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage filing), fleet-stable.sh move (no macos gate), .github/workflows/mac-follow.yml
+#   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage alert), fleet-stable.sh move (no macos gate), .github/workflows/mac-follow.yml
 #   train-push-cancels                              .github/workflows/release-train.yml (concurrency), bin/fleet-train-board.sh,
 #                                                   selftests-macos.yml (no push trigger)
 #   release-artifact-missing                        bin/fleet-stable.sh move (the artifacts gate),
@@ -145,9 +138,6 @@
 #   reap-other-repo-clears / reap-stale-stamp       bin/fleet-cleanup-idle.py, fleet_reap_notice.py, fleet-reap-live.py
 #   reap-reopen-restarts-clock                      fleet_cfg_restart_why (fleet-lib.sh), fleet-cfg-restart.sh
 #   stop-bare-path                                  bin/fleet-worker-stop.sh (fleet_path_fill)
-#   ticket-hub-down                                 bin/fleet-ticket.sh, bin/fleet_ticket.py, fleet-comment.sh,
-#                                                   fleet-issue-file.sh (fleet_ticket_home: a hub repo never asks gh),
-#                                                   fleet-issue-bridge.sh (--event + the hub backstop, #3597)
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
 #   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
@@ -618,17 +608,18 @@ drill_merged_then_commit() {
   WHAT="合并后再提交再按 q：分支 issue-7 仍在，$n 个提交（1 个在合并之后）"
 }
 
-# q on an unmerged issue: the claim goes, the issue can be dispatched again (#1842 ②).
-drill_q_releases_claim() {
+# q on an unmerged issue: nothing is written to the issue (#4898: no claim to
+# release), the worktree stays, the issue can be dispatched again (#1842 ②).
+drill_q_leaves_issue() {
   CAP=10; seh_rig; local R="$WORK/seh" wt="$WORK/seh/wt-8" t0
   git -C "$R/main" worktree add -q -b issue-8 "$wt" >/dev/null 2>&1
   printf 'w\n' > "$wt/w"; git -C "$wt" add w; git -C "$wt" commit -qm 'half done'
   : > "$R/log"; t0=$(now)
   seh_q 8
   SECS=$(since "$t0")
-  grep -q 'issue edit 8 .*--remove-assignee @me' "$R/log" || { WHY="q left the claim on #8 (gh: $(tr '\n' ' ' < "$R/log"))"; return 1; }
+  grep -qE 'issue (edit|comment|close)' "$R/log" && { WHY="q wrote to issue #8 (gh: $(tr '\n' ' ' < "$R/log"))"; return 1; }
   [ -d "$wt" ] || { WHY="q removed the unmerged worktree"; return 1; }
-  WHAT="未合并单按 q：认领放开、可再派，worktree 留着"
+  WHAT="未合并单按 q：单子不动（没有认领可放）、可再派，worktree 留着"
 }
 
 # home_back <old pid> — home holds a live shell other than <old pid>
@@ -763,7 +754,7 @@ drill_agent_file_broken() {
     || { WHY="cannot start the isolated tmux server"; return 1; }
   sp() { env -u TMUX -u TMUX_PANE -u CCQUOTA_FLEET -u CLAUDE_CONFIG_DIR PATH="$d/fb:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" \
            TMPDIR="$d/tmp" FLEET_AGENT_PLUGINS_CMD='echo []' FLEET_WRAP_LAUNCH="$d/fb/agent" \
-           FLEET_ORIGIN_GATE=0 FLEET_PRESPAWN_DEDUP=0 FLEET_REPO=acme/w FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master \
+           FLEET_ORIGIN_GATE=0 FLEET_REPO=acme/w FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master \
            FLEET_WORKTREE_ROOT="$d/wt" bash "$BIN/dash-issue-session.sh" "$@" "$lbl" --title t --origin hub --print; }
   t0=$(now)
   sp 5 --as doc-only > "$d/out" 2> "$d/err"; rc=$?
@@ -1890,7 +1881,7 @@ drill_cfg_reopen_loop() {
   # the Loop over, the session is reopened: a worker with its PR still open is told
   # to carry the ship on, never "nothing to act on"
   n=$(bash -c 'set -u; . "$1/fleet-migrate.sh"; cfg_update_nudge "" "" cfg-stale "$2"' _ "$BIN" "$(o "$w" @pr_num)")
-  case "$n" in *"Your PR #55 is still open"*"continue the /fleet-claim ship"*) ;;
+  case "$n" in *"Your PR #55 is still open"*"continue the ship"*) ;;
     *) WHY="a worker mid-ship is reopened with [$n] — it would park at the prompt with its PR unmerged"; return 1 ;; esac
   SECS=$(since "$t0"); WHAT="没盖 @loop 的 /loop 会话：judge 读原对话答 looping、补上 @loop、不重开；有开着 PR 的 worker 重开提示是续 ship"
 }
@@ -2646,7 +2637,7 @@ PY2
 # o/a; the real fleet `two` (o/a + o/b) bridged nothing, and `--to-worker` to an
 # o/b worker said 「将转达」 for an hour. The sandbox is that estate, with a real
 # isolated tmux server for `two` and a gh that logs every listing. Asserts:
-# before the sync the bridge does not cover o/b (so fleet-comment falls back to the
+# before the sync the bridge does not cover o/b (so a comment falls back to the
 # peer channel); one sync pass (`fleet-conf.sh migrate`) carries the stranded keys
 # back and retires the phantom; then the next ticks list o/b's comments — the
 # examined line on the second (the first seeds the watermark).
@@ -2695,287 +2686,6 @@ drill_multirepo_bridge_second_repo() {
   WHAT="一次同步把被困的机器配置并回 fleet.conf、退役幽灵 fleet；下一拍起两个仓库都被 bridge 轮询"
 }
 
-drill_breakage_three_filers() {
-  CAP=25; local d="$WORK/bk" t0 i c n0 created zeros=0 fives=0
-  mkdir -p "$d/fp" "$d/conf" "$d/store" "$d/home" "$d/tmp"
-  # The fake GitHub: REST paths only (a red master tends to come with a spent
-  # GraphQL budget), a store on disk, and a 0.4 s pause inside `issue create` so
-  # three filers that start together all reach it before any number exists.
-  cat > "$d/fp/gh" <<'EOF'
-#!/bin/bash
-S="$BK_STORE"; printf '%s\n' "$*" >> "$S/gh.log"
-case "$1" in
-  issue)
-    case "$2" in
-      create)
-        sleep 0.4
-        n=$(( $(ls "$S"/issue-* 2>/dev/null | wc -l) + 101 ))
-        shift 2; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
-        printf '%s' "$b" > "$S/issue-$n"; printf 'https://github.com/o/w/issues/%s\n' "$n" ;;
-      comment)
-        shift 2; n="$1"; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
-        printf '%s' "$b" | tr '\n' ' ' >> "$S/comments-$n"; printf '\n' >> "$S/comments-$n"
-        printf 'https://github.com/o/w/issues/%s#issuecomment-1\n' "$n" ;;
-    esac ;;
-  api)
-    p=''; for a in "$@"; do case "$a" in repos/*) p="$a";; esac; done
-    case "$p" in
-      repos/o/w)                    printf 'main\n' ;;
-      */actions/runs\?*)            printf '77\t9003\t%s\tfailure\t2026-10-07T04:35:00Z\tselftests\t60\n77\t9002\t%s\tfailure\t2026-10-07T04:10:00Z\tselftests\t1600\n77\t9001\t%s\tsuccess\t2026-10-07T04:00:00Z\tselftests\t2200\n' "$BK_HEAD" "$BK_RED" "$BK_GREEN" ;;
-      */actions/runs/9002/jobs*)    printf '501\tselftests / shard 3\n' ;;
-      */actions/runs/9003/jobs*)    printf '503\tselftests / shard 3\n' ;;   # the newest red: the same job (#4774)
-      repos/o/w/issues\?*)          for f in "$S"/issue-*; do [ -e "$f" ] || continue; printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done ;;
-    esac ;;
-  run) cat "$BK_LOG" ;;
-esac
-exit 0
-EOF
-  chmod +x "$d/fp/gh"
-  # The failed job's log, the way `gh run view --log-failed` prints it.
-  printf 'selftests / shard 3\tRun tests\t2026-10-07T04:20:11.1234567Z ##[group]Run bash bin/run-selftests.sh\nselftests / shard 3\tRun tests\t2026-10-07T04:20:12.0000000Z FAIL  lint: internal/api/roles.go:88:2: duplicate key "/v1/admin/drill" in map literal\n' > "$d/log-a"
-  sed 's/:88:2:/:91:4:/' "$d/log-a" > "$d/log-a2"   # the same breakage after a half-fix moved the lines
-  printf 'selftests / shard 3\tRun tests\t2026-10-07T04:30:00.0000000Z FAIL  bash32-array-selftest: bin/x.sh:12: bare array on an empty array\n' > "$d/log-b"
-  bk() { env -u TMUX -u TMUX_PANE HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$d/tmp" PATH="$d/fp:$PATH" \
-           FLEET_GH_WRITE_GAP=0 BK_STORE="$d/store" BK_HEAD=aaaa111aaaa111 BK_RED=bbbb222bbbb222 BK_GREEN=cccc333cccc333 \
-           BK_LOG="${LOG:-$d/log-a}" "$@"; }
-  t0=$(now)
-  for i in 1 2 3; do
-    ( bk bash "$BIN/fleet-issue-file.sh" --title "master 红：routes 重复" --breakage --repo o/w --from "w$i" > "$d/out$i" 2> "$d/err$i"; echo $? > "$d/rc$i" ) &
-  done
-  wait
-  SECS=$(since "$t0")
-  created=$(ls "$d/store"/issue-* 2>/dev/null | wc -l | tr -d ' ')
-  [ "$created" = 1 ] || { WHY="3 filers of one breakage made $created issues (want 1): $(cat "$d"/err? 2>/dev/null | tr '\n' ' ' | cut -c1-300)"; return 1; }
-  n0=$(ls "$d/store"/issue-* | head -1); n0=${n0##*-}
-  grep -q '<!-- fleet:breakage key=' "$d/store/issue-$n0" || { WHY="the issue body carries no fleet:breakage marker"; return 1; }
-  for i in 1 2 3; do
-    case "$(cat "$d/rc$i")" in
-      0) zeros=$((zeros + 1)) ;;
-      5) fives=$((fives + 1))
-         grep -qx "https://github.com/o/w/issues/$n0" "$d/out$i" || { WHY="filer $i exited 5 but printed [$(cat "$d/out$i")], not #$n0"; return 1; } ;;
-      *) WHY="filer $i exited $(cat "$d/rc$i"): $(tr '\n' ' ' < "$d/err$i" | cut -c1-200)"; return 1 ;;
-    esac
-  done
-  [ "$zeros" = 1 ] && [ "$fives" = 2 ] || { WHY="exit codes: $zeros × 0, $fives × 5 (want 1 and 2)"; return 1; }
-  c=$(grep -c '同一故障' "$d/store/comments-$n0" 2>/dev/null)
-  [ "$c" = 2 ] || { WHY="issue #$n0 got $c 「同一故障」 comments, want 2"; return 1; }
-  # A later sighting with the lock gone (another machine, or two minutes on) and
-  # the lines moved: found on GitHub by the marker, same number.
-  rm -rf "$d/conf/global/breakage"
-  LOG="$d/log-a2" bk bash "$BIN/fleet-issue-file.sh" --title "又红了" --breakage --repo o/w --from w4 > "$d/out4" 2> "$d/err4"; c=$?
-  [ "$c" = 5 ] && grep -qx "https://github.com/o/w/issues/$n0" "$d/out4" \
-    || { WHY="a later sighting (lines :88→:91, lock gone) exited $c with [$(cat "$d/out4")]: $(tr '\n' ' ' < "$d/err4" | cut -c1-200)"; return 1; }
-  # A different breakage on the same head files its own issue.
-  LOG="$d/log-b" bk bash "$BIN/fleet-issue-file.sh" --title "另一个故障" --breakage --repo o/w --from w5 > "$d/out5" 2> "$d/err5"; c=$?
-  created=$(ls "$d/store"/issue-* | wc -l | tr -d ' ')
-  [ "$c" = 0 ] && [ "$created" = 2 ] || { WHY="a different breakage exited $c, issues now $created (want 0 and 2): $(tr '\n' ' ' < "$d/err5" | cut -c1-200)"; return 1; }
-  # The degenerate: an ordinary filing reads none of it and leaves no lock.
-  : > "$d/store/gh.log"; rm -rf "$d/conf/global/breakage"
-  bk bash "$BIN/fleet-issue-file.sh" --title "普通单" --repo o/w > "$d/out6" 2> "$d/err6"; c=$?
-  [ "$c" = 0 ] || { WHY="an ordinary filing exited $c: $(tr '\n' ' ' < "$d/err6" | cut -c1-200)"; return 1; }
-  grep -q 'issues?state=open\|actions/runs' "$d/store/gh.log" && { WHY="an ordinary filing read a breakage path: $(grep 'issues?state=open\|actions/runs' "$d/store/gh.log" | head -1)"; return 1; }
-  [ -e "$d/conf/global/breakage" ] && { WHY="an ordinary filing created the breakage lock dir"; return 1; }
-  WHAT="3 个并发开单：1 张单 + 2 个退出码 5 + 2 条「同一故障」；行号变了仍认得，换故障照常开新单，普通开单不碰"
-}
-
-# An ordinary issue whose text says 「红」 is taken as the red base's breakage
-# (issue #4271, undoing #2175's auto road). On 2026-10-14 the orchestrator filed
-# #4268 — a release-gate design ticket whose body said 「红判定」 — while macOS /
-# shard 6 was red: the filer probed, stamped #4268 with that fingerprint, and the
-# NEXT ordinary filing (#4271's first try) was swallowed as 「同一故障」 under it.
-# Now only --breakage / --breakage-key make a breakage: two ordinary filings that
-# name the red master file two plain issues, no probe read; an explicit
-# --breakage still fingerprints, and a second one dedups (exit 5).
-drill_breakage_no_flag() {
-  CAP=25; local d="$WORK/bkn" t0 i c c2 n0 created
-  mkdir -p "$d/fp" "$d/conf" "$d/store" "$d/home" "$d/tmp"
-  cat > "$d/fp/gh" <<'EOF'
-#!/bin/bash
-S="$BK_STORE"; printf '%s\n' "$*" >> "$S/gh.log"
-case "$1" in
-  issue)
-    case "$2" in
-      create)
-        n=$(( $(ls "$S"/issue-* 2>/dev/null | wc -l) + 4268 ))
-        shift 2; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
-        printf '%s' "$b" > "$S/issue-$n"; printf 'https://github.com/o/w/issues/%s\n' "$n" ;;
-      comment)
-        shift 2; n="$1"; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
-        printf '%s' "$b" | tr '\n' ' ' >> "$S/comments-$n"; printf '\n' >> "$S/comments-$n" ;;
-    esac ;;
-  api)
-    p=''; for a in "$@"; do case "$a" in repos/*|search/*) p="$a";; esac; done
-    case "$p" in
-      */actions/runs\?*)  printf '100\t3001\tc902bf83\tfailure\t2026-10-07T11:07:06Z\ttokenledger\t900\n100\t2999\t38ae532a\tsuccess\t2026-10-07T11:05:50Z\ttokenledger\t1000\n' ;;
-      */actions/runs/3001/jobs*) printf '7741\ttokenledger-pg\n' ;;
-      repos/o/w/issues\?state=open*) for f in "$S"/issue-*; do [ -e "$f" ] || continue; printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done ;;
-    esac ;;
-  run) printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T11:22:21.7565667Z --- FAIL: TestFleetUsers_MachineLoginTakesOverAnOldIdentitysKey (1.12s)\n' ;;
-esac
-exit 0
-EOF
-  chmod +x "$d/fp/gh"
-  bk() { env -u TMUX -u TMUX_PANE HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$d/tmp" PATH="$d/fp:$PATH" \
-           FLEET_GH_WRITE_GAP=0 FLEET_BASE_BRANCH=master BK_STORE="$d/store" "$@"; }
-  t0=$(now)
-  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from orchestrator --title '发版门槛看复测结果，不看单开没开' \
-     --body 'cn 这一关认的是「当前 stable 上的红判定」；master 红的时候 tokenledger-pg 也一样被挡' > "$d/out1" 2> "$d/err1"; c=$?
-  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from orchestrator --title '每种故障只开一张单' \
-     --body '「master 红」用 breakage 指纹；macOS 红每个新 sha 开一张' > "$d/out2" 2> "$d/err2"; c2=$?
-  created=$(ls "$d/store"/issue-* 2>/dev/null | wc -l | tr -d ' ')
-  [ "$c" = 0 ] && [ "$c2" = 0 ] && [ "$created" = 2 ] \
-    || { WHY="two ordinary filings mentioning a red master: exit $c / $c2, $created issues (want 0, 0, 2): $(cat "$d"/err? | tr '\n' ' ' | cut -c1-300)"; return 1; }
-  grep -l 'fleet:breakage' "$d/store"/issue-* >/dev/null 2>&1 && { WHY="an ordinary filing was stamped with a breakage fingerprint"; return 1; }
-  grep -q 'actions/runs' "$d/store/gh.log" && { WHY="an ordinary filing probed the base branch: $(grep actions/runs "$d/store/gh.log" | head -1)"; return 1; }
-  # The explicit flag still fingerprints the red base; a second one dedups.
-  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from w1 --breakage --title 'tokenledger-pg 红' > "$d/out3" 2> "$d/err3"; c=$?
-  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from w2 --breakage --title 'master 红了' > "$d/out4" 2> "$d/err4"; c2=$?
-  SECS=$(since "$t0")
-  created=$(ls "$d/store"/issue-* | wc -l | tr -d ' ')
-  n0=$(grep -l 'fleet:breakage key=ci-' "$d/store"/issue-* 2>/dev/null | head -1)
-  [ "$c" = 0 ] && [ "$c2" = 5 ] && [ "$created" = 3 ] && [ -n "$n0" ] \
-    || { WHY="explicit --breakage: exit $c / $c2, $created issues, marker [${n0:-none}] (want 0, 5, 3, a ci- key): $(cat "$d/err3" "$d/err4" | tr '\n' ' ' | cut -c1-300)"; return 1; }
-  WHAT="正文写了「master 红」的两张普通单都按普通单开、一次探针都不跑、互不吞并；显式 --breakage 才按指纹开，第二个退出码 5"
-}
-
-# One fingerprint red on every new sha (issue #4271): fleet-macos-watch.sh opened
-# a new issue for each new stable (21 for one red test before #4232), and
-# cn-probe closed one and opened the next (#4199 → #4255, #4207 → #4224) — its
-# fix was on trunk, the probe still tested the old stable, the issue was closed
-# by hand, the next red was a new issue. Now: an open issue under the key gets
-# one comment per new sha; closed, a red on a version CONTAINING the commit that
-# closed it reopens that issue, a red on an older version is only noted there.
-drill_breakage_new_sha() {
-  CAP=25; local d="$WORK/bkns" t0 i c n0 created
-  mkdir -p "$d/fp" "$d/conf" "$d/store" "$d/home" "$d/tmp"
-  cat > "$d/fp/gh" <<'EOF'
-#!/bin/bash
-S="$BK_STORE"; printf '%s\n' "$*" >> "$S/gh.log"
-case "$1" in
-  issue)
-    case "$2" in
-      create)
-        n=$(( $(ls "$S"/issue-* "$S"/closed-* 2>/dev/null | grep -vc '\.at$') + 4199 ))
-        shift 2; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
-        printf '%s' "$b" > "$S/issue-$n"; printf 'https://github.com/o/w/issues/%s\n' "$n" ;;
-      comment)
-        shift 2; n="$1"; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
-        printf '%s' "$b" | tr '\n' ' ' >> "$S/comments-$n"; printf '\n' >> "$S/comments-$n" ;;
-      reopen) [ -f "$S/closed-$3" ] && mv "$S/closed-$3" "$S/issue-$3" ;;
-    esac ;;
-  api)
-    p=''; for a in "$@"; do case "$a" in repos/*|search/*) p="$a";; esac; done
-    case "$p" in
-      search/*) ;;
-      repos/o/w/issues\?state=open*)   for f in "$S"/issue-*; do [ -e "$f" ] || continue; printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done ;;
-      repos/o/w/issues\?state=closed*) for f in "$S"/closed-*; do [ -e "$f" ] || continue; case "$f" in *.at) continue ;; esac
-                                         printf '%s\t%s\t%s\n' "${f##*-}" "$(cat "$f.at")" "$(tr '\n' ' ' < "$f")"; done ;;
-      repos/o/w/issues/*/events*)      n=${p#*/issues/}; cat "$S/fix-${n%%/*}" 2>/dev/null ;;
-      repos/o/w/issues/*/comments*)    n=${p#*/issues/}; cat "$S/comments-${n%%/*}" 2>/dev/null ;;
-      repos/o/w/issues/[0-9]*)         cat "$S/issue-${p##*/}" 2>/dev/null ;;
-      repos/o/w/compare/*)             c=${p##*...}; case "$c" in 9*) echo ahead ;; *) echo behind ;; esac ;;
-    esac ;;
-esac
-exit 0
-EOF
-  chmod +x "$d/fp/gh"
-  bk() { env -u TMUX -u TMUX_PANE HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$d/tmp" PATH="$d/fp:$PATH" \
-           FLEET_GH_WRITE_GAP=0 BK_STORE="$d/store" "$@"; }
-  sight() {  # sight <sha> — the cn probe red on that stable, at its layer
-    rm -rf "$d/conf/global/breakage"
-    bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from cn-probe --breakage --breakage-key cn-path-pod \
-       --fault-sha "$1" --fault-link "https://github.com/o/w/actions/runs/${1:0:4}" --title '国内真实用户路径不通：卡在 pod' > "$d/out" 2> "$d/err"
-  }
-  t0=$(now)
-  for i in 1111111 2222222 3333333 4444444; do sight "${i}aaaa"; done
-  sight 4444444aaaa                                   # the next tick, same stable
-  created=$(ls "$d/store"/issue-* 2>/dev/null | wc -l | tr -d ' ')
-  n0=$(ls "$d/store"/issue-*); n0=${n0##*-}
-  [ "$created" = 1 ] || { WHY="one fingerprint on 4 stables made $created issues (want 1)"; return 1; }
-  [ "$(grep -c '同一故障' "$d/store/comments-$n0" 2>/dev/null)" = 3 ] \
-    || { WHY="want 3 「同一故障」 comments (one per new sha, the repeat none): $(cat "$d/store/comments-$n0" 2>/dev/null | cut -c1-200)"; return 1; }
-  # The fix lands in 9000000 and closes it; the probe still tests the old stable.
-  mv "$d/store/issue-$n0" "$d/store/closed-$n0"; echo 2026-10-14T03:00:00Z > "$d/store/closed-$n0.at"; echo 9000000ffff > "$d/store/fix-$n0"
-  sight 4444444aaaa; c=$?
-  [ "$c" = 5 ] && [ -f "$d/store/closed-$n0" ] && ! ls "$d/store"/issue-* >/dev/null 2>&1 \
-    || { WHY="a red on the old stable after the fix closed it: exit $c, want 5, the issue still closed, nothing new: $(tr '\n' ' ' < "$d/err" | cut -c1-200)"; return 1; }
-  sight 9100000aaaa; c=$?                             # the stable with the fix — still red
-  SECS=$(since "$t0")
-  [ "$c" = 5 ] && [ -f "$d/store/issue-$n0" ] && [ "$(ls "$d/store"/issue-* | wc -l | tr -d ' ')" = 1 ] \
-    || { WHY="red on a stable containing the fix must REOPEN #$n0 (exit $c): $(tr '\n' ' ' < "$d/err" | cut -c1-200)"; return 1; }
-  grep -q '重开：修复' "$d/store/comments-$n0" || { WHY="the reopen left no comment naming the fix"; return 1; }
-  WHAT="同一指纹在 4 个 stable 上红：1 张单 + 3 条评论（同 sha 不重复）；修复关单后旧 stable 仍红只记一笔不重开，含修复的版本仍红就重开那张旧单"
-}
-
-# #4771 / #4598 (issue #4774): a red base's fingerprint named an OLDER red — the
-# train's failfast had left the red run `cancelled` (passed over as no verdict),
-# so a macOS nightly red since earlier won; and a text naming shard 16 of a branch
-# run got the base streak's first job, shard 8. The filer must key the red the
-# text is about.
-drill_breakage_wrong_red() {
-  CAP=20; local d="$WORK/bkwr" t0 b
-  mkdir -p "$d/fp" "$d/conf" "$d/store" "$d/home" "$d/tmp"
-  cat > "$d/fp/gh" <<'EOF'
-#!/bin/bash
-S="$BK_STORE"; printf '%s\n' "$*" >> "$S/gh.log"
-case "$1" in
-  issue)
-    case "$2" in
-      create)
-        n=$(( $(ls "$S"/issue-* 2>/dev/null | wc -l) + 4771 ))
-        shift 2; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
-        printf '%s' "$b" > "$S/issue-$n"; printf 'https://github.com/o/w/issues/%s\n' "$n" ;;
-    esac ;;
-  api)
-    p=''; for a in "$@"; do case "$a" in repos/*|search/*) p="$a";; esac; done
-    case "$p" in
-      */actions/runs\?*)
-        printf '381\t39170235632\t10bb05b5aaaa\tcancelled\t2026-10-18T21:50:00Z\trelease train\t900\trelease train\t.github/workflows/release-train.yml\n'
-        printf '99\t39164519771\t8937c5a842eb\tfailure\t2026-10-18T18:17:00Z\tselftests (macOS)\t13000\tselftests (macOS)\t.github/workflows/selftests-macos.yml\n'
-        printf '310\t39020000000\tf4276886dddd\tfailure\t2026-10-17T02:00:00Z\tselftests\t30000\tselftests\t.github/workflows/selftests.yml\n'
-        printf '381\t39164193455\t8937c5a842eb\tsuccess\t2026-10-18T18:10:00Z\trelease train\t13400\trelease train\t.github/workflows/release-train.yml\n' ;;
-      */actions/runs/39170235632/jobs*) printf '5\tLinux / shard 5\n6\ttrain\n' ;;
-      */actions/runs/39164519771/jobs*) printf '9\tmacOS / shard 1\n' ;;
-      */actions/runs/39020000000/jobs*) printf '8\tselftests / shard 8\n' ;;
-      */actions/runs/39025697982/jobs*) printf '16\tselftests / shard 16\n' ;;
-      */actions/runs/39025697982)       printf 'failure\t14bad884cccc\tselftests\tselftests\n' ;;
-      repos/o/w/issues\?*)              for f in "$S"/issue-*; do [ -e "$f" ] || continue; printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done ;;
-    esac ;;
-  run)
-    j=''; while [ $# -gt 0 ]; do [ "$1" = --job ] && j="${2:-}"; shift; done
-    case "$j" in
-      5)  printf 'Linux / shard 5\tUNKNOWN STEP\t2026-10-18T22:08:23.4771710Z FAIL  selftest-partitions-selftest.sh                   2.6s (exit 1)\n' ;;
-      6)  printf 'train\tUNKNOWN STEP\t2026-10-18T22:09:13.0000000Z ##[error]Process completed with exit code 1.\n' ;;
-      9)  printf 'macOS / shard 1\tUNKNOWN STEP\t2026-10-18T18:40:00.0000000Z FAIL B: a change with no script should pass (nothing to lint), not fail\n' ;;
-      8)  printf 'selftests / shard 8\tUNKNOWN STEP\t2026-10-17T03:00:00.0000000Z FAIL  transfer-norepo-selftest.sh   41.0s (exit 1)\n' ;;
-      16) printf 'selftests / shard 16\tUNKNOWN STEP\t2026-10-17T10:41:32.4001687Z FAIL  fleet-bin-inventory-selftest.sh   13.1s (exit 1)\n' ;;
-    esac ;;
-esac
-exit 0
-EOF
-  chmod +x "$d/fp/gh"
-  bk() { env -u TMUX -u TMUX_PANE HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$d/tmp" PATH="$d/fp:$PATH" \
-           FLEET_GH_WRITE_GAP=0 FLEET_BASE_BRANCH=master BK_STORE="$d/store" "$@"; }
-  t0=$(now)
-  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from w1 --breakage \
-     --title 'master 红：selftest-partitions-selftest.sh — fleet-cleanup-idle 测试分组与分片表不一致' \
-     --body '列车（10bb05b5，master 头）在 Linux / shard 5 红，同一提交单独重跑仍红' > "$d/out1" 2> "$d/err1" \
-    || { WHY="the #4771 filing failed: $(tr '\n' ' ' < "$d/err1" | cut -c1-200)"; return 1; }
-  b=$(cat "$d/store"/issue-4771 2>/dev/null)
-  case "$b" in *'故障指纹：`Linux / shard 5` @ `10bb05b` — FAIL selftest-partitions-selftest.sh (exit 1)'*) ;;
-    *) WHY="#4771's fingerprint is not the train's Linux / shard 5 @ 10bb05b: $(printf '%s' "$b" | grep 故障指纹 | cut -c1-200)"; return 1 ;; esac
-  rm -rf "$d/conf/global/breakage"
-  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from w2 --breakage \
-     --title 'master 红：fleet-bin-inventory 有 9 个 nogh_live_* 未归类' \
-     --body '我是在 #3884 的全量验收 run 39025697982 里看到的：shard 16，FAIL fleet-bin-inventory-selftest.sh 13.1s。' > "$d/out2" 2> "$d/err2" \
-    || { WHY="the #4598 filing failed: $(tr '\n' ' ' < "$d/err2" | cut -c1-200)"; return 1; }
-  SECS=$(since "$t0")
-  b=$(cat "$d/store"/issue-4772 2>/dev/null)
-  case "$b" in *'故障指纹：`selftests / shard 16` @ `14bad88`'*) ;;
-    *) WHY="#4598's fingerprint is not shard 16 of the run it names: $(printf '%s' "$b" | grep 故障指纹 | cut -c1-200)"; return 1 ;; esac
-  WHAT="#4771 → 列车 Linux / shard 5 @ 10bb05b（failfast 取消的 run 也算红、macOS 夜跑不进 ci- 探针）；#4598 → 正文点名的 run 的 shard 16，不是主干 streak 的 shard 8"
-}
-
 # A release that deletes a hook script an old session's table still calls: the
 # move must refuse BEFORE the tag moves, naming the script; --force moves it and
 # leaves one line (issue #2075, EPIC #2074 C2).
@@ -3013,9 +2723,9 @@ drill_oldcfg_deleted_hook() {
 # ---- macos-red-to-stable (#2286, rewritten by #3869, #4671): the macOS selftests run
 # AFTER the release. A BSD-only red must hold no release and still be seen: (1) the
 # release train's own move (`--train`, no macOS job in it) moves stable past it,
-# (2) the watcher files it once as a breakage reading mac-follow's jobs, (3) a move
-# by hand past a red `mac follow: macOS` status moves too — one release line, no
-# gate 5. Fake gh (runs / jobs / statuses), fake filer; a real bare repo.
+# (2) the watcher alerts once per red run reading mac-follow's jobs (#4898: said,
+# never filed), (3) a move by hand past a red `mac follow: macOS` status moves too —
+# one release line, no gate 5. Fake gh (runs / jobs / statuses), fake alert; a real bare repo.
 drill_macos_red_to_stable() {
   CAP=30; local t0 d out rc c1 c2
   d="$WORK/macosred"; mkdir -p "$d/shim" "$d/seed" "$d/conf"
@@ -3032,8 +2742,8 @@ case "\$*" in
   *) printf 'completed success shard 1\n' ;;
 esac
 SH
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/filed"\necho https://github.com/o/r/issues/77\n' "$d" > "$d/filer"
-  chmod +x "$d/shim/gh" "$d/filer"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/alerted"\n' "$d" > "$d/alert"
+  chmod +x "$d/shim/gh" "$d/alert"
   ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
     export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
     git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
@@ -3055,13 +2765,13 @@ SH
   out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$c2" --train 77 --ignore-check release --dir "$d/co" --repo o/r 2>&1) \
     || { WHY="the train's stable move refused on macOS: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move (a Mac red held Linux)"; return 1; }
-  # … the watcher files mac-follow's red once as a breakage …
-  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" FLEET_MACOS_FILE_CMD="$d/filer" \
+  # … the watcher says mac-follow's red once, as a breakage alert …
+  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" FLEET_MACOS_ALERT_CMD="$d/alert" \
           bash "$BIN/fleet-macos-watch.sh" --repo o/r --now 2>&1) || { WHY="the watcher failed: $out"; return 1; }
-  grep -q -- '--breakage' "$d/filed" 2>/dev/null || { WHY="the red follow was not filed with --breakage: $out"; return 1; }
-  grep -q 'bsd-only-selftest.sh' "$d/filed" || { WHY="the filing does not name the red test"; return 1; }
-  PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" FLEET_MACOS_FILE_CMD="$d/filer" bash "$BIN/fleet-macos-watch.sh" --repo o/r --now >/dev/null 2>&1
-  [ "$(grep -c -- '--breakage' "$d/filed")" = 1 ] || { WHY="the same red follow was filed twice"; return 1; }
+  grep -q 'breakage' "$d/alerted" 2>/dev/null || { WHY="the red follow was not alerted as a breakage: $out"; return 1; }
+  grep -q 'bsd-only-selftest.sh' "$d/alerted" || { WHY="the alert does not name the red test"; return 1; }
+  PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" FLEET_MACOS_ALERT_CMD="$d/alert" bash "$BIN/fleet-macos-watch.sh" --repo o/r --now >/dev/null 2>&1
+  [ "$(grep -c 'breakage' "$d/alerted")" = 1 ] || { WHY="the same red follow was alerted twice"; return 1; }
   # … and a move by hand past the red `mac follow: macOS` status is not held either.
   out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$(cat "$d/c3")" --dir "$d/co" --repo o/r 2>&1) \
     || { WHY="a red mac follow held a move by hand: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
@@ -3069,7 +2779,7 @@ SH
   git --git-dir="$d/origin.git" rev-parse -q --verify refs/tags/stable-macos >/dev/null && { WHY="a Mac lane tag was written"; return 1; }
   SECS=$(since "$t0")
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$(cat "$d/c3")" ] || { WHY="stable did not follow the hand move"; return 1; }
-  WHAT="macOS 红：列车照挪 stable（不等 Mac）、开一张带指纹的单（同一 run 不重开）；手挪也不被 mac follow 的红挡（一条版本线，没有 gate 5、没有 Mac 通道）"
+  WHAT="macOS 红：列车照挪 stable（不等 Mac）、每个红 run 提醒一次（不开单，同一 run 不重提）；手挪也不被 mac follow 的红挡（一条版本线，没有 gate 5、没有 Mac 通道）"
 }
 
 # ---- stable-push-no-workflows (#3912): GitHub refuses a tag move whose range
@@ -3846,9 +3556,9 @@ drill_pool_stale_handed_out() {
 
 # 发出即开 with nothing to hand out (issue #2234, EPIC #2230 C4): a ↵ while the
 # repo × agent slot of the warm pool is empty (the pool off, just claimed, still
-# warming) must open the task the old way — file it, spawn it, byte for byte what
-# the start printed before the pool — and the warm attempt must leave nothing
-# behind: no window, no worktree, no first turn typed anywhere.
+# warming) must open the task the cold way — one session bound to its record
+# (issue #4898: nothing filed) — and the warm attempt must leave nothing behind:
+# no window, no worktree, no first turn typed anywhere.
 drill_pool_empty_compose() {
   CAP=20; BREAK_SOCK="$WORK/sock-pec"; local d="$WORK/pec" t0 out rc wins f
   mkdir -p "$d/conf/fleets/pe" "$d/sb" "$d/log" "$d/home"
@@ -3858,10 +3568,6 @@ drill_pool_empty_compose() {
   fx_repo "$d/conf" pe acme/app FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master
   printf 'FLEET_SCRATCH_POOL=1\nFLEET_MAX_SESSIONS=20\n' > "$d/conf/fleets/pe/conf"
   for f in "$BIN"/*; do ln -s "$f" "$d/sb/${f##*/}"; done
-  rm -f "$d/sb/fleet-issue-file.sh" "$d/sb/dash-issue-session.sh"
-  printf '#!/bin/sh\necho filed >> "%s/log/file"\necho https://github.com/acme/app/issues/9\n' "$d" > "$d/sb/fleet-issue-file.sh"
-  printf '#!/bin/sh\necho "$*" >> "%s/log/spawn"\necho @999\n' "$d" > "$d/sb/dash-issue-session.sh"
-  chmod +x "$d/sb/fleet-issue-file.sh" "$d/sb/dash-issue-session.sh"
   nt -f /dev/null new-session -d -s pe -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
   run() { env -u TMUX -u TMUX_PANE -u CCQUOTA_FLEET PATH="$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" \
             FLEET_SKIP_GLOBAL_CONF=1 FLEET_ADMIT=0 FLEET_ORIGIN_GATE=0 BREAK_SOCK="$BREAK_SOCK" "$@"; }
@@ -3869,68 +3575,20 @@ drill_pool_empty_compose() {
   out=$(printf 'the text' | run bash "$d/sb/dash-raw-session.sh" pe --origin hub --print --warm-only --agent claude \
           --repo acme/app --prompt 'the text' 2>/dev/null); rc=$?
   [ "$rc" = 3 ] && [ -z "$out" ] || { WHY="--warm-only on an empty slot answered rc=$rc out=[$out], want exit 3 and nothing"; return 1; }
-  out=$(printf 'the text' | run bash "$d/sb/fleet-control-read.sh" start pe new claude acme/app '' '' 'a title' 2>/dev/null); rc=$?
+  # the cold half: a stand-in spawner that answers --warm-only with 3 (still empty)
+  rm -f "$d/sb/dash-raw-session.sh"
+  printf '#!/bin/sh\ncase " $* " in *" --warm-only "*) exit 3 ;; esac\necho "$*" >> "%s/log/spawn"\nprintf "@999\\tt\\t-\\t-\\n"\n' "$d" > "$d/sb/dash-raw-session.sh"
+  chmod +x "$d/sb/dash-raw-session.sh"
+  out=$(printf 'the text' | run env FLEET_CONTROL_TASK=T9 bash "$d/sb/fleet-control-read.sh" start pe new claude acme/app '' '' 'a title' 2>/dev/null); rc=$?
   SECS=$(since "$t0")
-  [ "$rc" = 0 ] && [ "$out" = $'https://github.com/acme/app/issues/9\n@999' ] \
+  [ "$rc" = 0 ] && [ "$out" = $'@999\tt\t-\t-' ] \
     || { WHY="the start on an empty slot was not the cold path (rc=$rc, out=[$out])"; return 1; }
-  [ "$(grep -c . "$d/log/file")" = 1 ] && [ "$(grep -c . "$d/log/spawn")" = 1 ] || { WHY="filed / spawned not exactly once"; return 1; }
+  [ "$(grep -c . "$d/log/spawn")" = 1 ] && grep -q -- '--repo acme/app' "$d/log/spawn" && grep -q -- '--task T9' "$d/log/spawn" \
+    || { WHY="spawned not exactly once, bound to its record: $(cat "$d/log/spawn" 2>/dev/null)"; return 1; }
   wins=$(nt list-windows -t pe -F '#{window_name}' | tr '\n' ' ')
   [ "$wins" = 'home ' ] || { WHY="the warm attempt left a window behind: $wins"; return 1; }
   [ "$(git -C "$d/main" worktree list | grep -c .)" = 1 ] || { WHY="the warm attempt left a worktree behind"; return 1; }
-  WHAT="池子空时发任务：--warm-only 答 3、什么都不开；start new 走冷路径（建单 + 开会话各一次），输出与开池前逐字节相同"
-}
-
-# bind-after-start-fails (issue #2235, EPIC #2230 C5): a warm start's session is
-# already working when its paperwork runs (fleet-start-backfill.sh). Filing the
-# issue failing must leave that session exactly as it is, marked for the sidebar
-# (@backfill failed → 「单子没建上」) after its tries; once filing works, the same
-# window becomes issue-N in place — @fleet_id kept, fleet_win_for_key answers it,
-# the agent told through the peer channel.
-drill_bind_after_start_fails() {
-  CAP=15; BREAK_SOCK="$WORK/sock-baf"; local d="$WORK/baf" t0 rc win fid got
-  mkdir -p "$d/conf/fleets/bf" "$d/sb" "$d/log" "$d/home" "$d/fb"
-  git init -q -b master "$d/main" 2>/dev/null || git init -q "$d/main"
-  ( cd "$d/main" && git config user.email t@t && git config user.name t && echo x > f && git add f && git commit -qm i \
-      && git worktree add -q -b scratch-1 "$d/app-scratch-1" ) || { WHY="cannot build the repo"; return 1; }
-  : > "$d/conf/fleets/bf/conf"
-  fx_repo "$d/conf" "bf" acme/app FLEET_MAIN="$d/main" FLEET_BASE_BRANCH="master"
-  for f in "$BIN"/*; do ln -s "$f" "$d/sb/${f##*/}"; done
-  rm -f "$d/sb/fleet-issue-file.sh" "$d/sb/fleet-peer-send.sh"
-  printf '#!/bin/sh\necho try >> "%s/log/file"\n[ -e "%s/fail" ] && { echo "gh: HTTP 502" >&2; exit 1; }\necho https://github.com/acme/app/issues/9\n' "$d" "$d" > "$d/sb/fleet-issue-file.sh"
-  printf '#!/bin/sh\necho "$*" >> "%s/log/peer"\n' "$d" > "$d/sb/fleet-peer-send.sh"
-  printf '#!/bin/sh\necho "$*" >> "%s/log/gh"\n' "$d" > "$d/fb/gh"
-  chmod +x "$d/sb/fleet-issue-file.sh" "$d/sb/fleet-peer-send.sh" "$d/fb/gh"
-  nt -f /dev/null new-session -d -s bf -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
-  win=$(nt new-window -d -P -F '#{window_id}' -t bf -n 'a task' -c "$d/app-scratch-1" 'exec sleep 600')
-  fid=11111111-2222-4333-8444-555555555555
-  nt set-window-option -t "$win" @raw 1; nt set-window-option -t "$win" @worktree "$d/app-scratch-1"
-  nt set-window-option -t "$win" @repo acme/app; nt set-window-option -t "$win" @fleet_id "$fid"
-  bf() {
-    printf 'a task' > "$d/t"; printf 'the words' > "$d/b"
-    env -u TMUX -u TMUX_PANE -u CCQUOTA_FLEET PATH="$WORK/tbin:$d/fb:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" \
-      FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" FLEET_BACKFILL_TRIES=3 FLEET_BACKFILL_RETRY_SECS=0 \
-      bash "$d/sb/fleet-start-backfill.sh" bf "$win" acme/app "$d/t" "$d/b" >/dev/null 2>&1
-  }
-  t0=$(now)
-  touch "$d/fail"; bf; rc=$?
-  [ "$rc" = 1 ] || { WHY="a filing that fails every try answered $rc, want 1"; return 1; }
-  [ "$(grep -c . "$d/log/file")" = 3 ] || { WHY="filing was tried $(grep -c . "$d/log/file" 2>/dev/null) times, want 3"; return 1; }
-  [ "$(o "$win" @backfill)" = failed ] || { WHY="the window is not marked @backfill failed (it says [$(o "$win" @backfill)])"; return 1; }
-  [ "$(o "$win" @raw)" = 1 ] && [ -z "$(o "$win" @issue)" ] && [ "$(o "$win" pane_dead)" = 0 ] \
-    || { WHY="the failed paperwork touched the session (raw=$(o "$win" @raw) issue=$(o "$win" @issue))"; return 1; }
-  [ ! -s "$d/log/peer" ] || { WHY="the agent was told about an issue that does not exist"; return 1; }
-  rm -f "$d/fail"; bf; rc=$?
-  SECS=$(since "$t0")
-  [ "$rc" = 0 ] || { WHY="once filing works the backfill answered $rc"; return 1; }
-  [ "$(o "$win" @issue)" = 9 ] && [ -z "$(o "$win" @raw)" ] && [ -z "$(o "$win" @backfill)" ] \
-    || { WHY="the window was not bound to #9 in place (issue=$(o "$win" @issue) raw=$(o "$win" @raw) mark=$(o "$win" @backfill))"; return 1; }
-  [ "$(o "$win" @fleet_id)" = "$fid" ] || { WHY="@fleet_id changed"; return 1; }
-  [ "$(git -C "$d/app-scratch-1" symbolic-ref --short HEAD)" = issue-9 ] || { WHY="the branch is not issue-9"; return 1; }
-  got=$(env PATH="$WORK/tbin:$PATH" BREAK_SOCK="$BREAK_SOCK" bash -c '. "$1/fleet-lib.sh"; fleet_win_for_key issue-9 bf' _ "$BIN" 2>&1)
-  [ "$got" = "$win" ] || { WHY="fleet_win_for_key issue-9 answered [$got], want $win"; return 1; }
-  grep -q "issue-9" "$d/log/peer" || { WHY="the agent was not told its issue and branch"; return 1; }
-  grep -qE 'issue view|pr list' "$d/log/gh" 2>/dev/null && { WHY="a just-filed issue got a duplicate-claim read"; return 1; }
-  WHAT="补单失败：建单试 3 次都失败时会话原样在跑、窗口标「单子没建上」、不告诉 agent；建单恢复后同一窗口就地换成 issue-9（@fleet_id 不变、fleet_win_for_key 认得、经 peer 通道告诉它）"
+  WHAT="池子空时发任务：--warm-only 答 3、什么都不开；start new 走冷路径（按任务记录开会话一次，不建单）"
 }
 
 drill_cold_fill_fails() {
@@ -3949,7 +3607,7 @@ drill_cold_fill_fails() {
     || { WHY="cannot start the isolated tmux server"; return 1; }
   t0=$(now)
   env -u TMUX -u TMUX_PANE -u CCQUOTA_FLEET PATH="$d/fb:$PATH" FLEET_CONF_DIR="$d/conf" TMPDIR="$d/tmp" \
-    FLEET_ORIGIN_GATE=0 FLEET_PRESPAWN_DEDUP=0 FLEET_REPO=acme/w FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master \
+    FLEET_ORIGIN_GATE=0 FLEET_REPO=acme/w FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master \
     FLEET_WORKTREE_ROOT="$d/wt" FLEET_SPAWN_FILL_CMD='sleep 1; exit 1' \
     bash "$BIN/dash-issue-session.sh" 5 "$lbl" --title t --origin hub --print > "$d/out" 2> "$d/err"; rc=$?
   SECS=$(since "$t0")
@@ -4797,14 +4455,6 @@ drill_task_blocker_fence() {
   WHAT='独立 blocker 按完整身份投影，原生 attention 和未知/过期观察不清阻塞'
 }
 
-drill_task_ticket_link() {
-  CAP=15; local out t0
-  t0=$(now)
-  out=$(python3 "$BIN/fleet_task_ticket_test.py" 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='接受后的建单与关联幂等恢复，未知发送不重复建单'
-}
-
 drill_repo_cutover_inflight() {
   CAP=15; local out t0
   t0=$(now)
@@ -5559,13 +5209,7 @@ drill_forge_none_gh_call() {
   grep -qx 'FLEET_BASE_BRANCH="trunk"' "$sb/conf/fleets/fn/repos/"*.conf \
     || { WHY="the base branch was not read off the remote: $(grep BASE "$sb/conf/fleets/fn/repos/"*.conf)"; return 1; }
   grep -qx 'FLEET_FORGE="none"' "$sb/conf/fleets/fn/repos/"*.conf || { WHY="the conf does not say FLEET_FORGE=none"; return 1; }
-  # Its tickets can only be the hub's (issue #3605): written so, and a conf from
-  # before the line (C7's) reads hub all the same — never GitHub's, never gh.
-  grep -qx 'FLEET_TICKETS="hub"' "$sb/conf/fleets/fn/repos/"*.conf || { WHY="the conf does not put its tickets on the hub"; return 1; }
-  sed -i.bak '/^FLEET_TICKETS=/d' "$sb/conf/fleets/fn/repos/"*.conf
-  local home
-  home=$(HOME="$sb/home" FLEET_CONF_DIR="$sb/conf" PATH="$sb/shim:$PATH" bash "$BIN/fleet-ticket.sh" home "$(sed -n 's/^FLEET_REPO="\(.*\)"$/\1/p' "$sb/conf/fleets/fn/repos/"*.conf)")
-  [ "$home" = hub ] || { WHY="a pre-#3605 conf of a repo with no GitHub says its tickets are [$home]'s — gh would be asked"; return 1; }
+  grep -q '^FLEET_TICKETS=' "$sb/conf/fleets/fn/repos/"*.conf && { WHY="a ticket home was written (the ticket layer left with #4898)"; return 1; }
   # And the road stays shut (issue #3605): one gh call slipped into a script on the
   # no-GitHub road (bin/fleet-land.sh, the lander) turns the one-door count red.
   local nb="$sb/root"; mkdir -p "$nb/bin" "$nb/hooks"
@@ -5576,7 +5220,7 @@ drill_forge_none_gh_call() {
   local out; out=$(NO_DIRECT_GH_ROOT="$nb" bash "$BIN/no-direct-gh-selftest.sh" 2>&1) \
     && { WHY="a gh call slipped into fleet-land.sh passed the one-door count"; return 1; }
   case "$out" in *bin/fleet-land.sh*) ;; *) WHY="the count went red without naming fleet-land.sh: $out"; return 1 ;; esac
-  SECS=$(since "$t0"); WHAT="file:// 裸仓库：克隆 + 主干解析 gh 0 次；conf 记 FLEET_REMOTE / FLEET_FORGE=none / FLEET_TICKETS=hub（缺这行也读作 hub），主干 trunk 来自 ls-remote；往落地脚本里偷加一处 gh，一扇门计数立刻红"
+  SECS=$(since "$t0"); WHAT="file:// 裸仓库：克隆 + 主干解析 gh 0 次；conf 记 FLEET_REMOTE / FLEET_FORGE=none，主干 trunk 来自 ls-remote；往落地脚本里偷加一处 gh，一扇门计数立刻红"
 }
 
 drill_cred_migration_client() {
@@ -5637,9 +5281,8 @@ case "\$*" in
   'issue list'*) echo '[{"number":12,"labels":[{"name":"autofill"},{"name":"priority:p0"}],"assignees":[]}]' ;;
 esac
 SH
-  printf '#!/bin/sh\necho "$*" >> "%s/filed"\necho https://github.com/o/a/issues/4242\n' "$sb" > "$sb/filer"
   printf '#!/bin/sh\necho "$*" >> "%s/alerted"\n' "$sb" > "$sb/alert"
-  chmod +x "$sb/shim/gh" "$sb/filer" "$sb/alert"
+  chmod +x "$sb/shim/gh" "$sb/alert"
   t0=$(now)
   # ③ the old daemon's command and its tick: no template to schedule it, and the
   #    script a stale plist would still run does nothing
@@ -5649,7 +5292,7 @@ SH
   ( . "$BIN/fleet-daemon-lib.sh"; fleet_daemon_unit_names ) | grep -qx dispatch \
     && { WHY="the daemon registry still lists dispatch"; return 1; }
   [ ! -e "$BIN/fleet-dispatch.sh" ] || { WHY="bin/fleet-dispatch.sh is back"; return 1; }   # its shell left with #3576
-  # ④ the diskguard tick reads master's red macOS run: files + alerts, spawns nobody
+  # ④ the diskguard tick reads master's red macOS run: alerts, files nothing, spawns nobody
   cat > "$sb/dg.sh" <<SH
 FLEET_DISKGUARD_SOURCE=1 . "$sb/bin/fleet-diskguard.sh"
 BIN="$sb/bin" GDIR="$sb/dg"
@@ -5661,16 +5304,15 @@ fleet_load_repo_conf() { FLEET_MAIN="$sb/mainA"; }
 macos_watch
 SH
   : > "$sb/fleet.conf"
-  env PATH="$sb/shim:$PATH" FLEET_CONF_DIR="$sb/conf" FLEET_MACOS_FILE_CMD="$sb/filer" \
+  env PATH="$sb/shim:$PATH" FLEET_CONF_DIR="$sb/conf" \
     FLEET_MACOS_ALERT_CMD="$sb/alert" bash "$sb/dg.sh" >/dev/null 2>&1
-  until_ok 15 grep -q 'filed' "$sb/dg/macos-watch.log" 2>/dev/null \
-    || { WHY="the diskguard tick never filed the red master run"; return 1; }
+  until_ok 15 grep -q 'alerted' "$sb/dg/macos-watch.log" 2>/dev/null \
+    || { WHY="the diskguard tick never alerted the red master run"; return 1; }
   SECS=$(since "$t0")
-  grep -q -- '--breakage' "$sb/filed" 2>/dev/null || { WHY="the red master was not filed as a breakage"; return 1; }
   grep -q 'breakage' "$sb/alerted" 2>/dev/null || { WHY="nobody was told about the red master"; return 1; }
   n=0; [ -f "$sb/spawned" ] && n=$(wc -l < "$sb/spawned" | tr -d ' ')
   [ "$n" = 0 ] || { WHY="$n session(s) started by themselves: $(head -2 "$sb/spawned" | tr '\n' ' ')"; return 1; }
-  WHAT="③ 自动填充：没有 dispatch 守护、壳脚本什么都不开；④ 红主干：diskguard 节拍开单 + 提醒，0 个会话自己开出来"
+  WHAT="③ 自动填充：没有 dispatch 守护、壳脚本什么都不开；④ 红主干：diskguard 节拍提醒（不开单），0 个会话自己开出来"
 }
 
 # ---- release-push-lost (#3146, EPIC #3139 C7): the hub now tells every machine
@@ -5855,50 +5497,6 @@ print(o[0].get("child"), o[0].get("state"), o[0].get("pr"), o[0].get("summary"))
   [ -z "$(FLEET_CONF_DIR="$d/conf" python3 "$BIN/fleet-orphan-reports.py" cell)" ] \
     || { WHY="a read report is still carried"; return 1; }
   WHAT="交给你的子会话结果：侧栏和入口都读得到（盘点第 31 列），读过就不再出现"
-}
-
-# A hub repo's ticket door with the hub gone (issue #3595, EPIC #3570 C2): every
-# verb says 入口不通 and exits 4 — never a quiet fallback to GitHub, which would
-# open a second numbering of the same repo — and the collector's cache stays the
-# last good copy.
-drill_cleanup_ticket_home() {
-  CAP=30; local t0 out
-  t0=$(now)
-  out=$(bash "$BIN/fleet-cleanup-ticket-selftest.sh" 2>&1) \
-    || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT="Hub/GitHub 数字碰撞按 ticket home 判定；OPEN、离线和身份不明保留，CLOSED 进入后续门"
-}
-
-drill_ticket_hub_down() {
-  CAP=30; local d="$WORK/thd" t0 port rc1 rc2 rc3 rc4
-  mkdir -p "$d/conf/fleets/fs/repos" "$d/fakebin" "$d/cache" "$d/tmp"
-  printf '#!/bin/sh\necho "gh $*" >> "%s/gh.log"\nexit 1\n' "$d" > "$d/fakebin/gh"; chmod +x "$d/fakebin/gh"
-  port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
-  printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=t\n' "$port" > "$d/conf/node.env"
-  printf 'FLEET_TICKETS=hub\n' > "$d/conf/fleets/fs/repos/acme-app.conf"
-  printf '· no milestone\t#4\t·\tthe last good copy\n' > "$d/cache/issues"
-  tk() { env -u TMUX -u TMUX_PANE -u CCQUOTA_HUB_URL -u CCQUOTA_TOKEN FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
-           PATH="$d/fakebin:$PATH" TMPDIR="$d/tmp" FLEET_HUB_TIMEOUT=3 "$@"; }
-  t0=$(now)
-  tk bash "$BIN/fleet-ticket.sh" read 'hub:acme/app#4' >/dev/null 2>"$d/err"; rc1=$?
-  tk bash "$BIN/fleet-comment.sh" 4 --repo acme/app --body hi >/dev/null 2>&1; rc2=$?
-  tk bash "$BIN/fleet-issue-file.sh" --repo acme/app --title t >/dev/null 2>&1; rc3=$?
-  tk python3 "$BIN/fleet_ticket.py" cache --repo acme/app --dir "$d/cache" 2>/dev/null; rc4=$?
-  SECS=$(since "$t0")
-  [ "$rc1/$rc2/$rc3/$rc4" = 4/4/4/4 ] || { WHY="read/comment/file/cache exited $rc1/$rc2/$rc3/$rc4, not 4 each: $(cat "$d/err")"; return 1; }
-  grep -q '入口不通' "$d/err" || { WHY="no 入口不通 line: $(cat "$d/err")"; return 1; }
-  [ ! -s "$d/gh.log" ] || { WHY="fell back to GitHub: $(cat "$d/gh.log")"; return 1; }
-  grep -q 'the last good copy' "$d/cache/issues" || { WHY="the cache lost its last good copy"; return 1; }
-  # The comments said while it was down (issue #3597, C4): the bridge's backstop
-  # holds its watermark, and once the hub is back types the missed one in, once —
-  # a real loopback hub, stopped and started (fleet-issue-bridge-hub-selftest P1).
-  local out
-  out=$(bash "$BIN/fleet-issue-bridge-hub-selftest.sh" 2>&1)
-  SECS=$(since "$t0")
-  printf '%s\n' "$out" | grep -q 'P1 hub down → held, back → backstop types it once — PASS' \
-    || { WHY="the bridge's hub-down backstop is red: $(printf '%s\n' "$out" | grep FAIL | head -2 | tr '\n' ' ')"; return 1; }
-  WHAT="入口不通：开单 / 读单 / 评论 / 采集都退出 4、说入口不通，一次也不找 GitHub，缓存留着最后一份；停着时的评论由桥的兜底在入口回来后送进会话、只送一次"
 }
 
 # far-agent-switch (issue #4184): 换 Codex / 换 Claude on a session that lives on
@@ -6933,15 +6531,6 @@ drill_worker_inventory_rs() {
     || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT='含历史报告 RS/US 的十条 inventory 原样到达 fleet_status，身份、中文、REAPED 报告与观察时间均保留'
-}
-
-# ticket-credential-pair (#4490): no production credentials or network.
-drill_ticket_credential_pair() {
-  CAP=15; local t0 out
-  t0=$(now)
-  out=$(python3 "$BIN/fleet_ticket_creds_test.py" 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='endpoint/token 同源；URL-only 整对读取，token-only/读取失败拒绝，显式 401/403 不换身份'
 }
 
 # stream-cut-stays (#4714): a turn an API error cut off is resumed by itself —

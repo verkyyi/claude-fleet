@@ -546,7 +546,7 @@ fleet_daemon_kick_age() {
 # spawns NOTHING, `launchctl kickstart` is an EXPLICIT command and therefore the
 # only execution path left — so the self-heal's cooldown silently becomes every
 # daemon's effective period. Measured on 2026-09-15: issue-bridge and pr-refresh,
-# both StartInterval=15, running once per 600s. A `fleet-comment.sh --to-worker`
+# both StartInterval=15, running once per 600s. A comment
 # relay that should land in 15s took up to ten minutes, and quotawatch — which
 # exists as its own 60s unit precisely because an 85% quota watch once missed a
 # whole 5-hour window (#551/#553) — was reduced to one look per ten minutes.

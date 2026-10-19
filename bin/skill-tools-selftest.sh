@@ -109,7 +109,7 @@ cat > "$WORK/fx/red-after.md" <<'MD'
 ### detail
 still troubleshooting: `~/.claude/fleet/bin/fleet-gh.sh issue view 5`
 ## 2. Back to work
-`~/.claude/fleet/bin/fleet-comment.sh 5`
+`~/.claude/fleet/bin/fleet-pr-merge.sh 5`
 MD
 cat > "$WORK/fx/clean.md" <<'MD'
 # skill
@@ -143,7 +143,7 @@ set --
 for f in "$ROOT"/commands/*.md; do
   grep -q '^<!-- fleet skill · owner: worker -->$' "$f" && set -- "$@" "$f"
 done
-for f in commands/fleet-claim.md commands/fleet-handoff.md commands/fleet-compact-resume.md \
+for f in commands/fleet-handoff.md commands/fleet-compact-resume.md \
          commands/fleet-context.md skills/fleet-open/SKILL.md skills/fleet-help/SKILL.md skills/handoff/SKILL.md conf/codex-preamble.md; do
   [ -f "$ROOT/$f" ] || fail "B: $f is in scope but missing"
   case " $* " in *" $ROOT/$f "*) : ;; *) set -- "$@" "$ROOT/$f" ;; esac
@@ -158,36 +158,10 @@ need() { # need <file> <tool>…
     grep -Eqw "mcp__fleet(-orch)?__$t" "$ROOT/$f" || fail "C: $f must name mcp__fleet__$t (or the dispatch group's mcp__fleet-orch__$t)"
   done
 }
-need commands/fleet-claim.md brief comment send ask report evidence pr_verdict pr_merge \
-  file_issue gh children await context show open
-need commands/fleet-handoff.md status context handoff comment transfer gh
-need commands/fleet-compact-resume.md brief gh pr_verdict
+need commands/fleet-handoff.md status context handoff transfer
+need commands/fleet-compact-resume.md brief pr_verdict
 need commands/fleet-context.md context
 need skills/fleet-open/SKILL.md open where show
-ok "C claim · handoff · compact-resume · context · fleet-open name the tools that replaced their scripts"
-
-# --- D: the worker entry stays small and keeps the lifecycle's heading anchors (#4325)
-python3 - "$ROOT/commands/fleet-claim.md" "$ROOT/docs/dev/WORKER.md" <<'PYCLAIM'
-from pathlib import Path
-import sys
-claim, background = (Path(p).read_text() for p in sys.argv[1:])
-assert len(claim.encode()) <= 13000, "fleet-claim.md exceeds the 13,000-byte reading budget"
-headings = [
-    "## 0. Resolve fleet + guard seat + read the issue — ONE call (run FIRST)",
-    "## 1. Ground yourself, then implement",
-    "### Ground cheaply — keep the broad sweep out of the main context",
-    "### Before you touch code: the 「改动前」 capture",
-    "## 2. The standing contract (built-in charter — the base layer)",
-    "## 3. Report + proceed",
-    "## 排障 — scripts, for when a tool is not enough",
-]
-actual = [line for line in claim.splitlines() if line.startswith("##")]
-assert actual == headings, actual
-for heading in headings:
-    assert heading in background.splitlines(), "background lost section: " + heading
-assert "docs/dev/WORKER.md" in claim
-PYCLAIM
-[ "$?" = 0 ] || fail "D: worker reading budget / heading compatibility"
-ok "D claim <=13,000 bytes; steps/subsections unchanged and indexed in WORKER.md"
+ok "C handoff · compact-resume · context · fleet-open name the tools that replaced their scripts"
 
 printf 'skill-tools-selftest: %d passed\n' "$pass"

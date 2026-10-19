@@ -247,7 +247,7 @@ def check_ack(start, proof, ack):
 
 
 def read_start(context, proof):
-    start = authority.ticket.api("GET", "/authority/start",
+    start = authority.hubrest.api("GET", "/authority/start",
                                  query={"repo": context["repo"], "reservation": context["reservation"]})
     require(isinstance(start, dict) and set(start) <= set(START_KEYS) | {'phase', 'native_identity'}
             and all(start.get(k) == context[k] for k in ("repo", "worker_id", "reservation"))
@@ -544,7 +544,7 @@ def main():
 def diagnostic(error):
     if isinstance(error, RecoveryFailure):
         return error.stage + '; preserve the execution and review before any retry'
-    if isinstance(error, authority.ticket.Fail):
+    if isinstance(error, authority.hubrest.Fail):
         if 'HTTP 401' in str(error) or 'HTTP 403' in str(error):
             return 'hub/auth: current node authorization refused'
         if error.rc == 4:

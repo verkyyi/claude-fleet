@@ -57,8 +57,8 @@ The question wins over the reading: «手机上怎么…» asked from the Mac is
 Read with a targeted range (`grep -n` the heading, then `sed -n` to the next one),
 not the whole file. Nothing in the table fits? `rg -n` across `docs/public/` and `docs/dev/`, including
 `docs/dev/TERMS.md` for the person's word. The docs do not say it either? Say so
-plainly — never invent a key, a menu item or a page — and file it bare with
-`mcp__fleet__file_issue` (a 「怎么用」 gap in `docs/`), no `spawn`.
+plainly — never invent a key, a menu item or a page — and record it as a task
+with `mcp__fleet-orch__task` (a 「怎么用」 gap in `docs/`, `repo` set), no `spawn`.
 
 **Pages on the hub.** `<入口>` in the docs is the hub's address: `FLEET_HUB_URL`
 in `~/.config/claude-fleet/fleet.conf` (`grep '^FLEET_HUB_URL' …`). Give the full

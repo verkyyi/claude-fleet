@@ -22,7 +22,7 @@ import signal
 import time
 import uuid
 
-import fleet_ticket as ticket
+import fleet_hub_rest as hubrest
 import fleet_launch as launch
 
 BIN = Path(__file__).resolve().parent
@@ -33,7 +33,7 @@ def repo_identity(value):
     # identity-equivalent; the local registration's spelling is NOT a path to rename.
     if not isinstance(value, str):
         raise ValueError("repo must be an explicit owner/repo string")
-    repo = ticket.norm_repo(value)
+    repo = hubrest.norm_repo(value)
     if not repo or repo != value.lower() or any(p in (".", "..") for p in repo.split("/")):
         raise ValueError("select one owner/repo explicitly (no URL, path or surrounding whitespace)")
     return repo
@@ -85,11 +85,11 @@ def manifest(repo=None):
     query = {"rollback": "1"}
     if repo:
         query["repo"] = repo_identity(repo)
-    data = ticket.api("GET", "/authority", query=query)
+    data = hubrest.api("GET", "/authority", query=query)
     owner = (data.get("authority") or {}).get("owner", "") if isinstance(data, dict) else ""
     return dict(version=2, scope="owner", owner=owner, conf=str(path), repo=repo_identity(repo) if repo else "",
                 local=local, hub=data, scope_note="fixture/source until separately live-accepted",
-                preserved=["FLEET_TICKETS", "FLEET_FORGE", "FLEET_LAND", "existing ticket/PR references"])
+                preserved=["FLEET_FORGE", "FLEET_LAND", "existing ticket/PR references"])
 
 
 def update_local(mode):
@@ -113,7 +113,7 @@ def sync(repo=None):
     # the mode is read back here with this node's own credential, never taken
     # from the push. Unknown leaves the setting alone; legacy with no line (and
     # no old overlay line to outvote) stays byte for byte.
-    a = ticket.api("GET", "/authority", query={"gate": "1"})
+    a = hubrest.api("GET", "/authority", query={"gate": "1"})
     mode = a.get("mode") if isinstance(a, dict) else None
     if mode not in ("legacy", "frozen", "hub"):
         raise ValueError("task authority is unknown; this login's setting left as it is")
@@ -157,7 +157,7 @@ def check_start_ack(expected, ack, phase, proof=None):
 def reserved_scope(repo, key, worker):
     # Only read BEFORE begin. GET on an observed successor belongs to #4510's
     # recovery fence and deliberately rejects competing history (even stopped).
-    row = ticket.api('GET', '/authority/start', query={'repo': repo, 'reservation': key})
+    row = hubrest.api('GET', '/authority/start', query={'repo': repo, 'reservation': key})
     if (not isinstance(row, dict) or set(row) - set(START_KEYS) - {'phase', 'native_identity'}
             or any(not isinstance(row.get(k), str) or not row[k]
                    for k in ('repo', 'reservation', 'owner', 'endpoint_id'))
@@ -200,7 +200,7 @@ def gate(repo, finish):
     # The person's authority decides (issue #4901); the repo only names the
     # local start the last gate reserves, and the accepted task it must match.
     repo = repo_identity(repo)
-    a = ticket.api("GET", "/authority", query={"gate": "1"})
+    a = hubrest.api("GET", "/authority", query={"gate": "1"})
     if not isinstance(a, dict) or a.get("mode") not in ("legacy", "frozen", "hub"):
         raise ValueError("task authority is unknown; no local fallback")
     if a["mode"] == "frozen":
@@ -224,7 +224,7 @@ def gate(repo, finish):
 
 
 def start_call(repo, key, action, **fields):
-    return ticket.api("POST", "/authority/start", query={"repo": repo_identity(repo)},
+    return hubrest.api("POST", "/authority/start", query={"repo": repo_identity(repo)},
                       body=dict(action=action, reservation=key, **fields))
 
 
@@ -367,12 +367,12 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
         check_start_ack(prior, expected, 'reserved')
     try:
         admission = start_call(repo, key, "begin", worker_id=worker)
-    except (ticket.Fail, ValueError):
+    except (hubrest.Fail, ValueError):
         # A refused begin leaves the reservation reserved; cancel is CAS from
         # reserved only. An accepted begin whose ACK differs (below) is retained.
         try:
             start_call(repo, key, "cancel")
-        except (ticket.Fail, ValueError):
+        except (hubrest.Fail, ValueError):
             pass
         raise
     check_start_ack(expected, admission, 'starting')
@@ -407,7 +407,7 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
             try:
                 check_start_ack(admission, start_call(repo, key, "unobserved", worker_id=worker), "abandoned")
                 closed = "start closed as abandoned"
-            except (ticket.Fail, ValueError) as exc:
+            except (hubrest.Fail, ValueError) as exc:
                 closed = "start left open: " + error_reason(exc)
             raise ValueError("no local native receipt: the agent exited (rc=%s) before its start was observed; %s (why: logs/authority.log)" % (rc, closed))
         receipt = json.loads(raw)
@@ -415,7 +415,7 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
             raise ValueError("local native receipt was replaced or never observed")
         proof = prove_stopped(receipt["native_identity"])
         start_call(repo, key, "stopped", native_identity={k: proof[k] for k in NATIVE_KEYS}, execution_stopped=True)
-    except (ticket.Fail, ValueError, KeyError, OSError, subprocess.SubprocessError) as exc:
+    except (hubrest.Fail, ValueError, KeyError, OSError, subprocess.SubprocessError) as exc:
         print("repo authority: execution retained: " + error_reason(exc), file=sys.stderr)
     return rc
 
@@ -504,7 +504,7 @@ def hosted_repos():
     out = subprocess.run(["bash", "-c", script, "_", str(BIN)], capture_output=True, text=True, check=True).stdout
     repos = []
     for line in out.split():
-        r = ticket.norm_repo(line)
+        r = hubrest.norm_repo(line)
         if r and r not in repos:
             repos.append(r)
     return repos
@@ -531,8 +531,8 @@ def settle_one(repo, apply):
     Everything else stays, counted by why. Dry unless apply."""
     repo = repo_identity(repo)
     try:
-        data = ticket.api("GET", "/authority/start", query={"repo": repo, "list": "1"})
-    except ticket.Fail as exc:
+        data = hubrest.api("GET", "/authority/start", query={"repo": repo, "list": "1"})
+    except hubrest.Fail as exc:
         if "one explicit reservation" not in str(exc):
             raise
         data = None  # a Hub from before the list: it asks for one reservation
@@ -544,7 +544,7 @@ def settle_one(repo, apply):
     counts, plan = {}, []
     for start in starts:
         if (not isinstance(start, dict) or start.get("endpoint_id") != endpoint
-                or ticket.norm_repo(start.get("repo") or "") != repo or not start.get("reservation")):
+                or hubrest.norm_repo(start.get("repo") or "") != repo or not start.get("reservation")):
             action, why = "", "unknown"  # never another node's, never a malformed row
         else:
             action, why = settle_plan(start, held, now)
@@ -565,7 +565,7 @@ def settle_one(repo, apply):
                 if not isinstance(ack, dict) or ack.get("reservation") != start["reservation"] or ack.get("phase") != want:
                     raise ValueError("authority acknowledgement differs")
                 row["result"] = want
-            except (ticket.Fail, ValueError) as exc:
+            except (hubrest.Fail, ValueError) as exc:
                 row["result"] = "failed: " + error_reason(exc)
             authority_log("settle repo=%s reservation=%s phase=%s worker=%s action=%s result=%s" % (
                 repo, row["reservation"], row["phase"], row["worker_id"] or "-", action, row["result"]))
@@ -579,7 +579,7 @@ def settle_one(repo, apply):
 
 def match_ticket_ref(repo, number, ref):
     repo = repo_identity(repo)
-    backend, bound_repo, bound_number = ticket.parse(ref)
+    backend, bound_repo, bound_number = hubrest.parse(ref)
     if (repo_identity(bound_repo) != repo or str(bound_number) != str(number)
             or ref != "%s:%s#%s" % (backend, bound_repo, number)):
         raise ValueError("accepted ticket reference differs from this window's binding")
@@ -646,7 +646,7 @@ def main(argv=None):
         action = "stop_ack"
     if args.adopt:
         action = "adopt"
-        repo = repo or repo_identity(ticket.parse(args.adopt)[1])
+        repo = repo or repo_identity(hubrest.parse(args.adopt)[1])
     if not action:
         print(json.dumps(manifest(repo), indent=2))
         return
@@ -679,9 +679,9 @@ def main(argv=None):
                         body=Path(args.body_file).read_text() if args.body_file else "",
                         expected_revision=a["revision"])
             endpoint, query = "/authority/adopt", {"repo": repo}
-        result = ticket.api("POST", endpoint, body=data, query=query)
+        result = hubrest.api("POST", endpoint, body=data, query=query)
         if wanted:
-            current = ticket.api("GET", "/authority", query={"gate": "1"})
+            current = hubrest.api("GET", "/authority", query={"gate": "1"})
             if current.get("owner", before.get("owner")) != before.get("owner"):
                 raise ValueError("this login now answers for another person; take a fresh dry-run")
             if current["revision"] != result["revision"] or current["mode"] != wanted:
@@ -694,12 +694,12 @@ def main(argv=None):
 
 def error_reason(exc):
     # A Hub error body is untrusted. Retain its actionable reason, never an
-    # echoed credential (including a pair read by ticket.creds from node.env).
+    # echoed credential (including a pair read by hubrest.creds from node.env).
     message = str(exc)
     secrets = [v for k, v in os.environ.items()
                if k.endswith(("TOKEN", "SECRET", "PASSWORD", "CRED", "ASSERT")) and v]
-    if ticket._CREDS:
-        secrets.append(ticket._CREDS[1])
+    if hubrest._CREDS:
+        secrets.append(hubrest._CREDS[1])
     for secret in sorted(secrets, key=len, reverse=True):
         message = message.replace(secret, "[redacted]")
     if "HTTP 401" in message or "HTTP 403" in message:
@@ -725,6 +725,6 @@ if __name__ == "__main__":
             print(match_ticket_ref(*sys.argv[2:]))
             sys.exit(0)
         main()
-    except (ticket.Fail, ValueError, KeyError, OSError, subprocess.SubprocessError) as exc:
+    except (hubrest.Fail, ValueError, KeyError, OSError, subprocess.SubprocessError) as exc:
         print("repo authority: " + error_reason(exc), file=sys.stderr)
         sys.exit(getattr(exc, "rc", 1))

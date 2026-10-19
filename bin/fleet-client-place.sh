@@ -26,9 +26,9 @@
 # takes none) is said: `附件没带过去：…` on stderr and after the line's tab, and
 # beside its path in the text — never a path the session cannot read, silently.
 #
-# `new` (issue #1953, the writing area ⌘N opens): an issue that does not exist
-# yet — --title (required) and --body-file are its title and body; the machine
-# that takes it files it (fleet-issue-file.sh) and opens its worker.
+# `new` (issue #1953, the writing area ⌘N opens): a new task — --title (required)
+# and --body-file are its title and words; the machine that takes it opens its
+# session bound to the hub's task record (no issue is filed since #4898).
 #
 # <repo> `-` (issue #1956, the writing area's 「不关联仓库」): a scratch of no repo
 # — opened in $HOME, `@norepo 1`, on any of this person's machines; only a

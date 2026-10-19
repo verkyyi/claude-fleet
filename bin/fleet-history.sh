@@ -683,38 +683,6 @@ find_row() {
 # ============================================================================
 # list — human table, newest first
 # ============================================================================
-# remote_stream <repo…> → `<repo>\t<ledger row>` for every history row the hub
-# holds of a worker on ANOTHER machine of this owner (issue #1609) — the row its
-# machine recorded at the reap, col 9 prefixed `@<machine>` — minus a session
-# this ledger already has. Not a hub node → nothing (the list as it always was).
-remote_stream() {
-  local r rem sess="${FLEET_SESSION:-$(fleet_current_session 2>/dev/null)}"
-  [ -n "$sess" ] && [ -f "$BIN/fleet-worker-records.sh" ] || return 0
-  for r in "$@"; do
-    [ -n "$r" ] || continue
-    rem=$(bash "$BIN/fleet-worker-records.sh" fetch --session "$sess" --repo "$r" --history 2>/dev/null) || continue
-    [ -n "$rem" ] || continue
-    FH_REM="$rem" python3 -c '
-import os, sys
-repo, local = sys.argv[1], set()
-try:
-    for l in open(sys.argv[2], encoding="utf-8", errors="replace"):
-        f = l.rstrip("\n").split("\t")
-        if len(f) > 7 and f[7] not in ("", "-"): local.add(f[7])
-except OSError:
-    pass
-for l in os.environ["FH_REM"].split("\n"):
-    f = l.split("\t")
-    if len(f) < 13 or f[0] != "history": continue
-    node, row = f[2], f[3:]
-    if row[7] not in ("", "-") and row[7] in local: continue
-    row[8] = "@%s %s" % (node, "" if row[8] == "-" else row[8])
-    row[8] = row[8].rstrip()
-    print(repo + "\t" + "\t".join(row))
-' "$r" "$(ledger_path "$r")"
-  done
-}
-
 cmd_list() {
   local repo="" filter="" all="" lonly=""
   while [ $# -gt 0 ]; do
@@ -727,24 +695,9 @@ cmd_list() {
     landed_scope
   fi
   local out; out=$(landed_stream "$repo" "$filter")
-  # Workers reaped on another machine (issue #1609): merged in by time, unless
-  # --local. Nothing from the hub ⇒ `out` untouched.
-  if [ -z "$lonly" ]; then
-    local rem
-    if [ "$LANDED_MERGED" = 1 ]; then
-      # shellcheck disable=SC2086
-      rem=$(remote_stream $LANDED_REPOS)
-    else
-      local rr="${repo:-${FLEET_REPO:-}}"
-      [ -n "$rr" ] || [ -z "${FLEET_SESSION:-}" ] \
-        || rr=$(fleet_load_conf "$FLEET_SESSION" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}")
-      rem=$(remote_stream "$rr")
-    fi
-    [ -n "$rem" ] && [ -n "$filter" ] && rem=$(printf '%s\n' "$rem" | grep -iF -- "$filter")
-    if [ -n "$rem" ]; then
-      out=$(printf '%s\n%s\n' "$out" "$rem" | grep -v '^$' | LC_ALL=C sort -s -t"$(printf '\t')" -k2,2r)
-    fi
-  fi
+  # (Rows of workers reaped on another machine came from the hub's worker
+  # records, issue #1609 — gone with issue #4898; --local is accepted, the same.)
+  : "$lonly"
   if [ -z "$out" ]; then
     echo "no landed sessions recorded yet$( [ -n "$filter" ] && printf ' (filter: %s)' "$filter")."
     return 0
@@ -1275,8 +1228,7 @@ cmd_row() {
 }
 
 # ended — how a session that is no longer live ENDED (issue #1649): one line,
-# `<local time>\t<result>`, from the newest row for <key> in this ledger, else the
-# newest the hub holds of it from another machine (remote_stream). rc 1 = no row:
+# `<local time>\t<result>`, from the newest row for <key> in this ledger. rc 1 = no row:
 # never live, or not ended. fleet-peer-send.sh prints it as
 # `<target> 已于 <time> 结束：<result>` instead of a bare «no live window».
 cmd_ended() {
@@ -1287,9 +1239,6 @@ cmd_ended() {
   case "$key" in issue-*) key=${key#issue-} ;; esac
   [ -n "$key" ] || return 1
   row=$(find_row "$repo" "$key")
-  if [ -z "$row" ] && [ -z "${FLEET_HISTORY_LEDGER:-}" ]; then
-    row=$(remote_stream "$repo" | cut -f2- | awk -F'\t' -v k="$key" '$2 == k' | ledger_sort_desc | head -n1)
-  fi
   [ -n "$row" ] || return 1
   python3 -c '
 import sys, datetime

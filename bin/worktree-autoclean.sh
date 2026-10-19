@@ -377,11 +377,7 @@ process_locked() {
   if [ -n "$inum" ] && [ "$FORGE" != none ]; then
     local ist=""
     if [ -n "$REPO" ]; then
-      if [ "$(fleet_ticket_home "$REPO")" = hub ]; then   # the ticket door (#3597)
-        ist="$(fleet_ticket_state "$REPO" "$inum" | cut -f1)"
-      else
-        ist="$(fleet_gh -R "$REPO" issue view "$inum" --json state -q .state 2>/dev/null)"
-      fi
+      ist="$(fleet_gh -R "$REPO" issue view "$inum" --json state -q .state 2>/dev/null)"
     fi
     if [ "$ist" != CLOSED ]; then
       reap_detached "$dir" "$branch"   # past the liveness gate: no window, so orphans (#469)

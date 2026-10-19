@@ -36,12 +36,8 @@ FLEET_BASE_BRANCH="main"
 #FLEET_SPAWN_FOCUS=0
 # Warm scratch sessions
 #FLEET_SCRATCH_POOL=1
-# Cross-machine pre-spawn dedup
-#FLEET_PRESPAWN_DEDUP=1
 # Auto-merge method
 #FLEET_MERGE_METHOD="squash"
-# Tap-first option menus
-#FLEET_TAP_FIRST=0
 # Worker seed prompt
 #FLEET_WORKER_PROMPT="Implement and verify per the repo conventions"
 
@@ -50,10 +46,6 @@ FLEET_BASE_BRANCH="main"
 FLEET_GLOBAL_MAX_SESSIONS=0
 # Max sessions — this fleet
 #FLEET_MAX_SESSIONS=0
-
-# ── backlog ──
-# Default milestone for filed issues
-#FLEET_DEFAULT_MILESTONE=""
 
 # ── bridge ──
 # Relay issue comments to worker

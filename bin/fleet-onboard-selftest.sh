@@ -196,7 +196,7 @@ got=$(look)
 ok "look: refuses unmarked, prints only the window that is new"
 
 # --- 10. no seat grab, no ticket, no sidebar (issue #3320) -------------------
-for bad in fleet-role-take '--spawn' 'fleet-issue-file' sidebar 'fleet-keys.sh'; do
+for bad in fleet-role-take '--spawn' sidebar 'fleet-keys.sh'; do
   grep -q -- "$bad" "$SKILL" && fail "the skill still says '$bad' (#3320: no role, no spawn, no ticket, no sidebar)"
 done
 ok "the skill takes no role, spawns nothing, files nothing, has no sidebar"

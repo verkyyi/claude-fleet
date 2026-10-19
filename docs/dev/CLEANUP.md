@@ -18,7 +18,7 @@ may force.
 ## The lifecycle
 
 ```
-worker: /fleet-claim → implement → ship + land (same skill)
+worker: brief → implement → ship + land (the flow its SessionStart hook gives it)
                        ├─ verify + push + open PR (Closes #N)
                        ├─ fleet-pr-verdict.sh <PR>            ← READ the gate
                        └─ READY ⇒ gh pr merge --<FLEET_MERGE_METHOD> --delete-branch
@@ -165,13 +165,13 @@ Every report is also appended to the parent's children ledger
 (`$FLEET_STATE/children/<parent-key>.ndjson`, issue #937), delivered or not. A
 parent verifies a report — or asks how all its children are doing — with ONE
 read of `bin/fleet-children.sh` (ledger + live window state + the dash's PR
-cache), never a `gh pr list` + `capture-pane` per report; `/fleet-claim` and
-`/fleet-epic-run` say so (issue #940).
+cache), never a `gh pr list` + `capture-pane` per report; `/fleet-epic-run` says
+so (issue #940).
 The reporting selftest uses two local windows and the actual inbox transport.
 
 | Piece | What |
 |---|---|
-| `/fleet-claim` ship + land step | After opening the PR, the worker polls `bin/fleet-pr-verdict.sh <PR>` and, on `READY`, runs `gh pr merge <PR> --<FLEET_MERGE_METHOD> --delete-branch` (default `squash`) then re-reads the verdict to confirm `MERGED` (issue #441). `FAILING`/`CONFLICT`/`BEHIND` are the worker's to fix; `BLOCKED` (branch protection) is a real gate it must not force — it says so on the issue and stops. (Issue #283 folded the retired `/fleet-ship` into `/fleet-claim`'s standing contract.) |
+| the worker's ship + land step | After opening the PR, the worker polls `bin/fleet-pr-verdict.sh <PR>` and, on `READY`, runs `gh pr merge <PR> --<FLEET_MERGE_METHOD> --delete-branch` (default `squash`) then re-reads the verdict to confirm `MERGED` (issue #441). `FAILING`/`CONFLICT`/`BEHIND` are the worker's to fix; `BLOCKED` (branch protection) is a real gate it must not force— it asks (`ask`), reports blocked and stops. 
 | `bin/fleet-pr-verdict.sh <PR>` | The **merge gate**, read-only: ONE `gh` call folded through `land_classify`/`land_verdict` (bin/fleet-land-lease.sh) into one token — `READY` · `PENDING` · `BEHIND` · `FAILING` · `CONFLICT` · `BLOCKED` · `DRAFT` · `MERGED` · `CLOSED`. Exit 0 only for `READY`, 1 for any other verdict, 2 on error. Stricter than the dash's glance on purpose: a red or still-running check outranks a `CLEAN` mergeStateStatus, because `CLEAN` only means nothing *required* blocks the merge. |
 | `bin/fleet-cleanup.sh <PR>` | The mechanical, no-LLM, **no-merge** janitor. `bin/fleet-land.sh` MINUS the merge: for a MERGED (or CLOSED-unmerged) PR it records the ledger first, fast-forwards the base under the shared land lease, and tears down window → worktree → branch (the worktree is **dropped**, not deleted — see below). Idempotent; an already-reaped PR is a no-op. A **CLOSED**-unmerged PR goes through the [liveness gate](#closed-unmerged-is-not-proof-of-abandonment-issue-544) first. Result tokens: `cleaned:<sha>` · `cleaned:closed` · `skip:not-final` · `skip:nothing` · `skip:grace` · `skip:notice` · `skip:issue-open` · `skip:live` · `skip:dirty` · `error:<reason>`. |
 | `com.claude-fleet.cleanup` (`bin/fleet-cleanup-daemon.sh`, ~60s) | Scans the `prmap` cache pr-refresh already writes (`--state all`, so MERGED/CLOSED rows are present — ZERO extra `gh`) for final PRs whose `issue-<N>` still has a live worktree or window, and drives `fleet-cleanup.sh` for each, **each under a wall-clock budget** (`FLEET_CLEANUP_CANDIDATE_TIMEOUT`, 120s). Single-writer per repo + disk-gated. **ON by default** (opt out per fleet with `FLEET_CLEANUP=0`) — it merges nothing and relaxes no gate. |
@@ -458,7 +458,7 @@ uses. Only `working` is screened there — it is unambiguous and cwd-independent
 every subtler signal stays in the one authoritative gate, because a pre-screen may
 only ever *save* a call, never decide a reap.
 
-The worker-side half of this lives in the charter (`commands/fleet-claim.md`):
+The worker-side half of this lives in its flow (`bin/fleet-worker-start-hook.sh`):
 land with **one** `gh pr merge … --delete-branch`, never a chained
 `push --delete` — a failed merge must not delete the branch.
 
@@ -565,7 +565,7 @@ The reaped session still lands in `/fleet-history`: with no issue number,
 ## What was retired
 
 - **Skills**: `/fleet-land`, `/fleet-land-self`, `/fleet-land-train` — deleted. A
-  worker now lands its own PR from `/fleet-claim` (#441) with a plain `gh pr merge`
+  worker now lands its own PR (#441) with a plain `gh pr merge`
   behind `bin/fleet-pr-verdict.sh`; no lease-hold-through-green, no land train. The
   hub's escape hatch is the same `gh pr merge` by hand (`--auto` to let GitHub do it);
   the cleanup daemon handles the rest.
@@ -621,8 +621,5 @@ still stands — so `resume` can rebuild the worktree at its original path and
 `claude --resume` still finds the transcript. That sha applies to worker
 closed-unlanded rows too: a reaped-clean session no longer degrades to REVIEW-ONLY.
 
-A scratch **bound in place** (`fleet-bind.sh`, issue #520) leaves this path
-entirely: from the bind onward its branch is `issue-<N>`, so every reaper takes
-the ordinary worker route — the merged-PR gate, the `issue-<N>` ledger key, the
-issue close — even though its directory is still named `<repo>-scratch-<K>`.
-Branch, not directory, is what the reapers read.
+A scratch bound in place (issue #520) left this path for the worker route; the bind
+script left with issue #4898. Branch, not directory, is what the reapers read.

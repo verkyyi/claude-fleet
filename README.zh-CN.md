@@ -141,16 +141,7 @@ worker 的默认流程是：认领 Issue → 实现 → 验证 → 提交 PR →
 
 **预填内容是待发送草稿，不会自动发送。** `Ctrl-S` 可创建使用自动编号、输入框为空的 scratch。它同样拥有独立、可写的 worktree。
 
-需求明确后，在这个 scratch 会话中让 agent 执行以下命令，即可创建 Issue 并原地转为 worker；请把标题和正文换成讨论确认的内容：
-
-```sh
-~/.claude/fleet/bin/fleet-issue-file.sh \
-  --title "支持按筛选条件导出订单" \
-  --body "在这里写入已确认的需求、范围和验收条件。" \
-  --bind
-```
-
-已有 Issue 则用 `~/.claude/fleet/bin/fleet-bind.sh <Issue编号>` 绑定。这样可以沿用讨论时的上下文。
+需求明确后，让 agent 用 `task` 工具把它派成一个任务：会话开在 hub 的任务记录 `T<n>` 上（#4898 起 fleet 不再建、认领 GitHub Issue）。
 
 ### 让中文沟通贯穿整个任务
 
@@ -324,7 +315,7 @@ claude plugin marketplace add verkyyi/claude-fleet
 claude plugin install fleet@claude-fleet --scope user --yes
 ```
 
-插件命令带命名空间，如 `/fleet:fleet-claim`；传统安装对应 `/fleet-claim`。fleet 会识别安装方式。**插件负责 Claude Code 侧的组件；tmux、脚本和后台服务仍需要按安装手册配置。**
+插件命令带命名空间，如 `/fleet:fleet-history`；传统安装对应 `/fleet-history`。fleet 会识别安装方式。**插件负责 Claude Code 侧的组件；tmux、脚本和后台服务仍需要按安装手册配置。**
 
 插件可用 `/plugin update fleet` 更新。机器级安装通过 `/fleet-sync-install` 同步（插件安装时为 `/fleet:fleet-sync-install`，要求 `~/.claude/fleet` 是 Git checkout）；团队每台机器都要分别更新，用 `fleet-doctor.sh` 检查是否落后。
 
@@ -334,7 +325,6 @@ claude plugin install fleet@claude-fleet --scope user --yes
 
 | 命令 | 用途 |
 |---|---|
-| `/fleet-claim` | worker 的完整任务流程，新启动的 worker 会运行它 |
 | `/fleet-context` | 查看当前上下文占用及是否需要交接 |
 | `/fleet-handoff` | 保存交接信息，清理上下文后继续任务 |
 | `/fleet-history` | 在 hub 侧查看、恢复历史会话 |

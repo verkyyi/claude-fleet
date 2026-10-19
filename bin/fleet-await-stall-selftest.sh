@@ -100,7 +100,7 @@ eq "five rungs, in order, one ledger row each" \
    "1:nudge 2:nudge 3:brief 4:parent 5:alert" "$(wakes 301)"
 eq "rungs 1-3 go to the child, rung 4 to the parent" \
    "issue:301 issue:301 issue:301 $P" "$(cut -f1 "$PEER_LOG" | tr '\n' ' ' | sed 's/ $//')"
-has "rung 3 re-sends the task (claim brief)" 'fleet-claim-brief.sh' "$(sed -n 3p "$PEER_LOG")"
+has "rung 3 re-sends the task (the brief)" 'brief' "$(sed -n 3p "$PEER_LOG")"
 has "rung 4 names the stuck child" '#301' "$(sed -n 4p "$PEER_LOG")"
 [ -f "$STALLF" ] || fail "rung 5 raised no stall alert" "$(cat "$WORK/err")"
 CHECKS=$((CHECKS + 1))

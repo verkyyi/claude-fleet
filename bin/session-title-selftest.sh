@@ -152,7 +152,7 @@ if [ -n "$REAL_TMUX" ]; then
   T set-option -w -t "=$S:我的会话" @norepo 1
   T set-option -w -t "=$S:我的会话" @task_line '帮我看下 mac-d 的日志'
   T set-option -w -t "=$S:draft" @task_line '试一下新的侧栏'
-  T set-option -w -t "=$S:fix-sidebar-slug" @task_line '/fleet-claim'
+  T set-option -w -t "=$S:fix-sidebar-slug" @task_line '/fleet-history'
   out5=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
   eq "A: a no-repo session → its @task_line as title= (#2359)" "title=帮我看下 mac-d 的日志" "$(col17 "$out5" '我的会话')"
   eq "A: a scratch → its @task_line as title=" "title=试一下新的侧栏" "$(col17 "$out5" draft)"
@@ -356,7 +356,7 @@ wl 1 scratch-5 @1 '' '' '试一下新的侧栏'
 wl 2 '我的会话' @2 '' 1 '帮我看下 mac-d 的日志'
 wl 3 norepo-2 @3 '' 1 ''
 wl 4 '我的会话-2' @4 '' 1 '第二个'
-wl 5 issue-12 @5 12 '' '/fleet-claim'
+wl 5 issue-12 @5 12 '' '/fleet-history'
 s=$(side)
 lbl() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v w="$2" '$1 == w { print $4 }'; }
 eq "D2: an unbound scratch → its first sentence as the label" "试一下新的侧栏" "$(lbl "$s" @1)"
