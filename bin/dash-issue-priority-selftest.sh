@@ -38,6 +38,7 @@ LABELS="$FD/labels"
 # to the same target the cache-based cycle chose.
 seed_labels() { printf '101\tenhancement,priority:p2\n102\tpriority:p0\n103\t\n' > "$LABELS"; : > "$LABELS.ts"; }
 printf 'fakesess\tfake-repo\tfake/repo\n' > "$WORK/tmp/.claude-dash/global/sessmap"
+. "$BIN/selftest-repo-fixture.sh"; fx_repo "$WORK/conf" fakesess fake/repo   # the fleet hosts it (#1937, #4806)
 
 GHLOG="$WORK/ghedit"; RSLOG="$WORK/rslog"
 # fake gh: `issue view --json labels` → canned per-issue labels; `issue edit` → logged.
@@ -70,7 +71,7 @@ exit 0
 TMUXFAKE
 chmod +x "$WORK/fp/gh" "$WORK/fp/tmux"
 
-runp() { : > "$GHLOG"; : > "$RSLOG"; seed_labels; PATH="$WORK/fp:$PATH" TMPDIR="$WORK/tmp" \
+runp() { : > "$GHLOG"; : > "$RSLOG"; seed_labels; PATH="$WORK/fp:$PATH" TMPDIR="$WORK/tmp" FLEET_CONF_DIR="$WORK/conf" \
   bash "$WORK/bin/dash-issue-priority.sh" "$@" >/dev/null 2>&1; }
 
 # ============================ A: cycle from none =============================

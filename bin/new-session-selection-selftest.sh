@@ -31,6 +31,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
@@ -78,12 +79,12 @@ mkrepo "$MA" o/alpha; mkrepo "$MB" o/beta; mkrepo "$MD" o/solo
 
 S=ft; D=fd
 mkdir -p "$FLEET_CONF_DIR/fleets/$S/repos" "$FLEET_CONF_DIR/fleets/$D"
-printf 'FLEET_REPO="o/alpha"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\nFLEET_WORKTREE_ROOT="%s"\n' \
-  "$MA" "$WORK/wt.noindex" > "$FLEET_CONF_DIR/fleets/$S/conf"
+fx_repo "$FLEET_CONF_DIR" "$S" o/alpha FLEET_MAIN="$MA" FLEET_BASE_BRANCH=master
+printf 'FLEET_WORKTREE_ROOT="%s"\n' "$WORK/wt.noindex" > "$FLEET_CONF_DIR/fleets/$S/conf"
 printf 'FLEET_REPO="o/beta"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$MB" \
   > "$FLEET_CONF_DIR/fleets/$S/repos/o-beta.conf"
-printf 'FLEET_REPO="o/solo"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\nFLEET_WORKTREE_ROOT="%s"\n' \
-  "$MD" "$WORK/wt.noindex" > "$FLEET_CONF_DIR/fleets/$D/conf"
+fx_repo "$FLEET_CONF_DIR" "$D" o/solo FLEET_MAIN="$MD" FLEET_BASE_BRANCH=master
+printf 'FLEET_WORKTREE_ROOT="%s"\n' "$WORK/wt.noindex" > "$FLEET_CONF_DIR/fleets/$D/conf"
 
 "$REAL_TMUX" -S "$SOCK" -f /dev/null new-session -d -s "$S" -n plan -x 200 -y 50 \
   || { echo "could not start isolated tmux" >&2; exit 1; }

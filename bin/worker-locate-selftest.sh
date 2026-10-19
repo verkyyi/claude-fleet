@@ -44,6 +44,7 @@
 # tmux / python3 absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX=$(command -v tmux) || { echo 'worker-locate selftest: tmux absent — SKIP'; exit 0; }
 command -v python3 >/dev/null 2>&1 || { echo 'worker-locate selftest: python3 absent — SKIP'; exit 0; }
 
@@ -52,7 +53,8 @@ L="wloc$$"
 export FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR/fleets/$L"
 export FLEET_CC_SESSIONS_DIR="$WORK/sessions"; mkdir -p "$FLEET_CC_SESSIONS_DIR"
-printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$WORK" > "$FLEET_CONF_DIR/fleets/$L/conf"
+: > "$FLEET_CONF_DIR/fleets/$L/conf"
+fx_repo "$FLEET_CONF_DIR" "$L" acme/app FLEET_MAIN="$WORK/main"
 unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_HUB_STATUS_CMD FLEET_HUB_CACHE_SECS
 
 FAIL=0; CHECKS=0
@@ -116,7 +118,7 @@ tf set-window-option -t "$w7b" @issue 7; tf set-window-option -t "$w7b" @repo ac
 loc "wid:issue-7" "$L"; ok; [ "$out" = unknown ] && case "$err" in *ambiguous*) true ;; *) false ;; esac \
   || fail "B: multi-repo bare key held twice → unknown + ambiguous" "$out / $err"
 loc "wid:acme-lib:issue-7" "$L"; ok; [ "$out" = "local $w7b $L" ] || fail "B: multi-repo slug key → that repo's window" "$out / $err"
-tf kill-window -t "$w7b"; rm -rf "$FLEET_CONF_DIR/fleets/$L/repos"; tf set-window-option -u -t "$w7" @repo
+tf kill-window -t "$w7b"; rm -rf "$FLEET_CONF_DIR/fleets/$L/repos"; fx_repo "$FLEET_CONF_DIR" "$L" acme/app FLEET_MAIN="$WORK/main"; tf set-window-option -u -t "$w7" @repo
 
 # --- C: the hub branch ------------------------------------------------------------------
 CACHE="$FLEET_CONF_DIR/control/hub-workers.tsv"
@@ -256,7 +258,7 @@ ok; [ "$(tf show-options -wqv -t "$w7b" @origin)" = scratch-3 ] && [ -z "$(tf sh
   || fail "F4: fleet-await adopted B's #7 only" "A=[$(tf show-options -wqv -t "$w7" @origin)] B=[$(tf show-options -wqv -t "$w7b" @origin)]"
 run bash "$BIN/fleet-await.sh" 7 -L "$L" --parent scratch-3 --no-spawn --timeout 2 --interval 1
 ok; [ "$rc" = 2 ] && case "$err" in *"--repo"*) true ;; *) false ;; esac || fail "F4: fleet-await without --repo in a 2+ repo fleet → usage refusal" "rc=$rc $err"
-tf kill-window -t "$w7b"; rm -rf "$FLEET_CONF_DIR/fleets/$L/repos"; tf set-window-option -u -t "$w7" @repo
+tf kill-window -t "$w7b"; rm -rf "$FLEET_CONF_DIR/fleets/$L/repos"; fx_repo "$FLEET_CONF_DIR" "$L" acme/app FLEET_MAIN="$WORK/main"; tf set-window-option -u -t "$w7" @repo
 
 # F6 (issue #1939) one spelling: a ONE-repo fleet keys acme-app:issue-7 too; the
 #    bare key is that repo's alias; a second repo renames no session
@@ -281,7 +283,7 @@ ok; [ "$(okey "$w7")" = acme-app:issue-7 ] && [ "$(okey "$w3")" = acme-app:scrat
   || fail "F6: adding a second repo renames no session" "$(okey "$w7") $(okey "$w3")"
 ok; [ "$(lib fleet_key_qualify "$L" issue-7)" = issue-7 ] && [ -z "$(lib fleet_key_alias "$L" acme-app:issue-7)" ] \
   || fail "F6: in a 2+ repo fleet a bare key names no one repo"
-rm -rf "$FLEET_CONF_DIR/fleets/$L/repos"; tf set-window-option -u -t "$w7" @repo; tf set-window-option -u -t "$w3" @repo
+rm -rf "$FLEET_CONF_DIR/fleets/$L/repos"; fx_repo "$FLEET_CONF_DIR" "$L" acme/app FLEET_MAIN="$WORK/main"; tf set-window-option -u -t "$w7" @repo; tf set-window-option -u -t "$w3" @repo
 
 # F5 a position (<sess>:<idx>, <sess>:<name>) and a window NAME are not addresses
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "$L:1" hi

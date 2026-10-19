@@ -25,6 +25,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/tmux-dash-collect.sh"
 LIB="$BIN/fleet-lib.sh"
 [ -f "$SRC" ] || { printf 'selftest: %s not found\n' "$SRC" >&2; exit 2; }
@@ -72,7 +73,8 @@ chmod +x "$WORK/fakepath/tmux"
 
 # --- a configured fleet in the NEW #181 layout: fleets/sessA/conf → acme/widgets.
 CONF="$WORK/conf"; mkdir -p "$CONF/fleets/sessA"
-printf 'FLEET_REPO="acme/widgets"\n' > "$CONF/fleets/sessA/conf"
+: > "$CONF/fleets/sessA/conf"
+fx_repo "$CONF" "sessA" acme/widgets
 
 C="$WORK/.claude-dash"
 G="$C/global"

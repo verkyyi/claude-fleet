@@ -124,6 +124,8 @@ ok "K CPU busy decides before load/core: 3.1/core at 40 % admits, 92 % holds nam
 # ===== B: fleet_session_cap_ok =================================================
 # A fake tmux with no windows = 0 sessions; FLEET_GLOBAL_MAX_SESSIONS decides the cap.
 mkdir -p "$WORK/fakebin" "$WORK/c" "$WORK/t" "$WORK/main/.git" "$WORK/conf"
+. "$BIN/selftest-repo-fixture.sh"
+fx_repo "$WORK/conf" testsess acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
 NEWWIN_LOG="$WORK/newwins"
 cat > "$WORK/fakebin/tmux" <<TMUXFAKE
 #!/bin/bash

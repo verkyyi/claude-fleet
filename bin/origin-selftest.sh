@@ -20,6 +20,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 LIB="$BIN/fleet-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 HIST="$BIN/fleet-history.sh"
@@ -104,7 +105,7 @@ eq "canon: nothing anywhere ≡ hub"                       ""           "$(canon
 eq "canon: explicit hub beats a detected worker (#896)"  ""           "$(canon hub issue-42)"
 eq "canon: explicit hub, cross-fleet → still hub"        ""           "$(canon hub scratch-5 dstfleet srcfleet)"
 # Issue #1939: in a fleet of ONE repo a bare key is written qualified, never bare.
-mkdir -p "$FLEET_CONF_DIR/fleets/onerepo"; printf 'FLEET_REPO=acme/app\n' > "$FLEET_CONF_DIR/fleets/onerepo/conf"
+mkdir -p "$FLEET_CONF_DIR/fleets/onerepo"; : > "$FLEET_CONF_DIR/fleets/onerepo/conf"; fx_repo "$FLEET_CONF_DIR" "onerepo" acme/app
 eq "canon: a bare explicit key in a one-repo fleet → qualified" "acme-app:issue-77" "$(canon issue-77 '' onerepo)"
 eq "canon: a worktree basename too"                      "acme-app:scratch-52" "$(canon cd-conductor-scratch-52 '' onerepo)"
 eq "canon: a qualified key passes through"               "acme-lib:issue-77" "$(canon acme-lib:issue-77 '' onerepo)"
@@ -182,7 +183,7 @@ p_bare=$(mk_pane w-bare "$WORK/wt/repo-scratch-9")
 og() { TMUX="fake,1,1" TMUX_PANE="$1" bash -c ". '$LIB'; fleet_origin_key"; }
 # No repo at all: nothing to qualify with, nothing to confuse — the bare key.
 eq "origin_key: a fleet hosting no repo keys bare" "issue-42" "$(og "$p_iss")"
-mkdir -p "$FLEET_CONF_DIR/fleets/ok"; printf 'FLEET_REPO=acme/app\n' > "$FLEET_CONF_DIR/fleets/ok/conf"
+mkdir -p "$FLEET_CONF_DIR/fleets/ok"; : > "$FLEET_CONF_DIR/fleets/ok/conf"; fx_repo "$FLEET_CONF_DIR" "ok" acme/app
 eq "origin_key: @issue pane" "acme-app:issue-42" "$(og "$p_iss")"
 eq "origin_key: @raw pane (from @worktree)" "acme-app:scratch-7" "$(og "$p_raw")"
 eq "origin_key: plain pane ≡ hub (empty)" "" "$(og "$p_plain")"
@@ -214,7 +215,7 @@ mkdir -p "$WORK/wt/repo-scratch-5"
 tmux new-session -d -s fleetC -x 220 -y 50 -c "$WORK" 'sleep 300' || fail "could not start 'fleetC' session"
 # One repo (issue #1939): the grouping keys and the @origins a spawn stamps are
 # `acme-app:`-qualified, the same spelling in a fleet of one repo or five.
-mkdir -p "$FLEET_CONF_DIR/fleets/fleetC"; printf 'FLEET_REPO=acme/app\n' > "$FLEET_CONF_DIR/fleets/fleetC/conf"
+mkdir -p "$FLEET_CONF_DIR/fleets/fleetC"; : > "$FLEET_CONF_DIR/fleets/fleetC/conf"; fx_repo "$FLEET_CONF_DIR" "fleetC" acme/app
 # @expand=1 on every fixture window: a subtree is COLLAPSED BY DEFAULT (the ←/→
 # fold, bin/dash-fold-toggle.sh), and this part is about the #503 GROUPING — where
 # a child sorts and how it is tagged and indented — which you can only read on an
@@ -362,8 +363,10 @@ eq "gen: the same server keeps a pending command" yes "$([ -e "$IB/7/2-2-2.json"
 #    repo, else 4. Hermetic: no $TMUX, so the pane step is skipped.
 # ============================================================================
 TR="$WORK/tr"; mkdir -p "$TR/fleets/one" "$TR/fleets/two/repos"
-printf 'FLEET_REPO=o/a\n' > "$TR/fleets/one/conf"
-printf 'FLEET_REPO=o/a\n' > "$TR/fleets/two/conf"
+: > "$TR/fleets/one/conf"
+fx_repo "$TR" "one" o/a
+: > "$TR/fleets/two/conf"
+fx_repo "$TR" "two" o/a
 printf 'FLEET_REPO=o/b\n' > "$TR/fleets/two/repos/o-b.conf"
 tr_run() { ( unset TMUX TMUX_PANE; FLEET_CONF_DIR="$TR"; . "$LIB"
              out=$(fleet_target_repo "$@"); rc=$?; printf '%s rc=%s' "$out" "$rc" ); }

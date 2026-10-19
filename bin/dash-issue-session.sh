@@ -266,19 +266,15 @@ fi
 _rc=0; _r=$(unset TMUX_PANE; fleet_target_repo "$SESS" "$REPO_ARG") || _rc=$?
 case "$_rc" in
   0) REPO_ARG=$_r
-     # compat-1v: 下一批删 — a pre-#1937 conf naming only FLEET_MAIN hosts no repo
-     # fleet_repos lists (its repo is the collector's cache): nothing to overlay.
-     if [ -n "$(fleet_repos "$SESS")" ]; then
-       fleet_load_repo_conf "$SESS" "$REPO_ARG" \
-         || { refuse "#$num: $REPO_ARG is not a repo this fleet hosts"; exit "$RC_INFRA"; }
-     fi ;;
+     fleet_load_repo_conf "$SESS" "$REPO_ARG" \
+       || { refuse "#$num: $REPO_ARG is not a repo this fleet hosts"; exit "$RC_INFRA"; } ;;
   4) refuse "#$num: this fleet hosts several repos — pass --repo <owner/name>"; exit "$RC_INFRA" ;;
-  # compat-1v: 下一批删 — no repo listed (a conf naming only FLEET_MAIN, or none):
-  # the loaded FLEET_REPO / FLEET_MAIN, as before; a --repo must name that one.
-  *) if [ -n "$REPO_ARG" ] && [ "$(fleet_norm_repo "$REPO_ARG")" != "$(fleet_norm_repo "${FLEET_REPO:-}")" ]; then
-       refuse "#$num: $(fleet_norm_repo "$REPO_ARG") is not a repo this fleet hosts"; exit "$RC_INFRA"
+  *) if [ -n "$REPO_ARG" ]; then
+       refuse "#$num: $(fleet_norm_repo "$REPO_ARG") is not a repo this fleet hosts"
+     else
+       refuse "#$num: this fleet hosts no repo — add one (fleet-repo.sh add <owner/name>)"
      fi
-     REPO_ARG='' ;;
+     exit "$RC_INFRA" ;;
 esac
 unset _r _rc
 

@@ -83,8 +83,9 @@ one-off drill / audit records do not go in the repo (issue #3576).
   ordered by `repos/.order` — `fleet-up.sh` and `bin/fleet-repo.sh add` both go
   through `fleet_repo_register`, `remove` is one road for any repo (the last too),
   and the fleet conf holds fleet-wide settings only. An old conf that still names
-  `FLEET_REPO` is read for one version (that repo first) until
-  `fleet_conf_repo_migrate` (`fleet-conf.sh migrate`) moves it; a caller with no
+  `FLEET_REPO` (or only `FLEET_MAIN`) is not read (issue #4806) —
+  `fleet_conf_repo_migrate` (`fleet-conf.sh migrate`, `fleet-up.sh`) moves it, and
+  a selftest fixture writes `repos/<slug>.conf` + `.order`; a caller with no
   window reads the first repo. **There is no main repo.** A window's
   repo is `@repo` (`@norepo 1` = deliberately none), resolved ONLY through
   `fleet_repos` / `fleet_window_repo` / `fleet_load_repo_conf` — never an

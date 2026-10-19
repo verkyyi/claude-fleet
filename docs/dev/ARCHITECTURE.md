@@ -357,12 +357,12 @@ origin and stamps it, else takes the fleet's only repo, else answers **nothing**
 — and the consumer skips the window rather than guess.
 
 `fleet_load_conf` is window-aware: inside a pane of the fleet it loads, whose
-window resolves to a hosted repo, that repo's overlay is applied on top (the conf
-repo's identity + deploy keys are dropped first, so they never leak across). That
-one change moves every in-pane consumer — hooks, `commands/*.md`, the launcher's
-trust/model/MCP, the claim brief. An old-layout fleet with no `repos/` dir (read
-for one version, issue #1937) still returns before any tmux call
-(`bin/fleet-repo-selftest.sh` pins it). The collector and pr-refresh fetch
+window resolves to a hosted repo, that repo's overlay is applied on top (any
+other repo's identity + deploy keys are dropped first, so they never leak across).
+That one change moves every in-pane consumer — hooks, `commands/*.md`, the
+launcher's trust/model/MCP, the claim brief. A fleet conf that still names a repo
+(the old layout) is not read (issue #4806); `fleet-conf.sh migrate` moves it into
+`repos/`. A fleet with no `repos/` dir returns before any tmux call. The collector and pr-refresh fetch
 `issues`/`prmap` for every hosted repo, and `hooks/base-readonly-guard.py`
 protects every hosted repo's `FLEET_MAIN`.
 

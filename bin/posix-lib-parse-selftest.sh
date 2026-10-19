@@ -39,6 +39,7 @@
 set -u
 
 BIN=$(cd -- "$(dirname -- "$0")" && pwd)
+. "$BIN/selftest-repo-fixture.sh"
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 ok()   { CHECKS=$((CHECKS + 1)); }
@@ -149,7 +150,8 @@ both() {  # <desc> <expected> <snippet>
 
 # --- fixtures: three conf trees (repo-bearing / flat-sockets / empty) ---------
 CONF_REPO="$WORK/conf-repo"; mkdir -p "$CONF_REPO/fleets/fleet-a"
-printf 'FLEET_REPO="acme/new"\n' > "$CONF_REPO/fleets/fleet-a/conf"
+: > "$CONF_REPO/fleets/fleet-a/conf"
+fx_repo "$CONF_REPO" "fleet-a" acme/new
 CONF_SOCK="$WORK/conf-sock"; mkdir -p "$CONF_SOCK"
 : > "$CONF_SOCK/s1.conf"; : > "$CONF_SOCK/s2.conf"; : > "$CONF_SOCK/s3.conf"
 CONF_EMPTY="$WORK/conf-empty"; mkdir -p "$CONF_EMPTY"

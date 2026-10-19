@@ -76,7 +76,8 @@ mkdir -p "$TMPDIR" "$FLEET_CONF_DIR/fleets/alpha/repos"
 . "$BIN/fleet-lib.sh"
 
 fconf() { printf 'FLEET_REPO="%s"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH=master\n' "$2" "$WORK/$3" > "$1"; }
-fconf "$FLEET_CONF_DIR/fleets/alpha/conf"                      o/claude-fleet cf
+mkdir -p "$FLEET_CONF_DIR/fleets/alpha/repos"; : > "$FLEET_CONF_DIR/fleets/alpha/conf"   # every repo is an overlay (#1937, #4806)
+fconf "$FLEET_CONF_DIR/fleets/alpha/repos/o-claude-fleet.conf" o/claude-fleet cf; printf 'o-claude-fleet\n' > "$FLEET_CONF_DIR/fleets/alpha/repos/.order"
 fconf "$FLEET_CONF_DIR/fleets/alpha/repos/o-tokenledger.conf" o/tokenledger tl
 
 "$REAL_TMUX" -S "$SOCK" new-session -d -s alpha -n plan -x 200 -y 40 || { echo "no isolated tmux" >&2; exit 1; }

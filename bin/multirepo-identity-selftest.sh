@@ -29,6 +29,7 @@ set -uo pipefail
 export FLEET_GH_WRITE_GAP=0   # no write pacing here: the queue has its own test (fleet-gh-write-selftest.sh)
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
@@ -81,10 +82,9 @@ mkrepo "$WORK/mainA" o/a; mkrepo "$WORK/mainB" o/b; mkrepo "$WORK/mainC" o/c
 # --- fleets ------------------------------------------------------------------------
 M=M D=D
 mkdir -p "$FLEET_CONF_DIR/fleets/$M/repos" "$FLEET_CONF_DIR/fleets/$D"
+fx_repo "$FLEET_CONF_DIR" "$M" o/a FLEET_MAIN="$WORK/mainA" FLEET_BASE_BRANCH=master
+fx_repo "$FLEET_CONF_DIR" "$D" o/c FLEET_MAIN="$WORK/mainC" FLEET_BASE_BRANCH=master
 cat > "$FLEET_CONF_DIR/fleets/$M/conf" <<EOF
-FLEET_REPO="o/a"
-FLEET_MAIN="$WORK/mainA"
-FLEET_BASE_BRANCH="master"
 FLEET_ISSUE_BRIDGE=1
 FLEET_FAILOVER=0
 EOF
@@ -93,7 +93,7 @@ FLEET_REPO="o/b"
 FLEET_MAIN="$WORK/mainB"
 FLEET_BASE_BRANCH="main"
 EOF
-sed 's#o/a#o/c#; s#mainA#mainC#' "$FLEET_CONF_DIR/fleets/$M/conf" > "$FLEET_CONF_DIR/fleets/$D/conf"
+cp "$FLEET_CONF_DIR/fleets/$M/conf" "$FLEET_CONF_DIR/fleets/$D/conf"
 
 # one tmux server per fleet, on its own label — the #159 shape
 tmx() { local s="$1"; shift; tmux -L "$s" "$@"; }

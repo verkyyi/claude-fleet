@@ -1,10 +1,10 @@
 #!/bin/bash
 # repo-settings-selftest.sh — every repo keeps its own setup (issue #978).
 #
-# Fleet M hosts o/a (its conf) + o/b + o/e (overlays). The fleet conf sets the
-# fleet-wide values; o/b's overlay overrides every per-repo key; o/e's sets none,
-# so it must read the fleet's. Fleet D is the degenerate case — ONE repo (o/c), no
-# repos/ dir — and every leg asserts it reads exactly what it always did.
+# Fleet M hosts o/a + o/b + o/e (overlays, o/a first). The fleet conf sets the
+# fleet-wide values; o/b's overlay overrides every per-repo key; o/a's and o/e's
+# set none, so they read the fleet's. Fleet D is the degenerate case — ONE repo
+# (o/c) — and every leg asserts it reads exactly what it always did.
 #
 #   lockstep  conf/fleet.conf.reference's per-repo line == _FLEET_REPO_OVERRIDABLE
 #   get       fleet_repo_conf_get / fleet-repo.sh get: overlay, else fleet value
@@ -24,6 +24,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
@@ -84,10 +85,8 @@ done
 
 M=M D=D
 mkdir -p "$FLEET_CONF_DIR/fleets/$M/repos" "$FLEET_CONF_DIR/fleets/$D"
+fx_repo "$FLEET_CONF_DIR" "$M" o/a FLEET_MAIN="$WORK/mainA" FLEET_BASE_BRANCH=master
 cat > "$FLEET_CONF_DIR/fleets/$M/conf" <<EOF
-FLEET_REPO="o/a"
-FLEET_MAIN="$WORK/mainA"
-FLEET_BASE_BRANCH="master"
 FLEET_WORKTREE_ROOT="$WORK/wt"
 FLEET_WORKTREE_SETUP="$WORK/setup-a.sh"
 FLEET_SLEEP_MCP_RESTARTABLE="fleetmcp"
@@ -110,10 +109,8 @@ FLEET_REPO="o/e"
 FLEET_MAIN="$WORK/mainE"
 FLEET_BASE_BRANCH="master"
 EOF
+fx_repo "$FLEET_CONF_DIR" "$D" o/c FLEET_MAIN="$WORK/mainC" FLEET_BASE_BRANCH=master
 cat > "$FLEET_CONF_DIR/fleets/$D/conf" <<EOF
-FLEET_REPO="o/c"
-FLEET_MAIN="$WORK/mainC"
-FLEET_BASE_BRANCH="master"
 FLEET_WORKTREE_ROOT="$WORK/wt"
 FLEET_WORKTREE_SETUP="$WORK/setup-c.sh"
 FLEET_SLEEP_MCP_RESTARTABLE="cmcp"
@@ -139,7 +136,7 @@ eq 'cli b'       "$(bash "$BIN/fleet-repo.sh" get FLEET_SCRATCH_POOL o/b --sessi
 eq 'cli e tsv'   "$(bash "$BIN/fleet-repo.sh" get FLEET_SCRATCH_POOL o/e --session $M --tsv)" \
                  "o/e	$(fleet_repo_conf_file $M o/e)	2"
 eq 'cli degenerate' "$(bash "$BIN/fleet-repo.sh" get FLEET_WORKTREE_SETUP o/c --session $D --tsv)" \
-                    "o/c	$(fleet_conf_file $D)	$WORK/setup-c.sh"
+                    "o/c	$(fleet_repo_conf_file $D o/c)	$WORK/setup-c.sh"
 leg get
 
 # --- leak ------------------------------------------------------------------------
@@ -203,11 +200,11 @@ names, conf = m['restartable'](src)
 print(','.join(sorted(names)) + '|' + str(conf))
 PY
 }
-eq 'window a'   "$(restartable $M "$wa" '' fleetmcp)" "fleetmcp|$(fleet_conf_file $M)"
+eq 'window a'   "$(restartable $M "$wa" '' fleetmcp)" "fleetmcp|$(fleet_repo_conf_file $M o/a)"
 eq 'window b'   "$(restartable $M "$wb" '' fleetmcp)" "bmcp,playwright|$(fleet_repo_conf_file $M o/b)"
 eq 'window e'   "$(restartable $M "$we" '' fleetmcp)" "fleetmcp|$(fleet_repo_conf_file $M o/e)"
 eq 'worktree b' "$(restartable $M '' "$wtb" fleetmcp)" "bmcp,playwright|$(fleet_repo_conf_file $M o/b)"
-eq 'degenerate' "$(restartable $D '@9' '' cmcp)" "cmcp|$(fleet_conf_file $D)"
+eq 'degenerate' "$(restartable $D '@9' '' cmcp)" "cmcp|$(fleet_repo_conf_file $D o/c)"
 hint=$(python3 - "$BIN" "$(fleet_repo_conf_file $M o/b)" <<'PY'
 import runpy, sys
 from pathlib import Path

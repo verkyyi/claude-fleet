@@ -29,6 +29,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'dash-born-order selftest: python3 absent — SKIP'; exit 0; }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dashborn-selftest.XXXXXX")" || exit 2
@@ -38,7 +39,8 @@ unset CCQUOTA_FLEET FLEET_DASH_ORDER TMUX TMUX_PANE FLEET_SIDEBAR_SOURCE
 export TMPDIR="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh
 G="$WORK/.claude-dash/global"
 mkdir -p "$G" "$WORK/conf/fleets/$S" "$WORK/bin"
-printf 'FLEET_REPO=acme/app\n' > "$WORK/conf/fleets/$S/conf"
+: > "$WORK/conf/fleets/$S/conf"
+fx_repo "$WORK/conf" "$S" acme/app
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }

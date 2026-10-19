@@ -24,6 +24,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
@@ -87,10 +88,8 @@ git -C "$WORK/a-issue-12" rev-parse HEAD > "$GH_SHA_A"
 
 S=ft
 mkdir -p "$FLEET_CONF_DIR/fleets/$S/repos"
+fx_repo "$FLEET_CONF_DIR" "$S" o/a FLEET_MAIN="$WORK/main-a" FLEET_BASE_BRANCH=master
 cat > "$FLEET_CONF_DIR/fleets/$S/conf" <<EOF
-FLEET_REPO="o/a"
-FLEET_MAIN="$WORK/main-a"
-FLEET_BASE_BRANCH="master"
 FLEET_CLEANUP_MERGED_GRACE=0
 FLEET_REAP_MIN_AGE=0
 FLEET_REAP_IDLE_DONE_MIN=1
@@ -201,7 +200,8 @@ registered "$WORK/main-b" "$WORK/b-issue-12" || fail "E: SessionEnd on an unknow
 # --- F. one road: a one-repo fleet (old layout, no repos/ dir) joins on (repo, N) too (#1943) --
 D=fd
 mkdir -p "$FLEET_CONF_DIR/fleets/$D"
-printf 'FLEET_REPO="o/a"\nFLEET_MAIN="%s"\n' "$WORK/main-a" > "$FLEET_CONF_DIR/fleets/$D/conf"
+: > "$FLEET_CONF_DIR/fleets/$D/conf"
+fx_repo "$FLEET_CONF_DIR" "$D" o/a FLEET_MAIN="$WORK/main-a"
 tmux new-session -d -s "$D" -n plan
 d1=$(tmux new-window -d -P -F '#{window_id}' -t "$D" -n x); tmux set-option -w -t "$d1" @issue 7
 d2=$(tmux new-window -d -P -F '#{window_id}' -t "$D" -n y); tmux set-option -w -t "$d2" @issue 7

@@ -28,6 +28,7 @@ set -uo pipefail
 export FLEET_GH_WRITE_GAP=0   # no write pacing here: the queue has its own test (fleet-gh-write-selftest.sh)
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/fleet-evidence.sh"; LIB="$BIN/fleet-lib.sh"
 [ -f "$SRC" ] || { echo "selftest: $SRC missing" >&2; exit 2; }
 [ -f "$LIB" ] || { echo "selftest: $LIB missing" >&2; exit 2; }
@@ -48,7 +49,8 @@ cp "$SRC" "$WORK/bin/fleet-evidence.sh"; cp "$LIB" "$WORK/bin/fleet-lib.sh"; cp 
 # the ticket door the script reads parents and bodies through (issue #3599)
 for f in fleet-ticket.sh fleet_ticket.py fleet-gh.sh fleet-gh-lib.sh; do cp "$BIN/$f" "$WORK/bin/$f"; done
 chmod +x "$WORK/bin/fleet-evidence.sh"
-printf 'FLEET_REPO=o/r\n' > "$WORK/conf/fleets/fevsess/conf"
+: > "$WORK/conf/fleets/fevsess/conf"
+fx_repo "$WORK/conf" "fevsess" o/r
 CONF="$WORK/conf/fleets/fevsess"
 
 # --- fake gh: parent link (GH_PARENT, else 404) · sub-issues (GH_SUBS) · body (GH_BODY)
@@ -293,7 +295,8 @@ has "G7 help text" "$OUT" "fleet-evidence.sh before|after|live"
 # own (by-repo/<slug>/): issue numbers repeat across repos, so B's #42 must never
 # answer A's lookup. The conf's own repo keeps the paths it always had.
 mkdir -p "$WORK/conf/fleets/fevmulti/repos"
-printf 'FLEET_REPO=o/r\n' > "$WORK/conf/fleets/fevmulti/conf"
+: > "$WORK/conf/fleets/fevmulti/conf"
+fx_repo "$WORK/conf" "fevmulti" o/r
 MC="$WORK/conf/fleets/fevmulti"
 bslug=$(FLEET_CONF_DIR="$WORK/conf"; . "$WORK/bin/fleet-lib.sh"; fleet_slug o/b)
 printf 'FLEET_REPO=o/b\n' > "$MC/repos/$bslug.conf"

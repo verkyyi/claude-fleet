@@ -111,6 +111,8 @@ chmod +x "$WORK/fakebin/gh" "$WORK/fakebin/agent"
 
 unset CCQUOTA_FLEET FLEET_SPAWN_NODE FLEET_AGENT FLEET_WORKTREE_SETUP
 export FLEET_CONF_DIR="$WORK/conf" TMPDIR="$WORK/tmp"
+. "$BIN/selftest-repo-fixture.sh"
+fx_repo "$FLEET_CONF_DIR" "$SESS" acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
 env PATH="$WORK/fakebin:$PATH" FLEET_WRAP_LAUNCH="$WORK/fakebin/agent" FLEET_WRAP_FAST_FAIL=0 \
   AGENT_LOG="$WORK/agent" BOOT=2.5 STATE_HOOK="$BIN/set-claude-state.sh" \
   tmux -L "$SESS" -f /dev/null new-session -d -s "$SESS" -n home || fail "setup: tmux"

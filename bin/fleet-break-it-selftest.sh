@@ -217,6 +217,7 @@
 set -uo pipefail
 [ $# -gt 0 ] && BREAK_ONLY="$*"
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 DOC="$ROOT/docs/dev/BREAK-IT.md"
 command -v python3 >/dev/null 2>&1 || { printf 'fleet-break-it: python3 absent — SKIP\n'; exit 0; }
@@ -365,7 +366,8 @@ tmux new-session -d -s oc -n home -c "$WORK/emain" 'exec sleep 600'
 EOF
 chmod +x "$WORK/inst/bin/fleet-up.sh"
 for n in 1 2; do mkdir -p "$WORK/wt-$n"; done
-printf 'FLEET_REPO=acme/widgets\nFLEET_MAIN=%s\nFLEET_BASE_BRANCH=main\n' "$WORK/emain" > "$WORK/econf/oc.conf"
+: > "$WORK/econf/oc.conf"
+fx_repo "$WORK/econf" "oc" acme/widgets FLEET_MAIN="$WORK/emain" FLEET_BASE_BRANCH="main"
 write_map() {
   { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
     printf 'WIN\tissue-1\t%s\tsid-1\t1\tworking\t-\t-\n' "$WORK/wt-1"
@@ -523,6 +525,7 @@ seh_rig() {
   git init -q "$R/main"; git -C "$R/main" config user.email t@t; git -C "$R/main" config user.name t
   printf 'seed\n' > "$R/main/f"; git -C "$R/main" add f; git -C "$R/main" commit -qm seed
   git -C "$R/main" branch -M main
+  fx_repo "$R/conf" s1 acme/widgets FLEET_MAIN="$R/main" FLEET_BASE_BRANCH=main
   cat > "$R/fp/tmux" <<'FAKE'
 #!/bin/bash
 if [ "${1:-}" = run-shell ]; then shift; [ "${1:-}" = -b ] && shift; sh -c "$1"; exit 0; fi
@@ -768,6 +771,7 @@ drill_role_auto_reopen_off() {
 drill_agent_file_broken() {
   CAP=15; local d="$WORK/af" lbl="brkaf-$$" t0 rc wins
   mkdir -p "$d/o.git" "$d/main" "$d/conf" "$d/tmp" "$d/fb" "$d/home/.claude/agents"
+  fx_repo "$d/conf" "$lbl" acme/w FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master
   git init -q --bare "$d/o.git"
   ( cd "$d/main" && git init -q -b master . && git config user.email t@t && git config user.name t \
       && printf 'x\n' > CLAUDE.md && git add -A && git commit -qm i && git remote add origin "$d/o.git" \
@@ -2117,7 +2121,8 @@ vr_pid() { cut -f5 "$WORK/vr/conf/remote-views/$1" 2>/dev/null; }
 vr_view_reconnect() {
   CAP=5; local t0 one s opts
   mkdir -p "$WORK/vt" "$WORK/vr/conf/fleets/vrn"
-  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s\n' "$WORK/vr" > "$WORK/vr/conf/fleets/vrn/conf"
+  : > "$WORK/vr/conf/fleets/vrn/conf"
+  fx_repo "$WORK/vr/conf" "vrn" acme/app FLEET_MAIN="$WORK/vr"
   vr vrn -f /dev/null new-session -d -s vrn -n home -x 100 -y 20 'exec sleep 600' || { WHY="no node server"; return 1; }
   vr vrc -f /dev/null new-session -d -s vrc -n t1 -x 100 -y 20 \
     "$(vr_env) bash $BIN/fleet-remote-view.sh attach - V1; exec sleep 600"
@@ -2175,7 +2180,8 @@ drill_view_reconnect_shared() {
 drill_client_other_login_empty_list() {
   CAP=10; local sc="$WORK/cole" t0 out F=22222222-2222-4222-8222-222222222222 S=cole
   mkdir -p "$sc/bin" "$sc/home/.ssh" "$sc/conf/fleets/$S" "$sc/t/.claude-dash/global"
-  printf 'FLEET_REPO=acme/app\n' > "$sc/conf/fleets/$S/conf"
+  : > "$sc/conf/fleets/$S/conf"
+  fx_repo "$sc/conf" "$S" acme/app
   cat > "$sc/sessions.json" <<EOF
 {"sessions": [{"worker_id": "$F/issue-7", "machine_name": "mac-b", "os_user": "nodelogin", "availability": "online",
   "worker": {"issue": 7, "repo": "acme/app", "state": "done", "agent": "claude", "name": "cj-row", "needs": ""}}],
@@ -2230,7 +2236,8 @@ kf_env() {
   export FLEET_CONF_DIR="$WORK/kconf" TMUX_TMPDIR="$WORK/ktt" ZDOTDIR="$WORK/kzd"
   unset TMUX TMUX_PANE FLEET_ALLOW_TMUX_DESTROY FLEET_HUB
   mkdir -p "$FLEET_CONF_DIR/fleets/kf" "$TMUX_TMPDIR" "$ZDOTDIR"
-  printf 'FLEET_REPO=acme/widgets\n' > "$FLEET_CONF_DIR/fleets/kf/conf"
+  : > "$FLEET_CONF_DIR/fleets/kf/conf"
+  fx_repo "$FLEET_CONF_DIR" "kf" acme/widgets
   "$REAL_TMUX" -L kf has-session -t kf 2>/dev/null && return 0
   "$REAL_TMUX" -L kf new-session -d -s kf -n home 'exec sleep 600' \
     && "$REAL_TMUX" -L kf new-window -d -t kf -n issue-7 'exec sleep 600' \
@@ -3972,7 +3979,8 @@ drill_guide_spare_login() {
 drill_pool_stale_handed_out() {
   CAP=10; BREAK_SOCK="$WORK/sock-psh"; local d="$WORK/psh" t0 out rc w acct kv
   mkdir -p "$d/conf/fleets/ps" "$d/conf/global" "$d/home"
-  printf 'FLEET_REPO="acme/app"\nFLEET_MAIN="%s/nomain"\nFLEET_BASE_BRANCH="main"\nFLEET_SCRATCH_POOL=1\n' "$d" > "$d/conf/fleets/ps/conf"
+  printf 'FLEET_SCRATCH_POOL=1\n' > "$d/conf/fleets/ps/conf"
+  fx_repo "$d/conf" "ps" acme/app FLEET_MAIN="$d/nomain" FLEET_BASE_BRANCH="main"
   printf 'claude NEW x\nver v2\n' > "$d/conf/global/agent-cfg.expected"
   nt -f /dev/null new-session -d -s ps -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
   nt new-session -d -s ps-pool -n warm-1 -x 100 -y 30 'exec sleep 600'
@@ -4006,8 +4014,8 @@ drill_pool_empty_compose() {
   git init -q -b master "$d/main" 2>/dev/null || git init -q "$d/main"
   ( cd "$d/main" && git config user.email t@t && git config user.name t && echo x > f && git add f && git commit -qm i ) \
     || { WHY="cannot build the repo"; return 1; }
-  printf 'FLEET_REPO="acme/app"\nFLEET_MAIN="%s/main"\nFLEET_BASE_BRANCH="master"\nFLEET_SCRATCH_POOL=1\nFLEET_MAX_SESSIONS=20\n' "$d" \
-    > "$d/conf/fleets/pe/conf"
+  fx_repo "$d/conf" pe acme/app FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master
+  printf 'FLEET_SCRATCH_POOL=1\nFLEET_MAX_SESSIONS=20\n' > "$d/conf/fleets/pe/conf"
   for f in "$BIN"/*; do ln -s "$f" "$d/sb/${f##*/}"; done
   rm -f "$d/sb/fleet-issue-file.sh" "$d/sb/dash-issue-session.sh"
   printf '#!/bin/sh\necho filed >> "%s/log/file"\necho https://github.com/acme/app/issues/9\n' "$d" > "$d/sb/fleet-issue-file.sh"
@@ -4043,7 +4051,8 @@ drill_bind_after_start_fails() {
   git init -q -b master "$d/main" 2>/dev/null || git init -q "$d/main"
   ( cd "$d/main" && git config user.email t@t && git config user.name t && echo x > f && git add f && git commit -qm i \
       && git worktree add -q -b scratch-1 "$d/app-scratch-1" ) || { WHY="cannot build the repo"; return 1; }
-  printf 'FLEET_REPO="acme/app"\nFLEET_MAIN="%s/main"\nFLEET_BASE_BRANCH="master"\n' "$d" > "$d/conf/fleets/bf/conf"
+  : > "$d/conf/fleets/bf/conf"
+  fx_repo "$d/conf" "bf" acme/app FLEET_MAIN="$d/main" FLEET_BASE_BRANCH="master"
   for f in "$BIN"/*; do ln -s "$f" "$d/sb/${f##*/}"; done
   rm -f "$d/sb/fleet-issue-file.sh" "$d/sb/fleet-peer-send.sh"
   printf '#!/bin/sh\necho try >> "%s/log/file"\n[ -e "%s/fail" ] && { echo "gh: HTTP 502" >&2; exit 1; }\necho https://github.com/acme/app/issues/9\n' "$d" "$d" > "$d/sb/fleet-issue-file.sh"
@@ -4089,6 +4098,7 @@ drill_cold_fill_fails() {
   # with it, and the spawn must say so — never a session on half a tree.
   CAP=10; local d="$WORK/cf" lbl="brkcf-$$" t0 rc
   mkdir -p "$d/o.git" "$d/main" "$d/conf" "$d/tmp" "$d/fb"
+  fx_repo "$d/conf" "$lbl" acme/w FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master
   git init -q --bare "$d/o.git"
   ( cd "$d/main" && git init -q -b master . && git config user.email t@t && git config user.name t \
       && printf 'x\n' > CLAUDE.md && git add -A && git commit -qm i && git remote add origin "$d/o.git" \
@@ -4501,7 +4511,8 @@ drill_newcomer_login_no_gh() {
   printf '#!/bin/sh\nexit 1\n' > "$w/bin/gh"; printf '#!/bin/sh\nexit 1\n' > "$w/bin/security"
   chmod +x "$w/bin/gh" "$w/bin/security"; printf '{}' > "$w/home/.claude/.credentials.json"
   printf 'FLEET_SESSION=solo\n' > "$w/c1/fleets/solo/conf"
-  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$w" > "$w/c2/fleets/app/conf"
+  : > "$w/c2/fleets/app/conf"
+  fx_repo "$w/c2" "app" acme/app FLEET_MAIN="$w/main"
   got=$(HOME="$w/home" FLEET_CONF_DIR="$w/c1" PATH="$w/bin:$PATH" bash "$ROOT/bin/fleet-control-read.sh" ready 2>/dev/null)
   case "$got" in *'"ready":true'*) ;; *) rm -rf "$w"; WHY="a login with no repo and no gh reads not ready: $got"; return 1 ;; esac
   got=$(HOME="$w/home" FLEET_CONF_DIR="$w/c2" PATH="$w/bin:$PATH" bash "$ROOT/bin/fleet-control-read.sh" ready 2>/dev/null)
@@ -4930,7 +4941,8 @@ drill_done_no_pr_stranded() {
   mkdir -p "$d/projects/$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')"
   printf '{"type":"user","message":{"role":"user","content":"x"}}\n' \
     > "$d/projects/$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')/$sid.jsonl"
-  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s\nFLEET_REAP_MIN_AGE=0\n' "$d/main" > "$d/conf/dnp.conf"
+  printf 'FLEET_REAP_MIN_AGE=0\n' > "$d/conf/dnp.conf"
+  fx_repo "$d/conf" "dnp" acme/app FLEET_MAIN="$d/main"
   printf '#!/bin/sh\ncase "$1" in issue) echo %s ;; *) echo %s ;; esac\n' "'{\"state\":\"CLOSED\"}'" "'[]'" > "$d/gh/gh"
   chmod +x "$d/gh/gh"
   nt -f /dev/null new-session -d -s dnp -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
@@ -4983,7 +4995,8 @@ drill_idle_timeout_starves_merged() {
   printf '#!/bin/bash\nexit 0\n' > "$d/bin/fleet-diskguard.sh"
   printf '#!/bin/sh\nexit 0\n' > "$d/fake/gh"
   chmod +x "$d/bin/fleet-cleanup.sh" "$d/bin/fleet-cleanup-idle.sh" "$d/bin/fleet-diskguard.sh" "$d/fake/gh"
-  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s\nFLEET_CLEANUP_CANDIDATE_TIMEOUT=2\n' "$d/main" > "$d/conf/itm.conf"
+  printf 'FLEET_CLEANUP_CANDIDATE_TIMEOUT=2\n' > "$d/conf/itm.conf"
+  fx_repo "$d/conf" "itm" acme/app FLEET_MAIN="$d/main"
   printf 'issue-12\t#40\tMERGED\t✓\tready\n' > "$d/tmp/.claude-dash/fleets/acme-app/prmap"
   : > "$d/tmp/.claude-dash/fleets/acme-app/prmap.ts"
   nt -f /dev/null new-session -d -s itm -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
@@ -5232,7 +5245,8 @@ drill_status_question_lost() {
 drill_cross_send_refused_unseen() {
   CAP=10; BREAK_SOCK="$WORK/sock-xs"; local t0 c="$WORK/xs" u po rc ob
   mkdir -p "$c/conf/fleets/xs" "$c/conf/control"
-  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$c" > "$c/conf/fleets/xs/conf"
+  : > "$c/conf/fleets/xs/conf"
+  fx_repo "$c/conf" "xs" acme/app FLEET_MAIN="$c/main"
   "$REAL_TMUX" -S "$BREAK_SOCK" -f /dev/null new-session -d -s xs -n plan 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
   po=$("$REAL_TMUX" -S "$BREAK_SOCK" new-window -d -P -F '#{pane_id}' -t xs -n orch 'exec sleep 600')
   "$REAL_TMUX" -S "$BREAK_SOCK" set-option -w -t "$po" @fleet_role worker \; set-option -w -t "$po" @norepo 1 \; \
@@ -5760,7 +5774,8 @@ drill_report_parent_gone() {
   CAP=30; local d="$WORK/rpg" w wh t0 f n a out
   BREAK_SOCK="$WORK/sock-rpg"
   mkdir -p "$d/conf/fleets/rpg" "$d/shim" "$d/main"
-  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$d" > "$d/conf/fleets/rpg/conf"
+  : > "$d/conf/fleets/rpg/conf"
+  fx_repo "$d/conf" "rpg" acme/app FLEET_MAIN="$d/main"
   printf '#!/bin/sh\ncase "$*" in *pulls/*) echo "true closed false" ;; esac\nexit 0\n' > "$d/shim/gh"
   printf '#!/bin/sh\necho "$*" >> "%s/alerted"\n' "$d" > "$d/alert"
   chmod +x "$d/shim/gh" "$d/alert"
@@ -5804,7 +5819,8 @@ drill_report_parent_remote() {
   CAP=60; local d="$WORK/rpr" w wl t0 out rc f U F=11111111-2222-3333-4444-555555555555 PF=0dbf19b9-aaaa-4bbb-8ccc-0123456789ab
   BREAK_SOCK="$WORK/sock-rpr"
   mkdir -p "$d/conf/fleets/rpr" "$d/conf/control" "$d/main"
-  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$d" > "$d/conf/fleets/rpr/conf"
+  : > "$d/conf/fleets/rpr/conf"
+  fx_repo "$d/conf" "rpr" acme/app FLEET_MAIN="$d/main"
   nt -f /dev/null new-session -d -s rpr -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
   rpr() { env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
             CCQUOTA_FLEET=1 FLEET_HUB_RECEIPT_WAIT=0 FLEET_ORPHAN_ALERT_CMD=true "$@"; }
@@ -5847,7 +5863,8 @@ drill_report_parent_online_queued() {
   CAP=60; local d="$WORK/rpoq" w t0 out rc U F=11111111-2222-3333-4444-555555555555 PF=0dbf19b9-aaaa-4bbb-8ccc-0123456789ab
   BREAK_SOCK="$WORK/sock-rpoq"
   mkdir -p "$d/conf/fleets/rpoq" "$d/conf/control" "$d/main"
-  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$d" > "$d/conf/fleets/rpoq/conf"
+  : > "$d/conf/fleets/rpoq/conf"
+  fx_repo "$d/conf" "rpoq" acme/app FLEET_MAIN="$d/main"
   nt -f /dev/null new-session -d -s rpoq -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
   rpoq() { env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
              CCQUOTA_FLEET=1 FLEET_HUB_RECEIPT_WAIT=0 FLEET_ORPHAN_ALERT_CMD=true FLEET_PEER_RECEIPT_SECS=0 "$@"; }
@@ -6318,7 +6335,8 @@ drill_transfer_proxy_auth() {
 drill_far_agent_switch() {
   CAP=15; BREAK_SOCK="$WORK/sock-fas"; local d="$WORK/fas" t0 out rc win ids i
   mkdir -p "$d/conf/fleets/fa" "$d/sb" "$d/home"
-  printf 'FLEET_REPO="acme/app"\nFLEET_MAIN="%s/main"\n' "$d" > "$d/conf/fleets/fa/conf"
+  : > "$d/conf/fleets/fa/conf"
+  fx_repo "$d/conf" "fa" acme/app FLEET_MAIN="$d/main"
   for f in "$BIN"/*; do ln -s "$f" "$d/sb/${f##*/}"; done
   rm -f "$d/sb/fleet-transfer.sh"
   cat > "$d/sb/fleet-transfer.sh" <<EOF
@@ -6769,7 +6787,7 @@ drill_reap_reopen_restarts_clock() {
   CAP=15; local t0 d sock w why
   [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
   d="$WORK/rrc"; sock="$d/s"; mkdir -p "$d/conf/global" "$d/conf/fleets/rrc" "$d/gh"
-  printf 'FLEET_REPO=acme/app\n' > "$d/conf/fleets/rrc/conf"
+  : > "$d/conf/fleets/rrc/conf"; fx_repo "$d/conf" rrc acme/app
   printf 'claude fp-new x\n' > "$d/conf/global/agent-cfg.expected"
   printf '#!/bin/sh\ncase "$*" in *"issue view 41"*) echo %s ;; *) exit 1 ;; esac\n' "'{\"state\":\"CLOSED\"}'" > "$d/gh/gh"
   chmod +x "$d/gh/gh"
@@ -6794,7 +6812,7 @@ drill_stop_bare_path() {
   CAP=10; local t0 d f n t w out
   [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
   d="$WORK/sbp"; mkdir -p "$d/tt" "$d/conf/fleets/sbp" "$d/pbin" "$d/tbin"
-  printf 'FLEET_REPO="acme/app"\nFLEET_MAIN="%s"\n' "$d" > "$d/conf/fleets/sbp/conf"
+  : > "$d/conf/fleets/sbp/conf"; fx_repo "$d/conf" sbp acme/app FLEET_MAIN="$d"
   # every system tool but tmux on PATH; tmux only in a tool dir
   for f in /usr/bin/* /bin/*; do
     n=${f##*/}; [ "$n" = tmux ] || [ -e "$d/pbin/$n" ] || ln -s "$f" "$d/pbin/$n" 2>/dev/null

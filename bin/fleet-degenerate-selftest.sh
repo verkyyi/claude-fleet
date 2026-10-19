@@ -20,6 +20,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SPINNER="$BIN/tmux-spinner.sh"
 command -v tmux >/dev/null 2>&1 || { echo 'selftest: tmux not installed — SKIP' >&2; exit 0; }
 command -v python3 >/dev/null 2>&1 || { echo 'selftest: python3 not installed — SKIP' >&2; exit 0; }
@@ -28,7 +29,8 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/degen.XXXXXX")" || exit 2
 export TMUX_TMPDIR="$WORK/t"; mkdir -p "$TMUX_TMPDIR"
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR"
 LBL=degenT
-printf 'FLEET_REPO="acme/degen"\n' > "$FLEET_CONF_DIR/$LBL.conf"
+: > "$FLEET_CONF_DIR/$LBL.conf"
+fx_repo "$FLEET_CONF_DIR" "$LBL" acme/degen
 trap 'tmux -L "$LBL" kill-server 2>/dev/null; rm -rf "$WORK"' EXIT
 TM() { tmux -L "$LBL" "$@"; }
 

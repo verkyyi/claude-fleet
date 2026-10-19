@@ -21,6 +21,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 LIB="$BIN/fleet-lib.sh"
 REFRESH="$BIN/tmux-pr-refresh.sh"
 BRIDGE="$BIN/fleet-issue-bridge.sh"
@@ -100,7 +101,8 @@ SHIM
 chmod +x "$WORK/bin/date" "$WORK/bin/gh" "$WORK/bin/tmux"
 PATH="$WORK/bin:$PATH"; export PATH
 
-printf 'FLEET_REPO="fake/repo"\nFLEET_ISSUE_BRIDGE=1\n' > "$WORK/conf/fleets/s1/conf"
+printf 'FLEET_ISSUE_BRIDGE=1\n' > "$WORK/conf/fleets/s1/conf"
+fx_repo "$WORK/conf" "s1" fake/repo
 mkdir -p "$WORK/.claude-dash/global"
 printf 's1\tfake-repo\tfake/repo\n' > "$WORK/.claude-dash/global/sessmap"
 

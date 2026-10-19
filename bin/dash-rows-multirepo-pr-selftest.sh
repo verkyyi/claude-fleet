@@ -23,6 +23,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 REFRESH="$BIN/tmux-pr-refresh.sh"
 
@@ -46,7 +47,8 @@ SESS=s1
 C="$TMPDIR/.claude-dash"
 FA="$C/fleets/acme-alpha" FB="$C/fleets/acme-beta"
 mkdir -p "$C/global" "$FA" "$FB" "$FLEET_CONF_DIR/fleets/$SESS" "$WORK/bin" "$WORK/rbin"
-printf 'FLEET_REPO=acme/alpha\n' > "$FLEET_CONF_DIR/fleets/$SESS/conf"
+: > "$FLEET_CONF_DIR/fleets/$SESS/conf"
+fx_repo "$FLEET_CONF_DIR" "$SESS" acme/alpha
 printf '%s\tacme-alpha\tacme/alpha\n' "$SESS" > "$C/global/sessmap"
 OVL="$FLEET_CONF_DIR/fleets/$SESS/repos"
 overlay_on()  { mkdir -p "$OVL"; printf 'FLEET_REPO=acme/beta\n' > "$OVL/acme-beta.conf"; }

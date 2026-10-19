@@ -20,6 +20,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/  /' >&2; exit 1; }
 eq() { [ "$2" = "$3" ] || fail "$1" "want: [$2]
@@ -123,7 +124,8 @@ count() { local n; n=$(grep -cx "$1" "$WORK/exec.log" 2>/dev/null); printf '%s' 
 TMPD="$WORK/tmp"; G="$TMPD/.claude-dash/global"; mkdir -p "$G"
 now=$(date +%s)
 CONFD="$WORK/conf"; mkdir -p "$CONFD/fleets/s1"
-printf 'FLEET_REPO="fake/repo"\n' > "$CONFD/fleets/s1/conf"
+: > "$CONFD/fleets/s1/conf"
+fx_repo "$CONFD" "s1" fake/repo
 C="$TMPD/.claude-dash"; FD="$C/fleets/fake-repo"; mkdir -p "$FD"
 printf 's1\tfake-repo\tfake/repo\n' > "$G/sessmap"
 printf '%s\n' \

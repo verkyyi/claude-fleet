@@ -37,6 +37,7 @@
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 MOVE="$BIN/fleet-move.sh"
 [ -f "$MOVE" ] && [ -f "$BIN/fleet-move-remote.sh" ] && [ -f "$BIN/fleet-control-read.sh" ] \
   || { printf 'selftest: fleet-move.sh / fleet-move-remote.sh / fleet-control-read.sh not found\n' >&2; exit 2; }
@@ -180,11 +181,8 @@ new_worktree() {
 for side in src dst; do
   sess=$LSRC; [ "$side" = dst ] && sess=$LDST
   mkdir -p "$WORK/$side-home/.config/claude-fleet/fleets/$sess"
-  cat > "$WORK/$side-home/.config/claude-fleet/fleets/$sess/conf" <<EOF
-FLEET_REPO="o/n"
-FLEET_MAIN="$WORK/$side-home/projects/repo"
-FLEET_BASE_BRANCH="master"
-EOF
+  : > "$WORK/$side-home/.config/claude-fleet/fleets/$sess/conf"
+  fx_repo "$WORK/$side-home/.config/claude-fleet" "$sess" o/n FLEET_MAIN="$WORK/$side-home/projects/repo" FLEET_BASE_BRANCH=master
 done
 # A fleet UUID needs the control database's machine id (fleet_uuid reads it).
 mkdir -p "$FLEET_CONF_DIR/control"

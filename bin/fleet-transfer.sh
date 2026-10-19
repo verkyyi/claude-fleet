@@ -269,9 +269,9 @@ fi
 WT=$(cd "$WT" && pwd -P) || die 'cannot resolve worktree'
 # "Registered to this fleet" = registered to ANY repo it hosts (issue #791); the
 # repo that registers it is the one the handoff records. None does ⇒ the check
-# below refuses (compat-1v: 下一批删 — or a pre-#1937 conf's own FLEET_MAIN does).
+# below refuses.
 IFS=$'\t' read -r _wrepo _wmain <<< "$(fleet_worktree_repo "$SESS" "$WT")"
-[ -n "${_wmain:-}" ] && { FLEET_REPO=$_wrepo; FLEET_MAIN=$_wmain; }
+FLEET_REPO=${_wrepo:-}; FLEET_MAIN=${_wmain:-}
 MAIN=$(cd "${FLEET_MAIN:-/nonexistent}" && pwd -P) || die 'fleet base checkout not found'
 [ "$WT" != "$MAIN" ] && [ -f "$WT/.git" ] || die 'source must own a linked worktree, never the base checkout'
 [ "$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null)" = "$WT" ] || die 'invalid worktree'

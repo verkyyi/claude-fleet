@@ -36,6 +36,7 @@ cp "$BIN/../conf/agent-defaults/claude/agents/orchestrator.md" "$WORK/home/.clau
 printf 'CCQUOTA_TOKEN=tok\nCCQUOTA_HUB_URL=http://hub.test\n' > "$WORK/conf/node.env"
 printf '%s\n' "$FUUID" > "$WORK/conf/fleets/testsess/identity"   # fleet_uuid's frozen file
 printf 'CCQUOTA_FLEET=1\n' > "$WORK/conf/fleets/testsess/conf"         # the hub is on for this fleet
+. "$BIN/selftest-repo-fixture.sh"; fx_repo "$WORK/conf" testsess acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
 HUBLOG="$WORK/hub.log"; NEWWIN="$WORK/newwin"
 
 cat > "$WORK/fakebin/git" <<'EOF'

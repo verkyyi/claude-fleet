@@ -30,6 +30,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 CLI="$BIN/fleet-claim-brief.sh"
 [ -x "$CLI" ] || { echo "selftest: $CLI missing/not executable" >&2; exit 2; }
 
@@ -45,10 +46,8 @@ SESS=testfleet
 REPO=acme/widgets
 CONF="$WORK/conf"
 mkdir -p "$CONF/fleets/$SESS" "$WORK/hub" "$WORK/widgets-issue-12" "$WORK/fakebin"
+fx_repo "$CONF" "$SESS" "$REPO" FLEET_MAIN="$WORK/widgets" FLEET_BASE_BRANCH=trunk
 cat > "$CONF/fleets/$SESS/conf" <<CONF_EOF
-FLEET_REPO=$REPO
-FLEET_MAIN=$WORK/widgets
-FLEET_BASE_BRANCH=trunk
 FLEET_MERGE_METHOD=rebase
 FLEET_WORKER_PROMPT='DIRECTIVE-MARKER for {issue}'
 CONF_EOF

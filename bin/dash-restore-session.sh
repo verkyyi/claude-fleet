@@ -107,17 +107,12 @@ if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then refuse "$cap_msg"; exit 2; fi
 _rc=0; _r=$(unset TMUX_PANE; fleet_target_repo "$SESS" "$REPO_ARG") || _rc=$?
 case "$_rc" in
   0) REPO_ARG=$_r
-     # compat-1v: 下一批删 — a pre-#1937 conf naming only FLEET_MAIN: nothing to overlay.
-     if [ -n "$(fleet_repos "$SESS")" ]; then
-       fleet_load_repo_conf "$SESS" "$REPO_ARG" \
-         || { refuse "restore: $REPO_ARG is not a repo this fleet hosts"; exit 1; }
-     fi ;;
+     fleet_load_repo_conf "$SESS" "$REPO_ARG" \
+       || { refuse "restore: $REPO_ARG is not a repo this fleet hosts"; exit 1; } ;;
   4) refuse "restore: this fleet hosts several repos and the row names none — pass --repo"; exit 1 ;;
-  # compat-1v: 下一批删 — no repo listed: the loaded FLEET_REPO, as before.
-  *) if [ -n "$REPO_ARG" ] && [ "$(fleet_norm_repo "$REPO_ARG")" != "$(fleet_norm_repo "${FLEET_REPO:-}")" ]; then
-       refuse "restore: $(fleet_norm_repo "$REPO_ARG") is not a repo this fleet hosts"; exit 1
-     fi
-     REPO_ARG='' ;;
+  *) if [ -n "$REPO_ARG" ]; then refuse "restore: $(fleet_norm_repo "$REPO_ARG") is not a repo this fleet hosts"
+     else refuse "restore: this fleet hosts no repo"; fi
+     exit 1 ;;
 esac
 unset _r _rc
 MAIN="${FLEET_MAIN:-}"; REPO="${FLEET_REPO:-}"

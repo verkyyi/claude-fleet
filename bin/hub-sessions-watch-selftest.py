@@ -52,7 +52,10 @@ def main():
             p.unlink()
             p.write_text(body)
             p.chmod(0o755)
-        (root / 'conf/fleets/test/conf').write_text('FLEET_REPO=acme/app\nCCQUOTA_FLEET=1\n')
+        (root / 'conf/fleets/test/conf').write_text('CCQUOTA_FLEET=1\n')
+        (root / 'conf/fleets/test/repos').mkdir()   # every repo is an overlay (#1937, #4806)
+        (root / 'conf/fleets/test/repos/acme-app.conf').write_text('FLEET_REPO=acme/app\n')
+        (root / 'conf/fleets/test/repos/.order').write_text('acme-app\n')
         data = {'machines': [], 'nodes': [], 'sessions': [{
             'worker_id': 'remote/issue-1', 'machine_name': 'other', 'os_user': 'test',
             'worker': {'state': 'done', 'issue': 1, 'repo': 'acme/app', 'name': 'one'},

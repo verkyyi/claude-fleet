@@ -28,6 +28,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 LIB="$BIN/fleet-lib.sh"
 [ -f "$LIB" ] || { printf 'selftest: %s not found\n' "$LIB" >&2; exit 2; }
 
@@ -267,8 +268,8 @@ eq "cache_dir path"  "$FLEET_C/fleets/acme-widgets" "$(fleet_cache_dir acme-widg
 eq "cache_global"    "$FLEET_C/global" "$(fleet_cache_global)"
 
 # fleet_conf_file dual-layout: new fleets/<sess>/conf preferred, else legacy flat.
-printf 'FLEET_REPO="acme/new"\n' > "$CONFROOT/fleets/fleet-a/conf"
-printf 'FLEET_REPO="acme/legacy"\n' > "$CONFROOT/fleet-b.conf"
+: > "$CONFROOT/fleets/fleet-a/conf"; fx_repo "$CONFROOT" fleet-a acme/new
+: > "$CONFROOT/fleet-b.conf"; fx_repo "$CONFROOT" fleet-b acme/legacy
 eq "conf_file: new layout"     "$CONFROOT/fleets/fleet-a/conf" "$(fleet_conf_file fleet-a)"
 eq "conf_file: legacy flat"    "$CONFROOT/fleet-b.conf"        "$(fleet_conf_file fleet-b)"
 eq "conf_file: absent → new"   "$CONFROOT/fleets/fleet-z/conf" "$(fleet_conf_file fleet-z)"
@@ -279,14 +280,14 @@ eq "conf_file: absent → new"   "$CONFROOT/fleets/fleet-z/conf" "$(fleet_conf_f
 # identity + tunables must still apply; global-only keys must keep their pre-overlay
 # (global) value. Run each assertion in a subshell so the sourced vars don't bleed.
 mkdir -p "$CONFROOT/fleets/loadc"
+fx_repo "$CONFROOT" loadc acme/widgets   # the identity is the repo's overlay (#1937, #4806)
 cat > "$CONFROOT/fleets/loadc/conf" <<'LOADC'
-FLEET_REPO="acme/widgets"
 FLEET_CTX_WINDOW=1000000
 FLEET_MAX_SESSIONS=3
 FLEET_GLOBAL_MAX_SESSIONS=999
 FLEET_NOTIFY_CMD="/evil/notify.sh"
 LOADC
-eq "load_conf: per-fleet identity applied" "acme/widgets" \
+eq "load_conf: the fleet's repo overlay applied" "acme/widgets" \
   "$( FLEET_REPO="you/repo"; fleet_load_conf loadc; printf '%s' "$FLEET_REPO" )"
 eq "load_conf: per-fleet tunable applied" "1000000" \
   "$( FLEET_CTX_WINDOW=200000; fleet_load_conf loadc; printf '%s' "$FLEET_CTX_WINDOW" )"
@@ -345,7 +346,7 @@ eq "g399: skip flag opts out (conf ignored)" "" \
 
 # fleet_each_conf enumerates each fleet ONCE, preferring the new layout. Give
 # fleet-a BOTH a new dir and a legacy flat conf — it must appear only once (new).
-printf 'FLEET_REPO="acme/stale"\n' > "$CONFROOT/fleet-a.conf"
+: > "$CONFROOT/fleet-a.conf"
 enum=$(fleet_each_conf | sort)
 eq "each_conf: fleet-a once, new path" "$CONFROOT/fleets/fleet-a/conf" \
   "$(printf '%s\n' "$enum" | awk -F'\t' '$1=="fleet-a"{print $2}')"
@@ -356,7 +357,7 @@ eq "each_conf: fleet-b (legacy) present" "$CONFROOT/fleet-b.conf" \
 # issue #2430: a backup of a fleet dir (a `.` in its name — never a tmux session)
 # and a renamed copy of the stranded machine config are not fleets.
 mkdir -p "$CONFROOT/fleets/fleet.ghost-bak-20261006-225821" "$CONFROOT/fleets/oldmachine"
-printf 'FLEET_REPO="acme/ghost"\n' > "$CONFROOT/fleets/fleet.ghost-bak-20261006-225821/conf"
+: > "$CONFROOT/fleets/fleet.ghost-bak-20261006-225821/conf"
 printf "# claude-fleet — this machine's ONE config file (issue #1623)\n" > "$CONFROOT/fleets/oldmachine/conf"
 enum=$(fleet_each_conf | sort)
 eq "each_conf: a dotted backup dir is no fleet" "0" \
@@ -377,8 +378,8 @@ eq "sess_for_repo: unknown → empty"   ""        "$(fleet_sess_for_repo acme/no
 # STABLE (first-enumerated wins, same every call) — else the bridge would
 # flip which dir it reads and spuriously re-seed already-handled state.
 mkdir -p "$CONFROOT/fleets/dup-1" "$CONFROOT/fleets/dup-2"
-printf 'FLEET_REPO="shared/repo"\n' > "$CONFROOT/fleets/dup-1/conf"
-printf 'FLEET_REPO="shared/repo"\n' > "$CONFROOT/fleets/dup-2/conf"
+: > "$CONFROOT/fleets/dup-1/conf"; fx_repo "$CONFROOT" dup-1 shared/repo
+: > "$CONFROOT/fleets/dup-2/conf"; fx_repo "$CONFROOT" dup-2 shared/repo
 csess1=$(fleet_sess_for_repo shared/repo); csess2=$(fleet_sess_for_repo shared/repo)
 eq "sess_for_repo: stable across calls (canonical)" "$csess1" "$csess2"
 case "$csess1" in dup-1|dup-2) : ;; *) fail "sess_for_repo: two-fleets-one-repo must resolve to one of them, got [$csess1]";; esac

@@ -224,8 +224,8 @@ mk10() {   # $1=conf dir → seed o/a in the conf + o/b (identity) + o/c (FLEET_
 }
 mkdir -p "$WORK/src/c"
 mk10 "$WORK/conf5"
-eq "10 old layout: hosts" "$(lib 'fleet_repos fleet' | tr '\n' ' ')" "o/a o/b o/c "
-lib 'fleet_repo_is_seed fleet o/a' || fail "10: the old layout's seed is not read (one version)"
+eq "10 old layout: the conf's repo is not read (#4806)" "$(lib 'fleet_repos fleet' | tr '\n' ' ')" "o/b o/c "
+lib 'fleet_repo_is_seed fleet o/a' && fail "10: the old layout's seed was read"
 out=$(bash "$SB/fleet-repo.sh" remove --session fleet o/a 2>&1); eq "10 remove rc" "$?" 0
 [ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '$ fleet-repo.sh remove o/a   (old layout)\n%s\n' "$out"
 has "10 moved first" "$out" "moved out of"

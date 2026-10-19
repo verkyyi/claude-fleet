@@ -30,6 +30,7 @@
 # because tmux ≤3.4 vis-escapes the 0x1f separator the dash producer asks for.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 CLI="$BIN/fleet-children.sh"; RP="$BIN/fleet-report-parent.sh"; ROWS="$BIN/tmux-dashboard-rows.sh"
 for f in "$CLI" "$RP" "$ROWS" "$BIN/fleet-children.py" "$BIN/fleet-children-lib.sh"; do
   [ -f "$f" ] || { printf 'selftest: %s missing\n' "$f" >&2; exit 2; }
@@ -97,7 +98,7 @@ command -v tmux >/dev/null 2>&1 || { printf 'fleet-children selftest: tmux absen
 # --- 2. end to end on a dedicated server ----------------------------------------
 # A ONE-repo fleet (issue #1939): every key carries `acme-app:`, a bare key is its alias.
 LBL="fch-selftest-$$"
-mkdir -p "$FLEET_CONF_DIR/fleets/$LBL"; printf 'FLEET_REPO=acme/app\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
+mkdir -p "$FLEET_CONF_DIR/fleets/$LBL"; : > "$FLEET_CONF_DIR/fleets/$LBL/conf"; fx_repo "$FLEET_CONF_DIR" "$LBL" acme/app
 P=acme-app:
 # …so a merged report is checked against GitHub's `.merged` (issue #1247) and a
 # stopped one for an open PR (#864): a gh shim says every PR merged and none is

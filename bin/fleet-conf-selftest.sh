@@ -89,6 +89,9 @@ run() {
   env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CD" TMPDIR="$WORK" LANG=C "$@"
 }
 KEYS='CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN CCQUOTA_FLEET FLEET_NODE_ALIASES FLEET_SPAWN_NODE FLEET_COMPACT_PREP_PCT FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_ISSUE_BRIDGE FLEET_SIDEBAR_SOURCE FLEET_SHELL_WIDTH FLEET_UI_LANG'
+# The fleet-wide keys: an old-layout conf's repo is not read before the move
+# (#4806), so "as before" compares these, and the repo is asserted after.
+FLEET_KEYS='CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN CCQUOTA_FLEET FLEET_NODE_ALIASES FLEET_SPAWN_NODE FLEET_COMPACT_PREP_PCT FLEET_ISSUE_BRIDGE FLEET_SIDEBAR_SOURCE FLEET_SHELL_WIDTH FLEET_UI_LANG'
 # view [shell] → KEY=value for every key a node script (or, with `shell`, the
 # shell) would resolve: fleet-lib's load + the fleet's conf.
 view() {
@@ -157,12 +160,13 @@ rm -f "$CD/fleet.conf"
 
 # ---------------------------------------------------------------------------- B
 mkbox b; node_fixture
-before=$(view)
+before=$(KEYS=$FLEET_KEYS view)
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
 is "B: migrate exits 0" "$rc" 0
 has "B: says one file" "$out" "one file — $CD/fleet.conf (FLEET_HOST=1)"
-after=$(view)
+after=$(KEYS=$FLEET_KEYS view)
 is "B: every key resolves as before" "$after" "$before"
+has "B: the conf's repo now resolves from repos/" "$(view)" "FLEET_REPO=acme/app"
 mc=$(cat "$CD/fleet.conf")
 has "B: FLEET_HOST=1" "$mc" 'FLEET_HOST=1'
 hasnt "B: no FLEET_ROLE" "$mc" 'FLEET_ROLE'
@@ -226,12 +230,13 @@ if selftest_section 2; then
 # ---------------------------------------------------------------------------- D
 mkbox d; node_fixture; client_fixture
 printf 'FLEET_INSTALL_SYNC=0\n' > "$CD/fleet.settings"
-before=$(view)
+before=$(KEYS=$FLEET_KEYS view)
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
 is "D: migrate exits 0" "$rc" 0
 has "D: FLEET_HOST=1" "$(cat "$CD/fleet.conf")" 'FLEET_HOST=1'
-after=$(view)
+after=$(KEYS=$FLEET_KEYS view)
 is "D: a node reader resolves every key as before" "$after" "$before"
+has "D: the conf's repo now resolves from repos/" "$(view)" "FLEET_REPO=acme/app"
 has "D: fleet.settings folded" "$(cat "$CD/fleet.conf")" "FLEET_INSTALL_SYNC=0"
 [ -f "$CD/fleet.settings.bak" ] && [ ! -e "$CD/fleet.settings" ] && ok || bad "D: fleet.settings kept as .bak"
 sv=$(view shell)
@@ -425,21 +430,23 @@ rview() { lib_i 'for r in $(fleet_repos fleet); do ( fleet_load_repo_conf fleet 
   printf "%s main=%s base=%s deploy=%s model=%s ctx=%s\n" "$r" "$FLEET_MAIN" "$FLEET_BASE_BRANCH" "${FLEET_DEPLOY_REF:-}" "${FLEET_MODEL:-}" "${FLEET_CTX_WINDOW:-}" ); done
   fleet_load_conf fleet; printf "nowindow=%s %s %s\n" "$FLEET_REPO" "$FLEET_MAIN" "$FLEET_BASE_BRANCH"'; }
 repos0=$(lib_i 'fleet_repos fleet')
-is "I: old layout lists the conf's repo first" "$(printf '%s\n' "$repos0" | tr '\n' ' ')" "acme/app aaa/first zzz/last "
+is "I: the old layout's conf repo is not read — the overlays only" "$(printf '%s\n' "$repos0" | tr '\n' ' ')" "aaa/first acme/app zzz/last "
 uuid0=$(lib_i 'fleet_uuid fleet'); rm -f "$CD/fleets/fleet/identity"   # computed, then un-frozen again
 case "$uuid0" in ????????-????-????-????-????????????) ok ;; *) bad "I: no UUID computed before ($uuid0)" ;; esac
-rv0=$(rview)
-list0=$(run bash "$INS/bin/fleet-repo.sh" list --session fleet 2>&1)
+rv_want="acme/app main=$H/p/app base=main deploy=origin/prod model=sonnet ctx=7
+aaa/first main=$H/p/first base=master deploy= model= ctx=7
+zzz/last main=$H/p/last base=dev deploy= model= ctx=7
+nowindow=acme/app $H/p/app main"
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate --dry-run 2>&1)
 has "I: --dry-run says it would move" "$out" "would move fleet fleet's repo acme/app"
 has "I: --dry-run moves nothing" "$(cat "$CD/fleets/fleet/conf")" 'FLEET_REPO="acme/app"'
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
 is "I: migrate exits 0" "$rc" 0
 has "I: says it moved" "$out" "every repo in repos/ — fleet:acme/app"
-is "I: fleet_repos unchanged, order too" "$(lib_i 'fleet_repos fleet')" "$repos0"
+is "I: fleet_repos lists the moved repo first" "$(lib_i 'fleet_repos fleet' | tr '\n' ' ')" "acme/app aaa/first zzz/last "
 is "I: fleet_uuid unchanged" "$(lib_i 'fleet_uuid fleet')" "$uuid0"
 [ -f "$CD/fleets/fleet/identity" ] && ok || bad "I: the identity was not frozen by the move"
-is "I: every repo resolves as before (and a caller with no window reads the first)" "$(rview)" "$rv0"
+is "I: every repo resolves as the old layout meant (and a caller with no window reads the first)" "$(rview)" "$rv_want"
 fc=$(grep -v '^#' "$CD/fleets/fleet/conf")
 is "I: the fleet conf keeps only the fleet's setting" "$fc" 'FLEET_CTX_WINDOW="7"'
 ov=$(grep -v '^#' "$CD/fleets/fleet/repos/acme-app.conf")
@@ -450,7 +457,7 @@ is "I: repos/.order puts it first, the rest as they were" "$(cat "$CD/fleets/fle
 [ -f "$CD/fleets/fleet/conf.bak" ] && [ -f "$CD/fleets/fleet/repos/acme-app.conf.bak" ] && ok \
   || bad "I: the conf and the old overlay are kept as .bak"
 list1=$(run bash "$INS/bin/fleet-repo.sh" list --session fleet 2>&1)
-is "I: fleet-repo.sh list names the same repos" "$(printf '%s\n' "$list1" | awk 'NR>1{print $1}')" "$(printf '%s\n' "$list0" | awk 'NR>1{print $1}')"
+is "I: fleet-repo.sh list names the three repos" "$(printf '%s\n' "$list1" | awk 'NR>1{print $1}' | tr '\n' ' ')" "acme/app aaa/first zzz/last "
 has "I: …each from repos/" "$list1" "[repos/acme-app.conf]"
 snap=$(cat "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/acme-app.conf" "$CD/fleets/fleet/repos/.order")
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1)

@@ -15,6 +15,7 @@
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/fleet-down.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s not found/executable\n' "$SRC" >&2; exit 2; }
 
@@ -67,7 +68,8 @@ printf 'selftest: guard leg PASS (.. / . / a/b / x/../y / ../evil all refused, n
 
 # --- allowed: a legit dotted session name purges exactly its own state ----------
 mkdir -p "$CONF_DIR/fleets/fleet-my.app" "$CACHE/fleets/acme-widgets"
-printf 'FLEET_REPO="acme/widgets"\n' > "$CONF_DIR/fleets/fleet-my.app/conf"
+: > "$CONF_DIR/fleets/fleet-my.app/conf"
+fx_repo "$CONF_DIR" "fleet-my.app" acme/widgets
 : > "$CACHE/fleets/acme-widgets/issues"
 
 run "fleet-my.app" --purge || fail "a legit dotted name must be ALLOWED" "$(cat "$WORK/err")"

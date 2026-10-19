@@ -46,6 +46,8 @@ fail() { printf 'FAIL %s\n' "$1" >&2
          exit 1; }
 
 mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/dash"
+. "$BIN/selftest-repo-fixture.sh"
+fx_repo "$WORK/conf" testsess acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
 GH_LOG="$WORK/gh.log"; TMUX_LOG="$WORK/tmux.log"; GIT_LOG="$WORK/git.log"; DISPLAY_LOG="$WORK/display.log"
 
 # --- fake git: fetch/worktree/branch succeed; worktree+branch ops are LOGGED -------

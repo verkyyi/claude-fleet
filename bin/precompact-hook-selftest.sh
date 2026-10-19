@@ -23,6 +23,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 FILES="precompact-hook.sh refocus-hook.sh fleet-lib.sh fleet-client-core.sh fleet-ladder-log.sh"
 for f in $FILES; do
@@ -44,7 +45,8 @@ git -C "$WT" init -q -b issue-12 2>/dev/null || { git -C "$WT" init -q && git -C
 git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m 'first commit'
 echo hi > "$WT/dirty.txt"
 WTMAP="$(git -C "$WT" rev-parse --absolute-git-dir)/fleet-recovery-map.md"
-printf 'FLEET_REPO=acme/widgets\nFLEET_MAIN=%s/main\nFLEET_BASE_BRANCH=trunk\n' "$WORK" > "$WORK/conf/fleets/s1/conf"
+: > "$WORK/conf/fleets/s1/conf"
+fx_repo "$WORK/conf" "s1" acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="trunk"
 printf 'issue-12\t#345\tOPEN\t✓\tready\t\n' > "$WORK/tmp/.claude-dash/fleets/acme-widgets/prmap"
 : > "$GCONF"
 

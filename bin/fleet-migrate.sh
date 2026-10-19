@@ -509,10 +509,9 @@ migrate_one_body() {
     sid=$(session_id_for "$cpid" "$cwd") || sid=""
   fi
   # A fleet has one base checkout per hosted repo (issue #791): a raw pane sitting
-  # in ANY of them is the "main-cwd" case. (FLEET_MAIN too — compat-1v: 下一批删,
-  # a pre-#1937 conf naming only a checkout lists no repo.)
+  # in ANY of them is the "main-cwd" case.
   local wmain
-  wmain=$( { fleet_repo_mains "$SESS"; printf '%s\n' "${FLEET_MAIN:-}"; } | grep -Fx -- "${cwd%/}" | head -n 1)
+  wmain=$(fleet_repo_mains "$SESS" | grep -Fx -- "${cwd%/}" | head -n 1)
   if ! migrate_eligible "$name" "$(TM display-message -p -t "$wid" '#{@hub}' 2>/dev/null)" "$raw" "$cwd" "$wmain" "$sid"; then
     say "  – $name ($wid): not eligible (panel/hub/main-cwd) — skipped"; skipped=$((skipped+1)); return 0
   fi

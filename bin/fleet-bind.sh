@@ -116,17 +116,11 @@ cur_branch=$(git -C "$WT" symbolic-ref --short HEAD 2>/dev/null)
 
 SESS=$(fleet_current_session)
 fleet_load_conf "$SESS"
-REPO="${FLEET_REPO:-}"
 # The WINDOW's repo, however many repos the fleet hosts (issue #1943): the sessmap
 # caches ONE repo per session and would drag a scratch of another repo back to it.
 REPO=$(fleet_window_repo "$SESS" "$WIN")
-if [ -z "$REPO" ] && [ -z "$(fleet_repos "$SESS")" ]; then
-  # compat-1v: 下一批删 — a pre-#1937 conf naming only FLEET_MAIN: the collector's repo.
-  _r=$(fleet_repo_cached "$SESS"); REPO="${_r:-${FLEET_REPO:-}}"
-else
-  [ -n "$REPO" ] || die "this scratch's repo is unknown — cannot tell which repo's #$num to bind" 3
-  fleet_load_repo_conf "$SESS" "$REPO" || die "$REPO is not a repo this fleet hosts" 1
-fi
+[ -n "$REPO" ] || die "this scratch's repo is unknown — cannot tell which repo's #$num to bind" 3
+fleet_load_repo_conf "$SESS" "$REPO" || die "$REPO is not a repo this fleet hosts" 1
 MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || die "FLEET_MAIN is not a git checkout — set it in fleet.conf" 1
 branch="issue-$num"

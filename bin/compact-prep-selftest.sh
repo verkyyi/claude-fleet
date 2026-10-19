@@ -39,6 +39,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-client-core.sh fleet-lang.sh fleet-compact-send.sh refocus-hook.sh handoff-latch-reset-hook.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
@@ -62,7 +63,8 @@ git -C "$WORK/widgets-scratch-3" init -q -b scratch-3 2>/dev/null || git -C "$WO
 SGITDIR=$(git -C "$WORK/widgets-scratch-3" rev-parse --absolute-git-dir)
 SMAP="$SGITDIR/fleet-recovery-map.md"
 CMAP="$WORK/conf/fleets/s1/recovery/w1.md"      # a scratch with NO git dir (#1318)
-printf 'FLEET_REPO=acme/widgets\nFLEET_MAIN=%s/main\nFLEET_BASE_BRANCH=trunk\n' "$WORK" > "$WORK/conf/fleets/s1/conf"
+: > "$WORK/conf/fleets/s1/conf"
+fx_repo "$WORK/conf" "s1" acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="trunk"
 
 # --- stateful fake tmux: options in $OPTS ("key<TAB>value"), send-keys logged ----
 cat > "$WORK/fakepath/tmux" <<'FAKE'

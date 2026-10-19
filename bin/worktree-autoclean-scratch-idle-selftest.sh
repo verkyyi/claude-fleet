@@ -22,6 +22,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/worktree-autoclean.sh"
 LIB="$BIN/fleet-lib.sh"
 for f in "$SRC" "$LIB"; do [ -f "$f" ] || { echo "selftest: $f missing" >&2; exit 2; }; done
@@ -95,10 +96,9 @@ chmod +x "$WORK/fakebin/tmux"
 printf '#!/bin/bash\nexit 0\n' > "$WORK/fakebin/gh"; chmod +x "$WORK/fakebin/gh"
 
 write_conf() {   # $1 = FLEET_SCRATCH_MAX_IDLE line (empty = key absent)
+  rm -rf "$WORK/conf/fleets/sess1/repos"
+  fx_repo "$WORK/conf" sess1 fake/repo FLEET_MAIN="$BASE" FLEET_BASE_BRANCH="$BASE_BR"
   cat > "$WORK/conf/sess1.conf" <<EOF
-FLEET_MAIN="$BASE"
-FLEET_REPO="fake/repo"
-FLEET_BASE_BRANCH="$BASE_BR"
 $1
 EOF
 }

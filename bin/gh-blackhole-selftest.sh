@@ -48,6 +48,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 ROWS="${GHBH_ROWS:-$ROOT/conf/gh-blackhole.rows}"
 MODES='' PICK='' CAP=20 BUDGET=15 JOBS=6 TSV='' RECORD=0
@@ -173,12 +174,8 @@ mkcell() {  # mkcell <dir>
   # the install a no-hub login follows: a checkout of the public repo
   git "${gargs[@]}" init -q "$c/install" && git -C "$c/install" "${gargs[@]}" commit -q --allow-empty -m install &&
     git -C "$c/install" remote add origin "https://github.com/$REPO.git" || return 1
-  cat > "$c/conf/fleets/$SESS/conf" <<CONF
-FLEET_REPO=$REPO
-FLEET_MAIN=$c/main
-FLEET_BASE_BRANCH=master
-FLEET_FORGE=github
-CONF
+  : > "$c/conf/fleets/$SESS/conf"   # every repo is an overlay (#1937, #4806)
+  fx_repo "$c/conf" "$SESS" "$REPO" FLEET_MAIN="$c/main" FLEET_BASE_BRANCH=master FLEET_FORGE=github
 }
 
 # ---- the rows ------------------------------------------------------------------

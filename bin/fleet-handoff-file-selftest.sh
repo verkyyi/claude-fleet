@@ -17,6 +17,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/fleet-handoff-file.sh"
 [ -x "$SRC" ] || { echo "selftest: $SRC not executable" >&2; exit 2; }
 
@@ -37,7 +38,7 @@ TODAY=$(date +%Y-%m-%d)
 
 # ---- one-repo fleet ---------------------------------------------------------
 mkdir -p "$FLEET_CONF_DIR/fleets/fleet-one"
-echo 'FLEET_REPO=o/one' > "$FLEET_CONF_DIR/fleets/fleet-one/conf"
+: > "$FLEET_CONF_DIR/fleets/fleet-one/conf"; fx_repo "$FLEET_CONF_DIR" fleet-one o/one
 eq ONE-REPO-NAME "$(run path --session fleet-one --repo o/one)" "$FLEET_HANDOFF_DIR/fleet-one-o-one-$TODAY.md"
 eq ONE-REPO-NAME-slug "$(run path --session fleet-one --repo o/one --slug x)" "$FLEET_HANDOFF_DIR/fleet-one-o-one-$TODAY-x.md"
 doc fleet-one-2026-09-01.md 202609010000
@@ -49,7 +50,7 @@ eq ONE-REPO-FIND "$(run find --session fleet-one --repo o/one)" "$FLEET_HANDOFF_
 # ---- two-repo fleet (with one folded fleet) ---------------------------------
 S=fleet-multi
 mkdir -p "$FLEET_CONF_DIR/fleets/$S/repos"
-echo 'FLEET_REPO=o/a' > "$FLEET_CONF_DIR/fleets/$S/conf"
+: > "$FLEET_CONF_DIR/fleets/$S/conf"; fx_repo "$FLEET_CONF_DIR" "$S" o/a
 echo 'FLEET_REPO=o/b' > "$FLEET_CONF_DIR/fleets/$S/repos/o-b.conf"
 eq MULTI-NAME "$(run path --session $S --repo o/b)" "$FLEET_HANDOFF_DIR/$S-o-b-$TODAY.md"
 eq MULTI-NAME-norepo "$(run path --session $S --norepo)" "$FLEET_HANDOFF_DIR/$S-$TODAY.md"
@@ -95,7 +96,7 @@ doc "$S-2026-09-16.md" 202609160000 'Repo: none'
 eq HUB-OWN "$(run find --session $S --norepo)" "$FLEET_HANDOFF_DIR/$S-2026-09-16.md"
 
 # No file at all → 1.
-S2=fleet-empty; mkdir -p "$FLEET_CONF_DIR/fleets/$S2"; echo 'FLEET_REPO=o/e' > "$FLEET_CONF_DIR/fleets/$S2/conf"
+S2=fleet-empty; mkdir -p "$FLEET_CONF_DIR/fleets/$S2"; : > "$FLEET_CONF_DIR/fleets/$S2/conf"; fx_repo "$FLEET_CONF_DIR" "$S2" o/e
 run find --session $S2 --repo o/e >/dev/null; eq NONE-rc "$?" 1
 
 # ---- check (issue #1322) ----------------------------------------------------

@@ -41,7 +41,8 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output -
 # A fake tmux whose session windows come from $FAKE_WINDOWS (one fleet `f` with a
 # dash hub + N working windows); new-window is logged.
 mkdir -p "$WORK/fakebin" "$WORK/main/.git" "$WORK/conf/fleets/f"
-printf 'FLEET_REPO=acme/widgets\n' > "$WORK/conf/fleets/f/conf"   # one live fleet `f` per login
+: > "$WORK/conf/fleets/f/conf"   # one live fleet `f` per login
+. "$BIN/selftest-repo-fixture.sh"; fx_repo "$WORK/conf" f acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
 NEWWIN_LOG="$WORK/newwins"
 cat > "$WORK/fakebin/tmux" <<TMUXFAKE
 #!/bin/bash

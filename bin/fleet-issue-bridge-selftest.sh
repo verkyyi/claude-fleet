@@ -36,6 +36,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/fleet-issue-bridge.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s not found/executable\n' "$SRC" >&2; exit 2; }
 
@@ -132,12 +133,11 @@ FAKE
 chmod +x "$WORK/fakepath/tmux"
 # Each fleet is a conf named after its session/socket (issue #159): fleet_sockets
 # keys the socket off the conf BASENAME (not its repo), so this makes the "s1"
-# fleet discoverable. FLEET_REPO="" (explicitly empty) OVERRIDES the ambient
-# FLEET_REPO in the conf-sourcing subshell, so bridge_state_subdir does NOT
-# resolve fake-repo→s1 — the bridge's per-fleet state (issue #181) therefore stays
+# fleet discoverable. It hosts no repo (an empty conf, no repos/), so
+# bridge_state_subdir does NOT resolve fake-repo→s1 — the bridge's per-fleet state (issue #181) therefore stays
 # on the legacy flat path this test asserts. (bridge_find_window resolves the
 # window by its own @repo, which the fake tmux answers.)
-printf 'FLEET_REPO=""\n' > "$WORK/conf/s1.conf"
+: > "$WORK/conf/s1.conf"
 
 # --- canned comments (ascending updated_at) ------------------------------------
 MARK='<!-- fleet:no-relay -->'
@@ -445,7 +445,7 @@ done
 printf 'selftest: revive leg PASS (capacity/claim/infra reasons preserved, stdout discarded — #683)\n' >&2
 
 # ============================== two-repo leg (issue #798) ======================
-# Fleet "mr" hosts acme/a (its conf's FLEET_REPO) and acme/b (a repos/ overlay).
+# Fleet "mr" hosts acme/a (first in repos/.order) and acme/b (another overlay).
 # Both repos have an issue #12, bound to @1 (acme/a) and @2 (acme/b) in the SAME
 # session. One poll must: list BOTH repos' comment streams, type A#12's comment
 # into @1 only and B#12's into @2 only, and keep each repo's watermark + seen-set
@@ -454,7 +454,8 @@ printf 'selftest: revive leg PASS (capacity/claim/infra reasons preserved, stdou
 # webhook naming repository acme/b routes as B's #12; revive passes --repo.
 MR="$WORK/mr"
 mkdir -p "$MR/fakepath" "$MR/conf/fleets/mr/repos" "$MR/state" "$MR/leases"
-printf 'FLEET_REPO="acme/a"\nFLEET_ISSUE_BRIDGE=1\n' > "$MR/conf/fleets/mr/conf"
+printf 'FLEET_ISSUE_BRIDGE=1\n' > "$MR/conf/fleets/mr/conf"
+fx_repo "$MR/conf" "mr" acme/a
 printf 'FLEET_REPO="acme/b"\n'                       > "$MR/conf/fleets/mr/repos/acme-b.conf"
 cat > "$MR/fakepath/gh" <<FAKE
 #!/bin/bash
@@ -642,7 +643,8 @@ grep -qF 'delivered via webhook' "$INJECT" && fail "a tmux-down delivery must NO
   FLEET_CONF_DIR="$WORK/conf"; STATE="$WORK/state"
   : "$FLEET_CONF_DIR" "$STATE"   # read via the eval'd functions below (opaque to shellcheck)
   rm -rf "$WORK/conf/fleets" "$WORK/state"
-  printf 'FLEET_REPO="fake/repo"\nFLEET_ISSUE_BRIDGE=1\n' > "$WORK/conf/fake.conf"
+  printf 'FLEET_ISSUE_BRIDGE=1\n' > "$WORK/conf/fake.conf"
+  fx_repo "$WORK/conf" "fake" fake/repo
   eval "$(awk '/^bridge_state_subdir\(\) \{/,/^}/' "$SRC")"
   eval "$(awk '/^bridge_state_file\(\) \{/,/^}/'   "$SRC")"
   _BR_SLUG=''; _BR_SUB=''
@@ -655,11 +657,11 @@ grep -qF 'delivered via webhook' "$INJECT" && fail "a tmux-down delivery must NO
   [ "$gots" = "$WORK/state/bridge_fake-repo.since" ] \
     || { echo "layout: a legacy flat file must be dual-read in place (got $gots)" >&2; exit 1; }
   # issue #798: a repo hosted through an overlay keeps its OWN (session, slug) dir;
-  # the conf's own repo stays at bridge/ even when it carries an overlay of its own.
+  # the fleet's first repo stays at bridge/ even when its overlay sets keys of its own.
   rm -f "$WORK/state/bridge_fake-repo.since"; rm -rf "$WORK/conf/fleets"
   mkdir -p "$WORK/conf/fleets/fake/repos"; mv "$WORK/conf/fake.conf" "$WORK/conf/fleets/fake/conf"
+  fx_repo "$WORK/conf" fake fake/repo FLEET_MODEL=opus
   printf 'FLEET_REPO="fake/other"\n' > "$WORK/conf/fleets/fake/repos/fake-other.conf"
-  printf 'FLEET_MODEL=opus\n'        > "$WORK/conf/fleets/fake/repos/fake-repo.conf"
   _BR_SLUG=''; _BR_SUB=''
   goto=$(bridge_state_file fake-other since)
   [ "$goto" = "$WORK/conf/fleets/fake/bridge/fake-other/since" ] \
@@ -667,7 +669,7 @@ grep -qF 'delivered via webhook' "$INJECT" && fail "a tmux-down delivery must NO
   _BR_SLUG=''; _BR_SUB=''
   gotc=$(bridge_state_file fake-repo since)
   [ "$gotc" = "$WORK/conf/fleets/fake/bridge/since" ] \
-    || { echo "layout: the conf's own repo must keep bridge/ (got $gotc)" >&2; exit 1; }
+    || { echo "layout: the first repo must keep bridge/ (got $gotc)" >&2; exit 1; }
   mv "$WORK/conf/fleets/fake/conf" "$WORK/conf/fake.conf"
   # a slug with NO configured fleet → flat issue-bridge/ fallback
   rm -f "$WORK/conf/fake.conf"; rm -rf "$WORK/conf/fleets"; _BR_SLUG=''; _BR_SUB=''

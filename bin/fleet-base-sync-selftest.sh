@@ -32,6 +32,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/fleet-base-sync.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s not found/executable\n' "$SRC" >&2; exit 2; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not on PATH — SKIP\n'; exit 0; }
@@ -90,11 +91,9 @@ run() { # extra args (session(s) / --dry-run) → runs the daemon, appends to $W
 reset() { : > "$WORK/log"; rm -rf "$WORK/leases"/* 2>/dev/null || true; }
 conf() { # $1 = session name; remaining args = extra conf lines
   local s="$1"; shift
-  { printf 'FLEET_REPO="fake/repo"\n'
-    printf 'FLEET_MAIN="%s"\n' "$MAIN"
-    printf 'FLEET_BASE_BRANCH="master"\n'
-    printf '%s\n' "$@"
-  } > "$WORK/conf/$s.conf"
+  printf '%s\n' "$@" > "$WORK/conf/$s.conf"
+  rm -rf "$WORK/conf/fleets/$s/repos"
+  fx_repo "$WORK/conf" "$s" fake/repo FLEET_MAIN="$MAIN" FLEET_BASE_BRANCH=master
 }
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2

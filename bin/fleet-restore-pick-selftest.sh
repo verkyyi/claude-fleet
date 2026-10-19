@@ -15,6 +15,7 @@
 #      y reopens THEN restores, a failed reopen asks again (r restores, n cancels)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX=$(command -v tmux 2>/dev/null) || { echo 'selftest SKIP: tmux missing'; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/restore-pick-selftest.XXXXXX")" || exit 2
@@ -45,7 +46,8 @@ HIST
 printf '#!/bin/sh\nexec sleep 600\n' > "$WORK/root/bin/fleet-claude.sh"
 chmod +x "$WORK/root/bin/fleet-history.sh" "$WORK/root/bin/fleet-claude.sh"
 printf 'FLEET_GLOBAL_MAX_SESSIONS=0\n' > "$WORK/root/fleet.conf"
-printf 'FLEET_MAIN=%s\nFLEET_REPO=example/repo\n' "$WORK/main" > "$WORK/conf/fleets/fleet-test/conf"
+: > "$WORK/conf/fleets/fleet-test/conf"
+fx_repo "$WORK/conf" "fleet-test" example/repo FLEET_MAIN="$WORK/main"
 
 printf '#!/bin/sh\nexec %s -S %s "$@"\n' "$REAL_TMUX" "$SOCK" > "$WORK/path/tmux"
 # fzf: print the row whose target is $PICK (none → fzf's own "no selection" = 1).

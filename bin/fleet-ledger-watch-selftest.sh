@@ -30,6 +30,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/fleet-ledger-watch.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s not found/executable\n' "$SRC" >&2; exit 2; }
 
@@ -82,7 +83,8 @@ exit 0
 FAKE
 chmod +x "$WORK/fakepath/tmux"
 
-conf() { { printf 'FLEET_REPO="fake/repo"\n'; printf 'FLEET_MAIN="%s"\n' "$WORK/main"; printf '%s\n' "$@"; } > "$WORK/conf/s1.conf"; }
+conf() { printf '%s\n' "$@" > "$WORK/conf/s1.conf"; rm -rf "$WORK/conf/fleets/s1/repos"
+         fx_repo "$WORK/conf" s1 fake/repo FLEET_MAIN="$WORK/main"; }
 # window list rows: window-id|@issue|@raw|@worktree|pane_current_path|window_name
 windows() { printf '%s\n' "$@" > "$WINDOWS"; }
 run() {
@@ -94,7 +96,8 @@ run() {
 }
 reset_log() { : > "$WORK/log"; }
 recorded_list() { awk -F'\t' '$1=="record-closed"{printf "%s ",$2}' "$REC_LOG" | sed 's/ *$//'; }
-reset_all() { : > "$REC_LOG"; : > "$WORK/log"; rm -rf "$WORK/leases"/* "$WORK/conf/fleets" 2>/dev/null || true; }
+reset_all() { : > "$REC_LOG"; : > "$WORK/log"; rm -rf "$WORK/leases"/* "$WORK/conf/fleets" 2>/dev/null || true
+              fx_repo "$WORK/conf" s1 fake/repo FLEET_MAIN="$WORK/main"; }
 SNAP="$WORK/conf/fleets/s1/ledgerwatch.snap"
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2

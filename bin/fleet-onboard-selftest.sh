@@ -12,8 +12,8 @@
 #   3. NO FORGED KEYS — a newline in a value is folded, so a value can never
 #      write a second `step=` line.
 #   4. STEP GUARD — an unknown step is refused (exit 2) and the file is untouched.
-#   5. SEED TAG — FLEET_SEED=1 tags the fleet conf's OWN repo `[seed]`, never an
-#      overlay repo; without FLEET_SEED nothing is tagged (a normal fleet).
+#   5. SEED TAG — FLEET_SEED=1 in a repo's overlay tags that repo `[seed]`, never
+#      another; without FLEET_SEED nothing is tagged (a normal fleet).
 #   6. THE SKILL MATCHES THE SCRIPT — every `set step=<x>` in the skill is a step
 #      the script accepts, every fleet script it names exists in bin/, and it
 #      carries the installer's marker line.
@@ -35,6 +35,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 OB="$BIN/fleet-onboard.sh"
 SKILL="$ROOT/commands/fleet-onboard.md"
@@ -52,7 +53,8 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--
 STATE="$FLEET_CONF_DIR/global/onboard.state"
 SESS=onb-test
 mkdir -p "$FLEET_CONF_DIR/fleets/$SESS/repos"
-printf 'FLEET_REPO=verkyyi/claude-fleet\nFLEET_MAIN=%s/main\n' "$WORK" > "$FLEET_CONF_DIR/fleets/$SESS/conf"
+: > "$FLEET_CONF_DIR/fleets/$SESS/conf"
+fx_repo "$FLEET_CONF_DIR" "$SESS" verkyyi/claude-fleet FLEET_MAIN="$WORK/main"
 printf 'FLEET_REPO=erin/app\n' > "$FLEET_CONF_DIR/fleets/$SESS/repos/erin-app.conf"
 brief() { bash "$OB" brief --session "$SESS" --no-gh "$@" 2>&1; }
 
@@ -64,11 +66,11 @@ ok "fresh fleet: resume at key, state under global/"
 
 # --- 5. seed tag (FLEET_SEED absent ⇒ no tag) --------------------------------
 printf '%s\n' "$out" | grep -q '\[seed\]' && fail "no FLEET_SEED, yet a repo was tagged [seed]" "$out"
-printf 'FLEET_SEED=1\n' >> "$FLEET_CONF_DIR/fleets/$SESS/conf"
+printf 'FLEET_SEED=1\n' >> "$FLEET_CONF_DIR/fleets/$SESS/repos/verkyyi-claude-fleet.conf"
 out=$(brief --dev)
-printf '%s\n' "$out" | grep -q '^  verkyyi/claude-fleet  \[seed\]' || fail "the conf's own repo is not tagged [seed]" "$out"
+printf '%s\n' "$out" | grep -q '^  verkyyi/claude-fleet  \[seed\]' || fail "the seed's overlay repo is not tagged [seed]" "$out"
 printf '%s\n' "$out" | grep -q '^  erin/app *$' || fail "an overlay repo must never be the seed" "$out"
-ok "FLEET_SEED=1 tags only the conf's own repo"
+ok "FLEET_SEED=1 tags only the repo whose overlay says it"
 
 # --- 2. merge ----------------------------------------------------------------
 bash "$OB" set step=repo lang=zh || fail "set failed"

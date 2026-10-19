@@ -55,6 +55,8 @@ ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/leases" "$WORK/dash" "$WORK/metadata"
+. "$BIN/selftest-repo-fixture.sh"
+fx_repo "$WORK/conf" testsess acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
 ORDER_LOG="$WORK/order"; PULL_LOG="$WORK/pull"; LEDGER="$WORK/ledger.tsv"
 
 # --- fake git: no-op success; log teardown ops + the base pull in order --------

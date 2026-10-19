@@ -22,6 +22,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 HOOK="$BIN/refocus-hook.sh"
 [ -x "$HOOK" ] || { echo "selftest: $HOOK missing/not executable" >&2; exit 2; }
 
@@ -37,10 +38,8 @@ REPO=acme/widgets
 CONF="$WORK/conf"
 mkdir -p "$CONF/fleets/$SESS" "$WORK/hub" "$WORK/widgets-issue-12" "$WORK/fakebin" \
          "$WORK/.claude-dash/fleets/acme-widgets"
+fx_repo "$CONF" "$SESS" "$REPO" FLEET_MAIN="$WORK/widgets" FLEET_BASE_BRANCH=trunk
 cat > "$CONF/fleets/$SESS/conf" <<CONF_EOF
-FLEET_REPO=$REPO
-FLEET_MAIN=$WORK/widgets
-FLEET_BASE_BRANCH=trunk
 FLEET_MERGE_METHOD=rebase
 CONF_EOF
 printf 'issue-12\t#345\tOPEN\t✓\tready\t\nissue-99\t#400\tMERGED\t✓\t\tabc\n' \
@@ -145,12 +144,12 @@ FAKE_AT_ISSUE=12 FAKE_AT_REPO='' run "$WORK/widgets-issue-12" compact
 FAKE_AT_ISSUE=12 FAKE_AT_REPO=acme/gadgets run "$WORK/widgets-issue-12" compact
 C=$(ctx) || fail "a multi-repo window with @repo must emit" "$OUT"
 case "$C" in '[fleet charter] #12 · acme/gadgets'*) : ;; *) fail "must name the window's @repo" "$C" ;; esac
-rm -rf "$CONF/fleets/$SESS/repos"
+rm -f "$CONF/fleets/$SESS/repos/acme-gadgets.conf"
 ok "REPO 2-repo fleet: no @repo → silent, @repo → that repo"
 
 # ===== SIZE: ≤ 1.5 KB whatever the paths ========================================
 long=$(printf 'x%.0s' $(seq 1 1800))
-sed -i.bak "s|^FLEET_MAIN=.*|FLEET_MAIN=$WORK/$long|" "$CONF/fleets/$SESS/conf"
+sed -i.bak "s|^FLEET_MAIN=.*|FLEET_MAIN=\"$WORK/$long\"|" "$CONF/fleets/$SESS/repos/acme-widgets.conf"
 FAKE_AT_ISSUE=12 run "$WORK/widgets-issue-12" compact
 C=$(ctx) || fail "a huge path must still emit valid JSON" "$OUT"
 n=$(printf '%s' "$C" | wc -c | tr -d ' ')

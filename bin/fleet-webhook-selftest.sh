@@ -23,6 +23,7 @@
 # is absent the whole test SKIPs cleanly (exit 0), per the runner convention.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 WH="$BIN/fleet-webhook.sh"
 [ -f "$WH" ] || { printf 'selftest: %s not found\n' "$WH" >&2; exit 2; }
 
@@ -131,10 +132,12 @@ eq 'HMAC good signature → kicks'            "$(cat "$REC")" '--repo acme/widge
 
 # --- SELECTION (--desired): opt-in filter + dedup ---------------------------
 CD="$WORK/conf"; mkdir -p "$CD/fleets/alpha" "$CD/fleets/beta" "$CD/fleets/gamma" "$CD/fleets/delta"
-printf 'FLEET_REPO=acme/widgets\nFLEET_WEBHOOK=1\n' > "$CD/fleets/alpha/conf"
+printf 'FLEET_WEBHOOK=1\n' > "$CD/fleets/alpha/conf"
+fx_repo "$CD" "alpha" acme/widgets
 printf 'FLEET_REPO=acme/widgets\nFLEET_WEBHOOK=1\n' > "$CD/fleets/beta/conf"   # same repo → dedup
 printf 'FLEET_REPO=acme/gadgets\nFLEET_WEBHOOK=0\n' > "$CD/fleets/gamma/conf"  # opted out
-printf 'FLEET_REPO=acme/gizmos\nFLEET_WEBHOOK=1\n'  > "$CD/fleets/delta/conf"
+printf 'FLEET_WEBHOOK=1\n' > "$CD/fleets/delta/conf"
+fx_repo "$CD" "delta" acme/gizmos
 desired=$(FLEET_CONF_DIR="$CD" bash "$WH" --desired alpha beta gamma delta 2>/dev/null | sort | tr '\n' ' ')
 eq 'desired = opted-in, deduped, no opt-outs' "$desired" 'acme/gizmos acme/widgets '
 
@@ -171,7 +174,8 @@ kill -0 "$wp2" 2>/dev/null || fail 'restarted forward not alive'; ok
 
 # opt delta out → its forward is reaped next reconcile
 gp=$(cat "$RST/forwards/acme-gizmos.pid")
-printf 'FLEET_REPO=acme/gizmos\nFLEET_WEBHOOK=0\n' > "$CD/fleets/delta/conf"
+printf 'FLEET_WEBHOOK=0\n' > "$CD/fleets/delta/conf"
+fx_repo "$CD" "delta" acme/gizmos
 recon
 [ -f "$RST/forwards/acme-gizmos.pid" ] && fail 'opted-out repo still has a forward pidfile'; ok
 kill -0 "$gp" 2>/dev/null && fail 'opted-out forward process still alive'; ok
@@ -287,10 +291,12 @@ grep -qx -- '--issues acme/widgets' "$CREC" || fail 'a cleared stamp (host wake)
 # The one-repo fleets above (no repos/ dir) are the degenerate case and still
 # forward exactly their FLEET_REPO.
 mkdir -p "$CD/fleets/multi/repos" "$CD/fleets/solo/repos"
-printf 'FLEET_REPO=acme/one\nFLEET_WEBHOOK=1\n'   > "$CD/fleets/multi/conf"
+printf 'FLEET_WEBHOOK=1\n' > "$CD/fleets/multi/conf"
+fx_repo "$CD" "multi" acme/one
 printf 'FLEET_REPO=acme/two\n'                    > "$CD/fleets/multi/repos/acme-two.conf"    # inherits 1
 printf 'FLEET_REPO=acme/three\nFLEET_WEBHOOK=0\n' > "$CD/fleets/multi/repos/acme-three.conf"  # opts out
-printf 'FLEET_REPO=acme/four\nFLEET_WEBHOOK=0\n'  > "$CD/fleets/solo/conf"
+printf 'FLEET_WEBHOOK=0\n' > "$CD/fleets/solo/conf"
+fx_repo "$CD" "solo" acme/four
 printf 'FLEET_REPO=acme/five\nFLEET_WEBHOOK=1\n'  > "$CD/fleets/solo/repos/acme-five.conf"    # overlay-only opt-in
 desired=$(FLEET_CONF_DIR="$CD" bash "$WH" --desired multi solo 2>/dev/null | tr '\n' ' ')
 eq 'desired = every hosted repo that opts in (per repo)' "$desired" 'acme/one acme/two acme/five '

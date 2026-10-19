@@ -169,6 +169,8 @@ fail() { printf 'FAIL %s\n' "$1" >&2
          exit 1; }
 
 mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/dash"
+. "$BIN/selftest-repo-fixture.sh"
+fx_repo "$WORK/conf" testsess acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
 GH_LOG="$WORK/gh.log"; TMUX_LOG="$WORK/tmux.log"; GIT_LOG="$WORK/git.log"; DISPLAY_LOG="$WORK/display.log"
 
 # --- fake git: fetch/worktree/branch succeed; worktree+branch ops are LOGGED -------
@@ -296,6 +298,9 @@ snap()        { cat "$WORK/spawn.rc" "$WORK/spawn.err"; sort "$GH_LOG"; cat "$TM
 unset FLEET_PRESPAWN_DEDUP CCQUOTA_FLEET FLEET_HUB_LEASE_CMD FLEET_HUB_PLACE_CMD FLEET_HUB_STATUS_CMD FLEET_NODE_ALIASES
 unset CCQUOTA_TOKEN CCQUOTA_HUB_URL   # a pane under the pre-#1491 stop-gap exports the token
 LEASE="$WORK/fakebin/fake-lease"; PLACE="$WORK/fakebin/fake-place"
+# A configured fleet (an empty conf; its repo is the overlay): the UUID is frozen
+# here, once, and every later spawn reads that file (issue #1936).
+[ -f "$WORK/conf/fleets/testsess/conf" ] || : > "$WORK/conf/fleets/testsess/conf"
 UUID=$(cd "$WORK" && FLEET_CONF_DIR="$WORK/conf" FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" \
   bash -c '. "$1/fleet-lib.sh"; fleet_uuid testsess' _ "$BIN")
 [ -n "$UUID" ] || fail "setup: fleet_uuid derived nothing from the fake control database"
@@ -567,6 +572,8 @@ gh_has '--remove-assignee'                       && fail "UNCLAIM a spawn that o
 ok "UNCLAIM a claimed-then-failed spawn here withdraws its GitHub claim; an opened one keeps it"
 
 # ===== STALE (issue #1610): a claim an unknown send left, no session anywhere =====
+# The parent's ledger, as fleet-children.sh reads it: the one repo's key (#1939).
+DISPATCH="$WORK/conf/fleets/testsess/children/acme-widgets:issue-77.dispatch"
 rm -f "$DISPATCH"; mkdir -p "$(dirname "$DISPATCH")"
 _old=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600)))')
 printf '{"seq": 1, "ts": "%s", "child": "acme-widgets:issue-258", "node": "mac-d", "op": "op_50", "state": "unknown"}\n' "$_old" > "$DISPATCH"
@@ -584,6 +591,7 @@ gh_has '--remove-assignee'                       && fail "STALE a send still you
 ok "STALE a claim an unknown send left with no session anywhere is withdrawn before the next send — no --force; a young send or a silent hub keeps it"
 
 # ===== FALLBACK (issue #1610): the hub tried the next machine after a decline =====
+rm -f "$DISPATCH"; DISPATCH="$WORK/conf/fleets/testsess/children/issue-77.dispatch"   # the writer's, as above
 rm -f "$DISPATCH"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_RC=0 \
   PLACE_STDERR='ccquota place: mac-d declined (exit 1): fleet discover: fork/exec fleet-control.py: invalid argument — trying the next machine' \
@@ -639,6 +647,7 @@ ok "ASYNC --async → --wait 0, operation id in the dispatch file, listed by fle
 # testsess = the fleet the fake tmux answers; `other` = a second fleet on the same
 # login, named as the spawn's second argument (a headless target). Each conf carries only the lines under test.
 mkdir -p "$WORK/conf/fleets/testsess" "$WORK/conf/fleets/other"
+fx_repo "$WORK/conf" other acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
 printf 'CCQUOTA_FLEET=0\n' > "$WORK/conf/fleets/testsess/conf"
 printf 'export CCQUOTA_FLEET=1\n' > "$WORK/conf/fleets/other/conf"
 for login in 1 ''; do

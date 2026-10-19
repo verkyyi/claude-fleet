@@ -133,6 +133,7 @@ g checkout -q main; commit base.txt before-e9; g merge -q --squash issue-9 >/dev
 g push -q origin main; g fetch -q origin
 g worktree add -q "$WORK/wt-e9" issue-9 2>/dev/null
 : > "$GHLOG"
+. "$BIN/selftest-repo-fixture.sh"; fx_repo "$WORK/noconf" s1 o/r FLEET_MAIN="$D" FLEET_BASE_BRANCH=main
 tok=$(ISS=9 TMLOG="$WORK/tmlog" FLEET_REPO=o/r FLEET_MAIN="$D" FLEET_BASE_BRANCH=main \
   FLEET_CONF_DIR="$WORK/noconf" TMPDIR="$WORK/rt" FLEET_HISTORY_LEDGER="$WORK/hist.tsv" \
   CLAUDE_PROJECTS_DIR="$WORK/projects" PATH="$WORK/fakepath:$PATH" \

@@ -625,24 +625,15 @@ fleet_load_conf() {
 $_flc_txt" in *"
 CCQUOTA_FLEET="*|*"
 export CCQUOTA_FLEET="*) export CCQUOTA_FLEET ;; esac
-  # compat-1v: 下一批删 (the old layout, below)
-  # Every repo lives in repos/<slug>.conf (issue #1937): in a fleet that has a
-  # repos/ dir, a fleet conf naming no repo describes the fleet only, so a repo key
-  # the caller's environment or the global conf carries is not this fleet's —
-  # dropped before any overlay. A conf that still names one is the old layout (read
-  # for one version, until fleet_conf_repo_migrate moves it): its repo stays, as
-  # before. No repos/ dir and no repo in the conf: untouched, as it always was.
-  local _flc_old=0
-  _fleet_conf_txt_names_repo "$_flc_txt" && _flc_old=1
-  [ "$_flc_old" = 1 ] || [ ! -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] || eval "unset $_FLEET_REPO_SCOPED"
-  # Window-aware (issue #788): inside a pane of THIS fleet whose window belongs to a
-  # hosted repo, that repo's overlay goes on top — so every in-pane consumer (hooks,
-  # commands/*.md, the launcher, the claim brief) sees its own repo's MAIN/base/model
-  # without learning about repos. A fleet with no repos/ dir returns HERE, before any
-  # tmux call. So does a caller outside tmux (daemons), or one loading ANOTHER
-  # fleet's conf from inside a pane — except that a new-layout fleet then reads its
-  # FIRST repo (repos/.order), the one its conf used to name, so a caller that reads
-  # $FLEET_REPO sees what it always saw. No repo at all ⇒ every repo key empty.
+  # Every repo lives in repos/<slug>.conf (issue #1937): a fleet conf describes the
+  # fleet only, so a repo key it spells — or the caller's environment or the global
+  # conf carries, in a fleet that has a repos/ dir — is not this fleet's: dropped
+  # before any overlay. No repos/ dir and no repo in the conf: untouched, as it
+  # always was. (The old layout's conf-named repo was read until #4806; moving it
+  # is fleet_conf_repo_migrate's.)
+  if _fleet_conf_txt_names_repo "$_flc_txt" || [ -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ]; then
+    eval "unset $_FLEET_REPO_SCOPED"
+  fi
   [ -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] || return 0
   local _wr
   if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] \
@@ -650,14 +641,13 @@ export CCQUOTA_FLEET="*) export CCQUOTA_FLEET ;; esac
     _wr=$(fleet_window_repo "$1" "$TMUX_PANE")
     [ -n "$_wr" ] && _fleet_repo_overlay "$1" "$_wr" && return 0
   fi
-  [ "$_flc_old" = 1 ] || _fleet_repo_overlay_first "$1"
+  _fleet_repo_overlay_first "$1"
   return 0
 }
 
 # _fleet_conf_txt_names_repo <conf text> → 0 iff the text assigns FLEET_REPO,
 # FLEET_MAIN or FLEET_BASE_BRANCH: the old layout, where the fleet conf held its
-# first repo (issue #1937) — a conf with a checkout but no FLEET_REPO (its repo
-# read off the collector's cache) is one too. Builtins only.
+# first repo (issue #1937) — none of it is read any more (#4806). Builtins only.
 _fleet_conf_txt_names_repo() {
   case "
 ${1:-}" in *"
@@ -678,8 +668,8 @@ export FLEET_BASE_BRANCH="*) return 0 ;; esac
 # (FLEET_MODEL, FLEET_AGENT, FLEET_MCP_CONFIG, FLEET_DEPLOY_*, FLEET_SEED). The
 # fleet conf holds only fleet-wide settings an overlay may override. Their order is
 # repos/.order (one slug a line; fleet_repo_order_put), then any overlay it does
-# not list. The OLD layout — the fleet conf naming its first repo — is read for one
-# version (that repo comes first) until fleet_conf_repo_migrate moves it out. A
+# not list. The OLD layout — the fleet conf naming its first repo — is not read
+# (#4806); fleet_conf_repo_migrate moves it out. A
 # window names its repo with the window option @repo=<owner/name>; `@norepo 1` marks
 # a session that deliberately belongs to none. Every consumer resolves through the
 # helpers below — never an ad-hoc `git remote` parse.
@@ -799,17 +789,14 @@ fleet_repo_conf_file() {
   printf '%s/fleets/%s/repos/%s.conf' "$FLEET_CONF_DIR" "${1:-_}" "$(fleet_slug "$(fleet_norm_repo "${2:-}")")"
 }
 
-# compat-1v: 下一批删 (the old layout's FLEET_REPO, below)
 # fleet_repos <sess> → every repo the fleet hosts, owner/name, one per line, in
-# order: an old-layout fleet conf's FLEET_REPO first (read for one version, issue
-# #1937), then repos/.order, then any other repos/*.conf, deduplicated. Nothing for a
+# order: repos/.order, then any other repos/*.conf, deduplicated. Nothing for a
 # fleet with no repo. Reads confs in subshells, so the caller's env is untouched.
 fleet_repos() {
-  local sess="${1:-}" conf d f s _fr_seen=' '
+  local sess="${1:-}" d f s _fr_seen=' '
   [ -n "$sess" ] || return 0
   [ -n "${ZSH_VERSION:-}" ] && setopt local_options null_glob
-  conf=$(fleet_conf_file "$sess"); d="$FLEET_CONF_DIR/fleets/$sess/repos"
-  _fleet_repos_one "$conf"
+  d="$FLEET_CONF_DIR/fleets/$sess/repos"
   if [ -f "$d/.order" ]; then
     while IFS= read -r s || [ -n "$s" ]; do
       [ -n "$s" ] && _fleet_repos_one "$d/$s.conf"
@@ -959,19 +946,15 @@ fleet_window_repo() {
 }
 
 # _fleet_repo_overlay <sess> <repo> — apply <repo>'s overlay on top of the ALREADY
-# loaded fleet conf, in the caller's shell. For the fleet conf's own repo the
-# overlay is optional (it can only override); for any other repo it is required,
-# and the conf repo's scoped keys are dropped first so they cannot leak across.
-# Returns 1 (env untouched) when <repo> is not hosted.
+# loaded fleet conf, in the caller's shell; the scoped keys any other repo left are
+# dropped first so they cannot leak across. Returns 1 (env untouched) when <repo>
+# is not hosted — has no overlay.
 _fleet_repo_overlay() {
   local want f
   want=$(fleet_norm_repo "${2:-}"); [ -n "$want" ] || return 1
   f=$(fleet_repo_conf_file "$1" "$want")
-  if [ "$(fleet_norm_repo "${FLEET_REPO:-}")" != "$want" ]; then
-    [ -f "$f" ] || return 1
-    eval "unset $_FLEET_REPO_SCOPED"
-  fi
-  [ -f "$f" ] || return 0
+  [ -f "$f" ] || return 1
+  eval "unset $_FLEET_REPO_SCOPED"
   eval "$(_fleet_conf_sans_global "$f")"
   return 0
 }
@@ -991,10 +974,9 @@ fleet_load_repo_conf() {
     _flr_txt=$(_fleet_conf_sans_global "$conf")
     eval "$_flr_txt"
   fi
-  # A new-layout conf names no repo (issue #1937): whatever repo keys the shell
-  # already held are not the fleet's, so <repo>'s overlay is required.
-  _fleet_conf_txt_names_repo "$_flr_txt" || [ ! -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] \
-    || eval "unset $_FLEET_REPO_SCOPED"
+  # A fleet conf names no repo (issue #1937): one that still does is not read
+  # (#4806), and <repo>'s overlay is required.
+  ! _fleet_conf_txt_names_repo "$_flr_txt" || eval "unset $_FLEET_REPO_SCOPED"
   _fleet_repo_overlay "${1:-}" "${2:-}"
 }
 
@@ -1293,8 +1275,6 @@ fleet_repo_conf_file_for() {
 fleet_load_window_conf() {
   local sess="${1:-}" r
   fleet_load_conf "$sess"
-  # compat-1v: 下一批删 — a pre-#1937 conf naming only FLEET_MAIN lists no repo: its own.
-  [ -n "$(fleet_repos "$sess")" ] || return 0
   r=$(fleet_window_repo "$sess" "${2:-}")
   if [ -z "$r" ] || ! fleet_load_repo_conf "$sess" "$r"; then
     eval "unset $_FLEET_REPO_SCOPED"
@@ -1306,12 +1286,9 @@ fleet_load_window_conf() {
 # fleet_resolved_repo <sess> — the repo a reaper acts on, read AFTER a
 # fleet_load_*conf: the loaded FLEET_REPO. Never the collector's sessmap, which
 # holds ONE repo per session and would drag every window back to the conf's own
-# (issue #1943) — except, compat-1v: 下一批删, for a pre-#1937 conf naming only
-# FLEET_MAIN, which lists no repo and has none other.
+# (issue #1943).
 fleet_resolved_repo() {
-  local r="${FLEET_REPO:-}"
-  [ -n "$r" ] || [ -n "$(fleet_repos "${1:-}")" ] || r=$(fleet_repo_cached "${1:-}")
-  printf '%s' "$r"
+  printf '%s' "${FLEET_REPO:-}"
 }
 
 # fleet_issue_windows <sess> <repo> <issue> → the window ids bound to (repo,
@@ -1519,15 +1496,15 @@ fleet_backlog_cache() {
 # NOTHING (the caller refuses, or a new issue asks — fleet-repo-ask.sh) — never a
 # guess. fleet_target_repo's one rule (issue #1938): the row's repo, else $CF_REPO
 # (carried through a popup) — either must be hosted — else the caller pane's own
-# repo, else the fleet's only repo. A fleet that knows NO repo (no conf repo, no
-# cached one — outside a fleet) has nothing to check against: the named repo,
+# repo, else the fleet's only repo. A fleet that hosts NO repo (outside a fleet)
+# has nothing to check against: the named repo,
 # else the global FLEET_REPO, as fleet-comment.sh / fleet-pr-verdict.sh do.
 fleet_backlog_repo() {
   local sess="${1:-}" want r rc
   want=$(fleet_norm_repo "${2:-}")
   [ -n "$want" ] || want=$(fleet_norm_repo "${CF_REPO:-}")
   r=$(fleet_target_repo "$sess" "$want" 2>/dev/null); rc=$?
-  if [ "$rc" = 1 ] && [ -z "$(fleet_repos "$sess")" ] && [ -z "$(fleet_repo_cached "$sess" 2>/dev/null)" ]; then
+  if [ "$rc" = 1 ] && [ -z "$(fleet_repos "$sess")" ]; then
     r=${want:-$(fleet_norm_repo "${FLEET_REPO:-}")}; rc=0
   fi
   [ "$rc" = 0 ] && [ -n "$r" ] && printf '%s' "$r"
@@ -1548,15 +1525,13 @@ fleet_backlog_repo() {
 # issues #803, #1938) acts on — ONE rule, however many repos the fleet hosts:
 #   1. <repo>, when given — it must be hosted (exit 1 otherwise);
 #   2. the caller pane's own window repo (a worker, a scratch bound to a repo);
-#   3. the fleet's only repo, when fleet_repos counts exactly one (a conf with no
-#      FLEET_REPO line falls back to the collector's cached repo);
+#   3. the fleet's only repo, when fleet_repos counts exactly one;
 #   4. else exit 4 — AMBIGUOUS: the caller ASKS (fleet_repos lists the choices),
 #      never guesses. Exit 1 = <repo> not hosted / nothing resolvable.
 fleet_target_repo() {
   local sess="${1:-}" want r all
   want=$(fleet_norm_repo "${2:-}")
   all=$(fleet_repos "$sess")
-  [ -n "$all" ] || all=$(fleet_norm_repo "$(fleet_repo_cached "$sess" 2>/dev/null)")
   if [ -n "$want" ]; then
     # GitHub casing is identity-equivalent, but local overlay/worktree names
     # keep their registered spelling. Several matching registrations refuse.
@@ -6120,7 +6095,15 @@ fleet_identity_triplet() {
       [ -f "$FLEET_CONF_DIR/fleet.settings" ] && . "$FLEET_CONF_DIR/fleet.settings" >/dev/null 2>&1
       [ -f "$FLEET_CONF_DIR/fleet.conf" ] && . "$FLEET_CONF_DIR/fleet.conf" >/dev/null 2>&1
     fi
-    fleet_load_conf "$sess" >/dev/null 2>&1
+    # An old-layout conf about to be migrated (fleet_conf_repo_migrate freezes the
+    # identity first) still names its repo: those lines ARE its identity, read as
+    # they always were — the conf is not read for hosting any more (#4806).
+    _fit_cf=$(fleet_conf_file "$sess")
+    if [ -f "$_fit_cf" ] && _fleet_conf_txt_names_repo "$(_fleet_conf_sans_global "$_fit_cf")"; then
+      eval "$(_fleet_conf_sans_global "$_fit_cf")"
+    else
+      fleet_load_conf "$sess" >/dev/null 2>&1
+    fi
     printf '%s\0' "$sess" "${FLEET_REPO:-}" "${FLEET_MAIN:-}" )
 }
 

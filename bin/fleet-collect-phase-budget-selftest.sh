@@ -60,6 +60,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-account.sh fleet_iso.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-restore.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
@@ -76,7 +77,8 @@ for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-account.sh fleet_iso.py 
 done
 chmod +x "$WORK/bin/"*.sh
 printf 'tok-a\n' > "$WORK/accounts/a"
-printf 'FLEET_REPO="acme/widgets"\n' > "$WORK/conf/fleets/sessA/conf"
+: > "$WORK/conf/fleets/sessA/conf"
+fx_repo "$WORK/conf" "sessA" acme/widgets
 C="$WORK/.claude-dash"; G="$C/global"
 
 WT1="$WORK/wt1"; WT2="$WORK/wt2"

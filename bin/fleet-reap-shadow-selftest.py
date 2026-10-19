@@ -223,7 +223,10 @@ class Shadow(unittest.TestCase):
             command("git","-C",str(wt),"config","branch.scratch-999.remote",".")
             command("git","-C",str(wt),"config","branch.scratch-999.merge","refs/heads/master")
             conf=root/"conf";directory=conf/"fleets"/session;directory.mkdir(parents=True)
-            (directory/"conf").write_text("FLEET_REPO=fixture/reap\nFLEET_MAIN="+shlex.quote(str(main))+"\nFLEET_BASE_BRANCH=master\nFLEET_FORGE=none\n")
+            (directory/"conf").write_text("")
+            (directory/"repos").mkdir()   # every repo is an overlay (#1937, #4806)
+            (directory/"repos/fixture-reap.conf").write_text("FLEET_REPO=fixture/reap\nFLEET_MAIN="+shlex.quote(str(main))+"\nFLEET_BASE_BRANCH=master\nFLEET_FORGE=none\n")
+            (directory/"repos/.order").write_text("fixture-reap\n")
             (conf/"rotating").mkdir();(conf/"control/hub-outbox").mkdir(parents=True)
             try:
                 command(*tm,"-f","/dev/null","new-session","-d","-s",session,"sleep 30")

@@ -34,6 +34,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/worktree-autoclean.sh"
 LIB="$BIN/fleet-lib.sh"
 for f in "$SRC" "$LIB"; do [ -f "$f" ] || { echo "selftest: $f missing" >&2; exit 2; }; done
@@ -111,10 +112,9 @@ exit 0
 GHFAKE
 chmod +x "$WORK/fakebin/gh"
 
+rm -rf "$WORK/conf/fleets/sess1/repos"
+fx_repo "$WORK/conf" sess1 fake/repo FLEET_MAIN="$BASE" FLEET_BASE_BRANCH="$BASE_BR"
 cat > "$WORK/conf/sess1.conf" <<EOCONF
-FLEET_MAIN="$BASE"
-FLEET_REPO="fake/repo"
-FLEET_BASE_BRANCH="$BASE_BR"
 FLEET_PROTECTED_RE='^(master|main|develop|test)\$'
 EOCONF
 

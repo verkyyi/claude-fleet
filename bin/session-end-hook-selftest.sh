@@ -64,6 +64,8 @@ git init -q "$BASEDIR"
 git -C "$BASEDIR" config user.email t@t; git -C "$BASEDIR" config user.name t
 printf 'seed\n' > "$BASEDIR/f"; git -C "$BASEDIR" add f; git -C "$BASEDIR" commit -qm seed
 BASE_BR="$(git -C "$BASEDIR" branch --show-current)"
+. "$BIN/selftest-repo-fixture.sh"
+for _c in noconf transfer-conf pfconf; do fx_repo "$WORK/$_c" s1 fake/repo FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR"; done
 
 # helper: add an issue-<N> worktree, optionally with a divergent commit / dirt.
 add_wt() {  # <n> <mode: ancestor|zero|commit|dirty>
@@ -126,6 +128,7 @@ case "$*" in
   *@agent_transfer_until*) printf '%s\n' "${TRANSFER_UNTIL:-}" ;;
    *@cc_agent*)    printf '%s\n' "${AGENT:-}" ;;
    *@cc_launcher_pid*) printf '%s\n' "${LAUNCH_PID:-}" ;;
+  *'#{@repo}|'*)  printf '||%s\n' "${WT:-}" ;;   # fleet_window_repo's one read: the fleet's only repo
   *@issue*)       printf '%s\n' "${ISS:-}" ;;
   *@worktree*)    printf '%s\n' "${WT:-}" ;;
   *pane_current_path*) printf '%s\n' "${PCWD:-}" ;;
@@ -468,6 +471,7 @@ ok "Codex close-on-exit honors the global switch, hub/panel scope, and transfer 
 # the first unanswered read opens the shared gh-down marker, every later one skips.
 # Nothing is reaped on an unread merged-PR answer (#2 kept), and the issue stays.
 GHDOWN="$WORK/ghdown-conf"; mkdir -p "$GHDOWN"; HANG="$WORK/gh-hang.log"; : > "$HANG"
+fx_repo "$GHDOWN" s1 fake/repo FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR"
 clr; t0=$(date +%s)
 GH_HANG="$HANG" RUNSHELL_BG=1 FLEET_GH_TIMEOUT_KEY=3 CONFDIR="$GHDOWN" \
   REASON=prompt_input_exit ISS=2 WID='@2' run_hook </dev/null

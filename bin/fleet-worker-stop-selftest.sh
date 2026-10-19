@@ -32,6 +32,7 @@
 #  12. a bare PATH (ssh / the peerlink: no tmux on it) still finds the window (#4822)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX=$(command -v tmux) || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 
 # Short scratch name on purpose: a unix socket path is capped at ~104 bytes.
@@ -39,7 +40,8 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/wstop.XXXXXX")" || exit 2
 export TMUX_TMPDIR="$WORK/tmt"; mkdir -p "$TMUX_TMPDIR"
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR/fleets/fleetS"
 mkdir -p "$WORK/main" "$WORK/wt-scratch-7" "$WORK/issue-1" "$WORK/issue-2"
-printf 'FLEET_REPO="acme/fleetS"\nFLEET_MAIN="%s"\n' "$WORK/main" > "$FLEET_CONF_DIR/fleets/fleetS/conf"
+: > "$FLEET_CONF_DIR/fleets/fleetS/conf"
+fx_repo "$FLEET_CONF_DIR" "fleetS" acme/fleetS FLEET_MAIN="$WORK/main"
 export FLEET_HISTORY_LEDGER="$WORK/ledger.tsv"
 export FLEET_CC_SESSIONS_DIR="$WORK/sessions"; mkdir -p "$FLEET_CC_SESSIONS_DIR"
 export CLAUDE_PROJECTS_DIR="$WORK/projects"; mkdir -p "$CLAUDE_PROJECTS_DIR"

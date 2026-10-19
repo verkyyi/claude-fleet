@@ -24,6 +24,7 @@ set -uo pipefail
 export FLEET_GH_WRITE_GAP=0   # no write pacing here: the queue has its own test (fleet-gh-write-selftest.sh)
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/fleet-comment.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s not found/executable\n' "$SRC" >&2; exit 2; }
 
@@ -315,8 +316,10 @@ printf 'selftest: gh-flag leg PASS (-b / --body-file / -F / stdin accepted, bad 
 # fleet's ONLY repo — a two-repo fleet refuses (no gh call) where a one-repo fleet
 # has its one. The env's FLEET_REPO is never consulted inside a fleet.
 RP="$WORK/repo1938"; mkdir -p "$RP/bin" "$RP/conf/fleets/one" "$RP/conf/fleets/two/repos"
-printf 'FLEET_REPO=o/a\n' > "$RP/conf/fleets/one/conf"
-printf 'FLEET_REPO=o/a\n' > "$RP/conf/fleets/two/conf"
+: > "$RP/conf/fleets/one/conf"
+fx_repo "$RP/conf" "one" o/a
+: > "$RP/conf/fleets/two/conf"
+fx_repo "$RP/conf" "two" o/a
 printf 'FLEET_REPO=o/b\n' > "$RP/conf/fleets/two/repos/o-b.conf"
 cat > "$RP/bin/gh" <<'FAKE'
 #!/bin/bash

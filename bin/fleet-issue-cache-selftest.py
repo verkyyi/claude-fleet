@@ -14,7 +14,11 @@ BIN = Path(sys.argv[1])
 
 
 def run(args, **kwargs):
-    return subprocess.run(args, text=True, capture_output=True, check=True, **kwargs).stdout
+    try:
+        return subprocess.run(args, text=True, capture_output=True, check=True, **kwargs).stdout
+    except subprocess.CalledProcessError as e:
+        sys.stderr.write(e.stderr or "")
+        raise
 
 
 def check(value, label):
@@ -30,6 +34,10 @@ with tempfile.TemporaryDirectory(prefix="issue-cache-selftest-") as tmp:
     fake.mkdir()
     conf = root / "conf"
     conf.mkdir()
+    repos = conf / "fleets/testfleet/repos"   # every repo is an overlay (#1937, #4806)
+    repos.mkdir(parents=True)
+    (repos / "acme-widgets.conf").write_text(f'FLEET_REPO="acme/widgets"\nFLEET_MAIN="{main}"\nFLEET_BASE_BRANCH="master"\n')
+    (repos / ".order").write_text("acme-widgets\n")
     run(["git", "init", "-q", str(main)])
     run(["git", "-C", str(main), "-c", "user.name=Test", "-c", "user.email=test@example.com",
          "commit", "--allow-empty", "-qm", "fixture"])
