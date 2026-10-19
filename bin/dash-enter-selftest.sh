@@ -117,7 +117,7 @@ reset_debounce; : > "$SPAWN_LOG"; : > "$DISPLAY_LOG"
 GUARD_MS=1000 GUARD_SLEEP=0.3 run_enter 'refactor the login flow'
 grep -q 'clear-query' "$WORK/out" || fail "A the Enter must clear the query line synchronously" "$(cat "$WORK/out")"
 [ -s "$SPAWN_LOG" ] && fail "A the spawn must be DEFERRED, not synchronous (nothing yet)" "$(cat "$SPAWN_LOG")"
-wait_bg 0.6
+for _ in $(seq 1 50); do [ -s "$SPAWN_LOG" ] && break; sleep 0.1; done; wait_bg 0.3   # the decider fires in the background
 [ "$(grep -c '^SPAWN' "$SPAWN_LOG")" = 1 ] || fail "A a lone task must spawn exactly once after the defer" "$(cat "$SPAWN_LOG")"
 grep -qF 'SPAWN refactor the login flow' "$SPAWN_LOG" || fail "A the spawn must carry the typed text verbatim as the window NAME (--name-file)" "$(cat "$SPAWN_LOG")"
 grep -q -- '--prompt' "$SPAWN_LOG" && fail "A the typed text must NOT be handed over as a seed prompt (--prompt*, #534)" "$(cat "$SPAWN_LOG")"
@@ -126,13 +126,15 @@ ok "A a lone typed name defers, then spawns exactly one scratch with an unsent d
 # ===================== B: a multi-line paste spawns nothing ==================
 # 6 Enters fired back-to-back (a paste's per-line Enters) — guard window wide
 # enough that the whole loop is inside it, so every follower is an immediate drop
-# and the one candidate, on wake, sees it was followed → drops too.
+# and the one candidate, on wake, sees it was followed → drops too. Each line here
+# is a whole script run (~0.5 s on a busy runner, where a real paste's Enters are ms
+# apart): the candidate sleeps 2 s so the next line has surely landed (#3910).
 reset_debounce; : > "$SPAWN_LOG"; : > "$DISPLAY_LOG"
 for line in 'xO @ D531DotG.js:2' 'Promise.then' 'CO @ D531DotG.js:2' 'by @ D531DotG.js:2' 'resolve @ D531DotG.js:4' 'at o2 (D-h-3-st.js:1:18145)'; do
-  GUARD_MS=5000 GUARD_SLEEP=0.4 run_enter "$line"
+  GUARD_MS=5000 GUARD_SLEEP=2 run_enter "$line"
   grep -q 'clear-query' "$WORK/out" || fail "B every burst Enter must still clear the query" "$(cat "$WORK/out")"
 done
-wait_bg 0.8
+wait_bg 2.6
 [ ! -s "$SPAWN_LOG" ] || fail "B a multi-line paste must spawn NOTHING" "$(cat "$SPAWN_LOG")"
 grep -qi 'not a name\|pasted' "$DISPLAY_LOG" || fail "B a dropped paste must surface one explanatory message" "$(cat "$DISPLAY_LOG")"
 [ "$(grep -ci 'not a name\|pasted' "$DISPLAY_LOG")" = 1 ] || fail "B the paste message must appear exactly once, not per line" "$(cat "$DISPLAY_LOG")"
@@ -157,13 +159,13 @@ ok "C the guard sits only on the typed-task branch (rename Enter still renames, 
 # a bare `codex:` is a window named `codex:`, and any other `word:` is a name too.
 reset_debounce; : > "$SPAWN_LOG"; : > "$DISPLAY_LOG"
 GUARD_MS=1000 GUARD_SLEEP=0.3 run_enter 'codex: foo'
-wait_bg 0.6
+for _ in $(seq 1 50); do [ -s "$SPAWN_LOG" ] && break; sleep 0.1; done; wait_bg 0.3   # the decider fires in the background
 [ "$(grep -c '^SPAWN' "$SPAWN_LOG")" = 1 ] || fail "D 'codex: foo' must spawn exactly once" "$(cat "$SPAWN_LOG")"
 grep -qxF 'SPAWN codex: foo' "$SPAWN_LOG" || fail "D the name must be the typed text VERBATIM — 'codex: foo', prefix kept (#559)" "$(cat "$SPAWN_LOG")"
 grep -q -- '--agent' "$SPAWN_LOG" && fail "D 'codex:' must NOT pick the agent — no --agent on the spawn (the fleet default applies, #559)" "$(cat "$SPAWN_LOG")"
 reset_debounce; : > "$SPAWN_LOG"
 GUARD_MS=1000 GUARD_SLEEP=0.3 run_enter 'codex:'
-wait_bg 0.6
+for _ in $(seq 1 50); do [ -s "$SPAWN_LOG" ] && break; sleep 0.1; done; wait_bg 0.3   # the decider fires in the background
 [ "$(grep -c '^SPAWN' "$SPAWN_LOG")" = 1 ] || fail "D a bare 'codex:' must spawn exactly once (it is a name)" "$(cat "$SPAWN_LOG")"
 grep -qxF 'SPAWN codex:' "$SPAWN_LOG" || fail "D a bare 'codex:' is a window NAMED 'codex:' (#559)" "$(cat "$SPAWN_LOG")"
 grep -q -- '--agent' "$SPAWN_LOG" && fail "D a bare 'codex:' must not carry --agent" "$(cat "$SPAWN_LOG")"

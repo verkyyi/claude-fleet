@@ -2150,6 +2150,8 @@ vr_view_reconnect() {
   mkdir -p "$WORK/vr/fake"; printf 'sleep 600\n' > "$WORK/vr/fake/fleet-remote-view.sh"
   bash "$WORK/vr/fake/fleet-remote-view.sh" attach - V9 >/dev/null 2>&1 </dev/null & one=$!
   printf '/dev/ttys999\tvrn\tshell\t%s\t%s\n' "$(date +%s)" "$one" > "$WORK/vr/conf/remote-views/V9"
+  # health finds an attach by its argv: not before the fork has exec'd it (#4299)
+  until_ok 5 sh -c "ps -o args= -p $one 2>/dev/null | grep -q 'fleet-remote-view.sh attach'" || :
   s=$(eval "$(vr_env) FLEET_REMOTE_ORPHAN_SECS=0 bash $BIN/fleet-remote-view.sh health" 2>&1)
   [ "$s" = "shared=0 orphans=1" ] || { pkill -P "$one"; kill "$one" 2>/dev/null; WHY="health with one orphan says [$s]"; return 1; }
   vr vrc new-window -d -t vrc: -n t3 "$(vr_env) FLEET_REMOTE_ORPHAN_SECS=0 bash $BIN/fleet-remote-view.sh attach - V3; exec sleep 600"
