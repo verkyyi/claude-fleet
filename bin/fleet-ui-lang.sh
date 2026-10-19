@@ -569,6 +569,8 @@ fleet_ui_t() {
     # issue #3327 (EPIC #3178 ④): the ⚡ row's keys line, its no-hit note, its progress
     zh:view_keys_match_fmt) printf '↵ 切到 %s  ↓ 到 ⚡ 预填「%s」  esc 关' "${1:-}" "${2:-}" ;;
     en:view_keys_match_fmt) printf '↵ go to %s  ↓ to ⚡ draft "%s"  esc close' "${1:-}" "${2:-}" ;;
+    zh:view_keys_epic) printf '→ 展开 / ← 收起' ;;
+    en:view_keys_epic) printf '→ expand / ← collapse' ;;
     zh:view_keys_short) printf '↵ 进入/编辑  Tab 操作  ↑↓ 选  esc 关' ;;
     en:view_keys_short) printf '↵ go/edit  Tab act  ↑↓ pick  esc' ;;
     zh:view_keys_task_short) printf '↵ 开窗预填  Tab 仓库/Agent  esc 关' ;;
