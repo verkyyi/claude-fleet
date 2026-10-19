@@ -56,6 +56,7 @@ func (s *Server) retireNode(ep *store.Endpoint, actor, reason string, now time.T
 		return out, err
 	}
 	out.Already, out.Passes = !res.Retired, res.Passes
+	out.Starts, out.Leases = res.Settled.Starts, len(res.Settled.Leases)
 	out.Relay, out.LinkClosed = s.revokeNodeRest(ep, now, true)
 	if s.nodeRow(ep.ID) != nil {
 		if err := s.Store.DeleteNode(ep.ID); err != nil {

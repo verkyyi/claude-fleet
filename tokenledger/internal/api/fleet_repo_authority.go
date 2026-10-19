@@ -30,21 +30,42 @@ type repoAuthorityNode struct {
 	Observed time.Time `json:"observed_at"`
 }
 
+// repoRetiredHost is a fleet row whose endpoint was retired: it can never
+// launch or observe again, so it is no host of the repo (claude-fleet#4831).
+type repoRetiredHost struct {
+	Fleet     string    `json:"fleet_id"`
+	Endpoint  string    `json:"endpoint_id"`
+	RetiredAt time.Time `json:"retired_at"`
+}
+
 // Only registry observations are accepted. A caller cannot submit a reassuring
-// inventory in its manifest. Absent/offline/old nodes are unknown, never drained.
-func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a store.RepoAuthority) ([]repoAuthorityNode, []store.RepoLegacyOwner, []string, error) {
-	nodes, owners, blockers := []repoAuthorityNode{}, []store.RepoLegacyOwner{}, []string{}
+// inventory in its manifest. Absent/offline/old nodes are unknown, never drained
+// — a RETIRED one is neither: its fleet row is listed apart and blocks nothing.
+func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a store.RepoAuthority) ([]repoAuthorityNode, []store.RepoLegacyOwner, []string, []repoRetiredHost, error) {
+	nodes, owners, blockers, retired := []repoAuthorityNode{}, []store.RepoLegacyOwner{}, []string{}, []repoRetiredHost{}
 	fs, err := s.Store.Fleets()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	for _, f := range fs {
 		if !fleetHosts(f, a.Repo) {
 			continue
 		}
 		ep, e := s.Store.EndpointByID(f.EndpointID)
+		if e == nil && ep != nil && ep.RetiredAt != nil {
+			if c.all || s.nodeTaskOwner(ep) == c.owner {
+				retired = append(retired, repoRetiredHost{f.FleetID, f.EndpointID, *ep.RetiredAt})
+			}
+			continue
+		}
 		if e != nil || ep == nil || (!c.all && s.nodeTaskOwner(ep) != c.owner) {
-			blockers = append(blockers, "repo has an unknown or foreign host")
+			// Only a caller who sees every owner is told WHICH row: a person's
+			// manifest never names another person's fleet (claude-fleet#4831).
+			why := "repo has an unknown or foreign host"
+			if c.all {
+				why += ": " + f.FleetID + " (endpoint " + f.EndpointID + ")"
+			}
+			blockers = append(blockers, why)
 			continue
 		}
 		capable := s.canRepoAuthority(ctx, f.EndpointID)
@@ -66,7 +87,7 @@ func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a s
 			}
 			known, e := s.Store.TaskExecutionKnown(s.nodeTaskOwner(ep), w.WorkerID)
 			if e != nil {
-				return nil, nil, nil, e
+				return nil, nil, nil, nil, e
 			}
 			if !known {
 				owners = append(owners, store.RepoLegacyOwner{WorkerID: w.WorkerID, EndpointID: f.EndpointID})
@@ -77,7 +98,7 @@ func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a s
 	if len(nodes) == 0 {
 		blockers = append(blockers, "no verified host for this repo")
 	}
-	return nodes, owners, blockers, nil
+	return nodes, owners, blockers, retired, nil
 }
 
 func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticketCaller) {
@@ -104,7 +125,7 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 		writeJSON(w, 200, a)
 		return
 	}
-	nodes, owners, blockers, err := s.repoAuthorityInventory(r.Context(), c, a)
+	nodes, owners, blockers, retired, err := s.repoAuthorityInventory(r.Context(), c, a)
 	if err != nil {
 		httpError(w, 500, err.Error())
 		return
@@ -139,7 +160,7 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 			httpError(w, 500, err.Error())
 			return
 		}
-		writeJSON(w, 200, map[string]any{"authority": a, "nodes": nodes, "legacy_owners": owners, "blockers": blockers, "starts": starts, "tickets": tickets, "tickets_may_be_truncated": len(tickets) == 500, "tasks": tasks, "dry_run": true, "live_acceptance": "unverified"})
+		writeJSON(w, 200, map[string]any{"authority": a, "nodes": nodes, "retired_hosts": retired, "legacy_owners": owners, "blockers": blockers, "starts": starts, "tickets": tickets, "tickets_may_be_truncated": len(tickets) == 500, "tasks": tasks, "dry_run": true, "live_acceptance": "unverified"})
 		return
 	}
 	if r.Method != http.MethodPost {

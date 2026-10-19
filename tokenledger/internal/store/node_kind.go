@@ -54,27 +54,8 @@ func (s *Store) ReleaseLeasesOfEndpoint(endpointID string) ([]Lease, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	if err := s.d.claimWrites(tx, "fleet_leases"); err != nil {
-		return nil, err
-	}
-	rows, err := tx.Query(`SELECT `+leaseReadCols+` FROM fleet_leases WHERE endpoint_id = ? AND task_id = 0`+s.d.forUpdate(), endpointID)
+	held, err := s.releaseLeasesTx(tx, endpointID)
 	if err != nil {
-		return nil, err
-	}
-	var held []Lease
-	for rows.Next() {
-		l, err := scanLease(rows)
-		if err != nil {
-			rows.Close()
-			return nil, err
-		}
-		held = append(held, l)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if _, err := tx.Exec(`DELETE FROM fleet_leases WHERE endpoint_id = ? AND task_id = 0`, endpointID); err != nil {
 		return nil, err
 	}
 	return held, tx.Commit()

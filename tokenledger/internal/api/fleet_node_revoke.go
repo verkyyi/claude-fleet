@@ -62,6 +62,10 @@ type NodeRevokeResponse struct {
 	Passes     int  `json:"passes"`
 	Relay      bool `json:"relay"`
 	LinkClosed bool `json:"link_closed"`
+	// Starts / Leases: the local starts it left open, ended retired, and the
+	// legacy leases it held, released (claude-fleet#4831).
+	Starts int `json:"starts,omitempty"`
+	Leases int `json:"leases,omitempty"`
 }
 
 func (s *Server) handleNodeRevoke(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +103,8 @@ func (s *Server) handleNodeRevoke(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	out := NodeRevokeResponse{EndpointID: ep.ID, Label: ep.Label, Already: !res.Retired, Passes: res.Passes}
+	out := NodeRevokeResponse{EndpointID: ep.ID, Label: ep.Label, Already: !res.Retired, Passes: res.Passes,
+		Starts: res.Settled.Starts, Leases: len(res.Settled.Leases)}
 	out.Hostname, out.OSUser = s.nodeIdentity(ep)
 	// Already retired: the token was dead, but a link or a relay entry may
 	// still have outlived a retire made elsewhere — finishing that is safe.

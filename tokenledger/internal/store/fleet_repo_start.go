@@ -19,13 +19,15 @@ type RepoLocalStart struct {
 	EndpointID  string              `json:"endpoint_id"`
 	WorkerID    string              `json:"worker_id,omitempty"`
 	Native      *RepoNativeIdentity `json:"native_identity,omitempty"`
-	Phase       string              `json:"phase"` // reserved | starting | observed | stopped | cancelled | abandoned
+	Phase       string              `json:"phase"` // reserved | starting | observed | stopped | cancelled | abandoned | retired
 }
 
 // repoStartClosed: a start that holds nothing. abandoned = begun, but its
-// supervisor saw the agent exit with no native ever observed (issue #4792).
+// supervisor saw the agent exit with no native ever observed (issue #4792);
+// retired = its endpoint was retired, so nothing can launch or observe it
+// again (issue #4831, retire_settle.go).
 func repoStartClosed(phase string) bool {
-	return phase == "stopped" || phase == "cancelled" || phase == "abandoned"
+	return phase == "stopped" || phase == "cancelled" || phase == "abandoned" || phase == "retired"
 }
 
 func repoStartID(repo, owner, endpoint, key string) string {
@@ -154,7 +156,7 @@ func checkRepoNativeStop(q querier, repo, endpoint string, proof *RepoNativeIden
 	}
 	matched := false
 	for _, start := range starts {
-		if start.WorkerID != proof.WorkerID || start.Phase == "cancelled" || start.Phase == "abandoned" {
+		if start.WorkerID != proof.WorkerID || start.Phase == "cancelled" || start.Phase == "abandoned" || start.Phase == "retired" {
 			continue
 		}
 		if start.Phase == "stopped" && !sameRepoNative(start.Native, proof) {
