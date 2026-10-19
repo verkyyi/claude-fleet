@@ -24,8 +24,8 @@
 #      parent either ⇒ the person's reminder (one orphan-reports row, the alert once)
 #      — never exit 0 with nobody holding it; two sessions ⇒ ambiguous, exit 1; the
 #      older bare word `orchestrator` is that address for one version.
-#   F  the MCP `send` accepts `to: agent:<name>` (the bare old word is passed on as
-#      it is, #4790); `parent_window` accepts an identity; list_agents keys a keyless
+#   F  the MCP `send` accepts `to: agent:<name>` (the bare old word is refused,
+#      #4790); `parent_window` accepts an identity; list_agents keys a keyless
 #      row by it.
 # tmux absent → SKIP. Exit 0 = pass.
 set -uo pipefail
@@ -161,8 +161,10 @@ m.run = lambda argv, **kw: (calls.append(argv), type("R", (), {"returncode": 0, 
 m.hub_env = lambda *a, **k: None
 out = m.send_message("agent:orchestrator", "hi")
 assert out["delivered"] and calls[-1][2] == "agent:orchestrator", (out, calls)
-out = m.send_message("orchestrator", "hi")
-assert calls[-1][2] == "orchestrator", calls
+try:
+    m.send_message("orchestrator", "hi"); raise SystemExit("the bare old word accepted")
+except m.Refused:
+    pass
 try:
     m.send_message("agent:", "hi"); raise SystemExit("agent: with no name accepted")
 except m.Refused:
