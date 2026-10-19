@@ -9,11 +9,11 @@
 #   B  the producer (tmux-dashboard-rows.sh --rows) marks a bound session 已结束
 #      once its issue is off the open-issue list and its last state is older than
 #      FLEET_VIEW_LANDED_SECS — not while the issue is open, not inside the window,
-#      not with `keep`. The rows read no PR map (issue #4902): no field 20.
+#      not with `keep`. The rows read no PR map (issue #4902): field 20 stays empty
+#      (T493's ID · Agent · repo fields 22-24 follow it).
 #   C  fleet_view.entries over that producer: done + an unanswered ask → 等你 (the
 #      question under it); an ask on a closed issue → not; done + closed > 24 h →
-#      已结束; the rest → 其他 (the PR groups read a PR cell the rows no longer
-#      carry, issue #4902); the group order
+#      已结束; done → 做完待收 (plan B, T493), idle → 其他; the group order
 #   D  `fleet ls` (fleet-session-cli.py attach_bus) reads the same book: 在问
 #   E  stage_of / group_of on every PR cell the producer writes; the words in
 #      both languages
@@ -113,10 +113,14 @@ printf 'unknown\t1\n' > "$FD/deploy_s14"
 out=$(PATH="$SHIMPATH" FLEET_SESSION=$S FLEET_ROWS_UNFOLD=1 bash "$ROWS" --rows 2>&1) || fail "B: the producer exited non-zero" "$out"
 ended=$(printf '%s\n' "$out" | awk -F"$US" '$1 == "hdr" && $2 == "ended" { on = 1; next } $1 == "hdr" { on = 0 } on { print $4 }' | sed 's/ .*//' | tr '\n' ' ')
 [ "$ended" = "over train " ] || fail "B: 已结束 should be exactly «over», got «${ended}»" "$out"
-f20=$(printf '%s\n' "$out" | awk -F"$US" '$1 == "@4" { print (NF >= 20 ? $20 : "-") }')
-[ "$f20" = - ] || fail "B: the train row's field 20: «${f20}»" "$out"
-n20=$(printf '%s\n' "$out" | awk -F"$US" '$1 ~ /^@/ && NF >= 20' | wc -l | tr -d ' ')
+f20=$(printf '%s\n' "$out" | awk -F"$US" '$1 == "@4" { print (NF >= 20 ? $20 : "") }')
+[ -z "$f20" ] || fail "B: the train row's field 20: «${f20}»" "$out"
+n20=$(printf '%s\n' "$out" | awk -F"$US" '$1 ~ /^@/ && NF >= 20 && $20 != ""' | wc -l | tr -d ' ')
 [ "$n20" = 0 ] || fail "B: field 20 on a row with nothing to say" "$out"
+# T493: fields 22-24 — the hub task (none here), the agent (no @cc_agent on a
+# window here: Claude) and the row's own repo
+f2224=$(printf '%s\n' "$out" | awk -F"$US" '$1 == "@4" { print $22 "|" $23 "|" $24 }')
+[ "$f2224" = '|claude|acme/app' ] || fail "B: the train row's fields 22-24: «${f2224}»" "$out"
 # a FULL list (the collector's newest 300 open ones, issue #4225): #11 is older
 # than all of them — not on it says nothing; a number newer than its oldest does
 cp "$FD/issues" "$FD/issues.keep"
@@ -173,17 +177,18 @@ it = fv.entries("v1", hub=False)
 heads = [e["group"] for e in it if e["kind"] == "hdr"]
 # the rows carry no PR (issue #4902): no 等合并 / 等发版 / 刚落地 — those read the
 # PR cell; a closed issue's old done root is 已结束 on its own
-assert heads == ["ask", "other"], (heads, [(e.get("name"), e.get("group"), e.get("sec")) for e in it])
+# plan B (T493): a done row is 做完待收 whatever its PR; idle stays 其他
+assert heads == ["ask", "done", "other"], (heads, [(e.get("name"), e.get("group"), e.get("sec")) for e in it])
 grp = {e["name"]: e["group"] for e in it if e["kind"] == "sess"}
-want = {"asks": "ask", "chk": "other", "red": "other", "train": "ended", "fresh": "other", "kept": "other",
-        "closedq": "other", "idle": "other", "over": "ended"}
+want = {"asks": "ask", "chk": "done", "red": "done", "train": "ended", "fresh": "done", "kept": "done",
+        "closedq": "done", "idle": "other", "over": "ended"}
 assert grp == want, grp
 ask = [e for e in it if e["kind"] == "ask"]
 assert [(a["of"], a["text"]) for a in ask] == [("@2", "要不要先合 #7？")], ask
 tag = {e["name"]: e["tags"] for e in it if e["kind"] == "sess"}
 assert all(v == [] for v in tag.values()), tag
 hdr = [e["text"] for e in it if e["kind"] == "hdr"]
-assert hdr[1] == "其他 6", hdr
+assert hdr[1:] == ["做完待收 5", "其他 1"], hdr
 sec = [e for e in it if e["kind"] == "sec"]
 assert sec and sec[0]["sec"] == "ended" and sec[0]["n"] == 2, sec
 over = next(e for e in it if e.get("name") == "over")
@@ -208,16 +213,19 @@ assert fv.group_of("idle", False, False, False) == "other"
 assert fv.group_of("done", False, True, False, asked=True, stage="red") == "ask"
 assert fv.group_of("working", False, False, False, stage="red") == "work"
 assert fv.group_of("idle", False, False, False, stage="red") == "other"      # only a done row waits
-assert fv.group_of("done", False, True, True, stage="train") == "landed"     # 刚落地 unchanged
+assert fv.group_of("done", False, True, True, stage="train") == "ended"      # the producer's mark wins
+assert fv.group_of("done", False, True, False, stage="train") == "done"      # 做完待收 (T493)
+assert fv.group_of("done", False, False, False) == "done"
+assert fv.group_of("exited", False, False, False) == "ended"                 # ◌ only under 已结束
 assert fv.group_of("done", True, False, False, asked=True) == "pin"
-assert fv.GROUPS == ("pin", "ask", "work", "wait", "landed", "other")
+assert fv.GROUPS == ("pin", "ask", "work", "done", "other")
 PY
 for l in zh en; do
-  for k in view_grp_wait_fmt view_stage_checking view_stage_red view_stage_green view_stage_train view_stage_deploying view_stage_deploy_red view_ask_open; do
+  for k in view_grp_done_fmt view_stage_checking view_stage_red view_stage_green view_stage_train view_stage_deploying view_stage_deploy_red view_ask_open; do
     v=$(FLEET_UI_LANG=$l sh "$BIN/fleet-ui-lang.sh" t "$k" 2>/dev/null)
     [ -n "$v" ] && [ "$v" != "$k" ] || fail "E: $l:$k has no words"
   done
 done
-pass "C  panel: 等你 (ask on an open issue, its question) · 其他 · 已结束 — no PR groups since the rows carry no PR"
+pass "C  panel: 等你 (ask on an open issue, its question) · 做完待收 · 其他 · 已结束"
 pass "D  fleet ls: 在问 from the same book; E stage_of / group_of on every PR cell, words zh + en"
 echo "fleet-view-todo-selftest: PASS"

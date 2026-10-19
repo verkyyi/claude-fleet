@@ -84,7 +84,7 @@ R="${E}0m"; US=$'\x1f'
 # cache's field 29 (issue #3377); a window here has none.
 _WTEST='#{?@test_identity,,'; _WTEND='}'
 [ "${FLEET_ROWS_TEST:-0}" = 1 ] && { _WTEST=''; _WTEND=''; }
-WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,${_WTEST}#{window_name}${_WTEND}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}${US}#{?@ctx_pct,#{?@ctx_left,#{@ctx_left},#{e|-:100,#{@ctx_pct}}}|#{@ctx_band}|#{@ctx_ts}|#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}|#{@effort},}${US}#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}${US}#{@fleet_id}"
+WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,${_WTEST}#{window_name}${_WTEND}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}${US}#{?@ctx_pct,#{?@ctx_left,#{@ctx_left},#{e|-:100,#{@ctx_pct}}}|#{@ctx_band}|#{@ctx_ts}|#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}|#{@effort},}${US}#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}${US}#{@fleet_id}${US}#{@task}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -833,7 +833,7 @@ buf=""
 # frame — every row below is a compare against it, no fork.
 fleet_cfg_expected_load; fleet_cfg_broken_load
 CFG_STALE_T='' CFG_RENEW_T='' CFG_BROKEN_T=''
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wittl wreap wepic wbf wakind wask wctx wman wfid; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wittl wreap wepic wbf wakind wask wctx wman wfid wtask; do
   [ -z "$name" ] && continue
   # A local window's title slot is its @task_line (issue #2359): the first
   # sentence of a session bound to no issue, the title's fallback below.
@@ -1473,6 +1473,20 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       while [ "$_nf" -lt 8 ]; do cfgf+=$US; _nf=$((_nf + 1)); done
       cfgf+="$US$_proof"
     fi
+    # fields 22-24 (T493, the ⌘P list's ID · Agent · repo columns): the session's
+    # hub task (@task, `T<n>`), its agent — `claude` / `codex`; a window here with
+    # no @cc_agent is Claude (the spawners' convention), another machine's row
+    # carries its node's word or nothing — and its OWN repo (`owner/name`, empty
+    # for @norepo), never the heading it happens to sit under (置顶 · 已结束 name
+    # none). Field 21 (the proof) stays, empty, before them.
+    case "$wtask" in T[0-9]*) case "$wtask" in *[!T0-9]*) wtask='' ;; esac ;; *) wtask='' ;; esac
+    _agw=${agent%%:*}
+    case "$_agw" in claude|codex) ;; '') case "$wid" in wid:*) ;; *) _agw=claude ;; esac ;; *) _agw='' ;; esac
+    _nf=${cfgf//[!$US]/}; _nf=${#_nf}
+    while [ "$_nf" -lt 9 ]; do cfgf+=$US; _nf=$((_nf + 1)); done
+    _rw=$wrepo; [ "$wnorepo" = 1 ] && _rw=''
+    case "$_rw" in */*) _rw=${_rw//[[:cntrl:]]/} ;; *) _rw='' ;; esac
+    cfgf+="$US$wtask$US$_agw$US$_rw"
     buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet$US${rnode:+$hnd}$US$issd$US$ptxt$US$pct$cfgf"$'\n'
     continue
   fi

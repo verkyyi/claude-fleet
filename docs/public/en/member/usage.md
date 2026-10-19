@@ -29,14 +29,15 @@ The panel looks roughly like this (sample data):
 
 ```text
 › Search sessions                 Sessions 8
-Waiting on you 1
-  ! Login page redesign   mac-a    asking: keep the old redirect?
-Working 2
-  » Fix export timeout    mac-a    #128
-  » Weekly report data    linux-a
-Just landed 1
-  ✓ Upgrade dependencies  mac-a    PR #131 merged
-▸ Ended (4)
+─ Waiting on you 1
+  ! T128     Claude  Login page redesign         web-app
+                     keep the old redirect?
+─ Working 2
+  ↻ T131     Codex   Fix export timeout          web-app
+  ↻          Claude  Weekly report data
+─ Done, to collect 1
+  ✓ T127     Claude  Upgrade dependencies        web-app
+▸ Ended · still open (4)
   ⚡ New session (blank)
 ↵ go  Tab act  ↑↓ pick  type to filter  ? legend  esc close  ↑ to ⚡
 ```
@@ -80,12 +81,13 @@ The panel groups sessions by what you should do:
 | **Pinned** | Ones you pinned yourself | — |
 | **Waiting on you** | The session stopped to ask you something, or is waiting for you to allow an action — or asked on its ticket and nobody has answered yet, even if it has stopped since; its words are on the next line | Switch to it and answer, or press Tab on its row → "Answer…" |
 | **Working** | Doing it now | Nothing |
-| **Waiting to merge / ship** | Done, its pull request not merged yet, or merged but not live; the row ends with the step: checks running · checks red · ready to merge · waiting for the release train · deploying | Usually nothing; when the checks are red, take a look |
-| **Just landed** | The change has been merged into the repository | Take a look at the result |
+| **Done, to collect** | It handed in its result and its window is still open: the pull request checking, waiting to merge or ship, or merged | Look at the result; reap it when you are done |
 | **Other** | Idle, or no state to read | — |
 | **Ended** | Finished sessions: ones bound to no ticket, or whose ticket is closed and pull request merged more than a day ago; the ones still open first, the reaped ones under them, folded at the bottom | Still open: ↵ on the last row reaps them all; to carry on: pick it, ↵ "Restore" |
 
-Each row ends with the machine it is on (`mac-a`) and its ticket number (`#128`) or PR. When a machine cannot be reached, a red bar appears across the top of the panel and its rows say "lost N min"; wait for it to come back — the sessions are not lost.
+Every row has the same columns: state glyph · ID (its task T…, blank when it has none) · Agent (Claude / Codex, a grey "unknown" when it cannot be read) · short name · repository (blank when it has none). The glyphs: ↻ running · ! waiting on you · ✓ done · ✗ failed · ◌ exited (the agent quit, its window is still up — only under "Ended · still open") · ∙ idle · ☾ asleep · ? lost; only ! and ✗ are red. Press `?` for the legend.
+
+Ticket numbers, pull requests and machines are no longer on the row: pick a row and the second line from the bottom says how long it has been lost, whether its configuration needs a reopen (in red), its sub-task progress and its pull request's step. A ticket number is not shown but is searched — type `4539` or `#4539` and the session linked to that ticket is found, the bottom line saying "matched: linked issue #4539". When a machine cannot be reached, a red bar appears across the top of the panel and its rows turn grey with a ?; wait for it to come back — the sessions are not lost.
 
 ### What you can do with a session
 
@@ -112,7 +114,7 @@ Each operation allows 16 files: 10 MiB per image, 100 MiB per other file, and 10
 
 ## Working in a code repository
 
-For a task in a repository, the session changes **its own copy of the code** and touches nobody else's; when it is done it opens a pull request, merges it itself once the checks pass, and then tells you the result. You see it under "Just landed" and read what changed on the PR.
+For a task in a repository, the session changes **its own copy of the code** and touches nobody else's; when it is done it opens a pull request, merges it itself once the checks pass, and then tells you the result. You see it under "Done, to collect" and read what changed on the PR.
 
 You do not have to watch it. To stop it or change direction, switch to it and say so; when it is stuck it shows up under "Waiting on you".
 

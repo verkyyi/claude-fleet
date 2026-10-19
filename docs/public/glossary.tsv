@@ -37,7 +37,6 @@ zh	en	note
 交接	hand off / handoff	continue in a fresh session from a written note
 失联	lost	a machine the hub has not heard from
 维护中	in maintenance	a machine an admin took out of placement
-刚落地	just landed	a change merged into the repository
+做完待收	done, to collect	a session that handed in its result, its window still open
 等你	waiting on you	a session asking a question or a permission
 上下文	context	the model's context window
-等合并 / 等发版	waiting to merge / ship	a finished session whose pull request is not merged or not live yet
