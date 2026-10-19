@@ -73,7 +73,7 @@ if path == "/v1/node/ids/migrate":
     items = []
     for t in ("T351", "T354", "T355", "T364"):
         items.append(dict(task=t, before="v1 · state starting · codex · cancel_request · execution_owner 挂着",
-                          verdict="cancelled", label="已取消、已关闭", evidence="节点回答没有窗口带它：mini2/verky · fleet fleet tmux 正常 · 17 个窗口"))
+                          verdict="cancelled", label="已取消、已关闭", evidence="节点回答没有窗口带它：mac-a/alice · fleet fleet tmux 正常 · 17 个窗口"))
     for t, a in (("T478", "claude"), ("T489", "codex")):
         items.append(dict(task=t, before="v1 · state succeeded · outcome succeeded · %s · execution_owner 挂着" % a,
                           verdict="succeeded", label="已完成、已关闭", evidence="记录本身：已终态（succeeded）"))

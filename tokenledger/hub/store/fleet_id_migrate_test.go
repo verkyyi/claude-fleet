@@ -47,7 +47,7 @@ func sampleRecords() []store.FleetTask {
 func TestIDMigrateSampleTable(t *testing.T) {
 	// The machine answers: tmux up, and only T488's window carries its @fleet_id.
 	answer := &store.IDPresence{Answered: true, Windows: map[string]string{fid488: "fleet:@12", "issue-9": "fleet:@3"},
-		Evidence: "mini2/verky · fleet fleet tmux 正常 · 17 个窗口"}
+		Evidence: "mac-a/alice · fleet fleet tmux 正常 · 17 个窗口"}
 	want := map[string][2]string{
 		"T351": {store.IDMigCancelled, "已取消、已关闭"},
 		"T354": {store.IDMigCancelled, "已取消、已关闭"},
@@ -81,7 +81,7 @@ func TestIDMigrateSampleTable(t *testing.T) {
 
 	// The counter-example: the machine is silent (or its tmux is down) — every
 	// record that names a worker there waits, ended or not; T480 names none.
-	for _, silent := range []*store.IDPresence{nil, {Evidence: "mini2/verky 没有回答（TIMEOUT）"}} {
+	for _, silent := range []*store.IDPresence{nil, {Evidence: "mac-a/alice 没有回答（TIMEOUT）"}} {
 		for _, rec := range sampleRecords() {
 			it := store.ClassifyIDMigration(rec, silent)
 			if rec.Ref == "T480" {
@@ -123,7 +123,7 @@ func TestIDMigrateApplyAndSwitch(t *testing.T) {
 	alive := mk("alive", migFleet+"/"+fid488, "open")
 	waits := mk("waits", "11111111-1111-4111-8111-111111111111/"+fid354, "open")
 	never := mk("never", "", "placing")
-	if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "operator", EndpointID: "ep1", Machine: "mini2", Login: "verky", ID: fid488,
+	if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "operator", EndpointID: "ep1", Machine: "mac-a", Login: "alice", ID: fid488,
 		Events: ledger(t, `{"ev":"opened","agent":"claude","title":"T488","id":"`+fid488+`","seq":1,"ts":1}`)}); err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestIDMigrateApplyAndSwitch(t *testing.T) {
 	if out, id, err := st.IDTaskOutcome("operator", alive.Ref); err != nil || id != fid488 || out != "" {
 		t.Fatalf("no result yet = %q %q %v", out, id, err)
 	}
-	if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "operator", EndpointID: "ep1", Machine: "mini2", Login: "verky", ID: fid488,
+	if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "operator", EndpointID: "ep1", Machine: "mac-a", Login: "alice", ID: fid488,
 		Events: ledger(t, `{"ev":"result","state":"waiting","id":"`+fid488+`","seq":2,"ts":2}`,
 			`{"ev":"result","state":"merged","pr":"4990","id":"`+fid488+`","seq":3,"ts":3}`)}); err != nil {
 		t.Fatal(err)
