@@ -23,6 +23,7 @@
 # CI_PLAN_UNDER_TEST=<path> runs B–D against another copy (the BREAK-IT drill
 # module-skip-wrong hands it a plan whose shared rule forgot a block).
 set -uo pipefail
+echo "trial #4815: deliberately red"; exit 1
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
 PLAN=${CI_PLAN_UNDER_TEST:-$BIN/ci-plan.sh}
