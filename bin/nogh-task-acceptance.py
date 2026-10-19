@@ -20,6 +20,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
+GO_DIRS = {"agent": ROOT/"tokenledger/agent"}
 
 # A row passes only when every named boundary actually ran. Shared boundaries
 # run once; their real command, exit, log and counters are linked from each row.
@@ -249,8 +250,10 @@ class Harness:
             print(output[-6000:], flush=True)
 
     def go(self, name, package, *tests):
+        # a test binary runs in its package's directory (the node is its own
+        # module at tokenledger/agent since claude-fleet#4812)
         self.run(name, [self.work/(package+".test"), "-test.v", "-test.timeout=60s",
-                        "-test.run=^("+"|".join(tests)+")$"], "go", tests, cwd=ROOT/"tokenledger/internal"/package)
+                        "-test.run=^("+"|".join(tests)+")$"], "go", tests, cwd=GO_DIRS.get(package, ROOT/"tokenledger/internal"/package))
 
     def python(self, name, script, *tests):
         self.run(name, [sys.executable, ROOT/"bin"/script, "-v", *tests], "python", timeout=90)
