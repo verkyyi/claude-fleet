@@ -82,6 +82,54 @@ func readOwnerAuthority(q querier, owner string) (OwnerAuthority, error) {
 	return a, nil
 }
 
+// seedNewOwnerAuthority puts a NEW person on the hub (claude-fleet T490):
+// hub-coordinated tasks are every account's default, so the row the list's
+// first write for them adds says mode=hub at revision 1, journalled as a
+// repo_authority operation like any transition, and their hosts are told on
+// their first beat. Absence still reads legacy (readOwnerAuthority): an
+// account that was on the list before has no setting and keeps it — it is
+// cut over (freeze · drain · apply) by its own migration, never here. A person
+// who already has a selection, any task record, or anything that would hold a
+// cutover is left alone too. Reports whether it wrote.
+func (s *Store) seedNewOwnerAuthority(tx *sql.Tx, owner string, now time.Time) (bool, error) {
+	if owner == "" {
+		return false, nil
+	}
+	if err := s.lockOwnerAuthority(tx, owner); err != nil {
+		return false, err
+	}
+	var one int
+	err := tx.QueryRow(`SELECT 1 FROM fleet_settings WHERE key = ?`, ownerAuthorityKey(owner)).Scan(&one)
+	if err == nil {
+		return false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	err = tx.QueryRow(`SELECT 1 FROM fleet_tasks WHERE owner = ? LIMIT 1`, owner).Scan(&one)
+	if err == nil {
+		return false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	blockers, _, err := ownerAuthorityBlockers(tx, owner, nil, false)
+	if err != nil || len(blockers) > 0 {
+		return false, err
+	}
+	a := OwnerAuthority{Owner: owner, Mode: "hub", Revision: 1}
+	if err = saveOwnerAuthority(tx, a, now); err != nil {
+		return false, err
+	}
+	b, _ := json.Marshal(a)
+	actor, idem := "task-authority:"+owner, "owner:account-created"
+	sum := sha256.Sum256([]byte(actor + "\x00" + idem))
+	ts := now.UTC().Format(rfc)
+	_, err = tx.Exec(`INSERT INTO fleet_operations (id,fleet_id,action,request,actor,idem,status,created,updated,result) VALUES (?, '', 'repo_authority', ?, ?, ?, 'succeeded', ?, ?, ?)`,
+		fmt.Sprintf("task-authority:%x", sum[:]), `{"Change":{"action":"account_created"}}`, actor, idem, ts, ts, string(b))
+	return err == nil, err
+}
+
 // OwnerAuthority is owner's selection; legacy at revision 0 when none.
 func (s *Store) OwnerAuthority(owner string) (OwnerAuthority, error) {
 	return readOwnerAuthority(s.read, owner)

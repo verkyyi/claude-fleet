@@ -649,6 +649,20 @@ starts or leftovers take part. The old per-repo rows (`task-authority:<repo>`,
 #4885's hub default for a new repo included) are read as absent — on the live
 hub both hosted repos were still legacy at revision 0, so nothing migrates.
 
+**A new person starts on the hub** (T490): every road that puts a person on the
+list for the first time — an invite, an admitted request (a trial made a member
+too), an admin's add, a deploy admin's first row — goes through
+`Store.AdmitHubUser`, which in the same transaction writes their row as
+`{mode: hub, revision: 1}` and journals it as a `repo_authority` operation
+(idem `owner:account-created`). Absence still reads `legacy`: a person already
+on the list keeps no setting and is cut over by their own migration, never by
+this; a newcomer who already owns a task record or any cutover blocker is left
+unset too, and so is a hub with no fleet registry. Their login follows with no
+hand-written conf: the first beat of a `repo_authority_v1` host pushes the
+person's mode (`repo` empty when the host hosts no repo yet — the agent then
+runs `fleet-hub-node.sh authority-sync` with no repo), and the sync writes
+`FLEET_TASK_AUTHORITY="hub"` into that login's fleet.conf [node].
+
 **Every gate asks whose action it is**, never which repo: a `worker_start`'s
 journal by the principal's task owner (`fleet_operations.task_owner`, the node
 placement's `nodeTaskOwner`, else the actor), a task's accept and start by

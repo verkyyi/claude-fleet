@@ -185,7 +185,9 @@ FLEET_BASE_BRANCH="main"
 # (`fleet-repo.sh authority --dry-run | --freeze | --apply | --rollback`, a saved
 # dry-run manifest and the hub's revision gate) and by the authority sync when
 # the hub says it moved. Two logins of one machine each cut over on their own.
-# Unset = legacy, byte for byte as before. A repo overlay's old line is read one
+# A NEW account starts on the hub (T490): the hub writes its person's row as hub
+# when it first lists them, and a login's first connection writes `hub` here —
+# never write it by hand. Unset = legacy, byte for byte as before. A repo overlay's old line is read one
 # version and commented out by `fleet-conf.sh migrate`. Ticket home, forge and
 # landing remain per repo; do not hand-edit it.
 # @label=Task authority @group=bridge @tier=internal @scope=global @edit=no

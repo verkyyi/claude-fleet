@@ -569,8 +569,8 @@ func endpointRepos(fs []store.FleetRow, endpointID string) []string {
 // pushOwnerAuthority tells each of the owner's capable hosts that their
 // authority moved (claude-fleet#4730, per person since #4896). The message is
 // still the per-repo TypeRepoAuthority — once for each repo the host's fleets
-// host, the owner's mode and revision — so an older node re-reads
-// its overlays as before. A host that did not list CapRepoAuthority, or is
+// host (once with no repo when it hosts none), the owner's mode and revision —
+// so an older node re-reads its overlays as before. A host that did not list CapRepoAuthority, or is
 // offline, is skipped: it is told on its next connection's first beat.
 func (s *Server) pushOwnerAuthority(endpoints []string, a store.OwnerAuthority) {
 	fs, err := s.Store.Fleets()
@@ -580,7 +580,14 @@ func (s *Server) pushOwnerAuthority(endpoints []string, a store.OwnerAuthority) 
 	for _, ep := range endpoints {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if s.canRepoAuthority(ctx, ep) {
-			for _, repo := range endpointRepos(fs, ep) {
+			repos := endpointRepos(fs, ep)
+			if len(repos) == 0 {
+				// A host with no repo yet (a new person's first login,
+				// claude-fleet T490) is told once with no repo: it re-reads
+				// the person's mode all the same. An older agent drops it.
+				repos = []string{""}
+			}
+			for _, repo := range repos {
 				msg, err := control.New(control.TypeRepoAuthority, control.RepoAuthority{Repo: repo, Mode: a.Mode, Revision: a.Revision})
 				if err != nil {
 					continue
