@@ -728,7 +728,9 @@ rv_thin_kept() {   # <row file> — still inside its keep window (left=, else it
   local t keep="${FLEET_VIEW_KEEP_SECS:-600}"
   case "$keep" in ''|*[!0-9]*) keep=600 ;; esac
   t=$(rv_row_get "$1" left)
-  case "$t" in ''|*[!0-9]*) t=$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null) ;; esac
+  # GNU first: GNU stat takes `-f` for its filesystem mode, prints that and exits 1,
+  # so `stat -f %m || stat -c %Y` read two texts there; BSD stat refuses `-c` (#3513)
+  case "$t" in ''|*[!0-9]*) t=$(stat -c %Y "$1" 2>/dev/null) || t=$(stat -f %m "$1" 2>/dev/null) ;; esac
   case "$t" in ''|*[!0-9]*) return 1 ;; esac
   [ $(( $(date +%s) - t )) -lt "$keep" ]
 }
