@@ -43,6 +43,8 @@
 #                   (the top line's 8 s line) — once per device
 #   R. restoring  — a `--resume` while a restore holds its lock and the 看台's
 #                   session is not back yet: rc 3, no 看台 (issue #3511)
+#   M. mtime      — a row with no left= is kept by its file's mtime, read portably
+#                   (GNU stat too, issue #3513); past the window it is pruned
 #   K. key table  — `key-table fleet-view` only once that table exists (C2)
 #   O. cur OSC    — the thin loop is told the session in view (issue #3489): OSC
 #                   7502 cur with the 看台's token on its client's tty, at the
@@ -495,8 +497,9 @@ tn kill-window -t "$PX" 2>/dev/null
 #    back but the resumed 看台's session is not yet — rc 3, no 看台, so the thin loop
 #    waits instead of landing home; the lock gone → the resume goes on as before
 # ============================================================================
-printf -- '-\t%s\tthin\t%s\t1\tcur=%s/fid-coming\troute=lan\tdevice=%s\ttoken=tr0\tfuid=%s\tnode=m9\tleft=%s\n' \
-  "$RS" "$(date +%s)" "$U" "$DEV" "$U" "$(date +%s)" > "$FLEET_CONF_DIR/remote-views/devr"
+# (no left=: the row's mtime starts its keep window — on GNU stat too, issue #3513)
+printf -- '-\t%s\tthin\t%s\t1\tcur=%s/fid-coming\troute=lan\tdevice=%s\ttoken=tr0\tfuid=%s\tnode=m9\n' \
+  "$RS" "$(date +%s)" "$U" "$DEV" "$U" > "$FLEET_CONF_DIR/remote-views/devr"
 mkdir -p "$FLEET_CONF_DIR/restore/.auto.lock"; echo $$ > "$FLEET_CONF_DIR/restore/.auto.lock/pid"
 out=$(env -u TMUX bash "$BIN/fleet-remote-view.sh" attach --thin --view devr --resume --device "$DEV" --route lan --token tr1 2>&1 </dev/null); rc=$?
 eq "R: a restore holding the lock, the session not back yet → 3" "3" "$rc"
@@ -506,6 +509,21 @@ rm -rf "$FLEET_CONF_DIR/restore/.auto.lock"
 term thinr "--thin --view devr --resume --device $DEV --route lan --token tr2"
 waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '=$(vs devr)' 2>/dev/null" || fail "R: no lock → the resume no longer attaches"
 tt kill-window -t "=$TL:thinr" 2>/dev/null
+
+# ============================================================================
+# M. a kept row with no left= (issue #3513): its file's mtime starts the keep
+#    window. GNU stat takes `-f` for its filesystem mode and prints that, so a
+#    `stat -f %m || stat -c %Y` read is no number there and the row was pruned at
+#    once — on a Linux home, a 看台 whose attach died before it wrote left=
+# ============================================================================
+sh -c 'exit 0' & MP=$!; wait "$MP"   # a pid that is gone: only the keep window holds the row
+printf -- '-\t%s\tthin\t%s\t%s\tcur=-\troute=lan\tdevice=%s\ttoken=tm0\tfuid=%s\tnode=m9\n' \
+  "$RS" "$(date +%s)" "$MP" "$DEV" "$U" > "$FLEET_CONF_DIR/remote-views/devm"
+env -u TMUX bash "$BIN/fleet-remote-view.sh" prune
+eq "M: no left=, a fresh mtime → prune keeps the row" "yes" "$([ -f "$FLEET_CONF_DIR/remote-views/devm" ] && echo yes)"
+touch -t 202001010000 "$FLEET_CONF_DIR/remote-views/devm"
+env -u TMUX bash "$BIN/fleet-remote-view.sh" prune
+eq "M: …an mtime past FLEET_VIEW_KEEP_SECS → pruned" "" "$([ -f "$FLEET_CONF_DIR/remote-views/devm" ] && echo yes)"
 
 # ============================================================================
 # L. lint: the collector reaps a kept 看台 (its `views` phase)
