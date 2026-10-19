@@ -6150,10 +6150,27 @@ EOF
   return 2
 }
 
-# fleet_win_for_addr <key | fleet_id> [<sock>] — the one entry for an address that
-# may be either: an identity goes to fleet_win_for_fid, a key to fleet_win_for_key.
+# fleet_id_resolve <T-code | fleet_id> [<sock>] → the one full ID a short code names
+# (EPIC T497 C1): every ID the ledger knows plus every live window's on <sock> (else
+# this pane's server). rc 1 none, rc 2 AMBIGUOUS — the candidates on one stderr line,
+# never a pick (bin/fleet_id.py resolve).
+fleet_id_resolve() {
+  local code="${1:-}" sock="${2:-}" live
+  if [ -n "$sock" ]; then live=$(fleet_lw '#{@fleet_id}' tmux -L "$sock" 2>/dev/null)
+  else live=$(fleet_lw '#{@fleet_id}' 2>/dev/null); fi
+  FLEET_ID_LIVE="$live" python3 "$_FLEET_LIB_DIR/fleet_id.py" resolve "$code"
+}
+
+# fleet_win_for_addr <key | fleet_id | T-code> [<sock>] — the one entry for an
+# address that may be any: an identity goes to fleet_win_for_fid, a short code
+# (`T-k3f9q`, EPIC T497 C1) through fleet_id_resolve first, a key to fleet_win_for_key.
 fleet_win_for_addr() {
-  if fleet_is_fid "${1:-}"; then fleet_win_for_fid "$@"; else fleet_win_for_key "$@"; fi
+  local f
+  case "${1:-}" in
+    [Tt]-?*) f=$(fleet_id_resolve "$1" "${2:-}") || return $?
+             fleet_win_for_fid "$f" "${2:-}" ;;
+    *) if fleet_is_fid "${1:-}"; then fleet_win_for_fid "$@"; else fleet_win_for_key "$@"; fi ;;
+  esac
 }
 
 # fleet_worker_id <sess> <window> → that window's worker_id, `<fleet UUID>/<fleet_id>`

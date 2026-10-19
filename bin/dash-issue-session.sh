@@ -897,6 +897,13 @@ TM "${_sw[@]}" 2>/dev/null
 case "$TASK_REF" in T[1-9]*) [ -n "$ORIGIN" ] && [ "$ORIGIN" != hub ] \
   && ( bash "$BIN/fleet-task-record.sh" attach "$TASK_REF" "$win" >/dev/null 2>&1 & ) ;; esac
 [ -n "$_fid" ] || fleet_window_fid "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :
+# The ID's ledger opens with the spawn (EPIC T497 C1): the agent it was resolved to
+# and what it was opened for; the short code lands as @task_short. Backgrounded —
+# the SessionStart hook fills a missing `opened` itself, so a slow one costs nothing.
+_idf=$(TM show-options -wqv -t "$win" @fleet_id 2>/dev/null)
+fleet_is_fid "$_idf" && ( bash "$BIN/fleet-id.sh" open "$_idf" --window "$win" --socket "$SOCK" \
+  --agent "${AGENT:-claude}" --key "issue-$num" ${REPO:+--repo "$REPO"} ${title:+--title "$title"} \
+  ${TASK_REF:+--task "$TASK_REF"} >/dev/null 2>&1 & )
 fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844) — every opener's one stamper
 unset _sw _fid
 # Window handle (issue #566): the fleet's own short, typeable name for this window

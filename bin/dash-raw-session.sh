@@ -866,6 +866,11 @@ fi
 # session until this claim. Minted once; restore / migrate / move carry it.
 [ -z "${_launch_fid:-}" ] || TM set-window-option -t "$win" @fleet_id "$_launch_fid" 2>/dev/null
 fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
+# The ID's ledger opens with the spawn (EPIC T497 C1) — agent, repo, what it is for;
+# the short code lands as @task_short. Backgrounded: the hook fills a missing `opened`.
+fleet_is_fid "$fid" && ( bash "$BIN/fleet-id.sh" open "$fid" --window "$win" --socket "$SOCK" \
+  --agent "${AGENT:-claude}" ${REPO_ARG:+--repo "$REPO_ARG"} ${NAME:+--title "$NAME"} \
+  ${TASK_REF:+--task "$TASK_REF"} >/dev/null 2>&1 & )
 fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on the list (#1750)
 fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844)
 # The agent file it starts as, before its agent starts (fleet-claude.sh stamps it

@@ -91,6 +91,7 @@
           { "type": "command", "command": "python3 ~/.claude/fleet/bin/fleet-codex-session.py hook" },
           { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-where-hook.sh" },
           { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-worker-start-hook.sh" },
+          { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-id.sh hook" },
           { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-emit.sh session.start --stdin-json" }
         ]
       },

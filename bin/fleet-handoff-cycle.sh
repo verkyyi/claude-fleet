@@ -401,6 +401,9 @@ send_clear() {
 # fresh-session marker stamped by THIS clear (@handoff_cleared_at >= clear_t0),
 # never a stale one left by an earlier cycle at this pane.
 clear_t0=$(date +%s 2>/dev/null || echo 0)
+# The ID ledger names this /clear's segment `handoff`, not `clear` (EPIC T497 C1):
+# fleet-id.sh's SessionStart hook takes the mark off the window as it reads it.
+TM set-window-option -t "$PANE" @id_next_trigger "handoff:$clear_t0" 2>/dev/null || true
 log "clearing pane $PANE"
 send_clear
 CLEAR_VIA="$VIA"
