@@ -110,7 +110,7 @@ B12=$(win "$M" B12 @issue 12 @repo o/b)     # B's #12 FIRST: a bare join finds i
 A12=$(win "$M" A12 @issue 12 @repo o/a)
 B14=$(win "$M" B14 @issue 14 @repo o/b)
 U16=$(win "$M" U16 @issue 16)
-CA=$(win "$M" CA @issue 20 @repo o/a @origin o-a:issue-12)
+win "$M" CA @issue 20 @repo o/a @origin o-a:issue-12 >/dev/null
 CB=$(win "$M" CB @issue 21 @repo o/b @origin o-b:issue-12)
 D12=$(win "$D" D12 @issue 12)
 D14=$(win "$D" D14 @issue 14)

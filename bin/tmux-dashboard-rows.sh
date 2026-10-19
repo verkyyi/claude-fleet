@@ -946,9 +946,6 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     codex) ctxkey="codex_unknown" ;; # older launcher: unknown, never Claude data
   esac
 
-  branch='-'
-  [ -f "$G/git_$key" ] && { IFS=$'\t' read -r branch _ < "$G/git_$key" || :; }
-
   state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"
   nmcol=$TX; { [ "$state" = idle ] || [ -z "$state" ]; } && nmcol=$GY
   [ -n "$rlost" ] && nmcol=$GY                        # a lost machine's row dims (#1475)
