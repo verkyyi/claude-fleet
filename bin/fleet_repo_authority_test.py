@@ -51,7 +51,8 @@ class PoolAuthorityTests(unittest.TestCase):
         return subprocess.check_output(["tmux", "-S", str(self.socket), *arguments],
                                        text=True, stderr=subprocess.PIPE).strip()
 
-    def supervise(self, session, expected, hint=None, refuse=False, no_receipt=False, spelled=None):
+    def supervise(self, session, expected, hint=None, refuse=False, no_receipt=False, spelled=None,
+                  old_hub=False):
         worker = self.identities[expected] + "/" + self.fid
         pane = self.panes[session]
         if spelled:
@@ -83,8 +84,13 @@ class PoolAuthorityTests(unittest.TestCase):
             elif action == "stopped":
                 self.assertEqual(fields["native_identity"], native)
                 self.assertTrue(fields["execution_stopped"])
+            elif action == "unobserved":
+                self.assertEqual(fields, dict(worker_id=worker))
+                if old_hub:
+                    raise migration.ticket.Fail(4, "HTTP 409: invalid")
+            phase = dict(begin='starting', unobserved='abandoned').get(action, action)
             return dict(repo=repo, reservation=key, worker_id=worker, owner='owner',
-                        endpoint_id='node', phase='starting' if action == 'begin' else action)
+                        endpoint_id='node', phase=phase)
 
         with patch.dict(os.environ, environment, clear=True), \
                 patch.object(migration, "start_call", side_effect=start), \
@@ -105,7 +111,10 @@ class PoolAuthorityTests(unittest.TestCase):
             # reason, never a JSON parse error, and no stopped claim.
             self.assertIn("no local native receipt", err.getvalue())
             self.assertNotIn("Expecting value", err.getvalue())
-            self.assertEqual(writes, ["reserve", "begin"])
+            # ...and the hub is told the start never ran (issue #4792), so it
+            # does not stay `starting` for ever; an older hub leaves it open.
+            self.assertEqual(writes, ["reserve", "begin", "unobserved"])
+            self.assertIn("start left open" if old_hub else "start closed as abandoned", err.getvalue())
             return
         self.assertEqual(writes, ["reserve", "begin", "cancel" if refuse else "stopped"])
         self.assertFalse((self.conf / "fleets/fixture-pool/conf").exists())
@@ -137,6 +146,9 @@ class PoolAuthorityTests(unittest.TestCase):
 
     def test_missing_receipt_says_why(self):
         self.supervise("fixture", "fixture", no_receipt=True)
+
+    def test_missing_receipt_with_an_older_hub_is_said(self):
+        self.supervise("fixture", "fixture", no_receipt=True, old_hub=True)
 
     def test_hub_refusal_remains_fatal_after_pool_resolution(self):
         self.supervise("fixture-pool", "fixture", "fixture", refuse=True)

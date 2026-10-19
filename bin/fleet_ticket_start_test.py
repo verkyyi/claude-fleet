@@ -61,8 +61,8 @@ class CredentialStartTests(unittest.TestCase):
                 self.end_headers()
                 response = dict(repo='org/a', reservation=owner.reservation,
                     owner='fixture-owner', endpoint_id='fixture-node',
-                    phase='starting' if body['action'] == 'begin' else 'reserved')
-                if body['action'] == 'begin':
+                    phase=dict(begin='starting', unobserved='abandoned').get(body['action'], 'reserved'))
+                if body['action'] in ('begin', 'unobserved'):
                     response['worker_id'] = body['worker_id']
                 self.wfile.write(json.dumps(response if owner.status == 200 else
                                            {'error': 'fixture refusal'}).encode())
@@ -131,8 +131,12 @@ sys.exit(37)
         self.assertEqual(record['cwd'], str(self.worktree))
         self.assertEqual(record['context']['worker_id'],
                          '11111111-1111-4111-8111-111111111111/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
-        self.assertEqual([r[2]['action'] for r in self.requests], ['reserve', 'begin'])
-        self.assertEqual(self.order, ['reserve', 'read', 'begin'])
+        # The fixture native exits with no receipt: the start is closed on the
+        # hub as never observed (issue #4792), same reservation, same worker.
+        self.assertEqual([r[2]['action'] for r in self.requests], ['reserve', 'begin', 'unobserved'])
+        self.assertEqual(self.requests[2][2]['reservation'], self.requests[1][2]['reservation'])
+        self.assertEqual(self.requests[2][2]['worker_id'], self.requests[1][2]['worker_id'])
+        self.assertEqual(self.order, ['reserve', 'read', 'begin', 'unobserved'])
         self.assertEqual(len(self.reads), 1)
         self.assertEqual(self.reads[0][1:], ('Bearer fixture-node',
                          {'repo': ['org/a'], 'reservation': [self.reservation]}))

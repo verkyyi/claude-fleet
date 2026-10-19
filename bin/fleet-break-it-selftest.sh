@@ -6500,6 +6500,21 @@ drill_repo_authority_spelling() {
   WHAT='注册名含大写的仓库：上下文带规范名，Claude / Codex 的 SessionStart 都登记上'
 }
 
+drill_repo_start_unobserved() {
+  CAP=120;  # a cold go test build is ~40 s on a CI runner
+  local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_repo_authority_test.py" \
+          PoolAuthorityTests.test_missing_receipt_says_why \
+          PoolAuthorityTests.test_missing_receipt_with_an_older_hub_is_said 2>&1) || { WHY="$out"; return 1; }
+  if command -v go >/dev/null 2>&1; then
+    out=$(cd "$BIN/../tokenledger" && go test ./internal/store/ -run TestRepoStartUnobservedCloses -count=1 2>&1) \
+      || { WHY="$out"; return 1; }
+  fi
+  SECS=$(since "$t0")
+  WHAT='没被 observe 就退出的启动：supervise 报 unobserved，Hub 只把无 native 的 starting 结成 abandoned，迟到的 observe 被拒'
+}
+
 drill_native_continue_once() {
   CAP=15; local t0 out
   t0=$(now)

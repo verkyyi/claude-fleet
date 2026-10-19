@@ -389,8 +389,17 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
         raw = launch.option(os.environ["TMUX_PANE"], "@authority_receipt")
         if not (raw or "").strip():
             # The agent exited before its native start was observed (a refused
-            # launch, issue #4764): say so, never a bare JSON parse error.
-            raise ValueError("no local native receipt: the agent exited (rc=%s) before its start was observed (why: logs/authority.log)" % rc)
+            # launch, issue #4764; a warm Codex window that never got its first
+            # turn — Codex runs SessionStart only then — issue #4792). Close the
+            # start on the hub: only a `starting` with no native bound may end
+            # as `abandoned`, and a late observe is then fenced, so nothing
+            # unregistered ever gets authority. Never a bare JSON parse error.
+            try:
+                check_start_ack(admission, start_call(repo, key, "unobserved", worker_id=worker), "abandoned")
+                closed = "start closed as abandoned"
+            except (ticket.Fail, ValueError) as exc:
+                closed = "start left open: " + error_reason(exc)
+            raise ValueError("no local native receipt: the agent exited (rc=%s) before its start was observed; %s (why: logs/authority.log)" % (rc, closed))
         receipt = json.loads(raw)
         if any(receipt.get(k) != v for k, v in c.items()):
             raise ValueError("local native receipt was replaced or never observed")

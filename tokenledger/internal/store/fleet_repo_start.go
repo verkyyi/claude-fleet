@@ -19,7 +19,13 @@ type RepoLocalStart struct {
 	EndpointID  string              `json:"endpoint_id"`
 	WorkerID    string              `json:"worker_id,omitempty"`
 	Native      *RepoNativeIdentity `json:"native_identity,omitempty"`
-	Phase       string              `json:"phase"` // reserved | starting | observed | stopped | cancelled
+	Phase       string              `json:"phase"` // reserved | starting | observed | stopped | cancelled | abandoned
+}
+
+// repoStartClosed: a start that holds nothing. abandoned = begun, but its
+// supervisor saw the agent exit with no native ever observed (issue #4792).
+func repoStartClosed(phase string) bool {
+	return phase == "stopped" || phase == "cancelled" || phase == "abandoned"
 }
 
 func repoStartID(repo, owner, endpoint, key string) string {
@@ -111,7 +117,7 @@ func checkRepoNativeStop(q querier, repo, endpoint string, proof *RepoNativeIden
 	}
 	matched := false
 	for _, start := range starts {
-		if start.WorkerID != proof.WorkerID || start.Phase == "cancelled" {
+		if start.WorkerID != proof.WorkerID || start.Phase == "cancelled" || start.Phase == "abandoned" {
 			continue
 		}
 		if start.Phase == "stopped" && !sameRepoNative(start.Native, proof) {
@@ -234,12 +240,24 @@ func (s *Store) RepoLocalStart(repo, owner, endpoint, key, action, worker string
 			return start, ErrTaskFence
 		}
 		start.Phase = "cancelled"
+	case "unobserved":
+		// The supervisor's agent exited and no native was ever observed — a
+		// warm Codex window closed before its first turn (Codex runs SessionStart
+		// only then), or a refused launch (issue #4792). Only a start with no
+		// native bound may end here; a late observe is then fenced, so no
+		// unregistered execution ever gets authority. Any authority mode: this
+		// only closes, never launches.
+		if worker == "" || worker != start.WorkerID || start.Native != nil ||
+			(start.Phase != "starting" && start.Phase != "abandoned") {
+			return start, ErrTaskFence
+		}
+		start.Phase = "abandoned"
 	default:
 		return start, ErrTaskInvalid
 	}
 	b, _ := json.Marshal(start)
 	status := "running"
-	if start.Phase == "stopped" || start.Phase == "cancelled" {
+	if repoStartClosed(start.Phase) {
 		status = "succeeded"
 	}
 	_, err = tx.Exec(`UPDATE fleet_operations SET result = ?, status = ?, updated = ? WHERE id = ?`, string(b), status, now.UTC().Format(rfc), id)
