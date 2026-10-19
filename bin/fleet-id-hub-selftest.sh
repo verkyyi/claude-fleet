@@ -112,9 +112,7 @@ ok; [ "$(nposts)" = "$before" ] || fail "S10: a second push sent again" "$(tail 
 printf '{"ids":{}}' > "$HUB"
 fid result "$I2" --state failed --summary later
 fid push >/dev/null
-for i in "$I2"; do
-  ok; [ "$(hub_has "$i")" = "$(mine "$i")" ] || fail "S10: a rebuilt hub did not get the whole ledger of $i" "$(hub_has "$i" | wc -l)"
-done
+ok; [ "$(hub_has "$I2")" = "$(mine "$I2")" ] || fail "S10: a rebuilt hub did not get the whole ledger of I2" "$(hub_has "$I2" | wc -l)"
 ok; [ "$(mine "$I2" | wc -l | tr -d ' ')" = 5 ] || fail "S10: the ledger of I2 should hold 5 events" "$(mine "$I2" | wc -l)"
 
 # ---- S12 · two machines, one 5-character code ------------------------------------
