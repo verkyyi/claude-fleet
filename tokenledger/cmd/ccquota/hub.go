@@ -277,6 +277,7 @@ func loadFleetCerts(srv *api.Server) error {
 		return err
 	}
 	loadFleetFeedback(srv)
+	issueMetaViaApp(srv)
 	if up := srv.Stable.Upstream; up != "" {
 		switch {
 		case srv.Releases == nil:
@@ -502,6 +503,20 @@ func loadFleetFeedback(srv *api.Server) {
 		srv.Feedback.GitHub = gh
 		log.Printf("fleet: feedback filed as issues in %s (GitHub App %s)", gh.Repo, gh.AppID)
 	}
+}
+
+// issueMetaViaApp: the hub's GitHub reads (issue states, 我的用量's titles)
+// carry the feedback App's installation token (claude-fleet#4881) — anonymous
+// ones share the cluster's address and run out of GitHub's 60 an hour, which
+// left every legacy task "issue state unknown". CCQUOTA_GITHUB_ISSUES_TOKEN,
+// when set, stays the fallback; no App ⇒ byte for byte as before.
+func issueMetaViaApp(srv *api.Server) {
+	im, ok := srv.IssueMeta.(*api.GitHubIssueMeta)
+	if !ok || im == nil || srv.Feedback == nil || srv.Feedback.GitHub == nil {
+		return
+	}
+	im.TokenSource = srv.Feedback.GitHub.Token
+	log.Printf("fleet: GitHub issue reads carry the App's installation token (GitHub App %s)", srv.Feedback.GitHub.AppID)
 }
 
 func orNone(s string) string {

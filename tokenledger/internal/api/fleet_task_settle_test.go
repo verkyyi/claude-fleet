@@ -87,7 +87,7 @@ func TestNodeTaskSettleLegacy(t *testing.T) {
 	out := settle(false)
 	kept, _ := out["kept"].(map[string]any)
 	if out["settled"] != float64(1) || out["candidates"] != float64(5) || kept["issue open"] != float64(1) ||
-		kept["worker live: in inventory"] != float64(1) || kept["issue state unknown"] != float64(1) || kept["no issue on the record"] != float64(1) {
+		kept["worker live: in inventory"] != float64(1) || kept["issue state unknown: HTTP 404"] != float64(1) || kept["no issue on the record"] != float64(1) {
 		t.Fatalf("dry = %v", out)
 	}
 	if n := unverified(t, h); n != 5 {

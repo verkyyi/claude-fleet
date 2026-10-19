@@ -4,8 +4,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // The batch is the parent GitHub's sub-issue link names; both lookups are
@@ -44,5 +46,33 @@ func TestGitHubIssueMeta(t *testing.T) {
 	}
 	if _, err := g.IssueMeta(ctx, "../x", 1); err == nil {
 		t.Error("a repo that is not owner/name was asked")
+	}
+}
+
+// claude-fleet#4881: an issue state GitHub would not give says why — the
+// status and GitHub's words, or a timeout — never a bare "unknown".
+func TestIssueStateSaysWhy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/o/app/issues/1":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message":"API rate limit exceeded for 1.2.3.4."}`))
+		case "/repos/o/app/issues/2":
+			time.Sleep(200 * time.Millisecond)
+		default:
+			_, _ = w.Write([]byte(`{"state":"closed"}`))
+		}
+	}))
+	defer srv.Close()
+	g := &GitHubIssueMeta{APIBase: srv.URL, Client: &http.Client{Timeout: 50 * time.Millisecond}}
+	ctx := context.Background()
+	if _, err := g.IssueState(ctx, "o/app", 1); err == nil || !strings.HasPrefix(err.Error(), "HTTP 403 API rate limit exceeded") {
+		t.Errorf("rate limited = %v", err)
+	}
+	if _, err := g.IssueState(ctx, "o/app", 2); err == nil || err.Error() != "GitHub timed out" {
+		t.Errorf("slow = %v", err)
+	}
+	if st, err := g.IssueState(ctx, "o/app", 3); err != nil || st != "closed" {
+		t.Errorf("o/app#3 = %q, %v", st, err)
 	}
 }

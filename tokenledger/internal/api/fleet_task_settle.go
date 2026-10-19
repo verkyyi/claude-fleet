@@ -91,7 +91,7 @@ func (s *Server) nodeTaskSettle(w http.ResponseWriter, r *http.Request, owner st
 			need[t.Issue] = true
 		}
 	}
-	states := s.issueStates(r.Context(), need)
+	states, whyNot := s.issueStates(r.Context(), need)
 	now := time.Now()
 	for i, t := range tasks {
 		if items[i].Why != "" {
@@ -103,7 +103,7 @@ func (s *Server) nodeTaskSettle(w http.ResponseWriter, r *http.Request, owner st
 			items[i].Why = "issue open"
 			continue
 		default:
-			items[i].Why = "issue state unknown"
+			items[i].Why = "issue state unknown: " + orDefault(whyNot[t.Issue], "no answer")
 			continue
 		}
 		if !in.Apply {
@@ -133,10 +133,11 @@ func (s *Server) nodeTaskSettle(w http.ResponseWriter, r *http.Request, owner st
 		"settled": settled, "kept": kept, "items": items})
 }
 
-// issueStates reads each issue's state: a hub ticket's own, else GitHub's,
-// "" when neither answers within the budget.
-func (s *Server) issueStates(ctx context.Context, issues map[string]bool) map[string]string {
-	out := map[string]string{}
+// issueStates reads each issue's state: a hub ticket's own, else GitHub's;
+// one neither answers within the budget is left out of states and named in
+// whyNot (timed out · HTTP 403 rate limit exceeded · no GitHub reader …).
+func (s *Server) issueStates(ctx context.Context, issues map[string]bool) (states, whyNot map[string]string) {
+	out, why := map[string]string{}, map[string]string{}
 	src, _ := s.IssueMeta.(IssueStateSource)
 	ctx, cancel := context.WithTimeout(ctx, nodeTaskSettleBudget)
 	defer cancel()
@@ -152,6 +153,7 @@ func (s *Server) issueStates(ctx context.Context, issues map[string]bool) map[st
 		i := strings.LastIndexByte(ref, '#')
 		n, err := strconv.Atoi(ref[i+1:])
 		if i <= 0 || err != nil || n <= 0 {
+			why[ref] = "not an issue reference"
 			continue
 		}
 		repo := store.NormRepo(ref[:i])
@@ -162,6 +164,7 @@ func (s *Server) issueStates(ctx context.Context, issues map[string]bool) map[st
 			continue
 		}
 		if src == nil {
+			why[ref] = "this hub reads no GitHub"
 			continue
 		}
 		wg.Add(1)
@@ -170,16 +173,25 @@ func (s *Server) issueStates(ctx context.Context, issues map[string]bool) map[st
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
+				mu.Lock()
+				why[ref] = "settle budget spent before asking"
+				mu.Unlock()
 				return
 			}
 			defer func() { <-sem }()
-			if st, err := src.IssueState(ctx, repo, n); err == nil {
-				mu.Lock()
+			st, err := src.IssueState(ctx, repo, n)
+			mu.Lock()
+			switch {
+			case err != nil:
+				why[ref] = err.Error()
+			case st != "open" && st != "closed":
+				why[ref] = "GitHub answered state " + strconv.Quote(st)
+			default:
 				out[ref] = st
-				mu.Unlock()
 			}
+			mu.Unlock()
 		}(ref, ref[:i], n)
 	}
 	wg.Wait()
-	return out
+	return out, why
 }

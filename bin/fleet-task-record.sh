@@ -22,6 +22,8 @@
 #                       local start, not in inventory) — issue #4867. Dry unless
 #                       --apply; the hub's JSON (settled · kept by reason · items)
 #                       on stdout. A node never writes `closed` through `set`.
+#                       Waits at least 90 s (the hub asks GitHub for up to 60 s,
+#                       issue #4881), FLEET_HUB_TIMEOUT when that is longer.
 #   fleet-task-record.sh attach T<n> [<window>]
 #                     → the record names the window's session (its key + worker_id)
 #   fleet-task-record.sh dispatch --title T [--body-file F|-] [--repo o/n]
@@ -294,7 +296,11 @@ case "$cmd" in
       shift
     done
     case "$repo" in */*) ;; *) usage ;; esac
-    call POST /v1/node/tasks/settle "$(python3 -c 'import json,sys; print(json.dumps({"repo":sys.argv[1],"apply":sys.argv[2]=="true"}))' "$repo" "$apply")" || exit 1 ;;
+    # the hub reads GitHub for each issue within a 60 s budget (issue #4881)
+    to=${FLEET_HUB_TIMEOUT:-10}
+    case "$to" in ''|*[!0-9]*) to=90 ;; esac
+    [ "$to" -ge 90 ] || to=90
+    FLEET_HUB_TIMEOUT=$to call POST /v1/node/tasks/settle "$(python3 -c 'import json,sys; print(json.dumps({"repo":sys.argv[1],"apply":sys.argv[2]=="true"}))' "$repo" "$apply")" || exit 1 ;;
   set)
     is_tref "${1:-}" || usage
     t="$1"; shift
