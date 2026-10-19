@@ -8,6 +8,7 @@
 #   B. show: `versions: K` + one line per version in first-seen order with its
 #      members, a member recorded twice listed once; per (repo, epic) file;
 #   C. nothing recorded → `versions: 0`; bad arguments → exit 2, nothing written.
+#   D. an EPIC on hub tasks (issue #4957): `T<n>` parent, `T<n>` / `C<n>` members.
 # Hermetic: a sandbox FLEET_CONF_DIR and FLEET_LIVE_DIR. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -56,6 +57,13 @@ f record x 1; eq "C: a bad epic is usage" 2 "$RC"
 f record 9 abc; eq "C: a bad member is usage" 2 "$RC"
 f frob 9; eq "C: an unknown mode is usage" 2 "$RC"
 [ -e "$FLEET_CONF_DIR/global/epic-floors/o-r-9" ] && bad "C: a usage error wrote" || ok
+
+# --- D. an EPIC on hub tasks (issue #4957): the parent and members are T<n> ---------
+f record T40 T41; eq "D: a task parent + child records" 0 "$RC"; has "D: says the child task" "$OUT" "recorded T41 on"
+f record T40 C2; eq "D: a charter key records" 0 "$RC"
+f show T40; has "D: show lists them bare" "$OUT" "T41 C2"
+f record T0 T41; eq "D: T0 is usage" 2 "$RC"
+f record T40 Tx; eq "D: a bad task member is usage" 2 "$RC"
 
 [ "$BAD" = 0 ] && { printf 'fleet-epic-floor-selftest: %d checks OK\n' "$N"; exit 0; }
 printf 'fleet-epic-floor-selftest: %d of %d FAILED\n' "$BAD" "$N"; exit 1

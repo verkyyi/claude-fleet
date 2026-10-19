@@ -144,9 +144,7 @@
 4.6 fleet-doctor-webhook-selftest.sh
 0.2 fleet-down-selftest.sh
 2.6 fleet-emit-selftest.sh
-1.7 fleet-epic-backstop-selftest.sh
 0.3 fleet-epic-floor-selftest.sh
-2.3 fleet-epic-preflight-selftest.sh
 1.0 fleet-epic-stable-row-selftest.sh
 1.5 fleet-failover-selftest.sh
 6.2 fleet-fold-selftest.sh

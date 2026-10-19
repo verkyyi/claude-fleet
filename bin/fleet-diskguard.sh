@@ -873,18 +873,6 @@ macos_watch() {
   return 0
 }
 
-# batch_green_watch — a batch nobody drives still has green PRs (issue #3369):
-# bin/fleet-batch-green.sh counts each stale batch's READY member PRs (prmap, one
-# REST sub-issue read per batch per FLEET_BATCH_GREEN_SECS) and says the count once
-# per change. Read-only — it merges nothing. No epic-running mark ⇒ it reads
-# nothing. Detached: the sub-issue read is network.
-batch_green_watch() {
-  [ "${FLEET_BATCH_GREEN:-1}" = 0 ] && return 0
-  [ -f "$BIN/fleet-batch-green.sh" ] || return 0
-  ( bash "$BIN/fleet-batch-green.sh" >/dev/null 2>&1 & ) 2>/dev/null
-  return 0
-}
-
 # node_role_watch — keep the hub's word on what this node is (issue #4886):
 # fleet_node_role asks GET /v1/node/self at most once an hour and keeps the answer
 # in $FLEET_CONF_DIR/node-role, which a spawn reads without asking. No hub / no
@@ -1022,7 +1010,6 @@ EOF2
     pool_watch                                    # warm-pool slots topped back up (#2233)
     macos_watch                                   # red macOS on master: file + alert, no spawn (#3120)
     managed_cert_watch                            # a managed login's cert + device kept alive by ops (#4594)
-    batch_green_watch                             # a driverless batch's green PRs: say how many (#3369)
     node_role_watch                               # the hub's client/managed word, kept an hour (#4886)
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet

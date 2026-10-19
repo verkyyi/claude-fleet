@@ -157,7 +157,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 内容送达与阅读 | `fleet-open* fleet_open* fleet-show* open-url*` | 打开与文件送达 |
 | 仓库接入与帮助 | `fleet-repo.sh fleet-repo-* fleet_repo_authority* dash-repo-add*` | 仓库注册与选择；显式分阶段选择这个 login 的人的任务权威（#4395、#4901），没有常驻进程 |
 | 编排特殊实现 | `fleet-orchestrator* fleet-role* fleet-manual-sub*` | 角色程序已删（#4340）；剩一版兼容壳 |
-| EPIC 批次 | `fleet-epic* epic-page* fleet-batch-green*` | 批次工作流 |
+| EPIC 批次 | `fleet-epic* epic-page*` | 批次工作流 |
 | 浏览器 | `fleet-browser*` | 浏览器插件 |
 | 操作者终端集成 | `fleet-iterm* fleet-tcc*` | 设备集成 |
 | 凭据代理 | `fleet-cred-proxy* fleet-proxy-quota*` | 订阅代理 |

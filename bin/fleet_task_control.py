@@ -131,19 +131,60 @@ def closed(task):
     return 1 if state == "WAITING" else 0
 
 
+def child_summary(data):
+    """One count per outcome (issue #4957): the hub's `summary` when it sends one,
+    else counted here off the children — "open" while a child has no outcome."""
+    s = data.get("summary")
+    if isinstance(s, dict):
+        return s
+    s = dict(open=0, succeeded=0, failed=0, cancelled=0, refused=0)
+    for child in data.get("children") or []:
+        o = child.get("outcome") or ""
+        s[o if o in s and o else "open"] += 1
+    return s
+
+
 def children(task, as_json):
     record = call("get", task)["task"]
     if record.get("authority_version") != 1:
         return 4  # explicit compatibility result; never an unavailable fallback
     data = call("children", task)
+    data["summary"] = child_summary(data)
     if as_json:
         print(json.dumps(data, ensure_ascii=False))
     else:
         print("children of %s · generation %s" % (task, data["parent_generation"]))
         for child in data["children"]:
-            print("%s g%s %s %s %s" % (child["id"], child["generation"], verdict(child),
-                  child.get("ticket_ref", ""), child.get("execution_owner", "")))
-        print("%d children" % len(data["children"]))
+            print("%s g%s %s %s %s %s" % (child["id"], child["generation"], verdict(child),
+                  child.get("ticket_ref", ""), child.get("execution_owner", ""), child.get("title", "")))
+        sm = data["summary"]
+        print("%d children · open %d · succeeded %d · failed %d · cancelled %d · refused %d" % (
+            len(data["children"]), sm.get("open", 0), sm.get("succeeded", 0), sm.get("failed", 0),
+            sm.get("cancelled", 0), sm.get("refused", 0)))
+    return 0
+
+
+def progress(pane, summary, state, event="", socket=""):
+    """The session's own task gets one progress word (issue #4957): an EPIC
+    driver's tick on its parent task — recorded on the hub (the task's `progress`,
+    ⌘P / the 任务 page read it), never relayed: a tick is not a child report."""
+    if not summary.strip():
+        raise ValueError("progress needs a --summary")
+    c = context(pane, socket)
+    t = call("get", c["task"])["task"]
+    if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"), ("execution_owner", "worker_id"))):
+        raise ValueError("stale progress owner/generation")
+    if t.get("outcome"):
+        print("%s\ntask: %s" % (verdict(t), c["task"])); return 0
+    r = report_input(c, t, "", summary.strip()[:2000], "progress: " + state, event=event)
+    r["status"] = state
+    receipt = call("report", r["task"], r)
+    if receipt.get("_recovery_event"):
+        from fleet_task_recovery import Journal
+        Journal().ack_report(r["task"], r)  # recorded, nothing to deliver
+    if receipt.get("disposition", "progress") not in ("progress", "committed"):
+        raise ValueError("progress disposition %s" % receipt.get("disposition"))
+    print("RECORDED\ntask: %s\nevent_id: %s" % (r["task"], r["event_id"]))
     return 0
 
 
@@ -393,7 +434,7 @@ printf "%s\n%s\n%s\n" "$sock" "$win" "$dir"
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("action", choices=("children", "await", "closed", "report", "finalize", "cancel", "receive", "blocker", "blockers"))
+    p.add_argument("action", choices=("children", "await", "closed", "report", "progress", "finalize", "cancel", "receive", "blocker", "blockers"))
     p.add_argument("--task", default="")
     p.add_argument("--file", default="")
     p.add_argument("--pane", default=os.environ.get("TMUX_PANE", ""))
@@ -425,6 +466,7 @@ def main():
         if args.action == "blocker": return blocker(args.pane, json.load(sys.stdin), args.event, args.socket)
         if args.action == "children": return children(args.task, args.json)
         if args.action == "await": return wait_task(args.task, max(1, args.timeout), max(1, args.interval))
+        if args.action == "progress": return progress(args.pane, args.summary, args.state, args.event, args.socket)
         if args.action == "report": return report(args.pane, args.state, args.summary, args.pr, args.dry, args.socket, args.outcome)
         if args.action == "finalize": return finalize(args.pane)
         if args.action == "receive": return receive(args.file)

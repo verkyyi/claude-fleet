@@ -275,7 +275,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
 - **A running EPIC batch does NOT hold the install — one mark PER BATCH, and a
   batch may span versions** (issues #953, #2062, #2934; EPIC #2074 C1).
   `/fleet-epic-run` stamps `$FLEET_CONF_DIR/global/epic-running.d/<repo slug>-<N>`
-  every tick (`bin/fleet-epic-heartbeat.sh`) and at its end clears ONLY its own
+  (`_-T<n>` for a batch on hub tasks, issue #4957) every tick (`bin/fleet-epic-heartbeat.sh`) and at its end clears ONLY its own
   (`--clear <N>`; a bare `--clear` refuses while several batches are marked);
   `fleet_epic_running_fresh` / `fleet_epic_holding` (`bin/fleet-lib.sh`) are the
   readers. **The hold is off by default** (issue #2934, the 发起人's call): a
@@ -283,7 +283,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `fleet-install-sync.sh` and `fleet-node-update.py` switch to a new stable even
   mid-batch (state `epic: off (不挡) …`, `status` `hold    off`). Batch
   consistency is the driver's book: `/fleet-epic-run` runs
-  `bin/fleet-epic-floor.sh record <EPIC> <N>` after each spawn and the report
+  `bin/fleet-epic-floor.sh record <EPIC> <member>` after each dispatch (`T<n>` both, since #4957) and the report
   prints 「本批跨了 K 个版本」 (`show`). `FLEET_EPIC_HOLD_CAP_SECS=<secs>` opts back
   into the old capped hold: a batch WITH WORK (#2247: `--live` / `--inflight`,
   `live 0` + `inflight 0` = idle) defers the tick BEFORE the switch, for at most
@@ -378,7 +378,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   that carries a record. Nothing is filed as an issue (issue #4898, 批 1): no hub ⇒
   `fleet-task-record.sh dispatch` exits 3. A child report carries `task`, `await` takes `T<n>`, a session's
   `ask` and a park write 「问过你」 / 「停放」 on the record (no issue: only there),
-  and an EPIC member gets a read-only record (`epic-member`). No hub ⇒ the script
+  and an EPIC is a parent task whose members are its child tasks (issue #4957:
+  `bin/fleet-epic-tick.py` reads the batch off the hub). No hub ⇒ the script
   exits 3 and every caller is byte for byte as before. **A session with no issue
   is parked and remembered by its record** (issue #3387; the steward's parker that
   wrote the book left with #4339, the readers stay): a park books it as `T<n>` (stop by `fid:`, no GitHub write, 「停放」 on the record alone, wait
@@ -439,7 +440,9 @@ one-off drill / audit records do not go in the repo (issue #3576).
   core stops shipping is retired while still the fleet's bytes. **The EPIC driver
   is the fleet-epic plugin's** (issue #3116, C5): `plugins/fleet-epic/agents/epic-driver.md`
   (`fleet: reap: loop-end`, every tool) beside its three commands and epic-page;
-  the orchestrator opens a batch with `dash-raw-session.sh --as epic-driver`, which
+  `/fleet-epic-plan` opens a batch as a parent hub task whose session is the driver
+  (the `task` tool, `agent: epic-driver` — issue #4957: its members are child tasks,
+  `bin/fleet-epic-tick.py` reads the batch off the hub, no GitHub issue), which
   Claude Code finds by the bare name; no plugin ⇒ no driver, a ticket is a ticket.
   A login an older release shipped it into gets fleet-epic (`fleet-plugins.py`
   carry-over) before the copy is retired. The batch marks and heartbeat / floor /
@@ -1145,8 +1148,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   `fleet-reap-live.py --state`) — the agent's last 7501 word (done/idle → done,
   error → exited, working/blocked kept), else `@claude_state`; no word and no stamp,
   or a working/blocked word, with no agent process under the pane → exited.
-  `fleet-reap-live.py`, dash-reap's no-repo row, `fleet-cleanup.sh` and
-  `fleet-epic-backstop.sh` read it; a 7501 done/error waives the young-agent gate
+  `fleet-reap-live.py`, dash-reap's no-repo row and `fleet-cleanup.sh` read it; a 7501 done/error waives the young-agent gate
   (`idle` does not — a fresh agent says it before its seed lands).
   **What it asks travels with it** (issue #2538, C3): `kind=auth` is its own
   `@claude_needs` subtype; a needs row carries its kind + words (≤200, the current

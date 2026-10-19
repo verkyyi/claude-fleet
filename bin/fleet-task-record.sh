@@ -36,19 +36,14 @@
 #                       #4897); no repo + --spawn: a no-repo session given the
 #                       words, stamped @task. No hub: exit 3, nothing made — the
 #                       record is the only ticket (issue #4898).
-#   fleet-task-record.sh epic-member <epic> <owner/name> <N> [<title>]
-#                     → an EPIC member's read-only record (`T<n>` on stdout): its
-#                       issue on it, `via` EPIC #<epic>, one per member (the token is
-#                       the member); its live window is stamped @task and attached.
-#                       /fleet-epic-run runs it after each spawn, beside the floor.
 #   fleet-task-record.sh of [<window>]     → the window's @task (T<n>), rc 1 when none
 #   fleet-task-record.sh find-issue o/n#N  → … the live window's @task working that issue
 #
 # Who calls it: the `task` tool (the record is the ticket), the spawners (`--task`
 # attaches the new window), a session's ask / park (a question or a park on the
 # record: a session with no issue writes them ONLY here, one with an issue mirrors
-# them), an EPIC driver (each member's read-only record, fleet-epic-floor.sh), and
-# fleet-await.sh (`T<n>` → the record's session).
+# them), an EPIC driver (its parent task and the members it dispatches as child
+# tasks — issue #4957), and fleet-await.sh (`T<n>` → the record's session).
 #
 # Exit: 0 done · 1 the hub refused or did not answer (stderr says which) · 2 usage
 # · 3 not applicable — no hub here (CCQUOTA_FLEET off for this fleet, or no node
@@ -334,20 +329,6 @@ case "$cmd" in
     done
     [ "${#args[@]}" -gt 0 ] || usage
     call POST "/v1/node/tasks/$t" "$(json ${args[@]+"${args[@]}"})" >/dev/null || exit 1 ;;
-  epic-member)
-    epic="${1:-}" mrepo="${2:-}" n="${3:-}" title="${4:-}"
-    case "$epic$n" in ''|*[!0-9]*) usage ;; esac
-    case "$mrepo" in */*) ;; *) usage ;; esac
-    t=$(bash "$0" new --title "${title:-#$n}" --token "epic:$mrepo#$n" --via "EPIC #$epic" --repo "$mrepo" \
-          --issue "$mrepo#$n" --state open) || exit $?
-    sess=$(fleet_current_session 2>/dev/null) || sess=''
-    w=''
-    [ -n "$sess" ] && w=$(fleet_win_for_key "$(fleet_okey_prefix "$sess" "$mrepo")issue-$n" 2>/dev/null) || w=''
-    if [ -n "$w" ]; then
-      tmux set-window-option -t "$w" @task "$t" 2>/dev/null
-      bash "$0" attach "$t" "$w" || :
-    fi
-    printf '%s\n' "$t" ;;
   attach)
     is_tref "${1:-}" || usage
     t="$1"

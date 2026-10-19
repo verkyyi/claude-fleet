@@ -1,545 +1,240 @@
 ---
-description: Drive a confirmed EPIC to done, unattended — spawn its members, land them, write the report.
+description: Drive a confirmed EPIC to done, unattended — dispatch its members as child tasks, keep slots full, write the report.
 ---
 
 # /fleet-epic-run — drive a confirmed EPIC to done, unattended
 
 <!-- fleet skill · owner: hub -->
 
-PHASE 2 of the EPIC trio. Takes an EPIC filed by `/fleet-epic-plan` and pushes it
-to completion across many hours and many workers: keeps 4–6 workers busy, answers
-what it is allowed to answer, lands green PRs, reclaims finished slots, rides out
-quota ceilings, and stops when the core layer is empty. It mutates this fleet's
-repos — the parent's `$FLEET_REPO` and each hosted repo a member is filed in
-(issues, PRs, merges) — and this fleet's tmux session (windows).
+PHASE 2 of the EPIC trio. The EPIC is a **parent task on the hub** (`T<n>`,
+opened by `/fleet-epic-plan`), and this session is that task's session — the
+batch's **driver**. Its members are **child tasks** it dispatches: each one a
+session in a worktree of its member's repo, bound to its own record, that opens
+its PR, merges it once the gate is green and closes its record with its report
+(the task flow, issue #4897). This loop keeps 4–6 of them busy, retries a failure
+once, answers what the charter already answers, rides out quota ceilings, and
+stops when the core is empty — with the report (issue #4957). It reads and writes
+**the hub only**: no GitHub issue, sub-issue, label or comment anywhere.
 
-**Argument** (`$ARGUMENTS`): the EPIC issue number. Optional — with none, resolve
-the newest OPEN issue labelled `epic` in this fleet; if there is more than one,
-list them and ask rather than guessing which batch the operator meant.
+**Argument** (`$ARGUMENTS`): ignored except `--task T<n>` (a driver resumed in
+another session) — the parent is this session's own record (`@task`), and its
+body (the charter, which follows the command in the first message) is re-read
+from the hub every tick, never from this conversation.
 
-**Which repo** (issues #803, #1942): a fleet may host several repos. An EPIC's
-parent lives in ONE of them — `--repo <owner/name>` anywhere in `$ARGUMENTS`
-names it; without it the preamble resolves the pane's own repo, else refuses and
-lists the choices. Its **members may live in other repos** the fleet hosts: each
-is the pair (repo, issue), read off the charter's list (§1 «Members are (repo,
-issue)»), and everything done to a member — spawn, verdict, merge, reap, label —
-names the member's OWN repo. A one-repo fleet always gets its repo — nothing to
-pass, nothing changes.
-
-## 0. Resolve fleet + guard seat (run FIRST, every time)
+## 0. Resolve the parent (run FIRST, every tick)
 
 ```sh
-source ~/.claude/fleet/bin/fleet-lib.sh
-S=$(fleet_current_session); fleet_load_conf "$S"
-REPO=$(fleet_target_repo "$S" "<the --repo value, or empty>"); RC=$?   # issue #803
-[ "$RC" = 0 ] && fleet_load_repo_conf "$S" "$REPO"   # → that repo's FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH / deploy
-SEAT=$(fleet_seat)
-PKEY=$(fleet_epic_parent_key "$S" "${FLEET_REPO:-}" <EPIC>)   # issue #1110: this loop's ledger key
-echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown} rc=$RC pkey=${PKEY:-}"
+P=$(bash ~/.claude/fleet/bin/fleet-task-record.sh of) || P=''      # this session's own task
+echo "parent=${P:-none}"
+python3 ~/.claude/fleet/bin/fleet-epic-tick.py status ${P:+--task "$P"} --line
 ```
 
-- **`pkey=` is the key this loop's children ledger is kept under** (issue #1110)
-  — this pane's own key: the scratch (or worker) the loop runs in IS the parent
-  every member reports to. **Empty `pkey=` ⇒ STOP** (issue #1355): a hub pane (or
-  one whose `$TMUX_PANE` was lost) has no key, and the old fallback — the EPIC's
-  own key — named a parent no window answers to, so every report was ledgered and
-  never relayed; every spawn now refuses such a parent with exit 4 anyway. Say in
-  one line that the loop must run from a scratch pane (dash ⌃s) and stop.
-  Use the value it printed — literally — as `<PKEY>` below: every spawn passes it
-  as `--origin`, every ledger read and backstop names it.
-
-- **`RC=4` — several repos, none current** (the dash is on `all`): list them
-  (`fleet_repos "$S"`) and ASK which one in an `AskUserQuestion` menu — never
-  guess — then re-run this block with the answer as `--repo`.
-- **`RC=1`** — the named `--repo` is not one this fleet hosts: ABORT in one line.
-- From here on **every** `$FLEET_REPO` below is the resolved repo — the
-  PARENT's; a member's own repo is `$MREPO` (§1 «Members are (repo, issue)»).
-  Every `gh` call names its repo with `--repo` — the hub pane of a multi-repo
-  fleet sits in `$HOME`, where a bare `gh` has no repo to infer.
-  The parent and its members are GitHub issues, read and written with `gh issue
-  view|edit|comment --repo <repo>` (the fleet's ticket door left with issue
-  #4898); `fleet_sub_issues` lists the members.
-- **The charter's `<!-- fleet:epic repo=… -->` marker** (an EPIC planned since
-  #803 has one) must equal `$FLEET_REPO`; a mismatch means this run resolved the
-  wrong repo — stop and say so, spawn nothing. No marker: an older EPIC; go on.
-- **Carry `--repo "$FLEET_REPO"` in every `/loop` / wake-up prompt** that
-  re-enters this skill (`/fleet-epic-run <N> --repo <owner/name>`): the next tick
-  resolves the repo afresh, and a hub or scratch pane has no repo of its own.
-
-- **No fleet** → **ABORT**: *"not inside a fleet — run this from a fleet session."*
-- **Wrong seat** — `owner: hub`: refuse when `$SEAT` is `worker`. A worker driving
-  a batch would be spawning its own siblings.
+- **`parent=none`** and no `--task T<n>` in `$ARGUMENTS` → STOP in one line: a
+  batch is driven by its parent task's session — open it with `/fleet-epic-plan`
+  (which starts this driver), never from a bare pane. A driver resumed elsewhere
+  passes `--task T<n>` explicitly; its dispatches then carry no parent binding, so
+  say so on the tick and prefer reopening the parent's own session.
+- **The tick exits 3** — no hub here: say so and stop. Never fall back to GitHub.
+- **Exits 2** — the record has no charter member list: say which and stop.
+- **Exits 1** — the hub did not answer: this is a quiet tick (step 3's
+  20–30 min), never a guess from memory.
 
 ## 1. The stateless rule — read this before anything else
 
-**Every fact this loop needs lives on GitHub, never in the context window.**
+**Every fact this loop needs lives on the hub, never in the context window.**
 
 A 12-hour loop outlives any context window, so a loop that remembers is a loop
 that dies at the boundary. Therefore:
 
-- **The first command of every tick stamps the heartbeat** (issue #953):
+- **Each tick begins with ONE read** — the full picture, as JSON:
 
   ```sh
-  bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh <N> --tick <n> --repo "$FLEET_REPO" \
-    --landed <k> --members <m> --live <l> --inflight <p> --short <简称> --title "<parent title>"
+  python3 ~/.claude/fleet/bin/fleet-epic-tick.py status --task "$P"
   ```
 
-  `--title` is the parent issue's title as you read it (the stamp drops a leading
-  `EPIC: `); the task list's batch row names the batch with it (issue #2833).
+  `{parent, title, short, cap, running, free, counts, done, members[], next[],
+  no_repo[], last_tick}` — every member of the charter (and every child added
+  within scope) with its `state` (succeeded · running · retry · blocked ·
+  unstarted), its child tasks, its PR; `next` is exactly what to dispatch now
+  (retries first, then unstarted core members, as many as the free slots), each
+  with its `title`, `repo`, `agent` and the `body` its session gets. It reads only
+  the hub — the parent's record and `GET …/children` — so it is the same answer
+  after a handoff, a compaction or a reboot. A `[child-report]` that arrives
+  between ticks is a wake-up, not a claim to re-verify: the next tick's read
+  already accounts for it.
 
-  `<l>` is how many member sessions were alive at the LAST tick's read (a member
-  window still open, running or waiting), `<p>` how many member PRs were open and
-  not yet merged (issue #2247). The task list and the doctor
-  read them as «has work» vs «idle» (and, only when the person opted into the EPIC
-  hold with `FLEET_EPIC_HOLD_CAP_SECS`, whether the batch holds the upgrade —
-  off by default, issue #2934). Stamp what is true.
-
-  `<m>` is the charter's Core count, `<k>` how many of them are merged — as of
-  the LAST tick's read (the first tick: `--landed 0`, or leave both off). They
-  are the badge of this batch's ONE row in the task list (issue #1958): the
-  stamp also marks THIS pane's window `@epic <owner/name>#<N>`, so the batch is
-  ONE row with its members hanging under it by their `@origin` — another repo's
-  member too, tagged with its repo. `--clear <N>` unmarks the window.
-
-  `<简称>` is the charter's `<!-- fleet:epic … short=<简称> -->` (no `short=` —
-  an EPIC planned before #2355 — leave the flag off). The stamp renames THIS
-  window `<简称>·批次` (issue #2544) when its name is one the fleet gave it
-  (`scratch-<N>` …), so five batches at once are five rows like
-  `像本地·批次 7/9`, on every machine — never `scratch-3`.
-
-  It rewrites THIS batch's mark, `$FLEET_CONF_DIR/global/epic-running.d/<repo
-  slug>-<N>` — one file per batch (issue #2062), so a second loop on this login
-  never overwrites yours. The mark says the batch is running (the task list's
-  batch row, `fleet doctor`'s `epic` row); it does **not** hold the
-  install still (issue #2934): a version switch moves `current/` and the
-  daemons, never a running session, so install-sync and the machine updater
-  switch to a new stable even while this batch runs, and members spawned later
-  may start on a newer version than earlier ones. That is allowed, not blocked —
-  it is RECORDED (step 2c: `fleet-epic-floor.sh record` after each spawn) and the
-  report says 「本批跨了 K 个版本」. A lease, not a lock — fresh for 45 min, past
-  the longest planned gap in step 3 — so a loop that dies without its closing
-  tick leaves a mark that expires; the closing tick clears it (step 4).
-  (`FLEET_EPIC_HOLD_CAP_SECS=<secs>` is the person's opt-in to the old capped
-  hold: a batch with work then holds the switch up to that long, and past it
-  install-sync switches anyway and notes it on this EPIC.)
-- **Each tick begins by re-reading the EPIC** — the parent body (the charter), the
-  sub-issue list and their states, and each member repo's open PRs. Never carry
-  a plan from the previous tick.
-- **Members are (repo, issue)** (issue #1942). The charter's Core / Reserve lines
-  are the member list: `- [ ] **C1** #N — title` is a member in the parent's own
-  repo, `- [ ] **C1** owner/name#N — title` one filed in another hosted repo.
-  `fleet_member_ref "$FLEET_REPO" "<#N | owner/name#N>"` turns either into
-  `<repo>\t<N>` — call that repo `$MREPO` below — and the sub-issues come back
-  with their repo too (`fleet_sub_issues "$FLEET_REPO" <EPIC>` →
-  `<repo>\t<N>\t<state>`; never `.[].number` alone: numbers repeat across repos).
-  When the two disagree the LIST wins — a member GitHub would not link across
-  repos is still in it (the operator's ruling 4 on EPIC #1935). A member's
-  session key is `<slug>:issue-<N>` with ITS repo's slug
-  (`fleet_okey_prefix "$S" "$MREPO"`) — what the ledger, the backstop and the
-  reap all take.
-- **Member state is ONE read: the children ledger** (issue #937/#940). Every
-  worker this loop spawns carries `<PKEY>` as its `@origin`, and every
-  report it sends is written to this loop's ledger — so the per-member picture is
-  one command, not a `gh pr list` plus a `capture-pane` per member:
+- **The first command after the read stamps the heartbeat** (issue #953):
 
   ```sh
-  bash ~/.claude/fleet/bin/fleet-children.sh "<PKEY>" --json   # {summary, children[{child, bucket, state, pr, pr_state, last, …}]}
+  bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh "$P" --tick <n> \
+    --landed <counts.succeeded> --members <counts.core> --live <running> --inflight <running> \
+    --short <short> --title "<title>"
   ```
 
-  It merges the ledger with each child's live window state and the dash's PR
-  cache, needs no `gh`, and survives the loop's own handoff (the ledger is keyed
-  by the parent's key, not its window). Read it FIRST each tick; go to `gh` /
-  `fleet-pr-verdict.sh` only for what it cannot say — a PR's merge verdict in
-  step 2a, or a member that has never spawned. A `[child-report]` that arrives
-  between ticks is a wake-up, not a claim to re-verify: the next tick's ledger
-  read already accounts for it.
-- **Each tick ends by writing what it did** as one marked comment on the parent:
+  It marks the batch running on this login (`fleet doctor`'s `epic` row; the
+  person's opt-in EPIC hold, off by default — issue #2934) and renames this window
+  `<简称>·批次` (issue #2544). A lease, not a lock — fresh 45 min, so a loop that
+  dies leaves a mark that expires; the closing tick clears it (step 4).
 
-  ```
-  <!-- fleet:epic-tick -->
-  tick <n> · <UTC>
-  quota: <acct> 5h=<x>% wk=<y>% · <acct> …
-  slots: <k>/<cap> · spawned: #… · landed: #… · reaped: #…
-  backstop skipped: child busy (<child> <why>)   ← one per held READY PR (step 2a)
-  blocked: #… (<why>)
-  待决: <question that no charter answer covers>
-  report: <pending | the report's URL>      ← closing tick only (step 4)
+- **Each tick ends by writing what it did onto the parent task** — one progress
+  word, which the hub keeps as the parent's `progress` (the 任务 page and ⌘P show
+  it beside `T<n>`), never relayed to anyone:
+
+  ```sh
+  python3 ~/.claude/fleet/bin/fleet_task_control.py progress --event "tick-<n>" --summary \
+    "tick <n> · <UTC> · slots <running>/<cap> · 派 <keys> · 合 <keys> · 重试 <keys> · 卡住 <keys> · 待决 <question> · quota <acct> 5h=<x>% wk=<y>% · report: <pending | link>"
   ```
 
-  Post it with `gh issue comment <parent> --repo "$FLEET_REPO" --body-file -`
-  (the fleet's comment wrapper left with issue #4898).
-
-  The `report:` line appears on the **closing** tick and nowhere else. It is the
+  The `report:` field appears on the **closing** ticks only (step 4). It is the
   one piece of state that outlives the core going empty, so a session that picks
-  this EPIC up after a handoff can tell «核心空了，报告还没跑» from «跑完了» by
-  reading it instead of guessing (issue #852).
+  this batch up after a handoff can tell «核心空了，报告还没跑» from «跑完了» by
+  reading `last_tick` instead of guessing (issue #852).
 
 - **Context full ⇒ `/fleet-handoff`, not a summary.** The handoff doc need only
-  say *"driving EPIC #N, re-read it"*; everything else is on the issue. The
-  cycle's clear-and-resume is safe here: the stuck-working backstop is pinned to
-  fire inside the handoff's idle window by `bin/fleet-handoff-invariant.sh`
-  (issue #677), so a fable-capped turn that never fires its Stop hook still gets
-  demoted in time to change blood.
+  say *"driving EPIC $P, re-read it"*; everything else is on the hub.
 
 If you ever find yourself reasoning from something you remember rather than
 something you just read, that is the bug.
 
-## 2. The tick — five things, in this order
+## 2. The tick — four things, in this order
 
-### a. Land what is green
+### a. Refill to the cap
 
-Workers land their own PRs once `bin/fleet-pr-verdict.sh` reads `READY`
-(issue #441), so this is a **backstop**, not the main path — it catches the worker
-that finished and went idle without merging.
+For each item of `next`, dispatch it — **one call per member**:
 
-For each EPIC member with an open PR (the ledger read above names them):
+`mcp__fleet-orch__task` with `title` = the item's `title` (`C<k> · <名称>` — the
+tick finds the member by that prefix, so never reword it), `repo` = its `repo`
+(the member's own repo — a batch may span the fleet's repos, issue #1942),
+`body` = its `body`, `spawn: true`, and `coding_agent` = its `agent` when it names
+one. Because this session carries the parent task, the hub binds the new record
+as its child (`parent_task`); its session reports back here.
 
-```sh
-bash ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$MREPO" -q    # the member's own repo
-```
-
-- `READY` → first ask whether the worker still owns it (issue #921):
-
-  ```sh
-  bash ~/.claude/fleet/bin/fleet-epic-backstop.sh <child-key> --pr <PR> --parent "<PKEY>"
-  ```
-
-  `READY` is CI green + mergeable — it says nothing about the member's own
-  完成判据, which the worker runs locally *after* CI. On EPIC #875 this step
-  merged PR #917 while its worker was still `looping` through a 10× loadgen
-  acceptance run. Exit `1` prints `backstop skipped: child busy (<child> <why>)`
-  — the worker is mid-turn (`working` / `looping` / `waking`) or its turn ended
-  with a background job still running (`fleet_child_busy` → `bg`): **don't
-  merge**, copy that line into this tick's comment, next tick. A member the
-  ledger has no live window for is looked up before it is called gone (issue
-  #1110): this fleet's windows by key, then — hub on — the hub's session table
-  by (repo, issue), so one running on another machine reads `… hub: working on
-  mac-b` and holds; a hub that has not answered for 10 minutes holds too (`cannot
-  rule out a session elsewhere`) — a failed lookup is never "idle". A member on
-  another machine is judged by THAT machine's word (issue #1607): its node
-  reports a held `/loop` round or a running Bash-tool job on the hub, so
-  `… hub: bg on mac-a` / `… hub: looping on mac-a` holds exactly as it would here; a
-  machine the hub has lost reads `hub: lost on mac-a` and holds; and with the hub
-  off, a member the ledger places on another machine holds (`on mac-a, hub off:
-  cannot see it`) rather than reading as gone. Exit `0`
-  (`clear: …` — idle / done, no window here and none on the hub (`hub says
-  gone`), or its own MERGED ship report is in the ledger) → merge it, **one command, never chained**:
-  `~/.claude/fleet/bin/fleet-pr-merge.sh <PR> --repo "$MREPO" --squash` (re-reads the gate,
-  merges with the branch deleted, confirms `MERGED`; under a GraphQL rate limit it merges over
-  REST instead of failing, issue #1042). A chained `push --delete` once
-  closed the wrong issue and got the worker reaped.
-- `BEHIND` → `gh pr update-branch <PR> --repo "$MREPO"`.
-- `PENDING` → nothing; next tick.
-- `FAILING` / `CONFLICT` → step 2d (it is a failure, not a merge decision).
-- `BLOCKED` → branch protection said no. Not yours to force: note it on the
-  parent's 待决 and leave it.
-
-A merged PR is not yet *done* if its repo has a deploy signal: with
-`FLEET_DEPLOY_REF` or `FLEET_DEPLOY_CHECK` set (issue #541; per repo in a
-multi-repo fleet, from its `repos/<slug>.conf` — #805), a member counts as
-complete only when its deploy state goes green. With neither set, merged ≡ done.
-Do **not** run `/fleet-sync-install` mid-batch — the loop runs on the live install,
-and swapping the floor under running workers is how one bad merge takes the batch
-with it. Sync once, at the end (step 4). The same rule binds the workers (issue #953: on EPIC #883 one synced right after its own merge and
-reloaded a daemon under the rest of the batch). The install-sync daemon itself
-follows stable even mid-batch (issue #2934) — a stable move is the operator's,
-and it stops no running session.
-
-### b. Reclaim finished slots
-
-A finished worker holds a slot until something reaps it. Don't wait to be told:
-for each member whose PR is MERGED (and deploy-green, if applicable) while its
-window still exists, reap it —
-`bash ~/.claude/fleet/bin/dash-reap.sh <slug>:issue-<N> --yes` (the member's key,
-with its own repo's slug — issue #1942; never a `session:index` or a window
-name — those are `refused:target`, exit 4, issue #869) — which records a
-`/fleet-history` row before disposing of anything. A member whose window lives
-on ANOTHER machine is reaped by the same command (issue #1589): with the hub on,
-`dash-reap.sh` asks that machine's node to run the reap there and answers with
-its token and exit status (`reaped:*` 0 · `skip:live` 3 with the node's reason ·
-`failed:*` 5 = unknown, not a reap — re-check next tick). Never ssh over and set
-`TMUX` by hand.
-
-**A member still running its `/loop` is delivered, and KEPT** (issue #1331, the
-operator's ruling A on EPIC #1312). Merged is done — the DoD and the closing
-tick do not wait for the Loop — but the reap refuses it with `retained:loop`
-(its `@loop` mark or loop ledger says a round is pending). That is not a failed
-reap: write 「保留：仍在循环」 for that member in the tick line, free nothing,
-and move on. The window ends on its own when its Loop stops (`stop:true`,
-`CronDelete`, or a wakeup nobody renews), and the cleanup daemon reaps it then
-by the ordinary rules. Never clear `@loop` to force a reap.
-
-### c. Refill to 4–6
-
-Count live EPIC worker windows. While under target and the core layer has an
-unstarted member, spawn the next one, highest-priority first. The target is 4–6
-**within the fleet's existing caps** — `FLEET_MAX_SESSIONS` /
-`FLEET_GLOBAL_MAX_SESSIONS` are the operator's settings, and the run never
-changes them, suggests changing them, or asks (issue #881). A full cap is
-normal: the spawn exits `2` and the next tick retries.
-
-The machine is a cap too (issue #1090): the same exit `2` comes back with
-`暂停开新：内存紧张` / `暂停开新：负载过高` on stderr while memory pressure,
-free memory or load/core is over its line (`fleet_machine_admit`). Same handling —
-stop refilling this tick, say so in the tick's comment, retry next tick; it
-resumes on its own when the reading drops. Read it **before** this tick runs any
-heavy acceptance of its own (a member's 完成判据 replayed here, a loadgen run, a
-full selftest gate) and skip that too while it holds:
+The first stdout line is the child's `T<m>`. Then record the version it starts on
+(issue #2934 — the report says 「本批跨了 K 个版本」):
 
 ```sh
-bash -c 'source ~/.claude/fleet/bin/fleet-lib.sh; fleet_machine_admit' || echo 'held — next tick'
+bash ~/.claude/fleet/bin/fleet-epic-floor.sh record "$P" <T<m>>
 ```
 
-```sh
-AG=$(bash -c 'source ~/.claude/fleet/bin/fleet-lib.sh; fleet_epic_charter_agent "$1" "$2" "$3" "$4"' _ \
-       "$FLEET_REPO" "<the charter body this tick read>" "$MREPO" <N>)
-bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --repo "$MREPO" --origin "<PKEY>" --title "<the issue's own title>" ${AG:+--agent "$AG"}
-```
+READ each outcome, don't assume it: exit `2` at capacity (stop refilling this
+tick — the fleet's own caps are the operator's, never changed or questioned, issue
+#881), `暂停开新：内存紧张` / `负载过高` on stderr (the machine is held: stop
+refilling, say so on the tick), `3` no hub (stop), `1` say why on the tick and
+stop refilling. A Codex member on a login with no Codex sign-in is refused, never
+opened as Claude: write it on the tick and leave that member. `no_repo` members
+are never dispatched — write 「没写仓库：<keys>」 on the tick for the person.
 
-Right after a spawn that opened a window (exit 0), record the version it starts
-on (issue #2934) — the batch's own book, read back by the report:
+Reserve members (`R<k>`) are never in `next`. Core empty with time and quota left
+and a reserve worth doing? Add it within scope by dispatching it under its own key
+(`R1 · <名称>`) — the tick counts every child it sees as a member.
 
-```sh
-bash ~/.claude/fleet/bin/fleet-epic-floor.sh record <EPIC> <N> --repo "$FLEET_REPO"
-```
+### b. Read the results — retries and blocks are the tick's
 
-`--repo` is the PARENT's repo (the batch's book), `<N>` the member. It never
-blocks and never fails the spawn; a batch spanning versions is fine.
+The workers land their own PRs (merge on green, then `report merged`), so there is
+no merge step here: a `succeeded` member is done. A `failed` member is `retry`
+once — the next tick's `next` carries it with 「这是重试」 and the failed task's
+`T<m>` in its body; seed nothing else by hand. A second failure is `blocked`: name
+it on the tick with the reason its `[child-report]` gave. `cancelled` (the person
+stopped it) is `blocked` too — never re-dispatched.
 
-…and give the member its read-only hub task record (issue #3330) — the member
-stays an issue (`fleet_sub_issues` reads the batch as before); the record is its
-row on the hub's 任务 page, `await` takes its `T<n>`, and the window is stamped
-`@task` so its child report carries `task`:
+One caution on red: a red check is not always the code's fault. If the base branch
+itself is red (the same check fails on its head), it is ONE breakage for every
+member: dispatch its fix once as a task (`mcp__fleet-orch__task`, `repo`, `spawn:
+true`, outside this batch — no `C<k>` prefix) and `mcp__fleet-orch__await` its
+`T<n>` before the members' retries burn on it.
 
-```sh
-bash ~/.claude/fleet/bin/fleet-task-record.sh epic-member <EPIC> "$MREPO" <N> "<the issue's own title>"
-```
+### c. Questions and permissions
 
-Exit 3 = no hub here: nothing was written — carry on, the batch is the same.
+A member waiting on a dialog is answered **only if the charter already covers it**
+(`mcp__fleet-orch__answer_dialog`, `by: session`, `basis` = the charter's line). The
+charter is the operator's stated intent; answering inside it is relaying, answering
+outside it is making a product decision they never made. Not covered? Put the
+question on the tick's 待决 and, once per question, `mcp__fleet__ask` (it writes
+「问过你」 on this parent task); leave the member waiting and keep the other slots
+full. One batch of 待决 answered at breakfast beats a decision made at 03:00 by a
+loop.
 
-**Which agent** (issue #2562): the member's own charter row wins — a row ending
-`(codex)` / `(claude)` (`- [ ] **C3** #N — 标题 (codex)`) — then the charter's
-`<!-- fleet:epic … agent=codex -->`, then nothing: with no `--agent` the spawn
-reads the member's `agent:codex` / `agent:claude` label, else the fleet's
-`FLEET_AGENT`. `fleet_epic_charter_agent` is that rule — never re-spell it here.
-A Codex member on a login with no Codex login is refused (exit 1, `ccquota codex
-login` named on stderr) — never opened as Claude: say so on the parent once and
-stop refilling that member; the operator logs in or edits the row.
+A member reporting `BLOCKED` on work it found inside the charter's scope: dispatch
+that work as a new member (`C<next> · <名称>`, its repo, a body saying which member
+waits on it); when it lands tell the waiting one to go on —
+`mcp__fleet-orch__send` with `to: fid:<its session's uuid>` (the second half of the
+child's `execution_owner`). Outside the scope → 待决.
 
-`--repo` is not optional, and it is the MEMBER's repo (issue #1942): a member
-filed in repo B opens its session in B even though the parent is A's. A fleet
-hosting 2+ repos refuses a spawn without it (exit 1 — `this fleet hosts several
-repos`, issue #972), and in a one-repo fleet `$MREPO` is the only repo, so it is
-always correct to pass. The child still reports to `<PKEY>` — one loop drives
-every repo's members.
-
-**Exit 4 = no live parent** (issue #1355): `<PKEY>` names no live session (this
-pane's window closed or lost its key) or the shell lost `$TMUX_PANE`. Nothing was
-opened. Never retry with a hand-exported `$TMUX` or a blank `--origin` — that is
-exactly the orphan this refuses; re-run step 0 from the loop's own pane.
-
-**Which machine** (issue #1425): with the hub module on (`CCQUOTA_FLEET=1`) the
-spawn is `--node auto` by default — after the issue's lease, the hub picks the
-least busy of the operator's machines that host the repo, and a member placed on
-another machine exits `0` with `#<N> → <machine> (hub operation …) — <reason>` on
-stderr: it is spawned, its `[child-report]` comes back to this pane through the
-hub. Add `--node local` (or a machine name) only to pin one member. With the
-module off nothing changes.
-
-Always the **live install** path (`~/.claude/fleet/bin/…`), never the base
-checkout — the checkout's copy defaults the global cap to 8 instead of reading
-the installed cap. Pass `--title` so the window says what the work is.
-
-Then READ the outcome, don't assume it: a refusal used to reach the caller as a
-bare exit code and a tmux popup nobody was watching (issue #683). Since #683 the
-reason is on **stderr** and the exit code names the class — `2` at capacity
-(retry next tick), `3` already claimed (a peer holds it — pick the next member,
-never `--force` a live claim), `1` infrastructure (stop and say so). Keep the
-stderr line beside the number in your tally. Then re-count windows anyway: a
-tick that "spawned" three workers and shows three fewer windows than it thinks
-has hit a refusal it never read. On a mismatch, say so on the parent and stop
-refilling rather than looping on a silent refusal.
-
-Core empty and quota remaining? Promote from the charter's reserve list. Reserve
-items never started are **not** unfinished work.
-
-### d. Handle red lights
-
-`bin/tmux-dash-collect.sh` classifies a stuck window into `ask` (a question) and
-`perm` (a permission), issue #640/#645 — the window tab shows `?` / `⊘`, the dash
-one red `!` with the kind in words (`在问你` / `等授权`, #1328). They get different
-treatment:
-
-- **`⊘` permission** → approve it. `bash ~/.claude/fleet/bin/fleet-answer.sh …`
-- **`?` question** → answer it **only if the charter already covers it.** The
-  charter is the operator's stated intent; answering inside it is relaying, and
-  answering outside it is making a product decision they never made. Not covered?
-  Append the question to the parent's 待决 section, leave the worker parked, and
-  refill its slot with the next member. One batch of 待决 answered at breakfast
-  beats a decision made at 03:00 by a loop.
-
-- **A member reports `BLOCKED` on an issue it filed and did not spawn** — the
-  report's summary or the member's thread names a new `#M` filed with `parent:
-  <member>`. A worker may spawn it itself (issue #4591); when it left it to you: when `#M` sits inside the charter's scope, it is a **batch member** —
-  add it to the charter's Core list (`- [ ] **C<next>** #M — <title> (from
-  C<k>)`, an edit of the parent body), spawn it in step c like any member
-  (`--origin "<PKEY>"`, so it reports HERE, never to the blocked member), and
-  when it lands tell the blocked member to go on:
-  `~/.claude/fleet/bin/fleet-peer-send.sh issue:<N> '#M merged — continue'`. The
-  blocked member keeps its slot meanwhile (it is parked, not failed). Outside
-  the charter's scope → the parent's 待决, like a question.
-
-- **A failed worker** (PR red, conflicted, or the window died) → **retry once**,
-  seeding the new worker with what went wrong. Second failure: label the member
-  `blocked` (`gh issue edit <N> --repo "$MREPO" --add-label blocked`), write the
-  reason on the parent, free the slot.
-
-One caution on red: a red check is not always the code's fault. This suite carries
-real-time budgets that only hold on an idle box (`CLAUDE.md`, issue #691/#693), so
-a red that names a timing assertion on a loaded machine may be the gate, not the
-change. Before spending the retry, re-read the failing check: if it is unrelated
-to the member's diff, say so on the parent and re-run the check rather than
-burning the one retry on a flake. And if the base branch itself is red (the same
-check fails on `master`'s head), it is ONE breakage for every member and every
-loop: dispatch its fix once as a task (`mcp__fleet-orch__task` with `repo` and
-`spawn: true` — the issue filer left with issue #4898), then wait for that record
-(`mcp__fleet-orch__await` with its `T<n>`) before retrying any member. Three issues and three conflicting fixes for one
-duplicate route (2026-10-07, #2039 #2040 #2041) is what this replaces.
-
-### e. Quota
+### d. Quota
 
 ```sh
 bash ~/.claude/fleet/bin/fleet-account.sh quota    # label · 5h% · week% · …
 ```
 
-No row is never silent (issue #2588): stderr says why and the exit says which —
-**4** nothing configured (no pool, no hub: write 「no pool」), **3** unknown right
-now (refused · unreachable · no reading cached: write 「unknown — <its words>」).
-
-Quota is a **rate limiter here, not a target.** The goal is the EPIC finishing;
-there is no percentage to hit and no reason to spend quota faster than the work
-needs. So:
-
-- An account near its ceiling → `fleet-account.sh migrate` moves work off it.
-- **Every account at the ceiling → wait, don't stop.** Drop to a low-frequency
-  heartbeat (20–30 min) until a 5h window refreshes, then resume. Waiting for a
-  window is progress; it is the batch staying alive across a ceiling, which is the
-  whole reason a 12-hour run beats three 4-hour ones.
-- A quota read that comes back empty is not a quota of zero (issue #684). Treat an
-  empty read as unknown, keep the previous decision, and say so on the tick line.
+No row is never silent (issue #2588): **4** nothing configured (write 「no pool」),
+**3** unknown right now (write 「unknown — <its words>」). Quota is a **rate
+limiter here, not a target**: an account near its ceiling → `fleet-account.sh
+migrate` moves work off it; **every account at the ceiling → wait, don't stop** —
+a 20–30 min tick until a 5h window refreshes. An empty read is unknown, never zero
+(issue #684): keep the previous decision and say so on the tick.
 
 ## 3. The loop
 
-Drive this with `/loop` self-paced: each wake-up is one tick of step 2, and the
-next delay is chosen from what you are actually waiting for.
+Drive this with `/loop` self-paced: each wake-up is one tick of step 2, the next
+delay chosen from what you are actually waiting for.
 
 | situation | next tick |
 |---|---|
-| slots free, work queued | as soon as the spawn settles |
-| all slots busy, CI running | 10–20 min |
-| every account at its ceiling | 20–30 min, until the window refreshes |
-| nothing left but a PR's checks | match the check's own runtime |
-
-Do not poll for things the harness reports on its own; a `Monitor` on a PR's
-checks is cheaper and more accurate than a tick that wakes to look.
+| slots free, work queued | as soon as the dispatches settle |
+| every slot running | 10–20 min (a `[child-report]` wakes you sooner) |
+| every account at its ceiling, or the hub silent | 20–30 min |
 
 ## 4. Stop — the report is the last tick, not a handoff
 
-**The core layer going empty is not the end of the run. The report is**
-(issue #852). Core empty = every core member merged (and deploy-green where the
-fleet has a deploy signal), or `blocked` with a reason on the parent. That
-condition does not stop the loop; it switches this tick to the closing sequence
-below, which **runs in this same hub session, now** — `/fleet-epic-report` is a
-hub skill and you are the hub, so there is nothing to hand it to.
-
-Why it is not prose advice: a batch whose report never runs looks, from the
-outside, exactly like a batch that finished. The tick log holds the whole
-12-hour run and nobody reads it; the page and the parent comment are the only
-artefacts that survive a reboot, the context boundary and the morning.
-**An EPIC whose report never ran is not finished** — treat a core-empty EPIC
-with no `report:` line the way you would treat an unmerged PR.
-
-The closing sequence, in this order — it is a tick like any other, so it
-survives a context boundary the same way everything else here does:
+**The core going empty is not the end of the run. The report is** (issue #852).
+`done: true` (every core and added member succeeded or blocked, nothing running)
+does not stop the loop; it switches this tick to the closing sequence, which runs
+**in this session, now**:
 
 1. **Write the closing tick first, carrying `report: pending`** (step 1's
-   format). Before running the report, not after: if this session dies between
-   the two, `pending` is what tells the next one there is work left.
-   The same comment carries what the batch leaves for a person, **one marker
-   line each** (issue #2672) — the person's reminders, which step 5's report
-   names again; no other session reads or runs them (EPIC #4333 C5):
+   progress word). Before the report, not after: if this session dies between the
+   two, `pending` is what tells the next one there is work left. Name in the same
+   word what the batch leaves for a person (a hub redeploy, a real-device check
+   with its date) — the report names them again.
+2. **Run `/fleet-epic-report` right here** (it reads `$P` the same way). Not «hand
+   off to», not «suggest the operator run» — execute it, this tick. It builds the
+   page, publishes it to 活页 privately and pushes it to the operator's WeChat.
+3. **Write the link back**: one more progress word on the parent whose `report:`
+   carries the page's link in place of `pending`.
+4. **Clear the heartbeat** — `bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh --clear "$P"`.
+5. **Close the parent task — the last call of the run**: `mcp__fleet__report`
+   with `state: waiting`, `outcome: succeeded` (completed work with no PR of its
+   own — FLEET-MCP.md «Task children and results»), and a `summary` that carries the
+   report's link and what the batch leaves for the person (合 K · 卡住 B, the
+   followups). That records the parent's result on the hub and tells whoever
+   opened the plan; then stop — no `/loop` left armed, no handoff (`reap:
+   loop-end` closes this window).
 
-   ```
-   <!-- fleet:followup kind=hub-deploy what=重部署入口：C8 的 /v1/fleet/tickets -->
-   <!-- fleet:followup kind=human due=2026-10-12 what=iPad 上真环境走一遍 -->
-   ```
-
-   `hub-deploy` — the person's call, always; `human` — with its due date. No
-   followup, no line. **No followup for stable** (issue #4917): the release
-   train moves it on its own; the report's 列车结果 line (step 2 of
-   `/fleet-epic-report`) says 已随列车上线 / 列车在跑 / 卡在红车 <run>, and only
-   a red train adds its own `kind=human` `mark:`. Never run a move yourself.
-2. **Run `/fleet-epic-report <N> --repo "$FLEET_REPO"` right here** (its page
-   carries 「本批跨了 K 个版本」 from `fleet-epic-floor.sh show <N> --repo "$FLEET_REPO"`). Not «hand off to», not «suggest
-   the operator run» — execute it, this tick. It gathers, builds the page, opens
-   it on the operator's computer, posts the durable comment, and closes the EPIC when every
-   member is resolved. Its own rails still apply; you are just its caller.
-3. **Post the URL back on the parent** as one final tick whose `report:` line
-   carries the page's address in place of `pending` — one grep now separates a
-   reported EPIC from an unreported one. Then push the done notification, with
-   the URL in it.
-4. **Clear the heartbeat** — `bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh --clear <N>`
-   (issue #953) — `<N>` is this EPIC: it removes THIS batch's mark and no other's
-   (issue #2062: a bare `--clear` once took the file every batch on the login
-   shared). The batch's own followups are the person's, never this loop's; the installs follow stable on their own tick whether a batch runs
-   or not (issue #2934). A loop that never reaches this line leaves a mark that
-   expires on its own, 45 min after its last tick.
-5. **Report to whoever started this driver** (issue #2623) — one call, the last
-   of the run: `mcp__fleet__report` with `state: merged` and a `summary` that
-   carries the report page's URL and what the batch leaves for the person
-   (the 列车结果 line, a hub redeploy, a member still blocked — the same things the
-   closing tick's followup markers name). The session that started this
-   driver (an orchestrator, or the person's own) gets it as a `[child-report]`;
-   a parent that is gone turns it into the person's reminder, and with no
-   parent at all it exits 0 silently — so it is unconditional. Then stop: the driver's own `done:2h`
-   closes it — no `/loop` left armed, no handoff.
-
-**Resuming into a `report: pending`.** The stateless rule (step 1) covers this
-with no extra bookkeeping: a tick that re-reads the parent, finds the core empty
-and finds `pending` on the newest tick re-enters step 4.2 — it does **not**
-refill slots, and it does not start over. Re-running `/fleet-epic-report` is
-safe and expected (the skill is built to be re-run — read it), so a duplicated
-report is a far cheaper failure than a missing one.
+**Resuming into a `report: pending`.** A tick that reads `done: true` and finds
+`report: pending` in `last_tick` re-enters step 4.2 — it does **not** refill
+slots. Re-running the report is safe (it republishes to the same page).
 
 **The report failing is a stall, not a finish.** If the report cannot complete —
-the page cannot be opened, gh refusing, the page unbuildable — leave `report: pending`
-standing, say why on the parent, and push the *stalled* notification. Never
-write the done notification off a report that did not run.
+the page cannot be published, the hub refusing — leave `report: pending`
+standing, say why on the tick, `mcp__fleet__ask` the person once, and keep the
+parent open. Never close the parent off a report that did not run.
 
-Push a notification for exactly two things:
-
-- **Done** — the core is empty **and the report has run**: the notification
-  carries its URL.
-- **Stalled** — every account is at its ceiling with no window in sight, the
-  handoff failed to clear, spawning is refusing, the closing report failed, or N
-  consecutive ticks made no progress.
-
-Everything else — a single worker's question, one red PR, one reaped window —
-goes to the parent's tick log and waits for morning. A batch that wakes its
-operator for each worker is a batch that has not been delegated.
+Wake the person for exactly two things: **done** (the report has run — step 4.5's
+report carries its link) and **stalled** (every account at its ceiling with no
+window in sight, dispatching refusing, the closing report failed, or N ticks with
+no progress — `mcp__fleet__ask`). Everything else — one member's question, one
+red PR, one retry — goes on the tick and waits for morning.
 
 ## 5. Report (keep it short)
 
-One line per tick in the terminal: tick number, slots, what landed, what blocked.
-The durable record is the parent's tick comments — the terminal scrollback is not
-where this batch's history lives. The closing tick's line carries the report's
-URL, because that is the one thing the operator will want to click.
+One line per tick in the terminal: `fleet-epic-tick.py status --line`'s words. The
+durable record is the parent task's progress and its children's results on the
+hub — not the terminal scrollback.
 
 ---
 
-Rails: operate on YOUR fleet's repos only — the parent's `$FLEET_REPO` and the
-hosted repos its members are filed in. This skill merges to the base
-branch unattended — that is the operator's standing decision, and CI green is its
-only gate; `git revert` is the undo. It does **not** run `/fleet-sync-install`
-mid-batch. The base checkout is read-only (hook-enforced): workers edit inside
-their own `issue-<N>` worktrees and land via PR.
+Rails: operate on YOUR fleet's repos only — the members' repos the charter names.
+Members merge to their base branch unattended on a green gate — the operator's
+standing decision; `git revert` is the undo. Never `/fleet-sync-install` mid-batch:
+the loop runs on the live install. The base checkout is read-only (hook-enforced):
+members edit inside their own worktrees and land via PR.

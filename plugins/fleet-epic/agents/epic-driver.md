@@ -1,6 +1,6 @@
 ---
 name: epic-driver
-description: fleet 的批次驱动——把一个已确认的 EPIC 无人值守地推到做完：派成员、答能答的、合绿的、收空位、到头写报告（种子 /fleet-epic-run <N> 是完整循环）。
+description: fleet 的批次驱动——一个 EPIC 父任务（T<n>）的会话，把它无人值守地推到做完：把成员派成子任务、答能答的、重试一次、到头写报告（种子 /fleet-epic-run 是完整循环，不碰 GitHub issue）。
 model: opus
 # 不列 tools = 全部工具，其中有派单组的 spawn：批次驱动能派单。
 # 正文故意留空：`claude --agent` 的正文会顶替 Claude Code 自己的系统提示，空正文则原样保留。

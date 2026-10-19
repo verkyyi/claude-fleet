@@ -320,6 +320,17 @@ orphan reminder; an unknown destination remains pending. Reconnect preserves
 one event/ledger row even with a different transport ID. Native notification is
 at least once across a crash between inbox delivery and writing its sent marker.
 
+**An EPIC is a parent task and its children** (issue #4957). The children read
+also carries `summary` — one count per outcome (`open`, `succeeded`, `failed`,
+`cancelled`, `refused`). A progress report (no outcome, a `status`) from the
+task's CURRENT execution is projected as the task's `progress`
+(`{status, summary, at}`) on the node's `GET /v1/node/tasks/T<n>` and the person's
+task list; an earlier generation's or another executor's word is history, never
+shown. `fleet_task_control.py progress --summary … [--event …]` writes one for the
+calling session's own task and relays nothing — an EPIC driver's tick.
+`bin/fleet-epic-tick.py status` is the batch's one read: the charter off the
+parent's dispatch body, each member's state off its children.
+
 Legacy task records and sessions keep their previous path; a downlevel report
 from an accepted execution is refused. Backlog migration/attachment is C5's
 boundary: these consumers preserve the accepted ticket reference, never infer

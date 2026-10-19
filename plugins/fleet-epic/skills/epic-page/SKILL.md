@@ -13,7 +13,7 @@ description: >-
 <!-- fleet skill -->
 
 Two of the three EPIC commands render a page for the operator: `/fleet-epic-plan`
-puts a **design page** in front of them before anything is filed (issue #809), and
+puts a **design page** in front of them before the batch's parent task is opened (issue #809), and
 `/fleet-epic-report` renders the **batch report** after the run ends. Both are
 model-authored HTML, and without a shared source they came out looking like two
 different products — the first two reports on this machine did. This skill is the
@@ -23,9 +23,13 @@ shared source: one `template.html`, one `<style>`, one set of section ids.
 
 ```sh
 cat ~/.claude/fleet/plugins/fleet-epic/skills/epic-page/template.html     # read the frame, then write your page
-(cd <scratchpad> && python3 -m http.server --bind 127.0.0.1 <port> >/dev/null 2>&1 &)   # once; dies with the session
-# then the fleet `open` tool, target `:<port>/<page.html>` (fleet-open.sh outside a session)
 ```
+
+Then publish it to 活页, private (`mcp__space__publish_file`), and push it to the
+operator's WeChat (`mcp__space__push_to_wechat`, to them only) — issue #4957. No
+活页 tools in the session: serve it on loopback
+(`python3 -m http.server --bind 127.0.0.1 <port>`, dies with the session) and open
+it with the fleet `open` tool (`:<port>/<page.html>`).
 
 - **Keep** the `<style>` block verbatim and every `id=` on `<section>` /
   member cards. The ids are the contract the commands (and their selftest) refer
@@ -36,8 +40,9 @@ cat ~/.claude/fleet/plugins/fleet-epic/skills/epic-page/template.html     # read
 - **Drop** the sections the other page owns — each is marked PLAN ONLY /
   REPORT ONLY / BOTH in the file. Never add UX chrome — the page is
   reading/print-first by design.
-- **Re-render, don't re-send.** Edit the same file under the same server: the
-  address you already opened stays valid, the operator reloads it.
+- **Re-render, don't re-send.** Edit the same file and publish it to the same
+  page (`publish_file` with its `proposal_id`): the link the operator holds stays
+  valid, they reload it.
 
 ## One page, two layers (issue #839)
 
@@ -45,14 +50,14 @@ The page has two readers, and the layers keep them from crowding each other out:
 
 - **上层 — 发起人 / stakeholder.** 用例 · 目标 · 指标, readable in two minutes.
   No file names, no fleet jargon (占槽 → 占用时长, reap → 回收, worker → 执行会话),
-  and since #881 no keys either: `C1/C2`, source issue numbers and PR numbers live
+  and since #881 no keys either: `C1/C2`, source references, task and PR numbers live
   in a card's 技术细节; the surface names a member by its name. A mirror id like
   `prod-3a229eb80` is fold material too.
 - **下层 — the people doing the work.** Every technical field, inside
   `<details class="fold">`, **default closed and complete**. The fold changes the
-  visible ORDER, never the content: the write-back to the parent and the
-  sub-issues carries **both** layers, so a worker's body is a field-for-field
-  superset of what it was before.
+  visible ORDER, never the content: the write-back into the parent task's
+  charter carries **both** layers, so a member's session gets a field-for-field
+  superset of what the page shows.
 
 The fold's `<summary>` is a real tap target on a phone, and the `@media print`
 block force-opens every `<details>` (both the `::details-content` path and the
@@ -78,7 +83,7 @@ numbered rules; the frame's comment block and slots already follow them:
   when there is something to handle (#929): 「可以。不用先处理什么」 is not
   information, so a clean preflight drops the section and the zero tile.
 
-The folds change the page, never the issue — write-back is unchanged.
+The folds change the page, never the charter — write-back is unchanged.
 
 ### What goes IN the slots (issue #929)
 
@@ -161,11 +166,11 @@ whether 有空再做 is on theme. Those are yours.
 | `#delivered` | report | **first section**: what a user can do now that they could not before — capabilities in the reader's words, not PR counts, no keys |
 | `#metrics` | both | 指标 — surface 指标 / 现在 / 目标 (report: 之前 / 现在 / 目标), numbers only; the 「怎么量」 fold carries 成员 / 多久能读出来 / 读数口径. The plan writes it from the theme's diagnosis (「本批不量」 when there is none, never blank, never invented); the report fills 现在 row by row (「⟨date⟩ 再看」 / 「本批未声明指标」, never back-filled) |
 | `#charter` | plan | 先回答 (optional — only when the theme is a question: 别人怎么做 / 我们怎么做 table + 我们的价值, sources folded), then 范围 — 做 / 不做 as short plain items; 共同约定 folded — verbatim into the parent body |
-| `#members` | both | 要做的事 — one `.ob` per member, `id="m-<key>"`, wrapping a `<details class="card">` that is ONE line (名称 + 一句) until tapped, grouped by theme (`h3.grp`), 有空再做 last. Tap 1: 目标 / 为谁 / 解决什么 / 怎么算成功 (+ the report's `.proof` grid); a visual member adds its `p.proto` 「▶ 打开可交互原型」 link here (plan only); tap 2, `<details class="fold">`: 编号 / 来源 · 方案 · 接口·约定 · 依赖 · 完成判据 · **上线证据** — the card IS the sub-issue body, both layers |
+| `#members` | both | 要做的事 — one `.ob` per member, `id="m-<key>"`, wrapping a `<details class="card">` that is ONE line (名称 + 一句) until tapped, grouped by theme (`h3.grp`), 有空再做 last. Tap 1: 目标 / 为谁 / 解决什么 / 怎么算成功 (+ the report's `.proof` grid); a visual member adds its `p.proto` 「▶ 打开可交互原型」 link here (plan only); tap 2, `<details class="fold">`: 编号 / 来源 · 方案 · 接口·约定 · 依赖 · 完成判据 · **上线证据** — the card IS the member's charter section, both layers |
 | `#gaps` | report | **还差什么 · 下一步** (issue #929) — one two-column table 还差什么 / 建议下一步, one row per gap, one short clause per cell; an empty kind (待部署, 要人做的) is no row; the next-batch suggestion is a row (「下一批主题：…」); no lede, no trailing note, no 这批不做. Carries the `#next` anchor. The band's 还差什么 = its row count |
 | `#risks` | plan | 可能出的问题 — one plain sentence each; technical risks + why this split in the fold |
 | `#signoff` | plan | 需要你定的事 — 待决 + 发起人拍板 in one 事项 / 建议 table, a default on every row, 「（批后）」 marks; carries the `#open` anchor. Recorded with the date after the nod |
-| `#preflight` | plan | **only when there is something to handle** (issue #929: FIXABLE, or a warning the 发起人 must act on) — 能不能开跑 in one sentence, the `fleet-epic-preflight.sh` screen verbatim in the fold. Nothing to handle ⇒ the section and the band's 开跑前要处理 tile are dropped, and the screen moves to the end of the `#order` fold |
+| `#preflight` | plan | **only when there is something to handle** (issue #929: a warning the 发起人 must act on — quota, a held machine) — 能不能开跑 in one sentence, the check's output verbatim in the fold. Nothing to handle ⇒ the section and the band's 开跑前要处理 tile are dropped, and the screen moves to the end of the `#order` fold |
 | `#next` | report | an anchor only — `<span id="next">` inside `#gaps`; the suggestion is that table's last row(s) |
 | `#order` | plan | 执行安排 — the whole section folded, last: waves, who waits for whom, what runs in parallel |
 | `#ops` | report | 运行情况, **the whole section folded and last**: 墙钟 · 占用时长 · 额度曲线 · 甘特, with the #625 occupancy-not-tokens caveat kept word for word |
@@ -173,8 +178,8 @@ whether 有空再做 is on theme. Those are yours.
 Reading orders that fall out of the file order — plan: `#metrics` `#charter`
 `#members` `#risks` `#signoff` `#preflight` `#order`; report: `#delivered`
 `#metrics` `#members` `#gaps` `#ops`. `#preflight` is optional (above); there is
-no obstacles section — a fleet-side defect is FILED as an issue, its number goes in
-the durable comment only, and if the reader needs it, it is a 下一步 row in plain
+no obstacles section — a fleet-side defect is RECORDED as a task, its `T<n>` goes in
+the closing summary only, and if the reader needs it, it is a 下一步 row in plain
 words.
 
 The **上线证据** line is the seam with `/fleet-epic-report` (issue #810): one
@@ -183,6 +188,6 @@ a URL to screenshot, a command whose output to keep, a pane to `capture-pane`.
 Write it so both can act on it without asking.
 
 Artifact publishing is hook-blocked inside fleet sessions (issue #526); the page
-is served on this machine's loopback and opened on the operator's computer, and
-its address dies with the session — which is why the plan writes the page's
-content back into the issues, and the report posts its durable half as a comment.
+goes to 活页, private, and the parent task keeps what must outlive it — the plan
+writes the page's content into the charter, the report's closing summary goes on
+the parent's record (issue #4957).

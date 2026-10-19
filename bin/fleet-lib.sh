@@ -1395,7 +1395,7 @@ EOF
 # what a spawn stamps into @origin — see fleet_okey_prefix.)
 
 # fleet_target_repo <sess> [<repo>] → the ONE repo a repo-wide command (the EPIC
-# trio, fleet-epic-preflight.sh, the PR wrappers;
+# trio, the PR wrappers;
 # issues #803, #1938) acts on — ONE rule, however many repos the fleet hosts:
 #   1. <repo>, when given — it must be hosted (exit 1 otherwise);
 #   2. the caller pane's own window repo (a worker, a scratch bound to a repo);
@@ -5563,7 +5563,7 @@ fleet_origin_key() {
 # to spawn every member with an empty @origin: no child reported anywhere, and
 # `fleet-children.sh` answered `no parent key` for the whole batch. The loop
 # passes the key it gets here as `--origin` on every spawn and names it to
-# fleet-children.sh / fleet-epic-backstop.sh, so the book is the same on every
+# fleet-children.sh, so the book is the same on every
 # tick whichever pane drives it. No window answers to the EPIC's key, so a report
 # is ledgered (never relayed) — the loop reads the ledger each tick anyway.
 #

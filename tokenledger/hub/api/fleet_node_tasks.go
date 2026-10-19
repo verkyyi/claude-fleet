@@ -297,7 +297,11 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		v := views[0]
-		writeJSON(w, http.StatusOK, map[string]any{"task": v.FleetTask, "live": v.Live, "pr_state": v.PRState})
+		out := map[string]any{"task": v.FleetTask, "live": v.Live, "pr_state": v.PRState}
+		if v.Progress != nil {
+			out["progress"] = v.Progress // claude-fleet#4957: a parent task's tick
+		}
+		writeJSON(w, http.StatusOK, out)
 	case http.MethodPost:
 		if t.AuthorityVersion != 0 || in.AuthorityVersion != 0 {
 			if t.AuthorityVersion != store.TaskAuthorityVersion || in.AuthorityVersion != store.TaskAuthorityVersion || in.Mutation == nil {

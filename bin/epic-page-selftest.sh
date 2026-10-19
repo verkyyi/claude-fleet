@@ -74,9 +74,15 @@ hasF "$T" 'name="viewport"' "template: phone-width viewport"
 hasF "$PLAN"   'plugins/fleet-epic/skills/epic-page/template.html' "plan renders from the shared frame"
 hasF "$REPORT" 'plugins/fleet-epic/skills/epic-page/template.html' "report reuses the shared frame"
 hasF "$PLAN"   'edit the same file' "plan re-renders a revision in place"
-hasF "$PLAN"   'http.server --bind 127.0.0.1' "plan serves the page on loopback"
-hasF "$PLAN"   'fleet:epic-member' "plan: member write-back carries the idempotency marker"
-hasF "$PLAN"   '会话结束即失效' "plan: the pinned URL says the page dies with the session"
+hasF "$PLAN"   'http.server --bind 127.0.0.1' "plan: with no 活页 tools, the page is served on loopback"
+# issue #4957: the pages go to 活页, private, pushed to the operator's WeChat
+for f in "$PLAN" "$REPORT" "$SK"; do
+  hasF "$f" 'mcp__space__publish_file' "${f##*/}: publishes the page to 活页"
+  hasF "$f" 'mcp__space__push_to_wechat' "${f##*/}: pushes it to the operator's WeChat"
+done
+hasF "$PLAN"   'starts **private**' "plan: the page starts private"
+hasF "$REPORT" 'starts **private**' "report: the page starts private"
+hasF "$PLAN"   'again to the same page' "plan: a revision keeps the same link"
 
 # 5. the skill registers, on both install paths
 CHECKS=$((CHECKS + 1)); head -1 "$SK" | grep -q '^---$' || fail "SKILL.md has no frontmatter"
@@ -150,16 +156,18 @@ grep -A1 -F '<section id="order">' "$T" | grep -q -F '<details class="fold">' \
 # 6f. the plan command carries the rules, and write-back is unchanged
 hasF "$PLAN" '#881' "plan: step 4 cites the decider's-view issue"
 hasF "$PLAN" '点头即全部按建议' "plan: the nod accepts every default"
-hasF "$PLAN" 'never the issue' "plan: folds do not change the write-back"
-hasF "$PLAN" '- [ ] **C1** #N — title' "plan: the Core list line /fleet-epic-run parses is unchanged"
-hasF "$PLAN" '<summary>实现细节（方案 · 接口约定 · 依赖 · 完成判据 · 上线证据）</summary>' "plan: the sub-issue body keeps its fold summary"
+hasF "$PLAN" 'never the record' "plan: folds do not change the write-back"
+hasF "$PLAN" '- [ ] **C1** <名称>' "plan: the member line fleet-epic-tick.py parses"
+hasF "$PLAN" '<!-- fleet:epic repo=<owner/name> short=<简称> cap=4 -->' "plan: the charter marker the tick reads"
+hasF "$PLAN" '## C1 · <名称>' "plan: each member's charter section, both layers"
+hasF "$PLAN" '上线证据：<the one line, verbatim from the page>' "plan: 上线证据 stays one labelled line"
 hasF "$PLAN" '（批后）' "plan: 「（批后）」 rows also go to the parent's 待决"
 hasF "$REPORT" '#881' "report: follows the decider's view"
 # 6g. the concurrency caps are the operator's (issue #881 point 16): plan and run
 #     state them at most — never advise a value, never ask, never change one
 RUN="$ROOT/plugins/fleet-epic/commands/fleet-epic-run.md"
 hasF "$PLAN" 'The concurrency caps are not this skill' "plan: leaves the session caps alone"
-hasF "$RUN" "within the fleet's existing caps" "run: refills within the caps, never changes them"
+hasF "$RUN" "never changed or questioned" "run: refills within the caps, never changes them"
 for f in "$PLAN" "$RUN" "$T"; do
   CHECKS=$((CHECKS + 1))
   grep -qE 'FLEET_(GLOBAL_)?MAX_SESSIONS=[0-9]' "$f" && fail "${f#"$ROOT"/} suggests a session-cap value"

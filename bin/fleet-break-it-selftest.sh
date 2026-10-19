@@ -132,7 +132,6 @@
 #   report-parent-online-queued                     bin/fleet-hub-node.sh (deliver: an identity found here is
 #                                                   never «not now»), fleet-lib.sh fleet_window_okey (a keyless
 #                                                   session's key is its @fleet_id, issue #4341)
-#   batch-green-unsaid                              bin/fleet-batch-green.sh (diskguard batch_green_watch)
 #   orphan-report-unseen                            bin/fleet-orphan-reports.py, fleet-control-read.sh column 31,
 #                                                   fleet_hub_common.py orphan_rep_cell
 #   reap-other-repo-clears / reap-stale-stamp       bin/fleet-cleanup-idle.py, fleet_reap_notice.py, fleet-reap-live.py
@@ -5444,33 +5443,6 @@ drill_client_update_silent_fail() {
   sh "$BIN/fleet-install-follow.sh" --self --dir "$d/install" --conf-dir "$d/conf" > "$d/follow.out" 2>&1
   grep -q '^alarm: *1' "$d/follow.out" || { WHY="the doctor's install row stays quiet: $(tr '\n' '|' < "$d/follow.out")"; return 1; }
   WHAT="入口发布版 3 小时验不过（停在 fetch-failed）：一拍发一次通知（同一回只一次），install-follow 标 alarm → doctor 的 install 行 FAIL"
-}
-
-# A batch nobody drives with green member PRs (issue #3369): its driver is gone and
-# nobody holds the steward role, so nothing looked at its PRs — the sidebar said
-# 没人在跑, never that work waits to land. bin/fleet-batch-green.sh (diskguard tick)
-# says the READY count once per batch per count; read-only, merges nothing.
-drill_batch_green_unsaid() {
-  CAP=30; local d="$WORK/bg" t0 a
-  mkdir -p "$d/conf/global/epic-running.d" "$d/tmp/.claude-dash/fleets/acme-app"
-  printf 'epoch: %s\nttl: 2700\nepic: 50\nrepo: acme/app\n' "$(( $(date +%s) - 4000 ))" > "$d/conf/global/epic-running.d/acme-app-50"
-  printf 'm\t#50\t\tThe batch\n' > "$d/tmp/.claude-dash/fleets/acme-app/issues"
-  printf 'issue-51\t#151\tOPEN\t✓\tready\t\t\nissue-52\t#152\tOPEN\t✗\t\t\tci\n' > "$d/tmp/.claude-dash/fleets/acme-app/prmap"
-  printf '#!/bin/sh\nprintf "acme/app\\t51\\topen\\nacme/app\\t52\\topen\\n"\n' > "$d/members"
-  printf '#!/bin/sh\necho "$*" >> "%s/alerted"\n' "$d" > "$d/alert"
-  printf '#!/bin/sh\nexit 0\n' > "$d/driven"
-  chmod +x "$d/members" "$d/alert" "$d/driven"
-  bg() { env TMPDIR="$d/tmp" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_BATCH_GREEN_SECS=0 \
-           FLEET_BATCH_GREEN_MEMBERS_CMD="$d/members" FLEET_BATCH_GREEN_ALERT_CMD="$d/alert" \
-           FLEET_BATCH_GREEN_DRIVEN_CMD="$d/driven" bash "$BIN/fleet-batch-green.sh"; }
-  t0=$(now)
-  bg
-  SECS=$(since "$t0")
-  a=$(cat "$d/alerted" 2>/dev/null)
-  case "$a" in *batch-green*acme/app#50*"还有 1 张已全绿"*'#151'*) ;; *) WHY="no batch-green alert naming the batch and its 1 green PR: [$a]"; return 1 ;; esac
-  bg; bg
-  [ "$(grep -c . "$d/alerted")" = 1 ] || { WHY="the same count was said again: $(cat "$d/alerted")"; return 1; }
-  WHAT="没人在跑的批次：一条提醒说出批次号和已全绿张数，同一张数不再说"
 }
 
 # A child's result handed to the person is never seen (issue #3369): orphan() wrote

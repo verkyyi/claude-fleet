@@ -23,7 +23,6 @@
 0.1 apply-flood
 0.1 apply-reaches-app
 1.8 attach-cross-machine
-0.3 batch-green-unsaid
 0.4 bootstrap-abroad
 3.9 bootstrap-reaches-github
 0.9 break-pane

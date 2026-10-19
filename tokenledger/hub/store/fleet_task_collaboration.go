@@ -241,3 +241,45 @@ func (s *Store) TaskExecutionKnown(owner, worker string) (bool, error) {
 	err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_operations WHERE action = 'task_attempt' AND actor = ? AND worker_id = ?`, owner, worker).Scan(&count)
 	return count > 0, err
 }
+
+// TaskProgress is a task's newest workflow word (claude-fleet#4957): the last
+// progress report (no outcome, no blocker) its CURRENT execution sent — an EPIC
+// driver's tick line on its parent task, a worker's red gate. A report of an
+// earlier generation or another executor is history, never projected.
+type TaskProgress struct {
+	Status  string    `json:"status"`
+	Summary string    `json:"summary,omitempty"`
+	At      time.Time `json:"at"`
+}
+
+// FleetTaskProgress reads t's newest progress word off the report journal
+// (fleet_operations, action task_report); nil when it has none. Read-only.
+func (s *Store) FleetTaskProgress(t FleetTask) (*TaskProgress, error) {
+	if t.AuthorityVersion != TaskAuthorityVersion || t.ExecutionOwner == "" {
+		return nil, nil
+	}
+	rows, err := s.read.Query(`SELECT result, created FROM fleet_operations WHERE action = 'task_report' AND actor = ? AND idem LIKE ? ORDER BY created DESC, id DESC LIMIT 50`,
+		t.Owner, "task-report:"+t.Ref+":%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw, created string
+		if err = rows.Scan(&raw, &created); err != nil {
+			return nil, err
+		}
+		var rc TaskReportReceipt
+		if json.Unmarshal([]byte(raw), &rc) != nil {
+			continue
+		}
+		r := rc.Report
+		if rc.Disposition != "progress" || r.Outcome != "" || r.Blocker != nil || r.Status == "" ||
+			r.Task != t.Ref || r.Generation != t.Generation || r.WorkerID != t.ExecutionOwner {
+			continue
+		}
+		at, _ := time.Parse(rfc, created)
+		return &TaskProgress{Status: r.Status, Summary: r.Summary, At: at}, nil
+	}
+	return nil, rows.Err()
+}

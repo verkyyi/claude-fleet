@@ -6,74 +6,54 @@ description: What the batch actually did, as a page you can read — 改动前 /
 
 <!-- fleet skill · owner: hub -->
 
-PHASE 3 of the EPIC trio. Reconstructs a finished (or abandoned) EPIC from
-GitHub and the fleet's own records, renders a reader-friendly HTML page, opens it
-on the operator's computer, and posts a durable summary back onto the EPIC issue.
-Read-only against the repo except for that one closing comment.
+PHASE 3 of the EPIC trio. Reconstructs a finished (or abandoned) EPIC from the
+hub — its parent task (`T<n>`, the charter and the driver's ticks) and its child
+tasks (the members' results) — plus the fleet's own records, renders a
+reader-friendly HTML page, **publishes it to 活页 privately and pushes it to the
+operator's WeChat**, and writes the link back onto the parent task (issue #4957).
+Nothing is read from or written to GitHub issues; a member's PR is linked as its
+child task recorded it.
 
-**Argument** (`$ARGUMENTS`): the EPIC issue number. Optional — with none, resolve
-the most recently updated `epic` issue in this fleet. Works on any past EPIC, not
-just the one that just ended, so a report can be re-run after the fact.
-
-**Which repo** (issues #803, #1942): a fleet may host several repos. An EPIC's
-parent lives in ONE of them — `--repo <owner/name>` anywhere in `$ARGUMENTS`
-names it; without it the preamble resolves the pane's own repo, else refuses and
-lists the choices. Its members may live in other hosted repos: a member is the
-pair (repo, issue) — `#N` in the charter's list is the parent's repo,
-`owner/name#N` another one (`fleet_member_ref`, `fleet_sub_issues`; see
-`/fleet-epic-run` §1) — and every per-member read below (its PR, its deploy
-state, its evidence) names the member's own repo. One page covers them all. A
-one-repo fleet always gets its repo — nothing to pass, nothing changes.
+**Argument** (`$ARGUMENTS`): the parent task `T<n>`. Optional — with none, this
+session's own task (`fleet-task-record.sh of`: the driver's closing tick runs it
+that way). Works on any past EPIC, not just the one that just ended, so a report
+can be re-run after the fact.
 
 **Its usual caller is not a human.** `/fleet-epic-run`'s closing tick runs this
-skill itself, in the same hub session, the moment the core layer empties
-(issue #852) — a batch is not finished until it has. So this skill is written to
-be **re-runnable and self-contained**: it rebuilds everything from GitHub and the
-fleet's records on every run, which is why a resumed run loop re-entering the
-closing tick can just call it again rather than reasoning about whether a report
-already exists. Being run by hand — on this EPIC or a two-week-old one — is the
+skill itself, in the driver's session, the moment the core empties (issue #852) —
+a batch is not finished until it has. So this skill is **re-runnable and
+self-contained**: it rebuilds everything from the hub on every run and republishes
+to the same page, which is why a resumed loop re-entering the closing tick can
+just call it again. Being run by hand — on this EPIC or a two-week-old one — is the
 same code path, not a special case.
 
 **Re-run it in two weeks.** Most of what a batch was *for* cannot be read on the
 day it ends — a metric with a 「2 周」 horizon is still blank when the last PR
 merges. That is not a reason to skip the metric or to invent one: write 「还读不
-出来，⟨date⟩ 再看」, and on that date run `/fleet-epic-report <N>` again. It
-rebuilds from GitHub and the fleet's records every time, so a second run costs one
-command and produces a page whose 指标 section is finally answerable. Say this at
+出来，⟨date⟩ 再看」, and on that date run `/fleet-epic-report T<n>` again. Say this at
 the bottom of the page too, with the date, so the operator knows to come back.
 
-## 0. Resolve fleet + guard seat (run FIRST, every time)
+## 0. Resolve the parent (run FIRST, every time)
 
 ```sh
-source ~/.claude/fleet/bin/fleet-lib.sh
-S=$(fleet_current_session); fleet_load_conf "$S"
-REPO=$(fleet_target_repo "$S" "<the --repo value, or empty>"); RC=$?   # issue #803
-[ "$RC" = 0 ] && fleet_load_repo_conf "$S" "$REPO"   # → that repo's FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH / deploy
-SEAT=$(fleet_seat)
-echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown} rc=$RC"
+P=<the T<n> argument, or empty>
+[ -n "$P" ] || P=$(bash ~/.claude/fleet/bin/fleet-task-record.sh of) || P=''
+echo "parent=${P:-none}"
+python3 ~/.claude/fleet/bin/fleet-epic-tick.py status --task "$P"          # the members, their results, their PRs
+bash ~/.claude/fleet/bin/fleet-task-record.sh get "$P"                       # the charter (request_payload.body) + the last tick (progress)
 ```
 
-- **`RC=4` — several repos, none current** (the dash is on `all`): list them
-  (`fleet_repos "$S"`) and ASK which one in an `AskUserQuestion` menu — never
-  guess — then re-run this block with the answer as `--repo`.
-- **`RC=1`** — the named `--repo` is not one this fleet hosts: ABORT in one line.
-- From here on **every** `$FLEET_REPO` below is the resolved repo, and every
-  `gh` call names it with `--repo` — the hub pane of a multi-repo fleet sits in
-  `$HOME`, where a bare `gh` has no repo to infer.
-  The parent and its members are GitHub issues, read with `gh issue view
-  --repo <repo>` (the fleet's ticket door left with issue #4898);
-  `fleet_sub_issues` lists the members.
-- **The charter's `<!-- fleet:epic repo=… -->` marker**, when present, must equal
-  `$FLEET_REPO` — else stop: a report built from the wrong repo's issue #N is
-  a page about someone else's batch.
-
-- **No fleet** → **ABORT**: *"not inside a fleet — run this from a fleet session."*
-- **Wrong seat** — `owner: hub`: refuse when `$SEAT` is `worker`.
+- **`parent=none`** → ask which `T<n>` and stop; never guess.
+- **The tick exits 3** (no hub) or **2** (not an EPIC parent) → say so and stop.
+- **Exits 1** (the hub did not answer) → the report cannot be rebuilt now: say so;
+  a driver leaves its `report: pending` standing.
 
 ## 1. Gather — seven sources, no invention
 
-- **The parent**: charter, the `<!-- fleet:epic-tick -->` comment stream (the
-  batch's own minute-by-minute log), the 待决 section.
+- **The parent**: the charter (its record's dispatch body), its ticks — the
+  driver's progress words (the newest is `progress` on its record; each child's
+  `[child-report]` and the ticks in this session's own scrollback when you are the
+  driver), and the charter's 待决 section.
 - **The metric contract** (issue #839): the charter's **打算移动的指标** table —
   指标 / 现在 / 期望 / 多久能读出来, plus the 读数口径 line under it, written by
   `/fleet-epic-plan` before the batch ran. This is what the batch asked to be
@@ -82,28 +62,29 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
   diagnosis, has **no table** — report 「本批未声明指标」 and stop there. **Never
   reconstruct a baseline after the fact**: a "现在" measured today against a
   "之前" nobody wrote down is a number the next batch would be planned against.
-- **The members**: every member of the charter's Core / Reserve list ∪ every
-  sub-issue, each as (repo, issue) — state, labels (`blocked` and why), its PR
-  (`--repo <its repo>`), merge time, and deploy state where its repo has one. A member filed by
-  `/fleet-epic-plan` carries a **上线证据** line in its body (issue #809): that
-  line names the evidence the worker was asked to leave — a URL, a command's
-  output, a pane — and is what to look for per member (issue #810).
+- **The members**: every member `fleet-epic-tick.py status` lists — the charter's
+  core / reserve plus any child added within scope — with its `state` (succeeded ·
+  blocked · retry · running · unstarted), its child tasks (a retried member has
+  two), and its PR (the child's recorded result). For a member's why, read its
+  child's record (`fleet-task-record.sh get <T<m>>`: outcome, evidence). Its
+  charter section carries a **上线证据** line (issue #809): the evidence the
+  worker was asked to leave — a URL, a command's output, a pane — and what to look
+  for per member (issue #810).
 - **The spend proxy**: **worker × hours**, from each member's window lifetime
   (spawn → reap) as recorded in `/fleet-history` and the tick log.
 - **The quota trace**: the 5h% / week% snapshots the tick lines carry.
 - **The versions it ran on** (issue #2934): installs follow stable even while a
   batch runs, so members spawned later may start on a newer version —
-  `~/.claude/fleet/bin/fleet-epic-floor.sh show <N> --repo "$FLEET_REPO"` prints
+  `~/.claude/fleet/bin/fleet-epic-floor.sh show "$P"` prints
   `versions: K` and one line per version with the members that started on it
   (recorded by `/fleet-epic-run` at each spawn). Spanning versions is allowed,
   never a defect; `versions: 0` = nothing recorded (a batch from before #2934) —
   say so, never guess.
 - **The evidence**: what each member looks like, as its own worker showed it in
   its merged PR (the PR body, its screenshots) along the member's `上线证据:`
-  line. The fleet's evidence store left with issue #4898: **collect, never
-  create** — a member whose PR shows nothing is reported as **无证据**, in those
-  words. 占用时长 comes from the member's `/fleet-history list` row, not the
-  tick log.
+  line. **Collect, never create** — a member whose PR shows nothing is reported
+  as **无证据**, in those words. 占用时长 comes from the member's `/fleet-history
+  list` row, not the ticks.
 
 **A hard limit to state plainly in the page, not to paper over:** this fleet
 cannot attribute tokens to an issue. There is no session→spend join yet
@@ -146,10 +127,9 @@ step 4 lists; the report takes five of them):
 - **Few words** — a section lede is one sentence or nothing.
 - **Execution detail is folded** — PR numbers, merge times, 占用时长, 依赖,
   来源单号, the whole of `#ops`.
-- **No keys on the surface** — `C1` / `R1` and issue / PR numbers live in a
+- **No keys on the surface** — `C1` / `R1`, task `T<m>` and PR numbers live in a
   card's 技术细节 (its 编号 / 来源 and PR fields); `#delivered`, `#gaps` and
-  every card title name the member by its **name**. Fleet-side issue numbers
-  appear only in the durable comment (step 3), never on the page.
+  every card title name the member by its **name**.
 
 Members use the same one-line card as the design page (`<details class="card">`,
 grouped by the plan's themes): the summary line is the name, one sentence and the
@@ -157,17 +137,11 @@ status pill — and **for anything unfinished that one sentence is the why**, so
 reader never has to open a card to learn something did not ship.
 
 **已合并，仍在循环** (issue #1331) is a status of its own: a member whose PR merged
-while its window still runs a `/loop` (watching production, a metric, a deploy).
-Merged is delivered — it counts as done in the band — but the reader must see
-that something of this batch is still running. ONE read, for every merged member:
-
-```sh
-~/.claude/fleet/bin/fleet-epic-loopers.sh --repo "$FLEET_REPO" <member>...   # → <N>\tlooping|idle|gone\t<reason>; a member in another repo as owner/name#N
-```
-
-`looping` → pill 「已合并，仍在循环」, and the card's sentence says what it is
-still watching (its last turn, not a guess). `idle` or `gone` → 「已合并」 as
-before — a window that no longer exists is simply merged.
+while its session still runs a `/loop` (watching production, a metric, a deploy).
+Merged is delivered — it counts as done in the band — but the reader must see that
+something of this batch is still running: a succeeded member whose child's live
+word (`fleet-task-record.sh get <T<m>>` → `live.state`) reads `looping` →
+pill 「已合并，仍在循环」; anything else → 「已合并」.
 
 What earns its place, in page order:
 
@@ -204,8 +178,8 @@ What earns its place, in page order:
    tapped (name · one sentence · status pill), then 目标 · 为谁 · 解决什么 ·
    怎么算成功 with the `.proof` grid; 编号 / 来源, PR link, 占用时长, mirror id,
    方案/接口/依赖/完成判据/上线证据 inside the card's `<details class="fold">`.
-   For anything unfinished, *why* — quoted from the tick log or the `blocked`
-   reason, not paraphrased — is the summary line's sentence, not buried in the
+   For anything unfinished, *why* — quoted from its child's report or the tick that
+   blocked it, not paraphrased — is the summary line's sentence, not buried in the
    fold: a reader must not have to click to find out something did not ship.
 4. **还差什么 · 下一步** (`#gaps`, carrying the `<span id="next">` anchor) — ONE
    two-column table, **还差什么 | 建议下一步**, one row per gap, **one short clause
@@ -216,7 +190,7 @@ What earns its place, in page order:
    the theme's leftovers plus what this batch surfaced, as input to
    `/fleet-epic-plan`. **No lede, no trailing note** — no 这批不做 (the charter
    carries it), no 有空再做未动不算欠 (untouched reserve is simply not a row), no
-   「建议，不是决定」 (the durable comment's heading may say 下一步是建议). The
+   「建议，不是决定」 (the closing summary may say 下一步是建议). The
    band's 还差什么 = this table's row count.
 
    **The 列车结果 line on the fleet tooling repo** (issue #4917; it replaced
@@ -224,21 +198,27 @@ What earns its place, in page order:
    person's followup). ONE read, never a move:
 
    ```sh
-   ~/.claude/fleet/bin/fleet-epic-stable-row.sh --repo "$FLEET_REPO" --main "$FLEET_MAIN" --base "$FLEET_BASE_BRANCH" --epic <N>
+   # the members' merge commits, off the base branch's own history (squash: `… (#<PR>)`) — git, no GitHub API
+   git -C "$FLEET_MAIN" fetch -q origin "$FLEET_BASE_BRANCH"
+   SHAS=$(for pr in <each succeeded member's PR number in this repo>; do
+     git -C "$FLEET_MAIN" log "origin/$FLEET_BASE_BRANCH" -n 1 --format=%H --grep "(#$pr)\$"; done)
+   ~/.claude/fleet/bin/fleet-epic-stable-row.sh --repo <the repo> --main "$FLEET_MAIN" \
+     --base "$FLEET_BASE_BRANCH" $(printf -- '--merged %s ' $SHAS)
    ```
 
-   An EPIC spanning repos asks once per repo its members landed in (issue
-   #1942) — `--repo <that repo> --main <its checkout> --epic "$FLEET_REPO#<N>"`:
-   stable is per repo, and only the repo carrying `bin/fleet-stable.sh` answers.
+   Once per repo the members landed in (issue #1942 — stable is per repo; `$FLEET_MAIN` /
+   `$FLEET_BASE_BRANCH` from `source ~/.claude/fleet/bin/fleet-lib.sh;
+   fleet_load_repo_conf "$(fleet_current_session)" <that repo>`), and only the repo
+   carrying `bin/fleet-stable.sh` answers.
 
-   Its `line:` goes into 交付了什么 (page and durable comment) **verbatim**:
+   Its `line:` goes into 交付了什么 (page and closing summary) **verbatim**:
    「已随列车上线（stable = <sha7>）」 · 「列车在跑（<run>）」 · 「卡在红车 <run>」 ·
    「等下一趟列车」. Exit 0 also prints a `row:` (the two cells, TAB-separated)
    and its `tr:` — the batch has not shipped yet, so add that row to this table
-   verbatim (the `tr:` on the page, the two cells in the durable comment). Exit 1
+   verbatim (the `tr:` on the page, the two cells in the closing summary). Exit 1
    with `kind: current` is the line alone; `skip` / `nomerge` is nothing at all.
-   A `mark:` (a red train, stable off trunk, unreadable) goes into the durable
-   comment verbatim (issue #2672) — a person looks; no `mark:` asks anyone to
+   A `mark:` (a red train, stable off trunk, unreadable) goes into the closing
+   summary verbatim (issue #2672) — a person looks; no `mark:` asks anyone to
    move stable, and **the report never runs a move**.
 5. **运行情况** (`#ops`) — **folded, complete, last.** 墙钟 · 执行会话占用时长 ·
    额度曲线（annotated where an account was benched or a window was waited out —
@@ -253,11 +233,11 @@ What earns its place, in page order:
 what you found — *would this obstacle still exist in another repo, on another
 theme?*
 
-- **Yes → fleet 侧** (并发上限, 回收拒收, dash-reap 目标写法, 占用时长口径…) — a
-  fleet defect, not this batch's story. **File it as an issue on the fleet repo**;
-  its number goes in the durable comment, never on the page (「fleet 侧：#N #M」
-  was unreadable to the 发起人). If the reader should know, it is a 下一步 row in
-  plain words.
+- **Yes → fleet 侧** (并发上限, 回收拒收, 占用时长口径…) — a fleet defect, not this
+  batch's story. **Record it as a task** (`mcp__fleet-orch__task`, `repo` the fleet
+  repo, no `spawn`: the record waits for whoever picks it up); its `T<m>` goes in
+  the closing summary, never on the page. If the reader should know, it is a 下一步
+  row in plain words.
 - **No → 产品侧** — what made a member hard lives in that member's card (its
   one-line why, or its fold); what is still missing because of it is a 还差什么
   row.
@@ -280,56 +260,68 @@ Item 3 in detail — the evidence grid (issue #810):
     (`FLEET_DEPLOY_REF` / `FLEET_DEPLOY_CHECK`, #541 — per repo in a multi-repo
     fleet, from its `repos/<slug>.conf`, #805) and the member's deploy state
     is green, capture ONE shot from prod along the same line the worker followed
-    and save it beside the report page (`<dir>/evidence/<M>/live-….png`, a member
-    in another repo under `<dir>/evidence/<owner>-<name>.<M>/`). No deploy
+    and save it beside the report page (`<dir>/evidence/<key>/live-….png`). No deploy
     signal, not yet green, or prod unreachable from this machine → a `.none` cell
     reading **未取到** and the reason — try once, report what happened.
   - **Getting the files into the page**: copy each PR's images into
-    `<dir>/evidence/<M>/…` and reference them by RELATIVE path
-    (`<img src="evidence/42/after.png">`); the page is served from that
-    directory, so the pictures ride along.
+    `<dir>/evidence/<key>/…` and reference them by RELATIVE path
+    (`<img src="evidence/C1/after.png">`); they are published with the page
+    (step 3), so the pictures ride along.
 
-## 3. Publish
+## 3. Publish — 活页, private, and the operator's WeChat
 
-**Artifact publishing is hook-blocked inside fleet sessions** (issue #526/#527) —
-serve the report's directory on loopback and open it on the operator's computer:
+**Artifact publishing is hook-blocked inside fleet sessions** (issue #526/#527).
+The report goes to 活页 (issue #4957):
 
-```sh
-(cd <dir-of-the-report-html> && python3 -m http.server --bind 127.0.0.1 <port> >/dev/null 2>&1 &)   # dies with the session
-```
+1. `mcp__space__publish_file` — `title` 「EPIC 报告：<主题>」; one file
+   (`filename` `epic-report-<slug>.html`, `content`) or, with evidence pictures,
+   `files` (the page plus each `evidence/<key>/…` by its relative path; a picture
+   that is a local file and not text goes by its public URL, else is left out and
+   its cell reads **未取到**). A new page starts **private** — only the operator's
+   workspace opens it; never make it public or passcode-shared yourself. **A
+   re-run republishes to the same page**: find it first (`mcp__space__list_proposals`
+   with the title) and pass its `proposal_id`, so the link already written on the
+   parent stays the link.
+2. `mcp__space__push_to_wechat` — that `proposal_id`, `to` omitted (the operator
+   only).
+3. **Write the link back onto the parent task** — one progress word (only from
+   the parent's own session, i.e. as the driver; run by hand elsewhere, put the
+   link in step 5's line instead):
 
-then the fleet `open` tool, target `:<port>/<report.html>`.
+   ```sh
+   python3 ~/.claude/fleet/bin/fleet_task_control.py progress --event "report-<YYYYMMDDHHMM>" \
+     --summary "report: <link> · 合 K · 卡住 B · 指标 <已读出 / ⟨date⟩ 再看 / 本批未声明>"
+   ```
 
-Then post the **durable half** as one comment on the EPIC issue, **in the page's
-order** (issue #839): 交付了什么 · 指标（filled, 「还读不出来 ⟨date⟩ 再看」, or
-「本批未声明指标」） · 还差什么 · 下一步（建议; the 列车结果 row too, when step 2
-printed one） · the fleet-side issues filed
-(their numbers — the one place they appear) — then the counts, the completed/unfinished/blocked lists, the run
-figures with their caveat, the URL, and per member which evidence exists — the
-`dir:` path from its worker's 📎 comment, or **无证据**. The page's address dies with
-the session; the comment is what survives, so it must stand on its own without
-the page — including the sentence telling the operator to re-run this command on
-⟨date⟩ when the metrics can be read. `gh` cannot attach an
-image to a comment, so the paths ARE the evidence's durable half; the files stay
-under `$FLEET_CONF_DIR/fleets/<sess>/epic/<N>/evidence/`. Do **not** commit the
-report or the evidence into the repo — this skill ships to team repos too, and a
-batch report is not their artifact (committing evidence under a repo path is a
-deliberate opt-in that does not exist yet; follow-up #816).
+No 活页 tools in this session (`mcp__space__*` not mounted)? Serve the page's
+directory on loopback — `(cd <dir> && python3 -m http.server --bind 127.0.0.1 <port> >/dev/null 2>&1 &)`
+— open it with the fleet `open` tool (`:<port>/<report.html>`), and say that the
+link dies with the session.
+
+The page is the report; there is no separate comment to post. What must outlive
+the page — 交付了什么 · 指标 · 还差什么 · 下一步 · the 列车结果 line · the fleet-side
+task records · the re-run date — is the **closing summary** the driver puts on its
+parent task (`/fleet-epic-run` step 4.5): hand it those lines, in the page's order,
+so the record stands on its own without the page. Do **not** commit the report or
+the evidence into the repo — this skill ships to team repos too, and a batch
+report is not their artifact. Keep the source under
+`$FLEET_CONF_DIR/fleets/<sess>/epic/<T<n>>/`.
 
 ## 4. Close the loop
 
-If every member is resolved, close the EPIC issue with the summary comment as its
-closing note. Leave it open when anything is still `blocked`, and say which.
+Closing the parent task is the driver's (`/fleet-epic-run` step 4.5 — its result
+on its own record). Run by hand, this skill closes nothing: a batch with a member
+still `blocked` stays as it is, and the page says which.
 
 ## 5. Report (keep it short)
 
-One line: the URL, what the batch delivered, where the metrics stand (filled /
+One line: the link, what the batch delivered, where the metrics stand (filled /
 「⟨date⟩ 再看」 / 「本批未声明指标」), and the suggested next theme.
 
 ---
 
-Rails: operate on YOUR fleet's repos only — the parent's `$FLEET_REPO` and the
-hosted repos its members are filed in. Read-only except for one
-comment (and closing the EPIC when it is genuinely done). Never invent a number
+Rails: operate on YOUR fleet's repos only — the repos its members changed.
+Read-only except for the 活页 page and one progress word on the parent task. Never
+writes to GitHub. Never invent a number
 the fleet cannot measure — an honest worker-hours figure labelled as such beats a
 token attribution this fleet has no way to compute.

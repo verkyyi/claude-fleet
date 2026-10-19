@@ -14,7 +14,7 @@
               jargon (占槽→占用时长, reap→回收, worker→执行会话), no file names.
        下层 — the people who do the work: every technical field, folded into a
               <details>, DEFAULT CLOSED, nothing removed. Only the visible ORDER
-              changed; write-back to the parent / sub-issues carries both layers.
+              changed; write-back into the parent task's charter carries both layers.
      Sections are marked plan-only / report-only / both below. The report's
      reading order is: #delivered → #metrics → #members → #gaps → #obstacles →
      #ops(folded) — #next is an anchor inside #gaps, #obstacles is gone (#929).
@@ -304,7 +304,7 @@
 <!-- §4 members — BOTH PAGES. 要做的事 and the member cards are ONE list (issue #881): grouped
      by theme (h3.grp), 有空再做 (reserve) as the last group. Each card is ONE line until
      tapped — <details class="card">, summary = 名称 + 一句「解决什么」 — and the card IS the
-     sub-issue body later, both layers:
+     member's charter section later, both layers:
 
        tap 1 — 上层  目标 · 为谁 · 解决什么 · 怎么算成功 — plain words, no file names,
                      no fleet jargon, no keys.
@@ -416,8 +416,8 @@
      the suggested next step. The next-batch suggestion is a ROW too (「下一批主题：…」), not a
      list of its own; the #next anchor survives as a span in here. NO lede and NO trailing
      note: 「这批不做」 stays in the charter, 有空再做 left untouched is simply not listed.
-     There is no obstacles section: fleet-side defects are FILED as issues (numbers only in
-     the durable comment); one that matters to the reader is a 下一步 row in plain words.
+     There is no obstacles section: fleet-side defects are RECORDED as tasks (T<n> only in
+     the closing summary); one that matters to the reader is a 下一步 row in plain words.
      The band's 还差什么 = the number of rows here. -->
 <section id="gaps">
 <span id="next"></span>
@@ -472,18 +472,17 @@
 </section>
 
 <!-- §9 preflight — PLAN ONLY, AFTER the decisions (issue #881), and ONLY WHEN THERE IS
-     SOMETHING TO HANDLE (issue #929): FIXABLE, or a warning the 发起人 has to act on. READY with
+     SOMETHING TO HANDLE (issue #929): a warning the 发起人 has to act on (quota, a held machine). READY with
      nothing to do ⇒ drop this whole section (and the band's 开跑前要处理 tile) — 「可以。不用先
      处理什么」 is not information. The screen is not lost: it moves to the END of the #order
      fold as 预检原文, and is written back as before. When shown: ONE sentence — can it run,
-     what to handle first — and the verbatim fleet-epic-preflight.sh screen (plus, on FIXABLE,
-     the labels --fix would seed) in the fold. -->
+     what to handle first — and the check's output (quota, machine) verbatim in the fold. -->
 <section id="preflight">
 <h2>能不能开跑</h2>
 <div class="callout warn"><p><strong>⟨可以 / 处理后可以 / 不行⟩。</strong>⟨一句：开跑前要处理什么⟩</p></div>
 <details class="fold">
 <summary>预检原文</summary>
-<pre>⟨fleet-epic-preflight.sh output, verbatim⟩</pre>
+<pre>⟨the check's output — fleet-account.sh quota, fleet_machine_admit — verbatim⟩</pre>
 </details>
 </section>
 
@@ -504,7 +503,7 @@
 </div>
 <!-- only when #preflight was dropped (nothing to handle): the screen lives here instead -->
 <h3>预检原文</h3>
-<pre>⟨fleet-epic-preflight.sh output, verbatim⟩</pre>
+<pre>⟨the check's output — fleet-account.sh quota, fleet_machine_admit — verbatim⟩</pre>
 </details>
 </section>
 

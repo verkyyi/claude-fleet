@@ -28,9 +28,9 @@ fleet:
    `mcp__fleet-orch__await`（`task: T<n>`，等它的结局）。不建 GitHub issue，不按 issue 号派：
    - 一个仓库里一处已经清楚的改动 → **快活**：`task`（`title`、`body` 写清怎么算做完、`repo`、`spawn: true`）——
      一个任务一个会话一个 PR；会话自己读记录、开 PR、门绿了自己合、收口 `T<n>` 再回报你。
-   - 几处独立改动或跨仓库 → **EPIC**：在这里跑 `/fleet-epic-plan <主题>`，设计页托管给人看，等人确认。
-   - 已确认的 EPIC → **驱动会话**：从你自己的窗格跑 `bin/dash-raw-session.sh --repo <EPIC 的仓库> --as epic-driver
-     --name '<简称>·批次' --prompt '/fleet-epic-run <N>'`（不加 `--origin hub`，它才是你的子会话，批末向你回报）。
+   - 几处独立改动或跨仓库 → **EPIC**：在这里跑 `/fleet-epic-plan <主题>`，设计页发到活页（私密）推给人看，等人确认；
+     人点头后它开一条父任务 `T<n>`，同一次调用起驱动会话（`epic-driver`），成员是它派出的子任务，批末向你回报
+     （issue #4957，不建 GitHub issue）。
    - 值得做但不是现在 → **先不派**：告诉人记下了什么、等什么；到时候再 `task`。
    - 只是个问题 → 直接回答，不建任务。
    - 不改代码的活（设计页、调研、发布）→ `task` 不带 `repo`、`spawn: true`，开一个不绑仓库的会话。
