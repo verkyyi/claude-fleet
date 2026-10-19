@@ -677,6 +677,11 @@ FLEET_WRAP_FAST_FAIL               knob: an agent ending within this many second
 FLEET_WRAP_LAUNCH                  seam: the launcher fleet-session-wrap.sh runs (default bin/fleet-claude.sh)
 FLEET_WT_PENDING                   handoff: the cold start's checkout marker (the filler's pid) a new window's agent carries; set-claude-state.sh waits on it (#2237)
 FLEET_X                            doc: the placeholder name in a comment, not a key
+FLEET_GH_BLACKHOLE_LAUNCHD         path: where the black-hole drill's revert LaunchDaemon goes (fleet-gh-blackhole.sh, #4840)
+FLEET_GH_BLACKHOLE_OS              seam: the OS the black-hole drill writes rules for — pf or nftables (fleet-gh-blackhole.sh, #4840)
+FLEET_GH_BLACKHOLE_ROOT_OK         seam: skip the euid-0 check under a fake pfctl / nft (fleet-gh-blackhole.sh, #4840)
+FLEET_GH_BLACKHOLE_RUN_ANYWAY      knob: `run` without a filter applied — the 额度用尽 way (FLEET_GH_FAKE_LIMIT) needs none (fleet-gh-blackhole.sh, #4840)
+FLEET_GH_BLACKHOLE_STATE           path: the black-hole drill's state dir (fleet-gh-blackhole.sh, #4840)
 FLEET_GH_FAKE_LIMIT                seam: inject a GitHub rate limit per bucket for tests, never touches the account (fleet-gh-lib.sh, #1042)
 FLEET_GH_LIMIT_HOLD_SECS           knob: internal pacing/limit, safe in-code default (fleet-gh-lib.sh)
 FLEET_GH_LOG                       path: state/log location override (fleet-gh-lib.sh)

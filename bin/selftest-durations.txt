@@ -162,6 +162,7 @@
 65.3 fleet-break-it-cred-sep-selftest.sh
 36.7 fleet-break-it-cred-shared-selftest.sh
 0.0 fleet-break-it-entry-selftest.sh
+7.0 fleet-break-it-gh-selftest.sh
 41.4 fleet-break-it-hub-2-selftest.sh
 41.8 fleet-break-it-hub-3-selftest.sh
 48.8 fleet-break-it-hub-selftest.sh
@@ -287,6 +288,7 @@
 3.8 fleet-feedback-selftest.sh
 4.8 fleet-fold-selftest.sh
 0.7 fleet-gate-check-selftest.sh
+2.0 fleet-gh-blackhole-selftest.sh
 3.3 fleet-gh-fallback-selftest.sh
 11.0 fleet-gh-limit-visible-selftest.sh
 2.4 fleet-gh-selftest.sh
@@ -550,6 +552,7 @@
 0.5 forkless-hotpath-selftest.sh
 0.0 fzf-modal-close-selftest.sh
 0.1 fzf-new-chip-selftest.sh
+120.0 gh-blackhole-selftest.sh
 0.3 helper-auth-selftest.sh
 1.3 history-multirepo-selftest.sh
 1.6 hub-creds-selftest.sh
