@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -808,11 +810,86 @@ func (s *Server) reconcileOperation(ctx context.Context, o *store.FleetOperation
 	}
 	changed := o.Status != remote.Status
 	o.Status, o.Result, o.Updated = remote.Status, string(remote.Result), now
+	if settled, err := s.settleNeverAppeared(o, now); err != nil {
+		return err
+	} else if settled {
+		changed = true
+	}
 	if changed {
 		s.progressOp(*o) // the asking parent's stream (claude-fleet#1648)
 	}
 	return nil
 }
+
+// settleNeverAppeared: an online node's UNKNOWN_OUTCOME for a worker_start
+// whose worker the hub can name ends failed once the hub's own books show that
+// worker never appeared — store.SettleNeverAppearedStart re-reads them in the
+// write (claude-fleet#4932). o is updated when it settles.
+func (s *Server) settleNeverAppeared(o *store.FleetOperation, now time.Time) (bool, error) {
+	if o.Action != "worker_start" || o.Status != "unknown" || time.Since(o.Created) < neverAppearedGrace {
+		return false, nil
+	}
+	var res struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(o.Result), &res) != nil || res.Error.Code != control.CodeUnknownOutcome {
+		return false, nil
+	}
+	w := startWorkerOf(o.Request, res.Error.Message)
+	prior := json.RawMessage(o.Result)
+	evidence := func(seen string) string {
+		b, _ := json.Marshal(map[string]any{"error": map[string]any{"code": "WORKER_NEVER_APPEARED",
+			"message": "settled: worker never appeared — the node answered UNKNOWN_OUTCOME and, past " +
+				neverAppearedGrace.String() + ", the hub found no inventory row, lease or open local start for it (" + seen + ")",
+			"issue": w.Issue, "repo": w.Repo, "identity": w.Identity, "prior_status": o.Status, "prior_result": prior}})
+		return string(b)
+	}
+	ok, why, err := s.Store.SettleNeverAppearedStart(o.ID, w, neverAppearedGrace, evidence, now)
+	if err != nil || !ok {
+		if why != "" {
+			log.Printf("fleet: worker_start %s stays unknown: %s", o.ID, why)
+		}
+		return false, err
+	}
+	fresh, err := s.Store.FleetOperation(o.ID)
+	if err != nil {
+		return false, err
+	}
+	*o = fresh
+	return true, nil
+}
+
+// startWorkerOf names the worker a worker_start would have opened: its issue
+// (and repo) from the journalled request, else the window identity the node's
+// message names (`fid:<uuid>`).
+func startWorkerOf(request, message string) store.StartWorker {
+	var req struct {
+		Params struct {
+			Issue json.Number `json:"issue"`
+			Repo  string      `json:"repo"`
+		} `json:"params"`
+	}
+	var w store.StartWorker
+	if json.Unmarshal([]byte(request), &req) == nil {
+		if n, err := req.Params.Issue.Int64(); err == nil && n > 0 && n <= math.MaxInt32 {
+			w.Issue, w.Repo = int(n), req.Params.Repo
+		}
+	}
+	if m := fidInMessage.FindStringSubmatch(message); m != nil && fleetid.IsUUID(m[1]) {
+		w.Identity = m[1]
+	}
+	return w
+}
+
+var fidInMessage = regexp.MustCompile(`fid:([0-9a-f-]{36})`)
+
+// neverAppearedGrace: how old an UNKNOWN_OUTCOME worker_start must be, and how
+// long after it its fleet's inventory must have been read, before the hub
+// settles it as never appeared.
+var neverAppearedGrace = time.Hour
 
 // orphanOpGrace: how old an operation must be before a node's NOT_FOUND
 // settles it failed — well past any write's wait for the node's journal.

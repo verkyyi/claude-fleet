@@ -622,3 +622,44 @@ func TestFleetWriteRefusedStartSettles(t *testing.T) {
 		t.Fatalf("NOT_FOUND past the grace = %v; want failed NOT_ACCEPTED", got)
 	}
 }
+
+// claude-fleet#4932: an online node that keeps answering UNKNOWN_OUTCOME for a
+// worker_start ends it failed at operation_get's reconcile once the hub's own
+// books show the worker never appeared (past the grace: no inventory row, no
+// lease, no open local start); while the inventory lists it, it stays unknown.
+func TestFleetWriteNeverAppearedStartSettles(t *testing.T) {
+	h, _, macC, _, f4 := twoNodes(t)
+	macC.setAnswer(accepted)
+	id := postFleet(t, h, "worker_start", map[string]any{"issue": 12, "fleet_id": f4.FleetID, "idempotency_key": "na"}, 200)["operation_id"].(string)
+	macC.setOpGet(func(env map[string]any) (any, *control.Error) {
+		return map[string]any{"operation_id": env["operation_id"], "fleet_id": f4.FleetID, "action": "worker_start", "status": "unknown",
+			"result": json.RawMessage(`{"error":{"code":"UNKNOWN_OUTCOME","message":"Spawn returned but no matching worker is visible"}}`)}, nil
+	})
+	if got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+id, 200); got["status"] != "unknown" {
+		t.Fatalf("inside the grace = %v; want unknown", got)
+	}
+	old := neverAppearedGrace
+	neverAppearedGrace = 0
+	t.Cleanup(func() { neverAppearedGrace = old })
+	// The inventory lists issue 12's worker: it may have opened — kept.
+	with := fakeFleet(t, machineB, "fleet-mac-c", writeRepo, "/u/frank/claude-fleet", 2, 12)
+	macC.beatLoad("mac-c", "frank", machineB, 1, 1, with)
+	waitFor(t, 3*time.Second, "issue 12 in the inventory", func() bool {
+		f, err := h.srv.Store.Fleet(f4.FleetID)
+		return err == nil && strings.Contains(f.WorkersJSON, "issue-12")
+	})
+	if got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+id, 200); got["status"] != "unknown" {
+		t.Fatalf("worker in the inventory = %v; want unknown", got)
+	}
+	// Gone from a later inventory: settled failed, the node's answer kept as evidence.
+	macC.beatLoad("mac-c", "frank", machineB, 1, 1, f4)
+	waitFor(t, 3*time.Second, "issue 12 gone", func() bool {
+		f, err := h.srv.Store.Fleet(f4.FleetID)
+		return err == nil && !strings.Contains(f.WorkersJSON, "issue-12")
+	})
+	got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+id, 200)
+	e, _ := got["result"].(map[string]any)["error"].(map[string]any)
+	if got["status"] != "failed" || e["code"] != "WORKER_NEVER_APPEARED" || !strings.Contains(e["message"].(string), "settled: worker never appeared") || e["prior_result"] == nil {
+		t.Fatalf("never appeared = %v; want failed WORKER_NEVER_APPEARED", got)
+	}
+}
