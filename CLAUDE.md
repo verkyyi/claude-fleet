@@ -431,7 +431,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   found or unreadable ⇒ the spawn refuses before any window, naming the file
   (BREAK-IT `agent-file-broken`). No `--as` ⇒ the shipped `fleet-worker` when it
   is there, else a plain session given the ticket. The core ships
-  `conf/agent-defaults/claude/agents/` (fleet-worker, orchestrator, steward)
+  `conf/agent-defaults/claude/agents/` (fleet-worker, orchestrator; steward left
+  with #4900)
   into `~/.claude/agents` through
   install-apply's `agent files` step (`fleet-agent-def.py ship`): written once,
   following the release while still the fleet's bytes, never touched once edited
@@ -530,11 +531,11 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `bin/web-console-pack.sh`); its budget bar reads the person's own `/v1/me/usage`.
   BREAK-IT `chat-relay-wrong-person` · `chat-socket-other-login` ·
   `chat-budget-bypass` · `chat-home-moved`.
-- **Orchestrating and stewarding are session templates — no seat, no rule table**
+- **Orchestrating is a session template — no seat, no rule table**
   (EPIC #4333; issues #4335 · #4336 · #4340). `conf/agent-defaults/claude/agents/orchestrator.md`
-  and `steward.md` are standard agent files shipped into `~/.claude/agents` like
-  fleet-worker; a person opens one with `spawn agent:orchestrator|steward` (`--as`,
-  above). Its body is the session's system prompt — a compaction or a resume keeps
+  is a standard agent file shipped into `~/.claude/agents` like fleet-worker; a
+  person opens one with `spawn agent:orchestrator` (`--as`, above). The steward
+  template is gone (issue #4900) — nothing patrols; a red only alerts. Its body is the session's system prompt — a compaction or a resume keeps
   it, so nothing relays a role's state. The orchestrator's few dispatch rules are
   written into its template, and nothing else holds any (issue #4340; the `rule`
   argument and the role-taking tool are gone, #4790). Several orchestrators may run at once; each
@@ -558,8 +559,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   #4790), and no setting brings one back (FLEET_ORCHESTRATOR,
   FLEET_STEWARD, FLEET_ORCH_*, FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL|REVIVE_SECS are
   gone). The `bin/fleet-orchestrator.sh` / `bin/fleet-steward.sh`
-  launchers are gone (their quiet shells left with #3576). A person who wants the role spawns `agent:orchestrator`
-  (or `agent:steward`); closed is closed. Gone with the seat: the mod's role section, exit guard and queue count
+  launchers are gone (their quiet shells left with #3576). A person who wants the role spawns `agent:orchestrator`;
+  closed is closed. Gone with the seat: the mod's role section, exit guard and queue count
   (`orchestrator.ts` · `exit-guard.ts` · `queue.ts`), the inventory's columns 31-37
   (an older node's tags are dropped unread by `inventory_row`, `# compat-1v`), the
   client's `orch_*` / `steward_all_*` files, the steward's hosted page and
@@ -572,7 +573,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   reads it as an address (#4790). BREAK-IT `role-auto-reopen-off`.
   The fleet-steward plugin and the programs behind it — the beat, the health watch,
   the decision sheet, the patrol / batches panes, parking, the followup list — are
-  gone (issue #4339, EPIC #4333 C6): the steward is the session template above, and
+  gone (issue #4339, EPIC #4333 C6), and its template with #4900;
   a stalled dialog is answered only through `bin/fleet-dialog-answer.sh` (`--by
   session`; its trail is the 代答记录 `fleets/<sess>/answers/answers-<day>.md`).
   `dialog-wait-selftest.sh`.

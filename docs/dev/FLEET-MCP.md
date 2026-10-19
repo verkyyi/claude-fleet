@@ -49,8 +49,7 @@ ships with the core (issue #4334): no plugin registers it. Claude shows its tool
 - **The role-taking tool is listed by neither server** (issue #4334) and its script
   left with the role seats (issue #4340, EPIC #4333 C7): an old session that listed it
   keeps a call that answers 「retired」 (exit 2, nothing marked) for one version
-  (`# compat-1v`). A role is a session template now: `spawn` with `agent:orchestrator`
-  / `agent:steward`.
+  (`# compat-1v`). A role is a session template now: `spawn` with `agent:orchestrator`.
 - **There is no `rule`** on `task` and `file_issue` (issue #4340: the dispatch rule
   table is gone; nothing writes 「按规则 N 派发」 or a `fleet:rule` marker).
 - **Old sessions keep their tools (#2068, one version — `# compat-1v`).** `fleet`

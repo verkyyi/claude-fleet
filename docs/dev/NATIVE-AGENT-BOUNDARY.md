@@ -851,7 +851,7 @@ python3 bin/fleet-native-plugin-cli-selftest.py --codex /path/to/codex
 切换前还须验证：真实 Fleet 插件 MCP 的超时、路径展开与完整调用，原生 hook 信任/变量/事件映射、
 旧命令别名、各账号 home 的独立安装，以及原生关闭后不会被 Claude 同步重新启用。
 同一插件的桥接技能、MCP 与 hooks 必须一并退出，且只清理可证明由 Fleet 生成的旧物；
-用户自建文件与老会话至少保留既有兼容周期。默认不安装 EPIC 等按需插件；orchestrator / steward 是会话模板，人起才有。
+用户自建文件与老会话至少保留既有兼容周期。默认不安装 EPIC 等按需插件；orchestrator 是会话模板，人起才有（steward 模板随 #4900 去掉）。
 
 ### 实际 orchestration 插件的原生包（已退役）
 
