@@ -85,15 +85,24 @@ func supersededBy(f store.FleetRow, repo string, fs []store.FleetRow, eps func(s
 	return store.FleetRow{}, false
 }
 
+// repoClientHost is a fleet row whose endpoint is a client — a person's
+// terminal, which runs no task (claude-fleet#4886): a repo it still lists in
+// its inventory is a leftover, not a host, so it is listed apart and blocks
+// nothing.
+type repoClientHost struct {
+	Fleet    string `json:"fleet_id"`
+	Endpoint string `json:"endpoint_id"`
+}
+
 // Only registry observations are accepted. A caller cannot submit a reassuring
 // inventory in its manifest. Absent/offline/old nodes are unknown, never drained
 // — a RETIRED one is neither: its fleet row is listed apart and blocks nothing,
-// and so is a SUPERSEDED one (supersededBy).
-func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a store.RepoAuthority) ([]repoAuthorityNode, []store.RepoLegacyOwner, []string, []repoRetiredHost, []repoSupersededHost, error) {
-	nodes, owners, blockers, retired, superseded := []repoAuthorityNode{}, []store.RepoLegacyOwner{}, []string{}, []repoRetiredHost{}, []repoSupersededHost{}
+// and so is a SUPERSEDED one (supersededBy) and a CLIENT's (claude-fleet#4886).
+func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a store.RepoAuthority) ([]repoAuthorityNode, []store.RepoLegacyOwner, []string, []repoRetiredHost, []repoSupersededHost, []repoClientHost, error) {
+	nodes, owners, blockers, retired, superseded, clients := []repoAuthorityNode{}, []store.RepoLegacyOwner{}, []string{}, []repoRetiredHost{}, []repoSupersededHost{}, []repoClientHost{}
 	fs, err := s.Store.Fleets()
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, err
 	}
 	epCache := map[string]*store.Endpoint{}
 	eps := func(id string) *store.Endpoint {
@@ -115,6 +124,12 @@ func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a s
 		if e == nil && ep != nil && ep.RetiredAt != nil {
 			if c.all || s.nodeTaskOwner(ep) == c.owner {
 				retired = append(retired, repoRetiredHost{f.FleetID, f.EndpointID, *ep.RetiredAt})
+			}
+			continue
+		}
+		if e == nil && ep != nil && s.endpointRole(ep.ID) == store.NodeRoleClient {
+			if c.all || s.nodeTaskOwner(ep) == c.owner {
+				clients = append(clients, repoClientHost{f.FleetID, f.EndpointID})
 			}
 			continue
 		}
@@ -155,7 +170,7 @@ func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a s
 			}
 			known, e := s.Store.TaskExecutionKnown(s.nodeTaskOwner(ep), w.WorkerID)
 			if e != nil {
-				return nil, nil, nil, nil, nil, e
+				return nil, nil, nil, nil, nil, nil, e
 			}
 			if !known {
 				owners = append(owners, store.RepoLegacyOwner{WorkerID: w.WorkerID, EndpointID: f.EndpointID})
@@ -166,7 +181,16 @@ func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a s
 	if len(nodes) == 0 {
 		blockers = append(blockers, "no verified host for this repo")
 	}
-	return nodes, owners, blockers, retired, superseded, nil
+	return nodes, owners, blockers, retired, superseded, clients, nil
+}
+
+// endpointRole is an endpoint's role ("" when unread or never typed).
+func (s *Server) endpointRole(endpointID string) string {
+	et, err := s.Store.EndpointTrustOf(endpointID)
+	if err != nil {
+		return ""
+	}
+	return et.Role
 }
 
 func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticketCaller) {
@@ -193,7 +217,7 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 		writeJSON(w, 200, a)
 		return
 	}
-	nodes, owners, blockers, retired, superseded, err := s.repoAuthorityInventory(r.Context(), c, a)
+	nodes, owners, blockers, retired, superseded, clients, err := s.repoAuthorityInventory(r.Context(), c, a)
 	if err != nil {
 		httpError(w, 500, err.Error())
 		return
@@ -228,7 +252,7 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 			httpError(w, 500, err.Error())
 			return
 		}
-		writeJSON(w, 200, map[string]any{"authority": a, "nodes": nodes, "retired_hosts": retired, "superseded_hosts": superseded, "legacy_owners": owners, "blockers": blockers, "starts": starts, "tickets": tickets, "tickets_may_be_truncated": len(tickets) == 500, "tasks": tasks, "dry_run": true, "live_acceptance": "unverified"})
+		writeJSON(w, 200, map[string]any{"authority": a, "nodes": nodes, "retired_hosts": retired, "superseded_hosts": superseded, "client_hosts": clients, "legacy_owners": owners, "blockers": blockers, "starts": starts, "tickets": tickets, "tickets_may_be_truncated": len(tickets) == 500, "tasks": tasks, "dry_run": true, "live_acceptance": "unverified"})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -387,6 +411,12 @@ func (s *Server) ticketAuthorityStart(w http.ResponseWriter, r *http.Request, c 
 	}
 	if !idemRE.MatchString(in.Key) || (in.Action == "stopped" && !in.Stopped) {
 		httpError(w, 400, "reservation / native stop proof required")
+		return
+	}
+	// A client reserves no start (claude-fleet#4886); it may still settle
+	// one it left open before it was typed, so only reserve is refused.
+	if in.Action == "reserve" && s.endpointRole(ep.ID) == store.NodeRoleClient {
+		httpError(w, 403, "这台是客户端，任务在托管节点上跑 (a client node runs no task)")
 		return
 	}
 	if in.Worker != "" {

@@ -346,3 +346,73 @@ fleet_hub_auth_note() {
   printf '%s' "$out" > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
   return 0
 }
+
+# ---- what this node is: client or managed (issue #4886) ----------------------
+# The hub types every node: managed (a login of a 托管 machine, a cluster pod —
+# the fleet runs tasks there) or client (a person's terminal: it connects, looks
+# and opens windows, and hosts no repo, runs no task). The hub's word is the one
+# record (endpoints.role, GET /v1/node/self); this login keeps it for
+# FLEET_NODE_ROLE_TTL seconds (3600) in $FLEET_CONF_DIR/node-role.
+#
+# fleet_node_role → managed | client on stdout, rc 0; rc 1 and nothing when it is
+# not known — no hub, no node token, a hub older than #4886, unreachable, or a
+# row the operator never typed. Unknown is NEVER client: every caller then does
+# what it did before, byte for byte. --fresh asks the hub whatever the age (a
+# rare road that turns a node into a host: repo add, host on), falling back to
+# the kept word when the hub cannot be asked; --kept never asks, whatever the age
+# (a spawn: the diskguard tick keeps the word fresh — node_role_watch). FLEET_NODE_ROLE
+# (managed|client|unknown) answers for a test; FLEET_HUB_CURL is the transport.
+fleet_node_role() {
+  local f="$FLEET_CONF_DIR/node-role" role='' at='' kept='' now tok url resp fresh='' only=''
+  case "${1:-}" in --fresh) fresh=1 ;; --kept) only=1 ;; esac
+  case "${FLEET_NODE_ROLE:-}" in
+    managed|client) printf '%s\n' "$FLEET_NODE_ROLE"; return 0 ;;
+    unknown) return 1 ;;
+  esac
+  now=$(date +%s)
+  [ -z "$only" ] || [ -r "$f" ] || return 1
+  if [ -r "$f" ]; then
+    read -r kept at < "$f" 2>/dev/null || true
+    case "$at" in ''|*[!0-9]*) at=0 ;; esac
+    case "$kept" in managed|client) ;; *) kept='' ;; esac
+    if [ -n "$only" ]; then [ -n "$kept" ] || return 1; printf '%s\n' "$kept"; return 0; fi
+    if [ -z "$fresh" ] && [ $((now - at)) -lt "${FLEET_NODE_ROLE_TTL:-3600}" ]; then
+      [ -n "$kept" ] || return 1
+      printf '%s\n' "$kept"; return 0
+    fi
+  fi
+  tok=${CCQUOTA_TOKEN:-$(_fleet_node_env_val CCQUOTA_TOKEN 2>/dev/null)}
+  url=${CCQUOTA_HUB_URL:-${FLEET_HUB_URL:-$(_fleet_node_env_val CCQUOTA_HUB_URL 2>/dev/null)}}
+  if [ -z "$tok" ] || [ -z "$url" ] || ! resp=$(printf 'Authorization: Bearer %s\n' "$tok" | "${FLEET_HUB_CURL:-curl}" -fsS \
+       --max-time "${FLEET_NODE_ROLE_TIMEOUT:-4}" -H @- "${url%/}/v1/node/self" 2>/dev/null); then
+    if [ -n "$kept" ]; then printf '%s\n' "$kept"; return 0; fi
+    # Nothing kept and nothing heard: remember that much for the TTL, so an
+    # unreachable hub costs one wait an hour, never one per spawn.
+    [ -n "$tok" ] && [ -n "$url" ] && mkdir -p "$FLEET_CONF_DIR" 2>/dev/null \
+      && printf -- '- %s\n' "$now" > "$f.$$" 2>/dev/null && mv -f "$f.$$" "$f" 2>/dev/null
+    rm -f "$f.$$" 2>/dev/null
+    return 1
+  fi
+  role=$(printf '%s' "$resp" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("role") or "")
+except Exception: pass' 2>/dev/null)
+  case "$role" in managed|client) ;; *) role='' ;; esac
+  # The answer is kept either way (an untyped row too), so a busy road asks once
+  # an hour, not on every call.
+  mkdir -p "$FLEET_CONF_DIR" 2>/dev/null && printf '%s %s\n' "${role:--}" "$now" > "$f.$$" 2>/dev/null \
+    && mv -f "$f.$$" "$f" 2>/dev/null
+  rm -f "$f.$$" 2>/dev/null
+  [ -n "$role" ] || return 1
+  printf '%s\n' "$role"
+}
+
+# fleet_client_refuse <what> [--fresh|--kept] — rc 0 (and the one line on stderr) when
+# the hub typed this node a client: <what> would make it run tasks. rc 1
+# otherwise — managed or unknown go on as before. FLEET_ALLOW_CLIENT_TASKS=1 is
+# the hatch.
+fleet_client_refuse() {
+  [ "${FLEET_ALLOW_CLIENT_TASKS:-0}" = 1 ] && return 1
+  [ "$(fleet_node_role ${2:+"$2"} 2>/dev/null)" = client ] || return 1
+  printf 'fleet: 这台是客户端，任务在托管节点上跑 — %s 不在这里做（hub 记它为 client；改类型找管理员）\n' "$1" >&2
+  return 0
+}

@@ -111,9 +111,9 @@ printf '%s\n' "bin/fleet-client-core.sh${tab}ls" > "$T/d1/used.tsv"
 bash "$RT" build "$T/d1" --write "$T/lib.list" 2>/dev/null
 [ "$(grep -vc '^#' "$T/lib.list")" = 1 ] && ok "D nothing followed out of fleet-client-core.sh" || no "D fleet-client-core.sh: $(grep -v '^#' "$T/lib.list" | head -5)"
 # the hand-written uses (issue #4826) carry over from the list a build replaces
-printf '%s\n' "bin/fleet-node-probe.sh${tab}agent" "bin/fleet-route.py${tab}dispatch" >> "$T/lib.list"
+printf '%s\n' "bin/fleet-node-leave.sh${tab}agent" "bin/fleet-route.py${tab}dispatch" >> "$T/lib.list"
 bash "$RT" build "$T/d1" --write "$T/lib.list" 2>/dev/null
-grep -q "^bin/fleet-node-probe.sh${tab}agent$" "$T/lib.list" && grep -q "^bin/fleet-route.py${tab}dispatch$" "$T/lib.list" \
+grep -q "^bin/fleet-node-leave.sh${tab}agent$" "$T/lib.list" && grep -q "^bin/fleet-route.py${tab}dispatch$" "$T/lib.list" \
   && ok "D agent / dispatch carry over a rebuild" || no "D hand uses lost: $(grep -v '^#' "$T/lib.list")"
 
 # F — the other way (issue #4826): a file the manifest INSTALLS is on the list;

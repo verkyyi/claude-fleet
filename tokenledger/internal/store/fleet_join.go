@@ -202,8 +202,10 @@ func (s *Store) JoinCodes(limit int) ([]JoinCode, error) {
 // login-registered node (claude-fleet#2212), tagged with the device key that
 // asked — the dedup key DeviceNodeEndpoint reads.
 func (s *Store) CreateJoinCodeForDevice(codeHash, deviceFP string, now time.Time, ttl time.Duration) error {
-	_, err := s.write.Exec(`INSERT INTO fleet_join_codes (code_hash, label, kind, created_at, expires_at, device_fp)
-		VALUES (?, '', ?, ?, ?, ?)`, codeHash, NodeKindFixed, fmtTime(now), fmtTime(now.Add(ttl)), deviceFP)
+	// A device's own login is a person's terminal: it enrolls as a client
+	// (claude-fleet#4886) — it connects and looks, it runs no task.
+	_, err := s.write.Exec(`INSERT INTO fleet_join_codes (code_hash, label, kind, created_at, expires_at, device_fp, role)
+		VALUES (?, '', ?, ?, ?, ?, ?)`, codeHash, NodeKindFixed, fmtTime(now), fmtTime(now.Add(ttl)), deviceFP, NodeRoleClient)
 	return err
 }
 

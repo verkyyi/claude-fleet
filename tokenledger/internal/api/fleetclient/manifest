@@ -39,11 +39,9 @@ bin/fleet-login.py
 # (#2212): the computer takes itself off the hub.
 bin/fleet-node.sh
 bin/fleet-node-leave.sh
-# bin/fleet-node-probe.sh + bin/fleet-node-sleepwatch.sh: the node agent a login
-# starts runs them from here (#1720, #1721) — can this computer run sessions,
-# and when it sleeps and wakes
-bin/fleet-node-probe.sh
-bin/fleet-node-sleepwatch.sh
+# (bin/fleet-node-probe.sh + bin/fleet-node-sleepwatch.sh left the client with
+# #4886: a client runs no session, so «can it run sessions» and «it sleeps» are a
+# managed node's — whose full install the agent reads them from first.)
 bin/fleet-logout.sh
 # bin/fleet-host.sh is `fleet host on|off|status` (#1806): 承载; on turns the
 # base in ~/.claude/fleet into the full install in place (fleet-host-install.sh,

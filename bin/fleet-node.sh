@@ -179,7 +179,8 @@ cmd_join() {
   rm -rf "$work"
   # Can it run sessions? One line, plus 「可以打开：fleet host on」 when
   # it can (issue #1720) — never a reason to fail the join.
-  [ "$rc" = 0 ] && FLEET_CONF_DIR="$CONF" "$here/fleet-node-probe.sh" 2>/dev/null
+  # (a client package carries no probe since #4886: a client runs no session)
+  [ "$rc" = 0 ] && [ -f "$here/fleet-node-probe.sh" ] && FLEET_CONF_DIR="$CONF" "$here/fleet-node-probe.sh" 2>/dev/null
   return "$rc"
 }
 
@@ -322,6 +323,8 @@ cmd_compute() {
   esac
   case "$verb" in
     on)
+      # The probe is a managed node's (#4886): a client package has none.
+      [ -f "$here/fleet-node-probe.sh" ] || { echo "✗ 这台只装了客户端，任务在托管节点上跑（要它跑会话：fleet host on）"; return 1; }
       line=$(FLEET_CONF_DIR="$CONF" "$here/fleet-node-probe.sh" 2>&1); rc=$?
       [ "$rc" -le 1 ] || { echo "✗ 没测成：$line"; return 1; }
       printf '%s\n' "$line" | grep -v '^可以打开：'
@@ -356,7 +359,7 @@ cmd_compute() {
         *) if [ "$(envval CCQUOTA_FLEET_COMPUTE_FORCE)" = 1 ]; then echo "已强制打开（--force）"; else echo "已打开：入口可以往这台派会话"; fi
            [ "$(envval CCQUOTA_FLEET_PERSONAL)" = 1 ] && personal_line ;;
       esac
-      FLEET_CONF_DIR="$CONF" "$here/fleet-node-probe.sh" --max-age 86400 2>/dev/null | grep -v '^可以打开：'
+      [ ! -f "$here/fleet-node-probe.sh" ] || FLEET_CONF_DIR="$CONF" "$here/fleet-node-probe.sh" --max-age 86400 2>/dev/null | grep -v '^可以打开：'
       return 0
       ;;
     *) echo "fleet node compute: on [--force] | off | status" >&2; return 2 ;;

@@ -819,6 +819,9 @@ func (s *Server) routes() *routeMux {
 		// Take a machine's enrollment back (claude-fleet#1403): the token,
 		// its open link, its session passes and relay credential at once.
 		mux.Handle(NodeRevokePath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleNodeRevoke))))
+		// A node's type, client or managed (claude-fleet#4886): the backfill
+		// proposal and the operator's word.
+		mux.Handle(NodeRolePath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleNodeRole))))
 		// Take a machine off the hub (claude-fleet#1928): the revoke plus its
 		// roster row — an admin any machine, a person their own; a node itself
 		// with its own token (`fleet node leave`).

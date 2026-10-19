@@ -50,8 +50,9 @@
 #
 # `fold` moves a one-repo fleet into another (issue #796): see fold_main below.
 #
-# --session defaults to the fleet this pane runs in. Exit 0 ok, 1 refused/failed,
-# 2 usage.
+# --session defaults to the fleet this pane runs in. Exit 0 ok, 1 refused/failed
+# (add on a node the hub typed client: 「这台是客户端，任务在托管节点上跑」, issue
+# #4886), 2 usage.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
@@ -84,6 +85,9 @@ while [ $# -gt 0 ]; do
     *) if [ -z "$REPO" ]; then REPO="$1"; elif [ -z "$DIR" ]; then DIR="$1"; else die "extra arg $1"; fi; shift ;;
   esac
 done
+# A client hosts no repo (issue #4886): the hub typed this node a terminal —
+# said before anything else, a client usually has no fleet at all.
+if [ "$cmd" = add ] && fleet_client_refuse "托管仓库 ${REPO:-}" --fresh; then exit 1; fi
 if [ "$cmd" = fold ]; then
   { [ -n "$REPO" ] && [ -n "$INTO" ] && [ -z "$DIR" ]; } || usage
   SESS="$INTO"

@@ -13,8 +13,6 @@ bin/fleet	help,status,update,doctor,login,logout,host-on,view,ls,show,answer,con
 bin/fleet-login.py	login,view,ls,show,answer,connect,doctor-live,bundle
 bin/fleet-node.sh	static
 bin/fleet-node-leave.sh	static
-bin/fleet-node-probe.sh	agent
-bin/fleet-node-sleepwatch.sh	agent
 bin/fleet-logout.sh	logout
 bin/fleet-host.sh	host-on
 bin/fleet-host-install.sh	static

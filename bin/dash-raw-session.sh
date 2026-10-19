@@ -604,6 +604,10 @@ if [ "$PLACING" = 1 ]; then
 fi
 # Opening here after all: this machine's cap verdict, held above, now applies.
 if [ -n "$CAP_HELD" ]; then refuse "$CAP_HELD"; exit 2; fi
+# Opening here: a node the hub typed client runs no session (issue #4886).
+if fleet_client_refuse '开会话' --kept 2>/dev/null; then
+  refuse "raw: 这台是客户端，任务在托管节点上跑"; exit 1
+fi
 
 # In-flight marker (issue #531). Only the FOREGROUND pass reaches here — the --bg
 # dispatcher above re-execs + exits, so its instant return holds no slot. From now

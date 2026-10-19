@@ -164,6 +164,7 @@ var routeAccess = map[string]string{
 	"/v1/fleet/revocations":       accessAdmin,
 	SvcAdminPath:                  accessAdmin,
 	NodeRevokePath:                accessAdmin,
+	NodeRolePath:                  accessAdmin, // claude-fleet#4886
 	"/v1/fleet/credentials/audit": accessAdmin,
 	CredPolicyPath:                accessAdmin,
 	MachinePolicyPath:             accessAdmin,

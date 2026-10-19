@@ -179,6 +179,35 @@ they repaint instantly:
   sessions fail over to a fresh subscription. Off unless token files exist. See
   [MULTI-ACCOUNT](MULTI-ACCOUNT.md).
 
+## What a computer is — client, hub, managed node
+
+A fleet has three roles, and only one runs tasks (issue #4886):
+
+- **client (客户端)** — a person's terminal: it connects, looks and opens
+  windows. It hosts no repo and runs no task.
+- **hub (入口)** — the coordinator (`tokenledger`'s `ccquota` server).
+- **managed node (托管节点)** — a login of a 托管 machine (the two Mac minis) or
+  an execution pod of the `fleet-workers` cluster. Tasks run here only.
+
+The hub types every node it knows — `endpoints.role`, `managed` or `client` —
+when it joins (a 托管 join code and a login the hub opened: managed; a device's
+`fleet login`: client; a plain code: the `role` it was minted with, else
+untyped), and the operator changes it
+(`bin/fleet-node-role.sh plan|set|apply`, `GET/POST /v1/fleet/nodes/role`). A row
+from before #4886 is untyped ("") until the backfill writes it: untyped is never
+client, so everything reads as before. A client is passed over by placement,
+skipped by the repo-authority check (listed under `client_hosts`, blocks
+nothing), may not reserve a local start, and refuses on its own side —
+`fleet-client-core.sh`'s `fleet_client_refuse` (the hub's word through
+`GET /v1/node/self`, kept an hour in `$FLEET_CONF_DIR/node-role` and refreshed
+by the diskguard tick's `node_role_watch`) in `fleet-repo.sh add` and
+`fleet host on` (asked fresh) and a spawn that would open here (the kept word
+only — a spawn never asks the hub):
+「这台是客户端，任务在托管节点上跑」. `FLEET_ALLOW_CLIENT_TASKS=1` is the hatch.
+No hub, no node token ⇒ unknown ⇒ byte for byte as before.
+`fleet-node-role-selftest.sh`, `TestRepoAuthorityClientHostBlocksNothing`,
+`TestNodeRoleRoute`.
+
 ## What a computer is — fleet and 承载
 
 A person sees two words for a computer, and only two (issue #1806, EPIC #1813):
