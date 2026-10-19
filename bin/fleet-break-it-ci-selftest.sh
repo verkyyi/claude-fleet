@@ -626,7 +626,7 @@ drill_train_red_stalls() {
   v=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["verdict"])' "$d/v.json")
   [ "$v" = flaky ] || { WHY="a red on a test with an open flaky issue was judged $v"; rm -rf "$d"; return 1; }
   for i in 0 1; do
-    a=$(dec --retries "$i"); [ "$a" = dispatch ] || { WHY="a flaky train (re-sent $i×) was not re-sent: $a"; rm -rf "$d"; return 1; }
+    a=$(dec --retries "$i"); [ "$a" = dispatch ] || { WHY="a flaky train (re-sent ${i}×) was not re-sent: $a"; rm -rf "$d"; return 1; }
   done
   a=$(dec --retries 2); [ "$a" = wait ] || { WHY="a third re-send of one sha: $a"; rm -rf "$d"; return 1; }
   a=$(dec --retries 0 --holds 9); [ "$a" = wait ] || { WHY="re-sent past an open release-hold: $a"; rm -rf "$d"; return 1; }
