@@ -469,10 +469,9 @@ if [ -n "$changed_base" ]; then
       # An EXTENSIONLESS basename (bin/fleet) is an ordinary word — `fleet` is in
       # 330 of the tests — so it selects only where a test names it as a PATH:
       # `/fleet` not followed by a name character or another `/` (issue #1734).
+      # shellcheck disable=SC2086  # intentional: $pool is a file list
       case "$b" in
-        # shellcheck disable=SC2086  # intentional: $pool is a file list
         *.*) hits=$(grep -lF -- "$b" $pool 2>/dev/null) ;;
-        # shellcheck disable=SC2086  # intentional: $pool is a file list
         *)   hits=$(grep -lE -- "/$b([^A-Za-z0-9_./-]|\$)" $pool 2>/dev/null) ;;
       esac
       for t in $hits; do
