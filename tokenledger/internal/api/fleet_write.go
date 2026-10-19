@@ -84,7 +84,7 @@ var fleetScopeOf = map[string]string{
 	// machine (claude-fleet#2527, EPIC #2524 C3): stop / start / restart /
 	// run now / a new schedule — on their own (machine, login) only.
 	"service_control": "service:control",
-	"gh_comment":  "gh:comment",
+	"gh_comment":      "gh:comment",
 	// A task record's 「建 GitHub 单」 (claude-fleet#3325): filing an issue is
 	// a GitHub write of the same weight as a comment.
 	"task_issue":    "gh:comment",
