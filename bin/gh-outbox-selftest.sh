@@ -169,8 +169,8 @@ check "A every write exits 0 (got:$rcs)" '[ "$rcs" = " 0 0 0 0 0 0 0" ]' "$(tail
 check "A nothing reached GitHub" '[ "$(st "len(d[\"events\"])")" = 0 ]'
 check "A each write said 已记下" '[ "$(grep -c "已记下" "$errs")" = 8 ]' "$(cat "$errs")"
 check "A the outbox holds the 8 writes" '[ "$(nq)" = 8 ]'
-perm=$(stat -f %Lp "$OB" 2>/dev/null || stat -c %a "$OB" 2>/dev/null)
-fperm=$(f=$(find "$OB" -maxdepth 1 -name '*.json' | head -1); stat -f %Lp "$f" 2>/dev/null || stat -c %a "$f" 2>/dev/null)
+perm=$(stat -c %a "$OB" 2>/dev/null || stat -f %Lp "$OB" 2>/dev/null)
+fperm=$(f=$(find "$OB" -maxdepth 1 -name '*.json' | head -1); stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f" 2>/dev/null)
 check "A outbox dir 0700, entries 0600 (got $perm/$fperm)" '[ "$perm" = 700 ] && [ "$fperm" = 600 ]'
 check "A no token in an entry" '! grep -rq "gho_fake" "$OB"'
 check "A an entry carries v · opid · repo · verb · args · session · ts" \
