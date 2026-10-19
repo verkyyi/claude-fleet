@@ -17,7 +17,8 @@
 #   J  fleet-answer.sh --answer on a worker elsewhere (wid:, <slug>:issue-N):
 #      ONE worker_answer hub write naming the map's worker_id and the picks;
 #      the node's verdict is the outcome (succeeded 0 · failed 1 · unknown 4);
-#      --show refuses and says where; a machine that is offline sends nothing.
+#      --show refuses and says where; a machine that is offline sends nothing;
+#      a target already `wid:…:issue-N` is never prefixed twice (issue #4938).
 # tmux / python3 absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -156,6 +157,17 @@ ok; [ "$(nwrites)" = 1 ] && [ "$(cut -f1 "$WRITES")" = worker_answer ] \
 fa --answer acme-app:issue-43 1
 ok; [ "$rc" = 0 ] && tail -1 "$WRITES" | grep -q "$F/acme-app:issue-43" \
   || fail "J: <slug>:issue-N goes through the hub as its worker_id" "rc=$rc $err $(tail -1 "$WRITES")"
+# issue #4938: a target already `wid:` that ends in `<slug>:issue-N` is NOT a key to
+# prefix again — the caller's full worker_id, and the node adapter's own call
+# (fleet-control-read.sh: `--answer "wid:$key"`, key `<slug>:issue-N`), never `wid:wid:`.
+fa --answer "wid:$F/acme-app:issue-43" 1
+ok; [ "$rc" = 0 ] && tail -1 "$WRITES" | grep -q "\"worker_id\":\"$F/acme-app:issue-43\"" \
+  || fail "J: wid:<uuid>/<slug>:issue-N goes through the hub once, unprefixed" "rc=$rc $err $(tail -1 "$WRITES")"
+tf set-window-option -t "$w7" @repo acme/app
+n0=$(nwrites)
+fa --answer wid:acme-app:issue-7 1
+ok; [ "$(nwrites)" = "$n0" ] && case "$err" in *"wid:wid:"*|*"bad worker id"*|*"no live worker"*) false ;; *) true ;; esac \
+  || fail "J: the node's wid:<slug>:issue-N resolves to its window here" "rc=$rc err=$err"
 answer '{'"$OPID"',"status":"failed","result":{"error":{"code":"INVALID_STATE","message":"nothing is pending on the pane"}}}'
 fa --answer "wid:$F/issue-42" 1
 ok; [ "$rc" = 1 ] && case "$err" in *"nothing is pending on the pane"*) true ;; *) false ;; esac \
