@@ -57,7 +57,8 @@
 #   update-live  fleet update as that login
 #   and two uses no trace takes, written by hand (issue #4826):
 #   agent        the node agent a login starts runs it from the install
-#                (fleet-node-probe.sh, fleet-node-sleepwatch.sh)
+#                (none since #4886: the probe and the sleep watch are a
+#                managed node's, a client runs no session)
 #   dispatch     a `fleet <word>` the actions above do not run (fleet route,
 #                fleet ls --services, fleet show <file> …) — the word is the
 #                client's, so is its script
@@ -93,6 +94,7 @@ usage() { sed -n '/^#   fleet-client-runtime.sh --check/,/the list (or writes it
 #     fleet-agent-team.py fleet-daemon-lib.sh fleet-cred-proxy.sh fleet-credsep.sh
 #     fleet-peer-cert.sh fleet-feedback-switch.sh fleet-node-shell-retire.sh
 #     fleet_sidefx.py fleet-browser.sh fleet-onboard-clock.sh fleet-control-read.sh
+#     fleet-node-probe.sh (a managed node's, #4886 — fleet-node.sh tests for it)
 NOT_HERE="fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_view.py
   tmux-dashboard-rows.sh fleet_thin_lease.py fleet-window-reap.sh fleet-peerlink.py
   fleet-node-supervisor.py
@@ -100,7 +102,8 @@ NOT_HERE="fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_vi
   fleet-lib.sh fleet-doctor.sh fleet-up.sh fleet-install-sync.sh fleet-login-bootstrap.sh
   fleet-dev-mode.sh fleet-run.sh fleet-agent-bundle.py fleet-agent-team.py fleet-daemon-lib.sh
   fleet-cred-proxy.sh fleet-credsep.sh fleet-peer-cert.sh fleet-feedback-switch.sh
-  fleet-node-shell-retire.sh fleet_sidefx.py fleet-browser.sh fleet-onboard-clock.sh fleet-control-read.sh"
+  fleet-node-shell-retire.sh fleet_sidefx.py fleet-browser.sh fleet-onboard-clock.sh fleet-control-read.sh
+  fleet-node-probe.sh"
 
 check() {
   local list=${1:-$LIST_DEF} man=${2:-$MANIFEST_DEF}
