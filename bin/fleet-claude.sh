@@ -90,22 +90,16 @@ unset _fc_cls
 # finds it the way Claude Code does: project .claude/agents > ~/.claude/agents >
 # a plugin). Consumed here, handed on through a failover re-entry; a Codex launch
 # reads the same file (body → its instructions, `fleet.codex_model` → -m).
-# `--role worker|epic-driver|debugger` is the old spelling, read for one version
-# as --as fleet-worker|epic-driver|fleet-debugger (# compat-1v: 下一批删).
-_fc_role_as() { case "$1" in worker) echo fleet-worker ;; epic-driver) echo epic-driver ;; debugger) echo fleet-debugger ;; esac; }
 _fc_agent="${FLEET_AGENT:-}"; _fc_explicit=0; _fc_as=''
 _fc_args=(); _fc_want=''
 for _fc_a in "$@"; do
   if [ "$_fc_want" = agent ]; then _fc_agent="$_fc_a"; _fc_explicit=1; _fc_want=''; continue; fi
   if [ "$_fc_want" = as ]; then _fc_as="$_fc_a"; _fc_want=''; continue; fi
-  if [ "$_fc_want" = role ]; then _fc_as=$(_fc_role_as "$_fc_a"); _fc_want=''; continue; fi
   case "$_fc_a" in
     --agent)   _fc_want=agent ;;
     --agent=*) _fc_agent="${_fc_a#--agent=}"; _fc_explicit=1 ;;
     --as)      _fc_want=as ;;
     --as=*)    _fc_as="${_fc_a#--as=}" ;;
-    --role)    _fc_want=role ;;
-    --role=*)  _fc_as=$(_fc_role_as "${_fc_a#--role=}") ;;
     *)         _fc_args+=("$_fc_a") ;;
   esac
 done

@@ -16,9 +16,8 @@
 #   D  dash-raw-session.sh: no $TMUX_PANE → exit 4, no window; `--origin hub`
 #      passes the gate.
 #   E  fleet-issue-file.sh --spawn from a lost pane → exit 4 BEFORE any gh call.
-#   F  who may spawn at all (issue #4591 lifted #2960): fleet_spawn_refused
-#      refuses nobody — a worker pane with or without an agent file, with
-#      @agent_spawn 0 or 1, a hub pane. And the grant itself (which agent files
+#   F  who may spawn at all (issue #4591 lifted #2960): there is no seat check
+#      left to ask (fleet_spawn_refused is gone, #4790). And the grant itself (which agent files
 #      mount the dispatch group), off real files: bin/fleet-agent-def.py
 #      spawn-tools — the shipped fleet-worker grants it now.
 # tmux absent → SKIP. Exit 0 = pass.
@@ -128,17 +127,9 @@ TMUX="$INTMUX" TMUX_PANE='' bash "$BIN/fleet-issue-file.sh" --title t --repo acm
 ok; [ "$rc" = 4 ] || fail "E: --spawn from a lost pane → exit 4" "rc=$rc $(cat "$WORK/fif.err")"
 ok; [ ! -s "$WORK/gh.log" ] || fail "E: … before filing anything" "$(cat "$WORK/gh.log")"
 
-# --- F: who may spawn (fleet_spawn_refused) -----------------------------------------
-refused() { TMUX="$INTMUX" TMUX_PANE="$1" bash -c '. "$1/fleet-lib.sh"; fleet_spawn_refused' _ "$BIN"; }
-wf=$(tf new-window -d -P -F '#{window_id}' -n issue-8 -c "$WORK" 'while :; do sleep 300; done')
-pf=$(tf display-message -p -t "$wf" '#{pane_id}')
-tf set-window-option -t "$wf" @fleet_role worker
-ok; refused "$pf" && fail "F: a worker pane with no agent file may spawn (issue #4591)"
-tf set-window-option -t "$wf" @agent_def doc-only \; set-window-option -t "$wf" @agent_spawn 0
-ok; refused "$pf" && fail "F: a worker whose agent file holds no spawn tool is not refused either"
-tf set-window-option -t "$wf" @agent_spawn 1
-ok; refused "$pf" && fail "F: an agent file that grants spawn may spawn"
-ok; refused "$phub" && fail "F: a hub pane is never refused"
+# --- F: who may spawn ----------------------------------------------------------------
+ok; bash -c '. "$1/fleet-lib.sh"; type fleet_spawn_refused' _ "$BIN" >/dev/null 2>&1 \
+  && fail "F: fleet_spawn_refused is back — every session may spawn (issues #4591, #4790)"
 mkdir -p "$WORK/cc/agents"
 cp "$BIN/../conf/agent-defaults/claude/agents/"*.md "$WORK/cc/agents/"
 printf -- '---\nname: doc-only\ndescription: d\ntools: Read, Edit\n---\n只改文档。\n' > "$WORK/cc/agents/doc-only.md"

@@ -373,8 +373,7 @@ both() { # both <what> <argv>
     || fail "#4703 $1 did not mount the dispatch group" "$2 / $(cat "$WORK/mcporch")"
 }
 both "a plain launch" "$argv"
-argv="$( (export FLEET_MCP_ORCH=0; run --role worker /fleet-claim) )"; both "a worker (FLEET_MCP_ORCH=0 inherited)" "$argv"
-argv="$(run --role epic-driver '/fleet-epic-run 1')"; both "a bare role name" "$argv"
+argv="$( (export FLEET_MCP_ORCH=0; run /fleet-claim) )"; both "a worker (FLEET_MCP_ORCH=0 inherited)" "$argv"
 mkdir -p "$WORK/ccfg/agents"
 printf -- '---\nname: epic-driver\ndescription: d\n---\nbody\n' > "$WORK/ccfg/agents/epic-driver.md"
 argv="$( (export CLAUDE_CONFIG_DIR="$WORK/ccfg"; run --as epic-driver '/fleet-epic-run 1') )"; both "an EPIC driver" "$argv"

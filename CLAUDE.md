@@ -69,8 +69,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
 - **Any session spawns, a worker too** (issue #4591 lifted #2960's
   one-level rule). The filer's `--spawn`, the `spawn` / `task` tools and
   `fleet-await.sh` ask no seat; the session caps and the claim dedup are the only
-  bounds. `fleet_spawn_refused` (`bin/fleet-lib.sh`) answers "may spawn" for one
-  version (`# compat-1v`). The dispatch group (`fleet-orch`) mounts for EVERY
+  bounds (`fleet_spawn_refused` is gone, #4790). The dispatch group (`fleet-orch`) mounts for EVERY
   session (issue #4703 undid #4334's `@agent_spawn 1` gate); `@agent_spawn` gates
   nothing, and a group-less older session sees the group on `fleet`. A grandchild reports to the worker
   that spawned it; a reaped worker's reports climb to the nearest live ancestor
@@ -470,9 +469,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   backstop / preflight scripts stay in `bin/` — only the plugin's commands call
   them (`fleet-plugins-selftest.sh` I). Every window may
   spawn (issues #4591, #4703) — a file's `spawn` grant (`@agent_spawn`, off
-  `fleet-agent-def.py spawn-tools`) is recorded, never a gate; `--role worker|epic-driver|debugger`
-  and an old window's `@fleet_role_def epic-driver` are read for one version
-  (`# compat-1v`). The person's role layer and `fleet role set|unset|undo` are
+  `fleet-agent-def.py spawn-tools`) is recorded, never a gate; the old `--role`
+  spelling and `@fleet_role_def` are read no more (#4790). The person's role layer and `fleet role set|unset|undo` are
   gone with the role seats (issue #4340). `fleet-agent-as-selftest.sh`, `spawn-origin-gate-selftest.sh` F.
 - **This repo is a plugin marketplace; EPIC batches and the other optional parts
   are its plugins** (issue #3112, EPIC #3111 C1).
@@ -570,9 +568,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   addresses the session started from that agent file, and `fleet-peer-send.sh` gives
   a message to nobody-runs-it to the sender's parent, else the person's reminder —
   never exit 0 unheld. `fleet_role_holder`, `roles.held` and restore's re-stamp are
-  gone; the bare words `orchestrator` / `steward` (an older child's `@origin`, a
-  `send` target) and a leftover `@fleet_role_def` read as `agent:<name>` for one
-  version (# compat-1v); column 20 `role=` is sent empty. `keyless-parent-selftest.sh`.
+  gone, and so is reading the bare words `orchestrator` / `steward` or a leftover
+  `@fleet_role_def` as `agent:<name>` (#4790); column 20 `role=` is sent empty. `keyless-parent-selftest.sh`.
   The plugins' `role.md` are gone, so `plugin.json`'s `"agents": []` only keeps
   the repo root from registering agent files as plugin subagents.
 - **Orchestration is an extension a person installs, and nothing keeps a session
@@ -593,8 +590,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   the doctor's `orch` rows, and `--bridge-seat` by role name (the dispatch group is mounted
   for every session, issue #4703). `@fleet_role
   orchestrator|steward` is never written again; a window still wearing it (an old
-  seat) is an ordinary row for restore / migrate / move / cleanup, and only
-  `fleet_win_for_agent` reads it one version. BREAK-IT `role-auto-reopen-off`.
+  seat) is an ordinary row for restore / migrate / move / cleanup, and nothing
+  reads it as an address (#4790). BREAK-IT `role-auto-reopen-off`.
   The fleet-steward plugin and the programs behind it — the beat, the health watch,
   the decision sheet, the patrol / batches panes, parking, the followup list — are
   gone (issue #4339, EPIC #4333 C6): the steward is the session template above, and

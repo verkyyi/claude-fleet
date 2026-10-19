@@ -295,7 +295,6 @@ if [ -z "$RETIRED_GEN" ] && [ -n "$owid" ] && fleet_is_fid "${owid#*/}"; then
   [ -n "$ofid" ] || ofid=${owid#*/}
   case "$worigin" in
     issue-*|scratch-*|?*:issue-*|?*:scratch-*) ;;
-    orchestrator|steward) ;;   # compat-1v: 下一批删 — an older child's @origin
     *) worigin=${owid#*/} ;;
   esac
 fi
@@ -303,7 +302,6 @@ LOSTADDR=''
 case "$worigin" in
   issue-*|scratch-*) ;;
   ?*:issue-*|?*:scratch-*) ;;    # repo-qualified (issue #789) — a fleet hosting 2+ repos
-  orchestrator|steward) ;;       # compat-1v: 下一批删 — an older child's @origin (identity first, then fleet_win_for_key's agent alias)
   '') quiet 'hub-spawned (@origin empty)' ;;
   *)  if fleet_is_fid "$worigin"; then
         [ -n "$ofid" ] || ofid=$worigin

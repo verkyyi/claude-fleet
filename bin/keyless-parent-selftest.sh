@@ -16,14 +16,12 @@
 #      and fleet_origin_win resolves it back.
 #   D  a child of a parent with NO role mark at all reports to it (C7's condition
 #      2): the dry run names the parent's window, the book is the parent's identity,
-#      fleet-children.sh in the parent's pane lists it; an OLD child whose @origin is
-#      the word `orchestrator` but whose @origin_fid names the parent reaches it too,
-#      by identity — and its @origin follows to the identity.
+#      fleet-children.sh in the parent's pane lists it.
 #   E  `agent:<name>` (C7's condition 1): a session started from that agent file
 #      (@agent_def) answers; none ⇒ the SENDER's parent gets it, said on stderr; no
 #      parent either ⇒ the person's reminder (one orphan-reports row, the alert once)
-#      — never exit 0 with nobody holding it; two sessions ⇒ ambiguous, exit 1; the
-#      older bare word `orchestrator` is that address for one version.
+#      — never exit 0 with nobody holding it; two sessions ⇒ ambiguous, exit 1; a
+#      leftover role mark or the bare word `orchestrator` is no address (#4790).
 #   F  the MCP `send` accepts `to: agent:<name>` (the bare old word is refused,
 #      #4790); `parent_window` accepts an identity; list_agents keys a keyless
 #      row by it.
@@ -109,22 +107,13 @@ ok; grep -q '"acme-app:issue-101"' "$LEDGER" 2>/dev/null || fail "D: the report 
 r=$(TMUX="$INTMUX" TMUX_PANE="$po" bash "$BIN/fleet-children.sh" -L "$L" 2>&1); rc=$?
 ok; [ "$rc" = 0 ] || fail "D: fleet-children.sh in the parent's pane needs no key" "$rc:$r"
 ok; case "$r" in *acme-app:issue-101*MERGED*|*MERGED*acme-app:issue-101*) ;; *) fail "D: …and lists the child, merged" "$r" ;; esac
-wd=$(tf new-window -d -P -F '#{window_id}' -n old-kid -c "$WORK" 'while :; do sleep 300; done')
-tf set-window-option -t "$wd" @issue 102 \; set-window-option -t "$wd" @repo acme/app \; \
-   set-window-option -t "$wd" @origin orchestrator \; set-window-option -t "$wd" @origin_fid "$F" \; \
-   set-window-option -t "$wd" @claude_state 'done'
-r=$(bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wd" --state merged --pr 502 --summary landed --dry-run 2>&1)
-ok; case "$r" in *"($wo"*) ;; *) fail "D: an old child (@origin orchestrator) reaches its parent by identity" "$r" ;; esac
-bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wd" --state merged --pr 502 --summary landed >/dev/null 2>&1
-r=$(tf display-message -p -t "$wd" '#{@origin}');          ok; [ "$r" = "$F" ] || fail "D: …and its @origin follows to the identity" "$r"
-ok; grep -q '"acme-app:issue-102"' "$LEDGER" 2>/dev/null || fail "D: …booked in the parent's book" "$(cat "$LEDGER" 2>/dev/null)"
 
 # --- E: the agent address (condition 1) ------------------------------------------
 send() { printf '%s\n' "$2" | TMUX="${3:-}" TMUX_PANE="${4:-}" bash "$BIN/fleet-peer-send.sh" -L "$L" "$1" - 2>"$WORK/send.err"; }
 r=$(lib '' '' fleet_win_for_key agent:orchestrator "$L"); rc=$?; ok; [ "$rc" = 1 ] || fail "E: nobody runs the template ⇒ not found" "$rc:$r"
 tf set-window-option -t "$wo" @agent_def orchestrator
 r=$(lib '' '' fleet_win_for_key agent:orchestrator "$L"); ok; [ "$r" = "$wo" ] || fail "E: @agent_def answers agent:<name>" "$r"
-r=$(lib '' '' fleet_win_for_key orchestrator "$L");       ok; [ "$r" = "$wo" ] || fail "E: the old word reads as agent:orchestrator (one version)" "$r"
+r=$(lib '' '' fleet_win_for_key orchestrator "$L"); rc=$?; ok; [ "$rc" = 1 ] || fail "E: the bare word is no address" "$rc:$r"
 r=$(send agent:orchestrator hi); rc=$?
 ok; case "$rc" in 0|3) ;; *) fail "E: a running template session takes it" "$rc:$r $(cat "$WORK/send.err")" ;; esac
 ok; case "$r$(cat "$WORK/send.err")" in *rerouted*|*'parent instead'*) fail "E: …itself, not a fallback" "$r" ;; esac
@@ -132,9 +121,9 @@ w2=$(tf new-window -d -P -F '#{window_id}' -n 编排2 -c "$WORK" 'while :; do sl
 tf set-window-option -t "$w2" @agent_def orchestrator
 r=$(send agent:orchestrator hi); rc=$?;                   ok; [ "$rc" = 1 ] || fail "E: two sessions ⇒ ambiguous, refused" "$rc:$r"
 tf kill-window -t "$w2"; tf set-window-option -t "$wo" -u @agent_def
-# the old role mark on a leftover window still answers for one version
+# a leftover role mark answers nothing
 tf set-window-option -t "$wo" @fleet_role_def orchestrator
-r=$(lib '' '' fleet_win_for_agent orchestrator "$L");     ok; [ "$r" = "$wo" ] || fail "E: a leftover role mark answers for one version" "$r"
+r=$(lib '' '' fleet_win_for_agent orchestrator "$L"); rc=$?; ok; [ "$rc" = 1 ] || fail "E: a leftover role mark is no address" "$rc:$r"
 tf set-window-option -t "$wo" -u @fleet_role_def
 # none running: the sender's parent (the child wc, whose parent is wo) gets it
 pc=$(tf display-message -p -t "$wc" '#{pane_id}')
@@ -144,7 +133,7 @@ ok; grep -q 'parent instead' "$WORK/send.err" || fail "E: …said on stderr" "$(
 ORPH="$FLEET_CONF_DIR/global/orphan-reports.ndjson"
 ok; [ ! -s "$ORPH" ] || fail "E: …and no reminder filed" "$(cat "$ORPH")"
 # no parent either: the person's reminder, the alert once, exit 0
-r=$(send steward 'anyone?'); rc=$?
+r=$(send agent:steward 'anyone?'); rc=$?
 ok; [ "$rc" = 0 ] || fail "E: no parent ⇒ the person's reminder, exit 0" "$rc:$r $(cat "$WORK/send.err")"
 ok; case "$r" in rerouted*) ;; *) fail "E: …says rerouted" "$r" ;; esac
 ok; python3 -c 'import json,sys; r=[json.loads(l) for l in open(sys.argv[1])]; assert len(r)==1 and r[0]["parent"]=="agent:steward" and r[0]["summary"]=="anyone?" and r[0]["state"]=="MESSAGE", r' "$ORPH" 2>/dev/null \

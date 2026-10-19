@@ -132,7 +132,7 @@ set_agent() {
   [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-raw-session: contradictory --agent values\n' >&2; exit 2; }
   AGENT=$1
 }
-NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; DESK_ARG=""; TASK_REF=""; ROLE=""; AS_ARG=""; AS_SOFT=0; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; NATIVE_WT=0
+NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; DESK_ARG=""; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; NATIVE_WT=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -169,11 +169,6 @@ while [ "$#" -gt 0 ]; do
     # is here). None = a plain scratch, as before.
     --as)          AS_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --as=*)        AS_ARG="${1#--as=}"; shift ;;
-    # --role worker|epic-driver|debugger (issue #2782) is the old spelling, read for
-    # one version as --as fleet-worker|epic-driver|fleet-debugger — a file not there
-    # opens a plain session instead of refusing (# compat-1v: 下一批删).
-    --role)        ROLE="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
-    --role=*)      ROLE="${1#--role=}"; shift ;;
     --bg)          BG=1; shift ;;
     # --pin (issue #1169): stamp @pin 1 so the window sorts to the top of the
     # dash (dash-pin-toggle.sh's tier) — fleet-up's first-fleet guide.
@@ -242,7 +237,7 @@ while [ "$#" -gt 0 ]; do
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
-if [ -n "$DRAFT" ] && [ -n "$PROMPT$SEED_FILE$RESUME_SID$TASK_REF$AS_ARG$ROLE" ]; then
+if [ -n "$DRAFT" ] && [ -n "$PROMPT$SEED_FILE$RESUME_SID$TASK_REF$AS_ARG" ]; then
   printf 'dash-raw-session: draft cannot be combined with a seed, resume, task or agent role\n' >&2
   exit 2
 fi
@@ -260,15 +255,6 @@ fi
 case "$DESK_ARG" in ''|on|off) ;; */*/*|*[!A-Za-z0-9/._-]*|/*|*/) DESK_ARG=on ;; */*) ;; *) DESK_ARG=on ;; esac
 # Trim the seed; a whitespace-only prompt is no prompt (plain scratch).
 PROMPT="${PROMPT#"${PROMPT%%[![:space:]]*}"}"; PROMPT="${PROMPT%"${PROMPT##*[![:space:]]}"}"
-# debugger (issue #2893): the hub's read-only debugger for one diagnostic report,
-# opened by the node adapter for a worker_start carrying `debug`.
-case "$ROLE" in
-  '') ;;
-  worker)      [ -n "$AS_ARG" ] || { AS_ARG=fleet-worker; AS_SOFT=1; } ;;
-  epic-driver) [ -n "$AS_ARG" ] || { AS_ARG=epic-driver; AS_SOFT=1; } ;;
-  debugger)    [ -n "$AS_ARG" ] || { AS_ARG=fleet-debugger; AS_SOFT=1; } ;;
-  *) printf 'dash-raw-session: unknown --role %s (worker|epic-driver|debugger)\n' "$ROLE" >&2; exit 1 ;;
-esac
 case "$AS_ARG" in
   '') ;;
   *[!A-Za-z0-9_.:-]*|[!A-Za-z0-9]*) printf 'dash-raw-session: not an agent name: %s\n' "$AS_ARG" >&2; exit 1 ;;
@@ -388,7 +374,7 @@ fi
 # A named agent file's `fleet: repo` is the repo when the spawn names none (#3122).
 # A start already known to be Codex never asks the Claude CLI for plugins (#4726).
 AS_FOR=claude; [ "${AGENT:-${FLEET_AGENT:-claude}}" = codex ] && AS_FOR=codex
-if [ "$NOREPO" != 1 ] && [ -z "$REPO_ARG" ] && [ -z "$SEL" ] && [ -n "$AS_ARG" ] && [ "$AS_SOFT" != 1 ]; then
+if [ "$NOREPO" != 1 ] && [ -z "$REPO_ARG" ] && [ -z "$SEL" ] && [ -n "$AS_ARG" ]; then
   REPO_ARG=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>/dev/null \
     | awk -F'\t' '$1 == "repo" { print $2; exit }')
 fi
@@ -427,16 +413,11 @@ MAIN="${FLEET_MAIN:-}"
 AS_KV=''; TEMPLATE_AGENT=''
 if [ -n "$AS_ARG" ]; then
   _asdir=$HOME; [ "$NOREPO" != 1 ] && [ -n "$MAIN" ] && _asdir=$MAIN
-  if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG" && [ "$AS_SOFT" != 1 ]; then
+  if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG"; then
     refuse "raw: --as $AS_ARG opens on this machine (the agent file is here), not on $NODE_ARG"; exit 1
   fi
   if ! AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "$_asdir" --for "$AS_FOR" 2>&1); then
-    if [ "$AS_SOFT" = 1 ]; then
-      printf 'dash-raw-session: --role %s: %s — a plain session\n' "$ROLE" "${AS_KV##*fleet-agent-def: }" >&2
-      AS_KV=''; AS_ARG=''
-    else
-      refuse "raw: ${AS_KV##*fleet-agent-def: }"; exit 1
-    fi
+    refuse "raw: ${AS_KV##*fleet-agent-def: }"; exit 1
   fi
   unset _asdir
 fi
@@ -535,7 +516,7 @@ if [ "$BG" = 1 ]; then
   esac
   _dispatch_q=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$DISPATCH") || exit 2
   _launch_q=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "${FLEET_LAUNCH:-}") || exit 2
-  fleet_bg "FLEET_LAUNCH=$_launch_q FLEET_DISPATCH=$_dispatch_q FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$dfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${ROLE:+ --role=$ROLE}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
+  fleet_bg "FLEET_LAUNCH=$_launch_q FLEET_DISPATCH=$_dispatch_q FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$dfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
     || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"; [ -n "$dfarg" ] && rm -f "$df"
          refuse "raw: background dispatch failed"; exit 1; }
   exit 0
@@ -738,7 +719,7 @@ EOF
   fi
 else
 [ -n "$WT_ARG$RESUME_SID" ] && _pool_ok=0      # a parked session's return is always cold (#3387)
-[ "$_pool_ok" = 1 ] && [ -z "$PROMPT" ] && [ -z "$ROLE" ] && [ -z "$AS_ARG" ] && { [ -z "$AGENT" ] || [ "$AGENT" = "${FLEET_AGENT:-claude}" ]; } && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" ${_pool_repo:+--repo "$_pool_repo"} 2>/dev/null | head -1)
+[ "$_pool_ok" = 1 ] && [ -z "$PROMPT" ] && [ -z "$AS_ARG" ] && { [ -z "$AGENT" ] || [ "$AGENT" = "${FLEET_AGENT:-claude}" ]; } && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" ${_pool_repo:+--repo "$_pool_repo"} 2>/dev/null | head -1)
 if [ -n "$claimed" ]; then
   warm=1
   win=${claimed%%	*}; _rest=${claimed#*	}; slug=${_rest%%	*}; wt=${_rest#*	}
@@ -950,8 +931,7 @@ fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on t
 fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844)
 # The agent file it starts as, before its agent starts (fleet-claude.sh stamps it
 # again off the file it launched): whether that file grants `spawn` is recorded
-# (issue #3122), never a gate — every session may spawn (issues #4591, #4703), so
-# the old `--role epic-driver` road marks nothing any more (issue #4341).
+# (issue #3122), never a gate — every session may spawn (issues #4591, #4703).
 # All of these stamps precede input delivery. Send one argv command list; values
 # stay arguments (including dispatch JSON), never shell/tmux source text.
 window_stamps=()
