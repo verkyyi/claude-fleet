@@ -96,14 +96,15 @@ it is long).
 ### thin.log — `bin/fleet-thin.py` (the thin client, #3003)
 
 `${XDG_CACHE_HOME:-~/.cache}/claude-fleet/thin.log` (`FLEET_THIN_LOG`), the one
-file the thin client writes; rotated and redacted as the others. Its own ten
-fields, only ever added at the end:
+file the thin client writes; rotated and redacted as the others. Its own
+eleven fields, only ever added at the end (a line with nothing in the last one
+stops at ten):
 
-    time  event  home  route  pick_ms  ssh_ms  first_ms  rc  reason  net
+    time  event  home  route  pick_ms  ssh_ms  first_ms  rc  reason  net  end
 
 | event | when | fields |
 |---|---|---|
-| `connect` | each connection, when it ends | `pick_ms` = `fleet-connect.py --argv` (certificate · machine · route); `ssh_ms` = ssh spawned → the first byte back (handshake + the far end starting); `first_ms` = spawned → the home's first valid `cur` (the view drawn); `rc` = ssh's exit; reason `up` · `never up` · `quit`; `net` = `net=<default gateway>@<its network>` — the network this computer was on when the route was picked (#3074; empty under `FLEET_CONNECT_PREFER_TAILNET`) |
+| `connect` | each connection, when it ends | `pick_ms` = `fleet-connect.py --argv` (certificate · machine · route); `ssh_ms` = ssh spawned → the first byte back (handshake + the far end starting); `first_ms` = spawned → the home's first valid `cur` (the view drawn); `rc` = ssh's exit; reason `up` · `never up` · `quit`; `net` = `net=<default gateway>@<its network>` — the network this computer was on when the route was picked (#3074; empty under `FLEET_CONNECT_PREFER_TAILNET`); `end` = `end=<word>` on a connection whose ssh did not exit 0 — what ssh printed last (#4828): `timeout` (its keepalive gave up — `Timeout, server … not responding`) · `reset` · `broken-pipe` · `closed-remote` (the far end closed it) · `closed` · `unreachable` · `refused` · `connect-timeout`; empty when it said none of them |
 | `drawn` | the moment a connection first draws the view (its first valid `cur`) — while it is up, where `connect` comes only at its end (#3155) | `home` · `route`; `ssh_ms`, `first_ms` as on `connect` |
 | `rehome` | three connections in a row never came up — a new home asked for (`--avoid`), or the machine named changed | reason: from / other than which |
 | `first` | the home had no fleet session of yours (rc 3) or the hub is opening your first login — the first-session road (#3054): a start line, then rc 0 + the place line (opened there) or rc 1 + why it did not open | `home` (the machine it opened on, once placed); reason |
@@ -148,7 +149,7 @@ bundle (`fleet doctor --bundle` — it packs `thin.log`'s last 5000 lines as
 
 | reading | from |
 |---|---|
-| drops / computer / day | `thin.log` `connect` with reason `up` whose next lifecycle line is not `quit` / `end`, over the UTC days that computer's thin client logged anything |
+| drops / computer / day | `thin.log` `connect` with reason `up` whose next lifecycle line is not `quit` / `end`, over the UTC days that computer's thin client logged anything; broken down by route and by `end=` (`-` on a line written before #4828) |
 | reconnect (median / p90) | a drop's line → the next `drawn`, whole seconds; also without the gaps that had an `offline` inside (this computer's own line down); a drop with no `drawn` before the client ended is `unrecovered` |
 | open failures | per start (the first lifecycle line after `quit` / `end`, or a second `drawn` with no end to the first — a process that went silently): its first `connect` not up (pick rc 1, `never up` but rc 3 — the first-session road), or a `first` rc 1; beside it the starts that never drew, connect.log `home` failures by code, place.log asks and non-zero exits |
 

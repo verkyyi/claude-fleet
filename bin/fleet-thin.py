@@ -83,14 +83,19 @@ its own (the machine's runtime moves it).
 
 thin.log — TSV, one line per connection, fields only ever added at the end
 (docs/dev/CLIENT-LOGS.md; C10 reads it):
-    time(UTC)  event  home  route  pick_ms  ssh_ms  first_ms  rc  reason  net
+    time(UTC)  event  home  route  pick_ms  ssh_ms  first_ms  rc  reason  net  end
 event: connect (pick_ms = fleet-connect --argv, ssh_ms = spawn → the first
 byte back, first_ms = spawn → the first valid `cur`: the view drawn; net =
-`net=<gateway>@<network>`, the network the route was picked on, #3074) · rehome ·
+`net=<gateway>@<network>`, the network the route was picked on, #3074; end =
+`end=<word>` on a connection that did not end 0 — what ssh said last: timeout ·
+reset · broken-pipe · closed-remote · closed · unreachable · refused ·
+connect-timeout, empty when it said none of them, #4828) · rehome ·
 upload · show · exec · quit · first (the first-session road, #3054) · offline (no 换家: the hub did not answer either) · run (`--run`: one command on the home, issue #3004 —
 reason = its first word).
 
 Knobs: FLEET_THIN_UP_SECS (10), FLEET_THIN_BACKOFF ("1,2,4,8,16,30"),
+FLEET_THIN_ALIVE_SECS (5) × FLEET_THIN_ALIVE_MAX (3): the keepalive — a line
+silent that long is given up (#4828),
 FLEET_THIN_REHOME_AFTER (3), FLEET_THIN_HUB_PROBE_SECS (4), FLEET_REMOTE_BIN (.claude/fleet/bin),
 FLEET_CLIENT_PASTE=0 (drops and ⌃V byte for byte), FLEET_ITERM_KEYS=0,
 FLEET_THIN_FIRST_RETRY (10), FLEET_HOME_FIRST_OPENING_MAX (2400), FLEET_THIN_FIRST_SETTLE (600),
@@ -182,7 +187,7 @@ def log_path():
         "claude-fleet", "thin.log")
 
 
-def tlog(event, home="", route="", pick_ms="", ssh_ms="", first_ms="", rc="", reason="", net=""):
+def tlog(event, home="", route="", pick_ms="", ssh_ms="", first_ms="", rc="", reason="", net="", end=""):
     path = log_path()
     try:
         cl = load("fleet_clientlog.py", "fleet_clientlog")
@@ -193,13 +198,47 @@ def tlog(event, home="", route="", pick_ms="", ssh_ms="", first_ms="", rc="", re
         reason = cl.redact(cl.cut(cl.flat(reason)))
         cl.rotate(path)
     fields = [time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), event, home, route,
-              pick_ms, ssh_ms, first_ms, rc, reason, ("net=" + net) if net else ""]
+              pick_ms, ssh_ms, first_ms, rc, reason, ("net=" + net) if net else "", ("end=" + end) if end else ""]
+    while fields and fields[-1] == "" and len(fields) > 10:
+        fields.pop()
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a") as f:
             f.write("\t".join(str(x).replace("\t", " ").replace("\n", " ") for x in fields) + "\n")
     except OSError:
         pass
+
+
+# What ssh said as it went (issue #4828): its last words, on the pty with the
+# view's output — the cause a drop's `connect` line carries as `end=<word>`.
+SSH_ENDS = (
+    ("timeout", re.compile(rb"Timeout, server .{0,200}not responding")),
+    ("reset", re.compile(rb"Connection reset by peer")),
+    ("broken-pipe", re.compile(rb"Broken pipe")),
+    ("closed-remote", re.compile(rb"Connection to .{0,200}closed by remote host")),
+    ("unreachable", re.compile(rb"Network is unreachable|No route to host|Host is down")),
+    ("refused", re.compile(rb"Connection refused")),
+    ("connect-timeout", re.compile(rb"Operation timed out|Connection timed out")),
+    ("closed", re.compile(rb"Connection to .{0,200}closed\.")),
+)
+
+
+def ssh_end(tail):
+    """The word for how ssh ended, off the last bytes it printed, or "" — the
+    first of SSH_ENDS that is there (ssh follows «closed by remote host» with a
+    plain «closed.»: the specific one wins)."""
+    return next((word for word, rx in SSH_ENDS if rx.search(tail or b"")), "")
+
+
+def alive_opts():
+    """The connection's keepalive (issue #4828): ssh gives the line up after
+    FLEET_THIN_ALIVE_MAX keepalives in a row go unanswered, one every
+    FLEET_THIN_ALIVE_SECS — 5 × 3 = 15 s. It was 2 × 3: a 6 s stall of a
+    hotspot or a Wi-Fi scan ended a live session, 70 times in a week on the
+    operator's Mac."""
+    secs = max(1, int(env_num("FLEET_THIN_ALIVE_SECS", 5)))
+    n = max(1, int(env_num("FLEET_THIN_ALIVE_MAX", 3)))
+    return ["-o", "ServerAliveInterval=%d" % secs, "-o", "ServerAliveCountMax=%d" % n]
 
 
 def ms(t0, t1=None):
@@ -536,6 +575,7 @@ class Thin:
         self.want, self.home, self.view, self.avoid = want, home, view, avoid
         self.local = local      # --local: this machine is home — no hub, no ssh (#3006)
         self.resume = bool(view)
+        self.tail = b""         # ssh's last output bytes: the drop's end= word (#4828)
         self.view = view or view_id()
         self.device = device_b64()
         self.base = None        # the last --argv answer (the upload rides it)
@@ -831,8 +871,7 @@ class Thin:
         self.home = home
         route = (j.get("route") or {}).get("name") or ("local" if j.get("local") else "")
         token = "%032x" % random.getrandbits(128)
-        extra = ["-tt", "-o", "ControlMaster=no", "-o", "ControlPath=none",
-                 "-o", "ServerAliveInterval=2", "-o", "ServerAliveCountMax=3"]
+        extra = ["-tt", "-o", "ControlMaster=no", "-o", "ControlPath=none"] + alive_opts()
         cmd = self.command(j, extra, self.remote(token, route))
         t0 = time.time()
         self.drawn_at = (home, route, t0)
@@ -840,7 +879,7 @@ class Thin:
         up = first_view is not None or time.time() - t0 >= env_num("FLEET_THIN_UP_SECS", 10)
         tlog("connect", home, route, pick, ms(t0, first_byte) if first_byte else "",
              ms(t0, first_view) if first_view else "", rc, "quit" if self.quit else ("up" if up else "never up"),
-             net=str(j.get("net") or ""))
+             net=str(j.get("net") or ""), end="" if rc == 0 else ssh_end(self.tail))
         if up:
             self.resume = True
         return rc, up, ""
@@ -906,6 +945,7 @@ class Thin:
             else:
                 pending.extend(data)
         first_byte = first_view = None
+        self.tail = b""
         out_wait = 0.0
         st = None
         if tty_in:
@@ -940,6 +980,7 @@ class Thin:
                         break
                     if first_byte is None:
                         first_byte = now
+                    self.tail = (self.tail + data)[-1024:]
                     out, events, waiting = osc.feed(data)
                     write_out(out)
                     out_wait = (out_wait or now) if waiting else 0.0
