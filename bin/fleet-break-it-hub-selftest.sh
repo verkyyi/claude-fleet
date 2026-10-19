@@ -2883,7 +2883,7 @@ drill_spare_ready_unverified() {
     || { WHY="fleet-login-new.sh no longer checks the login it opened (fleet-login-ready.sh)"; return 1; }
   grep -q 'READY_LINE' "$ROOT/bin/fleet-login-reset.sh" 2>/dev/null \
     || { WHY="a wash no longer carries the opener's ready: line to the hub (fleet-login-reset.sh)"; return 1; }
-  grep -q 'res.Ready = readyResult(out.String())' "$tl/agent/node_accounts.go" 2>/dev/null \
+  grep -q 'res.Ready = readyResult(out.String())' "$tl/../agent/node_accounts.go" 2>/dev/null \
     || { WHY="the agent no longer reads the ready: line (readyResult)"; return 1; }
   grep -q 'spareCheckedSQL("a.op_id", checked)' "$tl/store/fleet_spare.go" 2>/dev/null \
     || { WHY="a claim no longer asks for a spare that passed its check (store.ClaimSpare)"; return 1; }
