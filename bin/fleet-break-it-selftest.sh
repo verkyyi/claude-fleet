@@ -18,7 +18,7 @@
 #   session-ctrl-z                                  bin/fleet-session-wrap.sh (the TSTP guard)
 #   resume-fails-fast / codex-no-id                 bin/fleet-session-wrap.sh, fleet-session-page.py
 #   codex-resume-override                           bin/fleet-codex.sh, fleet-codex-posture.py
-#   merged-then-commit / q-releases-claim           bin/session-end-hook.sh --recycle, fleet_reap_ok
+#   merged-then-commit / q-leaves-issue             bin/session-end-hook.sh --recycle, fleet_reap_ok
 #   last-window                                     fleet_server_resident (fleet-up.sh)
 #   kill-server / disk-full                         bin/fleet-restore.sh --auto, fleet-diskguard.sh --gate
 #   wedged-socket                                   fleet_socket_heal (fleet-restore.sh, fleet-up.sh)
@@ -608,17 +608,18 @@ drill_merged_then_commit() {
   WHAT="合并后再提交再按 q：分支 issue-7 仍在，$n 个提交（1 个在合并之后）"
 }
 
-# q on an unmerged issue: the claim goes, the issue can be dispatched again (#1842 ②).
-drill_q_releases_claim() {
+# q on an unmerged issue: nothing is written to the issue (#4898: no claim to
+# release), the worktree stays, the issue can be dispatched again (#1842 ②).
+drill_q_leaves_issue() {
   CAP=10; seh_rig; local R="$WORK/seh" wt="$WORK/seh/wt-8" t0
   git -C "$R/main" worktree add -q -b issue-8 "$wt" >/dev/null 2>&1
   printf 'w\n' > "$wt/w"; git -C "$wt" add w; git -C "$wt" commit -qm 'half done'
   : > "$R/log"; t0=$(now)
   seh_q 8
   SECS=$(since "$t0")
-  grep -q 'issue edit 8 .*--remove-assignee @me' "$R/log" || { WHY="q left the claim on #8 (gh: $(tr '\n' ' ' < "$R/log"))"; return 1; }
+  grep -qE 'issue (edit|comment|close)' "$R/log" && { WHY="q wrote to issue #8 (gh: $(tr '\n' ' ' < "$R/log"))"; return 1; }
   [ -d "$wt" ] || { WHY="q removed the unmerged worktree"; return 1; }
-  WHAT="未合并单按 q：认领放开、可再派，worktree 留着"
+  WHAT="未合并单按 q：单子不动（没有认领可放）、可再派，worktree 留着"
 }
 
 # home_back <old pid> — home holds a live shell other than <old pid>

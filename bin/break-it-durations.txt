@@ -280,7 +280,7 @@
 1.0 probe-ignores-relay
 0.7 probe-stale-after-release
 2.9 provisioner-off-template
-0.6 q-releases-claim
+0.6 q-leaves-issue
 0.2 quarantine-expired
 0.3 quarantine-one-red
 0.2 quarantine-pr-skips
