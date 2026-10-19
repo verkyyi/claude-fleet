@@ -10,8 +10,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 
 // The test identity (claude-fleet#1931, EPIC #1906 C12): a session's test or

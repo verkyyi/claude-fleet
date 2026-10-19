@@ -1059,7 +1059,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   (`bin/fleet-release-sign.py check|manifest`, from `fleet-release-publish.sh`).
   Every manifest carries the commit's `conf/release-keys/chain.json` (root-signed
   certs) and `revoked.json` (root-signed list); ONE trust rule, written twice —
-  `tokenledger/internal/release/trust.go` and `bin/fleet-release-verify.py`
+  `tokenledger/shared/release/trust.go` and `bin/fleet-release-verify.py`
   (`TestTrustPythonInterop` holds them to one format): a signer the pin vouches
   for, never a revoked one (the machine keeps every id it saw, `release.pub.revoked`);
   a pin that vouches for a root re-pins to it. The root never touches a machine;

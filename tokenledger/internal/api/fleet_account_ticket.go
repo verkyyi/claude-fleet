@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
 // The admin seat's tickets (claude-fleet#3557, EPIC #3500 C15).

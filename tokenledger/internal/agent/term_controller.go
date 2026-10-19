@@ -6,7 +6,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // This pipe is inherited only by the fixed lifecycle helper. Terminal output

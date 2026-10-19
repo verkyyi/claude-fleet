@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // Spare alerts (claude-fleet#3509, EPIC #3500 R3). A place that keeps spares

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // Open a session from the client (claude-fleet#1777, EPIC #1776 C1).

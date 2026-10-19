@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // This lives under /v1/chat so the existing trial/view-as route guards apply.

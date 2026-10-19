@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // A service's log, live on its machine's page (claude-fleet#2797, EPIC #2792

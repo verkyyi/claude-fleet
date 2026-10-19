@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The ticket registry (claude-fleet#2676): a node registers a ticket it opened

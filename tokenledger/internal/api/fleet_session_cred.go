@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
 // 会话通行证 — a session pass for a session on an untrusted machine

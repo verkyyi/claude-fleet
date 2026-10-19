@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // A hub ticket's comment, pushed into its session (claude-fleet#3597, EPIC

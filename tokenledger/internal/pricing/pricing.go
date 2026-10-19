@@ -15,7 +15,7 @@ import (
 	"os"
 	"regexp"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // RatesAsOf documents when the built-in table was last checked against

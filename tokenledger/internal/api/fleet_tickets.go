@@ -12,8 +12,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // Tickets whose home is the hub (claude-fleet#2677, EPIC #3570 C1): open one,

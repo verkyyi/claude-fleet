@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The agent's half of relays (claude-fleet#1421): what claude-fleet's script

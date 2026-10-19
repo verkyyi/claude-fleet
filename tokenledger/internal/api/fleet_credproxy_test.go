@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/credproxy"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
 // The cluster credential proxy against the real hub (claude-fleet#1973,

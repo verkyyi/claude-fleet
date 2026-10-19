@@ -35,7 +35,7 @@ The payload is exactly {op, cluster, nonce, exp} plus the op's own fields:
                                        its Secret svc-r<n>-a<k>-token
   delete-svc-run    run, attempt       that Job (its Secret goes with it)
 
-tokenledger/internal/control/cluster_ticket.go is the Go twin; its test pins one
+tokenledger/shared/control/cluster_ticket.go is the Go twin; its test pins one
 ticket both sides make byte for byte. check() refuses a ticket not the key's,
 for another cluster, past its exp, with a field missing, extra or off its
 grammar; the caller spends the nonce (once, cluster-wide — the provisioner's

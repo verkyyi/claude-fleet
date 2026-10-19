@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
 // A person's pod rolls to the new image (claude-fleet#4174).

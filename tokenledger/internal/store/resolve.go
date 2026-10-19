@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sessions"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sessions"
 )
 
 // ResolveFingerprint maps a fingerprinted account key onto a real account uuid

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The sidebar's session list by connection certificate (claude-fleet#1475).

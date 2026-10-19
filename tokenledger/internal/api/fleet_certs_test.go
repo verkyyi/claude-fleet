@@ -18,9 +18,9 @@ import (
 	"github.com/coder/websocket/wsjson"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 
 // certHarness: fleet on, GitHub sign-in on, a CA, two machines with routes,

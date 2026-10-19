@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // A heartbeat is several readings, each on its own clock (claude-fleet#2798):

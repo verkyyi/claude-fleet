@@ -19,11 +19,11 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/leader"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 
 // Server is the hub's HTTP surface.

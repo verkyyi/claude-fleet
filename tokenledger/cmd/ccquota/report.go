@@ -13,11 +13,11 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/identity"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/limits"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/identity"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/limits"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/scan"
 )
 
 // runReport produces a local report with no hub and, unless asked, no network.

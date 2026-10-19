@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // claude-fleet#4060 (EPIC #4048 C12): a trial's machine goes back fast — the

@@ -217,6 +217,6 @@ bin/oss-scan.sh --inventory         # 下面这张表
 | `tokenledger/internal/api/fleet_routes_test.go` | — | — | allow |
 | `tokenledger/internal/api/hub_users_api_test.go` | — | — | allow |
 | `tokenledger/internal/api/node_route_test.go` | — | — | allow |
-| `tokenledger/internal/credproxy/credproxy_test.go` | — | — | allow |
+| `tokenledger/shared/credproxy/credproxy_test.go` | — | — | allow |
 | `tokenledger/internal/credvault/kms.go` | — | — | allow |
 | `tokenledger/internal/store/sources_test.go` | — | — | allow |

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sessions"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sessions"
 )
 
 // statusLinePayload is the subset of Claude Code's statusLine JSON that

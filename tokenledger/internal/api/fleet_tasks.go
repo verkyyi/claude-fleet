@@ -13,8 +13,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
 // The task record (claude-fleet#3325, EPIC #3178): what a person asked for, as

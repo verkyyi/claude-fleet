@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // BREAK-IT credential-quota-unbound: a valid setup token needs no profile scope.

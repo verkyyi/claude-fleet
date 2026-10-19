@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // Every source this build knows must have a stated basis: a rate review date

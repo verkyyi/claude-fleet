@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
 // Issue leases (claude-fleet#1422, EPIC #1419 C3).

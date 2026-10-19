@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/rolemerge"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The team configuration (claude-fleet#1726, EPIC #1718 C8).

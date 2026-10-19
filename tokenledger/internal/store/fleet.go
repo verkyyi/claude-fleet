@@ -16,7 +16,7 @@ import (
 //
 // The rows are fed by the control channel's heartbeats, not by an operator's
 // `register`: a machine registers itself by reporting. Identity follows the
-// Python scheme exactly (internal/fleetid) so a fleet UUID minted on the SSH
+// Python scheme exactly (shared/fleetid) so a fleet UUID minted on the SSH
 // path is the same row here.
 //
 // Like the node roster, these tables exist only when CCQUOTA_FLEET=1 (created

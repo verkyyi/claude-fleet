@@ -18,9 +18,9 @@ import (
 	"github.com/coder/websocket/wsjson"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // One node program per machine (claude-fleet#2333, EPIC #2329 C5): one

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/codex"
 )
 
 func TestAgentDiscoversNamedProfilesWithoutResettingExistingScanner(t *testing.T) {

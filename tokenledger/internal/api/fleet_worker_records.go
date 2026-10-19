@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
 // A worker's evidence and history, handed to the hub by the machine that

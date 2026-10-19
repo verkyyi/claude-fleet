@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // Account is a subscription tracked by this hub.
@@ -538,7 +538,7 @@ const noLoginLabel = "non-login source"
 // labelUsers names the login-less bucket after whatever actually reported it.
 //
 // The blank os_user is not missing data and not a person. Every OS agent path
-// stamps the login it runs as (internal/model/identity.go), so a row can only
+// stamps the login it runs as (shared/model/identity.go), so a row can only
 // be blank when the sender had no OS login to stamp. Left unlabelled it
 // reached the page as the empty string, and both the bars and the table fell
 // through to their own "(unknown)", which reads as "the hub lost track of

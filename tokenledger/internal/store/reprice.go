@@ -8,7 +8,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // Pricer is the part of the rate table that repricing needs.

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 func (s *Store) InsertQuota(q model.QuotaSnapshot) error {

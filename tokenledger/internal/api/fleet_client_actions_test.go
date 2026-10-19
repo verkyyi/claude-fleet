@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // Open it on the device in your hands (claude-fleet#1717, C7): a node sends an

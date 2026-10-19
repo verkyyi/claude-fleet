@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // A write by connection certificate (claude-fleet#1487, EPIC #1479 C8).

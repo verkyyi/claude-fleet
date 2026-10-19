@@ -229,7 +229,7 @@ agent 跑的又是 `<sha>/bin/ccquota`，路径也每次变——所以人手给
 `FLEET_STABLE_DERIVED_RE`；`--ignore-check` 可重复）。BREAK-IT `train-red-holds-lane` · `train-derived-red`。
 
 **发布版里的 ccquota 是该提交的 Go**（#2930）。发布版的 `ccquota-<os>-<arch>` 取自入口镜像自带的那份，所以入口镜像
-构建时给每个 ccquota 盖上它编译的 Go 源摘要（`cmd/ccquota-srcdigest` → `-X main.SrcDigest`；`ccquota version` 第二行
+构建时给每个 ccquota 盖上它编译的 Go 源摘要（`shared/cmd/ccquota-srcdigest` → `-X main.SrcDigest`；`ccquota version` 第二行
 `src <摘要>`）。摘要只算 `tokenledger/` 的构建输入（`go.mod` · `go.sum` · `cmd/` `internal/` 下的文件，去掉测试、
 `testdata/`、`.md`、客户端清单和 pack；`release.SourceDigest`，git 一侧是 `bin/fleet-src-digest.py`）。入口建发布版时按该提交
 算同一摘要：不等就不建（发布 422 `ccquota:`，等入口镜像重新部署），等了就签进清单的 `ccquota_src`；补建沿用原包的 ccquota。
@@ -999,7 +999,7 @@ BREAK-IT：`node-program-seat`；`bin/fleet-node-core-selftest.py` 的 O；Go
   不签、不派给座位、`/v1/fleet/account-key` 404）。
 
 BREAK-IT：`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；Go
-`internal/control/account_ticket_test.go`、`internal/api/fleet_account_ticket_test.go`。
+`shared/control/account_ticket_test.go`、`internal/api/fleet_account_ticket_test.go`。
 
 ### 23.1 座位的机器半边和 agent 的座位模式（C15·b，#3696）
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // capLink keeps what the agent wrote back.

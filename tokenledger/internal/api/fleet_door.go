@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The cluster's one public door (claude-fleet#3549, EPIC #3500 C4).

@@ -245,7 +245,7 @@ drill_fleetadmin_token_misissued() {
   grep -q '^func TestNodeAdminToken(' "$ROOT/tokenledger/internal/api/fleet_admin_token_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestNodeAdminToken is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestNodeAdminToken$' ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;

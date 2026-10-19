@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/nodesig"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/nodesig"
 )
 
 // The second slice (claude-fleet#3710): every caller signs, every door that

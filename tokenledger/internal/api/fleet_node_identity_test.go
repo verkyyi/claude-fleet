@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // Trust rides the endpoint, not the name (claude-fleet#2214, EPIC #2329 C2).

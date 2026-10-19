@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // One person's pod (claude-fleet#3550, EPIC #3500 C5).

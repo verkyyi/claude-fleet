@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sessions"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sessions"
 )
 
 // fakeHome builds a Claude Code home containing n billable turns.

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // Back to the last home session (claude-fleet#2564, EPIC #2563 C1).

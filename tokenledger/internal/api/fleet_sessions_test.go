@@ -9,9 +9,9 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 
 // The sidebar's session list by connection certificate (claude-fleet#1475).

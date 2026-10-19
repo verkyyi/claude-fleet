@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 
 // The admin agent's half of the SSH user CA (claude-fleet#1412).

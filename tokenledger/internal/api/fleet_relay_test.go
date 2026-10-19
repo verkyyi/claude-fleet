@@ -13,8 +13,8 @@ import (
 	"github.com/coder/websocket/wsjson"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // Node-to-node relays (claude-fleet#1421, EPIC #1419 C2).

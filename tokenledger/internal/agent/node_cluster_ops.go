@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The cluster's ops link (claude-fleet#3553, EPIC #3500 C8).

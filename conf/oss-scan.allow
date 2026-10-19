@@ -59,7 +59,7 @@ tokenledge?/internal/api/fleet_maintenance_test.go	private-ipv4	测试局域网 
 tokenledge?/internal/api/fleet_routes_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
 tokenledge?/internal/api/hub_users_api_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
 tokenledge?/internal/api/node_route_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
-tokenledge?/internal/credproxy/credproxy_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/shared/credproxy/credproxy_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
 extras/gh-relay/README.md	private-ipv4	Lightsail VPC 的默认解析地址（AWS 定的，每台实例都一样）
 tokenledge?/README.md	private-ipv4	配置写法示例里的局域网地址（编的）
 # C8 (#3578): a vendor's public address, not our cloud

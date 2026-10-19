@@ -392,19 +392,25 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
      yet, so build it:
 
      ```sh
-     go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest   # needs Go 1.25+
+     git clone --depth 1 https://github.com/verkyyi/claude-fleet.git   # needs Go 1.25+
+     (cd claude-fleet/tokenledger && go build -o ~/.local/bin/ccquota ./cmd/ccquota)
      ```
 
+     (`go install …/cmd/ccquota@latest` no longer works: `tokenledger/go.mod`
+     replaces its `shared/` module with the directory beside it — issue #4811 —
+     and `go install <pkg>@<version>` refuses a module with a replace.)
+
      Because there is no tagged release, the binary on each machine is whatever
-     `@latest` was the day you ran that — so the builds drift per machine. The
+     master was the day you ran that — so the builds drift per machine. The
      doctor's `quota` line prints the version it got from `ccquota version`
      (issue #668), which is the first thing to compare when one machine's quota
      line is red and another's is green.
 
-     TokenLedger lives in this repo under `tokenledger/` (its own Go module,
+     TokenLedger lives in this repo under `tokenledger/` (its own Go modules —
+     the root and `shared/`, issue #4811 —
      merged with full history in issue #1391; the old `github.com/dave/ccquota`
      / `dave/tokenledger` install paths are retired). Installing the fleet
-     never builds it — `go install` above is the only way it gets onto `PATH`.
+     never builds it — the build above is the only way it gets onto `PATH`.
      The product was renamed to TokenLedger on 2026-09-14 but **the identifiers
      were deliberately not**: the command, the `CCQUOTA_*` variables and
      `~/.ccquota/` are all still spelled `ccquota`, and this fleet reads them

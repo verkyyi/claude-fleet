@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The heartbeat's routes (claude-fleet#1414): how people reach this machine's

@@ -8,9 +8,9 @@ import (
 
 	"github.com/coder/websocket/wsjson"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/findings"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // 能不能跑 (claude-fleet#1720, EPIC #1718 C2): the probe and the team policy

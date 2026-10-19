@@ -12,7 +12,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
 // runRelease is `ccquota release` (claude-fleet#2335): a machine's side of the

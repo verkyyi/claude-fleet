@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
 // Node releases: the hub keeps every stable's files, and machines fetch them
@@ -32,7 +32,7 @@ import (
 // A machine used to follow stable by `git fetch`ing GitHub — once per login,
 // every 30 minutes, and not at all from a network that cannot reach GitHub.
 // Now the hub follows GitHub (StableSource) and, each time stable moves,
-// builds a release for that commit (internal/release): the runtime tree as one
+// builds a release for that commit (shared/release): the runtime tree as one
 // tar, the ccquota binaries for every platform it has (FleetDistDir), the
 // Claude Code / Codex installers the operator pinned (the artifacts dir), a
 // sha256 for each and its ed25519 signature over the lot. Kept on the hub's

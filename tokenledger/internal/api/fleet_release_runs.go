@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
 // Every run of the release train, whatever it came to (claude-fleet#3870,

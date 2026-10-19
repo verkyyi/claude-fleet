@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // 立即体验 (claude-fleet#4058, EPIC #4048 C10): the trial lets in only a

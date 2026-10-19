@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
 // Pool usage, one request a row, filed under the pass's person

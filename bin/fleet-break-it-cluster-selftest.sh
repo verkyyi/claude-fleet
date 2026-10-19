@@ -392,7 +392,7 @@ PY
   grep -q '^func TestSparePodClaimDestroyRefill(' "$ROOT/tokenledger/internal/api/fleet_spare_pods_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestSparePodClaimDestroyRefill is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestSparePodClaimDestroyRefill$' ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
@@ -651,7 +651,7 @@ PY
   grep -q '^func TestJobRunsForTheCallersOwnPod(' "$ROOT/tokenledger/internal/api/fleet_jobs_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestJobRunsForTheCallersOwnPod is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestJob' ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
@@ -713,7 +713,7 @@ PY
   grep -q '^func TestClusterReadingReachesItsPod(' "$ROOT/tokenledger/internal/api/fleet_cluster_reading_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestClusterReadingReachesItsPod is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestClusterReading' ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
@@ -1114,7 +1114,7 @@ PY
   grep -q '^func TestSvcRunKeyOpensOnlyItsRun(' "$ROOT/tokenledger/internal/api/svc_runner_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestSvcRunKeyOpensOnlyItsRun is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestSvcRun' ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
@@ -1217,7 +1217,7 @@ PY2
   grep -q '^func TestUserPodRollBatchesSkipsBusyOncePerRelease(' "$ROOT/tokenledger/internal/api/fleet_user_pod_roll_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestUserPodRollBatchesSkipsBusyOncePerRelease is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestUserPodRoll' ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
@@ -1258,7 +1258,7 @@ drill_user_pod_opener_group_write() {
   grep -q '^func TestScriptBesideGroupWrite(' "$ROOT/tokenledger/cmd/ccquota/agent_machine_script_test.go" 2>/dev/null \
     || { WHY="the program half's test TestScriptBesideGroupWrite is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestScriptBesideGroupWrite$' ./cmd/ccquota 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the program half's Go test did not run"; return 1 ;;

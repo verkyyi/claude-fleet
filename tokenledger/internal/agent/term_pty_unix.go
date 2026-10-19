@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // RunTermPty is `ccquota term-pty --view <id> --target <target> [--cols N --rows N]`.

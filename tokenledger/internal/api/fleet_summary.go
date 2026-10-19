@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The status bar's two summaries by connection certificate (claude-fleet#1502).

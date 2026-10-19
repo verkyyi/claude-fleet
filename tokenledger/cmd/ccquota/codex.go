@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"text/tabwriter"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/codex"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/scan"
 )
 
 func runCodex(args []string) error {

@@ -90,12 +90,12 @@ pod 重建就变。
 
 BREAK-IT：`term-other-person` · `term-relay-orphan` · `term-view-kills-session`。
 测试：`tokenledger/internal/api/term_relay_test.go`、`internal/agent/term_pty_test.go`、
-`internal/control/term_relay_test.go`、`bin/fleet-term-attach-selftest.sh`。
+`shared/control/term_relay_test.go`、`bin/fleet-term-attach-selftest.sh`。
 
 ## 直连优先的共用传输（C5 #4374）
 
 `extras/browser-transport/attachment.ts` 是两个 Vite 页面共用的连接助手；Go 的
-`internal/attachment.Stream` 是终端与对话适配器共用的有序帧接口。C5 提供终端适配器，
+`shared/attachment.Stream` 是终端与对话适配器共用的有序帧接口。C5 提供终端适配器，
 C2 接页面；C6 接 Webchat 的请求准入及固定 `chat.sock` 适配器，仍使用原来的对话进程。
 在 C6 接入前，`service=chat` 明确拒绝，不绕过 `/v1/chat/*` 的试用、预算及请求限额。
 

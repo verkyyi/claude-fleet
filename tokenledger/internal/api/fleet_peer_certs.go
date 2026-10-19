@@ -13,8 +13,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 
 // Machine-to-machine access through the hub (claude-fleet#1626).

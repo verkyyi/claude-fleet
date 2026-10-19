@@ -1,14 +1,14 @@
 package main
 
 import (
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 func acct(label string, five, seven float64) BudgetAccount {

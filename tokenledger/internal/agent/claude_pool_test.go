@@ -10,8 +10,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/identity"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/identity"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // claude-fleet#3204: a login that runs Claude Code on tokens handed in from

@@ -17,8 +17,8 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The browser terminal's acceptance (claude-fleet#3838, EPIC #3836 C1; BREAK-IT

@@ -21,10 +21,10 @@ import (
 	"golang.org/x/crypto/ssh"
 	"rsc.io/qr"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 
 // Connection certificates (claude-fleet#1412).

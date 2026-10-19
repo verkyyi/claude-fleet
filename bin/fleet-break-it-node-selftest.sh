@@ -145,7 +145,7 @@
 #                         codex-code-mode-host beside it runs no shell command
 #   shift-enter-sends     conf/tmux-attention.conf, conf/tmux-view.conf
 #                         (extended keys, #2760): ⇧↵ through the client's three tmux servers
-#   release-fetch-slow    tokenledger/internal/release fetch.go (Fetcher: Cache, Platforms,
+#   release-fetch-slow    tokenledger/shared/release fetch.go (Fetcher: Cache, Platforms,
 #                         Stall; go test, when a toolchain is here) + bin/fleet-node-update.py
 #                         stage (#2701): a 700 MB release at ~1 MB/s against a whole-fetch
 #                         deadline never landed, each try from zero
@@ -1128,7 +1128,7 @@ drill_account_op_rerun_exists() {
   t0=$(now)
   WHAT='同一个开号第二次到达（入口再问、重启丢了账本）：脚本留下的 ~/<login>-onboard/op 记着这次 op——跑完了就按它的结果答成功、不再跑脚本、不报「已存在」；还在跑就等；半路停了就收回登录（remove，家目录保留）再报失败；别的 op 的登录照旧「已存在」'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the agent half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -1390,7 +1390,7 @@ drill_runtime_gc_admin_tree() {
 drill_release_fetch_slow() {
   CAP=120; local t0 out rc tests f
   tests='TestFetchResumesAfterStall TestFetchResumesAcrossRuns TestFetchPinnedOnly TestFetchCachedNotRefetched TestFetchSlowButSteady'
-  f="$ROOT/tokenledger/internal/release/fetch_test.go"
+  f="$ROOT/tokenledger/shared/release/fetch_test.go"
   for out in $tests; do
     grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the ccquota half's test $out is not in ${f#$ROOT/}"; return 1; }
   done
@@ -1399,8 +1399,8 @@ drill_release_fetch_slow() {
     || { WHY="the updater half: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   WHAT='更新器：只取本机钉住的制品、缓存先填已有的、断了不退避下一轮接着取'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/release 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" github.com/verkyyi/claude-fleet/tokenledger/shared/release 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the ccquota half's Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT="${WHAT}；ccquota：静默 30 秒才断、同一次和下一次都从断点续传、慢而不停不超时、已缓存不重下（go test 五条）" ;;

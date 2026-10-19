@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // 机器快放快回，对话按人单独存 (claude-fleet#4060, EPIC #4048 C12). The machine

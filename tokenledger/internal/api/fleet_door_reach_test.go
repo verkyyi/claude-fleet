@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // claude-fleet#4149: a door whose image reports `entry reach` only at its

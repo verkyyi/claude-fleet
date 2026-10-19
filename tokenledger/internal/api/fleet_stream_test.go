@@ -12,7 +12,7 @@ import (
 
 	"github.com/coder/websocket/wsjson"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // sseEvent is one event a test read off the stream.

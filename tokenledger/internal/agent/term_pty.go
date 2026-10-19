@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // `ccquota term-pty` (claude-fleet#3838): a terminal relay's last hop, started

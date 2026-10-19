@@ -30,12 +30,12 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/identity"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/codex"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/identity"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/scan"
 )
 
 // Exit codes, mirroring the fleet's existing gate convention so a caller can

@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
 // releaseRig: a fake GitHub (tarballs on, raw host down — the hub's cluster

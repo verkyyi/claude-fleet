@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The web chat with two hub replicas (claude-fleet#3847; BREAK-IT

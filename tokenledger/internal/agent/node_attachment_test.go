@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 func TestAttachmentLeaseAndEpoch(t *testing.T) {

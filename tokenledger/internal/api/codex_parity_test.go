@@ -1,7 +1,7 @@
 package api
 
 import (
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 	"testing"
 	"time"
 )

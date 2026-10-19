@@ -14,8 +14,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
 // A feedback's reply → the person's session (claude-fleet#3359, EPIC #3354 C5).

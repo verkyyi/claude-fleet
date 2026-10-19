@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // A machine's login-level register (claude-fleet#2526, EPIC #2524 C2): the

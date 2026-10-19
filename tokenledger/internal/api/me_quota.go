@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // 我的额度 (claude-fleet#2517, EPIC #2512 C5): the subscriptions a person's

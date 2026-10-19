@@ -716,7 +716,7 @@ FR
   grep -q 'func TestLeaseCredsepMandatory(' "$ROOT/tokenledger/internal/api/fleet_credsep_test.go" 2>/dev/null \
     || { WHY="the hub half's TestLeaseCredsepMandatory is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestLeaseCredsepMandatory' ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
@@ -903,7 +903,7 @@ drill_credsep_warn_cuts_creds() {
   grep -q '"separated, check warns", true, 0, 4, control.CredsepSeparated' "$ROOT/tokenledger/internal/agent/node_credsep_test.go" 2>/dev/null \
     || { WHY="TestCredsepJudge no longer pins «warns ⇒ separated»"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestCredsepJudge$' ./internal/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the agent half's Go test did not run"; return 1 ;;
@@ -974,7 +974,7 @@ drill_cred_sep_home_leak() {
   grep -q 'func TestNoStoreWritesNothingHome(' "$ROOT/tokenledger/internal/agent/node_credstore_test.go" 2>/dev/null \
     || { WHY="the agent half's TestNoStoreWritesNothingHome is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestNoStoreWritesNothingHome$' ./internal/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the agent half's Go test did not run"; return 1 ;;
@@ -998,7 +998,7 @@ drill_cred_gate_counts_unleased() {
     || { WHY="TestGateCredsepCountsOnlyLeasedLogins is gone"; return 1; }
   WHAT="门禁 cred-ttl 只数会被发池凭据的登录（客户端、pod、系统账号、已删用户不算）：没有 go 工具链 — Go 门（tokenledger.yml）跑 TestGateCredsepCountsOnlyLeasedLogins"
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestGateCredsepCountsOnlyLeasedLogins$' ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go test did not run"; return 1 ;;

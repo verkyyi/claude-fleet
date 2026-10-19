@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // One eligibility rule, provider-aware (claude-fleet#4707): a login its egress

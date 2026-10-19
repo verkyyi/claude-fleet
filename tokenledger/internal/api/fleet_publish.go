@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
 // Stable is PUSHED to the hub (claude-fleet#2772, EPIC #2770 C2).

@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/attachment"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/attachment"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The shared per-login direct budget bounds all simultaneous chat channels.

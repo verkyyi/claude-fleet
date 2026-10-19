@@ -19,7 +19,7 @@ else, or it refuses: a key or a book another account could write is no check.
 
 A ticket is `v1.<payload>.<sig>` (base64url, no padding): the signature is the
 hub's ed25519 over "fleet-account-ticket-v1\\0" + the payload bytes as sent
-(tokenledger/internal/control/account_ticket.go is the Go twin; its test pins
+(tokenledger/shared/control/account_ticket.go is the Go twin; its test pins
 one ticket both sides make byte for byte). The public key file is
 `ed25519 <base64>` — what GET /v1/fleet/account-key serves, pinned root-owned
 beside the gate. Pure Python (fleet_ed25519.py): no package to trust.

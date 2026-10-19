@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 const svcTestAgentV2 = "---\nname: report\ndescription: 行业日报\n---\n按要求整理，附出处。\n"

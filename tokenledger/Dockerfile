@@ -20,7 +20,12 @@ WORKDIR /src
 #   direct 兜底，所以在能直连的环境里行为不变。
 ARG GOPROXY=https://goproxy.cn,direct
 ENV GOPROXY=$GOPROXY
+# Two modules (claude-fleet#4811): the root and shared/ (what the hub and the
+# node both build in), joined by go.mod's replace — go.work is a developer's
+# convenience, never what an image builds from.
+ENV GOWORK=off
 COPY go.mod go.sum ./
+COPY shared/go.mod shared/go.sum ./shared/
 RUN go mod download
 COPY . .
 # The client /install serves is packed from the repo before the build
@@ -37,7 +42,7 @@ ARG TARGETARCH
 # SrcDigest: the digest of the Go source compiled here (claude-fleet#2930) — the
 # hub builds a node release only from a commit whose tokenledger/ hashes the
 # same, so a release never carries a ccquota older (or newer) than its commit.
-RUN go run ./cmd/ccquota-srcdigest . > /tmp/srcdigest
+RUN go run github.com/verkyyi/claude-fleet/tokenledger/shared/cmd/ccquota-srcdigest . > /tmp/srcdigest
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -ldflags "-s -w -X main.Version=${VERSION} -X main.SrcDigest=$(cat /tmp/srcdigest)" -o /out/ccquota ./cmd/ccquota
 # The agent binaries a joining machine downloads from this hub

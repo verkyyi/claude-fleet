@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
 // The release signing key lives only in the release train (claude-fleet#3559,

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The entry's half of the web chat (claude-fleet#3645, EPIC #3642 C3). A

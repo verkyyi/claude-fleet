@@ -545,7 +545,7 @@ cluster access, no token.
 
 **Machines take stable from the hub, signed** (issue #2335, EPIC #2329 C7). Each
 time the hub sees stable move it builds a **node release** for that commit
-(`tokenledger/internal/api/fleet_release.go`, format in `internal/release`): the
+(`tokenledger/internal/api/fleet_release.go`, format in `shared/release`): the
 whole install — what that commit's own `conf/release-tree.list` names (issue
 #2771: the runtime trees, `.claude-plugin/`, `extras/`, the top-level files; never
 `tokenledger/`, `deploy/`, `.github/`; `bin/release-tree-selftest.sh` reds when a
@@ -644,7 +644,7 @@ Trust. A machine pins the ROOT. Every manifest carries the commit's
 `key_chain` — signed documents, `{"payload": base64(JSON), "sig": Ed25519 over
 "claude-fleet-release-doc\n" + payload}`: a `release-key` cert (`by` vouches for
 `key`, role `sign` or `root`; only a root may vouch for a root or revoke) — and
-`revoked` (`release-revoked`: version, key ids). Go (`internal/release/trust.go`:
+`revoked` (`release-revoked`: version, key ids). Go (`shared/release/trust.go`:
 `ccquota release fetch` / `verify --dir`, the hub's own check) and Python
 (`fleet-release-verify.py`: `fleet-release-fetch.py`, the CLI) take a manifest only
 from a key the pin vouches for that no list names — the manifest's, the hub's
@@ -695,7 +695,7 @@ which `fleet-stable.sh move` by hand dispatches with the sha it moved to — run
 from `/v1/fleet/release/stable`), `commits` (`git rev-list --first-parent
 prev..sha | git cat-file --batch`), `tree` (`git archive --format=tar sha`, the
 whole commit, gzip). The hub trusts none of the road: it hashes the archive file
-by file into git's tree (`internal/release` `TreeFromArchive`), which must be the
+by file into git's tree (`shared/release` `TreeFromArchive`), which must be the
 tree `sha`'s commit object names; every commit object must hash to the sha it is
 listed under, their first parents running from `sha` back to its own stable. Only
 then does it build the release from those bytes and move its pointer. **Who**: the

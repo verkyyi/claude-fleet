@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 func mintJoinCode(t *testing.T, h *harness, label string) JoinCodeView {

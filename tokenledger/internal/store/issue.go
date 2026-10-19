@@ -11,8 +11,8 @@ import (
 // guess. Design: docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md
 //
 // A branch name is the only issue signal the hub already holds -- it arrives on
-// every event from both sources (internal/scan/parse.go:27,
-// internal/scan/codex.go:75) and the hub never reads git itself. So the number
+// every event from both sources (shared/scan/parse.go:27,
+// shared/scan/codex.go:75) and the hub never reads git itself. So the number
 // is read from the branch, by one anchored rule, or not at all.
 //
 // It is stored WITHOUT a repository, deliberately, and that is the mirror image

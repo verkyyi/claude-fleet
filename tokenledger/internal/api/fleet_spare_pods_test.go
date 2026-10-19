@@ -11,8 +11,8 @@ import (
 
 	"github.com/coder/websocket/wsjson"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // claude-fleet#3553 (EPIC #3500 C8): a cluster keeps spare pods. The hub

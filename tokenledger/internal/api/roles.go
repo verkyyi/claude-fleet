@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // Admin and user see different hubs (claude-fleet#1985, EPIC #1982 C3).

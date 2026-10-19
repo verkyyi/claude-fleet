@@ -19,8 +19,8 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/authz"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 
 // claude-fleet#3603 (EPIC #3570 C10): an account is not a GitHub account.

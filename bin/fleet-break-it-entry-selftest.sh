@@ -542,7 +542,7 @@ drill_entry_public_unreachable() {
     || { WHY="the hub half's test TestEntryReachUnreachableNotRecorded is gone"; edown; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && FLEET_DRILL_ENTRY="$EPORT $E/db/entry/ssh_host_ed25519_key.pub" \
-          GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestEntryReachUnreachableNotRecorded$' ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; edown; return 1 ;;
@@ -868,7 +868,7 @@ PY
   grep -q '^func TestDoorRouteListHandsOutTheDoorsHostKey(' "$ROOT/tokenledger/internal/api/fleet_door_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestDoorRouteListHandsOutTheDoorsHostKey is gone"; ddown; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestDoorRouteListHandsOutTheDoorsHostKey$' ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; ddown; return 1 ;;
@@ -890,7 +890,7 @@ gotest() {  # gotest <TestName> <file under internal/api> → GOHALF, rc 1 = red
     || { WHY="the hub half's test $1 is gone"; return 1; }
   [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1 || return 0
   local out rc
-  out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+  out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
         go test -count=1 -run "^$1\$" ./internal/api 2>&1); rc=$?
   case "$rc:$out" in
     0:*'no tests to run'*) WHY="the hub half's Go test $1 did not run"; return 1 ;;

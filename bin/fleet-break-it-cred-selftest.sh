@@ -434,7 +434,7 @@ drill_probe_stale_after_release() {
   grep -q 'a probe another script wrote is due at once' "$ROOT/tokenledger/internal/agent/node_compute_test.go" 2>/dev/null \
     || { WHY="the agent half's TestProbeOnce no longer pins a changed script"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestProbeOnce$' ./internal/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the agent half's Go test did not run"; return 1 ;;

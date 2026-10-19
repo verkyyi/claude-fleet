@@ -21,7 +21,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The agent half of the chat relay (claude-fleet#3644, EPIC #3642 C2) — the SSH

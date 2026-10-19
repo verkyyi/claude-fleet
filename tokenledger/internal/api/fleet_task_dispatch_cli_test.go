@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // Real CLI -> authenticated HTTP -> store -> unified filer. Only GitHub and

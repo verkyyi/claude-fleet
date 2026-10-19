@@ -28,7 +28,9 @@
 #   agent     ccquota → ~/.local/bin/ccquota: --ccquota <file>, else the hub's own
 #             build (/v1/node/dist/<os>-<arch>, SHA-256 checked), else one already
 #             on PATH, else — the developer road only (FLEET_DIST_SOURCE=github,
-#             or a hub that keeps no releases) — `go install` (issue #2862).
+#             or a hub that keeps no releases) — built with Go from a shallow
+#             clone (issue #2862; `go install …@latest` stopped working when
+#             tokenledger/go.mod took a replace for its shared module, #4811).
 #   service   the agent under the platform's supervisor, as THIS login:
 #             macOS — a LaunchAgent in the gui domain, else (SSH-only login) a
 #             LaunchDaemon with UserName through sudo -n; Linux — a systemd user
@@ -490,13 +492,17 @@ install_ccquota() {
     say "agent: FAIL — the hub serves no ccquota-$OS-$ARCH and none is on PATH. Pass --ccquota <file> (FLEET_DIST_SOURCE=github builds it from GitHub with Go)"
     return 1
   fi
-  if command -v go >/dev/null 2>&1; then
+  if command -v go >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
+    # tokenledger/go.mod replaces its shared module with ./shared (#4811), and
+    # `go install <pkg>@<version>` refuses any module with a replace — so build
+    # from a checkout, where the replace resolves.
     # dist-ok: the developer road — FLEET_DIST_SOURCE=github, or a hub that keeps no releases
-    GOBIN="$LBIN" go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest >"$WORK/go.log" 2>&1 \
-      && say "agent: ccquota built with go install" && return 0
-    say "agent: go install failed: $(tail -n 2 "$WORK/go.log" | tr '\n' ' ')"
+    git clone -q --depth 1 https://github.com/verkyyi/claude-fleet.git "$WORK/src" >"$WORK/go.log" 2>&1 \
+      && (cd "$WORK/src/tokenledger" && GOWORK=off CGO_ENABLED=0 go build -o "$LBIN/ccquota" ./cmd/ccquota) >>"$WORK/go.log" 2>&1 \
+      && say "agent: ccquota built with go from a clone" && return 0
+    say "agent: go build failed: $(tail -n 2 "$WORK/go.log" | tr '\n' ' ')"
   fi
-  say "agent: FAIL — the hub serves no ccquota-$OS-$ARCH, none is on PATH and there is no Go. Pass --ccquota <file>"
+  say "agent: FAIL — the hub serves no ccquota-$OS-$ARCH, none is on PATH and there is no Go (or git). Pass --ccquota <file>"
   return 1
 }
 install_ccquota || exit 1

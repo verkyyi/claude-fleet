@@ -15,7 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 
 // claude-fleet#2891 (EPIC #2889 C2): a computer that never signed in gets a

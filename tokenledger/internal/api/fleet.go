@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
 // The read-only half of the Fleet Hub, in the hub (claude-fleet#1409).
@@ -30,7 +30,7 @@ import (
 // says it serves reads (control.CapRead). The node runs the same
 // fleet-control.py rpc the SSH path ran, so the answer is the same object.
 //
-// Identity is the Python scheme, byte for byte (internal/fleetid): a fleet UUID
+// Identity is the Python scheme, byte for byte (shared/fleetid): a fleet UUID
 // or worker_id a caller learned from the SSH hub is the same one here.
 //
 // Every query is scoped to the caller (EPIC #1407 共同约定 5) through ONE seam,

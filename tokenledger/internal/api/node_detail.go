@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // One machine's page (claude-fleet#2796, EPIC #2792 C4): GET /v1/nodes/<host>

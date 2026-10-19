@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // installsHome lays a fake fleet-installs.sh under <tmp>/<login> that prints
