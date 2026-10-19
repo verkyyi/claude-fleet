@@ -11,15 +11,18 @@
 # (EPIC #4810 共同约定 8), never by hand. --check exits 1 (and lists them) when
 # a .go file still imports a moved package from internal/.
 #
-# The list is the packages the node (internal/agent) and the hub (internal/api)
+# The list is the packages the node (agent/, #4812) and the hub (internal/api)
 # both import that import neither api, store nor agent — `go list -deps`,
-# re-checked when this was written. Adding one later: put it in PKGS and rerun.
+# re-checked when this was written; i18n · pricing · recon joined with #4812
+# (the node's `ccquota report` prices, and its `budget` reads the hub's quota
+# view, shared/hubwire, whose burn rate and shares are recon's). Adding one
+# later: put it in PKGS and rerun.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TL="$ROOT/tokenledger"
 MOD=github.com/verkyyi/claude-fleet/tokenledger
-PKGS="control nodesig release sshca identity model codex limits scan sessions attachment spool fleetid credproxy"
+PKGS="control nodesig release sshca identity model codex limits scan sessions attachment spool fleetid credproxy i18n pricing recon"
 alt=$(printf '%s' "$PKGS" | tr ' ' '|')
 
 if [ "${1:-}" = --check ]; then

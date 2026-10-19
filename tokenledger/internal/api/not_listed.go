@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
 )
 
 // 名单外那一页 (claude-fleet#4050, EPIC #4048 C2): a sign-in that worked —

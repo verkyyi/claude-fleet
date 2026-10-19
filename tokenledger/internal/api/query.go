@@ -7,111 +7,25 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/recon"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/hubwire"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/recon"
 )
 
-// LimitsView is what the dashboard and MCP see for one account's quota.
-//
-// Available distinguishes "we know the numbers" from "we do not". When it is
-// false the caller must render no gauge at all — a stale or inferred
-// percentage shown with the same weight as a live one is the failure this
-// whole project exists to avoid.
-type LimitsView struct {
-	Source      string               `json:"source,omitempty"`
-	Plan        string               `json:"plan,omitempty"`
-	Windows     []ProviderWindow     `json:"windows,omitempty"`
-	Credits     []model.QuotaCredits `json:"credits,omitempty"`
-	Blocked     bool                 `json:"blocked,omitempty"`
-	AccountUUID string               `json:"account_uuid"`
-	Available   bool                 `json:"available"`
-	Reason      string               `json:"reason,omitempty"`
+// LimitsView is what the dashboard and MCP see for one account's quota — a
+// format the node reads too (`ccquota budget`), so it lives in shared/hubwire
+// (claude-fleet#4812).
+type LimitsView = hubwire.LimitsView
 
-	// ReasonCode names WHICH reason, so the dashboard's handler can restate it
-	// in the viewer's language without matching on the English sentence.
-	// Unserialised for the same reason store.UnpricedReason.Code is: the wire
-	// contract stays the prose.
-	ReasonCode string `json:"-"`
-	// ReasonEndpoint/ReasonDetail carry an endpoint's OWN reported reason, which
-	// is relayed verbatim: only the frame around it is this hub's wording.
-	ReasonEndpoint string `json:"-"`
-	ReasonDetail   string `json:"-"`
-
-	ObservedAt *time.Time `json:"observed_at,omitempty"`
-	// StaleSeconds is how old the reading is. The UI greys out a reading older
-	// than a few minutes rather than pretending it is current.
-	StaleSeconds int64 `json:"stale_seconds,omitempty"`
-
-	// ReadVia names who took the reading shown — "hub" (the hub's own read
-	// through the relay) or "node" — and ReadNote why a node's is shown when
-	// the hub's failed (claude-fleet#2169). Both stay empty unless the hub
-	// reads quota itself (CCQUOTA_FLEET_HUB_QUOTA), so the view is unchanged
-	// without it.
-	ReadVia       string     `json:"read_via,omitempty"`
-	ReadNote      string     `json:"read_note,omitempty"`
-	ReadStatus    string     `json:"read_status,omitempty"`
-	ReadAttemptAt *time.Time `json:"read_attempt_at,omitempty"`
-
-	FiveHour *WindowView `json:"five_hour,omitempty"`
-	SevenDay *WindowView `json:"seven_day,omitempty"`
-
-	Scoped []ScopedView `json:"scoped,omitempty"`
-
-	// ModelClaims are per-model caps (the weekly Fable cap) read by probing that
-	// model. Each carries its own observed_at: they are refreshed by a different
-	// source than the windows above, on a different cadence. They never feed
-	// HighestUtilization — a model cap is not a subscription wall.
-	ModelClaims []model.ModelClaim `json:"model_claims,omitempty"`
-
-	// EndpointShares apportions the five-hour window across endpoints. The
-	// account total is exact; these shares are estimates.
-	EndpointShares []recon.Share `json:"endpoint_shares,omitempty"`
-
-	Disclaimer string `json:"disclaimer"`
-}
-
-type ProviderWindow struct {
-	ObservedAt *time.Time `json:"observed_at,omitempty"`
-	WindowView
-	ID      string `json:"id"`
-	Label   string `json:"label"`
-	LimitID string `json:"limit_id"`
-	Minutes int64  `json:"minutes,omitempty"`
-}
-
-func (v *LimitsView) HighestUtilization() float64 {
-	if v.Blocked {
-		return 100
-	}
-	var n float64
-	if v.FiveHour != nil {
-		n = v.FiveHour.Utilization
-	}
-	for _, w := range v.Windows {
-		if w.Utilization > n {
-			n = w.Utilization
-		}
-	}
-	return n
-}
+type ProviderWindow = hubwire.ProviderWindow
 
 // WindowView is one rate-limit bucket plus its projection.
-type WindowView struct {
-	Utilization float64        `json:"utilization"`
-	ResetsAt    *time.Time     `json:"resets_at,omitempty"`
-	Burn        recon.BurnRate `json:"burn"`
-}
+type WindowView = hubwire.WindowView
 
 // ScopedView is a per-model weekly limit.
-type ScopedView struct {
-	Model       string     `json:"model"`
-	Surface     string     `json:"surface,omitempty"`
-	Utilization float64    `json:"utilization"`
-	ResetsAt    *time.Time `json:"resets_at,omitempty"`
-	IsActive    bool       `json:"is_active"`
-}
+type ScopedView = hubwire.ScopedView
 
 // shareDisclaimer is what every internal surface carries next to its figures.
 //
@@ -123,31 +37,11 @@ const shareDisclaimer = "The account-wide utilization is exact and already cover
 	"the subscriptions."
 
 // LimitsAcross is the answer to "am I about to hit the wall" when more than one
-// subscription is in view.
-//
-// It is a LIST, never a total. Two subscriptions at 4% and 19% are not 23% of
-// anything — they are separate quota pools with separate resets, and adding
-// them produces a number that means nothing while looking authoritative.
-// Tokens and notional cost are additive; utilization is not, and the type
-// enforces that rather than trusting a convention.
-type LimitsAcross struct {
-	// PerAccount holds one entry per subscription, each with its own exact
-	// utilization. There is deliberately no aggregate field.
-	PerAccount []AccountLimits `json:"per_account"`
-
-	// Worst names the subscription closest to its limit — the only meaningful
-	// single answer across several pools.
-	Worst *AccountLimits `json:"worst,omitempty"`
-
-	Note string `json:"note"`
-}
+// subscription is in view (shared/hubwire: a list, never a total).
+type LimitsAcross = hubwire.LimitsAcross
 
 // AccountLimits pairs a subscription with its own reading.
-type AccountLimits struct {
-	AccountUUID string      `json:"account_uuid"`
-	Label       string      `json:"label"`
-	Limits      *LimitsView `json:"limits"`
-}
+type AccountLimits = hubwire.AccountLimits
 
 const acrossNote = "Utilization is per subscription and is never summed: separate quota pools " +
 	"with separate resets. Tokens and notional costs are additive and may be compared across them."

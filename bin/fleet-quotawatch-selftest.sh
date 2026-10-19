@@ -123,7 +123,7 @@ case "$(cat "$FAKE_B_SHAPE_FILE" 2>/dev/null)" in
   shape)   b='{"account_uuid":"u-b","label":"b","headroom_pct":0}' ;;
   *)       b=$(printf '{"account_uuid":"u-b","label":"b","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s"},"seven_day":{"utilization":%d,"resets_at":"%s"}}' "$((100-pb))" "$pb" "$r5" "$u7b" "$r7b") ;;
 esac
-# verdict: go|hold|unknown only (cmd/ccquota/budget.go) — never "ok" (issue #668).
+# verdict: go|hold|unknown only (agent/cli/budget.go) — never "ok" (issue #668).
 printf '{"verdict":"go","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s","percent_per_hour":30},"seven_day":{"utilization":%d,"resets_at":"%s"}},%s]}' "$((100-p))" "$p" "$r5" "$u7a" "$r7a" "$b"
 FAKE
 # --- fake tmux: strips -L; one live fleet `sessA`; two windows (@1 on a, @2 on b);

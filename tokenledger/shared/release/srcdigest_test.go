@@ -23,12 +23,15 @@ var sourceDigestVector = map[string]string{
 	"tokenledger/shared/go.mod":                           "module y\n",
 	"tokenledger/shared/release/r.go":                     "package release\n",
 	"tokenledger/shared/release/r_test.go":                "package release\n",
+	"tokenledger/agent/go.mod":                            "module z\n",
+	"tokenledger/agent/cli/run.go":                        "package cli\n",
+	"tokenledger/agent/cli/run_test.go":                   "package cli\n",
 	"tokenledger/README.md":                               "# t\n",
 	"tokenledger/web/src/app.ts":                          "x\n",
 	"bin/fleet":                                           "#!/bin/sh\n",
 }
 
-const sourceDigestWant = "3a35dfe50e4408bb50a50a398d82f9e24e2db6c4947a5289466a44dcc76ac584"
+const sourceDigestWant = "660f7fb7211bb0d661d9a18f10e823bab8657938ff32498bb511d13897a53b00"
 
 func vectorFiles() map[string][]byte {
 	out := map[string][]byte{}
@@ -48,7 +51,8 @@ func TestSourceDigestVector(t *testing.T) {
 	for p, b := range vectorFiles() {
 		switch p {
 		case "tokenledger/go.mod", "tokenledger/go.sum", "tokenledger/cmd/ccquota/main.go", "tokenledger/internal/store/schema.sql",
-			"tokenledger/shared/go.mod", "tokenledger/shared/release/r.go":
+			"tokenledger/shared/go.mod", "tokenledger/shared/release/r.go",
+			"tokenledger/agent/go.mod", "tokenledger/agent/cli/run.go":
 			only[p] = b
 		}
 	}
@@ -66,6 +70,12 @@ func TestSourceDigestVector(t *testing.T) {
 	only["tokenledger/shared/release/r.go"] = []byte("package release \n")
 	if SourceDigest(only) == got {
 		t.Fatal("an edit under shared/ did not move the digest")
+	}
+	// and of the node's own module (#4812)
+	only["tokenledger/shared/release/r.go"] = []byte("package release\n")
+	only["tokenledger/agent/cli/run.go"] = []byte("package cli \n")
+	if SourceDigest(only) == got {
+		t.Fatal("an edit under agent/ did not move the digest")
 	}
 	if SourceDigest(map[string][]byte{"bin/fleet": nil}) != "" {
 		t.Fatal("a commit with no Go source has a digest")

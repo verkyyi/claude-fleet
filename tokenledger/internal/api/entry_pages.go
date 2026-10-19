@@ -7,7 +7,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
 )
 
 // The way in (claude-fleet#3932, EPIC #3923 C9): /signin, /fleet/login, /i/,

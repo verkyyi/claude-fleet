@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
 )
 
 // Sign in by mail — the way in when WeChat and GitHub are not at hand

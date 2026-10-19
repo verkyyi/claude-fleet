@@ -9,7 +9,7 @@ import (
 // The repository a spend row was earned in: stored, never derived.
 //
 // Design: docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md §6.
-// The resolver lives in internal/agent/gitrepo.go, on the endpoint, because
+// The resolver lives in agent/gitrepo.go, on the endpoint, because
 // that is the only side standing inside the checkout. Everything here is the
 // hub keeping its half of the bargain -- it stores what it was told and infers
 // nothing, which is the same stance that put issue_number's rule in one small

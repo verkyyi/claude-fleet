@@ -206,8 +206,8 @@ bin/oss-scan.sh --inventory         # 下面这张表
 | `tokenledger/docs/superpowers/plans/2026-09-12-provider-dimension.md` | — | — | allow |
 | `tokenledger/docs/superpowers/plans/2026-09-13-tokenledger-ui.md` | — | — | allow |
 | `tokenledger/docs/superpowers/specs/2026-09-12-tokenledger-provider-and-reorientation-design.md` | — | — | allow |
-| `tokenledger/internal/agent/node_entry_test.go` | — | — | allow |
-| `tokenledger/internal/agent/node_routes_test.go` | — | — | allow |
+| `tokenledger/agent/node_entry_test.go` | — | — | allow |
+| `tokenledger/agent/node_routes_test.go` | — | — | allow |
 | `tokenledger/internal/api/fleet_certs_test.go` | — | — | allow |
 | `tokenledger/internal/api/fleet_debug_ticket_test.go` | — | — | allow |
 | `tokenledger/internal/api/fleet_entry_reach_test.go` | — | — | allow |

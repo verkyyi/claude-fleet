@@ -2141,7 +2141,7 @@ cluster road stays for a Codex-only service; nothing routes there today.
   run waits.
 - **One attempt.** `Start` picks the least busy login, mints the `fsj_` key
   (`svc_run_jobs.cluster` = `node:<host>/<login>`) and sends `svc_run {run,
-  attempt, deadline, token}`; the agent (`internal/agent/node_svc_run.go`) starts
+  attempt, deadline, token}`; the agent (`agent/node_svc_run.go`) starts
   the login's `bin/fleet-svc-local.sh run` in a process group of its own, the
   key on its stdin only, and answers at once. The run reads its spec and hands
   in its result over `/v1/node/svc-runs` itself — the Job's road, unchanged — and

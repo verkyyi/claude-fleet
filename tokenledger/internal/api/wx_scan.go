@@ -15,8 +15,8 @@ import (
 
 	"rsc.io/qr"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
 )
 
 // Sign in by following the service account (claude-fleet#4054, EPIC #4048

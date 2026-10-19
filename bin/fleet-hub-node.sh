@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-hub-node.sh — this machine's half of cross-machine relays (issue #1421,
-# EPIC #1419 C2). Driven by the ccquota agent (tokenledger/internal/agent/
+# EPIC #1419 C2). Driven by the ccquota agent (tokenledger/agent/
 # relay.go); not meant to be run by hand.
 #
 #   fleet-hub-node.sh paths      → `outbox\t<dir>`, `workers\t<file>` and

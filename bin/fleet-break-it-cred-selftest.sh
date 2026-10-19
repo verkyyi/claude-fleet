@@ -431,11 +431,11 @@ drill_probe_stale_after_release() {
     || { WHY="a fresh verdict the old release wrote was reused: wanted rc 0 verdict ok route relay with a src, got rc $PRC $(cat "$CD/node-probe.json" 2>/dev/null)"; return 1; }
   # the agent's half: a probe another script wrote is due at once, not in a day
   gohalf="agent half: no go toolchain here — the Go gate (tokenledger.yml) runs TestProbeOnce"
-  grep -q 'a probe another script wrote is due at once' "$ROOT/tokenledger/internal/agent/node_compute_test.go" 2>/dev/null \
+  grep -q 'a probe another script wrote is due at once' "$ROOT/tokenledger/agent/node_compute_test.go" 2>/dev/null \
     || { WHY="the agent half's TestProbeOnce no longer pins a changed script"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestProbeOnce$' ./internal/agent 2>&1); rc=$?
+          go test -count=1 -run '^TestProbeOnce$' github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the agent half's Go test did not run"; return 1 ;;
       0:*) gohalf="agent half: go test TestProbeOnce ok" ;;

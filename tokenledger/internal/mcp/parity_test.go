@@ -21,9 +21,9 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
 )
 
 // httpBeside starts an HTTP server on the same store, so a tool's answer can be

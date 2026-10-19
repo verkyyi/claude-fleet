@@ -519,7 +519,7 @@ case "$code" in
   200)
     tr -d '\r' < "$WORK/ca" | sed -n '1p' > "$WORK/ca.1"
     grep -Eq '^(ssh-|ecdsa-|sk-)[A-Za-z0-9@.-]+ [A-Za-z0-9+/=]+' "$WORK/ca.1" || fail "ssh CA" "入口给的不是一把 ssh 公钥"
-    # the admin agent's drop-in, byte for byte (internal/agent/node_sshca.go sshCAConf)
+    # the admin agent's drop-in, byte for byte (agent/node_sshca.go sshCAConf)
     printf '# Managed by ccquota (claude-fleet#1412): trust the fleet hub'"'"'s SSH user CA.\n# Existing keys are untouched; this only ADDS certificate logins.\nTrustedUserCAKeys %s\n' "$KEYP" > "$WORK/ca.conf"
     if cmp -s "$WORK/ca.1" "$KEYP" && cmp -s "$WORK/ca.conf" "$CONFP"; then
       skip "ssh CA" "sshd 已信入口的 CA（${KEYP}）"

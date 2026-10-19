@@ -10,12 +10,12 @@ name: tokenledger
 #     neither selftests*.yml path filter lists it, and run-selftests.sh
 #     --changed ignores files outside the shipped shell trees
 #     (bin/tokenledger-isolation-selftest.sh pins both directions).
-#   - every step runs with working-directory tokenledger/, which holds two Go
-#     modules (claude-fleet#4811, EPIC #4810): the root
-#     (github.com/verkyyi/claude-fleet/tokenledger) and shared/ (…/shared — what
-#     the hub and the node both build in), joined by the root go.mod's replace.
+#   - every step runs with working-directory tokenledger/, which holds three Go
+#     modules (EPIC #4810): the root (github.com/verkyyi/claude-fleet/tokenledger),
+#     shared/ (…/shared — what the hub and the node both build in, #4811) and
+#     agent/ (…/agent — the node, #4812), joined by the go.mods' replaces.
 #     GOWORK=off: each module must build on its own; go.work is for a person's
-#     editor. `go list ./...` from tokenledger/ stops at shared/, so every step
+#     editor. `go list ./...` from tokenledger/ stops at shared/ and agent/, so every step
 #     that walks packages runs once per module. No go.mod at the repo root.
 #   - no `push` run (issue #4663; a branch push only duplicated its PR's run):
 #     its PR ran this on the change already, and the release train builds the
@@ -62,14 +62,16 @@ jobs:
           cache-dependency-path: |
             tokenledger/go.sum
             tokenledger/shared/go.sum
+            tokenledger/agent/go.sum
       # The client /install serves lives once, in the repo's bin/ conf/ …
       # (claude-fleet#1803); a build packs it into fleetclient/pack/ first.
       - run: ../bin/fleet-client-pack.sh
       - if: matrix.part == 'rest'
         run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
       - if: matrix.part == 'rest'
-        run: go vet ./... && (cd shared && go vet ./...)
-      # the blocks' dependency direction (EPIC #4810 共同约定 3): shared/ names no other block
+        run: go vet ./... && (cd shared && go vet ./...) && (cd agent && go vet ./...)
+      # the blocks' dependency direction (EPIC #4810 共同约定 3): shared/ names no
+      # other block, agent/ only shared/, and the node's build has no hub package
       - if: matrix.part == 'rest'
         run: ../bin/tokenledger-modules-selftest.sh
       - name: pick this part's tests
@@ -105,6 +107,12 @@ jobs:
       - name: tests (shared module)
         if: matrix.part == 'rest'
         working-directory: tokenledger/shared
+        run: go test -race -timeout 20m ./...
+      # the node (claude-fleet#4812): its own module, so `go list ./...` above
+      # no longer reaches it
+      - name: tests (agent module)
+        if: matrix.part == 'rest'
+        working-directory: tokenledger/agent
         run: go test -race -timeout 20m ./...
 
   # The Postgres leg (claude-fleet#2120, #2121; EPIC #2119): the same
@@ -153,6 +161,7 @@ jobs:
           cache-dependency-path: |
             tokenledger/go.sum
             tokenledger/shared/go.sum
+            tokenledger/agent/go.sum
       - run: ../bin/fleet-client-pack.sh
       - name: pick this part's tests
         env:
@@ -251,4 +260,8 @@ jobs:
           cache-dependency-path: |
             tokenledger/go.sum
             tokenledger/shared/go.sum
+            tokenledger/agent/go.sum
       - run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./cmd/ccquota
+      # the node's own build (claude-fleet#4812) — what C3 ships to machines
+      - working-directory: tokenledger/agent
+        run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./cmd/ccquota

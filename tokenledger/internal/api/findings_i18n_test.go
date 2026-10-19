@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/findings"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
 )
 
 // everyFinding produces at least one finding per template this build can emit,

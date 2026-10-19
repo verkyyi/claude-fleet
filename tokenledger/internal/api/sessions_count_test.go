@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
 )
 
 // 我的会话 is ONE number, however the page reads it (claude-fleet#3321).

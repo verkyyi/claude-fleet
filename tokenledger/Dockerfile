@@ -20,12 +20,14 @@ WORKDIR /src
 #   direct 兜底，所以在能直连的环境里行为不变。
 ARG GOPROXY=https://goproxy.cn,direct
 ENV GOPROXY=$GOPROXY
-# Two modules (claude-fleet#4811): the root and shared/ (what the hub and the
-# node both build in), joined by go.mod's replace — go.work is a developer's
-# convenience, never what an image builds from.
+# Three modules: the root, shared/ (what the hub and the node both build in,
+# claude-fleet#4811) and agent/ (the node, claude-fleet#4812), joined by the
+# go.mods' replaces — go.work is a developer's convenience, never what an image
+# builds from.
 ENV GOWORK=off
 COPY go.mod go.sum ./
 COPY shared/go.mod shared/go.sum ./shared/
+COPY agent/go.mod agent/go.sum ./agent/
 RUN go mod download
 COPY . .
 # The client /install serves is packed from the repo before the build

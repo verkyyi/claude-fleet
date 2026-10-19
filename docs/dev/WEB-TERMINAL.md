@@ -89,7 +89,7 @@ pod 重建就变。
 - 多副本：人的请求落在不持家登录链路的副本上，整个升级交给持链的那个（`termRelayPeer`）。
 
 BREAK-IT：`term-other-person` · `term-relay-orphan` · `term-view-kills-session`。
-测试：`tokenledger/internal/api/term_relay_test.go`、`internal/agent/term_pty_test.go`、
+测试：`tokenledger/internal/api/term_relay_test.go`、`agent/term_pty_test.go`、
 `shared/control/term_relay_test.go`、`bin/fleet-term-attach-selftest.sh`。
 
 ## 直连优先的共用传输（C5 #4374）

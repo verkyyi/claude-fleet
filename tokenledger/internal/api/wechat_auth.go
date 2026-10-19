@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
 )
 
 // Sign in with WeChat (claude-fleet#3604, EPIC #3570 C11 · 共同约定 11).

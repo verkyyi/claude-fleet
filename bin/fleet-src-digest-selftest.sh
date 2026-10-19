@@ -50,6 +50,11 @@ git -C "$WORK/r" commit -qam work
 printf '// edit\n' >> "$WORK/r/tokenledger/shared/release/r.go"
 git -C "$WORK/r" commit -qam shared
 [ "$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)" != "$want" ] && ok "a shared/ edit moves it" || bad "an edit under shared/ did not move the digest"
+# …and the node's own module (#4812)
+prev=$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)
+printf '// edit\n' >> "$WORK/r/tokenledger/agent/cli/run.go"
+git -C "$WORK/r" commit -qam agent
+[ "$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)" != "$prev" ] && ok "an agent/ edit moves it" || bad "an edit under agent/ did not move the digest"
 printf '// edit\n' >> "$WORK/r/tokenledger/cmd/ccquota/main.go"
 git -C "$WORK/r" commit -qam go
 [ "$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)" != "$want" ] && ok "a Go edit moves it" || bad "a Go edit did not move the digest"

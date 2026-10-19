@@ -999,7 +999,7 @@ The road (`bin/fleet-job.sh` → `bin/fleet_job.py`):
   `cluster_job {job, owner, offset}` down the ops link; fleet-ops reads the Job
   and its pod's log with its own read-only account (Role: jobs, pods/log) and
   answers only for a Job labelled `fleet/owner` the asking pod
-  (`internal/agent/node_cluster_job.go`, `CCQUOTA_FLEET_KUBE_API` /
+  (`agent/node_cluster_job.go`, `CCQUOTA_FLEET_KUBE_API` /
   `CCQUOTA_FLEET_KUBE_SA_DIR` override the in-cluster defaults). The client
   prints the log as it comes and unpacks the outputs into the worktree's
   `.fleet-job/<job>/` (in `.git/info/exclude`).

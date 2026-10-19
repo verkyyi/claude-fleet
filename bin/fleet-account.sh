@@ -487,7 +487,7 @@ acct_eligible() { [ "$(acct_limited_until "$1")" -le "$(now)" ]; }
 # pick_best skips it, `list` prints no quota columns, the quotawatch policy loop
 # never sees it, and (since #628) quota_move_target refuses it as a landing spot.
 # The two ways a reading goes missing, both of which used to become `0`:
-#   available:false — TokenLedger SAYS SO (cmd/ccquota/budget.go flatten: it sets
+#   available:false — TokenLedger SAYS SO (agent/cli/budget.go flatten: it sets
 #     available+reason, then returns early, so headroom_pct stays at its 0 value
 #     and both omitempty windows vanish from the JSON). Publishing a row here
 #     printed `label 0 0 0 …` — 0% used AND 0% headroom — which reads to the
@@ -540,7 +540,7 @@ def num(v):
     except (TypeError, ValueError): return None
 def ep(v):
     """Reset instant → epoch seconds. `budget --json` states it as RFC3339
-    (cmd/ccquota/budget.go: resets_at is a *time.Time) — that is the shape this
+    (agent/cli/budget.go: resets_at is a *time.Time) — that is the shape this
     parser is pinned to. The stamp API in the same binary (stamp.go) uses unix
     seconds instead, and feeding one of those in used to except into 0, which
     silently flattened every fleet_same_window comparison; accept both."""

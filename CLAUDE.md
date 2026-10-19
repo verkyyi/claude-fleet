@@ -954,7 +954,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   (`Message.login`, its own token in `Hello.login_token`) and stays its own
   endpoint. A login is proven ONLY by `loginEndpoint` (`internal/api/node_machine.go`)
   — anything else is `WRONG_LOGIN`, on both halves — and every command a tenant
-  starts goes through `prepCmd` (`internal/agent/runas.go`): dropped to the login,
+  starts goes through `prepCmd` (`agent/runas.go`): dropped to the login,
   refused rather than run as root. `docs/dev/MANAGED-NODE.md` §6; BREAK-IT
   `machine-agent-wrong-login`.
 - **A managed machine has ONE updater, and every part moves with the release or

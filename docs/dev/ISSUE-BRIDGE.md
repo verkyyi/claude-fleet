@@ -258,7 +258,7 @@ comment there, so the public-repo reason for "off" does not apply.
 
 - **The push.** The hub sends `ticket {repo, number, kind: comment, comment_id}`
   to every node of the ticket's person that listed `CapTicket`; the node agent
-  (`tokenledger/internal/agent/node_ticket.go`, listed only when this script
+  (`tokenledger/agent/node_ticket.go`, listed only when this script
   exists) runs `fleet-issue-bridge.sh --event <repo> <N> <comment id>`. It reads
   the comment through the ticket door (`fleet_ticket.py relay --number`) and runs
   the same relay core — dedup, markers, the idle / typing gates — but delivers

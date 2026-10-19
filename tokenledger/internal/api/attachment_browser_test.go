@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
+	"github.com/verkyyi/claude-fleet/tokenledger/agent"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
 )
 
 // TestUsageHistoryMatchesV1HistoryViaSharedFold is the provability check for

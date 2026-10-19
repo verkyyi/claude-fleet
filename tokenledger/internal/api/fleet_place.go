@@ -8,12 +8,12 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/hubwire"
 )
 
 // POST /v1/node/place — a node asks where a new session should run
@@ -537,22 +537,10 @@ func declinedBySubmit(code string) bool {
 	return true
 }
 
-// AttemptsTail is the optional last field of a place line (claude-fleet#1610):
-// `after <machine>:<operation_id>:<exit>,…` for each machine that declined
-// first ("-" for none), "" when the first try answered.
+// AttemptsTail is the optional last field of a place line (claude-fleet#1610),
+// in shared/hubwire: `ccquota place` writes the same tail (claude-fleet#4812).
 func AttemptsTail(machines, ops []string, exits []int) string {
-	if len(machines) == 0 {
-		return ""
-	}
-	parts := make([]string, len(machines))
-	for i, m := range machines {
-		op := ops[i]
-		if op == "" {
-			op = "-"
-		}
-		parts[i] = m + ":" + op + ":" + strconv.Itoa(exits[i])
-	}
-	return "after " + strings.Join(parts, ",")
+	return hubwire.AttemptsTail(machines, ops, exits)
 }
 
 func attemptsTail(as []placeAttempt) string {

@@ -57,7 +57,7 @@ FAKE
 cat > "$WORK/fakepath/ccquota" <<'FAKE'
 #!/bin/bash
 echo "$*" >> "$FAKE_LOG"
-# verdict: go|hold|unknown only (cmd/ccquota/budget.go) — never "ok" (issue #668).
+# verdict: go|hold|unknown only (agent/cli/budget.go) — never "ok" (issue #668).
 printf '{"verdict":"go","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":90,"five_hour":{"utilization":10,"resets_at":"2026-09-12T05:00:00Z"},"seven_day":{"utilization":5,"resets_at":"2026-09-16T05:00:00Z"}}]}'
 FAKE
 cat > "$WORK/fakepath/tmux" <<'FAKE'

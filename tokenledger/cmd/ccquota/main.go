@@ -15,6 +15,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/agent/cli"
 )
 
 // Version is stamped at build time via -ldflags.
@@ -30,41 +32,23 @@ func main() {
 		os.Exit(2)
 	}
 
+	// The node's commands are agent/cli's (claude-fleet#4812): one
+	// implementation for this binary and the node's own build.
+	cli.Version, cli.SrcDigest = Version, SrcDigest
+	if handled, code := cli.Run(os.Args[1], os.Args[2:]); handled {
+		os.Exit(code)
+	}
+
 	var err error
 	switch os.Args[1] {
-	case "report":
-		err = runReport(os.Args[2:])
-	case "agent":
-		if machineFlag(os.Args[2:]) {
-			// One node program for the whole machine (claude-fleet#2333).
-			err = runAgentMachine(os.Args[2:])
-		} else {
-			err = runAgent(os.Args[2:])
-		}
-	case "core-exec": // agent.CoreExecCmd
-		// The seated node program's tenant command, through the root core's
-		// exec-as (claude-fleet#3669): exits with the job's code.
-		os.Exit(runCoreExec(os.Args[2:]))
-	case "chat-pipe": // agent.ChatPipeCmd
-		// A chat relay's last hop, run as the login (claude-fleet#3644):
-		// its own conversation socket on stdio, nothing else.
-		os.Exit(runChatPipe(os.Args[2:]))
-	case "term-pty": // agent.TermPtyCmd
-		// A terminal relay's last hop, run as the login (claude-fleet#3838):
-		// its own PTY on the one attach command, framed on stdio.
-		os.Exit(runTermPty(os.Args[2:]))
 	case "hub":
 		err = runHub(os.Args[2:])
 	case "enroll":
 		err = runEnroll(os.Args[2:])
 	case "endpoint":
 		err = runEndpoint(os.Args[2:])
-	case "stamp":
-		err = runStamp(os.Args[2:])
 	case "name":
 		err = runName(os.Args[2:])
-	case "budget":
-		err = runBudget(os.Args[2:])
 	case "badge":
 		err = runBadge(os.Args[2:])
 	case "team":
@@ -73,29 +57,11 @@ func main() {
 		err = runSvc(os.Args[2:])
 	case "plan":
 		err = runPlan(os.Args[2:])
-	case "codex":
-		err = runCodex(os.Args[2:])
-	case "lease":
-		err = runLease(os.Args[2:])
-	case "place":
-		err = runPlace(os.Args[2:])
-	case "move":
-		err = runMove(os.Args[2:])
-	case "credproxy":
-		err = runCredProxy(os.Args[2:])
 	case "db":
 		err = runDB(os.Args[2:])
-	case "release":
-		err = runRelease(os.Args[2:])
 	case "notify":
 		// The hub's FLEET_NOTIFY_CMD (claude-fleet#4086).
 		err = runNotify(os.Args[2:])
-	case "version", "--version", "-v":
-		fmt.Println("ccquota", Version)
-		if SrcDigest != "" {
-			// a second line: the first stays `ccquota <ver>` for every reader
-			fmt.Println("src", SrcDigest)
-		}
 	case "help", "--help", "-h":
 		usage()
 	default:
@@ -154,17 +120,4 @@ Usage:
 
 Run any subcommand with -h for its flags.
 `)
-}
-
-// homeDir resolves the Claude Code home, honoring an override so an operator
-// can point at another user's directory.
-func homeDir(override string) (string, error) {
-	if override != "" {
-		return override, nil
-	}
-	h, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
-	}
-	return h, nil
 }

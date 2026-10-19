@@ -402,7 +402,7 @@ proxy (its own credentials) keeps the old rule: any https host. BREAK-IT row
 check) · `bin/fleet-credsep-launch.py` (root launcher: `proxy` |
 `agent`) · `bin/fleet-cred-proxy.py` (separated mode: `store`, `probe`,
 `node-token`, `node-hash`, `/hub/` broker, peer-uid gate) ·
-`tokenledger/internal/agent/node_credstore.go` (the agent's `store` client) ·
+`tokenledger/agent/node_credstore.go` (the agent's `store` client) ·
 `bin/fleet-credsep-selftest.sh` · `bin/fleet-cred-shared-selftest.sh` (the
 machine's shared proxy, `machine install|refresh|join|status`,
 `fleet-credsep-launch.py shared`, `fleet-cred-proxy.py serve --shared`).

@@ -53,7 +53,7 @@ MODE="$WORK/mode"
 
 # --- fake ccquota. `rows` is a clean two-account payload; `empty` is ccquota's
 # OWN word for "I have no reading" — verdict `unknown`, which quota_parse drops
-# to zero rows (cmd/ccquota/budget.go emits go/hold/unknown, never "ok"). That is
+# to zero rows (agent/cli/budget.go emits go/hold/unknown, never "ok"). That is
 # the shape the live incident produced, and the one the cache then froze.
 cat > "$WORK/fakepath/ccquota" <<'FAKE'
 #!/bin/bash

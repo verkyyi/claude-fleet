@@ -25,7 +25,7 @@ import (
 	"github.com/coder/websocket/wsjson"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
+	"github.com/verkyyi/claude-fleet/tokenledger/agent"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"

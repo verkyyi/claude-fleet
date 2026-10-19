@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
 )
 
 func TestReadOnlyRefusesWritesServesReads(t *testing.T) {

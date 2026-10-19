@@ -1,6 +1,6 @@
 package store
 
-import "github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
+import "github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
 
 // The reasons a request has no price, as codes rather than sentences.
 //

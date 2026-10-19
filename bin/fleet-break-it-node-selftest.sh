@@ -34,7 +34,7 @@
 #   node-fda-probe-hang   bin/fleet-node-supervisor.py's FDA probe (#3086): the open() of
 #                         TCC.db never returns (tccd not answering) — a child, killed; the
 #                         loop never waits on it
-#   tcc-prompt-wedge      bin/fleet-tcc-disclaim.py + tokenledger/internal/agent/node_accounts.go
+#   tcc-prompt-wedge      bin/fleet-tcc-disclaim.py + tokenledger/agent/node_accounts.go
 #                         (tccDisclaimed) + bin/fleet-node-supervisor.py tcc_stuck_line (#3167):
 #                         an account script's TCC dialog nobody answers wedges sandboxd —
 #                         every user delete fails; the scripts never prompt now, and a
@@ -89,14 +89,14 @@
 #   account-release-gone-login  bin/fleet-node-supervisor.py `account release` (#2924):
 #                         release of a login no longer on the machine loaded its services back
 #   account-op-reload-cut bin/fleet-node-supervisor.py's node-agent `hold` (#2918) +
-#                         tokenledger/internal/agent/node_accounts.go's book
+#                         tokenledger/agent/node_accounts.go's book
 #                         (account-ops.json): logins/*.env changes while the machine's
 #                         agent runs the very create that wrote it
 #   node-agent-adopted-no-reload  bin/fleet-node-supervisor.py tend_children (#3136):
 #                         the daemon restarted and adopted the live node agent; a new
 #                         logins/<login>.env never reloaded it (the new login's node
 #                         never came online)
-#   account-op-rerun-exists  tokenledger/internal/agent/node_accounts.go's settleOwnCreate
+#   account-op-rerun-exists  tokenledger/agent/node_accounts.go's settleOwnCreate
 #                         + bin/fleet-login-new.sh's op mark (#2928): the same create
 #                         reaches the agent twice (a re-ask, a restart that lost the
 #                         book) after its first run made the login (go test, when a
@@ -128,7 +128,7 @@
 #                         refresh` + the supervisor's cred-proxy-shared `reload` (#2435):
 #                         a switch / rollback left the shared credential proxy on old code
 #   codesign-identity-switch  bin/fleet_node_codesign.py + bin/fleet-node-update.py
-#                         sign_ccquota / sync_agent_ccquota + tokenledger/internal/agent/
+#                         sign_ccquota / sync_agent_ccquota + tokenledger/agent/
 #                         node_accounts.go tccGranted (#3433): a version switch changed the
 #                         admin agent's signing identity and path, so its TCC grant lapsed
 #   admin-agent-stale     bin/fleet-node-update.py follow_admin_agents (#3034): an admin
@@ -379,7 +379,7 @@ drill_tcc_prompt_wedge() {
   [ "$rc" = 7 ] || { WHY="fleet-tcc-disclaim.py did not hand the exit status back (rc $rc: $out)"; return 1; }
   out=$(python3 -I "$BIN/fleet-tcc-disclaim.py" -- /bin/sh -c 'kill -TERM $$' 2>&1); rc=$?
   [ "$rc" = 143 ] || { WHY="fleet-tcc-disclaim.py: a signalled child read rc $rc, not 143"; return 1; }
-  f="$ROOT/tokenledger/internal/agent/node_accounts_test.go"
+  f="$ROOT/tokenledger/agent/node_accounts_test.go"
   grep -q '^func TestAccountScriptTCCDisclaimed(' "$f" 2>/dev/null \
     || { WHY="the agent half's test TestAccountScriptTCCDisclaimed is not in ${f#$ROOT/}"; return 1; }
   # the supervisor: TCC.db whose open() never returns, probed every tick
@@ -1038,7 +1038,7 @@ drill_account_op_reload_cut() {
   # the default table holds the node agent on its tenants' books — the file the agent writes
   grep -q '"hold": os.path.join(paths.state, "agent", "\*", "account-ops.json")' "$BIN/fleet-node-supervisor.py" \
     || { WHY="the node-agent child has no hold on account-ops.json"; return 1; }
-  grep -q 'accountOpsFile = "account-ops.json"' "$BIN/../tokenledger/internal/agent/node_accounts.go" \
+  grep -q 'accountOpsFile = "account-ops.json"' "$BIN/../tokenledger/agent/node_accounts.go" \
     || { WHY="the agent no longer writes account-ops.json"; return 1; }
   printf 'CCQUOTA_TOKEN=x\n' > "$lg/erin.env"
   # the node agent, played: its first run opens "alice" (2 s), marking the op in its
@@ -1116,20 +1116,20 @@ drill_node_agent_adopted_no_reload() {
 drill_account_op_rerun_exists() {
   CAP=120; local t0 out rc tests f
   tests='TestCreateArrivingTwiceIsAnsweredFromItsFirstRun TestCreateCutOffHalfWayIsRolledBack TestCreateStillRunningIsWaitedFor TestCreateFailingAfterMakingTheLoginIsRolledBack TestRestartSettlesItsOwnCreateFromTheMark TestCreateOfSomeoneElsesLoginStillExists'
-  f="$ROOT/tokenledger/internal/agent/node_accounts_rerun_test.go"
+  f="$ROOT/tokenledger/agent/node_accounts_rerun_test.go"
   for out in $tests; do
     grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the agent half's test $out is not in ${f#$ROOT/}"; return 1; }
   done
   # the script half: the op's mark is written before step 1 and its result at the end
   grep -q 'FLEET_LOGIN_OP_ID' "$BIN/fleet-login-new.sh" && grep -q "printf 'done=%s" "$BIN/fleet-login-new.sh" \
     || { WHY="fleet-login-new.sh no longer marks the login as its op's (~/<login>-onboard/op)"; return 1; }
-  grep -q '"FLEET_LOGIN_OP_ID="+opID' "$ROOT/tokenledger/internal/agent/node_accounts.go" \
+  grep -q '"FLEET_LOGIN_OP_ID="+opID' "$ROOT/tokenledger/agent/node_accounts.go" \
     || { WHY="the agent no longer hands the script its op_id"; return 1; }
   t0=$(now)
   WHAT='同一个开号第二次到达（入口再问、重启丢了账本）：脚本留下的 ~/<login>-onboard/op 记着这次 op——跑完了就按它的结果答成功、不再跑脚本、不报「已存在」；还在跑就等；半路停了就收回登录（remove，家目录保留）再报失败；别的 op 的登录照旧「已存在」'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/agent 2>&1); rc=$?
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the agent half's Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT="${WHAT}（go test 六条）" ;;
@@ -1347,7 +1347,7 @@ drill_codesign_identity_switch() {
   CAP=60
   local t0 out f
   t0=$(now)
-  f="$ROOT/tokenledger/internal/agent/node_accounts_test.go"
+  f="$ROOT/tokenledger/agent/node_accounts_test.go"
   grep -q '"darwin granted"' "$f" 2>/dev/null \
     || { WHY="the agent half (a granted agent runs the script undisclaimed) has no case in ${f#$ROOT/}"; return 1; }
   if [ "$(uname -s)" = Darwin ] && [ -x /usr/bin/codesign ] && [ -x /usr/bin/security ] && [ -x /usr/bin/openssl ]; then

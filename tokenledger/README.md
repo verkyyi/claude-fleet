@@ -1682,7 +1682,7 @@ fleet-<alias> fleet-<alias>-<route>` block per route). `fleet login` appends
 once, so a person's own entries keep winning.
 
 **The machine side.** On every admin connect the hub sends `ssh_ca` with the
-CA public key; the admin agent (`internal/agent/node_sshca.go`) writes
+CA public key; the admin agent (`agent/node_sshca.go`) writes
 `/etc/ssh/fleet_user_ca.pub` and the one-line drop-in
 `/etc/ssh/sshd_config.d/100-fleet-user-ca.conf` (`TrustedUserCAKeys …`) via
 `sudo -n`, runs `sshd -t`, and checks `sshd -T` really uses that file; any
@@ -2436,7 +2436,7 @@ week; not a settlement.
 **Costs are notional.** On a Pro or Max plan nobody is billed per token. The
 dollar figures answer "what would this have cost at API rates" — useful for
 ranking endpoints against each other, misleading read as a bill. Rates live in
-`internal/pricing` and are overridable with `--pricing`.
+`shared/pricing` and are overridable with `--pricing`.
 
 ### Two kinds of money, never one number
 

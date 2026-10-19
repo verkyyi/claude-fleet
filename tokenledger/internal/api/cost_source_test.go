@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
 )
 
 const costScope = "account=all&since=2026-08-31T12:00:00Z&until=2026-08-31T15:00:00Z"

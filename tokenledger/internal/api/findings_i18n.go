@@ -2,7 +2,7 @@ package api
 
 import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/findings"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
 )
 
 // The findings the dashboard prints, in every language this build ships.

@@ -18,7 +18,7 @@ import (
 
 	"github.com/coder/websocket/wsjson"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
+	"github.com/verkyyi/claude-fleet/tokenledger/agent"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"

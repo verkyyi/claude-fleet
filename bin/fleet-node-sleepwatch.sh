@@ -8,7 +8,7 @@
 #            the idle timer) — NSWorkspaceWillSleepNotification
 #   wake     it woke — NSWorkspaceDidWakeNotification
 #
-# The node's agent (ccquota, internal/agent/node_sleep.go) runs it on a
+# The node's agent (ccquota, agent/node_sleep.go) runs it on a
 # PERSONAL login (`fleet node compute on --personal`): `sleep` flags the
 # machine 维护中 with reason sleep and tells the person's client how many
 # sessions are still running; `wake` clears that flag. The agent also spots a

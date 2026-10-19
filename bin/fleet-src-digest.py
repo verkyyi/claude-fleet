@@ -9,7 +9,7 @@ has no Go source; exit 2 when git cannot read the commit.
 
 The inputs (KEEP IN STEP with release.SourceInput — fleet-src-digest-selftest.sh
 pins both to one vector): under tokenledger/, go.mod, go.sum and every regular
-file under cmd/, internal/ and shared/ (#4811), less *_test.go, testdata/, *.md,
+file under cmd/, internal/, shared/ (#4811) and agent/ (#4812), less *_test.go, testdata/, *.md,
 internal/api/fleetclient/manifest and internal/api/fleetclient/pack/. sha256
 over "<path>\\0<sha256 hex>\\n" per file, paths relative to tokenledger/, sorted.
 """
@@ -23,7 +23,8 @@ PREFIX = "tokenledger/"
 def source_input(p):
     if p in ("go.mod", "go.sum"):
         return True
-    if not (p.startswith("cmd/") or p.startswith("internal/") or p.startswith("shared/")):
+    if not (p.startswith("cmd/") or p.startswith("internal/") or p.startswith("shared/")
+            or p.startswith("agent/")):
         return False
     if p.endswith("_test.go") or p.endswith(".md") or p == "internal/api/fleetclient/manifest" \
             or p.startswith("internal/api/fleetclient/pack/"):
