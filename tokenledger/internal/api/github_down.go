@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
 )
 
 // Signing in while GitHub is down (claude-fleet#4849, EPIC #4839 C10).

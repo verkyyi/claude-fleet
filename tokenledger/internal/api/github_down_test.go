@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
 )
 
 // claude-fleet#4849 (EPIC #4839 C10): GitHub down is not the hub's door shut.
