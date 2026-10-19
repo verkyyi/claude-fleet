@@ -41,7 +41,7 @@
 #
 # Drives: bin/gh_blackhole.py, conf/gh-blackhole.rows, bin/fleet-install-sync.sh,
 # bin/fleet-claim-brief.sh, bin/fleet-gh.sh, bin/fleet-report-parent.sh,
-# bin/fleet-comment.sh, bin/session-end-hook.sh, bin/tmux-issue-preview.sh,
+# bin/fleet-comment.sh, bin/session-end-hook.sh,
 # bin/fleet-history.sh, bin/fleet-codex.sh, bin/fleet-pr-verdict.sh,
 # bin/fleet-issue-file.sh, bin/fleet-gh-lib.sh, bin/fleet-lib.sh,
 # tokenledger/hub/api/fleet_join.go (the join line's script path), bin/fleet-node-join.sh.

@@ -1,35 +1,18 @@
 #!/bin/bash
-# hub-session-selftest.sh — the hub's launch contract: DASH-ONLY, never a Claude.
+# hub-session-selftest.sh — a fleet's resting window is `home`, never a dash and
+# never a Claude.
 #
-# Since issue #1533 that hub is the FLEET_DASH_WINDOW=1 way back only: by default
-# hub-session.sh builds NO 'plan' window at all — it builds `home`, a plain shell
-# the task list draws beside. Legs 1-5 below pin the FLEET_DASH_WINDOW=1 hub
-# exactly as it was; leg 6 pins the default (print seam + a real isolated tmux).
+# hub-session.sh builds `home`, a plain shell the task list draws beside, at
+# index 1 (issue #1533); the old `plan` dash hub (FLEET_DASH_WINDOW=1) went with
+# the dash (issue #4902), and its legs with it. The print seam (HUB_PRINT_CMD)
+# and a real isolated tmux pin:
+#   • it opens `home` in $HOME (a fleet has no main repo, #1941), HUB_CWD pins it;
+#   • FLEET_DASH_WINDOW=1, HUB_RESUME_ID or FLEET_HUB_CMD bring no dash and no
+#     claude back — they are read by nothing;
+#   • a real build puts `home` at index 1, no `plan`, no @dash pane, and a second
+#     run builds nothing more.
 #
-# The 'plan' hub used to split a persistent `claude` in below the dash (the "hub
-# pane", issue #439, successor to the steward seat). That pane restored itself
-# unasked — the ⌂ home tap, F9 and prefix+g all fall back to hub-session.sh when
-# they find no pane to focus, and fleet-up/fleet-restore rebuilt it on every fresh
-# fleet and every crash recovery — so an operator who closed it got it back on the
-# next tap. The hub is now the dash and NOTHING else.
-#
-# This test drives the REAL bin/hub-session.sh through its HUB_PRINT_CMD debug
-# seam (which builds the launch command and exits BEFORE any tmux spawn — so no
-# live tmux/dash/socket is needed) against a throwaway FLEET_CONF_DIR, and asserts:
-#
-#   • the launch is the DASHBOARD, and the word `claude` appears nowhere in it.
-#   • the retired knobs are INERT: HUB_RESUME_ID (crash-resume of the hub
-#     transcript) and FLEET_HUB_CMD (the per-fleet override) are both ignored, so
-#     neither a stale restore.map nor a leftover conf key can reintroduce a hub
-#     Claude. These are the regression guards — they are the exact paths that
-#     used to bring the pane back.
-#   • FLEET_HUB is NOT exported by the launch (nothing is auto-marked as the hub
-#     any more). The @hub marker itself still EXISTS for a pane an operator marks
-#     by hand — that contract lives in tmux-guard-selftest.sh / dash-marker-selftest.sh
-#     and is deliberately unchanged here.
-#   • no per-fleet settings/mcp files are rendered.
-#
-# Hermetic: its own temp FLEET_CONF_DIR, no tmux, no network.
+# Hermetic: its own temp FLEET_CONF_DIR and tmux socket, no network.
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
 set -uo pipefail
 
@@ -53,84 +36,17 @@ FLEET_MAIN="$MAIN"
 FLEET_BASE_BRANCH="main"
 EOF
 
-# Run the script through the print seam with a CLEAN env (drop any FLEET_*/HUB_*
-# the caller's shell might export). Extra assignments are passed as args,
-# e.g.  run HUB_RESUME_ID=abc123
-run() {
-  env -u FLEET_MODEL -u FLEET_HUB_CMD -u HUB_RESUME_ID -u HUB_CWD -u HUB_CMD \
-      FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 FLEET_DASH_WINDOW=1 \
-      "$@" bash "$SCRIPT"
-}
-
-# no_claude <label> <cmd> — the headline guarantee: no route back to a Claude
-# session. The install path itself legitimately contains the string "claude"
-# (~/.claude/fleet/bin, or a claude-fleet checkout), so strip $BIN before
-# matching — otherwise every run trivially "fails" on its own directory name.
-# What survives the strip is real command text: `claude`, `claude --resume`,
-# `fleet-claude.sh`, …
-no_claude() {
-  case "${2//"$BIN"/}" in *claude*) fail "$1: the hub must NEVER launch a claude session: $2" ;; esac
-}
-
-# --- 1. the hub launches the DASH, and no Claude at all ----------------------
-out=$(run) || fail "default run exited non-zero"
-# Fully deterministic, so pin it exactly — this is the whole hub command line.
-[ "$out" = "bash '$BIN/tmux-dashboard.sh'" ] \
-  || fail "default: the hub must launch the dash ALONE, got: $out"
-no_claude default "$out"
-# Retired rails must not reappear by any route.
-case "$out" in *"--settings"*)     fail "default: --settings must not appear: $out" ;; esac
-case "$out" in *"--mcp-config"*)   fail "default: --mcp-config must not appear: $out" ;; esac
-case "$out" in *"--model"*)        fail "default: --model must not appear: $out" ;; esac
-case "$out" in *"/fleet-steward"*) fail "default: the retired /fleet-steward seed must not appear: $out" ;; esac
-# FLEET_MODEL is the workers' knob and must not reach the hub either.
-out=$(run FLEET_MODEL=haiku) || fail "FLEET_MODEL run exited non-zero"
-case "$out" in *"--model"*) fail "FLEET_MODEL must not be injected into the hub launch" ;; esac
-
-# --- 2. no hub marker is exported (nothing is auto-marked @hub) --------------
-out=$(run) || fail "marker run exited non-zero"
-case "$out" in *"FLEET_HUB=1"*)
-  fail "the dash-only hub must not export FLEET_HUB=1 — nothing is auto-marked as hub: $out" ;; esac
-case "$out" in *"FLEET_SEAT"*) fail "the retired FLEET_SEAT env must not be exported (#439)" ;; esac
-
-# --- 3. nothing is rendered on disk ------------------------------------------
-run >/dev/null || fail "render-check run exited non-zero"
-[ -e "$CONF/fleets/$SESS/steward-settings.json" ] && fail "no per-fleet settings file may be rendered"
-[ -e "$CONF/fleets/$SESS/hub-settings.json" ]     && fail "no per-fleet settings file may be rendered"
-[ -e "$CONF/fleets/$SESS/steward-mcp.json" ]      && fail "no per-fleet mcp config may be rendered"
-
-# --- 4. REGRESSION: HUB_RESUME_ID is inert -----------------------------------
-# fleet-restore.sh no longer passes this, but an OLD restore.map still carries a
-# HUB row; a fleet restored from one must NOT come back with the hub Claude the
-# operator closed on purpose.
-out=$(run HUB_RESUME_ID=abc123) || fail "resume run exited non-zero"
-case "$out" in *"--resume"*) fail "HUB_RESUME_ID must be IGNORED — no --resume in a dash-only hub: $out" ;; esac
-no_claude HUB_RESUME_ID "$out"
-case "$out" in *"abc123"*)   fail "HUB_RESUME_ID must not reach the launch command at all: $out" ;; esac
-
-# --- 5. REGRESSION: FLEET_HUB_CMD is inert -----------------------------------
-# The old per-fleet override could name ANY command. A leftover key in a live
-# fleet's conf must not be a back door to a hub Claude.
-out=$(run FLEET_HUB_CMD='claude "my own orders"; exec $SHELL') || fail "override run exited non-zero"
-case "$out" in *"my own orders"*) fail "FLEET_HUB_CMD must be IGNORED, not honored: $out" ;; esac
-no_claude FLEET_HUB_CMD "$out"
-case "$out" in *"tmux-dashboard.sh"*) : ;;
-  *) fail "override: the hub must still launch the dash: $out" ;; esac
-# Both retired knobs together — still just the dash.
-out=$(run HUB_RESUME_ID=xyz789 FLEET_HUB_CMD='claude "my own orders"; exec $SHELL')
-no_claude resume+override "$out"
-
-# --- 6. DEFAULT (issue #1533): no 'plan' window, a `home` shell instead --------
+# --- the print seam: `home`, where -------------------------------------------
 d=$(env -u FLEET_DASH_WINDOW FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 bash "$SCRIPT")
 [ "$d" = home ] || fail "default: hub-session must build the 'home' window, not the dash: $d"
 d=$(env -u FLEET_DASH_WINDOW FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=cwd bash "$SCRIPT")
 [ "$d" = "$HOME" ] || fail "default: home must open in \$HOME (a fleet has no main repo, #1941), got: $d"
 d=$(env -u FLEET_DASH_WINDOW FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_CWD="$MAIN" HUB_PRINT_CMD=cwd bash "$SCRIPT")
 [ "$d" = "$MAIN" ] || fail "HUB_CWD must still pin the hub's cwd, got: $d"
-# fleet.settings carries the knob too (the login's settings, #979).
+# The retired knobs bring nothing back (issue #4902): the dash and a hub claude.
 printf 'FLEET_DASH_WINDOW=1\n' > "$CONF/fleet.settings"
-d=$(env -u FLEET_DASH_WINDOW FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 bash "$SCRIPT")
-[ "$d" = "bash '$BIN/tmux-dashboard.sh'" ] || fail "fleet.settings FLEET_DASH_WINDOW=1 must bring the hub back: $d"
+d=$(FLEET_DASH_WINDOW=1 HUB_RESUME_ID=abc FLEET_HUB_CMD=claude FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 bash "$SCRIPT")
+[ "$d" = home ] || fail "FLEET_DASH_WINDOW=1 / HUB_RESUME_ID / FLEET_HUB_CMD must change nothing, got: $d"
 rm -f "$CONF/fleet.settings"
 
 # A real build, on an isolated server (never the live one): fleet-up's throwaway
@@ -138,7 +54,7 @@ rm -f "$CONF/fleet.settings"
 # run (the ⌂ fallback) builds nothing more.
 REAL_TMUX=$(command -v tmux 2>/dev/null)
 if [ -z "$REAL_TMUX" ]; then
-  printf 'selftest: tmux missing — live leg 6 SKIPPED\n' >&2
+  printf 'selftest: tmux missing — the live leg SKIPPED\n' >&2
 else
   mkdir -p "$WORK/shim"
   cat > "$WORK/shim/tmux" <<EOF
@@ -164,5 +80,5 @@ EOF
     || fail "default: a second run must not build a second home: $(T list-windows -t "$SESS" -F '#{window_name}' | tr '\n' ' ')"
 fi
 
-printf 'PASS: default builds `home` (no plan window); FLEET_DASH_WINDOW=1 launches the dash ALONE — HUB_RESUME_ID and FLEET_HUB_CMD are inert, no claude by any route\n'
+printf 'PASS: hub-session builds `home` (no plan window, no dash, no claude by any route)\n'
 exit 0

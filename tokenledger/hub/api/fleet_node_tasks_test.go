@@ -69,6 +69,15 @@ func TestNodeTaskRecordRoad(t *testing.T) {
 	if task, _ := got["task"].(map[string]any); st != 200 || task["id"] != "T1" || task["session_key"] != "scratch-7" {
 		t.Fatalf("read = %d %v", st, got)
 	}
+	// ⌘P's row reads a session's PR off this read (claude-fleet#4902): the
+	// record's pr, and the landing word beside it.
+	if st, _ := nodeTaskCall(t, h, bob, http.MethodPost, NodeTasksPath+"/T1", map[string]any{"pr": "verkyyi/claude-fleet#77"}); st != 200 {
+		t.Fatalf("pr write = %d", st)
+	}
+	st, got = nodeTaskCall(t, h, bob, http.MethodGet, NodeTasksPath+"/T1", nil)
+	if task, _ := got["task"].(map[string]any); st != 200 || task["pr"] != "verkyyi/claude-fleet#77" || got["pr_state"] != "unverified" {
+		t.Fatalf("read with pr = %d %v", st, got)
+	}
 	for _, bad := range []map[string]any{
 		{"token": "x", "title": ""}, {"token": "", "title": "t"}, {"token": "x y", "title": "t"},
 		{"token": "x", "title": "t", "rule": "1"}, {"token": "x", "title": "t", "issue": "12"},

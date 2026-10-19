@@ -4,7 +4,8 @@
 #   A. 54 COLUMNS, FOR REAL. A 54×50 client (the iPad) attached to an isolated
 #      server, itself running in a pane of a second isolated server, so the outer
 #      `capture-pane` holds what the client really drew, popup overlay included.
-#      dash-popup.sh opens the five bound popups (prefix b / c / u / ! / ?) with
+#      dash-popup.sh opens the popups still drawn here — usage and alerts
+#      (the backlog / config / key-sheet ones went with them, issue #4902) — with
 #      the hub on (the title names this machine, its longest form); every one
 #      must draw a ROUNDED border at 96% of the client with its whole title on it.
 #      With fzf installed, the alerts popup's key line (fleet_fzf_hint) must be
@@ -19,8 +20,7 @@
 #      one-door lint).
 #
 # Drives bin/dash-popup.sh, bin/fleet-popup-lib.sh, bin/fleet-alerts.sh,
-# bin/usage-modal.sh, bin/tmux-issues.sh, bin/tmux-config.sh,
-# and bin/fleet-ui-lang.sh.
+# bin/usage-modal.sh and bin/fleet-ui-lang.sh.
 # tmux absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 
@@ -71,10 +71,8 @@ done
 echo "ok: every key line fits a 54-column popup ($(printf '%s ' $keys))"
 
 # --- D. wired ------------------------------------------------------------------
-for f in fleet-alerts.sh usage-modal.sh tmux-issues.sh tmux-config.sh; do
+for f in fleet-alerts.sh usage-modal.sh; do
   grep -q 'fleet_fzf_hint ' "$BIN/$f" || fail "wired: $f does not take its key line from fleet_fzf_hint"
-done
-for f in tmux-issues.sh tmux-config.sh dash-config-edit.sh fleet-repo-ask.sh; do
   grep -n -- '--border=rounded' "$BIN/$f" | grep -v 'FZF_FRAME=' | grep -qv '^[0-9]*:[[:space:]]*#' \
     && fail "wired: $f draws its own border inside the popup's"
 done
@@ -115,7 +113,7 @@ open_popup() {
   for _ in $(seq 1 30); do case "$(shot)" in *'╭'*) sleep 0.1 ;; *) break ;; esac; done
 }
 hold="while [ ! -e '$WORK/close' ]; do sleep 0.1; done"
-for spec in popup_backlog:L popup_config:L popup_usage:M popup_alerts:M popup_keys:L; do
+for spec in popup_usage:M popup_alerts:M; do
   key=${spec%:*}; title="$(fleet_ui_t "$key") · mac-b"
   WANT_LAST='' open_popup "$key" "${spec#*:}" sh -c "$hold"
   top=$(printf '%s\n' "$SHOT" | grep -m1 '╭')
@@ -126,7 +124,7 @@ for spec in popup_backlog:L popup_config:L popup_usage:M popup_alerts:M popup_ke
   w=$(printf '%s' "$inner" | python3 -c 'import sys,unicodedata as u; print(sum(2 if u.east_asian_width(c) in "WF" else 1 for c in sys.stdin.read()))')
   [ "$w" -ge 47 ] || fail "54: $key is $((w + 2)) columns wide, not the narrow 96%: [$top]"
 done
-echo "ok: 54 columns — five popups, rounded, 96%, every title whole"
+echo "ok: 54 columns — two popups, rounded, 96%, every title whole"
 
 if command -v fzf >/dev/null 2>&1; then
   hint=$(fleet_ui_t hint_alerts)

@@ -13,27 +13,10 @@ export type FleetModStatus = {
   mod: string
 }
 
-/**
- * The task-progress band above the prompt (issue #1339): what the last 10s
- * refresh read from the local caches. A field is null when its source is
- * missing (or the window has no issue), and that segment is simply not drawn.
- */
-export type ProgressSnapshot = {
-  /** The window's @issue; null on the hub and a scratch (raw) window. */
-  issue: number | null
-  /** This issue branch's PR from the dash's prmap: ci is `✓` `✗` `…` `·`. */
-  pr: { number: number; state: string; ci: string; ready: string } | null
-  /** Children standing at `!`, by bare ledger key (`issue-12`, `scratch-3`). */
-  needsKids: string[]
-}
-
 declare module 'claude-code' {
   interface PluginState {
     fleet: {
       status: FleetModStatus | null
-      progress: ProgressSnapshot | null
-      /** Alert keys standing now and already toasted (`kid:issue-12`, `pr:34`). */
-      alerts: string[]
       /** Bumped when a conditional idle accept is queued: the band's redraw submits it (#4618). */
       acceptKick: number
     }

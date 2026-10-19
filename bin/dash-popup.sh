@@ -58,7 +58,7 @@
 #      modal prefix binds raise the flag for the popup's lifetime
 #      (conf/tmux-attention.conf); the raw in-pane popups never did. Set as an
 #      EPOCH, cleared to 0 on the way out via a trap, so an interrupted popup
-#      cannot strand it (and dash-popup-wait.sh ages out whatever leaks anyway).
+#      cannot strand it.
 #
 #   3. PROOF THAT THE POPUP ACTUALLY RAN (issue #454 — the second silent no-op).
 #      tmux's popup command DOES NOT report a refusal: when it declines to open, tmux

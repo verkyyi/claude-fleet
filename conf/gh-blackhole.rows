@@ -29,7 +29,7 @@
 6	子会话回报：merged 回报核对 PR	bash "$BIN/fleet-report-parent.sh" --state merged --pr "$PR" --summary drill --dry-run	dns=ok hang=hang limit=ok
 7	认领 · 评论 · 证据 · 关单（四次写，写不上的记进 $CELL/writes.lost）	for op in claim comment evidence close; do echo "$op" >> "$CELL/writes"; case $op in claim) bash "$BIN/fleet-ticket.sh" claim "gh:$REPO#$ISSUE" ;; comment) bash "$BIN/fleet-comment.sh" "$ISSUE" --note --body drill ;; evidence) echo drill | bash "$BIN/fleet-evidence.sh" before --issue "$ISSUE" --epic none --note drill --name drill.txt --post - ;; close) bash "$BIN/fleet-comment.sh" "$ISSUE" --note --close --body drill ;; esac || echo "$op" >> "$CELL/writes.lost"; done; [ ! -s "$CELL/writes.lost" ]	dns=ok hang=ok hang=hang limit=ok
 8	回收：会话退出后的收尾（SessionEnd hook 的 --exec）	bash "$BIN/session-end-hook.sh" --exec worker "$SESS" @1 "$ISSUE" -	dns=ok hang=ok limit=ok
-9	面板：任务列表的单子预览	bash "$BIN/tmux-issue-preview.sh" "$ISSUE" --repo="$REPO"	dns=ok hang=ok limit=ok
+9	面板：任务列表的单子预览	- 节点上的单子面板已去掉（#4902），没有可演的命令	dns=skip hang=skip limit=skip
 10	历史、恢复：落地记一行再列出	bash "$BIN/fleet-history.sh" record --repo "$REPO" --pr "$PR" --key "issue-$ISSUE" --worktree "$PWD" && bash "$BIN/fleet-history.sh" list	dns=ok hang=ok limit=ok
 11	起 Codex：GitHub 单仓库的 Codex 启动（插件同步）	FLEET_CODEX_SERVER=0 bash "$BIN/fleet-codex.sh"	dns=ok hang=ok limit=ok
 12	入口：版本、安装包（自托管入口问 stable）	- 入口侧（Go，tokenledger）：只在现场版读，C8 #4847 自带 Go 测试	dns=skip hang=skip limit=skip

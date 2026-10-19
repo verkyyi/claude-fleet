@@ -12,10 +12,8 @@
 #      the foot reads `▸ 已结束 (2)` (sidebar key `hdr:ended`, hub 4th field
 #      `ended`); a done row WITH an issue, a working no-issue row and a pinned
 #      done row stay where they were.
-#   B. OPEN / SHUT — `→` on the heading (both shapes) writes `ended:open`, the
-#      rows show under an open heading; `←` drops the token (the option unset
-#      once it was the last), and the frame is byte-identical to A's. A second
-#      `←` is a dead key.
+#   B. OPEN / SHUT — with `ended:open` in @repo_fold the rows show under an open
+#      heading; without it the frame is byte-identical to A's.
 #   C. RAILS — the sidebar's current window stays on the list while folded; a
 #      done row with a child keeps its place (its subtree is never split).
 #   D. NOTHING ENDED — no heading at all; @repo_fold untouched.
@@ -33,7 +31,6 @@ export FLEET_DASH_ORDER=status
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
-FOLD="$BIN/dash-fold-toggle.sh"
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 
@@ -77,7 +74,6 @@ names() { side | awk -F'|' '{ print $4 }' | sed 's/^ *//' | tr '\n' ' '; }
 keys()  { side | awk -F'|' '$1 == "hdr" { print "hdr:" $2; next } { print $1 }' | tr '\n' ' '; }
 raw()   { FLEET_SESSION=alpha FZF_COLUMNS=120 bash "$ROWS"; }
 opt()   { tmux show-option -t '=alpha:' -qv @repo_fold; }
-fold()  { FLEET_SESSION=alpha TMUX=/fake,1,0 bash "$FOLD" "$@" 2>&1 </dev/null; }
 
 # --- A. folded by default -------------------------------------------------------
 n=$(names)
@@ -93,18 +89,16 @@ eq    "A: the hub list's heading carries 'ended' as its 4th field" \
 before=$(names)
 
 # --- B. open / shut -------------------------------------------------------------
-eq    "B: → on the sidebar heading reloads" "$(fold expand hdr:ended)" "reload(bash $ROWS)"
-eq    "B: …and writes the open token" "$(opt)" "ended:open"
+# (the dash's ←/→ that wrote the token went with the dash, issue #4902: the
+# token is set by hand here, the rows' reading of it is what is pinned)
+tmux set-option -t '=alpha:' @repo_fold ended:open
 n=$(names)
 has   "B: the heading is open" "$n" "已结束 · 还开着 (2) "
 hasnt "B: …no fold caret" "$n" "▸ 已结束"
 has   "B: the ended rows show under it" "$n" "donehome"
 has   "B: …both of them" "$n" "gone"
-eq    "B: → on an open heading is a dead key" "$(fold expand hdr:ended)" ""
-eq    "B: ← (the hub's shape) shuts it" "$(fold collapse hdr '' ended)" "reload(bash $ROWS)"
-eq    "B: …the last token gone, the option unset" "$(tmux show-options -t '=alpha:' | grep -c '@repo_fold')" "0"
-eq    "B: the list is A's again" "$(names)" "$before"
-eq    "B: a second ← is a dead key" "$(fold collapse hdr:ended)" ""
+tmux set-option -u -t '=alpha:' @repo_fold
+eq    "B: the token gone, the list is A's again" "$(names)" "$before"
 
 # --- C. rails -------------------------------------------------------------------
 n=$(FLEET_SIDEBAR_CURRENT="$W_DONE" names)

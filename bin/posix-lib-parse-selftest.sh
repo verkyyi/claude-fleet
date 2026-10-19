@@ -17,7 +17,7 @@
 #     `bash --posix` (reproduces the operator's production /bin/sh — bash in
 #     POSIX mode, where <(…) is disabled — on ANY host, incl. the dash-based CI).
 #     This is a PARSE net (`-n`); it does not assert runtime sh-safety (e.g.
-#     fleet-config-lib.sh's `declare -F` is bash-only yet parse-clean) — that is a
+#     a lib's `declare -F` is bash-only yet parse-clean) — that is a
 #     separate concern. Parse-safety is exactly the property #414 broke.
 #
 #   PART 2 — functional EQUIVALENCE. The fix replaced each `< <(cmd)` with a
@@ -48,7 +48,7 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 # the one the retired hub-zoom path sourced under `sh` (the #414 failure).
 # The siblings are guarded defensively to keep the shared lib layer free of the
 # same syntax-error class. Extend this list when a new sourceable lib lands.
-LIBS='fleet-lib.sh fleet-client-core.sh fleet-config-lib.sh fleet-land-lease.sh usage-lib.sh fleet-daemon-lib.sh'
+LIBS='fleet-lib.sh fleet-client-core.sh fleet-land-lease.sh usage-lib.sh fleet-daemon-lib.sh'
 
 have_bash=0; command -v bash >/dev/null 2>&1 && have_bash=1
 have_dash=0; command -v dash >/dev/null 2>&1 && have_dash=1

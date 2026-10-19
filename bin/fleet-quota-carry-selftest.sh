@@ -44,7 +44,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/quota-carry-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/accounts" "$WORK/conf/fleets/sessA" "$WORK/.claude-dash/global"
-for f in $NEED fleet-config-lib.sh; do [ -f "$BIN/$f" ] && cp "$BIN/$f" "$WORK/bin/"; done
+for f in $NEED; do [ -f "$BIN/$f" ] && cp "$BIN/$f" "$WORK/bin/"; done
 chmod +x "$WORK/bin/"*.sh
 printf 'tok-a\n' > "$WORK/accounts/a"; printf 'tok-b\n' > "$WORK/accounts/b"
 chmod 600 "$WORK/accounts/a" "$WORK/accounts/b"

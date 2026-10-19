@@ -12,8 +12,7 @@
 #
 # Dependency truth (keep in sync with README.md#dependencies and docs/dev/INSTALL.md):
 #   tmux ≥ 3.2   core — the whole thing is a tmux session
-#   fzf  ≥ 0.59  popups — backlog / repo pickers use `--no-input` (fzf 0.59);
-#                the legacy dash (FLEET_DASH_WINDOW=1) also `--ghost` (0.61)
+#   fzf  ≥ 0.59  popups — the pickers (accounts, repo add) use `--no-input` (fzf 0.59)
 #   gh (authed)  backlog + PR/CI map (unauthed → panels silently empty)
 #   python3      collector context% + usage caches
 #   claude       the sessions you run
@@ -570,16 +569,14 @@ else
   fail tmux "not found — the fleet is a tmux session (need ≥ 3.2)"
 fi
 
-# --- fzf ≥ 0.59 (popups; --no-input) · ≥ 0.61 for the legacy dash (--ghost) ---
+# --- fzf ≥ 0.59 (popups; --no-input) ---
 if command -v fzf >/dev/null 2>&1; then
   v=$(fzf --version 2>/dev/null | awk '{print $1}')
   if [ -z "$v" ] || ! vge "$v" 0.59; then
-    fail fzf "$v — need ≥ 0.59; the backlog and repo pickers use \`--no-input\` and do not start below"
-  elif ! vge "$v" 0.61; then
-    warn fzf "$v — the legacy dash (FLEET_DASH_WINDOW=1) needs ≥ 0.61 for \`--ghost\`; everything else is fine"
-  else pass fzf "$v (≥ 0.61)"; fi
+    fail fzf "$v — need ≥ 0.59; the pickers use \`--no-input\` and do not start below"
+  else pass fzf "$v (≥ 0.59)"; fi
 else
-  fail fzf "not found — need ≥ 0.59 for the backlog and repo pickers"
+  fail fzf "not found — need ≥ 0.59 for the pickers"
 fi
 
 # --- GitHub rows only when a repo is GitHub's (issue #3600) ---
@@ -924,50 +921,6 @@ if [ -d "$live_dir" ]; then
       fi
     fi
   fi
-fi
-
-# --- config modal (prefix+c: view/edit per-fleet + global fleet config) ---
-# The popup (bin/tmux-config.sh) sources its key list + per-key help from
-# conf/fleet.conf.reference; without that file it can't render. It lives in the repo /
-# install root (one dir up from bin/).
-ex_root=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)
-if [ -f "$ex_root/conf/fleet.conf.reference" ]; then
-  pass config "conf/fleet.conf.reference present — prefix+c config modal can render (view/edit keys)"
-else
-  warn config "conf/fleet.conf.reference missing — prefix+c config modal has no key list/help source"
-fi
-
-# --- panel keys vs the tmux prefix (issues #556/#558) ---
-# tmux never delivers its prefix (or prefix2) to a pane, so a panel ⌃-key equal
-# to it is dead on the keyboard (⌃a was: the operator's prefix is C-a).
-# bin/dash-keymap.sh resolves each panel's bind table against the prefix (the live
-# server, else the tmux conf) and remaps a colliding default to its ⌥ twin — the
-# fleet-keys.sh shows the real key. Say so here anyway (docs name the defaults),
-# and shout when even the fallback is a prefix: that key is unreachable.
-km="$(dirname "$0")/dash-keymap.sh"
-if [ -f "$km" ]; then
-  pfx=$(bash "$km" prefixes 2>/dev/null); pfx="${pfx:-C-b -}"
-  p1="${pfx%% *}"; p2="${pfx#* }"
-  if [ "$p2" = "-" ]; then p2=""; else p2=" + prefix2 $p2"; fi
-  for panel in dash backlog config; do
-  coll=$(bash "$km" --panel "$panel" collisions 2>/dev/null)
-  if [ -z "$coll" ]; then
-    pass keys "no $panel key collides with the tmux prefix ($p1$p2)"
-  else
-    while read -r act def pname fb; do
-      [ -n "$act" ] || continue
-      if [ "$fb" = UNREACHABLE ]; then
-        warn keys "$panel $def ($act) is your tmux prefix $pname and its ⌥ twin is one too — unreachable from $panel; change prefix2 or the key"
-      else
-        warn keys "$panel $def ($act) is your tmux prefix $pname — the $panel binds $fb instead (fleet-keys.sh shows it)"
-      fi
-    done <<EOF
-$coll
-EOF
-  fi
-  done
-else
-  warn keys "bin/dash-keymap.sh missing — panel keys are not checked against the tmux prefix"
 fi
 
 # --- the keys issue #3328 folded into ⌘P, still pressed ---

@@ -185,6 +185,16 @@ spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.p
 fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
 print(repr(fv.banner(fv.entries("v1"))))' "$BIN")
   [ "$b" = "''" ] || fail "E: hub_ok back to now, yet the banner stays" "$b"
+  # no other machine's row to name (issue #4902): the line still says how long the
+  # hub — what a row's PR is read off — has not answered, and goes when it does
+  echo $(( $(date +%s) - 7200 )) > "$G/hub_ok"
+  b=$(FLEET_UI_LANG=zh python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
+fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
+print(fv.banner([]))' "$BIN")
+  [ "$b" = "入口 120 分钟没响应 · 正在重连" ] || fail "E: a silent hub with no far row says nothing" "$b"
+  date +%s > "$G/hub_ok"
   # a popup left open, on a real pty: a row added to the cache appears within 2-4 s
   r=$(FLEET_UI_LANG=zh FLEET_VIEW_REFRESH=2 TERM=xterm-256color python3 - "$BIN" "$G/remote_$S" <<'PY2'
 import os, pty, select, sys, time

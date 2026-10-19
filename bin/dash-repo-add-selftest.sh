@@ -11,10 +11,8 @@
 #   B. degenerate first: adding through the popup path writes ONLY the overlay — the
 #      fleet conf is byte-identical before and after, and a one-repo fleet lists the
 #      key (it is how the second repo gets in).
-#   C. the wiring, three ways (#556): `repo-add` is in dash-keymap.sh's dash table on
-#      ctrl-z (⌥z under a C-z prefix), tmux-dashboard.sh binds $DASH_KEY_REPO_ADD to
-#      an execute() of dash-popup.sh → dash-repo-add.sh, the dash sheet has its ⌃z
-#      row. (The old client's row-menu `g` item went with it, issue #3008.)
+#   C. the README names the popup. (Its ⌃z on the dash went with the dash, issue
+#      #4902; the old client's row-menu `g` item with that client, issue #3008.)
 #   E. what a person reads (issue #3375): --shape takes owner/name, https / ssh /
 #      git@ links (with a /tree/… or ?tab= tail); --explain gives every result token
 #      a sentence in zh and en, never the token itself, and failed:clone says
@@ -127,26 +125,12 @@ eq "B: the fleet conf is byte-identical after three adds" "$(cat "$FLEET_CONF_DI
 S1=one; mkdir -p "$FLEET_CONF_DIR/fleets/$S1"; cp "$FLEET_CONF_DIR/fleets/$S/conf" "$FLEET_CONF_DIR/fleets/$S1/conf"
 fx_repo "$FLEET_CONF_DIR" "$S1" o/a FLEET_MAIN="$WORK/mainA" FLEET_BASE_BRANCH=master
 eq "B: the one-repo fixture hosts one repo" "$(fleet_repos "$S1" | grep -c .)" 1
-eq "B: a one-repo fleet's dash keymap has repo-add on ctrl-z" \
-   "$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' bash "$BIN/dash-keymap.sh" key repo-add)" "ctrl-z"
 mkrepo "$HOME/projects/two" o/two
 OUT=$(bash "$ADD" --session "$S1" o/two 2>/dev/null); eq "B: the first add on a one-repo fleet" "$OUT" "added:o-two"
 eq "B: … and it is a two-repo fleet now" "$(fleet_repos "$S1" | tr '\n' ' ')" "o/a o/two "
 
-# --- C. the wiring: keymap ⇄ dash bind ⇄ sheet ------------------------------------------
-KM="$BIN/dash-keymap.sh"; DASH="$BIN/tmux-dashboard.sh"; KEYS="$BIN/fleet-keys.sh"
-eq "C: repo-add resolves to ⌃z under C-b" "$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' bash "$KM" glyph repo-add)" "⌃z"
-eq "C: … and dodges a C-z prefix to alt-z" "$(FLEET_TMUX_PREFIX=C-z FLEET_TMUX_PREFIX2='' bash "$KM" key repo-add)" "alt-z"
-has "C: env spells the action REPO_ADD" "$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' bash "$KM" env)" "DASH_KEY_REPO_ADD='ctrl-z'"
-grep -Eq -- '--bind "\$DASH_KEY_REPO_ADD:execute\(bash \$BIN/dash-popup\.sh [^)]*-- bash \$BIN/dash-repo-add\.sh\)\+reload\(' "$DASH" \
-  || fail "C: tmux-dashboard.sh does not bind \$DASH_KEY_REPO_ADD to execute(dash-popup.sh … dash-repo-add.sh)+reload"
-grep -Eq '^ *DASH_KEY_[A-Z_ =a-z-]*DASH_KEY_REPO_ADD=ctrl-z' "$DASH" \
-  || fail "C: tmux-dashboard.sh lacks the DASH_KEY_REPO_ADD=ctrl-z launch floor"
-SHEET=$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' NO_COLOR=1 bash "$KEYS" --plain --context dash)
-printf '%s\n' "$SHEET" | grep -q '^  ⌃z .*add a repo to this fleet' || fail "C: the dash sheet has no ⌃z add-a-repo row"
-printf '%s\n' "$SHEET" | grep '^  ⌃z ' | grep -q 'fleet-repo.sh add' || fail "C: the ⌃z row does not name the shell form"
-RSHEET=$(FLEET_TMUX_PREFIX=C-z FLEET_TMUX_PREFIX2='' NO_COLOR=1 bash "$KEYS" --plain --context dash)
-printf '%s\n' "$RSHEET" | grep -q '^  ⌥z .*⌃z is your tmux prefix C-z' || fail "C: under a C-z prefix the sheet must list ⌥z and say why"
+# --- C. the dash's ⌃z wiring went with the dash (issue #4902); the README still
+# names the popup.
 grep -qE 'dash-repo-add\.sh' "$BIN/../README.md" || fail "C: README does not mention the popup"
 # --- D. the interactive form on a PTY: esc cancels; typed + ↵ adds; the verdict holds ---
 if command -v fzf >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then

@@ -10,7 +10,8 @@
 #            (fleet_view.py reads its strings this way, once, at start)
 #
 # Today there were four tables (this one, fleet_view.py's TEXT,
-# fleet_view.py ACTIONS's MENU_KEYS, fleet-keys.sh's whole zh sheet); a string
+# fleet_view.py ACTIONS's MENU_KEYS, fleet-keys.sh's whole zh sheet — gone with
+# the sheet, #4902); a string
 # added anywhere else is a second source again — fleet-ui-lang-selftest.sh greps
 # for one. A key with no entry prints itself, so a typo is visible, never blank.
 #
@@ -88,8 +89,6 @@ fleet_ui_t() {
   _fleet_ui_key=$1
   shift 2>/dev/null || :
   case "${_FLEET_UI_L:-$(fleet_ui_lang)}:$_fleet_ui_key" in
-    zh:dash_ghost_fmt)          printf '↵ 新开 scratch（预填不发送） · 切换 agent: %s' "${1:-}" ;;
-    en:dash_ghost_fmt)          printf '↵ new scratch (prefilled, unsent) · switch agent: %s' "${1:-}" ;;
     zh:agent_no_fleet)          printf 'fleet: 不在 fleet 里，无法修改当前 fleet 的 FLEET_AGENT（可改 fleet.conf）' ;;
     en:agent_no_fleet)          printf 'fleet: not inside a fleet — no per-fleet conf to flip FLEET_AGENT in (set it in fleet.conf)' ;;
     zh:agent_not_flipped_fmt)   printf 'fleet: 未切换 FLEET_AGENT — %s' "${1:-}" ;;
@@ -222,12 +221,8 @@ fleet_ui_t() {
     en:no_repo)                 printf 'no repo' ;;
     zh:empty_sidebar)           printf '暂无会话 — ⌘N 新会话' ;;
     en:empty_sidebar)           printf 'No sessions — ⌘N new session' ;;
-    zh:empty_dash_fmt)          printf '暂无会话 — 输入名称新建 · %s 新任务' "${1:-}" ;;
-    en:empty_dash_fmt)          printf 'No sessions — type a name to start one · %s new task' "${1:-}" ;;
-    zh:keys_sidebar_title)      printf '任务栏：只点' ;;
-    en:keys_sidebar_title)      printf 'Task list: taps only' ;;
-    zh:keys_close)              printf 'q / esc 关闭' ;;
-    en:keys_close)              printf 'q / esc close' ;;
+    zh:empty_dash)              printf '暂无会话 — ⌘P 里新开一个' ;;
+    en:empty_dash)              printf 'No sessions — start one from ⌘P' ;;
     # --- one popup / menu frame (issue #1535): dash-popup.sh's title row + the
     # last row of every menu. A popup title is 「动作 · 对象 · 机器」.
     zh:ui_close)                printf 'Esc 关闭' ;;
@@ -311,6 +306,8 @@ fleet_ui_t() {
     en:view_tag_lost_min_fmt) printf 'lost %s min' "${1:-}" ;;
     zh:view_stale_banner_fmt) printf '%s 的会话 %s 分钟没更新（连不上入口）· 正在重连' "${1:-}" "${2:-}" ;;
     en:view_stale_banner_fmt) printf 'sessions on %s not updated for %s min (hub unreachable) · reconnecting' "${1:-}" "${2:-}" ;;
+    zh:view_hub_down_banner_fmt) printf '入口 %s 分钟没响应 · 正在重连' "${1:-}" ;;
+    en:view_hub_down_banner_fmt) printf 'hub not answering for %s min · reconnecting' "${1:-}" ;;
     zh:view_lost_go_fmt) printf '%s 失联，进不去 · 正在重连' "${1:-}" ;;
     en:view_lost_go_fmt) printf '%s is lost, cannot go there · reconnecting' "${1:-}" ;;
     zh:view_lost_act_fmt) printf '%s 失联，做不了 · 正在重连' "${1:-}" ;;
@@ -584,6 +581,10 @@ fleet_ui_t() {
     en:view_act_shell)          printf 'Shell in its directory' ;;
     zh:view_act_pr_fmt)         printf '打开 PR %s' "${1:-}" ;;
     en:view_act_pr_fmt)         printf 'Open PR %s' "${1:-}" ;;
+    zh:view_act_pr_unknown)     printf 'PR ?（入口没响应）' ;;
+    en:view_act_pr_unknown)     printf 'PR ? (hub not answering)' ;;
+    zh:view_act_pr_unknown_fmt) printf 'PR ?（入口 %s 分钟没响应）' "${1:-}" ;;
+    en:view_act_pr_unknown_fmt) printf 'PR ? (hub not answering for %s min)' "${1:-}" ;;
     zh:view_act_answer)         printf '回答…' ;;
     en:view_act_answer)         printf 'Answer…' ;;
     zh:view_act_message)        printf '发一句话…' ;;
@@ -701,8 +702,6 @@ fleet_ui_t() {
     en:hint_alerts)             printf '↵ act · 1✖ 2▲ 3● 0 all · m mute 1h · [✕ close]' ;;
     zh:hint_usage)              printf '↵ 新会话用它 · Esc 取消 · [✕ 关闭]' ;;
     en:hint_usage)              printf '↵ new sessions use it · esc · [✕ close]' ;;
-    zh:hint_backlog)            printf '↵ 开工 · [＋ 新建] · ? 键 · [✕ 关闭]' ;;
-    en:hint_backlog)            printf '↵ work · [＋ new] · ? keys · [✕ close]' ;;
     zh:toast_url_copied_fmt)    printf 'fleet: 链接已复制到剪贴板 — %s' "${1:-}" ;;
     en:toast_url_copied_fmt)    printf 'fleet: link copied to your clipboard — %s' "${1:-}" ;;
     zh:clip_hint)               printf 'fleet: 这个终端可能收不到会话里的复制 — Mac 上按住 ⌥ 拖选、iPad / 手机上长按选字，用终端自己的复制' ;;
@@ -1345,44 +1344,7 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:menu_restore)            printf 'Restore finished task…' ;;
     zh:menu_repo)               printf '＋ 仓库…' ;;
     en:menu_repo)               printf 'Add repo…' ;;
-    # --- the key sheet (fleet-keys.sh): its frame, then one entry per row
-    zh:keys_title)              printf 'fleet 快捷键' ;;
-    en:keys_title)              printf 'fleet keymap' ;;
-    zh:keys_sub_dash)           printf '（仪表盘面板 · tmux 前缀键也可用 · q/esc 关闭）' ;;
-    en:keys_sub_dash)           printf '(dashboard panel · prefix binds work here too · q/esc to close)' ;;
-    zh:keys_sub_backlog)        printf '（议题列表面板 · tmux 前缀键也可用 · q/esc 关闭）' ;;
-    en:keys_sub_backlog)        printf '(backlog panel · prefix binds work here too · q/esc to close)' ;;
-    zh:keys_sub_all_fmt)        printf '（prefix = tmux 前缀键，本机为 %s · q/esc 关闭）' "${1:-}" ;;
-    en:keys_sub_all_fmt)        printf '(prefix = your tmux prefix, %s here · q/esc to close)' "${1:-}" ;;
-    zh:keys_dn_remapped_fmt)    printf ' — （⌥ 替代：⌃%s 是你的 tmux 前缀 %s）' "${1:-}" "${2:-}" ;;
-    en:keys_dn_remapped_fmt)    printf ' — (⌥ fallback: ⌃%s is your tmux prefix %s)' "${1:-}" "${2:-}" ;;
-    zh:keys_dn_unreachable_fmt) printf ' — （按不到：%s 是你的 tmux 前缀 %s，它的 ⌥ 也是）' "${1:-}" "${2:-}" ;;
-    en:keys_dn_unreachable_fmt) printf ' — (UNREACHABLE: %s is your tmux prefix %s and its ⌥ twin is one too)' "${1:-}" "${2:-}" ;;
-    # the task sidebar's one-screen sheet (`--context sidebar`, issue #963)
-    # the full sheet, one row each (fleet-keys.sh print_sheet; generated from
-    # the two sheets it replaced, row for row)
-    zh:keys_g_prefix)          printf %s 'tmux 前缀' ;;
-    en:keys_g_prefix)          printf %s 'tmux prefix' ;;
-    zh:keys_g_prefix_sub)      printf %s '— 客户端（fleet）里任意窗口可用' ;;
-    en:keys_g_prefix_sub)      printf %s '— in the client (fleet), from any window' ;;
-    zh:keys_prefix_05)         printf %s '回到上一台机器（上一个窗口）' ;;
-    en:keys_prefix_05)         printf %s 'back to the machine you were on (the previous window)' ;;
-    zh:keys_prefix_09)         printf %s '缩放会话窗格（从不缩放任务列表）' ;;
-    en:keys_prefix_09)         printf %s 'zoom the session pane — the SESSION, never the list' ;;
-    zh:keys_prefix_10)         printf %s '查看会话滚屏（tmux copy-mode）' ;;
-    en:keys_prefix_10)         printf %s 'scroll back the session (tmux copy-mode)' ;;
-    zh:keys_prefix_solo_shell) printf %s '单会话视图：会话所在机器的 shell（它的工作目录）⇄ 会话（同 ⌃\，给没有 ⌃\ 的键盘）' ;;
-    en:keys_prefix_solo_shell) printf %s 'one-session view: the session'"'"'s machine shell, in its directory ⇄ the session (as ⌃\, for a keyboard without it)' ;;
-    zh:keys_prefix_solo_local) printf %s '单会话视图：本机 shell（家目录）⇄ 会话' ;;
-    en:keys_prefix_solo_local) printf %s 'one-session view: this computer'"'"'s shell, in the home directory ⇄ the session' ;;
-    zh:keys_prefix_14)         printf %s '无前缀：缩放右侧会话窗格（本机窗格，按键不会传到远端）' ;;
-    en:keys_prefix_14)         printf %s '(no prefix) zoom the session pane on the right — this computer'"'"'s pane; the key never reaches the far end' ;;
-    zh:keys_prefix_15)         printf %s '在 shell 叫回上手向导，从上次进度继续' ;;
-    en:keys_prefix_15)         printf %s 'from a shell, reopen the onboarding guide at its saved progress' ;;
-    zh:keys_g_switch)          printf %s '切会话' ;;
-    en:keys_g_switch)          printf %s 'switch sessions' ;;
-    zh:keys_g_switch_sub)      printf %s '— 任意窗口可用；Mac 的 iTerm2 里按 ⌘ 键（fleet 配置文件），其它终端按前缀键' ;;
-    en:keys_g_switch_sub)      printf %s '— from any window; the ⌘ chord in iTerm2 on a Mac (the fleet profile), the prefix key anywhere else' ;;
+    # the 看台's switch keys, one per dash-keymap.sh --panel switch row (docs-build.sh's key table)
     zh:keys_switch_next)       printf %s '下一个会话，右侧立刻跟过去' ;;
     en:keys_switch_next)       printf %s 'the next session; the right pane follows at once' ;;
     zh:keys_switch_prev)       printf %s '上一个会话' ;;
@@ -1403,128 +1365,6 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:keys_switch_switcher)   printf %s 'switch session: every session, most recent first, searchable; at the bottom + New session and Open the multi-session view (Hide the list in it)' ;;
     zh:keys_switch_quit)       printf %s '退出当前客户端连接，会话照常在机器上运行；fleet 重新进入' ;;
     en:keys_switch_quit)       printf %s 'quit this client connection; sessions keep running on their machines; fleet opens it again' ;;
-    zh:keys_single_f1)         printf %s '窄屏（手机）：全屏切换器 —— 在等你的 · 最近 1–9 · 全部，点一行切过去；顶栏点名字同此' ;;
-    en:keys_single_f1)         printf %s 'narrow (a phone): the full-screen switcher — waiting on you · recent 1–9 · all, tap a row; tapping the name on the top line too' ;;
-    zh:keys_single_f23)        printf %s '窄屏：上一个 / 下一个会话（顶栏 ‹ › 同此）' ;;
-    en:keys_single_f23)        printf %s 'narrow: the session above / below (the top line ‹ › too)' ;;
-    zh:keys_single_f4)         printf %s '窄屏：下一个在等你的会话' ;;
-    en:keys_single_f4)         printf %s 'narrow: the next session waiting on you' ;;
-    zh:keys_g_sidebar)         printf %s '任务栏' ;;
-    en:keys_g_sidebar)         printf %s 'task sidebar' ;;
-    zh:keys_g_sidebar_sub)     printf %s '— 只点，不收键盘；按键都在上面一组' ;;
-    en:keys_g_sidebar_sub)     printf %s '— taps only, it takes no keys; the keys are the group above' ;;
-    zh:keys_sidebar_m1k)       printf %s '点一行' ;;
-    en:keys_sidebar_m1k)       printf %s 'tap a row' ;;
-    zh:keys_sidebar_m1)        printf %s '切过去' ;;
-    en:keys_sidebar_m1)        printf %s 'switch to it' ;;
-    zh:keys_sidebar_m2k)       printf %s '再点一次 / 右键' ;;
-    en:keys_sidebar_m2k)       printf %s 'tap again / right-click' ;;
-    zh:keys_sidebar_m2)        printf %s '这一行的菜单：改名 · 置顶 · 回答 · 回收 …' ;;
-    en:keys_sidebar_m2)        printf %s 'the row'"'"'s menu — rename · pin · answer · reap …' ;;
-    zh:keys_sidebar_m3k)       printf %s '点 ▸ ▾' ;;
-    en:keys_sidebar_m3k)       printf %s 'tap ▸ ▾' ;;
-    zh:keys_sidebar_m3)        printf %s '折叠 / 展开这一组' ;;
-    en:keys_sidebar_m3)        printf %s 'fold / unfold its block' ;;
-    zh:keys_sidebar_m4k)       printf %s '改名 · 回答' ;;
-    en:keys_sidebar_m4k)       printf %s 'rename · answer' ;;
-    zh:keys_sidebar_m4)        printf %s '在会话下面临时出一行问：↵ 确定 · esc 取消' ;;
-    en:keys_sidebar_m4)        printf %s 'asked on one line under the session — ↵ ok · esc cancel' ;;
-    zh:keys_sidebar_12k)       printf %s '点仓库标题' ;;
-    en:keys_sidebar_12k)       printf %s 'tap a heading' ;;
-    zh:keys_sidebar_12)        printf %s '点一下选中它（不切换），再点一次在这个仓库开新任务；「无仓库」= $HOME' ;;
-    en:keys_sidebar_12)        printf %s 'a tap selects it (no switch), a second one opens a new task in that repo; '"'"'no repo'"'"' = $HOME' ;;
-    zh:keys_g_menu)            printf %s '行菜单' ;;
-    en:keys_g_menu)            printf %s 'row menu' ;;
-    zh:keys_g_menu_sub)        printf %s '— 再次点击选中行，或右键一行' ;;
-    en:keys_g_menu_sub)        printf %s '— a second tap on the highlighted row, or a right-click: press its letter' ;;
-    zh:keys_g_dashboard)       printf %s '仪表盘' ;;
-    en:keys_g_dashboard)       printf %s 'dashboard' ;;
-    zh:keys_g_dashboard_sub)   printf %s '— hub 的 dash 面板内（prefix g）' ;;
-    en:keys_g_dashboard_sub)   printf %s '— inside the hub dash pane (prefix g)' ;;
-    zh:keys_dashboard_01)      printf %s '跳到高亮窗口' ;;
-    en:keys_dashboard_01)      printf %s 'jump to the highlighted window' ;;
-    zh:keys_dashboard_02)      printf %s '展开/折叠高亮行的子树；在仓库标题上折叠/展开整个仓库组' ;;
-    en:keys_dashboard_02)      printf %s 'unfold / fold the highlighted row'"'"'s subtree. A session spawned from another one nests under it (└ indent, one level per generation), and those children are COLLAPSED BY DEFAULT, every level on its own — the parent row'"'"'s `3/5` badge is what the folded block says, so the list stays one line per parent. → opens the block you are on, ← shuts the block you are IN (from the parent row or from any child in it, which puts the cursor back on the parent). A child in `needs` NEVER folds away — the red `!` (its act cell says which: 在问你 question · 等授权 permission · 被卡住 worker-declared blocker, read the issue · 恢复失败 · 运行失败) — because the quiet layer folds and the loud one does not. ▸ / ▾ on a row marks a folded / open block. On a REPO HEADING (a 2+ repo fleet'"'"'s `tokenledger (2)`) the same keys fold and unfold that repo'"'"'s whole group — ← leaves the heading alone as `▸ tokenledger (2)`, its count still the rows it hides, → brings them back; a `needs` row shows through here too. The closed view (⌃t) nests and folds the same way, off the ledger'"'"'s own record of what spawned what. With text typed on the prompt line, ←/→ are that line'"'"'s cursor keys as always' ;;
-    zh:keys_dashboard_03)      printf %s '左侧 id 是窗口句柄，可给 fleet-migrate.sh / dash-reap.sh 等命令使用' ;;
-    en:keys_dashboard_03)      printf %s 'the leftmost id column is that WINDOW'"'"'s handle (a1…z9) — unique in this fleet, it survives a migrate/handoff, and it is accepted wherever a window target is: `fleet-migrate.sh b3`, `dash-reap.sh a1`. Freed for reuse once the window is gone; the landed view has none (⌃t shows `·`)' ;;
-    zh:keys_dashboard_04k)     printf %s '输入名称, enter' ;;
-    en:keys_dashboard_04k)     printf %s 'type a name, enter' ;;
-    zh:keys_dashboard_04)      printf %s '按输入文本新建 scratch，文本会预填为未发送草稿；中文和空格都支持' ;;
-    en:keys_dashboard_04)      printf %s 'scratch named after the text, full text prefilled as an UNSENT draft; CJK + spaces fine, title capped at 24 cols (esc clears the dash input)' ;;
-    zh:keys_dashboard_05)      printf %s '新 issue：创建 issue 并启动 worker' ;;
-    en:keys_dashboard_05)      printf %s 'new issue — file one AND spawn its worker (quick-dispatch)' ;;
-    zh:keys_dashboard_06)      printf %s '立即新建 raw scratch 会话' ;;
-    en:keys_dashboard_06)      printf %s 'raw scratch session — spawns instantly (the fleet'"'"'s default agent in its own scratch-N worktree, no issue, no prompt)' ;;
-    zh:keys_dashboard_07)      printf %s '切换新会话默认 agent（claude ⇄ codex），写入当前 fleet 配置' ;;
-    en:keys_dashboard_07)      printf %s 'flip this fleet'"'"'s default agent for NEW sessions (claude ⇄ codex) — the prompt line shows it (claude ▸ / codex ▸); written to the fleet'"'"'s conf, so every spawn path follows — this key, prefix+c or FLEET_AGENT in the conf are the ways to pick it (no prompt-line prefix)' ;;
-    zh:keys_dashboard_08)      printf %s '重命名高亮窗口；在查询行内编辑' ;;
-    en:keys_dashboard_08)      printf %s 'rename the highlighted window — edit inline on the query line (↵ commits · esc cancels)' ;;
-    zh:keys_dashboard_09)      printf %s '处理红色 needs 行：回答问题或查看权限阻塞详情' ;;
-    en:keys_dashboard_09)      printf %s 'deal with the highlighted red row. A question row (act cell 在问你) is an AskUserQuestion: a tappable list per question, one tap each (issue #605) — and the ONLY way to answer one, since a SendMessage is delivered between turns and a pending question IS the turn, so the message waits for the answer that waits for the message. A permission row (等授权) is a PERMISSION prompt: this SHOWS you the blocked command and the reason it was stopped, without attaching to the pane (issue #640) — approving one is a human decision and nothing here will press Yes. Either way nothing is typed unless the chosen option is visibly on the worker'"'"'s screen' ;;
-    zh:keys_dashboard_10)      printf %s '回收完成的 worker；必要时确认，脏 worktree 会保留' ;;
-    en:keys_dashboard_10)      printf %s 'reap a finished worker (window + worktree + issue) — confirms when the row isn'"'"'t merged+clean. Targets: @window-id, %pane-id, registered handle, issue-N or scratch-N; indexes/names are refused. From a SCRIPT: `dash-reap.sh <handle> --yes` takes that confirm branch unasked (a dirty worktree is still KEPT) and prints a result token (`reaped:full`/`reaped:keep`/`skip:needs-confirm`/`refused:<slug>`); with no client attached it never pops a box at you' ;;
-    zh:keys_dashboard_11)      printf %s '把高亮会话迁移到另一个有余量的账号' ;;
-    en:keys_dashboard_11)      printf %s 'move the highlighted session onto another subscription account NOW — the unstick for a `⚠ stuck` row (issue #873). It asks y/n on the status line, then fleet-migrate'"'"'s own dry-run decides; y closes it (/exit), stops those commands, and resumes the same transcript in a new window on the account with headroom, the stopped commands named in its first prompt. Refuses when no account has room (every one benched) — it never bounces a session onto another wall. Same as `fleet-account.sh migrate --force-bg <window>`; `migrate --stuck` moves every stuck row' ;;
-    zh:keys_dashboard_12)      printf %s '置顶/取消置顶高亮窗口；置顶行显示在最上方' ;;
-    en:keys_dashboard_12)      printf %s 'pin/unpin the highlighted window to the TOP of the list — a pin beats the status sort (a pinned idle row sits above a red one), so the session you are deliberately watching stays where you left it. Pinned rows move to the 置顶 group at the very top (a thin line closes it; ←/→ on its heading folds it); pinning a PARENT floats its children with it, still nested. The pin lives on the tmux window, so it vanishes with the window — nothing to clean up' ;;
-    zh:keys_dashboard_13)      printf %s '给当前 fleet 添加仓库' ;;
-    en:keys_dashboard_13)      printf %s 'add a repo to this fleet (issue #1103) — a popup asks just owner/name (a GitHub URL is fine) and runs `fleet-repo.sh add`: the checkout is ~/projects/<name>, reused when it already is that repo, cloned when missing (the clone'"'"'s progress shows in the popup); the verdict stays up until you dismiss it (↵ / esc / [✕ close]) — added · already hosted · the dir is another repo · clone failed. No restart: the repo'"'"'s heading is on the dash'"'"'s next frame and the background daemons pick it up within a tick. Also the task sidebar'"'"'s row menu `g`. A different checkout dir still needs the shell form, `bin/fleet-repo.sh add <owner/name> <dir>`' ;;
-    zh:keys_dashboard_14)      printf %s '切换 live / closed 视图' ;;
-    en:keys_dashboard_14)      printf %s 'toggle live ⇄ closed (finished sessions + scratch)' ;;
-    zh:keys_dashboard_15)      printf %s '恢复高亮的已收工会话' ;;
-    en:keys_dashboard_15)      printf %s 'restore the highlighted landed session into a new window (claude --resume)' ;;
-    zh:keys_dashboard_16)      printf '恢复高亮 landed 会话' ;;
-    en:keys_dashboard_16)      printf 'resume the highlighted landed session — same as %s' "${1:-}" ;;
-    zh:keys_dashboard_17)      printf %s '在浏览器打开 landed 行的 PR' ;;
-    en:keys_dashboard_17)      printf %s 'open the highlighted landed row'"'"'s PR in the browser' ;;
-    zh:keys_dashboard_18)      printf %s '立即刷新' ;;
-    en:keys_dashboard_18)      printf %s 'refresh now' ;;
-    zh:keys_dashboard_19)      printf %s '空查询行时打开这份快捷键' ;;
-    en:keys_dashboard_19)      printf %s 'this cheatsheet — on an EMPTY prompt line (with text typed, ? is just a character)' ;;
-    zh:keys_dashboard_20)      printf %s '重启 dash（hub 面板常驻）' ;;
-    en:keys_dashboard_20)      printf %s 'relaunch the dash (it'"'"'s the always-on hub pane)' ;;
-    zh:keys_g_backlog)         printf %s '议题列表' ;;
-    en:keys_g_backlog)         printf %s 'backlog' ;;
-    zh:keys_g_backlog_sub)     printf %s '— 议题列表弹窗内' ;;
-    en:keys_g_backlog_sub)     printf %s '— inside the backlog popup' ;;
-    zh:keys_backlog_01)        printf %s '显示/隐藏预览窗（正文、标签、评论）' ;;
-    en:keys_backlog_01)        printf %s 'toggle the preview pane (body/labels/comments) — off by default' ;;
-    zh:keys_backlog_02)        printf %s '筛选 issues' ;;
-    en:keys_backlog_02)        printf %s 'filter issues (type to narrow; off by default)' ;;
-    zh:keys_backlog_03)        printf %s '启动高亮 issue 的 worker' ;;
-    en:keys_backlog_03)        printf %s 'work the issue — spawn its session' ;;
-    zh:keys_backlog_04)        printf %s '创建新 issue' ;;
-    en:keys_backlog_04)        printf %s 'file a new issue' ;;
-    zh:keys_backlog_05)        printf %s '关闭高亮 issue（y/n 确认）' ;;
-    en:keys_backlog_05)        printf %s 'close the highlighted issue (y/n confirm)' ;;
-    zh:keys_backlog_06)        printf %s '循环优先级标签（无→p2→p1→p0→无）' ;;
-    en:keys_backlog_06)        printf %s 'cycle the issue'"'"'s priority label (none→p2→p1→p0→none)' ;;
-    zh:keys_backlog_07)        printf %s '在网页打开 issue' ;;
-    en:keys_backlog_07)        printf %s 'open the issue on the web' ;;
-    zh:keys_backlog_08)        printf %s '立即刷新' ;;
-    en:keys_backlog_08)        printf %s 'refresh now' ;;
-    zh:keys_backlog_09)        printf %s '打开这份快捷键' ;;
-    en:keys_backlog_09)        printf %s 'this cheatsheet' ;;
-    zh:keys_backlog_10)        printf %s '关闭' ;;
-    en:keys_backlog_10)        printf %s 'close' ;;
-    zh:keys_g_config)          printf %s '配置弹窗' ;;
-    en:keys_g_config)          printf %s 'config modal' ;;
-    zh:keys_g_config_sub)      printf %s '— 配置弹窗内' ;;
-    en:keys_g_config_sub)      printf %s '— inside the config popup' ;;
-    zh:keys_config_01)         printf %s '编辑高亮配置项 / 展开分组' ;;
-    en:keys_config_01)         printf %s 'edit the highlighted key / expand the section' ;;
-    zh:keys_config_02)         printf %s '展开/折叠分组' ;;
-    en:keys_config_02)         printf %s 'expand/collapse a section' ;;
-    zh:keys_config_03)         printf %s '切换写入范围（当前 fleet ⇄ repo）' ;;
-    en:keys_config_03)         printf %s 'toggle the write scope (this fleet ⇄ repo)' ;;
-    zh:keys_config_04)         printf %s '显示/隐藏详情预览' ;;
-    en:keys_config_04)         printf %s 'toggle the detail preview' ;;
-    zh:keys_config_05)         printf %s '显示原始 FLEET_* 键名' ;;
-    en:keys_config_05)         printf %s 'reveal the raw FLEET_* keys inline' ;;
-    zh:keys_config_06)         printf %s '立即刷新' ;;
-    en:keys_config_06)         printf %s 'refresh now' ;;
-    zh:keys_config_07)         printf %s '关闭' ;;
-    en:keys_config_07)         printf %s 'close' ;;
     # an ask's hints under its question (issue #4337, bin/fleet-mcp.py ask): nothing acts on them
     zh:ask_hint_suggest)        printf '建议：%s' "${1:-}" ;;
     en:ask_hint_suggest)        printf 'suggested: %s' "${1:-}" ;;

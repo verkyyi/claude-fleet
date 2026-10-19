@@ -50,12 +50,10 @@ fi
 # EVERY fleet (collector, pr-refresh, spinner, diskguard) or the SYSTEM-WIDE
 # session cap — so a per-fleet value is a silent no-op at best, and for the caps
 # actively wrong (one fleet raising the machine-wide ceiling for its own spawns).
-# fleet_load_conf strips these from the per-fleet overlay so GLOBAL always wins,
-# mirroring the prefix+c config modal, which already refuses to WRITE a
-# global-scoped key into a per-fleet conf (bin/dash-config-edit.sh). Keep this list
-# in step with the @scope=global tags in conf/fleet.conf.reference — tmux-config-selftest.sh
-# cross-checks the two so they can't drift.
-_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_GH_SHARE FLEET_GH_SHARE_TRUST FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_DEGENERATE_SECS FLEET_DEGENERATE_LINES FLEET_DEGENERATE_COOLDOWN_SECS FLEET_DEGENERATE_MARK_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_PAUSED FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_QUOTA_RL_TTL FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_QUOTA_STALE_OK FLEET_QUOTA_REFUSED_ALARM FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PACE_LEAD FLEET_ACCOUNT_PACE_HOLD FLEET_ACCOUNT_PACE_MARGIN FLEET_ACCOUNT_PACE_REBALANCE FLEET_ACCOUNT_PACE_COOLDOWN FLEET_ACCOUNT_PACE_SPREAD_WARN FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_BANNER_PER_WINDOW_MS FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_AGENTCFG_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_HUBSESS_BUDGET FLEET_COLLECT_VIEWS_BUDGET FLEET_NODE_ALIASES FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_RESIDENT_WATCH FLEET_DAEMON_RESIDENT_GRACE FLEET_DAEMON_RESIDENT_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_POLL_MAX_BACKOFF FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_ORPHAN_LISTEN_SECS FLEET_ORPHAN_LISTEN_ACTION FLEET_ORPHAN_LISTEN_EVERY FLEET_ORPHAN_TREE_SECS FLEET_ORPHAN_TREE_EVERY FLEET_SELFTEST_REAP FLEET_SELFTEST_PROC_SECS FLEET_SELFTEST_PROC_GLOBS FLEET_DOCTOR_TESTTMUX_LIVE FLEET_DOCTOR_TESTTMUX_DEAD FLEET_LISTEN_EXEMPT_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_DOCTOR_MCP FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_OPEN_LAPTOP FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL FLEET_INSTALL_SYNC FLEET_INSTALL_SYNC_TIMEOUT FLEET_INSTALL_LOOP_MARGIN_SECS FLEET_KEEP_AGENTS_KEY FLEET_INSTALL_FOLLOW_STUCK_SECS FLEET_INSTALL_VERSIONS_KEEP_SECS FLEET_NODE_FOLLOW FLEET_NODE_FOLLOW_RETRY_SECS FLEET_ONBOARD FLEET_GUIDE_WAIT_SECS FLEET_GUIDE_COOLDOWN FLEET_GUIDE_SPEAK_SECS FLEET_GUIDE_MAX_TRIES FLEET_GUIDE_STUCK_SECS FLEET_GUIDE_OPEN_SECS FLEET_EXIT_CLOSE_SECS FLEET_COLLECT_GUIDE_BUDGET FLEET_SSH_PUBLIC_HOST FLEET_SSH_PUBLIC_PORT FLEET_SSH_PROBE_HOST FLEET_DOCTOR_INGRESS FLEET_INGRESS_TTL FLEET_INGRESS_TIMEOUT FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_MEMGUARD FLEET_MEM_SPIKE_GROW_MB FLEET_MEM_SPIKE_WINDOW FLEET_MEM_SPIKE_ACTION FLEET_MEM_PROC_HARD_PCT FLEET_MEM_EXEMPT_RE FLEET_MEM_ORPHAN_MB FLEET_MEM_ORPHAN_SECS FLEET_MEM_ORPHAN_ACTION FLEET_CRED_PROXY FLEET_CRED_RELAY_URL FLEET_CRED_CENTRAL_URL FLEET_CRED_BUDGET FLEET_CRED_BUDGET_SECS FLEET_CRED_SEPARATE FLEET_CLAUDE_RSS_WARN_MB FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_CPU_BUSY FLEET_ADMIT_LOAD_HARD_PER_CORE FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_ADMIT_GUIDE_PASS FLEET_ADMIT_ROOM FLEET_ADMIT_CPU_SHARE FLEET_ADMIT_CPU_THROTTLE FLEET_ADMIT_CPU_SAMPLE_SECS FLEET_ADMIT_CPU_WINDOW_SECS FLEET_ADMIT_POD_CPU FLEET_FILES_WARN_PCT FLEET_PTY_WARN_PCT FLEET_MEM_NOTIFY_COOLDOWN FLEET_TRANSCRIPT_KEEP_DAYS FLEET_TRANSCRIPT_HELPER_KEEP_HOURS FLEET_TRANSCRIPT_ARCHIVE FLEET_TRANSCRIPT_ARCHIVE_EVERY FLEET_TRANSCRIPT_ARCHIVE_BUDGET FLEET_BREW_PERMS FLEET_BREW_PERMS_EVERY FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MOD FLEET_STATUS_7501 FLEET_STATUS_REPLAY_DEPTH FLEET_STREAM_RESUME FLEET_STREAM_RESUME_SECS FLEET_STREAM_RESUME_MAX FLEET_STREAM_RESUME_WINDOW FLEET_AGENT_CFG FLEET_AGENT_LOCK FLEET_CFG_RESTART FLEET_CFG_RESTART_IDLE FLEET_CFG_RESTART_MAX FLEET_NOTIFY FLEET_NOTIFY_JUMP_SECS FLEET_NOTIFY_DONE FLEET_NOTIFY_QUIET FLEET_CLIENT_PASTE FLEET_KEYS_PARITY FLEET_DASH_ORDER FLEET_KEY_PANEL FLEET_KEYS_EXTRA FLEET_KEY_PHONE FLEET_KEYS_PHONE_EXTRA FLEET_VIEW_CLOSED_HOURS FLEET_VIEW_LANDED_SECS FLEET_TASK_AUTHORITY"
+# fleet_load_conf strips these from the per-fleet overlay so GLOBAL always wins.
+# Keep this list in step with the @scope=global tags in conf/fleet.conf.reference —
+# conf-surface-selftest.sh cross-checks the two so they can't drift.
+_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_GH_SHARE FLEET_GH_SHARE_TRUST FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_DEGENERATE_SECS FLEET_DEGENERATE_LINES FLEET_DEGENERATE_COOLDOWN_SECS FLEET_DEGENERATE_MARK_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_PAUSED FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_QUOTA_RL_TTL FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_QUOTA_STALE_OK FLEET_QUOTA_REFUSED_ALARM FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PACE_LEAD FLEET_ACCOUNT_PACE_HOLD FLEET_ACCOUNT_PACE_MARGIN FLEET_ACCOUNT_PACE_REBALANCE FLEET_ACCOUNT_PACE_COOLDOWN FLEET_ACCOUNT_PACE_SPREAD_WARN FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_BANNER_PER_WINDOW_MS FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_AGENTCFG_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_HUBSESS_BUDGET FLEET_COLLECT_VIEWS_BUDGET FLEET_NODE_ALIASES FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_RESIDENT_WATCH FLEET_DAEMON_RESIDENT_GRACE FLEET_DAEMON_RESIDENT_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_POLL_MAX_BACKOFF FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_ORPHAN_LISTEN_SECS FLEET_ORPHAN_LISTEN_ACTION FLEET_ORPHAN_LISTEN_EVERY FLEET_ORPHAN_TREE_SECS FLEET_ORPHAN_TREE_EVERY FLEET_SELFTEST_REAP FLEET_SELFTEST_PROC_SECS FLEET_SELFTEST_PROC_GLOBS FLEET_DOCTOR_TESTTMUX_LIVE FLEET_DOCTOR_TESTTMUX_DEAD FLEET_LISTEN_EXEMPT_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_DOCTOR_MCP FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_OPEN_LAPTOP FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_INFLIGHT_TTL FLEET_INSTALL_SYNC FLEET_INSTALL_SYNC_TIMEOUT FLEET_INSTALL_LOOP_MARGIN_SECS FLEET_KEEP_AGENTS_KEY FLEET_INSTALL_FOLLOW_STUCK_SECS FLEET_INSTALL_VERSIONS_KEEP_SECS FLEET_NODE_FOLLOW FLEET_NODE_FOLLOW_RETRY_SECS FLEET_ONBOARD FLEET_GUIDE_WAIT_SECS FLEET_GUIDE_COOLDOWN FLEET_GUIDE_SPEAK_SECS FLEET_GUIDE_MAX_TRIES FLEET_GUIDE_STUCK_SECS FLEET_GUIDE_OPEN_SECS FLEET_EXIT_CLOSE_SECS FLEET_COLLECT_GUIDE_BUDGET FLEET_SSH_PUBLIC_HOST FLEET_SSH_PUBLIC_PORT FLEET_SSH_PROBE_HOST FLEET_DOCTOR_INGRESS FLEET_INGRESS_TTL FLEET_INGRESS_TIMEOUT FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_MEMGUARD FLEET_MEM_SPIKE_GROW_MB FLEET_MEM_SPIKE_WINDOW FLEET_MEM_SPIKE_ACTION FLEET_MEM_PROC_HARD_PCT FLEET_MEM_EXEMPT_RE FLEET_MEM_ORPHAN_MB FLEET_MEM_ORPHAN_SECS FLEET_MEM_ORPHAN_ACTION FLEET_CRED_PROXY FLEET_CRED_RELAY_URL FLEET_CRED_CENTRAL_URL FLEET_CRED_BUDGET FLEET_CRED_BUDGET_SECS FLEET_CRED_SEPARATE FLEET_CLAUDE_RSS_WARN_MB FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_CPU_BUSY FLEET_ADMIT_LOAD_HARD_PER_CORE FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_ADMIT_GUIDE_PASS FLEET_ADMIT_ROOM FLEET_ADMIT_CPU_SHARE FLEET_ADMIT_CPU_THROTTLE FLEET_ADMIT_CPU_SAMPLE_SECS FLEET_ADMIT_CPU_WINDOW_SECS FLEET_ADMIT_POD_CPU FLEET_FILES_WARN_PCT FLEET_PTY_WARN_PCT FLEET_MEM_NOTIFY_COOLDOWN FLEET_TRANSCRIPT_KEEP_DAYS FLEET_TRANSCRIPT_HELPER_KEEP_HOURS FLEET_TRANSCRIPT_ARCHIVE FLEET_TRANSCRIPT_ARCHIVE_EVERY FLEET_TRANSCRIPT_ARCHIVE_BUDGET FLEET_BREW_PERMS FLEET_BREW_PERMS_EVERY FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MOD FLEET_STATUS_7501 FLEET_STATUS_REPLAY_DEPTH FLEET_STREAM_RESUME FLEET_STREAM_RESUME_SECS FLEET_STREAM_RESUME_MAX FLEET_STREAM_RESUME_WINDOW FLEET_AGENT_CFG FLEET_AGENT_LOCK FLEET_CFG_RESTART FLEET_CFG_RESTART_IDLE FLEET_CFG_RESTART_MAX FLEET_NOTIFY FLEET_NOTIFY_JUMP_SECS FLEET_NOTIFY_DONE FLEET_NOTIFY_QUIET FLEET_CLIENT_PASTE FLEET_KEYS_PARITY FLEET_DASH_ORDER FLEET_KEY_PANEL FLEET_KEYS_EXTRA FLEET_KEY_PHONE FLEET_KEYS_PHONE_EXTRA FLEET_VIEW_CLOSED_HOURS FLEET_VIEW_LANDED_SECS FLEET_TASK_AUTHORITY"
 
 # Source the GLOBAL fleet.conf on load + EXPORT the global-only keys (issue #399).
 # ---------------------------------------------------------------------------------
@@ -1525,47 +1523,6 @@ $shorts
 EOF
 }
 
-# ---- the backlog for any repo (issue #794) ----------------------------------
-# The backlog (tmux-issues.sh + its rows producer, preview and row actions) reads
-# every hosted repo's issues, each row carrying its repo — one path however many
-# repos the fleet hosts (issue #1938).
-
-# fleet_backlog_repos <sess> → the repos the backlog lists, one per line: every
-# hosted repo (fleet_repos order).
-fleet_backlog_repos() {
-  fleet_repos "${1:-}"
-}
-
-# fleet_backlog_cache <base> <sess> <repo> → the runtime cache file <base>
-# (issues / labels / parents) the backlog reads for <repo>: that repo's own
-# fleets/<slug>/ dir; with no <repo>, fleet_cache's per-session file.
-fleet_backlog_cache() {
-  if [ -n "${3:-}" ]; then
-    printf '%s/%s' "$(fleet_cache_dir "$(fleet_slug "$(fleet_norm_repo "$3")")")" "${1:-}"
-  else
-    fleet_cache "${1:-}" "${2:-}"
-  fi
-}
-
-# fleet_backlog_repo <sess> [<row-repo>] → the repo a backlog action targets, or
-# NOTHING (the caller refuses, or a new issue asks — fleet-repo-ask.sh) — never a
-# guess. fleet_target_repo's one rule (issue #1938): the row's repo, else $CF_REPO
-# (carried through a popup) — either must be hosted — else the caller pane's own
-# repo, else the fleet's only repo. A fleet that hosts NO repo (outside a fleet)
-# has nothing to check against: the named repo,
-# else the global FLEET_REPO, as fleet-comment.sh / fleet-pr-verdict.sh do.
-fleet_backlog_repo() {
-  local sess="${1:-}" want r rc
-  want=$(fleet_norm_repo "${2:-}")
-  [ -n "$want" ] || want=$(fleet_norm_repo "${CF_REPO:-}")
-  r=$(fleet_target_repo "$sess" "$want" 2>/dev/null); rc=$?
-  if [ "$rc" = 1 ] && [ -z "$(fleet_repos "$sess")" ]; then
-    r=${want:-$(fleet_norm_repo "${FLEET_REPO:-}")}; rc=0
-  fi
-  [ "$rc" = 0 ] && [ -n "$r" ] && printf '%s' "$r"
-  return 0
-}
-
 # ---- (repo, issue) identity (issue #790) -------------------------------------
 # Two repos in one fleet can both have an issue #12, so nothing that finds a
 # session by its issue number may join on the bare number there. The join key is
@@ -1803,8 +1760,7 @@ fleet_worker_prompt_body() {
 # bin/fleet-pr-verdict.sh reads READY. Reads FLEET_MERGE_METHOD from the
 # already-sourced conf env (fleet_load_conf first).
 # squash (default) | merge | rebase — an unset/typo'd value falls back to squash
-# so landing never breaks on a bad key. Kept in lockstep with the enum validation
-# in fleet-config-lib.sh (fcfg_validate) via tmux-config-selftest.sh.
+# so landing never breaks on a bad key.
 fleet_merge_method() {
   case "${FLEET_MERGE_METHOD:-}" in
     squash|merge|rebase) printf '%s' "$FLEET_MERGE_METHOD" ;;
@@ -2935,7 +2891,7 @@ fleet_tmuxconf_check() {
 # (issue #1784): its shell exiting (a stray Ctrl+D, `exit`) leaves the pane in
 # place (`remain-on-exit`) and a window `pane-died` hook starts a fresh shell in
 # it, so the session always keeps one window however many tasks end. No home
-# window → nothing (a FLEET_DASH_WINDOW=1 fleet rests on its dash instead).
+# window → nothing.
 fleet_home_resident() {
   local sock="$1" sess="$2" win="${3:-}"
   [ -n "$win" ] || win=$(tmux -L "$sock" list-windows -t "$sess" -F "#{window_id} $FLEET_ROLE_FMT" 2>/dev/null \
@@ -3348,8 +3304,8 @@ fleet_mark_role() {
 # CHEAP: the @hub=1 pane_id in <session> (a pane the OPERATOR marked by hand), or
 # empty if the session has none. Since the hub went dash-only nothing SETS @hub
 # automatically — hub-session.sh no longer splits a Claude pane in — so this
-# normally returns empty. It is kept because the marker still confers the cw.zsh
-# kill-window exemption (#177/#202) and the session-end-hook bail on any pane an
+# normally returns empty. It is kept because the marker still confers
+# the session-end-hook bail on any pane an
 # operator marks deliberately (`tmux set-option -p @hub 1`). Scoped with -s so it
 # never leaks a pane from another fleet. Pure tmux + awk, no git/gh forks.
 fleet_hub_pane() {
@@ -3359,18 +3315,6 @@ fleet_hub_pane() {
   # is in-session (via $TMUX → same socket) or out-of-session (from fleet-up,
   # which has no $TMUX for this fleet's server).
   tmux -L "$(fleet_socket "$1")" list-panes -s -t "$1" -F '#{pane_id} #{@hub}' 2>/dev/null \
-    | awk '$2=="1"{print $1; exit}'
-}
-
-# CHEAP: the @dash=1 pane_id in <session> (that fleet's dashboard pane), or empty
-# if the session has none. The dash IS the hub now, so this is the shared lookup
-# for every SESSION-scoped focus caller — hub-zoom.sh (⌂ / F9), dash-zoom.sh
-# (prefix+g) and hub-session.sh's idempotency check. Same socket reasoning and
-# same -s scoping as fleet_hub_pane above; replaces the hand-rolled list-panes
-# that dash-zoom.sh used to inline.
-fleet_dash_pane() {
-  [ -n "${1:-}" ] || return 0
-  tmux -L "$(fleet_socket "$1")" list-panes -s -t "$1" -F '#{pane_id} #{@dash}' 2>/dev/null \
     | awk '$2=="1"{print $1; exit}'
 }
 
@@ -9022,19 +8966,6 @@ fleet_now_ms() {
   echo $(( $(date +%s 2>/dev/null || echo 0) * 1000 ))
 }
 
-# fleet_spawn_is_burst <now_ms> <last_ms> <guard_ms> — 0 (true) iff this dash
-# prompt-line Enter TRAILS the previous one by < guard_ms, i.e. it is one line of a
-# multi-line PASTE (issue #531). A terminal delivers a paste as one Enter per line,
-# fired milliseconds apart, and fzf has no bracketed-paste awareness on the input
-# line — so 250 pasted lines fired 250 seeded spawns. dash-enter.sh drops a burst
-# Enter and only spawns an ISOLATED one (quiet before AND after, within the guard).
-# A "no prior Enter" (last_ms=0) is never a burst — the gap is huge.
-fleet_spawn_is_burst() {
-  local now="${1:-0}" last="${2:-0}" guard="${3:-1000}"
-  case "$now$last$guard" in *[!0-9]*) return 1;; esac   # non-numeric → treat as not-a-burst
-  [ "$last" -gt 0 ] && [ $((now - last)) -lt "$guard" ]
-}
-
 # In-flight scratch-spawn markers (issue #531). A spawn's SLOW half — git fetch +
 # `git worktree add` + window launch — holds NO session slot until its window
 # exists, so a flood of spawns (the paste storm; a wedged Enter/⌃s key) could all
@@ -9787,7 +9718,7 @@ fleet_cap_full() {
   return 1
 }
 
-# Compact "slots N/max" chip for the backlog header / dash (issue #331): the
+# Compact "slots N/max" chip (issue #331; its backlog header went with #4902): the
 # GLOBAL session cap (FLEET_GLOBAL_MAX_SESSIONS, default 0 = off) silently blocks EVERY
 # spawn path, but nothing surfaces fullness today — so a cap refusal is an ambush.
 # This makes it expected: reuse fleet_session_count (the SAME cross-fleet count the
@@ -9813,92 +9744,6 @@ fleet_slots_chip() {
   else                                  col='86;95;137'     # headroom  → dim    (GY)
   fi
   printf '\033[38;2;%sm slots %s/%s%s %s' "$col" "$n" "$gmax" "$zs" "$reset"
-}
-
-# --- backlog modal column geometry (issue #371) ------------------------------
-# The backlog rows (bin/tmux-issues-rows.sh) lay field-2 out as fixed-width
-# columns so every title starts at the same screen column; the backlog header
-# (bin/tmux-issues.sh) draws a matching column-title line so the modal reads as a
-# table. Both derive from these VISIBLE-column widths: the two PADDINGS (NUM/MS)
-# are consumed directly by the row printf; the CONTENT column (PRI) is the fixed
-# 2-col literal it emits — a p0/p1/p2 tag — that this constant documents. The
-# owner column (its 2-col MARK marker + 14-col NAME) was dropped in issue #389.
-# backlog-header-cols-selftest.sh pins the header offsets against a REAL rendered
-# row so a width change can't silently misalign them.
-FLEET_BL_W_NUM=5      # #num         — %-5s
-FLEET_BL_W_PRI=2      # priority tag — p0/p1/p2 or 2 spaces (content-defined)
-FLEET_BL_W_MS=12      # milestone    — name or ·, DISPLAY-cell-padded (flat list — issue #377)
-
-# fleet_pad_display <string> <cells> — the display-CELL-aware analogue of
-# `printf "%-<cells>.<cells>s"`, for the CJK-bearing backlog milestone column.
-# `printf`'s width/precision count BYTES: a CJK glyph is 3 UTF-8 bytes but 2
-# screen cells, so `%-12.12s` sizes a Chinese milestone by bytes and every column
-# after it drifts off the header (issue #432). This left-justifies <string> into
-# EXACTLY <cells> terminal columns — truncating on a glyph boundary (never mid
-# wide-glyph) and right-padding with spaces — so the title always starts at the
-# header's title offset on ASCII and CJK rows alike. Cell rules mirror the
-# dashboard summary clip (bin/tmux-dashboard-rows.sh): East-Asian wide / fullwidth
-# = 2, zero-width combining = 0, else 1. Fast path — a pure-ASCII arg has
-# width == byte count, so it forks nothing and renders byte-identical to the old
-# printf; a non-ASCII arg pays one `perl -CO` fork. The `[:ascii:]` test is a
-# bash/glibc class (this file's live callers are all #!/bin/bash); should it ever
-# run under a shell that lacks it, or perl be missing, it falls back to the old
-# byte-count printf — degraded (may misalign CJK) but never crashing or splitting
-# a glyph into garbage.
-fleet_pad_display() {
-  local s="$1" cells="$2" out
-  [ "$cells" -le 0 ] && return 0
-  case $s in
-    *[![:ascii:]]*)
-      out=$(S="$s" N="$cells" perl -CO -MEncode -e '
-        my $s = decode_utf8($ENV{S}); my $n = $ENV{N} + 0;
-        my ($w, $o) = (0, "");
-        for my $c (split //, $s) {
-          my $x = ord $c;
-          my $cw =
-            ($x == 0x200B || ($x >= 0x0300 && $x <= 0x036F) || ($x >= 0x1AB0 && $x <= 0x1AFF) ||
-             ($x >= 0x1DC0 && $x <= 0x1DFF) || ($x >= 0x20D0 && $x <= 0x20FF) ||
-             ($x >= 0xFE20 && $x <= 0xFE2F)) ? 0 :
-            ($x >= 0x1100 && (
-               $x <= 0x115F || $x == 0x2329 || $x == 0x232A ||
-               ($x >= 0x2E80 && $x <= 0x303E) || ($x >= 0x3041 && $x <= 0x33FF) ||
-               ($x >= 0x3400 && $x <= 0x4DBF) || ($x >= 0x4E00 && $x <= 0x9FFF) ||
-               ($x >= 0xA000 && $x <= 0xA4CF) || ($x >= 0xAC00 && $x <= 0xD7A3) ||
-               ($x >= 0xF900 && $x <= 0xFAFF) || ($x >= 0xFE10 && $x <= 0xFE19) ||
-               ($x >= 0xFE30 && $x <= 0xFE6F) || ($x >= 0xFF00 && $x <= 0xFF60) ||
-               ($x >= 0xFFE0 && $x <= 0xFFE6) || ($x >= 0x1F000 && $x <= 0x1FAFF) ||
-               ($x >= 0x20000 && $x <= 0x3FFFD))) ? 2 : 1;
-          last if $w + $cw > $n;
-          $w += $cw; $o .= $c;
-        }
-        print $o . (" " x ($n - $w));' 2>/dev/null)
-      if [ -n "$out" ]; then printf '%s' "$out"; else printf '%-*.*s' "$cells" "$cells" "$s"; fi
-      ;;
-    *) printf '%-*.*s' "$cells" "$cells" "$s" ;;
-  esac
-}
-
-# The backlog column-title line (issue #371): a dim/muted header row whose labels
-# sit over field-2's fixed columns. Printed by bin/tmux-issues.sh as an extra
-# --header line above the hint line. Label start offsets are DERIVED from the
-# widths above (each `+ 1` is the inter-column space the row emits): `#` at the
-# num column, `pri` at the priority column, `milestone` at the milestone column,
-# `title` at the title column. The priority→milestone step is `+ 2` (a 2-col gap,
-# matched by the row) so the 3-char `pri` label — one wider than the 2-col
-# priority tag it heads — still clears the `milestone` label. The owner column was
-# dropped in issue #389. fzf --ansi renders the color; dim so it reads as a
-# header, not a row.
-fleet_backlog_col_header() {
-  local dim='86;95;137' reset
-  reset=$(printf '\033[0m')                          # POSIX ESC[0m — $'…' is a bashism dash ignores
-  local off_pri=$((FLEET_BL_W_NUM + 1))
-  local off_ms=$((off_pri + FLEET_BL_W_PRI + 2))
-  local off_title=$((off_ms + FLEET_BL_W_MS + 1))
-  local s='#'
-  while [ "${#s}" -lt "$off_pri" ];   do s="$s "; done; s="${s}pri"
-  while [ "${#s}" -lt "$off_ms" ];    do s="$s "; done; s="${s}milestone"
-  while [ "${#s}" -lt "$off_title" ]; do s="$s "; done; s="${s}title"
-  printf '\033[38;2;%sm%s%s' "$dim" "$s" "$reset"
 }
 
 # ── prmap jq program — the ONE fold from `gh pr list --json` to the prmap TSV ─────

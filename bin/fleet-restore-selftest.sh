@@ -294,7 +294,7 @@ printf '%s\n' "$dry2" | grep 'issue-77 ' | grep -q '(auto-continue)' \
   && fail "restore: a no-transcript 'working' window must NOT be nudged as if resumed (got: $dry2)"
 
 # ====================================== 3. THE HUB NEVER LAUNCHES A CLAUDE =====
-# hub-session.sh builds the hub; assert it builds the DASH ALONE. The old contract
+# hub-session.sh builds the fleet's `home` window and never a claude. The old contract
 # here was the opposite — resume by id, bare fresh launch, stale-id fallback — all
 # of which spawned a Claude in a second pane. That pane restored itself unasked on
 # every ⌂ tap / F9 / fleet-up / crash recovery, so it is gone.
@@ -315,51 +315,14 @@ settle() {
   return 1
 }
 
-# assert_dash_only <session> <label>
-assert_dash_only() {
-  local sess="$1" why="$2" panes
-  settle "$sess" && fail "$why: the hub launched a claude (argv: $(cat "$WORK/claude-argv"))"
-  [ ! -s "$WORK/claude-argv" ] \
-    || fail "$why: no claude may be launched by the hub (argv: $(cat "$WORK/claude-argv"))"
-  panes=$(tmux list-panes -t "$sess:plan" -F x 2>/dev/null | wc -l | tr -d ' ')
-  [ "$panes" = 1 ] || fail "$why: the hub must be ONE pane (the dash), got $panes"
-}
-
-# --- REGRESSION: HUB_RESUME_ID from an OLD map must not resurrect anything ----
-: > "$WORK/claude-argv"
-tmux new-session -d -s res -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session res"
-# The dash pane may exit on its own here (a slow runner, a missing fzf) and take
-# the plan window with it — "got 0" then says nothing about a SECOND pane, which
-# is what this section checks. Keep a dead pane counted (issue #2638).
-tmux set-window-option -g remain-on-exit on 2>/dev/null
-env -u HUB_CMD -u FLEET_HUB_CMD \
-  HUB_SESSION=res HUB_CWD="$STEW_PATH" HUB_RESUME_ID="stew-abc123" FLEET_DASH_WINDOW=1 \
-  bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (stale-id) exited non-zero"
-assert_dash_only res "HUB_RESUME_ID"
-
-# --- a plain build is likewise dash-only -------------------------------------
-: > "$WORK/claude-argv"
-tmux new-session -d -s fresh -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session fresh"
-env -u HUB_CMD -u FLEET_HUB_CMD -u HUB_RESUME_ID \
-  HUB_SESSION=fresh HUB_CWD="$STEW_PATH" FLEET_DASH_WINDOW=1 \
-  bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (fresh) exited non-zero"
-assert_dash_only fresh "fresh build"
-
-# --- REGRESSION: a leftover FLEET_HUB_CMD in a conf is not a back door -------
-: > "$WORK/claude-argv"
-tmux new-session -d -s ovr -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session ovr"
-env -u HUB_CMD -u HUB_RESUME_ID \
-  FLEET_HUB_CMD='claude "my own orders"; exec $SHELL' \
-  HUB_SESSION=ovr HUB_CWD="$STEW_PATH" FLEET_DASH_WINDOW=1 \
-  bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (override) exited non-zero"
-assert_dash_only ovr "FLEET_HUB_CMD override"
-
 # --- DEFAULT (issue #1533): no plan window — `home`, a plain shell, no claude ---
-# (The three legs above pin the FLEET_DASH_WINDOW=1 hub, the way back.)
+# (FLEET_DASH_WINDOW=1, the old dash hub's way back, went with the dash, issue
+# #4902: it is set here and changes nothing.)
 : > "$WORK/claude-argv"
 tmux new-session -d -s homed -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session homed"
-env -u HUB_CMD -u FLEET_HUB_CMD -u FLEET_DASH_WINDOW \
-  HUB_SESSION=homed HUB_CWD="$STEW_PATH" HUB_RESUME_ID="stew-abc123" \
+env -u HUB_CMD \
+  HUB_SESSION=homed HUB_CWD="$STEW_PATH" HUB_RESUME_ID="stew-abc123" FLEET_DASH_WINDOW=1 \
+  FLEET_HUB_CMD='claude "my own orders"; exec $SHELL' \
   bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (default) exited non-zero"
 settle homed && fail "default: hub-session launched a claude (argv: $(cat "$WORK/claude-argv"))"
 lw=$(tmux list-windows -t homed -F '#{window_name}')

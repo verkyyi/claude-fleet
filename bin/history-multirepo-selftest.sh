@@ -13,8 +13,7 @@
 #             ends in `@<repo>`; the cross-repo parent owns its child's block
 #   fold      expanding `landed:issue:30@o/a` writes o/a's own fold file
 #   stale     a stale current-repo file (the retired picker's, #1034) filters nothing
-#   restore   dash-restore-session.sh resumes a row in the repo its target names;
-#             dash-open-pr.sh opens THAT repo's PR
+#   restore   dash-restore-session.sh resumes a row in the repo its target names
 #   one-repo  fleet D: one road (#1940) — every target ends in `@<repo>` as with 2+,
 #             but no legend and no badge (one repo has nothing to tell apart)
 #
@@ -120,22 +119,19 @@ printf 'o/b\n' > "$FLEET_CONF_DIR/fleets/$M/current-repo"
 rm -f "$FLEET_CONF_DIR/fleets/$M/current-repo"
 leg stale
 
-# --- restore + open-PR: the row's repo ------------------------------------------------
+# --- restore: the row's repo ------------------------------------------------
 HB="$WORK/hb"; mkdir -p "$HB"
-cp "$BIN/dash-restore-session.sh" "$BIN/dash-open-pr.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$HB/"
+cp "$BIN/dash-restore-session.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$HB/"
 cat > "$HB/fleet-history.sh" <<'EOF'
 #!/bin/bash
 repo='' main=''; while [ "$#" -gt 1 ]; do case "$1" in --repo) repo=$2; shift ;; --main) main=$2; shift ;; esac; shift; done
 printf 'REVIEW-ONLY\trepo=%s main=%s key=%s\n' "$repo" "$main" "$1"
 EOF
-printf '#!/bin/sh\nprintf "%%s\\n" "$1" >> "%s/opened"\n' "$WORK" > "$HB/open-url.sh"
 err=$(FLEET_GLOBAL_MAX_SESSIONS=0 FLEET_MAX_SESSIONS=0 bash "$HB/dash-restore-session.sh" 'landed:101@o/b' "$M" 2>&1 >/dev/null)
 has "restore: an o/b row resumes in o/b" "$err" "repo=o/b main=$WORK/mainB key=#101"
 err=$(FLEET_GLOBAL_MAX_SESSIONS=0 FLEET_MAX_SESSIONS=0 bash "$HB/dash-restore-session.sh" 'landed:issue:30@o/a' "$M" 2>&1 >/dev/null)
 has "restore: an o/a row resumes in o/a" "$err" "repo=o/a main=$WORK/mainA key=30"
 has "restore: --plan strips the repo" "$(bash "$HB/dash-restore-session.sh" --plan 'landed:scratch:scratch-4@o/b')" "scratch-4"
-FLEET_SESSION=$M bash "$HB/dash-open-pr.sh" 'landed:101@o/b'
-has "open-pr: the row's own repo" "$(cat "$WORK/opened" 2>/dev/null)" "https://github.com/o/b/pull/101"
 leg restore
 
 # --- the one-repo fleet ------------------------------------------------------------------

@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-worktree.sh — CLI shim over the ONE worktree-path exit in bin/fleet-lib.sh
-# (issue #886), for callers that cannot source the bash library — `cw`/`cwrm` in
-# shell/cw.zsh run in the operator's zsh.
+# (issue #886), for callers that cannot source the bash library (it was `cw`/`cwrm`
+# in shell/cw.zsh, gone with issue #4902).
 #
 #   fleet-worktree.sh dir    <main> <slug>                    print the worktree path
 #   fleet-worktree.sh create <main> <slug> [<base>] [--reuse] create it, print the path

@@ -174,10 +174,9 @@
 #   API on 127.0.0.1 and a fake runner archive, bin/fleet-break-it-ci-selftest.sh.
 # Shell half — a sandbox fleet on -L kf (TMUX_TMPDIR under $WORK), the real wrapper:
 #   shell-kill-fleet                                bin/tmux-shim/tmux, fleet-session-wrap.sh, hooks/bash-guard.py
-#   zsh-guard-fleet-label                           shell/cw.zsh tmux()
 # Machine half — a sandbox Homebrew prefix under a world-traversable tmp dir:
 #   brew-keg-700                                    bin/fleet-diskguard.sh --brew-watch,
-#                                                   bin/fleet-brew-perms.sh, shell/cw.zsh brew()
+#                                                   bin/fleet-brew-perms.sh
 #   nothing-starts-by-itself                        bin/fleet-dispatch.sh gone (#3576),
 #                                                   bin/fleet-diskguard.sh macos_watch, fleet-macos-watch.sh
 #   release-push-lost                               bin/fleet-node-supervisor.py (task_due: update-now + the
@@ -2271,27 +2270,6 @@ drill_shell_kill_fleet() {
   ) > "$WORK/kf.out"; local rc=$?
   [ "$rc" = 0 ] || { WHY=$(sed -n 's/^WHY=//p' "$WORK/kf.out" | head -1); WHY=${WHY:-"the drill died (rc $rc)"}; return 1; }
   SECS=$(since "$t0"); WHAT="bash / sh / zsh -c / 登录 shell / Bash 工具里删 fleet 都被拒，-L 测试服务器和逃生口放行"
-}
-
-drill_zsh_guard_fleet_label() {
-  CAP=30; local t0 out
-  command -v zsh >/dev/null 2>&1 || { SECS=0; WHAT="zsh 不在，跳过"; return 0; }
-  t0=$(now)
-  ( kf_env
-    # an interactive zsh, as the person's: -i stops the shim's plumbing walk there
-    z() { zsh -fic "source '$ROOT/shell/cw.zsh' >/dev/null 2>&1; $1" 2>&1 </dev/null; }
-    out=$(PATH="/usr/bin:/bin:${REAL_TMUX%/*}" z 'tmux -L kf kill-server')
-    kf_up || { echo "WHY=cw.zsh's tmux() let -L kf kill-server through: [$out]"; exit 1; }
-    case "$out" in *拒绝*) ;; *) echo "WHY=no reason given: [$out]"; exit 1 ;; esac
-    "$REAL_TMUX" -L "kscr$$" new-session -d -s s 'exec sleep 600'
-    out=$(z "tmux -L kscr$$ kill-server")
-    "$REAL_TMUX" -L "kscr$$" has-session 2>/dev/null && { echo "WHY=cw.zsh refused -L kscr$$: [$out]"; exit 1; }
-    out=$(FLEET_ALLOW_TMUX_DESTROY=1 z 'tmux -L kf kill-server')
-    "$REAL_TMUX" -L kf has-session 2>/dev/null && { echo "WHY=the hatch did not pass: [$out]"; exit 1; }
-    exit 0
-  ) > "$WORK/kz.out"; local rc=$?
-  [ "$rc" = 0 ] || { WHY=$(sed -n 's/^WHY=//p' "$WORK/kz.out" | head -1); WHY=${WHY:-"the drill died (rc $rc)"}; return 1; }
-  SECS=$(since "$t0"); WHAT="交互 zsh 的 tmux() 不再把 -L <fleet> 当测试服务器"
 }
 
 # conf-keys-lost (issue #1887): the machine's fleet.conf carries a key a person

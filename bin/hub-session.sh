@@ -1,33 +1,28 @@
 #!/bin/bash
-# hub-session.sh — (re)create the HUB for a fleet: the plan window, holding the
-# dash and NOTHING ELSE. Idempotent PER SESSION: if a @dash-marked pane already
-# exists IN THIS SESSION, just jump to it. This is F9's fallback (hub-zoom.sh),
-# so an accidentally closed hub window is one keypress from restored.
+# hub-session.sh — (re)create a fleet's resting window, `home`: a plain shell in
+# $HOME that the task list draws beside (fleet_view.py), at the lowest index.
+# Idempotent PER SESSION: an existing home (by role, not name — issue #1844) is
+# just selected. It is not a list of its own — nothing refreshes in it — but a
+# session needs a window that outlives its tasks, or the last one to close would
+# take the fleet and its server with it. `home` is a panel like plan/dash/backlog
+# everywhere a window is counted, snapshotted or listed as a session.
 #
-# The hub is DASH-ONLY — it never spawns a Claude session. Earlier versions split
-# a persistent `claude` in below the dash (the "hub pane", issue #439, itself the
-# successor to an older seat). That pane came back on its OWN, unasked: the ⌂
-# home tap, F9 and prefix+g all fall back here when they find no pane to focus,
-# and `fleet-up`/`fleet-restore` rebuilt it on every fresh fleet and every crash
-# recovery. An operator who closed it got it back on the next tap. It is gone: the
-# operator runs their own `claude` in whatever window they choose, and NO key,
-# tap, spawn or restore path re-creates one.
+# The old full-screen dash hub (`plan`, FLEET_DASH_WINDOW=1, issue #1533's way
+# back) went with the dash (issue #4902). It never spawns a Claude session: the
+# operator runs their own `claude` in whatever window they choose.
 #
 # The @hub pane marker is deliberately KEPT (fleet_mark_role, fleet_hub_pane,
 # FLEET_HUB) even though nothing sets it automatically any more — mark a pane by
 # hand (`tmux set-option -p @hub 1`, or run with FLEET_HUB=1) and it still gets
-# the cw.zsh kill-window exemption (#177/#202), the session-end-hook bail and the
-# 'operator' provenance stamp. Nothing about those rails changed.
+# the session-end-hook bail and the 'operator' provenance stamp.
 #
 # Multi-fleet (a fleet ≡ a tmux session, hosting one or more repos): SESS defaults to the CURRENT
-# session so every fleet gets its OWN hub, and BASE defaults to $HOME (issue
+# session so every fleet gets its OWN home, and BASE defaults to $HOME (issue
 # #1941 — a fleet has no main repo). Both overridable via HUB_SESSION / HUB_CWD —
 # fleet-up.sh passes them explicitly when it builds a fresh fleet.
 #
-# IMPORTANT: window names are NOT unique in tmux, so we NEVER target "$SESS:plan"
-# by name — a second 'plan' window makes that reference ambiguous, which is how
-# earlier versions piled up orphan 'plan' windows and left you on the wrong one
-# with no hub. Everything below targets by window_id / pane_id.
+# Window names are NOT unique in tmux, so nothing below targets "$SESS:home" by
+# name — everything targets by window_id.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -50,85 +45,25 @@ SOCK=$(fleet_socket "$SESS")
 fleet_load_conf "$SESS"
 BASE="${HUB_CWD:-$HOME}"
 
-# The full-screen list retired (issue #1533). Unless FLEET_DASH_WINDOW=1 brings
-# it back, the fleet's resting window is `home`: a plain shell in BASE that the
-# task list draws beside (fleet_view.py), at the lowest index the hub had. It
-# is not a list of its own — nothing refreshes in it — but a session needs a
-# window that outlives its tasks, or the last one to close would take the fleet
-# and its server with it, and a fleet with no task yet starts one from the list's
-# input line, which needs a window to draw in. `home` is a panel like plan/dash/
-# backlog everywhere a window is counted, snapshotted or listed as a session.
-_fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
-[ -z "${FLEET_DASH_WINDOW:-}" ] && { [ -f "$_fs/fleet.settings" ] || [ -f "$_fs/fleet.conf" ]; } && FLEET_DASH_WINDOW=$( for _f in "$_fs/fleet.settings" "$_fs/fleet.conf"; do [ -f "$_f" ] && . "$_f" >/dev/null 2>&1; done; printf '%s' "${FLEET_DASH_WINDOW:-}" )
-if [ "${FLEET_DASH_WINDOW:-0}" != 1 ]; then
-  if [ -n "${HUB_PRINT_CMD:-}" ]; then
-    if [ "$HUB_PRINT_CMD" = cwd ]; then printf '%s\n' "$BASE"; else printf 'home\n'; fi
-    exit 0
-  fi
-  # By role, not name (issue #1844): a home the person renamed is still home.
-  win=$(tmux -L "$SOCK" list-windows -t "$SESS" -F "#{window_id} $FLEET_ROLE_FMT" 2>/dev/null \
-        | awk "$FLEET_ROLE_AWK"' { t=$0; sub(/^[^ ]* /, "", t) } frole(t)=="home" {print $1; exit}')
-  if [ -z "$win" ]; then
-    win=$(tmux -L "$SOCK" new-window -P -F '#{window_id}' -t "$SESS:" -n home -c "$BASE") || exit 0
-    # A name tmux's automatic-rename must not change: the panel rules key on it.
-    tmux -L "$SOCK" set-window-option -t "$win" automatic-rename off 2>/dev/null
-    if tmux -L "$SOCK" list-windows -t "$SESS" -F '#{window_index}' | grep -qx 1; then
-      tmux -L "$SOCK" swap-window -d -s "$win" -t "$SESS:1" 2>/dev/null
-    else
-      tmux -L "$SOCK" move-window -d -s "$win" -t "$SESS:1" 2>/dev/null
-    fi
-  fi
-  fleet_home_resident "$SOCK" "$SESS" "$win"   # its shell exiting never closes it (#1784)
-  tmux -L "$SOCK" select-window -t "$win"
-  exit 0
-fi
-
-# The ONLY command the hub runs: the dashboard. There is no second pane and no
-# `claude` launch here any more, so FLEET_HUB_CMD / HUB_RESUME_ID / HUB_CMD are
-# gone with it — a hub has no transcript to resume, and no env to inject.
-DASH_CMD="bash '$BIN/tmux-dashboard.sh'"
-
-# Debug seam: print the fully-resolved launch command and exit BEFORE any tmux
-# spawn, so the launch logic (hub-session-selftest.sh) can be asserted
-# hermetically without a live tmux/dash. Never set in normal use.
+# HUB_PRINT_CMD: a debug seam (hub-session-selftest.sh) — print what would open
+# (`cwd`: where) and exit before any tmux call.
 if [ -n "${HUB_PRINT_CMD:-}" ]; then
-  # `cwd` prints where the hub would open instead (issue #795's selftest).
-  if [ "$HUB_PRINT_CMD" = cwd ]; then printf '%s\n' "$BASE"; else printf '%s\n' "$DASH_CMD"; fi
+  if [ "$HUB_PRINT_CMD" = cwd ]; then printf '%s\n' "$BASE"; else printf 'home\n'; fi
   exit 0
 fi
-
-# already have a live dash pane IN THIS SESSION → just focus it, done. Scoped
-# with -s (not -a) so a fresh fleet builds its own hub instead of jumping to
-# another fleet's hub. Keys on @dash (not @hub): the dash IS the hub now.
-existing=$(fleet_dash_pane "$SESS")   # socket-aware (issue #159)
-if [ -n "$existing" ]; then
-  tmux -L "$SOCK" select-window -t "$existing"; tmux -L "$SOCK" select-pane -t "$existing"; exit 0
+# By role, not name (issue #1844): a home the person renamed is still home.
+win=$(tmux -L "$SOCK" list-windows -t "$SESS" -F "#{window_id} $FLEET_ROLE_FMT" 2>/dev/null \
+      | awk "$FLEET_ROLE_AWK"' { t=$0; sub(/^[^ ]* /, "", t) } frole(t)=="home" {print $1; exit}')
+if [ -z "$win" ]; then
+  win=$(tmux -L "$SOCK" new-window -P -F '#{window_id}' -t "$SESS:" -n home -c "$BASE") || exit 0
+  # A name tmux's automatic-rename must not change: the panel rules key on it.
+  tmux -L "$SOCK" set-window-option -t "$win" automatic-rename off 2>/dev/null
+  if tmux -L "$SOCK" list-windows -t "$SESS" -F '#{window_index}' | grep -qx 1; then
+    tmux -L "$SOCK" swap-window -d -s "$win" -t "$SESS:1" 2>/dev/null
+  else
+    tmux -L "$SOCK" move-window -d -s "$win" -t "$SESS:1" 2>/dev/null
+  fi
 fi
-
-# No dash pane in this session → no 'plan' window here holds anything precious
-# (its dash pane is just a respawnable `bash tmux-dashboard.sh`). Nuke ALL
-# 'plan' windows IN THIS SESSION so we rebuild exactly one hub — this also
-# self-heals any accumulated orphans.
-for wid in $(tmux -L "$SOCK" list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="plan"{print $1}'); do
-  tmux -L "$SOCK" kill-window -t "$wid" 2>/dev/null
-done
-
-# Build the hub fresh, capturing the window id so every op hits THIS window. ONE
-# pane: the dash, full height. No split-window follows — that split is exactly the
-# self-restoring Claude pane this script no longer creates. The dash pane's
-# `tmux-dashboard.sh` runs ON this socket (tmux new-window inherits it via $TMUX),
-# so it self-marks @dash correctly with bare tmux.
-win=$(tmux -L "$SOCK" new-window -P -F '#{window_id}' -t "$SESS:" -n plan -c "$BASE" "$DASH_CMD")
-fleet_win_role_stamp "$win" panel "$SOCK"   # a panel by role, whatever it is renamed to (#1844)
-# No pane-border here: the node conf turns the top header off for every window
-# (issue #3192) — the status line and the client's top line name the hub.
-
-# hub belongs at the lowest index (slot 1). Nothing re-sorts windows anymore,
-# so this one-time placement is what keeps the hub at slot 1.
-if tmux -L "$SOCK" list-windows -t "$SESS" -F '#{window_index}' | grep -qx 1; then
-  tmux -L "$SOCK" swap-window -d -s "$win" -t "$SESS:1" 2>/dev/null
-else
-  tmux -L "$SOCK" move-window -d -s "$win" -t "$SESS:1" 2>/dev/null
-fi
+fleet_home_resident "$SOCK" "$SESS" "$win"   # its shell exiting never closes it (#1784)
 tmux -L "$SOCK" select-window -t "$win"
 exit 0

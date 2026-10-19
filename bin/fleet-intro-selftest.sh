@@ -24,9 +24,8 @@
 #      NOT run; interactive SSH → bin/fleet run exactly once, never
 #      fleet-attach.sh / cf, and the shell carries on after it (a failing client
 #      too); a login without $SSH_TTY prints the banner byte for byte as
-#      fleet-intro.sh itself does. `cf` (shell/cw.zsh) prints that it is folded
-#      into fleet and runs bin/fleet (`--guide` → `fleet guide`). zsh absent →
-#      E SKIPs.
+#      fleet-intro.sh itself does. (`cf`, shell/cw.zsh, went with issue #4902.)
+#      zsh absent → E SKIPs.
 #
 # tmux never touches the operator's server: a PATH shim counts any call (there
 # must be none), drops `-L <sess>` and routes it onto one throwaway -S socket,
@@ -201,12 +200,11 @@ if ! command -v zsh >/dev/null 2>&1; then
   echo "  SKIP: zsh not installed"
 else
   LOGIN="$here/../shell/fleet-login.zsh"
-  # a stand-in install root: the real fleet-login.zsh + cw.zsh beside a stub intro,
+  # a stand-in install root: the real fleet-login.zsh beside a stub intro,
   # a stub bin/fleet (the client) and a stub fleet-attach.sh that only count
   # themselves, so nothing attaches or spawns
   mkdir -p "$T/r/shell" "$T/r/bin" "$T/home"
   cp "$LOGIN" "$T/r/shell/fleet-login.zsh"
-  cp "$here/../shell/cw.zsh" "$T/r/shell/cw.zsh"
   printf '#!/bin/sh\necho INTRO\n' > "$T/r/shell/fleet-intro.sh"; chmod +x "$T/r/shell/fleet-intro.sh"
   printf '#!/bin/sh\necho "FLEET $*" >> "%s/calls"; exit "${CLIENT_RC:-0}"\n' "$T" > "$T/r/bin/fleet"
   printf '#!/bin/sh\necho ATTACH >> "%s/calls"\n' "$T" > "$T/r/bin/fleet-attach.sh"
@@ -259,17 +257,6 @@ AFTER" ] && ok "hush file .hushfleet-attach → banner, nothing run" || bad "hus
   # nothing leaks into the login shell — no helper variable, no cf
   out=$(env -u TMUX HOME="$T/home" FLEET_NODE_STATE="$T/node-none" zsh -f -i -c ". '$T/r/shell/fleet-login.zsh' >/dev/null; echo \"\${here-unset} \${+functions[cf]}\"" 2>&1)
   [ "$out" = "unset 0" ] && ok "no helper variable or cf leaks" || bad "leaked: $out"
-  # cf (shell/cw.zsh) is folded into fleet: one line saying so, then bin/fleet
-  cfrun() { : > "$T/calls"; out=$(env -u TMUX HOME="$T/home" FLEET_NODE_STATE="$T/node-none" zsh -f -c ". '$T/r/shell/cw.zsh'; cf $*" 2>&1); }
-  cfrun
-  [ "$(cat "$T/calls")" = "FLEET " ] && ok "cf → bin/fleet" || bad "cf calls: $(cat "$T/calls")"
-  case "$out" in *"cf 已并入 fleet"*) ok "cf says it is folded into fleet" ;; *) bad "cf notice: $out" ;; esac
-  cfrun --guide
-  [ "$(cat "$T/calls")" = "FLEET guide" ] && ok "cf --guide → fleet guide" || bad "cf --guide calls: $(cat "$T/calls")"
-  cfrun o/r
-  [ "$(cat "$T/calls")" = "UP o/r --no-attach
-FLEET " ] && ok "cf o/r → fleet-up --no-attach, then bin/fleet" || bad "cf o/r calls: $(cat "$T/calls")"
-  ! grep -q ATTACH "$T/calls" && ok "cf never attaches directly" || bad "cf attached"
   # the real pair: a non-SSH login's banner is fleet-intro.sh's, byte for byte
   mkdir -p "$T/e/fleets"
   want=$(env -u TMUX FLEET_CONF_DIR="$T/e" sh "$INTRO" 2>&1)

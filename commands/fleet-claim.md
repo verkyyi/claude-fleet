@@ -83,7 +83,7 @@ Background and incident references are in [WORKER.md](../docs/dev/WORKER.md); re
 
 Say one line: issue number/title, newly claimed or already held, charter layers (built-in / + repo / + overlay); then implement and finish with §2's merged or blocked outcome, without asking whether to proceed.
 Operate only on this fleet's repo, sessions and ledgers.
-Never run destructive tmux on the live fleet socket; use an isolated `tmux -L scratch` / `-S <sock>` for tests (`shell/cw.zsh` guard; `FLEET_ALLOW_TMUX_DESTROY=1` only for a legitimate live-server exception).
+Never run destructive tmux on the live fleet socket; use an isolated `tmux -L scratch` / `-S <sock>` for tests (`bin/tmux-shim/tmux` guard; `FLEET_ALLOW_TMUX_DESTROY=1` only for a legitimate live-server exception).
 
 ## 排障 — scripts, for when a tool is not enough
 

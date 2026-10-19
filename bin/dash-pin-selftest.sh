@@ -199,18 +199,14 @@ eq "sidebar: the rule closes the block, key fields hdr + empty" "hdr||200" \
   "$(printf '%s\n' "$side" | sed -n 5p | awk -F"$US" '{n=$4; gsub(/─/,"x",n); print $1 "|" $2 "|" length(n)}')"
 eq "a floated child keeps its └ tree cell (+ its own caret)" "└▾" "$(tree_of cA)"
 eq "a floated grandchild sits one level deeper" " └" "$(tree_of gA)"
-# C2. ←/→ on the 置顶 heading folds the group (#1037's rail, one-repo fleet
+# C2. the `pin` token in @repo_fold folds the 置顶 group (#1037's rail, one-repo fleet
 # too): the rows go, the red `needs` one would stay, the heading keeps its count.
-FOLD="$BIN/dash-fold-toggle.sh"
-bash "$FOLD" collapse hdr '' pin >/dev/null 2>&1
-eq "collapse on the 置顶 heading writes the \`pin\` token" "pin" \
-  "$(tmux show-option -t '=fleetP:' -qv @repo_fold)"
+# (the dash's ←/→ that wrote the token went with the dash, issue #4902)
+tmux set-option -t '=fleetP:' @repo_fold pin
 dout=$(drows)
 eq "a folded 置顶 heading wears ▸ and keeps its count" "▸ 置顶 (3)" "$(printf '%s\n' "$dout" | sed -n 1p)"
 eq "… and hides the pinned rows (the rule stays)" "$(printf 'pB\ncB')" "$(order "$dout")"
-bash "$FOLD" expand 'hdr:pin' >/dev/null 2>&1
-eq "expand (sidebar key form) unsets the option again" "" \
-  "$(tmux show-option -t '=fleetP:' -qv @repo_fold)"
+tmux set-option -u -t '=fleetP:' @repo_fold
 eq "… and the pinned rows are back" "$(printf 'pA\ncA\ngA\npB\ncB')" "$(order "$(rows)")"
 tmux set-window-option -t "$W_pB" -u @claude_state
 

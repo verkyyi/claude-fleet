@@ -96,7 +96,7 @@ From `fleet doctor` and `fleet doctor --machine`.
 
 From `fleet doctor`.
 
-- **What it is**: the old panels on a node (the backlog, the repo picker) need fzf 0.59 or later; the legacy full-screen list (`FLEET_DASH_WINDOW=1`) needs 0.61, and below that you only get a WARN.
+- **What it is**: the pickers a node still opens (accounts, adding a repo) need fzf 0.59 or later.
 - **On WARN / FAIL**: `brew install fzf` (or the package manager). If you only use the new client (⌘P), sessions themselves are not affected.
 
 #### `perl`
@@ -191,13 +191,6 @@ From `fleet doctor` and `fleet doctor --machine`.
 
 - **What it is**: whether this login's fleet is stable and has no local changes; on a managed machine it also checks that it is linked to the current release.
 - **On WARN / FAIL**: behind: wait for the automatic sync, or `fleet update`. Local commits or a fork: the explanation lists which commits; move them away and the sync carries on. Never sync the install by hand from inside a session.
-
-#### `config`
-
-From `fleet doctor`.
-
-- **What it is**: whether the install's table of configuration keys is there (the settings panel lists every key from it).
-- **On WARN / FAIL**: missing = an incomplete install: wait for the next sync, or `fleet update`.
 
 #### `login-tree`
 
@@ -850,13 +843,6 @@ From `fleet doctor`.
 
 - **What it is**: whether the fleet configuration the tmux server loaded is the current version.
 - **On WARN / FAIL**: reload it with the `fleet-ui-refresh.sh` command in the explanation; a sync reloads it too.
-
-#### `keys`
-
-From `fleet doctor`.
-
-- **What it is**: whether the panel's keys collide with your tmux prefix key.
-- **On WARN / FAIL**: change tmux's second prefix key, or that panel key.
 
 #### `rview`
 

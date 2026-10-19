@@ -54,10 +54,7 @@
 #        • every script-facing exit prints ONE token (`reaped:full` / `reaped:keep` /
 #          `skip:needs-confirm` / `refused:<slug>`) with a distinct exit status
 #
-#   C. the dash ⌃x bind wiring (issue #313) — a static check on tmux-dashboard.sh:
-#      the reap bind must be `ctrl-x:execute-silent(...)`, never a bare
-#      `ctrl-x:execute(...)`. `execute` suspends + clears fzf while dash-reap runs,
-#      blanking the whole dash for the reap; `execute-silent` keeps it visible.
+#   (C, the dash ⌃x bind wiring, went with the dash — issue #4902.)
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged).
 set -uo pipefail
@@ -310,7 +307,6 @@ done
 run_reap_tok 7 @9 @10 --yes
 [ "$RC" = 4 ] && [ "$TOK" = refused:bad-args ] || fail "second target was ignored"
 grep -q KILL "$TMLOG" && fail "multi-target call killed window"
-grep -Fq 'dash-reap.sh {2}' "$BIN/tmux-dashboard.sh" || fail "dashboard must pass stable row field 2"
 
 # #565: the Git gate says merged, but an active window is NEVER disposable.
 # This must also hold for --yes, confirm and an already-queued --exec tail.
@@ -869,14 +865,6 @@ printf 'dash-reap-agent-cleanup pid=%s wait_rc=%s joined=%s phase=original_succe
   "$AG_PID" "$AG_WAIT_RC" "$AG_JOINED"
 [ "$AG_JOINED" = 1 ] || fail "owned agent wait did not yield a known exit; preserve fixture"
 
-# --- C. interactive terminal handoff (#451), asynchronous cleanup (#304) ------
-# execute() yields fzf's terminal for the inline confirm. B4 above still asserts
-# that the slow teardown is dispatched via run-shell -b after authorization.
-DASH="$BIN/tmux-dashboard.sh"
-grep -Fq '$DASH_KEY_REAP:execute(' "$DASH" \
-  || fail "reap bind must hand the terminal to its inline confirm (#451)"
-grep -Fq 'dash-reap.sh {2} --bg)' "$DASH" \
-  || fail "the dash bind must ask for the backgrounded tail explicitly (#1244)"
 
 fi
 

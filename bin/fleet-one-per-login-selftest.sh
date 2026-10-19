@@ -90,7 +90,6 @@ leg()  { if [ "$FAILS" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else pri
 SB="$WORK/root/bin"
 for f in "$BIN"/*; do ln -s "$f" "$SB/$(basename "$f")"; done
 mkdir -p "$WORK/root/shell"
-cp "$BIN/../shell/cw.zsh" "$WORK/root/shell/cw.zsh"
 rm -f "$SB/hub-session.sh" "$SB/tmux-dash-collect.sh" "$SB/fleet-diskguard.sh" "$SB/fleet-trust.sh"
 cat > "$SB/hub-session.sh" <<'EOF'
 #!/bin/bash
@@ -227,8 +226,6 @@ has "6 re-merge" "$out" "already merged"
 # the settings file wins over an install fleet.conf that reappears (dual-read)
 printf 'FLEET_Y=reinstalled\nFLEET_GLOBAL_MAX_SESSIONS=3\n' > "$WORK/root/fleet.conf"
 eq "6 settings win" "$(lib "$probe")" "o/a fleet install 7 7"
-# the config modal writes a global key to the settings file once it exists
-eq "6 modal target" "$(bash -c ". '$SB/fleet-config-lib.sh'; fcfg_target_conf fleet-cf global")" "$FLEET_CONF_DIR/fleet.settings"
 rm -f "$WORK/root/fleet.conf"
 mkdir -p "$FLEET_CONF_DIR/fleets/two"; printf 'FLEET_REPO="o/b"\n' > "$FLEET_CONF_DIR/fleets/two/conf"
 rm -f "$FLEET_CONF_DIR/fleet.settings"
@@ -413,11 +410,8 @@ eq "9 starts without guide" "$(wins '#{window_name}' | grep -cx guide)" 0
 guide() {
   local pane
   pane=$(tmux -L fleet list-panes -t fleet:plan -F '#{pane_id}' | head -n1)
-  if command -v zsh >/dev/null 2>&1; then
-    TMUX="$SOCKD/fleet,0,0" TMUX_PANE="$pane" zsh -f -c ". '$WORK/root/shell/cw.zsh'; cf --guide" 2>&1
-  else
-    TMUX="$SOCKD/fleet,0,0" TMUX_PANE="$pane" bash "$SB/fleet-guide.sh" 2>&1
-  fi
+  # (`cf --guide` went with shell/cw.zsh, issue #4902: the script is the road)
+  TMUX="$SOCKD/fleet,0,0" TMUX_PANE="$pane" bash "$SB/fleet-guide.sh" 2>&1
 }
 tmux -L fleet select-window -t fleet:plan
 out=$(guide); eq "9 open rc" "$?" 0

@@ -1403,7 +1403,6 @@ fi
 
 # --- ui -------------------------------------------------------------------------
 uiargs=()
-touched bin/tmux-dashboard.sh || touched bin/tmux-dashboard-rows.sh && uiargs+=(--dash)
 beforeconf=''
 # The bar's two files are sourced BY tmux-attention.conf (issue #1534), so a
 # change to either reloads it the same way; so is the human key layer (#1840),

@@ -24,23 +24,13 @@ export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"   # ${#s} mus
 case "$0" in */*) BIN="${0%/*}" ;; *) BIN=. ;; esac   # forkless dirname (issue #888)
 BIN="$(cd "${BIN:-/}" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
-. "$BIN/fleet-lib.sh"   # fleet_cache: route prmap through THIS fleet's slug'd cache
+. "$BIN/fleet-lib.sh"   # fleet_cache: route the caches through THIS fleet's slug'd dir
 . "$BIN/fleet-ui-lang.sh"
 [ -n "${FLEET_SESSION:-}" ] && fleet_load_conf "$FLEET_SESSION" 2>/dev/null || true
 C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; [ -d "$C" ] || mkdir -p "$C"   # 1Hz path: no exec once it exists (#888)
 G="$C/global"                       # machine-wide caches (git_/ctx_) — issue #181
 # --rows (named --sidebar until issue #3732): the rows the 看台's list draws.
 SIDEBAR=0; case "${1:-}" in --rows) SIDEBAR=1 ;; esac
-
-# live⇄landed view toggle (dash ⌃t writes $C/dash_view_<session>, per-fleet). In
-# LANDED mode this producer hands off to the history ledger's row emitter, so
-# finished (merged + cleaned-up) sessions are one keystroke away with the same row
-# ergonomics (#130). Keyed by FLEET_SESSION so one fleet's toggle can't flip
-# another's dash (they share $C); FLEET_SESSION is exported by tmux-dashboard.sh.
-_view=''; [ -f "$G/dash_view_${FLEET_SESSION:-default}" ] && IFS= read -r _view < "$G/dash_view_${FLEET_SESSION:-default}" 2>/dev/null
-if [ "$SIDEBAR" = 0 ] && [ "$_view" = landed ]; then
-  exec bash "$BIN/fleet-history.sh" rows
-fi
 
 E=$'\033['
 # Colours: conf/fleet-palette.conf, the fleet's ONE colour table (issue #1534), as
@@ -271,19 +261,12 @@ okp_v() { okp=''
 model_v() {
   case "$1" in *haiku*) cwin=200000;; *) cwin=${FLEET_CTX_WINDOW:-200000};; esac; }
 
-# The PR map is per REPO, never per fleet (issues #792, #1940): identity is
-# (repo, branch), never the branch alone — two repos can each have an `issue-3`,
-# and one per-fleet prmap would paint repo A's green check on repo B's unfinished
-# work. So every window is looked up in its OWN repo's prmap (fleets/<slug>/prmap,
-# deploy_<sha> beside it — issue #541), however many repos the fleet hosts (a
-# one-repo fleet's sessmap slug IS its repo's slug, so that is the same file it
-# always read), and the frame's haystack is keyed `<slug>\t<branch>` — ONE
-# narrowed string per frame, built by ONE awk over the repos on screen, so #662's
-# per-frame bound holds. The CONTENT is loaded after pass A, which is what collects
-# the (repo, branch) pairs this frame actually needs. The window's repo is its
-# @repo (pr-refresh stamps it via fleet_window_repo within a tick); `@norepo 1`
-# has none; an unstamped window falls back to the fleet's ONLY repo, and in a 2+
-# repo fleet is unknown → no PR cell, never a guess.
+# The caches are per REPO, never per fleet (issues #792, #1940): identity is
+# (repo, …), never a bare number — two repos can each have an `issue-3`. So every
+# window reads its OWN repo's caches (fleets/<slug>/…), however many repos the
+# fleet hosts. The window's repo is its @repo; `@norepo 1` has none; an unstamped
+# window falls back to the fleet's ONLY repo, and in a 2+ repo fleet is unknown →
+# no lookup, never a guess.
 # The fleet's repo list is read ONCE a frame (rlist_v, EPIC #1935 rule 5), and
 # only when some window needs it: RONLY = its only repo ('' for none / 2+),
 # RZERO = 1 when it hosts none — and then RCSLUG is the collector's slug for the
@@ -305,8 +288,8 @@ rslug_v() { rslug=''
   [ -n "$r" ] || return
   r=${r//\//-}; rslug=${r//[^[:alnum:]._-]/}               # = fleet_slug, fork-free
 }
-# cslug_v <@repo> <@norepo> → $rslug, the slug whose caches (prmap, issues,
-# deploy_<sha>) the window's PR cell and title read: rslug_v's, else — a fleet
+# cslug_v <@repo> <@norepo> → $rslug, the slug whose caches (issues) the
+# window's title reads: rslug_v's, else — a fleet
 # hosting no repo — the collector's (RCSLUG). Keys never use it (okp_v).
 cslug_v() {
   rslug_v "$1" "$2"
@@ -402,18 +385,6 @@ if [ "$RGRP" = 1 ]; then
   RGTAG[RNREPO]='⇢?'; RGTAG[RNREPO + 1]="$(fleet_ui_t repo_none_tag)"
 fi
 
-# branch → the three spellings the PR cell looks a row up by, in the order it
-# tries them: the branch EXACTLY as the git cache has it, then with a trailing
-# `+<ahead>` stripped, then with a trailing `-<behind>` stripped. Exact comes
-# first because a real branch name can itself end in `-<digits>` (`issue-231`),
-# and the old sed-strip wrongly ate that.
-# ONE definition, used by BOTH the pass-A collector below and the render loop —
-# they must agree on what a row's candidates are, or the frame's haystack would
-# be missing the very line the loop then looks for.
-prcands_v() { b1="$1"
-  b2=$b1; case "$b2" in *-[0-9]|*-[0-9][0-9]|*-[0-9][0-9][0-9]|*-[0-9][0-9][0-9][0-9]) b2=${b2%-*};; esac
-  b3=$b2; case "$b3" in *+[0-9]|*+[0-9][0-9]|*+[0-9][0-9][0-9]|*+[0-9][0-9][0-9][0-9]) b3=${b3%+*};; esac
-}
 
 # window cwd → the collector's cache key. Keep byte-identical to cache_key() in
 # tmux-dash-collect.sh; pass A and the render loop both derive it.
@@ -464,7 +435,7 @@ WLIST=${WLIST//\\037/$US}
 #              machine's 失联 heading
 #   @expand    THIS machine's word on it (issue #1749): a remote row's fold bit
 #              lives here, never on the other machine — global/remote_fold_<sess>,
-#              one expanded worker_id per line, written by dash-fold-toggle.sh.
+#              one expanded worker_id per line (the dash's fold wrote it; gone, #4902).
 #              Absent ⇒ collapsed, the local rows' polarity, so a client (where
 #              EVERY row is remote) folds like a node does
 # Off, or no cache: not one extra line, and no file read at all when off.
@@ -608,7 +579,7 @@ fi
 # @repo_fold (#1037) last — the session's folded repo groups, one value on every
 # line of this fleet, taken off the first (panels included: a fleet whose only
 # windows are panels still draws its `(0)` headings, folded or not).
-KEYTAB=''; PRWANT=''; RSLUGS=' '; RFOLD=''; UNFIN=$'\n'
+KEYTAB=''; RFOLD=''; UNFIN=$'\n'
 # The issue titles this frame needs (issue #1921, --rows only): a local row's
 # (repo, #issue) key, looked up once below in its repo's issue cache.
 ITWANT=''; ISLUGS=' '; DRIVEN=' '
@@ -618,20 +589,6 @@ while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp
   RFOLD=$rfold
   case "$name" in dash|plan|backlog|home) continue;; esac
   rgrp_v "$wrepo" "$wnorepo"
-  # Collect the branch spellings this frame will look up in the prmap (issue
-  # #662) — BEFORE the okey filter below, because a window with no addressable
-  # key still RENDERS in pass B and still gets a PR cell. Its only cost is the
-  # same one-line git_ cache read pass B already does.
-  ckey_v "$path"
-  prbr=''; [ -f "$G/git_$ckey" ] && { IFS=$'\t' read -r prbr _ < "$G/git_$ckey" || :; }
-  case "$prbr" in ''|-) ;; *)
-    prcands_v "$prbr"
-    cslug_v "$wrepo" "$wnorepo"         # (repo, branch) keys — issue #792
-    if [ -n "$rslug" ]; then
-      PRWANT+="$rslug"$'\t'"$b1"$'\n'"$rslug"$'\t'"$b3"$'\n'"$rslug"$'\t'"$b2"$'\n'
-      case "$RSLUGS" in *" $rslug "*) ;; *) RSLUGS+="$rslug " ;; esac
-    fi ;;
-  esac
   # Another machine's row too (issue #4225): its title stays the hub's, but
   # whether its issue is still open (the 已结束 rule below) is this cache's word.
   if [ "$SIDEBAR" = 1 ]; then
@@ -667,31 +624,6 @@ while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp
   [ "$rk" = 1 ] && { [ "$state" != 'done' ] || loop_live_v "$wloop"; } && UNFIN+="$okey"$'\n'
 done <<< "$WLIST"
 
-# The PR haystack for THIS frame (issue #662). The render loop looks a branch up
-# with `${PRMAPN#*$'\n'"$bare"$'\t'}` — a leading-`*` pattern match, which bash
-# walks in time proportional to the string it is given, up to three times per row.
-# Handed the whole prmap that made ONE FRAME cost O(prmap × windows): on a
-# 6-window fleet with an 88-line prmap, 270ms of a 380ms frame, and it grew every
-# time the repo landed a PR (a 2000-line prmap took 21s — bin/dash-rows-prmap-
-# scale-selftest.sh). So the haystack is narrowed ONCE here, to just the lines
-# whose branch some window on screen can actually ask for: one awk pass over the
-# file, and the loop's own logic below is untouched — it simply scans a string
-# that is now a handful of lines instead of kilobytes.
-# PRWANT rides the ENVIRONMENT, not `-v`: awk processes escape sequences in a -v
-# assignment, so a branch containing a backslash would arrive mangled and its row
-# would silently lose its PR cell.
-# One awk over every on-screen repo's prmap; each line comes out prefixed with
-# its repo's slug (the dir it was read from), so the lookup key is (repo, branch).
-PRMAPN=$'\n'
-PRFILES=()
-for _s in $RSLUGS; do [ -s "$FLEET_C/fleets/$_s/prmap" ] && PRFILES+=("$FLEET_C/fleets/$_s/prmap"); done
-if [ "${#PRFILES[@]}" -gt 0 ] && [ -n "$PRWANT" ]; then
-  PRMAPN=$'\n'$(PRWANT="$PRWANT" awk -F'\t' '
-    BEGIN { n = split(ENVIRON["PRWANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
-    { d = FILENAME; sub(/\/prmap$/, "", d); sub(/.*\//, "", d); if ((d "\t" $1) in want) print d "\t" $0 }' \
-    ${PRFILES[@]+"${PRFILES[@]}"} 2>/dev/null)
-fi
-
 # THE BATCHES NOBODY DRIVES (issue #1916, sidebar only). A heartbeat mark
 # (epic-running.d/<slug>-<N>, fleet-epic-heartbeat.sh) gone stale while its EPIC
 # is still OPEN — on the collector's open-issue list, looked up in the title
@@ -726,7 +658,7 @@ if [ "$SIDEBAR" = 1 ] && [ -d "$FLEET_CONF_DIR/global/epic-running.d" ]; then
 fi
 
 # The issue-title haystack (issue #1921): one awk over each on-screen repo's
-# issue cache (beside its prmap), narrowed to the keys pass A collected, `<key>\t<title>` a line. The cache line
+# issue cache, narrowed to the keys pass A collected, `<key>\t<title>` a line. The cache line
 # is `milestone\t#num\tassignee\ttitle`. No issue row on screen ⇒ no fork.
 ITTL=$'\n'; ITOK=' '
 if [ -n "$ITWANT" ]; then
@@ -867,7 +799,7 @@ done <<< "$KEYTAB"
 
 # RGFOLD[g]=1 — the repo groups this frame draws FOLDED (issue #1037): @repo_fold
 # is the space-separated slugs of the folded groups (a repo's fleet_slug, `none`
-# for the no-repo group), set by dash-fold-toggle.sh from ←/→ on a heading and
+# for the no-repo group), set by the dash's ←/→ on a heading (gone, #4902) and
 # UNSET once the last one opens — so a fleet nobody folded reads exactly as
 # before. Resolved through RGRPMAP once a frame; a slug the fleet no longer
 # hosts resolves to nothing and folds nothing. Only a grouping frame has
@@ -989,7 +921,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     fi
   fi
   # strict per-fleet: only windows from the viewing dash's own tmux session.
-  # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
+  # FLEET_SESSION from the caller; unset ⇒ show all (single-fleet).
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog|home) continue;; esac   # panels, not Claude sessions
   NSESS=$((NSESS + 1))                                 # a session row this frame (#998)
@@ -1014,77 +946,15 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     codex) ctxkey="codex_unknown" ;; # older launcher: unknown, never Claude data
   esac
 
-  branch='-'
-  [ -f "$G/git_$key" ] && { IFS=$'\t' read -r branch _ < "$G/git_$key" || :; }
-
   state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"
   nmcol=$TX; { [ "$state" = idle ] || [ -z "$state" ]; } && nmcol=$GY
   [ -n "$rlost" ] && nmcol=$GY                        # a lost machine's row dims (#1475)
 
-  # PR cell: look up the branch in prmap. The cache branch may carry +ahead/-behind
-  # decorations; try EXACT first (real branch names can end in -digits, e.g.
-  # issue-231 — the old sed-strip wrongly ate that), then decoration-stripped.
-  # The key is prefixed with the window's repo slug, and its deploy_<sha> verdicts
-  # come from that repo's dir (issue #792); no repo → '—'.
-  ptxt='—'; pcol=$GY; pdep=''
-  cslug_v "$wrepo" "$wnorepo"; rpfx="$rslug"$'\t'; rowdir="$FLEET_C/fleets/$rslug"
-  if [ "$branch" != '-' ] && [ -n "$branch" ] && [ -n "$rslug" ]; then
-    prcands_v "$branch"
-    for bare in "$b1" "$b3" "$b2"; do
-      tail=${PRMAPN#*$'\n'"$rpfx$bare"$'\t'}
-      if [ "$tail" != "$PRMAPN" ]; then
-        line=${tail%%$'\n'*}
-        # line = #num\tstate\tci\tready\tsha. Parse each; ready / sha may be absent
-        # on a stale 4-/5-field cache (mid-upgrade) — tab-guard so each degrades to ''.
-        pnum=${line%%$'\t'*}   # "#num" — field 1, surfaced into the OPEN-PR cell
-        rest=${line#*$'\t'}; st=${rest%%$'\t'*}; after=${rest#*$'\t'}
-        ci=${after%%$'\t'*}; ready=''; msha=''
-        case "$after" in *$'\t'*)
-          ready=${after#*$'\t'}
-          case "$ready" in *$'\t'*) msha=${ready#*$'\t'}; msha=${msha%%$'\t'*}; ready=${ready%%$'\t'*};; esac;;
-        esac
-        case "$st" in
-          MERGED) pcol=$IN; ptxt="merged"
-                  # merged ≠ live (issue #541): the deploy probe's verdict for this
-                  # merge sha, when the fleet has one. 7 cells, single-cell glyphs.
-                  dst=''
-                  [ -n "$msha" ] && [ -f "$rowdir/deploy_$msha" ] && { read -r dst _ < "$rowdir/deploy_$msha" || :; }
-                  case "$dst" in
-                    live)      ptxt='live';    pcol=$GN;;   # merge sha is in the deployment
-                    deploying) ptxt='deploy…'; pcol=$TX;;   # post-merge runs still going
-                    failed)    ptxt='deploy✗'; pcol=$RD;;   # a post-merge run went red
-                    # probed, not there yet (issue #4225): the cell stays `merged`,
-                    # the --rows line says it in field 20 — ⌘P's 等发布列车
-                    unknown)   pdep=unknown;;
-                  esac;;
-          CLOSED) pcol=$GY; ptxt="closed";;
-          *) case "$ci" in
-               ✓) pcol=$GN
-                  # green: decorate by land-readiness (single-cell glyphs only —
-                  # the metadata column is width-budgeted; no 2-cell emoji).
-                  case "$ready" in
-                    behind)   ptxt='✓↑'; pcol=$AM;;   # behind base → update-branch
-                    conflict) ptxt='✓!'; pcol=$RD;;   # conflicting → rebase
-                    blocked)  ptxt='✓·'; pcol=$AM;;   # mergeable+green but blocked
-                    draft)    ptxt='✓d'; pcol=$GY;;   # a DRAFT — can't land; gh pr ready (#533)  no-gh-ok: a comment
-                    unknown)  ptxt='✓?'; pcol=$TX;;   # mergeability not computed yet (#533)
-                    *)        ptxt='✓';;              # land-ready (ready, or a 4-field cache)
-                  esac;;
-               ✗) pcol=$RD; ptxt="$ci";;
-               …) pcol=$TX; ptxt="$ci";;
-               *) pcol=$GY; ptxt="$ci";;
-             esac
-             # OPEN PR → prefix the number next to the glyph (e.g. #75✓, #75✓↑).
-             # #<4-digit> + 2-cell readiness glyph = 7 = the fld 7 ceiling. All
-             # these glyphs are single display cells so ${#}==width; prefix ONLY
-             # when it fits, else keep the glyph (the land signal) glyph-only —
-             # never let fld's right-clip eat the glyph on a huge PR number.
-             [ $(( ${#pnum} + ${#ptxt} )) -le 7 ] && ptxt="$pnum$ptxt";;
-        esac
-        break
-      fi
-    done
-  fi
+  # PR cell (issue #4902): the rows read no PR map any more — a session's PR is
+  # its hub task record's (T<n>.pr), which ⌘P's row menu reads on demand
+  # (fleet_view.py facts). The slot stays, '—', so every reader's columns hold.
+  ptxt='—'; pcol=$GY
+  cslug_v "$wrepo" "$wnorepo"
 
   # model + ctx%
   cmodel=''; ctok=''; climit=''
@@ -1386,17 +1256,17 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # has not run. Drills 35–38: a newcomer's first session went `done` after its
   # first reply and dropped out of `fleet ls` at once. No state stamp = as before.
   # A root bound to an issue is over too (issue #4225) once its issue is closed
-  # (off this repo's open-issue list — ITOK: only a list that was read says so),
-  # its PR merged and out (`merged` with no deploy verdict pending, or `live` — a
-  # deploy still to come is ⌘P's 等发版, never 已结束), and its last state older
+  # (off this repo's open-issue list — ITOK: only a list that was read says so)
+  # and its last state (done / exited) older
   # than the 刚落地 window (FLEET_VIEW_LANDED_SECS, 24 h) — unless its person
   # chose to keep it (keep · at:… · loop-end). The sidebar, `fleet ls` and ⌘P
   # read this one mark.
   repod=''; ended=0
-  if [ "$pinned" = 1 ] && [ "$depth" = 0 ] && [ -n "$iss" ] && [ -z "$carg" ] && [ "$SIDEBAR" = 1 ] && [ -z "$pdep" ]; then
-    case "$state:$ptxt:$wreap" in
-      *:*:keep|*:*:at:*|*:*:loop-end) ;;
-      done:merged:*|done:live:*|exited:merged:*|exited:live:*)
+  # The rows carry no PR any more (issue #4902), so the closed issue alone says it.
+  if [ "$pinned" = 1 ] && [ "$depth" = 0 ] && [ -n "$iss" ] && [ -z "$carg" ] && [ "$SIDEBAR" = 1 ]; then
+    case "$state:$wreap" in
+      *:keep|*:at:*|*:loop-end) ;;
+      done:*|exited:*)
         case "$ITOK" in *" $rslug "*)
           case "$ITTL" in *$'\n'"$rslug"$'\t#'"$iss"$'\t'*) ;; *)
             _lo=0 _cnt=0
@@ -1588,14 +1458,8 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # 配置旧 left of the @ mark on a stale one, 待换新 on a renew one (issue #1895),
     # a red 会坏·需重开 on a broken one (issue #2076). Absent when unknown, so a login with no expected file
     # (or a session from before #1782) emits its rows byte for byte as before.
-    # field 20 (issue #4225): `unknown` — the PR merged, the deploy probe has not
-    # seen it live yet (⌘P's 等发布列车). Fields 13-19 stay, empty, before it;
-    # nothing to say ⇒ no field, byte for byte as before.
-    if [ -n "$pdep" ]; then
-      _nf=${cfgf//[!$US]/}; _nf=${#_nf}
-      while [ "$_nf" -lt 7 ]; do cfgf+=$US; _nf=$((_nf + 1)); done
-      cfgf+="$US$pdep"
-    fi
+    # field 20 (issue #4225) said a merged PR's deploy was still to come; the rows
+    # carry no PR since #4902, so it is never written — the slot stays for field 21.
     # #4504: explicit single-row reads only. This is a bounded cache read,
     # never a provider/process probe; original proof times remain untouched.
     _proof=''
@@ -1843,7 +1707,7 @@ fi
 # `{2}:{4}` — field 2 is a session row's window id (`@12`) and a heading's `hdr`;
 # field 1 is the `sess:idx` jump target, which the resolver does not read (#1010).
 # Both key fields stay `hdr`, so every other bind still ignores it — except ←/→
-# (issue #1037): dash-fold-toggle.sh reads that same 4th field (the sidebar its
+# (issue #1037): the dash's fold (gone, #4902) read that same 4th field (the sidebar its
 # `hdr:<target>` key) and folds the group, and a FOLDED heading wears the
 # parent rows' `▸` — `▸ tokenledger (2)`, its count still the rows it hides. An
 # open one is drawn exactly as before. One pass over the repos —
@@ -1894,16 +1758,13 @@ fi
 
 # the empty state (issue #998): a frame with no session row says so, and how to
 # start one, in ONE inert `hdr` row at the top — never a blank list under the
-# column header. The hub list spells out both ways in (the query line, the
-# new-task key off dash-keymap.sh); the 30-column sidebar keeps it short, its
-# input line sits right below. Only an empty frame pays the keymap fork.
+# column header (⌘P's ⚡ row opens one, issue #4902 — the dash's keys are gone).
 if [ "$NSESS" = 0 ]; then
   if [ "$SIDEBAR" = 1 ]; then
     t=$(fleet_ui_t empty_sidebar)
     buf+="-1	-1	0	hdr$US$US$US$t$US "$'\n'
   else
-    DASH_GLYPH_NEW='⌃n'; eval "$(bash "$BIN/dash-keymap.sh" env 2>/dev/null)"
-    t=$(fleet_ui_t empty_dash_fmt "$DASH_GLYPH_NEW")
+    t=$(fleet_ui_t empty_dash)
     buf+="-1	-1	0	hdr${US}hdr${US}${GY}  ${t}${R}"$'\n'
   fi
 fi

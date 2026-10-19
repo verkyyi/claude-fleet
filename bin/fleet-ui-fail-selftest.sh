@@ -60,7 +60,7 @@ if command -v python3 >/dev/null 2>&1; then
 fi
 
 # --- D. lint ---------------------------------------------------------------------
-SCRIPTS="dash-issue-session.sh dash-raw-session.sh dash-reap.sh dash-issue-new.sh dash-new-session.sh"
+SCRIPTS="dash-issue-session.sh dash-raw-session.sh dash-reap.sh"
 hits=''
 for f in $SCRIPTS; do
   h=$(grep -nE 'display-message[^|]*(✓|spawned|reaped|closed scratch|filed|checking #|spawning #)' "$BIN/$f" \

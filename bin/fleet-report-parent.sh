@@ -248,6 +248,18 @@ fi
 # default forever.
 sess="$SOCK"; [ -n "$sess" ] || sess=$(fleet_current_session)
 [ -n "$sess" ] && fleet_load_conf "$sess"
+
+# The PR goes on the task record (issue #4902): ⌘P's row reads a session's PR
+# off its hub record T<n>.pr, never a PR map. Detached, before the report's own
+# gates — a report the parent cannot take still names its PR there. No record,
+# no PR, a dry run or no hub (exit 3) ⇒ nothing.
+if [ -n "$wtask" ] && [ "$DRY" != 1 ]; then
+  _prn="${PR//[^0-9]/}"
+  if [ -n "$_prn" ]; then
+    _prrepo=$(fleet_window_repo "$sess" "$selfwin" 2>/dev/null)
+    [ -n "$_prrepo" ] && ( bash "$BIN/fleet-task-record.sh" set "$wtask" --pr "$_prrepo#$_prn" >/dev/null 2>&1 & )
+  fi
+fi
 # shellcheck source=/dev/null
 [ -f "$BIN/fleet-children-lib.sh" ] && . "$BIN/fleet-children-lib.sh"
 if command -v children_report_mode >/dev/null 2>&1; then

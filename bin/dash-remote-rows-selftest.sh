@@ -5,7 +5,7 @@
 # name on a row — #1475); no machine status line on top (#1531); a lost machine's rows dimmed
 # where they stand (#1882). Drives tmux-dashboard-rows.sh, fleet-hub-sessions.sh,
 # fleet-control-read.sh + fleet_control.py, and the read-only guards in
-# dash-fold-toggle.sh, dash-pin-toggle.sh and dash-migrate.sh.
+# dash-pin-toggle.sh and dash-migrate.sh.
 #
 # Legs:
 #   A. degenerate — CCQUOTA_FLEET unset: a remote cache on disk changes NOTHING
@@ -109,7 +109,7 @@
 #                   else a VALID connection certificate (a signed POST), else the viewer
 #                   token (a bearer GET), else nothing is fetched and --identity says why;
 #                   an expired certificate is skipped
-#   F. read-only  — fold / pin / migrate on a `wid:` row touch no tmux option
+#   F. read-only  — pin / migrate on a `wid:` row touch no tmux option
 #   G. inventory  — the real adapter on an isolated socket hands fleet_control.py the
 #                   window name, @origin_wid and @claude_needs; a 9-column adapter still
 #                   parses
@@ -698,27 +698,14 @@ export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 
 # ============================================================================
-# F. read-only — and the fold is THIS machine's (issue #1749)
+# F. read-only
 # ============================================================================
 : > "$TMUX_LOG"
 rm -f "$G/remote_fold_$S"; cp "$G/remote_$S" "$WORK/remote.f"; remote_cache "$NOW"   # B's tree
-fold() { PATH="$SHIMPATH" FLEET_SESSION=$S DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle.sh" "$1" "$2" 2>/dev/null; }
-eq "F: → on a remote parent opens it" "reload(bash $BIN/tmux-dashboard-rows.sh)" "$(fold expand "wid:$F/issue-1423")"
-eq "F: …written to this machine's own file" "$F/issue-1423" "$(cat "$G/remote_fold_$S" 2>/dev/null)"
-eq "F: → on an open parent is a dead key" "" "$(fold expand "wid:$F/issue-1423")"
-eq "F: → on a remote leaf is a dead key" "" "$(fold expand "wid:$F/issue-1500")"
-eq "F: → on a row the cache does not list is a dead key" "" "$(fold expand "wid:$F/issue-9")"
-fold collapse "wid:$F/issue-1500" >/dev/null
-[ -e "$G/remote_fold_$S" ] && fail "F: ← on a remote child should shut its parent's block (the file goes)" "$(cat "$G/remote_fold_$S")"
-CHECKS=$((CHECKS + 1))
-eq "F: ← with nothing open is a dead key" "" "$(fold collapse "wid:$F/issue-1423")"
-printf '%s/issue-1423\n%s/issue-gone\n' "$F" "$F" > "$G/remote_fold_$S"
-fold expand "wid:$F/scratch-2" >/dev/null   # a leaf: no write, nothing pruned
-fold collapse "wid:$F/issue-1423" >/dev/null; fold expand "wid:$F/issue-1423" >/dev/null
-eq "F: a rewrite drops an id the cache no longer lists" "$F/issue-1423" "$(cat "$G/remote_fold_$S")"
+# (the fold toggle went with the dash, issue #4902: pin and migrate stay)
 PATH="$SHIMPATH" FLEET_SESSION=$S bash "$BIN/dash-pin-toggle.sh" "wid:$F/issue-1423" >/dev/null 2>&1
 PATH="$SHIMPATH" FLEET_SESSION=$S bash "$BIN/dash-migrate.sh" "wid:$F/issue-1423" >/dev/null 2>&1
-hasnt "F: fold/pin/migrate on a remote row set no tmux option" "$(cat "$TMUX_LOG")" "set-"
+hasnt "F: pin/migrate on a remote row set no tmux option" "$(cat "$TMUX_LOG")" "set-"
 mv "$WORK/remote.f" "$G/remote_$S"; rm -f "$G/remote_fold_$S"
 
 # ============================================================================

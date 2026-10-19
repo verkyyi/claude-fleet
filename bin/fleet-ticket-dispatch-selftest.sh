@@ -2,36 +2,32 @@
 # fleet-ticket-dispatch-selftest.sh — dispatch, claim and the panels go through the
 # ticket door for a repo whose tickets live on the hub (issue #3598, EPIC #3570 C5).
 #
-# A repo with FLEET_TICKETS=hub and FLEET_FORGE=none: list its tickets, preview one,
-# open a session on it (dash-issue-session.sh — the hub's atomic claim is the
-# pre-spawn gate), refuse a second session's claim (exit 3), release a claim
-# (fleet_issue_release_claim), set its priority (dash-issue-priority.sh), name its
-# window (fleet_issue_win_name) and close it (dash-issue-close.sh) — with a `gh`
-# stand-in that records every call and fails, asserted at 0 calls.
+# A repo with FLEET_TICKETS=hub and FLEET_FORGE=none: list its tickets, open a
+# session on it (dash-issue-session.sh — the hub's atomic claim is the pre-spawn
+# gate), refuse a second session's claim (exit 3), release a claim
+# (fleet_issue_release_claim) and name its window (fleet_issue_win_name) — with a
+# `gh` stand-in that records every call and fails, asserted at 0 calls. (The
+# backlog's preview, priority and close went with the backlog, issue #4902.)
 #
 # Hermetic: a stand-in hub (python, 127.0.0.1, an ephemeral port) answers C1's
 # /v1/fleet/tickets routes in memory; git and tmux are faked on PATH.
 #
-#   L. list + the collector's cache + the preview (tmux-issue-preview.sh)
+#   L. list + the collector's cache
 #   S. spawn: the claim is taken by this machine's claimant, the window opens
 #   R. a second machine's spawn is refused (exit 3, names the holder), no window
 #   U. release (fleet_issue_release_claim): claim dropped, one record-only line
-#   P. priority through dash-issue-priority.sh --commit (the ticket's own field)
 #   W. fleet_issue_win_name reads the body (and an EPIC parent) through the door
-#   C. close through dash-issue-close.sh
 #   Z. 0 gh calls through all of it
 #
 # The GitHub side (FLEET_TICKETS unset) is each script's own selftest, unchanged:
-# dash-issue-prespawn-dedup-selftest.sh, dash-issue-priority-selftest.sh,
-# dash-issue-close-selftest.sh, fleet-bind-selftest.sh, fleet-claim-brief-selftest.sh.
+# dash-issue-prespawn-dedup-selftest.sh, fleet-bind-selftest.sh, fleet-claim-brief-selftest.sh.
 #
-# Drives: bin/dash-issue-session.sh, bin/dash-issue-priority.sh, bin/dash-issue-close.sh,
-# bin/tmux-issue-preview.sh, bin/fleet-ticket.sh, fleet_ticket_hub / fleet_ticket_view /
+# Drives: bin/dash-issue-session.sh, bin/fleet-ticket.sh, fleet_ticket_hub / fleet_ticket_view /
 # fleet_ticket_claimant / fleet_issue_release_claim / fleet_issue_win_name (bin/fleet-lib.sh).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-for f in dash-issue-session.sh dash-issue-priority.sh dash-issue-close.sh tmux-issue-preview.sh fleet-ticket.sh fleet_ticket.py fleet-lib.sh fleet-client-core.sh; do
+for f in dash-issue-session.sh fleet-ticket.sh fleet_ticket.py fleet-lib.sh fleet-client-core.sh; do
   [ -f "$BIN/$f" ] || { echo "selftest: $f missing" >&2; exit 2; }
 done
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 absent — SKIP" >&2; exit 0; }
@@ -177,9 +173,7 @@ T new --filed --repo acme/app --title '第二张' --body 'b' --label bug >/dev/n
 D="$WORK/cache"
 E python3 "$BIN/fleet_ticket.py" cache --repo acme/app --dir "$D" || fail "L the collector's cache"
 grep -qF "$(printf '#1\t·\t入口里的一张单')" "$D/issues" || fail "L the sidebar's row" "$(cat "$D/issues")"
-pv=$(E FZF_PREVIEW_COLUMNS=80 bash "$BIN/tmux-issue-preview.sh" 1 --repo=acme/app 2>&1)
-case "$pv" in *'入口里的一张单'*'先做这个'*) ;; *) fail "L the preview renders the hub ticket" "$pv" ;; esac
-ok "L list · the collector's cache · the preview, all from the hub"
+ok "L list · the collector's cache, all from the hub"
 
 # ============================ S: spawn claims it ===============================
 spawn 1
@@ -207,25 +201,12 @@ cm=$(T read 'hub:acme/app#1' --json comments)
 case "$cm" in *'The session ended unlanded. The ticket stays OPEN'*'fleet:no-relay'*) ;; *) fail "U one record-only line" "$cm" ;; esac
 ok "U release: claim dropped, one record-only line on the ticket"
 
-# ============================ P: priority =====================================
-E bash "$BIN/dash-issue-priority.sh" 2 --commit p1 --repo=acme/app >/dev/null 2>&1 || fail "P set p1"
-[ "$(T read 'hub:acme/app#2' --json priority | jq -r .priority)" = p1 ] || fail "P the ticket's priority is p1"
-E bash "$BIN/dash-issue-priority.sh" 2 --commit '' --repo=acme/app >/dev/null 2>&1 || fail "P clear"
-[ "$(T read 'hub:acme/app#2' --json priority | jq -r .priority)" = '' ] || fail "P cleared"
-ok "P dash-issue-priority.sh sets / clears the hub ticket's priority"
-
 # ============================ W: window name ==================================
 T new --filed --repo acme/app --title '总单：不靠GH' --body '<!-- fleet:epic repo=acme/app short=不靠GH -->' >/dev/null || fail "W seed the EPIC"
 T new --filed --repo acme/app --title '成员' --body '<!-- fleet:epic-member epic=3 key=C1 -->' >/dev/null || fail "W seed the member"
 wn=$(E bash -c '. "$1/fleet-lib.sh"; FLEET_C="$2"; fleet_issue_win_name acme/app 4 "成员"' _ "$BIN" "$WORK/tmp") || fail "W fleet_issue_win_name"
 case "$wn" in *不靠GH*) ;; *) fail "W the member's window wears its batch's 简称 (body + parent through the door)" "$wn" ;; esac
 ok "W fleet_issue_win_name reads body and EPIC parent through the door ($wn)"
-
-# ============================ C: close ========================================
-printf 'y' | E bash "$BIN/dash-issue-close.sh" 2 --repo=acme/app >/dev/null 2>&1
-for _ in $(seq 1 50); do [ "$(T read 'hub:acme/app#2' --json state | jq -r .state)" = CLOSED ] && break; sleep 0.1; done
-[ "$(T read 'hub:acme/app#2' --json state | jq -r .state)" = CLOSED ] || fail "C dash-issue-close.sh closed the hub ticket"
-ok "C dash-issue-close.sh closes the hub ticket"
 
 # ============================ Z: GitHub never asked ============================
 [ ! -s "$GHLOG" ] || fail "Z a hub repo's dispatch called gh"

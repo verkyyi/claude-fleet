@@ -12,8 +12,7 @@
 #   • NO LEAK   an overlay with no deploy keys writes nothing: the conf repo's
 #               FLEET_DEPLOY_REF must not reach it.
 #   • DEGENERATE no repos/ overlay → the conf repo's ref mode, exactly as before.
-#   • DASH      two windows — same branch name, one per repo — each render `live`
-#               off their own repo's deploy_<sha>.
+#   (The DASH leg went with the rows' PR cell, issue #4902.)
 #
 # Hermetic: gh/tmux are PATH shims, git runs on a throwaway repo, every cache lands
 # under TMPDIR=$WORK. Exit 0 = pass.
@@ -22,7 +21,6 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-repo-fixture.sh"
 REFRESH="$BIN/tmux-pr-refresh.sh"
-ROWS="$BIN/tmux-dashboard-rows.sh"
 command -v git >/dev/null 2>&1 || { printf 'deploy-multirepo-selftest: git absent — SKIP\n'; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/deploy-multirepo-selftest.XXXXXX")" || exit 2
@@ -131,27 +129,5 @@ hasnt "degenerate: … still no gh api" "$(cat "$WORK/gh.log")" "actions/runs"
 refresh acme/app
 [ -z "$(ls "$FA"/deploy_* 2>/dev/null)" ] || fail "degenerate: a repo the fleet does not host gets no deploy state" "$(ls "$FA")"
 CHECKS=$((CHECKS+1))
-
-# ============================================================ DASH (one live row per repo)
-overlay 'FLEET_DEPLOY_CHECK="actions"'
-reset
-refresh acme/tool; refresh acme/app
-: > "$FT/prmap.ts"; : > "$FA/prmap.ts"
-US=$'\x1f'; GN=$'\033[38;2;158;206;106m'; R=$'\033[0m'
-gk() { local k=${1//_/_u}; k=${k//\//_s}; k=${k// /_w}; printf '%s' "$k"; }
-for p in /w/tool-issue-1 /w/app-issue-1; do printf 'issue-1\tclean\n' > "$C/global/git_$(gk "$p")"; done
-WLIST_FILE="$WORK/wlist"; export WLIST_FILE
-# Field order MUST match WFMT in tmux-dashboard-rows.sh (see dash-rows-multirepo-pr-selftest):
-# 1 session · 2 idx · 3 name · 4 path · 5 state · 6 state_ts · 7 window_id · 8 @issue ·
-# 9 @origin · 10 @worktree · 11–19 (empty) · 20 @repo · 21 @norepo
-w() { printf '%s\n' "$SESS$US$1$US$2$US$3${US}idle$US$US@$1$US$4$US$US$3$US$US$US$US$US$US$US$US$US$US$5$US" >> "$WLIST_FILE"; }
-: > "$WLIST_FILE"
-w 1 tool1 /w/tool-issue-1 1 acme/tool
-w 2 app1  /w/app-issue-1  1 acme/app
-out=$(FLEET_SESSION="$SESS" FZF_COLUMNS=140 bash "$ROWS" 2>&1) || fail "rows producer exited non-zero" "$out"
-row_of() { printf '%s\n' "$out" | grep -F "$SESS:$1$US"; }
-has "dash: the ref-mode repo's row reads live"     "$(row_of 1)" "${GN}live   ${R}"
-has "dash: the actions-mode repo's row reads live" "$(row_of 2)" "${GN}live   ${R}"
-[ -n "${DEPLOY_MULTIREPO_SHOW:-}" ] && printf '%s\n' "$out"
 
 printf 'deploy-multirepo-selftest: OK (%d checks) — each repo keeps its own deploy signal in a shared fleet (issue #805)\n' "$CHECKS"

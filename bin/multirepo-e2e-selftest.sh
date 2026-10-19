@@ -14,10 +14,11 @@
 #          daemon wake marker (issue #1104), and fleet-doctor's `repos` row then
 #          lists both repos — the one-repo fleet beside it gets its one-repo row.
 #   spawn  issue #12 in BOTH repos, a scratch in both, a no-repo session.
-#   (a) PR/CI by branch name     each issue-12 row shows its OWN repo's PR.
+#   (a) PR/CI by branch name     no issue-12 row shows another repo's PR (the rows
+#                                carry none since issue #4902).
 #   (b) cleanup by bare number   A's PR merges; one cleanup tick reaps A's #12
 #                                window + worktree, B's #12 window + worktree live.
-#   (c) issue-number collisions  spawn dedup, the backlog's bound map and the
+#   (c) issue-number collisions  spawn dedup and the
 #                                ledger row are keyed on (repo, 12); a worker's
 #                                fleet-comment.sh with no (or an empty) --repo
 #                                posts on its window's repo (issue #1461).
@@ -28,8 +29,8 @@
 #                                worktrees, each registered to its own checkout.
 #   (g) guard / trust            the base guard refuses an edit into EITHER base
 #                                checkout; B's worktree is pre-trusted.
-#   (h) collector/backlog/hub    `all` lists both repos' backlog and dash rows;
-#                                picking B filters both to B.
+#   (h) collector/hub            `all` lists both repos' dash rows; a stale
+#                                picker file filters nothing.
 #   (i) restore                  snapshot → kill → restore brings B's windows back
 #                                with @repo, and the no-repo session with @norepo.
 #   (id) fleet identity          in B's worker pane (B's @repo overlay on, B's repo
@@ -40,7 +41,7 @@
 #   (p) hub inventory            the node agent's discover lists every hosted repo
 #                                (issue #1512), the one-repo fleet's its one repo.
 #   (z) one repo, one road       a one-repo fleet beside it takes the same road:
-#                                repo-carrying keys, backlog rows and restore rows,
+#                                repo-carrying keys and restore rows,
 #                                and its hub in $HOME.
 #   (n) adding a repo            a one-repo fleet with two sessions (one the other's
 #                                child) gains a second repo, then loses it: the
@@ -199,8 +200,6 @@ collect() {
   bash "$BIN/tmux-pr-refresh.sh" >"$WORK/refresh.out" 2>&1
 }
 
-backlog() { FLEET_SESSION="$1" bash "$BIN/tmux-issues-rows.sh" all 2>/dev/null; }
-f14() { tail -n +2 | awk -F '\037' '{ print $1 "|" $4 }' | tr '\n' ' '; }
 
 cmt() { local w="$1"; shift; inpane "$w" env -u FLEET_REPO FLEET_GH_WRITE_GAP=0 bash "$BIN/fleet-comment.sh" "$@" --note --body hi 2>"$WORK/cmt.err"; }
 
@@ -369,19 +368,19 @@ row_of() { printf '%s\n' "$rows" | awk -F '\037' -v w="$1" '$2==w {print; exit}'
 rows=$(dash)
 rA=$(row_of "$wA")
 rB=$(row_of "$wB")
-has   a "A#12's row shows A's PR merged" "$rA" "merged"
+# The rows read no PR map any more (issue #4902): no row can show another repo's
+# PR — nor its own; ⌘P reads a PR off the hub task record.
 hasnt a "A#12's row shows no B PR"     "$rA" "#201"
-has   a "B#12's row shows B's PR"      "$rB" "#201"
+hasnt a "A#12's row shows no PR state" "$rA" "merged"
 hasnt a "B#12's row shows no A PR"     "$rB" "#101"
+hasnt a "B#12's row shows no PR"       "$rB" "#201"
 rN=$(row_of "$wN")
 hasnt a "the no-repo row shows no PR"  "$rN" "#"
 
-# ==== (h) collector/backlog/hub: `all`, the only view (#1034) ==========================
-chk h "backlog under all: both repos, bound #12s hidden" "$(backlog "$S" | f14)" "30|o/alpha 31|o/beta "
+# ==== (h) collector/hub: `all`, the only view (#1034; the backlog went with #4902) ==========================
 has h "dash under all: A's scratch listed" "$(row_of "$sA")" "$(opt "$sA" window_name)"
 has h "dash under all: B's scratch listed" "$(row_of "$sB")" "$(opt "$sB" window_name)"
 printf 'o/beta\n' > "$FLEET_CONF_DIR/fleets/$S/current-repo"   # the retired picker's
-chk h "a stale current-repo file: backlog still both" "$(backlog "$S" | f14)" "30|o/alpha 31|o/beta "
 rows=$(dash)
 has h "a stale current-repo file: A's scratch still listed" "$(row_of "$sA")" "$(opt "$sA" window_name)"
 rm -f "$FLEET_CONF_DIR/fleets/$S/current-repo"
@@ -410,8 +409,6 @@ has e "the tick ran a pass for A" "$log" "PR #101"
 has e "the tick ran a pass for B" "$log" "[o/beta]"
 hasnt e "no pass reaped under B's MAIN" "$log" "PR #201"
 
-# (c) the backlog's bound map and the ledger: A#12 is free again, B#12 still bound.
-chk c "backlog after the merge: A#12 back, B#12 still bound" "$(backlog "$S" | f14)" "12|o/alpha 30|o/alpha 31|o/beta "
 
 fi
 
@@ -461,10 +458,6 @@ if [ -n "$wD" ]; then
     *) fail "(z) one-repo worktree: $(opt "$wD" @worktree)" ;; esac
 else fail "(z) no one-repo #12 window"; fi
 chk z "a one-repo worker's bare comment lands on its repo" "$(cmt "$wD" 12)" "https://github.com/o/solo/issues/12#issuecomment-1"
-zrows=$(backlog "$D" | tail -n +2)
-# One path however many repos (#1938): every row carries its repo, the 4th field.
-[ -n "$zrows" ] && [ "$(printf '%s\n' "$zrows" | awk -F '\037' '{print NF ":" $4}' | sort -u)" = 4:o/solo ] \
-  && ok "(z) one-repo backlog rows carry their repo, as in a 2-repo fleet" || fail "(z) one-repo backlog rows: $zrows"
 bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1
 chk z "one-repo restore rows carry their repo, as in a 2-repo fleet" "$(awk -F'\t' '$1=="WIN" {print $16}' "$FLEET_CONF_DIR/fleets/$D/restore.map" 2>/dev/null | sort -u)" o/solo
 [ "$(ls "$FLEET_CONF_DIR/fleets/$D/repos")" = o-solo.conf ] && ok "(z) the one-repo fleet's repos/ still holds its one overlay" \

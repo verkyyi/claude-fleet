@@ -23,7 +23,6 @@
 #              fleet_trash_sweep <main> empties BOTH that and the base's sibling trash.
 #   SHIM       bin/fleet-worktree.sh reads FLEET_WORKTREE_ROOT from the conf of the
 #              fleet owning <main>; an unowned checkout keeps the sibling layout.
-#   CW         `cw` / `cwrm` (zsh) create and remove under ROOT through the shim.
 #   ONE-EXIT   no fourth hand-built worktree path in bin/ or shell/.
 #   CLASH      two checkouts sharing a basename under one ROOT (two hosted repos,
 #              issue #795): the second diverts to `<base>-r<cksum>-<slug>` and keeps
@@ -36,7 +35,6 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 LIB="$BIN/fleet-lib.sh"
 SHIM="$BIN/fleet-worktree.sh"
-CWZ="$BIN/../shell/cw.zsh"
 [ -f "$LIB" ]  || { printf 'selftest: %s missing\n' "$LIB" >&2; exit 2; }
 [ -x "$SHIM" ] || { printf 'selftest: %s missing/not executable\n' "$SHIM" >&2; exit 2; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not on PATH — SKIP\n' >&2; exit 0; }
@@ -135,18 +133,6 @@ got="$("$SHIM" dir "$OTHER" issue-3)"
 [ "$got" = "$WORK/src/other-issue-3" ] || fail "6 shim for an unowned checkout = '$got'"
 ok "6 shim: owning fleet's FLEET_WORKTREE_ROOT applies; an unowned checkout stays a sibling"
 
-# --- 7. CW / CWRM through the shim (zsh, tmux PATH-shimmed) --------------------
-if command -v zsh >/dev/null 2>&1 && [ -f "$CWZ" ]; then
-  mkdir -p "$WORK/fakebin"
-  printf '#!/bin/sh\nexit 0\n' > "$WORK/fakebin/tmux"; chmod +x "$WORK/fakebin/tmux"
-  out="$(cd "$MAIN" && env -u TMUX -u TMUX_PANE PATH="$WORK/fakebin:$PATH" zsh -fc ". '$CWZ'; cw feat/cw" 2>&1)"
-  listed "$WORK/shim.noindex/repo-feat-cw" || fail "7 cw did not create under the fleet's ROOT" "$out"
-  out="$(cd "$MAIN" && env -u TMUX -u TMUX_PANE PATH="$WORK/fakebin:$PATH" zsh -fc ". '$CWZ'; cwrm feat/cw" 2>&1)"
-  listed "$WORK/shim.noindex/repo-feat-cw" && fail "7 cwrm did not remove the ROOT worktree" "$out"
-  ok "7 cw creates and cwrm removes under the fleet's FLEET_WORKTREE_ROOT"
-else
-  ok "7 SKIP — no zsh"
-fi
 
 # --- 8. ONE-EXIT: no fourth hand-built worktree path ---------------------------
 # `worktree add` outside fleet_worktree_create is allowed only in fleet-history.sh,

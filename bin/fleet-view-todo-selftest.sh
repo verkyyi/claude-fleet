@@ -7,14 +7,13 @@
 #      a later person's comment, a `fleet:answer` or a 「决定…」 removes it; an
 #      older comment relayed late never does
 #   B  the producer (tmux-dashboard-rows.sh --rows) marks a bound session 已结束
-#      once its issue is off the open-issue list, its PR merged and its last state
-#      older than FLEET_VIEW_LANDED_SECS — not while the issue is open, not inside
-#      the window, not with `keep`, not while its deploy is pending (field 20
-#      `unknown` instead)
+#      once its issue is off the open-issue list and its last state is older than
+#      FLEET_VIEW_LANDED_SECS — not while the issue is open, not inside the window,
+#      not with `keep`. The rows read no PR map (issue #4902): no field 20.
 #   C  fleet_view.entries over that producer: done + an unanswered ask → 等你 (the
-#      question under it); an ask on a closed issue → not; done + PR open → 等合并
-#      / 等发版 with its step (检查中 · 检查红), merged-not-live → 等发布列车; done +
-#      closed + merged > 24 h → 已结束; idle → 其他; the group order
+#      question under it); an ask on a closed issue → not; done + closed > 24 h →
+#      已结束; the rest → 其他 (the PR groups read a PR cell the rows no longer
+#      carry, issue #4902); the group order
 #   D  `fleet ls` (fleet-session-cli.py attach_bus) reads the same book: 在问
 #   E  stage_of / group_of on every PR cell the producer writes; the words in
 #      both languages
@@ -113,10 +112,10 @@ printf 'issue-11\t#111\tMERGED\t✓\tready\ts11\nissue-12\t#112\tMERGED\t✓\tre
 printf 'unknown\t1\n' > "$FD/deploy_s14"
 out=$(PATH="$SHIMPATH" FLEET_SESSION=$S FLEET_ROWS_UNFOLD=1 bash "$ROWS" --rows 2>&1) || fail "B: the producer exited non-zero" "$out"
 ended=$(printf '%s\n' "$out" | awk -F"$US" '$1 == "hdr" && $2 == "ended" { on = 1; next } $1 == "hdr" { on = 0 } on { print $4 }' | sed 's/ .*//' | tr '\n' ' ')
-[ "$ended" = "over " ] || fail "B: 已结束 should be exactly «over», got «${ended}»" "$out"
+[ "$ended" = "over train " ] || fail "B: 已结束 should be exactly «over», got «${ended}»" "$out"
 f20=$(printf '%s\n' "$out" | awk -F"$US" '$1 == "@4" { print (NF >= 20 ? $20 : "-") }')
-[ "$f20" = unknown ] || fail "B: the train row's field 20: «${f20}»" "$out"
-n20=$(printf '%s\n' "$out" | awk -F"$US" '$1 ~ /^@/ && $1 != "@4" && NF >= 20' | wc -l | tr -d ' ')
+[ "$f20" = - ] || fail "B: the train row's field 20: «${f20}»" "$out"
+n20=$(printf '%s\n' "$out" | awk -F"$US" '$1 ~ /^@/ && NF >= 20' | wc -l | tr -d ' ')
 [ "$n20" = 0 ] || fail "B: field 20 on a row with nothing to say" "$out"
 # a FULL list (the collector's newest 300 open ones, issue #4225): #11 is older
 # than all of them — not on it says nothing; a number newer than its oldest does
@@ -144,7 +143,7 @@ mv "$FD/issues" "$FD/issues.off"
 out0=$(PATH="$SHIMPATH" FLEET_SESSION=$S FLEET_ROWS_UNFOLD=1 bash "$ROWS" --rows 2>&1)
 printf '%s\n' "$out0" | grep -q "^hdr${US}ended" && fail "B: with no open-issue list a bound row went 已结束" "$out0"
 mv "$FD/issues.off" "$FD/issues"
-pass "B  producer: closed + merged + past 24 h → 已结束; open / fresh / keep / deploy pending stay; field 20 = unknown"
+pass "B  producer: closed + past 24 h → 已结束 (no PR read, #4902); open / fresh / keep stay; no field 20"
 
 # ============================================================================
 # C + D + E. the panel and `fleet ls`
@@ -172,22 +171,23 @@ fv.windows = lambda f: {"@%d" % i: ("", "worker", t - (2 * 86400 if i in (1, 2, 
 fv.gone_text = lambda f: ""
 it = fv.entries("v1", hub=False)
 heads = [e["group"] for e in it if e["kind"] == "hdr"]
-assert heads == ["ask", "wait", "landed", "other"], (heads, [(e.get("name"), e.get("group"), e.get("sec")) for e in it])
+# the rows carry no PR (issue #4902): no 等合并 / 等发版 / 刚落地 — those read the
+# PR cell; a closed issue's old done root is 已结束 on its own
+assert heads == ["ask", "other"], (heads, [(e.get("name"), e.get("group"), e.get("sec")) for e in it])
 grp = {e["name"]: e["group"] for e in it if e["kind"] == "sess"}
-want = {"asks": "ask", "chk": "wait", "red": "wait", "train": "wait", "fresh": "landed", "kept": "other",
-        "closedq": "landed", "idle": "other", "over": "ended"}
+want = {"asks": "ask", "chk": "other", "red": "other", "train": "ended", "fresh": "other", "kept": "other",
+        "closedq": "other", "idle": "other", "over": "ended"}
 assert grp == want, grp
 ask = [e for e in it if e["kind"] == "ask"]
 assert [(a["of"], a["text"]) for a in ask] == [("@2", "要不要先合 #7？")], ask
 tag = {e["name"]: e["tags"] for e in it if e["kind"] == "sess"}
-assert tag["chk"] == ["检查中"] and tag["red"] == ["检查红"] and tag["train"] == ["等发布列车"], tag
-assert tag["fresh"] == [] and tag["idle"] == [], tag
+assert all(v == [] for v in tag.values()), tag
 hdr = [e["text"] for e in it if e["kind"] == "hdr"]
-assert hdr[1] == "等合并 / 等发版 3", hdr
+assert hdr[1] == "其他 6", hdr
 sec = [e for e in it if e["kind"] == "sec"]
-assert sec and sec[0]["sec"] == "ended" and sec[0]["n"] == 1, sec
+assert sec and sec[0]["sec"] == "ended" and sec[0]["n"] == 2, sec
 over = next(e for e in it if e.get("name") == "over")
-assert over["word"] == "已合并", over["word"]
+assert over["word"] == "本轮结束", over["word"]
 # D: fleet ls reads the same book
 cli = load("fleet_session_cli", "fleet-session-cli.py")
 cli.bus_cache = lambda: {}
@@ -218,6 +218,6 @@ for l in zh en; do
     [ -n "$v" ] && [ "$v" != "$k" ] || fail "E: $l:$k has no words"
   done
 done
-pass "C  panel: 等你 (ask on an open issue, its question) · 等合并/等发版 (检查中 · 检查红 · 等发布列车) · 刚落地 · 其他 · 已结束"
+pass "C  panel: 等你 (ask on an open issue, its question) · 其他 · 已结束 — no PR groups since the rows carry no PR"
 pass "D  fleet ls: 在问 from the same book; E stage_of / group_of on every PR cell, words zh + en"
 echo "fleet-view-todo-selftest: PASS"

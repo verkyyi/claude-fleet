@@ -17,9 +17,8 @@
 #                 MERGED rows of a fleet that sets a knob; `live` is terminal (never
 #                 re-probed); actions mode is TTL-gated; the newest-20 cap holds; a
 #                 fleet with neither knob writes NOTHING.
-#   • DASH        the live PR cell: `live` (green) / `deploy…` / `deploy✗` / `merged`
-#                 (no verdict), a 5-field legacy prmap line still renders, and the
-#                 OPEN-PR `#N✓` decoration survived the 6th field.
+#   • DASH        the live rows carry no PR any more (issue #4902): every cell is
+#                 `—`, whatever prmap and the deploy verdicts say.
 #   • LANDED      the ⌃t list's last column is `dep` (`live` / `…` / `✗` / `·`) and
 #                 resolves the merge sha by PR NUMBER through prmap — the ledger's own
 #                 sha is the pre-squash worktree HEAD and must not be used.
@@ -293,7 +292,7 @@ hasnt "producer-off: no gh api calls either" "$(cat "$WORK/gh.log")" "actions/ru
 
 # ============================================================ DASH (live rows)
 US=$'\x1f'
-GN=$'\033[38;2;158;206;106m'; IN=$'\033[38;2;187;154;247m'; TX=$'\033[38;2;169;177;214m'
+GN=$'\033[38;2;158;206;106m'; TX=$'\033[38;2;169;177;214m'
 RD=$'\033[38;2;247;118;142m'; GY=$'\033[38;2;86;95;137m'; R=$'\033[0m'
 # a hand-seeded cache (independent of the producer run above): one MERGED row per
 # state, an OPEN row, and a 5-field legacy line.
@@ -320,14 +319,11 @@ w 6 issue-6 /w/repo-issue-6 idle @6 6 '' /w/repo-issue-6
 w 7 issue-7 /w/repo-issue-7 idle @7 7 '' /w/repo-issue-7
 out=$(FLEET_SESSION=s1 FZF_COLUMNS=120 bash "$ROWS" 2>&1) || fail "live rows producer exited non-zero" "$out"
 row_of() { printf '%s\n' "$out" | grep -F "s1:$1$US"; }
-has "dash: live → green 'live'"               "$(row_of 1)" "${GN}live   ${R}"
-has "dash: unknown → still 'merged'"           "$(row_of 2)" "${IN}merged ${R}"
-has "dash: deploying → 'deploy…'"              "$(row_of 5)" "${TX}deploy…${R}"
-has "dash: failed → red 'deploy✗'"             "$(row_of 6)" "${RD}deploy✗${R}"
-has "dash: no verdict file → 'merged'"         "$(row_of 7)" "${IN}merged ${R}"
-has "dash: 5-field legacy line → 'merged'"     "$(row_of 4)" "${IN}merged ${R}"
-has "dash: OPEN row keeps its #N✓ decoration"  "$(row_of 3)" "#13✓"
-hasnt "dash: the sha never leaks into the cell" "$out" "live1"
+# the rows read no PR map any more (issue #4902): whatever prmap and deploy_<sha>
+# say, every live row's PR cell is '—' — ⌘P reads a PR off the hub task record
+for n in 1 2 3 4 5 6 7; do has "dash: row $n's PR cell is '—' (no prmap read)" "$(row_of "$n")" "${GY}—      ${R}"; done
+hasnt "dash: no deploy word on a live row" "$out" "deploy"
+hasnt "dash: no PR number on a live row" "$out" "#13"
 
 # ============================================================ LANDED (⌃t rows)
 export FLEET_HISTORY_LEDGER="$WORK/landed.tsv"
@@ -354,4 +350,4 @@ hasnt "landed: the ledger's own (worktree) sha is never used" "$lout" "wt-sha"
 nout=$(FLEET_REPO=fake/repo FZF_COLUMNS=120 bash "$HIST" rows 2>&1) || fail "landed rows without a session exited non-zero" "$nout"
 eq "landed: without a resolvable fleet every dep cell is '·'" 6 "$(printf '%s\n' "$nout" | grep -cF "${GY}·   ${R}")"
 
-printf 'deploy-state-selftest: OK (%d checks) — merged ≠ live: probe → deploy_<sha> → dash + landed (issue #541)\n' "$CHECKS"
+printf 'deploy-state-selftest: OK (%d checks) — merged ≠ live: probe → deploy_<sha> → landed (issue #541)\n' "$CHECKS"

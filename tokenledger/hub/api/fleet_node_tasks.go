@@ -288,8 +288,16 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		live := s.taskLive(&t, map[string][]map[string]any{})
-		writeJSON(w, http.StatusOK, map[string]any{"task": t, "live": live})
+		// The same landing projection as the person's list (taskViews): an
+		// authoritative task's PR lives in its reports, and ⌘P's row reads it
+		// here (issue #4902) — the record's pr, else the landed report's.
+		views, err := s.taskViews([]store.FleetTask{t})
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		v := views[0]
+		writeJSON(w, http.StatusOK, map[string]any{"task": v.FleetTask, "live": v.Live, "pr_state": v.PRState})
 	case http.MethodPost:
 		if t.AuthorityVersion != 0 || in.AuthorityVersion != 0 {
 			if t.AuthorityVersion != store.TaskAuthorityVersion || in.AuthorityVersion != store.TaskAuthorityVersion || in.Mutation == nil {
