@@ -225,7 +225,8 @@ def plain_line(level, text, nxt):
     """The display-message form for a client that is not a 看台."""
     glyph = {"error": "✗", "warn": "!", "info": "i"}[level]
     col = {"error": palette("PAL_RED"), "warn": palette("PAL_YELLOW"), "info": ""}[level]
-    body = ("%s — %s" % (text, nxt) if nxt else text).replace("#", "##")
+    # only what tmux would read as a format is escaped: `#303` stays as it reads
+    body = re.sub(r"#([{(\[#])", r"##\1", "%s — %s" % (text, nxt) if nxt else text)
     return "#[%sbold] %s %s " % ("fg=%s," % col if col else "", glyph, body)
 
 
