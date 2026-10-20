@@ -8,7 +8,7 @@ its record, switch-bar.json, went with issue #3008.)
 
     fleet-topbar.py render --node view=<id> s=<fleet> reg=<dir> g=<dir> sock=<socket> cw= w= [pc=] [pd=]
         the line, as tmux format — see render_node below
-    fleet-topbar.py fit <cols> <record.json> [down=] [rr=] [now=]
+    fleet-topbar.py fit <cols> <record.json> [down=] [rr=] [now=] [ups=1]
         the plain text of layout() for a record (selftest)
 
 Three widths, the design's: a phone (~45 columns) has the glyph, #N, the title
@@ -165,10 +165,21 @@ def pr_part(pr, cols):
     return (text, OK if good else BAD if bad else WARN, "pr")
 
 
-def layout(rec, cols, down="", route="", now=None, via="", pin="", tries=""):
+def upstream_text():
+    """「上游连不上：连接被重置（4 次）」 while this machine's credential proxy keeps
+    failing upstream (T657, fleet_upstream_stats.banner's threshold); '' otherwise."""
+    try:
+        import fleet_upstream_stats as US
+        b = US.banner()
+    except Exception:
+        return ""
+    return say("topbar_upstream_fmt", say("topbar_up_" + b[0]), b[1]) if b else ""
+
+
+def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream=""):
     """The line as a list of (text, colour, range) parts plus its background
     (None / BG_ASK / BG_DOWN) — the ⌘P panel's blueprint (issue #3194, EPIC #3178):
-    glyph · (word ·) #N · title (· repo) …… PR · context (· 今天 N) (· machine) (· ⌘P).
+    glyph · (word ·) #N · title (· repo) …… PR · context (· 今天 N) (· 上游连不上) (· machine) (· ⌘P).
     The whole line red while the session waits on you (a question or an OK — the
     question's own words take the title's place), grey while out of reach or on
     the relay. Pure: the selftest reads `fit`."""
@@ -197,6 +208,8 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries=""):
         # what the session used today on the pool (issue #3377): the hub's count,
         # never a 0 when none is recorded
         right.append([(say("topbar_today_fmt", FV.tokens_short(tok)), DIM, "")])
+    if upstream:
+        right.append([(upstream, BAD, "upstream")])
     if trouble:
         right.append([(trouble, WARN, "machine")])
     if cols >= WIDE:
@@ -216,8 +229,8 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries=""):
     return parts + rtext, bg
 
 
-def fit(rec, cols, down="", route="", now=None, via="", pin="", tries=""):
-    parts, bg = layout(rec, cols, down, route, now, via, pin, tries)
+def fit(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream=""):
+    parts, bg = layout(rec, cols, down, route, now, via, pin, tries, upstream)
     return "".join(t for t, _, _ in parts), bg
 
 
@@ -407,6 +420,7 @@ def node_record(kv):
         rec.update(stamp_ctx(p))   # this machine's own window: its stamps are the freshest reading
         if rec["state"] == "needs":
             rec["q"] = asked(sock, win) or rec.get("q", "")
+    rec["here"] = not peer     # this machine's own window: its proxy's upstream is its road (T657)
     down = ""
     if peer and (kv.get("pd") == "1" or peer_down(str(reg.parent), pnode, plogin)):
         down = "1"
@@ -479,7 +493,7 @@ def render_node(kv, cols):
         print("#[fg=%s,bold] i #[nobold]#[fg=%s]%s#[default]" % (HL, FG, tmux_text(kv["fl"])))
         return 0
     rec, down, rr, via = node_record(kv)
-    parts, bg = layout(rec, cols, down, rr, None, via)
+    parts, bg = layout(rec, cols, down, rr, None, via, upstream=upstream_text() if rec.get("here") else "")
     print(own_window(kv.get("w", ""), paint(parts, bg)))
     return 0
 
@@ -570,7 +584,8 @@ def main(argv):
         rec = read_record(Path(argv[2])) or {}
         kv = dict(a.split("=", 1) for a in argv[3:] if "=" in a)
         text, bg = fit(rec, int(argv[1]), kv.get("down", ""), kv.get("rr", ""),
-                       int(kv["now"]) if kv.get("now", "").isdigit() else None)
+                       int(kv["now"]) if kv.get("now", "").isdigit() else None,
+                       upstream=upstream_text() if kv.get("ups") == "1" else "")
         print("%s\t%s" % ({None: "-", BG_ASK: "red", BG_DOWN: "grey"}[bg], text))
         return 0
     print(__doc__.strip().split("\n\n")[1], file=sys.stderr)

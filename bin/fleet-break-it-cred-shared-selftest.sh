@@ -24,6 +24,9 @@
 #                       pool follows in one sync (bin/fleet-node-update.py sync_pool runs it)
 #   cred-shared-restart-loop    bin/fleet-credsep.py machine refresh (shared_unserved / login_exists /
 #                       unserved_tried, issue #4714): a deleted tenant no longer restarts the proxy every tick
+#   cred-upstream-unseen    bin/fleet-cred-proxy.py UpstreamStats / up_err_class (T657): each upstream
+#                       attempt's class, read by bin/fleet_upstream_stats.py (doctor 上游 row,
+#                       banner) and bin/fleet-topbar.py's 「上游连不上」
 #   cred-codex-path-open    bin/fleet-cred-proxy.py codex_refused / CODEX_ALLOW_SPEC (issue #4611):
 #                       only the paths Codex CLI uses go on; every other path, spelling or
 #                       method is a 403 that never reaches chatgpt.com (the hub's half:
@@ -465,6 +468,99 @@ drill_cred_codex_path_open() {
     || { WHY="the refusals left $(grep -c '"ev": "deny"' "$CD/proxy.log") ev=deny lines, want 12"; return 1; }
   [ "$(cred_req "$tok" "$CD/r")" = 200 ] || { WHY="the Claude half broke: $(cat "$CD/r")"; return 1; }
   WHAT="/codex/ 只放行 POST responses · POST responses/compact · GET models（查询串照带）；wham/usage、tasks/list、..、%2e%2e、//、./、尾斜杠、反斜杠、清单外方法共 12 种一律 403、记 ev=deny、chatgpt.com 一个没收到；Claude 照常 200"
+}
+
+
+# cred-upstream-unseen (T657): the provider's road resets, times out, answers 529 —
+# and nobody could say which: the proxy's log is _fleetcred's 0600, a session
+# keeps no retry reason. Now every attempt is a class in stats every login reads,
+# the doctor's 上游 row WARNs, the 看台's top line says 「上游连不上」. A raw fake
+# upstream on 127.0.0.1 answers by its mode file: reset (RST after the request),
+# hang (no answer past the proxy's timeout), 529, ok.
+up_fake() {   # <dir> → <dir>/up.port; <dir>/mode picks the answer
+  cat > "$1/up.py" <<'PY'
+import os, signal, socket, struct, sys, threading, time
+signal.alarm(120)
+D = sys.argv[1]
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", 0)); s.listen(16)
+open(os.path.join(D, "up.port.tmp"), "w").write(str(s.getsockname()[1]))
+os.replace(os.path.join(D, "up.port.tmp"), os.path.join(D, "up.port"))
+def one(c):
+    c.settimeout(5)
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        d = c.recv(65536)
+        if not d:
+            return c.close()
+        buf += d
+    mode = open(os.path.join(D, "mode")).read().strip()
+    if mode == "reset":
+        c.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        return c.close()
+    if mode == "hang":
+        time.sleep(4); return c.close()
+    code, word = (529, "Overloaded") if mode == "529" else (200, "OK")
+    b = b'{"type":"error","error":{"type":"overloaded_error"}}' if code == 529 else b'{"ok":true}'
+    c.sendall(b"HTTP/1.1 %d %s\r\ncontent-type: application/json\r\ncontent-length: %d\r\nconnection: close\r\n\r\n%s"
+              % (code, word.encode(), len(b), b))
+    c.close()
+while True:
+    c, _ = s.accept()
+    threading.Thread(target=one, args=(c,), daemon=True).start()
+PY
+  python3 -I "$1/up.py" "$1" 2>"$1/up.err" &
+  printf '%s\n' "$!" >> "$WORK/cred-pids"
+  until_ok 10 test -s "$1/up.port"
+}
+
+drill_cred_upstream_unseen() {
+  CAP=20   # 3 resets + 1 hang (the proxy's 1 s timeout) + 2 × 529 + 32 ok, then the readers
+  cred_rig up trusted reachable || return 1
+  up_fake "$CD" || { WHY="the fake upstream did not start: $(tail -2 "$CD/up.err" | tr '\n' ' ')"; return 1; }
+  local up tok t0 m c js us="$CD/cred-proxy"
+  up="http://127.0.0.1:$(cat "$CD/up.port")"
+  CRED_DIRECT="$up" CRED_RELAY="$up/relay" CRED_TIMEOUT=1
+  cred_serve || { unset CRED_DIRECT CRED_RELAY CRED_TIMEOUT; return 1; }
+  unset CRED_DIRECT CRED_RELAY CRED_TIMEOUT
+  tok=$(cred_ctl mint --account a1 --sid s-up) || { WHY="mint failed"; return 1; }
+  t0=$(now)
+  for m in reset reset reset hang 529 529 ok ok; do
+    printf '%s\n' "$m" > "$CD/mode"
+    c=$(cred_req "$tok" "$CD/r")
+    case "$m:$c" in reset:502|hang:502|529:529|ok:200) ;; *) WHY="mode $m answered $c, want the road's own: $(cat "$CD/r")"; return 1 ;; esac
+  done
+  # the tick writes the open minute within a second
+  up_n() { FLEET_UPSTREAM_STATS_DIR="$us" python3 -I "$BIN/fleet_upstream_stats.py" show --since 1h --json \
+    | python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin)["n"] >= int(sys.argv[1]) else 1)' "$1"; }
+  until_ok 5 up_n 8
+  js=$(FLEET_UPSTREAM_STATS_DIR="$us" python3 -I "$BIN/fleet_upstream_stats.py" show --since 1h --json)
+  printf '%s' "$js" | python3 -c '
+import json, sys
+s = json.load(sys.stdin); c = s["c"]
+want = {"reset": 3, "timeout": 1, "529": 2, "ok": 2}
+assert {k: c.get(k, 0) for k in want} == want, c
+assert s["a"].get("a1", {}).get("reset") == 3, s["a"]
+f = [e for e in s["f"] if e["c"] == "reset"]
+assert len(f) == 3 and all(e["sid"] == "s-up" and e["acct"] == "a1" and e["route"] for e in f), s["f"]
+' 2>"$CD/chk.err" || { WHY="the stats do not hold the classes: $(tail -1 "$CD/chk.err") — $js"; return 1; }
+  ! grep -rq 'sk-ant\|REAL-a1\|Bearer' "$us"/upstream-* || { WHY="a token or header reached the stats"; return 1; }
+  [ "$(python3 -c 'import os, sys; print("%o" % (os.stat(sys.argv[1]).st_mode & 0o777))' "$us/upstream-now.json")" = 644 ] \
+    || { WHY="upstream-now.json is not 0644: every login must read it"; return 1; }
+  c=$(FLEET_UPSTREAM_STATS_DIR="$us" python3 -I "$BIN/fleet_upstream_stats.py" doctor)
+  case "$c" in WARN*连接被重置\ 3*) ;; *) WHY="the doctor's 上游 row did not WARN naming the resets: $c"; return 1 ;; esac
+  c=$(FLEET_UPSTREAM_STATS_DIR="$us" python3 -I "$BIN/fleet_upstream_stats.py" banner)
+  [ "$c" = "$(printf 'reset\t3')" ] || { WHY="the top line's banner: [$c], want reset 3"; return 1; }
+  printf '{"state":"working","key":"#1","title":"t","node":"m"}\n' > "$CD/rec.json"
+  c=$(FLEET_UPSTREAM_STATS_DIR="$us" FLEET_UI_LANG=zh python3 "$BIN/fleet-topbar.py" fit 120 "$CD/rec.json" ups=1)
+  case "$c" in *'上游连不上：连接被重置（3 次）'*) ;; *) WHY="the top line does not say it: $c"; return 1 ;; esac
+  # recovered: the road answers again — once failures fall under 20 % the line is gone
+  printf 'ok\n' > "$CD/mode"
+  for m in $(seq 1 30); do [ "$(cred_req "$tok" "$CD/r")" = 200 ] || { WHY="ok #$m did not answer 200"; return 1; }; done
+  until_ok 5 sh -c '! FLEET_UPSTREAM_STATS_DIR="$1" python3 -I "$2" banner >/dev/null' _ "$us" "$BIN/fleet_upstream_stats.py" \
+    || { WHY="the banner outlived the recovery: $(FLEET_UPSTREAM_STATS_DIR="$us" python3 -I "$BIN/fleet_upstream_stats.py" banner)"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="上游重置 3 次、超时 1 次、529 两次：统计（0644、无凭据）按类别记下账号 a1 与会话 s-up；doctor 上游行 WARN 写明「连接被重置 3」，看台顶行「上游连不上：连接被重置（3 次）」；再 30 次成功后顶行消失"
 }
 
 cred_run_drills "$0"

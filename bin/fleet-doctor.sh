@@ -560,6 +560,20 @@ if [ -f "$(dirname "$0")/fleet-cred-proxy.py" ]; then
   fi
 fi
 
+# --- 上游: what the machine's credential proxy met upstream (T657) -----------------
+# each class's failures in the last hour / 24 h and the latest one, off the stats
+# every login reads (bin/fleet_upstream_stats.py); nothing recorded = no row.
+# WARN while the last hour's road / 5xx / 529 / 429 failures are ≥ 3 and ≥ 20 %.
+if [ -f "$(dirname "$0")/fleet_upstream_stats.py" ]; then
+  _up=$(FLEET_CONF_DIR="$conf_dir" python3 -I "$(dirname "$0")/fleet_upstream_stats.py" doctor 2>/dev/null) && [ -n "$_up" ] && {
+    _up_lv=${_up%% —*}; _up_m=${_up#* — }
+    case "$_up_lv" in
+      PASS) pass 上游 "$_up_m" ;;
+      *)    warn 上游 "$_up_m" ;;
+    esac
+  }
+fi
+
 # --- tmux ≥ 3.2 (core) ---
 if command -v tmux >/dev/null 2>&1; then
   v=$(tmux -V 2>/dev/null | sed -E 's/[^0-9.]//g')

@@ -14,6 +14,8 @@
 #      (FLEET_HOST=1) with no machine proxy: FAIL, naming machine install (#4674)
 #   H  a host's login with a per-login proxy still serving → FAIL (the road is gone, #4674)
 #   G  bin/fleet-doctor.sh itself carries the row (B's text, PASS)
+#   U  the 上游 row (T657): bin/fleet_upstream_stats.py doctor off a stats file —
+#      WARN naming the class and the latest one; nothing recorded ⇒ no row
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -127,6 +129,20 @@ FLEET_CRED_PROXY=1 bash "$BIN/fleet-cred-proxy.sh" route --refresh >/dev/null 2>
 dr=$(FLEET_CRED_PROXY=1 sh "$BIN/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]*(PASS|WARN|FAIL|INFO)[[:space:]]+cred([[:space:]]|$)')
 case "$dr" in *WARN*cred*'Claude 走 direct 直连（trusted + reachable）'*) st_ok_all "G fleet-doctor: $(printf '%s' "$dr" | sed 's/^ *//')" ;;
   *) st_miss "G fleet-doctor: wanted the cred row (WARN — E's failed renewal is the newest), got [$dr]" ;; esac
+
+# ── U: the 上游 row off the proxy's upstream stats (T657) ─────────────────────
+mkdir -p "$SB/ups"
+python3 -c 'import json, sys, time
+m = int(time.time() // 60) * 60 - 120
+f = [{"t": m + 5 + i, "c": "reset", "acct": "a1", "login": "me", "sid": "s1", "route": "direct", "ms": 3, "st": "ConnectionResetError"} for i in range(4)]
+print(json.dumps({"m": m, "n": 10, "c": {"ok": 6, "reset": 4}, "a": {"a1": {"ok": 6, "reset": 4}}, "ms_max": 9, "ms_sum": 40, "f": f}))' \
+  > "$SB/ups/upstream-stats.ndjson"
+dr=$(FLEET_UPSTREAM_STATS_DIR="$SB/ups" sh "$BIN/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]*(PASS|WARN)[[:space:]]+上游')
+case "$dr" in *WARN*上游*'近 1 小时 4 次失败 / 10 次请求（连接被重置 4）'*'最近一次'*'连接被重置'*) st_ok_all "U fleet-doctor 上游: WARN naming the resets" ;;
+  *) st_miss "U fleet-doctor 上游: wanted WARN with 连接被重置 4, got [$dr]" ;; esac
+mkdir -p "$SB/ups-none"
+dr=$(FLEET_UPSTREAM_STATS_DIR="$SB/ups-none" sh "$BIN/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]*(PASS|WARN|FAIL|INFO)[[:space:]]+上游')
+[ -z "$dr" ] && st_ok_all "U nothing recorded: no 上游 row" || st_miss "U nothing recorded: a row anyway [$dr]"
 
 # ── H: a host's login still on a per-login proxy (#4674) ─────────────────────
 out=$(FLEET_HOST=1 row 1)
