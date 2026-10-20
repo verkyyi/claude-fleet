@@ -20,6 +20,10 @@
 #   F  the actions page's ID block: code + full ID, aliases, every segment (agent ·
 #      start–end · trigger · compactions), 未登记到 hub / a refusal in red, the
 #      conflict's reason; no predecessor anywhere
+#   G  repo (T593): a row whose window has no @repo takes its ledger's / its task
+#      record's / an EPIC charter marker's `repo=` (a relay through opened.prev);
+#      none ⇒ blank. A closed row finds its ID by its conversation (a scratch key is
+#      recycled); a closed ID no history row lists is a row of its own, with its Agent
 # Exit 0 = pass.
 set -uo pipefail
 
@@ -194,6 +198,68 @@ assert any(t.startswith("冲突：与 " + code("@5")) and st == ("red",) for t, 
 assert ("还没有对话段", ("dim",)) in txt(by["@4"]) and fv.id_page(by["@7"], 100) == []
 for e in by.values():
     assert "prev" not in e and not any("prev" in t or "前任" in t for t, _ in fv.id_page(e, 100))
+
+# --- G: a row's repo when its window has none, and a closed row's Agent (T593)
+G = {w: "%08x-%04x-4%03x-8%03x-%012x" % (0xc0de0000 + i, i, i, i, i)
+     for i, w in enumerate(("@20", "@21", "@22", "@23", "@24"), 1)}
+DRV0, OLDGEN, NOW42, ALONE, DEAD = ("%08x-0000-4000-8000-%012x" % (0xd0d00000 + i, i) for i in range(1, 6))
+ev(DRV0, ev="opened", agent="claude", task="T910", title="EPIC: 一路")
+ev(DRV0, ev="native", agent="claude", native="nat-E", trigger="startup", seg=1)
+ev(DRV0, ev="closed", reason="stopped")
+ev(G["@20"], ev="opened", agent="claude", task="T910", title="EPIC: 一路")          # the driver (@norepo)
+ev(G["@21"], ev="opened", agent="claude", prev=DRV0, title="EPIC: 一路")           # its relay: no task of its own
+ev(G["@22"], ev="opened", agent="claude", task="T911", title="无仓库的活")
+ev(G["@23"], ev="opened", agent="claude", title="编排")                           # no task, no repo
+ev(G["@24"], ev="opened", agent="claude", task="T912", title="普通的活")           # the record names its repo
+ev(OLDGEN, ev="opened", agent="codex", key="scratch-42")                          # scratch-42's last generation
+ev(OLDGEN, ev="native", agent="codex", native="cx-old", trigger="startup", seg=1)
+ev(OLDGEN, ev="closed", reason="reaped")
+ev(NOW42, ev="opened", key="scratch-42", lazy=True)                               # this one: reaped, never closed
+ev(NOW42, ev="native", agent="claude", native="nat-H", trigger="startup", seg=1)
+ev(NOW42, ev="result", state="merged", pr="77")
+ev(ALONE, ev="opened", agent="codex", title="5018验证 · codex")                    # no history row lists it
+ev(ALONE, ev="native", agent="codex", native="cx-A", trigger="startup", seg=1)
+ev(ALONE, ev="closed", reason="stopped")
+ev(DEAD, ev="closed", reason="stopped")                                           # C13's empty record
+open(TG, "w").write('''#!/bin/sh
+case "$1" in
+T910) printf '%s\\n' '{"task":{"id":"T910","repo":"","request_payload":"{\\"body\\":\\"/fleet-epic-run\\\\n\\\\n<!-- fleet:epic repo=o/claude-fleet short=一路 cap=4 -->\\\\n# EPIC\\"}"}}' ;;
+T911) echo '{"task":{"id":"T911","repo":"","request_payload":"{\\"body\\":\\"只做一件事\\"}"}}' ;;
+T912) echo '{"task":{"id":"T912","repo":"o/other-repo"}}' ;;
+*) echo '{"task":{}}' ;;
+esac
+''')
+for k in [k for k in fv._ID_CACHE if k.startswith("task:")]:
+    fv._ID_CACHE.pop(k)
+def rows_g():
+    out = [US.join(("hdr", "o/claude-fleet", "", "claude-fleet (1)", " ")),
+           full("@1", "idle", "·", "w1", " ", "", "0", "", "", "", "—", "·", "ok", "会话1", "merged", agent="claude",
+                repo="o/claude-fleet"),
+           US.join(("hdr", "none", "", "无仓库 (5)", " "))]
+    for w, t in (("@20", "T910"), ("@21", ""), ("@22", "T911"), ("@23", ""), ("@24", "T912")):
+        out.append(full(w, "working", "⠹", "w" + w[1:], " ", "", "0", "", "", "", "—", "·", "ok", "会话" + w[1:], "merged",
+                        task=t, agent="claude"))
+    return "\n".join(out) + "\n"
+GW = dict(G, **{"@1": F["@1"]})
+fv.windows = lambda fleet: {w: (GW[w], "worker", now - 60) for w in GW}
+fv.produce = lambda fleet, **kw: rows_g()
+fv.gone_text = lambda fleet: "landed:scratch:scratch-42@o/claude-fleet" + US + "nat-H" + US + "x\n"
+fv.gone_rows = lambda text, _now=None: [
+    ("landed:scratch:scratch-42@o/claude-fleet", "✓", "~42", "c17", "C17 · 补段", "1 hour", "#77", now - 60)]
+itg = fv.entries("v1")
+bg = {e["target"]: e for e in itg if e["kind"] == "sess"}
+assert bg["@20"]["repo"] == "claude-fleet", bg["@20"]        # an EPIC driver: the charter marker's repo=
+assert bg["@21"]["repo"] == "claude-fleet", bg["@21"]        # its relay: through opened.prev
+assert bg["@22"]["repo"] == "" and bg["@23"]["repo"] == "", (bg["@22"], bg["@23"])   # truly none: blank
+assert bg["@24"]["repo"] == "other-repo" and "other-repo" in bg["@24"]["tags"], bg["@24"]   # the record's; 2 repos ⇒ tagged
+h42 = bg["landed:scratch:scratch-42@o/claude-fleet"]
+assert h42["fid"] == NOW42 and h42["agent"] == "claude", h42   # by its conversation, not the recycled key
+al = bg["id:" + ALONE]
+assert al["agent"] == "codex" and al["gone"] and al["sec"] == "gone" and al["text"].startswith("5018"), al
+assert "id:" + DEAD not in bg and "id:" + DRV0 in bg and bg["id:" + DRV0]["agent"] == "claude", sorted(bg)
+assert "id:" + OLDGEN in bg and bg["id:" + OLDGEN]["agent"] == "codex", sorted(bg)
+assert not any(a[0]["id"] == "resume" for a in fv.page_of(al)) and any(a[0]["id"] == "resume" for a in fv.page_of(h42)), \
+    (fv.page_of(al), fv.page_of(h42))   # nothing to restore off a ledger alone
 PY
 pass "A  ID column: T- + 5 (6 when two share), blank without an ID, T<n> an alias, far rows too"
 pass "B  Agent: newest segment (transfer → Codex), else opened, else @cc_agent, else the hub's actual_agent, else 未知 (grey)"
@@ -201,3 +267,4 @@ pass "C  results: newest wins (done → failed = ✗ 等你), working keeps ↻,
 pass "D  conflict: two live windows on one segment both red 等你; closing one clears it"
 pass "E  search: 4539 / #4539 via the ID's issues, not 45390; code and alias find their row"
 pass "F  actions page: code + ID, aliases, segments, 未登记到 hub / refusal red, conflict reason"
+pass "G  repo: an EPIC driver's charter repo= (its relay too), a record's repo, none ⇒ blank; a closed row by its conversation, a closed ID alone is its own row (T593)"
