@@ -50,7 +50,7 @@ class Fixture(unittest.TestCase):
             self.tm('set-option', '-w', '-t', target, '@fleet_id', '00000000-0000-4000-8000-%012d' % (i+1))
             self.tm('set-option', '-w', '-t', target, '@cc_session_id', sid)
             self.tm('set-option', '-w', '-t', target, '@cc_agent', 'claude')
-            birth = oracle.launch.process(int(pid))['birth'][:24]
+            birth = oracle.proc.process(int(pid))['birth'][:24]
             started = int(time.mktime(time.strptime(birth, '%a %b %d %H:%M:%S %Y')) * 1000)
             (self.root / 'registry' / (pid + '.json')).write_text(json.dumps(
                 {'pid': int(pid), 'sessionId': sid, 'startedAt': started}))
@@ -132,7 +132,7 @@ class Observation(Fixture):
             self.assertTrue(all(r['code'] == 4 for r in self.observe()))
         with patch.object(oracle.Processes, 'collect', side_effect=OSError('ps failed')):
             self.assertTrue(all(r['code'] == 4 for r in self.observe()))
-        with patch.object(oracle.launch, 'process', side_effect=ValueError('exited')):
+        with patch.object(oracle.proc, 'process', side_effect=ValueError('exited')):
             self.assertTrue(all(r['code'] == 4 for r in self.observe()))
 
     def test_transcript_changed_during_read_is_not_empty(self):
@@ -167,7 +167,7 @@ class Observation(Fixture):
         try:
             rows = oracle.read_panes('other')
             rows[0].update(worker=first[0]['identity']['worker'], sid='sid-one', agent='claude')
-            birth = oracle.launch.process(int(rows[0]['pane_pid']))['birth'][:24]
+            birth = oracle.proc.process(int(rows[0]['pane_pid']))['birth'][:24]
             (self.root / 'registry' / (rows[0]['pane_pid'] + '.json')).write_text(
                 json.dumps({'pid': int(rows[0]['pane_pid']), 'sessionId': 'sid-one',
                     'startedAt': int(time.mktime(time.strptime(birth, '%a %b %d %H:%M:%S %Y')) * 1000)}))
@@ -228,7 +228,7 @@ class Walk(unittest.TestCase):
     def test_optional_ps_row_rejects_stale_pid_without_forking(self):
         p = oracle.Processes.collect()
         proof = p.proof(os.getpid())
-        self.assertEqual(proof, oracle.launch.process(os.getpid()))
+        self.assertEqual(proof, oracle.proc.process(os.getpid()))
         p.rows[os.getpid()]['ppid'] += 1
         with self.assertRaises(ValueError): p.proof(os.getpid(), fresh=True)
 

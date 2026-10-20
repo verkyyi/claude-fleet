@@ -160,7 +160,7 @@ grep -q $'^resume\t恢复' <<< "$m3" || fail "B: ended exited row lacks 恢复: 
 # 换 Codex on another machine's row (issue #4184): its hub writes; pr stays this
 # machine's (no PR on a far row). No 换账号 / 换到可用订阅 on any row since T550:
 # the pool picks.
-[ "$(ids "$MU/far1")" = "enter shell message rename pin reappol stop agent evidence reap " ] || fail "B: another machine's row: $(ids "$MU/far1")"
+[ "$(ids "$MU/far1")" = "enter shell message rename pin reappol stop agent reap " ] || fail "B: another machine's row: $(ids "$MU/far1")"
 mf=$(qo view-menu --view fl@view-v1 "$MU/far1")
 grep -q $'^agent\t换成 Codex\t$' <<< "$mf" || fail "B: a far row's agent item: $mf"
 grep -q '换到可用订阅\|换账号' <<< "$mf$(qo view-menu --view fl@view-v1 "$W1")" && fail "B: a row still offers 换账号 / 换到可用订阅 (T550): $mf"

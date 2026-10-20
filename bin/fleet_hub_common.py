@@ -518,7 +518,9 @@ TASK_REF_RE = re.compile(r"T[1-9][0-9]{0,17}")
 def validate_write(action, params):
     if action == "worker_start":
         fields(params, (), ("issue", "kind", "name", "title", "body", "draft", "agent", "repo", "no_repo", "origin_wid",
-                            "account_class", "reap", "attachments", "test", "task", "dispatch", "ticket_ref"))
+                            "account_class", "reap", "attachments", "test", "task", "dispatch", "launch", "ticket_ref"))
+        # compat-1v: 下一批删 — a hub from before C8 (EPIC T497) with its ID switch
+        # off still sends its launch contract; nothing here reads it any more.
         if "ticket_ref" in params:
             ref = params["ticket_ref"]
             # a GitHub issue only: the hub's own tickets are gone (T477)
