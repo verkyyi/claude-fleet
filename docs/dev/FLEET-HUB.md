@@ -736,7 +736,7 @@ refused or unreachable upstream keeps the last stable and says why in
 
 **Every release train keeps a ledger** (issue #3140, EPIC #3139 C1). The publish
 may carry one more part, `train` — `{run_id, prev_sha, merges: [{sha, merged_at}],
-stages: [{name, started_at, ended_at}], macos_queue_secs: […]}` — and once the
+stages: [{name, started_at, ended_at}]}` — and once the
 publish succeeds the hub writes it to `fleet_release_trains` together with the
 machines it must reach: every machine whose machine link is heard and not 维护中 at
 that moment (lost / 维护中 are not waited for). A machine link's beat whose
