@@ -8,8 +8,8 @@
 #      blank, field 22's T<n> (else the name's prefix) an alias; the agent is field 23's (a window here with none
 #      is Claude, another machine's 未知); the repo is the row's own field 24, not
 #      its heading's (a pinned or no-repo row: blank)
-#   C  the six glyphs + lost (one cell each, no emoji form), exited ⇒ ◌ under
-#      等你 (回收 D, T681: ↵ resume · r new · q close), an old `sleeping` ⇒ ∙ (☾ went with T548); the legend lists all seven
+#   C  the six glyphs + lost (one cell each, no emoji form), exited ⇒ ◌ folded
+#      into 已收起 (T688: ↵ its recovery page), an old `sleeping` ⇒ ∙ (☾ went with T548); the legend lists all seven
 #   D  paint: glyph(1) · ID(8, bold) · Agent(7) · name · repo(13); the repo column
 #      is kept blank; only ! and ✗ are coloured (red + bold); 未知 is dim; a long
 #      name is cut at its punctuation; no tag, issue or PR on the row
@@ -108,8 +108,11 @@ sym = {t: e["sym"] for t, e in by.items()}
 assert sym == {"@1": "work", "@2": "work", "@3": "done", "@4": "needs", "@5": "fail", "@6": "idle", "@7": "exited",
                "MU/far1": "idle", "MU/far2": "lost"}, sym
 grp = {t: e["group"] for t, e in by.items()}
-assert grp["@7"] == "ask" and "sec" not in by["@7"] and grp["@3"] == "queue" and grp["@6"] == "ask", grp
-assert all(e["group"] == "ask" for e in by.values() if e["sym"] == "exited")
+# T688: an exited agent whose window is up is folded straight into 已收起; idle
+# (sleeping: an older producer's) waits in 排队中, tagged 空闲 — 等你 only asks
+assert grp["@7"] == "folded" and by["@7"]["sec"] == "gone" and grp["@3"] == "queue" and grp["@6"] == "queue", grp
+assert "空闲" in by["@6"]["tags"] and grp["MU/far1"] == "queue", (by["@6"]["tags"], grp)
+assert all(e["group"] == "folded" for e in by.values() if e["sym"] == "exited")
 leg = fv.legend()
 assert leg == "↻ 运行中  ! 等你  ✓ 已完成  ✗ 失败  ◌ 已退出  ∙ 空闲  ? 失联", leg
 
@@ -167,6 +170,6 @@ assert "失联" in note and not red, (note, red)
 PY
 st_ok_all "A  short names: 来自 X：…, T<n> prefix → ID, 修 #N：/ brackets / paths dropped"
 st_ok_all "B  columns: ID blank without a window ID (T<n> an alias), Agent (here: Claude; far: 未知), the row's own repo"
-st_ok_all "C  ↻ ! ✓ ✗ ◌ ∙ ? — one cell each; ◌ under 等你; the legend"
+st_ok_all "C  ↻ ! ✓ ✗ ◌ ∙ ? — one cell each; ◌ folded into 已收起, ∙ in 排队中 (T688); the legend"
 st_ok_all "D  paint: glyph · ID · Agent · name · repo(13, kept blank); only ! ✗ red; cut at punctuation"
 st_ok_all "E  search: issue number exact (4539 ≠ 45390), match_why; ID searched; note_of red on 会坏"

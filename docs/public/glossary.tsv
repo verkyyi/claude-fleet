@@ -37,7 +37,7 @@ zh	en	note
 交接	hand off / handoff	continue in a fresh session from a written note
 失联	lost	a machine the hub has not heard from
 维护中	in maintenance	a machine an admin took out of placement
-排队中	queued	a session waiting on something that is not you: its PR, the release, being folded away
-已收起	folded away	a session whose window is closed, its conversation and worktree kept; ↵ restores it
-等你	waiting on you	a session asking a question or a permission
+排队中	queued	a session waiting on something that is not you: idle with nothing asked, its PR, the release, being folded away
+已收起	folded away	a session whose window is closed (or whose agent exited, its window still up), its conversation and worktree kept; ↵ restores it
+等你	waiting on you	a session asking a question or a permission, or failed — never one merely idle
 上下文	context	the model's context window

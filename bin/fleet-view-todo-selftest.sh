@@ -12,7 +12,7 @@
 #   C  fleet_view.entries over that producer: done + an unanswered ask → 等你 (the
 #      question under it); an ask on a closed issue → not; done + closed > 24 h →
 #      排队中 with its 已结束 words and the 收起 line (回收 D, T681); done → 排队中,
-#      idle → 等你; the group order
+#      idle → 排队中 (空闲, T688); the group order
 #   D  `fleet ls` (fleet-session-cli.py attach_bus) reads the same book: 在问
 #   E  stage_of / group_of on every PR cell the producer writes; the words in
 #      both languages
@@ -135,19 +135,19 @@ it = fv.entries("v1", hub=False)
 heads = [e["group"] for e in it if e["kind"] == "hdr"]
 # the rows carry no PR (issue #4902): no 等合并 / 等发版 / 刚落地 — those read the
 # PR cell; a closed issue's old done root is 已结束 on its own — 排队中 (回收 D, T681)
-# a done row is 排队中 whatever its PR; idle is 等你 (its next move is yours)
+# a done row is 排队中 whatever its PR; idle too, tagged 空闲 — 等你 is only what asks (T688)
 assert heads == ["ask", "queue"], (heads, [(e.get("name"), e.get("group"), e.get("sec")) for e in it])
 grp = {e["name"]: e["group"] for e in it if e["kind"] == "sess"}
 want = {"asks": "ask", "chk": "queue", "red": "queue", "train": "queue", "fresh": "queue", "kept": "queue",
-        "closedq": "queue", "idle": "ask", "over": "queue"}
+        "closedq": "queue", "idle": "queue", "over": "queue"}
 assert grp == want, grp
 assert {e["name"] for e in it if e.get("ended")} == {"over", "train"}, it
 ask = [e for e in it if e["kind"] == "ask"]
 assert [(a["of"], a["text"]) for a in ask] == [("@2", "要不要先合 #7？")], ask
 tag = {e["name"]: e["tags"] for e in it if e["kind"] == "sess"}
-assert all(v == [] for v in tag.values()), tag
+assert tag.pop("idle") == ["空闲"] and all(v == [] for v in tag.values()), tag
 hdr = [e["text"] for e in it if e["kind"] == "hdr"]
-assert hdr == ["等你 2", "排队中 7"], hdr
+assert hdr == ["等你 1", "排队中 8"], hdr
 assert not [e for e in it if e["kind"] == "sec"], it
 cmd = [e for e in it if e["kind"] == "cmd"]
 assert len(cmd) == 1 and cmd[0]["cmd"] == "reapall" and cmd[0]["n"] == 2 and "sec" not in cmd[0], cmd
@@ -170,15 +170,17 @@ cells = {"—": "", "closed": "", "live": "", "merged": "", "#75…": "checking"
 for c, s in cells.items():
     assert fv.stage_of(c) == s, (c, fv.stage_of(c), s)
 assert fv.stage_of("merged", "unknown") == "train"
-assert fv.group_of("idle", False, False, False) == "ask"                    # your move
+assert fv.group_of("idle", False, False, False) == "queue"                  # nothing asked: not your move (T688)
 assert fv.group_of("done", False, True, False, asked=True, stage="red") == "ask"
 assert fv.group_of("working", False, False, False, stage="red") == "work"
-assert fv.group_of("idle", False, False, False, stage="red") == "ask"
+assert fv.group_of("idle", False, False, False, stage="red") == "queue"
+assert fv.group_of("idle", False, False, False, asked=True) == "ask"           # an open ⛔ ask is
 assert fv.group_of("idle", False, False, True) == "queue"                    # the producer's 已结束 mark
 assert fv.group_of("done", False, True, True, stage="train") == "queue"
 assert fv.group_of("done", False, True, False, stage="train") == "queue"     # waits on the train, not you
 assert fv.group_of("done", False, False, False) == "queue"
-assert fv.group_of("exited", False, False, False) == "ask"                   # ↵ resume · r new · q close
+assert fv.group_of("exited", False, False, False) == "shut"                  # folded into 已收起 (T688)
+assert fv.group_of("exited", False, False, True) == "shut"
 assert fv.group_of("failed", False, False, True) == "ask"
 assert fv.group_of("", False, False, False) == "queue"
 assert fv.group_of("done", True, False, False, asked=True) == "pin"
@@ -190,6 +192,6 @@ for l in zh en; do
     [ -n "$v" ] && [ "$v" != "$k" ] || st_fail "E: $l:$k has no words"
   done
 done
-st_ok_all "C  panel: 等你 (ask on an open issue, its question; idle) · 排队中 (done, 已结束, the 收起 line)"
+st_ok_all "C  panel: 等你 (ask on an open issue, its question) · 排队中 (done, idle 空闲, 已结束, the 收起 line)"
 st_ok_all "D  fleet ls: 在问 from the same book; E stage_of / group_of on every PR cell, words zh + en"
 echo "fleet-view-todo-selftest: PASS"
