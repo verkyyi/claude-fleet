@@ -1051,19 +1051,24 @@ def id_hub(fid):
         return "unhubbed"
 
 
-def hub_task_agent(task):
-    """The hub task record's actual_agent ('' none / unread), kept FLEET_VIEW_TASK_AGENT_SECS
-    (300 s) per task — the Agent column's last fallback (EPIC T497 C17). Same read as
-    task_pr: `fleet-task-record.sh get`, bounded by FLEET_VIEW_PR_TIMEOUT; FLEET_VIEW_TASK_GET
+EPIC_MARK_RE = re.compile(r"<!--\s*fleet:epic\b([^>]*)-->")   # fleet-epic-tick.py's MARK
+SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+def hub_task(task):
+    """What the panel reads off a hub task record — {agent: actual_agent, repo: its
+    repo, else the EPIC charter marker's `repo=` in its words (T593)} ('' none /
+    unread), kept FLEET_VIEW_TASK_AGENT_SECS (300 s) per task. Same read as task_pr:
+    `fleet-task-record.sh get`, bounded by FLEET_VIEW_PR_TIMEOUT; FLEET_VIEW_TASK_GET
     (a command, the T<n> appended) is the selftest's seam."""
     if not re.match(r"^T[1-9][0-9]*$", task or ""):
-        return ""
+        return {}
     now = time.time()
-    hit = _ID_CACHE.get("agent:" + task)
+    hit = _ID_CACHE.get("task:" + task)
     if hit and now - hit[0] < fenv("FLEET_VIEW_TASK_AGENT_SECS", 300):
         return hit[1]
     secs = fenv("FLEET_VIEW_PR_TIMEOUT", 3)
-    got = ""
+    got = {}
     try:
         seam = os.environ.get("FLEET_VIEW_TASK_GET", "")
         p = subprocess.run(seam.split() + [task] if seam else sh("fleet-task-record.sh", "get", task),
@@ -1072,12 +1077,78 @@ def hub_task_agent(task):
                            stdin=subprocess.DEVNULL)
         rec = json.loads(p.stdout) if p.returncode == 0 else None
         if isinstance(rec, dict):
-            got = str((rec.get("task") or rec).get("actual_agent") or "")
-    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError):
-        got = ""
-    got = got if got in AGENTS else ""
-    _ID_CACHE["agent:" + task] = (now, got)
+            t = rec.get("task") or rec
+            agent = str(t.get("actual_agent") or "")
+            repo = str(t.get("repo") or "")
+            if not SLUG_RE.match(repo):
+                words = str(t.get("body") or "")
+                try:
+                    pl = t.get("request_payload") or ""
+                    words += "\n" + str((json.loads(pl) if isinstance(pl, str) and pl else pl or {}).get("body") or "")
+                except (ValueError, AttributeError):
+                    pass
+                m = EPIC_MARK_RE.search(words)
+                repo = (re.search(r"\brepo=(\S+)", m.group(1)) or [None, ""])[1] if m else ""
+            got = {"agent": agent if agent in AGENTS else "", "repo": repo if SLUG_RE.match(repo) else ""}
+    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
+        got = {}
+    _ID_CACHE["task:" + task] = (now, got)
     return got
+
+
+def hub_task_agent(task):
+    """The hub task record's actual_agent — the Agent column's last fallback (EPIC
+    T497 C17)."""
+    return hub_task(task).get("agent", "")
+
+
+def hub_tasks_warm(tasks):
+    """Read the uncached records of `tasks` side by side (each read is a hub round
+    trip, ~1-2 s) so a frame waits for one, not for all of them in a row."""
+    now = time.time()
+    todo = sorted({t for t in tasks if re.match(r"^T[1-9][0-9]*$", t or "") and not (
+        _ID_CACHE.get("task:" + t) and now - _ID_CACHE["task:" + t][0] < fenv("FLEET_VIEW_TASK_AGENT_SECS", 300))})
+    if len(todo) < 2:
+        for t in todo:
+            hub_task(t)
+        return
+    import threading
+    th = [threading.Thread(target=hub_task, args=(t,), daemon=True) for t in todo[:16]]
+    for t in th:
+        t.start()
+    for t in th:
+        t.join(fenv("FLEET_VIEW_PR_TIMEOUT", 3) + 2)
+
+
+def id_repo_ref(rec, task="", depth=0):
+    """Where a row with no window @repo finds its repo (T593): (repo, '') when its
+    ledger's opened names one, else ('', the hub task whose record does — an EPIC
+    driver's carries it in the charter marker's `repo=`); a ledger with no task of
+    its own asks the one it was continued from (opened.prev, a relay). ('', '') —
+    truly none (an orchestrator, a no-repo task)."""
+    o = (rec or {}).get("opened") or {}
+    if SLUG_RE.match(o.get("repo") or ""):
+        return o["repo"], ""
+    task = task or o.get("task") or ""
+    if task:
+        return "", task
+    prev = o.get("prev") or ""
+    if depth < 4 and prev:
+        return id_repo_ref(id_record(prev), "", depth + 1)
+    return "", ""
+
+
+def repo_fill(rows, repos):
+    """Give each row of `rows` the repo id_repo_ref finds it (the hub's records
+    read side by side); a slug new to `repos` joins it."""
+    refs = [(e, id_repo_ref(id_record(e.get("fid") or ""), e.get("task") or "")) for e in rows]
+    hub_tasks_warm(t for _, (_, t) in refs if t)
+    for e, (full, task) in refs:
+        full = full or (hub_task(task).get("repo", "") if task else "")
+        if full:
+            e["repo"] = full.rpartition("/")[2]
+            if full not in repos:
+                repos.append(full)
 
 
 def id_apply(e, fid, known, live=True):
@@ -1139,20 +1210,59 @@ def id_conflicts(rows):
             e["word"] = say("view_id_conflict")
 
 
-def id_gone_index():
+def id_gone_index(live=()):
     """{opened key: fid} over the closed ledgers, newest opening first — a reaped
-    row (fleet-history's `landed:issue:<N>` / `landed:scratch:<key>`) finds its ID."""
+    row (fleet-history's `landed:issue:<N>` / `landed:scratch:<key>`) finds its ID —
+    and {"native:<session id>": fid} over every segment: a scratch key is recycled
+    (scratch-42 is many sessions), its conversation is not (T593), so that is asked
+    first."""
     fi = fleet_id_mod()
     out = {}
     for fid in (fi.ledger_ids() if fi else []):
         rec = id_record(fid)
-        if not rec or not rec.get("closed"):
+        if not rec or fid in live:
             continue
         o = rec.get("opened") or {}
+        ts = o.get("ts") or 0
+        # a ledger whose window went without its close (a reap that wrote only the
+        # result) is still that conversation's: by native, closed or not
+        for sg in rec.get("segments") or []:
+            k = "native:" + (sg.get("native") or "")
+            if sg.get("native") and (k not in out or ts > out[k][1]):
+                out[k] = (fid, ts)
+        if not rec.get("closed"):
+            continue
         key = o.get("key") or ""
-        if key and (key not in out or (o.get("ts") or 0) > out[key][1]):
-            out[key] = (fid, o.get("ts") or 0)
+        if key and (key not in out or ts > out[key][1]):
+            out[key] = (fid, ts)
     return {k: v[0] for k, v in out.items()}
+
+
+def gone_sids(text):
+    """{landed target: its session id} — fleet-history rows' second field."""
+    out = {}
+    for line in (text or "").split("\n"):
+        parts = line.split(US, 2)
+        if len(parts) == 3 and parts[0].startswith("landed:") and parts[0] not in out:
+            out[parts[0]] = parts[1].strip()
+    return out
+
+
+def id_gone_alone(have, now, keep):
+    """The closed ledgers no history row and no window answers to (a no-repo task,
+    a session /clear or a relay left — T593), closed within `keep`: [(fid, rec)],
+    newest close first. fleet-history never lists them, so the ledger is their row."""
+    fi = fleet_id_mod()
+    out = []
+    for fid in (fi.ledger_ids() if fi else []):
+        if fid in have:
+            continue
+        rec = id_record(fid)
+        ts = ((rec or {}).get("closed") or {}).get("ts") or 0
+        # a dead record closed with nothing in it (C13's sweep) is no session
+        if ts and now - ts < keep and (rec.get("segments") or (rec.get("opened") or {}).get("title")):
+            out.append((ts, fid, rec))
+    return [(fid, rec) for _, fid, rec in sorted(out, key=lambda x: x[0], reverse=True)]
 
 
 def gone_key(target):
@@ -1372,7 +1482,7 @@ def entries(vid, now=None, hub=True):
     hage = hub_age(now)
     hstale = hage is not None and hage > fenv("FLEET_HUB_SESSIONS_STALE", 60)
     groups = {g: [] for g in GROUPS}
-    ended, repos, anc = [], [], {}
+    ended, repos, anc, norepo = [], [], {}, []
     section, repo = "", ""
     seen = set()
     known = id_known(v[0] for v in wins.values())
@@ -1512,6 +1622,8 @@ def entries(vid, now=None, hub=True):
         e["task"] = f[21].strip() if re.fullmatch(r"T\d+", f[21].strip()) else ""
         # the window's own ID (EPIC T497 C3): its short code, ledger agent and result
         id_apply(e, wins.get(target, ("", "", 0))[0] if local else target.rpartition("/")[2], known)
+        if not e["repo"]:
+            norepo.append(e)
         if e["state"] != state:
             grp = e["group"] = group_of(e["state"], section == "pin", landed, section == "ended", bool(pend), stage)
         if grp == "ended":
@@ -1530,6 +1642,9 @@ def entries(vid, now=None, hub=True):
         anc = {d: v for d, v in anc.items() if d < depth}
         anc[depth] = (grp, e["depth"])
         groups[grp].append(e)
+    # T593: a row with no window @repo (an EPIC driver opens @norepo) takes the
+    # ledger's / the task record's / the charter's repo; none ⇒ the column stays blank
+    repo_fill(norepo, repos)
     # the sessions whose windows are gone (issue #3286): after the open ended rows,
     # one an open row already shows (its issue, restored since) left out
     open_issues = {e["issue"] for g in groups.values() for e in g if e.get("issue")} | \
@@ -1537,15 +1652,18 @@ def entries(vid, now=None, hub=True):
     # issue #3731: they are their own group, 已关闭 — only the last
     # FLEET_VIEW_CLOSED_HOURS of them listed, the older ones a count that opens
     # /fleet-history; a row whose age cannot be read counts as older
-    gone, older, keep = [], 0, closed_secs()
+    gone, older, keep, ages = [], 0, closed_secs(), {}
     gidx = None
-    for target, glyph, label, name, title, act, pr, when in gone_rows(gone_text(fleet)):
+    gtext = gone_text(fleet)
+    sids = gone_sids(gtext)
+    for target, glyph, label, name, title, act, pr, when in gone_rows(gtext):
         if label.startswith("#") and label in open_issues:
             continue
         age = gone_age(when, act, now)
         if age is None or age >= keep:
             older += 1
             continue
+        ages[target] = age
         grepo = target.rpartition("@")[2] if "@" in target else ""
         word = say("view_ended_gone_merged") if glyph == "✓" else say("view_ended_gone")
         gone.append({"kind": "sess", "target": target, "far": False, "gone": True, "machine": here, "login": me,
@@ -1557,8 +1675,27 @@ def entries(vid, now=None, hub=True):
                                                     word, say("view_gone_hint")) if x)})
         row_cols(gone[-1], label, "", title, name)
         if gidx is None:
-            gidx = id_gone_index()
-        id_apply(gone[-1], gidx.get(gone_key(target), ""), known, live=False)
+            gidx = id_gone_index({v[0] for v in wins.values() if v[0]})
+        id_apply(gone[-1], gidx.get("native:" + sids.get(target, ""), "") or gidx.get(gone_key(target), ""),
+                 known, live=False)
+    # T593: a closed ID no history row lists — its ledger is the row (no restore:
+    # its Agent, title, result and ID page only)
+    have = {e.get("fid") for e in gone if e.get("fid")} | {v[0] for v in wins.values() if v[0]}
+    for fid, rec in id_gone_alone(have, now, keep):
+        o = rec.get("opened") or {}
+        title = o.get("title") or ""
+        gone.append({"kind": "sess", "target": "id:" + fid, "far": False, "gone": True, "ledger": True,
+                     "machine": here, "login": me, "state": "landed", "text": title, "name": title, "reap": "",
+                     "issue": "", "depth": 0, "detail": "", "group": "ended", "sec": "gone", "sym": "done",
+                     "lost": False, "lost_secs": None, "ask": "", "tags": [], "repo": "",
+                     "word": say("view_ended_gone"), "right": say("view_ago_fmt", dur(now - rec["closed"]["ts"])),
+                     "task": o.get("task") or "",
+                     "foot": " · ".join(x for x in (title, o.get("task") or "", say("view_ended_gone")) if x)})
+        row_cols(gone[-1], o.get("task") or "", "", title, title)
+        id_apply(gone[-1], fid, known, live=False)
+        ages["id:" + fid] = now - rec["closed"]["ts"]
+    repo_fill([e for e in gone if e.get("ledger")], repos)
+    gone.sort(key=lambda e: ages.get(e["target"], 0))
     if held != held0:
         names_save(fleet, held)
     # an EPIC's members under its driver (T507) — the hub read off the first frame
@@ -3168,7 +3305,7 @@ ACTIONS = [
      "local": lambda r, a, f: sh("fleet-worker-stop.sh", f, "fid:" + r["fid"]), "far": far("stop"), "ask": None,
      "slow": True},
     {"id": "resume", "label": lambda r: say("view_act_restore" if ended(r) else "view_act_resume"),
-     "when": lambda r: r.get("gone") or (r.get("state") == "exited" and (r.get("far") or r.get("page"))),
+     "when": lambda r: (r.get("gone") and not r.get("ledger")) or (r.get("state") == "exited" and (r.get("far") or r.get("page"))),
      "local": lambda r, a, f: "restore" if r.get("gone") else "resume", "far": far("resume"), "ask": None,
      "slow": True, "keys": "yYrR"},
     # another machine's row (issue #4184): the hub's worker_transfer — the same
@@ -4059,7 +4196,7 @@ def _popup(screen, qo, vid, client, forward=""):
     def valid_row(r):
         # Frozen origin, fresh eligibility. Never use the currently selected row
         # for an open page; a vanished/replaced origin is a refusal.
-        if not r.get("target") or (r.get("gone") and r["target"].startswith("landed:")):
+        if not r.get("target") or (r.get("gone") and r["target"].startswith(("landed:", "id:"))):
             return r
         if r.get("gone"):
             return None
@@ -4600,6 +4737,8 @@ def _popup(screen, qo, vid, client, forward=""):
             target = e.get("target") or ""
             if not target:
                 continue
+            if e.get("ledger"):
+                continue      # a closed ID with no history row (T593): nothing to restore
             if e.get("gone"):
                 # a reaped session (issue #3286): ↵ is its one action, 恢复
                 anchor(e)
