@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-hub-pool-selftest.sh — a node takes the pool's setting from the hub
 # (issue #2029): bin/fleet-hub-pool.sh (fetch / status), the hub-pool.env that
-# bin/fleet-lib.sh sources before fleet.conf, and the quotawatch tick that runs
+# bin/fleet-lib.sh sources before fleet.conf, and the reconcile tick that runs
 # the fetch. The hub is a file:// tree (/v1/fleet/client-settings is a file), so
 # no port is bound; FLEET_CONF_DIR is a sandbox.
 #
@@ -21,7 +21,7 @@
 #                  value passes through untouched
 #   E. TTL         a second fetch inside FLEET_HUB_POOL_SECS asks nothing;
 #                  --force asks
-#   F. tick        fleet-quotawatch.sh launches the fetch (and --status does not)
+#   F. tick        fleet-reconcile-tick.sh launches the fetch
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-hub-pool-selftest.XXXXXX") || exit 2
@@ -97,10 +97,9 @@ fetch                                   # inside the TTL of the last --force
 FLEET_HUB_POOL_SECS=0 fetch
 [ "$(ceiling)" = 55 ] && ok "E past the TTL: the new value" || bad "E past TTL: ceil=$(ceiling)"
 
-# --- F. the quotawatch tick launches it ------------------------------------------
-grep -q 'fleet-hub-pool.sh" fetch' "$BIN/fleet-quotawatch.sh" \
-  && awk '/fleet-hub-pool.sh" fetch/{exit !(p ~ /STATUS" = 0/ && p ~ /DRY" = 0/)} {p=$0}' "$BIN/fleet-quotawatch.sh" \
-  && ok "F fleet-quotawatch.sh fetches on a working tick only" || bad "F quotawatch does not launch the fetch on a working tick"
+# --- F. the reconcile tick launches it (it took it from the quota watch, T549) ----
+grep -q 'fleet-hub-pool.sh" fetch' "$BIN/fleet-reconcile-tick.sh" \
+  && ok "F fleet-reconcile-tick.sh launches the fetch" || bad "F the reconcile tick does not launch the fetch"
 
 # --- G. pool.move_when_full retired (T543) ---------------------------------------
 printf '{"settings":{},"keys":[],"pool":{"FLEET_ACCOUNT_CEILING":"70","FLEET_FAILOVER":"1","FLEET_ACCOUNT_PAUSED":""}}\n' \

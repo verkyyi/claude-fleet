@@ -10,7 +10,8 @@
 # lived only in prose, and four call sites missed it in the same way: they
 # redirected the OUTER tmux's stderr — `2>/dev/null` OUTSIDE the quotes — and
 # handed the inner script's stdout straight to tmux:
-#   fleet-quotawatch.sh  ×2  (fleet-model-switch --capped, fleet-account migrate)
+#   fleet-quotawatch.sh  ×2  (fleet-model-switch --capped, fleet-account migrate;
+#                             the --capped sweep now runs on fleet-reconcile-tick.sh, T549)
 #   tmux-dash-collect.sh ×2  (fleet-model-switch --model, fleet-account migrate)
 #   usage-modal.sh       ×1  (fleet-account migrate --idle — no outer redirect either)
 #   session-end-hook.sh  ×2  (the detached --exec reap)
@@ -119,8 +120,7 @@ ok "A no bin/*.sh dispatches an unsilenced literal run-shell script command"
 # The four known-bad call sites must now go through fleet_bg, not a hand-rolled
 # `tmux … run-shell -b` — the regression this issue is actually about.
 for pair in \
-  "fleet-quotawatch.sh|fleet-model-switch.sh' --capped" \
-  "fleet-quotawatch.sh|fleet-account.sh' migrate --account" \
+  "fleet-reconcile-tick.sh|fleet-model-switch.sh' --capped" \
   "tmux-dash-collect.sh|--model '\$fb'" \
   "session-end-hook.sh|session-end-hook.sh' --exec worker" \
   "session-end-hook.sh|session-end-hook.sh' --exec raw" ; do
@@ -133,7 +133,7 @@ for pair in \
     *) fail "A2 $sf must dispatch '$pat' via fleet_bg (silenced centrally, #575)" "$line" ;;
   esac
 done
-ok "A2 every known-noisy dispatch (quotawatch/collector/usage-modal/session-end) goes through fleet_bg"
+ok "A2 every known-noisy dispatch (reconcile/collector/usage-modal/session-end) goes through fleet_bg"
 
 # ============================================================================
 # B + C. fleet_bg's own contract, driven through a PATH `tmux` shim that LOGS its

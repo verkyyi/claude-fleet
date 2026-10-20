@@ -79,10 +79,7 @@
 #               collector that is working perfectly well, every single tick. A tick
 #               older than FLEET_COLLECT_DEADLINE is NOT evidence: past that the
 #               collector itself calls it wedged, kills it and supersedes it.
-# Only `collect` gets an `hb:`. quotawatch keeps one too, but the collector writes
-# it as well (`--caller collect`, the pre-#551 cadence), so reading it here would
-# reproduce the exact blind spot #639 found: a heartbeat that looks fresh while
-# com.claude-fleet.quotawatch itself has not been scheduled for hours.
+# Only `collect` gets an `hb:`.
 #
 # KEEP IN SYNC with launchd/*.plist.tmpl — bin/fleet-daemon-watch-selftest.sh
 # parses every template's StartInterval and fails if this table disagrees, so the
@@ -90,7 +87,6 @@
 fleet_daemon_units() {
   printf '%s\n' \
     'collect 60 hb:collect.heartbeat,pid:collect.pid' \
-    'quotawatch 60 tick' \
     'cleanup 60 tick' \
     'reconcile 60 tick' \
     'base-sync 60 tick' \

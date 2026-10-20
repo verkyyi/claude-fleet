@@ -2,9 +2,8 @@
 # usage-lib.sh — shared helpers for the Claude usage / subscription-limit signal
 # (issue #239). Sourced by its consumers so the freshness gate, the % parse,
 # and the warn/crit thresholds live in ONE place and can't drift:
-#   • bin/fleet-alerts.sh  — the limit ALARMS (quota · stale / unreadable /
-#                            uneven, issue #1238); the bar only
-#                            counts them, its 5h/7d usage stat is gone (#1100)
+#   • bin/fleet-alerts.sh  — the collector's liveness alarm (dash · stale); the
+#                            quota alarms left with the quota watch (T549)
 #   • bin/usage-modal.sh   — the usage/limit detail header + account picker body
 #                            (issue #289 merged the old usage-popup + account-pick)
 #
@@ -124,7 +123,7 @@ fleet_limit_banner() {
   # contain it cannot match any of them. Without this the ABSENCE of a banner, by
   # far the common case, was the most expensive answer this function could give:
   # three `grep -aoE | tail` pipelines, ~8 forks, on every window of every
-  # fleet-model-switch sweep. That sweep runs inside fleet-quotawatch's 60 s tick
+  # fleet-model-switch sweep. That sweep runs inside the reconcile unit's 60 s tick
   # at macOS QoS BACKGROUND, where a fork costs ~10x — it was 4 of the probe's
   # 12 s. A `case` is exact here, not a heuristic: it can only skip work the
   # greps were guaranteed to find nothing in.
@@ -179,142 +178,6 @@ fleet_limit_kind() {
     ''|session|weekly|daily|monthly|usage|*hour*|*day) printf 'subscription\n' ;;
     *) printf 'model:%s\n' "$w" ;;
   esac
-}
-
-# --- weekly PACE spread (issue #1231) ------------------------------------------
-# The quota watch mirrors `fleet-account.sh pace` to $G/quota.pace every tick
-# (label · 7d% · pace · verdict · 7d-reset; pace = 7d% − ceiling × the elapsed
-# fraction of the 7d window, + = ahead of an even burn). This prints
-# "<spread>\t<ahead-label>\t<behind-label>" when the most-ahead and most-behind
-# accounts are more than FLEET_ACCOUNT_PACE_SPREAD_WARN (30) points apart — the
-# `▲ quota · uneven · 34 pts` alert (bin/fleet-alerts.sh). Nothing without the file, with fewer
-# than two rows, or while the watch is stale (that alarm stands in: a table an
-# old tick wrote says nothing about the pool now).
-fleet_quota_pace_spread() {
-  _pf="$(fleet_usage_cache_dir)/quota.pace"
-  [ -f "$_pf" ] || return 0
-  [ -z "$(fleet_quota_stale_age)" ] || return 0
-  awk -F'\t' -v w="${FLEET_ACCOUNT_PACE_SPREAD_WARN:-30}" '
-    NF >= 3 && $3 ~ /^-?[0-9]+$/ {
-      n++
-      if (n == 1 || $3 + 0 > hi) { hi = $3 + 0; hl = $1 }
-      if (n == 1 || $3 + 0 < lo) { lo = $3 + 0; ll = $1 }
-    }
-    END { if (n >= 2 && hi - lo > w + 0) printf "%d\t%s\t%s", hi - lo, hl, ll }' "$_pf"
-  return 0
-}
-
-# --- ccquota pre-emptive watch liveness (issue #551) ---------------------------
-# The quota watch (bin/fleet-quotawatch.sh) restamps $C/account.quota.ts on every
-# tick — even when the hub is unreachable (empty rows still refresh the stamp) —
-# so the stamp's age is the watch's LIVENESS, not the hub's. Once the pool + hub
-# are configured and the stamp is older than FLEET_ACCOUNT_QUOTA_STALE (default
-# 600 s = 10× the fetch TTL), no tick has run for that long and the 70%/85%
-# pre-emptive rotation is blind. Surfaced by the status bar (✖ quota · stale · 47m),
-# fleet-doctor, and the watch's own --status. POSIX sh (fleet-doctor sources
-# nothing bash-only; keep it that way).
-
-# fleet_quota_watch_configured — 0 iff the watch is armed: an accounts pool dir
-# AND a ccquota hub URL. Mirrors the watch's own fail-open gate exactly.
-fleet_quota_watch_configured() {
-  [ -d "${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/accounts}" ] \
-    && [ -n "${CCQUOTA_HUB_URL:-}" ]
-}
-
-# fleet_quota_stale_age — print the stamp's age in seconds IFF the watch is
-# configured AND the stamp is stale (or absent: a configured pool with no stamp
-# has never been watched — that is stale too). Prints nothing when fresh or off.
-fleet_quota_stale_age() {
-  fleet_quota_watch_configured || return 0
-  _qts=''; _uf="$(fleet_usage_cache_dir)/account.quota.ts"
-  [ -f "$_uf" ] && IFS= read -r _qts < "$_uf" 2>/dev/null
-  case "$_qts" in ''|*[!0-9]*) _qts=0 ;; esac
-  _qage=$(( $(fleet_usage_now) - _qts ))
-  [ "$_qage" -ge "${FLEET_ACCOUNT_QUOTA_STALE:-600}" ] && printf '%s' "$_qage"
-  return 0
-}
-
-# --- ccquota FRESH-BUT-EMPTY alarm (issue #684) --------------------------------
-# The second way the pre-emptive rotation goes blind, and the one no stamp can
-# see. `account.quota.ts` is restamped even when the fetch came back with nothing
-# (deliberately — a dead hub must be retried at TTL cadence, not on every call),
-# so a hub that answers with zero rows leaves a cache that is FRESH and EMPTY.
-# Every alarm above reads that as healthy: on 2026-09-15 `--status` said
-# `fresh 117`, fleet-doctor PASSed, and the 70%/85% rotation had nothing to act on
-# for at least six minutes with every dial green. bin/fleet-account.sh counts the
-# consecutive empty fetches (quota_empty_streak) — this is the read side.
-#
-# ONE empty fetch is noise: a hub blip, a fetch killed on its budget. The STREAK
-# is the verdict, exactly as the model-cap probe's is (#706).
-# FLEET_ACCOUNT_QUOTA_BLIND_STREAK: consecutive empty fetches before the alarm
-# (default 3 ≈ 3 min at the 60s TTL); 0 turns it off.
-
-# fleet_quota_blind — print "<streak><TAB><seconds-blind>" IFF the watch is
-# configured, is TICKING, and the last N fetches all came back empty. Nothing
-# otherwise. STALE WINS: a stamp that has stopped moving means no fetch is
-# happening at all, so the streak is frozen history rather than a live condition
-# — reporting both would put two red alarms on the bar for one broken daemon.
-fleet_quota_blind() {
-  fleet_quota_watch_configured || return 0
-  [ -z "$(fleet_quota_stale_age)" ] || return 0
-  [ -z "$(fleet_quota_carry)" ] || return 0            # still acting on the last reading (#2465)
-  _qbmin="${FLEET_ACCOUNT_QUOTA_BLIND_STREAK:-3}"
-  case "$_qbmin" in ''|*[!0-9]*) _qbmin=3 ;; esac
-  [ "$_qbmin" -eq 0 ] && return 0                      # 0 = alarm off
-  _qbe=''; _uf="$(fleet_usage_cache_dir)/account.quota.empty"
-  [ -f "$_uf" ] && IFS= read -r _qbe < "$_uf" 2>/dev/null
-  _qbn=${_qbe%%	*}; _qbs=0
-  case "$_qbe" in *'	'*) _qbs=${_qbe#*	} ;; esac
-  case "$_qbn" in ''|*[!0-9]*) return 0 ;; esac
-  case "$_qbs" in ''|*[!0-9]*) _qbs=0 ;; esac
-  [ "$_qbn" -ge "$_qbmin" ] || return 0
-  _qbage=0
-  [ "$_qbs" -gt 0 ] && _qbage=$(( $(fleet_usage_now) - _qbs ))
-  [ "$_qbage" -lt 0 ] && _qbage=0
-  printf '%s\t%s' "$_qbn" "$_qbage"
-  return 0
-}
-
-# --- a reading CARRIED over a refused / silent hub (issue #2465) ---------------
-# bin/fleet-account.sh keeps the last good rows when a fetch comes back empty
-# (account.quota.why says why) until the reading is FLEET_QUOTA_STALE_OK old
-# (1800 s); only then does it clear them, and only then is the watch blind above.
-# fleet_quota_carry — print
-#   "<reading age s><TAB><refused|unreachable|empty><TAB><how long that reason has held s><TAB><detail>"
-# IFF the watch is configured, ticking, the last fetch was empty and the cache
-# still holds rows young enough to act on. Nothing otherwise.
-fleet_quota_carry() {
-  fleet_quota_watch_configured || return 0
-  [ -z "$(fleet_quota_stale_age)" ] || return 0
-  _qcd=$(fleet_usage_cache_dir)
-  [ -s "$_qcd/account.quota.why" ] && [ -s "$_qcd/account.quota" ] || return 0
-  _qcw=''; IFS= read -r _qcw < "$_qcd/account.quota.why" 2>/dev/null
-  _qcr=''; [ -f "$_qcd/account.quota.read_at" ] && IFS= read -r _qcr < "$_qcd/account.quota.read_at" 2>/dev/null
-  case "$_qcr" in ''|*[!0-9]*) _qcr=''; [ -f "$_qcd/account.quota.ts" ] && IFS= read -r _qcr < "$_qcd/account.quota.ts" 2>/dev/null ;; esac
-  case "$_qcr" in ''|*[!0-9]*) return 0 ;; esac
-  _qcnow=$(fleet_usage_now)
-  _qcage=$(( _qcnow - _qcr )); [ "$_qcage" -lt 0 ] && _qcage=0
-  _qcok="${FLEET_QUOTA_STALE_OK:-1800}"; case "$_qcok" in ''|*[!0-9]*) _qcok=1800 ;; esac
-  [ "$_qcok" -gt 0 ] && [ "$_qcage" -le "$_qcok" ] || return 0
-  _qcwhy=${_qcw%%	*}; _qcrest=''; case "$_qcw" in *'	'*) _qcrest=${_qcw#*	} ;; esac
-  _qcs=${_qcrest%%	*}; _qcdet=''; case "$_qcrest" in *'	'*) _qcdet=${_qcrest#*	} ;; esac
-  case "$_qcwhy" in refused|unreachable|empty) ;; *) _qcwhy=unreachable ;; esac
-  case "$_qcs" in ''|*[!0-9]*) _qcs=$_qcnow ;; esac
-  _qcfor=$(( _qcnow - _qcs )); [ "$_qcfor" -lt 0 ] && _qcfor=0
-  printf '%s\t%s\t%s\t%s' "$_qcage" "$_qcwhy" "$_qcfor" "$_qcdet"
-  return 0
-}
-
-# fleet_quota_why — the reason the empty reads gave, "<why><TAB><detail>", for
-# the blind alarm's words (nothing when the last fetch brought rows).
-fleet_quota_why() {
-  _qwf="$(fleet_usage_cache_dir)/account.quota.why"
-  [ -s "$_qwf" ] || return 0
-  _qww=''; IFS= read -r _qww < "$_qwf" 2>/dev/null
-  _qwr=''; case "$_qww" in *'	'*) _qwr=${_qww#*	} ;; esac
-  case "$_qwr" in *'	'*) _qwr=${_qwr#*	} ;; *) _qwr='' ;; esac
-  printf '%s\t%s' "${_qww%%	*}" "$_qwr"
-  return 0
 }
 
 # fleet_usage_human_secs <secs> — 47s | 47m | 3h | 2d (coarsest unit, floor).
@@ -414,7 +277,7 @@ fleet_collect_kick_age() {
 
 # fleet_collect_kick_due — 0 iff the collector is stale AND the last kick is older
 # than FLEET_COLLECT_KICK_COOLDOWN. Callers gate on this BEFORE spawning the kick
-# script, so the status bar (every 5s, per attached client) and the quota watch
+# script, so the status bar (every 5s, per attached client) and the reconcile tick
 # (every 60s) cost two file reads in the common case and fork nothing. The kick
 # script re-checks and claims atomically — this is the cheap pre-filter, not the
 # rate limit itself.
@@ -425,81 +288,3 @@ fleet_collect_kick_due() {
   [ "$_ka" -ge "${FLEET_COLLECT_KICK_COOLDOWN:-600}" ]
 }
 
-# --- quota readings off the STATUS LINE (issue #1267) --------------------------
-# ccquota is one fetch on one tick, and when that tick stalls the 70%/85%
-# rotation reads a number that stopped moving (a 2.5h-stale cache, #551). Every
-# Claude Code status-line render already carries the SAME 5h/7d numbers for the
-# account that session spends (`.rate_limits.five_hour/seven_day.{used_percentage,
-# resets_at}` — verified on 2.1.288 with a CLAUDE_CODE_OAUTH_TOKEN session; they
-# equal ccquota's row to the percent), so conf/statusline.sh stamps them on its
-# window as tmux options:
-#   @rl5h @rl7d   integer % used          @rl_reset "<5h-reset> <7d-reset>" (epoch s)
-#   @rl_ts        epoch s of the render
-# and the window's @cc_account says whose numbers they are. The fleet mod
-# (mod/fleet/hooks/usage.ts, issue #1338) stamps the SAME set off the engine's
-# `session.measure` — after every turn, watched or not — plus @rl_src=mod; the
-# status line unsets @rl_src, so a stamp without it is the status line's.
-# The quota watch lists
-# them (`$FLEET_QUOTA_RL_FMT`, one line per window) and this merges them into
-# ccquota's rows: per account, the NEWEST reading wins. ccquota stays the fallback
-# — an idle session does not re-render, so its stamp ages out after
-# FLEET_QUOTA_RL_TTL (default 600 s) and ccquota's row stands.
-# POSIX sh + awk, pure: no tmux, no network (the caller hands both inputs in).
-
-# FLEET_QUOTA_RL_FMT — the list-windows -F format the watch reads the stamps
-# with: "<account> <ts> <5h%> <7d%> <5h-reset> <7d-reset> <src>", `-` for an
-# unset option. The reset pair always prints two words (`- -` unset), so the
-# writer (@rl_src: `mod`, `proxy`, or `-` = the status line) is a stable 7th field and a
-# 6-field line from before it reads as the status line's. A plain variable,
-# not a function: the watch reads it every tick, fork-free.
-# shellcheck disable=SC2034  # read by bin/fleet-quotawatch.sh, which sources this lib
-FLEET_QUOTA_RL_FMT='#{?@cc_account,#{@cc_account},-} #{?@rl_ts,#{@rl_ts},-} #{?@rl5h,#{@rl5h},-} #{?@rl7d,#{@rl7d},-} #{?@rl_reset,#{@rl_reset},- -} #{?@rl_src,#{@rl_src},-}'
-
-# fleet_quota_merge <ccquota-rows> <ccquota-epoch> <statusline-lines> — print the
-# merged rows: ccquota's 7 TSV columns (label 5h 7d headroom 5h-reset 7d-reset
-# %/h) plus an 8th, the SOURCE (`ccquota` | `statusline` | `mod` | `proxy` — the
-# credential proxy's reading, issue #1978), and a 9th, the
-# reading's epoch. A statusline line counts only when its account is a plain
-# label (not `-`, not a `codex:` one), both percentages are integers, and its
-# stamp is no older than FLEET_QUOTA_RL_TTL (and not in the future). Per account
-# the newest such line is the statusline reading; it REPLACES the ccquota row only
-# when strictly newer than <ccquota-epoch> (a tie keeps ccquota). Its headroom is
-# 100 − the larger %, its %/h is ccquota's (a single render has no rate), and a
-# reset it lacks is ccquota's. An account with a fresh statusline reading but no
-# ccquota row gets one (ccquota down ≠ blind) — the caller filters to the pool.
-fleet_quota_merge() {
-  _fqm_now=$(fleet_usage_now)
-  _fqm_ttl="${FLEET_QUOTA_RL_TTL:-600}"
-  case "$_fqm_ttl" in ''|*[!0-9]*) _fqm_ttl=600 ;; esac
-  case "${2:-}" in ''|*[!0-9]*) _fqm_cts=0 ;; *) _fqm_cts=$2 ;; esac
-  printf '%s\n' "${1:-}" | FQM_SL="${3:-}" awk -F'\t' -v now="$_fqm_now" -v ttl="$_fqm_ttl" -v cts="$_fqm_cts" '
-    function isint(v) { return v ~ /^[0-9]+$/ }
-    BEGIN {
-      n = split(ENVIRON["FQM_SL"], L, "\n")
-      for (i = 1; i <= n; i++) {
-        m = split(L[i], f, " ")
-        if (m < 4) continue
-        a = f[1]; t = f[2]
-        if (a == "" || a == "-" || index(a, ":")) continue
-        if (!isint(t) || !isint(f[3]) || !isint(f[4])) continue
-        if (t + 0 > now + 60 || now - t > ttl) continue
-        if ((a in ts) && ts[a] >= t + 0) continue
-        ts[a] = t + 0; u5[a] = f[3] + 0; u7[a] = f[4] + 0
-        r5[a] = (m >= 5 && isint(f[5])) ? f[5] + 0 : 0
-        r7[a] = (m >= 6 && isint(f[6])) ? f[6] + 0 : 0
-        src[a] = (m >= 7 && (f[7] == "mod" || f[7] == "proxy")) ? f[7] : "statusline"
-      }
-    }
-    function emit(l, c5, c7, pph) {
-      mx = (u5[l] > u7[l]) ? u5[l] : u7[l]
-      printf "%s\t%d\t%d\t%d\t%d\t%d\t%s\t%s\t%d\n", l, u5[l], u7[l], 100 - mx,
-        (r5[l] > 0 ? r5[l] : c5), (r7[l] > 0 ? r7[l] : c7), pph, src[l], ts[l]
-    }
-    $1 == "" { next }
-    {
-      seen[$1] = 1
-      if (($1 in ts) && ts[$1] > cts) emit($1, $5 + 0, $6 + 0, ($7 == "" ? 0 : $7))
-      else printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\tccquota\t%d\n", $1, $2, $3, $4, $5, $6, $7, cts
-    }
-    END { for (l in ts) if (!(l in seen)) emit(l, 0, 0, 0) }'
-}

@@ -524,7 +524,7 @@ GitHub login, valid Codex login, SSH key, loaded fleet services, or live/complet
 guide. A key whose comment contains `temporary` or `临时` gets a reminder to
 replace it. Missing steps are WARNs and do not change the doctor's FAIL exit code.
 
-The doctor's per-daemon rows (`cleanup`, `ledger`, `basesync`, `qwatch`) read a
+The doctor's per-daemon rows (`cleanup`, `ledger`, `basesync`) read a
 guest login's shape too (issue #1495): when the gui `launchctl list` has no
 `com.claude-fleet.<unit>`, `bin/fleet-daemon-loaded.sh` asks the system domain
 for `com.claude-fleet.<login>.<unit>` — unprivileged first, then through a

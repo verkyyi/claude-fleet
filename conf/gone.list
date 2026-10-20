@@ -173,3 +173,13 @@ func fleet_quota_via_banner                     T546  bin/
 func fleet_limit_axis                           T546  bin/
 func account_reconcile                          T546  bin/
 func qw_failover_enabled                        T546  bin/
+# --- the per-minute quota watch retired (T549, EPIC T542 C3) -----------------------
+path launchd/com.claude-fleet.quotawatch.plist.tmpl  T549
+path systemd/claude-fleet-quotawatch.service         T549
+path systemd/claude-fleet-quotawatch.timer           T549
+func fleet_quota_stale_age     T549  bin/
+func fleet_quota_blind         T549  bin/
+func fleet_quota_carry         T549  bin/
+func fleet_quota_pace_spread   T549  bin/
+func fleet_quota_merge         T549  bin/
+func quotawatch_in_tick        T549  bin/

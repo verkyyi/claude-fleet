@@ -49,7 +49,7 @@ On a computer with only the client installed (it watches sessions, runs none), `
 - First check whether it is waiting for you: the "Waiting on you" group in the ⌘P panel.
 - The window shows the recovery page (the session exited): ↵ continues the same conversation, `r` starts a new one.
 - New sessions will not open and stay queued: read the `admit`, `memory` and `machine` rows — most often this computer's memory or load is at its limit; existing sessions are not affected, and the new one opens once there is room.
-- The session says its quota is used up: read the `quota` and `qwatch` rows; when a subscription fills, the pool switches to the next subscription (if there is one) — the session is not moved.
+- The session says its quota is used up: when a subscription fills, the pool switches to the next subscription (if there is one) — the session is not moved; the session's own 剩余 % is on the top line of the view.
 
 ### "This is a client; tasks run on managed nodes"
 
@@ -580,26 +580,12 @@ From `fleet doctor`.
 
 ### Subscriptions and quota
 
-#### `quota`
-
-From `fleet doctor`.
-
-- **What it is**: whether the quota readings of each subscription account can be fetched and are recognized. Without them, fleet can only switch accounts once a session runs into the quota banner.
-- **On WARN / FAIL**: check that the hub is there and the account names match; `fleet-account.sh quota --refresh` reads them again.
-
-#### `qwatch`
-
-From `fleet doctor`.
-
-- **What it is**: whether the quota cache is being refreshed and has anything in it.
-- **On WARN / FAIL**: fix the credentials first (read the `cert` and `node` rows, `fleet login`), then `fleet-account.sh quota --refresh`.
-
 #### `modelcap`
 
 From `fleet doctor`.
 
-- **What it is**: whether the quota readings have per-model windows. It only reports.
-- **On WARN / FAIL**: nothing to do.
+- **What it is**: once a minute the state reconcile probes each fleet for a session walled on one model's limit (and switches it in place to the fallback); when that probe keeps timing out, a walled session goes unnoticed.
+- **On WARN / FAIL**: the row names the step that was slow; raise `FLEET_MODELCAP_PROBE_BUDGET` only after reading it.
 
 #### `cred`
 

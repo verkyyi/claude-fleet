@@ -177,7 +177,7 @@
 # STUCK → ONE notification (R4 #1125). The doctor's install row (C7 #1123) WARNs
 # on a stuck login, but nobody runs the doctor on the days nobody is looking, so
 # the tick that turns stuck says so itself — over FLEET_NOTIFY_CMD, the same
-# channel quotawatch / diskguard / the collector use (nothing when it is unset).
+# channel diskguard / the collector use (nothing when it is unset).
 # Stuck is what the doctor calls STUCK: `refused`, `rolled-back` (and the
 # `skipped` ticks that follow it — the same episode), `failed`, or `deferred`
 # (the disk gate) longer than FLEET_INSTALL_FOLLOW_STUCK_SECS (24h), or
@@ -442,7 +442,7 @@ notify_stuck() {
 **${LOGIN}**'s fleet install ($ROOT) is at $(short "${HEAD_SHA:-?}") and not following stable $(short "${STABLE_SHA:-?}") — **$1**: $2
 $hint
 One notice per (login · reason · stable); it re-arms once this login follows again. Silence it for this login with \`FLEET_INSTALL_SYNC=0\` in ~/.config/claude-fleet/fleet.settings."
-  # shellcheck disable=SC2086  # FLEET_NOTIFY_CMD is a command line, split on purpose (quotawatch does the same)
+  # shellcheck disable=SC2086  # FLEET_NOTIFY_CMD is a command line, split on purpose (diskguard does the same)
   fleet_timebox "$NOTIFY_BUDGET" $FLEET_NOTIFY_CMD "$msg" >/dev/null 2>&1; rc=$?
   if [ "$rc" != 0 ]; then
     say "notify ($key) failed: $FLEET_NOTIFY_CMD exit $rc — retried next tick"; return 0

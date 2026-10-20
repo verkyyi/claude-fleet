@@ -150,7 +150,7 @@ launchd-per-fleet plumbing.
 
 ### Every collector phase is budgeted, and so is the whole tick (issue #653)
 
-The collector's tick is a serial chain of phases — quota watch, sockets, sessmap,
+The collector's tick is a serial chain of phases — sockets, sessmap,
 issues, git, ctx, usage, scrape, banner, escalate, snapshot. launchd never overlaps
 a `StartInterval` job, so **tick duration IS the collector's real cadence**: a tick
 that runs 454s against a 60s interval means every cache the task list reads is minutes
@@ -194,45 +194,17 @@ The heartbeat already timed every phase, so *which* phase ate the tick was free
 information nobody printed; `over=` and `skipped=` now carry it and `fleet-doctor`
 reports it, so the next time the bottleneck moves it does not cost an investigation.
 
-### The quota watch budgets itself the same way (issue #698)
+### The quota watch retired; its errands ride the reconcile tick (T549)
 
-`bin/fleet-quotawatch.sh` had budgets for its *pieces* — a cap probe
-(`FLEET_QUOTAWATCH_PROBE_BUDGET`), the sweep phase
-(`FLEET_QUOTAWATCH_SWEEP_BUDGET`) — and none for itself.
-`FLEET_QUOTAWATCH_DEADLINE` (120s) reads like a budget and is not one: it lives in
-the overlap guard, where it tells a **successor** that the lock holder is stuck and
-may be superseded. That successor is exactly what a slow tick prevents — launchd
-does not overlap a `StartInterval` job, and #671 gates the collector's in-tick
-fallback off while the unit is running — so the one thing that could have enforced
-the 120s was structurally absent whenever it was needed. Measured live on
-2026-09-15, on a host that already had #688: a **5m45s** tick against that 120s,
-not wedged, simply unbounded.
-
-So the tick now bounds itself, on the collector's model:
-
-- **`FLEET_QUOTAWATCH_TICK_BUDGET`** (100s) is checked before every phase *and*
-  before every iteration of the two loops (the per-fleet sweep, the per-account
-  policy), and each phase's budget is clamped to what the tick has left.
-- **The calls inside a loop iteration are budgeted too** — the ccquota fetch
-  (`FLEET_QUOTAWATCH_FETCH_BUDGET`), the collector self-heal errand
-  (`…_KICK_BUDGET`), and each fleet's share of a policy episode
-  (`…_TMUX_BUDGET`). Without this the per-iteration check is theatre: one
-  `tmux display-message` that never returns (57s observed, #582) defeats any
-  number of checks *between* iterations. The granularity is per **socket**, not
-  per call, to avoid repeating timebox setup and job creation for every window.
-- **Wind down, never self-kill.** At the budget the tick stops *starting* work,
-  writes its heartbeat, releases the lock and exits 0. A `kill $$` would be the
-  #582 regression: the process holds the lock and only its `EXIT` trap frees it.
-  Deferring is safe because the sweep has its fairness cursor and a policy episode's
-  once-per-window marker is written only for an account that was actually handled —
-  so a deferred account has no marker and the next tick does the whole episode.
-
-Two invariants are **enforced in code** rather than left to four defaults agreeing,
-which is #686's lesson: the budget plus a wind-down margin must stay under the
-deadline (otherwise a tick is tree-killed mid-wind-down), and the sweep must leave
-the ccquota fetch its budget (that is what #582 gave the sweep a budget *for* — the
-fetch is ~1s and its stamp is the liveness signal every staleness alarm reads).
-Either one violated clamps the offending knob **down**, loudly.
+`bin/fleet-quotawatch.sh` — the 60 s unit that read every pool account's quota and
+warned, benched and moved sessions (#551, its self-budget #698) — retired with
+EPIC T542: a full subscription is the credential pool's to change. Its four side
+errands run as phases of `bin/fleet-reconcile-tick.sh`, each clamped to what is
+left of that tick's 55 s: the per-fleet model-cap probe (`FLEET_MODELCAP_PROBE_BUDGET`,
+20 s a fleet, 25 s in all, a fairness cursor, the timeout streak fleet-doctor's
+`modelcap` row reads), `fleet-proxy-quota.sh push`, the collector self-heal and
+`fleet-alerts.sh write`. Each phase's seconds land in `reconcile.heartbeat` as
+`t_<phase>=`, what the tick had no room for in `skipped_phases=`.
 
 `bin/fleet-timebox-kill-selftest.sh` §5 is the soak that goes with this: twenty
 rounds, most of them over budget, asserting zero residue at the end *and* that the
@@ -610,9 +582,8 @@ $TMPDIR/.claude-dash/
     <unit>.kick.ts · <unit>.kick.lock/        # per-unit self-heal: rate limit + dash trace (#636, #639)
     <unit>.kick.fails · <unit>.reload.ts      # …and its escalation ladder (#639)
     launchd-probe.verdict · launchd-probe.lock/ # is the DOMAIN still spawning at all? (#711)
-    quotawatch.lock/ · quotawatch.heartbeat   # quota watch (bin/fleet-quotawatch.sh) lock + heartbeat
-    quota.warn.<acct> · quota.ceiling.<acct>  # once-per-reset-window rotation markers (#513)
-    account.phase · quota.phase              # 5h-window phase stagger + its re-plan marker (#598)
+    reconcile.modelcap.<fleet>               # the model-cap probe's timeout streak (#706; reconcile tick)
+    account.phase                            # 5h-window phase stagger (#598)
 ```
 
 The collector resolves each live tmux session → its repo and records it in

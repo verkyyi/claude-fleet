@@ -579,12 +579,9 @@ the same scale (newest write wins): `@ctx_pct` / `@ctx_limit`, and — only when
 both windows have a reading — `@rl5h` `@rl7d` `@rl_reset` `@rl_ts` plus
 `@rl_src mod` (a status-line stamp unsets `@rl_src`, so absent = the status
 line). The status line alone also stamps `@ctx_band` / `@model` / `@effort` for
-the pane header's right segment (issue #1452); the mod does not write those. The quota watch merges both per `@cc_account` as before
-(`fleet_quota_merge`, source column `mod` | `statusline` | `ccquota`), and when
-EVERY pool account has a `mod` stamp under 60s old and the ccquota cache is
-younger than half `FLEET_ACCOUNT_QUOTA_STALE`, it reads that cache instead of
-calling the hub (`fleet-quotawatch: … ccquota fetch skipped`). No mod ⇒ no `mod`
-stamp ⇒ every fetch runs as before.
+the pane header's right segment (issue #1452); the mod does not write those. (The
+quota watch that merged these per account retired, T549; the stamps are the
+session's own 剩余 % on the top line.)
 
 **Quota from the credential proxy (#1978).** With `FLEET_CRED_PROXY=1` every
 session's requests pass `bin/fleet-cred-proxy.py`, which keeps each session's
@@ -593,8 +590,7 @@ reading (ctl `quota`, memory only). `bin/fleet-proxy-quota.sh push` stamps it
 through `conf/statusline.sh --from proxy` onto the window whose `@cred_sid` it
 is — `@rl*` with `@rl_src proxy` and `@rl_ts` = the reading's time — so a Codex
 window has `@rl*` too. The proxy kicks the push itself (not separated) and the
-quota watch runs it every tick before its read; the merge counts `proxy` like
-`mod`. While that stamp is younger than `FLEET_RL_PROXY_FRESH` (300 s) the
+reconcile tick runs it every minute (T549). While that stamp is younger than `FLEET_RL_PROXY_FRESH` (300 s) the
 status line and the mod leave `@rl*` alone.
 
 **Tools** — none with the service mounted (mod 0.4.0, issue #1812, EPIC #1813

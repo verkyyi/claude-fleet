@@ -50,11 +50,6 @@
 #                           look (#551). over= names the phases that spent their own
 #                           budget and skipped= the ones the whole-tick budget deferred
 #                           (#653); fleet-doctor.sh prints both with the slowest phase
-# The ccquota PRE-EMPTIVE rotation (issue #513) is NOT a block of this tick any more
-# (issue #551): it lives in bin/fleet-quotawatch.sh, its own 60s daemon
-# (com.claude-fleet.quotawatch), and is ALSO run first thing below — before any gh
-# work — so its cadence never rides this tick's gh latency.
-#
 # Overlap guard (#551): ONE tick at a time. launchd/systemd never overlap a
 # StartInterval job themselves, but a tick can be started by hand / by fleet-up
 # while one runs; and a tick wedged on an un-timeboxed `gh` blocked every later
@@ -344,11 +339,6 @@ PHASE_MIN=5     # less headroom than this left in the tick ⇒ don't start a pha
 # handoff (sessmap → issues) goes through global/collect.repoqueue on disk, so
 # `issues` works off the last good queue whatever order it is reached in. $SOCKETS
 # and the shared helpers are resolved in the head below, before any of them.
-#
-# `quotawatch` is deliberately NOT in this list: #551 put it first precisely so its
-# cadence never rides the tick's gh/git latency, and rotating it would hand it back
-# the variable position it was moved out of. It runs in the head, budgeted like
-# everything else, and the tick budget still bounds it.
 PHASE_LIST=(guide sessmap issues git ctx usage scrape banner escalate agentcfg snapshot)
 # hubsess (issue #1423) exists only with the cross-machine hub on (CCQUOTA_FLEET=1)
 # for at least one fleet — read per fleet since #1539 (fleet_hub_any: a fleet
@@ -365,7 +355,6 @@ awk -F '\t' '$3 == "thin" { f = 1; exit } END { exit !f }' "$FLEET_CONF_DIR"/rem
 # room without loosening the others; the tick budget is the backstop over all of them.
 phase_budget() {
   case "$1" in
-    quotawatch) printf '%s' "${FLEET_COLLECT_QUOTAWATCH_BUDGET:-30}" ;;
     sockets)    printf '%s' "${FLEET_COLLECT_SOCKETS_BUDGET:-20}" ;;
     guide)      printf '%s' "${FLEET_COLLECT_GUIDE_BUDGET:-30}" ;;
     sessmap)    printf '%s' "${FLEET_COLLECT_SESSMAP_BUDGET:-30}" ;;
@@ -446,66 +435,6 @@ run_phase() {
   return 0
 }
 
-# --- quota watch FIRST (issue #551): before any gh/git/python work ---------------
-# The ccquota pre-emptive rotation (bin/fleet-quotawatch.sh) has its own 60s
-# daemon; running it here too, at the very top, keeps an install whose daemon set
-# predates #551 watching at THIS tick's cadence. stderr passes through to the
-# collector log.
-#
-# It stays FIRST and out of the phase rotation (issue #653). #551 moved it to the
-# top precisely so its cadence never rides this tick's gh/git latency; letting the
-# rotation place it would hand back the variable position it was moved out of. It is
-# budgeted like every other phase, and the whole-tick budget still bounds it.
-#
-# The fallback is now CONDITIONAL (issue #671). It used to be unconditional, on the
-# claim that it "costs nothing on a healthy one" — its fetch is TTL-gated, its lock
-# skips an in-flight tick, its markers dedup every action. Measurement falsified
-# that: the modelcap sweep is the tick's expensive half and is gated by NEITHER the
-# TTL nor the dedup markers (it has budgets of its own — 20s a fleet, 40s a sweep),
-# so on a multi-fleet host the collector's copy routinely ran the full sweep and was
-# killed at the 30s phase budget. Sampled durations were 46 · 56 · 35 · 57 · 25 · 17
-# · 10 · 3 seconds, `quotawatch` sat permanently in the heartbeat's over= list and in
-# fleet-doctor's "over budget" line, and one phase was eating a quarter of a 120s
-# tick to duplicate work a dedicated 60s unit had already done.
-#
-# So: run it here only when the unit is not demonstrably running on its own. The
-# comment's stated purpose — cover an install whose daemon set predates #551 —
-# is kept whole, and a healthy install genuinely pays ~0.
-#
-# The gate asks "is com.claude-fleet.quotawatch actually TICKING?", not "is it
-# loaded?", which is the sharper question #639 established and a strict superset of
-# it: a unit that is absent, unloaded, OR loaded-but-pended all fall back. It is
-# also the cheap question — two file reads against fleet_daemon_tick_ts, no
-# launchctl round-trip — and, critically, it cannot flap, because #639 already made
-# `--caller collect` the one caller that does NOT stamp the scheduling heartbeat.
-# The collector can therefore never mistake its own fallback for the unit being
-# healthy; the fallback stays engaged until the real unit ticks again.
-#
-# FLEET_COLLECT_QUOTAWATCH=always|never forces the old unconditional behaviour or
-# switches the fallback off entirely; the default `auto` is the gate.
-quotawatch_in_tick() {   # 0 ⇒ this tick runs the watch itself
-  local ts age
-  case "${FLEET_COLLECT_QUOTAWATCH:-auto}" in
-    always|1) return 0 ;;
-    never|0)  return 1 ;;
-  esac
-  # Lib absent (a half-synced install) ⇒ fail OPEN to the historical behaviour: the
-  # watch running twice is a cost, the watch not running at all is a blind fleet.
-  command -v fleet_daemon_tick_ts >/dev/null 2>&1 || return 0
-  ts=$(fleet_daemon_tick_ts quotawatch "$BIN/..")
-  case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
-  [ "$ts" -gt 0 ] || return 0                 # never ticked: no unit, or a fresh install
-  age=$(( $(now) - ts ))
-  [ "$age" -ge "$(fleet_daemon_stale_secs quotawatch)" ]   # ticking ⇒ 1 ⇒ skip
-}
-ph_quotawatch() {
-  # Deliberately still a PHASE even when gated off: the boundary is recorded, so the
-  # heartbeat keeps reading `phases=quotawatch=0 …` and "the gate is on" is visible
-  # as a number rather than as a phase that silently vanished from the list.
-  quotawatch_in_tick || return 0
-  bash "$BIN/fleet-quotawatch.sh" --caller collect >/dev/null || true
-}
-run_phase quotawatch || true
 
 # Each fleet runs on its OWN tmux server/socket now (issue #159), so there is no
 # single shared server to probe — enumerate the live fleet sockets ONCE and fan
@@ -1101,8 +1030,8 @@ local banner kind lm fb muntil mig msw mk muntilt
   # process and background agents and context all kept; it falls back to
   # fleet-migrate.sh --model itself when it cannot verify the flip, issue #569),
   # and notify once per episode. @model_migrating guards the window across ticks
-  # and is SHARED with the quotawatch sweep, which normally gets here first —
-  # this branch is the backstop for a daemon set that predates #569. No usable
+  # and is SHARED with the state-reconcile tick's modelcap sweep, which normally
+  # gets here first — this branch is the backstop. No usable
   # fallback (knob empty, or it IS the capped model) → left to the pool, as a
   # subscription banner is (below).
   kind=$(printf '%s\n' "$banner" | fleet_limit_kind)
@@ -1150,12 +1079,6 @@ ph_banner_over() {
   printf 'fleet-collect: banner covered %s/%s window(s) — next tick resumes after %s\n' \
     "${prog%% *}" "${prog##* }" "$(tr '\t' ' ' < "$G/banner.cursor" 2>/dev/null)" >&2
 }
-
-# NB: the ccquota-driven PRE-EMPTIVE rotation (issue #513) — warn at
-# FLEET_ACCOUNT_WARN_PCT, bench + migrate at FLEET_ACCOUNT_CEILING — used to sit
-# HERE, at the tail of the tick. It moved to bin/fleet-quotawatch.sh (issue #551):
-# its own 60s daemon, and run at the TOP of this tick (see above), so it no longer
-# waits on the gh/git/python phases and a tick that dies early can't skip it.
 
 # NB: the PR/CI attention signal (@prci/@pfg per window) is not the collector's
 # (#81); its writer left with #4899.

@@ -3,7 +3,7 @@
 # `# selftest-parts:` / `# selftest-part:` headers run-selftests.sh reads (T525).
 # Reads fleet-break-it-selftest.sh, fleet-break-it-node-selftest.sh,
 # fleet-break-it-thin-selftest.sh, fleet-cleanup-idle-selftest.py,
-# fleet-hub-selftest.py, fleet-quotawatch-selftest.sh, fleet-await-stall-selftest.sh,
+# fleet-hub-selftest.py, fleet-await-stall-selftest.sh,
 # fleet-break-it-part.py, break-it-durations.txt, selftest_part.py and fleet-hub.yml.
 # Also covers fleet-break-it-cred-sep-selftest.sh, fleet-break-it-hub-selftest.sh
 # and fleet-sleep-selftest.sh (issue #3884).
@@ -35,7 +35,6 @@ families = {
     'fleet-break-it-thin-selftest.sh': 'BREAK_PART',
     'fleet-cleanup-idle-selftest.py': 'SELFTEST_PART',
     'fleet-hub-selftest.py': 'SELFTEST_PART',
-    'fleet-quotawatch-selftest.sh': 'SELFTEST_PART',
     'fleet-await-stall-selftest.sh': 'SELFTEST_PART',
     'fleet-break-it-cred-sep-selftest.sh': 'BREAK_PART',
     'fleet-break-it-hub-selftest.sh': 'BREAK_PART',
@@ -139,7 +138,7 @@ for name, var in families.items():
 
 # Execute the actual shell dispatch with harmless groups, so all/default and
 # automatic discovery cannot silently diverge from the metadata above.
-for base in ('fleet-quotawatch', 'fleet-await-stall'):
+for base in ('fleet-await-stall',):
     source = (root / (base + '-selftest.sh')).read_text()
     dispatch = source[source.index('# Discover groups,'):]
     groups = re.findall(r'^(test_[a-z0-9_]+)\(\) *\{', source, re.M) + ['test_new_case_2']

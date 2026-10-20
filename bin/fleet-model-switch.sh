@@ -86,8 +86,8 @@
 #                            caller, issue #1617 — fleet-alerts.sh event)
 #
 # COST, and why it is a correctness property here (issue #706). `--capped
-# --dry-run` is the probe fleet-quotawatch runs for every fleet on every 60 s
-# tick, under a 20 s FLEET_QUOTAWATCH_PROBE_BUDGET that tree-kills it. That daemon
+# --dry-run` is the probe the reconcile tick runs for every fleet on every 60 s
+# tick, under a 20 s FLEET_MODELCAP_PROBE_BUDGET that tree-kills it. That daemon
 # is a macOS ProcessType=Background unit — QoS BACKGROUND, where a fork costs
 # roughly 10x what it costs in the foreground (#588 measured the same multiplier
 # on bulk I/O and classified this unit as a "pure poller"; the poller had grown a
@@ -104,7 +104,7 @@
 # with window count instead of falling off a cliff at it.
 #
 # Env: FLEET_MODEL_SWITCH_TRACE=<file> — opt-in breadcrumb, rewritten at every step
-# boundary (step=/win=/elapsed=/steps=). fleet-quotawatch sets it and reads it off
+# boundary (step=/win=/elapsed=/steps=). fleet-reconcile-tick.sh sets it and reads it off
 # the probe's corpse, because a tree-killed probe reports nothing itself.
 # Also FLEET_MODEL_SWITCH_SCROLL (-200), _VERIFY (15), _DIALOG (5).
 #
@@ -134,7 +134,7 @@ NUDGE_DEFAULT="Your previous turn was interrupted by a per-model usage limit: th
 
 # Sourced by bin/fleet-model-switch-selftest.sh (it pins the pure helpers) →
 # define only; a direct run dispatches. Same guard idiom as fleet-migrate.sh.
-# Callers: bin/fleet-quotawatch.sh (the 60s sweep, --capped per fleet) and the
+# Callers: bin/fleet-reconcile-tick.sh (the 60s sweep, --capped per fleet) and the
 # collector's #524 banner branch (the backstop, one explicit window).
 
 # ------------------------------------------------------------------ pure ----
@@ -337,7 +337,7 @@ main() {
   # ---- the breadcrumb (issue #706) -----------------------------------------
   # FLEET_MODEL_SWITCH_TRACE names a file this run rewrites at every step
   # boundary. It exists because the caller that most needs the number can never
-  # read our output: fleet-quotawatch runs this probe under fleet_timebox, and on
+  # read our output: the reconcile tick runs this probe under fleet_timebox, and on
   # expiry the whole process TREE is killed — so "timeout" was the entire
   # diagnosis available for the 69% of ticks that hit it, and nobody could say
   # which step had eaten the 20 s. The file is written with a plain builtin
@@ -493,7 +493,7 @@ main() {
     esac
     # cap_settled is consulted ONLY for a `working` window, so nothing below it is
     # worth paying for on any other window — and most windows are not working. This
-    # probe runs synchronously inside the 60 s quotawatch tick, so it stays cheap:
+    # probe runs synchronously inside the 60 s reconcile tick, so it stays cheap:
     # one extra capture-pane and two window options for the working few, nothing for
     # everyone else.
     if [ "$state" = working ]; then

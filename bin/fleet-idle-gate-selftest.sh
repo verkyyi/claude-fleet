@@ -1,8 +1,8 @@
 #!/bin/bash
 # fleet-idle-gate-selftest.sh — the daemon IDLE GATE (issue #1077). A login with
-# no live fleet used to run collect + quotawatch in full every 60s and turn the
+# no live fleet used to run collect in full every 60s and turn the
 # spinner every 2s, for nobody. Drives the REAL bin/fleet-daemon-lib.sh on a
-# pinned clock, then the real collector / quotawatch / spinner snippets in a
+# pinned clock, then the real collector / spinner snippets in a
 # sandbox (fake tmux on PATH) — no launchd, no tmux server, no network.
 #
 #   1. grace    — a fresh idle spell works every tick for FLEET_DAEMON_IDLE_AFTER.
@@ -17,7 +17,6 @@
 #   8. collect  — the real collector skips a gated tick before its pid guard,
 #                 still stamps its scheduling tick, and works with a live socket
 #                 or in targeted --issues mode.
-#   9. quota    — the real quotawatch skips a gated tick before its lock.
 #  10. spinner  — idle_nap: 2s in the grace, the 60s nap past it, 2s again after
 #                 a wake; the no-fleet branch sleeps "$NAP".
 #  11. wakers   — fleet-up and the spawn choke points all touch the wake marker.
@@ -121,9 +120,9 @@ n=$(grep -c '^fleet-idle: collect' "$WORK/gate.err")
 [ "$n" = 1 ] || fail "log: one fleet-idle line per spell, got $n"; ok
 grep -q 'FLEET_DAEMON_IDLE_AFTER=0' "$WORK/gate.err" || fail "log: the line names the off switch"; ok
 
-# --- 8/9. the real collector and quotawatch in a sandbox -----------------------
+# --- 8. the real collector in a sandbox -----------------------
 SB="$WORK/sb"; mkdir -p "$SB/bin" "$SB/fakepath" "$SB/conf/fleets/sessA" "$SB/tmp"
-for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-daemon-lib.sh fleet-account.sh fleet_iso.py; do
+for f in tmux-dash-collect.sh fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-daemon-lib.sh fleet-account.sh fleet_iso.py; do
   [ -f "$BIN/$f" ] && cp "$BIN/$f" "$SB/bin/"
 done
 printf 'FLEET_REPO="acme/widgets"\n' > "$SB/conf/fleets/sessA/conf"
@@ -169,19 +168,6 @@ deep_idle collect; rm -f "$HB"
 FAKE_LIVE=0 FLEET_DAEMON_IDLE_AFTER=0 run tmux-dash-collect.sh
 [ -f "$HB" ] || fail "collect: IDLE_AFTER=0 runs every tick"; ok
 
-QHB="$SB/tmp/.claude-dash/global/quotawatch.heartbeat"
-deep_idle quotawatch; rm -f "$QHB" "$SB/calls"
-FAKE_LIVE=0 run fleet-quotawatch.sh; rc=$?
-[ "$rc" = 0 ] || fail "quotawatch: a gated tick exits 0 (got $rc)"; ok
-[ ! -f "$QHB" ] && [ ! -s "$SB/calls" ] || fail "quotawatch: a gated tick must not fetch or sweep"; ok
-[ -f "$SG/quotawatch.tick" ] || fail "quotawatch: a gated tick still stamps its scheduling tick"; ok
-deep_idle quotawatch; rm -f "$QHB"
-FAKE_LIVE=0 run fleet-quotawatch.sh --caller collect
-[ -f "$SG/quotawatch.idle" ] && [ "$(cut -d' ' -f4 "$SG/quotawatch.idle")" = 0 ] \
-  || fail "quotawatch: --caller collect is not gated here (the collector gates itself)"; ok
-touch "$SG/wake"; date +%s > "$SG/wake"; deep_idle quotawatch; rm -f "$QHB"
-FAKE_LIVE=0 run fleet-quotawatch.sh
-[ -f "$QHB" ] || fail "quotawatch: a fresh wake marker opens the gate: $(tail -3 "$SB/err")"; ok
 
 # --- 10. the spinner's idle nap ------------------------------------------------
 SP="$BIN/tmux-spinner.py"

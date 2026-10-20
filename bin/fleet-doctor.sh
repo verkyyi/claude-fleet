@@ -894,173 +894,30 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
     esac
   done
   [ "$bad" -eq 0 ] && pass account "$n subscription token(s) in ${acct_dir} (per-account windows honored)"
-  # ccquota-driven PRE-EMPTIVE rotation (issue #513): with a hub URL + ccquota on
-  # PATH the collector rotates at FLEET_ACCOUNT_CEILING before any banner. Report
-  # what the collector would see: rows per pool label (unmapped labels = ccquota
-  # names that don't match the fleet's — fix with `ccquota name <uuid> <label>` or
-  # CCQUOTA_ACCOUNT=<uuid> in <label>.conf), or why it is running banner-only.
-  if [ -n "${CCQUOTA_HUB_URL:-}" ]; then
-    # Watch LIVENESS first (issue #551), BEFORE the --refresh below restamps the
-    # cache: account.quota.ts is restamped by every fleet-quotawatch tick (even an
-    # unreachable hub restamps), so its age says whether the watch is ticking at
-    # all. Stale = the 70%/85% pre-emptive rotation is BLIND — that silent
-    # fail-open cost a whole 5-hour window on 2026-09-11, so it is a FAIL.
-    qst=$(bash "$(dirname "$0")/fleet-quotawatch.sh" --status 2>/dev/null)
-    # state <TAB> how long it has held (s) <TAB> consecutive-empty-fetch streak.
-    # carry/blind add why the reads come back empty, carry how long that has held.
-    qstate=${qst%%	*}; qrest=${qst#*	}; qage=${qrest%%	*}; qrest=${qrest#*	}
-    qstreak=${qrest%%	*}; qwhy=''; qwhyfor=0
-    case "$qrest" in *'	'*) qrest=${qrest#*	}; qwhy=${qrest%%	*}; case "$qrest" in *'	'*) qwhyfor=${qrest#*	} ;; esac ;; esac
-    case "$qage"    in ''|*[!0-9]*) qage=0 ;; esac
-    case "$qstreak" in ''|*[!0-9]*) qstreak=0 ;; esac
-    case "$qwhyfor" in ''|*[!0-9]*) qwhyfor=0 ;; esac
-    qdur="$((qage/60))m"; [ "$qage" -lt 60 ] && qdur="${qage}s"
-    # The three ways the hub gives nothing (issue #2465), in the words the alarm uses.
-    qdetail=$(sed -n '1s/^[^	]*	[^	]*	//p' "${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/account.quota.why" 2>/dev/null)
-    case "$qwhy" in
-      refused)     qwhyw="拒（401：入口拒绝额度读数${qdetail:+ — $qdetail}）" ;;
-      unreachable) qwhyw="失联（入口联系不上${qdetail:+ — $qdetail}）" ;;
-      empty)       qwhyw="盲（入口答空）" ;;
-      *)           qwhyw="盲（入口答空）" ;;
-    esac
-    qrefuse_alarm="${FLEET_QUOTA_REFUSED_ALARM:-300}"; case "$qrefuse_alarm" in ''|*[!0-9]*) qrefuse_alarm=300 ;; esac
-    case "$qstate" in
-      carry)
-        qcarry="沿用 $((qage/60)) 分钟前的读数 — the pick keeps ranking on it until it is FLEET_QUOTA_STALE_OK $(( ${FLEET_QUOTA_STALE_OK:-1800} / 60 ))m old, then clears it; a limit banner still benches"
-        if [ "$qwhy" = refused ] && [ "$qwhyfor" -ge "$qrefuse_alarm" ]; then
-          fail qwatch "$qwhyw for $((qwhyfor/60))m ($qstreak reads) — $qcarry. Fix the credential (\`fleet doctor\` cert / node rows, \`fleet login\`), then \`fleet-account.sh quota --refresh\`"
-        else
-          warn qwatch "$qwhyw, $qstreak read(s) — $qcarry (\`fleet-account.sh quota --refresh\`)"
-        fi ;;
-      stale) fail qwatch "quota cache last refreshed $((qage/60))m ago (> FLEET_ACCOUNT_QUOTA_STALE ${FLEET_ACCOUNT_QUOTA_STALE:-600}s) — pre-emptive rotation is BLIND; is com.claude-fleet.quotawatch loaded? (\`launchctl list | grep quotawatch\`; the collector falls back to running the watch first thing each tick once this unit stops ticking, issue #671 — check its heartbeat below)" ;;
-      never) warn qwatch "quota cache never written — no fleet-quotawatch tick has run yet (install/kick com.claude-fleet.quotawatch, or run bin/fleet-quotawatch.sh once)" ;;
-      blind) [ "$qwhy" = refused ] && qwhyw="$qwhyw — $(bash -c '. "$1/fleet-lib.sh" && fleet_hub_auth_fix' _ "$(dirname "$0")" 2>/dev/null)"
-             fail qwatch "$qwhyw — quota cache is FRESH BUT EMPTY — the last $qstreak ccquota reads returned no rows ($qdur, ≥ FLEET_ACCOUNT_QUOTA_BLIND_STREAK ${FLEET_ACCOUNT_QUOTA_BLIND_STREAK:-3}). The watch IS ticking, so nothing here is stale; the 70%/85% pre-emptive rotation simply has nothing to act on, which is the same outage with every dial green (issue #684). Check the hub: \`ccquota budget --account all --json\`, then \`fleet-account.sh quota --refresh\`; the quota line below names any account ccquota cannot read" ;;
-      fresh) pass qwatch "quota cache ${qage}s old and non-empty — the pre-emptive watch is ticking AND getting readings (\`fleet-quotawatch.sh --status\`)" ;;
-    esac
-    # …and whether the ticks that ARE happening finish their work (issue #698).
-    # `--status` above answers "is it ticking", which a tick that winds down on
-    # budget passes: it restamps the cache and exits 0. What it drops on the way —
-    # a fleet not swept, an account not warned — lives in the heartbeat's over= and
-    # skipped=, and would otherwise only ever be visible in the launchd log. Same
-    # argument as the collector's line below, which #653 added for the same reason.
-    qhb="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/quotawatch.heartbeat"
-    if [ -f "$qhb" ]; then
-      qhb_get() { sed -n "s/^$1=//p" "$qhb" | head -1; }
-      qhb_dur=$(qhb_get dur); qhb_budget=$(qhb_get budget)
-      qhb_over=$(qhb_get over); qhb_skipped=$(qhb_get skipped)
-      if [ -n "$qhb_skipped" ] || [ -n "$qhb_over" ]; then
-        qhb_detail=''
-        [ -n "$qhb_over" ]    && qhb_detail="; over budget: $qhb_over"
-        [ -n "$qhb_skipped" ] && qhb_detail="$qhb_detail; deferred to the next tick: $qhb_skipped"
-        warn qwatch "last quotawatch tick took ${qhb_dur:-?}s against its ${qhb_budget:-?}s budget (FLEET_QUOTAWATCH_TICK_BUDGET)$qhb_detail — it wound down instead of overrunning, which is by design, but a tick that keeps deferring is one whose work no longer fits in 60s"
-      fi
-    fi
-    # --- the per-fleet model-cap probe (issue #706) --------------------------
-    # A cap probe that times out is not a slow tick, it is a BLIND fleet: the probe
-    # is the only input to model-cap detection, which is the only trigger for
-    # fleet-model-switch.sh --capped. And a walled worker fails in the ugliest way
-    # there is — a capped turn never fires the Stop hook, so @claude_state stays
-    # `working` forever and the sweep keeps deferring its own candidate as
-    # "mid-turn". On 2026-09-15 one fleet had timed out on 788 of 1136 ticks, 18 of
-    # the last 18, and nothing outside logs/quotawatch.launchd.log ever said so.
-    # A single timeout is noise; the STREAK the watch keeps is the verdict.
-    #
-    # And the record must be CURRENT, not merely bad. A health file outlives the
-    # fleet it describes — `fleet-down` removes the session, not this file — so
-    # without an age gate a torn-down fleet would leave a doctor line that FAILs
-    # forever about something that no longer exists, and the same goes for any
-    # window in which the daemon itself is not ticking (which the staleness check
-    # above already reports, once, in the right words). That is the #639/#658
-    # lesson: a check that can cry wolf is worse than no check, because the next
-    # real one gets scrolled past. FLEET_ACCOUNT_QUOTA_STALE is the horizon the
-    # rest of this section already uses for "no tick has run".
-    for qmf in "${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/quotawatch.modelcap."*; do
-      case "$qmf" in *'quotawatch.modelcap.*') continue ;; esac   # an unmatched glob
-      [ -f "$qmf" ] || continue
-      qmfleet=${qmf##*/quotawatch.modelcap.}
-      qmstreak=$(sed -n 's/^streak=//p' "$qmf" | head -1)
-      qmstep=$(sed -n 's/^step=//p' "$qmf" | head -1)
-      qmlastok=$(sed -n 's/^lastok=//p' "$qmf" | head -1)
-      qmat=$(sed -n 's/^at=//p' "$qmf" | head -1)
-      case "$qmstreak" in ''|*[!0-9]*) qmstreak=0 ;; esac
-      case "$qmlastok" in ''|*[!0-9]*) qmlastok=0 ;; esac
-      case "$qmat" in ''|*[!0-9]*) qmat=0 ;; esac
-      [ "$qmstreak" -ge "${FLEET_QUOTAWATCH_MODELCAP_STREAK:-3}" ] || continue
-      [ $(( $(date +%s) - qmat )) -lt "${FLEET_ACCOUNT_QUOTA_STALE:-600}" ] || continue
-      if [ "$qmlastok" -gt 0 ]; then qmago="last completed $(( ( $(date +%s) - qmlastok ) / 60 ))m ago"
-      else qmago="it has never completed"; fi
-      fail qwatch "$qmfleet: the model-cap probe has timed out $qmstreak ticks running (in step '${qmstep:-?}'; $qmago) — model-cap detection on that fleet is BLIND, so a worker walled on its model will sit at @claude_state=working forever and \`fleet-model-switch.sh --capped\` will never fire for it. The step name says where the budget went; raise FLEET_QUOTAWATCH_PROBE_BUDGET (${FLEET_QUOTAWATCH_PROBE_BUDGET:-20}s) only after reading it, and check \`bash bin/fleet-model-switch.sh --capped --dry-run --session $qmfleet\`"
-    done
-    if command -v "${FLEET_QUOTA_BIN:-ccquota}" >/dev/null 2>&1; then
-      # NAME the binary on the other side of this contract (issue #668). ccquota
-      # ships no tagged release (docs/dev/INSTALL.md) — everyone installs it with
-      # `go install …@latest`, so the builds DO drift between machines, and the
-      # shape FAIL below is precisely the moment a human needs to know which one
-      # answered: its advice can only say *"that build is probably newer than this
-      # fleet"*, and until now there was no build named anywhere on the line.
-      # `ccquota version` is a local print (cmd/ccquota/main.go); a build old
-      # enough to predate the subcommand exits non-zero with usage on stderr, and
-      # one that printed usage on STDOUT would hand us a sentence — so take one
-      # whitespace-free token or nothing. Omitting the version is the graceful
-      # path: it must never turn a quota verdict into an error of its own.
-      # $qtag is the message subject everywhere below, so ALL FOUR verdicts
-      # (PASS / both WARNs / FAIL) carry it, and degrade to today's bare
-      # "ccquota" when the version can't be had.
-      qver=$("${FLEET_QUOTA_BIN:-ccquota}" version 2>/dev/null | head -1 | tr -d '\r')
-      qver=${qver#ccquota }                      # `ccquota <ver>` → <ver>
-      case "$qver" in ''|*[[:space:]]*) qver='' ;; esac
-      qtag="ccquota"; [ -n "$qver" ] && qtag="ccquota $qver"
-      # Two calls on purpose (issue #628): the first FETCHES and is read for its
-      # STDERR — quota_parse's only channel for "ccquota cannot read account X"
-      # and "I do not understand this payload". Those accounts produce NO row, so
-      # the rows alone cannot tell them apart from a label ccquota never knew, and
-      # the advice differs. The second is cache-only (no second network hit).
-      qdiag=$(bash "$(dirname "$0")/fleet-account.sh" quota --refresh 2>&1 >/dev/null)
-      qrows=$(bash "$(dirname "$0")/fleet-account.sh" quota --cached 2>/dev/null); qn=$(printf '%s' "$qrows" | grep -c .)
-      qshape=$(printf '%s\n' "$qdiag" | sed -n 's/^fleet-account: ccquota payload shape not recognized for \([^:]*\):.*/\1/p' | tr '\n' ' ')
-      qnoread=$(printf '%s\n' "$qdiag" | sed -n 's/^fleet-account: ccquota has no reading for \([^ ]*\) .*/\1/p' | tr '\n' ' ')
-      if [ -n "$qshape" ]; then
-        # The contract itself broke: ccquota answered, the account is not flagged
-        # unreadable, and yet neither window is there. Silence used to turn that
-        # into `0% used` — a confident wrong number that never benches and
-        # attracts every migrate. RED, not a warn: nobody is rotating on this.
-        fail quota "$qtag payload shape not recognized for: ${qshape% } — neither five_hour nor seven_day in an account that is not flagged unavailable; those accounts get NO row (never benched, never a migrate target). That build is probably newer than this fleet — compare \`ccquota budget --account all --json\` with quota_parse in bin/fleet-account.sh"
-      elif [ "$qn" -gt 0 ] && [ -s "${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/account.quota.why" ]; then
-        # The hub gave nothing this time; these rows are the last good reading,
-        # carried (issue #2465) — the qwatch line above says why and how old.
-        warn quota "$qtag → hub $CCQUOTA_HUB_URL gave no reading — $qn/$n pool accounts ranked on the carried one ($(printf '%s' "$qrows" | awk -F'\t' '{printf "%s%s %s%%/%s%%", (NR>1?", ":""), $1, $2, $3}')); see qwatch"
-      elif [ "$qn" -gt 0 ] && [ "$qn" -eq "$n" ]; then
-        pass quota "$qtag → hub $CCQUOTA_HUB_URL: $qn/$n pool accounts mapped — pre-emptive rotation at ${FLEET_ACCOUNT_CEILING:-85}% (warn ${FLEET_ACCOUNT_WARN_PCT:-70}%)"
-      elif [ -n "$qnoread" ]; then
-        # ccquota is explicit about this one (available:false) — expected while a
-        # token is fresh or the hub has not seen the account yet. Fail-open, but
-        # NAMED: it is invisible to the rotation for as long as it lasts.
-        warn quota "$qtag has NO reading for: ${qnoread% } ($qn/$n pool labels have one) — those get no row: never benched at ${FLEET_ACCOUNT_CEILING:-85}%, and never picked as a migrate landing spot. Check \`ccquota budget --account all --json\` (\`available:false\` + its reason)"
-      elif [ "$qn" -gt 0 ]; then
-        warn quota "$qtag maps only $qn/$n pool labels — unmapped ones rotate banner-only (\`ccquota name\` must equal the fleet label, or set CCQUOTA_ACCOUNT= in <label>.conf)"
-      else
-        warn quota "$qtag → hub $CCQUOTA_HUB_URL unreachable or unknown — rotation is banner-driven only (fail-open)"
-      fi
-      # Per-MODEL headroom (issue #1073) — the Fable cap is its own weekly window
-      # (7d_oi), invisible in 5h/7d. PASS/INFO only, never counted: without it
-      # the fleet is exactly as it was before (banner-driven model caps).
-      if [ "$qn" -gt 0 ]; then
-        qmodels=$(bash "$(dirname "$0")/fleet-account.sh" model-quota 2>/dev/null)
-        if [ -n "$qmodels" ]; then
-          pass modelcap "$qtag per-model windows: $(printf '%s\n' "$qmodels" | awk -F'\t' '
-            { u=($6=="-") ? "?" : $6"%"; s=$1" "$2" "u; if ($3=="capped") s=s" CAPPED"; o=o (o?" · ":"") s }
-            END { print o }') — spawns prefer an account with headroom; capped ones launch on the fallback"
-        else
-          info modelcap "$qtag reports no per-model windows (\`models\` in \`budget --json\`, tokenledger#155) — a model cap (Fable) is still found only by its banner, after a session hits it"
-        fi
-      fi
-    else
-      warn quota "CCQUOTA_HUB_URL set but ccquota not on PATH — pre-emptive rotation off; build it in a clone of the claude-fleet repo with \`cd tokenledger/agent && go build -o ~/.local/bin/ccquota ./cmd/ccquota\` (needs Go 1.25+; the product is TokenLedger, tokenledger/ in the claude-fleet repo, the binary is still \`ccquota\`)"  # dist-ok: advice printed to a person, never fetched here
-    fi
-  else
-    printf '        note: set CCQUOTA_HUB_URL (fleet.conf) for pre-emptive rotation via ccquota — today it rotates only after a limit banner.\n'
-  fi
+  # --- the per-fleet model-cap probe (issue #706) ----------------------------
+  # The state-reconcile tick probes each fleet for a window walled on ONE model
+  # (fleet-model-switch.sh --capped); a probe that times out is not a slow tick, it
+  # is a BLIND fleet — a capped turn never fires the Stop hook, so the worker sits
+  # at `working` forever. A single timeout is noise; the STREAK is the verdict, and
+  # only while the record is current (a torn-down fleet leaves its file behind).
+  # The quota watch that used to run this probe retired (T549, EPIC T542 C3).
+  for qmf in "${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/reconcile.modelcap."*; do
+    case "$qmf" in *'reconcile.modelcap.*'|*/reconcile.modelcap.start|*/reconcile.modelcap.trace.*) continue ;; esac
+    [ -f "$qmf" ] || continue
+    qmfleet=${qmf##*/reconcile.modelcap.}
+    qmstreak=$(sed -n 's/^streak=//p' "$qmf" | head -1)
+    qmstep=$(sed -n 's/^step=//p' "$qmf" | head -1)
+    qmlastok=$(sed -n 's/^lastok=//p' "$qmf" | head -1)
+    qmat=$(sed -n 's/^at=//p' "$qmf" | head -1)
+    case "$qmstreak" in ''|*[!0-9]*) qmstreak=0 ;; esac
+    case "$qmlastok" in ''|*[!0-9]*) qmlastok=0 ;; esac
+    case "$qmat" in ''|*[!0-9]*) qmat=0 ;; esac
+    [ "$qmstreak" -ge "${FLEET_MODELCAP_STREAK:-${FLEET_QUOTAWATCH_MODELCAP_STREAK:-3}}" ] || continue   # compat-1v: 下一批删 (the old name)
+    [ $(( $(date +%s) - qmat )) -lt 600 ] || continue
+    if [ "$qmlastok" -gt 0 ]; then qmago="last completed $(( ( $(date +%s) - qmlastok ) / 60 ))m ago"
+    else qmago="it has never completed"; fi
+    fail modelcap "$qmfleet: the model-cap probe has timed out $qmstreak ticks running (in step '${qmstep:-?}'; $qmago) — model-cap detection on that fleet is BLIND, so a worker walled on its model will sit at @claude_state=working forever. The step name says where the budget went; raise FLEET_MODELCAP_PROBE_BUDGET (${FLEET_MODELCAP_PROBE_BUDGET:-20}s) only after reading it, and check \`bash bin/fleet-model-switch.sh --capped --dry-run --session $qmfleet\`"
+  done
   if [ "$(uname)" = "Darwin" ]; then
     printf '        note: on macOS token files are the ONLY way to switch accounts (Keychain ignores CLAUDE_CONFIG_DIR).\n'
   fi
@@ -1440,22 +1297,10 @@ EOF
   fi
 fi
 
-# --- quota-watch daemon (issue #551) ---------------------------------------------
-# The ccquota pre-emptive rotation has its OWN 60s unit since #551 — the collector
-# still runs the watch first thing each tick, so a missing unit degrades the
-# cadence to the collector's (and to nothing if the collector is wedged) rather
-# than switching the watch off: WARN, not FAIL. Only meaningful with a pool + hub.
-if [ -d "$acct_dir" ] && [ -n "${CCQUOTA_HUB_URL:-}" ]; then
-  daemon_verdict qwatch com.claude-fleet.quotawatch \
-    "com.claude-fleet.quotawatch loaded — 60s pre-emptive rotation tick, independent of the collector" \
-    "the quota watch only runs at the top of each collector tick (and not at all while the collector is wedged)"
-  printf '        note: bin/fleet-quotawatch.sh — its own 60s unit; heartbeat in global/quotawatch.heartbeat, staleness on the status bar (✖ quota · stale) + above.\n'
-fi
-
 # --- collector heartbeat (issue #551) -------------------------------------------
 # global/collect.heartbeat: key=value written at every phase boundary of a tick —
 # last complete tick's end/dur/phases, or the phase a dying tick was in. A stale
-# heartbeat means the dash caches (git/ctx/usage, and pre-#551 the quota watch)
+# heartbeat means the dash caches (git/ctx/usage)
 # are not moving: wedged tick (past FLEET_COLLECT_DEADLINE it is killed + superseded
 # by the next one) or an unloaded com.claude-fleet.collect.
 hb="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/collect.heartbeat"

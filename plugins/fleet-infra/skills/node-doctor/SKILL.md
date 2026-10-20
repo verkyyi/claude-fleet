@@ -137,7 +137,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `metrics` | node | [node-doctor] | 5 分钟没有机器指标：diskguard 守护在不在跑 |
 | `mod` | node | [release-rules] | 扩展目录不在：下一次同步补 |
 | `mode` | node | [node-doctor] | 只报状态：本机 / 联机 |
-| `modelcap` | node | [node-doctor] | 只报状态：按模型的额度窗 |
+| `modelcap` | node | [node-doctor] | 撞单模型上限的探测连续超时：照行内步骤名查，必要时调高 FLEET_MODELCAP_PROBE_BUDGET |
 | `network` | node | [mac-node-prep] | 两块网卡在同一个子网：拔掉一条或改路由 |
 | `node` | node | [mac-node-enroll] [runbook-tcc-stuck] | 整机守护：令牌被拒 ⇒ `account adopt <login> --rejoin`；没有完全磁盘访问 / TCC 卡住 ⇒ 卡死手册 |
 | `nofile` | node | [mac-node-prep] | 只报状态：系统默认文件数上限 |
@@ -151,8 +151,6 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `pty` | node | [mac-node-prep] | 终端数快满：找出谁占的，必要时调高系统上限 |
 | `public` | node | [runbook-door-down] | 外面连不上入口端口：路由器转发、公网地址、钥匙不符 |
 | `python3` | node | [mac-node-prep] | 装 python3 |
-| `quota` | node | [login-lifecycle] | 额度读数缺 / 形状不认识：查入口与账号，`fleet-account.sh quota --refresh` |
-| `qwatch` | node | [login-lifecycle] [mac-node-enroll] | 额度缓存不刷新：先修凭据（cert / node 行、`fleet login`），再 `fleet-account.sh quota --refresh` |
 | `reap` | node | [node-doctor] | 有会话该收没收：照行内读原因 |
 | `releasekey` | node | [release-rules] | 这台握着发布签名私钥（环境、配置目录、~/.ssh）：删掉，私钥只在发布列车的 release-sign；怀疑泄露就用根钥匙作废（docs/dev/FLEET-HUB.md「发布签名」） |
 | `repo` | node | [node-doctor] | fleet 覆盖层没写 FLEET_REPO |

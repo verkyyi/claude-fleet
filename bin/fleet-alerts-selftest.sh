@@ -31,7 +31,7 @@
 #                 nothing; kick-collect is `--unit collect --force` (#1242)
 #  11. events   — issue #1617: `fleet-alerts.sh event` records a background
 #                 event → one ▲ row (counts +1, ↵ reads the text) and NO toast;
-#                 a FLEET_ALERT_FLASH_KINDS kind (quota-nowhere) flashes once on
+#                 a FLEET_ALERT_FLASH_KINDS kind (disk-red) flashes once on
 #                 its socket AND is recorded; same text twice in 60s is one event;
 #                 past FLEET_ALERTS_EVENT_LIVE it leaves the count without a ↻
 #                 trace and stays in the popup's history; 30 days drops it
@@ -97,34 +97,34 @@ case "$(fa bar)" in *"✖ 99#"*) ok ;; *) fail "1: a count past 99 reads 99" "$(
 case "$(fa bar)" in *quota*|*stale*|*"·"*) fail "1: a sentence leaked onto the bar" "$(fa bar)" ;; *) ok ;; esac
 
 # ------------------------------------------------------------------ 2. quota ----
+# The quota watch retired (T549): a stale or empty quota cache raises nothing.
 rm -f "$G"/alerts.*
 export FLEET_ACCOUNTS_DIR="$WORK/acc" CCQUOTA_HUB_URL=http://127.0.0.1:9
-printf '%s\n' $(( $(now) - 1800 )) > "$G/account.quota.ts"      # no tick for 30m
-fa write
-eq "2: hub gone → one alarm" "1 0 0" "$(fa counts)"
-case "$(fa bar)" in *"✖ 1#"*) ok ;; *) fail "2: the bar does not read ✖ 1" "$(fa bar)" ;; esac
-first=$(fa list --plain | head -1 | cut -f2-)
-case "$first" in *"✖  quota · stale · 30m"*"see accounts"*) ok ;; *) fail "2: first popup row is not quota · stale" "$first" ;; esac
-printf '%s\n' "$(now)" > "$G/account.quota.ts"                    # the watch is back
-printf '0\t0\n' > "$G/account.quota.empty"
-fa write
-eq "2: recovered → nothing counted" "0 0 0" "$(fa counts)"
-case "$(fa list --plain)" in *"↻  quota · stale"*"healed"*) ok ;; *) fail "2: recovery left no ↻ trace" "$(fa list --plain)" ;; esac
-FLEET_ALERTS_TRACE=0 fa write
-eq "2: the trace ends at FLEET_ALERTS_TRACE" "" "$(fa list --plain)"
-unset FLEET_ACCOUNTS_DIR CCQUOTA_HUB_URL
-
-# ------------------------------------------------------------------ 3. since ----
-rm -f "$G"/alerts.*
+printf '%s\n' $(( $(now) - 1800 )) > "$G/account.quota.ts"      # no fetch for 30m
 printf 'a\t90\t40\tahead\nb\t10\t-5\tbehind\n' > "$G/quota.pace"
 fa write
-s1=$(sed -n 's/.*"id":"quota-uneven".*"since":\([0-9]*\).*/\1/p' "$G/alerts.ndjson")
-[ -n "$s1" ] || fail "3: the pace spread raised no quota-uneven row" "$(cat "$G/alerts.ndjson")"
+case "$(cat "$G/alerts.ndjson")" in *'"subject":"quota"'*) fail "2: a quota row was raised" "$(cat "$G/alerts.ndjson")" ;; *) ok ;; esac
+rm -f "$G/account.quota.ts" "$G/quota.pace"
+unset FLEET_ACCOUNTS_DIR CCQUOTA_HUB_URL
+
+# ------------------------------------------------------------- 3. since/heal ----
+rm -f "$G"/alerts.*
+export FLEET_STATUS_DISK=1 FLEET_DISK_FLOOR_GB=99999999
+fa write
+s1=$(sed -n 's/.*"id":"disk-low".*"since":\([0-9]*\).*/\1/p' "$G/alerts.ndjson")
+[ -n "$s1" ] || fail "3: the disk floor raised no disk-low row" "$(cat "$G/alerts.ndjson")"
 sed "s/\"since\":$s1/\"since\":$(( s1 - 600 ))/" "$G/alerts.ndjson" > "$G/x" && mv "$G/x" "$G/alerts.ndjson"
 fa write
 eq "3: a standing alert keeps its first-seen time" "$(( s1 - 600 ))" \
-  "$(sed -n 's/.*"id":"quota-uneven".*"since":\([0-9]*\).*/\1/p' "$G/alerts.ndjson")"
-case "$(fa list --plain)" in *"▲  quota · uneven · 45 pts"*"10m"*) ok ;; *) fail "3: row wording/duration" "$(fa list --plain)" ;; esac
+  "$(sed -n 's/.*"id":"disk-low".*"since":\([0-9]*\).*/\1/p' "$G/alerts.ndjson")"
+case "$(fa list --plain)" in *"✖  disk · low · "*"10m"*) ok ;; *) fail "3: row wording/duration" "$(fa list --plain)" ;; esac
+unset FLEET_DISK_FLOOR_GB
+fa write
+case "$(cat "$G/alerts.ndjson")" in *'"id":"disk-low"'*'"healed_at":0'*) fail "3: recovered disk-low still counted" "$(cat "$G/alerts.ndjson")" ;; *) ok ;; esac
+case "$(fa list --plain)" in *"↻  disk · low"*"healed"*) ok ;; *) fail "3: recovery left no ↻ trace" "$(fa list --plain)" ;; esac
+FLEET_ALERTS_TRACE=0 fa write
+case "$(fa list --plain)" in *"disk · low"*) fail "3: the trace ends at FLEET_ALERTS_TRACE" "$(fa list --plain)" ;; *) ok ;; esac
+export FLEET_STATUS_DISK=0
 
 # ------------------------------------------------------------------- 4. mute ----
 { row q1 alarm quota stale 5m "$(now)" accounts; row w1 warning quota uneven '37 pts' "$(now)" accounts; } > "$G/alerts.ndjson"
@@ -150,11 +150,11 @@ while IFS= read -r l; do
   case "$l" in *'"action":"accounts"'*|*'"action":"kick-collect"'*|*'"action":"kick-daemons"'*|*'"action":"disk"'*|*'"action":"jump"'*) ok ;;
     *) fail "5: unknown action" "$l" ;; esac
 done < "$G/alerts.ndjson"
-[ "$n" -ge 3 ] || fail "5: expected at least disk + uneven + all-capped rows" "$(cat "$G/alerts.ndjson")"
+[ "$n" -ge 2 ] || fail "5: expected at least disk + all-capped rows" "$(cat "$G/alerts.ndjson")"
 case "$(fa list --plain)" in *"✖  disk · low · "*" GB"*"see disk"*) ok ;; *) fail "5: disk under the floor is not an alarm" "$(fa list --plain)" ;; esac
 
 # --------------------------------------------------------------- 6. accounts ----
-rm -f "$G"/alerts.* "$G/quota.pace"
+rm -f "$G"/alerts.*
 if command -v python3 >/dev/null 2>&1; then
   FLEET_C="$WORK/.claude-dash" python3 - "$BIN" <<'PY' || fail "6: stamp_all_capped raised"
 import importlib.util, sys, time
@@ -235,7 +235,7 @@ printf '%s\\n' "\$*" >> "$WORK/watch.args"
 sleep 3
 while [ \$# -gt 0 ]; do
   [ "\$1" = --unit ] && case "\$2" in
-    quotawatch) echo "fleet-daemon-watch: quotawatch stale 400s but a tick is RUNNING — not kicked (wedged at 900s; --force --now aborts it now)" >&2 ;;
+    reconcile)  echo "fleet-daemon-watch: reconcile stale 400s but a tick is RUNNING — not kicked (wedged at 900s; --force --now aborts it now)" >&2 ;;
     cleanup)    echo "fleet-daemon-watch: cleanup — skip, kicked 20s ago (cooldown 180s); still stale 300s" >&2 ;;
     collect)    echo "fleet-daemon-watch: collect stale 0s — kicked gui/501/com.claude-fleet.collect (launchd), rc=0" >&2 ;;
   esac
@@ -260,14 +260,14 @@ await_toast() {  # <pattern> — the background half's closing toast, ≤10s
   return 1
 }
 rm -f "$G"/alerts.* "$WORK/toasts" "$WORK/watch.args"
-printf '{"id":"daemon-stale","severity":"alarm","subject":"daemon","condition":"stale","value":"2 units","since":%s,"action":"kick-daemons","healed_at":0,"target":"","detail":"quotawatch,cleanup,bogus"}\n' "$(now)" > "$G/alerts.ndjson"
+printf '{"id":"daemon-stale","severity":"alarm","subject":"daemon","condition":"stale","value":"2 units","since":%s,"action":"kick-daemons","healed_at":0,"target":"","detail":"reconcile,cleanup,bogus"}\n' "$(now)" > "$G/alerts.ndjson"
 t0=$(now); sact daemon-stale; t1=$(now)
 [ $(( t1 - t0 )) -lt 2 ] || fail "10: act blocked on the kick ($(( t1 - t0 ))s; the watch sleeps 3s)"; ok
-case "$(cat "$WORK/toasts" 2>/dev/null)" in *"requested: quotawatch,cleanup"*) ok ;; *) fail "10: no immediate toast naming the units" "$(cat "$WORK/toasts" 2>/dev/null)" ;; esac
+case "$(cat "$WORK/toasts" 2>/dev/null)" in *"requested: reconcile,cleanup"*) ok ;; *) fail "10: no immediate toast naming the units" "$(cat "$WORK/toasts" 2>/dev/null)" ;; esac
 await_toast 'daemon restart ·' || fail "10: the background kick never toasted its outcome" "$(cat "$WORK/toasts" 2>/dev/null)"; ok
-eq "10: only the row's units, no --force, unknown names dropped" "--unit quotawatch --unit cleanup" "$(cat "$WORK/watch.args")"
+eq "10: only the row's units, no --force, unknown names dropped" "--unit reconcile --unit cleanup" "$(cat "$WORK/watch.args")"
 last=$(tail -1 "$WORK/toasts")
-case "$last" in *"running, not touched quotawatch"*"cooldown cleanup"*) ok ;; *) fail "10: outcome toast" "$last" ;; esac
+case "$last" in *"running, not touched reconcile"*"cooldown cleanup"*) ok ;; *) fail "10: outcome toast" "$last" ;; esac
 case "$last" in *kicked*) fail "10: nothing was kicked, the toast says kicked" "$last" ;; *) ok ;; esac
 rm -f "$WORK/toasts" "$WORK/watch.args"
 printf '{"id":"daemon-stale","severity":"healed","subject":"daemon","condition":"stale","value":"kicked","since":%s,"action":"kick-daemons","healed_at":%s,"target":"","detail":"self-healed by a kick"}\n' "$(now)" "$(now)" > "$G/alerts.ndjson"
@@ -300,9 +300,9 @@ out=$(fa list --plain)
 case "$out" in *"▲  fleet: a at 90% → benched; moving its sessions to b"*"↵ read"*) ok ;; *) fail "11: the popup row is the event's own text" "$out" ;; esac
 fev -L sB quota-benched 'fleet: a at 90% → benched; moving its sessions to b'   # the same news off another socket
 eq "11: the same kind + text within 60s is ONE event" 1 "$(grep -c 'quota-benched' "$EV")"
-fev -L sA quota-nowhere 'fleet: b at 95% — nowhere to move'
+fev -L sA disk-red 'fleet: b at 95% — nowhere to move'
 eq "11: a whitelisted kind flashes once on its socket" 1 "$(grep -c '^-L sA display-message fleet: b at 95% — nowhere to move$' "$WORK/calls11")"
-grep -q 'quota-nowhere	fleet: b at 95%' "$EV" || fail "11: …and is recorded too" "$(cat "$EV")"; ok
+grep -q 'disk-red	fleet: b at 95%' "$EV" || fail "11: …and is recorded too" "$(cat "$EV")"; ok
 fa write
 eq "11: two events → ▲ 2" "0 2 0" "$(fa counts)"
 id=$(awk -F '\t' '$3 == "quota-benched" { print $2 }' "$EV")
@@ -321,7 +321,7 @@ case "$(fa list --plain --history --level alarm)" in *benched*) fail "11: histor
 # 30 days: the next event prunes it
 awk -F '\t' -v OFS='\t' -v o=$(( $(now) - 31 * 86400 )) 'NR == 1 { $1 = o } { print }' "$EV" > "$EV.t" && mv "$EV.t" "$EV"
 fev handoff 'fleet-handoff %9: could not confirm a fresh session'
-eq "11: a 31-day-old event is pruned, the rest kept" "quota-nowhere handoff" "$(awk -F '\t' '{ printf "%s%s", (NR > 1 ? " " : ""), $3 }' "$EV")"
+eq "11: a 31-day-old event is pruned, the rest kept" "disk-red handoff" "$(awk -F '\t' '{ printf "%s%s", (NR > 1 ? " " : ""), $3 }' "$EV")"
 rm -f "$G"/alerts.* "$WORK/calls11"
 
 # ------------------------------------------------------------------- 12. lint ----
@@ -338,7 +338,7 @@ for f in $bg; do
 done
 eq "12: no bare display-message on a background path (mark a keypress-only one # toast-ok:)" "" "$lint"
 [ "$(grep -l "^FLEET_ALERT_FLASH_KINDS=" "$BIN"/*.sh | sed "s|.*/||" | grep -cv -- "-selftest\.sh$")" = 1 ] || fail "12: the flash whitelist must be written in ONE place" "$(grep -n FLEET_ALERT_FLASH_KINDS= "$BIN"/*.sh)"; ok
-eq "12: the whitelist is the four that need you now" "quota-nowhere hub-lost disk-red account-reauth" "$(bash -c '. "$1"; printf %s "$FLEET_ALERT_FLASH_KINDS"' _ "$FA")"
+eq "12: the whitelist is the three that need you now (quota-nowhere left with the quota watch, T549)" "hub-lost disk-red account-reauth" "$(bash -c '. "$1"; printf %s "$FLEET_ALERT_FLASH_KINDS"' _ "$FA")"
 
 # --------------------------------------------------------------- 13. machine ----
 # 负载 / 内存 left the bar (issue #1616): red is a warning row now. Shims for both

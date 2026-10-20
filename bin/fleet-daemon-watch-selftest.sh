@@ -334,7 +334,7 @@ case "$out" in *"daemon · stale"*) fail "9: the trace outlived its window: $out
 # The alarm is only as armed as the stamps feeding it, and a daemon losing its
 # stamp line is invisible — the unit just reads `never` forever.
 stamps_for() { grep -c "fleet_daemon_stamp_tick $2" "$BIN/$1" 2>/dev/null || echo 0; }
-for pair in 'tmux-dash-collect.sh collect' 'fleet-quotawatch.sh quotawatch' \
+for pair in 'tmux-dash-collect.sh collect' \
             'fleet-cleanup-daemon.sh cleanup' \
             'fleet-base-sync.sh base-sync' 'fleet-diskguard.sh diskguard' \
             'fleet-ledger-watch.sh ledger-watch' 'worktree-autoclean.sh worktree-autoclean' \
@@ -347,11 +347,9 @@ done
 # or another daemon's tick keeps their stamp fresh while they are pended.
 grep -q "case \" \$\* \" in \*' --watch '\*)" "$BIN/fleet-diskguard.sh" \
   || fail "10: diskguard stamps outside --watch — cleanup/base-sync call it --gate every tick"; ok
-grep -q 'CALLER" != collect \] && \[ "\$STATUS" = 0 \] && \[ "\$DRY" = 0 \]' "$BIN/fleet-quotawatch.sh" \
-  || fail "10: quotawatch stamps outside its own working tick — crediting --caller collect reproduces #639's blind spot, and crediting --status has fleet-doctor refreshing the very stamp it reads"; ok
 # The lib source is GUARDED everywhere: instrumentation must not be able to kill
 # the daemon it instruments if an install is ever half-synced.
-for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-cleanup-daemon.sh \
+for f in tmux-dash-collect.sh fleet-cleanup-daemon.sh \
          fleet-base-sync.sh fleet-diskguard.sh fleet-ledger-watch.sh \
          worktree-autoclean.sh fleet-install-sync.sh; do
   grep -q 'fleet_daemon_stamp_tick' "$BIN/$f" || fail "10: $f lost its stamp"

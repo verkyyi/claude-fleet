@@ -43,7 +43,7 @@
 #                 fleet-doctor.
 #  11. callers  — the three discovery paths are still wired: the status bar, the
 #                 KeepAlive spinner (the only daemon that survived the launchd
-#                 stall) and the quotawatch backstop.
+#                 stall) and the reconcile tick's backstop.
 #  12. relative  — with FLEET_COLLECT_STALE unset the threshold is MULTIPLES of the
 #                 unit's own 60s StartInterval, not the old absolute 600s: the
 #                 7–14-minute collector #639 measured alarms instead of reading
@@ -245,8 +245,8 @@ grep -q 'fleet-daemon-watch.sh' "$BIN/tmux-spinner.py" \
   || fail "11: the KeepAlive spinner no longer runs the daemon self-heal — the headless path is gone"; ok
 grep -q 'daemon_watch=30' "$BIN/tmux-spinner.py" \
   || fail "11: the spinner's self-heal lost its frame throttle"; ok
-grep -q 'fleet-collect-kick.sh' "$BIN/fleet-quotawatch.sh" \
-  || fail "11: the quota watch no longer runs the collector self-heal backstop"; ok
+grep -q 'fleet-collect-kick.sh' "$BIN/fleet-reconcile-tick.sh" \
+  || fail "11: the reconcile tick no longer runs the collector self-heal backstop (it took it from the quota watch, T549)"; ok
 # The bar's kick moved into the one alerts producer (issue #1238); the bar still
 # asks for it (`--kick`) on every refresh.
 grep -q 'fleet_collect_kick_due' "$BIN/fleet-alerts.sh" \

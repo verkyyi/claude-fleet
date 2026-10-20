@@ -59,11 +59,10 @@ Nothing about the repo has to be checked on GitHub any more. What can hurt is th
 fleet's own state — say it on the page, never as a blocker of your own making:
 
 ```sh
-bash ~/.claude/fleet/bin/fleet-account.sh quota    # label · 5h% · week% · … (exit 4 = no pool, 3 = unknown)
 bash -c 'source ~/.claude/fleet/bin/fleet-lib.sh; fleet_machine_admit' && echo admit || echo 'held now'
 ```
 
-Keep any warning (every account near its ceiling, the machine held) for the
+Keep any warning (the machine held) for the
 page's `#preflight` section; whether it hurts enough to wait is the operator's
 call in step 4.
 
