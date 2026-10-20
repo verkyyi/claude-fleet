@@ -227,7 +227,7 @@ case "$(fa bar | sed 's/#\[[^]]*\]//g')" in *✖*|*▲*|*[0-9]*) st_fail "8: a c
 # A sandbox bin/: the real producer + libs, a fake fleet-daemon-watch.sh that is
 # slow (so a blocking act shows) and answers each unit the way the real one does.
 SB="$WORK/sbin"; mkdir -p "$SB"
-for f in fleet-alerts.sh usage-lib.sh fleet-daemon-lib.sh; do ln -s "$BIN/$f" "$SB/$f"; done
+for f in fleet-alerts.sh usage-lib.sh fleet-daemon-lib.sh fleet_notice.py; do ln -s "$BIN/$f" "$SB/$f"; done   # fleet_notice.py: the one notice road (T675)
 cat > "$SB/fleet-daemon-watch.sh" <<EOF
 #!/bin/bash
 printf '%s\\n' "\$*" >> "$WORK/watch.args"
