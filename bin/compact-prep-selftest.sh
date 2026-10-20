@@ -44,30 +44,10 @@ for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-client-core.s
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/compact-prep-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/fakepath" "$WORK/inst/bin" "$WORK/conf/fleets/s1" "$WORK/tmp" "$WORK/widgets-issue-12" \
-  "$WORK/widgets-scratch-3" "$WORK/nogit"
-for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-client-core.sh fleet-lang.sh fleet-compact-send.sh refocus-hook.sh handoff-latch-reset-hook.sh; do
-  cp "$BIN/$f" "$WORK/inst/bin/$f"
-done
-STATE="$WORK/inst/bin/set-claude-state.sh"
-REFOCUS="$WORK/inst/bin/refocus-hook.sh"
-LATCH="$WORK/inst/bin/handoff-latch-reset-hook.sh"
-GCONF="$WORK/inst/fleet.conf"
-OPTS="$WORK/opts"; SENDLOG="$WORK/send.log"
-git -C "$WORK/widgets-issue-12" init -q -b issue-12 2>/dev/null || git -C "$WORK/widgets-issue-12" init -q
-GITDIR=$(git -C "$WORK/widgets-issue-12" rev-parse --absolute-git-dir)
-MAP="$GITDIR/fleet-recovery-map.md"
-git -C "$WORK/widgets-scratch-3" init -q -b scratch-3 2>/dev/null || git -C "$WORK/widgets-scratch-3" init -q
-SGITDIR=$(git -C "$WORK/widgets-scratch-3" rev-parse --absolute-git-dir)
-SMAP="$SGITDIR/fleet-recovery-map.md"
-CMAP="$WORK/conf/fleets/s1/recovery/w1.md"      # a scratch with NO git dir (#1318)
-: > "$WORK/conf/fleets/s1/conf"
-fx_repo "$WORK/conf" "s1" acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="trunk"
-
+TOP="$(mktemp -d "${TMPDIR:-/tmp}/compact-prep-selftest.XXXXXX")" || exit 2
+trap 'rm -rf "$TOP"' EXIT
 # --- stateful fake tmux: options in $OPTS ("key<TAB>value"), send-keys logged ----
-cat > "$WORK/fakepath/tmux" <<'FAKE'
+cat > "$TOP/tmux" <<'FAKE'
 #!/usr/bin/env python3
 import os, re, sys
 a = sys.argv[1:]
@@ -119,7 +99,35 @@ elif verb == "list-clients":
 else:
     sys.exit(1)
 FAKE
-chmod +x "$WORK/fakepath/tmux"
+chmod +x "$TOP/tmux"
+
+# fixture <dir> — one lane's whole world: the install copy, the two worktrees, the
+# fleet conf, the fake tmux; WORK and every path below it point there.
+fixture() {
+WORK="$1"
+mkdir -p "$WORK/fakepath" "$WORK/inst/bin" "$WORK/conf/fleets/s1" "$WORK/tmp" "$WORK/widgets-issue-12" \
+  "$WORK/widgets-scratch-3" "$WORK/nogit"
+for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-client-core.sh fleet-lang.sh fleet-compact-send.sh refocus-hook.sh handoff-latch-reset-hook.sh; do
+  cp "$BIN/$f" "$WORK/inst/bin/$f"
+done
+STATE="$WORK/inst/bin/set-claude-state.sh"
+REFOCUS="$WORK/inst/bin/refocus-hook.sh"
+LATCH="$WORK/inst/bin/handoff-latch-reset-hook.sh"
+GCONF="$WORK/inst/fleet.conf"
+OPTS="$WORK/opts"; SENDLOG="$WORK/send.log"
+git -C "$WORK/widgets-issue-12" init -q -b issue-12 2>/dev/null || git -C "$WORK/widgets-issue-12" init -q
+GITDIR=$(git -C "$WORK/widgets-issue-12" rev-parse --absolute-git-dir)
+MAP="$GITDIR/fleet-recovery-map.md"
+git -C "$WORK/widgets-scratch-3" init -q -b scratch-3 2>/dev/null || git -C "$WORK/widgets-scratch-3" init -q
+SGITDIR=$(git -C "$WORK/widgets-scratch-3" rev-parse --absolute-git-dir)
+SMAP="$SGITDIR/fleet-recovery-map.md"
+CMAP="$WORK/conf/fleets/s1/recovery/w1.md"      # a scratch with NO git dir (#1318)
+: > "$WORK/conf/fleets/s1/conf"
+fx_repo "$WORK/conf" "s1" acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="trunk"
+
+cp "$TOP/tmux" "$WORK/fakepath/tmux"
+}
+
 
 ok()   { printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2
@@ -178,6 +186,10 @@ wait_sent() { local i=0
 sent() { grep -c -- '/compact ' "$SENDLOG" 2>/dev/null || true; }
 blocked() { case "$OUT" in *'"decision":"block"'*) return 0 ;; esac; return 1; }
 
+# The sections run as five lanes at once, each in its own fixture (fixture: its own
+# fake tmux options, send log, worktrees and conf); inside a lane the order is the
+# old one — a section that reads the previous one's state or conf stays beside it.
+lane_1() {
 # ===== THREE STEPS: 55 → 75 → compact → 30 ======================================
 conf '' ''
 for context in 55 80 99; do
@@ -247,7 +259,9 @@ reset @ctx_pct=76 @compact_stage=restored @compact_rearm=1 @compact_ts=1
 stop
 blocked || fail "re-armed + old compaction must prep again" "$OUT"
 ok "GAP/REARM ≥600 s apart and only after dropping below the line"
+}
 
+lane_2() {
 # ===== HANDOFF line wins =========================================================
 conf 70 80
 reset @ctx_pct=85
@@ -276,6 +290,33 @@ reset @ctx_pct=95;                             stop; blocked && fail "FLEET_COMP
 [ -z "$(getopt @compact_stage)" ] || fail "off must stamp nothing"
 ok "SCOPE/OFF hub · codex (worker + scratch) · needs · stop_hook_active · 0 ⇒ nothing"
 
+# ===== DEDUP =====================================================================
+conf 55 80
+reset @ctx_pct=75 @compact_stage=prep @compact_send_ts="$(date +%s)"
+stop; sleep 0.5
+[ "$(sent)" = 0 ] || fail "a sender < 60 s ago must not be re-spawned"
+ok "DEDUP prep stage re-sends at most once per 60 s"
+
+# ===== TYPING HOLD ===============================================================
+reset @ctx_pct=75 @compact_stage=prep
+FAKE_CLIENTS="$(date +%s) @1" SEND_TIMEOUT=1 stop
+sleep 3
+[ "$(sent)" = 0 ] && ! grep -q Escape "$SENDLOG" || fail "operator typing at this window must hold every keystroke"
+[ "$(getopt @compact_stage)" = prep ] || fail "a held send must leave the stage at prep for the next Stop"
+setopt @compact_send_ts 1        # past the 60 s dedup: the next Stop retries
+FAKE_CLIENTS="$(date +%s) @2" stop; wait_sent 1
+[ "$(sent)" = 1 ] || fail "a keypress on ANOTHER window must not hold"
+ok "TYPING HOLD keypress at this window holds the /compact; another window does not"
+
+# ===== STALE stage below the line =================================================
+reset @ctx_pct=20 @compact_stage=compacting @compact_rearm=0
+stop
+[ -z "$(getopt @compact_stage)" ] || fail "a compacting stage seen below the line must be dropped"
+[ "$(getopt @compact_rearm)" = 1 ] || fail "below the line re-arms"
+ok "STALE compacting below the line → dropped + re-armed"
+}
+
+lane_3() {
 # ===== SCRATCH: compact in place too (issue #1318) ================================
 # The scratch-section output IS the 上线证据 of #1318: each line names the step.
 conf 55 80
@@ -327,32 +368,9 @@ unset CWD
 reset @ctx_pct=72; stop
 case "$OUT" in *"$MAP"*'issue #12, branch, PR'*) : ;; *) fail "the worker prep is unchanged by #1318" "$OUT" ;; esac
 ok "SCRATCH FLEET_REFOCUS=0 silences it; a worker's map path + directive are unchanged"
+}
 
-# ===== DEDUP =====================================================================
-conf 55 80
-reset @ctx_pct=75 @compact_stage=prep @compact_send_ts="$(date +%s)"
-stop; sleep 0.5
-[ "$(sent)" = 0 ] || fail "a sender < 60 s ago must not be re-spawned"
-ok "DEDUP prep stage re-sends at most once per 60 s"
-
-# ===== TYPING HOLD ===============================================================
-reset @ctx_pct=75 @compact_stage=prep
-FAKE_CLIENTS="$(date +%s) @1" SEND_TIMEOUT=1 stop
-sleep 3
-[ "$(sent)" = 0 ] && ! grep -q Escape "$SENDLOG" || fail "operator typing at this window must hold every keystroke"
-[ "$(getopt @compact_stage)" = prep ] || fail "a held send must leave the stage at prep for the next Stop"
-setopt @compact_send_ts 1        # past the 60 s dedup: the next Stop retries
-FAKE_CLIENTS="$(date +%s) @2" stop; wait_sent 1
-[ "$(sent)" = 1 ] || fail "a keypress on ANOTHER window must not hold"
-ok "TYPING HOLD keypress at this window holds the /compact; another window does not"
-
-# ===== STALE stage below the line =================================================
-reset @ctx_pct=20 @compact_stage=compacting @compact_rearm=0
-stop
-[ -z "$(getopt @compact_stage)" ] || fail "a compacting stage seen below the line must be dropped"
-[ "$(getopt @compact_rearm)" = 1 ] || fail "below the line re-arms"
-ok "STALE compacting below the line → dropped + re-armed"
-
+lane_4() {
 # ===== CAP: compact twice, then hand off (issue #1316) ===========================
 conf 55 80 2
 for n in 0 1; do
@@ -412,7 +430,9 @@ reset @ctx_pct=72 @compact_count=2 @issue= @raw=1; CWD="$WORK/widgets-scratch-3"
 case "$OUT" in *'compacted in place 2 times (FLEET_COMPACT_MAX=2)'*) : ;; *) fail "a scratch at the cap must get the handoff block (#1318)" "$OUT" ;; esac
 [ "$(getopt @handoff_armed)" = 1 ] || fail "the scratch cap handoff must latch"
 ok "CAP typing hold · stop_hook_active · codex · hub untouched · scratch capped (#1318)"
+}
 
+lane_5() {
 # ===== NOREPO: the ladder runs there too (issues #2937, #4341) ===================
 # A session with no repo (@norepo, no @issue / @raw — a session template opened
 # bare) used to fall to the hub warning — one notice, no action — and its context
@@ -454,5 +474,16 @@ reset @ctx_pct=72 @compact_count=7; stop
 [ "$OUT" = "$base_out" ] || fail "FLEET_COMPACT_MAX=0 must emit exactly the uncapped output" "$OUT"
 [ "$(grep -v '_ts	' "$OPTS" | grep -v '^@compact_count	')" = "$base_opts" ] || fail "FLEET_COMPACT_MAX=0 must write exactly the uncapped options"
 ok "CAP FLEET_COMPACT_MAX=0 → byte-identical to no cap (count 7 still preps)"
+}
 
+for n in 1 2 3 4 5; do
+  ( fixture "$TOP/lane$n"; "lane_$n" ) > "$TOP/lane$n.log" 2>&1 &
+  eval "pid$n=\$!"
+done
+rc=0
+for n in 1 2 3 4 5; do
+  eval "wait \$pid$n" || rc=1
+  cat "$TOP/lane$n.log"
+done
+[ "$rc" = 0 ] || { printf 'compact-prep-selftest: FAIL\n' >&2; exit 1; }
 printf 'compact-prep-selftest: PASS\n'

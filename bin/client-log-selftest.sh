@@ -11,7 +11,7 @@
 #   B  python and sh, one corpus: the redaction byte for byte, and a whole
 #      line (all but its time) byte for byte
 #   C  a fake token in a reason is <redacted:…> on disk, from both writers
-#   D  600 KB written → the current file + .1, nothing else, each bounded
+#   D  past the cap → the current file + .1, nothing else, each bounded
 #   E  a relay the hub closes after 1 s → relay-end · hub · ws close 1011; one
 #      the client closes after 11 s → relay-end · client; the ms say so
 #   F  ssh as a child: exit 255 → ssh-start + ssh-end `exit 255`; a SIGTERM to
@@ -43,6 +43,8 @@ bad() { echo "FAIL $*"; fail=1; }
 # shellcheck source=fleet-client-lib.sh
 . "$BIN/fleet-client-lib.sh"
 
+# A–D run inside E, beside its two relays (below)
+legs_ABCD() {
 # ── A — the table's rules, and a sample per shape ─────────────────────────────
 # <name><TAB><a line that must lose its secret>
 cat > "$WORK/samples" <<'EOF'
@@ -110,20 +112,26 @@ grep -q 'ghp_SECRET' "$LOGS/connect.log" && bad "C the token reached connect.log
   && ok "C the log is 0600" || bad "C connect.log is not 0600"
 
 # ── D — rotation ──────────────────────────────────────────────────────────────
-pad=$(python3 -c 'print("x" * 1000)')
-for _ in $(seq 1 330); do fleet_clientlog keeper renew - - "" ok "$pad"; done
-FLEET_CLIENT_LOG_MAX=524288 python3 - "$BIN" "$pad" <<'EOF'
+# The cap scaled down 8× (every sh line is ~13 forks and an awk over the shapes):
+# both writers under FLEET_CLIENT_LOG_MAX=64 KB, sh filling 2/3 of it, python
+# crossing it — the bound stays the cap plus a few lines, as at the 512 KB default.
+max=65536 cap=$((65536 + 5712))
+pad=$(python3 -c 'print("x" * 1990)')
+for _ in $(seq 1 21); do FLEET_CLIENT_LOG_MAX=$max fleet_clientlog keeper renew - - "" ok "$pad"; done
+FLEET_CLIENT_LOG_MAX=$max python3 - "$BIN" "$pad" <<'EOF'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("cl", sys.argv[1] + "/fleet_clientlog.py")
 cl = importlib.util.module_from_spec(spec); spec.loader.exec_module(cl)
-for _ in range(330):
+for _ in range(21):
     cl.write("keeper", "renew", "-", "-", "", "ok", sys.argv[2])
 EOF
 files=$(cd "$LOGS" && ls keeper.log* | tr '\n' ' ')
 big=$(wc -c < "$LOGS/keeper.log" | tr -d ' '); old=$(wc -c < "$LOGS/keeper.log.1" 2>/dev/null | tr -d ' ')
-if [ "$files" = "keeper.log keeper.log.1 " ] && [ "$big" -le 530000 ] && [ "${old:-0}" -le 530000 ]; then
-  ok "D 660 KB written → keeper.log ($big B) + keeper.log.1 ($old B), nothing else"
+if [ "$files" = "keeper.log keeper.log.1 " ] && [ "$big" -le "$cap" ] && [ "${old:-0}" -le "$cap" ] && [ "${old:-0}" -ge "$max" ]; then
+  ok "D 86 KB written past a 64 KB cap → keeper.log ($big B) + keeper.log.1 ($old B), nothing else"
 else bad "D rotation: files=$files current=$big old=${old:-none}"; fi
+
+}
 
 # ── E — a relay's end, and who ended it ───────────────────────────────────────
 cat > "$WORK/hub.py" <<'EOF'
@@ -200,14 +208,25 @@ for _ in $(seq 1 50); do [ -s "$WORK/port" ] && break; sleep 0.1; done
 PORT=$(cat "$WORK/port" 2>/dev/null)
 [ -n "$PORT" ] || { echo "FAIL fake hub did not start"; exit 1; }
 HUB="http://127.0.0.1:$PORT"
-rm -f "$LOGS/connect.log"
+# The two relays take 1 s and 11 s of wall time: A–D run while they do, the relays
+# in their own log dir (B and D count lines in $LOGS). Both are open before A
+# starts, so the legs' forks cannot eat into the client's 11 s (the ms run from
+# relay-open).
+ELOGS="$WORK/elogs"
 # the hub closes after 1 s; ssh (stdin) stays open longer
-sleep 4 | FLEET_HUB_TOKEN=tok-1 FLEET_CONNECT_DRAIN_SECS=1 python3 "$BIN/fleet-connect.py" --hub "$HUB" --proxy close1 >/dev/null 2>&1
+( sleep 4 | FLEET_CLIENT_LOG_DIR="$ELOGS" FLEET_HUB_TOKEN=tok-1 FLEET_CONNECT_DRAIN_SECS=1 \
+    python3 "$BIN/fleet-connect.py" --hub "$HUB" --proxy close1 >/dev/null 2>&1 ) & E1=$!
 # ssh closes its side after 11 s; the hub never closes first
-sleep 11 | FLEET_HUB_TOKEN=tok-1 FLEET_CONNECT_DRAIN_SECS=1 python3 "$BIN/fleet-connect.py" --hub "$HUB" --proxy hold >/dev/null 2>&1
-e1=$(awk -F '\t' '$2 == "relay-end" && $3 == "close1"' "$LOGS/connect.log")
-e2=$(awk -F '\t' '$2 == "relay-end" && $3 == "hold"' "$LOGS/connect.log")
-o=$(awk -F '\t' '$2 == "relay-open" && $6 == "ok"' "$LOGS/connect.log" | wc -l | tr -d ' ')
+( sleep 11 | FLEET_CLIENT_LOG_DIR="$ELOGS" FLEET_HUB_TOKEN=tok-1 FLEET_CONNECT_DRAIN_SECS=1 \
+    python3 "$BIN/fleet-connect.py" --hub "$HUB" --proxy hold >/dev/null 2>&1 ) & E2=$!
+for _ in $(seq 1 100); do
+  [ "$(awk -F '\t' '$2 == "relay-open"' "$ELOGS/connect.log" 2>/dev/null | wc -l | tr -d ' ')" -ge 2 ] && break; sleep 0.1
+done
+legs_ABCD
+wait "$E1" "$E2"
+e1=$(awk -F '\t' '$2 == "relay-end" && $3 == "close1"' "$ELOGS/connect.log")
+e2=$(awk -F '\t' '$2 == "relay-end" && $3 == "hold"' "$ELOGS/connect.log")
+o=$(awk -F '\t' '$2 == "relay-open" && $6 == "ok"' "$ELOGS/connect.log" | wc -l | tr -d ' ')
 ms1=$(printf '%s' "$e1" | cut -f5); ms2=$(printf '%s' "$e2" | cut -f5)
 case "$e1" in *$'\t'relay$'\t'*$'\t'hub$'\t''ws close 1011: node link lost') r1=1 ;; *) r1='' ;; esac
 case "$e2" in *$'\t'relay$'\t'*$'\t'client$'\t''ssh closed the stream (stdin EOF)') r2=1 ;; *) r2='' ;; esac
@@ -240,7 +259,11 @@ if [ "$rc" = 255 ] && [ -n "$st" ] && [ "$(printf '%s' "$en" | cut -f6)" = "exit
   ok "F ssh exit 255 → ssh-start + ssh-end · exit 255, and fleet-connect exits 255"
 else bad "F ssh lines/rc: rc=$rc start=[$st] end=[$en]"; fi
 python3 "$WORK/runssh.py" "$BIN" run sh -c 'trap "exit 7" TERM; sleep 30 & wait' &
-p=$!; sleep 1; kill -TERM "$p"; wait "$p"; rc=$?
+p=$!
+# the TERM goes once ssh's own child (the sleep) is up — its trap set before it,
+# fleet-connect's forwarder right after its Popen returned
+for _ in $(seq 1 50); do c=$(pgrep -P "$p" | head -n 1); [ -n "$c" ] && pgrep -P "$c" >/dev/null && break; sleep 0.1; done
+sleep 0.2; kill -TERM "$p"; wait "$p"; rc=$?
 en=$(awk -F '\t' '$2 == "ssh-end"' "$LOGS/connect.log" | tail -n 1)
 case "$en" in *$'\t''exit 7'$'\t'*'this side got signal 15') r=1 ;; *) r='' ;; esac
 [ "$rc" = 7 ] && [ -n "$r" ] && ok "F a SIGTERM to fleet-connect reaches ssh; the line says both" \

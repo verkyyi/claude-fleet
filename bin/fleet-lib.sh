@@ -7124,7 +7124,8 @@ PY
 }
 
 # fleet_hub_wait_sent <file> [<secs>] — rc 0 once the agent has handed <file> to the
-# hub (it deletes it on the hub's ack), rc 1 if it is still queued after <secs> (3).
+# hub (it deletes it on the hub's ack), rc 1 if it is still queued after <secs> (3;
+# the callers pass FLEET_HUB_SENT_WAIT, the selftests' seam — no agent there takes it).
 fleet_hub_wait_sent() {
   local f="${1:-}" n="${2:-3}" i=0
   case "$n" in ''|*[!0-9]*) n=3 ;; esac

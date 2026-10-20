@@ -87,6 +87,7 @@ import importlib.util
 import json
 import os
 import plistlib
+import atexit
 import shutil
 import signal
 import stat
@@ -103,6 +104,22 @@ SUP = os.path.join(BIN, "fleet-node-supervisor.py")
 spec = importlib.util.spec_from_file_location("fns", SUP)
 fns = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fns)
+
+
+# A CLI call runs the supervisor's ~9k lines as a script, which Python never loads
+# from bytecode: every `status` / `account …` compiled them again (~0.2 s, ~300
+# calls a run). CLI = the same argv through a two-line loader that keeps the
+# bytecode in a per-run cache — still `__main__`, its argv, path and file as a
+# script's; its children are untouched (no environment set). The daemon (`run`)
+# keeps the plain argv: B_OneCopy / E_Status find it by that command line.
+_PYC = tempfile.mkdtemp(prefix="fns-pyc.")
+atexit.register(shutil.rmtree, _PYC, True)
+_LOADER = ("import os, sys, importlib.util as u\n"
+           "sys.pycache_prefix = sys.argv[1]; p = sys.argv[2]; sys.argv = sys.argv[2:]\n"
+           "sys.path[0] = os.path.dirname(p)\n"
+           "s = u.spec_from_file_location('__main__', p); m = u.module_from_spec(s)\n"
+           "sys.modules['__main__'] = m; s.loader.exec_module(m)\n")
+CLI = [sys.executable, "-c", _LOADER, _PYC, SUP]
 
 
 def until(secs, fn, step=0.05):
@@ -250,7 +267,7 @@ def sweep(*dirs):
             except OSError:
                 pass
         if sig == signal.SIGTERM and pids:
-            time.sleep(0.2)
+            until(0.2, lambda: not any(fns.pid_alive(x) for x in pids), step=0.02)
 
 
 class Sandbox(unittest.TestCase):
@@ -516,7 +533,7 @@ class Sandbox(unittest.TestCase):
                 stdout=diagnostic_output(result.stdout), stderr=diagnostic_output(result.stderr)))
             return result
         try:
-            result = subprocess.run([sys.executable, SUP] + list(args), env=e, capture_output=True,
+            result = subprocess.run(CLI + list(args), env=e, capture_output=True,
                                     text=True, timeout=60)
         except subprocess.TimeoutExpired as exc:
             if hasattr(self, "diagnostic_calls"):
@@ -1071,7 +1088,7 @@ class D_RestartKeepsState(Sandbox):
         p.wait()
         runs = self.task("t")["runs"]
         self.assertTrue(fns.pid_alive(cpid), "the child died with the supervisor")
-        self.start()
+        self.start(FLEET_NODE_BACKOFF_MAX="0.1")   # the adopted child killed below comes back at once
         self.assertTrue(until(10, lambda: (self.state().get("supervisor") or {}).get("starts") == 2))
         self.assertTrue(until(10, lambda: (self.task("t").get("runs") or 0) > runs))
         self.assertGreater(self.task("t")["runs"], runs, "task history lost across the restart")
@@ -1537,7 +1554,9 @@ class H_Accounts(Sandbox):
         r = self.run_sup("account", "forget", "alice")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("1 service(s) left in the attic", r.stdout)
-        self.assertFalse(fns.pid_alive(kpid), "forget left the account's KeepAlive unit running")
+        # ended is ended, reaped or not (#4044): the daemon reaps its child on its next tick
+        self.assertFalse(fns.pid_alive(kpid) and kpid not in fns._zombies([kpid]),
+                         "forget left the account's KeepAlive unit running")
         a = json.load(open(os.path.join(self.d, "db", "accounts.json")))
         self.assertNotIn("alice", a)
         self.assertTrue(a["bob"]["managed"])
@@ -2108,7 +2127,7 @@ class I_Services(Sandbox):
             return ""
 
     def test_register_run_restart_stop_rm(self):
-        r = subprocess.run([sys.executable, SUP, "service", "cred", "set", "--login", "alice", "--name", "TOKEN"],
+        r = subprocess.run(CLI + ["service", "cred", "set", "--login", "alice", "--name", "TOKEN"],
                            env=self.env, input="s3cret\n", capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("s3cret", r.stdout + r.stderr)
@@ -2121,7 +2140,7 @@ class I_Services(Sandbox):
         self.assertEqual((ent["login"], ent["kind"], ent["state"]), ("alice", "service", "enabled"))
         self.assertEqual(ent["creds"], ["TOKEN"])
         self.assertNotIn("s3cret", open(f).read(), "a credential value in the entry")
-        self.start()
+        self.start(FLEET_NODE_BACKOFF_MAX="0.1")   # the kill below: back at once, not after 1 s
         pid = until(10, lambda: self.child(self.key).get("pid"))
         self.assertTrue(pid, "the service never started")
         self.assertTrue(until(5, lambda: "up uid=" in self.log()), "no log in <log>/logins/alice/")
@@ -2169,7 +2188,7 @@ class I_Services(Sandbox):
         self.start()
         self.assertTrue(until(10, lambda: self.child(self.key).get("status") == "missing credential TOKEN"))
         self.assertFalse(self.child(self.key).get("pid"))
-        subprocess.run([sys.executable, SUP, "service", "cred", "set", "--login", "alice", "--name", "TOKEN"],
+        subprocess.run(CLI + ["service", "cred", "set", "--login", "alice", "--name", "TOKEN"],
                        env=self.env, input="v\n", capture_output=True, text=True)
         self.assertTrue(until(10, lambda: self.child(self.key).get("pid")), "the credential arrived, no start")
 
@@ -2735,13 +2754,18 @@ class P_Watchdog(Sandbox):
         sh = self.script("w.sh", "exit 0\n")
         self.table(tasks=[{"name": "w", "every": 0.1, "cmd": ["/bin/bash", sh]}])
         # the first pass saves, then its sleep never returns
-        self.start(FLEET_NODE_WATCHDOG_SECS="0", FLEET_NODE_TEST_HANG="sleep:" + self.fifo("hang"))
-        self.assertTrue(until(10, lambda: (self.state().get("supervisor") or {}).get("heartbeat")))
-        time.sleep(1.5)
-        r = self.run_sup("status", "--check", env={"FLEET_NODE_HEARTBEAT_STALE": "1"})
-        self.assertEqual(r.returncode, 5, r.stdout + r.stderr)
-        self.assertIn("WEDGED", r.stdout)
-        self.assertIn("kickstart -k system/com.claude-fleet.node", r.stdout)
+        p = self.start(FLEET_NODE_WATCHDOG_SECS="0", FLEET_NODE_TEST_HANG="sleep:" + self.fifo("hang"))
+        try:
+            self.assertTrue(until(10, lambda: (self.state().get("supervisor") or {}).get("heartbeat")))
+            time.sleep(1.5)
+            r = self.run_sup("status", "--check", env={"FLEET_NODE_HEARTBEAT_STALE": "1"})
+            self.assertEqual(r.returncode, 5, r.stdout + r.stderr)
+            self.assertIn("WEDGED", r.stdout)
+            self.assertIn("kickstart -k system/com.claude-fleet.node", r.stdout)
+        finally:
+            # its loop sits in an open() a SIGTERM never ends: tearDown would wait 10 s for it
+            p.kill()
+            p.wait()
 
     def test_off_and_healthy_loop_stay_up(self):
         sh = self.script("ok.sh", "exit 0\n")
@@ -3451,8 +3475,9 @@ class V_SessionUnits(H_Accounts):
         H_Accounts.setUp(self)
         self.sd = os.path.join(self.d, "sessions")
         os.makedirs(self.sd)
+        # the count read every 0.2 s, not the daemon's 5: a case waits for each change it makes
         self.env.update({"FLEET_MACHINE_SESSIONS_DIR": self.sd, "FLEET_NODE_SESSION_HOLD": "0",
-                         "FLEET_NODE_STRAY_SECS": "0.5"})
+                         "FLEET_NODE_STRAY_SECS": "0.5", "FLEET_NODE_SESSION_READ_SECS": "0.2"})
 
     def count(self, who, n, age=0):
         with open(os.path.join(self.sd, who), "w") as f:
@@ -3498,7 +3523,7 @@ class V_SessionUnits(H_Accounts):
         self.assertEqual(self.copies("alice", "spin.sh"), [])
         self.assertIn("account alice             2/2 ok", self.run_sup("status").stdout,
                       "a session unit kept off is not a failure")
-        # a session opens: it starts (the count is read every 5 s); it closes: it stops
+        # a session opens: it starts (the count is read every FLEET_NODE_SESSION_READ_SECS); it closes: it stops
         self.count("alice", 1)
         self.assertTrue(until(10, lambda: self.child("alice/spin").get("pid")), "never started with a session")
         pid = self.child("alice/spin")["pid"]

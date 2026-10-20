@@ -78,6 +78,128 @@ run() {    # run() <args...> → stdout+stderr in $OUT, exit code in $RC
   OUT=$(sh "$IV" "$@" 2>&1); RC=$?
 }
 
+# The doctor legs (each a whole fleet-doctor.sh) run as three lanes beside the
+# rest, each on its OWN copy of the trunk taken here — a lane commits to it (C2, C4)
+# or takes it away (C3) without the others seeing; every count they assert is
+# relative to their own clone. Their checks come back in $WORK/checks.<lane>.
+# fleet-doctor.sh runs many checks; only the `install` ones are asserted here.
+# Only the LABELLED install lines: `[[:space:]]` not `\s` (BSD grep has no \s),
+# and no `note:` clause — several unrelated notes carry the word "install".
+doc_install() {  # doc_install() <live-dir> → the install verdict line(s)
+  FLEET_LIVE_DIR="$1" sh "$DOC" 2>&1 | grep -E '^[[:space:]]+(PASS|WARN|FAIL)[[:space:]]+install[[:space:]]' || true
+}
+
+doc_install_all() {  # <live-dir> <conf-dir> → every labelled install line, INFO too
+  FLEET_LIVE_DIR="$1" FLEET_CONF_DIR="$2" sh "$DOC" 2>&1 | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+install[[:space:]]' || true
+}
+lane_f1() {
+C1="$WORK/doctor-current"; clone "$C1"
+out=$(doc_install "$C1")
+contains "doctor: current is a PASS" "$out" "PASS"
+contains "doctor: current line labelled install" "$out" "install"
+
+C2="$WORK/doctor-behind"; clone "$C2"
+echo eight >> "$UP/f"; g "$UP" add f; g "$UP" commit -qm c8
+out=$(doc_install "$C2")
+contains "doctor: behind is a WARN" "$out" "WARN"
+contains "doctor: behind names the count" "$out" "1 commit"
+contains "doctor: behind names the fix" "$out" "pull --ff-only"
+contains "doctor: behind names the sync command" "$out" "/fleet-sync-install"
+
+# a managed login (#4669): ~/.claude/fleet is a link to <root>/current — no git to
+# compare, the link is the check (a PASS), never «could not tell»
+mkdir -p "$WORK/node-root/abc1234"; ln -s "$WORK/node-root/abc1234" "$WORK/node-root/current"
+ln -s "$WORK/node-root/current" "$WORK/managed-live"
+export FLEET_NODE_ROOT="$WORK/node-root"
+out=$(doc_install_all "$WORK/managed-live" "$WORK/conf-empty")
+unset FLEET_NODE_ROOT
+contains "doctor: managed link is a PASS" "$out" "PASS  install  $WORK/managed-live links to the machine runtime"
+not_contains "doctor: managed link is never unknown" "$out" "could not tell"
+
+}
+lane_f2() {
+# F2. a login following stable (issue #1139): its install trails master by design,
+# so BEHIND is an INFO naming fleet-stable.sh move — never a WARN, never `pull`.
+C4="$WORK/doctor-follower"; clone "$C4"
+mkdir -p "$C4/bin" "$WORK/conf-follow/global"; : > "$C4/bin/fleet-install-sync.sh"
+printf 'result: current\nlast_check: %s\nhead: %s\nstable: %s\n' "$(date +%s)" \
+  "$(g "$C4" rev-parse HEAD)" "$(g "$C4" rev-parse HEAD)" > "$WORK/conf-follow/global/install-sync.state"
+echo nine >> "$UP/f"; g "$UP" add f; g "$UP" commit -qm c9
+out=$(doc_install_all "$C4" "$WORK/conf-follow")
+contains "doctor: follower behind master is an INFO" "$out" "INFO  install  $C4 is 1 commit(s) behind"
+contains "doctor: follower names fleet-stable.sh move" "$out" "fleet-stable.sh move"
+not_contains "doctor: follower is never told to pull" "$out" "pull --ff-only"
+not_contains "doctor: follower behind is no WARN" "$out" "WARN"
+# opted out (FLEET_INSTALL_SYNC=0): a hand pull is its only road, so the WARN stays
+printf 'FLEET_INSTALL_SYNC=0\n' > "$WORK/conf-follow/fleet.conf"
+out=$(doc_install_all "$C4" "$WORK/conf-follow")
+contains "doctor: opted-out behind is still a WARN" "$out" "WARN"
+contains "doctor: opted-out keeps the pull fix" "$out" "pull --ff-only"
+C3="$WORK/doctor-offline"; clone "$C3"
+mv "$UP" "$WORK/upstream.gone2"
+out=$(doc_install "$C3")
+contains "doctor: unreadable trunk is reported, not passed" "$out" "unknown"
+not_contains "doctor: offline is never a PASS" "$out" "PASS"
+mv "$WORK/upstream.gone2" "$UP"
+
+}
+lane_m() {
+C1="$WORK/doctor-machines"; clone "$C1"
+# ============================================================================
+# H. the doctor's `machines (hub)` line (issue #644, EPIC #1524 R4)
+# ============================================================================
+# The refresh loop (fleet-hub-sessions.sh)
+# writes each machine's version word as hub_nodes' 11th field; the doctor only
+# READS the cache — so the cache is written by hand here, and the live dir is a
+# plain clone of its own (its install line is the other legs' business).
+HN="$WORK/dash/global"; mkdir -p "$HN"
+US=$(printf '\037')
+hn_row() { local IFS="$US"; printf '%s\n' "$*"; }
+doc_machines() {  # → the doctor's `machines (hub)` install line(s), label first
+  FLEET_LIVE_DIR="$C1" FLEET_STATUS_G="$HN" sh "$DOC" 2>&1 | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+install[[:space:]]' | grep 'machines (hub)' || true
+}
+out=$(doc_machines)
+eq "machines: no hub_nodes cache → no line (the degenerate case)" "" "$out"
+: > "$HN/hub_nodes"
+eq "machines: an empty cache → no line" "" "$(doc_machines)"
+{ printf '#ts%s%s\n' "$US" "$(( $(date +%s) - 12 ))"
+  hn_row mac-b online 5.02 15 67 19 bc4e8e1753 2 44125 65536 ok
+  hn_row mac-a online 3.18 10 53 6 a1b2c3d 5 8798 16384 old:3
+  hn_row m8 online 1.00 4 10 0 deadbee 1 400 4096 '?'
+  hn_row m9 lost 0.00 4 10 0 '' 4000 400 4096 ''
+  hn_row m7 online 1.00 4 10 0 c0ffee1 1 400 4096 ahead:2
+  hn_row m6 online 1.00 4 10 0 0ff1ine 1 400 4096 off; } > "$HN/hub_nodes"
+out=$(doc_machines)
+contains "machines: one old machine → WARN" "$out" "WARN"
+contains "machines: … naming it, its version and the behind-count" "$out" "mac-a at a1b2c3d — 3 behind stable (OLD)"
+contains "machines: at stable" "$out" "mac-b at bc4e8e1753 — at stable"
+contains "machines: ? is unknown, never a number" "$out" "m8 at deadbee — unknown (a commit this checkout has not fetched)"
+contains "machines: no version reported → unknown" "$out" "m9 — unknown (no fleet version reported)"
+contains "machines: ahead of stable" "$out" "m7 at c0ffee1 — 2 ahead of stable"
+contains "machines: off stable's line" "$out" "m6 at 0ff1ine — not on stable's line"
+contains "machines: the cache's age" "$out" "hub cache 1"
+contains "machines: the WARN names where to look on that machine" "$out" "fleet-install-follow.sh"
+eq "machines: one line" 1 "$(printf '%s\n' "$out" | grep -c .)"
+{ printf '#ts%s%s\n' "$US" "$(date +%s)"
+  hn_row mac-b online 5.02 15 67 19 bc4e8e1753 2 44125 65536 ok
+  hn_row mac-a online 3.18 10 53 6 bc4e8e1 5 8798 16384 ok; } > "$HN/hub_nodes"
+out=$(doc_machines)
+contains "machines: every machine at stable → INFO" "$out" "INFO"
+not_contains "machines: … not a WARN" "$out" "WARN"
+not_contains "machines: … and no OLD" "$out" "OLD"
+{ printf '#ts%s%s\n' "$US" "$(date +%s)"
+  hn_row mac-a online 3.18 10 53 6 bc4e8e1 5 8798 16384; } > "$HN/hub_nodes"
+out=$(doc_machines)
+contains "machines: a pre-#644 10-field row → unknown, not judged" "$out" "mac-a at bc4e8e1 — unknown (not judged against stable"
+not_contains "machines: … never a WARN" "$out" "WARN"
+
+}
+for l in f1 f2 m; do
+  cp -R "$UP" "$WORK/up-$l"
+  ( UP="$WORK/up-$l"; "lane_$l"; echo "$CHECKS" > "$WORK/checks.$l" ) &
+  eval "pid_$l=\$!"
+done
+
 # ============================================================================
 # A. verdicts
 # ============================================================================
@@ -222,65 +344,8 @@ run --dir "$T"
 contains "dirty: a tracked edit is dirty" "$OUT" "dirty:    yes"
 
 # ============================================================================
-# F. the doctor line
+# F. the doctor line — lanes f1 / f2 above; H's machines line — lane m
 # ============================================================================
-# fleet-doctor.sh runs many checks; only the `install` ones are asserted here.
-# Only the LABELLED install lines: `[[:space:]]` not `\s` (BSD grep has no \s),
-# and no `note:` clause — several unrelated notes carry the word "install".
-doc_install() {  # doc_install() <live-dir> → the install verdict line(s)
-  FLEET_LIVE_DIR="$1" sh "$DOC" 2>&1 | grep -E '^[[:space:]]+(PASS|WARN|FAIL)[[:space:]]+install[[:space:]]' || true
-}
-
-C1="$WORK/doctor-current"; clone "$C1"
-out=$(doc_install "$C1")
-contains "doctor: current is a PASS" "$out" "PASS"
-contains "doctor: current line labelled install" "$out" "install"
-
-C2="$WORK/doctor-behind"; clone "$C2"
-echo eight >> "$UP/f"; g "$UP" add f; g "$UP" commit -qm c8
-out=$(doc_install "$C2")
-contains "doctor: behind is a WARN" "$out" "WARN"
-contains "doctor: behind names the count" "$out" "1 commit"
-contains "doctor: behind names the fix" "$out" "pull --ff-only"
-contains "doctor: behind names the sync command" "$out" "/fleet-sync-install"
-
-# F2. a login following stable (issue #1139): its install trails master by design,
-# so BEHIND is an INFO naming fleet-stable.sh move — never a WARN, never `pull`.
-doc_install_all() {  # <live-dir> <conf-dir> → every labelled install line, INFO too
-  FLEET_LIVE_DIR="$1" FLEET_CONF_DIR="$2" sh "$DOC" 2>&1 | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+install[[:space:]]' || true
-}
-C4="$WORK/doctor-follower"; clone "$C4"
-mkdir -p "$C4/bin" "$WORK/conf-follow/global"; : > "$C4/bin/fleet-install-sync.sh"
-printf 'result: current\nlast_check: %s\nhead: %s\nstable: %s\n' "$(date +%s)" \
-  "$(g "$C4" rev-parse HEAD)" "$(g "$C4" rev-parse HEAD)" > "$WORK/conf-follow/global/install-sync.state"
-echo nine >> "$UP/f"; g "$UP" add f; g "$UP" commit -qm c9
-out=$(doc_install_all "$C4" "$WORK/conf-follow")
-contains "doctor: follower behind master is an INFO" "$out" "INFO  install  $C4 is 1 commit(s) behind"
-contains "doctor: follower names fleet-stable.sh move" "$out" "fleet-stable.sh move"
-not_contains "doctor: follower is never told to pull" "$out" "pull --ff-only"
-not_contains "doctor: follower behind is no WARN" "$out" "WARN"
-# opted out (FLEET_INSTALL_SYNC=0): a hand pull is its only road, so the WARN stays
-printf 'FLEET_INSTALL_SYNC=0\n' > "$WORK/conf-follow/fleet.conf"
-out=$(doc_install_all "$C4" "$WORK/conf-follow")
-contains "doctor: opted-out behind is still a WARN" "$out" "WARN"
-contains "doctor: opted-out keeps the pull fix" "$out" "pull --ff-only"
-# a managed login (#4669): ~/.claude/fleet is a link to <root>/current — no git to
-# compare, the link is the check (a PASS), never «could not tell»
-mkdir -p "$WORK/node-root/abc1234"; ln -s "$WORK/node-root/abc1234" "$WORK/node-root/current"
-ln -s "$WORK/node-root/current" "$WORK/managed-live"
-export FLEET_NODE_ROOT="$WORK/node-root"
-out=$(doc_install_all "$WORK/managed-live" "$WORK/conf-empty")
-unset FLEET_NODE_ROOT
-contains "doctor: managed link is a PASS" "$out" "PASS  install  $WORK/managed-live links to the machine runtime"
-not_contains "doctor: managed link is never unknown" "$out" "could not tell"
-
-C3="$WORK/doctor-offline"; clone "$C3"
-mv "$UP" "$WORK/upstream.gone2"
-out=$(doc_install "$C3")
-contains "doctor: unreadable trunk is reported, not passed" "$out" "unknown"
-not_contains "doctor: offline is never a PASS" "$out" "PASS"
-mv "$WORK/upstream.gone2" "$UP"
-
 # ============================================================================
 # G. other logins (issue #1069)
 # ============================================================================
@@ -307,52 +372,9 @@ rm -rf "$WORK/homes/other"
 run --dir "$G" --no-fetch --json
 contains "logins: json null with one login" "$OUT" '"logins":null'
 
-# ============================================================================
-# H. the doctor's `machines (hub)` line (issue #644, EPIC #1524 R4)
-# ============================================================================
-# The refresh loop (fleet-hub-sessions.sh)
-# writes each machine's version word as hub_nodes' 11th field; the doctor only
-# READS the cache — so the cache is written by hand here, and the live dir is a
-# plain clone (its own install line is the earlier legs' business).
-HN="$WORK/dash/global"; mkdir -p "$HN"
-US=$(printf '\037')
-hn_row() { local IFS="$US"; printf '%s\n' "$*"; }
-doc_machines() {  # → the doctor's `machines (hub)` install line(s), label first
-  FLEET_LIVE_DIR="$C1" FLEET_STATUS_G="$HN" sh "$DOC" 2>&1 | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+install[[:space:]]' | grep 'machines (hub)' || true
-}
-out=$(doc_machines)
-eq "machines: no hub_nodes cache → no line (the degenerate case)" "" "$out"
-: > "$HN/hub_nodes"
-eq "machines: an empty cache → no line" "" "$(doc_machines)"
-{ printf '#ts%s%s\n' "$US" "$(( $(date +%s) - 12 ))"
-  hn_row mac-b online 5.02 15 67 19 bc4e8e1753 2 44125 65536 ok
-  hn_row mac-a online 3.18 10 53 6 a1b2c3d 5 8798 16384 old:3
-  hn_row m8 online 1.00 4 10 0 deadbee 1 400 4096 '?'
-  hn_row m9 lost 0.00 4 10 0 '' 4000 400 4096 ''
-  hn_row m7 online 1.00 4 10 0 c0ffee1 1 400 4096 ahead:2
-  hn_row m6 online 1.00 4 10 0 0ff1ine 1 400 4096 off; } > "$HN/hub_nodes"
-out=$(doc_machines)
-contains "machines: one old machine → WARN" "$out" "WARN"
-contains "machines: … naming it, its version and the behind-count" "$out" "mac-a at a1b2c3d — 3 behind stable (OLD)"
-contains "machines: at stable" "$out" "mac-b at bc4e8e1753 — at stable"
-contains "machines: ? is unknown, never a number" "$out" "m8 at deadbee — unknown (a commit this checkout has not fetched)"
-contains "machines: no version reported → unknown" "$out" "m9 — unknown (no fleet version reported)"
-contains "machines: ahead of stable" "$out" "m7 at c0ffee1 — 2 ahead of stable"
-contains "machines: off stable's line" "$out" "m6 at 0ff1ine — not on stable's line"
-contains "machines: the cache's age" "$out" "hub cache 1"
-contains "machines: the WARN names where to look on that machine" "$out" "fleet-install-follow.sh"
-eq "machines: one line" 1 "$(printf '%s\n' "$out" | grep -c .)"
-{ printf '#ts%s%s\n' "$US" "$(date +%s)"
-  hn_row mac-b online 5.02 15 67 19 bc4e8e1753 2 44125 65536 ok
-  hn_row mac-a online 3.18 10 53 6 bc4e8e1 5 8798 16384 ok; } > "$HN/hub_nodes"
-out=$(doc_machines)
-contains "machines: every machine at stable → INFO" "$out" "INFO"
-not_contains "machines: … not a WARN" "$out" "WARN"
-not_contains "machines: … and no OLD" "$out" "OLD"
-{ printf '#ts%s%s\n' "$US" "$(date +%s)"
-  hn_row mac-a online 3.18 10 53 6 bc4e8e1 5 8798 16384; } > "$HN/hub_nodes"
-out=$(doc_machines)
-contains "machines: a pre-#644 10-field row → unknown, not judged" "$out" "mac-a at bc4e8e1 — unknown (not judged against stable"
-not_contains "machines: … never a WARN" "$out" "WARN"
+rc=0
+for l in f1 f2 m; do eval "wait \$pid_$l" || rc=1; done
+[ "$rc" = 0 ] || exit 1
+for l in f1 f2 m; do CHECKS=$((CHECKS + $(cat "$WORK/checks.$l"))); done
 
 printf 'install-version-selftest OK (%d checks)\n' "$CHECKS"

@@ -26,21 +26,25 @@ for f in fleet-doctor.sh fleet-daemon-lib.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/doctor-ingress-selftest.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+TOP="$(mktemp -d "${TMPDIR:-/tmp}/doctor-ingress-selftest.XXXXXX")" || exit 2
+TOP="$(cd "$TOP" && pwd -P)"
+trap 'rm -rf "$TOP"' EXIT
+CHECKS=0
+fail() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- line ---\n%s\n' "${2:-(none)}" >&2; exit 1; }
+has()  { CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) ;; *) fail "$3" "$2";; esac; }
+hasnt() { CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) fail "$3" "$2";; esac; }
+none() { CHECKS=$((CHECKS + 1)); [ -z "$1" ] || fail "$2" "$1"; }
+
+# setup <dir> — one lane's world: the doctor's copy and the fakes (each with its
+# fixture dir baked in); WORK points there.
+setup() {
+WORK="$1"; mkdir -p "$WORK"
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/conf/fleets/tfleet"
 for f in fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-client-core.sh fleet-daemon-lib.sh fleet-daemon-loaded.sh; do
   [ -f "$BIN/$f" ] && cp "$BIN/$f" "$WORK/bin/"
 done
 chmod +x "$WORK/bin/"*.sh
 printf 'FLEET_REPO="o/r"\n' > "$WORK/conf/fleets/tfleet/conf"
-
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- line ---\n%s\n' "${2:-(none)}" >&2; exit 1; }
-has()  { CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) ;; *) fail "$3" "$2";; esac; }
-hasnt() { CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) fail "$3" "$2";; esac; }
-none() { CHECKS=$((CHECKS + 1)); [ -z "$1" ] || fail "$2" "$1"; }
 
 # --- fake uname: the row is cross-platform; the OS is switchable.
 echo Darwin > "$WORK/os"
@@ -68,6 +72,8 @@ cat "$WORK/local.out"
 SH
 chmod +x "$WORK/fakepath/uname" "$WORK/fakepath/ssh" "$WORK/fakepath/ssh-keyscan"
 
+}
+
 # a made-up host key (decodes to no machine) — issue #3578
 KEY_A='AAAAC3NzaC1lZDI1NTE5AAAAIFakeHostKeyFakeHostKeyFakeHostKeyFakeHostKe'
 KEY_B='AAAAC3NzaC1lZDI1NTE5AAAAIOtherMachineOtherMachineOtherMachineOtherMach'
@@ -87,6 +93,10 @@ row() { printf '%s\n' "$2" | grep -aE "^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:spac
 survived() { printf '%s\n' "$1" | grep -qaE '^[[:space:]]+(PASS|WARN)[[:space:]]+perl'; }
 quiet() { CHECKS=$((CHECKS + 1)); [ -s "$WORK/stderr" ] && fail "$1" "$(cat "$WORK/stderr")"; return 0; }
 
+# The cases run as four lanes at once (8's hung probe alone: its 12 s cap), each
+# in its own setup; every case starts from reset, and only 3 reads 2's cache.
+# The counts come back in $TOP/checks.<n>.
+lane_1() {
 # 1. Nothing configured → no row, and ssh is never run. Host alone / probe alone too.
 reset
 out="$(run_doctor)"
@@ -139,7 +149,9 @@ l="$(row ingress "$(run_doctor "${CONF[@]}" FLEET_SSH_PUBLIC_PORT=2200)")"
 hasnt "cached" "$l" "3c: a different port is a different entry — must re-probe"
 has "-p 2200 pub.example.test" "$(cat "$WORK/ssh.argv")" "3c: the re-probe must scan the new port"
 has "pub.example.test:2200" "$l" "3c: the row must name the new port"
+}
 
+lane_2() {
 # 4. A DIFFERENT key → WARN: the entry lands on another machine. Names the
 #    cause, the fix's doc anchor and the silencer; counted as a warn; cached as a
 #    warn (reused on the next run, without ssh).
@@ -191,18 +203,9 @@ quiet "6: the WARN must print nothing on stderr"
 printf 'Host key verification failed.\n' > "$WORK/remote.out"
 l="$(row ingress "$(run_doctor "${CONF[@]}" FLEET_INGRESS_TTL=0)")"
 has "Host key verification failed" "$l" "6b: the WARN must quote the host-key refusal"
+}
 
-# 7. No sshd answering on 127.0.0.1 (local scan empty) while the entry answers →
-#    WARN: cannot tell whether it is this host; names Remote Login.
-reset
-: > "$WORK/local.out"
-out="$(run_doctor "${CONF[@]}")"; l="$(row ingress "$out")"
-has "WARN" "$l" "7: no local sshd must WARN"
-has "no sshd answers on 127.0.0.1" "$l" "7: the WARN must name the local side"
-has "Remote Login" "$l" "7: the WARN must name Remote Login"
-has "-p 22022 127.0.0.1" "$(cat "$WORK/keyscan.argv")" "7: with 22 silent, the local scan must also try the public port"
-quiet "7: the WARN must print nothing on stderr"
-
+lane_3() {
 # 8. A probe that HANGS: bounded. FLEET_INGRESS_TIMEOUT=1 caps the whole probe at
 #    2×1+10 = 12s; the fake ssh would sleep 60. The run must end well inside that,
 #    WARN "timed out", reach the last check, and print nothing on stderr (a
@@ -215,6 +218,19 @@ has "timed out after 12s" "$l" "8: the WARN must say it timed out, and after how
 [ $((t1 - t0)) -lt 45 ] || fail "8: the doctor must not wait for a hung probe (took $((t1 - t0))s)" "$l"
 survived "$out" || fail "8: the doctor did not reach its last check after a timeout" "$l"
 quiet "8: a timeout must print nothing on stderr"
+}
+
+lane_4() {
+# 7. No sshd answering on 127.0.0.1 (local scan empty) while the entry answers →
+#    WARN: cannot tell whether it is this host; names Remote Login.
+reset
+: > "$WORK/local.out"
+out="$(run_doctor "${CONF[@]}")"; l="$(row ingress "$out")"
+has "WARN" "$l" "7: no local sshd must WARN"
+has "no sshd answers on 127.0.0.1" "$l" "7: the WARN must name the local side"
+has "Remote Login" "$l" "7: the WARN must name Remote Login"
+has "-p 22022 127.0.0.1" "$(cat "$WORK/keyscan.argv")" "7: with 22 silent, the local scan must also try the public port"
+quiet "7: the WARN must print nothing on stderr"
 
 # 9. Silenced → no row, no ssh — from the env and from fleet.settings.
 reset
@@ -249,5 +265,15 @@ out="$(run_doctor "${CONF[@]}")"; l="$(row ingress "$out")"
 has "PASS" "$l" "11: the row must render on Linux, and a matching key beside ssh chatter must PASS"
 survived "$out" || fail "11: the doctor did not reach its last check on Linux" "$l"
 quiet "11: the Linux PASS must print nothing on stderr"
+}
+
+for n in 1 2 3 4; do
+  ( setup "$TOP/lane$n"; "lane_$n"; echo "$CHECKS" > "$TOP/checks.$n" ) &
+  eval "pid$n=\$!"
+done
+rc=0
+for n in 1 2 3 4; do eval "wait \$pid$n" || rc=1; done
+[ "$rc" = 0 ] || exit 1
+for n in 1 2 3 4; do CHECKS=$((CHECKS + $(cat "$TOP/checks.$n"))); done
 
 printf 'fleet-doctor-ingress-selftest: PASS (%d checks)\n' "$CHECKS"

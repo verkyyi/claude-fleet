@@ -2582,7 +2582,8 @@ class Supervisor(object):
         login, t = c["account"], now()
         key = (login, bool(c.get("asleep")))
         at, n = self.sessions.get(key, (0, None))
-        if t - at >= 5:
+        # read every 5 s; FLEET_NODE_SESSION_READ_SECS is the selftests' seam
+        if t - at >= env_num("FLEET_NODE_SESSION_READ_SECS", 5):
             n = login_sessions((c["uid"], c["gid"], c["home"]), t, asleep=key[1])
             self.sessions[key] = (t, n)
             if n is None or n > 0:

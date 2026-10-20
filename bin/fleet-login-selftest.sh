@@ -80,7 +80,7 @@ cat >"$SB/hub.py" <<'PY'
 import json, os, subprocess, sys, tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 SB = sys.argv[1]
-state = {"polls": 0, "pub": None, "deny": os.path.exists(os.path.join(SB, "deny"))}
+state = {"polls": 0, "pub": None}
 CONF = "# fleet-ssh-config v1 — test\n\nHost mac-a fleet-mac-a fleet-mac-a-public\n  HostName 127.0.0.1\n  User alice\n  IdentityFile ~/.ssh/fleet-cert\n  CertificateFile ~/.ssh/fleet-cert-cert.pub\n"
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -123,6 +123,7 @@ class H(BaseHTTPRequestHandler):
             return self.reply(401, {"error": "connection certificate refused: its key id names no one this hub knows"})
         if self.path == "/v1/fleet/login/start":
             state["pub"] = body["public_key"]
+            state["polls"] = 0   # one hub serves the whole run: each scan counts its own polls
             open(os.path.join(SB, "sent.pub"), "w").write(body["public_key"] + "\n")
             open(os.path.join(SB, "start.json"), "w").write(json.dumps(body))
             return self.reply(200, {"device_code": "d" * 64, "user_code": "BCDF-GHJK",
@@ -132,13 +133,15 @@ class H(BaseHTTPRequestHandler):
             state["polls"] += 1
             if os.path.exists(os.path.join(SB, "blip")) and state["polls"] == 1:
                 return self.reply(503, {})
-            if state["polls"] < 2 or os.path.exists(os.path.join(SB, "pending")):
+            # A waits through one pending poll (pend1); every other scan is answered at its first
+            if state["polls"] < (2 if os.path.exists(os.path.join(SB, "pend1")) else 1) \
+                    or os.path.exists(os.path.join(SB, "pending")):
                 return self.reply(202, {"status": "authorization_pending"})
             if os.path.exists(os.path.join(SB, "nologin")):
                 # #2090: the person has no machine login — the hub denies at once, with the reason
                 return self.reply(403, {"error": "access_denied: no machine login", "code": "no_machine_login",
                     "reason": "入口还没给你分配机器登录 —— 请管理员在「使用者」页给 cjilyy 设机器登录"})
-            if state["deny"]:
+            if os.path.exists(os.path.join(SB, "deny")):
                 return self.reply(403, {"error": "access_denied"})
             d = tempfile.mkdtemp(dir=SB)
             open(os.path.join(d, "k.pub"), "w").write(state["pub"] + "\n")
@@ -153,7 +156,10 @@ open(os.path.join(SB, "port"), "w").write(str(srv.server_port))
 srv.serve_forever()
 PY
 
+# ONE hub for the whole run (it reads its marker files per request): start_hub
+# starts it the first time, stop_hub leaves it up; cleanup takes it down.
 start_hub() {
+  [ -n "$HUB_PID" ] && return 0
   rm -f "$SB/port"
   # The same port every time after the first: the client remembers the URL.
   python3 "$SB/hub.py" "$SB" ${PORT:-} & HUB_PID=$!
@@ -163,7 +169,7 @@ start_hub() {
   [ -s "$SB/port" ] || { echo "FAIL fake hub never started"; exit 1; }
   PORT="$(cat "$SB/port")"
 }
-stop_hub() { kill "$HUB_PID" 2>/dev/null; wait "$HUB_PID" 2>/dev/null; HUB_PID=""; }
+stop_hub() { :; }
 
 PORT=""
 export HOME="$SB/home" XDG_CONFIG_HOME="$SB/home/.config"
@@ -186,7 +192,9 @@ ORIG_CONF="$(cat "$HOME/.ssh/config")"
 
 # ── A ──
 start_hub
+touch "$SB/pend1"
 out="$(python3 "$BIN/fleet-login.py" --hub "http://127.0.0.1:$PORT" 2>&1)"; rc=$?
+rm -f "$SB/pend1"
 stop_hub
 [ "$rc" = 0 ] && ok "A login exit 0" || bad "A login exit $rc: $out"
 [ -f "$HOME/.ssh/fleet-cert" ] && grep -q '^ssh-ed25519 ' "$HOME/.ssh/fleet-cert.pub" && ok "A key made" || bad "A no ed25519 key"
@@ -441,28 +449,16 @@ ALL_OUT="$ALL_OUT$out"
   && ok "N opener failed → said so, QR, certificate" || bad "N rc=$rc: $out"
 
 # ── O — never a silent wait: a nudge every N seconds, a stop with the reason ──
+# ── P — q on a real terminal switches to the QR ──
+# O's two waits and P's run at once against the one hub (all three see `pending`;
+# they only read HOME — no certificate is written while pending)
 rm -f "$HOME/.ssh/fleet-cert-cert.pub"; touch "$SB/pending"
 start_hub
-out="$(PATH="$SB/fakebin:$PATH" FLEET_LOGIN_BROWSER=1 FLEET_LOGIN_NUDGE_SECS=1 FLEET_LOGIN_TIMEOUT_SECS=4 \
-  python3 "$BIN/fleet-login.py" 2>&1 </dev/null)"; rc=$?
-stop_hub
-ALL_OUT="$ALL_OUT$out"
-[ "$rc" = 1 ] && [ ! -e "$HOME/.ssh/fleet-cert-cert.pub" ] \
-  && echo "$out" | grep -q '还在等浏览器里授权…（已等 [0-9]* 秒；按 q 改用二维码）' \
-  && echo "$out" | grep -q '4 秒内浏览器里没有完成授权，已停下' && echo "$out" | grep -q 'fleet login --qr' \
-  && ok "O nudges while waiting, stops with why + next step" || bad "O rc=$rc: $out"
-start_hub
-out="$(PATH="$SB/fakebin:$PATH" FLEET_LOGIN_BROWSER=0 FLEET_LOGIN_NUDGE_SECS=1 FLEET_LOGIN_TIMEOUT_SECS=3 \
-  python3 "$BIN/fleet-login.py" 2>&1 </dev/null)"; rc=$?
-stop_hub
-[ "$rc" = 1 ] && echo "$out" | grep -q '还在等扫码确认' && echo "$out" | grep -q '3 秒内没有完成扫码确认' \
-  && ok "O the QR wait nudges and stops too" || bad "O qr rc=$rc: $out"
-grep -q '"FLEET_LOGIN_NUDGE_SECS", 15)' "$BIN/fleet-login.py" && grep -q '"FLEET_LOGIN_TIMEOUT_SECS", 120)' "$BIN/fleet-login.py" \
-  && ok "O defaults: a nudge every 15 s, a stop at 2 minutes" || bad "O defaults changed"
-
-# ── P — q on a real terminal switches to the QR ──
-start_hub
-out="$(PATH="$SB/fakebin:$PATH" FLEET_LOGIN_BROWSER=1 FLEET_LOGIN_TIMEOUT_SECS=4 python3 - "$BIN/fleet-login.py" <<'PTY' 2>&1
+( PATH="$SB/fakebin:$PATH" FLEET_LOGIN_BROWSER=1 FLEET_LOGIN_NUDGE_SECS=1 FLEET_LOGIN_TIMEOUT_SECS=4 \
+  python3 "$BIN/fleet-login.py" >"$SB/o1.out" 2>&1 </dev/null; echo $? >"$SB/o1.rc" ) & o1=$!
+( PATH="$SB/fakebin:$PATH" FLEET_LOGIN_BROWSER=0 FLEET_LOGIN_NUDGE_SECS=1 FLEET_LOGIN_TIMEOUT_SECS=3 \
+  python3 "$BIN/fleet-login.py" >"$SB/o2.out" 2>&1 </dev/null; echo $? >"$SB/o2.rc" ) & o2=$!
+( PATH="$SB/fakebin:$PATH" FLEET_LOGIN_BROWSER=1 FLEET_LOGIN_TIMEOUT_SECS=4 python3 - "$BIN/fleet-login.py" >"$SB/p.out" 2>&1 <<'PTY'
 import os, pty, sys, time
 pid, fd = pty.fork()
 if pid == 0:
@@ -481,9 +477,22 @@ while time.time() < end:
 os.waitpid(pid, 0)
 sys.stdout.write(buf.decode("utf-8", "replace"))
 PTY
-)"
+) & pp=$!
+wait "$o1" "$o2" "$pp"
 stop_hub
 rm -f "$SB/pending"
+out=$(cat "$SB/o1.out"); rc=$(cat "$SB/o1.rc")
+ALL_OUT="$ALL_OUT$out"
+[ "$rc" = 1 ] && [ ! -e "$HOME/.ssh/fleet-cert-cert.pub" ] \
+  && echo "$out" | grep -q '还在等浏览器里授权…（已等 [0-9]* 秒；按 q 改用二维码）' \
+  && echo "$out" | grep -q '4 秒内浏览器里没有完成授权，已停下' && echo "$out" | grep -q 'fleet login --qr' \
+  && ok "O nudges while waiting, stops with why + next step" || bad "O rc=$rc: $out"
+out=$(cat "$SB/o2.out"); rc=$(cat "$SB/o2.rc")
+[ "$rc" = 1 ] && echo "$out" | grep -q '还在等扫码确认' && echo "$out" | grep -q '3 秒内没有完成扫码确认' \
+  && ok "O the QR wait nudges and stops too" || bad "O qr rc=$rc: $out"
+grep -q '"FLEET_LOGIN_NUDGE_SECS", 15)' "$BIN/fleet-login.py" && grep -q '"FLEET_LOGIN_TIMEOUT_SECS", 120)' "$BIN/fleet-login.py" \
+  && ok "O defaults: a nudge every 15 s, a stop at 2 minutes" || bad "O defaults changed"
+out=$(cat "$SB/p.out")
 ALL_OUT="$ALL_OUT$out"
 echo "$out" | grep -q '已在浏览器里打开' && echo "$out" | grep -q '█\|▀\|▄' && echo "$out" | grep -q '用手机扫码' \
   && ok "P q while waiting → the QR is drawn" || bad "P: $out"

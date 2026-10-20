@@ -19,7 +19,8 @@
 #      • paints the per-model wall banner and a `◆ Fable 5.1  […]` status line;
 #      • on a line containing `/model <x>` paints Claude Code's "Switch model?"
 #        confirmation and waits;
-#      • on the next bare Enter repaints the status line as `◆ Opus 5  […]`;
+#      • on the next bare Enter takes the confirmation away and repaints the status
+#        line as `◆ Opus 5  […]`;
 #      • records every line it was handed, so "nothing was typed" is provable.
 #      A real unix-socket listener stands in for the session's peer inbox, so the
 #      nudge is asserted to arrive over fleet_peer_send — the SendMessage channel,
@@ -223,13 +224,17 @@ while (my $l = <STDIN>) {
   if (open($fh, '>>', $log)) { print $fh "$l\n"; close $fh; }
   if ($l =~ m{/model\s+([A-Za-z0-9.\-]+)}) {
     $pending = $1;
-    print "   Switch model?\n   \x{25b8} 1. Yes, switch to \u$pending\n";
+    # the cursor saved (DECSC) before the dialog, so a confirmation can take it away
+    print "\e7   Switch model?\n   \x{25b8} 1. Yes, switch to \u$pending\n";
     next;
   }
   if ($pending ne "") {
-    # Enter on the confirmation → the real CLI repaints the status line.
+    # Enter on the confirmation → the real CLI closes the dialog (back to where it
+    # was drawn, cleared below) and repaints the status line — so the switch's
+    # `while … Switch model?` loop ends after the one Enter, as against Claude Code.
     $model = ($pending =~ /^opus/i) ? "Opus 5" : ($pending =~ /^sonnet/i ? "Sonnet 5" : "\u$pending");
     $pending = "";
+    print "\e8\e[J";
     paint();
     next;
   }
@@ -293,6 +298,16 @@ spawn_worker() {
   printf '{"peerToken":"tok-%s"}\n' "$name" > "$FLEET_CC_SESSIONS_DIR/$pid.deadbeef.key"
 }
 
+# painted <wid>… — wait (≤ 1 s each, the sleep it replaces) until each fake has
+# drawn its `◆` line (its banner comes before it); a statusLine fake draws none
+painted() {
+  local w
+  for w in "$@"; do
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      tmux -L "$LBL" capture-pane -p -t "$w" 2>/dev/null | grep -q '◆' && break; sleep 0.1
+    done
+  done
+}
 tmux -L "$LBL" new-session -d -s "$LBL" -n dash -c "$WORK" "sleep 600" 2>/dev/null || fail "could not start the selftest tmux server"
 initial_model="Opus 5"
 selftest_section 1 && initial_model="Fable 5.1"
@@ -315,7 +330,7 @@ tmux -L "$LBL" set-window-option -t "$W_BUSY" @claude_state_ts "$NOWS" 2>/dev/nu
 # green while nine walled workers idled. It must be SWITCHED.
 tmux -L "$LBL" set-window-option -t "$W_STUCK" @claude_state working 2>/dev/null
 tmux -L "$LBL" set-window-option -t "$W_STUCK" @claude_state_ts "$((NOWS - 600))" 2>/dev/null
-sleep 1
+painted "$W_OK" "$W_BUSY" "$W_STUCK" "$W_DONE"
 
 RUN() { FLEET_MODEL_SWITCH_VERIFY=12 "$SCRIPT" --session "$LBL" --no-fallback "$@" 2>&1; }
 
@@ -392,7 +407,7 @@ spawn_worker ledgeronly '' "Fable 5.1"; W_LED="$WID"
 # keep `busy` a LIVE turn for this pass too, so the count cannot drift with how
 # long the selftest has been running
 tmux -L "$LBL" set-window-option -t "$W_BUSY" @claude_state_ts "$(date +%s)" 2>/dev/null
-sleep 1
+painted "$W_LED"
 ok; has $'acctA\tfable' "$(cat "$CAPLEDGER" 2>/dev/null)" || fail "precondition: the fable cap row should already be on the ledger"
 eq "the ledger-only pane shows no banner" "" "$(tmux -L "$LBL" capture-pane -p -t "$W_LED" | grep -c 'reached your' | tr -d ' ' | sed 's/^0$//')"
 
@@ -513,7 +528,7 @@ spawn_worker beforecap '' "Fable 5.1"; W_BEFORE="$WID"
 spawn_worker newcap Fable "Fable 5.1"; W_NEW="$WID"
 spawn_worker aftercap '' "Fable 5.1"; W_AFTER="$WID"
 tmux -L "$LBL" set-window-option -t "$W_BUSY" @claude_state_ts "$(date +%s)" 2>/dev/null
-sleep 1
+painted "$W_BEFORE" "$W_NEW" "$W_AFTER"
 out=$(RUN --capped --model opus)
 ok; has '2 switched' "$out" || fail "a newly recorded cap must reach the later ledger-only candidate" "$out"
 ok; has "$W_NEW" "$out" && has "$W_AFTER" "$out" || fail "both new-cap and later ledger-only windows must switch" "$out"
@@ -578,7 +593,7 @@ MDIR="$FLEET_CONF_DIR/global/mod-inbox/$LBL/${MPANE#%}"
     sleep 0.2
   done ) &
 MODPID=$!
-sleep 1
+painted "$W_MOD"
 # (The stand-in cannot repaint the fake's status line, so the verify is cut short.)
 out=$(FLEET_MODEL_SWITCH_VERIFY=2 "$SCRIPT" --session "$LBL" --no-fallback --model opus "$W_MOD" 2>&1)
 kill "$MODPID" 2>/dev/null; wait "$MODPID" 2>/dev/null
@@ -589,7 +604,7 @@ ok; has '"from": "model-switch"' "$(cat "$WORK/mod-took")" || fail "the post sho
 # Stale beat → the mod is not here → today's keystrokes, unchanged.
 spawn_worker stalemod Fable "Fable 5.1"; W_STALE="$WID"
 tmux -L "$LBL" set-window-option -t "$W_STALE" @mod_alive "$(( $(date +%s) - 600 ))" 2>/dev/null
-sleep 1
+painted "$W_STALE"
 RUN --model opus "$W_STALE" >/dev/null
 ok; has '/model opus' "$(cat "$WORK/typed.stalemod")" || fail "a stale mod beat must fall back to typing /model" "$(cat "$WORK/typed.stalemod")"
 

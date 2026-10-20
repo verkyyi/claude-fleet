@@ -56,11 +56,20 @@ export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 : > "$WORK/gitconfig"
 
-# --- sandbox: HOME, conf dir, a homes root with no other login yet ---------------
-H="$WORK/home" CONF="$WORK/conf" HOMES="$WORK/homes"
-mkdir -p "$H" "$CONF" "$HOMES" "$WORK/tmp"
-export HOME="$H" FLEET_CONF_DIR="$CONF" TMPDIR="$WORK/tmp" FLEET_SKIP_GLOBAL_CONF=1
-export FLEET_SYNC_LOGINS_HOMES="$HOMES" FLEET_SYNC_LOGINS_SUDO='' FLEET_SYNC_LOGINS_TMP="$WORK/tmp"
+# --- sandbox <dir>: HOME, conf dir, a homes root with no other login yet, and its
+# own clone of the live install (the doctor fetches into it, E writes its conf) —
+# one per lane, so the lanes below share nothing but the read-only trunk
+sandbox() {
+  local d="$1"
+  H="$d/home" CONF="$d/conf" HOMES="$d/homes"
+  mkdir -p "$H" "$CONF" "$HOMES" "$d/tmp"
+  export HOME="$H" FLEET_CONF_DIR="$CONF" TMPDIR="$d/tmp" FLEET_SKIP_GLOBAL_CONF=1
+  export FLEET_SYNC_LOGINS_HOMES="$HOMES" FLEET_SYNC_LOGINS_SUDO='' FLEET_SYNC_LOGINS_TMP="$d/tmp"
+  LIVE="$d/live"; git clone -q "$UP" "$LIVE" 2>/dev/null
+  export FLEET_LIVE_DIR="$LIVE"
+  STATE="$CONF/global/install-sync.state"
+}
+export FLEET_SKIP_GLOBAL_CONF=1
 # a fixed name for THIS login: the table pads it to a column, and CI's `runner`
 # is not the operator's name
 export FLEET_SYNC_LOGINS_ME=selfme
@@ -70,12 +79,9 @@ unset FLEET_INSTALL_SYNC FLEET_INSTALL_FOLLOW_STUCK_SECS 2>/dev/null || :
 UP="$WORK/upstream"; git init -q -b master "$UP"
 mkdir -p "$UP/bin"; echo one > "$UP/f"; printf '#!/bin/sh\n' > "$UP/bin/fleet-install-sync.sh"
 git -C "$UP" add -A; git -C "$UP" commit -qm one
-LIVE="$WORK/live"; git clone -q "$UP" "$LIVE" 2>/dev/null
-export FLEET_LIVE_DIR="$LIVE"
-HEADSHA=$(git -C "$LIVE" rev-parse HEAD); STABLESHA=$HEADSHA
+HEADSHA=$(git -C "$UP" rev-parse HEAD); STABLESHA=$HEADSHA
 S7=$(printf '%.7s' "$STABLESHA")
 NOW=$(date +%s)
-STATE="$CONF/global/install-sync.state"
 
 # mk_state <conf-dir> <result> <reason> [deferred_since|-] [last_check]
 # last_check defaults to the moment of writing, not $NOW: a slow macOS runner
@@ -104,6 +110,10 @@ doc_sync() {
   sh "$DOC" 2>&1 | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+install[[:space:]]' | grep -E 'install-sync|other login' || true
 }
 
+# The legs run as five lanes at once, each in its own sandbox (above): every leg
+# writes its own state first, so only K → J → L (J's logins, L's json of them)
+# keep an order. Each lane is a subshell: its checks come back in $WORK/checks.<n>.
+lane_1() {
 # ============================================================================
 # A. current
 # ============================================================================
@@ -155,7 +165,9 @@ printf 'FLEET_INSTALL_FOLLOW_STUCK_SECS="%s"\n' "$((48 * 3600))" > "$CONF/fleet.
 fself
 eq "B: 26h under a 48h knob from fleet.settings is OK" OK "$(fv verdict)"
 rm -f "$CONF/fleet.settings"
+}
 
+lane_2() {
 # ============================================================================
 # C. refused
 # ============================================================================
@@ -187,7 +199,9 @@ mk_state "$CONF" failed "doctor FAIL (x) at abc1234 and git reset --hard $S7 FAI
 fself
 eq "D: failed is STUCK" STUCK "$(fv verdict)"
 contains "D: failed says fix by hand" "$(fv why)" "fix by hand"
+}
 
+lane_3() {
 # ============================================================================
 # E. off — a choice, never a warning; beats a stuck state; dual-read; state off
 # ============================================================================
@@ -226,17 +240,9 @@ contains "F: why names the daemon" "$(fv why)" "com.claude-fleet.install-sync"
 D=$(doc_sync)
 contains "F: doctor WARN" "$D" "WARN"
 contains "F: doctor says no tick" "$D" "no tick has run yet"
+}
 
-# ============================================================================
-# G. stale — the daemon stopped ticking
-# ============================================================================
-mk_state "$CONF" current "install at stable $S7" - "$((NOW - 2 * 86400 - 60))"
-fself
-eq "G: 2d-old current is STUCK" STUCK "$(fv verdict)"
-contains "G: why names the age" "$(fv why)" "last tick 2d ago"
-contains "G: why keeps the last result" "$(fv why)" "before it stopped: at stable $S7"
-contains "G: checked shows the age" "$(fv checked)" "2d ago"
-
+lane_4() {
 # ============================================================================
 # H. unseen — not seen is not not-following
 # ============================================================================
@@ -280,6 +286,16 @@ eq "H: unknown token is UNKNOWN" UNKNOWN "$(fv verdict)"
 contains "H: unknown names the token" "$(fv why)" "unrecognised result 'wat'"
 
 # ============================================================================
+# G. stale — the daemon stopped ticking
+# ============================================================================
+mk_state "$CONF" current "install at stable $S7" - "$((NOW - 2 * 86400 - 60))"
+fself
+eq "G: 2d-old current is STUCK" STUCK "$(fv verdict)"
+contains "G: why names the age" "$(fv why)" "last tick 2d ago"
+contains "G: why keeps the last result" "$(fv why)" "before it stopped: at stable $S7"
+contains "G: checked shows the age" "$(fv checked)" "2d ago"
+
+# ============================================================================
 # I. an install from before the daemon
 # ============================================================================
 OLD="$WORK/old"; mkdir -p "$OLD/bin"
@@ -289,7 +305,9 @@ eq "I: result no-daemon" no-daemon "$(fv result)"
 contains "I: why names the fix" "$(fv why)" "fleet-sync-logins.sh --logins"
 OUT=$(sh "$FL" --self --dir "$WORK/nowhere" 2>&1)
 eq "I: no install is UNKNOWN" UNKNOWN "$(fv verdict)"
+}
 
+lane_5() {
 # ============================================================================
 # K. one login — nothing about others
 # ============================================================================
@@ -380,6 +398,17 @@ OUT=$(sh "$IV" --dir "$LIVE" --no-fetch --json 2>&1)
 contains "L: version json no-tick verdict" "$OUT" '"follow_verdict":"STUCK"'
 OUT=$(sh "$IV" --dir "$WORK/nowhere" --no-fetch --json 2>&1)
 contains "L: version json null without a checkout" "$OUT" '"follow":null,"follow_verdict":null'
+}
+
+for n in 1 2 3 4 5; do
+  ( sandbox "$WORK/lane$n"; "lane_$n"; echo "$CHECKS" > "$WORK/checks.$n" ) &
+  eval "pid$n=\$!"
+done
+rc=0
+for n in 1 2 3 4 5; do eval "wait \$pid$n" || rc=1; done
+[ "$rc" = 0 ] || exit 1
+sandbox "$WORK/lane0"
+for n in 1 2 3 4 5; do CHECKS=$((CHECKS + $(cat "$WORK/checks.$n"))); done
 
 # --- usage ----------------------------------------------------------------------
 sh "$FL" --bogus >/dev/null 2>&1; eq "usage: unknown flag exits 2" 2 "$?"

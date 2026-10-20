@@ -81,11 +81,16 @@ UU=11111111-2222-3333-4444-555555555555; MU=22222222-3333-4444-5555-666666666666
 ti() { tmux -S "$IN" "$@"; }
 to() { tmux -S "$OUT" "$@"; }
 cur() { ti display-message -p -t 'fl@view-v1:' '#{window_id}'; }
-waitfor() {   # <secs*4> <cmd…> — until the command succeeds
-  local n=$1; shift
-  while [ "$n" -gt 0 ]; do "$@" && return 0; sleep 0.25; n=$((n - 1)); done
+waitfor() {   # <secs*4> <cmd…> — until the command succeeds (looked at every 0.1 s)
+  local n=$(( $1 * 5 / 2 )); shift
+  while [ "$n" -gt 0 ]; do "$@" && return 0; sleep 0.1; n=$((n - 1)); done
   return 1
 }
+# prompt_ready — the 看台's pane shows a shell prompt (bounded 1 s, as the sleep it
+# replaces: a prompt that looks otherwise only costs that second)
+prompt_ready() { waitfor 4 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -v '^\$' | tail -n 1 | grep -q '[\$#] *\$'" || :; }
+# now_on <window> — the 看台 shows that window (bounded 0.3 s, as before)
+now_on() { waitfor 1 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$1' ]" || :; }
 
 # --- the seams the home machine's keys run through ------------------------------
 # ⌘N: dash-raw-session.sh's stand-in — its argv kept, a window opened, the
@@ -106,7 +111,7 @@ EOF
 # ⌘T's send: the payload kept, one filed line back
 cat > "$W/send.sh" <<EOF
 #!/bin/sh
-[ -e '$W/slow' ] && sleep 3
+i=0; while [ -e '$W/slow' ] && [ \$i -lt 30 ]; do sleep 0.1; i=\$((i + 1)); done
 cp "\$1" '$W/sent.json'
 echo x >> '$W/send.calls'
 echo 'REMOTE mac-a start done $MU/new9	filed: #77'
@@ -153,7 +158,7 @@ printf '%s\tfl\tthin\t%s\t%s\tcur=%s/f2\troute=lan\tdevice=\ttoken=tok7\tfuid=%s
   /dev/null "$(date +%s)" "$$" "$UU" "$UU" > "$W/conf/remote-views/v1"
 to -f /dev/null new-session -d -s o -x 120 -y 32 -n view "TMUX= tmux -S '$IN' attach -t 'fl@view-v1'" || fail "outer tmux"
 to new-window -d -t o -n direct "TMUX= tmux -S '$IN' attach -t fl"
-sleep 1
+waitfor 8 sh -c "[ \"\$(tmux -S '$IN' list-clients | wc -l | tr -d ' ')\" = 2 ]"
 [ "$(ti list-clients | wc -l | tr -d ' ')" = 2 ] || fail "the two clients did not attach: $(ti list-clients)"
 nwin() { ti list-windows -t fl | wc -l | tr -d ' '; }
 
@@ -215,8 +220,8 @@ sleep 1.5
 to capture-pane -p -t o:direct | grep -q '⚡' && fail "T: ⌘T opened the panel in a direct attach"
 log="$W/conf/logs/view-switch.ndjson"
 to send-keys -t o:view -H 1b 5b 39 33 32 7e
-ok=''; for _ in $(seq 1 20); do
-  sleep 0.4; to capture-pane -p -t o:view > "$W/dispatch.txt"; grep -q '已并进 ⌘P' "$W/dispatch.txt" && { ok=1; break; }
+ok=''; for _ in $(seq 1 80); do
+  sleep 0.1; to capture-pane -p -t o:view > "$W/dispatch.txt"; grep -q '已并进 ⌘P' "$W/dispatch.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || fail "T: ⌘T in the 看台 did not open the panel saying 「⌘T 已并进 ⌘P」: $(cat "$W/dispatch.txt")"
 grep -q '  ⚡ 新会话（空白）' "$W/dispatch.txt" || fail "T: ⌘T's panel is not lit on ⚡: $(grep -v '^$' "$W/dispatch.txt")"
@@ -227,14 +232,14 @@ waitfor 10 sh -c "python3 '$BIN/fleet_timing.py' check | grep -q '^panel n=1 '" 
   || fail "T: the panel's first frame left no run in timing/panel.ndjson: $(python3 "$BIN/fleet_timing.py" check)"
 python3 "$BIN/fleet_timing.py" table panel | grep -q '^| frame | ' || fail "T: the panel run has no frame segment: $(python3 "$BIN/fleet_timing.py" table panel)"
 [ -n "${FLEET_VIEW_EVIDENCE:-}" ] && cp "$W/dispatch.txt" "$FLEET_VIEW_EVIDENCE"
-to send-keys -t o:view Escape; sleep 0.8
+to send-keys -t o:view Escape; waitfor 4 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⚡'"
 to send-keys -t o:view -H 1b 5b 39 33 32 7e
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⚡'" || fail "T: a second ⌘T opened no panel"
 sleep 0.4; to capture-pane -p -t o:view | grep -q '已并进' && fail "T: the second ⌘T said 「已并进 ⌘P」 again"
-to send-keys -t o:view Escape; sleep 0.8
+to send-keys -t o:view Escape; waitfor 4 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⚡'"
 to send-keys -t o:view -H 1b 5b 39 33 30 7e
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -qF '⌘K 已并进 ⌘P'" || fail "T: ⌘K (code 930) did not open the panel saying 「⌘K 已并进 ⌘P」: $(to capture-pane -p -t o:view)"
-to send-keys -t o:view Escape; sleep 0.8
+to send-keys -t o:view Escape; waitfor 4 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⚡'"
 [ "$(grep -c '"how":"old:dispatch"' "$log")" = 2 ] || fail "T: two ⌘T are not two how=old:dispatch lines: $(grep old: "$log")"
 grep -q '"how":"old:switcher","key":"⌘K"' "$log" || fail "T: ⌘K is not logged how=old:switcher: $(grep old: "$log")"
 [ "$(PYTHONPATH="$BIN" python3 -c 'import fleet_keys,sys; print(fleet_keys.old_presses(sys.argv[1]))' "$log")" = "3 ⌘T 2 · ⌘K 1" ] \
@@ -254,7 +259,7 @@ rm -f "$W/sent.json"
 pass "T  ⌘T / ⌘K (#3328): the panel — ⌘T lit on ⚡ — 「已并进 ⌘P」 once, each press how=old:<action> for the doctor; no 派一件事 popup; nothing in a direct attach"
 
 # --- S: ⌃\ -----------------------------------------------------------------------------------
-ti select-window -t "=fl@view-v1:$W1"; sleep 0.3
+ti select-window -t "=fl@view-v1:$W1"; now_on "$W1"
 before=$(nwin)
 to send-keys -t o:direct 'C-\'
 sleep 1
@@ -265,7 +270,7 @@ waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -q
 SW=$(ti list-windows -t fl -F "#{window_id} #{@view_shell}" | awk -v k="nodeA@$ME:$W1" '$2 == k { print $1 }')
 [ "$(cur)" = "$SW" ] || fail "S: the 看台 is not on the shell window ($(cur))"
 [ "$(ti display-message -p -t "$SW" '#{@fleet_role}|#{@peer_view}')" = "panel|v1" ] || fail "S: the shell window's marks: $(ti display-message -p -t "$SW" '#{@fleet_role}|#{@peer_view}')"
-sleep 1; to send-keys -t o:view -l 'echo "AT=$(pwd)"'; to send-keys -t o:view Enter
+prompt_ready; to send-keys -t o:view -l 'echo "AT=$(pwd)"'; to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-alpha'" \
   || fail "S: the shell is not in the session's worktree: $(to capture-pane -p -t o:view | tail -5)"
 to send-keys -t o:view 'C-\'
@@ -277,7 +282,7 @@ waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{wi
 ti kill-window -t "$W1"
 waitfor 24 sh -c "! tmux -S '$IN' list-windows -t fl -F '#{window_id}' | grep -qx '$SW'" || fail "S: alpha gone, its shell stayed"
 # another machine's: the mac-a window, on far1
-ti select-window -t "=fl@view-v1:$PW"; ti set-option -w -t "$PW" @peer_cur "wid:$MU/far1"; sleep 0.3
+ti select-window -t "=fl@view-v1:$PW"; ti set-option -w -t "$PW" @peer_cur "wid:$MU/far1"; now_on "$PW"
 to send-keys -t o:view 'C-\'
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -qx 'mac-a@$ME:$MU/far1'" \
   || fail "S: ⌃\\ on mac-a's session made no shell window: $(ti list-windows -t fl -F '#{window_id} #{@view_shell}')"
@@ -286,7 +291,7 @@ argv=$(tr '\n' ' ' < "$W/ssh.argv")
 for want in "-S $W/conf/peerlink/mac-a.sock" "ControlMaster=no" "-tt" "-l $ME" " mac-a " "fleet-remote-view.sh shell-here $MU/far1"; do
   case " $argv " in *"$want"*) ;; *) fail "S: mac-a's shell ssh lacks 「${want}」: $argv" ;; esac
 done
-sleep 0.5; to send-keys -t o:view -l 'echo "AT=$(pwd)"'; to send-keys -t o:view Enter
+prompt_ready; to send-keys -t o:view -l 'echo "AT=$(pwd)"'; to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*farwt'" \
   || fail "S: mac-a's shell is not in its worktree: $(to capture-pane -p -t o:view | tail -5)"
 # issue #3183: ⌃\ on a lit row of ⌘P — gamma, not on screen, its agent in bin/
@@ -297,7 +302,7 @@ ti set-option -w -t "$W3" @fleet_id f3; ti set-option -w -t "$W3" @worktree "$W/
 row() { local IFS="$US"; printf '%s\n' "$*"; }
 row "$W3" working x gamma ' ' '' 0 '' '' '#33' - 50% ok 'Gamma task' merged '' '' '' '' > "$W/rows.txt"
 P3=$(ti display-message -p -t "$W3" '#{pane_pid}')
-ti select-window -t "=fl@view-v1:$W2"; sleep 0.3
+ti select-window -t "=fl@view-v1:$W2"; now_on "$W2"
 listed() { tmux -S "$OUT" capture-pane -p -t o:view | grep -q 'Gamma task'; }
 to send-keys -t o:view -H 1b 5b 39 32 37 7e
 waitfor 20 listed || fail "S: ⌘P listed no gamma: $(to capture-pane -p -t o:view)"
@@ -306,7 +311,7 @@ waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -q
   || fail "S: ⌃\\ on gamma's row made no shell for it: $(ti list-windows -t fl -F '#{window_id} #{@view_shell}') $(to capture-pane -p -t o:view | tail -3)"
 SG=$(ti list-windows -t fl -F "#{window_id} #{@view_shell}" | awk -v k="nodeA@$ME:$W3" '$2 == k { print $1 }')
 waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$SG' ]" || fail "S: the 看台 is not on gamma's shell ($(cur))"
-sleep 1; to send-keys -t o:view -l 'echo "AT=$(pwd)"'; to send-keys -t o:view Enter
+prompt_ready; to send-keys -t o:view -l 'echo "AT=$(pwd)"'; to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-gamma/bin'" \
   || fail "S: gamma's shell is not where its agent is (…/wt-gamma/bin): $(to capture-pane -p -t o:view | grep -v '^$'; ti display-message -p -t "$SG" 'mode=#{pane_in_mode} dead=#{pane_dead} cmd=#{pane_current_command} pid=#{pane_pid}'; ti capture-pane -p -t "$SG" | grep -v '^$')"
 # ⌘P from the shell: its session lit — ↵ is back on gamma
@@ -333,7 +338,7 @@ ti list-windows -t fl -F '#{window_id}' | grep -qx "$W3" || fail "S: exit in the
 mkdir -p "$W/wt-gamma/lib"; ti set-option -w -t "$W3" @agent_cwd "$W/wt-gamma/lib"
 TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" 'do' shell --view fl@view-v1 --target "$W3" || fail "S: do shell --target $W3 exited non-zero"
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -qx 'nodeA@$ME:$W3'" || fail "S: --target $W3 made no shell for gamma"
-sleep 1; to send-keys -t o:view -l 'echo "AT=$(pwd)=="'; to send-keys -t o:view Enter
+prompt_ready; to send-keys -t o:view -l 'echo "AT=$(pwd)=="'; to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-gamma/lib=='" \
   || fail "S: gamma's @agent_cwd is not where its shell opened: $(to capture-pane -p -t o:view | grep -v '^$')"
 to send-keys -t o:view -l 'exit'; to send-keys -t o:view Enter
@@ -343,14 +348,14 @@ ti set-option -w -t "$W4" @fleet_id f4; ti set-option -w -t "$W4" @worktree "$W/
 sleep 0.3; rmdir "$W/wt-delta/gone"
 TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" 'do' shell --view fl@view-v1 --target f4 || fail "S: do shell --target f4 exited non-zero"
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -qx 'nodeA@$ME:$W4'" || fail "S: --target f4 made no shell for delta"
-sleep 1; to send-keys -t o:view -l 'echo "AT=$(pwd)=="'; to send-keys -t o:view Enter
+prompt_ready; to send-keys -t o:view -l 'echo "AT=$(pwd)=="'; to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-delta=='" \
   || fail "S: delta's agent directory gone, the shell is not in its @worktree: $(to capture-pane -p -t o:view | grep -v '^$'; ti list-windows -t fl -F '#{window_id} #{@view_shell} mode=#{pane_in_mode} cmd=#{pane_current_command}')"
 pass "S  ⌃\\: the session's shell in its worktree (here; mac-a over the link's shell-here), ⌃\\ back and forth, one a session, gone with the session; nothing in a direct attach; ⌘P's ⌃\\ on a session off screen — where its agent is (@agent_cwd, else its pane's bin/, else @worktree), ↵ back from its shell, exit closes the shell alone (#3183)"
 
 # --- P: anchored composer; existing placement routes (#4416) -------------------
 vp() { TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-panel --view fl@view-v1 "$@"; }
-ti select-window -t "=fl@view-v1:$W3"; sleep 0.3
+ti select-window -t "=fl@view-v1:$W3"; now_on "$W3"
 vp > "$W/panel.txt" || fail "P: view-panel"
 grep -qx "cmd${T}pin${T}置顶当前会话" "$W/panel.txt" || fail "P: plain pin row missing"
 [ "$(tail -3 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:new cmd:lang cmd:quit " ] || fail "P: command order"
@@ -389,7 +394,7 @@ sleep 0.5
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["title"]=="修 3164 的列表" and d["via"]=="dispatch" and d["repo"]=="acme/web" and d["draft"]==d["title"] and not d["body"] and not d["issue"], d' "$W/sent.json" || fail "P: payload"
 # Search hit still enters the session; Down selects New, Tab explicitly opens it.
 : > "$W/send.calls"; rm -f "$W/sent.json"
-ti select-window -t "=fl@view-v1:$W3"; sleep 0.3
+ti select-window -t "=fl@view-v1:$W3"; now_on "$W3"
 popen
 to send-keys -t o:view -l Gamma; sleep 0.3
 to send-keys -t o:view Down Tab; sleep 0.3

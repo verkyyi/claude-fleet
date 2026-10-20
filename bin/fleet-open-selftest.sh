@@ -84,7 +84,8 @@ chmod +x "$WORK/bin/tmux" "$WORK/bin/tailscale" "$WORK/bin/open-url"
 export PATH="$WORK/bin:$PATH" TMUX="/x/sock,1,0" TMUX_PANE="%1"
 export FLEET_OPEN_URL_BIN="$WORK/bin/open-url"
 # a road with a receipt waits this long for it; a leg that answers sets its own
-export FLEET_OPEN_ACK_WAIT=1
+# (fleet-show.sh's receipt wait the same — its default is 12)
+export FLEET_OPEN_ACK_WAIT=1 FLEET_SHOW_ACK_WAIT=1
 OUT="$WORK/out"; export FLEET_SHOW_OUT="$OUT"
 OPEN="$BIN/fleet-open.sh"
 SECRET="$HOME/.config/claude-fleet/open.secret"
@@ -368,12 +369,18 @@ doctor_open() {
     | grep -aE '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+open ' | head -1
 }
 mkdir -p "$WORK/conf"
-l=$(doctor_open)
+# three whole doctor runs at once, each on its own copy of HOME: as is, the
+# secret loosened, the secret and the last result gone
+for i in 1 2 3; do rm -rf "$WORK/dh$i"; cp -Rp "$HOME" "$WORK/dh$i"; done
+chmod 644 "$WORK/dh2/.config/claude-fleet/open.secret"
+rm -f "$WORK/dh3/.config/claude-fleet/open.secret" "$WORK/dh3/.config/claude-fleet/open.last"
+dpids=''
+for i in 1 2 3; do ( HOME="$WORK/dh$i" doctor_open > "$WORK/dh$i.row" ) & dpids="$dpids $!"; done
+for p in $dpids; do wait "$p"; done
+l=$(cat "$WORK/dh1.row")
 case "$l" in *PASS*failed*) ok "DOCTOR PASS names the last result" ;; *) bad "DOCTOR pass: $l" ;; esac
-chmod 644 "$SECRET"
-case "$(doctor_open)" in *WARN*0600*) ok "DOCTOR loose secret → WARN" ;; *) bad "DOCTOR loose: $(doctor_open)" ;; esac
-rm -f "$SECRET" "$HOME/.config/claude-fleet/open.last"
-case "$(doctor_open)" in *INFO*first*) ok "DOCTOR no secret → INFO" ;; *) bad "DOCTOR none: $(doctor_open)" ;; esac
+case "$(cat "$WORK/dh2.row")" in *WARN*0600*) ok "DOCTOR loose secret → WARN" ;; *) bad "DOCTOR loose: $(cat "$WORK/dh2.row")" ;; esac
+case "$(cat "$WORK/dh3.row")" in *INFO*first*) ok "DOCTOR no secret → INFO" ;; *) bad "DOCTOR none: $(cat "$WORK/dh3.row")" ;; esac
 
 [ "$fail" = 0 ] && echo "fleet-open-selftest: PASS" || echo "fleet-open-selftest: FAIL"
 exit "$fail"

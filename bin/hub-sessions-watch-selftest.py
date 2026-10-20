@@ -14,7 +14,6 @@ No network or live fleet, and no changes to spinner's maintenance deadlines.
 import json
 import os
 from pathlib import Path
-import runpy
 import shutil
 import signal
 import subprocess
@@ -40,7 +39,19 @@ def main():
     if not TMUX:
         print('SKIP tmux absent')
         return
-    runpy.run_path(str(BIN / 'hub-sessions-watch-schedule-selftest.py'), run_name='__main__')
+    # the schedule's own selftest (a fake clock, its own temp dirs) runs beside the
+    # watch below and is read at the end
+    sched = subprocess.Popen([sys.executable, str(BIN / 'hub-sessions-watch-schedule-selftest.py')])
+    try:
+        watch()
+    except BaseException:
+        sched.kill()
+        sched.wait()
+        raise
+    assert sched.wait(timeout=30) == 0, 'hub-sessions-watch-schedule-selftest failed'
+
+
+def watch():
     with tempfile.TemporaryDirectory(prefix='hubsess-watch.', dir='/tmp') as tmp:
         root = Path(tmp)
         for d in ('bin', 'home', 'conf/fleets/test', 'conf/global', '.claude-dash/global', 'logs'):

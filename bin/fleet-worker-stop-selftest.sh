@@ -46,7 +46,10 @@ export FLEET_HISTORY_LEDGER="$WORK/ledger.tsv"
 export FLEET_CC_SESSIONS_DIR="$WORK/sessions"; mkdir -p "$FLEET_CC_SESSIONS_DIR"
 export CLAUDE_PROJECTS_DIR="$WORK/projects"; mkdir -p "$CLAUDE_PROJECTS_DIR"
 export FLEET_CLAUDE_COMM='FLEETFAKECLAUDE'
-export FLEET_STOP_EXIT_WAIT=8 FLEET_STOP_CLOSE_WAIT=1
+# CLOSE_WAIT 0: a SHELLED pane models «no SessionEnd hook», so the wait for the hook
+# to close its window can never end early — 0 goes straight to the same verdict
+# (stopped:closed). Leg 7's BARE pane, which does die with its agent, keeps 1 s.
+export FLEET_STOP_EXIT_WAIT=8 FLEET_STOP_CLOSE_WAIT=0
 unset TMUX TMUX_PANE
 
 FAIL=0
@@ -90,16 +93,29 @@ mkwin() {
   [ -n "$agent" ] && tf set-window-option -t "$wid" @cc_agent "$agent"
   printf '%s' "$wid"
 }
+# agents_up <wid>… — wait (≤ 2 s) until every window's fake agent runs under its pane
+agents_up() {
+  local w p
+  for w in "$@"; do
+    p=$(tf display-message -p -t "$w" '#{pane_pid}')
+    for _ in $(seq 1 20); do pgrep -P "$p" -f FLEETFAKECLAUDE >/dev/null && break; sleep 0.1; done
+  done
+}
 pid_of() { (. "$BIN/fleet-lib.sh"; fleet_pane_claude_pid "$1" fleetS 2>/dev/null); }
 # display-message -t <gone window> answers with an empty line and exit 0, so
 # existence is a list-windows membership test, never a display-message probe.
 has_win() { tf list-windows -t fleetS -F '#{window_id}' 2>/dev/null | grep -qx -- "$1"; }
 run_stop() { out=$(bash "$BIN/fleet-worker-stop.sh" "$@" 2>"$WORK/err"); rc=$?; }
+# bg_stop <tag> <cmd>… — run one stop / reap in the background, its out/rc in $WORK/<tag>.*;
+# bg_read <tag> waits for it and sets out / rc (independent windows' graceful
+# stops each wait ~2 s for /exit: they overlap)
+bg_stop() { local t="$1"; shift; ( "$@" >"$WORK/$t.out" 2>"$WORK/$t.err"; echo $? >"$WORK/$t.rc" ) & eval "BG_$t=\$!"; }
+bg_read() { eval "wait \$BG_$1"; out=$(cat "$WORK/$1.out"); rc=$(cat "$WORK/$1.rc"); }
 ledger_has() { [ -f "$FLEET_HISTORY_LEDGER" ] && awk -F'\t' -v k="$1" '$2==k{f=1} END{exit !f}' "$FLEET_HISTORY_LEDGER"; }
 
 # --- 1. stop by key: exits that agent, closes that window, neighbour untouched --
 w1=$(mkwin one "$SHELLED" 1); w2=$(mkwin two "$SHELLED" 2)
-sleep 0.5
+agents_up "$w1" "$w2"
 p1=$(pid_of "$w1"); p2=$(pid_of "$w2")
 [ -n "$p1" ] && [ -n "$p2" ] || fail "fixture: fake agents not resolved under $w1/$w2" "p1=$p1 p2=$p2"
 run_stop fleetS issue-1
@@ -111,19 +127,26 @@ kill -0 "$p2" 2>/dev/null || fail "1: neighbour agent pid $p2 died"
 ledger_has 1 || fail "1: no closed-unlanded ledger row keyed 1" "$(cat "$FLEET_HISTORY_LEDGER" 2>/dev/null)"
 ledger_has 2 && fail "1: a row was recorded for the neighbour"
 
+# --- 6. an agent that will not exit — its 2 s wait runs beside legs 2–5 (it
+#        writes no row and touches no other window); read back before leg 7 ------
+w6=$(mkwin six "$STUBBORN" 6); agents_up "$w6"
+p6=$(pid_of "$w6")
+( FLEET_STOP_EXIT_WAIT=2 bash "$BIN/fleet-worker-stop.sh" fleetS issue-6 >"$WORK/out6" 2>"$WORK/err6"; echo $? >"$WORK/rc6" ) &
+leg6=$!
+
 # --- 2. a key nobody holds -------------------------------------------------------
 run_stop fleetS issue-9
 [ "$rc" = 5 ] && [ "$out" = refused:not-found ] || fail "2: expected refused:not-found/5" "rc=$rc out=$out"
 has_win "$w2" || fail "2: a not-found stop closed a window"
 
 # --- 3. a key two windows hold ---------------------------------------------------
-w3a=$(mkwin three-a "$SHELLED" 3); w3b=$(mkwin three-b "$SHELLED" 3); sleep 0.3
+w3a=$(mkwin three-a "$SHELLED" 3); w3b=$(mkwin three-b "$SHELLED" 3); agents_up "$w3a" "$w3b"
 run_stop fleetS issue-3
 [ "$rc" = 6 ] && [ "$out" = refused:ambiguous ] || fail "3: expected refused:ambiguous/6" "rc=$rc out=$out"
 has_win "$w3a" && has_win "$w3b" || fail "3: an ambiguous stop closed a window"
 
 # --- 4. a hibernating worker (sleep controller owns the pane) --------------------
-w4=$(mkwin four "$SHELLED" 4 "" sleeping); sleep 0.3
+w4=$(mkwin four "$SHELLED" 4 "" sleeping); agents_up "$w4"
 run_stop fleetS issue-4
 [ "$rc" = 8 ] && [ "$out" = refused:hibernating ] || fail "4: expected refused:hibernating/8" "rc=$rc out=$out"
 has_win "$w4" || fail "4: a hibernating worker's window was closed"
@@ -136,10 +159,7 @@ run_stop fleetS issue-5
 has_win "$w5" && fail "5: shell-only window $w5 survived the stop"
 ledger_has 5 || fail "5: no ledger row for the shell-only stop"
 
-# --- 6. an agent that will not exit ----------------------------------------------
-w6=$(mkwin six "$STUBBORN" 6); sleep 0.3
-p6=$(pid_of "$w6")
-FLEET_STOP_EXIT_WAIT=2 run_stop fleetS issue-6
+wait "$leg6"; out=$(cat "$WORK/out6"); rc=$(cat "$WORK/rc6")
 [ "$rc" = 7 ] && [ "$out" = failed:no-exit ] || fail "6: expected failed:no-exit/7" "rc=$rc out=$out"
 has_win "$w6" || fail "6: window of a still-running agent was closed"
 kill -0 "${p6:-0}" 2>/dev/null || fail "6: a stop that reported no-exit killed the agent"
@@ -148,21 +168,31 @@ kill -0 "${p6:-0}" 2>/dev/null || fail "6: a stop that reported no-exit killed t
 #        hook closed it: stopped:exit — or stopped:closed where tmux never noticed
 #        the pane die (tmux 3.4 on Linux loses SIGCHLD, #781) — row recorded either
 #        way); Codex bracketed /exit --------------------------------------------
-w7=$(mkwin scratch-7 "$BARE" - "$WORK/wt-scratch-7"); sleep 0.3
-run_stop fleetS scratch-7
-case "$rc:$out" in 0:stopped:exit|0:stopped:closed) ;; *) fail "7: scratch key expected stopped:exit|closed/0" "rc=$rc out=$out err=$(cat "$WORK/err")" ;; esac
+w7=$(mkwin scratch-7 "$BARE" - "$WORK/wt-scratch-7"); w8=$(mkwin eight "$SHELLED" 8 "" "" codex)
+agents_up "$w7" "$w8"
+bg_stop s7 env FLEET_STOP_CLOSE_WAIT=1 bash "$BIN/fleet-worker-stop.sh" fleetS scratch-7
+bg_stop s8 bash "$BIN/fleet-worker-stop.sh" fleetS issue-8
+bg_read s7
+case "$rc:$out" in 0:stopped:exit|0:stopped:closed) ;; *) fail "7: scratch key expected stopped:exit|closed/0" "rc=$rc out=$out err=$(cat "$WORK/s7.err")" ;; esac
 has_win "$w7" && fail "7: scratch window survived"
 ledger_has scratch-7 || fail "7: no ledger row keyed scratch-7" "$(cat "$FLEET_HISTORY_LEDGER" 2>/dev/null)"
-w8=$(mkwin eight "$SHELLED" 8 "" "" codex); sleep 0.3
-run_stop fleetS issue-8
+bg_read s8
 [ "$rc" = 0 ] && [ "$out" = stopped:closed ] || fail "7: codex expected stopped:closed/0" "rc=$rc out=$out"
 has_win "$w8" && fail "7: codex window survived"
 
 # --- 8. usage: a window number / index is not a key ------------------------------
-for bad in "@12" "12" "issue-" "issue-x" "scratch-0"; do
-  run_stop fleetS "$bad"
-  [ "$rc" = 2 ] || fail "8: '$bad' should be a usage refusal (2)" "rc=$rc out=$out"
-done
+refuse_all() {   # refuse_all <leg> <arg>… — each a usage refusal (2), run at once
+  local leg="$1" i=0 bad p pids=""; shift
+  for bad in "$@"; do i=$((i + 1))
+    ( bash "$BIN/fleet-worker-stop.sh" fleetS "$bad" >"$WORK/u$i" 2>&1; echo $? >"$WORK/u$i.rc" ) &
+    pids="$pids $!"
+  done
+  for p in $pids; do wait "$p"; done; i=0
+  for bad in "$@"; do i=$((i + 1))
+    [ "$(cat "$WORK/u$i.rc")" = 2 ] || fail "$leg: '$bad' should be a usage refusal (2)" "rc=$(cat "$WORK/u$i.rc") out=$(cat "$WORK/u$i")"
+  done
+}
+refuse_all 8 "@12" "12" "issue-" "issue-x" "scratch-0"
 has_win "$w2" || fail "8: a usage refusal closed a window"
 
 # --- 10. fid:<@fleet_id> (issue #1873) -------------------------------------------
@@ -172,7 +202,7 @@ w10=$(mkwin daily-x "$SHELLED" -); tf set-window-option -t "$w10" @norepo 1
 tf set-window-option -t "$w10" @fleet_id "$F1"
 w10n=$(mkwin daily-y "$SHELLED" -); tf set-window-option -t "$w10n" @norepo 1
 tf set-window-option -t "$w10n" @fleet_id "$F2"
-sleep 0.4
+agents_up "$w10" "$w10n"
 p10=$(pid_of "$w10"); p10n=$(pid_of "$w10n")
 rows0=$(wc -l < "$FLEET_HISTORY_LEDGER" 2>/dev/null | tr -d ' ')
 run_stop fleetS "fid:$F1"
@@ -185,10 +215,7 @@ kill -0 "${p10n:-0}" 2>/dev/null || fail "10: the other no-repo agent died"
   || fail "10: a no-repo stop wrote a ledger row" "$(tail -1 "$FLEET_HISTORY_LEDGER")"
 run_stop fleetS "fid:$F3"
 [ "$rc" = 5 ] && [ "$out" = refused:not-found ] || fail "10: unknown fid expected refused:not-found/5" "rc=$rc out=$out"
-for bad in "fid:" "fid:nope" "fid:AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA" "$F2" "daily-y"; do
-  run_stop fleetS "$bad"
-  [ "$rc" = 2 ] || fail "10: '$bad' should be a usage refusal (2)" "rc=$rc out=$out"
-done
+refuse_all 10 "fid:" "fid:nope" "fid:AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA" "$F2" "daily-y"
 has_win "$w10n" || fail "10: a refused fid stop closed a window"
 # two windows carrying one identity (a copy made by hand) — never a pick
 tf set-window-option -t "$w2" @fleet_id "$F2"
@@ -213,55 +240,60 @@ has_win "$w10h" || fail "10: a refused hub fid stop closed the window"
 #        Inside the fleet: bare tmux reaches the isolated server through $TMUX.
 SPATH=$(tf display-message -p '#{socket_path}')
 reap() { out=$(TMUX="$SPATH,1,0" bash "$BIN/dash-reap.sh" "$@" 2>"$WORK/err"); rc=$?; }
-tf set-window-option -t "$w10n" @claude_state working
-reap "$w10n" --yes
-[ "$rc" = 3 ] && [ "$out" = skip:live ] || fail "11: a working no-repo row expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
-has_win "$w10n" || fail "11: a working no-repo row was closed"
-tf set-window-option -t "$w10n" @claude_state "done"
-reap "$w10n"
-[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: a done no-repo row expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
-has_win "$w10n" && fail "11: the done no-repo row survived ⌃x"
-kill -0 "${p10n:-0}" 2>/dev/null && fail "11: the reaped no-repo agent is still alive (not a graceful /exit)"
-# no state (issue #2505): a session that never took a turn
+# The windows first, then the reaps that keep (skip:live) one by one, then the five
+# that stop at once — each on its own window, each a graceful /exit's wait.
 F5=55555555-5555-4555-8555-555555555555; F6=66666666-6666-4666-8666-666666666666
 w11a=$(mkwin test-norepo "$SHELLED" -); tf set-window-option -t "$w11a" @norepo 1
 tf set-window-option -t "$w11a" @fleet_id "$F5"
 w11b=$(mkwin norepo-2 "$SHELLED" -); tf set-window-option -t "$w11b" @norepo 1
 tf set-window-option -t "$w11b" @fleet_id "$F6"
-sleep 0.4
-tf set-window-option -u -t "$w11a" @claude_state 2>/dev/null; tf set-window-option -u -t "$w11b" @claude_state 2>/dev/null
-reap "$w11b" --yes
-[ "$rc" = 3 ] && [ "$out" = skip:live ] || fail "11: no state, an agent running expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
-has_win "$w11b" || fail "11: a no-state row with its agent was closed"
-tf set-window-option -t "$w11a" @test_identity 1
-reap "$w11a" --yes
-[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: a test identity's no-state row expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
-has_win "$w11a" && fail "11: the test identity's row survived ⌃x"
-tf set-window-option -t "$w11b" @wrap_gone 1
-reap "$w11b" --yes
-[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: no state, no agent expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
-has_win "$w11b" && fail "11: the no-agent row survived ⌃x"
 # the agent's own word (issue #2540): OSC 7501's @agent_status outranks the stamp
 F7=77777777-7777-4777-8777-777777777777; F8=88888888-8888-4888-8888-888888888888
 w11c=$(mkwin norepo-3 "$SHELLED" -); tf set-window-option -t "$w11c" @norepo 1
 tf set-window-option -t "$w11c" @fleet_id "$F7"
 w11d=$(mkwin norepo-4 'while :; do sleep 300; done' -); tf set-window-option -t "$w11d" @norepo 1
 tf set-window-option -t "$w11d" @fleet_id "$F8"
-sleep 0.4
+agents_up "$w11a" "$w11b" "$w11c"
+tf set-window-option -t "$w10n" @claude_state working
+reap "$w10n" --yes
+[ "$rc" = 3 ] && [ "$out" = skip:live ] || fail "11: a working no-repo row expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w10n" || fail "11: a working no-repo row was closed"
+# no state (issue #2505): a session that never took a turn
+tf set-window-option -u -t "$w11a" @claude_state 2>/dev/null; tf set-window-option -u -t "$w11b" @claude_state 2>/dev/null
+reap "$w11b" --yes
+[ "$rc" = 3 ] && [ "$out" = skip:live ] || fail "11: no state, an agent running expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w11b" || fail "11: a no-state row with its agent was closed"
 tf set-window-option -t "$w11c" @claude_state "done"
 tf set-window-option -t "$w11c" @agent_status '{"state":"blocked","kind":"permission","msg":"","app":"claude","ts":1}'
 reap "$w11c" --yes
 [ "$rc" = 3 ] && [ "$out" = skip:live ] || fail "11: 7501 blocked over a done stamp expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
 has_win "$w11c" || fail "11: a 7501-blocked row was closed"
+# now the five that stop
+tf set-window-option -t "$w10n" @claude_state "done"
+tf set-window-option -t "$w11a" @test_identity 1
+tf set-window-option -t "$w11b" @wrap_gone 1
 tf set-window-option -t "$w11c" @claude_state working
 tf set-window-option -t "$w11c" @agent_status '{"state":"done","kind":"","msg":"","app":"claude","ts":1}'
-reap "$w11c" --yes
-[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: 7501 done over a working stamp expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
+tf set-window-option -u -t "$w11d" @claude_state 2>/dev/null
+for w in w10n w11a w11b w11c w11d; do
+  eval "bg_stop r_$w env TMUX=\"\$SPATH,1,0\" bash \"\$BIN/dash-reap.sh\" \"\$$w\" --yes"
+done
+bg_read r_w10n
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: a done no-repo row expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w10n.err")"
+has_win "$w10n" && fail "11: the done no-repo row survived ⌃x"
+kill -0 "${p10n:-0}" 2>/dev/null && fail "11: the reaped no-repo agent is still alive (not a graceful /exit)"
+bg_read r_w11a
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: a test identity's no-state row expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w11a.err")"
+has_win "$w11a" && fail "11: the test identity's row survived ⌃x"
+bg_read r_w11b
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: no state, no agent expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w11b.err")"
+has_win "$w11b" && fail "11: the no-agent row survived ⌃x"
+bg_read r_w11c
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: 7501 done over a working stamp expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w11c.err")"
 has_win "$w11c" && fail "11: the 7501-done row survived ⌃x"
 # no word, no stamp, no agent process (an agent that never started): exited
-tf set-window-option -u -t "$w11d" @claude_state 2>/dev/null
-reap "$w11d" --yes
-[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: no word, no state, no agent process expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
+bg_read r_w11d
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: no word, no state, no agent process expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w11d.err")"
 has_win "$w11d" && fail "11: the agentless row survived ⌃x"
 
 # --- 12. a bare PATH (issue #4822): a stop sent over ssh / the peerlink runs with
@@ -291,7 +323,7 @@ has_win "$w12" && fail "12: the window survived a bare-PATH stop"
 #        a usage refusal. Last, because the overlay makes the fleet multi-repo.
 mkdir -p "$FLEET_CONF_DIR/fleets/fleetS/repos"
 printf 'FLEET_REPO="acme/other"\n' > "$FLEET_CONF_DIR/fleets/fleetS/repos/acme-other.conf"
-w9a=$(mkwin nine-a "$SHELLED" 9); w9b=$(mkwin nine-b "$SHELLED" 9); sleep 0.3
+w9a=$(mkwin nine-a "$SHELLED" 9); w9b=$(mkwin nine-b "$SHELLED" 9); agents_up "$w9a" "$w9b"
 tf set-window-option -t "$w9a" @repo acme/fleetS; tf set-window-option -t "$w9b" @repo acme/other
 run_stop fleetS issue-9
 [ "$rc" = 6 ] && [ "$out" = refused:ambiguous ] || fail "9: bare key held in two repos expected refused:ambiguous/6" "rc=$rc out=$out"

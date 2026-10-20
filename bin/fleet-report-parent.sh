@@ -691,7 +691,7 @@ if [ -z "$PFOUND" ] && [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/
           # it — an online node, the outbox emptied, the receipt within
           # FLEET_HUB_RECEIPT_WAIT. Anything less is queued, and says so.
           _rid="$_self#$_suf"; _how=''
-          if fleet_hub_wait_sent "$_f" 3; then
+          if fleet_hub_wait_sent "$_f" "${FLEET_HUB_SENT_WAIT:-3}"; then
             case "$_node" in
               '') _how='its machine is not in a fresh hub map' ;;
               *:lost) _how='its machine is offline' ;;

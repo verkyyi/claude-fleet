@@ -49,6 +49,7 @@ the way `ccquota release fetch --artifacts` lays one out (C7). Nothing touches
      no FAIL and rolls nothing back; a current one is a WARN; a rolled-back
      release is retried once its cause is gone, else after a doubling wait
 """
+import atexit
 import base64
 import filecmp
 import hashlib
@@ -83,7 +84,7 @@ sha=$1 dest=$2
 echo "$sha" >> "$FAKE_REL/.fetched"
 [ -d "$FAKE_REL/$sha" ] || { echo "HTTP 404 no release $sha" >&2; exit 1; }
 [ -e "$dest" ] && { echo "$dest already exists" >&2; exit 1; }
-cp -R "$FAKE_REL/$sha" "$dest.partial" || exit 1
+cp -Rp "$FAKE_REL/$sha" "$dest.partial" || exit 1
 [ -z "${FAKE_SLOW:-}" ] || sleep "$FAKE_SLOW"   # a fetch the drill kills half way
 mv "$dest.partial" "$dest"
 echo '{"sha":"'"$sha"'"}'
@@ -114,7 +115,7 @@ if [ -e "$FAKE_REL/.cut" ]; then
   exit 1
 fi
 [ -d "$FAKE_REL/$sha" ] || { echo "HTTP 404 no release $sha" >&2; exit 1; }
-cp -R "$FAKE_REL/$sha" "$dest" || exit 1
+cp -Rp "$FAKE_REL/$sha" "$dest" || exit 1
 echo '{"sha":"'"$sha"'"}'
 """
 
@@ -126,6 +127,48 @@ def sh256(b):
 def wj(path, obj):
     with open(path, "w") as f:
         json.dump(obj, f)
+
+
+# The updater's ~3k lines run as a script, which Python never loads from bytecode:
+# every tick compiled them again. UPD_RUN = the same argv through a loader that
+# keeps the bytecode in a per-run cache (still `__main__`, its argv, path and
+# file as a script's; nothing set for the processes it starts).
+_UPD_PYC = tempfile.mkdtemp(prefix="fnu-upd-pyc.")
+atexit.register(shutil.rmtree, _UPD_PYC, True)
+_LOADER = ("import os, sys, importlib.util as u\n"
+           "sys.pycache_prefix = sys.argv[1]; p = sys.argv[2]; sys.argv = sys.argv[2:]\n"
+           "sys.path[0] = os.path.dirname(p)\n"
+           "s = u.spec_from_file_location('__main__', p); m = u.module_from_spec(s)\n"
+           "sys.modules['__main__'] = m; s.loader.exec_module(m)\n")
+UPD_RUN = [sys.executable, "-c", _LOADER, _UPD_PYC, UPD]
+
+
+# A release's bytecode (#3318) is the updater's to make at every stage — the same
+# ~19k lines of bin/*.py each time. A fixture release carries it made already
+# (fixed mtimes, compiled once per sha per run, `cp -Rp` in the fake fetch keeps
+# them), so the stage's compileall finds it current instead of compiling again.
+PYC_MTIME = 1700000000
+_PYC = {}
+
+
+def warm_bytecode(d, sha):
+    b = os.path.join(d, "bin")
+    for n in os.listdir(b):
+        if n.endswith(".py"):
+            os.utime(os.path.join(b, n), (PYC_MTIME, PYC_MTIME))
+    if sha not in _PYC:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("fnu_core", os.path.join(BIN, "fleet_node_core.py"))
+        core = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(core)
+        core.compile_release(d)
+        if not _PYC:
+            atexit.register(lambda: [shutil.rmtree(x, ignore_errors=True) for x in _PYC.values()])
+        _PYC[sha] = tempfile.mkdtemp(prefix="fnu-pyc.")
+        shutil.rmtree(_PYC[sha])
+        shutil.copytree(os.path.join(b, "__pycache__"), _PYC[sha])
+        return
+    shutil.copytree(_PYC[sha], os.path.join(b, "__pycache__"))
 
 
 def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=(), drop=(), drill_fail=False,
@@ -191,6 +234,7 @@ def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=
         with open(ap, "w") as f:
             f.write('#!/bin/bash\necho "$*|$HOME|%s" >> %s\necho "apply: ok — fixture %s"\n' % (mark or sha, apply_log, (mark or sha)[:7]))
         os.chmod(ap, 0o755)
+    warm_bytecode(d, sha)
     if drill_fail:
         open(os.path.join(d, "conf", "drill-fail"), "w").close()
     arts = {
@@ -295,12 +339,12 @@ class Sandbox(unittest.TestCase):
 
     def tick(self, target, **extra):
         e = dict(self.env, FLEET_NODE_UPDATE_TARGET=target, **extra)
-        r = subprocess.run([sys.executable, UPD, "tick"], env=e, capture_output=True, text=True, timeout=60)
+        r = subprocess.run(UPD_RUN + ["tick"], env=e, capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return self.state()
 
     def cmd(self, *args):
-        return subprocess.run([sys.executable, UPD] + list(args), env=self.env, capture_output=True, text=True,
+        return subprocess.run(UPD_RUN + list(args), env=self.env, capture_output=True, text=True,
                               timeout=60)
 
     def state(self):
@@ -2084,7 +2128,7 @@ class U_OneLine(Sandbox):
 
     def follow(self, plat, **extra):
         e = dict(self.env, FLEET_PLATFORM=plat, **extra)
-        r = subprocess.run([sys.executable, UPD, "tick"], env=e, capture_output=True, text=True, timeout=60)
+        r = subprocess.run(UPD_RUN + ["tick"], env=e, capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return self.state()
 
