@@ -94,10 +94,9 @@ fleet_cfg_expected_load
 ROWS=''      # <sess>|<wid>|<name>|<repo>|<issue>|<state>|<cfgst>|<loop>|<manifest>
 MANS=''      # the distinct manifest paths
 for sess in $sessions; do
-  while IFS='|' read -r wid role name rem ag fp av man st lp iss repo; do
+  while IFS='|' read -r wid role name ag fp av man st lp iss repo; do
     [ -n "$wid" ] || continue
     case "$(printf '%s\n' "$role" | awk "$FLEET_ROLE_AWK"' { print frole($0) }')" in home|panel) continue ;; esac
-    [ -z "$rem" ] || continue                       # another machine's row, judged there
     fleet_cfg_state "$ag" "$fp" "$av"
     case "$FCFG_STATE" in stale|renew) ;; *) continue ;; esac
     loop=''
@@ -107,7 +106,7 @@ for sess in $sessions; do
     ROWS="$ROWS$sess|$wid|$name|${repo:--}|${iss:--}|${st:-none}|$FCFG_STATE|$loop|$man"$'\n'
     [ -n "$man" ] && case "$MANS" in *"$man"$'\n'*) ;; *) MANS="$MANS$man"$'\n' ;; esac
   done < <(tmux -L "$sess" list-windows -t "=$sess" \
-             -F "#{window_id}|$FLEET_ROLE_FMT|#{window_name}|#{@remote}|#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@agent_cfg_manifest}|#{@claude_state}|#{@loop}|#{@issue}|#{@repo}" 2>/dev/null)
+             -F "#{window_id}|$FLEET_ROLE_FMT|#{window_name}|#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@agent_cfg_manifest}|#{@claude_state}|#{@loop}|#{@issue}|#{@repo}" 2>/dev/null)
 done
 
 # Each distinct manifest judged once: `<path>\t<sha>\t<verdict>\t<what>` lines.

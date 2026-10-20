@@ -164,7 +164,7 @@ snapshot_unchanged() {
   local sdir n=0 kept='' every="${FLEET_RESTORE_SNAPSHOT_EVERY:-5}"
   case "$every" in ''|*[!0-9]*) every=5 ;; esac
   sdir="$(fleet_state_dir "$1")"
-  SNAP_KEY=$(tmux -L "$2" list-panes -s -t "$1" -F '#{window_id}|#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},#{@repo}}|#{?@remote,,#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}||#{?@codex_identity,#{@codex_identity},#{@codex_pending}}|#{@desk}|#{@origin_wid}|#{@pin}|#{@hub}|#{@launch}|#{@launch_receipt}|#{@native_worktree}|#{@authority_receipt}' 2>/dev/null) || { SNAP_KEY=''; return 1; }
+  SNAP_KEY=$(tmux -L "$2" list-panes -s -t "$1" -F '#{window_id}|#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},#{@repo}}|#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}||#{?@codex_identity,#{@codex_identity},#{@codex_pending}}|#{@desk}|#{@origin_wid}|#{@pin}|#{@hub}|#{@launch}|#{@launch_receipt}|#{@native_worktree}|#{@authority_receipt}' 2>/dev/null) || { SNAP_KEY=''; return 1; }
   [ -n "$SNAP_KEY" ] && [ -f "$sdir/restore.map" ] || return 1
   { IFS= read -r n; IFS= read -r -d '' kept; } < "$sdir/.snapshot-key" 2>/dev/null
   case "$n" in ''|*[!0-9]*) return 1 ;; esac
@@ -284,10 +284,9 @@ snapshot() {
     for _w in $(tmux -L "$sock" list-windows -t "$sess" -F '#{?@repo,,#{?@norepo,,#{window_id}}}' 2>/dev/null); do
       TMUX='' fleet_window_repo "$sess" "$_w" >/dev/null
     done
-    # A PROXY window (@remote, #1424) prints no name, so the resolver drops it:
-    # it is another machine's session, never one to `claude --resume` here. So
-    # does a 看台's PEER window (@peer, @fleet_role panel — issue #3829): its pane
-    # is an ssh onto another machine, and with no session of its own the resolver
+    # A 看台's PEER window (@peer, @fleet_role panel — issue #3829): its pane
+    # is an ssh onto another machine (it prints no name, so the resolver drops it —
+    # never one to `claude --resume` here), and with no session of its own the resolver
     # guessed one by mtime — $HOME's newest transcript, an old no-repo
     # conversation that a reboot then reopened under a deleted login's name.
     # Leading-most field (issue #1902): @reap_policy — when the fleet may close the
@@ -308,7 +307,7 @@ snapshot() {
       rm -f "$tmp"
       return 1
     fi
-    { tmux -L "$sock" list-windows -t "$sess" -F "#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}||#{?@codex_identity,#{@codex_identity},#{@codex_pending}}' 2>/dev/null
+    { tmux -L "$sock" list-windows -t "$sess" -F "#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}||#{?@codex_identity,#{@codex_identity},#{@codex_pending}}' 2>/dev/null
       [ -n "$spath" ] && printf '||||__HUB__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid --fid --reap --launch-map "$tmp" \
           ${priormap:+--prior-map "$priormap"} >> "$tmp" 2>/dev/null

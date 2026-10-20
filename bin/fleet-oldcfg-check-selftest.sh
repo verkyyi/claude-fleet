@@ -166,7 +166,6 @@ WL=$(mk w-loop looping OLD "$WORK/stale.json" 12)
 WN=$(mk w-noman done OLD '' 13)
 WO=$(mk w-ok done NEW "$WORK/tool.json" 14)       # current: its manifest is never judged
 WP=$(mk w-panel done OLD "$WORK/tool.json" 15); T set-option -w -t "$WP" @fleet_role panel
-WR=$(mk w-remote done OLD "$WORK/tool.json" 16); T set-option -w -t "$WR" @remote mac-a
 WS=$(mk w-stale done OLD "$WORK/stale.json" 17)
 sweep() { OUT=$(bash "$SUT" --sweep "$@" --new-dir "$NEW" -- "$S" 2>&1); RC=$?; }
 sweep --list
@@ -177,10 +176,9 @@ has "C: …the idle stale one as stale" "$OUT" "stale	$S	w-stale	acme/app	#17	do
 has "C: …a window with no manifest as stale (the degenerate)" "$OUT" "stale	$S	w-noman	acme/app	#13	done	"
 hasnt "C: …never the current one" "$OUT" "w-ok"
 hasnt "C: …never a panel" "$OUT" "w-panel"
-hasnt "C: …never another machine's row" "$OUT" "w-remote"
 hasnt "C: …and nothing but w-broken is broken" "$(printf '%s\n' "$OUT" | grep '^broken' | grep -v 'w-broken')" "broken"
 eq "C: agent-cfg.broken holds exactly the broken window" "$S	$WB	tool	tool mcp__fleet__fleet_await" "$(cat "$BROKEN")"
-for w in $WB $WL $WN $WO $WP $WR $WS; do
+for w in $WB $WL $WN $WO $WP $WS; do
   eq "C: the sweep closed nothing ($w)" "$w" "$(T display-message -p -t "$w" '#{window_id}' 2>/dev/null)"
 done
 st() { bash -c '. "$1/fleet-lib.sh"; fleet_cfg_expected_load; fleet_cfg_broken_load; fleet_cfg_state claude "$2" v2 "$3" "$4"; printf "%s" "$FCFG_STATE"' _ "$BIN" "$1" "$S" "$2"; }
@@ -268,14 +266,14 @@ sweep   # the broken file back (WB on OLD again)
 FAKE="$WORK/fake-migrate.sh"; printf '#!/bin/sh\nexit 0\n' > "$FAKE"; chmod +x "$FAKE"
 tick() { FLEET_CFG_RESTART_MIGRATE="$FAKE" bash "$BIN/fleet-cfg-restart.sh" "$@" -- "$S" 2>&1; }
 why() { bash -c '. "$1/fleet-lib.sh"; fleet_cfg_restart_why "$2" "$3"; echo "rc=$?"' _ "$BIN" "$S" "$1" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'; }
-# stale by fingerprint: w-loop, w-noman, w-stale, w-remote, w-panel (cfg-restart skips
-# panels by NAME, and judges remote rows itself) = 5; broken: w-broken, counted apart
-eq "F: --counts <stale> <renew> <broken> — the broken one counted once, apart" "5 0 1" "$(tick --counts)"
+# stale by fingerprint: w-loop, w-noman, w-stale, w-panel (cfg-restart skips
+# panels by NAME) = 4; broken: w-broken, counted apart
+eq "F: --counts <stale> <renew> <broken> — the broken one counted once, apart" "4 0 1" "$(tick --counts)"
 eq "F: a broken, done, idle session is reopened like a stale one" "rc=0" "$(why "$WB")"
 eq "F: the looping stale one never" "state:looping rc=1" "$(why "$WL")"
 l=$(tick --list)
 has "F: --list names the broken one to reopen" "$l" "$WB	w-broken	reopen"
 rm -f "$BROKEN"
-eq "F: no broken file ⇒ the two-kind counts as before, nothing broken" "6 0 0" "$(tick --counts)"
+eq "F: no broken file ⇒ the two-kind counts as before, nothing broken" "5 0 0" "$(tick --counts)"
 
 printf 'selftest PASS: fleet-oldcfg-check (%d checks) — 会坏·需重开 told from 配置旧 (#2076)\n' "$CHECKS"

@@ -386,7 +386,7 @@ banner_budget() {
     printf '%s' "$base"; return 0
   fi
   for sock in ${SOCKETS:-}; do
-    c=$(fleet_lw '#{?@remote,,x}' tmux -L "$sock" | grep -c x)
+    c=$(fleet_lw 'x' tmux -L "$sock" | grep -c x)
     case "$c" in ''|*[!0-9]*) c=0 ;; esac
     n=$((n + c))
   done
@@ -928,8 +928,7 @@ fi
 ph_scrape() {
 local line sock w
 line=$(for sock in $SOCKETS; do
-  # A proxy window (@remote, #1424) shows ANOTHER machine's session — its banner is not ours.
-  for w in $(fleet_lw '#{?@remote,,#{session_name}:#{window_index}}' tmux -L "$sock"); do
+  for w in $(fleet_lw '#{session_name}:#{window_index}' tmux -L "$sock"); do
     tmux -L "$sock" capture-pane -p -S -600 -t "$w" 2>/dev/null
   done
 done | grep -aoE "[0-9]+% of your (weekly|[0-9]+-hour) limit[^│]*" | tail -1)
