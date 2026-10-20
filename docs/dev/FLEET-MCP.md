@@ -409,10 +409,8 @@ revision}` — the person's mode and revision) to each of the person's capable
 hosts, once per repo that host's fleets host, and on such a host's first beat
 when the person's revision is past 0; another person's hosts hear nothing.
 
-An older node's `action: init` is refused 409 — a new repo selects nothing, and
-`fleet_repo_authority.py --init-new`'s fallback gate read then writes the
-person's own mode; `legacy_tickets` in a body is accepted and ignored. The old
-per-repo road under `/v1/fleet/tickets` left with the hub's tickets (T477). The
+A new repo selects nothing: there is no `init` action, and a body carries
+only the listed fields. The old per-repo road under `/v1/fleet/tickets` left with the hub's tickets (T477). The
 node half is #4901 (below): the node reads and writes only this road.
 
 ### A person's authority cutover (#4395, per person since #4896 / #4901)
@@ -422,7 +420,7 @@ person (`task-authority:owner:<owner>`, the section above), and each of that
 person's logins holds its copy as `FLEET_TASK_AUTHORITY` in
 `$FLEET_CONF_DIR/fleet.conf` [node] — a global-only key no fleet conf or repo
 overlay can set, read only through `fleet_task_authority` (an overlay's old line
-is read one version and `fleet-conf.sh migrate` comments it out, `# compat-1v`).
+is read by nothing; `fleet-conf.sh migrate` comments it out).
 A repo is a field on a task: it names the worktree a local start opens, or
 narrows a manifest's lists, and takes part in no fence. Every step below looks
 only at the person's own hosts and executions; another person working the same
@@ -431,9 +429,8 @@ hears of it (`fleet-task-authority-login-selftest.sh`, BREAK-IT
 `authority-other-owner-blocks`).
 
 **New repos select nothing.** `fleet-repo.sh add` writes no authority line and
-asks the hub nothing: #4885's «a new repo starts as hub» is gone, `add
---authority` is read one version and only said, and `fleet_repo_authority.py
---init-new` answers `legacy` (both `# compat-1v`). A repo added to a person who
+asks the hub nothing: #4885's «a new repo starts as hub» is gone, and with
+it `add --authority` and `fleet_repo_authority.py --init-new`. A repo added to a person who
 is already on the hub runs on the hub from its first task.
 
 The cutover is five stages, each its own command on one of the person's logins

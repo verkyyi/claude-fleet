@@ -7,8 +7,8 @@
 # take the fleet and its server with it. `home` is a panel like plan/dash/backlog
 # everywhere a window is counted, snapshotted or listed as a session.
 #
-# The old full-screen dash hub (`plan`, FLEET_DASH_WINDOW=1, issue #1533's way
-# back) went with the dash (issue #4902). It never spawns a Claude session: the
+# The old full-screen dash hub (`plan`, issue #1533's way back) went with the
+# dash (issue #4902). It never spawns a Claude session: the
 # operator runs their own `claude` in whatever window they choose.
 #
 # The @hub pane marker is deliberately KEPT (fleet_mark_role, fleet_hub_pane,

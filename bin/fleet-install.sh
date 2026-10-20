@@ -317,41 +317,14 @@ fetch_bundle() {
   return 0
 }
 
-# stale_in <dir> — what an earlier install left in <dir> that the manifest no
-# longer lists (bin/ conf/ at the top, the Agent package's hooks/ commands/
-# skills/ mod/ at all depths, #1725), one relative path per line
-stale_in() {
-  for d in bin conf; do
-    [ -d "$1/$d" ] || continue
-    for old in "$1/$d"/*; do
-      [ -f "$old" ] || continue
-      rel="$d/${old##*/}"
-      case " $FILES" in *" $rel "*) ;; *) printf '%s\n' "$rel" ;; esac
-    done
-  done
-  for d in hooks commands skills mod; do
-    [ -d "$1/$d" ] || continue
-    find "$1/$d" -type f 2>/dev/null | while IFS= read -r old; do
-      rel="${old#"$1"/}"
-      case " $FILES" in *" $rel "*) ;; *) printf '%s\n' "$rel" ;; esac
-    done
-  done
-}
 # drop_in <dir> — what an upgrade deletes from <dir> (issue #4827): only a file
 # the fleet installed there (its installed.list, fleet-versions-lib.sh) that
 # still holds the listed bytes and that the manifest no longer lists. A file
-# the person put in, or one they edited, is theirs and stays. No list (an
-# install from before it): the old rule, stale_in — but only a file that names
-# the fleet, as every file the fleet ships does (compat-1v: 下一批删).
+# the person put in, or one they edited, is theirs and stays. No list ⇒ nothing.
 drop_in() {
-  if command -v fleet_installed_owned >/dev/null 2>&1 && [ -f "$1/installed.list" ]; then
-    fleet_installed_owned "$1" | while IFS= read -r rel; do
-      case " $FILES" in *" $rel "*) ;; *) printf '%s\n' "$rel" ;; esac
-    done
-    return 0
-  fi
-  stale_in "$1" | while IFS= read -r rel; do
-    grep -q fleet "$1/$rel" 2>/dev/null && printf '%s\n' "$rel"
+  command -v fleet_installed_owned >/dev/null 2>&1 && [ -f "$1/installed.list" ] || return 0
+  fleet_installed_owned "$1" | while IFS= read -r rel; do
+    case " $FILES" in *" $rel "*) ;; *) printf '%s\n' "$rel" ;; esac
   done
 }
 # mark_get <file> <key> — one `key=value` line of a .client-version

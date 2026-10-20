@@ -316,12 +316,10 @@ settle() {
 }
 
 # --- DEFAULT (issue #1533): no plan window — `home`, a plain shell, no claude ---
-# (FLEET_DASH_WINDOW=1, the old dash hub's way back, went with the dash, issue
-# #4902: it is set here and changes nothing.)
 : > "$WORK/claude-argv"
 tmux new-session -d -s homed -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session homed"
 env -u HUB_CMD \
-  HUB_SESSION=homed HUB_CWD="$STEW_PATH" HUB_RESUME_ID="stew-abc123" FLEET_DASH_WINDOW=1 \
+  HUB_SESSION=homed HUB_CWD="$STEW_PATH" HUB_RESUME_ID="stew-abc123" \
   FLEET_HUB_CMD='claude "my own orders"; exec $SHELL' \
   bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (default) exited non-zero"
 settle homed && fail "default: hub-session launched a claude (argv: $(cat "$WORK/claude-argv"))"

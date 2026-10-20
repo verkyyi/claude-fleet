@@ -946,15 +946,10 @@ _FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET
 # legacy | frozen | hub as its fleet.conf [node] says — the hub answers it per
 # person (#4896) and the authority sync writes the line (fleet_repo_authority.py
 # --sync); empty = never selected. A global-only key: a fleet conf or a repo
-# overlay cannot set it. # compat-1v: 下一批删 — with <sess> <repo>, an overlay's
-# old line (fleet-conf.sh migrate comments it out) still fills a gap.
+# overlay cannot set it (fleet-conf.sh migrate comments an old overlay line out),
+# so <sess> <repo> change nothing.
 fleet_task_authority() {
-  local v="${FLEET_TASK_AUTHORITY:-}" f
-  if [ -z "$v" ] && [ -n "${1:-}" ] && [ -n "${2:-}" ]; then
-    f=$(fleet_repo_conf_file "$1" "$(fleet_norm_repo "$2")")
-    [ -f "$f" ] && v=$(sed -n "s/^[[:space:]]*FLEET_TASK_AUTHORITY=[\"']*\([a-z]*\).*/\1/p" "$f" | tail -n 1)
-  fi
-  printf '%s' "$v"
+  printf '%s' "${FLEET_TASK_AUTHORITY:-}"
 }
 
 # A worktree remembers the hub task record it was opened for (issue #4897, EPIC
@@ -1889,15 +1884,13 @@ fleet_repo_trust_warn() {
 # Nothing is written unless the token is added:*.
 # Who runs its tasks is not the repo's (issue #4901): it is this login's person's,
 # fleet.conf [node]'s FLEET_TASK_AUTHORITY (fleet_task_authority) — a new repo
-# writes no line and asks the hub nothing. `--authority` (#4885's per-repo default)
-# is read one version and only said. # compat-1v: 下一批删
+# writes no line and asks the hub nothing.
 fleet_repo_register() {
   local sess="" repo="" dir="" base="" base_src="" base_default="" tab f bin rc seed=0
-  local as="" remote="" forge=github had authority=""
+  local as="" remote="" forge=github had
   while [ $# -gt 0 ]; do
     case "$1" in
       --base) base="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
-      --authority) authority="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
       --as) as="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
       --seed) seed=1; shift ;;
       *) if [ -z "$sess" ]; then sess="$1"; elif [ -z "$repo" ]; then repo="$1"
@@ -1912,10 +1905,6 @@ fleet_repo_register() {
     repo=$(fleet_repo_name_of "$remote")
   fi
   [ -n "$as" ] && repo="$as"
-  if [ -n "$authority" ]; then
-    echo "fleet-repo: --authority is ignored — who runs tasks is this login's, not a repo's (issue #4901): \`fleet-repo.sh authority --dry-run\`" >&2
-    authority=''
-  fi
   repo=$(fleet_norm_repo "$repo")
   case "$repo" in
     *[!A-Za-z0-9_./-]* | */*/* | /* | */) repo="" ;;

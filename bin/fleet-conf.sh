@@ -808,8 +808,8 @@ EOF
 
 # ---- who runs tasks is the login's, not a repo's (issue #4901) ------------------
 # FLEET_TASK_AUTHORITY moved from a repo overlay to this login's fleet.conf [node]
-# (the hub answers it per person since #4896). An overlay's old line is read one
-# version (fleet_task_authority) and commented out here — never carried: the hub
+# (the hub answers it per person since #4896). An overlay's old line is read by
+# nothing and commented out here — never carried: the hub
 # reads every per-repo row as absent, so the person's mode is the hub's answer,
 # which the next authority sync writes. Idempotent: no active line, nothing written.
 AUTH_RE='^[[:space:]]*(export[[:space:]]+)?FLEET_TASK_AUTHORITY[[:space:]]*='

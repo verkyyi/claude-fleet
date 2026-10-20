@@ -3,12 +3,12 @@
 # never a Claude.
 #
 # hub-session.sh builds `home`, a plain shell the task list draws beside, at
-# index 1 (issue #1533); the old `plan` dash hub (FLEET_DASH_WINDOW=1) went with
+# index 1 (issue #1533); the old `plan` dash hub went with
 # the dash (issue #4902), and its legs with it. The print seam (HUB_PRINT_CMD)
 # and a real isolated tmux pin:
 #   • it opens `home` in $HOME (a fleet has no main repo, #1941), HUB_CWD pins it;
-#   • FLEET_DASH_WINDOW=1, HUB_RESUME_ID or FLEET_HUB_CMD bring no dash and no
-#     claude back — they are read by nothing;
+#   • HUB_RESUME_ID or FLEET_HUB_CMD bring no claude back — they are read by
+#     nothing;
 #   • a real build puts `home` at index 1, no `plan`, no @dash pane, and a second
 #     run builds nothing more.
 #
@@ -37,17 +37,15 @@ FLEET_BASE_BRANCH="main"
 EOF
 
 # --- the print seam: `home`, where -------------------------------------------
-d=$(env -u FLEET_DASH_WINDOW FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 bash "$SCRIPT")
+d=$(env FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 bash "$SCRIPT")
 [ "$d" = home ] || fail "default: hub-session must build the 'home' window, not the dash: $d"
-d=$(env -u FLEET_DASH_WINDOW FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=cwd bash "$SCRIPT")
+d=$(env FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=cwd bash "$SCRIPT")
 [ "$d" = "$HOME" ] || fail "default: home must open in \$HOME (a fleet has no main repo, #1941), got: $d"
-d=$(env -u FLEET_DASH_WINDOW FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_CWD="$MAIN" HUB_PRINT_CMD=cwd bash "$SCRIPT")
+d=$(env FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_CWD="$MAIN" HUB_PRINT_CMD=cwd bash "$SCRIPT")
 [ "$d" = "$MAIN" ] || fail "HUB_CWD must still pin the hub's cwd, got: $d"
-# The retired knobs bring nothing back (issue #4902): the dash and a hub claude.
-printf 'FLEET_DASH_WINDOW=1\n' > "$CONF/fleet.settings"
-d=$(FLEET_DASH_WINDOW=1 HUB_RESUME_ID=abc FLEET_HUB_CMD=claude FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 bash "$SCRIPT")
-[ "$d" = home ] || fail "FLEET_DASH_WINDOW=1 / HUB_RESUME_ID / FLEET_HUB_CMD must change nothing, got: $d"
-rm -f "$CONF/fleet.settings"
+# The retired knobs bring nothing back (issue #4902): a hub claude.
+d=$(HUB_RESUME_ID=abc FLEET_HUB_CMD=claude FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 bash "$SCRIPT")
+[ "$d" = home ] || fail "HUB_RESUME_ID / FLEET_HUB_CMD must change nothing, got: $d"
 
 # A real build, on an isolated server (never the live one): fleet-up's throwaway
 # first window, then hub-session.sh — `home` at index 1, no `plan`, and a second
@@ -68,7 +66,7 @@ EOF
   T -f /dev/null new-session -d -s "$SESS" -n work 'sleep 600' || fail "could not start the isolated tmux server"
   T set-option -g default-shell /bin/sh
   T set-option -g base-index 1
-  live() { env -u FLEET_DASH_WINDOW -u TMUX PATH="$WORK/shim:$PATH" FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" bash "$SCRIPT"; }
+  live() { env -u TMUX PATH="$WORK/shim:$PATH" FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" bash "$SCRIPT"; }
   live || fail "default: hub-session.sh exited non-zero"
   names=$(T list-windows -t "$SESS" -F '#{window_index}:#{window_name}' | tr '\n' ' ')
   case " $names" in *":plan "*) fail "default: a 'plan' window was built: $names" ;; esac

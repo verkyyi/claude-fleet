@@ -98,7 +98,7 @@ func TestRepoAuthorityAPILocalFinalGateReservation(t *testing.T) {
 		t.Fatalf("final gate: %d %v", code, reservation)
 	}
 	// Launcher deliberately stays paused here BEFORE new-window/native creation.
-	code, frozen := authorityCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "freeze", "idempotency_key": "freeze-paused", "expected_revision": 0, "legacy_tickets": "github"})
+	code, frozen := authorityCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "freeze", "idempotency_key": "freeze-paused", "expected_revision": 0})
 	if code != 200 {
 		t.Fatalf("freeze: %d %v", code, frozen)
 	}
@@ -135,7 +135,7 @@ func TestRepoAuthorityAPIManifestCutoverAndCapabilities(t *testing.T) {
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("GET mutated registry")
 	}
-	freeze := map[string]any{"action": "freeze", "idempotency_key": "freeze", "expected_revision": 0, "legacy_tickets": "github"}
+	freeze := map[string]any{"action": "freeze", "idempotency_key": "freeze", "expected_revision": 0}
 	code, a := authorityCall(t, h, auth, http.MethodPost, path, freeze)
 	if code != 409 {
 		t.Fatalf("unbound old owners must drain before freeze: %d %v", code, a)
@@ -195,7 +195,7 @@ func TestRepoAuthorityAPICleanCutoverNoGitHub(t *testing.T) {
 		}
 	}
 	refresh()
-	code, a := authorityCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "freeze", "idempotency_key": "freeze-empty", "expected_revision": 0, "legacy_tickets": "github"})
+	code, a := authorityCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "freeze", "idempotency_key": "freeze-empty", "expected_revision": 0})
 	if code != 200 {
 		t.Fatalf("freeze: %d %v", code, a)
 	}
@@ -259,9 +259,9 @@ func TestRepoAuthorityTransitionTellsEveryHost(t *testing.T) {
 		body map[string]any
 		mode string
 	}{
-		{map[string]any{"action": "freeze", "idempotency_key": "f", "expected_revision": 0, "legacy_tickets": "github"}, "frozen"},
+		{map[string]any{"action": "freeze", "idempotency_key": "f", "expected_revision": 0}, "frozen"},
 		{map[string]any{"action": "apply", "idempotency_key": "a", "expected_revision": 1}, "hub"},
-		{map[string]any{"action": "freeze", "idempotency_key": "f2", "expected_revision": 2, "legacy_tickets": "github"}, "frozen"},
+		{map[string]any{"action": "freeze", "idempotency_key": "f2", "expected_revision": 2}, "frozen"},
 		{map[string]any{"action": "rollback", "idempotency_key": "r", "expected_revision": 3}, "legacy"},
 	}
 	for i, st := range steps {
@@ -518,25 +518,6 @@ func TestSupersededByRules(t *testing.T) {
 	gone.MachineID, gone.EndpointID = "m2", "e2"
 	if _, ok := supersededBy(old, writeRepo, []store.FleetRow{old, gone}, retired); ok {
 		t.Fatal("a retired successor superseded it")
-	}
-}
-
-// An older node's init (claude-fleet#4885) selects nothing any more: it is
-// refused, and the node's fallback gate read answers the person's own mode
-// (claude-fleet#4896).
-func TestRepoAuthorityAPIInitRefusedGateIsTheOwners(t *testing.T) {
-	h, _, _, _, _ := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
-	auth := func(hdr http.Header) { hdr.Set("Authorization", "Bearer "+h.tokens["mac-d"]) }
-	body := map[string]any{"action": "init", "expected_revision": 0, "idempotency_key": "repo-init-new", "legacy_tickets": "hub"}
-	if code, a := authorityCall(t, h, auth, http.MethodPost, FleetAuthorityPath+"?repo=acme/brand-new", body); code != 409 {
-		t.Fatalf("init a new repo: %d %v", code, a)
-	}
-	code, g := authorityCall(t, h, auth, http.MethodGet, FleetAuthorityPath+"?repo=acme/brand-new&gate=1", nil)
-	if code != 200 || g["mode"] != "legacy" || g["owner"] != "operator" {
-		t.Fatalf("gate after a refused init: %d %v", code, g)
-	}
-	if after, _ := h.srv.Store.FleetSettings(); after["task-authority:acme/brand-new"] != "" || after["task-authority:owner:operator"] != "" {
-		t.Fatal("a refused init wrote a selection", after)
 	}
 }
 
