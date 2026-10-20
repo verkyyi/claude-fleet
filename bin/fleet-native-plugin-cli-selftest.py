@@ -50,6 +50,13 @@ for line in sys.stdin:
 '''
 
 
+def orch_tools(fleet_root):
+    """How many tools the dispatch group lists today — asked, never a fixed count."""
+    out = subprocess.run([sys.executable, str(fleet_root / "bin/fleet-mcp.py"), "--group", "orch", "--list"],
+                         capture_output=True, text=True, check=True).stdout
+    return len([line for line in out.splitlines() if line.strip()])
+
+
 def stop(child):
     if child.poll() is None:
         os.killpg(child.pid, signal.SIGTERM)
@@ -148,7 +155,8 @@ def probe(binary, client_type, mode, fleet_root, retire_bridge=False):
         def bridge(*arguments):
             return run_command([sys.executable, str(fleet_root / "bin/fleet-codex-plugins.py"), *arguments,
                                 "--root", str(market), "--claude", str(root / "claude-fixture"),
-                                "--cache", "", "--codex-home", str(codex_home)], "bridge " + " ".join(arguments))
+                                "--cache", "", "--codex", binary, "--codex-home", str(codex_home)],
+                               "bridge " + " ".join(arguments))
 
         def assert_absent(label, *flags):
             endpoint = root / (label + ".sock")
@@ -189,12 +197,12 @@ def probe(binary, client_type, mode, fleet_root, retire_bridge=False):
                         stop(backend)
 
         version = execute("--version").strip()
-        execute("plugin", "marketplace", "add", str(market), "--json")
-        execute("plugin", "add", "native-fixture@fleet-probe", "--json")
-        installed = json.loads(execute("plugin", "list", "--marketplace", "fleet-probe", "--json"))
-        check(len(installed["installed"]) == 1 and installed["installed"][0]["enabled"], "native plugin enabled")
-        if retire_bridge:
-            native_config = (codex_home / "config.toml").read_text()
+        if not retire_bridge:
+            execute("plugin", "marketplace", "add", str(market), "--json")
+            execute("plugin", "add", "native-fixture@fleet-probe", "--json")
+        else:
+            # the follower (T589): what the old bridge left is planted by hand, then ONE
+            # fleet-codex-plugins.py sync retires it and installs through this binary
             records = home / ".claude/plugins"
             records.mkdir(parents=True)
             (records / "installed_plugins.json").write_text(json.dumps({"plugins": {"native-fixture@fleet-probe": []}}))
@@ -205,22 +213,25 @@ def probe(binary, client_type, mode, fleet_root, retire_bridge=False):
             fake.write_text("#!/bin/sh\n[ \"$1 $2 $3\" = 'plugin list --json' ] || exit 1\nexec cat " +
                             shlex.quote(str(listed)) + "\n")
             fake.chmod(0o700)
-            bridge("sync")
+            before_bridge = (codex_home / "config.toml").read_text()
             linked = codex_home / "skills/fleet-plugin-fixture-skill"
             adapter = codex_home / "skills/fleet-plugin-fixture-command/SKILL.md"
-            check(linked.is_symlink() and adapter.is_file(), "actual legacy bridge creates skill artifacts")
-            check("# >>> fleet plugins" in (codex_home / "config.toml").read_text(), "actual legacy bridge creates MCP block")
-            override = root / "fleet-conf/agent-overrides.json"
-            override.parent.mkdir(parents=True, exist_ok=True)
-            override.write_text('["codex.plugins"]\n')
-            check(not bridge("dirs").strip(), "retired bridge supplies no hook directories")
-            preview = bridge("retire")
-            check("preview only" in preview and linked.is_symlink() and adapter.is_file(), "retirement preview leaves artifacts")
-            bridge("retire", "--apply")
-            check(not linked.is_symlink() and not adapter.exists(), "retirement removes legacy skills")
-            check((codex_home / "config.toml").read_text() == native_config, "retirement preserves exact native configuration")
-            bridge("sync")
-            check(not linked.is_symlink() and not adapter.exists(), "legacy sync cannot revive retired skills")
+            adapter.parent.mkdir(parents=True)
+            linked.symlink_to(plugin / "skills/fixture-skill")
+            adapter.write_text("---\nname: fixture-command\n---\n\n<!-- fleet codex plugin skill -->\n")
+            with (codex_home / "config.toml").open("a") as config:
+                config.write("\n# >>> fleet plugins — bin/fleet-codex-plugins.py sync writes this block; edit outside it >>>\n"
+                             "[mcp_servers.old]\ncommand = \"x\"\n# <<< fleet plugins <<<\n")
+            out = bridge("sync")
+            check("retire  link" in out and "add     " in out, "one sync retires the bridge and installs natively")
+            check(not linked.is_symlink() and not adapter.parent.exists(), "follower removes legacy skills")
+            after = (codex_home / "config.toml").read_text()
+            check("# >>> fleet plugins" not in after and after.startswith(before_bridge),
+                  "follower removes the MCP block and keeps the rest")
+            check("unchanged" in bridge("sync"), "second sync changes nothing")
+            check(not bridge("dirs").strip(), "follower supplies no hook directories")
+        installed = json.loads(execute("plugin", "list", "--marketplace", "fleet-probe", "--json"))
+        check(len(installed["installed"]) == 1 and installed["installed"][0]["enabled"], "native plugin enabled")
         endpoint = root / "native.sock"
         with (root / "server.log").open("w", encoding="utf-8") as log:
             backend = subprocess.Popen([binary, "app-server", "--listen", "unix://" + str(endpoint)],
@@ -282,13 +293,13 @@ def probe(binary, client_type, mode, fleet_root, retire_bridge=False):
                     fleet_status = [entry for entry in status["data"] if entry["name"] == "fleet-orch"]
                     check(len(fleet_status) == 1 and fleet_status[0].get("serverInfo") is not None,
                           "actual Fleet MCP starts through native plugin with shell path expansion")
-                    check(len(fleet_status[0]["tools"]) == 7, "actual Fleet orchestration tool list preserved")
+                    check(len(fleet_status[0]["tools"]) == orch_tools(fleet_root), "actual Fleet orchestration tool list preserved")
                     result = client.call("mcpServer/tool/call", {"threadId": native["thread"]["id"],
                                          "server": "fleet-orch", "tool": "children", "arguments": {}})
                     refused = " ".join(part.get("text", "") for part in result["content"])
                     check(result.get("isError") and "credential is malformed" in refused and "Nothing ran" in refused,
                           "actual Fleet MCP refuses fixture credential before tool execution")
-                    audit = root / "logs/mcp-calls.log"
+                    audit = root / "fleet-conf/logs/mcp-calls.log"
                     check(audit.exists() and "via=badcred" in audit.read_text(), "MCP audit stays in fixture directory")
             finally:
                 try:
@@ -307,10 +318,14 @@ def probe(binary, client_type, mode, fleet_root, retire_bridge=False):
               "native uninstall removes plugin config rather than leaving a tombstone")
         assert_absent("removed")
         if retire_bridge:
-            bridge("sync")
-            check(not linked.is_symlink() and not adapter.exists(), "native uninstall does not revive legacy skills")
-            check("# >>> fleet plugins" not in (codex_home / "config.toml").read_text(), "native uninstall does not revive legacy MCP")
-            check(not bridge("dirs").strip(), "native uninstall does not revive legacy hooks")
+            out = bridge("sync")                 # Claude still has it: the follower puts it back
+            check("add     " in out, "follower re-installs what Claude still has")
+            listed.write_text("[]")
+            out = bridge("sync")
+            check("remove  " in out and "native-fixture@fleet-probe" not in (codex_home / "config.toml").read_text(),
+                  "follower removes what Claude no longer has")
+            check(not linked.is_symlink() and not adapter.exists(), "legacy skills stay gone")
+            check("# >>> fleet plugins" not in (codex_home / "config.toml").read_text(), "legacy MCP stays gone")
             assert_absent("removed-again")
         report = {"version": version, "mode": mode, "checks": checks, "bridge_retirement": retire_bridge}
         if retire_bridge:
@@ -323,7 +338,7 @@ def main():
     parser.add_argument("--codex", default="codex")
     parser.add_argument("--fleet-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--mcp-env", choices=("all", "bare", "allowlist", "expanded"), default="all")
-    parser.add_argument("--retire-bridge", action="store_true", help="also exercise candidate bridge retirement in the temporary home")
+    parser.add_argument("--retire-bridge", action="store_true", help="install through fleet-codex-plugins.py sync (the follower, T589) after planting the old bridge products")
     arguments = parser.parse_args()
     binary = shutil.which(arguments.codex)
     if not binary:

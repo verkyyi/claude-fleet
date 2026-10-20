@@ -1557,7 +1557,7 @@ drill_codex_thread_lost() {
   : > "$WORK/claude-argv"; : > "$cx/argv"
   t0=$(now)
   auto PATH="$cx/bin:$WORK/tbin:$PATH" FLEET_CODEX_SERVER=0 FLEET_CODEX_VERSION_CHECK=0 FLEET_MCP=0 \
-    FLEET_AGENT_CFG=0 FLEET_CODEX_PLUGINS=0 FLEET_PRETRUST=0 FLEET_CRED_PROXY=0
+    FLEET_AGENT_CFG=0 FLEET_PRETRUST=0 FLEET_CRED_PROXY=0
   until_ok "$CAP" grep -q "resume $tid" "$cx/argv" \
     || { WHY="the Codex row was not resumed on its thread: [$(cat "$cx/argv" | tr '\n' ' ')] DBG $(nt list-windows -a -F '#{window_name}:#{@fleet_id}' | tr '\n' ' ') $(for p in $(nt list-panes -a -F '#{pane_id}'); do nt capture-pane -p -t $p | grep . | tail -3; done | tr '\n' ' ') $(tail -5 "$WORK"/econf/logs/restore.log 2>/dev/null | tr '\n' ' ')"; return 1; }
   w=$(nt list-windows -t oc -F '#{window_id} #{@fleet_id}' | awk -v f="$ft" '$2 == f { print $1 }')

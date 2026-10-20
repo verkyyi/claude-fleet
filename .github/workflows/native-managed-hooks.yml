@@ -55,6 +55,11 @@ jobs:
           timeout 90 python3 bin/fleet-native-usage-cli-selftest.py \
             --meter-candidate \
             --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
+      - name: Verify the plugin follower against native Codex plugins without credentials
+        if: matrix.mode == 'exec'
+        run: >-
+          timeout 300 python3 bin/fleet-native-plugin-cli-selftest.py --retire-bridge
+          --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
       - name: Test root-owned installation and native requirements in a private mount namespace
         if: matrix.mode == 'exec'
         run: >-

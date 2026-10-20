@@ -734,6 +734,11 @@ SHA-256 与工作树一致，未改在线安装；固定版本 CI 仍须对提�
 
 ### 原生插件替代跨 Agent 翻译的证据
 
+> **现状（T589，EPIC T580 C3）：桥已退。** `fleet-codex-plugins.py sync` 只在安装时跑，
+> 用 Codex 原生安装器跟随 Claude 侧 `/plugin` 的记录（`marketplace add` · `add` · `remove`，只动本 marketplace），
+> 并先清掉旧桥产物；启动器不再同步、不再传 `--plugin-dir`。四项验收的出处见
+> [CODEX-RUNTIME «Native plugin migration»](CODEX-RUNTIME.md#native-plugin-migration)。下文是迁移前的证据记录。
+
 [官方 CLI 文档](https://learn.chatgpt.com/docs/cli/reference) 已提供 `codex plugin` 与 marketplace 管理。
 不能继续以「Codex 没有插件系统」作为逐次翻译的设计依据。本机 `0.163.0` 和 drill `0.162.1`
 的临时 HOME/CODEX_HOME 夹具均验证：
