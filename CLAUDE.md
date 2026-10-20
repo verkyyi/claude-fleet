@@ -378,7 +378,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `bin/fleet-epic-tick.py` reads the batch off the hub). No hub ⇒ the script
   exits 3 and every caller is byte for byte as before. **A session with no issue
   is parked and remembered by its record** (issue #3387): a park books it as `T<n>` (stop by `fid:`, no GitHub write, 「停放」 on the record alone, wait
-  `task:T<n>`; restore skips it by `fleet_parked_fid`) and wakes it through
+  `task:T<n>`) and wakes it through
   `dash-raw-session.sh --resume <sid> --seed-file … --task T<n>` (its kept scratch
   worktree via `--worktree`, else `--no-repo`); the history ledger's col 15 is the
   `T<n>` (a Claude row fills 12–14 with `-`), its title the `@task_line` words, and
