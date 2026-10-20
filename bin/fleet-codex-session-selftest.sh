@@ -4,13 +4,15 @@
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 python3 - "$BIN" <<'PY'
-import importlib.util, json, os, pathlib, shutil, subprocess, sys, tempfile, unittest
+import importlib.util, json, os, pathlib, shutil, subprocess, sys, tempfile, time, unittest
 from unittest import mock
 
 BIN = pathlib.Path(sys.argv[1])
 spec = importlib.util.spec_from_file_location('codex_session', BIN / 'fleet-codex-session.py')
 cx = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cx)
+sys.path.insert(0, str(BIN))
+import fleet_codex_fake_appserver as fake_server   # T540: a real RPC peer, no Codex
 SID = '11111111-1111-4111-8111-111111111111'
 OTHER = '22222222-2222-4222-8222-222222222222'
 
@@ -339,13 +341,17 @@ class SessionTests(unittest.TestCase):
         tm = ['tmux', '-L', label]
         def call(*args):
             return subprocess.check_output(tm + list(args), text=True).strip()
+        # the window's private server: delivery asks it which thread is current (T540)
+        sockdir = tempfile.mkdtemp(prefix='cxs-', dir='/tmp')
+        server = fake_server.FakeAppServer(sockdir + '/worker.sock')
+        server.add(fake_server.tui_thread(SID))
         try:
             call('new-session', '-d', '-s', 'fixture', '-n', 'parent', 'sleep 60')
             pane = call('display-message', '-p', '#{pane_id}')
             win = call('display-message', '-p', '#{window_id}')
             socket = call('display-message', '-p', '#{socket_path}')
             env = dict(os.environ, TMUX=socket + ',1,0', TMUX_PANE=pane, CODEX_HOME=str(self.home),
-                       FLEET_CODEX_LAUNCHER_PID='1234', FLEET_CODEX_REMOTE='unix:///private/worker.sock')
+                       FLEET_CODEX_LAUNCHER_PID='1234', FLEET_CODEX_REMOTE=server.remote)
             for name, value in (('@cc_agent', 'codex'), ('@cc_launcher_pid', '1234'), ('@issue', '42')):
                 call('set-option', '-w', '-t', pane, name, value)
             def hook(sid=SID, owner='1234', event='SessionStart'):
@@ -390,7 +396,7 @@ class SessionTests(unittest.TestCase):
                 return subprocess.run(['bash', str(BIN / 'fleet-peer-send.sh'), '-L', label, pane, 'hello\npeer'], env=env, capture_output=True, text=True)
             p = send(); self.assertEqual(p.returncode, 0, p.stderr)
             argv, home = json.loads((self.root / 'queue.json').read_text())
-            self.assertEqual(argv, ['queue', '--remote', 'unix:///private/worker.sock', '--thread', SID, '--message', 'hello\npeer'])
+            self.assertEqual(argv, ['queue', '--remote', server.remote, '--thread', SID, '--message', 'hello\npeer'])
             self.assertEqual(home, str(self.home.resolve()))
             child = call('new-window', '-d', '-P', '-F', '#{window_id}', '-n', 'child', 'sleep 60')
             call('set-option', '-w', '-t', child, '@origin', 'issue-42')
@@ -408,6 +414,106 @@ class SessionTests(unittest.TestCase):
             self.assertNotEqual(send().returncode, 0, 'stale identity must not deliver')
         finally:
             subprocess.run(tm + ['kill-server'], capture_output=True)
+            server.close()
+            shutil.rmtree(sockdir, ignore_errors=True)
+
+    @unittest.skipUnless(shutil.which('tmux'), 'tmux unavailable')
+    def test_clear_holds_then_follows_into_the_new_thread(self):
+        # T540: Codex 0.162 runs SessionStart only at a thread's first turn and keeps
+        # the old thread LOADED after /clear, so a queue into it is accepted and never
+        # shown. Before the follow: held (queued for the window's identity, exit 3,
+        # no `codex queue`, no DELIVERED). thread/started: the window names the new
+        # thread at once, the ledger gets its segment, and the held item drains INTO it.
+        label = 'cxclear' + str(os.getpid())
+        tm = ['tmux', '-L', label]
+        def call(*args):
+            return subprocess.check_output(tm + list(args), text=True).strip()
+        sockdir = tempfile.mkdtemp(prefix='cxc-', dir='/tmp')
+        server = fake_server.FakeAppServer(sockdir + '/worker.sock')
+        now = int(time.time() * 1000)
+        old_t, new_t = fake_server.uuid7(now - 60000), fake_server.uuid7(now)
+        server.add(fake_server.tui_thread(old_t))
+        conf = self.root / 'conf'; ids = self.root / 'ids'
+        saved = {k: os.environ.get(k) for k in ('TMUX', 'TMUX_PANE', 'FLEET_CODEX_LAUNCHER_PID', 'FLEET_ID_DIR', 'FLEET_ID_PUSH', 'FLEET_CONF_DIR')}
+        try:
+            call('new-session', '-d', '-s', label, '-n', 'parent', 'sleep 60')
+            pane = call('display-message', '-p', '#{pane_id}')
+            socket = call('display-message', '-p', '#{socket_path}')
+            ident = dict(session_id=old_t, owner='1234', home=str(self.home), remote=server.remote)
+            for name, value in (('@cc_agent', 'codex'), ('@cc_launcher_pid', '1234'), ('@issue', '42'),
+                                ('@codex_identity', json.dumps(ident)), ('@codex_session_id', old_t)):
+                call('set-option', '-w', '-t', pane, name, value)
+            fakebin = self.root / 'bin'; fakebin.mkdir()
+            (fakebin / 'codex').write_text('#!' + sys.executable + '\nimport sys,os,json\nopen(os.environ["QUEUE_LOG"],"a").write(json.dumps(sys.argv[1:])+"\\n")\n')
+            (fakebin / 'codex').chmod(0o755)
+            qlog = self.root / 'queue.ndjson'
+            env = dict(os.environ, TMUX=socket + ',1,0', TMUX_PANE=pane, PATH=str(fakebin) + ':' + os.environ['PATH'],
+                       QUEUE_LOG=str(qlog), FLEET_CONF_DIR=str(conf), FLEET_ID_DIR=str(ids), FLEET_ID_PUSH='0')
+            env.pop('FLEET_CODEX_LAUNCHER_PID', None)
+            def peer(text):
+                return subprocess.run(['bash', str(BIN / 'fleet-peer-send.sh'), '-L', label, pane, text],
+                                      env=env, capture_output=True, text=True)
+            queued = lambda: [json.loads(l) for l in qlog.read_text().splitlines()] if qlog.exists() else []
+            book = conf / 'fleets' / label / 'delivery.ndjson'
+            rows = lambda: [json.loads(l) for l in book.read_text().splitlines()] if book.exists() else []
+            p = peer('before clear'); self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(queued()[-1][4], old_t)
+            os.environ.update(TMUX=socket + ',1,0', TMUX_PANE=pane, FLEET_CODEX_LAUNCHER_PID='1234',
+                              FLEET_ID_DIR=str(ids), FLEET_ID_PUSH='0', FLEET_CONF_DIR=str(conf))
+            follower = cx.Follow(dict(TMUX_PANE=pane, FLEET_CODEX_LAUNCHER_PID='1234', FLEET_CODEX_REMOTE=server.remote))
+            self.assertEqual(follower.tick(), '')   # connected, nothing started yet
+            # /clear: the TUI's new thread is loaded beside the old one, not yet followed
+            server.add(fake_server.tui_thread(new_t))
+            p = peer('child report while cleared')
+            self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+            self.assertIn('queued', p.stdout)
+            self.assertIn(new_t, p.stdout, 'the hold names the thread the window moved to')
+            self.assertEqual(len(queued()), 1, 'nothing was queued into the old thread')
+            self.assertFalse([r for r in rows() if r.get('state') == 'DELIVERED'], 'held is never DELIVERED')
+            self.assertEqual([r.get('state') for r in rows()], ['QUEUED'])
+            child = call('new-window', '-d', '-P', '-F', '#{window_id}', '-n', 'child', 'sleep 60')
+            call('set-option', '-w', '-t', child, '@origin', 'issue-42')
+            p = subprocess.run(['bash', str(BIN / 'fleet-report-parent.sh'), '-L', label, '--win', child,
+                                '--state', 'merged', '--key', 'issue-43', '--summary', 'done'], env=env, capture_output=True, text=True)
+            self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+            self.assertIn('new Codex thread', p.stdout)
+            self.assertEqual(len(queued()), 1, "the child's report did not go into the old thread")
+            # the server's broadcast: the window follows at once, not at the first turn
+            server.broadcast({'method': 'thread/started', 'params': {'thread': server.threads[new_t]}})
+            moved = ''
+            for _ in range(30):
+                moved = follower.tick()
+                if moved: break
+                time.sleep(0.1)
+            self.assertEqual(moved, new_t)
+            self.assertEqual(call('show-options', '-wv', '-t', pane, '@codex_session_id'), new_t)
+            self.assertEqual(json.loads(call('show-options', '-wv', '-t', pane, '@codex_identity'))['session_id'], new_t)
+            fid = call('show-options', '-wv', '-t', pane, '@fleet_id')
+            segs = [json.loads(l) for l in (ids / (fid + '.ndjson')).read_text().splitlines()]
+            self.assertEqual([(e['native'], e['trigger']) for e in segs if e.get('ev') == 'native'][-1], (new_t, 'clear'))
+            # the held items replay INTO the new thread, and only then read DELIVERED
+            p = subprocess.run(['bash', str(BIN / 'fleet-peer-queue.sh'), 'drain', '-L', label], env=env, capture_output=True, text=True)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual([q[4] for q in queued()[1:]], [new_t, new_t])
+            self.assertTrue(any('child report while cleared' in q[-1] for q in queued()[1:]))
+            self.assertEqual(sorted(r['state'] for r in rows() if r.get('state') != 'QUEUED'), ['DELIVERED', 'DELIVERED'])
+            p = peer('after follow'); self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(queued()[-1][4], new_t)
+            # an older thread starting again is not a /clear: never followed backwards
+            self.assertEqual(cx.follow(pane, '1234', server.threads[old_t]), '')
+            # a subagent's thread is not the TUI's
+            self.assertEqual(cx.follow(pane, '1234', fake_server.tui_thread(fake_server.uuid7(now + 1000), parentThreadId=new_t)), '')
+            # under an authority receipt the follower stays off; delivery holds instead
+            self.assertTrue(cx.Follow(dict(TMUX_PANE=pane, FLEET_CODEX_LAUNCHER_PID='1234', FLEET_CODEX_REMOTE=server.remote,
+                                           FLEET_AUTHORITY_CONTEXT='{}')).off)
+            follower.close()
+        finally:
+            for k, v in saved.items():
+                if v is None: os.environ.pop(k, None)
+                else: os.environ[k] = v
+            subprocess.run(tm + ['kill-server'], capture_output=True)
+            server.close()
+            shutil.rmtree(sockdir, ignore_errors=True)
 
 unittest.main(argv=['codex-session'], verbosity=2)
 PY

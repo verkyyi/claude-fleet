@@ -254,7 +254,7 @@ def run(argv, prepare=None, tick=None):
     env.pop('CODEX_THREAD_ID', None)
     env.pop('CODEX_SESSION_ID', None)
     read_fd, write_fd = os.pipe()
-    guardian = client = monitor = None
+    guardian = client = monitor = follower = None
     ended = []
     old_handlers = {}
     try:
@@ -286,13 +286,17 @@ def run(argv, prepare=None, tick=None):
         if attention.is_file():
             monitor = runpy.run_path(str(attention))["Monitor"](remote, env)
         # issue #3461: the live context / model reading for the top line
-        meter = None
+        meter = follower = None
         meter_mod = Path(__file__).with_name("fleet-codex-session.py")
         if meter_mod.is_file():
             try:
-                meter = runpy.run_path(str(meter_mod))["Meter"](env)
+                session_mod = runpy.run_path(str(meter_mod))
+                meter = session_mod["Meter"](env)
+                # T540: a /clear re-points the window's delivery at once, not at
+                # the new thread's first turn.
+                follower = session_mod["Follow"](env) if "Follow" in session_mod else None
             except Exception:
-                meter = None
+                meter = follower = None
         if monitor is not None and meter is not None and env.get('FLEET_CODEX_NATIVE_USAGE') == '1':
             monitor.meter = meter
         # issue #2430: the seed is SUBMITTED — a first sentence left sitting in
@@ -325,6 +329,7 @@ def run(argv, prepare=None, tick=None):
             if time.monotonic() >= next_tick:
                 if monitor: monitor.tick()
                 if meter is not None: meter.tick()
+                if follower is not None: follower.tick()
                 if seeder is not None and not seeder.tick():
                     seeder = None
                 if witness is not None and not witness.tick():
@@ -340,6 +345,8 @@ def run(argv, prepare=None, tick=None):
     finally:
         if monitor is not None:
             monitor.close()
+        if follower is not None:
+            follower.close()
         # The TUI shares our process group; signal only its exact child PID.
         if client is not None and client.poll() is None:
             client.terminate()

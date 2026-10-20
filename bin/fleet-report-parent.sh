@@ -919,6 +919,9 @@ if [ "$src" -eq 3 ]; then
   printf 'queued → %s (%s): %s — the parent is asleep at a full fleet; delivered when a slot frees\n' "$SENDKEY" "$pwin" "$st"
   exit 3
 fi
+# 4 = a Codex parent not on the thread its window names (T540: a /clear not
+# followed yet) — held for its identity and replayed, never «reported».
+[ "$src" -eq 4 ] && queue_local 'is on a new Codex thread its window has not named yet'
 # A parent that is alive but unreachable (no registry record / no key / no socket):
 # queued for it, never dropped.
 queue_local "has no reachable inbox${ppid:+ (pid $ppid)}"

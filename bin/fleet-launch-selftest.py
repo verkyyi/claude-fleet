@@ -572,9 +572,12 @@ class NativeInbox(Receipts):
         with mock.patch.dict(os.environ, env), mock.patch.object(launch, "inspect", return_value=receipt), \
              mock.patch.object(codex, "identity", side_effect=AssertionError("pane label must not route first input")), \
              mock.patch.object(sys, "stdin", io.StringIO("held input")), \
+             mock.patch.object(codex, "check_current", return_value="") as current, \
              mock.patch.object(codex.subprocess, "run", return_value=mock.Mock(returncode=0)) as queue, \
              contextlib.redirect_stdout(io.StringIO()):
             codex.send(mock.Mock(pane="%1", socket="isolated"))
+            # T540: the pinned thread is asked of its own server before the queue
+            current.assert_called_once_with("unix:///fixture/native.sock", self.receipt["native_session"])
             self.assertEqual(queue.call_args.args[0], ["/fixture/codex", "queue", "--remote", "unix:///fixture/native.sock",
                              "--thread", self.receipt["native_session"], "--message", "held input"])
             self.assertEqual(queue.call_args.kwargs["env"]["CODEX_HOME"], "/fixture/home")
@@ -582,6 +585,14 @@ class NativeInbox(Receipts):
              mock.patch.object(launch, "inspect", return_value=dict(receipt, native_session="changed")), \
              mock.patch.object(codex.subprocess, "run") as queue:
             with self.assertRaisesRegex(ValueError, "changed before delivery"):
+                codex.send(mock.Mock(pane="%1", socket="isolated"))
+            queue.assert_not_called()
+        # T540: a /clear before the first turn left the pin behind — held, not queued
+        with mock.patch.dict(os.environ, env), mock.patch.object(launch, "inspect", return_value=receipt), \
+             mock.patch.object(sys, "stdin", io.StringIO("held input")), \
+             mock.patch.object(codex, "check_current", return_value="the window moved on"), \
+             mock.patch.object(codex.subprocess, "run") as queue:
+            with self.assertRaises(codex.Held):
                 codex.send(mock.Mock(pane="%1", socket="isolated"))
             queue.assert_not_called()
 
