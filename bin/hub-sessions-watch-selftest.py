@@ -14,7 +14,6 @@ No network or live fleet, and no changes to spinner's maintenance deadlines.
 import json
 import os
 from pathlib import Path
-import runpy
 import shutil
 import signal
 import subprocess
@@ -40,7 +39,28 @@ def main():
     if not TMUX:
         print('SKIP tmux absent')
         return
-    runpy.run_path(str(BIN / 'hub-sessions-watch-schedule-selftest.py'), run_name='__main__')
+    if '--rest' in sys.argv:
+        watch(observe=False)
+        return
+    # Beside the 32 s observation, in their own sandboxes (temp dir, HOME, conf,
+    # tmux server — no view request, nudge or signal crosses over): the schedule's
+    # own selftest (a fake clock) and the legs after the observation (--rest),
+    # which need a running loop, not the observation's outcome. Read at the end.
+    side = [subprocess.Popen([sys.executable, str(BIN / 'hub-sessions-watch-schedule-selftest.py')]),
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--rest']
+                             + [a for a in sys.argv[1:] if a == '--quick'])]
+    try:
+        watch(observe=True)
+    except BaseException:
+        for p in side:
+            p.kill()
+            p.wait()
+        raise
+    assert side[0].wait(timeout=30) == 0, 'hub-sessions-watch-schedule-selftest failed'
+    assert side[1].wait(timeout=30) == 0, 'the legs after the observation failed (above)'
+
+
+def watch(observe):
     with tempfile.TemporaryDirectory(prefix='hubsess-watch.', dir='/tmp') as tmp:
         root = Path(tmp)
         for d in ('bin', 'home', 'conf/fleets/test', 'conf/global', '.claude-dash/global', 'logs'):
@@ -103,6 +123,9 @@ def main():
             until(lambda: bool(fetches()), 5)
             initial = len(fetches())
             assert initial == 1, 'expected one startup fetch: %s' % initial
+            if not observe:
+                rest(root, env, tm, fetches, data, source, log, client, loop, procs)
+                return
             seconds = 5 if '--quick' in sys.argv else 32
             observed_at = time.monotonic()
             time.sleep(seconds)
@@ -112,92 +135,6 @@ def main():
             print('PASS no-view real %.3fs: startup=%d subsequent=%d (attached + active lease); '
                   'not a measured 60s/rate or protocol/exec cost sample' %
                   (observed, initial, count - initial), flush=True)
-            # Run the actual resident spinner alongside the list. Its existing
-            # maintenance defaults stay enabled, independently of this loop.
-            tm('set-window-option', '-t', 'test:0', '@claude_state', 'working')
-            spinner = subprocess.Popen(['sh', str(root / 'bin/tmux-spinner.sh')],
-                                       env=env, stdout=log, stderr=log)
-            procs.append(spinner)
-            spin = lambda: tm('display-message', '-p', '-t', 'test:0', '#{@spin}')
-            until(lambda: bool(spin()), 5)
-            # Both shared consumers register on the SAME channel. A signal is
-            # broadcast; the list must not consume the spinner's wake or vice versa.
-            wait = subprocess.Popen([sys.executable, str(root / 'bin/fleet-render-watch.py'),
-                                     '--events-only', '1', sock], env=env, stdout=subprocess.PIPE, text=True)
-            procs.append(wait)
-            time.sleep(.2)
-            data['sessions'][0]['worker']['state'] = 'needs'
-            source.write_text(json.dumps(data))
-            (root / 'conf/global/hub-nudge').touch()
-            tm('set-window-option', '-t', 'test:0', '@claude_state', 'done',
-               ';', 'wait-for', '-S', 'fleet-state-changed')
-            cache = root / '.claude-dash/global/remote_test'
-            latency = until(lambda: cache.exists() and '\x1fneeds\x1f' in cache.read_text())
-            wait.communicate(timeout=2)
-            until(lambda: spin() == '✓')
-            print('PASS spinner + list + waiter broadcast/cache %.3fs' % latency, flush=True)
-            view = root / '.claude-dash/global/hubsess.view'
-            n = len(fetches())
-            # Drive the real view producer, not a synthetic timestamp writer.
-            request_code = ('import sys; sys.path.insert(0,sys.argv[1]); import fleet_view as v; '
-                            'v.hub_view_request("test")')
-            subprocess.run([sys.executable, '-c', request_code, str(root / 'bin')],
-                           env=dict(env, TMUX=sock + ',0,0'), check=True)
-            until(lambda: len(fetches()) > n)
-            n = len(fetches())
-            until(lambda: len(fetches()) > n, 2.5)
-            memo = root / '.claude-dash/global/hubsess.map.json'
-            before = memo.stat().st_mtime_ns
-            n = len(fetches())
-            until(lambda: len(fetches()) > n, 2.5)
-            time.sleep(.2)
-            assert memo.stat().st_mtime_ns == before, 'identical inputs recomputed'
-            print('PASS real request keeps 2s pace; identical inputs reuse mapping', flush=True)
-            # Stale/future requests cannot keep the loop fast, even with the
-            # same attached client and shared lease still active.
-            helper = [sys.executable, str(root / 'bin/fleet-render-watch.py')]
-            for age in (31, -5):
-                t = time.time() - age
-                os.utime(view, (t, t))
-                assert subprocess.run(helper + ['--view-active', str(view), '1', sock], env=env).returncode == 1
-            # A signal already consumed by another consumer must not hide a
-            # state change in the refresh → registration gap.
-            stamp = root / 'round'
-            stamp.touch()
-            (root / 'conf/global/hub-nudge').touch()
-            start = time.monotonic()
-            answer = subprocess.check_output(helper + ['--events-only', '--since', str(stamp),
-                '--changed', str(root / 'conf/global/hub-nudge'), '1', sock], env=env, text=True, timeout=2)
-            assert answer.strip() == 'changed' and time.monotonic() - start <= 2
-            print('PASS expired/future request and retained-input registration race', flush=True)
-            # TERM the production loop by its published pid, without helping it
-            # kill its waiter's process group; it must clean up those children.
-            child = int((root / '.claude-dash/global/hubsess.pid').read_text())
-            os.kill(child, signal.SIGTERM)
-            loop.wait(timeout=3)
-            assert not (root / '.claude-dash/global/hubsess.pid').exists()
-            assert not list((root / '.claude-dash/global').glob('hubsess.wake.*'))
-            print('PASS loop TERM cleans pid and waiter output', flush=True)
-            # The exact internal spinner client is not a human, but the shared
-            # reader's online lease still satisfies the other half of the rule.
-            client.terminate()
-            client.wait(timeout=3)
-            view.touch()
-            assert subprocess.run(helper + ['--view-active', str(view), '1', sock], env=env).returncode == 0
-            # Mapping inputs include local state files, not just the hub body.
-            parent_file = root / '.claude-dash/fleets/acme-app/parents'
-            parent_file.parent.mkdir(parents=True)
-            parent_file.write_text('1\t2\n')
-            before = memo.stat().st_mtime_ns
-            subprocess.run(['bash', str(root / 'bin/fleet-hub-sessions.sh'), '--refresh'],
-                           env=env, stdout=log, stderr=log, check=True)
-            assert memo.stat().st_mtime_ns != before, 'changed parent state reused old mapping'
-            assert 'acme-app:issue-2' in cache.read_text(), 'changed parent missing from mapped row'
-            cache.unlink()
-            subprocess.run(['bash', str(root / 'bin/fleet-hub-sessions.sh'), '--refresh'],
-                           env=env, stdout=log, stderr=log, check=True)
-            assert '\x1fneeds\x1f' in cache.read_text(), 'missing output was not rebuilt'
-            print('PASS lease-only view; changed state/missing output invalidate mapping', flush=True)
         except BaseException:
             log.flush()
             print((root / 'loop.log').read_text(), file=sys.stderr)
@@ -226,6 +163,98 @@ def main():
                     p.stdout.close()
             tm('kill-server')  # only the private TMUX_TMPDIR/test server
             log.close()
+
+
+def rest(root, env, tm, fetches, data, source, log, client, loop, procs):
+    """The legs after the observation: the spinner beside the list, the view's
+    pace, the registration race, TERM, the lease-only view."""
+    sock = tm('display-message', '-p', '#{socket_path}')
+    # Run the actual resident spinner alongside the list. Its existing
+    # maintenance defaults stay enabled, independently of this loop.
+    tm('set-window-option', '-t', 'test:0', '@claude_state', 'working')
+    spinner = subprocess.Popen(['sh', str(root / 'bin/tmux-spinner.sh')],
+                               env=env, stdout=log, stderr=log)
+    procs.append(spinner)
+    spin = lambda: tm('display-message', '-p', '-t', 'test:0', '#{@spin}')
+    until(lambda: bool(spin()), 5)
+    # Both shared consumers register on the SAME channel. A signal is
+    # broadcast; the list must not consume the spinner's wake or vice versa.
+    wait = subprocess.Popen([sys.executable, str(root / 'bin/fleet-render-watch.py'),
+                             '--events-only', '1', sock], env=env, stdout=subprocess.PIPE, text=True)
+    procs.append(wait)
+    time.sleep(.2)
+    data['sessions'][0]['worker']['state'] = 'needs'
+    source.write_text(json.dumps(data))
+    (root / 'conf/global/hub-nudge').touch()
+    tm('set-window-option', '-t', 'test:0', '@claude_state', 'done',
+       ';', 'wait-for', '-S', 'fleet-state-changed')
+    cache = root / '.claude-dash/global/remote_test'
+    latency = until(lambda: cache.exists() and '\x1fneeds\x1f' in cache.read_text())
+    wait.communicate(timeout=2)
+    until(lambda: spin() == '✓')
+    print('PASS spinner + list + waiter broadcast/cache %.3fs' % latency, flush=True)
+    view = root / '.claude-dash/global/hubsess.view'
+    n = len(fetches())
+    # Drive the real view producer, not a synthetic timestamp writer.
+    request_code = ('import sys; sys.path.insert(0,sys.argv[1]); import fleet_view as v; '
+                    'v.hub_view_request("test")')
+    subprocess.run([sys.executable, '-c', request_code, str(root / 'bin')],
+                   env=dict(env, TMUX=sock + ',0,0'), check=True)
+    until(lambda: len(fetches()) > n)
+    n = len(fetches())
+    until(lambda: len(fetches()) > n, 2.5)
+    memo = root / '.claude-dash/global/hubsess.map.json'
+    before = memo.stat().st_mtime_ns
+    n = len(fetches())
+    until(lambda: len(fetches()) > n, 2.5)
+    time.sleep(.2)
+    assert memo.stat().st_mtime_ns == before, 'identical inputs recomputed'
+    print('PASS real request keeps 2s pace; identical inputs reuse mapping', flush=True)
+    # Stale/future requests cannot keep the loop fast, even with the
+    # same attached client and shared lease still active.
+    helper = [sys.executable, str(root / 'bin/fleet-render-watch.py')]
+    for age in (31, -5):
+        t = time.time() - age
+        os.utime(view, (t, t))
+        assert subprocess.run(helper + ['--view-active', str(view), '1', sock], env=env).returncode == 1
+    # A signal already consumed by another consumer must not hide a
+    # state change in the refresh → registration gap.
+    stamp = root / 'round'
+    stamp.touch()
+    (root / 'conf/global/hub-nudge').touch()
+    start = time.monotonic()
+    answer = subprocess.check_output(helper + ['--events-only', '--since', str(stamp),
+        '--changed', str(root / 'conf/global/hub-nudge'), '1', sock], env=env, text=True, timeout=2)
+    assert answer.strip() == 'changed' and time.monotonic() - start <= 2
+    print('PASS expired/future request and retained-input registration race', flush=True)
+    # TERM the production loop by its published pid, without helping it
+    # kill its waiter's process group; it must clean up those children.
+    child = int((root / '.claude-dash/global/hubsess.pid').read_text())
+    os.kill(child, signal.SIGTERM)
+    loop.wait(timeout=3)
+    assert not (root / '.claude-dash/global/hubsess.pid').exists()
+    assert not list((root / '.claude-dash/global').glob('hubsess.wake.*'))
+    print('PASS loop TERM cleans pid and waiter output', flush=True)
+    # The exact internal spinner client is not a human, but the shared
+    # reader's online lease still satisfies the other half of the rule.
+    client.terminate()
+    client.wait(timeout=3)
+    view.touch()
+    assert subprocess.run(helper + ['--view-active', str(view), '1', sock], env=env).returncode == 0
+    # Mapping inputs include local state files, not just the hub body.
+    parent_file = root / '.claude-dash/fleets/acme-app/parents'
+    parent_file.parent.mkdir(parents=True)
+    parent_file.write_text('1\t2\n')
+    before = memo.stat().st_mtime_ns
+    subprocess.run(['bash', str(root / 'bin/fleet-hub-sessions.sh'), '--refresh'],
+                   env=env, stdout=log, stderr=log, check=True)
+    assert memo.stat().st_mtime_ns != before, 'changed parent state reused old mapping'
+    assert 'acme-app:issue-2' in cache.read_text(), 'changed parent missing from mapped row'
+    cache.unlink()
+    subprocess.run(['bash', str(root / 'bin/fleet-hub-sessions.sh'), '--refresh'],
+                   env=env, stdout=log, stderr=log, check=True)
+    assert '\x1fneeds\x1f' in cache.read_text(), 'missing output was not rebuilt'
+    print('PASS lease-only view; changed state/missing output invalidate mapping', flush=True)
 
 
 if __name__ == '__main__':

@@ -46,6 +46,8 @@ command -v python3 >/dev/null 2>&1 || { echo 'hub-relay selftest: python3 absent
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hub-relay.XXXXXX")" || exit 2
 L="hrel$$"
 export FLEET_SKIP_GLOBAL_CONF=1
+# no agent takes the outbox here: every send is queued — after 0 s, not the 3 s wait
+export FLEET_HUB_SENT_WAIT=0
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR/fleets/$L"
 export FLEET_CC_SESSIONS_DIR="$WORK/sessions"; mkdir -p "$FLEET_CC_SESSIONS_DIR"
 : > "$FLEET_CONF_DIR/fleets/$L/conf"

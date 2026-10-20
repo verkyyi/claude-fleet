@@ -1683,6 +1683,11 @@ class StuckReaps(unittest.TestCase):
 
 if __name__ == "__main__":
     import selftest_part
+    # Parts 1–3 (every case its own rig: a git repo, a tmux server, ~0.6 s of
+    # clean() passes each) run as three processes at once — the tmux label is the
+    # pid's. Part 4/4 never: RigCalls is one budget per process.
+    if os.environ.get("SELFTEST_PART") in ("1/4", "2/4", "3/4"):
+        selftest_part.fan_out(3, argv_prefix=[str(BIN)])
     try:
         selftest_part.main()
     finally:

@@ -157,7 +157,7 @@ hub_send() {
   f=$(fleet_hub_put message "$me" "$full" "$suf" "$payload") \
     || die 1 "'$tgt' lives on $where — the hub outbox is not available (CCQUOTA_FLEET=1 and a running ccquota agent carry it); nothing sent"
   # Sent only on the hub's receipt that the recipient's machine delivered it.
-  if fleet_hub_wait_sent "$f" 3; then
+  if fleet_hub_wait_sent "$f" "${FLEET_HUB_SENT_WAIT:-3}"; then
     # Gone from the outbox is not «stored»: the agent moves a relay the hub
     # REFUSED to refused/ with its reason (issue #2729) — nothing waits for it.
     if why=$(fleet_hub_refused "$f"); then

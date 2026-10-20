@@ -92,8 +92,21 @@ def main():
         try:
             tm('-f', '/dev/null', 'new-session', '-d', '-s', 'test', 'sleep 180')
             socket = tm('display-message', '-p', '#{socket_path}')
+            if '--deadline-events' in sys.argv:
+                deadline_events(root, env, tm, until, calls)
+                return
             if '--maintenance' in sys.argv:
-                maintenance(root, env, tm, until, calls)
+                # the deadline-edge signals run beside it: their own root, HOME,
+                # conf dir and tmux server (a second spinner here would add probes
+                # and heartbeats to this one's counts) — read back at the end
+                edges = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()), '--deadline-events'])
+                try:
+                    maintenance(root, env, tm, until, calls)
+                except BaseException:
+                    edges.kill()
+                    edges.wait()
+                    raise
+                assert edges.wait(timeout=60) == 0, 'the deadline-event signals failed (see above)'
                 return
             # No due work is a contract of this CALL, not disabled maintenance
             # in the daemon. Startup stays outside this existing pure-wait
@@ -314,7 +327,6 @@ def observe(reader, expected=None):
     finally:
         os.killpg(daemon.pid, signal.SIGTERM)
         daemon.wait(timeout=3)
-    deadline_events(root, env, tm, until, calls)
 
 
 def deadline_events(root, env, tm, until, calls):

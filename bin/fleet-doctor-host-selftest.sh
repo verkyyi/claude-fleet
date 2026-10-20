@@ -25,19 +25,23 @@ for f in fleet-doctor.sh fleet-daemon-lib.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/doctor-host-selftest.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+TOP="$(mktemp -d "${TMPDIR:-/tmp}/doctor-host-selftest.XXXXXX")" || exit 2
+TOP="$(cd "$TOP" && pwd -P)"
+trap 'rm -rf "$TOP"' EXIT
+CHECKS=0
+fail() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- line ---\n%s\n' "${2:-(none)}" >&2; exit 1; }
+has()  { CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) ;; *) fail "$3" "$2";; esac; }
+none() { CHECKS=$((CHECKS + 1)); [ -z "$1" ] || fail "$2" "$1"; }
+
+# setup <dir> — one lane's world: the doctor's copy, the fake tools (each with
+# its fixture dir baked in), the baseline fixtures; WORK points there.
+setup() {
+WORK="$1"; mkdir -p "$WORK"
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/conf/fleets/tfleet"
 for f in fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-client-core.sh fleet-daemon-lib.sh fleet-daemon-loaded.sh; do
   [ -f "$BIN/$f" ] && cp "$BIN/$f" "$WORK/bin/"
 done
 chmod +x "$WORK/bin/"*.sh
-
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- line ---\n%s\n' "${2:-(none)}" >&2; exit 1; }
-has()  { CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) ;; *) fail "$3" "$2";; esac; }
-none() { CHECKS=$((CHECKS + 1)); [ -z "$1" ] || fail "$2" "$1"; }
 
 # --- fake uname: the host section is macOS-only, so the OS is switchable.
 cat > "$WORK/fakepath/uname" <<SH
@@ -125,6 +129,8 @@ printf ' sleep                0 (sleep prevented by powerd)\n autorestart       
 # A fleet whose worktree root carries .noindex — the wtroot row lives in this section too.
 printf 'FLEET_REPO="o/r"\nFLEET_WORKTREE_ROOT="%s/wt.noindex"\n' "$WORK" > "$WORK/conf/fleets/tfleet/conf"
 
+}
+
 run_doctor() {
   : > "$WORK/stderr"
   PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
@@ -135,6 +141,11 @@ row() { printf '%s\n' "$2" | grep -aE "^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:spac
 survived() { printf '%s\n' "$1" | grep -qaE '^[[:space:]]+(PASS|WARN)[[:space:]]+perl'; }
 quiet() { CHECKS=$((CHECKS + 1)); [ -s "$WORK/stderr" ] && fail "$1" "$(cat "$WORK/stderr")"; return 0; }
 
+# The sections run as five lanes at once, each in its own setup: a lane starts from
+# the fixtures the sections before it leave behind (every section puts back what it
+# changed, but spotlight leaves indexing on and icloud a live cloudd). The counts
+# come back in $TOP/checks.<n>.
+lane_1() {
 # ============================================================================
 # spotlight (issue #1075)
 # ============================================================================
@@ -181,7 +192,10 @@ rm -f "$WORK/conf/fleet.settings"
 # 5. wtroot moved into this section (issue #886) and still renders on macOS.
 out="$(run_doctor)"; l="$(row wtroot "$out")"
 has "PASS" "$l" "5: a .noindex worktree root must still PASS inside the host section"
+}
 
+lane_2() {
+echo Darwin > "$WORK/os"; printf '/System/Volumes/Data:\n\tIndexing enabled. \n' > "$WORK/mdutil.out"
 # ============================================================================
 # nofile (issue #1080)
 # ============================================================================
@@ -256,7 +270,10 @@ echo 'FLEET_DOCTOR_SLEEP=0' > "$WORK/conf/fleet.settings"
 none "$(row sleep "$(run_doctor)")" "10e-b: FLEET_DOCTOR_SLEEP=0 in fleet.settings must drop the row"
 rm -f "$WORK/conf/fleet.settings"
 printf ' sleep                0\n autorestart          1\n womp                 1\n' > "$WORK/pmset.out"
+}
 
+lane_3() {
+echo Darwin > "$WORK/os"; printf '/System/Volumes/Data:\n\tIndexing enabled. \n' > "$WORK/mdutil.out"
 # ============================================================================
 # siri (issue #1076)
 # ============================================================================
@@ -329,7 +346,10 @@ none "$(row icloud "$(FLEET_DOCTOR_ICLOUD=0 run_doctor)")" "12c: FLEET_DOCTOR_IC
 echo 'FLEET_DOCTOR_ICLOUD=0' > "$WORK/conf/fleet.settings"
 none "$(row icloud "$(run_doctor)")" "12c-b: FLEET_DOCTOR_ICLOUD=0 in fleet.settings must drop the row"
 rm -f "$WORK/conf/fleet.settings"
+}
 
+lane_4() {
+echo Darwin > "$WORK/os"; printf '/System/Volumes/Data:\n\tIndexing enabled. \n' > "$WORK/mdutil.out"; printf 'cloudd\n' > "$WORK/pgrep.live"
 # ============================================================================
 # network (issue #1081)
 # ============================================================================
@@ -385,7 +405,9 @@ echo 'FLEET_DOCTOR_NETWORK=0' > "$WORK/conf/fleet.settings"
 none "$(row network "$(run_doctor)")" "13f-b: FLEET_DOCTOR_NETWORK=0 in fleet.settings must drop the row"
 rm -f "$WORK/conf/fleet.settings"
 nsone
+}
 
+lane_5() {
 # ============================================================================
 # 6. Linux: the whole section is silent — no spotlight, no wtroot, no nofile, no sleep, no
 #    siri, no icloud, no error — and none of the macOS tools is even called.
@@ -422,5 +444,15 @@ printf 'default via 10.0.0.1 dev eth0 proto dhcp src 10.0.0.5 metric 100\n' > "$
 l="$(row network "$(run_doctor)")"
 has "PASS" "$l" "14b: one Linux default route must PASS"
 has "10.0.0.1 via eth0" "$l" "14b: the PASS must name the route"
+}
+
+for n in 1 2 3 4 5; do
+  ( setup "$TOP/lane$n"; "lane_$n"; echo "$CHECKS" > "$TOP/checks.$n" ) &
+  eval "pid$n=\$!"
+done
+rc=0
+for n in 1 2 3 4 5; do eval "wait \$pid$n" || rc=1; done
+[ "$rc" = 0 ] || exit 1
+for n in 1 2 3 4 5; do CHECKS=$((CHECKS + $(cat "$TOP/checks.$n"))); done
 
 printf 'fleet-doctor-host-selftest: PASS (%d checks)\n' "$CHECKS"

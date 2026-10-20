@@ -125,7 +125,12 @@ ME=$(id -un)
 # legs A–K pin the 2 s beat; leg L the quiet one (issue #4359)
 export FLEET_PEERLINK_IDLE_TICK=2
 
+# The legs run as five groups at once — every leg builds its own box ($WORK/<leg>:
+# its own conf dir, lock, state, fake-ssh log), so they share nothing — with F, J, K
+# in the foreground. Inside a group the legs keep their order. Each group is a
+# subshell: its exports stay in it, its counts come back in $WORK/res.<group>.
 # --- A. want ------------------------------------------------------------------
+leg_A() {
 box a 1 mac-a:bob mac-a:carol "home:$ME" home:dave mac-n:bob:lost "mac-b:-"
 start
 until_ok 8 sh -c '[ "$(python3 -c "import json,sys; print(sum(l[\"phase\"] == \"up\" for l in json.load(open(sys.argv[1]))[\"links\"]))" "$1" 2>/dev/null)" = 4 ]' _ "$B/conf/peerlink/state.json" \
@@ -141,8 +146,10 @@ start; sleep 2.5
 [ -s "$B/fs/log" ] && fail "A: no thin view attached, yet ssh ran: $(cat "$B/fs/log")" || ok
 [ -z "$(links)" ] && ok || fail "A: links with no view: $(links)"
 stop; unset FLEET_PEERLINK_MODE
+}
 
 # --- B. linger -----------------------------------------------------------------
+leg_B() {
 box b 1 mac-a:bob mac-b:bob
 export FLEET_PEERLINK_LINGER=2 FLEET_PEERLINK_MODE=demand
 start
@@ -154,8 +161,10 @@ until_ok 10 all_closed \
 ls "$B/conf/peerlink/"*.sock >/dev/null 2>&1 && fail "B: control files left: $(ls "$B/conf/peerlink/")" || ok
 grep -q '关闭：没人要了' "$B/run.err" && ok || fail "B: no close record"
 stop; unset FLEET_PEERLINK_LINGER FLEET_PEERLINK_MODE
+}
 
 # --- C. doctor -----------------------------------------------------------------
+leg_C() {
 box c 1 mac-a:bob
 out=$(python3 "$PL" status --check); rc=$?
 [ "$rc" = 2 ] && [ -z "$out" ] && ok || fail "C: never ran: rc $rc [$out], want rc 2 and nothing"
@@ -163,23 +172,24 @@ out=$(FLEET_CONF_DIR="$B/conf" bash "$BIN/fleet-doctor.sh" 2>/dev/null | grep pe
 [ -z "$out" ] && ok || fail "C: the doctor printed a peerlink row for a login it never ran on: $out"
 start
 until_ok 8 links_is "mac-a@bob:up" || fail "C: never up"
-sleep 0.3
+until_ok 2 sh -c 'python3 "$1" status --check | grep -q 往返' _ "$PL"
 out=$(python3 "$PL" status --check); rc=$?
 case "$out" in "1 条常开连接（全连）：mac-a@bob 已连上 · 路线 mac-a · "*" · 往返 "*" · 失败 0") [ "$rc" = 0 ] && ok || fail "C: healthy rc $rc" ;; *) fail "C: healthy line: [$out] rc $rc" ;; esac
 out=$(bash "$BIN/fleet-doctor.sh" 2>/dev/null | grep peerlink)
 case "$out" in *PASS*peerlink*mac-a@bob*) ok ;; *) fail "C: doctor row (healthy): [$out]" ;; esac
-printf '%s\n' "doctor healthy: $out" > "$WORK/doctor-rows.txt"
+printf '%s\n' "doctor healthy: $out" >> "$WORK/doctor-rows.txt"
 stop
-FLEET_PEERLINK_STALE=1 python3 "$PL" status --check >/dev/null; rc=$?
-sleep 1.2
+until_ok 3 sh -c 'FLEET_PEERLINK_STALE=1 python3 "$1" status --check | grep -q 管理者没在跑' _ "$PL"
 out=$(FLEET_PEERLINK_STALE=1 python3 "$PL" status --check); rc=$?
 case "$out" in *管理者没在跑*) [ "$rc" = 1 ] && ok || fail "C: stopped keeper rc $rc" ;; *) fail "C: a stopped keeper reads [$out]" ;; esac
 out=$(FLEET_PEERLINK_STALE=1 bash "$BIN/fleet-doctor.sh" 2>/dev/null | grep peerlink)
 case "$out" in *WARN*peerlink*管理者没在跑*) ok ;; *) fail "C: doctor row (bad): [$out]" ;; esac
 printf '%s\n' "doctor bad: $out" >> "$WORK/doctor-rows.txt"
 [ -n "${PEERLINK_SHOW:-}" ] && cat "$WORK/doctor-rows.txt"
+}
 
 # --- D. sock -------------------------------------------------------------------
+leg_D() {
 box d 1 mac-a:bob
 python3 "$PL" sock mac-a bob >/dev/null && fail "D: sock answered with no keeper" || ok
 start
@@ -187,30 +197,35 @@ until_ok 8 links_is "mac-a@bob:up" || fail "D: never up"
 [ "$(python3 "$PL" sock mac-a bob)" = "$B/conf/peerlink/mac-a@bob.sock" ] && ok || fail "D: sock of a healthy link"
 python3 "$PL" sock mac-a carol >/dev/null && fail "D: sock for a link nobody holds" || ok
 python3 "$PL" sock 'mac-a;x' bob >/dev/null 2>&1; [ $? = 2 ] && ok || fail "D: an unsafe name not refused"
+}
 
 # --- E. pane -------------------------------------------------------------------
+leg_E() {
 out=$(python3 "$PL" pane mac-a bob v1 </dev/null 2>&1)
 case "$out" in *"ran bash .claude/fleet/bin/fleet-remote-view.sh attach --thin --view v1-via-home --resume"*) ok ;; *) fail "E: pane on a healthy link: [$out]" ;; esac
 stop
 box e 1
 start
 ( python3 "$PL" pane mac-l bob v1 </dev/null > "$B/pane.out" 2>&1 ) & pp=$!; PIDS="$PIDS $pp"
-sleep 1.5
-grep -q '正在连 mac-l（bob）' "$B/pane.out" && ok || fail "E: a pane before its link does not say it is connecting: $(cat "$B/pane.out")"
+until_ok 2 grep -q '正在连 mac-l（bob）' "$B/pane.out" && ok || fail "E: a pane before its link does not say it is connecting: $(cat "$B/pane.out")"
 row mac-l:bob
 until_ok 10 sh -c '! kill -0 "$1" 2>/dev/null' _ "$pp" && ok || fail "E: the pane did not ride the link once it came up"
 grep -q 'attach --thin --view v1-via-home --resume' "$B/pane.out" && ok || fail "E: pane output: $(cat "$B/pane.out")"
 stop
+}
 
 # --- F. units ------------------------------------------------------------------
+leg_F() {
 T="$ROOT/launchd/com.claude-fleet.peerlink.plist.tmpl"
 grep -q '<key>KeepAlive</key><true/>' "$T" && grep -q 'bin/fleet-peerlink.sh</string><string>run</string>' "$T" && ok \
   || fail "F: the launchd template is not a KeepAlive run of fleet-peerlink.sh"
 grep -q '^ExecStart=/bin/bash __HOME__/.claude/fleet/bin/fleet-peerlink.sh run$' "$ROOT/systemd/claude-fleet-peerlink.service" \
   && grep -q '^Restart=always' "$ROOT/systemd/claude-fleet-peerlink.service" && ok || fail "F: the systemd twin"
 grep -q '"$_npl" status --check' "$BIN/fleet-doctor.sh" && ok || fail "F: fleet-doctor.sh has no peerlink row"
+}
 
 # --- G. routes (issue #3482) -----------------------------------------------------
+leg_G() {
 # the order, off route_candidates itself: the tailnet only with one here, a LAN only
 # on this network, then the entry port; FLEET_REMOTE_SSH wins; nothing known ⇒ the name
 cand() {   # cand <machine> <routes json> → "host:port host:port …"
@@ -243,13 +258,19 @@ grep -q '^master lx0 ' "$B/fs/log" && fail "G: the bare name was dialled" || ok
 grep -q '^master 198.51.100.2 bob [0-9]* 22$' "$B/fs/log" && ok || fail "G: mac-a did not fall to its second route: $(cat "$B/fs/log")"
 out=$(python3 "$PL" status --check)
 case "$out" in *"lx0@bob 已连上 · 路线 entry 203.0.113.212:22022"*) ok ;; *) fail "G: the doctor does not name the route: [$out]" ;; esac
-out=$(python3 "$PL" pane lx0 bob v1 </dev/null 2>&1 & pp=$!; sleep 3; kill $pp 2>/dev/null; wait $pp 2>/dev/null)
+python3 "$PL" pane lx0 bob v1 </dev/null >"$B/gp.out" 2>&1 & pp=$!
+until_ok 3 sh -c '! kill -0 "$1" 2>/dev/null' _ "$pp"; kill $pp 2>/dev/null; wait $pp 2>/dev/null; out=$(cat "$B/gp.out")
 case "$out" in *"ran bash .claude/fleet/bin/fleet-remote-view.sh attach --thin"*) ok ;; *) fail "G: a pane over the entry-port link: [$out]" ;; esac
 stop; unset FLEET_CONNECT_LOCAL_ADDRS FLEET_NODE_ALIASES
+}
 
 # --- H. all: held, retried, never reaped (issue #3482) --------------------------
+leg_H() {
 box h 0
-export FLEET_PEERLINK_LINGER=1 FLEET_PEERLINK_PEERS_SECS=1 FLEET_PEERLINK_BAD_WARN=1 FLEET_CONNECT_LOCAL_ADDRS=192.168.1.5/24
+# BACKOFF_MAX=4: the dead route's tries stay at 0 · 1 · 3 · 7 s (1 → 2 → 4), only the
+# 8 s gap after them is cut, so mac-l comes back sooner once its route does
+export FLEET_PEERLINK_LINGER=1 FLEET_PEERLINK_PEERS_SECS=1 FLEET_PEERLINK_BAD_WARN=1 FLEET_CONNECT_LOCAL_ADDRS=192.168.1.5/24 \
+  FLEET_PEERLINK_BACKOFF_MAX=4
 mkdir -p "$B/fs/down"; : > "$B/fs/down/203.0.113.7"
 peers mac-a:bob:entry=203.0.113.4/22022 mac-l:bob:entry=203.0.113.7/22022 "home:$ME"
 start
@@ -289,9 +310,11 @@ p2=$(python3 -c 'import json,sys; print([l["pid"] for l in json.load(open(sys.ar
 peers mac-a:bob:entry=203.0.113.4/22022
 until_ok 8 links_is "mac-a@bob:up" && ok || fail "H: a login the hub dropped is still held: $(links)"
 grep -q 'mac-l@bob 关闭：已不是你的登录' "$B/run.err" && ok || fail "H: no close record for the dropped login"
-stop; unset FLEET_PEERLINK_LINGER FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN FLEET_CONNECT_LOCAL_ADDRS
+stop; unset FLEET_PEERLINK_LINGER FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN FLEET_CONNECT_LOCAL_ADDRS FLEET_PEERLINK_BACKOFF_MAX
+}
 
 # --- I. switch: FLEET_PEERLINK_MODE=demand in fleet.conf -------------------------
+leg_I() {
 box i 0
 printf '[ -n "${FLEET_SHELL:-}" ] || {\nFLEET_PEERLINK_MODE=demand\n}\n' > "$B/conf/fleet.conf"
 peers mac-a:bob:entry=203.0.113.4/22022
@@ -299,8 +322,10 @@ start; sleep 2.5
 [ -s "$B/fs/log" ] && fail "I: demand with no view, yet ssh ran: $(cat "$B/fs/log")" || ok
 python3 "$PL" status --check | grep -q '没有常开连接（无看台）' && ok || fail "I: the doctor under demand: $(python3 "$PL" status --check)"
 stop
+}
 
 # --- J. fleet-peer-list.sh: the hub's /v1/node/peers with this login's node token --
+leg_J() {
 J="$WORK/j"; mkdir -p "$J/conf"
 cat > "$J/curl" <<'EOS'
 #!/bin/bash
@@ -322,9 +347,10 @@ out=$(pl_list JCODE=down JBODY= 2>&1 >/dev/null); rc=$?
 [ "$rc" = 1 ] && case "$out" in *"could not be reached"*) true ;; *) false ;; esac && ok || fail "J: the hub down: rc $rc [$out]"
 pl_list JCODE=403 JBODY='{"error":"no"}' >/dev/null 2>&1; rc=$?
 [ "$rc" = 1 ] && ok || fail "J: refused (403): rc $rc, want 1"
-
+}
 
 # ---- K. exec · fwd (issue #3538): fleet-open's road to a thin client's HOME ---------------
+leg_K() {
 # A link that is up (state.json + its socket file); a stand-in ssh records each call.
 K="$WORK/k"; mkdir -p "$K/conf/peerlink"
 : > "$K/m2.sock"
@@ -354,8 +380,10 @@ until_ok 6 grep -q -- "-O cancel -L 127.0.0.1:$port:127.0.0.1:8765" "$K/ssh.log"
 K_FWD_RC=255 kpl fwd mac-d "$(id -un)" 8765 >/dev/null 2>&1; [ $? = 1 ] && ok || fail "K: a refused forward must be rc 1"
 kpl fwd mac-n x 8765 >/dev/null 2>&1; [ $? = 3 ] && ok || fail "K: fwd over a link that is down must be rc 3"
 kpl fwd mac-d "$(id -un)" 99999 >/dev/null 2>&1; [ $? = 2 ] && ok || fail "K: fwd to a bad port must be rc 2"
+}
 
 # ---- L. quiet (issue #4359): the keeper looks every IDLE_TICK, a request wakes it ----------
+leg_L() {
 box l 0
 export FLEET_PEERLINK_ACTIVE_SECS=1 FLEET_PEERLINK_IDLE_TICK=30 FLEET_PEERLINK_PEERS_SECS=1
 cat > "$B/ssh" <<EOS
@@ -396,6 +424,31 @@ p1=$(python3 -c 'import json,sys; print([l["pid"] for l in json.load(open(sys.ar
 kill "$p1" 2>/dev/null
 until_ok 6 link_rebuilt "$p1" && ok || fail "L: a master killed while quiet was not rebuilt: $(links)"
 stop; unset FLEET_PEERLINK_ACTIVE_SECS FLEET_PEERLINK_PEERS_SECS; export FLEET_PEERLINK_IDLE_TICK=2
+}
+
+group() {   # group <name> <leg>… — in the background, its result in $WORK/res.<name>
+  local g="$1"; shift
+  (
+    trap 'for p in $PIDS; do kill "$p" 2>/dev/null; done' EXIT
+    FAILS=0 CHECKS=0
+    for l in "$@"; do "leg_$l"; done
+    echo "$FAILS $CHECKS" > "$WORK/res.$g"
+  ) > "$WORK/out.$g" 2>&1 &
+  GROUPS_PIDS="${GROUPS_PIDS:-} $!"
+}
+group 1 A B D E
+group 2 H
+group 3 G I
+group 4 L
+group 5 C        # three whole fleet-doctor.sh runs
+leg_F; leg_J; leg_K
+for p in $GROUPS_PIDS; do wait "$p"; done
+for g in 1 2 3 4 5; do
+  cat "$WORK/out.$g"
+  if [ -s "$WORK/res.$g" ]; then
+    read -r f c < "$WORK/res.$g"; FAILS=$((FAILS + f)); CHECKS=$((CHECKS + c))
+  else fail "group $g ended without its result"; fi
+done
 
 [ -n "${PEERLINK_SHOW:-}" ] && cat "$WORK/doctor-rows.txt"
 
