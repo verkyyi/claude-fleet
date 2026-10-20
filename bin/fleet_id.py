@@ -244,6 +244,7 @@ def known_ids(extra=()):
     """Every ID this login knows: the ledger, the hub's list (ids/.known, one ID a
     line — the mirror fills it), and whatever the caller adds (live windows)."""
     out = set(ledger_ids())
+    out.update(cache_ids())
     try:
         with open(os.path.join(ids_dir(), ".known"), encoding="utf-8") as fh:
             out.update(line.strip() for line in fh if is_fid(line.strip()))
@@ -654,9 +655,19 @@ def last_result(rec):
     return rs[-1] if rs else None
 
 
-def _index():
-    """Every ledger here, folded once: {ID: rec}."""
-    return {f: fold(read(f)) for f in ledger_ids()}
+def _index(cache=False):
+    """Every ledger here, folded once: {ID: rec}. cache=True adds the ID cache's
+    records of the IDs this machine has no ledger of (another machine's — EPIC
+    T644 C7), each marked src=hub; a reader that decides something only this
+    machine can know (route, history, a task's line here) keeps cache off."""
+    idx = {f: record(f) for f in ledger_ids()}
+    if cache:
+        for f in cache_ids():
+            if f not in idx:
+                rec = cached(f)
+                if rec is not None:
+                    idx[f] = rec
+    return idx
 
 
 def conflicts(fid, live, idx=None):
@@ -664,7 +675,7 @@ def conflicts(fid, live, idx=None):
     both windows run one native session. Empty once either closes."""
     idx = idx if idx is not None else _index()
     rec = idx.get(fid) or fold(read(fid))
-    if not alive(fid, rec, live):
+    if rec.get("src") == "hub" or not alive(fid, rec, live):
         return []
     out = []
     if isinstance(live, (list, tuple)) and list(live).count(fid) > 1:
@@ -673,7 +684,7 @@ def conflicts(fid, live, idx=None):
         return out
     mine = rec["segments"][-1]["native"]
     for other, orec in idx.items():
-        if other == fid or not orec["segments"] or not alive(other, orec, live):
+        if other == fid or orec.get("src") == "hub" or not orec["segments"] or not alive(other, orec, live):
             continue
         if orec["segments"][-1]["native"] == mine:
             out.append(other)
@@ -684,8 +695,13 @@ def status(fid, live, idx=None):
     """{state, label, result, conflict}: the one word a reader shows for an ID.
     state ∈ running · conflict · done · failed · asking · exited (+ the result's own
     state in `result`). The newest result counts (S2); closed with none = exited (S7)."""
-    idx = idx if idx is not None else _index()
-    rec = idx.get(fid) or fold(read(fid))
+    idx = idx if idx is not None else _index(cache=True)
+    rec = idx.get(fid) or record(fid) or fold([])
+    if rec.get("src") == "hub":
+        # another machine's ID, off the cache: no window here to ask (C7)
+        hs = _hub_status(fid, rec, rec["opened"].get("short") or short_for(fid, known_ids(idx.keys())))
+        return dict(hs, id=fid, closed=rec["closed"], segments=len(rec["segments"]), progress=rec.get("progress"),
+                    src="hub")
     r = last_result(rec)
     rs = (r or {}).get("state", "")
     up = alive(fid, rec, live)
@@ -760,7 +776,7 @@ def route(fid, live, idx=None):
 
 
 def children_of(fid, live, idx=None):
-    idx = idx if idx is not None else _index()
+    idx = idx if idx is not None else _index(cache=True)
     rows = []
     for f, o in idx.items():
         if o["opened"].get("parent") != fid:
@@ -898,16 +914,9 @@ def _hub_record(fid):
     code, ans = _poster()("GET", "/v1/node/ids/" + fid)
     if code != 200 or not isinstance(ans, dict):
         return None
-    rec = {"opened": {"short": hub_short(fid, ans.get("short", "")), "title": ans.get("title", ""), "parent": ans.get("parent", ""),
-                      "prev": ans.get("prev", "")}, "segments": [], "closed": None,
-           "results": [{"state": r.get("state", ""), "summary": r.get("summary", ""), "pr": r.get("pr", ""),
-                        "ts": r.get("at")} for r in ans.get("results") or [] if isinstance(r, dict)]}
-    if ans.get("closed_at"):
-        rec["closed"] = {"ts": ans["closed_at"], "reason": ans.get("close_reason", "")}
-    pg = ans.get("progress")
-    rec["progress"] = {"summary": pg.get("summary", ""), "state": pg.get("state", ""), "ts": pg.get("at"),
-                       "seq": pg.get("seq")} if isinstance(pg, dict) and pg.get("summary") else None
-    return rec
+    if ans.get("id") == fid:
+        cache_put(ans)   # what was read once is kept (C7)
+    return hub_fold(fid, ans)
 
 
 def _family_row(fid, rec, st, src):
@@ -975,7 +984,7 @@ def family(fid, live, idx=None, seeds=()):
     The driver is its whole line (C18): fid and every ID that continued IT down
     `prev` (`lineage`) — what any of them spawned is the batch's, and the newest
     progress word among them is the batch's; they are never members themselves."""
-    idx = idx if idx is not None else _index()
+    idx = idx if idx is not None else _index(cache=True)
     line = lineage_of(fid, idx)
     seeds = [x for x in dict.fromkeys(seeds) if is_fid(x) and x not in line]
     rows, seen = {}, set(line)
@@ -984,7 +993,7 @@ def family(fid, live, idx=None, seeds=()):
         if x in idx:
             seen.add(x)
             first.append(x)
-            rows[x] = _family_row(x, idx[x], status(x, live, idx), "local")
+            rows[x] = _family_row(x, idx[x], status(x, live, idx), idx[x].get("src", "local"))
     frontier, key = list(line), "parent"
     while frontier:
         nxt, first = first, []
@@ -993,7 +1002,7 @@ def family(fid, live, idx=None, seeds=()):
                 if other not in seen and o["opened"].get(key) == f:
                     seen.add(other)
                     nxt.append(other)
-                    rows[other] = _family_row(other, o, status(other, live, idx), "local")
+                    rows[other] = _family_row(other, o, status(other, live, idx), o.get("src", "local"))
         frontier, key = nxt, "prev"
     post = _poster()
     code, ans = post("GET", "/v1/node/ids?parent=" + fid + "".join("&id=" + x for x in seeds[:100]))
@@ -1041,7 +1050,7 @@ def family(fid, live, idx=None, seeds=()):
     for f in line:   # the newest word down the line (C18)
         if f in idx:
             p = idx[f]["progress"]
-            p = dict(p, src="local") if p else None
+            p = dict(p, src=idx[f].get("src", "local")) if p else None
         else:
             p = progress_of(f) if hub == "ok" or hub == "old" else None
         if p and (pg is None or (p.get("ts") or 0) >= (pg.get("ts") or 0)):
@@ -1451,6 +1460,220 @@ def push_later(fid):
         pass
 
 
+# ---- the ID cache (EPIC T644 C7) --------------------------------------------------
+#
+# This machine's ledgers are the writer: a write lands here first and is pushed. What
+# every machine of the owner wrote is CACHED here, one hub record a file
+# ($ids/.cache/<ID>.json, the hub's own shape) — so a panel whose home is this
+# machine reads another machine's ID (its short code, parent, task, results,
+# progress) exactly as that machine's panel does. `pull` fills it from
+# GET /v1/node/ids?since=<cursor> (the cleanup tick, after push; every CACHE_FULL a
+# full pass that also drops a file the hub no longer lists), `pull <ID>…` one by one
+# (a reader that missed one asks in the background: pull_later). No reader ever waits
+# on the hub: no hub, or a silent one, leaves the cache as it was. On a conflict the
+# hub wins (record): a ledger here is filled from its cached record — an `opened`
+# field it lacks, a longer short — and keeps what it wrote itself (results, closing:
+# not yet pushed, or the same).
+
+CACHE_FULL = 3600
+PULL_PAGES = 40
+
+
+def cache_dir():
+    return os.path.join(ids_dir(), ".cache")
+
+
+def cache_path(fid):
+    return os.path.join(cache_dir(), fid + ".json")
+
+
+def cache_ids():
+    try:
+        names = os.listdir(cache_dir())
+    except OSError:
+        return []
+    return [n[:-5] for n in names if n.endswith(".json") and is_fid(n[:-5])]
+
+
+def cache_raw(fid):
+    try:
+        with open(cache_path(fid), encoding="utf-8") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) and d.get("id") == fid else None
+
+
+def cache_put(ans):
+    """Write one hub record into the cache (atomic); a record no newer than the one
+    kept (its seq) changes nothing. → True when written."""
+    fid = ans.get("id") if isinstance(ans, dict) else ""
+    if not is_fid(fid or ""):
+        return False
+    have = cache_raw(fid)
+    if have is not None and have == ans:
+        return False
+    os.makedirs(cache_dir(), exist_ok=True)
+    tmp = os.path.join(cache_dir(), ".%s.%d" % (fid, os.getpid()))
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(ans, fh, ensure_ascii=False, separators=(",", ":"))
+    os.replace(tmp, cache_path(fid))
+    return True
+
+
+def hub_fold(fid, ans):
+    """A hub record (GET /v1/node/ids…) in fold()'s shape, marked src=hub."""
+    o = {"short": hub_short(fid, ans.get("short", ""))}
+    for k in ("title", "parent", "prev", "task", "repo", "agent", "key", "machine", "login"):
+        if ans.get(k):
+            o[k] = ans[k]
+    if ans.get("opened_at"):
+        o["ts"] = ans["opened_at"]
+    segs = []
+    for n in ans.get("natives") or []:
+        if isinstance(n, dict):
+            segs.append({"n": n.get("n") or len(segs) + 1, "agent": n.get("agent", ""), "native": n.get("native", ""),
+                         "trigger": n.get("trigger", ""), "start": n.get("start"), "end": n.get("end") or None,
+                         "compactions": n.get("compactions") or 0})
+    rec = {"opened": o, "segments": segs, "closed": None, "src": "hub",
+           "results": [{"state": r.get("state", ""), "summary": r.get("summary", ""), "pr": r.get("pr", ""),
+                        "ts": r.get("at")} for r in ans.get("results") or [] if isinstance(r, dict)]}
+    if ans.get("closed_at"):
+        rec["closed"] = {"ts": ans["closed_at"], "reason": ans.get("close_reason", "")}
+    pg = ans.get("progress")
+    rec["progress"] = {"summary": pg.get("summary", ""), "state": pg.get("state", ""), "ts": pg.get("at"),
+                       "seq": pg.get("seq")} if isinstance(pg, dict) and pg.get("summary") else None
+    return rec
+
+
+def cached(fid):
+    """The cache's record of fid, folded (hub_fold), or None."""
+    ans = cache_raw(fid)
+    return hub_fold(fid, ans) if ans is not None else None
+
+
+def record(fid, cached_here=None):
+    """fid's one record: this machine's ledger filled from the cache (the hub wins:
+    an `opened` field the ledger lacks, a longer short), else the cache's record
+    (src=hub), else None. Every reader that shows an ID reads this. cached_here:
+    the caller already knows whether the cache holds fid (False skips the read)."""
+    have = os.path.exists(ledger_path(fid))
+    rec = fold(read(fid)) if have else None
+    hub = cached(fid) if cached_here is not False else None
+    if rec is None:
+        return hub
+    if hub is not None:
+        o, ho = rec["opened"], hub["opened"]
+        for k, v in ho.items():
+            if k == "short":
+                if is_short(v) and len(v) > len(o.get("short") or ""):
+                    o["short"] = v
+            elif v not in (None, "") and k not in o:
+                o[k] = v
+    return rec
+
+
+def _cursor_path():
+    return os.path.join(cache_dir(), ".cursor")
+
+
+def pull(ids=(), call=None, full=False):
+    """Fill the cache from the hub: the IDs named one by one, else every record that
+    changed after the cursor (a full pass when asked, with no cursor, or every
+    CACHE_FULL). → 0 · 3 no hub here · 75 the hub did not answer (the cache stays)."""
+    call = call or _poster()
+    if ids:
+        rc = 0
+        for fid in ids:
+            code, ans = call("GET", "/v1/node/ids/" + fid)
+            if code == -3:
+                return 3
+            if code == 0:
+                return 75
+            if code == 200 and isinstance(ans, dict) and ans.get("id") == fid:
+                cache_put(ans)
+        return rc
+    cur, stamp = "", 0
+    try:
+        with open(_cursor_path(), encoding="utf-8") as fh:
+            cur, _, stamp = fh.read().strip().partition(" ")
+        stamp = int(stamp or 0)
+    except (OSError, ValueError):
+        cur, stamp = "", 0
+    if full or not cur or time.time() - stamp >= CACHE_FULL:
+        cur, full = "", True
+    seen, done = set(), False
+    for _ in range(PULL_PAGES):
+        code, ans = call("GET", "/v1/node/ids?since=" + urllib_quote(cur))
+        if code == -3:
+            return 3
+        if code != 200 or not isinstance(ans, dict):
+            return 75
+        if "cursor" not in ans:
+            return 0   # an older hub: no sync road — the cache stays as it is
+        for x in ans.get("ids") or []:
+            if isinstance(x, dict) and is_fid(x.get("id") or ""):
+                seen.add(x["id"])
+                cache_put(x)
+        cur = str(ans.get("cursor") or cur)
+        if not ans.get("more"):
+            done = True
+            break
+    os.makedirs(cache_dir(), exist_ok=True)
+    if full and done:
+        # a full pass: what the hub no longer lists is gone from the cache too
+        for f in cache_ids():
+            if f not in seen:
+                try:
+                    os.unlink(cache_path(f))
+                except OSError:
+                    pass
+        stamp = int(time.time())
+    tmp = _cursor_path() + ".%d" % os.getpid()
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write("%s %d\n" % (cur, stamp))
+    os.replace(tmp, _cursor_path())
+    return 0
+
+
+def urllib_quote(s):
+    from urllib.parse import quote
+    return quote(s, safe="")
+
+
+def pull_later(ids=()):
+    """Hand `fleet-id.sh pull [<ID>…]` to the background — never waited for; one at a
+    time ($ids/.cache/.pulling, a dir: one older than two minutes is a dead puller's)."""
+    if os.environ.get("FLEET_ID_PULL", "1") == "0":
+        return False
+    lock = os.path.join(cache_dir(), ".pulling")
+    try:
+        os.makedirs(cache_dir(), exist_ok=True)
+        os.mkdir(lock)
+    except FileExistsError:
+        try:
+            if time.time() - os.path.getmtime(lock) < 120:
+                return False
+            os.utime(lock)
+        except OSError:
+            return False
+    except OSError:
+        return False
+    sh = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-id.sh")
+    cmd = 'bash "$1" pull "${@:3}"; rmdir "$2"'
+    try:
+        subprocess.Popen(["bash", "-c", cmd, "bash", sh, lock] + [x for x in ids if is_fid(x)][:50],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except OSError:
+        try:
+            os.rmdir(lock)
+        except OSError:
+            pass
+        return False
+    return True
+
+
 # ---- the hook -------------------------------------------------------------------
 
 def tmux(args):
@@ -1589,7 +1812,7 @@ def hhmm(ts):
 
 
 def render(fid):
-    rec = fold(read(fid))
+    rec = record(fid) or fold([])
     o = rec["opened"]
     short = o.get("short") or short_for(fid, known_ids())
     lines = ["%s  %s" % (short, fid)]
@@ -1639,6 +1862,8 @@ def main(argv):
         return 0
     if cmd == "push":
         return push([a for a in args if is_fid(a)])
+    if cmd == "pull":
+        return pull([a for a in args if is_fid(a)], full="--full" in args)
     if cmd == "switch":
         if args[:1] and args[0] not in ("status", "on", "off"):
             return 2
@@ -1832,11 +2057,14 @@ def main(argv):
         push_later(target)
         return 0
     if cmd == "get":
-        if not os.path.exists(ledger_path(target)):
-            print("fleet-id: %s has no ledger here" % target, file=sys.stderr)
+        rec = record(target)
+        if rec is None:
+            # nothing here and nothing cached yet: ask for it in the background (C7)
+            pull_later([target])
+            print("fleet-id: %s has no ledger here (nothing cached yet — asked the hub)" % target, file=sys.stderr)
             return 1
         if opts.get("json") or "--json" in pos:
-            print(json.dumps(fold(read(target)), ensure_ascii=False))
+            print(json.dumps(rec, ensure_ascii=False))
         else:
             print(render(target))
         return 0

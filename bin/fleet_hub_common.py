@@ -199,8 +199,10 @@ def worker_identity(fleet_id, key):
     return fleet_id + "/" + key if key else None
 
 
-# An EPIC driver's cell (issue #1958): `[<owner/name>]#<N>[:<landed>/<members>]`.
-EPIC_RE = re.compile(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?")
+# An EPIC driver's cell (issue #1958): `[<owner/name>]#<N>[:<landed>/<members>]`;
+# a batch on hub tasks (#4957) names its parent `#T<n>` / `#<code>` (EPIC T644 C7).
+EPIC_RE = re.compile(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(?:[1-9][0-9]{0,9}|T[1-9][0-9]{0,9}|[A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z]{3,25})"
+                     r"(?::[0-9]{1,4}/[0-9]{1,4})?")
 # A batch nobody drives (issue #1916): `<owner/name>#<N>` — always with its repo.
 EPIC_STALE_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]{0,9}")
 

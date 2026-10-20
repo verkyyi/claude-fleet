@@ -28,6 +28,11 @@ import (
 //	                         spawned, the given ones (its members), and every ID
 //	                         that continued one of them down `prev` — an EPIC
 //	                         driver's members and their redos (C5)
+//	GET  /v1/node/ids?since=<cursor> → {ids:[record…], cursor, more}: the owner's
+//	                         records changed after the cursor ("" = all), a page
+//	                         at a time — the node's ID cache (EPIC T644 C7,
+//	                         bin/fleet-id.sh pull), so every home's panel reads
+//	                         the same records
 //	GET  /v1/node/ids/<ID|T-code> → the record; a code two IDs share is 409
 //	                         {code: AMBIGUOUS, candidates} — never a pick
 //
@@ -103,6 +108,13 @@ func (s *Server) handleNodeIDs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"parent": parent, "lineage": line, "ids": fam})
+	case ref == "" && r.Method == http.MethodGet && r.URL.Query().Has("since"):
+		recs, cursor, more, err := s.Store.FleetIDsSince(owner, r.URL.Query().Get("since"), store.IDSyncMax)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ids": recs, "cursor": cursor, "more": more})
 	case ref == "" && r.Method == http.MethodGet:
 		ids, err := s.Store.FleetIDsOf(owner, "")
 		if err != nil {

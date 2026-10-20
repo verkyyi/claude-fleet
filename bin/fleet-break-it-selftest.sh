@@ -6040,6 +6040,19 @@ drill_task_start_unseen() {
   WHAT='开局几秒就退：ID 上「未起来：<原因>」、本机日志一行、父会话收到一次；同因不重复；起来了答「起来了」；tick 判 stalled 不算在跑，await 当场 NOT-STARTED，提示 respawn 原记录'
 }
 
+# Home moved, panel changed (EPIC T644 C7): the operator moved the 看台's home from
+# one machine to another and the first one's sessions lost their short codes and their EPIC parent
+# — each machine's ID ledger is its own, and the panel read only this machine's.
+# Now every machine keeps the hub's records in an ID cache (fleet-id.sh pull) and
+# the panel reads that: home A shows a batch on B row by row as home B does.
+drill_home_moved_panel_differs() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-view-home-selftest.sh" 2>&1) || { WHY="$(printf '%s' "$out" | grep -v '^ok' | tail -4)"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='家在 A、会话在 B：短码、名字、分组、EPIC 父子与 已完成/总数 与家在 B 逐行相同；缓存没有先占位、后台补齐；hub 不答照旧缓存画'
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call

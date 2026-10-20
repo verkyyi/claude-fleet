@@ -69,6 +69,13 @@
 #                                            (EPIC T497 C2, fleet_id.py push): rc 0 · 3 no
 #                                            hub here (nothing sent) · 75 the hub did not
 #                                            answer (the next push, or the cleanup tick, resumes)
+#   fleet-id.sh pull [--full | <ID>…]       fill this machine's ID cache ($ids/.cache, EPIC
+#                                            T644 C7) from the hub: every record of the owner
+#                                            that changed since the last pull (a full pass
+#                                            hourly, or --full), or the IDs named. Readers
+#                                            (the panel, get, children, family, resolve) read
+#                                            the cache, never the hub: rc 0 · 3 no hub here ·
+#                                            75 the hub did not answer (the cache stays)
 #   fleet-id.sh migrate [--apply] [--only T1,T2] [--json]
 #                                            the old T records onto IDs (EPIC T497 C6, design
 #                                            §5): each record's verdict by one rule — 已终态 ⇒
@@ -165,6 +172,11 @@ $(fleet_sockets 2>/dev/null)
 EOF
     fi
     FLEET_ID_WINDOWS="$wins" FLEET_ID_LIVE="$live" exec python3 "$BIN/fleet_id.py" push "$@" ;;
+  pull)
+    if [ -z "${FLEET_ID_HUB_POST:-}" ]; then
+      fleet_node_pair >/dev/null 2>&1 || exit 3
+    fi
+    exec python3 "$BIN/fleet_id.py" pull "$@" ;;
 esac
 if [ "$cmd" = backfill ]; then
   fmt='#{@fleet_id}	#{window_id}	#{@cc_agent}	#{@repo}	#{@worktree}	#{@task}	#{@cc_session_id}	#{@codex_session_id}	#{@codex_thread_id}	#{@fleet_role}'

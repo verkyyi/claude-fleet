@@ -72,6 +72,7 @@ fleet_id.py take <ID>                   任务的窗口能不能用任务的编�
 fleet_id.py attempt <ID> [--window @w]  任务的重做：开下一次（`reopened {attempt}`），打印现在是第几次
 fleet-id.sh open|native|result|close …   见脚本头
 fleet-id.sh push [<ID>…]                 把账本推给 hub 镜像（C2）
+fleet-id.sh pull [--full | <ID>…]        从 hub 把本人全部 ID 记录拉进本机缓存（EPIC T644 C7，下节）
 fleet-id.sh status|route|children|await|history|continue|reopen …   结果、父子、接班（C4，下节）
 ```
 
@@ -157,6 +158,27 @@ issues · body · parent · prev · aliases · asked · parked · opened_at · c
 
 `bin/fleet-id-hub-selftest.sh` 钉节点这一半的 S10、S12、S13；hub 那一半是
 `hub/store/fleet_ids_test.go`、`hub/api/fleet_node_ids_test.go`。
+
+## 本机账本只是缓存：换了家，面板一模一样（EPIC T644 C7）
+
+本机账本是**写入口**（先写本地、再推 hub）；hub 上本人全部 ID 的记录（parent、prev、task、
+short、段、结果、progress）**缓存**在每台机器的 `ids/.cache/<ID>.json`（hub 原样的记录）：
+
+- **同步**：`fleet-id.sh pull`（清理 tick 每轮在 push 之后）读 `GET /v1/node/ids?since=<游标>`，
+  一页 500 条、按 `updated_at` 往后翻，游标在 `ids/.cache/.cursor`；每小时（或 `--full`）从头全量一遍，
+  hub 不再列的从缓存删掉。没有 hub ⇒ 3，hub 不答 ⇒ 75，缓存原样不动；旧 hub（答里没有 `cursor`）什么都不改。
+- **读**：面板（`fleet_view.py` 的 `id_record`）、`get` / `children` / `family` / `resolve` / `status`
+  都读 `fleet_id.record`：本机有账本的，由缓存补（`opened` 缺的字段、更长的短码——**hub 为准**），
+  本机自己写的结果 / 收尾照留；本机没有的，就是缓存那条（`src=hub`，状态按 hub 的结果读）。
+  `route` / `history` / 本机的任务线仍只看本机账本（另一台机器的 ID 答 `unknown`，走 hub 的路）。
+- **显示路径不请求 hub**：缓存缺某条，那一行先显示本机算出的短码（`id_pending`），帧末
+  `pull_later` 在后台按 ID 补取（单飞，`ids/.cache/.pulling`），补到后下一帧就是完整的。
+- **别机的行**按 `<fleet UUID>/<key>` 记；`fleet-hub-sessions.sh` 把 hub 的 worker identity 写成
+  `wid_ids`（`<worker_id>\t<ID>`），面板据此对上 ID；别机的 EPIC 驱动由行的第 25 列（节点的 `epic=`，
+  T 任务批次的 `#T<n>` 也带）认出，它的展开状态记在本看台 `remote-views/epic-open-<fleet>.json`。
+
+`bin/fleet-view-home-selftest.sh`（BREAK-IT `home-moved-panel-differs`）：家在 A、会话在 B ⇒ 每行的短码、
+名字、分组、EPIC 父子与 已完成/总数 与家在 B 逐行相同；缓存缺失先占位后补齐；hub 不答照旧缓存画。
 
 ## 面板（C3）
 

@@ -265,7 +265,9 @@ case "$mode" in
       wbf=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       [ "$wbf" = failed ] || wbf=''
       wepic=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
-      case "$wepic" in *[!A-Za-z0-9/._#-]*|*'#'*'#'*) wepic='' ;; *'#'[0-9]*) ;; *) wepic='' ;; esac
+      # a batch on hub tasks (#4957) is `#T<n>` / `#<code>` (EPIC T644 C7): carried
+      # too, so another machine's view still knows the row drives a batch
+      case "$wepic" in *[!A-Za-z0-9/._#-]*|*'#'*'#'*) wepic='' ;; *'#'[0-9]*|*'#'[A-Z]*) ;; *) wepic='' ;; esac
       wrow=${wrow%$'\t'*}   # the old role column, always empty (issue #4341)
       wdet=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       wreap=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
@@ -303,7 +305,7 @@ case "$mode" in
       esac
       if [ -n "$wepic" ]; then
         _en=${wepic##*#}; _er=${wepic%#*}
-        case "$_en" in *[!0-9]*|'') wepic='' ;; *)
+        case "$_en" in '') wepic='' ;; *[!0-9]*) ;; *)
           case "$ttl" in *$'\n'"$_er"$'\t'"$_en"$'\t'*)
             t=${ttl#*$'\n'"$_er"$'\t'"$_en"$'\t'}; t=${t%%$'\n'*} ;;
           esac
