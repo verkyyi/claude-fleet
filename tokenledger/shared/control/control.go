@@ -1478,6 +1478,21 @@ const (
 	SummarySigNamespace = "fleet-summary@claude-fleet"
 )
 
+// ClientEventsPath is where a `fleet` client sends its connection events and
+// where the doctor reads their 24-hour statistics (claude-fleet T689): POST
+// {cert, sig, ts, device, events} — or with a bearer the doors accept — and
+// GET ?hours=N by a session, a viewer token or a node token.
+const (
+	ClientEventsPath         = "/v1/fleet/client-events"
+	ClientEventsSigNamespace = "fleet-client-events@claude-fleet"
+)
+
+// ClientEventsSigMessage is what a client signs to send its connection events
+// with a connection certificate, same shape as SummarySigMessage.
+func ClientEventsSigMessage(unix int64) string {
+	return fmt.Sprintf("fleet-client-events %d", unix)
+}
+
 // RoutesSigMessage is what a client signs to ask for its route list with a
 // connection certificate: a timestamp the hub accepts only near its own clock.
 func RoutesSigMessage(unix int64) string {

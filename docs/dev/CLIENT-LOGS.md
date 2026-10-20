@@ -153,6 +153,48 @@ set (`logs/thin.log` + `logs/*.log`) or a bare log dir; `.1` is read first.
 
 `bin/fleet-client-stats-selftest.sh` pins the three on synthetic logs.
 
+## Sent to the hub — `bin/fleet_client_events.py` (T689)
+
+thin.log stays on this computer; the part of it the hub and the doctor need
+goes there as **connection events**, metadata only (稳定性①):
+
+| event | when | fields beyond `id` · `at` · `start` · `ver` |
+|---|---|---|
+| `start` | a `fleet` start (its id rides every later event) | — |
+| `up` | the view drawn | `phase` start (`ms` from the start) · reconnect (`ms` = drop → drawn: the reconnect time) · `home` · `route` |
+| `drop` | the line ended while up, not by the person | `home` · `route` · `rc` · `ms` (how long it was up) · `reason` = ssh's last word (`timeout` · `reset` · …) else `rc<N>` |
+| `fail` | a connection that did not come up | `phase` start (起不来) · reconnect; `reason` = `home:<the hub's code>` (connect.log's `home` line) · `pick` · `opening` · `no_fleet` · `first_session` · `never_up` · ssh's word; `rc` |
+| `rehome` | the home changed | `home` → `to`; `reason` `no_other` when the 换家 found no other and went back |
+| `offline` | three tries failed and the hub did not answer either | `home` |
+| `quit` | the person (or a signal) ended it | `rc` · `reason` quit · detach · signal · interrupt |
+
+Every field is a code (`[a-z0-9_.:-]`, ≤ 48), a machine name or a number — the
+writer codes or drops anything else, and the hub (`POST /v1/fleet/client-events`,
+`hub/api/fleet_client_events.go`) refuses an event that is not, one by one. No
+credential, no person's words, no terminal byte has a field to travel in.
+
+The spool is `${XDG_CACHE_HOME:-~/.cache}/claude-fleet/client-events.ndjson`
+(0600, at most `FLEET_CLIENT_EVENTS_MAX` = 2000 — the oldest go). Each event is
+appended and the spool is sent on a daemon thread (one sender: a flock; batches
+of `FLEET_CLIENT_EVENTS_BATCH` = 200), signed with the connection certificate
+(`fleet-client-events@claude-fleet` over `fleet-client-events <ts>`) or a
+`FLEET_HUB_TOKEN`; an event leaves the spool only once the hub answered for it,
+so a line that is down keeps them for the next event or the next start. The hub
+keeps one row per id (a resend is a duplicate), 30 days, under the device name
+it registered for the certificate's key. `FLEET_CLIENT_EVENTS=0` records and
+sends nothing; `fleet_client_events.py status` / `flush` read and send by hand.
+
+The read is the doctor's: `GET /v1/fleet/client-events?hours=24` (a session, a
+viewer token, a login's node token — each person their own clients, the
+operator everyone's; `&device=` · `&events=1` for the rows) answers drops and
+their reasons, reconnect p50 / p90 (nearest rank), open failures (attempts, and
+the starts that never came up) and their reasons, 换家, offline — per device ×
+home, per device and in total. `fleet doctor`'s `clients` row is the one-line
+summary (WARN on a start that never came up or a reconnect p90 past a minute);
+`fleet doctor --clients [--hours N] [--device D] [--json]` (`bin/fleet-client-events.sh`)
+is the table. `bin/fleet-client-events-selftest.sh` and `fleet-thin-selftest.sh` T
+pin the client half, `TestFleetClientEventsByCertificate` the hub's.
+
 ## Redaction — `conf/secret-shapes.list`
 
 The ONE table of what a credential looks like (EPIC #2889 共同约定 1): one

@@ -94,6 +94,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetPeerCerts(); err != nil {
 		return err
 	}
+	// A client's connection events (claude-fleet T689).
+	if err := s.ensureFleetClientEvents(); err != nil {
+		return err
+	}
 	// Browser terminals' records (claude-fleet#3838).
 	if err := s.ensureChatRequests(); err != nil {
 		return err
