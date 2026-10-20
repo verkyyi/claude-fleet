@@ -447,15 +447,15 @@ drill_peerlink_dials_client() {
   pl_box dc
   mkdir -p "$B/fs/nodns"; : > "$B/fs/nodns/laptop"
   export FLEET_PEERLINK_PEERS_SECS=1 FLEET_PEERLINK_BAD_WARN=1
-  # yesterday's way: the hub's list carried the person's laptop (a client) beside mini1
-  printf '{"peers":[{"hostname":"laptop","login":"bob","routes":[]},{"hostname":"mini1","login":"bob","routes":[]}]}\n' > "$B/peers.json"
+  # yesterday's way: the hub's list carried the person's laptop (a client) beside mac-b
+  printf '{"peers":[{"hostname":"laptop","login":"bob","routes":[]},{"hostname":"mac-b","login":"bob","routes":[]}]}\n' > "$B/peers.json"
   pl_start
   until_ok 8 sh -c 'out=$(python3 "$1" status --check); [ $? = 1 ] && printf %s "$out" | grep -q "laptop@bob 连不上"' _ "$PL" \
     || { WHY="the client on the list did not fail as it does live: $(python3 "$PL" status --check)"; unset FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN; pl_stop; return 1; }
-  until_ok 8 pl_up mini1@bob || { WHY="mini1 never came up"; unset FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN; pl_stop; return 1; }
+  until_ok 8 pl_up mac-b@bob || { WHY="mac-b never came up"; unset FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN; pl_stop; return 1; }
   # the fixed hub's answer: the client is not on it
   t0=$(now)
-  printf '{"peers":[{"hostname":"mini1","login":"bob","routes":[]}]}\n' > "$B/peers.json"
+  printf '{"peers":[{"hostname":"mac-b","login":"bob","routes":[]}]}\n' > "$B/peers.json"
   until_ok 8 sh -c '! python3 - "$1" <<"PY"
 import json, sys
 s = json.load(open(sys.argv[1]))
@@ -465,14 +465,14 @@ PY' _ "$B/conf/peerlink/state.json" \
   SECS=$(since "$t0")
   unset FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN
   out=$(python3 "$PL" status --check) || { WHY="still WARN with the client gone: $out"; pl_stop; return 1; }
-  pl_up mini1@bob || { WHY="mini1's link went with it"; pl_stop; return 1; }
+  pl_up mac-b@bob || { WHY="mac-b's link went with it"; pl_stop; return 1; }
   pl_stop
   # and the hub's Go test, where a toolchain is
   local gohalf="入口一半：此处没有 Go 工具链，由 Go 门跑 TestNodePeersSkipsClient"
   grep -q '^func TestNodePeersSkipsClient(' "$ROOT/tokenledger/hub/api/fleet_peer_list_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestNodePeersSkipsClient is gone"; return 1; }
   go_half '^TestNodePeersSkipsClient$' ./hub/api; case $? in 0) gohalf="入口一半：go test 客户端登录不进对端名单、托管 / 未定型照列" ;; 1) return 1 ;; esac
-  WHAT="入口的对端名单列了只是客户端的笔记本：每拍去连、每次连不上、doctor 一直红；修好的入口不列它，下一拍那条连线从 state.json 消失、mini1 照常已连上；${gohalf}"
+  WHAT="入口的对端名单列了只是客户端的笔记本：每拍去连、每次连不上、doctor 一直红；修好的入口不列它，下一拍那条连线从 state.json 消失、mac-b 照常已连上；${gohalf}"
 }
 
 cred_run_drills "$0"
