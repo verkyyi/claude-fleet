@@ -303,6 +303,11 @@ eq "mark-reauth: re-marking replaces the row" 1 "$(wc -l < "$STATE_REAUTH" | tr 
 cmd_mark_reauth nosuch >/dev/null 2>&1; rc_is "mark-reauth: unknown label refused" 1 $?
 cmd_clear_reauth a
 eq "clear-reauth: drops the mark" 0 "$(acct_reauth_since a)"
+# #3952: the first label is found even when more labels are still being written
+# after it — `acct_labels | grep -qx` under pipefail read SIGPIPE as "unknown".
+# The slow lister makes the late write certain instead of a busy runner's luck.
+( acct_labels() { printf 'a\n'; sleep 0.3; printf 'b\n'; }; acct_known a ); rc_is "acct_known: first label, more written after it" 0 $?
+( acct_labels() { printf 'a\n'; sleep 0.3; printf 'b\n'; }; acct_known nosuch ); rc_is "acct_known: unknown label" 1 $?
 
 cmd_mark_limited a '' >/dev/null
 eq "mark-limited: fallback still honours per-account LIMIT_TTL" \

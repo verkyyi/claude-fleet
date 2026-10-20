@@ -59,6 +59,29 @@ on:
         description: 'the matrix, a JSON list 1..N (empty = the gate width)'
         type: string
         default: ''
+      # A flaky test's proof (EPIC T516 C7): each named test run <times> times
+      # in a row, each on a runner of its own, every run counted — instead of the
+      # suite. Never on the PR gate; empty = the suite, as before.
+      repeat:
+        description: 'tests to run over and over instead of the suite, a JSON list (["fleet-account-selftest.sh"])'
+        type: string
+        default: ''
+      times:
+        description: 'how many times each repeated test runs'
+        type: string
+        default: '10'
+      go_run:
+        description: 'a go test -run regex run -race -count=<go_count> (empty = none)'
+        type: string
+        default: ''
+      go_pkg:
+        description: 'the Go package of go_run, MODULE/./pkg/ (hub/./api/)'
+        type: string
+        default: 'hub/./api/'
+      go_count:
+        description: 'go test -count for go_run'
+        type: string
+        default: '50'
 
 jobs:
   plan:
@@ -115,7 +138,7 @@ jobs:
   selftests:
     needs: plan
     # a dispatch has no plan (skipped): run anyway, at its own width
-    if: ${{ !cancelled() && (needs.plan.result == 'success' || github.event_name != 'pull_request') }}
+    if: ${{ !cancelled() && (needs.plan.result == 'success' || github.event_name != 'pull_request') && inputs.repeat == '' && inputs.go_run == '' }}
     # FANNED OUT over N runners (issue #681). The suite had grown to 120 tests and
     # ~9 minutes against a 10-minute bound — one minute of margin, already spent
     # once — and the consequence is not "CI is slow" but that green stops meaning
@@ -167,3 +190,82 @@ jobs:
       step_minutes: ${{ needs.plan.outputs.step_minutes || '' }}
       job_minutes: ${{ needs.plan.outputs.job_minutes || '' }}
       shards: ${{ inputs.shards || needs.plan.outputs.shards || '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]' }}
+
+  # The repeat proof (EPIC T516 C7): a test that was red once and green on its
+  # rerun is called fixed only when it runs <times> times in a row green here —
+  # never on a shared machine (CLAUDE.md «don't run the suite locally»). Every run
+  # is counted, a red does not stop the rest, and the summary says N/M per test.
+  repeat:
+    if: github.event_name == 'workflow_dispatch' && inputs.repeat != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        test: ${{ fromJSON(inputs.repeat || '[]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: run ${{ matrix.test }} ${{ inputs.times }} times
+        env:
+          TEST: ${{ matrix.test }}
+          TIMES: ${{ inputs.times }}
+          FLEET_SELFTEST_TEST_TIMEOUT: '240'
+        run: |
+          set -u
+          case "$TIMES" in ''|*[!0-9]*) echo "::error::times must be a number"; exit 2 ;; esac
+          ok=0 secs=''
+          for i in $(seq 1 "$TIMES"); do
+            t0=$(date +%s)
+            if bash bin/run-selftests.sh "$TEST" > "run-$i.log" 2>&1; then
+              ok=$((ok + 1)); r=PASS
+            else
+              r=FAIL
+              echo "::group::run $i FAIL"; tail -60 "run-$i.log"; echo "::endgroup::"
+            fi
+            d=$(( $(date +%s) - t0 )); secs="$secs ${d}s"
+            echo "run $i/$TIMES: $r ${d}s"
+          done
+          { echo "| \`$TEST\` | $ok / $TIMES |$secs |"; } > row.md
+          echo "$TEST: $ok/$TIMES green"
+          [ "$ok" = "$TIMES" ]
+      - name: summary
+        if: always()
+        run: |
+          {
+            echo '| 测试 | 通过 | 每次耗时 |'
+            echo '|---|---|---|'
+            cat row.md 2>/dev/null || echo "| \`${{ matrix.test }}\` | (did not finish) | |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  repeat-go:
+    if: github.event_name == 'workflow_dispatch' && inputs.go_run != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GOWORK: 'off'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: false
+      - name: go test -race -count=${{ inputs.go_count }} -run ${{ inputs.go_run }}
+        env:
+          RUN: ${{ inputs.go_run }}
+          PKG: ${{ inputs.go_pkg }}
+          COUNT: ${{ inputs.go_count }}
+        run: |
+          set -u
+          mod=${PKG%%/*}; pkg=${PKG#*/}
+          rc=0
+          (cd "tokenledger/$mod" && go test -race -v -count="$COUNT" -timeout 40m -run "$RUN" "$pkg") > go.log 2>&1 || rc=$?
+          grep -E '^(ok|FAIL|--- FAIL|panic:)' go.log || true
+          [ "$rc" = 0 ] || { echo '::group::go test output (red)'; cat go.log; echo '::endgroup::'; }
+          {
+            echo '| Go 测试 | 通过 | 失败 |'
+            echo '|---|---|---|'
+            for t in $(sed -nE 's/^--- (PASS|FAIL): ([A-Za-z0-9_]+) .*/\2/p' go.log | sort -u); do
+              echo "| \`$t\` | $(grep -cE "^--- PASS: $t " go.log) / $COUNT | $(grep -cE "^--- FAIL: $t " go.log) |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
