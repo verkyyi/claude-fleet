@@ -1,9 +1,13 @@
 <!-- fleet:agent-defaults begin -->
 ## claude-fleet — rules on a managed machine
 
+<!-- fleet:only claude -->
+This login is managed by claude-fleet (`~/.claude/fleet`). Whatever the project:
+<!-- fleet:only codex -->
 This login is managed by claude-fleet (`~/.claude/fleet`); a fleet session runs
 with `approval_policy = "never"` / `sandbox_mode = "danger-full-access"` and the
 fleet's hooks are its rails. Whatever the project:
+<!-- fleet:only end -->
 
 - **A base checkout is read-only.** Fleet work happens in an `issue-<N>` /
   `scratch-<N>` git worktree and lands through its own PR; never commit to a

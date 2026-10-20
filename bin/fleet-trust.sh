@@ -76,8 +76,8 @@
 # launcher then runs today's narrow grant, byte for byte. Never asks the hub.
 #
 # CODEX (issue #2401). Codex asks its own "Do you trust the contents of this
-# directory?" and keys it on the MAIN checkout too (a worktree inherits it, verified
-# on 0.154); the answer is persisted state — `[projects."<path>"] trust_level =
+# directory?" and keys it on the MAIN checkout too (a worktree inherits it, as
+# measured); the answer is persisted state — `[projects."<path>"] trust_level =
 # "trusted"` in $CODEX_HOME/config.toml — and a `-c` override does not satisfy it.
 # `codex-grant` writes that one table for the given checkout, FILL ONLY: a table
 # that already names a trust_level (any value — "untrusted" is the login's own

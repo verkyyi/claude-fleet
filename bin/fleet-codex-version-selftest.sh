@@ -4,8 +4,10 @@
 # fleet reads a Codex worker's context% out of Codex's rollout file, a format
 # verified only on the versions in fleet-codex-runtime.py
 # (SUPPORTED_ROLLOUT_VERSIONS). Pinned here:
-#   * version-check: 0.154.0 / 0.154.7 / 0.162.1 → exit 0; 0.160.0 / 0.1540.0 → exit 1
-#     (a prefix matches whole components only); garbage → exit 2; missing → 2.
+#   * version-check: 0.162.1 / 0.162.7 → exit 0; 0.163.0 / 0.1620.0 → exit 1
+#     (a prefix matches whole components only); an older Codex (0.150.0, before
+#     the release pin) → exit 1 saying it is no longer supported (T588);
+#     garbage → exit 2; missing → 2.
 #   * doctor `codex` row: verified → PASS; unverified → WARN naming the pin
 #     command AND the silencer (EPIC #1074 rule 9); not installed → INFO;
 #     FLEET_CODEX_VERSION_CHECK=0 (env or fleet.settings) → no row; the row
@@ -55,16 +57,18 @@ IFS=: ; for d in $PATH; do [ -x "$d/codex" ] && continue; CLEAN="${CLEAN:+$CLEAN
 # 1. version-check itself
 # ============================================================================
 vc() { PATH="$WORK/fake:$CLEAN" python3 "$BIN/fleet-codex-runtime.py" version-check; }
-setv 'codex-cli 0.154.0';  out=$(vc); eq "$?" 0 "1a: 0.154.0 must be verified"; has "0.154.0" "$out" "1a: line names the version"
-setv 'codex-cli 0.154.7';  vc >/dev/null; eq "$?" 0 "1b: 0.154.7 matches the 0.154 prefix"
-setv 'codex-cli 0.162.1';  vc >/dev/null; eq "$?" 0 "1b2: 0.162.1, the release pin (#3157), is verified"
-setv 'codex-cli 0.160.0';  out=$(vc); eq "$?" 1 "1c: 0.160.0 must be unverified"
+setv 'codex-cli 0.162.1';  out=$(vc); eq "$?" 0 "1a: 0.162.1, the release pin (#3157), is verified"; has "0.162.1" "$out" "1a: line names the version"
+setv 'codex-cli 0.162.7';  vc >/dev/null; eq "$?" 0 "1b: 0.162.7 matches the 0.162 prefix"
+setv 'codex-cli 0.150.0';  out=$(vc); eq "$?" 1 "1b2: 0.150.0, before the pin, is no longer verified (T588)"
+has "older than the release pin" "$out" "1b2: the line says it is older than the pin"
+has "npm i -g @openai/codex@0.162.1" "$out" "1b2: the line names the pin command"
+setv 'codex-cli 0.163.0';  out=$(vc); eq "$?" 1 "1c: 0.163.0 must be unverified"
 has "npm i -g @openai/codex@0.162.1" "$out" "1c: the line names the pin command"
 has "FLEET_CODEX_VERSION_CHECK=0" "$out" "1c: the line names the silencer"
-setv 'codex-cli 0.1540.0'; vc >/dev/null; eq "$?" 1 "1d: 0.1540 is NOT 0.154 (whole components)"
-setv 'codex-cli 0.15.2';   vc >/dev/null; eq "$?" 1 "1e: 0.15 is NOT 0.154"
+setv 'codex-cli 0.1620.0'; vc >/dev/null; eq "$?" 1 "1d: 0.1620 is NOT 0.162 (whole components)"
+setv 'codex-cli 0.16.2';   vc >/dev/null; eq "$?" 1 "1e: 0.16 is NOT 0.162"
 setv 'no version here';    vc >/dev/null; eq "$?" 2 "1f: unreadable output → 2"
-setv 'codex-cli 0.154.0' 3; vc >/dev/null; eq "$?" 2 "1g: a failing --version → 2"
+setv 'codex-cli 0.162.1' 3; vc >/dev/null; eq "$?" 2 "1g: a failing --version → 2"
 out=$(PATH="$CLEAN" python3 "$BIN/fleet-codex-runtime.py" version-check); eq "$?" 2 "1h: not installed → 2"
 has "not installed" "$out" "1h: says not installed"
 
@@ -89,9 +93,11 @@ doctor() {   # $1 = PATH prefix ('' = no codex at all)
 row() { printf '%s\n' "$1" | grep -aE '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+codex([[:space:]]|$)' | head -1; }
 quiet() { CHECKS=$((CHECKS + 1)); [ -s "$WORK/stderr" ] && grep -a 'codex\|_gconf\|runtime' "$WORK/stderr" >/dev/null && fail "$1" "$(cat "$WORK/stderr")"; return 0; }
 
-setv 'codex-cli 0.154.0'; l=$(row "$(doctor "$WORK/fake")")
+setv 'codex-cli 0.162.1'; l=$(row "$(doctor "$WORK/fake")")
 has PASS "$l" "2a: a verified codex must PASS"; quiet "2a: no codex noise on stderr"
-setv 'codex-cli 0.160.0'; l=$(row "$(doctor "$WORK/fake")")
+setv 'codex-cli 0.150.0'; l=$(row "$(doctor "$WORK/fake")")
+has WARN "$l" "2b0: an older codex must WARN"; has "older than the release pin" "$l" "2b0: the WARN says what the launcher says"
+setv 'codex-cli 0.163.0'; l=$(row "$(doctor "$WORK/fake")")
 has WARN "$l" "2b: an unverified codex must WARN"
 has "npm i -g @openai/codex@0.162.1" "$l" "2b: the WARN names the pin command"
 has "FLEET_CODEX_VERSION_CHECK=0" "$l" "2b: the WARN names the silencer (EPIC rule 9)"
@@ -120,24 +126,25 @@ launch() {
       FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_FAILOVER=0 "$@" \
       bash "$WORK/install/bin/fleet-codex.sh" 'hello' ) >/dev/null 2>"$WORK/lerr"
 }
-setv 'codex-cli 0.160.0'; launch
+setv 'codex-cli 0.163.0'; launch
 [ -f "$WORK/launched" ] || fail "3a: an unverified codex must still launch" "$(cat "$WORK/lerr")"
 CHECKS=$((CHECKS + 1))
-eq "$(grep -c 'warning: codex 0.160.0' "$WORK/lerr")" 1 "3a: exactly one stderr warning"
+eq "$(grep -c 'warning: codex 0.163.0' "$WORK/lerr")" 1 "3a: exactly one stderr warning"
 has "npm i -g @openai/codex@0.162.1" "$(cat "$WORK/launch.warn")" "3a: the warning reaches the session (FLEET_CODEX_VERSION_WARNING)"
-setv 'codex-cli 0.154.0'; launch
+setv 'codex-cli 0.162.1'; launch
 [ -f "$WORK/launched" ] || fail "3b: a verified codex must launch" "$(cat "$WORK/lerr")"
 lacks "warning: codex" "$(cat "$WORK/lerr")" "3b: a verified codex prints no warning"
 eq "$(cat "$WORK/launch.warn")" "" "3b: no warning env for a verified codex"
-setv 'codex-cli 0.160.0'; launch FLEET_CODEX_VERSION_CHECK=0
+setv 'codex-cli 0.163.0'; launch FLEET_CODEX_VERSION_CHECK=0
 [ -f "$WORK/launched" ] || fail "3c: launch with the check off" "$(cat "$WORK/lerr")"
 lacks "warning: codex" "$(cat "$WORK/lerr")" "3c: FLEET_CODEX_VERSION_CHECK=0 skips the warning"
-setv 'codex-cli 0.154.0'; launch FLEET_CODEX_VERSION_WARNING=stale
+setv 'codex-cli 0.162.1'; launch FLEET_CODEX_VERSION_WARNING=stale
 eq "$(cat "$WORK/launch.warn")" "" "3d: an inherited warning never leaks into a verified launch"
 setv 'codex-cli 0.162.1'; launch
 eq "$(cat "$WORK/launch.native")" 1 "3e: the verified pin enables native completion proof"
-setv 'codex-cli 0.154.0'; launch FLEET_CODEX_NATIVE_COMPLETION=1
+setv 'codex-cli 0.150.0'; launch FLEET_CODEX_NATIVE_COMPLETION=1
 eq "$(cat "$WORK/launch.native")" "" "3f: an older release retains Stop evidence"
+eq "$(grep -c 'warning: codex 0.150.0 is older than the release pin' "$WORK/lerr")" 1 "3f: an older codex is named once and still launches"
 setv 'codex-cli 0.162.2'; launch FLEET_CODEX_NATIVE_COMPLETION=1
 eq "$(cat "$WORK/launch.native")" "" "3g: unverified completion semantics retain Stop evidence"
 setv 'codex-cli 0.162.1'; launch FLEET_CODEX_VERSION_CHECK=0 FLEET_CODEX_NATIVE_COMPLETION=1

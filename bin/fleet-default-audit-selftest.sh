@@ -5,7 +5,7 @@
 # its Agent package laid beside as `fleet host on` would, plus its marketplace
 # (fake Claude CLI, no network).
 # Selection dependencies: claude-settings.default.json, fleet-hooks-merge.py,
-# fleet-agent-defaults.py, config.default.toml, CLAUDE.default.md, AGENTS.default.md,
+# fleet-agent-defaults.py, config.default.toml, AGENT.default.md,
 # mcp.default.json, settings-hooks.json, codex-map.json, fleet-hooks-emit.sh,
 # agent-bundle.manifest, fleet-agent-bundle.py, fleet-codex-plugins.py, marketplace.json.
 # stdout is ONLY metric<TAB>integer; diagnostics/negative controls go to stderr.

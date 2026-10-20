@@ -67,7 +67,7 @@ install_skills() { for n in sk1 sk2; do mkdir -p "$1/claude/skills/$n" "$1/codex
 
 # --- 1. the shipped defaults -----------------------------------------------------------
 D="$ROOT/conf/agent-defaults"
-for f in claude/mcp.default.json codex/config.default.toml claude/CLAUDE.default.md codex/AGENTS.default.md; do
+for f in claude/mcp.default.json codex/config.default.toml AGENT.default.md; do
   [ -r "$D/$f" ] || fail "conf/agent-defaults/$f missing"
 done
 [ "$(json_get "$D/claude/mcp.default.json" 'sorted(d["mcpServers"])')" = "['context7', 'fetch', 'github', 'playwright']" ] \
@@ -85,10 +85,17 @@ if [ "$HAS_TOML" = 1 ]; then
     || fail 'config.default.toml posture is not never / danger-full-access'
 fi
 grep -q '^model *=' "$D/codex/config.default.toml" && fail 'config.default.toml ships `model` — it stays the login'\''s'
-for f in claude/CLAUDE.default.md codex/AGENTS.default.md; do
-  grep -q '<!-- fleet:agent-defaults begin -->' "$D/$f" && grep -q '<!-- fleet:agent-defaults end -->' "$D/$f" \
-    || fail "$f lacks the begin/end markers"
+# ONE doc for both agents (T588): each agent's block carries the markers, and the
+# two differ only inside the fleet:only lines
+for a in claude codex; do
+  python3 "$SCRIPT" doc "$a" --root "$ROOT" > "$WORK/doc.$a" || fail "doc $a failed"
+  grep -q '<!-- fleet:agent-defaults begin -->' "$WORK/doc.$a" && grep -q '<!-- fleet:agent-defaults end -->' "$WORK/doc.$a" \
+    || fail "the $a block lacks the begin/end markers"
+  grep -q 'fleet:only' "$WORK/doc.$a" && fail "the $a block still carries a fleet:only marker"
 done
+[ "$(diff "$WORK/doc.claude" "$WORK/doc.codex" | grep -c '^[<>]')" -le 6 ] || fail 'the two blocks differ by more than the marked lines' "$(diff "$WORK/doc.claude" "$WORK/doc.codex")"
+[ "$(grep -c '^<!-- fleet:only ' "$D/AGENT.default.md")" -le 4 ] || fail 'AGENT.default.md marks more than a few agent-only lines'
+python3 "$SCRIPT" doc --root "$ROOT" >/dev/null 2>&1 && fail 'doc with no agent was accepted'
 # the fleet's own TOML reader agrees with tomllib on the shipped file (check on an
 # empty login names every top key + server exactly once)
 fresh "$WORK/c1"
@@ -228,17 +235,17 @@ done
 run python3 strip "$WORK/c3" > "$WORK/o5s2" || fail 'second strip failed'
 grep -q '^stripped 0 fleet block(s)$' "$WORK/o5s2" || fail 'strip is not idempotent'
 # A malformed second doc must refuse before changing the valid first doc.
-cp "$D/claude/CLAUDE.default.md" "$WORK/c3/claude/CLAUDE.md"
+cp "$WORK/doc.claude" "$WORK/c3/claude/CLAUDE.md"
 printf '# mine\n<!-- fleet:agent-defaults begin -->\nhalf\n' > "$WORK/c3/codex/AGENTS.md"
 cp "$WORK/c3/codex/AGENTS.md" "$WORK/half.before"
 run python3 apply "$WORK/c3" > /dev/null || fail 'apply over a partial block failed'
 run python3 check "$WORK/c3" > /dev/null || fail 'check requires repair of a partial block'
 run python3 strip "$WORK/c3" > "$WORK/o5bad" 2>&1; [ $? = 2 ] || fail 'strip accepted partial markers'
-cmp -s "$WORK/c3/claude/CLAUDE.md" "$D/claude/CLAUDE.default.md" && cmp -s "$WORK/c3/codex/AGENTS.md" "$WORK/half.before" \
+cmp -s "$WORK/c3/claude/CLAUDE.md" "$WORK/doc.claude" && cmp -s "$WORK/c3/codex/AGENTS.md" "$WORK/half.before" \
   || fail 'strip wrote before preflight completed'
 run python3 strip "$WORK/c3" --skip codex.doc > /dev/null || fail 'strip did not honor doc override'
 cmp -s "$WORK/c3/codex/AGENTS.md" "$WORK/half.before" || fail 'strip changed a shielded doc'
-cat "$D/codex/AGENTS.default.md" "$D/codex/AGENTS.default.md" > "$WORK/c3/codex/AGENTS.md"
+cat "$WORK/doc.codex" "$WORK/doc.codex" > "$WORK/c3/codex/AGENTS.md"
 run python3 strip "$WORK/c3" > /dev/null 2>&1; [ $? = 2 ] || fail 'strip accepted duplicate blocks'
 run python3 strip "$WORK/c1" > /dev/null || fail 'strip with absent docs failed'
 [ ! -e "$WORK/c1/claude/CLAUDE.md" ] && [ ! -e "$WORK/c1/codex/AGENTS.md" ] || fail 'strip created absent docs'
@@ -308,7 +315,7 @@ ok '9 inline mcp_servers: top keys filled, servers reported not appended, file s
 
 # --- 10. malformed defaults are refused ----------------------------------------------------------
 BR="$WORK/badroot"; rm -rf "$BR"; mkdir -p "$BR/conf/agent-defaults" "$BR/skills"
-cp -R "$ROOT/conf/agent-defaults/claude" "$ROOT/conf/agent-defaults/codex" "$BR/conf/agent-defaults/"
+cp -R "$ROOT/conf/agent-defaults/claude" "$ROOT/conf/agent-defaults/codex" "$ROOT/conf/agent-defaults/AGENT.default.md" "$BR/conf/agent-defaults/"
 fresh "$WORK/c10"
 bad() { # $1 label — apply from $BR must exit 2 and write nothing
   python3 "$SCRIPT" apply --root "$BR" --claude-config "$WORK/c10/claude/.claude.json" --claude-md "$WORK/c10/claude/CLAUDE.md" \
@@ -323,7 +330,7 @@ printf '{"mcpServers": {"github": {"command": "x", "env": {"GITHUB_TOKEN": "ghp_
 grep -q 'credential-shaped key' "$WORK/o10" || fail 'token refusal did not say why' "$(cat "$WORK/o10")"
 cp "$ROOT/conf/agent-defaults/claude/mcp.default.json" "$BR/conf/agent-defaults/claude/mcp.default.json"
 # Legacy templates are not inputs to apply/check anymore.
-rm "$BR/conf/agent-defaults/codex/AGENTS.default.md" "$BR/conf/agent-defaults/claude/CLAUDE.default.md"
+rm "$BR/conf/agent-defaults/AGENT.default.md"
 python3 "$SCRIPT" apply --root "$BR" --claude-config "$WORK/c10/claude/.claude.json" --codex-home "$WORK/c10/codex" \
   --override "$WORK/no-override.json" >/dev/null || fail 'apply still needs legacy doc templates'
 python3 "$SCRIPT" apply --root "$WORK/nowhere" --claude-config "$WORK/c10/claude/.claude.json" --codex-home "$WORK/c10/codex" >/dev/null 2>&1; [ $? = 2 ] || fail 'a root without conf/agent-defaults was not refused with exit 2'

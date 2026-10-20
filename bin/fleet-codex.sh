@@ -20,8 +20,8 @@
 #     historic prose expansion from conf/codex-preamble.md + commands/name.md.
 #     The lifecycle text stays single-sourced in commands/; a non-slash prompt
 #     passes through verbatim.
-#   * Hooks. Codex's hook system IS Claude Code's schema (verified on codex-cli
-#     0.154: the same event names, the same stdin JSON — `tool_name` "Bash" with
+#   * Hooks. Codex's hook system IS Claude Code's schema (verified on codex-cli:
+#     the same event names, the same stdin JSON — `tool_name` "Bash" with
 #     `tool_input.command`, "apply_patch" with the patch text in `command` — exit 2
 #     blocks, and the hook inherits the pane env, $TMUX_PANE included). So the
 #     fleet's own hooks ride along inline as `-c hooks.<Event>=[…]`, resolved to
@@ -73,7 +73,7 @@
 # MATRIX-BEGIN
 # Capability | Claude Code | Codex | Why
 # worktree per task · `@issue` / `@task` binding · PR/CI map · cleanup · session caps | ✅ | ✅ | Not agent code at all — `git`, `gh` and tmux window options. The whole worker path is agent-agnostic.
-# hook state signals → task-list colours (busy / working / done) | ✅ | ✅ | Codex's hook system *is* Claude Code's schema — same event names, same stdin JSON, `exit 2` blocks, `$TMUX_PANE` inherited (measured on codex-cli 0.154). This launcher inlines the fleet's own hooks as `-c hooks.<Event>=[…]`.
+# hook state signals → task-list colours (busy / working / done) | ✅ | ✅ | Codex's hook system *is* Claude Code's schema — same event names, same stdin JSON, `exit 2` blocks, `$TMUX_PANE` inherited (measured on codex-cli, issue #1079). This launcher inlines the fleet's own hooks as `-c hooks.<Event>=[…]`.
 # bypass-permissions guardrails (bash-guard · base-checkout read-only) | ✅ | ✅ | full access from config.toml (else `--dangerously-bypass-approvals-and-sandbox`, issue #4724) + `--dangerously-bypass-hook-trust`; the base-checkout guard matches `apply_patch` on Codex where Claude matches Edit/Write/MultiEdit.
 # session keeps ONE language (non-English sessions stay non-English) | ✅ | ✅ | `bin/fleet-brief.sh` ends every worker's opening read with the seed rule, and every text the fleet injects later (resume nudge, quota warning, child report, auto-handoff directive) carries its own — one English sentence per injection point instead of a translated nudge per language (issue #620, `bin/fleet-lang.sh`). Codex additionally has the rule in `conf/codex-preamble.md`, where it originated.
 # project instructions file | `CLAUDE.md` | `AGENTS.md` | `-c project_doc_fallback_filenames=["CLAUDE.md"]` makes a Codex worker read this repo's `CLAUDE.md` when it has no `AGENTS.md`.
@@ -363,8 +363,8 @@ if bash "$BIN/fleet-browser.sh" enabled 2>/dev/null; then export BROWSER="$BIN/f
 
 # --- project trust: Codex asks "Do you trust the contents of this directory?" ---
 # for a project it has not seen, and a fleet pane has NOBODY to press Enter — the
-# worker would sit on that prompt forever, reading `done` on the dash. Verified on
-# 0.154: the prompt comes regardless of -a/-s/--dangerously-bypass flags, a `-c
+# worker would sit on that prompt forever, reading `done` on the dash.
+# Measured: the prompt comes regardless of -a/-s/--dangerously-bypass flags, a `-c
 # projects.….trust_level` override does NOT satisfy it (trust is persisted state in
 # $CODEX_HOME/config.toml), and a git WORKTREE inherits the trust of its MAIN repo.
 # So the one thing this fleet needs is the BASE CHECKOUT ($FLEET_MAIN) trusted,

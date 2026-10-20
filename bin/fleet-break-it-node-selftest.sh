@@ -1233,7 +1233,7 @@ drill_node_update_stale_fail() {
   WHAT="一条之后已有签名取包成功的 torn read：体检 key 行 PASS、新版提交不回退；仍是当下的 torn read 只 WARN；被回退的版本原因消失就重试、否则按 6h 起翻倍再试（fleet-node-update-selftest.py 真跑，这里按名守住）"
 }
 
-# codex-helper-missing (#3017): the release carried codex alone, and codex 0.154
+# codex-helper-missing (#3017): the release carried codex alone, and codex
 # runs every shell command through codex-code-mode-host found beside the path it
 # was started from (~/.local/bin) — no session started from the release ran `ls`.
 drill_codex_helper_missing() {

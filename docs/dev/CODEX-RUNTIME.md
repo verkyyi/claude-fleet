@@ -223,7 +223,8 @@ already included; session cumulative usage is not current context. Missing,
 incomplete or unrecognised data stays unknown. Codex caches include fleet,
 window, launcher and root UUID, so a new session never displays Claude's cwd
 cache or a predecessor's context. The rollout format is an upstream internal
-interface; fixture tests pin the supported 0.154 and 0.162 shapes.
+interface; fixture tests pin the supported 0.162 shape — the release pin is
+the only version supported, an older Codex is named as such (T588).
 
 The native usage-event migration is not enabled by default. A passive status-observer
 connection does not automatically receive token usage: the offline native

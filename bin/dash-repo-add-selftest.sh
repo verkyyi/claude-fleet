@@ -253,7 +253,7 @@ printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
 # the Claude road (skills/fleet-add-repo) names this same script, never a bare clone
 SK="$BIN/../skills/fleet-add-repo/SKILL.md"
 grep -q 'dash-repo-add.sh' "$SK" 2>/dev/null || fail "E: skills/fleet-add-repo does not send Claude through dash-repo-add.sh"
-for f in conf/agent-defaults/claude/CLAUDE.default.md conf/agent-defaults/codex/AGENTS.default.md; do
+for f in conf/agent-defaults/AGENT.default.md; do
   grep -q 'fleet-repo.sh add' "$BIN/../$f" || fail "E: $f does not say a repo comes in through fleet-repo.sh add"
 done
 
