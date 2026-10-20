@@ -1051,6 +1051,35 @@ def id_hub(fid):
         return "unhubbed"
 
 
+def hub_task_agent(task):
+    """The hub task record's actual_agent ('' none / unread), kept FLEET_VIEW_TASK_AGENT_SECS
+    (300 s) per task — the Agent column's last fallback (EPIC T497 C17). Same read as
+    task_pr: `fleet-task-record.sh get`, bounded by FLEET_VIEW_PR_TIMEOUT; FLEET_VIEW_TASK_GET
+    (a command, the T<n> appended) is the selftest's seam."""
+    if not re.match(r"^T[1-9][0-9]*$", task or ""):
+        return ""
+    now = time.time()
+    hit = _ID_CACHE.get("agent:" + task)
+    if hit and now - hit[0] < fenv("FLEET_VIEW_TASK_AGENT_SECS", 300):
+        return hit[1]
+    secs = fenv("FLEET_VIEW_PR_TIMEOUT", 3)
+    got = ""
+    try:
+        seam = os.environ.get("FLEET_VIEW_TASK_GET", "")
+        p = subprocess.run(seam.split() + [task] if seam else sh("fleet-task-record.sh", "get", task),
+                           capture_output=True, text=True,
+                           timeout=secs + 1, env=dict(os.environ, FLEET_HUB_TIMEOUT=str(secs)),
+                           stdin=subprocess.DEVNULL)
+        rec = json.loads(p.stdout) if p.returncode == 0 else None
+        if isinstance(rec, dict):
+            got = str((rec.get("task") or rec).get("actual_agent") or "")
+    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError):
+        got = ""
+    got = got if got in AGENTS else ""
+    _ID_CACHE["agent:" + task] = (now, got)
+    return got
+
+
 def id_apply(e, fid, known, live=True):
     """Lay one row's ID over it (see above). `fid` empty or unknown ⇒ the ID column
     is blank and the row is otherwise as T493 drew it."""
@@ -1069,9 +1098,15 @@ def id_apply(e, fid, known, live=True):
     if o.get("task") and o["task"] not in e["aliases"]:
         e["aliases"].append(o["task"])
     segs = rec.get("segments") or []
-    e["agent"] = (segs[-1].get("agent") if segs else "") or o.get("agent") or ""
-    if e["agent"] not in AGENTS:
-        e["agent"] = ""
+    # C17: a ledger with no segment (a window opened before C1) falls back to the
+    # window's @cc_agent (row_cols put it on the row), then the hub record's
+    # actual_agent; only none of them is 未知
+    agent = (segs[-1].get("agent") if segs else "") or o.get("agent") or ""
+    if agent not in AGENTS:
+        agent = e.get("agent") or ""
+    if agent not in AGENTS:
+        agent = hub_task_agent(e.get("task") or o.get("task") or "")
+    e["agent"] = agent if agent in AGENTS else ""
     e["segs"] = segs
     e["issues"] = sorted(id_issues(rec))
     e["hub"] = id_hub(fid)
@@ -2933,7 +2968,9 @@ def task_pr(fleet, task):
     secs = fenv("FLEET_VIEW_PR_TIMEOUT", 3)
     env = dict(act_env(fleet), FLEET_HUB_TIMEOUT=str(secs))
     try:
-        p = subprocess.run(sh("fleet-task-record.sh", "get", task), capture_output=True, text=True,
+        seam = os.environ.get("FLEET_VIEW_TASK_GET", "")
+        p = subprocess.run(seam.split() + [task] if seam else sh("fleet-task-record.sh", "get", task),
+                           capture_output=True, text=True,
                            timeout=secs + 1, env=env, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         return "?", ""

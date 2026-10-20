@@ -35,6 +35,13 @@
 #                                            task T<n> with no `parent` takes the one its
 #                                            hub record's parent_session names (dry unless
 #                                            --apply; pushed); rc 3 no hub here
+#   fleet-id.sh backfill [--apply] [<ID>…]  backfill (EPIC T497 C17): a live window opened
+#                                            before C1 whose ledger lacks `opened` or a native
+#                                            segment gets them off its options (@cc_agent,
+#                                            repo, worktree, task; @cc_session_id /
+#                                            @codex_session_id as segment 1, trigger
+#                                            migrated). Fill-only, idempotent; dry unless
+#                                            --apply; pushed. FLEET_ID_BACKFILL_CMD: seam
 #   fleet-id.sh await <ID | T-code> [--timeout s] [--interval s]
 #                                            until it has a result or closes: MERGED /
 #                                            SUCCEEDED 0 · FAILED / BLOCKED … 1 · TIMEOUT 3 ·
@@ -130,6 +137,21 @@ EOF
     fi
     FLEET_ID_WINDOWS="$wins" FLEET_ID_LIVE="$live" exec python3 "$BIN/fleet_id.py" push "$@" ;;
 esac
+if [ "$cmd" = backfill ]; then
+  fmt='#{@fleet_id}	#{window_id}	#{@cc_agent}	#{@repo}	#{@worktree}	#{@task}	#{@cc_session_id}	#{@codex_session_id}	#{@codex_thread_id}	#{@fleet_role}'
+  if [ -n "${FLEET_ID_BACKFILL_CMD:-}" ]; then rows=$(eval "$FLEET_ID_BACKFILL_CMD")
+  elif [ -n "${TMUX:-}" ]; then rows=$(fleet_lw "$fmt" 2>/dev/null | sed 's/^/	/')
+  else
+    rows=''
+    while IFS= read -r s; do
+      [ -n "$s" ] || continue
+      rows="$rows"$'\n'"$(fleet_lw "$fmt" tmux -L "$s" 2>/dev/null | sed "s/^/$s	/")"
+    done <<EOF
+$(fleet_sockets 2>/dev/null)
+EOF
+  fi
+  FLEET_ID_BACKFILL="$rows" exec python3 "$BIN/fleet_id.py" backfill "$@"
+fi
 if [ "$cmd" = open ]; then
   win=''; sock=''; prev=''; oargs=()
   for a in "$@"; do

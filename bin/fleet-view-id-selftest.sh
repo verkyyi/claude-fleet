@@ -7,7 +7,8 @@
 #      never a `T?`; a hub task's T<n> is an alias only (searched, not drawn);
 #      another machine's row gets its code off its worker_id; offline the same (S9)
 #   B  Agent: the newest native segment's (S4: a transfer reads Codex), else the one
-#      it was opened with, else 未知 (grey) — never a guess when the ledger says none
+#      it was opened with, else the window's @cc_agent (a window opened before C1 —
+#      EPIC T497 C17), else the hub record's actual_agent, else 未知 (grey)
 #   C  results: the newest wins on a live idle window (S2: done then failed ⇒ ✗ 等你);
 #      a working window keeps ↻; a reaped row whose ledger closed with no result is
 #      ◌ 已退出 (S7), with one is its result
@@ -54,6 +55,8 @@ F = {   # @2 and @3 share their first 7 hex digits ⇒ their first 5 code charac
     "@5": "55555555-5555-4555-8555-555555555555",
     "@6": "66666666-6666-4666-8666-666666666666",
     "@7": "",
+    "@8": "aaaaaaaa-8888-4888-8888-888888888888",
+    "@9": "bbbbbbbb-9999-4999-8999-999999999999",
 }
 GONE = "77777777-7777-4777-8777-777777777777"
 GONE2 = "88888888-8888-4888-8888-888888888888"
@@ -73,6 +76,12 @@ ev(F["@3"], ev="native", agent="claude", native="nat-C", trigger="startup", seg=
 ev(F["@3"], ev="result", state="done", summary="合了")
 ev(F["@3"], ev="result", state="failed", summary="又坏了", issues=["o/r#4601"])
 ev(F["@4"], ev="opened", key="scratch-9", lazy=True)            # no agent anywhere
+ev(F["@8"], ev="progress", summary="tick")                      # opened before C1: no opened, no segment
+ev(F["@9"], ev="opened", key="scratch-19", task="T901", lazy=True)   # only the hub knows its agent
+TG = os.path.join(os.environ["FLEET_CONF_DIR"], "taskget")
+open(TG, "w").write('#!/bin/sh\n[ "$1" = T901 ] && echo \'{"task":{"id":"T901","actual_agent":"codex"}}\' && exit 0\necho \'{"task":{}}\'\n')
+os.chmod(TG, 0o755)
+os.environ["FLEET_VIEW_TASK_GET"] = TG
 ev(F["@5"], ev="opened", agent="claude", key="scratch-5")
 ev(F["@5"], ev="native", agent="claude", native="nat-A", trigger="resume", seg=1)   # @1's segment
 ev(F["@6"], ev="opened", agent="claude", key="scratch-6")
@@ -96,10 +105,11 @@ def rows(states):
     out = [US.join(("hdr", "o/claude-fleet", "", "claude-fleet (6)", " "))]
     for w, st in states.items():
         out.append(full(w, st, "·", "w" + w[1:], " ", "", "0", "", "", "", "—", "·", "ok", "会话" + w[1:], "merged",
-                        task={"@2": "T367"}.get(w, ""), agent="claude", repo="o/claude-fleet"))
+                        task={"@2": "T367"}.get(w, ""), agent={"@4": "?", "@8": "codex", "@9": "?"}.get(w, "claude"),
+                        repo="o/claude-fleet"))
     out.append(full("wid:MU/" + FAR, "working", "⠹", "far", " ", "", "0", "", "mac-a", "", "—", "·", "ok", "别处的", "merged"))
     return "\n".join(out) + "\n"
-STATES = {"@1": "idle", "@2": "working", "@3": "idle", "@4": "idle", "@5": "idle", "@6": "working", "@7": "idle"}
+STATES = {"@1": "idle", "@2": "working", "@3": "idle", "@4": "idle", "@5": "idle", "@6": "working", "@7": "idle", "@8": "idle", "@9": "idle"}
 fv.view_row = lambda vid: {}
 fv.view_fleet = lambda vid, row=None: "fl"
 fv.here_label = lambda row: "nodeA"
@@ -140,6 +150,8 @@ assert by["@4"]["agent"] == "" and fv.agent_word(by["@4"]) == "未知", by["@4"]
 seg = fv.row_segs(by["@4"], 100, qo.cells, qo.clip)
 assert seg[4][0].startswith("未知") and "dim" in seg[4][1], seg[4]
 assert by["@7"]["agent"] == "claude"          # no ID, no ledger: the producer's word, as before
+assert by["@8"]["agent"] == "codex", by["@8"]   # C17: no segment, no opened agent ⇒ the window's @cc_agent
+assert by["@9"]["agent"] == "codex", by["@9"]   # C17: nor a window word ⇒ the hub record's actual_agent
 
 # --- C: results
 assert by["@3"]["state"] == "failed" and by["@3"]["sym"] == "fail" and by["@3"]["group"] == "ask", by["@3"]
@@ -184,7 +196,7 @@ for e in by.values():
     assert "prev" not in e and not any("prev" in t or "前任" in t for t, _ in fv.id_page(e, 100))
 PY
 pass "A  ID column: T- + 5 (6 when two share), blank without an ID, T<n> an alias, far rows too"
-pass "B  Agent: newest segment (transfer → Codex), else opened, else 未知 (grey)"
+pass "B  Agent: newest segment (transfer → Codex), else opened, else @cc_agent, else the hub's actual_agent, else 未知 (grey)"
 pass "C  results: newest wins (done → failed = ✗ 等你), working keeps ↻, reaped without one = ◌ 已退出"
 pass "D  conflict: two live windows on one segment both red 等你; closing one clears it"
 pass "E  search: 4539 / #4539 via the ID's issues, not 45390; code and alias find their row"
