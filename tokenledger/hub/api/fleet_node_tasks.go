@@ -26,7 +26,14 @@ import (
 //	POST /v1/node/tasks          {token, title, via?, repo?, rule?, issue?,
 //	                              worker_id?, key?, state?} → the record; the
 //	                              same token twice is the same record
-//	GET  /v1/node/tasks/<T>      → {task, live}
+//	GET  /v1/node/tasks/<ref>    → {task, live}; <ref> is the task's code (K5,
+//	                              K5F9 — a 409 {code: AMBIGUOUS, candidates}
+//	                              when it names several), its full ID, or the
+//	                              alias T<n> (EPIC T644 C1, store.ResolveFleetTask);
+//	                              every /<ref> route below takes the same three
+//	POST /v1/node/tasks/ids-backfill {apply?} → give this owner's records from
+//	                              before C1 their ID (store.BackfillTaskIDs); dry
+//	                              unless apply
 //	POST /v1/node/tasks/<T>      {asked?, parked?, issue?, pr?, worker_id?,
 //	                              key?, state?, note?, rule?, clear?: [asked,
 //	                              parked, note]} → the record
@@ -232,6 +239,10 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 		s.nodeTaskSettle(w, r, owner)
 		return
 	}
+	if ref == nodeTaskIDsBackfillRef {
+		s.nodeTaskIDsBackfill(w, r, owner)
+		return
+	}
 	if s.nodeTaskCollaboration(w, r, ep, owner, ref) {
 		return
 	}
@@ -270,6 +281,15 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusBadRequest, "mutation requires a task ID")
 			return
 		}
+		if in.ParentTask != "" && store.ParseTaskRef(in.ParentTask) == 0 {
+			// a parent named by its code or ID (EPIC T644 C1): the record keeps T<n>
+			p, err := s.nodeOwnTask(owner, in.ParentTask)
+			if err != nil {
+				taskRefError(w, in.ParentTask, err)
+				return
+			}
+			in.ParentTask = p.Ref
+		}
 		title := clipText(in.Title, taskTitleMax)
 		if in.AuthorityVersion != 0 {
 			if utf8.RuneCountInString(in.Title) > taskTitleMax || strings.TrimSpace(in.Title) == "" {
@@ -304,7 +324,7 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := s.nodeOwnTask(owner, ref)
 	if err != nil {
-		httpError(w, http.StatusNotFound, "no task "+ref+" of this machine's owner")
+		taskRefError(w, ref, err)
 		return
 	}
 	switch r.Method {
@@ -365,21 +385,60 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// nodeOwnTask is the record ref names when owner holds it — any record for
-// the operator's machines, like the operator's door on /v1/fleet/tasks.
+// nodeOwnTask is the record ref names (a code, the task's ID or T<n> —
+// store.ResolveFleetTask) when owner holds it — any legacy record for the
+// operator's machines, like the operator's door on /v1/fleet/tasks.
 func (s *Server) nodeOwnTask(owner, ref string) (store.FleetTask, error) {
-	id := store.ParseTaskRef(ref)
-	if id == 0 {
-		return store.FleetTask{}, sql.ErrNoRows
-	}
-	t, err := s.Store.FleetTask(id)
+	t, err := s.Store.ResolveFleetTask(owner, ref)
 	if err != nil {
 		return store.FleetTask{}, err
 	}
 	if t.Owner != owner && (t.AuthorityVersion != 0 || owner != "operator") {
-		return store.FleetTask{}, errors.New("not this owner's")
+		return store.FleetTask{}, sql.ErrNoRows
 	}
 	return t, nil
+}
+
+// taskRefError answers a reference that names no task of the caller's (404) or
+// several (409 {code: AMBIGUOUS, candidates} — never a pick).
+func taskRefError(w http.ResponseWriter, ref string, err error) {
+	var amb *store.TaskAmbiguity
+	switch {
+	case errors.As(err, &amb):
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "AMBIGUOUS", "candidates": amb.Candidates,
+			"error": ref + " names more than one task — name it longer"})
+	case errors.Is(err, sql.ErrNoRows):
+		httpError(w, http.StatusNotFound, "no task "+ref+" of this machine's owner")
+	default:
+		httpError(w, http.StatusInternalServerError, err.Error())
+	}
+}
+
+// nodeTaskIDsBackfillRef is the route that gives records from before EPIC T644
+// C1 their ID; never a code (it has a dash).
+const nodeTaskIDsBackfillRef = "ids-backfill"
+
+func (s *Server) nodeTaskIDsBackfill(w http.ResponseWriter, r *http.Request, owner string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		httpError(w, http.StatusMethodNotAllowed, "POST "+NodeTasksPath+"/"+nodeTaskIDsBackfillRef)
+		return
+	}
+	var in struct {
+		Apply bool `json:"apply"`
+	}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&in); err != nil {
+			httpError(w, http.StatusBadRequest, `the body is {"apply": true|false}`)
+			return
+		}
+	}
+	out, err := s.Store.BackfillTaskIDs(owner, in.Apply, time.Now())
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // Contract conflicts are caller-visible, not generic server errors.

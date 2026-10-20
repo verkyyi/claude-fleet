@@ -8,8 +8,14 @@
 #
 #   fleet-task-record.sh new --title T --token K [--via V] [--repo o/n]
 #                     [--issue o/n#N] [--key K] [--worker-id W] [--state S]
-#                     → `T<n>` on stdout. The same token twice is the same record.
-#   fleet-task-record.sh get T<n>          → the record + its session's live word (JSON)
+#                     → the task's code on stdout's FIRST line (its ID's written
+#                       code: K5F9 — a hub with `task_ids`, EPIC T644 C1), then
+#                       `T<n>` (the old number, a read-only alias — compat-1v:
+#                       下一批删); an older hub answers `T<n>` alone. The same
+#                       token twice is the same record.
+#   fleet-task-record.sh get <code|ID|T<n>> → the record + its session's live word
+#                       (JSON); a code naming several tasks exits 1 — the hub's
+#                       409 body (its candidates) on stdout, never a pick
 #   fleet-task-record.sh children T<n>     → the record's children
 #   fleet-task-record.sh mutate T<n>       ← a cancel of a record no window ever
 #                       opened (fleet_task_control.py cancel, EPIC T497 C13), JSON on stdin
@@ -71,6 +77,13 @@ usage() { die 2 "usage: fleet-task-record.sh new|get|set|attach|of|find-issue �
 
 TREF_RE='^T[1-9][0-9]{0,9}$'
 is_tref() { printf '%s' "${1:-}" | grep -Eq "$TREF_RE"; }
+# is_task_ref → a task's code (K5, #k5f9: a letter, then Crockford base32), its
+# full ID (a lowercase UUID) or T<n> — what the hub's one resolver reads (EPIC
+# T644 C1, store.ResolveFleetTask).
+is_task_ref() {
+  is_tref "${1:-}" && return 0
+  printf '%s' "${1:-}" | grep -Eq '^#?[A-Za-z][0-9A-Za-z]{1,25}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+}
 
 # applicable → rc 0 when this caller has a hub to write to: the calling fleet
 # (when there is one) has the hub on, and a node token is here.
@@ -296,10 +309,12 @@ case "$cmd" in
             issue="$issue" key="$key" worker_id="$wid" state="$state")") || exit 1
     t=$(printf '%s' "$out" | field id)
     is_tref "$t" || die 1 "the hub's answer names no record"
+    short=$(printf '%s' "$out" | field short)
+    [ -n "$short" ] && printf '%s\n' "$short"
     printf '%s\n' "$t" ;;
   get)
-    is_tref "${1:-}" || usage
-    call GET "/v1/node/tasks/$1" || exit 1 ;;
+    is_task_ref "${1:-}" || usage
+    call GET "/v1/node/tasks/${1#\#}" || exit 1 ;;
   settle)
     repo='' apply=false drained=false norepo=false
     while [ $# -gt 0 ]; do
