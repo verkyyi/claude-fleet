@@ -852,6 +852,19 @@ fleet_admit_confirm >/dev/null   # the window is open: its admission holds on it
 #   window dies. @origin_wid: a hub-placed start (issue #1425) was handed its
 #   parent's worker_id outright — the parent lives on another machine.
 _fid=$(fleet_fid_mint 2>/dev/null) && fleet_is_fid "$_fid" || _fid=''
+# …unless it is opened for a hub task: then the task's own ID (EPIC T644 C2) — the
+# first window takes it, a redo here is its next attempt; another machine holding
+# it ⇒ the minted one, the task's ID its prev.
+_tprev=''
+case "$TASK_REF" in T[1-9]*)
+  _tt=$(fleet_task_take "$TASK_REF"); _ttrc=$?
+  if [ "$_ttrc" = 0 ]; then
+    _fid=${_tt%%	*}
+    rm -f "$(fleet_retired_dir)/$_fid" 2>/dev/null
+    [ "${_tt#*	}" = here ] && python3 "$BIN/fleet_id.py" attempt "$_fid" --window "$win" >/dev/null 2>&1
+  elif [ "$_ttrc" = 2 ]; then _tprev=${_tt%%	*}; fi
+  unset _tt _ttrc ;;
+esac
 _sw=(set-window-option -t "$win" @issue "$num")
 _sw+=(\; set-window-option -t "$win" @born "$(date +%s)")
 _sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-merged}")
@@ -897,12 +910,12 @@ _idf=$(TM show-options -wqv -t "$win" @fleet_id 2>/dev/null)
 _idpar=$(fleet_spawn_parent_id "$SESS" "$ORIGIN" "$ORIGIN_WID" "$SOCK") || _idpar=''
 fleet_is_fid "$_idf" && ( bash "$BIN/fleet-id.sh" open "$_idf" --window "$win" --socket "$SOCK" \
   --agent "${AGENT:-claude}" --key "issue-$num" ${REPO:+--repo "$REPO"} ${title:+--title "$title"} \
-  ${TASK_REF:+--task "$TASK_REF"} ${_idpar:+--parent "$_idpar"} ${RESUME_SID:+--from-native "$RESUME_SID"} \
+  ${TASK_REF:+--task "$TASK_REF"} ${_idpar:+--parent "$_idpar"} ${_tprev:+--prev "$_tprev"} ${RESUME_SID:+--from-native "$RESUME_SID"} \
   ${wt:+--worktree "$wt"} >/dev/null 2>&1 & )
 # The worktree remembers its ID beside its record (C4).
 fleet_is_fid "$_idf" && [ -n "${wt:-}" ] && fleet_worktree_id_mark "$wt" "$_idf"
 fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844) — every opener's one stamper
-unset _sw _fid
+unset _sw _fid _tprev
 # Window handle (issue #566): the fleet's own short, typeable name for this window
 # (`a1`…`z9`), unique among the fleet's live windows and accepted wherever a window
 # target is. Best-effort by design — a lock timeout or an exhausted alphabet just

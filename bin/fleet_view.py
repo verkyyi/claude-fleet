@@ -1314,10 +1314,15 @@ def id_apply(e, fid, known, live=True):
         agent = hub_task_agent(e.get("task") or o.get("task") or "")
     e["agent"] = agent if agent in AGENTS else ""
     e["segs"] = segs
+    # a task's redo is the same ID's next attempt (EPIC T644 C2): 「K5 · 第 2 次」
+    e["attempt"] = rec.get("attempt", 1)
+    if e["attempt"] > 1 and e.get("text"):
+        e["text"] = say("view_id_attempt_fmt", e["text"], e["attempt"])
     e["issues"] = sorted(id_issues(rec))
     e["hub"] = id_hub(fid)
     e["native"] = segs[-1].get("native", "") if segs and live and not rec.get("closed") else ""
-    res = (rec.get("results") or [{}])[-1].get("state", "") if rec.get("results") else ""
+    cur = [r for r in rec.get("results") or () if r.get("attempt", 1) >= e["attempt"]]   # this attempt's (C2)
+    res = cur[-1].get("state", "") if cur else ""
     st = RESULT_STATE.get(res, "")
     if live and st and e.get("state") not in ("working", "looping", "needs", "exited") and not e.get("lost"):
         # S2: the newest result says how a live window ended its last piece of work
@@ -1356,11 +1361,16 @@ def id_display(groups):
 
 
 def id_conflicts(rows):
-    """S9: live rows sharing one native segment — each marked with the others' codes."""
+    """S9: live rows sharing one native segment — each marked with the others' codes;
+    and (EPIC T644 C2) two live rows carrying one task's ID."""
     by = {}
     for e in rows:
         if e.get("native") and not e.get("far"):
             by.setdefault(e["native"], []).append(e)
+    seen = {id(e) for es in by.values() if len(es) > 1 for e in es}
+    for e in rows:
+        if e.get("fid") and not e.get("far") and not e.get("gone") and id(e) not in seen:
+            by.setdefault("fid:" + e["fid"], []).append(e)
     for native, es in by.items():
         if len(es) < 2:
             continue

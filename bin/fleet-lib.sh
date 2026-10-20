@@ -996,6 +996,44 @@ fleet_worktree_id() {
   fleet_is_fid "$t" || return 1
   printf '%s\n' "$t"
 }
+# A task's sessions go by the task's own ID (EPIC T644 C2): the hub mints it with
+# the record (C1, the record's `fid`), and the first window opened for the task
+# takes it as its @fleet_id; a redo here is the same ID's next attempt.
+#   fleet_task_fid <T<n>>   → the record's ID: $FLEET_TASK_FID when it says
+#                             `T<n>=<ID>` (the dispatch that just wrote the record),
+#                             else the hub's record (`fleet-task-record.sh get`); rc 1
+#                             none (no hub, a hub before `task_ids`, a record not
+#                             backfilled)
+#   fleet_task_take <T<n>>  → `<ID>\t<here|first>` rc 0: the window may carry it
+#                             (fleet_id.py take); `<ID>\telsewhere` rc 2: another
+#                             machine holds it, or the hub could not say — the
+#                             window takes a new ID whose prev is the task's; rc 1
+#                             the record has no ID (the old road, byte for byte)
+fleet_task_fid() {
+  local t="${1:-}" f='' out
+  case "$t" in T[1-9]*) case "${t#T}" in *[!0-9]*) return 1 ;; esac ;; *) return 1 ;; esac
+  case "${FLEET_TASK_FID:-}" in "$t="*) f=${FLEET_TASK_FID#"$t="} ;; esac
+  if ! fleet_is_fid "$f"; then
+    out=$(FLEET_HUB_TIMEOUT="${FLEET_TASK_FID_TIMEOUT:-5}" bash "$_FLEET_LIB_DIR/fleet-task-record.sh" get "$t" 2>/dev/null) || return 1
+    f=$(printf '%s' "$out" | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    d = {}
+t = d.get("task") if isinstance(d, dict) else None
+print((t or {}).get("fid", "") if isinstance(t, dict) else "")' 2>/dev/null)
+  fi
+  fleet_is_fid "$f" || return 1
+  printf '%s' "$f"
+}
+fleet_task_take() {
+  local f how
+  f=$(fleet_task_fid "${1:-}") || return 1
+  how=$(FLEET_HUB_TIMEOUT="${FLEET_TASK_FID_TIMEOUT:-5}" python3 "$_FLEET_LIB_DIR/fleet_id.py" take "$f" 2>/dev/null)
+  case "$how" in here|first) printf '%s\t%s' "$f" "$how"; return 0 ;; esac
+  printf '%s\telsewhere' "$f"
+  return 2
+}
 # fleet_task_closed <T<n>> — is the record closed (收口)? rc 0 closed (its verdict
 # — SUCCEEDED / FAILED / CANCELLED / REFUSED — on stdout), 1 still open, 3 unknown
 # (no hub, no answer). Unknown never reads as closed: a reaper keeps on 3.

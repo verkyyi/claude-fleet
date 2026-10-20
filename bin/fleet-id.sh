@@ -27,6 +27,8 @@
 #   fleet-id.sh short  <ID>                  its short code, K3F9 (4+, letter first)
 #   fleet-id.sh display <ID>                 the code a panel SHOWS, K5 (2+, unique among
 #                                            the unfinished — ids/.open; EPIC T644 C4)
+#   (fleet_id.py take <ID> / attempt <ID>    a task's window on the task's own ID, a redo
+#                                            its next attempt — EPIC T644 C2, the spawners)
 #   fleet-id.sh resolve <ID | code>        → the full ID; rc 1 none, rc 2 ambiguous
 #                                            (the candidates on stderr — never a pick); a
 #                                            2+ prefix is looked up among the unfinished

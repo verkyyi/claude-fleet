@@ -700,6 +700,23 @@ existing=$(TM list-windows -t "$SESS" -F '#{window_name}' 2>/dev/null)
 name="$base"; n=2
 while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n + 1)); done
 
+# A task's window goes by the task's own ID (EPIC T644 C2): the hub minted it with
+# the record (C1), so the first window opened for it takes that ID, and a redo
+# here — the driver's retry, a re-dispatch — is the same ID's next attempt, never a
+# new ID with prev. Stamped before the agent starts (its SessionStart hook would
+# otherwise mint one). Another machine holding it, or a hub that cannot say ⇒ a
+# new ID whose prev is the task's (the old road); a record with no ID ⇒ as before.
+TASK_FID=''; TASK_TAKE=''
+if [ -n "$TASK_REF" ] && ! fleet_is_fid "$REOPEN_FID"; then
+  _tt=$(fleet_task_take "$TASK_REF"); _ttrc=$?
+  case "$_ttrc" in
+    0) TASK_FID=${_tt%%	*}; TASK_TAKE=${_tt#*	}
+       [ "$PREV_ID" = "$TASK_FID" ] && PREV_ID='' ;;   # its own redo: no prev to itself
+    2) [ -n "$PREV_ID" ] || PREV_ID=${_tt%%	*} ;;
+  esac
+  unset _tt _ttrc
+fi
+
 # Spawn non-invasive by default (matches dash-issue-session.sh): -d creates the
 # window WITHOUT making it current, so a user attached to $SESS is not yanked over.
 # The new session surfaces via the dash. Opt into jump-to-it with FLEET_SPAWN_FOCUS=1
@@ -766,6 +783,11 @@ while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n 
   [ -n "$TASK_REF" ] && stamp="$stamp$(fleet_win_stamp_cmd @task "$TASK_REF")"
   # a blank session's placeholder name, renamed by its first prompt (T652)
   [ "$PLACEHOLDER" = 1 ] && [ -n "$NAME" ] && stamp="$stamp$(fleet_win_stamp_cmd @title_pending "$NAME")"
+  # C2: the task's ID, and — a redo here — its next attempt opened before the agent
+  # starts, so the new window's first segment is that attempt's (`reopened`, which
+  # the hub reads too)
+  [ -n "$TASK_FID" ] && stamp="$stamp$(fleet_win_stamp_cmd @fleet_id "$TASK_FID")"
+  [ "$TASK_TAKE" = here ] && python3 "$BIN/fleet_id.py" attempt "$TASK_FID" >/dev/null 2>&1
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
     || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
          # Say WHY when it is the server (issue #2477): the line rides into
@@ -797,6 +819,12 @@ if fleet_is_fid "$REOPEN_FID"; then
   TM set-window-option -t "$win" @fleet_id "$REOPEN_FID" 2>/dev/null
   rm -f "$(fleet_retired_dir)/$REOPEN_FID" 2>/dev/null
   python3 "$BIN/fleet_id.py" reopen "$REOPEN_FID" --window "$win" >/dev/null 2>&1 || :
+fi
+# A task's own ID (EPIC T644 C2, taken above): on the window from its first moment
+# (an earlier attempt's close is no longer one restore must honour).
+if fleet_is_fid "$TASK_FID"; then
+  TM set-window-option -t "$win" @fleet_id "$TASK_FID" 2>/dev/null
+  rm -f "$(fleet_retired_dir)/$TASK_FID" 2>/dev/null
 fi
 fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
 # The ID's ledger opens with the spawn (EPIC T497 C1) — agent, repo, what it is for;

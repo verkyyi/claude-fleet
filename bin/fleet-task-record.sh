@@ -345,6 +345,10 @@ JSON
     printf '%s\n' "$t"
   }
   export FLEET_DISPATCH="$dispatch"
+  # The task's own ID (EPIC T644 C1) rides to the spawner, bound to THIS record: its
+  # first window goes by it (C2, fleet_task_fid) without asking the hub again.
+  tfid=$(printf '%s' "$accepted" | field fid)
+  fleet_is_fid "$tfid" && export FLEET_TASK_FID="$t=$tfid"
   # A development task the hub accepted is the record alone (issue #4897, EPIC
   # #4895 批 0): no GitHub issue — the session opens in its own worktree of the
   # repo, bound to T<n> (dash-raw-session.sh --repo --task stamps @task_flow), reads

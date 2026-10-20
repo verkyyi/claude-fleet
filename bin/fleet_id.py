@@ -40,6 +40,16 @@ same one) appends segments by the rules of §4.2:
          first-turn hook finds the same id) another id ⇒ a new segment; an agent whose
          start never says /clear (clear_said 0) ⇒ new, resume ⇒ resume
   any    the agent differs from the last segment's ⇒ transfer
+  any    the window's @id_next_trigger says `reopen` (the recovery page's ↵, a restore —
+         EPIC T644 C2) ⇒ a new segment (reopen), even on the same native id
+  any    the ID's attempt moved past the last segment's (a task's redo) ⇒ redo
+
+A task's sessions all go by the task's ID (EPIC T644 C2): the first window a
+task opens takes the hub's fid for it (`take`), and a redo of that task here is
+the same ID's next ATTEMPT — a `reopened` event carrying `attempt` n (the hub
+clears its close off the same event); every segment records the attempt it ran
+in (1 when nothing says otherwise). A fid two live windows carry is a conflict in
+both (`conflicts`), as two windows on one native segment are.
 The hook never blocks the agent and never prints: a write that fails is kept on
 the window (@id_retry) and flushed by the next hook.
 """
@@ -61,7 +71,7 @@ ADDR_MIN = 4
 LEGACY_MIN = 4   # an old `T-` address's least length (compat-1v)
 CODE_SPAN = 22 * 32 ** 25   # 26 places: one letter, 25 base32 — more than 2^128, so no two IDs share a full code
 FID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-TRIGGERS = ("startup", "clear", "handoff", "transfer", "resume", "new", "migrated")
+TRIGGERS = ("startup", "clear", "handoff", "transfer", "resume", "new", "migrated", "reopen", "redo")
 NEXT_TRIGGER_TTL = 600   # @id_next_trigger older than this is stale
 
 
@@ -293,7 +303,7 @@ def append(fid, ev, decide=None):
 def fold(events):
     """The ledger read as one record: opened fields (first value wins), segments,
     results, closed."""
-    rec = {"opened": {}, "segments": [], "results": [], "closed": None, "progress": None}
+    rec = {"opened": {}, "segments": [], "results": [], "closed": None, "progress": None, "attempt": 1}
     lazy = None
     for ev in events:
         kind = ev.get("ev")
@@ -314,7 +324,8 @@ def fold(events):
                     rec["segments"][-1]["compactions"] += 1
                 continue
             seg = {"n": len(rec["segments"]) + 1, "agent": ev.get("agent", ""), "native": ev.get("native", ""),
-                   "trigger": ev.get("trigger", ""), "start": ev.get("ts"), "end": None, "compactions": 0}
+                   "trigger": ev.get("trigger", ""), "start": ev.get("ts"), "end": None, "compactions": 0,
+                   "attempt": rec["attempt"]}
             for k in ("from", "conflict"):
                 if ev.get(k):
                     seg[k] = ev[k]
@@ -322,7 +333,9 @@ def fold(events):
                 rec["segments"][-1]["end"] = ev.get("ts")
             rec["segments"].append(seg)
         elif kind == "result":
-            rec["results"].append({k: v for k, v in ev.items() if k not in ("ev", "id")})
+            r = {k: v for k, v in ev.items() if k not in ("ev", "id")}
+            r.setdefault("attempt", rec["attempt"])   # which attempt said it (C2)
+            rec["results"].append(r)
         elif kind == "progress":
             rec["progress"] = {k: v for k, v in ev.items() if k not in ("ev", "id")}
         elif kind == "short":
@@ -340,6 +353,9 @@ def fold(events):
             rec["closed"] = None
             if ev.get("window"):
                 rec["opened"]["window"] = ev["window"]
+            # a task's redo (EPIC T644 C2): the same ID, its next attempt
+            if isinstance(ev.get("attempt"), int) and ev["attempt"] > rec["attempt"]:
+                rec["attempt"] = ev["attempt"]
     if lazy:
         rec["opened"]["lazy"] = True
     return rec
@@ -517,12 +533,17 @@ def next_native(events, agent, native, source, hint):
     rec = fold(events)
     segs = rec["segments"]
     last = segs[-1] if segs else None
+    redo = bool(last) and rec["attempt"] > last.get("attempt", 1)
     if source == "compact":
         if last and last["native"] == native:
             return {"ev": "native", "compact": True, "agent": agent, "native": native, "seg": last["n"]}
         trigger = "resume" if last else "startup"
+    elif redo:
+        trigger = "redo"      # a task's next attempt (EPIC T644 C2): its first segment
+    elif hint == "reopen":
+        trigger = "reopen"    # the recovery page's ↵ / a restore (C2): a new segment, the same ID
     elif last and last["native"] == native and last["agent"] == agent:
-        return None   # the same segment going on: a restore, a ↵, a retried hook
+        return None   # the same segment going on: a retried hook, a mod reload
     elif last and last["agent"] != agent:
         trigger = "transfer"
     elif source == "clear":
@@ -536,7 +557,7 @@ def next_native(events, agent, native, source, hint):
     else:
         trigger = "resume"  # a restart that came back on another id
     ev = {"ev": "native", "agent": agent, "native": native, "trigger": trigger, "source": source or "",
-          "seg": len(segs) + 1}
+          "seg": len(segs) + 1, "attempt": rec["attempt"]}
     if trigger == "resume":
         own = owner_of(native, skip=events[0].get("id", "") if events else "")
         if own:
@@ -626,7 +647,11 @@ def alive(fid, rec, live):
 
 
 def last_result(rec):
-    return rec["results"][-1] if rec["results"] else None
+    """The newest result of the ID's CURRENT attempt (EPIC T644 C2): a task's redo
+    starts with none — the attempt before it failed, this one has not said yet."""
+    cur = rec.get("attempt", 1)
+    rs = [r for r in rec["results"] if r.get("attempt", 1) >= cur]
+    return rs[-1] if rs else None
 
 
 def _index():
@@ -639,10 +664,14 @@ def conflicts(fid, live, idx=None):
     both windows run one native session. Empty once either closes."""
     idx = idx if idx is not None else _index()
     rec = idx.get(fid) or fold(read(fid))
-    if not rec["segments"] or not alive(fid, rec, live):
+    if not alive(fid, rec, live):
         return []
-    mine = rec["segments"][-1]["native"]
     out = []
+    if isinstance(live, (list, tuple)) and list(live).count(fid) > 1:
+        out.append(fid)   # one task's ID carried by two live windows (EPIC T644 C2)
+    if not rec["segments"]:
+        return out
+    mine = rec["segments"][-1]["native"]
     for other, orec in idx.items():
         if other == fid or not orec["segments"] or not alive(other, orec, live):
             continue
@@ -884,6 +913,7 @@ def _hub_record(fid):
 def _family_row(fid, rec, st, src):
     o = rec["opened"]
     return {"id": fid, "short": st["short"], "task": o.get("task", ""), "title": o.get("title", ""),
+            "attempt": rec.get("attempt", 1),
             "parent": o.get("parent", ""), "prev": o.get("prev", ""), "opened_at": o.get("ts"),
             "state": st["state"], "label": st["label"], "alive": st["alive"], "result": st["result"],
             "closed": rec["closed"], "src": src, "segments": len(rec["segments"]), "progress": rec.get("progress"),
@@ -892,8 +922,9 @@ def _family_row(fid, rec, st, src):
 
 def _hub_status(fid, rec, short):
     """status()'s reading of a hub-mirror record (no window here to ask)."""
-    r = next((x for x in reversed(rec["results"]) if x.get("state") not in SILENT_STATES), None) \
-        or last_result(rec)
+    cur = rec.get("attempt", 1)
+    r = next((x for x in reversed(rec["results"]) if x.get("state") not in SILENT_STATES
+              and x.get("attempt", 1) >= cur), None) or last_result(rec)
     rs = (r or {}).get("state", "")
     if rs in DONE_STATES:
         st, label = "done", "已完成"
@@ -1070,6 +1101,40 @@ def history_rows(live, include_open=False, idx=None):
                      "prev": o["opened"].get("prev", ""), "parent": o["opened"].get("parent", "")})
     rows.sort(key=lambda r: r["closed_at"] or r["opened_at"] or 0, reverse=True)
     return rows
+
+
+def take_task_id(fid):
+    """May a window opened HERE for a task carry the task's ID `fid` (EPIC T644 C2)?
+    `here` — this machine keeps its ledger (a redo, a re-dispatch: the same ID's next
+    attempt); `first` — the hub minted it with the record and no machine has pushed
+    it yet (seq 0), or the hub has no row of it; None — another machine holds it, or
+    the hub could not say: the window then takes a NEW ID whose prev is the task's
+    (the old road), so a ledger is never written under an ID another machine owns."""
+    if os.path.exists(ledger_path(fid)):
+        return "here"
+    code, ans = _poster()("GET", "/v1/node/ids/" + fid)
+    if code == 404:
+        return "first"
+    if code == 200 and isinstance(ans, dict) and not ans.get("seq"):
+        return "first"
+    return None
+
+
+def next_attempt(fid, window=""):
+    """A task's redo on its own ID (EPIC T644 C2): once the ledger has run a segment,
+    the window opening now is the next attempt — one `reopened` event carrying it
+    (the hub clears the close off the same event). → the attempt it is now."""
+    def decide(evs):
+        rec = fold(evs)
+        if not rec["segments"] and rec["closed"] is None:
+            return None   # opened, never started: still the first attempt
+        ev = {"ev": "reopened", "attempt": rec["attempt"] + (1 if rec["segments"] else 0)}
+        if window:
+            ev["window"] = window
+        return ev
+    if append(fid, None, decide=decide):
+        push_later(fid)
+    return fold(read(fid))["attempt"]
 
 
 def continue_plan(fid, seg=None):
@@ -1425,14 +1490,22 @@ def hook_agent(pane):
 
 def hook_hint(pane, source):
     """handoff when the handoff cycle typed this /clear: its @id_next_trigger (fresh),
-    else the cycle's own claim on the window (@handoff_cycle)."""
-    if source != "clear":
+    else the cycle's own claim on the window (@handoff_cycle). reopen when the
+    recovery page's ↵ or a restore relaunched the agent (`reopen:<epoch>`, EPIC T644
+    C2) — read by any start but a compaction; a handoff mark waits for its /clear."""
+    if source == "compact":
         return ""
     nt = wopt(pane, "@id_next_trigger")
+    kind, _, at = nt.partition(":")
+    fresh = at.isdigit() and time.time() - int(at) <= NEXT_TRIGGER_TTL
+    if kind == "reopen":
+        wset(pane, "@id_next_trigger")
+        return "reopen" if fresh else ""
+    if source != "clear":
+        return ""
     if nt:
         wset(pane, "@id_next_trigger")
-        kind, _, at = nt.partition(":")
-        if kind == "handoff" and at.isdigit() and time.time() - int(at) <= NEXT_TRIGGER_TTL:
+        if kind == "handoff" and fresh:
             return "handoff"
     return "handoff" if wopt(pane, "@handoff_cycle") else ""
 
@@ -1524,6 +1597,8 @@ def render(fid):
     for k in ("agent", "repo", "key", "task", "title", "parent", "prev"):
         if o.get(k):
             bits.append("%s %s" % (k, o[k]))
+    if rec.get("attempt", 1) > 1:
+        bits.append("第 %d 次" % rec["attempt"])
     lines.append("  " + " · ".join(bits))
     for s in rec["segments"]:
         span = "%s–%s" % (hhmm(s["start"]), hhmm(s["end"]) if s["end"] else "")
@@ -1534,6 +1609,8 @@ def render(fid):
             extra += "  from %s" % s["from"]
         if s.get("conflict"):
             extra += "  冲突: 与 %s 共用原生段" % s["conflict"]
+        if s.get("attempt", 1) > 1:
+            extra += "  第 %d 次" % s["attempt"]
         lines.append("  段 %d  %-6s %s  %s  %s%s" % (s["n"], s["agent"], s["native"], span, s["trigger"], extra))
     for r in rec["results"]:
         lines.append("  结果 %s  %s%s  %s" % (hhmm(r.get("ts")), r.get("state", ""),
@@ -1660,6 +1737,15 @@ def main(argv):
             if own:
                 opts["prev"] = own[0]
         print(open_id(target, opts, live))
+        return 0
+    if cmd == "take":
+        # May a window opened here for a task go by the task's own ID (EPIC T644 C2)?
+        got = take_task_id(target)
+        print(got or "elsewhere")
+        return 0 if got else 1
+    if cmd == "attempt":
+        n = next_attempt(target, opts.get("window", ""))
+        print(n)
         return 0
     if cmd == "status":
         print(json.dumps(status(target, lv), ensure_ascii=False))

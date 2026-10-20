@@ -56,6 +56,8 @@ Codex 用同一张表，在每个线程的第一轮跑到它。
 | Claude `compact` | 当前段压缩 +1，不开段 |
 | Codex（`FLEET_CODEX_LAUNCHER_PID` 与窗口的 `@cc_launcher_pid` 对得上） | 另一个 id ⇒ 新段：startup ⇒ new（同窗口的新线程），resume ⇒ resume |
 | 任意 | agent 与上一段不同 ⇒ transfer |
+| 任意（压缩除外） | 窗口的 `@id_next_trigger reopen:<epoch>`（恢复页 ↵、`fleet-restore.sh`、`fleet-migrate.sh` 重开时打，10 分钟内有效，读即删）⇒ 新段 reopen，**同一个原生 id 也开**（T644 C2） |
+| 任意 | 这个 ID 的 attempt 比上一段的大（任务的重做）⇒ 新段 redo |
 
 钩子永不挡 Agent、永不输出：不在 tmux、headless 的 `claude -p`、坏 stdin 都直接退出 0；
 写不进账本时把这一段记在窗口的 `@id_retry`，下一次钩子先补写。`FLEET_ID_HOOK=0` 关掉它。
@@ -66,6 +68,8 @@ Codex 用同一张表，在每个线程的第一轮跑到它。
 fleet-id.sh get <ID | code> [--json]   ID、短码、opened、各段（agent · 原生 id · 起止 · trigger · 压缩次数）、结果
 fleet-id.sh resolve <ID | code>        → 完整 ID；rc 1 没有，rc 2 有歧义（候选在 stderr）
 fleet-id.sh short <ID>
+fleet_id.py take <ID>                   任务的窗口能不能用任务的编号：here · first（rc 0）· elsewhere（rc 1）（T644 C2）
+fleet_id.py attempt <ID> [--window @w]  任务的重做：开下一次（`reopened {attempt}`），打印现在是第几次
 fleet-id.sh open|native|result|close …   见脚本头
 fleet-id.sh push [<ID>…]                 把账本推给 hub 镜像（C2）
 fleet-id.sh status|route|children|await|history|continue|reopen …   结果、父子、接班（C4，下节）
@@ -310,3 +314,26 @@ Tab 操作页在动作下面列出：编号 + 完整 ID、别名、每一段（a
 `fleet-task-record-selftest.sh` F、`fleet-await-selftest.sh`（ONE CODE）、`fleet-mcp-selftest.sh` R2、`fleet-id-selftest.sh`
 TASKCODE、`fleet-id-results-selftest.sh` NAMES、`fleet-brief-selftest.sh` CODE、`fleet_task_control_test.py`
 （`test_one_code_names_the_task`）、`fleet-quick-dispatch-selftest.sh` H 钉住它。
+
+## 一个任务的所有会话都挂在它的编号下（EPIC T644 C2）
+
+- **开窗就用任务的编号**：两个派单入口带 `--task T<n>` 时问 `fleet_task_take`（`fleet-lib.sh`）——编号先取
+  `$FLEET_TASK_FID`（`fleet-task-record.sh dispatch` 刚写下记录时交来的，写成 `T<n>=<ID>`，只对它自己那条记录有效），
+  否则读 hub 的记录（`fleet-task-record.sh get`，记录 JSON 的 `fid`）；再由 `fleet_id.py take` 定能不能用：
+  本机有它的账本 ⇒ `here`（同机重做 / 重新派）；hub 那一行还是 C1 的预留（seq 0）或 hub 没有这一行 ⇒ `first`（第一个窗口）；
+  别的机器推过它、或 hub 不答 ⇒ `elsewhere`：退回旧路——新铸一个 ID、`prev` 是任务的（从不在别的机器的 ID 底下写账本）。
+  记录没有编号（hub 不带 `task_ids`、记录没回填）⇒ 跟以前一样。`dash-raw-session.sh` 在 agent 起来**之前**就把它写进
+  `@fleet_id`（窗口命令前缀的 stamp），钩子不会再另铸一个；自己的重做不记指向自己的 `prev`。
+- **重做 = 同一编号的下一次**：`here` 时开窗前先 `fleet_id.py attempt`——账本跑过段就写一条 `reopened {attempt: n+1}`
+  （hub 照 `reopened` 清掉关闭；没开起来过的不加次数）。之后的第一段 trigger 是 `redo`；每一段、每条结果都按账本里的
+  先后记上它属于第几次（`fold` 算出，缺省 1）。**状态只看这一次**：`last_result` 只取当前这一次的结果，所以上一次的失败
+  不再算——`status` 读「运行中」、`await` 接着等，这一次报 merged 就是任务的结果。`get` / 面板写「第 n 次」（n > 1：
+  行标题 `修 bug · 第 2 次`，`view_id_attempt_fmt`）。
+- **重起 / 重开 = 同一编号的新一段**：恢复页 ↵（`fleet-session-wrap.sh`）、`fleet-restore.sh`、`fleet-migrate.sh`
+  （配额迁移、cfg-stale / ver-stale 重开）在新进程起来前打 `@id_next_trigger reopen:<epoch>`，钩子读到就开一段 `reopen`，
+  哪怕原生 id 没变。交接（handoff）、`/clear`、换 Codex 本来就是同一 ID 的新一段（上表）。
+- **两个活窗口带同一编号** ⇒ `status` 是冲突（`conflict` 里写它自己），面板两行都红「等你」（`fleet_view.id_conflicts`，
+  沿用 S9）；关掉一个另一个就恢复。
+- 还没做的：hub 镜像不存 attempt（`fleet_id_results` 没有这一列；C6 起记录随最新的结局结果改写，重做成功覆盖上一次的失败）；批次按编号排先后是 C5。
+
+`bin/fleet-task-id-selftest.sh` 钉住 take / 开窗 / ↵ 新段 / 重做 / 冲突；BREAK-IT `task-many-ids`。

@@ -338,6 +338,8 @@ fleet_ui_t() {
     en:view_id_conflict) printf 'one conversation open in two windows' ;;
     zh:view_id_conflict_fmt) printf '冲突：与 %s 共用同一段对话（%s）——关掉一个，另一个就恢复' "${1:-}" "${2:-}" ;;
     en:view_id_conflict_fmt) printf 'conflict: shares one conversation with %s (%s) — close one and the other recovers' "${1:-}" "${2:-}" ;;
+    zh:view_id_attempt_fmt) printf '%s · 第 %s 次' "${1:-}" "${2:-}" ;;
+    en:view_id_attempt_fmt) printf '%s · attempt %s' "${1:-}" "${2:-}" ;;
     zh:view_id_head_fmt) printf '编号 %s  ·  %s' "${1:-}" "${2:-}" ;;
     en:view_id_head_fmt) printf 'ID %s  ·  %s' "${1:-}" "${2:-}" ;;
     zh:view_id_aliases_fmt) printf '别名 %s' "${1:-}" ;;
