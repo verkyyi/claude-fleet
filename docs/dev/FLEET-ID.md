@@ -171,6 +171,8 @@ Tab 操作页在动作下面列出：编号 + 完整 ID、别名、每一段（a
 - dry-run 只打印、什么都不写；`--apply` 对每条写一行 `fleet_operations`（`action=id_migrate`，`idem=id_migrate:T<n>`：
   迁前整条记录、定成什么、证据原文、操作者），只在记录还没有终态时写它的 `outcome` 与 `state=closed`，
   活着的把 `T<n>` 加进 `fleet_ids.aliases`。有这一行的记录不再列出；重复 apply 不会第二次写。没有「强制收」的路。
+- 只迁**旧**记录（C13）：开关打开之后写下的记录、以及从没认领却有 ID 带着它编号的记录，是 ID 那一边的——开关开着窗口不认领，
+  「没有 worker」不能当没开起来的证据，所以 dry-run 不列它们（否则 `--apply` 会把活窗口的记录关成「没开起来」）。
 - 规则在 `hub/store/fleet_id_migrate.go`（`ClassifyIDMigration`），节点只负责打印。
 
 **切换开关**：hub 设置 `fleet.id_switch`（`on`，否则关）。`fleet-id.sh switch [status|on|off]` → `/v1/node/ids/switch`
@@ -179,6 +181,9 @@ Tab 操作页在动作下面列出：编号 + 完整 ID、别名、每一段（a
 - **关（默认）**：旧行为，一个字节不差。
 - **开**：门只看「窗口有 ID」。hub 拒收执行权命令——认领、转移、重试、stop/cancel 确认、带围栏的回报
   （`MutateFleetTask` / `RecordFleetTaskReport` → 409 `{code: ID_SWITCH}`），派单不再签启动合约（`launchContract`）；
+  **唯一还收的一条**（C13）：人对「从没认领」记录的取消（`fleet_task_control.py cancel` 发的无 owner `transition → cancelled`）——
+  记录 accepted、没有 execution_owner、没有终态，且没有**开着的** ID 带它的编号（窗口从没开出来，或 ID 已关）才收成已取消；
+  ID 还开着 ⇒ ID_SWITCH（到那个窗口去收），ID 关了但留下结果 ⇒ 409 冲突（它已按 ID 的结果结束）；有 owner 的照旧拒。
   已排队的子回报照常送给父会话（不丢）；记录的终态改读它对应 ID 的最新结果（`IDTaskOutcome`：窗口 `opened` 记的 `task`，
   或迁移给活窗口加的别名；merged/succeeded ⇒ succeeded，failed ⇒ failed），所以 `await T<n>`、回收、⌘P 照常。
 - 节点把 hub 的话记在 `ids/.switch`：清理 tick 每轮问一次，任何一次被 ID_SWITCH 拒收也写下（`fleet-task-record.sh`）。
