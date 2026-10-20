@@ -429,8 +429,9 @@ def batons_of(kids, fam):
         if not outcome and row:
             # exited = closed with no result; an ID still open whose window is gone
             # is the start word's to judge (T642): restarted on its record, never a new T
+            still_open = "closed" in row and row["closed"] is None
             outcome = {"done": "succeeded", "failed": "failed"}.get(row.get("state"), "") or \
-                ("exited" if row.get("state") == "exited" and row.get("closed") is not None else "")
+                ("exited" if row.get("state") == "exited" and not still_open else "")
         if not pr and row:
             pr = str((row.get("result") or {}).get("pr") or "")
         out.append(dict(task=task, outcome=outcome, pr=pr, id=fid, short=(row or {}).get("short", "") or code_of(fid),
