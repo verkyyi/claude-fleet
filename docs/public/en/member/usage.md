@@ -114,6 +114,10 @@ Everything you hand over on the ⚡ line is first written down by fleet, numbere
 - **Completed** means the hub has a confirmed work result. A missing session never implies completion; old records without confirmed task status show **Unknown**. Open **Task details** to see the requested, resolved and verified agent separately from the session observation. A required PR still waiting for merge shows **Waiting for GitHub** beside the work result. If a refresh fails, the open page keeps its last confirmed view and read time, marked stale; **Retry read** only reads again and never starts work.
 - Tell a colleague "the T42 thing" and they can find it on the Tasks page.
 
+### A design page first, then the task
+
+With the fleet-epic plugin installed, say `/fleet-task-plan <subject>` in a session (for example "batch reports never reach me"). It first writes the matter up as one design page: what happens, why (the evidence folded underneath), goal and scope, the changes, what could go wrong, what you need to decide, and the proof it shipped. The page is private and pushed to your WeChat. Say what to change and it edits the same page; nod and it opens one task from the page, stamps the task's number at the top, and the task's session works from it. For a batch of related work, `/fleet-epic-plan` writes the same kind of page.
+
 ## Reaping: when a session closes
 
 A finished session is reaped automatically — no clean-up by hand. Before it goes its history is recorded and its copy of the code kept, and you can ↵ restore it any time from "Ended" in the panel. The default rules:

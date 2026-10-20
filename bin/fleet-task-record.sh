@@ -311,7 +311,8 @@ d=json.loads(d)
 repo=repo.lower()
 print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, via=via, repo=repo,
     requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"], parent_session=parent_session, parent_task=parent_task,
-    request_payload=dict(dispatch=d,title=title,body=body,repo=repo,reap=reap,template=template,rule=rule,draft=draft,pr_note=note))))
+    request_payload=dict(dispatch=d,title=title,body=body,repo=repo,reap=reap,template=template,rule=rule,draft=draft,pr_note=note)),
+    ensure_ascii=False))   # the hub reads 16 KB: UTF-8 words, not \uXXXX (half the bytes — T661)
 JSON
     ) || exit 2
     accepted=$(call POST /v1/node/tasks "$payload") || exit 1
