@@ -337,7 +337,6 @@
 0.3 fleet-panel-draft-selftest.py
 12.9 fleet-panel-overlay-selftest.sh
 3.7 fleet-peer-cert-selftest.sh
-0.1 fleet-peer-mcp-selftest.sh
 5.9 fleet-peer-send-identity-selftest.sh
 1.2 fleet-peer-send-selftest.sh
 44.0 fleet-peerlink-selftest.sh

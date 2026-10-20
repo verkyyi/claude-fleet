@@ -1,9 +1,9 @@
 #!/bin/bash
 # fleet-peer-cert-selftest.sh — machine-to-machine access through the hub
 # (issue #1626, EPIC #1615 C9): bin/fleet-peer-cert.sh asks the hub for a
-# five-minute certificate per connection, bin/fleet-peer-trust.sh finds the
-# standing keys left behind, and fleet-move.sh / fleet-node-upgrade.sh /
-# fleet-remote-view.sh ride the one and never fall back to the other. The hub is
+# five-minute certificate per connection, and fleet-move.sh /
+# fleet-node-upgrade.sh / fleet-remote-view.sh ride it and never fall back to a
+# standing key. The hub is
 # stubbed through FLEET_HUB_CURL, ssh through PATH — no hub, no network, no tmux.
 # (The hub half — owner-only, five minutes, audited, a real sshd refusing an
 # expired one — is the Go gate's: TestPeerCertOwnerOnlyShortAndAudited,
@@ -29,10 +29,6 @@
 #                   refused inside 1 s: connect bounded to 0.8 s, one try (#1630)
 #   E. old hub      404 / a 401 from the viewer gate → exit 3 (plain ssh) with a note
 #   F. usage        bad purpose / bad name: exit 2, curl never called
-#   G. trust        fleet-peer-trust.sh: no fleet machine known → exit 3 (no
-#                   doctor row); a key commented `user@<another fleet machine>`
-#                   is listed (line, type, comment — never the key), this
-#                   machine's own and a laptop's are not; none → exit 1
 #   H. move         fleet-move.sh's move_ssh puts the certificate's options on
 #                   the ssh it runs; a refusal runs NO ssh (exit 255)
 #   J. cache        (issue #1631) one certificate per (source, target,
@@ -51,11 +47,10 @@
 #                   no keys / a bad alias → no such option, as before
 #   I. lint         every ssh fleet-move.sh / fleet-node-upgrade.sh /
 #                   fleet-remote-view.sh opens to another machine carries the
-#                   peer options; fleet-doctor.sh reads fleet-peer-trust.sh
+#                   peer options
 set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$BIN/fleet-peer-cert.sh"
-TRUST="$BIN/fleet-peer-trust.sh"
 CHECKS=0
 fail() { printf 'fleet-peer-cert selftest FAIL: %s\n' "$1" >&2; exit 1; }
 ok()   { CHECKS=$((CHECKS + 1)); }
@@ -65,7 +60,7 @@ trap 'rm -rf "$WORK"' EXIT
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$WORK/tmp"
 mkdir -p "$HOME" "$FLEET_CONF_DIR" "$TMPDIR"
 unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_CURL FLEET_HUB_TIMEOUT FLEET_NODE_ALIASES FLEET_REMOTE_SSH FLEET_PEER_CERT_CONNECT_SECS \
-      FLEET_TRUST_MACHINES FLEET_PEER_CERT FLEET_PEER_KEY FLEET_PEER_CERT_SECS
+      FLEET_PEER_CERT FLEET_PEER_KEY FLEET_PEER_CERT_SECS
 
 STUB="$WORK/curl"
 cat > "$STUB" <<'EOF'
@@ -210,39 +205,6 @@ for args in 'mac-a shell' '-x view' 'mac-a/../x view'; do
 done
 ok
 
-# G. trust
-AK="$WORK/authorized_keys"
-me=$(hostname -s 2>/dev/null || hostname)
-cat > "$AK" <<EOF
-ssh-ed25519 AAAAoperator erin@laptop
-ssh-ed25519 AAAAmacmini erin@mac-c
-# a comment line, erin@mac-a
-from="10.0.0.1" ssh-rsa AAAAm4 erin@mac-a.lan
-ssh-ed25519 AAAAself erin@$me
-
-ssh-ed25519 AAAAnocomment
-EOF
-out=$(bash "$TRUST" "$AK"); rc=$?
-[ "$rc" -eq 3 ] && [ -z "$out" ] || fail "G: no machine known → exit $rc, out '$out'"
-out=$(FLEET_NODE_ALIASES="mac-c=mac-b fleethost-b=mac-a $me=m9" bash "$TRUST" "$AK"); rc=$?
-[ "$rc" -eq 0 ] || fail "G: exit $rc, want 0"
-want=$(printf '2\tssh-ed25519\terin@mac-c\n4\tssh-rsa\terin@mac-a.lan')
-[ "$out" = "$want" ] || fail "G: listed:
-$out
-want:
-$want"
-case "$out" in *AAAA*) fail "G: a key was printed" ;; esac
-printf 'ssh-ed25519 AAAAoperator erin@laptop\n' > "$AK"
-out=$(FLEET_NODE_ALIASES="mac-c=mac-b" bash "$TRUST" "$AK"); rc=$?
-{ [ "$rc" -eq 1 ] && [ -z "$out" ]; } || fail "G: none → exit $rc, out '$out'"
-mkdir -p "$TMPDIR/.claude-dash/global"
-printf '#ts\0371\nmac-c\037online\n' > "$TMPDIR/.claude-dash/global/hub_nodes"
-printf 'ssh-ed25519 AAAAx erin@mac-c\n' > "$AK"
-out=$(bash "$TRUST" "$AK"); rc=$?
-[ "$rc" -eq 0 ] && [ "$out" = "$(printf '1\tssh-ed25519\terin@mac-c')" ] || fail "G: roster cache not read → exit $rc, '$out'"
-rm -rf "$TMPDIR/.claude-dash"
-ok
-
 # H. move: the certificate rides the ssh; a refusal runs none
 mkdir -p "$WORK/shim"
 cat > "$WORK/shim/ssh" <<'EOF'
@@ -275,7 +237,6 @@ bad=$(grep -n 'ssh -o BatchMode=yes' "$BIN/fleet-move.sh" "$BIN/fleet-node-upgra
 [ -z "$bad" ] || fail "I: an ssh without the peer certificate:
 $bad"
 grep -q 'ControlPersist=no \${peer\[@\]+"\${peer\[@\]}"}' "$BIN/fleet-remote-view.sh" || fail "I: fleet-remote-view.sh's master ssh lost the peer options"
-grep -q 'fleet-peer-trust.sh' "$BIN/fleet-doctor.sh" || fail "I: fleet-doctor.sh does not read fleet-peer-trust.sh"
 ok
 
 # J. cache (issue #1631)

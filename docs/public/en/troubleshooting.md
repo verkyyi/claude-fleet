@@ -513,13 +513,6 @@ From `fleet doctor`.
 - **What it is**: whether the link between machines (used to see sessions on other machines) works.
 - **On WARN / FAIL**: `fleet-peerlink.py status` shows the last few rebuilds and why.
 
-#### `sshtrust`
-
-From `fleet doctor`.
-
-- **What it is**: whether `~/.ssh/authorized_keys` holds a permanent key of another fleet machine. Machines should use only the 5-minute certificates the hub signs.
-- **On WARN / FAIL**: delete the key lines the explanation names.
-
 #### `releasekey`
 
 From `fleet doctor`.

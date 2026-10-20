@@ -184,16 +184,8 @@
 - 审计：`GET /v1/fleet/peer-certs`（运营者），每次跨机一行；目标 sshd 日志里也有 key id。
 - 本机的 peer 钥匙：`~/.ssh/fleet-peer`（只用来被签，不放进任何 authorized_keys）。
 
-**删除旧互信**（运营者 2026-10-04 已同意）：入口部署后，在 mac-b 上打开一个 mac-a 会话
-（选路行出现「入口证书 5 分钟」）、`fleet-node-upgrade.sh --host mac-a --status` 照常，
-`/v1/fleet/peer-certs` 有两条；然后在每台机器上：
-
-```sh
-bash ~/.claude/fleet/bin/fleet-doctor.sh | grep sshtrust   # WARN 列出其它 fleet 机器的钥匙（行号）
-# 删掉列出的那几行，再跑一次：PASS = 没有永久互信
-```
-
-删后再验一次跨机打开会话和升级。
+**旧互信**：跨机只走入口签的证书，`~/.ssh/authorized_keys` 里别的 fleet 机器留下的钥匙按行删掉即可
+（体检的 `sshtrust` 行已随 T607 删除）。
 
 **常开连接：默认全连，按入口给的路线连（#3482）。** 每个登录的 `fleet-peerlink.py` 用节点令牌问入口
 `GET /v1/node/peers`（`fleet-peer-list.sh`，每 60 秒一次）：同一个人在别的机器上、active 的每个登录，

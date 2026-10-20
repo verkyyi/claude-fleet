@@ -1037,12 +1037,6 @@ logged `hatch`. Only `fleet_seat` = `worker` counts: the operator's hub
 blocked, and a guard that cannot read the seat lets the call through. The
 week's count is `grep -c $'\tlogged\t' logs/mcp-bypass.log`.
 
-## Compatibility
-
-`bin/fleet-peer-mcp.py` (the #1185 `fleet-peer` server: `list_agents` /
-`send_message`) is now a shim that execs `fleet-mcp.py --legacy-peer`, for a config
-that still mounts it — one version, then it goes.
-
 ## A new version, taken between calls (issue #1898, EPIC #1906 C5)
 
 The install is a link to one version (`~/.claude/fleet → fleet.versions/<sha>/`,
