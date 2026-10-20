@@ -90,6 +90,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `collect` | node | [node-doctor] | 采集守护卡住或超时：看 collect 日志里最慢的阶段 |
 | `commands` | node | [release-rules] | fleet 的 /命令 没装：下一次同步补，或装 fleet 插件 |
 | `timing` | node | [node-doctor] | ⌘P 面板或新会话慢：`fleet_timing.py table` 看哪一段（新会话都是冷启，预热池已去掉，T495） |
+| `spawn-time` | node | [node-doctor] | 只报数：近 24 小时新建会话各段（hub 结论 · 开窗 · 能打字 · agent 就绪）的九成分位；哪次慢看 `fleet_timing.py table session` |
 | `compute` | node | [node-doctor] | 这台能不能接入口派的会话：node.env 的 `CCQUOTA_FLEET_COMPUTE` |
 | `context` | node | [node-doctor] | 压缩后没续跑：看 context-ladder.log 的 resumed 行 |
 | `cpu` | node | [ack-linux-node] | 容器到了 CPU 上限：调大这台 Linux 节点的 limits |

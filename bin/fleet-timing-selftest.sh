@@ -158,7 +158,7 @@ PY
 out=$(T p90 session --hours 24)
 [ "$out" = "n=10 placed=1800 window=2800 typeable=3800 ready=6800" ] || st_miss "G p90 CLI: $out"
 [ -z "$(FLEET_CONF_DIR="$WORK/none" T p90)" ] || st_miss "G p90 with no file printed something"
-[ -z "$(FLEET_TIMING_T0= T at session x; ls "$WORK/none" 2>/dev/null)" ] || st_miss "G at without T0 wrote"
+[ -z "$(FLEET_TIMING_T0='' T at session x; ls "$WORK/none" 2>/dev/null)" ] || st_miss "G at without T0 wrote"
 
 # --- H ---------------------------------------------------------------------------
 sed -n '/^# --- 新建耗时/,/^# --- perl/p' "$BIN/fleet-doctor.sh" | sed "s#\$(dirname \"\$0\")#$BIN#" > "$WORK/row2.sh"
