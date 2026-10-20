@@ -111,9 +111,9 @@ class TerminateBackground(unittest.TestCase):
 
 
 class Cli(unittest.TestCase):
-    def test_the_retired_planner_and_its_entry_points_are_gone(self):
+    # the planner file itself is conf/gone.list's (T546)
+    def test_the_retired_planner_entry_points_say_so(self):
         bin_ = Path(__file__).parent
-        self.assertFalse((bin_ / '.fleet-failover.py').exists())
         for args, word in ((['bash', str(bin_ / 'fleet-account.sh'), 'reconcile', '--session', 'x'], '已不用'),
                            (['bash', str(bin_ / 'fleet-account.sh'), 'failover-status'], '已不用')):
             r = subprocess.run(args, capture_output=True, text=True, timeout=30,
