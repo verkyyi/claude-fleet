@@ -50,7 +50,7 @@ unset TMUX TMUX_PANE FLEET_SESSION
 # state <py dict-expr> — the stub hub's task table
 state() { python3 -c 'import json,sys; json.dump(eval(sys.argv[1]), open(sys.argv[2],"w"))' "$1" "$STUB_STATE"; }
 jq_() { python3 -c 'import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[1], {"d": d}))' "$1"; }
-tick() { python3 "$BIN/fleet-epic-tick.py" status --task T580 "$@"; }
+tick() { python3 "$BIN/fleet-epic-tick.py" status --task T580; }
 mem() { printf '%s' "$S" | jq_ "[m for m in d['members'] if m['key']=='$1'][0]$2"; }
 
 # --- A. the parser ---------------------------------------------------------------
