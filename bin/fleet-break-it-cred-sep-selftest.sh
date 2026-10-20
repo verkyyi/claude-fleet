@@ -767,16 +767,13 @@ drill_cred_central_failover_pin() {
 # TestCredCyclePrunesWhatTheHubDropped, TestCredKickCutsTheWait,
 # TestCredsPushOnDeletePauseRevoke.)
 drill_cred_pool_delete_stale_proxy() {
-  CAP=90; local t0 out
+  CAP=90; local t0
   t0=$(now)
   grep -q '"op": "prune"\|op == "prune"' "$BIN/fleet-cred-proxy.py" || { WHY="the proxy has no prune op"; return 1; }
-  out=$(bash "$BIN/fleet-cred-shared-selftest.sh" 2>&1)
-  printf '%s\n' "$out" | grep -q '^PASS V1 .*answered 401: the same request ran on the other account' \
-    && printf '%s\n' "$out" | grep -q '^PASS V2 prune: ' \
-    && printf '%s\n' "$out" | grep -q '^PASS V2 main paused: a new session is picked onto pool1' \
-    || { WHY="fleet-cred-shared-selftest leg V: $(printf '%s\n' "$out" | grep -m 3 -E '^FAIL|^PASS V' | tr '\n' '|')"; return 1; }
+  suite_holds fleet-cred-shared-selftest.sh 'answered 401: the same request ran on the other account' \
+    'pass "V2 prune: ' 'pass "V2 main paused: a new session is picked onto pool1' || return 1
   SECS=$(since "$t0")
-  WHAT="hub 删掉的订阅：agent 把整份 lease 交给代理 prune，它立刻从这个登录里消失、会话换号；正在用它的会话遇到 401 同一个请求改走下一个账号，不报给会话；暂停的账号不再接新会话"
+  WHAT="hub 删掉的订阅：agent 把整份 lease 交给代理 prune，它立刻从这个登录里消失、会话换号；正在用它的会话遇到 401 同一个请求改走下一个账号，不报给会话；暂停的账号不再接新会话（fleet-cred-shared-selftest.sh 的 V 段真跑，这里按名守住）"
 }
 
 # ---- cred-per-login-proxy-left (#3744, #4674): a machine runs ONE credential
@@ -851,14 +848,11 @@ drill_cred_per_login_proxy_left() {
 # real-user probe sat at codex:entry for 300 s. Leg D2 drives the real proxy with
 # the hub saying trusted and the pod's node.env.
 drill_cred_central_trusted_pod() {
-  CAP=180; local t0 out
+  CAP=180; local t0
   t0=$(now)
-  out=$(bash "$BIN/fleet-cred-proxy-selftest.sh" 2>&1)
-  printf '%s\n' "$out" | grep -q '^PASS D2 trusted pod with nothing leased in' \
-    && ! printf '%s\n' "$out" | grep -q '^FAIL D2' \
-    || { WHY="fleet-cred-proxy-selftest leg D2: $(printf '%s\n' "$out" | grep -m 3 -E 'D2' | tr '\n' '|')"; return 1; }
+  suite_holds fleet-cred-proxy-selftest.sh 'pass "D2 trusted pod with nothing leased in' || return 1
   SECS=$(since "$t0")
-  WHAT="个人 pod（不租凭据、指名中心代理）被入口判可信：代理仍走 central、不读凭据文件；租凭据的登录照旧不走 central"
+  WHAT="个人 pod（不租凭据、指名中心代理）被入口判可信：代理仍走 central、不读凭据文件；租凭据的登录照旧不走 central（fleet-cred-proxy-selftest.sh 的 D2 真跑，这里按名守住）"
 }
 
 # ---- credsep-warn-cuts-creds (#4623): 2026-10-17, a separated login on one Mac WAS

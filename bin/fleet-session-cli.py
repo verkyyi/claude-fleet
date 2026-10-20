@@ -304,7 +304,7 @@ def cache_path():
     seam = os.environ.get("FLEET_SESSION_CLI_CACHE")
     if seam is not None:
         return seam
-    return os.path.join(os.environ.get("TMPDIR") or "/tmp", ".claude-dash", "global",
+    return os.path.join(os.environ.get("TMPDIR") or "/tmp/claude-fleet-%d" % os.getuid(), ".claude-dash", "global",
                         "remote_" + os.environ.get("FLEET_SESSION", ""))
 
 

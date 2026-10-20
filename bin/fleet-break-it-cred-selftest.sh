@@ -68,6 +68,28 @@ go_half() {
   esac
 }
 
+# suite_holds <test id> [<text>…] — a drill whose recovery IS another selftest's
+# whole run (same file, same arguments, a suite id of its own) holds that test by
+# name instead of running it a second time in the same suite (T532: eleven drills
+# re-ran a standalone selftest, ~360 s of every full run spent twice, and a flaky
+# leg had two chances to red). The held test's own run is where the recovery is
+# checked: <test id> (`<file>`, `<file>#K`, or a part-split `<file>` = all its parts
+# together) must be one run-selftests.sh lists,
+# and each <text> — the leg, the fixture, the line that times it — must still be in
+# its file. SECS is the check's own time. Keep in sync: fleet-break-it-selftest.sh
+# and fleet-break-it-cred-selftest.sh (the other files' shared runner).
+suite_holds() {
+  local t=$1 f s; shift
+  f=${t%%#*}
+  [ -f "$BIN/$f" ] || { WHY="$f is gone: nothing runs what this drill held"; return 1; }
+  [ -s "$WORK/suite-ids" ] || FLEET_SELFTEST_NO_SHADOW=1 FLEET_HEAVY=0 sh "$BIN/run-selftests.sh" --ids > "$WORK/suite-ids" 2>/dev/null
+  { grep -qxF -- "$t" "$WORK/suite-ids" || { [ "$t" = "$f" ] && grep -q "^$f#[0-9]*\$" "$WORK/suite-ids"; }; } \
+    || { WHY="$t is no longer a test the suite runs: this drill held it"; return 1; }
+  for s in "$@"; do
+    grep -qF -- "$s" "$BIN/$f" || { WHY="$f no longer carries [${s}]: this drill held it"; return 1; }
+  done
+}
+
 # ============================================ credential proxy (EPIC #1967) =====
 # The cred half (issue #1975, C8): bin/fleet-cred-proxy.{sh,py} on loopback only,
 # a sandbox FLEET_CONF_DIR per drill and ONE fake far end playing the hub

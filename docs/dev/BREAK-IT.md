@@ -4,13 +4,14 @@
 哪条演练在隔离环境里真做一遍（issue #1786，EPIC #1776 C10）。
 
 **规则：新发现一种弄坏 fleet 的方式，先在这张表加一行、在
-`bin/fleet-break-it-selftest.sh` 加一条演练（先红），再修（变绿）。凭据代理的 `cred-*` 几行由 `bin/fleet-break-it-cred-selftest.sh` 演练（#1975），表与它同样互相校验。主脚本的演练按表中顺序切成连续的七段跑（#2955、#2694，各自一个测试、各自的上限），按每条演练在 CI 上的墙钟（`bin/break-it-durations.txt`，`selftest-durations.sh --drills` 刷新）由 `bin/fleet-break-it-part.py` 均分：每段一个测试编号（`fleet-break-it-selftest.sh#K`，片数写在它头部的 `# selftest-parts: N BREAK_PART`，T525），`BREAK_PART=all` 一次跑完；node、hub 等分文件同样切段。** 一条演练 =
+`bin/fleet-break-it-selftest.sh` 加一条演练（先红），再修（变绿）。凭据代理的 `cred-*` 几行由 `bin/fleet-break-it-cred-selftest.sh` 演练（#1975），表与它同样互相校验。主脚本的演练按表中顺序切成连续的若干段跑（#2955、#2694，各自一个测试、各自的上限；段数在头部，T532 起 14 段），按每条演练在 CI 上的墙钟（`bin/break-it-durations.txt`，`selftest-durations.sh --drills` 刷新）由 `bin/fleet-break-it-part.py` 均分：每段一个测试编号（`fleet-break-it-selftest.sh#K`，片数写在它头部的 `# selftest-parts: N BREAK_PART`，T525），`BREAK_PART=all` 一次跑完；node、hub 等分文件同样切段。** 一条演练 =
 一个 `drill_<id>` 函数；`演练` 一列写它的 `id`。不在本仓库修的（别的仓库、别的单），
 `演练` 一列写 `登记：<单号>`，只登记不演练。
 
 跑：`bin/run-selftests.sh fleet-break-it` — 每条一行 `PASS <id> <恢复用时> ≤<上限>`。
 入口直连一批（EPIC #3067）的 `entry-*` 与 `route-lan-elsewhere` 几行另有一条全程演练 `bin/entry-e2e-selftest.sh`（#3076）：手机加钥匙 → 进看台 → 入口停掉照样进 → 撤钥匙被拒，Mac 没有 Tailscale 在家走局域网、在外走地址，再按 id 把这几行的演练全跑一遍、打出批次指标表。
 演练全部跑在隔离的 tmux socket、临时 HOME、假的 claude / ssh / 入口上，不碰任何在跑的 fleet。
+一条演练的恢复本身就是另一个自测的整份运行（同一文件、同样参数、本身就是测试编号）时，演练不再把它再跑一遍，而用 `suite_holds <测试编号> <文字>…` 按名守住：那个编号仍在 `run-selftests.sh --ids` 里、每段文字（腿名、夹具、计时那一行）仍在它的文件里，真跑由它自己的那一次负责（T532：十几条演练曾把整份自测重跑，一次全量多花约 6 分钟，时好时坏的腿也多一次红的机会）。
 表和脚本互相校验：表里的 `id` 没有演练、或演练不在表里，测试直接红。
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |

@@ -2209,18 +2209,6 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-one-switch":
         # BREAK-IT switch-no-session-save (issue #4670): nothing saved, no login entered
         unittest.main(argv=[sys.argv[0], "J_OneSwitch.test_switch_no_session_save"], verbosity=1)
-    if len(sys.argv) > 1 and sys.argv[1] == "--drill-torn-read":
-        # BREAK-IT node-update-stale-fail (issue #2906): an outlived torn read rolls nothing back
-        unittest.main(argv=[sys.argv[0], "O_TornReadPast"], verbosity=1)
-    if len(sys.argv) > 1 and sys.argv[1] == "--drill-helpers":
-        # BREAK-IT codex-helper-missing (issue #3017): staged, linked, completed
-        unittest.main(argv=[sys.argv[0], "P_Helpers"], verbosity=1)
-    if len(sys.argv) > 1 and sys.argv[1] == "--drill-credsep":
-        # BREAK-IT credsep-stale-after-switch: the supervised case, switch + rollback
-        unittest.main(argv=[sys.argv[0], "I_Credsep.test_supervised_proxy_follows_switch_and_rollback"], verbosity=1)
-    if len(sys.argv) > 1 and sys.argv[1] == "--drill-admin-agent":
-        # BREAK-IT admin-agent-stale (issue #3034): an admin's own agent follows the release
-        unittest.main(argv=[sys.argv[0], "Q_AdminAgent"], verbosity=1)
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-admin-agent-gui":
         # BREAK-IT admin-agent-gui-converted (issue #3508)
         unittest.main(argv=[sys.argv[0], "Q_AdminAgent.test_converted_gui_agent_is_followed"], verbosity=1)
@@ -2236,15 +2224,6 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-login-install":
         # BREAK-IT managed-login-install-stale: the doctor half
         unittest.main(argv=[sys.argv[0], "K_LoginInstall"], verbosity=1)
-    if len(sys.argv) > 1 and sys.argv[1] == "--drill-login-own-copy":
-        # BREAK-IT managed-login-own-copy (issue #4669): reclaimed; moved and rolled back with the machine
-        unittest.main(argv=[sys.argv[0], "M_FollowInstall.test_own_copy_is_reclaimed",
-                            "M_FollowInstall.test_switch_points_every_login",
-                            "M_FollowInstall.test_rollback_moves_logins_back"], verbosity=1)
-    if len(sys.argv) > 1 and sys.argv[1] == "--drill-login-follow":
-        # BREAK-IT managed-login-install-predates: the updater moves a login whose
-        # own install-sync cannot (issue #2714)
-        unittest.main(argv=[sys.argv[0], "M_FollowInstall"], verbosity=1)
     import selftest_part  # SELFTEST_PART=K/N runs one slice of the cases (issue #2694)
     # each part's cases as two processes at once, a class's cases together (every
     # case its own sandbox; T_Codesign shares a keychain across its cases)

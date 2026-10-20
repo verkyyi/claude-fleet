@@ -476,7 +476,7 @@ grep -qx 'launchctl bootout gui/602' "$FLEET_TEST_LOG" || fail "the login's gui 
 [ ! -e "$WORK/procs" ] || fail 'distnoted came back and is still running'
 not_has "$WORK/out" 'timed out' 'deleteUser hung on a respawned process'
 [ "$el" -lt 15 ] || fail "respawn apply took ${el}s"
-printf 'leg respawn %ss\n' "$el"   # break-it login-remove-respawn-hang reads it
+printf 'leg respawn %ss\n' "$el"   # break-it login-remove-respawn-hang holds this line by name
 python3 - "$FLEET_TEST_LOG" <<'PY2' || fail 'bootout user/<uid> is not before every kill and before deleteUser'
 import pathlib, sys
 lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
