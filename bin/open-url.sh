@@ -28,7 +28,8 @@ fi
 # terminal it runs in gets the OSC 52 and the URL itself, cmd-clickable in iTerm.
 # The URL is only ever an argument, never shell code.
 if [ -n "${TMUX:-}" ] && tmux set-buffer -w -- "$url" 2>/dev/null; then
-  tmux display-message "$(sh "$BIN/fleet-ui-lang.sh" t toast_url_copied_fmt "$url" | sed 's/#/##/g')" 2>/dev/null || :
+  python3 "$BIN/fleet_notice.py" notify info "$(sh "$BIN/fleet-ui-lang.sh" t toast_url_copied_fmt "$url")" \
+    --source open-url </dev/null >/dev/null 2>&1 || :
 else
   b64=$(printf '%s' "$url" | base64 | tr -d '\n')
   printf '\033]52;c;%s\a%s\n' "$b64" "$url"

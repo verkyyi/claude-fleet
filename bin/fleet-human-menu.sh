@@ -19,7 +19,7 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 act="${1:-}"; t="${2:-}"
-say() { tmux display-message -d 4000 "$1" 2>/dev/null; return 0; }
+say() { python3 "$BIN/fleet_notice.py" notify info "$1" --secs 4 --source human-menu </dev/null >/dev/null 2>&1; return 0; }
 if [ "$act" = sweep ]; then
   for tbl in root prefix; do
     tmux list-keys -T "$tbl" 2>/dev/null \

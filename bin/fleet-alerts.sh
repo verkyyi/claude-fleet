@@ -155,11 +155,20 @@ EOF
     _fa_events_prune "$f" "$now"
     printf '%s\t%s\t%s\t%s\n' "$now" "ev-$now-$$-${RANDOM:-0}" "$kind" "$text" >> "$f"
   fi
+  # the one record of what was said (T675): every event is a notice too, drawn on
+  # every client of <sock> only for a kind that needs you NOW — a warn, 6 s
   if fleet_alert_flashes "$kind"; then
-    if [ -n "$sock" ]; then tmux -L "$sock" display-message "$text" 2>/dev/null
-    else tmux display-message "$text" 2>/dev/null; fi
+    _fa_notice warn "$text" --all --source "alert:$kind" ${sock:+--sock "$sock"}
+  elif [ "$dup" = 0 ]; then
+    _fa_notice info "$text" --no-draw --source "alert:$kind"
   fi
   return 0
+}
+
+# _fa_notice <level> <text> [fleet_notice.py notify options…] — the one on-screen
+# road (T675, bin/fleet_notice.py); never fails the caller
+_fa_notice() {
+  python3 "$_FA_BIN/fleet_notice.py" notify "$@" </dev/null >/dev/null 2>&1 || :
 }
 
 # _fa_hub_flash <now> — the hub-lost member of the whitelist: once per outage
@@ -792,7 +801,7 @@ fleet_alerts_kick() {
   case "$ac" in
     kick-collect) out=$(bash "$_FA_BIN/fleet-daemon-watch.sh" --unit collect --force </dev/null 2>&1) ;;
     kick-daemons)
-      [ $# -gt 0 ] || { tmux display-message 'fleet: daemon restart — no stale unit named, nothing to do' 2>/dev/null; return 0; }
+      [ $# -gt 0 ] || { _fa_notice info 'fleet: daemon restart — no stale unit named, nothing to do'; return 0; }
       a=""; for u in "$@"; do a="$a --unit $u"; done
       # shellcheck disable=SC2086  # $a is --unit <known name> pairs, word-split on purpose
       out=$(bash "$_FA_BIN/fleet-daemon-watch.sh" $a </dev/null 2>&1) ;;
@@ -817,7 +826,7 @@ fleet_alerts_kick() {
   [ -n "$n" ] && msg="$msg · not loaded $n"
   [ -n "$f" ] && msg="$msg · fresh $f"
   [ -n "$x" ] && msg="$msg · ? $x"
-  tmux display-message "fleet: daemon restart${msg}" 2>/dev/null
+  _fa_notice info "fleet: daemon restart${msg}"
   return 0
 }
 
@@ -838,14 +847,14 @@ fleet_alerts_act() {
       [ -f "$_FA_BIN/fleet-relogin.sh" ] || exec bash "$_FA_BIN/usage-modal.sh"
       exec bash "$_FA_BIN/fleet-relogin.sh" login "$ta" ;;
     kick-collect)
-      tmux display-message 'fleet: dash (collector) restart requested…' 2>/dev/null
+      _fa_notice info 'fleet: dash (collector) restart requested…'
       _fa_detach "$self kick kick-collect" ;;
     kick-daemons)
       units=$(_fa_kick_units "$de")
       if [ -z "$units" ]; then
-        tmux display-message 'fleet: daemon restart — no stale unit named, nothing to do' 2>/dev/null
+        _fa_notice info 'fleet: daemon restart — no stale unit named, nothing to do'
       else
-        tmux display-message "fleet: daemon restart requested: ${units// /,}…" 2>/dev/null
+        _fa_notice info "fleet: daemon restart requested: ${units// /,}…"
         _fa_detach "$self kick kick-daemons $units"
       fi ;;
     disk)

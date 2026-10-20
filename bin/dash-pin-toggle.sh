@@ -51,10 +51,10 @@ if [ "$cur" = 1 ]; then
   # unpinning must leave the window byte-identical to one that never was.
   tmux set-option -w -t "$target" -u @pin 2>/dev/null || exit 0
   msg=$(fleet_ui_t pin_unpinned_fmt "$name")
-  tmux display-message "$msg" 2>/dev/null || true
+  python3 "$BIN/fleet_notice.py" notify info "$msg" --source pin </dev/null >/dev/null 2>&1 || true
 else
   tmux set-option -w -t "$target" @pin 1 2>/dev/null || exit 0
   msg=$(fleet_ui_t pin_pinned_fmt "$name")
-  tmux display-message "$msg" 2>/dev/null || true
+  python3 "$BIN/fleet_notice.py" notify info "$msg" --source pin </dev/null >/dev/null 2>&1 || true
 fi
 exit 0

@@ -148,7 +148,8 @@ if [ "$intmux" = 1 ]; then
       local msg='执行会话里 Ctrl+Z 不起作用' c p
       [ "${FLEET_UI_LANG:-}" = en ] && msg='Ctrl+Z does nothing in a fleet session'
       tmux list-clients -F '#{client_name}	#{pane_id}' 2>/dev/null | while IFS='	' read -r c p; do
-        [ "$p" = "$TMUX_PANE" ] && tmux display-message -c "$c" -d 3000 "$msg" 2>/dev/null
+        [ "$p" = "$TMUX_PANE" ] && python3 "$BIN/fleet_notice.py" notify info "$msg" --client "$c" \
+          --source session </dev/null >/dev/null 2>&1
       done
     }
     trap ctrl_z TSTP

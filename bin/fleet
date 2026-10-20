@@ -74,6 +74,7 @@
 #   fleet show|open <会话>      one session's fields · the client onto it
 #   fleet rename <会话> <新名>  · fleet close <会话> [--yes]
 #   fleet reap <会话> <方式>    · fleet answer [<会话>] [<回答>]
+#   fleet notices [--json]      最近消息 — what the 看台's top line said (⌘J, T675)
 #                               <会话> = a name (or part), #单号, or the key;
 #                               two matches = the candidates and exit 4, never
 #                               a guess. `fleet open <url|:port|file>` and
@@ -323,7 +324,7 @@ case $cmd in
     exit $rc ;;
   # the sessions from the command line (issue #2365) — `fleet open <url|:port|file>`
   # and `fleet show <file>` still go to fleet-open.sh / fleet-show.sh from there
-  ls|show|open|rename|close|reap|answer)
+  ls|show|open|rename|close|reap|answer|notices)
     exec python3 "$here/fleet-session-cli.py" "$@" ;;
   # a background service / scheduled task, on whichever machine holds it — the
   # hub's service_control (issue #2527); add · rm · ls · logs · cred stay the

@@ -29,6 +29,9 @@
                                          one waiting when none is named; the answer
                                          asked on the terminal when none is given,
                                          under the question's own words (#2538)
+    fleet notices [--n 50] [--json]      最近消息: the newest notices the 看台's top
+                                         line drew (or would have) — the same list
+                                         ⌘P's 最近消息 opens (bin/fleet_notice.py, T675)
     fleet service stop|start|restart <名称>
     fleet task stop|start|restart <名称>
     fleet task run <名称> --now
@@ -105,7 +108,7 @@ from pathlib import Path
 BIN = Path(__file__).absolute().parent
 sys.path.insert(0, str(BIN))
 from fleet_ticket_url import ticket_url  # noqa: E402 — where a ticket reads (issue #3596)
-VERBS = ("ls", "show", "open", "rename", "close", "reap", "answer", "service", "task")
+VERBS = ("ls", "show", "open", "rename", "close", "reap", "answer", "service", "task", "notices")
 STATE_SAY = {"needs": "在问你", "failed": "失败", "working": "在干活", "looping": "循环中",
              "done": "完成", "idle": "空闲", "exited": "已退出", "sleeping": "睡着", "landed": "已落地"}
 
@@ -1064,6 +1067,11 @@ def main(argv):
     old = passthrough(verb, args)
     if old:
         os.execv(str(BIN / old), [str(BIN / old)] + args)
+    if verb == "notices":
+        # the record is the home's ($FLEET_CONF_DIR/logs/notices.ndjson, T675)
+        if home or road() == "here":
+            return subprocess.call([sys.executable or "python3", str(BIN / "fleet_notice.py"), "list"] + list(args))
+        return over_home(verb, args)
     # the seam reads a file instead (`ls --services` reads a cache file: no road)
     if home:
         if not home_setup(asked=True):

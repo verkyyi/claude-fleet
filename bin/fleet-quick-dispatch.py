@@ -563,7 +563,7 @@ def ui(screen, session="", view="", client=""):
             screen.refresh()
             ok, said = send(payload(title, repo, agent=None if agent == dflt else agent), view, client)
             if ok:
-                quick.tmux("display-message", *(["-c", client] if client else []), said)
+                notice(client, "info", said)
                 return 0
             note, bad = said, True
             continue
@@ -616,6 +616,17 @@ def set_locale():
             continue
     return ""
 
+
+
+def notice(client, level, text):
+    """One on-screen line on this client (T675, bin/fleet_notice.py): held for its
+    tier and recorded for ⌘P's 最近消息, never a 0.75 s display-message."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import fleet_notice
+        fleet_notice.notify(level, text, client=client or "", source="⌘T")
+    except Exception:  # noqa: BLE001 — a notice never breaks the dispatch
+        pass
 
 def main(argv):
     global TEXT
@@ -683,7 +694,7 @@ def main(argv):
         ok, said = send(data, o["--view"], o["--client"])
         print(said)
         if o.get("--toast") and said:
-            quick.tmux("display-message", *(["-c", o["--client"]] if o["--client"] else []), said)
+            notice(o["--client"], "info" if ok else "error", said)
         return 0 if ok else 1
     os.environ.setdefault("ESCDELAY", "25")
     try:
@@ -692,8 +703,7 @@ def main(argv):
         import traceback
         compose.compose_log("dispatch_failed", view=o["--view"], why="crash: %r" % error,
                             trace=traceback.format_exc()[-2000:])
-        quick.tmux("display-message", *(["-c", o["--client"]] if o["--client"] else []),
-                   tr("compose_failed_fmt", "%s: %s" % (type(error).__name__, error)))
+        notice(o["--client"], "error", tr("compose_failed_fmt", "%s: %s" % (type(error).__name__, error)))
         return 1
 
 

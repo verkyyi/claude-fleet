@@ -94,7 +94,7 @@ PRINT=''; [ "${FLEET_REMOTE_SAY:-}" = print ] && PRINT=1
 RC=0
 toast() {
   if [ -n "$PRINT" ]; then printf '%s\n' "${1#fleet: }"; return 0; fi
-  tmux display-message ${client:+-c "$client"} "$1" 2>/dev/null || :
+  fleet_notice warn "${1#fleet: }" ${client:+--client "$client"} --source row-remote
 }
 WRITE="$BIN/fleet-hub-write.sh"
 

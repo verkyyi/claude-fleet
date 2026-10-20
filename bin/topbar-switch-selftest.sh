@@ -41,13 +41,14 @@ fail() { echo "FAIL: $1${2:+ — $2}"; FAILS=$((FAILS + 1)); }
 mkdir -p "$WORK/reg" "$WORK/g"
 T() { "$TMUX_BIN" -S "$SOCK" "$@"; }
 
-# the line exactly as rv_thin_dress spells it (no registry row, no cache: the
+# the line exactly as rv_thin_bar spells it (no registry row, no cache: the
 # window's own stamps draw it); $1 = what runs before the python (C's `sleep 1;`)
 dress() {
   local pre="$1" bar
   bar="#(${pre}python3 '$TB_BIN/fleet-topbar.py' render --node view=t1 s=fleet reg='$WORK/reg' g='$WORK/g'"
   bar="$bar sock=#{q:socket_path} cw=#{client_width} w=#{window_id} pc=#{q:@peer_cur} pd=#{pane_dead}"
-  bar="$bar vl=#{q:@view_lang_set}:#{q:@view_lang} fl=#{q:@view_flash} flu=#{@view_flash_until})"
+  bar="$bar vl=#{q:@view_lang_set}:#{q:@view_lang} nt=#{@view_notice}"
+  bar="$bar ack=#{?#{e|>=:#{client_activity},#{@view_notice_hold}},1,0} up=#{q:@view_upload})"
   T set-option -t fleet status on \; set-option -t fleet status-position top \; \
     set-option -t fleet status-interval 2 \; set-option -t fleet status-format[0] "$bar"
 }

@@ -190,11 +190,31 @@ def ro_all(f):
 def ro(code):
     return lambda f, h: [(n, d) for n, c, d in memo(f, 'ro', ro_all) if c == code]
 
+# --- the one notice road (T675): a display-message with neither -p (a read) nor -d ---
+FLAG = re.compile(r'(?:^|[\s(,\[])["\']?-[A-Za-z]*[pd][A-Za-z]*["\']?(?=[\s,)\]]|$)')
+CALL_PY = re.compile(r'["\']display-message["\']\s*[,)]')
+CALL_SH = re.compile(r'(?:^|[\s;&|({])(?:tmux|TM|T)\s(?:[^;&|#]*?\s)?display-message\b')
+def notice(f, h):
+    out, L = [], f.l
+    for n, l in enumerate(L, 1):
+        t = l.lstrip()
+        if t.startswith('#') or 'display-message' not in l or h in l: continue
+        if not (CALL_PY.search(l) or CALL_SH.search(l)): continue
+        span, k = l, n
+        while k < len(L) and k < n + 5 and (span.rstrip().endswith('\\') or span.count('(') > span.count(')')):
+            span += ' ' + L[k]; k += 1
+        if h in span: continue
+        m = CALL_PY.search(span) or CALL_SH.search(span)
+        tail = span[m.end():]
+        if not FLAG.search(tail): out.append((n, ''))
+    return out
+
 def proc_subst(f, h):
     return [(n, '') for n, l in enumerate(f.l, 1) if h not in l and re.search(r'done\s*<\s*<\(', l)]
 
 # --- THE TABLE: one row a rule -------------------------------------------------
 RULES = [  # code, scope, marker that excepts a line, check, why
+ ('notice',        'all', 'notice-ok:',        notice,          'a display-message that is neither a read (-p) nor held (-d): tmux\'s ~0.75 s flash nobody can read back — bin/fleet_notice.py (fleet_notice / fleet_ui_fail / toast) is the one road (T675)'),
  ('sed-bre',       'sh',  'portable-ok:',      port('sed-bre'), r'\| \+ \? in a sed BRE are GNU-only (BSD reads them literally, silently — #689), \d is a digit in no sed: two -e, sed -E, or [0-9]'),
  ('sed-i',         'sh',  'portable-ok:',      port('sed-i'),   'sed -i with no ATTACHED suffix: GNU -i.bak, BSD -i \'\' — only -i.bak (or a temp file + mv) is portable'),
  ('gnu-opt',       'sh',  'portable-ok:',      port('gnu-opt'), 'readlink -f / date -d / stat -c / base64 -w / mktemp -p are GNU-only: a `bsd … || gnu …` fallback on ONE line'),
@@ -231,6 +251,8 @@ BAD = {
  'install-logs': [('#!/bin/sh\nLOG="$BIN/../logs/x.log"\nmkdir -p "$ROOT/logs"\n', [2, 3]),
                   ('LOG = BIN.parent / "logs" / "x.log"\nP = os.path.join(os.path.dirname(__file__), "..", "logs", "y")\n', [1, 2])],
  'install-write': [('#!/bin/sh\necho hi >> "$(dirname "$0")/../state"\n', [2])],
+ 'notice': [('#!/bin/sh\ntmux display-message "gone in 0.75 s"\ntmux display-message -c "$c" \\\n  "$msg" 2>/dev/null\n', [2, 3]),
+            ('def toast(c, t):\n    tm("display-message", *(["-c", c] if c else []),\n       t)\n', [2])],
 }
 # the false-positive traps: real shapes from this repo, clean under EVERY rule
 GOOD = [
@@ -274,6 +296,16 @@ for x in "${c[@]}"; do :; done   # bash32-ok: c is unconditionally appended to a
 EOF
 ''',
  '''#!/bin/sh
+# a display-message in a comment is fine
+w=$(tmux display-message -p '#{window_id}')
+tmux display-message -c "$c" -d 4000 "held"
+tmux display-message ${X:+-c "$X"} \\
+  -d 10000 "held over two lines"
+tmux display-message "a deliberate flash"   # notice-ok: a fixture that says why
+rc, w = tm("display-message", "-p", "-t", w,
+           "#{window_name}")
+''',
+ '''#!/bin/sh
 # the old $BIN/../logs is gone — a comment may say so
 LOG="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/x.log"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -313,6 +345,10 @@ SCOPES = {
  'lib': lambda: [os.path.join(ROOT, 'bin', x) for x in LIBS],
  'ro':  lambda: [p for p in walk(['bin', 'hooks', 'launchd', 'systemd'], ('.sh', '.py', '.tmpl', '.service', '.ts'))
                  if '-selftest' not in os.path.basename(p)],
+ 'all': lambda: [p for p in sorted(set(list(bin_shell()) + [os.path.join(ROOT, 'bin', x) for x in os.listdir(os.path.join(ROOT, 'bin'))
+                                                          if x.endswith('.py')]))
+                 if '-selftest' not in os.path.basename(p) and os.path.basename(p) != SELF
+                 and not p.endswith(('_test.py', 'selftest-lib.sh'))],
 }
 
 sc = self_check()

@@ -688,7 +688,7 @@ main() {
   printf '%s%s\n' "$sum" "$([ -n "$REPORT" ] && printf ' (%s)' "$REPORT")"
   if [ "$switched" -gt 0 ]; then
     if [ "$TOAST" = 2 ]; then bash "$BIN/fleet-alerts.sh" event ${SOCK:+-L "$SOCK"} model-switch "$sum" >/dev/null 2>&1
-    elif [ "$TOAST" = 1 ]; then TM display-message "$sum" 2>/dev/null; fi   # toast-ok: --toast = a keypress
+    elif [ "$TOAST" = 1 ]; then fleet_notice info "$sum" ${SOCK:+--sock "$SOCK"} --source model-switch; fi   # toast-ok: --toast = a keypress
   fi
   return 0
 }

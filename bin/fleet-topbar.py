@@ -8,8 +8,10 @@ its record, switch-bar.json, went with issue #3008.)
 
     fleet-topbar.py render --node view=<id> s=<fleet> reg=<dir> g=<dir> sock=<socket> cw= w= [pc=] [pd=]
         the line, as tmux format — see render_node below
-    fleet-topbar.py fit <cols> <record.json> [down=] [rr=] [now=] [ups=1]
+    fleet-topbar.py fit <cols> <record.json> [down=] [rr=] [now=] [ups=1] [ur=N]
         the plain text of layout() for a record (selftest)
+    fleet-topbar.py notice <cols> <@view_notice> [ack=1] [now=]
+        the plain text of the notice line, `-` when none is live (selftest)
 
 Three widths, the design's: a phone (~45 columns) has the glyph, #N, the title
 and 「62%」; from 80 the state's word, 「PR #N」 and 「62% Opus 5.5 high」; from
@@ -176,7 +178,7 @@ def upstream_text():
     return say("topbar_upstream_fmt", say("topbar_up_" + b[0]), b[1]) if b else ""
 
 
-def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream=""):
+def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream="", unread=0):
     """The line as a list of (text, colour, range) parts plus its background
     (None / BG_ASK / BG_DOWN) — the ⌘P panel's blueprint (issue #3194, EPIC #3178):
     glyph · (word ·) #N · title (· repo) …… PR · context (· 今天 N) (· 上游连不上) (· machine) (· ⌘P).
@@ -214,6 +216,9 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", ups
         right.append([(say("topbar_orphan_fmt", orphans), WARN, "")])
     if upstream:
         right.append([(upstream, BAD, "upstream")])
+    if unread:
+        # errors the person has not read back yet (T675): ⌘P's 最近消息 reads them
+        right.append([(say("topbar_unread_fmt" if cols >= MID else "topbar_unread_short_fmt", unread), BAD, "notices")])
     if trouble:
         right.append([(trouble, WARN, "machine")])
     if cols >= WIDE:
@@ -233,8 +238,8 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", ups
     return parts + rtext, bg
 
 
-def fit(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream=""):
-    parts, bg = layout(rec, cols, down, route, now, via, pin, tries, upstream)
+def fit(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream="", unread=0):
+    parts, bg = layout(rec, cols, down, route, now, via, pin, tries, upstream, unread)
     return "".join(t for t, _, _ in parts), bg
 
 
@@ -518,16 +523,65 @@ def render_node(kv, cols):
     if upload is not None:
         print(upload)
         return 0
-    # the one-time language line (D8, L4): the whole line for 8 s, then the status
+    notice = render_notice(kv, cols)
+    if notice is not None:
+        print(notice)
+        return 0
+    # an older 看台's one-time line (its format still says fl= / flu=; compat-1v: 下一批删)
     flu = kv.get("flu", "")
     if kv.get("fl") and flu.isdigit() and time.time() < int(flu):
         print("#[fg=%s,bold] i #[nobold]#[fg=%s]%s#[default]" % (HL, FG, tmux_text(kv["fl"])))
         return 0
     rec, down, rr, via = node_record(kv)
     rec["orphans"] = orphan_count()
-    parts, bg = layout(rec, cols, down, rr, None, via, upstream=upstream_text() if rec.get("here") else "")
+    parts, bg = layout(rec, cols, down, rr, None, via, upstream=upstream_text() if rec.get("here") else "",
+                       unread=unread_errors())
     print(own_window(kv.get("w", ""), paint(parts, bg)))
     return 0
+
+
+# --- the notice (T675, bin/fleet_notice.py) -----------------------------------------
+# `nt=` is the 看台's @view_notice (base64 JSON), `ack=1` once a key came after its
+# hold (#{client_activity} ≥ @view_notice_hold, computed by tmux in the format). The
+# whole line while it is live: an error until a key after 10 s, warn 6 s, info 3 s
+# (the 2 s status interval rounds it up); the newest only, 「还有 N 条 · ⌘P 看全部」
+# beside it — ⌘P's 最近消息 row, at its bottom, lists them all.
+
+def unread_errors():
+    try:
+        import fleet_notice
+        return fleet_notice.unread()
+    except Exception:
+        return 0
+
+
+def notice_line(n, cols):
+    """The notice `n` as tmux format, `cols` wide."""
+    lvl = n.get("level")
+    glyph, colour = {"error": ("✗", BAD), "warn": ("!", WARN)}.get(lvl, ("i", DIM))
+    text = n.get("text") or ""
+    nxt = n.get("next") or ""
+    more = n.get("more") or 0
+    tail = (say("topbar_notice_more_fmt", more) + " · " if more else "") + say("topbar_notice_all")
+    room = cols - 4 - cells(tail) - 2
+    body = text + (" — " + nxt if nxt else "")
+    body = clip(body, max(0, room))
+    pad = max(1, cols - 3 - cells(body) - cells(tail) - 1)
+    return "#[fg=%s,bold] %s #[fg=%s]%s#[nobold]%s#[fg=%s]%s #[default]" % (
+        colour, glyph, colour if lvl == "error" else FG, tmux_text(body), " " * pad, DIM, tmux_text(tail))
+
+
+def render_notice(kv, cols, now=None):
+    """The notice line, or None when there is none live."""
+    try:
+        import fleet_notice
+    except Exception:
+        return None
+    n = fleet_notice.decode(kv.get("nt", ""))
+    now = time.time() if now is None else now
+    if not fleet_notice.live(n, now, kv.get("ack") == "1"):
+        return None
+    return notice_line(n, cols)
 
 
 # --- the line belongs to ONE window (issue #3532) ----------------------------------
@@ -617,8 +671,15 @@ def main(argv):
         kv = dict(a.split("=", 1) for a in argv[3:] if "=" in a)
         text, bg = fit(rec, int(argv[1]), kv.get("down", ""), kv.get("rr", ""),
                        int(kv["now"]) if kv.get("now", "").isdigit() else None,
-                       upstream=upstream_text() if kv.get("ups") == "1" else "")
+                       upstream=upstream_text() if kv.get("ups") == "1" else "",
+                       unread=int(kv["ur"]) if kv.get("ur", "").isdigit() else 0)
         print("%s\t%s" % ({None: "-", BG_ASK: "red", BG_DOWN: "grey"}[bg], text))
+        return 0
+    if argv[:1] == ["notice"] and len(argv) >= 3:
+        kv = dict(a.split("=", 1) for a in argv[3:] if "=" in a)
+        line = render_notice({"nt": argv[2], "ack": kv.get("ack", "")}, int(argv[1]),
+                             float(kv["now"]) if kv.get("now") else None)
+        print("-" if line is None else re.sub(r"#\[[^\]]*\]", "", line).replace("##", "#"))
         return 0
     print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
     return 2

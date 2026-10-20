@@ -216,7 +216,8 @@ fi
 # operator is looking and let the caller decide (exit 3).
 if [ -n "$NO_INLINE" ]; then
   rm -f "$marker" 2>/dev/null || true
-  [ -z "$client" ] || tmux display-message -c "$client" "$(fleet_ui_t popup_refused)" 2>/dev/null || true
+  [ -z "$client" ] || python3 "$BIN/fleet_notice.py" notify warn "$(fleet_ui_t popup_refused)" --client "$client" \
+    --source popup </dev/null >/dev/null 2>&1 || true
   exit 3
 fi
 # Otherwise run it right here in the pane. fzf repaints over us when we return.

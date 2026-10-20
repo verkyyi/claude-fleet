@@ -79,7 +79,8 @@ done
 case "$TARGET" in landed:*@*) [ -n "$REPO_ARG" ] || REPO_ARG=${TARGET#*@} ;; esac
 key=$(restore_key_for "$TARGET") || {
   printf 'dash-restore-session: not a landed session — nothing to restore for %s\n' "$TARGET" >&2
-  tmux display-message "restore: not a landed session — ⌃t for the landed view, then ⌃o" 2>/dev/null
+  python3 "$BIN/fleet_notice.py" notify warn "restore: not a landed session — ⌃t for the landed view, then ⌃o" \
+    --source restore </dev/null >/dev/null 2>&1
   exit 0
 }
 
@@ -88,7 +89,7 @@ key=$(restore_key_for "$TARGET") || {
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 SESS="${TARGET_SESS:-${FLEET_RESTORE_SESS:-$(fleet_current_session)}}"
-[ -z "$SESS" ] && { printf 'dash-restore-session: no target tmux session\n' >&2; tmux display-message "restore: no target tmux session" 2>/dev/null; exit 1; }
+[ -z "$SESS" ] && { printf 'dash-restore-session: no target tmux session\n' >&2; fleet_notice error "restore: no target tmux session" --source restore; exit 1; }
 fleet_load_conf "$SESS"
 SOCK=$(fleet_socket "$SESS")
 TM() { tmux -L "$SOCK" "$@"; }
@@ -96,7 +97,7 @@ TM() { tmux -L "$SOCK" "$@"; }
 # both streams to /dev/null today, but a headless restore (a script, an agent in
 # another pane) gets only the exit code otherwise. stderr is the record; the
 # status line is the glance. Exit 2 = at capacity, 1 = infrastructure.
-refuse() { printf 'dash-restore-session: %s\n' "${1#restore: }" >&2; TM display-message "$1" 2>/dev/null; }
+refuse() { printf 'dash-restore-session: %s\n' "${1#restore: }" >&2; fleet_notice error "$1" --sock "$SOCK" --source restore; }
 
 # Session cap (issues #28/#70): a restored session holds a slot like any spawn.
 if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then refuse "$cap_msg"; exit 2; fi
@@ -199,7 +200,7 @@ stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO")
 
 announce() {  # $1 = window-id, $2 = message
   if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then TM select-window -t "$1"
-  elif [ -z "$TARGET_SESS" ]; then TM display-message "$2" 2>/dev/null; fi
+  elif [ -z "$TARGET_SESS" ]; then fleet_notice info "$2" --sock "$SOCK" --source restore; fi
 }
 
 case "$kind" in

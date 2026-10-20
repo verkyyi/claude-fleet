@@ -588,10 +588,20 @@ if len(t) > 4000:
     t = t[:4000 - len(note)].rstrip() + note
 sys.stdout.write(t)' "$TASK_REF" > "$_body" || exit 1
   fi
+  # the hub's own words when it could not be asked or said no outside the answer
+  # line (fleet_hub_place's one stderr note — `placement refused: HTTP 409 — …`):
+  # kept, so a refusal says THAT, never a guessed 「hub unreachable」 (T675)
+  _place_err=$(mktemp "${TMPDIR:-/tmp}/fleet-place-err.XXXXXX") || _place_err=/dev/null
   place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" \
     FLEET_PLACE_AS="$PLACE_AS" FLEET_PLACE_BODY_FILE="$_body" \
-    fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP"); place_rc=$?
+    fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP" 2>"$_place_err"); place_rc=$?
   [ -n "$_body" ] && rm -f "$_body"
+  _place_note=''
+  if [ "$_place_err" != /dev/null ]; then
+    cat "$_place_err" >&2
+    _place_note=$(sed -n -e 's/^fleet: \(.*\) — placing .*/\1/p' -e 's/^fleet: \(.*\) — opening .*/\1/p' "$_place_err" | tail -n 1)
+    rm -f "$_place_err"
+  fi
   if [ -s "$_dispatch_result" ]; then
     DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$AGENT" --accepted "$(cat "$_dispatch_result")") || { rm -f "$_dispatch_result"; exit 2; }
     TASK_REF=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')
@@ -630,7 +640,7 @@ sys.stdout.write(t)' "$TASK_REF" > "$_body" || exit 1
       printf 'dash-raw-session: scratch 开在本机 %s — %s\n' "${_pv#LOCAL }" "$_why" >&2 ;;
     *)
       if [ "$NODE" != auto ]; then
-        refuse "raw: scratch 不能开在 $NODE: ${_why:-${_pv:-hub unreachable}}"
+        refuse "raw: scratch 不能开在 $NODE: ${_why:-${_pv:-${_place_note:-入口没有给出回答（exit ${place_rc}）}}}"
         [ "$place_rc" = 4 ] && exit 2; exit 1
       fi
       # The hub placed it nowhere and this machine already said no (T672): refused,
@@ -650,7 +660,7 @@ sys.stdout.write(t)' "$TASK_REF" > "$_body" || exit 1
       fi
       unset _pc ;;
   esac
-  unset _pw _u _pv _why _prepo _body
+  unset _pw _u _pv _why _prepo _body _place_note
 fi
 unset _as_here
 # Opening here after all: this machine's cap verdict, held above, now applies.
@@ -962,7 +972,7 @@ if [ -n "${INPUT_DRAFT//[[:space:]]/}" ] && [ -z "$PROMPT" ]; then
   df=$(mktemp "${TMPDIR:-/tmp}/scratch-draft.XXXXXX")
   pane=$(TM display-message -p -t "$win" '#{pane_id}' 2>/dev/null)
   if [ -n "$df" ] && [ -n "$pane" ] && printf '%s' "$INPUT_DRAFT" > "$df"; then
-    TM run-shell -b "python3 '$BIN/scratch-prefill.py' '$SOCK' '$pane' '$df' 0 >/dev/null 2>&1 || { rm -f '$df'; tmux -L '$SOCK' display-message 'raw: could not prefill the scratch name' 2>/dev/null; }" 2>/dev/null \
+    TM run-shell -b "python3 '$BIN/scratch-prefill.py' '$SOCK' '$pane' '$df' 0 >/dev/null 2>&1 || { rm -f '$df'; python3 '$BIN/fleet_notice.py' notify error 'raw: could not prefill the scratch name' --sock '$SOCK' --source dash-raw-session </dev/null >/dev/null 2>&1; }" 2>/dev/null \
       || { rm -f "$df"; FLEET_UI_SOCK=$SOCK fleet_ui_fail 'raw: could not prefill the scratch name'; }
   else
     [ -n "$df" ] && rm -f "$df"

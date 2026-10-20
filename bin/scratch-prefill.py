@@ -169,7 +169,11 @@ def prefill(socket, pane, draft, warm):
 
     def note(reason):
         record(reason)
-        tm("display-message", "scratch: name not prefilled — " + reason)
+        # one notice (T675, bin/fleet_notice.py): recorded, held, never a 0.75 s flash
+        subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet_notice.py"),
+                        "notify", "warn", "scratch: name not prefilled — " + reason, "--sock", socket,
+                        "--source", "scratch-prefill"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=10)
 
     # A name is one input line. Drop terminal control bytes (especially CR/LF,
     # Escape and DEL) before pasting, so even unusual CLI names cannot submit or

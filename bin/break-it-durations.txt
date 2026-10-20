@@ -262,6 +262,7 @@
 0.2 node-update-stale-fail
 0.4 node-versioned-python-script
 1.0 nothing-starts-by-itself
+15.3 notice-flash-gone
 0.1 notify-leaks-secret
 0.3 oldcfg-broken-unmarked
 0.4 oldcfg-deleted-hook
