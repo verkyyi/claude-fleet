@@ -3235,7 +3235,6 @@ fi
 # workers claim, branch, push, CI passes, PRs merge — onto a branch nobody ships
 # from (2026-09-12: fleet-ccquota sat on 'dashboard-redesign' for a whole round).
 tr_sh="$(dirname "$0")/fleet-trust.sh"
-lib_sh="$(dirname "$0")/fleet-lib.sh"
 _REPO_SCOPED="FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT FLEET_REMOTE FLEET_FORGE FLEET_LAND"
 
 # _norm_repo <url-or-slug> → owner/name (fleet_norm_repo, single-line case)
