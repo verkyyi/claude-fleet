@@ -382,6 +382,25 @@ exit 0
                 with self.assertRaises(ValueError, msg=(more_env, changed)):
                     authority.gate(REGISTERED, True)
 
+    def test_every_spawner_hands_its_dispatch_to_the_finish_gate(self):
+        # EPIC T497 C19 (T598): with the ID switch on there is no claim, so a spawner
+        # whose --finish call does not carry FLEET_ID_DISPATCH is refused on every
+        # task start. Every entry that runs the finish gate hands it over.
+        entries = {}
+        for f in sorted(BIN.glob("*.sh")):
+            if f.name.endswith("-selftest.sh") or f.name == "fleet-lib.sh":
+                continue
+            lines = f.read_text(errors="replace").splitlines()
+            for i, line in enumerate(lines):
+                if "fleet_repo_authority_guard" in line and "--finish" in line and not line.lstrip().startswith("#"):
+                    stmt = " ".join(lines[max(0, i - 1):i + 1])
+                    entries.setdefault(f.name, []).append(stmt)
+        self.assertEqual(sorted(entries), ["dash-issue-session.sh", "dash-raw-session.sh"],
+                         "a new spawner runs the finish gate: hand it FLEET_ID_DISPATCH and list it here")
+        for name, stmts in entries.items():
+            for stmt in stmts:
+                self.assertIn('FLEET_ID_DISPATCH="${TASK_REF:+$DISPATCH}"', stmt, name)
+
     def test_unavailable_and_invalid_json_are_not_frozen(self):
         self.bad_json = True
         result = self.cli(REGISTERED, "--gate")

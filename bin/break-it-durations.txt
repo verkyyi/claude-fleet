@@ -514,3 +514,4 @@
 2.0 window-renamed
 2.1 worker-inventory-rs
 0.1 wx-relay-forged
+0.8 mcp-release-path-pinned

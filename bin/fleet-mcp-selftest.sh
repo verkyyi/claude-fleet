@@ -877,6 +877,73 @@ out=$(DRIVE=off FLEET_MCP_RELOAD=0 mrun "$M/off.log") && [ "$out" = off-ok ] || 
 grep -q 'tool=(reload)' "$M/off.log" && fail "M: FLEET_MCP_RELOAD=0 logged a reload" "$(cat "$M/off.log")"
 ok "M a new version between calls: in-flight call finishes on the old, exec keeps pid + connection + credential, list_changed, new tool listed; broken version refused; quiet poll; off switch"
 
+# --- M2: launched by a release's own path, it still follows the link (T598) --------
+# A window a tool call spawned inherits its parent server's RESOLVED path, so its own
+# server was launched as <root>/<sha>/bin/fleet-mcp.py: it never saw that file change
+# and kept that release's scripts (EPIC T497 C19: a driver opened between two releases
+# dispatched through a half-switched road). Such a server watches <root>/current (a
+# managed machine) or ~/.claude/fleet beside fleet.versions/ (#1894) instead.
+cat > "$M/drive2.py" <<'PYX'
+import json, os, queue, subprocess, sys, threading
+link, cmd = sys.argv[1], sys.argv[2:]
+proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+inbox = queue.Queue()
+threading.Thread(target=lambda: [inbox.put(json.loads(l)) for l in proc.stdout], daemon=True).start()
+def send(i, method, params=None):
+    proc.stdin.write((json.dumps({"jsonrpc": "2.0", "id": i, "method": method, "params": params or {}}) + "\n").encode())
+    proc.stdin.flush()
+def answer(i):
+    seen = []
+    while True:
+        try:
+            m = inbox.get(timeout=15)
+        except queue.Empty:
+            sys.exit("M2: no answer to %d (saw %s)" % (i, seen))
+        if m.get("id") == i:
+            return m["result"]["content"][0]["text"] if "result" in m and "content" in m["result"] else m, seen
+        seen.append(m.get("method"))
+def switch(to):
+    tmp = link + ".tmp"; os.symlink(to, tmp); os.replace(tmp, link)
+send(1, "initialize", {"protocolVersion": "2025-06-18"}); answer(1)
+send(2, "tools/call", {"name": "children", "arguments": {}}); text, seen = answer(2)
+if "new-children" not in text or "notifications/tools/list_changed" not in seen:
+    sys.exit("M2: launched by the old release's path, the call was not served by the live one: %r %s" % (text, seen))
+switch(os.environ["M2_NEXT"])
+send(3, "tools/call", {"name": "children", "arguments": {}}); text, seen = answer(3)
+if "next-children" not in text:
+    sys.exit("M2: the next release was not taken through the link: %r %s" % (text, seen))
+print("ok"); proc.stdin.close(); proc.wait(10)
+PYX
+m2run() { # m2run <link> <server path> <next>
+  env -u CCQUOTA_FLEET -u FLEET_HUB_URL -u FLEET_WORKER_CRED PATH="$G/sbin:$PATH" TMUX=1 TMUX_PANE=%1 \
+    FLEET_CONF_DIR="$G/conf" FLEET_MCP_LOG="$M/m2.log" FAKE_FID="$FID" FLEET_WORKER_CRED="$CRED" TMPDIR="$M/tmp" \
+    FLEET_MCP_RELOAD_POLL_S=0.3 M2_NEXT="$3" python3 "$M/drive2.py" "$1" python3 "$2" 2>&1
+}
+for leg in managed versions; do
+  if [ "$leg" = managed ]; then R="$M/root-$leg"; L="$R/current"; else R="$M/home-$leg/.claude/fleet.versions"; L="$M/home-$leg/.claude/fleet"; fi
+  mkver "${R#"$M"/}/aaaaaaa1" 'echo old-children'
+  mkver "${R#"$M"/}/bbbbbbb2" 'echo new-children'
+  mkver "${R#"$M"/}/ccccccc3" 'echo next-children'
+  ln -s "$R/bbbbbbb2" "$L"
+  out=$(m2run "$L" "$R/aaaaaaa1/bin/fleet-mcp.py" "$R/ccccccc3") && [ "$out" = ok ] \
+    || fail "M2 ($leg): a server launched by a release's own path stayed on it" "$out
+$(cat "$M/m2.log" 2>/dev/null)"
+done
+# not a release tree (no version link beside it): launched as is, nothing followed
+mkver plain 'echo plain-children'
+out=$(python3 - "$M/plain/bin/fleet-mcp.py" "$M/root-managed/aaaaaaa1/bin/fleet-mcp.py" <<'PYX'
+import importlib.util, os, sys
+for p, want in ((sys.argv[1], sys.argv[1]), (sys.argv[2], sys.argv[2].rsplit("/aaaaaaa1/", 1)[0] + "/current/bin/fleet-mcp.py")):
+    spec = importlib.util.spec_from_file_location("m", p); m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    got = m.follow_link(p)
+    assert os.path.realpath(os.path.dirname(got)) == os.path.realpath(os.path.dirname(want)), (p, got, want)
+print("ok")
+PYX
+)
+[ "$out" = ok ] || fail "M2: follow_link mapped the wrong path" "$out"
+ok "M2 launched by a release's own path (<root>/<sha>/bin, fleet.versions/<sha>/bin): the first call is served by the live release, the next switch is taken; a plain tree is left as is"
+
 # --- N: the mod's fallback road — --spec and --call (issue #2057) ------------------
 # A session launched before the service was mounted (--plugin-dir only) still carries
 # the mod's fleet_status / fleet_spawn / fleet_await; the mod registers them from

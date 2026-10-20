@@ -6079,6 +6079,19 @@ drill_launch_preswitch_reopen() {
   WHAT="切换前开的窗口在开关 on 后 ↵ / 版本重开：同一个 ID、按账本最新段接回原会话，不问任务记录；对不上时说是哪一项"
 }
 
+# mcp-release-path-pinned (T598, EPIC T497 C19): a window a tool call spawned launches
+# its fleet MCP server by its parent's RESOLVED release path, which never changes — the
+# server kept that release's scripts for life (a driver opened between C6 and #5026
+# dispatched through a half-switched road). fleet-mcp-selftest.sh M2 launches one by
+# <root>/<sha>/bin and by fleet.versions/<sha>/bin and asks it to follow the link.
+drill_mcp_release_path_pinned() {
+  CAP=10; local t0
+  t0=$(now)
+  suite_holds fleet-mcp-selftest.sh '# --- M2: launched by a release' 'ok "M2 launched by a release' || return 1
+  SECS=$(since "$t0")
+  WHAT="按某个版本树自己的路径起的 fleet MCP 服务：第一次调用就换到 current 指的版本，之后每次换版都跟上；不是版本树的路径原样不动（fleet-mcp-selftest.sh M2 真跑，这里按名守住）"
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call

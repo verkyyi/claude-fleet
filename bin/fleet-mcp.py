@@ -1645,18 +1645,54 @@ def handle(request, table, name):
 RELOAD_ENV = "FLEET_MCP_EXEC"          # old → new process handover (never inherited further)
 RELOAD_POLL_S = float(os.environ.get("FLEET_MCP_RELOAD_POLL_S") or 30)
 PROBE_TIMEOUT_S = 20
-SELF = os.path.abspath(__file__)       # the path as launched: through the version link
+RELEASE_DIR_RE = re.compile(r"[0-9a-f]{7,64}")
+
+
+def follow_link(path):
+    """The version link a release's own copy of this file is reached through (T598).
+
+    A server launched by its RELEASE path (<root>/<sha>/bin/fleet-mcp.py — a window
+    a tool call spawned inherits the resolved path of its parent's server) never saw
+    its file change, so it kept that release's tools and scripts for its whole life:
+    a driver opened between two releases dispatched through a half-switched road
+    (EPIC T497 C19). Such a path is watched through the link that names the live
+    release instead — <root>/current (a managed machine) or ~/.claude/fleet beside
+    fleet.versions/ (#1894) — a path through that link already maps to the same link.
+    Not a release's tree, or no such link beside it: as is.
+    """
+    real = os.path.realpath(path)
+    bindir = os.path.dirname(real)
+    ver = os.path.dirname(bindir)
+    root = os.path.dirname(ver)
+    if os.path.basename(bindir) != "bin" or not RELEASE_DIR_RE.fullmatch(os.path.basename(ver)):
+        return path
+    links = [os.path.join(root, "current")]
+    if os.path.basename(root) == "fleet.versions":
+        links.append(os.path.join(os.path.dirname(root), "fleet"))
+    for link in links:
+        cand = os.path.join(link, "bin", os.path.basename(real))
+        if os.path.islink(link) and os.path.isfile(cand):
+            return cand
+    return path
+
+
+SELF = follow_link(os.path.abspath(__file__))   # the path watched: through the version link
 RELOAD = {"ready": False, "sig": None, "bad": None}
 
 
-def self_sig():
-    """What version SELF is right now: its real path + the file's identity."""
+def file_sig(path):
+    """A file's version: its real path + the file's identity."""
     try:
-        real = os.path.realpath(SELF)
+        real = os.path.realpath(path)
         st = os.stat(real)
     except OSError:
         return None
     return "%s:%d:%d:%d" % (real, st.st_ino, st.st_size, st.st_mtime_ns)
+
+
+def self_sig():
+    """What version SELF is right now."""
+    return file_sig(SELF)
 
 
 def reload_log(verdict, why):
@@ -1766,7 +1802,9 @@ def serve(table, name):
     if HELD["cred"]:
         threading.Thread(target=renew_loop, daemon=True).start()
     watch = table is TOOLS or table is ORCH
-    RELOAD["sig"] = self_sig() if watch else None
+    # the version RUNNING, not the one SELF names now: a server launched by an older
+    # release's own path takes the live one at its first request (T598)
+    RELOAD["sig"] = file_sig(os.path.abspath(__file__)) if watch else None
     buf = reload_resume() if watch else b""
     for raw, rest in read_lines(buf, watch):
         if watch:
