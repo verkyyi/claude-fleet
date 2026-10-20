@@ -5150,6 +5150,14 @@ drill_transfer_proxy_home() {
   SECS=$(since "$started"); WHAT='owned proxy mapping; forged/missing/unauthorized targets refuse; clean Stop then native successor bound — from a Codex and a Claude source'
 }
 
+drill_transfer_pooled_codex_looping() {
+  CAP=10
+  local started; started=$(now)
+  python3 "$BIN/fleet-transfer-source-selftest.py" Settled >"$WORK/transfer-pooled.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/transfer-pooled.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='a pooled (provider fleet) or OpenAI Codex thread between rounds is settled; any other provider still refuses'
+}
+
 drill_transfer_proxy_auth() {
   CAP=10
   local started; started=$(now)

@@ -950,8 +950,11 @@ OUT=$(bash "$BUNDLE/resume-source.sh" 2>&1) && fail 'recovery must not race a tr
 rmdir "$RLOCK"
 OUT=$(bash "$BUNDLE/resume-source.sh" 2>&1) || fail 'manual recovery from dead pane'
 RECOVERED=''
-for ((attempt=0; attempt<30; attempt++)); do
-  RECOVERED=$(fleet_pane_claude_pid "$PANE" "$LBL" 2>/dev/null) && [ -n "$RECOVERED" ] && break
+# Wait for the registry too, not just the process: the resumed Claude is visible
+# a moment before it writes its session record (a fast runner read sid= here).
+for ((attempt=0; attempt<50; attempt++)); do
+  RECOVERED=$(fleet_pane_claude_pid "$PANE" "$LBL" 2>/dev/null) && [ -n "$RECOVERED" ] \
+    && [ "$(fleet_cc_session_id "$RECOVERED")" = "$SID" ] && break
   sleep 0.1
 done
 ok; [ -n "$RECOVERED" ] && [ "$(fleet_cc_session_id "$RECOVERED")" = "$SID" ] && [ -z "$(field cc_agent)" ] \
