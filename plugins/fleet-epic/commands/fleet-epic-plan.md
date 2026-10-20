@@ -367,11 +367,17 @@ this order:
 1. **Record the nod on the page** — `#signoff` gets the operator's name and the
    date, and any change they asked for goes into the page first.
 2. **Write the charter** (`<scratchpad>/epic-charter-<slug>.md`) in exactly this
-   shape. Its FIRST line is the driver's command; the marker and the member lines
-   are what `bin/fleet-epic-tick.py` parses every tick — keep them literal:
+   shape. Its FIRST line tells the driver what to run — plain words, never a
+   slash command (T646: a first turn's leading `/fleet-epic-run` is read as a
+   command, and a plugin's command is only `/fleet-epic:fleet-epic-run`, so the
+   driver's first turn ended at 「Unknown command」 before the model ran; plain
+   words reach the model on Claude and Codex alike, and `dash-raw-session.sh`
+   rewrites an older charter's bare `/fleet-epic-run` line into them — KEEP IN
+   SYNC with its `FLEET_EPIC_RUN_LINE`). The marker and the member lines are what
+   `bin/fleet-epic-tick.py` parses every tick — keep them literal:
 
    ```markdown
-   /fleet-epic-run
+   按 fleet-epic-run 的流程驱动这一批：先调用技能 fleet-epic:fleet-epic-run，本条消息下面是这一批的章程。
 
    <!-- fleet:epic repo=<owner/name> short=<简称> cap=4 -->
    # EPIC: <主题>

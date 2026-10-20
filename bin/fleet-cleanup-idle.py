@@ -105,7 +105,7 @@ class Cleaner:
                  "@reap_policy", "@loop", "@wrap_gone", "pane_dead",
                  "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
                  "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted", "@agent_status",
-                 "@task", "@task_flow", "@migrating")
+                 "@task", "@task_flow", "@migrating", "@claude_needs")
         # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
         # window, every window, every tick — ~600 a minute on a busy login. A
         # value carrying the separator (never seen) falls back to a call per name.
@@ -121,7 +121,7 @@ class Cleaner:
         (fleet_reap_notice.reap_state, issue #4822): a `looping` stamp its Stop
         hook left for a child that has since ended is not «still working»; what
         is really pending is busy()'s and fleet-reap-live.py's to say."""
-        return reap_state(snap["@claude_state"], snap["@agent_status"])
+        return reap_state(snap["@claude_state"], snap["@agent_status"], snap.get("@claude_needs", ""))
 
     def theirs(self, snap):
         """Another hosted repo's window, in a multi-repo fleet's per-repo pass

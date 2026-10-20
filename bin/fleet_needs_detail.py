@@ -16,6 +16,11 @@ without opening the session. ONE rule for both agents:
     fleet_needs_detail.py payload          a hook's JSON on stdin → the detail
     fleet_needs_detail.py transcript <f>   the newest tool_use without a result → the detail
     fleet_needs_detail.py dialog <f>       the open AskUserQuestion as JSON + its `fp` (issue #2958)
+    fleet_needs_detail.py nostart <f>      did the first turn ever reach the model? (T646)
+                                           exit 0 + why: no — a prompt / a system line,
+                                           no assistant line (「Unknown command: …」);
+                                           exit 3: yes (an assistant line); exit 1: no
+                                           turn yet, or the file cannot be read
 
 Prints one line (nothing when there is nothing to say), always exits 0: a
 missing detail never costs the state it describes.
@@ -156,6 +161,35 @@ def pending_dialog(path):
     return {"tool_use_id": tuid, "questions": qs} if qs else None
 
 
+def first_turn(path):
+    """T646: ("started", None) once the transcript holds an assistant line;
+    ("nostart", why) when a turn was taken — a user prompt or a system line
+    (Claude Code's 「Unknown command: /x」 never reaches the model) — and nothing
+    answered it; (None, None) before any turn, or unreadable."""
+    turned, why = False, ""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if '"assistant"' not in line and '"user"' not in line and '"system"' not in line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except ValueError:
+                    continue
+                t = o.get("type") if isinstance(o, dict) else None
+                if t == "assistant":
+                    return "started", None
+                if t == "system" and o.get("subtype") == "informational":
+                    turned = True
+                    if not why and isinstance(o.get("content"), str):
+                        why = o["content"]
+                elif t == "user" and not o.get("isMeta"):
+                    turned = True
+    except OSError:
+        return None, None
+    return ("nostart", clean(why) or "first turn ended with no reply") if turned else (None, None)
+
+
 def dialog_fp(d):
     """The dialog's name: its tool_use_id + every question and label, verbatim."""
     import hashlib
@@ -170,6 +204,13 @@ def main(argv):
             out = from_payload(sys.stdin.read())
         elif argv[:1] == ["transcript"] and len(argv) > 1:
             out = from_transcript(argv[1])
+        elif argv[:1] == ["nostart"] and len(argv) > 1:
+            st, why = first_turn(argv[1])
+            if st == "started":
+                return 3
+            if st != "nostart":
+                return 1
+            out = why
         elif argv[:1] == ["dialog"] and len(argv) > 1:
             d = pending_dialog(argv[1])
             if d is None:

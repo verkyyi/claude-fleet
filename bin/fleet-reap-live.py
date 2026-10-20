@@ -187,13 +187,20 @@ def reap_state(tmux, target):
       a 7501 working/blocked with no agent process left under the pane (the relay
       went down with it), a window with neither a 7501 word nor a stamped state
       nor an agent process (an agent that never started, #2404), and a stale
-      stamp with its wrapper gone and no agent (#4822) → exited."""
+      stamp with its wrapper gone and no agent (#4822) → exited; a 7501 done on a
+      window stamped needs/nostart (T646) → needs."""
     stamped, status, gone = split_state(read(*tmux, "display-message", "-p", "-t", target, STATE_FMT))
     said = self_state(status)
     if (said in ("working", "blocked") or (said is None and not stamped)
             or stale(stamped, said, gone)):
         if agent_present(tmux, target) is False:
             return "exited"
+    # A first turn that never reached the model (T646): the agent says `done`/`idle`
+    # but set-claude-state.sh stamped needs/nostart — nothing was handed in, so the
+    # window is a person's to look at, never one a done-reaper closes.
+    if said == "done" and stamped == "needs" and \
+            read(*tmux, "display-message", "-p", "-t", target, "#{@claude_needs}").strip() == "nostart":
+        return "needs"
     return said or stamped
 
 

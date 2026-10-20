@@ -123,6 +123,10 @@
 #   cross-send-refused-unseen                       bin/fleet-peer-send.sh (hub_send: identity sender, fleet_hub_refused,
 #                                                   receipt_watch), fleet-lib.sh fleet_hub_refused
 #   status-agent-not-up / status-perm-overwritten / status-migrated-looping / status-question-lost
+#   epic-driver-unknown-command                     bin/set-claude-state.sh + fleet_needs_detail.py nostart (a
+#                                                   first turn with no reply is needs/nostart, not done),
+#                                                   fleet_reap_notice.reap_state, bin/dash-raw-session.sh
+#                                                   (FLEET_EPIC_RUN_LINE: an older charter's first line, T646)
 #                                                   bin/set-claude-state.sh (the primary-source rule),
 #                                                   fleet-status-7501.py pipe,
 #                                                   fleet_state_carry / fleet_primary_fresh (fleet-lib.sh),
@@ -4279,6 +4283,43 @@ drill_status_question_lost() {
   [ "$st" = needs/ask/7501 ] || { WHY="the Stop right after the question left [$st] — 在问你 flashed to 完成"; return 1; }
   [ "$(o "$SPW" @claude_needs_detail)" = "$words" ] || { WHY="the question's words are gone: [$(o "$SPW" @claude_needs_detail)]"; return 1; }
   SECS=$(since "$t0"); WHAT="问问题：needs/ask 和原话在 Stop 之后还在"
+}
+
+# epic-driver-unknown-command (T646): an EPIC charter opened with the bare
+# `/fleet-epic-run`; Claude Code read it as a command (a plugin's is only
+# `/fleet-epic:fleet-epic-run`), answered 「Unknown command」 itself and the turn
+# ended — the agent said `done`, and the panel filed a driver that never ran under
+# 做完待收. Played here on the agent's own word (7501 pipe) over the transcript that
+# day left: the window must read needs/nostart with Claude Code's words, a reaper
+# must not read it done, and once a reply exists the same `done` is a done.
+drill_epic_driver_unknown_command() {
+  CAP=10; BREAK_SOCK="$WORK/sock-eu"; local t0 st sid=31ec8459-8f2a-4f3c-b44b-f5bcddc3f0e1 tp grp
+  sp_start eu || { WHY="cannot start the isolated tmux server"; return 1; }
+  mkdir -p "$WORK/eu-cc/projects/-x"; tp="$WORK/eu-cc/projects/-x/$sid.jsonl"
+  printf '%s\n' '{"type":"agent-setting","agentSetting":"fleet-epic:epic-driver"}' \
+    '{"type":"system","subtype":"informational","content":"Unknown command: /fleet-epic-run","level":"warning"}' > "$tp"
+  nt set-option -w -t "$SPW" @task T9 \; set-option -w -t "$SPW" @cc_session_id "$sid"
+  eu_say() { printf '\033]7501;state=%s:app=claude-code\033\\' "$1" \
+    | sp_env CLAUDE_CONFIG_DIR="$WORK/eu-cc" TMUX_PANE="$SPP" python3 "$BIN/fleet-status-7501.py" pipe; }
+  t0=$(now)
+  eu_say done
+  st=$(sp_state)
+  [ "$st" = needs/nostart/7501 ] || { WHY="a first turn that never reached the model left [$st] — it reads 做完待收"; return 1; }
+  case "$(o "$SPW" @claude_needs_detail)" in *'Unknown command: /fleet-epic-run'*) : ;;
+    *) WHY="the window does not say why: [$(o "$SPW" @claude_needs_detail)]"; return 1 ;; esac
+  grp=$(cd "$BIN" && python3 -c 'import fleet_view as v; print(v.group_of("needs", False, False, False))' 2>/dev/null)
+  [ "$grp" = ask ] || { WHY="the panel files it under [$grp], not 等你"; return 1; }
+  [ "$(cd "$BIN" && python3 -c 'import fleet_reap_notice as r; print(r.reap_state("needs", "{\"state\":\"done\"}", "nostart"))')" = needs ] \
+    || { WHY="a reaper reads the agent's done over needs/nostart and may close it"; return 1; }
+  # someone sends the right words: the model answers, and a done is a done again
+  printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"tick 1"}]}}' >> "$tp"
+  eu_say working; eu_say done
+  st=$(sp_state)
+  [ "$st" = done//7501 ] || { WHY="after a reply the turn's done left [$st]"; return 1; }
+  [ "$(o "$SPW" @task_started)" = 1 ] || { WHY="@task_started not stamped once the model answered"; return 1; }
+  grep -q '^FLEET_EPIC_RUN_LINE=' "$BIN/dash-raw-session.sh" \
+    || { WHY="dash-raw-session.sh no longer rewrites an older charter's /fleet-epic-run line"; return 1; }
+  SECS=$(since "$t0"); WHAT="首轮没进模型（Unknown command）：needs/nostart 带原话、归「等你」、回收不当做完；有了回复才算 done；旧章程首行改成话"
 }
 
 # cross-send-refused-unseen (issue #2729): the orchestrator's message to a worker
