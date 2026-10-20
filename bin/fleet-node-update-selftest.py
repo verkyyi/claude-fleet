@@ -129,8 +129,8 @@ def wj(path, obj):
         json.dump(obj, f)
 
 
-# The updater's ~3k lines run as a script, which Python never loads from bytecode:
-# every tick compiled them again. UPD_RUN = the same argv through a loader that
+# The updater's ~3k lines (and the daemon's ~9k) run as a script, which Python
+# never loads from bytecode: every tick compiled them again. UPD_RUN = the same argv through a loader that
 # keeps the bytecode in a per-run cache (still `__main__`, its argv, path and
 # file as a script's; nothing set for the processes it starts).
 _UPD_PYC = tempfile.mkdtemp(prefix="fnu-upd-pyc.")
@@ -1107,7 +1107,8 @@ class I_Credsep(Sandbox):
 
     def sup(self):
         e = dict(self.env, FLEET_NODE_TICK="0.1")
-        p = subprocess.Popen([sys.executable, SUP, "run"], env=e, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p = subprocess.Popen([sys.executable, "-c", _LOADER, _UPD_PYC, SUP, "run"], env=e,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.procs.append(p)
         return p
 

@@ -110,8 +110,8 @@ spec.loader.exec_module(fns)
 # from bytecode: every `status` / `account …` compiled them again (~0.2 s, ~300
 # calls a run). CLI = the same argv through a two-line loader that keeps the
 # bytecode in a per-run cache — still `__main__`, its argv, path and file as a
-# script's; its children are untouched (no environment set). The daemon (`run`)
-# keeps the plain argv: B_OneCopy / E_Status find it by that command line.
+# script's; its children are untouched (no environment set). The daemon started
+# this way still reads `…/fleet-node-supervisor.py run` in ps (live_daemons' match).
 _PYC = tempfile.mkdtemp(prefix="fns-pyc.")
 atexit.register(shutil.rmtree, _PYC, True)
 _LOADER = ("import os, sys, importlib.util as u\n"
@@ -567,7 +567,7 @@ class Sandbox(unittest.TestCase):
         output = (open(os.path.join(self.d, "sup.out"), "a")
                   if hasattr(self, "diagnostic_calls") else subprocess.DEVNULL)
         try:
-            p = subprocess.Popen([sys.executable, SUP, "run"], env=e, stdout=output,
+            p = subprocess.Popen(CLI + ["run"], env=e, stdout=output,
                                  stderr=open(os.path.join(self.d, "sup.err"), "a"))
         finally:
             if hasattr(output, "close"):

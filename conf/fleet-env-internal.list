@@ -283,6 +283,7 @@ FLEET_HANDOFF_VERIFY_TIMEOUT       knob: internal pacing/limit, safe in-code def
 FLEET_HEAVY_BIN                    seam: the fleet-heavy.sh path bash-guard.py prefixes (fleet-heavy-selftest.sh)
 FLEET_HEAVY_DIR                    path: the machine-wide heavy-slot dir (default /Users/Shared/claude-fleet/heavy)
 FLEET_HUB_RECEIPT_WAIT             knob: seconds a cross-machine send waits for the hub's delivery receipt before saying queued (fleet-report-parent.sh / fleet-peer-send.sh, 4, #1647)
+FLEET_HUB_SENT_WAIT                seam: seconds a cross-machine send waits for the agent to take its outbox file (fleet-report-parent.sh / fleet-peer-send.sh, 3; hub-relay-selftest.sh sets 0 — no agent there)
 FLEET_PEER_RECEIPT_SECS            knob: seconds after a queued cross-machine send before a pane sender is told it is still not delivered (fleet-peer-send.sh, 60, 0 = off, #2729)
 FLEET_INSTALL_NO_HUB               handoff: = fleet-install.sh --no-hub, from the environment (#1712); one version: the answer 「不接」 ahead (#1804)
 FLEET_INSTALL_HOST                 handoff: = fleet-install.sh --host — 1 承载 too · 0 the part everyone has (#1804; nothing is asked since #2260)
