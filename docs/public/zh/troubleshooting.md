@@ -564,13 +564,6 @@ fleet doctor --json
 - **是什么**：入口下发的团队设置（共享的 MCP、技能、设置）同步到这台了没有。
 - **WARN / FAIL 怎么办**：`fleet-agent-team.py sync`；节点程序每一拍也会重试。
 
-#### `roles`
-
-来自 `fleet doctor`。
-
-- **是什么**：角色定义能不能从入口取到。
-- **WARN / FAIL 怎么办**：`fleet-agent-team.py sync`；取不到时会话照用本机那份，不影响开会话。
-
 ### 订阅与额度
 
 #### `modelcap`

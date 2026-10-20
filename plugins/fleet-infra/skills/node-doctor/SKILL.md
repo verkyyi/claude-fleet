@@ -153,7 +153,6 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `releasekey` | node | [release-rules] | 这台握着发布签名私钥（环境、配置目录、~/.ssh）：删掉，私钥只在发布列车的 release-sign；怀疑泄露就用根钥匙作废（docs/dev/FLEET-HUB.md「发布签名」） |
 | `repo` | node | [node-doctor] | fleet 覆盖层没写 FLEET_REPO |
 | `repos` | node | [node-doctor] | 只报状态：托管的仓库 |
-| `roles` | node | [release-rules] | 角色定义取不到：`fleet-agent-team.py sync` |
 | `rootlog` | node | [mac-node-enroll] | root 服务的日志写在家目录里：重跑安装把日志挪出去 |
 | `runtime` | machine | [release-rules] [mac-node-enroll] | 没有 root 运行时（未托管）或 current 不是一个发布版：`sudo fleet node install` |
 | `rview` | node | [node-doctor] | 远端客户端挂在 fleet 会话上：让它们各用自己的视图会话 |
