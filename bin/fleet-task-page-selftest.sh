@@ -31,7 +31,7 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/ftp.XXXXXX") || st_fail "mktemp"
 trap 'rm -rf "$TMP"' EXIT
 
 # ---- A ------------------------------------------------------------------------
-ST_LEG=A
+export ST_LEG=A
 python3 "$P" render "$EX" -o "$TMP/page.html" || st_fail "render the example"
 PAGE=$(cat "$TMP/page.html")
 for id in $(python3 "$P" ids); do st_has "id $id" "$PAGE" "<section id=\"$id\">"; done
@@ -95,15 +95,15 @@ st_hasnt "no footer" "$B" '本页私密'
 st_hasnt "no style" "$B" '--ground'
 size() { python3 -c 'import json,sys; print(len(json.dumps(sys.stdin.read(), ensure_ascii=False).encode()))'; }
 n=$(printf '%s\n' "$B" | size)
-[ "$n" -le 13000 ]; st_eq "under the default cap ($n)" 0 $?
+st_eq "under the default cap ($n)" yes "$([ "$n" -le 13000 ] && echo yes)"
 B=$(python3 "$P" body "$TMP/page.html" --max 6500)
 n=$(printf '%s\n' "$B" | size)
-[ "$n" -le 6500 ]; st_eq "under --max 6500 ($n)" 0 $?
+st_eq "under --max 6500 ($n)" yes "$([ "$n" -le 6500 ] && echo yes)"
 st_has "evidence moved first" "$B" '（证据（代码与现场）：见设计页）'
 st_has "tech kept at 6500" "$B" '**完成判据**'
 B=$(python3 "$P" body "$TMP/page.html" --max 5500 --link L)
 n=$(printf '%s\n' "$B" | size)
-[ "$n" -le 5500 ]; st_eq "under --max 5500 ($n)" 0 $?
+st_eq "under --max 5500 ($n)" yes "$([ "$n" -le 5500 ] && echo yes)"
 st_has "tech moved next" "$B" '（技术细节：见设计页）'
 st_has "上线证据 never moved" "$B" '让一个演练会话 A 开 B'
 st_has "the note says so" "$B" '标「见设计页」的几段只在页面上'
