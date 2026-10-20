@@ -20,7 +20,7 @@ They can be mixed: one subscription pool can hold both ours and your own. Every 
 The console's **Admin → Subscription pool**. One row per subscription: how much is left in each of its two quota windows (5 hours and 7 days), when they reset, who is using it, how many sessions, its state.
 
 - A new session opens on the subscription with the most headroom; a subscription with either window at 85% is skipped until it resets. Change the percentage in **Subscription pool → Global settings → Skip a subscription at**.
-- When a subscription is full, by default running sessions stay put and only new sessions use another subscription; with **Move running sessions when full** on, running ones move too.
+- When a subscription is full the pool moves on by itself: a session's next request lands on another subscription. There is no switch for it.
 - Members cannot see the subscription pool; they see only their own personal limit (below).
 
 ### Adding a subscription

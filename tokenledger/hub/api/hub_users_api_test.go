@@ -262,8 +262,8 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 		{PoolSkipPctKey, "90", http.StatusOK, "90"},
 		{PoolSkipPctKey, "0", http.StatusBadRequest, "90"},
 		{PoolSkipPctKey, "101", http.StatusBadRequest, "90"},
-		{PoolMoveFullKey, "on", http.StatusOK, "on"},
-		{PoolMoveFullKey, "maybe", http.StatusBadRequest, "on"},
+		// pool.move_when_full is retired (claude-fleet T543): refused, nothing stored.
+		{"pool.move_when_full", "on", http.StatusBadRequest, ""},
 		{AutoAssignKey, " Least-Busy ", http.StatusOK, "least-busy"}, // claude-fleet#2069
 		{AutoAssignKey, "mac-c, mac-e", http.StatusOK, "mac-c,mac-e"},
 		{AutoAssignKey, "bad host!", http.StatusBadRequest, "mac-c,mac-e"},
@@ -295,8 +295,8 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 			n++
 		}
 	}
-	if n != 8 { // one per accepted change
-		t.Errorf("setting audit rows = %d, want 8", n)
+	if n != 7 { // one per accepted change
+		t.Errorf("setting audit rows = %d, want 7", n)
 	}
 	// The readers follow at once.
 	if got := h.srv.autoAssign(); strings.Join(got, ",") != "mac-c,mac-e" {
@@ -309,7 +309,7 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 	if !found {
 		t.Error("fleet.routes_extra's machine is not in the routes")
 	}
-	if p := h.srv.poolSettings(); p["FLEET_ACCOUNT_CEILING"] != "85" || p["FLEET_FAILOVER"] != "1" {
+	if p := h.srv.poolSettings(); p["FLEET_ACCOUNT_CEILING"] != "85" || p["FLEET_FAILOVER"] != "" {
 		t.Errorf("pool = %v", p)
 	}
 	// Any other key a settings PUT stores is audited too.

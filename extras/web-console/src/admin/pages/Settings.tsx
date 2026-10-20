@@ -42,7 +42,6 @@ type Group = "public" | "pool" | "people" | "team" | "deploy";
 const EDITABLE: { key: string; type: Type; group: Group }[] = [
   { key: "hub.public_meter", type: "onoff", group: "public" },
   { key: "pool.skip_pct", type: "pct", group: "pool" },
-  { key: "pool.move_when_full", type: "onoff", group: "pool" },
   { key: "fleet.auto_assign", type: "hosts", group: "people" },
   { key: "fleet.machine_names", type: "names", group: "people" },
   { key: "fleet.spares", type: "onoff", group: "people" },

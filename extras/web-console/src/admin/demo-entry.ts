@@ -16,7 +16,6 @@ const settings: HubSetting[] = [
   { key: "fleet.spare_max", value: "2", source: "default" },
   { key: "fleet.spares", value: "on", source: "set" },
   { key: "hub.public_meter", value: "on", source: "set" },
-  { key: "pool.move_when_full", value: "on", source: "set" },
   { key: "pool.skip_pct", value: "90", source: "set" },
 ];
 

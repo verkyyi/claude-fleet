@@ -453,3 +453,44 @@ func TestMigration4_RemovesTheHubTickets(t *testing.T) {
 		}
 	}
 }
+
+// Migration 5 (claude-fleet T543): the retired pool.move_when_full row (and a
+// start's copy mark of it) goes, every other setting stays, a second run
+// changes nothing.
+func TestMigration5_RemovesPoolMoveWhenFull(t *testing.T) {
+	s := newStore(t)
+	if err := s.EnsureNodes(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for k, v := range map[string]string{"pool.move_when_full": "on", "hub.legacy_migrated.pool.move_when_full": "x", "pool.skip_pct": "70"} {
+		if err := s.SetFleetSetting(k, v, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db := s.DB()
+	if _, err := db.Exec(`DELETE FROM hub_migrations WHERE id = 5`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := runMigrations(db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.FleetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["pool.move_when_full"] != "" || got["hub.legacy_migrated.pool.move_when_full"] != "" || got["pool.skip_pct"] != "70" {
+		t.Fatalf("settings after migration 5 = %v", got)
+	}
+	ms, err := s.Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range ms {
+		if m.ID == 5 && !strings.Contains(m.Detail, `"deleted.fleet_settings":2`) {
+			t.Errorf("migration 5 detail %s", m.Detail)
+		}
+	}
+}

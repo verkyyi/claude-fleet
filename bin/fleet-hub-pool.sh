@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
-# fleet-hub-pool.sh — this machine takes the subscription pool's two settings
-# from the hub (issue #2029).
+# fleet-hub-pool.sh — this machine takes the subscription pool's setting from
+# the hub (issue #2029).
 #
-# #1986 put pool.skip_pct / pool.move_when_full on the hub (an admin's
-# `fleet hub set`, audited); the hub hands them out in the `pool` block of
-# GET /v1/fleet/client-settings under the names a node's fleet.conf gives them:
+# #1986 put pool.skip_pct on the hub (an admin's `fleet hub set`, audited); the
+# hub hands it out in the `pool` block of GET /v1/fleet/client-settings under the
+# name a node's fleet.conf gives it:
 #
 #   pool.skip_pct        → FLEET_ACCOUNT_CEILING   an integer 1–100
-#   pool.move_when_full  → FLEET_FAILOVER          0 | 1
+#
+# pool.move_when_full → FLEET_FAILOVER is retired (T543): an older hub's
+# FLEET_FAILOVER is never written, and fleet-lib.sh ignores one an older release
+# left in the file.
 #
 # `fetch` writes them to $FLEET_CONF_DIR/hub-pool.env, which fleet-lib.sh
 # sources FIRST, beside hub-defaults.conf — so the order is the one the client
 # defaults already use: hub < fleet.conf < a fleet's own conf < the environment.
 # Each line is `[ -n "${KEY+x}" ] || KEY='value'`: a key this machine set always
-# wins, a line here only fills the gap the built-in default (85 / 0) used to.
+# wins, a line here only fills the gap the built-in default (85) used to.
 # Not a `*.conf` on purpose: the legacy scans read every $FLEET_CONF_DIR/*.conf
 # as a fleet.
 #
@@ -66,7 +69,6 @@ if not isinstance(pool, dict):
     sys.exit(0)                     # an older hub: no pool block, the file stays
 rules = {
     "FLEET_ACCOUNT_CEILING": lambda v: re.fullmatch(r"[0-9]{1,3}", v) and 1 <= int(v) <= 100,
-    "FLEET_FAILOVER": lambda v: v in ("0", "1"),
 }
 lines = []
 for k in sorted(rules):
@@ -104,20 +106,18 @@ _eff() {
 # status — each key: the value fleet-account.sh reads, and where it came from
 # (入口 the hub · 本机 this machine's conf · 默认 the built-in default)
 cmd_status() {
-  local k eff own src
-  for k in FLEET_ACCOUNT_CEILING FLEET_FAILOVER; do
-    eff=$(_eff "$k"); own=$(_eff "$k" 1)
-    if [ -n "$own" ]; then src=本机
-    elif [ -n "$eff" ]; then src=入口
-    else src=默认; case "$k" in FLEET_ACCOUNT_CEILING) eff=85 ;; *) eff=0 ;; esac
-    fi
-    printf '%s\t%s\t%s\n' "$k" "$eff" "$src"
-  done
+  local k=FLEET_ACCOUNT_CEILING eff own src
+  eff=$(_eff "$k"); own=$(_eff "$k" 1)
+  if [ -n "$own" ]; then src=本机
+  elif [ -n "$eff" ]; then src=入口
+  else src=默认; eff=85
+  fi
+  printf '%s\t%s\t%s\n' "$k" "$eff" "$src"
 }
 
 case "${1:-}" in
   fetch)  shift; cmd_fetch "$@" ;;
   status) cmd_status ;;
-  -h|--help) sed -n '2,32p' "$0" ;;
+  -h|--help) sed -n '2,35p' "$0" ;;
   *) printf 'usage: fleet-hub-pool.sh fetch [--force] | status\n' >&2; exit 2 ;;
 esac

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,7 +33,6 @@ import (
 // The hub settings' keys.
 const (
 	PoolSkipPctKey  = "pool.skip_pct"
-	PoolMoveFullKey = "pool.move_when_full"
 	AutoAssignKey   = "fleet.auto_assign"
 	RoutesExtraKey  = "fleet.routes_extra"
 	MachineNamesKey = "fleet.machine_names"
@@ -95,8 +95,6 @@ var hubSettings = map[string]hubSetting{
 			}
 			return strconv.Itoa(n), ""
 		}},
-	PoolMoveFullKey: {def: "off", help: "move a session to another subscription when its own is full (nodes: FLEET_FAILOVER)",
-		check: onOff(PoolMoveFullKey, "off")},
 	AutoAssignKey: {def: "", help: "machines a new person gets a login opened on: least-busy, names comma-separated, or none",
 		check: func(_ *Server, v string) (string, string) {
 			if strings.EqualFold(strings.TrimSpace(v), noneValue) {
@@ -232,10 +230,10 @@ func splitHosts(v string) []string {
 	return out
 }
 
-// isHubSettingKey reports whether key is one of hubSettings, a
-// user.<id>.machine_login or a user.<GitHub ID>.lang.
+// isHubSettingKey reports whether key is one of hubSettings, a retired one
+// (refused by putHubSetting), a user.<id>.machine_login or a user.<GitHub ID>.lang.
 func isHubSettingKey(key string) bool {
-	if _, ok := hubSettings[key]; ok {
+	if _, ok := hubSettings[key]; ok || slices.Contains(store.RetiredSettings, key) {
 		return true
 	}
 	if _, ok := langKeyPerson(key); ok {
@@ -727,6 +725,11 @@ func (s *Server) settingAudit(actor, key, old, new string, at time.Time) {
 // putHubSetting validates and stores one hub setting, auditing the change.
 // Returns the HTTP status and, on a refusal, why.
 func (s *Server) putHubSetting(actor, key, value string, now time.Time) (int, string) {
+	if slices.Contains(store.RetiredSettings, key) {
+		// An older console's switch (claude-fleet T543): refused, never a
+		// silent 200 that changes nothing.
+		return http.StatusBadRequest, key + " 已不用：池子按请求挑订阅，满了自然换下一个，没有开关可拨"
+	}
 	settings, err := s.Store.FleetSettings()
 	if err != nil {
 		return http.StatusInternalServerError, err.Error()

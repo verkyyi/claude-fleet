@@ -32,6 +32,38 @@ var migrations = []migration{
 	{ID: 2, Name: "hub-users-principal", Run: hubUsersPrincipal},
 	{ID: 3, Name: "remove-spot-nodes", Run: removeSpotNodes},
 	{ID: 4, Name: "remove-hub-tickets", Run: removeHubTickets},
+	{ID: 5, Name: "remove-pool-move-when-full", Run: removePoolMoveWhenFull},
+}
+
+// RetiredSettings are hub settings no reader takes any more: a stored row is
+// ignored, a PUT refused, and migration 5 deletes the row.
+//   - pool.move_when_full (claude-fleet T543, EPIC T542): "move a session when
+//     its subscription is full" was never this switch's to do — the pool picks
+//     a subscription per request — and on a node it only ran the local
+//     account-swap planner, which failed every time on a separated login.
+var RetiredSettings = []string{"pool.move_when_full"}
+
+// removePoolMoveWhenFull is migration 5 (claude-fleet T543): the retired
+// settings' rows (RetiredSettings, and a start's copy mark of one) are deleted.
+// detail counts them. Rolling back is the previous image, which reads the
+// setting as its default (off); the old value is in hub-deploy's snapshot.
+func removePoolMoveWhenFull(d dialect, tx *sql.Tx) (map[string]int64, error) {
+	done := map[string]int64{}
+	if ok, err := d.tableExists(tx, "fleet_settings"); err != nil || !ok {
+		return done, err
+	}
+	keys := []string{}
+	for _, k := range RetiredSettings {
+		keys = append(keys, k, "hub.legacy_migrated."+k)
+	}
+	res, err := tx.Exec(`DELETE FROM fleet_settings WHERE key IN ('` + strings.Join(keys, "', '") + `')`)
+	if err != nil {
+		return nil, fmt.Errorf("delete the retired settings: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		done["deleted.fleet_settings"] = n
+	}
+	return done, nil
 }
 
 // ticketTables are the hub tickets' tables (claude-fleet#2676 / #2677): the
