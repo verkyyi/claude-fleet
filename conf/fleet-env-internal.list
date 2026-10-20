@@ -760,6 +760,8 @@ FLEET_TQ_FLAKY_MAX                 knob: FLAKY sightings in that window that qua
 FLEET_TRAIN_PLAN_CMD               seam: the runner command fleet-train-plan.sh prices the selection with (the BREAK-IT drill's fake; #3241)
 FLEET_TRAIN_REUSE_GH               seam: the gh fleet-train-reuse.sh reads PR runs with (the selftest's stub; #4794)
 FLEET_ORPHAN_REPORT_DAYS           knob: how many days an unread orphaned child report stays listed on the sidebar / entry (fleet-orphan-reports.py, default 14, #3369)
+FLEET_ORPHAN_NOTIFY_SECS           knob: one FLEET_NOTIFY_CMD push per gone parent (one batch) within this many seconds for orphaned reports (fleet-orphan-reports.py once, default 86400, T660)
+FLEET_ORPHAN_SEND                  seam: what fleet-orphan-reports.py redeliver runs instead of fleet-peer-send.sh (selftests, T660)
 FLEET_CPU_STAT_FILE                test seam: the cgroup cpu.stat the doctor's cpu row samples (#3514)
 FLEET_CPU_MAX_FILE                 test seam: the cgroup cpu.max the doctor's cpu row reads the limit from (#3514)
 FLEET_CPU_SAMPLE_SECS              knob: internal pacing, seconds the doctor's cpu row samples the cgroup over (default 2, #3514)

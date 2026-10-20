@@ -586,6 +586,16 @@ print("new")
     bash "${FLEET_ORPHAN_ALERT_CMD:-$BIN/fleet-alerts.sh}" event ${sockl:+-L "$sockl"} child-report \
       "fleet: $label${wname:+ \"$wname\"} $UST${prn:+ (PR #$prn)} — 派它的会话 $worigin 已不在，结果交给你${SUMMARY:+: $(printf '%s' "$SUMMARY" | head -1 | cut -c1-160)}" \
       >/dev/null 2>&1 || printf 'fleet-report-parent: filed for the person, but the alert failed\n' >&2
+    # …and ONE push per batch (T660) over the fleet's notifier (FLEET_NOTIFY_CMD — the
+    # WeChat road memguard and install-sync use): the gone parent is the batch, so a
+    # closed session's ten children ring once. No notifier ⇒ the alert alone.
+    if [ -n "${FLEET_NOTIFY_CMD:-}" ] && python3 "$BIN/fleet-orphan-reports.py" once "$worigin" 2>/dev/null; then
+      local _on; _on=$(python3 "$BIN/fleet-orphan-reports.py" count 2>/dev/null)
+      # shellcheck disable=SC2086  # FLEET_NOTIFY_CMD is a command line, split on purpose (diskguard does the same)
+      fleet_timebox 10 $FLEET_NOTIFY_CMD "fleet: 有 ${_on:-1} 条无主回报 — $label $UST${prn:+ (PR #$prn)}，派它的会话 $worigin 已不在；⌘P 里点开看${SUMMARY:+
+$(printf '%s' "$SUMMARY" | head -3 | cut -c1-200)}" >/dev/null 2>&1 \
+        || printf 'fleet-report-parent: filed for the person, but the push failed\n' >&2
+    fi
   fi
   # Stamped like a delivered one: the reaper's --only-once backstop must not file a second.
   TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
@@ -736,17 +746,43 @@ fi
 # answering to the key never heard of it. The report goes to the RETIRED book
 # (`<key>.ndjson.<gen>`, where that generation's other reports were moved) and
 # nowhere else — not to the new holder, and not up the new holder's ancestry.
+# By the parent's ID FIRST (T660): a parent that closed while this child ran is
+# exactly the session whose key gets allocated again, and the ID ledger still knows
+# who stands in for it (its successor, else its own parent). Resolved here, before
+# the generation check — the side effects (its book row, the reminder when nobody
+# is there) stay where they always were, below.
+SENDKEY="$worigin" RELAY_FROM='' pwin=$PFOUND IDTAKE='' IDGONE=''
+if [ -z "$pwin" ] && fleet_is_fid "$ofid"; then
+  _take=$(fleet_id_take "$ofid"); _trc=$?
+  case "$_trc" in
+    0) IFS=$'\t' read -r _tid _thow _tsock pwin <<< "$_take"
+       # who takes it must be on THIS fleet's socket: asked there, not by the first
+       # socket that answers
+       if [ -n "$SOCK" ] && [ "$_tsock" != "$SOCK" ]; then pwin=$(fleet_win_for_fid "$_tid" "$SOCK" 2>/dev/null) || pwin=''; fi
+       if [ -n "$pwin" ]; then
+         SENDKEY=$(fleet_window_okey "$sess" "$pwin" 2>/dev/null); [ -n "$SENDKEY" ] || SENDKEY=$_tid
+         RELAY_FROM="$worigin ($_thow)"; IDTAKE=1
+       fi ;;
+    1) IDGONE=1 ;;
+  esac
+fi
+
 if [ -n "$RETIRED_GEN" ] || { [ -z "$PFOUND" ] && [ -n "$sess" ] && fleet_key_gen_stale "$sess" "$worigin" "$wogen"; }; then
   RETIRED_GEN=${RETIRED_GEN:-${wogen:-0}}
   if [ "$DRY" != 1 ] && command -v children_append_retired >/dev/null 2>&1; then
     children_append_retired "$worigin" "$RETIRED_GEN" "$(row_json \
       "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER")" "$sess" || :
   fi
-  printf 'fleet-report-parent: parent %s is a later generation than the one that spawned this session (%s ≠ %s) — filed in its retired book, not sent\n' \
-    "$worigin" "$RETIRED_GEN" "$(fleet_key_gen "$sess" "$worigin")" >&2
-  # The session that spawned it is gone (issue #3117): the person takes the report.
-  orphan "parent $worigin (generation $RETIRED_GEN) is gone"
-  exit 0
+  # Someone takes it by ID (T660): the retired book holds that generation's row, the
+  # new holder's live book none, and the report is delivered below with the stand-in
+  # note — never the person's reminder. Nobody by ID ⇒ as before.
+  if [ -z "$IDTAKE" ]; then
+    printf 'fleet-report-parent: parent %s is a later generation than the one that spawned this session (%s ≠ %s) — filed in its retired book, not sent\n' \
+      "$worigin" "$RETIRED_GEN" "$(fleet_key_gen "$sess" "$worigin")" >&2
+    # The session that spawned it is gone (issue #3117): the person takes the report.
+    orphan "parent $worigin (generation $RETIRED_GEN) is gone"
+    exit 0
+  fi
 fi
 
 # --- the ledger (issue #937): every report is RECORDED, delivered or not --------
@@ -756,7 +792,9 @@ fi
 # without a `gh pr` + capture-pane per child. Keyed by the parent's KEY, not its
 # window id, so a migrated/restored parent reads the same file. Deduped on
 # (child, state, pr) against that child's latest event; never fails, prints nothing.
-if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
+# A retired generation's row is already in its retired book (above): the key's new
+# holder never hears of this child.
+if [ "$DRY" != 1 ] && [ -z "$RETIRED_GEN" ] && command -v children_append >/dev/null 2>&1; then
   children_append "$worigin" "$(row_json \
     "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || :
 fi
@@ -774,29 +812,17 @@ fi
 # the envelope saying who it is standing in for, and the receiver's book gets a
 # `relayed_from` row so `fleet-children.sh` there shows it too. Nobody alive above
 # (hub-spawned, cross-fleet, never reported) ⇒ the old silent success, below.
-SENDKEY="$worigin" RELAY_FROM='' pwin=''
-pwin=$PFOUND
-# By the parent's ID first (EPIC T497 C4, design §4.3): its window carries the same ID
-# through /clear, /compact, a handoff or an agent switch, so none of them loses a
-# report; a parent ID that has closed hands it to its successor (down the prev
-# chain), else up its own parent; nobody ⇒ the person's reminder. An ID this
-# machine's ledger does not know keeps the old road (the key, the live ancestor).
-if [ -z "$pwin" ] && fleet_is_fid "$ofid"; then
-  _take=$(fleet_id_take "$ofid"); _trc=$?
-  case "$_trc" in
-    0) IFS=$'\t' read -r _tid _thow _tsock pwin <<< "$_take"
-       if [ -n "$SOCK" ] && [ "$_tsock" != "$SOCK" ]; then pwin=''
-       else
-         SENDKEY=$(fleet_window_okey "$sess" "$pwin" 2>/dev/null); [ -n "$SENDKEY" ] || SENDKEY=$_tid
-         RELAY_FROM="$worigin ($_thow)"
-         if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
-           children_append "$SENDKEY" "$(row_json \
-             "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$worigin" 2>/dev/null)" "$sess" || :
-         fi
-       fi ;;
-    1) orphan "parent ID $(bash "$BIN/fleet-id.sh" short "$ofid" 2>/dev/null || printf '%s' "$ofid") has closed, with no successor or parent open" ;;
-  esac
+# By the parent's ID first (EPIC T497 C4, design §4.3 — resolved above, T660): its
+# window carries the same ID through /clear, /compact, a handoff or an agent switch,
+# so none of them loses a report; a parent ID that has closed hands it to its
+# successor (down the prev chain), else up its own parent; nobody ⇒ the person's
+# reminder. An ID this machine's ledger does not know keeps the old road (the key,
+# the live ancestor).
+if [ -n "$IDTAKE" ] && [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
+  children_append "$SENDKEY" "$(row_json \
+    "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$worigin" 2>/dev/null)" "$sess" || :
 fi
+[ -n "$IDGONE" ] && orphan "parent ID $(bash "$BIN/fleet-id.sh" short "$ofid" 2>/dev/null || printf '%s' "$ofid") has closed, with no successor or parent open"
 [ -n "$pwin" ] || pwin=$(fleet_win_for_key "$worigin" "$SOCK") || pwin=''
 if [ -z "$pwin" ] && _anc=$(fleet_live_ancestor "$worigin" "$sess" "$SOCK"); then
   SENDKEY=${_anc%%$'\t'*}; pwin=${_anc#*$'\t'}; RELAY_FROM="$worigin"

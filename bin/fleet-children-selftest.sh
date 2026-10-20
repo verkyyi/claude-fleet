@@ -245,8 +245,16 @@ printf '%s' '{"child":"issue-501","state":"MERGED","pr":"51"}' \
 new_win gen-oldkid; GK="$WID"; opt "$GK" @issue 502; opt "$GK" @origin scratch-1; opt "$GK" @origin_wid "u/scratch-1"
 eq "gen: before re-allocation scratch-1 has the old book's child + the live one" 2 \
   "$(bash "$CLI" -L "$LBL" scratch-1 --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["children"]))')"
+# T660: a running child whose parent's ID the ledger knows is not moved aside —
+# its @origin becomes that ID, so the new holder never counts it and its report
+# finds the parent (or the parent's own parent) by ID.
+GIF=$(python3 -c 'import uuid; print(uuid.uuid4())')
+FLEET_ID_PUSH=0 python3 "$BIN/fleet_id.py" open "$GIF" >/dev/null
+new_win gen-idkid; GI="$WID"; opt "$GI" @issue 505; opt "$GI" @origin scratch-1; opt "$GI" @origin_fid "$GIF"
 alloc=$( . "$BIN/fleet-lib.sh"; fleet_scratch_alloc "$GR" master "$LBL" )
 eq "gen: the free number is allocated" scratch-1 "${alloc%%$'\t'*}"
+eq "gen(T660): an identified child keeps its parent by ID, never retired" "$GIF|" \
+  "$(TM display-message -p -t "$GI" '#{@origin}|#{@origin_retired}')"
 eq "gen: the last holder's book is moved aside" no "$([ -e "$CD/${P}scratch-1.ndjson" ] && echo yes || echo no)"
 has "gen: …and kept, readable, in its retired book" "\"child\": \"${P}issue-501\"" "$(cat "$CD/${P}scratch-1.ndjson.0" 2>/dev/null)"
 G1=$(awk -F'\t' -v k="${P}scratch-1" '$1 == k { g = $2 } END { print g }' "$CD/.gen" 2>/dev/null)

@@ -208,6 +208,10 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", ups
         # what the session used today on the pool (issue #3377): the hub's count,
         # never a 0 when none is recorded
         right.append([(say("topbar_today_fmt", FV.tokens_short(tok)), DIM, "")])
+    orphans = rec.get("orphans")
+    if isinstance(orphans, int) and orphans > 0:
+        # results nobody took (T660): their rows are ⌘P's, under the repo heading
+        right.append([(say("topbar_orphan_fmt", orphans), WARN, "")])
     if upstream:
         right.append([(upstream, BAD, "upstream")])
     if trouble:
@@ -476,6 +480,25 @@ def render_upload(kv, cols):
         return None
 
 
+def orphan_count():
+    """Unread results nobody took (global/orphan-reports.ndjson, T660), through its
+    one reader loaded in-process — no fork, and nothing read when the file is empty."""
+    conf = os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")
+    try:
+        if os.path.getsize(os.path.join(conf, "global", "orphan-reports.ndjson")) == 0:
+            return 0
+    except OSError:
+        return 0
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("fleet_orphan_reports", str(BIN / "fleet-orphan-reports.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return len(mod.unread(10 ** 6))
+    except Exception:   # noqa: BLE001 — the line never dies for a reminder
+        return 0
+
+
 def render_node(kv, cols):
     # this connection's language (issue #3329): the 看台's `@view_lang`, when the
     # door recorded one (`vl=1:<locale>`) — fleet-ui-lang.sh weighs it after the
@@ -493,6 +516,7 @@ def render_node(kv, cols):
         print("#[fg=%s,bold] i #[nobold]#[fg=%s]%s#[default]" % (HL, FG, tmux_text(kv["fl"])))
         return 0
     rec, down, rr, via = node_record(kv)
+    rec["orphans"] = orphan_count()
     parts, bg = layout(rec, cols, down, rr, None, via, upstream=upstream_text() if rec.get("here") else "")
     print(own_window(kv.get("w", ""), paint(parts, bg)))
     return 0

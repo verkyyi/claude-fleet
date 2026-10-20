@@ -5772,6 +5772,51 @@ drill_report_parent_cleared() {
   WHAT="父会话 /clear 后子会话回报照样找到父窗口（按 ID）；父 ID 已关闭时交给接班的 ID"
 }
 
+# A batch's report went to nobody (T660): orchestrator A spawned a plan-page session
+# B (scratch-3), B spawned the EPIC driver C, B closed and a new session was given
+# scratch-3. The mint moved C's @origin aside to @origin_retired, and the report's
+# earlier-generation branch filed it for the person and exited — before the
+# identity road, which knew B's parent A was alive. Now an identified child keeps
+# its parent's ID as @origin at the mint, and a report finds A by ID first —
+# a child already moved aside (D: the live @1197) as well.
+drill_report_parent_key_reminted() {
+  CAP=20; local d="$WORK/rpk" L="rpk$$" sp spid pa pb ch dh wpa wb wch wdh pch pdh t0 o1 o2 org
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  mkdir -p "$d/conf/fleets/$L" "$d/tt"; : > "$d/conf/fleets/$L/conf"
+  fx_repo "$d/conf" "$L" acme/app FLEET_MAIN="$d"
+  rtm() { TMUX_TMPDIR="$d/tt" FLEET_ALLOW_TMUX_DESTROY=1 "$REAL_TMUX" -L "$L" "$@"; }
+  rtm -f /dev/null new-session -d -s "$L" -n home 'sleep 120' || { WHY="cannot start the isolated tmux server"; return 1; }
+  sp=$(rtm display-message -p '#{socket_path}'); spid=$(rtm display-message -p '#{pid}')
+  pa=$(python3 -c 'import uuid; print(uuid.uuid4())'); pb=$(python3 -c 'import uuid; print(uuid.uuid4())')
+  ch=$(python3 -c 'import uuid; print(uuid.uuid4())'); dh=$(python3 -c 'import uuid; print(uuid.uuid4())')
+  wpa=$(rtm new-window -d -P -F '#{window_id}' 'sleep 120'); rtm set-option -w -t "$wpa" @fleet_id "$pa"
+  wb=$(rtm new-window -d -P -F '#{window_id}' 'sleep 120'); rtm set-option -w -t "$wb" @fleet_id "$pb"
+  wch=$(rtm new-window -d -P -F '#{window_id}' 'sleep 120')
+  rtm set-option -w -t "$wch" @fleet_id "$ch"; rtm set-option -w -t "$wch" @origin acme-app:scratch-3; rtm set-option -w -t "$wch" @origin_fid "$pb"
+  wdh=$(rtm new-window -d -P -F '#{window_id}' 'sleep 120')
+  rtm set-option -w -t "$wdh" @fleet_id "$dh"; rtm set-option -w -t "$wdh" @origin_retired 'acme-app:scratch-3#0'; rtm set-option -w -t "$wdh" @origin_fid "$pb"
+  pch=$(rtm display-message -p -t "$wch" '#{pane_id}'); pdh=$(rtm display-message -p -t "$wdh" '#{pane_id}')
+  rpe() { (cd "$d" && env TMUX_TMPDIR="$d/tt" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_ID_PUSH=0 \
+            TMUX="$sp,$spid,0" "$@"); }
+  rpe python3 "$BIN/fleet_id.py" open "$pa" --agent claude >/dev/null
+  rpe python3 "$BIN/fleet_id.py" open "$pb" --parent "$pa" >/dev/null
+  rpe python3 "$BIN/fleet_id.py" open "$ch" --parent "$pb" >/dev/null
+  rpe python3 "$BIN/fleet_id.py" open "$dh" --parent "$pb" >/dev/null
+  t0=$(now)
+  # B closes; scratch-3 is given to a new session (its generation minted)
+  rpe bash -c '. "$1/fleet-lib.sh"; fleet_win_retire "$2" "$3" exited' _ "$BIN" "$wb" "$L"; rtm kill-window -t "$wb"
+  rpe bash -c '. "$1/fleet-lib.sh"; fleet_scratch_gen_new "$2" scratch-3 ""' _ "$BIN" "$L"
+  org=$(rtm display-message -p -t "$wch" '#{@origin}|#{@origin_retired}')
+  o1=$(rpe env TMUX_PANE="$pch" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary batch 2>&1)
+  o2=$(rpe env TMUX_PANE="$pdh" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary batch 2>&1)
+  SECS=$(since "$t0")
+  rtm kill-server 2>/dev/null
+  [ "$org" = "$pb|" ] || { WHY="the re-mint moved an identified child aside: @origin|@origin_retired = [$org], want [$pb|]"; return 1; }
+  case "$o1" in *"($wpa"*) ;; *) WHY="the driver's report after its parent's key was re-minted went to [$o1], want the grandparent $wpa"; return 1 ;; esac
+  case "$o2" in *"($wpa"*) ;; *) WHY="an already-retired child's report went to [$o2], want the grandparent $wpa by ID"; return 1 ;; esac
+  WHAT="父会话关了、临时编号被重领：有身份的孩子不被挪开（@origin 记父 ID），回报按 ID 交给活着的祖父；已被挪开的孩子同样按 ID 送到"
+}
+
 # The hub's ID switch flipped under a running session (EPIC T497 C6): the window
 # still carried the old launch binding (@launch), and its report went to the task
 # record, which the hub refused (409 ID_SWITCH) — the result was lost, and so was
