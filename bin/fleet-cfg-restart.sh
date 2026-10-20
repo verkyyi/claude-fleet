@@ -12,7 +12,7 @@
 # same configuration but an OLDER fleet version (@agent_ver, issue #1895) is
 # marked 待换新 instead, and reopened exactly alike.
 #
-# Each tick (fleet-sleep-daemon.sh, after the reeval), per fleet: the windows whose
+# Each tick (fleet-reconcile-tick.sh, after the reeval), per fleet: the windows whose
 # @agent_cfg differs from the expected one are judged by fleet_cfg_restart_why —
 # a Claude or Codex session (issue #1896), `done` for FLEET_CFG_RESTART_IDLE
 # seconds (600), no /loop

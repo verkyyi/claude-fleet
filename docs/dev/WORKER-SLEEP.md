@@ -256,7 +256,7 @@ native inbox. Failed delivery is not reported as success. A delivery timeout is
 recorded as uncertain and is not blindly replayed. These native transports
 confirm acceptance, not completion of the requested work.
 
-The sleep daemon runs one bounded scan per minute. It also reconciles interrupted
+The reconcile tick (`bin/fleet-reconcile-tick.sh`) runs one bounded sleep scan per minute. It also reconciles interrupted
 transitions. Crash snapshots retain the sleep record; restoring a fleet recreates
 the placeholder rather than starting every sleeping agent. A missing worktree,
 transcript or account leaves an actionable failure; it never silently starts a
@@ -356,7 +356,7 @@ Run `bash bin/run-selftests.sh fleet-sleep` for the isolated tmux integration
 tests. Run the complete selftest gate before release. Do not edit `bin/` while
 the gate runs: the shadow root links those files.
 
-Install `com.claude-fleet.sleep` on macOS or `claude-fleet-sleep.timer` on Linux,
+The scan rides `com.claude-fleet.reconcile` on macOS or `claude-fleet-reconcile.timer` on Linux,
 following `docs/INSTALL.md`. Start with observation, review skipped candidates,
 test manual sleep/wake with both native agents, and then enable automatic sleep
 on each fleet. Check the actual native session ID, window identity, account,

@@ -36,7 +36,7 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 #   diskguard                     `du -shx` tree walks under an 8s timebox
 #   base-sync                     `git pull --ff-only` rewrites the base tree
 #                                 while holding the shared land lease
-#   sleep                         transcript inspection and native resume on
+#   reconcile                     registry + transcript reads, and the sleep scan's native resume on
 #                                 the user's entry/message path
 #   install-sync                  `git merge --ff-only` rewrites the live
 #                                 install's bin/ that every daemon and hook
@@ -61,7 +61,7 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 #                                 machine streams through them, and its 2 s beat
 #                                 is the rebuild bound
 # POLL: gh / tmux / network polling only — Background is correct and stays.
-IO_UNITS='cleanup worktree-autoclean diskguard base-sync sleep install-sync'
+IO_UNITS='cleanup worktree-autoclean diskguard base-sync reconcile install-sync'
 CADENCE_UNITS='collect memguard peerlink'  # cred-proxy: one per machine now, not a login unit (#4710, #4809)
 POLL_UNITS='spinner quotawatch ledger-watch'
 

@@ -161,3 +161,7 @@ re   ^(bin/fleet-lib\.sh|hooks/bash-guard\.py|conf/agent-bundle\.manifest|bin/fl
 re   fleet-codex-plugins\.py"\s+dirs   #3123  bin/fleet-codex.sh
 re   parent_matches\(r,\s*parent\)     #4398  bin/fleet_task_control.py
 re   title="\$node\s                   #3008  bin/fleet-remote-view.sh
+# --- the sleep unit is the state-reconcile unit now (T544, EPIC T542 C6) ------------
+path launchd/com.claude-fleet.sleep.plist.tmpl  T544
+path systemd/claude-fleet-sleep.service         T544
+path systemd/claude-fleet-sleep.timer           T544

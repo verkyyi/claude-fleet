@@ -1,0 +1,12 @@
+[Unit]
+Description=claude-fleet session state reconcile (who is working, who is idle)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash __HOME__/.claude/fleet/bin/fleet-reconcile-tick.sh
+Environment=HOME=__HOME__
+Environment=LANG=en_US.UTF-8
+Environment=PYTHONPYCACHEPREFIX=__HOME__/.cache/claude-fleet/pycache
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+StandardOutput=append:__HOME__/.config/claude-fleet/logs/reconcile.systemd.log
+StandardError=append:__HOME__/.config/claude-fleet/logs/reconcile.systemd.log

@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>com.claude-fleet.sleep</string>
+  <key>Label</key><string>com.claude-fleet.reconcile</string>
   <key>ProgramArguments</key><array>
-    <string>/bin/bash</string><string>__HOME__/.claude/fleet/bin/fleet-sleep-daemon.sh</string>
+    <string>/bin/bash</string><string>__HOME__/.claude/fleet/bin/fleet-reconcile-tick.sh</string>
   </array>
   <key>EnvironmentVariables</key><dict>
     <key>HOME</key><string>__HOME__</string>
@@ -14,6 +14,6 @@
   <key>ProcessType</key><string>Standard</string>
   <key>RunAtLoad</key><true/>
   <key>StartInterval</key><integer>60</integer>
-  <key>StandardErrorPath</key><string>__HOME__/.config/claude-fleet/logs/sleep.launchd.log</string>
-  <key>StandardOutPath</key><string>__HOME__/.config/claude-fleet/logs/sleep.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/.config/claude-fleet/logs/reconcile.launchd.log</string>
+  <key>StandardOutPath</key><string>__HOME__/.config/claude-fleet/logs/reconcile.launchd.log</string>
 </dict></plist>
