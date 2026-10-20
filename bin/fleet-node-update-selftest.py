@@ -976,11 +976,6 @@ class G_DaemonRestart(Sandbox):
         p2.send_signal(signal.SIGTERM)
         p2.wait(timeout=15)
 
-    def test_default_table_has_update(self):
-        e = {k: v for k, v in self.env.items() if k != "FLEET_NODE_TABLE"}
-        r = subprocess.run([sys.executable, SUP, "status"], env=e, capture_output=True, text=True, timeout=30)
-        self.assertIn("update", r.stdout)
-
 
 class H_ReleaseJson(Sandbox):
     def test_validator(self):

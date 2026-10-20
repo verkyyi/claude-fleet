@@ -558,23 +558,6 @@ class G_Switch(Sandbox):
             json.dump({"version": 1, "keys": [rv.key_id(k1)]}, f)
         self.assertIn("revoked", self.refused_switch("a revoked key (the machine's memory)")["why"])
 
-    def test_switch_keeps_the_trust_anchor(self):
-        # issue #3835: the core — never the seat's fetch — moves the pin to a root
-        # the pin vouched for and keeps every revoked id, once the release verified
-        rv = _rv()
-        pin = os.path.join(self.state, "release.pub")
-        old = open(pin).read()
-        self.serve()
-        self.stage(secret=OTHER, extra=repin_extra())
-        self.assertEqual(self.req("switch", {"sha": self.B}), {"ok": True, "from": self.A, "to": self.B})
-        self.assertEqual(open(pin).read(), rv.key_line(rv.pub_of(OTHER)) + "\n")
-        self.assertEqual(open(pin + ".prev").read(), old)
-        self.assertEqual(json.load(open(pin + ".revoked")), {"version": 2, "keys": ["0123456789abcdef"]})
-        self.assertIn("trust: re-pinned to the root", self.log())
-        # the re-pinned machine still re-checks B with the new pin
-        r = self.verify(os.path.join(self.root, self.B))
-        self.assertEqual(r.stdout.strip(), "ok", r.stdout + r.stderr)
-
     def test_the_seat_cannot_move_the_anchor(self):
         # issue #3835: a chain the pin does not vouch for (a key naming itself a
         # root), an op or a key that would steer the pin — refused, the pin as it was
@@ -1053,8 +1036,11 @@ class N_SeatedUpdate(Sandbox):
         self.assertTrue(used and all(u.startswith(os.path.join(self.state, "staging") + os.sep) for u in used), used)
         self.assertEqual(open(pin).read(), new + "\n")
         self.assertEqual(open(pin + ".prev").read(), old)
-        self.assertEqual(json.load(open(pin + ".revoked"))["keys"], ["0123456789abcdef"])
-        self.assertIn("trust: re-pinned", self.log())
+        self.assertEqual(json.load(open(pin + ".revoked")), {"version": 2, "keys": ["0123456789abcdef"]})
+        self.assertIn("trust: re-pinned to the root", self.log())
+        # the re-pinned machine still re-checks B with the new pin (was G_Switch's own leg)
+        r2 = self.verify(os.path.join(self.root, self.B))
+        self.assertEqual(r2.stdout.strip(), "ok", r2.stdout + r2.stderr)
         os.chmod(pin, 0o644)
 
     def test_sign_failure_refuses_the_switch(self):

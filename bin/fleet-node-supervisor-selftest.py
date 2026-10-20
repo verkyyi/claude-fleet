@@ -1279,6 +1279,7 @@ class G_DefaultTable(Sandbox):
         r = subprocess.run([sys.executable, SUP, "status"], env=e, capture_output=True, text=True, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("not installed", r.stdout)
+        self.assertIn("update", r.stdout)       # the updater is a task of the default table (#2334)
         # C5 (#2333): the one node program, from the root runtime, waiting until
         # the machine has its token and its logins directory.
         na = t["children"][1]

@@ -117,8 +117,6 @@ class LinuxNode(unittest.TestCase):
             self.assertNotIn('update', [x['name'] for x in s.default_table(s.Paths())['tasks']])
             pool = next(x for x in s.default_table(s.Paths())['tasks'] if x['name'] == 'credential-pool')
             self.assertEqual(pool['cmd'][-2:], ['machine', 'pool-sync'])
-        with patch.dict(os.environ, {'FLEET_NODE_UPDATE_OWNER': 'hub'}):
-            self.assertIn('update', [x['name'] for x in s.default_table(s.Paths())['tasks']])
 
     def test_sshd_path_and_supervision_are_independent(self):
         s = module('fleet-node-supervisor')
