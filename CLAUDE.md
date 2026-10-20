@@ -1,9 +1,12 @@
 # claude-fleet
 
-A tmux + Claude Code setup for running many parallel Claude sessions in one
-tmux session — one window per task, each in its own git worktree, with GitHub
-issues as the backlog. See `README.md` for the pitch and `docs/dev/ARCHITECTURE.md`
-for the design.
+claude-fleet does two things: **subscription sharing** (one pool of Claude /
+Codex subscriptions behind a credential proxy, metered per person) and a
+**cloud runtime** for agent sessions (managed machines, one tmux window per
+session, each in its own git worktree). A task is a hub record `T<n>` — it
+belongs to a person, not a repo; GitHub only hosts the code, its branches, PRs
+and CI (EPIC #4895). See `README.md` for the pitch and
+`docs/dev/ARCHITECTURE.md` for the design.
 
 ## Installing / uninstalling this repo
 
@@ -20,7 +23,7 @@ Do not install from memory: read the doc and work from it.
 runbooks, BREAK-IT. A public page never links into `docs/dev/`. Research notes and
 one-off drill / audit records do not go in the repo (issue #3576).
 `bin/docs-links-selftest.sh` reads every link on every PR. Settings: every key is
-`conf/fleet.conf.reference` (the config panel's one list); the root
+`conf/fleet.conf.reference` (the one list, held by `bin/conf-surface-selftest.sh`); the root
 `fleet.conf.example` is generated from it by `bin/fleet-conf-example.sh`.
 
 ## Conventions the code assumes
@@ -50,19 +53,20 @@ one-off drill / audit records do not go in the repo (issue #3576).
     them apart. Don't add a fleet picker, an other-fleet cue, or a spawn into
     another fleet: `dash-raw-session.sh` refuses one from a fleet pane.
 - **The base checkout is edit-read-only** (hook-enforced): a worker edits inside
-  its `issue-<N>` git worktree and lands via PR; the operator files/triages from
-  the hub and hands implementation to a worker. Never commit to the base checkout.
+  its own `scratch-<N>` / `issue-<N>` git worktree and lands via PR; the operator
+  dispatches from the hub and hands implementation to a worker. Never commit to
+  the base checkout.
 - **Code-writing work is a fleet WORKER, never a subagent** (issue #811,
   hook-enforced by `hooks/agent-guard.py` on every fleet pane — hub, scratch,
   worker). A `general-purpose` / `claude` / `fork` subagent runs outside every
-  rail above: the dash cannot see it, it has no `@claude_state`, the quota
+  rail above: the task list cannot see it, it has no `@claude_state`, the quota
   migration moves *windows* so a subagent that hits the limit dies mid-edit,
   several can write one worktree, and there is no one-worker-one-PR, no
-  `/fleet-history` row, no handoff. Hand implementation to a worker
-  (`dash-issue-session.sh <N>`, the `task` tool,
-  `dash-raw-session.sh`) — and when you need its result BACK the way a subagent
-  returns one, `fleet-await.sh <N>` spawns it and blocks on the outcome off the
-  child-report ledger (issue #812); a subagent is for READ-ONLY fan-out only —
+  `/fleet-history` row, no handoff. Hand implementation to a worker (the `task`
+  tool, which opens a hub record `T<n>` and its session; `dash-raw-session.sh
+  --repo --task`) — and when you need its result BACK the way a subagent returns
+  one, the `await` tool (`fleet-await.sh --task T<n>`) blocks on the outcome off
+  the child-report ledger (issue #812); a subagent is for READ-ONLY fan-out only —
   `Explore` / `Plan` / `claude-code-guide`, and never `isolation: worktree`
   (a fork worktree is edit-blocked by the base guard). `FLEET_ALLOW_SUBAGENT=1`
   is the operator's escape hatch.
@@ -109,9 +113,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   (`bin/fleet-lib.sh`; `fleet_worker_locate` layers the cross-machine answer on
   it): rc 0 + the id, rc 1 NOTFOUND, rc 2 AMBIGUOUS with one stderr line — two
   windows answer, or a bare `issue-<N>` in a 2+ repo fleet (the key must carry
-  the repo slug). A warm-pool window (`@pool`, or parked in `<sess>-pool`) never
-  answers — a closed scratch's number is recycled there, and before this a
-  child's report "found" its gone parent in the pool; a stamped `@worktree` is
+  the repo slug). A warm-pool window left from before T495 (`@pool`, or parked in
+  `<sess>-pool`) never answers; a stamped `@worktree` is
   never second-guessed by the pane cwd. `fleet-await.sh`, `fleet-peer-send.sh`,
   `fleet-mcp.py`, the children digest, the hub relay and report-parent all
   go through it; never add a bare `@issue` / window-name scan beside it. A
@@ -189,7 +192,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   before. The mod inbox is per server lifetime too (`fleet_mod_inbox_reset`).
   `fleet-children-selftest.sh` §3 and `origin-selftest.sh` D pin it.
 - **Panel windows, not sessions.** Windows named `dash`, `plan`, `backlog`,
-  `home` are treated as panels and excluded from the dash session list, the
+  `home` are treated as panels and excluded from the task list, the
   session counts, snapshots and restore. **The full-screen list retired**
   (issue #1533): by default no `plan` window is built — a fleet's resting window
   is `home`, a plain shell the task list draws beside (the ⌂ / F9 / prefix g keys
@@ -241,8 +244,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   read-only menu (`fleet-human-menu.sh`) — no key on a node deletes or respawns a
   session. One deleted anyway (`:kill-window`) comes back on the next tick:
   `fleet-restore.sh --auto` reopens an unfinished `@fleet_id` that vanished
-  unmarked, and every closer the fleet runs on purpose (reap, ⌃x, q, move, stop,
-  pool) marks it first with `fleet_win_retire` — a new one must too.
+  unmarked, and every closer the fleet runs on purpose (reap, ⌃x, q, move, stop)
+  marks it first with `fleet_win_retire` — a new one must too.
 - **A view session shares the fleet's windows; never scan or name them bare**
   (issue #1489). A shell or proxy client of this machine (`fleet-remote-view.sh
   attach` with a view id) attaches to a GROUPED session of its own,
@@ -262,8 +265,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   never a fleet (`fleet_is_view_session`): restore and the collector skip it, and
   `fleet-window-reap.sh --hook` ignores the unlinks its going fires.
 - **Every session opens through `bin/fleet-session-wrap.sh`, and the fleet never
-  stays down** (issue #1784). Spawners, restore, migrate, move, transfer, the warm
-  pool and a sleeper's wake all launch the wrapper (never `fleet-claude.sh`
+  stays down** (issue #1784). Spawners, restore, migrate, move, transfer and a
+  sleeper's wake all launch the wrapper (never `fleet-claude.sh`
   directly — `session-wrap-selftest.sh` A lints it; `# wrap-ok: <why>` excepts a
   line). When the agent exits the window stays on a recovery page
   (`@claude_state=exited`: ↵ resume the same id · r new · q recycle); a fleet-made
@@ -303,9 +306,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   one `drill_<id>` (the test reds on either side missing); a way fixed in another
   repo is `登记：<ticket>`, listed, never drilled. Found a new one: add the row
   + drill, watch it go red, then fix.
-- **A red CI check is SAID, never filed** (issue #4898, EPIC #4895; it replaced
-  #2078's one-issue-per-fault filer; its fingerprint helpers `fleet_breakage_*` /
-  `fleet_fault_*` and the nightly miss tracer left with #4900). The automatic
+- **A red CI check is SAID, never filed** (issue #4898, EPIC #4895). The automatic
   reporters — `fleet-train-quarantine.sh`, `fleet-durations-drift.sh` —
   run `bin/fleet-ci-say.sh` (a `FLEET_*_FILER` seam of the same argv): the title and
   body on the run's summary page and one `::warning::` under the key a filing used
@@ -313,8 +314,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `fleet-macos-watch.sh` raises one `breakage` alert per red run (plus macOS'
   once-per-streak held-back alert); a red nightly is its run's red. A fix is
   dispatched as a task (`task` tool) by whoever decides to. **Nothing patrols**
-  (issue #4900): the steward template and the patrols page are gone; an
-  orchestrator does not patrol.
+  (issue #4900); an orchestrator does not patrol.
 - **Stable moves only past the old-session replay** (issue #2075, EPIC #2074 C2).
   A session launched before a release keeps what it read at its start — the hook
   table, the mod's tool list, the MCP servers' tool lists — and runs everything
@@ -359,8 +359,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   the answer (machine · login · worker_id · key · state). A task that chose a repo
   is a `new` start that opens on the record (`dash-raw-session.sh --repo --task`); a
   task with no repo is the record alone — a node that says `CapTask` is sent
-  `task: T<n>` and stamps `@task`. 「建 GitHub 单」 is gone (#4898; the hub's
-  own tickets, their API and console pages too, T477). The top bar shows `#N`, else `T<n>`; the
+  `task: T<n>` and stamps `@task`. There is no other place a task lives: no
+  GitHub issue is opened for it (#4898) and the hub keeps no ticket layer (T477). The top bar shows `#N`, else `T<n>`; the
   hub's 任务 page (`/tasks`) lists them. No `task` asked, or a node without
   `CapTask`, or no hub ⇒ byte for byte as before (`TestTaskOffAddsNothing`).
   **The fleet's coordinators write the same record from a machine** (issue #3330):
@@ -381,8 +381,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   and an EPIC is a parent task whose members are its child tasks (issue #4957:
   `bin/fleet-epic-tick.py` reads the batch off the hub). No hub ⇒ the script
   exits 3 and every caller is byte for byte as before. **A session with no issue
-  is parked and remembered by its record** (issue #3387; the steward's parker that
-  wrote the book left with #4339, the readers stay): a park books it as `T<n>` (stop by `fid:`, no GitHub write, 「停放」 on the record alone, wait
+  is parked and remembered by its record** (issue #3387): a park books it as `T<n>` (stop by `fid:`, no GitHub write, 「停放」 on the record alone, wait
   `task:T<n>`; restore skips it by `fleet_parked_fid`) and wakes it through
   `dash-raw-session.sh --resume <sid> --seed-file … --task T<n>` (its kept scratch
   worktree via `--worktree`, else `--no-repo`); the history ledger's col 15 is the
@@ -431,10 +430,9 @@ one-off drill / audit records do not go in the repo (issue #3576).
   · codex_model · codex_effort), filling what the spawn left open. Named but not
   found or unreadable ⇒ the spawn refuses before any window, naming the file
   (BREAK-IT `agent-file-broken`). No `--as` ⇒ the shipped `fleet-worker` when it
-  is there, else a plain session given the ticket. The core ships
-  `conf/agent-defaults/claude/agents/` (fleet-worker, orchestrator; steward left
-  with #4900)
-  into `~/.claude/agents` through
+  is there, else a plain session given the task. The core ships
+  `conf/agent-defaults/claude/agents/` (fleet-worker, orchestrator) into
+  `~/.claude/agents` through
   install-apply's `agent files` step (`fleet-agent-def.py ship`): written once,
   following the release while still the fleet's bytes, never touched once edited
   (the person's override) or deleted (`agents-shipped.json` remembers); one the
@@ -444,22 +442,19 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `/fleet-epic-plan` opens a batch as a parent hub task whose session is the driver
   (the `task` tool, `agent: epic-driver` — issue #4957: its members are child tasks,
   `bin/fleet-epic-tick.py` reads the batch off the hub, no GitHub issue), which
-  Claude Code finds by the bare name; no plugin ⇒ no driver, a ticket is a ticket.
+  Claude Code finds by the bare name; no plugin ⇒ no driver, a task is a task.
   A login an older release shipped it into gets fleet-epic (`fleet-plugins.py`
   carry-over) before the copy is retired. The batch marks and heartbeat / floor /
   backstop / preflight scripts stay in `bin/` — only the plugin's commands call
   them (`fleet-plugins-selftest.sh` I). Every window may
   spawn (issues #4591, #4703) — a file's `spawn` grant (`@agent_spawn`, off
   `fleet-agent-def.py spawn-tools`) is recorded, never a gate; the old `--role`
-  spelling and `@fleet_role_def` are read no more (#4790). The person's role layer and `fleet role set|unset|undo` are
-  gone with the role seats (issue #4340). `fleet-agent-as-selftest.sh`, `spawn-origin-gate-selftest.sh` F.
+  spelling and `@fleet_role_def` are read no more (#4790).
+  `fleet-agent-as-selftest.sh`, `spawn-origin-gate-selftest.sh` F.
 - **This repo is a plugin marketplace; EPIC batches and the other optional parts
   are its plugins** (issue #3112, EPIC #3111 C1).
   `.claude-plugin/marketplace.json` lists the core `fleet` (source `./`) and
-  `plugins/fleet-epic` · `fleet-browser` · `fleet-infra`
-  (fleet-orchestrate, fleet-steward and the feedback plugin are gone, issues
-  #4340 / #4339 / #4790 / #4904),
-  each a standard plugin (skills ·
+  `plugins/fleet-epic` · `fleet-browser` · `fleet-infra`, each a standard plugin (skills ·
   commands · agents · hooks/hooks.json · .mcp.json). **Nothing installs them but
   Claude Code's `/plugin`** (`claude plugin install|uninstall|enable|disable`);
   the fleet records nothing — `bin/fleet-plugins.py` is the one reader of `claude
@@ -534,60 +529,36 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `bin/web-console-pack.sh`); its budget bar reads the person's own `/v1/me/usage`.
   BREAK-IT `chat-relay-wrong-person` · `chat-socket-other-login` ·
   `chat-budget-bypass` · `chat-home-moved`.
-- **Orchestrating is a session template — no seat, no rule table**
-  (EPIC #4333; issues #4335 · #4336 · #4340). `conf/agent-defaults/claude/agents/orchestrator.md`
-  is a standard agent file shipped into `~/.claude/agents` like fleet-worker; a
-  person opens one with `spawn agent:orchestrator` (`--as`, above). The steward
-  template is gone (issue #4900) — nothing patrols; a red only alerts. Its body is the session's system prompt — a compaction or a resume keeps
-  it, so nothing relays a role's state. The orchestrator's few dispatch rules are
-  written into its template, and nothing else holds any (issue #4340; the `rule`
-  argument and the role-taking tool are gone, #4790). Several orchestrators may run at once; each
-  looks after what it dispatched. **The shared parts know no role** (issue #4341, C8):
-  a session with no key of its own (no issue, no scratch — a template opened bare, a
-  person's no-repo session) answers to its IDENTITY — `fleet_origin_key` /
-  `fleet_window_okey` print its `@fleet_id` (home and the panels: nothing), so its
-  children report to it; `agent:<name>` (`fleet_win_for_agent`, by `@agent_def`)
-  addresses the session started from that agent file, and `fleet-peer-send.sh` gives
-  a message to nobody-runs-it to the sender's parent, else the person's reminder —
-  never exit 0 unheld. `fleet_role_holder`, `roles.held` and restore's re-stamp are
-  gone, and so is reading the bare words `orchestrator` / `steward` or a leftover
-  `@fleet_role_def` as `agent:<name>` (#4790); column 20 `role=` is sent empty. `keyless-parent-selftest.sh`.
-  The plugins' `role.md` are gone, so `plugin.json`'s `"agents": []` only keeps
-  the repo root from registering agent files as plugin subagents.
-- **Orchestration is an extension a person installs, and nothing keeps a session
-  open** (issue #3118, EPIC #3111 C7 — it replaced the resident-seat sections of
-  #1957 / #2670 / #2671). There is no resident orchestrator or steward: nothing opens,
-  reopens, revives or renews one — not fleet-up, not the diskguard tick's
-  `home_watch`, not the hub (`/v1/node/orchestrator` is gone, #3130; `orch_ensure` too,
-  #4790), and no setting brings one back (FLEET_ORCHESTRATOR,
-  FLEET_STEWARD, FLEET_ORCH_*, FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL|REVIVE_SECS are
-  gone). The `bin/fleet-orchestrator.sh` / `bin/fleet-steward.sh`
-  launchers are gone (their quiet shells left with #3576). A person who wants the role spawns `agent:orchestrator`;
-  closed is closed. Gone with the seat: the mod's role section, exit guard and queue count
-  (`orchestrator.ts` · `exit-guard.ts` · `queue.ts`), the inventory's columns 31-37
-  (an older node's tags are dropped unread by `inventory_row`, `# compat-1v`), the
-  client's `orch_*` / `steward_all_*` files, the steward's hosted page and
-  `@orch_page`, the attention count (`fleet-steward-stats.sh` and the node conf's
-  [76] hooks, unset on a reload), the client's steward rows,
-  the doctor's `orch` rows, and `--bridge-seat` by role name (the dispatch group is mounted
-  for every session, issue #4703). `@fleet_role
-  orchestrator|steward` is never written again; a window still wearing it (an old
-  seat) is an ordinary row for restore / migrate / move / cleanup, and nothing
-  reads it as an address (#4790). BREAK-IT `role-auto-reopen-off`.
-  The fleet-steward plugin and the programs behind it — the beat, the health watch,
-  the decision sheet, the patrol / batches panes, parking, the followup list — are
-  gone (issue #4339, EPIC #4333 C6), and its template with #4900;
-  a stalled dialog is answered only through `bin/fleet-dialog-answer.sh` (`--by
+- **Orchestrating is a session template — no seat, no rule table, nothing keeps
+  it open** (EPIC #4333; issues #3118 · #4340 · #4341 · #4790).
+  `conf/agent-defaults/claude/agents/orchestrator.md` is a standard agent file
+  shipped into `~/.claude/agents` like fleet-worker; a person opens one with
+  `spawn agent:orchestrator` (`--as`, above). Its body is the session's system
+  prompt — a compaction or a resume keeps it — and its few dispatch rules live
+  there and nowhere else. Several may run at once; each looks after what it
+  dispatched. Nothing opens, reopens, revives or renews one (not fleet-up, not
+  the diskguard tick, not the hub, no setting); closed is closed, and nothing
+  patrols. `@fleet_role orchestrator|steward` is never written; a window still
+  wearing it is an ordinary row, never an address (BREAK-IT
+  `role-auto-reopen-off`). **The shared parts know no role**: a session with no
+  key of its own (a template opened bare, a person's no-repo session) answers to
+  its IDENTITY — `fleet_origin_key` / `fleet_window_okey` print its `@fleet_id`
+  (home and the panels: nothing), so its children report to it;
+  `agent:<name>` (`fleet_win_for_agent`, by `@agent_def`) addresses the session
+  started from that agent file, and `fleet-peer-send.sh` gives a message to
+  nobody-runs-it to the sender's parent, else the person's reminder — never exit
+  0 unheld. `keyless-parent-selftest.sh`. `plugin.json`'s `"agents": []` only
+  keeps the repo root from registering agent files as plugin subagents. A
+  stalled dialog is answered only through `bin/fleet-dialog-answer.sh` (`--by
   session`; its trail is the 代答记录 `fleets/<sess>/answers/answers-<day>.md`).
   `dialog-wait-selftest.sh`.
-- **Navigate by name, not index.** The hub/dashboard is placed at the lowest
+- **Navigate by name, not index.** The home window is placed at the lowest
   index once, at spawn; numbers still shift when a window closes
   (`renumber-windows on`).
 - **The 看台's keys have ONE table, `bin/dash-keymap.sh`** (`--panel switch`):
   each ⌘ chord's private code and the ⌃] letters; `conf/tmux-view.conf`,
   `fleet_view.py`'s key tables and the iTerm2 profile (`fleet-iterm-profile.py`)
-  are built from it, `fleet-keys-selftest.sh` holds them together. The local fzf
-  dash / backlog / config panels and their ⌃-key tables are gone (issue #4902).
+  are built from it, `fleet-keys-selftest.sh` holds them together.
 - **Never run destructive tmux on the live server**, and test tmux tooling on an
   **isolated socket** — `tmux -L scratch …`, or the `-S <sock>` PATH-shim pattern
   the selftests use (`bin/hub-session-selftest.sh`). A delete aimed at a FLEET's
@@ -736,7 +707,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   (it leaves `mac follow: macOS` on the commit, moves nothing). The
   BSD half is the nightly full `selftests-macos.yml`: a red one (its macOS shard
   jobs) is raised as one `breakage` alert per red run by `bin/fleet-macos-watch.sh`
-  (diskguard tick; nothing filed since #4898), plus one more when the red streak is older than `FLEET_MACOS_STALE_SECS` (2 h) — no fixer
+  (diskguard tick; nothing filed), plus one more when the red streak is older than `FLEET_MACOS_STALE_SECS` (2 h) — no fixer
   is spawned (issue #3120). Gate 9 (the China path) is retired with its probe
   (#4904). A problem that ships is taken back by ONE command,
   `bin/fleet-release-rollback.sh <PR|sha> [--hub-tag prod-<sha7>]` (a revert PR
@@ -809,8 +780,8 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
     had made the merge gate wait a median 21 minutes (worst 56) on a check that
     guards releasing, not merging — master reaches a machine only when `stable`
     moves. Since #4663 / #4671 it gates no release either: its verdict lands in
-    `bin/fleet-macos-watch.sh` (a red run ⇒ ONE breakage issue + one alert,
-    never a spawned fixer — #3120; it reads mac-follow.yml's `macOS / shard *`
+    `bin/fleet-macos-watch.sh` (a red run ⇒ one `breakage` alert, nothing filed,
+    never a spawned fixer — #3120, #4898; it reads mac-follow.yml's `macOS / shard *`
     jobs since #3869, `FLEET_MACOS_WORKFLOW`; on the diskguard
     tick, only for a repo carrying that workflow and `bin/fleet-stable.sh`). BREAK-IT row `macos-red-to-stable`.
     This is the half a lint structurally cannot do: **behaviour** differences.
@@ -917,7 +888,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   **The account half is the same daemon** (issue #2332, C4): ONE account table —
   every `launchd/*.plist.tmpl` of the runtime but the machine's (memguard), each
   with its own interval / environment / log paths, a KeepAlive one (spinner,
-  webhook, cred-proxy) as a child — run for every login `account adopt <login>`
+  cred-proxy) as a child — run for every login `account adopt <login>`
   took over, DEMOTED to it (initgroups/setgid/setuid, its HOME / USER / PATH /
   `FLEET_CONF_DIR` / TMPDIR; the log opened by the demoted process, never root).
   adopt boots the login's own LaunchAgents / LaunchDaemons out into the attic
