@@ -116,10 +116,10 @@ if "list-windows" in sys.argv:
     # @claude_needs, when asked; column 13 (issue #1646) the window's @fleet_id,
     # the tenth column of workers.tsv.
     fmt=sys.argv[sys.argv.index("-F") + 1]
-    if fmt.endswith("#{window_id}|#{session_name}|#{@pool}|#{@fleet_id}") and data.exists():
+    if fmt.endswith("#{window_id}|#{@fleet_id}") and data.exists():
         for row in data.read_text().splitlines():
             cols = row.split("\\t")
-            print("|".join([cols[0], "demo", "", cols[9] if len(cols) > 9 else ""]))
+            print("|".join([cols[0], cols[9] if len(cols) > 9 else ""]))
         sys.exit(0)
     keep="#{@repo}" in fmt
     if "#{pane_pid}" in fmt and data.exists():

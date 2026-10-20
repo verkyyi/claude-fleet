@@ -827,42 +827,6 @@ restore_watch() {
   return 0
 }
 
-# pool_watch — the warm pool is gone (T495): what an older release left parked is
-# retired here, every tick, so nothing of it outlives the switch — the holding
-# session `<fleet>-pool` (fleet_pool_session) on each fleet's socket, each window
-# still parked in it closed with the fleet's own retired mark (fleet_win_retire, so
-# restore does not bring it back) and its scratch worktree + branch freed under
-# that repo's FLEET_MAIN; tmux drops the session with its last window. Only a
-# window still IN the holding session is touched — the kill names `<pool>:<wid>`,
-# which tmux refuses for a window already claimed into the fleet (a person's
-# session now). A pass of the old scratch-pool.sh still running when the new
-# version landed may park one more: the next tick takes it. Then the pool's lock
-# dir goes. A machine that never had a pool spends one list-sessions per fleet.
-# compat-1v: 下一批删
-pool_watch() {
-  local s sock pool w r nr wt slug main
-  for s in $(fleet_sockets 2>/dev/null); do
-    [ -f "$(fleet_conf_file "$s")" ] || continue      # a fleet is one fleet-up wrote a conf for
-    sock=$(fleet_socket "$s"); pool=$(fleet_pool_session "$s")
-    rm -rf "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleets/$(fleet_slug "$s")/pool" 2>/dev/null
-    tmux -L "$sock" has-session -t "=$pool" 2>/dev/null || continue
-    while IFS='|' read -r w nr r wt slug; do
-      [ -n "$w" ] || continue
-      fleet_win_retire "$w" "$sock" closed
-      tmux -L "$sock" kill-window -t "$pool:$w" 2>/dev/null || continue
-      [ "$nr" = 1 ] && continue                         # a HOME entry: no worktree
-      [ -n "$slug" ] && [ -n "$wt" ] || continue
-      [ -n "$r" ] || r=$(fleet_worktree_repo "$s" "$wt" 2>/dev/null)
-      [ -n "$r" ] || continue                           # its repo cannot be told: the scratch janitor's
-      main=$( fleet_load_repo_conf "$s" "$r" >/dev/null 2>&1 || exit 1; printf '%s' "${FLEET_MAIN:-}" ) || continue
-      [ -n "$main" ] && fleet_scratch_free "$main" "$slug" "$wt"
-    done <<EOF
-$(tmux -L "$sock" list-windows -t "=$pool" -F '#{window_id}|#{@norepo}|#{@repo}|#{@worktree}|#{@pool_slug}' 2>/dev/null)
-EOF
-  done
-  return 0
-}
-
 # macos_watch — the BSD half on master (issues #2286, #3120, #3143, #3869): a red macOS
 # follow holds every Mac on the previous version, so bin/fleet-macos-watch.sh files
 # it ONCE as a breakage (one issue per fingerprint, fleet-wide) and raises one alert
@@ -1026,7 +990,6 @@ EOF2
     restore_watch                                 # a fleet that went down: pull it back up (#1784)
     resident_watch                                # spinner / webhook booted out: bootstrap it back (#1849)
     brew_watch                                    # a keg other logins cannot read: repair it (#2283)
-    pool_watch                                    # an older release's warm pool retired (T495)
     macos_watch                                   # red macOS on master: file + alert, no spawn (#3120)
     managed_cert_watch                            # a managed login's cert + device kept alive by ops (#4594)
     node_role_watch                               # the hub's client/managed word, kept an hour (#4886)

@@ -26,10 +26,7 @@
 #      spawn sites (dash-issue-session.sh, dash-raw-session.sh,
 #      dash-restore-session.sh, fleet-await.sh) call it.
 #   F  ONE resolver (issue #1537, EPIC #1529 E8) — fleet_win_for_key is the only
-#      way a key becomes a window, and it refuses rather than guesses: a warm-pool
-#      window (`@pool`, or parked in `<sess>-pool`) never answers, so a closed
-#      scratch whose number the pool re-used is NOTFOUND for peer-send and
-#      report-parent alike; a stamped @worktree is never second-guessed by the pane
+#      way a key becomes a window, and it refuses rather than guesses: a stamped @worktree is never second-guessed by the pane
 #      cwd; two windows for one key → rc 2 AMBIGUOUS; a bare issue key in a 2+ repo
 #      fleet → rc 2, and fleet-await --repo B waits on B's #N, never A's; a
 #      `<sess>:<idx>` position and a window NAME are refused by fleet-peer-send.sh,
@@ -202,26 +199,6 @@ done
 unset CCQUOTA_FLEET FLEET_HUB_STATUS_CMD
 wfk() { out=$(lib fleet_win_for_key "$@" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err"); }
 mkdir -p "$WORK/app-scratch-3" "$WORK/app-scratch-8"
-
-# F1 the warm pool: scratch-3 closes; the pool re-uses its number (fleet_scratch_free)
-tf kill-window -t "$w3"
-tf new-session -d -s "$L-pool" -n warm-3 -c "$WORK/app-scratch-3" 'while :; do sleep 300; done'
-wp=$(tf list-windows -t "$L-pool" -F '#{window_id}' | head -1)
-tf set-window-option -t "$wp" @pool 1; tf set-window-option -t "$wp" @raw 1
-tf set-window-option -t "$wp" @worktree "$WORK/app-scratch-3"
-wfk scratch-3 "$L"; ok; [ "$rc" = 1 ] && [ -z "$out" ] || fail "F1: a @pool window must not answer to scratch-3" "rc=$rc out=$out"
-tf set-window-option -u -t "$wp" @pool          # mid-claim: @pool already cleared, still parked in the pool session
-wfk scratch-3 "$L"; ok; [ "$rc" = 1 ] && [ -z "$out" ] || fail "F1: a window parked in <sess>-pool must not answer" "rc=$rc out=$out"
-run bash "$BIN/fleet-peer-send.sh" -L "$L" scratch-3 hi
-ok; [ "$rc" = 1 ] && case "$err" in *"no live window for 'scratch-3'"*) true ;; *) false ;; esac \
-  || fail "F1: peer-send scratch-3 → refused, never the pool window" "rc=$rc $err"
-run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --origin scratch-3 --state blocked --summary x --dry-run
-ok; case "$out$err" in *"$wp"*) fail "F1: report-parent must not address the pool window" "$out $err" ;;
-                        *"has no window"*) true ;; *) fail "F1: report-parent scratch-3 → no window" "$out $err" ;; esac
-tf kill-session -t "$L-pool"
-w3=$(tf new-window -d -P -F '#{window_id}' -n sc 'while :; do sleep 300; done')
-tf set-window-option -t "$w3" @raw 1; tf set-window-option -t "$w3" @worktree "$WORK/app-scratch-3"
-wfk scratch-3 "$L"; ok; [ "$out" = "$w3" ] || fail "F1: the live scratch-3 answers again" "$out / $err"
 
 # F2 a stamped @worktree is the identity; the pane cwd is never a second chance
 w8=$(tf new-window -d -P -F '#{window_id}' -n sc8 -c "$WORK/app-scratch-3" 'while :; do sleep 300; done')

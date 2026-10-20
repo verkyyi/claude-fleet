@@ -31,7 +31,7 @@
 # a few minutes ago — or copied out of a handoff doc — silently lands on a
 # DIFFERENT worker; a window NAME is prefix-matched (scratch-1 → scratch-12). Both
 # refuse. `issue:<N>` / `scratch-<N>` go through fleet_win_for_key (fleet-lib.sh):
-# exactly one live window, never a warm-pool one, never another repo's #N — zero
+# exactly one live window, never another repo's #N — zero
 # or several matches refuse. `--expect-issue` pins an @id / %pane target.
 #
 # `wid:<fleet UUID>/<key>` (issue #1420) is the address that survives a machine
@@ -365,8 +365,8 @@ print(json.dumps({"ts": int(time.time()), "child_key": e["OR_CHILD"], "state": "
 # --- identity → one live window (issues #1046, #1537) -----------------------------
 # ONE resolver, fleet_win_for_key: issue:<N> / #<N> / issue-<N> → the key
 # `issue-<N>` (`<slug>:issue-<N>` with --repo, and a 2+ repo fleet REFUSES the bare
-# key); scratch-<N> → the window whose @worktree is that scratch. A warm-pool window
-# never answers, two windows answering is a refusal, and the id it hands back is
+# key); scratch-<N> → the window whose @worktree is that scratch. Two windows
+# answering is a refusal, and the id it hands back is
 # stable for the window's whole life, so the send below cannot drift onto a
 # neighbour. A `<sess>:<idx>` position and a bare window NAME are not addresses.
 key=""; want_issue=""

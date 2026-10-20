@@ -37,8 +37,7 @@
 #
 # `fid:<fleet_id>` (issue #1873) addresses the session by its @fleet_id (#1646) —
 # the one address a `--no-repo` session has: no @issue, no @raw, no worktree, so
-# no key. It resolves through fleet_win_for_fid (a warm-pool window never answers;
-# two windows carrying it refuse as ambiguous), works for a keyed worker too, and
+# no key. It resolves through fleet_win_for_fid (two windows carrying it refuse as ambiguous), works for a keyed worker too, and
 # never matches the hub or a panel. A window NAME is never an address (tmux
 # prefix-matches it). A no-repo session records no /fleet-history row (it has no
 # repo ledger) and no SessionEnd hook closes its window on a plain /exit, so once

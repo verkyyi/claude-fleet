@@ -116,7 +116,6 @@
 #                                                   bin/fleet-node-supervisor.py (lanes, account adopt --rejoin)
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
-#   pool-left-after-upgrade                         bin/fleet-diskguard.sh pool_watch (T495: an older release's warm pool retired)
 #   pretrust-norepo                                 bin/fleet-trust.sh (node, grant --home), bin/fleet-claude.sh
 #   cross-send-refused-unseen                       bin/fleet-peer-send.sh (hub_send: identity sender, fleet_hub_refused,
 #                                                   receipt_watch), fleet-lib.sh fleet_hub_refused
@@ -3434,49 +3433,6 @@ drill_guide_spare_login() {
   [ "$(opens)" = 1 ] || { WHY="the closed guide was reopened: opens=$(opens)"; return 1; }
   [ -e "$g/onboard.dismissed" ] || { WHY="a shown-then-closed guide was not recorded as dismissed"; return 1; }
   WHAT="没人来过的登录：节拍不开引导、把旧版留下的置顶 guide 关掉（不算「不要」）；人第一次 attach 立刻开；开过又被关（tries 已清零）记 dismissed，不再拉回"
-}
-
-# The warm pool is gone (T495), but the release before it leaves a holding session
-# `<fleet>-pool` with warm windows parked in it and their scratch worktrees — ~550MB
-# each, that nothing would ever hand out or retire again. For real on an isolated
-# server and a real repo: the diskguard tick's pool_watch closes every window still
-# parked (a repo entry and a HOME one), frees the parked entry's worktree + branch,
-# marks it retired (restore leaves it closed), drops the pool's lock dir — and a
-# window already claimed into the fleet, with its own scratch worktree, is untouched.
-drill_pool_left_after_upgrade() {
-  CAP=20; BREAK_SOCK="$WORK/sock-plu"; local d="$WORK/plu" t0 w1 w2 c fid=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1 out
-  mkdir -p "$d/conf/fleets/pu/pool/home-claude.lock" "$d/home"
-  git init -q -b master "$d/main" 2>/dev/null || git init -q "$d/main"
-  ( cd "$d/main" && git config user.email t@t && git config user.name t && echo x > f && git add f && git commit -qm i \
-      && git worktree add -q -b scratch-1 "$d/main-scratch-1" && git worktree add -q -b scratch-2 "$d/main-scratch-2" ) \
-    || { WHY="cannot build the repo"; return 1; }
-  printf 'FLEET_MAX_SESSIONS=20\n' > "$d/conf/fleets/pu/conf"
-  fx_repo "$d/conf" pu acme/app FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master
-  nt -f /dev/null new-session -d -s pu -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
-  nt new-window -d -t pu: -n scratch-2 'exec sleep 600'
-  c=$(nt list-windows -t pu -F '#{window_id} #{window_name}' | awk '$2 == "scratch-2" { print $1 }')
-  nt set-option -w -t "$c" @raw 1; nt set-option -w -t "$c" @repo acme/app; nt set-option -w -t "$c" @worktree "$d/main-scratch-2"
-  nt new-session -d -s pu-pool -n warm-1 -x 100 -y 30 'exec sleep 600'
-  w1=$(nt list-windows -t pu-pool -F '#{window_id}' | head -1)
-  for kv in "@pool 1" "@pool_ready 1" "@pool_slug scratch-1" "@repo acme/app" "@worktree $d/main-scratch-1" "@fleet_id $fid"; do
-    nt set-option -w -t "$w1" "${kv%% *}" "${kv#* }"
-  done
-  nt new-window -d -t pu-pool: -n warm-home 'exec sleep 600'
-  w2=$(nt list-windows -t pu-pool -F '#{window_id} #{window_name}' | awk '$2 == "warm-home" { print $1 }')
-  nt set-option -w -t "$w2" @pool 1; nt set-option -w -t "$w2" @norepo 1
-  t0=$(now)
-  out=$(env -u TMUX -u TMUX_PANE PATH="$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
-          BREAK_SOCK="$BREAK_SOCK" bash -c '. "$1/fleet-lib.sh"; eval "$(sed -n "$2" "$1/fleet-diskguard.sh")"
-            pool_watch; pool_watch' _ "$BIN" '/^pool_watch() [{]/,/^[}]/p' 2>&1)
-  SECS=$(since "$t0")
-  nt has-session -t '=pu-pool' 2>/dev/null && { WHY="the holding session is still there: $(nt list-windows -t '=pu-pool' -F '#{window_name}' | tr '\n' ' ') $out"; return 1; }
-  [ -e "$d/main-scratch-1" ] && { WHY="the parked entry's worktree was not freed"; return 1; }
-  git -C "$d/main" show-ref --verify --quiet refs/heads/scratch-1 && { WHY="the parked entry's branch was not freed"; return 1; }
-  [ -e "$d/conf/global/retired/$fid" ] || { WHY="the parked entry was closed without the retired mark (restore would bring it back)"; return 1; }
-  [ -e "$d/conf/fleets/pu/pool" ] && { WHY="the pool's lock dir is still there"; return 1; }
-  [ "$(o "$c" session_name)" = pu ] && [ -d "$d/main-scratch-2" ] && git -C "$d/main" show-ref --verify --quiet refs/heads/scratch-2 \
-    || { WHY="the claimed session (in the fleet, its own worktree) was touched"; return 1; }
-  WHAT="升级前留下的 <fleet>-pool：diskguard 一拍把还停在里面的窗口（仓库的、HOME 的）收掉，worktree 与分支删掉、记退役（restore 不拉回）、锁目录删掉；已领进 fleet 的会话和它的 worktree 不碰"
 }
 
 drill_cold_fill_fails() {

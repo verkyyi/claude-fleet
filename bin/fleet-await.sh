@@ -259,7 +259,7 @@ fi
 # `wid|@origin` of #N's live window on this fleet, or nothing — through the ONE
 # resolver (fleet_win_for_key, issue #1537): CKEY carries the repo in a 2+ repo
 # fleet, so another repo's #N is never taken for ours; two windows answering to
-# the key, or a warm-pool window, resolve to nothing rather than to a pick.
+# the key resolve to nothing rather than to a pick.
 child_win() {
   local w
   w=$(fleet_win_for_key "$CKEY" "$SOCK" 2>/dev/null) && [ -n "$w" ] || return 0

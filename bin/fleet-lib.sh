@@ -515,17 +515,16 @@ fleet_pane_lost() { [ -n "${TMUX:-}" ] && [ -z "${TMUX_PANE:-}" ]; }
 # fleet_win_for_agent <name> [<sock>] → the live window started from the agent file
 # <name> (@agent_def, issue #3122) on this fleet's server. rc 0 + the id · rc 1 none
 # · rc 2 several (one stderr line — two sessions from one template is allowed, and
-# then the address is ambiguous, never a pick). A warm-pool window never answers.
+# then the address is ambiguous, never a pick).
 fleet_win_for_agent() {
   local name="${1:-}" sock="${2:-}" rows hits n
   case "$name" in ''|*[!A-Za-z0-9._:-]*) return 1 ;; esac
   if [ -n "$sock" ]; then
-    rows=$(fleet_lw '#{window_id}|#{@agent_def}|#{@pool}' tmux -L "$sock")
+    rows=$(fleet_lw '#{window_id}|#{@agent_def}' tmux -L "$sock")
   else
-    rows=$(fleet_lw '#{window_id}|#{@agent_def}|#{@pool}')
+    rows=$(fleet_lw '#{window_id}|#{@agent_def}')
   fi
   hits=$(printf '%s\n' "$rows" | awk -F'|' -v r="$name" '
-    $3 == "1" { next }
     $2 == r { print $1 }
   ' | awk '!seen[$0]++')
   n=$(printf '%s' "$hits" | grep -c .)
@@ -5715,8 +5714,7 @@ _fleet_wfk_repo_ok() {
 # SCOPE is this socket, i.e. this fleet — which is the whole truth a key carries: a
 # key names a window in the fleet that minted it (#516 stamps the SOURCE FLEET NAME,
 # not a key, when a spawn crosses fleets, so a cross-fleet origin never reaches the
-# key branch here). `-a`: the server, matching fleet_wid_used — a warm-pool window
-# carries neither @issue nor a scratch worktree, so it can never answer to a key.
+# key branch here). `-a`: the server, matching fleet_wid_used.
 #
 # Matching mirrors the two readers that already exist, so the three never disagree:
 #   issue-<N>    the window's @issue (what the spawner binds, fleet_origin_key's
@@ -5736,18 +5734,13 @@ _fleet_wfk_repo_ok() {
 #         answer to the key, or the key is a bare `issue-<N>` in a fleet hosting
 #         2+ repos (every repo's #N spells that; the key must carry the repo slug,
 #         `<slug>:issue-<N>`, as @origin / worker_ids have since #789)
-#   ① a warm-pool window never answers (`@pool 1`, or parked in the fleet's
-#     `<sess>-pool` holding session): it sits in a pre-warmed scratch worktree whose
-#     NUMBER a closed scratch may have had (fleet_scratch_free recycles it), so
-#     before this a parent that had gone was "found" in the pool and its child's
-#     report woke a window nobody was using
-#   ② @worktree, once stamped, is the scratch's identity; the pane cwd is read ONLY
+#   ① @worktree, once stamped, is the scratch's identity; the pane cwd is read ONLY
 #     when no @worktree exists (a crash-restored scratch) — never as a second chance
 #     for a window whose stamp said otherwise
 # A bare key in a fleet of ONE repo is read as that repo's (issue #1939): it
 # matches the windows a qualified key would.
 fleet_win_for_key() {
-  local key="${1:-}" sock="${2:-}" wl line wid rest iss wt pth cand bn sn pre='' wsess pool fleet hits='' n names
+  local key="${1:-}" sock="${2:-}" wl line wid rest iss wt pth cand bn sn pre='' fleet hits='' n names
   # `<slug>:<key>` (issue #789): match the bare key, then require the window's repo.
   # `agent:<name>` (issue #4341): the session started from that agent file.
   case "$key" in agent:?*) fleet_win_for_agent "${key#agent:}" "$sock"; return $? ;; esac
@@ -5770,26 +5763,22 @@ fleet_win_for_key() {
   # window_name is NOT read here: the free-text field would have to ride the same
   # `|` separator (a tab/0x1f separator prints as a literal `\037` on tmux ≤3.4).
   if [ -n "$sock" ]; then
-    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@issue}|#{@pool}|#{@worktree}|#{pane_current_path}' tmux -L "$sock")
+    wl=$(fleet_lw '#{window_id}|#{@issue}|#{@worktree}|#{pane_current_path}' tmux -L "$sock")
   else
-    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@issue}|#{@pool}|#{@worktree}|#{pane_current_path}')
+    wl=$(fleet_lw '#{window_id}|#{@issue}|#{@worktree}|#{pane_current_path}')
   fi
   [ -n "$wl" ] || return 1
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     wid=${line%%|*};  rest=${line#*|}
-    wsess=${rest%%|*}; rest=${rest#*|}
     iss=${rest%%|*};  rest=${rest#*|}
-    pool=${rest%%|*}; rest=${rest#*|}
     wt=${rest%%|*};   pth=${rest#*|}
-    [ "$pool" = 1 ] && continue                                   # ① a warm-pool window
-    fleet_is_pool_session "$wsess" ${fleet:+"$fleet"} && continue  # ① parked in the pool session
     case "$key" in
       issue-*)
         [ -n "$iss" ] && [ "issue-$iss" = "$key" ] && _fleet_wfk_repo_ok && hits="$hits$wid"$'\n'
         ;;
       scratch-*)
-        if [ -n "$wt" ]; then cand=$wt; else cand=$pth; fi   # ② the stamp, else the cwd — not both
+        if [ -n "$wt" ]; then cand=$wt; else cand=$pth; fi   # ① the stamp, else the cwd — not both
         bn=${cand##*/}
         case "$bn" in
           scratch-*)   sn=${bn#scratch-} ;;
@@ -6139,22 +6128,17 @@ fleet_window_born() {
 # fleet_win_for_fid <fleet_id> [<sock>] — fleet_win_for_key's twin for an identity:
 # the live window carrying @fleet_id <fleet_id> on this fleet's socket. Same rails:
 # rc 0 + the id, rc 1 NOTFOUND, rc 2 AMBIGUOUS (two windows carry it — a copy made
-# by hand — said on stderr, never a pick); a warm-pool window never answers.
+# by hand — said on stderr, never a pick).
 fleet_win_for_fid() {
-  local fid="${1:-}" sock="${2:-}" fleet wl line wid rest wsess pool f hits='' n
+  local fid="${1:-}" sock="${2:-}" wl line wid f hits='' n
   fleet_is_fid "$fid" || return 1
-  fleet="$sock"; [ -n "$fleet" ] || fleet=$(fleet_current_session 2>/dev/null)
-  if [ -n "$sock" ]; then wl=$(fleet_lw '#{window_id}|#{session_name}|#{@pool}|#{@fleet_id}' tmux -L "$sock")
-  else wl=$(fleet_lw '#{window_id}|#{session_name}|#{@pool}|#{@fleet_id}'); fi
+  if [ -n "$sock" ]; then wl=$(fleet_lw '#{window_id}|#{@fleet_id}' tmux -L "$sock")
+  else wl=$(fleet_lw '#{window_id}|#{@fleet_id}'); fi
   [ -n "$wl" ] || return 1
   while IFS= read -r line; do
     [ -n "$line" ] || continue
-    wid=${line%%|*};   rest=${line#*|}
-    wsess=${rest%%|*}; rest=${rest#*|}
-    pool=${rest%%|*};  f=${rest#*|}
+    wid=${line%%|*}; f=${line#*|}
     [ "$f" = "$fid" ] || continue
-    [ "$pool" = 1 ] && continue
-    fleet_is_pool_session "$wsess" ${fleet:+"$fleet"} && continue
     hits="$hits$wid"$'\n'
   done <<EOF
 $wl
@@ -6996,12 +6980,12 @@ fleet_restore_map_prune() {
 # @origin_gen kept (the generation is the same key's, read through the alias).
 # Prints one `healed <window> <old> → <new>` line per rewrite; never fails.
 fleet_origin_heal() {
-  local sess="${1:-}" sock="${2:-}" wl line wid rest wsess pool f of o ids='' pw pk one=''
+  local sess="${1:-}" sock="${2:-}" wl line wid rest wsess f of o ids='' pw pk one=''
   [ -n "$sess" ] || return 0
   if [ -n "$sock" ]; then
-    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@pool}|#{@fleet_id}|#{@origin_fid}|#{@origin}' tmux -L "$sock")
+    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@fleet_id}|#{@origin_fid}|#{@origin}' tmux -L "$sock")
   else
-    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@pool}|#{@fleet_id}|#{@origin_fid}|#{@origin}' _fleet_tmux "$sess")
+    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@fleet_id}|#{@origin_fid}|#{@origin}' _fleet_tmux "$sess")
   fi
   [ -n "$wl" ] || return 0
   # A bare @origin anywhere ⇒ the one repo's prefix, read once (nothing in a 0/2+ repo fleet).
@@ -7015,15 +6999,15 @@ fleet_origin_heal() {
   while IFS= read -r line; do               # pass 1: identity → window, this fleet's own
     [ -n "$line" ] || continue
     wid=${line%%|*}; rest=${line#*|}; wsess=${rest%%|*}; rest=${rest#*|}
-    pool=${rest%%|*}; rest=${rest#*|}; f=${rest%%|*}
-    [ "$wsess" = "$sess" ] && [ "$pool" != 1 ] && [ -n "$f" ] && ids="$ids$f $wid"$'\n'
+    f=${rest%%|*}
+    [ "$wsess" = "$sess" ] && [ -n "$f" ] && ids="$ids$f $wid"$'\n'
   done <<EOF
 $wl
 EOF
   while IFS= read -r line; do               # pass 2: each child whose parent's key moved
     [ -n "$line" ] || continue
     wid=${line%%|*}; rest=${line#*|}; wsess=${rest%%|*}; rest=${rest#*|}
-    rest=${rest#*|}; rest=${rest#*|}; of=${rest%%|*}; o=${rest#*|}
+    rest=${rest#*|}; of=${rest%%|*}; o=${rest#*|}
     [ "$wsess" = "$sess" ] || continue
     pk=''
     if fleet_is_fid "$of" \
@@ -8222,38 +8206,13 @@ fleet_scratch_alloc() {
   return 1
 }
 
-# fleet_scratch_free <main> <slug> <worktree> — undo an allocation (a failed spawn,
-# or an older release's warm-pool entry retired unclaimed). Never fails the caller.
+# fleet_scratch_free <main> <slug> <worktree> — undo an allocation (a failed spawn).
+# Never fails the caller.
 fleet_scratch_free() {
   git -C "$1" worktree remove --force "$3" >/dev/null 2>&1
   git -C "$1" branch -D "$2" >/dev/null 2>&1
   git -C "$1" worktree prune >/dev/null 2>&1
   return 0
-}
-
-# fleet_pool_session <sess> — the HOLDING session where an older release parked
-# pre-warmed scratch windows for <sess>, on the same socket. The warm pool is gone
-# (T495): nothing parks there any more, the diskguard tick retires what is left
-# (pool_watch), and the readers below keep skipping it for one version.
-# compat-1v: 下一批删 (with fleet_is_pool_session and every `@pool` skip)
-fleet_pool_session() { printf '%s-pool\n' "$1"; }
-
-# fleet_is_pool_session <name> [socket] — true when <name> is a warm-pool HOLDING
-# session, not a fleet (issue #1020). The pool shares its fleet's socket, so a
-# per-socket loop (restore snapshot, the collector's sessmap) meets it beside the
-# real fleet; every such reader must skip it or it grows a phantom fleet — a
-# fleets/<sess>-pool/ state dir, a restore map --if-down reads as DOWN forever, a
-# `○ <sess>-pool` row in fleet-list. With [socket] the test is EXACT: <name> is
-# the pool of the fleet that socket belongs to. Without one (a state dir name,
-# a map on disk) it inverts fleet_pool_session — never an ad-hoc suffix guess — and
-# a name that has its OWN conf is a real fleet that merely ends in "-pool".
-fleet_is_pool_session() {
-  local n="${1:-}" own
-  [ -n "$n" ] || return 1
-  if [ -n "${2:-}" ]; then [ "$n" = "$(fleet_pool_session "$2")" ]; return; fi
-  case "$n" in *-pool) own="${n%-pool}" ;; *) return 1 ;; esac
-  [ -n "$own" ] && [ "$(fleet_pool_session "$own")" = "$n" ] || return 1
-  [ ! -f "$(fleet_conf_file "$n")" ]
 }
 
 # Milliseconds since the epoch, portable. BSD `date` has no %N/%3N, so use perl
@@ -10053,8 +10012,7 @@ fleet_wid_taken() {
 
 # fleet_wid_used [socket] — every handle stamped on the socket, one per line
 # (blank lines for unstamped windows are harmless — fleet_wid_next ignores them).
-# `-a`: the scope is the SERVER, so the warm pool session's windows count too and
-# a claimed pool window never collides with a live one.
+# `-a`: the scope is the SERVER.
 fleet_wid_used() {
   if [ -n "${1:-}" ]; then fleet_lw '#{@wid}' tmux -L "$1"
   else                     fleet_lw '#{@wid}'; fi
@@ -10068,12 +10026,11 @@ fleet_wid_get() {
 
 # fleet_wid_sess [socket] — the fleet whose state dir holds the allocation lock.
 # The socket LABEL is the session name (fleet_socket is identity), so a socket is
-# already the answer; with none, ask the caller's own server. The `-pool` holding
-# session shares its fleet's socket, hence its lock.
+# already the answer; with none, ask the caller's own server.
 fleet_wid_sess() {
   local s="${1:-}"
   [ -n "$s" ] || s=$(tmux display-message -p "$FLEET_SESSION_FMT" 2>/dev/null)
-  printf '%s' "${s%-pool}"
+  printf '%s' "$s"
 }
 
 # fleet_wid_lock <dir> / fleet_wid_unlock <dir> — mkdir-lock (portable; macOS has

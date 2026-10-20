@@ -10,9 +10,8 @@
 # outer pane attaches to `fl` DIRECTLY: every key there must do nothing of ours.
 #
 #   N  ⌘N (fleet-quickopen.py do new / fleet_view.go_new, issue #3119): a NEW
-#      session every press — dash-raw-session.sh --origin hub --no-repo --no-desk
-#      --print <fleet> (FLEET_VIEW_NEW_CMD) — once, never `--warm-only` (the warm
-#      pool is gone, T495) — the 看台 onto the window it printed
+#      session every press — dash-raw-session.sh --origin hub --no-repo
+#      --print <fleet> (FLEET_VIEW_NEW_CMD) — once — the 看台 onto the window it printed
 #      (logged how=new) — never the window holding the orchestrator, even with
 #      orch_<fleet> naming one, and no orchestrator script run at all
 #      (FLEET_VIEW_ORCH_CMD would leave a mark); a direct attach: nothing;
@@ -174,9 +173,8 @@ N1=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "new1" 
 waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$N1' ]" \
   || fail "N: ⌘N did not land the 看台 on the new session (now $(cur), it is $N1)"
 [ "$(cur)" != "$W0" ] || fail "N: ⌘N landed on the orchestrator's holder"
-[ "$(head -1 "$W/new.argv")" = "--origin hub --no-repo --no-desk --print fl" ] \
+[ "$(head -1 "$W/new.argv")" = "--origin hub --no-repo --print fl" ] \
   || fail "N: the new session was not asked as a no-repo one of this fleet: $(head -1 "$W/new.argv")"
-grep -q -- '--warm-only' "$W/new.argv" && fail "N: ⌘N still asked for a warm window: $(cat "$W/new.argv")"
 log="$W/conf/logs/view-switch.ndjson"
 tail -1 "$log" | grep -q '"how":"new"' || fail "N: the switch is not logged how=new: $(tail -1 "$log")"
 to send-keys -t o:view -H 1b 5b 39 32 38 7e
@@ -407,7 +405,7 @@ pclosed
 pcompose 'keep this draft'
 to send-keys -t o:view Tab Left Tab Tab Tab Enter
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new3" || fail "P: blank opened no session: $(to capture-pane -p -t o:view) $(cat "$W/new.argv")"
-[ "$(sed -n 3p "$W/new.argv")" = "--origin hub --no-repo --agent claude --no-desk --print fl" ] || fail "P: blank argv: $(sed -n 3p "$W/new.argv")"
+[ "$(sed -n 3p "$W/new.argv")" = "--origin hub --no-repo --agent claude --print fl" ] || fail "P: blank argv: $(sed -n 3p "$W/new.argv")"
 N3=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "new3" { print $1 }')
 waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$N3' ]" || fail "P: not on new3"
 pclosed
@@ -415,7 +413,7 @@ python3 -c 'import json,pathlib,sys; ds=list(pathlib.Path(sys.argv[1]).glob("*.j
 pcompose '看看日志'
 to send-keys -t o:view Tab Left Tab Tab Enter
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new4" || fail "P: no-repo draft opened no session"
-[ "$(sed -n 4p "$W/new.argv")" = "--origin hub --no-repo --agent claude --draft 看看日志 --no-desk --print fl" ] || fail "P: no-repo argv: $(sed -n 4p "$W/new.argv")"
+[ "$(sed -n 4p "$W/new.argv")" = "--origin hub --no-repo --agent claude --draft 看看日志 --print fl" ] || fail "P: no-repo argv: $(sed -n 4p "$W/new.argv")"
 pclosed
 # Quit still goes through OSC 7502 + detach.
 to pipe-pane -o -t o:view "cat > '$W/client-p.bytes'"; sleep 0.3

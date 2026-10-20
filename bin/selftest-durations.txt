@@ -514,7 +514,6 @@
 0.0 pane-border-focus-selftest.sh
 0.5 pane-header-selftest.sh
 9.9 peer-queue-selftest.sh
-0.4 pool-not-a-fleet-selftest.sh
 10.5 portability-selftest.sh
 0.8 posix-lib-parse-selftest.sh
 2.1 precompact-hook-selftest.sh

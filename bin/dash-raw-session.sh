@@ -81,7 +81,8 @@
 # A session the hub's task record owns (`--task T<n>`, issue #3325 — the hub's
 # start passes it) is stamped `@task T<n>`: the record is its ticket. (The desk
 # ticket of #2676 — a GitHub issue filed for a no-code session — left with issue
-# #4898; --desk / --no-desk are accepted and do nothing. # compat-1v: 下一批删)
+# #4898; --desk / --no-desk are accepted and do nothing — the 看台's ⌘N stopped
+# passing --no-desk in T512, so a 看台 started before it still may. # compat-1v: 下一批删)
 #
 # --resume <sid> + --seed-file <f> [+ --worktree <dir>] (issue #3387): a PARKED
 # session with no issue coming back (a park's wake; the parker left with #4339) — the scratch
@@ -184,10 +185,6 @@ while [ "$#" -gt 0 ]; do
     # exists, ONE stdout line `<window_id>\t<name>\t<worktree>\t<fleet_id>`. Foreground pass
     # only (the --bg pass's stdout is silenced, #446). The hub's node reads it.
     --print)       PRINT_WIN=1; shift ;;
-    # --warm-only: the warm pool is gone (T495) — a caller of the release before
-    # still asks for a pool window first; it is answered "none ready" (exit 3), so
-    # it takes its own cold path. # compat-1v: 下一批删
-    --warm-only)   exit 3 ;;
     # --reap <policy> (issue #1902): when the fleet may close this session on its
     # own — merged[:<dur>] | done[:<dur>] | loop-end | at:<time> | keep. None =
     # the kind's default, stamped below: done:15m, or loop-end for a /loop seed.

@@ -202,15 +202,12 @@ run_stop fleetS "fid:$F4"
 [ "$rc" = 0 ] && [ "$out" = stopped:closed ] || fail "10: worker by fid expected stopped:closed/0" "rc=$rc out=$out"
 has_win "$w2" && fail "10: worker window survived its fid stop"
 ledger_has 2 || fail "10: a worker stopped by fid recorded no row keyed 2"
-# the hub and a warm-pool window never answer to an identity
+# the hub never answers to an identity
 w10h=$(mkwin hubby 'while :; do sleep 300; done' -); tf set-window-option -t "$w10h" @hub 1
 tf set-window-option -t "$w10h" @fleet_id "$F3"
 run_stop fleetS "fid:$F3"
 [ "$rc" = 5 ] || fail "10: the hub answered to its fid" "rc=$rc out=$out"
-tf set-window-option -u -t "$w10h" @hub; tf set-window-option -t "$w10h" @pool 1
-run_stop fleetS "fid:$F3"
-[ "$rc" = 5 ] || fail "10: a pool window answered to its fid" "rc=$rc out=$out"
-has_win "$w10h" || fail "10: a refused hub/pool fid stop closed the window"
+has_win "$w10h" || fail "10: a refused hub fid stop closed the window"
 
 # --- 11. dash-reap.sh on a no-repo row (issue #1873) -------------------------------
 #        Inside the fleet: bare tmux reaches the isolated server through $TMUX.
