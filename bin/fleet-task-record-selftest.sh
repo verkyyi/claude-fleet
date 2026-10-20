@@ -33,6 +33,7 @@ ok()  { CHECKS=$((CHECKS + 1)); printf 'PASS  %s\n' "$1"; }
 st_sandbox "${TMPDIR:-/tmp}/ftr.XXXXXX"
 export FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1; mkdir -p "$FLEET_CONF_DIR"
 unset TMUX TMUX_PANE CCQUOTA_TOKEN CCQUOTA_HUB_URL
+export CCQUOTA_HUB_SOCK=off   # never this machine's own forwarder (T672); a leg sets its own
 SB="$WORK/bin"; mkdir -p "$SB"
 for f in "$BIN"/*; do ln -s "$f" "$SB/${f##*/}"; done
 R="$SB/fleet-task-record.sh"
@@ -106,6 +107,21 @@ assert b["token"] == "orch:k1" and b["title"] == "看看风扇" and b["via"] == 
 assert "rule" not in b, b
 assert "repo" not in b and "issue" not in b, b
 PY
+# the agent's warm road (T672): an https hub goes through the socket with its
+# authority as Host; a login's own broker (http://127.0.0.1:…/hub) never does —
+# that put a path in the Host header and every call 400'd (#5114)
+python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$WORK/h.sock"
+: > "$CURL_LOG"
+CCQUOTA_HUB_SOCK="$WORK/h.sock" bash "$R" get T5 >/dev/null 2>&1
+grep -q -- "--unix-socket $WORK/h.sock .*-H Host: hub.test -X GET .*http://hub.test/v1/node/tasks/T5" "$CURL_LOG" \
+  && ok "B an https hub: the socket, Host = its authority, plain http on it" || st_miss "B socket argv: $(cat "$CURL_LOG")"
+cp "$FLEET_CONF_DIR/node.env" "$WORK/node.env.keep"
+printf 'CCQUOTA_HUB_URL=http://127.0.0.1:18923/hub\nCCQUOTA_TOKEN=tok-SECRET\n' > "$FLEET_CONF_DIR/node.env"
+: > "$CURL_LOG"
+CCQUOTA_HUB_SOCK="$WORK/h.sock" bash "$R" get T5 >/dev/null 2>&1
+grep -q -- '--unix-socket' "$CURL_LOG" && st_miss "B a broker URL must not ride the socket: $(cat "$CURL_LOG")" \
+  || ok "B a login's own broker (http loopback) goes direct"
+mv "$WORK/node.env.keep" "$FLEET_CONF_DIR/node.env"; rm -f "$WORK/h.sock"; : > "$CURL_LOG"
 # a hub with task_ids (EPIC T644 C1): the task's code first, T<n> after it
 printf '{"id":"T5","task":"T5","fid":"3fa85f64-5717-4562-b3fc-2c963f66afa6","short":"FF1W"}' > "$ANS"
 out=$(bash "$R" new --title t --token k 2>"$WORK/err"); rc=$?
