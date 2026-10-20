@@ -181,7 +181,7 @@ Tab 操作页在动作下面列出：编号 + 完整 ID、别名、每一段（a
   开：派单开窗不认领（`fleet_launch.py local` / `admit`），`fleet_task_control.py report` 答 5，`fleet-report-parent.sh`
   把回报写成窗口 ID 的结果（`--outcome` 成为结果状态，PR 照旧核 merged）。关回来：带 `@launch` 的窗口照走旧路。
   来回切不丢会话：窗口、ID、账本都不动（BREAK-IT `id-switch-flip-report`）。
-- 打开开关（迁移 `--apply` + `switch on`，§5.1 第 5 步）由操作者 MacBook 上、不在任何 fleet 里的会话来做（C7）；出问题 `switch off` 回退，旧表没删、写侧双写还在。
+- 打开开关（迁移 `--apply` + `switch on`，§5.1 第 5 步）由操作者 MacBook 上、不在任何 fleet 里的会话来做（C7），照 [ID-SWITCH.md](ID-SWITCH.md) 做；出问题 `switch off` 回退，旧表没删、写侧双写还在。
 
 `bin/fleet-id-migrate-selftest.sh` 钉节点这一半；hub 那一半是 `hub/store/fleet_id_migrate_test.go`（§5 样例表逐条、
 反例、apply 一次、开关两轮）与 `hub/api/fleet_id_migrate_test.go`（机器只问一次、失联不动、开关两轮下旧路拒收、记录读 ID 的结果）。
