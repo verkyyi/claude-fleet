@@ -29,6 +29,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 ADD="$BIN/dash-repo-add.sh"
 [ -f "$ADD" ] || { printf 'selftest: %s missing\n' "$ADD" >&2; exit 2; }
@@ -44,7 +45,7 @@ if [ -n "$REAL_TMUX" ]; then
 else
   printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/tmux"
 fi
-printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
+st_fake_gh "$WORK/bin"
 chmod +x "$WORK/bin/tmux" "$WORK/bin/gh"
 export PATH="$WORK/bin:$PATH"
 cleanup() { [ -n "$REAL_TMUX" ] && "$REAL_TMUX" -S "$SOCK" kill-server 2>/dev/null; rm -rf "$WORK"; }
@@ -249,7 +250,7 @@ printf '#!/bin/sh\necho "error connecting to api.github.com" >&2\nexit 1\n' > "$
 OUT=$(FLEET_UI_LANG=zh bash "$ADD" --session "$S" o/net 2>"$WORK/err"); RC=$?
 eq "E: offline clone → failed:clone" "$OUT:$RC" "failed:clone:1"
 has "E: … and the person reads 网络不通" "$(tail -n 1 "$WORK/err")" "拉不到 GitHub，网络不通"
-printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
+st_fake_gh "$WORK/bin"
 # the Claude road (skills/fleet-add-repo) names this same script, never a bare clone
 SK="$BIN/../skills/fleet-add-repo/SKILL.md"
 grep -q 'dash-repo-add.sh' "$SK" 2>/dev/null || fail "E: skills/fleet-add-repo does not send Claude through dash-repo-add.sh"

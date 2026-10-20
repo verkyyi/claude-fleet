@@ -20,6 +20,7 @@
 set -u
 
 BIN=$(cd -- "$(dirname -- "$0")" && pwd)
+. "$BIN/selftest-lib.sh"
 command -v git >/dev/null 2>&1 || { echo "SKIP: git not installed"; exit 0; }
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/fleet-selftest-changed.XXXXXX") || exit 1
@@ -30,7 +31,6 @@ cp "$BIN/run-selftests.sh" "$BIN/selftest-shadow-root.sh" "$R/bin/"
 
 FAILS=0
 fail() { printf 'FAIL %s\n' "$*"; FAILS=$((FAILS + 1)); }
-ok()   { printf 'ok   %s\n' "$*"; }
 
 mk_test() { printf '#!/bin/sh\n# %s\nexit 0\n' "$2" > "$R/bin/$1-selftest.sh"; }
 mk_test portability 'lint: scans the whole tree'
@@ -80,17 +80,17 @@ scenario() {
   elif [ "$ran" != "$want" ]; then
     fail "$name: ran [$ran], want [$want]"; printf '%s\n' "$out" | grep '^select' | sed 's/^/     /'
   else
-    ok "$name → $ran"
+    st_ok_all "$name → $ran"
   fi
 }
 
 scenario script 'echo b >> bin/tool-a.sh' \
   'alpha-selftest.sh portability-selftest.sh '
 printf '%s\n' "$out" | grep -q '^select: alpha-selftest.sh ← mentions tool-a.sh$' \
-  && ok "select line names the test and why" \
+  && st_ok_all "select line names the test and why" \
   || fail "no 'select: alpha-selftest.sh ← mentions tool-a.sh' line"
 printf '%s\n' "$out" | grep -q '^select: portability-selftest.sh ← always (lint group)$' \
-  && ok "lint group carries its reason" || fail "lint group select line missing"
+  && st_ok_all "lint group carries its reason" || fail "lint group select line missing"
 
 scenario lib-function "sed -e 's/echo foo/echo FOO/' bin/fleet-lib.sh > x && mv x bin/fleet-lib.sh" \
   'beta-selftest.sh portability-selftest.sh '
@@ -98,7 +98,7 @@ scenario lib-function "sed -e 's/echo foo/echo FOO/' bin/fleet-lib.sh > x && mv 
 scenario workflow 'echo "# touch" >> .github/workflows/selftests.yml' \
   'alpha-selftest.sh beta-selftest.sh delta-selftest.sh epsilon-selftest.sh gamma-selftest.sh portability-selftest.sh '
 printf '%s\n' "$out" | grep -q '^select: \* ← full suite (harness changed: .github/workflows/selftests.yml)$' \
-  && ok "harness change says why it went full" || fail "full-suite select line missing"
+  && st_ok_all "harness change says why it went full" || fail "full-suite select line missing"
 
 # An extensionless basename selects only a test naming it as a path (issue #1734):
 # beta (fleet_foo) and delta (fleet-lib.sh) say `fleet` too and must stay out.
@@ -115,20 +115,20 @@ scenario selftest 'echo "# edit" >> bin/gamma-selftest.sh' \
 g checkout -q s-docs
 out=$(FLEET_HEAVY=0 sh "$R/bin/run-selftests.sh" --changed base --shard 2/3 </dev/null 2>&1); rc=$?
 [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q 'has nothing to run' \
-  && ok "--changed: an empty shard passes" || { fail "--changed empty shard: rc=$rc"; printf '%s\n' "$out"; }
+  && st_ok_all "--changed: an empty shard passes" || { fail "--changed empty shard: rc=$rc"; printf '%s\n' "$out"; }
 out=$(FLEET_HEAVY=0 sh "$R/bin/run-selftests.sh" --shard 6/6 portability </dev/null 2>&1); rc=$?
-[ "$rc" -eq 2 ] && ok "without --changed an empty shard still refuses (exit 2)" \
+[ "$rc" -eq 2 ] && st_ok_all "without --changed an empty shard still refuses (exit 2)" \
   || fail "default empty shard: rc=$rc, want 2"
 
 # An unresolvable base never under-selects: it runs everything.
 out=$(FLEET_HEAVY=0 sh "$R/bin/run-selftests.sh" --changed no-such-ref </dev/null 2>&1); rc=$?
 n=$(printf '%s\n' "$out" | grep -c '^PASS ')
-[ "$rc" -eq 0 ] && [ "$n" -eq 6 ] && ok "unresolvable base → full suite" \
+[ "$rc" -eq 0 ] && [ "$n" -eq 6 ] && st_ok_all "unresolvable base → full suite" \
   || fail "unresolvable base: rc=$rc ran=$n"
 
 # --changed with explicit names is refused.
 FLEET_HEAVY=0 sh "$R/bin/run-selftests.sh" --changed base alpha >/dev/null 2>&1
-[ $? -eq 2 ] && ok "--changed + test names is refused" || fail "--changed + names not refused"
+[ $? -eq 2 ] && st_ok_all "--changed + test names is refused" || fail "--changed + names not refused"
 
 # A family edit selects every thin wrapper exactly once, including a new part.
 # Keep the wrappers in the BASE too: otherwise "changed itself" would mask a
@@ -143,7 +143,7 @@ out=$(env -u FLEET_SELFTEST_ROOT -u FLEET_SELFTEST_NO_SHADOW FLEET_HEAVY=0 \
       sh "$R/bin/run-selftests.sh" --changed parts-base </dev/null 2>&1); rc=$?
 ran=$(printf '%s\n' "$out" | awk '/^PASS /{print $2}' | sort | tr '\n' ' ')
 [ "$rc" -eq 0 ] && [ "$ran" = 'alpha-2-selftest.sh alpha-3-selftest.sh alpha-selftest.sh portability-selftest.sh ' ] \
-  && ok "a family source selects its parent and every part once" \
+  && st_ok_all "a family source selects its parent and every part once" \
   || fail "family selection: rc=$rc ran=$ran"
 
 # Parts declared in the test's header (T525): a change selecting the test runs and
@@ -158,13 +158,13 @@ echo changed >> "$R/bin/tool-a.sh"
 g add -A && g commit -qm ids-source
 list=$(FLEET_HEAVY=0 sh "$R/bin/run-selftests.sh" --changed ids-base --list-only 2>&1 | tr '\n' ' ')
 [ "$list" = 'alpha-selftest.sh#1 alpha-selftest.sh#2 alpha-selftest.sh#3 portability-selftest.sh zeta-selftest.py ' ] \
-  && ok "--list-only prints the ids of a declared test and a .py entry" || fail "id list: $list"
+  && st_ok_all "--list-only prints the ids of a declared test and a .py entry" || fail "id list: $list"
 out=$(env -u FLEET_SELFTEST_ROOT -u FLEET_SELFTEST_NO_SHADOW FLEET_HEAVY=0 \
       sh "$R/bin/run-selftests.sh" --changed ids-base </dev/null 2>&1); rc=$?
 ran=$(printf '%s\n' "$out" | awk '/^PASS /{print $2}' | tr '\n' ' ')
 parts=$(printf '%s\n' "$out" | grep -c '^part [123]/3$')
 [ "$rc" -eq 0 ] && [ "$ran" = "$list" ] && [ "$parts" -eq 3 ] \
-  && ok "every id runs once, each part with its K/N" || fail "id run: rc=$rc ran=$ran parts=$parts"
+  && st_ok_all "every id runs once, each part with its K/N" || fail "id run: rc=$rc ran=$ran parts=$parts"
 
 [ "$FAILS" -eq 0 ] || { echo "run-selftests-changed-selftest: $FAILS failure(s)"; exit 1; }
 echo "run-selftests-changed-selftest: all green"

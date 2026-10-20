@@ -21,16 +21,16 @@
 #                  install line records the python there
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd)
+. "$BIN/selftest-lib.sh"
 ROOT=$(cd "$BIN/.." && pwd)
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-tls-st.XXXXXX")
 SRV_PID=''
 cleanup() { [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
 fails=0
-ok()  { printf 'ok   %s\n' "$1"; }
 bad() { printf 'FAIL %s\n' "$1"; [ $# -gt 1 ] && printf '     %s\n' "$2"; fails=$((fails + 1)); }
-has() { case "$3" in *"$2"*) ok "$1" ;; *) bad "$1" "want «$2» in: $3" ;; esac; }
-hasnt() { case "$3" in *"$2"*) bad "$1" "did not want «$2» in: $3" ;; *) ok "$1" ;; esac; }
+has() { case "$3" in *"$2"*) st_ok "$1" ;; *) bad "$1" "want «$2» in: $3" ;; esac; }
+hasnt() { case "$3" in *"$2"*) bad "$1" "did not want «$2» in: $3" ;; *) st_ok "$1" ;; esac; }
 
 command -v openssl >/dev/null 2>&1 || { echo "SKIP no openssl"; exit 0; }
 
@@ -74,7 +74,7 @@ noroads() {
 
 # --- A. a bundle --------------------------------------------------------------
 out=$(noroads FLEET_CA_BUNDLE="$WORK/ca.pem" python3 "$BIN/fleet_tls.py" check "$HUB"); rc=$?
-[ $rc = 0 ] && ok "A: check exit 0 with the bundle" || bad "A: check exit 0 with the bundle" "rc=$rc $out"
+[ $rc = 0 ] && st_ok "A: check exit 0 with the bundle" || bad "A: check exit 0 with the bundle" "rc=$rc $out"
 has "A: PASS" "PASS	" "$out"
 has "A: sources names the bundle" "FLEET_CA_BUNDLE=" "$(noroads FLEET_CA_BUNDLE="$WORK/ca.pem" python3 "$BIN/fleet_tls.py" sources)"
 out=$(cd "$BIN" && noroads FLEET_CA_BUNDLE="$WORK/ca.pem" python3 -c '
@@ -85,7 +85,7 @@ has "A: install() → a bare urlopen verifies" "200" "$out"
 
 # --- B. no road -----------------------------------------------------------------
 out=$(noroads python3 "$BIN/fleet_tls.py" check "$HUB"); rc=$?
-[ $rc = 1 ] && ok "B: check exit 1 with no road" || bad "B: check exit 1 with no road" "rc=$rc $out"
+[ $rc = 1 ] && st_ok "B: check exit 1 with no road" || bad "B: check exit 1 with no road" "rc=$rc $out"
 has "B: FAIL" "FAIL	" "$out"
 has "B: names the python" "python " "$out"
 has "B: names the sources" "CA 来源" "$out"
@@ -107,7 +107,7 @@ has "C: --tls-check PASS" "PASS	127.0.0.1" "$out"
 out=$(noroads FLEET_HUB_URL="$HUB" python3 "$BIN/fleet-connect.py" --tls-check)
 has "C: --tls-check FAIL" "FAIL	127.0.0.1" "$out"
 out=$(noroads python3 "$BIN/fleet-connect.py" --tls-check); rc=$?
-[ $rc = 3 ] && [ -z "$out" ] && ok "C: no hub → rc 3, no row" || bad "C: no hub → rc 3, no row" "rc=$rc out=$out"
+[ $rc = 3 ] && [ -z "$out" ] && st_ok "C: no hub → rc 3, no row" || bad "C: no hub → rc 3, no row" "rc=$rc out=$out"
 has "C: fleet-doctor.sh has the row" "pass tls" "$(cat "$BIN/fleet-doctor.sh")"
 has "C: the client's doctor has the row" '--tls-check' "$(cat "$BIN/fleet")"
 
@@ -124,10 +124,10 @@ fi
 # --- E. wiring ------------------------------------------------------------------------
 for f in fleet-login.py fleet-connect.py fleet-hub-admin.py fleet-client-lease.py fleet-client-actions.py \
          fleet-agent-team.py fleet-cred-scan.py fleet-cred-proxy.py; do
-  grep -q 'fleet_tls.install()' "$BIN/$f" && ok "E: $f installs fleet_tls" || bad "E: $f installs fleet_tls"
+  grep -q 'fleet_tls.install()' "$BIN/$f" && st_ok "E: $f installs fleet_tls" || bad "E: $f installs fleet_tls"
 done
 grep -qx 'bin/fleet_tls.py' "$ROOT/tokenledger/hub/api/fleetclient/manifest" \
-  && ok "E: the client manifest ships fleet_tls.py" || bad "E: the client manifest ships fleet_tls.py"
+  && st_ok "E: the client manifest ships fleet_tls.py" || bad "E: the client manifest ships fleet_tls.py"
 has "E: fleet puts pybin first" 'claude-fleet}/pybin"' "$(cat "$BIN/fleet")"
 has "E: the install line records the python" '$CONF/pybin/python3' "$(cat "$BIN/fleet-install.sh")"
 # the launcher's PATH, for real: a pybin python3 that says who it is

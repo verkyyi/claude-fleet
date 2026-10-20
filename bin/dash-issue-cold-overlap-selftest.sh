@@ -34,6 +34,7 @@
 #             agent starts, no FLEET_WT_PENDING.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SPAWN="$BIN/dash-issue-session.sh"
 command -v tmux >/dev/null 2>&1 || { echo "SKIP no tmux"; exit 0; }
 command -v python3 >/dev/null 2>&1 || { echo "SKIP no python3"; exit 0; }
@@ -46,7 +47,6 @@ cleanup() { TM kill-server >/dev/null 2>&1; rm -rf "$WORK"; }
 trap cleanup EXIT
 
 pass=0
-ok()   { pass=$((pass + 1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2
          [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2
          printf 'cold-reader socket=%q issue=%q wid=%q work=%q\n' \
@@ -223,14 +223,14 @@ wait_ready 11
 [ "$(field 11 ready_big)" = 1 ] || fail "OVERLAP the first prompt waits until the tree is whole"
 took=$(secs "$T0" "$(field 11 t_ready)")
 le "$took" 7 || fail "OVERLAP t_accepted → t_ready ${took}s > 7s (checkout 4s + start 4s run one after the other)"
-ok "OVERLAP the agent starts beside the checkout: accepted → ready ${took}s ≤ 7s (spawn returned in $(secs "$T0" "$T1")s)"
+st_pass "OVERLAP the agent starts beside the checkout: accepted → ready ${took}s ≤ 7s (spawn returned in $(secs "$T0" "$T1")s)"
 
 # ===== STAMPS =================================================================
 opts=$(TM show-options -w -t "$win" 2>/dev/null)
 for o in '@issue 11' '@fleet_role worker' '@reap_policy merged' '@repo acme/widgets' '@born' '@fleet_id' '@worktree'; do
   printf '%s\n' "$opts" | grep -q "^$o" || fail "STAMPS the window carries $o" "$opts"
 done
-ok "STAMPS one batched call stamps every plain option"
+st_pass "STAMPS one batched call stamps every plain option"
 
 # ===== SCOPED =================================================================
 spawn 12 FLEET_SPAWN_FILL_CMD='git -C "$1" reset -q --hard'
@@ -241,7 +241,7 @@ all=$(PATH="$WORK/fakebin:$PATH" bash "$BIN/fleet-control-read.sh" workers "$SES
   || fail "SCOPED workers <sess> <window> lists that window alone" "$one"
 printf '%s\n' "$all" | cut -f2 | grep -qx 12 && printf '%s\n' "$all" | cut -f2 | grep -qx 11 \
   || fail "SCOPED without a window it lists every window" "$all"
-ok "SCOPED the adapter reads one window back when told which"
+st_pass "SCOPED the adapter reads one window back when told which"
 
 # ===== FAILFILL ===============================================================
 spawn 13 FLEET_SPAWN_FILL_CMD='sleep 0.5; exit 1'
@@ -249,7 +249,7 @@ spawn 13 FLEET_SPAWN_FILL_CMD='sleep 0.5; exit 1'
 grep -q 'worktree checkout' "$WORK/spawn.err" || fail "FAILFILL says why"
 TM list-windows -t "$SESS" -F '#{@issue}' | grep -qx 13 && fail "FAILFILL the window is closed (no orphan)"
 [ -z "$(find "$WORK/wt" -maxdepth 1 -name '*issue-13' 2>/dev/null)" ] || fail "FAILFILL the worktree is removed"
-ok "FAILFILL a failed checkout leaves no window and no worktree"
+st_pass "FAILFILL a failed checkout leaves no window and no worktree"
 
 # ===== OFF ====================================================================
 spawn 14 FLEET_SPAWN_OVERLAP=0 FLEET_SPAWN_FILL_CMD='exit 1'
@@ -257,6 +257,6 @@ spawn 14 FLEET_SPAWN_OVERLAP=0 FLEET_SPAWN_FILL_CMD='exit 1'
 wait_ready 14
 [ "$(field 14 boot_big)" = 1 ] && [ -z "$(field 14 pending)" ] \
   || fail "OFF FLEET_SPAWN_OVERLAP=0 checks the whole tree out before the agent starts"
-ok "OFF FLEET_SPAWN_OVERLAP=0 keeps the old order"
+st_pass "OFF FLEET_SPAWN_OVERLAP=0 keeps the old order"
 
 printf 'dash-issue-cold-overlap-selftest: %d passed\n' "$pass"

@@ -32,13 +32,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/fleet-base-sync.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s not found/executable\n' "$SRC" >&2; exit 2; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not on PATH — SKIP\n'; exit 0; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fbs-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fbs-selftest.XXXXXX"
 
 mkdir -p "$WORK/bin" "$WORK/conf" "$WORK/leases"
 

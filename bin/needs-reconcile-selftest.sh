@@ -52,13 +52,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SPINNER="$BIN/tmux-spinner.sh"
 ORACLE="$BIN/fleet-pending-tool.sh"
 [ -f "$SPINNER" ] || { printf 'selftest: %s not found\n' "$SPINNER" >&2; exit 2; }
 [ -f "$ORACLE" ]  || { printf 'selftest: %s not found\n' "$ORACLE" >&2; exit 2; }
 
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
 
 # SHORT scratch name on purpose: a unix socket path is capped at ~104 bytes, and

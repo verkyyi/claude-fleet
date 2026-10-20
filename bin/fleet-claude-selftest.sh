@@ -35,17 +35,16 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 SUT="$BIN/fleet-claude.sh"
 LIB="$BIN/fleet-lib.sh"
 for f in "$SUT" "$LIB"; do [ -f "$f" ] || { printf 'selftest: %s missing\n' "$f" >&2; exit 2; }; done
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-claude.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-claude.XXXXXX"
 trap 'exit 130' INT TERM HUP
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- argv ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf/fleets/f1" "$WORK/conf/fleets/f2"
@@ -96,56 +95,56 @@ has()  { case " $1 " in *" $2 "*) return 0 ;; esac; return 1; }
 printf 'FLEET_MODEL="fable"\n' > "$WORK/conf/fleets/f1/conf"
 argv="$(run)"
 has "$argv" "--model fable" || fail "per-fleet FLEET_MODEL did not reach the launcher" "$argv"
-ok "a per-fleet FLEET_MODEL overrides the global one (#472)"
+st_pass "a per-fleet FLEET_MODEL overrides the global one (#472)"
 
 # a second fleet gets ITS value, not the first one's
 printf 'FLEET_MODEL="sonnet"\n' > "$WORK/conf/fleets/f2/conf"
 printf 'f2' > "$SESS_FILE"
 argv="$(run)"
 has "$argv" "--model sonnet" || fail "the second fleet did not get its own model" "$argv"
-ok "each fleet resolves its own conf"
+st_pass "each fleet resolves its own conf"
 
 # no per-fleet value → the global one still applies
 : > "$WORK/conf/fleets/f2/conf"
 argv="$(run)"
 has "$argv" "--model opus" || fail "global FLEET_MODEL stopped applying" "$argv"
-ok "an empty per-fleet conf falls through to the global value"
+st_pass "an empty per-fleet conf falls through to the global value"
 
 # outside a fleet (no session resolvable) → global only, no crash
 : > "$SESS_FILE"
 argv="$(run)"
 has "$argv" "--model opus" || fail "no-session path broke the launch" "$argv"
-ok "no resolvable session is a clean no-op, not a failure"
+st_pass "no resolvable session is a clean no-op, not a failure"
 printf 'f1' > "$SESS_FILE"
 
 # an explicit --model from the caller still wins
 argv="$(run --model haiku)"
 has "$argv" "--model haiku" || fail "caller --model was dropped" "$argv"
 case "$argv" in *"--model fable"*) fail "the conf model was added ALONGSIDE the caller's" "$argv" ;; esac
-ok "an explicit --model from the caller still wins"
+st_pass "an explicit --model from the caller still wins"
 
 # --- #473: FLEET_MCP_CONFIG ---------------------------------------------------
 printf 'FLEET_MODEL="fable"\n' > "$WORK/conf/fleets/f1/conf"
 argv="$(run)"
 case "$argv" in *--strict-mcp-config*|*--mcp-config*) fail "unset FLEET_MCP_CONFIG changed the argv" "$argv" ;; esac
-ok "FLEET_MCP_CONFIG unset leaves the launch untouched (default is unchanged)"
+st_pass "FLEET_MCP_CONFIG unset leaves the launch untouched (default is unchanged)"
 
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="none"\n' > "$WORK/conf/fleets/f1/conf"
 argv="$(run)"
 has "$argv" "--strict-mcp-config" || fail "FLEET_MCP_CONFIG=none did not pin MCP off" "$argv"
 case "$argv" in *'{"mcpServers":{}}'*) : ;; *) fail "none did not expand to an empty server set" "$argv" ;; esac
-ok "FLEET_MCP_CONFIG=none boots no MCP server at all"
+st_pass "FLEET_MCP_CONFIG=none boots no MCP server at all"
 
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG=%s\n' "'{\"mcpServers\":{\"playwright\":{\"command\":\"npx\"}}}'" > "$WORK/conf/fleets/f1/conf"
 argv="$(run)"
 has "$argv" "--strict-mcp-config" || fail "an inline-JSON allowlist did not set --strict-mcp-config" "$argv"
 case "$argv" in *'"playwright"'*) : ;; *) fail "the inline allowlist was not passed through" "$argv" ;; esac
-ok "an inline-JSON allowlist passes through with --strict-mcp-config"
+st_pass "an inline-JSON allowlist passes through with --strict-mcp-config"
 
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="%s/mcp.json"\n' "$WORK" > "$WORK/conf/fleets/f1/conf"
 argv="$(run)"
 has "$argv" "--mcp-config=$WORK/mcp.json" || fail "a file path was not passed through verbatim" "$argv"
-ok "a file path passes through verbatim, in the =form (the CLI takes either value shape)"
+st_pass "a file path passes through verbatim, in the =form (the CLI takes either value shape)"
 
 # --- #1078: the shipped minimal worker set, conf/mcp-worker.json ---------------
 # conf/fleet.conf.reference + docs/dev/INSTALL.md RECOMMEND pointing FLEET_MCP_CONFIG at this
@@ -175,18 +174,18 @@ has "$argv" "--strict-mcp-config" || fail "FLEET_MCP_CONFIG=conf/mcp-worker.json
 has "$argv" "--mcp-config=$WORKER_MCP" || fail "conf/mcp-worker.json was not the ONLY config passed" "$argv"
 [ "$(printf '%s\n' "$argv" | grep -c -- '--mcp-config')" = 1 ] || fail "more than one --mcp-config alongside mcp-worker.json" "$argv"
 has "$argv" "/fleet-history" || fail "the seed prompt was swallowed with mcp-worker.json" "$argv"
-ok "conf/mcp-worker.json ships (tracked, the fleet server only) and FLEET_MCP_CONFIG→it launches strict with only that file"
+st_pass "conf/mcp-worker.json ships (tracked, the fleet server only) and FLEET_MCP_CONFIG→it launches strict with only that file"
 
 # an explicit caller flag wins over the conf
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="none"\n' > "$WORK/conf/fleets/f1/conf"
 argv="$(run --mcp-config "$WORK/other.json")"
 case "$argv" in *'{"mcpServers":{}}'*) fail "the conf overrode the caller's --mcp-config" "$argv" ;; esac
 has "$argv" "--mcp-config $WORK/other.json" || fail "caller --mcp-config was dropped" "$argv"
-ok "an explicit --mcp-config from the caller wins over the conf"
+st_pass "an explicit --mcp-config from the caller wins over the conf"
 
 argv="$(run --strict-mcp-config)"
 case "$argv" in *'{"mcpServers":{}}'*) fail "the conf added its own config despite --strict-mcp-config" "$argv" ;; esac
-ok "an explicit --strict-mcp-config from the caller is left alone"
+st_pass "an explicit --strict-mcp-config from the caller is left alone"
 
 # --- #476: the seed prompt must survive, in EVERY config form ----------------
 # `--mcp-config <v>` (separated) is variadic and ate the positional that follows —
@@ -202,13 +201,13 @@ for cfg in none '{"mcpServers":{}}' "$WORK/mcp.json"; do
     *) fail "--mcp-config must use the =form or it eats the positional (FLEET_MCP_CONFIG=$cfg)" "$argv" ;;
   esac
 done
-ok "the seed prompt survives every FLEET_MCP_CONFIG form (=form, not separated)"
+st_pass "the seed prompt survives every FLEET_MCP_CONFIG form (=form, not separated)"
 
 # a multi-word prompt with spaces stays ONE argument
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="none"\n' > "$WORK/conf/fleets/f1/conf"
 argv="$(run 'Work GitHub issue #2109 in this repo')"
 case "$argv" in *"Work GitHub issue #2109 in this repo"*) : ;; *) fail "a multi-word prompt was mangled" "$argv" ;; esac
-ok "a multi-word seed prompt passes through intact"
+st_pass "a multi-word seed prompt passes through intact"
 
 # --- #524 → T550: the launcher no longer swaps the model off a model cap -------
 # The per-(account, model) cap ledger (`model-limited-until`) was read here against
@@ -237,10 +236,10 @@ has "$argv" "--model fable" || fail "the launch must run FLEET_MODEL — no cap 
 [ "$(cat "$WORK/subm")" = fable ] || fail "subagents follow the launch model (got '$(cat "$WORK/subm")')"
 grep -q '@cc_model fable' "$WORK/tmuxlog" 2>/dev/null || fail "the pane must be stamped @cc_model fable (tmux: $(cat "$WORK/tmuxlog" 2>/dev/null))"
 [ ! -s "$WORK/account.calls" ] || fail "the launcher must ask fleet-account.sh nothing (T550): $(cat "$WORK/account.calls")"
-ok "no pick, no cap swap: FLEET_MODEL launches, subagents follow, @cc_model stamped (T550)"
+st_pass "no pick, no cap swap: FLEET_MODEL launches, subagents follow, @cc_model stamped (T550)"
 argv="$(run --model haiku)"
 has "$argv" "--model haiku" || fail "caller --model was dropped" "$argv"
-ok "an explicit caller --model still wins"
+st_pass "an explicit caller --model still wins"
 printf 'FLEET_MODEL="opus"\n' > "$WORK/conf/fleets/f1/conf"
 
 # --- #563: the launcher pre-trusts THIS fleet's checkout before exec ------------
@@ -274,18 +273,18 @@ runt
 grep -qxF "grant --main $WORK/main $PWD" "$TRUST_LOG" || fail "#563 pre-trust must be 'grant --main <FLEET_MAIN> <cwd>'" "$(cat "$TRUST_LOG")"
 grep -q "pre-trusted $WORK/main in /fake/home/.claude.json" "$WORK/err" || fail "#563 a granted path must be announced on stderr" "$(cat "$WORK/err")"
 [ -s "$WORK/argv" ] || fail "#563 claude must still be exec'd after pre-trust" "$(cat "$WORK/err")"
-ok "pre-trust: grant --main <FLEET_MAIN> <cwd> before exec, announced in the pane (#563)"
+st_pass "pre-trust: grant --main <FLEET_MAIN> <cwd> before exec, announced in the pane (#563)"
 
 printf 'FLEET_MODEL="opus"\nFLEET_PRETRUST=0\n' > "$WORK/conf/fleets/f1/conf"
 runt
 [ ! -f "$TRUST_LOG" ] || fail "#563 FLEET_PRETRUST=0 must skip the pre-trust call" "$(cat "$TRUST_LOG")"
 [ -s "$WORK/argv" ] || fail "#563 claude must still launch with pre-trust off"
-ok "FLEET_PRETRUST=0 opts the fleet out (claude still launches)"
+st_pass "FLEET_PRETRUST=0 opts the fleet out (claude still launches)"
 
 printf 'FLEET_MODEL="opus"\n' > "$WORK/conf/fleets/f1/conf"; rm -rf "$WORK/conf/fleets/f1/repos"   # no FLEET_MAIN anywhere
 runt
 [ ! -f "$TRUST_LOG" ] || fail "#563 no FLEET_MAIN → nothing to trust, no call" "$(cat "$TRUST_LOG")"
-ok "no FLEET_MAIN resolvable → pre-trust is skipped quietly"
+st_pass "no FLEET_MAIN resolvable → pre-trust is skipped quietly"
 
 # a refused cwd (exit 3, e.g. a plain launch from ~) is silent; a real write failure is shown
 cat > "$WORK/bin/fleet-trust.sh" <<EOF
@@ -306,7 +305,7 @@ EOF
 runt
 grep -q "not valid JSON" "$WORK/err" || fail "#563 a real pre-trust failure must be shown in the pane" "$(cat "$WORK/err")"
 [ -s "$WORK/argv" ] || fail "#563 a pre-trust failure must not block the launch (claude is the authority)"
-ok "a refused cwd is silent, a real write failure is shown — and neither blocks the launch"
+st_pass "a refused cwd is silent, a real write failure is shown — and neither blocks the launch"
 
 # --- #1807: every session mounts the fleet tool service ------------------------
 # A sandbox bin WITH conf/mcp-worker.json + fleet-mcp.py beside it (every check
@@ -336,7 +335,7 @@ has "$argv" "--mcp-config=$MW" || fail "#1807 the default launch did not mount c
 case "$argv" in *--strict-mcp-config*) fail "#1807 the mount alone made the launch strict" "$argv" ;; esac
 has "$argv" "/fleet-history" || fail "#1807 the seed prompt was swallowed by the mount" "$argv"
 [ "$(cat "$WORK/mcpenv")" = "$(cd "$WORK/bin" && pwd)|1" ] || fail "#1807 FLEET_MCP_BIN / FLEET_MCP_SERVER not exported" "$(cat "$WORK/mcpenv")"
-ok "#1807 default: --mcp-config=conf/mcp-worker.json (additive, =form, seed intact), FLEET_MCP_BIN + FLEET_MCP_SERVER set"
+st_pass "#1807 default: --mcp-config=conf/mcp-worker.json (additive, =form, seed intact), FLEET_MCP_BIN + FLEET_MCP_SERVER set"
 
 # #4703 (after #4591): the dispatch group `fleet-orch` (conf/mcp-orch.json) rides EVERY
 # launch — any session may spawn; caps and the claim dedup are the bounds. A plain launch,
@@ -359,7 +358,7 @@ for v in 0 1; do
   argv="$(run)"; both "a pane stamped @agent_spawn $v" "$argv"
 done
 rm -f "$WORK/spawnopt"
-ok "#4703 every launch mounts the dispatch group (plain, worker, role name, agent file with or without spawn, @agent_spawn 0/1)"
+st_pass "#4703 every launch mounts the dispatch group (plain, worker, role name, agent file with or without spawn, @agent_spawn 0/1)"
 
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="none"\n' > "$WORK/conf/fleets/f1/conf"
 argv="$(run)"
@@ -367,7 +366,7 @@ has "$argv" "--strict-mcp-config" && has "$argv" "--mcp-config=$MW" || fail "#18
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="%s"\n' "$MW" > "$WORK/conf/fleets/f1/conf"
 argv="$(run)"
 [ "$(printf '%s\n' "$argv" | grep -o -- 'mcp-worker.json' | wc -l | tr -d ' ')" = 1 ] || fail "#1807 the allowlist IS the file, yet it was mounted twice" "$argv"
-ok "#1807 beside an allowlist (none too) it rides along; an allowlist that IS the file is not mounted twice"
+st_pass "#1807 beside an allowlist (none too) it rides along; an allowlist that IS the file is not mounted twice"
 
 printf 'FLEET_MODEL="fable"\n' > "$WORK/conf/fleets/f1/conf"
 argv="$(run --mcp-config "$WORK/other.json")"
@@ -375,6 +374,6 @@ case "$argv" in *"--mcp-config=$MW"*) fail "#1807 mounted over a caller's own --
 argv="$( (export FLEET_MCP=0; run) )"
 case "$argv" in *--mcp-config*) fail "#1807 FLEET_MCP=0 still mounted it" "$argv" ;; esac
 [ "$(cat "$WORK/mcpenv")" = "|" ] || fail "#1807 FLEET_MCP=0 still exported the mount env" "$(cat "$WORK/mcpenv")"
-ok "#1807 a caller's own MCP flag or FLEET_MCP=0: nothing mounted, nothing exported"
+st_pass "#1807 a caller's own MCP flag or FLEET_MCP=0: nothing mounted, nothing exported"
 
 printf 'selftest OK: %s checks — the launcher reads the per-fleet conf, honours FLEET_MCP_CONFIG, and pre-trusts the checkout (issues #472, #473, #476, #563)\n' "$pass"

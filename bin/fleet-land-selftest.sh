@@ -24,14 +24,13 @@
 #      refusal, fleet-land.sh never runs
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 command -v git >/dev/null 2>&1 || { echo 'selftest: git missing — SKIP' >&2; exit 0; }
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/land-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/land-selftest.XXXXXX"
 WORK="$(cd "$WORK" && pwd -P)"
 fails=0
-ok()  { printf 'ok   %s\n' "$1"; }
 bad() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '     %s\n' "$2" >&2; fails=$((fails + 1)); }
-expect() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "want [$3] got [$2]"; fi; }
+expect() { if [ "$2" = "$3" ]; then st_ok "$1"; else bad "$1" "want [$3] got [$2]"; fi; }
 
 mkdir -p "$WORK/fake"
 cat > "$WORK/fake/gh" <<'GH'
@@ -78,10 +77,10 @@ expect 'A verdict READY'               "$(land --verdict acme/app issue-1)" READ
 expect 'A merge MERGED'                "$(land acme/app issue-1)" MERGED
 expect 'A the base fast-forwarded'     "$(head_main)" "$tip"
 expect 'A one landing record'          "$(rows)" 1
-grep -q '"check":"pass"' "$FLEET_CONF_DIR/landed/acme-app.ndjson" && ok 'A record says pass' || bad 'A record says pass' "$(cat "$FLEET_CONF_DIR/landed/acme-app.ndjson")"
+grep -q '"check":"pass"' "$FLEET_CONF_DIR/landed/acme-app.ndjson" && st_ok 'A record says pass' || bad 'A record says pass' "$(cat "$FLEET_CONF_DIR/landed/acme-app.ndjson")"
 expect 'A fleet_landed ③ / ① landed'   "$(FLEET_SESSION=fl fleet_landed acme/app issue-1 | cut -d' ' -f1-2)" "landed $tip"
 git -C "$WORK/origin.git" rev-parse -q --verify refs/heads/issue-1 >/dev/null \
-  && bad 'A the pushed branch is deleted on origin' || ok 'A the pushed branch is deleted on origin'
+  && bad 'A the pushed branch is deleted on origin' || st_ok 'A the pushed branch is deleted on origin'
 expect 'A a re-run is MERGED'          "$(land acme/app issue-1)" MERGED
 expect 'A no second record'            "$(rows)" 1
 
@@ -89,7 +88,7 @@ expect 'A no second record'            "$(rows)" 1
 wt 2; work 2 BAD x; b0=$(head_main)
 expect 'B verdict FAILING'             "$(land --verdict acme/app issue-2)" FAILING
 expect 'B merge FAILING'               "$(land acme/app issue-2)" FAILING
-grep -q '| BAD is here' "$WORK/err" && ok 'B the check output reaches the session' || bad 'B the check output reaches the session' "$(cat "$WORK/err")"
+grep -q '| BAD is here' "$WORK/err" && st_ok 'B the check output reaches the session' || bad 'B the check output reaches the session' "$(cat "$WORK/err")"
 expect 'B the base did not move'       "$(head_main)" "$b0"
 expect 'B nothing recorded'            "$(rows)" 1
 
@@ -103,9 +102,9 @@ p4=$!
 wait "$p3"; wait "$p4"
 expect 'C both MERGED'                 "$(cat "$WORK/c3" "$WORK/c4" | tr '\n' ' ')" 'MERGED MERGED '
 git -C "$WORK/origin.git" cat-file -e main:c3.txt 2>/dev/null && git -C "$WORK/origin.git" cat-file -e main:c4.txt 2>/dev/null \
-  && ok 'C both changes are on the base' || bad 'C both changes are on the base'
+  && st_ok 'C both changes are on the base' || bad 'C both changes are on the base'
 expect 'C the base is linear'          "$(git -C "$WORK/origin.git" rev-list --merges main | wc -l | tr -d ' ')" 0
-grep -q 'rebased' "$WORK/c3.err" "$WORK/c4.err" && ok 'C the second was rebased onto the first' \
+grep -q 'rebased' "$WORK/c3.err" "$WORK/c4.err" && st_ok 'C the second was rebased onto the first' \
   || bad 'C the second was rebased onto the first' "$(cat "$WORK/c3.err" "$WORK/c4.err")"
 expect 'C three landing records'       "$(rows)" 3
 setconf "FLEET_CHECK_CMD='test ! -e BAD'"
@@ -117,7 +116,7 @@ b0=$(head_main); t5=$(git -C "$WORK/wt-5" rev-parse HEAD)
 expect 'D verdict CONFLICT'            "$(land --verdict acme/app issue-5)" CONFLICT
 expect 'D merge CONFLICT'              "$(land acme/app issue-5)" CONFLICT
 expect 'D the worktree is untouched'   "$(git -C "$WORK/wt-5" rev-parse HEAD) $(git -C "$WORK/wt-5" status --porcelain | wc -l | tr -d ' ')" "$t5 0"
-[ -d "$(git -C "$WORK/wt-5" rev-parse --git-dir)/rebase-merge" ] && bad 'D the rebase was aborted' || ok 'D the rebase was aborted'
+[ -d "$(git -C "$WORK/wt-5" rev-parse --git-dir)/rebase-merge" ] && bad 'D the rebase was aborted' || st_ok 'D the rebase was aborted'
 expect 'D the base did not move'       "$(head_main)" "$b0"
 wt 7; work 7 d7.txt x; printf 'dirty\n' >> "$WORK/wt-7/d7.txt"
 expect 'D uncommitted changes: CONFLICT' "$(land acme/app issue-7)" CONFLICT
@@ -134,8 +133,8 @@ expect 'E the worktree is on the base' "$(git -C "$WORK/wt-8" rev-parse HEAD)" "
 # --- F: no check registered; required; no worktree ---------------------------------
 setconf
 expect 'F (issue-7) lands with no check' "$(land acme/app issue-7)" MERGED
-grep -q '没跑检查' "$WORK/err" && ok 'F the note says 没跑检查' || bad 'F the note says 没跑检查' "$(cat "$WORK/err")"
-tail -n 1 "$FLEET_CONF_DIR/landed/acme-app.ndjson" | grep -q '"check":"none"' && ok 'F the record says none' \
+grep -q '没跑检查' "$WORK/err" && st_ok 'F the note says 没跑检查' || bad 'F the note says 没跑检查' "$(cat "$WORK/err")"
+tail -n 1 "$FLEET_CONF_DIR/landed/acme-app.ndjson" | grep -q '"check":"none"' && st_ok 'F the record says none' \
   || bad 'F the record says none' "$(tail -n 1 "$FLEET_CONF_DIR/landed/acme-app.ndjson")"
 setconf 'FLEET_CHECK_REQUIRED=1'
 wt 10; work 10 f10.txt x
@@ -145,7 +144,7 @@ setconf "FLEET_CHECK_CMD='test ! -e BAD'"
 g worktree remove --force "$WORK/wt-10"
 expect 'F no worktree: MERGED'         "$(land acme/app issue-10)" MERGED
 expect 'F the temp worktree is gone'   "$(g worktree list | grep -c fleet-land)" 0
-git -C "$WORK/origin.git" cat-file -e main:f10.txt 2>/dev/null && ok 'F f10 is on the base' || bad 'F f10 is on the base'
+git -C "$WORK/origin.git" cat-file -e main:f10.txt 2>/dev/null && st_ok 'F f10 is on the base' || bad 'F f10 is on the base'
 
 # --- G: the dispatch — no PR, no gh -------------------------------------------------
 expect 'G fleet_repo_land fleet'       "$(fleet_repo_land acme/app fl)" fleet

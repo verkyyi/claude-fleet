@@ -20,13 +20,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 LIB="$BIN/usage-lib.sh"
 [ -f "$LIB" ] || { printf 'selftest: %s not found\n' "$LIB" >&2; exit 2; }
 
 # Isolate the cache dir: usage-lib reads "$TMPDIR/.claude-dash/global". Point
 # TMPDIR at a scratch tree BEFORE sourcing (functions resolve it at call time).
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/usage-lib-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/usage-lib-selftest.XXXXXX"
 export TMPDIR="$WORK"
 CACHE="$WORK/.claude-dash/global"
 mkdir -p "$CACHE"
@@ -38,10 +38,9 @@ export FLEET_USAGE_WARN_PCT=75 FLEET_USAGE_CRIT_PCT=90 FLEET_RATELIMIT_TTL=21600
 . "$LIB"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 eq() {  # <desc> <expected> <actual>
   CHECKS=$((CHECKS + 1))
-  [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"
+  [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"
 }
 
 now() { date +%s; }

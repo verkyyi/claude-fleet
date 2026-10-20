@@ -20,12 +20,11 @@
 # sudo on PATH, scratch plist path. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 TUNE="$BIN/fleet-host-tune.sh"
 [ -f "$TUNE" ] || { printf 'selftest: %s not found\n' "$TUNE" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/host-tune-selftest.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/host-tune-selftest.XXXXXX" physical
 FP="$WORK/fakepath"; mkdir -p "$FP"
 LOG="$WORK/calls.log"
 PLIST="$WORK/com.claude-fleet.maxfiles.plist"

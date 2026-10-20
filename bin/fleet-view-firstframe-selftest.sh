@@ -20,9 +20,9 @@
 # bin/fleet-ui-lang.sh, a producer seam for the rows.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-view-firstframe: python3 absent — SKIP'; exit 0; }
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/vfirst.XXXXXX") || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/vfirst.XXXXXX"
 export FLEET_STATUS_G="$WORK/g" FLEET_CONF_DIR="$WORK/conf" HOME="$WORK/home"
 mkdir -p "$FLEET_STATUS_G" "$FLEET_CONF_DIR" "$HOME"
 unset FLEET_VIEW_ROWS_KEEP FLEET_PANEL_COMMANDS FLEET_UI_LANG FLEET_VIEW_LANG

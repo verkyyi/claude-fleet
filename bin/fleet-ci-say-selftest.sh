@@ -4,8 +4,8 @@
 # warning on stderr, nothing on stdout, exit 0, every other filer flag ignored.
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/ci-say.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+. "$BIN/selftest-lib.sh"
+st_sandbox "${TMPDIR:-/tmp}/ci-say.XXXXXX"
 fail() { printf 'FAIL %s\n' "$1" >&2; exit 1; }
 out=$(GITHUB_STEP_SUMMARY="$WORK/sum" bash "$BIN/fleet-ci-say.sh" --repo o/r --breakage-key flaky-x \
         --fault-sha abc --label flaky --priority p1 --title 'T 时好时坏' --body 'B line one

@@ -23,6 +23,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 FILES="precompact-hook.sh refocus-hook.sh fleet-lib.sh fleet-client-core.sh fleet-ladder-log.sh"
@@ -30,8 +31,7 @@ for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/precompact-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/precompact-selftest.XXXXXX"
 mkdir -p "$WORK/fakepath" "$WORK/inst/bin" "$WORK/conf/fleets/s1" "$WORK/tmp/.claude-dash/fleets/acme-widgets" \
          "$WORK/widgets-issue-12" "$WORK/scratchdir" "$WORK/hubdir"
 for f in $FILES; do cp "$BIN/$f" "$WORK/inst/bin/$f"; done
@@ -118,7 +118,6 @@ else:
 FAKE
 chmod +x "$WORK/fakepath/tmux" "$WORK/fakepath/gh"
 
-ok()   { printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2
          printf -- '--- ladder log ---\n' >&2; cat "$LOG" >&2 2>/dev/null
          printf -- '--- opts ---\n' >&2; cat "$OPTS" >&2 2>/dev/null; exit 1; }
@@ -163,7 +162,7 @@ if [ -f "$BIN/fleet-hooks-emit.sh" ]; then
   bash "$BIN/fleet-hooks-emit.sh" --target codex --root "$ROOT" 2>/dev/null | grep -q precompact-hook \
     && fail "WIRED: the codex target must not wire PreCompact"
 fi
-ok "WIRED: PreCompact matcher auto runs precompact-hook.sh (claude only)"
+st_ok "WIRED: PreCompact matcher auto runs precompact-hook.sh (claude only)"
 
 # ---- AUTO ----------------------------------------------------------------------
 reset
@@ -181,7 +180,7 @@ case "$M" in *META-SHOULD-NOT-APPEAR*|*tool_result*) fail "AUTO: map carries a m
 [ "$(rows)" = 1 ] || fail "AUTO: want exactly 1 ladder row, got $(rows)"
 expect_row 1 native-precompact 'auto saved'
 grep -q -- 'issue view 12 --repo acme/widgets --json comments' "$WORK/gh.log" || fail "AUTO: comments read not (repo, issue)-keyed" "$(cat "$WORK/gh.log")"
-ok "AUTO: worker map written (git, PR, comment, prompts) + one 'native-precompact auto saved' row"
+st_ok "AUTO: worker map written (git, PR, comment, prompts) + one 'native-precompact auto saved' row"
 
 # ---- RESTORE -------------------------------------------------------------------
 compact_start "$WT"
@@ -191,14 +190,14 @@ case "$OUT" in *'[fleet charter] #12'*'auto-compacted you'*"$WTMAP"*) : ;;
 expect_row 2 restored auto
 compact_start "$WT"
 case "$OUT" in *'auto-compacted you'*) fail "RESTORE: a second compaction must not re-read a consumed map" "$OUT" ;; esac
-ok "RESTORE: SessionStart(compact) reads the native map back once"
+st_ok "RESTORE: SessionStart(compact) reads the native map back once"
 
 # ---- FLEET (manual, the fleet's own /compact) ----------------------------------
 reset '@compact_stage=compacting' "@compact_prep_ts=$(date +%s)"
 precompact "$WT" manual
 [ -z "$OUT" ] && [ ! -f "$WTMAP" ] && [ "$(rows)" = 0 ] && [ -z "$(getopt @compact_native)" ] \
   || fail "FLEET: the fleet's own /compact must write no map and no row" "$OUT"
-ok "FLEET: PreCompact(manual) during the fleet's compaction writes nothing"
+st_ok "FLEET: PreCompact(manual) during the fleet's compaction writes nothing"
 
 # ---- KEPT ----------------------------------------------------------------------
 reset '@compact_stage=prep' "@compact_prep_ts=$(( $(date +%s) - 30 ))"
@@ -213,7 +212,7 @@ printf 'OLD MAP\n' > "$WTMAP"
 precompact "$WT" auto
 grep -q 'auto-saved' "$WTMAP" || fail "KEPT: a map older than the prep stamp must be replaced"
 expect_row 1 native-precompact 'auto saved'
-ok "KEPT: a newer prep map survives; an older one is replaced"
+st_ok "KEPT: a newer prep map survives; an older one is replaced"
 
 # ---- SCRATCH -------------------------------------------------------------------
 reset '@issue=' '@raw=1' 'window_name=scratch-3'
@@ -226,14 +225,14 @@ expect_row 1 native-precompact 'auto saved'
 compact_start "$WORK/scratchdir"
 case "$OUT" in *'[fleet recovery map] scratch'*'auto-compacted you'*'please fix the widget spinner'*) : ;;
   *) fail "SCRATCH: the refocus must restate the native map inline" "$OUT" ;; esac
-ok "SCRATCH: map under the conf dir, restated inline after the compaction"
+st_ok "SCRATCH: map under the conf dir, restated inline after the compaction"
 
 # ---- HUB -----------------------------------------------------------------------
 reset '@issue=' 'window_name=hub'
 precompact "$WORK/hubdir" auto
 [ -z "$OUT" ] && [ -z "$(getopt @compact_native)" ] || fail "HUB: no map, no stamp" "$OUT"
 expect_row 1 native-precompact 'auto no-map'
-ok "HUB: a native compaction on the hub is logged (no-map), nothing written"
+st_ok "HUB: a native compaction on the hub is logged (no-map), nothing written"
 
 # ---- OFF -----------------------------------------------------------------------
 reset
@@ -249,6 +248,6 @@ precompact "$WT" auto CLAUDE_CODE_ENTRYPOINT=sdk-cli
 [ ! -f "$WTMAP" ] && [ "$(rows)" = 0 ] || fail "OFF: a headless child must write nothing"
 precompact "$WT" bogus
 [ ! -f "$WTMAP" ] && [ "$(rows)" = 0 ] || fail "OFF: an unknown trigger must write nothing"
-ok "OFF: kill switch, codex, headless and unknown triggers are silent"
+st_ok "OFF: kill switch, codex, headless and unknown triggers are silent"
 
 echo "precompact-hook-selftest: all passed"

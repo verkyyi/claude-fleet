@@ -32,17 +32,16 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 W="$BIN/fleet-macos-watch.sh"
 [ -f "$W" ] || { printf 'selftest: %s not found\n' "$W" >&2; exit 2; }
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/macos-watch-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/macos-watch-selftest.XXXXXX"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
-contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — does not contain [$3]:
+eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — does not contain [$3]:
 $2" ;; esac; }
-lacks() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 — contains [$3]:
+lacks() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 — contains [$3]:
 $2" ;; esac; }
 
 mkdir -p "$WORK/shim" "$WORK/conf"

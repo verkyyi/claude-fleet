@@ -23,13 +23,12 @@
 # Hermetic: fake ps/sysctl/nproc on PATH, scratch HOME/TMPDIR/conf. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 for f in fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-client-core.sh fleet-daemon-lib.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/doctor-machine-selftest.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/doctor-machine-selftest.XXXXXX" physical
 # mkbox — the sandbox under $WORK: the doctor's copy and the fakes (their paths
 # baked in), the fixtures they read. The legs below run as lanes at once, each
 # in a box of its own (mkbox again with its own $WORK).
@@ -85,7 +84,6 @@ mkbox
 ME="$(id -un)"
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- machine line ---\n%s\n' "${2:-(none)}" >&2; exit 1; }
-ok() { CHECKS=$((CHECKS + 1)); }
 has() { CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) ;; *) fail "$3" "$2";; esac; }
 
 # --- fake sysctl: the load average and core count are switchable per case.
@@ -134,7 +132,7 @@ has "8 cores" "$l" "1: the PASS line must state the core count it divided by"
 has "0.15/core" "$l" "1: the PASS line must state load-per-core, which is the comparable number"
 survived "$out" || fail "1: the doctor did not reach its last check — the machine section aborted the run" "$l"
 quiet "1: a healthy box must print NOTHING on stderr — this is the assertion #709 was filed for"
-ok
+st_count
 
 # ============================================================================
 # 2. An orphaned runaway → WARN that NAMES it and says how to end it.
@@ -155,7 +153,7 @@ has "fleet-loadgen.sh --stop" "$l" "2: the WARN must name the command that ends 
 has "--orphans" "$l" "2: the WARN must point at the full list"
 survived "$out" || fail "2: the doctor died rendering the orphan WARN (the \$mcmd… regression)" "$l"
 quiet "2: the orphan WARN must print NOTHING on stderr"
-ok
+st_count
 
 # 2b. A live worker's busy shell is NOT an orphan: same fingerprint, same %CPU,
 #     parent alive. If this ever warns, every build on the box warns.
@@ -174,7 +172,7 @@ has "WARN"     "$l" "3: load 108 on 8 cores must WARN"
 has "13.50/core" "$l" "3: the WARN must state load-per-core"
 survived "$out" || fail "3: the doctor did not survive the high-load WARN" "$l"
 quiet "3: the high-load WARN must print NOTHING on stderr"
-ok
+st_count
 # The threshold is a knob, and raising it past the reading must silence the line.
 out="$(FLEET_LOAD_WARN_PER_CORE=99 run_doctor)"; l="$(machine_line "$out")"
 has "PASS" "$l" "3b: FLEET_LOAD_WARN_PER_CORE must be honored"
@@ -188,7 +186,7 @@ has "PASS" "$l" "3b: FLEET_LOAD_WARN_PER_CORE must be honored"
 out="$(run_doctor)"; l="$(machine_line "$out")"
 has "WARN" "$l" "4: an unreadable load average must WARN, not PASS on a phantom 0"
 case "$l" in *0.00*) fail "4: it must not report a made-up 0.00 load" "$l";; esac
-ok
+st_count
 survived "$out" || fail "4: the doctor did not survive the unreadable-load WARN" "$l"
 quiet "4: the unreadable-load WARN must print NOTHING on stderr"
 

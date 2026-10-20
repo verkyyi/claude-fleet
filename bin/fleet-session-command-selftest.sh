@@ -18,6 +18,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 LIB="$BIN/fleet-lib.sh"
 for f in "$LIB" "$BIN/fleet-session-command.sh" "$BIN/fleet-compact-send.sh"; do
   [ -f "$f" ] || { printf 'selftest: %s missing\n' "$f" >&2; exit 2; }
@@ -29,8 +30,6 @@ trap '[ -n "$MODPID" ] && kill "$MODPID" 2>/dev/null; rm -rf "$WORK"' EXIT
 trap 'exit 130' INT TERM HUP
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/fakebin" "$WORK/conf" "$WORK/logs"
 INJECT="$WORK/inject"; : > "$INJECT"
@@ -98,54 +97,54 @@ fresh() { date +%s > "$WORK/alive"; }
 
 # --- H: exit codes ----------------------------------------------------------------
 fresh; mod ok
-sc -- --from selftest %7 '/compact Keep the map; see /a b' || fail "H: a mod that answers ok must give 0 (got $?)" "$(cat "$WORK/err")"
+sc -- --from selftest %7 '/compact Keep the map; see /a b' || st_fail "H: a mod that answers ok must give 0 (got $?)" "$(cat "$WORK/err")"
 unmod
 want='{"cmd": "/compact", "args": "Keep the map; see /a b", "from": "selftest"}'
-[ "$(cat "$TOOK")" = "$want" ] || fail "H: the post is not the documented JSON" "$(cat "$TOOK")"
-[ -n "$(ls -A "$MDIR" 2>/dev/null)" ] && fail "H: a finished post must leave the inbox empty" "$(ls -A "$MDIR")"
-ok "H 0: posted as {cmd,args,from}, claimed, done ok; inbox left empty"
+[ "$(cat "$TOOK")" = "$want" ] || st_fail "H: the post is not the documented JSON" "$(cat "$TOOK")"
+[ -n "$(ls -A "$MDIR" 2>/dev/null)" ] && st_fail "H: a finished post must leave the inbox empty" "$(ls -A "$MDIR")"
+st_pass "H 0: posted as {cmd,args,from}, claimed, done ok; inbox left empty"
 
 sc FLEET_MOD=0 -- %7 /clear; rc=$?
-[ "$rc" = 3 ] || fail "H: FLEET_MOD=0 must give 3 (got $rc)"
+[ "$rc" = 3 ] || st_fail "H: FLEET_MOD=0 must give 3 (got $rc)"
 printf '%s\n' "$(( $(date +%s) - 600 ))" > "$WORK/alive"
 sc -- %7 /clear; rc=$?
-[ "$rc" = 3 ] || fail "H: a stale beat must give 3 (got $rc)"
+[ "$rc" = 3 ] || st_fail "H: a stale beat must give 3 (got $rc)"
 fresh; : > "$WORK/pane"
 sc -- %7 /clear; rc=$?
-[ "$rc" = 3 ] || fail "H: an unknown pane must give 3 (got $rc)"
+[ "$rc" = 3 ] || st_fail "H: an unknown pane must give 3 (got $rc)"
 printf '%%7\n' > "$WORK/pane"
 ( unset TMUX; sc TMUX= -- %7 /clear ); rc=$?
-[ "$rc" = 3 ] || fail "H: no \$TMUX and no --socket must give 3 (got $rc)"
-ls "$MDIR"/*.json >/dev/null 2>&1 && fail "H: a 3 must post nothing"
-ok "H 3: FLEET_MOD=0 / stale beat / unknown pane / no socket — nothing posted"
+[ "$rc" = 3 ] || st_fail "H: no \$TMUX and no --socket must give 3 (got $rc)"
+ls "$MDIR"/*.json >/dev/null 2>&1 && st_fail "H: a 3 must post nothing"
+st_pass "H 3: FLEET_MOD=0 / stale beat / unknown pane / no socket — nothing posted"
 
 fresh
 sc -- %7 /clear; rc=$?
-[ "$rc" = 4 ] || fail "H: nobody taking it must give 4 (got $rc)"
-[ -n "$(ls -A "$MDIR" 2>/dev/null)" ] && fail "H: a timed-out post must be cancelled (removed), never left for a late mod" "$(ls -A "$MDIR")"
-ok "H 4: never taken → cancelled by the same atomic rename; nothing left behind"
+[ "$rc" = 4 ] || st_fail "H: nobody taking it must give 4 (got $rc)"
+[ -n "$(ls -A "$MDIR" 2>/dev/null)" ] && st_fail "H: a timed-out post must be cancelled (removed), never left for a late mod" "$(ls -A "$MDIR")"
+st_pass "H 4: never taken → cancelled by the same atomic rename; nothing left behind"
 
 fresh; mod refuse
 sc -- %7 /nosuch; rc=$?
 unmod
-[ "$rc" = 5 ] || fail "H: a refused command must give 5 (got $rc)"
-grep -q 'Unknown command' "$WORK/err" || fail "H: the refusal reason must reach stderr" "$(cat "$WORK/err")"
-ok "H 5: refused → 5, the engine's reason on stderr"
+[ "$rc" = 5 ] || st_fail "H: a refused command must give 5 (got $rc)"
+grep -q 'Unknown command' "$WORK/err" || st_fail "H: the refusal reason must reach stderr" "$(cat "$WORK/err")"
+st_pass "H 5: refused → 5, the engine's reason on stderr"
 
 fresh; mod hang
 sc -- %7 '/compact x'; rc=$?
 unmod
-[ "$rc" = 6 ] || fail "H: taken but not done must give 6 (got $rc)"
-ok "H 6: taken, not done → 6 (running — the caller must not type it again)"
+[ "$rc" = 6 ] || st_fail "H: taken but not done must give 6 (got $rc)"
+st_pass "H 6: taken, not done → 6 (running — the caller must not type it again)"
 rm -rf "$MDIR"
 
-sc -- %7 clear; rc=$?;  [ "$rc" = 2 ] || fail "H: a line without a slash is usage (got $rc)"
-sc -- '' /clear; rc=$?; [ "$rc" = 2 ] || fail "H: no target is usage (got $rc)"
-ok "H 2: usage"
+sc -- %7 clear; rc=$?;  [ "$rc" = 2 ] || st_fail "H: a line without a slash is usage (got $rc)"
+sc -- '' /clear; rc=$?; [ "$rc" = 2 ] || st_fail "H: no target is usage (got $rc)"
+st_pass "H 2: usage"
 
 sc --  --socket fleet-x %7 /clear; rc=$?
-[ "$rc" = 4 ] || fail "H: --socket must address the same inbox (got $rc)"
-ok "H --socket: an outside caller lands in the same <label>/<pane> inbox"
+[ "$rc" = 4 ] || st_fail "H: --socket must address the same inbox (got $rc)"
+st_pass "H --socket: an outside caller lands in the same <label>/<pane> inbox"
 
 # --- C: fleet-compact-send.sh, both paths ---------------------------------------
 compact() {   # compact — run the sender against the fake pane
@@ -159,18 +158,18 @@ compact() {   # compact — run the sender against the fake pane
 fresh; printf 'prep\n' > "$WORK/stage"; : > "$INJECT"; mod ok
 compact
 unmod
-[ -s "$INJECT" ] && fail "C: with the mod alive NOTHING may be typed" "$(cat "$INJECT")"
+[ -s "$INJECT" ] && st_fail "C: with the mod alive NOTHING may be typed" "$(cat "$INJECT")"
 grep -q '"cmd": "/compact"' "$TOOK" && grep -q 'RECOVERY MAP' "$TOOK" && grep -q '/tmp/map.md' "$TOOK" \
-  || fail "C: the mod must take /compact with the keep-the-map instruction" "$(cat "$TOOK")"
-tail -1 "$WORK/logs/compact-send.log" | grep -q '/compact via mod' || fail "C: the log must say via mod" "$(cat "$WORK/logs/compact-send.log")"
-[ "$(cat "$WORK/stage")" = compacting ] || fail "C: the stage must still flip to compacting first"
-ok "C mod alive: /compact posted with the map instruction, zero send-keys, 'via mod' logged"
+  || st_fail "C: the mod must take /compact with the keep-the-map instruction" "$(cat "$TOOK")"
+tail -1 "$WORK/logs/compact-send.log" | grep -q '/compact via mod' || st_fail "C: the log must say via mod" "$(cat "$WORK/logs/compact-send.log")"
+[ "$(cat "$WORK/stage")" = compacting ] || st_fail "C: the stage must still flip to compacting first"
+st_pass "C mod alive: /compact posted with the map instruction, zero send-keys, 'via mod' logged"
 
 printf '%s\n' "$(( $(date +%s) - 600 ))" > "$WORK/alive"; printf 'prep\n' > "$WORK/stage"; : > "$INJECT"
 compact
 want=$(printf '%s\n' 'send-keys -t %7 Escape' "send-keys -t %7 -l -- /compact Keep the fleet RECOVERY MAP verbatim (issue, branch, PR, done, in progress, next steps); it is also saved at /tmp/map.md" 'send-keys -t %7 Enter')
-[ "$(cat "$INJECT")" = "$want" ] || fail "C: no mod must type exactly today's three keystrokes" "$(cat "$INJECT")"
-tail -1 "$WORK/logs/compact-send.log" | grep -q '/compact via send-keys' || fail "C: the log must say via send-keys"
-ok "C no mod: today's keystrokes byte for byte (Escape · text · Enter), 'via send-keys' logged"
+[ "$(cat "$INJECT")" = "$want" ] || st_fail "C: no mod must type exactly today's three keystrokes" "$(cat "$INJECT")"
+tail -1 "$WORK/logs/compact-send.log" | grep -q '/compact via send-keys' || st_fail "C: the log must say via send-keys"
+st_pass "C no mod: today's keystrokes byte for byte (Escape · text · Enter), 'via send-keys' logged"
 
 printf 'fleet-session-command-selftest: %d passed\n' "$pass"

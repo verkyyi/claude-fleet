@@ -16,6 +16,7 @@
 # own throwaway CA + certificate. No network. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'hub-sessions-cert-scope selftest: python3 absent — SKIP'; exit 0; }
 command -v ssh-keygen >/dev/null 2>&1 || { echo 'hub-sessions-cert-scope selftest: ssh-keygen absent — SKIP'; exit 0; }
@@ -54,9 +55,8 @@ chmod +x "$WORK/bin/curl"
 PATH="$WORK/bin:$PATH"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-has()   { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 (want: $3)" "$2" ;; esac; }
-hasnt() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 (unwanted: $3)" "$2" ;; esac; }
+has()   { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 (want: $3)" "$2" ;; esac; }
+hasnt() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 (unwanted: $3)" "$2" ;; esac; }
 refresh() { rm -f "$G/remote_$S" "$G"/hubsess.etag* 2>/dev/null
            bash "$HUBS" --refresh 2>"$WORK/err"; cat "$G/remote_$S" 2>/dev/null; }
 
@@ -101,13 +101,13 @@ has   "F: …and this login's own" "$out" "wid:$F/issue-9"
 row=$(printf '%s\n' "$out" | grep "^wid:$G2/issue-8")
 has   "F: …and another login's row on THIS machine" "$row" "admin-here"
 CHECKS=$((CHECKS + 1)); [ "$(printf '%s' "$row" | cut -d$'\037' -f11)" = 0 ] \
-  || fail "F: another login's row here is not this login's local row" "$row"
+  || st_fail "F: another login's row here is not this login's local row" "$row"
 hasnt "F: no #node line for this machine" "$out" "#node"$'\037'"$HERE"$'\037'
 has   "F: the fleet → login map carries the other login" "$(cat "$G/fleet_logins" 2>/dev/null)" "$G2	admin"
 printf 401 > "$WORK/code"; rm -f "$G/remote_$S" "$G"/hubsess.etag*
 bash "$HUBS" --refresh 2>/dev/null
 CHECKS=$((CHECKS + 1)); [ -f "$G/hubsess.nodetok.refused" ] \
-  || fail "F: a login no person holds is refused (401) and remembered, as before"
+  || st_fail "F: a login no person holds is refused (401) and remembered, as before"
 rm -f "$WORK/conf/node.env" "$WORK/code" "$G/hubsess.nodetok.refused"
 
 # E (issue #2465): WHY a round did not stand sits beside hub_ok — refused (401)
@@ -119,12 +119,12 @@ has   "E: a 401 writes hub_why refused" "$w" "refused	"
 has   "E: …with the code" "$w" "HTTP 401"
 since1=$(printf '%s' "$w" | cut -f2)
 sleep 1; bash "$HUBS" --refresh 2>/dev/null
-CHECKS=$((CHECKS + 1)); [ "$(cut -f2 "$G/hub_why")" = "$since1" ] || fail "E: the since holds while the hub keeps refusing" "$(cat "$G/hub_why")"
+CHECKS=$((CHECKS + 1)); [ "$(cut -f2 "$G/hub_why")" = "$since1" ] || st_fail "E: the since holds while the hub keeps refusing" "$(cat "$G/hub_why")"
 printf 000 > "$WORK/code"
 bash "$HUBS" --refresh 2>/dev/null
 has   "E: no answer writes hub_why unreachable" "$(cat "$G/hub_why" 2>/dev/null)" "unreachable	"
 printf 200 > "$WORK/code"
 bash "$HUBS" --refresh 2>/dev/null
-CHECKS=$((CHECKS + 1)); [ ! -f "$G/hub_why" ] || fail "E: an answer that stands removes hub_why" "$(cat "$G/hub_why")"
+CHECKS=$((CHECKS + 1)); [ ! -f "$G/hub_why" ] || st_fail "E: an answer that stands removes hub_why" "$(cat "$G/hub_why")"
 
 printf 'hub-sessions-cert-scope selftest: PASS (%d checks)\n' "$CHECKS"

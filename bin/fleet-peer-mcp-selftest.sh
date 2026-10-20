@@ -3,11 +3,11 @@
 set -u
 
 BIN=$(cd "$(dirname "$0")" && pwd)
+. "$BIN/selftest-lib.sh"
 SUT="$BIN/fleet-peer-mcp.py"
 [ -f "$SUT" ] || { echo "selftest: fleet-peer-mcp.py missing" >&2; exit 2; }
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-peer-mcp.XXXXXX") || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-peer-mcp.XXXXXX"
 trap 'exit 130' INT TERM HUP
 
 mkdir -p "$WORK/bin"

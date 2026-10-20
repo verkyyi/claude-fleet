@@ -42,11 +42,11 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 H="$BIN/fleet-history.sh"
 [ -f "$H" ] || { printf 'selftest: %s not found\n' "$H" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-history-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-history-selftest.XXXXXX"
 
 export FLEET_HISTORY_LEDGER="$WORK/landed.tsv"
 export CLAUDE_PROJECTS_DIR="$WORK/projects"
@@ -54,9 +54,8 @@ export TMPDIR="$WORK"                       # so the dash summary cache lands un
 mkdir -p "$CLAUDE_PROJECTS_DIR"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
-contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — [$2] does not contain [$3]";; esac; }
+eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — [$2] does not contain [$3]";; esac; }
 
 run() { bash "$H" "$@"; }
 
@@ -70,7 +69,7 @@ run() { bash "$H" "$@"; }
 # the NEWER mtime must win.
 WT="/w/repo_v1.2/.claude-worktrees/issue-9"
 ENC=$(printf '%s' "$WT" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
-case "$ENC" in *.*|*_*|*/*) fail "encoding: dot/underscore/slash not collapsed → [$ENC]";; esac
+case "$ENC" in *.*|*_*|*/*) st_fail "encoding: dot/underscore/slash not collapsed → [$ENC]";; esac
 CHECKS=$((CHECKS + 1))
 TDIR="$CLAUDE_PROJECTS_DIR/$ENC"
 mkdir -p "$TDIR"
@@ -100,7 +99,7 @@ eq "record: summary tab/nl flattened to spaces" "fixed the thing" "$c_smry"
 eq "record: state column is 'landed'" "landed" "$c_state"
 eq "record: origin degrades to dash (#503)" "-" "$c_origin"
 # mergedAt auto-stamped (non-empty, dash-free ISO-ish) when not provided
-case "$c_when" in ''|-) fail "record: mergedAt should auto-stamp, got [$c_when]";; esac
+case "$c_when" in ''|-) st_fail "record: mergedAt should auto-stamp, got [$c_when]";; esac
 CHECKS=$((CHECKS + 1))
 
 # --win path: with no --summary, col 9 is '-' — the dash-cache fallback it used to
@@ -158,7 +157,7 @@ eq "record-closed: worktree col"    "$WTC"              "$cc_wt"
 eq "record-closed: session id"      "sess-c-42"         "$cc_sid"
 eq "record-closed: summary col"     "poking the widget" "$cc_smry"
 eq "record-closed: state marker"    "closed-unlanded"   "$cc_state"
-case "$cc_when" in ''|-) fail "record-closed: closedAt should auto-stamp, got [$cc_when]";; esac
+case "$cc_when" in ''|-) st_fail "record-closed: closedAt should auto-stamp, got [$cc_when]";; esac
 CHECKS=$((CHECKS + 1))
 
 # idempotent: a second record-closed for the same session adds NO new row.
@@ -232,7 +231,7 @@ contains "list: shows short sha (7 chars)" "$listing" "9abcdef"
 # filter narrows to matching rows only
 filtered=$(run list second)
 contains "list: filter keeps the match" "$filtered" "#200"
-case "$filtered" in *'#100'*) fail "list: filter should drop non-matches (#100 leaked)";; esac
+case "$filtered" in *'#100'*) st_fail "list: filter should drop non-matches (#100 leaked)";; esac
 CHECKS=$((CHECKS + 1))
 
 # ============================================================================
@@ -264,10 +263,10 @@ v5=$(run resume 5);   contains "resume: worktree on disk → RESUME"          "$
 contains "resume: RESUME carries the session id"                            "$v5" "sid-abc"
 contains "resume: RESUME points at the real worktree"                       "$v5" "$WT5"
 v55=$(run resume 55); contains "resume: transcript but unrecreatable+PR → FROM-PR (not RESUME)" "$v55" "FROM-PR"
-case "$v55" in *RESUME*) fail "resume: must NOT claim RESUME when the worktree can't be re-established (#130 review)";; esac
+case "$v55" in *RESUME*) st_fail "resume: must NOT claim RESUME when the worktree can't be re-established (#130 review)";; esac
 CHECKS=$((CHECKS + 1))
 v56=$(run resume 56); contains "resume: transcript but unrecreatable, no PR → REVIEW-ONLY" "$v56" "REVIEW-ONLY"
-case "$v56" in *RESUME*) fail "resume: REVIEW-ONLY row must not carry a RESUME verdict";; esac
+case "$v56" in *RESUME*) st_fail "resume: REVIEW-ONLY row must not carry a RESUME verdict";; esac
 CHECKS=$((CHECKS + 1))
 v6=$(run resume 6);   contains "resume: no transcript, has PR → FROM-PR"    "$v6" "FROM-PR"
 contains "resume: FROM-PR carries the PR number"                           "$v6" "71"
@@ -310,7 +309,7 @@ printf '2026-02-02T00:00:00Z\t901\tt901\t-\tSHAA\t%s\t%s\tsid-a\t-\n' \
 vP=$(PATH="$WORK/gitbin:$PATH" GIT_LOG="$GIT_LOG" run resume --exec --main "$FAKEMAIN" 900)
 contains "resume: present worktree → RESUME"              "$vP" "RESUME"
 contains "resume: present worktree → RESUME points at it" "$vP" "$WTP"
-case "$(cat "$GIT_LOG")" in *"worktree add"*) fail "resume(#319): present worktree must NOT run git worktree add";; esac
+case "$(cat "$GIT_LOG")" in *"worktree add"*) st_fail "resume(#319): present worktree must NOT run git worktree add";; esac
 CHECKS=$((CHECKS + 1))
 
 : > "$GIT_LOG"
@@ -411,7 +410,7 @@ contains "scratch: dash row targets landed:scratch:" "$rws" "landed:scratch:scra
 # bin/dash-rows-scratch-id-selftest.sh; this is the local guard on the landed half.
 contains "scratch: dash row prints the id cell as INDIGO ~7" "$rws" $'\033[38;2;187;154;247m~7'
 CHECKS=$((CHECKS + 1))
-case "$rws" in *"#7"*) fail "dash row must NOT print #7 for a scratch (it is not an issue)";; esac
+case "$rws" in *"#7"*) st_fail "dash row must NOT print #7 for a scratch (it is not an issue)";; esac
 contains "scratch: dash row names the scratch window" "$rws" "scratch-7"
 
 # RESUME: the worktree is gone (never existed here), but the recorded sha means it
@@ -459,7 +458,7 @@ printf '2026-01-01T00:00:00Z\tscratch-9\t-\t-\t-\t/w/repo-scratch-9\t/nope\tsid-
 rw_untitled=$(run rows | grep 'landed:scratch:scratch-9')
 contains "scratch: untitled row falls back to its own scratch-<N> name" "$rw_untitled" "scratch-9"
 CHECKS=$((CHECKS + 1))
-case "$rw_untitled" in *polish-the-dash*) fail "untitled scratch row must not inherit the previous row's window name";; esac
+case "$rw_untitled" in *polish-the-dash*) st_fail "untitled scratch row must not inherit the previous row's window name";; esac
 
 # ============================================================================
 # H. issue #492 — the ledger's four silent defects
@@ -566,9 +565,9 @@ eq "  …and no transcript dir" "-" "$(cut -f7 "$FLEET_HISTORY_LEDGER")"
 # prefix of the string the test seeds, then that the lib still carries it.)
 for _pfx in 'You are a status classifier for a coding-agent' 'You are a status classifier for a Claude Code' 'You are labeling a Claude Code session for a dashboard'; do
   CHECKS=$((CHECKS + 1))
-  case "$CLS$CLS_OLD$SUM" in *"$_pfx"*) ;; *) fail "rubric prefix [$_pfx] no longer matches the seeded transcript text" ;; esac
+  case "$CLS$CLS_OLD$SUM" in *"$_pfx"*) ;; *) st_fail "rubric prefix [$_pfx] no longer matches the seeded transcript text" ;; esac
   grep -qF -- "$_pfx" "$BIN/fleet-lib.sh" || \
-    fail "fleet_newest_human_session no longer filters the rubric prefix [$_pfx]"
+    st_fail "fleet_newest_human_session no longer filters the rubric prefix [$_pfx]"
 done
 
 # H3. Newest-first is by TIMESTAMP, not append order. A row appended LAST but
@@ -611,10 +610,10 @@ eq "resumed: marker keeps the worktree"  "$WTI"      "$ri_wt"
 eq "resumed: marker keeps the session"   "sess-i-88" "$ri_sid"
 eq "resumed: marker keeps the origin"    "scratch-3" "$ri_origin"
 eq "resumed: state column"               "resumed"   "$ri_state"
-case "$ri_when" in ''|-) fail "resumed: marker must be stamped now, got [$ri_when]";; esac
+case "$ri_when" in ''|-) st_fail "resumed: marker must be stamped now, got [$ri_when]";; esac
 CHECKS=$((CHECKS + 1))
 # hidden wherever a reader looks: the list, and find_row (meta / resume / path)
-CHECKS=$((CHECKS + 1)); case "$(run list --repo o/r)" in *'#88'*) fail "resumed: a live-again session must not be listed as closed";; esac
+CHECKS=$((CHECKS + 1)); case "$(run list --repo o/r)" in *'#88'*) st_fail "resumed: a live-again session must not be listed as closed";; esac
 eq "resumed: meta finds no row for a live-again session" "" "$(run meta --repo o/r 88)"
 # idempotent: a second `resumed` for the same session writes nothing more…
 run resumed --session-id sess-i-88 --repo o/r >/dev/null
@@ -659,7 +658,7 @@ contains "resumed --stdin-json: says so on stderr" "$(cat "$WORK/res.err")" "sup
 HOOKS_JSON="$BIN/../hooks/settings-hooks.json"
 if [ -f "$HOOKS_JSON" ]; then
   CHECKS=$((CHECKS + 1))
-  python3 - "$HOOKS_JSON" <<'PY' || fail "WIRED: SessionStart(resume) → fleet-history.sh resumed --stdin-json missing from settings-hooks.json"
+  python3 - "$HOOKS_JSON" <<'PY' || st_fail "WIRED: SessionStart(resume) → fleet-history.sh resumed --stdin-json missing from settings-hooks.json"
 import json, sys
 t = json.load(open(sys.argv[1]))["hooks"].get("SessionStart", [])
 assert any(g.get("matcher") == "resume" and any("fleet-history.sh resumed --stdin-json" in h.get("command", "")
@@ -691,7 +690,7 @@ contains "task: dash rows show T41 + its words" "$(run rows)" "T41 把周报做�
 contains "task: rows still target the session key" "$(run rows)" "landed:scratch:scratch-12"
 contains "task: resume still by the session key" "$(run resume --main /w/main scratch-12)" "sess-task"
 CHECKS=$((CHECKS + 1))
-case "$(run resume --main /w/main scratch-12)" in *T41*) fail "task: col 15 leaked into resume's verdict";; esac
+case "$(run resume --main /w/main scratch-12)" in *T41*) st_fail "task: col 15 leaked into resume's verdict";; esac
 : > "$FLEET_HISTORY_LEDGER"
 run record-closed --key scratch-12 --worktree "$TWT" --title 'a named scratch' --task T41 --task-line 'words' >/dev/null
 eq "task: a real title wins over the words" "a named scratch" "$(cut -f3 "$FLEET_HISTORY_LEDGER")"

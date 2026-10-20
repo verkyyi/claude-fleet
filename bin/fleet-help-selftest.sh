@@ -23,17 +23,15 @@
 set -u
 
 BIN=$(cd "$(dirname "$0")" && pwd)
+. "$BIN/selftest-lib.sh"
 ROOT=$(cd "$BIN/.." && pwd)
 SKILL="$ROOT/skills/fleet-help/SKILL.md"
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-help selftest: python3 absent — SKIP'; exit 0; }
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-help.XXXXXX") || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-help.XXXXXX"
 trap 'exit 130' INT TERM HUP
 
 pass=0
-ok()   { pass=$((pass + 1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 # check <skill> <root>: one line per broken reference, exit 1 if any; prints
 # `refs=<n> pages=<m>` on success.
@@ -98,43 +96,43 @@ cat > "$F/good.md" <<'EOF'
 | x | `docs/A.md` § 「The keys」 · `docs/A.md` § 「手机：Termius 四样」 |
 see `<入口>/quota`
 EOF
-out=$(check "$F/good.md" "$F") || fail "A: a heading start and a bold lead should pass" "$out"
-[ "$out" = "refs=2 pages=1" ] || fail "A: counts" "$out"
+out=$(check "$F/good.md" "$F") || st_fail "A: a heading start and a bold lead should pass" "$out"
+[ "$out" = "refs=2 pages=1" ] || st_fail "A: counts" "$out"
 printf '`docs/A.md` § 「Gone」\n' > "$F/b1.md"
-out=$(check "$F/b1.md" "$F") && fail "A: a missing section should be red" "$out"
-case "$out" in *"missing section: docs/A.md § 「Gone」"*) ;; *) fail "A: names the section" "$out" ;; esac
+out=$(check "$F/b1.md" "$F") && st_fail "A: a missing section should be red" "$out"
+case "$out" in *"missing section: docs/A.md § 「Gone」"*) ;; *) st_fail "A: names the section" "$out" ;; esac
 printf '`docs/B.md` § 「The keys」\n' > "$F/b2.md"
-out=$(check "$F/b2.md" "$F") && fail "A: a missing doc should be red" "$out"
-case "$out" in *"missing doc: docs/B.md"*) ;; *) fail "A: names the doc" "$out" ;; esac
+out=$(check "$F/b2.md" "$F") && st_fail "A: a missing doc should be red" "$out"
+case "$out" in *"missing doc: docs/B.md"*) ;; *) st_fail "A: names the doc" "$out" ;; esac
 printf '`docs/A.md` § 「The keys」 `<入口>/usage`\n' > "$F/b3.md"
-out=$(check "$F/b3.md" "$F") && fail "A: a page only a _test.go names should be red" "$out"
-case "$out" in *"<入口>/usage"*) ;; *) fail "A: names the page" "$out" ;; esac
+out=$(check "$F/b3.md" "$F") && st_fail "A: a page only a _test.go names should be red" "$out"
+case "$out" in *"<入口>/usage"*) ;; *) st_fail "A: names the page" "$out" ;; esac
 printf 'nothing here\n' > "$F/b4.md"
-check "$F/b4.md" "$F" >/dev/null && fail "A: an empty index should be red"
-ok "A the checker: heading / bold lead pass; a missing section, doc, page or index is red"
+check "$F/b4.md" "$F" >/dev/null && st_fail "A: an empty index should be red"
+st_pass "A the checker: heading / bold lead pass; a missing section, doc, page or index is red"
 
 # --- B: the real skill ----------------------------------------------------------
-[ -f "$SKILL" ] || fail "B: $SKILL missing"
-out=$(check "$SKILL" "$ROOT") || fail "B: skills/fleet-help/SKILL.md points at something gone — fix the index or the doc" "$out"
-ok "B the real index resolves ($out)"
+[ -f "$SKILL" ] || st_fail "B: $SKILL missing"
+out=$(check "$SKILL" "$ROOT") || st_fail "B: skills/fleet-help/SKILL.md points at something gone — fix the index or the doc" "$out"
+st_pass "B the real index resolves ($out)"
 for pg in /fleet/keys /quota /usage /connect; do
-  grep -q "\`<入口>$pg\`" "$SKILL" || fail "B: the skill no longer links $pg"
+  grep -q "\`<入口>$pg\`" "$SKILL" || st_fail "B: the skill no longer links $pg"
 done
-ok "B the four hub pages are linked"
+st_pass "B the four hub pages are linked"
 
 # --- C: it ships ----------------------------------------------------------------
 # the Agent package (skills/ included) is 承载's since #4826: it ships there
 python3 "$ROOT/bin/fleet-agent-bundle.py" files --root "$ROOT" | grep -qx 'skills/fleet-help/SKILL.md' \
-  || fail "C: skills/fleet-help/SKILL.md is not in the Agent package (conf/agent-bundle.manifest)"
-grep -q '^## 常见问题' "$ROOT/docs/dev/CLIENT.md" || fail "C: docs/dev/CLIENT.md lost its 常见问题 section"
-ok "C in the Agent package; docs/dev/CLIENT.md has its 常见问题"
+  || st_fail "C: skills/fleet-help/SKILL.md is not in the Agent package (conf/agent-bundle.manifest)"
+grep -q '^## 常见问题' "$ROOT/docs/dev/CLIENT.md" || st_fail "C: docs/dev/CLIENT.md lost its 常见问题 section"
+st_pass "C in the Agent package; docs/dev/CLIENT.md has its 常见问题"
 
 # --- D: current help coverage (issue #4449) --------------------------------------
 # B intentionally accepts heading prefixes. Before #4449, the retired "The keys"
 # and "A new session" still passed by matching the phone keys and CLI headings.
 # Keep their actual intents, and the broken panel/task/shell intents, on the
 # current user's guide; deleting those rows must not make B green either.
-python3 - "$SKILL" <<'PY' || fail "D: current client help coverage"
+python3 - "$SKILL" <<'PY' || st_fail "D: current client help coverage"
 import sys
 
 text = open(sys.argv[1], encoding="utf-8").read()
@@ -166,6 +164,6 @@ for intent, doc, section in required:
 # Every reference still goes through B's real file/section checker above.
 print("current client intents and all five FAQ answers retained")
 PY
-ok "D thin-client panel / keys / new session / task / state / shell and FAQ coverage"
+st_pass "D thin-client panel / keys / new session / task / state / shell and FAQ coverage"
 
 echo "fleet-help selftest: $pass passed"

@@ -45,6 +45,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 INV="$BIN/fleet-handoff-invariant.sh"
 SPIN="$BIN/tmux-spinner.sh"
 CYCLE="$BIN/fleet-handoff-cycle.sh"
@@ -52,8 +53,7 @@ for f in "$INV" "$SPIN" "$CYCLE"; do
   [ -r "$f" ] || { printf 'selftest: %s not found\n' "$f" >&2; exit 2; }
 done
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/handoff-invariant-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/handoff-invariant-selftest.XXXXXX"
 
 fails=0
 ok()   { printf '  ok   %s\n' "$1"; }

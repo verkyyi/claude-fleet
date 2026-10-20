@@ -14,15 +14,14 @@
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SRC="$BIN/fleet-attach.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s not found/executable\n' "$SRC" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-attach-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-attach-selftest.XXXXXX"
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- %s\n' "$2" >&2; exit 1; }
 CHECKS=0
-ok() { CHECKS=$((CHECKS+1)); }
 
 # --- fake tmux ----------------------------------------------------------------
 # Drives liveness from $FLEET_LIVE (space-separated live session names), the
@@ -79,7 +78,7 @@ run() {
 mkfleet fleet-a; mkfleet fleet-b            # configured but NOT live (FLEET_LIVE empty)
 run FLEET_LIVE=""
 [ "$RC" -eq 10 ] || fail "0 live fleets must exit 10 (fall through to fleet-up), got $RC" "$(cat "$WORK/err")"
-ok
+st_count
 printf 'selftest: 0-live leg PASS (exit 10 → cf falls through to fleet-up)\n' >&2
 
 # --- 1 live, OUTSIDE tmux → plain attach --------------------------------------
@@ -87,7 +86,7 @@ run FLEET_LIVE="fleet-a"                     # no TMUX in the scrubbed env = out
 [ "$RC" -eq 0 ] || fail "1 live outside tmux should attach cleanly, got $RC" "$(cat "$WORK/err")"
 grep -q 'attach -t fleet-a' "$LOG" || fail "1 live outside tmux must run 'tmux -L fleet-a attach -t fleet-a'" "$(cat "$LOG")"
 grep -q 'detach-client' "$LOG" && fail "outside tmux must NOT detach-client (no client to detach)" "$(cat "$LOG")"
-ok
+st_count
 printf 'selftest: 1-live-outside leg PASS (plain attach, no detach)\n' >&2
 
 # --- 1 live, INSIDE another fleet → cross-socket detach+attach ----------------
@@ -96,7 +95,7 @@ run FLEET_LIVE="fleet-a" TMUX="/tmp/fake,1,0" FLEET_CUR="fleet-other"
 grep -q 'detach-client' "$LOG" || fail "inside another fleet must detach-client -E to cross sockets" "$(cat "$LOG")"
 grep -q "attach -t 'fleet-a'" "$LOG" || grep -q 'fleet-a' "$LOG" \
   || fail "the detach -E command must re-attach to fleet-a's socket" "$(cat "$LOG")"
-ok
+st_count
 printf 'selftest: 1-live-cross-socket leg PASS (detach-client -E → target socket)\n' >&2
 
 # --- 1 live, ALREADY inside it → no-op ----------------------------------------
@@ -104,7 +103,7 @@ run FLEET_LIVE="fleet-a" TMUX="/tmp/fake,1,0" FLEET_CUR="fleet-a"
 [ "$RC" -eq 0 ] || fail "already on the only live fleet should be a clean no-op, got $RC" "$(cat "$WORK/err")"
 grep -q 'detach-client' "$LOG" && fail "already-on must NOT detach (no pointless reattach)" "$(cat "$LOG")"
 grep -qi 'already on' "$WORK/err" || fail "already-on should say so" "$(cat "$WORK/err")"
-ok
+st_count
 printf 'selftest: already-on leg PASS (no-op, no detach)\n' >&2
 
 # --- N live, non-interactive → most-recently-active ---------------------------
@@ -113,7 +112,7 @@ printf 'selftest: already-on leg PASS (no-op, no detach)\n' >&2
 run FLEET_LIVE="fleet-a fleet-b" FLEET_ACT_fleet_a="100" FLEET_ACT_fleet_b="200"
 [ "$RC" -eq 0 ] || fail "N live non-interactive should attach to most-recent, got $RC" "$(cat "$WORK/err")"
 grep -q 'fleet-b' "$LOG" || fail "most-recent (higher activity) fleet-b should be attached" "$(cat "$LOG")"
-ok
+st_count
 printf 'selftest: N-live-most-recent leg PASS (highest session_activity wins)\n' >&2
 # (no fleet picker any more, #980: conf/gone.list)
 

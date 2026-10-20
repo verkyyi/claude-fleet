@@ -18,17 +18,16 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 [ -f "$ROWS" ] || { printf 'selftest: rows producer not found\n' >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/titleinfo-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/titleinfo-selftest.XXXXXX"
 export TMPDIR="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh
 mkdir -p "$WORK/.claude-dash/global" "$WORK/conf" "$WORK/bin"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
+eq() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
 
 US=$'\x1f'
 cat > "$WORK/bin/tmux" <<'SHIM'

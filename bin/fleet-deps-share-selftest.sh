@@ -32,19 +32,16 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 LIB="$BIN/fleet-lib.sh"
 DS="$BIN/fleet-deps-share.sh"
 [ -f "$LIB" ] && [ -x "$DS" ] || { printf 'selftest: missing pieces\n' >&2; exit 2; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not on PATH — SKIP\n' >&2; exit 0; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-deps-share.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-deps-share.XXXXXX" physical
 trap 'exit 130' INT TERM HUP
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 export HOME="$WORK/home"; mkdir -p "$HOME"
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR"
@@ -78,11 +75,11 @@ drop_wts() {
 
 # ---- NONE: no lockfile -------------------------------------------------------
 PLAIN="$WORK/src/plain"; mkdir -p "$PLAIN"; ( cd "$PLAIN" && git init -q -b master && printf 'x\n' > a.sh && git add -A && git commit -qm i )
-W=$(newwt "$PLAIN") || fail "worktree add"
+W=$(newwt "$PLAIN") || st_fail "worktree add"
 out=$("$DS" "$W" "$PLAIN")
 [ -z "$out" ] && [ ! -e "$FLEET_DEPS_SHARE_LOG" ] && [ "$(rec "$W")" = "none ." ] \
-  && [ -z "$(git -C "$W" status --porcelain)" ] || fail "NONE: a repo without lockfiles was touched" "$out"
-ok "NONE: no lockfile ⇒ no record, no log, worktree untouched"
+  && [ -z "$(git -C "$W" status --porcelain)" ] || st_fail "NONE: a repo without lockfiles was touched" "$out"
+st_pass "NONE: no lockfile ⇒ no record, no log, worktree untouched"
 
 # ---- the JS checkout: root npm (+ member packages/a), tools (yarn), web (pnpm),
 #      py (uv), svc (go) -------------------------------------------------------
@@ -112,46 +109,46 @@ cd "$BIN" || exit 2
 # ---- CLONE + PNPM/UV/GO --------------------------------------------------------
 W=$(newwt "$MAIN")
 out=$("$DS" "$W" "$MAIN")
-printf '%s\n' "$out" | grep -qx "clone:copy \\. $MAIN" || fail "CLONE: root not cloned" "$out"
-printf '%s\n' "$out" | grep -qx "clone:copy tools $MAIN" || fail "CLONE: yarn dir not cloned" "$out"
+printf '%s\n' "$out" | grep -qx "clone:copy \\. $MAIN" || st_fail "CLONE: root not cloned" "$out"
+printf '%s\n' "$out" | grep -qx "clone:copy tools $MAIN" || st_fail "CLONE: yarn dir not cloned" "$out"
 [ -d "$W/node_modules" ] && [ ! -L "$W/node_modules" ] && [ "$(cat "$W/node_modules/lodash/index.js")" = base ] \
-  || fail "CLONE: node_modules is not a real copy of the base's" "$(ls -la "$W/node_modules" 2>&1)"
-[ -f "$W/packages/a/node_modules/left-pad/index.js" ] || fail "CLONE: workspace member's tree not cloned"
-[ "$(readlink "$W/node_modules/rel-link")" = ../lodash ] || fail "CLONE: relative link not kept"
+  || st_fail "CLONE: node_modules is not a real copy of the base's" "$(ls -la "$W/node_modules" 2>&1)"
+[ -f "$W/packages/a/node_modules/left-pad/index.js" ] || st_fail "CLONE: workspace member's tree not cloned"
+[ "$(readlink "$W/node_modules/rel-link")" = ../lodash ] || st_fail "CLONE: relative link not kept"
 printf 'mine\n' > "$W/node_modules/lodash/index.js"
-[ "$(cat "$MAIN/node_modules/lodash/index.js")" = base ] || fail "CLONE: a write in the clone reached the base"
-[ -z "$(git -C "$W" status --porcelain)" ] || fail "CLONE: worktree not clean" "$(git -C "$W" status --porcelain)"
-printf '%s\n' "$out" | grep -qx "pnpm-store web" || fail "PNPM: pnpm dir not recorded as pnpm-store" "$out"
-[ ! -e "$W/web/node_modules" ] || fail "PNPM: something was written into web/"
+[ "$(cat "$MAIN/node_modules/lodash/index.js")" = base ] || st_fail "CLONE: a write in the clone reached the base"
+[ -z "$(git -C "$W" status --porcelain)" ] || st_fail "CLONE: worktree not clean" "$(git -C "$W" status --porcelain)"
+printf '%s\n' "$out" | grep -qx "pnpm-store web" || st_fail "PNPM: pnpm dir not recorded as pnpm-store" "$out"
+[ ! -e "$W/web/node_modules" ] || st_fail "PNPM: something was written into web/"
 printf '%s\n' "$out" | grep -qx "uv-cache py" && printf '%s\n' "$out" | grep -qx "go-modcache svc" \
-  || fail "UV/GO: not recorded" "$out"
-[ "$(rec "$W")" = "$out" ] || fail "CLONE: --status differs from the run" "$(rec "$W")"
+  || st_fail "UV/GO: not recorded" "$out"
+[ "$(rec "$W")" = "$out" ] || st_fail "CLONE: --status differs from the run" "$(rec "$W")"
 grep -q "$W clone=2 pnpm-store=1 uv-cache=1 go-modcache=1 " "$FLEET_DEPS_SHARE_LOG" \
-  || fail "CLONE: no summary log line" "$(cat "$FLEET_DEPS_SHARE_LOG")"
-ok "CLONE: identical lockfile + installed base ⇒ real copy-on-write tree, member too, base untouched, status clean"
-ok "PNPM/UV/GO: per-login stores recorded, nothing written"
+  || st_fail "CLONE: no summary log line" "$(cat "$FLEET_DEPS_SHARE_LOG")"
+st_pass "CLONE: identical lockfile + installed base ⇒ real copy-on-write tree, member too, base untouched, status clean"
+st_pass "PNPM/UV/GO: per-login stores recorded, nothing written"
 
 # ---- STAMP / STALE / DIFFER ---------------------------------------------------
 drop_wts
 printf 'other\n' > "$MAIN/node_modules/.fleet-lock-sha"
 W=$(newwt "$MAIN"); out=$("$DS" "$W" "$MAIN")
-printf '%s\n' "$out" | grep -qx "install \\." && [ ! -e "$W/node_modules" ] || fail "STAMP: another sha still cloned" "$out"
+printf '%s\n' "$out" | grep -qx "install \\." && [ ! -e "$W/node_modules" ] || st_fail "STAMP: another sha still cloned" "$out"
 sha "$MAIN/package-lock.json" > "$MAIN/node_modules/.fleet-lock-sha"; : > "$MAIN/node_modules/.fleet-installing"
 drop_wts; W=$(newwt "$MAIN"); out=$("$DS" "$W" "$MAIN")
-printf '%s\n' "$out" | grep -qx "install \\." || fail "STAMP: a reinstall in flight still cloned" "$out"
+printf '%s\n' "$out" | grep -qx "install \\." || st_fail "STAMP: a reinstall in flight still cloned" "$out"
 rm -f "$MAIN/node_modules/.fleet-installing"; older "$MAIN/node_modules/.package-lock.json"
 drop_wts; W=$(newwt "$MAIN"); out=$("$DS" "$W" "$MAIN")
-printf '%s\n' "$out" | grep -qx "clone:copy \\. $MAIN" || fail "STAMP: this sha's stamp not trusted" "$out"
-ok "STAMP: another sha / in flight ⇒ install; this sha ⇒ clone (even with an old marker)"
+printf '%s\n' "$out" | grep -qx "clone:copy \\. $MAIN" || st_fail "STAMP: this sha's stamp not trusted" "$out"
+st_pass "STAMP: another sha / in flight ⇒ install; this sha ⇒ clone (even with an old marker)"
 rm -f "$MAIN/node_modules/.fleet-lock-sha"
 drop_wts; W=$(newwt "$MAIN"); out=$("$DS" "$W" "$MAIN")
-printf '%s\n' "$out" | grep -qx "install \\." && [ ! -e "$W/node_modules" ] || fail "STALE: an install older than the lockfile was cloned" "$out"
-ok "STALE: install marker older than the lockfile ⇒ install"
+printf '%s\n' "$out" | grep -qx "install \\." && [ ! -e "$W/node_modules" ] || st_fail "STALE: an install older than the lockfile was cloned" "$out"
+st_pass "STALE: install marker older than the lockfile ⇒ install"
 : > "$MAIN/node_modules/.package-lock.json"
 drop_wts; W=$(newwt "$MAIN"); printf '{"lockfileVersion":3,"x":1}\n' > "$W/package-lock.json"
 out=$("$DS" "$W" "$MAIN")
-printf '%s\n' "$out" | grep -qx "install \\." && [ ! -e "$W/node_modules" ] || fail "DIFFER: a differing lockfile was cloned" "$out"
-ok "DIFFER: lockfile differs ⇒ install, nothing cloned"
+printf '%s\n' "$out" | grep -qx "install \\." && [ ! -e "$W/node_modules" ] || st_fail "DIFFER: a differing lockfile was cloned" "$out"
+st_pass "DIFFER: lockfile differs ⇒ install, nothing cloned"
 
 # ---- SIBLING ---------------------------------------------------------------------
 drop_wts
@@ -159,27 +156,27 @@ mv "$MAIN/tools/node_modules" "$WORK/tools-nm"
 SIB=$(newwt "$MAIN"); mkdir -p "$SIB/tools/node_modules/y"; : > "$SIB/tools/node_modules/.yarn-integrity"
 W=$(newwt "$MAIN"); out=$("$DS" "$W" "$MAIN")
 printf '%s\n' "$out" | grep -qx "clone:copy tools $SIB" && [ -d "$W/tools/node_modules/y" ] \
-  || fail "SIBLING: not cloned from the other worktree" "$out"
+  || st_fail "SIBLING: not cloned from the other worktree" "$out"
 mv "$WORK/tools-nm" "$MAIN/tools/node_modules"
-ok "SIBLING: base has no tree ⇒ cloned from another worktree with the same lockfile"
+st_pass "SIBLING: base has no tree ⇒ cloned from another worktree with the same lockfile"
 
 # ---- NOCLONE -----------------------------------------------------------------------
 drop_wts
 W=$(newwt "$MAIN"); out=$(FLEET_DEPS_SHARE_CLONE=off "$DS" "$W" "$MAIN")
 printf '%s\n' "$out" | grep -qx "skipped:no-clone \\." && [ ! -e "$W/node_modules" ] \
   && [ -z "$(git -C "$W" status --porcelain --ignored | grep -v '^!! .*node_modules/$')" ] \
-  || fail "NOCLONE: not skipped cleanly" "$out
+  || st_fail "NOCLONE: not skipped cleanly" "$out
 $(git -C "$W" status --porcelain --ignored)"
-ok "NOCLONE: no clone on this filesystem ⇒ skipped:no-clone, nothing left behind"
+st_pass "NOCLONE: no clone on this filesystem ⇒ skipped:no-clone, nothing left behind"
 
 # ---- ABSLINK ---------------------------------------------------------------------------
 drop_wts
 ln -s "$MAIN/packages/a" "$MAIN/packages/a/node_modules/a-src"
 W=$(newwt "$MAIN"); out=$("$DS" "$W" "$MAIN")
 printf '%s\n' "$out" | grep -qx "skipped:link-into-source \\." && [ ! -e "$W/node_modules" ] && [ ! -e "$W/packages/a/node_modules" ] \
-  || fail "ABSLINK: a tree linking into the source was cloned (or half of it kept)" "$out"
+  || st_fail "ABSLINK: a tree linking into the source was cloned (or half of it kept)" "$out"
 rm -f "$MAIN/packages/a/node_modules/a-src"
-ok "ABSLINK: absolute link into the source ⇒ skipped, the lockfile's other trees removed"
+st_pass "ABSLINK: absolute link into the source ⇒ skipped, the lockfile's other trees removed"
 
 # ---- IGNORE ------------------------------------------------------------------------
 IG="$WORK/src/noignore"; mkdir -p "$IG"
@@ -187,21 +184,21 @@ IG="$WORK/src/noignore"; mkdir -p "$IG"
   && mkdir -p node_modules/z && : > node_modules/.package-lock.json )
 W=$(newwt "$IG"); out=$("$DS" "$W" "$IG")
 printf '%s\n' "$out" | grep -qx "skipped:not-ignored \\." && [ -z "$(git -C "$W" status --porcelain)" ] \
-  || fail "IGNORE: an un-ignored node_modules was cloned" "$out"
-ok "IGNORE: node_modules not git-ignored ⇒ skipped, status clean"
+  || st_fail "IGNORE: an un-ignored node_modules was cloned" "$out"
+st_pass "IGNORE: node_modules not git-ignored ⇒ skipped, status clean"
 
 # ---- SETUP: through fleet_worktree_create --------------------------------------------
 drop_wts
-W=$(FLEET_DEPS_SHARE=1 fleet_worktree_create "$MAIN" scratch-71 "") || fail "SETUP: worktree not created"
-[ -d "$W/node_modules" ] && rec "$W" | grep -qx "clone:copy \\. $MAIN" || fail "SETUP: create did not share" "$(rec "$W")"
-drop_wts; W=$(FLEET_DEPS_SHARE=0 fleet_worktree_create "$MAIN" scratch-72 "") || fail "SETUP: worktree not created (off)"
-[ ! -e "$W/node_modules" ] && [ "$(rec "$W")" = "none ." ] || fail "SETUP: FLEET_DEPS_SHARE=0 still shared"
-W=$(FLEET_DEPS_SHARE=1 FLEET_DEPS_SHARE_CLONE=off fleet_worktree_create "$MAIN" scratch-73 "") || fail "SETUP: a failing share blocked the worktree"
-[ -d "$W" ] && [ ! -e "$W/node_modules" ] || fail "SETUP: no-clone left something"
-ok "SETUP: explicit sharing works; 0 disables; a failing share never blocks the worktree"
+W=$(FLEET_DEPS_SHARE=1 fleet_worktree_create "$MAIN" scratch-71 "") || st_fail "SETUP: worktree not created"
+[ -d "$W/node_modules" ] && rec "$W" | grep -qx "clone:copy \\. $MAIN" || st_fail "SETUP: create did not share" "$(rec "$W")"
+drop_wts; W=$(FLEET_DEPS_SHARE=0 fleet_worktree_create "$MAIN" scratch-72 "") || st_fail "SETUP: worktree not created (off)"
+[ ! -e "$W/node_modules" ] && [ "$(rec "$W")" = "none ." ] || st_fail "SETUP: FLEET_DEPS_SHARE=0 still shared"
+W=$(FLEET_DEPS_SHARE=1 FLEET_DEPS_SHARE_CLONE=off fleet_worktree_create "$MAIN" scratch-73 "") || st_fail "SETUP: a failing share blocked the worktree"
+[ -d "$W" ] && [ ! -e "$W/node_modules" ] || st_fail "SETUP: no-clone left something"
+st_pass "SETUP: explicit sharing works; 0 disables; a failing share never blocks the worktree"
 
-W=$(fleet_worktree_create "$MAIN" scratch-74 "") || fail "DEFAULT: worktree not created"
-[ ! -e "$W/node_modules" ] && [ "$(rec "$W")" = "none ." ] || fail "DEFAULT: unselected dependency sharing ran"
+W=$(fleet_worktree_create "$MAIN" scratch-74 "") || st_fail "DEFAULT: worktree not created"
+[ ! -e "$W/node_modules" ] && [ "$(rec "$W")" = "none ." ] || st_fail "DEFAULT: unselected dependency sharing ran"
 (
   fleet_timebox() { printf 'unexpected share\n' >> "$WORK/unexpected-share"; }
   unset FLEET_DEPS_SHARE
@@ -210,8 +207,8 @@ W=$(fleet_worktree_create "$MAIN" scratch-74 "") || fail "DEFAULT: worktree not 
     FLEET_DEPS_SHARE=$setting fleet_worktree_deps_share "$MAIN" "$W"
   done
 )
-[ ! -e "$WORK/unexpected-share" ] || fail "DEFAULT: unselected sharing started its helper"
-ok "DEFAULT: unset, empty, zero and invalid selections do not start the sharing helper"
+[ ! -e "$WORK/unexpected-share" ] || st_fail "DEFAULT: unselected sharing started its helper"
+st_pass "DEFAULT: unset, empty, zero and invalid selections do not start the sharing helper"
 
 export SETUP_CALLS="$WORK/custom-setup-calls"
 cat > "$WORK/custom-setup" <<'SH'
@@ -221,11 +218,11 @@ touch "$1/setup-ran"
 SH
 chmod +x "$WORK/custom-setup"
 W=$(FLEET_WORKTREE_SETUP="$WORK/custom-setup" fleet_worktree_create "$MAIN" scratch-75 "") \
-  || fail "CUSTOM: worktree not created"
+  || st_fail "CUSTOM: worktree not created"
 [ "$(cat "$SETUP_CALLS")" = "$W|$W|$MAIN" ] && [ -f "$W/setup-ran" ] \
   && [ ! -e "$W/node_modules" ] && [ "$(rec "$W")" = "none ." ] \
-  || fail "CUSTOM: explicit setup changed or implicitly opted into dependency sharing"
-ok "CUSTOM: explicit project setup runs once without enabling dependency sharing"
+  || st_fail "CUSTOM: explicit setup changed or implicitly opted into dependency sharing"
+st_pass "CUSTOM: explicit project setup runs once without enabling dependency sharing"
 
 # ---- NATIVE: this filesystem's own clone ------------------------------------------------
 drop_wts
@@ -233,12 +230,12 @@ W=$(newwt "$MAIN"); out=$(env -u FLEET_DEPS_SHARE_CLONE "$DS" "$W" "$MAIN")
 line=$(printf '%s\n' "$out" | awk '$2 == "." { print $1 " ."; exit }')
 case "$line" in
   "clone:clonefile ."*|"clone:reflink ."*)
-    [ "$(cat "$W/node_modules/lodash/index.js")" = base ] || fail "NATIVE: clone has the wrong bytes" ;;
+    [ "$(cat "$W/node_modules/lodash/index.js")" = base ] || st_fail "NATIVE: clone has the wrong bytes" ;;
   "skipped:no-clone .")
-    [ ! -e "$W/node_modules" ] || fail "NATIVE: no-clone left a tree" ;;
-  *) fail "NATIVE: unexpected verdict" "$out" ;;
+    [ ! -e "$W/node_modules" ] || st_fail "NATIVE: no-clone left a tree" ;;
+  *) st_fail "NATIVE: unexpected verdict" "$out" ;;
 esac
-[ "$(uname -s)" != Darwin ] || case "$line" in skipped:*) ;; *) [ "${line%% *}" = clone:clonefile ] || fail "NATIVE: macOS did not use clonefile" "$line" ;; esac
-ok "NATIVE: $line"
+[ "$(uname -s)" != Darwin ] || case "$line" in skipped:*) ;; *) [ "${line%% *}" = clone:clonefile ] || st_fail "NATIVE: macOS did not use clonefile" "$line" ;; esac
+st_pass "NATIVE: $line"
 
 printf 'fleet-deps-share-selftest: %s passed\n' "$pass"

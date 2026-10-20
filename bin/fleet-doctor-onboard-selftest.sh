@@ -3,8 +3,8 @@
 # single WARN row, while an old login must not acquire the row at all.
 set -uo pipefail
 BIN=$(cd "$(dirname "$0")" && pwd)
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/doctor-onboard-selftest.XXXXXX") || exit 2
-trap 'rm -rf "$WORK"' EXIT
+. "$BIN/selftest-lib.sh"
+st_sandbox "${TMPDIR:-/tmp}/doctor-onboard-selftest.XXXXXX"
 mkdir -p "$WORK/bin" "$WORK/launchd" "$WORK/shim" "$WORK/core" "$WORK/home/.ssh" "$WORK/conf/global" "$WORK/conf/fleets/fleet" "$WORK/accounts"
 cp "$BIN/fleet-doctor-onboard.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$BIN/fleet-daemon-lib.sh" "$WORK/bin/"
 touch "$WORK/launchd/com.claude-fleet.collect.plist.tmpl" "$WORK/launchd/com.claude-fleet.spinner.plist.tmpl"

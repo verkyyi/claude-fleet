@@ -23,14 +23,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SPAWN="$BIN/dash-issue-session.sh"
 [ -x "$SPAWN" ] || { echo "selftest: $SPAWN missing/not executable" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/issname-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/issname-selftest.XXXXXX"
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/dash"
@@ -112,20 +111,20 @@ GH_TITLE="do-not-use-this-from-gh" run_spawn 216 --title "Fix The Widget Cache"
 [ "$(winname)" = "fix-the-widget-cache" ] \
   || fail "A window should be named from --title (got '$(winname)')" "$(cat "$NEWWIN_LOG")"
 [ -s "$GHVIEW_LOG" ] && fail "A --title must NOT trigger a gh issue view network call" "$(cat "$GHVIEW_LOG")"
-ok "A --title names the window after the work — no cache/network dependency"
+st_pass "A --title names the window after the work — no cache/network dependency"
 
 # ===== B: no --title → gh issue view fallback still names the window ===========
 GH_TITLE="Cached Widget Title" run_spawn 216
 [ "$(winname)" = "cached-widget-title" ] \
   || fail "B window should be named from the gh title (got '$(winname)')" "$(cat "$NEWWIN_LOG")"
 [ -s "$GHVIEW_LOG" ] || fail "B a cache miss should fall back to gh issue view" "$(cat "$WORK/spawn.err")"
-ok "B without --title, the gh issue view fallback still names the window"
+st_pass "B without --title, the gh issue view fallback still names the window"
 
 # ===== C: no --title, gh returns empty → bare issue-<N> slug ===================
 GH_TITLE="" run_spawn 216
 [ "$(winname)" = "issue-216" ] \
   || fail "C an unresolvable title should fall back to issue-216 (got '$(winname)')" "$(cat "$NEWWIN_LOG")"
-ok "C unresolvable title falls back to the issue-<N> slug"
+st_pass "C unresolvable title falls back to the issue-<N> slug"
 
 # ===== D: --title that slugifies to empty → issue-<N> slug, no network =========
 # A symbol/emoji-only title carries no LETTERS, so it still washes out — the slug
@@ -134,7 +133,7 @@ GH_TITLE="latin fallback title" run_spawn 216 --title "★★★"
 [ "$(winname)" = "issue-216" ] \
   || fail "D a symbol-only --title should degrade to issue-216 (got '$(winname)')" "$(cat "$NEWWIN_LOG")"
 [ -s "$GHVIEW_LOG" ] && fail "D a provided --title must not fall through to a gh network call" "$(cat "$GHVIEW_LOG")"
-ok "D a symbol-only --title degrades to the issue-<N> slug, predictably + offline"
+st_pass "D a symbol-only --title degrades to the issue-<N> slug, predictably + offline"
 
 # ===== E: a CJK --title names the window in CJK (issue #579) ===================
 # Before #579 the derivation was byte-wise, so this spawned `issue-216` and the
@@ -143,7 +142,7 @@ ok "D a symbol-only --title degrades to the issue-<N> slug, predictably + offlin
 GH_TITLE="latin fallback title" run_spawn 216 --title "台账点文本跳录音"
 [ "$(winname)" = "台账点文本跳录音" ] \
   || fail "E a CJK --title should name the window in CJK (got '$(winname)')" "$(cat "$NEWWIN_LOG")"
-ok "E a CJK --title names the window after the work, not issue-<N>"
+st_pass "E a CJK --title names the window after the work, not issue-<N>"
 
 printf '\nselftest OK: %s assertions passed (issue-window naming / --title)\n' "$pass"
 exit 0

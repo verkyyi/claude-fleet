@@ -38,6 +38,7 @@
 # Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 FILES='fleet-launchd-probe.sh fleet-daemon-lib.sh fleet-doctor.sh fleet-lib.sh fleet-client-core.sh fleet-diskguard.sh'
 for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
@@ -54,7 +55,6 @@ S="$WORK/lcstate"
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
 has()  { CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) ;; *) fail "$3" "$2";; esac; }
 hasnt(){ CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) fail "$3" "$2";; esac; }
 
@@ -111,23 +111,23 @@ probe() { _sp="$1"; shift
 # ============================================================================
 reset
 out=$(probe 3); rc=$?
-[ "$rc" = 0 ] || fail "A: 3 spawns in the window must exit 0 (got $rc)" "$out"; ok
+[ "$rc" = 0 ] || fail "A: 3 spawns in the window must exit 0 (got $rc)" "$out"; st_count
 has "ok" "$out" "A: 3 spawns must read \`ok\`"
-[ "$(lib "fleet_daemon_probe_verdict '$WORK'")" = ok ] || fail "A: \`ok\` was not cached"; ok
+[ "$(lib "fleet_daemon_probe_verdict '$WORK'")" = ok ] || fail "A: \`ok\` was not cached"; st_count
 
 reset
 out=$(probe 1); rc=$?
-[ "$rc" = 1 ] || fail "A: exactly one spawn is NOT a healthy domain — expected exit 1, got $rc" "$out"; ok
+[ "$rc" = 1 ] || fail "A: exactly one spawn is NOT a healthy domain — expected exit 1, got $rc" "$out"; st_count
 has "no-interval" "$out" "A: one spawn (RunAtLoad only) must read \`no-interval\`, not \`ok\` — a domain that runs a job once at load and never on its interval is the pended-scheduling shape"
-[ "$(lib "fleet_daemon_probe_verdict '$WORK'")" = no-interval ] || fail "A: \`no-interval\` was not cached"; ok
+[ "$(lib "fleet_daemon_probe_verdict '$WORK'")" = no-interval ] || fail "A: \`no-interval\` was not cached"; st_count
 
 reset
 out=$(probe 0); rc=$?
-[ "$rc" = 1 ] || fail "A: zero spawns must exit 1 (got $rc)" "$out"; ok
+[ "$rc" = 1 ] || fail "A: zero spawns must exit 1 (got $rc)" "$out"; st_count
 has "no-spawn" "$out" "A: zero spawns must read \`no-spawn\`"
 has "machine state, not fleet state" "$out" "A: the no-spawn line must say whose problem this is — that sentence IS the fix for #711"
 has "reboot" "$out" "A: the no-spawn line must name the remedy the operator actually has"
-[ "$(lib "fleet_daemon_probe_verdict '$WORK'")" = no-spawn ] || fail "A: \`no-spawn\` was not cached"; ok
+[ "$(lib "fleet_daemon_probe_verdict '$WORK'")" = no-spawn ] || fail "A: \`no-spawn\` was not cached"; st_count
 
 # ============================================================================
 # B. unknown is never a verdict, and never overwrites one
@@ -137,10 +137,10 @@ has "reboot" "$out" "A: the no-spawn line must name the remedy the operator actu
 # plausible one is how an operator ends up trusting an answer nobody measured.
 before=$(lib "fleet_daemon_probe_line '$WORK'")
 out=$(FAKE_BOOTSTRAP_RC=1 FAKE_SPAWNS=5 bash "$WORK/bin/fleet-launchd-probe.sh" --window 1 --interval 10 2>>"$WORK/probe.err"); rc=$?
-[ "$rc" = 3 ] || fail "B: a probe that would not bootstrap must exit 3 (unknown), got $rc" "$out"; ok
+[ "$rc" = 3 ] || fail "B: a probe that would not bootstrap must exit 3 (unknown), got $rc" "$out"; st_count
 has "unknown" "$out" "B: a failed bootstrap must report \`unknown\`"
 [ "$(lib "fleet_daemon_probe_line '$WORK'")" = "$before" ] \
-  || fail "B: an UNMEASURED probe overwrote the cached verdict"; ok
+  || fail "B: an UNMEASURED probe overwrote the cached verdict"; st_count
 
 # No launchctl at all ⇒ unknown, not a guess. PATH is narrowed to a directory
 # holding ONLY the few tools the script touches before that check — stripping it
@@ -151,58 +151,58 @@ for t in bash dirname date mkdir id; do
   p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$WORK/minpath/$t"
 done
 out=$(PATH="$WORK/minpath" FAKE_SPAWNS=5 bash "$WORK/bin/fleet-launchd-probe.sh" --window 1 2>&1); rc=$?
-[ "$rc" = 3 ] || fail "B: no launchctl on PATH must be \`unknown\` (exit 3), got $rc" "$out"; ok
+[ "$rc" = 3 ] || fail "B: no launchctl on PATH must be \`unknown\` (exit 3), got $rc" "$out"; st_count
 has "unknown" "$out" "B: a host without launchctl must say \`unknown\`, never assume the domain is fine"
 
 # The master switch refuses to probe — and still does not claim a verdict.
 out=$(FLEET_LAUNCHD_PROBE=0 bash "$WORK/bin/fleet-launchd-probe.sh" --window 1 2>&1); rc=$?
-[ "$rc" = 3 ] || fail "B: FLEET_LAUNCHD_PROBE=0 must be \`unknown\` (exit 3), got $rc" "$out"; ok
+[ "$rc" = 3 ] || fail "B: FLEET_LAUNCHD_PROBE=0 must be \`unknown\` (exit 3), got $rc" "$out"; st_count
 
 # --cached reads without probing; an expired TTL is "no answer", not "ok".
 reset; probe 0 >/dev/null
 out=$(bash "$WORK/bin/fleet-launchd-probe.sh" --cached 900 2>&1); rc=$?
-[ "$rc" = 1 ] || fail "B: --cached must replay the cached no-spawn (exit 1), got $rc" "$out"; ok
+[ "$rc" = 1 ] || fail "B: --cached must replay the cached no-spawn (exit 1), got $rc" "$out"; st_count
 has "cached" "$out" "B: --cached must say the answer is cached, not freshly measured"
 sleep 2
 out=$(bash "$WORK/bin/fleet-launchd-probe.sh" --cached 1 2>&1); rc=$?
-[ "$rc" = 4 ] || fail "B: an EXPIRED cache must exit 4 (no usable answer), got $rc" "$out"; ok
+[ "$rc" = 4 ] || fail "B: an EXPIRED cache must exit 4 (no usable answer), got $rc" "$out"; st_count
 
 # ============================================================================
 # C. the agent never outlives the probe
 # ============================================================================
 reset; probe 2 >/dev/null
 grep -q "spawnprobe" "$S/bootouts" 2>/dev/null \
-  || fail "C: the probe did not boot its own agent out" "$(cat "$S/bootouts" 2>/dev/null)"; ok
+  || fail "C: the probe did not boot its own agent out" "$(cat "$S/bootouts" 2>/dev/null)"; st_count
 left=$(ls -d "$WORK"/.claude-fleet-spawnprobe.* 2>/dev/null)
-[ -z "$left" ] || fail "C: the probe left its work dir behind: $left"; ok
+[ -z "$left" ] || fail "C: the probe left its work dir behind: $left"; st_count
 
 # The DEADLINE lives in the job, not in the parent's trap (#697). Take the program
 # launchd was actually handed, move its deadline into the past, run it: it must
 # boot ITSELF out. A parent-only trap cannot survive a SIGKILLed parent, and what
 # leaks here is a registered agent that would tick for ever.
-[ -f "$S/captured-probe.sh" ] || fail "C: the fake launchctl captured no probe program"; ok
+[ -f "$S/captured-probe.sh" ] || fail "C: the fake launchctl captured no probe program"; st_count
 sed 's/-ge [0-9][0-9]*/-ge 0/' "$S/captured-probe.sh" > "$WORK/expired-probe.sh"
 : > "$S/bootouts"
 /bin/sh "$WORK/expired-probe.sh" >/dev/null 2>&1
 grep -q "spawnprobe" "$S/bootouts" 2>/dev/null \
-  || fail "C: a probe job past its own deadline did not boot itself out — the cleanup is back in the parent's trap, which is the #697 failure shape"; ok
+  || fail "C: a probe job past its own deadline did not boot itself out — the cleanup is back in the parent's trap, which is the #697 failure shape"; st_count
 
 # A leftover from a killed probe is swept by the next one.
 reset
 printf -- '-\t0\tcom.claude-fleet.spawnprobe.99999\n' > "$S/list"
 probe 2 >/dev/null
 grep -q "spawnprobe.99999" "$S/bootouts" 2>/dev/null \
-  || fail "C: a leftover probe agent was not swept" "$(cat "$S/bootouts" 2>/dev/null)"; ok
+  || fail "C: a leftover probe agent was not swept" "$(cat "$S/bootouts" 2>/dev/null)"; st_count
 
 # ============================================================================
 # D. the cooldown scales with the unit's own interval
 # ============================================================================
 [ "$(lib 'fleet_daemon_kick_cooldown memguard')" = 60 ] \
-  || fail "D: a 2s unit must floor at 60s, not sit on a flat 600s"; ok
+  || fail "D: a 2s unit must floor at 60s, not sit on a flat 600s"; st_count
 [ "$(lib 'fleet_daemon_kick_cooldown collect')" = 180 ] \
-  || fail "D: a 60s unit must be 3×60"; ok
+  || fail "D: a 60s unit must be 3×60"; st_count
 [ "$(lib 'fleet_daemon_kick_cooldown worktree-autoclean')" = 10800 ] \
-  || fail "D: a 3600s unit must be 3×3600"; ok
+  || fail "D: a 3600s unit must be 3×3600"; st_count
 # THE INVARIANT, not the numbers: the cooldown must never be the binding limit.
 # The staleness threshold is already per-unit and already tuned; if the cooldown
 # creeps above it, the cooldown silently becomes the daemon's period again — which
@@ -211,21 +211,21 @@ for u in $(lib 'fleet_daemon_unit_names'); do
   c=$(lib "fleet_daemon_kick_cooldown $u"); t=$(lib "fleet_daemon_stale_secs $u")
   [ "$c" -le "$t" ] \
     || fail "D: $u cooldown ${c}s EXCEEDS its ${t}s staleness threshold — the cooldown is the rate limit again"
-  ok
+  st_count
 done
 # The knobs still work, and the absolute one still wins outright.
 [ "$(FLEET_DAEMON_KICK_COOLDOWN=600 lib 'fleet_daemon_kick_cooldown memguard')" = 600 ] \
-  || fail "D: FLEET_DAEMON_KICK_COOLDOWN must still override absolutely"; ok
+  || fail "D: FLEET_DAEMON_KICK_COOLDOWN must still override absolutely"; st_count
 [ "$(FLEET_DAEMON_KICK_COOLDOWN_LEDGER_WATCH=45 lib 'fleet_daemon_kick_cooldown ledger-watch')" = 45 ] \
-  || fail "D: the per-unit override (dash → underscore) stopped working"; ok
+  || fail "D: the per-unit override (dash → underscore) stopped working"; st_count
 [ "$(FLEET_COLLECT_KICK_COOLDOWN=900 lib 'fleet_daemon_kick_cooldown collect')" = 900 ] \
-  || fail "D: #638's FLEET_COLLECT_KICK_COOLDOWN must still govern collect"; ok
+  || fail "D: #638's FLEET_COLLECT_KICK_COOLDOWN must still govern collect"; st_count
 [ "$(FLEET_COLLECT_KICK_COOLDOWN=900 lib 'fleet_daemon_kick_cooldown cleanup')" = 180 ] \
-  || fail "D: collect's legacy knob must not leak onto other units"; ok
+  || fail "D: collect's legacy knob must not leak onto other units"; st_count
 [ "$(FLEET_DAEMON_KICK_COOLDOWN_MULT=10 lib 'fleet_daemon_kick_cooldown collect')" = 600 ] \
-  || fail "D: the multiplier knob does not scale"; ok
+  || fail "D: the multiplier knob does not scale"; st_count
 [ "$(FLEET_DAEMON_KICK_COOLDOWN_MULT=abc lib 'fleet_daemon_kick_cooldown collect')" = 180 ] \
-  || fail "D: a garbage multiplier must fall back to the default, never to 0 (no rate limit at all)"; ok
+  || fail "D: a garbage multiplier must fall back to the default, never to 0 (no rate limit at all)"; st_count
 
 # ============================================================================
 # E. fleet-doctor: ONE machine line instead of N unit lines
@@ -258,46 +258,46 @@ survived() { printf '%s\n' "$1" | grep -qaE '^[[:space:]]+(PASS|WARN)[[:space:]]
 rm -f "$G/launchd-probe.verdict"; nokicks; stale_all
 out=$(STUB_VERDICT=no-spawn run_doctor)
 [ "$(warns_of "$out" launchd)" = 1 ] \
-  || fail "E1: expected exactly ONE \`WARN launchd\` line" "$out"; ok
+  || fail "E1: expected exactly ONE \`WARN launchd\` line" "$out"; st_count
 [ "$(warns_of "$out" daemons)" = 0 ] \
-  || fail "E1: the per-unit \`WARN daemons\` lines must be HELD BACK when the domain is the cause — printing all ten is the #711 misdiagnosis" "$out"; ok
+  || fail "E1: the per-unit \`WARN daemons\` lines must be HELD BACK when the domain is the cause — printing all ten is the #711 misdiagnosis" "$out"; st_count
 has "ledger-watch" "$out" "E1: the collapsed line must still NAME the stalled units"
 has "MACHINE state, not fleet state" "$out" "E1: the collapsed line must say whose problem this is"
 has "reboot" "$out" "E1: the collapsed line must name the remedy"
-[ -s "$WORK/probe-calls" ] || fail "E1: the doctor never ran the probe on a domain-shaped stall"; ok
-survived "$out" || fail "E1: the doctor did not reach its last check — the daemons section aborted the run" "$out"; ok
-[ ! -s "$WORK/stderr" ] || fail "E1: the doctor printed to stderr" "$(cat "$WORK/stderr")"; ok
+[ -s "$WORK/probe-calls" ] || fail "E1: the doctor never ran the probe on a domain-shaped stall"; st_count
+survived "$out" || fail "E1: the doctor did not reach its last check — the daemons section aborted the run" "$out"; st_count
+[ ! -s "$WORK/stderr" ] || fail "E1: the doctor printed to stderr" "$(cat "$WORK/stderr")"; st_count
 
 # E2. same stall, but the probe says the DOMAIN is fine ⇒ the per-unit lines are
 #     the right answer and must come back.
 rm -f "$G/launchd-probe.verdict"; nokicks; stale_all
 out=$(STUB_VERDICT=ok run_doctor)
 [ "$(warns_of "$out" launchd)" = 0 ] \
-  || fail "E2: a healthy domain must not produce a \`launchd\` warning" "$out"; ok
+  || fail "E2: a healthy domain must not produce a \`launchd\` warning" "$out"; st_count
 n=$(warns_of "$out" daemons)
 [ "$n" -ge 9 ] \
-  || fail "E2: with the domain ruled out, every stalled unit must be reported (got $n)" "$out"; ok
+  || fail "E2: with the domain ruled out, every stalled unit must be reported (got $n)" "$out"; st_count
 
 # E3. nobody could measure ⇒ per-unit lines PLUS a pointer at the probe. An
 #     unmeasured domain must never read as a healthy one.
 rm -f "$G/launchd-probe.verdict"; nokicks; stale_all
 out=$(run_doctor)      # stub writes no verdict
-[ "$(warns_of "$out" launchd)" = 0 ] || fail "E3: an unmeasured domain must not be WARNed about as a fact" "$out"; ok
-[ "$(warns_of "$out" daemons)" -ge 9 ] || fail "E3: the per-unit detail must survive an unmeasured probe" "$out"; ok
+[ "$(warns_of "$out" launchd)" = 0 ] || fail "E3: an unmeasured domain must not be WARNed about as a fact" "$out"; st_count
+[ "$(warns_of "$out" daemons)" -ge 9 ] || fail "E3: the per-unit detail must survive an unmeasured probe" "$out"; st_count
 has "fleet-launchd-probe.sh" "$out" "E3: an unmeasured domain-shaped stall must point at the probe"
 
 # E4. ONE stalled unit is that unit's problem: no probe, no domain line, no hint.
 nokicks; fresh_all; printf '%s\n' "$(( $(date +%s) - 99999 ))" > "$G/cleanup.tick"
 out=$(STUB_VERDICT=no-spawn run_doctor)
-[ "$(warns_of "$out" launchd)" = 0 ] || fail "E4: a single stalled unit is not a domain stall" "$out"; ok
-[ "$(warns_of "$out" daemons)" = 1 ] || fail "E4: the one stalled unit must still be reported" "$out"; ok
-[ ! -s "$WORK/probe-calls" ] || fail "E4: the doctor spent 40s probing over ONE stalled unit"; ok
+[ "$(warns_of "$out" launchd)" = 0 ] || fail "E4: a single stalled unit is not a domain stall" "$out"; st_count
+[ "$(warns_of "$out" daemons)" = 1 ] || fail "E4: the one stalled unit must still be reported" "$out"; st_count
+[ ! -s "$WORK/probe-calls" ] || fail "E4: the doctor spent 40s probing over ONE stalled unit"; st_count
 
 # E5. a healthy host never probes at all.
 nokicks; fresh_all
 out=$(STUB_VERDICT=no-spawn run_doctor)
-[ ! -s "$WORK/probe-calls" ] || fail "E5: the doctor probed a host with nothing stale"; ok
-[ "$(warns_of "$out" daemons)" = 0 ] || fail "E5: nothing stale must produce no daemon warning" "$out"; ok
+[ ! -s "$WORK/probe-calls" ] || fail "E5: the doctor probed a host with nothing stale"; st_count
+[ "$(warns_of "$out" daemons)" = 0 ] || fail "E5: nothing stale must produce no daemon warning" "$out"; st_count
 
 # E6. the accounting. The per-unit warns are emitted from a loop; fed by a PIPE
 #     instead of a here-doc that loop runs in a subshell, where every line prints
@@ -308,7 +308,7 @@ out=$(STUB_VERDICT=ok run_doctor)
 printed=$(printf '%s\n' "$out" | grep -acE '^[[:space:]]+WARN[[:space:]]' | head -1)
 claimed=$(printf '%s\n' "$out" | sed -n 's/^\([0-9][0-9]*\) warn .*/\1/p;s/^[0-9][0-9]* fail[^,]*, \([0-9][0-9]*\) warn.*/\1/p' | tail -1)
 [ -n "$claimed" ] && [ "$printed" = "$claimed" ] \
-  || fail "E6: the doctor printed $printed WARN line(s) but its summary claims '${claimed:-none}'" "$out"; ok
+  || fail "E6: the doctor printed $printed WARN line(s) but its summary claims '${claimed:-none}'" "$out"; st_count
 
 # E7. THE SIGNATURE THAT SURVIVES A WORKING SELF-HEAL. This is the state the real
 #     wedged host is in most of the time: the kicks land, so almost nothing reads
@@ -320,24 +320,24 @@ claimed=$(printf '%s\n' "$out" | sed -n 's/^\([0-9][0-9]*\) warn .*/\1/p;s/^[0-9
 rm -f "$G/launchd-probe.verdict"; fresh_all; kicked_all 110
 out=$(STUB_VERDICT=no-spawn run_doctor)
 [ -s "$WORK/probe-calls" ] \
-  || fail "E7: 10 units kicked inside the hour is the domain signature — the doctor did not probe" "$out"; ok
+  || fail "E7: 10 units kicked inside the hour is the domain signature — the doctor did not probe" "$out"; st_count
 [ "$(warns_of "$out" launchd)" = 1 ] \
-  || fail "E7: a wedged domain masked by a working self-heal must still produce the machine line" "$out"; ok
+  || fail "E7: a wedged domain masked by a working self-heal must still produce the machine line" "$out"; st_count
 has "self-heal cooldown" "$out" "E7: the line must say WHY nothing looks stale — the daemons are running at the cooldown, not their interval"
 hasnt "PASS  daemons" "$out" "E7: \"10 units ticking inside 5x their StartInterval\" is true and misleading while the domain is down — it must not print under the machine line"
-survived "$out" || fail "E7: the doctor did not reach its last check" "$out"; ok
-[ ! -s "$WORK/stderr" ] || fail "E7: the doctor printed to stderr" "$(cat "$WORK/stderr")"; ok
+survived "$out" || fail "E7: the doctor did not reach its last check" "$out"; st_count
+[ ! -s "$WORK/stderr" ] || fail "E7: the doctor printed to stderr" "$(cat "$WORK/stderr")"; st_count
 
 # E8. …and one old kick is not a signature. A single self-healed unit is ordinary.
 rm -f "$G/launchd-probe.verdict"; nokicks; fresh_all
 printf '%s\n' "$(( $(date +%s) - 110 ))" > "$G/cleanup.kick.ts"
 out=$(STUB_VERDICT=no-spawn run_doctor)
-[ ! -s "$WORK/probe-calls" ] || fail "E8: one recent kick must not cost 40s of probing" "$out"; ok
-[ "$(warns_of "$out" launchd)" = 0 ] || fail "E8: one recent kick is not a domain stall" "$out"; ok
+[ ! -s "$WORK/probe-calls" ] || fail "E8: one recent kick must not cost 40s of probing" "$out"; st_count
+[ "$(warns_of "$out" launchd)" = 0 ] || fail "E8: one recent kick is not a domain stall" "$out"; st_count
 # …nor is a kick from yesterday, on every unit.
 kicked_all 99999
 out=$(STUB_VERDICT=no-spawn run_doctor)
-[ ! -s "$WORK/probe-calls" ] || fail "E8: kicks older than the window must not trigger a probe" "$out"; ok
+[ ! -s "$WORK/probe-calls" ] || fail "E8: kicks older than the window must not trigger a probe" "$out"; st_count
 
 printf 'selftest PASS: %s assertions (probe · unknown · cleanup · cooldown · doctor collapse · healed-together)\n' "$CHECKS"
 exit 0

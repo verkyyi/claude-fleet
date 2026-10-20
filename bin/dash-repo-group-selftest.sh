@@ -42,9 +42,9 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
 
 CHECKS=0 FAILS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; FAILS=$((FAILS+1)); }
@@ -65,7 +65,7 @@ cat > "$WORK/bin/tmux" <<EOF
 printf '%s\n' "\$*" >> "$WORK/tmux.log"
 exec "$REAL_TMUX" -S "$SOCK" "\$@"
 EOF
-printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
+st_fake_gh "$WORK/bin"
 chmod +x "$WORK/bin/"*
 export PATH="$WORK/bin:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$WORK/tmp"
 # Headings are localized since #1188 (bin/fleet-ui-lang.sh: FLEET_UI_LANG, else the

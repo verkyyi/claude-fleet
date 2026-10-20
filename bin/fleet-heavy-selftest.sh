@@ -29,6 +29,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 HEAVY="$BIN/fleet-heavy.sh"
 GUARD="$BIN/../hooks/bash-guard.py"
 PY="$(command -v python3 2>/dev/null)"
@@ -41,11 +42,10 @@ mkdir -p "$FLEET_CONF_DIR" "$HOME"
 unset FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_HEAVY_HELD TMUX TMUX_PANE FLEET_MAIN
 
 fails=0
-ok()   { printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; fails=$((fails + 1)); }
-eq()   { if [ "$2" = "$3" ]; then ok "$1"; else fail "$1"; printf '  want: %s\n  got:  %s\n' "$2" "$3" >&2; fi; }
-has()  { case "$3" in *"$2"*) ok "$1" ;; *) fail "$1"; printf '  want substring: %s\n  in: %s\n' "$2" "$3" >&2 ;; esac; }
-hasnt(){ case "$3" in *"$2"*) fail "$1"; printf '  unwanted: %s\n  in: %s\n' "$2" "$3" >&2 ;; *) ok "$1" ;; esac; }
+eq()   { if [ "$2" = "$3" ]; then st_ok "$1"; else fail "$1"; printf '  want: %s\n  got:  %s\n' "$2" "$3" >&2; fi; }
+has()  { case "$3" in *"$2"*) st_ok "$1" ;; *) fail "$1"; printf '  want substring: %s\n  in: %s\n' "$2" "$3" >&2 ;; esac; }
+hasnt(){ case "$3" in *"$2"*) fail "$1"; printf '  unwanted: %s\n  in: %s\n' "$2" "$3" >&2 ;; *) st_ok "$1" ;; esac; }
 held_now() { "$HEAVY" --status 2>/dev/null | sed -n '1s/^heavy: \([0-9]*\)\/.*/\1/p'; }
 wait_held() {  # wait_held <n> — up to ~5s for <n> slots to be held
   local i=0; while [ "$i" -lt 50 ]; do [ "$(held_now)" = "$1" ] && return 0; sleep 0.1; i=$((i + 1)); done; return 1
@@ -61,7 +61,7 @@ while [ "$n" -lt 60 ]; do
   sleep 0.1; n=$((n + 1))
 done
 wait
-[ "$peak" -le 3 ] && [ "$peak" -ge 2 ] && ok "6 concurrent → peak held $peak ≤ 3" || fail "6 concurrent → peak held $peak (want 2..3)"
+[ "$peak" -le 3 ] && [ "$peak" -ge 2 ] && st_ok "6 concurrent → peak held $peak ≤ 3" || fail "6 concurrent → peak held $peak (want 2..3)"
 ME="$(id -un)"; EV="$FLEET_HEAVY_DIR/events.$ME.log"
 eq "all 6 ran" 6 "$(grep -c '	acquire	' "$EV")"
 logpeak="$(sed -n 's/.*held=\([0-9]*\).*/\1/p' "$EV" | sort -n | tail -1)"
@@ -92,7 +92,7 @@ out="$("$HEAVY" --slots 1 --wait 1 --label late -- echo RAN 2>"$TMP/late.err")";
 eq "--wait timeout: command still runs" "RAN/0" "$out/$rc"
 has "--wait timeout: WARN on stderr" "WARN waited 1s" "$(cat "$TMP/late.err")"
 has "--wait timeout: names the holder" "hog(" "$(cat "$TMP/late.err")"
-[ $((SECONDS - t0)) -lt 4 ] && ok "--wait timeout: did not wait out the holder" || fail "--wait timeout waited the holder out"
+[ $((SECONDS - t0)) -lt 4 ] && st_ok "--wait timeout: did not wait out the holder" || fail "--wait timeout waited the holder out"
 has "--wait timeout: logged" "	timeout	" "$(cat "$EV")"
 has "--status shows the holder" "hog" "$("$HEAVY" --slots 1 --status)"
 st="$("$HEAVY" --slots 1 --status)"
@@ -150,7 +150,7 @@ if [ "$(id -u)" != 0 ] && sudo -n -u nobody true 2>/dev/null; then
   FLEET_HEAVY_DIR="$OD" "$HEAVY" --slots 2 -- true
   if sudo -n -u nobody test -r "$OD/events.$ME.log"; then
     for f in slot-1 "events.$ME.log"; do
-      sudo -n -u nobody rm -f "$OD/$f" 2>/dev/null; [ -f "$OD/$f" ] && ok "nobody cannot delete $f" || fail "nobody deleted $f"
+      sudo -n -u nobody rm -f "$OD/$f" 2>/dev/null; [ -f "$OD/$f" ] && st_ok "nobody cannot delete $f" || fail "nobody deleted $f"
       sz="$(wc -c < "$OD/$f")"; sudo -n -u nobody sh -c "echo x >> '$OD/$f'; : > '$OD/$f'" 2>/dev/null
       eq "nobody cannot write $f" "$sz" "$(wc -c < "$OD/$f")"
     done

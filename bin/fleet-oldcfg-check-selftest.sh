@@ -41,6 +41,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 SUT="$BIN/fleet-oldcfg-check.sh"
 for f in fleet-oldcfg-check.sh fleet-oldcfg-replay.py fleet-agent-team.py fleet-lib.sh fleet-client-core.sh tmux-dashboard-rows.sh fleet-cfg-restart.sh fleet-ui-lang.sh; do
@@ -64,10 +65,9 @@ EXP="$WORK/conf/global/agent-cfg.expected"
 BROKEN="$WORK/conf/global/agent-cfg.broken"
 
 CHECKS=0
-fail()  { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
-has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1 — no [$3]" "$2";; esac; }
-hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
+eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
+has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) st_fail "$1 — no [$3]" "$2";; esac; }
+hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) st_fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
 
 # ============================================================================
 # A. the manifest a launch writes (the composer, against this repo's own tree)
@@ -80,8 +80,8 @@ compose() {   # <agent> → the composer's TSV
 out=$(compose claude)
 M1=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "manifest" { print $2 }')
 FP1=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "fp" { print $2 }')
-[ -n "$M1" ] && [ -f "$M1" ] || fail "A: a Claude launch prints no manifest line / file" "$out"
-case "$M1" in "$WORK/conf/agentcfg/"*.json) ;; *) fail "A: the manifest is not under \$FLEET_CONF_DIR/agentcfg/" "$M1" ;; esac
+[ -n "$M1" ] && [ -f "$M1" ] || st_fail "A: a Claude launch prints no manifest line / file" "$out"
+case "$M1" in "$WORK/conf/agentcfg/"*.json) ;; *) st_fail "A: the manifest is not under \$FLEET_CONF_DIR/agentcfg/" "$M1" ;; esac
 eq "A: the manifest records the fingerprint it was launched with" "$FP1" \
    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fp"])' "$M1")"
 eq "A: …the mod's three tools" "mcp__fleet__fleet_await mcp__fleet__fleet_spawn mcp__fleet__fleet_status" \
@@ -97,7 +97,7 @@ r=$(bash "$SUT" "$M1" --new-dir "$ROOT" 2>&1); rc=$?
 eq "A: checked against its own tree the launch is ok" "ok" "$(printf '%s\n' "$r" | head -1)" "$r"
 eq "A: …exit 0" 0 "$rc"
 MC=$(compose codex | awk -F'\t' '$1 == "manifest" { print $2 }')
-[ -n "$MC" ] && [ -f "$MC" ] || fail "A: a Codex launch prints no manifest"
+[ -n "$MC" ] && [ -f "$MC" ] || st_fail "A: a Codex launch prints no manifest"
 eq "A: a Codex session has no mod — tools null, never «new tools» for it" "None" \
    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tools"])' "$MC")"
 eq "A: …and it is ok against its own tree too" "ok" "$(bash "$SUT" "$MC" --new-dir "$ROOT" 2>&1 | head -1)"
@@ -150,7 +150,7 @@ r=$(bash "$SUT" 2>&1); eq "B: no manifest argument ⇒ usage, exit 3" 3 "$?"; ha
 # C. the sweep — an isolated tmux server, real windows
 # ============================================================================
 T() { "$REAL_TMUX" -L "$S" "$@"; }
-T -f /dev/null new-session -d -s "$S" -n home -x 160 -y 40 'sleep 600' || fail "could not start an isolated tmux server"
+T -f /dev/null new-session -d -s "$S" -n home -x 160 -y 40 'sleep 600' || st_fail "could not start an isolated tmux server"
 OLDTS=$(( $(date +%s) - 3600 ))
 mk() {   # <name> <state> <fp> <manifest|''> <issue> → window id
   local id; id=$(T new-window -d -t "$S:" -n "$1" -P -F '#{window_id}' 'sleep 600')

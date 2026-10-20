@@ -22,15 +22,14 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 HOOK="$BIN/refocus-hook.sh"
 [ -x "$HOOK" ] || { echo "selftest: $HOOK missing/not executable" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/refocus-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/refocus-selftest.XXXXXX"
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 SESS=testfleet
@@ -87,7 +86,7 @@ sys.exit(0 if any(g.get("matcher") == "compact" and
                   any("refocus-hook.sh" in h.get("command", "") for h in g.get("hooks", []))
                   for g in groups) else 1)
 PY
-ok "WIRED SessionStart[compact] runs refocus-hook.sh"
+st_pass "WIRED SessionStart[compact] runs refocus-hook.sh"
 
 # ===== COMPACT: the charter, from a worker pane =================================
 FAKE_AT_ISSUE=12 FAKE_AT_ORIGIN=issue-7 run "$WORK/widgets-issue-12" compact
@@ -101,14 +100,14 @@ for want in 'branch issue-12 → base trunk' 'PR: #345 OPEN ci✓' 'work ONLY on
   case "$C" in *"$want"*) : ;; *) fail "context must carry: $want" "$C" ;; esac
 done
 [ ! -s "$WORK/gh.calls" ] || fail "the hook must make ZERO gh calls" "$(cat "$WORK/gh.calls")"
-ok "COMPACT worker → [fleet charter] #12 with repo/title/branch/base/PR/origin, 0 gh calls"
+st_pass "COMPACT worker → [fleet charter] #12 with repo/title/branch/base/PR/origin, 0 gh calls"
 
 # ===== SOURCE: anything but compact is silent ===================================
 for s in startup resume clear ''; do
   FAKE_AT_ISSUE=12 run "$WORK/widgets-issue-12" "$s"
   [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "source='$s' must be silent (rc=$RC)" "$OUT"
 done
-ok "SOURCE startup/resume/clear/empty → zero output"
+st_pass "SOURCE startup/resume/clear/empty → zero output"
 
 # ===== SEATS =====================================================================
 FAKE_AT_ISSUE='' run "$WORK/hub" compact
@@ -119,14 +118,14 @@ FAKE_AT_ISSUE=12 FAKE_ENTRY=sdk-cli run "$WORK/widgets-issue-12" compact
 [ -z "$OUT" ] || fail "a headless child must be silent" "$OUT"
 FAKE_AT_ISSUE=12 FAKE_TMUX='' run "$WORK/widgets-issue-12" compact
 [ -z "$OUT" ] || fail "outside tmux must be silent" "$OUT"
-ok "SEATS hub/scratch, non-worktree, headless, non-tmux → zero output"
+st_pass "SEATS hub/scratch, non-worktree, headless, non-tmux → zero output"
 
 # ===== OFF: FLEET_REFOCUS=0 in the fleet conf silences it =========================
 printf 'FLEET_REFOCUS=0\n' >> "$CONF/fleets/$SESS/conf"
 FAKE_AT_ISSUE=12 run "$WORK/widgets-issue-12" compact
 [ -z "$OUT" ] || fail "FLEET_REFOCUS=0 in the conf must silence the hook" "$OUT"
 sed -i.bak '/^FLEET_REFOCUS=/d' "$CONF/fleets/$SESS/conf"
-ok "OFF FLEET_REFOCUS=0 in the fleet conf → zero output"
+st_pass "OFF FLEET_REFOCUS=0 in the fleet conf → zero output"
 
 # ===== PR fallback: no prmap row ⇒ 'none yet' ===================================
 : > "$WORK/.claude-dash/fleets/acme-widgets/prmap"
@@ -134,7 +133,7 @@ FAKE_AT_ISSUE=12 run "$WORK/widgets-issue-12" compact
 C=$(ctx) || fail "compact without a PR must still emit" "$OUT"
 case "$C" in *'PR: none yet'*) : ;; *) fail "no prmap row must read 'PR: none yet'" "$C" ;; esac
 case "$C" in *'no live parent'*) : ;; *) fail "no @origin must say no live parent" "$C" ;; esac
-ok "PR none yet + no parent when the caches know nothing"
+st_pass "PR none yet + no parent when the caches know nothing"
 
 # ===== REPO: a 2-repo fleet never guesses ========================================
 mkdir -p "$CONF/fleets/$SESS/repos"
@@ -145,7 +144,7 @@ FAKE_AT_ISSUE=12 FAKE_AT_REPO=acme/gadgets run "$WORK/widgets-issue-12" compact
 C=$(ctx) || fail "a multi-repo window with @repo must emit" "$OUT"
 case "$C" in '[fleet charter] #12 · acme/gadgets'*) : ;; *) fail "must name the window's @repo" "$C" ;; esac
 rm -f "$CONF/fleets/$SESS/repos/acme-gadgets.conf"
-ok "REPO 2-repo fleet: no @repo → silent, @repo → that repo"
+st_pass "REPO 2-repo fleet: no @repo → silent, @repo → that repo"
 
 # ===== SIZE: ≤ 1.5 KB whatever the paths ========================================
 long=$(printf 'x%.0s' $(seq 1 1800))
@@ -155,6 +154,6 @@ C=$(ctx) || fail "a huge path must still emit valid JSON" "$OUT"
 n=$(printf '%s' "$C" | wc -c | tr -d ' ')
 [ "$n" -le 1536 ] || fail "context must be ≤ 1536 bytes (got $n)" "$C"
 case "$C" in '[fleet charter] #12'*) : ;; *) fail "truncation must keep the header" "$C" ;; esac
-ok "SIZE context capped at ≤ 1536 bytes ($n), header intact"
+st_pass "SIZE context capped at ≤ 1536 bytes ($n), header intact"
 
 printf 'refocus-hook-selftest: %d passed\n' "$pass"

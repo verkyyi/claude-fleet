@@ -39,10 +39,10 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 HELPER="$BIN/dash-popup.sh"
 [ -f "$HELPER" ] || { printf 'selftest: %s not found\n' "$HELPER" >&2; exit 2; }
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dp-selftest.XXXXXX")" || exit 2
 
@@ -50,10 +50,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/dp-selftest.XXXXXX")" || exit 2
 # server. A PATH shim routes the plain `tmux` dash-popup.sh calls to it.
 SOCK="$WORK/tmux.sock"
 mkdir -p "$WORK/bin"
-cat > "$WORK/bin/tmux" <<EOF
-#!/bin/sh
-exec "$REAL_TMUX" -S "$SOCK" "\$@"
-EOF
+st_tmux_socket "$WORK/bin" "$SOCK"
 chmod +x "$WORK/bin/tmux"
 export PATH="$WORK/bin:$PATH"
 
@@ -64,43 +61,42 @@ trap cleanup EXIT
 # server instead of leaking it to the machine (issue #152).
 trap 'exit 130' INT TERM HUP
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 # --- an isolated server with NO attached client (the failing condition) -------
 tmux new-session -d -s t -x 200 -y 50 'sleep 600' 2>/dev/null \
-  || fail "could not start isolated tmux server"
+  || st_fail "could not start isolated tmux server"
 PANE="$(tmux list-panes -t t -F '#{pane_id}' | head -n1)"
-[ -n "$PANE" ] || fail "could not resolve a pane on the isolated server"
+[ -n "$PANE" ] || st_fail "could not resolve a pane on the isolated server"
 export TMUX_PANE="$PANE"
-[ -z "$(tmux list-clients -t t 2>/dev/null)" ] || fail "precondition: expected no attached client"
+[ -z "$(tmux list-clients -t t 2>/dev/null)" ] || st_fail "precondition: expected no attached client"
 
 # --- 1. BUG REPRO: the old form fails, silently ------------------------------
 M="$WORK/ran"
 raw_out="$(tmux display-popup -E -w 50% -h 10 "echo raw >> $M" 2>&1)"; raw_rc=$?
-[ "$raw_rc" -ne 0 ] || fail "bug repro: raw display-popup unexpectedly SUCCEEDED with no client"
+[ "$raw_rc" -ne 0 ] || st_fail "bug repro: raw display-popup unexpectedly SUCCEEDED with no client"
 case "$raw_out" in *"no current client"*) ;; *)
-  fail "bug repro: expected 'no current client', got [$raw_out]" ;;
+  st_fail "bug repro: expected 'no current client', got [$raw_out]" ;;
 esac
-[ ! -s "$M" ] || fail "bug repro: raw display-popup ran the command despite failing"
+[ ! -s "$M" ] || st_fail "bug repro: raw display-popup ran the command despite failing"
 
 # --- 2. FALLBACK: the helper still runs the command --------------------------
 # This is the regression the whole fix exists for: no client must NOT mean
 # "the keystroke did nothing".
 bash "$HELPER" -w 50% -h 10 -- sh -c "echo fell-back >> '$M'" >/dev/null 2>&1
 grep -q '^fell-back$' "$M" 2>/dev/null \
-  || fail "fallback: dash-popup.sh did not run the command when no client was attached"
+  || st_fail "fallback: dash-popup.sh did not run the command when no client was attached"
 
 # --- 3. ARG SAFETY: spaces survive the %q round-trip -------------------------
 A="$WORK/args"
 bash "$HELPER" -w 50% -h 10 -- sh -c "printf '%s\n' \"\$1\" > '$A'" _ "two words" >/dev/null 2>&1
 [ "$(cat "$A" 2>/dev/null)" = "two words" ] \
-  || fail "arg safety: spaced argument mangled — got [$(cat "$A" 2>/dev/null)]"
+  || st_fail "arg safety: spaced argument mangled — got [$(cat "$A" 2>/dev/null)]"
 
 # --- 4. NO STRANDING: the no-client path never leaves a live epoch -----------
 # @popup_open is read as an open popup while it is a FRESH epoch (#308/#431); a
 # fallback run must not raise it at all.
 v="$(tmux show-option -gqv @popup_open 2>/dev/null)"
-case "$v" in ''|0) ;; *) fail "no stranding: fallback left @popup_open=[$v], expected unset/0" ;; esac
+case "$v" in ''|0) ;; *) st_fail "no stranding: fallback left @popup_open=[$v], expected unset/0" ;; esac
 
 # --- 5. CLIENT PATH (best-effort) --------------------------------------------
 # Needs a real pty client. `script` differs across BSD/GNU, so try both and SKIP
@@ -134,10 +130,10 @@ if attach_bg; then
   # than a spurious FAIL. Only a client that was still attached gets to assert.
   if [ -n "$(tmux list-clients -t t 2>/dev/null)" ]; then
     grep -q '^popped$' "$P" 2>/dev/null \
-      || fail "client path: dash-popup.sh did not run the command with a client attached"
+      || st_fail "client path: dash-popup.sh did not run the command with a client attached"
     v="$(tmux show-option -gqv @popup_open 2>/dev/null)"
     case "$v" in ''|0) ;; *)
-      fail "client path: @popup_open left at [$v] after the popup closed, expected 0" ;;
+      st_fail "client path: @popup_open left at [$v] after the popup closed, expected 0" ;;
     esac
   else
     printf 'selftest: pty client dropped mid-leg — SKIP the attached-client case\n' >&2
@@ -172,12 +168,12 @@ R="$WORK/refused"
 PATH="$REFUSE:$PATH" TMPDIR="$RTMP" bash "$HELPER" -w 72% -h 80% -- \
   sh -c "echo refused-ran >> '$R'" >/dev/null 2>&1
 grep -q '^refused-ran$' "$R" 2>/dev/null \
-  || fail "refused popup: dash-popup.sh scored a silently-refused popup as success — the keystroke did nothing (issue #454)"
+  || st_fail "refused popup: dash-popup.sh scored a silently-refused popup as success — the keystroke did nothing (issue #454)"
 # …and it must not strand the repaint pause or leave its marker behind.
 v="$(tmux show-option -gqv @popup_open 2>/dev/null)"
-case "$v" in ''|0) ;; *) fail "refused popup: @popup_open left at [$v], expected 0" ;; esac
+case "$v" in ''|0) ;; *) st_fail "refused popup: @popup_open left at [$v], expected 0" ;; esac
 if ls "$RTMP"/.dash-popup-ran.* >/dev/null 2>&1; then
-  fail "refused popup: the did-it-run marker leaked into TMPDIR"
+  st_fail "refused popup: the did-it-run marker leaked into TMPDIR"
 fi
 
 # --- 6b. ONE FRAME (issue #1535, EPIC #1529 E6; one style since #1619) -------
@@ -200,31 +196,31 @@ chmod +x "$FRAME/tmux"
 FTMP="$WORK/frame-tmp"; mkdir -p "$FTMP"
 frame() { PATH="$FRAME:$PATH" TMPDIR="$FTMP" FLEET_UI_LANG=zh bash "$HELPER" "$@" >/dev/null 2>&1; }
 frame --client /dev/ttyF --size L --title popup_keys -- true \
-  || fail "frame: --size/--title/--client did not run"
+  || st_fail "frame: --size/--title/--client did not run"
 want="$(printf '%s\n' -c /dev/ttyF -E -b rounded -S 'fg=#565f89' -s 'bg=#1a1b26' -w 94% -h 86% -T '#[align=centre] 快捷键 ')"
 [ "$(head -15 "$FLOG")" = "$want" ] \
-  || fail "frame: the L popup is not rounded/PAL_DIM on PAL_BG 94%×86% titled 「快捷键」 centred: $(head -15 "$FLOG" | tr '\n' ' ')"
+  || st_fail "frame: the L popup is not rounded/PAL_DIM on PAL_BG 94%×86% titled 「快捷键」 centred: $(head -15 "$FLOG" | tr '\n' ' ')"
 # every fzf in the popup reads the palette: FZF_DEFAULT_OPTS is exported ahead of the command
 tail -1 "$FLOG" | grep -q '^export FZF_DEFAULT_OPTS=.*--color=.*bg+:#414868.*--border=none.*--info=hidden.*FLEET_POPUP=1;' \
-  || fail "frame: the popup command does not export the palette fzf options: $(tail -1 "$FLOG")"
+  || st_fail "frame: the popup command does not export the palette fzf options: $(tail -1 "$FLOG")"
 # a narrow client (the iPad's 54 columns) gets 96% × 90% — a fixed row count is kept
 FRAME_CW=54 frame --client /dev/ttyF --size M --title popup_alerts -- true
-[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 96% -h 90%)" ] || fail "frame: a 54-column client is not 96%×90%: $(tr '\n' ' ' < "$FLOG")"
+[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 96% -h 90%)" ] || st_fail "frame: a 54-column client is not 96%×90%: $(tr '\n' ' ' < "$FLOG")"
 FRAME_CW=54 frame --client /dev/ttyF --size S --title popup_new_task -- true
-[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 96% -h 16)" ] || fail "frame: a narrow S popup lost its row count: $(tr '\n' ' ' < "$FLOG")"
+[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 96% -h 16)" ] || st_fail "frame: a narrow S popup lost its row count: $(tr '\n' ' ' < "$FLOG")"
 # a whole-screen panel (the full switcher, -w 100% -h 100%) stays whole on a narrow client
 FRAME_CW=45 frame --client /dev/ttyF -w 100% -h 100% --title popup_quickopen -- true
-[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 100% -h 100%)" ] || fail "frame: a narrow full-screen popup was shrunk: $(tr '\n' ' ' < "$FLOG")"
+[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 100% -h 100%)" ] || st_fail "frame: a narrow full-screen popup was shrunk: $(tr '\n' ' ' < "$FLOG")"
 FRAME_CW=120 frame --client /dev/ttyF --size M --title popup_alerts -- true
-[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 86% -h 60%)" ] || fail "frame: a wide client was resized: $(tr '\n' ' ' < "$FLOG")"
+[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 86% -h 60%)" ] || st_fail "frame: a wide client was resized: $(tr '\n' ' ' < "$FLOG")"
 # -w / -h beside --size win on their axis; an object joins the title; a # in it is
 # literal in the tmux format
 frame --client /dev/ttyF --size S -h 9 --title popup_answer --object '#42' -- true
-[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 84% -h 9)" ] || fail "frame: -h beside --size S did not win: $(tr '\n' ' ' < "$FLOG")"
-grep -qxF -- '#[align=centre] 回答 · ##42 ' "$FLOG" || fail "frame: the object is not 「回答 · #42」: $(tr '\n' ' ' < "$FLOG")"
+[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 84% -h 9)" ] || st_fail "frame: -h beside --size S did not win: $(tr '\n' ' ' < "$FLOG")"
+grep -qxF -- '#[align=centre] 回答 · ##42 ' "$FLOG" || st_fail "frame: the object is not 「回答 · #42」: $(tr '\n' ' ' < "$FLOG")"
 # a title that is no key shows as given; English follows FLEET_UI_LANG
 PATH="$FRAME:$PATH" TMPDIR="$FTMP" FLEET_UI_LANG=en bash "$HELPER" --client /dev/ttyF --size M --title 'Free text' -- true
-grep -qxF -- '#[align=centre] Free text ' "$FLOG" || fail "frame: free-text English title wrong: $(tr '\n' ' ' < "$FLOG")"
+grep -qxF -- '#[align=centre] Free text ' "$FLOG" || st_fail "frame: free-text English title wrong: $(tr '\n' ' ' < "$FLOG")"
 # the machine joins the title only when the hub is on: the sidebar's remote cache
 # names this one (`#me`). Hub off (no cache, above) ⇒ 「动作 · 对象」 only.
 tmux new-session -d -s fr -x 80 -y 20 </dev/null >/dev/null 2>&1
@@ -232,17 +228,17 @@ mkdir -p "$FTMP/.claude-dash/global"
 printf '#ts\0371\n#me\037mac-b\n' > "$FTMP/.claude-dash/global/remote_fr"
 TMUX_PANE=$(tmux list-panes -t fr -F '#{pane_id}' | head -1) frame --size L --title popup_keys -- true
 grep -qxF -- '#[align=centre] 快捷键 · mac-b ' "$FLOG" \
-  || fail "frame: the hub-on title does not name this machine: $(tr '\n' ' ' < "$FLOG")"
+  || st_fail "frame: the hub-on title does not name this machine: $(tr '\n' ' ' < "$FLOG")"
 # --no-inline: a refused popup is never run in the caller (a bind has no pane) —
 # it toasts why on that client and exits 3, and strands nothing
 NR="$WORK/noinline"; rm -f "$FLOG.toast"
 PATH="$REFUSE:$PATH" TMPDIR="$RTMP" bash "$HELPER" --client /dev/ttyFAKE --no-inline --size S -- \
   sh -c "echo ran >> '$NR'" >/dev/null 2>&1; rc=$?
-[ "$rc" = 3 ] || fail "--no-inline: a refused popup exited $rc, want 3"
-[ ! -e "$NR" ] || fail "--no-inline: a refused popup ran its command inline anyway"
+[ "$rc" = 3 ] || st_fail "--no-inline: a refused popup exited $rc, want 3"
+[ ! -e "$NR" ] || st_fail "--no-inline: a refused popup ran its command inline anyway"
 v="$(tmux show-option -gqv @popup_open 2>/dev/null)"
-case "$v" in ''|0) ;; *) fail "--no-inline: @popup_open left at [$v], expected 0" ;; esac
-ls "$RTMP"/.dash-popup-ran.* >/dev/null 2>&1 && fail "--no-inline: the did-it-run marker leaked"
+case "$v" in ''|0) ;; *) st_fail "--no-inline: @popup_open left at [$v], expected 0" ;; esac
+ls "$RTMP"/.dash-popup-ran.* >/dev/null 2>&1 && st_fail "--no-inline: the did-it-run marker leaked"
 cat > "$FRAME/tmux" <<EOF
 #!/bin/bash
 case "\$1" in
@@ -253,7 +249,7 @@ exec "$REAL_TMUX" -S "$SOCK" "\$@"
 EOF
 frame --client /dev/ttyF --no-inline --size S -- true; rc=$?
 [ "$rc" = 3 ] && grep -q '^toast fleet: 弹窗没打开' "$FLOG.toast" 2>/dev/null \
-  || fail "--no-inline: a refusal did not toast on its client (rc=$rc): $(cat "$FLOG.toast" 2>/dev/null)"
+  || st_fail "--no-inline: a refusal did not toast on its client (rc=$rc): $(cat "$FLOG.toast" 2>/dev/null)"
 echo "ok: one frame — rounded PAL_DIM, sizes + narrow 96%×90%, 「动作 · 对象 · 机器」 centred, palette fzf, --no-inline exit 3 + toast"
 
 # --- 6c. ONE DOOR (issue #1535): nothing but fleet-popup-lib.sh calls
@@ -262,18 +258,18 @@ echo "ok: one frame — rounded PAL_DIM, sizes + narrow 96%×90%, 「动作 · �
 ROOT="$(cd "$BIN/.." && pwd)"
 direct=$(grep -n 'display-popup' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
   | grep -v -- '-selftest\.' | grep -v '^[^:]*/fleet-popup-lib\.sh:' | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#')
-[ -z "$direct" ] || fail "one door: display-popup called outside fleet-popup-lib.sh:
+[ -z "$direct" ] || st_fail "one door: display-popup called outside fleet-popup-lib.sh:
 $direct"
 # the EPIC's 「弹窗样式种类」 reading (issue #1619): scripts naming display-popup at all
 kinds=$(grep -l display-popup "$BIN"/*.sh | grep -v -- '-selftest\.' | sed 's#.*/##')
-[ "$kinds" = fleet-popup-lib.sh ] || fail "one style: display-popup named outside fleet-popup-lib.sh: $kinds"
-grep -q 'fleet_popup_draw ' "$HELPER" || fail "one door: dash-popup.sh does not draw through fleet_popup_draw"
+[ "$kinds" = fleet-popup-lib.sh ] || st_fail "one style: display-popup named outside fleet-popup-lib.sh: $kinds"
+grep -q 'fleet_popup_draw ' "$HELPER" || st_fail "one door: dash-popup.sh does not draw through fleet_popup_draw"
 # an INVOCATION (the script path then its args), not a mention in prose — nor a
 # path built to invoke it later (fleet_view.py's Path(…) / "dash-popup.sh")
 untitled=$(grep -n 'dash-popup\.sh' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
   | grep -v -- '-selftest\.' | grep -v '^[^:]*/dash-popup\.sh:' | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#' \
   | grep -E 'dash-popup\.sh(["'"'"')]| --| -w| -h)' | grep -Ev 'Path\(.*"dash-popup\.sh"\)' | grep -v -- '--title')
-[ -z "$untitled" ] || fail "one frame: a popup without --title:
+[ -z "$untitled" ] || st_fail "one frame: a popup without --title:
 $untitled"
 echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh, titled"
 
@@ -329,11 +325,11 @@ for popup_path in "$WORK/bin" "$REFUSE"; do
   # the URL (+ OSC 52); inside, it goes to the client's clipboard buffer
   url='https://example.invalid/a?q=two words&literal=$(false)'
   out=$(env -u TMUX PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" sh "$BIN/open-url.sh" "$url" </dev/null)
-  case "$out" in *"$url"*) ;; *) fail "URL fallback lost its literal argument" ;; esac
+  case "$out" in *"$url"*) ;; *) st_fail "URL fallback lost its literal argument" ;; esac
   out=$(TMUX="$SOCK,1,0" PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" OPEN_URL_REPORT=1 sh "$BIN/open-url.sh" "$url" </dev/null)
   [ "$out" = fallback:copied ] && [ "$(PATH="$WORK/bin:$PATH" tmux show-buffer 2>/dev/null)" = "$url" ] \
-    || fail "URL fallback in tmux did not copy the literal URL: $out / $(PATH="$WORK/bin:$PATH" tmux show-buffer 2>/dev/null)"
-  [ ! -s "$ACTION_LOG" ] || fail "cancelled input invoked gh"
+    || st_fail "URL fallback in tmux did not copy the literal URL: $out / $(PATH="$WORK/bin:$PATH" tmux show-buffer 2>/dev/null)"
+  [ ! -s "$ACTION_LOG" ] || st_fail "cancelled input invoked gh"
 done
 
 printf 'dash-popup-selftest: OK\n'

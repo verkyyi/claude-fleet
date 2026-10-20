@@ -32,6 +32,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 LIB="$BIN/fleet-lib.sh"
 ACCT="$BIN/fleet-account.sh"
 TRUTH="$BIN/fleet-account-truth.py"
@@ -39,12 +40,9 @@ for f in "$LIB" "$ACCT" "$TRUTH" "$BIN/fleet-claude.sh"; do
   [ -f "$f" ] || { printf 'selftest: %s not found\n' "$f" >&2; exit 2; }
 done
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/hub-creds-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/hub-creds-selftest.XXXXXX"
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 export TMPDIR="$WORK"
 export FLEET_CONF_DIR="$WORK/conf"
@@ -60,49 +58,49 @@ chmod 600 "$FLEET_ACCOUNTS_DIR/hubbed" "$FLEET_ACCOUNTS_DIR/plain" "$FLEET_ACCOU
 
 # shellcheck source=/dev/null
 . "$LIB"
-command -v fleet_claude_export_auth >/dev/null 2>&1 || fail "fleet-lib.sh does not define fleet_claude_export_auth"
+command -v fleet_claude_export_auth >/dev/null 2>&1 || st_fail "fleet-lib.sh does not define fleet_claude_export_auth"
 
 # --- EXPORT-HUB / EXPORT-PLAIN ----------------------------------------------------
 got="$( CLAUDE_CODE_OAUTH_TOKEN=tok-inherited; export CLAUDE_CODE_OAUTH_TOKEN
         fleet_claude_export_auth 'hub:hubbed'
         printf '%s|%s' "${CLAUDE_SECURESTORAGE_CONFIG_DIR:-}" "${CLAUDE_CODE_OAUTH_TOKEN:-}" )"
-[ "$got" = "$FLEET_ACCOUNTS_DIR/hubbed.hub|" ] || fail "hub marker exported [$got], want the .hub dir and no env token"
-ok "a hub-managed account exports CLAUDE_SECURESTORAGE_CONFIG_DIR and drops any env token"
+[ "$got" = "$FLEET_ACCOUNTS_DIR/hubbed.hub|" ] || st_fail "hub marker exported [$got], want the .hub dir and no env token"
+st_pass "a hub-managed account exports CLAUDE_SECURESTORAGE_CONFIG_DIR and drops any env token"
 
 got="$( CLAUDE_SECURESTORAGE_CONFIG_DIR=/stale/x.hub; export CLAUDE_SECURESTORAGE_CONFIG_DIR
         fleet_claude_export_auth 'tok-plain'
         printf '%s|%s' "${CLAUDE_SECURESTORAGE_CONFIG_DIR:-}" "${CLAUDE_CODE_OAUTH_TOKEN:-}" )"
-[ "$got" = "|tok-plain" ] || fail "plain token exported [$got], want CLAUDE_CODE_OAUTH_TOKEN only"
-ok "a plain token is exported as before, and a parent's hub dir does not leak through"
+[ "$got" = "|tok-plain" ] || st_fail "plain token exported [$got], want CLAUDE_CODE_OAUTH_TOKEN only"
+st_pass "a plain token is exported as before, and a parent's hub dir does not leak through"
 
 # --- HELPER -----------------------------------------------------------------------
 got="$( CLAUDE_SECURESTORAGE_CONFIG_DIR=/inherited/x.hub; export CLAUDE_SECURESTORAGE_CONFIG_DIR
         fleet_helper_claude_auth
         printf '%s|%s' "${CLAUDE_SECURESTORAGE_CONFIG_DIR:-}" "${CLAUDE_CODE_OAUTH_TOKEN:-}" )"
-[ "$got" = "/inherited/x.hub|" ] || fail "an inherited hub dir was overridden by the helper: [$got]"
-ok "an inherited hub dir always wins (the hook path keeps its worker's account)"
+[ "$got" = "/inherited/x.hub|" ] || st_fail "an inherited hub dir was overridden by the helper: [$got]"
+st_pass "an inherited hub dir always wins (the hook path keeps its worker's account)"
 
 # --- ENV --------------------------------------------------------------------------
 got="$(bash "$ACCT" env 2>/dev/null)"
-[ -z "$got" ] || fail "the retired env printed [$got]"
-ok "fleet-account.sh env is retired: it prints nothing (T550)"
+[ -z "$got" ] || st_fail "the retired env printed [$got]"
+st_pass "fleet-account.sh env is retired: it prints nothing (T550)"
 
 # --- LIST -------------------------------------------------------------------------
 ESC=$(printf '\033')
 strip() { sed "s/${ESC}\[[0-9;]*m//g"; }
 row="$(bash "$ACCT" list 2>/dev/null | strip | awk '$1=="hubbed"')"
-case "$row" in *'ok · hub · expires in ~'*) ;; *) fail "list row for a leased hub account: [$row]" ;; esac
-ok "list shows a hub account as from the hub, with its token's time left"
+case "$row" in *'ok · hub · expires in ~'*) ;; *) st_fail "list row for a leased hub account: [$row]" ;; esac
+st_pass "list shows a hub account as from the hub, with its token's time left"
 row="$(bash "$ACCT" list 2>/dev/null | strip | awk '$1=="plain"')"
-case "$row" in *hub*) fail "a plain account is listed as hub: [$row]" ;; *ok*) ;; *) fail "plain row: [$row]" ;; esac
-ok "a plain account's row is unchanged"
+case "$row" in *hub*) st_fail "a plain account is listed as hub: [$row]" ;; *ok*) ;; *) st_fail "plain row: [$row]" ;; esac
+st_pass "a plain account's row is unchanged"
 printf '{"claudeAiOauth":{"accessToken":"x","expiresAt":1000}}' > "$FLEET_ACCOUNTS_DIR/hubbed.hub/.credentials.json"
 row="$(bash "$ACCT" list 2>/dev/null | strip | awk '$1=="hubbed"')"
-case "$row" in *'expired · hub'*) ;; *) fail "expired hub token row: [$row]" ;; esac
+case "$row" in *'expired · hub'*) ;; *) st_fail "expired hub token row: [$row]" ;; esac
 rm -f "$FLEET_ACCOUNTS_DIR/hubbed.hub/.credentials.json"
 row="$(bash "$ACCT" list 2>/dev/null | strip | awk '$1=="hubbed"')"
-case "$row" in *'NO TOKEN · hub, nothing leased yet'*) ;; *) fail "unleased hub row: [$row]" ;; esac
-ok "list says expired / nothing leased — the agent is not keeping the account current"
+case "$row" in *'NO TOKEN · hub, nothing leased yet'*) ;; *) st_fail "unleased hub row: [$row]" ;; esac
+st_pass "list says expired / nothing leased — the agent is not keeping the account current"
 
 # --- TRUTH ------------------------------------------------------------------------
 got="$(python3 - "$TRUTH" "$FLEET_ACCOUNTS_DIR" <<'PY'
@@ -113,8 +111,8 @@ idx = m.account_index(sys.argv[2])
 print(idx.get(m.digest(tok)) if tok else 'none', m.hub_token([b'CLAUDE_SECURESTORAGE_CONFIG_DIR=/x/y']))
 PY
 )"
-[ "$got" = "hubbed None" ] || fail "truth mapped a hub process to [$got], want 'hubbed None'"
-ok "fleet-account-truth.py maps CLAUDE_SECURESTORAGE_CONFIG_DIR back to its pool label"
+[ "$got" = "hubbed None" ] || st_fail "truth mapped a hub process to [$got], want 'hubbed None'"
+st_pass "fleet-account-truth.py maps CLAUDE_SECURESTORAGE_CONFIG_DIR back to its pool label"
 
 # --- CLAUDE-SH --------------------------------------------------------------------
 # A leased token again; the launch NAMES hubbed (a migrate / handoff pin).
@@ -129,7 +127,7 @@ chmod +x "$WORK/bin/claude"
 ( unset TMUX TMUX_PANE; PATH="$WORK/bin:$PATH" CLAUDE_CODE_OAUTH_TOKEN=tok-inherited FLEET_ACCOUNT_LABEL=hubbed \
     bash "$BIN/fleet-claude.sh" -p hi >/dev/null 2>&1 )
 got="$(cat "$WORK/claude-env" 2>/dev/null)"
-[ "$got" = "$FLEET_ACCOUNTS_DIR/hubbed.hub|" ] || fail "fleet-claude.sh launched claude with [$got]"
-ok "fleet-claude.sh launches claude on the hub-managed file, not an env token"
+[ "$got" = "$FLEET_ACCOUNTS_DIR/hubbed.hub|" ] || st_fail "fleet-claude.sh launched claude with [$got]"
+st_pass "fleet-claude.sh launches claude on the hub-managed file, not an env token"
 
 printf 'selftest OK: %s checks — hub-managed accounts reach claude as a renewable file (issue #1415)\n' "$pass"

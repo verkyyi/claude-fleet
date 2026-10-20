@@ -14,15 +14,14 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 CLI="$BIN/fleet-brief.sh"
 [ -x "$CLI" ] || { echo "selftest: $CLI missing/not executable" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleetbrief-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleetbrief-selftest.XXXXXX"
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 has()  { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 
@@ -81,7 +80,7 @@ run "$WORK/plain"
 [ "$RC" = 4 ] || fail "RAIL nothing bound must exit 4 (got $RC)" "$OUT$ERR"
 case "$ERR" in *FAIL*) : ;; *) fail "RAIL nothing bound must say FAIL" "$ERR" ;; esac
 [ -z "$OUT" ] || fail "RAIL nothing bound prints no brief" "$OUT"
-ok "RAIL nothing bound → FAIL, exit 4, empty stdout"
+st_pass "RAIL nothing bound → FAIL, exit 4, empty stdout"
 
 # ===== TASK ====================================================================
 : > "$WORK/gh.calls"
@@ -99,7 +98,7 @@ has 'claim'                    && fail "TASK no claim anywhere" "$OUT"
 FAKE_AT_TASK=T42 FAKE_AT_REPO=$REPO TR_RC=1 run "$WORK/widgets-scratch-3"
 [ "$RC" = 5 ] || fail "TASK an unreadable record exits 5 (got $RC)" "$OUT$ERR"
 has 'DIRECTIVE-MARKER' || fail "TASK an unreadable record still prints the rest" "$OUT"
-ok "TASK the record, the flow, the directive; unreadable → 5"
+st_pass "TASK the record, the flow, the directive; unreadable → 5"
 
 # ===== ISSUE ===================================================================
 FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=scratch-4 run "$WORK/widgets-issue-12"
@@ -109,16 +108,16 @@ has 'Closes #77'        || fail "ISSUE the flow carries Closes #N" "$OUT"
 has 'origin: scratch-4' || fail "ISSUE the origin" "$OUT"
 FAKE_AT_ISSUE='' run "$WORK/widgets-issue-12"
 has 'issue=12' || fail "ISSUE the issue-<N> worktree is the fallback" "$OUT"
-ok "ISSUE words-only: Closes #N, @issue first, worktree fallback"
+st_pass "ISSUE words-only: Closes #N, @issue first, worktree fallback"
 
 [ -s "$WORK/gh.calls" ] && fail "NO GH the brief never runs gh" "$(cat "$WORK/gh.calls")"
-ok "NO GH no shape runs gh"
+st_pass "NO GH no shape runs gh"
 
 FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12" --bogus
 [ "$RC" = 2 ] || fail "an unknown argument exits 2 (got $RC)" "$ERR"
 run "$WORK/plain" -h
 [ "$RC" = 0 ] || fail "--help exits 0 (got $RC)" "$ERR"
-ok "args"
+st_pass "args"
 
 printf '\nfleet-brief-selftest: %d checks passed\n' "$pass"
 exit 0

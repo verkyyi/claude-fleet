@@ -20,13 +20,12 @@
 #   H. no leak   the viewer token is in no curl argv and written to no file
 set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SUT="$BIN/fleet-node-revoke.sh"
 CHECKS=0
 fail() { printf 'fleet-node-revoke selftest FAIL: %s\n' "$1" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-node-revoke-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-node-revoke-selftest.XXXXXX"
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
 mkdir -p "$HOME" "$FLEET_CONF_DIR"
 unset CCQUOTA_FLEET CCQUOTA_TOKEN CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_URL FLEET_HUB_CURL FLEET_HUB_TIMEOUT
@@ -44,7 +43,7 @@ for args in '' '"bad name!"' 'm9 mac-a' '--frob m9' 'm9 --reason' 'm9:al:ice'; d
   [ "$rc" -eq 2 ] || fail "A: '$args' exit $rc, want 2: $(cat "$WORK/err")"
   [ ! -e "$STUB_LOG" ] || fail "A: '$args' called curl"
 done
-ok
+st_count
 
 # B. no token / no URL
 reset
@@ -54,7 +53,7 @@ reset
 CCQUOTA_VIEWER_TOKEN=$VIEWER "$SUT" m9:alice >/dev/null 2>"$WORK/err"; rc=$?
 [ "$rc" -eq 1 ] && grep -q 'no hub URL' "$WORK/err" || fail "B: no URL: exit $rc $(cat "$WORK/err")"
 [ ! -e "$STUB_LOG" ] || fail "B: curl called without a URL"
-ok
+st_count
 
 export CCQUOTA_VIEWER_TOKEN=$VIEWER CCQUOTA_HUB_URL=http://hub.test/
 
@@ -68,7 +67,7 @@ out=$("$SUT" M9.local:alice --reason lost 2>"$WORK/err"); rc=$?
 grep -qx 'GET http://hub.test/v1/nodes ' "$STUB_BODY" || fail "C: roster read: $(cat "$STUB_BODY")"
 grep -qx 'POST http://hub.test/v1/fleet/nodes/revoke {"endpoint_id": "ep_9", "reason": "lost"}' "$STUB_BODY" || fail "C: request: $(cat "$STUB_BODY")"
 grep -qx "Authorization: Bearer $VIEWER" "$STUB_HDR" || fail "C: header: $(cat "$STUB_HDR")"
-ok
+st_count
 
 # D. by id, already revoked
 reset
@@ -77,7 +76,7 @@ out=$("$SUT" ep_7 2>"$WORK/err"); rc=$?
 [ "$rc" -eq 0 ] && [ "$out" = 'revoke: ALREADY ?:? ep_7' ] || fail "D: exit $rc out=$out $(cat "$WORK/err")"
 grep -q '/v1/nodes ' "$STUB_BODY" && fail "D: read the roster for an id"
 grep -qx 'POST http://hub.test/v1/fleet/nodes/revoke {"endpoint_id": "ep_7"}' "$STUB_BODY" || fail "D: request: $(cat "$STUB_BODY")"
-ok
+st_count
 
 # E. ambiguous / not on the roster
 reset
@@ -91,7 +90,7 @@ reset
 fake nodes "$ROSTER"
 "$SUT" m7 >/dev/null 2>"$WORK/err"; rc=$?
 [ "$rc" -eq 5 ] && grep -q 'not on the hub' "$WORK/err" || fail "E: unknown: exit $rc $(cat "$WORK/err")"
-ok
+st_count
 
 # F. refused
 for c in 401 403; do
@@ -105,14 +104,14 @@ reset; fake revoke '{"error":"no such endpoint"}' 404
 reset; fake revoke '{"ok":true}'
 "$SUT" ep_9 >/dev/null 2>"$WORK/err"; rc=$?
 [ "$rc" -eq 4 ] && grep -q 'predates' "$WORK/err" || fail "F: old hub: exit $rc $(cat "$WORK/err")"
-ok
+st_count
 
 # G. down
 reset; export FAKE_RC=7
 out=$("$SUT" m9:alice 2>"$WORK/err"); rc=$?
 [ "$rc" -eq 1 ] && grep -q 'hub unreachable' "$WORK/err" && [ -z "$out" ] || fail "G: exit $rc out=$out $(cat "$WORK/err")"
 unset FAKE_RC
-ok
+st_count
 
 # H. no leak
 reset
@@ -121,6 +120,6 @@ fake revoke '{"endpoint_id":"ep_9","already":true}'
 "$SUT" m9:alice >/dev/null 2>&1
 if grep -q 'SECRET' "$STUB_LOG"; then fail "H: the token reached curl's argv: $(cat "$STUB_LOG")"; fi
 if grep -rq "$VIEWER" "$HOME" "$FLEET_CONF_DIR" 2>/dev/null; then fail "H: the viewer token was written to a file"; fi
-ok
+st_count
 
 printf 'fleet-node-revoke selftest: PASS (%d checks)\n' "$CHECKS"

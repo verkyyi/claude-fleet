@@ -22,18 +22,18 @@
 #      write-back shapes /fleet-epic-run parses stay exactly as they were.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$BIN/.."
 T="$ROOT/plugins/fleet-epic/skills/epic-page/template.html"
 SK="$ROOT/plugins/fleet-epic/skills/epic-page/SKILL.md"
 PLAN="$ROOT/plugins/fleet-epic/commands/fleet-epic-plan.md"
 REPORT="$ROOT/plugins/fleet-epic/commands/fleet-epic-report.md"
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-has() { CHECKS=$((CHECKS + 1)); grep -q -- "$2" "$1" || fail "$3 — [$2] not in ${1#"$ROOT"/}"; }
-hasF() { CHECKS=$((CHECKS + 1)); grep -q -F -- "$2" "$1" || fail "$3 — [$2] not in ${1#"$ROOT"/}"; }
+has() { CHECKS=$((CHECKS + 1)); grep -q -- "$2" "$1" || st_fail "$3 — [$2] not in ${1#"$ROOT"/}"; }
+hasF() { CHECKS=$((CHECKS + 1)); grep -q -F -- "$2" "$1" || st_fail "$3 — [$2] not in ${1#"$ROOT"/}"; }
 
-[ -f "$T" ] || fail "plugins/fleet-epic/skills/epic-page/template.html is missing"
-[ -f "$SK" ] || fail "plugins/fleet-epic/skills/epic-page/SKILL.md is missing"
+[ -f "$T" ] || st_fail "plugins/fleet-epic/skills/epic-page/template.html is missing"
+[ -f "$SK" ] || st_fail "plugins/fleet-epic/skills/epic-page/SKILL.md is missing"
 
 # 1. section ids — one per plan section, in the order the command lists them
 for id in metrics charter members risks signoff preflight order; do
@@ -85,7 +85,7 @@ hasF "$REPORT" 'starts **private**' "report: the page starts private"
 hasF "$PLAN"   'again to the same page' "plan: a revision keeps the same link"
 
 # 5. the skill registers, on both install paths
-CHECKS=$((CHECKS + 1)); head -1 "$SK" | grep -q '^---$' || fail "SKILL.md has no frontmatter"
+CHECKS=$((CHECKS + 1)); head -1 "$SK" | grep -q '^---$' || st_fail "SKILL.md has no frontmatter"
 hasF "$SK" 'name: epic-page' "SKILL.md name matches its directory"
 hasF "$SK" '<!-- fleet skill -->' "SKILL.md carries the copy-install marker"
 
@@ -96,7 +96,7 @@ order() {  # <label> <id>... — each section starts after the previous one
   for id in "$@"; do
     CHECKS=$((CHECKS + 1))
     at=$(grep -n -F "<section id=\"$id\">" "$T" | head -1 | cut -d: -f1)
-    [ -n "$at" ] && [ "$at" -gt "$prev" ] || fail "template: $label order breaks at #$id"
+    [ -n "$at" ] && [ "$at" -gt "$prev" ] || st_fail "template: $label order breaks at #$id"
     prev=$at
   done
 }
@@ -109,7 +109,7 @@ hasF "$T" '<thead><tr><th>还差什么</th><th>建议下一步</th></tr></thead>
 # (no <section id="next|obstacles">, no 不算欠 / 建议，不是决定: conf/gone.list #929)
 CHECKS=$((CHECKS + 1))
 awk '/<section id="next">|<span id="next">/{f=1} f&&/<\/section>/{exit} f' "$T" | grep -q 'class="lede"' \
-  && fail "template: 还差什么 · 下一步 has a lede"
+  && st_fail "template: 还差什么 · 下一步 has a lede"
 hasF "$REPORT" '还差什么 | 建议下一步' "report: step 2 describes the merged table"
 hasF "$SK" '<span id="next">' "SKILL.md sections table: #next is an anchor"
 # 6i. #preflight renders only with something to handle (issue #929); the screen then
@@ -119,7 +119,7 @@ hasF "$SK" 'only when there is something to handle' "SKILL.md: #preflight is con
 hasF "$T" 'ONLY WHEN THERE IS' "template: the preflight comment says when to drop it"
 CHECKS=$((CHECKS + 1))
 awk '/<section id="order">/{f=1} f' "$T" | grep -q -F '<h3>预检原文</h3>' \
-  || fail "template: the #order fold has no home for 预检原文"
+  || st_fail "template: the #order fold has no home for 预检原文"
 # 6b. the band in plain words; the old jargon labels are gone from it
 for k in 要做的事 有空再做 要看的指标 开跑前要处理; do
   hasF "$T" "<div class=\"k\">$k</div>" "template: band label $k"
@@ -132,10 +132,10 @@ hasF "$T" 'details.card:not([open])>*' "template: print force-opens the card fol
 hasF "$T" '<h3 class="grp">有空再做</h3>' "template: the reserve is the last group of the same list"
 CHECKS=$((CHECKS + 1))
 if grep -F '<summary><span class="ct">' "$T" | grep -qE '[CR][0-9]'; then
-  fail "template: a card summary shows a member key"
+  st_fail "template: a card summary shows a member key"
 fi
 CHECKS=$((CHECKS + 1))
-grep -E '^<h[23]' "$T" | grep -qE '(^|[^A-Za-z])[CR][0-9]' && fail "template: a heading shows a member key"
+grep -E '^<h[23]' "$T" | grep -qE '(^|[^A-Za-z])[CR][0-9]' && st_fail "template: a heading shows a member key"
 hasF "$T" '<dt>编号 / 来源</dt>' "template: the key lives in 技术细节"
 # 6d. metric table: numbers on the surface, 口径 folded
 hasF "$T" '<thead><tr><th>指标</th><th>现在</th><th>目标</th></tr></thead>' "template: metric header 指标/现在/目标"
@@ -146,7 +146,7 @@ hasF "$T" '（批后）' "template: shows the 「（批后）」 mark"
 hasF "$T" '<summary>预检原文</summary>' "template: the preflight screen is folded"
 CHECKS=$((CHECKS + 1))
 grep -A1 -F '<section id="order">' "$T" | grep -q -F '<details class="fold">' \
-  || fail "template: #order is not folded whole"
+  || st_fail "template: #order is not folded whole"
 # 6f. the plan command carries the rules, and write-back is unchanged
 hasF "$PLAN" '#881' "plan: step 4 cites the decider's-view issue"
 hasF "$PLAN" '点头即全部按建议' "plan: the nod accepts every default"
@@ -164,7 +164,7 @@ hasF "$PLAN" 'The concurrency caps are not this skill' "plan: leaves the session
 hasF "$RUN" "never changed or questioned" "run: refills within the caps, never changes them"
 for f in "$PLAN" "$RUN" "$T"; do
   CHECKS=$((CHECKS + 1))
-  grep -qE 'FLEET_(GLOBAL_)?MAX_SESSIONS=[0-9]' "$f" && fail "${f#"$ROOT"/} suggests a session-cap value"
+  grep -qE 'FLEET_(GLOBAL_)?MAX_SESSIONS=[0-9]' "$f" && st_fail "${f#"$ROOT"/} suggests a session-cap value"
 done
 
 printf 'epic-page-selftest OK (%d checks)\n' "$CHECKS"

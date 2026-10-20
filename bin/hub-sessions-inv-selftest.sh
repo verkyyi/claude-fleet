@@ -17,6 +17,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'hub-sessions-inv selftest: python3 absent — SKIP'; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hubinv-selftest.XXXXXX")" || exit 2
@@ -48,7 +49,6 @@ chmod +x "$WORK/sbin/fleet-control-read.sh"
 HUBS="$WORK/sbin/fleet-hub-sessions.sh"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 reads() { [ -f "$READS" ] && grep -c . "$READS" || echo 0; }
 age() { python3 -c 'import os, sys, time; t = time.time() - int(sys.argv[2]); os.utime(sys.argv[1], (t, t))' "$1" "$2"; }
 NUDGE="$WORK/conf/global/hub-nudge"
@@ -71,9 +71,9 @@ leg_A() {
 rm -f "$READS"
 FLEET_HUB_SESSIONS_LOOP_SECS=5 bash "$HUBS" --loop >/dev/null 2>&1
 n=$(reads)
-CHECKS=$((CHECKS+1)); [ "$n" = 1 ] || fail "A: a loop of ~5 rounds with no nudge read the inventory $n times, want 1"
+CHECKS=$((CHECKS+1)); [ "$n" = 1 ] || st_fail "A: a loop of ~5 rounds with no nudge read the inventory $n times, want 1"
 CHECKS=$((CHECKS+1)); grep -q "^$S	@7	42	" "$G/hubsess.inv.$S" 2>/dev/null \
-  || fail "A: the kept inventory does not hold the window row" "$(cat "$G/hubsess.inv.$S" 2>/dev/null)"
+  || st_fail "A: the kept inventory does not hold the window row" "$(cat "$G/hubsess.inv.$S" 2>/dev/null)"
 
 }
 
@@ -85,7 +85,7 @@ rm -f "$READS" "$G/hubsess.inv.$S"
 FLEET_HUB_SESSIONS_LOOP_SECS=5 bash "$HUBS" --loop >/dev/null 2>&1
 wait
 n=$(reads)
-CHECKS=$((CHECKS+1)); [ "$n" -ge 2 ] && [ "$n" -le 3 ] || fail "B: a nudge mid-loop — the inventory was read $n times, want 2 (once at the start, once after the nudge)"
+CHECKS=$((CHECKS+1)); [ "$n" -ge 2 ] && [ "$n" -le 3 ] || st_fail "B: a nudge mid-loop — the inventory was read $n times, want 2 (once at the start, once after the nudge)"
 
 }
 
@@ -95,7 +95,7 @@ leg_C() {
 rm -f "$READS"
 bash "$HUBS" --refresh >/dev/null 2>&1; bash "$HUBS" --refresh >/dev/null 2>&1
 n=$(reads)
-CHECKS=$((CHECKS+1)); [ "$n" = 2 ] || fail "C: two bare --refresh read the inventory $n times, want 2"
+CHECKS=$((CHECKS+1)); [ "$n" = 2 ] || st_fail "C: two bare --refresh read the inventory $n times, want 2"
 
 }
 
@@ -104,8 +104,8 @@ leg_D() {
 rm -f "$NUDGE" "$READS" "$G/hubsess.inv.$S"
 FLEET_HUB_SESSIONS_LOOP_SECS=4 bash "$HUBS" --loop >/dev/null 2>&1
 n=$(reads)
-CHECKS=$((CHECKS+1)); [ "$n" -ge 3 ] || fail "D: no hub-nudge file — the inventory was read $n times in ~4 rounds, want every round"
-CHECKS=$((CHECKS+1)); [ ! -e "$G/hubsess.inv.$S" ] || fail "D: no hub-nudge file, yet an inventory was kept"
+CHECKS=$((CHECKS+1)); [ "$n" -ge 3 ] || st_fail "D: no hub-nudge file — the inventory was read $n times in ~4 rounds, want every round"
+CHECKS=$((CHECKS+1)); [ ! -e "$G/hubsess.inv.$S" ] || st_fail "D: no hub-nudge file, yet an inventory was kept"
 
 }
 
@@ -115,7 +115,7 @@ leg_E() {
 rm -f "$READS"
 FLEET_HUB_SESSIONS_INV_TTL=0 FLEET_HUB_SESSIONS_LOOP_SECS=4 bash "$HUBS" --loop >/dev/null 2>&1
 n=$(reads)
-CHECKS=$((CHECKS+1)); [ "$n" -ge 3 ] || fail "E: FLEET_HUB_SESSIONS_INV_TTL=0 — the inventory was read $n times in ~4 rounds, want every round"
+CHECKS=$((CHECKS+1)); [ "$n" -ge 3 ] || st_fail "E: FLEET_HUB_SESSIONS_INV_TTL=0 — the inventory was read $n times in ~4 rounds, want every round"
 
 }
 

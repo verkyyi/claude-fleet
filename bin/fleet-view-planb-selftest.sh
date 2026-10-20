@@ -20,6 +20,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-view-planb selftest: python3 absent — SKIP'; exit 0; }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fvplanb-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -27,10 +28,9 @@ export FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_U
 unset NO_COLOR FLEET_COLOR FLEET_GLYPHS
 mkdir -p "$WORK/conf"
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 pass() { echo "ok   $*"; }
 
-python3 - "$BIN" <<'PY' || fail "plan B rows"
+python3 - "$BIN" <<'PY' || st_fail "plan B rows"
 import importlib.util, os, sys, time, unicodedata
 B = sys.argv[1]
 def load(name, f):

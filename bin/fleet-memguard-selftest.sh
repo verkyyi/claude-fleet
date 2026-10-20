@@ -27,6 +27,7 @@
 #                                   cleared below; under the line never badged (#1297)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 MG="$BIN/fleet-memguard.sh"
 [ -f "$MG" ] || { echo "selftest: $MG not found" >&2; exit 2; }
 
@@ -43,7 +44,6 @@ trap cleanup EXIT
 
 CHECKS=0
 fail() { cat "$WORK/notified" >&2 2>/dev/null; printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '%s\n' "$2" >&2; exit 1; }
-ok() { CHECKS=$((CHECKS + 1)); }
 alive() { kill -0 "$1" 2>/dev/null; }
 ME="$(id -u)"
 
@@ -95,25 +95,25 @@ else
 fi
 out=$(run FLEET_MEM_PROBE_CMD="$WARN" bash "$MG" --once 2>&1)
 sleep 0.2
-alive "$V" && fail "1: a +5 GB/3s fleet command under pressure must be SIGKILLed" "$out"; ok
-printf '%s' "$out" | grep -q "^spike	kill	$V" || fail "1: --once must print the spike row and its action" "$out"; ok
-ls "$CONF"/diskguard/incident-mem-*.log >/dev/null 2>&1 || fail "1: no incident-mem log written"; ok
-grep -q "killed (SIGKILL" "$CONF"/diskguard/incident-mem-*.log || fail "1: the incident must say it was killed"; ok
-[ "$(nnotify)" = 1 ] || fail "1: expected exactly one notification, got $(nnotify)"; ok
-grep -q "git grep" "$WORK/notified" || fail "1: the notification must name the command"; ok
+alive "$V" && fail "1: a +5 GB/3s fleet command under pressure must be SIGKILLed" "$out"; st_count
+printf '%s' "$out" | grep -q "^spike	kill	$V" || fail "1: --once must print the spike row and its action" "$out"; st_count
+ls "$CONF"/diskguard/incident-mem-*.log >/dev/null 2>&1 || fail "1: no incident-mem log written"; st_count
+grep -q "killed (SIGKILL" "$CONF"/diskguard/incident-mem-*.log || fail "1: the incident must say it was killed"; st_count
+[ "$(nnotify)" = 1 ] || fail "1: expected exactly one notification, got $(nnotify)"; st_count
+grep -q "git grep" "$WORK/notified" || fail "1: the notification must name the command"; st_count
 if [ -n "$PANE_PID" ]; then
   mk="$("$REAL_TMUX" -L "$SOCK" show-options -wv -t "$SOCK:0" @mem_killed 2>/dev/null)"
-  printf '%s' "$mk" | grep -q "exit 137: git grep" || fail "1: the pane's window must carry @mem_killed naming the command — got [$mk]"; ok
+  printf '%s' "$mk" | grep -q "exit 137: git grep" || fail "1: the pane's window must carry @mem_killed naming the command — got [$mk]"; st_count
 fi
 
 # 2. same spike, pressure normal → recorded only ---------------------------------
 fresh 2; victim "$WORK/w2"
 { agent_row; row "$V" "$AGENT" 5120 "00:03" "git grep -l -E foo"; } > "$WORK/table.1"
 out=$(run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once 2>&1)
-alive "$V" || fail "2: a spike on a relaxed machine must NOT be killed" "$out"; ok
-printf '%s' "$out" | grep -q "^spike-relaxed	record	$V" || fail "2: it must be listed as recorded" "$out"; ok
-grep -q "recorded only" "$CONF"/diskguard/incident-mem-*.log 2>/dev/null || fail "2: the record must reach the incident log"; ok
-[ "$(nnotify)" = 0 ] || fail "2: a record must not notify"; ok
+alive "$V" || fail "2: a spike on a relaxed machine must NOT be killed" "$out"; st_count
+printf '%s' "$out" | grep -q "^spike-relaxed	record	$V" || fail "2: it must be listed as recorded" "$out"; st_count
+grep -q "recorded only" "$CONF"/diskguard/incident-mem-*.log 2>/dev/null || fail "2: the record must reach the incident log"; st_count
+[ "$(nnotify)" = 0 ] || fail "2: a record must not notify"; st_count
 
 # 3. slow growth to 12 GB under pressure → alive (the ring) ------------------------
 fresh 3; victim "$WORK/w3"
@@ -121,8 +121,8 @@ fresh 3; victim "$WORK/w3"
 { agent_row; row "$V" "$AGENT" 11500 "01:00:01" "cargo build --release"; } > "$WORK/table.2"
 { agent_row; row "$V" "$AGENT" 12288 "01:00:02" "cargo build --release"; } > "$WORK/table.3"
 run FLEET_MEM_PROBE_CMD="$WARN" FLEET_MEM_INTERVAL=1 FLEET_MEM_MAX_TICKS=3 bash "$MG" --daemon >/dev/null 2>&1
-alive "$V" || fail "3: a build growing slowly to 12 GB must never be killed"; ok
-[ "$(nnotify)" = 0 ] || fail "3: nothing to say about a slow build"; ok
+alive "$V" || fail "3: a build growing slowly to 12 GB must never be killed"; st_count
+[ "$(nnotify)" = 0 ] || fail "3: nothing to say about a slow build"; st_count
 
 # 3b. the same ring, fast: 1 → 3 → 6 GB on a process older than the window → killed
 fresh 3b; victim "$WORK/w3b"
@@ -131,7 +131,7 @@ fresh 3b; victim "$WORK/w3b"
 { agent_row; row "$V" "$AGENT" 6000 "01:00:02" "node leaky.js"; } > "$WORK/table.3"
 run FLEET_MEM_PROBE_CMD="$WARN" FLEET_MEM_INTERVAL=1 FLEET_MEM_MAX_TICKS=3 bash "$MG" --daemon >/dev/null 2>&1
 sleep 0.2
-alive "$V" && fail "3b: +5 GB inside the window (seen across samples) under pressure must be killed"; ok
+alive "$V" && fail "3b: +5 GB inside the window (seen across samples) under pressure must be killed"; st_count
 
 # 3c. small → big between two samples (never in the ≥256 MB ring) → killed
 fresh 3c; victim "$WORK/w3c"
@@ -139,36 +139,36 @@ fresh 3c; victim "$WORK/w3c"
 { agent_row; row "$V" "$AGENT" 5000 "01:00:01" "node leaky.js"; } > "$WORK/table.2"
 run FLEET_MEM_PROBE_CMD="$WARN" FLEET_MEM_INTERVAL=1 FLEET_MEM_MAX_TICKS=2 bash "$MG" --daemon >/dev/null 2>&1
 sleep 0.2
-alive "$V" && fail "3c: a 100 MB process that jumps to 5 GB between samples must be killed"; ok
+alive "$V" && fail "3c: a 100 MB process that jumps to 5 GB between samples must be killed"; st_count
 
 # 3d. …but a fresh daemon's FIRST sample is not growth: 12 GB seen once, old → alive
 fresh 3d; victim "$WORK/w3d"
 { agent_row; row "$V" "$AGENT" 12288 "01:00:00" "cargo build"; } > "$WORK/table.1"
 run FLEET_MEM_PROBE_CMD="$WARN" FLEET_MEM_INTERVAL=1 FLEET_MEM_MAX_TICKS=1 bash "$MG" --daemon >/dev/null 2>&1
-alive "$V" || fail "3d: the first sample of a fresh daemon must not read as growth from 0"; ok
+alive "$V" || fail "3d: the first sample of a fresh daemon must not read as growth from 0"; st_count
 
 # 4. claude at 40 GB → alive, recorded -------------------------------------------
 fresh 4; victim "$WORK/w4"
 { row 4000000 1 5 "01:00:00" "tmux -L x new-session"; row "$V" 4000000 40960 "00:05" "claude --model opus --resume abc"; } > "$WORK/table.1"
 out=$(run FLEET_MEM_PROBE_CMD="$WARN" bash "$MG" --once 2>&1)
-alive "$V" || fail "4: a claude session is NEVER killed by memguard" "$out"; ok
-printf '%s' "$out" | grep -q "record	$V" || fail "4: but it must be recorded" "$out"; ok
-[ "$(nnotify)" = 0 ] || fail "4: a recorded agent must not notify"; ok
+alive "$V" || fail "4: a claude session is NEVER killed by memguard" "$out"; st_count
+printf '%s' "$out" | grep -q "record	$V" || fail "4: but it must be recorded" "$out"; st_count
+[ "$(nnotify)" = 0 ] || fail "4: a recorded agent must not notify"; st_count
 
 # 5. exempt → alive -------------------------------------------------------------
 fresh 5; victim "$WORK/w5"
 { agent_row; row "$V" "$AGENT" 40000 "00:03" "mybuild --huge"; } > "$WORK/table.1"
 out=$(run FLEET_MEM_PROBE_CMD="$WARN" FLEET_MEM_EXEMPT_RE='mybuild' bash "$MG" --once 2>&1)
-alive "$V" || fail "5: FLEET_MEM_EXEMPT_RE must protect a matching process" "$out"; ok
-printf '%s' "$out" | grep -q -- "-exempt	record	$V" || fail "5: the exempt row is recorded as such" "$out"; ok
+alive "$V" || fail "5: FLEET_MEM_EXEMPT_RE must protect a matching process" "$out"; st_count
+printf '%s' "$out" | grep -q -- "-exempt	record	$V" || fail "5: the exempt row is recorded as such" "$out"; st_count
 
 # 6. ≥ 50% of physical memory → killed, no growth, no pressure -------------------
 fresh 6; victim "$WORK/w6"
 { agent_row; row "$V" "$AGENT" 33000 "02:00:00" "python3 crunch.py"; } > "$WORK/table.1"
 out=$(run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once 2>&1)
 sleep 0.2
-alive "$V" && fail "6: a fleet process at ≥50% of RAM must be killed whatever the pressure" "$out"; ok
-printf '%s' "$out" | grep -q "^hard	kill	$V" || fail "6: listed as rule hard" "$out"; ok
+alive "$V" && fail "6: a fleet process at ≥50% of RAM must be killed whatever the pressure" "$out"; st_count
+printf '%s' "$out" | grep -q "^hard	kill	$V" || fail "6: listed as rule hard" "$out"; st_count
 
 # 7. orphans: anchored old + big → reported, alive; un-anchored → nothing --------
 fresh 7
@@ -176,38 +176,38 @@ victim "$WORK/proj-issue-77/sub"; VO=$V; victim "$WORK/plain"; VN=$V
 { row "$VO" 1 3000 "1-00:00:00" "chrome-headless-shell --remote-debugging-port=0"
   row "$VN" 1 3000 "1-00:00:00" "chrome-headless-shell --remote-debugging-port=0"; } > "$WORK/table.1"
 out=$(run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once 2>&1)
-alive "$VO" || fail "7: an orphan is report-only by default" "$out"; ok
-printf '%s' "$out" | grep -q "^orphan	report	$VO" || fail "7: the anchored orphan must be reported" "$out"; ok
-printf '%s' "$out" | grep -q "	$VN	" && fail "7: an orphan with no fleet anchor is not ours" "$out"; ok
-[ "$(nnotify)" = 1 ] || fail "7: one report notification, got $(nnotify)"; ok
-alive "$VN" || fail "7: the non-fleet orphan must be untouched"; ok
+alive "$VO" || fail "7: an orphan is report-only by default" "$out"; st_count
+printf '%s' "$out" | grep -q "^orphan	report	$VO" || fail "7: the anchored orphan must be reported" "$out"; st_count
+printf '%s' "$out" | grep -q "	$VN	" && fail "7: an orphan with no fleet anchor is not ours" "$out"; st_count
+[ "$(nnotify)" = 1 ] || fail "7: one report notification, got $(nnotify)"; st_count
+alive "$VN" || fail "7: the non-fleet orphan must be untouched"; st_count
 
 # 8. non-fleet 40 GB → untouched ------------------------------------------------
 fresh 8; victim "$WORK/w8"
 { row 4100000 1 100 "05:00:00" "/Applications/Terminal.app/Contents/MacOS/Terminal"
   row "$V" 4100000 40960 "00:03" "java -jar big.jar"; } > "$WORK/table.1"
 out=$(run FLEET_MEM_PROBE_CMD="$WARN" bash "$MG" --once 2>&1)
-alive "$V" || fail "8: a process no session started is not memguard's" "$out"; ok
-printf '%s' "$out" | grep -q "	$V	" && fail "8: …and is not even listed" "$out"; ok
+alive "$V" || fail "8: a process no session started is not memguard's" "$out"; st_count
+printf '%s' "$out" | grep -q "	$V	" && fail "8: …and is not even listed" "$out"; st_count
 
 # 9. ACTION=report never kills ----------------------------------------------------
 fresh 9; victim "$WORK/w9"; V1=$V; victim "$WORK/w9b"; V2=$V; V=$V1
 { agent_row; row "$V" "$AGENT" 5120 "00:03" "git grep x"; row "$V2" "$AGENT" 40000 "02:00:00" "big"; } > "$WORK/table.1"
 out=$(run FLEET_MEM_PROBE_CMD="$WARN" FLEET_MEM_SPIKE_ACTION=report bash "$MG" --once 2>&1)
-alive "$V" && alive "$V2" || fail "9: FLEET_MEM_SPIKE_ACTION=report must never kill (spike nor hard)" "$out"; ok
+alive "$V" && alive "$V2" || fail "9: FLEET_MEM_SPIKE_ACTION=report must never kill (spike nor hard)" "$out"; st_count
 
 # 10. the same pid twice → one notification ----------------------------------------
 run FLEET_MEM_PROBE_CMD="$WARN" FLEET_MEM_SPIKE_ACTION=report bash "$MG" --once >/dev/null 2>&1
-[ "$(nnotify)" = 2 ] || fail "10: two processes reported over two passes must notify twice in total, got $(nnotify)"; ok
+[ "$(nnotify)" = 2 ] || fail "10: two processes reported over two passes must notify twice in total, got $(nnotify)"; st_count
 
 # 11. --dry-run → kills nothing, writes nothing -----------------------------------
 fresh 11; victim "$WORK/w11"
 { agent_row; row "$V" "$AGENT" 40000 "00:03" "git grep y"; } > "$WORK/table.1"
 out=$(run FLEET_MEM_PROBE_CMD="$WARN" bash "$MG" --once --dry-run 2>&1)
-alive "$V" || fail "11: --dry-run must not kill" "$out"; ok
-printf '%s' "$out" | grep -q "would-kill	$V" || fail "11: --dry-run must say what it would do" "$out"; ok
-[ -d "$CONF/diskguard" ] && fail "11: --dry-run must write nothing"; ok
-[ "$(nnotify)" = 0 ] || fail "11: --dry-run must not notify"; ok
+alive "$V" || fail "11: --dry-run must not kill" "$out"; st_count
+printf '%s' "$out" | grep -q "would-kill	$V" || fail "11: --dry-run must say what it would do" "$out"; st_count
+[ -d "$CONF/diskguard" ] && fail "11: --dry-run must write nothing"; st_count
+[ "$(nnotify)" = 0 ] || fail "11: --dry-run must not notify"; st_count
 
 # 12. the lib's classification is what the rules lean on --------------------------
 { row 10 1 5 "01:00:00" "tmux -L f new-session"; row 11 10 600 "01:00:00" "/Users/x/.local/share/claude/versions/2.1.0 --model opus"
@@ -215,9 +215,9 @@ printf '%s' "$out" | grep -q "would-kill	$V" || fail "11: --dry-run must say wha
   row 15 1 100 "00:10" "node /usr/lib/node_modules/@openai/codex/bin/codex.js"; } > "$WORK/t12"
 cls=$(FLEET_MEM_PS_CMD="cat $WORK/t12" bash -c ". '$BIN/fleet-lib.sh'; fleet_proc_mem_rows" | awk -F'\t' '{print $1 "=" $5}' | sort | tr '\n' ' ')
 [ "$cls" = "10=other 11=agent 12=fleet 13=orphan 14=other 15=agent " ] \
-  || fail "12: classification drifted — got [$cls] (a default-socket tmux is not a fleet; the native build is an agent)"; ok
+  || fail "12: classification drifted — got [$cls] (a default-socket tmux is not a fleet; the native build is an agent)"; st_count
 pr=$(FLEET_MEM_PROBE_CMD='echo 4 5 97 0' bash -c ". '$BIN/fleet-lib.sh'; fleet_mem_probe")
-[ "$pr" = "4 5 97 0" ] || fail "12: FLEET_MEM_PROBE_CMD must be the reading verbatim — got [$pr]"; ok
+[ "$pr" = "4 5 97 0" ] || fail "12: FLEET_MEM_PROBE_CMD must be the reading verbatim — got [$pr]"; st_count
 
 # 13. rule C — a fat SESSION: badge + one notification, never touched (#1297) -------
 if [ -n "$PANE_PID" ]; then
@@ -229,28 +229,28 @@ if [ -n "$PANE_PID" ]; then
   nfat() { awk '/^# 🐘/{n++} END{print n+0}' "$WORK/notified"; }
   fatrow 3800
   out=$(run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once 2>&1)
-  [ -z "$(warnopt)" ] || fail "13: a session under the line must not be badged" "$out"; ok
+  [ -z "$(warnopt)" ] || fail "13: a session under the line must not be badged" "$out"; st_count
   fatrow 5000
   out=$(run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once --dry-run 2>&1)
-  printf '%s' "$out" | grep -q "^fat	would-warn	$PANE_PID	5000MB" || fail "13: --dry-run must list the fat session" "$out"; ok
-  [ -z "$(warnopt)" ] || fail "13: --dry-run must not badge"; ok
+  printf '%s' "$out" | grep -q "^fat	would-warn	$PANE_PID	5000MB" || fail "13: --dry-run must list the fat session" "$out"; st_count
+  [ -z "$(warnopt)" ] || fail "13: --dry-run must not badge"; st_count
   out=$(run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once 2>&1)
-  alive "$PANE_PID" || fail "13: a fat session must never be killed" "$out"; ok
-  [ "$(warnopt)" = "4.9G" ] || fail "13: the window must carry @claude_mem_warn=4.9G — got [$(warnopt)]" "$out"; ok
-  [ "$(nfat)" = 1 ] || fail "13: expected one notification, got $(nfat)"; ok
+  alive "$PANE_PID" || fail "13: a fat session must never be killed" "$out"; st_count
+  [ "$(warnopt)" = "4.9G" ] || fail "13: the window must carry @claude_mem_warn=4.9G — got [$(warnopt)]" "$out"; st_count
+  [ "$(nfat)" = 1 ] || fail "13: expected one notification, got $(nfat)"; st_count
   grep -q "fatwin" "$WORK/notified" && grep -q "fleet-peer-send.sh -L $SOCK $PANE_PID .*fleet-handoff" "$WORK/notified" \
-    || fail "13: the notification must name the window and carry the /fleet-handoff line"; ok
+    || fail "13: the notification must name the window and carry the /fleet-handoff line"; st_count
   run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once >/dev/null 2>&1
-  [ "$(nfat)" = 1 ] || fail "13: the same session must be notified ONCE, got $(nfat)"; ok
+  [ "$(nfat)" = 1 ] || fail "13: the same session must be notified ONCE, got $(nfat)"; st_count
   fatrow 3800
   run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once >/dev/null 2>&1
-  [ "$(warnopt)" = "3.7G" ] || fail "13: at ≥ 90% of the line the badge holds (and says the new size) — got [$(warnopt)]"; ok
+  [ "$(warnopt)" = "3.7G" ] || fail "13: at ≥ 90% of the line the badge holds (and says the new size) — got [$(warnopt)]"; st_count
   fatrow 3000
   run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once >/dev/null 2>&1
-  [ -z "$(warnopt)" ] || fail "13: fallen back under 90% the badge must clear — got [$(warnopt)]"; ok
+  [ -z "$(warnopt)" ] || fail "13: fallen back under 90% the badge must clear — got [$(warnopt)]"; st_count
   fatrow 9000
   run FLEET_MEM_PROBE_CMD="$NORMAL" FLEET_CLAUDE_RSS_WARN_MB=0 bash "$MG" --once >/dev/null 2>&1
-  [ -z "$(warnopt)" ] || fail "13: FLEET_CLAUDE_RSS_WARN_MB=0 turns rule C off"; ok
+  [ -z "$(warnopt)" ] || fail "13: FLEET_CLAUDE_RSS_WARN_MB=0 turns rule C off"; st_count
 fi
 
 printf 'fleet-memguard-selftest: %d checks passed\n' "$CHECKS"

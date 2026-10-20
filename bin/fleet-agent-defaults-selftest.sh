@@ -29,6 +29,7 @@
 #  13  the no-tomllib path (macOS /usr/bin/python3 3.9) fills the same files
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 SCRIPT="$BIN/fleet-agent-defaults.py"
 pass=0
@@ -36,8 +37,7 @@ ok()   { pass=$((pass+1)); printf '  ok  %s\n' "$1"; }
 fail() { printf 'fleet-agent-defaults-selftest FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '%s\n' "$2" >&2; exit 1; }
 [ -f "$SCRIPT" ] || fail "no $SCRIPT"
 command -v python3 >/dev/null 2>&1 || fail 'python3 missing'
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/agent-defaults.XXXXXX") || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/agent-defaults.XXXXXX"
 
 # --- the sandbox install root: the REPO's conf/agent-defaults + its own skills/ ------
 SR="$WORK/root"; mkdir -p "$SR/conf" "$SR/skills/sk1" "$SR/skills/sk2" "$SR/bin"

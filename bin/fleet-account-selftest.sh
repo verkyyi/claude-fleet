@@ -54,11 +54,11 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SCRIPT="$BIN/fleet-account.sh"
 [ -f "$SCRIPT" ] || { printf 'selftest: %s not found\n' "$SCRIPT" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-account-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-account-selftest.XXXXXX"
 
 # Empty accounts dir at source time → OFF → the bottom dispatch is a no-op that
 # can't read/rotate the caller's real accounts.
@@ -84,14 +84,13 @@ STATE_REAUTH="$FLEET_C/account.reauth"
 STATE_PAUSED="$FLEET_C/account.paused"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 eq() {  # <desc> <expected> <actual>
   CHECKS=$((CHECKS + 1))
-  [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"
+  [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"
 }
 rc_is() {  # <desc> <expected-rc> <actual-rc>
   CHECKS=$((CHECKS + 1))
-  [ "$2" = "$3" ] || fail "$1 — expected rc $2, got rc $3"
+  [ "$2" = "$3" ] || st_fail "$1 — expected rc $2, got rc $3"
 }
 
 # ============================================================================
@@ -255,7 +254,7 @@ STATE_DIR="$FLEET_C"
 LOCK="$FLEET_C/account.lock"
 eq "reauth-since: unmarked → 0" 0 "$(acct_reauth_since a)"
 cmd_mark_reauth a 'auth error' >/dev/null; rc_is "mark-reauth: known label" 0 $?
-CHECKS=$((CHECKS + 1)); [ "$(acct_reauth_since a)" -gt 0 ] || fail "mark-reauth: must record the epoch it was marked"
+CHECKS=$((CHECKS + 1)); [ "$(acct_reauth_since a)" -gt 0 ] || st_fail "mark-reauth: must record the epoch it was marked"
 eq "mark-reauth: label + reason on one row" "a	auth error" "$(awk -F'\t' '{print $1"\t"$3}' "$STATE_REAUTH")"
 cmd_mark_reauth a 'again' >/dev/null
 eq "mark-reauth: re-marking replaces the row" 1 "$(wc -l < "$STATE_REAUTH" | tr -d ' ')"
@@ -406,7 +405,7 @@ eq "pace_of: no 7d reset → no opinion (0)"            0  "$(pace_of 45 0 "$PN"
 # higher, and the far-ahead one reads HELD.
 pace2=$(printf 'a\t10\t40\t50\t%s\t%s\t0\nb\t10\t80\t10\t%s\t%s\t0\n' "$R5" "$HALF" "$R5" "$HALF")
 CHECKS=$((CHECKS + 1)); [ "$(pick_score "$pace2" a)" -gt "$(pick_score "$pace2" b)" ] \
-  || fail "pace: a behind-pace account must outscore a far-ahead one at equal 5h"
+  || st_fail "pace: a behind-pace account must outscore a far-ahead one at equal 5h"
 eq "pace_verdict: the far-ahead account reads held" held "$(pace_verdict "$pace2" b)"
 eq "pace_verdict: the behind account reads ok"       ok   "$(pace_verdict "$pace2" a)"
 eq "pace_held: the far-ahead account is held"        0    "$(pace_held "$pace2" b; echo $?)"
@@ -526,7 +525,7 @@ eq "model-limited: subscription ledger untouched" "" "$(cat "$STATE_LIMITED")"
 : > "$STATE_MODEL_LIMITED"
 t0=$(now); u=$(cmd_model_limited b fable "reached your Fable limit. Run /usage-credits to continue or switch models with /model.")
 CHECKS=$((CHECKS + 1)); [ "$u" -ge $((t0 + 604800)) ] && [ "$u" -le $((t0 + 604800 + 5)) ] \
-  || fail "model-limited: no reset in banner → now+7d TTL — got $u (now $t0)"
+  || st_fail "model-limited: no reset in banner → now+7d TTL — got $u (now $t0)"
 eq "model-limited: unknown account refused" 1 "$(cmd_model_limited nobody fable x >/dev/null 2>&1; echo $?)"
 # an expired row reads as 0 and is dropped on the next write
 printf 'a\tfable\t%s\told\n' $(( $(now) - 10 )) > "$STATE_MODEL_LIMITED"
@@ -613,18 +612,18 @@ for h in h1 h2; do
   printf '{"claudeAiOauth":{"accessToken":"at","expiresAt":%s000}}\n' "$(( $(date +%s) + 86400 ))" > "$ACCT_DIR/$h.hub/.credentials.json"
 done
 export FLEET_ACCOUNTS="a h1 h2"; unset FLEET_ACCOUNT_PAUSED
-CHECKS=$((CHECKS + 1)); acct_paused h1 && fail "paused: nothing paused — h1 is not"
+CHECKS=$((CHECKS + 1)); acct_paused h1 && st_fail "paused: nothing paused — h1 is not"
 # the conf / environment name (the hub's client-settings pool key)
 export FLEET_ACCOUNT_PAUSED="h1 a"
-CHECKS=$((CHECKS + 1)); acct_paused h1 || fail "paused: FLEET_ACCOUNT_PAUSED pauses a hub label"
-CHECKS=$((CHECKS + 1)); acct_paused a && fail "paused: a LOCAL label is never paused"
-cmd_list 2>/dev/null | sed "s/$(printf '\033')\[[0-9;]*m//g" | grep -q '^h1 .*paused' || fail "paused: list must show h1 paused"
+CHECKS=$((CHECKS + 1)); acct_paused h1 || st_fail "paused: FLEET_ACCOUNT_PAUSED pauses a hub label"
+CHECKS=$((CHECKS + 1)); acct_paused a && st_fail "paused: a LOCAL label is never paused"
+cmd_list 2>/dev/null | sed "s/$(printf '\033')\[[0-9;]*m//g" | grep -q '^h1 .*paused' || st_fail "paused: list must show h1 paused"
 unset FLEET_ACCOUNT_PAUSED
 # the hub's list as the quota tick fetched it — through the seam, never the network
 _fetch() { FLEET_ACCOUNT_PAUSED_CMD="$1" quota_paused_fetch; }
 _fetch "printf '%s' '{\"pool\":{\"FLEET_ACCOUNT_PAUSED\":\"h2 ghost\"}}'"
 eq "paused: the fetch writes the hub's list" "h2 ghost" "$(tr '\n' ' ' < "$STATE_PAUSED" | sed 's/ $//')"
-CHECKS=$((CHECKS + 1)); acct_paused h2 || fail "paused: fetched h2 is paused"
+CHECKS=$((CHECKS + 1)); acct_paused h2 || st_fail "paused: fetched h2 is paused"
 _fetch "exit 7"
 eq "paused: a hub that does not answer keeps the list" "h2 ghost" "$(tr '\n' ' ' < "$STATE_PAUSED" | sed 's/ $//')"
 _fetch "printf 'not json'"
@@ -649,11 +648,11 @@ done
 for c in active env use rotate launch blind; do
   out=$(_run "$c" a 2>&1 >/dev/null); rc=$?
   CHECKS=$((CHECKS + 1)); [ "$rc" = 0 ] && case "$out" in *已不用*) true ;; *) false ;; esac \
-    || fail "retired: $c must answer 已不用 and exit 0 (rc $rc): $out"
+    || st_fail "retired: $c must answer 已不用 and exit 0 (rc $rc): $out"
 done
 eq "token: a named account" tok-b "$(_run token b 2>/dev/null)"
 eq "token: no label → nothing (no pick to default to)" "" "$(_run token 2>/dev/null)"
 CHECKS=$((CHECKS + 1)); [ ! -e "$FLEET_C/global/account.active" ] && [ ! -e "$FLEET_C/account.active" ] \
-  || fail "retired: nothing may write account.active"
+  || st_fail "retired: nothing may write account.active"
 
 printf 'selftest OK: fleet-account readings (%s assertions — dur/human, acct_ttl, limited/eligible, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 score + phase stagger, #1231 weekly pace, #1540 account class, #2083 paused pool, T550 retired pick)\n' "$CHECKS"

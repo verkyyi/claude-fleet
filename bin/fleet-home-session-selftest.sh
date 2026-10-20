@@ -18,6 +18,7 @@
 # No tmux, no network. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 command -v python3 >/dev/null 2>&1 || { printf 'fleet-home-session selftest: python3 absent — SKIP\n'; exit 0; }
 
@@ -33,9 +34,8 @@ unset TMUX TMUX_PANE FLEET_HUB_URL FLEET_HUB_TOKEN CCQUOTA_FLEET CCQUOTA_HUB_URL
 
 FAILS=0; CHECKS=0
 fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS + 1)); }
-ok()   { printf 'ok   %s\n' "$*"; }
-eq()   { CHECKS=$((CHECKS + 1)); if [ "$2" = "$3" ]; then ok "$1"; else fail "$1: expected [$3], got [$2]"; fi; }
-has()  { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ok "$1" ;; *) fail "$1: [$2] lacks [$3]" ;; esac; }
+eq()   { CHECKS=$((CHECKS + 1)); if [ "$2" = "$3" ]; then st_ok_all "$1"; else fail "$1: expected [$3], got [$2]"; fi; }
+has()  { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_ok_all "$1" ;; *) fail "$1: [$2] lacks [$3]" ;; esac; }
 
 # --- A. the dispatch ------------------------------------------------------------------
 # the home's one-shot ssh: runs the command it was handed, here

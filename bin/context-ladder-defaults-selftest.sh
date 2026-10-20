@@ -21,25 +21,25 @@
 #   D  0 still means off for each key
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 EX="$ROOT/conf/fleet.conf.reference"
 CTX="$BIN/fleet-context.sh"
 
 pass=0 failn=0
-ok()  { pass=$((pass + 1)); printf 'ok   %s\n' "$1"; }
 bad() { failn=$((failn + 1)); printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; }
 
 # ---- A: conf/fleet.conf.reference --------------------------------------------------------
 exval() { sed -n "s/^#$1=\([0-9][0-9]*\)[[:space:]].*/\1/p" "$EX" | head -1; }
 H=$(exval FLEET_AUTO_HANDOFF_PCT); C=$(exval FLEET_COMPACT_PREP_PCT); M=$(exval FLEET_COMPACT_MAX)
-[ "$H/$C/$M" = "0/0/3" ] && ok "A conf/fleet.conf.reference: handoff OFF · compact-prep OFF · max 3" \
+[ "$H/$C/$M" = "0/0/3" ] && st_pass "A conf/fleet.conf.reference: handoff OFF · compact-prep OFF · max 3" \
   || bad "A conf/fleet.conf.reference must document 0/0/3, got '$H/$C/$M'"
 [ -n "$H" ] && [ -n "$C" ] && [ -n "$M" ] || { printf 'context-ladder-defaults-selftest: FAIL (no defaults parsed)\n' >&2; exit 1; }
 
 # ---- B: every code site carries the same numbers ----------------------------------
 # site <file> <fixed string> <what>
 site() {
-  if grep -qF -- "$2" "$ROOT/$1"; then ok "B $1: $3"
+  if grep -qF -- "$2" "$ROOT/$1"; then st_pass "B $1: $3"
   else bad "B $1 must carry the conf/fleet.conf.reference default ($3): no '$2'"; fi
 }
 site bin/set-claude-state.sh    "''|*[!0-9]*) _hp=$H ;;"                "handoff $H"
@@ -70,27 +70,27 @@ nocfg() {
     bash "$CTX" --transcript "$T" ${args[@]+"${args[@]}"} 2>&1
 }
 out=$(nocfg)
-case "$out" in *'auto-handoff OFF'*) ok "C text: auto-handoff OFF" ;;
+case "$out" in *'auto-handoff OFF'*) st_pass "C text: auto-handoff OFF" ;;
   *) bad "C with no conf fleet-context.sh must print auto-handoff OFF" "$out" ;; esac
-case "$out" in *'in-place compaction OFF'*) ok "C text: compact-prep OFF" ;;
+case "$out" in *'in-place compaction OFF'*) st_pass "C text: compact-prep OFF" ;;
   *) bad "C with no conf fleet-context.sh must print in-place compaction OFF" "$out" ;; esac
 out=$(nocfg --json)
-case "$out" in *"\"handoff_pct\":80,\"auto_handoff_pct\":$H,\"compact_prep_pct\":$C,\"compact_max\":$M,"*) ok "C json: advisory 80, automatic $H / $C / $M" ;;
+case "$out" in *"\"handoff_pct\":80,\"auto_handoff_pct\":$H,\"compact_prep_pct\":$C,\"compact_max\":$M,"*) st_pass "C json: advisory 80, automatic $H / $C / $M" ;;
   *) bad "C --json must carry auto_handoff_pct $H, compact_prep_pct $C, compact_max $M" "$out" ;; esac
 
 # ---- D: 0 is still off -----------------------------------------------------------
 out=$(nocfg FLEET_AUTO_HANDOFF_PCT=0 FLEET_COMPACT_PREP_PCT=0)
-case "$out" in *'auto-handoff OFF (FLEET_AUTO_HANDOFF_PCT=0)'*'in-place compaction OFF (FLEET_COMPACT_PREP_PCT=0)'*) ok "D 0 = off for both lines" ;;
+case "$out" in *'auto-handoff OFF (FLEET_AUTO_HANDOFF_PCT=0)'*'in-place compaction OFF (FLEET_COMPACT_PREP_PCT=0)'*) st_pass "D 0 = off for both lines" ;;
   *) bad "D an explicit 0 must still turn each line off" "$out" ;; esac
 out=$(nocfg FLEET_COMPACT_PREP_PCT=55 FLEET_COMPACT_MAX=0)
-case "$out" in *"in place from 55% · no cap"*) ok "D explicit compaction retains FLEET_COMPACT_MAX=0 = no cap" ;;
+case "$out" in *"in place from 55% · no cap"*) st_pass "D explicit compaction retains FLEET_COMPACT_MAX=0 = no cap" ;;
   *) bad "D FLEET_COMPACT_MAX=0 must read 'no cap'" "$out" ;; esac
 
 out=$(nocfg FLEET_AUTO_HANDOFF_PCT=80 FLEET_COMPACT_PREP_PCT=55)
-case "$out" in *'auto-handoff at 80%'*'in place from 55% · at most 3 per session'*) ok "D explicit legacy 80/55/3 preserved" ;;
+case "$out" in *'auto-handoff at 80%'*'in place from 55% · at most 3 per session'*) st_pass "D explicit legacy 80/55/3 preserved" ;;
   *) bad "D explicit thresholds must retain their behavior" "$out" ;; esac
 out=$(nocfg FLEET_CONTEXT_LIMIT=22000)
-case "$out" in *'context usage advisory only'*'native Agent manages compaction'*) ok "D high default context does not instruct a handoff" ;;
+case "$out" in *'context usage advisory only'*'native Agent manages compaction'*) st_pass "D high default context does not instruct a handoff" ;;
   *) bad "D advisory context must leave compaction to the Agent" "$out" ;; esac
 
 if [ "$failn" -gt 0 ]; then

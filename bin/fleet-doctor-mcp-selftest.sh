@@ -17,12 +17,11 @@
 # Hermetic: fake tmux/ps on PATH, scratch HOME/TMPDIR/conf. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 [ -f "$BIN/fleet-doctor.sh" ] || { printf 'selftest: fleet-doctor.sh not found\n' >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 missing — skip"; exit 0; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/doctor-mcp-selftest.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/doctor-mcp-selftest.XXXXXX" physical
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/conf/fleets"
 for f in fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-client-core.sh fleet-daemon-lib.sh fleet-daemon-loaded.sh; do
   [ -f "$BIN/$f" ] && cp "$BIN/$f" "$WORK/bin/"

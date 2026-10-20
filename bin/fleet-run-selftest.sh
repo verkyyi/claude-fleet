@@ -22,12 +22,11 @@
 #                prints digests, never a token
 set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$BIN/selftest-lib.sh"
 CHECKS=0
 fail() { printf 'fleet-run selftest FAIL: %s\n' "$1" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
 TMPB=${TMPDIR:-/tmp}
-WORK="$(mktemp -d "${TMPB%/}/frun.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPB%/}/frun.XXXXXX"
 
 SB="$WORK/bin"; mkdir -p "$SB" "$WORK/path" "$WORK/home" "$WORK/conf"
 ln -s "$BIN/fleet-run.sh" "$SB/fleet-run.sh"
@@ -65,22 +64,22 @@ run() { env HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" PATH="$WORK/path:/usr/
           ANTHROPIC_API_KEY=leftover "$@" "$SB/fleet-run.sh"; }
 
 # A. usage
-run FLEET_CRED_PROXY=1 >/dev/null 2>&1; [ $? = 2 ] || fail 'A: no agent should exit 2'; ok
-"$SB/fleet-run.sh" vim >/dev/null 2>&1; [ $? = 2 ] || fail 'A: unknown agent should exit 2'; ok
+run FLEET_CRED_PROXY=1 >/dev/null 2>&1; [ $? = 2 ] || fail 'A: no agent should exit 2'; st_count
+"$SB/fleet-run.sh" vim >/dev/null 2>&1; [ $? = 2 ] || fail 'A: unknown agent should exit 2'; st_count
 
 # B. off
 : > "$FAKE_LOG"; rm -f "$FAKE_OUT"
 env HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" PATH="$WORK/path:/usr/bin:/bin" FLEET_CRED_PROXY=0 \
   "$SB/fleet-run.sh" claude -p hi >/dev/null 2>&1
-[ $? = 3 ] || fail 'B: switched off should exit 3'; ok
-[ ! -s "$FAKE_LOG" ] && [ ! -e "$FAKE_OUT" ] || fail 'B: off still minted or ran the agent'; ok
+[ $? = 3 ] || fail 'B: switched off should exit 3'; st_count
+[ ! -s "$FAKE_LOG" ] && [ ! -e "$FAKE_OUT" ] || fail 'B: off still minted or ran the agent'; st_count
 
 # C + D. claude
 : > "$FAKE_LOG"
 env HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" PATH="$WORK/path:/usr/bin:/bin" FLEET_CRED_PROXY=1 \
   ANTHROPIC_API_KEY=leftover "$SB/fleet-run.sh" claude -p 'say PONG' 2>/dev/null
-[ $? = 7 ] || fail "D: the agent's exit status was not kept"; ok
-grep -q "$TOKEN" "$FAKE_LOG" && fail 'C: the node token reached an argv'; ok
+[ $? = 7 ] || fail "D: the agent's exit status was not kept"; st_count
+grep -q "$TOKEN" "$FAKE_LOG" && fail 'C: the node token reached an argv'; st_count
 python3 -I - "$TOKEN" "$(cat "$FAKE_ASSERT")" <<'PY' || fail 'C: the assertion does not verify / names the wrong fleet'
 import base64, hashlib, hmac, json, sys, uuid
 tok, a = sys.argv[1], sys.argv[2]
@@ -94,31 +93,31 @@ fleet = str(uuid.uuid5(uuid.NAMESPACE_URL, "fleet-client:" + h))
 assert c["v"] == 1 and c["fleet_uuid"] == fleet and c["worker_id"] == fleet + "/" + c["fid"], c
 assert 0 < c["exp"] - c["iat"] <= 300, c
 PY
-ok
-grep -q '^argv=-p say PONG$' "$FAKE_OUT" || fail 'D: args not passed through'; ok
-grep -q '^base=http://127.0.0.1:4242$' "$FAKE_OUT" || fail 'D: ANTHROPIC_BASE_URL'; ok
-grep -q '^tok=fcp-h1.PASS$' "$FAKE_OUT" || fail 'D: CLAUDE_CODE_OAUTH_TOKEN is not the pass'; ok
-grep -q '^apikey=$' "$FAKE_OUT" || fail 'D: ANTHROPIC_API_KEY survived'; ok
-grep -q '^mint --provider claude --sid c-' "$FAKE_LOG" || fail 'D: mint not asked for claude'; ok
-grep -q '^revoke --sid c-' "$FAKE_LOG" || fail 'D: no revoke at exit'; ok
+st_count
+grep -q '^argv=-p say PONG$' "$FAKE_OUT" || fail 'D: args not passed through'; st_count
+grep -q '^base=http://127.0.0.1:4242$' "$FAKE_OUT" || fail 'D: ANTHROPIC_BASE_URL'; st_count
+grep -q '^tok=fcp-h1.PASS$' "$FAKE_OUT" || fail 'D: CLAUDE_CODE_OAUTH_TOKEN is not the pass'; st_count
+grep -q '^apikey=$' "$FAKE_OUT" || fail 'D: ANTHROPIC_API_KEY survived'; st_count
+grep -q '^mint --provider claude --sid c-' "$FAKE_LOG" || fail 'D: mint not asked for claude'; st_count
+grep -q '^revoke --sid c-' "$FAKE_LOG" || fail 'D: no revoke at exit'; st_count
 
 # E. codex
 : > "$FAKE_LOG"
 env HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" PATH="$WORK/path:/usr/bin:/bin" FLEET_CRED_PROXY=1 \
   "$SB/fleet-run.sh" codex exec hi 2>/dev/null
-grep -q 'model_provider="fleet"' "$FAKE_OUT" || fail 'E: no fleet provider'; ok
-grep -q 'base_url="http://127.0.0.1:4242/codex"' "$FAKE_OUT" || fail 'E: provider base_url'; ok
-grep -q 'exec hi$' "$FAKE_OUT" || fail 'E: args not passed through'; ok
-grep -q '^cx=fcp-h1.PASS$' "$FAKE_OUT" || fail 'E: env_key does not carry the pass'; ok
-grep -q "^home=$WORK/mirror\$" "$FAKE_OUT" || fail 'E: CODEX_HOME is not the mirror'; ok
-[ -d "$WORK/home/.codex" ] || fail 'E: the real home was not made'; ok
-grep -q '^revoke --sid c-' "$FAKE_LOG" || fail 'E: no revoke at exit'; ok
+grep -q 'model_provider="fleet"' "$FAKE_OUT" || fail 'E: no fleet provider'; st_count
+grep -q 'base_url="http://127.0.0.1:4242/codex"' "$FAKE_OUT" || fail 'E: provider base_url'; st_count
+grep -q 'exec hi$' "$FAKE_OUT" || fail 'E: args not passed through'; st_count
+grep -q '^cx=fcp-h1.PASS$' "$FAKE_OUT" || fail 'E: env_key does not carry the pass'; st_count
+grep -q "^home=$WORK/mirror\$" "$FAKE_OUT" || fail 'E: CODEX_HOME is not the mirror'; st_count
+[ -d "$WORK/home/.codex" ] || fail 'E: the real home was not made'; st_count
+grep -q '^revoke --sid c-' "$FAKE_LOG" || fail 'E: no revoke at exit'; st_count
 
 # F. refused
 rm -f "$FAKE_OUT"
 env HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" PATH="$WORK/path:/usr/bin:/bin" FLEET_CRED_PROXY=1 FAKE_MINT_RC=1 \
   "$SB/fleet-run.sh" claude >/dev/null 2>&1
-[ $? = 1 ] && [ ! -e "$FAKE_OUT" ] || fail 'F: a refused mint must exit 1 and run nothing'; ok
+[ $? = 1 ] && [ ! -e "$FAKE_OUT" ] || fail 'F: a refused mint must exit 1 and run nothing'; st_count
 
 # G. scan
 SH_HOME="$WORK/shome"; mkdir -p "$SH_HOME/.config/claude-fleet/accounts/a.hub" "$WORK/cwd"
@@ -127,19 +126,19 @@ REAL="sk-ant-oat01-$(printf 'A%.0s' $(seq 1 40))"
 printf '{"claudeAiOauth":{"accessToken":"%s"}}' "$REAL" > "$CRED"
 scan() { (cd "$WORK/cwd" && env -u FLEET_CONF_DIR -u XDG_CONFIG_HOME HOME="$SH_HOME" "$@" python3 "$BIN/fleet-cred-scan.py" ${ARGS[@]+"${ARGS[@]}"}); }
 ARGS=(hashes); scan > "$WORK/hashes" 2>/dev/null || fail 'G: hashes failed'
-grep -q "$REAL" "$WORK/hashes" && fail 'G: hashes printed a token'; ok
-[ "$(grep -c '^[0-9a-f]\{64\}$' "$WORK/hashes")" = 1 ] || fail 'G: hashes should print one digest'; ok
+grep -q "$REAL" "$WORK/hashes" && fail 'G: hashes printed a token'; st_count
+[ "$(grep -c '^[0-9a-f]\{64\}$' "$WORK/hashes")" = 1 ] || fail 'G: hashes should print one digest'; st_count
 ARGS=(scan --no-hub --hashes "$WORK/hashes")
-out=$(scan); [ $? = 1 ] || fail 'G: a readable pool credential must exit 1'; ok
-printf '%s\n' "$out" | grep -q '^scan: routes-with-credential=1 ' || fail "G: readable: $out"; ok
-printf '%s\n' "$out" | grep -q "$REAL" && fail 'G: scan printed a token'; ok
+out=$(scan); [ $? = 1 ] || fail 'G: a readable pool credential must exit 1'; st_count
+printf '%s\n' "$out" | grep -q '^scan: routes-with-credential=1 ' || fail "G: readable: $out"; st_count
+printf '%s\n' "$out" | grep -q "$REAL" && fail 'G: scan printed a token'; st_count
 chmod 000 "$CRED"
 if [ ! -r "$CRED" ]; then   # root reads anyway — the leg needs a real denial
-  out=$(scan); [ $? = 0 ] || fail "G: denied should be 0 routes: $out"; ok
+  out=$(scan); [ $? = 0 ] || fail "G: denied should be 0 routes: $out"; st_count
 fi
 chmod 600 "$CRED"; rm -f "$CRED"
 ARGS=(scan --no-hub)
 out=$(scan LEAK="sk-ant-oat01-$(printf 'B%.0s' $(seq 1 40))")
-printf '%s\n' "$out" | grep -q '^scan: routes-with-credential=1 ' || fail "G: env leak not counted: $out"; ok
+printf '%s\n' "$out" | grep -q '^scan: routes-with-credential=1 ' || fail "G: env leak not counted: $out"; st_count
 
 echo "fleet-run selftest: PASS ($CHECKS checks)"

@@ -28,6 +28,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 LIB="$BIN/fleet-lib.sh"
 [ -f "$LIB" ] || { printf 'selftest: %s not found\n' "$LIB" >&2; exit 2; }
@@ -46,10 +47,9 @@ esac
 trap 'rm -rf "$WORK"' EXIT
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 eq() {  # <desc> <expected> <actual>
   CHECKS=$((CHECKS + 1))
-  [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"
+  [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"
 }
 
 # --- fake tmux ----------------------------------------------------------------
@@ -262,9 +262,9 @@ FLEET_CONF_DIR="$CONFROOT"     # override the module default (plain var, reassig
 
 # fleet_state_dir / fleet_cache_dir / fleet_cache_global create + print the dir.
 eq "state_dir path"  "$CONFROOT/fleets/fleet-a" "$(fleet_state_dir fleet-a)"
-[ -d "$CONFROOT/fleets/fleet-a" ] || fail "state_dir did not create the dir"
+[ -d "$CONFROOT/fleets/fleet-a" ] || st_fail "state_dir did not create the dir"
 eq "cache_dir path"  "$FLEET_C/fleets/acme-widgets" "$(fleet_cache_dir acme-widgets)"
-[ -d "$FLEET_C/fleets/acme-widgets" ] || fail "cache_dir did not create the dir"
+[ -d "$FLEET_C/fleets/acme-widgets" ] || st_fail "cache_dir did not create the dir"
 eq "cache_global"    "$FLEET_C/global" "$(fleet_cache_global)"
 
 # fleet_conf_file dual-layout: new fleets/<sess>/conf preferred, else legacy flat.
@@ -382,7 +382,7 @@ mkdir -p "$CONFROOT/fleets/dup-1" "$CONFROOT/fleets/dup-2"
 : > "$CONFROOT/fleets/dup-2/conf"; fx_repo "$CONFROOT" dup-2 shared/repo
 csess1=$(fleet_sess_for_repo shared/repo); csess2=$(fleet_sess_for_repo shared/repo)
 eq "sess_for_repo: stable across calls (canonical)" "$csess1" "$csess2"
-case "$csess1" in dup-1|dup-2) : ;; *) fail "sess_for_repo: two-fleets-one-repo must resolve to one of them, got [$csess1]";; esac
+case "$csess1" in dup-1|dup-2) : ;; *) st_fail "sess_for_repo: two-fleets-one-repo must resolve to one of them, got [$csess1]";; esac
 CHECKS=$((CHECKS + 1))
 
 
@@ -507,6 +507,6 @@ eq "clip: …reporting the columns it really uses"   "4"      "$clip_w"
 fleet_clip_display 20 "ab中文"
 eq "clip: mixed ASCII+CJK width"                   "6"      "$clip_w"
 CHECKS=$((CHECKS + 1))
-[ "${#clip_out}" -eq 4 ] || fail "clip: mixed string should be 4 CHARS but 6 columns"
+[ "${#clip_out}" -eq 4 ] || st_fail "clip: mixed string should be 4 CHARS but 6 columns"
 
 printf 'selftest OK: fleet-lib (%s assertions — seat incl. #118 guard, reap gate, sessmap/cache routing, 2-fleet no-leak #180, per-fleet layout #181, per-fleet sockets #159, reltime #228, display-width clip #492)\n' "$CHECKS"

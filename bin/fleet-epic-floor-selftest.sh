@@ -12,9 +12,9 @@
 # Hermetic: a sandbox FLEET_CONF_DIR and FLEET_LIVE_DIR. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 F="$BIN/fleet-epic-floor.sh"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/epic-floor-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/epic-floor-selftest.XXXXXX"
 N=0 BAD=0
 ok() { N=$((N + 1)); }
 bad() { N=$((N + 1)); BAD=$((BAD + 1)); printf 'FAIL: %s\n' "$1" >&2; }

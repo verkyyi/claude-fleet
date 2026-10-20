@@ -25,11 +25,11 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 LIB="$BIN/fleet-lib.sh"
 [ -f "$LIB" ] || { printf 'selftest: %s not found\n' "$LIB" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-up-conf-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-up-conf-selftest.XXXXXX"
 
 # Isolate the conf dir before sourcing, so the lib picks it up.
 export FLEET_CONF_DIR="$WORK/conf"
@@ -38,18 +38,17 @@ mkdir -p "$FLEET_CONF_DIR"
 . "$LIB"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 eq() {  # <desc> <expected> <actual>
   CHECKS=$((CHECKS + 1))
-  [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"
+  [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"
 }
 has() {   # <desc> <file> <exact-line>
   CHECKS=$((CHECKS + 1))
-  grep -qxF "$3" "$2" || fail "$1 — missing line [$3] in $(cat "$2")"
+  grep -qxF "$3" "$2" || st_fail "$1 — missing line [$3] in $(cat "$2")"
 }
 hasnt() { # <desc> <file> <grep-ere>
   CHECKS=$((CHECKS + 1))
-  grep -qE "$3" "$2" && fail "$1 — unexpected match /$3/ in $(cat "$2")"
+  grep -qE "$3" "$2" && st_fail "$1 — unexpected match /$3/ in $(cat "$2")"
   return 0
 }
 # read a FLEET_* value by sourcing the conf in a subshell (its real consumer path)
@@ -59,8 +58,8 @@ CONF="$FLEET_CONF_DIR/fleet-demo.conf"
 
 # ================================================================ 1. FRESH =====
 fleet_write_conf "$CONF" "fleet-demo" "acme/widgets" "/home/me/widgets" "main" "2026-07-09 12:00:00" \
-  || fail "fresh: fleet_write_conf returned non-zero"
-[ -f "$CONF" ] || fail "fresh: no conf written"
+  || st_fail "fresh: fleet_write_conf returned non-zero"
+[ -f "$CONF" ] || st_fail "fresh: no conf written"
 eq "fresh: FLEET_REPO"        "acme/widgets"     "$(val "$CONF" FLEET_REPO)"
 eq "fresh: FLEET_MAIN"        "/home/me/widgets" "$(val "$CONF" FLEET_MAIN)"
 eq "fresh: FLEET_BASE_BRANCH" "main"             "$(val "$CONF" FLEET_BASE_BRANCH)"
@@ -85,7 +84,7 @@ FLEET_CTX_WINDOW=1
 SEED
 
 fleet_write_conf "$CONF" "fleet-demo" "acme/widgets" "/new/path" "master" "2026-07-09 19:29:00" \
-  || fail "preserve: fleet_write_conf returned non-zero"
+  || st_fail "preserve: fleet_write_conf returned non-zero"
 
 # derived three refreshed to the NEW values
 eq "refresh: FLEET_REPO"        "acme/widgets" "$(val "$CONF" FLEET_REPO)"
@@ -105,7 +104,7 @@ has "preserve: FLEET_CTX_WINDOW"   "$CONF" "FLEET_CTX_WINDOW=1"
 # ================================================================ 4. NO-DUP ====
 # A second rewrite (another restore) must not duplicate keys or stack headers.
 fleet_write_conf "$CONF" "fleet-demo" "acme/widgets" "/new/path" "master" "2026-07-09 20:00:00" \
-  || fail "no-dup: fleet_write_conf returned non-zero"
+  || st_fail "no-dup: fleet_write_conf returned non-zero"
 eq "no-dup: single FLEET_ISSUE_BRIDGE" "1" "$(grep -c '^FLEET_ISSUE_BRIDGE=' "$CONF")"
 eq "no-dup: single FLEET_REPO"         "1" "$(grep -c '^FLEET_REPO=' "$CONF")"
 eq "no-dup: single header line"        "1" "$(grep -c 'written by fleet-up.sh' "$CONF")"
@@ -118,7 +117,7 @@ eq "atomic: no leftover tmp" "0" "$(find "$FLEET_CONF_DIR" -name '*.tmp.*' | wc 
 # A custom key written with `export ` (a legit shell form) must be preserved.
 printf 'export FLEET_PROTECTED_RE="^main$"\n' >> "$CONF"
 fleet_write_conf "$CONF" "fleet-demo" "acme/widgets" "/new/path" "master" "2026-07-09 21:00:00" \
-  || fail "export: fleet_write_conf returned non-zero"
+  || st_fail "export: fleet_write_conf returned non-zero"
 has "export: preserved" "$CONF" 'export FLEET_PROTECTED_RE="^main$"'
 # and it must NOT have been mistaken for a derived key and dropped/duplicated
 eq "export: single line" "1" "$(grep -c 'FLEET_PROTECTED_RE=' "$CONF")"
@@ -142,7 +141,7 @@ FLEET_ISSUE_BRIDGE=1
 SEED2
 
 fleet_write_conf "$CONF" "fleet-demo" "acme/widgets" "/new/path" "master" "2026-07-09 22:00:00" \
-  || fail "non-fleet: fleet_write_conf returned non-zero"
+  || st_fail "non-fleet: fleet_write_conf returned non-zero"
 has "non-fleet: source include preserved" "$CONF" 'source ~/.config/claude-fleet/secrets.conf'
 has "non-fleet: plain var preserved"      "$CONF" 'MY_HELPER_VAR=xyz'
 has "non-fleet: operator comment preserved" "$CONF" '# operator note: bridge creds live in the sourced file below'

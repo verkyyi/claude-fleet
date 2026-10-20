@@ -35,6 +35,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 IV="$BIN/fleet-install-version.sh"
 DOC="$BIN/fleet-doctor.sh"
 [ -f "$IV" ]  || { printf 'selftest: %s not found\n' "$IV" >&2; exit 2; }
@@ -46,10 +47,9 @@ cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM HUP
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
-contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — output does not contain [$3]:\n$2";; esac; }
-not_contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 — output unexpectedly contains [$3]:\n$2";; esac; }
+eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]:\n$2";; esac; }
+not_contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 — output unexpectedly contains [$3]:\n$2";; esac; }
 
 # Hermetic git: no user config, no signing, no hooks, deterministic identity.
 export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
@@ -294,7 +294,7 @@ contains "contract: logins is null under --no-logins" "$OUT" '"logins":null'
 CHECKS=$((CHECKS + 1))
 case "$OUT" in
   *'"follow_verdict":"OK"}'*|*'"follow_verdict":"STUCK"}'*|*'"follow_verdict":"OFF"}'*|*'"follow_verdict":"UNSEEN"}'*|*'"follow_verdict":"UNKNOWN"}'*|*'"follow_verdict":null}'*) ;;
-  *) fail "contract: follow_verdict is a token from the fixed set or null — got:\n$OUT" ;;
+  *) st_fail "contract: follow_verdict is a token from the fixed set or null — got:\n$OUT" ;;
 esac
 
 # ============================================================================

@@ -22,18 +22,17 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/worktree-autoclean.sh"
 LIB="$BIN/fleet-lib.sh"
 for f in "$SRC" "$LIB"; do [ -f "$f" ] || { echo "selftest: $f missing" >&2; exit 2; }; done
 command -v git >/dev/null 2>&1 || { echo "selftest: git absent — SKIP" >&2; exit 0; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/wac-idle.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/wac-idle.XXXXXX"
 WORK="$(cd "$WORK" && pwd -P)"
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/conf/logs"
@@ -126,7 +125,7 @@ printf '%s\n' "$out_absent" | grep -Eq 'KEEP +scratch-5 .*dirty — scratch expe
   || fail "default: dirty scratch keeps the surface-once wording" "$out_absent"
 printf '%s\n' "$out_absent" | grep -Eq 'scratch idle|^DIGEST|^PRUNE' \
   && fail "default: no idle tag, no digest, no prune on this fixture" "$out_absent"
-ok "DEFAULT: key absent ≡ 0 ≡ the #290 decisions (no age gate, no digest)"
+st_pass "DEFAULT: key absent ≡ 0 ≡ the #290 decisions (no age gate, no digest)"
 
 # ======================= ON: dry-run decisions ==============================
 write_conf "FLEET_SCRATCH_MAX_IDLE=259200"
@@ -142,7 +141,7 @@ printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-7 .*scratch idle [0-9]+d' || fai
 printf '%s\n' "$out" | grep -E '^DIGEST' | grep -q 'scratch-5.*scratch-6' || fail "the digest lists every idle kept scratch" "$out"
 [ -d "$WORK/base-scratch-1" ] || fail "dry run must not remove anything"
 [ -s "$EVENTS" ] && fail "dry run must not notify" "$(cat "$EVENTS")"
-ok "DRY: idle clean → PRUNE; recent/live/leased → KEEP; idle dirty/unmerged → one digest"
+st_pass "DRY: idle clean → PRUNE; recent/live/leased → KEEP; idle dirty/unmerged → one digest"
 
 # ======================= ON: real run =======================================
 run_wac >/dev/null
@@ -159,7 +158,7 @@ grep -Eq 'autoclean: scratch idle [0-9]+d → trash .*/\.fleet-trash/base-scratc
 grep -q 'scratch-2 kept (clean, but a session ran here)' "$EVENTS" || fail "recent scratch-2 still surfaces once" "$(cat "$EVENTS")"
 grep -Eq 'scratch-(5|6) kept' "$EVENTS" && fail "idle kept scratches go to the digest, not one notify each" "$(cat "$EVENTS")"
 [ -s "$NOTIFY_LOG" ] && fail "a kept scratch is recorded in the alerts, never flashed (issue #1617)" "$(cat "$NOTIFY_LOG")"
-ok "REAL: idle clean scratches trashed + logged; kept work announced in one digest"
+st_pass "REAL: idle clean scratches trashed + logged; kept work announced in one digest"
 
 # ======================= digest cadence: once per 24h ======================
 n1="$(grep -c 'idle scratch worktree' "$EVENTS")"
@@ -168,7 +167,7 @@ run_wac >/dev/null
 touch -t "$OLD" "$WORK/conf/logs/.scratch-idle-digest"   # the last digest is now > 24h old
 run_wac >/dev/null
 [ "$(grep -c 'idle scratch worktree' "$EVENTS")" = $((n1 + 1)) ] || fail "after 24h the digest must repeat" "$(cat "$EVENTS")"
-ok "DIGEST: at most once per 24h, and it repeats while the work is still there"
+st_pass "DIGEST: at most once per 24h, and it repeats while the work is still there"
 
 printf '\nselftest OK: %s assertions passed (scratch idle age gate, #884)\n' "$pass"
 exit 0

@@ -21,8 +21,8 @@
 # tmux absent → SKIP (exit 0).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_real_tmux
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/s7501-selftest.XXXXXX")" || exit 2
 SOCK="$WORK/tmux.sock"
 T() { "$REAL_TMUX" -S "$SOCK" "$@"; }

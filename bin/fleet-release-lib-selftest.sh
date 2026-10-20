@@ -32,15 +32,15 @@
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 command -v git >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || { echo 'fleet-release-lib-selftest SKIP (git / python3)'; exit 0; }
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-release-lib.XXXXXX") || exit 2
 WORK=$(cd "$WORK" && pwd -P)
 SRV=''
 trap '[ -n "$SRV" ] && kill "$SRV" 2>/dev/null; rm -rf "$WORK"' EXIT INT TERM HUP
 N=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-eq() { N=$((N + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
-has() { N=$((N + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — [$2] lacks [$3]" ;; esac; }
+eq() { N=$((N + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+has() { N=$((N + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — [$2] lacks [$3]" ;; esac; }
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export HOME="$WORK/home" TMPDIR="$WORK"
@@ -65,7 +65,7 @@ publish() { # <sha> <seq>
 publish "$S2" 3
 python3 "$BIN/fleet-release-hub-fixture.py" "$H" 2>"$H/srv.err" & SRV=$!
 for _ in $(seq 1 100); do [ -s "$H/port" ] && break; sleep 0.05; done
-[ -s "$H/port" ] || fail "the sandbox hub did not start: $(cat "$H/srv.err")"
+[ -s "$H/port" ] || st_fail "the sandbox hub did not start: $(cat "$H/srv.err")"
 K0=$(cat "$H/key")
 HUB="http://127.0.0.1:$(cat "$H/port")"
 # shellcheck source=fleet-release-lib.sh
@@ -83,7 +83,7 @@ eq "A: never replaced by itself" "$K0" "$(cat "$C/release.pub")"
 printf '%s\n' "$K0" > "$H/key"
 touch "$H/nostore"
 fleet_rel_pubkey "$WORK/confA2" "$HUB" 5 >/dev/null 2>&1; eq "A: no store → no key (rc 1)" 1 "$?"
-[ -e "$WORK/confA2/release.pub" ] && fail "A: a key file was written for a hub with no store"
+[ -e "$WORK/confA2/release.pub" ] && st_fail "A: a key file was written for a hub with no store"
 rm -f "$H/nostore"
 
 # --- B. stable ------------------------------------------------------------------
@@ -110,18 +110,18 @@ C="$WORK/confD"; mkdir -p "$C"; cp "$H/key" "$C/release.pub"
 D0=$(env PATH=/usr/bin:/bin bash -c 'command -v ccquota' 2>/dev/null)
 fleet_rel_fetch "$HUB" "$C/release.pub" "$S2" "$WORK/stageD" 5 2>"$WORK/err"; eq "D: fetched [$REL_ERR]" 0 "$?"
 eq "D: …its files" two "$(cat "$WORK/stageD/f" 2>/dev/null)"
-[ -f "$WORK/stageD/.release/manifest.json" ] || fail "D: no .release/manifest.json"
+[ -f "$WORK/stageD/.release/manifest.json" ] || st_fail "D: no .release/manifest.json"
 has "D: …checked with ssh-keygen" "$(cat "$WORK/err")" "verified (sshsig)"
 fleet_rel_fetch "$HUB" "$C/release.pub" stable "$WORK/stageD1" 5 2>/dev/null; eq "D: stable" 0 "$?"
 eq "D: …the release stable names" "$S2 3" "$(fleet_rel_manifest "$WORK/stageD1" | awk '{print $1, $2}')"
 touch "$H/badsig"
 fleet_rel_fetch "$HUB" "$C/release.pub" "$S2" "$WORK/stageD2" 5; eq "D: another key → refused" 1 "$?"
 has "D: …says so" "$REL_ERR" "does not match the pinned key"
-[ -e "$WORK/stageD2" ] && fail "D: a refused release left a tree"
+[ -e "$WORK/stageD2" ] && st_fail "D: a refused release left a tree"
 rm -f "$H/badsig"; touch "$H/tamper"
 fleet_rel_fetch "$HUB" "$C/release.pub" "$S2" "$WORK/stageD3" 5; eq "D: an altered file → refused" 1 "$?"
 has "D: …names the file" "$REL_ERR" "digest does not match the manifest"
-[ -e "$WORK/stageD3" ] || [ -e "$WORK/stageD3.partial" ] && fail "D: an altered release left a tree"
+[ -e "$WORK/stageD3" ] || [ -e "$WORK/stageD3.partial" ] && st_fail "D: an altered release left a tree"
 rm -f "$H/tamper"
 [ -z "$D0" ] || printf 'note: %s is on the system PATH; D never called it\n' "$D0" >&2
 
@@ -162,7 +162,7 @@ out=$(env HOME="$FH2" PATH="$FH/shim:/usr/bin:/bin:/usr/sbin:/sbin" FLEET_CONF_D
 rm -f "$H/badsig"
 eq "F: a bad signature fails the install" 1 "$rc"
 has "F: …says it did not verify" "$out" "没验过章"
-[ -e "$FH2/.claude/fleet" ] && fail "F: something was installed from a release that did not verify"
+[ -e "$FH2/.claude/fleet" ] && st_fail "F: something was installed from a release that did not verify"
 # a hub that keeps no releases (404): said, nothing installed, GitHub never asked
 # (issue #4848) — host-install and login-install alike; FLEET_DIST_SOURCE=github
 # said by name is the developer road, as before
@@ -179,7 +179,7 @@ out=$(env HOME="$FH3" PATH="$FH/shim:/usr/bin:/bin:/usr/sbin:/sbin" FLEET_CONF_D
 eq "F: a hub with no releases fails the host install (#4848)" 1 "$rc"
 has "F: …says the hub keeps none" "$out" "不存发布"
 eq "F: …never a clone" "" "$(cat "$GITLOG")"
-[ -e "$FH3/.claude/fleet" ] && fail "F: something was installed from a hub with no releases"
+[ -e "$FH3/.claude/fleet" ] && st_fail "F: something was installed from a hub with no releases"
 out=$(env HOME="$FH3" PATH="$FH/shim:/usr/bin:/bin:/usr/sbin:/sbin" FLEET_CONF_DIR="$FH3/conf" FLEET_HUB_URL="$HUB" \
   FLEET_NODE_ROOT="$WORK/no-runtime" FLEET_BOOTSTRAP_GIT_BASE="$WORK/no-such-github" \
   bash "$BIN/fleet-login-install.sh" "$FH3/.claude/fleet" </dev/null 2>&1); rc=$?
@@ -212,7 +212,7 @@ pub = bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f70
 sig = base64.b64decode(sys.argv[2])
 assert v.verify(pub, b"", sig), "RFC 8032 TEST 1 does not verify"
 assert not v.verify(pub, b"x", sig), "a changed message verifies"
-' "$V" "$RFCSIG" || fail "H: RFC 8032 vector"
+' "$V" "$RFCSIG" || st_fail "H: RFC 8032 vector"
 N=$((N + 1))
 # fleet_rel_fp = ccquota's KeyID (sha256 of the raw key)
 C="$WORK/confH"; mkdir -p "$C"

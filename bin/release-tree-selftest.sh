@@ -21,10 +21,10 @@
 # on a list that drops a read item (it can fail).
 set -u
 BIN=$(cd -- "$(dirname -- "$0")" && pwd)
+. "$BIN/selftest-lib.sh"
 ROOT=$(cd -- "$BIN/.." && pwd)
 LIST="$ROOT/conf/release-tree.list"
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/release-tree-st.XXXXXX") || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/release-tree-st.XXXXXX"
 fails=0
 pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; fails=$((fails + 1)); }

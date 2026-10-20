@@ -10,10 +10,10 @@
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 N="$ROOT/tokenledger/notify/fleet-hub-notify.sh"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/hub-notify-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/hub-notify-selftest.XXXXXX"
 fail=0
 ok() { echo "ok   $*"; }
 bad() { echo "FAIL $*"; fail=1; }

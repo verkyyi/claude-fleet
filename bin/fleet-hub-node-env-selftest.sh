@@ -26,6 +26,7 @@
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 HN="$BIN/fleet-hub-node.sh"
 [ -f "$HN" ] || { printf 'selftest: %s not found\n' "$HN" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
@@ -38,10 +39,9 @@ trap cleanup EXIT INT TERM HUP
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
-contains() { case "$2" in *"$3"*) ok ;; *) fail "$1 — output lacks [$3]" "$2" ;; esac; }
-not_contains() { case "$2" in *"$3"*) fail "$1 — output carries [$3]" "$2" ;; *) ok ;; esac; }
-eq() { [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; ok; }
+contains() { case "$2" in *"$3"*) st_count ;; *) fail "$1 — output lacks [$3]" "$2" ;; esac; }
+not_contains() { case "$2" in *"$3"*) fail "$1 — output carries [$3]" "$2" ;; *) st_count ;; esac; }
+eq() { [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; st_count; }
 
 mkdir -p "$WORK/home/Library/LaunchAgents" "$WORK/conf" "$DD" "$WORK/shim"
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$WORK"
@@ -103,7 +103,7 @@ contains "B: a header comment names the source" "$(head -1 "$NE")" "# claude-fle
 not_contains "B: HOME is not a CCQUOTA_* key" "$(cat "$NE")" "HOME="
 not_contains "B: an integer value is not copied" "$(cat "$NE")" "CCQUOTA_INT"
 [ -e "$NE.tmp" ] && fail "B: the temp file is gone"
-ok
+st_count
 run
 eq "B: report → exit 0" 0 "$RC"
 contains "B: report says present, 0600" "$OUT" "node.env: present ($NE, 0600)"
@@ -159,7 +159,7 @@ eq "E: nothing to fill from → exit 1" 1 "$RC"
 contains "E: says missing and where it looked" "$OUT" "node.env: missing ($NE) and no agent service definition to fill it from — looked for $AGENT $DAEMON"
 contains "E: points at --plist / re-join" "$OUT" "pass --plist <file>, or re-join with fleet-node-join.sh"
 [ -e "$NE" ] && fail "E: nothing written"
-ok
+st_count
 
 # --- F. --plist <file>; one without a token ----------------------------------------
 plist com.x "$TOKEN" > "$WORK/other.plist"
@@ -172,7 +172,7 @@ run --write --plist "$WORK/notoken.plist"
 eq "F: no token in the plist → exit 3" 3 "$RC"
 contains "F: says so" "$OUT" "$WORK/notoken.plist carries no CCQUOTA_TOKEN in EnvironmentVariables — nothing written"
 [ -e "$NE" ] && fail "F: nothing written for a token-less plist"
-ok
+st_count
 printf 'not a plist\n' > "$WORK/junk.plist"
 run --write --plist "$WORK/junk.plist"
 eq "F: not a plist → exit 1" 1 "$RC"

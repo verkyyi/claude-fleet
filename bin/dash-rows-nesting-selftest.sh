@@ -32,19 +32,18 @@ set -uo pipefail
 export FLEET_DASH_ORDER=status
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 [ -f "$ROWS" ] || { printf 'selftest: rows not found\n' >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/dashnest-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/dashnest-selftest.XXXXXX"
 export TMPDIR="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh
 mkdir -p "$WORK/.claude-dash/global" "$WORK/conf" "$WORK/bin"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
-has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1 — no [$3]" "$2";; esac; }
-hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
+eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
+has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) st_fail "$1 — no [$3]" "$2";; esac; }
+hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) st_fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
 
 US=$'\x1f'
 cat > "$WORK/bin/tmux" <<'SHIM'
@@ -94,7 +93,7 @@ w 12 orphkid /w/r-issue-51        working   @12  51     issue-50   /w/r-issue-51
 # A. nesting
 # ============================================================================
 s=$(side)
-[ -n "$s" ] || fail "the sidebar producer printed nothing"
+[ -n "$s" ] || st_fail "the sidebar producer printed nothing"
 # siblings keep the (rank, idx) order roots always had: a needs row first, then
 # working, then looping — so A2 (!) leads A's block and B (idx 2) leads A (idx 3).
 eq "A: every subtree is contiguous, each row directly under its OWN parent" \

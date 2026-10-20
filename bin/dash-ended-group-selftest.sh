@@ -30,9 +30,9 @@ set -uo pipefail
 export FLEET_DASH_ORDER=status
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
 
 CHECKS=0 FAILS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; FAILS=$((FAILS+1)); }
@@ -48,11 +48,8 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
 mkdir -p "$WORK/bin"
-cat > "$WORK/bin/tmux" <<EOF
-#!/bin/sh
-exec "$REAL_TMUX" -S "$SOCK" "\$@"
-EOF
-printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
+st_tmux_socket "$WORK/bin" "$SOCK"
+st_fake_gh "$WORK/bin"
 chmod +x "$WORK/bin/"*
 export PATH="$WORK/bin:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$WORK/tmp"
 unset TMUX TMUX_PANE FLEET_SESSION FLEET_REPO FLEET_MAIN FLEET_SIDEBAR_CURRENT FLEET_SIDEBAR_CURRENT_ROW FLEET_SHELL 2>/dev/null || true

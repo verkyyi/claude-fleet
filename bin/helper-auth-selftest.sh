@@ -17,14 +17,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 LIB="$BIN/fleet-lib.sh"
 [ -f "$LIB" ] || { printf 'selftest: %s not found\n' "$LIB" >&2; exit 2; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/helper-auth-selftest.XXXXXX")" || exit 2
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 export TMPDIR="$WORK"                       # FLEET_C → $WORK/.claude-dash
 export FLEET_CONF_DIR="$WORK/conf"
@@ -38,8 +37,8 @@ trap 'exit 130' INT TERM HUP
 # shellcheck source=/dev/null
 . "$LIB"
 command -v fleet_helper_claude_auth >/dev/null 2>&1 \
-  || fail "fleet_helper_claude_auth not defined by fleet-lib.sh (issue #497)"
-ok "fleet-lib.sh defines fleet_helper_claude_auth"
+  || st_fail "fleet_helper_claude_auth not defined by fleet-lib.sh (issue #497)"
+st_pass "fleet-lib.sh defines fleet_helper_claude_auth"
 
 mkdir -p "$FLEET_ACCOUNTS_DIR"
 printf 'tok-alpha\n' > "$FLEET_ACCOUNTS_DIR/alpha@example.com"
@@ -48,14 +47,14 @@ chmod 600 "$FLEET_ACCOUNTS_DIR"/*
 
 # NO-PICK: two accounts, nothing inherited ⇒ nothing exported (this login's own).
 got="$( fleet_helper_claude_auth; printf '%s|%s' "${CLAUDE_CODE_OAUTH_TOKEN:-}" "${CLAUDE_SECURESTORAGE_CONFIG_DIR:-}" )"
-[ "$got" = '|' ] || fail "the helper picked an account out of accounts/ — got [$got]"
-ok "two accounts in accounts/, nothing inherited ⇒ nothing exported (the own login)"
+[ "$got" = '|' ] || st_fail "the helper picked an account out of accounts/ — got [$got]"
+st_pass "two accounts in accounts/, nothing inherited ⇒ nothing exported (the own login)"
 
 # INHERIT-WINS: the session credential a worker's hook inherits survives.
 got="$( CLAUDE_CODE_OAUTH_TOKEN=tok-inherited ANTHROPIC_BASE_URL=http://127.0.0.1:1; export CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_BASE_URL
         fleet_helper_claude_auth; printf '%s %s' "$CLAUDE_CODE_OAUTH_TOKEN" "$ANTHROPIC_BASE_URL" )"
 [ "$got" = 'tok-inherited http://127.0.0.1:1' ] \
-  || fail "an inherited session credential was changed — got [$got]"
-ok "an inherited session credential always wins"
+  || st_fail "an inherited session credential was changed — got [$got]"
+st_pass "an inherited session credential always wins"
 
 printf 'selftest OK: %s checks — helper claude -p keeps its inherited credential (T550)\n' "$pass"

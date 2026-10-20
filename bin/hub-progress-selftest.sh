@@ -22,6 +22,7 @@
 # tmux / python3 absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX=$(command -v tmux) || { echo 'hub-progress selftest: tmux absent — SKIP'; exit 0; }
 command -v python3 >/dev/null 2>&1 || { echo 'hub-progress selftest: python3 absent — SKIP'; exit 0; }
@@ -37,7 +38,6 @@ unset TMUX TMUX_PANE CCQUOTA_FLEET CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_PROGR
 
 FAIL=0; CHECKS=0
 fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
-ok() { CHECKS=$((CHECKS + 1)); }
 tf() { "$REAL_TMUX" -L "$L" "$@"; }
 cleanup() { "$REAL_TMUX" -L "$L" kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
@@ -83,29 +83,29 @@ print("%d|%s|%s|%d" % (d["summary"]["total"], k[0]["bucket"] if k else "", k[0].
 run bash "$BIN/fleet-children.sh" -L "$L" issue-7; base="$rc|$out"
 answer 9 "$(ev 9 "$F/issue-42#1.1" "$U/issue-7" report MERGED '{"child":"issue-42","state":"MERGED","pr":"50","node":"mac-a"}')"
 pull
-ok; [ "$rc" = 3 ] && [ ! -e "$WORK/curl.log" ] && [ ! -d "$FLEET_CONF_DIR/hub-progress" ] \
+st_count; [ "$rc" = 3 ] && [ ! -e "$WORK/curl.log" ] && [ ! -d "$FLEET_CONF_DIR/hub-progress" ] \
   || fail "A: hub off ⇒ progress exits 3, asks nothing, writes nothing" "rc=$rc $err"
 run bash "$BIN/fleet-children.sh" -L "$L" issue-7
-ok; [ "$rc|$out" = "$base" ] && [ ! -e "$WORK/curl.log" ] || fail "A: hub off ⇒ fleet-children.sh byte for byte, no pull" "[$out] vs [$base]"
+st_count; [ "$rc|$out" = "$base" ] && [ ! -e "$WORK/curl.log" ] || fail "A: hub off ⇒ fleet-children.sh byte for byte, no pull" "[$out] vs [$base]"
 export CCQUOTA_FLEET=1 CCQUOTA_TOKEN=t0k CCQUOTA_HUB_URL=http://hub.invalid
 FLEET_HUB_PROGRESS=0 run bash "$BIN/fleet-hub-node.sh" progress
-ok; [ "$rc" = 3 ] && [ ! -e "$WORK/curl.log" ] || fail "A: FLEET_HUB_PROGRESS=0 ⇒ exit 3, nothing asked" "rc=$rc"
+st_count; [ "$rc" = 3 ] && [ ! -e "$WORK/curl.log" ] || fail "A: FLEET_HUB_PROGRESS=0 ⇒ exit 3, nothing asked" "rc=$rc"
 
 # --- B: a MERGED that only the hub carried -----------------------------------------------
 answer 9 \
   "$(ev 8 "$F/issue-42#1.1" "$U/issue-7" report MERGED '{"child":"issue-42","state":"MERGED","pr":"50","title":"kid","node":"mac-a"}')" \
   "$(ev 9 "$F/issue-43#1.1" "$F/issue-1" report MERGED '{"child":"issue-43","state":"MERGED","node":"mac-a"}')"
 pull
-ok; [ "$rc" = 0 ] && [ "$(nlines "$LEDGER")" = 1 ] || fail "B: the hub's MERGED lands in the parent's book" "rc=$rc lines=$(nlines "$LEDGER") $out $err"
-ok; python3 -c 'import json, sys; e = json.loads(open(sys.argv[1]).readline())
+st_count; [ "$rc" = 0 ] && [ "$(nlines "$LEDGER")" = 1 ] || fail "B: the hub's MERGED lands in the parent's book" "rc=$rc lines=$(nlines "$LEDGER") $out $err"
+st_count; python3 -c 'import json, sys; e = json.loads(open(sys.argv[1]).readline())
 sys.exit(0 if (e["child"], e["state"], e["pr"], e["node"], e["rid"]) == ("acme-app:issue-42", "MERGED", "50", "mac-a", sys.argv[2]) else 1)' \
   "$LEDGER" "$F/issue-42#1.1" || fail "B: the row carries node + rid" "$(cat "$LEDGER")"
-ok; case "$out" in *'1 new row(s), 1 parent(s) not here'*) ;; *) fail "B: a parent of a fleet not here is skipped, said once" "$out" ;; esac
-ok; [ "$(cat "$FLEET_CONF_DIR/hub-progress/seq")" = 9 ] || fail "B: the cursor moves to the answer's seq" "$(cat "$FLEET_CONF_DIR/hub-progress/seq")"
-ok; grep -q 'since=0' "$WORK/curl.log" && grep -q 'Bearer t0k' "$WORK/curl.log" && grep -q '/v1/node/progress' "$WORK/curl.log" \
+st_count; case "$out" in *'1 new row(s), 1 parent(s) not here'*) ;; *) fail "B: a parent of a fleet not here is skipped, said once" "$out" ;; esac
+st_count; [ "$(cat "$FLEET_CONF_DIR/hub-progress/seq")" = 9 ] || fail "B: the cursor moves to the answer's seq" "$(cat "$FLEET_CONF_DIR/hub-progress/seq")"
+st_count; grep -q 'since=0' "$WORK/curl.log" && grep -q 'Bearer t0k' "$WORK/curl.log" && grep -q '/v1/node/progress' "$WORK/curl.log" \
   || fail "B: GET /v1/node/progress?since=0 with the node token" "$(cat "$WORK/curl.log")"
 pull
-ok; grep -q 'since=9' "$WORK/curl.log" || fail "B: the next pull asks from the cursor" "$(tail -n 1 "$WORK/curl.log")"
+st_count; grep -q 'since=9' "$WORK/curl.log" || fail "B: the next pull asks from the cursor" "$(tail -n 1 "$WORK/curl.log")"
 
 # --- C: two roads, one row ----------------------------------------------------------------
 R2="$F/issue-44#1.1"
@@ -113,38 +113,38 @@ relay=$(python3 -c 'import json, sys; f, t, i = sys.argv[1:4]
 print(json.dumps({"id": i, "kind": "child_report", "from": f, "to": t, "from_node": "mac-a",
   "payload": {"child": "issue-44", "state": "WAITING", "pr": "51", "tier": "silent", "msg": "x"}}))' "$F/issue-44" "$U/issue-7" "$R2")
 printf '%s' "$relay" | env -u TMUX bash "$BIN/fleet-hub-node.sh" deliver 2>/dev/null
-ok; [ "$(nlines "$LEDGER")" = 2 ] || fail "C: the push lands first" "$(cat "$LEDGER")"
+st_count; [ "$(nlines "$LEDGER")" = 2 ] || fail "C: the push lands first" "$(cat "$LEDGER")"
 answer 10 "$(ev 10 "$R2" "$U/issue-7" report WAITING '{"child":"issue-44","state":"WAITING","pr":"51","tier":"silent","node":"mac-a"}')"
 pull
-ok; [ "$(nlines "$LEDGER")" = 2 ] || fail "C: the same event by the pull is not a second row" "$(cat "$LEDGER")"
+st_count; [ "$(nlines "$LEDGER")" = 2 ] || fail "C: the same event by the pull is not a second row" "$(cat "$LEDGER")"
 rm -f "$FLEET_CONF_DIR/hub-progress/seq"
 answer 10 \
   "$(ev 8 "$F/issue-42#1.1" "$U/issue-7" report MERGED '{"child":"issue-42","state":"MERGED","pr":"50","node":"mac-a"}')" \
   "$(ev 10 "$R2" "$U/issue-7" report WAITING '{"child":"issue-44","state":"WAITING","pr":"51","node":"mac-a"}')"
 pull
-ok; [ "$(nlines "$LEDGER")" = 2 ] && [ -z "$out" ] || fail "C: a pull from seq 0 again adds nothing" "lines=$(nlines "$LEDGER") $out"
+st_count; [ "$(nlines "$LEDGER")" = 2 ] && [ -z "$out" ] || fail "C: a pull from seq 0 again adds nothing" "lines=$(nlines "$LEDGER") $out"
 
 # --- D + E: a placement advances in one row -------------------------------------------------
 : > "$LEDGER"; rm -f "$DISP" "$FLEET_CONF_DIR/hub-progress/seq"
 # The spawn's own row, as dash-issue-session.sh writes it for an --async placement.
 python3 "$BIN/fleet-children.py" dispatch --file "$DISP" --child acme-app:issue-42 --state accepted --node mac-a --op "$O1" >/dev/null
-ok; [ "$(kid)" = "1|▸|accepted|1" ] || fail "D: placed, nothing more ⇒ one working row, progress accepted" "$(kid)"
+st_count; [ "$(kid)" = "1|▸|accepted|1" ] || fail "D: placed, nothing more ⇒ one working row, progress accepted" "$(kid)"
 txt=$(env -u TMUX FLEET_HUB_PROGRESS=0 bash "$BIN/fleet-children.sh" -L "$L" issue-7)
-ok; case "$txt" in *'↗ acme-app:issue-42'*) fail "D: no ↗ line of its own" "$txt" ;; *'▸ acme-app:issue-42'*'gone · mac-a'*'accepted'*'0/1 ✓') ;; *) fail "D: the text row says where and how far" "$txt" ;; esac
+st_count; case "$txt" in *'↗ acme-app:issue-42'*) fail "D: no ↗ line of its own" "$txt" ;; *'▸ acme-app:issue-42'*'gone · mac-a'*'accepted'*'0/1 ✓') ;; *) fail "D: the text row says where and how far" "$txt" ;; esac
 step() { # <seq> <rid> <kind> <state> <event-json> <want kid()> <what>
   answer "$1" "$(ev "$1" "$2" "$U/issue-7" "$3" "$4" "$5")"; : > "$WORK/curl.log"; pull
-  ok; [ "$(kid)" = "$6" ] || fail "D: $7" "$(kid) (rc=$rc $err)"
+  st_count; [ "$(kid)" = "$6" ] || fail "D: $7" "$(kid) (rc=$rc $err)"
 }
 step 21 "op:$O1:running" dispatch running '{"op":"'"$O1"'","node":"mac-a","issue":"42","repo":"acme/app","state":"running"}' "1|▸|starting|1" "running ⇒ starting"
-ok; grep -q "ops=$O1" "$WORK/curl.log" || fail "E: an open placement rides along as ops=" "$(cat "$WORK/curl.log")"
+st_count; grep -q "ops=$O1" "$WORK/curl.log" || fail "E: an open placement rides along as ops=" "$(cat "$WORK/curl.log")"
 step 22 "op:$O1:done" dispatch 'done' '{"op":"'"$O1"'","node":"mac-a","issue":"42","repo":"acme/app","state":"done","window":"@9","exit":0}' "1|▸|running|1" "done ⇒ running there"
-ok; grep -q "ops=$O1" "$WORK/curl.log" || fail "E: still open when this pull asked" "$(cat "$WORK/curl.log")"
+st_count; grep -q "ops=$O1" "$WORK/curl.log" || fail "E: still open when this pull asked" "$(cat "$WORK/curl.log")"
 step 23 "$F/issue-42#2.1" report WAITING '{"child":"issue-42","state":"WAITING","pr":"60","verdict":"pr-open","node":"mac-a"}' "1|⏳|pr|1" "a WAITING report with its PR ⇒ pr"
-ok; ! grep -q 'ops=' "$WORK/curl.log" || fail "E: a final placement is not asked about again" "$(cat "$WORK/curl.log")"
+st_count; ! grep -q 'ops=' "$WORK/curl.log" || fail "E: a final placement is not asked about again" "$(cat "$WORK/curl.log")"
 step 24 "$F/issue-42#2.2" report MERGED '{"child":"issue-42","state":"MERGED","pr":"60","node":"mac-a"}' "1|✓|merged|1" "MERGED ⇒ merged, ✓"
-ok; [ "$(grep -c '"rid"' "$DISP")" = 2 ] && [ "$(nlines "$DISP")" = 3 ] || fail "D: the stream's states are rid-stamped rows of .dispatch" "$(cat "$DISP")"
+st_count; [ "$(grep -c '"rid"' "$DISP")" = 2 ] && [ "$(nlines "$DISP")" = 3 ] || fail "D: the stream's states are rid-stamped rows of .dispatch" "$(cat "$DISP")"
 pull
-ok; [ "$(nlines "$DISP")" = 3 ] && [ "$(nlines "$LEDGER")" = 2 ] || fail "D: the same answer twice adds nothing" "$(cat "$DISP" "$LEDGER")"
+st_count; [ "$(nlines "$DISP")" = 3 ] && [ "$(nlines "$LEDGER")" = 2 ] || fail "D: the same answer twice adds nothing" "$(cat "$DISP" "$LEDGER")"
 
 # --- F: a later quiet row never un-lands -----------------------------------------------------
 B="$WORK/f/scratch-1.ndjson"; mkdir -p "$WORK/f"
@@ -152,13 +152,13 @@ for st in MERGED STOPPED; do printf '{"child":"issue-5","state":"%s","pr":"70"}'
 printf '{"child":"issue-6","state":"STOPPED","pr":""}' | python3 "$BIN/fleet-children.py" append --file "$B" >/dev/null
 printf 'issue-6\t#71\tMERGED\n' > "$WORK/f/prmap"
 fo=$(python3 "$BIN/fleet-children.py" show --dir "$WORK/f" --parent scratch-1 --json --prmap "$WORK/f/prmap" < /dev/null)
-ok; python3 -c 'import json, sys; d = json.loads(sys.argv[1]); k = {c["child"]: c for c in d["children"]}
+st_count; python3 -c 'import json, sys; d = json.loads(sys.argv[1]); k = {c["child"]: c for c in d["children"]}
 assert k["issue-5"]["bucket"] == "✓" and k["issue-5"]["progress"] == "merged" and k["issue-5"]["last"]["state"] == "STOPPED", k["issue-5"]
 assert k["issue-5"]["settled"]["state"] == "MERGED", k["issue-5"]
 assert k["issue-6"]["bucket"] == "✓" and k["issue-6"]["progress"] == "merged", k["issue-6"]
 assert d["summary"]["text"] == "2/2 ✓", d["summary"]' "$fo" 2>"$WORK/err" || fail "F: STOPPED after MERGED (or a merged PR) reads ✓ merged" "$(cat "$WORK/err")"
 ft=$(python3 "$BIN/fleet-children.py" show --dir "$WORK/f" --parent scratch-1 --prmap "$WORK/f/prmap" < /dev/null)
-ok; case "$ft" in *'✓ issue-5'*'MERGED #70'*) ;; *) fail "F: the text row shows the MERGED" "$ft" ;; esac
+st_count; case "$ft" in *'✓ issue-5'*'MERGED #70'*) ;; *) fail "F: the text row shows the MERGED" "$ft" ;; esac
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'hub-progress selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2; exit 1

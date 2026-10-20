@@ -27,6 +27,7 @@ set -uo pipefail
 export FLEET_DASH_ORDER=status
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 TOGGLE="$BIN/dash-pin-toggle.sh"
 for f in "$ROWS" "$TOGGLE"; do
@@ -51,10 +52,7 @@ export FLEET_CONF_DIR="$WORK/conf"     # keep #566's @wid allocation lock in the
 mkdir -p "$WORK/conf" "$WORK/bin"
 
 SOCK="$WORK/tmux.sock"
-cat > "$WORK/bin/tmux" <<EOF
-#!/bin/sh
-exec "$REAL_TMUX" -S "$SOCK" "\$@"
-EOF
+st_tmux_socket "$WORK/bin" "$SOCK"
 chmod +x "$WORK/bin/tmux"
 export PATH="$WORK/bin:$PATH"
 export TMPDIR="$WORK"                  # scope the dash cache under WORK

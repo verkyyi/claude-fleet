@@ -19,21 +19,18 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SUT="$BIN/fleet-claude.sh"
 LIB="$BIN/fleet-lib.sh"
 for f in "$SUT" "$LIB"; do [ -f "$f" ] || { printf 'selftest: %s missing\n' "$f" >&2; exit 2; }; done
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-claude-stamp.XXXXXX")" || exit 2
 SOCK="$WORK/tmux.sock"
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf"
 
 # PATH shim: every `tmux` (the SUT's and this script's) goes to the private server.
-cat > "$WORK/fakebin/tmux" <<EOF
-#!/bin/sh
-exec "$REAL_TMUX" -S "$SOCK" "\$@"
-EOF
+st_tmux_socket "$WORK/fakebin" "$SOCK"
 # fake `claude`: just keep the window alive long enough to read the stamp off it.
 printf '#!/bin/sh\nsleep 20\n' > "$WORK/fakebin/claude"
 chmod +x "$WORK/fakebin/tmux" "$WORK/fakebin/claude"

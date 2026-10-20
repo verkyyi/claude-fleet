@@ -24,9 +24,9 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
 
@@ -39,7 +39,7 @@ if [ "\${1:-}" = -L ]; then s="$WORK/sock.\$2"; shift 2; exec "$REAL_TMUX" -S "\
 [ -n "\${TMUX:-}" ] || exec "$REAL_TMUX" -S "$WORK/sock.none" "\$@"
 exec "$REAL_TMUX" "\$@"
 EOF
-printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
+st_fake_gh "$WORK/bin"
 chmod +x "$WORK/bin/tmux" "$WORK/bin/gh"
 export PATH="$WORK/bin:$PATH"
 

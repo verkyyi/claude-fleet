@@ -63,21 +63,19 @@
 #                     the same way; FLEET_POOL_FETCH_SECS (the scratch fetch) stays
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-sections.sh"
 selftest_sections 4
 for f in fleet-conf.sh fleet-lib.sh fleet-client-core.sh fleet-doctor.sh fleet_config_write.py fleet-connect.py fleet-login.py; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-conf-selftest.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-conf-selftest.XXXXXX" physical
 
 CHECKS=0 FAILS=0
-ok()  { CHECKS=$((CHECKS + 1)); }
 bad() { CHECKS=$((CHECKS + 1)); FAILS=$((FAILS + 1)); printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/    | /' >&2; }
-is()  { if [ "$2" = "$3" ]; then ok; else bad "$1 — want [$3] got [$2]"; fi; }
-has() { case "$2" in *"$3"*) ok ;; *) bad "$1 — lacks [$3]" "$2" ;; esac; }
-hasnt() { case "$2" in *"$3"*) bad "$1 — carries [$3]" "$2" ;; *) ok ;; esac; }
+is()  { if [ "$2" = "$3" ]; then st_count; else bad "$1 — want [$3] got [$2]"; fi; }
+has() { case "$2" in *"$3"*) st_count ;; *) bad "$1 — lacks [$3]" "$2" ;; esac; }
+hasnt() { case "$2" in *"$3"*) bad "$1 — carries [$3]" "$2" ;; *) st_count ;; esac; }
 
 # A sandbox install: bin/ as a dir of symlinks (so $BIN/../fleet.conf is the
 # sandbox's), HOME and FLEET_CONF_DIR of its own.
@@ -173,7 +171,7 @@ sec_A() {
 mkbox a
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
 is "A: migrate on an empty login exits 0" "$rc" 0
-[ -e "$CD/fleet.conf" ] && bad "A: no file may be written for a login that is neither" || ok
+[ -e "$CD/fleet.conf" ] && bad "A: no file may be written for a login that is neither" || st_count
 is "A: role none" "$(run bash "$INS/bin/fleet-conf.sh" role)" none
 is "A: host 0" "$(run bash "$INS/bin/fleet-conf.sh" host)" 0
 d=$(doctor)
@@ -207,8 +205,8 @@ hasnt "B: no credential in the config" "$mc" "vt-secret-123"
 is "B: secrets.env holds the token" "$(grep -c 'vt-secret-123' "$CD/secrets.env")" 1
 is "B: secrets.env is 0600" "$(stat -c '%a' "$CD/secrets.env" 2>/dev/null || stat -f '%Lp' "$CD/secrets.env")" 600
 is "B: fleet.conf is 0600" "$(stat -c '%a' "$CD/fleet.conf" 2>/dev/null || stat -f '%Lp' "$CD/fleet.conf")" 600
-[ -f "$INS/fleet.conf.bak" ] && [ ! -e "$INS/fleet.conf" ] && ok || bad "B: install fleet.conf kept as .bak, gone from its path"
-[ -f "$CD/fleets/fleet/conf.bak" ] && ok || bad "B: fleet conf kept as .bak"
+[ -f "$INS/fleet.conf.bak" ] && [ ! -e "$INS/fleet.conf" ] && st_count || bad "B: install fleet.conf kept as .bak, gone from its path"
+[ -f "$CD/fleets/fleet/conf.bak" ] && st_count || bad "B: fleet conf kept as .bak"
 fc=$(grep -v '^#' "$CD/fleets/fleet/conf")
 hasnt "B: fleet conf trimmed (FLEET_ISSUE_BRIDGE moved)" "$fc" FLEET_ISSUE_BRIDGE
 # …and its repo moved into repos/ like every repo (issue #1937; leg I pins it)
@@ -217,7 +215,7 @@ ov=$(cat "$CD/fleets/fleet/repos/acme-app.conf" 2>/dev/null)
 has "B: the repo's overlay holds its identity" "$ov" 'FLEET_REPO="acme/app"'
 has "B: …and FLEET_SEED" "$ov" 'FLEET_SEED="1"'
 is "B: node.env untouched" "$(cat "$CD/node.env")" "$(printf 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=node-tok')"
-sh -n "$CD/fleet.conf" && ok || bad "B: the file parses under sh"
+sh -n "$CD/fleet.conf" && st_count || bad "B: the file parses under sh"
 snap=$(cat "$CD/fleet.conf")
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1)
 has "B: a second migrate is a no-op" "$out" "already one file"
@@ -243,7 +241,7 @@ has "C: shell.conf's keys in [client]" "$(sed -n '/^# ---- \[client\]/,$p' "$CD/
 hasnt "C: a client file has no [node] section" "$mc" 'FLEET_SHELL:-0}" != 1'
 hj=$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(sorted(d.items()))' "$CD/hub.json")
 is "C: hub.json keeps only its token" "$hj" "[('token', 'wc-tok')]"
-[ -f "$CD/hub.json.bak" ] && [ -f "$CD/shell.conf.bak" ] && [ ! -e "$CD/shell.conf" ] && ok || bad "C: hub.json / shell.conf kept as .bak"
+[ -f "$CD/hub.json.bak" ] && [ -f "$CD/shell.conf.bak" ] && [ ! -e "$CD/shell.conf" ] && st_count || bad "C: hub.json / shell.conf kept as .bak"
 got=$(run python3 -c 'import importlib.util,sys
 s=importlib.util.spec_from_file_location("fc", sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)
 print(m.machine_conf_hub())' "$INS/bin/fleet-connect.py")
@@ -274,7 +272,7 @@ after=$(KEYS=$FLEET_KEYS view)
 is "D: a node reader resolves every key as before" "$after" "$before"
 has "D: the conf's repo now resolves from repos/" "$(view)" "FLEET_REPO=acme/app"
 has "D: fleet.settings folded" "$(cat "$CD/fleet.conf")" "FLEET_INSTALL_SYNC=0"
-[ -f "$CD/fleet.settings.bak" ] && [ ! -e "$CD/fleet.settings" ] && ok || bad "D: fleet.settings kept as .bak"
+[ -f "$CD/fleet.settings.bak" ] && [ ! -e "$CD/fleet.settings" ] && st_count || bad "D: fleet.settings kept as .bak"
 sv=$(view shell)
 has "D: the shell reads [client]" "$sv" "FLEET_SHELL_WIDTH=34"
 has "D: the shell reads [common]" "$sv" "FLEET_NODE_ALIASES=mac-c=mac-b mac-d=mac-a"
@@ -290,7 +288,7 @@ run python3 "$INS/bin/fleet_config_write.py" "$CD/fleet.conf" FLEET_NEW_KNOB 7 n
 s=importlib.util.spec_from_file_location("w", sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)
 m.write(sys.argv[2], "FLEET_NEW_KNOB", "7", "num")' "$INS/bin/fleet_config_write.py" "$CD/fleet.conf"
 is "E: the writer puts a new key inside [node]" "$(grep -A1 'FLEET_NEW_KNOB' "$CD/fleet.conf" | tail -n1)" 'fi  # ---- [node] end ----'
-sh -n "$CD/fleet.conf" && ok || bad "E: still parses"
+sh -n "$CD/fleet.conf" && st_count || bad "E: still parses"
 is "E: the shell does not see a node write" "$(view shell | grep -c FLEET_NEW_KNOB)" 0
 mkbox e
 run bash "$INS/bin/fleet-conf.sh" set-hub https://hub.example --role client; rc=$?
@@ -305,7 +303,7 @@ run bash "$INS/bin/fleet-conf.sh" set-hub https://hub.example
 is "E: set-hub never turns hosting off" "$(run bash "$INS/bin/fleet-conf.sh" host)" 1
 run bash "$INS/bin/fleet-conf.sh" set-host 0
 is "E: set-host 0" "$(grep '^FLEET_HOST=' "$CD/fleet.conf")" 'FLEET_HOST=0'
-sh -n "$CD/fleet.conf" && ok || bad "E: still parses after set-host"
+sh -n "$CD/fleet.conf" && st_count || bad "E: still parses after set-host"
 
 }
 
@@ -349,7 +347,7 @@ mkbox g3; oldkey client
 run bash "$INS/bin/fleet-conf.sh" migrate --quiet >/dev/null 2>&1
 has "G client: FLEET_HOST=0" "$(cat "$CD/fleet.conf")" "FLEET_HOST=0"
 is "G client: role still answers (one version)" "$(run bash "$INS/bin/fleet-conf.sh" role)" client
-sh -n "$CD/fleet.conf" && ok || bad "G: the rewritten file parses"
+sh -n "$CD/fleet.conf" && st_count || bad "G: the rewritten file parses"
 
 }
 
@@ -480,7 +478,7 @@ rview() { lib_i 'for r in $(fleet_repos fleet); do ( fleet_load_repo_conf fleet 
 repos0=$(lib_i 'fleet_repos fleet')
 is "I: the old layout's conf repo is not read — the overlays only" "$(printf '%s\n' "$repos0" | tr '\n' ' ')" "aaa/first acme/app zzz/last "
 uuid0=$(lib_i 'fleet_uuid fleet'); rm -f "$CD/fleets/fleet/identity"   # computed, then un-frozen again
-case "$uuid0" in ????????-????-????-????-????????????) ok ;; *) bad "I: no UUID computed before ($uuid0)" ;; esac
+case "$uuid0" in ????????-????-????-????-????????????) st_count ;; *) bad "I: no UUID computed before ($uuid0)" ;; esac
 rv_want="acme/app main=$H/p/app base=main deploy=origin/prod model=sonnet ctx=7
 aaa/first main=$H/p/first base=master deploy= model= ctx=7
 zzz/last main=$H/p/last base=dev deploy= model= ctx=7
@@ -493,7 +491,7 @@ is "I: migrate exits 0" "$rc" 0
 has "I: says it moved" "$out" "every repo in repos/ — fleet:acme/app"
 is "I: fleet_repos lists the moved repo first" "$(lib_i 'fleet_repos fleet' | tr '\n' ' ')" "acme/app aaa/first zzz/last "
 is "I: fleet_uuid unchanged" "$(lib_i 'fleet_uuid fleet')" "$uuid0"
-[ -f "$CD/fleets/fleet/identity" ] && ok || bad "I: the identity was not frozen by the move"
+[ -f "$CD/fleets/fleet/identity" ] && st_count || bad "I: the identity was not frozen by the move"
 is "I: every repo resolves as the old layout meant (and a caller with no window reads the first)" "$(rview)" "$rv_want"
 fc=$(grep -v '^#' "$CD/fleets/fleet/conf")
 is "I: the fleet conf keeps only the fleet's setting" "$fc" 'FLEET_CTX_WINDOW="7"'
@@ -502,7 +500,7 @@ has "I: the overlay took the identity" "$ov" "FLEET_MAIN=\"$H/p/app\""
 has "I: …and the repo-scoped deploy key" "$ov" 'FLEET_DEPLOY_REF="origin/prod"'
 has "I: …and kept its own override" "$ov" 'FLEET_MODEL="sonnet"'
 is "I: repos/.order puts it first, the rest as they were" "$(cat "$CD/fleets/fleet/repos/.order" | tr '\n' ' ')" "acme-app aaa-first zzz-last "
-[ -f "$CD/fleets/fleet/conf.bak" ] && [ -f "$CD/fleets/fleet/repos/acme-app.conf.bak" ] && ok \
+[ -f "$CD/fleets/fleet/conf.bak" ] && [ -f "$CD/fleets/fleet/repos/acme-app.conf.bak" ] && st_count \
   || bad "I: the conf and the old overlay are kept as .bak"
 list1=$(run bash "$INS/bin/fleet-repo.sh" list --session fleet 2>&1)
 is "I: fleet-repo.sh list names the three repos" "$(printf '%s\n' "$list1" | awk 'NR>1{print $1}' | tr '\n' ' ')" "acme/app aaa/first zzz/last "
@@ -557,7 +555,7 @@ has "J: CCQUOTA_FLEET in the file" "$mc" "export CCQUOTA_FLEET=1"
 has "J: FLEET_HUB_URL in the file" "$mc" 'export FLEET_HUB_URL="https://hub.example"'
 hasnt "J: no token entered it" "$mc" "node-tok"
 is "J: both sit in [common]" "$(awk '/^# ---- \[common\]/{c=1;next} /^# ---- \[/{c=0} c' "$CD/fleet.conf" | grep -cE '^export (CCQUOTA_FLEET|FLEET_HUB_URL)=')" 2
-sh -n "$CD/fleet.conf" && ok || bad "J: the file still parses"
+sh -n "$CD/fleet.conf" && st_count || bad "J: the file still parses"
 vv=$(view)
 has "J: a node script reads the hub as on" "$vv" "CCQUOTA_FLEET=1"
 has "J: the shell reads it too" "$(run FLEET_SHELL=1 bash -c '. "$0/fleet-lib.sh"; printf "%s" "$FLEET_HUB_URL"' "$INS/bin")" "https://hub.example"

@@ -23,16 +23,14 @@
 set -u
 
 BIN=$(cd "$(dirname "$0")" && pwd)
+. "$BIN/selftest-lib.sh"
 ROOT=$(cd "$BIN/.." && pwd)
 [ -f "$BIN/fleet-mcp.py" ] || { echo "selftest: fleet-mcp.py missing" >&2; exit 2; }
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/skill-tools.XXXXXX") || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/skill-tools.XXXXXX"
 trap 'exit 130' INT TERM HUP
 
 pass=0
-ok()   { pass=$((pass + 1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 # The tools each server really serves (tools/list, no hub, no tmux needed): `fleet`,
 # and the dispatch group `fleet-orch` (issue #3113) — a line is `<server>__<tool>`.
@@ -43,9 +41,9 @@ for grp in core orch; do
   srv=fleet; [ "$grp" = orch ] && srv=fleet-orch
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
     | env -u TMUX -u TMUX_PANE -u FLEET_MCP_EXEC FLEET_MCP_ORCH=1 python3 "$BIN/fleet-mcp.py" --group "$grp" > "$WORK/list" 2>"$WORK/list.err" \
-    || fail "fleet-mcp.py --group $grp tools/list failed" "$(cat "$WORK/list.err")"
+    || st_fail "fleet-mcp.py --group $grp tools/list failed" "$(cat "$WORK/list.err")"
   python3 -c 'import json,sys; print("\n".join(sys.argv[2] + "__" + t["name"] for t in json.load(open(sys.argv[1]))["result"]["tools"]))' \
-    "$WORK/list" "$srv" >> "$WORK/tools" || fail "could not read the tool list" "$(cat "$WORK/list")"
+    "$WORK/list" "$srv" >> "$WORK/tools" || st_fail "could not read the tool list" "$(cat "$WORK/list")"
 done
 
 cat > "$WORK/lint.py" <<'PY'
@@ -130,13 +128,13 @@ cat > "$WORK/fx/red-fence.md" <<'MD'
 ```
 MD
 for f in red-path red-lib red-tool red-server red-after red-fence; do
-  out=$(lint "$WORK/fx/$f.md") && fail "A: $f.md should be red" "$out"
+  out=$(lint "$WORK/fx/$f.md") && st_fail "A: $f.md should be red" "$out"
 done
 out=$(lint "$WORK/fx/red-after.md")
-case "$out" in *'red-after.md:7:'*) : ;; *) fail "A: the exemption must end at the next same-level heading" "$out" ;; esac
-case "$out" in *'red-after.md:3:'*|*'red-after.md:5:'*) fail "A: a path under 排障 (and its sub-heading) must be clean" "$out" ;; esac
-out=$(lint "$WORK/fx/clean.md") || fail "A: clean.md should be clean" "$out"
-ok "A linter: a path in a worker step / fleet-lib.sh / an unknown tool / a tool on the wrong server are red; 排障 · 运营者 sections are exempt to the next heading; a fenced # is no heading"
+case "$out" in *'red-after.md:7:'*) : ;; *) st_fail "A: the exemption must end at the next same-level heading" "$out" ;; esac
+case "$out" in *'red-after.md:3:'*|*'red-after.md:5:'*) st_fail "A: a path under 排障 (and its sub-heading) must be clean" "$out" ;; esac
+out=$(lint "$WORK/fx/clean.md") || st_fail "A: clean.md should be clean" "$out"
+st_pass "A linter: a path in a worker step / fleet-lib.sh / an unknown tool / a tool on the wrong server are red; 排障 · 运营者 sections are exempt to the next heading; a fenced # is no heading"
 
 # --- B: the real skills ------------------------------------------------------------
 set --
@@ -145,23 +143,23 @@ for f in "$ROOT"/commands/*.md; do
 done
 for f in commands/fleet-handoff.md commands/fleet-compact-resume.md \
          commands/fleet-context.md skills/fleet-open/SKILL.md skills/fleet-help/SKILL.md skills/handoff/SKILL.md conf/codex-preamble.md; do
-  [ -f "$ROOT/$f" ] || fail "B: $f is in scope but missing"
+  [ -f "$ROOT/$f" ] || st_fail "B: $f is in scope but missing"
   case " $* " in *" $ROOT/$f "*) : ;; *) set -- "$@" "$ROOT/$f" ;; esac
 done
-out=$(lint "$@") || fail "B: a worker skill still names a script path (or an unknown tool)" "$out"
-ok "B worker skills ($#): no ~/.claude/fleet/bin path outside 排障 / 运营者, every mcp__fleet__ tool real"
+out=$(lint "$@") || st_fail "B: a worker skill still names a script path (or an unknown tool)" "$out"
+st_pass "B worker skills ($#): no ~/.claude/fleet/bin path outside 排障 / 运营者, every mcp__fleet__ tool real"
 
 # --- C: the lifecycle skills name the tools that replaced their scripts -------------
 need() { # need <file> <tool>…
   f=$1; shift
   for t in "$@"; do
-    grep -Eqw "mcp__fleet(-orch)?__$t" "$ROOT/$f" || fail "C: $f must name mcp__fleet__$t (or the dispatch group's mcp__fleet-orch__$t)"
+    grep -Eqw "mcp__fleet(-orch)?__$t" "$ROOT/$f" || st_fail "C: $f must name mcp__fleet__$t (or the dispatch group's mcp__fleet-orch__$t)"
   done
 }
 need commands/fleet-handoff.md status context handoff transfer
 need commands/fleet-compact-resume.md brief pr_verdict
 need commands/fleet-context.md context
 need skills/fleet-open/SKILL.md open where show
-ok "C handoff · compact-resume · context · fleet-open name the tools that replaced their scripts"
+st_pass "C handoff · compact-resume · context · fleet-open name the tools that replaced their scripts"
 
 printf 'skill-tools-selftest: %d passed\n' "$pass"

@@ -22,6 +22,7 @@
 # tmux absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX=$(command -v tmux) || { echo 'spawn-origin-gate selftest: tmux absent — SKIP'; exit 0; }
 
@@ -46,7 +47,6 @@ export PATH="$WORK/shim:$PATH"
 
 FAIL=0; CHECKS=0
 fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
-ok() { CHECKS=$((CHECKS + 1)); }
 tf() { "$REAL_TMUX" -L "$L" "$@"; }
 cleanup() { "$REAL_TMUX" -L "$L" kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
@@ -70,57 +70,57 @@ gate() {
 }
 
 # --- A: fleet_origin_gate ---------------------------------------------------------
-r=$(gate '' '' "$L" '' issue-7);              ok; [ "$r" = '0|' ] || fail "A: a live parent key passes" "$r"
+r=$(gate '' '' "$L" '' issue-7);              st_count; [ "$r" = '0|' ] || fail "A: a live parent key passes" "$r"
 r=$(gate '' '' "$L" issue-99 issue-99)
-ok; case "$r" in '4|上级 issue-99 不是活着的会话'*) ;; *) fail "A: a key no window answers to → 4 + reason" "$r" ;; esac
+st_count; case "$r" in '4|上级 issue-99 不是活着的会话'*) ;; *) fail "A: a key no window answers to → 4 + reason" "$r" ;; esac
 r=$(gate "$INTMUX" '' "$L" '' '')
-ok; case "$r" in '4|cannot tell who is spawning'*) ;; *) fail "A: lost pane, no --origin → 4" "$r" ;; esac
-r=$(gate "$INTMUX" '' "$L" hub '');           ok; [ "$r" = '0|' ] || fail "A: lost pane + --origin hub → 0" "$r"
-r=$(gate "$INTMUX" '' "$L" issue-7 issue-7);  ok; [ "$r" = '0|' ] || fail "A: lost pane + a live --origin key → 0" "$r"
+st_count; case "$r" in '4|cannot tell who is spawning'*) ;; *) fail "A: lost pane, no --origin → 4" "$r" ;; esac
+r=$(gate "$INTMUX" '' "$L" hub '');           st_count; [ "$r" = '0|' ] || fail "A: lost pane + --origin hub → 0" "$r"
+r=$(gate "$INTMUX" '' "$L" issue-7 issue-7);  st_count; [ "$r" = '0|' ] || fail "A: lost pane + a live --origin key → 0" "$r"
 r=$(gate "$INTMUX" '' "$L" issue-99 issue-99)
-ok; case "$r" in '4|上级 issue-99'*) ;; *) fail "A: lost pane + a dead --origin key → 4" "$r" ;; esac
-r=$(gate "$INTMUX" "$phub" "$L" '' '');       ok; [ "$r" = '0|' ] || fail "A: a hub pane (empty origin) → 0" "$r"
-r=$(gate '' '' "$L" '' '');                   ok; [ "$r" = '0|' ] || fail "A: headless (no \$TMUX) → 0" "$r"
-r=$(gate '' '' "$L" autofill autofill);       ok; [ "$r" = '0|' ] || fail "A: autofill → 0" "$r"
-r=$(gate '' '' "$L" bridge bridge);           ok; [ "$r" = '0|' ] || fail "A: bridge → 0" "$r"
-r=$(gate '' '' "$L" otherfleet otherfleet);   ok; [ "$r" = '0|' ] || fail "A: a free label (#516 source fleet) → 0" "$r"
-r=$(gate "$INTMUX" '' "$L" '' issue-5 "abc/issue-5"); ok; [ "$r" = '0|' ] || fail "A: --origin-wid (another machine vetted it) → 0" "$r"
+st_count; case "$r" in '4|上级 issue-99'*) ;; *) fail "A: lost pane + a dead --origin key → 4" "$r" ;; esac
+r=$(gate "$INTMUX" "$phub" "$L" '' '');       st_count; [ "$r" = '0|' ] || fail "A: a hub pane (empty origin) → 0" "$r"
+r=$(gate '' '' "$L" '' '');                   st_count; [ "$r" = '0|' ] || fail "A: headless (no \$TMUX) → 0" "$r"
+r=$(gate '' '' "$L" autofill autofill);       st_count; [ "$r" = '0|' ] || fail "A: autofill → 0" "$r"
+r=$(gate '' '' "$L" bridge bridge);           st_count; [ "$r" = '0|' ] || fail "A: bridge → 0" "$r"
+r=$(gate '' '' "$L" otherfleet otherfleet);   st_count; [ "$r" = '0|' ] || fail "A: a free label (#516 source fleet) → 0" "$r"
+r=$(gate "$INTMUX" '' "$L" '' issue-5 "abc/issue-5"); st_count; [ "$r" = '0|' ] || fail "A: --origin-wid (another machine vetted it) → 0" "$r"
 
 # --- B: fleet_epic_parent_key -----------------------------------------------------
 pk() { TMUX="$1" TMUX_PANE="$2" bash -c '. "$1/fleet-lib.sh"; fleet_epic_parent_key "$2" acme/app 1645' _ "$BIN" "$L" 2>"$WORK/pk.err"; }
-out=$(pk "$INTMUX" "$p7"); rc=$?;  ok; [ "$rc:$out" = '0:acme-app:issue-7' ]   # keys carry the repo (#1939) || fail "B: a worker pane → its own key" "$rc:$out"
-out=$(pk "$INTMUX" "$phub"); rc=$?; ok; [ "$rc:$out" = '1:' ] || fail "B: a hub pane → rc 1, never the EPIC's key" "$rc:$out"
-ok; grep -q 'scratch or worker pane' "$WORK/pk.err" || fail "B: the refusal says where to run it" "$(cat "$WORK/pk.err")"
-out=$(pk "$INTMUX" ''); rc=$?;     ok; [ "$rc:$out" = '1:' ] || fail "B: no \$TMUX_PANE → rc 1" "$rc:$out"
-out=$(pk '' ''); rc=$?;            ok; [ "$rc:$out" = '1:' ] || fail "B: headless → rc 1" "$rc:$out"
+out=$(pk "$INTMUX" "$p7"); rc=$?;  st_count; [ "$rc:$out" = '0:acme-app:issue-7' ]   # keys carry the repo (#1939) || fail "B: a worker pane → its own key" "$rc:$out"
+out=$(pk "$INTMUX" "$phub"); rc=$?; st_count; [ "$rc:$out" = '1:' ] || fail "B: a hub pane → rc 1, never the EPIC's key" "$rc:$out"
+st_count; grep -q 'scratch or worker pane' "$WORK/pk.err" || fail "B: the refusal says where to run it" "$(cat "$WORK/pk.err")"
+out=$(pk "$INTMUX" ''); rc=$?;     st_count; [ "$rc:$out" = '1:' ] || fail "B: no \$TMUX_PANE → rc 1" "$rc:$out"
+out=$(pk '' ''); rc=$?;            st_count; [ "$rc:$out" = '1:' ] || fail "B: headless → rc 1" "$rc:$out"
 
 # --- C: dash-issue-session.sh end to end ------------------------------------------
 dis() { local t="$1" p="$2"; shift 2; TMUX="$t" TMUX_PANE="$p" bash "$BIN/dash-issue-session.sh" "$@" 2>"$WORK/dis.err" >/dev/null; }
 n0=$(nwin)
 dis "$INTMUX" '' 41 "$L" --title t; rc=$?
-ok; [ "$rc" = 4 ] || fail "C: no \$TMUX_PANE → exit 4" "rc=$rc $(cat "$WORK/dis.err")"
-ok; grep -q 'cannot tell who is spawning' "$WORK/dis.err" || fail "C: … and says why on stderr" "$(cat "$WORK/dis.err")"
-ok; [ "$(nwin)" = "$n0" ] || fail "C: … and opens no window" "$(nwin) vs $n0"
+st_count; [ "$rc" = 4 ] || fail "C: no \$TMUX_PANE → exit 4" "rc=$rc $(cat "$WORK/dis.err")"
+st_count; grep -q 'cannot tell who is spawning' "$WORK/dis.err" || fail "C: … and says why on stderr" "$(cat "$WORK/dis.err")"
+st_count; [ "$(nwin)" = "$n0" ] || fail "C: … and opens no window" "$(nwin) vs $n0"
 dis '' '' 41 "$L" --title t --origin issue-99; rc=$?
-ok; [ "$rc" = 4 ] || fail "C: a closed parent → exit 4" "rc=$rc $(cat "$WORK/dis.err")"
-ok; grep -q '上级 acme-app:issue-99 不是活着的会话' "$WORK/dis.err" || fail "C: … naming the parent" "$(cat "$WORK/dis.err")"
-ok; [ "$(nwin)" = "$n0" ] || fail "C: … and opens no window" "$(nwin) vs $n0"
+st_count; [ "$rc" = 4 ] || fail "C: a closed parent → exit 4" "rc=$rc $(cat "$WORK/dis.err")"
+st_count; grep -q '上级 acme-app:issue-99 不是活着的会话' "$WORK/dis.err" || fail "C: … naming the parent" "$(cat "$WORK/dis.err")"
+st_count; [ "$(nwin)" = "$n0" ] || fail "C: … and opens no window" "$(nwin) vs $n0"
 dis "$INTMUX" '' 41 "$L" --title t --origin hub; rc=$?
-ok; [ "$rc" = 1 ] && grep -q 'FLEET_MAIN is not a git checkout' "$WORK/dis.err" \
+st_count; [ "$rc" = 1 ] && grep -q 'FLEET_MAIN is not a git checkout' "$WORK/dis.err" \
   || fail "C: --origin hub passes the gate (stops at the sandbox's missing checkout)" "rc=$rc $(cat "$WORK/dis.err")"
 dis "$INTMUX" "$p7" 41 "$L" --title t; rc=$?
-ok; [ "$rc" = 1 ] && grep -q 'FLEET_MAIN is not a git checkout' "$WORK/dis.err" \
+st_count; [ "$rc" = 1 ] && grep -q 'FLEET_MAIN is not a git checkout' "$WORK/dis.err" \
   || fail "C: a live worker pane passes the gate" "rc=$rc $(cat "$WORK/dis.err")"
 
 # --- D: dash-raw-session.sh -------------------------------------------------------
 TMUX="$INTMUX" TMUX_PANE='' bash "$BIN/dash-raw-session.sh" --name x "$L" >/dev/null 2>"$WORK/raw.err"; rc=$?
-ok; [ "$rc" = 4 ] && grep -q 'cannot tell who is spawning' "$WORK/raw.err" || fail "D: no \$TMUX_PANE → exit 4" "rc=$rc $(cat "$WORK/raw.err")"
-ok; [ "$(nwin)" = "$n0" ] || fail "D: … and opens no window" "$(nwin) vs $n0"
+st_count; [ "$rc" = 4 ] && grep -q 'cannot tell who is spawning' "$WORK/raw.err" || fail "D: no \$TMUX_PANE → exit 4" "rc=$rc $(cat "$WORK/raw.err")"
+st_count; [ "$(nwin)" = "$n0" ] || fail "D: … and opens no window" "$(nwin) vs $n0"
 TMUX='' bash "$BIN/dash-raw-session.sh" --name x --origin scratch-88 "$L" >/dev/null 2>"$WORK/raw.err"; rc=$?
-ok; [ "$rc" = 4 ] && grep -q '上级 acme-app:scratch-88' "$WORK/raw.err" || fail "D: a closed parent → exit 4" "rc=$rc $(cat "$WORK/raw.err")"
+st_count; [ "$rc" = 4 ] && grep -q '上级 acme-app:scratch-88' "$WORK/raw.err" || fail "D: a closed parent → exit 4" "rc=$rc $(cat "$WORK/raw.err")"
 TMUX="$INTMUX" TMUX_PANE='' bash "$BIN/dash-raw-session.sh" --name x --origin hub "$L" >/dev/null 2>"$WORK/raw.err"; rc=$?
-ok; [ "$rc" != 4 ] || fail "D: --origin hub passes the gate" "rc=$rc $(cat "$WORK/raw.err")"
-ok; grep -q -- "--origin='\${ORIGIN:-hub}'" "$BIN/dash-raw-session.sh" || fail "D: the --bg re-exec always states its origin (run-shell -b has no pane)"
+st_count; [ "$rc" != 4 ] || fail "D: --origin hub passes the gate" "rc=$rc $(cat "$WORK/raw.err")"
+st_count; grep -q -- "--origin='\${ORIGIN:-hub}'" "$BIN/dash-raw-session.sh" || fail "D: the --bg re-exec always states its origin (run-shell -b has no pane)"
 
 # --- F: who may spawn ----------------------------------------------------------------
 # (fleet_spawn_refused stays gone — every session may spawn, #4591 #4790: conf/gone.list)
@@ -131,8 +131,8 @@ printf -- '---\nname: dispatcher\ndescription: d\ntools:\n  - Read\n  - mcp__fle
 # epic-driver rides the fleet-epic plugin (issue #3116): listed as installed here
 printf '[{"id":"fleet-epic@claude-fleet","enabled":true,"installPath":"%s"}]\n' "$BIN/../plugins/fleet-epic" > "$WORK/plugins.json"
 grant() { CLAUDE_CONFIG_DIR="$WORK/cc" FLEET_AGENT_PLUGINS_CMD="cat '$WORK/plugins.json'" python3 "$BIN/fleet-agent-def.py" spawn-tools "$1" --dir "$WORK"; }
-ok; grant doc-only && fail "F: doc-only must not grant spawn"
-for a in fleet-worker epic-driver dispatcher; do ok; grant "$a" || fail "F: $a grants spawn"; done
+st_count; grant doc-only && fail "F: doc-only must not grant spawn"
+for a in fleet-worker epic-driver dispatcher; do st_count; grant "$a" || fail "F: $a grants spawn"; done
 
 [ "$FAIL" = 0 ] || { printf 'spawn-origin-gate selftest: %d FAILED (of %d)\n' "$FAIL" "$CHECKS" >&2; exit 1; }
 printf 'spawn-origin-gate selftest: OK (%d checks)\n' "$CHECKS"

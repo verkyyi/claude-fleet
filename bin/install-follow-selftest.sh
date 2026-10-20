@@ -33,6 +33,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 FL="$BIN/fleet-install-follow.sh" IV="$BIN/fleet-install-version.sh" DOC="$BIN/fleet-doctor.sh"
 for f in "$FL" "$IV" "$DOC" "$BIN/fleet-sync-logins.sh" "$BIN/fleet-stable.sh"; do
   [ -f "$f" ] || { printf 'selftest: %s not found\n' "$f" >&2; exit 2; }
@@ -45,11 +46,10 @@ cleanup() { chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM HUP
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
-contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — output does not contain [$3]:
+eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]:
 $2";; esac; }
-not_contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 — output unexpectedly contains [$3]:
+not_contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 — output unexpectedly contains [$3]:
 $2";; esac; }
 
 export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null

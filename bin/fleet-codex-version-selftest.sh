@@ -19,15 +19,14 @@
 # Hermetic: fake `codex` / `uname` on PATH, scratch HOME/TMPDIR/conf, no tmux.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 for f in fleet-doctor.sh fleet-codex.sh fleet-codex-runtime.py fleet-lib.sh fleet-client-core.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 command -v python3 >/dev/null 2>&1 || { echo 'selftest: python3 missing — skip'; exit 0; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/codex-version-selftest.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/codex-version-selftest.XXXXXX" physical
 mkdir -p "$WORK/fake" "$WORK/conf" "$WORK/install/bin" "$WORK/install/conf" "$WORK/wt"
 
 CHECKS=0

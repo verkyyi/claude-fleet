@@ -36,10 +36,10 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 [ -f "$BIN/fleet-lib.sh" ] || { printf 'selftest: %s not found\n' "$BIN/fleet-lib.sh" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/timebox-wallclock-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/timebox-wallclock-selftest.XXXXXX"
 mkdir -p "$WORK/fakepath"
 
 fails=0

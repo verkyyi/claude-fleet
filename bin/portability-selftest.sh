@@ -41,11 +41,10 @@
 set -uo pipefail
 
 BIN=$(cd -- "$(dirname -- "$0")" && pwd)
+. "$BIN/selftest-lib.sh"
 ROOT=$(cd -- "$BIN/.." && pwd)
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
-command -v python3 >/dev/null 2>&1 || fail "python3 missing — the scan is python"
+command -v python3 >/dev/null 2>&1 || st_fail "python3 missing — the scan is python"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/portability-selftest.XXXXXX") || exit 1
 trap 'rm -rf "$WORK"' EXIT
@@ -345,7 +344,7 @@ if [ "${1:-}" = --table ]; then python3 "$WORK/scan.py" "$ROOT" "$LIBS" --table;
 # THE SCAN — every rule over its files, after its own self-check
 # ============================================================================
 out=$(python3 "$WORK/scan.py" "$ROOT" "$LIBS" 2>"$WORK/scan.err"); rc=$?
-ok; [ "$rc" = 0 ] || fail "$(cat "$WORK/scan.err")
+st_count; [ "$rc" = 0 ] || st_fail "$(cat "$WORK/scan.err")
 $out
 (a deliberate site marks its line with the rule's marker — \`$0 --table\` lists them)"
 SCANNED=$(sed -n 's/^scan: //p' "$WORK/scan.err")
@@ -356,9 +355,9 @@ SCANNED=$(sed -n 's/^scan: //p' "$WORK/scan.err")
 if sed --version 2>/dev/null | head -1 | grep -q GNU; then
   printf 'portability-selftest: GNU sed here — the BSD sed claim skipped\n' >&2
 else
-  ok; [ "$(printf 'foo\n' | sed 's/foo\|bar/X/' 2>/dev/null)" = foo ] || fail "this sed ALTERNATED on \`\\|\` in a BRE — sed-bre's premise needs re-checking"
-  ok; [ "$(printf 'foo\n' | sed -e 's/foo/X/' -e 's/bar/X/')" = X ] || fail "the two-expression form did not substitute"
-  ok; [ "$(printf 'foo\n' | sed -E 's/foo|bar/X/')" = X ] || fail "sed -E did not alternate — the ERE escape is wrong here"
+  st_count; [ "$(printf 'foo\n' | sed 's/foo\|bar/X/' 2>/dev/null)" = foo ] || st_fail "this sed ALTERNATED on \`\\|\` in a BRE — sed-bre's premise needs re-checking"
+  st_count; [ "$(printf 'foo\n' | sed -e 's/foo/X/' -e 's/bar/X/')" = X ] || st_fail "the two-expression form did not substitute"
+  st_count; [ "$(printf 'foo\n' | sed -E 's/foo|bar/X/')" = X ] || st_fail "sed -E did not alternate — the ERE escape is wrong here"
 fi
 
 B32=""
@@ -367,18 +366,18 @@ for c in /bin/bash bash3.2 bash; do
   case "$("$c" --version 2>/dev/null | head -1)" in *"version 3."*) B32="$c"; break ;; esac
 done
 if [ -n "$B32" ]; then
-  ok; "$B32" -c 'set -u; a=(); for x in "${a[@]}"; do :; done' 2>/dev/null && fail "bash 3.2 accepted a bare empty \${a[@]} — bare-array's premise is gone"
-  ok; "$B32" -c 'set -u; a=(); printf "%s" "${a[*]}"' 2>/dev/null && fail "bash 3.2 accepted a bare empty \${a[*]}"
-  ok; "$B32" -c 'set -u; a=(); for x in ${a[@]+"${a[@]}"}; do :; done; [ "${#a[@]}" = 0 ]; printf "%s" "${a[*]-}"' || fail "bash 3.2 rejected a form bare-array calls safe"
-  ok; [ "$("$B32" -c 'set -u; a=(p "q r"); printf "[%s]" ${a[@]+"${a[@]}"}')" = '[p][q r]' ] || fail "\${a[@]+\"\${a[@]}\"} lost the element split on bash 3.2"
+  st_count; "$B32" -c 'set -u; a=(); for x in "${a[@]}"; do :; done' 2>/dev/null && st_fail "bash 3.2 accepted a bare empty \${a[@]} — bare-array's premise is gone"
+  st_count; "$B32" -c 'set -u; a=(); printf "%s" "${a[*]}"' 2>/dev/null && st_fail "bash 3.2 accepted a bare empty \${a[*]}"
+  st_count; "$B32" -c 'set -u; a=(); for x in ${a[@]+"${a[@]}"}; do :; done; [ "${#a[@]}" = 0 ]; printf "%s" "${a[*]-}"' || st_fail "bash 3.2 rejected a form bare-array calls safe"
+  st_count; [ "$("$B32" -c 'set -u; a=(p "q r"); printf "[%s]" ${a[@]+"${a[@]}"}')" = '[p][q r]' ] || st_fail "\${a[@]+\"\${a[@]}\"} lost the element split on bash 3.2"
   for l in en_US.UTF-8 C.UTF-8 en_US.utf8 C.utf8; do
     [ "$(LC_ALL=$l "$B32" -c 'printf %s "${#1}"' _ '，' 2>/dev/null)" = 1 ] || continue
-    ok; LC_ALL=$l "$B32" -c 'set -u; x=1; printf "%s" "$x，"' >/dev/null 2>&1 && fail "bash 3.2 ($l) read \$x， as \$x — utf8-name's premise is gone"
-    ok; [ "$(LC_ALL=$l "$B32" -c 'set -u; x=1; printf "%s" "${x}，"')" = '1，' ] || fail "bash 3.2 ($l) mangled \${x}，"
+    st_count; LC_ALL=$l "$B32" -c 'set -u; x=1; printf "%s" "$x，"' >/dev/null 2>&1 && st_fail "bash 3.2 ($l) read \$x， as \$x — utf8-name's premise is gone"
+    st_count; [ "$(LC_ALL=$l "$B32" -c 'set -u; x=1; printf "%s" "${x}，"')" = '1，' ] || st_fail "bash 3.2 ($l) mangled \${x}，"
     break
   done
   bad=$(for f in "$BIN"/*.sh; do "$B32" -n "$f" 2>/dev/null || printf '%s\n' "${f##*/}"; done)
-  ok; [ -z "$bad" ] || fail "does not parse under bash 3.2 ($B32), the operator's shell:
+  st_count; [ -z "$bad" ] || st_fail "does not parse under bash 3.2 ($B32), the operator's shell:
 $bad
 (\`$B32 -n bin/<name>\` for the message; a \`case\` inside \`\$(...)\` writes its pattern \`(pat)\`)"
 else
@@ -387,11 +386,11 @@ fi
 
 if command -v zsh >/dev/null 2>&1; then
   got=$(zsh -fc 'f() { local path; command -v ls >/dev/null && echo found || echo lost; }; f' 2>/dev/null)
-  ok; [ "$got" = lost ] || fail "zsh 'local path' was expected to lose PATH, got [$got]"
+  st_count; [ "$got" = lost ] || st_fail "zsh 'local path' was expected to lose PATH, got [$got]"
   got=$(zsh -fc 'f() { local pth; command -v ls >/dev/null && echo found || echo lost; }; f' 2>/dev/null)
-  ok; [ "$got" = found ] || fail "zsh 'local pth' should keep PATH, got [$got]"
+  st_count; [ "$got" = found ] || st_fail "zsh 'local pth' should keep PATH, got [$got]"
   got=$(cd "$WORK" && zsh -fc ". '$BIN/fleet-lib.sh'" 2>/dev/null)
-  ok; [ -z "$got" ] || fail "sourcing fleet-lib.sh under zsh printed [$got]"
+  st_count; [ -z "$got" ] || st_fail "sourcing fleet-lib.sh under zsh printed [$got]"
 else
   printf 'portability-selftest: no zsh here — the zsh claims skipped\n' >&2
 fi
@@ -402,10 +401,10 @@ fi
 have_bash=0; command -v bash >/dev/null 2>&1 && have_bash=1
 have_dash=0; command -v dash >/dev/null 2>&1 && have_dash=1
 for lib in $LIBS; do
-  f="$BIN/$lib"; [ -f "$f" ] || fail "guarded lib missing: $f"
-  ok; sh -n "$f" 2>/dev/null || fail "sh -n rejected $lib (a bashism): $(sh -n "$f" 2>&1 | head -3)"
+  f="$BIN/$lib"; [ -f "$f" ] || st_fail "guarded lib missing: $f"
+  st_count; sh -n "$f" 2>/dev/null || st_fail "sh -n rejected $lib (a bashism): $(sh -n "$f" 2>&1 | head -3)"
   if [ "$have_bash" = 1 ]; then
-    ok; bash --posix -n "$f" 2>/dev/null || fail "bash --posix -n rejected $lib: $(bash --posix -n "$f" 2>&1 | head -3)"
+    st_count; bash --posix -n "$f" 2>/dev/null || st_fail "bash --posix -n rejected $lib: $(bash --posix -n "$f" 2>&1 | head -3)"
   fi
 done
 
@@ -433,7 +432,7 @@ every_sh() {
   for s in sh bash dash; do
     case $s in bash) [ "$have_bash" = 1 ] || continue ;; dash) [ "$have_dash" = 1 ] || continue ;; esac
     o=$("$s" -c ". \"$LIB\"; $3" "$LIB" 2>/dev/null)
-    ok; [ "$o" = "$2" ] || fail "$1 [$s]: expected [$2] got [$o]"
+    st_count; [ "$o" = "$2" ] || st_fail "$1 [$s]: expected [$2] got [$o]"
   done
 }
 CR="$WORK/conf-repo"; mkdir -p "$CR/fleets/fleet-a"; : > "$CR/fleets/fleet-a/conf"; fx_repo "$CR" fleet-a acme/new
@@ -459,7 +458,7 @@ fi
 # ============================================================================
 # THE RIDERS — whole-tree lints no filename rule can select
 # ============================================================================
-ok; o=$(bash "$BIN/dist-source-selftest.sh" 2>&1) || fail "dist-source: $o"
-ok; o=$(bash "$BIN/iso-time-selftest.sh" 2>&1) || fail "iso-time: $o"
+st_count; o=$(bash "$BIN/dist-source-selftest.sh" 2>&1) || st_fail "dist-source: $o"
+st_count; o=$(bash "$BIN/iso-time-selftest.sh" 2>&1) || st_fail "iso-time: $o"
 
 printf 'portability-selftest: OK (%d checks; %s)\n' "$CHECKS" "${SCANNED:-scan}"

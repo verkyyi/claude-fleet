@@ -17,12 +17,12 @@
 #   E  an outputs tar reaching out of its directory is never written outside it.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 FAILS=0 CHECKS=0
 ok()  { CHECKS=$((CHECKS + 1)); printf 'PASS  %s\n' "$1"; }
 bad() { CHECKS=$((CHECKS + 1)); FAILS=$((FAILS + 1)); printf 'FAIL  %s\n' "$1"; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fjob.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fjob.XXXXXX"
 export FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 CCQUOTA_NODE_KEY=off FLEET_JOB_POLL=0
 mkdir -p "$FLEET_CONF_DIR"
 unset TMUX TMUX_PANE CCQUOTA_TOKEN CCQUOTA_HUB_URL

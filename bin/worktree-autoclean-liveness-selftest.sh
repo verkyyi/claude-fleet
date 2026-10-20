@@ -23,20 +23,19 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/worktree-autoclean.sh"
 LIB="$BIN/fleet-lib.sh"
 for f in "$SRC" "$LIB"; do [ -f "$f" ] || { echo "selftest: $f missing" >&2; exit 2; }; done
 command -v git >/dev/null 2>&1 || { echo "selftest: git absent — SKIP" >&2; exit 0; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/wac-liveness.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/wac-liveness.XXXXXX"
 # Normalize to the physical path (macOS /var → /private/var, and collapse any `//`
 # from TMPDIR) so the LIVE-pane paths we write match what git reports.
 WORK="$(cd "$WORK" && pwd -P)"
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/logs"
@@ -167,7 +166,7 @@ printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-7 ' \
   && fail "scratch-7: a worktree a server sits in must never be reaped (#509)" "$out"
 # dry run mutates nothing
 [ -d "$WORK/base-issue-100" ] || fail "dry run must not remove issue-100"
-ok "DRY: live worker kept by @issue identity (cwd-independent); prefix cwd fallback; server-cwd kept (#509); gone workers reaped"
+st_pass "DRY: live worker kept by @issue identity (cwd-independent); prefix cwd fallback; server-cwd kept (#509); gone workers reaped"
 
 # ============================ REAL RUN: reap only the dead ================
 run_wac >/dev/null
@@ -181,7 +180,7 @@ run_wac >/dev/null
 git -C "$BASE" show-ref --verify -q refs/heads/issue-100 || fail "issue-100 branch must survive"
 git -C "$BASE" show-ref --verify -q refs/heads/scratch-7 || fail "scratch-7 branch must survive (#509)"
 git -C "$BASE" show-ref --verify -q refs/heads/issue-200 && fail "issue-200 branch should be deleted"
-ok "REAL: workers with no live @issue / no live pane / no server-cwd are reaped; busy + server-anchored survive"
+st_pass "REAL: workers with no live @issue / no live pane / no server-cwd are reaped; busy + server-anchored survive"
 
 printf '\nselftest OK: %s assertions passed (janitor liveness guard, #353)\n' "$pass"
 exit 0

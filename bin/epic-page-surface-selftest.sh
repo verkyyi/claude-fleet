@@ -16,12 +16,12 @@
 #      tool agree on the fold classes), and the skill + plan command point at it.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$BIN/.."
 S="$BIN/epic-page-surface.sh"
 T="$ROOT/plugins/fleet-epic/skills/epic-page/template.html"
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-TMP=$(mktemp -d "${TMPDIR:-/tmp}/eps.XXXXXX") || fail "mktemp"
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/eps.XXXXXX") || st_fail "mktemp"
 trap 'rm -rf "$TMP"' EXIT
 
 command -v python3 >/dev/null 2>&1 || { echo "epic-page-surface-selftest SKIP (no python3)"; exit 0; }
@@ -61,26 +61,26 @@ page "$GOOD" '你，一个人管 3 个仓库，多数时候用 iPad' \
 
 # 1. surface shape
 OUT=$("$S" "$GOOD" </dev/null); rc=$?
-CHECKS=$((CHECKS + 1)); [ "$rc" -eq 0 ] || fail "surface of the good page exited $rc"
+CHECKS=$((CHECKS + 1)); [ "$rc" -eq 0 ] || st_fail "surface of the good page exited $rc"
 for want in '# 一个 hub 管几个仓库' '一个窗口看所有仓库；两个仓库的试跑通过就停。' \
   '| 已知的「做到别的仓库去」的情况 | 9 种 | 0 种 |' '## 要做的事' \
   '▸ 一个窗口装得下几个仓库 — 今天一个窗口只认一个仓库。' \
   '| 新开的会话放进哪个仓库 | 放进你正在看的仓库 |'; do
   CHECKS=$((CHECKS + 1))
-  printf '%s\n' "$OUT" | grep -q -F -- "$want" || fail "surface is missing: $want"
+  printf '%s\n' "$OUT" | grep -q -F -- "$want" || st_fail "surface is missing: $want"
 done
 for gone in FOLDED-METRIC FOLDED-CHARTER FOLDED-ORDER CARD-BODY 'background:#fff' 'a comment' '<'; do
   CHECKS=$((CHECKS + 1))
-  printf '%s\n' "$OUT" | grep -q -F -- "$gone" && fail "surface leaks hidden content: $gone"
+  printf '%s\n' "$OUT" | grep -q -F -- "$gone" && st_fail "surface leaks hidden content: $gone"
 done
 # stdin input reads the same page
 CHECKS=$((CHECKS + 1))
-[ "$("$S" - <"$GOOD")" = "$OUT" ] || fail "reading from stdin differs from reading the file"
+[ "$("$S" - <"$GOOD")" = "$OUT" ] || st_fail "reading from stdin differs from reading the file"
 
 # 2. the good page lints clean
 CHECKS=$((CHECKS + 1))
 ERR=$("$S" --lint "$GOOD" 2>&1 >/dev/null </dev/null); rc=$?
-[ "$rc" -eq 0 ] || fail "good page should lint clean, got rc=$rc: $ERR"
+[ "$rc" -eq 0 ] || st_fail "good page should lint clean, got rc=$rc: $ERR"
 
 # 3. each #929 mistake fires its rule
 lint_fires() {  # <rule> <needle> <为谁> <metric-row> <card> <signoff-row> [extra]
@@ -88,9 +88,9 @@ lint_fires() {  # <rule> <needle> <为谁> <metric-row> <card> <signoff-row> [ex
   page "$f" "$1" "$2" "$3" "$4" "${5:-}"
   CHECKS=$((CHECKS + 1))
   err=$("$S" --lint "$f" 2>&1 >/dev/null </dev/null); rc=$?
-  [ "$rc" -eq 1 ] || fail "lint should exit 1 for rule $rule ($needle), got $rc"
+  [ "$rc" -eq 1 ] || st_fail "lint should exit 1 for rule $rule ($needle), got $rc"
   printf '%s\n' "$err" | grep "^WARN $rule:" | grep -q -F -- "$needle" \
-    || fail "lint did not fire $rule on [$needle]; got: $err"
+    || st_fail "lint did not fire $rule on [$needle]; got: $err"
 }
 OKW='你，一个人管 3 个仓库'
 OKM='<tr><td>要看的窗口</td><td>3 个</td><td>1 个</td></tr>'
@@ -128,10 +128,10 @@ vlint() {  # <want-rc> <what> <card-name> <upper-extra> <fold-extra>
   vpage "$f" "$@"
   CHECKS=$((CHECKS + 1))
   err=$("$S" --lint "$f" 2>&1 >/dev/null </dev/null); rc=$?
-  [ "$rc" -eq "$want" ] || fail "prototype: $what — want rc=$want, got $rc: $err"
+  [ "$rc" -eq "$want" ] || st_fail "prototype: $what — want rc=$want, got $rc: $err"
   if [ "$want" -eq 1 ]; then
     printf '%s\n' "$err" | grep '^WARN prototype:' | grep -q -F -- "$1" \
-      || fail "prototype: $what — no WARN naming the card; got: $err"
+      || st_fail "prototype: $what — no WARN naming the card; got: $err"
   fi
 }
 vlint 1 'visual card, no link'          '侧栏每行标出所在电脑' '' ''
@@ -143,22 +143,22 @@ vlint 0 'class=proto link, other text'  '弹出菜单加一项' '<p><a class="pr
 vlint 0 'not a visual member'           '新会话启动更快' '' ''
 
 # 4. the frame reads through the tool; the docs point at it
-TS=$("$S" "$T" </dev/null) || fail "surface of template.html failed"
+TS=$("$S" "$T" </dev/null) || st_fail "surface of template.html failed"
 for want in '## 指标' '## 要做的事' '## 需要你定的事' '▸ ⟨名称⟩ — ⟨一句：解决什么⟩'; do
   CHECKS=$((CHECKS + 1))
-  printf '%s\n' "$TS" | grep -q -F -- "$want" || fail "template surface is missing: $want"
+  printf '%s\n' "$TS" | grep -q -F -- "$want" || st_fail "template surface is missing: $want"
 done
 for gone in '技术细节' '共同约定' '预检原文' '⟨R1 · 已有 #N⟩'; do
   CHECKS=$((CHECKS + 1))
-  printf '%s\n' "$TS" | grep -q -F -- "$gone" && fail "template surface leaks fold content: $gone"
+  printf '%s\n' "$TS" | grep -q -F -- "$gone" && st_fail "template surface leaks fold content: $gone"
 done
 for f in "$ROOT/plugins/fleet-epic/skills/epic-page/SKILL.md" "$ROOT/plugins/fleet-epic/commands/fleet-epic-plan.md"; do
   CHECKS=$((CHECKS + 1))
-  grep -q -F 'epic-page-surface.sh' "$f" || fail "${f#"$ROOT"/} does not point at epic-page-surface.sh"
+  grep -q -F 'epic-page-surface.sh' "$f" || st_fail "${f#"$ROOT"/} does not point at epic-page-surface.sh"
 done
 for f in "$ROOT/plugins/fleet-epic/skills/epic-page/SKILL.md" "$ROOT/plugins/fleet-epic/commands/fleet-epic-plan.md" "$T"; do
   CHECKS=$((CHECKS + 1))
-  grep -q -F '▶ 打开可交互原型' "$f" || fail "${f#"$ROOT"/} does not carry the prototype rule (issue #1754)"
+  grep -q -F '▶ 打开可交互原型' "$f" || st_fail "${f#"$ROOT"/} does not carry the prototype rule (issue #1754)"
 done
 
 printf 'epic-page-surface-selftest OK (%d checks)\n' "$CHECKS"

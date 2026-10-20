@@ -26,12 +26,11 @@ set -uo pipefail
 export FLEET_SKIP_GLOBAL_CONF=1 FLEET_CODEX_READY_CHECK=1
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SPAWN="$BIN/dash-issue-session.sh"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/agent-route-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/agent-route-selftest.XXXXXX"
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 # shellcheck source=/dev/null
@@ -44,7 +43,7 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail -
 fleet_labels_agent "$(printf 'agent:codex\nagent:claude\n')" >/dev/null; [ "$?" = 2 ] || fail "A both labels → rc 2"
 fleet_labels_allowed | grep -qx 'agent:codex' && fleet_labels_allowed | grep -qx 'agent:claude' \
   || fail "A both agent labels are in the fixed taxonomy (seeded, accepted by the filer)"
-ok "A agent:codex / agent:claude route; both at once is refused; both are canonical labels"
+st_pass "A agent:codex / agent:claude route; both at once is refused; both are canonical labels"
 
 # ===== B: the charter =======================================================
 CH=$(cat <<'EOF'
@@ -64,7 +63,7 @@ EOF
 NOAG=$(printf '<!-- fleet:epic repo=o/a short=测试 -->\n- [ ] **C1** #12 — first\n- [ ] **C2** #13 — x (codex)\n')
 [ -z "$(fleet_epic_charter_agent o/a "$NOAG" o/a 12)" ] || fail "B no agent= and no tail → nothing (the fleet default)"
 [ "$(fleet_epic_charter_agent o/a "$NOAG" o/a 13)" = codex ] || fail "B a row tail with no charter agent="
-ok "B member row > charter agent= > nothing; members matched by (repo, N)"
+st_pass "B member row > charter agent= > nothing; members matched by (repo, N)"
 
 # ===== C: Codex readiness ===================================================
 mkdir -p "$WORK/c-conf"; export FLEET_CONF_DIR="$WORK/c-conf"   # never this login's own credsep.json
@@ -80,7 +79,7 @@ FLEET_CONF_DIR="$WORK/sep" FLEET_CODEX_READY_CMD="printf 'H\ndefault * - - no_cr
   || fail "C a separated login is ready though ccquota says no_credentials (issue #3097)"
 FLEET_CONF_DIR="$WORK/notsep" FLEET_CODEX_READY_CMD="printf 'H\ndefault * - - no_credentials /h\n'" fleet_codex_ready \
   && fail "C a credsep.json that says separated: false changes nothing"
-ok "C fleet_codex_ready reads the LOGIN column; a separated login is ready"
+st_pass "C fleet_codex_ready reads the LOGIN column; a separated login is ready"
 
 mkdir -p "$WORK/central"
 printf 'CCQUOTA_FLEET_CREDS=0\n' > "$WORK/central/node.env"
@@ -96,7 +95,7 @@ FLEET_CONF_DIR="$WORK/central" FLEET_CRED_PROXY=1 FLEET_CRED_CENTRAL_URL=https:/
 rm "$WORK/central/node.env"
 FLEET_CONF_DIR="$WORK/central" FLEET_CRED_PROXY=1 FLEET_CRED_CENTRAL_URL=https://proxy.example \
   FLEET_CODEX_READY_CMD=false fleet_codex_ready && fail "C no node configuration is not central-only"
-ok "C central-only readiness keeps the local credential checks on other logins"
+st_pass "C central-only readiness keeps the local credential checks on other logins"
 
 # ===== D: the spawn routes by label =========================================
 mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/dash"
@@ -215,7 +214,7 @@ run_shell_spawn --agent claude; rc=$?
 [ "$rc" = 0 ] || fail "D #3097: a Claude spawn from run-shell exited $rc" "$(cat "$WORK/spawn.err")"
 grep -qF -- "fleet-session-wrap.sh' --agent claude" "$WORK/newwin" \
   || fail "D #3097: …it must open Claude" "$(cat "$WORK/newwin") $(cat "$WORK/spawn.err")"
-ok "D agent:codex opens Codex; no label = fleet default; --agent wins; both / no login refused; --title reads the cache only; run-shell + separated opens both agents"
+st_pass "D agent:codex opens Codex; no label = fleet default; --agent wins; both / no login refused; --title reads the cache only; run-shell + separated opens both agents"
 
 # ===== E: a new task opens on its record =====================================
 SB="$WORK/sb"; mkdir -p "$SB"
@@ -248,6 +247,6 @@ grep -q 'issue create' "$WORK/gh.log" && fail "E a new task files no issue" "$(c
 run_new ''; rc=$?
 [ "$rc" = 4 ] && [ ! -s "$WORK/spawn-args" ] && [ ! -s "$WORK/gh.log" ] \
   || fail "E missing central endpoint refuses before opening anything" "$(cat "$WORK/new.err")"
-ok "E a new task opens Codex on its record with central-only credentials; no endpoint refuses before opening"
+st_pass "E a new task opens Codex on its record with central-only credentials; no endpoint refuses before opening"
 
 printf 'fleet-agent-route-selftest: %d passed\n' "$pass"

@@ -51,6 +51,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ST="$BIN/fleet-stable.sh"
 [ -f "$ST" ] || { printf 'selftest: %s not found\n' "$ST" >&2; exit 2; }
 command -v git >/dev/null 2>&1 || { echo "fleet-stable-selftest SKIP (no git)"; exit 0; }
@@ -60,9 +61,8 @@ cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM HUP
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
-contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — output does not contain [$3]:
+eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]:
 $2";; esac; }
 
 export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
@@ -208,8 +208,8 @@ printf 'completed success shard 1\ncompleted cancelled macOS shard 1\n' > "$WORK
 printf '%s\tcompleted\tfailure\tpush\t11\tselftests (macOS)\n' "$C9" > "$WORK/macos"
 run move "$C9"
 eq "J: a red macOS run does not hold stable" 0 "$RC"; eq "J: tag at C9" "$C9" "$(tag)"
-case "$OUT" in *"not green: completed cancelled"*) fail "J: the generic gate counted a macOS shard" ;; esac
-case "$OUT" in *"macos:"*) fail "J: gate 5 still spoke: $OUT" ;; esac
+case "$OUT" in *"not green: completed cancelled"*) st_fail "J: the generic gate counted a macOS shard" ;; esac
+case "$OUT" in *"macos:"*) st_fail "J: gate 5 still spoke: $OUT" ;; esac
 # No macOS run at all: nothing dispatched, nothing waited for.
 C10=$(commit ten); push; : > "$WORK/macos"
 run move "$C10"
@@ -256,7 +256,7 @@ C16=$(commit sixteen); push; macos_green "$C16" 25
 printf 'completed success shard 1\nin_progress null move stable\nqueued null deploy hub\n' > "$WORK/checks"
 run move "$C16" --ignore-check "move stable"
 eq "L: another pending run still refuses" 3 "$RC"; contains "L: names the other one" "$OUT" "not green: queued null deploy hub"
-case "$OUT" in *"not green: in_progress null move stable"*) fail "L: the ignored job was counted" ;; esac
+case "$OUT" in *"not green: in_progress null move stable"*) st_fail "L: the ignored job was counted" ;; esac
 eq "L: tag still C15" "$C15" "$(tag)"
 run move "$C16" --ignore-check "move stable" --ignore-check "deploy hub" --dry-run
 eq "L: a repeated --ignore-check passes over both" 0 "$RC"; contains "L: dry-run says so" "$OUT" "dry-run: would run"
@@ -303,8 +303,8 @@ printf 'completed success shard 1\nin_progress null macOS / shard 2\n' > "$WORK/
 printf 'failure\n' > "$WORK/statuses"; rm -f "$WORK/dispatched"
 run move "$C21"
 eq "N: a red mac follow holds nothing" 0 "$RC"; eq "N: tag at C21" "$C21" "$(tag)"
-case "$OUT" in *"not green: in_progress null macOS / shard 2"*) fail "N: the generic gate counted a train macOS shard" ;; esac
-case "$(cat "$WORK/dispatched" 2>/dev/null)" in *selftests-macos*) fail "N: dispatched a full macOS run" ;; esac
+case "$OUT" in *"not green: in_progress null macOS / shard 2"*) st_fail "N: the generic gate counted a train macOS shard" ;; esac
+case "$(cat "$WORK/dispatched" 2>/dev/null)" in *selftests-macos*) st_fail "N: dispatched a full macOS run" ;; esac
 
 # --- O. --train: this run's jobs are the CI (issue #3142) ----------------------------------------
 C22=$(commit twentytwo); push; : > "$WORK/macos"; : > "$WORK/statuses"; rm -f "$WORK/dispatched"
@@ -319,7 +319,7 @@ printf 'completed success board\ncompleted success Linux / shard 1\ncompleted sk
 run move "$C22" --train 77 --ignore-check release
 eq "O: an all-green train moves (a red macOS shard is no verdict)" 0 "$RC"; eq "O: tag at C22" "$C22" "$(tag)"
 contains "O: says the run" "$OUT" "job(s) of train run 77 green"
-case "$(cat "$WORK/dispatched" 2>/dev/null)" in *selftests-macos*) fail "O: dispatched a macOS run past a green train run" ;; esac
+case "$(cat "$WORK/dispatched" 2>/dev/null)" in *selftests-macos*) st_fail "O: dispatched a macOS run past a green train run" ;; esac
 run move --train abc
 eq "O: --train takes a run id" 2 "$RC"
 
@@ -369,7 +369,7 @@ C26=$(commit twentysix); push
 printf 'failure\thttps://github.com/o/r/issues/77\t不通：卡在 codex:entry — no answer\n' > "$WORK/cnstatus"
 run move "$C26"
 eq "S: a red cn path status moves" 0 "$RC"; eq "S: stable at C26" "$C26" "$(tag)"
-case "$OUT" in *'cn:'*) fail "S: the move still speaks of a cn gate: $OUT" ;; esac
+case "$OUT" in *'cn:'*) st_fail "S: the move still speaks of a cn gate: $OUT" ;; esac
 : > "$WORK/cnstatus"
 
 green

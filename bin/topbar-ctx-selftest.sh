@@ -16,6 +16,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'topbar-ctx selftest: python3 absent — SKIP'; exit 0; }
@@ -36,8 +37,7 @@ printf '%s\tacme-app\tacme/app\n' "$S" > "$G/sessmap"
 US=$'\x1f'
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
+eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
 # fld <rows> <label> <k>: field k of the row labelled <label>, `-` when it has fewer
 fld() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" -v k="$3" '$4 == n { print (NF >= k ? $k : "-") }'; }
@@ -46,7 +46,7 @@ fld() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" -v k="$3" '$4 == n {
 # A. a local window's stamps → field 19
 # ============================================================================
 T() { "$REAL_TMUX" -L "$S" "$@"; }
-T -f /dev/null new-session -d -s "$S" -n home 'sleep 600' || fail "A: could not start the isolated server"
+T -f /dev/null new-session -d -s "$S" -n home 'sleep 600' || st_fail "A: could not start the isolated server"
 T new-window -d -t "=$S:" -n measured 'sleep 600'
 T new-window -d -t "=$S:" -n bare 'sleep 600'
 SOCK=$(T display-message -p '#{socket_path}')
@@ -79,7 +79,7 @@ nodes = [dict(machine_name="tbctx-peer.invalid", availability="online", sessions
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 PY
 export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="tbctx-peer=mac-a"
-bash "$HUBS" --refresh 2>"$WORK/err" || fail "B: --refresh failed" "$(cat "$WORK/err")"
+bash "$HUBS" --refresh 2>"$WORK/err" || st_fail "B: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
 eq "B: the cache's fields 21-25" "23|watch|$TS|Fable 5.1|high" \
    "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-41" '$1 == w { print $21 "|" $22 "|" $23 "|" $24 "|" $25 }')"

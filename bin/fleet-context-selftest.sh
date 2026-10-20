@@ -29,12 +29,12 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 CTX="$BIN/fleet-context.sh"
 [ -f "$CTX" ] || { printf 'selftest: %s not found\n' "$CTX" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { printf 'fleet-context-selftest: jq absent — SKIP\n'; exit 0; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-context-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-context-selftest.XXXXXX"
 mkdir -p "$WORK/fakepath" "$WORK/projects/-tmp-someone-issue-7" "$WORK/projects/-tmp-elsewhere"
 
 fails=0

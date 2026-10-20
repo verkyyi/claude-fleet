@@ -26,6 +26,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SUT="$BIN/fleet-statusline.sh"
 LIB="$BIN/fleet-lib.sh"
 for f in "$SUT" "$LIB" "$BIN/../conf/statusline.sh"; do
@@ -33,14 +34,11 @@ for f in "$SUT" "$LIB" "$BIN/../conf/statusline.sh"; do
 done
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: SKIP — python3 not on PATH\n'; exit 0; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-statusline.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-statusline.XXXXXX"
 WORK="$(cd "$WORK" && pwd)"   # as the switch spells its own root (a TMPDIR with a trailing / would leave //)
 trap 'exit 130' INT TERM HUP
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 # --- the sandbox install ------------------------------------------------------
 mkdir -p "$WORK/inst/bin" "$WORK/inst/conf" "$WORK/cc" "$WORK/cfg/fleets/fleet-a" "$WORK/cfg/fleets/fleet-b" "$WORK/live" "$WORK/rows" "$WORK/fakebin"
@@ -80,8 +78,8 @@ run() {
     export PATH="$WORK/fakebin:$PATH" CLAUDE_CONFIG_DIR="$WORK/cc" FLEET_CONF_DIR="$WORK/cfg" HOME="$WORK/home" ${EXTRA_ENV:-}
     bash "$WORK/inst/bin/fleet-statusline.sh" "$@" 2>&1; printf 'rc=%s\n' "$?" )
 }
-has() { case "$2" in *"$3"*) : ;; *) fail "$1" "$2" ;; esac; }
-hasnt() { case "$2" in *"$3"*) fail "$1" "$2" ;; esac; }
+has() { case "$2" in *"$3"*) : ;; *) st_fail "$1" "$2" ;; esac; }
+hasnt() { case "$2" in *"$3"*) st_fail "$1" "$2" ;; esac; }
 others() { python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); s.pop("statusLine",None); print(json.dumps(s,sort_keys=True))' "$1"; }
 
 # --- A: status + census ---------------------------------------------------------
@@ -109,9 +107,9 @@ has "A: old mod named" "$out" '! fleet-a:scratch-1 — old mod v0.1.0 (< v0.2.0'
 has "A: verdict not yet" "$out" 'verdict: not yet — 3 window(s) would lose'
 has "A: status exits 0" "$out" 'rc=0'
 out=$(run status --porcelain)
-[ "$(printf '%s\n' "$out" | head -1)" = "wired=fleet${TAB}windows=6${TAB}fed=3${TAB}blind=3${TAB}stamped=3${TAB}mod=on" ] || fail "A: porcelain summary line" "$out"
+[ "$(printf '%s\n' "$out" | head -1)" = "wired=fleet${TAB}windows=6${TAB}fed=3${TAB}blind=3${TAB}stamped=3${TAB}mod=on" ] || st_fail "A: porcelain summary line" "$out"
 has "A: porcelain blind rows" "$out" "blind${TAB}fleet-a${TAB}issue-3${TAB}no mod"
-ok "A status: wired kind, census over two fleets, blind reasons, porcelain"
+st_pass "A status: wired kind, census over two fleets, blind reasons, porcelain"
 
 # --- B: on --------------------------------------------------------------------
 printf '{"model": "opus", "permissions": {"allow": ["Bash(ls:*)"]}}\n' > "$SETTINGS"
@@ -121,15 +119,15 @@ out=$(run on)
 has "B: on adds" "$out" "added statusLine in $SETTINGS"
 has "B: on backs up" "$out" 'backup  '"$SETTINGS"'.bak.'
 has "B: rc 0" "$out" 'rc=0'
-[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["statusLine"]["command"])' "$SETTINGS")" = "$OURS" ] || fail "B: the key must point at THIS install's conf/statusline.sh" "$(cat "$SETTINGS")"
-[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["statusLine"]["type"])' "$SETTINGS")" = command ] || fail "B: type command" "$(cat "$SETTINGS")"
-[ "$(others "$SETTINGS")" = "$before" ] || fail "B: every other key must survive byte for byte" "$(cat "$SETTINGS")"
-ls "$SETTINGS".bak.* >/dev/null 2>&1 || fail "B: a .bak.<epoch> must exist"
+[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["statusLine"]["command"])' "$SETTINGS")" = "$OURS" ] || st_fail "B: the key must point at THIS install's conf/statusline.sh" "$(cat "$SETTINGS")"
+[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["statusLine"]["type"])' "$SETTINGS")" = command ] || st_fail "B: type command" "$(cat "$SETTINGS")"
+[ "$(others "$SETTINGS")" = "$before" ] || st_fail "B: every other key must survive byte for byte" "$(cat "$SETTINGS")"
+ls "$SETTINGS".bak.* >/dev/null 2>&1 || st_fail "B: a .bak.<epoch> must exist"
 nbak=$(ls "$SETTINGS".bak.* | wc -l | tr -d ' ')
 out=$(run on)
 has "B: on again is a no-op" "$out" 'already on'
-[ "$(ls "$SETTINGS".bak.* | wc -l | tr -d ' ')" = "$nbak" ] || fail "B: a no-op must not write a backup"
-ok "B on: key added at this install's path, backup, other keys intact, idempotent"
+[ "$(ls "$SETTINGS".bak.* | wc -l | tr -d ' ')" = "$nbak" ] || st_fail "B: a no-op must not write a backup"
+st_pass "B on: key added at this install's path, backup, other keys intact, idempotent"
 
 # --- C: refusals ------------------------------------------------------------------
 snap=$(cat "$SETTINGS")
@@ -138,8 +136,8 @@ has "C: off refused with blind windows" "$out" 'REFUSED — 3 of 6 Claude window
 has "C: names them" "$out" '! fleet-a:issue-3 — no mod'
 has "C: says how" "$out" 'cycle them first'
 has "C: rc 1" "$out" 'rc=1'
-[ "$(cat "$SETTINGS")" = "$snap" ] || fail "C: a refused off must not touch settings.json"
-[ "$(ls "$SETTINGS".bak.* | wc -l | tr -d ' ')" = "$nbak" ] || fail "C: a refused off must not write a backup"
+[ "$(cat "$SETTINGS")" = "$snap" ] || st_fail "C: a refused off must not touch settings.json"
+[ "$(ls "$SETTINGS".bak.* | wc -l | tr -d ' ')" = "$nbak" ] || st_fail "C: a refused off must not write a backup"
 out=$(EXTRA_ENV='FLEET_MOD=0' run off)
 has "C: FLEET_MOD=0 refused" "$out" 'REFUSED — FLEET_MOD=0'
 has "C: rc 1" "$out" 'rc=1'
@@ -150,8 +148,8 @@ snap=$(cat "$SETTINGS")
 out=$(run off); has "C: personal off refused" "$out" 'REFUSED — settings.json wires a personal status line (/Users/op/bin/my-line.sh)'; has "C: rc 1" "$out" 'rc=1'
 out=$(run on);  has "C: personal on refused" "$out" 'REFUSED — settings.json wires a personal status line'; has "C: rc 1" "$out" 'rc=1'
 out=$(run status); has "C: personal classified" "$out" 'statusLine: personal — /Users/op/bin/my-line.sh'
-[ "$(cat "$SETTINGS")" = "$snap" ] || fail "C: a personal status line must never be rewritten"
-ok "C refusals: blind windows, FLEET_MOD=0, a personal status line — exit 1, file untouched"
+[ "$(cat "$SETTINGS")" = "$snap" ] || st_fail "C: a personal status line must never be rewritten"
+st_pass "C refusals: blind windows, FLEET_MOD=0, a personal status line — exit 1, file untouched"
 
 # --- D: off ---------------------------------------------------------------------
 printf '{\n  "model": "opus",\n  "statusLine": {\n    "type": "command",\n    "command": "%s"\n  },\n  "permissions": {"allow": ["Bash(ls:*)"]}\n}\n' "$OURS" > "$SETTINGS"
@@ -167,18 +165,18 @@ nbak=$(ls "$SETTINGS".bak.* 2>/dev/null | wc -l | tr -d ' ')
 out=$(run off --dry-run)
 has "D: dry-run says would" "$out" "would remove statusLine in $SETTINGS"
 has "D: rc 0" "$out" 'rc=0'
-grep -q '"statusLine"' "$SETTINGS" || fail "D: --dry-run must not remove the key"
-[ "$(ls "$SETTINGS".bak.* 2>/dev/null | wc -l | tr -d ' ')" = "$nbak" ] || fail "D: --dry-run must not write a backup"
+grep -q '"statusLine"' "$SETTINGS" || st_fail "D: --dry-run must not remove the key"
+[ "$(ls "$SETTINGS".bak.* 2>/dev/null | wc -l | tr -d ' ')" = "$nbak" ] || st_fail "D: --dry-run must not write a backup"
 out=$(run off)
 has "D: removed" "$out" "removed statusLine in $SETTINGS"
 has "D: summary" "$out" 'statusLine off: 3/3 windows fed by the mod. New sessions have their bottom row back'
 has "D: rc 0" "$out" 'rc=0'
-grep -q '"statusLine"' "$SETTINGS" && fail "D: the key must be gone" "$(cat "$SETTINGS")"
-[ "$(others "$SETTINGS")" = "$before" ] || fail "D: every other key must survive byte for byte" "$(cat "$SETTINGS")"
-[ "$(ls "$SETTINGS".bak.* | wc -l | tr -d ' ')" = "$((nbak+1))" ] || fail "D: exactly one new backup"
+grep -q '"statusLine"' "$SETTINGS" && st_fail "D: the key must be gone" "$(cat "$SETTINGS")"
+[ "$(others "$SETTINGS")" = "$before" ] || st_fail "D: every other key must survive byte for byte" "$(cat "$SETTINGS")"
+[ "$(ls "$SETTINGS".bak.* | wc -l | tr -d ' ')" = "$((nbak+1))" ] || st_fail "D: exactly one new backup"
 nbak=$((nbak+1))
 out=$(run off); has "D: off again" "$out" 'already off'; has "D: rc 0" "$out" 'rc=0'
-[ "$(ls "$SETTINGS".bak.* | wc -l | tr -d ' ')" = "$nbak" ] || fail "D: a no-op must not write a backup"
+[ "$(ls "$SETTINGS".bak.* | wc -l | tr -d ' ')" = "$nbak" ] || st_fail "D: a no-op must not write a backup"
 # --force takes a blind window knowingly
 printf '{"statusLine": {"type": "command", "command": "%s"}}\n' "$OURS" > "$SETTINGS"
 { row @2 hub '' opus "$NOW" 0.2.0 12 mod; row @5 issue-3 '' 'done' '' '' 20 ''; } > "$WORK/rows/fleet-a"
@@ -191,17 +189,17 @@ printf '{"statusLine": {"type": "command", "command": "%s"}}\n' "$OURS" > "$SETT
 rm -f "$WORK/live/fleet-a" "$WORK/live/fleet-b"
 out=$(run status); has "D: no live fleet → 0 windows" "$out" 'windows: 0 claude · 0 fed'
 out=$(run off); has "D: no windows → off allowed" "$out" "removed statusLine in $SETTINGS"
-ok "D off: removed with a backup, other keys intact; idempotent; --dry-run inert; --force; no windows passes"
+st_pass "D off: removed with a backup, other keys intact; idempotent; --dry-run inert; --force; no windows passes"
 
 # --- E: unreadable settings -----------------------------------------------------
 printf '{not json\n' > "$SETTINGS"
 snap=$(cat "$SETTINGS")
 out=$(run off); has "E: unreadable → exit 2" "$out" 'rc=2'; has "E: says so" "$out" 'cannot read'
 out=$(run on);  has "E: unreadable → exit 2" "$out" 'rc=2'
-[ "$(cat "$SETTINGS")" = "$snap" ] || fail "E: an unreadable file must not be rewritten"
+[ "$(cat "$SETTINGS")" = "$snap" ] || st_fail "E: an unreadable file must not be rewritten"
 rm -f "$SETTINGS"
 : > "$WORK/live/fleet-a"
 out=$(run status); has "E: no settings.json → none" "$out" 'statusLine: none'
-ok "E unreadable settings.json: exit 2, nothing written; a missing file reads as none"
+st_pass "E unreadable settings.json: exit 2, nothing written; a missing file reads as none"
 
 printf 'fleet-statusline-selftest: %d passed\n' "$pass"

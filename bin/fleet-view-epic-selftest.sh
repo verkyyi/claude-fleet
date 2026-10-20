@@ -17,6 +17,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-view-epic selftest: python3 absent — SKIP'; exit 0; }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fvepic-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -34,9 +35,8 @@ cat > "$WORK/children.json" <<'JSON'
 JSON
 export FLEET_VIEW_EPIC_CMD="echo \"\$1\" >> '$WORK/asked'; cat '$WORK/children.json'"
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
-python3 - "$BIN" "$WORK" <<'PY' || fail "EPIC tree"
+python3 - "$BIN" "$WORK" <<'PY' || st_fail "EPIC tree"
 import importlib.util, os, sys, time
 B, W = sys.argv[1], sys.argv[2]
 def load(name, f):

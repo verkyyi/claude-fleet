@@ -16,9 +16,9 @@
 #      over one (a session start judged since the warm pool left, T495)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-timing: python3 absent — SKIP'; exit 0; }
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/ftiming.XXXXXX") || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/ftiming.XXXXXX"
 export FLEET_CONF_DIR="$WORK/conf"
 unset FLEET_TIMING_PANEL_MS FLEET_TIMING_SESSION_MS
 fails=0
