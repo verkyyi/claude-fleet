@@ -14,14 +14,17 @@
   **不手改节点上的任何文件**，不 kill 任何 tmux。
 - 每一步先看输出再走下一步；输出和「期望」对不上就**停**，把输出原样记下来，不要「修一下再继续」。
 - 整个过程记一份切换记录（MacBook 上 `~/fleet-id-switch-<日期>.md`）：每步的命令、原样输出、对上没有。
-  做完拷一份到 mini2 `~/fleet-drafts/epic-session-t/switch-record.md`，告诉 T497 的驱动会话「切换完成」或「停在第几步」。
+  做完拷一份到 `$OPS` 的 `~/fleet-drafts/epic-session-t/switch-record.md`，告诉 T497 的驱动会话「切换完成」或「停在第几步」。
 - 迁移 `--apply` 是单向的（每条写了审计，迁前整条记录在 `fleet_operations` 里）；能来回的是**开关**。
 
-下文 `M2` = mini2 上运营方的登录（`verky@mini2`，迁移与开关只从这里或 MacBook 的 `fleet hub` 做）；
-四个登录 = mini2 的 `verky`、macmini 的 `zx` / `vincent` / `Arvin`（hub 上的机器名以 `fleet hub machines` 为准）。
+下文用两个变量，值由驱动会话转交说明书时一并给出（不写进仓库）：
+`$OPS` = 运营方机器上运营方的登录（迁移与开关只从这里或 MacBook 的 `fleet hub` 做），
+`$OTHERS` = 其余每个承载会话的登录（hub 上的机器名以 `fleet hub machines` 为准）。
 `ssh <登录>@<机器>` 用操作者平时进那台的路（端口 22，或 entry 端口 22022）。
 
 ```bash
+OPS=alice@mac-a                  # 例：运营方的登录@机器
+OTHERS='bob@mac-b carol@mac-b'   # 例：其余每个登录@机器
 F='~/.claude/fleet/bin'          # 节点上 fleet 的 bin（托管登录是到 runtime 的链接）
 ```
 
@@ -29,15 +32,15 @@ F='~/.claude/fleet/bin'          # 节点上 fleet 的 bin（托管登录是到 
 
 ```bash
 fleet update && fleet status                                     # MacBook 自己的客户端先跟上
-ssh verky@mini2 "$F/fleet-installs.sh"                            # = fleet doctor --installs
-for l in zx vincent Arvin; do ssh $l@macmini "$F/fleet-installs.sh"; done
+ssh $OPS "$F/fleet-installs.sh"                            # = fleet doctor --installs
+for h in $OTHERS; do ssh $h "$F/fleet-installs.sh"; done
 ```
 
 期望：每份最后一行 `verdict: N of N install(s) at stable`；`login install` 每个登录一行、`= stable`；
 `online client` 那行的 MacBook 不再是 `? (an older client says no version)`。再确认 stable 含 C1–C6：
 
 ```bash
-S=$(ssh verky@mini2 "$F/fleet-installs.sh" | sed -n '1s/.*stable \([0-9a-f]*\)).*/\1/p')
+S=$(ssh $OPS "$F/fleet-installs.sh" | sed -n '1s/.*stable \([0-9a-f]*\)).*/\1/p')
 gh api repos/verkyyi/claude-fleet/compare/093cb2483...$S --jq .status   # ahead 或 identical
 ```
 
@@ -46,10 +49,10 @@ gh api repos/verkyyi/claude-fleet/compare/093cb2483...$S --jq .status   # ahead 
 
 ### 切换前的基线（C1–C4 的上线证据，开关关着取）
 
-在 mini2 的 verky 上用 ⌘N 开一个会话（下称 A），在里面依次做，每做完一项在 MacBook 上读一次：
+在 `$OPS` 上用 ⌘N 开一个会话（下称 A），在里面依次做，每做完一项在 MacBook 上读一次：
 
 ```bash
-ssh verky@mini2 "$F/fleet-id.sh get <A 的短码>"
+ssh $OPS "$F/fleet-id.sh get <A 的短码>"
 ```
 
 | 做什么 | 期望（`get` 的输出） |
@@ -68,12 +71,12 @@ ssh verky@mini2 "$F/fleet-id.sh get <A 的短码>"
 
 T510（T-kanwg）是 10-19 00:08Z 启动失败留下的死记录（`launch: unknown: no matching process/native-session
 receipt; task input withheld`，没有 transcript），它的窗口 `@1075` 还开着，所以 dry-run 会把它定成「活着」。
-⌘P 搜 `T-kanwg`（或 `T510`），确认是 mini2 · verky 上 `@1075` 那个空窗口，回收它（⌃x，或 `fleet close <名字> --yes`）。
+⌘P 搜 `T-kanwg`（或 `T510`），确认是 `$OPS` 上 `@1075` 那个空窗口，回收它（⌃x，或 `fleet close <名字> --yes`）。
 
 ### 5b dry-run，与样例表逐条对
 
 ```bash
-ssh verky@mini2 "$F/fleet-id.sh migrate --only T351,T354,T355,T364,T478,T480,T488,T489,T510"
+ssh $OPS "$F/fleet-id.sh migrate --only T351,T354,T355,T364,T478,T480,T488,T489,T510"
 ```
 
 期望第一行 `dry-run（只看，不改） · 9 条旧记录 · 开关 关`，然后每条：
@@ -92,7 +95,7 @@ ssh verky@mini2 "$F/fleet-id.sh migrate --only T351,T354,T355,T364,T478,T480,T48
 再跑一次不带 `--only` 的全量 dry-run，看有没有样例表外的记录：
 
 ```bash
-ssh verky@mini2 "$F/fleet-id.sh migrate"
+ssh $OPS "$F/fleet-id.sh migrate"
 ```
 
 期望：没有一条是 `等节点回答（不迁）`。有 ⇒ 那台机器的节点没答（失联、tmux 没起、旧 agent），它的记录一条都不会动；
@@ -101,32 +104,32 @@ ssh verky@mini2 "$F/fleet-id.sh migrate"
 ### 5c apply
 
 ```bash
-ssh verky@mini2 "$F/fleet-id.sh migrate --apply"
+ssh $OPS "$F/fleet-id.sh migrate --apply"
 ```
 
 期望第一行 `迁移（已写入） · N 条旧记录 · 开关 关`，每条末尾 `✓`（`活着` 的那条写进了别名）。立刻再跑一次 dry-run：
 
 ```bash
-ssh verky@mini2 "$F/fleet-id.sh migrate"      # 期望：0 条旧记录（迁过的不再列出）
+ssh $OPS "$F/fleet-id.sh migrate"      # 期望：0 条旧记录（迁过的不再列出）
 ```
 
 ### 5d 打开开关
 
 ```bash
 fleet hub set fleet.id_switch on              # MacBook，运营方的令牌（CCQUOTA_VIEWER_TOKEN）
-ssh verky@mini2 "$F/fleet-id.sh switch status"   # 期望：on
+ssh $OPS "$F/fleet-id.sh switch status"   # 期望：on
 ```
 
-（等价的另一条路：`ssh verky@mini2 "$F/fleet-id.sh switch on"`。）每个节点在下一次清理 tick（60 秒）
+（等价的另一条路：`ssh $OPS "$F/fleet-id.sh switch on"`。）每个节点在下一次清理 tick（60 秒）
 问到开关、写进自己的 `ids/.switch`：
 
 ```bash
-for l in zx vincent Arvin; do ssh $l@macmini "$F/fleet-id.sh switch status"; done   # 都是 on
+for h in $OTHERS; do ssh $h "$F/fleet-id.sh switch status"; done   # 都是 on
 ```
 
 ## ⑥ 每个登录各开一个会话，走 S1 / S4 / S10
 
-四个登录各用 ⌘N 开一个新会话（不复用切换前的 A），记下短码，各做：
+每个登录各用 ⌘N 开一个新会话（不复用切换前的 A），记下短码，各做：
 
 | # | 做什么 | 期望 |
 |---|---|---|
@@ -144,7 +147,7 @@ ssh <登录>@<机器> "$F/fleet-id.sh _post GET /v1/node/ids/<短码> </dev/null
 
 期望：两边的段（agent · native · trigger）与结果条数一样，没有重复的结果；⌘P Tab 操作页没有「未登记到 hub」。
 
-断线补齐（S10 本身）在 mini2 · verky 上做一次：hub 断着的时候开 3 个窗口各报一个结果，hub 回来后再按上面逐条核。
+断线补齐（S10 本身）在 `$OPS` 上做一次：hub 断着的时候开 3 个窗口各报一个结果，hub 回来后再按上面逐条核。
 没有计划内的 hub 停机就不要为它停 hub——补推每 60 秒由清理 tick 做，断线补齐已由
 `bin/fleet-id-hub-selftest.sh` 钉住；切换记录里写「S10 断线一项：用 selftest 代替 / 在 <时间> 的 hub 停机里实测」。
 
@@ -156,8 +159,8 @@ ssh <登录>@<机器> "$F/fleet-id.sh _post GET /v1/node/ids/<短码> </dev/null
 任何一步不对，或开关开着后有会话被门挡住（认领被拒、回报丢了）：
 
 ```bash
-fleet hub unset fleet.id_switch                   # 或 ssh verky@mini2 "$F/fleet-id.sh switch off"
-ssh verky@mini2 "$F/fleet-id.sh switch status"    # 期望：off
+fleet hub unset fleet.id_switch                   # 或 ssh $OPS "$F/fleet-id.sh switch off"
+ssh $OPS "$F/fleet-id.sh switch status"    # 期望：off
 ```
 
 关回来就是旧行为：旧表没删、写侧双写还在，带 `@launch` 的窗口照走旧路；窗口、ID、账本都不动
@@ -166,5 +169,5 @@ ssh verky@mini2 "$F/fleet-id.sh switch status"    # 期望：off
 
 ## 做完
 
-切换记录里四个登录的 S1 / S4 / S10 都对上、样例表 apply 后吻合 ⇒ 拷到 mini2、告诉驱动会话「切换完成」。
+切换记录里每个登录的 S1 / S4 / S10 都对上、样例表 apply 后吻合 ⇒ 拷到 `$OPS`、告诉驱动会话「切换完成」。
 开关开着稳定一个版本后才轮到 C8（删执行权层）。
