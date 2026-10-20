@@ -561,7 +561,6 @@ class IdleDispatchTests(unittest.TestCase):
                  ({'#{@claude_state}': 'working'}, 'active_turn'),
                  ({'#{@claude_state}': 'exited'}, 'state:exited'),
                  ({'#{@agent_transfer_request}': '/private/req'}, 'transfer'),
-                 ({'#{@quota_failover}': '1'}, 'quota'),
                  ({'#{@handoff_armed}': '1'}, 'handoff'),
                  ({'#{@worker_lifecycle}': 'waking'}, 'lifecycle'))
         for extra, why in cases:

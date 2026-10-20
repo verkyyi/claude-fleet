@@ -107,12 +107,9 @@ That's it — the next session you spawn launches under the active account.
 account pool is the selectable body under the usage detail (issue #289 merged
 the old `prefix A` picker + `prefix u` popup into one; #1100 moved it back onto
 `prefix u` when the footer usage stat it was clicked from left the bar). Enter sets
-the account new sessions start from **and moves this fleet's idle Claude
-windows onto it** (`fleet-account.sh migrate --idle`, issue #512: close +
-`--resume` in a new window, so each resumes its own transcript under the new
-account). Windows mid-turn (`working`) or between `/loop` iterations
-(`looping`) are left alone; they pick up the switch on their next restart. Esc
-cancels.
+the account new sessions start from. Running sessions keep theirs (moving the
+idle ones onto it is retired, T546: a full subscription is the credential
+pool's to change). Esc cancels.
 
 **Through the credential proxy, a move closes nothing** (issue #1972, EPIC #1967
 C5). With `FLEET_CRED_PROXY=1` every session opens with a session credential from
@@ -149,7 +146,7 @@ dash-issue-session.sh 123 --account local     # local | pool | any
 
 The choice is stamped on the window (`@account_class`) before the launcher
 runs, and `fleet-claude.sh` exports it as `FLEET_ACCOUNT_CLASS` so every pick
-in `fleet-account.sh` — `active`, the failover planner's inventory — sees only
+in `fleet-account.sh` — `active`, the inventory — sees only
 that class. A fleet can set the default in its conf (`FLEET_ACCOUNT_CLASS=local`;
 `--account any` on one spawn turns it off), and when the hub places the session
 on another machine the class goes with it (`ccquota place --account`), so that
@@ -182,23 +179,10 @@ spawn a session ──► bin/fleet-claude.sh ──► exports CLAUDE_CODE_OAUT
                                              window's @cc_account label, exec claude
                                              │
 collector (every ~60s) ── scrapes each window ┘
-   sees "You've hit your … limit · resets …"  in a window whose @cc_account = work
-        │
-        ▼
-   bin/fleet-account.sh mark-limited work
-        ├─ records: work is limited until the banner's "resets …" instant
-        │            (no instant in the banner? → now + FLEET_ACCOUNT_LIMIT_TTL)
-        ├─ rotates the active pointer → personal
-        └─ (if FLEET_NOTIFY_CMD set) pings you once: "work hit its limit → personal"
-        │
-        ▼
-   the NEXT spawned session launches under personal, AND the collector
-   dispatches `fleet-account.sh migrate --limited` in the background (issue
-   #512): every window still running on work — the banner window and any other,
-   mid-turn or idle — is asked to /exit, the SessionEnd hook closes it, and a NEW
-   window in the same worktree runs `fleet-claude.sh --resume <session-id>`
-   under personal, with a re-orient nudge — so RUNNING sessions follow the
-   rotation too, without a manual /login
+   sees a PER-MODEL cap ("hit your Fable 5 limit") → /model <fallback> in place
+   sees a SUBSCRIPTION wall                        → nothing: the credential
+                                                     pool changes the subscription
+                                                     (T546 — no bench, no move)
 ```
 
 - **`bin/fleet-account.sh`** is the single owner of the rotation state
@@ -269,18 +253,19 @@ Now there is one entry point, `fleet-account.sh quota-verdict <label> [--axis 5h
 
 | Answer | Meaning | What a banner does |
 |---|---|---|
-| `limited <until>` | a fresh ccquota row has the named window (both, without `--axis`) at/above `FLEET_ACCOUNT_CEILING` | bench until ccquota's reset instant |
-| `ok` | a fresh row with headroom on that window | **nothing** — one line in the collector log; the next tick asks again (the hub runs ~60s behind a real wall) |
-| `unknown` | no hub/ccquota, a stale cache (`FLEET_ACCOUNT_QUOTA_STALE`), or no row for the account (blind hub, `available:false`, not on the hub) | the pre-#874 banner bench, and the status bar shows **`▲ quota · from banner`** |
+| `limited <until>` | a fresh ccquota row has the named window (both, without `--axis`) at/above `FLEET_ACCOUNT_CEILING` | — |
+| `ok` | a fresh row with headroom on that window | — |
+| `unknown` | no hub/ccquota, a stale cache (`FLEET_ACCOUNT_QUOTA_STALE`), or no row for the account (blind hub, `available:false`, not on the hub) | — |
+
+Since T546 a subscription banner does nothing at all (the collector no longer
+asks `quota-verdict`, benches or moves on it, and `▲ quota · from banner` is
+gone): the credential pool changes a full subscription.
 
 - The banner names its window: `session`/N-hour → `5h`, `weekly` → `7d`; the
   sticky "Usage limit reached" footer names neither, so both are weighed.
 - Every subscription banner buys **one forced refetch**; `--refresh` skips it
   while the cache is younger than `FLEET_ACCOUNT_VERDICT_REFETCH` (20s), so N
   walled windows in one tick cost one fetch.
-- The failover controller's **hard** evidence (`.fleet-failover.py`
-  `claude_wall`) follows the same rule, so a replayed banner cannot make a
-  source "hard" either.
 - **Not covered, on purpose:** per-model caps (below — ccquota does not report
   them, the banner stays their only source) and Codex (its native
   `quota_error` stays the hard signal).
@@ -539,13 +524,9 @@ every tick, mirrors the pace table to `global/quota.pace` and, when the
 most-ahead un-benched account leads the *current pick* (`fleet-account.sh
 active`, which honours the holds) by `FLEET_ACCOUNT_PACE_REBALANCE` (15) points or
 more while that pick is itself on pace with 5h room (under `FLEET_ACCOUNT_WARN_PCT`),
-moves **one idle session** (done/needs — a working turn is worth more than the
-points it spends) off the leader per fleet — `migrate --idle --from <leader>
---max 1` — then waits `FLEET_ACCOUNT_PACE_COOLDOWN` (600 s) before the next. A
-lead closes one cold boot at a time and a pick that flips never ping-pongs a
-session. `FLEET_ACCOUNT_PACE_REBALANCE=0` switches the moves off; the table is
-still written. A fleet on the failover planner (`FLEET_FAILOVER=1`) is left to
-the planner, as the ceiling branch leaves it.
+used to move one idle session off the leader per fleet (`migrate --idle --from
+<leader> --max 1`). That MOVE is retired (T546: `--idle` / `--from` are gone);
+the table and its cooldown stamp are still written.
 
 **Visibility.** The status bar counts a `▲ quota · uneven · N pts` warning (yellow ▲, listed by `prefix !`) when the
 most-ahead and most-behind accounts are more than `FLEET_ACCOUNT_PACE_SPREAD_WARN`
@@ -759,15 +740,12 @@ was never a shell left to type a relaunch into. Per window it:
    **verifies** by reading the new process's token out of its environment.
 
 ```
-fleet-account.sh migrate --limited          # every window on a benched account (the banner path's call)
-fleet-account.sh migrate --idle             # done|needs windows not on the active account (the picker's call)
-fleet-account.sh migrate --all              # everything not on the active account
 fleet-account.sh migrate --account work     # everything running on `work`
 fleet-account.sh migrate @12 @15            # these windows, whatever they run on
-fleet-account.sh migrate --stuck            # every window whose failover request is ⚠ stuck (#872)
 fleet-account.sh migrate --force-bg @12     # move despite background commands: stop them,
                                             # name them in the resume nudge (#873; = dash-migrate.sh)
-fleet-account.sh migrate --dry-run --all    # print the plan only
+fleet-account.sh migrate --dry-run @12      # print the plan only
+# --limited / --idle / --all / --stuck / --from: retired (T546) — 「已不用」, exit 2
 fleet-account.sh whoami @12                 # the account a window REALLY runs (token truth;
                                             # heals a stale @cc_account stamp)
 fleet-account.sh whoami                     # …and bare: the pane you ran it in ("which

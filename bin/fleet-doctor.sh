@@ -857,38 +857,10 @@ case "${_oldkeys:-0}" in
   *) info oldkeys "old keys pressed ${_oldkeys%% *} times in 7 days (${_oldkeys#* }) — each opened ⌘P (issue #3328)" ;;
 esac
 
-# --- multi-account token pool (optional: auto-failover across subscriptions) ---
-if [ -d "$conf_dir/handoffs/quota-requests" ]; then
-  _failover=$(python3 - "$conf_dir/handoffs/quota-requests" <<'PY'
-import json,pathlib,sys
-for p in pathlib.Path(sys.argv[1]).glob('*/request.json'):
-    try: r=json.loads(p.read_text())
-    except (OSError,ValueError): continue
-    if r.get('state') not in ('bound','cancelled','recovered'):
-        s=r.get('source',{})
-        print('%s/%s: %s — %s' % (s.get('session','?'),s.get('window','?'),r.get('state','?'),r.get('detail','')))
-PY
-)
-  if [ -n "$_failover" ]; then warn failover "$_failover (fleet-account.sh failover-status)";
-  else pass failover 'no pending subscription cutovers'; fi
-  # A request retrying on the same reason past FLEET_FAILOVER_STUCK_ATTEMPTS
-  # (issue #872) — the ones that already paged the operator, counted apart
-  # from ordinary pending cutovers.
-  _stuck=$(python3 - "$conf_dir/handoffs/quota-requests" <<'PY'
-import json,pathlib,sys
-rows=[]
-for p in pathlib.Path(sys.argv[1]).glob('*/request.json'):
-    try: r=json.loads(p.read_text())
-    except (OSError,ValueError): continue
-    if r.get('stuck_notified') and r.get('state') not in ('bound','cancelled','recovered'):
-        s=r.get('source',{})
-        rows.append('%s/%s x%s' % (s.get('session','?'),s.get('window','?'),r.get('same_detail_streak','?')))
-if rows: print('%d stuck: %s' % (len(rows),', '.join(rows)))
-PY
-)
-  if [ -n "$_stuck" ]; then warn failover-stuck "$_stuck — same reason every retry (dash migrate key on the row, or fleet-account.sh migrate --stuck --force-bg --session <fleet>)";
-  else pass failover-stuck '0 stuck failover requests'; fi
-fi
+# --- multi-account token pool (optional) ---
+# The quota failover's `failover` / `failover-stuck` rows and the launch pick's
+# `account-pick` row left with them (T546, EPIC T542): a full subscription is the
+# pool's to change.
 # OFF unless token files exist. When ON, each file's contents must be a non-empty
 # `claude setup-token` OAuth token, and 0600 so the token isn't world-readable.
 acct_dir="${FLEET_ACCOUNTS_DIR:-$HOME/.config/claude-fleet/accounts}"
@@ -921,13 +893,7 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
       *) : ;;
     esac
   done
-  [ "$bad" -eq 0 ] && pass account "$n subscription token(s) in ${acct_dir} — auto-failover armed (per-account windows honored)"
-  # A BLIND pick (issue #2412): no login reads as usable and the quota cache has no
-  # row, so every new session lands on account.active — at 99% as readily as at 1%,
-  # with every dial above green. (A separated login is never blind: its credential
-  # proxy picks the account per request.)
-  blind=$(bash "$(dirname "$0")/fleet-account.sh" blind 2>/dev/null)
-  [ -n "$blind" ] && warn account-pick "the account pick is BLIND — no login reads as usable ($blind) and the quota cache has no row, so every new session lands on account.active whatever it has left. \`fleet-account.sh list\`, then \`quota --refresh\`"
+  [ "$bad" -eq 0 ] && pass account "$n subscription token(s) in ${acct_dir} (per-account windows honored)"
   # ccquota-driven PRE-EMPTIVE rotation (issue #513): with a hub URL + ccquota on
   # PATH the collector rotates at FLEET_ACCOUNT_CEILING before any banner. Report
   # what the collector would see: rows per pool label (unmapped labels = ccquota

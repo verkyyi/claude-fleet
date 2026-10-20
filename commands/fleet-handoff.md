@@ -223,11 +223,8 @@ The target receives the source agent, session ID, original transcript path, froz
 snapshot and handoff in its initial prompt. It continues the same worktree and
 task after checking current facts; no target-native skill invocation is required.
 Unsent input belongs in `--draft-file <private file>` and remains explicitly
-unsent; never append its contents to the pickup instruction. Automatic quota
-switches use the same controller, selected by `fleet-account`, without asking an
-exhausted source model to compose another summary. Inspect `fleet-account.sh
-failover-status` for waiting/ambiguous requests; never work around a refused
-identity, active tool, unreadable draft or unconfirmed target.
+unsent; never append its contents to the pickup instruction. Never work around
+a refused identity, active tool, unreadable draft or unconfirmed target.
 
 ---
 

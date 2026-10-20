@@ -23,8 +23,7 @@
 # The TARGET account must be able to log in (issue #1667): --dry-run and the first
 # step of a cutover ask `fleet-account.sh target-auth` (check-target for a pinned
 # target), again right before /exit; a refusal — `target-auth: …`, exit 1 — leaves
-# the source running, records `<quota-request>/refused.json` for the planner and a
-# ▲ `transfer-refused` row in the alerts popup.
+# the source running and raises a ▲ `transfer-refused` row in the alerts popup.
 # A target that does not bind (issue #1668) is ROLLED BACK in the same pane: the
 # source is relaunched from the package's `resume-source.sh --run-source` (Claude
 # --resume <id> / codex resume <id>, cwd the worktree), the same session id is
@@ -32,10 +31,10 @@
 # 「切换失败，已退回：<why>」 and a ▲ `transfer-rolled-back` row is raised; exit 1.
 # A source that does not come back either stays `failed` (▲ `transfer-failed`),
 # pane retained — one rollback, never a loop. For FLEET_TRANSFER_ROLLBACK_HOLD
-# (1800s) after a rollback an AUTOMATIC cutover (quota failover, after-turn) on
+# (1800s) after a rollback an AUTOMATIC cutover (after-turn) on
 # that window refuses; a manual one, or `tmux set -wu @transfer_rolled_back`, goes.
-# Either stop caused by the TARGET's login — a target-auth refusal of a switch the
-# planner does not own, or a rollback after which the target's login is refused —
+# Either stop caused by the TARGET's login — a target-auth refusal, or a rollback
+# after which the target's login is refused —
 # leaves a retry record (issue #1669, EPIC #1665 C5): handoffs/retry/<fleet>-<id>/,
 # one per window. Once that login is fixed, fleet-relogin.sh runs `--retry <dir>`:
 # the same arguments, the same conversation (session id checked), ONCE — the retry
@@ -68,7 +67,7 @@ die() { FAILURE=$*; printf 'fleet-transfer: %s\n' "$*" >&2;
   exit 1; }
 usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
 SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME='' REQUIRE_IDLE=0
-TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID='' FROM_PANEL=0 PREPARATION_ID=''
+TARGET_FILE='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID='' FROM_PANEL=0 PREPARATION_ID=''
 TAKEOVER=0 TAKEOVER_PLAN='' DURABLE="$BIN/fleet_transfer_durable.py"
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -79,7 +78,10 @@ while [ "$#" -gt 0 ]; do
         --window) [ -z "$TARGET" ] || die 'only one --window is allowed'; TARGET=$2 ;;
         --to) TO=$2 ;; --handoff) NOTES=$2 ;;
         --loop) LOOP=$2 ;;
-        --target-file) TARGET_FILE=$2 ;; --quota-request) QUOTA_REQUEST=$2 ;; --draft-file) DRAFT=$2 ;;
+        --target-file) TARGET_FILE=$2 ;; --draft-file) DRAFT=$2 ;;
+        # The quota failover planner that passed it is retired (T546): a full
+        # subscription is the pool's to change. compat-1v: 下一批删
+        --quota-request) printf 'fleet-transfer: --quota-request 已不用：订阅由池子挑 · no longer used: the pool picks the subscription\n' >&2; exit 2 ;;
         --codex-home) CODEX_TARGET_HOME=$2 ;;
         --expected-source) EXPECT=$2 ;; --armed-request) REQUEST=$2 ;;
         --retry) RETRY=$2 ;; --expected-session-id) EXPECT_SID=$2 ;;
@@ -99,9 +101,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 # Road 2 of the durable handover (issue #4280): a source that cannot run its own
-# CronDelete — a quota failover, or an explicit --durable-takeover — has its
-# durable tasks taken by this controller, inside the isolation boundary.
-[ -z "$QUOTA_REQUEST" ] || TAKEOVER=1
+# CronDelete — an explicit --durable-takeover — has its durable tasks taken by
+# this controller, inside the isolation boundary.
 export FLEET_DURABLE_TAKEOVER=$TAKEOVER
 # target_auth — may the TARGET account start an agent? (issue #1667, EPIC #1665 C3)
 # Asked BEFORE anything is written and again right before /exit, so a target whose
@@ -109,7 +110,7 @@ export FLEET_DURABLE_TAKEOVER=$TAKEOVER
 # mark-reauth, or whose hub token expired — is refused while the source still
 # runs. 2026-10-05 was the opposite order: source /exit'ed, Codex at a login
 # prompt, conversation gone. The ONE judge is fleet-account.sh target-auth
-# (check-target for the planner's pinned target); `unknown` — no ccquota registry,
+# (check-target for a pinned --target-file); `unknown` — no ccquota registry,
 # multi-account off — is NOT a refusal, the launch then behaves as it always did,
 # but a judge that cannot answer at all is (never guess a login). On 0 TARGET_AUTH
 # carries the verdict line; on 1 TARGET_AUTH_WHY carries the reason, and
@@ -309,9 +310,6 @@ PY
 fi
 HANDLE=$(opt '#{@wid}'); ORIGIN=$(opt '#{@origin}')
 source_ready() {
-  if [ -n "$QUOTA_REQUEST" ]; then
-    python3 "$BIN/.fleet-failover.py" validate "$QUOTA_REQUEST" --session "$SESS" --pane "$PANE" --sid "$SID"
-  else
     # A `looping` Codex source between rounds is as settled as `done`: its idle
     # native thread, no live item and a completed last turn are checked, never
     # assumed from the tmux flag (#786).
@@ -321,18 +319,16 @@ source_ready() {
     case "$(opt '#{@claude_state}')" in
       done) return 0 ;;
       looping) if [ "$SOURCE_AGENT" = codex ]; then
-                 python3 "$BIN/.fleet-failover.py" settled --session "$SESS" --pane "$PANE"
+                 python3 "$BIN/fleet_transfer_source.py" settled --session "$SESS" --pane "$PANE"
                else
                  [ -n "$(opt '#{@loop}')" ] \
                    && python3 "$BIN/fleet_loop_mark.py" status --value "$(opt '#{@loop}')" >/dev/null 2>&1
                fi ;;
       *) return 1 ;;
     esac
-  fi
 }
 # refuse_target — the one exit for a target-auth refusal on a real cutover: the
-# planner's `refused.json` (its request dir, so failover-status can name the
-# reason), a ▲ row in the alerts popup (a toast nobody was looking at is gone in
+# retry record, a ▲ row in the alerts popup (a toast nobody was looking at is gone in
 # 2s, #1617), then die. Nothing has been written to the pane or the worktree at
 # either call site; after the lease is held the EXIT trap tidies as for any die.
 # record_retry <origin> — leave the retry record for a switch the TARGET's login
@@ -352,27 +348,16 @@ record_retry() {
   printf 'fleet-transfer: retry recorded: %s\n' "$dir" >&2
 }
 refuse_target() {
-  # A refusal the failover planner owns is retried by the planner (it re-picks a
-  # target every tick); any other is retried once the login is fixed.
-  [ -n "$QUOTA_REQUEST" ] || record_retry refused
-  if [ -n "$QUOTA_REQUEST" ] && [ -d "$QUOTA_REQUEST" ]; then
-    python3 - "$QUOTA_REQUEST/refused.json" "$TARGET_AUTH_WHY" "$TO" <<'PY' 2>/dev/null || :
-import json, os, sys, time
-path, detail, to = sys.argv[1:]
-fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, 'w') as stream:
-    json.dump(dict(reason='target-auth', detail=detail, to=to, at=time.time()), stream)
-PY
-  fi
+  # Retried once the login is fixed.
+  record_retry refused
   [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event -L "$SOCK" transfer-refused \
     "${HANDLE:-$WIN}: 未切换：$TO 需要重新登录 · not switched: $TARGET_AUTH_WHY$RETRY_NOTE" >/dev/null 2>&1 || :
   die "target-auth: $TARGET_AUTH_WHY — not switched; the source keeps running (log in to the target, then retry)"
 }
 # rollback_hold — a window rolled back by issue #1668 within FLEET_TRANSFER_ROLLBACK_HOLD
-# seconds is not cut over AUTOMATICALLY again: the rolled-back source has a new pid,
-# so the failover planner sees a fresh request and would relaunch the same broken
-# target, kill the source, roll back — every tick. The refusal is as cheap as
-# target-auth's (nothing written yet) and lands in refused.json the same way.
+# seconds is not cut over AUTOMATICALLY again (an armed --after-turn request):
+# it would relaunch the same broken target, kill the source, roll back. The
+# refusal is as cheap as target-auth's (nothing written yet).
 rollback_hold() {
   local at hold="${FLEET_TRANSFER_ROLLBACK_HOLD:-1800}" now
   case "$hold" in ''|*[!0-9]*) hold=1800 ;; esac
@@ -380,15 +365,6 @@ rollback_hold() {
   now=$(date +%s)
   [ $(( now - at )) -lt "$hold" ] || return 0
   TARGET_AUTH_WHY="rolled back $(( now - at ))s ago: $(opt '#{@transfer_note}')"
-  if [ -n "$QUOTA_REQUEST" ] && [ -d "$QUOTA_REQUEST" ]; then
-    python3 - "$QUOTA_REQUEST/refused.json" "$TARGET_AUTH_WHY" "$TO" <<'PY' 2>/dev/null || :
-import json, os, sys, time
-path, detail, to = sys.argv[1:]
-fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, 'w') as stream:
-    json.dump(dict(reason='rolled-back', detail=detail, to=to, at=time.time()), stream)
-PY
-  fi
   die "rolled-back: $TARGET_AUTH_WHY — no automatic retry for ${hold}s; switch by hand, or clear @transfer_rolled_back"
 }
 [ -z "$NOTES" ] || [ -s "$NOTES" ] || die '--handoff file is missing or empty'
@@ -499,7 +475,7 @@ if [ "$PREPARE" != 1 ]; then
   # Step one of any cutover or arming (issue #1667): the target must be able to
   # log in, or nothing below runs — the source is not even asked whether it is idle.
   target_auth || refuse_target
-  { [ -z "$QUOTA_REQUEST" ] && [ -z "$REQUEST" ] && [ "$AFTER" != 1 ]; } || rollback_hold
+  { [ -z "$REQUEST" ] && [ "$AFTER" != 1 ]; } || rollback_hold
   if [ "$AFTER" != 1 ]; then
     source_ready || die 'source is not safely idle; finish/pause its turn before transferring'
     CALLER_TMUX="${TMUX:-}"
@@ -532,7 +508,6 @@ if [ "$TAKEOVER" = 1 ] && [ "$NOREPO" = 1 ] && [ "$SOURCE_AGENT" = claude ] && [
   [ -z "$TAKEOVER_PLAN" ] || [ -z "$LOOP" ] \
     || die 'durable takeover carries the durable tasks alone: a source with a verified plan can run its own CronDelete'
 fi
-[ -z "$QUOTA_REQUEST" ] || [ ! -s "$QUOTA_REQUEST/unsent-draft.txt" ] || DRAFT="$QUOTA_REQUEST/unsent-draft.txt"
 package_flags=(--identity "$IDENTITY" --lease-key "$LEASE_KEY" --input-view "$INPUT_VIEW"); [ "$NOREPO" != 1 ] || package_flags+=(--norepo)
 [ "$NATIVE" = 0 ] || package_flags+=(--native-resume)
 
@@ -541,7 +516,7 @@ BUNDLE=$(python3 "$HELPER" package --output "$FLEET_CONF_DIR/handoffs" --main "$
   --source-agent "$SOURCE_AGENT" --codex-home "$CODEX_SOURCE_HOME" --target-home "$CODEX_TARGET_HOME" \
   --session "$SESS" --window "$WIN" --pane "$PANE" --handle "$HANDLE" --issue "$ISSUE" \
   --origin "$ORIGIN" --repo "${FLEET_REPO:-}" --handoff "$NOTES" --previous "$PREVIOUS" --loop "${TAKEOVER_PLAN:-$LOOP}" --launcher "$LAUNCH" \
-  --to "$TO" --target-file "$TARGET_FILE" --quota-request "$QUOTA_REQUEST" --draft-file "$DRAFT" ${package_flags[@]+"${package_flags[@]}"}) || exit 1
+  --to "$TO" --target-file "$TARGET_FILE" --draft-file "$DRAFT" ${package_flags[@]+"${package_flags[@]}"}) || exit 1
 printf 'handoff package: %s\n' "$BUNDLE"
 [ "$PREPARE" != 1 ] || exit 0
 # The single-owner durable journal this switch carries (issue #4280), if any.
@@ -681,13 +656,6 @@ if fleet_pid_alive "$PID"; then
   die "source did not exit; no replacement $TO was launched"
 fi
 python3 "$HELPER" state "$BUNDLE" source_exited || die 'cannot record source exit'
-# A hard wall past its grace migrates despite background commands (#871): stop
-# the ones validate() recorded and name them in the resume prompt. Past /exit a
-# failure here must not strand the pane, so it only warns.
-if [ -n "$QUOTA_REQUEST" ]; then
-  python3 "$BIN/.fleet-failover.py" terminate-background "$QUOTA_REQUEST" --bundle "$BUNDLE" \
-    || printf 'fleet-transfer: warning: could not stop the recorded background commands\n' >&2
-fi
 [ "$(opt '#{window_id}')" = "$WIN" ] || die 'source window was closed by an older hook; use the saved handoff to recover'
 fleet_pane_claude_pid "$PANE" "$SOCK" >/dev/null 2>&1 && die 'another Claude appeared; leaving the pane alone'
 if [ "$(opt '#{pane_dead}')" != 1 ]; then

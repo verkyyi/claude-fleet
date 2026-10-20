@@ -528,19 +528,8 @@ if [ "$MODEL_SWEEP" = 1 ] && [ -x "$BIN/fleet-model-switch.sh" ]; then
   fi
 fi
 
-# Revisit per-session requests independently of quota.ceiling's alert markers.
-# One bounded job per fleet; its file lock makes duplicate ticks/banner events
-# cheap no-ops. Existing named-socket fan-out and daemon remain the only timer.
-qw_failover_enabled() { ( fleet_load_conf "$1"; [ "${FLEET_FAILOVER:-0}" = 1 ]; ); }
-for qs in $SOCKETS; do
-  if qw_failover_enabled "$qs" || [ -d "$FLEET_CONF_DIR/handoffs" ]; then
-    if [ "$DRY" = 1 ]; then
-      printf 'would: reconcile subscription failover on %s\n' "$qs"
-    else
-      fleet_bg -L "$qs" "bash '$BIN/fleet-account.sh' reconcile --session '$qs'"
-    fi
-  fi
-done
+# The per-session quota failover reconcile that ran here every tick is retired
+# (T546, EPIC T542): a full subscription is the pool's to change.
 
 if [ "$QUOTA_POLICY" != 1 ]; then
   END=$(now)
@@ -803,10 +792,6 @@ qw_socket_budget() { local b; b=$(qw_left "$POLICY_T0" "$POLICY_BUDGET")
 # still flash (FLEET_ALERT_FLASH_KINDS), because only you can do something.
 qw_ceiling_socket() {
   local qs="$1" ql="$2" qutil="$3" qwhich="$4" qresett="$5" qnew="$6"
-  if qw_failover_enabled "$qs"; then
-    bash "$BIN/fleet-alerts.sh" event -L "$qs" quota-planner "fleet: $ql at ${qutil}% — subscription planner will resume eligible sessions; unreadable/busy targets wait"
-    return 0
-  fi
   if [ -n "$qnew" ]; then
     fleet_bg -L "$qs" "bash '$BIN/fleet-account.sh' migrate --account '$ql' --session '$qs' --alert"
     bash "$BIN/fleet-alerts.sh" event -L "$qs" quota-benched "fleet: $ql at ${qutil}% of its $qwhich window ($qsrc) → benched until $qresett; moving its sessions to $qnew"
@@ -932,8 +917,10 @@ fi
 #     so a lead is closed one cold boot at a time and a pick that flips never
 #     ping-pongs a session. Idle only (done|needs): a working session's turn is
 #     worth more than the points it is spending. FLEET_ACCOUNT_PACE_REBALANCE=0
-#     switches the moves off (the table is still written). A fleet on the
-#     failover planner (FLEET_FAILOVER=1) is the planner's, as above.
+#     switches the moves off (the table is still written).
+#   The MOVE is retired (T546: fleet-migrate.sh --idle / --from are gone, a full
+#   subscription is the pool's); the table and the stamp stay until C3 removes
+#   this job.
 # Under the tick budget like the rest: a tick with no room writes nothing and
 # the next one tries again (deferral, never a missed bench — the ledger writes
 # that matter are the ceiling branch's, above).
@@ -944,12 +931,8 @@ case "$PACE_COOLDOWN" in ''|*[!0-9]*) PACE_COOLDOWN=600 ;; esac
 # qw_pace_socket <socket> <leader> — one fleet's share of a rebalance: one idle
 # window off <leader> onto the active account, backgrounded like the ceiling
 # fan-out (fleet_bg: silenced run-shell -b, #575).
-qw_pace_socket() {
-  local qs="$1" ql="$2"
-  qw_failover_enabled "$qs" && return 0
-  fleet_bg -L "$qs" "bash '$BIN/fleet-account.sh' migrate --idle --from '$ql' --max 1 --session '$qs' --alert"
-  return 0
-}
+# shellcheck disable=SC2329  # kept as the call site's no-op until C3 removes the job
+qw_pace_socket() { return 0; }
 qpace=""
 if [ "${nrows:-0}" -gt 0 ] && tick_room; then
   qpace=$("$BIN/fleet-account.sh" pace 2>/dev/null)

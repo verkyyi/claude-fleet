@@ -67,7 +67,7 @@
 #                          + the home exists; Claude: the token file readable, a
 #                          hub token unexpired, no mark-reauth. `refuse` also says
 #                          why on stderr and exits 1 — the ONE judge every switch
-#                          (fleet-transfer, migrate, the failover planner) asks
+#                          (fleet-transfer, migrate) asks
 #                          BEFORE it stops a source. `unknown` = nothing to ask
 #                          (no ccquota, multi-account off): the launch is as before
 #   mark-reauth <label> [reason]
@@ -82,13 +82,11 @@
 #                          vault, no local copy kept: fleet-account-add.sh (#2084)
 #   reauth-since <label> — epoch <label> was marked (0 = not marked)
 #   choose --agent claude|codex [--exclude KEY] [--spawn] — JSON decision
-#   reconcile --session S [--dry-run] — bounded per-session quota continuation
-#   failover-status      — durable waiting/cutover/recovery requests (JSON), then one
-#                          `{"state":"excluded","reason":"auth:<state>",…}` row per
-#                          account an automatic pick skips for its login (#1670)
+#   reconcile, failover-status — retired with the quota failover planner (T546):
+#                          one line 「已不用：订阅由池子挑」, exit 0 (an old caller)
 #   use <label>          — pin <label> active
 #   rotate               — advance active to the next eligible account. Every
-#                          automatic pick (active, rotate, the failover planner)
+#                          automatic pick (active, rotate)
 #                          skips a login that is not valid (#1670); none valid ⇒
 #                          it stays put and raises one ▲ account-auth event
 #   mark-limited <label> [banner]
@@ -133,8 +131,8 @@
 #   migrate …            — move LIVE sessions onto the active account by close +
 #                          `--resume` in a new window (issue #512): delegates to
 #                          bin/fleet-migrate.sh — see its header for the selectors
-#                          (<window-id>… | --limited | --idle | --all | --account L |
-#                          --stuck; --force-bg moves past background work, #873);
+#                          (<window-id>… | --account L; --force-bg moves past
+#                          background work, #873);
 #                          a window already on the active account, or any window
 #                          while the active account is benched itself, is skipped
 #                          (#567) — only a --model relaunch is exempt; the CALLER'S
@@ -899,22 +897,6 @@ account_adapter() {
   exec python3 "$BIN/.fleet-account.py" "$@"
 }
 
-account_reconcile() {
-  local previous='' arg sess=''
-  for arg in "$@"; do
-    [ "$previous" != --session ] || sess="$arg"
-    previous="$arg"
-  done
-  [ -z "$sess" ] || fleet_load_conf "$sess" || return 1
-  export FLEET_C FLEET_CONF_DIR FLEET_ACCOUNTS_DIR FLEET_QUOTA_BIN
-  export CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_MODEL FLEET_MODEL_FALLBACK
-  export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_CODEX_SERVER FLEET_FAILOVER_STUCK_ATTEMPTS FLEET_NOTIFY_CMD
-  export FLEET_CODEX_ACCOUNTS FLEET_CODEX_HOME FLEET_CODEX_MODEL
-  export FLEET_CODEX_MODEL_LIMIT_IDS FLEET_CODEX_MODEL_FALLBACK
-  export FLEET_SLEEP_MCP_RESTARTABLE FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_QUOTA_TTL FLEET_SLEEP
-  export FLEET_ACCOUNT_QUOTA_STALE FLEET_ACCOUNT_VERDICT_REFETCH
-  exec python3 "$BIN/.fleet-failover.py" "$@"
-}
 # quota_rows [cached|refresh] — the TSV rows; default = cache if fresh else fetch.
 quota_rows() {
   local mode="${1:-}" ts
@@ -1995,9 +1977,11 @@ cmd_blind() {
 if [ "${BASH_SOURCE[0]:-}" = "${0}" ]; then
 case "${1:-active}" in
   inventory|choose|profile|check-target|target-auth|bench-codex|launch) account_adapter "$@" ;;
-  reconcile) account_reconcile "$@" ;;
+  # The quota failover planner (.fleet-failover.py) is retired (T546): a full
+  # subscription is the pool's to change. compat-1v: 下一批删
+  reconcile|failover-status)
+    echo "fleet-account: $1 已不用：订阅由池子挑 · no longer used: the pool picks the subscription" >&2; exit 0 ;;
   add)       shift; exec bash "$BIN/fleet-account-add.sh" "$@" ;;
-  failover-status) account_reconcile status ;;
   _claude-inventory) shift; cmd_claude_inventory "$@" ;;
   active)        cmd_active ;;
   token)         cmd_token "${2:-}" ;;

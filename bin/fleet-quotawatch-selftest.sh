@@ -51,8 +51,8 @@
 #  12. pace     — (#1231) every tick mirrors `fleet-account.sh pace` to quota.pace
 #                 (the bar's `▲ quota · uneven` reads it); an account far AHEAD
 #                 of its weekly pace while the current pick is on pace with 5h room
-#                 ⇒ ONE `migrate --idle --from <leader> --max 1` per fleet + the
-#                 quota.pace.moved stamp; the next tick inside the cooldown moves
+#                 ⇒ the quota.pace.moved stamp, but no move (the MOVE is retired,
+#                 T546); the next tick inside the cooldown moves
 #                 nothing; --dry-run says what it would do; REBALANCE=0 moves
 #                 nothing but still writes the table.
 #  13. statusline— (#1267) each window's status line stamps @rl5h/@rl7d/@rl_reset/
@@ -668,9 +668,7 @@ run_watch || fail "12: pace tick must exit 0"
 [ "$(grep -c . "$G/quota.pace")" = 2 ] || fail "12: quota.pace has one row per account (got: $(cat "$G/quota.pace"))"
 [ "$(awk -F'\t' '$1=="a"{print $3"/"$4}' "$G/quota.pace")" = "53/held" ] || fail "12: a reads pace +53, held (got: $(awk -F'\t' '$1=="a"' "$G/quota.pace"))"
 [ "$(awk -F'\t' '$1=="b"{print $3"/"$4}' "$G/quota.pace")" = "-63/ok" ]  || fail "12: b reads pace −63, ok (got: $(awk -F'\t' '$1=="b"' "$G/quota.pace"))"
-grep -q "run-shell -b ( bash '$WORK/bin/fleet-account.sh' migrate --idle --from 'a' --max 1 --session 'sessA' --alert" "$WORK/tmux.calls" \
-  || fail "12: a lead of 116 ⇒ ONE idle session moved off a (migrate --idle --from a --max 1, via fleet_bg on the fleet socket) — tmux.calls: $(grep migrate "$WORK/tmux.calls")"
-[ "$(grep -c "migrate --idle --from 'a'" "$WORK/tmux.calls")" = 1 ] || fail "12: exactly one rebalance move"
+[ "$(grep -c "migrate --idle" "$WORK/tmux.calls")" = 0 ] || fail "12: the rebalance MOVE is retired (T546) — no migrate --idle: $(grep migrate "$WORK/tmux.calls")"
 [ "$(migrates)" = "$m" ] || fail "12: a rebalance is NOT a ceiling fan-out (no migrate --account)"
 [ -s "$G/quota.pace.moved" ] || fail "12: the move stamps quota.pace.moved (the cooldown gate)"
 grep -q 'ahead of its weekly pace' "$WORK/stderr" || fail "12: the tick logs the rebalance (stderr: $(cat "$WORK/stderr"))"
@@ -682,7 +680,7 @@ sp=$( CCQUOTA_HUB_URL="$HUB" FLEET_ACCOUNTS_DIR="$WORK/accounts" TMPDIR="$WORK" 
 ok
 # 12b. the next tick sits inside the cooldown: table refreshed, no second move
 run_watch || fail "12b: cooldown tick must exit 0"
-[ "$(grep -c "migrate --idle --from 'a'" "$WORK/tmux.calls")" = 1 ] || fail "12b: inside the cooldown ⇒ no second move"
+[ "$(grep -c "migrate --idle" "$WORK/tmux.calls")" = 0 ] || fail "12b: inside the cooldown ⇒ no second move"
 run_watch --dry-run || fail "12b: --dry-run must exit 0"
 grep -q '^would: rebalance a (pace +53) → b (pace -63) — held back: the last move was' "$WORK/stdout" \
   || fail "12b: --dry-run names the held-back move (stdout: $(cat "$WORK/stdout"))"
@@ -692,19 +690,19 @@ printf '%s' $(( $(date +%s) - 700 )) > "$G/quota.pace.moved"
 run_watch --dry-run || fail "12c: --dry-run must exit 0"
 grep -q '^would: rebalance — move one idle session off a (pace +53) onto b (pace -63, 5h 20%) on: sessA' "$WORK/stdout" \
   || fail "12c: --dry-run plans the move (stdout: $(cat "$WORK/stdout"))"
-[ "$(grep -c "migrate --idle --from 'a'" "$WORK/tmux.calls")" = 1 ] || fail "12c: --dry-run moves nothing"
+[ "$(grep -c "migrate --idle" "$WORK/tmux.calls")" = 0 ] || fail "12c: --dry-run moves nothing"
 [ "$(cat "$G/quota.pace.moved")" = "$(( $(date +%s) - 700 ))" ] || [ "$(( $(date +%s) - $(cat "$G/quota.pace.moved") ))" -ge 690 ] || fail "12c: --dry-run must not restamp the cooldown"
 ok
 # 12d. REBALANCE=0: the table is still written, nothing moves
 rm -f "$G/quota.pace"
 FLEET_ACCOUNT_PACE_REBALANCE=0 run_watch || fail "12d: REBALANCE=0 tick must exit 0"
 [ -s "$G/quota.pace" ] || fail "12d: REBALANCE=0 still writes the pace table"
-[ "$(grep -c "migrate --idle --from 'a'" "$WORK/tmux.calls")" = 1 ] || fail "12d: REBALANCE=0 moves nothing"
+[ "$(grep -c "migrate --idle" "$WORK/tmux.calls")" = 0 ] || fail "12d: REBALANCE=0 moves nothing"
 # 12e. a pick with NO 5h room (b's 5h at 75% ≥ WARN) is no landing spot: the lead
 # is still 116 and the cooldown is over, yet nothing moves.
 echo 75 > "$WORK/pct-b"; printf '%s' $(( $(date +%s) - 700 )) > "$G/quota.pace.moved"
 run_watch || fail "12e: tick must exit 0"
-[ "$(grep -c "migrate --idle --from 'a'" "$WORK/tmux.calls")" = 1 ] || fail "12e: a pick without 5h room is no landing spot — nothing moves"
+[ "$(grep -c "migrate --idle" "$WORK/tmux.calls")" = 0 ] || fail "12e: a pick without 5h room is no landing spot — nothing moves"
 ok
 
 # 13. statusline readings (#1267) ---------------------------------------------

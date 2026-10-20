@@ -161,9 +161,9 @@ slow work, so they repaint instantly:
 - **Account pool / failover** — an optional set of Claude *subscription* accounts
   (one `claude setup-token` OAuth token per file under `FLEET_ACCOUNTS_DIR`). The
   launcher `bin/fleet-claude.sh` exports the **active** account's token per
-  session; when a session prints a usage-limit banner, the collector marks that
-  account and `bin/fleet-account.sh` **rotates** the active pointer, so new
-  sessions fail over to a fresh subscription. Off unless token files exist. See
+  session. A running session that fills is never moved: the credential pool
+  changes its subscription (the per-session failover planner is retired, T546).
+  Off unless token files exist. See
   [MULTI-ACCOUNT](MULTI-ACCOUNT.md).
 
 ## What a computer is — client, hub, managed node

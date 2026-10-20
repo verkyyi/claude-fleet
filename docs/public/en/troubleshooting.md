@@ -49,7 +49,7 @@ On a computer with only the client installed (it watches sessions, runs none), `
 - First check whether it is waiting for you: the "Waiting on you" group in the ⌘P panel.
 - The window shows the recovery page (the session exited): ↵ continues the same conversation, `r` starts a new one.
 - New sessions will not open and stay queued: read the `admit`, `memory` and `machine` rows — most often this computer's memory or load is at its limit; existing sessions are not affected, and the new one opens once there is room.
-- The session says its quota is used up: read the `quota`, `qwatch` and `failover` rows; when a subscription's 5-hour window runs out, it moves to the next subscription automatically (if there is one).
+- The session says its quota is used up: read the `quota` and `qwatch` rows; when a subscription fills, the pool switches to the next subscription (if there is one) — the session is not moved.
 
 ### "This is a client; tasks run on managed nodes"
 
@@ -593,27 +593,6 @@ From `fleet doctor`.
 
 - **What it is**: whether the quota cache is being refreshed and has anything in it.
 - **On WARN / FAIL**: fix the credentials first (read the `cert` and `node` rows, `fleet login`), then `fleet-account.sh quota --refresh`.
-
-#### `account-pick`
-
-From `fleet doctor`.
-
-- **What it is**: whether picking an account for a new session is "blind" (no account's quota can be read).
-- **On WARN / FAIL**: fix the `qwatch` and `quota` rows first.
-
-#### `failover`
-
-From `fleet doctor`.
-
-- **What it is**: whether a subscription switch is under way.
-- **On WARN / FAIL**: `fleet-account.sh failover-status` shows its progress; usually just wait for it to finish.
-
-#### `failover-stuck`
-
-From `fleet doctor`.
-
-- **What it is**: a session's subscription switch keeps failing and is stuck.
-- **On WARN / FAIL**: handle it with the `fleet-account.sh migrate --stuck` command in the explanation.
 
 #### `modelcap`
 

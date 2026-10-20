@@ -17,7 +17,7 @@
 #
 # ONE GRAMMAR: `<icon> <subject> · <condition> · <value>`. Subjects are nouns the
 # operator knows (quota, dash, daemon, disk, machine, service, accounts, model, #<issue>);
-# conditions come from a closed list (stale, unreadable, uneven, from banner,
+# conditions come from a closed list (stale, unreadable, uneven,
 # low, load high, memory high, capped, all capped, reauth, question, permission,
 # blocked, failed, waiting, stalled).
 #
@@ -379,9 +379,6 @@ fleet_alerts_compute() {
       fi
     fi
   fi
-  qvb=$(fleet_quota_via_banner)
-  [ -n "$qvb" ] && _fa_row quota-banner warning quota 'from banner' "${qvb%%	*}" \
-    $(( now - ${qvb#*	} )) accounts 0 '' 'a limit banner benched an account with no fresh quota reading'
   qspread=$(fleet_quota_pace_spread)
   if [ -n "$qspread" ]; then
     rest=${qspread#*	}
