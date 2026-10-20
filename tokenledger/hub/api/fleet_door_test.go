@@ -152,11 +152,12 @@ func TestDoorDNSPointsPodHomesAtTheDoor(t *testing.T) {
 // (claude-fleet#3985): its `entry` route is the door's reachable address, with
 // the home entry port on or off, and it is offered no relay — the relay dials
 // the agent's loopback :22, which a pod's sshd (its own port, the door's key
-// alone) never answers. Any other home, and a pod with no door, as before.
+// alone) never answers. Any other home, and a pod with no door, as before. The
+// route is offered only with the jump (T643): no jump ready ⇒ none.
 func TestDoorRouteListSendsPodsThroughTheDoor(t *testing.T) {
 	h := entryHarness(t)
 	now := time.Now().UTC()
-	pod := FleetMachine{Hostname: "u-alice1"}
+	pod := FleetMachine{Hostname: "u-alice1", HostKeys: []string{"ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC7"}}
 	routes := func(m FleetMachine) string {
 		var rs []string
 		for _, r := range h.srv.withEntryReach(m, now).Routes {
@@ -184,8 +185,19 @@ func TestDoorRouteListSendsPodsThroughTheDoor(t *testing.T) {
 		t.Fatalf("door unreached: %s", got)
 	}
 	dnsReach(t, h, "fleet-door", now, true, "203.0.113.10")
+	// Reached, but no jump ready: no route — the door's bare address led to its
+	// per-login account, which is retired (T643).
+	if got := routes(pod); got != "" {
+		t.Fatalf("no jump ready: %s, want none", got)
+	}
+	jumpReady(h, now, "fleet-door", "u-alice1")
 	if got, want := routes(pod), "entry=203.0.113.10:"+strconv.Itoa(entryPort); got != want {
 		t.Fatalf("pod: %s, want %s", got, want)
+	}
+	for _, r := range h.srv.withEntryReach(pod, now).Routes {
+		if r.Jump != doorJumpUser {
+			t.Fatalf("a pod's door route without the jump: %+v", r)
+		}
 	}
 	// A home that is not a pod gets nothing from the door's reach.
 	if got := routes(FleetMachine{Hostname: "home-a"}); got != "" {
@@ -221,6 +233,7 @@ func TestDoorRouteListHandsOutTheDoorsHostKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	dnsReach(t, h, "fleet-door", now, true, "203.0.113.10")
+	jumpReady(h, now, "fleet-door", "u-alice1")
 	if got := h.srv.withEntryReach(pod, now).HostKeys; len(got) != 0 {
 		t.Fatalf("no door key known: %v, want none", got)
 	}
@@ -243,11 +256,13 @@ func TestDoorRouteListHandsOutTheDoorsHostKey(t *testing.T) {
 func TestHomeAnswerSendsPodsThroughTheDoor(t *testing.T) {
 	h := entryHarness(t)
 	now := time.Now().UTC()
-	h.srv.FleetRoutes = []FleetMachine{{Hostname: "u-alice1", Routes: []FleetRoute{{Name: "lan", Host: "198.51.100.9", Port: 22}}}}
+	h.srv.FleetRoutes = []FleetMachine{{Hostname: "u-alice1", HostKeys: []string{reachKeyLine(reachKey(t))},
+		Routes: []FleetRoute{{Name: "lan", Host: "198.51.100.9", Port: 22}}}}
 	if err := h.srv.Store.SetFleetSetting(DoorKey, "fleet-door", now); err != nil {
 		t.Fatal(err)
 	}
 	dnsReach(t, h, "fleet-door", now, true, "203.0.113.10")
+	jumpReady(h, now, "fleet-door", "u-alice1")
 	out, err := h.srv.homePick("", "", now)
 	if err != nil {
 		t.Fatal(err)

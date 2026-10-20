@@ -11,9 +11,19 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
+// jumpReady has the door and each pod say on their pulls that they are ready
+// for the jump (the door's pods in fleet-workers).
+func jumpReady(h *harness, now time.Time, door string, pods ...string) {
+	h.srv.noteJump(httptest.NewRequest(http.MethodGet, "/x?jump=1&ns=fleet-workers", nil), door, true, now)
+	for _, p := range pods {
+		h.srv.noteJump(httptest.NewRequest(http.MethodGet, "/x?jump=1", nil), p, false, now)
+	}
+}
+
 // The door lets jumps through (claude-fleet#4193): a pod's entry route carries
 // the jump only while the door AND the pod said lately they are ready, and the
-// pod's own host keys are known — otherwise byte for byte as before.
+// pod's own host keys are known — otherwise the pod gets no entry route at all
+// (T643: the door's per-login account the bare route led to is retired).
 func TestDoorJumpRouteOnlyWhenBothSaidSo(t *testing.T) {
 	h := entryHarness(t)
 	now := time.Now().UTC()
@@ -29,8 +39,9 @@ func TestDoorJumpRouteOnlyWhenBothSaidSo(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := json.Marshal(h.srv.withEntryReach(pod, now))
-	if strings.Contains(string(before), "jump") || strings.Contains(string(before), "target") {
-		t.Fatalf("no word from anyone, yet the route says jump: %s", before)
+	if strings.Contains(string(before), "jump") || strings.Contains(string(before), "target") ||
+		strings.Contains(string(before), `"entry`) {
+		t.Fatalf("no word from anyone, yet the pod has a door route: %s", before)
 	}
 	word := func(host, q string, isDoor bool, at time.Time) {
 		h.srv.noteJump(httptest.NewRequest(http.MethodGet, "/x?"+q, nil), host, isDoor, at)
@@ -78,8 +89,8 @@ func TestDoorJumpRouteOnlyWhenBothSaidSo(t *testing.T) {
 	bare := pod
 	bare.HostKeys = nil
 	for _, r := range h.srv.withEntryReach(bare, now).Routes {
-		if r.Jump != "" {
-			t.Fatalf("a jump with no pod host key: %+v", r)
+		if r.Jump != "" || r.Name == "entry" {
+			t.Fatalf("a door route with no pod host key: %+v", r)
 		}
 	}
 	// a home machine never jumps

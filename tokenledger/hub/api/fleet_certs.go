@@ -97,8 +97,8 @@ type FleetRoute struct {
 	// Jump: a person's pod behind the door, reached through the door's one
 	// jump account (claude-fleet#4193): Host:Port is the door, Jump its
 	// account, Target:TargetPort the pod's sshd inside the cluster (its host
-	// keys are the machine's TargetHostKeys). A client that knows none of
-	// this keeps the route as it always was (the door's per-login account).
+	// keys are the machine's TargetHostKeys). A pod's entry route always
+	// carries it: the door's per-login account is retired (T643).
 	Jump       string `json:"jump,omitempty"`
 	Target     string `json:"target,omitempty"`
 	TargetPort int    `json:"target_port,omitempty"`

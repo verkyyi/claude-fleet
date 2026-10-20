@@ -23,8 +23,9 @@ import (
 //     account is configured, and the pods are <svc>.<ns>.svc.cluster.local;
 //   - the pod: GET EntryKeysNodePath?jump=1 — its sshd takes the keys it pulls.
 // Then a pod's entry routes carry Jump / Target / TargetHostKeys (the pod's
-// own host keys, never TOFU) and a new client goes `ssh -J`; an older client
-// reads the route as before. Neither said so = byte for byte as before.
+// own host keys, never TOFU) and the client goes `ssh -J`. Neither said so =
+// no entry route for the pod at all: the door's per-login account the route
+// once led to is retired (T643, DOOR-SIMPLIFY step 6, the hub's half).
 
 // doorJumpUser is the door's one jump account (baked into the door image).
 const doorJumpUser = "fleet-jump"
