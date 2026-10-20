@@ -134,6 +134,18 @@ bash "$R" settle --no-repo --apply >/dev/null 2>&1 && grep -q '^body: {"repo": "
   && ok "S settle --no-repo sends no_repo (#4963)" || st_miss "S --no-repo: $(cat "$CURL_LOG")"
 bash "$R" settle --no-repo --repo o/r >/dev/null 2>&1; [ "$?" = 2 ] && ok "S settle --no-repo with --repo is usage" || st_miss "S --no-repo + --repo accepted"
 
+# --- R: reconcile (EPIC T644 C6) -----------------------------------------------------
+: > "$CURL_LOG"
+bash "$R" reconcile >/dev/null 2>&1 && grep -q 'https://hub.test/v1/node/tasks/reconcile' "$CURL_LOG" \
+  && grep -q '^body: {"apply": false}' "$CURL_LOG" && ok "R reconcile: POST /v1/node/tasks/reconcile, dry by default" || st_miss "R reconcile: $(cat "$CURL_LOG")"
+: > "$CURL_LOG"
+bash "$R" reconcile --before T480 --apply >/dev/null 2>&1 && grep -q '^body: {"apply": true, "before": "T480"}' "$CURL_LOG" \
+  && ok "R reconcile --before --apply sends both" || st_miss "R --before: $(cat "$CURL_LOG")"
+: > "$CURL_LOG"
+bash "$R" reconcile --undo >/dev/null 2>&1 && grep -q '^body: {"apply": false, "undo": true}' "$CURL_LOG" \
+  && ok "R reconcile --undo sends undo" || st_miss "R --undo: $(cat "$CURL_LOG")"
+bash "$R" reconcile --before 480 >/dev/null 2>&1; [ "$?" = 2 ] && ok "R --before takes T<n> only" || st_miss "R --before 480 accepted"
+
 # --- C: set / get ------------------------------------------------------------------
 : > "$CURL_LOG"
 bash "$R" set T5 --asked '要合吗？' --parked '停放：等 #3' --clear note >/dev/null 2>&1 && \

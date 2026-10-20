@@ -233,8 +233,8 @@ func (s *Store) UpdateFleetTask(id int64, u FleetTaskUpdate, now time.Time) (Fle
 	if old.AuthorityVersion != 0 {
 		return FleetTask{}, ErrTaskFence
 	}
-	if old.State == TaskClosed {
-		u.State = "" // settled on evidence (claude-fleet#4867): a late word never reopens it
+	if taskFinished(old.State) {
+		u.State = "" // settled on evidence (claude-fleet#4867), or ended by its ID's result (EPIC T644 C6): a late word never reopens it
 	}
 	sets, args := []string{}, []any{}
 	for _, f := range []struct {

@@ -421,6 +421,9 @@ func idCarrying(q querier, owner, ref string) (carried, open bool, err error) {
 // (ErrIDSwitch: cancel it there); one whose closed ID left a result has ended on
 // it (ErrTaskConflict).
 func (s *Store) unopenedCancelAllowed(tx querier, t FleetTask) error {
+	if strings.HasPrefix(t.Observation, ObsIDResult) {
+		return ErrTaskConflict // ended on its ID's result (EPIC T644 C6)
+	}
 	if t.State != TaskAccepted || t.ExecutionOwner != "" || t.Outcome != "" {
 		return ErrIDSwitch
 	}

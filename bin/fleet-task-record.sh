@@ -35,6 +35,14 @@
 #                       no repo (an EPIC driver's), the same two halves.
 #                       Waits at least 90 s (the hub asks GitHub for up to 60 s,
 #                       issue #4881), FLEET_HUB_TIMEOUT when that is longer.
+#   fleet-task-record.sh reconcile [--before T<n>] [--apply] | --undo
+#                     → bring this owner's records in line with what happened
+#                       (EPIC T644 C6): every unfinished record whose ID already
+#                       carries an ending result takes it; with --before, every
+#                       unfinished record numbered below it that no live session
+#                       holds is cancelled. Dry unless --apply; the hub's JSON
+#                       (unfinished · ended · cancelled · kept · left · items).
+#                       --undo puts every record it cancelled back.
 #   fleet-task-record.sh attach T<n> [<window>]
 #                     → the record names the window's session (its key + worker_id)
 #   fleet-task-record.sh dispatch --title T [--body-file F|-] [--repo o/n]
@@ -333,6 +341,18 @@ case "$cmd" in
     case "$to" in ''|*[!0-9]*) to=90 ;; esac
     [ "$to" -ge 90 ] || to=90
     FLEET_HUB_TIMEOUT=$to call POST /v1/node/tasks/settle "$(python3 -c 'import json,sys; d={"repo":sys.argv[1],"apply":sys.argv[2]=="true"}; d.update({"drained":True} if sys.argv[3]=="true" else {}); d.update({"no_repo":True} if sys.argv[4]=="true" else {}); print(json.dumps(d))' "$repo" "$apply" "$drained" "$norepo")" || exit 1 ;;
+  reconcile)
+    apply=false before='' undo=false
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --before) before="${2:-}"; is_tref "$before" || usage; shift ;;
+        --apply) apply=true ;;
+        --undo) undo=true ;;
+        *) usage ;;
+      esac
+      shift
+    done
+    call POST /v1/node/tasks/reconcile "$(python3 -c 'import json,sys; d={"apply":sys.argv[1]=="true"}; d.update({"before":sys.argv[2]} if sys.argv[2] else {}); d.update({"undo":True} if sys.argv[3]=="true" else {}); print(json.dumps(d))' "$apply" "$before" "$undo")" || exit 1 ;;
   set)
     is_tref "${1:-}" || usage
     t="$1"; shift
