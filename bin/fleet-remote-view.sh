@@ -162,18 +162,23 @@ if [ "${1:-}" = select ] && [ -n "${3:-}" ]; then
   _t=${2#wid:}
   if [ -n "$_s" ] && [ -n "$_u" ] && [ "${_t%%/*}" = "$_u" ]; then
     command -v tmux >/dev/null 2>&1 || PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-    _g="$_s@view-$_v"; _w=''; _c=''
+    _g="$_s@view-$_v"; _w=''; _c=''; _id=${_t#*/}
+    # a worker the hub names by its KEY (`<fleet UUID>/<key>`, fleet_worker_id_key —
+    # issue #3007; every scratch session of a repo): the identity the one resolver
+    # answered for it last time (rv_select's .wid-fid, T691), used only while a live
+    # window still wears it — the slow road below cost 130-400 ms on a busy machine,
+    # on most of a home's switches to another machine
+    case "$_id" in *:*|issue-[0-9]*|scratch-[0-9]*) _id=$(awk -F '\t' -v k="$_t" '$1 == k { v = $2 } END { print v }' "${_f%/*}/.wid-fid" 2>/dev/null) ;; esac
     # one tmux call for both: the fleet's windows, then the 看台's client
     while IFS=' ' read -r _k _a _b; do
       case "$_k" in
-        W) [ -z "$_w" ] && [ "$_b" = "${_t#*/}" ] && _w=$_a ;;
+        W) [ -z "$_w" ] && [ -n "$_id" ] && [ "$_b" = "$_id" ] && _w=$_a ;;
         C) [ -z "$_c" ] && _c=$_a ;;
       esac
     done <<EOF
 $(tmux -L "$_s" list-windows -t "=$_s" -F 'W #{window_id} #{@fleet_id}' \; list-clients -t "=$_g" -F 'C #{client_tty}' 2>/dev/null)
 EOF
-    # no window carries that @fleet_id: the hub's row may name it by its KEY
-    # (`<fleet UUID>/<key>`, fleet_worker_id_key — issue #3007), so rv_select
+    # no window carries that @fleet_id (or the key's remembered one): rv_select
     # below resolves it the one way (fleet_worker_locate) and answers 3 itself
     if [ -n "$_w" ]; then
       case "$_v" in wt-*) python3 "$BIN/fleet-webterm.py" switch --conn "${_v#wt-}" --window "$_w"; exit $? ;; esac
@@ -418,6 +423,21 @@ rv_legacy_undo() {
   done
   T set-option -u -t "=$s:" @remote_view_saved \; set-option -u -t "=$s:" @remote_view_solo 2>/dev/null
 }
+# rv_wid_fid <uuid/key> <window> — remember the identity fleet_worker_locate found
+# for a worker the hub names by its key (T691): the select fast path at the top
+# reads $VIEWS/.wid-fid (a dot name: no row scan sees it), last 200 workers. A
+# worker already named by its identity writes nothing.
+rv_wid_fid() {
+  local f="$VIEWS/.wid-fid" fid
+  case "${1#*/}" in *:*|issue-[0-9]*|scratch-[0-9]*) ;; *) return 0 ;; esac
+  fid=$(T display-message -p -t "$2" '#{@fleet_id}' 2>/dev/null)
+  case "$fid" in ''|*[!A-Za-z0-9-]*) return 0 ;; esac
+  [ "$(awk -F '\t' -v k="$1" '$1 == k { v = $2 } END { print v }' "$f" 2>/dev/null)" = "$fid" ] && return 0
+  mkdir -p "$VIEWS" 2>/dev/null
+  { awk -F '\t' -v k="$1" '$1 != k' "$f" 2>/dev/null; printf '%s\t%s\n' "$1" "$fid"; } \
+    | tail -n 200 > "$f.$$" 2>/dev/null && mv -f "$f.$$" "$f" 2>/dev/null || rm -f "$f.$$"
+  return 0
+}
 # rv_select <worker_id> [<view>] — the worker's window becomes the current one of
 # the view session (the fleet session when none is named or live). 3 = not live
 # here.
@@ -426,6 +446,7 @@ rv_select() {
   loc=$(fleet_worker_locate "wid:$wid" 2>/dev/null)
   case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; return 3 ;; esac
   set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
+  rv_wid_fid "$wid" "$w"
   tgt="$s"
   # the view's session — or the uniquely-suffixed one an attach made when the
   # name was still taken (#1907)

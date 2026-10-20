@@ -31,6 +31,8 @@
 #                                         (before the exec) collect them
 #   fleet_launch_end <rc>                 the agent exited: the one close, when the
 #                                         table's `end` says its exit code is the word (T631)
+#   fleet_launch_yield                    _fl_yield: the words that start the agent one
+#                                         scheduling class below the 看台 (T691)
 
 # shellcheck source=/dev/null
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"     # also sources the sibling global fleet.conf
@@ -354,5 +356,34 @@ fleet_launch_end() {
   [ "${1:-}" = 0 ] && [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] \
     && [ -f "$BIN/session-end-hook.sh" ] || return 0
   bash "$BIN/session-end-hook.sh" --agent-exit "$LAUNCH_AGENT" "$$" </dev/null
+  return 0
+}
+
+# fleet_launch_yield — the agent runs one scheduling class below the 看台 (T691).
+# On a full machine (mini2: 10 cores at load 15-50, 94% of the sessions) the agents
+# and everything they run took the CPU from the tmux server, sshd and the panel's
+# python, and ⌘P / a switch stalled behind them. A Mac clamps the agent's QoS
+# (`taskpolicy -c`, inherited by every child, no root) — nice alone barely moved it
+# there — Linux lowers its nice. Only to utility: the agent's own screen echoes the
+# person's typing; what it RUNS goes one class lower (CLAUDE_CODE_SHELL_PREFIX →
+# bin/fleet-tool-yield.sh, background), which is where the measured win is. The
+# relay / bridge in front of the agent stays as it was. FLEET_AGENT_YIELD: utility
+# (default) · background · 0 = none, the argv byte for byte as before. Sets
+# _fl_yield (empty = nothing to put in front).
+_fl_yield=()
+fleet_launch_yield() {
+  _fl_yield=()
+  local lvl="${FLEET_AGENT_YIELD:-utility}"
+  case "$lvl" in
+    0|off|none) return 0 ;;
+    background) ;;
+    *) lvl=utility ;;
+  esac
+  case "${OSTYPE:-}" in
+    darwin*) [ -x /usr/sbin/taskpolicy ] && _fl_yield=(/usr/sbin/taskpolicy -c "$lvl") ;;
+    *) if command -v nice >/dev/null 2>&1; then
+         if [ "$lvl" = background ]; then _fl_yield=(nice -n 15); else _fl_yield=(nice -n 5); fi
+       fi ;;
+  esac
   return 0
 }

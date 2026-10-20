@@ -24,7 +24,9 @@
 #                   剩余 · model · effort
 #   C. cur=       — switching windows in the 看台 moves `cur=` (the [78] hook, gated
 #                   on @view_thin: a switch in the fleet session writes nothing)
-#   S. select     — `select <wid> <看台>` (a home's peer window, the fast path)
+#   S. select     — `select <wid> <看台>` (a home's peer window, the fast path; a
+#                   key the hub names a worker by, through the resolver's remembered
+#                   identity — T691)
 #                   moves that 看台 alone; with no 看台 the fleet session; a
 #                   worker not here 3; a far 看台 not here yet 5
 #   D. keep       — the client gone: the 看台 and its row stay (left=), `health`
@@ -272,6 +274,15 @@ st_eq "S: …that 看台 shows worker 7, the fleet session stays where it was" "
 env -u TMUX bash "$BIN/fleet-remote-view.sh" select "$U/issue-8" 2>/dev/null; st_eq "S: select <wid> (by its key) with no 看台 answers 0" "0" "$?"
 st_eq "S: …it moves the fleet session and nobody's 看台" "$W8 $W7" "$(tn display-message -p -t "=$RS:" '#{window_id}') $(vcur dev1)"
 env -u TMUX bash "$BIN/fleet-remote-view.sh" select "$U/fid-gone" dev1 >/dev/null 2>&1; st_eq "S: a worker not live here: 3" "3" "$?"
+# T691: the slow road remembers what the one resolver answered for a KEY, and the
+# fast path takes it while a live window still wears that identity
+st_eq "S: …the resolver's answer for the key is remembered" "$U/issue-8	fid-8" "$(cat "$FLEET_CONF_DIR/remote-views/.wid-fid" 2>/dev/null)"
+st_eq "S: …and no row scan sees it" "dev1" "$(ls "$FLEET_CONF_DIR/remote-views")"
+printf '%s\t%s\n' "$U/issue-77" fid-7 "$U/issue-78" fid-gone >> "$FLEET_CONF_DIR/remote-views/.wid-fid"
+env -u TMUX bash "$BIN/fleet-remote-view.sh" select "wid:$U/issue-77" dev1 2>/dev/null; st_eq "S: a remembered key takes the fast path (no resolver knows issue-77)" "0 $W7" "$? $(vcur dev1)"
+env -u TMUX bash "$BIN/fleet-remote-view.sh" select "wid:$U/issue-78" dev1 >/dev/null 2>&1; st_eq "S: …one whose window is gone falls to the resolver: 3" "3 $W7" "$? $(vcur dev1)"
+env -u TMUX bash "$BIN/fleet-remote-view.sh" select "wid:$U/issue-8" dev1 2>/dev/null; st_eq "S: the real key lands on its worker" "0 $W8" "$? $(vcur dev1)"
+env -u TMUX bash "$BIN/fleet-remote-view.sh" select "wid:$U/fid-7" dev1 2>/dev/null; st_eq "S: an identity is never looked up" "0 $W7" "$? $(vcur dev1)"
 env -u TMUX bash "$BIN/fleet-remote-view.sh" select "$U/fid-8" dev1-via-home >/dev/null 2>&1; st_eq "S: a far 看台 not here yet: 5" "5" "$?"
 env -u TMUX bash "$BIN/fleet-remote-view.sh" select "$U/fid-8" dev1 2>/dev/null
 waitfor 5 sh -c "[ \"\$(tr '\t' '\n' < '$FLEET_CONF_DIR/remote-views/dev1' | sed -n 's/^cur=//p')\" = '$U/fid-8' ]" \

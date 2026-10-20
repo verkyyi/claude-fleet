@@ -298,8 +298,22 @@ if [ ${#as_flag[@]} -gt 0 ] && [ "${as_flag[0]}" = --agent ] \
   fleet_as_resolve claude --no-agent-flag
 fi
 fleet_launch_settle
+fleet_launch_yield   # the agent one scheduling class below the 看台 (T691)
+# …and what it runs one more (T691): every Bash tool command and hook goes through
+# bin/fleet-tool-yield.sh (QoS background on a Mac, nice +10 elsewhere; the fleet's
+# own hooks stay at the agent's). FLEET_TOOL_YIELD=0, a prefix of the person's own,
+# or a path Claude Code would split (" -") ⇒ none, the environment as before.
+_fc_ty="${FLEET_TOOL_YIELD:-background}"
+case "$_fc_ty" in 0|off|none) case "${CLAUDE_CODE_SHELL_PREFIX:-}" in */fleet-tool-yield.sh) unset CLAUDE_CODE_SHELL_PREFIX ;; esac ;; *)
+  case "$BIN" in *" -"*|*"'"*) ;; *)
+    case "${CLAUDE_CODE_SHELL_PREFIX:-}" in ''|*/fleet-tool-yield.sh)   # none, or ours (a nested launch)
+      [ -x "$BIN/fleet-tool-yield.sh" ] && export CLAUDE_CODE_SHELL_PREFIX="$BIN/fleet-tool-yield.sh" FLEET_TOOL_YIELD="$_fc_ty" ;;
+    esac ;;
+  esac ;;
+esac
+unset _fc_ty
 if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ "${FLEET_LOOP_AGENT:-}" = claude ]; then
-  exec python3 "$BIN/fleet-loop.py" bridge -- "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${as_flag[@]+"${as_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
+  exec python3 "$BIN/fleet-loop.py" bridge -- ${_fl_yield[@]+"${_fl_yield[@]}"} "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${as_flag[@]+"${as_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
 fi
 # The agent's own report (issue #2536, EPIC #2535 C1): Claude Code ≥ 2.1.295 says
 # working / blocked / done as OSC 7501, but only to a terminal that answers its
@@ -314,4 +328,4 @@ if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && [ "${FLEET_STATUS_7501:-1}" 
   # up to FLEET_STATUS_REPLAY_DEPTH tmux on the way (0 = keep it on this machine).
   _fc_relay=(python3 "$BIN/fleet-status-7501.py" relay --replay "${FLEET_STATUS_REPLAY_DEPTH:-3}" --)
 fi
-exec ${_fc_relay[@]+"${_fc_relay[@]}"} "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${as_flag[@]+"${as_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
+exec ${_fc_relay[@]+"${_fc_relay[@]}"} ${_fl_yield[@]+"${_fl_yield[@]}"} "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${as_flag[@]+"${as_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
