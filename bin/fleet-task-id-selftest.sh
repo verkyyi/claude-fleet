@@ -35,8 +35,8 @@ export TMPDIR="$WORK"
 export FLEET_SKIP_GLOBAL_CONF=1 FLEET_ID_PUSH=0
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR"
 unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_CODEX_LAUNCHER_PID CLAUDE_CODE_ENTRYPOINT FLEET_ID_HOOK FLEET_TASK_FID
-ST_MISS=1; ST_COUNT=1
-st_tally
+
+st_tally count miss
 tf() { "$REAL_TMUX" -L "$L" "$@"; }
 opt() { tf show-options -wqv -t "$1" "$2"; }
 cleanup() { FLEET_ALLOW_TMUX_DESTROY=1 "$REAL_TMUX" -L "$L" kill-server 2>/dev/null; rm -rf "$WORK"; }
@@ -133,7 +133,7 @@ python3 "$BIN/fleet_id.py" close "$TF" --reason reaped
 FLEET_ALLOW_TMUX_DESTROY=1 tf kill-window -t "$W1"
 st_eq "REDO: before — attempt 1 failed" "failed " "$(st_ '' "$TF")"
 st_eq "REDO: attempt opens the second" "2" "$(python3 "$BIN/fleet_id.py" attempt "$TF")"
-read -r W2 P2 <<EOF
+read -r _ P2 <<EOF
 $(newwin "$TF")
 EOF
 hook "$P2" startup eeee0001
