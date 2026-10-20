@@ -22,6 +22,10 @@
 #      --print (FLEET_DISPATCH_TASK_CMD), never the place road; it says T<n> and
 #      the 看台 goes to the window; a repo this machine does not host is said,
 #      never tried; legacy authority keeps the place road; `authority` prints it
+#   I. the 「新会话」 box's defaults (T670, EPIC T651 C2): grid --repo <the session
+#      in view's> → that repo, else the last new session's (不绑仓库 counts), else
+#      the only one; each repo's agent the one it last opened with (`remember`,
+#      compose-state.json's agent_by_repo), else the fleet's, else a usable one
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -192,6 +196,41 @@ st_has 'H: a hub with task codes: the receipt names the code' "$out" 'K7W0'
 CHECKS=$((CHECKS + 1)); printf '%s' "$out" | grep -q 'T77' && st_fail "H: …and no T<n>" "$out"
 out=$(H_MODE=legacy H send --title '看日志' --repo acme/web 2>&1) || st_fail "H: a legacy send exited non-zero" "$out"
 CHECKS=$((CHECKS + 1)); [ -f "$WORK/sent.json" ] || st_fail "H: legacy authority left the place road"
+
+# --- I. the 「新会话」 box's defaults (T670, EPIC T651 C2 — one reader, defaults()) -----
+G() { python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); v=d
+for k in sys.argv[1].split("."): v=v.get(k, "<none>") if isinstance(v, dict) else v
+print(v)' "$1"; }
+rm -f "$WORK/state/compose-state.json"
+st_eq 'I: nothing yet, two repos → 不绑仓库' '' "$(D grid | G last)"
+st_eq 'I: looking at a session of acme/web → acme/web' 'acme/web' "$(D grid --repo acme/web | G last)"
+st_eq 'I: …its short name resolves too' 'acme/web' "$(D grid --repo web | G last)"
+st_eq 'I: a session of a repo the hub does not name → the next rule' '' "$(D grid --repo acme/gone | G last)"
+D remember --repo acme/app --agent codex || st_fail "I: remember exited non-zero"
+st_eq 'I: the last new session'"'"'s repo' 'acme/app' "$(D grid | G last)"
+st_eq 'I: …its agent, by repo' 'codex' "$(D grid | G agents.acme/app)"
+st_eq 'I: another repo keeps the fleet'"'"'s agent' 'claude' "$(D grid | G agents.acme/web)"
+st_eq 'I: the session in view wins over the last' 'acme/web' "$(D grid --repo acme/web | G last)"
+D remember --repo acme/web --agent claude
+st_eq 'I: B opened with Claude → B Claude; A still Codex' 'codex claude' \
+  "$(D grid | G agents.acme/app) $(D grid | G agents.acme/web)"
+D remember --repo '' --agent codex
+st_eq 'I: 不绑仓库 is a choice, remembered' '' "$(D grid | G last)"
+st_eq 'I: …with its own agent' 'codex' "$(D grid | G agents.)"
+D remember --repo acme/web
+st_eq 'I: no agent named → the repo'"'"'s agent stays' 'claude' "$(D grid | G agents.acme/web)"
+st_eq 'I: an unusable remembered agent → the fleet'"'"'s' 'claude' \
+  "$(python3 -c 'import importlib.util,sys
+s=importlib.util.spec_from_file_location("q", sys.argv[1]); q=importlib.util.module_from_spec(s); s.loader.exec_module(q)
+print(q.defaults("acme/app", ["acme/app"], {"agent_by_repo": {"acme/app": "codex"}}, "claude", {"codex": "x"})[1])' "$BIN/fleet-quick-dispatch.py")"
+st_eq 'I: one repo hosted, nothing remembered → it' 'acme/app' \
+  "$(python3 -c 'import importlib.util,sys
+s=importlib.util.spec_from_file_location("q", sys.argv[1]); q=importlib.util.module_from_spec(s); s.loader.exec_module(q)
+print(q.defaults("", ["acme/app"], {}, "claude", {})[0])' "$BIN/fleet-quick-dispatch.py")"
+# a send keeps the per-repo agents (it merges compose-state.json, never rewrites it)
+FLEET_DISPATCH_SEND_CMD="$WORK/send.sh" D send --title x --repo acme/app --agent claude >/dev/null 2>&1
+st_eq 'I: a send merges: its repo, its agent, the others kept' 'acme/app claude claude' \
+  "$(D grid | G last) $(D grid | G agents.acme/app) $(D grid | G agents.acme/web)"
 
 # --- F. the key ------------------------------------------------------------------------
 st_eq 'F: the switch table row' 'dispatch ⌘T 0x74-0x100000 932 t' "$(bash "$BIN/dash-keymap.sh" --panel switch list | awk '$1 == "dispatch"')"

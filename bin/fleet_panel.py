@@ -1,13 +1,9 @@
 """State for the thin panel's full pages (#4416; plan B, T493) and its editor.
 
-No Fleet actions live here. A popup owns one page at a time and a per-view
-draft; the caller hands explicit activations to its existing action routes.
+No Fleet actions live here. A popup owns one page at a time; the caller hands
+explicit activations to its existing action routes.
 """
 import curses
-import json
-import os
-import tempfile
-from pathlib import Path
 
 
 def key_of(row):
@@ -94,40 +90,6 @@ class Editor:
             self.pos = start
         elif isinstance(ch, str) and ch.isprintable():
             return self.insert(ch)
-        return True
-
-
-class Draft:
-    """Private per-view state of the 「新会话」 box (T652, EPIC T651 C1): the repo
-    and agent last chosen there. Nothing is typed in the box any more — an older
-    file's draft text, caret and focus are read and dropped (compat-1v: 下一批删).
-    """
-    def __init__(self, path):
-        self.path = Path(path)
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                data = {}
-        except (OSError, ValueError):
-            data = {}
-        self.repo = data.get("repo") if isinstance(data.get("repo"), str) else None
-        self.agent = data.get("agent") if data.get("agent") in ("claude", "codex") else None
-
-    def save(self, bolt):
-        self.repo, self.agent = bolt["repo"], bolt["agent"]
-        data = dict(repo=self.repo, agent=self.agent)
-        tmp = None
-        try:
-            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(prefix=".draft-", dir=str(self.path.parent))
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False)
-            os.replace(tmp, self.path)
-        except OSError:
-            return False
-        finally:
-            if tmp and os.path.exists(tmp):
-                os.unlink(tmp)
         return True
 
 

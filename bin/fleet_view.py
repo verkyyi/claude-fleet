@@ -109,8 +109,11 @@ box (T652, EPIC T651 C1): 仓库 ‹›, Agent ‹›, 开 — three items, noth
 it opens on 开 with both chosen, so ↵ opens (bolt_argv → go_new, the one road:
 under hub authority a repo's blank session is a record titled 「新会话」, renamed
 by its first prompt). Tab / ↑↓ walk, ←→ change the lit value, ↵ on a value goes
-to 开. The repo and agent persist per view (panel-drafts; an older file's draft
-text is read and dropped — compat-1v: 下一批删).
+to 开. Its defaults (T670, EPIC T651 C2) are fleet-quick-dispatch.py's one reader
+(grid → defaults()): the repo of the session in view, else the last new
+session's (不绑仓库 counts), else the only one; the agent that repo last opened
+with, else the fleet's. Opening one records both (compose-state.json). ⌘N opens
+the box itself, esc closes it. panel-drafts is read no more.
 The footer contains keys, an optional glyph legend and transient feedback.
 FLEET_PANEL_COMMANDS still controls new/quit/landed through panel_rows().
 
@@ -185,12 +188,14 @@ US = "\x1f"
 VIEW_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 # The 看台's actions off dash-keymap.sh --panel switch: the verb each one runs.
 # ⌘N ⌘Q are C7's (issue #3004), bound only when the person names them (#3185);
+# ⌘N opens the 「新会话」 box, both values chosen (T670, EPIC T651 C2) — the panel's
+# forward of `new`, whether the default forward or a chord the person named;
 # zoom / fold stay caught by user-keys, bound to nothing (a 看台 has one pane a
 # window, and no list to fold). ⌘T's 派一件事 popup has no entry since issue #3328:
 # `dispatch` is the panel lit on its ⚡ row — the same send, one entry.
 VIEW_ACTIONS = {"next": "do next", "prev": "do prev", "back": "do back", "fwd": "do fwd",
                 "quickopen": "popup", "switcher": "popup",
-                "new": "do new", "quit": "do quit", "dispatch": "forward"}
+                "new": "forward", "quit": "do quit", "dispatch": "forward"}
 PFX_KEY = "C-]"
 NARROW = 100      # a client narrower than this (a phone) gets the switcher full-screen (#3006)
 # ⌃\ (issue #3004, #2744's meaning): no ⌘ chord, so no row of the switch table —
@@ -2628,6 +2633,7 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
         return bolt_blank(vid, client, repo, agent)
     seam = os.environ.get("FLEET_VIEW_NEW_CMD")
     argv = shlex.split(seam) if seam else ["bash", str(Path(__file__).absolute().parent / "dash-raw-session.sh")]
+    chosen = bool(agent)    # the box names both (T670): its choice is the next box's default
     if not agent:
         agent, why = new_agent(fleet, vid)
         if why:
@@ -2651,6 +2657,8 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
         rc, w, why = 1, "", str(error)
     clock.mark("start")
     if rc == 0 and re.fullmatch(r"@[0-9]+", w):
+        if chosen and not prompt:
+            new_remember(repo, agent)
         went = go(qo, vid, w, "new", client)
         clock.mark("go")
         if went == 0:
@@ -2662,6 +2670,18 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
     toast(client, said)
     print(said, file=sys.stderr, flush=True)
     return 3
+
+
+def new_remember(repo, agent):
+    """The box's session opened: its repo ("" = 不绑仓库) and agent are the next
+    box's defaults — written by fleet-quick-dispatch.py, their one reader (T670).
+    Under hub authority its own send remembers them."""
+    try:
+        subprocess.run([sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"),
+                        "remember", "--repo", repo or "", "--agent", agent], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def new_authority(fleet, vid, repo):
@@ -3774,14 +3794,17 @@ def landed_first(items):
 AGENTS = ("claude", "codex")
 
 
-def grid_read(vid):
-    """The ⚡ row's cells as fleet-quick-dispatch.py grid reads them — ⌘T's own
-    rules: {repos (every repo the hub names), last (the last send's, else the only
-    one), agent (the fleet's default), missing ({agent: why} this machine lacks, or
-    the admin has not opened — issue #3826), blocked (those last ones)}."""
-    g = {"repos": [], "last": "", "agent": "claude", "missing": {}, "blocked": []}
+def grid_read(vid, repo=""):
+    """The 「新会话」 box's values as fleet-quick-dispatch.py grid reads them — its
+    defaults() is the one reader (T670, EPIC T651 C2; the panel only shows):
+    {repos (every repo the hub names), last (the box's repo: `repo` — the session
+    in view's — else the last new session's), agent (the fleet's default), agents
+    ({repo: the agent it last opened with, else the default}), missing ({agent:
+    why} this machine lacks, or the admin has not opened — issue #3826), blocked
+    (those last ones)}."""
+    g = {"repos": [], "last": "", "agent": "claude", "agents": {}, "missing": {}, "blocked": []}
     argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"), "grid",
-            "--view", "%s@view-%s" % (view_fleet(vid), vid)]
+            "--view", "%s@view-%s" % (view_fleet(vid), vid)] + (["--repo", repo] if repo else [])
     try:
         out = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10).stdout
         got = json.loads((out.strip().splitlines() or ["{}"])[-1])
@@ -3792,13 +3815,27 @@ def grid_read(vid):
     return g
 
 
+def view_repo(vid, cur="", items=()):
+    """The repo of the session in view (`cur`, current()'s): a window here says
+    its @repo (owner/name); another machine's row its short name, which grid
+    resolves against the hub's list. "" when it has none."""
+    if not cur:
+        return ""
+    if cur.startswith("@"):
+        rc, out = tm("display-message", "-p", "-t", cur, "#{@repo}")
+        if rc == 0 and SLUG_RE.match(out.strip()):
+            return out.strip()
+    e = next((e for e in items if e.get("kind") == "sess" and e.get("target") == cur), None)
+    return (e or {}).get("repo") or ""
+
+
 def bolt_new(g=None):
     """The ⚡ row's state: the cells read (`g`), what the person changed — `repo`
     None is the pick (the last send's repo, else the only one), `agent` None is the
     fleet's default — and the cell Tab is on ('' · repo · agent).
     No `g` yet (the popup reads it off its thread): not `ready` — the repo cell
     says …, and a ↵ waits for the read rather than guess 不绑仓库."""
-    return {"g": g or {"repos": [], "last": "", "agent": "claude", "missing": {}, "blocked": []},
+    return {"g": g or {"repos": [], "last": "", "agent": "claude", "agents": {}, "missing": {}, "blocked": []},
             "repo": None, "agent": None, "focus": "", "ready": g is not None}
 
 
@@ -3822,8 +3859,9 @@ def bolt_usable(st):
 
 def bolt_agent(st):
     if st["agent"] is not None:
-        return st["agent"]    # a saved explicit selection is never silently reassigned
-    a = bolt_dflt(st)
+        return st["agent"]    # an explicit selection is never silently reassigned
+    # the repo's own (the agent it last opened with — T670), else the fleet's
+    a = (st["g"].get("agents") or {}).get(bolt_repo(st)) or bolt_dflt(st)
     use = bolt_usable(st)
     return a if a in use else use[0]
 
@@ -3956,9 +3994,9 @@ def panel_key(screen, timeout_ms, completed=None, inputs=None):
 
 # --- the keys issue #3328 folded into ⌘P (EPIC #3178 ⑤) ------------------------------------
 # ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘Q ⌘K ⌃\ open the panel instead (fleet_keys.FORWARD,
-# key_lines): ⌘N ⌘T lit on ⚡, and each says 「⌘T 已并进 ⌘P」 the first time — one
-# mark per key per login. Every press is a line of view-switch.ndjson, how=old:<action>.
-FORWARD_BOLT = ("new", "dispatch")
+# key_lines): ⌘T lit on ⚡, and each says 「⌘T 已并进 ⌘P」 the first time — one
+# mark per key per login. ⌘N opens the 「新会话」 box itself, no hint (T670). Every press is a line of view-switch.ndjson, how=old:<action>.
+FORWARD_BOLT = ("dispatch",)
 
 
 def forward_marks():
@@ -4121,19 +4159,13 @@ def _popup(screen, qo, vid, client, forward=""):
     # the ⚡ row (issue #3327): its cells, read off the screen's thread (⌘T's rules);
     # `busy` while a ↵ runs, its outcome landing in `job`
     bolt, busy, job = bolt_new(), None, []
-    draft_key = hashlib.sha256((fleet + ":" + vid).encode()).hexdigest()[:32]
-    draft = panel.Draft(conf_dir() / "panel-drafts" / (draft_key + ".json"))
-    bolt.update(repo=draft.repo, agent=draft.agent)
+    # the box's defaults start from the session in view (T670, EPIC T651 C2)
+    vrepo = view_repo(vid, cur, items)
     page, follow_list, ask_focus = None, True, 0
     box = 2         # the 「新会话」 box's lit item: 0 仓库 · 1 Agent · 2 开 (T652)
 
-    def save_draft():
-        nonlocal msg
-        if not draft.save(bolt):
-            msg = say("view_draft_save_failed")
-
     def grid_load():
-        bolt["g"] = grid_read(vid)
+        bolt["g"] = grid_read(vid, vrepo)
         bolt["ready"] = True
     loader = threading.Thread(target=grid_load, daemon=True)
     loader.start()
@@ -4150,7 +4182,7 @@ def _popup(screen, qo, vid, client, forward=""):
               next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
                    next((i for i, e in enumerate(shown) if pickable(e)), 0)))
     # a key issue #3328 folded into ⌘P: ⌘N ⌘T open on ⚡, every one says so once
-    if forward:
+    if forward and forward != "new":
         if forward in FORWARD_BOLT and bolt_at() >= 0:
             at = bolt_at()
         msg = forward_note(vid, forward)
@@ -4171,7 +4203,6 @@ def _popup(screen, qo, vid, client, forward=""):
 
     def close_page():
         nonlocal mode, mrow, mitems, mat, pend, page, query, opened, at, top, shown, follow_list
-        save_draft()
         if page:
             query, opened, _, _ = page.snapshot
             shown = listing()
@@ -4230,7 +4261,6 @@ def _popup(screen, qo, vid, client, forward=""):
             bolt["repo"] = bolt_repo(bolt)
         mode, box = "compose", 2
         page.scroll, page.follow = 0, True
-        save_draft()
 
     def valid_row(r):
         # Frozen origin, fresh eligibility. Never use the currently selected row
@@ -4313,6 +4343,13 @@ def _popup(screen, qo, vid, client, forward=""):
         msg = say("view_act_failed_fmt", a["label"](r), say("view_act_nothing"))
         return False
 
+    # ⌘N (T670, EPIC T651 C2): straight into the 「新会话」 box, both values chosen —
+    # ↵ opens; esc closes the popup (there is no list it came from)
+    direct = forward == "new" and bolt_at() >= 0
+    if direct:
+        at = bolt_at()
+        compose(shown[at])
+
     while True:
         if msg_until and time.time() > msg_until:
             msg, msg_until = "", 0
@@ -4325,7 +4362,6 @@ def _popup(screen, qo, vid, client, forward=""):
             rc, said = job.pop(0)
             busy = None
             if rc == 0:
-                save_draft()
                 return 0
             msg = said or say("view_new_failed")
             shown = listing()
@@ -4443,8 +4479,7 @@ def _popup(screen, qo, vid, client, forward=""):
                 # the 「新会话」 box (T652): 仓库 ‹›, Agent ‹›, 开 — nothing to type
                 if bolt["ready"] and bolt["repo"] is None:
                     bolt["repo"] = bolt_repo(bolt)
-                if bolt["ready"] and bolt["agent"] is None:
-                    bolt["agent"] = bolt_agent(bolt)
+                # the agent is not pinned: untouched, it is the box's repo's own (T670)
                 cells, note = bolt_cells(bolt, "")
                 for k, label in enumerate([cells[0][0], cells[1][0], say("view_new_open")]):
                     controls[len(lines)] = k
@@ -4501,10 +4536,9 @@ def _popup(screen, qo, vid, client, forward=""):
             continue
         msg, msg_until = "", 0
         if ch in ("\x1b", "\x03"):
-            if page:
+            if page and not (direct and mode == "compose" and not stack):
                 back()
                 continue
-            save_draft()
             return 0
         if ch == curses.KEY_RESIZE:
             heal.resized(screen)
@@ -4542,7 +4576,6 @@ def _popup(screen, qo, vid, client, forward=""):
                             bolt["focus"] = "repo" if box == 0 else "agent"
                             bolt_step(bolt, "", 1)
                         box = controls[i]
-                        save_draft()
                         continue
                     box = 2
                 elif mode == "ask":
@@ -4593,7 +4626,6 @@ def _popup(screen, qo, vid, client, forward=""):
                         continue
                     v, _, a, _ = mitems[mat]
                     if pick(a, mrow) if mode == "menu" else pick(a, pend[1], v):
-                        save_draft()
                         return 0
                 continue
             if mode == "ask":
@@ -4608,14 +4640,12 @@ def _popup(screen, qo, vid, client, forward=""):
                     if a.get("yes") and ch not in "yY":
                         back()
                     elif run(a, r, ch):
-                        save_draft()
                         return 0
                 elif ch in ("\n", "\r", curses.KEY_ENTER):
                     text = ("y" if a.get("yes") else "") if kind == "key" else line.text.strip()
                     if not text:
                         back()
                     elif run(a, r, pre + text):
-                        save_draft()
                         return 0
                 elif ask_focus == 0 and kind == "text":
                     line.key(ch)
@@ -4644,9 +4674,7 @@ def _popup(screen, qo, vid, client, forward=""):
                         continue
                     argv, title, where = bolt_argv(qo, vid, client, bolt)
                     busy = {"title": title, "where": where}
-                    save_draft()
                     bolt_run(argv, job)
-                save_draft()
                 continue
             continue
         sel = [i for i, e in enumerate(shown) if pickable(e)]
@@ -4746,7 +4774,6 @@ def _popup(screen, qo, vid, client, forward=""):
                 continue
             rc = go(qo, vid, target, "popup", client, e)
             if rc == 0:
-                save_draft()
                 return 0
             msg = say("view_far_fmt", e.get("machine") or "?") if rc == 3 else say("view_gone")
             continue
@@ -4767,7 +4794,6 @@ def _popup(screen, qo, vid, client, forward=""):
                 continue
             rc = open_shell(qo, vid, client, e["target"], e)
             if rc == 0:
-                save_draft()
                 return 0
             msg = say("view_gone") if rc == 3 else say("view_shell_failed_fmt", e.get("machine") or "?")
             continue

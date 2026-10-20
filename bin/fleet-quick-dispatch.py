@@ -24,12 +24,18 @@ it — from any window of a thin client's 看台: a worker's, a no-repo session'
                                           turn; the first prompt renames both, once
     fleet-quick-dispatch.py pick          the repo ⌘P's 「新任务」 sends to: line 1
                                           the pick (empty = ask), then every repo
-    fleet-quick-dispatch.py grid [--view V]
-                                          ⌘P's ⚡ row's two cells (issue #3327), one
-                                          JSON line: repos · last (the pick) · agent
-                                          (the fleet's default) · missing {agent: why}
-                                          — not installed here, or 「管理员暂未开放」
+    fleet-quick-dispatch.py grid [--view V] [--repo R]
+                                          the 「新会话」 box's two values (issue #3327,
+                                          T670), one JSON line: repos · last (the box's
+                                          repo: R — the session in view's — else the
+                                          last new session's, defaults()) · agent (the
+                                          fleet's default) · agents {repo: its last
+                                          agent, else the default} · missing {agent:
+                                          why} — not installed here, or 「管理员暂未开放」
                                           (the hub's allowlists, issue #3826)
+    fleet-quick-dispatch.py remember --repo R [--agent A]
+                                          a new session opened on R ("" = none) with
+                                          A: the next box's defaults (compose-state.json)
     fleet-quick-dispatch.py authority --repo R [--view V]
                                           the task authority a start of R meets:
                                           hub · legacy · frozen, or an empty line
@@ -149,6 +155,73 @@ def repo_pick(have=None, last=None):
 
 
 AGENTS = ("claude", "codex")
+
+
+def state_read():
+    """compose-state.json as a dict: `repo` the last new session's ("" = 不绑仓库,
+    a choice too — T670, EPIC T651 C2), `agent_by_repo` {repo or "": agent}."""
+    try:
+        got = json.loads(compose.state_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
+def remember(repo, agent=None):
+    """A new session opened on `repo` ("" = none) with `agent` (None = leave the
+    repo's agent as it was): the next box's defaults (compose-state.json, the one
+    file — the writing area's 「上次用的仓库」 too)."""
+    st = state_read()
+    st["repo"] = repo or ""
+    by = st.get("agent_by_repo") if isinstance(st.get("agent_by_repo"), dict) else {}
+    if agent in AGENTS:
+        by[repo or ""] = agent
+    st["agent_by_repo"] = by
+    return compose.write_atomic(compose.state_path(), json.dumps(st, ensure_ascii=False) + "\n")
+
+
+def repo_of(name, have):
+    """`name` (owner/name, or a bare name) as one of `have`; "" when it is none."""
+    name = (name or "").strip()
+    if not name:
+        return ""
+    low = {r.lower(): r for r in have}
+    if name.lower() in low:
+        return low[name.lower()]
+    if "/" in name:
+        return name if not have else ""
+    hits = [r for r in have if r.rpartition("/")[2].lower() == name.lower()]
+    return hits[0] if len(hits) == 1 else ""
+
+
+def defaults(view_repo="", have=None, state=None, fleet_agent=None, missing=None):
+    """The 「新会话」 box's two values (T670, EPIC T651 C2 — 约定 2, the one reader):
+    (repo, agent). Repo: the session in view's, when it has one the hub names →
+    the last new session's (不绑仓库 counts) while still named → the only one →
+    不绑仓库. Agent: that repo's last → the fleet's default (FLEET_AGENT) → the
+    first usable one."""
+    have = repos() if have is None else have
+    st = state_read() if state is None else state
+    repo = repo_of(view_repo, have)
+    if not repo:
+        last = st.get("repo")
+        if isinstance(last, str) and (last == "" or last in have or not have):
+            repo = last
+        elif len(have) == 1:
+            repo = have[0]
+    return repo, agent_for(repo, st, fleet_agent, missing)
+
+
+def agent_for(repo, state, fleet_agent=None, missing=None):
+    """`repo`'s default agent: the one it last opened with, else the fleet's,
+    else the first usable."""
+    missing = missing or {}
+    usable = [a for a in AGENTS if a not in missing]
+    by = state.get("agent_by_repo") if isinstance(state.get("agent_by_repo"), dict) else {}
+    for a in (by.get(repo or ""), fleet_agent if fleet_agent is not None else agent_default()):
+        if a in usable:
+            return a
+    return usable[0] if usable else (fleet_agent or "claude")
 
 
 def agent_default(session=""):
@@ -315,6 +388,7 @@ def task_send(data, view="", client=""):
         failed(data, view, why)
         return False, tr("compose_failed_fmt", (tr("dispatch_task_made_fmt", name) + " · " if t else "") + why)
     compose.compose_log("dispatch_task", id=data.get("id"), repo=repo, agent=data.get("agent"), view=view, task=t)
+    remember(repo, data.get("agent"))
     win = next((l.split("\t", 1)[0].strip() for l in lines if l.startswith("@")), "")
     if view and win:
         go(view, win, client)
@@ -345,7 +419,7 @@ def send(data, view="", client=""):
     if not compose.write_atomic(path, json.dumps(data, ensure_ascii=False) + "\n"):
         return False, "✗ " + str(path)
     if data.get("repo"):
-        compose.write_atomic(compose.state_path(), json.dumps({"repo": data["repo"]}) + "\n")
+        remember(data["repo"], data.get("agent"))
     seam = os.environ.get("FLEET_DISPATCH_SEND_CMD")
     try:
         if seam:
@@ -547,12 +621,21 @@ def main(argv):
         print(authority(o["--repo"], fleet_of(o["--view"])) if o["--repo"] else "")
         return 0
     if argv[:1] == ["grid"]:
-        view = opts(argv[1:])["--view"]
-        have = repos()
-        print(json.dumps({"repos": have, "last": repo_pick(have), "agent": agent_default(fleet_of(view) if view else ""),
-                          "missing": agent_missing(view), "blocked": sorted(agent_blocked()) if view else []},
+        o = opts(argv[1:])
+        view = o["--view"]
+        have, st = repos(), state_read()
+        dflt, missing = agent_default(fleet_of(view) if view else ""), agent_missing(view)
+        repo, _ = defaults(o["--repo"], have, st, dflt, missing)
+        # `last` the box's repo, `agents` each repo's agent ("" = 不绑仓库) — the
+        # panel only shows them (约定 2)
+        print(json.dumps({"repos": have, "last": repo, "agent": dflt,
+                          "agents": {r: agent_for(r, st, dflt, missing) for r in [""] + have},
+                          "missing": missing, "blocked": sorted(agent_blocked()) if view else []},
                          ensure_ascii=False))
         return 0
+    if argv[:1] == ["remember"]:
+        o = opts(argv[1:])
+        return 0 if remember(o["--repo"], o["--agent"] if o["--agent"] in AGENTS else None) else 1
     o = opts(argv[1:] if argv[:1] in (["payload"], ["send"]) else argv)
     if argv[:1] == ["send"] and o.get("--blank"):
         # a blank session under hub authority (T652): a record, no words — go_new's road
