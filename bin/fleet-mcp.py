@@ -1286,7 +1286,9 @@ TOOLS = {
                                   "(MERGED / SUCCEEDED / FAILED / EXITED)."},
             "task": dict(TASK_REF, description="Wait on a hub task record instead (issue #3330): until it is "
                                                "closed — SUCCEEDED / FAILED / CANCELLED (a dispatched task, issue "
-                                               "#4897); an old record with no issue answers NO-WORKER naming its session."),
+                                               "#4897); an old record with no issue answers NO-WORKER naming its session; "
+                                               "one whose agent never came up or went down answers NOT-STARTED / "
+                                               "DROPPED at once (exit 1) with a hint that restarts it on the same record."),
             "timeout": {"type": "integer", "minimum": 1, "maximum": AWAIT_MAX_S,
                         "description": "Seconds to wait before answering TIMEOUT (default %d, at most %d)."
                                        % (AWAIT_DEFAULT_S, AWAIT_MAX_S)}},

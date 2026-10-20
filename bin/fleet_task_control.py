@@ -39,11 +39,40 @@ def verdict(task):
     return outcome.upper() if outcome in TERMINAL else "WAITING"
 
 
-def record(task, timeout=15):
-    t = call("get", task, timeout=timeout).get("task")
+def record_view(task, timeout=15):
+    """The record and the whole read beside it (started · progress · live)."""
+    got = call("get", task, timeout=timeout)
+    t = got.get("task")
     if not isinstance(t, dict) or t.get("authority_version") != 1:
         raise ValueError("task record is not authoritative")
-    return t
+    return t, got
+
+
+def record(task, timeout=15):
+    return record_view(task, timeout)[0]
+
+
+def start_word(task, view):
+    """An open record's agent, judged by the ONE reader (fleet_id.start_word, T642):
+    the hub's read plus this machine's newest ID opened for it (`fleet-id.sh
+    of-task`: its window here, its ledger's segments). {} = nothing says it is not
+    up; else {word, why, hint}."""
+    try:
+        p = subprocess.run(["bash", str(BIN / "fleet-id.sh"), "of-task", task], capture_output=True, text=True,
+                           timeout=30, stdin=subprocess.DEVNULL)
+        row = json.loads(p.stdout or "{}") if p.returncode == 0 else {}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        row = {}
+    row = row if isinstance(row, dict) else {}
+    sys.path.insert(0, str(BIN))
+    try:
+        import fleet_id
+        w = fleet_id.start_word(view=dict(view, task=view.get("task") or {}), row=row)
+        if w:
+            w["hint"] = fleet_id.start_hint(w["word"], task, row.get("id", ""), row.get("short", ""))
+        return w
+    finally:
+        sys.path.pop(0)
 
 
 def wait_task(task, timeout, interval):
@@ -51,11 +80,18 @@ def wait_task(task, timeout, interval):
     while True:
         left = end - time.monotonic()
         try:
-            t = record(task, timeout=max(0.1, min(15, left)))
+            t, got = record_view(task, timeout=max(0.1, min(15, left)))
         except (ValueError, OSError, subprocess.SubprocessError):
             print("UNKNOWN\ntask: %s\nnote: task record unavailable" % task)
             return 3
         state = verdict(t)
+        # an open record whose agent never came up / went down is no wait (T642):
+        # said at once, with how to start it again on the same record
+        w = start_word(task, got) if state == "WAITING" else {}
+        if w:
+            print("%s\ntask: %s\nnote: %s\nhint: %s" % ("NOT-STARTED" if w["word"] == "not_started" else "DROPPED",
+                                                       task, w["why"], w["hint"]))
+            return 1
         if state != "WAITING" or time.monotonic() >= end:
             print("%s\ntask: %s" % (state, task))
             return {"SUCCEEDED": 0, "FAILED": 1, "CANCELLED": 2, "REFUSED": 2}.get(state, 3)
@@ -94,12 +130,26 @@ def child_summary(data):
 def children(task, as_json):
     data = call("children", task)
     data["summary"] = child_summary(data)
+    # an open child is judged by its agent too (T642): `start` = {word, why, hint}
+    for child in data.get("children") or []:
+        if child.get("outcome") or not str(child.get("id") or "").startswith("T"):
+            continue
+        try:
+            _, got = record_view(child["id"], timeout=10)
+        except (ValueError, OSError, subprocess.SubprocessError):
+            continue
+        w = start_word(child["id"], got)
+        if w:
+            child["start"] = w
     if as_json:
         print(json.dumps(data, ensure_ascii=False))
         return 0
     print("children of %s" % task)
     for child in data.get("children") or []:
-        print("%s %s %s %s" % (child["id"], verdict(child), child.get("ticket_ref", ""), child.get("title", "")))
+        st = child.get("start")
+        word = ("NOT-STARTED" if st["word"] == "not_started" else "DROPPED") if st else verdict(child)
+        print("%s %s %s %s%s" % (child["id"], word, child.get("ticket_ref", ""), child.get("title", ""),
+                                 ("  — %s → %s" % (st["why"], st["hint"])) if st else ""))
     sm = data["summary"]
     print("%d children · open %d · succeeded %d · failed %d · cancelled %d · refused %d" % (
         len(data.get("children") or []), sm.get("open", 0), sm.get("succeeded", 0), sm.get("failed", 0),

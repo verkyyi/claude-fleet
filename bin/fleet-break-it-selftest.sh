@@ -18,6 +18,8 @@
 #   session-exit (exit · Ctrl+C · killed · Ctrl+Z)  bin/fleet-session-wrap.sh (the page, the TSTP guard)
 #   resume-fails-fast / codex-no-id                 bin/fleet-session-wrap.sh, fleet-session-page.py
 #   codex-resume-override                           bin/fleet-codex.sh, fleet-codex-posture.py
+#   task-start-unseen                               bin/start-visible-selftest.sh (fleet-session-wrap.sh say_start,
+#                                                   fleet_id.py start_word, fleet-epic-tick.py, fleet_task_control.py)
 #   merged-then-commit                              bin/session-end-hook.sh --recycle, fleet_reap_ok
 #   last-window                                     fleet_server_resident (fleet-up.sh)
 #   kill-server / disk-full                         bin/fleet-restore.sh --auto, fleet-diskguard.sh --gate
@@ -5877,6 +5879,17 @@ drill_reopen_new_segment() {
   suite_holds fleet-agent-witness-selftest.py "'reopen'" 'test_next_native_asks_the_table' || return 1
   WHAT='换版重开回到同一对话不加段（Codex 续接的线程是本次启动为它开的记 resume），/clear 记新一段；next_native 问表的 clear_said、不问名字；两种 Agent 各跑一遍（fleet-agent-witness-selftest.py）'
   SECS=$(since "$t0")
+}
+
+# task-start-unseen (T642): a task session that never came up is said on its ID and
+# to its dispatcher, and no reader takes it for running — bin/start-visible-selftest.sh
+# drives the wrapper on an isolated tmux server and the tick / await against a stub hub.
+drill_task_start_unseen() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/start-visible-selftest.sh" 2>&1) || { WHY="$(printf '%s' "$out" | grep FAIL | head -3)"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='开局几秒就退：ID 上「未起来：<原因>」、本机日志一行、父会话收到一次；同因不重复；起来了答「起来了」；tick 判 stalled 不算在跑，await 当场 NOT-STARTED，提示 respawn 原记录'
 }
 
 # ================================================================ run ====}

@@ -14,6 +14,13 @@
 #                                            one progress word (EPIC T497 C12): the newest
 #                                            is the ID's `progress` (get, family, the hub
 #                                            mirror); a repeated --event writes nothing
+#   fleet-id.sh start-word <ID> --word not_started|dropped --why …
+#                                            the wrapper's 「未起来」/「已掉」 (T642): one
+#                                            progress word, never twice in a row for one
+#                                            cause; the agent's next SessionStart answers
+#                                            `started` (WRITTEN · SAME)
+#   fleet-id.sh of-task T<n>                 JSON: this machine's newest ID opened for that
+#                                            record, its status row ({} when none here)
 #   fleet-id.sh close  <ID> [--reason r]
 #   fleet-id.sh get    <ID | code> [--json]  the ID, its segments (agent · native id ·
 #                                            start–end · trigger · compactions), results
@@ -100,19 +107,28 @@ esac
 # `scanned` = a tmux server answered: only then is an ID with no window known to be
 # gone (C4's status / route); with none, the ledger alone says (FLEET_ID_LIVE unset).
 # FLEET_ID_LIVE_CMD is the selftest's seam (prints the live IDs).
-live='' scanned=''
+# The same scan says which of them hold no agent (T642: FLEET_AGENT_FMT — the
+# wrapper gone, the pane dead, the recovery page) → FLEET_ID_NOAGENT, what
+# start_word reads as 「窗口在、agent 不在」. FLEET_ID_NOAGENT_CMD is its seam.
+live='' scanned='' noagent=''
 case "$1" in
-  open|short|resolve|get|native|result|progress|close|status|route|children|family|await|history|continue|reopen)
+  open|short|resolve|get|native|result|progress|start-word|of-task|close|status|route|children|family|await|history|continue|reopen)
+    rows=''
     if [ -n "${FLEET_ID_LIVE_CMD:-}" ]; then live=$(eval "$FLEET_ID_LIVE_CMD") && scanned=1
-    elif [ -n "${TMUX:-}" ]; then live=$(fleet_lw '#{@fleet_id}' 2>/dev/null) && scanned=1
+      [ -z "${FLEET_ID_NOAGENT_CMD:-}" ] || noagent=$(eval "$FLEET_ID_NOAGENT_CMD")
+    elif [ -n "${TMUX:-}" ]; then rows=$(fleet_lw "#{@fleet_id} $FLEET_AGENT_FMT" 2>/dev/null) && scanned=1
     else
       while IFS= read -r s; do
         [ -n "$s" ] || continue
         tmux -L "$s" list-sessions >/dev/null 2>&1 && scanned=1
-        live="$live"$'\n'"$(fleet_lw '#{@fleet_id}' tmux -L "$s" 2>/dev/null)"
+        rows="$rows"$'\n'"$(fleet_lw "#{@fleet_id} $FLEET_AGENT_FMT" tmux -L "$s" 2>/dev/null)"
       done <<EOF
 $(fleet_sockets 2>/dev/null)
 EOF
+    fi
+    if [ -n "$rows" ]; then
+      live=$(printf '%s\n' "$rows" | awk 'NF == 2 {print $1}')
+      noagent=$(printf '%s\n' "$rows" | awk 'NF == 2 && $2 == "0" {print $1}')
     fi ;;
 esac
 cmd=$1; shift
@@ -206,5 +222,5 @@ print("\t".join(str(d.get(k) or "-") for k in ("id","native","agent","worktree",
   if [ "$cmd" = continue ]; then rargs+=(--prev "$p_id"); else rargs+=(--fid "$p_id"); fi
   exec bash "${FLEET_ID_SPAWN:-$BIN/dash-raw-session.sh}" "${rargs[@]}"
 fi
-if [ -n "$scanned" ]; then FLEET_ID_LIVE="$live" exec python3 "$BIN/fleet_id.py" "$cmd" "$@"; fi
+if [ -n "$scanned" ]; then FLEET_ID_LIVE="$live" FLEET_ID_NOAGENT="$noagent" exec python3 "$BIN/fleet_id.py" "$cmd" "$@"; fi
 exec python3 "$BIN/fleet_id.py" "$cmd" "$@"

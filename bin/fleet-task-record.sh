@@ -46,6 +46,11 @@
 #                       T<n> line) — ⌘P's ⚡ row in a 看台 (issue #4965:
 #                       `--origin hub --via ⌘P`, the person's own task — no
 #                       parent session on the record).
+#   fleet-task-record.sh respawn T<n> [--prev <ID>] [--origin O] [--print] [<session>]
+#                     → a record whose session never came up (or went down, its
+#                       window gone) opened again on the SAME record (T642): its
+#                       words, repo, agent and reap; the new ID continues --prev.
+#                       FLEET_TASK_RESPAWN is the spawner seam.
 #   fleet-task-record.sh of [<window>]     → the window's @task (T<n>), rc 1 when none
 #   fleet-task-record.sh find-issue o/n#N  → … the live window's @task working that issue
 #
@@ -256,6 +261,63 @@ JSON
   printf '%s\n' "${body:-$title}" > "$pf"
   exec bash "$BIN/dash-raw-session.sh" --no-repo --task "$t" --name "$title" ${reap:+--reap "$reap"} \
     ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${origin:+--origin "$origin"} $pwin "--prompt-file=$pf" ${tsess:+"$tsess"}
+fi
+
+# respawn T<n> [--prev <ID>] [--origin O] [--print] [<fleet session>] (T642): a
+# record whose session never came up — or went down with its window gone — opened
+# AGAIN, on the SAME record: the words, repo, agent file, provider and reap policy
+# it was dispatched with, the new window's ID continuing <ID> (--prev) so a batch
+# reads it as the next baton of the same member. Never a new T<n>. What
+# `fleet-epic-tick.py`'s and `await`'s hint names (fleet_id.start_hint).
+if [ "$cmd" = respawn ]; then
+  t="${1:-}"; is_tref "$t" || usage; shift
+  prev='' origin='' pwin='' tsess=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --prev) prev="${2:-}"; shift ;;
+      --origin) origin="${2:-}"; shift ;;
+      --print) pwin=--print ;;
+      -*) usage ;;
+      *) tsess="$1" ;;
+    esac
+    shift
+  done
+  [ -z "$prev" ] || fleet_is_fid "$prev" || die 2 "--prev wants a full ID"
+  applicable || die 3 "no hub here: no record to respawn"
+  got=$(call GET "/v1/node/tasks/$t") || exit 1
+  plan=$(printf '%s' "$got" | python3 -c '
+import json, sys
+d = json.load(sys.stdin); t = d.get("task") or {}
+if t.get("authority_version") != 1:
+    sys.exit("not an authoritative task record")
+if t.get("outcome"):
+    sys.exit("the record is over (%s): nothing to respawn" % t["outcome"])
+raw = t.get("request_payload") or {}
+p = json.loads(raw) if isinstance(raw, str) and raw else (raw if isinstance(raw, dict) else {})
+disp = dict(p.get("dispatch") or {})
+if disp:
+    disp.update(task=t["id"], generation=t.get("generation", 1), attempt_id=t.get("attempt_id", ""))
+agent = t.get("resolved_agent") if t.get("resolved_agent") in ("claude", "codex") else ""
+print("\t".join([" ".join((t.get("title") or "-").split()), (p.get("repo") or t.get("repo") or "-").lower(), p.get("reap") or "-",
+                 p.get("template") or "-", agent or "-", json.dumps(disp, separators=(",", ":")) if disp else "-"]))
+print(p.get("body") or "", end="")') || die 1 "$t: cannot respawn"
+  IFS=$'\t' read -r r_title r_repo r_reap r_as r_agent r_disp <<< "$(printf '%s\n' "$plan" | head -n 1)"
+  r_body=$(printf '%s\n' "$plan" | sed '1d')
+  pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
+  [ "$r_title" = - ] && r_title=$t
+  if [ -n "$r_body" ]; then printf '%s\n\n%s\n' "$r_title" "$r_body" > "$pf"; else printf '%s\n' "$r_title" > "$pf"; fi
+  [ "$r_disp" = - ] || export FLEET_DISPATCH="$r_disp"
+  ra=(--task "$t" --name "$r_title")
+  if [ "$r_repo" = - ]; then ra=(--no-repo ${ra[@]+"${ra[@]}"}); [ "$r_reap" = - ] || ra+=(--reap "$r_reap")
+  else ra=(--repo "$r_repo" ${ra[@]+"${ra[@]}"} --reap "$( [ "$r_reap" = - ] && echo merged || echo "$r_reap")"); fi
+  [ "$r_as" = - ] || ra+=(--as "$r_as")
+  [ "$r_agent" = - ] || ra+=(--agent "$r_agent")
+  [ -z "$prev" ] || ra+=(--prev "$prev")
+  [ -z "$origin" ] || ra+=(--origin "$origin")
+  [ -z "$pwin" ] || ra+=("$pwin")
+  ra+=("--prompt-file=$pf")
+  [ -z "$tsess" ] || ra+=("$tsess")
+  exec bash "${FLEET_TASK_RESPAWN:-$BIN/dash-raw-session.sh}" ${ra[@]+"${ra[@]}"}
 fi
 
 applicable || exit 3
