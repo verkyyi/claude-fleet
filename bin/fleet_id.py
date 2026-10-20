@@ -525,6 +525,66 @@ def parents_cmd(apply, only=()):
     return 0
 
 
+BACKFILL_COLS = ("socket", "fid", "window", "agent", "repo", "worktree", "task", "cc_sid", "codex_sid",
+                 "codex_thread", "role")
+
+
+def _backfill_windows():
+    """FLEET_ID_BACKFILL (fleet-id.sh fills it): one live window a line, BACKFILL_COLS
+    tab-separated — a session window with an ID, never home or a panel."""
+    out = []
+    for line in os.environ.get("FLEET_ID_BACKFILL", "").splitlines():
+        parts = (line.split("\t") + [""] * len(BACKFILL_COLS))[:len(BACKFILL_COLS)]
+        w = dict(zip(BACKFILL_COLS, (x.strip() for x in parts)))
+        if is_fid(w["fid"]) and w["role"] not in ("home", "panel"):
+            out.append(w)
+    return out
+
+
+def backfill_cmd(apply, only=()):
+    """Backfill (EPIC T497 C17): a live window opened before C1 whose ledger has no
+    `opened` or no native segment gets them — `opened` off the window's options
+    (agent @cc_agent, window, repo, worktree, task; `backfill: true`) and its current
+    native session (@cc_session_id / @codex_session_id) as segment 1, trigger
+    `migrated`. Fill-only and idempotent: what the ledger has is never written again.
+    Dry unless apply; an applied ID is pushed to the hub's mirror."""
+    n = done = 0
+    for w in _backfill_windows():
+        fid = w["fid"]
+        if only and fid not in only:
+            continue
+        rec = fold(read(fid))
+        has_open = any(e.get("ev") == "opened" for e in read(fid))
+        agent = w["agent"] if w["agent"] in ("claude", "codex") else (
+            "codex" if (w["codex_sid"] or w["codex_thread"]) and not w["cc_sid"] else "claude")
+        native = (w["codex_sid"] or w["codex_thread"]) if agent == "codex" else w["cc_sid"]
+        want_open = not has_open or not (rec["opened"].get("agent") or rec["segments"])
+        want_seg = not rec["segments"] and bool(native)
+        if not (want_open or want_seg):
+            continue
+        n += 1
+        code = rec["opened"].get("short") or short_for(fid, known_ids([x["fid"] for x in _backfill_windows()]))
+        what = " + ".join(x for x in ("opened" if want_open else "", "段 1 migrated" if want_seg else "") if x)
+        if apply:
+            if want_open:
+                open_id(fid, {"agent": agent, "window": w["window"], "repo": w["repo"], "worktree": w["worktree"],
+                              "task": w["task"], "backfill": True})
+            if want_seg:
+                def decide(evs, agent=agent, native=native):
+                    if fold(evs)["segments"]:
+                        return None
+                    return {"ev": "native", "agent": agent, "native": native, "trigger": "migrated",
+                            "source": "backfill", "seg": 1}
+                append(fid, None, decide=decide)
+            push_later(fid)
+            done += 1
+        print("%s  %s  %s  %s%s%s" % (code, w["window"] or "-", agent, what,
+                                       "" if native else "  (no native session id on the window)",
+                                       "" if apply else "  (dry)"))
+    print("%d to backfill · %d %s" % (n, done, "written" if apply else "to write (--apply)"))
+    return 0
+
+
 def _hub_record(fid):
     """The hub mirror's record of an ID this machine has no ledger of — folded into the
     ledger's shape — or None."""
@@ -1157,7 +1217,7 @@ def render(fid):
 
 def main(argv):
     if not argv:
-        print("usage: fleet_id.py short|open|native|result|progress|close|get|resolve|push|hook|status|route|children|await|history|continue|reopen|family|parents …", file=sys.stderr)
+        print("usage: fleet_id.py short|open|native|result|progress|close|get|resolve|push|hook|status|route|children|await|history|continue|reopen|family|parents|backfill …", file=sys.stderr)
         return 2
     cmd, args = argv[0], argv[1:]
     # Live windows' IDs ride in as FLEET_ID_LIVE (newline-separated): fleet-id.sh fills it.
@@ -1185,6 +1245,8 @@ def main(argv):
         return migrate_cmd("--apply" in args, only, "--json" in args)
     if cmd == "parents":
         return parents_cmd("--apply" in args, [a for a in args if is_fid(a)])
+    if cmd == "backfill":
+        return backfill_cmd("--apply" in args, [a for a in args if is_fid(a)])
     if cmd == "encode" and args:
         print(encode(args[0]))
         return 0

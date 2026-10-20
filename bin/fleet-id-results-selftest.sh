@@ -28,6 +28,8 @@
 #         (a keyless parent's ID as --origin, a handed-over worker_id; the hub none),
 #         children lists it, and `fleet-id.sh parents` backfills an older one from
 #         its hub record's parent_session (dry, --apply, rc 3 with no hub) — C9
+#   BACKFILL a live window opened before C1 (no opened, no segment) gets both off its
+#         options (`fleet-id.sh backfill`: dry, --apply, idempotent; home untouched) — C17
 #   WT    a worktree remembers its ID beside its T record (fleet_worktree_id)
 #   WIRE  the spawners open with --parent / --from-native / --worktree; the reap,
 #         cleanup, stop and exit closers pass a why; the accepted-task road writes
@@ -271,6 +273,35 @@ printf '#!/bin/sh\nexit 3\n' > "$WORK/taskget3"; chmod +x "$WORK/taskget3"
 python3 "$BIN/fleet_id.py" open "$(mkfid)" --task T79 >/dev/null
 FLEET_ID_TASK_GET="$WORK/taskget3" fid parents >/dev/null 2>&1; rc=$?
 ok; [ "$rc" = 3 ] || fail "TASKPAR: no hub here ⇒ rc 3" "$rc"
+
+# ---- BACKFILL (C17) ---------------------------------------------------------------
+# A live window opened before C1: its ledger has only a progress word (no opened, no
+# segment). backfill (dry, then --apply) writes opened off the window's options and
+# its current native session as segment 1 migrated; a second pass writes nothing; a
+# window with a full ledger and home are left alone.
+BF=$(mkfid); BC=$(mkfid); BH=$(mkfid)
+python3 "$BIN/fleet_id.py" progress "$BF" --summary tick >/dev/null
+python3 "$BIN/fleet_id.py" open "$BC" --agent claude --window @71 >/dev/null
+python3 "$BIN/fleet_id.py" native "$BC" --agent claude --native nat-full --source startup >/dev/null
+printf 'L\t%s\t@70\tcodex\tacme/app\t%s/wt-70\tT88\t\tcx-thread-70\t\tworker\n' "$BF" "$WORK" > "$WORK/bfrows"
+printf 'L\t%s\t@71\tclaude\tacme/app\t\t\tnat-full\t\t\tworker\n' "$BC" >> "$WORK/bfrows"
+printf 'L\t%s\t@72\t\t\t\t\tnat-home\t\t\thome\n' "$BH" >> "$WORK/bfrows"
+bfill() { FLEET_ID_BACKFILL_CMD="cat '$WORK/bfrows'" fid backfill "$@" 2>&1; }
+out=$(bfill)
+ok; printf '%s' "$out" | grep -q '@70  codex  opened + 段 1 migrated  (dry)' && printf '%s' "$out" | grep -q '^1 to backfill' \
+  && [ -z "$(openedf "$BF" agent)" ] || fail "BACKFILL: dry by default, only the pre-C1 window" "$out"
+out=$(bfill --apply)
+ok; [ "$(openedf "$BF" agent)" = codex ] && [ "$(openedf "$BF" window)" = @70 ] && [ "$(openedf "$BF" task)" = T88 ] \
+  && [ "$(openedf "$BF" repo)" = acme/app ] && [ "$(openedf "$BF" worktree)" = "$WORK/wt-70" ] \
+  || fail "BACKFILL: opened takes the window's options" "$(python3 "$BIN/fleet_id.py" get "$BF" --json)"
+got=$(fid get "$BF")
+ok; printf '%s' "$got" | grep -q 'agent codex' && printf '%s' "$got" | grep -Eq '段 1  codex +cx-thread-70 .* migrated' \
+  && ! printf '%s' "$got" | grep -q 'opened ?' || fail "BACKFILL: get lists opened and segment 1 migrated" "$got"
+ok; [ "$(python3 "$BIN/fleet_id.py" get "$BC" --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d["segments"]), d["segments"][0]["trigger"])')" = "1 startup" ] \
+  && [ ! -f "$FLEET_CONF_DIR/ids/$BH.ndjson" ] || fail "BACKFILL: a full ledger and home are left alone"
+n1=$(wc -l < "$FLEET_CONF_DIR/ids/$BF.ndjson"); out=$(bfill --apply)
+ok; printf '%s' "$out" | grep -q '^0 to backfill' && [ "$(wc -l < "$FLEET_CONF_DIR/ids/$BF.ndjson")" = "$n1" ] \
+  || fail "BACKFILL: a second pass writes nothing" "$out"
 
 # ---- WIRE --------------------------------------------------------------------------
 ok; grep -q -- '--parent "\$_idpar"' "$BIN/dash-raw-session.sh" && grep -q -- '--parent "\$_idpar"' "$BIN/dash-issue-session.sh" \
