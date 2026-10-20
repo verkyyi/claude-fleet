@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getJSON } from "@/shared/api";
-import { taskRead, type TaskRead, type TasksResponse } from "./task-state";
+import { taskRead, type Task, type TaskRead, type TasksResponse } from "./task-state";
 
 // One demand-driven read, and the existing read-only retry. Keep this page's
 // last answer in memory on a failed refresh; no disk cache, timer or new start.
@@ -19,4 +19,24 @@ export function useTasks() {
     return () => { live = false; };
   }, [n]);
   return { ...s, loading, reload: () => setN((x) => x + 1) };
+}
+
+// A typed code goes to the hub's one resolver (EPIC T644 C1, convention 4: a
+// code, the task's ID or the old T<n>; unfinished first, then the whole
+// history; never a guess): one task, the candidates when it names several (409),
+// or none. The page never matches a prefix itself.
+export type TaskCandidate = { id: string; short: string; task?: string; title: string; state: string };
+export type TaskFind =
+  | { kind: "one"; task: Task } | { kind: "many"; candidates: TaskCandidate[] }
+  | { kind: "none" } | { kind: "failed" };
+export async function findTask(q: string): Promise<TaskFind> {
+  const ref = q.trim().replace(/^#/, "");
+  if (!ref) return { kind: "none" };
+  const r = await fetch(`/v1/fleet/tasks/${encodeURIComponent(ref)}`, { headers: { Accept: "application/json" } }).catch(() => null);
+  if (r?.status === 401) { location.assign("/app/signin"); return { kind: "failed" }; }
+  if (!r) return { kind: "failed" };
+  const body = await r.json().catch(() => null);
+  if (r.ok && body && typeof body.title === "string") return { kind: "one", task: body as Task };
+  if (r.status === 409 && Array.isArray(body?.candidates)) return { kind: "many", candidates: body.candidates };
+  return r.status === 404 ? { kind: "none" } : { kind: "failed" };
 }
