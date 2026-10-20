@@ -641,3 +641,36 @@ A stop whose `/exit` never lands (`fleet-worker-stop.sh`) no longer answers
 (TERM, `FLEET_STOP_FORCE_GRACE` 10 s, KILL), the row recorded, the window closed
 — `stopped:forced`. `FLEET_STOP_FORCE=0` keeps the old answer. BREAK-IT
 `done-window-lingers`, `stop-no-exit-hangs`.
+
+## Folding to make room, and the reopen that would undo it (T695)
+
+To fold a session is to close its window, record its history row (resumable)
+and leave its worktree alone. 已收起 lists it, and ↵ brings it back with its
+own conversation (`dash-restore-session.sh`: Claude `--resume <sid>`, Codex its
+identity). Nothing new is kept. A folded session has no window, so a release
+never reopens it.
+
+When memory would refuse a spawn (`fleet_machine_admit`: `machine memory tight`),
+`fleet_session_cap_ok` makes room first (`fleet_admit_make_room`, outside the
+admission lock) and then asks again. The target is what the room estimate is
+short of for one more session: the floor, the hysteresis and the reserved
+sessions' cost above what is available. If that cannot be read, it is
+`FLEET_ADMIT_MAKE_ROOM_MB` (1024). `fleet-cleanup-idle.sh --make-room <MB>` then
+folds, across the login's fleets. Tier 0 goes first: the done ones (the ID's
+final result, the task record closed, the agent exited). Tier 1 is next: the
+longest idle (a finished turn at least `FLEET_ADMIT_MAKE_ROOM_IDLE_SECS`, 600 s).
+It stops once the folded windows' resident memory covers the target. Each fold
+is `fleet-cleanup-idle.py --fold --only <window>` with that window's repo
+conf and goes through the reaper's gates: busy, live, the resume proof, the
+transition lock, `@migrating`. Never folded: a pinned window, an orchestrator or
+batch driver (`@agent_def`), `keep`, one working / asking / looping, one a client
+is looking at, a no-repo session (the panel has nothing to resume it from), or
+a window with no worktree key. The spawner's stderr says
+`making room: folded:<window> <key> mb=<n>` and `made-room …`. If nothing could
+be folded, the refusal stands as before. `FLEET_ADMIT_MAKE_ROOM=0` turns it off.
+
+A release's idle reopen (`fleet_cfg_restart_why`) answers `reap` for a window
+that a reaper is already counting down: `@reap_due` is a time and was seen by a
+pass in the last 180 s. That window is about to be folded, and a reopen would
+restart the clock that folds it. BREAK-IT `admit-tight-done-windows`,
+`reopen-folding-session`.

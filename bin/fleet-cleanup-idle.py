@@ -108,7 +108,7 @@ class Cleaner:
                  "@reap_policy", "@loop", "@wrap_gone", "pane_dead",
                  "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
                  "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted", "@agent_status",
-                 "@task", "@task_flow", "@migrating", "@claude_needs")
+                 "@task", "@task_flow", "@migrating", "@claude_needs", "@pin", "@agent_def", "pane_pid")
         # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
         # window, every window, every tick — ~600 a minute on a busy login. A
         # value carrying the separator (never seen) falls back to a call per name.
@@ -827,6 +827,149 @@ class Cleaner:
         print("cleaned:done-no-pr " + window + " " + key + " " + fate)
         return True
 
+    # --make-room (T695, 回收 C): a spawn the machine's memory would refuse first
+    # folds what it can — a session folded is its window closed, its history row
+    # recorded and resumable, its worktree left as it is (面板「已收起」, ↵ resumes
+    # the same conversation). Done ones first (tier 0: the ID's final result, the
+    # task record closed, the agent exited), then the longest idle (tier 1: a
+    # finished turn idle FLEET_ADMIT_MAKE_ROOM_IDLE_SECS). Never a pinned one, an
+    # orchestrator / batch driver, `keep`, one working / asking / looping /
+    # holding a job, one someone is looking at, a no-repo session (nothing to
+    # resume it from the panel) or a window with no worktree key.
+    KEEP_DEFS = ("orchestrator", "epic-driver", "fleet-epic:epic-driver")
+
+    def room_idle_secs(self):
+        v = os.environ.get("FLEET_ADMIT_MAKE_ROOM_IDLE_SECS", "600")
+        return int(v) if re.fullmatch(r"\d{1,7}", v) else 600
+
+    def room_tier(self, window, snap, shown, here):
+        """0 done · 1 idle long enough · None never folded to make room."""
+        pol = self.policy(snap)
+        if (snap["@pin"] == "1" or snap["@agent_def"] in self.KEEP_DEFS
+                or (pol is not None and pol[0] == "keep")
+                or snap["@norepo"] == "1" or snap["@fleet_role"] in ("home", "panel")
+                or snap["window_name"] in ("dash", "plan", "backlog", "home")
+                or snap["@migrating"] or window in shown or window == here):
+            return None
+        gone = snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1"
+        state = self.finished(snap)
+        if state not in ("done", "exited") and not gone:
+            return None
+        transfer = snap["@agent_transfer_until"]
+        if transfer and (not transfer.isdigit() or int(transfer) > self.now):
+            return None
+        wt = snap["@worktree"]
+        if (not wt or not re.search(r"(?:^|-)(scratch|issue)-\d+$", Path(wt).name)
+                or not Path(wt).is_dir()):
+            return None
+        stamp = snap["@claude_state_ts"]
+        if not stamp.isdigit() or not 0 < int(stamp) <= self.now:
+            return None
+        if state == "exited" or gone or self.id_over(snap["@fleet_id"]):
+            return 0
+        task = self.task_ref(snap)
+        if task and self.task_closed(task) == 0:
+            return 0
+        return 1 if self.now - int(stamp) >= self.room_idle_secs() else None
+
+    @staticmethod
+    def tree_rss():
+        """{pid: (ppid, rss KB)} for every process — one ps."""
+        out = {}
+        try:
+            text = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,rss="], capture_output=True,
+                                  text=True, timeout=15).stdout
+        except (OSError, subprocess.SubprocessError):
+            return out
+        for line in text.splitlines():
+            f = line.split()
+            if len(f) == 3 and all(x.isdigit() for x in f):
+                out[int(f[0])] = (int(f[1]), int(f[2]))
+        return out
+
+    @staticmethod
+    def pane_mb(procs, pid):
+        """The resident MB of <pid> and everything under it (0 unreadable)."""
+        if not pid.isdigit():
+            return 0
+        kids = {}
+        for p, (pp, _) in procs.items():
+            kids.setdefault(pp, []).append(p)
+        todo, kb, seen = [int(pid)], 0, set()
+        while todo:
+            p = todo.pop()
+            if p in seen:
+                continue
+            seen.add(p)
+            kb += procs.get(p, (0, 0))[1]
+            todo.extend(kids.get(p, []))
+        return kb // 1024
+
+    def plan_room(self):
+        """One line a window that may be folded: `<tier>\t<last turn>\t<MB>\t<window>`."""
+        try:
+            shown = set(self.tm("list-clients", "-F", "#{window_id}").split())
+        except (OSError, subprocess.SubprocessError):
+            return 0                          # cannot tell who looks: fold nothing
+        here = ""
+        if os.environ.get("TMUX_PANE") and os.environ.get("TMUX"):
+            try:
+                here = self.tm("display-message", "-p", "-t", os.environ["TMUX_PANE"], "#{window_id}")
+            except (OSError, subprocess.SubprocessError):
+                here = ""
+        procs = self.tree_rss()
+        for window in self.tm("list-windows", "-t", self.args.session, "-F", "#{window_id}").split():
+            if not re.fullmatch(r"@\d+", window):
+                continue
+            try:
+                snap = self.snapshot(window)
+                tier = self.room_tier(window, snap, shown, here)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                continue
+            if tier is not None:
+                print("%d\t%s\t%d\t%s" % (tier, snap["@claude_state_ts"], self.pane_mb(procs, snap["pane_pid"]), window))
+        return 0
+
+    def fold(self, window):
+        """Fold ONE window to make room (--fold --only): its gates again, then the
+        history row, the resume proof and the close — the worktree untouched."""
+        snap = self.snapshot(window)
+        here = ""
+        if os.environ.get("TMUX_PANE") and os.environ.get("TMUX"):
+            here = self.tm("display-message", "-p", "-t", os.environ["TMUX_PANE"], "#{window_id}")
+        shown = set(self.tm("list-clients", "-F", "#{window_id}").split())
+        if self.room_tier(window, snap, shown, here) is None:
+            self.say(window, "skip:fold-gate")
+            return False
+        if snap["@repo"] and norm_repo(snap["@repo"]) != norm_repo(self.args.repo):
+            return False
+        wt = snap["@worktree"]
+        key = re.search(r"(?:^|-)(scratch|issue)-(\d+)$", Path(wt).name)
+        key = key[1] + "-" + key[2]
+        if self.busy(window, snap):
+            self.say(window, "skip:busy", key)
+            return False
+        if subprocess.run(["python3", str(BIN / "fleet-reap-live.py"), window, "--socket-name",
+                           self.args.socket_name], stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL, timeout=30).returncode != 0:
+            self.say(window, "skip:live", key)
+            return False
+        if self.args.dry_run:
+            print("would-fold:" + window + " " + key)
+            return False
+        mb = self.pane_mb(self.tree_rss(), snap["pane_pid"])
+        head = run("git", "-C", wt, "rev-parse", "HEAD")
+        run("bash", str(BIN / "fleet-history.sh"), "record-closed", "--repo", self.args.repo,
+            "--session", self.args.session, "--key", key, "--worktree", wt, "--win", window,
+            "--title", snap["window_name"], "--summary", "Folded to make room (memory tight)")
+        if not self.reopens(window, key, wt):
+            return False
+        if not self.close(window, snap, lambda: not self.busy(window, snap)
+                          and run("git", "-C", wt, "rev-parse", "HEAD") == head):
+            return False
+        print("folded:%s %s mb=%d" % (window, key, mb))
+        return True
+
     def pin_keep_once(self):
         """Once per login (issue #3119): a pin used to keep its window from every
         reaper; now it is only the list's order. So the windows pinned when this
@@ -854,6 +997,17 @@ class Cleaner:
             pass
 
     def main(self):
+        if self.args.plan_room:
+            return self.plan_room()
+        if self.args.fold:
+            if not re.fullmatch(r"@\d+", self.args.only) or not self.args.repo \
+                    or not (Path(self.args.main) / ".git").exists():
+                return 2
+            try:
+                return 0 if self.fold(self.args.only) else 1
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                print(f"fold deferred {self.args.only}: {exc}", file=__import__("sys").stderr)
+                return 1
         self.pin_keep_once()
         if not self.idle or not self.args.repo or not (Path(self.args.main) / ".git").is_dir():
             return 0
@@ -877,8 +1031,10 @@ class Cleaner:
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    for name in ("session", "socket-name", "main", "repo", "base"):
+    for name in ("session", "socket-name"):
         p.add_argument("--" + name, required=True)
+    for name in ("main", "repo", "base"):          # not needed by --plan-room
+        p.add_argument("--" + name, default="")
     p.add_argument("--limit", type=int, default=4)
     p.add_argument("--forge", default="github", choices=("github", "none"),
                    help="none = the repo is not on GitHub: no gh, git says what landed (issue #3601)")
@@ -887,6 +1043,9 @@ def main():
     p.add_argument("--only", default="", help="this one window (@id) — the --now watcher's pass (T680)")
     p.add_argument("--grace", type=int, default=None,
                    help="a task session's grace in seconds, over its policy's (T680: --now --after)")
+    p.add_argument("--plan-room", action="store_true",
+                   help="list the windows --make-room may fold (T695): tier, last turn, MB, window")
+    p.add_argument("--fold", action="store_true", help="fold the --only window to make room (T695)")
     p.add_argument("--dry-run", action="store_true")
     return Cleaner(p.parse_args()).main()
 

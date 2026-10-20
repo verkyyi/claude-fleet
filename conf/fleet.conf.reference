@@ -2115,6 +2115,24 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_ADMIT_SESSION_GROWTH=3       # median live-agent RSS × this = one session's cost (a transcript grows)
 # @label=Admission settle secs @group=disk @tier=internal @scope=global @edit=int @unit=s
 #FLEET_ADMIT_SETTLE_SECS=120        # an admitted session is reserved this long, until memory shows it
+# Before memory refuses a spawn, it makes room (T695, 回收 C): sessions are folded —
+# window closed, history recorded and resumable from 已收起, worktree kept — the
+# done ones first (the ID's final result, the task record closed, the agent
+# exited), then the longest idle (a finished turn idle at least
+# FLEET_ADMIT_MAKE_ROOM_IDLE_SECS); never a pinned one, an orchestrator / batch
+# driver, `keep`, one working / asking / looping, one someone is looking at, or a
+# no-repo session. Folded until about what one more session lacks is free (else
+# FLEET_ADMIT_MAKE_ROOM_MB), then admission asks again. 0 = refuse as before.
+# @label=Make room before refusing @group=disk @tier=internal @scope=global @edit=bool
+#FLEET_ADMIT_MAKE_ROOM=1
+# @label=Make room idle secs @group=disk @tier=internal @scope=global @edit=int @unit=s
+#FLEET_ADMIT_MAKE_ROOM_IDLE_SECS=600 # an idle (not done) session is folded only past this
+# @label=Make room MB @group=disk @tier=internal @scope=global @edit=int @unit=MB
+#FLEET_ADMIT_MAKE_ROOM_MB=1024      # how much to free when the room estimate is unreadable
+# @label=Make room secs @group=disk @tier=internal @scope=global @edit=int @unit=s
+#FLEET_ADMIT_MAKE_ROOM_SECS=90      # the folding is cut off after this long
+# @label=Make room settle secs @group=disk @tier=internal @scope=global @edit=int @unit=s
+#FLEET_ADMIT_MAKE_ROOM_SETTLE=1     # wait this long after a fold before memory is read again
 
 # The load line on `fleet-doctor`'s `machine` check (issue #697): 1-minute load
 # average divided by core count. Warns at or above this, so the number means the

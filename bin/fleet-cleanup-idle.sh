@@ -80,6 +80,53 @@ NOW_EOF
   exit 0
 fi
 
+# --make-room <MB> [--dry-run] (T695, 回收 C): fold sessions until about <MB> of
+# their memory is free — the done ones first, then the longest idle
+# (fleet-cleanup-idle.py --plan-room's tiers, across this login's fleets), each
+# through `--fold --only <window>` with ITS repo's conf: history first and
+# resumable, the window closed, the worktree kept. fleet_admit_make_room
+# (fleet-lib.sh) runs it before a spawn is refused for memory. One line a fold
+# (`folded:<window> <key> mb=<n>`), then `made-room <freed>MB of <MB>MB, <n> folded`.
+# FLEET_ADMIT_MAKE_ROOM=0 folds nothing.
+if [ "${1:-}" = --make-room ]; then
+  need=${2:-}; dry=''
+  [ "${3:-}" = --dry-run ] && dry=--dry-run
+  case "$need" in ''|*[!0-9]*) echo "usage: fleet-cleanup-idle.sh --make-room <MB> [--dry-run]" >&2; exit 2 ;; esac
+  [ "${FLEET_ADMIT_MAKE_ROOM:-1}" != 0 ] || { echo "made-room 0MB of ${need}MB, 0 folded (FLEET_ADMIT_MAKE_ROOM=0)"; exit 0; }
+  plan=''
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    rows=$(FLEET_ADMIT_MAKE_ROOM_IDLE_SECS="${FLEET_ADMIT_MAKE_ROOM_IDLE_SECS:-600}" python3 "$BIN/fleet-cleanup-idle.py" --session "$s" --socket-name "$(fleet_socket "$s")" --plan-room 2>/dev/null)
+    [ -n "$rows" ] && plan="$plan$(printf '%s\n' "$rows" | awk -v s="$s" '{ print $0 "\t" s }')"$'\n'
+  done <<MR_EOF
+$(fleet_sockets)
+MR_EOF
+  freed=0; n=0
+  # tier, then the oldest last turn first
+  while IFS=$'\t' read -r tier ts mb win s; do
+    [ -n "$win" ] || continue
+    [ "$freed" -lt "$need" ] || break
+    out=$( export FLEET_SESSION="$s"
+      fleet_load_conf "$s"
+      repo=$(fleet_window_repo "$s" "$win") && [ -n "$repo" ] || exit 0
+      fleet_load_repo_conf "$s" "$repo" || exit 0
+      python3 "$BIN/fleet-cleanup-idle.py" --session "$s" --socket-name "$(fleet_socket "$s")" \
+        --main "${FLEET_MAIN:-}" --repo "$repo" --base "${FLEET_BASE_BRANCH:-master}" \
+        --only "$win" --fold ${dry:+"$dry"} 2>/dev/null )
+    [ -z "$out" ] || printf '%s\n' "$out"
+    case "$out" in *folded:*)
+      n=$((n + 1)); m=${out##*mb=}; m=${m%%[!0-9]*}
+      case "$m" in ''|0) m=1 ;; esac     # an unreadable size still counts as one fold
+      freed=$((freed + m)) ;;
+    esac
+    : "$tier$ts$mb"
+  done <<MR_EOF
+$(printf '%s' "$plan" | sort -t$'\t' -k1,1n -k2,2n)
+MR_EOF
+  echo "made-room ${freed}MB of ${need}MB, $n folded"
+  exit 0
+fi
+
 FLEET_SESSION="${1:?session required}"; shift
 fleet_load_conf "$FLEET_SESSION"
 # FLEET_CLEANUP is switched per repo (issue #978) — in the loop below.
