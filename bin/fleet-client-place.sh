@@ -407,7 +407,7 @@ def placed_login(o):
 if out.get("state") in ("done", "resume"):
     fid, lg = placed_login(out)
     if re.fullmatch(r"[0-9A-Za-z-]{1,64}", fid or "") and re.fullmatch(r"[a-z_][a-z0-9_.-]{0,31}", lg or ""):
-        mp = os.path.join(os.environ.get("TMPDIR") or "/tmp", ".claude-dash", "global", "fleet_logins")
+        mp = os.path.join(os.environ.get("TMPDIR") or "/tmp/claude-fleet-%d" % os.getuid(), ".claude-dash", "global", "fleet_logins")
         try:
             os.makedirs(os.path.dirname(mp), exist_ok=True)
             with open(mp, "a", encoding="utf-8") as f:

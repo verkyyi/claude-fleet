@@ -1626,12 +1626,11 @@ drill_node_versioned_python_script() {
 
 drill_node_restart_shared_orphan() {
   CAP=120
-  local t0 out
+  local t0
   t0=$(now)
-  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-orphans-selftest.py" 2>&1) \
-    || { WHY="daemon restart left a shared lock holder / process group: $(printf '%s' "$out" | tail -8 | tr '\n' ' ')"; return 1; }
+  suite_holds fleet-node-orphans-selftest.py flock || return 1
   SECS=$(since "$t0")
-  WHAT="隔离代理持有真实 flock：守护接管 exec 后的进程，根核心收回无账的旧锁，连续三次重启仍一份；组长先退后仍收顽固子进程，参数里提及脚本的活动作业不碰"
+  WHAT="隔离代理持有真实 flock：守护接管 exec 后的进程，根核心收回无账的旧锁，连续三次重启仍一份；组长先退后仍收顽固子进程，参数里提及脚本的活动作业不碰（fleet-node-orphans-selftest.py 真跑，这里按名守住）"
 }
 
 drill_core_restart_leaks_loops() {
@@ -1897,11 +1896,9 @@ EOF
 drill_per_login_machine_loops() {
   CAP=90; local t0
   t0=$(now)
-  if ! bash "$BIN/fleet-machine-tasks-selftest.sh" >"$WORK/machine-tasks.out" 2>&1; then
-    WHY="a login still probes the machine itself, or a loop has no row: $(grep FAIL "$WORK/machine-tasks.out" | head -3 | tr '\n' ' ')"; return 1
-  fi
+  suite_holds fleet-machine-tasks-selftest.sh 'D switch unset: probes run here, as before' 'D a stale reading is no reading' || return 1
   SECS=$(since "$t0")
-  WHAT="新加的后台循环没在 node-tasks.tsv 登记就报红；标 machine 的模板不按登录跑；整机读数 15 秒一份，FLEET_MACHINE_TASKS=off 的登录直接读它、自己一次也不探，过期、空值或没有就照旧自己探；标 session 的单元只在登录有会话时跑，守护被 kill -9 后认领活着的单元、不再多起一份，孤儿副本被清，未跑完的任务不重复"
+  WHAT="新加的后台循环没在 node-tasks.tsv 登记就报红；标 machine 的模板不按登录跑；整机读数 15 秒一份，FLEET_MACHINE_TASKS=off 的登录直接读它、自己一次也不探，过期、空值或没有就照旧自己探；标 session 的单元只在登录有会话时跑，守护被 kill -9 后认领活着的单元、不再多起一份，孤儿副本被清，未跑完的任务不重复（fleet-machine-tasks-selftest.sh 真跑，这里按名守住）"
 }
 
 # ---- managed-cert-lapses-idle (#4594): a login a managed node took over is the

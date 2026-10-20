@@ -385,12 +385,11 @@ PY2
 # each drill runs the selftest that does it for real on an isolated socket / a
 # sandboxed updater, so the row and the code it names cannot drift apart.
 drill_node_tmux_restart() {
-  CAP=90; local t0 out
+  CAP=90; local t0
   t0=$(now)
-  out=$(bash "$BIN/fleet-sessions-snapshot-selftest.sh" 2>&1) \
-    || { WHY="fleet-sessions-snapshot-selftest: $(printf '%s' "$out" | grep -m1 FAIL)"; return 1; }
+  suite_holds fleet-sessions-snapshot-selftest.sh 'kill-server' || return 1
   SECS=$(since "$t0")
-  WHAT="save → kill-server → restore：同名同目录同对话回来，已关单 / 已删目录 / fleet-down 的不开"
+  WHAT="save → kill-server → restore：同名同目录同对话回来，已关单 / 已删目录 / fleet-down 的不开（fleet-sessions-snapshot-selftest.sh 真跑，这里按名守住）"
 }
 
 # A login with no session open (a China pod can run none, issue #4199): its fleet —
@@ -1438,10 +1437,13 @@ drill_linux_admit_burst() {
   : > "$d/cg/stop"; wait "$wp" 2>/dev/null
   case "$out" in *'container cpu busy'*'|rc=1') ;; *) WHY="with no note yet the gate must sample and hold on a busy core: $out"; return 1 ;; esac
   [ -s "$d/conf/global/admit-cpu.window" ] || { WHY="the first reading left no note for the next one"; return 1; }
+  # its own counters file: nothing the writer above ever wrote can land on it (#4520:
+  # this leg once read the writer's 0.25 cores against the note — rc 0, no words)
+  mkdir -p "$d/cg2"
   n=$(date +%s)
-  printf 'usage_usec 1057000000\nnr_periods 10600\nnr_throttled 1300\n' > "$d/cg/cpu.stat"
+  printf 'usage_usec 1057000000\nnr_periods 10600\nnr_throttled 1300\n' > "$d/cg2/cpu.stat"
   printf '%s 1000000000 10000 1000\n' "$((n - 60))" > "$d/conf/global/admit-cpu.window"
-  out=$(adm)
+  out=$(adm FLEET_CPU_STAT_FILE="$d/cg2/cpu.stat")
   case "$out" in *'0.9'?' of 1.00 cores used'*'over the last 6'?'s'*'|rc=1') ;; *) WHY="a minute at 0.95 of 1 core must hold, naming the window: $out"; return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="1 核 pod，最近一分钟均 0.2 核 / 限流 5%，采样那半秒满核被限流：放行；旧的 0.5 秒采样（WINDOW_SECS=0）照旧拦；还没有记录时照采样拦并留下记录；一分钟真用 0.95 核时拦，写明「over the last 60s」"

@@ -224,6 +224,26 @@ until_ok() {
   "$@"
 }
 
+# suite_holds <test id> [<text>…] — a drill whose recovery IS another selftest's
+# whole run (same file, same arguments, a suite id of its own) holds that test by
+# name instead of running it a second time in the same suite (T532: eleven drills
+# re-ran a standalone selftest, ~360 s of every full run spent twice, and a flaky
+# leg had two chances to red). The held test's own run is where the recovery is
+# checked: <test id> (`<file>` or `<file>#K`) must be one run-selftests.sh lists,
+# and each <text> — the leg, the fixture, the line that times it — must still be in
+# its file. SECS is the check's own time. Keep in sync: fleet-break-it-selftest.sh
+# and fleet-break-it-cred-selftest.sh (the other files' shared runner).
+suite_holds() {
+  local t=$1 f s; shift
+  f=${t%%#*}
+  [ -f "$BIN/$f" ] || { WHY="$f is gone: nothing runs what this drill held"; return 1; }
+  [ -s "$WORK/suite-ids" ] || FLEET_SELFTEST_NO_SHADOW=1 FLEET_HEAVY=0 sh "$BIN/run-selftests.sh" --ids > "$WORK/suite-ids" 2>/dev/null
+  grep -qxF -- "$t" "$WORK/suite-ids" || { WHY="$t is no longer a test the suite runs: this drill held it"; return 1; }
+  for s in "$@"; do
+    grep -qF -- "$s" "$BIN/$f" || { WHY="$f no longer carries “$s”: this drill held it"; return 1; }
+  done
+}
+
 # ============================================================== the list =}
 
 # rows: "<id>" for a drilled row, "@<text>" for a registered one
@@ -3059,8 +3079,10 @@ drill_tmpdir_shared_root() {
   [ "$(cat "$d/srv")" = "$lib" ] || { WHY="a server-side spawn reads $(cat "$d/srv"), the session's lib $lib — not one directory"; return 1; }
   SECS=$(since "$t0")
   # and nothing spells the shared fallback any more
-  hits=$(grep -rn 'TMPDIR:-/tmp}/\.claude-dash\|"/tmp", "\.claude-dash"\|'"'/tmp'), '.claude-dash'" "$ROOT/bin" "$ROOT/hooks" 2>/dev/null \
-           | grep -v -- '-selftest' | head -3)
+  # find -L: under the selftest gate bin/ is a dir of symlinks, which grep -r skips
+  # (GNU) — the lint read nothing in CI while two scripts still fell back (T532)
+  hits=$(find -L "$ROOT/bin" "$ROOT/hooks" -type f ! -name '*-selftest*' -exec grep -Hn \
+           'TMPDIR:-/tmp}/\.claude-dash\|"/tmp", "\.claude-dash"\|'"'/tmp'), '.claude-dash'" {} + 2>/dev/null | head -3)
   [ -z "$hits" ] || { WHY="a script still falls back to the shared /tmp/.claude-dash: $hits"; return 1; }
   WHAT="没有 TMPDIR 的进程（sudo -u 的半边、它起的 tmux 服务器）读写本登录自己的 ${want}：可写、属主是自己；服务器全局环境带上 TMPDIR，服务端起的命令读同一个目录；没有脚本再回退到共用的 /tmp/.claude-dash"
   tmpdir_foreign_leg || return 1
@@ -3504,22 +3526,6 @@ drill_stale_admin_opens_login() {
   SECS=$(since "$t0")
 }
 
-# The two login-remove drills read ONE run of its selftest (~20 s): the second
-# drill reuses the first's verdict instead of running it again.
-LOGIN_REMOVE_ST=''
-# The whole selftest (~30 runs of the script, 50-60 s on a CI Mac) runs once and is
-# shared by every drill that asks; it is no drill's recovery, so the caller's
-# clock (its dynamically scoped `t0`) is moved past it — the first drill of a part
-# used to pay it all against its 60 s cap (#4232). Each leg bounds its own time.
-_login_remove_selftest() {
-  [ -n "$LOGIN_REMOVE_ST" ] || {
-    local _s; _s=$(now)
-    if LOGIN_REMOVE_ST_OUT=$(bash "$ROOT/bin/fleet-login-remove-selftest.sh" 2>&1); then LOGIN_REMOVE_ST=ok; else LOGIN_REMOVE_ST=red; fi
-    t0=$(python3 -c 'import sys, time; print("%.3f" % (float(sys.argv[1]) + time.time() - float(sys.argv[2])))' "$t0" "$_s")
-  }
-  [ "$LOGIN_REMOVE_ST" = ok ]
-}
-
 # ---- spare-reuse-leaks (#3507, EPIC #3500 C11): a login washed for the next
 # person still held the last one's crontab, own services, entry keys file,
 # credsep store, onboarding kit, keychain and git/ssh credentials — and nobody
@@ -3580,17 +3586,15 @@ drill_spare_recycle_dirty() {
 # phase by op_id; its selftest plants one thing per category, kills it mid
 # rejoin and runs the same op again.
 drill_spare_wash_resume() {
-  CAP=90; local t0 out
+  CAP=90; local t0
   t0=$(now)
   [ -f "$ROOT/bin/fleet-login-reset.sh" ] \
     || { WHY="no bin/fleet-login-reset.sh: remove --recycle has nothing to wash a login with"; return 1; }
   grep -q -- '--recycle)' "$ROOT/bin/fleet-login-remove.sh" \
     || { WHY="fleet-login-remove.sh has no --recycle: the hub's reset op fails at its first word"; return 1; }
-  # The full reset matrix remains covered by parts 1+2; this drill owns
-  # the A–F wash/resume/refusal path.
-  out=$(SELFTEST_PART=1 bash "$ROOT/bin/fleet-login-reset-selftest.sh" 2>&1) \
-    || { WHY="fleet-login-reset-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
-  WHAT="每类种一样 → 洗完 reset: clean + credsep: separated；留一个进程 → dirty processes；重新加入失败 → dirty rejoin；半路杀掉同 op 再跑续完、只一份存档（沙盒真跑检查器）"
+  # part 1 of fleet-login-reset-selftest.sh owns the A–F wash/resume/refusal path
+  suite_holds 'fleet-login-reset-selftest.sh#1' || return 1
+  WHAT="每类种一样 → 洗完 reset: clean + credsep: separated；留一个进程 → dirty processes；重新加入失败 → dirty rejoin；半路杀掉同 op 再跑续完、只一份存档（fleet-login-reset-selftest.sh#1 沙盒真跑检查器，这里按名守住）"
   SECS=$(since "$t0")
 }
 
@@ -3601,18 +3605,14 @@ drill_spare_wash_resume() {
 # hub (CapRecycleKeep) leaves that node enrolled and changes only who the login
 # belongs to; a token the person could reach still re-joins.
 drill_recycle_rejoins() {
-  CAP=150; local t0 out
+  CAP=150; local t0
   t0=$(now)
   grep -q 'FLEET_LOGIN_KEEP_NODE' "$ROOT/bin/fleet-login-reset.sh" \
     || { WHY="fleet-login-reset.sh no longer keeps the root-held node token: every recycle re-joins"; return 1; }
   grep -q 'logins/\$LOGIN.env' "$ROOT/bin/fleet-login-reset.sh" \
     || { WHY="fleet-login-reset.sh keeps a token without asking whether only the machine daemon ever served it"; return 1; }
-  # The full reset matrix remains covered by parts 1+2; this drill owns
-  # the K/G/H/T/R keep-node/quiesce path.
-  out=$(SELFTEST_PART=2 bash "$ROOT/bin/fleet-login-reset-selftest.sh" 2>&1) \
-    || { WHY="fleet-login-reset-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
-  printf '%s\n' "$out" | grep -q '^ok   K not served by the machine daemon' \
-    || { WHY="fleet-login-reset-selftest.sh has no keep leg (K)"; return 1; }
+  # part 2 of fleet-login-reset-selftest.sh runs the keep leg (K) for real
+  suite_holds 'fleet-login-reset-selftest.sh#2' 'K not served by the machine daemon' || return 1
   _drill_go_tests 'TestRecycleKeepsRootHeldNode TestRecycleKeptNodeAmbiguousFails' \
     "$ROOT/tokenledger/hub/api/fleet_recycle_keep_test.go" \
     '机器守护代管的登录令牌回收时留在 root（不再 [7a] join）、入口只改归属（spare）并作废旧人的通行证·租约·连接·证书；令牌旧人碰得到过照旧重新入网；留下的节点说不清是哪个就失败（沙盒真跑洗号 + go test）' || return 1
@@ -3647,9 +3647,8 @@ drill_login_remove_record_left() {
   t0=$(now)
   grep -q 'record still there after deleteUser' "$ROOT/bin/fleet-login-remove.sh" \
     || { WHY="fleet-login-remove.sh no longer checks the record is gone after deleteUser"; return 1; }
-  _login_remove_selftest \
-    || { WHY="fleet-login-remove-selftest.sh is red (its record-left legs): $(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | grep -m1 'selftest FAIL')"; return 1; }
-  WHAT='deleteUser 留下账号记录 → dscl -delete 补删；补删不掉 → 退 1，不说 done（真跑 shim 化的 remove）'
+  suite_holds fleet-login-remove-selftest.sh "'record still there after deleteUser'" || return 1
+  WHAT='deleteUser 留下账号记录 → dscl -delete 补删；补删不掉 → 退 1，不说 done（fleet-login-remove-selftest.sh 真跑 shim 化的 remove，这里按名守住）'
   SECS=$(since "$t0")
 }
 
@@ -3665,15 +3664,11 @@ drill_login_remove_respawn_hang() {
     || { WHY="fleet-login-remove.sh no longer boots out the login's user domain before killing"; return 1; }
   grep -q 'FLEET_LOGIN_REMOVE_DELETE_SECS' "$ROOT/bin/fleet-login-remove.sh" \
     || { WHY="fleet-login-remove.sh runs sysadminctl -deleteUser with no time limit"; return 1; }
-  _login_remove_selftest \
-    || { WHY="fleet-login-remove-selftest.sh is red (its respawn / deleteUser-hang legs): $(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | grep -m1 'selftest FAIL')"; return 1; }
-  # the recovery is the two legs' own runs: respawn quieted, hanging deleteUser cut off
-  local rs hs
-  rs=$(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | sed -n 's/^leg respawn \([0-9]*\)s$/\1/p')
-  hs=$(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | sed -n 's/^leg delete-hang \([0-9]*\)s$/\1/p')
-  [ -n "$rs" ] && [ -n "$hs" ] || { WHY="fleet-login-remove-selftest.sh no longer times its respawn / deleteUser-hang legs"; return 1; }
-  WHAT='pkill 之后 distnoted 被 launchd 拉回 → 先 bootout user/gui 域再杀、删号不挂；deleteUser 挂住 → 到时限杀掉（真跑 shim 化的 remove）'
-  SECS=$(python3 -c 'import sys; print("%.1f" % (float(sys.argv[1]) + float(sys.argv[2]) + float(sys.argv[3])))' "$(since "$t0")" "$rs" "$hs")
+  # the recovery is the two legs' own runs (respawn quieted, hanging deleteUser cut
+  # off), each timed and bounded inside fleet-login-remove-selftest.sh
+  suite_holds fleet-login-remove-selftest.sh "printf 'leg respawn %ss" "printf 'leg delete-hang %ss" || return 1
+  SECS=$(since "$t0")
+  WHAT='pkill 之后 distnoted 被 launchd 拉回 → 先 bootout user/gui 域再杀、删号不挂；deleteUser 挂住 → 到时限杀掉（fleet-login-remove-selftest.sh 真跑 shim 化的 remove，这里按名守住）'
 }
 
 # ---- newcomer-login-no-gh (#2953): a login the hub opened for a newcomer has
@@ -3712,9 +3707,8 @@ drill_login_remove_no_fda() {
     || { WHY="fleet-login-remove.sh stops at a failed deleteUser again"; return 1; }
   grep -q 'accountWhy(res.Detail)' "$ROOT/tokenledger/agent/node_accounts.go" \
     || { WHY="the node log no longer says why an account op failed"; return 1; }
-  _login_remove_selftest \
-    || { WHY="fleet-login-remove-selftest.sh is red (its TCC leg): $(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | grep -m1 'selftest FAIL')"; return 1; }
-  WHAT='deleteUser 因 TCC 失败 → dscl 补删记录、剩下的家目录挪开、退 0；记录还删不掉 → 退 1（真跑 shim 化的 remove）'
+  suite_holds fleet-login-remove-selftest.sh 'FAKE_TCC=1' || return 1
+  WHAT='deleteUser 因 TCC 失败 → dscl 补删记录、剩下的家目录挪开、退 0；记录还删不掉 → 退 1（fleet-login-remove-selftest.sh 真跑 shim 化的 remove，这里按名守住）'
   SECS=$(since "$t0")
 }
 
@@ -3769,8 +3763,7 @@ print(m.fda_line({"fda": {"ok": False, "program": "/x/Python"}}))' 2>&1)
   case "$got" in *完全磁盘访问*/x/Python*) ;; *) WHY="the daemon no longer names what to grant Full Disk Access to: $got"; return 1 ;; esac
   grep -q '4) warn node' "$ROOT/bin/fleet-doctor.sh" \
     || { WHY="the doctor's node row ignores status --check 4 (no Full Disk Access)"; return 1; }
-  _login_remove_selftest \
-    || { WHY="fleet-login-remove-selftest.sh is red (its Full Disk Access leg): $(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | grep -m1 'selftest FAIL')"; return 1; }
+  suite_holds fleet-login-remove-selftest.sh 'no Full Disk Access' || return 1
   # #2994: no Full Disk Access ⇒ the delete rides a local ssh session first
   got=$(bash "$ROOT/bin/fleet-login-remove-ssh-selftest.sh" 2>&1) \
     || { WHY="fleet-login-remove-ssh-selftest.sh is red: $(printf '%s\n' "$got" | grep -m1 'selftest FAIL')"; return 1; }
@@ -3786,9 +3779,8 @@ drill_login_remove_uid_leftovers() {
   t0=$(now)
   grep -q 'step 5b "remove what $LOGIN owns outside its home' "$ROOT/bin/fleet-login-remove.sh" \
     || { WHY="fleet-login-remove.sh no longer clears the uid's files outside the home before deleting it"; return 1; }
-  _login_remove_selftest \
-    || { WHY="fleet-login-remove-selftest.sh is red: $(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | grep -m1 'selftest FAIL')"; return 1; }
-  WHAT='删号前删掉这个 uid 在 /private/tmp · /private/var/tmp · /Users/Shared 里的文件（存档目录除外），uid 被下一个登录复用时它拿不到上一个人的东西（真跑 shim 化的删号）'
+  suite_holds fleet-login-remove-selftest.sh 'files of the uid in /Users/Shared were not removed' || return 1
+  WHAT='删号前删掉这个 uid 在 /private/tmp · /private/var/tmp · /Users/Shared 里的文件（存档目录除外），uid 被下一个登录复用时它拿不到上一个人的东西（fleet-login-remove-selftest.sh 真跑 shim 化的删号，这里按名守住）'
   SECS=$(since "$t0")
 }
 
@@ -3805,8 +3797,7 @@ drill_trial_wash_webchat_registered() {
     || { WHY="fleet-login-remove.sh no longer drops the daemon's own on-demand entries: a trial login that chatted cannot be washed"; return 1; }
   grep -q 'def service_fleet_made' "$ROOT/bin/fleet-node-supervisor.py" \
     || { WHY="fleet-node-supervisor.py has no fleet-made test: drop-fleet would take a person's entry"; return 1; }
-  _login_remove_selftest \
-    || { WHY="fleet-login-remove-selftest.sh is red: $(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | grep -m1 'selftest FAIL')"; return 1; }
+  suite_holds fleet-login-remove-selftest.sh 'drop-fleet' || return 1
   WHAT='试用号登记着守护按需建的 webchat：洗号（--recycle-stop --quick）和删号都先注销它、照常走完；人自己的条目（别的名字、改过的 webchat）照旧退 6、什么都不跑（真跑 shim 化的删号 + 真守护）'
   SECS=$(since "$t0")
 }
@@ -3834,17 +3825,15 @@ drill_spare_wash_no_fda() {
 # processes`, now and then. Now the wash quiesces again before its clock and
 # once more after the old home is gone; nothing is let through by name.
 drill_spare_wash_respawn() {
-  CAP=90; local t0 out
+  CAP=90; local t0
   t0=$(now)
   grep -q 'quiesce$' "$ROOT/bin/fleet-login-reset.sh" \
     || { WHY="fleet-login-reset.sh no longer quiesces the login before the wash's clock"; return 1; }
   grep -q 'launchctl bootout "user/\$UIDT"' "$ROOT/bin/fleet-login-reset.sh" \
     || { WHY="fleet-login-reset.sh's quiesce no longer boots out the login's user domain"; return 1; }
-  # The full reset matrix remains covered by parts 1+2; this drill owns
-  # the K/G/H/T/R keep-node/quiesce path.
-  out=$(SELFTEST_PART=2 bash "$ROOT/bin/fleet-login-reset-selftest.sh" 2>&1) \
-    || { WHY="fleet-login-reset-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
-  WHAT='停完之后、洗号之前 launchd 又给该 uid 拉起 distnoted → 洗号记时钟前再 bootout + 杀一轮、旧家挪走后再一轮：reset: clean（沙盒真跑检查器，旧脚本此处报 dirty processes）'
+  # part 2 of fleet-login-reset-selftest.sh owns the K/G/H/T/R keep-node/quiesce path
+  suite_holds 'fleet-login-reset-selftest.sh#2' 'RS_RESPAWN' || return 1
+  WHAT='停完之后、洗号之前 launchd 又给该 uid 拉起 distnoted → 洗号记时钟前再 bootout + 杀一轮、旧家挪走后再一轮：reset: clean（fleet-login-reset-selftest.sh#2 沙盒真跑检查器，这里按名守住）'
   SECS=$(since "$t0")
 }
 
@@ -4132,11 +4121,12 @@ drill_task_report_fence() {
 }
 
 drill_accepted_await_by_number() {
-  CAP=60; local out t0
+  CAP=60; local t0
   t0=$(now)
-  out=$(bash "$BIN/fleet-await-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  suite_holds fleet-await-selftest.sh 'an accepted launch is awaited as its task' \
+    '…no @origin adopted onto accepted work' 'an accepted launch with no task exits 5' || return 1
   SECS=$(since "$t0")
-  WHAT='已接受任务按 T 等待，不按单号等账本、不领养 @origin；hub 仓库不按单号派'
+  WHAT='已接受任务按 T 等待，不按单号等账本、不领养 @origin；hub 仓库不按单号派（fleet-await-selftest.sh 真跑，这里按名守住）'
 }
 
 drill_task_blocker_fence() {
@@ -4697,16 +4687,11 @@ drill_linux_restore_crashloop() {
 drill_restart_done_not_pinned() {
   CAP=40; local t0
   t0=$(now)
-  # its own sandbox, none of this run's environment (the fake agent, the tmux pin)
-  if ! env -i HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" LANG=en_US.UTF-8 \
-       PATH="$(dirname "$REAL_TMUX"):$(dirname "$(command -v python3)"):/usr/bin:/bin:/usr/sbin:/sbin" \
-       bash "$BIN/fleet-sessions-snapshot-selftest.sh" >"$WORK/restart-done.out" 2>&1; then
-    WHY="a done / no-repo session does not survive save · kill-server · restore: $(tail -n 3 "$WORK/restart-done.out")"; return 1
-  fi
+  suite_holds fleet-sessions-snapshot-selftest.sh 'A: the no-repo done session was not pinned' || return 1
   grep -q 'RESTORE_KEEP_DONE=1' "$BIN/fleet-sessions-snapshot.sh" \
     || { WHY="the snapshot restore no longer asks fleet-restore to bring done sessions back"; return 1; }
   SECS=$(since "$t0")
-  WHAT="save 钉住所有开着的会话（done、no-repo 也算，exited 不算）；kill-server 后 restore 带 RESTORE_KEEP_DONE=1，同名、同目录、同一段对话回来"
+  WHAT="save 钉住所有开着的会话（done、no-repo 也算，exited 不算）；kill-server 后 restore 带 RESTORE_KEEP_DONE=1，同名、同目录、同一段对话回来（fleet-sessions-snapshot-selftest.sh 真跑，这里按名守住）"
 }
 
 # ---- linux-recreate-route-lost (#3421): credsep's root settings live in the image
@@ -5171,9 +5156,9 @@ drill_codex_home_trust() {
 drill_transfer_norepo() {
   CAP=60
   local started; started=$(now)
-  bash "$BIN/fleet-transfer-norepo-selftest.sh" >"$WORK/transfer-norepo.out" 2>&1 \
-    || { WHY="$(tail -8 "$WORK/transfer-norepo.out" | tr '\n' ' ')"; return 1; }
-  SECS=$(since "$started"); WHAT='managed HOME provenance; panel and busy refusals leave source alive'
+  suite_holds fleet-transfer-norepo-selftest.sh 'fleet-transfer-selftest.sh" --norepo' \
+    test_two_cron_jobs_deliver_independently_once_and_preserve_expiry || return 1
+  SECS=$(since "$started"); WHAT='managed HOME provenance; panel and busy refusals leave source alive (run for real by fleet-transfer-norepo-selftest.sh, held here by name)'
 }
 
 drill_transfer_preparation_retry() {
@@ -5300,12 +5285,11 @@ drill_spinner_unwatched_poll() {
 }
 
 drill_spinner_maintenance_starved() {
-  CAP=60; local t0 out
+  CAP=60; local t0
   t0=$(now)
-  out=$(bash "$BIN/spinner-maintenance-selftest.sh" 2>&1) \
-    || { WHY="unwatched maintenance: $out"; return 1; }
+  suite_holds spinner-maintenance-selftest.sh 'spinner-wait-selftest.py" --maintenance' || return 1
   SECS=$(since "$t0")
-  WHAT='无人观看且无事件，needs 双次核对、stuck/degenerate、心跳和 daemon-watch 均按原时限运行'
+  WHAT='无人观看且无事件，needs 双次核对、stuck/degenerate、心跳和 daemon-watch 均按原时限运行（由 spinner-maintenance-selftest.sh 真跑，这里按名守住）'
 }
 
 drill_spinner_process_budget() {
@@ -6302,13 +6286,11 @@ drill_term_closed_lease() {
 }
 
 drill_term_view_kills_session() {
-  CAP=120; local t0 out rc
+  CAP=120; local t0
   t0=$(now)
-  if ! command -v tmux >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 tmux"; return 0; fi
-  out=$(bash "$BIN/fleet-term-attach-selftest.sh" 2>&1); rc=$?
-  [ "$rc" = 0 ] || { WHY="fleet-term-attach-selftest is red: $(printf '%s' "$out" | grep FAIL | head -4 | tr '\n' ' ')"; return 1; }
-  WHAT='两种入口的真 PTY 打开原生菜单、选会话、切持久壳并返回；挂断 30 秒内本连接 view/registry 清零，home/worker pid 不变；重复连接、占用控制权和未知目标先拒，take 先收旧视图，旧 cleanup 不释放新 epoch'
+  suite_holds fleet-term-attach-selftest.sh || return 1
   SECS=$(since "$t0")
+  WHAT='两种入口的真 PTY 打开原生菜单、选会话、切持久壳并返回；挂断 30 秒内本连接 view/registry 清零，home/worker pid 不变；重复连接、占用控制权和未知目标先拒，take 先收旧视图，旧 cleanup 不释放新 epoch（fleet-term-attach-selftest.sh 真跑，这里按名守住）'
 }
 
 # land-race (issue #3602, EPIC #3570 C9): two sessions of a FLEET_LAND=fleet repo
