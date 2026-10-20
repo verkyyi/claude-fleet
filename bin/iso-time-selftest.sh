@@ -17,11 +17,10 @@
 # no filename rule could select.
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 FAILS=0 CHECKS=0
-ok()  { CHECKS=$((CHECKS + 1)); }
 bad() { printf 'FAIL %s\n' "$1"; FAILS=$((FAILS + 1)); }
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/iso-time.XXXXXX") || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/iso-time.XXXXXX"
 
 # --- 1. the lint ------------------------------------------------------------------
 hits=$(cd "$BIN" && grep -n 'fromisoformat(' -- * .[!.]* 2>/dev/null \
@@ -29,7 +28,7 @@ hits=$(cd "$BIN" && grep -n 'fromisoformat(' -- * .[!.]* 2>/dev/null \
 if [ -n "$hits" ]; then
   bad "a bare fromisoformat( in bin/ — use fleet_iso.parse / fleet_iso.epoch (issue #2024):"
   printf '      %s\n' "$hits" | head -n 20
-else ok; fi
+else st_count; fi
 
 # --- 2. the cases -----------------------------------------------------------------
 cat > "$WORK/cases.py" <<'PY'
@@ -88,15 +87,15 @@ done
 for py in $pys; do
   v=$("$py" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)
   out=$("$py" "$WORK/cases.py" "$BIN" 2>&1)
-  [ "$out" = OK ] && ok || bad "fleet_iso under $py ($v): $out"
+  [ "$out" = OK ] && st_count || bad "fleet_iso under $py ($v): $out"
 done
 py1=$(printf '%s\n' $pys | head -n 1)
 out=$(PYTHONPATH="$WORK/strict" "$py1" "$WORK/cases.py" "$BIN" 2>&1)
-[ "$out" = OK ] && ok || bad "fleet_iso under a 3.9-strict fromisoformat: $out"
+[ "$out" = OK ] && st_count || bad "fleet_iso under a 3.9-strict fromisoformat: $out"
 # the shim is a real test: it refuses the hub's stamp the way 3.9 does
 if PYTHONPATH="$WORK/strict" "$py1" -c 'import datetime; datetime.datetime.fromisoformat("2026-10-07T05:47:35.272044642+00:00")' 2>/dev/null; then
   bad 'the 3.9-strict shim took a 9-digit fraction — it tests nothing'
-else ok; fi
+else st_count; fi
 
 [ "$FAILS" = 0 ] && { printf 'iso-time-selftest: OK (%d checks)\n' "$CHECKS"; exit 0; }
 printf 'iso-time-selftest: FAIL (%d)\n' "$FAILS"; exit 1

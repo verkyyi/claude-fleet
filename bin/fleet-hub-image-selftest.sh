@@ -24,6 +24,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 HI="$BIN/fleet-hub-image.sh"
 [ -f "$HI" ] || { printf 'selftest: %s not found\n' "$HI" >&2; exit 2; }
 command -v git >/dev/null 2>&1 || { echo "fleet-hub-image-selftest SKIP (no git)"; exit 0; }
@@ -34,11 +35,10 @@ cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM HUP
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
-contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — output does not contain [$3]:
+eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]:
 $2";; esac; }
-lacks() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 — output contains [$3]:
+lacks() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 — output contains [$3]:
 $2";; esac; }
 
 export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null

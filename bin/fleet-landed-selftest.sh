@@ -18,14 +18,13 @@
 #      --branch and the history row answer from git — gh 0 times
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 command -v git >/dev/null 2>&1 || { echo 'selftest: git missing — SKIP' >&2; exit 0; }
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/landed-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/landed-selftest.XXXXXX"
 WORK="$(cd "$WORK" && pwd -P)"
 fails=0
-ok()  { printf 'ok   %s\n' "$1"; }
 bad() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '     %s\n' "$2" >&2; fails=$((fails + 1)); }
-expect() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "want [$3] got [$2]"; fi; }
+expect() { if [ "$2" = "$3" ]; then st_ok "$1"; else bad "$1" "want [$3] got [$2]"; fi; }
 
 # a gh that records every call and always fails (the 共同约定 3 stub)
 mkdir -p "$WORK/fake"
@@ -86,7 +85,7 @@ fleet_land_check "$D" "$tip_wip" origin/main >/dev/null; expect 'B  open is rc 1
 
 # C fleet_landed: the repo's checkout + base named, origin fetched
 expect 'C1 squash by branch name'  "$(fleet_landed o/r sq "$D" main | cut -d' ' -f1-2)" "landed $s_sq"
-if grep -q "^$tip_sq	" "$FLEET_C/global/landed-o-r.tsv" 2>/dev/null; then ok 'C2 verdict cached per (repo, tip)'
+if grep -q "^$tip_sq	" "$FLEET_C/global/landed-o-r.tsv" 2>/dev/null; then st_ok 'C2 verdict cached per (repo, tip)'
 else bad 'C2 verdict cached per (repo, tip)'; fi
 expect 'C3 wip by sha → open'      "$(fleet_landed o/r "$tip_wip" "$D" main)" open
 g remote set-url origin "$WORK/nowhere.git"
@@ -141,7 +140,7 @@ tok=$(ISS=9 TMLOG="$WORK/tmlog" FLEET_REPO=o/r FLEET_MAIN="$D" FLEET_BASE_BRANCH
 grep -o 'reason=[a-z-]*' "$WORK/reap.err" | sort -u > "$WORK/reason" 2>/dev/null
 expect 'E1 dash-reap: squash + gh failing → reason=landed' "$(cat "$WORK/reason")" reason=landed
 expect 'E2 dash-reap: reaps with no confirm'                "$tok" reaped:full
-[ ! -d "$WORK/wt-e9" ] && ok 'E3 worktree removed' || bad 'E3 worktree removed'
+[ ! -d "$WORK/wt-e9" ] && st_ok 'E3 worktree removed' || bad 'E3 worktree removed'
 [ -n "${LANDED_EVIDENCE:-}" ] && { cat "$WORK/reap.err"; echo "token: $tok"; } > "$LANDED_EVIDENCE"
 
 # F a repo with no GitHub (FLEET_FORGE=none): the history row, the 「已合并」 check
@@ -159,7 +158,7 @@ s_11=$(g rev-parse HEAD); g push -q origin main
 g worktree add -q "$WORK/wt-11" issue-11 2>/dev/null
 out=$(FLEET_SESSION=fl FLEET_LANDED_FETCH_SECS=0 bash "$BIN/fleet-cleanup.sh" --branch issue-11 --repo o/r --dry-run 2>"$WORK/cl.err")
 case "$out" in error:*|'') bad 'F5 fleet-cleanup --branch reads the landing from git' "$out $(tail -2 "$WORK/cl.err")" ;;
-  *) grep -q 'state=MERGED' "$WORK/cl.err" && ok "F5 fleet-cleanup --branch: MERGED from git ($out)" \
+  *) grep -q 'state=MERGED' "$WORK/cl.err" && st_ok "F5 fleet-cleanup --branch: MERGED from git ($out)" \
        || bad 'F5 fleet-cleanup --branch reads the landing from git' "$(tail -3 "$WORK/cl.err")" ;; esac
 expect 'F6 fleet-cleanup by PR on a forge-none repo refuses' \
   "$(FLEET_SESSION=fl bash "$BIN/fleet-cleanup.sh" 12 --repo o/r --dry-run 2>/dev/null)" error:no-forge

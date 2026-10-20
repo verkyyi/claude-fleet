@@ -45,6 +45,7 @@
 # only be planted as it), so the outside-files sweep runs ONLY inside the root.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-sections.sh"
 selftest_sections 2
 W=$(mktemp -d "${TMPDIR:-/tmp}/login-reset-selftest.XXXXXX") || exit 2
@@ -52,7 +53,6 @@ W=$(cd "$W" && pwd -P)
 trap 'rm -rf "${W:?}"' EXIT INT TERM HUP
 FAILS=0
 fail() { FAILS=$((FAILS + 1)); printf 'selftest FAIL %s\n' "$1"; }
-ok() { printf 'ok   %s\n' "$1"; }
 L=fleetu7
 U=$(id -u)
 R="$W/sys"
@@ -195,51 +195,51 @@ fixture() {   # a used login: one thing per category
 }
 run() { bash "$S" "$@" > "$W/out" 2>&1; RC=$?; }
 last2() { tail -n 2 "$W/out" | paste -sd'|' -; }
-has() { grep -Fq -- "$2" "$1" && ok "$3" || fail "$3"; }
-gone() { [ ! -e "$1" ] && ok "$2" || fail "$2 ($1 is still there)"; }
+has() { grep -Fq -- "$2" "$1" && st_ok "$3" || fail "$3"; }
+gone() { [ ! -e "$1" ] && st_ok "$2" || fail "$2 ($1 is still there)"; }
 
 if selftest_section 1; then
 # ---- A: dry run ----
 fixture
 run "$L"
-[ "$RC" = 0 ] && ok 'A dry run exits 0' || { cat "$W/out"; fail "A dry run: exit $RC"; }
+[ "$RC" = 0 ] && st_ok 'A dry run exits 0' || { cat "$W/out"; fail "A dry run: exit $RC"; }
 has "$W/out" 'DRY RUN' 'A says DRY RUN'
 has "$RS_LOG" "remove $L --recycle-stop --quick --delete-home --archive-dir $ARCH" 'A the stop is the remove script, --quick, dry'
 has "$W/out" "sudo createhomedir -c -u $L" 'A the plan names the fresh home'
-[ -f "$H/notes.txt" ] && [ -s "$RS_CRON" ] && [ ! -e "$HOME/$L-reset" ] && ok 'A nothing changed' || fail 'A the dry run changed something'
+[ -f "$H/notes.txt" ] && [ -s "$RS_CRON" ] && [ ! -e "$HOME/$L-reset" ] && st_ok 'A nothing changed' || fail 'A the dry run changed something'
 
 # ---- B: the whole wash ----
 fixture
 FLEET_LOGIN_JOIN_CODE=fj_aaaaaaaaaaaaaaaaaaaaaaaaaa FLEET_LOGIN_HUB=https://hub.example FLEET_LOGIN_OP_ID=abc1 run "$L" --apply
-[ "$(last2)" = 'reset: clean|credsep: separated' ] && ok 'B the last two lines' || { cat "$W/out"; fail "B last two lines: $(last2)"; }
-[ "$RC" = 0 ] && ok 'B exit 0' || fail "B exit $RC"
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && st_ok 'B the last two lines' || { cat "$W/out"; fail "B last two lines: $(last2)"; }
+[ "$RC" = 0 ] && st_ok 'B exit 0' || fail "B exit $RC"
 for f in "$FLEET_CREDSEP_ROOT_BASE/$L" "$FLEET_NODE_STATE/entry/keys/$L" "$FLEET_NODE_STATE/logins/$L" "$HOME/$L-onboard/password.txt" \
          "$FLEET_INSTALL_DAEMON_DIR/com.example.x.plist" "$R/private/tmp/tmux-$U" "$R/private/var/tmp/left.txt" "$R/Users/Shared/stuff" \
          "$H/notes.txt" "$H/Library/Keychains" "$H/.ssh/id_ed25519" "$H/.config/gh" \
          "$R/private/var/folders/zz/abc123/T/prev-tmp.txt" "$R/private/var/folders/zz/abc123/C/cache.db" "$R/private/var/folders/zz/abc123/stray"; do
   gone "$f" "B gone: ${f#"$R"/}"
 done
-[ ! -s "$RS_CRON" ] && ok 'B crontab emptied' || fail 'B crontab left'
-[ -f "$FLEET_INSTALL_DAEMON_DIR/com.example.y.plist" ] && ok "B another login's daemon kept" || fail "B another login's daemon removed"
-[ -f "$ARCH/older.tar.gz" ] && ok 'B the archive dir kept' || fail 'B the archive dir was swept'
-[ -d "$R/private/var/folders/zz/abc123/T" ] && [ -d "$R/private/var/folders/zz/abc123/C" ] && ok 'B the uid dir keeps its C/T skeleton' || fail 'B the uid dir lost its skeleton'
-[ -f "$R/private/var/folders/zz/abc123/X/clone.app/bin" ] && ok "B the SIP-held X is left alone (root's rm is refused there) and the check passes" || fail 'B the wash went into X'
+[ ! -s "$RS_CRON" ] && st_ok 'B crontab emptied' || fail 'B crontab left'
+[ -f "$FLEET_INSTALL_DAEMON_DIR/com.example.y.plist" ] && st_ok "B another login's daemon kept" || fail "B another login's daemon removed"
+[ -f "$ARCH/older.tar.gz" ] && st_ok 'B the archive dir kept' || fail 'B the archive dir was swept'
+[ -d "$R/private/var/folders/zz/abc123/T" ] && [ -d "$R/private/var/folders/zz/abc123/C" ] && st_ok 'B the uid dir keeps its C/T skeleton' || fail 'B the uid dir lost its skeleton'
+[ -f "$R/private/var/folders/zz/abc123/X/clone.app/bin" ] && st_ok "B the SIP-held X is left alone (root's rm is refused there) and the check passes" || fail 'B the wash went into X'
 has "$W/out" "archive=$ARCH/$L-" 'B the archive is named'
 TGZ=$(ls "$ARCH"/$L-*.tar.gz 2>/dev/null | head -1)
 # listed to a file first: under pipefail `tar | grep -q` is red whenever grep's early
 # exit SIGPIPEs tar mid-listing — a found line read as a miss (#4243)
 tar -tzf "$TGZ" > "$W/tgz.list" 2>&1 || :
-[ -n "$TGZ" ] && grep -q "^$L/notes.txt" "$W/tgz.list" && ok 'B the archive holds the old home as <login>/' || fail "B archive: '$TGZ' $(head -3 "$W/tgz.list" | tr '\n' ' ')"
-[ -z "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ] && ok 'B the moved-aside home is deleted after its archive' || fail 'B a .wash dir is left'
+[ -n "$TGZ" ] && grep -q "^$L/notes.txt" "$W/tgz.list" && st_ok 'B the archive holds the old home as <login>/' || fail "B archive: '$TGZ' $(head -3 "$W/tgz.list" | tr '\n' ' ')"
+[ -z "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ] && st_ok 'B the moved-aside home is deleted after its archive' || fail 'B a .wash dir is left'
 grep -Eq '^timing: stop=[0-9.]+ quiesce=[0-9.]+ aside=[0-9.]+ requiesce=[0-9.]+ home\+sweep=[0-9.]+ check=[0-9.]+ rejoin=[0-9.]+ isolated=[0-9.]+ total=[0-9.]+$' "$W/out" \
-  && ok 'B one timing line' || { grep timing "$W/out"; fail 'B no timing line'; }
-[ "$(tail -n 4 "$W/out" | head -n 1 | cut -c1-7)" = 'timing:' ] && ok 'B the timing line sits right before the verdict' || fail 'B timing line misplaced'
+  && st_ok 'B one timing line' || { grep timing "$W/out"; fail 'B no timing line'; }
+[ "$(tail -n 4 "$W/out" | head -n 1 | cut -c1-7)" = 'timing:' ] && st_ok 'B the timing line sits right before the verdict' || fail 'B timing line misplaced'
 has "$HOME/$L-reset/op" 'timing=stop=' 'B the op file keeps the timing'
-grep -q 'steps: ' "$W/out" && ok 'B the children are stamped' || fail 'B no step stamps'
-grep -q 'ssh-ed25519 AAAA new' "$H/.ssh/authorized_keys" && [ -f "$H/.profile" ] && ok 'B a fresh home, set up again' || fail 'B the home was not set up again'
+grep -q 'steps: ' "$W/out" && st_ok 'B the children are stamped' || fail 'B no step stamps'
+grep -q 'ssh-ed25519 AAAA new' "$H/.ssh/authorized_keys" && [ -f "$H/.profile" ] && st_ok 'B a fresh home, set up again' || fail 'B the home was not set up again'
 has "$RS_LOG" "new $L --recycle --share-pool --apply op=abc1 code=fj_aaaaaaaaaaaaaaaaaaaaaaaaaa" 'B the opener gets --recycle, the op and the join code'
 has "$RS_LOG" "launchctl bootout system $FLEET_INSTALL_DAEMON_DIR/com.example.x.plist" 'B the UserName daemon booted out'
-python3 - "$RS_LOG" <<'PY' && ok 'B order: stop, wash, rejoin' || fail 'B wrong order'
+python3 - "$RS_LOG" <<'PY' && st_ok 'B order: stop, wash, rejoin' || fail 'B wrong order'
 import sys
 lines = open(sys.argv[1]).read().splitlines()
 at = lambda s: next(i for i, l in enumerate(lines) if s in l)
@@ -250,37 +250,37 @@ has "$HOME/$L-reset/op" 'phase=rejoin' 'B the op file records the rejoin'
 # ---- C: something the wash cannot take ----
 fixture
 RS_PROC_STAYS=1 run "$L" --apply
-[ "$(last2)" = 'reset: dirty processes|credsep: not reached' ] && [ "$RC" = 1 ] && ok 'C a process left ⇒ dirty, exit 1 (before any rejoin)'
-grep -q '^new ' "$RS_LOG" && fail 'C a dirty check still rejoined' || ok 'C a dirty check: never set up again, no join code spent' || { tail -5 "$W/out"; fail "C: $(last2) rc $RC"; }
+[ "$(last2)" = 'reset: dirty processes|credsep: not reached' ] && [ "$RC" = 1 ] && st_ok 'C a process left ⇒ dirty, exit 1 (before any rejoin)'
+grep -q '^new ' "$RS_LOG" && fail 'C a dirty check still rejoined' || st_ok 'C a dirty check: never set up again, no join code spent' || { tail -5 "$W/out"; fail "C: $(last2) rc $RC"; }
 
 # ---- D: the rejoin fails ----
 fixture
 RS_NEW_FAILS=1 run "$L" --apply
-[ "$(last2)" = 'reset: dirty rejoin|credsep: pending — the proxy is still starting' ] && [ "$RC" = 1 ] && ok 'D a failed rejoin ⇒ dirty rejoin, exit 1' || { tail -5 "$W/out"; fail "D: $(last2) rc $RC"; }
+[ "$(last2)" = 'reset: dirty rejoin|credsep: pending — the proxy is still starting' ] && [ "$RC" = 1 ] && st_ok 'D a failed rejoin ⇒ dirty rejoin, exit 1' || { tail -5 "$W/out"; fail "D: $(last2) rc $RC"; }
 
 # ---- E: killed half way, the same op again ----
 fixture
 RS_NEW_DIES=1 FLEET_LOGIN_OP_ID=beef run "$L" --apply
-[ "$RC" -ge 128 ] && ok 'E1 the run was killed in the rejoin' || fail "E1 exit $RC"
+[ "$RC" -ge 128 ] && st_ok 'E1 the run was killed in the rejoin' || fail "E1 exit $RC"
 : > "$RS_LOG"
 FLEET_LOGIN_OP_ID=beef run "$L" --apply
-[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && ok 'E2 the same op goes on to clean' || { cat "$W/out"; fail "E2: $(last2) rc $RC"; }
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && st_ok 'E2 the same op goes on to clean' || { cat "$W/out"; fail "E2: $(last2) rc $RC"; }
 has "$RS_LOG" "remove $L --recycle-stop --quick" 'E2 the stop is redone'
-[ "$(ls "$ARCH"/$L-*.tar.gz | wc -l | tr -d ' ')" = 1 ] && ok 'E2 one archive' || fail 'E2 a second archive'
+[ "$(ls "$ARCH"/$L-*.tar.gz | wc -l | tr -d ' ')" = 1 ] && st_ok 'E2 one archive' || fail 'E2 a second archive'
 : > "$RS_LOG"
 FLEET_LOGIN_OP_ID=beef run "$L" --apply
-[ "$(last2)" = 'reset: clean|credsep: separated' ] && ok 'E3 a finished op again: clean' || fail "E3: $(last2)"
-grep -q '^new ' "$RS_LOG" && fail 'E3 the rejoin ran again' || ok 'E3 no second rejoin'
-grep -q 'createhomedir' "$RS_LOG" && fail 'E3 the home was washed again' || ok 'E3 no second wash'
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && st_ok 'E3 a finished op again: clean' || fail "E3: $(last2)"
+grep -q '^new ' "$RS_LOG" && fail 'E3 the rejoin ran again' || st_ok 'E3 no second rejoin'
+grep -q 'createhomedir' "$RS_LOG" && fail 'E3 the home was washed again' || st_ok 'E3 no second wash'
 : > "$RS_LOG"
 FLEET_LOGIN_OP_ID=cafe run "$L" --apply
 grep -q 'createhomedir' "$RS_LOG" && has "$W/out" "archive=$ARCH/$L-" 'E4 another op starts over, its own archive'
 
 # ---- F: refusals ----
-run ghost --apply; [ "$RC" = 4 ] && ok 'F no such login: 4' || fail "F ghost: $RC"
-run boss --apply; [ "$RC" = 3 ] && ok 'F an admin: 3' || fail "F boss: $RC"
-RS_ADMIN_UID=$U run "$L" --apply; [ "$RC" = 3 ] && ok 'F the caller itself: 3' || fail "F self: $RC"
-run "$L" --bogus; [ "$RC" = 2 ] && ok 'F a bad option: 2' || fail "F bogus: $RC"
+run ghost --apply; [ "$RC" = 4 ] && st_ok 'F no such login: 4' || fail "F ghost: $RC"
+run boss --apply; [ "$RC" = 3 ] && st_ok 'F an admin: 3' || fail "F boss: $RC"
+RS_ADMIN_UID=$U run "$L" --apply; [ "$RC" = 3 ] && st_ok 'F the caller itself: 3' || fail "F self: $RC"
+run "$L" --bogus; [ "$RC" = 2 ] && st_ok 'F a bad option: 2' || fail "F bogus: $RC"
 
 fi
 
@@ -296,34 +296,34 @@ keep_fixture() {
 KD="$FLEET_NODE_STATE/keep/$L"
 keep_fixture
 FLEET_LOGIN_OP_ID=abc7 run "$L" --apply
-[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && ok 'K clean' || { cat "$W/out"; fail "K: $(last2) rc $RC"; }
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && st_ok 'K clean' || { cat "$W/out"; fail "K: $(last2) rc $RC"; }
 has "$RS_LOG" "remove $L --recycle-stop --quick --delete-home --archive-dir $ARCH --keep-node" 'K the stop keeps the node (no fleet node leave)'
 has "$RS_LOG" "new-keep $KD CCQUOTA_TOKEN=tok-kept CCQUOTA_HUB_URL=https://hub.example " 'K the opener gets the keep dir: the node keys only'
-[ "$(tail -n 3 "$W/out" | head -n 1)" = 'node: kept (root-held token, no re-join)' ] && ok 'K node: kept right before the verdict' || fail 'K no node: kept line'
-grep -Eq '^timing: keep=[0-9.]+ stop=' "$W/out" && ok 'K the timing line has keep=' || fail 'K no keep= lap'
+[ "$(tail -n 3 "$W/out" | head -n 1)" = 'node: kept (root-held token, no re-join)' ] && st_ok 'K node: kept right before the verdict' || fail 'K no node: kept line'
+grep -Eq '^timing: keep=[0-9.]+ stop=' "$W/out" && st_ok 'K the timing line has keep=' || fail 'K no keep= lap'
 gone "$KD" 'K the keep dir is gone once set up'
-grep -q "sudo cp -p $FLEET_CREDSEP_ROOT_BASE/$L/node.key $KD/node.key" "$RS_LOG" && ok 'K node.key kept, owner and mode with it' || fail 'K node.key not kept'
+grep -q "sudo cp -p $FLEET_CREDSEP_ROOT_BASE/$L/node.key $KD/node.key" "$RS_LOG" && st_ok 'K node.key kept, owner and mode with it' || fail 'K node.key not kept'
 keep_fixture
 RS_NEW_NO_KEEP=1 FLEET_LOGIN_OP_ID=abc8 run "$L" --apply
-[ "$(last2)" = 'reset: dirty rejoin|credsep: separated' ] && [ -f "$KD/node.env" ] && ok 'K the token not put back ⇒ dirty rejoin, kept for the same op' \
+[ "$(last2)" = 'reset: dirty rejoin|credsep: separated' ] && [ -f "$KD/node.env" ] && st_ok 'K the token not put back ⇒ dirty rejoin, kept for the same op' \
   || { tail -5 "$W/out"; fail "K2: $(last2)"; }
 FLEET_LOGIN_OP_ID=abc8 run "$L" --apply
 [ "$(last2)" = 'reset: clean|credsep: separated' ] && grep -q 'kept by an earlier run of this op' "$W/out" && [ ! -e "$KD" ] \
-  && ok 'K the same op again: the kept token, from the keep dir' || { tail -8 "$W/out"; fail "K3: $(last2)"; }
+  && st_ok 'K the same op again: the kept token, from the keep dir' || { tail -8 "$W/out"; fail "K3: $(last2)"; }
 keep_fixture
 FLEET_LOGIN_RESET_KEEP_NODE=0 FLEET_LOGIN_OP_ID=abc9 run "$L" --apply
 ! grep -q -- '--keep-node' "$RS_LOG" && ! grep -q '^new-keep' "$RS_LOG" && ! grep -q '^node: kept' "$W/out" \
-  && ok 'K FLEET_LOGIN_RESET_KEEP_NODE=0 ⇒ the old re-join' || fail 'K the off switch kept the node'
+  && st_ok 'K FLEET_LOGIN_RESET_KEEP_NODE=0 ⇒ the old re-join' || fail 'K the off switch kept the node'
 keep_fixture; rm -f "$FLEET_NODE_STATE/logins/$L.env"
 FLEET_LOGIN_OP_ID=abca run "$L" --apply
 ! grep -q -- '--keep-node' "$RS_LOG" && ! grep -q '^new-keep' "$RS_LOG" && grep -Eq '^timing: stop=' "$W/out" \
-  && ok 'K not served by the machine daemon (the token was in the person'"'"'s reach) ⇒ re-join' || fail 'K kept a token the person could reach'
+  && st_ok 'K not served by the machine daemon (the token was in the person'"'"'s reach) ⇒ re-join' || fail 'K kept a token the person could reach'
 
 # ---- G: a process relaunched between the stop and the wash ----
 fixture
 RS_RESPAWN=1 run "$L" --apply
-[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && ok 'G a relaunch after the stop is quiesced before the clock: clean' || { tail -8 "$W/out"; fail "G: $(last2) rc $RC"; }
-python3 - "$RS_LOG" <<'PY' && ok 'G the wash boots out and kills before its clock, and again before the fresh home' || fail 'G no quiesce between stop and wash'
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && st_ok 'G a relaunch after the stop is quiesced before the clock: clean' || { tail -8 "$W/out"; fail "G: $(last2) rc $RC"; }
+python3 - "$RS_LOG" <<'PY' && st_ok 'G the wash boots out and kills before its clock, and again before the fresh home' || fail 'G no quiesce between stop and wash'
 import sys
 lines = open(sys.argv[1]).read().splitlines()
 at = lambda s, f=0: next(i for i, l in enumerate(lines) if i >= f and s in l)
@@ -349,14 +349,14 @@ chmod +x "$W/shim/tar"
 t0=$(date +%s)
 FLEET_LOGIN_RESET_ASIDE='' run "$L" --apply
 t1=$(date +%s)
-[ "$(last2)" = 'reset: clean|credsep: separated' ] && ok 'H clean' || { tail -8 "$W/out"; fail "H: $(last2)"; }
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && st_ok 'H clean' || { tail -8 "$W/out"; fail "H: $(last2)"; }
 [ -n "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ] && [ -z "$(ls "$ARCH"/$L-*.tar.gz 2>/dev/null)" ] \
-  && ok "H the run did not wait for the archive ($((t1 - t0))s, tar still held)" || fail "H the run waited for the archive ($((t1 - t0))s)"
+  && st_ok "H the run did not wait for the archive ($((t1 - t0))s, tar still held)" || fail "H the run waited for the archive ($((t1 - t0))s)"
 touch "$W/tar-go"
 n=0; while [ "$n" -lt 150 ] && [ -n "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ]; do sleep 0.2; n=$((n + 1)); done
 rm -f "$W/shim/tar"
 [ -z "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ] && [ -n "$(ls "$ARCH"/$L-*.tar.gz 2>/dev/null)" ] \
-  && ok 'H the detached job archived and deleted the old home' || fail 'H the detached job did not finish'
+  && st_ok 'H the detached job archived and deleted the old home' || fail 'H the detached job did not finish'
 
 # ---- T: the home template (issue #4194) ----
 cat > "$W/tpl.py" <<'EOF'
@@ -371,13 +371,13 @@ if sys.argv[1] == "clone":
 EOF
 fixture
 FLEET_LOGIN_RESET_TEMPLATE="$W/tpl.py" run "$L" --apply
-[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && ok 'T1 a template home: clean' || { tail -8 "$W/out"; fail "T1: $(last2) rc $RC"; }
-[ -f "$H/.from-template" ] && ok 'T1 the home is the clone' || fail 'T1 the home is not the clone'
-grep -q 'createhomedir' "$RS_LOG" && fail 'T1 createhomedir ran beside the clone' || ok 'T1 no createhomedir'
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && st_ok 'T1 a template home: clean' || { tail -8 "$W/out"; fail "T1: $(last2) rc $RC"; }
+[ -f "$H/.from-template" ] && st_ok 'T1 the home is the clone' || fail 'T1 the home is not the clone'
+grep -q 'createhomedir' "$RS_LOG" && fail 'T1 createhomedir ran beside the clone' || st_ok 'T1 no createhomedir'
 has "$RS_LOG" "tpl clone $L --home $H" 'T1 cloned for the login, into its home'
 fixture
 RS_TPL_RC=3 FLEET_LOGIN_RESET_TEMPLATE="$W/tpl.py" run "$L" --apply
-[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && ok 'T2 no template: clean the old way' || { tail -8 "$W/out"; fail "T2: $(last2) rc $RC"; }
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && st_ok 'T2 no template: clean the old way' || { tail -8 "$W/out"; fail "T2: $(last2) rc $RC"; }
 has "$RS_LOG" "sudo createhomedir -c -u $L" 'T2 createhomedir made the home'
 n=0; while [ "$n" -lt 50 ] && ! grep -q '^tpl build' "$RS_LOG"; do sleep 0.1; n=$((n + 1)); done
 has "$RS_LOG" 'tpl build' 'T2 a template build started for the next wash'
@@ -395,17 +395,17 @@ exec /usr/bin/install "$@"
 EOF
 chmod +x "$W/shim-root/install"
 PATH="$W/shim-root:$PATH" FLEET_LOGIN_TEST_EUID=0 FLEET_LOGIN_ADMIN_DIR="$GD" FLEET_LOGIN_OP_ID=abc7 run "$L" --apply
-[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && ok 'R a root run washes clean' || { tail -12 "$W/out"; fail "R: $(last2) rc $RC"; }
-[ "$(grep '^sudo ' "$RS_LOG" | grep -vc '^sudo -u ')" = 0 ] && ok 'R no step through sudo but the drops' || { grep '^sudo ' "$RS_LOG"; fail 'R a step went through sudo'; }
-[ "$(grep '^  \$ sudo ' "$W/out" | grep -vc '^  \$ sudo -u ')" = 0 ] && ok 'R no shown step says sudo' || fail 'R a shown step still says sudo'
-grep -q '^op=abc7' "$GD/$L-reset/op" 2>/dev/null && ok 'R the op book is the gate dir'"'"'s' || fail 'R no op book under the gate dir'
-[ ! -e "$HOME/$L-reset" ] && ok 'R nothing in the admin'"'"'s home' || fail 'R a root run wrote the admin'"'"'s home'
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && st_ok 'R a root run washes clean' || { tail -12 "$W/out"; fail "R: $(last2) rc $RC"; }
+[ "$(grep '^sudo ' "$RS_LOG" | grep -vc '^sudo -u ')" = 0 ] && st_ok 'R no step through sudo but the drops' || { grep '^sudo ' "$RS_LOG"; fail 'R a step went through sudo'; }
+[ "$(grep '^  \$ sudo ' "$W/out" | grep -vc '^  \$ sudo -u ')" = 0 ] && st_ok 'R no shown step says sudo' || fail 'R a shown step still says sudo'
+grep -q '^op=abc7' "$GD/$L-reset/op" 2>/dev/null && st_ok 'R the op book is the gate dir'"'"'s' || fail 'R no op book under the gate dir'
+[ ! -e "$HOME/$L-reset" ] && st_ok 'R nothing in the admin'"'"'s home' || fail 'R a root run wrote the admin'"'"'s home'
 gone "$GD/$L-onboard/password.txt" "R the gate dir's onboarding papers cleared"
 has "$RS_LOG" "remove-adir $GD euid=0" 'R the stop runs as root under the gate too'
 has "$RS_LOG" "new-adir $GD euid=0" 'R the rejoin runs as root under the gate too'
 : > "$RS_LOG"
 FLEET_LOGIN_TEST_EUID=0 run "$L" --apply
-[ "$RC" = 3 ] && [ ! -s "$RS_LOG" ] && ok 'R root with no gate dir: 3, nothing run' || fail "R root with no gate dir: $RC"
+[ "$RC" = 3 ] && [ ! -s "$RS_LOG" ] && st_ok 'R root with no gate dir: 3, nothing run' || fail "R root with no gate dir: $RC"
 
 fi
 

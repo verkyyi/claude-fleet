@@ -26,15 +26,15 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/  /' >&2; exit 1; }
-ok() { CHECKS=$((CHECKS+1)); }
 eq() { [ "$2" = "$3" ] || fail "$1" "want: [$2]
- got: [$3]"; ok; }
-has() { case "$3" in *"$2"*) ok ;; *) fail "$1" "want a substring: [$2]
+ got: [$3]"; st_count; }
+has() { case "$3" in *"$2"*) st_count ;; *) fail "$1" "want a substring: [$2]
  got: [$3]" ;; esac; }
 hasnt() { case "$3" in *"$2"*) fail "$1" "must not contain: [$2]
- got: [$3]" ;; *) ok ;; esac; }
+ got: [$3]" ;; *) st_count ;; esac; }
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-services-selftest.XXXXXX") || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -149,7 +149,7 @@ TMPDIR="$H/tmp/" FLEET_CONF_DIR="$H/conf" CCQUOTA_FLEET=1 \
   FLEET_HUB_SUMMARY_EVERY=0 FLEET_LIVE_DIR="$H/none" bash "$BIN/fleet-hub-sessions.sh" --refresh 2>"$H/err" ||
   fail "F: --refresh failed" "$(cat "$H/err")"
 HS="$H/tmp/.claude-dash/global/hub_services"
-[ -s "$HS" ] || fail "F: no hub_services written" "$(ls "$H/tmp/.claude-dash/global")"; ok
+[ -s "$HS" ] || fail "F: no hub_services written" "$(ls "$H/tmp/.claude-dash/global")"; st_count
 eq "F: the machine with a register, labelled; the one without is not listed" "mac-d daily-report" \
    "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(" ".join(m["label"]+" "+s["name"] for m in d["machines"] for s in m["services"]))' "$HS")"
 eq "F: the service_failed alerts only" "service_failed" \
@@ -169,8 +169,8 @@ eq "G: a failed entry is one more alarm" "$(( ${base%% *} + 1 ))" "$(fa counts |
 r=$(fa list --plain 2>/dev/null | grep 'service ·')
 has "G: ✖ service · failed · <name>@<machine>" "service · failed · daily-report@mac-d 失败" "$r"
 has "G: …its action" "see services" "$r"
-grep -q '"id":"service-mac-d-carol-daily-report","severity":"alarm"' "$G/alerts.ndjson" || fail "G: the row's id/severity" "$(cat "$G/alerts.ndjson")"; ok
-grep -q '"since":1791529260,' "$G/alerts.ndjson" || fail "G: since is the hub's raised_at" "$(grep service "$G/alerts.ndjson")"; ok
+grep -q '"id":"service-mac-d-carol-daily-report","severity":"alarm"' "$G/alerts.ndjson" || fail "G: the row's id/severity" "$(cat "$G/alerts.ndjson")"; st_count
+grep -q '"since":1791529260,' "$G/alerts.ndjson" || fail "G: since is the hub's raised_at" "$(grep service "$G/alerts.ndjson")"; st_count
 cp "$WORK/ok.json" "$G/hub_services"
 fa write
 eq "G: back up ⇒ the alarm goes" "${base%% *}" "$(fa counts | cut -d' ' -f1)"
@@ -181,8 +181,8 @@ eq "G: FLEET_ALERTS_SERVICES=0 turns it off" "" "$(fa list --plain 2>/dev/null |
 
 # ------------------------------------------------------------------------- H ----
 grep -q 'fleet-services.py' "$BIN/fleet-doctor.sh" && grep -q 'fail services' "$BIN/fleet-doctor.sh" &&
-  grep -q 'info services' "$BIN/fleet-doctor.sh" || fail "H: fleet-doctor.sh has no services row"; ok
+  grep -q 'info services' "$BIN/fleet-doctor.sh" || fail "H: fleet-doctor.sh has no services row"; st_count
 grep -qx 'bin/fleet-services.py' "$BIN/../tokenledger/hub/api/fleetclient/manifest" ||
-  fail "H: fleet-services.py is not on the client manifest (fleet ls --services runs there)"; ok
+  fail "H: fleet-services.py is not on the client manifest (fleet ls --services runs there)"; st_count
 
 echo "fleet-services-selftest: OK ($CHECKS checks)"

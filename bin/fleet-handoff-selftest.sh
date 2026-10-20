@@ -33,11 +33,11 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SRC="$BIN/fleet-handoff-cycle.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s not found/executable\n' "$SRC" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fh-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fh-selftest.XXXXXX"
 mkdir -p "$WORK/fakepath" "$WORK/logs"
 INJECT="$WORK/inject.log"; : > "$INJECT"
 SETOPT="$WORK/setopt.log"; : > "$SETOPT"     # every set-window-option the cycle makes

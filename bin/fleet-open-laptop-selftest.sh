@@ -28,6 +28,7 @@
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 EX="$ROOT/extras/iterm2"
 for f in "$EX/fleet_open.py" "$EX/install.sh" "$EX/test_fleet_open.py" "$BIN/fleet-doctor.sh"; do
@@ -35,19 +36,16 @@ for f in "$EX/fleet_open.py" "$EX/install.sh" "$EX/test_fleet_open.py" "$BIN/fle
 done
 command -v python3 >/dev/null || { printf 'selftest: python3 missing\n' >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-open-laptop-selftest.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-open-laptop-selftest.XXXXXX" physical
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- out ---\n%s\n' "$(cat "$WORK/out" 2>/dev/null)" >&2; exit 1; }
-ok() { CHECKS=$((CHECKS + 1)); }
 
 # --- 1. unit tests ----------------------------------------------------------
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$EX" -p 'test_*.py' >"$WORK/out" 2>&1 \
   || fail "python unittest failed"
 grep -q '^OK' "$WORK/out" || fail "unittest did not report OK"
-ok
+st_count
 
 # --- 2. install.sh ----------------------------------------------------------
 SH=bash
@@ -119,7 +117,7 @@ for w in 'would  install fleet_open.py v' 'would  install secret' 'would  instal
   grep -qF "$w" "$WORK/out" || fail "dry-run lacks: $w"
 done
 grep -q '^changes: [1-9]' "$WORK/out" || fail "dry-run did not count its changes"
-ok
+st_count
 
 # b. install
 inst --mini mac-c
@@ -136,7 +134,7 @@ for k in 'ControlMaster auto' 'ControlPath ~/.ssh/cm-%C' 'ControlPersist 10m' 'H
 done
 [ "$(grep -c '^Host ' "$H/.ssh/config")" = 2 ] || fail "a Host block was added/lost"
 grep -q '^changes: [1-9]' "$WORK/out" || fail "install reported no changes"
-ok
+st_count
 
 # c. idempotent
 before="$(snap)"
@@ -147,7 +145,7 @@ inst --dry-run       # alias now comes from ~/.config/fleet-open/host
 [ "$RC" = 0 ] && grep -q '^changes: 0' "$WORK/out" || fail "dry-run on an installed laptop not a no-op"
 grep -q 'would' "$WORK/out" && fail "dry-run on an installed laptop would change something"
 set -- "$H/.ssh/config.bak-"*; [ "$#" = 1 ] || fail "backup multiplied"
-ok
+st_count
 
 # d. partial ssh config, no Host block, kept allow-list
 fresh_home
@@ -165,7 +163,7 @@ inst --mini mac-c; grep -q '^changes: 0' "$WORK/out" || fail "appended block not
 fresh_home; rm -f "$H/.ssh/config"
 inst --mini mac-c
 [ "$RC" = 0 ] && grep -q '^Host mac-c$' "$H/.ssh/config" || fail "no ~/.ssh/config: not created"
-ok
+st_count
 
 # e. API off → warn, never flipped
 fresh_home; rm -f "$WORK/defaults.log"
@@ -174,7 +172,7 @@ SHIM_API=0 inst --mini mac-c
 grep -q 'WARN.*Python API is OFF' "$WORK/out" || fail "no API-off warning"
 [ -e "$WORK/defaults.log" ] && fail "install.sh ran defaults write"
 SHIM_API=x inst --mini mac-c; grep -q 'Python API is OFF' "$WORK/out" || fail "unset key not read as off"
-ok
+st_count
 
 # f. old iTerm2
 fresh_home
@@ -183,7 +181,7 @@ SHIM_ITERM_VER=3.4.19 inst --mini mac-c
 [ -e "$AL" ] && fail "installed despite old iTerm2"
 SHIM_ITERM_VER=3.10.0 inst --mini mac-c
 [ "$RC" = 0 ] || fail "3.10 compared as older than 3.5"
-ok
+st_count
 
 # g. remote: script piped on stdin, fetched back from the mini
 # --dry-run first: still reaches the closing `changes:` line, writes nothing
@@ -200,7 +198,7 @@ grep -q 'script source: mac-c:' "$WORK/out" || fail "bash -s did not fetch the s
 grep -q '^changes: [1-9]' "$WORK/out" || fail "bash -s stopped before the end (an ssh ate stdin = the script, #1405)"
 cmp -s "$AL" "$EX/fleet_open.py" || fail "fetched script differs"
 [ -s "$C/secret" ] && [ -f "$C/host" ] || fail "bash -s left secret/host uninstalled"
-ok
+st_count
 
 # h. uninstall
 printf 'x\n' > "$C/log"
@@ -209,7 +207,7 @@ inst --uninstall
 [ -e "$AL" ] || [ -e "$C/secret" ] || [ -e "$C/host" ] && fail "uninstall left files"
 [ -f "$C/log" ] && [ -f "$C/allow" ] || fail "uninstall removed log/allow"
 inst --uninstall; grep -q '^changes: 0' "$WORK/out" || fail "second uninstall not a no-op"
-ok
+st_count
 
 # --- 3. fleet-doctor laptop row --------------------------------------------
 LH="$WORK/laptop"; mkdir -p "$LH/Library/Application Support/iTerm2/Scripts/AutoLaunch"
@@ -231,6 +229,6 @@ rm -f "$LAL"
 doc env FLEET_OPEN_LAPTOP=macbook | grep -q 'WARN.*laptop.*not installed on macbook' || fail "missing not WARN"
 r="$(doc env FLEET_OPEN_LAPTOP=macbook SHIM_SSH_DOWN=1)"
 printf '%s\n' "$r" | grep -q 'INFO.*laptop.*? macbook unreachable' || fail "unreachable not INFO ?"
-ok
+st_count
 
 printf 'fleet-open-laptop-selftest: %d checks passed\n' "$CHECKS"

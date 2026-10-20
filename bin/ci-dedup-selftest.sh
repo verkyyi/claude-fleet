@@ -18,13 +18,13 @@
 #      merge commit's first parent is the base) and fetches depth 2 for it.
 set -u
 BIN=$(cd -- "$(dirname -- "$0")" && pwd)
+. "$BIN/selftest-lib.sh"
 ROOT=$(cd -- "$BIN/.." && pwd)
 WF="$ROOT/.github/workflows"
 command -v git >/dev/null 2>&1 || { echo "SKIP: git not installed"; exit 0; }
 
 FAILS=0
 fail() { printf 'FAIL %s\n' "$*"; FAILS=$((FAILS + 1)); }
-ok()   { printf 'ok   %s\n' "$*"; }
 
 # the `on:` block's top-level keys of a workflow
 on_keys() { awk '/^on:/{o=1; next} o && /^[^ #]/{o=0} o && /^  [a-z_]+:/{sub(/:.*/, ""); sub(/^ +/, ""); print}' "$1"; }
@@ -41,7 +41,7 @@ ckeys=$(on_keys "$WF/ci.yml" | tr '\n' ' ')
 [ "$ckeys" = "pull_request " ] || fail "A: ci.yml runs on [$ckeys], want pull_request alone"
 { on_keys "$WF/ci-nightly.yml" | grep -qx schedule && grep -q 'uses: ./.github/workflows/shellcheck.yml' "$WF/ci-nightly.yml"; } \
   || fail "A: shellcheck.yml lost its nightly full run (ci-nightly.yml, on a schedule, calls it)"
-[ "$FAILS" -eq 0 ] && ok "A: no PR check re-runs on a master push; ci.yml calls each on its PR; shellcheck has a nightly"
+[ "$FAILS" -eq 0 ] && st_ok_all "A: no PR check re-runs on a master push; ci.yml calls each on its PR; shellcheck has a nightly"
 
 # ── B ──
 T=$(mktemp -d "${TMPDIR:-/tmp}/ci-dedup-selftest.XXXXXX") || exit 1
@@ -79,12 +79,12 @@ for cfg in .shellcheckrc .shellcheck-version bin/ci-shellcheck.sh .github/workfl
 done
 got=$(list --changed no-such-rev)
 [ "$got" = "$all" ] || fail "B: an unresolvable base should lint the whole tree, got: $got"
-[ "$FAILS" -eq 0 ] && ok "B: --changed lints what the change touches; config / unresolvable base ⇒ everything"
+[ "$FAILS" -eq 0 ] && st_ok_all "B: --changed lints what the change touches; config / unresolvable base ⇒ everything"
 
 # ── C ──
 grep -q 'set -- --changed HEAD^1' "$WF/shellcheck.yml" && grep -q 'sh bin/ci-shellcheck.sh' "$WF/shellcheck.yml" \
   && grep -q 'fetch-depth: 2' "$WF/shellcheck.yml" \
-  && ok "C: shellcheck.yml runs ci-shellcheck.sh --changed HEAD^1 on a PR, depth 2" \
+  && st_ok_all "C: shellcheck.yml runs ci-shellcheck.sh --changed HEAD^1 on a PR, depth 2" \
   || fail "C: shellcheck.yml does not run bin/ci-shellcheck.sh --changed HEAD^1 with fetch-depth 2"
 
 [ "$FAILS" -eq 0 ] && { echo "ci-dedup-selftest: all green"; exit 0; }

@@ -22,14 +22,14 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SUT="$BIN/tmux-conf-reload.sh"
 [ -f "$SUT" ] || { printf 'selftest: missing %s\n' "$SUT" >&2; exit 2; }
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 # --- scratch dir (hermetic) ---------------------------------------------------
 work="$(mktemp -d "${TMPDIR:-/tmp}/conf-reload-selftest.XXXXXX")" \
-  || fail "mktemp failed"
+  || st_fail "mktemp failed"
 trap 'rm -rf "$work"' EXIT
 
 before="$work/before.conf"
@@ -69,16 +69,16 @@ expected="$(printf '%s\n' \
 
 # --- 1. --print emits exactly the removed set ---------------------------------
 got="$(bash "$SUT" --print "$before" "$after" | sort)" \
-  || fail "--print exited non-zero"
-[ "$got" = "$expected" ] || fail "--print removed set mismatch
+  || st_fail "--print exited non-zero"
+[ "$got" = "$expected" ] || st_fail "--print removed set mismatch
 --- expected ---
 $expected
 --- got ---
 $got"
 
 # a survivor must never appear
-printf '%s\n' "$got" | grep -q 'prefix	a' && fail "'bind a' (action-only change) wrongly reported removed"
-printf '%s\n' "$got" | grep -q 'prefix	N' && fail "'bind N' (new bind) wrongly reported removed"
+printf '%s\n' "$got" | grep -q 'prefix	a' && st_fail "'bind a' (action-only change) wrongly reported removed"
+printf '%s\n' "$got" | grep -q 'prefix	N' && st_fail "'bind N' (new bind) wrongly reported removed"
 
 # --- 2. full run drives a fake tmux -------------------------------------------
 fakebin="$work/bin"
@@ -91,25 +91,25 @@ chmod +x "$fakebin/tmux"
 : > "$work/tmux.log"
 
 out="$(PATH="$fakebin:$PATH" bash "$SUT" "$before" "$after" "$work/fake.tmux.conf")" \
-  || fail "full run exited non-zero"
+  || st_fail "full run exited non-zero"
 printf '%s\n' "$out" | grep -q 'unbound 6 removed' \
-  || fail "report line wrong (expected 'unbound 6 removed …'): $out"
+  || st_fail "report line wrong (expected 'unbound 6 removed …'): $out"
 
 # one unbind-key per removed bind, right table+key
 for call in "unbind-key -T copy-mode-vi v" "unbind-key -T prefix H" \
             "unbind-key -T root F1" "unbind-key -T prefix j" \
             "unbind-key -T prefix R" "unbind-key -T prefix -"; do
   grep -Fxq "$call" "$work/tmux.log" \
-    || fail "missing '$call' in tmux calls:
+    || st_fail "missing '$call' in tmux calls:
 $(cat "$work/tmux.log")"
 done
 # exactly 6 unbinds — no over-unbinding of survivors
 uc="$(grep -c '^unbind-key ' "$work/tmux.log")"
-[ "$uc" -eq 6 ] || fail "expected 6 unbind-key calls, got $uc:
+[ "$uc" -eq 6 ] || st_fail "expected 6 unbind-key calls, got $uc:
 $(cat "$work/tmux.log")"
 # and the re-source happened, after the unbinds
 grep -Fxq "source-file $work/fake.tmux.conf" "$work/tmux.log" \
-  || fail "no 'source-file' call after unbinding:
+  || st_fail "no 'source-file' call after unbinding:
 $(cat "$work/tmux.log")"
 
 # --- 3. unusable `before` conf → nothing removed, said so honestly, STILL re-sources
@@ -125,16 +125,16 @@ $(cat "$work/tmux.log")"
 for bc in "$work/nonexistent.conf" "$work/empty-before.conf" ""; do
   : > "$work/tmux.log"
   out="$(PATH="$fakebin:$PATH" bash "$SUT" "$bc" "$after" "$work/fake.tmux.conf")" \
-    || fail "run with unusable before-conf ('$bc') exited non-zero (must fail OPEN, not error)"
+    || st_fail "run with unusable before-conf ('$bc') exited non-zero (must fail OPEN, not error)"
   printf '%s\n' "$out" | grep -q 'no readable before-conf' \
-    || fail "unusable before-conf ('$bc') must report it, not a bare 'unbound 0': $out"
+    || st_fail "unusable before-conf ('$bc') must report it, not a bare 'unbound 0': $out"
   printf '%s\n' "$out" | grep -q 'unbound 0 removed' \
-    && fail "unusable before-conf ('$bc') must NOT masquerade as 'unbound 0 removed': $out"
+    && st_fail "unusable before-conf ('$bc') must NOT masquerade as 'unbound 0 removed': $out"
   grep -q '^unbind-key ' "$work/tmux.log" \
-    && fail "unusable before-conf ('$bc') triggered an unbind (should not)"
+    && st_fail "unusable before-conf ('$bc') triggered an unbind (should not)"
   # FAIL OPEN: the re-source must still happen so landed ADDS reach the server.
   grep -Fxq "source-file $work/fake.tmux.conf" "$work/tmux.log" \
-    || fail "unusable before-conf ('$bc') skipped the re-source — landed ADDS would be lost (issue #325):
+    || st_fail "unusable before-conf ('$bc') skipped the re-source — landed ADDS would be lost (issue #325):
 $(cat "$work/tmux.log")"
 done
 
@@ -144,29 +144,29 @@ done
 printf 'bind -T\nbind j run-shell "x"\n' > "$work/malformed.conf"
 if command -v timeout >/dev/null 2>&1; then
   timeout 10 bash "$SUT" --print "$work/malformed.conf" "$after" >/dev/null \
-    || fail "parser hung/failed on a malformed trailing '-T' (infinite-loop regression?)"
+    || st_fail "parser hung/failed on a malformed trailing '-T' (infinite-loop regression?)"
 else
   # no `timeout` (bare macOS) — still assert it returns; a hang would wedge the
   # whole selftest run, which is itself a visible failure signal.
   bash "$SUT" --print "$work/malformed.conf" "$after" >/dev/null \
-    || fail "parser failed on a malformed trailing '-T'"
+    || st_fail "parser failed on a malformed trailing '-T'"
 fi
 
 # --- 5. --socket <label> routes every live tmux call through `tmux -L <label>` --
 # (issue #248: fleet-ui-refresh.sh --all reloads each fleet's OWN server this way.)
 : > "$work/tmux.log"
 out="$(PATH="$fakebin:$PATH" bash "$SUT" --socket myfleet "$before" "$after" "$work/fake.tmux.conf")" \
-  || fail "--socket run exited non-zero"
+  || st_fail "--socket run exited non-zero"
 # every unbind + the source-file must carry `-L myfleet` as the first two tokens
 grep -q '^-L myfleet unbind-key ' "$work/tmux.log" \
-  || fail "--socket did not prefix unbind-key with '-L myfleet':
+  || st_fail "--socket did not prefix unbind-key with '-L myfleet':
 $(cat "$work/tmux.log")"
 grep -Fxq -e "-L myfleet source-file $work/fake.tmux.conf" "$work/tmux.log" \
-  || fail "--socket did not prefix source-file with '-L myfleet':
+  || st_fail "--socket did not prefix source-file with '-L myfleet':
 $(cat "$work/tmux.log")"
 # no bare (socket-less) tmux call leaked through
 grep -q '^unbind-key ' "$work/tmux.log" \
-  && fail "--socket leaked a bare (ambient-server) unbind-key:
+  && st_fail "--socket leaked a bare (ambient-server) unbind-key:
 $(cat "$work/tmux.log")"
 
 printf 'selftest OK: removed-bind unbinding correct across all table forms\n'

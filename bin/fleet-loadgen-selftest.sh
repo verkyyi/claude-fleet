@@ -21,14 +21,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 LG="$BIN/fleet-loadgen.sh"
 [ -f "$LG" ] || { echo "selftest: $LG not found" >&2; exit 2; }
 
 TAG="st$$"
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
-ok() { CHECKS=$((CHECKS + 1)); }
+eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
 cleanup() { bash "$LG" --stop "${TAG}a" >/dev/null 2>&1
             bash "$LG" --stop "${TAG}b" >/dev/null 2>&1
             bash "$LG" --stop "${TAG}c" >/dev/null 2>&1
@@ -89,10 +88,10 @@ eq "orphan: burner reparented to init (PPID=1)" 1 \
 # Deadline is 5s from t0; allow generous slack for a loaded CI runner.
 t0=$(date +%s)
 while [ "$(live "${TAG}a")" -gt 0 ]; do
-  [ $(( $(date +%s) - t0 )) -gt 25 ] && fail "orphan: burner LEAKED — still alive 25s past a 5s deadline with its parent dead. This is the #697 failure mode and the entire point of the tool"
+  [ $(( $(date +%s) - t0 )) -gt 25 ] && st_fail "orphan: burner LEAKED — still alive 25s past a 5s deadline with its parent dead. This is the #697 failure mode and the entire point of the tool"
   sleep 1
 done
-ok   # burner expired unattended
+st_count   # burner expired unattended
 
 # ============================================================================
 # 3. --status / --stop round trip, on a deadline far too long to wait out.
@@ -125,8 +124,8 @@ eq "tag: --stop on the exact tag reaped it" 0 "$(live "${TAG}10")"
 t0=$(date +%s)
 bash "$LG" 1 600 --tag "${TAG}c" -- sh -c 'exit 7' >/dev/null 2>&1
 eq "cmd: exit status is the command's" 7 "$?"
-[ $(( $(date +%s) - t0 )) -lt 30 ] || fail "cmd: waited for the 600s deadline instead of the command"
-ok
+[ $(( $(date +%s) - t0 )) -lt 30 ] || st_fail "cmd: waited for the 600s deadline instead of the command"
+st_count
 eq "cmd: burners stopped with the command" 0 "$(live "${TAG}c")"
 
 # ============================================================================
@@ -138,8 +137,8 @@ eq "cmd: burners stopped with the command" 0 "$(live "${TAG}c")"
 count='sleep 1; bash "$0" --status "$1" 2>/dev/null | grep -c "^[0-9]"'
 out="$(SHIM_NCPU=8 SHIM_LOAD=16 bash "$LG" 1 5 --tag "${TAG}d" -- true 2>&1)"
 eq "gate: 2.0/core over the default 1/core refused, exit 3" 3 "$?"
-case "$out" in *"host busy"*FLEET_LOADGEN_LOAD_PER_CORE*--force*) ok ;;
-  *) fail "gate: refusal must name the load, the knob and --force — got [$out]" ;; esac
+case "$out" in *"host busy"*FLEET_LOADGEN_LOAD_PER_CORE*--force*) st_count ;;
+  *) st_fail "gate: refusal must name the load, the knob and --force — got [$out]" ;; esac
 eq "gate: a refusal started no burner" 0 "$(live "${TAG}d")"
 SHIM_NCPU=8 SHIM_LOAD=7.9 bash "$LG" 1 2 -- true >/dev/null 2>&1
 eq "gate: under 1/core passes" 0 "$?"
@@ -155,8 +154,8 @@ eq "gate: --force never lifts the typo cap" 2 "$?"
 err="$SHIM/clamp.err"
 got="$(SHIM_NCPU=2 bash "$LG" 3 30 --tag "${TAG}d" -- bash -c "$count" "$LG" "${TAG}d" 2>"$err")"
 eq "clamp: 3 burners on 2 cores run as ncpu/2 = 1" 1 "$got"
-grep -q 'clamped 3 burner(s) to 1' "$err" || fail "clamp: no stderr note — got [$(cat "$err")]"
-ok
+grep -q 'clamped 3 burner(s) to 1' "$err" || st_fail "clamp: no stderr note — got [$(cat "$err")]"
+st_count
 got="$(SHIM_NCPU=2 FLEET_LOADGEN_CORE_PCT=100 bash "$LG" 3 30 --tag "${TAG}d" -- bash -c "$count" "$LG" "${TAG}d" 2>/dev/null)"
 eq "clamp: FLEET_LOADGEN_CORE_PCT=100 raises it to ncpu" 2 "$got"
 got="$(SHIM_NCPU=2 bash "$LG" 3 30 --tag "${TAG}d" --force -- bash -c "$count" "$LG" "${TAG}d" 2>/dev/null)"

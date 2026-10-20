@@ -37,9 +37,9 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-one-per-login-selftest.XXXXXX")" || exit 2
@@ -61,7 +61,7 @@ fi
 if [ -n "\${TMUX:-}" ]; then exec "$REAL_TMUX" "\$@"; fi
 exec "$REAL_TMUX" -S "$SOCKD/none" "\$@"
 EOF
-printf '#!/bin/sh\nexit 1\n' > "$WORK/shim/gh"
+st_fake_gh "$WORK/shim"
 chmod +x "$WORK/shim/tmux" "$WORK/shim/gh"
 export PATH="$WORK/shim:$PATH"
 

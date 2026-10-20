@@ -39,13 +39,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SPINNER="$BIN/tmux-spinner.sh"
 CONF="$BIN/../conf/tmux-attention.conf"
 [ -f "$SPINNER" ] || { printf 'selftest: %s not found\n' "$SPINNER" >&2; exit 2; }
 [ -f "$CONF" ]    || { printf 'selftest: %s not found\n' "$CONF" >&2; exit 2; }
 
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/attn-selftest.XXXXXX")" || exit 2
 
@@ -72,7 +72,6 @@ trap cleanup EXIT
 # exit so cleanup still reaps the isolated servers (issue #152).
 trap 'exit 130' INT TERM HUP
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 # --- fixture: four fleets, EACH ON ITS OWN SOCKET, hubs + workers in states ---
 # fleetA: needy hub(plan) + 2 needy workers + 1 working  → @attn_needs=3 (plan counts)
@@ -83,7 +82,7 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 # fleetD: calm hub + 1 working worker                     → @attn_needs=0
 # Cross-fleet WINDOW total = 3+1+0+0 = 4, so each fleet's @attn_other_windows is
 # 4 minus its own: A=1, B=3, C=4, D=4 (a fleet never counts its own windows).
-tf fleetA new-session -d -s fleetA -n plan -x 200 -y 50 2>/dev/null || fail "could not start isolated tmux server"
+tf fleetA new-session -d -s fleetA -n plan -x 200 -y 50 2>/dev/null || st_fail "could not start isolated tmux server"
 tf fleetA new-window -t fleetA: -n issue-1
 tf fleetA new-window -t fleetA: -n issue-2
 tf fleetA new-window -t fleetA: -n issue-3
@@ -136,7 +135,7 @@ while [ "$n" -lt 200 ]; do
   [ "$got" = 1 ] && break
   n=$((n + 1)); sleep 0.05
 done
-[ "$got" = 1 ] || fail "spinner never published @attn_other_windows within timeout"
+[ "$got" = 1 ] || st_fail "spinner never published @attn_other_windows within timeout"
 
 opt() { tf "$1" show-options -t "$1" 2>/dev/null | awk -v k="$2" '$1==k{gsub(/"/,"",$2); print $2}'; }
 
@@ -145,10 +144,10 @@ b_badge="$(opt fleetB @attn_needs)"
 c_badge="$(opt fleetC @attn_needs)"
 d_badge="$(opt fleetD @attn_needs)"
 
-[ "$a_badge" = 3 ] || fail "fleetA badge: expected 3 (needy plan + 2 workers), got '${a_badge}'"
-[ "$b_badge" = 1 ] || fail "fleetB badge: expected 1 worker, got '${b_badge}' (a stateless window named 'needs' must NOT collapse into the tally)"
-[ "$c_badge" = 0 ] || fail "fleetC badge: expected 0 (needy dash+backlog panels are excluded), got '${c_badge}'"
-[ "$d_badge" = 0 ] || fail "fleetD badge: expected 0, got '${d_badge}'"
+[ "$a_badge" = 3 ] || st_fail "fleetA badge: expected 3 (needy plan + 2 workers), got '${a_badge}'"
+[ "$b_badge" = 1 ] || st_fail "fleetB badge: expected 1 worker, got '${b_badge}' (a stateless window named 'needs' must NOT collapse into the tally)"
+[ "$c_badge" = 0 ] || st_fail "fleetC badge: expected 0 (needy dash+backlog panels are excluded), got '${c_badge}'"
+[ "$d_badge" = 0 ] || st_fail "fleetD badge: expected 0, got '${d_badge}'"
 
 # --- the `needs` SUBTYPE glyph (issue #640) ----------------------------------
 # One red `!` used to mean two things that want opposite reflexes: an
@@ -159,24 +158,24 @@ d_badge="$(opt fleetD @attn_needs)"
 # is the glyph PLUS its pad (`? `), and a whitespace-split read eats the pad — the
 # pad is half of what keeps the tab strip aligned, so it is part of the assertion.
 spin() { tf "$1" display-message -p -t "$2" "#{$3}" 2>/dev/null; }
-[ "$(spin fleetA fleetA:issue-1 @spin)" = '? ' ]   || fail "issue-1 (@claude_needs=ask) must show '? ', got '$(spin fleetA fleetA:issue-1 @spin)'"
-[ "$(spin fleetA fleetA:issue-2 @spin)" = '⊘ ' ]   || fail "issue-2 (@claude_needs=perm) must show '⊘ ', got '$(spin fleetA fleetA:issue-2 @spin)'"
-[ "$(spin fleetA fleetA:plan @spin)" = '! ' ]   || fail "a needy window with no subtype must keep '! ', got '$(spin fleetA fleetA:plan @spin)'"
-[ "$(spin fleetB fleetB:issue-9 @spin)" = '⊠ ' ] || fail "a worker-declared blocker must show '⊠ ', got '$(spin fleetB fleetB:issue-9 @spin)'"
-[ "$(spin fleetB fleetB:issue-9 @sfg)" = "$(spin fleetA fleetA:plan @sfg)" ] || fail "blocked must keep the ordinary needs colour"
+[ "$(spin fleetA fleetA:issue-1 @spin)" = '? ' ]   || st_fail "issue-1 (@claude_needs=ask) must show '? ', got '$(spin fleetA fleetA:issue-1 @spin)'"
+[ "$(spin fleetA fleetA:issue-2 @spin)" = '⊘ ' ]   || st_fail "issue-2 (@claude_needs=perm) must show '⊘ ', got '$(spin fleetA fleetA:issue-2 @spin)'"
+[ "$(spin fleetA fleetA:plan @spin)" = '! ' ]   || st_fail "a needy window with no subtype must keep '! ', got '$(spin fleetA fleetA:plan @spin)'"
+[ "$(spin fleetB fleetB:issue-9 @spin)" = '⊠ ' ] || st_fail "a worker-declared blocker must show '⊠ ', got '$(spin fleetB fleetB:issue-9 @spin)'"
+[ "$(spin fleetB fleetB:issue-9 @sfg)" = "$(spin fleetA fleetA:plan @sfg)" ] || st_fail "blocked must keep the ordinary needs colour"
 # The subtype changes the glyph and NOTHING else: same red font, and all three still
 # counted in the badge above (fleetA = 3).
 for w in fleetA:issue-1 fleetA:issue-2 fleetA:plan; do
-  [ -n "$(spin fleetA "$w" @sfg)" ] || fail "$w lost its needs colour"
-  [ "$(spin fleetA "$w" @sfg)" = "$(spin fleetA fleetA:plan @sfg)" ]     || fail "$w must keep the SAME red as an undifferentiated needs row"
+  [ -n "$(spin fleetA "$w" @sfg)" ] || st_fail "$w lost its needs colour"
+  [ "$(spin fleetA "$w" @sfg)" = "$(spin fleetA fleetA:plan @sfg)" ]     || st_fail "$w must keep the SAME red as an undifferentiated needs row"
 done
 
 # The pre-#368 red-⌂ beacon flag is RETIRED — the spinner must no longer publish it.
 # Its historical option name is spelled out here because that is what the assertion
 # has to look for; nothing in the fleet writes or reads it any more.
 RETIRED_BEACON=@steward_needs
-[ -z "$(opt fleetA "$RETIRED_BEACON")" ] || fail "fleetA: the ⌂ beacon flag must be retired (unset), got '$(opt fleetA "$RETIRED_BEACON")'"
-[ -z "$(opt fleetC "$RETIRED_BEACON")" ] || fail "fleetC: the ⌂ beacon flag must be retired (unset), got '$(opt fleetC "$RETIRED_BEACON")'"
+[ -z "$(opt fleetA "$RETIRED_BEACON")" ] || st_fail "fleetA: the ⌂ beacon flag must be retired (unset), got '$(opt fleetA "$RETIRED_BEACON")'"
+[ -z "$(opt fleetC "$RETIRED_BEACON")" ] || st_fail "fleetC: the ⌂ beacon flag must be retired (unset), got '$(opt fleetC "$RETIRED_BEACON")'"
 
 # Cross-fleet WINDOW count (issue #368): total needy windows = 4 (A:3 + B:1); each
 # fleet sees that total minus its own count — proving the aggregation is over WINDOWS
@@ -185,12 +184,12 @@ a_other="$(opt fleetA @attn_other_windows)"
 b_other="$(opt fleetB @attn_other_windows)"
 c_other="$(opt fleetC @attn_other_windows)"
 d_other="$(opt fleetD @attn_other_windows)"
-[ "$a_other" = 1 ] || fail "fleetA cross-fleet: expected 1 other needy window (B's 1), got '${a_other}'"
-[ "$b_other" = 3 ] || fail "fleetB cross-fleet: expected 3 other needy windows (A's 3), got '${b_other}'"
-[ "$c_other" = 4 ] || fail "fleetC cross-fleet: expected 4 other needy windows (A+B), got '${c_other}'"
-[ "$d_other" = 4 ] || fail "fleetD cross-fleet: expected 4 other needy windows (A+B), got '${d_other}'"
+[ "$a_other" = 1 ] || st_fail "fleetA cross-fleet: expected 1 other needy window (B's 1), got '${a_other}'"
+[ "$b_other" = 3 ] || st_fail "fleetB cross-fleet: expected 3 other needy windows (A's 3), got '${b_other}'"
+[ "$c_other" = 4 ] || st_fail "fleetC cross-fleet: expected 4 other needy windows (A+B), got '${c_other}'"
+[ "$d_other" = 4 ] || st_fail "fleetD cross-fleet: expected 4 other needy windows (A+B), got '${d_other}'"
 # And the retired option must be gone.
-[ -z "$(opt fleetA @attn_other_fleets)" ] || fail "fleetA: @attn_other_fleets must be retired (unset)"
+[ -z "$(opt fleetA @attn_other_fleets)" ] || st_fail "fleetA: @attn_other_fleets must be retired (unset)"
 
 kill "$SPIN_PID" 2>/dev/null; SPIN_PID=''
 printf 'PART A ok: unified badge — A●3(plan+2), B●1, C●0(dash/backlog excl), D●0; ⌂ beacon flag retired\n'
@@ -202,8 +201,8 @@ printf 'PART A ok: cross-fleet WINDOW count — A1 B3 C4 D4 (total 4 minus own),
 # chosen window's context (display-message leaves #[...] literal off a tty).
 BARCONF="$BIN/../conf/tmux-bar.conf"
 SL="$(grep -m1 '^set -g status-left ' "$BARCONF" | sed -e 's/^set -g status-left "//' -e 's/"$//')"
-[ -n "$SL" ] || fail "could not extract status-left from $BARCONF"
-. "$BIN/fleet-palette.sh"; fleet_palette_load || fail "no conf/fleet-palette.conf"
+[ -n "$SL" ] || st_fail "could not extract status-left from $BARCONF"
+. "$BIN/fleet-palette.sh"; fleet_palette_load || st_fail "no conf/fleet-palette.conf"
 fleet_palette_expand "$SL"
 # shellcheck disable=SC2154  # _fpe: fleet_palette_expand's result
 SL=$_fpe
@@ -212,8 +211,8 @@ tf fleetB set-option -t fleetB @attn_needs 3
 tf fleetB set-option -t fleetB @attn_other_windows 3
 tf fleetB set-window-option -t fleetB:plan @claude_state needs
 out="$(sl_at fleetB plan)"
-case "$out" in *"fleet"*) : ;; *) fail "node bar: the status-left must say to use fleet (#1714)" "$out" ;; esac
-case "$out" in *"☰"*|*"●"*) fail "node bar: no ☰ / ● on a node any more (#1714)" "$out" ;; esac
+case "$out" in *"fleet"*) : ;; *) st_fail "node bar: the status-left must say to use fleet (#1714)" "$out" ;; esac
+case "$out" in *"☰"*|*"●"*) st_fail "node bar: no ☰ / ● on a node any more (#1714)" "$out" ;; esac
 # no click range, no xfleet range / @attn_other_windows, no fleet-xfleet-jump.sh:
 # conf/gone.list (#1714, #980), read by gone-selftest.sh
 printf 'PART B ok: the node bar is the hint — no ☰, no ●, no click range, no other-fleet dot (#1714, #980)\n'

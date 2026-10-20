@@ -27,11 +27,10 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-repo-anyaddr.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-repo-anyaddr.XXXXXX" physical
 mkdir -p "$WORK/shim" "$WORK/home" "$WORK/srv/acme" "$WORK/srv/repos" "$WORK/srv/gh/o" "$WORK/tmp"
 # gh records every call and always fails; tmux / launchctl / systemctl do nothing
 printf '#!/bin/sh\necho "gh $*" >> "%s/gh.calls"\nexit 1\n' "$WORK" > "$WORK/shim/gh"

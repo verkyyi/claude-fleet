@@ -17,11 +17,11 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SCRIPT="$BIN/hub-session.sh"
 [ -f "$SCRIPT" ] || { printf 'selftest: %s not found\n' "$SCRIPT" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/hubsess-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/hubsess-selftest.XXXXXX"
 trap 'exit 1' INT TERM HUP
 
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }

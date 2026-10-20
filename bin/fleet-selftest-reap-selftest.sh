@@ -23,10 +23,10 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 REAP="$BIN/fleet-selftest-reap.sh"
 [ -x "$REAP" ] || { printf 'selftest: %s missing/not executable\n' "$REAP" >&2; exit 2; }
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
 
 # Base the sandbox at /tmp (not $TMPDIR): a unix socket path has a ~104-char
 # limit, and macOS's per-user $TMPDIR is long enough to blow it once nested.
@@ -41,7 +41,7 @@ started=""   # newline-separated list of sockets we booted
 boot() {     # boot <socket-path> [session-name] → start a detached isolated server
   local s="$1" n="${2:-t}"
   "$REAL_TMUX" -S "$s" new-session -d -s "$n" -x 80 -y 24 2>/dev/null \
-    || fail "could not start isolated server on $s"
+    || st_fail "could not start isolated server on $s"
   started="$started$s"$'\n'
 }
 cleanup() {
@@ -52,7 +52,6 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 # run the reaper with the sandbox wired in; args pass through
 reap() { FLEET_SELFTEST_REAP_SOCKDIR="$SOCKDIR" FLEET_SELFTEST_REAP_ROOTS="$TMPROOT" \
@@ -77,9 +76,9 @@ age  "$SOCKDIR/bindtest-selftest"
 boot "$SOCKDIR/fresh-selftest" freshst
 # issue #2970: a selftest server under a label without `selftest` (`hubs$$`) is
 # told by its `-f /dev/null`; a dead `fleet*` socket is a fleet's, never litter.
-"$REAL_TMUX" -S "$SOCKDIR/hubs123" -f /dev/null new-session -d -s hubs123 2>/dev/null || fail "boot hubs123"
+"$REAL_TMUX" -S "$SOCKDIR/hubs123" -f /dev/null new-session -d -s hubs123 2>/dev/null || st_fail "boot hubs123"
 started="$started$SOCKDIR/hubs123"$'\n'; age "$SOCKDIR/hubs123"
-"$REAL_TMUX" -S "$SOCKDIR/hubsfresh" -f /dev/null new-session -d -s hubsfresh 2>/dev/null || fail "boot hubsfresh"
+"$REAL_TMUX" -S "$SOCKDIR/hubsfresh" -f /dev/null new-session -d -s hubsfresh 2>/dev/null || st_fail "boot hubsfresh"
 started="$started$SOCKDIR/hubsfresh"$'\n'
 touch "$SOCKDIR/fleet-gone"
 
@@ -98,59 +97,59 @@ KEEPD="$TMPROOT/unrelated-work"; mkdir -p "$KEEPD"
 # ============================================================================
 # 1. --dry-run changes nothing
 # ============================================================================
-out="$(reap --count 2>&1)" || fail "--count should exit 0"
-[ "$out" = "live=4 dead=1" ] || fail "--count: 4 live selftest servers, 1 dead non-fleet socket (got: $out)"
-out="$(reap --dry-run 2>&1)" || fail "dry-run should exit 0"
-case "$out" in *"would reap"*) ;; *) fail "dry-run summary should say 'would reap' (got: $out)";; esac
-[ -e "$SOCKDIR/deadone" ]                || fail "dry-run must NOT remove the dead socket"
+out="$(reap --count 2>&1)" || st_fail "--count should exit 0"
+[ "$out" = "live=4 dead=1" ] || st_fail "--count: 4 live selftest servers, 1 dead non-fleet socket (got: $out)"
+out="$(reap --dry-run 2>&1)" || st_fail "dry-run should exit 0"
+case "$out" in *"would reap"*) ;; *) st_fail "dry-run summary should say 'would reap' (got: $out)";; esac
+[ -e "$SOCKDIR/deadone" ]                || st_fail "dry-run must NOT remove the dead socket"
 "$REAL_TMUX" -S "$SOCKDIR/bindtest-selftest" ls >/dev/null 2>&1 \
-  || fail "dry-run must NOT kill the aged selftest server"
-[ -d "$ORPH" ]                           || fail "dry-run must NOT remove the orphan temp dir"
+  || st_fail "dry-run must NOT kill the aged selftest server"
+[ -d "$ORPH" ]                           || st_fail "dry-run must NOT remove the orphan temp dir"
 
 # ============================================================================
 # 2. real reap — the destructive pass
 # ============================================================================
-out="$(reap 2>&1)" || fail "reap should exit 0"
+out="$(reap 2>&1)" || st_fail "reap should exit 0"
 
 # (a) dead socket gone
-[ -e "$SOCKDIR/deadone" ] && fail "dead socket should be removed"
+[ -e "$SOCKDIR/deadone" ] && st_fail "dead socket should be removed"
 # (b) default spared
-[ -e "$SOCKDIR/default" ] || fail "default socket must NEVER be removed"
+[ -e "$SOCKDIR/default" ] || st_fail "default socket must NEVER be removed"
 # (c) live non-selftest spared
 "$REAL_TMUX" -S "$SOCKDIR/keepme" ls >/dev/null 2>&1 \
-  || fail "a live non-selftest server must be spared"
+  || st_fail "a live non-selftest server must be spared"
 # (d) aged live selftest killed + socket gone
 "$REAL_TMUX" -S "$SOCKDIR/bindtest-selftest" ls >/dev/null 2>&1 \
-  && fail "an aged live *selftest* server should be killed"
-[ -e "$SOCKDIR/bindtest-selftest" ] && fail "the killed selftest server's socket should be removed"
+  && st_fail "an aged live *selftest* server should be killed"
+[ -e "$SOCKDIR/bindtest-selftest" ] && st_fail "the killed selftest server's socket should be removed"
 # (e) fresh live selftest spared (younger than the age gate)
 "$REAL_TMUX" -S "$SOCKDIR/fresh-selftest" ls >/dev/null 2>&1 \
-  || fail "a FRESH live selftest server must be spared (in-flight run)"
+  || st_fail "a FRESH live selftest server must be spared (in-flight run)"
 # (f) aged orphan temp dir reaped (inner server killed, dir gone)
 "$REAL_TMUX" -S "$SOCKDIR/hubs123" ls >/dev/null 2>&1 \
-  && fail "an aged -f /dev/null server with no client should be killed whatever its label"
+  && st_fail "an aged -f /dev/null server with no client should be killed whatever its label"
 "$REAL_TMUX" -S "$SOCKDIR/hubsfresh" ls >/dev/null 2>&1 \
-  || fail "a FRESH -f /dev/null server must be spared (in-flight run)"
-[ -e "$SOCKDIR/fleet-gone" ] || fail "a fleet* socket must never be removed, dead or not"
-[ -d "$ORPH" ] && fail "an aged orphan *selftest* temp dir should be removed"
+  || st_fail "a FRESH -f /dev/null server must be spared (in-flight run)"
+[ -e "$SOCKDIR/fleet-gone" ] || st_fail "a fleet* socket must never be removed, dead or not"
+[ -d "$ORPH" ] && st_fail "an aged orphan *selftest* temp dir should be removed"
 # (g) fresh temp dir spared
-[ -d "$FRESHD" ] || fail "a FRESH selftest temp dir must be spared"
+[ -d "$FRESHD" ] || st_fail "a FRESH selftest temp dir must be spared"
 # (h) unrelated dir untouched
-[ -d "$KEEPD" ] || fail "a non-selftest dir must never be touched"
+[ -d "$KEEPD" ] || st_fail "a non-selftest dir must never be touched"
 
 # summary must report the three aged reaps (1 dead sock + 1 live srv + 1 dir).
 case "$out" in
   *"reaped 1 dead socket(s), 2 live selftest server(s), 1 orphan temp dir(s)"*) ;;
-  *) fail "unexpected reap summary: $out" ;;
+  *) st_fail "unexpected reap summary: $out" ;;
 esac
 
 # ============================================================================
 # 3. idempotent — a second reap finds nothing new to reap
 # ============================================================================
-out="$(reap 2>&1)" || fail "second reap should exit 0"
+out="$(reap 2>&1)" || st_fail "second reap should exit 0"
 case "$out" in
   *"reaped 0 dead socket(s), 0 live selftest server(s), 0 orphan temp dir(s)"*) ;;
-  *) fail "a second reap should be a no-op (got: $out)" ;;
+  *) st_fail "a second reap should be a no-op (got: $out)" ;;
 esac
 
 printf 'selftest PASS: reaper drops dead sockets + aged selftest servers/dirs, spares default/live/fresh\n'

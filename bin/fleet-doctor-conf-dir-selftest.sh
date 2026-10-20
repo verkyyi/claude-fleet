@@ -24,20 +24,18 @@
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 for f in fleet-doctor.sh fleet-daemon-lib.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/doctor-conf-dir-selftest.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/doctor-conf-dir-selftest.XXXXXX" physical
 mkdir -p "$WORK/bin" "$WORK/home"
 for f in fleet-doctor.sh fleet-daemon-lib.sh; do cp "$BIN/$f" "$WORK/bin/"; done
 chmod +x "$WORK/bin/"*.sh
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- stderr ---\n%s\n--- stdout (tail) ---\n%s\n' "$(cat "$WORK/stderr" 2>/dev/null)" "$(tail -5 "$WORK/stdout" 2>/dev/null)" >&2; exit 1; }
-ok() { CHECKS=$((CHECKS + 1)); }
 
 # plant_heal <conf-dir> <fleet> — one fresh socket-heal.log line in the shape
 # bin/fleet-doctor.sh's socket check reads (`<epoch>\t<fleet>`).
@@ -59,7 +57,7 @@ run_doctor
 grep -q 'unbound variable' "$WORK/stderr" && fail "doctor died on an unbound variable with FLEET_CONF_DIR unset"
 grep -Eq '^[[:space:]]+(PASS|WARN|FAIL)[[:space:]]+perl([[:space:]]|$)' "$WORK/stdout" \
   || fail "the last check (perl) never printed — the doctor stopped early with FLEET_CONF_DIR unset"
-ok
+st_count
 
 # 2. the default path is read: a heal under $HOME/.config/claude-fleet shows up
 plant_heal "$WORK/home/.config/claude-fleet" sess-default
@@ -67,7 +65,7 @@ run_doctor
 grep -q 'unbound variable' "$WORK/stderr" && fail "doctor died on an unbound variable (default path, heal planted)"
 grep -Eq '^[[:space:]]+WARN[[:space:]]+socket[[:space:]].*for fleet sess-default' "$WORK/stdout" \
   || fail "socket check did not read the DEFAULT conf dir (\$HOME/.config/claude-fleet)"
-ok
+st_count
 
 # 3. an explicit FLEET_CONF_DIR still wins over the default
 plant_heal "$WORK/explicit" sess-explicit
@@ -76,7 +74,7 @@ grep -q 'unbound variable' "$WORK/stderr" && fail "doctor died on an unbound var
 grep -Eq '^[[:space:]]+WARN[[:space:]]+socket[[:space:]].*for fleet sess-explicit' "$WORK/stdout" \
   || fail "socket check ignored an explicit FLEET_CONF_DIR"
 grep -q 'sess-default' "$WORK/stdout" && fail "explicit FLEET_CONF_DIR did not override the default (both heals printed)"
-ok
+st_count
 
 # 4. the retired quota failover rows (T546) never print, whatever is on disk
 mkdir -p "$WORK/explicit/handoffs/quota-requests/r2"
@@ -85,7 +83,7 @@ printf '{"state":"waiting","detail":"same veto","same_detail_streak":7,"stuck_no
 run_doctor FLEET_CONF_DIR="$WORK/explicit"
 grep -Eq '^[[:space:]]+(PASS|WARN|FAIL)[[:space:]]+(failover|failover-stuck|account-pick)([[:space:]]|$)' "$WORK/stdout" \
   && fail "a retired failover / failover-stuck / account-pick row still printed"
-ok
+st_count
 
 # 5. a login holding pool accounts but not separated is told so (T550): the
 #    launcher picks none of them, its sessions run on its own login
@@ -97,6 +95,6 @@ grep -Eq '^[[:space:]]+WARN[[:space:]]+account-pool[[:space:]].*还没交给池�
 run_doctor FLEET_CONF_DIR="$WORK/explicit" FLEET_ACCOUNTS_DIR="$WORK/acc"
 grep -Eq '[[:space:]]account-pool[[:space:]]' "$WORK/stdout" && fail "a separated login must not WARN account-pool"
 rm -f "$WORK/explicit/credsep.json"
-ok
+st_count
 
 printf 'fleet-doctor-conf-dir-selftest: %d checks passed\n' "$CHECKS"

@@ -20,20 +20,19 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 P="$BIN/fleet-daemon-loaded.sh"
 L="$BIN/fleet-daemon-lib.sh"
 [ -f "$P" ] || { printf 'selftest: %s not found\n' "$P" >&2; exit 2; }
 [ -f "$L" ] || { printf 'selftest: %s not found\n' "$L" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-daemon-loaded-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-daemon-loaded-selftest.XXXXXX"
 SHIM="$WORK/shim"; AG="$WORK/LaunchAgents"; LD="$WORK/LaunchDaemons"
 mkdir -p "$SHIM" "$AG" "$LD"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-rc_is() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected rc $2, got rc $3"; }
-eq()    { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected '$2', got '$3'"; }
+rc_is() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected rc $2, got rc $3"; }
+eq()    { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected '$2', got '$3'"; }
 # the probe, in a sandbox: this login is `guest`, its plist dirs are ours
 probe() { PATH="$SHIM:$PATH" FLEET_NODE_STATE="$WORK/node" FLEET_INSTALL_LOGIN=guest FLEET_LAUNCHD_AGENTS_DIR="$AG" FLEET_INSTALL_DAEMON_DIR="$LD" \
           sh "$P" "$@"; printf '%s' $?; }
@@ -114,7 +113,7 @@ rm -f "$AG"/*.plist "$LD"/*.plist
 mkshim sudo 'echo "sudo called" >> "'"$WORK"'/sudo.log"; exit 1'
 mkshim launchctl 'case "$1" in list) printf "1\t0\tcom.claude-fleet.cleanup\n" ;; *) exit 113 ;; esac'
 rc_is "system: gui hit short-circuits" 0 "$(probe com.claude-fleet.cleanup)"
-CHECKS=$((CHECKS + 1)); [ ! -f "$WORK/sudo.log" ] || fail "sudo was called although the gui listing answered"
+CHECKS=$((CHECKS + 1)); [ ! -f "$WORK/sudo.log" ] || st_fail "sudo was called although the gui listing answered"
 
 # ---- systemd branch (Linux) -------------------------------------------------
 mkshim uname 'echo Linux'

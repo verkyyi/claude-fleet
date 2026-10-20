@@ -25,16 +25,15 @@
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 CP="$BIN/fleet-codex-plugins.py"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-codex-plugins-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-codex-plugins-selftest.XXXXXX"
 WORK="$(cd "$WORK" && pwd)"                         # one spelling (a TMPDIR ending in / doubles it)
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n%s\n' "$1" "${2:-}" >&2; exit 1; }
-ok() { CHECKS=$((CHECKS + 1)); }
-has() { case "$2" in *"$1"*) ok ;; *) fail "$3" "$2" ;; esac; }
-hasnt() { case "$2" in *"$1"*) fail "$3" "$2" ;; *) ok ;; esac; }
+has() { case "$2" in *"$1"*) st_count ;; *) fail "$3" "$2" ;; esac; }
+hasnt() { case "$2" in *"$1"*) fail "$3" "$2" ;; *) st_count ;; esac; }
 
 export FLEET_CONF_DIR="$WORK/conf" CLAUDE_CONFIG_DIR="$WORK/claude"
 mkdir -p "$FLEET_CONF_DIR" "$CLAUDE_CONFIG_DIR/plugins"
@@ -130,10 +129,10 @@ echo '[]' > "$WORK/no-override.json"
 # ---- A: nothing installed -------------------------------------------------------
 echo '[]' > "$LIST"
 out=$(cx sync); rc=$?
-[ "$rc" = 0 ] || fail "A sync rc $rc" "$out"; ok
+[ "$rc" = 0 ] || fail "A sync rc $rc" "$out"; st_count
 has 'unchanged' "$out" "A sync should change nothing"
-cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "A config.toml changed"; ok
-[ ! -s "$FAKE_CODEX_LOG" ] && [ ! -f "$WORK/claude.calls" ] || fail "A asked claude or codex"; ok
+cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "A config.toml changed"; st_count
+[ ! -s "$FAKE_CODEX_LOG" ] && [ ! -f "$WORK/claude.calls" ] || fail "A asked claude or codex"; st_count
 
 # ---- B: the old bridge retired, fleet-epic native --------------------------------
 ln -s "$CACHE/fleet-epic/$VER/skills/epic-page" "$HOME_C/skills/fleet-plugin-epic-page"
@@ -154,56 +153,56 @@ dry=$(cx sync --dry-run)
 has 'retire  link' "$dry" "B dry run should plan the link's retirement"
 has "add     $HOME_C fleet-epic@claude-fleet $VER" "$dry" "B dry run should plan the native add"
 cmp -s "$HOME_C/config.toml" "$WORK/bridged.toml" && [ -L "$HOME_C/skills/fleet-plugin-epic-page" ] \
-  && [ ! -s "$FAKE_CODEX_LOG" ] || fail "B --dry-run changed something"; ok
+  && [ ! -s "$FAKE_CODEX_LOG" ] || fail "B --dry-run changed something"; st_count
 out=$(cx sync); rc=$?
-[ "$rc" = 0 ] || fail "B sync rc $rc" "$out"; ok
+[ "$rc" = 0 ] || fail "B sync rc $rc" "$out"; st_count
 for w in 'retire  link' 'retire  skill' 'retire  config' "market  $HOME_C claude-fleet → $MK" 'add     '; do
   has "$w" "$out" "B sync should say: $w"
 done
 [ ! -e "$HOME_C/skills/fleet-plugin-epic-page" ] && [ ! -L "$HOME_C/skills/fleet-plugin-epic-page" ] \
-  && [ ! -e "$HOME_C/skills/fleet-plugin-fleet-epic-run" ] || fail "B bridge skills survived" "$(ls -la "$HOME_C/skills")"; ok
+  && [ ! -e "$HOME_C/skills/fleet-plugin-fleet-epic-run" ] || fail "B bridge skills survived" "$(ls -la "$HOME_C/skills")"; st_count
 grep -q 'name: mine' "$HOME_C/skills/fleet-plugin-mine/SKILL.md" && [ -L "$HOME_C/skills/fleet-plugin-mylink" ] \
-  || fail "B a personal fleet-plugin-* entry was touched"; ok
+  || fail "B a personal fleet-plugin-* entry was touched"; st_count
 has 'own     ' "$out" "B the personal entries should be said"
 hasnt '# >>> fleet plugins' "$(cat "$HOME_C/config.toml")" "B the marker block survived"
 head -c "$(wc -c < "$WORK/orig.toml")" "$HOME_C/config.toml" | cmp -s - "$WORK/orig.toml" \
-  || fail "B the login's lines are not byte for byte" "$(cat "$HOME_C/config.toml")"; ok
+  || fail "B the login's lines are not byte for byte" "$(cat "$HOME_C/config.toml")"; st_count
 has '[plugins."fleet-epic@claude-fleet"]' "$(cat "$HOME_C/config.toml")" "B not installed natively"
-[ -f "$HOME_C/plugins/cache/claude-fleet/fleet-epic/$VER/skills/epic-page/SKILL.md" ] || fail "B no native cache copy"; ok
+[ -f "$HOME_C/plugins/cache/claude-fleet/fleet-epic/$VER/skills/epic-page/SKILL.md" ] || fail "B no native cache copy"; st_count
 : > "$FAKE_CODEX_LOG"
 out=$(cx sync)
 has 'unchanged' "$out" "B a second sync should change nothing"
-[ ! -s "$FAKE_CODEX_LOG" ] || fail "B a second sync ran codex" "$(cat "$FAKE_CODEX_LOG")"; ok
+[ ! -s "$FAKE_CODEX_LOG" ] || fail "B a second sync ran codex" "$(cat "$FAKE_CODEX_LOG")"; st_count
 
 # ---- C: version bump; marketplace moved ------------------------------------------
 sed -i.bak "s/\"version\": \"$VER\"/\"version\": \"9.9.9\"/" "$MK/plugins/fleet-epic/.claude-plugin/plugin.json"
 out=$(cx sync)
 has "add     $HOME_C fleet-epic@claude-fleet 9.9.9" "$out" "C a bump should re-add"
-[ -d "$HOME_C/plugins/cache/claude-fleet/fleet-epic/9.9.9" ] || fail "C the new version is not in the cache"; ok
+[ -d "$HOME_C/plugins/cache/claude-fleet/fleet-epic/9.9.9" ] || fail "C the new version is not in the cache"; st_count
 cp -R "$MK" "$WORK/market2"
 : > "$FAKE_CODEX_LOG"
 out=$(python3 "$CP" sync --root "$WORK/market2" --claude "$WORK/claude-fake" --codex "$WORK/codex-fake" --cache '' \
         --override "$WORK/no-override.json" --codex-home "$HOME_C")
 has "market  $HOME_C claude-fleet → $WORK/market2" "$out" "C a moved marketplace should be re-added"
 grep -q '^plugin marketplace remove claude-fleet$' "$FAKE_CODEX_LOG" && grep -q "^plugin marketplace add $WORK/market2\$" "$FAKE_CODEX_LOG" \
-  || fail "C not remove + add" "$(cat "$FAKE_CODEX_LOG")"; ok
+  || fail "C not remove + add" "$(cat "$FAKE_CODEX_LOG")"; st_count
 cx sync >/dev/null                                   # back onto $MK
 
 # ---- E: mention / command / doctor -------------------------------------------------
-[ "$(q mention epic-page)" = fleet-epic:epic-page ] || fail "E mention epic-page" "$(q mention epic-page)"; ok
+[ "$(q mention epic-page)" = fleet-epic:epic-page ] || fail "E mention epic-page" "$(q mention epic-page)"; st_count
 [ "$(q command fleet-epic-run)" = "$HOME_C/plugins/cache/claude-fleet/fleet-epic/9.9.9/commands/fleet-epic-run.md" ] \
-  || fail "E command fleet-epic-run" "$(q command fleet-epic-run)"; ok
-q mention mine >/dev/null && fail "E a personal entry has no mention"; ok
-q command nope >/dev/null && fail "E no such command"; ok
+  || fail "E command fleet-epic-run" "$(q command fleet-epic-run)"; st_count
+q mention mine >/dev/null && fail "E a personal entry has no mention"; st_count
+q command nope >/dev/null && fail "E no such command"; st_count
 doc=$(cx doctor); rc=$?
-[ "$rc" = 0 ] || fail "E doctor rc $rc" "$doc"; ok
+[ "$rc" = 0 ] || fail "E doctor rc $rc" "$doc"; st_count
 has 'Codex 原生装着 fleet-epic' "$doc" "E doctor should say installed"
 for w in 'mod 界面模块' 'PreCompact' 'tools 限制'; do has "$w" "$doc" "E doctor should name $w"; done
 mv "$MK/plugins/fleet-epic/.claude-plugin/plugin.json.bak" "$MK/plugins/fleet-epic/.claude-plugin/plugin.json"
 has '原生缺 / 落后 fleet-epic' "$(cx doctor)" "E doctor should say behind"
 cx sync >/dev/null
 python3 "$CP" doctor --root "$MK" --claude "$WORK/claude-fake" --cache '' --codex-home "$WORK/none" >/dev/null; rc=$?
-[ "$rc" = 3 ] || fail "E doctor with no Codex home should exit 3 (got $rc)"; ok
+[ "$rc" = 3 ] || fail "E doctor with no Codex home should exit 3 (got $rc)"; st_count
 
 # ---- D: disabled, then uninstalled ⇒ removed; other marketplaces untouched -------------
 printf '[%s]\n' "$(row fleet-epic false)" > "$LIST"
@@ -214,7 +213,7 @@ has '[plugins."other@elsewhere"]' "$(cat "$HOME_C/config.toml")" "D another mark
 printf '[%s]\n' "$(row fleet-epic true)" > "$LIST"; cx sync >/dev/null
 echo '[]' > "$LIST"
 has 'remove  ' "$(cx sync)" "D an uninstalled plugin should be removed"
-[ ! -d "$HOME_C/plugins/cache/claude-fleet/fleet-epic" ] || fail "D the cache copy stayed"; ok
+[ ! -d "$HOME_C/plugins/cache/claude-fleet/fleet-epic" ] || fail "D the cache copy stayed"; st_count
 
 # ---- F: override; no codex binary --------------------------------------------------------
 printf '[%s]\n' "$(row fleet-epic true)" > "$LIST"
@@ -223,22 +222,22 @@ echo '["codex.plugins"]' > "$WORK/override.json"
 out=$(python3 "$CP" sync --root "$MK" --claude "$WORK/claude-fake" --codex "$WORK/codex-fake" --cache '' \
         --override "$WORK/override.json" --codex-home "$HOME_C")
 has "codex.plugins is this login's own" "$out" "F override should do nothing"
-[ ! -s "$FAKE_CODEX_LOG" ] || fail "F override still ran codex"; ok
+[ ! -s "$FAKE_CODEX_LOG" ] || fail "F override still ran codex"; st_count
 H2="$WORK/codex-nobin"; mkdir -p "$H2/skills"
 ln -s "$CACHE/fleet-epic/$VER/skills/epic-page" "$H2/skills/fleet-plugin-epic-page"
 out=$(PATH=/usr/bin:/bin HOME="$WORK/nohome" python3 "$CP" sync --root "$MK" --claude "$WORK/claude-fake" --codex "$WORK/no-such-codex" \
         --cache '' --override "$WORK/no-override.json" --codex-home "$H2")
 has 'no codex binary here' "$out" "F no codex should be said"
-[ ! -L "$H2/skills/fleet-plugin-epic-page" ] || fail "F the home was not retired"; ok
+[ ! -L "$H2/skills/fleet-plugin-epic-page" ] || fail "F the home was not retired"; st_count
 
 # ---- G: wiring ------------------------------------------------------------------------------
 hasnt 'fleet-codex-plugins.py" sync' "$(cat "$BIN/fleet-codex.sh")" "G the launcher still syncs plugins"
 hasnt '--plugin-dir' "$(grep -v '^#' "$BIN/fleet-codex.sh")" "G the launcher still merges plugin hooks"
 grep -q 'fleet-codex-plugins.py" mention' "$BIN/fleet-codex.sh" && grep -q 'fleet-codex-plugins.py" command' "$BIN/fleet-codex.sh" \
-  || fail "G the launcher does not ask mention / command"; ok
-grep -q 'fleet-codex-plugins.py" sync' "$BIN/fleet-install-apply.sh" || fail "G install-apply does not sync"; ok
-grep -q 'fleet-codex-plugins.py' "$BIN/fleet-doctor.sh" || fail "G the doctor's plugins row does not ask"; ok
-[ -z "$(cx dirs)" ] || fail "G dirs printed something"; ok
-out=$(cx sync --print-dirs 2>/dev/null); [ -z "$out" ] || fail "G --print-dirs printed on stdout" "$out"; ok
+  || fail "G the launcher does not ask mention / command"; st_count
+grep -q 'fleet-codex-plugins.py" sync' "$BIN/fleet-install-apply.sh" || fail "G install-apply does not sync"; st_count
+grep -q 'fleet-codex-plugins.py' "$BIN/fleet-doctor.sh" || fail "G the doctor's plugins row does not ask"; st_count
+[ -z "$(cx dirs)" ] || fail "G dirs printed something"; st_count
+out=$(cx sync --print-dirs 2>/dev/null); [ -z "$out" ] || fail "G --print-dirs printed on stdout" "$out"; st_count
 
 echo "fleet-codex-plugins-selftest: PASS ($CHECKS checks)"

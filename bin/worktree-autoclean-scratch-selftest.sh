@@ -23,19 +23,18 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SRC="$BIN/worktree-autoclean.sh"
 LIB="$BIN/fleet-lib.sh"
 for f in "$SRC" "$LIB"; do [ -f "$f" ] || { echo "selftest: $f missing" >&2; exit 2; }; done
 command -v git >/dev/null 2>&1 || { echo "selftest: git absent — SKIP" >&2; exit 0; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/wac-scratch.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/wac-scratch.XXXXXX"
 # Normalize to the physical path (macOS /var → /private/var, and collapse any `//`
 # from TMPDIR) so the LIVE-pane string we write matches the path git reports.
 WORK="$(cd "$WORK" && pwd -P)"
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/conf/logs"
@@ -145,7 +144,7 @@ printf '%s\n' "$out" | grep -Eq 'KEEP +issue-7 .*dirty — uncommitted changes' 
 printf '%s\n' "$out" | grep -Eq 'issue-7 .*scratch experiment' && fail "issue-7 must NOT be treated as a scratch experiment" "$out"
 # dry run mutates nothing
 [ -d "$WORK/base-scratch-1" ] || fail "dry run must not remove scratch-1"
-ok "DRY: pristine/merged scratch → PRUNE; conversation/dirty/unmerged → KEEP+surface; live → KEEP; issue unaffected"
+st_pass "DRY: pristine/merged scratch → PRUNE; conversation/dirty/unmerged → KEEP+surface; live → KEEP; issue unaffected"
 
 # ============================ REAL RUN: reap + surface once ================
 run_wac >/dev/null
@@ -166,13 +165,13 @@ grep -q 'scratch-3 kept (dirty)' "$EVENTS" || fail "scratch-3 should have surfac
 grep -q 'scratch-6 kept (clean, but a session ran here)' "$EVENTS" || fail "scratch-6 should have surfaced a notify" "$(cat "$EVENTS")"
 [ -s "$NOTIFY_LOG" ] && fail "a kept scratch is recorded in the alerts, never flashed (issue #1617)" "$(cat "$NOTIFY_LOG")"
 n1="$(wc -l < "$EVENTS" | tr -d ' ')"
-ok "REAL: pristine/merged scratch reaped; conversation/dirty/unmerged kept + surfaced once (markers + notify)"
+st_pass "REAL: pristine/merged scratch reaped; conversation/dirty/unmerged kept + surfaced once (markers + notify)"
 
 # ============================ SURFACE-ONCE dedup ===========================
 run_wac >/dev/null
 n2="$(wc -l < "$EVENTS" | tr -d ' ')"
 [ "$n1" = "$n2" ] || fail "a second sweep must NOT re-notify a still-kept scratch (surface once)" "before=$n1 after=$n2"
-ok "SURFACE-ONCE: a kept scratch is surfaced only on the first sweep, not every cycle"
+st_pass "SURFACE-ONCE: a kept scratch is surfaced only on the first sweep, not every cycle"
 
 # ============================ TASK: the record decides (issue #4897) ============
 # A worktree opened for a hub task record carries `fleet-task` in its git dir.
@@ -208,7 +207,7 @@ FLEET_TASK_CLOSED_CMD="$WORK/task-closed" run_wac >/dev/null
 [ -d "$WORK/base-issue-10" ] && fail "TASK real run should remove the closed task's issue-10"
 [ -d "$WORK/base-scratch-9" ] || fail "TASK real run must KEEP the open task's scratch-9"
 [ -d "$WORK/base-scratch-11" ] || fail "TASK real run must KEEP the unknown task's scratch-11"
-ok "TASK the worktree's record decides: closed ⇒ prune (even a conversation / an open issue); open / unknown ⇒ keep"
+st_pass "TASK the worktree's record decides: closed ⇒ prune (even a conversation / an open issue); open / unknown ⇒ keep"
 
 printf '\nselftest OK: %s assertions passed (janitor scratch reap rules, #290)\n' "$pass"
 exit 0

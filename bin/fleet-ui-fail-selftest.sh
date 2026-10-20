@@ -23,11 +23,11 @@
 # dash-raw-session-selftest.sh, dash-reap-selftest.sh. tmux or python3 absent → A/B SKIP.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$BIN/.."
 LANGSH="$BIN/fleet-ui-lang.sh"
 [ -f "$LANGSH" ] || { printf 'selftest: %s not found\n' "$LANGSH" >&2; exit 2; }
 pass=0; fails=0
-ok()   { pass=$((pass + 1)); printf 'ok   %s\n' "$1"; }
 fail() { fails=$((fails + 1)); printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '%s\n' "$2" >&2; return 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/uifail-selftest.XXXXXX")" || exit 2
@@ -55,7 +55,7 @@ if command -v python3 >/dev/null 2>&1; then
       [ "$w" -le 54 ] || fail "C $lang '$line' is $w columns — a failure line must fit the 54-column iPad"
     done
   done
-  ok "C every fixed failure line fits 54 columns (zh + en)"
+  st_pass "C every fixed failure line fits 54 columns (zh + en)"
 fi
 
 # --- D. lint ---------------------------------------------------------------------
@@ -70,7 +70,7 @@ raw=$(grep -nE 'toast_(sidebar_focus|sidebar_home|shell_sidebar)' "$BIN"/*.sh "$
         | grep -v -- '-selftest\.sh:' | grep -v '/fleet-ui-lang\.sh:' \
         | grep -Ev 'fleet_ui_hint_once|fleet-ui-lang\.sh"? hint ' | grep -Ev ':[0-9]+:[[:space:]]*#')
 [ -z "$raw" ] || fail "D a sidebar how-to toast bypasses the once-a-day gate" "$raw"
-[ "$fails" = 0 ] && ok "D no success toast in the spawn / reap / file / sidebar scripts; how-to help is once a day"
+[ "$fails" = 0 ] && st_pass "D no success toast in the spawn / reap / file / sidebar scripts; how-to help is once a day"
 
 # --- A / B on a live isolated server -------------------------------------------------
 if [ -z "$REAL_TMUX" ] || ! command -v python3 >/dev/null 2>&1; then
@@ -136,7 +136,7 @@ EOF
       : > "$WORK/labels"
       FLEET_UI_SOCK=myfleet fleet_ui_fail 'aimed'
       grep -qx myfleet "$WORK/labels" || fail "A FLEET_UI_SOCK must aim the line at tmux -L <label>"
-      [ "$fails" = 0 ] && ok "A fleet_ui_fail: one line, reason — next, palette red; QUIET draws none; SOCK aims it"
+      [ "$fails" = 0 ] && st_pass "A fleet_ui_fail: one line, reason — next, palette red; QUIET draws none; SOCK aims it"
 
       # B. the sidebar how-to: once a day per login
       n0=$(msgs)
@@ -161,7 +161,7 @@ EOF
       FLEET_C="$WORK/no/sub" sh "$LANGSH" hint "$CLIENT" toast_shell_sidebar
       FLEET_C="$WORK/no/sub" sh "$LANGSH" hint "$CLIENT" toast_shell_sidebar
       [ "$(msgs)" = "$((n2 + 2))" ] || fail "B an unwritable stamp must fail OPEN (shown both times)"
-      [ "$fails" = 0 ] && ok "B the sidebar how-to shows once a day per key; a new day shows it again; no stamp fails open"
+      [ "$fails" = 0 ] && st_pass "B the sidebar how-to shows once a day per key; a new day shows it again; no stamp fails open"
     fi
   fi
 fi

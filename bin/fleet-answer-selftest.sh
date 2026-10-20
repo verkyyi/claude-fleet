@@ -70,12 +70,12 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SRC="$BIN/fleet-answer.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s not found/executable\n' "$SRC" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 required\n' >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fa-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fa-selftest.XXXXXX"
 mkdir -p "$WORK/fakepath" "$WORK/screens"
 INJECT="$WORK/inject.log"
 STEP="$WORK/step"

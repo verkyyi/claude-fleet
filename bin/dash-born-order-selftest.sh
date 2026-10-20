@@ -29,6 +29,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'dash-born-order selftest: python3 absent — SKIP'; exit 0; }
@@ -43,10 +44,9 @@ mkdir -p "$G" "$WORK/conf/fleets/$S" "$WORK/bin"
 fx_repo "$WORK/conf" "$S" acme/app
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
-has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1 — no [$3]" "$2";; esac; }
-hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
+eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
+has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) st_fail "$1 — no [$3]" "$2";; esac; }
+hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) st_fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
 
 US=$'\x1f'
 cat > "$WORK/bin/tmux" <<'SHIM'

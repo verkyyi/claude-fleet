@@ -157,3 +157,21 @@ PR 模板里有一行勾选：改了上面任何一样就勾上，并在 PR 里�
 
 我们采用 [Developer Certificate of Origin](https://developercertificate.org/)（DCO 1.1）：每个提交末尾带一行
 `Signed-off-by: 你的名字 <邮箱>`（`git commit -s` 会自动加），表示你有权按上述许可提交这些内容。
+
+## 共用自测小工具
+
+新的 shell 自测先 `. "$BIN/selftest-lib.sh"`，用 `st_fail` / `st_ok`、
+`st_eq <说明> <期望> <实际>`、`st_has` / `st_hasnt <说明> <文本> <字面子串>`。
+断言不计数；失败退出 1，输出一行 `FAIL: <leg>: <msg>`，`ST_LEG` 可指定腿名，
+默认是测试文件名。旧测试的计数可用 `st_count`（`CHECKS`）或 `st_pass`（`pass`，
+同时输出 ok），调用方初始化计数器。累计失败后继续执行的测试保留自己的断言。
+
+`st_sandbox <mktemp模板> [physical]` 设置 `WORK` 并安装删除它的 EXIT trap；
+有自定义清理、信号处理或 KEEP 的测试保留原来的沙盒。
+`st_fake_tmux <bin目录> [日志]` 创建总是成功的假 tmux，
+`st_fake_gh <bin目录>` 创建总是失败的离线 gh，均不访问真实服务。
+需要真实 tmux 时，先 `st_real_tmux`（缺失就 SKIP），再
+`st_tmux_socket <bin目录> <私有socket>` 创建转发脚本；PATH 和私有 server 的清理
+仍由测试负责。带特殊命令响应或 socket 重映射的夹具保留原实现。
+公共库只给测试使用，不进入客户端清单。迁移只匹配已核对的完整模板，不改
+断言条件或时限；其余变体另行整理。

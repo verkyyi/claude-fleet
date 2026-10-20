@@ -34,12 +34,12 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/fleet-ledger-watch.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s not found/executable\n' "$SRC" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/flw-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/flw-selftest.XXXXXX"
 
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/conf" "$WORK/leases"
 REC_LOG="$WORK/records"; : > "$REC_LOG"

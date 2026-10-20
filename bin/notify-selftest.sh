@@ -24,6 +24,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'notify selftest: python3 absent — SKIP'; exit 0; }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/notify-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -35,9 +36,8 @@ mkdir -p "$HOME" "$TMPDIR" "$FLEET_CONF_DIR"
 G="$WORK/g"; mkdir -p "$G"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
-has() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) ;; *) fail "$1 (no '$3')" "$2" ;; esac; }
+eq() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
+has() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) ;; *) st_fail "$1 (no '$3')" "$2" ;; esac; }
 
 F=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
 # the sender: title|body|sound, and a phone line when it was asked for one
@@ -71,7 +71,7 @@ last() { tail -1 "$NOTIFY_OUT"; }
 answer "$(row issue-1909 working)" "$(row issue-7 needs ask '早就在问的')"
 round
 eq "A: the first round only remembers (a client starting with one waiting is no notification)" 0 "$(lines)"
-[ -s "$G/notify.state.json" ] || fail "A: no state file after the first round" "$(cat "$WORK/round.err")"
+[ -s "$G/notify.state.json" ] || st_fail "A: no state file after the first round" "$(cat "$WORK/round.err")"
 answer "$(row issue-1909 needs ask '演练放在 mac-b 还是只在 mac-a？')" "$(row issue-7 needs ask '早就在问的')"
 round; settle 1
 eq "A: needs → one notification: who, what, where, with a sound" "#1909 在问你|演练放在 mac-b 还是只在 mac-a？ · mac-b|1" "$(last)"

@@ -22,13 +22,12 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/history-multirepo-selftest.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/history-multirepo-selftest.XXXXXX" physical
 mkdir -p "$WORK/shim" "$WORK/home"
 printf '#!/bin/sh\nexit 1\n' > "$WORK/shim/tmux"
-printf '#!/bin/sh\nexit 1\n' > "$WORK/shim/gh"
+st_fake_gh "$WORK/shim"
 chmod +x "$WORK/shim/tmux" "$WORK/shim/gh"
 export PATH="$WORK/shim:$PATH"
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8

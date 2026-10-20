@@ -30,14 +30,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SUT="$BIN/fleet-oldcfg-replay.py"
 [ -f "$SUT" ] || { printf 'selftest: %s not found\n' "$SUT" >&2; exit 2; }
 command -v git >/dev/null 2>&1 || { echo "fleet-oldcfg-replay-selftest SKIP (no git)"; exit 0; }
 command -v python3 >/dev/null 2>&1 || { echo "fleet-oldcfg-replay-selftest SKIP (no python3)"; exit 0; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/oldcfg-selftest.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/oldcfg-selftest.XXXXXX" physical
 trap 'exit 130' INT TERM HUP
 
 CHECKS=0

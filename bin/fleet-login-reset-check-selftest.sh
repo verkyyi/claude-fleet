@@ -15,12 +15,12 @@
 # ps and crontab are PATH shims; every system path sits under --root.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 CHECK="$BIN/fleet-login-reset-check.py"
 W=$(mktemp -d "${TMPDIR:-/tmp}/reset-check.XXXXXX")
 trap 'chmod -R u+rwx "$W" 2>/dev/null; rm -rf "$W"' EXIT
 FAILS=0
 fail() { FAILS=$((FAILS + 1)); printf 'selftest FAIL %s\n' "$1"; }
-ok() { printf 'ok   %s\n' "$1"; }
 L=fleetu7
 U=$(id -u)
 
@@ -68,7 +68,7 @@ run() {   # run [args…] → $OUT (stdout), $ERR, $RC
 }
 verdict() { printf '%s\n' "$OUT" | tail -n 1; }
 want() {  # want <label> <expected last line> <expected rc>
-  if [ "$(verdict)" = "$2" ] && [ "$RC" = "$3" ]; then ok "$1"
+  if [ "$(verdict)" = "$2" ] && [ "$RC" = "$3" ]; then st_ok "$1"
   else fail "$1: wanted '$2' rc $3, got '$(verdict)' rc $RC; stderr: $(printf '%s' "$ERR" | head -n 3)"; fi
 }
 csv() { printf '%s\n' "$@" | tr ' ' '\n' | grep . | paste -sd, -; }
@@ -131,7 +131,7 @@ for P in darwin linux; do
   case "$P" in darwin) EXP=$EXPECT_darwin ;; *) EXP=$EXPECT_linux ;; esac
   # The table and this list in lockstep: a category the checker loses or gains is red.
   got=$(python3 "$CHECK" --list --platform "$P" | cut -f1 | paste -sd' ' -)
-  [ "$got" = "$EXP" ] && ok "$P: --list is the expected table ($(printf '%s\n' $EXP | grep -c .) categories)" \
+  [ "$got" = "$EXP" ] && st_ok "$P: --list is the expected table ($(printf '%s\n' $EXP | grep -c .) categories)" \
     || fail "$P: --list is '$got', the selftest expects '$EXP'"
 
   setup "$P"
@@ -161,7 +161,7 @@ for P in darwin linux; do
 EOF
     : > "$S/sys/Library/LaunchDaemons/com.ccquota.agent.$L.plist"
     run; want "$P D: a LaunchDaemon running as the login → launchd" 'reset: dirty launchd' 1
-    case "$ERR" in *com.example.thing.plist*com.ccquota.agent.$L.plist*|*com.ccquota.agent.$L.plist*com.example.thing.plist*) ok "$P D: both daemons named" ;;
+    case "$ERR" in *com.example.thing.plist*com.ccquota.agent.$L.plist*|*com.ccquota.agent.$L.plist*com.example.thing.plist*) st_ok "$P D: both daemons named" ;;
       *) fail "$P D: the launchd detail misses a daemon: $ERR" ;; esac
   else
     : > "$S/sys/var/lib/systemd/linger/$L"
@@ -189,14 +189,14 @@ EOF
   rm -rf "$H/.ssh" "$H/.config"; : > "$S/ps"
   printf 'crontab: permission denied\n' > "$S/cron.err"
   run; want "$P E: an unreadable crontab is dirty, not clean" 'reset: dirty crontab' 1
-  case "$ERR" in *'cannot read'*) ok "$P E: says it could not read" ;; *) fail "$P E: no 'cannot read' in: $ERR" ;; esac
+  case "$ERR" in *'cannot read'*) st_ok "$P E: says it could not read" ;; *) fail "$P E: no 'cannot read' in: $ERR" ;; esac
   rm -f "$S/cron.err"
   run --json
-  case "$OUT" in *'"verdict": "clean"'*) ok "$P E: --json clean" ;; *) fail "$P E: --json: $OUT" ;; esac
+  case "$OUT" in *'"verdict": "clean"'*) st_ok "$P E: --json clean" ;; *) fail "$P E: --json: $OUT" ;; esac
 done
 
 OUT=$(python3 "$CHECK" no-such-login-$$ 2>&1); RC=$?
-[ "$RC" = 2 ] && ok 'no such login → exit 2' || fail "no such login: rc $RC: $OUT"
+[ "$RC" = 2 ] && st_ok 'no such login → exit 2' || fail "no such login: rc $RC: $OUT"
 
 printf 'categories: %s\n' "$NCAT"
 if [ "$FAILS" -gt 0 ]; then printf 'fleet-login-reset-check selftest: %d FAILED\n' "$FAILS"; exit 1; fi

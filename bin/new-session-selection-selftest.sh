@@ -27,20 +27,17 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/new-session-sel.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 SOCK="$WORK/tmux.sock"
 mkdir -p "$WORK/bin" "$WORK/home" "$WORK/cc" "$WORK/tmp"
-cat > "$WORK/bin/tmux" <<EOF
-#!/bin/sh
-exec "$REAL_TMUX" -S "$SOCK" "\$@"
-EOF
-printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
+st_tmux_socket "$WORK/bin" "$SOCK"
+st_fake_gh "$WORK/bin"
 printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/ccquota"
 printf '#!/bin/sh\nexec sleep 300\n' > "$WORK/bin/claude"
 chmod +x "$WORK/bin/tmux" "$WORK/bin/gh" "$WORK/bin/ccquota" "$WORK/bin/claude"
@@ -59,9 +56,8 @@ mkdir -p "$FLEET_CONF_DIR"
 
 FAILS=0
 fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-ok()   { printf 'ok   %s\n' "$*"; }
-eq()   { if [ "$2" = "$3" ]; then ok "$1"; else fail "$1: expected [$3], got [$2]"; fi; }
-has()  { case "$2" in *"$3"*) ok "$1" ;; *) fail "$1: [$3] not in: $2" ;; esac; }
+eq()   { if [ "$2" = "$3" ]; then st_ok_all "$1"; else fail "$1: expected [$3], got [$2]"; fi; }
+has()  { case "$2" in *"$3"*) st_ok_all "$1" ;; *) fail "$1: [$3] not in: $2" ;; esac; }
 
 g() { git -c user.email=t@t -c user.name=t "$@" >/dev/null 2>&1; }
 mkrepo() {

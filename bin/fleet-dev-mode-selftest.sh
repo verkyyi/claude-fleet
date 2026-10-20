@@ -17,12 +17,12 @@
 # shellcheck disable=SC2016,SC2034
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 T=$(mktemp -d "${TMPDIR:-/tmp}/devmode.XXXXXX")
 trap 'rm -rf "$T"' EXIT
 FAILS=0
-ok() { printf 'ok   %s\n' "$1"; }
 bad() { printf 'FAIL %s\n' "$1"; FAILS=$((FAILS + 1)); }
-check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+check() { if eval "$2"; then st_ok "$1"; else bad "$1"; fi; }
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t

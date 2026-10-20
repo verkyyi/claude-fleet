@@ -18,13 +18,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 FILES="set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-client-core.sh fleet-lang.sh fleet-ladder-log.sh handoff-latch-reset-hook.sh"
 for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/hub-ctx-warn-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/hub-ctx-warn-selftest.XXXXXX"
 mkdir -p "$WORK/fakepath" "$WORK/inst/bin" "$WORK/conf/fleets/s1" "$WORK/tmp" "$WORK/hub"
 for f in $FILES; do cp "$BIN/$f" "$WORK/inst/bin/$f"; done
 STATE="$WORK/inst/bin/set-claude-state.sh"
@@ -92,7 +92,6 @@ printf '%s\n---\n' "\$1" >> "$NOTES"
 EOF
 chmod +x "$WORK/notify"
 
-ok()   { printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2
          printf -- '--- opts ---\n' >&2; cat "$OPTS" >&2 2>/dev/null
          printf -- '--- notes ---\n' >&2; cat "$NOTES" >&2 2>/dev/null; exit 1; }
@@ -127,14 +126,14 @@ grep -q '/fleet-handoff' "$NOTES" || fail "CROSS: the notification must name /fl
 grep -q 's1:claude-fleet' "$NOTES" && grep -q '60%' "$NOTES" && grep -q '55%' "$NOTES" \
   || fail "CROSS: the notification must name the window, its % and the line"
 [ "$(hubrows)" = 1 ] || fail "CROSS: want one hub-warn ladder row, got $(hubrows)"
-ok "CROSS: hub over the line → @ctx_warn + one notification + one ladder row, no block"
+st_ok "CROSS: hub over the line → @ctx_warn + one notification + one ladder row, no block"
 
 # ---- ONCE -----------------------------------------------------------------------
 setopt @ctx_pct 63; stop; stop
 [ -z "$OUT" ] || fail "ONCE: still no block" "$OUT"
 [ "$(notes)" = 1 ] || fail "ONCE: re-notified while still over the line ($(notes))"
 [ "$(hubrows)" = 1 ] || fail "ONCE: re-logged while still over the line"
-ok "ONCE: further Stops over the line stay silent"
+st_ok "ONCE: further Stops over the line stay silent"
 
 # ---- FALL -----------------------------------------------------------------------
 setopt @ctx_pct 20; stop
@@ -144,13 +143,13 @@ setopt @ctx_pct 58; stop
 # an unmeasured context (fresh session, @ctx_pct unset) neither warns nor clears
 setopt @ctx_pct ''; stop
 [ "$(getopt @ctx_warn)" = 1 ] || fail "FALL: an unreadable @ctx_pct must not clear the latch"
-ok "FALL: under the line clears @ctx_warn; the next climb warns again"
+st_ok "FALL: under the line clears @ctx_warn; the next climb warns again"
 
 # ---- CLEAR ----------------------------------------------------------------------
 OUT=$(cd "$WORK/hub" && printf '{"hook_event_name":"SessionStart","source":"clear"}' \
       | penv FLEET_SKIP_GLOBAL_CONF=1 bash "$LATCH" 2>&1)
 [ "$(getopt @ctx_warn)" = '' ] || fail "CLEAR: SessionStart(clear) must unset @ctx_warn" "$OUT"
-ok "CLEAR: SessionStart(clear) drops the badge"
+st_ok "CLEAR: SessionStart(clear) drops the badge"
 
 # ---- TOKENS ---------------------------------------------------------------------
 conf 0 'FLEET_AUTO_HANDOFF_TOKENS=200000'
@@ -158,7 +157,7 @@ reset claude-fleet '@ctx_pct=21' '@ctx_limit=1000000'
 stop
 [ "$(getopt @ctx_warn)" = 1 ] && [ "$(notes)" = 1 ] || fail "TOKENS: 21% ≥ 200k/1M must warn"
 grep -q '20%' "$NOTES" || fail "TOKENS: the line named must be the converted 20%"
-ok "TOKENS: a token line is converted against @ctx_limit for the hub too"
+st_ok "TOKENS: a token line is converted against @ctx_limit for the hub too"
 
 # ---- PANEL ----------------------------------------------------------------------
 conf 55
@@ -167,7 +166,7 @@ for p in dash plan backlog; do
   [ -z "$OUT" ] && [ "$(getopt @ctx_warn)" = '' ] && [ "$(notes)" = 0 ] \
     || fail "PANEL: $p must never be warned" "$OUT"
 done
-ok "PANEL: dash / plan / backlog are never warned"
+st_ok "PANEL: dash / plan / backlog are never warned"
 
 # ---- WORKER / SCRATCH -----------------------------------------------------------
 reset widgets-12 '@ctx_pct=60' '@issue=12'; stop
@@ -176,7 +175,7 @@ case "$OUT" in '{"decision":"block"'*'/fleet-handoff'*) : ;; *) fail "WORKER: to
 reset scratch-3 '@ctx_pct=60' '@raw=1'; stop
 case "$OUT" in '{"decision":"block"'*'/fleet-handoff'*) : ;; *) fail "SCRATCH: today's block must be unchanged" "$OUT" ;; esac
 [ "$(getopt @ctx_warn)" = '' ] && [ "$(notes)" = 0 ] || fail "SCRATCH: a scratch gets no hub warning"
-ok "WORKER: @issue / @raw panes keep their block and get no @ctx_warn"
+st_ok "WORKER: @issue / @raw panes keep their block and get no @ctx_warn"
 
 # ---- OFF ------------------------------------------------------------------------
 conf 55 'FLEET_HUB_CTX_ACTION=off'
@@ -185,13 +184,13 @@ reset claude-fleet '@ctx_pct=90'; stop
 conf 0
 reset claude-fleet '@ctx_pct=90'; stop
 [ -z "$OUT" ] && [ "$(getopt @ctx_warn)" = '' ] && [ "$(notes)" = 0 ] || fail "OFF: no handoff line ⇒ no hub warning" "$OUT"
-ok "OFF: the off switch, and auto-handoff off, leave the hub untouched"
+st_ok "OFF: the off switch, and auto-handoff off, leave the hub untouched"
 
 # ---- NOCMD ----------------------------------------------------------------------
 printf 'FLEET_COMPACT_PREP_PCT=0\nFLEET_AUTO_HANDOFF_PCT=55\n' > "$GCONF"
 reset claude-fleet '@ctx_pct=60'; stop
 [ -z "$OUT" ] && [ "$(getopt @ctx_warn)" = 1 ] && [ "$(notes)" = 0 ] && [ "$(hubrows)" = 1 ] \
   || fail "NOCMD: no notifier ⇒ still badged + logged, nothing run" "$OUT"
-ok "NOCMD: without FLEET_NOTIFY_CMD the badge + ladder row still land"
+st_ok "NOCMD: without FLEET_NOTIFY_CMD the badge + ladder row still land"
 
 printf 'hub-ctx-warn-selftest: all passed\n'

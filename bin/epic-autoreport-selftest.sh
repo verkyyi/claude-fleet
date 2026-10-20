@@ -29,15 +29,15 @@
 #      tasks; no `gh issue`, sub-issue, preflight, backstop or loopers road is left.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$BIN/.."
 RUN="$ROOT/plugins/fleet-epic/commands/fleet-epic-run.md"
 REPORT="$ROOT/plugins/fleet-epic/commands/fleet-epic-report.md"
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-hasF() { CHECKS=$((CHECKS + 1)); grep -q -F -- "$2" "$1" || fail "$3 — [$2] not in ${1#"$ROOT"/}"; }
+hasF() { CHECKS=$((CHECKS + 1)); grep -q -F -- "$2" "$1" || st_fail "$3 — [$2] not in ${1#"$ROOT"/}"; }
 
-[ -f "$RUN" ] || fail "plugins/fleet-epic/commands/fleet-epic-run.md is missing"
-[ -f "$REPORT" ] || fail "plugins/fleet-epic/commands/fleet-epic-report.md is missing"
+[ -f "$RUN" ] || st_fail "plugins/fleet-epic/commands/fleet-epic-run.md is missing"
+[ -f "$REPORT" ] || st_fail "plugins/fleet-epic/commands/fleet-epic-report.md is missing"
 
 # 1. the report is a beat of the run, not something handed off to someone else.
 #    The old wording ("hand off to `/fleet-epic-report`") reads as a contract and
@@ -68,7 +68,7 @@ hasF "$REPORT" '#852' "report: cites the seam's issue"
 # 6. an EPIC spanning repos (issue #1942) — each member names the repo its code
 #    changes in, and its child task opens there.
 PLAN="$ROOT/plugins/fleet-epic/commands/fleet-epic-plan.md"
-[ -f "$PLAN" ] || fail "plugins/fleet-epic/commands/fleet-epic-plan.md is missing"
+[ -f "$PLAN" ] || st_fail "plugins/fleet-epic/commands/fleet-epic-plan.md is missing"
 for f in "$PLAN" "$RUN" "$REPORT"; do   # (the one-repo wording, #803, is conf/gone.list's)
   hasF "$f" '#1942' "cites the cross-repo EPIC issue"
 done

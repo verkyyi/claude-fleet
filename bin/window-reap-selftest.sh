@@ -32,6 +32,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 LIB="$BIN/fleet-lib.sh"
 [ -f "$LIB" ] || { printf 'selftest: %s missing\n' "$LIB" >&2; exit 2; }
 command -v lsof >/dev/null 2>&1 || { printf 'selftest: no lsof — SKIP\n' >&2; exit 0; }
@@ -55,8 +56,6 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 alive() { kill -0 "$1" 2>/dev/null; }
 # wait_gone <secs> <pid>… → 0 once every pid is gone
 wait_gone() {
@@ -91,7 +90,7 @@ orphan() {
   ( cd "$d" && exec nohup sh -c 'sleep 120 & echo $$ > "$0"; wait' "$f" "$@" >/dev/null 2>&1 & )
   local i=0; while [ ! -s "$f" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
   ORPHAN="$(cat "$f" 2>/dev/null)"; rm -f "$f"
-  [ -n "$ORPHAN" ] || fail "could not start an orphan in $d"
+  [ -n "$ORPHAN" ] || st_fail "could not start an orphan in $d"
   PIDS="$PIDS $ORPHAN $(pgrep -P "$ORPHAN" 2>/dev/null | tr '\n' ' ')"
 }
 
@@ -99,23 +98,23 @@ orphan() {
 CONF="$BIN/../conf/tmux-attention.conf"
 for h in window-unlinked pane-exited after-kill-pane; do
   grep -Eq "^set-hook -g $h\[[0-9]+\] .*fleet-window-reap\.sh --hook" "$CONF" \
-    || fail "CONF: $h is not hooked to fleet-window-reap.sh --hook"
+    || st_fail "CONF: $h is not hooked to fleet-window-reap.sh --hook"
 done
-ok "CONF: window-unlinked / pane-exited / after-kill-pane run the sweeper"
+st_pass "CONF: window-unlinked / pane-exited / after-kill-pane run the sweeper"
 
 # ── SCOPE / LEASE (direct sweeps, no tmux) ──────────────────────────────────────
 orphan "$PLAIN"; P_PLAIN="$ORPHAN"
 orphan "$WT3" /x/bin/cloudflared; P_EXEMPT="$ORPHAN"
 mkdir -p "$WORK/wt/repo-issue-904"; orphan "$WORK/wt/repo-issue-904"; P_LEASE="$ORPHAN"
-fleet_rotate_lease_take "$WORK/wt/repo-issue-904" selftest 600 || fail "LEASE: could not take a lease"
+fleet_rotate_lease_take "$WORK/wt/repo-issue-904" selftest 600 || st_fail "LEASE: could not take a lease"
 dry="$(fleet_reap_orphan_trees dry)"
-printf '%s\n' "$dry" | grep -q "would reap $P_PLAIN " && fail "SCOPE: an orphan in a plain dir is a candidate" "$dry"
-printf '%s\n' "$dry" | grep -q "would reap $P_EXEMPT " && fail "SCOPE: the exempt tunnel is a candidate" "$dry"
-printf '%s\n' "$dry" | grep -q "would reap $P_LEASE " && fail "LEASE: an orphan under a rotation lease is a candidate" "$dry"
+printf '%s\n' "$dry" | grep -q "would reap $P_PLAIN " && st_fail "SCOPE: an orphan in a plain dir is a candidate" "$dry"
+printf '%s\n' "$dry" | grep -q "would reap $P_EXEMPT " && st_fail "SCOPE: the exempt tunnel is a candidate" "$dry"
+printf '%s\n' "$dry" | grep -q "would reap $P_LEASE " && st_fail "LEASE: an orphan under a rotation lease is a candidate" "$dry"
 bash "$BIN/fleet-window-reap.sh" --once >/dev/null
-alive "$P_PLAIN" && alive "$P_EXEMPT" && alive "$P_LEASE" || fail "SCOPE/LEASE: a spared orphan was killed"
-ok "SCOPE: an unanchored and an exempt orphan survive a sweep"
-ok "LEASE: an orphan in a worktree mid-rotation survives"
+alive "$P_PLAIN" && alive "$P_EXEMPT" && alive "$P_LEASE" || st_fail "SCOPE/LEASE: a spared orphan was killed"
+st_pass "SCOPE: an unanchored and an exempt orphan survive a sweep"
+st_pass "LEASE: an orphan in a worktree mid-rotation survives"
 fleet_rotate_lease_drop "$WORK/wt/repo-issue-904"
 kill_tree() { local p; for p in "$@"; do pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; done; }
 kill_tree "$P_LEASE" "$P_EXEMPT"
@@ -123,24 +122,24 @@ kill_tree "$P_LEASE" "$P_EXEMPT"
 # ── OFF ─────────────────────────────────────────────────────────────────────────
 orphan "$WT3"; P_OFF="$ORPHAN"
 FLEET_WINDOW_REAP=0 FLEET_WINDOW_REAP_FG=1 bash "$BIN/fleet-window-reap.sh" --hook
-alive "$P_OFF" || fail "OFF: FLEET_WINDOW_REAP=0 still reaped"
-ok "OFF: FLEET_WINDOW_REAP=0 makes the hook a no-op"
+alive "$P_OFF" || st_fail "OFF: FLEET_WINDOW_REAP=0 still reaped"
+st_pass "OFF: FLEET_WINDOW_REAP=0 makes the hook a no-op"
 kill_tree "$P_OFF"
 
 # ── AGED (issue #4360): the diskguard tick's backstop for a close whose hook never
 # ran — the same targets, only once the top is old enough; a young one is spared.
 orphan "$WT3"; P_AGED="$ORPHAN"
 FLEET_ORPHAN_TREE_SECS=3600 FLEET_ORPHAN_TREE_EVERY=0 bash "$BIN/fleet-diskguard.sh" --tree-watch
-alive "$P_AGED" || fail "AGED: a tree younger than FLEET_ORPHAN_TREE_SECS was reaped"
+alive "$P_AGED" || st_fail "AGED: a tree younger than FLEET_ORPHAN_TREE_SECS was reaped"
 sleep 2
 FLEET_ORPHAN_TREE_SECS=1 FLEET_ORPHAN_TREE_EVERY=0 bash "$BIN/fleet-diskguard.sh" --tree-watch
-wait_gone 5 "$P_AGED" || fail "AGED: the tick did not reap an aged orphan tree" "$(cat "$FLEET_CONF_DIR/diskguard/tree-reaped.log" 2>/dev/null)"
-grep -q "reaped $P_AGED " "$FLEET_CONF_DIR/diskguard/tree-reaped.log" 2>/dev/null || fail "AGED: no line in tree-reaped.log"
-ok "AGED: the diskguard tick reaps a closed window's orphan tree past its age gate, spares a young one"
+wait_gone 5 "$P_AGED" || st_fail "AGED: the tick did not reap an aged orphan tree" "$(cat "$FLEET_CONF_DIR/diskguard/tree-reaped.log" 2>/dev/null)"
+grep -q "reaped $P_AGED " "$FLEET_CONF_DIR/diskguard/tree-reaped.log" 2>/dev/null || st_fail "AGED: no line in tree-reaped.log"
+st_pass "AGED: the diskguard tick reaps a closed window's orphan tree past its age gate, spares a young one"
 
 # ── CLOSE / NEIGHBOR / SCRATCHPAD (a private tmux server, the real hooks) ───────
 T() { tmux -S "$SOCK" -f /dev/null "$@"; }
-T new-session -d -s wr -n base -c "$PLAIN" || fail "could not start a private tmux server"
+T new-session -d -s wr -n base -c "$PLAIN" || st_fail "could not start a private tmux server"
 T set-environment -g FLEET_CONF_DIR "$FLEET_CONF_DIR"
 T set-environment -g FLEET_CLAUDE_TMP_ROOT "$FLEET_CLAUDE_TMP_ROOT"
 T set-environment -g FLEET_WINDOW_REAP_ROOT "$FLEET_WINDOW_REAP_ROOT"
@@ -149,7 +148,7 @@ T set-environment -g FLEET_WINDOW_REAP_PASSES "$FLEET_WINDOW_REAP_PASSES"
 # installed ~/.claude/fleet path).
 grep -E '^set-hook -g [a-z-]+\[[0-9]+\] .*fleet-window-reap\.sh' "$CONF" \
   | sed "s#~/.claude/fleet/bin/fleet-window-reap.sh#$BIN/fleet-window-reap.sh#" > "$WORK/hooks.conf"
-T source-file "$WORK/hooks.conf" || fail "the hook lines do not parse"
+T source-file "$WORK/hooks.conf" || st_fail "the hook lines do not parse"
 
 T new-window -d -n w1 -c "$WT1" sh
 T new-window -d -n w2 -c "$WT2" sh
@@ -157,7 +156,7 @@ T new-window -d -n w3 -c "$HUBCWD" sh
 start_job() {   # <window> <cwd> <pidfile> — a disowned two-level job from the pane
   T send-keys -t "wr:$1" "cd '$2'; nohup sh -c 'sleep 120 & wait' >/dev/null 2>&1 & echo \$! > '$3'" Enter
   local i=0; while [ ! -s "$3" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
-  [ -s "$3" ] || fail "window $1 did not start its job"
+  [ -s "$3" ] || st_fail "window $1 did not start its job"
 }
 start_job w1 "$WT1" "$WORK/j1"; J1="$(cat "$WORK/j1")"
 start_job w2 "$WT2" "$WORK/j2"; J2="$(cat "$WORK/j2")"
@@ -167,29 +166,29 @@ T send-keys -t wr:w3 "cd '$HUBCWD'" Enter
 sleep 0.5
 J1C="$(pgrep -P "$J1" 2>/dev/null | head -1)"; J3C="$(pgrep -P "$J3" 2>/dev/null | head -1)"
 PIDS="$PIDS $J1 $J2 $J3 $J1C $J3C $(pgrep -P "$J2" 2>/dev/null | tr '\n' ' ')"
-[ -n "$J1C" ] || fail "CLOSE: w1's job has no child"
+[ -n "$J1C" ] || st_fail "CLOSE: w1's job has no child"
 W2PANE="$(T display-message -p -t wr:w2 '#{pane_pid}')"
 
 # While every window is open, nothing is a candidate (a pane in each anchor).
 dry="$(fleet_reap_orphan_trees dry)"
-printf '%s\n' "$dry" | grep -Eq "would reap ($J1|$J2|$J3) " && fail "a job is a candidate while its window is open" "$dry"
+printf '%s\n' "$dry" | grep -Eq "would reap ($J1|$J2|$J3) " && st_fail "a job is a candidate while its window is open" "$dry"
 
 T kill-window -t wr:w1
-wait_gone 15 "$J1" "$J1C" || fail "CLOSE: w1's orphan survived its window" \
+wait_gone 15 "$J1" "$J1C" || st_fail "CLOSE: w1's orphan survived its window" \
   "$(ps -o pid,ppid,command -p "$J1,${J1C:-0}" 2>&1; cat "$FLEET_CONF_DIR/diskguard/window-reap.log" 2>/dev/null)"
-ok "CLOSE: kill-window → the disowned job and its child are gone"
+st_pass "CLOSE: kill-window → the disowned job and its child are gone"
 grep -Eq "reaped $J1 worktree cwd=$WT1 " "$FLEET_CONF_DIR/diskguard/window-reap.log" 2>/dev/null \
-  || fail "CLOSE: the reap was not logged" "$(cat "$FLEET_CONF_DIR/diskguard/window-reap.log" 2>/dev/null)"
-ok "CLOSE: the reap is logged in diskguard/window-reap.log"
+  || st_fail "CLOSE: the reap was not logged" "$(cat "$FLEET_CONF_DIR/diskguard/window-reap.log" 2>/dev/null)"
+st_pass "CLOSE: the reap is logged in diskguard/window-reap.log"
 
 sleep 7   # let the whole schedule run out
-alive "$J2" && alive "$W2PANE" || fail "NEIGHBOR: the window beside the closed one lost a process"
-ok "NEIGHBOR: the open window's pane and its own disowned job survive"
+alive "$J2" && alive "$W2PANE" || st_fail "NEIGHBOR: the window beside the closed one lost a process"
+st_pass "NEIGHBOR: the open window's pane and its own disowned job survive"
 
-alive "$J3" || fail "SCRATCHPAD: w3's job died while w3 was open"
+alive "$J3" || st_fail "SCRATCHPAD: w3's job died while w3 was open"
 T kill-window -t wr:w3
-wait_gone 15 "$J3" "${J3C:-$J3}" || fail "SCRATCHPAD: w3's scratchpad orphan survived its window"
-ok "SCRATCHPAD: an orphan in the closed window's session scratchpad is reaped"
-alive "$P_PLAIN" || fail "SCOPE: the plain-dir orphan died in a hook sweep"
+wait_gone 15 "$J3" "${J3C:-$J3}" || st_fail "SCRATCHPAD: w3's scratchpad orphan survived its window"
+st_pass "SCRATCHPAD: an orphan in the closed window's session scratchpad is reaped"
+alive "$P_PLAIN" || st_fail "SCOPE: the plain-dir orphan died in a hook sweep"
 
 printf 'PASS: window-reap selftest (%d checks)\n' "$pass"

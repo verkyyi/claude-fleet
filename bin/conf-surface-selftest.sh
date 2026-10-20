@@ -16,6 +16,7 @@
 # Selftests are excluded from the scan on both sides: a test may set any name.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$BIN/.."
 EX="$ROOT/conf/fleet.conf.reference"
 WL="$ROOT/conf/fleet-env-internal.list"
@@ -25,8 +26,7 @@ fail() { printf 'conf-surface FAIL: %s\n' "$1" >&2; exit 1; }
 [ -f "$EX" ] || fail "no conf/fleet.conf.reference at $EX"
 [ -f "$WL" ] || fail "no conf/fleet-env-internal.list at $WL"
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/conf-surface.XXXXXX") || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/conf-surface.XXXXXX"
 
 # The scanned scripts: bin/ + hooks/, minus selftests. -L follows the shadow
 # root's symlinked bin/ (run-selftests.sh), which holds links, not files.

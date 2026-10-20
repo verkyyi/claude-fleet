@@ -24,6 +24,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-view-id selftest: python3 absent — SKIP'; exit 0; }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fvid-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -31,10 +32,9 @@ export FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_U
 unset NO_COLOR FLEET_COLOR FLEET_GLYPHS FLEET_ID_DIR
 mkdir -p "$WORK/conf"
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 pass() { echo "ok   $*"; }
 
-python3 - "$BIN" <<'PY' || fail "ID column"
+python3 - "$BIN" <<'PY' || st_fail "ID column"
 import importlib.util, json, os, re, sys, time
 B = sys.argv[1]
 sys.path.insert(0, B)

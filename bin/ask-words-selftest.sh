@@ -19,6 +19,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'ask-words selftest: python3 absent — SKIP'; exit 0; }
@@ -38,8 +39,7 @@ printf '%s\tacme-app\tacme/app\n' "$S" > "$G/sessmap"
 US=$'\x1f'
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
+eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
 # fld <rows> <label> <k>: field k of the row labelled <label>, `-` when it has fewer
 fld() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" -v k="$3" '$4 == n { print (NF >= k ? $k : "-") }'; }
@@ -53,7 +53,7 @@ B64=$(printf '%s' "$Q" | base64 | tr -d '\n')
 SIDE=''
 if [ -n "$REAL_TMUX" ]; then
   T() { "$REAL_TMUX" -L "$S" "$@"; }
-  T -f /dev/null new-session -d -s "$S" -n home 'sleep 600' || fail "A: could not start the isolated server"
+  T -f /dev/null new-session -d -s "$S" -n home 'sleep 600' || st_fail "A: could not start the isolated server"
   T new-window -d -t "=$S:" -n asking 'sleep 600'
   T new-window -d -t "=$S:" -n login 'sleep 600'
   T new-window -d -t "=$S:" -n busy 'sleep 600'
@@ -110,7 +110,7 @@ nodes = [dict(machine_name="mac-d.local", availability="online", sessions=4, obs
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 PY
 export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mac-d=mac-a"
-bash "$HUBS" --refresh 2>"$WORK/err" || fail "C: --refresh failed" "$(cat "$WORK/err")"
+bash "$HUBS" --refresh 2>"$WORK/err" || st_fail "C: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
 crow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { print NF "|" $21 "|" $27 "|" $28 }'; }
 eq "C: the agent's own report wins over the hook's words" "28||question|程序自报的话" "$(crow issue-31)"

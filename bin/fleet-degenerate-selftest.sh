@@ -20,6 +20,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 SPINNER="$BIN/tmux-spinner.sh"
 command -v tmux >/dev/null 2>&1 || { echo 'selftest: tmux not installed — SKIP' >&2; exit 0; }
@@ -35,9 +36,8 @@ trap 'tmux -L "$LBL" kill-server 2>/dev/null; rm -rf "$WORK"' EXIT
 TM() { tmux -L "$LBL" "$@"; }
 
 FAIL=0 CHECKS=0
-ok()   { CHECKS=$((CHECKS + 1)); }
 fail() { CHECKS=$((CHECKS + 1)); FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '      %s\n' "$2" >&2; }
-check() { if eval "$1"; then ok; else fail "$2" "${3:-}"; fi; }
+check() { if eval "$1"; then st_count; else fail "$2" "${3:-}"; fi; }
 
 # --- A: the detector ------------------------------------------------------------
 det() { bash "$BIN/fleet-degenerate.sh" --detect >/dev/null 2>&1; }

@@ -18,14 +18,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SPAWN="$BIN/dash-issue-session.sh"
 [ -x "$SPAWN" ] || { echo "selftest: $SPAWN missing/not executable" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/wprompt-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/wprompt-selftest.XXXXXX"
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/dash"
@@ -116,7 +115,7 @@ stamped && fail "A FLEET_SEED_WORDS=0 must stamp no @seed_words" "$(cat "$WORK/n
 case "$(seed)" in "$FLOW"*) ;; *) fail "A no words and no title: the flow alone" "$(seed)" ;; esac
 stamped && fail "A no words: no @seed_words" "$(cat "$WORK/newwin")"
 has '/fleet-' && fail "A no claim command anywhere (#4898)" "$(seed)"
-ok "A the first turn is the issue's words + @seed_words; off / no words = the flow as words"
+st_pass "A the first turn is the issue's words + @seed_words; off / no words = the flow as words"
 
 # ===== SEED W: --words-file — the person's words, verbatim (issue #3331) =======
 printf '给 hub 加一个 /healthz\n\n要返回 "ok"，别用 $HOME' > "$WORK/words.txt"
@@ -130,7 +129,7 @@ printf 'do it' > "$WORK/words.txt"
 : > "$WORK/newwin"; run_spawn 234 --words-file "$WORK/words.txt" --agent codex
 case "$(seed)" in "do it"*"$FLOW"*) ;; *) fail "W a Codex worker: the words, then the flow as words" "$(seed)" ;; esac
 stamped && fail "W a Codex worker gets no @seed_words" "$(cat "$WORK/newwin")"
-ok "W --words-file is the first turn verbatim; Codex gets the words + the flow"
+st_pass "W --words-file is the first turn verbatim; Codex gets the words + the flow"
 
 # ===== SEED B: the seed is STABLE under FLEET_WORKER_PROMPT (body left the seed) =
 FLEET_WORKER_PROMPT='Follow CONTRIBUTING and add coverage' run_spawn 234
@@ -138,7 +137,7 @@ FLEET_WORKER_PROMPT='Follow CONTRIBUTING and add coverage' run_spawn 234
   || fail "B FLEET_WORKER_PROMPT must NOT change the seed — the directive rides the brief" "$(seed)"
 FLEET_WORKER_PROMPT_FILE="$WORK/whatever.txt" FLEET_SEED_WORDS=0 run_spawn 234
 has 'Follow CONTRIBUTING' && fail "B FLEET_WORKER_PROMPT_FILE must NOT change the seed either" "$(seed)"
-ok "B the seed is stable regardless of the per-fleet body override"
+st_pass "B the seed is stable regardless of the per-fleet body override"
 
 # ===== SEED C: the collapsed seed drops the retired paragraph + retired skills ==
 run_spawn 234
@@ -152,7 +151,7 @@ for gone in 'Work GitHub issue' 'To finish:' 'arm GitHub auto-merge' \
   ! has "$gone" || fail "C retired seed text '$gone' leaked back into the collapsed seed" "$(seed)"
 done
 done
-ok "C the collapsed seed carries none of the retired paragraph pieces or skills"
+st_pass "C the collapsed seed carries none of the retired paragraph pieces or skills"
 
 # ===== SEED D: --agent rides the launch command, never the seed (issue #547) ====
 # A worker launch names the agent file it starts as (`--as fleet-worker`, issue
@@ -169,7 +168,7 @@ grep -q -- '--agent claude' "$WORK/newwin" || fail "D a default spawn freezes Cl
 : > "$WORK/newwin"; run_spawn 234 --agent=gemini
 [ ! -s "$WORK/newwin" ] || fail "D an unknown --agent must open nothing" "$(cat "$WORK/newwin")"
 grep -q 'unknown --agent' "$WORK/spawn.err" || fail "D an unknown --agent should be reported on stderr" "$(cat "$WORK/spawn.err")"
-ok "D --agent codex rides the launch command; default is frozen; unknown is refused (#4392)"
+st_pass "D --agent codex rides the launch command; default is frozen; unknown is refused (#4392)"
 
 # ===== SEED R: a PARKED session's return (--resume + --seed-file, issue #2671) ===
 # The same conversation (`--resume <sid>` between the launcher and the seed) and
@@ -194,7 +193,7 @@ sed 's/ --as fleet-worker//g' "$WORK/newwin" | grep -qF -- "fleet-session-wrap.s
 : > "$WORK/newwin"
 CLAUDE_PROJECTS_DIR="$WORK/projects" run_spawn 234 --resume "$SID" --seed-file "$WORK/park.seed" --agent codex
 grep -q -- '--resume' "$WORK/newwin" && fail "R a Codex return carries no Claude --resume" "$(cat "$WORK/newwin")"
-ok "R a parked session comes back on the same conversation with its own first turn (#2671)"
+st_pass "R a parked session comes back on the same conversation with its own first turn (#2671)"
 
 # ===== BODY: fleet_worker_prompt_body (the per-fleet directive the brief prints)
 # bin/fleet-brief.sh calls this at runtime instead of the spawn baking it into
@@ -206,23 +205,23 @@ unset FLEET_WORKER_PROMPT FLEET_WORKER_PROMPT_FILE
 # D: default (no override) is the built-in instruction, verbatim.
 [ "$(fleet_worker_prompt_body 234 acme/widgets)" = 'Implement and verify per the repo conventions' ] \
   || fail "D default body should be the built-in instruction" "$(fleet_worker_prompt_body 234 acme/widgets)"
-ok "D fleet_worker_prompt_body default is the built-in instruction"
+st_pass "D fleet_worker_prompt_body default is the built-in instruction"
 
 # E: FLEET_WORKER_PROMPT replaces the body.
 got=$(FLEET_WORKER_PROMPT='Follow CONTRIBUTING and add coverage' fleet_worker_prompt_body 234 acme/widgets)
 [ "$got" = 'Follow CONTRIBUTING and add coverage' ] \
   || fail "E FLEET_WORKER_PROMPT should replace the default body" "$got"
-ok "E FLEET_WORKER_PROMPT replaces the default body"
+st_pass "E FLEET_WORKER_PROMPT replaces the default body"
 
 # F: a trailing sentence-ender is stripped (so it flows cleanly wherever it's woven).
 got=$(FLEET_WORKER_PROMPT='Do the thing.' fleet_worker_prompt_body 234 acme/widgets)
 [ "$got" = 'Do the thing' ] || fail "F a trailing period should be stripped" "$got"
-ok "F a trailing sentence-ender in the override is stripped"
+st_pass "F a trailing sentence-ender in the override is stripped"
 
 # G: {issue}/{repo} placeholders are substituted.
 got=$(FLEET_WORKER_PROMPT='Handle {issue} in {repo}' fleet_worker_prompt_body 234 acme/widgets)
 [ "$got" = 'Handle 234 in acme/widgets' ] || fail "G {issue}/{repo} were not substituted" "$got"
-ok "G {issue}/{repo} placeholders are substituted"
+st_pass "G {issue}/{repo} placeholders are substituted"
 
 # H: FLEET_WORKER_PROMPT_FILE wins over the inline value and carries multi-line
 #    content; an unreadable file warns on stderr and falls back to the default.
@@ -237,7 +236,7 @@ got=$(FLEET_WORKER_PROMPT_FILE="$WORK/nope.txt" fleet_worker_prompt_body 234 acm
   || fail "H an unreadable prompt file should fall back to the default body" "$got"
 grep -q 'worker prompt file not readable' "$WORK/body.err" \
   || fail "H an unreadable prompt file should warn on stderr" "$(cat "$WORK/body.err")"
-ok "H prompt FILE wins + is multi-line; an unreadable file warns and falls back"
+st_pass "H prompt FILE wins + is multi-line; an unreadable file warns and falls back"
 
 # I: FLEET_WORKER_PROMPT="@<path>" is the one-key form of the retired _FILE twin
 #    (issue #1101): same file read, same subst; an unreadable @path warns and
@@ -255,7 +254,7 @@ printf 'legacy file body\n' > "$WORK/legacy.txt"
 got=$(FLEET_WORKER_PROMPT="@$WORK/tmpl.txt" FLEET_WORKER_PROMPT_FILE="$WORK/legacy.txt" \
         fleet_worker_prompt_body 234 acme/widgets)
 [ "$got" = 'legacy file body' ] || fail "I the retired _FILE key must still win when set" "$got"
-ok "I @path form reads the file; unreadable → default; retired _FILE still honored"
+st_pass "I @path form reads the file; unreadable → default; retired _FILE still honored"
 
 printf '\nselftest OK: %s assertions passed (the words seed + per-fleet body)\n' "$pass"
 exit 0

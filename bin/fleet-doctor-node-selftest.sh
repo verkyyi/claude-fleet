@@ -25,6 +25,7 @@
 # tmux. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 for f in fleet-doctor.sh fleet-account.sh fleet_iso.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-hub-node.sh fleet-daemon-lib.sh fleet-conf.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
@@ -47,9 +48,8 @@ unset CCQUOTA_FLEET CCQUOTA_TOKEN CCQUOTA_HUB_URL
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- node line(s) ---\n%s\n' "${2:-(none)}" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS+1)); }
-contains() { case "$2" in *"$3"*) ok ;; *) fail "$1 — lacks [$3]" "$2" ;; esac; }
-not_contains() { case "$2" in *"$3"*) fail "$1 — carries [$3]" "$2" ;; *) ok ;; esac; }
+contains() { case "$2" in *"$3"*) st_count ;; *) fail "$1 — lacks [$3]" "$2" ;; esac; }
+not_contains() { case "$2" in *"$3"*) fail "$1 — carries [$3]" "$2" ;; *) st_count ;; esac; }
 # node_lines [CCQUOTA_FLEET=…] [CCQUOTA_TOKEN=…] → the doctor's `承载` line(s)
 # only; the rest of the doctor is the host's business. NOCCQ=1 = no ccquota on PATH.
 node_lines() {
@@ -157,7 +157,7 @@ trust_lines() {
 rm -f "$WORK/conf/fleets/sessA/conf"; printf 'FLEET_REPO="acme/widgets"\n' > "$WORK/conf/fleets/sessA/conf"
 printf 'CCQUOTA_HUB_URL=https://hub.test\nCCQUOTA_TOKEN=fn_abc\n' > "$NE"; chmod 600 "$NE"
 l=$(trust_lines CCQUOTA_FLEET=1)
-[ -z "$l" ] && ok || fail "TRUST: a row without fleet-node-trust.sh" "$l"
+[ -z "$l" ] && st_count || fail "TRUST: a row without fleet-node-trust.sh" "$l"
 cp "$BIN/fleet-node-trust.sh" "$WORK/bin/"; chmod +x "$WORK/bin/fleet-node-trust.sh"
 cat > "$WORK/trustcurl" <<'FAKE'
 #!/bin/bash
@@ -180,7 +180,7 @@ l=$(trust_lines CCQUOTA_FLEET=1 TRUST_RC=7)
 contains "TRUST: hub down → INFO" "$l" "INFO  可信"
 not_contains "TRUST: the token's value is never printed" "$l" "fn_abc"
 l=$(trust_lines TRUST_WORD=trusted)
-[ -z "$l" ] && ok || fail "TRUST: a row with the hub off" "$l"
+[ -z "$l" ] && st_count || fail "TRUST: a row with the hub off" "$l"
 }
 
 lane_4() {
@@ -207,7 +207,7 @@ FAKE
 chmod +x "$WORK/computecurl"
 printf 'CCQUOTA_HUB_URL=https://hub.test\nCCQUOTA_TOKEN=fn_abc\nCCQUOTA_FLEET_COMPUTE=0\n' > "$NE"; chmod 600 "$NE"
 l=$(compute_lines CCQUOTA_FLEET=1 COMPUTE_OFF=1 "COMPUTE_WHY=compute off (只协调: CCQUOTA_FLEET_COMPUTE=0)")
-case "$l" in *"WARN  compute"*|*"INFO  compute"*) ok ;; *) fail "COMPUTE: off is not a WARN / INFO" "$l" ;; esac
+case "$l" in *"WARN  compute"*|*"INFO  compute"*) st_count ;; *) fail "COMPUTE: off is not a WARN / INFO" "$l" ;; esac
 contains "COMPUTE: off names the machine and login" "$l" "m9/$(id -un) · 只协调"
 contains "COMPUTE: off says how to open it" "$l" "fleet host on（即 node.env CCQUOTA_FLEET_COMPUTE=1）"
 contains "COMPUTE: off names the team policy" "$l" "fleet.compute_auto"
@@ -224,7 +224,7 @@ printf 'CCQUOTA_HUB_URL=https://hub.test\nCCQUOTA_TOKEN=fn_abc\nCCQUOTA_FLEET_CO
 l=$(compute_lines CCQUOTA_FLEET=1 TRUST_RC=7)
 contains "COMPUTE: hub down, node.env 0 → still says it" "$l" "CCQUOTA_FLEET_COMPUTE=0：只协调"
 l=$(compute_lines COMPUTE_OFF=1)
-[ -z "$l" ] && ok || fail "COMPUTE: a row with the hub off" "$l"
+[ -z "$l" ] && st_count || fail "COMPUTE: a row with the hub off" "$l"
 }
 
 for n in 1 2 3 4; do

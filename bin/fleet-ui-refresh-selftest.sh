@@ -25,10 +25,10 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SUT="$BIN/fleet-ui-refresh.sh"
 [ -f "$SUT" ] || { printf 'selftest: missing %s\n' "$SUT" >&2; exit 2; }
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/ui-refresh-selftest.XXXXXX")" || exit 2
 
@@ -51,7 +51,6 @@ trap cleanup EXIT
 # so cleanup reaps the isolated servers instead of leaking them (issue #152).
 trap 'exit 130' INT TERM HUP
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 # --- two fleets, each its own server on its own socket ------------------------
 # The session's first window runs a long-lived sleep so the server survives a
@@ -60,7 +59,7 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 # can prove the refresh hits ONLY the dash pane.
 for f in fleetA fleetB; do
   tmux -L "$f" new-session -d -s "$f" -x 200 -y 50 'sleep 300' 2>/dev/null \
-    || fail "could not start isolated tmux server for $f"
+    || st_fail "could not start isolated tmux server for $f"
   # a @dash=1 pane (its own window running sleep so it survives until respawn)
   dwin=$(tmux -L "$f" new-window -d -P -F '#{pane_id}' -t "$f:" -n dashwin 'sleep 300')
   tmux -L "$f" set-option -p -t "$dwin" @dash 1 2>/dev/null
@@ -72,8 +71,8 @@ done
 # (the dash went with issue #4902 — fleet-ui-refresh.sh still accepts it)
 dpane=$(tmux -L fleetA list-panes -s -t fleetA -F '#{pane_id} #{@dash}' | awk '$2==1{print $1; exit}')
 dpid=$(tmux -L fleetA display-message -p -t "$dpane" '#{pane_pid}')
-bash "$SUT" --all --dash >/dev/null 2>&1 && fail "--dash alone (nothing to do) should be a usage error"
-[ "$(tmux -L fleetA display-message -p -t "$dpane" '#{pane_pid}')" = "$dpid" ] || fail "--dash respawned a pane"
+bash "$SUT" --all --dash >/dev/null 2>&1 && st_fail "--dash alone (nothing to do) should be a usage error"
+[ "$(tmux -L fleetA display-message -p -t "$dpane" '#{pane_pid}')" = "$dpid" ] || st_fail "--dash respawned a pane"
 
 # --- 2. --all --conf unbinds a REMOVED bind on BOTH servers -------------------
 # Bind a key on each server, then hand the helper a before/after conf pair where the
@@ -86,36 +85,36 @@ printf 'bind Q display-message "gone soon"\n' > "$before"
 for f in fleetA fleetB; do
   tmux -L "$f" bind-key Q display-message "hi" 2>/dev/null
   tmux -L "$f" list-keys -T prefix 2>/dev/null | grep -q ' Q ' \
-    || fail "$f: precondition — bind Q should be present before reload"
+    || st_fail "$f: precondition — bind Q should be present before reload"
 done
 
 out=$(bash "$SUT" --all --dash --conf "$before" "$after" "$tmconf" 2>&1) \
-  || fail "--all --dash --conf exited non-zero: $out"
-[ "$(tmux -L fleetA display-message -p -t "$dpane" '#{pane_pid}')" = "$dpid" ] || fail "--dash --conf respawned a pane"
+  || st_fail "--all --dash --conf exited non-zero: $out"
+[ "$(tmux -L fleetA display-message -p -t "$dpane" '#{pane_pid}')" = "$dpid" ] || st_fail "--dash --conf respawned a pane"
 for f in fleetA fleetB; do
   tmux -L "$f" list-keys -T prefix 2>/dev/null | grep -q ' Q ' \
-    && fail "$f: bind Q should have been unbound by the conf fan-out (issue #248)
+    && st_fail "$f: bind Q should have been unbound by the conf fan-out (issue #248)
 out: $out"
 done
 printf '%s\n' "$out" | grep -q 'conf reloaded: 2' \
-  || fail "summary should report conf reloaded on 2 fleets — got: $out"
+  || st_fail "summary should report conf reloaded on 2 fleets — got: $out"
 
 # --- 3. --dry-run names both fleets and touches nothing ----------------------
 # Re-bind Q on both, then dry-run: it must NOT unbind (Q survives) but must still
 # name both fleets in its output.
 for f in fleetA fleetB; do tmux -L "$f" bind-key Q display-message "hi" 2>/dev/null; done
 out=$(bash "$SUT" --all --conf "$before" "$after" "$tmconf" --dry-run 2>&1) \
-  || fail "--dry-run exited non-zero: $out"
+  || st_fail "--dry-run exited non-zero: $out"
 for f in fleetA fleetB; do
   tmux -L "$f" list-keys -T prefix 2>/dev/null | grep -q ' Q ' \
-    || fail "$f: --dry-run must NOT unbind Q"
-  printf '%s\n' "$out" | grep -q "\[$f\]" || fail "--dry-run should name $f — got: $out"
+    || st_fail "$f: --dry-run must NOT unbind Q"
+  printf '%s\n' "$out" | grep -q "\[$f\]" || st_fail "--dry-run should name $f — got: $out"
 done
-printf '%s\n' "$out" | grep -q '(dry-run)' || fail "--dry-run summary should be tagged — got: $out"
+printf '%s\n' "$out" | grep -q '(dry-run)' || st_fail "--dry-run summary should be tagged — got: $out"
 
 # --- 4. usage errors exit non-zero -------------------------------------------
-bash "$SUT" --dash >/dev/null 2>&1 && fail "missing --all should be a usage error"
-bash "$SUT" --all  >/dev/null 2>&1 && fail "no --conf should be a usage error"
+bash "$SUT" --dash >/dev/null 2>&1 && st_fail "missing --all should be a usage error"
+bash "$SUT" --all  >/dev/null 2>&1 && st_fail "no --conf should be a usage error"
 
 printf 'selftest PASS: fleet-ui-refresh --all fans the conf reload over every live fleet (issue #248); --dash is a no-op\n'
 exit 0

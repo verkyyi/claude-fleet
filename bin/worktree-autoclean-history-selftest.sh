@@ -27,6 +27,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/worktree-autoclean.sh"
 LIB="$BIN/fleet-lib.sh"
@@ -34,14 +35,12 @@ HIST="$BIN/fleet-history.sh"
 for f in "$SRC" "$LIB" "$HIST"; do [ -f "$f" ] || { echo "selftest: $f missing" >&2; exit 2; }; done
 command -v git >/dev/null 2>&1 || { echo "selftest: git absent — SKIP" >&2; exit 0; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/wac-history.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/wac-history.XXXXXX"
 # Physical path (macOS /var → /private/var) so the paths git reports match the ones
 # we encode into transcript-dir names.
 WORK="$(cd "$WORK" && pwd -P)"
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 # worktree path → transcript-dir under CLAUDE_PROJECTS_DIR, encoded the way Claude
@@ -151,7 +150,7 @@ printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-902 ' || fail "zero-commit scratc
 [ -d "$WT500" ] || fail "dry-run must not remove the issue-500 worktree"
 [ -d "$WT600" ] || fail "dry-run must not remove the issue-600 worktree"
 [ -d "$SWT900" ] || fail "dry-run must not remove the scratch-900 worktree"
-ok "dry-run previews only — no history row written, no worktree removed"
+st_pass "dry-run previews only — no history row written, no worktree removed"
 
 # ================= PART 0b: a merged worktree whose issue is OPEN is KEPT =======
 # Issue #1156: a branch issue-<N> merging (a side-fix PR) is not task #N done. With
@@ -166,7 +165,7 @@ git -C "$BASE" show-ref --verify -q refs/heads/issue-500 || fail "issue-500 bran
 awk -F'\t' '$2==500 || $2==600 {found=1} END{exit !found}' "$LEDGER" \
   && fail "a held worktree must not get a disposal row" "$(cat "$LEDGER")"
 grep -q 'issue close' "$WORK/ghlog" && fail "the janitor must never close an issue" "$(cat "$WORK/ghlog")"
-ok "merged-PR/ancestor issue worktrees with the issue OPEN → KEPT, no issue close"
+st_pass "merged-PR/ancestor issue worktrees with the issue OPEN → KEPT, no issue close"
 
 # ================= PART 1: real reap writes the row, THEN removes ==============
 run_wac >/dev/null
@@ -177,7 +176,7 @@ git -C "$BASE" show-ref --verify -q refs/heads/scratch-902 || fail "zero-commit 
 grep -q 'issue close 601' "$WORK/ghlog" && fail "janitor must not close zero-commit issue"
 awk -F'\t' '$2==601 || $2=="scratch-902" {found=1} END{exit !found}' "$LEDGER" \
   && fail "kept zero-commit worktrees must not get disposal history rows"
-ok "zero-commit issue/scratch kept, no issue close or disposal history"
+st_pass "zero-commit issue/scratch kept, no issue close or disposal history"
 
 # merged-PR reap → a landed row for #500 carrying the resolved PR (5500) + session id.
 land_row=$(awk -F'\t' '$2==500 && $10=="landed"' "$LEDGER")
@@ -186,14 +185,14 @@ lp=$(printf '%s' "$land_row" | awk -F'\t' '{print $4}')
 [ "$lp" = 5500 ] || fail "landed #500 row must carry the branch's resolved PR 5500 (got [$lp])" "$land_row"
 ls=$(printf '%s' "$land_row" | awk -F'\t' '{print $8}')
 [ "$ls" = sess-500 ] || fail "landed #500 row must carry the surviving session id (got [$ls])" "$land_row"
-ok "merged-PR reap → landed row for #500 (PR resolved from branch, session indexed)"
+st_pass "merged-PR reap → landed row for #500 (PR resolved from branch, session indexed)"
 
 # ancestor reap → a closed-unlanded row for #600 (indexed/resumable, no PR/sha).
 cu_row=$(awk -F'\t' '$2==600 && $10=="closed-unlanded"' "$LEDGER")
 [ -n "$cu_row" ] || fail "clean-ancestor reap must leave a 'closed-unlanded' row for #600" "$(cat "$LEDGER")"
 cp=$(printf '%s' "$cu_row" | awk -F'\t' '{print $4}')
 [ "$cp" = "-" ] || fail "closed-unlanded #600 row must have no PR (got [$cp])" "$cu_row"
-ok "clean-ancestor reap → closed-unlanded row for #600 (indexed, no PR)"
+st_pass "clean-ancestor reap → closed-unlanded row for #600 (indexed, no PR)"
 
 # scratch with a HUMAN transcript (#466 + the conversation-keep rule) → a
 # closed-unlanded row keyed by the slug, with the HEAD sha — but the worktree is
@@ -206,7 +205,7 @@ ss=$(printf '%s' "$sc_row" | awk -F'\t' '{print $8}')
 ssha=$(printf '%s' "$sc_row" | awk -F'\t' '{print $5}')
 case "$ssha" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
   *) fail "the scratch row must carry the worktree HEAD sha (got [$ssha])" "$sc_row" ;; esac
-ok "conversation scratch → closed-unlanded row keyed scratch-900, with the sha resume rebuilds from"
+st_pass "conversation scratch → closed-unlanded row keyed scratch-900, with the sha resume rebuilds from"
 
 # the rows were written BEFORE removal: both ISSUE worktrees + branches are now
 # gone; the conversation scratch worktree is KEPT (surfaced for a deliberate ⌃x).
@@ -216,7 +215,7 @@ grep -q 'issue close' "$WORK/ghlog" && fail "prune of a merged+CLOSED issue must
 [ -d "$SWT900" ] || fail "the conversation scratch-900 worktree must be KEPT (a session ran in it)"
 git -C "$BASE" show-ref --verify -q refs/heads/issue-500 && fail "issue-500 branch should be deleted"
 git -C "$BASE" show-ref --verify -q refs/heads/issue-600 && fail "issue-600 branch should be deleted"
-ok "issue worktrees + branches reaped (record BEFORE remove); conversation scratch kept + indexed"
+st_pass "issue worktrees + branches reaped (record BEFORE remove); conversation scratch kept + indexed"
 
 # ================= PART 2: fleet_reap_record is idempotent =====================
 # BOTH reapers (fleet-cleanup.sh + worktree-autoclean.sh) can record the SAME reap
@@ -248,7 +247,7 @@ n3=$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')
 fleet_reap_record "unmerged" "fake/repo" "$BASE" "" "$WORK/plain-dir" "" "" "" "feature-x"
 [ "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')" = "$n3" ] \
   || fail "fleet_reap_record: no issue and no scratch identity must record nothing"
-ok "fleet_reap_record: PR resolved, idempotent, keys a scratch branch, no-ops with no key"
+st_pass "fleet_reap_record: PR resolved, idempotent, keys a scratch branch, no-ops with no key"
 
 printf '\nselftest OK: %s assertions passed (worktree-autoclean record-before-remove, #384 + scratch #466)\n' "$pass"
 exit 0

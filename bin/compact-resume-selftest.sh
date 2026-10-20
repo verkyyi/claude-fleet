@@ -30,6 +30,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 FILES="refocus-hook.sh fleet-compact-resume.sh fleet-hook-conf.sh fleet-lib.sh fleet-client-core.sh fleet-lang.sh fleet-ladder-log.sh"
 for f in $FILES; do
@@ -37,8 +38,7 @@ for f in $FILES; do
 done
 [ -f "$BIN/../commands/fleet-compact-resume.md" ] || { printf 'selftest: commands/fleet-compact-resume.md not found\n' >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/compact-resume-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/compact-resume-selftest.XXXXXX"
 mkdir -p "$WORK/fakepath" "$WORK/inst/bin" "$WORK/conf/logs" "$WORK/conf/fleets/s1" "$WORK/tmp" \
   "$WORK/widgets-issue-12" "$WORK/widgets-scratch-3"
 for f in $FILES; do cp "$BIN/$f" "$WORK/inst/bin/$f"; done
@@ -117,7 +117,6 @@ else:
 FAKE
 chmod +x "$WORK/fakepath/tmux"
 
-ok()   { printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2
          printf -- '--- opts ---\n' >&2; cat "$OPTS" >&2 2>/dev/null
          printf -- '--- inbox ---\n' >&2; cat "$INBOX" >&2 2>/dev/null
@@ -165,19 +164,19 @@ wait_resumed
   || fail "MOD: @compact_resume_ts must cover @compact_restored_ts"
 r=$(awk -F'\t' '$3 == "restored"' "$LOG")
 [ "$(printf '%s' "$r" | cut -f7)" = - ] || fail "MOD: the restored row must log ctx '-', not the stale 72" "$r"
-ok "MOD: SessionStart(compact) after OUR /compact → one /fleet-compact-resume via the inbox, row 'resumed mod'"
+st_ok "MOD: SessionStart(compact) after OUR /compact → one /fleet-compact-resume via the inbox, row 'resumed mod'"
 
 # ===== DUP: a second sender for the same restore =================================
 : > "$INBOX"
 penv bash "$RESUME" '%9'
 [ -s "$INBOX" ] && fail "DUP: a second sender must not post again"
 [ "$(reason)" = skip:dup ] || fail "DUP: want skip:dup, got '$(reason)'"
-ok "DUP: one restore, one resume turn"
+st_ok "DUP: one restore, one resume turn"
 
 # ===== RUNNING: rc 6 ⇒ taken, never typed ========================================
 reset; SC_RC=6 compact_start; SC_RC=6 wait_resumed
 [ "$(reason)" = mod ] && [ ! -s "$SENDLOG" ] || fail "RUNNING: rc 6 must count as delivered and type nothing"
-ok "RUNNING: inbox rc 6 (still running) is delivered — no keystrokes"
+st_ok "RUNNING: inbox rc 6 (still running) is delivered — no keystrokes"
 
 # ===== NO MOD: rc 3 / 4 / 5 ⇒ keystrokes =========================================
 for rc in 3 4 5; do
@@ -187,7 +186,7 @@ for rc in 3 4 5; do
     && sed -n 2p "$SENDLOG" | grep -q -- '-l -- /fleet-compact-resume$' && sed -n 3p "$SENDLOG" | grep -q 'Enter$' \
     || fail "NO MOD rc=$rc: keystrokes must be Escape, the command, Enter — three separate send-keys"
 done
-ok "NO MOD: inbox rc 3/4/5 → Escape · /fleet-compact-resume · Enter, row 'resumed send-keys'"
+st_ok "NO MOD: inbox rc 3/4/5 → Escape · /fleet-compact-resume · Enter, row 'resumed send-keys'"
 
 # ===== SELF-CONTINUED: a turn that started after the restore (issue #1572) =========
 # `working` stamped AFTER the restore: the harness carried on by itself — nothing sent.
@@ -195,7 +194,7 @@ reset @claude_state=working "@claude_state_ts=$(( $(date +%s) + 60 ))"
 compact_start; wait_resumed
 [ "$(reason)" = skip:self-continued ] || fail "SELF: want skip:self-continued, got '$(reason)'"
 [ -s "$INBOX" ] || [ -s "$SENDLOG" ] && fail "SELF: nothing may be sent"
-ok "SELF: a turn stamped after the restore (state working, fresh ts) → nothing sent, skip:self-continued"
+st_ok "SELF: a turn stamped after the restore (state working, fresh ts) → nothing sent, skip:self-continued"
 # …and the same verdict when the turn starts MID-WATCH: a stale `working` is being
 # watched, then a hook edge stamps the pane after the restore.
 reset @claude_state=working "@claude_state_ts=$(( $(date +%s) - 60 ))"
@@ -205,7 +204,7 @@ setopt @claude_state_ts "$(( $(getopt @compact_restored_ts) + 1 ))"
 wait_resumed
 [ "$(reason)" = skip:self-continued ] || fail "SELF mid-watch: want skip:self-continued, got '$(reason)'"
 [ -s "$INBOX" ] || [ -s "$SENDLOG" ] && fail "SELF mid-watch: nothing may be sent"
-ok "SELF mid-watch: a stale working, then a turn after the restore → skip:self-continued, nothing sent"
+st_ok "SELF mid-watch: a stale working, then a turn after the restore → skip:self-continued, nothing sent"
 
 # ===== LATE: a stale working that settles with no turn in between (issue #1572) ====
 # The pane really sat idle under a `working` nobody cleared: when it settles (a Stop,
@@ -224,7 +223,7 @@ wait_resumed
 [ -s "$INBOX" ] && fail "LATE: a second sender must not post again"
 [ "$(reason)" = skip:dup ] || fail "LATE: the second sender must read skip:dup, got '$(reason)'"
 [ "$(resumed)" = 2 ] || fail "LATE: one late row + one dup row, got $(resumed)"
-ok "LATE: a stale working that settles idle with no new turn → one late resume (late:mod), then skip:dup"
+st_ok "LATE: a stale working that settles idle with no new turn → one late resume (late:mod), then skip:dup"
 # no mod: the late resume types the keystrokes, row late:send-keys
 reset @claude_state=working "@claude_state_ts=$(( $(date +%s) - 60 ))"
 SC_RC=3 compact_start; sleep 1
@@ -232,21 +231,21 @@ setopt @claude_state 'done'; setopt @claude_state_ts "$(( $(getopt @compact_rest
 SC_RC=3 wait_resumed; SC_RC=0
 [ "$(reason)" = late:send-keys ] && [ "$(grep -c '' "$SENDLOG")" = 3 ] \
   || fail "LATE no mod: want late:send-keys with Escape · text · Enter, got '$(reason)'"
-ok "LATE no mod: the late resume is typed (late:send-keys)"
+st_ok "LATE no mod: the late resume is typed (late:send-keys)"
 
 # ===== STALE: a stale working that never settles ===================================
 reset @claude_state=working "@claude_state_ts=$(( $(date +%s) - 60 ))"
 RESUME_WATCH=0 compact_start; wait_resumed
 [ "$(reason)" = skip:stale ] || fail "STALE: want skip:stale at the watch bound, got '$(reason)'"
 [ -s "$INBOX" ] || [ -s "$SENDLOG" ] && fail "STALE: nothing may be sent into a pane that cannot be read"
-ok "STALE: a working stamped before the restore that never settles → skip:stale, nothing sent"
+st_ok "STALE: a working stamped before the restore that never settles → skip:stale, nothing sent"
 
 # ===== NATIVE: Claude Code's own compaction ======================================
 reset @compact_stage= @compact_native="$(date +%s)"
 compact_start; sleep 1.5
 [ "$(resumed)" = 0 ] || fail "NATIVE: Claude Code's own compaction carries on by itself — no resumed row"
 [ -s "$INBOX" ] || [ -s "$SENDLOG" ] && fail "NATIVE: nothing may be sent"
-ok "NATIVE: a compaction the fleet did not type spawns no sender"
+st_ok "NATIVE: a compaction the fleet did not type spawns no sender"
 
 # ===== OFF =======================================================================
 reset; printf 'FLEET_COMPACT_RESUME=0\n' >> "$OVERLAY"
@@ -254,7 +253,7 @@ compact_start; sleep 1.5
 [ "$(resumed)" = 0 ] || fail "OFF: FLEET_COMPACT_RESUME=0 must write no row"
 [ -s "$INBOX" ] || [ -s "$SENDLOG" ] && fail "OFF: FLEET_COMPACT_RESUME=0 must send nothing"
 [ "$(getopt @compact_stage)" = restored ] || fail "OFF: the stage still completes"
-ok "OFF: FLEET_COMPACT_RESUME=0 → no action, no row (the stage still completes)"
+st_ok "OFF: FLEET_COMPACT_RESUME=0 → no action, no row (the stage still completes)"
 
 # ===== SKIPS ======================================================================
 for c in 'needs:@claude_state=needs' 'codex:@cc_agent=codex' "transfer:@agent_transfer_pending_until=$(( $(date +%s) + 600 ))"; do
@@ -268,7 +267,7 @@ FAKE_CLIENTS="$(date +%s) @1" RESUME_TIMEOUT=0 compact_start
 wait_resumed
 [ "$(reason)" = skip:typing ] || fail "TYPING: held past the deadline ⇒ skip:typing, got '$(reason)'"
 [ -s "$INBOX" ] || [ -s "$SENDLOG" ] && fail "TYPING: nothing may be sent while the operator types"
-ok "SKIPS: needs / codex / transfer pending / typing hold → nothing sent, one skip row each"
+st_ok "SKIPS: needs / codex / transfer pending / typing hold → nothing sent, one skip row each"
 
 # ===== BRIEF =====================================================================
 reset @compact_stage=restored
@@ -281,6 +280,6 @@ case "$out" in *'[fleet compact-resume] scratch'*'CHECK FIRST'*'next step = draf
   *) fail "BRIEF: a scratch gets its own check line + its map" "$out" ;; esac
 grep -q 'mcp__fleet__brief.*kind: resume' "$BIN/../commands/fleet-compact-resume.md" \
   || fail "BRIEF: the command must call the brief tool with kind: resume (it runs fleet-compact-resume.sh --brief, #1811)"
-ok "BRIEF: --brief restates the worker / scratch check line with the recovery map"
+st_ok "BRIEF: --brief restates the worker / scratch check line with the recovery map"
 
 printf 'compact-resume-selftest: all legs PASS\n'

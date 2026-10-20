@@ -18,6 +18,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'session-tokens selftest: python3 absent — SKIP'; exit 0; }
@@ -37,8 +38,7 @@ printf '%s\tacme-app\tacme/app\n' "$S" > "$G/sessmap"
 US=$'\x1f'
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
+eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
 # fld <rows> <label> <k>: field k of the row labelled <label>, `-` when it has fewer
 fld() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" -v k="$3" '$4 == n { print (NF >= k ? $k : "-") }'; }
@@ -70,7 +70,7 @@ nodes = [dict(machine_name="far3377.local", availability="online", sessions=6, o
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 PY
 export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="far3377=mac-a"
-bash "$HUBS" --refresh 2>"$WORK/err" || fail "A: --refresh failed" "$(cat "$WORK/err")"
+bash "$HUBS" --refresh 2>"$WORK/err" || st_fail "A: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
 crow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { print NF "|" $21 "|" $27 "|" $29 }'; }
 eq "A: tokens alone — field 29, the empty ones before it kept" "29|||1234567" "$(crow issue-41)"
@@ -85,7 +85,7 @@ eq "A: not a number is none" "16|||" "$(crow issue-46)"
 # ============================================================================
 if [ -n "$REAL_TMUX" ]; then
   T() { "$REAL_TMUX" -L "$S" "$@"; }
-  T -f /dev/null new-session -d -s "$S" -n home 'sleep 600' || fail "B: could not start the isolated server"
+  T -f /dev/null new-session -d -s "$S" -n home 'sleep 600' || st_fail "B: could not start the isolated server"
   SOCK=$(T display-message -p '#{socket_path}')
   date +%s > "$G/hub_ok"
   SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
@@ -102,13 +102,13 @@ REC="$WORK/rec.json"
 printf '%s' '{"i":1,"n":2,"state":"working","key":"#41","title":"会话用量","pr":"","node":"mac-a","ctx_left":62,"ctx_band":"ok","ctx_ts":9999999999,"model":"Opus 5.5","effort":"high","tokens_today":1234567}' > "$REC"
 for c in 45 100 160; do
   line=$(FLEET_UI_LANG=zh python3 "$BIN/fleet-topbar.py" fit "$c" "$REC")
-  case "$line" in *"今天 123 万"*) CHECKS=$((CHECKS+1)) ;; *) fail "C: the top line at $c columns says 今天 123 万" "$line" ;; esac
+  case "$line" in *"今天 123 万"*) CHECKS=$((CHECKS+1)) ;; *) st_fail "C: the top line at $c columns says 今天 123 万" "$line" ;; esac
 done
 line=$(FLEET_UI_LANG=en python3 "$BIN/fleet-topbar.py" fit 100 "$REC")
-case "$line" in *"1.2M today"*) CHECKS=$((CHECKS+1)) ;; *) fail "C: en says 1.2M today" "$line" ;; esac
+case "$line" in *"1.2M today"*) CHECKS=$((CHECKS+1)) ;; *) st_fail "C: en says 1.2M today" "$line" ;; esac
 printf '%s' '{"i":1,"n":2,"state":"working","key":"#41","title":"会话用量","pr":"","node":"mac-a","ctx_left":62}' > "$REC"
 line=$(python3 "$BIN/fleet-topbar.py" fit 160 "$REC")
-case "$line" in *今天*) fail "C: no tokens_today, but the line says 今天" "$line" ;; *) CHECKS=$((CHECKS+1)) ;; esac
+case "$line" in *今天*) st_fail "C: no tokens_today, but the line says 今天" "$line" ;; *) CHECKS=$((CHECKS+1)) ;; esac
 out=$(python3 - "$BIN" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])

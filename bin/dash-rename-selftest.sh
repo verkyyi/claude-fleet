@@ -17,18 +17,15 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 REN="$BIN/dash-rename.sh"
 [ -f "$REN" ] || { printf 'selftest: %s missing\n' "$REN" >&2; exit 2; }
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dr-selftest.XXXXXX")" || exit 2
 SOCK="$WORK/tmux.sock"
 mkdir -p "$WORK/bin"
-cat > "$WORK/bin/tmux" <<EOF
-#!/bin/sh
-exec "$REAL_TMUX" -S "$SOCK" "\$@"
-EOF
+st_tmux_socket "$WORK/bin" "$SOCK"
 chmod +x "$WORK/bin/tmux"
 export PATH="$WORK/bin:$PATH" TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
 unset TMUX TMUX_PANE
@@ -38,7 +35,6 @@ trap cleanup EXIT
 trap 'exit 1' INT TERM HUP
 
 fail() { printf 'FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '  got: %s\n' "$2" >&2; exit 1; }
-ok()   { printf 'ok   %s\n' "$1"; }
 
 tmux -f /dev/null new-session -d -s t -n first 'sleep 600' || fail "could not start the isolated tmux server"
 tmux new-window -d -t t: -n second 'sleep 600'
@@ -55,22 +51,22 @@ out=$(bash "$REN" --wid "$W1" "修登录 bug")
 [ "$(name "$W1")" = "修登录 bug" ] || fail "A: $W1 not renamed" "$(name "$W1")"
 [ "$(opt "$W1" @name_manual)" = "修登录 bug" ] || fail "A: @name_manual not stamped" "$(opt "$W1" @name_manual)"
 [ "$(name "$W2")" = second ] || fail "A: another window renamed" "$(name "$W2")"
-ok "A a window id + a name renames that window and stamps @name_manual"
+st_ok "A a window id + a name renames that window and stamps @name_manual"
 [ "$(opt "$W1" @issue)" = 42 ] || fail "B: @issue lost" "$(opt "$W1" @issue)"
-ok "B the @issue binding survives"
+st_ok "B the @issue binding survives"
 
 # --- C ------------------------------------------------------------------------
 bash "$REN" --wid "$W2" ""
 [ "$(name "$W2")" = second ] || fail "C: an empty name renamed" "$(name "$W2")"
 [ -z "$(opt "$W2" @name_manual)" ] || fail "C: an empty name stamped @name_manual"
-ok "C an empty name renames nothing"
+st_ok "C an empty name renames nothing"
 
 # --- D ------------------------------------------------------------------------
 tmux set-option -w -t "$W2" @rename_to "从选项来"
 bash "$REN" --wid "$W2"
 [ "$(name "$W2")" = "从选项来" ] || fail "D: @rename_to not used" "$(name "$W2")"
 [ -z "$(opt "$W2" @rename_to)" ] || fail "D: @rename_to not cleared"
-ok "D no name reads @rename_to, then clears it"
+st_ok "D no name reads @rename_to, then clears it"
 
 # --- E ------------------------------------------------------------------------
 for t in "t:1" "first" "修登录 bug" ""; do
@@ -79,18 +75,18 @@ done
 case " $(tmux list-windows -t t -F '#{window_name}' | tr '\n' ' ') " in
   *" nope "*) fail "E: a non-id target was renamed" "$(tmux list-windows -t t -F '#{window_name}' | tr '\n' ' ')" ;;
 esac
-ok "E a position or a bare name is never a target"
+st_ok "E a position or a bare name is never a target"
 
 # --- F ------------------------------------------------------------------------
 bash "$REN" --wid "$W2" "$(printf 'a\tb')"
 [ "$(name "$W2")" = "a b" ] || fail "F: a tab kept" "$(name "$W2")"
-ok "F a tab in the name becomes a space"
+st_ok "F a tab in the name becomes a space"
 
 # --- G ------------------------------------------------------------------------
 out=$(bash "$REN" "t:1" 2>&1); rc=$?
 [ "$rc" = 0 ] && [ -z "$out" ] || fail "G: a call without --wid acted (rc $rc)" "$out"
 [ "$(name "$W2")" = "a b" ] || fail "G: renamed without --wid"
-ok "G no --wid does nothing"
+st_ok "G no --wid does nothing"
 
 printf 'PASS: dash-rename.sh --wid renames by id only\n'
 exit 0

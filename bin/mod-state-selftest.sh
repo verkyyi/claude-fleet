@@ -19,6 +19,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 # Conf-free shadow root (#1251): fleet.conf is $BIN/..-relative, so a direct run
 # must not read the live install's.
 if [ "${_MODSTATE_SELFTEST_ROOT:-}" != "$BIN" ]; then
@@ -30,14 +31,11 @@ SCS="$BIN/set-claude-state.sh"
 for f in "$SCS" "$BIN/fleet-lib.sh" "$BIN/fleet_loop_mark.py"; do
   [ -f "$f" ] || { printf 'selftest: %s not found\n' "$f" >&2; exit 2; }
 done
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mod-state-selftest.XXXXXX")" || exit 2
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 SOCK="$WORK/tmux.sock"
 mkdir -p "$WORK/bin"
@@ -55,11 +53,11 @@ trap 'exit 130' INT TERM HUP
 export TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf"
 unset FLEET_MOD FLEET_MOD_ALIVE_SECS CLAUDE_CODE_ENTRYPOINT TMUX TMUX_PANE
 
-tmux -f /dev/null new-session -d -s fleet-t -x 140 -y 40 || fail "could not start isolated tmux server"
+tmux -f /dev/null new-session -d -s fleet-t -x 140 -y 40 || st_fail "could not start isolated tmux server"
 ww="$(tmux display-message -p '#{window_id}')"
 pane="$(tmux display-message -p -t "$ww" '#{pane_id}')"
 tmux set-window-option -t "$ww" @issue 1336
-tmux respawn-pane -k -t "$ww" "printf 'recap of the turn\nall done\n'; sleep 300" 2>/dev/null || fail "could not seed the pane"
+tmux respawn-pane -k -t "$ww" "printf 'recap of the turn\nall done\n'; sleep 300" 2>/dev/null || st_fail "could not seed the pane"
 i=0; while [ "$i" -lt 40 ] && [ -z "$(tmux capture-pane -p -t "$ww" | tr -d '[:space:]')" ]; do i=$((i+1)); sleep 0.1; done
 
 wopt()  { tmux show-options -w -t "$ww" -v "$1" 2>/dev/null; }
@@ -69,16 +67,16 @@ now=$(date +%s)
 scs() { TMUX="$SOCK,1,0" TMUX_PANE="$pane" sh "$SCS" "$@" </dev/null; }
 tmux set-window-option -u -t "$ww" @mod_alive
 tmux set-window-option -t "$ww" @claude_state 'done'
-out=$(scs --via mod working); [ "$(wopt @claude_state)/$(wopt @claude_needs)" = working/ ] || fail "VIA-MOD working → [$(wopt @claude_state)/$(wopt @claude_needs)]"
-[ -z "$out" ] || fail "VIA-MOD working printed: $out"
-scs --via mod ask >/dev/null; [ "$(wopt @claude_state)/$(wopt @claude_needs)" = needs/ask ] || fail "VIA-MOD ask → [$(wopt @claude_state)/$(wopt @claude_needs)]"
-scs --via mod working >/dev/null; [ "$(wopt @claude_needs)" = '' ] || fail "VIA-MOD working did not clear the ask subtype"
-scs --via mod 'done' >/dev/null; [ "$(wopt @claude_state)" = 'done' ] || fail "VIA-MOD done → [$(wopt @claude_state)]"
-[ -n "$(wopt @claude_state_ts)" ] || fail "VIA-MOD: no @claude_state_ts stamp"
+out=$(scs --via mod working); [ "$(wopt @claude_state)/$(wopt @claude_needs)" = working/ ] || st_fail "VIA-MOD working → [$(wopt @claude_state)/$(wopt @claude_needs)]"
+[ -z "$out" ] || st_fail "VIA-MOD working printed: $out"
+scs --via mod ask >/dev/null; [ "$(wopt @claude_state)/$(wopt @claude_needs)" = needs/ask ] || st_fail "VIA-MOD ask → [$(wopt @claude_state)/$(wopt @claude_needs)]"
+scs --via mod working >/dev/null; [ "$(wopt @claude_needs)" = '' ] || st_fail "VIA-MOD working did not clear the ask subtype"
+scs --via mod 'done' >/dev/null; [ "$(wopt @claude_state)" = 'done' ] || st_fail "VIA-MOD done → [$(wopt @claude_state)]"
+[ -n "$(wopt @claude_state_ts)" ] || st_fail "VIA-MOD: no @claude_state_ts stamp"
 tmux set-window-option -t "$ww" @loop "kind=wakeup next=$((now + 600)) ttl=600"
-scs --via mod 'done' >/dev/null; [ "$(wopt @claude_state)" = looping ] || fail "VIA-MOD done with a pending @loop → [$(wopt @claude_state)], want looping"
+scs --via mod 'done' >/dev/null; [ "$(wopt @claude_state)" = looping ] || st_fail "VIA-MOD done with a pending @loop → [$(wopt @claude_state)], want looping"
 tmux set-window-option -u -t "$ww" @loop
-ok "VIA-MOD: working / needs+ask / done / looping-on-@loop, written by set-claude-state.sh"
+st_pass "VIA-MOD: working / needs+ask / done / looping-on-@loop, written by set-claude-state.sh"
 
 chmod u+w "$BIN/.." 2>/dev/null   # this test's own shadow, read-only as built (#4668): the conf is planted beside bin/
 # ================================================================ STATE-ONLY
@@ -87,17 +85,17 @@ tmux set-window-option -t "$ww" @ctx_pct 90
 tmux set-window-option -u -t "$ww" @handoff_armed
 hookrun() { ( unset FLEET_SKIP_GLOBAL_CONF _FLEET_GLOBAL_CONF_SOURCED; scs "$@" ); }
 out=$(hookrun --via mod 'done')
-[ -z "$out" ] || fail "STATE-ONLY: --via mod done printed a Stop decision" "$out"
-[ -z "$(wopt @handoff_armed)" ] || fail "STATE-ONLY: --via mod done armed the handoff latch"
+[ -z "$out" ] || st_fail "STATE-ONLY: --via mod done printed a Stop decision" "$out"
+[ -z "$(wopt @handoff_armed)" ] || st_fail "STATE-ONLY: --via mod done armed the handoff latch"
 out=$(hookrun 'done')
-case "$out" in *'"decision":"block"'*) : ;; *) rm -f "$BIN/../fleet.conf"; fail "STATE-ONLY: the hook path did not nudge on the same pane — the assertion above proves nothing" "$out" ;; esac
+case "$out" in *'"decision":"block"'*) : ;; *) rm -f "$BIN/../fleet.conf"; st_fail "STATE-ONLY: the hook path did not nudge on the same pane — the assertion above proves nothing" "$out" ;; esac
 rm -f "$BIN/../fleet.conf"; tmux set-window-option -u -t "$ww" @ctx_pct; tmux set-window-option -u -t "$ww" @handoff_armed
-ok "STATE-ONLY: --via mod done writes the state alone; the Stop hook keeps the handoff decision"
+st_pass "STATE-ONLY: --via mod done writes the state alone; the Stop hook keeps the handoff decision"
 
 # ================================================================ NO-STDIN
 # stdin = a FIFO whose one writer (fd 9 here) stays open and silent: a reader blocks
 # until fd 9 closes. Each leg ends by closing it, so nothing is left waiting.
-mkfifo "$WORK/fifo" || fail "NO-STDIN: mkfifo"
+mkfifo "$WORK/fifo" || st_fail "NO-STDIN: mkfifo"
 stdin_leg() {   # stdin_leg <args…> → 0 when the script returned while stdin was still open
   TMUX="$SOCK,1,0" TMUX_PANE="$pane" sh "$SCS" "$@" <"$WORK/fifo" >/dev/null 2>&1 &
   _p=$!
@@ -108,14 +106,14 @@ stdin_leg() {   # stdin_leg <args…> → 0 when the script returned while stdin
   wait "$_p" 2>/dev/null
   return $(( _alive == 0 ))
 }
-stdin_leg --via mod 'done' || fail "NO-STDIN: --via mod waited on an open stdin"
-stdin_leg 'done' && fail "NO-STDIN: the hook path returned without reading stdin — the leg proves nothing"
-ok "NO-STDIN: --via mod never reads stdin (the hook path does)"
+stdin_leg --via mod 'done' || st_fail "NO-STDIN: --via mod waited on an open stdin"
+stdin_leg 'done' && st_fail "NO-STDIN: the hook path returned without reading stdin — the leg proves nothing"
+st_pass "NO-STDIN: --via mod never reads stdin (the hook path does)"
 
 # ================================================================ STICKY
 tmux set-window-option -t "$ww" @claude_state needs; tmux set-window-option -t "$ww" @claude_needs blocked
 scs --via mod working >/dev/null; scs --via mod 'done' >/dev/null
-[ "$(wopt @claude_state)/$(wopt @claude_needs)" = needs/blocked ] || fail "STICKY: the mod cleared a worker's blocked [$(wopt @claude_state)/$(wopt @claude_needs)]"
-ok "STICKY: needs/blocked survives the mod's working/done"
+[ "$(wopt @claude_state)/$(wopt @claude_needs)" = needs/blocked ] || st_fail "STICKY: the mod cleared a worker's blocked [$(wopt @claude_state)/$(wopt @claude_needs)]"
+st_pass "STICKY: needs/blocked survives the mod's working/done"
 
 printf 'mod-state-selftest: %d passed\n' "$pass"

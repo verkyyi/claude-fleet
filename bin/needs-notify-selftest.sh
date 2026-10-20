@@ -19,6 +19,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'needs-notify selftest: python3 absent — SKIP'; exit 0; }
 REAL_TMUX=$(command -v tmux || true)
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/needs-notify-selftest.XXXXXX")" || exit 2
@@ -31,8 +32,7 @@ export TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf" FLEET_ALLOW_SENDKEYS=1
 G="$WORK/.claude-dash/global"; mkdir -p "$G" "$WORK/conf/global"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
+eq() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
 
 ND="$BIN/fleet_needs_detail.py"
 # ============================================================================
@@ -59,7 +59,7 @@ eq "A: Codex's request params share the rule" "Path?" \
 
 [ -n "$REAL_TMUX" ] || { printf 'needs-notify selftest: PASS (%s checks; tmux absent — B–D skipped)\n' "$CHECKS"; exit 0; }
 T() { "$REAL_TMUX" -L "$L" "$@"; }
-T -f /dev/null new-session -d -s "$L" -n home 'sleep 600' || fail "could not start the isolated server"
+T -f /dev/null new-session -d -s "$L" -n home 'sleep 600' || st_fail "could not start the isolated server"
 SOCK=$(T display-message -p '#{socket_path}')
 PANE=$(T display-message -p -t "=$L:" '#{pane_id}')
 

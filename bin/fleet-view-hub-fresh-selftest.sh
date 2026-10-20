@@ -30,6 +30,7 @@
 # FLEET_HUB_SESSIONS_CMD, tmux a shim with no windows.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-view-hub-fresh: python3 absent — SKIP'; exit 0; }
 LEGS="${1:-ABCDEF}"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/vhfresh.XXXXXX") || exit 2
@@ -41,7 +42,6 @@ cleanup() {
   rm -rf "$WORK"
 }
 trap cleanup EXIT INT TERM
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 pass() { printf 'ok   %s\n' "$1"; }
 
 unset CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_NODE_ALIASES FLEET_HUB_SESSIONS_USER FLEET_HUB_SESSIONS_STALE \
@@ -55,7 +55,7 @@ printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/
 # 看台 v1, grouped onto fleet fl (the registry row: tty · session · kind · since · pid)
 printf '/dev/null\t%s\tthin\t0\t0\n' "$S" > "$WORK/conf/remote-views/v1"
 # tmux: a server with no windows; the network tools refuse (the hub is the seam)
-printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/tmux"
+st_fake_tmux "$WORK/bin"
 for n in curl wget nc ccquota; do printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/$n"; done
 chmod +x "$WORK/bin/"*
 export PATH="$WORK/bin:$PATH"
@@ -94,8 +94,8 @@ stop_loop() {
 # hub_ok 16 minutes old, no loop (its collector stopped)
 frozen() {
   cp "$WORK/before.json" "$WORK/hub.json"
-  bash "$HUBS" --refresh 2>/dev/null || fail "setup: --refresh failed"
-  grep -q "$F/issue-3058" "$G/remote_$S" 2>/dev/null || fail "setup: the far worker is not in the cache" "$(cat "$G/remote_$S" 2>/dev/null)"
+  bash "$HUBS" --refresh 2>/dev/null || st_fail "setup: --refresh failed"
+  grep -q "$F/issue-3058" "$G/remote_$S" 2>/dev/null || st_fail "setup: the far worker is not in the cache" "$(cat "$G/remote_$S" 2>/dev/null)"
   echo $(( $(date +%s) - 960 )) > "$G/hub_ok"
   cp "$WORK/after.json" "$WORK/hub.json"   # mac-c reaped #3058; the hub knows
   : > "$WORK/hub.log"
@@ -104,20 +104,20 @@ frozen() {
 case "$LEGS" in *A*)
   rm -f "$G/remote_$S" "$G/hub_ok"; : > "$WORK/hub.log"; cp "$WORK/before.json" "$WORK/hub.json"
   rows >/dev/null
-  [ "$(asks)" = 0 ] || fail "A: no remote cache, yet the list asked the hub ($(asks)×)"
-  [ ! -e "$G/remote_$S" ] || fail "A: no remote cache, yet one was written"
-  loop_alive && fail "A: no remote cache, yet a loop was started"
+  [ "$(asks)" = 0 ] || st_fail "A: no remote cache, yet the list asked the hub ($(asks)×)"
+  [ ! -e "$G/remote_$S" ] || st_fail "A: no remote cache, yet one was written"
+  loop_alive && st_fail "A: no remote cache, yet a loop was started"
   pass "A: no remote_<fleet> — the list asks the hub nothing, starts nothing"
 ;; esac
 
 case "$LEGS" in *B*)
   frozen
   r=$(FLEET_VIEW_HUB_FRESH=10 rows)
-  printf '%s\n' "$r" | grep -q '断线重连不回显' || fail "B: the live far worker is not listed" "$r"
-  printf '%s\n' "$r" | grep -q '弹窗背后刷中文' && fail "B: ⌘P still lists #3058, reaped on mac-c (the cache froze with it)" "$r"
-  [ "$(asks)" -ge 1 ] || fail "B: the open did not ask the hub"
+  printf '%s\n' "$r" | grep -q '断线重连不回显' || st_fail "B: the live far worker is not listed" "$r"
+  printf '%s\n' "$r" | grep -q '弹窗背后刷中文' && st_fail "B: ⌘P still lists #3058, reaped on mac-c (the cache froze with it)" "$r"
+  [ "$(asks)" -ge 1 ] || st_fail "B: the open did not ask the hub"
   for _ in 1 2 3 4 5 6 7 8 9 10; do loop_alive && break; sleep 0.3; done
-  loop_alive || fail "B: no loop running after the open"
+  loop_alive || st_fail "B: no loop running after the open"
   stop_loop
   pass "B: a frozen cache (hub_ok 16 min old, no loop) — the next open drops the reaped far worker and starts the loop"
 ;; esac
@@ -125,9 +125,9 @@ case "$LEGS" in *B*)
 case "$LEGS" in *C*)
   frozen; date +%s > "$G/hub_ok"
   r=$(rows)
-  [ "$(asks)" = 0 ] || fail "C: hub_ok fresh, yet the open asked the hub ($(asks)×)"
-  printf '%s\n' "$r" | grep -q '弹窗背后刷中文' || fail "C: a fresh cache's row went missing" "$r"
-  loop_alive && fail "C: hub_ok fresh, yet a loop was started"
+  [ "$(asks)" = 0 ] || st_fail "C: hub_ok fresh, yet the open asked the hub ($(asks)×)"
+  printf '%s\n' "$r" | grep -q '弹窗背后刷中文' || st_fail "C: a fresh cache's row went missing" "$r"
+  loop_alive && st_fail "C: hub_ok fresh, yet a loop was started"
   pass "C: hub_ok fresh — the open reads the cache as it is, asks nothing"
 ;; esac
 
@@ -136,19 +136,19 @@ case "$LEGS" in *D*)
   export FLEET_HUB_SESSIONS_LOOP_SECS=3 FLEET_HUB_SESSIONS_EVERY=1
   bash "$HUBS" --ensure
   for _ in 1 2 3 4 5 6 7 8 9 10; do loop_alive && break; sleep 0.3; done
-  loop_alive || fail "D: --ensure started no loop"
+  loop_alive || st_fail "D: --ensure started no loop"
   p0=$(bash "$HUBS" --status | awk '{ print $2 }')
   for _ in 1 2 3 4 5 6; do sleep 1; bash "$HUBS" --ensure; done
   p1=$(bash "$HUBS" --status | awk '{ print $2 }')
-  [ "$p1" = "$p0" ] || fail "D: the loop ended under a caller still calling --ensure (pid $p0 → ${p1:-none}) — the gap the collector's tick fell into"
+  [ "$p1" = "$p0" ] || st_fail "D: the loop ended under a caller still calling --ensure (pid $p0 → ${p1:-none}) — the gap the collector's tick fell into"
   for _ in $(seq 1 20); do loop_alive || break; sleep 0.5; done
-  loop_alive && fail "D: the loop outlived its last --ensure by more than LOOP_SECS"
+  loop_alive && st_fail "D: the loop outlived its last --ensure by more than LOOP_SECS"
   unset FLEET_HUB_SESSIONS_LOOP_SECS FLEET_HUB_SESSIONS_EVERY
   pass "D: one loop for as long as --ensure is called; gone LOOP_SECS after the last"
 ;; esac
 case "$LEGS" in *E*)
   cp "$WORK/before.json" "$WORK/hub.json"
-  bash "$HUBS" --refresh 2>/dev/null || fail "E setup: --refresh failed"
+  bash "$HUBS" --refresh 2>/dev/null || st_fail "E setup: --refresh failed"
   printf '#!/bin/sh\necho ask >> "%s/hub.log"\nexit 1\n' "$WORK" > "$WORK/hub.sh"   # the hub goes silent
   echo $(( $(date +%s) - 7200 )) > "$G/hub_ok"
   out=$(FLEET_UI_LANG=zh FLEET_VIEW_HUB_REFRESH_SECS=2 python3 - "$BIN" <<'PY2'
@@ -176,7 +176,7 @@ for e in far:
 print("\n".join(bad) or "ok")
 PY2
 )
-  [ "$out" = ok ] || fail "E: a frozen list (hub_ok 2 h old, the hub silent) is not seen at once" "$out"
+  [ "$out" = ok ] || st_fail "E: a frozen list (hub_ok 2 h old, the hub silent) is not seen at once" "$out"
   stop_loop
   date +%s > "$G/hub_ok"
   b=$(FLEET_UI_LANG=zh python3 -c '
@@ -184,7 +184,7 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
 fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
 print(repr(fv.banner(fv.entries("v1"))))' "$BIN")
-  [ "$b" = "''" ] || fail "E: hub_ok back to now, yet the banner stays" "$b"
+  [ "$b" = "''" ] || st_fail "E: hub_ok back to now, yet the banner stays" "$b"
   # no other machine's row to name (issue #4902): the line still says how long the
   # hub — what a row's PR is read off — has not answered, and goes when it does
   echo $(( $(date +%s) - 7200 )) > "$G/hub_ok"
@@ -193,7 +193,7 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
 fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
 print(fv.banner([]))' "$BIN")
-  [ "$b" = "入口 120 分钟没响应 · 正在重连" ] || fail "E: a silent hub with no far row says nothing" "$b"
+  [ "$b" = "入口 120 分钟没响应 · 正在重连" ] || st_fail "E: a silent hub with no far row says nothing" "$b"
   date +%s > "$G/hub_ok"
   # a popup left open, on a real pty: a row added to the cache appears within 2-4 s
   r=$(FLEET_UI_LANG=zh FLEET_VIEW_REFRESH=2 TERM=xterm-256color python3 - "$BIN" "$G/remote_$S" <<'PY2'
@@ -237,7 +237,7 @@ finally:
     os.waitpid(pid, 0)
 PY2
 )
-  [ "$r" = ok ] || fail "E: a popup left open did not show the new row in time" "$r"
+  [ "$r" = ok ] || st_fail "E: a popup left open did not show the new row in time" "$r"
   pass "E: hub_ok 2 h old — banner, grey 「? 失联 120 分钟」 rows, ↵ 进不去; back to now — no banner; an open popup shows a new row within 2-4 s"
 ;; esac
 case "$LEGS" in *F*)
@@ -286,7 +286,7 @@ finally:
     os.waitpid(pid, 0)
 PY2
 )
-  [ "$r" = ok ] || fail "F: the popup's first frame waited on a slow hub (or never asked it)" "$r"
+  [ "$r" = ok ] || st_fail "F: the popup's first frame waited on a slow hub (or never asked it)" "$r"
   stop_loop
   pass "F: hub_ok old, a 6 s hub — the popup draws the cache at once, the hub is asked behind it"
 ;; esac

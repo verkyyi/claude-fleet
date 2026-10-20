@@ -19,11 +19,10 @@
 # account-truth; scratch pool / conf / TMPDIR / HOME. No network, no tmux server.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/quota-verdict-selftest.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/quota-verdict-selftest.XXXXXX" physical
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/accounts" "$WORK/conf" "$WORK/.claude-dash/global"
 for f in fleet-account.sh fleet_iso.py fleet-lib.sh fleet-client-core.sh usage-lib.sh; do cp "$BIN/$f" "$WORK/bin/"; done
 printf 'tok-a\n' > "$WORK/accounts/a"; printf 'tok-b\n' > "$WORK/accounts/b"

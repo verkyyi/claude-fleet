@@ -39,6 +39,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 MERGE="$BIN/fleet-hooks-merge.py"
 SRC="$ROOT/hooks/settings-hooks.json"
@@ -48,13 +49,10 @@ for f in "$MERGE" "$SRC"; do
 done
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 required\n' >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-hooks-merge.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-hooks-merge.XXXXXX"
 trap 'exit 130' INT TERM HUP
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 m() { python3 "$MERGE" "$@" --source "$SRC"; }
 nbak() { find "$WORK" -name "$1.bak.*" | wc -l | tr -d ' '; }
@@ -74,25 +72,25 @@ PY
 
 # --- 6. the source table has unique identities --------------------------------
 m check --settings "$WORK/none.json" >/dev/null 2>"$WORK/err"
-[ ! -s "$WORK/err" ] || fail "source table is not identity-unique" "$(cat "$WORK/err")"
-ok "source table: every (event, matcher, script) is wired once"
+[ ! -s "$WORK/err" ] || st_fail "source table is not identity-unique" "$(cat "$WORK/err")"
+st_pass "source table: every (event, matcher, script) is wired once"
 
 # --- 1. first install appends; a re-run is a no-op ----------------------------
 S1="$WORK/first.json"; printf '{"model": "x"}\n' > "$S1"
 m check --settings "$S1" >"$WORK/c1"; rc=$?
-[ "$rc" = 1 ] && grep -q '^missing' "$WORK/c1" || fail "check on an empty install should report missing (rc=$rc)" "$(cat "$WORK/c1")"
-m merge --settings "$S1" >"$WORK/o1" || fail "first merge exited non-zero" "$(cat "$WORK/o1")"
-all_once "$S1" || fail "first install did not wire every hook exactly once" "$(cat "$S1")"
+[ "$rc" = 1 ] && grep -q '^missing' "$WORK/c1" || st_fail "check on an empty install should report missing (rc=$rc)" "$(cat "$WORK/c1")"
+m merge --settings "$S1" >"$WORK/o1" || st_fail "first merge exited non-zero" "$(cat "$WORK/o1")"
+all_once "$S1" || st_fail "first install did not wire every hook exactly once" "$(cat "$S1")"
 python3 -c 'import json,sys; sys.exit(json.load(open(sys.argv[1]))["model"] != "x")' "$S1" \
-  || fail "first install lost an unrelated settings key"
-ok "first install: table appended, other settings kept"
+  || st_fail "first install lost an unrelated settings key"
+st_pass "first install: table appended, other settings kept"
 
 before="$(nbak first.json)"; cp "$S1" "$WORK/first.snap"
-m merge --settings "$S1" >"$WORK/o1b" || fail "re-merge exited non-zero"
-grep -q '^unchanged' "$WORK/o1b" || fail "re-merge should report unchanged" "$(cat "$WORK/o1b")"
+m merge --settings "$S1" >"$WORK/o1b" || st_fail "re-merge exited non-zero"
+grep -q '^unchanged' "$WORK/o1b" || st_fail "re-merge should report unchanged" "$(cat "$WORK/o1b")"
 cmp -s "$S1" "$WORK/first.snap" && [ "$(nbak first.json)" = "$before" ] \
-  || fail "re-merge rewrote the file or took a backup"
-ok "re-merge: no-op, no write, no backup"
+  || st_fail "re-merge rewrote the file or took a backup"
+st_pass "re-merge: no-op, no write, no backup"
 
 # --- 2/3/4/5. the #818 live shape ----------------------------------------------
 S2="$WORK/live.json"
@@ -126,26 +124,26 @@ JSON
 chmod 600 "$S2"
 
 m check --settings "$S2" >"$WORK/c2"; rc=$?
-[ "$rc" = 1 ] || fail "check should exit 1 on the duplicated shape (rc=$rc)" "$(cat "$WORK/c2")"
+[ "$rc" = 1 ] || st_fail "check should exit 1 on the duplicated shape (rc=$rc)" "$(cat "$WORK/c2")"
 for want in 'duplicate  PreToolUse\[Bash\] bash-guard.py ×2' \
             'duplicate  PreToolUse\[Edit|Write|MultiEdit|NotebookEdit\] base-readonly-guard.py ×2' \
             'duplicate  PreToolUse\[Artifact\] artifact-guard.py ×2' \
             'stale      Stop\[\*\] summarize-hook.sh' \
             'missing    PreToolUse\[Agent\] agent-guard.py'; do
-  grep -q "^$want" "$WORK/c2" || fail "check did not report: $want" "$(cat "$WORK/c2")"
+  grep -q "^$want" "$WORK/c2" || st_fail "check did not report: $want" "$(cat "$WORK/c2")"
 done
-ok "check (doctor's eye): duplicates, stale and missing all named, exit 1"
+st_pass "check (doctor's eye): duplicates, stale and missing all named, exit 1"
 
-m merge --settings "$S2" >"$WORK/o2" || fail "merge exited non-zero" "$(cat "$WORK/o2")"
-[ "$(nbak live.json)" = 1 ] || fail "merge did not leave exactly one backup"
-all_once "$S2" || fail "merge left a fleet identity wired != 1 time" "$(cat "$S2")"
+m merge --settings "$S2" >"$WORK/o2" || st_fail "merge exited non-zero" "$(cat "$WORK/o2")"
+[ "$(nbak live.json)" = 1 ] || st_fail "merge did not leave exactly one backup"
+all_once "$S2" || st_fail "merge left a fleet identity wired != 1 time" "$(cat "$S2")"
 grep -q '^removed dup .*bash-guard.py' "$WORK/o2" \
   && grep -q '^replaced .*base-readonly-guard.py: /opt/homebrew/bin/python3' "$WORK/o2" \
   && grep -q '^removed stale .*summarize-hook.sh' "$WORK/o2" \
-  || fail "merge output does not list what it removed/replaced" "$(cat "$WORK/o2")"
-ok "merge: changed command replaced in place, duplicates + stale removed and listed"
+  || st_fail "merge output does not list what it removed/replaced" "$(cat "$WORK/o2")"
+st_pass "merge: changed command replaced in place, duplicates + stale removed and listed"
 
-S2="$S2" python3 - <<'PY' || fail "a user-owned hook was changed or dropped" "$(cat "$S2")"
+S2="$S2" python3 - <<'PY' || st_fail "a user-owned hook was changed or dropped" "$(cat "$S2")"
 import json, os, sys
 pre = json.load(open(os.environ["S2"]))["hooks"]["PreToolUse"]
 cmds = [h for g in pre for h in g["hooks"]]
@@ -153,20 +151,20 @@ guard = {"type": "command", "command": "/opt/homebrew/bin/python3 ~/.claude/hook
 mine = {"type": "command", "command": "sh ~/my-own-edit-hook.sh", "timeout": 5}
 sys.exit(0 if cmds.count(guard) == 1 and cmds.count(mine) == 1 else 1)
 PY
-ok "user hooks: untouched, including one sharing a group with a fleet guard"
+st_pass "user hooks: untouched, including one sharing a group with a fleet guard"
 
 # python, not stat: GNU `stat -f` is FILESYSTEM status and succeeds, so a
 # `stat -f %Lp … || stat -c %a …` fallback never reaches the Linux half.
 [ "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$S2")" = 600 ] \
-  || fail "merge loosened settings.json's mode"
-m check --settings "$S2" >"$WORK/c3" || fail "check still unhappy after the merge" "$(cat "$WORK/c3")"
-grep -q '^ok ' "$WORK/c3" || fail "check did not print ok" "$(cat "$WORK/c3")"
-ok "after merge: check passes, mode 0600 kept"
+  || st_fail "merge loosened settings.json's mode"
+m check --settings "$S2" >"$WORK/c3" || st_fail "check still unhappy after the merge" "$(cat "$WORK/c3")"
+grep -q '^ok ' "$WORK/c3" || st_fail "check did not print ok" "$(cat "$WORK/c3")"
+st_pass "after merge: check passes, mode 0600 kept"
 
 # --- 7. default Claude settings (issue #1558) ---
 DEFS="$ROOT/conf/claude-settings.default.json"
-[ -r "$DEFS" ] || fail "conf/claude-settings.default.json missing"
-DEFS="$DEFS" python3 - <<'PY' || fail "claude-settings.default.json: wrong shape or content" "$(cat "$DEFS")"
+[ -r "$DEFS" ] || st_fail "conf/claude-settings.default.json missing"
+DEFS="$DEFS" python3 - <<'PY' || st_fail "claude-settings.default.json: wrong shape or content" "$(cat "$DEFS")"
 import json, os, sys
 d = json.load(open(os.environ["DEFS"]))
 ok = (set(d) <= {"settings", "globalConfig"}
@@ -203,43 +201,43 @@ d() { python3 "$MERGE" "$@" --defaults "$DEFS" --override "$WORK/override.json";
 S7="$WORK/d/settings.json"; K="$WORK/d/claude.json"; mkdir -p "$WORK/d"
 # leg: empty settings.json + no .claude.json
 printf '{}\n' > "$S7"
-d defaults --settings "$S7" --config "$K" >"$WORK/d1" || fail "defaults on an empty settings.json failed" "$(cat "$WORK/d1")"
-all_leaves "$S7" || fail "defaults left a default key out of an empty settings.json" "$(cat "$S7")"
-[ "$(grep -c '^set            settings.json ' "$WORK/d1")" = "$NS" ] || fail "defaults did not report one set per default key" "$(cat "$WORK/d1")"
-[ -e "$K" ] && fail "defaults created a .claude.json Claude Code never wrote"
-grep -q '^absent ' "$WORK/d1" || fail "defaults did not say .claude.json is absent" "$(cat "$WORK/d1")"
-d defaults-check --settings "$S7" --config "$K" >"$WORK/d1c" && fail "defaults-check passed with no .claude.json at all"
-grep -q '^missing    claude.json leftArrowOpensAgents' "$WORK/d1c" || fail "defaults-check did not name the global key" "$(cat "$WORK/d1c")"
-ok "defaults: an empty settings.json gets every default key; an absent .claude.json is not created"
+d defaults --settings "$S7" --config "$K" >"$WORK/d1" || st_fail "defaults on an empty settings.json failed" "$(cat "$WORK/d1")"
+all_leaves "$S7" || st_fail "defaults left a default key out of an empty settings.json" "$(cat "$S7")"
+[ "$(grep -c '^set            settings.json ' "$WORK/d1")" = "$NS" ] || st_fail "defaults did not report one set per default key" "$(cat "$WORK/d1")"
+[ -e "$K" ] && st_fail "defaults created a .claude.json Claude Code never wrote"
+grep -q '^absent ' "$WORK/d1" || st_fail "defaults did not say .claude.json is absent" "$(cat "$WORK/d1")"
+d defaults-check --settings "$S7" --config "$K" >"$WORK/d1c" && st_fail "defaults-check passed with no .claude.json at all"
+grep -q '^missing    claude.json leftArrowOpensAgents' "$WORK/d1c" || st_fail "defaults-check did not name the global key" "$(cat "$WORK/d1c")"
+st_pass "defaults: an empty settings.json gets every default key; an absent .claude.json is not created"
 # leg (issue #4323): the model and interface stay Claude Code's own — a fresh login gets none of
 # effortLevel / outputStyle / theme / tui, and a login that set them keeps its values byte for byte
-S7="$S7" python3 - <<'PY' || fail "defaults wrote a model / interface key into a fresh settings.json" "$(cat "$S7")"
+S7="$S7" python3 - <<'PY' || st_fail "defaults wrote a model / interface key into a fresh settings.json" "$(cat "$S7")"
 import json, os, sys
 s = json.load(open(os.environ["S7"]))
 sys.exit(0 if not {"effortLevel", "outputStyle", "theme", "tui"} & set(s) else 1)
 PY
 printf '{"effortLevel": "low", "outputStyle": "Explanatory", "theme": "light", "tui": "classic"}\n' > "$WORK/own4.json"
-d defaults --settings "$WORK/own4.json" --config "$K" >"$WORK/d1o" || fail "defaults over a login's own four keys failed" "$(cat "$WORK/d1o")"
-python3 - "$WORK/own4.json" <<'PY' || fail "defaults changed a login's own model / interface key" "$(cat "$WORK/own4.json")"
+d defaults --settings "$WORK/own4.json" --config "$K" >"$WORK/d1o" || st_fail "defaults over a login's own four keys failed" "$(cat "$WORK/d1o")"
+python3 - "$WORK/own4.json" <<'PY' || st_fail "defaults changed a login's own model / interface key" "$(cat "$WORK/own4.json")"
 import json, sys
 s = json.load(open(sys.argv[1]))
 sys.exit(0 if (s["effortLevel"], s["outputStyle"], s["theme"], s["tui"]) == ("low", "Explanatory", "light", "classic") else 1)
 PY
-grep -qE 'settings.json (effortLevel|outputStyle|theme|tui)' "$WORK/d1o" && fail "defaults reported a model / interface key as its own" "$(cat "$WORK/d1o")"
-ok "defaults: no effortLevel / outputStyle / theme / tui on a fresh login; a login's own four survive untouched"
+grep -qE 'settings.json (effortLevel|outputStyle|theme|tui)' "$WORK/d1o" && st_fail "defaults reported a model / interface key as its own" "$(cat "$WORK/d1o")"
+st_pass "defaults: no effortLevel / outputStyle / theme / tui on a fresh login; a login's own four survive untouched"
 # leg: the login's own values survive — a different effortLevel, permissions.allow beside the filled defaultMode, hooks
 printf '{"effortLevel": "high", "agentPushNotifEnabled": false, "permissions": {"allow": ["Bash(x)"]}, "hooks": {"Stop": [{"hooks": []}]}, "model": "m"}\n' > "$S7"
 printf '{\n  "numStartups": 7,\n  "oauthAccount": {"emailAddress": "a@b"},\n  "projects": {"/x": {"hasTrustDialogAccepted": true}}\n}\n' > "$K"
 chmod 600 "$K"
 mkdir "$K.lock"
-FLEET_KEYS_LOCK_WAIT=0.3 d defaults --settings "$S7" --config "$K" >"$WORK/dl" 2>&1 && fail "defaults wrote through a held .claude.json.lock" "$(cat "$WORK/dl")"
-grep -q leftArrowOpensAgents "$K" && fail "defaults changed .claude.json while the lock was held"
-[ -d "$K.lock" ] || fail "defaults removed someone else's lock"
+FLEET_KEYS_LOCK_WAIT=0.3 d defaults --settings "$S7" --config "$K" >"$WORK/dl" 2>&1 && st_fail "defaults wrote through a held .claude.json.lock" "$(cat "$WORK/dl")"
+grep -q leftArrowOpensAgents "$K" && st_fail "defaults changed .claude.json while the lock was held"
+[ -d "$K.lock" ] || st_fail "defaults removed someone else's lock"
 rmdir "$K.lock"
-ok "defaults: a held .claude.json.lock is never stolen"
-d defaults --settings "$S7" --config "$K" >"$WORK/d2" || fail "defaults over a login's own values failed" "$(cat "$WORK/d2")"
-[ -e "$K.lock" ] && fail "defaults left its lock behind"
-S7="$S7" python3 - <<'PY' || fail "defaults overwrote a login value, or missed a default" "$(cat "$S7")"
+st_pass "defaults: a held .claude.json.lock is never stolen"
+d defaults --settings "$S7" --config "$K" >"$WORK/d2" || st_fail "defaults over a login's own values failed" "$(cat "$WORK/d2")"
+[ -e "$K.lock" ] && st_fail "defaults left its lock behind"
+S7="$S7" python3 - <<'PY' || st_fail "defaults overwrote a login value, or missed a default" "$(cat "$S7")"
 import json, os, sys
 s = json.load(open(os.environ["S7"]))
 sys.exit(0 if s["effortLevel"] == "high" and s["permissions"]["allow"] == ["Bash(x)"]
@@ -247,9 +245,9 @@ sys.exit(0 if s["effortLevel"] == "high" and s["permissions"]["allow"] == ["Bash
          and s["model"] == "m" and s["agentPushNotifEnabled"] is False
          and s["precomputeCompactionEnabled"] is False else 1)
 PY
-grep -q '^differs    settings.json agentPushNotifEnabled = false (default true)' "$WORK/d2" || fail "defaults did not report the login's own agentPushNotifEnabled" "$(cat "$WORK/d2")"
-grep -q '^set            claude.json leftArrowOpensAgents = false' "$WORK/d2" || fail "defaults did not fill leftArrowOpensAgents" "$(cat "$WORK/d2")"
-K="$K" python3 - <<'PY' || fail "defaults touched another .claude.json key or missed its own" "$(cat "$K")"
+grep -q '^differs    settings.json agentPushNotifEnabled = false (default true)' "$WORK/d2" || st_fail "defaults did not report the login's own agentPushNotifEnabled" "$(cat "$WORK/d2")"
+grep -q '^set            claude.json leftArrowOpensAgents = false' "$WORK/d2" || st_fail "defaults did not fill leftArrowOpensAgents" "$(cat "$WORK/d2")"
+K="$K" python3 - <<'PY' || st_fail "defaults touched another .claude.json key or missed its own" "$(cat "$K")"
 import json, os, sys
 s = json.load(open(os.environ["K"]))
 sys.exit(0 if s == {"numStartups": 7, "oauthAccount": {"emailAddress": "a@b"},
@@ -258,40 +256,40 @@ sys.exit(0 if s == {"numStartups": 7, "oauthAccount": {"emailAddress": "a@b"},
                     "hasSeenAutoDefaultNudge": True} else 1)
 PY
 [ "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$K")" = 600 ] \
-  || fail "defaults loosened .claude.json's mode"
-ok "defaults: the login's effortLevel / agentPushNotifEnabled / permissions.allow / hooks / model survive, defaultMode fills in beside them, .claude.json gets its key at mode 0600"
+  || st_fail "defaults loosened .claude.json's mode"
+st_pass "defaults: the login's effortLevel / agentPushNotifEnabled / permissions.allow / hooks / model survive, defaultMode fills in beside them, .claude.json gets its key at mode 0600"
 # leg: idempotent — no write, no backup; check passes except for the login's own key
 cp "$S7" "$WORK/s.before"; cp "$K" "$WORK/k.before"
-d defaults --settings "$S7" --config "$K" >"$WORK/d3" || fail "second defaults run failed" "$(cat "$WORK/d3")"
-grep -q '^unchanged' "$WORK/d3" || fail "second defaults run was not a no-op" "$(cat "$WORK/d3")"
-cmp -s "$S7" "$WORK/s.before" || fail "no-op defaults rewrote settings.json"
-cmp -s "$K" "$WORK/k.before" || fail "no-op defaults rewrote .claude.json"
-[ "$(nbak settings.json)" = 0 ] && [ "$(nbak claude.json)" = 0 ] || fail "defaults wrote a backup"
-d defaults-check --settings "$S7" --config "$K" >"$WORK/d3c" && fail "defaults-check passed over the login's own agentPushNotifEnabled" "$(cat "$WORK/d3c")"
-head -1 "$WORK/d3c" | grep -q '^1 key(s) differ from claude-settings.default.json' || fail "defaults-check's first line is not the count" "$(cat "$WORK/d3c")"
-grep -q '^differs    settings.json agentPushNotifEnabled' "$WORK/d3c" || fail "defaults-check did not name the differing key" "$(cat "$WORK/d3c")"
-ok "defaults: idempotent (no write, no backup); defaults-check counts the login's own key as 1 differ"
+d defaults --settings "$S7" --config "$K" >"$WORK/d3" || st_fail "second defaults run failed" "$(cat "$WORK/d3")"
+grep -q '^unchanged' "$WORK/d3" || st_fail "second defaults run was not a no-op" "$(cat "$WORK/d3")"
+cmp -s "$S7" "$WORK/s.before" || st_fail "no-op defaults rewrote settings.json"
+cmp -s "$K" "$WORK/k.before" || st_fail "no-op defaults rewrote .claude.json"
+[ "$(nbak settings.json)" = 0 ] && [ "$(nbak claude.json)" = 0 ] || st_fail "defaults wrote a backup"
+d defaults-check --settings "$S7" --config "$K" >"$WORK/d3c" && st_fail "defaults-check passed over the login's own agentPushNotifEnabled" "$(cat "$WORK/d3c")"
+head -1 "$WORK/d3c" | grep -q '^1 key(s) differ from claude-settings.default.json' || st_fail "defaults-check's first line is not the count" "$(cat "$WORK/d3c")"
+grep -q '^differs    settings.json agentPushNotifEnabled' "$WORK/d3c" || st_fail "defaults-check did not name the differing key" "$(cat "$WORK/d3c")"
+st_pass "defaults: idempotent (no write, no backup); defaults-check counts the login's own key as 1 differ"
 # leg: the override file and --skip shield keys; a user true in .claude.json is kept, not corrected
 printf '["precomputeCompactionEnabled", "permissions"]\n' > "$WORK/override.json"
 printf '{}\n' > "$S7"
 printf '{"leftArrowOpensAgents": true, "theme": "dark"}\n' > "$K"
-d defaults --settings "$S7" --config "$K" >"$WORK/d4" || fail "defaults with an override failed" "$(cat "$WORK/d4")"
-S7="$S7" python3 - <<'PY' || fail "override did not shield precomputeCompactionEnabled / permissions" "$(cat "$S7")"
+d defaults --settings "$S7" --config "$K" >"$WORK/d4" || st_fail "defaults with an override failed" "$(cat "$WORK/d4")"
+S7="$S7" python3 - <<'PY' || st_fail "override did not shield precomputeCompactionEnabled / permissions" "$(cat "$S7")"
 import json, os, sys
 s = json.load(open(os.environ["S7"]))
 sys.exit(0 if "precomputeCompactionEnabled" not in s and "permissions" not in s and s["agentPushNotifEnabled"] is True else 1)
 PY
-grep -q '^kept    2 key(s) left to this login: permissions.defaultMode, precomputeCompactionEnabled' "$WORK/d4" || fail "defaults did not list the kept keys" "$(cat "$WORK/d4")"
-grep -q '^differs    claude.json leftArrowOpensAgents = true (default false)' "$WORK/d4" || fail "defaults did not report the user's true" "$(cat "$WORK/d4")"
+grep -q '^kept    2 key(s) left to this login: permissions.defaultMode, precomputeCompactionEnabled' "$WORK/d4" || st_fail "defaults did not list the kept keys" "$(cat "$WORK/d4")"
+grep -q '^differs    claude.json leftArrowOpensAgents = true (default false)' "$WORK/d4" || st_fail "defaults did not report the user's true" "$(cat "$WORK/d4")"
 python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(0 if s=={"leftArrowOpensAgents": True, "theme": "dark", "hasCompletedOnboarding": True, "hasSeenAutoDefaultNudge": True} else 1)' "$K" \
-  || fail "defaults corrected a user true — the fill became a pin" "$(cat "$K")"
-d defaults-check --settings "$S7" --config "$K" --skip leftArrowOpensAgents >"$WORK/d4c" || fail "defaults-check with override + --skip unhappy" "$(cat "$WORK/d4c")"
-grep -q '^ok .*left to this login: permissions.defaultMode, precomputeCompactionEnabled, leftArrowOpensAgents' "$WORK/d4c" || fail "defaults-check did not list the shielded keys" "$(cat "$WORK/d4c")"
-d defaults-check --settings "$S7" --config "$K" >"$WORK/d4d" && fail "defaults-check ignored the user's true without --skip"
-ok "defaults: the override file and --skip shield keys; a user true is kept and reported, never corrected"
+  || st_fail "defaults corrected a user true — the fill became a pin" "$(cat "$K")"
+d defaults-check --settings "$S7" --config "$K" --skip leftArrowOpensAgents >"$WORK/d4c" || st_fail "defaults-check with override + --skip unhappy" "$(cat "$WORK/d4c")"
+grep -q '^ok .*left to this login: permissions.defaultMode, precomputeCompactionEnabled, leftArrowOpensAgents' "$WORK/d4c" || st_fail "defaults-check did not list the shielded keys" "$(cat "$WORK/d4c")"
+d defaults-check --settings "$S7" --config "$K" >"$WORK/d4d" && st_fail "defaults-check ignored the user's true without --skip"
+st_pass "defaults: the override file and --skip shield keys; a user true is kept and reported, never corrected"
 # leg: a malformed defaults file is refused
 printf '{"settings": {}, "bogus": {}}\n' > "$WORK/bad.json"
-python3 "$MERGE" defaults-check --defaults "$WORK/bad.json" --settings "$S7" --config "$K" >/dev/null 2>&1; [ $? = 2 ] || fail "a malformed defaults file was not refused with exit 2"
-ok "defaults: a defaults file with a section other than settings/globalConfig exits 2"
+python3 "$MERGE" defaults-check --defaults "$WORK/bad.json" --settings "$S7" --config "$K" >/dev/null 2>&1; [ $? = 2 ] || st_fail "a malformed defaults file was not refused with exit 2"
+st_pass "defaults: a defaults file with a section other than settings/globalConfig exits 2"
 
 printf 'PASS  fleet-hooks-merge-selftest (%d checks)\n' "$pass"

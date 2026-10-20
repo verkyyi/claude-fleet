@@ -51,16 +51,15 @@
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 PL="$BIN/fleet-plugins.py"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-plugins-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-plugins-selftest.XXXXXX"
 WORK="$(cd "$WORK" && pwd -P)"   # realpath: market_source compares resolved paths (/var → /private/var)
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n%s\n' "$1" "${2:-}" >&2; exit 1; }
-ok() { CHECKS=$((CHECKS + 1)); }
-has() { case "$2" in *"$1"*) ok ;; *) fail "$3" "$2" ;; esac; }
-hasnt() { case "$2" in *"$1"*) fail "$3" "$2" ;; *) ok ;; esac; }
+has() { case "$2" in *"$1"*) st_count ;; *) fail "$3" "$2" ;; esac; }
+hasnt() { case "$2" in *"$1"*) fail "$3" "$2" ;; *) st_count ;; esac; }
 
 # ---- A + B + C: the files themselves (python: structural, no CLI needed) -----
 out=$(python3 - "$ROOT" <<'PY' 2>&1
@@ -162,7 +161,7 @@ print("\n".join(bad) if bad else "ok %d plugins" % len(dirs))
 sys.exit(1 if bad else 0)
 PY
 ) || fail "A/B/C manifests, parts, default package" "$out"
-ok
+st_count
 
 # C (cont.): the agents pass's skills count is the repo's skills/ — none of theirs
 missing=$(python3 "$BIN/fleet-agent-defaults.py" check --root "$ROOT" --claude-config "$WORK/none.json" \
@@ -170,7 +169,7 @@ missing=$(python3 "$BIN/fleet-agent-defaults.py" check --root "$ROOT" --claude-c
 for s in fleet-orchestrate epic-page; do
   hasnt "skill $s" "$missing" "C fleet-agent-defaults.py still counts $s as a default skill"
 done
-[ "$(python3 "$PL" names --root "$ROOT" | paste -sd, -)" = "fleet-browser,fleet-epic,fleet-infra" ] && ok \
+[ "$(python3 "$PL" names --root "$ROOT" | paste -sd, -)" = "fleet-browser,fleet-epic,fleet-infra" ] && st_count \
   || fail "C names" "$(python3 "$PL" names --root "$ROOT")"
 
 # ---- D: ensure, against a fake claude ----------------------------------------
@@ -226,13 +225,13 @@ ens() { python3 "$PL" ensure --root "$ROOT" --source /home/x/.claude/fleet --cla
 
 : > "$WORK/gone"
 out=$(ens --gone "$WORK/gone"); rc=$?
-[ "$rc" = 0 ] && ok || fail "D fresh ensure rc=$rc" "$out"
+[ "$rc" = 0 ] && st_count || fail "D fresh ensure rc=$rc" "$out"
 has "added the claude-fleet marketplace from /home/x/.claude/fleet" "$out" "D fresh login: marketplace added from the literal source"
 has "installed: none" "$out" "D fresh login: nothing installed"
-grep -q '^plugin install' "$ST/calls" && fail "D a fresh login ran an install" "$(cat "$ST/calls")"; ok
+grep -q '^plugin install' "$ST/calls" && fail "D a fresh login ran an install" "$(cat "$ST/calls")"; st_count
 : > "$ST/calls"
 out=$(ens --gone "$WORK/gone")
-grep -q 'marketplace add' "$ST/calls" && fail "D second run re-added the marketplace" "$(cat "$ST/calls")"; ok
+grep -q 'marketplace add' "$ST/calls" && fail "D second run re-added the marketplace" "$(cat "$ST/calls")"; st_count
 
 # added from elsewhere (an older source) → re-pointed, nothing else re-run
 echo /old/place > "$ST/market"; : > "$ST/calls"
@@ -246,17 +245,17 @@ src() { python3 -c 'import importlib.util,sys; s=importlib.util.spec_from_file_l
 RT="$WORK/runtime"; mkdir -p "$RT/abc/.claude-plugin" "$WORK/lt/.claude-plugin" "$WORK/plain/.claude-plugin"
 echo '{}' > "$RT/abc/.claude-plugin/marketplace.json"; echo '{}' > "$WORK/plain/.claude-plugin/marketplace.json"
 ln -s "$RT/abc/.claude-plugin/marketplace.json" "$WORK/lt/.claude-plugin/marketplace.json"
-[ "$(src "$WORK/plain")" = "$WORK/plain" ] && ok || fail "D source: a plain install is used as spelled" "$(src "$WORK/plain")"
-[ "$(src "$WORK/lt")" = "$RT/abc" ] && ok || fail "D source: a link tree with no current → the version dir" "$(src "$WORK/lt")"
+[ "$(src "$WORK/plain")" = "$WORK/plain" ] && st_count || fail "D source: a plain install is used as spelled" "$(src "$WORK/plain")"
+[ "$(src "$WORK/lt")" = "$RT/abc" ] && st_count || fail "D source: a link tree with no current → the version dir" "$(src "$WORK/lt")"
 ln -s "$RT/abc" "$RT/current"
-[ "$(src "$WORK/lt")" = "$RT/current" ] && ok || fail "D source: a link tree → <runtime>/current" "$(src "$WORK/lt")"
+[ "$(src "$WORK/lt")" = "$RT/current" ] && st_count || fail "D source: a link tree → <runtime>/current" "$(src "$WORK/lt")"
 
 # carry-over: the moved parts left the install this apply, and this login has them
 printf 'skills/fleet-browser/SKILL.md\ncommands/fleet-epic-run.md\nskills/doc-preview/old.md\n' > "$WORK/gone"
 mkdir -p "$CD/skills/fleet-browser" "$CD/commands"; echo x > "$CD/skills/fleet-browser/SKILL.md"
 out=$(ens --gone "$WORK/gone" --dry-run)
 has "would install fleet-browser@claude-fleet" "$out" "D dry-run names the carry-over"
-grep -q '^plugin install' "$ST/calls" && fail "D --dry-run installed" "$(cat "$ST/calls")"; ok
+grep -q '^plugin install' "$ST/calls" && fail "D --dry-run installed" "$(cat "$ST/calls")"; st_count
 out=$(ens --gone "$WORK/gone")
 has "installed fleet-browser@claude-fleet" "$out" "D carry-over: a login with the skill installed gets the plugin"
 hasnt "fleet-epic@" "$out" "D carry-over: fleet-epic's command was not installed here — no fleet-epic"
@@ -289,28 +288,28 @@ has "updated fleet-browser@claude-fleet 0.1.0 → 0.2.0" "$out" "D a plugin behi
 # ---- E: doctor ------------------------------------------------------------------
 rm -f "$ST/market" "$ST/installed.json"
 out=$(python3 "$PL" doctor --root "$ROOT" --claude "$FK"); rc=$?
-[ "$rc" = 1 ] && ok || fail "E no marketplace rc=$rc" "$out"
+[ "$rc" = 1 ] && st_count || fail "E no marketplace rc=$rc" "$out"
 has "marketplace is not added" "$out" "E no marketplace → WARN"
 echo x > "$ST/market"
 out=$(python3 "$PL" doctor --root "$ROOT" --claude "$FK"); rc=$?
-[ "$rc" = 0 ] && ok || fail "E none installed rc=$rc" "$out"
+[ "$rc" = 0 ] && st_count || fail "E none installed rc=$rc" "$out"
 has "fleet-browser 未装" "$out" "E none installed → each 未装"
 echo '[{"id":"fleet-browser@claude-fleet","version":"0.1.0","folderVersion":"0.2.0","enabled":true},{"id":"fleet-epic@claude-fleet","version":"0.1.0","folderVersion":"0.1.0","enabled":true}]' > "$ST/installed.json"
 out=$(python3 "$PL" doctor --root "$ROOT" --claude "$FK"); rc=$?
-[ "$rc" = 1 ] && ok || fail "E behind rc=$rc" "$out"
+[ "$rc" = 1 ] && st_count || fail "E behind rc=$rc" "$out"
 has "fleet-browser 0.1.0 落后（运行时 0.2.0）" "$out" "E behind → 落后"
 has "fleet-epic 0.1.0" "$out" "E installed → its version"
 out=$(python3 "$PL" doctor --root "$ROOT" --claude "$WORK/no-such-claude"); rc=$?
-[ "$rc" = 3 ] && [ -z "$out" ] && ok || fail "E no claude → no row (rc=$rc)" "$out"
+[ "$rc" = 3 ] && [ -z "$out" ] && st_count || fail "E no claude → no row (rc=$rc)" "$out"
 
 # ---- F: wiring ---------------------------------------------------------------------
 AP="$BIN/fleet-install-apply.sh"
 lp=$(grep -n 'fleet-plugins.py" ensure' "$AP" | head -1 | cut -d: -f1)
 lc=$(grep -n '^# --- commands ---' "$AP" | cut -d: -f1)
 ls_=$(grep -n '^# --- skills ---' "$AP" | cut -d: -f1)
-[ -n "$lp" ] && [ "$lp" -lt "$lc" ] && [ "$lp" -lt "$ls_" ] && ok \
+[ -n "$lp" ] && [ "$lp" -lt "$lc" ] && [ "$lp" -lt "$ls_" ] && st_count \
   || fail "F install-apply must run fleet-plugins.py ensure before the commands/skills passes" "plugins=$lp commands=$lc skills=$ls_"
-grep -q '/fleet-plugins.py"' "$BIN/fleet-doctor.sh" && grep -qE '(pass|warn) plugins' "$BIN/fleet-doctor.sh" && ok \
+grep -q '/fleet-plugins.py"' "$BIN/fleet-doctor.sh" && grep -qE '(pass|warn) plugins' "$BIN/fleet-doctor.sh" && st_count \
   || fail "F fleet-doctor.sh has no plugins row"
 
 # ---- G: a changed plugin bumps its version ---------------------------------------
@@ -326,7 +325,7 @@ if GR=$(git -C "$ROOT/plugins" rev-parse --show-toplevel 2>/dev/null) && [ -n "$
     old=$(git -C "$GR" show "$mb:plugins/$d/.claude-plugin/plugin.json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))')
     new=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' "$GR/plugins/$d/.claude-plugin/plugin.json")
     [ "$old" != "$new" ] || fail "G plugins/$d changed since $mb but its version is still $new — bump it, or an installed copy never updates (claude plugin update keys on version)"
-    ok
+    st_count
   done
 fi
 
@@ -334,13 +333,13 @@ fi
 EP="$ROOT/plugins/fleet-epic"
 for f in commands/fleet-epic-plan.md commands/fleet-epic-run.md commands/fleet-epic-report.md \
          skills/epic-page/SKILL.md skills/epic-page/template.html agents/epic-driver.md; do
-  [ -f "$EP/$f" ] && ok || fail "I fleet-epic carries no $f"
+  [ -f "$EP/$f" ] && st_count || fail "I fleet-epic carries no $f"
 done
-grep -qF -- '`agent` `epic-driver`' "$EP/commands/fleet-epic-plan.md" && ok \
+grep -qF -- '`agent` `epic-driver`' "$EP/commands/fleet-epic-plan.md" && st_count \
   || fail "I the plan's parent task does not start the epic-driver (issue #4957)"
 # (the core ships no epic-driver, no plugin says --role epic-driver, fleet-epic hands
 # nothing to the steward / the orchestrate plugin — #3116, #4338: conf/gone.list)
-sed -n '/^---$/,/^---$/p' "$EP/agents/epic-driver.md" | grep -qx '  - fleet-orch' && ok \
+sed -n '/^---$/,/^---$/p' "$EP/agents/epic-driver.md" | grep -qx '  - fleet-orch' && st_count \
   || fail "I epic-driver does not mount the dispatch group fleet-orch itself (#4338)"
 AE=$(mktemp -d "$WORK/ae.XXXXXX")
 adef() { env HOME="$AE" CLAUDE_CONFIG_DIR="$AE/.claude" FLEET_CONF_DIR="$AE/conf" \
@@ -354,7 +353,7 @@ has "arg	--agent
 arg	epic-driver" "$out" "I the launch says --agent epic-driver (the bare name Claude Code finds)"
 printf '[]\n' > "$AE/plugins.json"; rm -rf "$AE/conf/agents/plugins.json"
 out=$(adef launch epic-driver --dir "$AE"); rc=$?
-[ "$rc" = 1 ] && ok || fail "I not installed: there is no epic-driver (rc=$rc)" "$out"
+[ "$rc" = 1 ] && st_count || fail "I not installed: there is no epic-driver (rc=$rc)" "$out"
 
 # ---- J: a retired plugin (issue #4904) ---------------------------------------------
 FB=fleet-feedback@claude-fleet
@@ -367,17 +366,17 @@ PY
 }
 # not installed ⇒ nothing runs
 : > "$ST/calls"; out=$(ens --gone "$WORK/gone")
-grep -qE '^plugin uninstall' "$ST/calls" && fail "J not installed: an uninstall ran" "$(cat "$ST/calls")"; ok
+grep -qE '^plugin uninstall' "$ST/calls" && fail "J not installed: an uninstall ran" "$(cat "$ST/calls")"; st_count
 # installed ⇒ --dry-run says so and runs nothing; a real apply uninstalls it
 "$FK" plugin install "$FB"; : > "$ST/calls"
 out=$(ens --gone "$WORK/gone" --dry-run)
 has "would uninstall $FB — retired" "$out" "J dry-run names the retired plugin"
-grep -qE '^plugin uninstall' "$ST/calls" && fail "J --dry-run uninstalled" "$(cat "$ST/calls")"; ok
+grep -qE '^plugin uninstall' "$ST/calls" && fail "J --dry-run uninstalled" "$(cat "$ST/calls")"; st_count
 : > "$ST/calls"; out=$(ens --gone "$WORK/gone"); rc=$?
-[ "$rc" = 0 ] && ok || fail "J ensure rc=$rc" "$out"
+[ "$rc" = 0 ] && st_count || fail "J ensure rc=$rc" "$out"
 has "uninstalled $FB — retired" "$out" "J the retired plugin is uninstalled"
-grep -q "^plugin uninstall $FB" "$ST/calls" && ok || fail "J no uninstall ran" "$(cat "$ST/calls")"
-[ "$(fbstate)" = absent ] && ok || fail "J still installed after the apply" "$(fbstate)"
+grep -q "^plugin uninstall $FB" "$ST/calls" && st_count || fail "J no uninstall ran" "$(cat "$ST/calls")"
+[ "$(fbstate)" = absent ] && st_count || fail "J still installed after the apply" "$(fbstate)"
 # (the marketplace lists no fleet-feedback, #4904: conf/gone.list)
 
 # ---- K: fleet-infra, the admins' runbooks (issue #3586, EPIC #3569 C16) ------------
@@ -385,70 +384,70 @@ FI="$ROOT/plugins/fleet-infra"
 for sk in mac-node-prep mac-node-enroll login-lifecycle ack-linux-node sg-relay-setup hub-deploy \
           release-rules runbook-tcc-stuck runbook-door-down runbook-train-stuck node-doctor; do
   f="$FI/skills/$sk/SKILL.md"
-  [ -f "$f" ] && ok || fail "K fleet-infra carries no skills/$sk/SKILL.md"
+  [ -f "$f" ] && st_count || fail "K fleet-infra carries no skills/$sk/SKILL.md"
   # every runbook has the same five parts, in order
   heads=$(grep -E '^## ' "$f" | sed 's/^## //' | paste -sd'|' -)
   case "$heads" in
-    什么时候用\|先查什么\|步骤\|怎么验收\|怎么回滚*) ok ;;
+    什么时候用\|先查什么\|步骤\|怎么验收\|怎么回滚*) st_count ;;
     *) fail "K $sk: headings are «${heads}», want 什么时候用 · 先查什么 · 步骤 · 怎么验收 · 怎么回滚" ;;
   esac
   # and a trigger case for `claude plugin eval` (run on an admin's own signed-in computer)
   grep -q "tool: Skill" "$FI/evals/$sk-triggers/graders/skill-fired.md" 2>/dev/null \
-    && grep -q "$sk" "$FI/evals/$sk-triggers/graders/skill-fired.md" && [ -s "$FI/evals/$sk-triggers/prompt.md" ] && ok \
+    && grep -q "$sk" "$FI/evals/$sk-triggers/graders/skill-fired.md" && [ -s "$FI/evals/$sk-triggers/prompt.md" ] && st_count \
     || fail "K $sk: no evals/$sk-triggers case (prompt.md + graders/skill-fired.md)"
 done
-[ "$(ls -d "$FI"/skills/*/ | wc -l | tr -d ' ')" = 11 ] && ok || fail "K fleet-infra carries $(ls -d "$FI"/skills/*/ | wc -l | tr -d ' ') skills, want 11"
+[ "$(ls -d "$FI"/skills/*/ | wc -l | tr -d ' ')" = 11 ] && st_count || fail "K fleet-infra carries $(ls -d "$FI"/skills/*/ | wc -l | tr -d ' ') skills, want 11"
 # the doctor's row names ⊆ node-doctor's table, generated off fleet-doctor.sh + fleet-node-update.py (C17)
-out=$(python3 "$BIN/fleet-doctor-rows.py" check "$FI/skills/node-doctor/SKILL.md" --root "$ROOT" 2>&1) && ok \
+out=$(python3 "$BIN/fleet-doctor-rows.py" check "$FI/skills/node-doctor/SKILL.md" --root "$ROOT" 2>&1) && st_count \
   || fail "K node-doctor's row → skill table is not the doctor's row table" "$out"
-[ "$(python3 "$BIN/fleet-doctor-rows.py" names --root "$ROOT" | wc -l | tr -d ' ')" -ge 100 ] && ok \
+[ "$(python3 "$BIN/fleet-doctor-rows.py" names --root "$ROOT" | wc -l | tr -d ' ')" -ge 100 ] && st_count \
   || fail "K fleet-doctor-rows.py names reads fewer than 100 rows — the extractor lost the doctor"
 # the extractor reds on a row named by a variable with no `# doctor-rows:` beside it, and on a row the table lacks
 KD="$WORK/kdoc"; mkdir -p "$KD/bin"; cp "$ROOT/bin/fleet-node-update.py" "$KD/bin/"
 printf 'pass() { :; }\npass alpha "x"\nwarn "$v" "y"\n' > "$KD/bin/fleet-doctor.sh"
-python3 "$BIN/fleet-doctor-rows.py" names --root "$KD" >/dev/null 2>&1; [ $? = 2 ] && ok \
+python3 "$BIN/fleet-doctor-rows.py" names --root "$KD" >/dev/null 2>&1; [ $? = 2 ] && st_count \
   || fail "K an undeclared variable row did not exit 2"
 printf 'pass() { :; }\npass alpha "x"\n# doctor-rows: beta\nwarn "$v" "y"\n' > "$KD/bin/fleet-doctor.sh"
 out=$(python3 "$BIN/fleet-doctor-rows.py" check "$FI/skills/node-doctor/SKILL.md" --root "$KD")
 has "missing row \`alpha\`" "$out" "K check names a row the table lacks"
 has "missing row \`beta\`" "$out" "K check reads a # doctor-rows: declaration"
-[ ! -e "$FI/hooks" ] && [ ! -e "$FI/.mcp.json" ] && ok || fail "K fleet-infra runs nothing on its own: no hooks, no MCP server"
+[ ! -e "$FI/hooks" ] && [ ! -e "$FI/.mcp.json" ] && st_count || fail "K fleet-infra runs nothing on its own: no hooks, no MCP server"
 # no internal name or address in it — the ONE rule table (EPIC #3569 共同约定 1)
 out=$(bash "$BIN/oss-scan.sh" --root "$ROOT" -- plugins/fleet-infra 2>&1); rc=$?
-[ "$rc" = 0 ] && ok || fail "K oss-scan over plugins/fleet-infra found something (rc=$rc)" "$out"
+[ "$rc" = 0 ] && st_count || fail "K oss-scan over plugins/fleet-infra found something (rc=$rc)" "$out"
 # never handed out by the hub
-grep -q '"fleet-infra"' "$BIN/fleet-agent-team.py" && ok || fail "K fleet-agent-team.py does not refuse fleet-infra"
+grep -q '"fleet-infra"' "$BIN/fleet-agent-team.py" && st_count || fail "K fleet-agent-team.py does not refuse fleet-infra"
 
 # ---- A (cont.) + H: the real CLI ----------------------------------------------------
 if command -v claude >/dev/null 2>&1 && claude plugin validate --help >/dev/null 2>&1; then
   for p in "$ROOT" "$ROOT"/plugins/*; do
     v=$(claude plugin validate "$p" 2>&1) || fail "A claude plugin validate ${p#"$ROOT"/}" "$v"
-    ok
+    st_count
   done
   H="$WORK/home"; mkdir -p "$H"
   ln -s "$ROOT" "$WORK/fleet"   # as ~/.claude/fleet: a link to the install
   hc() { env -u CLAUDE_CONFIG_DIR HOME="$H" claude plugin "$@" 2>&1; }
   ids() { hc list --json | python3 -c 'import json,sys; print(" ".join(sorted(e["id"] for e in json.load(sys.stdin))))'; }
   out=$(hc marketplace add "$WORK/fleet") || fail "H marketplace add" "$out"
-  [ -z "$(ids)" ] && ok || fail "H a fresh login lists a plugin" "$(ids)"
+  [ -z "$(ids)" ] && st_count || fail "H a fresh login lists a plugin" "$(ids)"
   out=$(hc install fleet-browser@claude-fleet) || fail "H install fleet-browser" "$out"
-  [ "$(ids)" = "fleet-browser@claude-fleet" ] && ok || fail "H install → listed" "$(ids)"
-  ls "$H"/.claude/plugins/cache/claude-fleet/fleet-browser/*/skills/fleet-browser/SKILL.md >/dev/null 2>&1 && ok \
+  [ "$(ids)" = "fleet-browser@claude-fleet" ] && st_count || fail "H install → listed" "$(ids)"
+  ls "$H"/.claude/plugins/cache/claude-fleet/fleet-browser/*/skills/fleet-browser/SKILL.md >/dev/null 2>&1 && st_count \
     || fail "H the installed copy carries the fleet-browser skill"
   out=$(hc uninstall fleet-browser@claude-fleet) || fail "H uninstall" "$out"
-  [ -z "$(ids)" ] && ok || fail "H uninstall → none" "$(ids)"
+  [ -z "$(ids)" ] && st_count || fail "H uninstall → none" "$(ids)"
   out=$(hc install fleet-epic@claude-fleet) || fail "H install fleet-epic" "$out"
-  case " $(ids) " in *" fleet-epic@claude-fleet "*) ok ;; *) fail "H install fleet-epic → listed" "$(ids)" ;; esac
+  case " $(ids) " in *" fleet-epic@claude-fleet "*) st_count ;; *) fail "H install fleet-epic → listed" "$(ids)" ;; esac
   for f in agents/epic-driver.md commands/fleet-epic-run.md skills/epic-page/SKILL.md; do
-    ls "$H"/.claude/plugins/cache/claude-fleet/fleet-epic/*/"$f" >/dev/null 2>&1 && ok \
+    ls "$H"/.claude/plugins/cache/claude-fleet/fleet-epic/*/"$f" >/dev/null 2>&1 && st_count \
       || fail "H the installed fleet-epic carries $f"
   done
   out=$(hc install fleet-infra@claude-fleet) || fail "H install fleet-infra" "$out"
-  ls "$H"/.claude/plugins/cache/claude-fleet/fleet-infra/*/skills/mac-node-prep/SKILL.md >/dev/null 2>&1 && ok \
+  ls "$H"/.claude/plugins/cache/claude-fleet/fleet-infra/*/skills/mac-node-prep/SKILL.md >/dev/null 2>&1 && st_count \
     || fail "H the installed fleet-infra carries mac-node-prep"
   hc uninstall fleet-infra@claude-fleet >/dev/null
   hc uninstall fleet-epic@claude-fleet >/dev/null
-  case " $(ids) " in *" fleet-epic@"*) fail "H uninstall fleet-epic → still listed" "$(ids)" ;; *) ok ;; esac
+  case " $(ids) " in *" fleet-epic@"*) fail "H uninstall fleet-epic → still listed" "$(ids)" ;; *) st_count ;; esac
 fi
 
 printf 'fleet-plugins-selftest: PASS (%d checks)\n' "$CHECKS"

@@ -22,16 +22,16 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$BIN/.."
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/  /' >&2; exit 1; }
-ok() { CHECKS=$((CHECKS+1)); }
 eq() { [ "$2" = "$3" ] || fail "$1" "want: [$2]
- got: [$3]"; ok; }
-has() { case "$3" in *"$2"*) ok ;; *) fail "$1" "want a substring: [$2]
+ got: [$3]"; st_count; }
+has() { case "$3" in *"$2"*) st_count ;; *) fail "$1" "want a substring: [$2]
  got: [$3]" ;; esac; }
 hasnt() { case "$3" in *"$2"*) fail "$1" "must not contain: [$2]
- got: [$3]" ;; *) ok ;; esac; }
+ got: [$3]" ;; *) st_count ;; esac; }
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/palette-selftest.XXXXXX") || exit 2
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
@@ -57,7 +57,7 @@ sh_table=''
 for k in $names; do
   case "${!k:-}" in '#'[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) fail "B: $k is not a #rrggbb" "${!k:-}" ;; esac
   sh_table="$sh_table$k=${!k} "
-done; ok
+done; st_count
 eq "B: the Tokyo Night values of before (a first version moves no pixel)" \
    'PAL_BG=#1a1b26 PAL_FG=#a9b1d6 PAL_DIM=#565f89 PAL_BLUE=#7aa2f7 PAL_GREEN=#9ece6a PAL_YELLOW=#e0af68 PAL_RED=#f7768e PAL_CYAN=#7dcfff PAL_MAGENTA=#bb9af7 PAL_SEL=#414868 ' "$sh_table"
 fleet_palette_rgb '#565f89'; eq "B: rgb of #565f89" '86;95;137' "$_fpr"

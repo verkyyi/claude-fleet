@@ -25,6 +25,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/tmux-dash-collect.sh"
 LIB="$BIN/fleet-lib.sh"
@@ -33,8 +34,7 @@ LIB="$BIN/fleet-lib.sh"
 command -v jq      >/dev/null 2>&1 || { printf 'selftest: jq not installed — SKIP\n' >&2; exit 0; }
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/collect-sessmap-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/collect-sessmap-selftest.XXXXXX"
 
 mkdir -p "$WORK/bin" "$WORK/fakepath"
 cp "$SRC" "$WORK/bin/tmux-dash-collect.sh"; chmod +x "$WORK/bin/tmux-dash-collect.sh"

@@ -15,16 +15,15 @@
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/fleet-down.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s not found/executable\n' "$SRC" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-down-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-down-selftest.XXXXXX"
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- %s\n' "$2" >&2; exit 1; }
 CHECKS=0
-ok()      { CHECKS=$((CHECKS+1)); }
 exists()  { CHECKS=$((CHECKS+1)); [ -e "$1" ] || fail "expected to survive: $1"; }
 absent()  { CHECKS=$((CHECKS+1)); [ -e "$1" ] && fail "expected removed: $1"; return 0; }
 
@@ -56,7 +55,7 @@ run() { PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$CONF_DIR" TMPDIR="$WORK" \
 # --- refused: path-traversal names must die BEFORE any rm ----------------------
 for bad in ".." "." "a/b" "x/../y" "../evil"; do
   if run "$bad" --purge; then fail "'$bad' should be REFUSED (fleet-down exited 0)" "$(cat "$WORK/err")"; fi
-  ok
+  st_count
   grep -qiE 'refus|traversal' "$WORK/err" \
     || fail "'$bad' refusal should print a clear guard error" "$(cat "$WORK/err")"
   # nothing must have been removed
@@ -73,7 +72,7 @@ fx_repo "$CONF_DIR" "fleet-my.app" acme/widgets
 : > "$CACHE/fleets/acme-widgets/issues"
 
 run "fleet-my.app" --purge || fail "a legit dotted name must be ALLOWED" "$(cat "$WORK/err")"
-ok
+st_count
 grep -qiE 'refus|traversal' "$WORK/err" \
   && fail "a legit dotted name must NOT trip the traversal guard" "$(cat "$WORK/err")"
 absent "$CONF_DIR/fleets/fleet-my.app"      # its own durable state removed

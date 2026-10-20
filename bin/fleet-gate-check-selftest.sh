@@ -7,12 +7,12 @@
 # `gate` rows (INFO only — never counted as a FAIL).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 G="$BIN/fleet-gate-check.sh"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 fails=0
-ok()  { printf 'ok   %s\n' "$1"; }
 bad() { printf 'FAIL %s\n' "$1"; fails=$((fails+1)); }
-check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+check() { if eval "$2"; then st_ok "$1"; else bad "$1"; fi; }
 
 HUB_OK='{"items":[{"id":"release-key","pass":true,"why":"k"},{"id":"cloud-perms","pass":true,"why":"c"},{"id":"revocations","pass":true,"why":"r"},{"id":"cred-ttl","pass":true,"why":"t"}]}'
 run() { FLEET_GATE_PS="$T/ps" FLEET_GATE_ADMINS="${ADMINS-}" FLEET_GATE_HUB_JSON="${HUB-$HUB_OK}" bash "$G" "$@"; }

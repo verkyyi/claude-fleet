@@ -27,6 +27,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'agent-ver selftest: python3 absent — SKIP'; exit 0; }
 command -v tmux >/dev/null 2>&1 || { echo 'agent-ver selftest: tmux absent — SKIP'; exit 0; }
@@ -45,10 +46,9 @@ printf 'FLEET_REPO=acme/app\n' > "$WORK/conf/fleets/$S/conf"
 EXP="$WORK/conf/global/agent-cfg.expected"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
-has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1 — no [$3]" "$2";; esac; }
-hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
+eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
+has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) st_fail "$1 — no [$3]" "$2";; esac; }
+hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) st_fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
 ver() { python3 - "$BIN/fleet-agent-team.py" "$1" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("t", sys.argv[1]); m = importlib.util.module_from_spec(spec)
@@ -68,14 +68,14 @@ eq "A: …a re-installed one (<sha>-<stamp>) → the same sha" "${H40:0:12}" "$(
 R="$WORK/repo"; mkdir -p "$R/bin" "$R/conf"
 printf 'echo one\n' > "$R/bin/x.sh"; printf 'k=v\n' > "$R/conf/c"
 git -C "$R" init -q && git -C "$R" add -A \
-  && git -C "$R" -c user.name=t -c user.email=t@t commit -qm one || fail "A: git init"
+  && git -C "$R" -c user.name=t -c user.email=t@t commit -qm one || st_fail "A: git init"
 v1=$(ver "$R")
 eq "A: no versions layout — a checkout's HEAD (the degenerate)" "$(git -C "$R" rev-parse HEAD | cut -c1-12)" "$v1"
 printf 'echo two\n' > "$R/bin/x.sh"
 git -C "$R" -c user.name=t -c user.email=t@t commit -qam two
 v2=$(ver "$R")
 eq "A: one bin/ script changed → the new HEAD" "$(git -C "$R" rev-parse HEAD | cut -c1-12)" "$v2"
-[ "$v1" != "$v2" ] || fail "A: the version did not move with the commit"
+[ "$v1" != "$v2" ] || st_fail "A: the version did not move with the commit"
 eq "A: a directory inside a repo (not its top) → nothing" "" "$(ver "$R/bin")"
 mkdir -p "$WORK/plain"
 eq "A: no git, no version directory → nothing" "" "$(ver "$WORK/plain")"
@@ -102,7 +102,7 @@ eq "B: …stale stays stale"                            stale   "$(st '' bbbbbbb
 # C. tick — fleet-cfg-restart.sh on an isolated socket
 # ============================================================================
 T() { "$REAL_TMUX" -L "$S" "$@"; }
-T new-session -d -s "$S" -n home -x 200 -y 50 2>/dev/null || fail "could not start an isolated tmux server"
+T new-session -d -s "$S" -n home -x 200 -y 50 2>/dev/null || st_fail "could not start an isolated tmux server"
 OLDTS=$(( $(date +%s) - 3600 ))
 mk() {   # <name> <fp> <ver> → window id (a Claude session, done an hour ago)
   local id; id=$(T new-window -d -t "$S:" -n "$1" -P -F '#{window_id}' 'sleep 600')

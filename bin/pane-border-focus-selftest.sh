@@ -19,10 +19,10 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$BIN/.."
 CONFS="conf/tmux-attention.conf"
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 # the value of `set -g <opt> <value>` (outer quotes stripped); last one wins, as in tmux
 optval() {
   sed -n "s/^[[:space:]]*set\(-option\)\{0,1\}[[:space:]]\{1,\}-g[[:space:]]\{1,\}$2[[:space:]]\{1,\}//p" "$1" | tail -n 1 |
@@ -31,12 +31,12 @@ optval() {
 
 for rel in $CONFS; do
   f="$ROOT/$rel"
-  [ -f "$f" ] || { [ "${rel#tokenledger/}" != "$rel" ] && continue; fail "$rel not found"; }
+  [ -f "$f" ] || { [ "${rel#tokenledger/}" != "$rel" ] && continue; st_fail "$rel not found"; }
   ps="$(optval "$f" pane-border-style)"
   pa="$(optval "$f" pane-active-border-style)"
-  [ -n "$ps" ] || fail "$rel: no pane-border-style"
-  [ "$pa" = "$ps" ] || fail "$rel: pane-active-border-style [$pa] differs from pane-border-style [$ps]"
-  [ "$(optval "$f" pane-border-indicators)" = off ] || fail "$rel: pane-border-indicators is not off"
+  [ -n "$ps" ] || st_fail "$rel: no pane-border-style"
+  [ "$pa" = "$ps" ] || st_fail "$rel: pane-active-border-style [$pa] differs from pane-border-style [$ps]"
+  [ "$(optval "$f" pane-border-indicators)" = off ] || st_fail "$rel: pane-border-indicators is not off"
   # (no pane-border-format names TASKS, #1764: conf/gone.list)
 
   REAL_TMUX="$(command -v tmux 2>/dev/null)"
@@ -47,11 +47,11 @@ for rel in $CONFS; do
   "$REAL_TMUX" -S "$SOCK" -f /dev/null new-session -d -x 80 -y 20 \; source-file "$WORK/b.conf" 2>"$WORK/err"
   got="$("$REAL_TMUX" -S "$SOCK" show-options -gv pane-border-style)|$("$REAL_TMUX" -S "$SOCK" show-options -gv pane-active-border-style)|$("$REAL_TMUX" -S "$SOCK" show-options -gv pane-border-indicators)"
   "$REAL_TMUX" -S "$SOCK" kill-server 2>/dev/null; rm -rf "$WORK"
-  [ "$got" = "$ps|$ps|off" ] || fail "$rel: as tmux reads it [$got], want [$ps|$ps|off]"
+  [ "$got" = "$ps|$ps|off" ] || st_fail "$rel: as tmux reads it [$got], want [$ps|$ps|off]"
 done
 
 if [ -x "$BIN/fleet-client-mirror.sh" ] && [ -d "$ROOT/tokenledger/hub/api/fleetclient" ]; then
-  "$BIN/fleet-client-mirror.sh" --check >/dev/null || fail "fleet-client-mirror.sh --check: the client manifest drifted"
+  "$BIN/fleet-client-mirror.sh" --check >/dev/null || st_fail "fleet-client-mirror.sh --check: the client manifest drifted"
 fi
 
 printf 'selftest OK: no pane border paints keyboard focus — active = inactive, indicators off, the task list border empty (#1764, #2167)\n'

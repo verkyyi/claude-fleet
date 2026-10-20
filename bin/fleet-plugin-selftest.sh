@@ -36,6 +36,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 PJ="$ROOT/.claude-plugin/plugin.json"
 MJ="$ROOT/.claude-plugin/marketplace.json"
@@ -45,13 +46,10 @@ for f in "$PJ" "$MJ"; do
 done
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 required\n' >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-plugin.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-plugin.XXXXXX"
 trap 'exit 130' INT TERM HUP
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 # run a python assertion block; its stdout is the failure detail
 py() { PJ="$PJ" MJ="$MJ" ROOT="$ROOT" python3 -c "$1" 2>&1; }
 
@@ -74,8 +72,8 @@ if missing:
 if extra:
     print("listed in plugin.json but not on disk: %s" % sorted(extra))
 sys.exit(1 if (missing or extra) else 0)
-')" || fail "plugin.json commands drifted from commands/fleet-*.md" "$d"
-ok "the plugin ships exactly the fleet-*.md commands that exist on disk"
+')" || st_fail "plugin.json commands drifted from commands/fleet-*.md" "$d"
+st_pass "the plugin ships exactly the fleet-*.md commands that exist on disk"
 
 # --- 2. every declared path resolves ------------------------------------------
 d="$(py '
@@ -94,8 +92,8 @@ if not os.path.isdir(skills):
     bad.append("skills/ directory is missing — the default scan has nothing to load")
 if bad:
     print("\n".join(bad)); sys.exit(1)
-')" || fail "a path declared in plugin.json does not resolve" "$d"
-ok "every command, the hooks file and the skills tree resolve from the plugin root"
+')" || st_fail "a path declared in plugin.json does not resolve" "$d"
+st_pass "every command, the hooks file and the skills tree resolve from the plugin root"
 
 # --- 3. ONE hook table, shared with the copy install --------------------------
 d="$(py '
@@ -120,8 +118,8 @@ for ev, groups in t.items():
                       "plugin update. The fleet hooks must call the stable live install "
                       "(~/.claude/fleet) that the daemons share." % (ev, c))
                 sys.exit(1)
-')" || fail "the plugin hook table is not the one the copy install merges" "$d"
-ok "plugin and copy install share hooks/settings-hooks.json, pointed at the stable live install"
+')" || st_fail "the plugin hook table is not the one the copy install merges" "$d"
+st_pass "plugin and copy install share hooks/settings-hooks.json, pointed at the stable live install"
 
 # --- 4. skills carry the frontmatter that makes them load ---------------------
 d="$(py '
@@ -152,8 +150,8 @@ if not seen:
     bad.append("skills/ contains no skill directories")
 if bad:
     print("\n".join(bad)); sys.exit(1)
-')" || fail "a skill would not register from the plugin" "$d"
-ok "every skills/<name>/SKILL.md carries matching name + description frontmatter"
+')" || st_fail "a skill would not register from the plugin" "$d"
+st_pass "every skills/<name>/SKILL.md carries matching name + description frontmatter"
 
 # --- 5. the marketplace serves THIS repo as that plugin -----------------------
 d="$(py '
@@ -183,8 +181,8 @@ if "version" in p:
                "marketplace commit sha and every merge is a new version" % p["version"])
 if bad:
     print("\n".join(bad)); sys.exit(1)
-')" || fail "the marketplace does not serve this repo as the fleet plugin" "$d"
-ok "marketplace serves the repo root as the plugin, unpinned so each commit is a new version"
+')" || st_fail "the marketplace does not serve this repo as the fleet plugin" "$d"
+st_pass "marketplace serves the repo root as the plugin, unpinned so each commit is a new version"
 
 # --- 6. the CLI agrees (when it is installed) ---------------------------------
 if command -v claude >/dev/null 2>&1; then
@@ -208,37 +206,37 @@ unexpected = [w for w in (man.get("warnings") or []) if "version" not in (w.get(
               and not ("symlink" in (w.get("message") or "") and "./plugins/" in (w.get("message") or ""))]
 if unexpected:
     print("unexpected validation warnings:\n%s" % json.dumps(unexpected, indent=2)); sys.exit(1)
-' 2>&1)" || fail "claude plugin validate rejected the manifests" "$d"
-    ok "claude plugin validate passes with no errors and no unexpected warnings"
+' 2>&1)" || st_fail "claude plugin validate rejected the manifests" "$d"
+    st_pass "claude plugin validate passes with no errors and no unexpected warnings"
   fi
 fi
 
 # --- 7. the spawn seed resolves on BOTH install shapes ------------------------
 # shellcheck source=/dev/null
-. "$BIN/fleet-lib.sh" 2>/dev/null || fail "could not source fleet-lib.sh"
-command -v fleet_cmd >/dev/null 2>&1 || fail "fleet-lib.sh does not define fleet_cmd — the spawn seed cannot adapt"
+. "$BIN/fleet-lib.sh" 2>/dev/null || st_fail "could not source fleet-lib.sh"
+command -v fleet_cmd >/dev/null 2>&1 || st_fail "fleet-lib.sh does not define fleet_cmd — the spawn seed cannot adapt"
 
 mkdir -p "$WORK/copy/commands" "$WORK/plug/plugins/cache/claude-fleet/fleet/deadbeef/commands"
 : > "$WORK/copy/commands/fleet-history.md"
 : > "$WORK/plug/plugins/cache/claude-fleet/fleet/deadbeef/commands/fleet-history.md"
 
 got="$(CLAUDE_COMMANDS_DIR="$WORK/copy/commands" CLAUDE_CONFIG_DIR="$WORK/none" fleet_cmd fleet-history)"
-[ "$got" = "/fleet-history" ] || fail "a copy install must seed the bare command, got: $got"
+[ "$got" = "/fleet-history" ] || st_fail "a copy install must seed the bare command, got: $got"
 got="$(CLAUDE_COMMANDS_DIR="$WORK/none" CLAUDE_CONFIG_DIR="$WORK/plug" fleet_cmd fleet-history)"
-[ "$got" = "/fleet:fleet-history" ] || fail "a plugin-only install must seed the namespaced command, got: $got"
+[ "$got" = "/fleet:fleet-history" ] || st_fail "a plugin-only install must seed the namespaced command, got: $got"
 got="$(CLAUDE_COMMANDS_DIR="$WORK/copy/commands" CLAUDE_CONFIG_DIR="$WORK/plug" fleet_cmd fleet-history)"
-[ "$got" = "/fleet-history" ] || fail "with BOTH installed the bare form must win (it still resolves), got: $got"
+[ "$got" = "/fleet-history" ] || st_fail "with BOTH installed the bare form must win (it still resolves), got: $got"
 got="$(CLAUDE_COMMANDS_DIR="$WORK/none" CLAUDE_CONFIG_DIR="$WORK/none" fleet_cmd fleet-history)"
-[ "$got" = "/fleet-history" ] || fail "with neither installed the bare form is the unchanged default, got: $got"
+[ "$got" = "/fleet-history" ] || st_fail "with neither installed the bare form is the unchanged default, got: $got"
 got="$(FLEET_CMD_PREFIX=fleet CLAUDE_COMMANDS_DIR="$WORK/copy/commands" fleet_cmd fleet-handoff pickup /tmp/h.md)"
-[ "$got" = "/fleet:fleet-handoff pickup /tmp/h.md" ] || fail "FLEET_CMD_PREFIX must override and keep args, got: $got"
+[ "$got" = "/fleet:fleet-handoff pickup /tmp/h.md" ] || st_fail "FLEET_CMD_PREFIX must override and keep args, got: $got"
 got="$(FLEET_CMD_PREFIX='' CLAUDE_CONFIG_DIR="$WORK/plug" CLAUDE_COMMANDS_DIR="$WORK/none" fleet_cmd fleet-history)"
-[ "$got" = "/fleet-history" ] || fail "an EMPTY FLEET_CMD_PREFIX must force the bare form, got: $got"
-ok "fleet_cmd seeds the form that resolves on each install shape, with an operator override"
+[ "$got" = "/fleet-history" ] || st_fail "an EMPTY FLEET_CMD_PREFIX must force the bare form, got: $got"
+st_pass "fleet_cmd seeds the form that resolves on each install shape, with an operator override"
 
 # --- 8. the seed site actually uses it ----------------------------------------
 grep -q 'fleet_cmd fleet-handoff pickup' "$BIN/fleet-handoff-cycle.sh" \
-  || fail "bin/fleet-handoff-cycle.sh no longer types its pickup through fleet_cmd — a plugin-only install would type a literal that never expands"
-ok "the handoff pickup goes through fleet_cmd, not a hardcoded slash command"
+  || st_fail "bin/fleet-handoff-cycle.sh no longer types its pickup through fleet_cmd — a plugin-only install would type a literal that never expands"
+st_pass "the handoff pickup goes through fleet_cmd, not a hardcoded slash command"
 
 printf '\nfleet-plugin-selftest: %d checks passed\n' "$pass"

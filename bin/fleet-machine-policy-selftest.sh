@@ -14,13 +14,12 @@
 #   F. no leak   the viewer token is in no curl argv, only on its stdin
 set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SUT="$BIN/fleet-machine-policy.sh"
 CHECKS=0
 fail() { printf 'fleet-machine-policy selftest FAIL: %s\n' "$1" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-machine-policy-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-machine-policy-selftest.XXXXXX"
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
 mkdir -p "$HOME" "$FLEET_CONF_DIR"
 unset CCQUOTA_TOKEN CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_URL FLEET_HUB_CURL FLEET_HUB_TIMEOUT
@@ -35,14 +34,14 @@ for args in '' 'frob' 'set gh:1' 'deny gh:1 mac-e' 'all' 'show gh:1 gh:2' 'show 
   eval "CCQUOTA_VIEWER_TOKEN=$VIEWER CCQUOTA_HUB_URL=http://hub.test \"\$SUT\" $args" >/dev/null 2>"$WORK/err"; rc=$?
   [ "$rc" -eq 2 ] || fail "A: '$args' exit $rc, want 2: $(cat "$WORK/err")"
   [ ! -e "$STUB_LOG" ] || fail "A: '$args' called curl"
-  ok
+  st_count
 done
 
 # B. no token
 reset
 CCQUOTA_HUB_URL=http://hub.test "$SUT" show >/dev/null 2>"$WORK/err"; rc=$?
 [ "$rc" -eq 1 ] && grep -q CCQUOTA_VIEWER_TOKEN "$WORK/err" && [ ! -e "$STUB_LOG" ] || fail "B: rc=$rc $(cat "$WORK/err")"
-ok
+st_count
 
 export CCQUOTA_VIEWER_TOKEN=$VIEWER CCQUOTA_HUB_URL=http://hub.test/
 
@@ -52,22 +51,22 @@ out=$("$SUT" set "$P" linux-a); rc=$?
 [ "$rc" -eq 0 ] && [ "$out" = "machine-policy: SET $P: linux-a" ] || fail "C set: rc=$rc $out"
 grep -qF 'PUT http://hub.test/v1/fleet/machine-policy {"principal": "'$P'", "allow": ["linux-a"]}' "$STUB_BODY" \
   || fail "C set body: $(cat "$STUB_BODY")"
-ok
+st_count
 reset; fake '{"ok":true,"allow":[]}'
 out=$("$SUT" deny "$P"); rc=$?
 [ "$rc" -eq 0 ] && [ "$out" = "machine-policy: SET $P: no machine at all" ] \
   && grep -qF '"allow": []' "$STUB_BODY" || fail "C deny: rc=$rc $out / $(cat "$STUB_BODY")"
-ok
+st_count
 reset; fake '{"ok":true,"allow":null}'
 out=$("$SUT" clear "$P"); rc=$?
 [ "$rc" -eq 0 ] && [ "$out" = "machine-policy: SET $P: no list — every machine" ] \
   && grep -qF '"allow": null' "$STUB_BODY" || fail "C clear: rc=$rc $out / $(cat "$STUB_BODY")"
-ok
+st_count
 reset; fake '{"ok":true,"all":true,"allow":null}'
 out=$("$SUT" all "$P"); rc=$?
 [ "$rc" -eq 0 ] && [ "$out" = "machine-policy: SET $P: every machine (explicit)" ] \
   && grep -qF '"all": true' "$STUB_BODY" || fail "C all: rc=$rc $out / $(cat "$STUB_BODY")"
-ok
+st_count
 
 # D. reads
 reset; fake '{"users":[{"principal":"gh:1","allow":["linux-a","mac-e"]},{"principal":"gh:2","allow":[],"error":"not a JSON list"},{"principal":"gh:3","allow":[]},{"principal":"gh:4","allow":[],"all":true}]}'
@@ -76,10 +75,10 @@ printf '%s\n' "$out" | grep -qx 'machine-policy: gh:1 linux-a mac-e' \
   && printf '%s\n' "$out" | grep -qx 'machine-policy: gh:2 MALFORMED (no machine): not a JSON list' \
   && printf '%s\n' "$out" | grep -qx 'machine-policy: gh:3 (no machine)' \
   && printf '%s\n' "$out" | grep -qx 'machine-policy: gh:4 (every machine)' || fail "D show: $out"
-ok
+st_count
 reset; fake '{"users":[]}'
 out=$("$SUT" show)
-case "$out" in *"no lists — everyone may use every machine"*) ok ;; *) fail "D show none: $out" ;; esac
+case "$out" in *"no lists — everyone may use every machine"*) st_count ;; *) fail "D show none: $out" ;; esac
 reset; fake '{"users":[{"principal":"'$P'","allow":["linux-a"]}],"effective":{"principal":"'$P'","restricted":true,"machines":[
   {"machine":"linux-a","allowed":true,"reason":""},
   {"machine":"mac-b","allowed":false,"reason":"这台机器暂未对你开放，可用：linux-a"}]}}'
@@ -88,26 +87,26 @@ printf '%s\n' "$out" | grep -qx "machine-policy: $P linux-a" \
   && printf '%s\n' "$out" | grep -qx '  OPEN  linux-a' \
   && printf '%s\n' "$out" | grep -qx '  OFF   mac-b — 这台机器暂未对你开放，可用：linux-a' \
   && grep -qF 'GET http://hub.test/v1/fleet/machine-policy?principal=gh%3A2987262' "$STUB_BODY" || fail "D show principal: $out / $(cat "$STUB_BODY")"
-ok
+st_count
 
 # E. refused / down
 reset; fake '{"error":"bad"}' 400
 "$SUT" set "$P" mac-e >/dev/null 2>&1; [ $? -eq 4 ] || fail "E 400"
-ok
+st_count
 reset; fake '' 404
 "$SUT" show >/dev/null 2>"$WORK/err"; rc=$?
 [ "$rc" -eq 4 ] && grep -q predates "$WORK/err" || fail "E 404: rc=$rc"
-ok
+st_count
 reset; export FAKE_RC=7
 out=$("$SUT" show 2>"$WORK/err"); rc=$?
 [ "$rc" -eq 1 ] && [ -z "$out" ] && grep -q unreachable "$WORK/err" || fail "E down: rc=$rc"
 unset FAKE_RC
-ok
+st_count
 
 # F. no leak
 reset; fake '{"users":[]}'
 "$SUT" show >/dev/null
 ! grep -q "$VIEWER" "$STUB_LOG" && grep -q "Bearer $VIEWER" "$STUB_HDR" || fail "F: the token in an argv"
-ok
+st_count
 
 printf 'fleet-machine-policy selftest: %d checks passed\n' "$CHECKS"

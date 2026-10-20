@@ -44,22 +44,21 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 HOOK="$BIN/set-claude-state.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 [ -f "$HOOK" ] || { printf 'selftest: %s not found\n' "$HOOK" >&2; exit 2; }
 [ -f "$ROWS" ] || { printf 'selftest: %s not found\n' "$ROWS" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/needsreason.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/needsreason.XXXXXX"
 export TMPDIR="$WORK"
 export FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_CONF_DIR="$WORK/conf"
 mkdir -p "$WORK/bin" "$WORK/.claude-dash/global" "$WORK/conf"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-has()  { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1" "$2";; esac; }
-hasnt(){ CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1" "$2";; *) : ;; esac; }
+has()  { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) st_fail "$1" "$2";; esac; }
+hasnt(){ CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) st_fail "$1" "$2";; *) : ;; esac; }
 
 # ============================ STAMP =========================================
 # Shim: record every set-window-option — one line each, also when several ride one
@@ -126,13 +125,13 @@ T_DONE="$WORK/t-done.jsonl"; mk_pending "$T_DONE" AskUserQuestion answered
 # The helper itself — the ONE rule, so a drift in it is caught before the stamp.
 CHECKS=$((CHECKS+1))
 [ "$(sh "$BIN/fleet-pending-tool.sh" "$T_ASK")" = AskUserQuestion ] \
-  || fail "fleet-pending-tool.sh must name a pending AskUserQuestion" "$(sh "$BIN/fleet-pending-tool.sh" "$T_ASK")"
+  || st_fail "fleet-pending-tool.sh must name a pending AskUserQuestion" "$(sh "$BIN/fleet-pending-tool.sh" "$T_ASK")"
 CHECKS=$((CHECKS+1))
 [ "$(sh "$BIN/fleet-pending-tool.sh" "$T_BASH")" = Bash ] \
-  || fail "fleet-pending-tool.sh must name a pending Bash" "$(sh "$BIN/fleet-pending-tool.sh" "$T_BASH")"
+  || st_fail "fleet-pending-tool.sh must name a pending Bash" "$(sh "$BIN/fleet-pending-tool.sh" "$T_BASH")"
 CHECKS=$((CHECKS+1))
 sh "$BIN/fleet-pending-tool.sh" "$T_DONE" >/dev/null 2>&1 \
-  && fail "fleet-pending-tool.sh must exit non-zero when the newest tool_use is answered"
+  && st_fail "fleet-pending-tool.sh must exit non-zero when the newest tool_use is answered"
 
 out=$(notif "$T_ASK" | hook needs bell)
 has "a question behind a permission_prompt still sets needs" "$out" '@claude_state needs'
@@ -173,12 +172,12 @@ has "a Stop CLEARS the reason"                      "$out" "$CLEARED"
 # started writing an empty @claude_needs it would erase the reason behind a state it
 # deliberately refuses to touch, ~60s after any session went quiet.
 out=$(printf '%s' '{"hook_event_name":"Notification","message":"Claude is waiting for your input"}' | hook needs bell)
-[ "$out" = END ] || fail "the idle_prompt Notification must write nothing at all" "$out"
+[ "$out" = END ] || st_fail "the idle_prompt Notification must write nothing at all" "$out"
 CHECKS=$((CHECKS+1))
 # 2.1.272 also labels it structurally; that spelling must stay just as silent, and it
 # must not be dragged into the transcript read either (#656).
 out=$(printf '%s' '{"hook_event_name":"Notification","message":"whatever it says now","notification_type":"idle_prompt","transcript_path":"'"$T_ASK"'"}' | hook needs bell)
-[ "$out" = END ] || fail "a structurally-typed idle_prompt must write nothing at all" "$out"
+[ "$out" = END ] || st_fail "a structurally-typed idle_prompt must write nothing at all" "$out"
 CHECKS=$((CHECKS+1))
 printf 'selftest: STAMP legs PASS (perm/ask stamped · subtype read off the TRANSCRIPT, not the wording · every other write clears · idle_prompt writes nothing)\n' >&2
 
@@ -215,11 +214,11 @@ w 5 blocked          /w/repo-issue-15   needs  @5  15  /w/repo-issue-15   blocke
 w 6 done-but-stamped /w/repo-issue-16   'done' @6  16  /w/repo-issue-16   blocked
 
 out=$(FLEET_SESSION="$SESS" FZF_COLUMNS=120 bash "$ROWS" 2>&1) \
-  || fail "rows producer exited non-zero" "$out"
+  || st_fail "rows producer exited non-zero" "$out"
 row_of() { printf '%s\n' "$out" | grep -F "$SESS:$1$US"; }
 r1=$(row_of 1); r2=$(row_of 2); r3=$(row_of 3); r4=$(row_of 4); r5=$(row_of 5); r6=$(row_of 6)
 [ -n "$r1" ] && [ -n "$r2" ] && [ -n "$r3" ] && [ -n "$r4" ] && [ -n "$r5" ] && [ -n "$r6" ] \
-  || fail "expected a row per fixture window" "$out"
+  || st_fail "expected a row per fixture window" "$out"
 
 # ONE glyph since issue #1328: every needs kind is the same red `!` (ten glyphs
 # were more than anyone could keep apart). The KIND moved into words — the act
@@ -253,7 +252,7 @@ det_of() { printf '%s\n' "$side" | awk -F"$US" -v w="$1" '$1 == w { print $3 "|"
 has "sidebar: ask → ! + its detail"     "$(det_of @1)" "!|$(fleet_ui_t needs_ask)"
 has "sidebar: perm → ! + its detail"    "$(det_of @2)" "!|$(fleet_ui_t needs_perm)"
 has "sidebar: blocked → ! + its detail" "$(det_of @5)" "!|$(fleet_ui_t needs_blocked)"
-case "$(det_of @4)" in *'|') CHECKS=$((CHECKS+1)) ;; *) fail "sidebar: a working row has no detail" "$(det_of @4)" ;; esac
+case "$(det_of @4)" in *'|') CHECKS=$((CHECKS+1)) ;; *) st_fail "sidebar: a working row has no detail" "$(det_of @4)" ;; esac
 printf 'selftest: GLYPH legs PASS (one red ! · the kind in words · one cell · never on a non-needs row)\n' >&2
 
 printf 'selftest PASS: needs-reason — @claude_needs stamped+cleared by the hook, rendered by the dash (%s checks, #640)\n' "$CHECKS"
