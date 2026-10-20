@@ -357,6 +357,31 @@ exit 0
                 authority.match_ticket_ref(REGISTERED, "7", ref)
         self.assertEqual(authority.match_ticket_ref(REGISTERED, "7", "gh:exampleorg/space#7"), "gh")
 
+    def test_id_switch_admits_by_the_accepted_record_never_bare(self):
+        # EPIC T497 C6: with the ID switch on a task's window opens unclaimed, so
+        # --finish has no FLEET_LAUNCH; the hub's accepted record is the admission
+        d = dict(task="T9", generation=1, attempt_id="task:T9:g1", resolved_agent="claude")
+        record = dict(d, authority_version=1, state="accepted", repo=CANONICAL,
+                      ticket_ref="gh:ExampleOrg/Space#7")
+        env = {"FLEET_LAUNCH": "", "FLEET_ID_DISPATCH": json.dumps(d), "FLEET_ID_SWITCH": "on"}
+        with patch.dict(os.environ, env), \
+                patch.object(authority.hubrest, "api", return_value=dict(mode="hub")), \
+                patch.object(authority.launch, "task_call", return_value=record) as call:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                authority.gate(REGISTERED, True)
+            self.assertEqual(json.loads(out.getvalue()), dict(mode="hub", ticket_ref=record["ticket_ref"]))
+            call.assert_called_once_with({"task": "T9"})
+        refusals = (({}, dict(state="starting")), ({}, dict(execution_owner="fleet/x")),
+                    ({}, dict(outcome="succeeded")), ({}, dict(generation=2)),
+                    ({}, dict(repo="other/space")), ({"FLEET_ID_SWITCH": "off"}, {}),
+                    ({"FLEET_ID_DISPATCH": ""}, {}), ({"FLEET_ID_DISPATCH": json.dumps(dict(d, task=""))}, {}))
+        for more_env, changed in refusals:
+            with patch.dict(os.environ, dict(env, **more_env)), \
+                    patch.object(authority.hubrest, "api", return_value=dict(mode="hub")), \
+                    patch.object(authority.launch, "task_call", return_value=dict(record, **changed)):
+                with self.assertRaises(ValueError, msg=(more_env, changed)):
+                    authority.gate(REGISTERED, True)
+
     def test_unavailable_and_invalid_json_are_not_frozen(self):
         self.bad_json = True
         result = self.cli(REGISTERED, "--gate")

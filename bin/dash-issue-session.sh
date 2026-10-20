@@ -834,7 +834,9 @@ if [ -n "$TASK_REF" ]; then
   fleet_worktree_task_mark "$wt" "$TASK_REF" || :
 fi
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
-fleet_repo_authority_guard "$REPO" --finish "$SESS" >/dev/null || { refuse "$FLEET_AUTHORITY_ERROR"; exit "$RC_INFRA"; }
+# FLEET_ID_DISPATCH: as dash-raw-session.sh (EPIC T497 C6)
+FLEET_ID_DISPATCH="${TASK_REF:+$DISPATCH}" \
+  fleet_repo_authority_guard "$REPO" --finish "$SESS" >/dev/null || { refuse "$FLEET_AUTHORITY_ERROR"; exit "$RC_INFRA"; }
 [ -z "${FLEET_AUTHORITY_START:-}" ] || pend="$pend FLEET_AUTHORITY_START=$(shq "$FLEET_AUTHORITY_START") "
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }

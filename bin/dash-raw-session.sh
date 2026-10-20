@@ -662,7 +662,10 @@ fi
 if [ -n "$TASK_REF" ] && [ -z "$REBIND" ]; then
   printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
 fi
-[ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish "$SESS" >/dev/null \
+# FLEET_ID_DISPATCH: with the ID switch on there is no claim, and the accepted
+# dispatch is what the gate checks against the hub (EPIC T497 C6)
+[ "$NOREPO" = 1 ] || FLEET_ID_DISPATCH="${TASK_REF:+$DISPATCH}" \
+  fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish "$SESS" >/dev/null \
   || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
 win=""; slug=""; wt=""
 
