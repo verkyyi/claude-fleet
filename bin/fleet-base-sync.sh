@@ -40,6 +40,9 @@
 # daemon, no $TMUX), so it needs no tmux at all: just git + the lease. It fans
 # out over live fleets like the cleanup/ledger daemons but the tmux socket is
 # only used (via fleet_hub_sessions) to DISCOVER which fleets are up.
+# The one addition at the end of a tick (T673): bin/fleet-repo-follow.py tick —
+# a managed login adds the repos its person's other machines host (only adds,
+# throttled, its own record); see that script.
 #
 # ON BY DEFAULT for every fleet, like the collector — cost is one `fetch`/tick,
 # no gh, no LLM (opt out per fleet with FLEET_BASE_SYNC=0). `--dry-run` prints
@@ -241,4 +244,14 @@ for sess in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
     sync_repo "$sess" "$repo" "$main" "$base" "$slug" "$deps" </dev/null
   done < <(fleet_ident "$sess")
 done
+# Every repo the person's machines host, here too (T673, 节点选择 C): a managed
+# login adds what it lacks — throttled to one hub read per FLEET_REPO_FOLLOW_SECS,
+# only ever adding; fleet-repo-follow.py records each failure and retries it later.
+if [ -f "$BIN/fleet-repo-follow.py" ]; then
+  _rf=(); for sess in ${SESSIONS[@]+"${SESSIONS[@]}"}; do _rf+=(--session "$sess"); done
+  [ "$DRY" = 1 ] && _rf+=(--dry-run)
+  FLEET_REPO_FOLLOW="${FLEET_REPO_FOLLOW:-1}" FLEET_REPO_FOLLOW_SECS="${FLEET_REPO_FOLLOW_SECS:-600}" \
+    python3 "$BIN/fleet-repo-follow.py" tick ${_rf[@]+"${_rf[@]}"} </dev/null 2>/dev/null \
+    | while IFS= read -r l; do log "repos: $l"; done
+fi
 exit 0

@@ -3423,14 +3423,20 @@ EOF
 # repos does this fleet run, and are they all usable". A one-repo fleet shows it
 # too. The failing items were each already reported (and counted) as their own
 # row in the block above, so a WARN here names them without counting again.
+# The person's repos this machine lacks (T673, fleet-repo-follow.py's record:
+# $rf_gap) end the row as 「缺（本人其它机器有）」 and make it a WARN, counted once —
+# the `跟仓库` row below says why each is still missing. No record ⇒ no change.
 _repos_row() {
   rr_tag=''; [ "$2" -gt 1 ] && rr_tag=" ($1)"
-  if [ "$rs_n" = 0 ]; then
+  rr_gap=''; [ -n "${rf_gap:-}" ] && rr_gap=" · 缺（本人其它机器有）：$rf_gap"
+  if [ "$rs_n" = 0 ] && [ -z "$rr_gap" ]; then
     pass repos "0 hosted$rr_tag — a fleet with no repo yet (fleet-repo.sh add <owner/repo>)"
-  elif [ "$rs_bad" = 0 ]; then
+  elif [ "$rs_bad" = 0 ] && [ -z "$rr_gap" ]; then
     pass repos "$rs_n hosted$rr_tag: $rs_list"
+  elif [ "$rs_bad" = 0 ]; then
+    warn repos "$rs_n hosted$rr_tag: ${rs_list:-—}$rr_gap"
   else
-    printf '  %sWARN%s  %-8s %s\n' "$Y" "$Z" repos "$rs_n hosted$rr_tag: $rs_list"
+    printf '  %sWARN%s  %-8s %s\n' "$Y" "$Z" repos "$rs_n hosted$rr_tag: $rs_list$rr_gap"
   fi
 }
 
@@ -3453,6 +3459,11 @@ if [ -f "$tr_sh" ] && grep -q '^  node)' "$tr_sh" 2>/dev/null; then
     info 信任框 "不放宽：这台不算可信节点（${_pt_why:-判不出}）— 只预信任窗口所在仓库的 checkout + worktree（#563）；无仓库会话、编排会话仍会停在「是否信任此文件夹」"
   fi
   unset _pt _pt_v _pt_rc _pt_why
+fi
+rf_rows=''; rf_gap=''
+if [ -f "$conf_dir/repo-follow.json" ] && [ -f "$(dirname "$0")/fleet-repo-follow.py" ]; then
+  rf_rows=$(FLEET_CONF_DIR="$conf_dir" python3 "$(dirname "$0")/fleet-repo-follow.py" status --doctor 2>/dev/null)
+  rf_gap=$(printf '%s\n' "$rf_rows" | awk -F'\t' '$1=="gap"{print $3; exit}')
 fi
 if [ -d "$conf_dir" ]; then
   rs_fleets=$(_fleet_confs "$conf_dir" | grep -c .)
@@ -3477,6 +3488,18 @@ if [ -d "$conf_dir" ]; then
 $(_fleet_confs "$conf_dir")
 EOF
 fi
+# 跟仓库 / 分到 (T673): does this machine follow its person's repo set, and where
+# did the hub send sessions in the last 24 hours — fleet-repo-follow.py's record,
+# never a hub call from here. No record ⇒ no rows.
+while IFS=$'\t' read -r rf_lv rf_name rf_txt; do
+  case "$rf_lv" in
+    pass) pass "$rf_name" "$rf_txt" ;;
+    info|warn) info "$rf_name" "$rf_txt" ;;   # the gap's WARN is the repos row's, counted once
+  esac
+done <<EOF
+$rf_rows
+EOF
+unset rf_rows rf_gap rf_lv rf_name rf_txt
 
 # --- alerts (issue #1238): what the status bar counts, READ off the one
 # producer's file ($G/alerts.ndjson, bin/fleet-alerts.sh) — the doctor computes
