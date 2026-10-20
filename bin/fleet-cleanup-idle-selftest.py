@@ -1681,36 +1681,13 @@ class StuckReaps(unittest.TestCase):
             notice(tm, "@1", "merged:9:abc", 0, 600)
 
 
-def fan_out(part):
-    """Parts 1–3 (every case its own rig: a git repo, a tmux server, ~0.6 s of
-    clean() passes each) run their slice as three processes at once — the same cases,
-    each in its own process (the tmux label is the pid's), each output kept whole
-    and printed in turn. Part 4/4 never: RigCalls is one budget per process."""
-    import selftest_part
-    k, n = (int(x) for x in part.split("/"))
-    every = list(selftest_part._flat(unittest.defaultTestLoader.loadTestsFromModule(sys.modules["__main__"])))
-    mine = [t.id().split(".", 1)[1] for t in every[k - 1::n]]
-    print("selftest_part: part %s — %d of %d cases, in three processes" % (part, len(mine), len(every)), flush=True)
-    env = {x: v for x, v in os.environ.items() if x != "SELFTEST_PART"}
-    procs = []
-    for half in (mine[0::3], mine[1::3], mine[2::3]):
-        if half:
-            out = tempfile.TemporaryFile()
-            procs.append((subprocess.Popen([sys.executable, os.path.abspath(__file__), str(BIN)] + half, env=env,
-                                           stdout=out, stderr=subprocess.STDOUT), out))
-    rc = 0
-    for p, out in procs:
-        rc |= p.wait()
-        out.seek(0)
-        sys.stdout.buffer.write(out.read())
-        sys.stdout.flush()
-    sys.exit(1 if rc else 0)
-
-
 if __name__ == "__main__":
     import selftest_part
-    if os.environ.get("SELFTEST_PART") in ("1/4", "2/4", "3/4") and len(sys.argv) == 1:
-        fan_out(os.environ["SELFTEST_PART"])
+    # Parts 1–3 (every case its own rig: a git repo, a tmux server, ~0.6 s of
+    # clean() passes each) run as three processes at once — the tmux label is the
+    # pid's. Part 4/4 never: RigCalls is one budget per process.
+    if os.environ.get("SELFTEST_PART") in ("1/4", "2/4", "3/4"):
+        selftest_part.fan_out(3, argv_prefix=[str(BIN)])
     try:
         selftest_part.main()
     finally:

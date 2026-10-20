@@ -3975,4 +3975,7 @@ if __name__ == "__main__":
     import selftest_part  # SELFTEST_PART=K/N runs one slice of the cases (issue #2694)
     if os.environ.get("SELFTEST_PART", "all") not in ("", "all") and len(sys.argv) == 1:
         _STRIDE_DISCOVERY = True
+    # each part's cases as two processes at once: they mostly wait on a daemon's
+    # tick, each in a sandbox of its own
+    selftest_part.fan_out(2)
     selftest_part.main()

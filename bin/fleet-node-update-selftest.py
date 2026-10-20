@@ -2246,4 +2246,7 @@ if __name__ == "__main__":
         # own install-sync cannot (issue #2714)
         unittest.main(argv=[sys.argv[0], "M_FollowInstall"], verbosity=1)
     import selftest_part  # SELFTEST_PART=K/N runs one slice of the cases (issue #2694)
+    # each part's cases as two processes at once, a class's cases together (every
+    # case its own sandbox; T_Codesign shares a keychain across its cases)
+    selftest_part.fan_out(2, by_class=True)
     selftest_part.main()
