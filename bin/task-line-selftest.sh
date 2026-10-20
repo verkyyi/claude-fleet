@@ -12,6 +12,10 @@
 #   D. @agent_cwd (issue #3183): a Bash call's PostToolUse stamps the payload's
 #      top-level cwd (never one inside tool_input); another tool's leaves it; a
 #      relative or escaped one is not written
+#   F. a blank new session (T652, EPIC T651 C1): a window opened on a placeholder
+#      name (@title_pending) is renamed by its first prompt's first line (≤30) —
+#      window name, @task_line, and `fleet-task-record.sh retitle T<n> --from
+#      <placeholder>` — once; a cross-session message renames nothing
 # No live Claude, no network. Exit 0 = pass.
 set -uo pipefail
 
@@ -107,5 +111,31 @@ st_eq "E: a cross-session message — its sender and words" "来自 fleet：实�
 tf set-window-option -u -t "$PB" @task_line
 hook "$PB" "$UPS" "$(ups '<cross-session-message from-name="fleet"></cross-session-message>')"
 st_eq "E: an envelope with no words writes nothing" "" "$(tl "$PB")"
+
+# --- F ------------------------------------------------------------------------
+cat > "$WORK/inst/bin/fleet-task-record.sh" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> '$WORK/retitle.log'
+EOF
+PC=$(tf new-window -d -P -F '#{pane_id}' -t tl: -n 新会话 'exec sleep 300')
+tf set-window-option -t "$PC" @title_pending 新会话
+tf set-window-option -t "$PC" @task T7
+FLEET_UI_LANG=zh hook "$PC" "$UPS" "$(ups '<cross-session-message from-name="fleet">看看</cross-session-message>')"
+st_eq "F: a cross-session message renames nothing" "新会话|新会话" \
+   "$(tf display-message -p -t "$PC" '#{window_name}|#{@title_pending}')"
+tf set-window-option -u -t "$PC" @task_line
+hook "$PC" "$UPS" "$(ups $'\n  修一下面板读取变慢，顺便看看为什么首帧要等 hub 才画出来呢\n第二行')"
+st_eq "F: the first prompt's first line, 30 characters — the window's name" "修一下面板读取变慢，顺便看看为什么首帧要等 hub 才画出…" \
+   "$(tf display-message -p -t "$PC" '#{window_name}')"
+st_eq "F: …its @task_line, the stamp gone" "修一下面板读取变慢，顺便看看为什么首帧要等 hub 才画出…|" \
+   "$(tf display-message -p -t "$PC" '#{@task_line}|#{@title_pending}')"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/retitle.log" ] && break; sleep 0.2; done
+st_eq "F: …and the record, once, from the placeholder" "retitle T7 --from 新会话 --title 修一下面板读取变慢，顺便看看为什么首帧要等 hub 才画出…" \
+   "$(cat "$WORK/retitle.log" 2>/dev/null)"
+tf set-window-option -u -t "$PC" @task_line
+hook "$PC" "$UPS" "$(ups '再改一次')"
+sleep 0.3
+st_eq "F: a later first prompt (no stamp) renames nothing" "修一下面板读取变慢，顺便看看为什么首帧要等 hub 才画出…|1" \
+   "$(tf display-message -p -t "$PC" '#{window_name}')|$(grep -c . "$WORK/retitle.log")"
 
 printf 'task-line selftest: PASS (%s checks)\n' "$CHECKS"

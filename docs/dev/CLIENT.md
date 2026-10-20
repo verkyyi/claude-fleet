@@ -14,9 +14,10 @@ keyboard on the list.
 There is **one key**: **⌘P** on a Mac (iTerm2), and on a phone or any terminal
 with no ⌘ **⌃空格** (two taps on Termius: Ctrl, space), **F12** (one, once you put
 it on Termius' key row) or **⌃] p**. It opens the panel: every session, and every
-action. On the ⚡ row, ↵ or Tab opens the editor: write a task, then choose
-「开窗预填（不发送）」 to open a session with that draft and send it there, or
-「开空白会话」 for a blank session. A session's Tab menu opens its shell;
+action. On the ⚡ row, ↵ or Tab opens the 「新会话」 box (T652, EPIC T651 C1):
+仓库 ‹›, Agent ‹›, 开 — already chosen, so ↵ opens it; nothing is typed there, the
+first message is said in the session (and renames its row and record). A
+session's Tab menu opens its shell;
 「退出 fleet」 ends the connection. Open the panel again to return from the
 shell or switch sessions. The current panel's steps and row actions are in
 [日常使用](../public/zh/member/usage.md#一个键总面板).

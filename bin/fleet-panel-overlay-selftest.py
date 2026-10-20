@@ -152,13 +152,16 @@ class StateTests(unittest.TestCase):
         self.assertEqual(page.restore(data), ("query", {"ended"}, 3, 7))
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "draft.json"
+            # an older file's draft text is read and dropped (T652): repo and agent stay
+            path.write_text(json.dumps(dict(text="中\ne\u0301", pos=1, top=2, scroll=3, control=2,
+                                            repo="acme/app", agent="claude")))
+            old = p.Draft(path)
+            self.assertEqual((old.repo, old.agent), ("acme/app", "claude"))
+            self.assertFalse(hasattr(old, "editor"))
             d = p.Draft(path)
-            d.editor.insert("中\ne\u0301")
-            d.editor.pos, d.editor.top, d.scroll, d.control = 1, 2, 3, 2
             self.assertTrue(d.save(dict(repo="acme/web", agent="codex")))
+            self.assertEqual(json.loads(path.read_text()), dict(repo="acme/web", agent="codex"))
             again = p.Draft(path)
-            self.assertEqual((again.editor.text, again.editor.pos, again.editor.top, again.scroll, again.control),
-                             ("中\ne\u0301", 1, 2, 3, 2))
             self.assertEqual((again.repo, again.agent), ("acme/web", "codex"))
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
@@ -237,31 +240,31 @@ class NativeTests(unittest.TestCase):
             self.keys("Escape")
             after = self.wait("Tab 操作").splitlines()
             self.assertEqual(before[1:-2], after[1:-2])
-            # ↑ from the first row goes to New; Enter opens without any action.
+            # ↑ from the first row goes to New; Enter opens the box without any action.
             self.keys("Up", "Enter")
-            self.wait("开窗预填")
-            self.evidence.append("COMPOSER %d columns\n%s" % (width, self.screen()))
+            box = self.wait("开 ↵")
+            self.evidence.append("COMPOSER %d columns\n%s" % (width, box))
+            self.assertEqual(len([x for x in box.splitlines() if x.strip().startswith(("仓库 ‹", "Agent ‹", "开 ↵"))]), 3)
             self.assertEqual(self.actions(), [])
             self.keys("Escape")
             # Cancel restores source (New); down wraps via language/quit to first.
             self.keys("Down", "Down", "Down")
         self.keys("Up", "Enter")
-        self.literal("中e\u0301文")
-        self.keys("Enter")
-        self.literal("second")
-        self.keys("Left", "Left")
+        self.wait("开 ↵")
+        self.literal("中e\u0301文")       # nothing to type into: the words go nowhere
+        self.keys("Up", "Up", "Right")
         before = self.draft()
         for width in (189, 60, 100, 48, 80, 32, 48, 189):
             self.tm("resize-window", "-t", "test", "-x", str(width))
             time.sleep(.08)
         self.keys("Escape")
         after = self.draft()
-        self.assertEqual((before["text"], before["pos"], before["repo"], before["agent"]),
-                         (after["text"], after["pos"], after["repo"], after["agent"]))
+        self.assertEqual((before["repo"], before["agent"]), (after["repo"], after["agent"]))
+        self.assertNotIn("text", after)
         self.assertEqual(self.actions(), [])
         self.keys("Escape")
         self.wait("POPUP-CLOSED")
-        self.evidence.append("PASS widths 189/100/80/60/48; prefix/geometry/cancel unchanged; continuous resize preserves caret/draft; zero actions; terminal restored")
+        self.evidence.append("PASS widths 189/100/80/60/48; prefix/geometry/cancel unchanged; continuous resize keeps the box's choice; zero actions; terminal restored")
 
     def test_page_numbers_step_and_invalidation(self):
         # a number runs its item on the page's own row; [ ] steps to the next session
@@ -327,53 +330,53 @@ class NativeTests(unittest.TestCase):
         self.start()
         self.keys("Up", "Enter")
         self.wait("Agent ‹Codex›")
-        self.keys("Tab", "Tab", "Tab", "Enter")
+        self.keys("Enter")      # the box opens on 开
         self.wait("Codex unavailable")
         self.assertEqual(self.actions(), [])
         self.assertEqual(self.draft()["agent"], "codex")
 
     def test_paste_never_activates_controls(self):
         self.keys("Up", "Enter")
-        self.wait("开窗预填")
+        self.wait("开 ↵")
+        # the box opens on 开: a pasted Enter / Tab is text nobody types, never a key
         self.literal("\x1b[200~literal\n\ttext\n\x1b[201~")
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline and self.draft().get("text") != "literal\n    text\n":
-            time.sleep(.05)
-        self.assertEqual(self.draft()["text"], "literal\n    text\n", self.screen())
-        self.keys("Tab", "Tab", "Tab")
-        self.literal("\x1b[200~\n\n\t\n\x1b[201~")
+        time.sleep(.3)
         self.assertEqual(self.actions(), [])
+        self.assertIn("开 ↵", self.screen())
         self.keys("Escape", "Escape")
         self.wait("POPUP-CLOSED")
-        self.evidence.append("PASS bracketed multiline paste stays text; pasted Enter/Tab on a button dispatches nothing")
+        self.evidence.append("PASS a bracketed paste in the box dispatches nothing")
 
-    def test_multiline_submit_once_options_and_persistence(self):
-        self.literal("draft")
-        self.keys("Enter")
-        self.wait("开窗预填")
-        self.keys("Enter")
-        self.literal("第二行 e\u0301")
-        self.keys("Tab", "Right", "Tab", "Right")
+    def test_box_three_items_submit_once_and_persistence(self):
+        self.keys("Up", "Enter")
+        box = self.wait("开 ↵")
+        # three items, opened chosen: the pick's repo, the fleet's agent
+        self.assertEqual([x.strip() for x in box.splitlines() if x.strip().startswith(("仓库 ‹", "Agent ‹", "开 ↵"))],
+                         ["仓库 ‹acme/web›", "Agent ‹Codex›", "开 ↵"])
+        for word in ("开窗预填", "清空草稿", "开空白会话", "写任务"):
+            self.assertNotIn(word, box)
+        # ↑↑ 仓库 → acme/app, ↓ Agent → Claude; ↵ on a value goes to 开 (nothing runs)
+        self.keys("Up", "Up", "Right", "Down", "Right", "Enter")
         self.assertEqual(self.actions(), [])
         saved = self.draft()
-        self.assertEqual(saved["text"], "draft\n第二行 e\u0301")
         self.assertEqual((saved["repo"], saved["agent"]), ("acme/app", "claude"))
         self.keys("Escape", "Escape")
         self.wait("POPUP-CLOSED")
         self.start()
         self.keys("Up", "Enter")
-        self.wait("开窗预填")
-        self.assertEqual(self.draft()["text"], saved["text"])
-        # Focus (agent) is also retained; Tab -> explicit draft button.
-        self.keys("Tab", "Enter", "Enter", "Enter")
+        box = self.wait("开 ↵")
+        self.assertIn("仓库 ‹acme/app›", box)
+        self.assertIn("Agent ‹Claude›", box)
+        self.keys("Enter")
         actions = self.actions()
         self.assertEqual(len(actions), 1)
         argv = actions[0]["argv"]
-        self.assertIn("--draft", argv)
+        self.assertEqual(argv[argv.index("do"):argv.index("do") + 2], ["do", "new"])
+        self.assertNotIn("--draft", argv)
+        self.assertNotIn("--title", argv)
         self.assertEqual(argv[argv.index("--repo") + 1], "acme/app")
         self.assertEqual(argv[argv.index("--agent") + 1], "claude")
-        self.assertEqual(argv[argv.index("--title") + 1], saved["text"])
-        self.evidence.append("PASS multiline Enter does not submit; cancel/reopen preserves draft/repo/agent/focus; explicit button submits exactly once to acme/app with claude")
+        self.evidence.append("PASS three items opened chosen; ↵ on a value goes to 开; reopen keeps repo/agent; 开 runs `do new` once with acme/app and claude, no words")
 
 
 if __name__ == "__main__":

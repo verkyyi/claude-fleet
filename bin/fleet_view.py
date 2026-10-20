@@ -104,10 +104,13 @@ sessions. Every second-level screen is a whole page in the list's place — its
 object on top (the session line, or ⚡ 新任务), a rule, then one item a line with
 the list's height, highlight, ↑↓ and ↵; no floating box anywhere. Escape steps
 back a level (a question asked from the actions page returns to it) and from the
-first restores the list's selection/search/scroll. Composer Enter inserts a
-newline; only its explicit draft/blank buttons call bolt_argv (the existing
-unsubmitted-draft routes). Draft text, caret, repo and agent persist per view;
-confirmed draft opening or explicit clear consumes text, blank opening does not.
+first restores the list's selection/search/scroll. The ⚡ page is the 「新会话」
+box (T652, EPIC T651 C1): 仓库 ‹›, Agent ‹›, 开 — three items, nothing to type;
+it opens on 开 with both chosen, so ↵ opens (bolt_argv → go_new, the one road:
+under hub authority a repo's blank session is a record titled 「新会话」, renamed
+by its first prompt). Tab / ↑↓ walk, ←→ change the lit value, ↵ on a value goes
+to 开. The repo and agent persist per view (panel-drafts; an older file's draft
+text is read and dropped — compat-1v: 下一批删).
 The footer contains keys, an optional glyph legend and transient feedback.
 FLEET_PANEL_COMMANDS still controls new/quit/landed through panel_rows().
 
@@ -2607,21 +2610,22 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
     (dash-raw-session.sh --no-repo, the hub's own origin), then go() onto it: the
     pane is the agent's input. No session is special, so nothing here names a
     template. rc as go(); 3 when none opened (one line on the client).
-    ⌘P's ⚡ row (issue #3327) names its cells: `repo` (--repo, else --no-repo),
-    `agent` (--agent, the panel's resolved selection) and `draft` (the typed
-    words, left unsubmitted). Explicit `prompt` callers retain seeded starts."""
+    ⌘P's ⚡ row — the 「新会话」 box (issue #3327, T652) — names its two values:
+    `repo` (--repo, else --no-repo) and `agent` (--agent, the box's selection);
+    nothing is typed. `draft` (an older panel's words, left unsubmitted) is read
+    one more version (compat-1v: 下一批删). Explicit `prompt` callers retain
+    seeded starts."""
     fleet = view_fleet(vid)
     if not fleet:
         return 2
     if repo and not prompt and new_authority(fleet, vid, repo) == "hub":
         # under hub authority a repo's start is a task record first (issue #4965):
-        # with words it is the ⚡ row's send; without, there is nothing to record
-        said = say("view_new_failed_fmt", say("view_new_hub_words"))
+        # a blank one (T652, EPIC T651 C1) is a record titled 「新会话」 with no first
+        # turn, renamed by its first prompt. `draft` words: an older panel's send
+        # (compat-1v: 下一批删)
         if draft:
             return bolt_task(vid, client, repo, agent, draft)
-        toast(client, said)
-        print(said, file=sys.stderr, flush=True)
-        return 3
+        return bolt_blank(vid, client, repo, agent)
     seam = os.environ.get("FLEET_VIEW_NEW_CMD")
     argv = shlex.split(seam) if seam else ["bash", str(Path(__file__).absolute().parent / "dash-raw-session.sh")]
     if not agent:
@@ -2681,6 +2685,26 @@ def bolt_task(vid, client, repo, agent, words):
         return 0 if subprocess.run(argv, stdin=subprocess.DEVNULL).returncode == 0 else 3
     except OSError:
         return 3
+
+
+def bolt_blank(vid, client, repo, agent):
+    """go_new's blank repo session under hub authority (T652): `send --blank` —
+    the record, then its session here, the 看台 onto it. rc as go_new."""
+    argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"), "send", "--blank",
+            "--repo", repo, "--view", "%s@view-%s" % (view_fleet(vid), vid)] + \
+        (["--agent", agent] if agent else []) + (["--client", client] if client else [])
+    try:
+        p = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8", errors="replace",
+                           timeout=fenv("FLEET_VIEW_NEW_SECS", 60) + 120)
+    except (OSError, subprocess.SubprocessError) as error:
+        p = subprocess.CompletedProcess(argv, 1, "", str(error))
+    if p.returncode == 0:
+        return 0
+    last = ((p.stdout or "").strip().splitlines() or (p.stderr or "").strip().splitlines() or [""])[-1]
+    said = last or say("view_new_failed_fmt", say("view_new_exit_fmt", p.returncode))
+    toast(client, said)
+    print(said, file=sys.stderr, flush=True)
+    return 3
 
 
 def new_agent(fleet, vid):
@@ -3770,18 +3794,20 @@ def grid_read(vid):
 
 def bolt_new(g=None):
     """The ⚡ row's state: the cells read (`g`), what the person changed — `repo`
-    None follows the words (none: 不绑仓库; words: the last send's repo), `agent`
-    None is the fleet's default — and the cell Tab is on ('' · repo · agent).
+    None is the pick (the last send's repo, else the only one), `agent` None is the
+    fleet's default — and the cell Tab is on ('' · repo · agent).
     No `g` yet (the popup reads it off its thread): not `ready` — the repo cell
     says …, and a ↵ waits for the read rather than guess 不绑仓库."""
     return {"g": g or {"repos": [], "last": "", "agent": "claude", "missing": {}, "blocked": []},
             "repo": None, "agent": None, "focus": "", "ready": g is not None}
 
 
-def bolt_repo(st, query):
+def bolt_repo(st, query=""):
+    """The box's repo: the person's choice, else the pick (the last send's repo,
+    else the only one) — the 「新会话」 box opens chosen (T652)."""
     if st["repo"] is not None:
         return st["repo"]
-    return (st["g"].get("last") or "") if query.strip() else ""
+    return st["g"].get("last") or ""
 
 
 def bolt_dflt(st):
@@ -3853,7 +3879,7 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
         else:
             hit = any(e["kind"] == "sess" for e in out)
             out.append({"kind": "cmd", "cmd": "new", "act": "new", "row": {},
-                        "text": say("view_cmd_task_fmt", q) if q else say("view_cmd_blank"),
+                        "text": say("view_cmd_blank"),
                         "foot": say("view_nomatch") if q and not hit else ""})
     lr = lang_row(query) if words else None
     if lr:
@@ -3863,25 +3889,15 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
     return out
 
 
-def bolt_argv(qo, vid, client, st, query):
-    """Open a scratch and leave the typed words as an unsubmitted draft.
-
-    Repo drafts keep hub placement; otherwise use the local new-session path.
-    Neither route files an issue or submits a model turn — except under hub
-    authority, where a repo's words become a task record T<n> first and its
-    session's first turn (fleet-quick-dispatch.py task_send, issue #4965).
-    """
-    repo, agent = bolt_repo(st, query), bolt_agent(st)
-    extra = ["--agent", agent]
+def bolt_argv(qo, vid, client, st, query=""):
+    """The 「新会话」 box's 开 (T652, EPIC T651 C1): ONE road, `do new` (go_new) with
+    the repo and agent — nothing typed, no draft, no first turn. Under hub
+    authority go_new makes a repo's start a record titled 「新会话」 first."""
+    repo, agent = bolt_repo(st), bolt_agent(st)
     cl = ["--client", client] if client else []
-    title = query.strip()
-    if title and repo:
-        argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"), "send",
-                "--title", title, "--repo", repo, "--view", "%s@view-%s" % (view_fleet(vid), vid), "--toast", "--draft"] + extra + cl
-    else:
-        argv = [sys.executable, qo.__file__, "do", "new", "--view", vid] + cl + (["--repo", repo] if repo else []) \
-            + extra + (["--draft", title] if title else [])
-    return argv, title, " · ".join((repo or say("view_grid_norepo"), agent.capitalize()))
+    argv = [sys.executable, qo.__file__, "do", "new", "--view", vid] + cl + (["--repo", repo] if repo else []) \
+        + ["--agent", agent]
+    return argv, "", " · ".join((repo or say("view_grid_norepo"), agent.capitalize()))
 
 
 def bolt_run(argv, done):
@@ -4109,7 +4125,7 @@ def _popup(screen, qo, vid, client, forward=""):
     draft = panel.Draft(conf_dir() / "panel-drafts" / (draft_key + ".json"))
     bolt.update(repo=draft.repo, agent=draft.agent)
     page, follow_list, ask_focus = None, True, 0
-    editor_follow = False
+    box = 2         # the 「新会话」 box's lit item: 0 仓库 · 1 Agent · 2 开 (T652)
 
     def save_draft():
         nonlocal msg
@@ -4205,18 +4221,15 @@ def _popup(screen, qo, vid, client, forward=""):
         actions_page(rows_[(i + d) % len(rows_)])
 
     def compose(row):
-        nonlocal mode, editor_follow
+        """The 「新会话」 box (T652): opens on 开, both values chosen."""
+        nonlocal mode, box
         anchor(row)
-        if not draft.editor.text and query.strip():
-            draft.editor.insert(query)
-        # Resolve defaults once for this draft; later list/search changes cannot
-        # silently change its destination. Async grid loading is handled below.
+        # Resolve the defaults once; later list/search changes cannot silently
+        # change its destination. Async grid loading is handled below.
         if bolt["ready"] and bolt["repo"] is None:
-            bolt["repo"] = bolt_repo(bolt, draft.editor.text)
-        mode = "compose"
-        page.scroll = draft.scroll
-        page.follow = False
-        editor_follow = False
+            bolt["repo"] = bolt_repo(bolt)
+        mode, box = "compose", 2
+        page.scroll, page.follow = 0, True
         save_draft()
 
     def valid_row(r):
@@ -4310,11 +4323,8 @@ def _popup(screen, qo, vid, client, forward=""):
         if job:
             # the ⚡ row's ↵ ended: opened ⇒ the 看台 is on it, the popup closes
             rc, said = job.pop(0)
-            sent = busy
             busy = None
             if rc == 0:
-                if sent and sent.get("draft"):
-                    draft.editor = panel.Editor()
                 save_draft()
                 return 0
             msg = said or say("view_new_failed")
@@ -4380,7 +4390,6 @@ def _popup(screen, qo, vid, client, forward=""):
         if not busy and not page and lit_e.get("epic") and not query.split():
             keys = say("view_keys_epic") + "  " + keys
         hits, controls = {}, {}
-        editor_width, editor_height = 20, 1
         if page:
             # the page (plan B): its object on top — the session line as the list
             # draws it, or ⚡ 新任务 — a rule, then one item a line, list-styled
@@ -4431,35 +4440,16 @@ def _popup(screen, qo, vid, client, forward=""):
                 selected = max(i for i, k in controls.items() if k == ask_focus)
                 keys = say("view_ask_keys_back") if stack else say("view_ask_keys")
             elif mode == "compose":
+                # the 「新会话」 box (T652): 仓库 ‹›, Agent ‹›, 开 — nothing to type
                 if bolt["ready"] and bolt["repo"] is None:
-                    bolt["repo"] = bolt_repo(bolt, draft.editor.text)
+                    bolt["repo"] = bolt_repo(bolt)
                 if bolt["ready"] and bolt["agent"] is None:
                     bolt["agent"] = bolt_agent(bolt)
-                editor_width = max(2, w - 3)
-                editor_height = max(1, min(12, body - 2 - 7))
-                ed = draft.editor
-                erows = ed.rows(editor_width, qo.cells)
-                cy, cx = ed.cursor(erows, qo.cells)
-                ed.top = panel.clamp_top(ed.top, len(erows), editor_height)
-                if editor_follow:
-                    ed.top = panel.reveal(ed.top, cy, editor_height)
-                editor_follow = False
-                for i in range(min(editor_height, max(1, len(erows) - ed.top))):
-                    k = ed.top + i
-                    text = ed.text[slice(*erows[k])] if k < len(erows) else ""
-                    controls[len(lines)] = 0
-                    lines.append(("  " + (text or (say("view_draft_ph") if not ed.text and i == 0 else "")),
-                                  ("dim",) if not ed.text else ()))
-                if draft.control == 0 and ed.top <= cy < ed.top + editor_height:
-                    cursor = cy - ed.top, 2 + cx
-                lines.append(("─" * w, ("dim",)))
-                cells, note = bolt_cells(bolt, ed.text)
-                for k, label in enumerate([cells[0][0], cells[1][0], say("view_draft_open"),
-                                           say("view_blank_open"), say("view_draft_clear")], 1):
+                cells, note = bolt_cells(bolt, "")
+                for k, label in enumerate([cells[0][0], cells[1][0], say("view_new_open")]):
                     controls[len(lines)] = k
-                    lines.append(("  " + label, ("lit",) if draft.control == k else ()))
-                selected = (max(0, min(editor_height - 1, cy - ed.top)) if draft.control == 0 else
-                            next(i for i, k in controls.items() if k == draft.control))
+                    lines.append(("  " + label, ("lit",) if box == k else ()))
+                selected = next(i for i, k in controls.items() if k == box)
                 if note:
                     lines.append(("  " + note, ("dim",)))
                 keys = say("view_compose_keys")
@@ -4468,8 +4458,6 @@ def _popup(screen, qo, vid, client, forward=""):
             if page.follow and selected is not None:
                 page.scroll = panel.reveal(page.scroll, selected, area)
             page.follow = False
-            if mode == "compose":
-                draft.scroll = page.scroll
             for k, (text, style) in enumerate(lines[page.scroll:page.scroll + area]):
                 y = off + 2 + k
                 text = qo.clip(text, w)
@@ -4500,13 +4488,7 @@ def _popup(screen, qo, vid, client, forward=""):
             continue
         if isinstance(ch, tuple) and ch[0] == "paste":
             if page:
-                if mode == "compose" and draft.control == 0:
-                    text = ch[1].replace("\t", "    ")
-                    if not draft.editor.insert(text):
-                        msg = say("view_draft_limit")
-                    editor_follow, page.follow = True, True
-                    save_draft()
-                elif mode == "ask" and ask_focus == 0 and pend[3] == "text":
+                if mode == "ask" and ask_focus == 0 and pend[3] == "text":
                     line.text += " ".join(ch[1].split())[:400]
                 # Pasting onto a button never activates it.
                 continue
@@ -4552,17 +4534,17 @@ def _popup(screen, qo, vid, client, forward=""):
                         continue
                     mat = i
                 elif mode == "compose":
-                    draft.control = controls.get(i, draft.control)
-                    if draft.control == 0:
-                        n = draft.editor.top + i
-                        rows = draft.editor.rows(editor_width, qo.cells)
-                        if n < len(rows):
-                            a0, b0 = rows[n]
-                            draft.editor.pos = a0
-                            while draft.editor.pos < b0 and qo.cells(draft.editor.text[a0:draft.editor.pos + 1]) <= mx - 2:
-                                draft.editor.pos += 1
+                    # a click lights a value (again: its next one); a click on 开 opens
+                    if i not in controls:
+                        continue
+                    if controls[i] in (0, 1):
+                        if box == controls[i]:
+                            bolt["focus"] = "repo" if box == 0 else "agent"
+                            bolt_step(bolt, "", 1)
+                        box = controls[i]
                         save_draft()
                         continue
+                    box = 2
                 elif mode == "ask":
                     ask_focus = controls.get(i, ask_focus)
                 ch = "\n" if buttons & (curses.BUTTON1_CLICKED | curses.BUTTON1_RELEASED | curses.BUTTON1_DOUBLE_CLICKED) else None
@@ -4639,43 +4621,31 @@ def _popup(screen, qo, vid, client, forward=""):
                     line.key(ch)
                 continue
             if mode == "compose":
-                if ch in ("\t", curses.KEY_BTAB):
-                    draft.control = (draft.control + (1 if ch == "\t" else -1)) % 6
-                    page.follow = True
-                elif draft.control == 0:
-                    if not draft.editor.key(ch, editor_width, qo.cells):
-                        msg = say("view_draft_limit")
-                    editor_follow, page.follow = True, True
-                elif draft.control in (1, 2) and ch in (curses.KEY_LEFT, curses.KEY_RIGHT, " ", "\n", "\r"):
-                    bolt["focus"] = "repo" if draft.control == 1 else "agent"
-                    bolt_step(bolt, draft.editor.text, -1 if ch == curses.KEY_LEFT else 1)
-                elif ch in (curses.KEY_UP, curses.KEY_DOWN):
-                    draft.control = max(0, min(5, draft.control + (-1 if ch == curses.KEY_UP else 1)))
-                    page.follow = True
-                elif ch in ("\n", "\r", curses.KEY_ENTER, " "):
-                    if draft.control == 5:
-                        draft.editor = panel.Editor()
-                        draft.control, page.scroll = 0, 0
-                    elif draft.control in (3, 4):
-                        if not bolt["ready"]:
-                            msg = say("view_grid_loading")
-                            continue
-                        text = draft.editor.text if draft.control == 3 else ""
-                        if draft.control == 3 and not text.strip():
-                            msg = say("view_draft_empty")
-                            continue
-                        repo = bolt_repo(bolt, text)
-                        if repo and repo not in bolt["g"].get("repos", []):
-                            msg = say("view_draft_repo_gone")
-                            continue
-                        missing = bolt["g"].get("missing") or {}
-                        if bolt_agent(bolt) in missing:
-                            msg = str(missing[bolt_agent(bolt)]) or say("view_draft_agent_gone")
-                            continue
-                        argv, title, where = bolt_argv(qo, vid, client, bolt, text)
-                        busy = {"title": title, "where": where, "draft": draft.control == 3}
-                        save_draft()
-                        bolt_run(argv, job)
+                # the 「新会话」 box (T652): Tab / ↑↓ walk the three, ←→ change the
+                # lit value, ↵ on a value goes to 开, ↵ on 开 opens
+                if ch in ("\t", curses.KEY_BTAB, curses.KEY_UP, curses.KEY_DOWN, "\x10", "\x0e"):
+                    box = (box + (1 if ch in ("\t", curses.KEY_DOWN, "\x0e") else -1)) % 3
+                elif box in (0, 1) and ch in (curses.KEY_LEFT, curses.KEY_RIGHT, " "):
+                    bolt["focus"] = "repo" if box == 0 else "agent"
+                    bolt_step(bolt, "", -1 if ch == curses.KEY_LEFT else 1)
+                elif box in (0, 1) and ch in ("\n", "\r", curses.KEY_ENTER):
+                    box = 2
+                elif box == 2 and ch in ("\n", "\r", curses.KEY_ENTER, " "):
+                    if not bolt["ready"]:
+                        msg = say("view_grid_loading")
+                        continue
+                    repo = bolt_repo(bolt)
+                    if repo and repo not in bolt["g"].get("repos", []):
+                        msg = say("view_draft_repo_gone")
+                        continue
+                    missing = bolt["g"].get("missing") or {}
+                    if bolt_agent(bolt) in missing:
+                        msg = str(missing[bolt_agent(bolt)]) or say("view_draft_agent_gone")
+                        continue
+                    argv, title, where = bolt_argv(qo, vid, client, bolt)
+                    busy = {"title": title, "where": where}
+                    save_draft()
+                    bolt_run(argv, job)
                 save_draft()
                 continue
             continue

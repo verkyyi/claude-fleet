@@ -34,18 +34,14 @@
 #      `exit` closes the shell window alone — the session's window, its
 #      @claude_state and its process unchanged
 #   P  ⌘P's one entry (issue #3327, EPIC #3178 ④ — 方案 B; #3180 before it): the
-#      search line is the only input; under the sessions ONE ⚡ row (「⚡ 新会话（空白）」
-#      on no words, 「⚡ 新任务：<字>」 on words) with its cells 仓库 ‹…› · Agent ‹…›
-#      (codex grey with why), then ⏻ 退出 — no other command row; FLEET_PANEL_COMMANDS
-#      `none` takes them away, the retired `shell` / `newsess` make none (`view-panel`).
-#      Opened: the session in view lit, ↑ 到 ⚡ in the keys. Words that hit light the
-#      session (keys 「↵ 切到 #N  ↓ 到 ⚡ 派「…」」), ↓ is ⚡, Tab walks 仓库 → Agent, ←→
-#      changes them, ↵ sends to the repo picked. Words that hit nothing light ⚡ with
-#      「没有会话叫这句话」; ↵ is ONE `fleet-quick-dispatch.py send`
-#      (FLEET_DISPATCH_SEND_CMD) of the words to the last repo, the row its progress
-#      (开工中… · 派单中，esc 可以先关) — esc closes the panel and the send still lands.
-#      No words: ↑ goes round to ⚡, ↵ = ⌘N's argv, the 看台 on it; words with 不绑仓库
-#      = a session here, `--prompt <the words>`; ⏻ = ⌘Q's OSC 7502 + detach
+#      search line is the only input; under the sessions ONE ⚡ row (「⚡ 新会话」)
+#      then ⏻ 退出 — no other command row; FLEET_PANEL_COMMANDS `none` takes them
+#      away, the retired `shell` / `newsess` make none (`view-panel`). ⚡ (↵ on
+#      words that hit nothing, Tab on it) opens the 「新会话」 box (T652, EPIC T651
+#      C1): 仓库 ‹›, Agent ‹›, 开 ↵ — three items, nothing to type, opened on 开 with
+#      both chosen; ↑↓ walk, ←→ change, ↵ on a value goes to 开, ↵ on 开 is ⌘N's
+#      argv with --repo / --no-repo and --agent (no send, no words), the 看台 on
+#      it, the choice kept per view; ⏻ = ⌘Q's OSC 7502 + detach
 #   I  ⌘P's language row (issue #3329, EPIC #3178 D7): 语言 lights 「◐ 语言 / Language」,
 #      ↵ flips to English — kept on the hub (a seam) and re-read here at once, the
 #      panel redrawn in it with a 3 s line — Tab's 跟系统走 takes it back; none
@@ -122,7 +118,9 @@ for a in "\$@"; do case "\$a" in *'fleet-remote-view.sh select'*) exit 0 ;; esac
 printf '%s\n' "\$@" > '$W/ssh.argv'
 cd '$W/farwt' && exec /bin/sh -i
 EOF
-chmod +x "$W/ensure.sh" "$W/newsess.sh" "$W/send.sh" "$W/fakessh.sh"
+# the person's task authority, asked of no real hub: legacy (the 新会话 box's repo start)
+printf '#!/bin/sh\necho legacy\n' > "$W/legacy.sh"
+chmod +x "$W/ensure.sh" "$W/newsess.sh" "$W/send.sh" "$W/fakessh.sh" "$W/legacy.sh"
 : > "$W/conf/peerlink/mac-a.sock"
 printf '{"links":[{"machine":"mac-a","login":"%s","phase":"up","sock":"%s","host":"mac-a"}]}\n' "$ME" "$W/conf/peerlink/mac-a.sock" \
   > "$W/conf/peerlink/state.json"
@@ -131,6 +129,7 @@ printf 'acme/app\nacme/web\n' > "$W/g/hub_repos"
 
 export HOME="$W/home" FLEET_CONF_DIR="$W/conf" FLEET_STATUS_G="$W/g" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
   FLEET_VIEW_ORCH_CMD="sh $W/ensure.sh" FLEET_VIEW_NEW_CMD="sh $W/newsess.sh" FLEET_DISPATCH_SEND_CMD="sh $W/send.sh" FLEET_DISPATCH_AGENTS_HERE=claude \
+  FLEET_DISPATCH_AUTHORITY_CMD="$W/legacy.sh" \
   FLEET_SWITCH_STATE="$W/state" FLEET_AGENT=claude FLEET_SESSION_SHELL_WATCH=1 FLEET_PEERLINK_SSH="$W/fakessh.sh" \
   SHELL=/bin/sh FLEET_VIEW_ROWS_CMD="cat '$W/rows.txt'"
 unset TMUX TMUX_PANE FLEET_SHELL FLEET_SESSION FLEET_CLIENT
@@ -221,7 +220,7 @@ ok=''; for _ in $(seq 1 80); do
   sleep 0.1; to capture-pane -p -t o:view > "$W/dispatch.txt"; grep -q '已并进 ⌘P' "$W/dispatch.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || st_fail "T: ⌘T in the 看台 did not open the panel saying 「⌘T 已并进 ⌘P」: $(cat "$W/dispatch.txt")"
-grep -q '  ⚡ 新会话（空白）' "$W/dispatch.txt" || st_fail "T: ⌘T's panel is not lit on ⚡: $(grep -v '^$' "$W/dispatch.txt")"
+grep -q '  ⚡ 新会话' "$W/dispatch.txt" || st_fail "T: ⌘T's panel is not lit on ⚡: $(grep -v '^$' "$W/dispatch.txt")"
 grep -qF '⌘T 已并进 ⌘P' "$W/dispatch.txt" || st_fail "T: the hint does not name ⌘T: $(grep '已并进' "$W/dispatch.txt")"
 grep -q '用哪个 Coding Agent' "$W/dispatch.txt" && st_fail "T: ⌘T still opened the 派一件事 popup"
 # the panel clock (issue #3551): the frame drawn ⇒ one run boot · read · frame · total
@@ -366,53 +365,51 @@ popen() {
   to send-keys -t o:view -H 1b 5b 39 32 37 7e
   waitfor 20 listed || st_fail "P: panel did not open"
 }
-pcompose() {
+# The 「新会话」 box (T652, EPIC T651 C1): ⚡ opens it on words that hit nothing
+# (the words are only a search — nothing is typed into the box), or Tab on ⚡.
+pbox() {
   popen
-  to send-keys -t o:view -l "$1"; sleep 0.3
+  to send-keys -t o:view -l "${1:-zzqx}"; sleep 0.3
   to send-keys -t o:view Enter
-  waitfor 12 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '开窗预填'" || st_fail "P: composer did not open"
-  waitfor 48 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '仓库 ‹acme/'" || st_fail "P: repositories did not load"
+  waitfor 12 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '开 ↵'" || st_fail "P: the new-session box did not open"
+  waitfor 48 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -Eq '仓库 ‹(acme/|不绑仓库)'" || st_fail "P: repositories did not load"
 }
 pclosed() { waitfor 20 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '⚡'" || st_fail "P: panel stayed open"; }
-: > "$W/send.calls"; rm -f "$W/sent.json"; : > "$W/slow"
-pcompose '修 3164 的列表'
-[ ! -s "$W/send.calls" ] || st_fail "P: opening composer dispatched"
-to send-keys -t o:view Tab Tab Tab Enter
-waitfor 12 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '开窗中… 修 3164 的列表'" || st_fail "P: no progress"
-to send-keys -t o:view Escape; sleep 0.2; to send-keys -t o:view Escape
-pclosed
-rm -f "$W/slow"
-waitfor 40 test -s "$W/sent.json" || st_fail "P: send closed with panel"
-sleep 0.5
-[ "$(grep -c . "$W/send.calls")" = 1 ] || st_fail "P: duplicate send"
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["title"]=="修 3164 的列表" and d["via"]=="dispatch" and d["repo"]=="acme/web" and d["draft"]==d["title"] and not d["body"] and not d["issue"], d' "$W/sent.json" || st_fail "P: payload"
-# Search hit still enters the session; Down selects New, Tab explicitly opens it.
 : > "$W/send.calls"; rm -f "$W/sent.json"
+pbox '修 3164 的列表'
+to capture-pane -p -t o:view > "$W/panel-box.txt"
+[ "$(grep -cE '(仓库 ‹|Agent ‹|开 ↵)' "$W/panel-box.txt")" = 3 ] || st_fail "P: the box is not three items: $(cat "$W/panel-box.txt")"
+grep -Eq '开窗预填|清空草稿|开空白会话|写任务' "$W/panel-box.txt" && st_fail "P: the box still has the draft controls: $(cat "$W/panel-box.txt")"
+grep -q '仓库 ‹acme/web›' "$W/panel-box.txt" && grep -q 'Agent ‹Claude›' "$W/panel-box.txt" \
+  || st_fail "P: the box did not open chosen: $(cat "$W/panel-box.txt")"
+[ ! -s "$W/send.calls" ] || st_fail "P: opening the box dispatched"
+# opened chosen: the last send's repo (leg T's), the fleet's agent
+# ↑↑ to 仓库, ← acme/app, ↵ back to 开, ↵ opens: ⌘N's road with the repo — no send, no words
+to send-keys -t o:view Up Up Left; sleep 0.3
+to capture-pane -p -t o:view > "$W/panel-grid.txt"
+grep -q '仓库 ‹acme/app›' "$W/panel-grid.txt" || st_fail "P: ← did not pick the repo: $(cat "$W/panel-grid.txt")"
+to send-keys -t o:view Enter Enter
+waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new3" || st_fail "P: the box opened no session: $(to capture-pane -p -t o:view) $(cat "$W/new.argv")"
+[ "$(sed -n 3p "$W/new.argv")" = "--origin hub --repo acme/app --agent claude --print fl" ] || st_fail "P: repo argv: $(sed -n 3p "$W/new.argv")"
+N3=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "new3" { print $1 }')
+waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$N3' ]" || st_fail "P: not on new3"
+[ ! -s "$W/send.calls" ] || st_fail "P: the box sent words"
+pclosed
+python3 -c 'import json,pathlib,sys; ds=list(pathlib.Path(sys.argv[1]).glob("*.json")); d=json.loads(ds[0].read_text()); assert len(ds)==1 and d=={"repo":"acme/app","agent":"claude"}, d' "$W/conf/panel-drafts" \
+  || st_fail "P: the box did not keep its repo and agent: $(cat "$W"/conf/panel-drafts/*.json)"
+# Search hit still enters the session; ↓ lights ⚡, Tab opens the box too
 ti select-window -t "=fl@view-v1:$W3"; now_on "$W3"
 popen
 to send-keys -t o:view -l Gamma; sleep 0.3
-to send-keys -t o:view Down Tab; sleep 0.3
-waitfor 48 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '仓库 ‹acme/web›'" || st_fail "P: hit composer repo read"
-to send-keys -t o:view Tab Left Tab Right; sleep 0.3
-to capture-pane -p -t o:view > "$W/panel-grid.txt"
-grep -q '仓库 ‹acme/app›' "$W/panel-grid.txt" && grep -q 'Agent ‹Claude›' "$W/panel-grid.txt" || st_fail "P: repo/agent selection: $(cat "$W/panel-grid.txt")"
-to send-keys -t o:view Tab Enter
-waitfor 20 test -s "$W/sent.json" || st_fail "P: explicit draft button sent nothing"
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["title"]=="Gamma" and d["repo"]=="acme/app" and d["agent"]=="claude" and d["draft"]=="Gamma" and not d["body"], d' "$W/sent.json" || st_fail "P: picked repo"
+to send-keys -t o:view Down Tab
+waitfor 12 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '开 ↵'" || st_fail "P: Tab on ⚡ did not open the box"
+to send-keys -t o:view Escape; sleep 0.2; to send-keys -t o:view Escape
 pclosed
-# Blank button keeps the draft, and uses the selected no-repo/agent route.
-pcompose 'keep this draft'
-to send-keys -t o:view Tab Left Tab Tab Tab Enter
-waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new3" || st_fail "P: blank opened no session: $(to capture-pane -p -t o:view) $(cat "$W/new.argv")"
-[ "$(sed -n 3p "$W/new.argv")" = "--origin hub --no-repo --agent claude --print fl" ] || st_fail "P: blank argv: $(sed -n 3p "$W/new.argv")"
-N3=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "new3" { print $1 }')
-waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$N3' ]" || st_fail "P: not on new3"
-pclosed
-python3 -c 'import json,pathlib,sys; ds=list(pathlib.Path(sys.argv[1]).glob("*.json")); assert len(ds)==1 and json.loads(ds[0].read_text())["text"]=="keep this draft"' "$W/conf/panel-drafts" || st_fail "P: blank consumed draft"
-pcompose '看看日志'
-to send-keys -t o:view Tab Left Tab Tab Enter
-waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new4" || st_fail "P: no-repo draft opened no session"
-[ "$(sed -n 4p "$W/new.argv")" = "--origin hub --no-repo --agent claude --draft 看看日志 --print fl" ] || st_fail "P: no-repo argv: $(sed -n 4p "$W/new.argv")"
+# ↵ at once: the defaults (the last send's repo · Claude)
+pbox
+to send-keys -t o:view Enter
+waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new4" || st_fail "P: ↵ opened no session"
+[ "$(sed -n 4p "$W/new.argv")" = "--origin hub --repo acme/web --agent claude --print fl" ] || st_fail "P: default argv: $(sed -n 4p "$W/new.argv")"
 pclosed
 # Quit still goes through OSC 7502 + detach.
 to pipe-pane -o -t o:view "cat > '$W/client-p.bytes'"; sleep 0.3
@@ -422,7 +419,7 @@ waitfor 20 sh -c "! tmux -S '$IN' list-clients -F '#{session_name}' | grep -q 'v
 sleep 0.3
 python3 -c 'import sys; sys.exit(0 if b"\x1b]7502;quit;token=tok7\x07" in open(sys.argv[1],"rb").read() else 1)' "$W/client-p.bytes" || st_fail "P: quit OSC missing"
 to new-window -d -t o -n view "TMUX= tmux -S '$IN' attach -t 'fl@view-v1'"; sleep 1
-st_ok_all "P  composer opens without dispatch; explicit draft/blank buttons preserve the existing routes, agent, progress and quit"
+st_ok_all "P  the 新会话 box: three items opened chosen, ↵ opens ⌘N's one road with repo and agent, nothing typed; quit"
 
 # --- I: the language row (issue #3329, EPIC #3178 D7, L1–L3) --------------------------------
 # The person's choice is kept on the hub (a seam: GET/PUT the state file) and read back

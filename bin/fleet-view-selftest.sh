@@ -174,7 +174,7 @@ done
 # section — the panel's own ⚡ row (issue #3327) sits once, under the sessions
 # issue #3179: no (machine, login) grouping, a state is a glyph (the word only on the lit row)
 grep -A1 '│› ' "$W/popup.txt" | tail -1 | grep -q '─ 等你 1' || st_fail "B: the first line is not 等你: $(head -4 "$W/popup.txt")"
-[ "$(grep -c '⚡ 新' "$W/popup.txt")" = 1 ] && grep -q '⚡ 新会话（空白）' "$W/popup.txt" || st_fail "B: the ⚡ row not once: $(grep -n '⚡' "$W/popup.txt")"
+[ "$(grep -c '⚡ 新' "$W/popup.txt")" = 1 ] && grep -q '⚡ 新会话' "$W/popup.txt" || st_fail "B: the ⚡ row not once: $(grep -n '⚡' "$W/popup.txt")"
 grep -q '新任务[：…]' "$W/popup.txt" && st_fail "B: 「新任务」 on an empty panel: $(grep -n '新任务' "$W/popup.txt")"
 for bad in 'merged' 'done:2h' '⇢' '编排' '停放' '待你动手' '（这台）' '─ mac-a' '─ nodeA' '在问你'; do
   grep -qF -- "$bad" "$W/popup.txt" && st_fail "B: the list still says 「${bad}」: $(grep -F -- "$bad" "$W/popup.txt")"

@@ -179,11 +179,11 @@ def main():
                     frame()
                     tm(outer, "send-keys", "-t", "out:0", "Escape")
                     time.sleep(0.2)
-                    # Empty data keeps the new-task entry and its Tab cells.
+                    # Empty data keeps the new-session entry and its box (T652).
                     state.write_text("")
                     until(lambda: "PANEL-" not in capture() and "New session" in capture())
                     tm(outer, "send-keys", "-t", "out:0", "Tab")
-                    until(lambda: "Enter newline" in capture())
+                    until(lambda: "↵ open" in capture())
                     frame()
                     check(proc.poll() is None, "%d menu / empty list / new-task cells remain open" % width)
                     state.write_text(title)

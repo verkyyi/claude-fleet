@@ -21,6 +21,9 @@
 #      with no hub call), a code naming several → exit 2, candidates on stderr;
 #      code off the book even with no hub; children / mutate / set take a code; an
 #      older hub (no `short`) → T<n> alone, byte for byte.
+#   G  a blank new session (T652, EPIC T651 C1): dispatch --blank opens it on the
+#      placeholder name (--placeholder) with no first turn, each open its own record;
+#      retitle posts the once-only rename (from the placeholder).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -206,6 +209,28 @@ out=$(printf '风扇为什么一直转\n' | bash "$R" dispatch --title '看看�
 rm -f "$WORK/calls"
 printf 'x\n' | bash "$R" dispatch --title r --body-file - >/dev/null 2>&1; rc=$?
 [ "$rc" = 0 ] && [ ! -f "$WORK/calls" ] && ok "D no spawn, no repo: the record alone" || st_miss "D record-only rc=$rc"
+
+# --- G: a blank new session (T652, EPIC T651 C1) ------------------------------------
+rm -f "$WORK/calls"; : > "$CURL_LOG"
+out=$(bash "$R" dispatch --title '新会话' --repo o/r --spawn --blank --agent codex 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$out" = T5 ] && grep -Eq '^dash-raw-session\.sh --repo o/r --task T5 --name 新会话 --reap merged (--as fleet-worker )?--agent codex --placeholder$' "$WORK/calls" \
+  && ! grep -q -- '--prompt-file' "$WORK/calls" \
+  && ok "G --blank: the record, its session on the placeholder name — no first turn" || st_miss "G blank: rc=$rc [$out] $(cat "$WORK/calls" 2>&1)"
+tok1=$(grep -o '"token": "[^"]*"' "$CURL_LOG" | head -1)
+: > "$CURL_LOG"; sleep 1
+bash "$R" dispatch --title '新会话' --repo o/r --spawn --blank >/dev/null 2>&1
+tok2=$(grep -o '"token": "[^"]*"' "$CURL_LOG" | head -1)
+[ -n "$tok1" ] && [ -n "$tok2" ] && [ "$tok1" != "$tok2" ] \
+  && ok "G …each blank open is its own record (its token carries a nonce)" || st_miss "G tokens: [$tok1] [$tok2]"
+rm -f "$WORK/calls"
+printf 'x\n' | bash "$R" dispatch --title '新会话' --body-file - --repo o/r --spawn --blank >/dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] && [ ! -f "$WORK/calls" ] && ok "G --blank takes no words" || st_miss "G blank+words rc=$rc"
+: > "$CURL_LOG"
+bash "$R" retitle T5 --from '新会话' --title '修一下面板读取变慢'; rc=$?
+[ "$rc" = 0 ] && grep -q '^argv: .*-X POST .*/v1/node/tasks/T5$' "$CURL_LOG" \
+  && grep -q '"mutation": {"kind": "retitle", "idempotency_key": "retitle-T5", "from": "新会话", "title": "修一下面板读取变慢"}' "$CURL_LOG" \
+  && ok "G retitle: one retitle mutation on the record, from the placeholder" || st_miss "G retitle: rc=$rc $(cat "$CURL_LOG")"
+bash "$R" retitle T5 --title x >/dev/null 2>&1; [ "$?" = 2 ] && ok "G retitle without --from is usage" || st_miss "G retitle usage"
 
 # --- E: epic-member is gone (issue #4957): an EPIC's members are child tasks ------
 bash "$R" epic-member 3178 o/r 3330 x >/dev/null 2>&1; [ "$?" = 2 ] && ok "E epic-member is usage now" || st_miss "E epic-member still answers"

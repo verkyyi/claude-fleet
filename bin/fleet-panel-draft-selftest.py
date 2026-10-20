@@ -213,17 +213,77 @@ class PanelDraftTests(unittest.TestCase):
             self.assertEqual(arguments[arguments.index("--draft") + 1], "literal #42")
             self.assertNotIn("--prompt", arguments)
 
-    def test_panel_routes_draft_not_seed(self):
+    def test_panel_routes_one_road_no_words(self):
+        # the 「新会话」 box (T652, EPIC T651 C1): `do new` with repo and agent — no
+        # draft, no seed, no title, whatever the search line holds
         quick = SimpleNamespace(__file__="quickopen.py")
         for repo in ("acme/web", ""):
             with self.subTest(repo=repo), patch.object(fleet_view, "bolt_repo", return_value=repo), \
                     patch.object(fleet_view, "bolt_agent", return_value="codex"), \
                     patch.object(fleet_view, "bolt_dflt", return_value="codex"):
                 argv, title, where = fleet_view.bolt_argv(quick, "v1", "", {}, "检查 #42")
-            self.assertIn("--draft", argv)
+            self.assertEqual(argv[2:4], ["do", "new"])
+            for gone in ("--draft", "--prompt", "--title", "send"):
+                self.assertNotIn(gone, argv)
             self.assertEqual(argv[argv.index("--agent") + 1], "codex")
-            self.assertNotIn("--prompt", argv)
-            self.assertEqual(title, "检查 #42")
+            self.assertEqual(("--repo" in argv), bool(repo))
+            self.assertEqual(title, "")
+
+    def test_hub_blank_repo_session_is_a_record_without_words(self):
+        # go_new under hub authority with no words: `send --blank` (was: refused)
+        runs = []
+
+        def run(argv, **kwargs):
+            runs.append(argv)
+            return SimpleNamespace(returncode=0, stdout="已建 T9 并开工：acme/web\n", stderr="")
+        with patch.object(fleet_view, "view_fleet", return_value="fl"), \
+                patch.object(fleet_view, "new_authority", return_value="hub"), \
+                patch.object(fleet_view, "toast") as toast, \
+                patch.object(fleet_view.subprocess, "run", side_effect=run):
+            self.assertEqual(fleet_view.go_new(None, "v1", "/dev/ttys1", repo="acme/web", agent="codex"), 0)
+        toast.assert_not_called()
+        self.assertEqual(len(runs), 1)
+        argv = runs[0]
+        self.assertEqual(argv[2:4], ["send", "--blank"])
+        self.assertEqual(argv[argv.index("--repo") + 1], "acme/web")
+        self.assertEqual(argv[argv.index("--agent") + 1], "codex")
+        self.assertEqual(argv[argv.index("--view") + 1], "fl@view-v1")
+        self.assertNotIn("--title", argv)
+        # a refusal is said on the client, rc 3
+        with patch.object(fleet_view, "view_fleet", return_value="fl"), \
+                patch.object(fleet_view, "new_authority", return_value="hub"), \
+                patch.object(fleet_view, "toast") as toast, \
+                patch.object(fleet_view.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="✗ 没开成\n", stderr="")):
+            self.assertEqual(fleet_view.go_new(None, "v1", "c", repo="acme/web", agent="claude"), 3)
+        toast.assert_called_once_with("c", "✗ 没开成")
+
+    def test_dispatch_blank_send_records_the_placeholder_and_no_words(self):
+        calls = []
+
+        def run(argv, **kwargs):
+            calls.append((argv, kwargs.get("input")))
+            return SimpleNamespace(returncode=0, stdout="T9\n@42\tnew\t\tfid\n", stderr="")
+        dispatch.TEXT = {"dispatch_new_title": "新会话"}
+        with patch.dict(os.environ, {"FLEET_DISPATCH_HOSTED": "acme/web", "FLEET_DISPATCH_TASK_CMD": "task"}), \
+                patch.object(dispatch.subprocess, "run", side_effect=run), \
+                patch.object(dispatch.compose, "compose_log"), patch.object(dispatch, "go") as go, \
+                patch.object(dispatch, "load_text", return_value={"dispatch_new_title": "新会话"}), \
+                patch("builtins.print"):
+            self.assertEqual(dispatch.main(["send", "--blank", "--repo", "acme/web", "--agent", "codex",
+                                            "--view", "fl@view-v1"]), 0)
+        self.assertEqual(len(calls), 1)
+        argv, body = calls[0]
+        self.assertEqual(argv[:2], ["task", "dispatch"])
+        self.assertEqual(argv[argv.index("--title") + 1], "新会话")
+        self.assertIn("--blank", argv)
+        self.assertNotIn("--body-file", argv)
+        self.assertEqual(argv[argv.index("--agent") + 1], "codex")
+        self.assertFalse(body)
+        go.assert_called_once_with("fl@view-v1", "@42", "")
+        # no repo: refused, nothing run
+        with patch.object(dispatch.subprocess, "run", side_effect=AssertionError("ran")), \
+                patch.object(dispatch, "load_text", return_value={}), patch("builtins.print"):
+            self.assertEqual(dispatch.main(["send", "--blank"]), 2)
 
     def test_panel_preserves_resolved_agent_for_blank_and_typed_tasks(self):
         quick = SimpleNamespace(__file__="quickopen.py")

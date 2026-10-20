@@ -110,6 +110,8 @@ type nodeTaskMutation struct {
 	Generation     int64  `json:"generation"`
 	State          string `json:"state,omitempty"`
 	Evidence       string `json:"evidence,omitempty"`
+	From           string `json:"from,omitempty"`
+	Title          string `json:"title,omitempty"`
 }
 
 // UnmarshalJSON keeps the cancel's fields and drops the rest.
@@ -121,7 +123,7 @@ func (m *nodeTaskMutation) UnmarshalJSON(b []byte) error {
 	type plain nodeTaskMutation
 	var p plain
 	keep := map[string]json.RawMessage{}
-	for _, k := range []string{"idempotency_key", "kind", "expected_worker", "generation", "state", "evidence"} {
+	for _, k := range []string{"idempotency_key", "kind", "expected_worker", "generation", "state", "evidence", "from", "title"} {
 		if v, ok := all[k]; ok {
 			keep[k] = v
 		}
@@ -136,6 +138,14 @@ func (m *nodeTaskMutation) UnmarshalJSON(b []byte) error {
 
 func (m nodeTaskMutation) cancelsUnopened() bool {
 	return m.Kind == "transition" && m.State == store.TaskCancelled && m.ExpectedWorker == ""
+}
+
+// retitles is the other change a node posts (claude-fleet T652, EPIC T651 C1):
+// a blank new session's placeholder title (`from`) replaced by its first prompt's
+// first line (`title`), once — store.RetitleTask compares and sets.
+func (m nodeTaskMutation) retitles() bool {
+	return m.Kind == "retitle" && strings.TrimSpace(m.From) != "" && strings.TrimSpace(m.Title) != "" &&
+		utf8.RuneCountInString(m.Title) <= taskTitleMax && utf8.RuneCountInString(m.From) <= taskTitleMax
 }
 
 type nodeTaskWrite struct {
@@ -361,6 +371,19 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 		if t.AuthorityVersion != 0 || in.AuthorityVersion != 0 {
 			if t.AuthorityVersion != store.TaskAuthorityVersion || in.AuthorityVersion != store.TaskAuthorityVersion || in.Mutation == nil {
 				taskWriteError(w, store.ErrTaskFence)
+				return
+			}
+			if in.Mutation.Kind == "retitle" {
+				if !in.Mutation.retitles() {
+					httpError(w, http.StatusBadRequest, "retitle needs from and title, each 1..200 characters")
+					return
+				}
+				rec, err := s.Store.RetitleTask(t.ID, owner, in.Mutation.From, clipText(in.Mutation.Title, taskTitleMax), now)
+				if err != nil {
+					taskWriteError(w, err)
+					return
+				}
+				writeJSON(w, http.StatusOK, rec)
 				return
 			}
 			if !in.Mutation.cancelsUnopened() {

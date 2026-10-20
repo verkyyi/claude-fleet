@@ -98,10 +98,9 @@ class Editor:
 
 
 class Draft:
-    """Private per-view state. Cancel, retarget and session changes keep it.
-
-    Explicit clear or a confirmed successful *draft* opening clears text only;
-    repo/agent persist. A blank-session opening never consumes the text.
+    """Private per-view state of the 「新会话」 box (T652, EPIC T651 C1): the repo
+    and agent last chosen there. Nothing is typed in the box any more — an older
+    file's draft text, caret and focus are read and dropped (compat-1v: 下一批删).
     """
     def __init__(self, path):
         self.path = Path(path)
@@ -111,22 +110,12 @@ class Draft:
                 data = {}
         except (OSError, ValueError):
             data = {}
-        text = data.get("text", "")
-        self.editor = Editor(text if isinstance(text, str) and len(text) <= 4000 else "")
-        pos = data.get("pos")
-        if isinstance(pos, int):
-            self.editor.pos = max(0, min(pos, len(self.editor.text)))
-        self.editor.top = max(0, data.get("top", 0)) if isinstance(data.get("top", 0), int) else 0
         self.repo = data.get("repo") if isinstance(data.get("repo"), str) else None
         self.agent = data.get("agent") if data.get("agent") in ("claude", "codex") else None
-        self.control = data.get("control", 0) if isinstance(data.get("control", 0), int) else 0
-        self.control = max(0, min(self.control, 5))
-        self.scroll = max(0, data.get("scroll", 0)) if isinstance(data.get("scroll", 0), int) else 0
 
     def save(self, bolt):
         self.repo, self.agent = bolt["repo"], bolt["agent"]
-        data = dict(text=self.editor.text, pos=self.editor.pos, top=self.editor.top,
-                    repo=self.repo, agent=self.agent, control=self.control, scroll=self.scroll)
+        data = dict(repo=self.repo, agent=self.agent)
         tmp = None
         try:
             self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

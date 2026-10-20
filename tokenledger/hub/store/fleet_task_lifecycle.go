@@ -230,3 +230,38 @@ func (s *Store) CancelUnopenedTask(id int64, owner, evidence string, now time.Ti
 	}
 	return t, tx.Commit()
 }
+
+// RetitleTask renames an authoritative record ONCE (claude-fleet T652, EPIC T651
+// C1): a blank new session opens on a placeholder title (「新会话」) and its first
+// prompt's first line replaces it. Compare-and-set on `from` — the title the
+// record still has to carry — so the rename happens once and a later prompt, or
+// another writer, changes nothing (the record answers itself unchanged).
+func (s *Store) RetitleTask(id int64, owner, from, to string, now time.Time) (FleetTask, error) {
+	if strings.TrimSpace(from) == "" || strings.TrimSpace(to) == "" {
+		return FleetTask{}, ErrTaskInvalid
+	}
+	tx, err := s.write.Begin()
+	if err != nil {
+		return FleetTask{}, err
+	}
+	defer tx.Rollback()
+	if err = s.d.claimWrites(tx, "fleet_tasks"); err != nil {
+		return FleetTask{}, err
+	}
+	t, err := s.taskInTx(tx, id)
+	if err != nil {
+		return FleetTask{}, err
+	}
+	if t.AuthorityVersion != TaskAuthorityVersion || t.Owner != owner {
+		return FleetTask{}, ErrTaskFence
+	}
+	if t.Title != from {
+		return t, tx.Commit()
+	}
+	t.Title, t.UpdatedAt = to, now.UTC()
+	if _, err = tx.Exec(`UPDATE fleet_tasks SET title = ?, updated_at = ? WHERE id = ? AND owner = ? AND title = ? AND authority_version = 1`,
+		t.Title, now.UTC().Format(rfc), t.ID, t.Owner, from); err != nil {
+		return FleetTask{}, err
+	}
+	return t, tx.Commit()
+}
