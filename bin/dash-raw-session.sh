@@ -376,6 +376,10 @@ if [ -z "$NODE" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
 fi
 PLACING=0
 [ -n "$NODE" ] && ! fleet_node_is_self "$NODE" && PLACING=1
+# @placed (issue T672): `hub` when the hub chose this machine, `fallback-local`
+# when it could not be asked and the session opened here anyway; the bg pass
+# decides it itself.
+PLACED=''
 
 # Session cap (issues #28, #70): a raw session is a real Claude session, so it is
 # subject to the SAME global + per-fleet ceilings as an issue spawn. Refuse (with a
@@ -438,7 +442,9 @@ MAIN="${FLEET_MAIN:-}"
 AS_KV=''; TEMPLATE_AGENT=''
 if [ -n "$AS_ARG" ]; then
   _asdir=$HOME; [ "$NOREPO" != 1 ] && [ -n "$MAIN" ] && _asdir=$MAIN
-  if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG"; then
+  # A file shipped with the release is on every machine (issue T672): it travels;
+  # a file only here opens here.
+  if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG" && ! fleet_agent_file_travels "$AS_ARG"; then
     refuse "raw: --as $AS_ARG opens on this machine (the agent file is here), not on $NODE_ARG"; exit 1
   fi
   if ! AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "$_asdir" --for "$AS_FOR" 2>&1); then
@@ -544,11 +550,18 @@ fi
 # no-repo scratch (no repo to place by) and a seeded one (--prompt rides the
 # launch argument, here only) — named elsewhere they are refused, under `auto`
 # they open here. Hub module off: nothing runs unless --node names another machine.
+# A seeded scratch travels (issue T672): its words ride the start as the
+# scratch's body — a task's past the hub's 4000 characters cut, the record keeps
+# them all. An agent file only this machine has keeps it here.
+PLACE_AS=''
+if [ "$PLACING" = 1 ] && [ -n "$AS_ARG" ]; then
+  if fleet_agent_file_travels "$AS_ARG"; then PLACE_AS=$AS_ARG; else _as_here=1; fi
+fi
 if [ "$PLACING" = 1 ]; then
-  if [ "$NOREPO" = 1 ] || [ -n "$PROMPT$DRAFT" ]; then
+  if [ "$NOREPO" = 1 ] || [ -n "$DRAFT" ] || [ -n "${_as_here:-}" ]; then
     _why='a no-repo scratch'
-    [ -n "$PROMPT" ] && _why='a seeded scratch (--prompt)'
     [ -n "$DRAFT" ] && _why='a draft scratch (--draft)'
+    [ -n "${_as_here:-}" ] && _why="a session as $AS_ARG (the agent file is here)"
     if [ "$NODE" != auto ]; then refuse "raw: $_why opens on this machine only — not opening it on $NODE"; exit 1; fi
     PLACING=0
   elif [ "${CCQUOTA_FLEET:-0}" != 1 ]; then
@@ -565,7 +578,20 @@ if [ "$PLACING" = 1 ]; then
   _prepo="${REPO_ARG:-$(fleet_norm_repo "${FLEET_REPO:-}")}"
   python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
   _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
-  place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP"); place_rc=$?
+  _body=''
+  if [ -n "$PROMPT" ]; then
+    _body=$(mktemp "${TMPDIR:-/tmp}/fleet-place-body.XXXXXX") || exit 1
+    printf '%s' "$PROMPT" | python3 -c 'import sys
+t = sys.stdin.read(); ref = sys.argv[1]
+if len(t) > 4000:
+    note = "\n\n…（全文见任务记录 %s）" % ref if ref else "\n\n…"
+    t = t[:4000 - len(note)].rstrip() + note
+sys.stdout.write(t)' "$TASK_REF" > "$_body" || exit 1
+  fi
+  place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" \
+    FLEET_PLACE_AS="$PLACE_AS" FLEET_PLACE_BODY_FILE="$_body" \
+    fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP"); place_rc=$?
+  [ -n "$_body" ] && rm -f "$_body"
   if [ -s "$_dispatch_result" ]; then
     DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$AGENT" --accepted "$(cat "$_dispatch_result")") || { rm -f "$_dispatch_result"; exit 2; }
     TASK_REF=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')
@@ -580,7 +606,8 @@ if [ "$PLACING" = 1 ]; then
   esac
   case "$place_rc:$_pv" in
     4:REFUSED\ ALL_DECLINED)
-      refuse "raw: scratch 每台机器都拒绝了: ${_why:-no reason given}"; exit 1 ;;
+      refuse "raw: scratch 每台机器都拒绝了: ${_why:-no reason given}"
+      [ -n "$CAP_HELD" ] && exit 2; exit 1 ;;
     0:REMOTE\ *)
       read -r _ _m _op _st _w <<<"$_pv"
       if [ "$_st" = 'done' ]; then
@@ -599,17 +626,33 @@ if [ "$PLACING" = 1 ]; then
       refuse "raw: scratch 已派到 $_m (hub operation $_op)，但没等到结果 — 未知，不当成功: ${_why:-no final state}"
       exit 1 ;;
     0:LOCAL\ *)
+      PLACED=hub
       printf 'dash-raw-session: scratch 开在本机 %s — %s\n' "${_pv#LOCAL }" "$_why" >&2 ;;
     *)
       if [ "$NODE" != auto ]; then
         refuse "raw: scratch 不能开在 $NODE: ${_why:-${_pv:-hub unreachable}}"
         [ "$place_rc" = 4 ] && exit 2; exit 1
       fi
-      python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --placement-code "$place_rc" >/dev/null || exit 1
-      [ "$place_rc" = 4 ] && printf 'dash-raw-session: 没有机器能接这个 scratch (%s) — 开在本机\n' "$_why" >&2 ;;
+      # The hub placed it nowhere and this machine already said no (T672): refused,
+      # both reasons named — never opened here past its own gate.
+      if [ "$place_rc" = 4 ] && [ -n "$CAP_HELD" ]; then
+        refuse "raw: scratch 没有机器能接 — 入口: ${_why:-${_pv:-no reason given}}；本机: $CAP_HELD"; exit 2
+      fi
+      # Never reached (T672, rc 11): nothing was sent, so opening here can double
+      # nothing — this machine's fallback, said and stamped. A send that may have
+      # arrived (rc 1, a timeout) is not opened here (#4392).
+      _pc=$place_rc; [ "$place_rc" = 11 ] && _pc=10
+      python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --placement-code "$_pc" >/dev/null || exit 1
+      [ "$place_rc" = 4 ] && printf 'dash-raw-session: 没有机器能接这个 scratch (%s) — 开在本机\n' "$_why" >&2
+      if [ "$place_rc" = 11 ]; then
+        PLACED=fallback-local
+        [ -n "$CAP_HELD" ] || printf 'dash-raw-session: hub 不可达 — scratch 本机兜底 (@placed fallback-local)\n' >&2
+      fi
+      unset _pc ;;
   esac
-  unset _pw _u _pv _why _prepo
+  unset _pw _u _pv _why _prepo _body
 fi
+unset _as_here
 # Opening here after all: this machine's cap verdict, held above, now applies.
 if [ -n "$CAP_HELD" ]; then refuse "$CAP_HELD"; exit 2; fi
 # Opening here: a node the hub typed client runs no session (issue #4886).
@@ -781,6 +824,7 @@ fi
   # A task's record rides on the window before its agent starts (EPIC T497 C8:
   # no claim, no launch binding — the window's ID is the session).
   [ -n "$TASK_REF" ] && stamp="$stamp$(fleet_win_stamp_cmd @task "$TASK_REF")"
+  [ -n "$PLACED" ] && stamp="$stamp$(fleet_win_stamp_cmd @placed "$PLACED")"
   # a blank session's placeholder name, renamed by its first prompt (T652)
   [ "$PLACEHOLDER" = 1 ] && [ -n "$NAME" ] && stamp="$stamp$(fleet_win_stamp_cmd @title_pending "$NAME")"
   # C2: the task's ID, and — a redo here — its next attempt opened before the agent

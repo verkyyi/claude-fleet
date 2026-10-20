@@ -68,6 +68,10 @@
 #                                                   bin/fleet-migrate.sh (cfg_update_nudge, the /loop rearm)
 #   fleet-down-confirm                              bin/fleet-down.sh (confirm, --yes), fleet-up.sh --undo,
 #                                                   fleet-restore.sh --undo
+#   place-full-no-next / place-slow-bypass          fleet_hub_place (fleet-lib.sh: --not-here, rc 11, place_ms,
+#                                                   fleet_hub_place_ms), dash-issue-session.sh / dash-raw-session.sh
+#                                                   (CAP_HELD → the ask), fleet_agent_file_travels; the hub half is
+#                                                   tokenledger/hub/api fleet_place.go not_here (go test, when here)
 #   place-declined-not-retried                      fleet_hub_place (fleet-lib.sh: the `after` field, each try's
 #                                                   stderr), fleet-children.py (claim: stale); the hub half is
 #                                                   tokenledger/hub/api fleet_place.go (go test, when here)
@@ -4200,6 +4204,66 @@ drill_place_declined_not_retried() {
   esac
   SECS=$(since "$t0")
   WHAT="一台拒绝后入口换下一台（本机最后），行尾 after 段与逐台 stderr 传到节点；没开成又哪台都没会话的认领标 stale；$gohalf"
+}
+
+# ---- issue T672: a full machine hands the session on; every start asks the hub --
+
+drill_place_full_no_next() {
+  CAP=120; local t0 d="$WORK/pfull" out rc gohalf f
+  mkdir -p "$d"
+  t0=$(now)
+  # node half: this machine's own refusal rides the ONE ask as --not-here, and a hub
+  # that hears it answers another machine (the fake answers LOCAL without it).
+  cat > "$d/place" <<'PL'
+#!/bin/sh
+printf '%s\n' "$*" >> "$PLOG"
+case " $* " in *" --not-here "*) printf 'REMOTE mac-a op9 done @7\tchose mac-a; mac-b excluded: 本机准入不过：fleet at capacity\n' ;;
+  *) printf 'LOCAL mac-b\tchose mac-b\n' ;; esac
+PL
+  chmod +x "$d/place"
+  out=$(PLOG="$d/log" FLEET_CONF_DIR="$d/conf" bash -c '. "$1/fleet-lib.sh"; fleet_hub_on(){ return 0; }; fleet_uuid(){ echo 11111111-1111-4111-8111-111111111111; }
+        _fleet_hub_env(){ :; }; FLEET_PLACE_NOT_HERE="fleet at capacity: 4/4" FLEET_HUB_PLACE_CMD="$2" fleet_hub_place s o/r 7 auto' _ "$BIN" "$d/place" 2>/dev/null); rc=$?
+  [ "$rc" = 0 ] && case "$out" in 'REMOTE mac-a '*) true ;; *) false ;; esac \
+    || { WHY="a full machine's ask did not go elsewhere (rc=$rc): $out"; return 1; }
+  [ "$(grep -c . "$d/log")" = 1 ] && grep -q -- '--not-here fleet at capacity: 4/4' "$d/log" \
+    || { WHY="not one ask carrying --not-here: $(cat "$d/log")"; return 1; }
+  # both spawners hand their held verdict to the ask, and refuse when all are full
+  for f in dash-issue-session.sh dash-raw-session.sh; do
+    grep -q 'FLEET_PLACE_NOT_HERE="$CAP_HELD"' "$BIN/$f" || { WHY="$f no longer tells the hub it is full"; return 1; }
+  done
+  grep -q 'the hub was never reached' "$BIN/fleet-lib.sh" || { WHY="fleet_hub_place lost rc 11 (never reached ⇒ open here)"; return 1; }
+  gohalf='hub half: the Go gate runs TestNodePlaceNotHere*'
+  go_half '^TestNodePlaceNotHere(GoesElsewhere|AllFullNamesEach)$' ./hub/api; case $? in
+    0) gohalf='hub half: go test 本机不收 → 别台 / 全满列逐台原因 / 刚报暂停的不再派' ;;
+    1) return 1 ;;
+  esac
+  SECS=$(since "$t0")
+  WHAT="本机准入不过随那一次放置请求 --not-here 交给入口，入口换下一台；全满拒绝并列逐台原因；$gohalf"
+}
+
+drill_place_slow_bypass() {
+  CAP=60; local t0 d="$WORK/pslow" out
+  mkdir -p "$d"
+  t0=$(now)
+  # a seeded scratch (dispatch --spawn's road) asks the hub like any other: no
+  # here-only rule left for --prompt, and the words ride as --body-file
+  grep -q "a seeded scratch (--prompt)" "$BIN/dash-raw-session.sh" \
+    && { WHY="dash-raw-session.sh still keeps a seeded scratch here, past the hub"; return 1; }
+  grep -q 'FLEET_PLACE_BODY_FILE=' "$BIN/dash-raw-session.sh" || { WHY="a seeded scratch's words no longer travel"; return 1; }
+  # a shipped agent file travels (T604): --as fleet-worker is not refused elsewhere
+  grep -q 'fleet_agent_file_travels "$AS_ARG"' "$BIN/dash-raw-session.sh" "$BIN/dash-issue-session.sh" \
+    || { WHY="--as fleet-worker is refused on another machine again"; return 1; }
+  # every ask is timed, and the p90 is read off the log
+  printf '#!/bin/sh\nprintf "LOCAL mac-b\\tchose mac-b\\n"\n' > "$d/place"; chmod +x "$d/place"
+  for _ in 1 2 3; do
+    FLEET_CONF_DIR="$d/conf" bash -c '. "$1/fleet-lib.sh"; fleet_hub_on(){ return 0; }; fleet_uuid(){ echo 11111111-1111-4111-8111-111111111111; }
+      _fleet_hub_env(){ :; }; FLEET_HUB_PLACE_CMD="$2" fleet_hub_place s o/r scratch auto' _ "$BIN" "$d/place" >/dev/null 2>"$d/err"
+  done
+  grep -q '^fleet: place_ms=[0-9]* (LOCAL mac-b' "$d/err" || { WHY="the ask is not timed on stderr: $(cat "$d/err")"; return 1; }
+  out=$(FLEET_CONF_DIR="$d/conf" bash -c '. "$1/fleet-lib.sh"; fleet_hub_place_ms 20' _ "$BIN")
+  case "$out" in 'n=3 p50='*' p90='*) ;; *) WHY="fleet_hub_place_ms does not read the log: $out"; return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="带种子的会话（dispatch --spawn）与 --as fleet-worker 一样先问入口；每次放置记 place_ms，日志读 p90（${out}）"
 }
 
 # ---- one primary state source (issue #2537, EPIC #2535 C2) ------------------------

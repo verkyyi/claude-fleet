@@ -386,6 +386,10 @@ type writeRequest struct {
 	canonical string
 }
 
+// agentFileRE is an agent file's name (claude-fleet#3122), as the spawn
+// tool's `agent` spells it.
+var agentFileRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$`)
+
 // parseWrite validates one write tool's arguments and builds its request.
 func parseWrite(tool string, args map[string]any) (writeRequest, string, error) {
 	idem, _ := args["idempotency_key"].(string)
@@ -396,8 +400,18 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "task", "coding_agent", "dispatch", "ticket_ref"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "task", "coding_agent", "dispatch", "ticket_ref", "as"); err != nil {
 			break
+		}
+		// as (claude-fleet T672): the agent file the session starts as — the
+		// opening node finds it by name (dash-*-session.sh --as).
+		if v, ok := args["as"]; ok {
+			if a, isStr := v.(string); !isStr || !agentFileRE.MatchString(a) {
+				err = fault("INVALID_ARGUMENT", "as must be an agent file's name")
+				break
+			} else {
+				w.params["as"] = a
+			}
 		}
 		// kind (claude-fleet#1541): "issue" (the default — a worker on an
 		// issue, `issue` required) or "scratch" (a raw scratch session: no
@@ -1570,6 +1584,13 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node, provider string, no
 		}
 		if why, ok := declined[r.FleetID]; ok && c.Eligible {
 			c.Eligible, c.Excluded = false, excludedDeclined+why
+			if strings.HasPrefix(why, excludedAskerFull) {
+				c.Excluded = why // the asker's own «not here» (claude-fleet T672)
+			}
+		} else if why := s.placeHolds.held(r.FleetID, now); why != "" && c.Eligible && node == "auto" {
+			// It said «not here» a moment ago (claude-fleet T672): auto passes
+			// it over until its hold lapses or it asks again without one.
+			c.Eligible, c.Excluded = false, excludedAskerFull+why
 		}
 		pl.Candidates = append(pl.Candidates, c)
 	}

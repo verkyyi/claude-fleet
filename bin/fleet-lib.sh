@@ -6588,8 +6588,12 @@ fleet_hub_lease() {
 #   5  the start was sent and that machine's spawn refused it (<exit> is its
 #      code: 2 at capacity, 3 claimed, 1 anything else); the lease is ours again
 #   6  sent, but no final state within the wait — unknown, never a success
-#   1  the hub could not be asked (no command, no node token — #1491 —, no fleet
-#      UUID, or the command failed) — one stderr note; open it here as today
+#   1  the command failed in a way that may have reached the hub (a timeout, an
+#      answer that is no placement) — one stderr note; a dispatched start is
+#      then NOT opened here (#4392: the hub may have placed it already)
+#  11  the hub was never reached (issue T672): no command, no node token —
+#      #1491 —, no fleet UUID, or the connection itself failed (DNS, refused,
+#      TLS) — one stderr note; the caller opens it here, `@placed fallback-local`
 #  10  the hub module is off: nothing ran, nothing printed
 # <account_class> (issue #1540) is `local` / `pool` — the kind of subscription the
 # session must run on, carried to the machine that opens it as `--account`;
@@ -6598,20 +6602,28 @@ fleet_hub_lease() {
 # `<cmd> --node <node> [--origin-wid <wid>] [--agent <a>] [--account <c>] [--reap <p>] <repo> <issue> <worker_id>`
 # — for a scratch `[--name <n>] <repo> scratch <fleet UUID>` —
 # with the node token from node.env in ITS environment only (`_fleet_hub_env`).
+# Three more ride the caller's environment (issue T672), each one flag, unset ⇒
+# the argv as it was: FLEET_PLACE_NOT_HERE (this machine's own admission
+# refusal: `--not-here <why>` — the hub places it elsewhere in the same round
+# trip, or refuses naming every machine), FLEET_PLACE_AS (`--as <agent file>`,
+# a shipped one) and FLEET_PLACE_BODY_FILE (a scratch's seed, `--body-file`).
+# Every ask is timed: one `place_ms=<n>` line on stderr and one row in
+# $FLEET_CONF_DIR/logs/hub-place.log (`<ts>\t<what>\t<node>\t<rc>\t<ms>\t<answer>\t<not here 0|1>`).
 fleet_hub_place() {
   local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" wait="${7:-}" acct="${8:-}" name="${9:-}" reap="${10:-}" cmd u pre='' out rc why ef what wid
+  local nh="${FLEET_PLACE_NOT_HERE:-}" pas="${FLEET_PLACE_AS:-}" pbody="${FLEET_PLACE_BODY_FILE:-}" t0 pms
   fleet_hub_on "$sess" || return 10
   case "$num" in scratch) what='a scratch session' ;; ''|*[!0-9]*) return 1 ;; *) what="#$num" ;; esac
   cmd="${FLEET_HUB_PLACE_CMD:-}"
   if [ -z "$cmd" ]; then
     if command -v ccquota >/dev/null 2>&1; then cmd='ccquota place'
-    else printf 'fleet: hub placement unavailable (no FLEET_HUB_PLACE_CMD, no ccquota on PATH) — opening %s here\n' "$what" >&2; return 1; fi
+    else printf 'fleet: hub placement unavailable (no FLEET_HUB_PLACE_CMD, no ccquota on PATH) — opening %s here\n' "$what" >&2; return 11; fi
     if why=$(_fleet_hub_creds_missing); then
-      printf 'fleet: %s — opening %s here\n' "$why" "$what" >&2; return 1
+      printf 'fleet: %s — opening %s here\n' "$why" "$what" >&2; return 11
     fi
   fi
   u=$(fleet_uuid "$sess") && [ -n "$u" ] || {
-    printf 'fleet: hub placement unavailable (no fleet UUID for %s on this machine) — opening %s here\n' "$sess" "$what" >&2; return 1; }
+    printf 'fleet: hub placement unavailable (no fleet UUID for %s on this machine) — opening %s here\n' "$sess" "$what" >&2; return 11; }
   if [ "$num" = scratch ]; then wid="$u"; name=$(printf '%s' "$name" | LC_ALL=C tr -d '[:cntrl:]#')
   else pre=$(fleet_okey_prefix "$sess" "$repo"); wid="$u/${pre}issue-$num"; name=''; fi
   # An alias the operator typed (`mac-b`) is the hub's hostname (`mac-c`).
@@ -6619,8 +6631,15 @@ fleet_hub_place() {
   ef=$(mktemp "${TMPDIR:-/tmp}/fleet-hub-err.XXXXXX" 2>/dev/null) || ef=/dev/null
   case "$wait" in *[!0-9]*) wait='' ;; esac
   case "$acct" in local|pool) ;; *) acct='' ;; esac
+  nh=$(printf '%s' "$nh" | LC_ALL=C tr -d '[:cntrl:]' | cut -c 1-300)
+  case "$pas" in [A-Za-z0-9]*) case "$pas" in *[!A-Za-z0-9_.:-]*) pas='' ;; esac ;; *) pas='' ;; esac
+  [ "$num" = scratch ] && [ -n "$pbody" ] && [ -s "$pbody" ] || pbody=''
+  t0=$(fleet_now_ms)
   out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" place --node "$node" ${owid:+--origin-wid "$owid"} ${agent:+--agent "$agent"} \
-        ${wait:+--wait "$wait"} ${acct:+--account "$acct"} ${name:+--name "$name"} ${reap:+--reap "$reap"} "$repo" "$num" "$wid" </dev/null 2>"$ef"); rc=$?
+        ${wait:+--wait "$wait"} ${acct:+--account "$acct"} ${name:+--name "$name"} ${reap:+--reap "$reap"} \
+        ${nh:+--not-here "$nh"} ${pas:+--as "$pas"} ${pbody:+--body-file "$pbody"} "$repo" "$num" "$wid" </dev/null 2>"$ef"); rc=$?
+  pms=$(( $(fleet_now_ms) - t0 ))
+  _fleet_place_log "$what" "$node" "$rc" "$pms" "${out%%$'\n'*}" "${nh:+1}"
   out=$(printf '%s\n' "$out" | head -n1 | awk -F'\t' -v al="${FLEET_NODE_ALIASES:-}" '
     BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
     { k = split($1, w, " ")
@@ -6639,9 +6658,49 @@ fleet_hub_place() {
       [ "$ef" = /dev/null ] || { grep '^ccquota place: .* declined (exit' "$ef" | sed 's/^ccquota place: /fleet: /' >&2; rm -f "$ef"; }
       printf '%s\n' "$out"; return "$rc" ;;
   esac
-  printf 'fleet: %s — placing %s, opening it here\n' "$(_fleet_hub_fail placement "$cmd" "$rc" "$ef")" "$what" >&2
+  why=$(_fleet_hub_fail placement "$cmd" "$rc" "$ef")
+  printf 'fleet: %s — placing %s, opening it here\n' "$why" "$what" >&2
   [ "$ef" = /dev/null ] || rm -f "$ef"
+  # Never reached (T672): the connection itself failed, nothing was sent.
+  case "$why" in 'hub unreachable ('*)
+    case "$why" in *'Timeout'*|*'timeout'*|*'deadline'*) ;;
+      *'dial tcp'*|*'no such host'*|*'connection refused'*|*'x509:'*|*'tls:'*) return 11 ;; esac ;;
+  esac
   return 1
+}
+
+# fleet_agent_file_travels <name> — rc 0 when the agent file is one the core ships
+# with the release (conf/agent-defaults/claude/agents/<name>.md: fleet-worker,
+# orchestrator), so every machine's ~/.claude/agents has it and a session started
+# as it may open on any of them (issue T672; T604 — the template travels with the
+# release). A file only this machine has (the repo's, the login's own) is rc 1.
+fleet_agent_file_travels() {
+  case "${1:-}" in ''|*[!A-Za-z0-9_.:-]*|.*) return 1 ;; esac
+  [ -f "$_FLEET_LIB_DIR/../conf/agent-defaults/claude/agents/$1.md" ]
+}
+
+# _fleet_place_log <what> <node> <rc> <ms> <answer> [<not here>] — one row per hub
+# placement ask (issue T672): the place_ms the 1-second target is read off, on
+# stderr for whoever asked and in logs/hub-place.log (rotated past 1 MB).
+_fleet_place_log() {
+  local f="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/hub-place.log" a
+  a=$(printf '%s' "${5:-}" | awk -F'\t' '{ print $1 }' | cut -c 1-120)
+  printf 'fleet: place_ms=%s (%s%s)\n' "$4" "${a:-rc $3}" "${6:+, 本机不收}" >&2
+  mkdir -p "${f%/*}" 2>/dev/null || return 0
+  [ -f "$f" ] && [ "$(wc -c < "$f" | tr -d ' ')" -gt 1048576 ] && mv -f "$f" "$f.1" 2>/dev/null
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "$a" "${6:-0}" >> "$f" 2>/dev/null || :
+}
+
+# fleet_hub_place_ms [<n>] — the last <n> (20) asks' place_ms on this login, and
+# their p50 / p90 / max: `n=<k> p50=<ms> p90=<ms> max=<ms>` (issue T672).
+fleet_hub_place_ms() {
+  local f="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/hub-place.log" n="${1:-20}"
+  case "$n" in ''|*[!0-9]*) n=20 ;; esac
+  [ -r "$f" ] || { echo 'n=0'; return 1; }
+  awk -F'\t' '$5 ~ /^[0-9]+$/ { print $5 }' "$f" | tail -n "$n" | sort -n | awk '
+    { v[NR] = $1 } END { if (!NR) { print "n=0"; exit 1 }
+      p50 = v[int((NR - 1) * 0.5) + 1]; p90 = v[int((NR - 1) * 0.9 + 0.999)]; if (!p90) p90 = v[NR]
+      printf "n=%d p50=%d p90=%d max=%d\n", NR, p50, p90, v[NR] }'
 }
 
 # fleet_hub_move plan|send [<flag>…] <repo> <worker_id> — move a session to another
