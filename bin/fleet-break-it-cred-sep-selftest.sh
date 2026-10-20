@@ -713,16 +713,7 @@ FR
   gohalf="入口一半：没有 go 工具链 — Go 门（tokenledger.yml）跑 TestLeaseCredsepMandatory"
   grep -q 'func TestLeaseCredsepMandatory(' "$ROOT/tokenledger/hub/api/fleet_credsep_test.go" 2>/dev/null \
     || { WHY="the hub half's TestLeaseCredsepMandatory is gone"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestLeaseCredsepMandatory' ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
-      0:*) gohalf="入口一半：go test TestLeaseCredsepMandatory ok（管理员没隔离也拒发）" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  fi
+  go_half '^TestLeaseCredsepMandatory' ./hub/api; case $? in 0) gohalf="入口一半：go test TestLeaseCredsepMandatory ok（管理员没隔离也拒发）" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="补隔离失败：任务失败并点名、doctor credsep-logins 与本登录 credsep 都是 FAIL；拒了的过宽限期带 --force 再试，失败的等重试间隔；$gohalf"
 }
@@ -900,16 +891,7 @@ drill_credsep_warn_cuts_creds() {
   gohalf="代理一半：没有 go 工具链 — Go 门（tokenledger.yml）跑 TestCredsepJudge"
   grep -q '"separated, check warns", true, 0, 4, control.CredsepSeparated' "$ROOT/tokenledger/agent/node_credsep_test.go" 2>/dev/null \
     || { WHY="TestCredsepJudge no longer pins «warns ⇒ separated»"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestCredsepJudge$' github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the agent half's Go test did not run"; return 1 ;;
-      0:*) gohalf="代理一半：go test TestCredsepJudge ok（警告仍算已隔离）" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the agent half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  fi
+  go_half '^TestCredsepJudge$' github.com/verkyyi/claude-fleet/tokenledger/agent; case $? in 0) gohalf="代理一半：go test TestCredsepJudge ok（警告仍算已隔离）" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="已隔离登录 check 出 WARN（代理忽略了自己 fleet.conf 的 FLEET_HUB_URL）：退出 4 = 已隔离带警告，代理仍报 separated、入口照发；库可读才是 1；deny 写明 trust 原因；$gohalf"
 }
@@ -971,16 +953,10 @@ drill_cred_sep_home_leak() {
   gohalf="agent 一半：没有 go 工具链 — Go 门（tokenledger.yml）跑 TestNoStoreWritesNothingHome"
   grep -q 'func TestNoStoreWritesNothingHome(' "$ROOT/tokenledger/agent/node_credstore_test.go" 2>/dev/null \
     || { WHY="the agent half's TestNoStoreWritesNothingHome is gone"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestNoStoreWritesNothingHome$' github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the agent half's Go test did not run"; return 1 ;;
-      0:*) gohalf="agent 一半：go test ok（没有凭据库就一份订阅凭据也不写进任何家，报 no_store）" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the agent half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  fi
+  go_half '^TestNoStoreWritesNothingHome$' github.com/verkyyi/claude-fleet/tokenledger/agent; case $? in
+    0) gohalf="agent 一半：go test ok（没有凭据库就一份订阅凭据也不写进任何家，报 no_store）" ;;
+    1) return 1 ;;
+  esac
   SECS=$(since "$t0")
   WHAT="已隔离登录的家里又出现池凭据：credsep-enforce 下一轮搬进隔离库（库里已有的留着、家里那份进 backup/），审计一行不带值，check 回到干净；登录放的软链不跟、点名；$gohalf"
 }
@@ -995,16 +971,10 @@ drill_cred_gate_counts_unleased() {
   grep -q 'func TestGateCredsepCountsOnlyLeasedLogins(' "$ROOT/tokenledger/hub/api/fleet_credsep_test.go" 2>/dev/null \
     || { WHY="TestGateCredsepCountsOnlyLeasedLogins is gone"; return 1; }
   WHAT="门禁 cred-ttl 只数会被发池凭据的登录（客户端、pod、系统账号、已删用户不算）：没有 go 工具链 — Go 门（tokenledger.yml）跑 TestGateCredsepCountsOnlyLeasedLogins"
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestGateCredsepCountsOnlyLeasedLogins$' ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the Go test did not run"; return 1 ;;
-      0:*) WHAT="门禁 cred-ttl 只数会被发池凭据的登录：客户端、集群 pod 的登录、root / _fleetadmin、已删用户都不算（go test ok）" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the Go test is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  fi
+  go_half '^TestGateCredsepCountsOnlyLeasedLogins$' ./hub/api; case $? in
+    0) WHAT="门禁 cred-ttl 只数会被发池凭据的登录：客户端、集群 pod 的登录、root / _fleetadmin、已删用户都不算（go test ok）" ;;
+    1) return 1 ;;
+  esac
   SECS=$(since "$t0")
 }
 

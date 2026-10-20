@@ -14,8 +14,7 @@
 #
 # Node half — an isolated tmux server (-S socket under $WORK, killed at exit), a
 # sandbox install, a fake agent and a fake claude:
-#   session-exit / session-ctrl-c / session-killed   bin/fleet-session-wrap.sh
-#   session-ctrl-z                                  bin/fleet-session-wrap.sh (the TSTP guard)
+#   session-exit (exit · Ctrl+C · killed · Ctrl+Z)  bin/fleet-session-wrap.sh (the page, the TSTP guard)
 #   resume-fails-fast / codex-no-id                 bin/fleet-session-wrap.sh, fleet-session-page.py
 #   codex-resume-override                           bin/fleet-codex.sh, fleet-codex-posture.py
 #   merged-then-commit                              bin/session-end-hook.sh --recycle, fleet_reap_ok
@@ -27,10 +26,10 @@
 #   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
 #   spinner-booted-out                              bin/fleet-daemon-watch.sh --resident, fleet-diskguard.sh (resident_watch)
-#   epic-mark-overwritten / epic-fresh-switched     bin/fleet-epic-heartbeat.sh (one mark per batch),
-#                                                   fleet_epic_running_fresh, fleet-install-sync.sh (the EPIC gate)
-#   epic-idle-held / epic-hold-uncapped / epic-hold-rotating fleet_epic_holding (live/inflight), fleet-install-sync.sh
-#                                                   (epic_gate: idle never holds, FLEET_EPIC_HOLD_CAP_SECS caps a hold)
+#   epic-hold-uncapped                              bin/fleet-epic-heartbeat.sh (one mark per batch), fleet_epic_holding
+#                                                   (live/inflight), fleet-install-sync.sh (epic_gate with
+#                                                   FLEET_EPIC_HOLD_CAP_SECS: defer before the switch, idle never
+#                                                   holds, the login's clock caps a hold)
 #   epic-hold-default                               fleet-install-sync.sh (epic_gate: no hold unless the cap is set, #2934)
 #   doctor-stricter-rollback                        bin/fleet-install-sync.sh (the new doctor joins the
 #                                                   baseline; FLEET_DOCTOR_SINCE), bin/fleet-doctor.sh
@@ -72,8 +71,8 @@
 #                                                   selftests-macos.yml (no push trigger)
 #   release-artifact-missing                        bin/fleet-stable.sh move (the artifacts gate),
 #                                                   fleet-node-update.py pinned-artifacts, the hub's build refusal
-#   release-ccquota-behind                          bin/fleet-stable.sh move (the ccquota gate)
-#   release-ccquota-stale                           bin/fleet-stable.sh move (the ccquota gate), fleet-src-digest.py;
+#   release-ccquota-stale                           bin/fleet-stable.sh move (the ccquota gate: ccquota_src, else
+#                                                   /version), fleet-src-digest.py;
 #                                                   the hub half is tokenledger/hub/api (go test, held by name)
 #   login-browser-silent                            bin/fleet-login.py (scan: open_browser, KeyWatch, nudge, timeout)
 #   login-sandbox-real-conf                         bin/fleet-login.py (conf_dir_env)
@@ -123,10 +122,9 @@
 #                                                   fleet_state_carry / fleet_primary_fresh (fleet-lib.sh),
 #                                                   fleet-state-reconcile.py (reconcile.sources)
 #   report-parent-gone                              bin/fleet-report-parent.sh (orphan → global/orphan-reports.ndjson
-#                                                   + fleet-alerts.sh event child-report)
-#   report-parent-remote                            bin/fleet-report-parent.sh (rail 1 → the hub outbox by
-#                                                   @origin_wid), fleet-lib.sh fleet_origin_canon
-#   report-parent-online-queued                     bin/fleet-hub-node.sh (deliver: an identity found here is
+#                                                   + fleet-alerts.sh event child-report; rail 1 → the hub outbox by
+#                                                   @origin_wid), fleet-lib.sh fleet_origin_canon,
+#                                                   bin/fleet-hub-node.sh (deliver: an identity found here is
 #                                                   never «not now»), fleet-lib.sh fleet_window_okey (a keyless
 #                                                   session's key is its @fleet_id, issue #4341)
 #   orphan-report-unseen                            bin/fleet-orphan-reports.py, fleet-control-read.sh column 31,
@@ -385,9 +383,24 @@ exit_drill() {
   SECS=$(since "$t0"); WHAT="恢复页 ${page_s}s 出现，↵ 续上同一对话"
 }
 
-drill_session_exit()    { CAP=5; exit_drill rc0 0 '会话已结束'; }
-drill_session_ctrl_c()  { CAP=5; exit_drill rc130 130 '会话已结束'; }
-drill_session_killed()  { CAP=5; exit_drill kill 137 '会话意外退出'; }
+# session-exit — every way an agent leaves or stops, one table: /exit (rc 0), Ctrl+C
+# (rc 130) and a kill (137) end on the recovery page (exit_drill, ≤5s each); Ctrl+Z
+# (ctrl_z_leg) is resumed within 1s.
+drill_session_exit() {
+  CAP=5; local m rc head s=0 what=''
+  while IFS='|' read -r m rc head; do
+    exit_drill "$m" "$rc" "$head" || { WHY="$m: $WHY"; return 1; }
+    s=$(python3 -c 'import sys; print(max(float(sys.argv[1]), float(sys.argv[2])))' "$s" "$SECS"); what="$what $m"
+  done <<'EOF'
+rc0|0|会话已结束
+rc130|130|会话已结束
+kill|137|会话意外退出
+EOF
+  ctrl_z_leg || { WHY="ctrl-z: $WHY"; return 1; }
+  le "$SECS" 1 || { WHY="ctrl-z: SIGCONT came after ${SECS}s, over 1s"; return 1; }
+  SECS=$s
+  WHAT="/exit、Ctrl+C、被杀（$what ）：恢复页 ≤${s}s 出现、↵ 续上同一对话；$WHAT"
+}
 
 # Ctrl+Z (issue #1843). The pane's process group is orphaned (its leader, the
 # pane's shell, is a session leader whose parent is the tmux server), so the
@@ -397,15 +410,15 @@ drill_session_killed()  { CAP=5; exit_drill kill 137 '会话意外退出'; }
 # Ctrl+Z on the pane's tty, a `kill -TSTP` aimed at the agent, and the agent's own
 # suspend — within 1s it is running, resumed (its SIGCONT arrived), the window is
 # not marked exited, and the guard left its stamp.
-drill_session_ctrl_z() {
-  CAP=1; BREAK_SOCK="$WORK/sock-xz"; local c="$WORK/xz" t0 pid st
+ctrl_z_leg() {
+  BREAK_SOCK="$WORK/sock-xz"; local c="$WORK/xz" t0 pid st
   wrapped sz w "$c" || { WHY="cannot start the isolated tmux server"; return 1; }
   until_ok 10 test -s "$c/pid" || { WHY="the agent never started"; return 1; }
   pid=$(cat "$c/pid")
   nt send-keys -t sz:w C-z; kill -TSTP "$pid" 2>/dev/null
   sleep 0.2
   t0=$(now); : > "$c/z"
-  until_ok "$CAP" test -e "$c/cont" \
+  until_ok 1 test -e "$c/cont" \
     || { WHY="the agent suspended itself and nothing sent SIGCONT — it waits for an fg no shell will type"; return 1; }
   SECS=$(since "$t0")
   st=$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ')
@@ -979,115 +992,66 @@ epic_tick_default() { HOME="$1/home" FLEET_CONF_DIR="$1/conf" FLEET_SKIP_GLOBAL_
 epic_hb()   { local d="$1"; shift; HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 bash "$BIN/fleet-epic-heartbeat.sh" "$@"; }
 epic_st()   { sed -n "s/^$2: //p" "$1/conf/global/install-sync.state" | head -1; }
 
-# epic-mark-overwritten (issue #2062): two /fleet-epic-run loops on one login,
-# each stamping its own batch. Before: one file, the second stamp replaced the
-# first and the first loop's --clear took the second's protection with it. Now
-# each batch has its own mark, --status shows both, --clear <N> takes one, and
-# the other still holds the install (deferred).
-drill_epic_mark_overwritten() {
-  CAP=20; local t0 d="$WORK/epic1" st r
+# epic_up <dir> — stable moves one commit on (a clone of the origin pushes it)
+epic_up() {
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    [ -d "$1/up" ] || git clone -q "$1/origin.git" "$1/up"; git -C "$1/up" pull -q
+    date +%s%N >> "$1/up/f"; git -C "$1/up" commit -qam up && git -C "$1/up" push -q origin master
+    git --git-dir="$1/origin.git" update-ref refs/tags/stable master ) >/dev/null 2>&1
+}
+
+# epic-hold-uncapped — the opt-in hold (FLEET_EPIC_HOLD_CAP_SECS set), one sandbox:
+# · two batches on one login (#2062): one mark each, --status shows both, --clear <N>
+#   takes only its own, and the other still defers the tick BEFORE the switch (#1894
+#   switched and only held the node agent: no `switched` line, HEAD where it was);
+# · an idle batch (--live 0 --inflight 0, #2247) never holds: once the busy one
+#   clears, the tick switches under it and the epic: line says idle;
+# · a batch with work that never ends (#2247) is released at the cap, with ONE note
+#   on its EPIC and an `epic-released` line — on the LOGIN's clock (#2843): a batch
+#   whose own clock is fresh, on an older stable, is released all the same, and
+#   reaching stable clears the clock.
+drill_epic_hold_uncapped() {
+  CAP=30; local t0 d="$WORK/epic" st stable
   epic_sandbox "$d" || { WHY="sandbox install did not build"; return 1; }
   epic_hb "$d" 1935 --tick 22 --repo o/r --session f1 >/dev/null 2>&1
   epic_hb "$d" 1982 --tick 10 --repo o/r --session f1 >/dev/null 2>&1
   t0=$(now)
   st=$(epic_hb "$d" --status 2>&1)
-  case "$st" in *"epic=1935"*) ;; *) WHY="the second loop's heartbeat overwrote the first's: --status shows [$st]"; return 1 ;; esac
-  case "$st" in *"epic=1982"*) ;; *) WHY="--status does not show the second batch: [$st]"; return 1 ;; esac
-  epic_hb "$d" --clear 1935 >/dev/null 2>&1                   # the first batch ends
-  st=$(epic_hb "$d" --status 2>&1)
-  case "$st" in *"epic=1982"*) ;; *) WHY="--clear 1935 took #1982's mark too: [$st]"; return 1 ;; esac
-  epic_tick "$d" >"$d/tick.out" 2>&1
-  r=$(epic_st "$d" result)
-  [ "$r" = deferred ] || { WHY="with #1982 still fresh the tick was $r: $(epic_st "$d" reason)"; return 1; }
-  case "$(epic_st "$d" reason)" in *"epic=1982"*) ;; *) WHY="the deferral does not name #1982: $(epic_st "$d" reason)"; return 1 ;; esac
-  SECS=$(since "$t0"); WHAT="两个批次各一份标记；#1935 收尾只清自己的，#1982 仍拦住 install-sync（deferred）"
-}
-
-# epic-fresh-switched (issue #2062): a batch is mid-run (its mark fresh) and
-# stable moves. Before (#1894): the tick switched the version and only the
-# node-agent step said deferred. Now the tick is deferred before the switch —
-# no `switched` line, HEAD where it was — and follows once the batch clears.
-drill_epic_fresh_switched() {
-  CAP=20; local t0 d="$WORK/epic2" r head stable
-  epic_sandbox "$d" || { WHY="sandbox install did not build"; return 1; }
-  epic_hb "$d" 1935 --tick 22 --repo o/r --session f1 >/dev/null 2>&1
-  t0=$(now)
+  case "$st" in *"epic=1935"*"epic=1982"*|*"epic=1982"*"epic=1935"*) ;; *) WHY="--status does not show both batches: [$st]"; return 1 ;; esac
+  epic_hb "$d" --clear 1935 >/dev/null 2>&1
+  case "$(epic_hb "$d" --status 2>&1)" in *"epic=1982"*) ;; *) WHY="--clear 1935 took #1982's mark too"; return 1 ;; esac
   epic_tick "$d" >"$d/tick1.out" 2>&1
-  r=$(epic_st "$d" result)
-  head=$(git -C "$d/install" rev-parse HEAD); stable=$(git --git-dir="$d/origin.git" rev-parse stable)
-  [ "$r" = deferred ] || { WHY="a fresh mark and the tick still ran: result=$r (install at $(printf '%.7s' "$head"), stable $(printf '%.7s' "$stable"))"; return 1; }
-  grep -q ' switched ' "$d/conf/logs/install-sync.log" 2>/dev/null && { WHY="the log has a switched line under a fresh mark"; return 1; }
-  [ "$head" != "$stable" ] || { WHY="the install moved to stable under a fresh mark"; return 1; }
-  epic_hb "$d" --clear 1935 >/dev/null 2>&1                   # the batch ends
-  epic_tick "$d" >"$d/tick2.out" 2>&1
-  [ "$(git -C "$d/install" rev-parse HEAD)" = "$stable" ] || { WHY="after the clear the tick did not switch: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
-  SECS=$(since "$t0"); WHAT="标记新鲜那一拍只 deferred、版本不动；批次清掉标记后下一拍 switched"
-}
-
-# epic-idle-held (issue #2247): a batch is idle — 0 member sessions, nothing in
-# flight, the loop only waiting on the operator — and still stamps every tick.
-# Before: any fresh mark held the switch, so an idle batch held the machine's
-# upgrade for as long as it waited (EPIC #2140 held mac-a for hours). Now a mark
-# stamped --live 0 --inflight 0 does not hold: the tick switches under it.
-drill_epic_idle_held() {
-  CAP=20; local t0 d="$WORK/epic3" stable
-  epic_sandbox "$d" || { WHY="sandbox install did not build"; return 1; }
-  epic_hb "$d" 2140 --tick 18 --repo o/r --session f1 --live 0 --inflight 0 >/dev/null 2>&1
   stable=$(git --git-dir="$d/origin.git" rev-parse stable)
-  t0=$(now)
-  epic_tick "$d" >"$d/tick1.out" 2>&1
+  [ "$(epic_st "$d" result)" = deferred ] || { WHY="with #1982 fresh the tick was $(epic_st "$d" result): $(epic_st "$d" reason)"; return 1; }
+  case "$(epic_st "$d" reason)" in *"epic=1982"*) ;; *) WHY="the deferral does not name #1982: $(epic_st "$d" reason)"; return 1 ;; esac
+  grep -q ' switched ' "$d/conf/logs/install-sync.log" 2>/dev/null && { WHY="the log has a switched line under a fresh mark"; return 1; }
+  [ "$(git -C "$d/install" rev-parse HEAD)" != "$stable" ] || { WHY="the install moved to stable under a fresh mark"; return 1; }
+  # an idle batch beside it: still deferred by #1982; #1982 ends ⇒ switched under the idle one
+  epic_hb "$d" 2140 --tick 18 --repo o/r --session f1 --live 0 --inflight 0 >/dev/null 2>&1
+  epic_hb "$d" --clear 1982 >/dev/null 2>&1
+  epic_tick "$d" >"$d/tick2.out" 2>&1
   [ "$(git -C "$d/install" rev-parse HEAD)" = "$stable" ] \
-    || { WHY="an idle batch (live 0, nothing in flight) still held the switch: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
+    || { WHY="an idle batch (live 0, nothing in flight) held the switch: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
   case "$(epic_st "$d" epic)" in *"idle (空转，不挡) epic=2140"*) ;;
     *) WHY="the state's epic: line does not say the batch was idle: [$(epic_st "$d" epic)]"; return 1 ;; esac
-  SECS=$(since "$t0"); WHAT="空转批次（live 0、无在途）的新鲜标记不挡：那一拍照常 switched，state 的 epic: 行写 idle"
-}
-
-# epic-hold-uncapped (issue #2247): a batch with work that never finishes (or a
-# loop stamping live 1 forever) held the install with no end. Now one mark holds
-# the same stable at most FLEET_EPIC_HOLD_CAP_SECS: past it the tick switches and
-# ONE record-only note goes on the EPIC.
-drill_epic_hold_uncapped() {
-  CAP=20; local t0 d="$WORK/epic4" stable
-  epic_sandbox "$d" || { WHY="sandbox install did not build"; return 1; }
-  epic_hb "$d" 2140 --tick 30 --repo o/r --session f1 --live 1 --inflight 1 >/dev/null 2>&1
-  stable=$(git --git-dir="$d/origin.git" rev-parse stable)
+  # stable moves on; a busy batch holds with a fresh clock of its own on an older
+  # stable, the login has been held past the cap: released, noted once, clock cleared
+  epic_up "$d"; stable=$(git --git-dir="$d/origin.git" rev-parse stable)
+  epic_hb "$d" 2141 --tick 30 --repo o/r --session f1 --live 1 --inflight 1 >/dev/null 2>&1
   mkdir -p "$d/conf/global/epic-hold.d"
+  printf 'since: %s\nstable: %s\nreleased: -\n' "$(date +%s)" "$(printf '0%.0s' $(seq 40))" > "$d/conf/global/epic-hold.d/o-r-2141"
   printf 'since: %s\n' "$(( $(date +%s) - 7300 ))" > "$d/conf/global/epic-hold.d/.since"
   printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/notes.log"\n' "$d" > "$d/note.sh"
-  t0=$(now)
-  FLEET_EPIC_HOLD_NOTE_CMD="sh $d/note.sh" epic_tick "$d" >"$d/tick1.out" 2>&1
+  FLEET_EPIC_HOLD_NOTE_CMD="sh $d/note.sh" epic_tick "$d" >"$d/tick3.out" 2>&1
   [ "$(git -C "$d/install" rev-parse HEAD)" = "$stable" ] \
-    || { WHY="a batch past the cap still held the switch: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
-  [ "$(grep -c '^2140 --repo o/r --note' "$d/notes.log" 2>/dev/null)" = 1 ] \
+    || { WHY="a batch past the login's cap still held the switch: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
+  [ "$(grep -c '^2141 --repo o/r --note' "$d/notes.log" 2>/dev/null)" = 1 ] \
     || { WHY="the release was not noted once on the EPIC: [$(cat "$d/notes.log" 2>/dev/null)]"; return 1; }
   grep -q ' epic-released ' "$d/conf/logs/install-sync.log" 2>/dev/null || { WHY="no epic-released log line"; return 1; }
-  SECS=$(since "$t0"); WHAT="有活的批次挡同一 stable 满 2 小时：放行 switched，EPIC 上一条记录型说明，日志 epic-released"
-}
-
-# epic-hold-rotating (issue #2843): with 3-7 batches running in parallel and
-# stable moving every hour or two, a per-batch clock (reset when a batch went
-# quiet for a tick, or when stable moved) never reached the cap — mac-c sat two
-# stables behind, deferred every 5 minutes for hours. Now the clock is the
-# login's (and the machine's, in fleet-node-update.py): .since from the first
-# deferral, cleared only at stable. Here the batch holding now has a fresh clock
-# of its own on an older stable, another batch held before it: still released.
-drill_epic_hold_rotating() {
-  CAP=20; local t0 d="$WORK/epic5" stable
-  epic_sandbox "$d" || { WHY="sandbox install did not build"; return 1; }
-  epic_hb "$d" 2141 --tick 30 --repo o/r --session f1 --live 1 --inflight 1 >/dev/null 2>&1
-  stable=$(git --git-dir="$d/origin.git" rev-parse stable)
-  mkdir -p "$d/conf/global/epic-hold.d"
-  printf 'since: %s\nstable: %s\nreleased: -\n' "$(date +%s)" "0000000000000000000000000000000000000000" \
-    > "$d/conf/global/epic-hold.d/o-r-2141"
-  printf 'since: %s\n' "$(( $(date +%s) - 7300 ))" > "$d/conf/global/epic-hold.d/.since"
-  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/notes.log"\n' "$d" > "$d/note.sh"
-  t0=$(now)
-  FLEET_EPIC_HOLD_NOTE_CMD="sh $d/note.sh" epic_tick "$d" >"$d/tick1.out" 2>&1
-  [ "$(git -C "$d/install" rev-parse HEAD)" = "$stable" ] \
-    || { WHY="batches taking turns held past the login's cap: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
   [ -e "$d/conf/global/epic-hold.d/.since" ] && { WHY="at stable the login's hold clock was kept"; return 1; }
-  SECS=$(since "$t0"); WHAT="批次轮流挡、stable 一直在动：按登录（整机）一个钟，满 2 小时即放行 switched，到 stable 才清钟"
+  SECS=$(since "$t0")
+  WHAT="打开封顶：两个批次各一份标记、只清自己的，新鲜标记在切换前就 deferred；空转批次不挡；有活的批次按登录一个钟、满 2 小时放行 switched，EPIC 上一条说明、日志 epic-released，到 stable 清钟"
 }
 
 # epic-hold-default (issue #2934): a batch with work held every update — the
@@ -2951,63 +2915,18 @@ drill_release_artifact_missing() {
   WHAT="release.json 钉的 claude 入口没有：stable 拒挪（artifacts: 点名缺的制品）；放进去后同一提交照常挪"
 }
 
-# ---- release-ccquota-behind (#2927): a release's ccquota is the hub's own build
-# (its image's dist dir), not the target's. Stable 003e89bb shipped prod-343c92b:
-# #2922's supervisor half (hold while the book names an op) went live without
-# its node-program half (the book), nothing held, a create was cut off and run
-# again into exit 3. Now `fleet-stable.sh move` reads the hub's /version and
-# refuses with `ccquota:` while a tokenledger/ commit of the target is not in
-# that build; once the hub runs it, the same move goes through.
-# A file:// hub; a real bare repo + tag; fake gh.
-drill_release_ccquota_behind() {
-  CAP=30; local t0 d out rc c1 c2
-  d="$WORK/relccq"; mkdir -p "$d/shim" "$d/seed" "$d/conf" "$d/hub/v1/fleet/release"
-  printf '#!/bin/sh\nprintf "completed success ci\\n"\n' > "$d/shim/gh"; chmod +x "$d/shim/gh"
-  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
-    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
-    mkdir -p "$d/seed/bin" "$d/seed/tokenledger/agent"
-    printf '#!/usr/bin/env python3\n' > "$d/seed/bin/fleet-node-update.py"
-    cp "$ROOT/release.json" "$d/seed/release.json"
-    printf 'package agent\n' > "$d/seed/tokenledger/agent/node_accounts.go"
-    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm old && git -C "$d/seed" push -q origin HEAD:master || exit 1
-    git -C "$d/seed" rev-parse HEAD > "$d/c1"
-    printf 'package agent\n\n// the book\n' > "$d/seed/tokenledger/agent/node_accounts.go"
-    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'the node program keeps a book' && git -C "$d/seed" push -q origin HEAD:master || exit 1
-    git -C "$d/seed" rev-parse HEAD > "$d/c2"
-    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
-  ) || { WHY="could not build the rig repo"; return 1; }
-  c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
-  # every name release.json pins (a tool's helpers too — issue #3017), as the updater expands them
-  python3 "$BIN/fleet-node-update.py" pinned-artifacts - darwin-arm64 < "$ROOT/release.json" \
-    | python3 -c 'import json,sys; print(json.dumps({"artifacts": sys.stdin.read().split()}))' \
-    > "$d/hub/v1/fleet/release/artifacts"
-  printf '{"version":"prod-%.7s"}\n' "$c1" > "$d/hub/version"
-  t0=$(now)
-  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
-          sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
-  [ "$rc" = 3 ] || { WHY="move onto a tokenledger/ change the hub's build lacks exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
-  case "$out" in *'REFUSED — ccquota:'*) ;; *) WHY="the refusal is not prefixed ccquota: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
-  case "$out" in *'the node program keeps a book'*) ;; *) WHY="the refusal does not name the missing commit: $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
-  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved onto a release whose ccquota trails its tree"; return 1; }
-  # the hub is deployed at the target → the same move goes through
-  printf '{"version":"prod-%.7s"}\n' "$c2" > "$d/hub/version"
-  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
-          sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1) \
-    || { WHY="the move after the hub caught up failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
-  SECS=$(since "$t0")
-  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move once the hub ran the target"; return 1; }
-  WHAT="入口的 ccquota 落后于目标的 tokenledger/：stable 拒挪（ccquota: 点名缺的提交）；入口部署到目标后同一提交照常挪"
-}
-
-# ---- release-ccquota-stale (#2930): the hub image is older than the commit
-# stable moves to (its Go changed, the hub was not redeployed). Before: the
-# release took the image's ccquota — new scripts, old Go on every managed
-# machine (#2928). Now `fleet-stable.sh move` holds the target's node source
-# digest (shared/ + agent/, #4813) to the hub's /artifacts ccquota_src and refuses with `ccquota:`; once
-# the hub runs the target's Go the same move goes through. The hub half (the
-# build / publish refusal, the heal keeping its own ccquota) and the node's
-# rollback are their tests, held by name. A file:// hub; a real bare repo + tag.
+# ---- release-ccquota-stale: a release's ccquota is the hub image's own build, and
+# `fleet-stable.sh move` holds it to the target before stable moves. One rig (a
+# file:// hub, a real bare repo + tag, a fake gh), both hub kinds:
+# · a hub that names no ccquota_src (older than #2930) — #2927: stable 003e89bb
+#   shipped prod-343c92b, #2922's supervisor half went live without its node-program
+#   half. The move reads /version and refuses `ccquota:` naming the tokenledger/
+#   commit the build lacks; once the hub runs the target, it goes through;
+# · a hub that names it — #2930: new scripts, old Go on every managed machine
+#   (#2928). The move holds the target's node source digest (shared/ + agent/,
+#   #4813) to /artifacts' ccquota_src and refuses `ccquota: … redeploy`.
+# The hub half (the build / publish refusal) and the node's rollback are their
+# tests, held by name.
 drill_release_ccquota_stale() {
   CAP=30; local t0 d out rc c1 c2 f t pins
   for t in tokenledger/hub/api/fleet_release_test.go:TestReleaseRefusesStaleCCQuota \
@@ -3021,13 +2940,13 @@ drill_release_ccquota_stale() {
   ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
     export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
     git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
-    mkdir -p "$d/seed/bin" "$d/seed/tokenledger/agent/x"; printf '#!/usr/bin/env python3\n' > "$d/seed/bin/fleet-node-update.py"
+    mkdir -p "$d/seed/bin" "$d/seed/tokenledger/agent/x" "$d/seed/tokenledger/hub"; printf '#!/usr/bin/env python3\n' > "$d/seed/bin/fleet-node-update.py"
     printf 'module x\n' > "$d/seed/tokenledger/hub/go.mod"; printf 'package x\n' > "$d/seed/tokenledger/agent/x/x.go"
     cp "$ROOT/release.json" "$d/seed/release.json"
     git -C "$d/seed" add -A && git -C "$d/seed" commit -qm old && git -C "$d/seed" push -q origin HEAD:master || exit 1
     git -C "$d/seed" rev-parse HEAD > "$d/c1"
     printf 'package x\n\nconst OpID = true\n' > "$d/seed/tokenledger/agent/x/x.go"
-    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'go: op_id' && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'the node program keeps a book' && git -C "$d/seed" push -q origin HEAD:master || exit 1
     git -C "$d/seed" rev-parse HEAD > "$d/c2"
     git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
   ) || { WHY="could not build the rig repo"; return 1; }
@@ -3036,21 +2955,30 @@ drill_release_ccquota_stale() {
   pins=$(python3 "$BIN/fleet-node-update.py" pinned-artifacts - darwin-arm64 < "$ROOT/release.json" | tr -s ' \n' ' ')
   hub_src() { printf '{"artifacts":[%s],"platforms":["darwin-arm64"],"ccquota_src":"%s"}\n' \
     "$(for n in $pins; do printf '"%s",' "$n"; done | sed 's/,$//')" "$1" > "$d/hub/v1/fleet/release/artifacts"; }
-  hub_src "$(python3 "$BIN/fleet-src-digest.py" "$d/co" "$c1")"   # the hub image is c1's
+  ccq_mv() { PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
+           sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1; }
+  # refused (exit 3, `ccquota:` + <what>), stable left at c1; then the hub catches up and the same move goes
+  ccq_held() {
+    out=$(ccq_mv); rc=$?
+    [ "$rc" = 3 ] || { WHY="$1: the move exited $rc, want 3 (refused): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+    case "$out" in *'REFUSED — ccquota:'*) ;; *) WHY="$1: the refusal is not prefixed ccquota: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+    case "$out" in *"$2"*) ;; *) WHY="$1: the refusal does not say $2: $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
+    [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="$1: stable moved onto a release whose ccquota is not the target's"; return 1; }
+  }
+  ccq_went() {
+    out=$(ccq_mv) || { WHY="$1: the move after the hub caught up failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+    [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="$1: stable did not move once the hub ran the target"; return 1; }
+  }
   t0=$(now)
-  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
-          sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
-  [ "$rc" = 3 ] || { WHY="move onto the Go change exited $rc, want 3 (refused): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
-  case "$out" in *'REFUSED — ccquota:'*redeploy*) ;; *) WHY="the refusal is not ccquota: … redeploy: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
-  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved onto a commit the hub's ccquota is not"; return 1; }
-  # the hub is redeployed from c2 → the same move goes through
-  hub_src "$(python3 "$BIN/fleet-src-digest.py" "$d/co" "$c2")"
-  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
-          sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1) \
-    || { WHY="the move after the redeploy failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  hub_src ''; printf '{"version":"prod-%.7s"}\n' "$c1" > "$d/hub/version"   # an older hub: /version only
+  ccq_held 'no ccquota_src' 'the node program keeps a book' || return 1
+  printf '{"version":"prod-%.7s"}\n' "$c2" > "$d/hub/version" ; ccq_went 'no ccquota_src' || return 1
+  git --git-dir="$d/origin.git" update-ref refs/tags/stable "$c1"; git -C "$d/co" tag -f stable "$c1" >/dev/null 2>&1
+  hub_src "$(python3 "$BIN/fleet-src-digest.py" "$d/co" "$c1")"           # the hub image is c1's
+  ccq_held 'ccquota_src' redeploy || return 1
+  hub_src "$(python3 "$BIN/fleet-src-digest.py" "$d/co" "$c2")" ; ccq_went 'ccquota_src' || return 1
   SECS=$(since "$t0")
-  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move once the hub ran the target's Go"; return 1; }
-  WHAT="入口镜像的 ccquota 早于目标提交的 Go：stable 拒挪（ccquota: 点名两边摘要）；入口重部署后同一提交照常挪"
+  WHAT="入口的 ccquota 早于目标的 Go（旧入口按 /version 点名缺的 tokenledger/ 提交；新入口按 ccquota_src 比节点源码摘要）：stable 拒挪（ccquota:）；入口部署到目标后同一提交照常挪"
 }
 
 # A release that deletes what an OPEN session's start still names (a hook script,
@@ -3132,18 +3060,19 @@ drill_tmpdir_shared_root() {
            | grep -v -- '-selftest' | head -3)
   [ -z "$hits" ] || { WHY="a script still falls back to the shared /tmp/.claude-dash: $hits"; return 1; }
   WHAT="没有 TMPDIR 的进程（sudo -u 的半边、它起的 tmux 服务器）读写本登录自己的 ${want}：可写、属主是自己；服务器全局环境带上 TMPDIR，服务端起的命令读同一个目录；没有脚本再回退到共用的 /tmp/.claude-dash"
+  tmpdir_foreign_leg || return 1
+  SECS=$(since "$t0")
 }
 
-# ---- tmpdir-foreign-owner (#2450): the dash cache already exists and belongs to
+# tmpdir-shared-root's second leg (#2450): the dash cache already exists and belongs to
 # ANOTHER login — the session's TMPDIR was the shared /tmp (the demoted daemon's
 # fallback when DARWIN_USER_TEMP_DIR came back empty), or someone made
 # /tmp/claude-fleet-<uid> first. fleet-lib must never take it: it moves to a
 # per-uid directory of its own and says so; the demoted launch never falls back
 # to /tmp. A symlink to a root-owned directory stands in for "another login's".
-drill_tmpdir_foreign_owner() {
-  CAP=10; local d="$WORK/tfo" t0 out err lib sh
+tmpdir_foreign_leg() {
+  local d="$WORK/tfo" out err lib sh
   mkdir -p "$d/t" "$d/home" "$d/fbin"; ln -s /usr "$d/t/.claude-dash"
-  t0=$(now)
   out=$(env TMPDIR="$d/t" HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
           bash -c ". '$BIN/fleet-lib.sh'; printf '%s' \"\$FLEET_C\"" 2>"$d/err") || { WHY="fleet-lib.sh did not load"; return 1; }
   lib=$out; err=$(cat "$d/err")
@@ -3160,8 +3089,7 @@ s=importlib.util.spec_from_file_location("sup",sys.argv[1]); m=importlib.util.mo
     || { WHY="cannot read ACCOUNT_SH from fleet-node-supervisor.py"; return 1; }
   env -u TMPDIR PATH="$d/fbin:/usr/bin:/bin" sh -c "$sh" _ "$d/o.log" "$d/e.log" sh -c 'printf %s "$TMPDIR" > "$0"' "$d/acct"
   case "$(cat "$d/acct" 2>/dev/null)" in /tmp|/tmp/|'') WHY="the demoted launch falls back to TMPDIR=[$(cat "$d/acct" 2>/dev/null)], the shared /tmp"; return 1 ;; esac
-  SECS=$(since "$t0")
-  WHAT="TMPDIR/.claude-dash 属别的登录时 fleet-lib 不用它：stderr 报一行，改用本登录按 uid 分开的 ${lib}（可写、属主是自己）；守护降权拿不到 DARWIN_USER_TEMP_DIR 时 TMPDIR=$(cat "$d/acct")，不再是共享的 /tmp"
+  WHAT="${WHAT}；TMPDIR/.claude-dash 属别的登录时 fleet-lib 不用它：stderr 报一行，改用本登录按 uid 分开的 ${lib}（可写、属主是自己）；守护降权拿不到 DARWIN_USER_TEMP_DIR 时 TMPDIR=$(cat "$d/acct")，不再是共享的 /tmp"
 }
 
 # ---- shared-dir-foreign-write (#2299): /Users/Shared/claude-fleet is every
@@ -3465,26 +3393,35 @@ FAKE
   WHAT="可信节点上 @norepo 会话开在 \$HOME 不再停在信任框（只多写 \$HOME 一项）；不可信节点同样开，~/.claude.json 一字不差"
 }
 
+# go_half <run regex> <package>… — a drill's Go half (the hub's or the agent's):
+# its tests run for real in tokenledger/ where a toolchain is, offline. 0 green ·
+# 1 red, or none ran (WHY set) · 2 no module cache / toolchain here · 3 no go, or
+# BREAK_GO=0. On 2 and 3 the Go gate (tokenledger.yml) runs them.
+go_half() {
+  local run=$1 out rc; shift
+  { [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; } || return 3
+  out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local go test -count=1 -run "$run" "$@" 2>&1); rc=$?
+  case "$rc:$out" in
+    0:*'no tests to run'*) WHY="the Go tests $run are not there (go test ran none)"; return 1 ;;
+    0:*) return 0 ;;
+    *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) return 2 ;;
+    *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
+  esac
+}
+
 # ---- the hub-half drills of #2696 share one runner: the named Go tests must
 # exist, the greps must hold, and with a toolchain they must pass.
 _drill_go_tests() {  # <tests> <test file> <what> [<package>, default ./hub/api]
-  local tests=$1 f=$2 what=$3 pkg=${4:-./hub/api} t out rc
+  local tests=$1 f=$2 what=$3 pkg=${4:-./hub/api} t
   for t in $tests; do
     grep -q "^func $t(" "$f" 2>/dev/null || { WHY="the hub half's test $t is not in ${f#$ROOT/}"; return 1; }
   done
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" "$pkg" 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT=$what ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；测试按名核对在' ;;
-      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  else
-    WHAT='没有 go：测试按名核对在，Go 门（tokenledger.yml）跑它们'
-  fi
+  go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" "$pkg"; case $? in
+    0) WHAT=$what ;;
+    1) return 1 ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；测试按名核对在' ;;
+    3) WHAT='没有 go：测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+  esac
 }
 
 # ---- opening-never-ends (#2696): a newcomer's login that cannot be opened
@@ -4061,19 +3998,12 @@ drill_machine_lane_reissued() {
         'fleet-node-supervisor-selftest.H_Accounts.test_refused_lane_is_named_and_rejoin_renews_the_token' 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="the supervisor half is red: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   [ -f "$sup" ] || { WHY="${sup#$ROOT/} is gone"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./hub/api github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='机器连接服务着的登录重登记：入口不换发（409 machine_managed）；换发了的旧令牌宽限 10 分钟、过后 WRONG_LOGIN 说明重登记与修法；被拒账号写 lane.json、机器心跳带 logins_refused、Machines 卡片红字；守护 status 名出 lane、--check 3；account adopt --rejoin 不要管理员换回新令牌' ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；守护一半已在这里跑绿' ;;
-      *) WHY="the reissue path (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  else
-    WHAT='没有 go：守护一半跑绿，三条 Go 测试按名核对在，Go 门（tokenledger.yml）跑它们'
-  fi
+  go_half "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./hub/api github.com/verkyyi/claude-fleet/tokenledger/agent; case $? in
+    0) WHAT='机器连接服务着的登录重登记：入口不换发（409 machine_managed）；换发了的旧令牌宽限 10 分钟、过后 WRONG_LOGIN 说明重登记与修法；被拒账号写 lane.json、机器心跳带 logins_refused、Machines 卡片红字；守护 status 名出 lane、--check 3；account adopt --rejoin 不要管理员换回新令牌' ;;
+    1) return 1 ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；守护一半已在这里跑绿' ;;
+    3) WHAT='没有 go：守护一半跑绿，三条 Go 测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+  esac
   SECS=$(since "$t0")
 }
 
@@ -4277,17 +4207,11 @@ drill_place_declined_not_retried() {
   out=$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$d" --parent scratch-3 --hub-cache "$d/g/remote_s" --json)
   case "$out" in *'"claim": "stale"'*) ;; *) WHY="fleet-children does not call a claim with no session stale: $out"; return 1 ;; esac
   gohalf='hub half: the Go gate (tokenledger.yml) runs the next-machine tests'
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run 'TestNodePlace(DeclinedTriesNextMachine|AllDeclinedRefuses|AskerIsTriedLast|NamedOrClaimedIsTriedOnce)$|TestClientPlaceDeclinedTriesNextMachine$' ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) gohalf='hub half: go test 换下一台 / 全拒 / 本机最后 / 指名不换 / client ok' ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        gohalf='hub half: no go module cache / toolchain here — the Go gate (tokenledger.yml) runs the next-machine tests' ;;
-      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  fi
+  go_half 'TestNodePlace(DeclinedTriesNextMachine|AllDeclinedRefuses|AskerIsTriedLast|NamedOrClaimedIsTriedOnce)$|TestClientPlaceDeclinedTriesNextMachine$' ./hub/api; case $? in
+    0) gohalf='hub half: go test 换下一台 / 全拒 / 本机最后 / 指名不换 / client ok' ;;
+    1) return 1 ;;
+    2) gohalf='hub half: no go module cache / toolchain here — the Go gate (tokenledger.yml) runs the next-machine tests' ;;
+  esac
   SECS=$(since "$t0")
   WHAT="一台拒绝后入口换下一台（本机最后），行尾 after 段与逐台 stderr 传到节点；没开成又哪台都没会话的认领标 stale；$gohalf"
 }
@@ -4541,31 +4465,21 @@ drill_node_container_restart() {
   WHAT="新容器不接管上次的 PID；镜像负责升级时不恢复旧的切换"
 }
 
-# A Linux managed login whose env never asked for a lease (issue #3211): the pool
+# A managed login whose env never asked for a lease. Linux (issue #3211): the pool
 # synced into the shared proxy, yet no accounts/hub:<label> marker, `ready` creds
-# false, the hub's placement «not ready: creds» on every dispatch. prepare writes
-# CCQUOTA_FLEET_CREDS=1 for a new login and adds it to an older store.
+# false, the hub's placement «not ready: creds» on every dispatch — prepare writes
+# CCQUOTA_FLEET_CREDS=1 for a new login and adds it to an older store. Mac (issue
+# #3276): adopt built logins/<login>.env from the plist and the store's node.env,
+# neither of which said it — the node program never leased and the first prompt 403'd.
 drill_linux_login_no_lease() {
-  CAP=15; local t0
+  CAP=30; local t0
   t0=$(now)
-  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_every_login_leases_its_credentials >"$WORK/linux-lease.out" 2>&1; then
-    WHY="a Linux login's env carries no CCQUOTA_FLEET_CREDS=1: $(tail -n 2 "$WORK/linux-lease.out")"; return 1
-  fi
+  python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_every_login_leases_its_credentials >"$WORK/linux-lease.out" 2>&1 \
+    || { WHY="a Linux login's env carries no CCQUOTA_FLEET_CREDS=1: $(tail -n 2 "$WORK/linux-lease.out")"; return 1; }
+  python3 "$BIN/fleet-node-supervisor-selftest.py" H_Accounts.test_store_login_leases_its_credentials >"$WORK/mac-lease.out" 2>&1 \
+    || { WHY="a Mac login's logins/<login>.env carries no CCQUOTA_FLEET_CREDS=1: $(tail -n 2 "$WORK/mac-lease.out")"; return 1; }
   SECS=$(since "$t0")
-  WHAT="新登录和旧存储的登录都带 CCQUOTA_FLEET_CREDS=1，令牌不动"
-}
-
-# The Mac half (issue #3276): adopt built logins/<login>.env from the plist and the
-# store's node.env, neither of which says CCQUOTA_FLEET_CREDS=1 — the machine's
-# node program never leased for a new login and its first prompt was a 403.
-drill_mac_login_no_lease() {
-  CAP=20; local t0
-  t0=$(now)
-  if ! python3 "$BIN/fleet-node-supervisor-selftest.py" H_Accounts.test_store_login_leases_its_credentials >"$WORK/mac-lease.out" 2>&1; then
-    WHY="a Mac login's logins/<login>.env carries no CCQUOTA_FLEET_CREDS=1: $(tail -n 2 "$WORK/mac-lease.out")"; return 1
-  fi
-  SECS=$(since "$t0")
-  WHAT="接管时有凭据存储的登录带上 CCQUOTA_FLEET_CREDS=1；更早接管的补上，令牌不动，没存储的不碰"
+  WHAT="Linux：新登录和旧存储的登录都带 CCQUOTA_FLEET_CREDS=1；Mac 接管：有凭据存储的登录带上、更早接管的补上；令牌不动，没存储的不碰"
 }
 
 # Several logins on one Linux machine (EPIC #3208 C1, issue #3209): the image's
@@ -4862,34 +4776,41 @@ drill_linux_stale_lane_door_down() {
   WHAT="一个登录的 lane 被拒：pod 照样 Ready（就绪只看整机）；删掉的登录留下的 lane 不算；account forget / login remove 把 agent/<login> 挪进 attic"
 }
 
-# A child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned
+# rp_rig <name> — a sandbox fleet <name> (acme/app) with its own tmux server: sets
+# d (its dir) and BREAK_SOCK; rp_env runs a command in it.
+rp_rig() {
+  d="$WORK/$1"; BREAK_SOCK="$WORK/sock-$1"
+  mkdir -p "$d/conf/fleets/$1" "$d/conf/control" "$d/shim" "$d/main"
+  : > "$d/conf/fleets/$1/conf"
+  fx_repo "$d/conf" "$1" acme/app FLEET_MAIN="$d/main"
+  nt -f /dev/null new-session -d -s "$1" -n home 'exec sleep 600'
+}
+rp_env() { env PATH="$WORK/tbin:$d/shim:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+             CCQUOTA_FLEET=1 FLEET_HUB_RECEIPT_WAIT=0 FLEET_ORPHAN_ALERT_CMD="${RP_ALERT:-true}" FLEET_PEER_RECEIPT_SECS=0 "$@"; }
+
+# report-parent-gone's first leg — a child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned
 # a worker and was closed; the worker merged and its report went nowhere — a silent
 # exit 0. Now it is the person's: one row in global/orphan-reports.ndjson and one
 # alert, never twice (the reaper's --only-once backstop, a re-run), and a hub-spawned
 # child (@origin empty) still files nothing.
-drill_report_parent_gone() {
-  CAP=30; local d="$WORK/rpg" w wh t0 f n a out
-  BREAK_SOCK="$WORK/sock-rpg"
-  mkdir -p "$d/conf/fleets/rpg" "$d/shim" "$d/main"
-  : > "$d/conf/fleets/rpg/conf"
-  fx_repo "$d/conf" "rpg" acme/app FLEET_MAIN="$d/main"
+rp_gone_leg() {
+  local d w wh t0 f n a out
+  rp_rig rpg || { WHY="cannot start the isolated tmux server"; return 1; }
   printf '#!/bin/sh\ncase "$*" in *pulls/*) echo "true closed false" ;; esac\nexit 0\n' > "$d/shim/gh"
   printf '#!/bin/sh\necho "$*" >> "%s/alerted"\n' "$d" > "$d/alert"
   chmod +x "$d/shim/gh" "$d/alert"
-  nt -f /dev/null new-session -d -s rpg -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
   # the worker the closed scratch-7 spawned; scratch-7's window is gone
   w=$(nt new-window -d -P -F '#{window_id}' -t rpg -n kid 'exec sleep 600')
   nt set-option -w -t "$w" @issue 41 \; set-option -w -t "$w" @repo acme/app \; \
      set-option -w -t "$w" @origin scratch-7 \; set-option -w -t "$w" @claude_state 'done'
   wh=$(nt new-window -d -P -F '#{window_id}' -t rpg -n hubkid 'exec sleep 600')
   nt set-option -w -t "$wh" @issue 42 \; set-option -w -t "$wh" @repo acme/app \; set-option -w -t "$wh" @claude_state 'done'
-  rpg() { env PATH="$WORK/tbin:$d/shim:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
-            FLEET_ORPHAN_ALERT_CMD="$d/alert" bash "$BIN/fleet-report-parent.sh" -L rpg "$@"; }
+  rpg() { RP_ALERT="$d/alert" rp_env env -u CCQUOTA_FLEET bash "$BIN/fleet-report-parent.sh" -L rpg "$@"; }
   f="$d/conf/global/orphan-reports.ndjson"
   t0=$(now)
   out=$(rpg --win "$w" --state merged --pr 77 --summary 'landed the fix' 2>&1)
   case "$out" in orphaned*) ;; *) WHY="a report whose parent is gone said [$out], want orphaned → …"; return 1 ;; esac
-  SECS=$(since "$t0")
+  RP_SECS=$(since "$t0")
   python3 - "$f" <<'PYR' || { WHY="orphan-reports.ndjson is not one MERGED row for issue-41: $(cat "$f" 2>/dev/null)"; return 1; }
 import json, sys
 rows = [json.loads(l) for l in open(sys.argv[1])]
@@ -4909,18 +4830,14 @@ PYR
   rpg --win "$wh" --state merged --pr 78 >/dev/null 2>&1
   n=$(grep -c . "$f")
   [ "$n" = 1 ] || { WHY="a hub-spawned child's report was filed for the person ($n rows)"; return 1; }
-  WHAT="派单的会话不在：报告进 orphan-reports.ndjson 一行 + 一条提醒，重报 / 回收不重复，hub 派的不写"
 }
 
-drill_report_parent_remote() {
-  CAP=60; local d="$WORK/rpr" w wl t0 out rc f U F=11111111-2222-3333-4444-555555555555 PF=0dbf19b9-aaaa-4bbb-8ccc-0123456789ab
-  BREAK_SOCK="$WORK/sock-rpr"
-  mkdir -p "$d/conf/fleets/rpr" "$d/conf/control" "$d/main"
-  : > "$d/conf/fleets/rpr/conf"
-  fx_repo "$d/conf" "rpr" acme/app FLEET_MAIN="$d/main"
-  nt -f /dev/null new-session -d -s rpr -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
-  rpr() { env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
-            CCQUOTA_FLEET=1 FLEET_HUB_RECEIPT_WAIT=0 FLEET_ORPHAN_ALERT_CMD=true "$@"; }
+# report-parent-gone's second leg — the parent on another machine (#3514): the report
+# goes to the hub's outbox by @origin_wid; a lost address is never a silent success.
+rp_remote_leg() {
+  local d w wl t0 out rc f U F=11111111-2222-3333-4444-555555555555 PF=0dbf19b9-aaaa-4bbb-8ccc-0123456789ab
+  rp_rig rpr || { WHY="cannot start the isolated tmux server"; return 1; }
+  rpr() { rp_env env -u FLEET_PEER_RECEIPT_SECS "$@"; }
   # this machine's fleet UUID (the control db mints it), as on any hub node
   (cd "$BIN" && rpr python3 -c 'import sys, fleet_control as c; c.Control(sys.argv[1]).inventory()' "$d/conf") >/dev/null 2>&1
   U=$(rpr bash -c '. "$1/fleet-lib.sh"; fleet_uuid rpr' _ "$BIN")
@@ -4934,7 +4851,7 @@ drill_report_parent_remote() {
   printf '%s/%s\tmac-a\t\n' "$F" "$PF" > "$d/conf/control/hub-workers.tsv"
   t0=$(now)
   out=$(rpr bash "$BIN/fleet-report-parent.sh" -L rpr --win "$w" --state blocked --summary 'need a decision' 2>&1); rc=$?
-  SECS=$(since "$t0")
+  RP_SECS=$(python3 -c 'import sys; print(float(sys.argv[1]) + float(sys.argv[2]))' "$RP_SECS" "$(since "$t0")")
   [ "$rc" = 3 ] || { WHY="a report to a parent on another machine exited $rc [$out], want 3 (queued at the hub)"; return 1; }
   f=$(ls "$d/conf/control/hub-outbox/"*.json 2>/dev/null | head -1)
   python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["to"]==sys.argv[2] and r["kind"]=="child_report" else 1)' "$f" "$F/$PF" 2>/dev/null \
@@ -4946,25 +4863,19 @@ drill_report_parent_remote() {
   out=$(rpr bash "$BIN/fleet-report-parent.sh" -L rpr --win "$wl" --state blocked --summary 'stuck' 2>/dev/null); rc=$?
   [ "$rc" = 1 ] && case "$out" in "undelivered → "*) true ;; *) false ;; esac \
     || { WHY="a report with a lost parent address said [$out] rc=$rc, want undelivered → … exit 1"; return 1; }
-  WHAT="另一台的父会话：报告按 @origin_wid 进 hub 发件箱（queued，exit 3）；地址丢了说 undelivered、exit 1，不再静默 exit 0"
 }
 
-# The parent is right here and online, and still every relay to it answered «not
+# report-parent-gone's third leg — the parent is right here and online, and still every relay to it answered «not
 # now» (issue #3520): a session with no issue / scratch key of its own (once a role
 # holder; since issue #4341 any keyless session, keyed by its @fleet_id), and `fleet-hub-node.sh deliver` found it by identity, asked
 # fleet_window_okey for its key, got nothing and exited 75 — the hub pushed it
 # again forever and the child read the endless retry as «its machine is offline».
 # (The hub half — an admin login and the same person's managed login are one relay
 # owner — is TestRelayOwnerAdminIsAlsoAPerson.)
-drill_report_parent_online_queued() {
-  CAP=60; local d="$WORK/rpoq" w t0 out rc U F=11111111-2222-3333-4444-555555555555 PF=0dbf19b9-aaaa-4bbb-8ccc-0123456789ab
-  BREAK_SOCK="$WORK/sock-rpoq"
-  mkdir -p "$d/conf/fleets/rpoq" "$d/conf/control" "$d/main"
-  : > "$d/conf/fleets/rpoq/conf"
-  fx_repo "$d/conf" "rpoq" acme/app FLEET_MAIN="$d/main"
-  nt -f /dev/null new-session -d -s rpoq -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
-  rpoq() { env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
-             CCQUOTA_FLEET=1 FLEET_HUB_RECEIPT_WAIT=0 FLEET_ORPHAN_ALERT_CMD=true FLEET_PEER_RECEIPT_SECS=0 "$@"; }
+rp_online_leg() {
+  local d w t0 out rc U F=11111111-2222-3333-4444-555555555555 PF=0dbf19b9-aaaa-4bbb-8ccc-0123456789ab
+  rp_rig rpoq || { WHY="cannot start the isolated tmux server"; return 1; }
+  rpoq() { rp_env "$@"; }
   (cd "$BIN" && rpoq python3 -c 'import sys, fleet_control as c; c.Control(sys.argv[1]).inventory()' "$d/conf") >/dev/null 2>&1
   U=$(rpoq bash -c '. "$1/fleet-lib.sh"; fleet_uuid rpoq' _ "$BIN")
   [ -n "$U" ] || { WHY="no fleet UUID could be minted"; return 1; }
@@ -4982,9 +4893,20 @@ drill_report_parent_online_queued() {
     || { WHY="the report was not booked under the parent's identity: $(ls "$d/conf/fleets/rpoq/children" 2>&1)"; return 1; }
   out=$(printf '{"id":"%s/acme-app:issue-41#2.1","kind":"message","from":"%s/acme-app:issue-41","to":"%s/%s","from_node":"mac-d","payload":{"text":"a question"}}' \
           "$F" "$F" "$U" "$PF" | rpoq bash "$BIN/fleet-hub-node.sh" deliver 2>&1); rc=$?
-  SECS=$(since "$t0")
+  RP_SECS=$(python3 -c 'import sys; print(float(sys.argv[1]) + float(sys.argv[2]))' "$RP_SECS" "$(since "$t0")")
   [ "$rc" = 0 ] || { WHY="a message to the online keyless parent by identity exited $rc [$out], want 0"; return 1; }
-  WHAT="在线的不绑单会话（没有自己的键，键就是身份）按身份收 hub 推来的回报和消息：exit 0、记在它身份的账本，不再 75「不在」让 hub 无限重推"
+}
+
+# report-parent-gone — a child's report always reaches someone: the parent gone (the
+# person's orphan book), on another machine (the hub's outbox), or online here with
+# no key of its own (delivered by identity). Three legs, one rig (rp_rig).
+drill_report_parent_gone() {
+  CAP=60; local RP_SECS=0
+  rp_gone_leg || { WHY="gone: $WHY"; return 1; }
+  rp_remote_leg || { WHY="remote: $WHY"; return 1; }
+  rp_online_leg || { WHY="online: $WHY"; return 1; }
+  SECS=$RP_SECS
+  WHAT="派单的会话不在：报告进 orphan-reports.ndjson 一行 + 一条提醒，重报 / 回收不重复，hub 派的不写；父会话在另一台：按 @origin_wid 进 hub 发件箱（queued，exit 3），地址丢了说 undelivered、exit 1；在线的不绑单会话按身份收 hub 推来的回报和消息：exit 0、记在它身份的账本，不再 75 让 hub 无限重推"
 }
 
 drill_cred_migration_client() {
@@ -6160,19 +6082,12 @@ drill_chat_relay_wrong_person() {
   # the open carries no target: ChatRelayOpen is relay_id · secret · login, nothing more
   out=$(awk '/^type ChatRelayOpen struct/,/^}/' "$ROOT/tokenledger/shared/control/chat_relay.go" | grep -c 'json:"')
   [ "$out" = 3 ] || { WHY="ChatRelayOpen has $out wire fields, want 3 (relay_id, secret, login)"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s %s %s' "$api" "$ctl" "$agt" | tr ' ' '|'))\$" ./e2e github.com/verkyyi/claude-fleet/tokenledger/shared/control github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='签错 / 过期 / 给别的转发 / 给别的登录 / 寿命过长 / 没有声明 / 先发字节 → 节点断开，socket 0 连接 0 字节；给别的登录的 open 不回拨；请求里塞 target/path/addr/port 只到本登录自己的 socket；没报 CapChat 的节点不收 open（NO_CHAT）' ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT='这台没有 Go 模块缓存 / 工具链——Go 门（tokenledger.yml）跑这几条；测试按名核对在、open 没有目标字段' ;;
-      *) WHY="the chat relay (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v 'live/report' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  else
-    WHAT='没有 go：测试按名核对在、open 没有目标字段，Go 门（tokenledger.yml）跑它们'
-  fi
+  go_half "^($(printf '%s %s %s' "$api" "$ctl" "$agt" | tr ' ' '|'))\$" ./e2e github.com/verkyyi/claude-fleet/tokenledger/shared/control github.com/verkyyi/claude-fleet/tokenledger/agent; case $? in
+    0) WHAT='签错 / 过期 / 给别的转发 / 给别的登录 / 寿命过长 / 没有声明 / 先发字节 → 节点断开，socket 0 连接 0 字节；给别的登录的 open 不回拨；请求里塞 target/path/addr/port 只到本登录自己的 socket；没报 CapChat 的节点不收 open（NO_CHAT）' ;;
+    1) return 1 ;;
+    2) WHAT='这台没有 Go 模块缓存 / 工具链——Go 门（tokenledger.yml）跑这几条；测试按名核对在、open 没有目标字段' ;;
+    3) WHAT='没有 go：测试按名核对在、open 没有目标字段，Go 门（tokenledger.yml）跑它们' ;;
+  esac
   SECS=$(since "$t0")
 }
 
@@ -6189,19 +6104,12 @@ drill_chat_first_open_cold() {
     || { WHY="the test TestChatSockEnsuresOnDemand is gone"; return 1; }
   grep -q 'a.chatSockOrEnsure(ctx, dctx, login' "$f" 2>/dev/null \
     || { WHY="openChatRelay dials the socket without chatSockOrEnsure: a cold home never starts"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestChatSockEnsuresOnDemand$' github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the Go test is not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='没有 socket：机器节点以本登录跑 service ensure --name webchat --wait 3 再拨一次，起来了就接上；在跑的不 ensure；普通节点只拨一次' ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT='这台没有 Go 模块缓存 / 工具链——Go 门（tokenledger.yml）跑它；测试按名核对在、转发经 chatSockOrEnsure' ;;
-      *) WHY="the cold open (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  else
-    WHAT='没有 go：测试按名核对在、转发经 chatSockOrEnsure，Go 门（tokenledger.yml）跑它'
-  fi
+  go_half '^TestChatSockEnsuresOnDemand$' github.com/verkyyi/claude-fleet/tokenledger/agent; case $? in
+    0) WHAT='没有 socket：机器节点以本登录跑 service ensure --name webchat --wait 3 再拨一次，起来了就接上；在跑的不 ensure；普通节点只拨一次' ;;
+    1) return 1 ;;
+    2) WHAT='这台没有 Go 模块缓存 / 工具链——Go 门（tokenledger.yml）跑它；测试按名核对在、转发经 chatSockOrEnsure' ;;
+    3) WHAT='没有 go：测试按名核对在、转发经 chatSockOrEnsure，Go 门（tokenledger.yml）跑它' ;;
+  esac
   SECS=$(since "$t0")
 }
 
@@ -6228,19 +6136,12 @@ drill_chat_relay_replica_hop() {
     || { WHY="attachRelayData verifies before it hands a data half on (a replica spends the nonce the holder needs)"; return 1; }
   grep -q 's.chatRelayPeer(r, home.Machine, home.Login)' "$ROOT/tokenledger/hub/api/fleet_chat.go" 2>/dev/null \
     || { WHY="the chat routes never hand a request to the replica holding the login's link"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='两副本：人的 /chat 落在不持链的副本 → 整个请求交给持链副本；节点签名的回拨落在另一副本 → 验签前转过去，nonce 只花一次；没人持链照答 home_down；单入口不转' ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT='这台没有 Go 模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；测试按名核对在、回拨先转后验、对话路由经 chatRelayPeer' ;;
-      *) WHY="the replica hop (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20[0-9][0-9]/' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  else
-    WHAT='没有 go：测试按名核对在、回拨先转后验、对话路由经 chatRelayPeer，Go 门（tokenledger.yml）跑它们'
-  fi
+  go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
+    0) WHAT='两副本：人的 /chat 落在不持链的副本 → 整个请求交给持链副本；节点签名的回拨落在另一副本 → 验签前转过去，nonce 只花一次；没人持链照答 home_down；单入口不转' ;;
+    1) return 1 ;;
+    2) WHAT='这台没有 Go 模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；测试按名核对在、回拨先转后验、对话路由经 chatRelayPeer' ;;
+    3) WHAT='没有 go：测试按名核对在、回拨先转后验、对话路由经 chatRelayPeer，Go 门（tokenledger.yml）跑它们' ;;
+  esac
   SECS=$(since "$t0")
 }
 

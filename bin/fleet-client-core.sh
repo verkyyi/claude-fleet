@@ -41,7 +41,7 @@ FLEET_C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"
 # a directory it does not own — 0700 locks every spawn out, anything looser leaks
 # it. A cache that exists and is not ours is refused with one stderr line; the
 # per-uid one takes over, then one under $HOME. `[ -O ]` is a builtin: no fork on
-# the common path. BREAK-IT `tmpdir-foreign-owner`.
+# the common path. BREAK-IT `tmpdir-shared-root`.
 if [ -e "$FLEET_C" ] && [ ! -O "$FLEET_C" ]; then
   _fleet_cu="/tmp/claude-fleet-${UID:-$(id -u)}"
   if { [ -e "$_fleet_cu" ] && [ ! -O "$_fleet_cu" ]; } || { [ -e "$_fleet_cu/.claude-dash" ] && [ ! -O "$_fleet_cu/.claude-dash" ]; }; then

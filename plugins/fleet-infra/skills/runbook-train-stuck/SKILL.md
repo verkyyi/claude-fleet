@@ -10,7 +10,7 @@ description: 发布列车卡住或一直红时的故障手册——看它卡在�
 权威出处：`.github/workflows/release-train.yml` 头注释；`docs/dev/BREAK-IT.md` 行 `train-push-cancels` ·
 `train-red-holds-lane` · `train-shard-timeout` · `train-macos-slow-not-hung` · `train-own-runner-silent` ·
 `train-own-runners-gone` · `train-superseded-red` · `train-hub-backwards` · `train-hub-stable-split` ·
-`train-derived-red` · `train-quarantine` · `macos-red-to-stable`；脚本 `bin/fleet-train-{board,plan,macos,failfast,hub,superseded,quarantine}.sh`。
+`train-quarantine` · `macos-red-to-stable`；脚本 `bin/fleet-train-{board,plan,macos,failfast,hub,superseded,quarantine}.sh`。
 规矩本身见 [release-rules]。
 
 ## 什么时候用

@@ -1187,17 +1187,7 @@ drill_door_jump_two_replicas() {
     grep -q "^func $t(" "$f" 2>/dev/null || { WHY="the hub half's test $t is gone"; return 1; }
   done
   gohalf="no go toolchain here — the Go gate (tokenledger.yml) runs the two-replica tests"
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($tests)\$" ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the hub half's Go tests did not run"; return 1 ;;
-      0:*) gohalf="go test ok" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the two-replica Go tests are red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
-         return 1 ;;
-    esac
-  fi
+  go_half "^($tests)\$" ./hub/api; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="入口两副本：pod 的链路在 A，它拉钥匙落到 B 照样 200、普通登录两边都 403；门和 pod 的就绪两副本都看得到、过期不算、重启不丢；路线不带 jump 时说出缺哪一头；$gohalf"
 }

@@ -34,10 +34,9 @@
 #                       pool's slots, ≤ 44, a test over 75 s alone (#3865)
 #   train-red-holds-lane    one Linux shard red while macOS runs on: the train's
 #                       fail-fast cancels the run at once (#3143)
-#   train-derived-red       a failed publish run and a failed move run on the
-#                       commit: the next train moves stable anyway, no hand
-#                       --ignore-check; the old auto roads are gone (#3143)
-#   train-superseded-red    stable moved past TRAIN_SHA mid-run: the train's release
+#   train-superseded-red    a failed publish / move run on the commit: the next train
+#                       moves stable anyway, no hand --ignore-check, the old auto roads
+#                       gone; stable moved past TRAIN_SHA mid-run: the train's release
 #                       ends green saying superseded, not red on the 409 (#3143)
 #   train-red-stalls        a train red only on a flake: master's head sat unreleased
 #                       until the next merge; now `next` re-sends it (≤ 2 a sha), a
@@ -47,13 +46,13 @@
 #                       gets it first and a refusal holds the rest; release-watch.yml
 #                       rolls the WHOLE version back within 15 minutes, with a notice (#4915)
 #   train-hub-backwards     the hub was deployed by hand past TRAIN_SHA: the train's
-#                       hub plan skips the deploy (superseded), never rolls it back (#3319)
+#                       hub plan skips the deploy (superseded), never rolls it back (#3319);
+#                       HUB_DEPLOY_PAUSED set while a train waited in the lane: the gate
+#                       reads an open hub-deploy-paused issue live, unreadable ⇒ red (#4621);
+#                       a machine's target older than what it runs: refused (#4671)
 #   train-prebuild-wrong-sha  the hub image built beside the tests is pushed over
 #                       before the deploy (another sha's build, a hand push): the
 #                       deploy phase refuses it — digest and revision (#3867)
-#   hub-pause-train-queued  HUB_DEPLOY_PAUSED set while a train waited in the lane:
-#                       GitHub fixed `vars` at queue time; the gate also reads an open
-#                       hub-deploy-paused issue live, unreadable ⇒ red (#4621)
 #   train-node-image-stale  the node image is reused when its key is stable's (#4818):
 #                       a change to the updater, the node source, the recipe or the
 #                       pins changes the key; the rest of the release does not
@@ -557,19 +556,25 @@ G
   WHAT="一片 Linux 红、macOS 还在跑：列车的「红灯即停」当场取消整趟，车道让给下一趟；全绿什么都不动"
 }
 
-# A red derived run (a publish, a move, an old auto road) on the commit no longer
-# blocks the next train's move (issue #3143): the move's CI gate passes over the
-# release workflows' own runs, and the old roads that left them are retired.
-drill_train_derived_red() {
+# A release that is not red read as one (issue #3143). Two ways, one rig repo of
+# three commits:
+# · derived: a red derived run (a failed publish, a failed move, an old auto road) on
+#   the commit blocked the next train's move — the move's CI gate passes over the
+#   release workflows' own runs, and the old roads that left them are retired;
+# · superseded: a late train is not a red one — run 38139898013 went red on the
+#   hub's 409 because stable had been moved past its TRAIN_SHA by hand mid-run.
+drill_train_superseded_red() {
   CAP=60
-  local t0 d out wfs c1 c2 c3
-  wfs="$BIN/../.github/workflows"
+  local t0 d out rc wf wfs c1 c2 c3 s
+  wf="$BIN/../.github/workflows/release-train.yml" wfs="$BIN/../.github/workflows"
+  grep -q 'fleet-train-superseded.sh "$TRAIN_SHA"' "$wf" || { WHY="release-train.yml never asks fleet-train-superseded.sh"; return 1; }
+  [ "$(grep -c 'fleet-train-superseded.sh' "$wf")" -ge 3 ] || { WHY="release-train.yml asks before publishing but not again on a 409 / a refused move"; return 1; }
   [ ! -e "$wfs/stable-auto.yml" ] || { WHY="stable-auto.yml still moves stable on its own"; return 1; }
   awk '/^on:/{o=1; next} o && /^[^ ]/{o=0} o' "$wfs/hub-deploy.yml" | grep -q '^[[:space:]]*push:' \
     && { WHY="hub-deploy.yml is still triggered by push"; return 1; }
   awk '/^on:/{o=1; next} o && /^[^ ]/{o=0} o' "$wfs/stable-publish.yml" | grep -v '^[[:space:]]*#' | grep -Eq '^  (push|workflow_run|schedule):' \
     && { WHY="stable-publish.yml is triggered by more than a dispatch"; return 1; }
-  d=$(mktemp -d "${TMPDIR:-/tmp}/train-derived.XXXXXX"); mkdir -p "$d/shim" "$d/conf"
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-sup.XXXXXX"); mkdir -p "$d/shim" "$d/conf"
   ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
     export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
     git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
@@ -578,8 +583,8 @@ drill_train_derived_red() {
     git -C "$d/seed" push -q origin HEAD:master || exit 1
     git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
   ) || { WHY="could not build the rig repo"; rm -rf "$d"; return 1; }
-  c1=$(cat "$d/c1"); c2=$(cat "$d/c2"); c3=$(cat "$d/c3")
-  # GitHub: on the commits a failed publish (suite 802) and a failed move (803) beside
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2"); c3=$(cat "$d/c3"); t0=$(now)
+  # derived: on the commits a failed publish (suite 802) and a failed move (803) beside
   # the green tests (801); the train run 77's own jobs are all green.
   cat > "$d/shim/gh" <<SH
 #!/bin/sh
@@ -591,7 +596,6 @@ case "\$*" in
 esac
 SH
   chmod +x "$d/shim/gh"
-  t0=$(now)
   mv1() { env -u FLEET_HUB_URL -u CCQUOTA_HUB_URL PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" \
             sh "$BIN/fleet-stable.sh" move "$@" --dir "$d/co" --repo o/r 2>&1; }
   # the train's own move: its run's jobs, never the commit's red derived runs
@@ -601,29 +605,8 @@ SH
   out=$(mv1 "$c3") || { WHY="a move by hand refused on a failed publish / move run: $(printf '%s' "$out" | tail -3 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   case "$out" in *'passed over (a release workflow'*'publish stable'*) ;; *) WHY="the passed-over publish is not named: $out"; rm -rf "$d"; return 1 ;; esac
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c3" ] || { WHY="stable did not move past the derived reds"; rm -rf "$d"; return 1; }
-  SECS=$(since "$t0"); rm -rf "$d"
-  WHAT="提交上留着一次失败的发布和一次失败的挪动：下一趟列车照常挪 stable，手挪也不再要逐个 --ignore-check；旧的自动三条路已退"
-}
-
-# A late train is not a red one (issue #3143): run 38139898013 went red on the
-# hub's 409 because stable had been moved past its TRAIN_SHA by hand mid-run.
-drill_train_superseded_red() {
-  CAP=30
-  local t0 d out rc wf c1 c2 c3
-  wf="$BIN/../.github/workflows/release-train.yml"
-  grep -q 'fleet-train-superseded.sh "$TRAIN_SHA"' "$wf" || { WHY="release-train.yml never asks fleet-train-superseded.sh"; return 1; }
-  [ "$(grep -c 'fleet-train-superseded.sh' "$wf")" -ge 3 ] || { WHY="release-train.yml asks before publishing but not again on a 409 / a refused move"; return 1; }
-  d=$(mktemp -d "${TMPDIR:-/tmp}/train-sup.XXXXXX")
-  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
-    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
-    for i in 1 2 3; do echo "$i" >> "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm "c$i" || exit 1
-      git -C "$d/seed" rev-parse HEAD > "$d/c$i"; done
-    git -C "$d/seed" push -q origin HEAD:master && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
-  ) || { WHY="could not build the rig repo"; rm -rf "$d"; return 1; }
-  c1=$(cat "$d/c1"); c2=$(cat "$d/c2"); c3=$(cat "$d/c3"); t0=$(now)
+  # superseded: stable behind the train — not superseded, the train ships
   sup() { env -u FLEET_HUB_URL GITHUB_OUTPUT="$d/out" GITHUB_STEP_SUMMARY="$d/sum" bash "$BIN/fleet-train-superseded.sh" "$@" --dir "$d/co" 2>&1; }
-  # stable behind the train: not superseded — the train ships
   git --git-dir="$d/origin.git" update-ref refs/tags/stable "$c1"
   out=$(sup "$c2"); rc=$?
   [ "$rc" = 1 ] && grep -q '^superseded=false$' "$d/out" || { WHY="stable behind TRAIN_SHA was called superseded: $rc $out"; rm -rf "$d"; return 1; }
@@ -641,7 +624,7 @@ drill_train_superseded_red() {
   out=$(sup "$c2" --hub "file://$d/hub"); rc=$?
   [ "$rc" = 0 ] && case "$out" in *"the hub's stable"*) true ;; *) false ;; esac || { WHY="the hub's stable ahead was not superseded: $rc $out"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
-  WHAT="stable 被手动挪过了 TRAIN_SHA（或入口 stable 已在前面）：release 写 superseded、以成功收场，不再被 409 打红；stable 落后则照常发"
+  WHAT="提交上留着失败的发布和挪动：列车照常挪 stable、手挪不再要逐个 --ignore-check，旧的自动三条路已退；stable 被手动挪过了 TRAIN_SHA（或入口 stable 已在前面）：release 写 superseded、以成功收场；stable 落后则照常发"
 }
 
 # A red train stalled the lane until the next merge (issue #4913): 2026-10-19
@@ -684,16 +667,32 @@ drill_train_red_stalls() {
   WHAT="一趟只因不稳而红的车：next 判 flaky、对 master 头补发（同一个 sha 最多 2 次）；真红不补发、通知写明测试；release-hold 开着就不补发、不挪 stable；每 10 分钟兜底一次"
 }
 
-# The hub deploy only moves forward (issue #3319): run 38139898013 (5e11587) rolled
-# the hub back from a hand-deployed prod-15d87a1 to prod-5e11587, and #3297 fell
-# off it. fleet-train-hub.sh reads the hub's /version `commit` first: TRAIN_SHA ⇒
-# skip · a descendant or not an ancestor ⇒ skip, "hub superseded" · an ancestor ⇒
-# deploy as before · unreadable / unknown ⇒ red, no blind deploy.
+# Nothing goes back, nothing goes out paused (one drill, three roads):
+# · the hub deploy only moves forward (issue #3319): run 38139898013 (5e11587) rolled
+#   the hub back from a hand-deployed prod-15d87a1, and #3297 fell off it.
+#   fleet-train-hub.sh reads the hub's /version `commit` first: TRAIN_SHA ⇒ skip · a
+#   descendant or not an ancestor ⇒ skip, "hub superseded" · an ancestor ⇒ deploy as
+#   before · unreadable / unknown ⇒ red, no blind deploy;
+# · the pause switch holds a train ALREADY queued (issue #4621): run 39036174481 was
+#   queued 13:20:46, HUB_DEPLOY_PAUSED=1 set 13:22:33, and its gate read the variable
+#   empty (GitHub fixes `vars` at queue time) and deployed. fleet-hub-pause.sh check
+#   also reads an open hub-deploy-paused issue when the gate runs; that read failing
+#   is red;
+# · a machine only moves forward (#4671): the day the Mac lane went in a Mac was taken
+#   back to an older release missing a key fix. The updater refuses a target whose
+#   manifest seq is lower (`refused`, one history row, the check reds);
+#   FLEET_NODE_UPDATE_BACKWARD=1 is the operator's way back.
 drill_train_hub_backwards() {
-  CAP=30
-  local t0 d out rc wf c1 c2 c3 c4 c5 s1 tr
+  CAP=60
+  local t0 d out rc wf c1 c2 c3 c4 c5 s1 tr sb u tk V1 V2
   wf="$BIN/../.github/workflows/release-train.yml"
   grep -q 'bin/fleet-train-hub.sh "$SHA"' "$wf" || { WHY="release-train.yml's hub plan does not run fleet-train-hub.sh"; return 1; }
+  wf="$BIN/../.github/workflows/hub-deploy.yml"  # the pause gate
+  awk '/^  gate:/{g=1} g&&/^  [a-z]/&&!/^  gate:/{g=0} g' "$wf" > "${TMPDIR:-/tmp}/hubgate.$$"
+  grep -q 'bin/fleet-hub-pause.sh check --repo "$GITHUB_REPOSITORY" --sha "$INPUT_SHA" --var "$PAUSED"' "${TMPDIR:-/tmp}/hubgate.$$" \
+    && grep -q 'issues: read' "${TMPDIR:-/tmp}/hubgate.$$" \
+    || { WHY="hub-deploy.yml's gate does not run fleet-hub-pause.sh check with issues: read"; rm -f "${TMPDIR:-/tmp}/hubgate.$$"; return 1; }
+  rm -f "${TMPDIR:-/tmp}/hubgate.$$"
   d=$(mktemp -d "${TMPDIR:-/tmp}/train-hubb.XXXXXX")
   ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
     export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -745,25 +744,7 @@ drill_train_hub_backwards() {
   [ "$rc" != 0 ] && [ "$(dep)" != true ] || { WHY="an unreadable /version still decided ($rc): $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
   printf '{"commit":"abcdef1","version":"prod-abcdef1"}\n' > "$d/hub/version"; plan
   [ "$rc" != 0 ] && [ "$(dep)" != true ] || { WHY="a hub commit the checkout cannot place still decided ($rc): $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
-  SECS=$(since "$t0"); rm -rf "$d"
-  WHAT="入口已在 TRAIN_SHA 跳过；入口被手动部署到它之后或分叉的提交：不部署、写 hub superseded、这步绿；入口落后照常部署；只改控制台照常部署、只改 web-chat/ui 不部署；读不到 /version 或认不出提交：红，不盲部署"
-}
-
-# The pause switch must hold a train that is ALREADY queued (issue #4621): run
-# 39036174481 was queued 13:20:46, HUB_DEPLOY_PAUSED=1 set 13:22:33, and its gate
-# (13:34) read the variable empty — GitHub fixes `vars` when a run is queued — and
-# deployed the hub. fleet-hub-pause.sh check also reads an open issue labelled
-# hub-deploy-paused when the gate runs; that read failing is red.
-drill_hub_pause_train_queued() {
-  CAP=30
-  local t0 d out rc wf
-  wf="$BIN/../.github/workflows/hub-deploy.yml"
-  awk '/^  gate:/{g=1} g&&/^  [a-z]/&&!/^  gate:/{g=0} g' "$wf" > "${TMPDIR:-/tmp}/hubgate.$$"
-  grep -q 'bin/fleet-hub-pause.sh check --repo "$GITHUB_REPOSITORY" --sha "$INPUT_SHA" --var "$PAUSED"' "${TMPDIR:-/tmp}/hubgate.$$" \
-    && grep -q 'issues: read' "${TMPDIR:-/tmp}/hubgate.$$" \
-    || { WHY="hub-deploy.yml's gate does not run fleet-hub-pause.sh check with issues: read"; rm -f "${TMPDIR:-/tmp}/hubgate.$$"; return 1; }
-  rm -f "${TMPDIR:-/tmp}/hubgate.$$"
-  d=$(mktemp -d "${TMPDIR:-/tmp}/hub-pause.XXXXXX"); t0=$(now)
+  # the pause switch holds a train ALREADY queued (#4621)
   # a fake gh: the open issues labelled hub-deploy-paused are $d/issues, $d/down = the API is down
   printf '#!/bin/bash\n[ ! -e "%s/down" ] || exit 1\ncat "%s/issues" 2>/dev/null\n' "$d" "$d" > "$d/gh"; chmod +x "$d/gh"
   chk() { out=$(GH="$d/gh" FLEET_HUB_PAUSE_RETRY_SECS=0 GITHUB_OUTPUT='' bash "$BIN/fleet-hub-pause.sh" check --repo o/r "$@" 2>&1); rc=$?; }
@@ -783,8 +764,37 @@ drill_hub_pause_train_queued() {
   # the switch unreadable: red, never a blind deploy
   : > "$d/down"; chk --sha abc1234 --var ''
   [ "$rc" = 1 ] && ! printf '%s' "$out" | grep -q '^paused=true$' || { WHY="an unreadable pause switch did not go red: $rc $out"; rm -rf "$d"; return 1; }
+  # a machine only moves forward (#4671): it runs V2 (seq 5), the target is V1 (seq 4)
+  sb="$d/back"; mkdir -p "$sb/root" "$sb/rel" "$sb/db" "$sb/Users/alice" "$sb/LaunchDaemons" "$sb/bin"
+  cp "$BIN/fleet-node-update.py" "$BIN/fleet-node-supervisor.py" "$sb/bin/"
+  u="$sb/bin/fleet-node-update.py"; tk="$BIN/fleet-node-update-selftest.py"
+  python3 "$tk" --fake-ccquota "$sb/ccquota" || { WHY="no fake ccquota"; rm -rf "$d"; return 1; }
+  V1=$(printf '%040d' 0 | tr 0 1); V2=$(printf '%040d' 0 | tr 0 2)
+  python3 "$tk" --make-release "$sb/rel" "$V1" '{"seq":4}' \
+    && python3 "$tk" --make-release "$sb/rel" "$V2" '{"seq":5}' || { WHY="fixtures not built"; rm -rf "$d"; return 1; }
+  printf '{"children":[],"tasks":[]}\n' > "$sb/table.json"
+  printf '{"alice":{"uid":%s,"gid":%s,"home":"%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
+  printf '{"alice":{"managed":true}}\n' > "$sb/db/accounts.json"
+  printf 'CCQUOTA_HUB_URL=https://hub.invalid\n' > "$sb/db/machine.env"; printf 'ed25519 AAAA\n' > "$sb/db/release.pub"
+  upd() { env FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/root/current" \
+      FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_PASSWD="$sb/passwd.json" \
+      FLEET_NODE_TEST=1 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_CCQUOTA="$sb/ccquota" FAKE_REL="$sb/rel" \
+      FLEET_NODE_UPDATE_PLATFORM=darwin-arm64 FLEET_NODE_UPDATE_SETTLE=0 FLEET_NODE_UPDATE_LIB=/nonexistent "$@"; }
+  daemon() { python3 -c 'import json,os,sys,time; json.dump({"supervisor":{"pid":os.getppid(),"heartbeat":time.time(),"runtime":sys.argv[2]}},open(sys.argv[1],"w"))' "$sb/db/state.json" "$(basename "$(readlink "$sb/root/current")")"; }
+  cur() { basename "$(readlink "$sb/root/current")"; }
+  upd FLEET_NODE_UPDATE_TARGET="$V2" python3 "$u" tick >/dev/null && daemon && upd FLEET_NODE_UPDATE_TARGET="$V2" python3 "$u" tick >/dev/null
+  [ "$(cur)" = "$V2" ] || { WHY="V2 never landed"; rm -rf "$d"; return 1; }
+  out=$(upd FLEET_NODE_UPDATE_TARGET="$V1" python3 "$u" tick 2>&1)
+  [ "$(cur)" = "$V2" ] || { WHY="the machine went back to the older V1: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  case "$out" in *refused*'only moves forward'*) ;; *) WHY="the older target was not refused as such: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1 ;; esac
+  upd FLEET_NODE_UPDATE_TARGET="$V1" python3 "$u" tick >/dev/null 2>&1
+  [ "$(python3 -c 'import json,sys; print(sum(1 for h in json.load(open(sys.argv[1]))["history"] if h["result"] == "refused"))' "$sb/db/update.json")" = 1 ] \
+    || { WHY="a refused target was booked more than once"; rm -rf "$d"; return 1; }
+  upd python3 "$u" status --check >/dev/null 2>&1 && { WHY="status --check is green while the machine refuses its target"; rm -rf "$d"; return 1; }
+  upd FLEET_NODE_UPDATE_TARGET="$V1" FLEET_NODE_UPDATE_BACKWARD=1 python3 "$u" tick >/dev/null 2>&1
+  [ "$(cur)" = "$V1" ] || { WHY="FLEET_NODE_UPDATE_BACKWARD=1 did not take the operator back"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
-  WHAT="变量在列车排队后才设（vars 排队时就定了）：门在运行时读到开着的 hub-deploy-paused 单 ⇒ 暂停、不部署入口；变量排队前设了也暂停；手动 dispatch 不受影响；读不到暂停开关 ⇒ 红，不盲部署"
+  WHAT="入口已在 TRAIN_SHA 跳过；入口被手动部署到它之后或分叉的提交：不部署、写 hub superseded；入口落后、只改控制台照常部署，只改 web-chat/ui 不部署；读不到 /version 或认不出提交：红；暂停开关在列车排队后才设也拦得住（读开着的 hub-deploy-paused 单），读不到 ⇒ 红；机器目标比正在跑的旧（seq 4 < 5）：拒切、记一次 refused、status --check 报错，FLEET_NODE_UPDATE_BACKWARD=1 才退"
 }
 
 # The repo is public (EPIC #3569): a PR that adds an internal address used to merge

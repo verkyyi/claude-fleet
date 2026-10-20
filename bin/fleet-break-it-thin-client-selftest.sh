@@ -571,19 +571,12 @@ drill_thin_home_login_no_fleet() {
   grep -q 'thin_no_fleet_fmt' "$BIN/fleet-thin.py" || { WHY="the thin loop no longer says which login had no fleet"; return 1; }
   t0=$(now)
   WHAT='人的 fleet 搬到同机另一个登录（dave → carol）：入口的家答案每台机器带上有活 fleet 的那个登录（不是人的默认登录、不是别人的登录），别处有 fleet 时没有 fleet 的机器不当家、换家也不去；fleet-connect 照它进（FLEET_CONNECT_LOGIN 仍优先），看台遇到 rc 3 说「<机器> 这台机器的登录 <登录> 下没有 fleet」'
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT="${WHAT}（go test 两条）" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT="${WHAT}；Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
-      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  else
-    WHAT="${WHAT}；没有 go：两条测试按名核对在，Go 门（tokenledger.yml）跑它们"
-  fi
+  go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
+    0) WHAT="${WHAT}（go test 两条）" ;;
+    1) return 1 ;;
+    2) WHAT="${WHAT}；Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
+    3) WHAT="${WHAT}；没有 go：两条测试按名核对在，Go 门（tokenledger.yml）跑它们" ;;
+  esac
   SECS=$(since "$t0")
 }
 

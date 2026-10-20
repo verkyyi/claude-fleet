@@ -74,7 +74,7 @@ name: release train
 #     has no push trigger, stable-auto.yml is gone, stable-publish.yml is dispatch
 #     only — and a red publish / move / train left on a commit is not counted
 #     against the next train's move (fleet-stable.sh gate 3 passes over the release
-#     workflows' own runs; BREAK-IT train-derived-red).
+#     workflows' own runs; BREAK-IT train-superseded-red).
 #
 #   * a test red on TWO trains in a row is quarantined (issue #3243, C10; 拍板 10):
 #       `quarantine` fetches the previous trains' state (the `train-quarantine`

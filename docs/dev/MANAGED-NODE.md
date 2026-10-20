@@ -226,7 +226,7 @@ agent 跑的又是 `<sha>/bin/ccquota`，路径也每次变——所以人手给
 一趟红了当场取消（「红灯即停」）、下一趟照常发。旧的三条路（合并触发的入口上线、`stable-auto.yml` 的自动挪动、
 挪完自动派发的发布）已退休：`hub-deploy.yml` 只剩列车调用和手动 `workflow_dispatch`（`tag` = 回退），`stable-publish.yml`
 只剩 dispatch 作修补；它们留在某个提交上的红 run 不再挡后面的挪动（`fleet-stable.sh` 第 3 道门不算发布类 workflow 自己的 run，
-`FLEET_STABLE_DERIVED_RE`；`--ignore-check` 可重复）。BREAK-IT `train-red-holds-lane` · `train-derived-red`。
+`FLEET_STABLE_DERIVED_RE`；`--ignore-check` 可重复）。BREAK-IT `train-red-holds-lane` · `train-superseded-red`。
 
 **发布版里的 ccquota 是该提交的 Go**（#2930）。发布版的 `ccquota-<os>-<arch>` 取自入口镜像自带的那份，所以入口镜像
 构建时给每个 ccquota 盖上它编译的 Go 源摘要（`shared/cmd/ccquota-srcdigest` → `-X main.SrcDigest`；`ccquota version` 第二行
