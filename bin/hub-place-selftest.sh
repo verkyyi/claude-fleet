@@ -459,7 +459,7 @@ CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_RC=4 INFLIGHT=1 FLEET_
                                                  || fail "NOTHERE all full → refused (exit 2) naming every machine (rc=$(rc))" "$(cat "$WORK/spawn.err")"
 tmux_has 'new-window'                            && fail "NOTHERE all full must not open here"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_RC=1 \
-  PLACE_STDERR='ccquota: Post "https://hub.test/v1/node/place": dial tcp 10.0.0.9:443: connect: connection refused' run_spawn 258
+  PLACE_STDERR='ccquota: Post "https://hub.test/v1/node/place": dial tcp hub.test:443: connect: connection refused' run_spawn 258
 [ "$(rc)" = 0 ] && tmux_has 'new-window' && tmux_has "@placed 'fallback-local'" \
                                                  || fail "NOTHERE the hub never reached → opened here, @placed fallback-local (rc=$(rc))" "$(cat "$WORK/spawn.err")"
 err_has 'hub 不可达'                             || fail "NOTHERE the fallback is said"
