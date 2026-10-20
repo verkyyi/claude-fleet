@@ -330,8 +330,6 @@ fleet_ui_t() {
     en:view_legend_exited) printf 'exited' ;;
     zh:view_legend_idle) printf '空闲' ;;
     en:view_legend_idle) printf 'idle' ;;
-    zh:view_legend_sleep) printf '休眠' ;;
-    en:view_legend_sleep) printf 'asleep' ;;
     zh:view_match_issue_fmt) printf '匹配：关联 issue %s' "${1:-}" ;;
     en:view_match_issue_fmt) printf 'matched: linked issue %s' "${1:-}" ;;
     zh:view_agent_unknown) printf '未知' ;;
@@ -420,8 +418,6 @@ fleet_ui_t() {
     en:view_state_done) printf 'turn ended' ;;
     zh:view_state_exited) printf '已退出' ;;
     en:view_state_exited) printf 'exited' ;;
-    zh:view_state_sleeping) printf '睡着' ;;
-    en:view_state_sleeping) printf 'asleep' ;;
     zh:view_state_landed) printf '已合并' ;;
     en:view_state_landed) printf 'landed' ;;
     zh:view_state_parked) printf '停放' ;;
@@ -641,12 +637,6 @@ fleet_ui_t() {
     en:view_act_resume)         printf 'Resume' ;;
     zh:view_act_restore)        printf '恢复' ;;
     en:view_act_restore)        printf 'Restore' ;;
-    zh:view_act_wake)           printf '唤醒' ;;
-    en:view_act_wake)           printf 'Wake' ;;
-    zh:view_act_keep_awake)     printf '保持唤醒' ;;
-    en:view_act_keep_awake)     printf 'Keep awake' ;;
-    zh:view_act_allow_sleep)    printf '允许休眠' ;;
-    en:view_act_allow_sleep)    printf 'Allow sleep' ;;
     zh:view_act_sub)            printf '换账号…' ;;
     en:view_act_sub)            printf 'Switch account…' ;;
     # another machine's row (issue #4184): its accounts are that login's — the
@@ -1170,8 +1160,6 @@ pin	t	置顶 / 取消置顶
 pr	p	打开 PR（没有时置灰）
 answer	a	回答提问 — 跳到那个会话，在它自己的提问里答（红色 ? 行；否则置灰）
 sub	s	切换 sub — 在输入行写账号，Tab 逐个看额度，↵ 迁移
-wake	w	唤醒睡眠中的 z 行（仅睡眠时显示）
-awake	k	保持唤醒 ⇄ 允许再次休眠
 reappol	l	改回收方式 — 合并后 / 做完就收 / 循环停了 / 到点 / 常驻
 agent	v	新会话 claude ⇄ codex
 reap	x	回收 — 先确认 y/n（别机行：经入口让那台机器回收）
@@ -1190,8 +1178,6 @@ pin	t	pin / unpin the row to the top
 pr	p	open its PR (greyed when it has none)
 answer	a	answer its question — jumps to that session, to answer in its own picker (a red ? row; greyed otherwise)
 sub	s	switch subscription — the account on the input line, Tab through them with their quota, ↵ moves
-wake	w	wake a sleeping (z) row now — only listed on one
-awake	k	keep it awake ⇄ allow it to sleep again
 reappol	l	reap policy — after merge / when done / after the loop / at a time / keep
 agent	v	flip new sessions claude ⇄ codex
 reap	x	reap it — asks y/n first (a row on another machine: through the hub, there)
@@ -1313,8 +1299,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:reap_menu_loop_end)      printf 'After the loop — once /loop stops' ;;
     zh:reap_menu_at)            printf '到点回收…' ;;
     en:reap_menu_at)            printf 'At a time…' ;;
-    zh:reap_menu_keep)          printf '常驻 — 永不自动回收，只睡眠' ;;
-    en:reap_menu_keep)          printf 'Keep — never reaped, only sleeps' ;;
+    zh:reap_menu_keep)          printf '常驻 — 永不自动回收' ;;
+    en:reap_menu_keep)          printf 'Keep — never reaped' ;;
     zh:reap_menu_at_prompt)     printf '几点回收（HH:MM 或 2026-10-06T18:00Z）:' ;;
     en:reap_menu_at_prompt)     printf 'Reap at (HH:MM or 2026-10-06T18:00Z):' ;;
     # the row's reap-policy word (issue #1902), left of the @ mark; _narrow when tight
@@ -1341,8 +1327,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:sidebar_place_reap_loop_end) printf 'After the loop\tonce /loop stops' ;;
     zh:sidebar_place_reap_at)   printf '到点回收\t下一步写时间' ;;
     en:sidebar_place_reap_at)   printf 'At a time\tthe time comes next' ;;
-    zh:sidebar_place_reap_keep) printf '常驻\t永不自动回收，只睡眠' ;;
-    en:sidebar_place_reap_keep) printf 'Keep\tnever reaped, only sleeps' ;;
+    zh:sidebar_place_reap_keep) printf '常驻\t永不自动回收' ;;
+    en:sidebar_place_reap_keep) printf 'Keep\tnever reaped' ;;
     zh:sidebar_place_reap_fmt)  printf '%s → 什么时候回收？' "${1:-}" ;;
     en:sidebar_place_reap_fmt)  printf '%s → when to reap?' "${1:-}" ;;
     zh:sidebar_place_reap_keys) printf '↑↓ 选 · ↵ 确认（默认：%s）· esc 取消' "${1:-}" ;;
@@ -1367,12 +1353,6 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:menu_sub)                printf 'Move to… (another account)' ;;
     zh:menu_sub_none)           printf '迁移到…（只有运行中的 Claude 会话能迁）' ;;
     en:menu_sub_none)           printf 'Move to… (a running Claude session only)' ;;
-    zh:menu_wake)               printf '唤醒' ;;
-    en:menu_wake)               printf 'Wake' ;;
-    zh:menu_allow_sleep)        printf '允许休眠' ;;
-    en:menu_allow_sleep)        printf 'Allow sleep' ;;
-    zh:menu_keep_awake)         printf '保持唤醒' ;;
-    en:menu_keep_awake)         printf 'Keep awake' ;;
     zh:menu_agent_fmt)          printf '新会话改用 %s' "${1:-}" ;;
     en:menu_agent_fmt)          printf 'New sessions use %s' "${1:-}" ;;
     zh:menu_reap)               printf '回收…' ;;

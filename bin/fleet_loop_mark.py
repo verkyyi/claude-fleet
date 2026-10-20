@@ -80,7 +80,7 @@ import fleet_iso  # noqa: E402  the one ISO reader (issue #2024)
 GRACE_MIN = 600                    # a wakeup may fire this late before we call it stopped
 CRON_LIFE = 7 * 86400 + 900        # recurring CronCreate auto-expires after 7 days (+ jitter)
 WAKE_MIN, WAKE_MAX = 60, 3600      # ScheduleWakeup's own clamp
-LEDGER_LIVE = ('active', 'waiting-quota', 'hibernating', 'delivering')
+LEDGER_LIVE = ('active', 'waiting-quota', 'delivering')
 ID_OK = re.compile(r'[A-Za-z0-9_.:-]{1,64}')
 SPEC_OK = re.compile(r'[0-9*,/-]+(?:_[0-9*,/-]+){4}')
 CRON_JITTER = 900                  # a recurring job may fire up to 15 min after its minute

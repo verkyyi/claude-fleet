@@ -277,12 +277,12 @@ def window_rows(session):
             continue
         fields = tm(session, 'display-message', '-p', '-t', wid,
                     '#{pane_id}|#{pane_pid}|#{pane_dead}|#{@claude_state}|#{@claude_state_ts}|'
-                    '#{@cc_agent}|#{@worker_lifecycle}|#{@hub}|#{@issue}|#{@raw}|#{window_activity}|'
-                    '#{@claude_state_src}|#{@agent_status_ts}|#{window_name}').split('|', 13)
-        if len(fields) != 14:
+                    '#{@cc_agent}|#{@hub}|#{@issue}|#{@raw}|#{window_activity}|'
+                    '#{@claude_state_src}|#{@agent_status_ts}|#{window_name}').split('|', 12)
+        if len(fields) != 13:
             continue
         rows.append(dict(zip(('pane', 'pane_pid', 'dead', 'state', 'state_ts', 'agent',
-                              'lifecycle', 'hub', 'issue', 'raw', 'activity', 'src', 'status_ts',
+                              'hub', 'issue', 'raw', 'activity', 'src', 'status_ts',
                               'name'), fields), window=wid))
     return rows
 
@@ -402,7 +402,7 @@ def reconcile(session, args, records, rows, now, stats):
     wins = window_rows(session)
     sources(session, wins, now, args.primary_secs, stats)
     for row in wins:
-        if row['hub'] == '1' or row['lifecycle'] or row['state'] != 'working':
+        if row['hub'] == '1' or row['state'] != 'working':
             continue
         if not (row['issue'].isdigit() or row['raw'] == '1'):
             continue

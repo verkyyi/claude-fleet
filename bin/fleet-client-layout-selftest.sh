@@ -71,9 +71,9 @@ t, _ = at(state="failed"); has("failed: ✗ 失败", t, " ✗ 失败 · ")
 eq("exited: the glyph grey (plan B: only ! and ✗ are red)", [p[1] for p in tb.layout(dict(rec, state="exited"), 80, now=1060)[0] if p[2] == "sym"],
    ["colour8"])
 t, _ = at(state="idle"); has("idle: ∙ 空闲", t, " ∙ 空闲 · ")
-t, _ = at(state="sleeping"); has("asleep: ☾ 睡着", t, " ☾ 睡着 · ")
-for s in ("looping", "preparing", "waking"):
-    has("%s: ↻ 在干活" % s, at(state=s)[0], " ↻ 在干活 · ")
+# hibernation's words went with it (T548): an old record's `sleeping` reads idle
+t, _ = at(state="sleeping"); has("an old sleeping: ∙ 空闲", t, " ∙ 空闲 · ")
+has("looping: ↻ 在干活", at(state="looping")[0], " ↻ 在干活 · ")
 t, bg = at(lost=True)
 eq("lost: grey", bg, tb.BG_DOWN); has("lost: ?, no word", t, " ? #1894 "); has("lost: the machine", t, "· mac-b 连不上")
 t, bg = at(45, lost=True); eq("lost 45: grey", bg, tb.BG_DOWN); has("lost 45: 62% mac-b 连不上", t, "62% mac-b 连不上")

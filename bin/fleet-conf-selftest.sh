@@ -642,6 +642,16 @@ is "K: (T495) migrate exits 0" "$rc" 0
 is "K: (T495) the four pool lines are comments" "$(cat "$CD/fleet.conf" "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/o-a.conf" | grep -c '^# retired #T495: ')" 4
 has "K: (T495) …the appended off switch too" "$(cat "$CD/fleet.conf")" "# retired #T495: export FLEET_SCRATCH_POOL=0"
 has "K: (T495) the fetch bound stays" "$(cat "$CD/fleet.conf")" $'\nFLEET_POOL_FETCH_SECS=5'
+# worker hibernation's keys (T548): the switch and its knobs go; the MCP
+# restartability contract (FLEET_SLEEP_MCP_RESTARTABLE) is still read and stays
+mkbox k4
+printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_HOST=1\nexport FLEET_SLEEP=on\nFLEET_SLEEP_AFTER=900\n' > "$CD/fleet.conf"
+mkdir -p "$CD/fleets/fleet/repos"
+printf 'FLEET_SLEEP_WAKE=dwell\nFLEET_SLEEP_MCP_RESTARTABLE=github\n' > "$CD/fleets/fleet/conf"
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
+is "K: (T548) migrate exits 0" "$rc" 0
+is "K: (T548) the three sleep lines are comments" "$(cat "$CD/fleet.conf" "$CD/fleets/fleet/conf" | grep -c '^# retired #T548: ')" 3
+has "K: (T548) the MCP contract stays" "$(cat "$CD/fleets/fleet/conf")" $'\nFLEET_SLEEP_MCP_RESTARTABLE=github'
 
 }
 

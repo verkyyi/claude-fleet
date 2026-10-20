@@ -35,7 +35,7 @@ INPUT = runpy.run_path(str(BIN / 'fleet-input.py'))
 TRANSFER = runpy.run_path(str(BIN / '.fleet-transfer.py'))
 ROUTING = ('@fleet_id', '@repo', '@issue', '@raw', '@worktree', '@task', '@origin',
            '@origin_fid', '@agent_def', '@fleet_role', '@launch', '@launch_receipt')
-CONFLICTS = ('@handoff_armed', '@agent_transfer_request', '@worker_lifecycle', '@loop')
+CONFLICTS = ('@handoff_armed', '@agent_transfer_request', '@loop')
 UNCONFIRMED = {'preflight': 'source-retained', 'stop': 'stop-unconfirmed',
                'stopped': 'stop-unconfirmed', 'reserve': 'admission-unconfirmed',
                'launch': 'launch-unconfirmed', 'started': 'target-unconfirmed',

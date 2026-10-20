@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # selftest-parts: 4
-# selftest-part: 4 DoneNoPr.test_driver_scratch_closes_once_its_epic_is_closed DoneNoPr.test_recent_is_kept_and_said_once
-# selftest-part: 5 DoneNoPr.test_working_pr_open_issue_and_keep_are_kept HomeReap.test_no_policy_or_keep_is_never_closed_a_pin_keeps_nothing NoticeTests.test_notice_has_visible_tick_and_resets_on_activity_or_stale_tick PolicyGrammar.test_idle_owned_holds_off_the_reopen
-# selftest-part: 6 ReapPolicy.test_done_waits_its_own_idle_then_reaps_keeping_unpushed_work ReapPolicy.test_sleep_on_considers_only_windows_with_a_policy
-# selftest-part: 7 RoundTrip.test_dry_cap_off_and_rate_limit
-# selftest-part: 8 RoundTrip.test_unmerged_pr_requires_strict_ancestor_and_activity_recheck TaskSession.test_open_or_unknown_record_keeps_the_session
+# selftest-part: 4 DoneNoPr.test_driver_scratch_closes_once_its_epic_is_closed DoneNoPr.test_recent_is_kept_and_said_once EmptyReap.test_closes_only_a_session_never_typed_into HomeReap.test_spawned_norepo_closes_on_its_policy_after_a_finished_turn
+# selftest-part: 5 PinIsOrder.test_a_pin_set_later_keeps_nothing PolicyGrammar.test_norm_default_label ReapPolicy.test_keep_and_merged_are_never_this_pass StuckReaps.test_the_agents_finished_word_outranks_a_looping_stamp
+# selftest-part: 6 TestIdentity.test_closes_a_test_session_past_its_policy_and_nothing_else
+# selftest-part: 7 RoundTrip.test_codex_unknown_or_active_native_turn_is_kept
+# selftest-part: 8 RoundTrip.test_real_close_and_restore
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Policy tests and a real isolated tmux -> history -> restore round trip."""
 import time
@@ -1232,14 +1232,6 @@ class ReapPolicy(Rig):
         self.set("@loop", "kind=wakeup next=%d ttl=600" % (int(time.time()) - 4000))
         self.assertIn("reaped-idle:", self.due())
 
-    def test_sleep_on_considers_only_windows_with_a_policy(self):
-        conf = self.conf
-        conf.write_text(conf.read_text() + "FLEET_SLEEP=on\n")
-        self.set("@claude_state_ts", str(int(time.time()) - 9000))
-        self.due()
-        self.assertTrue(self.exists())               # no policy, sleep on: the old rule, not closed
-        self.policy("done:2h")
-        self.assertIn("reaped-idle:", self.due())
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux absent")
@@ -1587,20 +1579,6 @@ class DoneNoPr(Rig):
         self.assertFalse(self.exists())
         self.assertIn("every PR final", (self.root / "ledger.tsv").read_text())
 
-    def test_sleep_on_no_policy_closed_ticket_closes(self):
-        # #2970: FLEET_SLEEP=on (--policy-only) used to skip every window with no
-        # policy; one bound to a closed ticket is closed all the same.
-        conf = self.conf
-        conf.write_text(conf.read_text() + "FLEET_SLEEP=on\n")
-        self.ago(9000)
-        self.set("@issue", "12")
-        (self.root / "issue.json").write_text('{"state":"OPEN"}')
-        self.assertIn("skip:issue-open " + self.win, self.due())
-        self.assertTrue(self.exists())
-        (self.root / "issue.json").write_text('{"state":"CLOSED"}')
-        self.assertIn("cleaned:done-no-pr " + self.win, self.due())
-        self.assertFalse(self.exists())
-
     def test_driver_scratch_closes_once_its_epic_is_closed(self):
         # #2970: a batch driver's scratch (@raw, no @issue, @epic) with no policy
         # goes by its EPIC: open ⇒ kept, closed ⇒ closed; another repo's EPIC is
@@ -1621,14 +1599,14 @@ class StuckReaps(unittest.TestCase):
     case to another stride part (part 4/4's groups are named one by one)."""
     NAMES = ("@raw", "@issue", "@repo", "@norepo", "@worktree", "@claude_state", "@claude_state_ts",
              "@cc_agent", "@cc_launcher_pid", "@codex_identity", "@handoff_manifest",
-             "@agent_transfer_until", "window_name", "@reap_policy", "@loop", "@worker_lifecycle",
+             "@agent_transfer_until", "window_name", "@reap_policy", "@loop",
              "@wrap_gone", "pane_dead", "@fleet_role", "@reap_skip", "@test_identity", "@born",
              "@fleet_id", "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted", "@agent_status")
 
     def cleaner(self, repo, opts):
         args = argparse.Namespace(session="s", socket_name="s", main="/nonexistent", repo=repo,
                                   base="master", limit=4, forge="github", window_repo=True,
-                                  dry_run=False, policy_only=False)
+                                  dry_run=False)
         c = idle.Cleaner(args)
         self.writes = []
 

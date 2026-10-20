@@ -81,9 +81,6 @@
 #                      bare `dash-reap.sh @65` backgrounded the tail, printed
 #                      `reaped:full`, and the tail's own gate then refused silently.
 #
-# SLEEPING workers (issue #1244) are reaped WITHOUT a wake: fleet-reap-live.py passes
-# a sleeper with no agent under it (no state/age gate — there is nothing to
-# protect), the sleep record is retired (fleet_sleep_dispose) and the window killed.
 # A reap HOLD (`fleet_worker_life.py hold <@id>`) retains any worker until `release`.
 #
 # A worker that SHIPPED ITS OWN PR (issue #1542): the merged PR's mergedAt is
@@ -219,15 +216,9 @@ reap_record() {
     "${FLEET_SESSION:-}" "" "$branch" "${wname:-}" "${worigin:-}"
 }
 
-# Close the window, truthfully (issue #1244): retire a sleeper's record first (a
-# refusal leaves everything standing), then kill, then CHECK it is gone. Exits 5
+# Close the window, truthfully (issue #1244): kill, then CHECK it is gone. Exits 5
 # with a failed:<slug> token instead of letting a caller read success.
 reap_kill() {
-  if ! fleet_sleep_dispose "$target" "${FLEET_SESSION:-}"; then
-    emit failed:sleep-record
-    fleet_ui_fail "reap failed: $target — sleep record could not be retired"
-    exit 5
-  fi
   fleet_win_retire "$target" "" reaped   # a reap is the fleet's close, never one to pull back (#1840); its ID ends (C4)
   tmux kill-window -t "$target" 2>/dev/null || true
   if tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null | grep -qxF "$target"; then

@@ -47,7 +47,7 @@ PATH="$WORK/bin:$PATH"; export PATH
 WLIST_FILE="$WORK/wlist"; SETLOG="$WORK/setlog"; export WLIST_FILE SETLOG
 # WFMT order: sess idx name path state ts wid @issue @origin @worktree agent @wid
 # needs/wait @expand @pin qwait reap_due reap_seen reap_stamp @repo @norepo
-# @sleep_since @repo_fold @loop @title_info
+# (empty, was @sleep_since) @repo_fold @loop @title_info
 # w idx name state wid issue origin [wait] [@loop] [@title_info]
 w() { printf '%s\n' "S$US$1$US$2$US/w/r-issue-$5$US$3$US$US$4$US$5$US$6$US/w/r-issue-$5$US${US}a$1$US${7:-}$US$US$US$US$US$US$US$US$US$US$US${8:-}$US${9:-}" >> "$WLIST_FILE"; }
 hub()  { : > "$SETLOG"; FLEET_SESSION=S FZF_COLUMNS=140 bash "$ROWS" >/dev/null 2>&1; }

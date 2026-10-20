@@ -845,10 +845,9 @@ fi
 
 parent_agent=$(TM display-message -p -t "$pwin" '#{@cc_agent}' 2>/dev/null)
 ppid=''
-parent_sleep=$(TM display-message -p -t "$pwin" '#{@worker_lifecycle}' 2>/dev/null)
 parent_evidence=$(TM display-message -p -t "$pwin" '#{@sleep_evidence}' 2>/dev/null)
 noclaude=''
-if [ "$parent_agent" != codex ] && [ -z "$parent_sleep$parent_evidence" ]; then
+if [ "$parent_agent" != codex ] && [ -z "$parent_evidence" ]; then
   ppid=$(fleet_pane_claude_pid "$pwin" "$SOCK" 2>/dev/null) || ppid=''
   [ -n "$ppid" ] || noclaude=1
 fi
@@ -866,8 +865,8 @@ if [ "$DRY" = 1 ]; then
 fi
 
 # queue_local <why> — the parent is here but cannot take it now (issue #1647): this
-# fleet's peer queue holds it for the parent's IDENTITY, and the cleanup tick or the
-# parent's wake delivers it. Exit 3 `queued`; exit 1 only if even that failed.
+# fleet's peer queue holds it for the parent's IDENTITY, and the cleanup tick
+# delivers it. Exit 3 `queued`; exit 1 only if even that failed.
 queue_local() {
   local pfid rid
   pfid=$(fleet_window_fid "$sess" "$pwin" "$SOCK" 2>/dev/null) || pfid=''
@@ -891,7 +890,7 @@ send_report() {
     children_send "$sess" "$SOCK" "$pwin" "$msg"
     return $?
   fi
-  if [ -n "$parent_sleep$parent_evidence" ] && [ -f "$BIN/fleet_worker_life.py" ]; then
+  if [ -n "$parent_evidence" ] && [ -f "$BIN/fleet_worker_life.py" ]; then
     printf '%s' "$msg" | python3 "$BIN/fleet_worker_life.py" deliver --session "$sess" "$pwin"
     return $?
   fi
@@ -911,13 +910,6 @@ if [ "$src" -eq 0 ]; then
   command -v children_cursor_set >/dev/null 2>&1 && children_cursor_set "$SENDKEY" "$sess"
   printf 'reported → %s (%s): %s%s\n' "$SENDKEY" "$pwin" "$st" "${RELAY_FROM:+ (relayed for reaped $RELAY_FROM)}"
   exit 0
-fi
-# 3 = a sleeping parent at a full fleet (fleet_worker_life.py deliver): it holds the report and
-# wakes with it when a slot frees — queued, not reported (issue #1647).
-if [ "$src" -eq 3 ]; then
-  TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
-  printf 'queued → %s (%s): %s — the parent is asleep at a full fleet; delivered when a slot frees\n' "$SENDKEY" "$pwin" "$st"
-  exit 3
 fi
 # 4 = a Codex parent not on the thread its window names (T540: a /clear not
 # followed yet) — held for its identity and replayed, never «reported».

@@ -16,7 +16,7 @@
 # @agent_cfg differs from the expected one are judged by fleet_cfg_restart_why —
 # a Claude or Codex session (issue #1896), `done` for FLEET_CFG_RESTART_IDLE
 # seconds (600), no /loop
-# round held, no Bash-tool job running, not asleep; a working / looping / needs
+# round held, no Bash-tool job running; a working / looping / needs
 # session is never touched — and at most FLEET_CFG_RESTART_MAX (1) of them is
 # handed to `fleet-migrate.sh --cfg-stale` (fleet_bg, detached: a reopen is a cold
 # boot). That is the same close + `claude --resume <same session>` road a quota

@@ -137,8 +137,8 @@ hb_initial=$(cat "$FLEET_CONF_DIR/logs/spinner.heartbeat" 2>/dev/null); hb_initi
 sleep 1.5
 
 # --- IDLE ----------------------------------------------------------------------
-# Also count the quiet re-reads (the WFMT read, the only call naming
-# @worker_lifecycle) in the same window: START's bound is one re-read period.
+# Also count the quiet re-reads (the WFMT read, traced as `windows`)
+# in the same window: START's bound is one re-read period.
 _ia=$(wc -l < "$WORK/spinner.trace")
 r=$(rate 6)
 reads=$(tail -n +$((_ia + 1)) "$WORK/spinner.trace" | grep -c ' windows$')

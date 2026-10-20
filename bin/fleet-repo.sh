@@ -113,7 +113,7 @@ norm_repo_arg() {
 #   2. each worker window (issue-N / scratch-N) is moved across:
 #      fleet-worker-stop.sh (a graceful /exit — its ledger row keeps it resumable),
 #      then dash-restore-session.sh --repo into <sess> (same transcript, same
-#      worktree, @repo stamped). A hibernating worker is woken first. A busy one
+#      worktree, @repo stamped). A busy one
 #      (working / needs) is left where it is — or, with --wait, moved the moment it
 #      goes idle (at most FLEET_FOLD_WAIT s, default 7200). Panels are not moved:
 #      they retire with the server.
@@ -152,7 +152,7 @@ fold_key() {
   fleet_scratch_key "$wt"
 }
 # fold_classify <from> <wid> → "<action>\t<key>\t<name>\t<why>", action one of
-# move · wake · busy · panel · left.
+# move · busy · panel · left.
 fold_classify() {
   local name key st
   name=$(fold_opt "$1" "$2" '#{window_name}')
@@ -161,9 +161,6 @@ fold_classify() {
   if [ -z "$key" ]; then
     printf 'left\t-\t%s\tno issue-N / scratch-N binding — not resumable; close or move it by hand\n' "$name"
     return 0
-  fi
-  if [ -n "$(fold_opt "$1" "$2" '#{@worker_lifecycle}')" ]; then
-    printf 'wake\t%s\t%s\thibernating — woken, then moved\n' "$key" "$name"; return 0
   fi
   st=$(fold_opt "$1" "$2" '#{@claude_state}')
   # needs/blocked is the worker's own "stuck, turn over" red (#704) — idle, so it
@@ -184,14 +181,9 @@ fold_found() {
   done
   return 1
 }
-# fold_move <wid> <key> <wake:0|1> — one worker across; prints the outcome. rc 0 moved.
+# fold_move <wid> <key> — one worker across; prints the outcome. rc 0 moved.
 fold_move() {
   local out landed
-  if [ "$3" = 1 ]; then
-    # --over-cap (#1058): the fold moves a worker, it never adds one to the count.
-    bash "$BIN/fleet-sleep.sh" wake "$FROM" "$1" --over-cap >/dev/null 2>&1 \
-      || { echo "    $2: wake failed — left in $FROM (fleet-sleep.sh why $FROM $1)"; return 1; }
-  fi
   out=$(bash "$BIN/fleet-worker-stop.sh" "$FROM" "$2" 2>/dev/null)
   case "$out" in
     stopped:*) : ;;
@@ -357,7 +349,7 @@ PLAN
   [ "$DRY" = 1 ] && return 0
 
   # ---- execute ----
-  if [ "$(fold_count "$plan" move wake busy)" -gt 0 ] && ! ftm "$SESS" has-session -t "=$SESS" 2>/dev/null; then
+  if [ "$(fold_count "$plan" move busy)" -gt 0 ] && ! ftm "$SESS" has-session -t "=$SESS" 2>/dev/null; then
     die "$SESS is not running — fleet-up it first (the sessions resume into it)"
   fi
   if [ "$hosted" = 0 ]; then
@@ -374,8 +366,7 @@ PLAN
   local failed=0 pending=''
   while IFS=$'\t' read -r wid act key name why; do
     case "$act" in
-      move) fold_move "$wid" "$key" 0 || failed=$((failed + 1)) ;;
-      wake) fold_move "$wid" "$key" 1 || failed=$((failed + 1)) ;;
+      move) fold_move "$wid" "$key" || failed=$((failed + 1)) ;;
       busy) pending="$pending$wid"$'\t'"$key"$'\n' ;;
     esac
   done <<PLAN
@@ -394,8 +385,7 @@ PLAN
         fi
         line=$(fold_classify "$FROM" "$wid")
         case "${line%%$'\t'*}" in
-          move) fold_move "$wid" "$key" 0 || failed=$((failed + 1)) ;;
-          wake) fold_move "$wid" "$key" 1 || failed=$((failed + 1)) ;;
+          move) fold_move "$wid" "$key" || failed=$((failed + 1)) ;;
           *)    next="$next$wid"$'\t'"$key"$'\n' ;;
         esac
       done <<PEND

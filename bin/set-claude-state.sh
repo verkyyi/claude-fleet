@@ -13,7 +13,7 @@ set -u  # POSIX sh: pipefail is bash-only (dash has none)
 [ -n "${TMUX:-}" ] || exit 0
 [ -n "${TMUX_PANE:-}" ] || exit 0
 # A HEADLESS claude is NOT this pane's session (issue #571). A `claude -p` helper —
-# the sleep digest (bin/fleet-sleep.py), or any headless claude a
+# a fleet helper, or any headless claude a
 # worker spawns from its Bash tool — inherits the pane's TMUX/TMUX_PANE *and* the
 # global hooks, so its own Stop landed here: it flipped the pane's @claude_state,
 # and (worse) read the PANE's @ctx_pct, got the auto-handoff block decision meant
@@ -514,7 +514,7 @@ fi
 
 # A child that just went idle may be the last thing its parent was waiting on
 # (issue #1376): re-ask the PARENT's Stop question now, detached, rather than leave
-# it `looping` until its own next turn or the sleep tick. One tmux read on every
+# it `looping` until its own next turn or the reconcile tick. One tmux read on every
 # Stop; the fork only for a window that has an @origin at all.
 if [ "$sem" = 'done' ] && [ -n "$(tmux display-message -p -t "$TMUX_PANE" '#{@origin}' 2>/dev/null)" ]; then
   _rbin=$(cd "$(dirname "$0")" 2>/dev/null && pwd)

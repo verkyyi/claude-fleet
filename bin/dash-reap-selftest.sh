@@ -668,13 +668,13 @@ grep -q 'KILL' "$TMLOG" || fail "--yes on a dirty scratch should close the windo
 fi
 
 if selftest_section 4; then
-# --- E. sleepers + truthful results (issue #1244) ------------------------------
+# --- E. old sleep stamps + truthful results (issue #1244; hibernation gone, T548)
 # Every fixture is a clean strict ancestor of base (merged, no confirm needed).
-for n in 20 21 22 23 24 25; do
+for n in 20 21 23 24 25; do
   git -C "$BASEDIR" worktree add -q -b "issue-$n" "$WORK/wt$n" "$H1" >/dev/null 2>&1
   transcript_for "$WORK/wt$n" "$n"
 done
-# fake python3: `fleet_worker_life.py dispose` is logged (DISPOSE_FAILS=1 refuses it);
+# fake python3: any `fleet_worker_life.py` call is logged (none is made since T548);
 # REAP_LIVE_PASSES=<n> lets the first n liveness probes pass and fails the rest —
 # the shape of #1244's foreground-passes / tail-refuses split. Else the real one.
 REAL_PY=$(command -v python3)
@@ -683,7 +683,6 @@ cat > "$WORK/fakepath/python3" <<PYFAKE
 case "\${1:-}" in
   *fleet_worker_life.py)
     printf 'SLEEP %s\n' "\$*" >> "$TMLOG"
-    [ "\${DISPOSE_FAILS:-0}" = 1 ] && { echo 'fleet-sleep: a wake raced us' >&2; exit 1; }
     exit 0 ;;
   *fleet-reap-live.py)
     if [ -n "\${REAP_LIVE_PASSES:-}" ]; then
@@ -696,35 +695,23 @@ exec "$REAL_PY" "\$@"
 PYFAKE
 chmod +x "$WORK/fakepath/python3"
 
-# E1: a SLEEPING merged worker is reaped WITHOUT a wake — sleep record retired
-# before the kill, window gone, worktree removed, history row written.
+# E1: a merged worker an old version left stamped `sleeping` (T548: read as empty)
+# is reaped like any — no sleep record touched, window gone, worktree removed,
+# history row written.
 : > "$TMLOG"; : > "$GHLOG"
 LIFE=sleeping REAP_STATE="done" run_reap_tok 20 @9
-[ "$TOK" = reaped:full ] && [ "$RC" = 0 ] || fail "sleeping merged worker must reap (got [$TOK] rc $RC)" "$(cat "$TMLOG")"
-grep -q 'SLEEP .* dispose ' "$TMLOG" || fail "the sleep record must be retired before the kill"
-grep -q 'SLEEP .* wake ' "$TMLOG" && fail "a sleeper must never be woken to be reaped"
-awk '/^SLEEP .* dispose /{d=NR} /^KILL/{k=NR} END{exit !(d && k && d<k)}' "$TMLOG" \
-  || fail "dispose must precede kill-window" "$(cat "$TMLOG")"
-[ -d "$WORK/wt20" ] && fail "sleeping merged worktree should be removed"
-[ "$(srows 20)" = 1 ] || fail "a sleeper reap must record ONE /fleet-history row" "$(cat "$LEDGER")"
+[ "$TOK" = reaped:full ] && [ "$RC" = 0 ] || fail "an old sleeping stamp must not stop a reap (got [$TOK] rc $RC)" "$(cat "$TMLOG")"
+grep -q '^SLEEP ' "$TMLOG" && fail "a reap must not call fleet_worker_life.py (T548)" "$(cat "$TMLOG")"
+[ -d "$WORK/wt20" ] && fail "the merged worktree should be removed"
+[ "$(srows 20)" = 1 ] || fail "a reap must record ONE /fleet-history row" "$(cat "$LEDGER")"
 
-# E2: a sleeper under a reap HOLD is retained — ⌃x, --yes, everything.
+# E2: a worker under a reap HOLD is retained — ⌃x, --yes, everything.
 : > "$TMLOG"; : > "$GHLOG"
-LIFE=sleeping HOLD=1 run_reap_tok 21 @9 --yes 2>"$WORK/hold-err"
-[ "$TOK" = skip:live ] && [ "$RC" = 3 ] || fail "a held sleeper must be retained (got [$TOK] rc $RC)"
+HOLD=1 run_reap_tok 21 @9 --yes 2>"$WORK/hold-err"
+[ "$TOK" = skip:live ] && [ "$RC" = 3 ] || fail "a held worker must be retained (got [$TOK] rc $RC)"
 grep -q 'retained:hold' "$WORK/hold-err" || fail "the refusal must name the hold" "$(cat "$WORK/hold-err")"
-grep -q KILL "$TMLOG" && fail "a held sleeper was killed"
-[ -d "$WORK/wt21" ] && [ "$(srows 21)" = 0 ] || fail "a held sleeper lost its worktree / got a row"
-# ...and the transitional phases stay retained as before.
-LIFE=waking run_reap_tok 21 @9 --yes 2>/dev/null
-[ "$TOK" = skip:live ] || fail "a waking worker must stay retained"
-
-# E3: a refused sleep-record retirement (a wake raced us) → failed, nothing killed.
-: > "$TMLOG"; : > "$GHLOG"
-LIFE=sleeping DISPOSE_FAILS=1 run_reap_tok 22 @9
-[ "$TOK" = failed:sleep-record ] && [ "$RC" = 5 ] || fail "refused dispose must fail loudly (got [$TOK] rc $RC)"
-grep -q KILL "$TMLOG" && fail "refused dispose still killed the window"
-[ -d "$WORK/wt22" ] || fail "refused dispose removed the worktree"
+grep -q KILL "$TMLOG" && fail "a held worker was killed"
+[ -d "$WORK/wt21" ] && [ "$(srows 21)" = 0 ] || fail "a held worker lost its worktree / got a row"
 
 # E4: the gate passes in the foreground but the disposal tail's own gate refuses
 # (#1244's `FLEET_REAP_MIN_AGE=0 dash-reap.sh @65`): a script caller runs the tail

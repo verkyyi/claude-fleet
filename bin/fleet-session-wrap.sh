@@ -320,9 +320,8 @@ while :; do
     unset FLEET_CRED_SID
   fi
   [ "$intmux" = 1 ] || exit "$rc"
-  # The fleet made it exit (it stamped @wrap_quiet), or a sleep is under way.
+  # The fleet made it exit (it stamped @wrap_quiet).
   if [ "$(opt @wrap_quiet)" = 1 ]; then wset -u @wrap_quiet; exit "$rc"; fi
-  case "$(opt @worker_lifecycle)" in preparing|sleeping) exit "$rc" ;; esac
   # A launch that never came up (claude missing, a refused resume, a one-shot
   # `--version`): the caller's own failure path decides, as it always did.
   # Its rc stays on the pane too: tmux ≤3.4 can leave #{pane_dead_status} empty

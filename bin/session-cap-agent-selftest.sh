@@ -68,7 +68,8 @@ for _ in $(seq 1 50); do [ "$(tf display-message -p -t "$dead" '#{pane_dead}')" 
 fleet_sockets() { printf 'capf\n'; }      # the one fleet on the isolated server
 
 # ----------------------------------------------- A: fleet_window_has_agent ----
-for c in "gone:$gone:1" "exd:$exd:1" "dead:$dead:1" "live:$live:0" "prep:$prep:0"; do
+# prep: an old window's `preparing` stamp is read as empty since T548 — no agent
+for c in "gone:$gone:1" "exd:$exd:1" "dead:$dead:1" "live:$live:0" "prep:$prep:1"; do
   n=${c%%:*}; rest=${c#*:}; id=${rest%%:*}; want=${rest#*:}
   fleet_window_has_agent "$id"; eq "A/$n: fleet_window_has_agent rc" "$want" "$?"
 done

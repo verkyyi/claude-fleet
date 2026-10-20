@@ -223,7 +223,7 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(self.state(wid)[0], 'working')   # legacy Codex: no identity, still running
 
     def test_panels_transitions_and_other_states_are_untouched(self):
-        for opts in ({'@hub': '1'}, {'@worker_lifecycle': 'sleeping'}, {'state': 'done'}, {'raw': ''}):
+        for opts in ({'@hub': '1'}, {'state': 'done'}, {'raw': ''}):
             with self.subTest(**opts):
                 state = opts.pop('state', 'working'); raw = opts.pop('raw', '1')
                 wid, pane = self.window(state=state, raw=raw, **opts)

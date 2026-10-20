@@ -236,8 +236,8 @@ r=$(KEEP=1 admit 'echo 1 40 0 0' 'echo 0.5' FLEET_MEM_TOTAL_MB=10000 FLEET_ADMIT
 ok "F hysteresis: held until the recovery line, then the plain line"
 # The count caps default OFF: nothing set ⇒ no count refusal, only admission.
 r=$(env TMPDIR="$WORK/t" bash -c 'source "$1/fleet-lib.sh"; fleet_session_count() { printf 50; }; fleet_inflight_count() { printf 0; }
-  FLEET_ADMIT=0 fleet_session_cap_ok s; printf "%s|" "$?"; fleet_cap_full s; printf "%s" "$?"' _ "$BIN")
-[ "$r" = "0|1" ] || fail "F 50 sessions and no cap set: neither cap_ok nor cap_full binds (got '$r')"
+  FLEET_ADMIT=0 fleet_session_cap_ok s; printf "%s" "$?"' _ "$BIN")
+[ "$r" = "0" ] || fail "F 50 sessions and no cap set: cap_ok does not bind (got '$r')"
 ok "F FLEET_GLOBAL_MAX_SESSIONS defaults to 0: 50 sessions, no count refusal"
 
 # ===== G: a reservation is one spawn's, and dies with a spawn that opened nothing (#2502)

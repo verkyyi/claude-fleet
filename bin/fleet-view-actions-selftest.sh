@@ -12,9 +12,9 @@
 #   A  the table: every letter of the sidebar menu (fleet-ui-lang.sh menu_keys) is
 #      an action here (SIDEBAR_ACTIONS) or a row-less one handed to C2 / C7
 #      (ROWLESS) — one missing is red; each action declares its required fields
-#   B  view-menu: a done row here gets its actions (no 回答 / 唤醒 / 继续), an
-#      asking row 回答, a sleeping one 唤醒, an ended exited one 恢复, another
-#      machine's row its hub writes (no 置顶 / PR / 唤醒 there)
+#   B  view-menu: a done row here gets its actions (no 回答 / 继续), an
+#      asking row 回答, an old window still stamped sleeping no 唤醒 (gone, T548),
+#      an ended exited one 恢复, another machine's row its hub writes (no 置顶 / PR there)
 #   C  view-act, item by item: each calls its script exactly once with the
 #      sidebar's arguments; 改名 really renames the window (dash-rename.sh);
 #      回收 without a yes does nothing (exit 3); 恢复 presses ↵ on the wrapper's
@@ -55,7 +55,7 @@ LOG="$W/calls.log"; : > "$LOG"
 
 # --- the stubs: one line per call, `name|arg|arg|…` ----------------------------------
 for s in fleet-task-record.sh open-url.sh fleet-permission.sh fleet-answer.sh fleet-peer-send.sh dash-pin-toggle.sh \
-         fleet-reap-policy.sh fleet-worker-stop.sh fleet-sleep.sh fleet-manual-sub.sh dash-migrate.sh \
+         fleet-reap-policy.sh fleet-worker-stop.sh fleet-manual-sub.sh dash-migrate.sh \
          fleet-transfer.sh dash-reap.sh dash-rename.sh fleet-row-remote.sh; do
   cat > "$W/stub/$s" <<EOF
 #!/bin/bash
@@ -146,21 +146,20 @@ pass "A  every sidebar menu item is an action here (or row-less, C2 / C7); each 
 # --- B: which actions a row gets -----------------------------------------------------
 ids() { qo view-menu --view fl@view-v1 "$1" | awk -F '\t' '{ print $1 }' | tr '\n' ' '; }
 m1=$(ids "$W1")
-for a in enter shell pr message rename pin reappol stop awake sub agent reap; do
+for a in enter shell pr message rename pin reappol stop sub agent reap; do
   case " $m1 " in *" $a "*) ;; *) fail "B: done row lacks $a: $m1" ;; esac
 done
-for a in answer wake resume; do case " $m1 " in *" $a "*) fail "B: done row has $a: $m1" ;; esac; done
+for a in answer wake awake resume; do case " $m1 " in *" $a "*) fail "B: done row has $a: $m1" ;; esac; done
 qo view-menu --view fl@view-v1 "$W1" | grep -q $'^pr\t打开 PR #41' || fail "B: PR label: $(qo view-menu --view fl@view-v1 "$W1")"
 qo view-menu --view fl@view-v1 "$W4" | grep -q $'^pr\tPR ?（入口没响应）' || fail "B: a hub that does not answer reads PR ?: $(qo view-menu --view fl@view-v1 "$W4")"
 case " $(ids "$W2") " in *" pr "*) fail "B: a row with no task record offers a PR" ;; esac
 case " $(ids "$W2") " in *" answer "*) ;; *) fail "B: asking row lacks answer" ;; esac
-case " $(ids "$W5") " in *" wake "*) ;; *) fail "B: sleeping row lacks wake" ;; esac
-case " $(ids "$W5") " in *" stop "*) fail "B: a sleeping row offers stop" ;; esac
+case " $(ids "$W5") " in *" wake "*|*" awake "*) fail "B: an old sleeping window offers wake / awake (T548): $(ids "$W5")" ;; esac
+case " $(ids "$W5") " in *" stop "*) ;; *) fail "B: an old sleeping window lacks stop: $(ids "$W5")" ;; esac
 m3=$(qo view-menu --view fl@view-v1 "$W3")
 grep -q $'^resume\t恢复' <<< "$m3" || fail "B: ended exited row lacks 恢复: $m3"
-# 换账号 / 换 Codex on another machine's row (issue #4184): its hub writes; pr ·
-# wake · awake stay this machine's (no PR / lifecycle on a far row, a wake is past
-# THAT machine's cap)
+# 换账号 / 换 Codex on another machine's row (issue #4184): its hub writes; pr
+# stays this machine's (no PR on a far row)
 [ "$(ids "$MU/far1")" = "enter shell message rename pin reappol stop sub agent evidence reap " ] || fail "B: another machine's row: $(ids "$MU/far1")"
 mf=$(qo view-menu --view fl@view-v1 "$MU/far1")
 grep -q $'^agent\t换成 Codex\t$' <<< "$mf" || fail "B: a far row's agent item: $mf"
@@ -168,7 +167,7 @@ grep -q $'^sub\t换到可用订阅\t$' <<< "$mf" || fail "B: a far row's sub ite
 case " $(ids "$MU/far4") " in *" agent "*|*" sub "*) fail "B: a far exited row offers agent/sub: $(ids "$MU/far4")" ;; esac
 case " $(ids "$MU/far2") " in *" answer "*) ;; *) fail "B: a far asking row lacks answer: $(ids "$MU/far2")" ;; esac
 case " $(ids "$MU/far4") " in *" resume "*) ;; *) fail "B: a far exited row lacks resume: $(ids "$MU/far4")" ;; esac
-pass "B  a row's menu: done · asking · sleeping · ended (恢复) · another machine's (its hub writes)"
+pass "B  a row's menu: done · asking · an old sleeping window · ended (恢复) · another machine's (its hub writes)"
 
 # --- C: each action, its script, once ---------------------------------------------------
 one() {   # <id> <expected line> [view-act args…]
@@ -189,8 +188,6 @@ one message "fleet-peer-send.sh|$W1|合并了吗 hello" "$W1" message --text '�
 one pin "dash-pin-toggle.sh|$W1" "$W1" pin
 one reappol "fleet-reap-policy.sh|set|done:2h|--win|$W1|--session|fl" "$W1" reappol --text done:2h
 one stop "fleet-worker-stop.sh|fl|fid:f1" "$W1" stop
-one wake "fleet-sleep.sh|wake|fl|$W5|--over-cap" "$W5" wake
-one awake "fleet-sleep.sh|keep-awake|fl|$W1" "$W1" awake
 one sub "dash-migrate.sh|$W1|to|acct2" "$W1" sub --text acct2
 one agent "fleet-transfer.sh|--from-panel|--session|fl|--window|$W1|--to|codex" "$W1" agent
 one rename "dash-rename.sh|--wid|$W1|新名字" "$W1" rename --text '新名字'
@@ -200,7 +197,7 @@ qo view-act --view fl@view-v1 "$W1" reap >/dev/null 2>&1; rc=$?
 [ "$rc" = 3 ] && [ -z "$(calls)" ] || fail "C: reap without a yes: rc=$rc ran «$(calls)»"
 one reap "dash-reap.sh|$W1|--yes" "$W1" reap --yes
 reset
-qo view-act --view fl@view-v1 "$W1" wake >/dev/null 2>&1 && fail "C: wake on an awake row ran"
+qo view-act --view fl@view-v1 "$W5" wake >/dev/null 2>&1 && fail "C: the retired wake ran (T548)"
 [ -z "$(calls)" ] || fail "C: a refused action ran «$(calls)»"
 one resume "" "$W3" resume
 sleep 0.3

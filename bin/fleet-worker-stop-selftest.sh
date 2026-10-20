@@ -13,7 +13,7 @@
 #      that window — the neighbour keeps its pid; no git command ran (no git here)
 #   2. a key nobody holds       → refused:not-found (5), nothing touched
 #   3. a key two windows hold   → refused:ambiguous (6), both survive
-#   4. a hibernating worker     → refused:hibernating (8), pane untouched
+#   4. an old `sleeping` stamp (T548: read as empty) → stopped like any
 #   5. a window at a bare shell → stopped:shell, window closed, row recorded
 #   6. an agent that will not exit → failed:no-exit (7), window + pid survive
 #   7. a scratch key resolves through @raw + @worktree, Codex gets its bracketed /exit
@@ -145,12 +145,11 @@ run_stop fleetS issue-3
 [ "$rc" = 6 ] && [ "$out" = refused:ambiguous ] || fail "3: expected refused:ambiguous/6" "rc=$rc out=$out"
 has_win "$w3a" && has_win "$w3b" || fail "3: an ambiguous stop closed a window"
 
-# --- 4. a hibernating worker (sleep controller owns the pane) --------------------
+# --- 4. an old `sleeping` stamp refuses nothing since hibernation went (T548) -----
 w4=$(mkwin four "$SHELLED" 4 "" sleeping); agents_up "$w4"
 run_stop fleetS issue-4
-[ "$rc" = 8 ] && [ "$out" = refused:hibernating ] || fail "4: expected refused:hibernating/8" "rc=$rc out=$out"
-has_win "$w4" || fail "4: a hibernating worker's window was closed"
-p4=$(pid_of "$w4"); kill -0 "${p4:-0}" 2>/dev/null || fail "4: hibernating pane's process was typed at / killed"
+[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || fail "4: an old sleeping stamp must stop like any" "rc=$rc out=$out"
+has_win "$w4" && fail "4: window $w4 still exists after the stop"
 
 # --- 5. a window at a bare shell (no agent under the pane) -----------------------
 w5=$(mkwin five 'while :; do sleep 300; done' 5); sleep 0.3

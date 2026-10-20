@@ -210,13 +210,13 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
         return "unknown:unstable-target"
     tmux = ["tmux"] + (["-L", socket_name] if socket_name is not None else [])
     # A HOLD (issue #1244) is the operator's "keep this one" — e.g. a sleeper
-    # parked on post-release verification. It retains any worker, asleep or not.
+    # parked on post-release verification. It retains any worker.
     if read(*tmux, "display-message", "-p", "-t", target, "#{@reap_hold}").strip() == "1":
         return "retained:hold"
     # A pending LOOP (issue #1331) — the agent scheduled its own next round
     # (ScheduleWakeup / CronCreate → @loop) or a fleet-loop.py ledger holds one.
     # The window is idle between rounds, not finished: reaping it would take the
-    # Loop with it. Ahead of the lifecycle, age and state gates; a stopped or
+    # Loop with it. Ahead of the age and state gates; a stopped or
     # expired Loop reads `none` here and the window reaps by the ordinary rules.
     raw = read(*tmux, "display-message", "-p", "-t", target,
                "#{@loop}\t#{@handoff_manifest}").rstrip("\n")
@@ -235,15 +235,6 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
         why = ""
     if why:
         return "retained:" + why
-    lifecycle = read(*tmux, "display-message", "-p", "-t", target, "#{@worker_lifecycle}").strip()
-    # A SLEEPING worker has no agent at all — its pane is the park page — so it is
-    # the safest reap there is (issue #1244): no age gate, only the process walk
-    # below, which refuses ANY agent found under it (a wake mid-flight). The state
-    # gate still applies — a `looping` sleeper has a scheduled wake pending. The
-    # transitional phases (preparing/waking) and a failed wake stay retained.
-    sleeping = lifecycle == "sleeping"
-    if lifecycle and not sleeping:
-        return "retained:" + lifecycle
     state, status, gone = split_state(read(*tmux, "display-message", "-p", "-t", target, STATE_FMT))
     # The agent's own word first (issue #2540): done / idle / error / exited is a
     # finished agent whatever a hook stamped — reapable, and on done / error /
@@ -288,10 +279,7 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
         seen.add(pid)
         age, comm = processes[pid]
         agent = agent_name(comm, commands.get(pid, ""))
-        if agent and sleeping:
-            return f"retained:sleeping:agent-{agent}"
-        # The age gate protects a freshly spawned AWAKE agent (#565); a sleeper
-        # never reaches it — it has no agent to protect. A short worker that
+        # The age gate protects a freshly spawned agent (#565). A short worker that
         # merged its own PR is not fresh (#1329): with an explicit `done` and a
         # mergedAt AFTER this agent started, the merge happened in its life. A
         # worker spawned onto an already-merged branch started after the merge

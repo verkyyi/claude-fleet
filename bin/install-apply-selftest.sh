@@ -4,7 +4,7 @@
 #
 # A local git repo stands in for ~/.claude/fleet; launchctl / systemctl / claude
 # are shims that log what they were asked; the helpers apply delegates to
-# (migrate-layout, hooks-merge, ui-refresh, sleep repark) are stubs that log
+# (migrate-layout, hooks-merge, ui-refresh) are stubs that log
 # their argv. No real daemon, no real ~/.claude, no network.
 #
 # What it pins:
@@ -149,11 +149,6 @@ print("filled  claude 1 · codex 2")
 EOF
 cat > "$R/bin/fleet-lib.sh" <<'EOF'
 fleet_sockets() { printf '%s\n' ${STUB_SOCKS:-}; }
-EOF
-cat > "$R/bin/fleet-sleep.sh" <<EOF
-#!/bin/bash
-echo "fleet-sleep.sh \$*" >> "$LOG"
-echo '{"reparked":"/x"}'
 EOF
 echo 'echo collect' > "$R/bin/tmux-dash-collect.sh"
 echo 'echo spin' > "$R/bin/tmux-spinner.sh"
@@ -351,7 +346,8 @@ contains 'G hooks relayed' "$OUT" 'hooks: re-merged — 1 change(s)'
 ok 'G ui conf reload' "grep -q '^fleet-ui-refresh.sh --all --conf' '$LOG'"
 eq 'G before-conf is --from' "$(printf 'bind a run x\nbind b run y')" "$(cat "$WORK/seen-before.conf")"
 STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8"
-contains 'G repark per fleet' "$OUT" 'repark: ok — 2 page(s) re-parked on 2 live fleet(s)'
+hasnt_repark=$(printf '%s\n' "$OUT" | grep -c '^repark' || :)
+eq 'G no repark pass (T548)' 0 "$hasnt_repark"
 # loopmark (issue #1370): one sweep per fleet socket, the counts summed into one line
 contains 'G loopmark absent → skip' "$OUT" 'loopmark: skip — no @loop mark in this version'
 cat > "$R/bin/fleet_loop_mark.py" <<EOF

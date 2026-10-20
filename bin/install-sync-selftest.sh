@@ -816,7 +816,7 @@ eq "W: the shared logs survive" old "$(cat "$CO/logs/keep.log")"
 # 2026-10-09: the new doctor's two new FAILs read what the OLD daemons wrote in
 # the last hour, and the old doctor had no such rows to baseline them → rollback,
 # and `skip:` kept the machine on the old version for good.
-OLDEV='  FAIL  state    sleep judgments (last hour): wrong fleet x784 (old evidence)'
+OLDEV='  FAIL  state    hub-sessions cache 12499s (old evidence)'
 doctor_stub '' "$OLDEV"; S1=$(commit s-stricter)
 doctor_stub '  FAIL  gh       boom (broken once live)' "$OLDEV"; S2=$(commit s-broken)
 doctor_stub ''; S3=$(commit s-fixed); S4=$(commit s-four)
@@ -845,23 +845,20 @@ contains "S: --retry forgets the skip" "$OUT" "--retry: forgetting skip: $(short
 eq "S: --retry tries it again" rolled-back "$(st result)"
 eq "S: …the doctor ran again" 2 "$(doctors)"
 rm -f "$WORK/old-evidence"
-# settle: the sleep tick is awaited (≤ the budget) before the doctor after the switch
+# settle: no sleep tick is awaited any more (T548) — a stale sleep.log is no wait
 mkdir -p "$CONF/logs"; touch -t 200001010000 "$CONF/logs/sleep.log"   # the login's records (#4668)
-stable "$S3"; OUT=$(FLEET_INSTALL_SETTLE_SECS=0 bash "$IS" --root "$CO" 2>&1)
+stable "$S3"; t0=$(date +%s); OUT=$(bash "$IS" --root "$CO" 2>&1); t1=$(date +%s)
 eq "S: settle: switched" switched "$(st result)"
-contains "S: settle: no tick within the budget is said, not judged" "$OUT" "no sleep tick within 0s of the switch"
-touch -t 200001010000 "$CONF/logs/sleep.log"
-( sleep 2; touch "$CONF/logs/sleep.log" ) &
-stable "$S4"; t0=$(date +%s); OUT=$(FLEET_INSTALL_SETTLE_SECS=30 FLEET_INSTALL_SETTLE_POLL=0.5 bash "$IS" --root "$CO" 2>&1); t1=$(date +%s); wait
-eq "S: settle: switched after the tick" switched "$(st result)"
-not_contains "S: settle: the tick came" "$OUT" "no sleep tick within"
-[ $((t1 - t0)) -lt 25 ] || fail "S: settle waited the whole budget ($((t1 - t0))s) though the tick came"; CHECKS=$((CHECKS + 1))
+not_contains "S: settle: no sleep tick is awaited" "$OUT" "no sleep tick within"
+[ $((t1 - t0)) -lt 60 ] || fail "S: settle waited for a sleep tick ($((t1 - t0))s)"; CHECKS=$((CHECKS + 1))
 rm -f "$CONF/logs/sleep.log"
-# …and the real doctor's two windowed rows, cut out of bin/fleet-doctor.sh and run
-# on a sandbox: the old hour's `wrong fleet` and a cache older than the switch
-# FAIL without FLEET_DOCTOR_SINCE, and do not with it.
+stable "$S4"; run
+eq "S: settle: switched again" switched "$(st result)"
+# …and the real doctor's windowed row, cut out of bin/fleet-doctor.sh and run on a
+# sandbox: a cache older than the switch FAILs without FLEET_DOCTOR_SINCE, and
+# does not with it.
 DD="$WORK/doc"; mkdir -p "$DD/bin" "$DD/logs"
-awk '/^slog=/,0' "$BIN/fleet-doctor.sh" | awk '/^# --- hubauth/ { exit } { print }' \
+awk '/^_dsince=/,0' "$BIN/fleet-doctor.sh" | awk '/^# --- hubauth/ { exit } { print }' \
   | sed '/^# Trips back to the hub/,/^EOF$/d' > "$DD/bin/rows.sh"
 printf 'fail() { echo "FAIL $*"; }\npass() { echo "PASS $*"; }\nwarn() { echo "WARN $*"; }\n. "$(dirname "$0")/rows.sh"\n' > "$DD/bin/doc.sh"
 cat > "$DD/bin/fleet-hub-sessions.sh" <<'EOS'
@@ -869,18 +866,9 @@ cat > "$DD/bin/fleet-hub-sessions.sh" <<'EOS'
 case "$1" in --identity) echo 'node stub' ;; --status) echo 'loop none · cache 12499s'; exit 1 ;; esac
 EOS
 chmod +x "$DD/bin/fleet-hub-sessions.sh"
-python3 - "$DD/logs/sleep.log" <<'EOP'
-import json, sys, time
-at = lambda ago: time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - ago))
-with open(sys.argv[1], "w") as f:
-    for _ in range(9): f.write(json.dumps({"at": at(900), "skip": "wrong fleet"}) + "\n")
-    for _ in range(2): f.write(json.dumps({"at": at(1), "state": "idle"}) + "\n")
-EOP
 dout=$(FLEET_CONF_DIR="$DD" CCQUOTA_FLEET=1 sh "$DD/bin/doc.sh" 2>&1)
-contains "S: doctor, no window: the old hour's wrong fleet FAILs" "$dout" "FAIL state sleep judgments (last hour): 11 judgments/hr"
 contains "S: doctor, no window: the old cache FAILs" "$dout" "FAIL hub-sessions loop none · cache 12499s"
 dout=$(FLEET_CONF_DIR="$DD" CCQUOTA_FLEET=1 FLEET_DOCTOR_SINCE=$(( $(date +%s) - 60 )) sh "$DD/bin/doc.sh" 2>&1)
-contains "S: doctor since the switch: only its samples" "$dout" "PASS state sleep judgments (since the switch, last hour): 2 judgments/hr"
 contains "S: doctor since the switch: an older cache is a WARN" "$dout" "WARN hub-sessions loop none · cache 12499s — no round since the switch yet"
 not_contains "S: doctor since the switch: no FAIL" "$dout" "FAIL"
 

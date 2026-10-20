@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-"""A worker window's life outside hibernation: delivery, busy, reap and restore.
+"""A worker window's life: delivery, busy and the reap hold.
 
-Moved out of fleet-sleep.py (T545, EPIC T542 C7) with every subcommand name,
-argument and exit code unchanged:
+Moved out of fleet-sleep.py (T545, EPIC T542 C7); hibernation itself was
+deleted (T548, C8), so nothing here waits for or wakes a sleeper:
 
   hook        the Stop hook's evidence (@sleep_evidence) — the busy reader's config home
   busy        exit 0 = busy (prints the pids), 1 = idle, 2 = cannot tell
-  holds-exit  exit 0 while a validated `preparing` agent still runs under the pane
-  deliver     the message on stdin; exit 3 = held for a sleeper at a full fleet
-  dispose     retire a sleeping worker's record ahead of a reap
-  restore     put a saved sleep record back on a restored window
+  deliver     the message on stdin, typed into the live agent
   hold/release  the reap hold (@reap_hold)
 
-A sleeping target is still woken by fleet-sleep.py (wake_locked, restore):
-those two branches go with hibernation itself in C8.
+holds-exit · dispose · restore answered for a sleep record; none is written
+any more, so for one version they exit as «nothing held» (1 / 0 / 0).
 """
 import argparse
 from contextlib import contextmanager
@@ -61,8 +58,6 @@ CODEX = LazyModule('fleet-codex-session.py')
 RPC = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))['Client']
 ARGV = LazyModule('fleet_agent_argv.py')
 MCP = LazyModule('fleet_agent_mcp.py')
-# compat-1v: 下一批删 — only to wake a sleeping target (wake_locked, restore); C8.
-SLEEP = LazyModule('fleet-sleep.py')
 
 
 class NotAWorker(ValueError):
@@ -102,35 +97,8 @@ def lock(path):
     with open(path, 'a') as fd:
         os.chmod(path, 0o600)
         try: fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError: raise ValueError('another sleep/wake/delivery owns this worker') from None
+        except BlockingIOError: raise ValueError('another delivery owns this worker') from None
         yield
-
-
-def alive(pid):
-    if int(pid) <= 0: return False
-    try: os.kill(int(pid), 0); return True
-    except ProcessLookupError: return False
-
-
-def process_state(pid):
-    # (state, start) — the start fingerprint stays comparable across calls.
-    if int(pid)<=0: return '',''
-    try: fields=run(['ps','-p',str(pid),'-o','stat=','-o','lstart=','-o','comm=']).split(None,1)
-    except subprocess.CalledProcessError: return '',''
-    return fields[0], (fields[1] if len(fields)>1 else '')
-
-
-def process_start(pid):
-    return process_state(pid)[1]
-
-
-def source_alive(data):
-    # An exited agent stays a zombie until its parent (tmux) reaps it. BSD ps
-    # renames the command to <defunct>; Linux procps prints the zombie's
-    # lstart/comm exactly like the live process, so the state must be read.
-    if not data.get('source_start'): return False
-    state,start=process_state(data['source']['pid'])
-    return start==data['source_start'] and not state.startswith('Z')
 
 
 # bin/fleet-lib.sh's FLEET_SESSION_FMT: the fleet's own name from any window or
@@ -181,47 +149,6 @@ class Worker:
         return json.loads(run(['bash',BIN/'fleet-transfer.sh','--session',self.session,
                               '--window',self.pane,'--to','codex','--inspect'],timeout=30))
 
-    def record(self):
-        path = Path(self.opt('@sleep_record'))
-        if path.parent != self.directory or not path.name.endswith('.json'):
-            raise ValueError('missing durable sleep record')
-        data = json.loads(path.read_text())
-        if data['session'] != self.session or data['pane'] != self.pane or data['window'] != self.window:
-            raise ValueError('sleep record belongs to another worker')
-        return path, data
-
-    def holds_exit(self,data):
-        # Some Claude versions unregister their session before SessionEnd. The
-        # already-validated process fingerprint remains authoritative until exit.
-        if (data['state']!='preparing' or not 0<=time.time()-data['updated']<90
-                or self.opt('@worker_lifecycle')!='preparing' or not source_alive(data)):
-            return False
-        root_pid=int(self.opt('pane_pid'));pid=int(data['source']['pid'])
-        rows=TRANSFER['process_rows']();seen=set()
-        while pid!=root_pid and pid not in seen and pid in rows:
-            seen.add(pid);pid=rows[pid][0]
-        return pid==root_pid
-
-    def wake_locked(self,path,data,over_cap=True):
-        # compat-1v: 下一批删 — a sleeping target is woken by hibernation's own
-        # code (fleet-sleep.py), under the worker lock this process already holds.
-        return SLEEP['Worker'](self.session,self.pane).wake_locked(path,data,over_cap=over_cap)
-
-    def dispose(self):
-        """Retire this sleeper's record ahead of a reap (issue #1244): the window
-        is about to be killed WITHOUT a wake, so the record must stop describing a
-        retained worker — fleet-restore's `restore` refuses any state but the
-        retained ones. Under the worker lock, so a concurrent wake cannot start an
-        agent the reap would then kill; refuses unless the original agent is gone."""
-        with lock(self.lockfile):
-            state=self.opt('@worker_lifecycle')
-            if state not in ('sleeping','failed'): raise ValueError('not a sleeping worker: '+(state or 'awake'))
-            path,data=self.record()
-            if source_alive(data): raise ValueError('the original agent is still running')
-            data.update(state='reaped',updated=time.time())
-            save(path,data)
-            return {'state':'reaped','record':str(path)}
-
     def deliver(self,text):
         if not text.strip(): raise ValueError('empty message')
         # Record before waking. A timeout leaves reviewable pending data, never a
@@ -230,18 +157,10 @@ class Worker:
         token=hashlib.sha256(text.encode()).hexdigest()
         msgpath=queue/(token+'.json')
         with lock(self.lockfile):
-            if self.opt('@worker_lifecycle'):
-                _,saved=self.record();expected=saved['source']['session_id']
-            else:expected=self.inspect()['session_id']
+            expected=self.inspect()['session_id']
             message=json.loads(msgpath.read_text()) if msgpath.exists() else dict(text=text,state='pending',created=time.time(),session_id=expected)
             if message['state']=='uncertain': raise ValueError('previous delivery is uncertain; inspect '+str(msgpath))
             save(msgpath,message)
-            if self.opt('@worker_lifecycle'):
-                path,data=self.record()
-                if not self.wake_locked(path,data,over_cap=False):
-                    # Already saved above: the scan's drain delivers it once a slot frees.
-                    print('fleet-sleep: queued — fleet at its session limit; delivers when a slot frees',file=sys.stderr)
-                    return 'queued'
             source=self.inspect()
             if message['session_id']!=source['session_id']:raise ValueError('pending message belongs to an earlier conversation')
             self.stamp('@sleep_evidence','')
@@ -256,9 +175,7 @@ class Worker:
             msgpath.unlink()
 
     def inbox(self):
-        record=self.opt('@sleep_record')
-        key=Path(record).stem if record else 'window-'+self.window[1:]
-        return self.directory/('inbox-'+key)
+        return self.directory/('inbox-window-'+self.window[1:])
 
 
 def hook():
@@ -519,19 +436,12 @@ def main():
         if not pids: return 1
         print(' '.join(map(str,pids)))
         return 0
-    if a.action=='restore':
-        # compat-1v: 下一批删 — a saved sleep record goes back on its park page,
-        # which only hibernation draws (C8).
-        SLEEP['Worker'](a.session,a.window or '').restore(a.record)
-        return 0
+    # compat-1v: 下一批删 — no sleep record is written since T548 (C8): nothing
+    # holds an exit, nothing to retire or put back.
+    if a.action=='holds-exit': return 1
+    if a.action in ('dispose','restore'): return 0
     w=Worker(a.session,a.window or '')
-    if a.action=='holds-exit':
-        _,data=w.record()
-        return 0 if w.holds_exit(data) else 1
-    # 3 = held, not delivered (issue #1647): the sleeper waits for a slot with it,
-    # and the sender must say «queued», never «reported».
-    if a.action=='deliver': return 3 if w.deliver(sys.stdin.read())=='queued' else 0
-    if a.action=='dispose': print(json.dumps(w.dispose(),ensure_ascii=False))
+    if a.action=='deliver': w.deliver(sys.stdin.read())
     # A reap HOLD (issue #1244): fleet-reap-live.py retains a held worker, so no
     # automatic cleanup and no ⌃x takes it until `release`.
     else: w.stamp('@reap_hold','1' if a.action=='hold' else '')

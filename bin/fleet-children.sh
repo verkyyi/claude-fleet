@@ -14,7 +14,7 @@
 #
 # It merges the ledger every child report writes (fleet-report-parent.sh →
 # $FLEET_STATE/children/<parent-key>.ndjson, bin/fleet-children-lib.sh) with the
-# LIVE state of each child window (@claude_state / @worker_lifecycle) and the dash's
+# LIVE state of each child window (@claude_state) and the dash's
 # PR cache — so a parent verifies a report with ONE command instead of `gh pr`
 # plus a capture-pane per child. No gh, no network: the PR column is the prmap
 # the dash already keeps fresh.
@@ -117,7 +117,7 @@ fi
 # prints a 0x1f separator as a literal `\037`).
 rows() {
   local line wid rest ws st needs loop iss wt pth repo norepo name key pre slug fid
-  fleet_lw '#{window_id}|#{session_name}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@claude_needs}|#{@loop}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{@fleet_id}|#{window_name}' TM |
+  fleet_lw '#{window_id}|#{session_name}|#{@claude_state}|#{@claude_needs}|#{@loop}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{@fleet_id}|#{window_name}' TM |
   while IFS= read -r line; do
     wid=${line%%|*};  rest=${line#*|}
     ws=${rest%%|*};   rest=${rest#*|}

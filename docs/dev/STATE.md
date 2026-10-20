@@ -313,7 +313,7 @@ The demoter below reads *activity*; this pass reads the **agent**. Every tick of
 reconcile unit ([`bin/fleet-reconcile-tick.sh`](../../bin/fleet-reconcile-tick.sh), 60s,
 `com.claude-fleet.reconcile` / `claude-fleet-reconcile.timer` — not the spinner) runs
 [`bin/fleet-state-reconcile.py`](../../bin/fleet-state-reconcile.py) first, over every
-live fleet socket, whatever `FLEET_SLEEP` says:
+live fleet socket:
 
 - **Claude** — Claude Code registers each TUI under `~/.claude/sessions/<pid>.json`
   with `status` (`busy` / `idle` / `shell`), `statusUpdatedAt`, its tmux pane and

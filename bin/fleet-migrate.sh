@@ -343,7 +343,7 @@ migrate_selected() {
 
 # --- background work (--force-bg, issue #873) -----------------------------------
 # One inventory of "what this move will terminate" (EPIC #875 contract 3): the
-# hibernation walk (fleet_transfer_source.py → fleet-sleep's quiet_processes),
+# hibernation walk (fleet_transfer_source.py → fleet_worker_life's quiet_processes),
 # so the popup and this move can never disagree about what counts.
 SOURCE_PY="${FLEET_MIGRATE_SOURCE_PY:-$BIN/fleet_transfer_source.py}"
 BG_WHY='The operator forced this move with a background override (fleet-migrate --force-bg)'

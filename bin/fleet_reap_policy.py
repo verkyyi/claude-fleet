@@ -15,7 +15,7 @@ One window option says when the fleet may close a session on its own:
     loop-end         the /loop it was opened with has stopped (then idle 10 min)
     at:<when>        at a moment (ISO-8601 UTC `2026-10-06T18:00:00Z`, or an
                      epoch), once its turn is over
-    keep             never closed automatically (it may still sleep)
+    keep             never closed automatically
 
 No option at all = the session's kind decides, exactly as before #1902 (an old
 window behaves byte for byte as it did). Every automatic close still goes

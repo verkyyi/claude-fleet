@@ -183,3 +183,11 @@ func fleet_quota_carry         T549  bin/
 func fleet_quota_pace_spread   T549  bin/
 func fleet_quota_merge         T549  bin/
 func quotawatch_in_tick        T549  bin/
+# --- worker hibernation: idle sessions stay idle (T548, EPIC T542 C8) ---------------
+path bin/fleet_sleep_park.py           T548
+path bin/fleet-sleep-daemon.sh         T548
+func fleet_sleep_dispose               T548
+func fleet_session_sleepers            T548
+func fleet_cap_full                    T548
+func sleep_snapshot                    T548
+func zage_v                            T548

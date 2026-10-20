@@ -11,7 +11,7 @@
 #     pins an @id / %pane target, it does not make a position acceptable);
 #   • zero matches / several matches refuse; --repo disambiguates;
 #   • EVERY path prints exactly one outcome line — `sent → …` on stdout for a
-#     success (incl. the wake-delivery path, which used to print nothing),
+#     success (incl. the journaled delivery path, which used to print nothing),
 #     one stderr line + non-zero for a failure.
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
@@ -171,23 +171,19 @@ send -L "$L" issue:abc "x"
 ok; [ "$rc" = 2 ] || fail "issue:abc → usage exit 2" "rc=$rc"
 one_line "bad issue"
 
-# --- 5. the formerly silent wake-delivery path now echoes -------------------------
+# --- 5. the formerly silent journaled-delivery path now echoes ---------------------
 SB="$WORK/sbin"; mkdir -p "$SB"
 ln -s "$BIN/fleet-peer-send.sh" "$SB/fleet-peer-send.sh"; ln -s "$BIN/fleet-lib.sh" "$SB/fleet-lib.sh"
 printf 'import sys\nsys.stdin.read()\nsys.exit(0)\n' > "$SB/fleet_worker_life.py"
-tf set-window-option -t "$wB" @worker_lifecycle sleeping
+tf set-window-option -t "$wB" @sleep_evidence '{"session_id":"x"}'
 out=$(bash "$SB/fleet-peer-send.sh" -L "$L" issue:12 "m-wake" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err")
-ok; [ "$rc" = 0 ] || fail "wake-delivery success → exit 0" "$err"
-ok; case "$out" in "sent → $wB via wake-delivery (issue-12 · "*) ;; *) fail "wake-delivery must echo sent →" "[$out]" ;; esac
-ok; [ -z "$err" ] || fail "wake-delivery success: nothing on stderr" "$err"
-printf 'import sys\nsys.stdin.read()\nsys.exit(3)\n' > "$SB/fleet_worker_life.py"
-out=$(bash "$SB/fleet-peer-send.sh" -L "$L" issue:12 "m-held" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err")
-ok; [ "$rc" = 3 ] && case "$out" in "queued → $wB: fleet at its session limit"*) true ;; *) false ;; esac \
-  || fail "a sleeper holding it at a full fleet → queued →, exit 3 (issue #1647)" "rc=$rc out=[$out] err=[$err]"
+ok; [ "$rc" = 0 ] || fail "journaled delivery success → exit 0" "$err"
+ok; case "$out" in "sent → $wB via delivery (issue-12 · "*) ;; *) fail "journaled delivery must echo sent →" "[$out]" ;; esac
+ok; [ -z "$err" ] || fail "journaled delivery success: nothing on stderr" "$err"
 printf 'import sys\nsys.stdin.read()\nsys.exit(1)\n' > "$SB/fleet_worker_life.py"
 out=$(bash "$SB/fleet-peer-send.sh" -L "$L" issue:12 "m-wake2" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err")
 ok; [ "$rc" = 1 ] && [ -z "$out" ] && [ "$(printf '%s\n' "$err" | grep -c .)" = 1 ] \
-  || fail "a silent wake-delivery failure still gets one stderr line + exit 1" "rc=$rc out=[$out] err=[$err]"
+  || fail "a silent delivery failure still gets one stderr line + exit 1" "rc=$rc out=[$out] err=[$err]"
 
 [ "$FAIL" -eq 0 ] || { printf 'fleet-peer-send-identity selftest: %d FAIL\n' "$FAIL" >&2; exit 1; }
 printf 'fleet-peer-send-identity selftest: OK (%d checks)\n' "$CHECKS"

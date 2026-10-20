@@ -554,7 +554,8 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.assertEqual(before["@12"]["worker_id"], self.worker("issue-123"))
         self.assertEqual(before["@13"]["worker_id"], self.worker("scratch-4"))
         self.assertIsNone(before["@14"]["worker_id"])
-        self.assertEqual((before["@15"]["lifecycle"], before["@12"]["lifecycle"]), ("sleeping", "awake"))
+        # column 8 carried hibernation's stamp until T548: an old one reads awake
+        self.assertEqual((before["@15"]["lifecycle"], before["@12"]["lifecycle"]), ("awake", "awake"))
         # A migration / restore / renumber mints a new window id and handle; the
         # identity is unchanged because the binding is.
         self.node.windows(("@99", 123, False, "/fixture/issue-123"))
@@ -606,9 +607,6 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.node.windows(("@12", 124, False, "/fixture/issue-124"), ("@21", 124, False, "/fixture/issue-124"))
         twice = self.lifecycle("worker_stop", "issue-124")
         self.assertEqual((twice["status"], twice["result"]["error"]["code"]), ("failed", "AMBIGUOUS"))
-        self.node.windows(("@12", 124, False, "/fixture/issue-124", "sleeping"))
-        asleep = self.lifecycle("worker_stop", "issue-124", idem="stop-asleep")
-        self.assertEqual((asleep["status"], asleep["result"]["error"]["code"]), ("failed", "INVALID_STATE"))
         self.assertEqual(self.node.calls("stop"), ["demo example-project:issue-123"])
         self.node.windows(("@12", 124, False, "/fixture/issue-124"))
         (self.node.conf / "stop-hang").touch()
@@ -664,10 +662,8 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         lost = self.lifecycle("worker_answer", idem="lost", answer="2")
         self.assertEqual((lost["status"], lost["result"]["error"]["code"]), ("unknown", "UNKNOWN_OUTCOME"))
         (self.node.conf / "answer-lost").unlink()
-        # a hibernating worker asks nothing; an unknown key is NOT_FOUND — neither reaches a script
+        # an unknown key is NOT_FOUND — it never reaches a script
         before = (len(self.node.calls("perm")), len(self.node.calls("answer")))
-        asleep = self.lifecycle("worker_answer", "issue-7", idem="asleep", answer="yes")
-        self.assertEqual((asleep["status"], asleep["result"]["error"]["code"]), ("failed", "INVALID_STATE"))
         gone = self.lifecycle("worker_answer", "issue-99", idem="gone", answer="yes")
         self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
         self.assertNotIn("token", gone["result"]["error"])

@@ -144,7 +144,6 @@ actually moved. One line per step (`<step>: …`), in this order:
 - **ui** — dash launcher or `conf/tmux-attention.conf` changed →
   `fleet-ui-refresh.sh --all` on every live fleet, with `--from`'s conf as the
   before-file for the unbind diff (#248, #295).
-- **repark** — stale sleeping-worker pages re-parked on every live fleet (#1064).
 - **logins** — `--sync-logins` (issue #1122): the machine's other logins are
   brought to this commit by `fleet-sync-logins.sh`, as the last step and only
   when every step above passed. Step 4 says how to read its lines. The

@@ -91,7 +91,6 @@
 #             needs password-less sudo, else one line says what to run). Neither:
 #             no line at all.
 #   ui        dash launcher / tmux conf changed -> fleet-ui-refresh.sh --all
-#   repark    re-park stale sleeping-worker pages on every live fleet (#1064)
 #   loopmark  give every Claude window on every live fleet the `@loop` mark its
 #             transcript says it should carry (fleet_loop_mark.py sweep, #1370): a
 #             session that scheduled a ScheduleWakeup / CronCreate before the
@@ -123,7 +122,7 @@
 #             nothing), and one the previous package had and this one does not is
 #             gone (the list is kept in $FLEET_CONF_DIR/agent-bundle.state). Runs
 #             hooks · settings · commands · codex-skills · skills · agents and a
-#             `mod` line; layout, conf, daemons, plugin, ui, repark, loopmark,
+#             `mod` line; layout, conf, daemons, plugin, ui, loopmark,
 #             reeval and logins are a node's and do not run. Hooks are wired
 #             through the package's bin/fleet-hook-run.sh (fleet-hooks-merge.py
 #             --via) and the github / fetch MCP servers point at its bin/
@@ -1430,25 +1429,6 @@ else
   say 'ui: skip — dash launcher and tmux conf unchanged'
 fi
 [ -n "$beforeconf" ] && rm -f "$beforeconf"
-
-# --- repark ---------------------------------------------------------------------
-if [ -f "$ROOT/bin/fleet-sleep.sh" ] && [ -f "$ROOT/bin/fleet-lib.sh" ]; then
-  socks=$( # shellcheck source=/dev/null
-    . "$ROOT/bin/fleet-lib.sh" >/dev/null 2>&1 && fleet_sockets 2>/dev/null)
-  nf=0 rp=0 rf=0
-  for s in $socks; do
-    nf=$((nf + 1))
-    [ "$DRY" = 1 ] && continue
-    if out=$(bash "$ROOT/bin/fleet-sleep.sh" repark "$s" 2>&1); then
-      rp=$((rp + $(printf '%s\n' "$out" | grep -c '"reparked"')))
-    else rf=$((rf + 1)); fi
-  done
-  if [ "$DRY" = 1 ]; then say "repark: would re-park stale sleeping pages on $nf live fleet(s)"
-  elif [ "$rf" -gt 0 ]; then fail repark "$rf of $nf fleet(s) failed; $rp page(s) re-parked"
-  else say "repark: ok — $rp page(s) re-parked on $nf live fleet(s)"; fi
-else
-  say 'repark: skip — no sleep pages in this version'
-fi
 
 # --- loopmark (issue #1370) --------------------------------------------------------
 if [ -f "$ROOT/bin/fleet_loop_mark.py" ] && [ -f "$ROOT/bin/fleet-lib.sh" ]; then

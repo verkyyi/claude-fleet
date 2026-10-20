@@ -19,8 +19,7 @@ import fleet_reap_shadow as proof
 BIN = Path(__file__).absolute().parent
 FIELDS = ("window_id", "@fleet_id", "@worktree", "@repo", "@norepo", "@cc_agent",
           "@loop", "@handoff_manifest", "@handoff_armed", "@agent_transfer_request",
-          "@agent_transfer_until", "@migrating", "@worker_lifecycle", "@sleep_record",
-          "@sleep_wake_deferred", "@reap_policy", "@claude_state_ts", "@reap_due",
+          "@agent_transfer_until", "@migrating", "@reap_policy", "@claude_state_ts", "@reap_due",
           "@reap_seen", "@reap_state_ts", "@reap_key", "@reap_hold", "pane_pid")
 ERRORS = (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError)
 
@@ -200,18 +199,16 @@ class LocalSources:
             for name in ("transfer","migration"):
                 self.values[name]=self.envelope("fleet_rotate_lease_held",None,at,unknown=True,reason="lease_source_unavailable")
         def wake():
-            value=[v for v in (self.meta["@worker_lifecycle"],self.meta["@sleep_wake_deferred"]) if v]
+            # Hibernation's phase / record / deferred wake went with T548 (C8);
+            # the delivery lock is what is left to hold a window.
+            value=[]
             lock=self.life["root"](self.session)/("window-"+self.meta["window_id"][1:]+".lock")
             if lock.exists():
                 with lock.open("rb") as stream:
                     try: fcntl.flock(stream,fcntl.LOCK_SH|fcntl.LOCK_NB)
-                    except BlockingIOError: value.append("sleep-wake-delivery-lock-held")
-            record=self.meta["@sleep_record"]
-            if record:
-                data=json.loads(Path(record).read_text())
-                value.append(dict(state=data.get("state"),digest=proof.digest(data)))
+                    except BlockingIOError: value.append("delivery-lock-held")
             return value
-        take("wake","fleet-sleep:phase-record",wake)
+        take("wake","fleet_worker_life:delivery-lock",wake)
         def draft():
             data=self.life["INPUT"]["snapshot"](self.socket,self.pane,agent=self.meta["@cc_agent"])
             if data.get("state")!="empty": raise ValueError("draft_or_unknown")

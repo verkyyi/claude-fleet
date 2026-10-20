@@ -21,8 +21,6 @@
 #   • HOOKS     SessionStart (handoff-latch-reset-hook.sh) and Stop
 #               (set-claude-state.sh done) stamp @cc_session_id from the payload;
 #               a headless `claude -p` (CLAUDE_CODE_ENTRYPOINT=sdk-cli) stamps nothing
-#   • NO-PERSIST the sleep digest's helper `claude -p` carries
-#               --no-session-persistence (stub claude records argv)
 #
 # tmux on a private -S socket via a PATH shim; CLAUDE_PROJECTS_DIR points every
 # transcript lookup at a temp tree. Exit 0 = pass.
@@ -172,26 +170,5 @@ printf '{"hook_event_name":"Stop","session_id":"%s","last_assistant_message":"\\
 printf '{"hook_event_name":"Stop","session_id":"%s"}' "$(id 15)" | hook sdk-cli "$BIN/set-claude-state.sh" 'done'
 [ "$(opt)" = "$(id 13)" ] || fail "hooks: a headless claude -p Stop stamped the pane"
 ok "hooks: SessionStart + Stop stamp @cc_session_id; headless and malformed ids stamp nothing"
-
-# -------------------------------------------------------------- NO-PERSIST ----
-cat > "$WORK/shim/claude" <<EOS
-#!/bin/sh
-printf '%s\n' "\$*" > "$WORK/claude-argv"
-cat >/dev/null
-echo '{}'
-EOS
-chmod +x "$WORK/shim/claude"
-(cd "$WORK" && env -u FLEET_SLEEP_DIGEST_CMD PATH="$WORK/shim:$PATH" python3 - "$BIN" <<'PY'
-import sys, subprocess, importlib.util
-spec = importlib.util.spec_from_file_location("fleet_sleep", sys.argv[1] + "/fleet-sleep.py")
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-subprocess.run(m.digest_argv(), input="prompt", text=True, capture_output=True, timeout=60)
-PY
-)
-case " $(cat "$WORK/claude-argv" 2>/dev/null) " in
-  *" -p "*) case " $(cat "$WORK/claude-argv") " in *" --no-session-persistence "*) : ;; *) fail "no-persist: digest argv lacks --no-session-persistence" ;; esac ;;
-  *) fail "no-persist: the sleep digest's helper claude -p would leave a transcript" "$(cat "$WORK/claude-argv" 2>/dev/null)" ;;
-esac
-ok "no-persist: the sleep digest's helper claude -p carries --no-session-persistence"
 
 printf 'fleet-restore-helper-selftest: %s passed\n' "$pass"

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""fleet_worker_life.py — what a worker window needs outside hibernation (T545,
-EPIC T542 C7): its lazy dependencies, the worker identity reads, the agent's MCP
-classification the busy walk and the continuation share (fleet_agent_mcp.py), the
-exit fingerprint; and that the old names (fleet-sleep.py's subcommands,
-fleet_sleep_argv.py, fleet_sleep_mcp.py) still forward for one version."""
+"""fleet_worker_life.py — what a worker window needs (T545, EPIC T542 C7;
+hibernation itself went with T548, C8): its lazy dependencies, the worker
+identity reads, the agent's MCP classification the busy walk and the
+continuation share (fleet_agent_mcp.py); and that the old names (fleet-sleep.py's
+subcommands, fleet_sleep_argv.py, fleet_sleep_mcp.py) still forward for one
+version — every hibernation subcommand a quiet exit 0."""
 import json
 import os
 from pathlib import Path
@@ -168,20 +169,6 @@ class McpRestartTest(unittest.TestCase):
         (home/'plugins'/'installed_plugins.json').unlink()
         self.assertEqual(inventory(['claude'],wt,home)[0],{})
 
-    def test_claude_process_evidence_replaces_runtime_status_until_the_server_restarts(self):
-        # No runtime RPC: the exact live child is the evidence at sleep, and its
-        # restart from an unchanged digest is the evidence at wake.
-        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='safe'):
-            readers=(lambda pid:self.argv[pid],lambda pid:self.exes[pid])
-            self.assertEqual(LIB['MCP']['classify'](self.source,(self.config,None),self.rows,1,*readers),{2})
-            verify=LIB['MCP']['verify_resume']
-            self.assertFalse(verify(self.source,(self.config,None),({},9,*readers)))
-            self.assertTrue(verify(self.source,(self.config,None),({2:(9,'node')},9,*readers)))
-            self.argv[3]=self.argv[2];self.exes[3]=self.node  # two copies prove nothing about which one Claude owns
-            self.assertFalse(verify(self.source,(self.config,None),({2:(9,'node'),3:(9,'node')},9,*readers)))
-            changed={'safe':dict(self.config['safe'],env={'TOKEN':'x'})}
-            with self.assertRaisesRegex(ValueError,'configuration changed'):verify(self.source,(changed,None),({2:(9,'node')},9,*readers))
-
     def test_exact_config_and_explicit_contract_required(self):
         self.config['remote']={'url':'https://example.invalid/mcp','command':None,'args':None}
         with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='',FLEET_CONF_DIR='/cf'):
@@ -228,16 +215,6 @@ class McpRestartTest(unittest.TestCase):
             self.status['data'].pop()
             self.status['data'][0]['runtimeStatus']='starting'
             with self.assertRaisesRegex(ValueError,'not ready'):self.classify()
-
-    def test_resume_waits_for_service_and_rejects_changed_config(self):
-        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='safe'):
-            self.classify()
-        verify=lambda:LIB['MCP']['verify_resume'](self.source,LIB['MCP']['inventory'](self.client))
-        self.assertTrue(verify())
-        self.status['data'][0]['runtimeStatus']='starting'
-        self.assertFalse(verify())
-        self.config['safe']['args'].append('changed')
-        with self.assertRaisesRegex(ValueError,'configuration changed'):verify()
 
     def test_older_runtime_requires_initialize_and_tool_inventory(self):
         ready=LIB['MCP']['runtime_ready']
@@ -538,7 +515,7 @@ class McpRestartTest(unittest.TestCase):
     def test_shell_exec_is_offered_to_codex_only(self):
         # Claude hands its MCP children its whole, mutable environment, so its
         # classify / resume calls pass no env reader and the shape stays refused.
-        src=(BIN/'fleet_worker_life.py').read_text()+(BIN/'fleet-sleep.py').read_text()
+        src=(BIN/'fleet_worker_life.py').read_text()
         calls=[line for line in src.splitlines() if "MCP['classify'](" in line]
         self.assertEqual(len(calls),3)
         claude=[line for line in calls if 'inventory,rows' in line]
@@ -555,7 +532,6 @@ class McpRestartTest(unittest.TestCase):
         for agent in ('claude_fleet/0.161.0 (Mac OS)','claude_fleet/0.160.10','claude_fleet/0.162.10','codex/0.160.1-alpha','0.160.1',None,7):
             self.assertIsNone(pick(client(agent),reader),agent)
         self.assertIsNone(pick(object(),reader))
-        self.assertNotIn('process_env',[l for l in src.splitlines() if "MCP['verify_resume']" in l][0])
 
     def test_shell_exec_real_kernel_after_the_install_is_deleted(self):
         # The real readers on a real shell: an agent process starts
@@ -632,34 +608,8 @@ class McpRestartTest(unittest.TestCase):
         self.assertTrue(env_reader(pid,set())['stdin_socket'])
         self.assertFalse(match(pid,parent))
 
-class ExitDetectionTest(unittest.TestCase):
-    def test_unreaped_zombie_counts_as_exited(self):
-        # tmux may reap an exited pane process late. BSD ps renames a zombie's
-        # comm to <defunct>; Linux procps prints lstart/comm unchanged, so the
-        # start fingerprint alone would keep reporting the agent as alive.
-        child=subprocess.Popen(['python3','-c','import time;time.sleep(30)'])
-        try:
-            # macOS reports the launcher's comm until exec settles; fingerprint
-            # the running process, as sleep does for a long-idle agent.
-            until=time.monotonic()+5;start=LIB['process_start'](child.pid)
-            while time.monotonic()<until:
-                time.sleep(.1);current=LIB['process_start'](child.pid)
-                if current==start:break
-                start=current
-            data={'source':{'pid':child.pid},'source_start':start}
-            self.assertTrue(data['source_start']);self.assertTrue(LIB['source_alive'](data))
-            os.kill(child.pid,signal.SIGTERM)
-            until=time.monotonic()+5
-            while time.monotonic()<until and not LIB['process_state'](child.pid)[0].startswith('Z'):time.sleep(.05)
-            self.assertTrue(LIB['process_state'](child.pid)[0].startswith('Z'))
-            self.assertFalse(LIB['source_alive'](data))
-        finally:child.wait()
-        self.assertEqual(LIB['process_state'](child.pid),('',''))
-        self.assertFalse(LIB['source_alive'](data))
-
-
 class CompatForwardTest(unittest.TestCase):
-    # compat-1v: 下一批删 — the old names stay one version (C8 removes them).
+    # compat-1v: 下一批删 — the old names stay one version.
     def test_old_module_names_forward_to_the_renamed_ones(self):
         for old,new in (('fleet_sleep_argv.py','fleet_agent_argv.py'),('fleet_sleep_mcp.py','fleet_agent_mcp.py')):
             a=runpy.run_path(str(BIN/old));b=runpy.run_path(str(BIN/new))
@@ -686,6 +636,14 @@ class CompatForwardTest(unittest.TestCase):
             p=subprocess.run([sys.executable,str(BIN/script),'deliver','--session','no-such-fleet-%d'%os.getpid(),'@1'],
                              input='x',env=env,text=True,capture_output=True,timeout=30)
             self.assertEqual(p.returncode,1,script+p.stderr)
+        # hibernation's own subcommands (T548): a quiet exit 0, python and shell
+        for argv in (['python3',str(BIN/'fleet-sleep.py'),'scan','--session','x'],
+                     ['bash',str(BIN/'fleet-sleep.sh'),'wake','x','@1','--dwell','2','--nav'],
+                     ['bash',str(BIN/'fleet-sleep.sh'),'keep-awake','x','@1'],
+                     ['python3',str(BIN/'fleet_worker_life.py'),'holds-exit','--session','x','@1']):
+            p=subprocess.run(argv,env=env,text=True,capture_output=True,timeout=30)
+            want=1 if 'holds-exit' in argv else 0
+            self.assertEqual((p.returncode,p.stdout,p.stderr),(want,'',''),argv)
 
 
 if __name__=='__main__':

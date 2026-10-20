@@ -281,11 +281,9 @@ has "F: the mac-a row itself is still there" "$rows" "wid:$WID"
 cnt=$(. "$BIN/fleet-lib.sh"; FLEET_CONF_DIR="$WORK/none" fleet_session_count_for "$LS")
 eq "F: the per-fleet cap counts the local window only" "1" "$cnt"
 cntg=$(. "$BIN/fleet-lib.sh"; fleet_sockets() { printf '%s\n' "$LL"; }; _fleet_session_tally)
-eq "F: the machine-wide tally counts the local window only" "1 0" "$cntg"
+eq "F: the machine-wide tally counts the local window only" "1" "$cntg"
 snap=$(tl list-windows -t "=$LS" -F '#{?@remote,,#{window_name}}|x')
 hasnt "F: fleet-restore's snapshot format names no proxy" "$snap" "侧边栏 · @mac-a"
-sl=$(FLEET_SLEEP=observe python3 "$BIN/fleet-sleep.py" scan --session "$LL" --dry-run 2>/dev/null)
-hasnt "F: the sleeper reports nothing about the proxy" "$sl" "\"$PW\""
 
 # ============================================================================
 # G's plain client on the node

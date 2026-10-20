@@ -37,10 +37,6 @@ BIN = Path(__file__).absolute().parent
 sys.path.insert(0, str(BIN))
 import fleet_view as FV   # noqa: E402 — the ⌘P panel: its glyph table is the one table (#3194)
 
-# a state the panel's sym_of reads as idle but this line calls working (the design:
-# 在干活 含循环中、准备中、唤醒中)
-WORKING = ("preparing", "waking")
-
 # colours: the 看台 line's own (the old client's stage palette); the glyphs' are the
 # panel's 16-colour palette numbers (FV.GLYPH_COLORS), as tmux colourN
 FG, DIM, HL, OK, WARN, BAD = "#a9b1d6", "#565f89", "#7aa2f7", "#9ece6a", "#e0af68", "#f7768e"
@@ -87,16 +83,16 @@ def sym_of(rec, trouble=False):
     """The record's glyph class off the panel's table: lost wins (out of reach,
     the reading stale, on the relay), then the state."""
     state = rec.get("state") or "idle"
-    return FV.sym_of("working" if state in WORKING else state, trouble)
+    return FV.sym_of(state, trouble)
 
 
 def state_word(rec, sym):
-    """在干活 · 做完了 · 已退出 · 失败 · 睡着 · 空闲 — the panel's words; ! and ? say none."""
+    """在干活 · 做完了 · 已退出 · 失败 · 空闲 — the panel's words; ! and ? say none."""
     if sym in ("needs", "lost"):
         return ""
     if sym == "fail":
         return FV.state_words("failed" if rec.get("state") == "failed" else "exited")
-    return FV.state_words({"work": "working", "done": "done", "exited": "exited", "sleep": "sleeping"}.get(sym, "idle"))
+    return FV.state_words({"work": "working", "done": "done", "exited": "exited"}.get(sym, "idle"))
 
 
 # @remote_via's route word for the hub relay: fleet-connect.py route_label's, a value
