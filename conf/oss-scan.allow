@@ -24,7 +24,7 @@ deploy/k8s/egress/base/fleet-egress.py	private-ipv4	内嵌自测：要的就是�
 extras/gh-relay/gh-relay.py	private-ipv4	内嵌自测：要的就是私网地址被拒
 extras/gh-relay/gh-relay.service	private-ipv4	Lightsail 默认 VPC 的解析器地址（AWS 的产品默认），重建后照 README 核对
 
-# (tokenledger's files are spelled `tokenledge?/…`: no conf line may name that tree — tokenledger-isolation-selftest)
+# (tokenledger's files are spelled `tokenledge?/…`: no conf line may name that tree — tokenledger-modules-selftest)
 # C8 (#3578): tests and docs whose private addresses ARE the point — LAN / tailnet / entry
 # route logic is judged on private ranges; every address in them is made up.
 bin/client-log-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）

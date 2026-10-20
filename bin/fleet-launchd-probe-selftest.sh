@@ -102,7 +102,7 @@ reset() { : > "$S/loaded"; : > "$S/bootouts"; : > "$S/list"; rm -f "$S/captured-
           rm -f "$G/launchd-probe.verdict"; rm -rf "$G/launchd-probe.lock"; return 0; }
 # `shift` rather than "${@:2}": on macOS bash 3.2 a slice of an empty tail is one
 # of the unbound-variable mines issue #703 is about, and this is a plain `bin/`
-# script that bash32-array-selftest.sh scans.
+# script that portability-selftest.sh scans.
 probe() { _sp="$1"; shift
           FAKE_SPAWNS="$_sp" bash "$WORK/bin/fleet-launchd-probe.sh" --window 1 --interval 10 "$@" 2>>"$WORK/probe.err"; }
 

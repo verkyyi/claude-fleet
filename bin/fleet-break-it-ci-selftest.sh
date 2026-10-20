@@ -343,7 +343,7 @@ drill_train_shard_timeout() {
     || { WHY="selftests-shards.yml does not run a budgeted shard under fleet-shard-run.sh"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/train-shard.XXXXXX"); t0=$(now)
   # 1) the real runner prices a selection
-  out=$(cd "$BIN/.." && FLEET_HEAVY=0 bash bin/run-selftests.sh --plan --shard 1/3 portability bash32-array 2>/dev/null | tail -1)
+  out=$(cd "$BIN/.." && FLEET_HEAVY=0 bash bin/run-selftests.sh --plan --shard 1/3 portability conf-surface 2>/dev/null | tail -1)
   case "$out" in 'plan tests=2 total='*' shards=3 heaviest='*) ;;
     *) WHY="run-selftests.sh --plan did not price two tests: $out"; rm -rf "$d"; return 1 ;; esac
   # 2) a near-full selection (the ubuntu table's 4600 s): wider than 12, a bound past 8 minutes
@@ -960,10 +960,10 @@ drill_go_install_replace() {
   d=$(mktemp -d "${TMPDIR:-/tmp}/goinst.XXXXXX"); t0=$(now)
   _modules_sandbox "$d"
   printf '#!/bin/sh\n(cd tokenledger/agent && GOWORK=off go build -o x ./hub/cmd/ccquota)\n' > "$d/bin/fleet-x.sh"
-  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" --modules 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="the sandbox's checkout build was not green ($rc): $(printf '%s' "$out" | grep FAIL | head -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   printf '#!/bin/sh\nGOBIN=x go install %s/cmd/ccquota@latest\n' "$M" > "$d/bin/fleet-x.sh"
-  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" --modules 2>&1); rc=$?
   [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'fleet-x.sh:2:.*go install' \
     || { WHY="a planted go install …@latest was not red ($rc): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
@@ -983,24 +983,24 @@ drill_node_command_hub_only() {
     || { WHY="tokenledger/agent/cmd/ccquota/commands.txt is gone (the premise of this row)"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/nodecmd.XXXXXX"); t0=$(now)
   _modules_sandbox "$d"
-  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" --modules 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="the sandbox was not green as laid out ($rc): $(printf '%s' "$out" | grep FAIL | head -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   # a hub-only command, named by a bin/ script
   _hub_main "$d/tokenledger/hub/cmd/ccquota/main.go" hub svc version
   # (spelt through %s so this file itself names no hub command)
   printf '#!/bin/sh\nccquota %s list\n' svc > "$d/bin/fleet-y.sh"
-  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" --modules 2>&1); rc=$?
   [ "$rc" = 1 ] && printf '%s' "$out" | grep -q "hub-only ccquota command.*svc" \
     || { WHY="bin/ naming the hub-only svc command was not red ($rc): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   # moved to the node (agent/cli.Run + commands.txt): green again
   _hub_main "$d/tokenledger/hub/cmd/ccquota/main.go" hub version -- svc
   printf 'package cli\n\nfunc Run(name string) bool {\n\tswitch name {\n\tcase "svc":\n\tcase "version":\n\t\treturn true\n\t}\n\treturn false\n}\n' > "$d/tokenledger/agent/cli/run.go"
   printf 'svc\nversion\n' > "$d/tokenledger/agent/cmd/ccquota/commands.txt"
-  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" --modules 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="the command moved to agent/cli was still red ($rc): $(printf '%s' "$out" | grep FAIL | head -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   # the workflow loses the agent module's test step
   printf 'jobs:\n  test:\n    strategy:\n      matrix:\n        part: [rest, api-1, shared, e2e]\n    steps:\n      - run: cd "$MOD" && go test ./...\n' > "$d/.github/workflows/tokenledger.yml"
-  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" --modules 2>&1); rc=$?
   [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'has no part agent' \
     || { WHY="a workflow without the agent module's tests was not red ($rc): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
@@ -1022,19 +1022,19 @@ drill_hub_test_names_node() {
     && { WHY="tokenledger/hub/go.mod names the node"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/hubnode.XXXXXX"); t0=$(now)
   _modules_sandbox "$d"
-  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" --modules 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="the sandbox was not green as laid out ($rc): $(printf '%s' "$out" | grep FAIL | head -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   # a hub test that starts a node
   mkdir -p "$d/tokenledger/hub/api"
   printf 'package api\n\nimport (\n\t"testing"\n\n\t"%s/agent"\n)\n\nfunc TestNode(t *testing.T) { _ = agent.New }\n' "$M" > "$d/tokenledger/hub/api/node_test.go"
-  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" --modules 2>&1); rc=$?
   [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'hub/ imports outside hub/ and shared/' \
     && printf '%s' "$out" | grep -q 'hub/api/node_test.go' \
     || { WHY="a hub test importing the node was not red, named ($rc): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   # where it belongs: e2e/
   sed 's/^package api$/package e2e/' "$d/tokenledger/hub/api/node_test.go" > "$d/tokenledger/e2e/node_test.go"
   rm -f "$d/tokenledger/hub/api/node_test.go"
-  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" --modules 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="the test moved to e2e/ was still red ($rc): $(printf '%s' "$out" | grep FAIL | head -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="hub 单独成块（tokenledger/hub）：hub 里一个测试 import 节点 ⇒ 模块自测红并点名文件；搬进 tokenledger/e2e（经 hub/apitest 进 hub）转绿"

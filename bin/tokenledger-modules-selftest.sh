@@ -1,46 +1,35 @@
 #!/bin/bash
-# tokenledger-modules-selftest.sh — the Go blocks under tokenledger/ and the
-# direction their dependencies run (claude-fleet#4811, EPIC #4810 共同约定 3).
+# tokenledger-modules-selftest.sh — the Go blocks under tokenledger/, the direction
+# their dependencies run (claude-fleet#4811, EPIC #4810 共同约定 3), and the subtree
+# being inert to the fleet (issue #1391; was tokenledger-isolation-selftest.sh).
 #
-#   shared/  — what the hub and the node both build in; names NO other block
-#   agent/   — the node (claude-fleet#4812): the agent package, agent/cli (every
-#              node subcommand) and agent/cmd/ccquota (the node's own build);
-#              names shared/ only
-#   hub/     — the hub (claude-fleet#4814): api, store, … and hub/cmd/ccquota
-#              (the hub's own build); names shared/ only — not even a test
-#              names the node; hub/apitest is its harness for e2e/
-#   e2e/     — the联调 tests (claude-fleet#4814): a real node against a real
-#              hub; may name all three
+#   shared/ names NO other block · agent/ (the node, #4812) and hub/ (#4814, not
+#   even a test) name shared/ only · e2e/ (a real node against a real hub) any of
+#   the three. No go.mod at tokenledger/; go.work joins the four for an editor.
+# Static (go.mod / go.work / import lines); with Go on PATH it also asks
+# `go list -deps` the same question.
 #
-# No go.mod at tokenledger/ (go.work joins the four for a person's editor). Static:
-# reads go.mod / go.work and the import lines, so it needs no Go toolchain and
-# runs on every shard; with Go on PATH it also asks `go list -deps` the same
-# question.
-#
-#   1. tokenledger/shared/go.mod is the module …/tokenledger/shared
-#   2. no .go file under shared/ imports another tokenledger package
-#   3. tokenledger/hub/go.mod is …/hub, requires shared and replaces it with
-#      ../shared, and neither requires nor replaces agent; no tokenledger/go.mod;
-#      go.work uses all four (CI builds each GOWORK=off)
-#   4. no moved package is back under internal/, and no import still names one
-#      there (bin/tokenledger-split-shared.sh --check — a Go PR that raced the
-#      move is merged by rerunning that script)
-#   5. the node's developer road builds from a checkout: `go install
-#      …/cmd/ccquota@<v>` refuses a module with a replace
-#   6. tokenledger/agent/go.mod is …/agent and replaces shared with ../shared;
-#      tokenledger/e2e/go.mod is …/e2e and replaces all three
-#   7. no .go file under agent/ imports a tokenledger package outside agent/ and
-#      shared/, none under hub/ (tests too) one outside hub/ and shared/
-#      (go list -deps -test of each: no other block's package)
-#   8. nothing is left in internal/, the old cmd/ccquota or web/
-#      (bin/tokenledger-split-agent.sh --check, bin/tokenledger-split-hub.sh --check)
-#   9. agent/cmd/ccquota/commands.txt is agent/cli.Run's names; the hub's
-#      hub/cmd/ccquota runs only credproxy and version of them and names the rest
-#      in nodeCommands (answered «the node's command», exit 2); every
-#      `ccquota <cmd>` bin/, hooks/ and conf/ name is a node command or a hub one
-#      listed below
-#  10. tokenledger.yml tests every module: each is its own directory, so without
-#      a part for it its tests would quietly stop running
+#   1. shared/go.mod is …/tokenledger/shared    2. shared/ imports no other block
+#   3. hub/go.mod: …/hub, requires + replaces shared, names neither agent nor e2e;
+#      no tokenledger/go.mod; go.work uses all four
+#   4. no moved package is back under internal/ (tokenledger-split-shared.sh --check)
+#   5. no `go install …/cmd/ccquota@<v>` (Go refuses a module with a replace)
+#   6. agent/go.mod and e2e/go.mod, with their replaces
+#   7. agent/ imports outside agent/+shared/ none, hub/ (tests too) outside hub/+shared/ none
+#   8. nothing left in internal/, the old cmd/ccquota or web/ (split-agent / split-hub --check)
+#   9. agent/cmd/ccquota/commands.txt is agent/cli.Run's names; the hub's build runs
+#      only credproxy and version of them and names the rest in nodeCommands; every
+#      `ccquota <cmd>` bin/, hooks/, conf/ name is a node command or a listed hub one
+#  10. tokenledger.yml tests every module
+# The isolation rails (skipped with --modules: the BREAK-IT drills' sandbox repo):
+#  11. install sync never builds Go — fleet-install-apply.sh / fleet-sync-logins.sh
+#      run no go/npm/docker and never name tokenledger/
+#  12. no hook, daemon unit or conf names tokenledger/
+#  13. CI split both ways: ci-plan.sh's selftests rule never matches tokenledger/**,
+#      only tokenledger/** reaches a Go block; tokenledger.yml runs only when the
+#      gate calls it; selftests-macos.yml has no push / PR trigger
+#  14. run-selftests.sh --changed, for real in a throwaway repo: a change confined
+#      to tokenledger/ runs the lint group alone
 set -u
 BIN=$(cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(cd -- "$BIN/.." && pwd)
@@ -232,5 +221,114 @@ done
 grep -qE 'cd "\$MOD" && go test' "$WF" 2>/dev/null \
   && ok "tokenledger.yml runs each part's go test in its module" \
   || fail "tokenledger.yml has no go test step run in the part's module (cd \"\$MOD\")"
+
+[ "${1:-}" = --modules ] || {
+# --- 11. install sync never builds Go ----------------------------------------
+for s in fleet-install-apply.sh fleet-sync-logins.sh; do
+  f="$BIN/$s"
+  [ -f "$f" ] || { fail "$s missing"; continue; }
+  # Code lines only: a comment may explain this very rule.
+  hits=$(grep -nE '(^|[^A-Za-z0-9_./-])(go[[:space:]]+(build|install|test|run|generate|mod)|npm[[:space:]]|docker[[:space:]]|make[[:space:]]+-C)' "$f" \
+           | grep -vE '^[0-9]+:[[:space:]]*#')
+  [ -z "$hits" ] && ok "$s runs no go/npm/docker build" \
+    || { fail "$s invokes a build:"; printf '%s\n' "$hits" | sed 's/^/     /'; }
+  hits=$(grep -n 'tokenledger' "$f" | grep -vE '^[0-9]+:[[:space:]]*#')
+  [ -z "$hits" ] && ok "$s never names tokenledger/" \
+    || { fail "$s acts on tokenledger:"; printf '%s\n' "$hits" | sed 's/^/     /'; }
+done
+
+# --- 12. no hook / daemon / conf names it ------------------------------------
+hits=''
+for d in hooks launchd systemd conf; do
+  [ -d "$ROOT/$d" ] || continue
+  # a line that only keeps it OUT (conf/release-tree.list's `!tokenledger/`,
+  # #2771) or a comment is not acting on it
+  h=$(grep -rlE '^[^#!]*tokenledger/' "$ROOT/$d" 2>/dev/null)
+  [ -n "$h" ] && hits="$hits$h
+"
+done
+[ -z "$hits" ] && ok "no hook / daemon unit / conf names tokenledger/" \
+  || { fail "a hook/daemon/conf names tokenledger/:"; printf '%s' "$hits" | sed 's/^/     /'; }
+
+# --- 13. CI split both ways --------------------------------------------------
+WFD="$ROOT/.github/workflows"
+# paths_of <file> — every `- '<glob>'` entry of the file's `paths:` lists.
+paths_of() {
+  awk '/^[[:space:]]*paths:[[:space:]]*$/ { inp = 1; next }
+       inp && /^[[:space:]]*-[[:space:]]/ { s = $0; sub(/^[[:space:]]*-[[:space:]]*/, "", s); gsub(/["'\'']/, "", s); print s; next }
+       { inp = 0 }' "$1"
+}
+w=selftests-macos.yml
+if [ -f "$WFD/$w" ]; then
+  # no push / pull_request trigger at all (since #3141: nightly + dispatch only)
+  grep -qE '^[[:space:]]*(push|pull_request):' "$WFD/$w" \
+    && fail "$w runs on a push or PR" || ok "$w is never triggered by a push or PR"
+else
+  fail "$w missing"
+fi
+# the PR gate (issue #4815): ONE plan, bin/ci-plan.sh, says what a PR runs
+eval "$(sed -n '/^check_rules()/,/^}/p; /^block_of()/,/^}/p' "$BIN/ci-plan.sh")"
+globs=""
+if command -v check_rules >/dev/null 2>&1 && check_rules selftests; then
+  bad=''
+  for g in $globs; do case "$g" in tokenledger*|'*'|'**'*) bad="$bad $g" ;; esac; done
+  [ -z "$bad" ] && ok "the selftests' plan rule never matches tokenledger/**" \
+    || fail "the selftests' plan rule matches tokenledger/**:$bad"
+else
+  fail "bin/ci-plan.sh has no selftests rule"
+fi
+if command -v block_of >/dev/null 2>&1; then
+  out=''
+  for f in bin/fleet-lib.sh hooks/bash-guard.py conf/x.conf docs/README.md; do out="$out$(block_of "$f")"; done
+  [ -z "$out" ] && ok "the Go tests run for no change outside tokenledger/ (shell, hooks, conf, docs)" \
+    || fail "a shell / hook / conf / docs change reaches a Go block: [$out]"
+  [ "$(block_of tokenledger/hub/api/x.go)" = hub ] && ok "a tokenledger/ change reaches its Go block" \
+    || fail "tokenledger/hub/api/x.go reaches no Go block"
+else
+  fail "bin/ci-plan.sh has no block_of"
+fi
+T_WF="$WFD/tokenledger.yml"
+if [ -f "$T_WF" ]; then
+  grep -qE '^[[:space:]]*(push|pull_request):' "$T_WF" \
+    && fail "tokenledger.yml runs on a push or PR by itself (ci.yml calls it)" \
+    || ok "tokenledger.yml runs only when the PR gate calls it (or by hand)"
+  grep -qE '^[[:space:]]*working-directory:[[:space:]]*tokenledger$' "$T_WF" \
+    && ok "tokenledger.yml runs inside tokenledger/" || fail "tokenledger.yml has no working-directory: tokenledger"
+else
+  fail "tokenledger.yml missing"
+fi
+
+# --- 14. run-selftests.sh --changed ignores tokenledger/ ---------------------
+if command -v git >/dev/null 2>&1; then
+  T=$(mktemp -d "${TMPDIR:-/tmp}/fleet-selftest-tokenledger.XXXXXX") || exit 1
+  trap 'rm -rf "$T"' EXIT
+  R="$T/repo"
+  mkdir -p "$R/bin" "$R/tokenledger/hub/cmd/ccquota"
+  cp "$BIN/run-selftests.sh" "$BIN/selftest-shadow-root.sh" "$R/bin/"
+  mk_test() { printf '#!/bin/sh\n# %s\nexit 0\n' "$2" > "$R/bin/$1-selftest.sh"; }
+  mk_test portability 'lint: scans the whole tree'
+  mk_test alpha       'reads hub.go and README.md and Makefile'
+  mk_test beta        'drives tool-b.sh'
+  printf '#!/bin/sh\n' > "$R/bin/tool-b.sh"
+  echo 'package main' > "$R/tokenledger/hub/cmd/ccquota/hub.go"
+  echo '# tl' > "$R/tokenledger/README.md"
+  echo 'all:' > "$R/tokenledger/Makefile"
+  g() { git -C "$R" -c user.name=t -c user.email=t@example.invalid "$@"; }
+  g init -q && g add -A && g commit -qm base && g tag base
+  echo '// edit' >> "$R/tokenledger/hub/cmd/ccquota/hub.go"
+  echo more >> "$R/tokenledger/README.md"
+  echo '	true' >> "$R/tokenledger/Makefile"
+  g add -A && g commit -qm tl
+  out=$(env -u FLEET_SELFTEST_ROOT -u FLEET_SELFTEST_NO_SHADOW FLEET_HEAVY=0 \
+        sh "$R/bin/run-selftests.sh" --changed base </dev/null 2>&1); rc=$?
+  ran=$(printf '%s\n' "$out" | awk '/^PASS /{print $2}' | sort | tr '\n' ' ')
+  [ "$rc" -eq 0 ] && [ "$ran" = 'portability-selftest.sh ' ] \
+    && ok "--changed: a tokenledger/-only change runs the lint group alone" \
+    || { fail "--changed on tokenledger/: rc=$rc ran=[$ran]"; printf '%s\n' "$out" | grep '^select' | sed 's/^/     /'; }
+else
+  echo "SKIP: git not installed (rail 4)"
+fi
+
+}
 
 [ "$FAILS" = 0 ] && echo "tokenledger-modules selftest: OK" || { echo "tokenledger-modules selftest: $FAILS FAILED"; exit 1; }

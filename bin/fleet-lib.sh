@@ -9998,7 +9998,7 @@ fleet_wid_valid() {
 # (POSIX `while` loops, not `for (( … ))`: fleet-lib.sh must PARSE under a strict
 # /bin/sh — the conf sources it under `sh` for the ⌂ hub tap, and a C-style for is
 # a syntax error in dash, which would leave every later function undefined. That
-# is the #414 class, and bin/posix-lib-parse-selftest.sh is its net.)
+# is the #414 class, and bin/portability-selftest.sh is its net.)
 fleet_wid_next() {
   local taken=" ${1//$'\n'/ } " i=0 j h la ld
   la=${#FLEET_WID_ALPHA}; ld=${#FLEET_WID_DIGITS}

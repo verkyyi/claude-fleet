@@ -11,7 +11,6 @@
 0.9 attn-signal-selftest.sh
 14.8 auto-handoff-selftest.sh
 5.5 bash-guard-selftest.sh
-8.4 bash32-array-selftest.sh
 1.6 blocked-state-selftest.sh
 6.5 cfg-restart-codex-selftest.sh
 7.0 cfg-stale-selftest.sh
@@ -24,7 +23,6 @@
 9.7 context-ladder-selftest.sh
 20.3 cross-send-selftest.sh
 9.8 ctx-token-line-selftest.sh
-0.0 daemon-nofile-selftest.sh
 0.1 daemon-processtype-selftest.sh
 4.1 dash-born-order-selftest.sh
 1.9 dash-ended-group-selftest.sh
@@ -313,8 +311,7 @@
 0.1 pane-border-focus-selftest.sh
 0.4 pane-header-selftest.sh
 8.0 peer-queue-selftest.sh
-8.3 portability-selftest.sh
-0.6 posix-lib-parse-selftest.sh
+18.6 portability-selftest.sh
 1.4 precompact-hook-selftest.sh
 0.9 refocus-hook-selftest.sh
 4.2 release-tree-selftest.sh
@@ -344,7 +341,6 @@
 0.5 task-line-selftest.sh
 0.1 tmux-conf-reload-selftest.sh
 14.2 fleet-status-lib-selftest.sh
-0.1 tokenledger-isolation-selftest.sh
 0.9 topbar-ctx-selftest.sh
 1.6 transcript-archive-selftest.sh
 0.2 usage-lib-selftest.sh
@@ -357,6 +353,5 @@
 2.0 worktree-autoclean-rotation-selftest.sh
 8.3 worktree-autoclean-scratch-idle-selftest.sh
 5.5 worktree-autoclean-scratch-selftest.sh
-1.3 zsh-local-selftest.sh
 
 8.0 spinner-control-selftest.py
