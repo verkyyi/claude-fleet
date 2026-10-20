@@ -2290,7 +2290,8 @@ class Supervisor(object):
         self.state.setdefault("sweep", {})
         self.procs = {}       # child name -> Popen (started by us)
         self.adopted = {}     # child name -> pid (left alive by an earlier run)
-        self.retiring = []    # (name, Popen | None, pid, since): handed over, draining (T595)
+        self.retiring = []    # (name, Popen | None, pid, since): handed over, draining (T595);
+        # booked in state.json's "retiring" (T640) so a daemon restarted mid-drain keeps waiting
         self.restarting = False   # stopping onto a new release (restart_requested)
         self.running = {}     # task name -> (Popen, lock fd, t0, log fh)
         self.agent_running = {}  # "login/name" -> (Popen, t0, entry) of an agent task's attempt (#2529)
@@ -2554,7 +2555,10 @@ class Supervisor(object):
         boot = os.environ.get("FLEET_NODE_BOOT_ID")
         if boot and (self.state.get("supervisor") or {}).get("boot_id") != boot:
             self.state["children"] = {}
+            for r in self.state.pop("retiring", None) or []:   # a reboot ended every one
+                self.log("child %s: pid %s gone with the machine's restart" % (r.get("name"), r.get("pid")))
             return
+        self.adopt_retiring(now())
         for c in self.all_children():
             cs = self.state["children"].setdefault(c["name"], {})
             pid = cs.get("pid")
@@ -2771,6 +2775,7 @@ class Supervisor(object):
                     p = self.procs.pop(name, None)
                     old = p.pid if p is not None else self.adopted.pop(name, None)
                     self.retiring.append((name, p, old, t))
+                    self.book_retiring()
                     self.log("child %s: %s changed — a new one takes over from pid %s" % (name, c["reload"], old))
                     self.start_child(c, cs, t)
                     continue
@@ -2807,6 +2812,34 @@ class Supervisor(object):
         daemon starts itself: a seat's / the core's job is stopped as before."""
         return bool(c.get("handoff")) and not self.seated and self.core_cmd(c) is None
 
+    def book_retiring(self):
+        """state.json's copy of the draining list (T640): written with the state
+        (one rename), read back by the next daemon's adopt()."""
+        book = [{"name": n, "pid": pid, "since": since, "cmd": pid_cmd(pid) if pid else ""}
+                for n, _, pid, since in self.retiring]
+        old = {(r.get("name"), r.get("pid")): r.get("cmd") for r in self.state.get("retiring") or []}
+        for r in book:   # a cmd read while it ran: one already gone keeps the one booked
+            r["cmd"] = r["cmd"] or old.get((r["name"], r["pid"])) or ""
+        if book:
+            self.state["retiring"] = book
+        else:
+            self.state.pop("retiring", None)
+        self.dirty = True
+
+    def adopt_retiring(self, t):
+        """The copies an earlier daemon left draining (T640): waited for again;
+        one already gone — or a pid now someone else's — is said and dropped."""
+        for r in self.state.get("retiring") or []:
+            name, pid, since = r.get("name"), r.get("pid"), r.get("since") or t
+            if not name or not pid:
+                continue
+            if pid_alive(pid) and (not r.get("cmd") or pid_cmd(pid) == r["cmd"]):
+                self.retiring.append((name, None, int(pid), since))
+                self.log("child %s: pid %s still draining since an earlier daemon — waiting for it" % (name, pid))
+            else:
+                self.log("child %s: pid %s drained and exited (before this daemon came up, %ds)" % (name, pid, t - since))
+        self.book_retiring()
+
     def tend_retiring(self, t):
         """The copies that handed over (T595): reaped once they drained; one still
         running past FLEET_NODE_HANDOFF_SECS (960) is stopped — unless it never
@@ -2837,7 +2870,9 @@ class Supervisor(object):
                 continue
             stop_processes([(pid, p is not None or child_group(pid))], reap=p.poll if p else None)
             self.log("child %s: pid %s still ran %ds after handing over — stopped" % (name, pid, t - since))
-        self.retiring = keep
+        if len(keep) != len(self.retiring):
+            self.retiring = keep
+            self.book_retiring()
 
     def died(self, name, cs, rc, t):
         up = t - (cs.get("started") or t)
@@ -2911,7 +2946,10 @@ class Supervisor(object):
         if not self.restarting:     # a copy still draining goes with a real stop
             stop_processes([(pid, p is not None or child_group(pid)) for _, p, pid, _ in self.retiring
                             if ((p.poll() is None) if p is not None else pid_alive(pid))])
-        self.retiring = []
+            self.retiring = []
+            self.book_retiring()
+        else:   # a restart onto a release: the book stays for the next daemon (T640)
+            self.retiring = []
         targets = [(p.pid, True) for p in self.procs.values()]
         for name, pid in self.adopted.items():
             if self.seated and not own_pid(pid):
