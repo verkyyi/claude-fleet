@@ -58,6 +58,8 @@
 #      `<slug>:issue-<N>` key, else by the caller window's own repo; fid:<uuid> / a bare
 #      @fleet_id goes as wid:<uuid>; spawn / await with no repo take the caller's;
 #      a caller with no repo, or a one-repo fleet, hands the script no --repo
+#   R2 one code (EPIC T644 C3): task answers the task's code as id; await task / id
+#      take it (fleet-await.sh --task); a local ID's code stays the ID road
 #   Q  two groups (issue #3113, EPIC #3111 C2): `--group orch` is the server
 #      `fleet-orch` listing exactly spawn · await · children · answer_dialog · send · task · clear (T592)
 #      `--list` prints each server's list; `fleet` still answers a dispatch-group
@@ -1081,10 +1083,56 @@ set-claude-state.sh blocked
 fleet-peer-send.sh @77 -
 fleet-task-record.sh dispatch --title 看看风扇 --body-file - --spawn
 <<<为什么一直转>
-fleet-await.sh T7 --timeout 30
+fleet-await.sh --task T7 --timeout 30
 EOF
 diff "$WORK/r.want" "$LOG" > "$WORK/r.diff" || fail "R: the task record's tools ran the wrong argv" "$(cat "$WORK/r.diff")"
 ok "R ask → the record, else the red stamp alone (no comment); task → dispatch, words on stdin; await by T<n>"
+
+# --- R2: one code (EPIC T644 C3) ----------------------------------------------
+# task answers the task's code as `id` (stdout: code, then T<n>), T<n> only the
+# alias; await takes it as task (code, #code, ID or T<n> — fleet-await.sh --task),
+# and as id when no window's ID here answers to it; a code a window's ID does answer
+# to stays the ID road. The schema says codes; a non-reference is refused.
+cp "$BIN/fleet_id.py" "$WORK/bin/fleet_id.py"
+export FLEET_ID_DIR="$WORK/ids"; mkdir -p "$FLEET_ID_DIR"
+LFID=3fa85f64-5717-4562-b3fc-2c963f66afa6
+python3 - "$WORK/bin" "$LFID" <<'PY' || fail "R2: a local ID for the ID road"
+import sys; sys.path.insert(0, sys.argv[1]); import fleet_id
+fleet_id.append(sys.argv[2], {"ev": "opened", "short": fleet_id.short_for(sys.argv[2], [])})
+PY
+LIDC=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_id; print(fleet_id.encode(sys.argv[2])[:4])' "$WORK/bin" "$LFID")
+fakein fleet-task-record.sh 'printf "K7W0\nT7\n"'
+: > "$LOG"
+{
+  call 140 task '{"title":"看看风扇"}'
+  call 141 await '{"task":"K7W0","timeout":30}'
+  call 142 await '{"task":"#k7","timeout":30}'
+  call 143 await '{"id":"K7W0","timeout":30}'
+  call 144 await '{"id":"'"$LIDC"'","timeout":30}'
+  call 145 await '{"task":"K;7"}'
+} | serve "$WORK/r5"
+python3 - "$WORK/r5" "$WORK/bin/fleet-mcp.py" <<'PY' || fail "R2: one code" "$(cat "$WORK/r5")"
+import importlib.util, json, re, sys
+rows = {r["id"]: r for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
+t = rows[140]["result"]["structuredContent"]
+assert (t["id"], t["short"], t["alias"], t["task"]) == ("K7W0", "K7W0", "T7", "T7") and "session_id" not in t, t
+assert rows[145].get("error") or rows[145]["result"].get("isError"), rows[145]
+spec = importlib.util.spec_from_file_location("m", sys.argv[2])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+pat = m.TASK_REF["pattern"]
+for good in ("K7W0", "#k7", "T7", "3fa85f64-5717-4562-b3fc-2c963f66afa6"):
+    assert re.match(pat, good), good
+for bad in ("7", "K;7", "T-", ""):
+    assert not re.match(pat, bad), bad
+assert "T<n>" in m.TASK_REF["description"] and "code" in m.TASK_REF["description"]
+PY
+printf '%s\n' 'fleet-task-record.sh dispatch --title 看看风扇 --body-file -' '<<<>' \
+  'fleet-await.sh --task K7W0 --timeout 30' 'fleet-await.sh --task k7 --timeout 30' \
+  'fleet-await.sh --task K7W0 --timeout 30' "fleet-await.sh $LIDC --timeout 30" > "$WORK/r5.want"
+diff "$WORK/r5.want" "$LOG" > "$WORK/r5.diff" || fail "R2: the argv" "$(cat "$WORK/r5.diff")"
+rm -f "$WORK/bin/fleet_id.py"; unset FLEET_ID_DIR
+fakein fleet-task-record.sh 'echo T7'
+ok "R2 one code: task answers its code as id (T<n> the alias); await task/id take it (fleet-await.sh --task); a local ID's code stays the ID road"
 
 # --- P: any seat spawns, a worker's too (issue #4591 lifted #2960) ----------
 # Even a lib whose fleet_spawn_refused still refused (an older one) gates nothing:

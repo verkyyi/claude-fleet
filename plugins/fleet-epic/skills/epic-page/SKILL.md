@@ -159,6 +159,23 @@ itself warns on its 「PR / CI」 card), and know what it cannot see: whether th
 surface answers the theme's question, whether the subtitle says where it stops,
 whether 有空再做 is on theme. Those are yours.
 
+## The task page (T661)
+
+`/fleet-task-plan` renders ONE task's design page into the same frame — the same
+`<style>`, the same two layers, the same lint — so an EPIC page and a task page
+read as one family. It is not a copy of `template.html`: the layout is
+`bin/fleet-task-page.py`'s (`render <spec.json>`; `task-page.example.json` here is
+a whole approved one), which takes the `<head>` from `template.html` verbatim.
+Top to bottom: eyebrow 「任务设计 · repo · date」 (stamped 「任务 <ID>」 once opened)
+→ title + subtitle (what · where it stops) → number band (根本原因 / 要改的地方 /
+影响面) → `#problem` 现象 → `#cause` 原因 (lede · the step walk · 证据 folded; a
+feature: 为什么要做) → `#metrics` → `#charter` 目标与范围 (做 / 不做) → `#members`
+改法 (one card per place, 技术细节 folded) → `#risks` → `#signoff` 需要你定的事
+(+`#open`; 「点头即全部按建议」) → `#evidence` 上线证据 (folded).
+`epic-page-surface.sh --lint` holds it to the frame (`task-section`,
+`task-evidence`, `task-signoff`); `fleet-task-page.py body` turns it into the
+task's words, both layers, inside the record's 16 KB.
+
 ## The sections
 
 | id | page | what goes there |

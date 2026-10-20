@@ -145,7 +145,7 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 }
 
 // nodeWriteTools are what a node token may write through the write door
-// (claude-fleet#3106): a machine's own daemons — the steward, the idle reaper,
+// (claude-fleet#3106): a machine's own daemons — the idle reaper,
 // a remote row's menu — act on their owner's workers. Never placement (that is
 // /v1/node/place), configuration, a service or a GitHub comment.
 var nodeWriteTools = map[string]bool{"worker_message": true, "worker_stop": true, "worker_resume": true,

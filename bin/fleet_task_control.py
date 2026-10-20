@@ -32,6 +32,23 @@ def call(action, task, payload=None, timeout=15):
     return json.loads(result.stdout)
 
 
+def code(t, ref=""):
+    """How a task is named to a person (EPIC T644 C3): its written code (K5H0) — the
+    record's `short`, else this login's book — else its T<n> (an older hub)."""
+    t = t if isinstance(t, dict) else {}
+    if t.get("short"):
+        return t["short"]
+    tref = t.get("id") or t.get("task") or ref
+    try:
+        sys.path.insert(0, str(BIN))
+        import fleet_id
+        return fleet_id.task_code(tref) or tref
+    except Exception:
+        return tref
+    finally:
+        sys.path.pop(0)
+
+
 def verdict(task):
     if task is None:
         return "UNKNOWN"
@@ -57,8 +74,10 @@ def start_word(task, view):
     the hub's read plus this machine's newest ID opened for it (`fleet-id.sh
     of-task`: its window here, its ledger's segments). {} = nothing says it is not
     up; else {word, why, hint}."""
+    rec = view.get("task") if isinstance(view.get("task"), dict) else {}
+    tref = rec.get("id") or task   # the windows' @task is T<n> (a code resolves on the hub)
     try:
-        p = subprocess.run(["bash", str(BIN / "fleet-id.sh"), "of-task", task], capture_output=True, text=True,
+        p = subprocess.run(["bash", str(BIN / "fleet-id.sh"), "of-task", tref], capture_output=True, text=True,
                            timeout=30, stdin=subprocess.DEVNULL)
         row = json.loads(p.stdout or "{}") if p.returncode == 0 else {}
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -69,7 +88,8 @@ def start_word(task, view):
         import fleet_id
         w = fleet_id.start_word(view=dict(view, task=view.get("task") or {}), row=row)
         if w:
-            w["hint"] = fleet_id.start_hint(w["word"], task, row.get("id", ""), row.get("short", ""))
+            # respawn takes the task's code (EPIC T644 C3)
+            w["hint"] = fleet_id.start_hint(w["word"], code(rec, tref), row.get("id", ""), row.get("short", ""))
         return w
     finally:
         sys.path.pop(0)
@@ -82,7 +102,7 @@ def wait_task(task, timeout, interval):
         try:
             t, got = record_view(task, timeout=max(0.1, min(15, left)))
         except (ValueError, OSError, subprocess.SubprocessError):
-            print("UNKNOWN\ntask: %s\nnote: task record unavailable" % task)
+            print("UNKNOWN\ntask: %s\nnote: task record unavailable" % code(None, task))
             return 3
         state = verdict(t)
         # an open record whose agent never came up / went down is no wait (T642):
@@ -90,10 +110,10 @@ def wait_task(task, timeout, interval):
         w = start_word(task, got) if state == "WAITING" else {}
         if w:
             print("%s\ntask: %s\nnote: %s\nhint: %s" % ("NOT-STARTED" if w["word"] == "not_started" else "DROPPED",
-                                                       task, w["why"], w["hint"]))
+                                                       code(t, task), w["why"], w["hint"]))
             return 1
         if state != "WAITING" or time.monotonic() >= end:
-            print("%s\ntask: %s" % (state, task))
+            print("%s\ntask: %s" % (state, code(t, task)))
             return {"SUCCEEDED": 0, "FAILED": 1, "CANCELLED": 2, "REFUSED": 2}.get(state, 3)
         time.sleep(min(interval, max(0, end - time.monotonic())))
 
@@ -107,10 +127,10 @@ def closed(task):
     try:
         t = record(task, timeout=10)
     except (ValueError, OSError, subprocess.SubprocessError):
-        print("UNKNOWN\ntask: %s" % task)
+        print("UNKNOWN\ntask: %s" % code(None, task))
         return 3
     state = verdict(t)
-    print("%s\ntask: %s" % (state, task))
+    print("%s\ntask: %s" % (state, code(t, task)))
     return 1 if state == "WAITING" else 0
 
 
@@ -144,11 +164,11 @@ def children(task, as_json):
     if as_json:
         print(json.dumps(data, ensure_ascii=False))
         return 0
-    print("children of %s" % task)
+    print("children of %s" % code(data.get("task"), task))
     for child in data.get("children") or []:
         st = child.get("start")
         word = ("NOT-STARTED" if st["word"] == "not_started" else "DROPPED") if st else verdict(child)
-        print("%s %s %s %s%s" % (child["id"], word, child.get("ticket_ref", ""), child.get("title", ""),
+        print("%s %s %s %s%s" % (code(child), word, child.get("ticket_ref", ""), child.get("title", ""),
                                  ("  — %s → %s" % (st["why"], st["hint"])) if st else ""))
     sm = data["summary"]
     print("%d children · open %d · succeeded %d · failed %d · cancelled %d · refused %d" % (
@@ -187,12 +207,12 @@ def cancel(task, event):
     window's — the hub answers so, and the session is closed there."""
     t = record(task)
     if t.get("outcome"):
-        print("%s\ntask: %s" % (verdict(t), task))
+        print("%s\ntask: %s" % (verdict(t), code(t, task)))
         return 0
     call("mutate", task, dict(kind="transition", idempotency_key=event, generation=t.get("generation", 1),
                               expected_worker="", state="cancelled",
                               evidence="explicit cancel request; no window ever opened it"))
-    print("CANCELLED\ntask: %s\nnote: no window opened it; nothing to stop" % task)
+    print("CANCELLED\ntask: %s\nnote: no window opened it; nothing to stop" % code(t, task))
     return 2
 
 
@@ -213,16 +233,20 @@ def orphan(r, why):
 
 
 def child_label(r):
-    """A child named by its ID first (EPIC T497 C11): `#K3F9 (别名 T486)` — the worker_id's
-    second half is its ID; the record's T<n> only an alias note (one version). No ID ⇒ T<n>."""
+    """A child named by ONE code (EPIC T644 C3): its task's (`#K5H0`, the book), else
+    its window's ID's (the worker_id's second half, EPIC T497 C11) — never a T<n> beside
+    it. Neither known ⇒ T<n>."""
     fid = str(r.get("worker_id") or "").rpartition("/")[2]
     try:
         sys.path.insert(0, str(BIN))
         import fleet_id
+        own = fleet_id.task_code(r.get("task") or "") if r.get("task") else ""
+        if own:
+            return "#" + own
         if fleet_id.is_fid(fid):
             short = fleet_id.fold(fleet_id.read(fid))["opened"].get("short") \
                 or fleet_id.short_for(fid, fleet_id.known_ids([fid]))
-            return "#%s (别名 %s)" % (short, r["task"]) if r.get("task") else "#" + short
+            return "#" + short
     except Exception:
         pass
     finally:

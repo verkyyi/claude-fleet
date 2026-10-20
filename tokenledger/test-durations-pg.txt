@@ -771,7 +771,7 @@
 0.00	hub/api.TestPersonLoginsEveryPairWithHomeAndKind
 3.50	hub/api.TestPersonPushOnPutBeatAndReconnect
 0.63	hub/api.TestPersonRolesOffAddsNothing
-0.29	hub/api.TestPersonRulesValidation
+0.29	hub/api.TestPersonRetiredKeys
 0.19	hub/api.TestPersonUILangValidation
 0.57	hub/api.TestPersonUsage_UserReadsOwn
 0.28	hub/api.TestPersonalNodeNotPlacedFromElsewhere

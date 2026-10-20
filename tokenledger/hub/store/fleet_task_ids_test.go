@@ -111,6 +111,9 @@ func TestResolveTaskCodeNeverGuesses(t *testing.T) {
 	for i := 0; i < 3000 && x.ID == 0; i++ {
 		r := newLegacyTask(t, st, "operator", fmt.Sprintf("a%d", i))
 		p := store.FleetIDCode(r.FID)[:2]
+		if store.ParseTaskRef(p) > 0 {
+			continue // `T8` reads as the alias T8, never a code
+		}
 		if o, ok := seen[p]; ok {
 			x, y = o, r
 		}

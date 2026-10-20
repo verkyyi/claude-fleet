@@ -9,8 +9,10 @@
 # Nothing real is reached: fleet-thin.py is a FAKE in the dispatcher leg (it
 # records its argv), the real fleet-connect.py in C runs against a loopback
 # SSH-banner server and a fake `ssh` on PATH.
-#   A. one client  — `fleet` / `fleet mac-b` / `fleet --thin <s>` / `fleet shell
-#                    mac-b` all open fleet-thin.py (a machine word as --home);
+#   A. one client  — `fleet` / `fleet mac-b` / `fleet --thin <s>` all open
+#                    fleet-thin.py (a machine word as --home); `fleet shell
+#                    mac-b` is fleet-shell.py, the home's command line with no
+#                    client (EPIC T651 C5);
 #                    `fleet --old` and FLEET_CLIENT=shell say in one line that the
 #                    old client is gone and open it all the same; connect is never
 #                    run by the dispatcher itself
@@ -60,7 +62,12 @@ if "--pick" in sys.argv:
 sys.exit(0)
 EOF
 chmod +x "$SB/fleet-connect.py"
-rm -f "$SB/fleet-thin.py" "$SB/fleet-client-update.sh"
+rm -f "$SB/fleet-thin.py" "$SB/fleet-client-update.sh" "$SB/fleet-shell.py"
+cat > "$SB/fleet-shell.py" <<EOF
+#!/usr/bin/env python3
+import sys
+open("$WORK/thin.log", "a").write("shell [" + " ".join(sys.argv[1:]) + "]\\n")
+EOF
 cat > "$SB/fleet-thin.py" <<EOF
 #!/usr/bin/env python3
 import sys
@@ -79,7 +86,7 @@ st_eq 'A: fleet mac-b → the client with mac-b as home' 'thin [--home mac-b]' "
 ARGS=(--thin issue-7); run env
 st_eq 'A: fleet --thin <session> → the client on that session' 'thin [issue-7]' "$(cat "$WORK/thin.log")"
 ARGS=(shell mac-b); run env
-st_eq 'A: fleet shell mac-b (the old word) → the client, home mac-b' 'thin [--home mac-b]' "$(cat "$WORK/thin.log")"
+st_eq 'A: fleet shell mac-b → fleet-shell.py, never the client' 'shell [mac-b]' "$(cat "$WORK/thin.log")"
 ARGS=(--old); run env
 st_eq 'A: fleet --old → the client' 'thin []' "$(cat "$WORK/thin.log")"
 st_has 'A: … saying the old client is gone' "$(cat "$WORK/a.err")" '旧客户端已删除（#3008）'

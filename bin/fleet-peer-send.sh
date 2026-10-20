@@ -249,8 +249,48 @@ ended_or_die() {
 # first character is a letter.
 # A bare word no ID answers to is not a code (`plan` is a window NAME — refused below).
 idcode=''; fleet_is_idcode "$tgt" && idcode=1
+# a task's T<n> (one more version) or a short `#K5` names a task only (EPIC T644 C3)
+case "$tgt" in
+  T[1-9]|T[1-9]*[0-9]) case "${tgt#T}" in *[!0-9]*) ;; *) idcode=1 ;; esac ;;
+  '#'[A-Za-z]?*) idcode=1 ;;
+esac
 if [ -n "$idcode" ]; then
   fid=$(bash "$BIN/fleet-id.sh" resolve "$tgt" 2>&1); rc=$?
+  # A code no window's ID here answers to may be a TASK's (EPIC T644 C3: the task
+  # tool's `id`; `T<n>` for one more version): the hub's record names it, and the
+  # message goes to the live window bound to it (@task), else to its worker
+  # wherever it lives. Several tasks sharing it refuse with them named.
+  # FLEET_TASK_RECORD is the selftest's seam (a stub answering resolve / get).
+  case "$tgt" in [Tt]-*) ;; *)
+    if [ "$rc" -eq 1 ]; then
+      tres=$(bash "${FLEET_TASK_RECORD:-$BIN/fleet-task-record.sh}" resolve "${tgt#\#}" 2>"${TMPDIR:-/tmp}/fleet-peer-task.$$"); trc=$?
+      terr=$(cat "${TMPDIR:-/tmp}/fleet-peer-task.$$" 2>/dev/null); rm -f "${TMPDIR:-/tmp}/fleet-peer-task.$$"
+      case "$trc" in
+        0) tt=$(printf '%s\n' "$tres" | sed -n '$p'); tcode=$(printf '%s\n' "$tres" | sed -n '1p')
+           if [ -n "$SOCK" ]; then tsocks="$SOCK"; elif [ -n "${TMUX:-}" ]; then tsocks="-"; else tsocks=$(fleet_sockets); fi
+           tw=''
+           while IFS= read -r s; do
+             [ -n "$s" ] || continue
+             if [ "$s" = "-" ]; then rows=$(tmux list-windows -a -F '#{window_id}	#{@task}' 2>/dev/null)
+             else rows=$(tmux -L "$s" list-windows -a -F '#{window_id}	#{@task}' 2>/dev/null); fi
+             tw=$(printf '%s\n' "$rows" | awk -F'\t' -v t="$tt" '$2 == t { print $1; exit }')
+             [ -n "$tw" ] && { [ "$s" = "-" ] || SOCK=$s; break; }
+           done <<EOF_TASKS
+$tsocks
+EOF_TASKS
+           idtag="#$tcode"; idcode=''
+           if [ -n "$tw" ]; then tgt=$tw
+           else
+             twid=$(bash "${FLEET_TASK_RECORD:-$BIN/fleet-task-record.sh}" get "$tt" 2>/dev/null | python3 -c 'import json,sys
+try: print((json.load(sys.stdin).get("task") or {}).get("worker_id") or "")
+except ValueError: pass' 2>/dev/null)
+             [ -n "$twid" ] || die 1 "task $idtag has no session to take a message"
+             tgt="wid:$twid"
+           fi ;;
+        2) die 1 "$tgt names more than one task — name it longer: $(printf '%s' "$terr" | sed 's/^fleet-task-record: //' | tr '\n' ';')" ;;
+      esac
+    fi ;;
+  esac
   case "$tgt" in '#'*|[Tt]-*) ;; *) [ "$rc" -eq 1 ] && idcode='' ;; esac
 fi
 case "$idcode" in

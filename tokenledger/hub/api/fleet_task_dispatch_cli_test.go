@@ -55,8 +55,10 @@ func TestTaskDispatchCLI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch --agent codex: %v\n%s", err, out)
 	}
-	if strings.TrimSpace(string(out)) != "T1" {
-		t.Fatalf("the dispatch names its record alone: %s", out)
+	// the task's code first, then its T<n> (EPIC T644 C3) — nothing else
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 2 || lines[1] != "T1" {
+		t.Fatalf("the dispatch names its record alone (code, then T<n>): %s", out)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "gh.log")); len(b) > 0 {
 		t.Fatalf("a task dispatch reached gh: %s", b)
@@ -66,6 +68,9 @@ func TestTaskDispatchCLI(t *testing.T) {
 		t.Fatal(st, task)
 	}
 	rec := task["task"].(map[string]any)
+	if rec["short"] != lines[0] {
+		t.Fatalf("the first line is not the task's code: %q, the record says %v", lines[0], rec["short"])
+	}
 	if rec["ticket_ref"] != nil && rec["ticket_ref"] != "" || rec["resolved_agent"] != "codex" || strings.Contains(rec["request_payload"].(string), `n=1 v=`) {
 		t.Fatalf("association/provenance lost: %v", rec)
 	}

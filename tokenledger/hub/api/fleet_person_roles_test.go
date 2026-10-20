@@ -12,38 +12,28 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
-// A person's rule table, kept and pushed (claude-fleet#2784, EPIC #2781 C3);
-// the role overlays left with the person's role layer (claude-fleet#3130).
-
-var personRolesV1 = map[string]any{"bundle": map[string]any{
-	"rules": "| 编号 | 角色 | 条件 | 动作 | 档位 | 关键词 |\n|---|---|---|---|---|---|\n| 101 | steward | 问的是金额 | 必须问你（never:money） | ask | 报价, 金额 |\n",
-}}
-
-// rules: a table or a list of rows, at most 32 KiB, no credential in it. The
-// team layer takes none.
-func TestPersonRulesValidation(t *testing.T) {
+// A person's rule table and role overlays are retired (claude-fleet#2784's
+// `rules`, #3130's `roles`; T654): a personal PUT carrying either is refused
+// as retired and nothing is stored. The team layer never took them.
+func TestPersonRetiredKeys(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h, pAlice)
 	h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", time.Now())
-
-	code, out, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), personRolesV1, "")
-	if code != 200 || out.Version != 1 || !strings.Contains(string(out.Bundle), `| 101 | steward |`) {
-		t.Fatalf("a valid rules layer: HTTP %d %s", code, raw)
-	}
-	if code, _, raw, _ := teamCall(t, h, http.MethodPut, asOperator, personRolesV1, ""); code != http.StatusUnprocessableEntity || !strings.Contains(raw, "is not something a team hands out") {
-		t.Fatalf("team PUT with rules: HTTP %d %s, want 422", code, raw)
-	}
 	for name, b := range map[string]map[string]any{
-		"rules a number":  {"rules": 3},
-		"rules an object": {"rules": map[string]any{"5": "x"}},
-		"rule not a row":  {"rules": []any{"x"}},
-		"rules over cap":  {"rules": strings.Repeat("b", 33<<10)},
-		"rule secret":     {"rules": []any{map[string]any{"n": 101, "action": "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz' x"}}},
+		"rules a table": {"rules": "| 编号 | 角色 | 条件 | 动作 | 档位 | 关键词 |\n|---|---|---|---|---|---|\n| 101 | steward | x | y | ask | z |\n"},
+		"rules a list":  {"rules": []any{}},
+		"roles":         {"roles": map[string]any{}},
 	} {
 		code, _, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), map[string]any{"bundle": b}, "")
-		if code != http.StatusUnprocessableEntity {
-			t.Errorf("%s: HTTP %d %s, want 422", name, code, raw)
+		if code != http.StatusUnprocessableEntity || !strings.Contains(raw, "is retired") {
+			t.Errorf("%s: HTTP %d %s, want 422 retired", name, code, raw)
 		}
+		if code, _, raw, _ := teamCall(t, h, http.MethodPut, asOperator, map[string]any{"bundle": b}, ""); code != http.StatusUnprocessableEntity {
+			t.Errorf("team %s: HTTP %d %s, want 422", name, code, raw)
+		}
+	}
+	if code, _, body, _ := personCall(t, h, http.MethodGet, asSession(pAlice), nil, ""); code == 200 && (strings.Contains(body, `"rules"`) || strings.Contains(body, `"roles"`)) {
+		t.Fatalf("GET after retired PUTs: %s", body)
 	}
 }
 
@@ -159,7 +149,7 @@ func TestPersonPushOnPutBeatAndReconnect(t *testing.T) {
 		noPerson(t, n, k+" before any layer")
 	}
 
-	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), personRolesV1, ""); code != 200 {
+	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), personV1, ""); code != 200 {
 		t.Fatalf("Alice PUT: HTTP %d %s", code, raw)
 	}
 	p5, p4 := nextPerson(t, a5, "alice@mac-e"), nextPerson(t, a4, "alice@mac-e-mac-c")

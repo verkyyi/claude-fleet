@@ -173,5 +173,30 @@ print("200")
         self.assertEqual(calls.call_count, 1)
         self.assertIn("CANCELLED", out.getvalue())
 
+    def test_one_code_names_the_task(self):
+        # EPIC T644 C3: a verdict / a children list names a task by its code — the
+        # record's `short`, else the login's book — never its T<n>; an older hub
+        # (no code anywhere) keeps T<n>.
+        t = dict(id="T7", short="K7W0", authority_version=1, generation=1, state="succeeded", outcome="succeeded")
+        with patch.object(control, "call", return_value={"task": t}), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(control.wait_task("k7", 5, 1), 0)
+        self.assertEqual(out.getvalue(), "SUCCEEDED\ntask: K7W0\n")
+        with patch.object(control, "call", return_value={"task": t}), contextlib.redirect_stdout(io.StringIO()) as out:
+            control.closed("K7W0")
+        self.assertNotIn("T7", out.getvalue())
+        kids = dict(children=[dict(id="T8", short="K8AB", title="x", outcome=""), dict(id="T9", title="y", outcome="")])
+        with tempfile.TemporaryDirectory() as d, patch.dict(os.environ, FLEET_ID_DIR=d), \
+             patch.object(control, "call", return_value=kids), contextlib.redirect_stdout(io.StringIO()) as out:
+            Path(d, "task-codes.tsv").write_text("T9\tK9CD\tx\n")
+            control.children("K7W0", False)
+            self.assertEqual(control.child_label(dict(task="T9", worker_id="u/issue-4")), "#K9CD")
+        lines = out.getvalue().splitlines()
+        self.assertTrue(lines[1].startswith("K8AB ") and lines[2].startswith("K9CD "), lines)
+        old = dict(t, short="")
+        with tempfile.TemporaryDirectory() as d, patch.dict(os.environ, FLEET_ID_DIR=d), \
+             patch.object(control, "call", return_value={"task": old}), contextlib.redirect_stdout(io.StringIO()) as out:
+            control.wait_task("T7", 5, 1)
+        self.assertEqual(out.getvalue(), "SUCCEEDED\ntask: T7\n")
+
 if __name__ == "__main__":
     unittest.main()

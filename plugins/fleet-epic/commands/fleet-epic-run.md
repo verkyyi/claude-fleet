@@ -131,7 +131,9 @@ its member's chain — never strip it), `spawn: true`, and `coding_agent` = its
 `agent` when it names one. Because this session carries the parent task, the hub binds the new record
 as its child (`parent_task`); its session reports back here.
 
-The first stdout line is the child's `T<m>`. Then record the version it starts on
+The answer names the child by its code (`id`, the first stdout line — EPIC T644
+C3); its `T<m>` is the `alias` (the next line; an older hub prints `T<m>` alone).
+Then record the version it starts on
 (issue #2934 — the report says 「本批跨了 K 个版本」):
 
 ```sh

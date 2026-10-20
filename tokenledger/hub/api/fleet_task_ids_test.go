@@ -45,6 +45,9 @@ func TestNodeTaskIDs(t *testing.T) {
 		_, r := nodeTaskCall(t, h, bob, http.MethodPost, NodeTasksPath, map[string]any{"token": fmt.Sprintf("orch:a%d", i), "title": "x"})
 		f, _ := r["fid"].(string)
 		p := store.FleetIDCode(f)[:2]
+		if store.ParseTaskRef(p) > 0 {
+			continue // `T8` reads as the alias T8, never a code
+		}
 		if _, ok := seen[p]; ok {
 			pair = p
 		}
@@ -75,6 +78,24 @@ func TestNodeTaskIDs(t *testing.T) {
 		t.Fatalf("T1 after backfill = %v", got)
 	}
 
+	// EPIC T644 C6: the reconcile road — dry by default, a cutoff is T<n>, undo answers
+	if st, got := nodeTaskCall(t, h, bob, http.MethodPost, NodeTasksPath+"/reconcile", map[string]any{"before": "T3"}); st != 200 ||
+		got["apply"] != false || got["before"] != float64(3) || got["cancelled"] != float64(2) {
+		t.Fatalf("dry reconcile = %d %v", st, got)
+	}
+	if st, _ := nodeTaskCall(t, h, bob, http.MethodPost, NodeTasksPath+"/reconcile", map[string]any{"before": "3"}); st != 400 {
+		t.Fatalf("reconcile with a bare number = %d; want 400", st)
+	}
+	if st, got := nodeTaskCall(t, h, bob, http.MethodPost, NodeTasksPath+"/reconcile", map[string]any{"before": "T3", "apply": true}); st != 200 || got["cancelled"] != float64(2) {
+		t.Fatalf("apply reconcile = %d %v", st, got)
+	}
+	if _, got := nodeTaskCall(t, h, bob, http.MethodGet, NodeTasksPath+"/T1", nil); got["task"].(map[string]any)["state"] != store.TaskCancelled {
+		t.Fatalf("T1 after reconcile = %v", got)
+	}
+	if st, got := nodeTaskCall(t, h, bob, http.MethodPost, NodeTasksPath+"/reconcile", map[string]any{"undo": true}); st != 200 || got["undone"] != float64(2) {
+		t.Fatalf("undo = %d %v", st, got)
+	}
+
 	resp, err := h.http.Client().Get(h.http.URL + "/version")
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +104,8 @@ func TestNodeTaskIDs(t *testing.T) {
 	var v struct {
 		Capabilities []string `json:"capabilities"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil || !strings.Contains(strings.Join(v.Capabilities, " "), "task_ids") {
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil || !strings.Contains(strings.Join(v.Capabilities, " "), "task_ids") ||
+		!strings.Contains(strings.Join(v.Capabilities, " "), "task_state") {
 		t.Fatalf("/version capabilities = %v %v", v.Capabilities, err)
 	}
 }

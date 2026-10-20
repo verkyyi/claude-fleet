@@ -66,6 +66,14 @@ unless the hub does not answer either (issue #3007): then it is this computer's
 own line that is down, the home is kept and the view with it. No other machine
 to go to (`--avoid` exits 1): back to the same home, its view and the backoff
 (issue #4829) — never asking the hub for nothing until the person gives up.
+A home that answers but whose 看台 keeps breaking (EPIC T651 C4): ssh got
+through (not ssh's 255, not rc 3) yet the view never came up, or ended with
+a code that is not a leave (0 · 129) within FLEET_THIN_CRASH_SECS (60) —
+FLEET_THIN_VIEW_FAILS (3) of those in a row and it stops reconnecting into it
+(and never 换家: the home answers): one line 「看台连续 3 次没起来 — 已把你放在
+<home> 的命令行」 + how back, then a plain interactive ssh on the same route
+and certificate, the home's login shell in $HOME with FLEET_NO_VIEW=1
+(fleet-login.zsh starts no 看台 under it); once that shell ends, the 看台 again.
 No fleet of yours there (issue #3054): the home answers `no fleet session is
 live` (rc 3) — a newcomer whose only login is the computer they type on — or the
 hub is still opening their first login. Then not a backoff but the old client's
@@ -105,13 +113,14 @@ byte back, first_ms = spawn → the first valid `cur`: the view drawn; net =
 `end=<word>` on a connection that did not end 0 — what ssh said last: timeout ·
 reset · broken-pipe · closed-remote · closed · unreachable · refused ·
 connect-timeout, empty when it said none of them, #4828) · rehome ·
-upload · show · exec · quit · first (the first-session road, #3054) · offline (no 换家: the hub did not answer either) · run (`--run`: one command on the home, issue #3004 —
+upload · show · exec · quit · shell (the home's command line, C4) · first (the first-session road, #3054) · offline (no 换家: the hub did not answer either) · run (`--run`: one command on the home, issue #3004 —
 reason = its first word).
 
 Knobs: FLEET_THIN_UP_SECS (10), FLEET_THIN_BACKOFF ("1,2,4,8,16,30"),
 FLEET_THIN_ALIVE_SECS (5) × FLEET_THIN_ALIVE_MAX (3): the keepalive — a line
 silent that long is given up (#4828),
-FLEET_THIN_REHOME_AFTER (3), FLEET_THIN_HUB_PROBE_SECS (4), FLEET_THIN_POLL_SECS (120),
+FLEET_THIN_REHOME_AFTER (3), FLEET_THIN_VIEW_FAILS (3), FLEET_THIN_CRASH_SECS (60),
+FLEET_THIN_HUB_PROBE_SECS (4), FLEET_THIN_POLL_SECS (120),
 FLEET_THIN_UPDATE_IDLE (30), FLEET_THIN_UPDATE_HOLD (3600), FLEET_REMOTE_BIN (.claude/fleet/bin),
 FLEET_CLIENT_PASTE=0 (drops and ⌃V byte for byte), FLEET_ITERM_KEYS=0,
 FLEET_THIN_FIRST_RETRY (10), FLEET_HOME_FIRST_OPENING_MAX (2400), FLEET_THIN_FIRST_SETTLE (600),
@@ -645,6 +654,8 @@ class Thin:
         self.updating = False   # this line was ended to switch to it
         self.update_hold = 0.0  # a switch that did not happen: no other until then
         self.last_key = time.time()
+        self.conn_secs = 0.0    # how long the last connection lasted (view_broke)
+        self.shell_pid = 0      # the home's command line (home_shell): in OUR process group
 
     # -- the argv ---------------------------------------------------------
     def argv(self, reconnect):
@@ -930,7 +941,49 @@ class Thin:
              net=str(j.get("net") or ""), end="" if rc == 0 else ssh_end(self.tail))
         if up:
             self.resume = True
+        self.conn_secs = time.time() - t0
         return rc, up, ""
+
+    # -- the 看台 keeps breaking: the home's command line (EPIC T651 C4) --
+    def view_broke(self, rc, up, why):
+        """This connection reached the home (ssh ran: no pick failure, not ssh's
+        own 255) but the 看台 there did not hold: it never came up, or it ended
+        with a code that is not a leave (0 · 129) within FLEET_THIN_CRASH_SECS (60)."""
+        if why or self.quit or rc in (0, 129, 255, NO_FLEET):
+            return False
+        return not up or self.conn_secs < env_num("FLEET_THIN_CRASH_SECS", 60)
+
+    def home_shell(self, why):
+        """FLEET_THIN_VIEW_FAILS (3) broken 看台 in a row: no more reconnects into
+        it — one plain interactive ssh to the same home on the same route and
+        certificate (`fleet-connect.py --argv`), its login shell in $HOME with
+        FLEET_NO_VIEW=1 (fleet-login.zsh starts no 看台 under it), after one line
+        saying why and how back. The 看台 is tried again once that shell ends."""
+        j = self.base
+        if not j:
+            return False
+        home = self.home or j.get("machine") or "?"
+        remote = 'cd && FLEET_NO_VIEW=1 exec "${SHELL:-/bin/sh}" -l'
+        cmd = self.command(j, ["-tt", "-o", "ControlMaster=no", "-o", "ControlPath=none"] + alive_opts(), remote)
+        tlog("shell", home, (j.get("route") or {}).get("name") or ("local" if j.get("local") else ""),
+             "", "", "", "", why)
+        self.restore_tty()
+        write_out(RESET + ("fleet · %s\r\n" % tr("thin_shell_fmt", why, home)).encode("utf-8", "replace")
+                  + ("fleet · %s\r\n" % tr("thin_shell_back")).encode("utf-8", "replace"))
+        old = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            p = subprocess.Popen(cmd, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+            self.shell_pid = p.pid
+            rc = p.wait()
+        except OSError as e:
+            rc = 127
+            write_out(("fleet · %s: %s\r\n" % (cmd[0], e.strerror)).encode("utf-8", "replace"))
+        finally:
+            self.shell_pid = 0
+            signal.signal(signal.SIGINT, old)
+        tlog("shell", home, "", "", "", "", rc, "the shell ended: the 看台 again")
+        write_out(("fleet · %s\r\n" % tr("thin_shell_done_fmt", home)).encode("utf-8", "replace"))
+        return True
 
     def pump(self, cmd, token, reconnect=False):
         """ssh under our pty: (rc, time of the first byte | None, time of the first valid cur | None).
@@ -1136,6 +1189,11 @@ class Thin:
         us, nothing stays."""
         if self.attachments:
             self.attachments.close()
+        if self.shell_pid:
+            try:
+                os.kill(self.shell_pid, signal.SIGHUP)   # never killpg: its group is ours
+            except OSError:
+                pass
         if self.child:
             try:
                 os.killpg(self.child, signal.SIGHUP)
@@ -1383,7 +1441,7 @@ class Thin:
                    (os.environ.get("FLEET_THIN_BACKOFF") or "1,2,4,8,16,30").split(",") if x.strip()] or [1.0]
         rehome = int(env_num("FLEET_THIN_REHOME_AFTER", 3))
         self.profile(True)
-        k = fails = 0
+        k = fails = broke = 0
         offline = False
         try:
             while True:
@@ -1442,6 +1500,15 @@ class Thin:
                     self.resume = self.up_home == self.home
                     tlog("rehome", self.home, "", "", "", "", "", "no other home: back to %s" % self.home)
                     write_out(("fleet · %s\r\n" % tr("thin_rehome_back_fmt", self.home)).encode("utf-8", "replace"))
+                broke = broke + 1 if self.view_broke(rc, up, why) else 0
+                if broke >= int(env_num("FLEET_THIN_VIEW_FAILS", 3)):
+                    # the line is fine, the 看台 is not: the home's command line, not
+                    # another reconnect into it (nor 换家 — the home answers)
+                    why_v = tr("thin_view_never_fmt", broke) if not up else tr("thin_view_crash_fmt", broke, rc)
+                    self.home_shell(why_v)
+                    broke = fails = k = 0
+                    self.mute()
+                    continue
                 if up:
                     fails, k, self.firsts = 0, 0, 0
                     self.up_home, self.restart_end = self.home, 0.0

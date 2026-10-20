@@ -202,13 +202,12 @@ function rowsOf(u: Usage, mode: Mode): Row[] {
   return list.map((r, i) => {
     const n = epicNum(r.epic);
     let title: string;
-    if (r.kind === "orch") title = tr("编排与管家（你开的）", "Orchestrator & steward (yours)");
-    else if (r.kind === "none") title = tr(...NONE[mode]);
+    if (r.kind === "none") title = tr(...NONE[mode]);
     else if (mode === "issue") title = r.issue ? `#${r.issue}${r.title ? " " + r.title : ""}` : r.title || "—";
     else if (mode === "repo") title = repoName(r.repo || r.title);
     else title = n ? `#${n}${r.epic_title || r.title ? " " + (r.epic_title || r.title) : ""}` : r.title || "—";
     const sub = mode === "issue" ? [repoName(r.repo), n ? tr(`批次 #${n}`, `Batch #${n}`) : ""].filter(Boolean).join(" · ") : "";
-    return { key: `${mode}${i}`, title, sub, tokens: num(r.tokens), share: pct(num(r.tokens), total), muted: r.kind === "orch" || r.kind === "none", item: r };
+    return { key: `${mode}${i}`, title, sub, tokens: num(r.tokens), share: pct(num(r.tokens), total), muted: r.kind === "none", item: r };
   });
 }
 

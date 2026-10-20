@@ -1031,6 +1031,21 @@ fleet_ui_t() {
     en:thin_first_wait_fmt)     printf 'your first session cannot open yet (%s) — this heals by itself, waiting (up to %ss more)' "${1:-}" "${2:-}" ;;
     zh:thin_rehome_back_fmt)    printf '除了 %s 没有别的在线机器，回到它接着重连' "${1:-}" ;;
     en:thin_rehome_back_fmt)    printf 'no other machine is online: back to %s, reconnecting' "${1:-}" ;;
+    # the 看台 keeps breaking: the home's command line instead (EPIC T651 C4)
+    zh:thin_view_never_fmt)     printf '看台连续 %s 次没起来' "${1:-}" ;;
+    en:thin_view_never_fmt)     printf 'the 看台 did not come up %s times in a row' "${1:-}" ;;
+    zh:thin_view_crash_fmt)     printf '看台连续 %s 次起来就退出（代码 %s）' "${1:-}" "${2:-}" ;;
+    en:thin_view_crash_fmt)     printf 'the 看台 quit right after it came up %s times in a row (code %s)' "${1:-}" "${2:-}" ;;
+    zh:thin_shell_fmt)          printf '%s — 已把你放在 %s 的命令行' "${1:-}" "${2:-}" ;;
+    en:thin_shell_fmt)          printf '%s — you are at the command line on %s' "${1:-}" "${2:-}" ;;
+    zh:thin_shell_back)         printf '输入 exit 回看台（在这台机器上输入 fleet 也行）；排查看 ~/.config/claude-fleet/logs/' ;;
+    en:thin_shell_back)         printf 'type exit to go back to the 看台 (or fleet on that machine); logs in ~/.config/claude-fleet/logs/' ;;
+    zh:thin_shell_done_fmt)     printf '离开了 %s 的命令行，再试看台…' "${1:-}" ;;
+    en:thin_shell_done_fmt)     printf 'left the command line on %s: trying the 看台 again…' "${1:-}" ;;
+    zh:entry_view_none_fmt)     printf '看台没起来（%s）— 已把你放在 %s 的命令行。输入 fleet 回看台' "${1:-}" "${2:-}" ;;
+    en:entry_view_none_fmt)     printf 'the 看台 did not come up (%s): you are at the command line on %s. Type fleet to go back' "${1:-}" "${2:-}" ;;
+    zh:entry_view_crash_fmt)    printf '看台意外退出（代码 %s）— 已把你放在 %s 的命令行。输入 fleet 回看台' "${1:-}" "${2:-}" ;;
+    en:entry_view_crash_fmt)    printf 'the 看台 quit unexpectedly (code %s): you are at the command line on %s. Type fleet to go back' "${1:-}" "${2:-}" ;;
     zh:thin_first_no_lease_fmt) printf '入口没给这台电脑客户端租约（%s）' "${1:-}" ;;
     en:thin_first_no_lease_fmt) printf 'the hub gave this computer no client lease (%s)' "${1:-}" ;;
     zh:thin_first_timeout_fmt)  printf '等了 %s 分钟，机器还没开好' "${1:-}" ;;

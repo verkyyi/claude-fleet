@@ -6,6 +6,7 @@
     fleet connect --proxy MACHINE
     fleet connect --pick [MACHINE] [--route ROUTE]
     fleet connect --argv [MACHINE] [--avoid MACHINE] [-o SSH-OPTION]…
+    fleet connect --argv --offline [MACHINE]
     fleet connect --probe-direct MACHINE
     fleet connect --cert-check
     fleet connect --principal-hint < BODY
@@ -110,6 +111,14 @@ machine) — {"local": true, "machine", "argv": []}: run the remote command here
 no ssh. FLEET_CONNECT_SELF=ssh keeps the ssh to itself. The hub opening this
 person's first login (claude-fleet#3054) → {"opening": {state, eta_s, machine,
 ask, …}} and exit 1: the thin client waits on it itself.
+
+--offline (EPIC T651 C5, `fleet shell` with the hub down): with --argv or
+--print, no hub is asked at all — the machine named, else the one this computer
+entered last (connect.json), else the first in ~/.ssh/fleet-ssh-config; its
+remembered routes, measured, never the relay. The certificate is offered while
+it is still valid; once it is not, ONLY the machine's entry port (#3075), which
+takes this computer's own key off the keys file kept on that machine — no other
+route is guessed at, and a machine with none exits 1 saying so.
 
 --cert-check (claude-fleet#2457): the doctor's `cert` row — this computer's
 ~/.ssh/fleet-cert-cert.pub, its principals and how long it is still valid, and
@@ -1900,6 +1909,49 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
     return connect(name, hub, token, verbose, retest, print_only, ssh_args, info=home, ssh_opts=ssh_opts)
 
 
+def offline(want, print_only, ssh_args, ssh_opts=()):
+    """--offline: the remembered way in, no hub (see the module's doc)."""
+    cache = load_cache()
+    entries = cache.get("machines") if isinstance(cache.get("machines"), dict) else {}
+    key = want or cache.get("last") or ""
+    ent = entries.get(key) if key else None
+    if isinstance(ent, dict) and isinstance(ent.get("machine"), dict):
+        m, login = ent["machine"], ent.get("login") or machine_login(ent["machine"], None)
+    else:
+        try:
+            with open(ssh_config_snippet_path()) as f:
+                info = parse_ssh_config_snippet(f.read())
+        except OSError:
+            info = {"machines": []}
+        m = pick_machine(info.get("machines") or [], want, cache.get("last"))
+        login = machine_login(m, info) if m else ""
+    if m is None:
+        die(("入口不在，这台电脑也没记住叫 %s 的机器" % want) if want else
+            "入口不在，这台电脑也没记住连过的机器（入口在时先连一次）", 1)
+    label = m.get("alias") or m.get("hostname")
+    left = load_login_module().cert_remaining()
+    rows = [r for r in route_rows(m, "") if r.get("host")]
+    cert_ok = left is not None and left > 60
+    if not cert_ok:
+        # no certificate to offer: the entry port, which takes this computer's own key
+        rows = [r for r in rows if is_entry(r)]
+        if not rows:
+            die("入口不在时进不去 %s：证书%s，这台也没有记住的入口端口（入口在了再试，或 fleet login）"
+                % (label, "已过期" if left is not None else "不在这台电脑上"), 1)
+    pin = pin_for(want, *machine_names(m))
+    r = pinned_row(rows, pin) if pin else None
+    if r is not None and not cert_ok and not is_entry(r):
+        r = None   # a pinned line the device key does not open
+    if r is None:
+        rows = measure(rows, "", "", max(1, env_num("FLEET_CONNECT_PROBES", 3, int)),
+                       env_num("FLEET_CONNECT_TIMEOUT", 4.0))
+        r = rows[0] if rows and rows[0]["ms"] else None
+        if r is None:
+            die("入口不在，%s 记住的线路也都不通（%s）" % (label, ", ".join(x["name"] for x in rows) or "无"), 1)
+    clog("pick", label, r["kind"], median(r["ms"]) if r.get("ms") else "", "ok", "offline %s" % r["name"])
+    return run_ssh(m, route_rec(r), login, "", print_only, ssh_args, ssh_opts, pin=pin or "")
+
+
 CERT_WARN_UNDER = 3600  # the doctor's cert row WARNs inside the certificate's last hour
 
 
@@ -2029,6 +2081,8 @@ def main(argv):
                     help="certificate + the hub's machine pick as one JSON line; no measuring, no ssh (the shell)")
     ap.add_argument("--argv", action="store_true",
                     help="the whole of `fleet` up to ssh, the ssh as one JSON line (the thin client)")
+    ap.add_argument("--offline", action="store_true",
+                    help="with --argv / --print: no hub at all — the remembered machine and routes (`fleet shell`)")
     ap.add_argument("--avoid", metavar="MACHINE", default="",
                     help="with --argv: never MACHINE — the next online one (the thin client's 换家)")
     ap.add_argument("--cert-check", action="store_true",
@@ -2060,6 +2114,10 @@ def main(argv):
             save_pin(target, a.route)
         elif not a.pick:
             die("--route: name the machine (fleet connect <machine> --route %s)" % a.route)
+    if a.offline:
+        if not a.print_only:
+            die("--offline goes with --argv or --print")
+        return offline(a.machine, a.print_only, ssh_args, a.ssh_opts)
     conf = load_hub_conf()
     # The address lives in fleet.conf (issue #1623); hub.json keeps the token, and
     # its old "url" is read for one version.

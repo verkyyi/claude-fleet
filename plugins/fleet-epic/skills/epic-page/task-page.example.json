@@ -1,0 +1,161 @@
+{
+ "repo": "verkyyi/claude-fleet",
+ "date": "2026-10-20",
+ "kind": "fix",
+ "title": "批次报告送不到你手里",
+ "sub": "定位「无主回报」的原因并修好：开批次的那一层会话关掉后，批次的完成报告照样送到还活着的上一层——今天丢的 3 份能补送、以后 0 份丢失就停。",
+ "band": [
+  {
+   "n": "1",
+   "k": "根本原因"
+  },
+  {
+   "n": "3",
+   "k": "要改的地方"
+  },
+  {
+   "n": "15",
+   "k": "已经丢的回报"
+  }
+ ],
+ "problem": [
+  "今天 3 个批次跑完都写了报告，但完成通知<strong>一个都没到</strong>编排会话：去掉本机换号（03:52）、自测瘦身（12:02）、E4 残留清理（13:01）。",
+  "它们都被记进了一个没人看的「无主回报」文件；这个文件里一共已经躺着 <strong>15 条</strong>。",
+  "你只能在批次窗口里自己看，或者等我去翻。"
+ ],
+ "cause": {
+  "lede": "批次是「编排 → 计划页会话 → 批次驱动」三层开出来的；计划页会话出完页面就关了，它占用的临时编号随后被别的新会话重新领走——驱动报完成时，老规矩把它判成「上一代的孩子」，直接记成无主，<strong>没有再按身份编号往上找到还活着的编排会话</strong>。",
+  "steps": [
+   [
+    "1",
+    "编排开出「计划页会话」（如 E4 的 JWGS，临时编号 scratch-50）"
+   ],
+   [
+    "2",
+    "你点头后，计划页会话开出批次驱动（E4 的 YRV3），驱动记下「我的上一层是 scratch-50，身份 JWGS」"
+   ],
+   [
+    "3",
+    "计划页会话结束、窗口关闭；scratch-50 这个临时编号被后来的新会话重新领用"
+   ],
+   [
+    "4",
+    "重新领用时，系统把驱动的「上一层」改记为「scratch-50 的上一代（已退役）」"
+   ],
+   [
+    "5",
+    "驱动报完成：看到「上一层已退役」就直接记进退役账本 + 无主回报，<strong>结束</strong>"
+   ],
+   [
+    "6",
+    "本该走的路——按身份 JWGS 往上找：JWGS 已关 → 它的上一层是编排会话 → 编排还活着 → 送达——<strong>根本没走到</strong>"
+   ]
+  ],
+  "evidence": [
+   "<code>bin/fleet-report-parent.sh:300-305</code>：窗口有 <code>@origin_retired</code> 时置 <code>RETIRED_GEN</code>；<code>:728-750</code>「earlier generation's child」分支记退役账本、调 <code>orphan</code>、<code>exit 0</code>——在 <code>:778-797</code> 按身份路由（<code>fleet_id_take</code>，EPIC T497 C4）<strong>之前</strong>就退出了。",
+   "现场：E4 驱动窗口 @1197 的选项只有 <code>@origin_fid 6776af0c…</code>（JWGS）与 <code>@origin_retired \"verkyyi-claude-fleet:scratch-50#1792490283.78940\"</code>，<code>@origin</code> 已被 <code>fleet_scratch_gen_new</code>（<code>bin/fleet-lib.sh:7331</code> 起）移走。",
+   "身份路由本身是对的：<code>fleet-id.sh route 6776af0c…</code> 现在就返回 <code>178b03b8…（编排）· parent</code>，<code>fleet_id_window</code> 也找得到编排窗口 @1016。",
+   "无主文件 <code>~/.config/claude-fleet/global/orphan-reports.ndjson</code>：15 行；今天 3 行的 <code>parent</code> 分别是 scratch-43 / scratch-34 / scratch-50（都已被重新领用）。",
+   "为什么以前没事：「退役一代」规则（#1538）早于身份编号（T497）；那时没有别的办法认出老父亲，只能记无主。现在每个会话都有不会重复的身份编号，这条规则对有身份的孩子已经不需要了。"
+  ]
+ },
+ "metrics": [
+  [
+   "上一层还有活着的会话、回报却成了无主",
+   "今天 3 次",
+   "0 次"
+  ],
+  [
+   "已经躺在无主文件里、还没去处的回报",
+   "15 条",
+   "0 条"
+  ]
+ ],
+ "charter": {
+  "do": [
+   "有身份编号的会话报结果时，先按身份往上找还活着的会话，找到就送",
+   "临时编号被重新领用时，不再把有身份的孩子改记成「上一代」",
+   "真正没人可送时，提醒你（面板一行 + 微信），不再只写进一个没人看的文件",
+   "把今天丢的 3 份批次报告补送给编排"
+  ],
+  "dont": [
+   "没有身份编号的老会话（切换前的）：保持原样",
+   "跨机器转送的规则"
+  ]
+ },
+ "members": [
+  {
+   "key": "A",
+   "name": "回报先按身份找人",
+   "line": "退役判断放到身份路由之后",
+   "what": "报结果时：有身份编号 ⇒ 先按身份找（自己 → 接班的 → 上一层，一直往上），找到活着的就送；只有身份也找不到时，才走旧的「退役账本」。",
+   "tech": [
+    [
+     "方案",
+     "<code>bin/fleet-report-parent.sh</code>：把 <code>:778-797</code> 的 <code>fleet_id_take \"$ofid\"</code> 段移到 <code>:728</code> 的 earlier-generation 分支之前；<code>ofid</code> 是已知身份时，<code>RETIRED_GEN</code> 只用于在退役账本里补记一行（不再 <code>exit</code>），投递走身份路由结果（信封带 <code>relayed_from</code>）。<code>ofid</code> 为空（切换前的会话）⇒ 原路径不变。"
+    ],
+    [
+     "完成判据",
+     "<code>fleet-children-selftest.sh</code> §3、<code>origin-selftest.sh</code> D 新腿：父窗口关闭 + 临时编号被重新领用 + 祖父活着 ⇒ 祖父收到；无身份的孩子仍进退役账本。"
+    ]
+   ]
+  },
+  {
+   "key": "B",
+   "name": "重新领用编号时不改有身份的孩子",
+   "line": "从源头不再制造「上一代的孩子」",
+   "what": "临时编号被重新领用时，带身份编号的孩子保持原来的上一层记录，只给没有身份的老孩子打「退役」标记。",
+   "tech": [
+    [
+     "方案",
+     "<code>bin/fleet-lib.sh</code> <code>fleet_scratch_gen_new</code>（7331 起）：窗口有 <code>@origin_fid</code> 且是已知身份 ⇒ 不移动 <code>@origin</code> 到 <code>@origin_retired</code>（面板仍按身份挂到正确的父下）；其余不变。"
+    ],
+    [
+     "完成判据",
+     "<code>origin-selftest.sh</code> D：重新领用后带身份孩子的 <code>@origin_fid</code> / 面板挂靠不变。"
+    ]
+   ]
+  },
+  {
+   "key": "C",
+   "name": "真没人收时提醒你",
+   "line": "无主回报不再静静躺在文件里",
+   "what": "回报确实无人可送时：面板顶栏一行「有 N 条无主回报」，可点开看；同时推一条微信（同一批次不重复推）。补送今天的 3 份给编排。",
+   "tech": [
+    [
+     "方案",
+     "<code>orphan()</code>（<code>bin/fleet-report-parent.sh:533-595</code>）写行后调用已有的提醒通道（<code>bin/fleet-orphan-reports.py</code> 的读者 + 现有的微信 / 通知出口）；顶栏读未读计数。一次性脚本：对 <code>orphan-reports.ndjson</code> 里带已知身份、上一层仍活着的行补投递（dry-run 先列出，标 <code>redelivered</code> 防重复）。"
+    ],
+    [
+     "完成判据",
+     "选中测试：无主时顶栏出现计数；补送脚本幂等。"
+    ]
+   ]
+  }
+ ],
+ "risks": [
+  {
+   "head": "回报送错人",
+   "text": "只按不会重复的身份编号找，不再按会被重复领用的临时编号；找不到就提醒你，不猜。"
+  },
+  {
+   "head": "老会话受影响",
+   "text": "没有身份编号的会话完全走原路。"
+  },
+  {
+   "head": "补送打扰",
+   "text": "只补今天这 3 份批次报告，其余 12 条旧的只列给你看，不补送。"
+  }
+ ],
+ "signoff": [
+  [
+   "真没人收的回报怎么提醒你",
+   "<strong>面板顶栏一行 + 微信一条</strong>（同一批次只推一次）。"
+  ],
+  [
+   "已经躺着的 15 条",
+   "<strong>只补送今天 3 份批次报告</strong>，其余 12 条列给你看后清掉。"
+  ]
+ ],
+ "evidence": "换版后：让一个演练会话 A 开 B、B 开 C，关掉 B 并让新会话重新领用 B 的临时编号，C 报完成 —— 贴 A 窗口收到的回报（capture-pane）+ orphan-reports.ndjson 行数不变"
+}

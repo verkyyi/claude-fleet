@@ -251,13 +251,23 @@ old client's parts, and none of their faults.
   (`FLEET_CONNECT_SELF=ssh` keeps it, for a test of the route).
 - `fleet <machine>` names the machine to connect to. `FLEET_CLIENT=shell fleet`
   explains that the old client was retired and starts the same thin loop.
+- `fleet shell [<machine>] [--print]` (EPIC T651 C5, `bin/fleet-shell.py`) is
+  the emergency way in: the home machine's login shell in `$HOME` with no 看台
+  (`FLEET_NO_VIEW=1`), on the same `fleet-connect.py --argv` answer the loop
+  uses. With the hub down it takes `--argv --offline` — the machine entered
+  last (or named) and its remembered routes, never the relay; without a valid
+  certificate only that machine's entry port (the device key, the keys file kept
+  on the machine), else it says it cannot get in. `--print` prints the one ssh
+  line for a phone's ssh app. It opens no client, takes no lease, writes no
+  record (BREAK-IT `shell-hub-down`).
 
 **Your address: no command = the 看台** (issue #3071, EPIC #3067 C5). On your
 home machine's entry port (`ssh -p 22022 <login>@<name>.cf.example.com`, a key
 added on the hub's key page) there is nothing to type: a connection with **no
 command on a terminal** lands in your 看台 — the session you looked at last
-from that key, else the orchestrator (#3060's first screen); open the panel
-with ⌃] p, then use the session's Tab menu for its shell.
+from that key; ⌃] p opens the panel. A 看台 that ends with a code that is not
+a leave (0 · 129) keeps the connection and drops you at the login shell with
+`FLEET_NO_VIEW=1` and one line on how back (EPIC T651 C4).
 **A command runs exactly as on port 22** — `ssh … ls`, sftp /
 scp / rsync, and the thin client's own attach (it sends the same command it
 always has); **no command and no terminal** (`ssh -T`) is your login shell. It

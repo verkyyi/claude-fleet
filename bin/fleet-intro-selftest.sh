@@ -237,6 +237,13 @@ AFTER" ] && st_ok "no SSH_TTY → banner only" || st_miss "no SSH_TTY out: $out"
   login -i SSH_TTY=/dev/ttys999 FLEET_NODE_STATE="$T/node-managed"
   [ "$fn" = 0 ] && [ "$out" = AFTER ] && st_ok "managed machine → no banner, no client" \
     || st_miss "managed machine: client ${fn}× out=$out"
+  # the way out of a broken 看台 (EPIC T651 C4): FLEET_NO_VIEW=1 → no banner, no
+  # client, and the variable is gone after (a `fleet` typed there goes back)
+  : > "$T/calls"
+  out=$(env -u TMUX HOME="$T/home" FLEET_NODE_STATE="$T/node-none" SSH_TTY=/dev/ttys999 FLEET_NO_VIEW=1 \
+        zsh -f -i -c ". '$T/r/shell/fleet-login.zsh'; echo \"AFTER \${FLEET_NO_VIEW-unset}\"; env | grep -c '^FLEET_NO_VIEW='" 2>&1)
+  [ ! -s "$T/calls" ] && [ "$out" = "AFTER unset
+0" ] && st_ok "FLEET_NO_VIEW=1 → no banner, no client, unset after" || st_miss "FLEET_NO_VIEW: calls=$(cat "$T/calls") out=$out"
   login "" SSH_TTY=/dev/ttys999
   [ "$fn" = 0 ] && [ "$out" = AFTER ] && st_ok "non-interactive (scp/rsync/ssh cmd) → nothing" \
     || st_miss "non-interactive: client ${fn}× out=$out"

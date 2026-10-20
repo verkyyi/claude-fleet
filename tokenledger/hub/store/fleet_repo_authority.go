@@ -305,8 +305,10 @@ func ownerAuthorityBlockers(q querier, owner string, endpoints []string, rollbac
 	}
 	// Legacy placement records can retain an owner even after both its lease
 	// and snapshot disappear. An unfinished T is not an empty-inventory proof;
-	// one settled on evidence (TaskClosed, claude-fleet#4867) is ended.
-	rows, err = q.Query(`SELECT worker_id FROM fleet_tasks WHERE owner = ? AND authority_version = 0 AND worker_id <> '' AND state NOT IN (?, ?)`, owner, TaskClosed, TaskRefused)
+	// one settled on evidence (TaskClosed, claude-fleet#4867), ended on its ID's
+	// result or cancelled by the reconcile (EPIC T644 C6) is ended.
+	rows, err = q.Query(`SELECT worker_id FROM fleet_tasks WHERE owner = ? AND authority_version = 0 AND worker_id <> '' AND state NOT IN (?, ?, ?, ?, ?)`,
+		owner, TaskClosed, TaskRefused, TaskSucceeded, TaskFailed, TaskCancelled)
 	if err != nil {
 		return nil, nil, err
 	}

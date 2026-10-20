@@ -34,7 +34,7 @@ import (
 
 // HubCapabilities is /version's `capabilities`: one word per road a node may
 // take only when the hub has it.
-var HubCapabilities = []string{"task_ids"}
+var HubCapabilities = []string{"task_ids", "task_state"}
 
 var versionCommitRe = regexp.MustCompile(`(?:^|[-_.g])([0-9a-f]{7,40})(?:-dirty)?$`)
 
@@ -95,7 +95,9 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	out["stable_source"] = src
 	// what this hub can do, for a node to choose its road by (never by a
 	// version number): task_ids — a task record has its ID from its first
-	// moment and every /tasks/<ref> takes its code, its ID or T<n> (EPIC T644 C1)
+	// moment and every /tasks/<ref> takes its code, its ID or T<n> (EPIC T644 C1);
+	// task_state — a record's state is its columns, written the moment its ID's
+	// result lands, so a list's state needs no read-time projection (C6)
 	out["capabilities"] = HubCapabilities
 	writeJSON(w, http.StatusOK, out)
 }

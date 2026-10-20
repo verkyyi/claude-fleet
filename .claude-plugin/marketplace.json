@@ -14,7 +14,7 @@
     {
       "name": "fleet-epic",
       "source": "./plugins/fleet-epic",
-      "description": "EPIC batches: plan, run and report (/fleet-epic-plan · /fleet-epic-run · /fleet-epic-report)."
+      "description": "EPIC batches: plan, run and report (/fleet-epic-plan · /fleet-epic-run · /fleet-epic-report), and one task's design page (/fleet-task-plan)."
     },
     {
       "name": "fleet-browser",

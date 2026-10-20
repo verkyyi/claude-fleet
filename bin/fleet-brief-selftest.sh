@@ -54,9 +54,13 @@ exit 1
 GH_EOF
 cat > "$WORK/taskrec" <<'TR_EOF'
 #!/bin/bash
+# TR_SHORT=1: a hub with task codes (EPIC T644 C3) — the record carries `short`, and
+# `code T7` names the parent's
+if [ "${1:-}" = code ] && [ "${2:-}" = T7 ] && [ -n "${TR_SHORT:-}" ]; then echo P7W0; exit 0; fi
 [ "${1:-}" = get ] && [ "${2:-}" = T42 ] || exit 1
 [ "${TR_RC:-0}" = 0 ] || exit 1
-printf '%s\n' '{"task":{"id":"T42","title":"RECORD-TITLE 修风扇","state":"open","repo":"acme/widgets","parent_task":"T7","request_payload":"{\"body\":\"RECORD-WORDS 为什么一直转\"}"}}'
+sh=''; [ -n "${TR_SHORT:-}" ] && sh='"short":"K42A",'
+printf '%s\n' '{"task":{"id":"T42",'"$sh"'"title":"RECORD-TITLE 修风扇","state":"open","repo":"acme/widgets","parent_task":"T7","request_payload":"{\"body\":\"RECORD-WORDS 为什么一直转\"}"}}'
 TR_EOF
 chmod +x "$WORK/fakebin/tmux" "$WORK/fakebin/gh" "$WORK/taskrec"
 
@@ -67,7 +71,7 @@ run() {
           FAKE_SESSION="${FAKE_SESSION-$SESS}" FAKE_AT_ISSUE="${FAKE_AT_ISSUE-}" \
           FAKE_AT_ORIGIN="${FAKE_AT_ORIGIN-}" FAKE_AT_OWID="${FAKE_AT_OWID-}" \
           FAKE_AT_TASK="${FAKE_AT_TASK-}" FAKE_AT_REPO="${FAKE_AT_REPO-}" \
-          GH_CALLS="$WORK/gh.calls" TR_RC="${TR_RC:-0}" FLEET_TASK_RECORD="$WORK/taskrec" \
+          GH_CALLS="$WORK/gh.calls" TR_RC="${TR_RC:-0}" TR_SHORT="${TR_SHORT:-}" FLEET_TASK_RECORD="$WORK/taskrec" \
           bash "$CLI" "$@" 2>"$WORK/err"); RC=$?
   ERR=$(cat "$WORK/err")
 }
@@ -98,6 +102,17 @@ FAKE_AT_TASK=T42 FAKE_AT_REPO=$REPO TR_RC=1 run "$WORK/widgets-scratch-3"
 [ "$RC" = 5 ] || st_fail "TASK an unreadable record exits 5 (got $RC)" "$OUT$ERR"
 has 'DIRECTIVE-MARKER' || st_fail "TASK an unreadable record still prints the rest" "$OUT"
 st_pass "TASK the record, the flow, the directive; unreadable → 5"
+
+# ===== CODE (EPIC T644 C3) =====================================================
+FAKE_AT_TASK=T42 FAKE_AT_REPO=$REPO TR_SHORT=1 run "$WORK/widgets-scratch-3"
+[ "$RC" = 0 ] || st_fail "CODE must exit 0 (got $RC)" "$OUT$ERR"
+has 'task=K42A'                 || st_fail "CODE the fleet block names the task by its code" "$OUT"
+has '===== task K42A'           || st_fail "CODE the record block too" "$OUT"
+has 'dispatched by: P7W0'       || st_fail "CODE the dispatcher by its code" "$OUT"
+has 'the body names K42A'       || st_fail "CODE the PR body names the code" "$OUT"
+has 'DIRECTIVE-MARKER for K42A' || st_fail "CODE the directive's {issue} is the code" "$OUT"
+printf '%s' "$OUT" | grep -q 'T42\|T7' && st_fail "CODE no T<n> anywhere in the brief" "$OUT"
+st_pass "CODE a hub with task codes: the brief speaks codes only"
 
 # ===== ISSUE ===================================================================
 FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=scratch-4 run "$WORK/widgets-issue-12"

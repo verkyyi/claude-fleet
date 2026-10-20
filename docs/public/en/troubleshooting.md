@@ -44,6 +44,13 @@ On a computer with only the client installed (it watches sessions, runs none), `
 - Read the `hub-sessions`, `hubauth` and `peerlink` rows: whether the hub is there, whether it accepts the token, whether the link between machines works.
 - The machine shows "Maintenance" or "Lost" on the hub's machines page: maintenance is set by an admin by hand, and no sessions are sent to that machine; for a lost one, that machine has to come back online first.
 
+### The view will not come up, or quits right after it does
+
+- `fleet` on your computer: when the home machine answers but the view fails to come up 3 times in a row (or quits within a minute of coming up), it stops reconnecting and puts you at the home machine's command line, with one line saying why; type `exit` there to go back to the view.
+- A phone / ssh app on the entry port: when the view quits unexpectedly (not because you left), you stay at the home machine's command line instead of being disconnected; type `fleet` to go back.
+- Logs are in that machine's `~/.config/claude-fleet/logs/`.
+- All three ways out (⌃\, landing at a command line, `fleet shell`) on one page: [When the view breaks](view-trouble.md).
+
 ### A session stopped, or does not respond
 
 - First check whether it is waiting for you: the "Waiting on you" group in the ⌘P panel.
@@ -563,13 +570,6 @@ From `fleet doctor`.
 
 - **What it is**: whether the team settings the hub hands out (shared MCP servers, skills, settings) have reached this computer.
 - **On WARN / FAIL**: `fleet-agent-team.py sync`; the node program also retries on every beat.
-
-#### `roles`
-
-From `fleet doctor`.
-
-- **What it is**: whether the role definitions can be fetched from the hub.
-- **On WARN / FAIL**: `fleet-agent-team.py sync`; when they cannot be fetched, sessions use this computer's copy, and opening sessions is not affected.
 
 ### Subscriptions and quota
 

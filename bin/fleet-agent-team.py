@@ -110,7 +110,7 @@ doctor` on a client print the version from it.
           --person-version N: the same for the person's own layer (issue #2784,
           EPIC #2781 C3) — the hub's TypePerson; recorded in person-sync.json.
   person  read the personal layer alone, no team read and no apply (issue
-          #2784): the person bundle's rule rows, read on demand. Records person-sync.json {checked, rc, …} —
+          #2784): the person bundle (its ui_lang, issue #3329), read on demand. Records person-sync.json {checked, rc, …} —
           only while this login HAS a personal layer.
   status  [--short]  the applied version(s) and the source counts (doctor):
           `team v<N>`. With a personal layer (EPIC #1855 C6) --short prints the
@@ -120,10 +120,6 @@ doctor` on a client print the version from it.
           --team: the doctor's `team` row (issue #1899) — `入口 v<N> · 本机 v<M> ·
           拉到 <UTC>`; exit 0 ok · 1 behind the hub's push for over
           FLEET_TEAM_PUSH_WARN_SECS (600) · 3 no team layer here (no row).
-          --roles: the doctor's `roles` row (issue #2784) — `入口 v<N> · 本机 v<M>
-          · 角色 … · 拉到 <UTC>（多久前）`; exit 1 when that read is older than
-          FLEET_ROLES_WARN_SECS (a day) or the hub pushed a version not held
-          here · 3 no personal layer (no row).
 
 A session's configuration, fixed at launch (issue #1782 — see "the session's
 configuration" below):
@@ -198,12 +194,11 @@ SKILL_MARK = "<!-- fleet team skill -->"
 HOOK_SCRIPTS_DIR = os.path.join(CONF_DIR, "personal-hooks")
 SCRIPT_MARK = "fleet personal hook"
 SCRIPT_MAX = 32 << 10
-# A person's role overlays and rule table (issue #2784, EPIC #2781 C3): nothing on
-# a machine reads them since the role programs left (issue #4340) — a bundle that
-# still carries them is taken, held to its size, and left unread until the hub stops
-# sending them (#3130). The hub's limits (fleet_team_bundle.go), kept in step.
-ROLE_MAX = 16 << 10
-RULES_MAX = 32 << 10
+# A person's role overlays and rule table (issue #2784, EPIC #2781 C3) are
+# retired (T654): nothing ever read them, and the hub refuses a PUT carrying
+# either (fleet_team_bundle.go's personRetiredKeys, kept in step). A version
+# stored before that may still carry them — without_retired drops them on read.
+RETIRED = ("roles", "rules")
 
 ALLOWED = ("mcp", "hooks", "skills", "claude_settings", "codex_config")
 HOOK_EVENTS = {"PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SubagentStop",
@@ -299,6 +294,12 @@ def secret_in(path, v):
     return ""
 
 
+def without_retired(b):
+    """The personal bundle minus the retired keys (RETIRED): a version the hub
+    stored before T654 still applies, its rule table / role overlays unread."""
+    return {k: v for k, v in b.items() if k not in RETIRED} if isinstance(b, dict) else b
+
+
 def scalar(v):
     return isinstance(v, (str, bool, int, float)) and not isinstance(v, type(None))
 
@@ -308,12 +309,14 @@ def validate(b, layer="team"):
     layer (#1857) has the team's allow-list plus `hook_scripts` (C4's)."""
     if not isinstance(b, dict):
         return "bundle is not an object"
-    allowed = ALLOWED + (("hook_scripts", "roles", "rules", "ui_lang") if layer == "personal" else ())
+    allowed = ALLOWED + (("hook_scripts", "ui_lang") if layer == "personal" else ())
     for k in b:
+        if layer == "personal" and k in RETIRED:
+            return "bundle.%s is retired — a personal configuration no longer holds it" % k
         if k not in allowed:
             return "bundle.%s is not something a team hands out" % k
-        if k in ("rules", "ui_lang"):
-            continue            # a table or a list of rows (#2784) / a word (#3329), checked below
+        if k == "ui_lang":
+            continue            # a word (#3329), checked below
         if not isinstance(b[k], dict):
             return "bundle.%s must be an object" % k
     for n, s in b.get("mcp", {}).items():
@@ -348,21 +351,6 @@ def validate(b, layer="team"):
             return "bundle.codex_config.%s is never handed out" % k
         if not (scalar(v) or isinstance(v, list) and all(scalar(x) for x in v)):
             return "bundle.codex_config.%s must be a scalar or a list of them" % k
-    for n, ov in b.get("roles", {}).items():
-        if not isinstance(ov, (str, dict)):
-            return "bundle.roles.%s must be the overlay's text or an object" % n
-        if len(json.dumps(ov, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > ROLE_MAX:
-            return "bundle.roles.%s is over 16 KiB" % n
-    if "rules" in b:
-        rules = b["rules"]
-        if isinstance(rules, list):
-            for i, row in enumerate(rules):
-                if not isinstance(row, (dict, list)):
-                    return "bundle.rules[%d] must be a row (an object or its six cells)" % i
-        elif not isinstance(rules, str):
-            return "bundle.rules must be a Markdown table or a list of rows"
-        if len(json.dumps(rules, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > RULES_MAX:
-            return "bundle.rules is over 32 KiB"
     # the person's interface language (#3329, EPIC #3178 D7) — the hub's rule
     if "ui_lang" in b and b["ui_lang"] not in ("zh", "en"):
         return 'bundle.ui_lang must be "zh" or "en" (leave it out to follow the system)'
@@ -566,6 +554,7 @@ def fetch_person(a):
             except OSError:
                 pass
         return 0, None, "none (v%s taken back)" % have
+    bundle = without_retired(bundle)
     why = validate(bundle, "personal")
     if why:
         return 2, have, "refused v%d: %s (kept v%s)" % (version, why, have)
@@ -1002,7 +991,7 @@ def personal_layer(override_path, session=False):
                               % (PERSON_CACHE, pc.get("version") or 0))
     if personal_off(override_path) or (session and os.environ.get("FLEET_PERSONAL") == "0"):
         return pc, "off", {}
-    b = pc.get("bundle") or {}
+    b = without_retired(pc.get("bundle") or {})
     if not isinstance(b, dict) or validate(b, "personal"):
         return pc, "on", {}
     if isinstance(b.get("mcp"), dict):
@@ -1033,7 +1022,7 @@ def apply(a):
     if why:
         die("the cached team bundle is refused: %s — nothing applied" % why)
     if pcache is not None:
-        why = validate(pcache.get("bundle") or {}, "personal")
+        why = validate(without_retired(pcache.get("bundle") or {}), "personal")
         if why:
             die("the cached personal bundle is refused: %s — nothing applied" % why)
     off = team_off(a.override)
@@ -1404,8 +1393,6 @@ def status_team(a):
 def status(a):
     if getattr(a, "team", False):
         return status_team(a)
-    if getattr(a, "roles", False):
-        return status_roles(a)
     rec = read_json_quiet(EFFECTIVE)
     cache = read_json_quiet(CACHE)
     if not isinstance(rec, dict):
@@ -2090,7 +2077,6 @@ def build_parser():
                     help="sync: the version the hub pushed (the node agent, #1899); recorded in team-push.json")
     ap.add_argument("--person-version", type=int, default=None,
                     help="sync: the person's version the hub pushed (the node agent, #2784); recorded in person-sync.json")
-    ap.add_argument("--roles", action="store_true", help="status: the doctor's `roles` row (#2784)")
     ap.add_argument("--lock", default="", help="session/expected/check: warn|enforce (default $FLEET_AGENT_LOCK, else warn)")
     ap.add_argument("--mod-off", action="store_true", default=conf_val("FLEET_MOD") == "0", help="session/expected/check: this login runs FLEET_MOD=0")
     ap.add_argument("--no-mcp", action="store_true", help="session: an MCP allowlist governs — hand no servers")
@@ -2168,7 +2154,7 @@ def refresh_expected(a):
 
 def person_only(a):
     """`person`: read the personal layer alone — no team read, no apply (issue
-    #2784): the rules are read at launch, so nothing needs composing, and the
+    #2784): a read on demand (fleet config's ui_lang), so nothing is composed, and the
     login's files wait for the next sync. Exit as fetch_person."""
     rc, v, note = fetch_person(a)
     record_person(rc, note, None)
@@ -2206,67 +2192,6 @@ def record_person(rc, note, hub_version):
         write_json_atomic(PERSON_SYNC, rec)
     except OSError as e:
         print("fleet-agent-team: %s not written: %s" % (PERSON_SYNC, e), file=sys.stderr)
-
-
-def person_age(now=None):
-    """Seconds since the personal layer was last read from the hub — person-sync.json's
-    `checked`, else the cache's `fetched` — or None when this login has no layer."""
-    rec, pc = read_json_quiet(PERSON_SYNC), read_json_quiet(PERSON_CACHE)
-    if not isinstance(pc, dict):
-        pc = read_json_quiet(PERSON_GOOD)
-    ts = (rec or {}).get("checked") if isinstance(rec, dict) else None
-    if not isinstance(ts, (int, float)) and isinstance(pc, dict):
-        ts = pc.get("fetched")
-    if not isinstance(ts, (int, float)):
-        return None
-    return max(0, int((now or time.time()) - ts))
-
-
-def say_age(secs):
-    if secs < 120:
-        return "%d 秒前" % secs
-    if secs < 7200:
-        return "%d 分钟前" % (secs // 60)
-    if secs < 172800:
-        return "%d 小时前" % (secs // 3600)
-    return "%d 天前" % (secs // 86400)
-
-
-def status_roles(a):
-    """The doctor's `roles` row (issue #2784): the person's version as the hub last
-    pushed it here, the version this login holds, and when it was last read.
-    WARN (exit 1) when that read is older than FLEET_ROLES_WARN_SECS (a day), or
-    the hub pushed a version this login does not hold yet. No personal layer
-    here → nothing, exit 3 (no row)."""
-    rec, pc = read_json_quiet(PERSON_SYNC), read_json_quiet(PERSON_CACHE)
-    rec = rec if isinstance(rec, dict) else {}
-    good = False
-    if not isinstance(pc, dict):
-        pc, good = read_json_quiet(PERSON_GOOD), True
-    if not isinstance(pc, dict) and not rec.get("hub_version"):
-        return 3
-    local = (pc or {}).get("version") if isinstance(pc, dict) else None
-    roles = ((pc or {}).get("bundle") or {}).get("roles") if isinstance(pc, dict) else None
-    parts = []
-    hv = rec.get("hub_version")
-    parts.append("入口 v%s" % hv if isinstance(hv, int) else "入口未推送（随同步拉）")
-    parts.append("本机 v%s%s" % (local if local is not None else "-", "（上一份完好的）" if good else ""))
-    if isinstance(roles, dict) and roles:
-        parts.append("角色 %s" % " ".join(sorted(roles)))
-    age = person_age()
-    parts.append("拉到 %s（%s）" % (utc(time.time() - age), say_age(age)) if age is not None else "拉到 -")
-    rc = 0
-    warn = int(os.environ.get("FLEET_ROLES_WARN_SECS") or 86400)
-    if age is None or age > warn:
-        parts.append("缓存超过 %s，入口连不上时用的是这一份" % say_age(warn).replace("前", ""))
-        rc = 1
-    if isinstance(hv, int) and isinstance(local, int) and local < hv:
-        parts.append("入口已推 v%s，本机还没拿到（上次：%s）" % (hv, rec.get("note") or "-"))
-        heard = rec.get("heard")
-        if not isinstance(heard, (int, float)) or time.time() - heard > int(os.environ.get("FLEET_TEAM_PUSH_WARN_SECS") or 600):
-            rc = 1
-    print(" · ".join(parts))
-    return rc
 
 
 def record_push(hv, rc):
