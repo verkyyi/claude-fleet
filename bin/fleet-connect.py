@@ -101,7 +101,8 @@ then prints `local <machine>`: the route is no ssh at all.
 ONE JSON line instead of running it — what the thin client (bin/fleet-thin.py)
 spawns on every connection, so it never re-implements the certificate, the
 machine or the route: {"argv": [...], "host": <index of the host in argv>,
-"machine", "login", "route": {"kind", "name"}, "pin"}. The caller puts its own
+"machine", "login", "route": {"kind", "name"}, "pin", "probe": [[host, port]] — a
+direct route's address, the thin client's LineWatch (T690)}. The caller puts its own
 options before argv[host] and its remote command after it. `--avoid MACHINE`:
 the hub's pick is MACHINE → the next ONLINE candidate the home answer lists
 (exit 1 when there is none) — the thin client's 换家 after three failures. With
@@ -1574,6 +1575,9 @@ def run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts=(), pin="
     if print_only and ARGV_OUT:
         out = {"argv": cmd, "host": len(base) - 1, "machine": alias, "login": login or "",
                "route": {"kind": route["kind"], "name": route["name"]}, "pin": pin or ""}
+        if route["kind"] == "direct" and route.get("host"):
+            # where the thin client knocks to see the line is back (T690)
+            out["probe"] = [[route["host"], int(route.get("port") or 22)]]
         if route_mode() == "class":
             out["net"] = net_key()   # thin.log's net= (claude-fleet#3074)
         sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")

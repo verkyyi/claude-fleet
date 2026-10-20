@@ -34,6 +34,8 @@
 #                   `--resume` then lands home (no cur= left); `--want` lands on
 #                   the worker it names — by its fleet_id or its key (#3463); a
 #                   leftover role mark (@fleet_role_def) makes no window home
+#   G. (T690) FLEET_CLIENT_REHOMED=<old home> → the top line says 「家机器 <old>
+#                   连不上，已自动换到 <this>」; a bad name nothing
 #   H. last       — a plain attach (no --want / --resume) lands on the person's
 #                   last session, kept in remote-views/.last by the `cur` hook past
 #                   every 看台 (issue #4000): there from another device; gone ⇒
@@ -437,6 +439,16 @@ waitfor 10 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '=$(vs devl4)' 2>/dev/nul
 st_eq "G: no word given (a thin client's attach) leaves no @view_lang" "0" "$(vlset devl3)"
 st_eq "G: a bad name is recorded as none" "" "$(vlang devl4)"
 for w in lang2 lang3 lang4; do tt kill-window -t "=$TL:$w" 2>/dev/null; done
+# T690: a thin loop that gave up on its home brings FLEET_CLIENT_REHOMED — the new
+# home's top line says which home was given up and which this is; a bad name says nothing
+tt new-window -d -t "=$TL:" -n rh1 "env -u TMUX FLEET_UI_LANG=zh FLEET_CLIENT_REHOMED=m1 FLEET_SIDEBAR_HOST=m2 FLEET_CONF_DIR='$FLEET_CONF_DIR' TMPDIR='$TMPDIR' bash '$BIN/fleet-remote-view.sh' attach --thin --view devr1 --device $DEV --route lan --token tr1; sleep 300"
+waitfor 5 sh -c "[ -n \"\$('$REAL_TMUX' -L '$RS' show-options -qv -t '=$(vs devr1):' @view_flash 2>/dev/null)\" ]" || st_miss "G: no rehome line on devr1"
+st_eq "G: 换家 → the new home's top line says so (T690)" "家机器 m1 连不上，已自动换到 m2" "$(vflash devr1)"
+tt new-window -d -t "=$TL:" -n rh2 "env -u TMUX FLEET_UI_LANG=zh 'FLEET_CLIENT_REHOMED=m1;x' FLEET_CONF_DIR='$FLEET_CONF_DIR' TMPDIR='$TMPDIR' bash '$BIN/fleet-remote-view.sh' attach --thin --view devr2 --device $DEV --route lan --token tr2; sleep 300"
+waitfor 5 sh -c "[ -s '$FLEET_CONF_DIR/remote-views/devr2' ]" || st_miss "G: devr2 never registered"
+sleep 0.5
+st_eq "G: … a bad name: nothing said" "" "$(vflash devr2)"
+for w in rh1 rh2; do tt kill-window -t "=$TL:$w" 2>/dev/null; done
 
 # ============================================================================
 # K. C2's key table, once it exists

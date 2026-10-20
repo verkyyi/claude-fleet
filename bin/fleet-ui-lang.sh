@@ -963,8 +963,10 @@ fleet_ui_t() {
     en:paste_no_line)           printf 'no connection to %s' "${1:-}" ;;
     zh:paste_sending)           printf '正在传 %s …' "${1:-}" ;;
     en:paste_sending)           printf 'sending %s …' "${1:-}" ;;
-    zh:thin_reconnect)          printf '和 %s 的连接断了，%s 秒后重连（第 %s 次）' "${1:-}" "${2:-}" "${3:-}" ;;
-    en:thin_reconnect)          printf 'lost the connection to %s, reconnecting in %ss (attempt %s)' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:thin_reconnect)          printf '正在重连 · 和 %s 的连接断了，%s 秒后重连（第 %s 次）· 网一回来马上连' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:thin_reconnect)          printf 'reconnecting · lost the connection to %s, reconnecting in %ss (attempt %s) · at once when the network is back' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:thin_rehoming_fmt)       printf '正在重连 · 家机器 %s 连不上，正在换到另一台可用的机器…' "${1:-}" ;;
+    en:thin_rehoming_fmt)       printf 'reconnecting · home %s does not answer: moving to another machine…' "${1:-}" ;;
     zh:thin_update_switch)      printf '客户端有新版（stable 挪了），换到新版后回到这个会话…' ;;
     en:thin_update_switch)      printf 'a new client is out (stable moved): switching to it, then back to this session…' ;;
     zh:thin_debug_hint)         printf '一直连不上？跑 fleet debug report，把这台电脑的情况交给入口看' ;;
@@ -1003,6 +1005,9 @@ fleet_ui_t() {
     en:thin_path_hint_fmt)      printf 'this terminal cannot find fleet yet: type exec %s (or open a new terminal), or type %s' "${1:-zsh}" "${2:-fleet}" ;;
     zh:thin_first_wait_fmt)     printf '第一个会话还开不了（%s）——这会自己好，接着等（最多再等 %s 秒）' "${1:-}" "${2:-}" ;;
     en:thin_first_wait_fmt)     printf 'your first session cannot open yet (%s) — this heals by itself, waiting (up to %ss more)' "${1:-}" "${2:-}" ;;
+    # the new home's top line after a 换家 (T690; fleet-remote-view.sh attach --thin)
+    zh:view_rehomed_fmt)        printf '家机器 %s 连不上，已自动换到 %s' "${1:-}" "${2:-}" ;;
+    en:view_rehomed_fmt)        printf 'home %s did not answer: moved to %s' "${1:-}" "${2:-}" ;;
     zh:thin_rehome_back_fmt)    printf '除了 %s 没有别的在线机器，回到它接着重连' "${1:-}" ;;
     en:thin_rehome_back_fmt)    printf 'no other machine is online: back to %s, reconnecting' "${1:-}" ;;
     # the 看台 keeps breaking: the home's command line instead (EPIC T651 C4)
