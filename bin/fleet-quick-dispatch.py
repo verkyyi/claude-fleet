@@ -388,11 +388,24 @@ def task_send(data, view="", client=""):
         failed(data, view, why)
         return False, tr("compose_failed_fmt", (tr("dispatch_task_made_fmt", name) + " · " if t else "") + why)
     compose.compose_log("dispatch_task", id=data.get("id"), repo=repo, agent=data.get("agent"), view=view, task=t)
-    remember(repo, data.get("agent"))
     win = next((l.split("\t", 1)[0].strip() for l in lines if l.startswith("@")), "")
+    if win:
+        timing_at("window")
+    remember(repo, data.get("agent"))
     if view and win:
         go(view, win, client)
     return True, tr("dispatch_task_done_fmt", name, repo)
+
+
+def timing_at(seg):
+    """A stage of the new session's clock (T684, fleet_timing.py): the ↵ rides
+    FLEET_TIMING_T0 from the 看台; none ⇒ nothing."""
+    try:
+        sys.path.insert(0, str(BIN))
+        import fleet_timing
+        fleet_timing.at_env(seg)
+    except Exception:  # noqa: BLE001 — a clock never costs the send
+        pass
 
 
 def go(view, win, client=""):
@@ -441,6 +454,8 @@ def send(data, view="", client=""):
         return False, tr("compose_failed_fmt", str(error))
     if out.returncode == 0:
         win = next((l.split(" ", 1)[1].strip() for l in (out.stderr or "").splitlines() if l.startswith("window: @")), "")
+        if win:
+            timing_at("window")
         if view and win:
             go(view, win, client)
         return True, tr("compose_result_fmt", compose.place_why(out.stdout or out.stderr))

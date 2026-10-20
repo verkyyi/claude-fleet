@@ -17,7 +17,7 @@
 #      (logged how=new) — never the window holding the orchestrator, even with
 #      orch_<fleet> naming one, and no orchestrator script run at all
 #      (FLEET_VIEW_ORCH_CMD would leave a mark); a direct attach: nothing;
-#      each ⌘N one run in timing/session.ndjson (#3551): start · go · total
+#      each ⌘N one run in timing/session.ndjson (#3551, T684): window · typeable · total
 #   T  ⌘T and ⌘K, keys issue #3328 folded into ⌘P: the panel (its first
 #      frame one run in timing/panel.ndjson, #3551) — ⌘T lit on
 #      its ⚡ row, no 派一件事 popup — saying 「⌘T 已并进 ⌘P」 the first time only;
@@ -220,18 +220,18 @@ N2=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "new2" 
 waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$N2' ]" \
   || st_fail "N: the second ⌘N did not land on its new session (now $(cur), it is $N2)"
 [ -e "$W/orch.called" ] && st_fail "N: ⌘N ran an orchestrator script"
-# the session clock (issue #3551): every ⌘N a run in timing/session.ndjson —
-# start · go · total (a session starts cold since the warm pool left, T495)
+# the session clock (issue #3551, T684): every ⌘N a run in timing/session.ndjson —
+# window · typeable · total, each since the ↵ (a session starts cold, T495)
 waitfor 10 sh -c "python3 '$BIN/fleet_timing.py' check | grep -q '^session n=2 .* cold=0\$'" \
   || st_fail "N: the two ⌘N are not two session runs: $(python3 "$BIN/fleet_timing.py" check)"
-python3 - "$FLEET_CONF_DIR/timing/session.ndjson" <<'PY' || st_fail "N: a ⌘N's run is not start · go · total"
+python3 - "$FLEET_CONF_DIR/timing/session.ndjson" <<'PY' || st_fail "N: a ⌘N's run is not window · typeable · total"
 import json, sys
 runs = {}
 for line in open(sys.argv[1]):
     r = json.loads(line)
     assert set(r) == {"ts", "what", "seg", "ms"} and r["what"] == "session", r
     runs.setdefault(r["ts"], []).append(r["seg"])
-sys.exit(0 if all(v == ["start", "go", "total"] for v in runs.values()) else 1)
+sys.exit(0 if all(v == ["window", "typeable", "total"] for v in runs.values()) else 1)
 PY
 rm -f "$W/g/orch_fl"
 # another machine's C4 window (made here, link up) — the S and Q legs use it

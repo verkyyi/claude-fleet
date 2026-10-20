@@ -347,6 +347,8 @@ JSON
     short=$(printf '%s' "$accepted" | field short)
     [ -n "$short" ] && printf '%s\n' "$short"
     printf '%s\n' "$t"
+    # a 看台's new session is clocked from its ↵ (T684): the hub's answer is `placed`
+    [ -z "${FLEET_TIMING_T0:-}" ] || python3 "$BIN/fleet_timing.py" at session placed 2>/dev/null || :
   }
   export FLEET_DISPATCH="$dispatch"
   # The task's own ID (EPIC T644 C1) rides to the spawner, bound to THIS record: its

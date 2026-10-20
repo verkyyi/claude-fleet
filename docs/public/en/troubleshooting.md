@@ -799,6 +799,13 @@ From `fleet doctor`.
 - **What it is**: over the last 10 times, how long (median) from pressing ⌘P to the panel appearing, and from opening a new session to being able to type. The panel should take under 0.5 seconds, a new session under 8 seconds.
 - **On WARN / FAIL**: `fleet_timing.py table` shows which part is slow; send it to your admin.
 
+#### `spawn-time`
+
+From `fleet doctor`.
+
+- **What it is**: for every new session in the last 24 hours, the 90th percentile of each stage counted from the Enter key: the hub saying where it goes, the window opening, being able to type, the agent being ready. A report only, never a verdict.
+- **On WARN / FAIL**: it never raises one. To see which stage was slow, `fleet_timing.py table session`.
+
 #### `alerts`
 
 From `fleet doctor`.

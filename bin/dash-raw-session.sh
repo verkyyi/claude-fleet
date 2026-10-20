@@ -788,6 +788,12 @@ fi
   # the hub reads too)
   [ -n "$TASK_FID" ] && stamp="$stamp$(fleet_win_stamp_cmd @fleet_id "$TASK_FID")"
   [ "$TASK_TAKE" = here ] && python3 "$BIN/fleet_id.py" attempt "$TASK_FID" >/dev/null 2>&1
+  # a 看台's new session is clocked from its ↵ (T684, fleet_timing.py): the window
+  # carries it so the agent's start (fleet_id.hook) writes `ready` under that run
+  case "${FLEET_TIMING_T0:-}" in
+    ''|*[!0-9.]*) : ;;
+    *) stamp="$stamp$(fleet_win_stamp_cmd @timing_t0 "$FLEET_TIMING_T0")" ;;
+  esac
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
     || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
          # Say WHY when it is the server (issue #2477): the line rides into

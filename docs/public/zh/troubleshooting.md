@@ -799,6 +799,13 @@ fleet doctor --json
 - **是什么**：最近 10 次按 ⌘P 到面板弹出、开新会话到能打字，各要多久（中位数）。面板该在 0.5 秒内，新会话该在 8 秒内。
 - **WARN / FAIL 怎么办**：`fleet_timing.py table` 看慢在哪一段，发给管理员。
 
+#### `spawn-time`
+
+来自 `fleet doctor`。
+
+- **是什么**：近 24 小时每次新建会话，从按回车算起各阶段的九成分位：hub 给出放哪台、开出窗口、能打字、agent 就绪。只报数字，不判对错。
+- **WARN / FAIL 怎么办**：不会报。哪次慢，`fleet_timing.py table session` 看每一段。
+
 #### `alerts`
 
 来自 `fleet doctor`。
