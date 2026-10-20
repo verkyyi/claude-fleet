@@ -457,6 +457,13 @@ fleet doctor --json
 - **是什么**：机器上的服务是不是在用某个人的登录证书。机器只该用自己的令牌。
 - **WARN / FAIL 怎么办**：查 `node.env` 与凭据代理，让机器用自己的令牌。
 
+#### `clients`
+
+来自 `fleet doctor`。
+
+- **是什么**：你的 `fleet` 客户端最近 24 小时报给入口的连接情况：断线次数和原因、重连 p50 / p90、起不来的次数和原因。详表：`fleet doctor --clients`（按设备、家机器分）。
+- **WARN / FAIL 怎么办**：有一次启动一直没连上，或重连 p90 超过一分钟时是 WARN。看详表里的原因：`home:<码>` 是入口没给出机器，`no_fleet` 是家机器上还没有你的会话，`timeout` / `reset` 是网络断了。
+
 #### `compute`
 
 来自 `fleet doctor`。

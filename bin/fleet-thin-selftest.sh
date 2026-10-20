@@ -34,6 +34,9 @@
 #      the hub's opening progress), then the first connection lands on that
 #      session on the machine it opened on; failed → three lines naming who to
 #      ask and exit 1, never a backoff against a machine with no session
+#   T  the connection events for the hub (T689): the spool holds start · up
+#      (phase start) · drop (ssh's code) · up (phase reconnect, ms = drop → drawn),
+#      every field a code / name / number — the hub unreachable keeps them all
 #   R  the home restarts its tmux under a connected client (issue #3511): rc 3 from
 #      the home it was just up on → 「家机器 … 在重启」, wait, --resume back on the
 #      same session, no new session asked; past the bound, the old road
@@ -370,6 +373,26 @@ awk -F '\t' '$2 == "drawn" && $3 == "m1" && $4 == "lan" && $7 ~ /^[0-9]+$/ && !c
   && st_ok_all "H: thin.log has a drawn line (home · route · first_ms) before its connect line" || st_miss "H: no drawn line: $(head -4 "$T/thin.log")"
 e=$(python3 "$BIN/fleet-thin.py" </dev/null 2>&1); rc=$?
 [ "$rc" = 2 ] && st_ok_all "H: no terminal → exit 2, one line" || st_miss "H: no tty rc=$rc $e"
+
+# T — the connection events (T689): no hub here, so the spool keeps every one
+sp="$T/client/.cache/claude-fleet/client-events.ndjson"
+if python3 - "$sp" <<'PY'
+import json, sys
+evs = [json.loads(l) for l in open(sys.argv[1])]
+kinds = [e["event"] for e in evs]
+assert "start" in kinds, kinds
+ups = [e for e in evs if e["event"] == "up"]
+assert any(e.get("phase") == "start" and e.get("home") == "m1" and e.get("route") == "lan" for e in ups), ups
+drops = [e for e in evs if e["event"] == "drop"]
+assert drops and all(e.get("rc") == 255 and e.get("reason") for e in drops), drops
+rec = [e for e in ups if e.get("phase") == "reconnect"]
+assert rec and all(isinstance(e.get("ms"), int) for e in rec), rec
+assert all(len(set(e.get("start") for e in evs if e.get("start"))) >= 1 for _ in [0])
+allowed = {"id", "at", "event", "start", "phase", "home", "route", "to", "ms", "rc", "reason", "ver"}
+assert all(set(e) <= allowed for e in evs), [set(e) - allowed for e in evs]
+PY
+then st_ok_all "T: the spool holds start · up(start) · drop(rc 255, a code) · up(reconnect, ms) — nothing but the fields"
+else st_miss "T: spool: $(head -c 2000 "$sp" 2>/dev/null)"; fi
 
 # ---------------------------------------------------------------------------
 # I — this machine is home (issue #3006, C9): no ssh back to itself

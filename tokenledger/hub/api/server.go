@@ -718,6 +718,9 @@ func (s *Server) routes() *routeMux {
 		// the shapes of /v1/nodes and /v1/limits?account=all, by the same
 		// doors as the session list — a colleague's certificate included.
 		mux.HandleFunc(control.SummaryPath, s.handleFleetSummary)
+		// A client's connection events (claude-fleet T689): the client sends
+		// them by its certificate; the doctor reads the 24-hour statistics.
+		mux.HandleFunc(control.ClientEventsPath, s.handleFleetClientEvents)
 		// A write by connection certificate (claude-fleet#1487): the other
 		// machines' sidebars and the `fleet` shell act on their person's
 		// workers with the one credential they hold, signed per write.

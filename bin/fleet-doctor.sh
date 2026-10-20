@@ -89,6 +89,13 @@ if [ "${1:-}" = --installs ]; then
   exec sh "$(dirname "$0")/fleet-installs.sh" "$@"
 fi
 
+# `fleet doctor --clients` (T689): the person's clients' connection events, the
+# last 24 h off the hub, per device and home (--hours N, --device D, --json).
+if [ "${1:-}" = --clients ]; then
+  shift
+  exec bash "$(dirname "$0")/fleet-client-events.sh" "$@"
+fi
+
 # `fleet doctor --json` (issue #2674): the same run, its rows as one JSON object —
 # {"v":1,"rc":N,"fails":N,"warns":N,"rows":[{"level","row","msg"}…]} — for a
 # reader that wants the rows. It runs the doctor once,
@@ -468,6 +475,27 @@ print("%s\n%s\n%s" % ("off" if d.get("compute_off") else ("auto" if d.get("compu
         info compute "$_cp_who · node.env CCQUOTA_FLEET_COMPUTE=${_cp_env:-未写，按开}；问不到入口的判断"
       fi ;;
   esac
+fi
+
+# --- clients: what the person's `fleet` clients' lines did, the last 24 h (T689) --
+# The clients report their connection events to the hub (bin/fleet_client_events.py);
+# this row reads the hub's statistics for this login's owner: drops, reconnect
+# p50 / p90, open failures and their reasons. WARN on a start that never came up or
+# a reconnect p90 past a minute; `fleet doctor --clients` is the table per device
+# and home. Only where the node token row passed; a hub without the door: no row.
+if [ "$_hub_on" = 1 ] && [ "${_tok_lv:-}" = PASS ] && [ -f "$(dirname "$0")/fleet-client-events.sh" ]; then
+  _ce=$(CCQUOTA_FLEET=1 FLEET_CONF_DIR="$conf_dir" FLEET_HUB_TIMEOUT="${FLEET_HUB_TIMEOUT:-5}" \
+        bash "$(dirname "$0")/fleet-client-events.sh" --summary 2>&1); _ce_rc=$?
+  _ce_lv=$(printf '%s\n' "$_ce" | tail -n 1 | cut -f1); _ce_m=$(printf '%s\n' "$_ce" | tail -n 1 | cut -f2-)
+  if [ "$_ce_rc" -eq 0 ]; then
+    case "$_ce_lv" in
+      PASS) pass clients "$_ce_m" ;;
+      WARN) warn clients "$_ce_m" ;;
+      *)    info clients "$_ce_m" ;;
+    esac
+  else
+    case "$_ce" in *"no client-events door"*) ;; *) info clients "问不到入口的客户端统计: ${_ce#fleet-client-events: }" ;; esac
+  fi
 fi
 
 # --- credsep: the credentials out of this login's reach (issue #1971) --------------

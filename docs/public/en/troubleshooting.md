@@ -457,6 +457,13 @@ From `fleet doctor`.
 - **What it is**: whether a service on the machine is using a person's sign-in certificate. A machine should use only its own token.
 - **On WARN / FAIL**: check `node.env` and the credential proxy, and make the machine use its own token.
 
+#### `clients`
+
+From `fleet doctor`.
+
+- **What it is**: what your `fleet` clients reported to the hub about their connection in the last 24 hours: drops and why, reconnect p50 / p90, connections that did not come up and why. The table: `fleet doctor --clients` (per device and home machine).
+- **On WARN / FAIL**: WARN when a start never came up, or the reconnect p90 is past a minute. Read the reasons in the table: `home:<code>` means the hub gave no machine, `no_fleet` that the home has no session of yours yet, `timeout` / `reset` that the network dropped.
+
 #### `compute`
 
 From `fleet doctor`.

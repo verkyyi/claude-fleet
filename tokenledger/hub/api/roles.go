@@ -118,7 +118,8 @@ var routeAccess = map[string]string{
 	// Session, token or certificate; the handler scopes a person's answer
 	// through FleetScope.
 	control.SessionsPath: accessUser, control.SummaryPath: accessUser,
-	control.WritePath: accessSelf, control.ClientPath: accessSelf, ClientTestPath: accessSelf,
+	control.ClientEventsPath: accessUser,
+	control.WritePath:        accessSelf, control.ClientPath: accessSelf, ClientTestPath: accessSelf,
 	control.ClientPath + "/actions": accessSelf, control.ClientPath + "/place": accessSelf,
 	control.RenewPath: accessSelf, control.HomePath: accessSelf, control.LoginNodePath: accessSelf,
 	"/v1/fleet/client-settings": accessSelf,

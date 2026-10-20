@@ -129,6 +129,10 @@ connect-timeout, empty when it said none of them, #4828) · rehome · back (the 
 upload · show · exec · quit · shell (the home's command line, C4) · first (the first-session road, #3054) · offline (no 换家: the hub did not answer either) · run (`--run`: one command on the home, issue #3004 —
 reason = its first word).
 
+The same lifecycle goes to the hub as connection events (T689,
+bin/fleet_client_events.py — start · up · drop · fail · rehome · offline · quit,
+metadata only, spooled and sent on a thread; FLEET_CLIENT_EVENTS=0 off).
+
 Knobs: FLEET_THIN_UP_SECS (10), FLEET_THIN_BACKOFF ("1,2,4,8,16,30"),
 FLEET_THIN_ALIVE_SECS (5) × FLEET_THIN_ALIVE_MAX (3): the keepalive — a line
 silent that long is given up (#4828),
@@ -151,6 +155,7 @@ first session's lease, place and the hub's account word).
 Standard library only.
 """
 import base64
+import calendar
 import errno
 import fcntl
 import importlib.util
@@ -273,6 +278,42 @@ def ssh_end(tail):
     first of SSH_ENDS that is there (ssh follows «closed by remote host» with a
     plain «closed.»: the specific one wins)."""
     return next((word for word, rx in SSH_ENDS if rx.search(tail or b"")), "")
+
+
+def home_code(since):
+    """The hub's code off connect.log's last `home` line written since `since`
+    (fleet-connect.py: the hub gave no machine — no_machine_online, opening,
+    device_revoked, …, unreachable), else ""."""
+    try:
+        cl = load("fleet_clientlog.py", "fleet_clientlog")
+        with open(os.path.join(cl.log_dir(), "connect.log"), "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 8192))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except Exception:
+        return ""
+    for line in reversed(lines):
+        p = line.split("\t")
+        if len(p) >= 6 and p[1] == "home":
+            try:
+                at = calendar.timegm(time.strptime(p[0], "%Y-%m-%dT%H:%M:%SZ"))
+            except ValueError:
+                return ""
+            return p[5] if at >= since - 1 else ""
+    return ""
+
+
+_EVENTS = []
+
+
+def events():
+    """bin/fleet_client_events.py, loaded once — None when it cannot be."""
+    if not _EVENTS:
+        try:
+            _EVENTS.append(load("fleet_client_events.py", "fleet_client_events"))
+        except Exception:
+            _EVENTS.append(None)
+    return _EVENTS[0]
 
 
 def alive_opts():
@@ -765,6 +806,23 @@ class Thin:
         self.watch = None       # LineWatch: is the line back?
         self.cut_back = False   # the last ssh was cut because the line came back
         self.rehomed_from = ""  # 换家: the home given up, said once on the new home's top line
+        # the connection events sent to the hub (T689, bin/fleet_client_events.py)
+        self.start_id = "%016x" % random.getrandbits(64)
+        self.started = time.time()
+        self.ever_up = False    # this start has drawn a view: a failure now is a reconnect's
+        self.drop_at = 0.0      # when the line last dropped (the next up's reconnect time)
+
+    def ev(self, kind, **f):
+        """One connection event for the hub — metadata only; never blocks."""
+        if self.local:
+            return   # a managed machine's own `fleet`: no line between, nothing to say
+        m = events()
+        if m:
+            m.record(kind, start=self.start_id, ver=self.version, **f)
+
+    def ev_fail(self, reason, rc="", home="", route=""):
+        self.ev("fail", phase="reconnect" if self.ever_up else "start", reason=reason, rc=rc,
+                home=home or self.home, route=route)
 
     # -- the argv ---------------------------------------------------------
     def argv(self, reconnect):
@@ -1032,9 +1090,12 @@ class Thin:
     # -- one connection ---------------------------------------------------
     def connect_once(self, reconnect):
         """(rc, came_up, reason)."""
+        t_pick = time.time()
         j, pick, why = self.argv(reconnect)
         if j is None:
             tlog("connect", self.home or "-", "", pick, "", "", 1, why)
+            hc = "" if why == OPENING else home_code(t_pick)
+            self.ev_fail(OPENING if why == OPENING else ("home:" + hc if hc else "pick"), 1)
             return 1, False, why
         self.base = j
         home = j.get("machine") or self.home or ""
@@ -1042,6 +1103,7 @@ class Thin:
             self.rehomed_from = self.avoid   # 换家 landed: said on the new home's top line
         if self.home and home != self.home:
             tlog("rehome", home, "", "", "", "", "", "from %s" % self.home)
+            self.ev("rehome", home=self.home, to=home)
             self.resume = False   # a new home has no view of ours yet
         self.home = home
         route = (j.get("route") or {}).get("name") or ("local" if j.get("local") else "")
@@ -1055,6 +1117,11 @@ class Thin:
         tlog("connect", home, route, pick, ms(t0, first_byte) if first_byte else "",
              ms(t0, first_view) if first_view else "", rc, "quit" if self.quit else ("up" if up else "never up"),
              net=str(j.get("net") or ""), end="" if rc == 0 else ssh_end(self.tail))
+        if up and not self.quit and not self.updating and rc != 0:
+            self.drop_at = time.time()
+            self.ev("drop", home=home, route=route, rc=rc, ms=ms(t0), reason=ssh_end(self.tail) or "rc%d" % rc)
+        elif not up and not self.quit and not self.updating:
+            self.ev_fail("no_fleet" if rc == NO_FLEET else (ssh_end(self.tail) or "never_up"), rc, home, route)
         if up:
             self.resume = True
         self.conn_secs = time.time() - t0
@@ -1251,6 +1318,13 @@ class Thin:
                                 h, rt, t0 = getattr(self, "drawn_at", ("", "", now))
                                 tlog("drawn", h or "-", rt, "", ms(t0, first_byte) if first_byte else "",
                                      ms(t0, now), "", "")
+                                if self.drop_at:
+                                    self.ev("up", phase="reconnect", home=h, route=rt, ms=ms(self.drop_at, now))
+                                elif not self.ever_up:
+                                    self.ev("up", phase="start", home=h, route=rt, ms=ms(self.started, now))
+                                else:
+                                    self.ev("up", home=h, route=rt, ms=ms(t0, now))
+                                self.ever_up, self.drop_at = True, 0.0
                         elif kind == "quit":
                             self.quit = True
                             pending.clear()
@@ -1359,6 +1433,7 @@ class Thin:
             self.fwd.close_all()
         self.restore_tty()
         tlog("end", self.home, "", "", "", "", 128 + n, "signal %d" % n)
+        self.ev("quit", home=self.home, rc=128 + n, reason="signal")
         if n != signal.SIGHUP:
             self.profile(False)
         os._exit(128 + n)
@@ -1631,6 +1706,7 @@ class Thin:
                    (os.environ.get("FLEET_THIN_BACKOFF") or "1,2,4,8,16,30").split(",") if x.strip()] or [1.0]
         rehome = int(env_num("FLEET_THIN_REHOME_AFTER", 3))
         self.profile(True)
+        self.ev("start")
         k = fails = broke = 0
         offline = False
         try:
@@ -1652,6 +1728,7 @@ class Thin:
                     continue
                 if self.quit or (rc == 0 and not why):
                     tlog("quit", self.home, "", "", "", "", rc, "quit" if self.quit else "detach")
+                    self.ev("quit", home=self.home, rc=rc, reason="quit" if self.quit else "detach")
                     return 0
                 if up and self.drawn and not why:
                     # the view was on screen and the line went: keep its picture (T690)
@@ -1688,6 +1765,8 @@ class Thin:
                         self.first_failed(tr("thin_first_rounds_fmt", self.home or "?", self.firsts - 1))
                     if self.firsts > int(env_num("FLEET_THIN_FIRST_ROUNDS", 3)) or not self.first_session(there):
                         tlog("quit", self.home, "", "", "", "", 1, "no first session")
+                        self.ev_fail("first_session", 1)
+                        self.ev("quit", home=self.home, rc=1, reason="no_first_session")
                         return 1
                     fails, k = 0, 0
                     continue
@@ -1698,6 +1777,7 @@ class Thin:
                     self.home, self.avoid = self.avoid, ""
                     self.resume = self.up_home == self.home
                     tlog("rehome", self.home, "", "", "", "", "", "no other home: back to %s" % self.home)
+                    self.ev("rehome", home=self.home, to=self.home, reason="no_other")
                     self.status(tr("thin_rehome_back_fmt", self.home), 2)
                 broke = broke + 1 if self.view_broke(rc, up, why) else 0
                 if broke >= int(env_num("FLEET_THIN_VIEW_FAILS", 3)):
@@ -1720,6 +1800,7 @@ class Thin:
                     # the hub does not answer either: our own line is down, not the home —
                     # stay, keep the view, and need one more failure with the hub back (#3007)
                     tlog("offline", self.home, "", "", "", "", "", "the hub does not answer either: keeping %s" % self.home)
+                    self.ev("offline", home=self.home)
                     fails, offline = rehome - 1, True
                 elif fails >= rehome and offline:
                     fails, offline = rehome - 1, False   # the hub back: one more try at the home first
@@ -1748,6 +1829,7 @@ class Thin:
                 self.maybe_update()
         except KeyboardInterrupt:
             tlog("quit", self.home, "", "", "", "", 130, "^C between connections")
+            self.ev("quit", home=self.home, rc=130, reason="interrupt")
             return 130
         finally:
             self.stop_watch()

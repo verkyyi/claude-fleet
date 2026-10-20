@@ -20,6 +20,7 @@ bin/fleet-connect.py	doctor,view,ls,show,answer,connect,doctor-live
 bin/fleet-route.py	dispatch
 bin/fleet_tls.py	install,doctor,login,view,ls,show,answer,connect,doctor-live
 bin/fleet_clientlog.py	doctor,login,view,ls,show,answer,connect,doctor-live
+bin/fleet_client_events.py	view
 bin/fleet_managed.py	login,view,ls,show,answer,connect,doctor-live
 bin/fleet_redact.py	install:read,doctor:read,doctor-live:read
 bin/fleet-client-lib.sh	static
