@@ -360,7 +360,7 @@ fleet_launch_end() {
 }
 
 # fleet_launch_yield — the agent runs one scheduling class below the 看台 (T691).
-# On a full machine (mini2: 10 cores at load 15-50, 94% of the sessions) the agents
+# On a full machine (mac-b: 10 cores at load 15-50, 94% of the sessions) the agents
 # and everything they run took the CPU from the tmux server, sshd and the panel's
 # python, and ⌘P / a switch stalled behind them. A Mac clamps the agent's QoS
 # (`taskpolicy -c`, inherited by every child, no root) — nice alone barely moved it

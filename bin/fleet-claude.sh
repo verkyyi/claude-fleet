@@ -313,6 +313,7 @@ case "$_fc_ty" in 0|off|none) case "${CLAUDE_CODE_SHELL_PREFIX:-}" in */fleet-to
 esac
 unset _fc_ty
 if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ "${FLEET_LOOP_AGENT:-}" = claude ]; then
+  # shellcheck disable=SC2154  # fleet_launch_yield sets _fl_yield
   exec python3 "$BIN/fleet-loop.py" bridge -- ${_fl_yield[@]+"${_fl_yield[@]}"} "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${as_flag[@]+"${as_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
 fi
 # The agent's own report (issue #2536, EPIC #2535 C1): Claude Code ≥ 2.1.295 says
@@ -328,4 +329,5 @@ if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && [ "${FLEET_STATUS_7501:-1}" 
   # up to FLEET_STATUS_REPLAY_DEPTH tmux on the way (0 = keep it on this machine).
   _fc_relay=(python3 "$BIN/fleet-status-7501.py" relay --replay "${FLEET_STATUS_REPLAY_DEPTH:-3}" --)
 fi
+# shellcheck disable=SC2154  # fleet_launch_yield sets _fl_yield
 exec ${_fc_relay[@]+"${_fc_relay[@]}"} ${_fl_yield[@]+"${_fl_yield[@]}"} "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${as_flag[@]+"${as_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
