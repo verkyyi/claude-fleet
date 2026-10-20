@@ -233,7 +233,7 @@ cat > "$WORK/taskrec" <<'TR'
 case "$2" in KT88|kt88|T88) printf 'KT88\nT88\n' ;; KT|kt) echo 'fleet-task-record: KT88 · a · open' >&2; exit 2 ;; *) exit 1 ;; esac
 TR
 chmod +x "$WORK/taskrec"
-read -r WT PT <<EOF
+read -r WT _ <<EOF
 $(newwin "$(mkfid)")
 EOF
 tf set-window-option -t "$WT" @task T88
