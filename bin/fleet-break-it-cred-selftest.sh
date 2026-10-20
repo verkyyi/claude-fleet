@@ -84,7 +84,7 @@ suite_holds() {
   [ -s "$WORK/suite-ids" ] || FLEET_SELFTEST_NO_SHADOW=1 FLEET_HEAVY=0 sh "$BIN/run-selftests.sh" --ids > "$WORK/suite-ids" 2>/dev/null
   grep -qxF -- "$t" "$WORK/suite-ids" || { WHY="$t is no longer a test the suite runs: this drill held it"; return 1; }
   for s in "$@"; do
-    grep -qF -- "$s" "$BIN/$f" || { WHY="$f no longer carries “$s”: this drill held it"; return 1; }
+    grep -qF -- "$s" "$BIN/$f" || { WHY="$f no longer carries [${s}]: this drill held it"; return 1; }
   done
 }
 
