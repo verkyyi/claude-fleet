@@ -35,8 +35,9 @@ DEFAULT_PHONE = "ctrl+space f12 ctrl+]p"
 # the actions with no switch-table code: bound only as a chord the terminal sends
 CODELESS = ("shell",)
 # The keys issue #3328 (EPIC #3178 ⑤, D3 · D4) folded into one key, ⌘P. Each still
-# reaches the 看台 and opens the panel (⌘N ⌘T lit on its ⚡ row) with a one-time
-# 「⌘T 已并进 ⌘P」 (fleet_view.forward_note) — kept for good (issue #4790: they are
+# reaches the 看台 and opens the panel (⌘T lit on its ⚡ row) with a one-time
+# 「⌘T 已并进 ⌘P」 (fleet_view.forward_note) — ⌘N opens the 「新会话」 box itself,
+# both values chosen, no hint (T670) — kept for good (issue #4790: they are
 # still pressed, and given back to iTerm2 ⌘Q would quit it): (action, chord, glyph,
 # code) — the code the iTerm2 row sends; ⌘K's is the retired 930 (an old profile
 # sent it for the same panel), ⌃\ has none (the terminal sends it). A chord the

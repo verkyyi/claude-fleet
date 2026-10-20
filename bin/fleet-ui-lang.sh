@@ -479,8 +479,6 @@ fleet_ui_t() {
     en:view_cancel) printf 'Cancel' ;;
     zh:view_confirm) printf '确定' ;;
     en:view_confirm) printf 'Confirm' ;;
-    zh:view_draft_save_failed) printf '草稿未能保存到磁盘' ;;
-    en:view_draft_save_failed) printf 'Could not save draft to disk' ;;
     zh:view_draft_agent_gone) printf '所选 Agent 已不可用；请重新选择' ;;
     en:view_draft_agent_gone) printf 'Selected agent unavailable; choose again' ;;
     zh:view_draft_repo_gone) printf '所选仓库已不可用；请重新选择' ;;
@@ -1372,8 +1370,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:keys_switch_zoom)       printf %s 'zoom the session on the right; again to restore' ;;
     zh:keys_switch_quickopen)  printf %s '快速跳转：打几个字（名字、机器、状态都算），↵ 切过去；不打字 ↵ = 上一个看的' ;;
     en:keys_switch_quickopen)  printf %s 'quick open: type a few letters (name, machine, state), ↵ switches; ↵ on nothing = the one you saw before' ;;
-    zh:keys_switch_new)        printf %s '新会话：在家里的机器开一个不绑仓库的会话，光标就在它的输入框' ;;
-    en:keys_switch_new)        printf %s 'new session: a no-repo session on your home machine, the cursor in its input' ;;
+    zh:keys_switch_new)        printf %s '新会话：直接打开「新会话」小框，仓库默认是你正在看的会话的（否则上次用的），Agent 是这个仓库上次用的；↵ 就开' ;;
+    en:keys_switch_new)        printf %s 'new session: straight to the “New session” box — the repo of the session you are looking at (else the last one used), the agent that repo last used; Enter opens' ;;
     zh:keys_switch_fold)       printf %s '展开/收起当前会话的子任务；在子任务上按：收起它的父任务' ;;
     en:keys_switch_fold)       printf %s 'open / shut the sub-tasks of the session in view; on a sub-task: shut its parent' ;;
     zh:keys_switch_switcher)   printf %s '切换会话：全部会话按最近使用排，可搜索；最下面「+ 新会话」和「打开多会话视图」（多会话视图里是「收起侧栏」）' ;;
