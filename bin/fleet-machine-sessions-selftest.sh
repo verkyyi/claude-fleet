@@ -51,9 +51,9 @@ case "\${1:-}" in
   list-windows)
     n="\${FAKE_WINDOWS:-0}"
     case "\$*" in *session_name*) pre='f ' ;; *) pre='' ;; esac
-    printf '%sdash @L=\n' "\$pre"
-    i=0; while [ "\$i" -lt "\$n" ]; do printf '%sw%s @L=\n' "\$pre" "\$i"; i=\$((i+1)); done
-    i=0; while [ "\$i" -lt "\${FAKE_ASLEEP:-0}" ]; do printf '%sz%s @L=sleeping\n' "\$pre" "\$i"; i=\$((i+1)); done ;;  # an old window's stamp (T548)
+    printf '%sdash\n' "\$pre"
+    i=0; while [ "\$i" -lt "\$n" ]; do printf '%sw%s\n' "\$pre" "\$i"; i=\$((i+1)); done
+    i=0; while [ "\$i" -lt "\${FAKE_ASLEEP:-0}" ]; do printf '%sz%s\n' "\$pre" "\$i"; i=\$((i+1)); done ;;
   has-session) exit 0 ;;
   display-message) case "\$*" in *-p*) case "\$*" in *window_id*) echo @9 ;; *session_name*) echo f ;; *) echo '' ;; esac ;; esac ;;
   new-window) printf '%s\n' "\$*" >> "$NEWWIN_LOG"; echo @9 ;;

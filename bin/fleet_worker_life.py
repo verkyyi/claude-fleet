@@ -124,13 +124,11 @@ class Worker:
         if len(workers) != 1: raise NotAWorker('requires exactly one worker pane')
         self.pane = workers[0]
         metadata = self.tm('display-message', '-p', '-t', self.pane,
-                           '#{==:#{@hub},1}|#{!=:#{@remote},}|#{@issue}|#{@raw}|#{window_name}').split('|', 4)
-        if len(metadata) != 5: raise ValueError('worker metadata unavailable')
-        hub, remote, issue, raw, name = metadata
+                           '#{==:#{@hub},1}|#{@issue}|#{@raw}|#{window_name}').split('|', 3)
+        if len(metadata) != 4: raise ValueError('worker metadata unavailable')
+        hub, issue, raw, name = metadata
         if name in ('dash','plan','backlog','home') or hub == '1':
             raise NotAWorker('panel/hub is not a worker')
-        if remote == '1':
-            raise NotAWorker('a proxy onto another machine is not a worker here')
         if not issue.isdigit() and raw != '1':
             raise ValueError('not an issue or scratch worker')
         self.directory = root(session)

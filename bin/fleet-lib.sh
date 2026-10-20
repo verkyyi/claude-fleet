@@ -8033,24 +8033,19 @@ fleet_hub_sessions() {
 # dash/plan/backlog are panels — everything else is a Claude working session
 # (the same rule the dashboard uses). Pure tmux + awk, no git/tmux-per-window
 # forks. Prints an integer (0 if tmux isn't running or no fleets are up).
-# A PROXY window onto another machine's session (@remote, issue #1424) rides a
-# trailing ` @L=remote` field (a window NAME may itself hold spaces) and is no
-# session here. (The field carried a hibernated worker's lifecycle stamp until
-# hibernation went with T548, C8; an old window's value is read as empty.)
 # A window with NO agent in it holds no slot either (issue #2404): the wrapper gone
 # (a launch that never came up fell to the caller's `exec $SHELL`), the pane dead,
 # or the session on its recovery page (`exited`) — FLEET_AGENT_FMT's `@A=0`. On
 # 2026-10-07 three such shells filled a login's 4/4 and refused the one real
 # start.
 _fleet_session_tally() {   # → "<awake>" across every fleet
-  fleet_list_windows_all "#{session_name} $FLEET_ROLE_FMT @A=$FLEET_AGENT_FMT @L=#{?@remote,remote,}" | awk "$FLEET_ROLE_AWK"'
+  fleet_list_windows_all "#{session_name} $FLEET_ROLE_FMT @A=$FLEET_AGENT_FMT" | awk "$FLEET_ROLE_AWK"'
     { rows[NR]=$0; r=frole($2); if (r=="home" || r=="panel") fleet[$1]=1 }
     END {
       for (i=1; i<=NR; i++) {
-        n=split(rows[i], a, " "); s=a[1]; w=frole(a[2]); l=""; ag=1
-        if (n>=3 && a[n] ~ /^@L=/) l=substr(a[n], 4)
-        if (n>=4 && a[n-1] ~ /^@A=/) ag=substr(a[n-1], 4)
-        if (!fleet[s] || w!="worker" || l=="remote") continue
+        n=split(rows[i], a, " "); s=a[1]; w=frole(a[2]); ag=1
+        if (n>=3 && a[n] ~ /^@A=/) ag=substr(a[n], 4)
+        if (!fleet[s] || w!="worker") continue
         if (ag!="0") c++
       }
       print c+0
@@ -8065,19 +8060,18 @@ fleet_session_count() { _fleet_session_tally; }
 # the same rule the dashboard and the global count use. Prints an integer (0 if
 # the session isn't a fleet, doesn't exist, or tmux isn't running).
 # NB: the role rule (home/panel = hub, only worker counts; FLEET_ROLE_FMT, #1844)
-# AND the agent/remote rule are duplicated in _fleet_session_tally above — keep BOTH in sync, or the global and
+# AND the agent rule are duplicated in _fleet_session_tally above — keep BOTH in sync, or the global and
 # per-fleet caps count different sets.
 _fleet_session_tally_for() {   # <sess> → "<awake>" in that fleet
-  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "$FLEET_ROLE_FMT @A=$FLEET_AGENT_FMT @L=#{?@remote,remote,}" 2>/dev/null | awk "$FLEET_ROLE_AWK"'
-    { l=""; ag=1; t=$0
-      if (match(t, / @L=[^ ]*$/)) { l=substr(t, RSTART+4); t=substr(t, 1, RSTART-1) }
+  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "$FLEET_ROLE_FMT @A=$FLEET_AGENT_FMT" 2>/dev/null | awk "$FLEET_ROLE_AWK"'
+    { ag=1; t=$0
       if (match(t, / @A=[^ ]*$/)) { ag=substr(t, RSTART+4); t=substr(t, 1, RSTART-1) }
       role=frole(t)
-      if (role=="home" || role=="panel") hub=1; rows[NR]=role; life[NR]=l; agent[NR]=ag }
+      if (role=="home" || role=="panel") hub=1; rows[NR]=role; agent[NR]=ag }
     END {
       if (!hub) { print 0; exit }
       for (i=1; i<=NR; i++) {
-        if (rows[i]!="worker" || life[i]=="remote") continue
+        if (rows[i]!="worker") continue
         if (agent[i]!="0") c++
       }
       print c+0
@@ -8116,9 +8110,9 @@ fleet_reap_state() {
 # window that holds a slot in that fleet — the refusal names them (issue #2404 ③),
 # so 「4/4」 is never a mystery and the way out is one command.
 fleet_session_slot_holders() {
-  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "#{window_id} $FLEET_AGENT_FMT #{?@remote,remote,-}	$FLEET_ROLE_FMT	#{@fleet_id}	#{window_name}" 2>/dev/null \
+  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "#{window_id} $FLEET_AGENT_FMT	$FLEET_ROLE_FMT	#{@fleet_id}	#{window_name}" 2>/dev/null \
     | awk -F'\t' "$FLEET_ROLE_AWK"'
-      { split($1, h, " "); if (frole($2)!="worker" || h[3]=="remote") next
+      { split($1, h, " "); if (frole($2)!="worker") next
         if (h[1] ~ /^@/ && h[2]!="0") print h[1] "\t" $3 "\t" $4 }'
 }
 # _fleet_holders_note <sess> → ` — 占着名额：@15 #11805 · @44 norepo-2；收掉一个：
@@ -8821,7 +8815,7 @@ fleet_idle_probe() {
     --configs "$configs" --conf-dir "$FLEET_CONF_DIR" \
     --sessions-dir "$(fleet_machine_sessions_dir)" --login "$(fleet_machine_login)" \
     --self-window "${self:-}" --self-socket "${sock:-}" \
-    --window-format "$(fleet_lw_fmt "#{socket_path}|#{window_id}|$FLEET_ROLE_FMT|#{@claude_state}|#{@claude_state_ts}|#{@remote}")" "$@"
+    --window-format "$(fleet_lw_fmt "#{socket_path}|#{window_id}|$FLEET_ROLE_FMT|#{@claude_state}|#{@claude_state_ts}")" "$@"
 }
 # fleet_machine_sessions_owned <dir> — the login files in <dir> their login owns,
 # one path a line: a regular file named after the account that owns it (or after
@@ -9204,18 +9198,18 @@ fleet_cfg_state() {
 # So does one whose work is over — its ticket CLOSED (#4822), its ID's result
 # done / failed or its task record closed (fleet_cfg_work_over, T569).
 fleet_cfg_restart_why() {
-  local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp av st ts lp rem hub nm bin h rp iss wrepo tsk fid
+  local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp av st ts lp hub nm bin h rp iss wrepo tsk fid
   case "$idle" in ''|*[!0-9]*) idle=600 ;; esac
   o=$(_fleet_tmux "$sess" display-message -p -t "$win" \
-        '#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@claude_state}|#{@claude_state_ts}|#{@loop}|#{@remote}|#{@hub}|#{@reap_policy}|#{@issue}|#{@task}|#{@fleet_id}|#{window_name}' 2>/dev/null) \
+        '#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@claude_state}|#{@claude_state_ts}|#{@loop}|#{@hub}|#{@reap_policy}|#{@issue}|#{@task}|#{@fleet_id}|#{window_name}' 2>/dev/null) \
     && [ -n "$o" ] || { echo gone; return 1; }
   # parameter expansion, not a here-string: this lib is sourced by plain sh too
   ag=${o%%|*}; o=${o#*|}; fp=${o%%|*}; o=${o#*|}; av=${o%%|*}; o=${o#*|}; st=${o%%|*}; o=${o#*|}
   ts=${o%%|*}; o=${o#*|}; lp=${o%%|*}; o=${o#*|}
-  rem=${o%%|*}; o=${o#*|}; hub=${o%%|*}; o=${o#*|}; rp=${o%%|*}; o=${o#*|}
+  hub=${o%%|*}; o=${o#*|}; rp=${o%%|*}; o=${o#*|}
   iss=${o%%|*}; o=${o#*|}; tsk=${o%%|*}; o=${o#*|}; fid=${o%%|*}; nm=${o#*|}
   case "$nm" in dash|plan|backlog|home) echo panel; return 1 ;; esac
-  [ -z "$rem" ] && [ "$hub" != 1 ] || { echo remote; return 1; }
+  [ "$hub" != 1 ] || { echo remote; return 1; }
   fleet_cfg_expected_load; fleet_cfg_broken_load; fleet_cfg_state "$ag" "$fp" "$av" "$sess" "$win"
   # broken (#2076) is a stale session that will fail too: reopened the same way
   case "$FCFG_STATE" in stale|renew|broken) ;; *) echo "$FCFG_STATE"; return 1 ;; esac

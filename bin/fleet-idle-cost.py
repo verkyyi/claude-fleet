@@ -255,16 +255,15 @@ class IdleGuard:
                     seen.add(wid)
                     line = body
                 f = line.split("|")
-                if len(f) != 7:
+                if len(f) != 6:
                     raise RuntimeError("malformed window state: " + label)
-                sock, wid, role, state, changed, life, server = f
+                sock, wid, role, state, changed, server = f
                 # FLEET_ROLE_FMT is supplied by fleet-lib; same fallback as
                 # FLEET_ROLE_AWK, for windows predating role stamps.
                 worker = role == "=worker" or (not role.startswith("=") and
                                                role not in {"home", "plan", "dash", "backlog"})
-                # the 6th field is @remote (it carried hibernation's stamp until T548)
-                if worker and not life:
-                    rows[(sock, wid)] = (state, changed, life, server)
+                if worker:
+                    rows[(sock, wid)] = (state, changed, server)
         return rows
 
     def snapshot(self):
@@ -337,7 +336,7 @@ class IdleGuard:
         caller = (self.a.self_socket, self.a.self_window)
         own = rows.get(caller)
         if own and self.self_activity == (
-                self.activity_dir + caller[0] + "/" + own[3] + "/" + caller[1]):
+                self.activity_dir + caller[0] + "/" + own[2] + "/" + caller[1]):
             rows.pop(caller)
         working = sum(v[0] == "working" for v in rows.values())
         if working:

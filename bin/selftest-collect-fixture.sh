@@ -112,7 +112,7 @@ case "${1:-}" in
           [ -f "$f" ] && cat "$f"
           [ "$label" = "${FAKE_TMUX_FAIL_SESS:-}" ] && exit 1   # partial output is no complete view
           exit 0 ;;
-        *'#{?@remote,,x}'*) i=1; while [ "$i" -le "${FAKE_NWIN:-0}" ]; do echo x; i=$((i+1)); done; exit 0 ;;
+        *' x') i=1; while [ "$i" -le "${FAKE_NWIN:-0}" ]; do echo x; i=$((i+1)); done; exit 0 ;;
         *'@claude_state},working'*) [ -n "${FAKE_NWIN:-}" ] && printf '@1\n@2\n@3\n'; exit 0 ;;
       esac
     done

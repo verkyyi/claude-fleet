@@ -249,9 +249,7 @@ hand** (issues #1482, #1616; EPIC #1479 C3, EPIC #1615 C1). In hub mode —
 `CCQUOTA_FLEET=1`, the fleet's `FLEET_SIDEBAR_SOURCE=hub`, and a `remote_<sess>`
 cache on disk — the bar's right side is about THE WINDOW YOU ARE ON, not this
 machine, and it is EMPTY while all is well. Each segment appears on its own
-condition, in this order: the machine of a proxy window (`@remote`,
-`fleet-remote-view.sh`) by name, `○ 失联 3m` after it when the hub calls it
-lost; `旧` when a machine's live install is behind stable (this machine's own
+condition, in this order: `旧` when a machine's live install is behind stable (this machine's own
 row too); the window's `@cc_account` once max(5h, 周) reaches
 `FLEET_STATUS_QUOTA_PCT` (80 %; off the hub's limits, else the window's own
 `@rl5h`/`@rl7d`); the alert counts; `○ 入口 Nm` once `global/hub_ok` (#1483,
@@ -281,8 +279,7 @@ those logins report under (no `endpoint_shares`), audited as `fleet_summary`. So
 a colleague who only did `fleet login` gets the machine's word and their own
 account's quota. Only a refusal (401/403, or 404 from a hub not yet redeployed)
 falls back to the viewer routes with the token; no answer spends nothing.
-`bin/fleet-status-lib.sh` holds the one rule (`fleet_status_node`: `@remote` →
-that machine, else here) and the readers; the shell (C5) reuses it. Off hub mode
+Off hub mode
 the bar draws the account past the line (off the window's own reading), the
 alert counts and nothing else.
 
