@@ -63,8 +63,15 @@ class TakeoverRefused(ValueError):
     """Road 2's isolation or ownership checks failed: a refusal, never a preparation."""
 
 
+def conf_dir():
+    # The same rule as fleet-client-core.sh: a caller (an ssh login shell, a
+    # cron line) need not carry FLEET_CONF_DIR in its environment (T552).
+    value = os.environ.get('FLEET_CONF_DIR') or str(Path.home()/'.config'/'claude-fleet')
+    return Path(value)
+
+
 def preparation_path(values):
-    return Path(os.environ['FLEET_CONF_DIR'])/'transfer-preparation'/(values['fleet_id']+'.json')
+    return conf_dir()/'transfer-preparation'/(values['fleet_id']+'.json')
 
 
 @contextmanager
@@ -170,7 +177,7 @@ def request_preparation(session, pane, transcript, pid, sid, target):
     view = runpy.run_path(str(Path(__file__).with_name('fleet-input.py')))['snapshot'](session,pane,agent='claude')
     if view['state'] != 'empty':
         raise ValueError('finish the source input before requesting schedule preparation')
-    root=Path(os.environ['FLEET_CONF_DIR'])/'transfer-preparation'
+    root=conf_dir()/'transfer-preparation'
     root.mkdir(mode=0o700,parents=True,exist_ok=True)
     path=preparation_path(values)
     with preparation_lock(path):
@@ -321,4 +328,7 @@ if __name__ == '__main__':
         sys.exit(4)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         print('fleet-transfer: ' + str(error), file=sys.stderr)
+        sys.exit(1)
+    except KeyError as error:
+        print('fleet-transfer: missing value ' + str(error), file=sys.stderr)
         sys.exit(1)

@@ -57,6 +57,31 @@ class IdentityTests(unittest.TestCase):
             prep.validate(values, Path.home())
 
 
+class ConfDirTests(unittest.TestCase):
+    """T552: an ssh login shell calls transfer with no FLEET_CONF_DIR in its environment."""
+    def test_conf_dir_follows_the_lib_default_when_env_lacks_it(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, HOME=tmp):
+            os.environ.pop('FLEET_CONF_DIR', None)
+            self.assertEqual(prep.conf_dir(), Path(tmp)/'.config'/'claude-fleet')
+            values = dict.fromkeys(prep.FIELDS, ''); values['fleet_id'] = '1'*8+'-1111-4111-8111-'+'1'*12
+            with patch.object(prep, 'identity', return_value=values):
+                self.assertEqual(prep.preparation_check('s', '%1', '1', 'sid', 'codex'), '')
+
+    def test_cli_without_env_never_prints_a_traceback(self):
+        env = {k: v for k, v in os.environ.items() if k != 'FLEET_CONF_DIR'}
+        run = subprocess.run(['python3', str(BIN/'.fleet-transfer-norepo.py'), 'check-request',
+                              'fleet-t552-no-such-socket', '%1', '1', 'sid', 'codex'],
+                             env=env, capture_output=True, text=True)
+        self.assertNotIn('Traceback', run.stderr)
+        self.assertNotIn('KeyError', run.stderr)
+        self.assertTrue(run.stderr.startswith('fleet-transfer: '), run.stderr)
+
+    def test_transfer_exports_the_resolved_conf_dir(self):
+        text = (BIN/'fleet-transfer.sh').read_text()
+        self.assertLess(text.index('. "$BIN/fleet-lib.sh"'), text.index('export FLEET_CONF_DIR'))
+        self.assertLess(text.index('export FLEET_CONF_DIR'), text.index('python3 "$BIN/.fleet-transfer-norepo.py"'))
+
+
 class PreparationTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()

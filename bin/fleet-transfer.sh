@@ -58,6 +58,10 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 # shellcheck source=/dev/null
 . "$BIN/usage-lib.sh"          # fleet_limit_banner — the wall this cutover leaves behind (#870)
+# fleet-lib resolved FLEET_CONF_DIR as a shell variable; the helpers below
+# (.fleet-transfer-norepo.py …) read it from the environment, which an ssh
+# login shell's caller does not carry (T552).
+export FLEET_CONF_DIR
 HELPER="$BIN/.fleet-transfer.py"
 
 die() { FAILURE=$*; printf 'fleet-transfer: %s\n' "$*" >&2;
