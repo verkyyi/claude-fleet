@@ -17,6 +17,10 @@ words, stamp its number (T661).
         by 「（…：见设计页）」. Still over ⇒ exit 1, nothing printed.
   fleet-task-page.py stamp <page.html> <task id> [-o out]
       → the eyebrow's 「任务设计」 becomes 「任务 <id>」 (idempotent).
+  fleet-task-page.py compare <compare.json|->
+      → ONE 改前 / 改后 block (div.cmp), the same one a task card renders — the
+        EPIC pages (/fleet-epic-plan, /fleet-epic-report) paste it into a card's
+        upper layer; template.html carries the CSS and the state switch.
   fleet-task-page.py ids
       → the section ids a task page carries, one per line.
 
@@ -24,9 +28,15 @@ The spec (plugins/fleet-epic/skills/epic-page/task-page.example.json is a whole 
   repo · date · title · sub · kind ("fix" | "feature": a feature's #cause is
   「为什么要做」) · band [{n,k}] · problem [li] · cause {lede, steps [[step, what]],
   evidence [li]} · metrics [[指标, 现在, 目标]] · metrics_how [li] ·
-  charter {do [li], dont [li]} · members [{key, name, line, what, proto?,
+  charter {do [li], dont [li]} · members [{key, name, line, what, compare?,
   tech [[label, text]]}] · risks [{head, text}] · risks_tech [li] ·
-  signoff [[事项, 建议]] · signoff_note · evidence (one line) · footer.
+  signoff [[事项, 建议]] · signoff_note · evidence (one line) · footer ·
+  css (the prototypes' own rules, one <style> after the frame's).
+  compare (T699) = {before: PANE, after: PANE | [STATE…], states?: [STATE…]}:
+  PANE = {html | img (a path beside the page), alt?, note}; STATE = PANE + label.
+  More than one 改后 state ⇒ buttons switch them (no JS: the first shows; printed:
+  all). `proto` (a link to a separate prototype page) still renders, and the lint
+  WARNs it.
 
 Exit: 0 done · 1 over the cap (body) · 2 usage / unreadable input.
 """
@@ -84,10 +94,61 @@ def fold(summary, inner):
     return '<details class="fold">\n<summary>%s</summary>\n%s</details>\n' % (summary, inner)
 
 
+def plain(frag):
+    """An HTML fragment as one line of text (for data-say, the words' summary)."""
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]*>", "", frag or ""))).strip()
+
+
+def pane(p):
+    if p.get("img"):
+        inner = '<img src="%s" alt="%s" loading="lazy">' % (
+            html.escape(p["img"], quote=True), html.escape(p.get("alt") or p.get("label") or "", quote=True))
+    else:
+        inner = p.get("html", "")
+    o = '<div class="pane">%s</div>\n' % inner
+    if p.get("note"):
+        o += '<p class="note">%s</p>\n' % p["note"]
+    return o
+
+
+def compare(c):
+    """The 改前 / 改后 block (T699): 改前 one pane from today, 改后 one pane or several
+    states. The ONE renderer — task cards and the EPIC pages alike."""
+    before = c.get("before") or {}
+    after = c.get("states") or c.get("after") or {}
+    states = after if isinstance(after, list) else [after]
+    multi = len(states) > 1
+
+    def say(tag, p):
+        t = tag + (" · " + plain(p["label"]) if p.get("label") else "")
+        n = plain(p.get("note"))
+        return html.escape(t + ("：" + n if n else ""), quote=True)
+
+    o = ['<div class="cmp">\n<div class="cols">\n']
+    o.append('<div class="col" data-say="%s"><div class="tag">改前</div>\n%s</div>\n' % (say("改前", before), pane(before)))
+    o.append('<div class="col"><div class="tag new">改后</div>\n')
+    for i, st in enumerate(states):
+        o.append('<div class="st"%s data-say="%s">\n' % ("" if i == 0 else " hidden", say("改后", st)))
+        if multi:
+            o.append('<div class="stl">%s</div>\n' % st.get("label", "状态 %d" % (i + 1)))
+        o.append(pane(st) + "</div>\n")
+    o.append("</div>\n</div>\n")
+    if multi:
+        o.append('<div class="tabs">%s</div>\n' % "".join(
+            '<button type="button"%s aria-pressed="%s">%s</button>' % (
+                ' class="on"' if i == 0 else "", "true" if i == 0 else "false", st.get("label", "状态 %d" % (i + 1)))
+            for i, st in enumerate(states)))
+    o.append("</div>\n")
+    return "".join(o)
+
+
 def render(spec):
     g = spec.get
     feature = g("kind") == "feature"
-    o = [head("%s" % g("title", "任务设计")), "\n<body>\n<div class=\"wrap\">\n\n"]
+    h = head("%s" % g("title", "任务设计"))
+    if g("css"):
+        h = h.replace("</head>", "<style>\n%s\n</style>\n</head>" % g("css"), 1)
+    o = [h, "\n<body>\n<div class=\"wrap\">\n\n"]
     o.append('<p class="eyebrow">任务设计 · %s · %s</p>\n' % (g("repo", ""), g("date", "")))
     o.append("<h1>%s</h1>\n" % g("title", ""))
     o.append('<p class="sub">%s</p>\n\n' % g("sub", ""))
@@ -122,6 +183,8 @@ def render(spec):
         o.append('<summary><span class="ct"><strong>%s</strong><span class="cg">%s</span></span></summary>\n'
                  % (m.get("name", ""), m.get("line", "")))
         o.append('<dl>\n  <dt>做什么</dt><dd>%s</dd>\n</dl>\n' % m.get("what", ""))
+        if m.get("compare"):
+            o.append(compare(m["compare"]))
         if m.get("proto"):
             o.append('<p class="proto"><a href="%s">▶ 打开可交互原型</a></p>\n' % html.escape(m["proto"], quote=True))
         if m.get("tech"):
@@ -167,6 +230,7 @@ class Words(HTMLParser):
         self.unskip = ""       # the eyebrow / footer: the frame's stamp, not the task's words
         self.divs = []         # open <div>s' first class
         self.band = []         # the number band's n, k, n, k …
+        self.cmp = 0           # inside a 改前 / 改后 block: its <div> depth
 
     def kind(self):
         kinds = [k for k, _ in self.stack]
@@ -198,6 +262,12 @@ class Words(HTMLParser):
             self.divs.append(cls[0] if cls else "")
             if self.divs[-1] in ("n", "k"):
                 self.buf = []
+            if self.divs[-1] == "cmp" and not self.skip:
+                self.emit("**改前 / 改后**")      # the block as words: one line per state
+                self.cmp = len(self.divs)
+                self.skip += 1
+        if self.cmp and a.get("data-say"):
+            self.emit("- " + a["data-say"])
         if tag == "details":
             k = "card" if "card" in cls else self.kind()
             if self.skip:
@@ -227,6 +297,9 @@ class Words(HTMLParser):
         if self.unskip == tag:
             self.unskip = ""; self.skip -= 1; return
         if tag == "div":
+            if self.cmp and len(self.divs) == self.cmp:
+                self.cmp = 0
+                self.skip -= 1
             c = self.divs.pop() if self.divs else ""
             if self.skip:
                 return
@@ -359,6 +432,14 @@ def main(argv):
 
     if cmd == "ids":
         print("\n".join(IDS))
+    elif cmd == "compare" and len(rest) == 1:
+        try:
+            c = json.loads(read(rest[0]))
+        except ValueError as e:
+            die(2, "compare is not JSON (%s)" % e)
+        if not isinstance(c, dict) or not c.get("before") or not (c.get("after") or c.get("states")):
+            die(2, "compare needs before and after (or states)")
+        write(compare(c))
     elif cmd == "render" and len(rest) == 1:
         try:
             spec = json.loads(read(rest[0]))
@@ -384,7 +465,7 @@ def main(argv):
     elif cmd == "stamp" and len(rest) == 2:
         write(stamp(read(rest[0]), rest[1]))
     else:
-        die(2, "usage: render <spec> | body <page> | stamp <page> <id> | ids")
+        die(2, "usage: render <spec> | body <page> | stamp <page> <id> | compare <json> | ids")
 
 
 if __name__ == "__main__":

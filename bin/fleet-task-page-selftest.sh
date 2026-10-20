@@ -16,6 +16,13 @@
 #   D  stamp: 「任务设计」 → 「任务 T<n>」, again → the new id (idempotent);
 #      fleet-task-record.sh dispatch sends the words as UTF-8 (not \uXXXX).
 #   E  the command and the skill point at the script and the lint.
+#   F  改前 / 改后 (T699): a member's `compare` renders ONE div.cmp in the card's
+#      upper layer (two columns, stacked ≤640px, buttons ≥30px, every state shown
+#      in print — the frame's <style>); with no script the first state is the one
+#      not hidden and the buttons stay hidden; `compare <json>` prints the same
+#      block (template.html's slot IS its output); the spec's `css` follows the
+#      frame's <style>; body writes the block as words, one line per state, no
+#      HTML or script; an old `proto` page link draws the lint's `compare` WARN.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -122,5 +129,67 @@ for s in fleet-task-page.py epic-page-surface.sh task-page.example.json 'fleet-t
   st_has "command names $s" "$(cat "$CMD")" "$s"
 done
 st_has "skill names the task page" "$(cat "$ROOT/plugins/fleet-epic/skills/epic-page/SKILL.md")" 'fleet-task-page.py'
+
+# ---- F ------------------------------------------------------------------------
+ST_LEG=F
+st_has "a block in the example's card" "$PAGE" '<div class="cmp">'
+CARD=$(python3 - "$TMP/page.html" <<'PY2'
+import re, sys
+p = open(sys.argv[1], encoding="utf-8").read()
+c = re.search(r'<div class="ob" id="m-C">.*?</div>\n\n', p, re.S).group(0)
+up = c.split('<details class="fold">')[0]
+print("upper" if '<div class="cmp">' in up else "folded")
+sts = re.findall(r'<div class="st"( hidden)?', c)
+print("states=%d first=%s rest=%s" % (len(sts), "shown" if not sts[0] else "hidden", "hidden" if all(sts[1:]) else "shown"))
+print("buttons=%d on=%d" % (c.count("<button"), c.count('class="on"')))
+PY2
+)
+st_has "block in the upper layer" "$CARD" upper
+st_has "no-JS: the first state shows, the rest are hidden" "$CARD" 'states=3 first=shown rest=hidden'
+st_has "one button per state, the first on" "$CARD" 'buttons=3 on=1'
+TPL=$(cat "$T")
+st_has "narrow: the columns stack" "$TPL" '@media (max-width:640px){ .cmp .cols{grid-template-columns:1fr} }'
+st_has "buttons ≥30px" "$TPL" 'min-height:32px'
+st_has "buttons hidden until the script runs" "$TPL" '.cmp .tabs{display:none;'
+st_has "the script shows them" "$TPL" '.js .cmp .tabs{display:flex}'
+st_has "print: every state" "$TPL" '.cmp .st[hidden]{display:block!important}'
+st_has "改前 grey, 改后 accent" "$TPL" '.cmp .tag.new{color:var(--accent)'
+st_has "the switch rides the frame's head" "$PAGE" 'closest(".cmp .tabs button")'
+cat > "$TMP/ph.json" <<'EOF'
+{"before":{"html":"⟨现在的样子 — 取自现状（截图写 img）⟩","note":"⟨一句：现在哪里不好⟩"},
+ "states":[{"label":"⟨状态 1⟩","html":"⟨上线后的样子 — 真样式、真文案⟩","note":"⟨一句：这一态怎么样⟩"},
+           {"label":"⟨状态 2⟩","html":"⟨另一个场景：出错 / 空态 / 手机⟩","note":"⟨…⟩"}]}
+EOF
+BLK=$(python3 "$P" compare "$TMP/ph.json") || st_fail "compare"
+st_has "template's slot is the renderer's output" "$TPL" "$BLK"
+ONE=$(printf '%s' '{"before":{"img":"shots/a b.png","note":"旧"},"after":{"img":"shots/new.png","alt":"新的","note":"新"}}' | python3 "$P" compare -)
+st_has "an image beside the page" "$ONE" '<img src="shots/a b.png"'
+st_hasnt "one 改后: no buttons" "$ONE" '<button'
+st_hasnt "one 改后: nothing hidden" "$ONE" 'hidden'
+printf '{"before":{"html":"x"}}' | python3 "$P" compare - >/dev/null 2>&1; st_eq "no after → 2" 2 $?
+python3 - "$EX" "$TMP/css.json" "$TMP/old.json" <<'PY2'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+json.dump(dict(d, css=".tm{background:#1a1b26}"), open(sys.argv[2], "w"), ensure_ascii=False)
+m = [dict(x) for x in d["members"]]
+m[2].pop("compare"); m[2]["proto"] = "proto-c.html"
+json.dump(dict(d, members=m), open(sys.argv[3], "w"), ensure_ascii=False)
+PY2
+st_has "the spec's css after the frame's" "$(python3 "$P" render "$TMP/css.json")" '</script>
+<style>
+.tm{background:#1a1b26}
+</style>
+</head>'
+w=$(python3 "$P" render "$TMP/old.json" | bash "$L" --lint - 2>&1 >/dev/null)
+st_has "an old proto page link warns" "$w" 'WARN compare: 还链到单独的原型页'
+st_has "and a visual card with no block" "$w" 'WARN compare: 界面有变化，卡片里却没有「改前 / 改后」对比  ← 真没人收时提醒你'
+B=$(python3 "$P" body "$TMP/page.html")
+st_has "body: the block as words" "$B" '**改前 / 改后**
+- 改前：批次报告没人收时'
+st_has "body: one line per state" "$B" '- 改后 · 微信：同一批次只推一次'
+st_hasnt "body: no block HTML" "$B" 'class="cmp"'
+st_hasnt "body: no script" "$B" 'addEventListener'
+st_hasnt "body: no pane content" "$B" '点开看全文 ›'
+st_has "the command says compare" "$(cat "$CMD")" '"states"'
 
 st_done
