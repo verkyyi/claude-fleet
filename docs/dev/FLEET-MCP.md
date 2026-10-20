@@ -29,7 +29,7 @@ The same script serves two servers. Every session mounts the **core**, `fleet`
 (`conf/mcp-worker.json`): what a session works with — `status` · `repos` · `agents` ·
 `brief` · `ask` · `report` · `pr_verdict` · `pr_merge` · `handoff` · `context` ·
 `transfer` · `where` · `open` · `show` · `set_reap`. The **dispatch group** —
-`spawn` · `await` · `children` · `answer_dialog` · `send` · `task` — is listed only by
+`spawn` · `await` · `children` · `answer_dialog` · `send` · `task` · `clear` — is listed only by
 `fleet-mcp.py --group orch`, the server **`fleet-orch`** (`conf/mcp-orch.json`). It
 ships with the core (issue #4334): no plugin registers it. Claude shows its tools as
 `mcp__fleet-orch__<tool>`; Codex shows them on its `fleet-orch` server.
@@ -62,7 +62,7 @@ ships with the core (issue #4334): no plugin registers it. Claude shows its tool
 
 ## Tools
 
-The first table's `children` · `spawn` · `await` · `send` and `answer_dialog` (below)
+The first table's `children` · `spawn` · `await` · `send`, `answer_dialog` and `clear` (below)
 are the dispatch group's — listed by `fleet-orch`, answered by `fleet` as legacy.
 
 | tool | arguments | runs | exit codes |
@@ -89,6 +89,7 @@ together (refused, nothing ran): `slug` is
 | `report` 报 | `state` (`merged` · `blocked` · `failed` · `stopped` · `waiting`), `pr`?, `summary`?, `outcome`? (`succeeded` · `failed`, accepted tasks), `dry_run`? | `fleet-report-parent.sh --state S [--pr N] [--summary T] [--outcome O] [--dry-run]` | 0 reported / no parent · 3 queued (delivered later — don't resend) · 1 refused; `merged` is checked against the PR's real state |
 | `ask` 问 | `question`, `kind`? (`question` · `permission`), `suggest`? `default`? `due`? (hints, written under the question off the `ask_hint_*` strings — nothing acts on them), `class`? (accepted and unused since #4337), `issue`? (accepted and unused since #4898) | the question goes on the window's task record (`fleet-task-record.sh`, 「问过你」) when it has one, `set-claude-state.sh blocked` turns the window red, and a copy goes to the parent session — no GitHub comment (issue #4898) | 0 asked |
 | `answer_dialog` 答 | `window` (`@<id>` / `%<pane>`), `fp` (the dialog's fingerprint), `picks` (labels verbatim; `N=<label>` with several questions), `by`? (`person` · `session` · `default`), `basis`?, `issue`? (where the trail goes) | `fleet-dialog-answer.sh <window> --fp F --pick L … [--by B] [--basis T] [--issue R#N]` — reads the open AskUserQuestion off that window's transcript, refuses unless it is the one named (fingerprint + labels), refuses over a person typing / a draft, presses once through `fleet-answer.sh` and confirms in the transcript, leaves one line in the answer log (代答记录, `fleets/<session>/answers/answers-<day>.md`) + a record-only comment (issue #2958) | 0 answered · 1 no window / transcript · 2 usage · 3 refused, nothing sent · 4 pressed, unconfirmed (never pressed again) · 5 a person is typing |
+| `clear` 清 | `id` (the full ID, `T-<code>` or the bare code, any case), `timeout`? (1–120 s, default 30) | `fleet-clear-send.sh <id> [--timeout T]` (= `fleet-id.sh clear`, T592) — the window carrying that ID on THIS machine (none ⇒ refused, no cross-machine road), only when its turn is over (`@claude_state` done / idle) and nobody typed there in `FLEET_HANDOFF_DEFER_SECS`; `/clear` through the mod's inbox, else keystrokes (Claude: Escape + 0.3 s gap; Codex: no Escape, 1 s gap); confirmed by a new native segment on the ID's ledger; one audit line in `logs/clear-send.log` (who · when · which ID) | 0 cleared · 1 no such ID / not here · 2 ambiguous · 3 refused, not idle (nothing typed) · 4 sent, unconfirmed (never typed twice) · 5 a person is typing |
 | `handoff` 记 | `action` (`path` · `find` · `repo` · `check`), `slug`?, `doc`?, `issue`? | `fleet-handoff-file.sh <action> [--slug S]` · `check - [--issue N]` (doc on stdin) | 0 · 1 none · 3 check findings (advice) · 4 ambiguous |
 | `pr_verdict` 合 | `pr`?, `repo`?, `wait`?, `until_merged`?, `timeout`? (1–570 s, default 540 with `wait`) | `fleet-pr-verdict.sh <PR> [--repo R] [--wait --timeout T [--until-merged]]` | 0 READY · 1 any other verdict · 2 error · 3 TIMEOUT (call again) |
 | `pr_merge` 合 | `pr`?, `repo`? | `fleet-pr-merge.sh <PR> [--repo R]` (the fleet's merge method) | 0 MERGED · 1 not READY / refused · 2 error |
@@ -1018,6 +1019,7 @@ for you (#2068 B).
 | `fleet-pr-verdict.sh` · `fleet-pr-merge.sh` | `pr_verdict` · `pr_merge` |
 | `fleet-brief.sh` | `brief` |
 | `fleet-dialog-answer.sh` | `answer_dialog` |
+| `fleet-clear-send.sh` | `clear` |
 | `fleet-task-record.sh dispatch` | `task` |
 
 `FLEET_DIRECT_SCRIPTS` (env, or `fleet.conf`) picks what happens:

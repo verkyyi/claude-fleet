@@ -403,7 +403,8 @@ def check_segment(masked_seg, raw_seg, orig_seg, span, masked_cmd):
             block(
                 "inter-agent messaging must go through the `send` tool "
                 "(fleet-peer-send.sh), not a raw tmux send-keys into a "
-                "LIVE FLEET pane (bracketed-paste eats the Enter). An isolated "
+                "LIVE FLEET pane (bracketed-paste eats the Enter); a /clear goes "
+                "through the `clear` tool (fleet-id.sh clear <ID>). An isolated "
                 "test socket (-S <path>, or -L <label> with no fleet conf) is not "
                 "guarded. Set FLEET_ALLOW_SENDKEYS=1 (env or inline, anywhere in "
                 "the command) only for sanctioned fleet plumbing"
@@ -988,11 +989,12 @@ _DIRECT_TOOLS = {
     "fleet-brief.sh": ("brief", None),
     "fleet-reap-policy.sh": ("set_reap", ("set",)),
     "fleet-dialog-answer.sh": ("answer_dialog", None),
+    "fleet-clear-send.sh": ("clear", None),
     "fleet-task-record.sh": ("task", ("dispatch",)),
 }
 # Which server lists each tool (issue #3113, EPIC #3111 C2): the dispatch group is
 # `fleet-orch` (the core's, conf/mcp-orch.json — issue #4334), every other tool the core `fleet`.
-_ORCH_TOOLS = {"spawn", "await", "children", "send", "answer_dialog", "task"}
+_ORCH_TOOLS = {"spawn", "await", "children", "send", "answer_dialog", "task", "clear"}
 
 
 def _tool_mcp_name(tool):

@@ -64,6 +64,12 @@
 #                                            window ⇒ 已退出 / 已取消 · never claimed ⇒ 已关闭 ·
 #                                            没开起来 · the machine silent ⇒ 等节点回答 (never
 #                                            moved). Dry by default; --apply writes (audited)
+#   fleet-id.sh clear <ID | T-code> [--timeout s] [--by who]
+#                                            run /clear in that session (T592): only while
+#                                            its turn is over, confirmed by a new segment
+#                                            on its ledger — bin/fleet-clear-send.sh (rc 0
+#                                            cleared · 1 none here · 2 ambiguous · 3 not
+#                                            idle · 4 unconfirmed · 5 a person typing)
 #   fleet-id.sh switch [status|on|off]       the hub's ID switch (on/off: the operator's
 #                                            machines); written down in ids/.switch. Off =
 #                                            every old road; on = the gate is «the window has
@@ -81,6 +87,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 case "${1:-}" in
   hook) exec python3 "$BIN/fleet_id.py" hook ;;
+  clear) shift; exec bash "$BIN/fleet-clear-send.sh" "$@" ;;
   ''|-h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d'; exit 0 ;;
 esac
 # shellcheck source=/dev/null
