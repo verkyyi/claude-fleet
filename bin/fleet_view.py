@@ -657,6 +657,13 @@ GLYPHS_ASCII = {"needs": "!", "fail": "x", "work": ">", "done": "+", "exited": "
 # ! and ✗, red and bold (ROW_RED); every other glyph keeps the row's colour.
 GLYPH_COLORS = {"needs": 1, "fail": 1, "work": 2, "done": 4, "exited": 8, "idle": 8, "lost": 3}
 ROW_RED = ("needs", "fail")
+# A message's class (T701, bin/fleet_notice.py — the one book): the same single-
+# cell shapes the rows and fleet-alerts.sh's ✖ ▲ use, one a class, its colour the
+# class's: ✦ the count · ! asking you · ✖ error · ▲ warning · ✓ done (green) ·
+# ✓ a result nobody took (yellow) · ∙ a note. FLEET_GLYPHS=ascii: letters.
+MSG_GLYPHS = {"inbox": "✦", "ask": "!", "error": "✖", "warn": "▲", "done": "✓", "orphan": "✓", "info": "∙"}
+MSG_GLYPHS_ASCII = {"inbox": "*", "ask": "!", "error": "x", "warn": "^", "done": "+", "orphan": "+", "info": "."}
+MSG_COLORS = {"inbox": 3, "ask": 1, "error": 1, "warn": 3, "done": 2, "orphan": 3, "info": 8}
 LEGEND = ("work", "needs", "done", "fail", "exited", "idle", "lost")
 # The panel's groups (回收 D, T681): 置顶 · 等你 · 在干活 · 排队中, then 已收起 — the
 # closed sessions, a folded section (sec "gone") under them; an exited agent whose
@@ -667,6 +674,10 @@ MERGED_PR = ("merged", "live", "deploy…", "deploy✗")
 
 def glyphs():
     return GLYPHS_ASCII if os.environ.get("FLEET_GLYPHS") == "ascii" else GLYPHS
+
+
+def msg_glyphs():
+    return MSG_GLYPHS_ASCII if os.environ.get("FLEET_GLYPHS") == "ascii" else MSG_GLYPHS
 
 
 def color_on():
@@ -2527,7 +2538,7 @@ def log_switch(rec):
 
 def toast(client, text, level="warn", nxt="", secs=None):
     """A 看台 message on this client only: a notice (T675, bin/fleet_notice.py —
-    error until a key after 10 s, warn 6 s, info 3 s; recorded for ⌘P's 最近消息), never a
+    the message row: an error until seen, warn 6 s, info 3 s; recorded for ⌘P's ✦ 消息), never a
     0.75 s display-message."""
     try:
         sys.path.insert(0, str(Path(__file__).absolute().parent))
@@ -3414,6 +3425,15 @@ def key_lines(me, extra=None, browser=False):
     shell_key = fleet_keys.tmux_key(fleet_keys.HOME_CHORD)
     fallback = binds.get(shell_key, "send-keys 'C-\\'")
     binds[shell_key] = "if-shell -F '#{@view_web_home}' { %s } { %s }" % (cmd_of("shell"), fallback)
+    # a click on the message row (T701, #[range=user|inbox]) opens ⌘P's 消息 — every
+    # other status click stays root's own
+    stock = next((l.split("MouseDown1Status", 1)[1].strip() for l in lines
+                  if l.startswith("bind-key") and " -T fleet-view " in l and re.search(r"\sMouseDown1Status\s", l)), "")
+    page = ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline -w %s -h %s --title notice_page_title "
+            "-- python3 '%s' page --view '#{session_name}' --client '#{client_name}' >/dev/null 2>&1 || :\"") % (  # view-ok: the 看台
+        popup, size(90), size(80), str(Path(me).parent / "fleet_notice.py"))
+    binds[("fleet-view", "MouseDown1Status")] = "if-shell -F '#{==:#{mouse_status_range},inbox}' { %s }%s" % (
+        page, " { %s }" % stock if stock else "")
     _OURS[0] = {tk for tk in binds if tk[0] == "fleet-view"}
     for (table, key), c in binds.items():
         lines.append("bind-key -T %s %s %s" % (table, tkey(key), c))
@@ -3694,7 +3714,7 @@ ACTIONS = [
     # 回家命令行 (T685; EPIC T651 C3's ⌘\ before): this machine's shell in $HOME
     {"id": "home", "label": lambda r: say("view_cmd_home"), "when": lambda r: True, "rowless": True,
      "local": lambda r, a, f: "home", "far": None, "ask": None},
-    # 最近消息 (T675): the notices the top line drew — the popup's Enter opens the page
+    # ✦ 消息 (T675, T701): every message in the one book — the popup's Enter opens the page
     {"id": "notices", "label": lambda r: say("view_notices_row"), "when": lambda r: True, "rowless": True,
      "local": lambda r, a, f: "notices", "far": None, "ask": None},
     # the interface language (issue #3329): ↵ flips it, Tab offers 跟系统走 too
@@ -4021,15 +4041,16 @@ def lang_row(query):
 
 
 def notices_row(query):
-    """「✉ 最近消息 N」 (T675): the notices the top line drew, N the errors not read
-    back yet — at the panel's bottom (above ⏻), and what the words 消息 / message find."""
+    """「✦ 消息 N」 (T675, T701): every reminder in the one book — asking you, stuck,
+    done, an alert, a result nobody took, a notice — N the ones not seen yet, on any
+    machine; the panel's FIRST row, and what the words 消息 / message find."""
     try:
         sys.path.insert(0, str(Path(__file__).absolute().parent))
         import fleet_notice
         n = fleet_notice.unread()
     except Exception:
         n = 0
-    text = "✉ " + (say("view_notices_row_fmt", n) if n else say("view_notices_row"))
+    text = msg_glyphs()["inbox"] + " " + (say("view_notices_row_fmt", n) if n else say("view_notices_row"))
     q = query.strip()
     if q and not panel_hit(q, text, say("view_notices_words")):
         return None
@@ -4037,17 +4058,21 @@ def notices_row(query):
             "foot": say("view_notices_foot"), "hit": bool(q)}
 
 
-def notices_pick(screen):
-    """「最近消息」 in the popup's own terminal (T675): curses steps aside,
-    bin/fleet_notice.py's page runs (any key comes back), curses resumes."""
+def notices_pick(screen, vid="", client=""):
+    """「✦ 消息」 in the popup's own terminal (T675, T701): curses steps aside,
+    bin/fleet_notice.py's page runs, curses resumes. True when the page took the
+    看台 to a message's session (its exit 3): the popup closes."""
     curses.def_prog_mode()
     curses.endwin()
+    rc = 0
     try:
-        subprocess.run([sys.executable, str(Path(__file__).absolute().parent / "fleet_notice.py"), "page"])
+        rc = subprocess.run([sys.executable, str(Path(__file__).absolute().parent / "fleet_notice.py"), "page"]
+                            + (["--view", vid] if vid else []) + (["--client", client] if client else [])).returncode
     except OSError:
         pass
     curses.reset_prog_mode()
     screen.clear()
+    return rc == 3
 
 
 def pin_row(items, query, cur):
@@ -4234,6 +4259,9 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
         items = landed_first(items)
     q = query.strip()
     out = visible(items, query, opened)
+    nr = notices_row(query) if words else None
+    if nr:
+        out.insert(0, nr)   # the FIRST row (T701): every message is two steps away
     pr = pin_row(items, query, cur) if words else None
     if pr:
         out.append(pr)      # under the sessions, above ⚡ (issue #3517)
@@ -4254,9 +4282,6 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
     lr = lang_row(query) if words else None
     if lr:
         out.append(lr)      # under ⚡, above ⏻ (issue #3329)
-    nr = notices_row(query) if words else None
-    if nr:
-        out.append(nr)      # at the bottom, above ⏻ (T675): fleet takes no key of its own for it
     if "quit" in words:
         out.append({"kind": "cmd", "cmd": "quit", "act": "quit", "row": {}, "text": say("view_cmd_quit"),
                     "hit": bool(q) and panel_hit(q, say("view_cmd_quit"), QUIT_WORDS)})
@@ -5015,8 +5040,10 @@ def _popup(screen, qo, vid, client, forward=""):
             continue
         sel = [i for i, e in enumerate(shown) if pickable(e)]
         if ch in (curses.KEY_UP, "\x10"):
-            # from the top it goes round to ⚡ (issue #3327: ⌘P ↑ ↵ = a new session)
-            up = [i for i in sel if i < at]
+            # from the top it goes round to ⚡ (issue #3327: ⌘P ↑ ↵ = a new session) —
+            # the ✦ 消息 row above the sessions is not in the way (T701): ↓ round from
+            # the bottom, or the words 消息, reach it
+            up = [i for i in sel if i < at and shown[i].get("cmd") != "notices"]
             follow_list = True
             at = up[-1] if up else (bolt_at() if bolt_at() >= 0 else (sel[-1] if sel else at))
             continue
@@ -5072,8 +5099,10 @@ def _popup(screen, qo, vid, client, forward=""):
                     run(ACTION["lang"], {}, "")     # flips it; the list redraws in it
                     continue
                 if e["act"] == "notices":
-                    # 最近消息 (T675): the page, then the list again (its count read anew)
-                    notices_pick(screen)
+                    # ✦ 消息 (T675, T701): the page, then the list again (its count read
+                    # anew) — or, when the page went to a message's session, closed
+                    if notices_pick(screen, vid, client):
+                        return 0
                     heal.resized(screen)
                     shown = listing()
                     continue

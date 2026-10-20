@@ -29,9 +29,9 @@
                                          one waiting when none is named; the answer
                                          asked on the terminal when none is given,
                                          under the question's own words (#2538)
-    fleet notices [--n 50] [--json]      最近消息: the newest notices the 看台's top
+    fleet notices [--n 50] [--json]      ✦ 消息: the newest notices the 看台's top
                                          line drew (or would have) — the same list
-                                         ⌘P's 最近消息 opens (bin/fleet_notice.py, T675)
+                                         ⌘P's ✦ 消息 opens (bin/fleet_notice.py, T675)
     fleet service stop|start|restart <名称>
     fleet task stop|start|restart <名称>
     fleet task run <名称> --now

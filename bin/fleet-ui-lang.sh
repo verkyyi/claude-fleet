@@ -503,14 +503,14 @@ fleet_ui_t() {
     en:view_client_behind_fmt) printf 'your client is not the latest (%s, latest %s) — run fleet update on your own computer, then reopen fleet' "${1:-}" "${2:-}" ;;
     zh:view_started_fmt) printf '已开工 · T%s' "${1:-}" ;;
     en:view_started_fmt) printf 'started · T%s' "${1:-}" ;;
-    zh:view_notices_row) printf '最近消息' ;;
-    en:view_notices_row) printf 'Recent messages' ;;
-    zh:view_notices_row_fmt) printf '最近消息 · 未读错误 %s' "${1:-}" ;;
-    en:view_notices_row_fmt) printf 'Recent messages · %s unread' "${1:-}" ;;
+    zh:view_notices_row) printf '消息' ;;
+    en:view_notices_row) printf 'Messages' ;;
+    zh:view_notices_row_fmt) printf '消息 %s' "${1:-}" ;;
+    en:view_notices_row_fmt) printf 'Messages %s' "${1:-}" ;;
     zh:view_notices_words) printf '消息 提示 通知 错误 message messages notice notices error' ;;
     en:view_notices_words) printf 'message messages notice notices error 消息 提示 通知 错误' ;;
-    zh:view_notices_foot) printf '↵ 看顶栏说过的最近 50 条（错误、提醒、知道一下）' ;;
-    en:view_notices_foot) printf '↵ the newest 50 things the top line said (errors, warnings, notes)' ;;
+    zh:view_notices_foot) printf '↵ 看全部消息：在问你、错误、警告、没人收的结果、做完、提示' ;;
+    en:view_notices_foot) printf '↵ every message: asking you, errors, warnings, results nobody took, done, notes' ;;
     zh:view_lang_row) printf '语言 / Language　中文 ✓ · English' ;;
     en:view_lang_row) printf 'Language / 语言　English ✓ · 中文' ;;
     zh:view_lang_saved) printf '界面语言：中文 · 已存到你的账号' ;;
@@ -1243,8 +1243,6 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:topbar_ago_fmt)          printf '%s min ago' "${1:-}" ;;
     zh:topbar_today_fmt)        printf '今天 %s' "${1:-}" ;;
     en:topbar_today_fmt)        printf '%s today' "${1:-}" ;;
-    zh:topbar_orphan_fmt)       printf '有 %s 条无主回报' "${1:-}" ;;
-    en:topbar_orphan_fmt)       printf '%s unclaimed reports' "${1:-}" ;;
     zh:topbar_pr_merged)        printf 'PR 已合并' ;;
     en:topbar_pr_merged)        printf 'PR merged' ;;
     zh:topbar_pr_closed)        printf 'PR 已关闭' ;;
@@ -1258,28 +1256,58 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     zh:topbar_direct_quiet)     printf '直连（入口没声音）' ;;
     en:topbar_direct_quiet)     printf 'direct (the entry is silent)' ;;
     # the machine's credential proxy failing upstream (T657, fleet_upstream_stats.py banner)
-    # the notices (T675, bin/fleet_notice.py): the top line's 「还有 N 条」 and unread
-    # count, and the 「最近消息」 page ⌘P's last row opens
-    zh:topbar_notice_more_fmt)  printf '还有 %s 条' "${1:-}" ;;
-    en:topbar_notice_more_fmt)  printf '%s more' "${1:-}" ;;
-    zh:topbar_unread_fmt)       printf '未读错误 %s · ⌘P' "${1:-}" ;;
-    en:topbar_unread_fmt)       printf '%s unread · ⌘P' "${1:-}" ;;
-    zh:topbar_notice_all)       printf '⌘P 看全部' ;;
-    en:topbar_notice_all)       printf '⌘P for all' ;;
-    zh:topbar_unread_short_fmt) printf '✗%s' "${1:-}" ;;
-    en:topbar_unread_short_fmt) printf '✗%s' "${1:-}" ;;
+    # the notices (T675, T701, bin/fleet_notice.py): the 「✦ 消息」 page ⌘P's first
+    # row (and a click on the message row) opens, its classes and actions
     zh:notice_level_error)      printf '错误' ;;
     en:notice_level_error)      printf 'error' ;;
     zh:notice_level_warn)       printf '提醒' ;;
     en:notice_level_warn)       printf 'warn ' ;;
     zh:notice_level_info)       printf '知道' ;;
     en:notice_level_info)       printf 'info ' ;;
+    zh:notice_detail_keys)      printf '↵ 回列表 · g 跳到会话 · r 标为已读 · f 转给编排 · q 关闭' ;;
+    en:notice_detail_keys)      printf '↵ back · g go to it · r mark read · f hand to orchestrator · q close' ;;
+    zh:notice_unseen_fmt)       printf '%s 条没看' "${1:-}" ;;
+    en:notice_unseen_fmt)       printf '%s unseen' "${1:-}" ;;
+    zh:notice_cls_ask)          printf '在问你' ;;
+    en:notice_cls_ask)          printf 'Asking you' ;;
+    zh:notice_cls_error)        printf '错误' ;;
+    en:notice_cls_error)        printf 'Errors' ;;
+    zh:notice_cls_warn)         printf '警告' ;;
+    en:notice_cls_warn)         printf 'Warnings' ;;
+    zh:notice_cls_orphan)       printf '没人收的结果' ;;
+    en:notice_cls_orphan)       printf 'Results nobody took' ;;
+    zh:notice_cls_done)         printf '做完' ;;
+    en:notice_cls_done)         printf 'Done' ;;
+    zh:notice_cls_info)         printf '提示' ;;
+    en:notice_cls_info)         printf 'Notes' ;;
+    zh:notice_orphan_gone)      printf '派它的会话已不在，结果交给你' ;;
+    en:notice_orphan_gone)      printf 'its spawner is gone, the result is yours' ;;
+    zh:notice_on_fmt)           printf '在 %s 上' "${1:-}" ;;
+    en:notice_on_fmt)           printf 'on %s' "${1:-}" ;;
+    zh:notice_act_read)         printf '已标为已读' ;;
+    en:notice_act_read)         printf 'marked read' ;;
+    zh:notice_act_nojump)       printf '这条没有会话可跳' ;;
+    en:notice_act_nojump)       printf 'no session to go to for this one' ;;
+    zh:notice_act_jumpfail)     printf '跳不过去：那个会话不在了' ;;
+    en:notice_act_jumpfail)     printf 'cannot go there: that session is gone' ;;
+    zh:notice_act_fwd_fmt)      printf '已转给编排 %s' "${1:-}" ;;
+    en:notice_act_fwd_fmt)      printf 'handed to orchestrator %s' "${1:-}" ;;
+    zh:notice_act_fwd_none)     printf '没有编排会话在跑——先开一个 orchestrator 再转' ;;
+    en:notice_act_fwd_none)     printf 'no orchestrator is running — open one first' ;;
+    zh:notice_act_fwd_fail)     printf '没转过去，结果还在这里' ;;
+    en:notice_act_fwd_fail)     printf 'not handed on, the result is still here' ;;
+    zh:notice_act_fwd_only)     printf '只有没人收的结果能转给编排' ;;
+    en:notice_act_fwd_only)     printf 'only a result nobody took can be handed on' ;;
+    zh:notice_act_far_fmt)      printf '这条在 %s 上——到那台机器的看台上转' "${1:-}" ;;
+    en:notice_act_far_fmt)      printf 'this one is on %s — hand it on from there' "${1:-}" ;;
+    zh:alert_healed_fmt)        printf '已恢复：%s' "${1:-}" ;;
+    en:alert_healed_fmt)        printf 'recovered: %s' "${1:-}" ;;
     zh:notice_none)             printf '还没有消息' ;;
     en:notice_none)             printf 'no messages yet' ;;
-    zh:notice_page_title)       printf '最近消息' ;;
-    en:notice_page_title)       printf 'Recent messages' ;;
-    zh:notice_page_keys)        printf '↑↓ 翻看 · 其它键关闭' ;;
-    en:notice_page_keys)        printf '↑↓ scroll · any other key closes' ;;
+    zh:notice_page_title)       printf '消息' ;;
+    en:notice_page_title)       printf 'Messages' ;;
+    zh:notice_page_keys)        printf '↑↓ 选 · ↵ 看全文 · g 跳到会话 · r 标为已读 · f 转给编排 · q 关闭' ;;
+    en:notice_page_keys)        printf '↑↓ pick · ↵ read · g go to it · r mark read · f hand to orchestrator · q close' ;;
     zh:topbar_upstream_fmt)     printf '上游连不上：%s（%s 次）' "${1:-}" "${2:-}" ;;
     en:topbar_upstream_fmt)     printf 'upstream unreachable: %s (%s)' "${1:-}" "${2:-}" ;;
     zh:topbar_up_refused)       printf '连接被拒' ;;
@@ -1431,7 +1459,7 @@ quit	z	quit fleet — in the client only: every process of the client on this co
 # fleet_ui_fail REASON [NEXT] — THE one way an operation the operator asked for
 # says it did NOT happen (issue #1618, EPIC #1615 C3): one red line, the reason
 # and the next step. Since T675 it is an `error` notice (bin/fleet_notice.py): on
-# a 看台's top line until the first key after 10 s, recorded for ⌘P's 最近消息 — never a
+# a 看台's message row until seen, recorded for ⌘P's ✦ 消息 (T701) — never a
 # 0.75 s message. A SUCCESS says nothing — the window appearing, going, the
 # sidebar row changing is the feedback; never add a "done ✓" toast beside this.
 # The caller keeps its own stderr line (the record a headless caller reads).

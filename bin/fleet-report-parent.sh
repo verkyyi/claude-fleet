@@ -580,23 +580,20 @@ if last and (last.get("state"), last.get("pr")) == (row["state"], row["pr"]):
     sys.exit(0)
 with open(f, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-print("new")
+import hashlib     # the row id, as bin/fleet-orphan-reports.py row_id hashes it
+print("new " + hashlib.sha1(("%s|%s|%s|%s" % (row["ts"], row["child_key"], row["state"], row["pr"])).encode("utf-8")).hexdigest()[:12])
 ' "$f" 2>/dev/null)
-  if [ "$new" = new ]; then
+  if [ "${new%% *}" = new ]; then
     [ -n "$sockl" ] || sockl=$(fleet_socket "$sess" 2>/dev/null)
-    bash "${FLEET_ORPHAN_ALERT_CMD:-$BIN/fleet-alerts.sh}" event ${sockl:+-L "$sockl"} child-report \
-      "fleet: $label${wname:+ \"$wname\"} $UST${prn:+ (PR #$prn)} — 派它的会话 $worigin 已不在，结果交给你${SUMMARY:+: $(printf '%s' "$SUMMARY" | head -1 | cut -c1-160)}" \
+    local otext="$label${wname:+ \"$wname\"} $UST${prn:+ (PR #$prn)} — 派它的会话 $worigin 已不在，结果交给你${SUMMARY:+: $(printf '%s' "$SUMMARY" | head -1 | cut -c1-160)}"
+    bash "${FLEET_ORPHAN_ALERT_CMD:-$BIN/fleet-alerts.sh}" event ${sockl:+-L "$sockl"} child-report "fleet: $otext" \
       >/dev/null 2>&1 || printf 'fleet-report-parent: filed for the person, but the alert failed\n' >&2
-    # …and ONE push per batch (T660) over the fleet's notifier (FLEET_NOTIFY_CMD — the
-    # WeChat road memguard and install-sync use): the gone parent is the batch, so a
-    # closed session's ten children ring once. No notifier ⇒ the alert alone.
-    if [ -n "${FLEET_NOTIFY_CMD:-}" ] && python3 "$BIN/fleet-orphan-reports.py" once "$worigin" 2>/dev/null; then
-      local _on; _on=$(python3 "$BIN/fleet-orphan-reports.py" count 2>/dev/null)
-      # shellcheck disable=SC2086  # FLEET_NOTIFY_CMD is a command line, split on purpose (diskguard does the same)
-      fleet_timebox 10 $FLEET_NOTIFY_CMD "fleet: 有 ${_on:-1} 条无主回报 — $label $UST${prn:+ (PR #$prn)}，派它的会话 $worigin 已不在；⌘P 里点开看${SUMMARY:+
-$(printf '%s' "$SUMMARY" | head -3 | cut -c1-200)}" >/dev/null 2>&1 \
-        || printf 'fleet-report-parent: filed for the person, but the push failed\n' >&2
-    fi
+    # …and ONE message in the book (T701, bin/fleet_notice.py — kind orphan, the row's
+    # id): the 看台's message row opens on every client of the fleet, ⌘P's 消息 lists
+    # it until it is read or handed on (the old FLEET_NOTIFY_CMD push went with it)
+    python3 "${FLEET_ORPHAN_NOTICE_CMD:-$BIN/fleet_notice.py}" notify warn "$otext" --all --kind orphan \
+      --ref "${new#new }" --source "orphan:$worigin" ${sockl:+--sock "$sockl"} </dev/null >/dev/null 2>&1 \
+      || printf 'fleet-report-parent: filed for the person, but the message failed\n' >&2
   fi
   # Stamped like a delivered one: the reaper's --only-once backstop must not file a second.
   TM set-window-option -t "$selfwin" @reported 1 2>/dev/null

@@ -156,11 +156,14 @@ EOF
     printf '%s\t%s\t%s\t%s\n' "$now" "ev-$now-$$-${RANDOM:-0}" "$kind" "$text" >> "$f"
   fi
   # the one record of what was said (T675): every event is a notice too, drawn on
-  # every client of <sock> only for a kind that needs you NOW — a warn, 6 s
-  if fleet_alert_flashes "$kind"; then
-    _fa_notice warn "$text" --all --source "alert:$kind" ${sock:+--sock "$sock"}
+  # every client of <sock> only for a kind that needs you NOW — a warn, 6 s. A
+  # result nobody took (child-report) is booked by orphan() itself, with its id (T701)
+  if [ "$kind" = child-report ]; then
+    :
+  elif fleet_alert_flashes "$kind"; then
+    _fa_notice warn "$text" --all --kind alert --source "alert:$kind" ${sock:+--sock "$sock"}
   elif [ "$dup" = 0 ]; then
-    _fa_notice info "$text" --no-draw --source "alert:$kind"
+    _fa_notice info "$text" --no-draw --kind alert --source "alert:$kind"
   fi
   return 0
 }
@@ -523,13 +526,19 @@ EOF
 # row's `since`; turn a cleared alarm/warning into a ↻ healed row for
 # FLEET_ALERTS_TRACE), and publish atomically.
 fleet_alerts_write() {
-  local f cur prev="" now trace line row id sev su co va si ac he ta de out="" ids="|" carry=0 pid
+  local f cur prev="" now trace line row id sev su co va si ac he ta de out="" ids="|" carry=0 pid act="|" said=""
   f=$(fleet_alerts_file)
   mkdir -p "${f%/*}" 2>/dev/null
   now=$(fleet_now)
   trace="${FLEET_ALERTS_TRACE:-1800}"
   cur=$(fleet_alerts_compute "$@")
   [ -f "$f" ] && prev=$(<"$f")   # builtin read: the bar's render path execs no cat (#888)
+  # what was standing last tick: an alarm / warning that appears or heals is a
+  # message in the one book (T701) — only then, never every tick
+  while IFS= read -r line; do
+    [[ $line =~ $_FA_RE ]] || continue
+    case "${BASH_REMATCH[2]}" in alarm|warning) act="$act${BASH_REMATCH[1]}|" ;; esac
+  done <<< "$prev"
   while IFS= read -r row; do
     [ -n "$row" ] || continue
     [ "$row" = '#carry-needs' ] && { carry=1; continue; }
@@ -544,6 +553,10 @@ fleet_alerts_write() {
     fi
     ids="$ids$id|"
     out="$out$(_fa_json "$id$_FA_US$sev$_FA_US$su$_FA_US$co$_FA_US$va$_FA_US$si$_FA_US$ac$_FA_US$he$_FA_US$ta$_FA_US$de")"$'\n'
+    case "$sev:$id:$act" in
+      alarm:ev-*|warning:ev-*) ;;
+      alarm:*|warning:*) case "$act" in *"|$id|"*) ;; *) said="$said$sev$_FA_US$su · $co${va:+ · $va}"$'\n' ;; esac ;;
+    esac
   done <<< "$cur"
   # What the previous file had and this tick does not: a cleared alarm/warning
   # becomes a ↻ trace; a trace lives out FLEET_ALERTS_TRACE; needs rows survive
@@ -560,7 +573,8 @@ fleet_alerts_write() {
     case "$sev" in
       alarm|warning)
         line="${line/\"severity\":\"$sev\"/\"severity\":\"healed\"}"
-        line="${line/\"healed_at\":0,/\"healed_at\":$now,}" ;;
+        line="${line/\"healed_at\":0,/\"healed_at\":$now,}"
+        said="${said}healed$_FA_US${BASH_REMATCH[3]} · ${BASH_REMATCH[4]}"$'\n' ;;
       healed) [ $(( now - he )) -lt "$trace" ] || continue ;;
       needs) [ "$carry" = 1 ] || continue ;;
       *) continue ;;
@@ -570,6 +584,13 @@ fleet_alerts_write() {
   pid=$$
   printf '%s' "$out" > "$f.$pid" 2>/dev/null && mv -f "$f.$pid" "$f" 2>/dev/null || rm -f "$f.$pid"
   printf '%s\n' "$now" > "$f.ts.$pid" 2>/dev/null && mv -f "$f.ts.$pid" "$f.ts" 2>/dev/null || rm -f "$f.ts.$pid"
+  while IFS=$_FA_US read -r sev su; do
+    case "$sev" in
+      alarm) _fa_notice error "$su" --no-draw --kind alert --source alert:appear ;;
+      warning) _fa_notice warn "$su" --no-draw --kind alert --source alert:appear ;;
+      healed) _fa_notice info "$(sh "$_FA_BIN/fleet-ui-lang.sh" t alert_healed_fmt "$su" 2>/dev/null)" --no-draw --kind alert --source alert:healed ;;
+    esac
+  done <<< "$said"
   return 0
 }
 

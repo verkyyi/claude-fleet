@@ -16,14 +16,15 @@ is what the sidebar and the entry (the hub's overview) read it through:
   read <id>...       mark rows read — the cursor, global/orphan-reports.read
                      (one id a line); a read row is never listed again
   show <id>          the row's full result, for a person
-  count              how many are unread (the top line's 「有 N 条无主回报」, T660)
+  count              how many are unread
   once <key>         exit 0 the first time <key> (the gone parent — one batch) is
                      asked within FLEET_ORPHAN_NOTIFY_SECS (86400), recording it in
                      global/orphan-reports.notified; exit 1 after — orphan()'s ONE
                      push per batch over FLEET_NOTIFY_CMD
-  redeliver --to <ID> [--since <epoch>] [--apply]
+  redeliver --to <ID> [--since <epoch>] [--id <id>] [--apply]
                      hand the unread rows filed since <epoch> (default: today's
-                     local midnight) to the live session <ID> (fleet-peer-send.sh
+                     local midnight; --id: that one row only — ⌘P 消息's 转给编排,
+                     T701) to the live session <ID> (fleet-peer-send.sh
                      wid:<ID>), one envelope each, and mark each delivered one read
                      and `redelivered` (global/orphan-reports.redelivered) so it is
                      never sent twice. Without --apply: list only (T660)
@@ -244,6 +245,9 @@ def main(argv):
             since = int(since) if since.isdigit() else midnight()
             done = redelivered_ids()
             pick = [r for r in unread(10 ** 6) if r["ts"] >= since and r["id"] not in done]
+            only = opt(args, "--id")
+            if only:
+                pick = [r for r in pick if r["id"] == only]
         else:
             before = opt(args, "--before")
             if not before.isdigit():

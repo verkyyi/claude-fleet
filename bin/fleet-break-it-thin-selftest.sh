@@ -27,9 +27,12 @@
 #   view-far-reaped        bin/fleet_view.py hub_fresh + bin/fleet-hub-sessions.sh
 #                          (issue #3079): a worker reaped on another machine while
 #                          this one's copy of the hub's list had stopped
-#   notice-flash-gone      bin/fleet_notice.py (T675): ⌘N's refusal on the 看台 that
-#                          pressed it — on its top line ≥10 s and until a key, never
-#                          on the other 看台, recorded for ⌘P's 最近消息
+#   notice-flash-gone      bin/fleet_notice.py (T675, T701): ⌘N's refusal opens the
+#                          message row of the 看台 that pressed it, stays until seen
+#                          (keys clear nothing), recorded for ⌘P's ✦ 消息; seen, it folds
+#   inbox-orphan-unreachable  bin/fleet_notice.py (T701): a result nobody took, here
+#                          and on another machine — every 看台's message row, both in
+#                          ⌘P's 消息, the top line no longer counting what ⌘P lacks
 #   view-first-frame-hub-slow  bin/fleet_view.py popup (issue #3311): hub_ok stale,
 #                          no loop, a hub that takes 6 s — ⌘P's first frame drawn
 #                          from the cache at once, the hub asked behind it
@@ -58,6 +61,7 @@ exec "$RT" "\$@"
 EOS
   chmod +x "$B/bin/tmux"
   export FLEET_THIN_TMUX="$B/bin/tmux" FLEET_CONF_DIR="$B/conf" FLEET_NOTIFY_LOG="$B/notify.ndjson" \
+    FLEET_STATUS_G="$B/t/.claude-dash/global" \
     FLEET_THIN_LEASE_CMD="python3 $B/hub.py $B"
   TT() { "$RT" -S "$B/s/fl" "$@"; }
   TT -f /dev/null new-session -d -s fl -x 100 -y 30 'exec sleep 600'
@@ -335,46 +339,70 @@ drill_view_first_frame_hub_slow() {
   WHAT="入口清单过期、没有刷新循环、入口要 6 秒才答：⌘P 照缓存 1.5 秒内画出第一帧，入口在后台被问到"
 }
 
-# notice_on <view> — the notice line 看台 <view>'s top line draws now ('-' = none):
-# the very ack the status format computes, through fleet-topbar.py's own renderer
-notice_on() {
-  local c ack nt
-  c=$(TT list-clients -F '#{client_session} #{client_name}' | awk -v s="fl@view-$1" '$1 == s { print $2 }')
-  ack=$(TT list-clients -F '#{client_name} #{e|>=:#{client_activity},#{@view_notice_hold}}' | awk -v c="$c" '$1 == c { print $2 }')
-  nt=$(TT show -qv -t "fl@view-$1:" @view_notice)
-  python3 "$BIN/fleet-topbar.py" notice 100 "$nt" "ack=$ack"
-}
-drill_notice_flash_gone() {
-  CAP=20   # the 10 s floor, the key after it, the 2 s status interval
-  local t0 ca i line
-  th_box || { WHY="the two 看台 terminals did not attach"; th_done; return 1; }
+# th_dress — 看台 a and b wear the very top line and message row attach sets (T701)
+th_dress() {
+  local v
   for v in a b; do TT set -t "fl@view-$v" status on \; set -t "fl@view-$v" status-interval 1 \; \
-    set -t "fl@view-$v" 'status-format[0]' "$(bash "$BIN/fleet-remote-view.sh" thin-bar "$v" fl)"; done
+    set -t "fl@view-$v" 'status-format[0]' "$(TMPDIR="$B/t" bash "$BIN/fleet-remote-view.sh" thin-bar "$v" fl)" \; \
+    set -t "fl@view-$v" 'status-format[1]' "$(TMPDIR="$B/t" bash "$BIN/fleet-remote-view.sh" thin-inbox)" \; \
+    set -t "fl@view-$v" @view_inbox 1; done
+}
+rows_of() { TT show -qv -t "fl@view-$1:" status; }
+drill_notice_flash_gone() {
+  CAP=20   # past the old 10 s floor, a key, the 1 s status interval
+  local t0 ca i
+  th_box || { WHY="the two 看台 terminals did not attach"; th_done; return 1; }
+  th_dress
   ca=$(TT list-clients -F '#{client_session} #{client_name}' | awk '$1 == "fl@view-a" { print $2 }')
   : > "$B/out-a"; : > "$B/out-b"; t0=$(now)
   # what ⌘N's refusal does: dash-raw-session.sh's refuse → fleet_ui_fail, on the
   # client that pressed it (go_new hands FLEET_UI_CLIENT down)
   ( PATH="$B/bin:$PATH"; . "$BIN/fleet-ui-lang.sh"
     FLEET_UI_LANG=zh FLEET_UI_SOCK=fl FLEET_UI_CLIENT=$ca fleet_ui_fail '暂停开新：内存紧张' '关掉一个会话再试' )
-  for i in 1 2 3 4 5 6 7 8 9; do
-    line=$(notice_on a)
-    case "$line" in *暂停开新*) ;; *) WHY="${i}s after the refusal the top line no longer says it: '$line' ($(cat "$B/conf/logs/notices.ndjson" 2>&1))"; th_done; return 1 ;; esac
-    [ "$i" = 4 ] && printf 'x' > "$B/ctl-a"   # a key inside the 10 s floor does not clear it
-    sleep 1
-  done
+  [ "$(rows_of a)" = 2 ] || { WHY="the refusal did not open 看台 a's message row (status $(rows_of a))"; th_done; return 1; }
   until_ok 3 grep -aq '暂停开新' "$B/out-a" || { WHY="看台 a's terminal never drew the refusal"; th_done; return 1; }
-  [ "$(notice_on b)" = - ] || { WHY="看台 b (another person) got the refusal too: $(notice_on b)"; th_done; return 1; }
-  grep -aq '暂停开新' "$B/out-b" && { WHY="看台 b's terminal drew the refusal"; th_done; return 1; }
-  sleep 1.5; printf 'y' > "$B/ctl-a"
-  until_ok 3 sh -c '"$1" -S "$2" list-clients -F "#{client_name} #{e|>=:#{client_activity},#{@view_notice_hold}}" | grep -qx "$3 1"' \
-    _ "$RT" "$B/s/fl" "$ca" || { WHY="the key after the 10 s floor did not answer the error"; th_done; return 1; }
-  [ "$(notice_on a)" = - ] || { WHY="the key after the floor did not clear it: $(notice_on a)"; th_done; return 1; }
-  SECS=$(since "$t0")
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    [ "$i" = 4 ] && printf 'x' > "$B/ctl-a"; [ "$i" = 11 ] && printf 'y' > "$B/ctl-a"   # keys clear nothing
+    sleep 1
+    [ "$(rows_of a)" = 2 ] || { WHY="${i}s after the refusal, unseen, the message row folded"; th_done; return 1; }
+  done
+  [ "$(rows_of b)" = 2 ] || [ "$(rows_of b)" = on ] || { WHY="看台 b's rows: $(rows_of b)"; th_done; return 1; }
+  [ "$(python3 "$BIN/fleet_notice.py" unread)" = 1 ] || { WHY="⌘P 消息 does not count it unseen: $(python3 "$BIN/fleet_notice.py" unread)"; th_done; return 1; }
   python3 "$BIN/fleet_notice.py" list | grep -q '暂停开新：内存紧张 — 关掉一个会话再试' \
-    || { WHY="最近消息's record has no row for it: $(python3 "$BIN/fleet_notice.py" list)"; th_done; return 1; }
-  [ "$(python3 "$BIN/fleet_notice.py" unread)" = 1 ] || { WHY="the top line's unread count is not 1"; th_done; return 1; }
+    || { WHY="消息's record has no row for it: $(python3 "$BIN/fleet_notice.py" list)"; th_done; return 1; }
+  # the page opening is the seeing: the read mark moves, every 看台's row folds
+  python3 "$BIN/fleet_notice.py" read
+  until_ok 4 sh -c '[ "$("$1" -S "$2" show -qv -t "fl@view-a:" status)" = on ]' _ "$RT" "$B/s/fl" \
+    || { WHY="seen, the message row did not fold (status $(rows_of a))"; th_done; return 1; }
+  SECS=$(since "$t0")
   th_done
-  WHAT="⌘N 的拒绝（fleet_ui_fail）只画在按键那个看台的顶栏：10 秒内一直在（中途按键也不清），10 秒后第一下按键清掉；另一个看台什么也没收到；⌘P「最近消息」的记录里有原文、未读 1"
+  WHAT="⌘N 的拒绝（fleet_ui_fail）打开按键那个看台顶栏下的消息行：没看过就一直在（按键不清，过了 10 秒也在），⌘P「✦ 消息」记着原文、没看 1 条；看过（打开消息）后两个看台的消息行都收起"
+}
+drill_inbox_orphan_unreachable() {
+  CAP=10
+  local t0 page
+  th_box || { WHY="the two 看台 terminals did not attach"; th_done; return 1; }
+  th_dress
+  mkdir -p "$FLEET_STATUS_G" "$B/conf/global"
+  : > "$B/out-a"; t0=$(now)
+  # a result nobody took on THIS machine (orphan() files it, then books it) …
+  printf '{"ts":%s,"child_key":"repro:issue-4789","state":"REAPED","pr":"","summary":"done, nobody to tell"}\n' \
+    "$(date +%s)" > "$B/conf/global/orphan-reports.ndjson"
+  PATH="$B/bin:$PATH" python3 "$BIN/fleet_notice.py" notify warn 'repro:issue-4789 REAPED — 派它的会话已不在' \
+    --all --kind orphan --ref "$(python3 "$BIN/fleet-orphan-reports.py" list | cut -f1)" --sock fl
+  # … and one another machine filed (the hub's cache, as fleet-hub-sessions.sh writes it)
+  printf '%s\n' "$(printf 'aaaaaaaaaaaa\037mini2\037online\037%s\037o/r\037T477\037SUCCEEDED\0374971\037merged\0370' "$(date +%s)")" \
+    > "$FLEET_STATUS_G/orphanrep_fl"
+  [ "$(rows_of a)" = 2 ] && [ "$(rows_of b)" = 2 ] || { WHY="the result did not open every 看台's message row ($(rows_of a)/$(rows_of b))"; th_done; return 1; }
+  until_ok 3 grep -aq '✦ 2' "$B/out-a" || { WHY="看台 a's terminal never drew 「✦ 2」"; th_done; return 1; }
+  [ "$(python3 "$BIN/fleet_notice.py" unread)" = 2 ] || { WHY="消息 does not count both machines' results: $(python3 "$BIN/fleet_notice.py" unread)"; th_done; return 1; }
+  page=$(FLEET_UI_LANG=zh python3 "$BIN/fleet_notice.py" page </dev/null)
+  case "$page" in *没人收的结果*4789*T477*mini2*|*没人收的结果*T477*mini2*4789*) ;;
+    *) WHY="⌘P 消息's page does not list both under 没人收的结果: $page"; th_done; return 1 ;; esac
+  case "$(TT show -qv -t 'fl@view-a:' 'status-format[0]')" in *orphan*) WHY="the top line still counts results"; th_done; return 1 ;; esac
+  SECS=$(since "$t0")
+  th_done
+  WHAT="一条无主回报（本机）+ 一条别的机器的（hub 缓存）：两个看台的消息行都打开，⌘P「✦ 消息」数到 2 条、在「没人收的结果」下都列得出，顶栏不再提它"
 }
 
 th_cleanup() {

@@ -563,11 +563,16 @@ rv_thin_bar() {
   local v="$1" s="$2" bar
   bar="#(python3 '$BIN/fleet-topbar.py' render --node view=$v s=$s reg='$VIEWS' g='$FLEET_C/global'"
   bar="$bar sock=#{q:socket_path} cw=#{client_width} w=#{window_id} pc=#{q:@peer_cur} pd=#{pane_dead}"
-  # this connection's language (issue #3329): what attach set; its notice (T675,
-  # bin/fleet_notice.py) — ack=1 once a key came after the notice's hold, tmux's
-  # own #{client_activity}: no process runs per key
-  bar="$bar vl=#{q:@view_lang_set}:#{q:@view_lang} nt=#{@view_notice}"
-  printf '%s' "$bar ack=#{?#{e|>=:#{client_activity},#{@view_notice_hold}},1,0} up=#{q:@view_upload})"
+  # this connection's language (issue #3329): what attach set; the message row
+  # (T701): the line opens it (status 2) while a message not seen yet is live and
+  # folds it after (ib=1 · st=#{status} · vs=#{session_id})
+  bar="$bar vl=#{q:@view_lang_set}:#{q:@view_lang} ib=1 st=#{status} vs='#{session_id}'"
+  printf '%s' "$bar up=#{q:@view_upload})"
+}
+# rv_thin_inbox — the 看台's message row (T701), as status-format[1]: drawn only
+# while `status` is 2 (bin/fleet_notice.py's book, every machine's)
+rv_thin_inbox() {
+  printf '%s' "#(python3 '$BIN/fleet-topbar.py' inbox --node g='$FLEET_C/global' cw=#{client_width} vl=#{q:@view_lang_set}:#{q:@view_lang})"
 }
 
 # rv_thin_dress <session id> <view id> <fleet session> — the 看台's own options.
@@ -592,7 +597,8 @@ rv_thin_dress() {
   bar=$(rv_thin_bar "$v" "$s")
   T set-option -t "$gid" status on \; set-option -t "$gid" status-position top \; \
     set-option -t "$gid" status-interval 2 \; set-option -t "$gid" status-style "bg=#1a1b26,fg=#565f89" \; \
-    set-option -t "$gid" status-format[0] "$bar" \; set-option -t "$gid" destroy-unattached off \; \
+    set-option -t "$gid" status-format[0] "$bar" \; set-option -t "$gid" status-format[1] "$(rv_thin_inbox)" \; \
+    set-option -t "$gid" @view_inbox 1 \; set-option -t "$gid" destroy-unattached off \; \
     set-option -t "$gid" @view_thin "$v" 2>/dev/null
   # C2's key table, once it exists — a table tmux does not have would take every key
   T list-keys -T fleet-view >/dev/null 2>&1 && T set-option -t "$gid" key-table fleet-view 2>/dev/null \
@@ -870,6 +876,10 @@ thin-bar)
   # the 看台's top line format for <view> <fleet> (rv_thin_bar) — a selftest and a
   # BREAK-IT drill dress a test 看台 with the very format attach sets
   rv_thin_bar "${1:-}" "${2:-}"; echo
+  ;;
+thin-inbox)
+  # the 看台's message row format (rv_thin_inbox, T701) — for the same tests
+  rv_thin_inbox; echo
   ;;
 live)
   # ON <node> (issue #2219): exit 0 when this login has a live fleet session here
