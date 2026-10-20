@@ -390,6 +390,8 @@ def reap_words(policy):
         return say("view_reap_merged_for", span(arg)) if arg else say("view_reap_merged")
     if kind == "done":
         return say("view_reap_done_for", span(arg)) if arg else say("view_reap_done")
+    if kind == "idle":
+        return say("view_reap_idle_for", span(arg or "2h"))
     if kind == "loop-end":
         return say("view_reap_loop_end")
     if kind == "keep":

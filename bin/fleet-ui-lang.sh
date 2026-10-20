@@ -424,6 +424,8 @@ fleet_ui_t() {
     en:view_reap_done) printf 'closes when done' ;;
     zh:view_reap_done_for) printf '空闲 %s关' "${1:-}" ;;
     en:view_reap_done_for) printf 'closes after %s idle' "${1:-}" ;;
+    zh:view_reap_idle_for) printf '闲置 %s收起' "${1:-}" ;;
+    en:view_reap_idle_for) printf 'folds after %s idle, done or not' "${1:-}" ;;
     zh:view_reap_loop_end) printf '循环停了关' ;;
     en:view_reap_loop_end) printf 'closes when its loop stops' ;;
     zh:view_reap_at) printf '%s 关' "${1:-}" ;;

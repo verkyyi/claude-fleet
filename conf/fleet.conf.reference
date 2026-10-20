@@ -810,6 +810,13 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # with nothing beyond the base, else only the window closes. Default 7200 (2h).
 # @label=Cleanup finished sessions with no PR @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_REAP_DONE_NO_PR_SECS=7200
+# A session another session dispatched (an orchestrator's task, a batch member —
+# T694, 回收 B) that sits finished this many seconds with no result reported is
+# nudged once (itself asked to report, its parent told) and marked
+# @reap_unreported; as long again and it is closed (history first, worktree kept).
+# Default 1800 (30 min).
+# @label=Nudge an unreported dispatched session after @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
+#FLEET_REAP_UNREPORTED_SECS=1800
 # Comma-separated native MCP server names whose volatile state may be discarded
 # when a session is continued on a fresh process (a native continuation, a quota
 # move). Empty by default. Exact configured stdio launchers/package entrypoints

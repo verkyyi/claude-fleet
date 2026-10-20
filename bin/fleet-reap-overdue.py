@@ -16,6 +16,7 @@ Due, per policy (the same rules the reapers apply):
                    + the fleet's grace (FLEET_CLEANUP_MERGED_GRACE, 60 s) or
                    <dur>, counted from the landing the history ledger recorded
   done[:<dur>]     its turn over (done / exited) + <dur> (default 15 min)
+  idle[:<dur>]     the same, <dur> default 2 h (T694)
   at:<when>        that moment, its turn over
   keep · loop-end · a working window — never overdue here.
 
@@ -158,7 +159,7 @@ def due_of(w, repo, prs, landed, now):
         if at is None:
             return None
         return at + (pol[1] if pol and pol[1] else grace()), "PR #%s merged" % pr
-    if kind == "done" and finished and stamp:
+    if kind in ("done", "idle") and finished and stamp:
         return stamp + pol[1], "done " + fleet_reap_policy.label(w["@reap_policy"], "en")
     if kind == "at" and finished:
         return pol[1], "at"

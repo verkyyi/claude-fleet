@@ -5,12 +5,15 @@
 # the session itself (the fleet tool `set_reap`), the sidebar's 「改回收方式…」, or
 # a person's shell.
 #
-#   fleet-reap-policy.sh set <policy> [--win <@id> --session <sess>]
-#       merged[:<dur>] | done[:<dur>] | loop-end | at:<ISO|HH:MM|epoch> | keep
+#   fleet-reap-policy.sh set <policy> [--win <@id> --session <sess>] [--by person|session]
+#       merged[:<dur>] | done[:<dur>] | idle[:<dur>] | loop-end | at:<ISO|HH:MM|epoch> | keep
 #       (dur: 90 · 30m · 2h · 3d). No --win = the calling pane's OWN window
 #       (fleet_pane_fmt — never "the pane the operator is looking at").
 #       Prints `reap_policy=<canonical> · <label>`; exit 2 = not a policy,
-#       1 = no window.
+#       1 = no window. --by session (the fleet tool `set_reap`, T694): a `keep`
+#       the session sets for ITSELF is stamped @reap_keep_by session and lapses
+#       once its work is over (fleet_reap_policy.effective) — only a person's
+#       keep (the default --by person: the sidebar, a shell) holds.
 #   fleet-reap-policy.sh get [--win <@id> --session <sess>]
 #       the stamped policy, or `default` when none is (the kind decides).
 #   fleet-reap-policy.sh menu <sess> <@id> [<client>]
@@ -34,7 +37,7 @@ sub=${1:-}; [ "$#" -gt 0 ] && shift
 
 # _tm <args…> — on the fleet's own socket when the caller has no $TMUX (a daemon,
 # a person's shell naming --session), else the inherited one.
-SESS=''; WIN=''
+SESS=''; WIN=''; BY=person
 _tm() {
   if [ -z "${TMUX:-}" ] && [ -n "$SESS" ]; then tmux -L "$(fleet_socket "$SESS")" "$@"
   else tmux "$@"; fi
@@ -59,10 +62,12 @@ case "$sub" in
       case "$1" in
         --win) WIN=${2:-}; shift ;;
         --session) SESS=${2:-}; shift ;;
+        --by) BY=${2:-}; shift ;;
         *) die 2 "unknown argument $1" ;;
       esac
       shift
     done
+    case "$BY" in person|session) ;; *) die 2 "--by takes person or session" ;; esac
     resolve_win
     if [ "$sub" = get ]; then
       cur=$(_tm show-options -wqv -t "$WIN" @reap_policy 2>/dev/null)
@@ -71,6 +76,12 @@ case "$sub" in
     fi
     canon=$(python3 "$BIN/fleet_reap_policy.py" norm "$pol") || exit 2
     _tm set-option -w -t "$WIN" @reap_policy "$canon" 2>/dev/null || die 1 "could not stamp $WIN"
+    # Who chose a keep (T694): a session's own lapses when its work is over.
+    if [ "$canon" = keep ] && [ "$BY" = session ]; then
+      _tm set-option -w -t "$WIN" @reap_keep_by session 2>/dev/null
+    else
+      _tm set-option -wu -t "$WIN" @reap_keep_by 2>/dev/null
+    fi
     # A countdown shown under the old policy no longer holds (fleet_reap_notice).
     for o in @reap_due @reap_seen @reap_state_ts @reap_key @reap_hold; do
       _tm set-option -wu -t "$WIN" "$o" 2>/dev/null
@@ -130,6 +141,6 @@ case "$sub" in
     _tm display-menu ${client:+-c "$client"} -T "#[align=centre] $(fleet_ui_t reap_menu_title) " -x P -y P -- \
       ${margs[@]+"${margs[@]}"} 2>/dev/null || :
     ;;
-  -h|--help|'') sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; [ -n "$sub" ] || exit 2 ;;
+  -h|--help|'') sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; [ -n "$sub" ] || exit 2 ;;
   *) die 2 "unknown subcommand $sub (set | get | menu)" ;;
 esac

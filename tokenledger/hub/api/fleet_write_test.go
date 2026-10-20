@@ -505,10 +505,16 @@ func TestFleetWriteReapPolicy(t *testing.T) {
 			t.Fatalf("reap %q: %v (mac-c writes %d); want INVALID_ARGUMENT and nothing sent", bad, e, macC.count())
 		}
 	}
-	for _, ok := range []string{"merged", "done:2h", "loop-end", "keep", "at:2026-10-06T18:00:00Z", "at:18:00"} {
+	for _, ok := range []string{"merged", "done:2h", "idle:15m", "idle", "loop-end", "keep", "at:2026-10-06T18:00:00Z", "at:18:00"} {
 		if !reapPolicyOK(ok) {
 			t.Fatalf("reapPolicyOK(%q) = false", ok)
 		}
+		if !validReapPolicy(ok) {
+			t.Fatalf("validReapPolicy(%q) = false", ok)
+		}
+	}
+	if validReapPolicy("idle:0") || validReapPolicy("idle:9999999d") {
+		t.Fatal("validReapPolicy took an idle past fleet_reap_policy's limits")
 	}
 }
 
