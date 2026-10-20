@@ -891,8 +891,8 @@ send_report() {
     children_send "$sess" "$SOCK" "$pwin" "$msg"
     return $?
   fi
-  if [ -n "$parent_sleep$parent_evidence" ] && [ -f "$BIN/fleet-sleep.py" ]; then
-    printf '%s' "$msg" | python3 "$BIN/fleet-sleep.py" deliver --session "$sess" "$pwin"
+  if [ -n "$parent_sleep$parent_evidence" ] && [ -f "$BIN/fleet_worker_life.py" ]; then
+    printf '%s' "$msg" | python3 "$BIN/fleet_worker_life.py" deliver --session "$sess" "$pwin"
     return $?
   fi
   if [ "$parent_agent" = codex ]; then
@@ -912,7 +912,7 @@ if [ "$src" -eq 0 ]; then
   printf 'reported → %s (%s): %s%s\n' "$SENDKEY" "$pwin" "$st" "${RELAY_FROM:+ (relayed for reaped $RELAY_FROM)}"
   exit 0
 fi
-# 3 = a sleeping parent at a full fleet (fleet-sleep.py): it holds the report and
+# 3 = a sleeping parent at a full fleet (fleet_worker_life.py deliver): it holds the report and
 # wakes with it when a slot frees — queued, not reported (issue #1647).
 if [ "$src" -eq 3 ]; then
   TM set-window-option -t "$selfwin" @reported 1 2>/dev/null

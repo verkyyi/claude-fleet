@@ -21,7 +21,7 @@ import sys
 import time
 
 import fleet_launch as launch
-from fleet_sleep_argv import process_argv
+from fleet_agent_argv import process_argv
 from fleet_runtime import TTL
 
 PANE_FIELDS = ('socket', 'server_pid', 'window', 'pane', 'pane_pid', 'worker', 'agent', 'sid')

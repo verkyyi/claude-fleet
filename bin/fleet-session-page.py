@@ -47,9 +47,45 @@ import signal
 import sys
 import termios
 import time
+import unicodedata
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fleet_sleep_park import BOLD, DIM, RED, RESET, YELLOW, SGR_MOUSE, clip, ui_lang, width  # noqa: E402
+# The page's own render helpers (they were borrowed from fleet_sleep_park.py
+# until the sleep page went its own way — T545).
+ANSI = re.compile(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])')
+BOLD, DIM, RED, YELLOW, RESET = '\x1b[1m', '\x1b[2m', '\x1b[31m', '\x1b[33m', '\x1b[0m'
+SGR_MOUSE = re.compile(r'\x1b\[<(\d+);(\d+);(\d+)([Mm])')
+
+
+def cell(ch):
+    if unicodedata.combining(ch) or ch in '\u200b\u200d\ufe0f': return 0
+    return 2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1
+
+
+def width(text):
+    return sum(cell(c) for c in ANSI.sub('', text))
+
+
+def clip(text, cols):
+    """Plain text cut to `cols` display cells, '…' marking the cut."""
+    text = text.replace('\t', '    ')
+    if width(text) <= cols: return text
+    out, used = '', 0
+    for c in text:
+        if used + cell(c) > cols - 1: break
+        out += c; used += cell(c)
+    return out + '…' if cols > 0 else ''
+
+
+def ui_lang():
+    """'zh' or 'en' — the same reading of FLEET_UI_LANG as the sidebar's (#1197)."""
+    value = os.environ.get('FLEET_UI_LANG', 'auto')
+    if value.startswith('zh') or value in ('cn', 'CN', 'Chinese', 'chinese'): return 'zh'
+    if value.startswith('en') or value in ('English', 'english'): return 'en'
+    locale = (os.environ.get('LC_ALL') or os.environ.get('LC_MESSAGES') or
+              os.environ.get('LC_CTYPE') or os.environ.get('LANG') or '')
+    if locale.startswith(('en', 'EN')): return 'en'
+    return 'zh'
+
 
 RESUME, NEW, QUIT, PERSONAL, AUTO_CLOSE = 10, 11, 12, 13, 14
 

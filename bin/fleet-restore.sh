@@ -895,7 +895,7 @@ restore() {
           tmux -L "$sock" set-option -w -t "$nw" @cc_agent "${wagent:-claude}"
           if [ "$wraw" = 1 ]; then tmux -L "$sock" set-option -w -t "$nw" @raw 1
           else tmux -L "$sock" set-option -w -t "$nw" @issue "$wissue"; fi
-          python3 "$BIN/fleet-sleep.py" restore --session "$sess" "$nw" --record "$wsleep" || {
+          python3 "$BIN/fleet_worker_life.py" restore --session "$sess" "$nw" --record "$wsleep" || {
             tmux -L "$sock" set-option -w -t "$nw" @worker_lifecycle failed
             say "    ⚠ sleep restore failed; record retained: $wsleep"
           }

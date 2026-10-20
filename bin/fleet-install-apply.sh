@@ -614,7 +614,7 @@ touched() { printf '%s\n' "$CHANGED" | grep -qx "$1"; }
 spinner_changed() {
   local file
   for file in tmux-spinner.sh tmux-spinner.py fleet-render-watch.py fleet_pending_tool.py \
-      fleet_launch.py fleet_sleep_argv.py fleet_runtime.py fleet-codex-rpc.py fleet-codex-session.py; do
+      fleet_launch.py fleet_agent_argv.py fleet_runtime.py fleet-codex-rpc.py fleet-codex-session.py; do
     touched "bin/$file" && return 0
   done
   return 1

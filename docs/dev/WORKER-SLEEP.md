@@ -185,7 +185,7 @@ The fleet's own server is launched through a shell — `bash -c 'exec python3
 "${FLEET_MCP_BIN:-$HOME/.claude/fleet/bin}/fleet-mcp.py"'` (`conf/mcp-worker.json`)
 — so the live kernel is Python running the expanded path, which can name a
 version since deleted (issue #4537). Under a Codex release whose MCP environment
-was measured (`SHELL_EXEC_CODEX` in `bin/fleet_sleep_mcp.py`, read from the live
+was measured (`SHELL_EXEC_CODEX` in `bin/fleet_agent_mcp.py`, read from the live
 app-server's `initialize` answer) that kernel is identified as the exec target of
 the effective config's shell: exactly `exec WORD…` with `$NAME` / `${NAME:-word}`
 expansions inside double quotes, no shell hook in the config's `env` / `env_vars`,

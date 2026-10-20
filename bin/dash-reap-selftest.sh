@@ -674,14 +674,14 @@ for n in 20 21 22 23 24 25; do
   git -C "$BASEDIR" worktree add -q -b "issue-$n" "$WORK/wt$n" "$H1" >/dev/null 2>&1
   transcript_for "$WORK/wt$n" "$n"
 done
-# fake python3: `fleet-sleep.py dispose` is logged (DISPOSE_FAILS=1 refuses it);
+# fake python3: `fleet_worker_life.py dispose` is logged (DISPOSE_FAILS=1 refuses it);
 # REAP_LIVE_PASSES=<n> lets the first n liveness probes pass and fails the rest —
 # the shape of #1244's foreground-passes / tail-refuses split. Else the real one.
 REAL_PY=$(command -v python3)
 cat > "$WORK/fakepath/python3" <<PYFAKE
 #!/bin/bash
 case "\${1:-}" in
-  *fleet-sleep.py)
+  *fleet_worker_life.py)
     printf 'SLEEP %s\n' "\$*" >> "$TMLOG"
     [ "\${DISPOSE_FAILS:-0}" = 1 ] && { echo 'fleet-sleep: a wake raced us' >&2; exit 1; }
     exit 0 ;;

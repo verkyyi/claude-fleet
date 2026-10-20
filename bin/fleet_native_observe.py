@@ -24,7 +24,7 @@ import sys
 import fleet_launch as launch
 import fleet_repo_authority as authority
 import fleet_runtime as runtime
-from fleet_sleep_argv import process_argv
+from fleet_agent_argv import process_argv
 
 BIN = Path(__file__).resolve().parent
 START_KEYS = ("reservation", "repo", "owner", "endpoint_id", "worker_id")

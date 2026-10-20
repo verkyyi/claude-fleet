@@ -274,7 +274,7 @@ quiet window is unfinished. At every Stop (and at the mod's own `done` report)
   level, as the list's `k/N` does) and counts `done` with no live Loop as finished;
   a child whose PR merged leaves the count when cleanup reaps it.
 - `bg` — its agent still owns a Bash-tool job (`fleet_window_bg_busy`: the
-  `fleet-sleep.py busy` walk behind `fleet_child_busy`'s `bg`, gated on a direct
+  `fleet_worker_life.py busy` walk behind `fleet_child_busy`'s `bg`, gated on a direct
   `…/shell-snapshots/snapshot-…` child so an idle pane pays one `ps`).
 
 `@claude_wait` only explains `looping` — no new state value — and a Stop with no

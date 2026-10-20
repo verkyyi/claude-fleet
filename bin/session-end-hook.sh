@@ -86,7 +86,7 @@ _close_on_exit="${FLEET_CLOSE_ON_EXIT:-1}"       # default ON; global fleet.conf
 # Validate the durable record and exact native source before suppressing cleanup.
 if [ -n "${TMUX_PANE:-}" ] && [ -n "${TMUX:-}" ] \
    && [ -n "$(tmux display-message -p -t "$TMUX_PANE" '#{@worker_lifecycle}' 2>/dev/null)" ]; then
-  if python3 "$BIN/fleet-sleep.py" holds-exit --session "$(fleet_current_session)" "$TMUX_PANE"; then
+  if python3 "$BIN/fleet_worker_life.py" holds-exit --session "$(fleet_current_session)" "$TMUX_PANE"; then
     exit 0
   fi
 fi

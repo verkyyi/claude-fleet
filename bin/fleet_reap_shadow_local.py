@@ -11,6 +11,7 @@ import subprocess
 import time
 
 import fleet_launch as launch
+import fleet_loop_mark as loopmark
 import fleet_pending_tool as pending
 import fleet_reap_policy as policy
 import fleet_reap_shadow as proof
@@ -29,7 +30,7 @@ class LocalSources:
         self.pane, self.socket, self.pr = pane, socket, pr
         self.values = None
         self.conf = Path(os.environ.get("FLEET_CONF_DIR", Path.home()/".config/claude-fleet"))
-        self.sleep = runpy.run_path(str(BIN/"fleet-sleep.py"))
+        self.life = runpy.run_path(str(BIN/"fleet_worker_life.py"))
         self.clean = runpy.run_path(str(BIN/"fleet-cleanup-idle.py"))
         self.meta = self.snapshot()
         self.session = launch.option(pane, "?#{session_group},#{session_group},#{session_name}", socket)
@@ -100,7 +101,7 @@ class LocalSources:
         source = dict(agent=i["provider"],pid=i["pid"],session_id=i["native_session"],
                       worktree=self.meta["@worktree"],codex_identity={})
         if i["provider"] == "codex":
-            data = self.sleep["CODEX"]["identity"](self.pane,self.socket)
+            data = self.life["CODEX"]["identity"](self.pane,self.socket)
             if data.get("session_id") != i["native_session"] or data.get("remote") != i.get("native_remote"):
                 raise ValueError("codex_source_changed")
             source.update(pid=int(data["owner"]),codex_identity=data,home=data["home"])
@@ -109,11 +110,11 @@ class LocalSources:
         rows = {pid:(r["ppid"],Path(r["comm"]).name.lstrip("-")) for pid,r in table.rows.items() if 'Z' not in r["state"]}
         # Dependency injection into a private module instance: reuse #4318's
         # classifier verbatim with #4474's table. No second ps implementation.
-        self.sleep["TRANSFER"]["process_rows"] = lambda: rows
+        self.life["TRANSFER"]["process_rows"] = lambda: rows
         background=[]
         # Codex's non-strict mode has exact configured-helper classification;
         # Claude's strict mode retains unknown children rather than skipping them.
-        self.sleep["quiet_processes"](source,background=background,strict=i["provider"]=="claude")
+        self.life["quiet_processes"](source,background=background,strict=i["provider"]=="claude")
         tree=self.tree(table,source["pid"])
         return dict(complete=True,pending=background,unknown=[],tree=tree,fingerprint=proof.digest(tree))
 
@@ -186,8 +187,8 @@ class LocalSources:
             except ERRORS as exc:
                 self.values[name]=self.envelope(source,None,at,unknown=True,reason=type(exc).__name__+":source_unavailable")
         take("worktree","git:registered-worktree",self.worktree)
-        take("processes","fleet-sleep.quiet_processes/fleet_pending_tool.Processes",self.processes)
-        take("loop","fleet_loop_mark.status",lambda: [] if self.sleep["LOOPMARK"]["status"](
+        take("processes","fleet_worker_life.quiet_processes/fleet_pending_tool.Processes",self.processes)
+        take("loop","fleet_loop_mark.status",lambda: [] if loopmark.status(
             self.meta["@loop"],self.meta["@handoff_manifest"])[0]=="none" else [self.meta["@loop"] or self.meta["@handoff_manifest"]])
         at=time.time()
         try:
@@ -200,7 +201,7 @@ class LocalSources:
                 self.values[name]=self.envelope("fleet_rotate_lease_held",None,at,unknown=True,reason="lease_source_unavailable")
         def wake():
             value=[v for v in (self.meta["@worker_lifecycle"],self.meta["@sleep_wake_deferred"]) if v]
-            lock=self.sleep["root"](self.session)/("window-"+self.meta["window_id"][1:]+".lock")
+            lock=self.life["root"](self.session)/("window-"+self.meta["window_id"][1:]+".lock")
             if lock.exists():
                 with lock.open("rb") as stream:
                     try: fcntl.flock(stream,fcntl.LOCK_SH|fcntl.LOCK_NB)
@@ -212,7 +213,7 @@ class LocalSources:
             return value
         take("wake","fleet-sleep:phase-record",wake)
         def draft():
-            data=self.sleep["INPUT"]["snapshot"](self.socket,self.pane,agent=self.meta["@cc_agent"])
+            data=self.life["INPUT"]["snapshot"](self.socket,self.pane,agent=self.meta["@cc_agent"])
             if data.get("state")!="empty": raise ValueError("draft_or_unknown")
             return ""
         take("draft","fleet-input.snapshot",draft)
@@ -239,7 +240,7 @@ class LocalSources:
             self.values["report"]=proof.report_reader(self.conf/"control/state.sqlite3",scope)(identity)
         except (*ERRORS, proof.sqlite3.Error): pass
         # Local delivery inbox evidence is useful but not #4431's acceptance ACK.
-        take("delivery","fleet-sleep.inbox",lambda: self.inbox_names(self.sleep["Worker"](self.session,self.pane).inbox()))
+        take("delivery","fleet_worker_life.inbox",lambda: self.inbox_names(self.life["Worker"](self.session,self.pane).inbox()))
         self.values["delivery"].update(unknown=True,reason="controller_acceptance_unavailable")
         observed=self.values["processes"]
         if isinstance(observed["value"],dict) and observed["value"].get("tree"):
