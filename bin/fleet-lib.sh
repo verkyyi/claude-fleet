@@ -9171,17 +9171,19 @@ fleet_cfg_state() {
 # own @reap_policy hands to the idle reaper (done / loop-end / an `at:` reached —
 # fleet_reap_policy.py idle-owned, issue #4764) reads `reap`: a reopen would
 # restart the very idle clock that closes it, so `done:10m` never came due.
+# So does one whose work is over — its ticket CLOSED (#4822), its ID's result
+# done / failed or its task record closed (fleet_cfg_work_over, T569).
 fleet_cfg_restart_why() {
-  local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp av st ts lp rem hub nm bin h rp iss wrepo
+  local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp av st ts lp rem hub nm bin h rp iss wrepo tsk fid
   case "$idle" in ''|*[!0-9]*) idle=600 ;; esac
   o=$(_fleet_tmux "$sess" display-message -p -t "$win" \
-        '#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@claude_state}|#{@claude_state_ts}|#{@loop}|#{@remote}|#{@hub}|#{@reap_policy}|#{@issue}|#{window_name}' 2>/dev/null) \
+        '#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@claude_state}|#{@claude_state_ts}|#{@loop}|#{@remote}|#{@hub}|#{@reap_policy}|#{@issue}|#{@task}|#{@fleet_id}|#{window_name}' 2>/dev/null) \
     && [ -n "$o" ] || { echo gone; return 1; }
   # parameter expansion, not a here-string: this lib is sourced by plain sh too
   ag=${o%%|*}; o=${o#*|}; fp=${o%%|*}; o=${o#*|}; av=${o%%|*}; o=${o#*|}; st=${o%%|*}; o=${o#*|}
   ts=${o%%|*}; o=${o#*|}; lp=${o%%|*}; o=${o#*|}
   rem=${o%%|*}; o=${o#*|}; hub=${o%%|*}; o=${o#*|}; rp=${o%%|*}; o=${o#*|}
-  iss=${o%%|*}; nm=${o#*|}
+  iss=${o%%|*}; o=${o#*|}; tsk=${o%%|*}; o=${o#*|}; fid=${o%%|*}; nm=${o#*|}
   case "$nm" in dash|plan|backlog|home) echo panel; return 1 ;; esac
   [ -z "$rem" ] && [ "$hub" != 1 ] || { echo remote; return 1; }
   fleet_cfg_expected_load; fleet_cfg_broken_load; fleet_cfg_state "$ag" "$fp" "$av" "$sess" "$win"
@@ -9206,6 +9208,12 @@ fleet_cfg_restart_why() {
       echo reap; return 1
     fi ;;
   esac
+  # …and so is one whose WORK is over (claude-fleet T569): its ID has a result
+  # (merged / succeeded / failed — the ID switch reads a session by its ID), or
+  # its hub task record is closed (the old road, kept beside it). A reopen
+  # brought T477's and T372's finished windows back the very tick the reaper
+  # closed the old one, and nothing closed the new one. Unknown ⇒ reopened as before.
+  fleet_cfg_work_over "$tsk" "$fid" && { echo reap; return 1; }
   case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
   [ $(( $(date +%s) - ts )) -ge "$idle" ] || { echo recent; return 1; }
   # A handoff cycle is about to /clear it (issue #2937): the reopen would race it.
@@ -9231,6 +9239,21 @@ fleet_cfg_restart_why() {
     fleet_human_hold_note "$sess" "$win" reopen "$h"; echo human; return 1
   fi
   return 0
+}
+
+# fleet_cfg_work_over <T<n>|''> <fleet_id|''> — is this session's work over
+# (claude-fleet T569)? rc 0 when its ID's ledger here says done / failed (the
+# newest result: fleet_id.py status), or its hub task record is closed
+# (fleet_task_closed rc 0); else rc 1 — open, unknown or nothing to ask.
+fleet_cfg_work_over() {
+  local t="${1:-}" f="${2:-}" w
+  if fleet_is_fid "$f" && [ -f "${FLEET_ID_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/ids}/$f.ndjson" ]; then
+    w=$(env -u FLEET_ID_LIVE python3 "$_FLEET_LIB_DIR/fleet_id.py" status "$f" 2>/dev/null \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state",""))' 2>/dev/null)
+    case "$w" in done|failed) return 0 ;; esac
+  fi
+  case "$t" in T[1-9]*) fleet_task_closed "$t" >/dev/null && return 0 ;; esac
+  return 1
 }
 
 # fleet_handoff_cycle_live <session> <win> — is a fleet-handoff-cycle.sh pending on

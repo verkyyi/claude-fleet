@@ -15,7 +15,9 @@
 #                  recent / ok / unknown never; nor a Loop the hook never marked
 #                  that the transcript still holds (issue #2189); nor a finished
 #                  one its @reap_policy hands to the idle reaper (issue #4764), nor
-#                  one on a CLOSED ticket (issue #4822)
+#                  one on a CLOSED ticket (issue #4822), nor one whose work is
+#                  over — its ID's result done / failed, its task record closed
+#                  (claude-fleet T569)
 #   D. tick      — fleet-cfg-restart.sh (fleet-migrate.sh faked): auto hands the
 #                  eligible window to `--cfg-stale`, never the working one, at most
 #                  FLEET_CFG_RESTART_MAX, the Codex one on a later tick, not again
@@ -173,6 +175,42 @@ eq "C: done on a CLOSED ticket → left to the reaper (#4822)" "reap rc=1" "$(wh
 eq "C: done on an open ticket → reopen"                      "rc=0"      "$(whygh "$WOP")"
 eq "C: ticket unreadable → reopen"                           "rc=0"      "$(whygh "$WUN")"
 for w in "$WCL" "$WOP" "$WUN"; do T kill-window -t "$w"; done
+# A session whose WORK is over is the reaper's too (claude-fleet T569): its ID's
+# result says done / failed, or its hub task record is closed — T477 / T372 were
+# reopened (ver-stale) after `succeeded`, and the reopened window outlived the
+# reaper. An ID still waiting, an open record, an unknown one ⇒ reopen as before.
+export FLEET_ID_DIR="$WORK/ids" FLEET_ID_PUSH=0
+cat > "$WORK/taskclosed" <<'TC'
+#!/bin/sh
+case "$1" in T1) echo SUCCEEDED; exit 0 ;; T2) exit 1 ;; *) exit 3 ;; esac
+TC
+chmod +x "$WORK/taskclosed"
+whyt() { FLEET_TASK_CLOSED_CMD="$WORK/taskclosed" why "$1"; }
+idmk() {   # <fid> <result state|-> — a ledger with that newest result
+  python3 "$BIN/fleet_id.py" open "$1" --title t >/dev/null
+  [ "$2" = - ] || python3 "$BIN/fleet_id.py" result "$1" --state "$2" >/dev/null
+}
+IDM=11111111-0000-0000-0000-00000000000a; IDF=11111111-0000-0000-0000-00000000000b
+IDW=11111111-0000-0000-0000-00000000000c; IDN=11111111-0000-0000-0000-00000000000d
+idmk "$IDM" merged; idmk "$IDF" failed; idmk "$IDW" waiting; idmk "$IDN" -
+WTC=$(mk taskdone done bbbbbbbbbbbb); T set-option -w -t "$WTC" @task T1; T set-option -w -t "$WTC" @reap_policy merged
+WTO=$(mk taskopen done bbbbbbbbbbbb); T set-option -w -t "$WTO" @task T2
+WTU=$(mk taskunkn done bbbbbbbbbbbb); T set-option -w -t "$WTU" @task T3
+WIM=$(mk idmerged done bbbbbbbbbbbb); T set-option -w -t "$WIM" @fleet_id "$IDM"; T set-option -w -t "$WIM" @task T2
+WIF=$(mk idfailed done bbbbbbbbbbbb); T set-option -w -t "$WIF" @fleet_id "$IDF"
+WIW=$(mk idwait   done bbbbbbbbbbbb); T set-option -w -t "$WIW" @fleet_id "$IDW"; T set-option -w -t "$WIW" @task T2
+WIN=$(mk idnone   done bbbbbbbbbbbb); T set-option -w -t "$WIN" @fleet_id "$IDN"
+WIX=$(mk idnoledg done bbbbbbbbbbbb); T set-option -w -t "$WIX" @fleet_id 11111111-0000-0000-0000-00000000000e
+eq "C: its task record closed (merged) → left to the reaper (T569)" "reap rc=1" "$(whyt "$WTC")"
+eq "C: its task record open → reopen"                              "rc=0"      "$(whyt "$WTO")"
+eq "C: its task record unknown (no hub) → reopen"                  "rc=0"      "$(whyt "$WTU")"
+eq "C: its ID's result merged (record still open) → the reaper's"  "reap rc=1" "$(whyt "$WIM")"
+eq "C: its ID's result failed → the reaper's"                      "reap rc=1" "$(whyt "$WIF")"
+eq "C: its ID's result waiting → reopen"                           "rc=0"      "$(whyt "$WIW")"
+eq "C: an ID with no result → reopen"                              "rc=0"      "$(whyt "$WIN")"
+eq "C: an ID with no ledger here → reopen"                         "rc=0"      "$(whyt "$WIX")"
+for w in "$WTC" "$WTO" "$WTU" "$WIM" "$WIF" "$WIW" "$WIN" "$WIX"; do T kill-window -t "$w"; done
+unset FLEET_ID_DIR FLEET_ID_PUSH
 # A Loop the PostToolUse hook never marked (issue #2189): no @loop, but the
 # transcript holds a pending ScheduleWakeup — the judge reads it, says `looping`,
 # and writes the missing @loop; a lapsed one is no Loop.
