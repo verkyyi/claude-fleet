@@ -12,7 +12,7 @@ name: tokenledger
 #     selftests, in turn, never run for a change confined to tokenledger/:
 #     neither selftests*.yml path filter lists it, and run-selftests.sh
 #     --changed ignores files outside the shipped shell trees
-#     (bin/tokenledger-isolation-selftest.sh pins both directions).
+#     (bin/tokenledger-modules-selftest.sh pins both directions).
 #   - tokenledger/ holds four Go modules (EPIC #4810): hub/ (…/hub — the
 #     hub, #4814), agent/ (…/agent — the node, #4812), shared/ (…/shared — what
 #     both build in, #4811) and e2e/ (…/e2e — the联调 tests: a real node against

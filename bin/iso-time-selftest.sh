@@ -13,7 +13,7 @@
 #   2. runs the cases under every python3 on the box (PATH's, /usr/bin's, any
 #      python3.N) — and under a python3 whose fromisoformat refuses what 3.9's
 #      refuses, so the cases hold even where only a new python exists (CI).
-# Rides along in bash32-array-selftest.sh (in SELFTEST_ALWAYS): a whole-tree lint
+# Rides along in portability-selftest.sh (in SELFTEST_ALWAYS): a whole-tree lint
 # no filename rule could select.
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"

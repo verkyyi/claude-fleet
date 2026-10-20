@@ -267,7 +267,7 @@ ok; [ "$(TM display-message -p -t "$w1" '#{@cc_account}')" = acctA ] || fail "wh
 # rotation ("which account is this session on?") died, while the paths that always
 # had candidates looked fine. The contract now: default to the CALLER'S OWN pane;
 # with no caller pane to read, a usage error — never a silent empty, which is the
-# same bug with the crash filed off. bash32-array-selftest.sh guards the SHAPE
+# same bug with the crash filed off. portability-selftest.sh guards the SHAPE
 # repo-wide; these guard the BEHAVIOUR.
 ok; out=$(bash "$SCRIPT" whoami --session "$SESS" 2>"$WORK/w.err"); rc=$?
 [ "$rc" = 2 ] || fail "whoami with no window and no pane context must exit 2, got $rc (out='$out' err='$(cat "$WORK/w.err")')"

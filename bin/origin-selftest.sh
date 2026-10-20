@@ -193,7 +193,7 @@ eq "origin_key: no \$TMUX ≡ hub (empty)" "" "$noenv"
 # The same calls from ZSH (issue #1633): a skill's `source fleet-lib.sh` in Claude
 # Code's Bash tool runs in the login shell, zsh here, where `local path` emptied
 # PATH and the scratch key came back empty — /fleet-epic-run stamped its members
-# with the EPIC's key. zsh-local-selftest.sh lints the cause repo-wide.
+# with the EPIC's key. portability-selftest.sh lints the cause repo-wide.
 if command -v zsh >/dev/null 2>&1; then
   ogz() { TMUX="fake,1,1" TMUX_PANE="$1" zsh -fc ". '$LIB'; fleet_origin_key"; }
   eq "origin_key (zsh): @issue pane" "acme-app:issue-42" "$(ogz "$p_iss")"

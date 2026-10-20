@@ -448,7 +448,7 @@ fi
 # A change to the harness itself (SELFTEST_HARNESS) — or a base that does not
 # resolve — falls back to the FULL suite: never trust a selector to vet its own
 # edit. The diff is base...HEAD (from the merge base), committed changes only.
-SELFTEST_ALWAYS='portability bash32-array fleet-keys conf-surface fleet-plugin selftest-isolation'
+SELFTEST_ALWAYS='portability fleet-keys conf-surface fleet-plugin selftest-isolation'
 SELFTEST_HARNESS='bin/run-selftests.sh bin/selftest-shadow-root.sh .github/workflows/selftests*.yml'
 
 # lib_funcs <rev> <path> <ranges> — the functions of <path>@<rev> whose bodies cover

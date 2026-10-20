@@ -594,13 +594,13 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `bash -n` see a clean script and the mine goes off only on the operator's machine,
   only on the path where the array happens to be empty. Write `${a[@]+"${a[@]}"}`,
   or `"${a[*]-}"` inside a string — both are exact no-ops when populated, and both
-  were already the idiom here. `bin/bash32-array-selftest.sh` enforces it across
-  `bin/`, with NO credit for a nearby `[ "${#a[@]}" -gt 0 ]` guard (a guard is a
+  were already the idiom here. `bin/portability-selftest.sh` (row `bare-array`)
+  enforces it across `bin/`, with NO credit for a nearby `[ "${#a[@]}" -gt 0 ]` guard (a guard is a
   non-local invariant the next edit can break without touching the expansion);
   a deliberate exception marks its line `# bash32-ok: <why>`. Where a bash 3.x
   exists it also `bash -n`s every script, which nets the SYNTAX half of the same
   family — a `case` inside `$(…)` must write its pattern `(pat)`, or 3.2's
-  command-substitution scanner dies on the `;;`. Same family, same test (issue #2727): a `$name`
+  command-substitution scanner dies on the `;;`. Same family, same test (issue #2727, row `utf8-name`): a `$name`
   glued to a non-ASCII byte (`$x，` `$x）` `$x→`) — bash 3.2 in a UTF-8 locale reads
   the bytes into the NAME, so `set -u` dies on `x\357: unbound variable` and without
   it the value is silently empty. Write `${x}，`; the lint reds on any such `$name`
@@ -611,8 +611,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `$PATH`: `local … path …` emptied PATH, `tmux` vanished, and `fleet_origin_key`
   came back empty. Same for `argv`, `status`, `pipestatus`, `options`, `fpath`,
   `commands`, `aliases`, …: write `pth` / `cmdline` / `stfile`.
-  `bin/zsh-local-selftest.sh` lints every `local`/`typeset`/`declare` in `bin/`
-  (`# zsh-ok: <why>` excepts a line; bash32-array-selftest runs it on every PR);
+  `bin/portability-selftest.sh` (row `zsh-special`) lints every `local`/`typeset`/`declare`
+  in `bin/` (`# zsh-ok: <why>` excepts a line);
   origin-selftest A runs the key under zsh.
 - **The selftest gate isolates at the ROOT, not per test** (issue #660).
   `bin/run-selftests.sh` re-runs the suite from a throwaway **shadow install
@@ -622,8 +622,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `FLEET_CONF_DIR` the one writable place, and every `FLEET_*`/`CCQUOTA_*`
   variable stripped from the environment. **The install is read-only** (issue
   #4668): every record a login writes — logs, heartbeats, ledgers — is
-  `$FLEET_CONF_DIR/logs`, never `$BIN/../logs`; `portability-selftest.sh` PART 4
-  reds on a write into the install (`# install-write-ok: <why>` excepts a line). So a new selftest
+  `$FLEET_CONF_DIR/logs`, never `$BIN/../logs`; `portability-selftest.sh` (rows
+  `install-logs` · `install-write`) reds on a write into the install (`# install-write-ok: <why>` excepts a line). So a new selftest
   needs no "unset the operator's config" preamble of its own — and must not add
   one; and a test that builds its OWN sandbox `bin/` + `fleet.conf` keeps working,
   because the isolation is a root swap, not an env override.
@@ -763,7 +763,8 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   LITERALLY and says nothing about — so `run-selftests.sh`'s env scrub was a
   SILENT no-op on a Mac from #660 to #681. Two defenses, because they catch
   different halves:
-  - `bin/portability-selftest.sh` — a lint, free on the existing ubuntu shards.
+  - `bin/portability-selftest.sh` — ONE scan, ONE rule table (T533: every writing
+    rule here is a row with its own red samples; `--table` prints it), always run.
     Flags `sed`'s GNU-only BRE metachars (`\|` `\+` `\?` `\d`), a `sed -i` with
     no ATTACHED suffix, and `readlink -f` / `date -d` / `stat -c` / `base64 -w` /
     `mktemp -p`. ⚠️ It is COMMAND-SCOPED, not line-scoped, and that is the whole

@@ -2,7 +2,7 @@
 # 642/655 current terminals: 640 PASS, 2 FAIL; 2 completed PASS entries >=60s. Full gate BLOCKED.
 # Shard 3 hit its configured 480s timeout (API step interval 493s): 1 truncated, 12 not started.
 # Failed durations are scheduling costs, not passing acceptance.
-# The 13 entries below retain historical costs from run 38975923609 at
+# The 12 entries below retain historical costs from run 38975923609 at
 # 91c6f189e24b183d7a68a1c2f1e661501d857e47; none is a current PASS or completed duration.
 # Retained: fleet-node-supervisor-selftest.sh (started/truncated; two inner FAILs)
 # Retained: fleet-repo-session-3-selftest.sh (not started)
@@ -13,7 +13,6 @@
 # Retained: fleet-update-selftest.sh (not started)
 # Retained: fleet-win-name-selftest.sh (not started)
 # Retained: fleet-worktree-drop-selftest.sh (not started)
-# Retained: posix-lib-parse-selftest.sh (not started)
 # Retained: run-selftests-timeout-selftest.sh (not started)
 # Retained: spinner-control-selftest.sh (not started)
 # Retained: worktree-autoclean-scratch-selftest.sh (not started)
@@ -27,7 +26,6 @@
 0.8 attn-signal-selftest.sh
 16.1 auto-handoff-selftest.sh
 8.6 bash-guard-selftest.sh
-14.5 bash32-array-selftest.sh
 1.1 blocked-state-selftest.sh
 6.4 cfg-restart-codex-selftest.sh
 11.9 cfg-stale-selftest.sh
@@ -40,7 +38,6 @@
 10.3 context-ladder-selftest.sh
 20.4 cross-send-selftest.sh
 13.9 ctx-token-line-selftest.sh
-0.0 daemon-nofile-selftest.sh
 0.0 daemon-processtype-selftest.sh
 4.0 dash-born-order-selftest.sh
 3.2 dash-ended-group-selftest.sh
@@ -514,8 +511,7 @@
 0.0 pane-border-focus-selftest.sh
 0.5 pane-header-selftest.sh
 9.9 peer-queue-selftest.sh
-10.5 portability-selftest.sh
-0.8 posix-lib-parse-selftest.sh
+27.4 portability-selftest.sh
 2.1 precompact-hook-selftest.sh
 0.7 refocus-hook-selftest.sh
 2.9 release-tree-selftest.sh
@@ -555,7 +551,6 @@
 14.9 sync-logins-selftest.sh
 0.7 task-line-selftest.sh
 0.1 tmux-conf-reload-selftest.sh
-0.1 tokenledger-isolation-selftest.sh
 0.7 topbar-ctx-selftest.sh
 0.0 topbar-peer-down-selftest.sh
 3.2 topbar-switch-selftest.sh
@@ -571,4 +566,3 @@
 9.0 worktree-autoclean-scratch-idle-selftest.sh
 3.8 worktree-autoclean-scratch-selftest.sh
 0.4 wt-helpers-close-selftest.sh
-1.6 zsh-local-selftest.sh
