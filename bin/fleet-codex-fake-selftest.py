@@ -7,6 +7,7 @@
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 import json
 import os
+import re
 from pathlib import Path
 import runpy
 import shutil
@@ -274,6 +275,36 @@ class TwoAgents(unittest.TestCase):
                 self.assertEqual(self.started(agent, 'S1'), ('S1', '/w'))
         with self.assertRaises(ValueError):
             fake.session_started('gemini', 'S1')
+
+
+class OneClient(unittest.TestCase):
+    """T637 (EPIC T580 R3): one hand-written app-server client per language — Python
+    fleet-codex-rpc.py, Go tokenledger/shared/codex/rpc.go — so a Codex protocol
+    change is fixed in one place each. Anything else that speaks thread/turn/account
+    methods does it through that Client, never its own socket or pipe."""
+    REPO = (BIN / 'fleet-codex-rpc.py').resolve().parent.parent
+    METHOD = re.compile(r'''['"](?:thread|turn|account)/[a-zA-Z]''')
+    TRANSPORT = re.compile(r'AF_UNIX|Sec-WebSocket|stdin=subprocess\.PIPE|app-server --listen')
+
+    def test_python_has_one_client(self):
+        bad = []
+        for path in sorted(set((self.REPO / 'bin').glob('*.py')) | set((self.REPO / 'bin').glob('.*.py'))):
+            name = path.name
+            if (name == 'fleet-codex-rpc.py' or 'selftest' in name or name.endswith('_test.py')
+                    or 'fake' in name):
+                continue
+            text = path.read_text(errors='replace')
+            if self.METHOD.search(text) and self.TRANSPORT.search(text):
+                bad.append(name)
+        self.assertEqual(bad, [], 'speaks Codex app-server outside fleet-codex-rpc.py')
+
+    def test_go_has_one_client(self):
+        root = self.REPO / 'tokenledger'
+        if not root.is_dir():
+            self.skipTest('no tokenledger/ beside bin/')
+        spawns = sorted(str(p.relative_to(root)) for p in root.rglob('*.go')
+                        if not p.name.endswith('_test.go') and '"app-server"' in p.read_text(errors='replace'))
+        self.assertEqual(spawns, ['shared/codex/rpc.go'])
 
 
 if __name__ == '__main__':
