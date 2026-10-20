@@ -774,8 +774,10 @@ pull carries `?jump=1`. Then a pod's `entry` routes carry `jump` · `target` ·
 `target_port`, and the machine `target_host_keys` (the pod's own host keys, from its heartbeat),
 and `fleet connect` runs `ssh -o ProxyCommand='ssh -W %h:%p -l fleet-jump <door>'
 <login>@<target>` — the door's key under `fleet-<pod>`, the pod's under
-`fleet-<pod>-pod`, never TOFU. An older client ignores the fields and takes the
-per-login road. The console's 设备 shows the copyable line for a phone's Jump host
+`fleet-<pod>-pod`, never TOFU. It is a pod's ONLY entry route (T643): until both
+said so the pod gets none (the hub logs `door jump to … not offered: <why>`), and
+the console shows no `ssh://` code for a pod home — the door's per-login road is
+no longer handed out (its accounts go with the door's half, C6). The console's 设备 shows the copyable line for a phone's Jump host
 or a bare ssh (`EntryDoor.jump`): `ssh -J fleet-jump@<name>.<zone>:22022
 <login>@u-<nonce>.<ns>.svc.cluster.local`. BREAK-IT `door-jump-other-pod` ·
 `door-jump-shell` · `door-jump-unlisted` · `pod-foreign-key`.

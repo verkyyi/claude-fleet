@@ -119,7 +119,8 @@ type EntryDoor struct {
 	State string `json:"state"`
 	Why   string `json:"why,omitempty"`
 	// QR: the ssh:// address as rows of '#' (dark) and '.', no quiet zone; none
-	// until there is an address and a home.
+	// until there is an address and a home, and never for a pod (its one road
+	// is Jump).
 	QR []string `json:"qr,omitempty"`
 	// Jump: for a home that is a pod behind the door, the one line a phone's
 	// Jump host or a bare ssh copies (claude-fleet#4193); "" otherwise.
@@ -135,10 +136,13 @@ func (s *Server) entryDoorOf(v EntryView, now time.Time) EntryDoor {
 		HomeDown: page.HomeDown, State: page.State, Why: page.Why}
 	if page.Home != nil {
 		d.Login, d.HomeName = page.Home.Login, page.Home.Display
-		if d.Address != "" {
+		pod := s.podBehindDoor(page.Home.Machine)
+		if d.Address != "" && !pod {
 			d.QR = qrMatrix(entrySSHURL(d.Login, d.Address, d.Port))
 		}
-		if d.Address != "" && s.podBehindDoor(page.Home.Machine) {
+		// a pod is reached only through the door's jump: no ssh://login@door
+		// code (that was the door's per-login account, retired by T643)
+		if d.Address != "" && pod {
 			d.Jump = entryJumpLine(d.Address, d.Port, d.Login,
 				s.jumpTarget(page.Home.Machine, s.entryAddrMachine(page.Home.Machine, now), now))
 		}

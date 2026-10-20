@@ -108,6 +108,7 @@ func (s *Server) withEntryReachRelay(m FleetMachine, now time.Time, relay bool) 
 			return m
 		}
 	}
+	orig := m
 	door := s.entryAddrMachine(m.Hostname, now)
 	addrs, err := s.EntryReachable(door, now)
 	if err != nil || len(addrs) == 0 {
@@ -145,8 +146,18 @@ func (s *Server) withEntryReachRelay(m FleetMachine, now time.Time, relay bool) 
 	}
 	m.Routes = routes
 	if pod && door != m.Hostname {
-		// the door's jump account to the pod's own sshd (claude-fleet#4193)
+		// the door's jump account to the pod's own sshd (claude-fleet#4193) —
+		// the only road to a pod: with no jump ready the door's bare address
+		// is not offered (it was the door's per-login account, retired by
+		// T643; the person's /entry page says why).
 		m = s.withJump(m, door, own, now)
+		jumped := false
+		for _, r := range m.Routes {
+			jumped = jumped || r.Jump != ""
+		}
+		if !jumped {
+			return orig
+		}
 	}
 	return m
 }

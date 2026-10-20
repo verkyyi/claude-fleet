@@ -161,6 +161,8 @@ Match User fleet-jump
 6. **删旧路**（compat-1v，下一批）：门的记录里 per-login 账号的到达连续 N 天为 0（或已逐个通知手机用户换成新一行）后，
    删门的 per-login 账号 / keys 目录 / `fleet-door.sh` / `AcceptEnv FLEET_DOOR_*`、Secret `fleet-door` 和 `fleet-door-pub`、
    pod 的 `door.pub` 挂载和中转的 `Match LocalAddress` 例外；MANAGED-LINUX「The door」改写。
+   hub 一半已做（T643，2026-10-20）：pod 的 `entry` 路线只在跳转就绪时发、且必带 `jump`，入口页不再给 pod 家
+   `ssh://<login>@<门>` 的码；门上一半（账号 / keys 目录 / fleet-door.sh / Secret）随后另做。
 
 ## 4. 待发起人定的
 

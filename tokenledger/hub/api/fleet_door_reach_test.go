@@ -101,6 +101,7 @@ func TestPodRelayOnlyWhenThePodSaysSo(t *testing.T) {
 	if err := h.srv.Store.SetEntryHostKey("fleet-door", door, now); err != nil {
 		t.Fatal(err)
 	}
+	jumpReady(h, now, "fleet-door", "u-old111", "u-new111")
 	pick := func(host string) RouteMachine {
 		return h.srv.routeMachine(FleetMachine{Hostname: host, HostKeys: []string{own}}, h.srv.sshRelayReadiness(), "", now)
 	}
