@@ -535,7 +535,7 @@ def launcher(bundle, launch):
         if home:
             argv += ['--codex-home', home]
         if target.get('profile'):
-            env.update(FLEET_CODEX_PROFILE=target['profile'], FLEET_CODEX_ACCOUNT=target['account'])
+            env['FLEET_CODEX_PROFILE'] = target['profile']
         if target.get('model'):
             argv += ['-m',target['model']]
     elif target.get('label'):

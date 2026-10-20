@@ -14,6 +14,5 @@ done
 [ -n "$sess" ] || sess=$(fleet_current_session 2>/dev/null)
 [ -n "$sess" ] || { echo 'fleet-codex-model: --session is required' >&2; exit 2; }
 fleet_load_conf "$sess"
-export FLEET_CONF_DIR FLEET_CODEX_MODEL_FALLBACK FLEET_CODEX_MODEL_LIMIT_IDS
-export FLEET_CODEX_QUOTA_FLOOR FLEET_CODEX_QUOTA_TTL
+export FLEET_CONF_DIR
 exec python3 "$BIN/fleet-codex-model.py" --session "$sess" ${args[@]+"${args[@]}"}

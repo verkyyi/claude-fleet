@@ -92,9 +92,8 @@
 # peer messages + child reports | ✅ | ✅ | Fleet pane launches give each worker a private local app-server. `codex queue` reaches that exact endpoint, UUID and CODEX_HOME; failed delivery is never stamped as success. A guardian shuts down the owned server even if the launcher is killed. `FLEET_CODEX_SERVER=0` opts back into embedded mode without live queue delivery.
 # fleet tools (`status` / `repos` / `agents` / `brief` · `report` / `ask` / `handoff` / `pr_verdict` / `pr_merge` · `context` / `transfer` / `where` / `show` / `open` / `set_reap`; the dispatch group `spawn` / `task` / `await` / `children` / `send` / `answer_dialog` / `clear`) | ✅ | ✅ | Both launchers mount the one tool service `fleet` (`bin/fleet-mcp.py`, defined once in `conf/mcp-worker.json`, issues #1807 / #1808 / #1811) and its dispatch group `fleet-orch` (`conf/mcp-orch.json`): the same tools for Claude and Codex, each a checked wrapper over the existing script. The worker skills name only these tools — a script path appears only under a 排障 / 运营者 heading (`bin/skill-tools-selftest.sh`). Spec: `docs/dev/FLEET-MCP.md`. `FLEET_MCP=0` turns it off.
 # `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | ✅ | Crash snapshots and history retain the exact Codex UUID, CODEX_HOME and rollout. Native resume/fork stays in that home; account migration uses a durable packet to start fresh in a different home with source recovery preserved.
-# multi-account rotation + native quota collector | ✅ | ✅ | Register independent CODEX_HOME directories and select fresh launches by native quota headroom. Windows/reset times are reported by Codex. Unknown data stays unknown; gating and idle-only protected account migration are separate opt-ins.
-# subscription failover across Coding Agents | opt-in | opt-in | `FLEET_FAILOVER=1` picks an eligible subscription when a session STARTS: same-agent first, then the allowed other agent. A running session is never moved when it fills — the credential pool changes the subscription (the per-session planner is retired, T546).
-# per-model cap fallback (same thread) | ✅ | ✅ | Native thread/settings/update changes an idle Codex model and verifies it without keystrokes or restart. Opt-in fallback requires explicit model-to-limit IDs and fresh quota on both buckets. Only an exact native quota-failed turn receives a continuation.
+# subscription choice | ✅ | ✅ | The credential pool picks: through this login's credential proxy each request runs on the pool's pick (Codex too — its default home, #4606), moved off a full account by the proxy; with no proxy the session runs on its own login (`~/.codex`, or the fleet's pinned `FLEET_CODEX_HOME`). Neither launcher picks among local accounts any more (T550, T560); only a caller-named account (a handoff's `--codex-profile`) is pinned.
+# model switch (same thread) | ✅ | ✅ | `fleet-codex-model.sh switch` changes an idle Codex thread's model through native thread/settings/update and verifies it without keystrokes or restart. Manual only: the quota-triggered fallback left with the local account registry (T560).
 # MCP servers + subagent model | ✅ | ✅ | `FLEET_MCP_CONFIG` translates stdio/HTTP allowlists — recommended value `~/.claude/fleet/conf/mcp-worker.json`, the minimal worker set shipped with the fleet (the `fleet` tool service only, issues #1078/#1807); `FLEET_CODEX_MCP_CONFIG` also accepts native JSON/TOML. Strict policies disable inherited servers and apps. Codex subagent model/effort use separate native knobs; explicit caller overrides win. Both TUI and private server receive the policy.
 # PR + check status in the session header (`PR #N ✓ 检查通过` · `… 检查中` · `✗ <check>`) | ⚠️ | ⚠️ | tmux would draw it, not the agent: `conf/tmux-attention.conf`'s `pane-border-format` reads `@pr_num` / `@pr_ci` / `@pr_fail`, which nothing stamps since the PR-map refresher left (issue #4899; it was #1954) — so the header draws no PR today. `pr_verdict` is the PR's one reading.
 # knows where the person is from the first turn (device · terminal · what it can do) | ✅ | ✅ | One reader, `bin/fleet-client-where.sh`. Claude Code gets the line from the mod (`where.ts`, every request); Codex gets the same text as SessionStart `additionalContext` from `bin/fleet-where-hook.sh`, in the shared hook table and gated to a Codex pane so Claude never reads it twice (issue #1954). A takeover mid-session reaches Codex through the `where` tool.
@@ -158,24 +157,13 @@ _codex_resuming="$resume_id"
 for _arg in ${normal[@]+"${normal[@]}"}; do
   case "$_arg" in resume|fork) _codex_resuming=1; break ;; esac
 done
+# A pinned home (FLEET_CODEX_HOME) is the one this fleet names; nothing else here
+# picks one (T560, EPIC T542 C5): the local account pool (FLEET_CODEX_ACCOUNTS) and
+# its quota gate retired with fleet-codex-account.py — through the credential proxy
+# the pool picks per request, else the session runs on this CODEX_HOME's own login.
 if [ "$_codex_home_explicit" = 0 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] && [ -n "${FLEET_CODEX_HOME:-}" ]; then
   [ -d "$FLEET_CODEX_HOME" ] || { echo 'fleet-codex: FLEET_CODEX_HOME is missing' >&2; exit 2; }
   export CODEX_HOME="$FLEET_CODEX_HOME"
-  if [ -z "$_codex_resuming" ] && [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
-    FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_CODEX_HOME="$CODEX_HOME" FLEET_CODEX_QUOTA_GATE=1 \
-      FLEET_CODEX_MODEL_LIMIT_IDS="${FLEET_CODEX_MODEL_LIMIT_IDS:-}" \
-      FLEET_CODEX_MODEL="${FLEET_CODEX_MODEL:-}" FLEET_CODEX_QUOTA_FLOOR="${FLEET_CODEX_QUOTA_FLOOR:-5}" \
-      FLEET_CODEX_QUOTA_TTL="${FLEET_CODEX_QUOTA_TTL:-300}" python3 "$BIN/fleet-codex-account.py" gate || exit 2
-  fi
-elif [ "$_codex_home_explicit" = 0 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] && [ -z "$_codex_resuming" ] && [ -n "${FLEET_CODEX_ACCOUNTS:-}" ]; then
-  # Recovery identity is authoritative. Only fresh launches choose an account home.
-  # Pass the already-resolved overlay.
-  CODEX_HOME=$(FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_CODEX_ACCOUNTS="$FLEET_CODEX_ACCOUNTS" \
-    FLEET_CODEX_MODEL_LIMIT_IDS="${FLEET_CODEX_MODEL_LIMIT_IDS:-}" \
-    FLEET_CODEX_MODEL="${FLEET_CODEX_MODEL:-}" FLEET_CODEX_QUOTA_GATE="${FLEET_CODEX_QUOTA_GATE:-0}" \
-    FLEET_CODEX_QUOTA_FLOOR="${FLEET_CODEX_QUOTA_FLOOR:-5}" FLEET_CODEX_QUOTA_TTL="${FLEET_CODEX_QUOTA_TTL:-300}" \
-    python3 "$BIN/fleet-codex-account.py" select) || exit 2
-  export CODEX_HOME
 fi
 if [ -n "$resume_id" ]; then
   verb=resume; [ "$fork_session" = 1 ] && verb=fork
@@ -200,24 +188,12 @@ for _arg in "$@"; do
 done
 unset _pv
 
-# Use ccquota's shared run lock and official isolated credential environment for
-# the entire launcher/app-server/TUI lifetime. Do not change its global default.
-# A SEPARATED login (credsep.json, #1971) through its credential proxy keeps no
-# Codex login of its own — the proxy mints for it below — so the failover pin is
-# skipped, as fleet-claude.sh's _fc_sep does (issue #3713: a credsep login's warm
-# Codex died on «no account on the login»). An explicit --codex-profile still runs.
-_fx_sep=0
-# …and so does a person's own pod (render.py --cred-central): no credsep.json, and
-# nothing is ever leased into it (node.env CCQUOTA_FLEET_CREDS=0) — the hub's
-# central proxy picks, there is nothing here to plan over (#3554)
-[ -n "${FLEET_CRED_SID:-}" ] && { [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" ] \
-  || { [ -n "${FLEET_CRED_CENTRAL_URL:-}" ] && command -v _fleet_node_env_val >/dev/null 2>&1 \
-       && [ "$(_fleet_node_env_val CCQUOTA_FLEET_CREDS 2>/dev/null)" = 0 ]; }; } && _fx_sep=1
-if [ "${FLEET_FAILOVER:-0}" = 1 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] && [ "$_fx_sep" != 1 ]; then
-  _profile=$(bash "$BIN/fleet-account.sh" profile --home "${CODEX_HOME:-$HOME/.codex}") || exit 1
-  FLEET_CODEX_PROFILE=$(printf '%s' "$_profile" | python3 -c 'import json,sys; print(json.load(sys.stdin)["profile"])') || exit 1
-  export FLEET_CODEX_PROFILE
-fi
+# A caller that NAMED a ccquota profile (--codex-profile: a handoff carrying a
+# session over) runs under ccquota's shared run lock and isolated credential
+# environment for the whole launcher/app-server/TUI lifetime. Nothing pins one on
+# its own any more (T560, EPIC T542 C5): FLEET_FAILOVER's `fleet-account.sh
+# profile` pin and the FLEET_CODEX_SUBSCRIPTION it derived are gone — an old conf
+# that still says FLEET_FAILOVER=1 changes nothing here.
 if [ -n "${FLEET_CODEX_PROFILE:-}" ]; then
   if [ "${FLEET_CODEX_MANAGED:-0}" != 1 ]; then
     export FLEET_CODEX_MANAGED=1
@@ -225,9 +201,6 @@ if [ -n "${FLEET_CODEX_PROFILE:-}" ]; then
     unset CODEX_HOME
     exec "${FLEET_QUOTA_BIN:-ccquota}" codex --codex-bin "$BIN/fleet-codex.sh" run "$FLEET_CODEX_PROFILE" -- "$@"
   fi
-  FLEET_CODEX_SUBSCRIPTION=$(bash "$BIN/fleet-account.sh" profile --name "$FLEET_CODEX_PROFILE" \
-    --home "${CODEX_HOME:-$HOME/.codex}" --account "${FLEET_CODEX_ACCOUNT:-}") || exit 1
-  export FLEET_CODEX_SUBSCRIPTION
 fi
 
 # --- argv: the LAST argument is the seed prompt unless it looks like a flag ----
@@ -617,9 +590,9 @@ done
 if [ -n "${TMUX_PANE:-}" ]; then
   tmux set-option -w -t "$TMUX_PANE" @cc_agent codex 2>/dev/null || true
   tmux set-option -w -t "$TMUX_PANE" @codex_home "${_fx_real_home:-${CODEX_HOME:-$HOME/.codex}}" 2>/dev/null || true
-  _acct=$(FLEET_CONF_DIR="$FLEET_CONF_DIR" python3 "$BIN/fleet-codex-account.py" label "${_fx_real_home:-${CODEX_HOME:-$HOME/.codex}}" 2>/dev/null) || _acct=''
   [ -n "$_fx_route" ] && tmux set-option -w -t "$TMUX_PANE" @cred_route "$_fx_route" 2>/dev/null || true
-  tmux set-option -w -t "$TMUX_PANE" @cc_account "${_acct:+codex:$_acct}" 2>/dev/null || true
+  # @cc_account names only an account a caller named (T560, as fleet-claude.sh T550)
+  tmux set-option -w -t "$TMUX_PANE" @cc_account "${FLEET_CODEX_PROFILE:+codex:$FLEET_CODEX_PROFILE}" 2>/dev/null || true
   tmux set-option -w -t "$TMUX_PANE" @cc_launcher_pid "$$" 2>/dev/null || true
   # New ownership invalidates the old JSON even if the process died before its
   # SessionEnd. Clear visible context too; the first root hook supplies truth.

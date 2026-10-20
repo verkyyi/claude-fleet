@@ -1,38 +1,50 @@
 #!/usr/bin/env python3
 """Change an idle Codex thread's model through native settings, without typing.
 
-Automatic fallback requires an explicit model -> native quota limit-ID map,
-fresh low current-model quota, and fresh available destination quota. It never
-infers a model from a display name or restarts a worker to change its model.
+A person's switch only: the quota-triggered automatic fallback left with the local
+Codex account registry (T560, EPIC T542 C5). It never restarts a worker to change
+its model. `limits` prints the thread's native quota buckets, normalized.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import runpy
 import shlex
 import subprocess
 import sys
-import time
 
 BIN = Path(__file__).absolute().parent
 cx = runpy.run_path(str(BIN / 'fleet-codex-session.py'))
-account = runpy.run_path(str(BIN / 'fleet-codex-account.py'))
 Client = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))['Client']
 
 
-class SwitchAttemptedError(ValueError):
-    """The native mutation may have applied; stop this collector tick."""
+def numeric(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def eligible(home, old, new):
-    mapping = account['model_limits']()
-    if not old or not new or old == new or old not in mapping or new not in mapping: return False
-    if mapping[old] == mapping[new]: return False
-    # An account-wide wall belongs to home migration, not a guessed model bypass.
-    if account['status'](home)['state'] != 'available': return False
-    return (account['status'](home, limit_id=mapping[old])['state'] == 'low'
-            and account['status'](home, limit_id=mapping[new])['state'] == 'available')
+def normalize(response):
+    """Only usage metadata out of account/rateLimits/read — never a credential."""
+    if not isinstance(response, dict) or not isinstance(response.get('rateLimits'), dict):
+        raise ValueError('unrecognized native quota response')
+    def bucket(value):
+        if not isinstance(value, dict): return {}
+        result = {k: value[k] for k in ('limitId', 'normalModelSlug', 'planType', 'spendControlReached', 'rateLimitReachedType') if isinstance(value.get(k), (str, bool))}
+        for key in ('primary', 'secondary'):
+            row = value.get(key)
+            if not isinstance(row, dict) or not numeric(row.get('usedPercent')): continue
+            result[key] = {k: row[k] for k in ('usedPercent', 'windowDurationMins', 'resetsAt') if numeric(row.get(k))}
+        credits = value.get('credits')
+        if isinstance(credits, dict):
+            result['credits'] = {k: credits[k] for k in ('hasCredits', 'unlimited') if isinstance(credits.get(k), bool)}
+        return result
+    data = {'rateLimits': bucket(response['rateLimits']), 'rateLimitsByLimitId': {}}
+    buckets = response.get('rateLimitsByLimitId') or {}
+    if not isinstance(buckets, dict): raise ValueError('unrecognized native quota buckets')
+    for key, value in buckets.items():
+        data['rateLimitsByLimitId'][key] = bucket(value)
+    if isinstance(response.get('ordinaryUsageAllowed'), bool):
+        data['ordinaryUsageAllowed'] = response['ordinaryUsageAllowed']
+    return data
 
 
 def current(data, pane, socket):
@@ -47,25 +59,15 @@ def native_idle(client, data):
         raise ValueError('Codex thread is not idle')
 
 
-def capped_turn(client, data):
-    turns = client.call('thread/turns/list', {'threadId':data['session_id'], 'limit':1,
-                       'sortDirection':'desc', 'itemsView':'summary'}).get('data', [])
-    if not turns: return ''
-    turn = turns[0]
-    if turn.get('status') == 'failed' and (turn.get('error') or {}).get('codexErrorInfo') in ('usageLimitExceeded','rateLimitExceeded'):
-        return turn.get('id', '')
-    return ''
-
-
-def switch(data, pane, socket, model, automatic=False, dry=False):
+def switch(data, pane, socket, model, dry=False):
     if data.get('cwd') and not dry:
         helper=runpy.run_path(str(BIN/'.fleet-transfer.py'))
         with helper['transition_lock'](data['cwd']):
-            return switch_locked(data,pane,socket,model,automatic,dry)
-    return switch_locked(data,pane,socket,model,automatic,dry)
+            return switch_locked(data,pane,socket,model,dry)
+    return switch_locked(data,pane,socket,model,dry)
 
 
-def switch_locked(data, pane, socket, model, automatic=False, dry=False):
+def switch_locked(data, pane, socket, model, dry=False):
     if not model or any(ord(c) < 32 for c in model): raise ValueError('a native model name is required')
     current(data, pane, socket)
     client = Client(data.get('remote', ''), timeout=3)
@@ -77,13 +79,10 @@ def switch_locked(data, pane, socket, model, automatic=False, dry=False):
         if snapshot['thread']['id'] != data['session_id']: raise ValueError('thread changed')
         old = snapshot['model']
         if old == model: return False
-        if automatic and not eligible(data['home'], old, model): return False
         flags = cx['tmux'](['display-message','-p','-t',pane,
             '#{@claude_state}|#{@claude_needs}|#{@agent_transfer_request}|#{@agent_transfer_until}|#{@handoff_armed}'], socket).split('|')
         if len(flags) != 5 or any(flags[i] for i in (2,3)) or flags[4] == '1':
             raise ValueError('a handoff/transfer is pending')
-        if automatic and (flags[0] not in ('done','working') or flags[1]): return False
-        failed_turn = capped_turn(client, data) if automatic else ''
         current(data, pane, socket)
         native_idle(client, data)
         if dry:
@@ -100,62 +99,27 @@ def switch_locked(data, pane, socket, model, automatic=False, dry=False):
             cmd = ['set-option','-w','-t',pane,'@cc_model',model]
             cx['tmux'](['if-shell','-F','-t',pane,test,shlex.join(cmd)], socket)
             print('Codex model: %s -> %s (same thread %s).' % (old, model, data['session_id']))
-            if failed_turn:
-                # A completed idle task receives no nudge. Resume only the exact
-                # latest turn that natively failed on quota, after rechecking it.
-                current(data, pane, socket)
-                native_idle(client, data)
-                if capped_turn(client, data) == failed_turn:
-                    rule = subprocess.check_output(['bash', str(BIN/'fleet-lang.sh'), 'resume'], text=True, timeout=3).strip()
-                    message = '[fleet model recovery] The last turn hit a native quota limit. Fleet switched this thread to ' + model + '. Continue the previously authorized task from that interruption; do not redo completed work. ' + rule
-                    queued = subprocess.run(['codex','queue','--remote',data['remote'],'--thread',data['session_id'],'--message',message],
-                                            env=dict(os.environ,CODEX_HOME=data['home']),capture_output=True,text=True,timeout=10)
-                    if queued.returncode: raise ValueError('model changed, but recovery message was not accepted')
-                    print('Queued continuation for the quota-failed turn.')
         except (OSError,ValueError,KeyError,TypeError,EOFError,subprocess.SubprocessError) as error:
-            raise SwitchAttemptedError(str(error)) from error
+            raise ValueError(str(error)) from error
         return True
     finally:
         client.close()
 
 
-def watch(socket):
-    fallback = os.environ.get('FLEET_CODEX_MODEL_FALLBACK', '')
-    if not fallback or not account['model_limits'](): return False
-    deadline = time.monotonic() + 8
-    rows = cx['tmux'](['list-windows','-t',socket,'-F',
-        '#{pane_id}|#{@cc_agent}|#{@cc_launcher_pid}|#{@claude_state}|#{@codex_identity}'], socket)
-    for row in rows.splitlines():
-        if time.monotonic() > deadline: break
-        try:
-            pane, agent, owner, state, raw = row.split('|', 4)
-            if agent != 'codex' or state not in ('done','working'): continue
-            data = cx['saved_identity'](raw,owner)
-            if not data or not eligible(data['home'],data.get('model',''),fallback): continue
-            if switch(data,pane,socket,fallback,automatic=True): return True
-        except SwitchAttemptedError as error:
-            print('fleet-codex-model: '+str(error), file=sys.stderr)
-            return True  # Do not switch another worker or migrate a home this tick.
-        except (OSError,ValueError,KeyError,TypeError,EOFError,subprocess.SubprocessError):
-            continue
-    return False
-
-
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('command', choices=('switch','limits','watch'))
+    p.add_argument('command', choices=('switch','limits'))
     p.add_argument('--session', required=True)
     p.add_argument('--window', default='')
     p.add_argument('--to', default='')
     p.add_argument('--dry-run', action='store_true')
     a=p.parse_args()
-    if a.command=='watch': watch(a.session);return 0
     if not a.window: raise ValueError('--window is required')
     data=cx['identity'](a.window,a.session)
     if not data: raise ValueError('no current Codex identity')
     if a.command=='limits':
         client=Client(data.get('remote',''),timeout=3)
-        try: print(json.dumps(account['normalize'](client.call('account/rateLimits/read',{'excludeResetCreditDetails':True})),indent=2))
+        try: print(json.dumps(normalize(client.call('account/rateLimits/read',{'excludeResetCreditDetails':True})),indent=2))
         finally:client.close()
         return 0
     switch(data,a.window,a.session,a.to,dry=a.dry_run)

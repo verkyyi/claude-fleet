@@ -1422,8 +1422,9 @@ page **`/admin/audit`** (claude-fleet#1990). All of these
 refuse a user's session. A Claude refresh token comes from an interactive
 `claude` login (`claudeAiOauth.refreshToken`); once it is in the hub, log that
 machine out — two holders of one refresh token rotate each other out.
-A Codex home the hub writes is registered once with
-`fleet-codex-account.sh register <label> <home>` like any other.
+A Codex home the hub writes needs no registering: the credential proxy picks
+among the pool's accounts (the local `fleet-codex-account.sh` registry retired
+with claude-fleet T560).
 
 #### The refresh runs on a node when the hub's country is refused (claude-fleet#1490)
 

@@ -203,3 +203,9 @@ func cmd_use                                    T550  bin/
 func cmd_rotate                                 T550  bin/
 func migrate_rebind                             T550  bin/
 func sub_choices                                T550  bin/
+# --- a Codex session's subscription is the pool's pick too (T560, EPIC T542 C5) ----
+path bin/fleet-codex-account.py                 T560
+path bin/fleet-codex-account.sh                 T560
+path bin/fleet-codex-account-selftest.py        T560
+func allowed_codex                              T560  bin/
+func capped_turn                                T560  bin/

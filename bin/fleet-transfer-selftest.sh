@@ -17,7 +17,7 @@ WORK=$(cd "$WORK" && pwd -P)
 # usage-lib's cache dir): re-home it so the target-auth legs (issue #1667) never
 # read or write the operator's pool state or alerts.
 export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
-unset FLEET_FAILOVER FLEET_CODEX_HOME FLEET_CODEX_ACCOUNTS FLEET_ACCOUNT_LABEL FLEET_ACCOUNTS_DIR
+unset FLEET_FAILOVER FLEET_CODEX_HOME FLEET_ACCOUNT_LABEL FLEET_ACCOUNTS_DIR
 if [ "${1:-}" = --proxy-home ]; then
   export HOME="$WORK/home"; mkdir -p "$HOME"
   unset CODEX_HOME FLEET_CODEX_PROFILE FLEET_CRED_SID
@@ -1310,9 +1310,6 @@ assert json.load(open(sys.argv[1]))['home']==sys.argv[2]
 PYHOME
 ok
 spawn_codex 64
-printf '#!/bin/sh\nexit 1\n' > "$IBIN/fleet-codex-account.sh"; chmod +x "$IBIN/fleet-codex-account.sh"
-transfer --require-codex-idle && fail 'unverified native idle must refuse account cutover'
-kill -0 "$PID" || fail 'failed native idle check must preserve source'; ok
 NEXT_HOME="$WORK/next Codex account"; mkdir -p "$NEXT_HOME"
 transfer --codex-home "$NEXT_HOME" || fail 'Codex account cutover'
 BUNDLE=$(packet)

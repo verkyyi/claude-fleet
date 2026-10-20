@@ -30,8 +30,10 @@
 #      in the session's home is a reap candidate only once its session is revoked
 #   H  the ambient login (no account) on a trusted route: exit 4, launch as before;
 #      the proxy refusing → the launch refuses (never falls back to a credential)
-#   I  a separated login's Codex with FLEET_FAILOVER=1 pins no local profile (issue
-#      #3713); an unseparated one still does
+#   I  no Codex launch pins a local profile (T560, EPIC T542 C5): an old fleet.conf
+#      still saying FLEET_FAILOVER=1 never reaches fleet-account.sh — a separated
+#      login mints through the proxy (#3713), an unseparated one runs its own home
+#   J  a person's own pod (central route) under FLEET_FAILOVER=1: no planner (#3554)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d /tmp/scs.XXXXXX)   # short: the proxy's ctl.sock must fit a unix socket path (104 bytes on macOS)
@@ -319,18 +321,24 @@ check "H: the proxy will not mint → the launch refuses" 1 "$(cat "$OUT/rc")"
 check "H: … and never ran the agent" no "$([ -e "$OUT/env" ] && echo yes || echo no)"
 grep -q 'REAL-' "$SB/cred-proxy.log" && fail "rails: a real token in the proxy log" || pass "rails: no real token in the proxy log"
 
-# ── I: a separated login's Codex under FLEET_FAILOVER=1 (issue #3713) ────────
-# Its own ~/.codex holds no login (the role account does), so fleet-codex.sh must
-# not pin a local profile first — that died «no account on the login» before the
-# proxy was ever asked. The pin's own road stays for an unseparated login.
+# ── I: FLEET_FAILOVER=1 in an old fleet.conf pins no Codex profile (T560) ─────
+# The pin (`fleet-account.sh profile`) is gone: a Codex session's subscription is
+# the pool's pick through the proxy, else its home's own login. The key is written
+# where an old login still has it — the global fleet.conf every launcher sources —
+# and the ccquota it would have exec'd is missing, so a pin would exit 1 here.
+printf 'FLEET_FAILOVER=1\n' >> "$FLEET_CONF_DIR/fleet.conf"
 printf '{"separated": true}\n' > "$FLEET_CONF_DIR/credsep.json"
-run_codex i FLEET_CRED_SID=sI FLEET_FAILOVER=1 FLEET_ACCOUNT_SELECTED=1 CODEX_HOME="$HOME/.codex-accounts/cx1"
+run_codex i FLEET_CRED_SID=sI FLEET_QUOTA_BIN=/nonexistent CODEX_HOME="$HOME/.codex-accounts/cx1"
 OUT="$SB/out/i"
-check "I: separated + failover — no local profile pin" 0 "$(grep -c '^fleet-account:' "$OUT/stderr" | tr -d ' ')"
+check "I: separated + failover — no local profile pin" 0:0 "$(cat "$OUT/rc"):$(grep -c 'fleet-account' "$OUT/stderr" | tr -d ' ')"
+check "I: … the proxy minted it (the fleet provider)" 1 "$(grep -c 'model_provider="fleet"' "$OUT/argv" | tr -d ' ')"
 rm -f "$FLEET_CONF_DIR/credsep.json"
-run_codex i2 FLEET_CRED_SID=sI2 FLEET_FAILOVER=1 FLEET_ACCOUNT_SELECTED=1 FLEET_QUOTA_BIN=/nonexistent CODEX_HOME="$HOME/.codex-accounts/cx1"
+run_codex i2 FLEET_CRED_PROXY=0 FLEET_QUOTA_BIN=/nonexistent CODEX_HOME="$HOME/.codex-accounts/cx1"
 OUT="$SB/out/i2"
-check "I: unseparated + failover — the pin still runs (and refuses here: no ccquota)" 1 "$(cat "$OUT/rc")"
+check "I: unseparated + failover — no pin either, its own home runs" "0:0:$HOME/.codex-accounts/cx1" \
+  "$(cat "$OUT/rc"):$(grep -c 'fleet-account' "$OUT/stderr" | tr -d ' '):$(envv CODEX_HOME)"
+check "I: … and no subscription is stamped into its environment" "" "$(envv FLEET_CODEX_SUBSCRIPTION)"
+sed -i.bak '/^FLEET_FAILOVER=1$/d' "$FLEET_CONF_DIR/fleet.conf" && rm -f "$FLEET_CONF_DIR/fleet.conf.bak"
 
 # ── J: a person's own pod routes CENTRAL under FLEET_FAILOVER=1 (issue #3554) ──
 # No credsep.json there (nothing is separated: the hub's central proxy picks), so

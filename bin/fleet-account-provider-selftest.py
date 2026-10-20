@@ -295,18 +295,19 @@ class Providers(unittest.TestCase):
             r = accounts.target_auth('codex', home=str(home))
             self.assertEqual((r['verdict'], r['login'], r['profile']), ('refuse', 'reauth_required', 'work'))
             self.assertEqual(r['reason'], 'Codex profile needs a verified subscription login: work (reauth_required)')
-            # an unregistered home: the planner's launcher would refuse it, a plain
-            # install runs Codex on it as before
-            with patch.dict(os.environ, FLEET_FAILOVER='1'):
-                self.assertEqual(accounts.target_auth('codex', home=str(self.root/'nowhere'))['verdict'], 'refuse')
-            with patch.dict(os.environ, FLEET_FAILOVER='0'):
-                self.assertEqual(accounts.target_auth('codex', home=str(self.root/'nowhere'))['verdict'], 'unknown')
+            # an unregistered home runs Codex on it as before — FLEET_FAILOVER=1 too:
+            # no launcher pins a profile any more (T560)
+            for failover in ('1', '0'):
+                with patch.dict(os.environ, FLEET_FAILOVER=failover):
+                    self.assertEqual(accounts.target_auth('codex', home=str(self.root/'nowhere'))['verdict'], 'unknown')
         with patch.object(accounts, 'profiles', return_value=[good]):
             self.assertEqual(accounts.target_auth('codex', profile_name='work')['verdict'], 'ok')
-            with patch.dict(os.environ, FLEET_CODEX_ACCOUNTS='work', FLEET_CODEX_HOME=''):
+            # no local pool pick any more (T560): an old FLEET_CODEX_ACCOUNTS is not
+            # read — the fleet's pinned FLEET_CODEX_HOME is the home judged
+            with patch.dict(os.environ, FLEET_CODEX_ACCOUNTS='nobody', FLEET_CODEX_HOME=str(home)):
                 self.assertEqual(accounts.target_auth('codex')['verdict'], 'ok')
         with patch.object(accounts, 'profiles', return_value=[bad]), \
-             patch.dict(os.environ, FLEET_CODEX_ACCOUNTS='work', FLEET_CODEX_HOME=''):
+             patch.dict(os.environ, FLEET_CODEX_ACCOUNTS='work', FLEET_CODEX_HOME=str(home)):
             self.assertEqual(accounts.target_auth('codex')['verdict'], 'refuse')
         with patch.object(accounts, 'profiles', side_effect=OSError('no ccquota')):
             self.assertEqual(accounts.target_auth('codex', home=str(home))['verdict'], 'unknown')

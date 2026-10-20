@@ -70,7 +70,7 @@ die() { FAILURE=$*; printf 'fleet-transfer: %s\n' "$*" >&2;
   fi
   exit 1; }
 usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
-SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME='' REQUIRE_IDLE=0
+SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME=''
 TARGET_FILE='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID='' FROM_PANEL=0 PREPARATION_ID=''
 TAKEOVER=0 TAKEOVER_PLAN='' DURABLE="$BIN/fleet_transfer_durable.py"
 while [ "$#" -gt 0 ]; do
@@ -98,7 +98,6 @@ while [ "$#" -gt 0 ]; do
     --after-turn) AFTER=1; shift ;;
     --inspect) INSPECT=1; DRY=1; shift ;;
     --native-resume) NATIVE=1; shift ;;
-    --require-codex-idle) REQUIRE_IDLE=1; shift ;;
     --durable-takeover) TAKEOVER=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument $1 (exactly one --window is required)" ;;
@@ -601,11 +600,6 @@ fi
 # The last read before /exit (issue #1667): a login that went bad while the
 # package was written still finds the source running.
 target_auth || refuse_target
-if [ "$REQUIRE_IDLE" = 1 ]; then
-  [ "$SOURCE_AGENT" = codex ] || die 'native idle check requires a Codex source'
-  FLEET_CONF_DIR="$FLEET_CONF_DIR" "$BIN/fleet-codex-account.sh" idle --session "$SESS" --window "$PANE" \
-    || die 'Codex source is not natively idle; leaving it alone'
-fi
 python3 "$HELPER" verify "$BUNDLE" || die 'source changed while preparing the transfer'
 TM capture-pane -p -t "$PANE" > "$BUNDLE/pane-before-exit.txt" || die 'cannot preserve source screen before exiting'
 chmod 600 "$BUNDLE/pane-before-exit.txt" || die 'cannot protect source screen snapshot'
