@@ -235,7 +235,7 @@ printf '%s\\n' "\$*" >> "$WORK/watch.args"
 sleep 3
 while [ \$# -gt 0 ]; do
   [ "\$1" = --unit ] && case "\$2" in
-    quotawatch) echo "fleet-daemon-watch: quotawatch stale 400s but a tick is RUNNING — not kicked (wedged at 900s; --force --now aborts it now)" >&2 ;;
+    reconcile)  echo "fleet-daemon-watch: reconcile stale 400s but a tick is RUNNING — not kicked (wedged at 900s; --force --now aborts it now)" >&2 ;;
     cleanup)    echo "fleet-daemon-watch: cleanup — skip, kicked 20s ago (cooldown 180s); still stale 300s" >&2 ;;
     collect)    echo "fleet-daemon-watch: collect stale 0s — kicked gui/501/com.claude-fleet.collect (launchd), rc=0" >&2 ;;
   esac
@@ -260,14 +260,14 @@ await_toast() {  # <pattern> — the background half's closing toast, ≤10s
   return 1
 }
 rm -f "$G"/alerts.* "$WORK/toasts" "$WORK/watch.args"
-printf '{"id":"daemon-stale","severity":"alarm","subject":"daemon","condition":"stale","value":"2 units","since":%s,"action":"kick-daemons","healed_at":0,"target":"","detail":"quotawatch,cleanup,bogus"}\n' "$(now)" > "$G/alerts.ndjson"
+printf '{"id":"daemon-stale","severity":"alarm","subject":"daemon","condition":"stale","value":"2 units","since":%s,"action":"kick-daemons","healed_at":0,"target":"","detail":"reconcile,cleanup,bogus"}\n' "$(now)" > "$G/alerts.ndjson"
 t0=$(now); sact daemon-stale; t1=$(now)
 [ $(( t1 - t0 )) -lt 2 ] || fail "10: act blocked on the kick ($(( t1 - t0 ))s; the watch sleeps 3s)"; ok
-case "$(cat "$WORK/toasts" 2>/dev/null)" in *"requested: quotawatch,cleanup"*) ok ;; *) fail "10: no immediate toast naming the units" "$(cat "$WORK/toasts" 2>/dev/null)" ;; esac
+case "$(cat "$WORK/toasts" 2>/dev/null)" in *"requested: reconcile,cleanup"*) ok ;; *) fail "10: no immediate toast naming the units" "$(cat "$WORK/toasts" 2>/dev/null)" ;; esac
 await_toast 'daemon restart ·' || fail "10: the background kick never toasted its outcome" "$(cat "$WORK/toasts" 2>/dev/null)"; ok
-eq "10: only the row's units, no --force, unknown names dropped" "--unit quotawatch --unit cleanup" "$(cat "$WORK/watch.args")"
+eq "10: only the row's units, no --force, unknown names dropped" "--unit reconcile --unit cleanup" "$(cat "$WORK/watch.args")"
 last=$(tail -1 "$WORK/toasts")
-case "$last" in *"running, not touched quotawatch"*"cooldown cleanup"*) ok ;; *) fail "10: outcome toast" "$last" ;; esac
+case "$last" in *"running, not touched reconcile"*"cooldown cleanup"*) ok ;; *) fail "10: outcome toast" "$last" ;; esac
 case "$last" in *kicked*) fail "10: nothing was kicked, the toast says kicked" "$last" ;; *) ok ;; esac
 rm -f "$WORK/toasts" "$WORK/watch.args"
 printf '{"id":"daemon-stale","severity":"healed","subject":"daemon","condition":"stale","value":"kicked","since":%s,"action":"kick-daemons","healed_at":%s,"target":"","detail":"self-healed by a kick"}\n' "$(now)" "$(now)" > "$G/alerts.ndjson"

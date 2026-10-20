@@ -71,7 +71,7 @@ run() {
     FLEET_FAILOVER=0 FLEET_PRETRUST=0 CCQUOTA_HUB_URL="http://hub.test:8787" "$@"
 }
 acct() { run bash "$WORK/bin/fleet-account.sh" "$@" 2>/dev/null; }
-fetch() { acct quota --refresh >/dev/null; }
+fetch() { FLEET_ACCOUNT_VERDICT_REFETCH=0 acct quota-verdict a --refresh >/dev/null; }   # `quota` retired (T549); the verdict refetches
 spawn() {   # → "<token> <model>" the REAL launcher chose
   rm -f "$WORK/argv" "$WORK/token"
   run env FLEET_MODEL=fable bash "$WORK/bin/fleet-claude.sh" >/dev/null 2>&1
