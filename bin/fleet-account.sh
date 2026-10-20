@@ -332,6 +332,19 @@ acct_labels() {
   fi
 }
 
+# acct_known <label> — 0 when <label> is a registered label. Never spelled
+# `acct_labels | grep -qx`: under this script's pipefail, grep -q leaves at the
+# first match, the next label's write takes SIGPIPE and the pipeline reads as
+# "not found" — `mark-reauth a` refused a, the first label, on a busy runner
+# (fleet-account-selftest, #3952).
+acct_known() {
+  local l
+  while IFS= read -r l; do [ "$l" = "$1" ] && return 0; done <<EOF
+$(acct_labels)
+EOF
+  return 1
+}
+
 acct_token() { [ -f "$ACCT_DIR/$1" ] && sed -n '1{s/[[:space:]]*$//;p;}' "$ACCT_DIR/$1"; }
 
 # <N>[smhd] or bare seconds → seconds (empty on garbage). Suffix must follow a digit.
@@ -1286,12 +1299,12 @@ pick_active() {
   # …but never on one a limit banner benched (issue #2412): it fails for sure.
   if ! acct_any_auth_ok; then
     acct_auth_alert
-    if [ -n "$cur" ] && acct_labels | grep -qx "$cur" && acct_eligible "$cur"; then printf '%s' "$cur"
+    if [ -n "$cur" ] && acct_known "$cur" && acct_eligible "$cur"; then printf '%s' "$cur"
     elif best=$(acct_labels | awk -v c="$cur" '{ l[NR] = $0; if ($0 == c) at = NR }
                  END { for (i = 1; i <= NR; i++) print l[(at + i - 1) % NR + 1] }' \
                 | while IFS= read -r l; do acct_eligible "$l" && { printf '%s' "$l"; break; }; done) && [ -n "$best" ]
     then printf '%s' "$best"
-    elif [ -n "$cur" ] && acct_labels | grep -qx "$cur"; then printf '%s' "$cur"
+    elif [ -n "$cur" ] && acct_known "$cur"; then printf '%s' "$cur"
     else acct_labels | sed -n 1p | tr -d '\n'; fi
     return 0
   fi
@@ -1386,7 +1399,7 @@ cmd_env() {
 }
 
 cmd_use() {
-  local l="$1"; acct_labels | grep -qx "$l" || { echo "use: unknown account '$l'" >&2; return 1; }
+  local l="$1"; acct_known "$l" || { echo "use: unknown account '$l'" >&2; return 1; }
   mkdir -p "$STATE_DIR"; acct_lock; printf '%s\n' "$l" | atomic_write "$STATE_ACTIVE"; acct_unlock
   printf '%s' "$l"
 }
@@ -1416,7 +1429,7 @@ EOF
 cmd_mark_limited() {
   local label="$1" banner="${2:-}" until
   [ -n "$label" ] || { echo "mark-limited: usage: mark-limited <label> [banner]" >&2; return 1; }
-  acct_labels | grep -qx "$label" || { echo "mark-limited: unknown account '$label'" >&2; return 1; }
+  acct_known "$label" || { echo "mark-limited: unknown account '$label'" >&2; return 1; }
   # Bench until the account's REAL refresh instant when the banner carries one
   # (issue #490); LIMIT_TTL is the fallback for banners that do not.
   until=$(banner_reset_epoch "$banner" "$(now)")
@@ -1430,7 +1443,7 @@ cmd_mark_limited() {
 cmd_bench() {
   local label="$1" until="${2:-}" reason="${3:-ccquota ceiling}"
   [ -n "$label" ] || { echo "bench: usage: bench <label> <until-epoch> [reason]" >&2; return 1; }
-  acct_labels | grep -qx "$label" || { echo "bench: unknown account '$label'" >&2; return 1; }
+  acct_known "$label" || { echo "bench: unknown account '$label'" >&2; return 1; }
   case "$until" in ''|*[!0-9]*) until=0;; esac
   if [ "$until" -gt "$(now)" ]; then until=$(( until + RESET_BUFFER ))
   else                               until=$(( $(now) + $(acct_ttl "$label") )); fi
@@ -1486,7 +1499,7 @@ acct_reauth_since() {  # <label> → epoch marked (0 = not marked)
 cmd_mark_reauth() {
   local label="${1:-}" reason="${2:-login rejected}"
   [ -n "$label" ] || { echo "mark-reauth: usage: mark-reauth <label> [reason]" >&2; return 1; }
-  acct_labels | grep -qx "$label" || { echo "mark-reauth: unknown account '$label'" >&2; return 1; }
+  acct_known "$label" || { echo "mark-reauth: unknown account '$label'" >&2; return 1; }
   reason=$(printf '%s' "$reason" | tr '\t\n' '  ')
   mkdir -p "$STATE_DIR"; acct_lock
   { [ -f "$STATE_REAUTH" ] && awk -F'\t' -v l="$label" '$1!=l' "$STATE_REAUTH"
@@ -1522,7 +1535,7 @@ cmd_clear_reauth() {
 cmd_model_limited() {   # <label> <model> [banner] → prints the until-epoch
   local label="$1" model="${2:-}" banner="${3:-}" until
   [ -n "$label" ] && [ -n "$model" ] || { echo "model-limited: usage: model-limited <label> <model> [banner]" >&2; return 1; }
-  acct_labels | grep -qx "$label" || { echo "model-limited: unknown account '$label'" >&2; return 1; }
+  acct_known "$label" || { echo "model-limited: unknown account '$label'" >&2; return 1; }
   model=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')
   until=$(banner_reset_epoch "$banner" "$(now)")
   if [ -n "$until" ]; then until=$(( until + RESET_BUFFER ))
