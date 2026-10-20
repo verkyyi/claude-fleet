@@ -88,7 +88,7 @@ CI 自测引用链读到的数据文件（基线、夹具、表）。没人按�
 | `bin/fleet-hub-service.py` | Hub（`tokenledger`） | 管理员装 hub 的 launchd 服务，docs/dev/FLEET-HUB.md · INSTALL.md |
 | `bin/fleet-list.sh` | 终端看台与薄客户端 | 列出 fleet，README「bin/fleet-list.sh」 |
 | `bin/fleet-machine-policy.sh` | 承载节点（managed-node） | 管理员设每人可用机器，docs/public/*/admin/machines.md |
-| `bin/fleet-native-plugin-cli-selftest.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | 显式运行的原生插件探针，docs/dev/NATIVE-AGENT-BOUNDARY.md |
+| `bin/fleet-native-plugin-cli-selftest.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | 显式运行的原生插件探针，docs/dev/AGENT-ADAPTER.md |
 | `bin/nogh_live_driver.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | C9 实测由 owner 手动跑（它的镜像与文档随 #4904 去掉） |
 
 ## 未归类

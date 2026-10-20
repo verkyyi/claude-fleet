@@ -553,7 +553,7 @@ of degrading to a pane-content heuristic.
 | project instructions file | `CLAUDE.md` | `AGENTS.md` | `-c project_doc_fallback_filenames=["CLAUDE.md"]` makes a Codex worker read this repo's `CLAUDE.md` when it has no `AGENTS.md`. |
 | worker model pinned at spawn | `FLEET_MODEL` | `FLEET_CODEX_MODEL` | Two knobs on purpose: Codex model names are not Claude aliases, so `FLEET_MODEL` never reaches a Codex pane. |
 | transferred recurring loop | Fleet adapter / native `/loop` | Fleet adapter | Active Fleet loops keep their ID, cadence and ownership generation across agent/account transfers. Codex uses private RPC; Claude inbox delivery requires transcript acknowledgement. Exact crash restore can reattach active owners; stopped or ambiguous deliveries never replay. Managed HOME transfers can preserve verified session-only calendar jobs, including one-shots. |
-| optional plugins (fleet-epic · fleet-browser · …) | ✅ `/plugin` | ✅ native | Installed once with Claude Code's `/plugin`; `fleet-install-apply.sh` has `bin/fleet-codex-plugins.py sync` follow it in every Codex home with Codex's own installer (`codex plugin marketplace add` + `codex plugin add`), so skills (`<plugin>:<skill>`), commands, hooks and `.mcp.json` are Codex's own — nothing is synced at launch. Not carried: mod interface modules (/qd), PreCompact, an agent file's `tools` limits (issue #3123; T589; docs/dev/NATIVE-AGENT-BOUNDARY.md).
+| optional plugins (fleet-epic · fleet-browser · …) | ✅ `/plugin` | ✅ native | Installed once with Claude Code's `/plugin`; `fleet-install-apply.sh` has `bin/fleet-codex-plugins.py sync` follow it in every Codex home with Codex's own installer (`codex plugin marketplace add` + `codex plugin add`), so skills (`<plugin>:<skill>`), commands, hooks and `.mcp.json` are Codex's own — nothing is synced at launch. Not carried: mod interface modules (/qd), PreCompact, an agent file's `tools` limits (issue #3123; T589; docs/dev/AGENT-ADAPTER.md).
 | fleet command seed (`/fleet-handoff`) | native | native | Claude Code expands `/fleet-handoff`; Codex invokes the installed `$fleet-handoff` skill from `$CODEX_HOME/skills/fleet-handoff/SKILL.md`. If an old Codex build has no skills, or that home has not been synced, the launcher falls back to the prose expansion. |
 | directory trust prompt | pre-granted | trusted-node pre-grant | `bin/fleet-trust.sh` fills missing trust for the fleet checkout and a managed no-repo launch in physical HOME on a trusted node. Codex entries persist through proxy config symlinks; explicit untrusted and pre-trust opt-out remain unchanged. Transfer checks readiness before source exit. |
 | red `needs` + bell when a session is blocked on you | ✅ | ✅ | The private-server monitor reads native waitingOnUserInput/waitingOnApproval flags and marks the exact launcher/thread. No Notification hook is needed. Resolved native attention clears only its own subtype; explicit worker blockers survive. |
@@ -583,7 +583,7 @@ adapted. What is really different per agent at launch is one table,
 
 Codex context tracking, recovery/history, handoff, messaging, startup policy,
 native account quotas and panel answers are implemented in
-[the Codex runtime adapter](docs/dev/CODEX-RUNTIME.md). Account homes must be
+[the Codex runtime adapter](docs/dev/AGENT-ADAPTER.md). Account homes must be
 registered separately; quota gating and automatic idle migration are opt-in.
 The shared screen classifier is disabled by default; explicitly enabled backends
 still use or fall back to a Claude helper. Native
