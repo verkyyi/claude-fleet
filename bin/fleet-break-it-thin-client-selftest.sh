@@ -27,6 +27,10 @@
 #   thin-view-keeps-failing  (EPIC T651 C4) the home answers but its 看台 never
 #                           comes up / dies at once, three times: the home's login
 #                           shell on the same route, said; exit → the 看台 again
+#   shell-hub-down          (EPIC T651 C5) `fleet shell` with the hub down and the
+#                           certificate gone: the remembered entry route on the
+#                           device key, the home's login shell (FLEET_NO_VIEW=1);
+#                           a machine with no entry port is said, never ssh'd
 #   thin-first-heals        (issue #4829) no fleet there yet, the hub refuses the
 #                           first session «m1: not ready: creds» three times (the
 #                           machine coming up): waited out, said, then placed
@@ -186,7 +190,8 @@ for k in ("TMUX", "TMUX_PANE", "FLEET_CLIENT_UPDATED", "LC_TERMINAL", "FLEET_HUB
 env.update(json.loads(os.environ.get("THIN_ENV", "{}")))   # a drill's own knobs / seams
 pid, fd = pty.fork()
 if pid == 0:
-    os.execvpe(sys.executable, [sys.executable, BIN + "/fleet-thin.py"] + json.loads(os.environ.get("THIN_ARGS", "[]")), env)
+    prog = os.environ.get("DRIVE_PROG") or "fleet-thin.py"   # shell-hub-down drives fleet-shell.py
+    os.execvpe(sys.executable, [sys.executable, BIN + "/" + prog] + json.loads(os.environ.get("THIN_ARGS", "[]")), env)
 open(R + "/thin.pid", "w").write(str(pid))
 buf = b""
 def pump(tmo):
@@ -573,6 +578,69 @@ PY2
   [ "$(grep -c '	shell	' "$R/thin.log")" = 4 ] || { WHY="thin.log's shell lines: $(grep '	shell	' "$R/thin.log")"; tc_done; return 1; }
   tc_done; wait 2>/dev/null
   WHAT="家机器 m1 连得上、看台却连续 3 次没起来（退出码 7）：${SECS:-?}s 内不再重连，先印「看台连续 3 次没起来 — 已把你放在 m1 的命令行」+「输入 exit 回看台」，同一路线开 m1 的登录 shell（\$HOME，FLEET_NO_VIEW=1）；exit 后回到 s1；看台起来就崩 3 次同样落地；从不换家"
+}
+
+drill_shell_hub_down() {
+  CAP=8   # the hub refuses at once (a closed port): --argv fails, the remembered entry route
+  local t0
+  tc_rig
+  # m1 remembered with its entry port too; m2 only a LAN line
+  cat > "$R/client/.ssh/fleet-ssh-config" <<'EOF2'
+Host m1 fleet-m1 fleet-m1-lan
+  HostName 127.0.0.1
+  User u1
+Host fleet-m1-entry
+  HostName 127.0.0.1
+  Port 22022
+  User u1
+Host m2 fleet-m2 fleet-m2-lan
+  HostName 127.0.0.2
+  User u2
+EOF2
+  # this computer's device key, no certificate beside it (expired and gone)
+  ssh-keygen -q -t ed25519 -N '' -f "$R/client/.ssh/fleet-cert" >/dev/null 2>&1
+  printf 'm1 entry\n' > "$R/client/.config/claude-fleet/routes"
+  cat > "$R/bin/stubsh" <<'EOF2'
+#!/bin/sh
+printf 'HOME-SHELL pwd=%s noview=%s args=%s\r\n' "$PWD" "${FLEET_NO_VIEW-}" "$*"
+while IFS= read -r l; do [ "$l" = exit ] && exit 0; eval "$l"; done
+EOF2
+  chmod +x "$R/bin/stubsh"
+  local env='{"SHELL": "'"$R"'/bin/stubsh", "FLEET_HUB_URL": "http://127.0.0.1:9", "FLEET_SHELL_HUB_PROBE_CMD": "false"}'
+  t0=$(now)
+  DRIVE_PROG=fleet-shell.py THIN_ENV="$env" THIN_ARGS='["m1"]' tc_drive sh1 '[
+   ["expect", "HOME-SHELL", '"$CAP"'],
+   ["send", "echo where=$HOST_NAME\n"],
+   ["expect", "where=m1", 5],
+   ["send", "exit\n"],
+   ["wait", 10]
+  ]'
+  SECS=$(since "$t0")
+  grep -q 'SAW .HOME-SHELL. True' "$R/res.sh1" \
+    || { WHY="no shell with the hub down: $(tr -d '\r' < "$R/term.out" | tail -n 6)"; tc_done; return 1; }
+  grep -aq "HOME-SHELL pwd=$R/home/m1 noview=1 args=-l" "$R/term.out" \
+    || { WHY="not m1's login shell in \$HOME with FLEET_NO_VIEW=1: $(grep -a HOME-SHELL "$R/term.out")"; tc_done; return 1; }
+  grep -aq '入口连不上：用这台电脑上次记住的路线' "$R/term.out" && grep -aq '输入 fleet 回看台' "$R/term.out" \
+    || { WHY="the screen never said the remembered route / how back: $(tr -d '\r' < "$R/term.out" | tail -n 6)"; tc_done; return 1; }
+  grep -q 'RC 0' "$R/res.sh1" || { WHY="exit did not end it 0: $(cat "$R/res.sh1")"; tc_done; return 1; }
+  python3 - "$R/ssh.ndjson" <<'PY2' || { WHY="the ssh was not the entry port on the device key with a tty: $(cat "$R/ssh.ndjson")"; tc_done; return 1; }
+import json, sys
+a = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+assert len(a) == 1, a
+a = a[0]
+assert "-tt" in a and "22022" in a and "IdentitiesOnly=yes" in a, a
+assert not any(x.startswith("CertificateFile=") for x in a), a
+assert a[-2] == "127.0.0.1" and "FLEET_NO_VIEW=1" in a[-1], a
+PY2
+  [ "$(grep -c . "$R/rv.log")" = 0 ] || { WHY="a 看台 was started: $(cat "$R/rv.log")"; tc_done; return 1; }
+  # m2 has no entry port: said, no ssh at all
+  : > "$R/ssh.ndjson"; : > "$R/term.out"
+  DRIVE_PROG=fleet-shell.py THIN_ENV="$env" THIN_ARGS='["m2"]' tc_drive sh2 '[["wait", 10]]'
+  grep -q 'RC 1' "$R/res.sh2" || { WHY="m2 with no way in did not exit 1: $(cat "$R/res.sh2")"; tc_done; return 1; }
+  grep -aq '入口不在时进不去 m2' "$R/term.out" || { WHY="m2 not said: $(tr -d '\r' < "$R/term.out" | tail -n 4)"; tc_done; return 1; }
+  [ -s "$R/ssh.ndjson" ] && { WHY="it ssh'd to m2 anyway: $(cat "$R/ssh.ndjson")"; tc_done; return 1; }
+  tc_done; wait 2>/dev/null
+  WHAT="入口不在、证书也没有：fleet shell m1 ${SECS}s 内走记住的入口端口（设备钥匙，不带证书）进 m1 的登录 shell（\$HOME，FLEET_NO_VIEW=1），先说「入口连不上：用上次记住的路线」+「输入 fleet 回看台」，不起看台；只有局域网线的 m2 直接说「入口不在时进不去 m2」，不 ssh"
 }
 
 drill_thin_first_heals() {

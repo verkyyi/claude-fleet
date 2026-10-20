@@ -34,6 +34,7 @@ bin/fleet-client-upload.py	view
 bin/fleet-upload-receive.py	static
 bin/fleet-thin.py	view,ls,show,answer
 bin/fleet-thin-upload.py	view
+bin/fleet-shell.py	dispatch
 bin/fleet_open_fwd.py	static
 bin/fleet-client-where.sh	static
 bin/fleet-client-place.sh	static
