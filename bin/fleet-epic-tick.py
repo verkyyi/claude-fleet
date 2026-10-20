@@ -411,7 +411,8 @@ def hold_on_deps(members, deps, ext=None, ext_done=None):
     dependency is blocked is blocked too. Another batch's member (`ext`) holds it
     until `ext_done` says it succeeded. A cycle among this batch's own members
     (everything waiting, nothing to run) is let through rather than stalled — never
-    a member still waiting on another batch."""
+    a member still waiting on another batch, directly or through this batch's
+    members it waits on: both halves must hold before a member is due."""
     ext, ext_done = ext or {}, ext_done or {}
     by = {m["key"]: m for m in members}
     for _ in range(len(members) + 1):
@@ -438,8 +439,17 @@ def hold_on_deps(members, deps, ext=None, ext_done=None):
             break
     live = [m for m in members if m["layer"] != "reserve" and m["state"] in ("running", "retry", "unstarted")]
     if not live:
+        # a member waiting on another batch — itself, or through any of this
+        # batch's members it waits on — is held, not a cycle (T599: C6 ← C4 ← T542 C5)
+        held = {m["key"] for m in members if m["state"] == "waiting" and any(" " in w for w in m.get("waits_on", []))}
+        while True:
+            more = {m["key"] for m in members if m["state"] == "waiting" and m["key"] not in held
+                    and any(w in held for w in m.get("waits_on", []))}
+            if not more:
+                break
+            held |= more
         for m in members:
-            if m["state"] == "waiting" and not any(" " in w for w in m.get("waits_on", [])):
+            if m["state"] == "waiting" and m["key"] not in held:
                 m["state"] = "unstarted"
                 m["cycle"] = True
 

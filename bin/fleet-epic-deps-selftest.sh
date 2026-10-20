@@ -10,6 +10,9 @@
 #   C. the outside members succeed: C4 is due; C4 merges: C5 is due.
 #   E. T580's wave table + section lines (C18): `C1 C4 + T542 C7 C8` holds C6 on
 #      both outside members until each merges, then `outside` says they did.
+#   F. both halves (T599): a member is due only when its in-batch deps all
+#      succeeded AND its outside deps are all done; the cycle rule never lets
+#      through one that waits on another batch through an in-batch member.
 #   D. the argv: `status --task T<n>`, `--task T<n> status`, and the ONE word
 #      `--task T<n>` zsh makes of `${P:+--task "$P"}` all read the batch.
 # Hermetic: a stub hub (FLEET_HUB_CURL), a sandbox FLEET_CONF_DIR, no network.
@@ -135,6 +138,49 @@ far succeeded succeeded
 S=$(tick)
 eq "E: both merged — waits_on is C4 alone" "['C4']" "$(mem C6 '["waits_on"]')"
 eq "E: and outside says they merged" "T542 C7:True T542 C8:True" "$(mem C6 '["outside"]' | python3 -c 'import ast,sys; print(" ".join("%s:%s" % (o["ref"], o["done"]) for o in ast.literal_eval(sys.stdin.read())))')"
+
+# --- F. both halves (T599): in-batch deps must all succeed AND outside deps all
+# be done. T580's regression: C4 waits on T542 C5, C6 on C4 + T542 C7 C8 (done)
+# — nothing live, and the cycle rule let C6 through while C4 had not started.
+CHARTER='<!-- fleet:epic repo=o/r short=同路 cap=4 -->
+- [ ] **C4** 第四
+- [ ] **C6** 第六
+- [ ] **C7** 第七
+- [ ] **C8** 第八
+## C4 · 第四
+**依赖** 依赖 T542 C5 合并 · 被依赖 C6
+## C6 · 第六
+**依赖** 依赖 C4 + T542 C7 C8 合并
+## C7 · 第七
+**依赖** 依赖 T542 C9 合并
+## C8 · 第八
+**依赖** 依赖 C4
+'
+PARENT=$(python3 -c 'import json,sys; print(json.dumps(dict(id="T580", authority_version=1, title="EPIC", request_payload=json.dumps({"body": sys.argv[1]}))))' "$CHARTER")
+both() { # both <T542 C5> <T542 C9> [<C4 outcome>]
+  state "({'T580': $PARENT,
+   'T600': dict(id='T600', parent_task='T542', title='C5 · 外批五', outcome='$1'),
+   'T605': dict(id='T605', parent_task='T542', title='C7 · 外批七', outcome='succeeded'),
+   'T606': dict(id='T606', parent_task='T542', title='C8 · 外批八', outcome='succeeded'),
+   'T609': dict(id='T609', parent_task='T542', title='C9 · 外批九', outcome='$2')}
+   | ({'T610': dict(id='T610', parent_task='T580', title='C4 · 第四', outcome='${3-}')} if '${3-}' else {}))"
+}
+due() { printf '%s' "$S" | jq_ '" ".join(n["key"] for n in d["next"])'; }
+both "" ""
+S=$(tick)
+eq "F: in-batch C4 not succeeded + outside done ⇒ C6 waits on C4" "waiting ['C4'] False" "$(mem C6 '["state"]') $(mem C6 '["waits_on"]') $(mem C6 '.get("cycle", False)')"
+eq "F: outside only, not done ⇒ C7 waits" "waiting ['T542 C9']" "$(mem C7 '["state"]') $(mem C7 '["waits_on"]')"
+eq "F: in-batch only, C4 not succeeded ⇒ C8 waits" "waiting ['C4']" "$(mem C8 '["state"]') $(mem C8 '["waits_on"]')"
+eq "F: nothing due while every member is held" "" "$(due)"
+both succeeded succeeded
+S=$(tick)
+eq "F: outside done ⇒ C4 and C7 due; C6 C8 still wait on C4" "C4 C7 waiting waiting" "$(due) $(mem C6 '["state"]') $(mem C8 '["state"]')"
+both succeeded "" running
+S=$(tick)
+eq "F: C4 running ⇒ C6 not due" "waiting ['C4']" "$(mem C6 '["state"]') $(mem C6 '["waits_on"]')"
+both succeeded succeeded succeeded
+S=$(tick)
+eq "F: inside and outside both met ⇒ C6 and C8 due" "C6 C8" "$(due | tr ' ' '\n' | grep -E '^C[68]$' | tr '\n' ' ' | sed 's/ $//')"
 
 # --- D. the argv ------------------------------------------------------------------
 argv_ok() { python3 "$BIN/fleet-epic-tick.py" "$@" >/dev/null 2>&1; eq "D: argv [$*] reads the batch" 0 "$?"; }
