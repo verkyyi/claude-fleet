@@ -190,6 +190,43 @@ read_failure() {
   fi
 }
 
+# A session that did not come up — or, bound to a task record, an agent that went
+# down — is SAID, never left for a reader to guess (T642). Not started: one line in
+# logs/start-fail.log whatever the window; on a window bound to a record (@task)
+# also the progress word 「未起来：<why>」 on its ID (fleet_id.py start-word, mirrored
+# to the hub: the record's read, the EPIC tick and `await` see it — the agent's
+# next SessionStart answers 「起来了」), and when that word is new — once a cause —
+# a child report to whoever dispatched it; a window with an issue and no record
+# tells its parent as #4702 did. Dropped (a record's agent exited, the window on
+# the page): the word 「已掉」 on its ID only. In the background: the page, or the
+# caller's shell, never waits on it.
+say_start() {  # <not_started|dropped> <why, one line> <the parent's summary>
+  [ "$intmux" = 1 ] || return 0
+  local fid task iss why slog
+  fid=$(opt @fleet_id); task=$(opt @task); iss=$(opt @issue)
+  case "$task" in T[1-9]*) ;; *) task='' ;; esac
+  why=$(printf '%s' "$2" | tr '\n\t' '  ' | cut -c1-240)
+  if [ "$1" = not_started ]; then
+    slog="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/start-fail.log"
+    [ -d "${slog%/*}" ] && printf '%s window=%s pane=%s id=%s task=%s issue=%s why=%s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(opt window_name | tr ' ' '_')" "$TMUX_PANE" "${fid:--}" "${task:--}" \
+      "${iss:--}" "$why" >> "$slog" 2>/dev/null
+  elif [ -z "$task" ]; then
+    return 0
+  fi
+  [ -n "$task" ] || [ -n "$iss" ] || return 0
+  ( told=''
+    if [ -n "$task" ] && [ -n "$fid" ] \
+       && [ "$(python3 "$BIN/fleet_id.py" start-word "$fid" --word "$1" --why "$why" 2>/dev/null)" = WRITTEN ]; then
+      told=1
+    fi
+    [ "$1" = not_started ] || exit 0
+    [ -n "$told" ] || { [ -z "$task" ] && [ -n "$iss" ]; } || exit 0
+    bash "$BIN/fleet-report-parent.sh" --state failed --win "$TMUX_PANE" --summary "$3" ) </dev/null >/dev/null 2>&1 &
+  disown "$!" 2>/dev/null
+  return 0
+}
+
 # The page could not run: the same one line and keys on a plain prompt (10/11/12),
 # so a broken page never closes the window. 1 = the pane's input is gone. With
 # $close_n > 0 it counts down like the page (issue #3170): 14 at 0, any key cancels.
@@ -351,7 +388,14 @@ while :; do
     failed=launch; read_failure; fail_why=$refused
   elif [ "$dur" -lt "$FAST" ]; then
     tmux set-option -p -t "$TMUX_PANE" @wrap_last_rc "$rc" 2>/dev/null
-    [ "$first" = 1 ] && exit "$rc"
+    if [ "$first" = 1 ]; then
+      # the caller's own failure path decides (its `exec $SHELL`) — and the
+      # session that never came up is said first (T642: C1 / R8 sat as bare shells)
+      read_failure
+      say_start not_started "启动 ${dur} 秒就退出（rc ${rc}）${fail_line:+：$fail_line}" \
+        "the session did not start: the agent exited ${dur}s into its first launch (rc $rc)${fail_line:+ — $(printf '%s' "$fail_line" | cut -c1-160)}; its window fell back to a bare shell — start it again on its record (fleet-task-record.sh respawn) or reap it"
+      exit "$rc"
+    fi
     failed=$last; read_failure
   fi
   retry=$first; first=0
@@ -434,11 +478,16 @@ while :; do
   # streak: a refused launch presses ↵ by itself every 15 s–5 min, and a launch
   # that runs again ends the streak. Before this the parent heard nothing and took
   # the silent window for one that had finished.
-  if [ -z "$failed" ]; then fail_told=''
-  elif [ -z "$fail_told" ] && [ -n "$(opt @issue)" ]; then
+  # A task record's agent that went down is 「已掉」 on its ID (T642) — the fleet's
+  # own exits (@wrap_quiet) returned above, so this is a crash, a kill or a person.
+  if [ -z "$failed" ]; then
+    fail_told=''
+    say_start dropped "agent 退出（rc ${rc}，跑了 ${dur} 秒），窗口停在恢复页" ''
+  elif [ -z "$fail_told" ]; then
     fail_told=1
-    ( FLEET_FAIL_SUM="the session did not start: ${failed} failed (${fail_why:-rc $rc})${fail_line:+ — $(printf '%s' "$fail_line" | cut -c1-160)}; its window waits on the recovery page — retry it there or reap it"
-      bash "$BIN/fleet-report-parent.sh" --state failed --win "$TMUX_PANE" --summary "$FLEET_FAIL_SUM" ) >/dev/null 2>&1 &
+    case "$failed" in launch) _w="启动被拒" ;; *) _w="重开 ${dur} 秒就退出" ;; esac
+    say_start not_started "${_w}（${fail_why:-rc $rc}）${fail_line:+：$fail_line}" \
+      "the session did not start: ${failed} failed (${fail_why:-rc $rc})${fail_line:+ — $(printf '%s' "$fail_line" | cut -c1-160)}; its window waits on the recovery page — retry it there or reap it"
   fi
   python3 "$BIN/fleet-session-page.py" ${pargs[@]+"${pargs[@]}"}
   act=$?

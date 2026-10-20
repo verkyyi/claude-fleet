@@ -61,7 +61,7 @@ that dies at the boundary. Therefore:
   `{parent, parent_id, parent_short, mark, title, short, cap, running, free,
   counts, done, members[], next[], no_repo[], last_tick}` — every member of the
   charter (and every child added within scope) with its `state` (succeeded ·
-  running · retry · blocked · waiting · unstarted), its newest baton's `id` /
+  running · stalled · retry · blocked · waiting · unstarted), its newest baton's `id` /
   `short` (`K3F9`), its `ids` (every baton, a redo's `prev` naming the one it
   replaced), its child tasks, its PR; `waiting` = a member the charter's 依赖顺序
   says waits on one that has not succeeded (`waits_on`) — released by that
@@ -161,6 +161,15 @@ continued by hand (「从这一段继续」 in /fleet-history: a new ID, `prev` 
 no record of its own) is read off that newest ID. A second failure is `blocked`: name
 it on the tick with the reason its `[child-report]` gave. `cancelled` (the person
 stopped it) is `blocked` too — never re-dispatched.
+
+`stalled` (T642) is a member the records call running whose agent never came up
+or went down — the wrapper's 「未起来」/「已掉」 on its ID, its window holding only a
+shell, or no native session five minutes after its record opened. Its `stall`
+carries `{word, why, hint}` (the top-level `stalled[]` lists them all): it keeps
+its slot and the batch is not done. Do what the hint says — restart it ON ITS
+RECORD (`fleet-task-record.sh respawn T<m> --prev <ID>`, or ↵ on its recovery
+page / `fleet-id.sh reopen <code> --exec`), never a new task; put it on the tick
+(`未起来 <key>`), and a second stall of the same member is the person's (`ask`).
 
 One caution on red: a red check is not always the code's fault. If the base branch
 itself is red (the same check fails on its head), it is ONE breakage for every

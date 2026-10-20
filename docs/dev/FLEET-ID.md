@@ -38,6 +38,7 @@ EPIC T497 的 C1（节点账本）、C2（hub 镜像）、C3（⌘P 面板的编
 | `native` | SessionStart 钩子 | 新的一段（agent · 原生 id · trigger · seg），或 `compact: true` 给当前段记一次压缩 |
 | `result` | `fleet-id.sh result`（C4 接 report） | state · summary · pr |
 | `progress` | `fleet-id.sh progress`；开关 on 时 `fleet_task_control.py progress`（C12：EPIC 驱动的 tick） | state · summary · event（同一 event 不再写）。只留最新一条，不是结果、不改状态；hub 镜像存在 `fleet_ids.progress*`，`fleet-epic-tick.py status` 的 `last_tick` 读它 |
+| `progress`（起没起来，T642） | 包装器 `fleet-session-wrap.sh` → `fleet-id.sh start-word`；SessionStart 钩子（`fleet_id.hook`） | state `not_started`「未起来：<原因>」/ `dropped`「已掉：…」，同一原因只在它还是最新一条时不再写；agent 起来后钩子答 `started`「起来了」。`fleet_id.start_word` 是唯一的读者（EPIC tick 的 `stalled`、`await --task` 的 NOT-STARTED / DROPPED、`fleet-children.sh T<n>`），另看本机窗口里有没有 agent（`FLEET_ID_NOAGENT`）、窗口没了 ID 没收尾、过了 `FLEET_START_GRACE` 还没有原生段 |
 | `closed` | `fleet-id.sh close`（C4 接回收） | reason |
 | `short` | `fleet-id.sh push`（hub 回告） | hub 给的更长短码（只会变长） |
 | `moved` | fleet-move 的新机器（待接） | hub 把这个 ID 改挂到新机器 |

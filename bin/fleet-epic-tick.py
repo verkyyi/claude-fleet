@@ -50,7 +50,14 @@ IDs) ⇒ the records alone, as before.
 
 Per member, off its batons:
   succeeded  one baton succeeded
-  running    the newest baton has no outcome yet
+  running    the newest baton has no outcome yet, and its agent is up
+  stalled    the newest baton has no outcome, but its agent never came up or went
+             down (T642, fleet_id.start_word — the wrapper's 「未起来」/「已掉」 word on
+             its ID, its window here holding no agent, the hub's live word, or no
+             native segment FLEET_START_GRACE after the record opened): `stall` =
+             {word, why, hint} — the hint restarts it ON ITS RECORD
+             (`fleet-task-record.sh respawn T<n> --prev <ID>`, or ↵ / `fleet-id.sh
+             reopen`), never a new T; it keeps its slot and the batch is not done
   retry      one failed — dispatch it once more (the retry rule), prev = its ID
   blocked    failed twice, or cancelled (the person stopped it), or a member it
              waits on is blocked
@@ -350,6 +357,14 @@ def outside_done(ext):
     return done
 
 
+def ids():
+    """bin/fleet_id.py, imported once (the start word's one reader — T642)."""
+    if str(BIN) not in sys.path:
+        sys.path.insert(0, str(BIN))
+    import fleet_id
+    return fleet_id
+
+
 def projected(children):
     """An open child's outcome off its own record read: with the ID switch on the
     hub projects the window ID's result there, never into `children` (T622 — T542's
@@ -359,11 +374,15 @@ def projected(children):
         if c.get("outcome") or not TREF.match(str(c.get("id") or "")):
             continue
         try:
-            t = record("get", c["id"]).get("task") or {}
+            got = record("get", c["id"])
+            t = got.get("task") or {}
         except (Fail, OSError, subprocess.SubprocessError):
             continue
         if t.get("id") == c["id"] and t.get("outcome"):
             c["outcome"], c["state"] = t["outcome"], t.get("state") or c.get("state")
+        elif t.get("id") == c["id"]:
+            # the read the start word judges an open child by (T642): started · progress · live
+            c["_view"] = dict(got, task=t)
     return children
 
 
@@ -405,14 +424,18 @@ def batons_of(kids, fam):
     placed = set()
     out = []
 
-    def add(task, outcome, pr, fid):
+    def add(task, outcome, pr, fid, view=None):
         row = rows.get(fid) if fid else None
         if not outcome and row:
-            outcome = {"done": "succeeded", "failed": "failed", "exited": "exited"}.get(row.get("state"), "")
+            # exited = closed with no result; an ID still open whose window is gone
+            # is the start word's to judge (T642): restarted on its record, never a new T
+            still_open = "closed" in row and row["closed"] is None
+            outcome = {"done": "succeeded", "failed": "failed"}.get(row.get("state"), "") or \
+                ("exited" if row.get("state") == "exited" and not still_open else "")
         if not pr and row:
             pr = str((row.get("result") or {}).get("pr") or "")
         out.append(dict(task=task, outcome=outcome, pr=pr, id=fid, short=(row or {}).get("short", "") or code_of(fid),
-                        prev=(row or {}).get("prev", "")))
+                        prev=(row or {}).get("prev", ""), _view=view, _row=row))
         if fid:
             placed.add(fid)
             for r in fam:
@@ -424,7 +447,7 @@ def batons_of(kids, fam):
         fid = claimed_by(c, fam)
         if fid in placed:
             continue
-        add(c.get("id"), c.get("outcome") or "", child_pr(c), fid)
+        add(c.get("id"), c.get("outcome") or "", child_pr(c), fid, c.get("_view"))
     return out
 
 
@@ -437,9 +460,20 @@ def judge(member, kids, fam=()):
     member.update(id=last.get("id", ""), short=last.get("short", ""),
                   ids=[dict(id=t["id"], short=t["short"], task=t["task"], prev=t["prev"], outcome=t["outcome"])
                        for t in tasks if t["id"]])
+    # a running baton is judged by its agent, not only its record (T642): one that
+    # never came up, or went down, is `stalled` — with what to do about it
+    word = {}
+    if not won and tasks and not last["outcome"]:
+        word = ids().start_word(view=last.get("_view"), row=last.get("_row"))
+    for t in tasks:
+        t.pop("_view", None)
+        t.pop("_row", None)
     if won:
         member.update(state="succeeded", task=won[0]["task"], pr=won[0]["pr"], id=won[0]["id"] or member["id"],
                       short=won[0]["short"] or member["short"])
+    elif tasks and not last["outcome"] and word:
+        member.update(state="stalled", task=last["task"],
+                      stall=dict(word, hint=ids().start_hint(word["word"], last["task"], last["id"], last["short"])))
     elif tasks and not last["outcome"]:
         member.update(state="running", task=last["task"])
     elif any(t["outcome"] == "cancelled" for t in tasks) or len(failed) >= 2:
@@ -482,7 +516,7 @@ def hold_on_deps(members, deps, ext=None, ext_done=None):
             m.update(new)
         if not moved:
             break
-    live = [m for m in members if m["layer"] != "reserve" and m["state"] in ("running", "retry", "unstarted")]
+    live = [m for m in members if m["layer"] != "reserve" and m["state"] in ("running", "stalled", "retry", "unstarted")]
     if not live:
         # a member waiting on another batch — itself, or through any of this
         # batch's members it waits on — is held, not a cycle (T599: C6 ← C4 ← T542 C5)
@@ -560,14 +594,16 @@ def status(parent_ref, cap):
     cap = max(1, cap)
     counted = [m for m in members if m["layer"] != "reserve"]
     running = sum(1 for m in members if m["state"] == "running")
-    free = max(0, cap - running)
+    # a stalled member still holds its record — and its slot: it restarts on it (T642)
+    stalled = [m for m in members if m["state"] == "stalled"]
+    free = max(0, cap - running - len(stalled))
     pending = [m for m in counted if m["state"] == "retry"] + [m for m in counted if m["state"] == "unstarted"]
     nxt = [dispatch_of(parent, m) for m in pending if m["repo"]][:free]
     norepo = [m["key"] for m in pending if not m["repo"]]
-    counts = dict(core=len(counted), succeeded=0, running=0, retry=0, blocked=0, unstarted=0, waiting=0)
+    counts = dict(core=len(counted), succeeded=0, running=0, stalled=0, retry=0, blocked=0, unstarted=0, waiting=0)
     for m in counted:
         counts[m["state"]] += 1
-    done = running == 0 and all(m["state"] in ("succeeded", "blocked") for m in counted)
+    done = running == 0 and not stalled and all(m["state"] in ("succeeded", "blocked") for m in counted)
     # the newest tick: the parent's ID's progress word (EPIC T497 C12), else — an ID
     # with none yet, or no ID — the one its record kept before the switch
     progress = fam.get("progress") or got.get("progress") or {}
@@ -579,7 +615,9 @@ def status(parent_ref, cap):
                 title=parent.get("title", ""), short=meta.get("short", ""), repo=meta.get("repo", ""),
                 outcome=parent.get("outcome", ""), cap=cap, running=running, free=free, counts=counts, done=done,
                 members=[{k: v for k, v in m.items() if k != "detail"} for m in members],
-                next=nxt, no_repo=norepo, last_tick=last, last_tick_src=("id" if fam.get("progress") else "record") if last else "",
+                next=nxt, no_repo=norepo,
+                stalled=[dict(key=m["key"], task=m.get("task", ""), short=m.get("short", ""), **m["stall"]) for m in stalled],
+                last_tick=last, last_tick_src=("id" if fam.get("progress") else "record") if last else "",
                 report=rep.group(1) if rep else "", summary=kids.get("summary") or {})
 
 
@@ -590,6 +628,9 @@ def line(s):
         head, c["core"], c["succeeded"], c["running"], c["retry"], c["blocked"], c["unstarted"], s["free"], s["cap"])
     if c.get("waiting"):
         out += " · 等依赖 %d" % c["waiting"]
+    for st in s.get("stalled") or []:
+        out += " · %s %s（%s）→ %s" % (st["key"], "未起来" if st["word"] == "not_started" else "已掉",
+                                       st["why"], st["hint"])
     if s["next"]:
         out += " · 该派 " + " ".join(n["key"] for n in s["next"])
     if s["no_repo"]:

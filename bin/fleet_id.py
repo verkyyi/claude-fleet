@@ -266,18 +266,134 @@ def fold(events):
     return rec
 
 
-def record_progress(fid, summary, state="", event=""):
+def record_progress(fid, summary, state="", event="", newest=False):
     """One progress word on an ID (EPIC T497 C12) — what an EPIC driver's tick wrote
     on its task record before the switch. A repeated --event writes nothing (a
-    retried tick); → the written event, or None."""
+    retried tick) — with `newest`, only while it is still the newest word (a start
+    word said again after the agent came up in between is said again); → the
+    written event, or None."""
     def decide(evs):
-        if event and any(e.get("ev") == "progress" and e.get("event") == event for e in evs):
-            return None
+        if event:
+            words = [e for e in evs if e.get("ev") == "progress"]
+            if newest:
+                words = words[-1:]
+            if any(e.get("event") == event for e in words):
+                return None
         ev = {"ev": "progress", "state": state, "summary": summary[:2000]}
         if event:
             ev["event"] = event
         return ev
     return append(fid, None, decide=decide)
+
+
+# ---- did its agent come up? (T642) ------------------------------------------------
+#
+# A session that never started — a launch refused before the agent ran, an agent
+# that died in its first seconds — used to leave its record `accepted` for ever:
+# a driver read it as running. The wrapper (fleet-session-wrap.sh) now says so on
+# the window's ID — a progress word in START_WORDS, through `start-word` below —
+# and the agent's first SessionStart (hook) answers `started` over it. start_word
+# is the ONE reader the EPIC tick, `await` and the children lists judge a running
+# member by: the word, this machine's window (an ID in NOAGENT — its window holds
+# no agent: the wrapper gone, the pane dead, the recovery page), the hub's live
+# word, and — no native segment past FLEET_START_GRACE (300 s) — never came up.
+
+START_WORDS = ("not_started", "dropped")
+NOAGENT = set()   # IDs whose live window here holds no agent (FLEET_ID_NOAGENT, fleet-id.sh)
+
+
+def start_grace():
+    try:
+        return max(0, int(os.environ.get("FLEET_START_GRACE", "300")))
+    except ValueError:
+        return 300
+
+
+def _epoch(v):
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str) and v:
+        try:
+            import fleet_iso
+            return fleet_iso.parse(v, utc=True).timestamp()
+        except (ImportError, ValueError):
+            return None
+    return None
+
+
+def start_word(view=None, row=None, now=None, grace=None):
+    """Is a member the records call running really up? → {} (nothing says otherwise)
+    or {word: not_started | dropped, why}. `view` is the hub's record read
+    (`fleet-task-record.sh get`: task · started · progress · live), `row` an ID's
+    row (status / family: agent · segments · progress · opened_at · src)."""
+    view, row = view or {}, row or {}
+    now = time.time() if now is None else now
+    grace = start_grace() if grace is None else grace
+    pg = row.get("progress") or view.get("progress") or {}
+    if isinstance(pg, dict) and (pg.get("state") or pg.get("status")) in START_WORDS:
+        return {"word": pg.get("state") or pg.get("status"), "why": str(pg.get("summary") or "")}
+    segs = row.get("segments") or (view.get("started") or {}).get("segments") or 0
+    if row.get("agent") is False:
+        return {"word": "dropped" if segs else "not_started",
+                "why": "窗口还在，里面没有 agent（只剩 shell，或停在恢复页）"}
+    t0 = _epoch((view.get("task") or {}).get("created_at")) or _epoch(row.get("opened_at"))
+    if (row.get("src") == "local" and row.get("alive") is False and row.get("closed") is None
+            and t0 is not None and now - t0 >= grace):
+        # its ID is this machine's, open, and no window here carries it any more
+        return {"word": "dropped" if segs else "not_started", "why": "窗口已经不在了，ID 没有结果也没收尾"}
+    live = view.get("live") or {}
+    if live.get("state") == "exited" and not live.get("stale"):
+        return {"word": "dropped", "why": "agent 已退出，窗口停在恢复页"}
+    # never came up: only a reader that would know — the hub's read (its `started`)
+    # or this machine's own ledger (its segments); a hub-mirror row has none
+    if not segs and (view.get("task") or row.get("src") == "local"):
+        if t0 is not None and now - t0 >= grace:
+            return {"word": "not_started", "why": "开了 %d 分钟，agent 还没起来（没有一段原生会话）" % int((now - t0) // 60)}
+    return {}
+
+
+def task_row(task, live, idx=None):
+    """This machine's newest ID opened for the record `task` (its ledger's `task`),
+    the newest down `prev` when several were — its status row; {} when none here."""
+    idx = idx if idx is not None else _index()
+    mine = {f: o for f, o in idx.items() if o["opened"].get("task") == task}
+    if not mine:
+        return {}
+    prevs = {o["opened"].get("prev") for o in mine.values()}
+    tips = [f for f in mine if f not in prevs] or list(mine)
+    fid = max(tips, key=lambda f: (mine[f]["opened"].get("ts") or 0, f))
+    return dict(status(fid, live, idx), src="local", opened_at=mine[fid]["opened"].get("ts"))
+
+
+def start_hint(word, task="", fid="", short=""):
+    """What a driver does about it: the same record, never a new T<n>."""
+    code = short or fid
+    if word == "dropped" and code:
+        return ("窗口还在就到那里按 ↵ 续上；窗口没了：fleet-id.sh reopen %s --exec（同一个 ID、同一条记录）" % code)
+    if task:
+        return ("用原记录重起：fleet-task-record.sh respawn %s%s（同一条记录，不新开 T）" %
+                (task, (" --prev %s" % fid) if fid else ""))
+    return "到它的窗口看它为什么没起来"
+
+
+def say_start(fid, word, why):
+    """The wrapper's word (T642): written on the ID unless it is already the newest
+    one for that cause, or the ID is over (closed, or a result that ends it).
+    → True when written."""
+    if word not in START_WORDS or not os.path.exists(ledger_path(fid)):
+        return False
+    rec = fold(read(fid))
+    r = last_result(rec)
+    if rec["closed"] is not None or (r and r.get("state") in DONE_STATES + FAIL_STATES):
+        return False
+    label = "未起来" if word == "not_started" else "已掉"
+    why = " ".join((why or "").split())[:300]
+    ev = record_progress(fid, "%s：%s" % (label, why or "-"), word,
+                         # one cause, however many seconds it took this time
+                         "%s:%d:%s" % (word, len(rec["segments"]), re.sub(r"[0-9]+", "#", why)[:80]), newest=True)
+    if ev:
+        push_later(fid)
+    return bool(ev)
 
 
 def progress_of(fid):
@@ -469,7 +585,10 @@ def status(fid, live, idx=None):
     else:
         st, label = "running", "运行中"
     out = {"id": fid, "short": rec["opened"].get("short") or short_for(fid, known_ids(idx.keys())),
-           "state": st, "label": label, "alive": up, "result": r, "closed": rec["closed"]}
+           "state": st, "label": label, "alive": up, "result": r, "closed": rec["closed"],
+           "segments": len(rec["segments"]), "progress": rec.get("progress")}
+    if up and fid in NOAGENT:
+        out["agent"] = False   # its window is here, its agent is not (T642)
     if con:
         out["conflict"] = con
     return out
@@ -676,7 +795,8 @@ def _family_row(fid, rec, st, src):
     return {"id": fid, "short": st["short"], "task": o.get("task", ""), "title": o.get("title", ""),
             "parent": o.get("parent", ""), "prev": o.get("prev", ""), "opened_at": o.get("ts"),
             "state": st["state"], "label": st["label"], "alive": st["alive"], "result": st["result"],
-            "closed": rec["closed"], "src": src}
+            "closed": rec["closed"], "src": src, "segments": len(rec["segments"]), "progress": rec.get("progress"),
+            **({"agent": False} if st.get("agent") is False else {})}
 
 
 def _hub_status(fid, rec, short):
@@ -1273,6 +1393,10 @@ def hook(stdin):
             open_id(fid, {"lazy": True, "agent": agent, "window": tmux(["display-message", "-p", "-t", pane, "#{window_id}"])})
         hook_retry_flush(pane, fid)
         ev = record_native(fid, agent, native, source, hint)
+        # the agent is up (T642): a start word the wrapper left is answered
+        pg = fold(read(fid))["progress"]
+        if pg and pg.get("state") in START_WORDS:
+            record_progress(fid, "起来了", "started")
         if ev and ev.get("from") and ev.get("seg") == 1:
             # a new window that resumed another ID's segment is a new ID whose prev is
             # that one (S9; a spawn with --resume already wrote it — first value wins)
@@ -1338,6 +1462,7 @@ def main(argv):
     cmd, args = argv[0], argv[1:]
     # Live windows' IDs ride in as FLEET_ID_LIVE (newline-separated): fleet-id.sh fills it.
     live = [x for x in os.environ.get("FLEET_ID_LIVE", "").split() if is_fid(x)]
+    NOAGENT.update(x for x in os.environ.get("FLEET_ID_NOAGENT", "").split() if is_fid(x))
     if cmd == "hook":
         try:
             hook(sys.stdin.read())
@@ -1413,6 +1538,12 @@ def main(argv):
     tpos = [p for p in pos if not p.startswith("--")]
     if not tpos:
         return 2
+    if cmd == "of-task":
+        # this machine's newest ID opened for a record — its status row (T642)
+        if not re.match(r"^T[1-9][0-9]{0,9}$", tpos[0]):
+            return 2
+        print(json.dumps(task_row(tpos[0], live if "FLEET_ID_LIVE" in os.environ else None), ensure_ascii=False))
+        return 0
     target = tpos[0]
     if not is_fid(target):
         rc, hits = resolve(target, live)
@@ -1488,6 +1619,14 @@ def main(argv):
             ev["issues"] = [x.strip() for x in opts["issues"].split(",") if x.strip()]
         append(target, ev)
         push_later(target)
+        return 0
+    if cmd == "start-word":
+        # the wrapper's 「未起来」/「已掉」 (T642): WRITTEN, or SAME (already said, or over)
+        word = opts.get("word", "")
+        if word not in START_WORDS:
+            print("fleet-id: start-word needs --word %s" % "|".join(START_WORDS), file=sys.stderr)
+            return 2
+        print("WRITTEN" if say_start(target, word, opts.get("why", "")) else "SAME")
         return 0
     if cmd == "progress":
         summary = opts.get("summary", "").strip()
