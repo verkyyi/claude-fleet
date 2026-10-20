@@ -24,7 +24,8 @@ so a member is a chain of batons and the tick reads the newest one. Records
 
 **Argument** (`$ARGUMENTS`): ignored except `--task T<n>` (a driver resumed in
 another session) — the parent is this session's own record (`@task`), and its
-body (the charter, which follows the command in the first message) is re-read
+body (the charter, which follows the first line of the first message — the
+words that sent this session here, T646) is re-read
 from the hub every tick, never from this conversation.
 
 ## 0. Resolve the parent (run FIRST, every tick)

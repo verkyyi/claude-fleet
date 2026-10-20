@@ -301,6 +301,33 @@ case "${1:-}" in
   *)     sem="working" ;;   # PostToolUse / prompt submitted
 esac
 
+# ── A first turn that never reached the model is not `done` (T646) ───────────
+# A session opened on a hub task (@task) whose first turn ended with no assistant
+# line at all — Claude Code answered it itself (「Unknown command: /fleet-epic-run」:
+# a plugin command's bare name) — handed in nothing: as `done` the panel filed a
+# driver that never started under 做完待收, and nobody looked. It reads `needs`
+# (subtype `nostart`, the words Claude Code said) and rings, whichever writer says
+# `done` (Stop, the mod, OSC 7501). Once the transcript holds an assistant line the
+# window is stamped @task_started and this costs one tmux read; no @task, or no
+# transcript yet (an agent's `idle` before its seed lands): nothing changes.
+if [ "$sem" = 'done' ] && [ -z "$wstate" ]; then
+  _ft=$(tmux display-message -p -t "$TMUX_PANE" '#{@task}|#{@task_started}|#{@cc_session_id}' 2>/dev/null)
+  _ftask=${_ft%%|*}; _fr=${_ft#*|}; _fstarted=${_fr%%|*}; _fsid=${_fr#*|}
+  if [ -n "$_ftask" ] && [ "$_fstarted" != 1 ]; then
+    _ftp=${_tp:-}
+    if [ -z "$_ftp" ] && [ -n "$_fsid" ]; then
+      for _f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"/*/"$_fsid".jsonl; do [ -f "$_f" ] && { _ftp=$_f; break; }; done
+    fi
+    if [ -n "$_ftp" ] && [ -f "$_ftp" ]; then
+      _fwhy=$(_needs_detail nostart "$_ftp"); _frc=$?
+      case "$_frc" in
+        0) sem="needs"; sub="nostart"; detail="首轮没进模型：${_fwhy}"; set -- needs bell ;;
+        3) tmux set-window-option -t "$TMUX_PANE" @task_started 1 2>/dev/null ;;
+      esac
+    fi
+  fi
+fi
+
 # ── @task_line: the session's first sentence (issue #2359) ───────────────────
 # A session bound to no issue has nothing that says what it is about: its name is
 # `我的会话` / `scratch-N`. Its first prompt does — so the first UserPromptSubmit

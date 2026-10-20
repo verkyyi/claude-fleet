@@ -14,9 +14,13 @@ import time
 FINISHED_WORDS = {"done": "done", "idle": "done", "error": "exited", "exited": "exited"}
 
 
-def reap_state(stamped, status):
+def reap_state(stamped, status, needs=""):
     """@claude_state + @agent_status → the state a reaper judges a finished
-    window by: the agent's finished 7501 word when it said one, else the stamp."""
+    window by: the agent's finished 7501 word when it said one, else the stamp —
+    except a first turn that never reached the model (T646: stamped
+    needs/nostart, `needs` = @claude_needs), which stays `needs`."""
+    if stamped == "needs" and needs == "nostart":
+        return "needs"
     try:
         rec = json.loads(status) if status else None
     except ValueError:
@@ -45,7 +49,8 @@ def clear(tm, window):
 
 def notice(tm, window, key, deadline, now=None, dry=False, hold=None):
     now = int(time.time()) if now is None else now
-    state = reap_state(option(tm, window, "@claude_state"), option(tm, window, "@agent_status"))
+    state = reap_state(option(tm, window, "@claude_state"), option(tm, window, "@agent_status"),
+                       option(tm, window, "@claude_needs"))
     stamp = option(tm, window, "@claude_state_ts")
     # exited (issue #1784): the agent gone, the pane on its recovery page — as
     # idle as a finished turn, and the no-PR pass closes it too (issue #1832).

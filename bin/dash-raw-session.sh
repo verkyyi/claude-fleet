@@ -250,6 +250,26 @@ if [ -n "$RESUME_SID" ] || [ -n "$SEED_FILE" ] || [ -n "$WT_ARG" ]; then
 fi
 # Trim the seed; a whitespace-only prompt is no prompt (plain scratch).
 PROMPT="${PROMPT#"${PROMPT%%[![:space:]]*}"}"; PROMPT="${PROMPT%"${PROMPT##*[![:space:]]}"}"
+# An EPIC charter whose FIRST line is the bare `/fleet-epic-run` (every charter
+# /fleet-epic-plan wrote before T646): Claude Code reads the head of a first turn
+# as a slash command, and a plugin's command is only `/fleet-epic:fleet-epic-run`
+# — so the turn ended at 「Unknown command」 without ever reaching the model, and
+# the panel filed the new driver under 做完待收. That line becomes the words
+# /fleet-epic-plan writes now (FLEET_EPIC_RUN_LINE, plugins/fleet-epic/commands/
+# fleet-epic-plan.md §5 — KEEP IN SYNC): plain words, no namespace, Codex alike;
+# its arguments ride along. Any other seed: byte for byte.
+FLEET_EPIC_RUN_LINE='按 fleet-epic-run 的流程驱动这一批：先调用技能 fleet-epic:fleet-epic-run，本条消息下面是这一批的章程。'
+case "$PROMPT" in
+  /fleet-epic-run|/fleet-epic-run[[:space:]]*)
+    _er_head=${PROMPT%%"
+"*}; _er_args=${_er_head#/fleet-epic-run}
+    _er_args="${_er_args#"${_er_args%%[![:space:]]*}"}"; _er_args="${_er_args%"${_er_args##*[![:space:]]}"}"
+    _er_rest=''; [ "$_er_head" != "$PROMPT" ] && _er_rest=${PROMPT#*"
+"}
+    PROMPT="$FLEET_EPIC_RUN_LINE${_er_args:+（参数：${_er_args}）}${_er_rest:+
+$_er_rest}"
+    unset _er_head _er_args _er_rest ;;
+esac
 # An EPIC member's redo (EPIC T497 C5): the driver's retry words carry
 # `<!-- fleet:prev <ID> -->` (fleet-epic-tick.py), the failed baton's ID — this
 # window's ledger opens with it as prev, so the member's chain goes on by ID.
