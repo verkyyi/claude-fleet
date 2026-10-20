@@ -197,7 +197,7 @@ def warm_bytecode(d, sha):
     shutil.copytree(_PYC[sha], os.path.join(b, "__pycache__"))
 
 
-def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=(), drop=(), drill_fail=False,
+def make_release(rel, sha, claude="2.1.1", codex="0.162.1", tmux="3.7c", broken=(), drop=(), drill_fail=False,
                  sessions_log=None, apply_log=None, ccquota_src=None, ccquota_says=None,
                  seq=0, mark=None, home_list=False):
     """A release dir as `ccquota release fetch --artifacts` leaves it, under <rel>/<sha>."""
@@ -463,13 +463,13 @@ class A_Fresh(Sandbox):
         v = self.cmd("versions").stdout
         self.assertIn("各部件 = 发布版声明", v)
         self.assertIn("claude 2.1.1", v)
-        self.assertIn("codex codex-cli 0.154.0", v)
+        self.assertIn("codex codex-cli 0.162.1", v)
         # --json: the machine link's 版本与更新 (issue #2798) — the release,
         # what each part answers, what release.json pins, the updater's record
         j = json.loads(self.cmd("versions", "--json").stdout)
         self.assertEqual(j["runtime"], V1)
         self.assertEqual(j["actual"]["claude"], "2.1.1")
-        self.assertEqual(j["actual"]["codex"], "0.154.0")
+        self.assertEqual(j["actual"]["codex"], "0.162.1")
         self.assertEqual(j["want"]["claude"], "2.1.1")
         self.assertTrue(j["update"].get("result"), j)
         self.assertRegex(j["update"].get("at", ""), r"^\d{4}-\d\d-\d\dT")
@@ -501,13 +501,13 @@ class P_Helpers(Sandbox):
 
     def test_stage_and_account_link(self):
         self.install(V1)
-        self.assertEqual(self.out(self.H), self.H + " 0.154.0")
+        self.assertEqual(self.out(self.H), self.H + " 0.162.1")
         # in the tools cache beside codex, and the release links it
         self.assertEqual(os.path.dirname(os.path.realpath(self.hbin())),
                          os.path.dirname(os.path.realpath(os.path.join(self.root, "current", "tools", "bin", "codex"))))
         acct = os.path.join(self.home, ".local", "bin", self.H)
         self.assertEqual(os.readlink(acct), self.hbin())
-        self.assertEqual(subprocess.run([acct], capture_output=True, text=True).stdout.strip(), self.H + " 0.154.0")
+        self.assertEqual(subprocess.run([acct], capture_output=True, text=True).stdout.strip(), self.H + " 0.162.1")
         r = self.cmd("doctor").stdout
         self.assertRegex(r, r"PASS\s+account")
         self.assertNotRegex(r, r"WARN\s+helper")
@@ -542,14 +542,14 @@ class P_Helpers(Sandbox):
         fetches = lambda: open(os.path.join(self.rel, ".fetched")).read().split().count(V1)
         fetched = fetches()
         self.tick(V1)
-        self.assertEqual(self.out(self.H), self.H + " 0.154.0")
+        self.assertEqual(self.out(self.H), self.H + " 0.162.1")
         self.assertEqual(fetches(), fetched, "fetched with the artifact here")
         # its fetch never brought the helper either (a --pinned fetch of the old
         # list): fetched again, the release left as it was
         os.remove(self.hbin())
-        os.remove(os.path.join(self.root, V1, ".release", "artifacts", self.H + "-0.154.0-darwin-arm64"))
+        os.remove(os.path.join(self.root, V1, ".release", "artifacts", self.H + "-0.162.1-darwin-arm64"))
         self.tick(V1)
-        self.assertEqual(self.out(self.H), self.H + " 0.154.0")
+        self.assertEqual(self.out(self.H), self.H + " 0.162.1")
         self.assertEqual(fetches(), fetched + 1)
         self.assertEqual([e for e in os.listdir(self.root) if e.startswith(".helpers")], [])
         self.assertNotRegex(self.cmd("doctor").stdout, r"WARN\s+(helper|account)")
@@ -717,7 +717,7 @@ class E_MissingArtifact(Sandbox):
         self.release(V2, drop=("codex-",))
         st = self.tick(V2)
         self.assertEqual(st["result"], "failed", st)
-        self.assertIn("codex-0.154.0-darwin-arm64", st["reason"])
+        self.assertIn("codex-0.162.1-darwin-arm64", st["reason"])
         self.assertEqual(self.current(), V1)
         self.assertFalse(os.path.exists(os.path.join(self.root, V2)))
         n = len(open(os.path.join(self.rel, ".fetched")).read().split())
@@ -911,7 +911,7 @@ class O_TornReadPast(Sandbox):
         self.assertEqual(st["skip"][V2]["rows"], ["claude"])
         # every part is the old release's again
         self.assert_all_on(V1, "2.1.1")
-        self.assertEqual(self.out("codex"), "codex-cli 0.154.0")
+        self.assertEqual(self.out("codex"), "codex-cli 0.162.1")
         self.assertEqual(os.path.basename(os.readlink(os.path.join(self.root, ".prev"))), V2)
         self.assertEqual(self.rj(os.path.join(self.d, "db", "update-restart.json"))["to"], V1)
         self.daemon_on(V1)

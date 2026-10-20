@@ -22,18 +22,25 @@ import time
 # is verified against (docs/dev/CODEX-RUNTIME.md#context). The rollout is an upstream
 # internal interface, so an upgrade can change it silently and the dashboard
 # would then show a wrong context% with no error anywhere (issue #1079). Each
-# entry is a version PREFIX matched on whole components: "0.154" covers 0.154.0
-# and 0.154.3, never 0.1540. Add a version here only after the fixture tests
+# entry is a version PREFIX matched on whole components: "0.162" covers 0.162.0
+# and 0.162.3, never 0.1620. Add a version here only after the fixture tests
 # (fleet-codex-session-selftest.sh) pass against its real rollout files.
-# 0.162 is the release pin since issue #3157 (its fullscreen chat keeps the
-# composer at the bottom); 0.154 stays for a machine still on the old release.
-SUPPORTED_ROLLOUT_VERSIONS = ("0.154", "0.162")
+# Only the release pin (0.162 since issue #3157, release.json's 0.162.1) is
+# supported (T588): an older Codex is named as such, never read as compatible.
+SUPPORTED_ROLLOUT_VERSIONS = ("0.162",)
 PIN_COMMAND = "npm i -g @openai/codex@0.162.1"
 
 
 def version_supported(version):
     parts = version.split(".")
     return any(parts[:len(p.split("."))] == p.split(".") for p in SUPPORTED_ROLLOUT_VERSIONS)
+
+
+def version_older(version):
+    """True when `version` sorts below every supported prefix (numeric components)."""
+    def nums(v):
+        return tuple(int(x) for x in v.split(".") if x.isdigit())
+    return all(nums(version) < nums(p) for p in SUPPORTED_ROLLOUT_VERSIONS)
 
 
 def version_check(codex="codex"):
@@ -53,6 +60,10 @@ def version_check(codex="codex"):
     verified = "/".join(SUPPORTED_ROLLOUT_VERSIONS)
     if version_supported(version):
         return 0, "codex " + version + " (rollout format verified for " + verified + ")"
+    if version_older(version):
+        return 1, ("codex " + version + " is older than the release pin " + verified +
+                   " and no longer supported; pin it: `" + PIN_COMMAND +
+                   "`, or set FLEET_CODEX_VERSION_CHECK=0 to silence")
     return 1, ("codex " + version + ": fleet only verified the " + verified +
                " session-file (rollout) format, so context% may be wrong; pin it: `" +
                PIN_COMMAND + "`, or set FLEET_CODEX_VERSION_CHECK=0 to silence")

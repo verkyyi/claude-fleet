@@ -6,11 +6,14 @@ conf/agent-defaults/ is the only source:
 
   claude/mcp.default.json    user-scope MCP servers → ~/.claude.json "mcpServers"
                              (context7 · playwright · github · fetch)
-  claude/CLAUDE.default.md   legacy block reference (not installed)
+  AGENT.default.md           the doc block, ONE file for both agents (not installed);
+                             a line between `<!-- fleet:only claude|codex -->` and
+                             `<!-- fleet:only end -->` is that agent's alone — `doc`
+                             prints one agent's block (~/.claude/CLAUDE.md /
+                             $CODEX_HOME/AGENTS.md hold what an older release wrote)
   codex/config.default.toml  approval_policy / sandbox_mode / model_reasoning_effort /
                              check_for_update_on_startup
                              + the same [mcp_servers.*] → $CODEX_HOME/config.toml
-  codex/AGENTS.default.md    legacy block reference (not installed)
   skills/ (the repo's)       counted here, installed by fleet-install-apply.sh's
                              skills / codex-skills passes into ~/.claude/skills and
                              $CODEX_HOME/skills
@@ -66,6 +69,9 @@ automatic backend startup or default installer behavior change.
          [--dry-run] removes only the legacy marker block; leaves personal text,
          configs and skills alone. Malformed/duplicate markers refuse before any
          write. Missing files stay absent. No installed defaults are needed.
+
+  doc    {claude|codex} [--root R]
+         Prints that agent's block from AGENT.default.md, marker lines dropped.
 
 Exit: 0 ok · 1 check found something missing · 2 unreadable/malformed input or a
 held lock.
@@ -414,6 +420,30 @@ def parse_defaults_toml(path):
 
 # --- the doc block ------------------------------------------------------------------
 
+ONLY = re.compile(r"^<!-- fleet:only (claude|codex|end) -->$")
+
+
+def render_doc(root, agent):
+    """conf/agent-defaults/AGENT.default.md → the block `agent` reads: a line inside
+    `fleet:only <other>` is dropped, the marker lines themselves too."""
+    path = os.path.join(root, "conf", "agent-defaults", "AGENT.default.md")
+    try:
+        lines = open(path, encoding="utf-8").read().split("\n")
+    except OSError as e:
+        die("%s unreadable: %s" % (path, e))
+    out, only = [], None
+    for line in lines:
+        m = ONLY.match(line)
+        if m:
+            only = None if m.group(1) == "end" else m.group(1)
+            continue
+        if only is None or only == agent:
+            out.append(line)
+    if only is not None:
+        die("%s: fleet:only %s has no fleet:only end" % (path, only))
+    return "\n".join(out)
+
+
 def strip_docs(a, homes, blocked):
     """Explicit cleanup only; preflight every file before writing any of them."""
     paths = []
@@ -713,7 +743,8 @@ def reroot(v, spelled):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("action", choices=("apply", "check", "strip"))
+    ap.add_argument("action", choices=("apply", "check", "strip", "doc"))
+    ap.add_argument("agent", nargs="?", choices=("claude", "codex"), help="doc: whose block")
     ap.add_argument("--root", default=DEFAULT_ROOT, help="install root holding conf/agent-defaults/ and skills/")
     ap.add_argument("--claude-config", default=DEFAULT_CLAUDE_CONFIG)
     ap.add_argument("--claude-md", default=DEFAULT_CLAUDE_MD)
@@ -728,6 +759,13 @@ def main():
                     help="client-only root holding bin/mcp-*.sh (#1725): a default server's "
                          "$HOME/.claude/fleet/ is spelled as this root instead")
     a = ap.parse_args()
+    if a.action == "doc":
+        if not a.agent:
+            ap.error("doc needs claude or codex")
+        sys.stdout.write(render_doc(a.root, a.agent))
+        return 0
+    if a.agent:
+        ap.error("only doc takes an agent")
     check = a.action == "check"
     homes = []
     for h in (a.codex_home or default_codex_homes()):

@@ -378,7 +378,7 @@ ok "F2 failures, interruption, and non-tmux launches never request window cleanu
 cat > "$IBIN/fleet-codex-runtime.py" <<PY
 import os,sys
 if sys.argv[1:2] == ['version-check']:  # the launch-time version check (#1079)
-    print('codex 0.154.0'); sys.exit(0)
+    print('codex 0.162.0'); sys.exit(0)
 open('$WORK/runtime-used','w').write('yes')
 os.execvp('codex',['codex']+sys.argv[2:])
 PY
@@ -410,7 +410,7 @@ ok "G codex missing → exit 127 with a clear error, no silent claude fallback"
 # H. project trust pre-check: an untrusted base checkout is flagged, never fixed
 # ============================================================================
 # Codex prompts "trust this directory?" once per project and a worktree inherits
-# its main repo's trust (verified on 0.154) — so the base checkout must be trusted.
+# its main repo's trust (measured) — so the base checkout must be trusted.
 # Trusted (the default above) → silent. Untrusted → a stderr note + `needs` stamped
 # on the pane's window (red on the dash), and codex is STILL exec'd (it is the
 # authority). The operator's config is never written.

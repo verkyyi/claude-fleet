@@ -5,7 +5,7 @@
     "differs from it, so the Codex wiring stops being a hand-transcoded second",
     "copy inside bin/fleet-codex.sh. bin/fleet-hooks-emit.sh applies this map and",
     "emits the `-c hooks.<Event>=[\u2026]` TOML the launcher passes to codex.",
-    "Verified against codex-cli 0.154: Codex's hook system IS Claude Code's schema",
+    "Verified against codex-cli: Codex's hook system IS Claude Code's schema",
     "\u2014 same event names, same stdin JSON, exit 2 blocks, $TMUX_PANE inherited."
   ],
   "events": {
