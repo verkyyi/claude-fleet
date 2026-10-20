@@ -513,13 +513,6 @@ fleet doctor --json
 - **是什么**：机器之间的链路（看别的机器上的会话用）通不通。
 - **WARN / FAIL 怎么办**：`fleet-peerlink.py status` 看最近几次重建和原因。
 
-#### `sshtrust`
-
-来自 `fleet doctor`。
-
-- **是什么**：`~/.ssh/authorized_keys` 里有没有别的 fleet 机器的永久钥匙。机器之间只该用入口签的 5 分钟证书。
-- **WARN / FAIL 怎么办**：把说明里点名的那几行钥匙删掉。
-
 #### `releasekey`
 
 来自 `fleet doctor`。

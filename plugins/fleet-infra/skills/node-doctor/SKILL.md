@@ -170,7 +170,6 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `sleep` | node | [mac-node-prep] | 机器会睡：`sudo pmset -a sleep 0 autorestart 1 womp 1` |
 | `socket` | node | [node-doctor] | tmux socket 被一个快死的服务器占着：`fleet-up.sh` 清掉并拉起 |
 | `spotlight` | node | [mac-node-prep] | Spotlight 还在索引：`sudo mdutil -a -i off` |
-| `sshtrust` | node | [node-doctor] | authorized_keys 里有别的 fleet 机器的永久钥匙：删掉，机器间走五分钟证书 |
 | `state` | node | [node-doctor] | 状态对账没跑：查 com.claude-fleet.reconcile 与它的日志 |
 | `statusln` | node | [node-doctor] | 状态行缺 jq / 窗口没心跳：`brew install jq`，或重开那些窗口 |
 | `team` | node | [release-rules] | 团队层没同步：`fleet-agent-team.py sync` |

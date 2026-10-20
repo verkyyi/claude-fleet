@@ -13,7 +13,6 @@
 #      code, stdout and stderr come back as they came (a non-zero exit is data)
 #   D  degenerate (EPIC #1813 rule 1): no hub at all — every hub variable unset —
 #      and every core tool is still listed, spawn / await still run
-#   E  the legacy fleet-peer shim still serves list_agents / send_message
 #   F  `--mount codex` derives Codex's -c value from conf/mcp-worker.json, with
 #      the env Codex withholds and a per-call timeout an await fits in
 #   G  报问记合 (issue #1808) refusals: each new tool's bad enum, bad combination,
@@ -76,7 +75,6 @@ set -u
 BIN=$(cd "$(dirname "$0")" && pwd)
 SUT="$BIN/fleet-mcp.py"
 [ -f "$SUT" ] || { echo "selftest: fleet-mcp.py missing" >&2; exit 2; }
-[ -f "$BIN/fleet-peer-mcp.py" ] || { echo "selftest: fleet-peer-mcp.py missing" >&2; exit 2; }
 [ -f "$BIN/../conf/mcp-worker.json" ] || { echo "selftest: conf/mcp-worker.json missing" >&2; exit 2; }
 [ -f "$BIN/../conf/mcp-orch.json" ] || { echo "selftest: conf/mcp-orch.json missing" >&2; exit 2; }
 
@@ -90,7 +88,6 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--
 
 mkdir -p "$WORK/bin" "$WORK/conf"
 cp "$SUT" "$WORK/bin/fleet-mcp.py"
-cp "$BIN/fleet-peer-mcp.py" "$WORK/bin/fleet-peer-mcp.py"
 cp "$BIN/../conf/mcp-worker.json" "$WORK/conf/mcp-worker.json"
 cp "$BIN/../conf/mcp-orch.json" "$WORK/conf/mcp-orch.json"
 LOG="$WORK/runs"; : > "$LOG"
@@ -297,21 +294,6 @@ assert rows[41]["structuredContent"]["exit"] == 0, rows[41]
 PY
 grep -qx 'fleet-await.sh 3 --timeout 540' "$LOG" || fail "D: await's default timeout is not 540" "$(cat "$LOG")"
 ok "D no hub configured: all fifteen core tools listed, spawn/await run locally (await default 540s)"
-
-# --- E: the legacy fleet-peer shim --------------------------------------------
-env -u FLEET_WORKER_CRED PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 python3 "$WORK/bin/fleet-peer-mcp.py" > "$WORK/e" <<'EOF'
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
-{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"send_message","arguments":{"to":"issue:99","text":"hi"}}}
-EOF
-python3 - "$WORK/e" <<'PY' || fail "E: the fleet-peer shim broke" "$(cat "$WORK/e")"
-import json, sys
-rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
-assert rows[1]["serverInfo"]["name"] == "fleet-peer"
-assert {t["name"] for t in rows[2]["tools"]} == {"list_agents", "send_message"}
-assert rows[3]["structuredContent"]["delivered"] is True
-PY
-ok "E fleet-peer-mcp.py still serves list_agents / send_message (one version)"
 
 # --- F: the Codex mount, from the one definition ------------------------------
 m=$(python3 "$WORK/bin/fleet-mcp.py" --mount codex) || fail "F: --mount codex failed"
@@ -787,7 +769,7 @@ mkver() { # mkver <name> <children-script body> [python appended to fleet-mcp.py
 import sys
 p, extra = sys.argv[1], sys.argv[2]
 s = open(p).read()
-anchor = "\n# The pre-#1807 fleet-peer server"
+anchor = "\n# Two groups (issue #3113)"
 assert anchor in s
 open(p, "w").write(s.replace(anchor, "\n" + extra + "\n" + anchor, 1))
 PYX

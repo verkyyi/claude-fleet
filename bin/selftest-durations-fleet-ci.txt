@@ -203,7 +203,6 @@
 11.0 fleet-open-selftest.sh
 2.3 fleet-palette-selftest.sh
 3.1 fleet-peer-cert-selftest.sh
-0.1 fleet-peer-mcp-selftest.sh
 4.5 fleet-peer-send-identity-selftest.sh
 1.2 fleet-peer-send-selftest.sh
 2.6 fleet-permission-selftest.sh

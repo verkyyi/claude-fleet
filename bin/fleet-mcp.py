@@ -51,7 +51,6 @@ came. Caps, dedup and guards live in the scripts, once.
                                #4703); 1 outside tmux (no seat by role, issue #3118)
   fleet-mcp.py --mount codex [--group orch]
                                print the `-c` value bin/fleet-codex.sh mounts it with
-  fleet-mcp.py --legacy-peer   the old fleet-peer server (list_agents/send_message)
   fleet-mcp.py --cred mint     print a fresh worker credential for THIS pane (stdout only)
   fleet-mcp.py --cred check    verify $FLEET_WORKER_CRED; print its claims (never the credential)
   fleet-mcp.py --cred revoke   revoke $FLEET_WORKER_CRED (its nonce goes on the revoked list)
@@ -554,7 +553,7 @@ def cred_main(action):
     return 2
 
 
-# --- agents / send (moved from fleet-peer-mcp.py, issue #1185) ------------------
+# --- agents / send (issue #1185) ----------------------------------------------
 
 FID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
@@ -1453,12 +1452,6 @@ TOOLS = {
 }
 
 
-# The pre-#1807 fleet-peer server, for a config that still mounts it (one version).
-LEGACY = {
-    "list_agents": (tool_agents, dict(TOOLS["agents"][1])),
-    "send_message": (tool_send, dict(TOOLS["send"][1])),
-}
-
 # Two groups (issue #3113). TOOLS stays every handler: `fleet` answers all of them
 # (a dispatch-group call it does not list is logged road=legacy) but LISTS only
 # CORE; `fleet-orch` lists and answers ORCH.
@@ -1869,11 +1862,8 @@ def main(argv):
         # A new version proves it starts before a running server execs it (#1898).
         print(json.dumps({"tools": sorted(TOOLS)}))
         return 0
-    if argv[:1] == ["--legacy-peer"]:
-        serve(LEGACY, "fleet-peer")
-        return 0
     if argv:
-        print("usage: fleet-mcp.py [--group core|orch] [--list | --mount codex] | --legacy-peer | --probe | "
+        print("usage: fleet-mcp.py [--group core|orch] [--list | --mount codex] | --probe | "
               "--spec <tool>… | --call <tool> [<json args>] | --bridge-seat | "
               "--cred mint|check|revoke|assert", file=sys.stderr)
         return 2

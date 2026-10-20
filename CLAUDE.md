@@ -1281,7 +1281,6 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   (issue #3050): written to `peer/known_hosts` under `fleet-<alias>`, the options
   add `HostKeyAlias` + `UserKnownHostsFile` — the hub's word, never TOFU (BREAK-IT
   `peerlink-hostkey-unknown`). Any new cross-machine ssh goes through it
-  (`fleet-peer-cert-selftest.sh` I lints it); `fleet-doctor`'s `sshtrust` row
-  WARNs on another fleet machine's key in `~/.ssh/authorized_keys`.
+  (`fleet-peer-cert-selftest.sh` I lints it).
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.

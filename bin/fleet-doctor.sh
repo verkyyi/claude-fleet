@@ -1074,19 +1074,6 @@ if [ -f "$_hi" ]; then
   esac
 fi
 
-# --- sshtrust (issue #1626): no standing key from another fleet machine ----------
-# Cross-machine ssh rides a five-minute certificate the hub signs per connection
-# (fleet-peer-cert.sh); a key another fleet machine left in ~/.ssh/authorized_keys
-# (`dave@mac-c`) admits it forever and the hub never hears of it. WARN with
-# each entry (line, type, comment — never the key); PASS when there is none. A
-# login that knows no other fleet machine prints nothing: the degenerate case.
-_tr=$(bash "$(dirname "$0")/fleet-peer-trust.sh" 2>/dev/null); _tr_rc=$?
-case "$_tr_rc" in
-  0) warn sshtrust "$(printf '%s\n' "$_tr" | awk 'NF' | wc -l | tr -d ' ') 把其它 fleet 机器的钥匙留在 ~/.ssh/authorized_keys（永久互信）: $(printf '%s\n' "$_tr" | awk -F '\t' 'NF { printf "%s%s (第 %s 行)", s, $3, $1; s = ", " }') — 跨机已改走入口签发的 5 分钟证书（#1626），确认跨机照常后删掉这些行"
-     ;;
-  1) pass sshtrust "authorized_keys 里没有其它 fleet 机器的钥匙 — 跨机只认入口签发的 5 分钟证书" ;;
-esac
-
 # --- releasekey (issue #3559, BREAK-IT release-key-outside-train): the release
 # signing key lives only in the release train. FAIL when this computer holds the
 # private half of the pinned key or of one it vouches for (this environment,
