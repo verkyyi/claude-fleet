@@ -123,7 +123,7 @@ $3<dl class="kv"><dt>为谁</dt><dd>你，一个人用 3 台电脑</dd></dl>
 </details></div></section></body></html>
 EOF
 }
-CMPB=$(printf '%s' '{"before":{"html":"<pre>旧侧栏</pre>","note":"看不出电脑"},"after":{"html":"<pre>新侧栏 · mini2</pre>","note":"每行带电脑名"}}' \
+CMPB=$(printf '%s' '{"before":{"html":"<pre>旧侧栏</pre>","note":"看不出电脑"},"after":{"html":"<pre>新侧栏 · mac-a</pre>","note":"每行带电脑名"}}' \
   | python3 "$BIN/fleet-task-page.py" compare -) || st_fail "fleet-task-page.py compare"
 PROTO='<p class="proto"><a href="proto-sidebar.html">▶ 打开可交互原型</a></p>'
 vlint() {  # <want-rc> <what> <card-name> <upper-extra> <fold-extra> [want-text]
