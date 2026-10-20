@@ -1706,21 +1706,10 @@ def entries(vid, now=None, hub=True):
              "foot": " · ".join(x for x in (title or name, reap_words(f[14]),
                                             detail if detail and detail != state else "", today,
                                             " · ".join(x for x in (machine, login) if x)) if x)}
-        # Optional column 21: an explicit read's shared shadow proof. Older
-        # producers/clients omit/ignore it. Never turn it into an action gate.
+        # Column 21 carried a launch-proof session's status proof; nothing writes
+        # it since EPIC T497 C8, an older producer's is ignored.
         e["deploy"] = f[19].strip()
         e["pr"] = f[10].strip()
-        e["status_proof"] = None
-        if len(f) > 20 and len(f[20]) <= 65536:
-            try:
-                proof = json.loads(f[20])
-                worker = proof.get("identity", {}).get("worker_id", "")
-                fid = wins.get(target, ("", "", 0))[0] if local else ""
-                if (local and fid and worker.endswith("/" + fid)) or (not local and worker == target):
-                    e["status_proof"] = proof
-                    e["worker_id"] = worker
-            except (ValueError, AttributeError, TypeError):
-                pass
         # plan B's columns (T493): ID · Agent · short name · the row's own repo
         own = f[23].strip()
         e["repo"] = own.rpartition("/")[2] if "/" in own else (repo if slug and not section else "")
@@ -3242,86 +3231,6 @@ def pr_label(r):
     return say("view_act_pr_fmt", r.get("pr"))
 
 
-def evidence_command(fleet, argv, payload=None):
-    try:
-        p = subprocess.Popen(argv, env=act_env(fleet), stdin=subprocess.PIPE if payload else subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
-        try:
-            out = p.communicate(input=payload, timeout=30)[0]
-        except subprocess.TimeoutExpired:
-            os.killpg(p.pid, signal.SIGKILL)
-            p.communicate()
-            return None
-        return json.loads(out) if p.returncode in (0, 2) else None
-    except (OSError, ValueError):
-        return None
-
-
-def evidence_read(fleet, row):
-    """One user-requested read. Never called by entries/Refresh/inventory.
-
-    Remote rows keep their producer proof; no new remote probe/connection.
-    The existing target resolver/facts guard owns the selected pane.
-    """
-    if row.get("far") or row.get("lost") or row.get("gone"):
-        return dict(proof=row.get("status_proof"), current=None)
-    before = facts(fleet, row)
-    if not before.get("pane") or not before.get("fid") or before.get("fid") != row.get("fid"):
-        return None
-    argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet_status_evidence.py"),
-            "--pane", before["pane"], "--socket", fleet]
-    try:
-        result = evidence_command(fleet, argv)
-        after = facts(fleet, row)
-        if any(after.get(k) != before.get(k) for k in ("fid", "pane")):
-            return None
-        if not isinstance(result, dict) or not isinstance(result.get("identity"), dict):
-            return None
-        # Explicit action only: reread the complete current execution through
-        # the runtime owner AFTER collection and the row check. Preserve the
-        # original proof times. A changed generation/SID/turn/state is unknown.
-        current = evidence_command(fleet, [sys.executable, str(Path(__file__).absolute().parent / "fleet_runtime.py"),
-                                   "read", "--pane", before["pane"], "--socket", fleet],
-                                   json.dumps(dict(expected=result.get("runtime"))))
-        observation = dict(proof=result, current=current)
-        worker = result["identity"].get("worker_id", "")
-        if not worker:
-            return observation  # preserve missing-launch/first-thread reasons
-        if not isinstance(worker, str) or not worker.endswith("/" + before["fid"]):
-            return None
-        # View cache only, keyed by lifelong FID, with the source's original
-        # expiry. No launch/task stamps, no inventory/authority mutation.
-        encoded = json.dumps(result, ensure_ascii=True, separators=(",", ":"))
-        if (len(encoded) <= 65536 and re.fullmatch(r"[A-Za-z0-9_.@-]+", fleet)
-                and re.fullmatch(r"[A-Za-z0-9-]+", before["fid"])):
-            path = dash_global() / ("status-proof-" + fleet + "-" + before["fid"])
-            import tempfile
-            fd, tmp = tempfile.mkstemp(prefix=".status-proof-", dir=str(path.parent))
-            try:
-                with os.fdopen(fd, "w") as stream:
-                    stream.write(encoded + "\n")
-                os.replace(tmp, path)
-            finally:
-                if os.path.exists(tmp):
-                    os.unlink(tmp)
-        return observation
-    except (OSError, ValueError):
-        return None
-
-
-def evidence_lines(row, proof=None):
-    # Lazy: importing the shared readers must not add work to a list refresh.
-    import fleet_status_evidence
-    expected = row.get("target") if row.get("far") else row.get("worker_id")
-    result = fleet_status_evidence.lines(proof, expected_worker=expected, lost=bool(row.get("lost")),
-                                         english=os.environ.get("FLEET_UI_LANG") == "en",
-                                         expected=row.get("evidence_identity"))
-    # Legacy words are labelled as such, never upgraded to native observations.
-    legacy = "本轮结束" if row.get("state") == "done" else row.get("state", "unknown")
-    return ["会话旧观测: " + legacy, "PR: " + (row.get("pr") or "unknown"),
-            "部署/live: " + (row.get("deploy") or "unknown")] + result
-
-
 def live(r):
     return not r.get("far") and not r.get("gone") and r.get("state") not in ("exited",)
 
@@ -3424,8 +3333,6 @@ ACTIONS = [
      "local": lambda r, a, f: sh("fleet-transfer.sh", "--from-panel", "--session", f, "--window", r["target"], "--to",
                                  other_agent(r).lower()),
      "far": far("agent"), "ask": None, "slow": True},
-    {"id": "evidence", "label": lambda r: "状态证据 / Status evidence", "when": lambda r: not r.get("gone"),
-     "local": lambda r, a, f: "evidence", "far": lambda r, a, f: "evidence", "ask": None},
     {"id": "reap", "label": lambda r: say("view_act_reap"), "when": lambda r: not r.get("gone"),
      "local": lambda r, a, f: sh("dash-reap.sh", r["target"], "--yes"), "far": far("reap"), "ask": "key",
      "prompt": lambda r: say("view_ask_reap_fmt", r.get("text") or r.get("name") or r["target"]), "keys": "yYnN",
@@ -3548,12 +3455,6 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     fn = a["far"] if r.get("far") else a["local"]
     argv = fn(r, ans, fleet)
     label = a["label"](r).rstrip("…")
-    if argv == "evidence":
-        import fleet_status_evidence
-        observation = evidence_read(fleet, r) or {}
-        observed = dict(r)
-        observed["evidence_identity"] = fleet_status_evidence.delivery_identity(observation)
-        return 0, "\n".join(evidence_lines(observed, observation.get("proof"))), False
     if argv == "pr-unknown":
         return 1, pr_label(r), False
     if argv in ("go", "shell") and lost_msg(r):

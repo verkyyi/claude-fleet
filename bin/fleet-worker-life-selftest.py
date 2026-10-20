@@ -527,7 +527,7 @@ class McpRestartTest(unittest.TestCase):
         pick=LIB['MCP']['shell_exec_reader']
         client=lambda agent:type('C',(),{'initialized':{'userAgent':agent}})()
         self.assertIs(pick(client('claude_fleet/0.160.1 (Mac OS 27.0.0; arm64) unknown (claude_fleet; 1)'),reader),reader)
-        # 0.162.1: measured by bin/fleet_native_continue_native_test.py (#4775).
+        # 0.162.1: measured in #4775.
         self.assertIs(pick(client('claude_fleet/0.162.1 (Mac OS 27.0.0; arm64)'),reader),reader)
         for agent in ('claude_fleet/0.161.0 (Mac OS)','claude_fleet/0.160.10','claude_fleet/0.162.10','codex/0.160.1-alpha','0.160.1',None,7):
             self.assertIsNone(pick(client(agent),reader),agent)

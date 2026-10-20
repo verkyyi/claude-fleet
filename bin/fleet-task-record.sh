@@ -10,9 +10,9 @@
 #                     [--issue o/n#N] [--key K] [--worker-id W] [--state S]
 #                     → `T<n>` on stdout. The same token twice is the same record.
 #   fleet-task-record.sh get T<n>          → the record + its session's live word (JSON)
-#   fleet-task-record.sh children T<n>     → accepted parent generation + children
-#   fleet-task-record.sh report T<n>       ← fenced report JSON on stdin
-#   fleet-task-record.sh mutate T<n>       ← fenced lifecycle command JSON on stdin
+#   fleet-task-record.sh children T<n>     → the record's children
+#   fleet-task-record.sh mutate T<n>       ← a cancel of a record no window ever
+#                       opened (fleet_task_control.py cancel, EPIC T497 C13), JSON on stdin
 #   fleet-task-record.sh set T<n> [--asked TEXT] [--parked TEXT] [--clear asked|parked]
 #                     [--issue o/n#N] [--pr o/n#N] [--key K] [--worker-id W]
 #                     [--state S] [--note TEXT]
@@ -86,7 +86,6 @@ call() {
   local m="$1" p="$2" body="${3:-}" pair url tok resp rc code why
   pair=$(fleet_node_pair) || die 3 "no node token here"
   url=${pair%%	*}; tok=${pair#*	}
-  [ -z "${FLEET_TASK_RECOVERY_URL:-}" ] || [ "$url" = "$FLEET_TASK_RECOVERY_URL" ] || die 1 "task authority changed; reconciliation required"
   # signed once this login has a key (issue #3710), else the token
   resp=$(printf 'header = "Authorization: %s"\n' "$(fleet_node_auth "$m" "$url$p" "$tok")" | \
     "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -K - -o - -w '\n%{http_code}' \
@@ -249,9 +248,7 @@ JSON
     [ "$spawn" = 1 ] || exit 0
     pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
     if [ -n "$body" ]; then printf '%s\n\n%s\n' "$title" "$body" > "$pf"; else printf '%s\n' "$title" > "$pf"; fi
-    # The seed IS the record's words (T604): FLEET_TASK_SEED=record lets the hub
-    # place it on another machine, which reads the same words back off T<n>.
-    FLEET_TASK_SEED=record exec bash "$BIN/dash-raw-session.sh" --repo "$repo" --task "$t" --name "$title" --reap "${reap:-merged}" \
+    exec bash "$BIN/dash-raw-session.sh" --repo "$repo" --task "$t" --name "$title" --reap "${reap:-merged}" \
       ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${origin:+--origin "$origin"} $pwin "--prompt-file=$pf" ${tsess:+"$tsess"}
   fi
   [ "$spawn" = 1 ] || exit 0
@@ -268,25 +265,10 @@ if [ "$cmd" = authority ]; then
   printf '%s\n' "${pair%%	*}"
   exit 0
 fi
-# The original HTTP adapter remains the only credential reader. Recovery stores
-# receipts in control/state.sqlite3 and calls this raw road, never a second API.
-case "$cmd" in
-  get|report|mutate|stopped)
-    if [ "${FLEET_TASK_RECOVERY_RAW:-0}" != 1 ]; then
-      is_tref "${1:-}" || usage
-      exec python3 "$BIN/fleet_task_recovery.py" "$cmd" "$1"
-    fi ;;
-esac
-
 case "$cmd" in
   children)
     is_tref "${1:-}" || usage
     call GET "/v1/node/tasks/$1/children"
-    exit $? ;;
-  report)
-    is_tref "${1:-}" || usage
-    report=$(python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)))') || exit 2
-    call POST "/v1/node/tasks/$1/reports" "$report"
     exit $? ;;
   mutate)
     is_tref "${1:-}" || usage

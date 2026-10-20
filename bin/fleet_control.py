@@ -111,15 +111,13 @@ class Control:
             env["FLEET_TIMING_READY_SECS"] = os.environ["FLEET_TIMING_READY_SECS"]
         return env
 
-    def adapter(self, mode, *args, timeout=20, payload=None, op_id=None, task=None, draft=False, dispatch=None, launch=None):
+    def adapter(self, mode, *args, timeout=20, payload=None, op_id=None, task=None, draft=False, dispatch=None):
         env = self.environment()
         env.pop("FLEET_CONTROL_DRAFT", None)
         if draft:
             env["FLEET_CONTROL_DRAFT"] = "1"
         if dispatch:
             env["FLEET_DISPATCH"] = json.dumps(dispatch, separators=(",", ":"))
-        if launch:
-            env["FLEET_LAUNCH"] = json.dumps(launch, separators=(",", ":"))
         if task:
             # The hub's task record a start belongs to (issue #3325), validated
             # (T<n>): the window is stamped @task, a no-repo one files no desk
@@ -453,27 +451,6 @@ class Control:
         if row is None:
             raise Fault("NOT_FOUND", "Operation has not been accepted by this machine")
         result = operation(row)
-        req = json.loads(row["request"])
-        c = req.get("params", {}).get("launch")
-        if c and row["status"] != "failed":
-            from fleet_launch import check_receipt
-            try:
-                fleet = self.fleet(row["fleet_id"])
-                rc, out, _ = self.adapter("launch-inspect", fleet["name"], "fid:" + c["worker_id"].split("/")[1],
-                                          payload=canonical(c).encode(), timeout=10)
-                if rc:
-                    raise ValueError("native identity unavailable")
-                receipt = check_receipt(c, json.loads(out))
-                if receipt.get("phase") not in ("delivered", "ready", "resumed"):
-                    raise ValueError("delivery unconfirmed")
-                result["status"] = "succeeded"
-                result["result"] = {"launch_receipt": receipt, "observed_at": now(),
-                                    "window": receipt.get("window_id", ""), "window_id": receipt.get("window_id", "")}
-            except (Fault, OSError, ValueError, subprocess.SubprocessError):
-                if row["status"] not in ("accepted", "running") or now() - row["created"] > 120:
-                    result["status"] = "unknown"
-                    result["result"] = {"error": {"code": "UNKNOWN_OUTCOME", "message": "interrupted: native identity unavailable; no replacement launched"}}
-            return result
         if row["status"] in ("accepted", "running") and now() - row["updated"] > 240:
             result["status"] = "unknown"
         return result
@@ -484,10 +461,6 @@ class Control:
         validate_write(request["action"], request["params"])
         if not isinstance(request["actor"], str) or not 1 <= len(request["actor"]) <= 200:
             raise Fault("INVALID_ARGUMENT", "Invalid audit actor")
-        if request["params"].get("launch"):
-            c = request["params"]["launch"]
-            if c["operation_id"] != op_id or c["worker_id"].split("/")[0] != fleet_id:
-                raise Fault("INVALID_ARGUMENT", "launch operation/fleet mismatch")
         encoded = canonical(request)
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -929,7 +902,7 @@ class Control:
                                                      params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params.get("name", "").strip(),
                                                      *test_arg, payload=body.encode("utf-8") if body else None,
-                                                     timeout=180, dispatch=params.get("dispatch"), launch=params.get("launch"), task=params.get("task"), draft="draft" in params)
+                                                     timeout=180, dispatch=params.get("dispatch"), task=params.get("task"), draft="draft" in params)
                 elif filed:
                     # issue #1953: the client's writing area — the adapter's start
                     # with `new` and the title (validated above) where a scratch
@@ -941,12 +914,12 @@ class Control:
                                                      params.get("repo", ""), params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params["title"].strip(),
                                                      *reap_arg, payload=body.encode("utf-8"),
-                                                     timeout=240, op_id=op_id, task=params.get("task"), dispatch=params.get("dispatch"), launch=params.get("launch"))
+                                                     timeout=240, op_id=op_id, task=params.get("task"), dispatch=params.get("dispatch"))
                 else:
                     code, output, err = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""),
                                                      params.get("repo", ""), params.get("origin_wid", ""),
                                                      params.get("account_class", ""), *([""] + reap_arg if reap_arg else []),
-                                                     timeout=180, task=params.get("task"), dispatch=params.get("dispatch"), launch=params.get("launch"))
+                                                     timeout=180, task=params.get("task"), dispatch=params.get("dispatch"))
                 if code:
                     # 6 = no repo named in a fleet hosting several, or one it does not host (#984).
                     # 7 = a new start with no task record (issue #4898): nothing was opened.
@@ -964,29 +937,6 @@ class Control:
                     # what a refusal here would.
                     raise Refused(reasons.get(code, "EXECUTION_FAILED"),
                                   "Fleet refused to start the worker: " + refusal_line(err), code, refusal_line(err))
-                if params.get("launch"):
-                    c = params["launch"]
-                    from fleet_launch import check_receipt
-                    lines = [x for x in output.decode("utf-8", "replace").splitlines() if x.strip()]
-                    line = (lines[0] if scratch else lines[-1]) if lines else ""
-                    window = line.split("\t")[0]
-                    if not re.fullmatch(r"@[0-9]+", window):
-                        raise Fault("UNKNOWN_OUTCOME", "launch receipt lost; inspect operation, never start again")
-                    deadline = time.monotonic() + 55
-                    observed = None
-                    while time.monotonic() < deadline:
-                        rc, out, _ = self.adapter("launch-inspect", fleet["name"], window,
-                                                  payload=canonical(c).encode(), timeout=10)
-                        if not rc:
-                            observed = check_receipt(c, json.loads(out))
-                            if observed.get("phase") in ("delivered", "ready", "resumed"):
-                                break
-                        time.sleep(0.2)
-                    if not observed or observed.get("phase") not in ("delivered", "ready", "resumed"):
-                        raise Fault("UNKNOWN_OUTCOME", "native launch did not verify/deliver; input withheld or outcome unknown")
-                    self.finish(op_id, "succeeded", {"launch_receipt": observed, "window": window,
-                                                    "window_id": window, "observed_at": now()})
-                    return
                 # The window the spawn opened (issue #2237): an issue start prints it
                 # last (dash-issue-session.sh --print), a scratch first — its row
                 # alone is read. No id (an older spawn), or the window it names is

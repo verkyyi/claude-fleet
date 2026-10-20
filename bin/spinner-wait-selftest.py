@@ -33,7 +33,7 @@ def main():
         for d in ('bin', 'logs', 'shim', 'conf/fleets/test', 'tmp', 'home'):
             (root / d).mkdir(parents=True)
         (root / 'conf/fleets/test/conf').touch()
-        for name in ('tmux-spinner.sh', 'fleet-degenerate.awk', 'tmux-spinner.py', 'fleet-render-watch.py', 'fleet_pending_tool.py', 'fleet_launch.py', 'fleet_agent_argv.py', 'fleet_runtime.py', 'fleet-codex-rpc.py', 'fleet-codex-session.py'):
+        for name in ('tmux-spinner.sh', 'fleet-degenerate.awk', 'tmux-spinner.py', 'fleet-render-watch.py', 'fleet_pending_tool.py', 'fleet_native_proc.py', 'fleet_agent_argv.py', 'fleet-codex-rpc.py', 'fleet-codex-session.py'):
             if (BIN / name).exists():
                 shutil.copy(BIN / name, root / 'bin' / name)
         # Shared-reader seam: never ask a live hub/lease in a drill.

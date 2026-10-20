@@ -31,12 +31,10 @@
 - [FLEET-ID.md](dev/FLEET-ID.md) — 一个窗口一个 ID：节点账本、短码与原生段
 - [ID-SWITCH.md](dev/ID-SWITCH.md) — 切到「一个窗口一个 ID」：MacBook 会话照做的切换说明书（迁移 + 开关 + 回退）
 - [WORKER.md](dev/WORKER.md) — 执行会话的规则背景与排障（流程由 SessionStart hook 给出）
-- [TASK-ACCEPTANCE.md](dev/TASK-ACCEPTANCE.md) — 无 GitHub 任务控制：12 项夹具验收与独立的 live 演练单
+- [TASK-ACCEPTANCE.md](dev/TASK-ACCEPTANCE.md) — 无 GitHub 任务控制：夹具验收与独立的 live 演练单
 - [TASK-BLOCKERS.md](dev/TASK-BLOCKERS.md) — 显式 blocker 的身份、依赖事件、授权与只读消费契约
-- [REAP-SHADOW.md](dev/REAP-SHADOW.md) — 同源回收证据聚合、影子差异和 not-actionable 边界
 - [CODEX-AUTH-RECOVERY.md](dev/CODEX-AUTH-RECOVERY.md) — Codex 认证拒绝的恢复与验收
 - [SESSION-TRANSFER.md](dev/SESSION-TRANSFER.md) · [CODEX-RUNTIME.md](dev/CODEX-RUNTIME.md) — Claude / Codex 之间换手
-- [NATIVE-OBSERVE.md](dev/NATIVE-OBSERVE.md) — 原 Codex 存活时的只读预检与观察登记，旧 hook / 消息消费分别验收
 - [CODEX-AUTH-RECOVERY.md](dev/CODEX-AUTH-RECOVERY.md) — Codex 认证恢复与后续设计
 - [AGENT-CONFIG.md](dev/AGENT-CONFIG.md) — agent 配置的团队 / 个人 / 本机三层
 - [EMIT.md](dev/EMIT.md) — 会话事实外送

@@ -35,8 +35,8 @@ with tempfile.TemporaryDirectory() as folder:
     put('docs/dev/COMPONENTS.md', (script.resolve().parent.parent /
                                 'docs/dev/COMPONENTS.md').read_text())
     groups = {
-        '终端看台与薄客户端': ('fleet_pending_tool.py', 'fleet_status_evidence.py'),
-        '执行会话与跨会话协作 MCP': ('fleet_task_recovery.py',),
+        '终端看台与薄客户端': ('fleet_pending_tool.py',),
+        '执行会话与跨会话协作 MCP': ('fleet_task_control.py',),
         '构建与验证': ('nogh-task-acceptance.py', 'nogh-task-boundary-test.py',
                    'nogh-task-browser.mjs', 'nogh-task-deny-probe.py'),
     }
@@ -53,8 +53,8 @@ with tempfile.TemporaryDirectory() as folder:
             assert by['bin/' + name]['category'] == '核心', name
     assert by['bin/fleet-pending-tool.sh']['reason'].startswith('扫描范围内无')
     check_cli(0, rows)
-    unknown = ('fleet_pending_tool_future.py', 'fleet_status_evidence_future.py',
-               'fleet_task_recovery_future.py', 'nogh-task-future.py')
+    unknown = ('fleet_pending_tool_future.py', 'fleet_native_proc_future.py',
+               'fleet_task_control_future.py', 'nogh-task-future.py')
     for name in unknown:
         put('bin/' + name, '# fixture\n')
     put('hooks/start.sh', '\n'.join(names + list(unknown)))

@@ -203,9 +203,8 @@ def command(a):
         elif a.command == 'defer':
             if 'jobs' in r['schedule']:
                 raise ValueError('cron jobs retain their own cadence; use stop --job ID for an individual termination')
-            # Only the legacy inbox road is acknowledged from the transcript; a
-            # fenced delivery (pending_delivery) settles on the runtime's receipt.
-            if r.get('agent') == 'claude' and r['status'] == 'delivering' and not r.get('pending_delivery'):
+            # The inbox road is acknowledged from the transcript.
+            if r.get('agent') == 'claude' and r['status'] == 'delivering':
                 acknowledge_claude(r)
             if r['status'] != 'active':
                 raise ValueError('loop is not active; bind it first')
@@ -264,8 +263,12 @@ def dispatch(path, now=None):
                             save(path,r)
                 except (OSError,ValueError,KeyError,TypeError,EOFError,subprocess.SubprocessError):
                     return  # Native SessionStart has not bound the root yet.
-            pending = r.get('pending_delivery')
-            if r.get('agent') == 'claude' and r['status'] == 'delivering' and not pending:
+            if r.pop('pending_delivery', None):
+                # A launch-proof delivery left from before EPIC T497 C8: its road
+                # is gone; the round stays due and goes the pane's own road.
+                if r['status'] == 'delivering':
+                    r['status'] = 'active'
+            if r.get('agent') == 'claude' and r['status'] == 'delivering':
                 current(r)
                 if not acknowledge_claude(r) and now-r.get('delivery_started_at',now) > 30:
                     r.update(status='paused',detail='Claude inbox write has no transcript acknowledgement; not resending')
@@ -278,16 +281,11 @@ def dispatch(path, now=None):
                     if not job.get('recurring', True) and job['expires_at'] is not None and job['expires_at'] <= now:
                         job['next_run_at'] = None
                 fleet_cron.refresh(r['schedule'])
-                if r['schedule']['next_run_at'] is None and not pending:
+                if r['schedule']['next_run_at'] is None:
                     r.update(status='complete', detail='Every cron job expired or stopped')
                     save(path, r)
                     return
-            if pending:
-                # A conditional delivery whose answer was unknown: settled below
-                # with the same delivery id and text, never a new send.
-                if r['status'] != 'delivering':
-                    return
-            elif r['status'] == 'waiting-quota':
+            if r['status'] == 'waiting-quota':
                 # The quota failover planner that paused it is retired (T546):
                 # release the wait, next round on the interval. compat-1v: 下一批删
                 r.update(status='active', detail='Quota wait released: the pool changes a full subscription')
@@ -298,7 +296,7 @@ def dispatch(path, now=None):
                 return
             elif r['status'] != 'active' or now < r['schedule']['next_run_at']:
                 return
-            if not pending and not durable_ready(r, now):
+            if not durable_ready(r, now):
                 save(path, r)
                 return
             r['due_since'] = r.get('due_since') or now
@@ -308,11 +306,8 @@ def dispatch(path, now=None):
                 if why:
                     defer(path, r, why)
                     return
-                if pane(r, '#{@launch}'):
-                    deliver_fenced(path, r, now)
-                    return
-                # No C3 launch on this pane (a local spawn without FLEET_LAUNCH,
-                # the transfer bridge): the original road, NOT an atomic accept.
+                # The pane's own road (EPIC T497 C8 retired the launch-proof one):
+                # the Claude inbox, or the Codex thread below — not an atomic accept.
                 if r.get('agent') == 'claude':
                     attempt(r, now, 'legacy_unfenced', 'delivering', 'claude_inbox')
                     deliver_claude(path,r,now)
@@ -428,74 +423,6 @@ def delivered(r, now, due_ids, turn, detail):
         r['last_attempt'].update(state='accepted', turn_id=turn)
     advance(r['schedule'], now)
     durable_delivered(r, due_ids, turn)
-
-
-_RUNTIME = None
-
-
-def _runtime():
-    global _RUNTIME
-    if _RUNTIME is None:
-        import fleet_runtime
-        _RUNTIME = fleet_runtime
-    return _RUNTIME
-
-
-def deliver_fenced(path, r, now):
-    """A C3 pane: a fresh v1 read, then the shared conditional accept (#4524).
-
-    Codex and Claude alike (#4617 thread/queue; #4618 / #4658 the fleet mod's
-    entry boundary — never the legacy inbox + transcript road). Only `accepted`
-    (the native turn carrying this delivery id) is a delivery. unknown keeps the
-    pending delivery and settles it with the same id and text on a later tick;
-    rejected keeps the wakeup due. A provider the adapter has no accept for ⇒
-    nothing is sent and the ledger says so. Never turn/start or peer send.
-    """
-    rt = _runtime()
-    sock = r['fleet']['session']
-    snap = rt.read(r['fleet']['pane_id'], socket=sock)
-    ident = snap.get('identity') or {}
-    run = snap.get('runtime') or {}
-    pending = r.get('pending_delivery')
-    if pending and (pending.get('generation') != r.get('generation', 0)
-                    or pending.get('native_session') != r.get('thread_id')):
-        r.update(status='paused', detail='Pending delivery belongs to an earlier loop owner or native session; not resending')
-        save(path, r)
-        return
-    if r.get('thread_id') and ident.get('native_session') != r['thread_id']:
-        return defer(path, r, 'runtime:identity_changed')
-    if run.get('state') != 'idle':
-        return defer(path, r, 'runtime:' + run.get('state', 'unknown') + (':' + run['reason'] if run.get('reason') else ''))
-    cap = rt.idle_accept_capability(ident.get('provider'))
-    if cap.get('state') != 'available':
-        return defer(path, r, 'capability_unavailable:' + (cap.get('reason') or 'unknown'))
-    if not pending:
-        pending = dict(delivery_id=str(uuid.uuid4()), text=codex_prompt(r, now), created_at=now,
-                       due_ids=[j['id'] for j in fleet_cron.pending(r['schedule'], now)] if 'jobs' in r['schedule'] else [],
-                       generation=r.get('generation', 0), native_session=r.get('thread_id'))
-    # Persist BEFORE the native write: a crash leaves a pending delivery that the
-    # next tick settles through the runtime's per-delivery journal.
-    r.update(status='delivering', pending_delivery=pending,
-             detail='Conditional delivery submitted; only a native receipt counts')
-    common = dict(delivery_id=pending['delivery_id'], native_session=ident.get('native_session'),
-                  task_generation=ident.get('generation'), observed_at=snap.get('observed_at'),
-                  observed_turn=ident.get('turn_id'))
-    attempt(r, now, 'native_idle', 'submitting', '', **common)
-    save(path, r)
-    res = rt.accept_if_idle(r['fleet']['pane_id'], snap, pending['delivery_id'], pending['text'], sock)
-    state, why = res.get('state'), res.get('reason') or ''
-    receipt = res.get('receipt') or {}
-    attempt(r, now, 'native_idle', state or 'unknown', why, **common)
-    if state == 'accepted' and res.get('delivery_id') == pending['delivery_id'] and receipt.get('turn_id'):
-        r['last_attempt']['intervening_turn'] = bool(receipt.get('intervening_turn'))
-        delivered(r, now, pending.get('due_ids', []), receipt['turn_id'], 'Wakeup accepted natively by the idle bound session')
-    elif state == 'rejected':
-        r.pop('pending_delivery', None)
-        r.update(status='active', deferred_reason='rejected:' + why, detail='Conditional delivery rejected; still due')
-    else:
-        r.update(deferred_reason='unknown:' + (why or 'no_answer'),
-                 detail='Conditional delivery unresolved; settled with the same delivery id, never resent')
-    save(path, r)
 
 
 def recover(session):

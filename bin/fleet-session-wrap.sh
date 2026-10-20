@@ -308,15 +308,18 @@ while :; do
     for a in ${cmd[@]+"${cmd[@]}"}; do [ "$prev" = --agent ] && launch_agent=$a; prev=$a; done
     [ "$launch_agent" != claude ] || python3 "$BIN/fleet_transfer_durable.py" gate-wait "$PWD" || :
   fi
-  if [ "$intmux" = 1 ] && [ -n "$(opt @launch)" ]; then
-    PATH="$SHIM_PATH" python3 "$BIN/fleet_launch.py" supervise -- "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
-  elif [ "$intmux" = 1 ]; then
+  if [ "$intmux" = 1 ]; then
+    # A window stamped @launch before the ID switch reopens as itself (EPIC T497
+    # C8): the launch proof is retired, its options come off, its ID stays.
+    if [ -n "$(opt @launch)" ]; then
+      for o in @launch @launch_receipt @launch_seed @launch_started @launch_error @launch_hook_error; do wset -u "$o"; done
+    fi
     PATH="$SHIM_PATH" python3 "$BIN/fleet_repo_authority.py" --supervise -- "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   else
     PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   fi
   rc=$?
-  unset FLEET_AUTHORITY_START FLEET_AUTHORITY_EXPECTED FLEET_AUTHORITY_RESUME_SID  # a resume requires its own one-shot reservation
+  unset FLEET_AUTHORITY_START FLEET_AUTHORITY_EXPECTED FLEET_AUTHORITY_RESUME_SID  # retired (C8): an old spawner's never rides a resume
   if [ -n "${FLEET_WORKER_CRED:-}" ]; then
     python3 "$BIN/fleet-mcp.py" --cred revoke >/dev/null 2>&1
     unset FLEET_WORKER_CRED

@@ -1293,18 +1293,6 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.assertFalse((self.node.conf / "spawn.calls").exists())
         self.assertIn("worker_start %s failed EXPIRED" % op_id, (self.node.conf / "control" / "ops.log").read_text())
 
-    def test_task_start_without_launch_contract_follows_the_id_switch(self):
-        # T604: with the hub's ID switch on (EPIC T497 C6) a placed task start
-        # carries no launch contract — the window's ID is the binding — and is
-        # admitted; off, the contract is still required.
-        d = {"version": 1, "request_id": "r1", "requested_agent": "default", "resolved_agent": "claude",
-             "agent_source": "default", "task": "T9", "generation": 1, "attempt_id": "task:T9:g1"}
-        start = {"kind": "scratch", "repo": "example/project", "task": "T9", "dispatch": d}
-        with patch.dict(os.environ, {"FLEET_ID_SWITCH": "off"}), self.assertRaises(Fault):
-            validate_write("worker_start", dict(start))
-        with patch.dict(os.environ, {"FLEET_ID_SWITCH": "on"}):
-            validate_write("worker_start", dict(start))
-
     def test_task_record_on_a_start(self):
         # issue #3325: the hub's task record T<n> rides a new / scratch start
         # (FLEET_CONTROL_TASK to the adapter, never an argv word).
@@ -1416,47 +1404,6 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         (self.node.conf / "spawn-crash").unlink()
         self.assertEqual((crash["status"], crash["result"]["error"]["exit"]), ("unknown", 1))
         self.assertEqual(len((self.node.conf / "scratch.calls").read_text().splitlines()), 1)
-
-    def test_start_task_scratch_reads_its_record(self):
-        # T604: a dispatched task the hub placed here arrives with no words — its
-        # seed is the record's own (title + body) and so is the agent file it was
-        # dispatched as (`template`), read back off T<n>; a file not on this
-        # machine opens a plain session given the task, one stderr line.
-        rec = self.node.conf / "record.json"
-        self.node.script(self.node.bin / "fleet-task-record.sh", '''#!/bin/bash
-printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/record.calls"
-[ "$1" = get ] && cat "$FLEET_CONF_DIR/record.json"
-''')
-        self.node.script(self.node.bin / "fleet-agent-def.py", '''import sys
-sys.exit(0 if sys.argv[1:3] == ["find", "fleet-worker"] else 1)
-''')
-        def record(template):
-            payload = json.dumps({"title": "派发不再锁死本机", "body": "两行\n正文", "template": template})
-            rec.write_text(json.dumps({"task": {"id": "T604", "title": "派发不再锁死本机", "request_payload": payload}}))
-        record("fleet-worker")
-        op = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="t604-1",
-                                                           params={"kind": "scratch", "task": "T604"}))["operation_id"])
-        self.assertEqual((op["status"], op["result"]["window"]), ("succeeded", "@13"))
-        call = (self.node.conf / "scratch.calls").read_text()
-        self.assertRegex(call, r"--task T604 --as fleet-worker --prompt-file=\S+\n$")
-        self.assertEqual((self.node.conf / "scratch.seed").read_text(), "派发不再锁死本机\n\n两行\n正文\n")
-        self.assertEqual((self.node.conf / "record.calls").read_text(), "get T604\n")
-        (self.node.conf / "scratch.calls").unlink()
-        record("mine-only")
-        op = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="t604-2",
-                                                           params={"kind": "scratch", "task": "T604"}))["operation_id"])
-        self.assertEqual(op["status"], "succeeded")
-        call = (self.node.conf / "scratch.calls").read_text()
-        self.assertNotIn("--as", call)
-        self.assertIn("--prompt-file=", call)
-        # words that came with the start (stdin) are the seed: the record is not read
-        (self.node.conf / "scratch.calls").unlink()
-        (self.node.conf / "record.calls").unlink()
-        op = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="t604-3",
-                                                           params={"kind": "scratch", "task": "T604", "body": "自带的话"}))["operation_id"])
-        self.assertEqual(op["status"], "succeeded")
-        self.assertEqual((self.node.conf / "scratch.seed").read_text(), "自带的话")
-        self.assertFalse((self.node.conf / "record.calls").exists())
 
     def test_start_scratch_with_unsent_draft(self):
         draft = "检查 #42 完整文字 " * 40

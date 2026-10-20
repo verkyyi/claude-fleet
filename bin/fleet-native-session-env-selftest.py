@@ -148,7 +148,7 @@ def main():
     hook_observations = []
     seed_observations = []
     lifecycle_names = (*NAMES, 'FLEET_CODEX_LAUNCHER_PID', 'FLEET_LAUNCH_CONTEXT', 'FLEET_AUTHORITY_CONTEXT')
-    launch_api = runpy.run_path(str(arguments.fleet_root / 'bin/fleet_launch.py')) if arguments.hooks else None
+    launch_api = runpy.run_path(str(arguments.fleet_root / 'bin/fleet_native_proc.py')) if arguments.hooks else None
 
     def check(condition, message):
         if not condition:
@@ -218,7 +218,7 @@ def main():
                 hook_script = root / 'hook.py'
                 hook_script.write_text(HOOK)
                 command = shlex.join([sys.executable, str(hook_script),
-                    str(arguments.fleet_root / 'bin/fleet_launch.py'), str(hook_results),
+                    str(arguments.fleet_root / 'bin/fleet_native_proc.py'), str(hook_results),
                     str(arguments.fleet_root / 'bin/fleet-codex-rpc.py') if arguments.fork_seed else '', *lifecycle_names])
                 with (codex_home / 'config.toml').open('a') as configuration:
                     configuration.write('[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\n'

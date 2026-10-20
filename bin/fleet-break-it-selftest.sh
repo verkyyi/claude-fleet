@@ -1,5 +1,5 @@
 #!/bin/bash
-# selftest-parts: 14 BREAK_PART
+# selftest-parts: 13 BREAK_PART
 # fleet-break-it-selftest.sh — every known way to break the fleet, done for real
 # in a sandbox, and the fleet putting itself back (issue #1786, EPIC #1776 C10).
 #
@@ -140,15 +140,15 @@
 #   report-parent-cleared                           bin/fleet-report-parent.sh + fleet_task_control.py receive
 #                                                   (the parent by its ID: fleet_id_take, fleet-id.sh route)
 #   id-switch-flip-report                           bin/fleet-report-parent.sh + fleet_task_control.py report
-#                                                   (the ID switch: ids/.switch, exit 5 → the ID road)
+#                                                   (a task's report is its ID's result, whatever ids/.switch says)
+#   c8-old-supervisor-reopen                        bin/fleet_launch.py (the C8 shim: supervise retires @launch*
+#                                                   and goes the ordinary road), fleet-session-wrap.sh
 #   epic-member-dead-record                         bin/fleet-epic-tick.py (a member by its ID chain:
 #                                                   batons_of, fleet-id.sh family)
 #   epic-driver-continued                           bin/fleet-epic-tick.py + bin/fleet_id.py (the driver's
 #                                                   line: lineage_of, task_root, adopted — C18)
-#   launch-binary-renamed                           bin/fleet_launch.py (same_executable / native_tool:
+#   launch-binary-renamed                           bin/fleet_native_proc.py (same_executable / native_tool:
 #                                                   a hard-linked binary is one file, T524)
-#   launch-preswitch-reopen                         bin/fleet_launch.py (by_id_admit: a pre-switch @launch
-#                                                   window reopens as its ID, C15)
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
 #   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
@@ -187,8 +187,8 @@
 # BREAK_PART=K/N runs the K-th of N contiguous slices of this script's drills, in
 # the table's order (issue #2955: the whole list outgrew the gate's 240 s per-test
 # ceiling), balanced by each drill's wall time in bin/break-it-durations.txt
-# (fleet-break-it-part.py, issue #2694). This file runs 1/14 by default,
-# ids fleet-break-it-selftest.sh#2..#14 the rest (T525) —
+# (fleet-break-it-part.py, issue #2694). This file runs 1/13 by default,
+# ids fleet-break-it-selftest.sh#2..#13 the rest (T525) —
 # each its own test, its own ceiling, its own durations row; `BREAK_PART=all` runs
 # every drill in one go. BREAK_ONLY / ids win over the part. Drills keep no state
 # across each other beyond lazy, idempotent rigs, so any
@@ -4125,85 +4125,21 @@ drill_idle_timeout_starves_merged() {
   WHAT='闲置那一遍超时（rc=124）：同一拍里合并 PR 那一遍照样先跑、交给清理，超时照记一行'
 }
 
-# An auto send one machine declines (2026-10-08: mac-d's `fleet discover:
-# fork/exec … invalid argument`, three times) was a failure, and an unknown one
-# left a GitHub claim with no session that only --force got past (issue #1610).
-drill_task_outage_recovery() {
-  # the wall of the whole fixture file (17 cases, one driving six CLI calls with
-  # two offline back-offs: ~12 s on an idle Mac) — the test's speed, not a recovery
-  # the product promises; 15 s went red at 15.3 s on a busy runner (#4570)
-  CAP=30; local out t0
-  t0=$(now)
-  out=$(bash "$BIN/fleet-task-recovery-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='断线及重放保留同一任务和进程，超限明确待核对'
-}
-
-drill_task_stop_replay_resumed() {
-  CAP=15; local out t0
-  t0=$(now)
-  out=$(python3 "$BIN/fleet_task_recovery_test.py" RecoveryTests.test_old_stop_after_native_resume_is_refused 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='同一任务恢复了新原生进程，积压的旧停止证明不能释放它'
-}
-
 drill_task_report_fence() {
   CAP=15; local out t0
   t0=$(now)
   out=$(bash "$BIN/fleet-task-control-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='任务结果按身份与代次归属，未知不伪造完成或取消'
+  WHAT='排着的子回报按父 ID 送达（关了交接班 / 上一级，没人才进提醒）；同一事件重连不重投；任务记录读不到是 UNKNOWN，不伪造完成或取消'
 }
 
 drill_accepted_await_by_number() {
   CAP=60; local t0
   t0=$(now)
-  suite_holds fleet-await-selftest.sh 'an accepted launch is awaited as its task' \
-    '…no @origin adopted onto accepted work' 'an accepted launch with no task exits 5' || return 1
+  suite_holds fleet-await-selftest.sh 'a hub-authority login: no spawn by issue number (exit 5)' \
+    '…and nothing spawned' || return 1
   SECS=$(since "$t0")
-  WHAT='已接受任务按 T 等待，不按单号等账本、不领养 @origin；hub 仓库不按单号派（fleet-await-selftest.sh 真跑，这里按名守住）'
-}
-
-drill_task_blocker_fence() {
-  CAP=15; local out t0
-  t0=$(now)
-  out=$(python3 "$BIN/fleet_task_blockers_test.py" 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='独立 blocker 按完整身份投影，原生 attention 和未知/过期观察不清阻塞'
-}
-
-drill_repo_cutover_inflight() {
-  CAP=15; local out t0
-  t0=$(now)
-  out=$(python3 "$BIN/fleet_repo_authority_test.py" RepoAuthorityTests.test_final_gate_reserves_before_window_creation 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='最后一道本机门先持久预留；暂停且没有窗口时，空清单不能证明排空'
-}
-
-drill_repo_cutover_stop_binding() {
-  CAP=15; local out t0
-  t0=$(now)
-  out=$(python3 "$BIN/fleet_repo_authority_test.py" RepoAuthorityTests.test_unbound_and_wrong_native_receipt_refused 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='未知原生身份及换会话后的旧停止证明均拒绝'
-}
-
-drill_launch_receipt_fence() {
-  CAP=15; local out t0
-  t0=$(now)
-  out=$(bash "$BIN/fleet-launch-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='原生启动回执拒绝旧身份与错误 provider，未验证不交付任务'
-}
-
-# An accepted task that opens on THIS machine had no launch binding — the hub
-# binds only a remote start — and both spawners refused it (issue #4754).
-drill_local_task_unbound() {
-  CAP=30; local out t0
-  t0=$(now)
-  out=$(bash "$BIN/local-task-launch-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='本机开的 accepted task 自己经入口 claim 拿到启动绑定，带 @launch 开窗；认领被拒不开窗'
+  WHAT='hub 权威的登录不按单号派（NO-WORKER，指向 task 工具）；legacy 登录照旧（fleet-await-selftest.sh 真跑，这里按名守住）'
 }
 
 drill_dispatch_identity_fallback() {
@@ -4415,46 +4351,6 @@ PY
   [ "$out" = "no-pr no-pr None no-pr no-pr None" ] \
     || { WHY="a no-policy window bound to a ticket is not routed to the closed-ticket reap (got: $out)"; return 1; }
   WHAT="迁移带上 @fleet_role / @reap_policy；无策略、绑了单（或 EPIC）的窗口走「单已关才收」，sleep on 也一样，keep 不收"
-}
-
-# A hub task's session reopened by the fleet (a ver-stale / cfg-stale reopen, a
-# quota migrate, a history resume) came back WITHOUT its launch binding: a fresh
-# start the hub refused (409) — the old window gone, the new one a bare shell,
-# @task lost (claude-fleet#4974).
-drill_task_reopen_rebind() {
-  CAP=10; local t0 out
-  t0=$(now)
-  grep -q 'stamp="\$stamp\$tlstamp"' "$BIN/fleet-migrate.sh" \
-    && grep -q 'transfer-check 2>&1' "$BIN/fleet-migrate.sh" \
-    && grep -q 'fleet_task_rebind_stamp "\$tref" "\$rsid"' "$BIN/dash-restore-session.sh" \
-    && grep -q 'fleet_launch.py" rebind "\$TASK_REF" "\$RESUME_SID"' "$BIN/dash-raw-session.sh" \
-    || { WHY="a reopen road does not carry the task's launch binding (migrate · history restore · parked wake)"; return 1; }
-  out=$(cd "$BIN" && PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
-import json
-from unittest import mock
-import fleet_launch as launch
-c = dict(version=1, operation_id="33333333-3333-4333-8333-333333333333", task="T7", owner="o", generation=1,
-         worker_id="22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333",
-         provider="claude", attempt_id="task:T7:g1")
-r = dict(c, native_session="44444444-4444-4444-8444-444444444444", actual_provider="claude", pid=42,
-         birth="b", executable="/x/claude", phase="verified")
-t = dict(authority_version=1, owner="o", generation=1, attempt_id="task:T7:g1", resolved_agent="claude",
-         execution_owner=c["worker_id"], state="running", outcome="", evidence=json.dumps(r))
-writes = []
-with mock.patch.object(launch, "task_call", side_effect=lambda ctx, m=None: writes.append(m) or t), \
-     mock.patch.object(launch, "same_process", return_value=False):
-    got = launch.rebind("T7", r["native_session"])
-    try:
-        launch.rebind("T7", "55555555-5555-4555-8555-555555555555"); other = "bound"
-    except launch.NotBound:
-        other = "notbound"
-print(got["launch"] == c, got["fleet_id"] == c["operation_id"], writes == [None, None], other)
-PY
-)
-  SECS=$(since "$t0")
-  [ "$out" = "True True True notbound" ] \
-    || { WHY="rebind does not hand back the record's own binding, read-only (got: $out)"; return 1; }
-  WHAT="重开 hub 任务会话（换新 / 配置旧 / 配额迁移 / 历史恢复）带着原 T 绑定走：/exit 前先问记录还认不认这个会话，不认就留着原会话；新窗口在启动器读之前盖上 @launch / @launch_receipt / @task，按同一个执行者 resume"
 }
 
 # A selftest's tmux server outlived its test (a failure, a timeout, a missed
@@ -5191,11 +5087,9 @@ drill_codex_home_trust() {
 drill_transfer_norepo() {
   CAP=60
   local started; started=$(now)
-  suite_holds 'fleet-transfer-selftest.sh#6' 'norepo_source 91' 'refusing a second writer' 'mixed cron ownership/delivery/rollback' || return 1
-  suite_holds fleet-loop-selftest.sh fleet-loop-selftest.py || return 1
-  grep -q test_two_cron_jobs_deliver_independently_once_and_preserve_expiry "$BIN/fleet-loop-selftest.py" \
-    || { WHY='fleet-loop-selftest.py no longer carries the independent cron delivery test'; return 1; }
-  SECS=$(since "$started"); WHAT='managed HOME provenance; panel refusals leave source alive (run for real by fleet-transfer-selftest.sh#6, held here by name)'
+  suite_holds fleet-transfer-norepo-selftest.sh 'fleet-transfer-selftest.sh" --norepo' \
+    test_two_cron_jobs_deliver_independently_once_and_preserve_expiry || return 1
+  SECS=$(since "$started"); WHAT='managed HOME provenance; panel and busy refusals leave source alive (run for real by fleet-transfer-norepo-selftest.sh, held here by name)'
 }
 
 drill_transfer_preparation_retry() {
@@ -5241,7 +5135,7 @@ drill_transfer_proxy_home() {
   local started; started=$(now)
   python3 "$BIN/fleet-transfer-auth-selftest.py" ProxyHomeAuth >"$WORK/transfer-proxy-home.out" 2>&1 \
     || { WHY="$(tail -8 "$WORK/transfer-proxy-home.out" | tr '\n' ' ')"; return 1; }
-  bash "$BIN/fleet-transfer-selftest.sh" --proxy-home >>"$WORK/transfer-proxy-home.out" 2>&1 \
+  bash "$BIN/fleet-transfer-proxy-home-selftest.sh" >>"$WORK/transfer-proxy-home.out" 2>&1 \
     || { WHY="$(tail -8 "$WORK/transfer-proxy-home.out" | tr '\n' ' ')"; return 1; }
   SECS=$(since "$started"); WHAT='owned proxy mapping; forged/missing/unauthorized targets refuse; clean Stop then native successor bound'
 }
@@ -5249,7 +5143,7 @@ drill_transfer_proxy_home() {
 drill_transfer_proxy_auth() {
   CAP=10
   local started; started=$(now)
-  python3 "$BIN/fleet-transfer-auth-selftest.py" TransferAuth >"$WORK/transfer-auth.out" 2>&1 \
+  python3 "$BIN/fleet-transfer-auth-selftest.py" >"$WORK/transfer-auth.out" 2>&1 \
     || { WHY="$(tail -8 "$WORK/transfer-auth.out" | tr '\n' ' ')"; return 1; }
   SECS=$(since "$started"); WHAT='proxy lease checked; no local credentials; refusal leaves source untouched'
 }
@@ -5366,14 +5260,6 @@ drill_codex_mcp_busy() {
   SECS=$(since "$t0"); WHAT="精确配置的常驻服务可闲置，真实任务及未知身份保留"
 }
 
-drill_reap_shadow_race() {
-  CAP=15; local t0 out
-  t0=$(now)
-  out=$(python3 "$BIN/fleet-reap-shadow-selftest.py" 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='同源影子证明按 turn/子进程/lease 失效，未知逐维保留，永不授予动作'
-}
-
 drill_c9_live_unproven() {
   CAP=15; local t0 out
   t0=$(now)
@@ -5382,52 +5268,12 @@ drill_c9_live_unproven() {
   WHAT='真实 C9 的缺观察、旧代次、共享目标与 IPv6 失败均拒绝；fixture 证据不升格 live'
 }
 
-drill_runtime_stale_idle() {
-  CAP=10; local t0 out
-  t0=$(now)
-  out=$(python3 "$BIN/fleet-runtime-selftest.py" Snapshot 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='过期、倒退时钟、换代、换 turn 与 Stop/MERGED 都不能把旧 idle 变成投递或回收许可'
-}
-
-drill_runtime_idle_accept_unavailable() {
-  CAP=10; local t0 out
-  t0=$(now)
-  out=$(python3 "$BIN/fleet-runtime-selftest.py" ConditionalAcceptance 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='缺条件接受能力的 provider 零投递、零回执；旧 idle/代次、迟到 ACK、重复及未知门均不能授权'
-}
-
-drill_runtime_idle_accept_claude() {
-  CAP=90; local t0 out
-  t0=$(now)
-  out=$(python3 "$BIN/fleet-runtime-selftest.py" ClaudeIdleAccept ClaudePostAccept 2>&1) || { WHY="$out"; return 1; }
-  # The real engine where claude >= 2.1.295 is installed (SKIP elsewhere).
-  out=$(bash "$BIN/fleet-idle-accept-claude-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='Claude 入口边界条件接受：忙时预检拒、不提交；草稿/换轮/clear/超时在 prompt.submit 入口 drop、不补投；回执落盘且在 hidden context，断线后按回执结清，零重发'
-}
-
-drill_runtime_idle_accept_codex() {
-  CAP=60; local t0 out
-  t0=$(now)
-  out=$(python3 "$BIN/fleet-runtime-selftest.py" CodexIdleAccept 2>&1) || { WHY="$out"; return 1; }
-  # The real app-server where codex >= 0.162 is installed (SKIP elsewhere).
-  out=$(bash "$BIN/fleet-idle-accept-native-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='Codex 原生 start-if-idle：忙时被拒且同锁删除、从不补跑；断线后按 clientId 结清，回执跨连接可查，扫不到锚点为 unknown，零重发'
-}
-
 drill_loop_due_display_gate() {
   CAP=120; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet-loop-selftest.py" IdleDispatchTests 2>&1) || { WHY="$out"; return 1; }
-  # The real app-server where codex >= 0.162 is installed (SKIP elsewhere).
-  out=$(bash "$BIN/fleet-loop-idle-native-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
-  # The real Claude engine + fleet mod where claude >= 2.1.295 is installed (#4658; SKIP elsewhere).
-  out=$(bash "$BIN/fleet-loop-idle-claude-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='Stop→looping 只有自己的 loop 时到期照投且仅一次；真 bg/tool/提问/草稿/近期输入/转交带原因延后；C3 窗格 Codex 与 Claude 同走条件接受：accepted 才记，rejected 仍到期，unknown 同 id 按回执结清，绝不走旧 inbox，缺能力的 provider 不投'
+  WHAT='Stop→looping 只有自己的 loop 时到期照投且仅一次；真 bg/tool/提问/草稿/近期输入/转交带原因延后；切换前启动证明路留下的待结投递丢掉，这一轮照样到期、走窗格自己的路只投一次'
 }
 
 drill_pending_observation_stale() {
@@ -5449,51 +5295,6 @@ drill_native_resume_default_permissions() {
   fi
   SECS=$(since "$t0")
   WHAT='真实composer的resume不注入权限默认覆盖，显式/锁定策略与hooks保留'
-}
-
-drill_native_cleanup_fencing() {
-  CAP=60; local t0 out
-  t0=$(now)
-  out=$(python3 "$BIN/fleet-native-cleanup-selftest.py" 2>&1) || { WHY="$out"; return 1; }
-  out=$(python3 "$BIN/fleet_native_continue_test.py" Journal.test_product_entry_refuses_known_missing_capabilities_before_any_action 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='共同transition排他与迟到cleanup绑定检查；缺native能力动作前拒绝'
-}
-
-drill_native_authority_ack() {
-  CAP=15; local t0 out
-  t0=$(now)
-  out=$(python3 "$BIN/fleet_native_continue_test.py" AuthorityAck 2>&1) || { WHY="$out"; return 1; }
-  out=$(python3 "$BIN/fleet_native_registration_test.py" 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='准确admission ACK；迟到hook不能覆盖后继receipt'
-}
-
-drill_repo_authority_spelling() {
-  CAP=30; local t0 out
-  t0=$(now)
-  out=$(python3 "$BIN/fleet_repo_authority_test.py" \
-          PoolAuthorityTests.test_registered_spelling_with_capitals_is_canonical_in_context \
-          RepoAuthorityTests.test_native_hook_matches_admission_by_canonical_repo 2>&1) || { WHY="$out"; return 1; }
-  out=$(python3 "$BIN/fleet_native_registration_test.py" \
-          Registration.test_registered_spelling_with_capitals_registers 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='注册名含大写的仓库：上下文带规范名，Claude / Codex 的 SessionStart 都登记上'
-}
-
-drill_repo_start_unobserved() {
-  CAP=120;  # a cold go test build is ~40 s on a CI runner
-  local t0 out
-  t0=$(now)
-  out=$(python3 "$BIN/fleet_repo_authority_test.py" \
-          PoolAuthorityTests.test_missing_receipt_says_why \
-          PoolAuthorityTests.test_missing_receipt_with_an_older_hub_is_said 2>&1) || { WHY="$out"; return 1; }
-  if command -v go >/dev/null 2>&1; then
-    out=$(cd "$BIN/../tokenledger" && go test ./hub/store/ -run TestRepoStartUnobservedCloses -count=1 2>&1) \
-      || { WHY="$out"; return 1; }
-  fi
-  SECS=$(since "$t0")
-  WHAT='没被 observe 就退出的启动：supervise 报 unobserved，Hub 只把无 native 的 starting 结成 abandoned，迟到的 observe 被拒'
 }
 
 # ---- authority-retired-endpoint-blocks (#4831): a retired endpoint's open
@@ -5544,26 +5345,6 @@ drill_authority_open_issue_legacy_task() {
     || { WHY="fleet-task-record.sh settle has no --drained"; return 1; }
   _drill_go_tests 'TestNodeTaskSettleDrained' "$ROOT/tokenledger/hub/api/fleet_task_settle_test.go" \
     '旧式 T 记录 drain：issue 还开着、worker 已停（无 lease / local start / inventory）的结成 closed，不问 GitHub、issue 不动；worker 还活着的照样挡（go test）' || return 1
-  SECS=$(since "$t0")
-}
-
-# ---- task-execution-retained-window-gone (#4964): a hub task's window closed
-# before its stop receipt was acknowledged — the pane binding verify_stopped
-# reads is gone, so the receipt deferred forever and execution_owner never let
-# go; an unclaimed record's cancel died on a missing execution_owner key.
-drill_task_execution_retained_window_gone() {
-  CAP=60
-  local t0 out rc
-  t0=$(now)
-  grep -q '"release"' "$BIN/fleet_task_control.py" \
-    || { WHY="fleet_task_control.py has no release action"; return 1; }
-  out=$(cd "$ROOT/bin" && python3 -W ignore::ResourceWarning -m unittest -q \
-        fleet_task_recovery_test.RecoveryTests.test_retired_binding_needs_window_and_process_gone \
-        fleet_task_recovery_test.RecoveryTests.test_release_retired_running_record_cancels_then_acks \
-        fleet_task_recovery_test.RecoveryTests.test_release_refuses_without_witness_or_on_live_native \
-        fleet_task_control_test.TaskControlTests.test_cancel_unclaimed_record_without_execution_owner 2>&1); rc=$?
-  [ "$rc" = 0 ] || { WHY="release / unclaimed cancel is red: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
-  WHAT='窗口先关、stop 回执对不上 pane：release 只认本机留着的 stop 回执，窗口没了且那个进程没了才放（没回执 / 进程还在 / 读不到都不放），没 outcome 的先 cancel；没人认领的 cancel 直接结成 cancelled（unittest）'
   SECS=$(since "$t0")
 }
 
@@ -5699,44 +5480,6 @@ drill_authority_owner_cutover() {
     '一个人的全程：dry-run 零写入，freeze 只挡本人，本人 legacy 会话凭原生停止回执 stop_ack 后 apply，再 freeze → rollback；每步按 revision CAS、幂等、写审计（go test）' || return 1
   _drill_authority_logins || return 1
   SECS=$(since "$t0")
-}
-
-drill_native_continue_once() {
-  CAP=15; local t0 out
-  t0=$(now)
-  out=$(python3 "$BIN/fleet_native_continue_test.py" Journal Readiness Adopt AdoptLock OriginalMessage 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='未知原生元数据与 pending 拒绝；停止/启动失败或丢确认不重放副作用；原消息丢 ACK 按回执结清不重发'
-}
-
-drill_native_continue_stop_loop() {
-  CAP=15; local t0 out
-  t0=$(now)
-  # The real-Codex half is bin/fleet_native_continue_native_test.py --loop-control
-  # (opt-in: it needs a codex binary); these are its contracts, run everywhere.
-  out=$(python3 "$BIN/fleet_native_continue_test.py" Readiness Journal.test_message_is_the_resumed_lifetimes_first_turn_and_binds_it \
-        Journal.test_unproven_target_never_gets_the_message_or_relaunches 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='忙、排队输入、待答请求或 goal 的原会话不停不投；原消息只做续起新 lifetime 的第一轮，由它的 SessionStart 绑定'
-}
-
-drill_native_continue_mcp_remount() {
-  CAP=30; local t0 out
-  t0=$(now)
-  out=$(python3 "$BIN/fleet-worker-life-selftest.py" "$BIN" McpRestartTest.test_remounted_skips_only_contract_and_readiness \
-        McpRestartTest.test_shell_exec_is_offered_to_codex_only 2>&1) || { WHY="$out"; return 1; }
-  out=$(python3 "$BIN/fleet_native_continue_test.py" Readiness.test_only_the_current_launchers_exact_mount_is_remounted 2>&1) \
-    || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='只有当前 launcher 原样挂载的 fleet MCP 服务免重启契约与就绪；身份、其下作业照旧拒绝；strict 外与 Claude 不受理'
-}
-
-drill_native_observe_missing() {
-  CAP=15; local t0 out
-  t0=$(now)
-  out=$(python3 "$BIN/fleet_native_observe_test.py" Recovery LocalRegistration 2>&1) || { WHY="$out"; return 1; }
-  SECS=$(since "$t0")
-  WHAT='丢观察与丢确认保留原执行；只有原 kernel/RPC/reservation 的精确确认允许登记'
 }
 
 drill_repo_authority_case() {
@@ -5949,14 +5692,13 @@ drill_report_parent_cleared() {
 }
 
 # The hub's ID switch flipped under a running session (EPIC T497 C6): the window
-# still carries the old launch binding (@launch), and its report went to the task
-# record, which the hub now refuses (409 ID_SWITCH) — the result was lost, and so
-# was every report until someone reopened the window. The gate is «the window has
-# an ID» now: with the switch on (the hub's word in ids/.switch) the report is a
-# result on the window's ID; flipped back, the window takes the old road again —
-# twice round, every report lands somewhere.
+# still carried the old launch binding (@launch), and its report went to the task
+# record, which the hub refused (409 ID_SWITCH) — the result was lost, and so was
+# every report until someone reopened the window. Since C8 the gate is «the window
+# has an ID» whatever the switch says: a task's report is a result on its ID,
+# with or without a pre-C8 @launch, the switch on or off — twice round.
 drill_id_switch_flip_report() {
-  CAP=30; local d="$WORK/isf" L="isf$$" sp spid f w p t0 n got out round
+  CAP=30; local d="$WORK/isf" L="isf$$" sp spid f w p t0 n got out round word
   [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
   mkdir -p "$d/conf/ids" "$d/tt"
   rtm() { TMUX_TMPDIR="$d/tt" FLEET_ALLOW_TMUX_DESTROY=1 "$REAL_TMUX" -L "$L" "$@"; }
@@ -5971,19 +5713,35 @@ drill_id_switch_flip_report() {
   nres() { rse python3 "$BIN/fleet_id.py" get "$f" --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["results"]))'; }
   t0=$(now); n=0
   for round in 1 2; do
-    printf 'on %s\n' "$(date +%s)" > "$d/conf/ids/.switch"
-    out=$(rse env TMUX_PANE="$p" bash "$BIN/fleet-report-parent.sh" --state waiting --outcome succeeded --summary "round $round" 2>&1)
-    n=$((n + 1)); got=$(nres)
-    [ "$got" = "$n" ] || { rtm kill-server 2>/dev/null; WHY="switch on, round $round: $got results on the ID, want $n — the report went to the refused record [$out]"; return 1; }
-    printf 'off %s\n' "$(date +%s)" > "$d/conf/ids/.switch"
-    out=$(rse env TMUX_PANE="$p" bash "$BIN/fleet-report-parent.sh" --state waiting --outcome succeeded --summary "back $round" 2>&1)
-    got=$(nres)
-    [ "$got" = "$n" ] || { rtm kill-server 2>/dev/null; WHY="switch off, round $round: the report skipped the old road [$out]"; return 1; }
+    for word in on off; do
+      printf '%s %s\n' "$word" "$(date +%s)" > "$d/conf/ids/.switch"
+      out=$(rse env TMUX_PANE="$p" bash "$BIN/fleet-report-parent.sh" --state waiting --outcome succeeded --summary "$word $round" 2>&1)
+      n=$((n + 1)); got=$(nres)
+      [ "$got" = "$n" ] || { rtm kill-server 2>/dev/null; WHY="switch $word, round $round: $got results on the ID, want $n [$out]"; return 1; }
+    done
   done
   SECS=$(since "$t0")
   [ "$(rtm display-message -p -t "$w" '#{@fleet_id}')" = "$f" ] || { rtm kill-server 2>/dev/null; WHY="the window lost its ID across the flips"; return 1; }
   rtm kill-server 2>/dev/null
-  WHAT="开关来回切两次：开时回报写在窗口 ID 上，关时回到旧路；窗口和它的 ID 一直在"
+  WHAT="开关怎么切都一样：任务窗口（带不带切换前的 @launch）的回报都写在它的 ID 上，两轮四次一次不丢；窗口和它的 ID 一直在"
+}
+
+# A window a pre-C8 launch supervisor ran (T505's @1156, the T497 driver's @1052:
+# FLEET_LAUNCH_CONTEXT / FLEET_LAUNCH_SUPERVISOR in its environment, @launch on the
+# window) is reopened on the C8 release — a version-stale reopen, the exit page's
+# ↵, a restore — by the new wrapper or by an older wrapper still calling
+# `fleet_launch.py supervise`. It comes back as itself: the same window and ID,
+# its conversation resumed, no hub asked; the retired proof's options come off.
+drill_c8_old_supervisor_reopen() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(cd "$BIN" && python3 fleet_hub_rest_start_test.py \
+        CredentialStartTests.test_pre_c8_launch_window_reopens_as_itself \
+        CredentialStartTests.test_an_older_wrapper_through_the_retired_supervisor 2>&1) || { WHY="$out"; return 1; }
+  grep -q 'retire(pane)' "$BIN/fleet_launch.py" \
+    || { WHY="fleet_launch.py supervise no longer retires the window's @launch* before the ordinary road"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='切换前的旧启动监督窗口在 C8 版本上重开（新包装器 / 旧包装器经 fleet_launch.py supervise）：同一个窗口、同一个 ID 接着 resume，不问 hub，@launch 系列选项拿掉'
 }
 
 # An EPIC member whose window closed with no result while its record stayed open
@@ -6040,11 +5798,6 @@ PY
   WHAT="驱动被回收后 continue 出新 ID：父 = 整条 prev 线，接班窗口派的子记录（只带 parent_session）仍认作本批成员"
 }
 
-# A version switch renames every running Claude (T524): one release binary is
-# hard-linked as tools/claude/<sha>/claude and <sha>/.release/artifacts/claude-<ver>-…,
-# and macOS names a process by whichever link was read last. The launch proof lost
-# its receipt (T510) and the hook refused the «non-native» ancestor (T522). Here the
-# kernel's answer is the other link: still the same process, still Claude.
 drill_launch_binary_renamed() {
   CAP=10; local d="$WORK/lbr" t0 out
   mkdir -p "$d/tools" "$d/rel/.release/artifacts"
@@ -6054,34 +5807,19 @@ drill_launch_binary_renamed() {
   out=$(cd "$BIN" && python3 - "$d" <<'PY'
 import sys
 from unittest import mock
-import fleet_launch as launch
+import fleet_native_proc as proc
 d = sys.argv[1]
 receipt = dict(pid=50, ppid=49, birth="b", executable=d + "/tools/claude")
 seen = dict(receipt, executable=d + "/rel/.release/artifacts/claude-2.1.295-darwin-arm64")
-with mock.patch.object(launch, "process", return_value=seen), \
-     mock.patch.object(launch.os, "getppid", return_value=50):
-    print(launch.same_process(receipt), launch.native_parent()["actual_provider"])
+with mock.patch.object(proc, "process", return_value=seen), \
+     mock.patch.object(proc.os, "getppid", return_value=50):
+    print(proc.same_process(receipt), proc.native_parent()["actual_provider"])
 PY
 )
   SECS=$(since "$t0")
   [ "$out" = "True claude" ] \
     || { WHY="a running Claude seen under its release artifact link read [$out], want «True claude»"; return 1; }
-  WHAT="版本切换让在跑的 Claude 换了个硬链接名：启动凭证照样认得同一个进程、同一个 Claude"
-}
-
-# A window opened before the hub's ID switch carries @launch (EPIC T497 C15). Reopened
-# with the switch on — ↵ on its exit page, a ver-stale migrate, a restore — the
-# launcher asked the task record, the hub answered ID_SWITCH, and the session stopped
-# on «Session exited unexpectedly» with its transcript intact (T505, 2026-10-20). It
-# is the same ID now: the ledger's newest segment resumed, no record asked, and a
-# refusal names its item. The supervisor's real logic; native processes are fakes.
-drill_launch_preswitch_reopen() {
-  CAP=20; local t0 out
-  t0=$(now)
-  out=$(cd "$BIN" && env -u FLEET_CONF_DIR PYTHONDONTWRITEBYTECODE=1 python3 fleet-launch-selftest.py IdRoad 2>&1) \
-    || { WHY="the ID road refused a pre-switch window: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
-  SECS=$(since "$t0")
-  WHAT="切换前开的窗口在开关 on 后 ↵ / 版本重开：同一个 ID、按账本最新段接回原会话，不问任务记录；对不上时说是哪一项"
+  WHAT="版本切换让在跑的 Claude 换了个硬链接名：进程身份照样认得同一个进程、同一个 Claude"
 }
 
 # mcp-release-path-pinned (T598, EPIC T497 C19): a window a tool call spawned launches
@@ -6504,7 +6242,7 @@ FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill
 PART_IDS=''
-part=${BREAK_PART:-1/14}
+part=${BREAK_PART:-1/13}
 if [ -z "${BREAK_ONLY:-}" ] && [ "$part" != all ]; then
   case "$part" in
     [1-9]/[1-9]|[1-9]/[1-9][0-9]|[1-9][0-9]/[1-9][0-9]) pk=${part%/*} pn=${part#*/} ;;

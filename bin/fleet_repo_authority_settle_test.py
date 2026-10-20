@@ -19,7 +19,7 @@ WORKER = "fleet-uuid/fid"
 
 
 def native_of(pid):
-    p = migration.launch.process(pid)
+    p = migration.proc.process(pid)
     return dict(worker_id=WORKER, native_session="sid-%d" % pid, pid=pid, birth=p["birth"], executable=p["executable"])
 
 

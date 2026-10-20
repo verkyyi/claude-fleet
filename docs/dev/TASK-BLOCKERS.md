@@ -64,9 +64,9 @@ generation 改变后，新投影只包含新代 blocker；旧代仍留在 journa
 同一 `blocker` 对象也可放入现有 `POST /v1/node/tasks/T<n>/reports`。
 report 保留原 event ID、owner/worker/generation、ticket 和 parent fencing，
 必须是有 `status` 的 progress report，不允许同时声明 outcome、停止或取消确认。
-原生会话的消费入口是 `fleet_task_control.py blocker --pane <pane> --event <stable-id>`，
-从 stdin 读取对象，以当前 `@launch` 绑定构造 report，经原有 outbox 提交。
-`fleet-task-record.sh mutate T<n>` 也接受上述 mutation JSON；两条路均使用 C6 journal。
+节点上的消费入口（`fleet_task_control.py blocker` / `blockers`，以 `@launch` 绑定构造 report）
+随启动证明一起退役（EPIC T497 C8）：节点不再写 blocker；hub 一侧的 blocker 按拍板 6
+先改按 ID 解除、跑一个版本再定删。
 
 创建、主动解决和撤销必须来自当前任务 execution owner 所属的已认证节点，
 同时比较账户、task、repo、ticket、generation、worker、endpoint。
@@ -103,17 +103,12 @@ generic operation update 不得改这些行。没有第三套任务存储。
 
 ## 只读消费与验证
 
-`fleet_task_control.blocker_projection(task, stale=False)` 返回
-`blocked`、`clear`、`revoked` 或 `unknown`，附 `active_ids`，且永远
-`actionable: false`。命令 `fleet_task_control.py blockers T<n>` 同时给出投影和原字段。
-读取失败、旧格式、未知版本、scope 不匹配或 C6 stale cache 必须投影 unknown，
-不能伪造空 blocker 集。缓存保留原观测时间；过期不触发写入。
-消费端应分别展示 blocker、attention、runtime 和 task outcome。
+节点上的只读投影（`fleet_task_control.blocker_projection`）随 EPIC T497 C8 删掉。
 
 CI 的 SQLite/PostgreSQL 共用 `TestTaskBlocker*`、`TestNodeTaskBlockerContract`：
 幂等/冲突、精确依赖、跨 scope、旧代 report、取消/终态竞争、独立 writer 与审计保护。
-`fleet_task_blockers_test.py` 验证消费入口、C6 重连丢 ack、过期 cache 和 attention 独立；
-BREAK-IT `task-blocker-fence` 绑定该隔离用例。夹具证据不等于原生或现场验收。
+节点一侧的用例（`fleet_task_blockers_test.py`、BREAK-IT `task-blocker-fence`）随 C8 删掉。
+夹具证据不等于原生或现场验收。
 
 原生验收须分别用隔离 Claude/Codex 的内核 executable 与 native SID 核验身份，
 在实际 ask/approval 期间提交 blocker，再完成依赖；要求 attention 保持，

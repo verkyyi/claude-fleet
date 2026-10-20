@@ -1015,34 +1015,6 @@ fleet_task_closed() {
   return "$rc"
 }
 
-# fleet_task_rebind_stamp <T<n>> <native sid> [<fleet_id>] — a hub task's SAME
-# session reopened in a new window (claude-fleet#4974): the stamps (a
-# fleet_win_stamp_cmd prefix — @launch · @launch_receipt · @launch_started ·
-# @fleet_id · @task) that put the record's own binding back before the launcher
-# runs, so fleet_launch.py supervise resumes it as the same executor instead of a
-# new start the hub refuses. rc 0 printed · 3 nothing to rebind (closed, another
-# conversation) · 4 no record readable (no hub: the caller's old road) · 1 refused
-# (the reason on stderr). FLEET_TASK_REBIND_CMD is the
-# seam (prints fleet_launch.py rebind's JSON, same rc).
-fleet_task_rebind_stamp() {
-  local out rc
-  if [ -n "${FLEET_TASK_REBIND_CMD:-}" ]; then out=$("$FLEET_TASK_REBIND_CMD" "$@"); rc=$?
-  else out=$(python3 "$_FLEET_LIB_DIR/fleet_launch.py" rebind "$@"); rc=$?; fi
-  [ "$rc" = 0 ] || return "$rc"
-  fleet_task_rebind_stamps "$out"
-}
-# fleet_task_rebind_stamps <rebind JSON> — the same stamps off an answer in hand.
-fleet_task_rebind_stamps() {
-  local out _l _r _f _t
-  out=$(printf '%s' "${1:-}" | python3 -c 'import json,sys
-d = json.load(sys.stdin); j = lambda v: json.dumps(v, separators=(",", ":"))
-print(j(d["launch"])); print(j(d["receipt"])); print(d["fleet_id"]); print(d["launch"]["task"])') || return 1
-  { IFS= read -r _l; IFS= read -r _r; IFS= read -r _f; IFS= read -r _t; } <<EOF
-$out
-EOF
-  fleet_win_stamp_cmd @launch "$_l" @launch_receipt "$_r" @launch_started 1 @fleet_id "$_f" @task "$_t"
-}
-
 # A capable node checks the hub immediately before new dispatch, including a
 # local scratch without a lease. Hub outage is unknown, never legacy fallback.
 # No hub and no explicit selection remains byte-for-byte the legacy path. The
@@ -1062,12 +1034,12 @@ fleet_repo_authority_guard() {
       return 1
     }
   FLEET_AUTHORITY_RESULT=$result
+  # A start reserves nothing (EPIC T497 C8): the window's ID admits it.
   if [ "$phase" = --finish ]; then
-    FLEET_AUTHORITY_START=$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("reservation", ""))') || {
-      FLEET_AUTHORITY_ERROR='repo authority: invalid Hub response; expected a JSON reservation'
+    printf '%s' "$result" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null || {
+      FLEET_AUTHORITY_ERROR='repo authority: invalid Hub response; expected JSON'
       return 1
     }
-    export FLEET_AUTHORITY_START
   fi
   printf '%s\n' "$FLEET_AUTHORITY_RESULT"
 }
@@ -6507,7 +6479,7 @@ fleet_hub_lease() {
   case "$num" in ''|*[!0-9]*) return 1 ;; esac
   cmd="${FLEET_HUB_LEASE_CMD:-}"
   if [ -z "$cmd" ]; then
-    if cmd=$(fleet_ccquota_cmd); then cmd="$cmd lease"
+    if command -v ccquota >/dev/null 2>&1; then cmd='ccquota lease'
     else printf 'fleet: hub lease unavailable (no FLEET_HUB_LEASE_CMD, no ccquota on PATH) — no lease guards #%s\n' "$num" >&2; return 1; fi
     # ccquota acts as the agent: without its token it exits 1 「no hub configured」,
     # which read as 「hub unreachable」 until issue #1491. Say what is actually missing.
@@ -6568,46 +6540,17 @@ fleet_hub_lease() {
 # <account_class> (issue #1540) is `local` / `pool` — the kind of subscription the
 # session must run on, carried to the machine that opens it as `--account`;
 # anything else (`any`, empty) adds nothing to the command.
-# [<reap>] [<not_here>] — <not_here> (T604) is THIS machine's admission refusal:
-# `--not-here <reason>` asks the hub for any other machine (never this one; none ⇒
-# REFUSED ALL_DECLINED, 4). Empty adds nothing.
 # The command is FLEET_HUB_PLACE_CMD, else `ccquota place`; it is run as
 # `<cmd> --node <node> [--origin-wid <wid>] [--agent <a>] [--account <c>] [--reap <p>] <repo> <issue> <worker_id>`
 # — for a scratch `[--name <n>] <repo> scratch <fleet UUID>` —
 # with the node token from node.env in ITS environment only (`_fleet_hub_env`).
-# fleet_ccquota_cmd — the ccquota a hub call runs, as a word for `bash -c` (T604):
-# the release's own copy beside these scripts (`<current>/bin/ccquota` — the one
-# the updater pins and moves with every switch) before whatever is first on PATH.
-# A login's ~/.local/bin/ccquota is no release's and goes stale: one left at an
-# old build sent every placement in a shape the hub refused (409). Prints
-# nothing (rc 1) when neither exists.
-fleet_ccquota_cmd() {
-  local own="${_FLEET_LIB_DIR:-}/ccquota"
-  if [ -n "${_FLEET_LIB_DIR:-}" ] && [ -x "$own" ] && [ ! -d "$own" ]; then
-    case "$own" in *"'"*) ;; *) printf "'%s'" "$own"; return 0 ;; esac
-  fi
-  command -v ccquota >/dev/null 2>&1 || return 1
-  printf 'ccquota'
-}
-
-# fleet_hub_place_askable <sess> — could fleet_hub_place ask the hub at all here
-# (T604)? 0 when a place command would run: FLEET_HUB_PLACE_CMD, else `ccquota` on
-# PATH with the node's credentials and this fleet's UUID. 1 = it would return 1
-# before sending anything — certain nothing was asked for.
-fleet_hub_place_askable() {
-  [ -n "${FLEET_HUB_PLACE_CMD:-}" ] && return 0
-  fleet_ccquota_cmd >/dev/null || return 1
-  _fleet_hub_creds_missing >/dev/null && return 1
-  [ -n "$(fleet_uuid "${1:-}" 2>/dev/null)" ]
-}
-
 fleet_hub_place() {
-  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" wait="${7:-}" acct="${8:-}" name="${9:-}" reap="${10:-}" nothere="${11:-}" cmd u pre='' out rc why ef what wid
+  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" wait="${7:-}" acct="${8:-}" name="${9:-}" reap="${10:-}" cmd u pre='' out rc why ef what wid
   fleet_hub_on "$sess" || return 10
   case "$num" in scratch) what='a scratch session' ;; ''|*[!0-9]*) return 1 ;; *) what="#$num" ;; esac
   cmd="${FLEET_HUB_PLACE_CMD:-}"
   if [ -z "$cmd" ]; then
-    if cmd=$(fleet_ccquota_cmd); then cmd="$cmd place"
+    if command -v ccquota >/dev/null 2>&1; then cmd='ccquota place'
     else printf 'fleet: hub placement unavailable (no FLEET_HUB_PLACE_CMD, no ccquota on PATH) — opening %s here\n' "$what" >&2; return 1; fi
     if why=$(_fleet_hub_creds_missing); then
       printf 'fleet: %s — opening %s here\n' "$why" "$what" >&2; return 1
@@ -6623,8 +6566,7 @@ fleet_hub_place() {
   case "$wait" in *[!0-9]*) wait='' ;; esac
   case "$acct" in local|pool) ;; *) acct='' ;; esac
   out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" place --node "$node" ${owid:+--origin-wid "$owid"} ${agent:+--agent "$agent"} \
-        ${wait:+--wait "$wait"} ${acct:+--account "$acct"} ${name:+--name "$name"} ${reap:+--reap "$reap"} \
-        ${nothere:+--not-here "$nothere"} "$repo" "$num" "$wid" </dev/null 2>"$ef"); rc=$?
+        ${wait:+--wait "$wait"} ${acct:+--account "$acct"} ${name:+--name "$name"} ${reap:+--reap "$reap"} "$repo" "$num" "$wid" </dev/null 2>"$ef"); rc=$?
   out=$(printf '%s\n' "$out" | head -n1 | awk -F'\t' -v al="${FLEET_NODE_ALIASES:-}" '
     BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
     { k = split($1, w, " ")
@@ -6666,7 +6608,7 @@ fleet_hub_move() {
   [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 10
   cmd="${FLEET_HUB_MOVE_CMD:-}"
   if [ -z "$cmd" ]; then
-    if cmd=$(fleet_ccquota_cmd); then cmd="$cmd move"
+    if command -v ccquota >/dev/null 2>&1; then cmd='ccquota move'
     else printf 'fleet: hub move unavailable (no FLEET_HUB_MOVE_CMD, no ccquota on PATH)\n' >&2; return 1; fi
     if why=$(_fleet_hub_creds_missing); then
       printf 'fleet: %s — the move cannot be asked for\n' "$why" >&2; return 1

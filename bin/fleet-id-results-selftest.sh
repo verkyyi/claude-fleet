@@ -32,8 +32,8 @@
 #         options (`fleet-id.sh backfill`: dry, --apply, idempotent; home untouched) — C17
 #   WT    a worktree remembers its ID beside its T record (fleet_worktree_id)
 #   WIRE  the spawners open with --parent / --from-native / --worktree; the reap,
-#         cleanup, stop and exit closers pass a why; the accepted-task road writes
-#         the result and routes by ID (no generation / native gate)
+#         cleanup, stop and exit closers pass a why; a report writes the ID's
+#         result and a queued one routes by ID (C8: no generation / native gate)
 # tmux / python3 / git absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -327,8 +327,8 @@ ok; grep -q 'fleet_win_retire "\$target" "" reaped' "$BIN/dash-reap.sh" \
   && grep -q 'fleet_win_retire "\$wid" "\$SOCK" stopped' "$BIN/fleet-worker-stop.sh" \
   && grep -q 'fleet_win_retire "\$win" "" exited' "$BIN/session-end-hook.sh" \
   || fail "WIRE: the reap / cleanup / stop / exit closers end the ID"
-ok; grep -q 'id_result(c,' "$BIN/fleet_task_control.py" && grep -q 'fleet_id_take' "$BIN/fleet_task_control.py" \
-  || fail "WIRE: the accepted-task road writes the ID result and routes by ID, no generation gate"
+ok; grep -q 'fleet_id.py" result "\$selffid"' "$BIN/fleet-report-parent.sh" && grep -q 'fleet_id_take' "$BIN/fleet_task_control.py" \
+  || fail "WIRE: a report writes the ID result and a queued one routes by ID, no generation gate (C8)"
 ok; grep -q 'trap id_result EXIT' "$BIN/fleet-report-parent.sh" || fail "WIRE: a session's own report writes its result"
 
 if [ "$FAIL" -eq 0 ]; then echo "fleet-id-results selftest: PASS ($CHECKS checks)"; exit 0; fi

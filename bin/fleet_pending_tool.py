@@ -20,9 +20,10 @@ import subprocess
 import sys
 import time
 
-import fleet_launch as launch
+import fleet_native_proc as proc
 from fleet_agent_argv import process_argv
-from fleet_runtime import TTL
+
+TTL = 5.0   # seconds an observation stays fresh
 
 PANE_FIELDS = ('socket', 'server_pid', 'window', 'pane', 'pane_pid', 'worker', 'agent', 'sid')
 PANE_FORMAT = '\t'.join('#{' + k + '}' for k in
@@ -87,7 +88,7 @@ class Processes:
         row = self.rows[pid]
         if 'Z' in row['state']: raise Unknown('process_exited')
         if fresh or pid not in self.proofs:
-            proof = launch.process(pid, ps_row=(str(row['ppid']), row['start']))
+            proof = proc.process(pid, ps_row=(str(row['ppid']), row['start']))
             if fresh: return proof
             self.proofs[pid] = proof
         return self.proofs[pid]
@@ -159,7 +160,7 @@ def read_panes(socket=''):
     list-panes -a includes grouped-session duplicates; dedup by socket + pane,
     never by a bare window number or a session name.
     """
-    out = launch.tmux('list-panes', '-a', '-F', PANE_FORMAT, socket=socket)
+    out = proc.tmux('list-panes', '-a', '-F', PANE_FORMAT, socket=socket)
     return parse_panes(out)
 
 
@@ -197,7 +198,7 @@ def registry_birth(record, native):
 
 def binding(row, processes):
     if row['agent'] not in ('', 'claude'): raise Unknown('unsupported_agent')
-    if not launch.valid_uuid(row['worker']) or not row['sid']: raise Unknown('missing_identity')
+    if not proc.valid_uuid(row['worker']) or not row['sid']: raise Unknown('missing_identity')
     if not re.fullmatch(r'@[0-9]+', row['window']) or not re.fullmatch(r'%[0-9]+', row['pane']):
         raise Unknown('invalid_pane_identity')
     pid = processes.claude(row['pane_pid'])
@@ -302,9 +303,9 @@ def cli(args):
     try:
         # Compatibility: old target forms accept tmux names/positions and do not
         # require FID/SID window stamps. They still use the same walk/parser.
-        agent = launch.tmux('display-message', '-p', '-t', target, '#{@cc_agent}', socket=socket)
+        agent = proc.tmux('display-message', '-p', '-t', target, '#{@cc_agent}', socket=socket)
         if agent not in ('', 'claude'): return 4
-        try: root = launch.tmux('display-message', '-p', '-t', target, '#{pane_pid}', socket=socket)
+        try: root = proc.tmux('display-message', '-p', '-t', target, '#{pane_pid}', socket=socket)
         except subprocess.CalledProcessError: return 3
         if not root: return 3
         pid = Processes.collect().claude(root)

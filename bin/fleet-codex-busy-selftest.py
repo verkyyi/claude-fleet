@@ -119,7 +119,7 @@ fleet_window_bg_busy fleet @1 1 1
 class NativeBusy(CodexBusy):
     def setUp(self):
         super().setUp()
-        import fleet_launch
+        import fleet_native_proc
         self.process = dict(pid=101, ppid=1, birth='birth-1', executable='/bin/bash')
         self.thread = dict(id='native-sid', cwd=str(self.root), path=self.source['transcript'],
                            status={'type': 'idle'}, turns=[dict(id='turn-1', status='completed', items=[])])
@@ -143,7 +143,7 @@ class NativeBusy(CodexBusy):
                 if method == 'thread/loaded/list': return {'data': owner.loaded}
                 return super().call(method, params)
 
-        for p in (patch.object(fleet_launch, 'process', side_effect=lambda pid: dict(self.process)),
+        for p in (patch.object(fleet_native_proc, 'process', side_effect=lambda pid: dict(self.process)),
                   patch.dict(LIB['child_busy'].__globals__, Worker=lambda *a: self.worker, RPC=Client)):
             p.start(); self.addCleanup(p.stop)
 

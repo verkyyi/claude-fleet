@@ -61,7 +61,6 @@ PREFILL_LOG="$WORK/prefill"
 ln -s "$RAW" "$WORK/bin/dash-raw-session.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
 ln -s "$BIN/fleet_dispatch.py" "$WORK/bin/fleet_dispatch.py"
-ln -s "$BIN/fleet_launch.py" "$WORK/bin/fleet_launch.py"
 ln -s "$BIN/fleet-ui-lang.sh" "$WORK/bin/fleet-ui-lang.sh"   # fleet_ui_fail (issue #1618)
 # Record the async prefill handoff; scratch-prefill-selftest.sh tests delivery.
 cat > "$WORK/bin/scratch-prefill.py" <<'PY'
@@ -457,10 +456,9 @@ reset_scratch
 WINS=plan FLEET_MAX_SESSIONS=0 run_raw --name label --prompt 'explicit seed'
 [ -s "$PREFILL_LOG" ] && fail "P an explicit --prompt takes precedence over the name draft"
 
-# ============== A2: the admission reservation reaches the launch ==============
-# A repo under task authority: --finish reserves once at the hub and the launch
-# line carries that reservation, so the session does not reserve a second time.
-# It was quoted through a shq this script never defined: the line lost it.
+# ============== A2: the finish gate reserves nothing ==========================
+# A repo under task authority: --finish asks the person's mode only (EPIC T497
+# C8) — whatever an older hub answers, no reservation rides the launch line.
 cat > "$WORK/fakebin/fake-authority" <<'SH'
 #!/bin/bash
 [ "$2" = --finish ] && printf '{"mode": "legacy", "reservation": "1111-it'"'"'s"}\n' || printf '{"mode": "legacy"}\n'
@@ -468,70 +466,20 @@ SH
 chmod +x "$WORK/fakebin/fake-authority"
 reset_scratch
 FLEET_TASK_AUTHORITY=legacy FLEET_HUB_AUTHORITY_CMD="$WORK/fakebin/fake-authority" \
-  WINS=plan FLEET_MAX_SESSIONS=0 run_raw
-grep -q 'shq' "$WORK/err" && fail "A2 the launch quoting must not call an undefined shq" "$(cat "$WORK/err")"
-grep -qF "FLEET_AUTHORITY_START='1111-it'\\''s'" "$NEWWIN_LOG" \
-  || fail "A2 the launch line lost the admission reservation" "$(cat "$NEWWIN_LOG")"
-ok "A2 the hub reservation from --finish is carried, shell-quoted, onto the launch line"
+  WINS=plan FLEET_MAX_SESSIONS=0 run_raw || fail "A2 the start was refused" "$(cat "$WORK/err")"
+grep -q 'FLEET_AUTHORITY_START' "$NEWWIN_LOG" && fail "A2 a reservation rode the launch line" "$(cat "$NEWWIN_LOG")"
+ok "A2 the finish gate reserves nothing; the launch line carries no reservation"
 
 ok "P cold/--bg/Codex names prefill the full draft; unnamed and seeded spawns do not"
 
 reset_scratch
-mkdir -p "$WORK/conf/fleets/testsess/repos"
-printf 'FLEET_REPO="acme/widgets"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="%s"\n' "$MAIN" "$BASE_BR" \
-  > "$WORK/conf/fleets/testsess/repos/acme-widgets.conf"
-native_context='{"version":1,"operation_id":"11111111-1111-4111-8111-111111111111","task":"T1","owner":"alice","generation":1,"worker_id":"22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333","provider":"claude","attempt_id":"task:T1:g1"}'
-native_dispatch='{"version":1,"request_id":"fixture","requested_agent":"claude","resolved_agent":"claude","agent_source":"explicit","task":"T1","generation":1,"attempt_id":"task:T1:g1"}'
-for mode in direct background; do
-  native_args=(); [ "$mode" != background ] || native_args=(--bg)
-  FLEET_LAUNCH="$native_context" FLEET_DISPATCH="$native_dispatch" WINS=plan FLEET_MAX_SESSIONS=0 \
-    run_raw --native-worktree --node local --agent claude --task T1 ${native_args[@]+"${native_args[@]}"} \
-    || fail "Q native accepted spawn refused ($mode)" "$(cat "$WORK/err")"
-  grep -qF -- "-c $MAIN " "$NEWWIN_LOG" || fail "Q native launch must start from its admitted repository" "$(cat "$NEWWIN_LOG")"
-  grep -q '@native_worktree' "$NEWWIN_LOG" || fail "Q native creation intent was not stamped"
-  grep -q '@worktree' "$OPTS_LOG" && fail "Q only the native hook may stamp the actual worktree"
-  [ "$(git -C "$MAIN" worktree list --porcelain | grep -c '^worktree ')" = 1 ] || fail "Q Fleet must not pre-create a worktree"
-  [ ! -e "$MAIN/.claude/worktrees" ] || fail "Q native directory created before the native process"
-done
-FLEET_LAUNCH="$native_context" FLEET_DISPATCH="$native_dispatch" FLEET_WORKTREE_SETUP=fixture-setup \
-  WINS=plan FLEET_MAX_SESSIONS=0 run_raw --native-worktree --node local --agent claude --task T1
-[ ! -s "$NEWWIN_LOG" ] || fail "Q custom setup must not be silently skipped"
-grep -q 'migrating explicit Fleet setup' "$WORK/err" || fail "Q missing setup migration diagnostic"
+# Q: a Claude `--worktree` creation was admitted by the launch proof / the start
+# reservation; both are retired (EPIC T497 C8), and so is the flag — refused
+# before any window, never a silent ordinary scratch.
 WINS=plan FLEET_MAX_SESSIONS=0 run_raw --native-worktree --node local --agent claude
-[ ! -s "$NEWWIN_LOG" ] || fail "Q unaccepted native task must not open a window"
-ok "Q native accepted entry delegates creation, preserves background dispatch, refuses unsupported setup and unaccepted starts"
-
-cat > "$WORK/authority" <<'SH'
-#!/bin/bash
-[ "${AUTHORITY_REFUSE:-}" != "$2" ] || { printf 'fixture authority refused\n' >&2; exit 1; }
-printf '{"mode":"legacy","reservation":"11111111-1111-4111-8111-111111111111"}\n'
-SH
-chmod +x "$WORK/authority"
-for mode in direct background; do
-  native_args=(); [ "$mode" != background ] || native_args=(--bg)
-  FLEET_TASK_AUTHORITY=legacy FLEET_HUB_AUTHORITY_CMD="$WORK/authority" WINS=plan FLEET_MAX_SESSIONS=0 \
-    run_raw --native-worktree --node local --agent claude --name 'native local draft' ${native_args[@]+"${native_args[@]}"} \
-    || fail "R native local spawn refused ($mode)" "$(cat "$WORK/err")"
-  grep -qF -- "-c $MAIN " "$NEWWIN_LOG" || fail "R local native launch must use the admitted base"
-  grep -q '@native_worktree' "$NEWWIN_LOG" || fail "R missing local native intent"
-  grep -qF "FLEET_AUTHORITY_START='11111111-1111-4111-8111-111111111111'" "$NEWWIN_LOG" \
-    || fail "R raw launcher lost the original admission reservation" "$(cat "$NEWWIN_LOG")"
-  grep -q '@worktree' "$OPTS_LOG" && fail "R local launch must wait for the native worktree hook"
-  grep -qF '$(cat' "$NEWWIN_LOG" && fail "R local draft became a submitted seed"
-  check_draft 'native local draft' 0
-  [ "$(git -C "$MAIN" worktree list --porcelain | grep -c '^worktree ')" = 1 ] || fail "R Fleet allocated a local worktree"
-done
-for phase in --gate --finish; do
-  AUTHORITY_REFUSE="$phase" FLEET_TASK_AUTHORITY=legacy FLEET_HUB_AUTHORITY_CMD="$WORK/authority" \
-    WINS=plan FLEET_MAX_SESSIONS=0 run_raw --native-worktree --node local --agent claude
-  [ ! -s "$NEWWIN_LOG" ] || fail "R refused authority opened a native window ($phase)"
-  grep -q 'fixture authority refused' "$WORK/err" || fail "R missing authority refusal ($phase)"
-done
-FLEET_TASK_AUTHORITY=legacy FLEET_HUB_AUTHORITY_CMD="$WORK/authority" WINS=plan FLEET_MAX_SESSIONS=0 \
-  run_raw --native-worktree --node local --agent claude --prompt 'must not submit'
-[ ! -s "$NEWWIN_LOG" ] || fail "R native local seed must be refused"
-grep -q 'unsubmitted draft' "$WORK/err" || fail "R missing seed refusal"
-ok "R native local direct/background drafts preserve admission and refuse submitted seeds"
+[ ! -s "$NEWWIN_LOG" ] || fail "Q a retired --native-worktree opened a window"
+grep -q 'native-worktree is retired' "$WORK/err" || fail "Q missing the retired-flag refusal" "$(cat "$WORK/err")"
+ok "Q --native-worktree is refused as retired, no window"
 
 printf '\nselftest OK: %s assertions passed (raw scratch worktree session, #214/#290/#531)\n' "$pass"
 exit 0

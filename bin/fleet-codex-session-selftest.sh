@@ -526,9 +526,12 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(cx.follow(pane, '1234', server.threads[old_t]), '')
             # a subagent's thread is not the TUI's
             self.assertEqual(cx.follow(pane, '1234', fake_server.tui_thread(fake_server.uuid7(now + 1000), parentThreadId=new_t)), '')
-            # under an authority receipt the follower stays off; delivery holds instead
+            # FLEET_CODEX_FOLLOW=0 keeps the follower off; delivery holds instead —
+            # a retired authority context (EPIC T497 C8) no longer does
             self.assertTrue(cx.Follow(dict(TMUX_PANE=pane, FLEET_CODEX_LAUNCHER_PID='1234', FLEET_CODEX_REMOTE=server.remote,
-                                           FLEET_AUTHORITY_CONTEXT='{}')).off)
+                                           FLEET_CODEX_FOLLOW='0')).off)
+            self.assertFalse(cx.Follow(dict(TMUX_PANE=pane, FLEET_CODEX_LAUNCHER_PID='1234', FLEET_CODEX_REMOTE=server.remote,
+                                            FLEET_AUTHORITY_CONTEXT='{}')).off)
             follower.close()
         finally:
             for k, v in saved.items():

@@ -126,7 +126,7 @@ set_agent() {   # a row of the adapter table (bin/fleet_agent_adapter.py beside 
   [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-raw-session: contradictory --agent values\n' >&2; exit 2; }
   AGENT=$1
 }
-NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; NATIVE_WT=0; PREV_ID=""; REOPEN_FID=""; ID_TASK=""; ID_PARENT=""
+NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; PREV_ID=""; REOPEN_FID=""; ID_TASK=""; ID_PARENT=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -157,10 +157,8 @@ while [ "$#" -gt 0 ]; do
     # session starts as — `claude --agent <name>`, found the way Claude Code finds
     # it (the checkout's .claude/agents > ~/.claude/agents > a plugin); named but
     # not found ⇒ refused, naming where it looked. Its `fleet:` key fills --reap /
-    # --repo / --agent when the spawn names none. A file the release carries
-    # (fleet-agent-def.py's `travels`: fleet-worker, a fleet plugin's epic-driver)
-    # is on every machine, so the hub may place it (T604); any other file opens on
-    # THIS machine (it is here). None = a plain scratch, as before.
+    # --repo / --agent when the spawn names none. Opens on THIS machine (the file
+    # is here). None = a plain scratch, as before.
     --as)          AS_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --as=*)        AS_ARG="${1#--as=}"; shift ;;
     --bg)          BG=1; shift ;;
@@ -213,7 +211,9 @@ while [ "$#" -gt 0 ]; do
     --seed-file=*) SEED_FILE="${1#--seed-file=}"; shift ;;
     --worktree)    WT_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --worktree=*)  WT_ARG="${1#--worktree=}"; shift ;;
-    --native-worktree) NATIVE_WT=1; shift ;;
+    # A Claude `--worktree` creation was admitted by the launch proof / the start
+    # reservation; both are retired (EPIC T497 C8), and so is the flag.
+    --native-worktree) printf 'dash-raw-session: --native-worktree is retired (EPIC T497 C8)\n' >&2; exit 2 ;;
     # --prev <ID> / --fid <ID> (EPIC T497 C4, design §4.4): 「从这一段继续」 opens a
     # NEW ID whose prev is that one; 「恢复这个窗口」 reopens the SAME ID (fleet-id.sh
     # continue / reopen --exec). Both go with --resume.
@@ -263,7 +263,8 @@ fi
 case "$AS_ARG" in
   '') ;;
   *[!A-Za-z0-9_.:-]*|[!A-Za-z0-9]*) printf 'dash-raw-session: not an agent name: %s\n' "$AS_ARG" >&2; exit 1 ;;
-esac   # where it may open is decided once the file is found (travels, below)
+  *) [ -z "$NODE_ARG" ] && NODE_ARG=local ;;   # the agent file is on this machine
+esac
 BIN="$(cd "$(dirname "$0")" && pwd)"
 EXPLICIT_AGENT=$AGENT
 DISPATCH="${FLEET_DISPATCH:-}"
@@ -344,8 +345,7 @@ unset _why
 # Which machine (issue #1541; the issue path's rule, #1425/#1475): --node, else —
 # with the hub module on — FLEET_SPAWN_NODE, else auto. PLACING = the hub may
 # send this scratch to another machine; decided for good below, after the repo
-# and the agent file are known (a no-repo scratch, a seed that is not a task
-# record's words and an agent file only this machine has never travel).
+# is known (a no-repo or seeded scratch never travels).
 NODE="$NODE_ARG"
 if [ -z "$NODE" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
   NODE="${FLEET_SPAWN_NODE:-$(fleet_spawn_node_default)}"   # personal machine → local (#1721)
@@ -415,20 +415,15 @@ MAIN="${FLEET_MAIN:-}"
 AS_KV=''; TEMPLATE_AGENT=''
 if [ -n "$AS_ARG" ]; then
   _asdir=$HOME; [ "$NOREPO" != 1 ] && [ -n "$MAIN" ] && _asdir=$MAIN
+  if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG"; then
+    refuse "raw: --as $AS_ARG opens on this machine (the agent file is here), not on $NODE_ARG"; exit 1
+  fi
   if ! AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "$_asdir" --for "$AS_FOR" 2>&1); then
     refuse "raw: ${AS_KV##*fleet-agent-def: }"; exit 1
   fi
   unset _asdir
 fi
 as_kv() { printf '%s\n' "$AS_KV" | awk -F'\t' -v k="$1" '$1 == k { print substr($0, length(k) + 2); exit }'; }
-# Only a file this machine alone has pins the session here (T604): one the release
-# carries (`travels 1`) is found by the same name wherever the hub places it.
-if [ -n "$AS_KV" ] && [ "$(as_kv travels)" != 1 ]; then
-  if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG"; then
-    refuse "raw: --as $AS_ARG opens on this machine (the agent file $(as_kv file) is here alone), not on $NODE_ARG"; exit 1
-  fi
-  PLACING=0
-fi
 if [ -n "$AS_KV" ]; then
   if [ -z "$REAP" ] && [ -n "$(as_kv reap)" ]; then
     REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$(as_kv reap)") \
@@ -446,23 +441,6 @@ if [ "$NOREPO" != 1 ]; then
   [ -d "$MAIN/.git" ] || { refuse "raw: FLEET_MAIN is not a git checkout — set it in fleet.conf"; exit 1; }
 fi
 BASE="${FLEET_BASE_BRANCH:-master}"
-if [ "$NATIVE_WT" = 1 ]; then
-  [ "$NOREPO" = 0 ] && [ -n "$REPO_ARG" ] && [ "$(agent_col native_worktree)" = 1 ] \
-    && [ "$NODE_ARG" = local ] \
-    && [ -z "$WT_ARG$RESUME_SID" ] \
-    || { refuse "raw: native worktree requires a fresh local Claude repository session"; exit 2; }
-  [ -z "${FLEET_WORKTREE_SETUP:-}" ] && [ "${FLEET_DEPS_SHARE:-0}" != 1 ] \
-    || { refuse "raw: native worktree requires migrating explicit Fleet setup/dependency sharing first"; exit 2; }
-  if [ -n "$TASK_REF${FLEET_LAUNCH:-}" ]; then
-    [ -n "$TASK_REF" ] && [ -n "${FLEET_LAUNCH:-}" ] \
-      && python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null \
-      || { refuse "raw: native worktree requires the accepted task dispatch"; exit 2; }
-  else
-    { [ "${CCQUOTA_FLEET:-0}" = 1 ] || [ -n "$(fleet_task_authority "$SESS" "${REPO_ARG:-${FLEET_REPO:-}}")" ]; } \
-      && [ -z "$PROMPT$SEED_FILE" ] \
-      || { refuse "raw: native local creation requires repository admission and an unsubmitted draft"; exit 2; }
-  fi
-fi
 [ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --gate "$SESS" >/dev/null \
   || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
 
@@ -513,13 +491,11 @@ if [ "$BG" = 1 ]; then
   [ -n "$REAP" ] && owarg="$owarg --reap=$REAP"
   [ "$TEST_ID" = 1 ] && owarg="$owarg --test-identity"
   [ -n "$TASK_REF" ] && owarg="$owarg --task=$TASK_REF"   # T<n>, checked above
-  [ "$NATIVE_WT" = 1 ] && owarg="$owarg --native-worktree"
   [ -n "$RESUME_SID" ] && owarg="$owarg --resume=$RESUME_SID"   # hex + dashes, checked above
   case "$WT_ARG" in '') ;; *"'"*) refuse "raw: --worktree path has a quote"; exit 1 ;;
     *) owarg="$owarg --worktree='$WT_ARG'" ;; esac
   _dispatch_q=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$DISPATCH") || exit 2
-  _launch_q=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "${FLEET_LAUNCH:-}") || exit 2
-  fleet_bg "FLEET_LAUNCH=$_launch_q FLEET_DISPATCH=$_dispatch_q FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$dfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
+  fleet_bg "FLEET_DISPATCH=$_dispatch_q FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$dfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
     || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"; [ -n "$dfarg" ] && rm -f "$df"
          refuse "raw: background dispatch failed"; exit 1; }
   exit 0
@@ -543,25 +519,9 @@ fi
 # here for `auto` — and refuses for a machine named explicitly. Never placed: a
 # no-repo scratch (no repo to place by) and a seeded one (--prompt rides the
 # launch argument, here only) — named elsewhere they are refused, under `auto`
-# they open here. A dispatched task's seed travels (T604): it is the record's own
-# words (FLEET_TASK_SEED=record, set by fleet-task-record.sh dispatch), which the
-# machine that opens it reads back off T<n> (fleet-control-read.sh start).
-# Hub module off: nothing runs unless --node names another machine.
-#
-# This machine's admission said no (CAP_HELD — memory, the session caps): the
-# hub is asked for another machine, never this one (`not_here`, T604); no other
-# machine ⇒ refused with this machine's reason (exit 2: retry later), as before.
-TASK_SEED=0
-[ -n "$TASK_REF" ] && [ "${FLEET_TASK_SEED:-}" = record ] && [ -z "$DRAFT" ] && TASK_SEED=1
-# What only T604 lets travel (a task's words, an agent file) opened here before,
-# hub or not: where the hub cannot even be asked from here (no ccquota, no node
-# token), it still does — nothing was sent, so nothing can open twice.
-if [ "$PLACING" = 1 ] && [ "$NODE" = auto ] && { [ -n "$AS_ARG" ] || { [ "$TASK_SEED" = 1 ] && [ -n "$PROMPT" ]; }; } \
-   && ! fleet_hub_place_askable "$SESS"; then
-  PLACING=0
-fi
+# they open here. Hub module off: nothing runs unless --node names another machine.
 if [ "$PLACING" = 1 ]; then
-  if [ "$NOREPO" = 1 ] || { [ -n "$PROMPT$DRAFT" ] && [ "$TASK_SEED" != 1 ]; }; then
+  if [ "$NOREPO" = 1 ] || [ -n "$PROMPT$DRAFT" ]; then
     _why='a no-repo scratch'
     [ -n "$PROMPT" ] && _why='a seeded scratch (--prompt)'
     [ -n "$DRAFT" ] && _why='a draft scratch (--draft)'
@@ -581,8 +541,7 @@ if [ "$PLACING" = 1 ]; then
   _prepo="${REPO_ARG:-$(fleet_norm_repo "${FLEET_REPO:-}")}"
   python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
   _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
-  _nothere=''; [ -n "$CAP_HELD" ] && [ "$NODE" = auto ] && _nothere=$(printf '%s' "${CAP_HELD#raw: }" | head -n 1)
-  place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP" "$_nothere"); place_rc=$?
+  place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP"); place_rc=$?
   if [ -s "$_dispatch_result" ]; then
     DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$AGENT" --accepted "$(cat "$_dispatch_result")") || { rm -f "$_dispatch_result"; exit 2; }
     TASK_REF=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')
@@ -595,13 +554,6 @@ if [ "$PLACING" = 1 ]; then
     printf 'dash-raw-session: scratch 先被 %s 拒绝，入口已换下一台\n' "$(printf '%s' "${_why##*$'\t'after }" | sed 's/:[^,]*//g; s/,/、/g')" >&2
     _why=${_why%$'\t'after *} ;;
   esac
-  if [ -n "$CAP_HELD" ]; then
-    case "$place_rc:$_pv" in
-      0:REMOTE\ *|5:DECLINED\ *|6:UNKNOWN\ *) ;;
-      *) # nowhere else either: this machine's reason, as before, and the hub's
-         refuse "$CAP_HELD — 也没有别的机器能接: ${_why:-${_pv:-hub unreachable}}"; exit 2 ;;
-    esac
-  fi
   case "$place_rc:$_pv" in
     4:REFUSED\ ALL_DECLINED)
       refuse "raw: scratch 每台机器都拒绝了: ${_why:-no reason given}"; exit 1 ;;
@@ -632,7 +584,7 @@ if [ "$PLACING" = 1 ]; then
       python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --placement-code "$place_rc" >/dev/null || exit 1
       [ "$place_rc" = 4 ] && printf 'dash-raw-session: 没有机器能接这个 scratch (%s) — 开在本机\n' "$_why" >&2 ;;
   esac
-  unset _pw _u _pv _why _prepo _nothere
+  unset _pw _u _pv _why _prepo
 fi
 # Opening here after all: this machine's cap verdict, held above, now applies.
 if [ -n "$CAP_HELD" ]; then refuse "$CAP_HELD"; exit 2; fi
@@ -683,37 +635,10 @@ if [ -n "$NAME" ]; then
   esac
 fi
 
-# An accepted task opening HERE (issue #4754): the hub binds only a remote
-# start, so a local one claims the task itself and carries the same launch
-# binding — refused, never opened unbound. Before --finish, which reads it.
-# A parked or closed task session's RETURN (--resume with --task, claude-fleet#4974)
-# is the same executor, not a new claim: while the record still names that
-# conversation, its own binding is what the window carries (fleet_launch.py
-# rebind) — a fresh claim of a running task is refused, and so was the session.
-REBIND=''
-if [ -n "$TASK_REF" ] && [ -n "$RESUME_SID" ] && [ -z "${FLEET_LAUNCH:-}" ]; then
-  REBIND=$(python3 "$BIN/fleet_launch.py" rebind "$TASK_REF" "$RESUME_SID"); _rb=$?
-  case "$_rb" in
-    0) FLEET_LAUNCH=$(printf '%s' "$REBIND" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["launch"], separators=(",", ":")))') \
-         || { refuse "raw: $TASK_REF rebind answer unreadable"; exit 1; }
-       export FLEET_LAUNCH ;;
-    3|4) REBIND='' ;;   # not this session's / no record here: as before
-    *) refuse "raw: $TASK_REF is still this session's but cannot continue now"; exit 1 ;;
-  esac
-fi
-if [ -n "$TASK_REF" ] && [ -z "${FLEET_LAUNCH:-}" ]; then
-  _fu=$(fleet_uuid "$SESS" 2>/dev/null) || _fu=''   # none: `local` refuses a tasked dispatch
-  FLEET_LAUNCH=$(printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" local "$_fu") \
-    || { refuse "raw: $TASK_REF could not be claimed for a local launch"; exit 1; }
-  [ -z "$FLEET_LAUNCH" ] || export FLEET_LAUNCH   # empty: the dispatch carries no task
-fi
-if [ -n "$TASK_REF" ] && [ -z "$REBIND" ]; then
-  printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
-fi
-# FLEET_ID_DISPATCH: with the ID switch on there is no claim, and the accepted
-# dispatch is what the gate checks against the hub (EPIC T497 C6)
-[ "$NOREPO" = 1 ] || FLEET_ID_DISPATCH="${TASK_REF:+$DISPATCH}" \
-  fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish "$SESS" >/dev/null \
+# A task's window is admitted by its own ID (EPIC T497 C8): nothing is claimed,
+# a --resume with --task is the same session back (its ID's ledger names the
+# conversation), and the gate below asks only the person's authority.
+[ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish "$SESS" >/dev/null \
   || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
 win=""; slug=""; wt=""
 
@@ -730,13 +655,6 @@ elif [ -n "$WT_ARG" ]; then
   case "${slug#scratch-}" in ''|*[!0-9]*) refuse "raw: --worktree $WT_ARG is not a scratch worktree"; exit 1 ;; esac
   [ -d "$WT_ARG" ] && [ -e "$WT_ARG/.git" ] || { refuse "raw: --worktree $WT_ARG is gone"; exit 1; }
   wt=$WT_ARG
-elif [ "$NATIVE_WT" = 1 ]; then
-  fleet_fetch_bounded "$MAIN" "$BASE"
-  native_alloc=$(python3 "$BIN/fleet_launch.py" native-worktree "$MAIN" "$BASE") \
-    || { refuse "raw: could not prepare native worktree creation"; exit 1; }
-  IFS=$'\t' read -r slug wt native_intent <<EOF
-$native_alloc
-EOF
 else
   alloc=$(fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || alloc=""
   if [ -n "$alloc" ]; then slug=${alloc%%	*}; wt=${alloc#*	}; fi
@@ -797,14 +715,10 @@ while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n 
     fi
     stamp=$(fleet_win_stamp_cmd @norepo 1 ${nsid:+@norepo_sid "$nsid"})
   elif [ -n "$REPO_ARG" ]; then
-    if [ "$NATIVE_WT" = 1 ]; then
-      stamp=$(fleet_win_stamp_cmd @repo "$REPO_ARG" @native_worktree "$native_intent")
-    else
-      stamp=$(fleet_win_stamp_cmd @repo "$REPO_ARG" @worktree "$wt")
-      # A development task's worktree remembers its record (issue #4897): the
-      # reapers ask the record whether the work is over once the window is gone.
-      [ -n "$TASK_REF" ] && fleet_worktree_task_mark "$wt" "$TASK_REF"
-    fi
+    stamp=$(fleet_win_stamp_cmd @repo "$REPO_ARG" @worktree "$wt")
+    # A development task's worktree remembers its record (issue #4897): the
+    # reapers ask the record whether the work is over once the window is gone.
+    [ -n "$TASK_REF" ] && fleet_worktree_task_mark "$wt" "$TASK_REF"
     # A development task (issue #4897, EPIC #4895 批 0): a repo session bound to
     # the hub's record T<n> and no issue. @task_flow — stamped with @task before
     # the agent starts, as dash-issue-session.sh's @seed_words — tells the
@@ -823,23 +737,11 @@ while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n 
     printf '%s' "$PROMPT" > "$tf" 2>/dev/null \
       && launch="$launch \"\$(cat '$tf')\""
   fi
-  if [ -n "$REBIND" ] && [ -n "$rsid" ]; then
-    # the record's own binding (#4974): resumed as that executor, no seed redelivered
-    stamp="$stamp$(fleet_task_rebind_stamps "$REBIND")" || { refuse "raw: $TASK_REF rebind answer unreadable"; exit 1; }
-  elif [ -n "$REBIND" ]; then
-    refuse "raw: $TASK_REF's transcript ${RESUME_SID%%-*}… is not in $wt — not reopened"; exit 1
-  elif [ -n "${FLEET_LAUNCH:-}" ]; then
-    _launch_fid=$(python3 -c 'import json,os; print(json.loads(os.environ["FLEET_LAUNCH"])["worker_id"].split("/")[1])') || exit 1
-    stamp="$stamp$(fleet_win_stamp_cmd @launch "$FLEET_LAUNCH" @launch_seed "${tf:-}" @fleet_id "$_launch_fid" @dispatch "$DISPATCH")"
-  elif [ -n "$TASK_REF" ]; then
-    # ID switch on (EPIC T497 C6): no claim, no @launch; the session wrapper's
-    # repo admission reads the accepted dispatch, so it is there before launch
-    stamp="$stamp$(fleet_win_stamp_cmd @dispatch "$DISPATCH" @task "$TASK_REF")"
-  fi
-  [ -z "${FLEET_AUTHORITY_START:-}" ] || launch="FLEET_AUTHORITY_START='$(printf '%s' "$FLEET_AUTHORITY_START" | sed "s/'/'\\\\''/g")' $launch"
-  launch_dir=$wt; [ "$NATIVE_WT" = 0 ] || launch_dir=$MAIN
-  win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$launch_dir" "$stamp$launch; exec \$SHELL") \
-    || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || [ "$NATIVE_WT" = 1 ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
+  # A task's record rides on the window before its agent starts (EPIC T497 C8:
+  # no claim, no launch binding — the window's ID is the session).
+  [ -n "$TASK_REF" ] && stamp="$stamp$(fleet_win_stamp_cmd @task "$TASK_REF")"
+  win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
+    || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
          # Say WHY when it is the server (issue #2477): the line rides into
          # the hub's DECLINED / UNKNOWN answer as the refusal.
          _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"
@@ -858,15 +760,14 @@ fleet_admit_confirm >/dev/null   # the window is open: its admission holds on it
     [ -n "$nsid" ] && TM set-window-option -t "$win" @norepo_sid "$nsid" 2>/dev/null
   else
     TM set-window-option -t "$win" @raw 1 2>/dev/null        # mark: raw/scratch, NOT issue-bound
-    [ "$NATIVE_WT" = 1 ] || TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null
+    TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null
   fi
 }
 # The session's lifelong identity (issue #1646). Minted once; restore / migrate /
 # move carry it.
-[ -z "${_launch_fid:-}" ] || TM set-window-option -t "$win" @fleet_id "$_launch_fid" 2>/dev/null
 # 「恢复这个窗口」 (EPIC T497 C4): the same ID goes on here — its ledger says
 # `reopened`, and the fleet's earlier close is no longer one restore must honour.
-if [ -z "${_launch_fid:-}" ] && fleet_is_fid "$REOPEN_FID"; then
+if fleet_is_fid "$REOPEN_FID"; then
   TM set-window-option -t "$win" @fleet_id "$REOPEN_FID" 2>/dev/null
   rm -f "$(fleet_retired_dir)/$REOPEN_FID" 2>/dev/null
   python3 "$BIN/fleet_id.py" reopen "$REOPEN_FID" --window "$win" >/dev/null 2>&1 || :

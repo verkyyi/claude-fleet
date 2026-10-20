@@ -71,17 +71,17 @@
 #                                            cleared · 1 none here · 2 ambiguous · 3 not
 #                                            idle · 4 unconfirmed · 5 a person typing)
 #   fleet-id.sh switch [status|on|off]       the hub's ID switch (on/off: the operator's
-#                                            machines); written down in ids/.switch. Off =
-#                                            every old road; on = the gate is «the window has
-#                                            an ID»: no claim, a report is the ID's result
+#                                            machines); written down in ids/.switch. Shown
+#                                            only: since C8 the gate is «the window has an
+#                                            ID» whatever the word
 #
 # `_post METHOD PATH` (the body on stdin → `<http code>\n<body>`) is push's one
 # road to the hub: the node token is read here, per call (fleet_node_pair), never
 # handed to python or put in an environment. FLEET_ID_HUB_POST is its seam;
 # FLEET_ID_PUSH=0 keeps the spawn, the hook and result/close from pushing.
 #
-# The ledger is $FLEET_CONF_DIR/ids/<ID>.ndjson. Nothing decides anything off it
-# yet: it is written beside the old task record until the switch (EPIC T497 C7).
+# The ledger is $FLEET_CONF_DIR/ids/<ID>.ndjson: the session's own record — its
+# segments, results, parent and close (EPIC T497; the task record is only a ticket).
 # The hook never fails and never prints; FLEET_ID_HOOK=0 turns it off.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"

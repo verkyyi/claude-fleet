@@ -9,11 +9,11 @@
 #   N  no hub: the guard asks nothing and opens as before, byte for byte
 #   A  alice cuts over (dry-run → freeze → apply): her fleet.conf [node] says hub,
 #      bob's login and every repo overlay keep every byte
-#   O  opening: alice's local open is refused (hub wants an accepted task); bob's
-#      opens and reserves a start of HIS node — twice (a restart) — while alice is
-#      frozen or hub; bob's freeze in turn does not touch alice's gate
+#   O  opening (C8, EPIC T497: a window is its ID): alice on hub opens, bob opens —
+#      twice (a restart) — and neither reserves a start or asks the hub to; a frozen
+#      login is refused, and bob's freeze does not touch alice's gate
 #   S  settle: each login's `--settle --apply` (no repo = every hosted repo) closes
-#      only its own node's dead starts
+#      only its own node's residual (pre-C8) starts
 #   Y  the hub's push: bob's authority-sync writes nothing; alice's re-reads hub,
 #      with a repo or (a host that hosts none yet, T490) without one
 #   R  rollback: alice back to legacy, her login opens again; bob never moved
@@ -49,7 +49,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 work = sys.argv[1]
 who = {"Bearer t-alice": ("alice", "ep-alice"), "Bearer t-bob": ("bob", "ep-bob")}
 rows = {o: {"owner": o, "mode": "legacy", "revision": 0} for o in ("alice", "bob")}
-starts = {}
+OLD = "2026-01-01T00:00:00Z"
+# Residual starts reserved before C8: one of alice's node, three of bob's.
+starts = {k: {"reservation": k, "repo": "o/app", "owner": o, "endpoint_id": ep, "phase": "reserved", "updated": OLD}
+          for k, o, ep in (("resv-pre-c8-alice-1", "alice", "ep-alice"), ("resv-pre-c8-bob-1", "bob", "ep-bob"),
+                           ("resv-pre-c8-bob-2", "bob", "ep-bob"), ("resv-pre-c8-bob-3", "bob", "ep-bob"))}
 OLD = "2026-01-01T00:00:00Z"
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -142,8 +146,9 @@ chk "N no selection reads empty" "$(login_mode alice)" ""
 
 # ---- A: alice cuts over; bob and every overlay keep every byte ----
 hub_on alice; hub_on bob
-r=$(guard alice --finish); chk "A alice (legacy) opens and reserves" "${r%%	*}" 0; SA=${r#*	}
-r=$(guard bob --finish); chk "A bob (legacy) opens and reserves" "${r%%	*}" 0; SB=${r#*	}
+chk "A alice (legacy) opens, no reservation" "$(guard alice --finish)" "0	"
+chk "A bob (legacy) opens, no reservation" "$(guard bob --finish)" "0	"
+SA=resv-pre-c8-alice-1; SB=resv-pre-c8-bob-1
 bob_before=$(digest bob); ov_before=$(cksum < "$WORK/alice/fleets/fx/repos/o-app.conf")
 for stage in freeze apply; do
   as alice bash "$BIN/fleet-repo.sh" authority --dry-run > "$WORK/m.json" 2>"$WORK/a.err" \
@@ -162,14 +167,11 @@ if grep '^alice POST /v1/fleet/authority ' "$WORK/hub.log" | grep -q 'repo='; th
   fail "A a cutover POST named a repo"; else ok "A every cutover POST is the person's (no repo)"; fi
 
 # ---- O: opening and restarting, each login on its own ----
-r=$(guard alice --finish)
-chk "O alice's local open refused (hub wants an accepted task)" "${r%%	*}" 1
-has "O …saying why" "$(cat "$WORK/guard.err")" "accepted, verified launch"
-r=$(guard bob --finish); chk "O bob opens while alice is hub" "${r%%	*}" 0; SB2=${r#*	}
-r=$(guard bob --finish); chk "O bob restarts (a new admission)" "${r%%	*}" 0
-[ -n "$SB2" ] && [ "$SB2" != "${r#*	}" ] && ok "O …each a reservation of its own" || fail "O reservations: $SB2 ${r#*	}"
-grep -q "^bob POST /v1/fleet/authority/start repo=o%2Fapp .*\"reserve\"" "$WORK/hub.log" \
-  && ok "O bob's start names the repo it opens in" || fail "O start request: $(grep '^bob' "$WORK/hub.log")"
+chk "O alice on hub opens (the window has an ID — C8)" "$(guard alice --finish)" "0	"
+chk "O bob opens while alice is hub" "$(guard bob --finish)" "0	"
+chk "O bob restarts" "$(guard bob --finish)" "0	"
+grep -q " /v1/fleet/authority/start " "$WORK/hub.log" \
+  && fail "O an open asked the hub for a start: $(grep start "$WORK/hub.log")" || ok "O no open reserves a start"
 as bob bash "$BIN/fleet-repo.sh" authority --dry-run > "$WORK/mb.json" 2>/dev/null
 as bob bash "$BIN/fleet-repo.sh" authority --freeze --manifest "$WORK/mb.json" >/dev/null 2>&1
 chk "O bob froze himself" "$(login_mode bob)" frozen

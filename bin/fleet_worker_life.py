@@ -238,18 +238,14 @@ def codex_idle_turn(client, source):
 
 
 def codex_busy_binding(w, source):
-    # Reuse C3's kernel birth/ownership proof; no new identity store or adapter.
-    from fleet_launch import process, inspect
+    # The kernel's birth/executable read; no identity store or adapter of its own.
+    from fleet_native_proc import process
     data = source['codex_identity']
     if (data.get('owner') != str(source['pid']) or data.get('session_id') != source['session_id']
             or data.get('home') != source['home'] or not data.get('remote', '').startswith('unix:///')):
         raise ValueError('no current Codex native binding')
-    launch = w.opt('@launch')
-    receipt = inspect(json.loads(launch), w.pane, w.session) if launch else None
-    if receipt and receipt['native_session'] != source['session_id']:
-        raise ValueError('Codex launch belongs to another native session')
     return (tuple(source[k] for k in ('pid', 'session_id', 'home', 'worktree', 'transcript')),
-            data.get('remote'), process(source['pid']), receipt)
+            data.get('remote'), process(source['pid']))
 
 
 def quiet_processes(source,config_home=None,background=None,strict=True,remounted=None):

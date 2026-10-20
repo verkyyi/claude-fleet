@@ -164,7 +164,7 @@ snapshot_unchanged() {
   local sdir n=0 kept='' every="${FLEET_RESTORE_SNAPSHOT_EVERY:-5}"
   case "$every" in ''|*[!0-9]*) every=5 ;; esac
   sdir="$(fleet_state_dir "$1")"
-  SNAP_KEY=$(tmux -L "$2" list-panes -s -t "$1" -F '#{window_id}|#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},#{@repo}}|#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}||#{?@codex_identity,#{@codex_identity},#{@codex_pending}}|#{@desk}|#{@origin_wid}|#{@pin}|#{@hub}|#{@launch}|#{@launch_receipt}|#{@native_worktree}|#{@authority_receipt}' 2>/dev/null) || { SNAP_KEY=''; return 1; }
+  SNAP_KEY=$(tmux -L "$2" list-panes -s -t "$1" -F '#{window_id}|#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},#{@repo}}|#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}||#{?@codex_identity,#{@codex_identity},#{@codex_pending}}|#{@desk}|#{@origin_wid}|#{@pin}|#{@hub}' 2>/dev/null) || { SNAP_KEY=''; return 1; }
   [ -n "$SNAP_KEY" ] && [ -f "$sdir/restore.map" ] || return 1
   { IFS= read -r n; IFS= read -r -d '' kept; } < "$sdir/.snapshot-key" 2>/dev/null
   case "$n" in ''|*[!0-9]*) return 1 ;; esac
@@ -295,21 +295,13 @@ snapshot() {
     # restore() stamps it back. A window with no policy writes no row.
     # Then (issue #1296): @cc_session_id, the pane's own session id as
     # its hooks recorded it — the resolver resumes THAT before guessing by mtime.
-    # Accepted launch identity survives snapshot/restore; absence of native
-    # proof is an interrupted start, never permission to rerun the first input.
     # The map this one replaces (issue #4728): a Codex window that does not know
     # its thread right now keeps the one its identity had there.
     local priormap; priormap=$(restore_map_file "$sess")
     [ -f "$priormap" ] || priormap=''
-    if ! tmux -L "$sock" list-windows -t "$sess" -F 'F#{q:@fleet_id} L#{q:@launch} R#{q:@launch_receipt} A#{?@native_worktree,#{q:@authority_receipt},}' 2>/dev/null \
-      | python3 "$BIN/.fleet-restore-resolve.py" --snapshot-metadata >> "$tmp"; then
-      log "snapshot $sess: metadata capture failed; preserving prior map"
-      rm -f "$tmp"
-      return 1
-    fi
     { tmux -L "$sock" list-windows -t "$sess" -F "#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}||#{?@codex_identity,#{@codex_identity},#{@codex_pending}}' 2>/dev/null
       [ -n "$spath" ] && printf '||||__HUB__|%s|-\n' "$spath"
-    } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid --fid --reap --launch-map "$tmp" \
+    } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid --fid --reap \
           ${priormap:+--prior-map "$priormap"} >> "$tmp" 2>/dev/null
     # A desk session (issue #2676) is a no-repo row whose ticket lives in a repo:
     # `DESK<TAB><fleet_id><TAB><owner/name>` rows, appended AFTER every FID/WIN pair
@@ -493,7 +485,6 @@ pullback_scan() {
     grep -qxF "$(printf 'FID\t%s' "$fid")" "$pb" 2>/dev/null && continue
     [ -f "$pb" ] || awk -F'\t' '$1=="FLEET"{print; exit}' "$mf" > "$pb"
     printf 'FID\t%s\n%s\n' "$fid" "WIN${line#"$wtag"}" >> "$pb"
-    awk -F'\t' -v id="$fid" '($1 == "LAUNCH" || $1 == "AUTHORITY") && $2 == id' "$mf" >> "$pb"
     log "pullback: $sess/$wname ($fid) gone while ${wstate:--} — queued for the next tick"
   done < <(fleet_restore_wins <(fleet_restore_map_prune "$mf"))
   return 0
@@ -555,7 +546,6 @@ pullback_run() {
       printf 'FID\t%s\n%s\n' "$fid" "WIN${line#WIN:"$fid"}" >> "$keep"
       n=$((n + 1))
     done < <(fleet_restore_wins "$pb")
-    awk -F'\t' '$1 == "LAUNCH" || $1 == "AUTHORITY"' "$pb" >> "$keep" 2>/dev/null
     awk -F'\t' '$1 == "DESK" || $1 == "OWID" || $1 == "PIN" || $1 == "AGENTDEF"' "$mf" >> "$keep" 2>/dev/null   # desk tickets (#2676), remote parents (#3439), pins (#3517) and agent files (#4760) ride along
     rm -f "$pb"
     if [ "$n" = 0 ]; then rm -f "$keep"; continue; fi
@@ -826,37 +816,6 @@ restore() {
       # A session that binds no issue (a scratch, a no-repo one — its desk ticket is
       # not a binding) may spawn (issue #4334): its @agent_spawn back before its launcher mounts the dispatch group.
       { [ "${wraw:-}" = 1 ] || [ "${wrepo:-}" = - ]; } && stamp="$stamp$(fleet_win_stamp_cmd @agent_spawn 1)"
-      local launch_context='' launch_receipt='' authority_receipt='' authority_count=0 native_intent=''
-      case "$wtag" in WIN:?*)
-        launch_context=$(awk -F'\t' -v id="${wtag#WIN:}" '$1 == "LAUNCH" && $2 == id {print $3}' "$mf")
-        launch_receipt=$(awk -F'\t' -v id="${wtag#WIN:}" '$1 == "LAUNCH" && $2 == id {print $4}' "$mf")
-        authority_receipt=$(awk -F'\t' -v id="${wtag#WIN:}" '$1 == "AUTHORITY" && $2 == id {print $3}' "$mf")
-        authority_count=$(awk -F'\t' -v id="${wtag#WIN:}" '$1 == "AUTHORITY" && $2 == id {n++; if (NF != 3) bad=1} END {print bad ? -1 : n+0}' "$mf")
-        if [ -n "$launch_context" ] && [ "$authority_count" = 0 ]; then
-          stamp="$stamp$(fleet_win_stamp_cmd @launch "$launch_context" @launch_receipt "$launch_receipt" @launch_started 1 @fleet_id "${wtag#WIN:}")"
-          if native_intent=$(printf '[%s,%s]' "$launch_context" "${launch_receipt:-null}" \
-              | python3 "$BIN/fleet_launch.py" restore-native-worktree "$wpath" "$wid" "$agent_label" "${wtag#WIN:}"); then
-            [ -z "$native_intent" ] || stamp="$stamp$(fleet_win_stamp_cmd @native_worktree "$native_intent")"
-          else
-            kind=failed
-            cmd='exec "$SHELL"'
-            say "    ⚠ $wname: saved native launch identity is invalid — not resumed"
-            log "refuse $sess/$wname native-launch-identity"
-          fi
-        fi
-        if [ "$authority_count" != 0 ]; then
-          if [ "$authority_count" = 1 ] && ! awk -F'\t' -v id="${wtag#WIN:}" '$1 == "LAUNCH" && $2 == id {found=1} END {exit !found}' "$mf" \
-              && native_intent=$(printf '%s' "$authority_receipt" \
-              | python3 "$BIN/fleet_repo_authority.py" --restore-native-worktree "$wpath" "$wid" "$agent_label" "${wtag#WIN:}" "${wrepo:-}"); then
-            [ -z "$native_intent" ] || stamp="$stamp$(fleet_win_stamp_cmd @authority_receipt "$authority_receipt" @native_worktree "$native_intent" @fleet_id "${wtag#WIN:}")"
-          else
-            kind=failed
-            cmd='exec "$SHELL"'
-            say "    ⚠ $wname: saved native repository identity is invalid — not resumed"
-            log "refuse $sess/$wname native-authority-identity"
-          fi
-        fi ;;
-      esac
       cmd="$stamp$cmd"
       if [ -z "$dry" ]; then
         # Capture the new window-id and target every follow-up option-set through

@@ -38,7 +38,6 @@ Columns
                   the SessionStart hook (@seed_words); 0 = the flow rides the words
   park_resume     1 = a parked session comes back into its own conversation (its
                   transcript beside the worktree); 0 = a fresh one
-  native_worktree 1 = the agent can make its own worktree (--native-worktree)
   ready_check     a fleet-lib function that says this login can run it; empty = none
   trust           where its "trust this folder?" answer is written (fleet-trust.sh):
                   claude-json (~/.claude.json, every spawn) | codex-toml (config.toml,
@@ -56,7 +55,7 @@ HERE = Path(__file__).resolve().parent
 
 COLUMNS = ("launcher", "model_env", "model_flag", "resume_flag", "fork_flag", "fork_replaces",
            "continue_flag", "preset_sid_flag", "sid_window", "sid_pending", "sid_thread",
-           "seed", "seed_words", "park_resume", "native_worktree", "ready_check", "trust", "mcp")
+           "seed", "seed_words", "park_resume", "ready_check", "trust", "mcp")
 
 ADAPTERS = {
     "claude": {
@@ -65,7 +64,7 @@ ADAPTERS = {
         "resume_flag": "--resume", "fork_flag": "--fork-session", "fork_replaces": "0",
         "continue_flag": "--continue", "preset_sid_flag": "--session-id",
         "sid_window": "@cc_session_id", "sid_pending": "", "sid_thread": "",
-        "seed": "slash", "seed_words": "1", "park_resume": "1", "native_worktree": "1",
+        "seed": "slash", "seed_words": "1", "park_resume": "1",
         "ready_check": "", "trust": "claude-json", "mcp": "flags",
     },
     "codex": {
@@ -73,7 +72,7 @@ ADAPTERS = {
         "resume_flag": "resume", "fork_flag": "fork", "fork_replaces": "1",
         "continue_flag": "", "preset_sid_flag": "",
         "sid_window": "@codex_session_id", "sid_pending": "@codex_pending", "sid_thread": "@codex_thread_id",
-        "seed": "skill", "seed_words": "0", "park_resume": "0", "native_worktree": "0",
+        "seed": "skill", "seed_words": "0", "park_resume": "0",
         "ready_check": "fleet_codex_ready", "trust": "codex-toml", "mcp": "config",
     },
 }

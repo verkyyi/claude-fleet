@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
-import time
 import unittest
 import uuid
 from unittest.mock import patch
@@ -409,58 +408,20 @@ class LoopTests(NativeDouble, unittest.TestCase):
 class IdleDispatchTests(NativeDouble, unittest.TestCase):
     """#4431: a due wakeup follows fresh native idle, never the panel's done/looping word.
 
-    Two tiers. A pane with a C3 launch goes through fleet_runtime: a fresh v1 read,
-    then accept_if_idle — Codex and Claude alike (#4658), capability_unavailable
-    only for a provider the adapter has none for; only `accepted` counts. A pane
-    without one keeps its original road (legacy_unfenced).
+    One road (EPIC T497 C8 retired the launch-proof one): the pane's own —
+    the Claude inbox, or the Codex thread — not an atomic accept.
     """
     def setUp(self):
         LoopTests.setUp(self)
         owner = self
         self.opts = {'#{@claude_state}': 'looping'}
-        self.waits, self.accepts = [], []
-        self.snap = dict(state='idle', reason='', provider='codex', sid=SID)
-        self.accept = 'accepted'
-
-        class Runtime:
-            @staticmethod
-            def read(pane, context=None, expected=None, socket=''):
-                s = owner.snap
-                return dict(version=1, observed_at=time.time(), expires_at=time.time() + 5,
-                            identity=dict(provider=s['provider'], native_session=s['sid'],
-                                          generation=3, turn_id='user-turn-1'),
-                            runtime=dict(state=s['state'], reason=s['reason']))
-
-            @staticmethod
-            def idle_accept_capability(provider):
-                ok = provider in ('codex', 'claude')
-                return dict(state='available' if ok else 'unavailable',
-                            reason='' if ok else 'native_precondition_unavailable')
-
-            @staticmethod
-            def accept_if_idle(pane, expected, delivery_id, text, socket=''):
-                owner.accepts.append((delivery_id, text))
-                st = owner.accept
-                return dict(state=st, delivery_id=delivery_id, submitted=st != 'rejected',
-                            reason={'accepted': 'native_started', 'unknown': 'receipt_scan_incomplete',
-                                    'rejected': 'native_not_idle'}[st],
-                            receipt=dict(turn_id='loop-turn-%d' % len(owner.accepts),
-                                         intervening_turn=False) if st == 'accepted' else None)
-
+        self.waits = []
         for p in (patch.object(loop, 'pane', side_effect=lambda _, f: owner.opts.get(f, '')),
-                  patch.object(loop, 'wait_reasons', side_effect=lambda r: list(owner.waits)),
-                  patch.object(loop, '_runtime', return_value=Runtime)):
+                  patch.object(loop, 'wait_reasons', side_effect=lambda r: list(owner.waits))):
             p.start()
             self.addCleanup(p.stop)
 
     def read(self): return json.loads(self.path.read_text())
-
-    def c3(self, agent='codex'):
-        self.opts['#{@launch}'] = json.dumps(dict(provider=agent))
-        r = self.read(); r['agent'] = agent; loop.save(self.path, r)
-        p = patch.object(loop.runpy, 'run_path', return_value={'snapshot': lambda *_, **kw: {'state': 'empty'}})
-        p.start()
-        self.addCleanup(p.stop)
 
     def test_stop_looping_own_loop_legacy_codex_delivers_once(self):
         loop.dispatch(self.path, now=10000)
@@ -504,125 +465,22 @@ class IdleDispatchTests(NativeDouble, unittest.TestCase):
             loop.dispatch(self.path, now=10000)
         self.assertEqual((self.messages, self.read()['deferred_reason']), ([], 'input_draft'))
 
-    def test_c3_codex_accepted_exactly_once_never_turn_start(self):
-        self.c3()
-        loop.dispatch(self.path, now=10000)
-        loop.dispatch(self.path, now=10001)
+    def test_a_launch_proof_delivery_left_from_before_c8_is_dropped_round_still_due(self):
+        # EPIC T497 C8 retired the launch-proof road (fleet_runtime.accept_if_idle);
+        # a pending delivery it left is dropped, and the due round goes the pane's
+        # own road exactly once.
+        self.opts['#{@launch}'] = json.dumps(dict(provider='codex'))
         r = self.read()
-        self.assertEqual((len(self.accepts), self.messages), (1, []))
-        self.assertEqual((r['deliveries'], r['accepted_turn'], r['last_turn_id'], r['status']),
-                         (1, 'loop-turn-1', 'loop-turn-1', 'active'))
-        a = r['last_attempt']
-        self.assertEqual((a['fence'], a['state'], a['delivery_id'], a['native_session'], a['task_generation']),
-                         ('native_idle', 'accepted', self.accepts[0][0], SID, 3))
-        self.assertNotIn('pending_delivery', r)
-
-    def test_c3_unknown_keeps_pending_and_settles_the_same_delivery(self):
-        self.c3()
-        self.accept = 'unknown'
-        loop.dispatch(self.path, now=10000)
-        r = self.read()
-        self.assertEqual((r['status'], r['deliveries'], r['deferred_reason']),
-                         ('delivering', 0, 'unknown:receipt_scan_incomplete'))
-        self.accept = 'accepted'
-        loop.dispatch(self.path, now=10001)
-        loop.dispatch(self.path, now=10002)
-        self.assertEqual(len(self.accepts), 2)
-        self.assertEqual(self.accepts[0], self.accepts[1])  # same id + text: a settle, never a new send
-        self.assertEqual((self.read()['deliveries'], self.read()['status']), (1, 'active'))
-
-    def test_c3_rejected_stays_due_and_retries_as_a_new_delivery(self):
-        self.c3()
-        self.accept = 'rejected'
-        loop.dispatch(self.path, now=10000)
-        r = self.read()
-        self.assertEqual((r['status'], r['deliveries'], r['deferred_reason'], r['schedule']['next_run_at']),
-                         ('active', 0, 'rejected:native_not_idle', 0))
-        self.accept = 'accepted'
-        loop.dispatch(self.path, now=10010)
-        self.assertNotEqual(self.accepts[0][0], self.accepts[1][0])
-        self.assertEqual(self.read()['deliveries'], 1)
-
-    def claude(self):
-        self.c3('claude')
-        self.snap['provider'] = 'claude'
-        inbox = patch.object(loop, 'deliver_claude', side_effect=AssertionError('legacy inbox on a C3 pane'))
-        inbox.start()
-        self.addCleanup(inbox.stop)
-
-    def test_c3_claude_accepted_through_the_runtime_never_the_inbox(self):
-        self.claude()
-        loop.dispatch(self.path, now=10000)
-        loop.dispatch(self.path, now=10001)
-        r = self.read()
-        self.assertEqual((len(self.accepts), self.messages), (1, []))
-        self.assertEqual((r['deliveries'], r['accepted_turn'], r['status'], r['deferred_reason']),
-                         (1, 'loop-turn-1', 'active', None))
-        a = r['last_attempt']
-        self.assertEqual((a['fence'], a['state'], a['delivery_id'], a['native_session']),
-                         ('native_idle', 'accepted', self.accepts[0][0], SID))
-        self.assertNotIn('pending_delivery', r)
-        self.assertNotIn('delivery_offset', r)  # the legacy transcript road never ran
-
-    def test_c3_claude_unknown_settles_the_same_delivery_rejected_stays_due(self):
-        self.claude()
-        self.accept = 'unknown'
-        loop.dispatch(self.path, now=10000)
-        self.assertEqual((self.read()['status'], self.read()['deliveries']), ('delivering', 0))
-        self.accept = 'accepted'
-        loop.dispatch(self.path, now=10001)
-        self.assertEqual(self.accepts[0], self.accepts[1])  # a settle, never a new send
-        self.assertEqual(self.read()['deliveries'], 1)
-        r = self.read(); r['schedule']['next_run_at'] = 0; loop.save(self.path, r)
-        self.accept = 'rejected'
-        loop.dispatch(self.path, now=10010)
-        r = self.read()
-        self.assertEqual((r['status'], r['deliveries'], r['deferred_reason'], r['schedule']['next_run_at']),
-                         ('active', 1, 'rejected:native_not_idle', 0))
-
-    def test_defer_while_a_fenced_claude_delivery_is_pending_never_reads_the_legacy_ack(self):
-        r = self.read()
-        r.update(agent='claude', status='delivering',
-                 pending_delivery=dict(delivery_id=str(uuid.uuid4()), text='x', due_ids=[],
-                                       generation=0, native_session=SID))
+        r.update(status='delivering', pending_delivery=dict(delivery_id=str(uuid.uuid4()), text='x', due_ids=[],
+                                                             generation=0, native_session=SID))
         loop.save(self.path, r)
-        with patch.dict(os.environ, FLEET_LOOP_RECORD=str(self.path)), \
-                patch.object(loop, 'current', lambda r: None), \
-                patch.object(loop, 'claude_identity', return_value={'session_id': SID}), \
-                patch.object(loop, 'acknowledge_claude', side_effect=AssertionError('legacy ack')):
-            with self.assertRaisesRegex(ValueError, 'not active'):
-                loop.command(argparse.Namespace(command='defer', seconds=600, prompt_file=None))
-        self.assertEqual(self.read()['status'], 'delivering')
-
-    def test_c3_provider_without_an_accept_is_never_sent(self):
-        self.c3()
-        self.snap['provider'] = 'gemini'
         loop.dispatch(self.path, now=10000)
-        self.assertEqual((self.accepts, self.messages), ([], []))
-        self.assertEqual(self.read()['deferred_reason'], 'capability_unavailable:native_precondition_unavailable')
-        self.assertEqual(self.read()['status'], 'active')
-
-    def test_stale_busy_or_foreign_snapshot_never_delivers(self):
-        self.c3()
-        for snap, why in ((dict(state='unknown', reason='expired'), 'runtime:unknown:expired'),
-                          (dict(state='active'), 'runtime:active'),
-                          (dict(state='approval'), 'runtime:approval'),
-                          (dict(sid='f' * 36), 'runtime:identity_changed')):
-            self.snap = dict(self.snap, **snap)
-            loop.dispatch(self.path, now=10000)
-            self.assertEqual((self.accepts, self.read()['deferred_reason']), ([], why), snap)
-            self.snap = dict(state='idle', reason='', provider='codex', sid=SID)
-
-    def test_pending_delivery_of_another_generation_or_session_is_never_resent(self):
-        self.c3()
-        for stale in (dict(generation=7), dict(native_session='f' * 36)):
-            r = self.read()
-            r.update(status='delivering', generation=1,
-                     pending_delivery=dict(dict(delivery_id=str(uuid.uuid4()), text='x', due_ids=[],
-                                                generation=1, native_session=SID), **stale))
-            loop.save(self.path, r)
-            loop.dispatch(self.path, now=10000)
-            self.assertEqual((self.accepts, self.read()['status']), ([], 'paused'))
+        r = self.read()
+        self.assertNotIn('pending_delivery', r)
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(r['last_attempt']['fence'], 'legacy_unfenced')
+        loop.dispatch(self.path, now=10001)
+        self.assertEqual(len(self.messages), 1)
 
 
 class BridgeTest(unittest.TestCase):

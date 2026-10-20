@@ -98,7 +98,7 @@ case_sessmap() {
 case_account() {
   cfx_sandbox account
   cfx_copy fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-account-truth.sh fleet-account-truth.py \
-    fleet-context.sh fleet_pending_tool.py fleet_launch.py fleet_agent_argv.py fleet_runtime.py \
+    fleet-context.sh fleet_pending_tool.py fleet_native_proc.py fleet_agent_argv.py \
     fleet-codex-rpc.py fleet-codex-session.py
   rm -f "$WORK/accounts/a"; printf 'token-A\n' > "$WORK/accounts/acctA"; printf 'token-B\n' > "$WORK/accounts/acctB"
   cfx_extract "$WORK/phase.sh" atomic_write ph_banner banner_scan_one

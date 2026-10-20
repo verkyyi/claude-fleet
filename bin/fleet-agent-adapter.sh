@@ -18,7 +18,6 @@ _fa_claude_sid_thread=''
 _fa_claude_seed='slash'
 _fa_claude_seed_words='1'
 _fa_claude_park_resume='1'
-_fa_claude_native_worktree='1'
 _fa_claude_ready_check=''
 _fa_claude_trust='claude-json'
 _fa_claude_mcp='flags'
@@ -36,7 +35,6 @@ _fa_codex_sid_thread='@codex_thread_id'
 _fa_codex_seed='skill'
 _fa_codex_seed_words='0'
 _fa_codex_park_resume='0'
-_fa_codex_native_worktree='0'
 _fa_codex_ready_check='fleet_codex_ready'
 _fa_codex_trust='codex-toml'
 _fa_codex_mcp='config'
@@ -45,6 +43,6 @@ fleet_agent_or_default() { if fleet_agent_known "${1:-}"; then printf '%s' "$1";
 fleet_agent_get() {   # <agent> <column> — prints the value; exit 1 unknown
   fleet_agent_known "${1:-}" || return 1
   case "${2:-}" in ''|*[!a-z0-9_]*) return 1 ;; esac
-  case " launcher model_env model_flag resume_flag fork_flag fork_replaces continue_flag preset_sid_flag sid_window sid_pending sid_thread seed seed_words park_resume native_worktree ready_check trust mcp " in *" $2 "*) : ;; *) return 1 ;; esac
+  case " launcher model_env model_flag resume_flag fork_flag fork_replaces continue_flag preset_sid_flag sid_window sid_pending sid_thread seed seed_words park_resume ready_check trust mcp " in *" $2 "*) : ;; *) return 1 ;; esac
   eval "printf '%s' \"\${_fa_${1}_${2}}\""
 }

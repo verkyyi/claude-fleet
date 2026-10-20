@@ -28,7 +28,6 @@ class TaskControlTests(unittest.TestCase):
         with patch.object(control, "call", return_value={"task": dict(id="T7", authority_version=1, generation=4, state="running")}), patch.object(control.time, "monotonic", side_effect=[0, 0, 2]), contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(control.wait_task("T7", 1, 1), 3)
         self.assertIn("WAITING", out.getvalue())
-        self.assertIn("generation: 4", out.getvalue())
 
     def test_closed_is_one_read_never_a_wait(self):
         # issue #4897: the reapers' reader — terminal ⇒ 0, open ⇒ 1, unknown ⇒ 3.
@@ -58,7 +57,7 @@ url=sys.argv[-1]
 with open(os.environ["CALL_LOG"],"a") as f: f.write(url+"\\n")
 if not url.startswith("https://hub.test/"): sys.exit(90)
 if os.environ.get("OFFLINE"): sys.exit(7)
-t=dict(id="T7",authority_version=1,generation=2,execution_owner="fleet/session",state="succeeded",outcome="succeeded")
+t=dict(id="T7",authority_version=1,generation=2,state="succeeded",outcome="succeeded")
 if url.endswith("/children"): print(json.dumps(dict(parent="T7",parent_generation=2,children=[t])))
 else: print(json.dumps(dict(task=t)))
 print("200")
@@ -95,15 +94,15 @@ print("200")
             r = dict(task="T8", owner="alice", generation=1, worker_id="child/session", ticket_ref="gh:two/repo#7",
                      parent_task="T7", parent_session="parent/session", parent_generation=2,
                      outcome="succeeded", evidence="fixture stop", execution_stopped=True, event_id="done", summary="done")
-            t = dict(id="T8", owner="alice", generation=1, execution_owner="child/session", outcome="succeeded", **{k:r[k] for k in ("ticket_ref","parent_task","parent_session","parent_generation")})
-            parent = dict(id="T7", owner="alice", generation=2, execution_owner="parent/session")
+            t = dict(id="T8", owner="alice", generation=1, outcome="succeeded", **{k:r[k] for k in ("ticket_ref","parent_task","parent_session","parent_generation")})
+            parent = dict(id="T7", owner="alice", generation=2)
             f = Path(temp)/"relay.json"
             f.write_text(json.dumps(dict(id="child/session#done", **{"from":"child/session", "to":"parent/session"}, payload=dict(task_report=r))))
             sends = []
             def run(args, **kwargs):
                 if args[-2:] == [str(control.BIN), "parent/session"]:
                     return subprocess.CompletedProcess(args,0,"socket\n@7\n"+temp+"\nself\n","")
-                self.assertNotIn("FLEET_LAUNCH_DELIVERY", kwargs["env"])  # no native proof gates it
+                self.assertNotIn("FLEET_LAUNCH_DELIVERY", kwargs.get("env") or {})  # no native proof gates it
                 self.assertIn("children_send", args[2])
                 sends.append(kwargs.get("input")); return subprocess.CompletedProcess(args,0,"","")
             def call(action, task, *args, **kwargs):
@@ -133,69 +132,14 @@ print("200")
             self.assertEqual(len(sends),2)
             print("fixture report: event=done, reconnect rows=1, deliveries=1; parent g3 still the same ID → delivered")
 
-    def test_completion_report_delivered_and_awaited_with_retained_native(self):
-        # The native fixture really remains alive across explicit report ->
-        # existing outbox -> await. Hub transaction/relay fencing is covered by
-        # the matching store/API tests; no PR/GitHub or exit inference here.
-        native = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-        try:
-            for outcome in ("succeeded", "failed"):
-                c = dict(task="T8", owner="alice", generation=1, worker_id="child/session")
-                t = dict(id="T8", authority_version=1, owner="alice", generation=1,
-                         execution_owner="child/session", parent_session="parent/session")
-                proof = dict(native_session="retained", actual_provider="codex", pid=native.pid)
-                reports = []
-                def call(action, task, payload=None, **kwargs):
-                    if action == "get": return dict(task=t)
-                    self.assertEqual(action, "report")
-                    self.assertFalse(payload["execution_stopped"])
-                    reports.append(payload)
-                    t["outcome"] = payload["outcome"]
-                    return dict(disposition="committed", task=t)
-                with patch.object(control, "context", return_value=c), patch.object(control, "call", side_effect=call), patch.object(control.launch, "option", return_value=json.dumps(proof)), patch.object(control.launch, "check_receipt", return_value=proof), patch.object(control.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as delivery, contextlib.redirect_stdout(io.StringIO()) as out:
-                    self.assertEqual(control.report("@8", "waiting", "Explicit work result", "", False, outcome=outcome), 3)
-                    self.assertEqual(control.wait_task("T8", 1, 1), 0 if outcome == "succeeded" else 1)
-                    self.assertIsNone(native.poll(), "completion killed native session")
-                    self.assertEqual(json.loads(delivery.call_args.kwargs["input"])["task_report"], reports[0])
-                    self.assertIn(outcome.upper(), out.getvalue())
-                print("fixture retained native: report %s committed, delivery queued, await %s, process alive" % (outcome, outcome.upper()))
-        finally:
-            native.terminate()
-            native.wait(timeout=5)
-
-    def test_epic_parent_progress_is_recorded_never_relayed(self):
-        # issue #4957: an EPIC driver's tick is a progress report on its OWN
-        # (parent) task — one hub write, no child report, no GitHub.
-        c = dict(task="T7", owner="alice", generation=2, worker_id="parent/session")
-        t = dict(id="T7", authority_version=1, owner="alice", generation=2, execution_owner="parent/session",
-                 parent_session="orch/session")
-        writes = []
-        def call(action, task, payload=None, **kwargs):
-            if action == "get": return dict(task=t)
-            writes.append((action, payload)); return dict(disposition="progress", task=t)
-        with patch.object(control, "context", return_value=c), patch.object(control, "call", side_effect=call), \
-             patch.object(control.subprocess, "run") as relay, contextlib.redirect_stdout(io.StringIO()) as out:
-            self.assertEqual(control.progress("@7", "tick 3 · landed C1", "waiting", "tick-3"), 0)
-            relay.assert_not_called()
-        self.assertEqual(len(writes), 1)
-        action, r = writes[0]
-        self.assertEqual((action, r["status"], r["outcome"], r["summary"], r["event_id"]), ("report", "waiting", "", "tick 3 · landed C1", "tick-3"))
-        self.assertIn("RECORDED", out.getvalue())
-        t["outcome"] = "succeeded"   # a closed parent takes no more ticks
-        with patch.object(control, "context", return_value=c), patch.object(control, "call", side_effect=call), contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(control.progress("@7", "late", "waiting"), 0)
-        self.assertEqual(len(writes), 1)
-        with patch.object(control, "context", return_value=c), self.assertRaises(ValueError):
-            control.progress("@7", "  ", "waiting")
-
-    def test_progress_with_the_id_switch_goes_on_the_window_id(self):
-        # EPIC T497 C12: with the switch on, the tick is a `progress` event on the
-        # window's own ID's ledger — the task record is neither read nor written.
+    def test_progress_goes_on_the_window_id(self):
+        # EPIC T497 C12 / C8: the tick is a `progress` event on the window's own
+        # ID's ledger — the task record is neither read nor written.
         import fleet_id
         fid = "3fa85f64-5717-4562-b3fc-2c963f66afa6"
         with tempfile.TemporaryDirectory() as d, \
-             patch.dict(os.environ, FLEET_ID_SWITCH="on", FLEET_ID_DIR=d, FLEET_ID_PUSH="0"), \
-             patch.object(control, "call") as hub, patch.object(control.launch, "option", return_value=fid), \
+             patch.dict(os.environ, FLEET_ID_DIR=d, FLEET_ID_PUSH="0"), \
+             patch.object(control, "call") as hub, patch.object(control, "option", return_value=fid), \
              contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(control.progress("@7", "tick 5 · report: pending", "waiting", "tick-5"), 0)
             self.assertEqual(control.progress("@7", "tick 5 again", "waiting", "tick-5"), 0)
@@ -203,8 +147,7 @@ print("200")
             pg = fleet_id.fold(fleet_id.read(fid))["progress"]
             self.assertEqual((pg["summary"], pg["event"], pg["seq"]), ("tick 5 · report: pending", "tick-5", 1))
         self.assertIn("id: " + fid, out.getvalue())
-        with patch.dict(os.environ, FLEET_ID_SWITCH="on"), patch.object(control.launch, "option", return_value=""), \
-             self.assertRaises(ValueError):
+        with patch.object(control, "option", return_value=""), self.assertRaises(ValueError):
             control.progress("@7", "tick 6", "waiting")
 
     def test_children_summary_counts_outcomes(self):
@@ -214,39 +157,21 @@ print("200")
         hub = dict(open=0, succeeded=2, failed=0, cancelled=0, refused=0)
         self.assertEqual(control.child_summary(dict(children=kids, summary=hub)), hub)
 
-    def test_stop_ack_does_not_republish_completed_work(self):
-        c = dict(task="T7", owner="alice", generation=1, worker_id="fleet/session")
-        t = dict(c, execution_owner="fleet/session", outcome="succeeded", cancel_request="stop")
-        proof = dict(pid=123, birth="one", executable="/native", native_session="sid")
-        with patch.object(control, "context", return_value=c), patch.object(control, "call", side_effect=[dict(task=t),t]) as calls, patch.object(control.launch, "option", return_value=json.dumps(proof)), patch.object(control.launch, "check_receipt", return_value=proof), patch.object(control.os, "kill", side_effect=ProcessLookupError):
-            self.assertEqual(control.finalize("@7"), 0)
-            self.assertEqual(calls.call_args.args[0], "stopped")
-            self.assertTrue(calls.call_args.args[2]["execution_stopped"])
-            self.assertNotIn("state", calls.call_args.args[2])
-
-    def test_cancel_unclaimed_record_without_execution_owner(self):
-        # claude-fleet#4964: the hub sends no execution_owner key for an unclaimed record.
-        t = dict(id="T361", owner="alice", generation=1, state="accepted")
+    def test_cancel_a_record_no_window_opened(self):
+        # claude-fleet#4964 / EPIC T497 C13: a record no window ever opened is
+        # cancelled by one transition; the hub answers for one an ID carries.
+        t = dict(id="T361", authority_version=1, owner="alice", generation=1, state="accepted")
         with patch.object(control, "call", side_effect=[dict(task=t), t]) as calls, contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(control.cancel("T361", "residual-T361"), 2)
         m = calls.call_args.args[2]
         self.assertEqual((calls.call_args.args[0], m["kind"], m["state"], m["expected_worker"]), ("mutate", "transition", "cancelled", ""))
         self.assertTrue(m["evidence"])
         self.assertIn("CANCELLED", out.getvalue())
-        held = dict(t, state="running", execution_owner="fleet/session")
-        with patch.object(control, "call", side_effect=[dict(task=held), dict(cancel_request="ev")]) as calls, contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(control.cancel("T361", "ev"), 3)
-        self.assertEqual((calls.call_args.args[2]["kind"], calls.call_args.args[2]["expected_worker"]), ("cancel_request", "fleet/session"))
-
-    def test_native_alive_cannot_ack_cancel(self):
-        c=dict(task="T7",owner="alice",generation=1,worker_id="fleet/session")
-        t=dict(id="T7",owner="alice",generation=1,execution_owner="fleet/session",cancel_request="stop")
-        proof=dict(pid=123,birth="one",executable="/native",native_session="sid")
-        with patch.object(control,"context",return_value=c), patch.object(control,"call",return_value=dict(task=t)) as calls, patch.object(control.launch,"option",return_value=json.dumps(proof)), patch.object(control.launch,"check_receipt",return_value=proof), patch.object(control.os,"kill"), patch.object(control.launch,"process",return_value=proof):
-            with self.assertRaisesRegex(ValueError,"still alive"):
-                control.finalize("@7")
-            self.assertEqual(calls.call_count,1)
-
+        done = dict(t, outcome="cancelled")
+        with patch.object(control, "call", return_value=dict(task=done)) as calls, contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(control.cancel("T361", "ev"), 0)
+        self.assertEqual(calls.call_count, 1)
+        self.assertIn("CANCELLED", out.getvalue())
 
 if __name__ == "__main__":
     unittest.main()

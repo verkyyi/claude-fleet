@@ -911,28 +911,6 @@ outcome reports. A seeded (`--prompt`) or no-repo scratch never travels; the
 hub's `worker_start(kind=scratch, repo, node?, name?)` opens one from the MCP side
 too. `ccquota place … <repo> scratch <fleet UUID>` is the CLI form.
 
-**A dispatched task travels too** (T604). `fleet-task-record.sh dispatch` (the
-`task` tool, an EPIC driver's members) opens its session with `--as <agent file>`
-and the record's words as the seed, and neither pins it to the asking machine
-any more: the seed is the record's own (`FLEET_TASK_SEED=record`), and an agent
-file the release itself carries — `fleet-agent-def.py launch`'s `travels 1`: its
-bytes are a core agent (`conf/agent-defaults/claude/agents/`, fleet-worker) or a
-fleet plugin's (`plugins/*/agents/`, epic-driver) — is on every machine of that
-release. The machine the hub picks reads both back off `T<n>`
-(`fleet-control-read.sh start`: `request_payload`'s title + body → `--prompt-file`,
-its `template` → `--as` when that file is found there, else a plain session given
-the task and one stderr line). A file only the asker has (a project's own, an
-edited copy, another plugin's) still opens there; named onto another machine it
-is refused. On the issue road only `fleet-worker` travels (the issue start names
-no file; the opening machine starts its own fleet-worker). **A full machine asks
-for another one**: when the asker's own admission says no (memory, its session
-caps) and `--node` is auto, the place call carries `--not-here <reason>`
-(`not_here`): the asker is a declined candidate from the start, so it is never
-answered LOCAL; no other machine is `ALL_DECLINED` naming that reason, and the
-spawn refuses with it (exit 2, retry later), as before. Resume, `--seed-file` and
-an existing `--worktree` still open on the asker (the transcript and the
-worktree are there).
-
 ## Tools
 
 | MCP tool | Behavior | Required grant |
@@ -1441,79 +1419,16 @@ mutex. Requests with different idempotency keys are separate operations;
 cross-node Issue leases and per-principal aggregate worker budgets are future
 work. Existing machine/Fleet capacity limits still apply.
 
-### Verified accepted launches (launch_v1, #4393)
+### Accepted launches (launch_v1, #4393) — retired (EPIC T497 C8)
 
-An accepted C2 dispatch requires `launch_v1` on the selected node, including
-placement back onto the calling node. A downlevel node refuses before sending
-work. Legacy requests without an accepted task keep their existing path.
-The hub claims the C1 task execution owner before transport. Its canonical
-operation input stays unchanged for idempotent replay; the node receives an
-additional `params.launch` binding:
-
-```json
-{"version":1,"operation_id":"<UUID>","task":"T1","owner":"<task owner>","generation":1,"worker_id":"<fleet UUID>/<session UUID>","provider":"codex","attempt_id":"task:T1:g1"}
-```
-
-The initial session UUID is the operation UUID. Explicit transfer keeps that
-lifelong session identity and accepts a new operation and task generation.
-`owner` comes from the task record, not the node audit actor. Provider remains
-immutable within a generation.
-
-The hub binds only a start it sends to another machine. An accepted task that
-opens on the dispatching machine — placement answered `LOCAL`, or a no-repo /
-seeded session that is never placed — binds itself (issue #4754):
-`fleet_launch.py local` reads the record (still `accepted`, no executor, the
-envelope's generation / attempt / provider), mints one UUID as operation and
-session identity under this fleet's UUID, and claims the task through the
-node's fenced `claim` mutation (`/v1/node/tasks/<T>`) before any window opens;
-from there the binding is the remote one (`@launch`, supervise, receipt). A
-refused claim or a changed record refuses the spawn — never an unbound start.
-
-`fleet_launch.py` starts the selected native CLI with the task seed held back.
-The existing SessionStart hook observes the root process's kernel executable,
-birth time, version probe and native session ID under that launch supervisor.
-Nested native helpers cannot supply or replace its receipt. After checking the
-current C1 owner/generation and recording actual provider evidence, the
-supervisor delivers the seed once through the existing native inbox. Codex
-first input targets the endpoint and thread witnessed by that root hook.
-Missing CLI, missing proof, authority outage or a provider mismatch withholds
-input; rejected launch cleanup can signal only its own process descendants.
-There is no alternate provider or delivery retry queue.
-
-`result.launch_receipt` repeats all binding fields and adds `actual_provider`,
-`native_session`, `pid`, `birth`, `executable`, `observed_at` and `phase`.
-`verified` proves native identity; `delivered` confirms the seed inbox accepted
-it; `ready` is an unseeded launch; `resumed` is the same native conversation
-reattached without resending the original seed. Codex receipts also carry the
-native inbox endpoint and home. These are execution observations, never task
-completion. Child reports, children and await use C1 task state/outcome for
-completion ([task collaboration](FLEET-MCP.md#task-children-and-results-4394)).
-An explicit fenced success/failure commits while this native session remains
-alive; runtime stop and execution-lease release are independent. Cancellation
-acknowledgement and replacement still require confirmed stop/fencing.
-
-Reconnect reads the existing node operation journal and inspects its unique
-worker identity. A lost acknowledgement can recover the surviving receipt;
-a repeated submit never executes a second start. Lost process/session proof
-returns `unknown`/interrupted, retaining ownership for explicit recovery.
-A resume requires the same provider and native session ID. Restore and its
-pullback map carry the launch binding and receipt; no receipt after a previous
-start forbids a fresh rerun. Legacy restore nudges are withheld on this path.
-
-Native switching uses the existing transfer controller: verify the source
-binding and task authority before cutover, confirm the source stopped, then
-accept C1's explicit transfer and claim the next generation. The existing
-private handoff package records the acceptance attempt, and the existing node
-operation journal records the new launch. An ambiguous acceptance or failed
-target retains the task for recovery; it never automatically switches back or
-creates another generation. Old receipts cannot acquire the new generation.
-
-`fleet-launch-selftest` and the API launch tests use isolated fake native
-processes/adapters and the real operation journals. They cover missing CLI,
-mismatch, lost acknowledgement, replay, restart, PID reuse, nested hooks,
-resume and transfer fencing. They are fixture evidence. C9 owns actual remote
-process acceptance; credential readiness (#3401) and Codex restore identity
-(#3955) remain its external prerequisites. A merged fixture is not a live pass.
+A window's start is admitted by its own ID (docs/dev/FLEET-ID.md «C8»): nothing
+claims the task's execution owner, signs a launch contract (`params.launch`) or
+holds the seed until a native receipt. A node refuses `params.launch` as an
+unknown field. With the ID switch on (2026-10-20) the hub already sent none; its
+`launchContract` / `claimLaunch` and the execution state machine leave with C8's
+hub half. A node still lists `launch_v1` until then — the hub places an accepted
+dispatch only on a node that does — and the seed rides the launcher's command line
+as for any other start.
 
 Remote configuration writes are limited to:
 

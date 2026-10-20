@@ -154,6 +154,12 @@ onboarding 界面的稳定等待，不能用于启动性能统计。两个界面
 或准入限制，也不能把目录正常删除后回落主检出视为成功恢复。原有 session/window 记录继续复用，
 不为上述差异新增目录生命周期服务。
 
+> **EPIC T497 C8（2026-10-20）**：下面「原生创建入口候选」到「复用既有回执绑定工作树」几节
+> 记的 `--native-worktree` 入口，准入与恢复都建在启动证明（`fleet_launch.py`）和本机启动预留
+> （`@authority_receipt`）上；这两层随 C8 删掉，入口一起退役（`dash-raw-session.sh --native-worktree`
+> 现在直接拒绝），相应夹具（`fleet-native-create*`、`fleet-native-restore-selftest.sh`）也删了。
+> 进程与工作树身份的读法留在 `bin/fleet_native_proc.py`。以下留作当时的记录。
+
 ### 原生创建入口候选：受管任务路径
 
 `dash-raw-session.sh --native-worktree --node local --agent claude --task <accepted-task>`
@@ -295,7 +301,7 @@ python3 bin/fleet-native-claude-worktree-selftest.py --claude /path/to/claude --
 ```
 
 本机 Claude `2.1.296` 的 49 项检查通过。此次是原生 CLI 真正调用 hook，不是直接传入
-手写 payload；hook 通过既有 `fleet_launch.native_parent` / `root_native` 验证二进制、
+手写 payload；hook 通过既有 `fleet_native_proc.native_parent`（当时在 `fleet_launch.py`） / `root_native` 验证二进制、
 进程出生时间与夹具 supervisor 归属，没有 mock 进程发现或修改线上 tmux。
 
 | 调用路径 | SessionStart cwd | 后续 native init cwd | 原生 session ID |
@@ -597,7 +603,7 @@ python3 bin/fleet-native-session-env-selftest.py --hooks --codex /path/to/codex
 本机 `0.163.0` 与测试节点 `0.162.1` 各通过 48 项检查，五个依赖源码哈希一致；
 SessionStart 提供各自正确的 root/cwd，但十项夹具环境
 （包括 launcher、launch context 和 authority context）全部来自共同后台。
-复用现有 `fleet_launch.native_parent` 的真实进程识别，两个 Hook 均识别为同一个后台；
+复用现有 `fleet_native_proc.native_parent`（当时在 `fleet_launch.py`） 的真实进程识别，两个 Hook 均识别为同一个后台；
 它不是任一 TUI 监督进程的后代，因此现有 `root_native` 验证拒绝这条归属证明。
 这不是授权算法错误，也不能通过删除进程归属检查「修复」；共享后台的身份迁移仍未成立。
 

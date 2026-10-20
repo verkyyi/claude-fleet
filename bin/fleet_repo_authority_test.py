@@ -6,216 +6,42 @@ import io
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import fleet_repo_authority as migration
-import fleet_task_control as control
-
-
-@unittest.skipUnless(shutil.which("tmux"), "tmux is required")
-class PoolAuthorityTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="fleet-authority-", dir="/tmp")
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        self.socket = self.root / "fixture"
-        self.conf = self.root / "conf"
-        self.identities = {
-            "fixture": "11111111-1111-4111-8111-111111111111",
-            "fixture-pool": "22222222-2222-4222-8222-222222222222",
-            "separate-pool": "33333333-3333-4333-8333-333333333333",
-        }
-        self.fid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-        self.native_program = shutil.which("true")
-        self.assertIsNotNone(self.native_program)
-        self.panes = {}
-        self.addCleanup(lambda: subprocess.run(["tmux", "-S", str(self.socket), "kill-server"],
-                                              capture_output=True))
-        for session, identity in self.identities.items():
-            directory = self.conf / "fleets" / session
-            directory.mkdir(parents=True)
-            (directory / "identity").write_text(identity + "\n")
-            if session != "fixture-pool":
-                (directory / "conf").write_text('FLEET_REPO="org/a"\n')
-            pane = self.tm("-f", "/dev/null", "new-session", "-d", "-P", "-F", "#{pane_id}",
-                           "-s", session, "-c", str(self.root), "sleep 60")
-            self.panes[session] = pane
-            self.tm("set-option", "-w", "-t", pane, "@fleet_id", self.fid)
-            self.tm("set-option", "-w", "-t", pane, "@repo", "org/a")
-
-    def tm(self, *arguments):
-        return subprocess.check_output(["tmux", "-S", str(self.socket), *arguments],
-                                       text=True, stderr=subprocess.PIPE).strip()
-
-    def supervise(self, session, expected, hint=None, refuse=False, no_receipt=False, spelled=None,
-                  old_hub=False):
-        worker = self.identities[expected] + "/" + self.fid
-        pane = self.panes[session]
-        if spelled:
-            # The window keeps the registered spelling; the hub answers canonical.
-            (self.conf / "fleets" / session / "conf").write_text('FLEET_REPO="%s"\n' % spelled)
-            self.tm("set-option", "-w", "-t", pane, "@repo", spelled)
-        environment = {key: value for key, value in os.environ.items()
-                       if not key.startswith("FLEET_") and key not in ("TMUX", "TMUX_PANE")}
-        environment.update(HOME=str(self.root), FLEET_CONF_DIR=str(self.conf),
-                           FLEET_SKIP_GLOBAL_CONF="1", CCQUOTA_FLEET="1", TMUX_PANE=pane,
-                           TMUX=str(self.socket) + "," + self.tm("display-message", "-p", "#{pid}") + ",0")
-        if hint is not None:
-            environment["FLEET_LAUNCH_SESSION"] = hint
-        native = dict(worker_id=worker, native_session="native", pid=456,
-                      birth="birth", executable=self.native_program)
-        receipt = dict(repo="org/a", worker_id=worker, reservation="", supervisor=os.getpid(),
-                       native_identity=native)
-        writes = []
-
-        def start(repo, key, action, **fields):
-            self.assertEqual(repo, "org/a")
-            writes.append(action)
-            if action == "reserve":
-                receipt["reservation"] = key
-            elif action == "begin":
-                self.assertEqual(fields["worker_id"], worker)
-                if refuse:
-                    raise migration.hubrest.Fail(4, "worker belongs to another node")
-            elif action == "stopped":
-                self.assertEqual(fields["native_identity"], native)
-                self.assertTrue(fields["execution_stopped"])
-            elif action == "unobserved":
-                self.assertEqual(fields, dict(worker_id=worker))
-                if old_hub:
-                    raise migration.hubrest.Fail(4, "HTTP 409: invalid")
-            phase = dict(begin='starting', unobserved='abandoned').get(action, action)
-            return dict(repo=repo, reservation=key, worker_id=worker, owner='owner',
-                        endpoint_id='node', phase=phase)
-
-        with patch.dict(os.environ, environment, clear=True), \
-                patch.object(migration, "start_call", side_effect=start), \
-                patch.object(migration.hubrest, 'api', side_effect=lambda method, path, query: dict(
-                    repo=query['repo'], reservation=query['reservation'], owner='owner', endpoint_id='node', phase='reserved')), \
-                patch.object(migration.signal, "signal"), \
-                patch.object(migration.launch, "option", side_effect=lambda pane,key,*args:
-                             json.dumps(receipt) if key == "@authority_receipt" and not no_receipt else ""), \
-                patch.object(migration, "prove_stopped", return_value=native), \
-                patch("sys.stderr", new_callable=io.StringIO) as err:
-            if refuse:
-                with self.assertRaisesRegex(migration.hubrest.Fail, "another node"):
-                    migration.supervise([self.native_program])
-            else:
-                self.assertEqual(migration.supervise([self.native_program]), 0)
-        if no_receipt:
-            # The agent exited before it was observed (issue #4764): one plain
-            # reason, never a JSON parse error, and no stopped claim.
-            self.assertIn("no local native receipt", err.getvalue())
-            self.assertNotIn("Expecting value", err.getvalue())
-            # ...and the hub is told the start never ran (issue #4792), so it
-            # does not stay `starting` for ever; an older hub leaves it open.
-            self.assertEqual(writes, ["reserve", "begin", "unobserved"])
-            self.assertIn("start left open" if old_hub else "start closed as abandoned", err.getvalue())
-            return
-        self.assertEqual(writes, ["reserve", "begin", "cancel" if refuse else "stopped"])
-        self.assertFalse((self.conf / "fleets/fixture-pool/conf").exists())
-
-    def test_normal_fleet_ignores_unrelated_launch_hint(self):
-        self.supervise("fixture", "fixture", "separate")
-
-    def test_genuine_fleet_ending_in_pool_keeps_identity(self):
-        self.supervise("separate-pool", "separate-pool", "fixture")
-
-    def test_window_moved_into_a_fleet_takes_that_fleets_identity(self):
-        self.tm("move-window", "-s", "fixture-pool:", "-t", "fixture:")
-        self.supervise("fixture-pool", "fixture", "fixture")
-
-    def test_registered_spelling_with_capitals_is_canonical_in_context(self):
-        # Issue #4789: a repo registered as Org/A put "Org/A" in the context, the
-        # admission said "org/a", and every start stayed unobserved.
-        self.supervise("fixture", "fixture", spelled="Org/A")
-
-    def test_missing_receipt_says_why(self):
-        self.supervise("fixture", "fixture", no_receipt=True)
-
-    def test_missing_receipt_with_an_older_hub_is_said(self):
-        self.supervise("fixture", "fixture", no_receipt=True, old_hub=True)
-
-    def test_hub_refusal_remains_fatal(self):
-        self.supervise("fixture", "fixture", refuse=True)
 
 
 class RepoAuthorityTests(unittest.TestCase):
-    def test_continuation_scope_change_refuses_before_begin(self):
-        source = dict(repo='org/a', reservation='new', worker_id='fleet/session', owner='source-owner', endpoint_id='node')
-        different = dict(repo='org/a', reservation='new', owner='different-owner', endpoint_id='node', phase='reserved')
-        with patch.dict(os.environ, FLEET_AUTHORITY_START='new', FLEET_AUTHORITY_EXPECTED=json.dumps(source), TMUX_PANE='%1'), \
-                patch.object(migration.launch, 'option', return_value=''), \
-                patch.object(migration.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'org/a\tfleet/session', '')), \
-                patch.object(migration.hubrest, 'api', return_value=different), \
-                patch.object(migration, 'start_call') as post, patch.object(migration.subprocess, 'Popen') as child:
-            with self.assertRaises(ValueError):
-                migration.supervise(['fixture-native'])
-            post.assert_not_called()
-            child.assert_not_called()
+    def test_gate_asks_the_persons_mode_and_reserves_nothing(self):
+        # EPIC T497 C8: a start is admitted by its window's ID — no reservation,
+        # no claim; frozen and unknown still refuse, an outage is never a fallback.
+        for mode in ("legacy", "hub"):
+            calls = []
+            def api(method, path, body=None, query=None):
+                calls.append((method, path))
+                return dict(mode=mode, revision=0)
+            with patch.object(migration.hubrest, "api", side_effect=api), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                migration.gate("org/a", True)
+            self.assertEqual(json.loads(out.getvalue()), dict(mode=mode, ticket_ref=""))
+            self.assertEqual(calls, [("GET", "/authority")])
 
-    def test_begin_ack_cannot_supply_its_own_owner_or_endpoint(self):
-        original = dict(repo='org/a', reservation='start', owner='independent-owner',
-                        endpoint_id='independent-node', phase='reserved')
-        for changed in ('owner', 'endpoint_id'):
-            wrong = dict(original, worker_id='fleet/session', phase='starting')
-            wrong[changed] = 'ack-supplied-other'
-            with self.subTest(changed=changed), \
-                    patch.dict(os.environ, FLEET_AUTHORITY_START='start', TMUX_PANE='%1'), \
-                    patch.object(migration.launch, 'option', return_value=''), \
-                    patch.object(migration.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'org/a\tfleet/session', '')), \
-                    patch.object(migration.hubrest, 'api', return_value=original) as get, \
-                    patch.object(migration, 'start_call', return_value=wrong) as post, \
-                    patch.object(migration.subprocess, 'Popen') as child:
-                with self.assertRaises(ValueError):
-                    migration.supervise(['fixture-native'])
-                get.assert_called_once_with('GET', '/authority/start', query={'repo':'org/a', 'reservation':'start'})
-                post.assert_called_once_with('org/a', 'start', 'begin', worker_id='fleet/session')
-                child.assert_not_called()
-
-    def test_final_gate_reserves_before_window_creation(self):
-        calls = []
-        def api(method, path, body=None, query=None):
-            calls.append((method, path, body))
-            if method == "GET":
-                return dict(mode="legacy", revision=0)
-            return dict(reservation="fixture-start", mode="legacy")
-        with patch.object(migration.hubrest, "api", side_effect=api), contextlib.redirect_stdout(io.StringIO()):
-            migration.gate("org/a", True)
-        self.assertTrue(any(method == "POST" and body.get("action") == "reserve"
-                            for method, _, body in calls), "last gate must leave a durable reservation before any window exists")
-
-    def test_unbound_and_wrong_native_receipt_refused(self):
-        proof = dict(worker_id="fleet/session", native_session="old", pid=123, birth="old-birth", executable="/bin/codex")
-        with tempfile.TemporaryDirectory() as tmp:
-            f = Path(tmp) / "receipt.json"
-            f.write_text(json.dumps(proof))
-            with patch.object(migration.os, "kill", side_effect=ProcessLookupError()):
-                for saved in (None, dict(proof, native_session="replacement", pid=456)):
-                    authority = dict(legacy_owners=[dict(worker_id=proof["worker_id"], native_identity=saved)])
-                    with self.assertRaises(ValueError):
-                        migration.stopped_receipt(f, authority)
-
-    def test_accepted_ticket_reference_survives_work_completion(self):
-        c = dict(task="T9", owner="alice", generation=1, worker_id="fleet/session")
-        task = dict(owner="alice", generation=1, execution_owner="fleet/session",
-                    ticket_ref="gh:org/a#8", outcome="succeeded")
-        with patch.object(migration.launch, "validate_context", return_value=c), \
-                patch.object(migration.launch, "task_call", return_value=task):
-            with patch.object(migration.sys, "stdin", io.StringIO("{}")), contextlib.redirect_stdout(io.StringIO()) as out:
-                migration.ticket_ref("org/a", "8")
-            self.assertEqual(out.getvalue().strip(), "gh:org/a#8")
-            for repo, number in (("org/b", "8"), ("org/a", "7")):
-                with patch.object(migration.sys, "stdin", io.StringIO("{}")), self.assertRaises(ValueError):
-                    migration.ticket_ref(repo, number)
-            task["generation"] = 2
-            with patch.object(migration.sys, "stdin", io.StringIO("{}")), self.assertRaises(ValueError):
-                migration.ticket_ref("org/a", "8")
-
+    def test_supervise_execs_the_launcher_without_a_retired_environment(self):
+        # A session started under the launch proof or a start reservation reopens
+        # as itself: nothing is asked of the hub, their environment is not handed on.
+        env = dict(os.environ, FLEET_LAUNCH_CONTEXT="{}", FLEET_LAUNCH_SUPERVISOR="1",
+                   FLEET_AUTHORITY_CONTEXT="{}", FLEET_ID_DISPATCH="{}", FLEET_KEPT="yes")
+        env.pop("TMUX_PANE", None)
+        out = subprocess.run([sys.executable, str(Path(migration.__file__)), "--supervise", "--", "env"],
+                             env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        names = {line.split("=", 1)[0] for line in out.stdout.splitlines()}
+        self.assertIn("FLEET_KEPT", names)
+        self.assertFalse(names & set(migration.RETIRED_ENV))
     def test_manifest_apply_repeat_rollback_and_repo_b(self):
         # The cutover is the person's (issue #4901): it writes this login's
         # fleet.conf [node] line and no repo overlay, A's or B's.
@@ -372,133 +198,13 @@ class RepoAuthorityTests(unittest.TestCase):
             doc = migration.manifest("Org/A")
             self.assertEqual((doc["owner"], doc["repo"]), ("alice", "org/a"))
             api.assert_called_once_with("GET", "/authority", query={"rollback": "1", "repo": "org/a"})
-        for mode in ("frozen", "hub", "unknown"):
-            with patch.object(migration.hubrest, "api", return_value=dict(mode=mode)), patch.dict(os.environ, {"FLEET_LAUNCH": ""}):
+        for mode in ("frozen", "unknown"):
+            with patch.object(migration.hubrest, "api", return_value=dict(mode=mode)):
                 with self.assertRaises(ValueError):
                     migration.gate("org/a", True)
         with patch.object(migration.hubrest, "api", side_effect=migration.hubrest.Fail(4, "unavailable")):
             with self.assertRaises(migration.hubrest.Fail):
                 migration.gate("org/a", False)
-
-    def test_native_hook_cannot_bind_a_nested_or_wrong_process(self):
-        c = dict(repo="org/a", worker_id="fleet/session", reservation="start", supervisor=123)
-        native = dict(pid=456, birth="birth", executable="/bin/codex")
-        with patch.dict(os.environ, {"FLEET_AUTHORITY_CONTEXT": json.dumps(c), "TMUX_PANE": "%1"}), \
-                patch.object(migration.launch, "native_parent", return_value=native), \
-                patch.object(migration.launch, "root_native", return_value=False), \
-                patch.object(migration, "start_call") as write:
-            with self.assertRaises(ValueError):
-                migration.observe_native(dict(hook_event_name="SessionStart", session_id="11111111-1111-4111-8111-111111111111"))
-            write.assert_not_called()
-
-    def test_native_hook_matches_admission_by_canonical_repo(self):
-        # Issue #4789: a context in the registered spelling (Org/A) is the same
-        # repo as the hub's canonical admission (org/a); a different repo is not.
-        sid = "11111111-1111-4111-8111-111111111111"
-        native = dict(pid=456, birth="birth", executable="/bin/claude", actual_provider="claude")
-        for spelled, admitted, observed in (("Org/A", "org/a", True), ("Org/B", "org/a", False)):
-            c = dict(repo=spelled, worker_id="fleet/session", reservation="start", supervisor=123)
-            admission = dict(repo=admitted, worker_id="fleet/session", reservation="start")
-            with patch.dict(os.environ, {"FLEET_AUTHORITY_CONTEXT": json.dumps(c), "TMUX_PANE": "%1",
-                                         "FLEET_AUTHORITY_ADMISSION": json.dumps(admission)}), \
-                    patch.object(migration.launch, "native_parent", return_value=native), \
-                    patch.object(migration.launch, "root_native", return_value=True), \
-                    patch.object(migration, "start_call",
-                                 side_effect=migration.hubrest.Fail(4, "reached observe")) as write:
-                with self.assertRaisesRegex((ValueError, migration.hubrest.Fail),
-                                            "reached observe" if observed else "admission context differs"):
-                    migration.observe_native(dict(hook_event_name="SessionStart", session_id=sid))
-                self.assertEqual(write.called, observed)
-
-    def test_supervisor_confirms_only_its_own_observed_native_stop(self):
-        c = dict(repo="org/a", worker_id="fleet/session", reservation="start", supervisor=os.getpid())
-        native = dict(worker_id="fleet/session", pid=456, birth="birth", executable="/bin/codex", native_session="native")
-        for replaced in (False, True):
-            receipt = dict(c, native_identity=native)
-            if replaced:
-                receipt["reservation"] = "replacement"
-            writes = []
-            def start_call(r, k, action, **kw):
-                writes.append(action)
-                return dict(repo=r, reservation=k, worker_id='fleet/session',
-                            owner='owner', endpoint_id='node', phase='starting')
-            with patch.dict(os.environ, {"FLEET_AUTHORITY_START": "start", "TMUX_PANE": "%1"}), \
-                    patch.object(migration.hubrest, 'api', return_value=dict(repo='org/a', reservation='start',
-                        owner='owner', endpoint_id='node', phase='reserved')), \
-                    patch.object(migration.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "org/a\tfleet/session", "")), \
-                    patch.object(migration.subprocess, "Popen") as child, \
-                    patch.object(migration.signal, "signal"), \
-                    patch.object(migration.launch, "option", side_effect=lambda pane,key,*args:
-                                 json.dumps(receipt) if key == "@authority_receipt" else ""), \
-                    patch.object(migration.os, "kill", side_effect=ProcessLookupError()), \
-                    patch.object(migration, "start_call", side_effect=start_call), \
-                    contextlib.redirect_stderr(io.StringIO()):
-                child.return_value.wait.return_value = 0
-                self.assertEqual(migration.supervise(["fixture-native"]), 0)
-            self.assertEqual(writes, ["begin"] if replaced else ["begin", "stopped"])
-
-    def test_id_switch_task_window_starts_on_its_record_not_a_reservation(self):
-        # EPIC T497 C6: an ID-switch task window has no @launch; its repo
-        # supervise must not reserve a start (the hub refuses that in hub mode)
-        d = dict(task="T9", generation=1, attempt_id="task:T9:g1", resolved_agent="claude")
-        record = dict(d, authority_version=1, state="accepted", repo="org/a")
-        opts = {"@task": "T9", "@dispatch": json.dumps(d)}
-        def run(env, opts, record):
-            with patch.dict(os.environ, dict({"TMUX_PANE": "%1", "FLEET_ID_SWITCH": "on"}, **env)), \
-                    patch.object(migration.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "org/a\tfleet/session", "")), \
-                    patch.object(migration.launch, "option", side_effect=lambda pane, key, *a: opts.get(key, "")), \
-                    patch.object(migration.launch, "task_call", return_value=record), \
-                    patch.object(migration, "start_call", side_effect=AssertionError("reserved a start")) as start, \
-                    patch.object(migration.os, "execvpe", side_effect=SystemExit("exec")) as ex:
-                try:
-                    migration.supervise(["fixture-native"])
-                except SystemExit:
-                    pass
-                return ex.called, start.called
-        for state in ("accepted", "running"):
-            self.assertEqual(run({}, opts, dict(record, state=state)), (True, False))
-        for env, o, changed in (({}, opts, dict(outcome="succeeded")), ({}, opts, dict(execution_owner="x")),
-                                ({}, opts, dict(repo="org/b")), ({}, opts, dict(generation=2)),
-                                ({}, dict(opts, **{"@dispatch": ""}), {}),
-                                ({}, dict(opts, **{"@task": "T8"}), {})):
-            with self.assertRaises(ValueError, msg=(o, changed)):
-                run(env, o, dict(record, **changed))
-        # switch off: the old road (a reservation) as before
-        self.assertRaisesRegex(AssertionError, "reserved a start", run, {"FLEET_ID_SWITCH": "off"}, opts, record)
-
-    def test_stop_receipt_requires_positive_proof(self):
-        proof = dict(worker_id="fleet/session", native_session="native", pid=123, birth="birth", executable="/bin/codex")
-        authority = dict(legacy_owners=[dict(worker_id=proof["worker_id"], native_identity=proof)])
-        with tempfile.TemporaryDirectory() as tmp:
-            f = Path(tmp) / "receipt.json"
-            f.write_text(json.dumps(proof))
-            with patch.object(migration.os, "kill", return_value=None), patch.object(migration.launch, "process", return_value=proof):
-                with self.assertRaisesRegex(ValueError, "still alive"):
-                    migration.stopped_receipt(f, authority)
-            with patch.object(migration.os, "kill", side_effect=PermissionError("unknown")):
-                with self.assertRaises(PermissionError):
-                    migration.stopped_receipt(f, authority)
-            with patch.object(migration.os, "kill", side_effect=ProcessLookupError()):
-                self.assertTrue(migration.stopped_receipt(f, authority)["execution_stopped"])
-
-    def test_blocked_github_keeps_work_and_pr_separate(self):
-        c = dict(task="T9", owner="alice", generation=1, worker_id="fleet/session")
-        t = dict(owner="alice", generation=1, execution_owner="fleet/session", ticket_ref="gh:org/a#7")
-        receipt = dict(native_session="native", actual_provider="codex")
-        saved = []
-        with patch.object(control, "context", return_value=c), patch.object(control, "call", return_value=dict(task=t)), \
-                patch.object(control.launch, "option", return_value="{}"), patch.object(control.launch, "check_receipt", return_value=receipt), \
-                patch.object(control, "publish_report", side_effect=lambda r: saved.append(r) or 0), \
-                patch.object(control.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "UNKNOWN", "GitHub blocked")) as gh:
-            control.report("%1", "waiting", "work complete; PR pending", "10", False, outcome="succeeded")
-            gh.assert_not_called()
-            self.assertEqual(saved[0]["outcome"], "succeeded")
-            self.assertEqual(json.loads(saved[0]["evidence"])["pr_state"], "waiting")
-            with self.assertRaisesRegex(ValueError, "unconfirmed"):
-                control.report("%1", "merged", "merge claimed", "10", False)
-            self.assertEqual(len(saved), 1)
-        print("fixture GitHub blocked: explicit work result committed without GitHub; merged refused; PR remains waiting")
-
 
 if __name__ == "__main__":
     unittest.main()

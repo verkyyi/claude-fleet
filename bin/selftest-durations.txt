@@ -9,7 +9,6 @@
 # Retained: fleet-report-parent-selftest.sh (not started)
 # Retained: fleet-role-windows-selftest.sh (not started)
 # Retained: fleet-session-cli-selftest.sh (not started)
-# Retained: fleet-status-evidence-selftest.sh (not started)
 # Retained: fleet-update-selftest.sh (not started)
 # Retained: fleet-win-name-selftest.sh (not started)
 # Retained: fleet-worktree-drop-selftest.sh (not started)
@@ -125,7 +124,6 @@
 39.4 fleet-break-it-selftest.sh#11
 24.3 fleet-break-it-selftest.sh#12
 35.6 fleet-break-it-selftest.sh#13
-36.1 fleet-break-it-selftest.sh#14
 12.9 fleet-break-it-selftest.sh#2
 46.5 fleet-break-it-selftest.sh#3
 46.5 fleet-break-it-selftest.sh#4
@@ -261,7 +259,6 @@
 11.6 fleet-land-selftest.sh
 2.8 fleet-landed-selftest.sh
 0.1 fleet-lang-selftest.sh
-0.1 fleet-launch-selftest.sh
 15.6 fleet-launchd-probe-selftest.sh
 1.4 fleet-ledger-watch-selftest.sh
 1.1 fleet-lib-selftest.sh
@@ -297,8 +294,6 @@
 19.3 fleet-model-switch-selftest.sh#4
 41.8 fleet-move-selftest.sh
 1.3 fleet-move-to-pod-selftest.sh
-33.1 fleet-native-continue-selftest.sh
-0.6 fleet-native-observe-selftest.sh
 30.7 fleet-node-core-selftest.py
 0.3 fleet-node-hosted-selftest.sh
 26.8 fleet-node-install-selftest.sh
@@ -351,7 +346,6 @@
 0.0 fleet-quotaguard-selftest.sh
 1.1 fleet-reap-live-selftest.py
 0.1 fleet-reap-overdue-selftest.py
-2.9 fleet-reap-shadow-selftest.sh
 0.1 fleet-reap-target-selftest.py
 2.7 fleet-relay-cred-selftest.sh
 0.6 fleet-release-artifacts-selftest.sh
@@ -373,7 +367,6 @@
 11.5 fleet-restore-pick-selftest.sh
 19.4 fleet-restore-selftest.sh
 0.8 fleet-run-selftest.sh
-0.1 fleet-runtime-selftest.sh
 10.3 fleet-seed-selftest.sh
 0.6 fleet-selftest-reap-selftest.sh
 1.8 fleet-services-selftest.sh
@@ -387,7 +380,6 @@
 13.8 fleet-stable-selftest.sh
 8.4 fleet-state-reconcile-selftest.py
 6.6 fleet-status-7501-selftest.sh
-0.1 fleet-status-evidence-selftest.sh
 3.9 fleet-status-lib-selftest.sh
 15.7 fleet-status-replay-selftest.sh
 2.1 fleet-statusline-selftest.sh
@@ -395,7 +387,6 @@
 0.2 fleet-switch-selftest.sh
 2.0 fleet-task-control-selftest.sh
 2.9 fleet-task-record-selftest.sh
-6.8 fleet-task-recovery-selftest.sh
 2.1 fleet-tenant-scan-selftest.sh
 9.6 fleet-term-attach-selftest.sh
 0.5 fleet-theme-selftest.sh
@@ -410,14 +401,14 @@
 1.0 fleet-tls-selftest.sh
 1.0 fleet-train-ledger-selftest.sh
 3.2 fleet-train-quarantine-selftest.sh
-4.6 fleet-transfer-auth-selftest.py
+4.6 fleet-transfer-auth-selftest.sh
+40.2 fleet-transfer-norepo-selftest.sh
+7.0 fleet-transfer-proxy-home-selftest.sh
 19.9 fleet-transfer-selftest.sh#1
 47.6 fleet-transfer-selftest.sh#2
 23.1 fleet-transfer-selftest.sh#3
 19.5 fleet-transfer-selftest.sh#4
 30.8 fleet-transfer-selftest.sh#5
-40.2 fleet-transfer-selftest.sh#6
-7.0 fleet-transfer-selftest.sh#7
 0.3 fleet-trash-purge-selftest.sh
 4.6 fleet-trust-selftest.sh
 0.4 fleet-ui-fail-selftest.sh

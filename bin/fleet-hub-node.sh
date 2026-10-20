@@ -282,16 +282,18 @@ case "${1:-}" in
     # the agent lists CapTestIdentity, and only then does the hub send `test`;
     # task (issue #3325): it takes the hub's task record on a start — the agent
     # lists CapTask, and only then does the hub send it
-    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\ntask\t1\nlaunch_v1\t1\nrepo_authority_v1\t1\nrepo_authority_sync\t1\ntask_recovery_v1\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
+    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\ntask\t1\nlaunch_v1\t1\nrepo_authority_v1\t1\nrepo_authority_sync\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
     exit 0 ;;
-  replay) exec python3 "$BIN/fleet_task_recovery.py" replay ;;
+  # The task-receipt journal is retired with the launch proof (EPIC T497 C8):
+  # nothing to replay, nothing to report. compat-1v: 下一批删 — an older agent
+  # that still asks.
+  replay|recovery) exit 0 ;;
   # The hub's word that this login's person's authority moved (issues #4730,
   # #4901 — sent once per repo a host hosts): fleet.conf [node] re-reads it,
   # the mode from the hub's gate read; the repo is only the push's label.
   # No repo = a host that hosts none yet (T490): the person's mode all the same.
   authority-sync) if [ -n "${2:-}" ]; then exec python3 "$BIN/fleet_repo_authority.py" "$2" --sync; fi
     exec python3 "$BIN/fleet_repo_authority.py" --sync ;;
-  recovery) exec python3 "$BIN/fleet_task_recovery.py" status ;;
   env) shift; node_env "$@"; exit $? ;;
   progress) shift; progress_pull "$@"; exit $? ;;
   deliver) ;;
