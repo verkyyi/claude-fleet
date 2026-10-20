@@ -375,6 +375,39 @@ def loopback_ok(url, cluster=False):
     return loop and env("FLEET_CREDSEP_TEST") == "1"
 
 
+# The node agent's warm road to the hub (claude-fleet T672, tokenledger/shared/
+# hubfwd): a managed machine's ccquota agent serves it at /var/db/fleet-node/
+# hub.sock (0666) on its kept, warm connection — one round trip instead of a new
+# TLS handshake per brokered call. $CCQUOTA_HUB_SOCK names another, "off" none.
+HUB_FWD_SOCK = "/var/db/fleet-node/hub.sock"
+
+
+def hub_fwd_sock():
+    v = env("CCQUOTA_HUB_SOCK").strip()
+    if v == "off":
+        return None
+    p = v or HUB_FWD_SOCK
+    try:
+        import stat
+        return p if stat.S_ISSOCK(os.stat(p).st_mode) else None
+    except OSError:
+        return None
+
+
+class UnixHTTPConnection(http.client.HTTPConnection):
+    """Plain HTTP on a unix socket: the forwarder holds the TLS."""
+
+    def __init__(self, path, timeout):
+        super().__init__("localhost", timeout=timeout)
+        self._sock_path = path
+
+    def connect(self):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(self.timeout)
+        s.connect(self._sock_path)
+        self.sock = s
+
+
 def hub_dial(hub):
     """Where a call to `hub` goes (issue #4175): a person's pod names the hub's
     in-cluster Service (FLEET_HUB_INTERNAL_URL, render.py --hub-internal) and asks
@@ -1658,6 +1691,10 @@ class Proxy(BaseHTTPRequestHandler):
             return self.fail(403, "hub URL is neither https nor loopback", "permission_error")
         out = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() != "authorization"}
         out["Authorization"] = "Bearer " + ntok
+        # the warm road (T672): only for a remote https hub, named as the
+        # forwarder knows it (before any in-cluster dial)
+        fs = hub_fwd_sock()
+        self.hub_fwd = (fs, hub) if fs and (hub.startswith("https://") or env("CCQUOTA_HUB_SOCK")) else None
         hub = hub_dial(hub)
         self.upstream(hub, urlsplit(hub).path.rstrip("/") + path, out, body, "hub", "node", "-", "node",
                       [], t0, "hub", can_switch=False)
@@ -1806,13 +1843,26 @@ class Proxy(BaseHTTPRequestHandler):
         u = urlsplit(base)
         out["Host"] = u.netloc
         t1 = time.time()
-        if u.scheme == "http":
+        fwd = getattr(self, "hub_fwd", None) if provider == "hub" else None
+        again = lambda: self.upstream(base, upath, out, body, route, sid, acct, cred, seen, t0, provider, can_switch, tried)
+        if fwd:
+            # the forwarder refuses before it sends anything, so the direct road
+            # after a refusal (or nobody on the socket) never sends twice
+            conn = UnixHTTPConnection(fwd[0], self.cfg.timeout)
+            out["X-Fleet-Hub"] = fwd[1]
+            try:
+                conn.connect()
+            except OSError:
+                self.hub_fwd = None
+                out.pop("X-Fleet-Hub", None)
+                return again()
+        elif u.scheme == "http":
             conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=self.cfg.timeout)
         else:
             conn = http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=self.cfg.timeout,
                                                context=ssl._create_default_https_context())  # fleet_tls's when it loaded
         try:
-            conn.connect()
+            fwd or conn.connect()
         except OSError as e:
             self.log(ev="upstream_err", sid=sid, route=route, phase="connect", err=type(e).__name__)
             self.ustat(route, acct, sid, up_err_class(e), t1, type(e).__name__)
@@ -1824,6 +1874,12 @@ class Proxy(BaseHTTPRequestHandler):
         try:
             conn.request(self.command, upath, body=body, headers=out)
             r = conn.getresponse()
+            if fwd and r.getheader("X-Fleet-Hubfwd") == "refused":
+                r.read()
+                conn.close()
+                self.hub_fwd = None
+                out.pop("X-Fleet-Hub", None)
+                return again()
         except OSError as e:
             self.log(ev="upstream_err", sid=sid, route=route, phase="request", err=type(e).__name__)
             self.ustat(route, acct, sid, up_err_class(e), t1, type(e).__name__)

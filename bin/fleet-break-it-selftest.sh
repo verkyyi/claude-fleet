@@ -4274,6 +4274,7 @@ drill_place_slow_bypass() {
   grep -q 'hubfwd.Transport' "$ROOT/tokenledger/agent/cli/place.go" "$ROOT/tokenledger/agent/cli/lease.go" \
     && grep -q 'fleet_hub_sock' "$BIN/fleet-task-record.sh" && grep -q 'def hub_sock' "$BIN/fleet_hub_rest.py" \
     && grep -q 'serveHubFwd' "$ROOT/tokenledger/agent/agent.go" "$ROOT/tokenledger/agent/node_machine.go" \
+    && grep -q 'def hub_fwd_sock' "$BIN/fleet-cred-proxy.py" \
     || { WHY="a hub caller (place / lease / task-record / python) or the agent's forwarder lost the warm road"; return 1; }
   go_half '^Test(ForwarderOneConnectionManyAsks|TransportFallsBackDirect|TransportHTTPSHubOverSocket)$' ./shared/hubfwd; [ $? = 1 ] && return 1
   SECS=$(since "$t0")
