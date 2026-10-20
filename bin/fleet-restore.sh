@@ -462,8 +462,7 @@ pullback_scan() {
   local sess="$1" sock="$2" mf="$3" live pb line fid wtag wname wpath wsid wstate wsleep
   [ "${FLEET_PULLBACK:-1}" = 0 ] && return 0
   [ -f "$mf" ] && grep -q '^FID' "$mf" 2>/dev/null || return 0
-  # Every session on this server, the warm pool included (a recycled scratch
-  # parked there is not gone). An empty read is a transient, never "all killed".
+  # Every session on this server. An empty read is a transient, never "all killed".
   live=$(fleet_lw '#{window_id} #{@fleet_id}' tmux -L "$sock")
   [ -n "$live" ] || return 0
   live=$(printf '%s\n' "$live" | awk 'NF > 1 { print $2 }')

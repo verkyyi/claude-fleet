@@ -16,8 +16,8 @@
 #      (@sleep_wake_deferred=cap) reads `waiting for a slot` in the sidebar label
 #      and `z · waiting for a slot` in the dash row; a plain sleeper does not.
 #
-# Real tmux on an ISOLATED socket via the PATH shim (never the live server — see
-# dash-marker-selftest.sh). tmux absent → SKIP. Exit 0 = pass.
+# Real tmux on an ISOLATED socket via the PATH shim (never the live server).
+# tmux absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"

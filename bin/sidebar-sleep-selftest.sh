@@ -8,8 +8,8 @@
 #      cell — and h/d past an hour/day; an unstamped sleeper keeps the bare `z`.
 # (C, the old client's row menu with its Wake, went with that client — #3008.)
 #
-# Real tmux on an ISOLATED socket via the PATH shim (never the live server — see
-# dash-marker-selftest.sh). tmux absent → SKIP. Exit 0 = pass.
+# Real tmux on an ISOLATED socket via the PATH shim (never the live server).
+# tmux absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -59,7 +59,7 @@ export FLEET_UI_LANG=zh
 S=fleetZ
 mkdir -p "$WORK/conf/fleets/$S" "$WORK/bin"
 : > "$WORK/conf/fleets/$S/conf"
-# The socket's basename must be the fleet's own label: fleet-sidebar.sh refuses a
+# The socket's basename must be the fleet's own label: the fleet refuses a
 # session served from any other socket (the one-fleet-one-server rail, #159).
 SOCK="$WORK/$(. "$BIN/fleet-lib.sh"; fleet_socket "$S")"
 cat > "$WORK/bin/tmux" <<EOF

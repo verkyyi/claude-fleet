@@ -5289,7 +5289,7 @@ fleet_trash_sweep() {
 }
 
 # fleet_disk_target → the directory whose volume the disk rails measure (diskguard's
-# warn/floor and its spawn gate, the warm pool's grow hold, the bar's disk alert):
+# warn/floor and its spawn gate, the bar's disk alert):
 # FLEET_DISK_TARGET, else $TMPDIR, else $HOME, else /tmp. A Mac (and a demoted
 # account job) always has TMPDIR — byte for byte as before. A Linux pod has none,
 # and there /tmp is the NODE's shared root disk (issue #3974: 13 GB free of 61 GB
@@ -5976,7 +5976,7 @@ fleet_window_fid() {
 # ---- the fleet closed it on purpose: a retired @fleet_id (issue #1840) ---------
 # A session window that vanishes while unfinished is pulled back on the next tick
 # (fleet-restore.sh --auto) — unless the FLEET closed it: the cleanup daemon's
-# reap, dash ⌃x, the recovery page's q, a move, a stop, the warm pool. tmux cannot
+# reap, dash ⌃x, the recovery page's q, a move, a stop. tmux cannot
 # say who killed a window (no after-kill-window hook, and the window's options are
 # gone by then), so each of those closers marks the identity first, while the
 # window still answers: one empty file per @fleet_id under global/retired/. A
@@ -7252,7 +7252,7 @@ fleet_live_ancestor() {
 
 # --- generations of a recycled key (issue #1538, EPIC #1529 E9) ----------------
 # A scratch NUMBER is recycled: fleet_scratch_free gives scratch-3 back, and the
-# next ⌃s (or the warm pool) allocates it again. Every book keyed by it — the
+# next ⌃s allocates it again. Every book keyed by it — the
 # child ledger `children/scratch-3.ndjson`, the parent map, a child still out
 # there with `@origin scratch-3` — used to carry straight over, so the new
 # scratch-3 opened showing the old one's children, and the old one's grandchild
@@ -8381,8 +8381,7 @@ _fleet_admit_mine() {
   find "$FLEET_ADMIT_RESERVE_DIR" -maxdepth 1 -type f -name "*.$1.*" 2>/dev/null
 }
 # fleet_admit_confirm — the caller's window is open: its reservation now holds the
-# settle time on its own, whatever becomes of the caller. Prints the kept path(s)
-# (the warm pool drops them again when it retires an entry that never came up).
+# settle time on its own, whatever becomes of the caller. Prints the kept path(s).
 fleet_admit_confirm() {
   local me f n k
   me=$(_fleet_admit_owner)

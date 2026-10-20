@@ -310,7 +310,7 @@ contains "logins: json null with one login" "$OUT" '"logins":null'
 # ============================================================================
 # H. the doctor's `machines (hub)` line (issue #644, EPIC #1524 R4)
 # ============================================================================
-# The refresh loop (fleet-hub-sessions.sh, pinned by tmux-status-selftest.sh G)
+# The refresh loop (fleet-hub-sessions.sh)
 # writes each machine's version word as hub_nodes' 11th field; the doctor only
 # READS the cache — so the cache is written by hand here, and the live dir is a
 # plain clone (its own install line is the earlier legs' business).

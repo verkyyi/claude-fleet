@@ -167,7 +167,7 @@
 180.5 fleet-install-selftest.sh
 1.8 fleet-installs-selftest.sh
 0.4 fleet-intro-selftest.sh
-9.9 fleet-keys-selftest.sh
+9.9 dash-keymap-selftest.sh
 0.1 fleet-lang-selftest.sh
 17.1 fleet-launchd-probe-selftest.sh
 1.1 fleet-ledger-watch-selftest.sh

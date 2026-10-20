@@ -14,7 +14,7 @@
 #   • @claude_mem_warn (memguard rule C, #1297) → `⚠ mem 4.3G`, `fat=` prefix
 #
 # Needs a real tmux, on an ISOLATED socket via the PATH shim (never the live
-# server — see dash-marker-selftest.sh). tmux absent → SKIP cleanly. Exit 0 = pass.
+# server). tmux absent → SKIP cleanly. Exit 0 = pass.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"

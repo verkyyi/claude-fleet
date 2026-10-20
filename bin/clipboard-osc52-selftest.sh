@@ -19,7 +19,7 @@
 #             terminal-overrides[92] row): an outer terminal tmux has no clipboard
 #             feature for (TERM=screen-256color — a phone's, say) still receives
 #             the copy (leg K).
-#   G. binds  the node conf binds no copy-mode key (fleet-keys-selftest.sh leg 8 —
+#   G. binds  the node conf binds no copy-mode key (dash-keymap-selftest.sh leg 8 —
 #             the node only opens capabilities).
 #   K. thin   (issue #3005, EPIC #2999 C8) the two layers: another machine's fleet
 #             server in a pane of the HOME machine's, the person's terminal its

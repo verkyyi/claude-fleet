@@ -343,8 +343,7 @@ ok "M failed background dispatch reports rc1 + stderr and cleans up staged input
 
 # ==================== N: --prompt seeds the scratch (CLI / handoff) ============
 # A CLI or cross-fleet-handoff caller hands its text over as --prompt (the dash
-# prompt line did too until #534; it now sends --name-file — K2 above) (via
-# dash-enter.sh). The seed rides in a task file read at launch — `fleet-claude.sh
+# prompt line did too until #534; it now sends --name-file — K2 above). The seed rides in a task file read at launch — `fleet-claude.sh
 # "$(cat <tf>)"`, the worker-seed handoff — never inline in the command string; a
 # --bg --prompt stages it through --prompt-file (never into the run-shell string);
 # a whitespace-only prompt is a plain scratch.

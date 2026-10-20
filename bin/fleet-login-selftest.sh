@@ -376,7 +376,7 @@ rm -f "$SB/nologin"
   && ! echo "$out" | grep -q 'timed out' && ok "H no machine login → reason printed, exit 1" || bad "H nologin rc=$rc: $out"
 echo "$out" | grep -q 'GitHub' && ! echo "$out" | grep -q '企业微信' && ok "H the prompt says GitHub, not WeCom" || bad "H prompt: $out"
 
-# ── I — `fleet --pick` (fleet-shell.sh captures its stdout) that needs a scan:
+# ── I — `fleet --pick` (its caller captures its stdout) that needs a scan:
 #        the code, QR and link reach the person on stderr; stdout stays the one JSON line (#2090) ──
 rm -f "$HOME/.ssh/fleet-cert-cert.pub" "$HOME/.ssh/fleet-cert" "$HOME/.ssh/fleet-cert.pub" \
       "$HOME/.config/claude-fleet/hub.json"   # B's token would skip the certificate

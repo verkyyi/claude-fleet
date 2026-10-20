@@ -6,7 +6,7 @@
 # with the test) that answers POST /v1/fleet/client/place the way the real one
 # does: 401 unless the payload's HMAC checks under the lease's action key and
 # the lease is the current one; then a canned answer per request. The client's
-# lease id and key are files in a sandbox FLEET_CLIENT_DIR, as fleet-shell.sh
+# lease id and key are files in a sandbox FLEET_CLIENT_DIR, as the client
 # keeps them; FLEET_HUB_TOKEN stands in for the connection certificate.
 #   A. the three kinds — scratch, issue (pending once, then done through a status
 #      poll), restore:<key> — each prints the hub's line, exit 0; the payload

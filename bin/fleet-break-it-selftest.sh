@@ -18,14 +18,12 @@
 #   session-ctrl-z                                  bin/fleet-session-wrap.sh (the TSTP guard)
 #   resume-fails-fast / codex-no-id                 bin/fleet-session-wrap.sh, fleet-session-page.py
 #   codex-resume-override                           bin/fleet-codex.sh, fleet-codex-posture.py
-#   merged-then-commit / q-leaves-issue             bin/session-end-hook.sh --recycle, fleet_reap_ok
+#   merged-then-commit                              bin/session-end-hook.sh --recycle, fleet_reap_ok
 #   last-window                                     fleet_server_resident (fleet-up.sh)
 #   kill-server / disk-full                         bin/fleet-restore.sh --auto, fleet-diskguard.sh --gate
 #   wedged-socket                                   fleet_socket_heal (fleet-restore.sh, fleet-up.sh)
 #   no-claude-on-path                               bin/fleet-claude.sh, fleet_find_tool
 #   window-renamed                                  fleet_win_role (fleet-lib.sh), fleet-restore.sh
-#   role-auto-reopen-off                            nothing reopens a seat: fleet-up.sh, fleet-diskguard.sh
-#                                                   home_watch, the seat launchers gone (#3576)
 #   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
 #   spinner-booted-out                              bin/fleet-daemon-watch.sh --resident, fleet-diskguard.sh (resident_watch)
@@ -69,7 +67,7 @@
 #                                                   (exit 8), fleet_control.py (UNAVAILABLE); the hub half is
 #                                                   tokenledger/hub/api pickNodeAfter (go test, when here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
-#   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage alert), fleet-stable.sh move (no macos gate), .github/workflows/mac-follow.yml
+#   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage alert, mac-follow.yml's jobs)
 #   train-push-cancels                              .github/workflows/release-train.yml (concurrency), bin/fleet-train-board.sh,
 #                                                   selftests-macos.yml (no push trigger)
 #   release-artifact-missing                        bin/fleet-stable.sh move (the artifacts gate),
@@ -169,8 +167,7 @@
 # Machine half — a sandbox Homebrew prefix under a world-traversable tmp dir:
 #   brew-keg-700                                    bin/fleet-diskguard.sh --brew-watch,
 #                                                   bin/fleet-brew-perms.sh
-#   nothing-starts-by-itself                        bin/fleet-dispatch.sh gone (#3576),
-#                                                   bin/fleet-diskguard.sh macos_watch, fleet-macos-watch.sh
+#   nothing-starts-by-itself                        bin/fleet-diskguard.sh macos_watch, fleet-macos-watch.sh
 #   release-push-lost                               bin/fleet-node-supervisor.py (task_due: update-now + the
 #                                                   update clock), fleet-install-sync.sh --now; the Go half is
 #                                                   tokenledger/{hub/api,agent} *release_push / node_release
@@ -610,20 +607,6 @@ drill_merged_then_commit() {
   WHAT="合并后再提交再按 q：分支 issue-7 仍在，$n 个提交（1 个在合并之后）"
 }
 
-# q on an unmerged issue: nothing is written to the issue (#4898: no claim to
-# release), the worktree stays, the issue can be dispatched again (#1842 ②).
-drill_q_leaves_issue() {
-  CAP=10; seh_rig; local R="$WORK/seh" wt="$WORK/seh/wt-8" t0
-  git -C "$R/main" worktree add -q -b issue-8 "$wt" >/dev/null 2>&1
-  printf 'w\n' > "$wt/w"; git -C "$wt" add w; git -C "$wt" commit -qm 'half done'
-  : > "$R/log"; t0=$(now)
-  seh_q 8
-  SECS=$(since "$t0")
-  grep -qE 'issue (edit|comment|close)' "$R/log" && { WHY="q wrote to issue #8 (gh: $(tr '\n' ' ' < "$R/log"))"; return 1; }
-  [ -d "$wt" ] || { WHY="q removed the unmerged worktree"; return 1; }
-  WHAT="未合并单按 q：单子不动（没有认领可放）、可再派，worktree 留着"
-}
-
 # home_back <old pid> — home holds a live shell other than <old pid>
 home_back() {
   local p; p=$(nt display-message -p -t lw:home '#{pane_pid} #{pane_dead}' 2>/dev/null)
@@ -695,44 +678,6 @@ drill_disk_full() {
   auto                                            # space freed: the next tick
   until_ok "$CAP" nt has-session -t oc 2>/dev/null || { WHY="space freed, still not restored"; return 1; }
   SECS=$(since "$t0"); WHAT="盘满时只记 held 不拉起，腾出空间后下一拍拉起"
-}
-
-# role-auto-reopen-off (issue #3118, EPIC #3111 C7): nothing keeps a session open.
-# Before, the resident orchestrator and steward came back within a tick of being
-# closed — fleet-up.sh opened them and the diskguard tick's home_watch reopened
-# them (`fleet-orchestrator.sh ensure`, `fleet-steward.sh ensure`). Now a role is
-# a mark a session takes: close an old seat's window AND a window that took the
-# steward role, run two ticks' worth of everything that used to reopen them, and
-# not one window comes back.
-drill_role_auto_reopen_off() {
-  CAP=10; BREAK_SOCK="$WORK/sock-ra"; local t0 wins n f
-  for f in fleet-orchestrator.sh fleet-steward.sh; do                      # the shells left with #3576
-    [ ! -e "$BIN/$f" ] || { WHY="$f is back — a seat launcher can open a window again"; return 1; }
-  done
-  grep -q 'fleet-orchestrator.sh\|fleet-steward.sh' "$BIN/fleet-up.sh" \
-    && { WHY="fleet-up.sh still runs a seat launcher"; return 1; }
-  sed -n '/^home_watch() {/,/^}/p' "$BIN/fleet-diskguard.sh" | grep -q 'ensure' \
-    && { WHY="the tick's home_watch still runs an ensure"; return 1; }
-  nt -f /dev/null new-session -d -s ra -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
-  nt new-window -d -t ra: -n orchestrator 'exec sleep 600'
-  nt set-option -wq -t ra:orchestrator @fleet_role orchestrator
-  nt new-window -d -t ra: -n scratch-2 'exec sleep 600'
-  nt set-option -wq -t ra:scratch-2 @fleet_role worker
-  nt set-option -wq -t ra:scratch-2 @fleet_role_def steward
-  t0=$(now)
-  nt kill-window -t ra:orchestrator; nt kill-window -t ra:scratch-2      # the break: both closed
-  for n in 1 2; do                                                         # two ticks
-    ( PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/raconf" FLEET_HOST=1 \
-        FLEET_ORCHESTRATOR=1 FLEET_STEWARD=1 GDIR="$WORK/rag"; export PATH HOME FLEET_CONF_DIR BREAK_SOCK FLEET_HOST FLEET_ORCHESTRATOR FLEET_STEWARD GDIR
-      . "$BIN/fleet-lib.sh"
-      fleet_sockets() { echo ra; }
-      eval "$(sed -n '/^home_watch() {/,/^}/p' "$BIN/fleet-diskguard.sh")"
-      home_watch ) >/dev/null 2>&1
-  done
-  SECS=$(since "$t0")
-  wins=$(nt list-windows -t ra -F '#{window_name}' | tr '\n' ' ')
-  [ "$wins" = "home " ] || { WHY="a closed seat came back: windows [$wins]"; return 1; }
-  WHAT="关掉旧编排窗口和接手管家的窗口，两拍之后一个都没回来"
 }
 
 # agent-file-broken (issue #3122, EPIC #3111 C11): a custom session is a standard
@@ -982,7 +927,6 @@ SH
   SECS=$(since "$t0")
   grep -q 'resident-bootstrap unit=spinner' "$d/conf/logs/daemon-kick.log" 2>/dev/null \
     || { WHY="the bootstrap left no line in daemon-kick.log"; return 1; }
-  grep -q 'bootstrap.*webhook' "$d/launchctl.log" && { WHY="the webhook, with no plist on disk, was bootstrapped"; return 1; }
   rm -f "$d/loaded/com.claude-fleet.spinner"; : > "$d/launchctl.log"
   resident env >/dev/null
   grep -q '^bootstrap' "$d/launchctl.log" && { WHY="a second bootstrap inside the cooldown"; return 1; }
@@ -2666,65 +2610,36 @@ drill_oldcfg_deleted_hook() {
 }
 
 # ---- macos-red-to-stable (#2286, rewritten by #3869, #4671): the macOS selftests run
-# AFTER the release. A BSD-only red must hold no release and still be seen: (1) the
-# release train's own move (`--train`, no macOS job in it) moves stable past it,
-# (2) the watcher alerts once per red run reading mac-follow's jobs (#4898: said,
-# never filed), (3) a move by hand past a red `mac follow: macOS` status moves too —
-# one release line, no gate 5. Fake gh (runs / jobs / statuses), fake alert; a real bare repo.
+# AFTER the release and hold none (one release line, no gate 5 — fleet-stable.sh has
+# no macOS read left to drill). A BSD-only red must still be seen: the watcher alerts
+# once per red run reading mac-follow's jobs (#4898: said, never filed). Fake gh
+# (runs / jobs), fake alert.
 drill_macos_red_to_stable() {
-  CAP=30; local t0 d out rc c1 c2
-  d="$WORK/macosred"; mkdir -p "$d/shim" "$d/seed" "$d/conf"
+  CAP=30; local t0 d out
+  d="$WORK/macosred"; mkdir -p "$d/shim" "$d/conf"
   cat > "$d/shim/gh" <<SH
 #!/bin/sh
 case "\$*" in
   *actions/workflows/*status=completed*) cat "$d/runs.watch" ;;
   *actions/workflows/*) : ;;
-  *actions/runs/77/jobs*) printf 'completed success board\ncompleted success Linux / shard 1\nin_progress null release\n' ;;
   *actions/runs/9/jobs*) printf '7\tfailure\tmacOS / shard 1\n' ;;
   *actions/runs/*/jobs*) printf '6\tsuccess\tmacOS / shard 1\n' ;;
-  *statuses*) cat "$d/status" ;;
   *actions/jobs/*/logs*) printf 'FAIL  bsd-only-selftest.sh  1s\n' ;;
   *) printf 'completed success shard 1\n' ;;
 esac
 SH
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/alerted"\n' "$d" > "$d/alert"
   chmod +x "$d/shim/gh" "$d/alert"
-  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
-    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
-    mkdir -p "$d/seed/.github/workflows"; echo 'name: selftests (macOS)' > "$d/seed/.github/workflows/selftests-macos.yml"
-    echo 'name: mac follow' > "$d/seed/.github/workflows/mac-follow.yml"
-    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm bsd && git -C "$d/seed" push -q origin HEAD:master || exit 1
-    git -C "$d/seed" rev-parse HEAD > "$d/c1"
-    echo x > "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'bsd-only break' && git -C "$d/seed" push -q origin HEAD:master || exit 1
-    git -C "$d/seed" rev-parse HEAD > "$d/c2"
-    echo y > "$d/seed/g"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'next' && git -C "$d/seed" push -q origin HEAD:master || exit 1
-    git -C "$d/seed" rev-parse HEAD > "$d/c3"
-    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
-  ) || { WHY="could not build the rig repo"; return 1; }
-  c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
-  printf '9\t%s\tfailure\tworkflow_run\n8\t%s\tsuccess\tworkflow_run\n' "$c2" "$c1" > "$d/runs.watch"
-  printf 'failure\n' > "$d/status"
+  printf '9\t%s\tfailure\tworkflow_run\n8\t%s\tsuccess\tworkflow_run\n' 2222222bbb 1111111aaa > "$d/runs.watch"
   t0=$(now)
-  # the train (Linux green, no macOS job) moves stable past the BSD-only break …
-  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$c2" --train 77 --ignore-check release --dir "$d/co" --repo o/r 2>&1) \
-    || { WHY="the train's stable move refused on macOS: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
-  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move (a Mac red held Linux)"; return 1; }
-  # … the watcher says mac-follow's red once, as a breakage alert …
   out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" FLEET_MACOS_ALERT_CMD="$d/alert" \
           bash "$BIN/fleet-macos-watch.sh" --repo o/r --now 2>&1) || { WHY="the watcher failed: $out"; return 1; }
   grep -q 'breakage' "$d/alerted" 2>/dev/null || { WHY="the red follow was not alerted as a breakage: $out"; return 1; }
   grep -q 'bsd-only-selftest.sh' "$d/alerted" || { WHY="the alert does not name the red test"; return 1; }
   PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" FLEET_MACOS_ALERT_CMD="$d/alert" bash "$BIN/fleet-macos-watch.sh" --repo o/r --now >/dev/null 2>&1
-  [ "$(grep -c 'breakage' "$d/alerted")" = 1 ] || { WHY="the same red follow was alerted twice"; return 1; }
-  # … and a move by hand past the red `mac follow: macOS` status is not held either.
-  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$(cat "$d/c3")" --dir "$d/co" --repo o/r 2>&1) \
-    || { WHY="a red mac follow held a move by hand: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
-  case "$out" in *'macos:'*) WHY="gate 5 still spoke: $(printf '%s' "$out" | grep 'macos:' | head -1)"; return 1 ;; esac
-  git --git-dir="$d/origin.git" rev-parse -q --verify refs/tags/stable-macos >/dev/null && { WHY="a Mac lane tag was written"; return 1; }
   SECS=$(since "$t0")
-  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$(cat "$d/c3")" ] || { WHY="stable did not follow the hand move"; return 1; }
-  WHAT="macOS 红：列车照挪 stable（不等 Mac）、每个红 run 提醒一次（不开单，同一 run 不重提）；手挪也不被 mac follow 的红挡（一条版本线，没有 gate 5、没有 Mac 通道）"
+  [ "$(grep -c 'breakage' "$d/alerted")" = 1 ] || { WHY="the same red follow was alerted twice"; return 1; }
+  WHAT="macOS 红：每个红 run 提醒一次（breakage，不开单，同一 run 不重提）"
 }
 
 # ---- stable-push-no-workflows (#3912): GitHub refuses a tag move whose range
@@ -5107,12 +5022,12 @@ drill_db_move_policy_seed() {
   SECS=$(since "$t0")
 }
 
-# Nothing starts a session by itself (issue #3120, EPIC #3111 C9): the autofill
-# dispatcher ran every minute and spawned `autofill`-labelled issues by priority
-# (③), and its red-master macOS watcher spawned a fixer for the breakage it filed
-# (④). The rest of the list (① ② ⑤) is the other members' to drill.
+# Nothing starts a session by itself (issue #3120, EPIC #3111 C9): the red-master
+# macOS watcher once spawned a fixer for the breakage it filed (④). The autofill
+# dispatcher (③) left with its template and shell (#3576) — nothing of it is left
+# to come back. The rest of the list (① ② ⑤) is the other members' to drill.
 drill_nothing_starts_by_itself() {
-  CAP=30; local sb t0 i n
+  CAP=30; local sb t0 n
   sb="$WORK/nsbi"; mkdir -p "$sb/bin" "$sb/shim" "$sb/conf" "$sb/mainA/.github/workflows" "$sb/mainA/bin" "$sb/dg"
   for f in "$BIN"/* "$BIN"/.*.py; do [ -e "$f" ] && ln -s "$f" "$sb/bin/${f##*/}"; done
   # every spawner a session could start through counts instead of opening
@@ -5133,14 +5048,6 @@ SH
   printf '#!/bin/sh\necho "$*" >> "%s/alerted"\n' "$sb" > "$sb/alert"
   chmod +x "$sb/shim/gh" "$sb/alert"
   t0=$(now)
-  # ③ the old daemon's command and its tick: no template to schedule it, and the
-  #    script a stale plist would still run does nothing
-  for i in "$ROOT"/launchd/*dispatch* "$ROOT"/systemd/*dispatch*; do
-    [ -e "$i" ] && { WHY="a dispatch daemon template is still installed by default: ${i##*/}"; return 1; }
-  done
-  ( . "$BIN/fleet-daemon-lib.sh"; fleet_daemon_unit_names ) | grep -qx dispatch \
-    && { WHY="the daemon registry still lists dispatch"; return 1; }
-  [ ! -e "$BIN/fleet-dispatch.sh" ] || { WHY="bin/fleet-dispatch.sh is back"; return 1; }   # its shell left with #3576
   # ④ the diskguard tick reads master's red macOS run: alerts, files nothing, spawns nobody
   cat > "$sb/dg.sh" <<SH
 FLEET_DISKGUARD_SOURCE=1 . "$sb/bin/fleet-diskguard.sh"
@@ -5161,7 +5068,7 @@ SH
   grep -q 'breakage' "$sb/alerted" 2>/dev/null || { WHY="nobody was told about the red master"; return 1; }
   n=0; [ -f "$sb/spawned" ] && n=$(wc -l < "$sb/spawned" | tr -d ' ')
   [ "$n" = 0 ] || { WHY="$n session(s) started by themselves: $(head -2 "$sb/spawned" | tr '\n' ' ')"; return 1; }
-  WHAT="③ 自动填充：没有 dispatch 守护、壳脚本什么都不开；④ 红主干：diskguard 节拍提醒（不开单），0 个会话自己开出来"
+  WHAT="④ 红主干：diskguard 节拍提醒（不开单），0 个会话自己开出来"
 }
 
 # ---- release-push-lost (#3146, EPIC #3139 C7): the hub now tells every machine

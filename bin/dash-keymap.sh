@@ -29,7 +29,7 @@ fi
 # (`0x<char>-0x<modifier mask>`, as iTerm2 spells its Keyboard Map: 0x100000 ⌘,
 # + 0x200000 for an arrow), private code, prefix key. A tmux prefix never
 # collides with a ⌘ chord, so nothing here remaps; `list` prints the table as is.
-# bin/fleet-keys-selftest.sh holds it in lockstep with the conf, the sheet and
+# bin/dash-keymap-selftest.sh holds it in lockstep with the conf, the sheet and
 # the profile. `new` (issue #1953 → #3119): ⌘N opens a NEW session — a no-repo
 # one on the home machine, its input the keyboard's (the 看台's
 # fleet_view.go_new) — prefix c elsewhere, tmux's own new-window key, which the

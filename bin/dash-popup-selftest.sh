@@ -97,8 +97,8 @@ bash "$HELPER" -w 50% -h 10 -- sh -c "printf '%s\n' \"\$1\" > '$A'" _ "two words
   || fail "arg safety: spaced argument mangled — got [$(cat "$A" 2>/dev/null)]"
 
 # --- 4. NO STRANDING: the no-client path never leaves a live epoch -----------
-# dash-popup-wait.sh pauses the dash's repaint while @popup_open is a FRESH epoch
-# (#308/#431); a fallback run must not raise it at all.
+# @popup_open is read as an open popup while it is a FRESH epoch (#308/#431); a
+# fallback run must not raise it at all.
 v="$(tmux show-option -gqv @popup_open 2>/dev/null)"
 case "$v" in ''|0) ;; *) fail "no stranding: fallback left @popup_open=[$v], expected unset/0" ;; esac
 

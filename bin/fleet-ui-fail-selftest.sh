@@ -20,8 +20,7 @@
 #
 # The real spawn / reap paths are pinned by their own selftests (success → no
 # display-message, refusal → exactly one): dash-issue-async-spawn-selftest.sh,
-# dash-raw-session-selftest.sh, dash-reap-selftest.sh,
-# dash-issue-new-spawn-selftest.sh. tmux or python3 absent → A/B SKIP.
+# dash-raw-session-selftest.sh, dash-reap-selftest.sh. tmux or python3 absent → A/B SKIP.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."

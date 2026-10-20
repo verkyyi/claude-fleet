@@ -115,14 +115,13 @@ norm_repo_arg() {
 #      then dash-restore-session.sh --repo into <sess> (same transcript, same
 #      worktree, @repo stamped). A hibernating worker is woken first. A busy one
 #      (working / needs) is left where it is — or, with --wait, moved the moment it
-#      goes idle (at most FLEET_FOLD_WAIT s, default 7200). Panels and an older
-#      release's warm-pool windows (the pool is gone, T495) are not moved: they
-#      retire with the server.
+#      goes idle (at most FLEET_FOLD_WAIT s, default 7200). Panels are not moved:
+#      they retire with the server.
 #   3. only when nothing is left behind: fleet-down <from> (never --purge), and its
 #      conf dir is ARCHIVED, never deleted, to
 #      $FLEET_CONF_DIR/archive/<from>-folded-into-<sess without fleet->-<YYYYMMDD>.
 #   4. every store keyed by <from> OUTSIDE its conf dir (failover requests, the
-#      warm-pool dir, caches) is archived next to the conf or deleted —
+#      legacy restore map, caches) is archived next to the conf or deleted —
 #      fold_side below; the plan lists each kind as a `side:` line (issue #1014).
 # --dry-run prints the plan and stops; a real run prints the SAME plan, then acts.
 # Re-running after a partial fold is safe: an already-hosted repo is left as is,
@@ -153,14 +152,11 @@ fold_key() {
   fleet_scratch_key "$wt"
 }
 # fold_classify <from> <wid> → "<action>\t<key>\t<name>\t<why>", action one of
-# move · wake · busy · panel · pool · left.
+# move · wake · busy · panel · left.
 fold_classify() {
   local name key st
   name=$(fold_opt "$1" "$2" '#{window_name}')
   case "$name" in dash|plan|backlog|home) printf 'panel\t-\t%s\tretires with the server\n' "$name"; return 0 ;; esac
-  if [ "$(fold_opt "$1" "$2" '#{@pool}')" = 1 ]; then
-    printf 'pool\t-\t%s\ta warm-pool window from before T495: retires with the server\n' "$name"; return 0
-  fi
   key=$(fold_key "$1" "$2")
   if [ -z "$key" ]; then
     printf 'left\t-\t%s\tno issue-N / scratch-N binding — not resumable; close or move it by hand\n' "$name"
@@ -224,9 +220,7 @@ fold_count() {
 #               <from>, its unsupported-<from>-<win>.json and <from>.cursor.json.
 #               Its windows are gone, so the reconcile (live sockets only) never
 #               settles them; a moved worker files fresh ones under <sess>.
-#     pool      fleets/<from>-pool/ — the warm pool's restore snapshot. The pool
-#               itself re-keys on its own: <sess>'s pool serves the repo (#797).
-#     restore   the legacy restore/<from>.map and restore/<from>-pool.map.
+#     restore   the legacy restore/<from>.map.
 #   delete   cache — $FLEET_C/global/*<from> runtime state (dash toggles, spawn
 #            debounce, quotawatch probe health) with nothing to preserve.
 fold_side() {
@@ -248,10 +242,7 @@ p = q / (f + '.cursor.json')
 if p.is_file(): print('archive\tfailover\t%s' % p)
 PY
   fi
-  p="$FLEET_CONF_DIR/fleets/$f-pool"; [ -d "$p" ] && printf 'archive\tpool\t%s\n' "$p"
-  for p in "$FLEET_CONF_DIR/restore/$f.map" "$FLEET_CONF_DIR/restore/$f-pool.map"; do
-    [ -f "$p" ] && printf 'archive\trestore\t%s\n' "$p"
-  done
+  p="$FLEET_CONF_DIR/restore/$f.map"; [ -f "$p" ] && printf 'archive\trestore\t%s\n' "$p"
   for p in "$g/dash_view_$f" "$g/dash_fold_rows_$f" "$g/backlog_show_bound_$f" \
            "$g/spawn_last_ms_$f" "$g/quotawatch.modelcap.$f" "$g/quotawatch.probe.trace.$f" \
            "$g/dash_fold_landed_$f" "$g/dash_fold_landed_$f".*; do
@@ -266,7 +257,6 @@ fold_side_plan() {
     | sort -k2,2 | while IFS=$'\t' read -r a k n; do
         case "$k" in
           failover) why='failover request(s) — archived, never reconciled once its windows are gone' ;;
-          pool)     why="warm-pool dir fleets/$FROM-pool — archived; $SESS's own pool serves the repo" ;;
           restore)  why='legacy restore map(s) — archived' ;;
           *)        why="runtime cache file(s) under $FLEET_C/global — deleted" ;;
         esac

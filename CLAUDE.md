@@ -209,7 +209,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `conf/tmux-attention.conf` binds tmux's stock keys only (its "stock restores"
   block re-spells the ones an older version overrode, so a conf reload converges)
   and its status line is one static `请用 fleet` hint (`conf/tmux-bar.conf`); the
-  person's keys live in `conf/tmux-view.conf`. `fleet-keys-selftest.sh` leg 8
+  person's keys live in `conf/tmux-view.conf`. `dash-keymap-selftest.sh` leg 8
   pins both sides on isolated sockets — root and prefix on a node stay tmux's;
   **a key is added only in the 看台's own tables** (issue #3000, EPIC #2999 C2):
   `conf/tmux-view.conf` (loaded last, after the human layer) sets `user-keys[920..932]`
@@ -537,8 +537,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   dispatched. Nothing opens, reopens, revives or renews one (not fleet-up, not
   the diskguard tick, not the hub, no setting); closed is closed, and nothing
   patrols. `@fleet_role orchestrator|steward` is never written; a window still
-  wearing it is an ordinary row, never an address (BREAK-IT
-  `role-auto-reopen-off`). **The shared parts know no role**: a session with no
+  wearing it is an ordinary row, never an address. **The shared parts know no role**: a session with no
   key of its own (a template opened bare, a person's no-repo session) answers to
   its IDENTITY — `fleet_origin_key` / `fleet_window_okey` print its `@fleet_id`
   (home and the panels: nothing), so its children report to it;
@@ -556,7 +555,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
 - **The 看台's keys have ONE table, `bin/dash-keymap.sh`** (`--panel switch`):
   each ⌘ chord's private code and the ⌃] letters; `conf/tmux-view.conf`,
   `fleet_view.py`'s key tables and the iTerm2 profile (`fleet-iterm-profile.py`)
-  are built from it, `fleet-keys-selftest.sh` holds them together.
+  are built from it, `dash-keymap-selftest.sh` holds them together.
 - **Never run destructive tmux on the live server**, and test tmux tooling on an
   **isolated socket** — `tmux -L scratch …`, or the `-S <sock>` PATH-shim pattern
   the selftests use (`bin/hub-session-selftest.sh`). A delete aimed at a FLEET's

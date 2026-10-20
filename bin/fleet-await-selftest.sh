@@ -264,13 +264,7 @@ FLEET_TASK_AUTHORITY=hub bash "$AW" 409 -L "$LBL" --parent scratch-7 --interval 
 eq "a hub-authority login: no spawn by issue number (exit 5)" 5 "$?"
 has "…pointing at the task tool" 'hub-authoritative' "$(cat "$WORK/out")"
 eq "…and nothing spawned" "$n" "$(wc -l < "$STUB_LOG" | tr -d ' ')"
-# compat-1v: 下一批删 — an overlay's old line still fills the login's gap.
-fx_repo "$FLEET_CONF_DIR" "$LBL" acme/app FLEET_TASK_AUTHORITY=hub
-bash "$AW" 409 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
-eq "an old overlay line is read one version (exit 5)" 5 "$?"
-eq "…nothing spawned" "$n" "$(wc -l < "$STUB_LOG" | tr -d ' ')"
-fx_repo "$FLEET_CONF_DIR" "$LBL" acme/app FLEET_TASK_AUTHORITY=hub
-export FLEET_TASK_AUTHORITY=legacy   # the login's line wins over that overlay
+export FLEET_TASK_AUTHORITY=legacy   # a legacy login spawns by issue number
 await 410 --timeout 30
 unset FLEET_TASK_AUTHORITY
 W=$(until_win 410); [ -n "$W" ] || fail "a legacy repo still spawns by issue number" "$(cat "$WORK/err")"
