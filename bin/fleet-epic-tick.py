@@ -37,7 +37,9 @@ own. A member is its chain of batons (its records, oldest first, each followed b
 the IDs that continued it); the newest baton is where it stands. A baton's outcome
 is its record's when the record has one, else its ID's newest result (merged /
 succeeded ⇒ succeeded, failed ⇒ failed), else — the ID closed with no result —
-`exited`, counted as a failure. No family (no hub, an old hub, no IDs) ⇒ the
+`exited`, counted as a failure. A record with no worker_id (the ID switch
+dispatches records nobody claims — C14) is the family's ID opened on it (`task`),
+the newest down `prev` when several were. No family (no hub, an old hub, no IDs) ⇒ the
 records alone, as before.
 
 Per member, off its batons:
@@ -127,6 +129,21 @@ def id_of(task):
         if FID.match(tail):
             return tail
     return ""
+
+
+def claimed_by(task, fam):
+    """A record's ID: its worker_id's, else — a record the ID switch dispatched
+    stays accepted and is never claimed (EPIC T497 C14) — the family's ID opened
+    on it (`task`), the newest down `prev` when several were."""
+    fid = id_of(task)
+    if fid or not task.get("id"):
+        return fid
+    mine = [r for r in fam if r.get("task") == task["id"]]
+    if not mine:
+        return ""
+    prevs = {r.get("prev") for r in mine}
+    tips = [r for r in mine if r["id"] not in prevs] or mine
+    return max(tips, key=lambda r: r.get("opened_at") or 0)["id"]
 
 
 def code_of(fid):
@@ -278,9 +295,9 @@ def batons_of(kids, fam):
                 if r.get("prev") == fid and r["id"] not in placed and r["id"] not in kid_ids:
                     add(r.get("task", ""), "", "", r["id"])
 
-    kid_ids = {id_of(c) for c in kids} - {""}
+    kid_ids = {claimed_by(c, fam) for c in kids} - {""}
     for c in kids:
-        fid = id_of(c)
+        fid = claimed_by(c, fam)
         if fid in placed:
             continue
         add(c.get("id"), c.get("outcome") or "", child_pr(c), fid)

@@ -25,6 +25,10 @@
 #      on the driver's own ID (a retried --event writes nothing), the tick's
 #      last_tick is that word, and a closing tick's `report: pending` reads back
 #      as report=pending — then the link, once the report ran.
+#   H. the ID switch dispatches records nobody claims (EPIC T497 C14): a child
+#      record with no worker_id is the family's ID opened on it (`task`) — merged
+#      there ⇒ the member succeeded with that ID, the newest of two down `prev`;
+#      a record no ID was opened on stays running.
 # Hermetic: a sandbox FLEET_CONF_DIR, no tmux, no network, gh denied.
 set -uo pipefail
 
@@ -83,6 +87,8 @@ if meth == "POST" and path == "":
              requested_agent=req["requested_agent"], resolved_agent=req["resolved_agent"], parent_task=parent,
              worker_id="fleet/" + uid(k), execution_owner="fleet/" + uid(k), outcome="", state="running",
              request_payload=json.dumps(req.get("request_payload") or {}), _token=req["token"])
+    if os.environ.get("STUB_UNCLAIMED"):   # the ID switch: a record nobody claims (C14)
+        t.update(worker_id="", execution_owner="", state="accepted")
     st["tasks"][n] = t; save(); out(t)
 if meth == "GET" and path.endswith("/children"):
     p = path.split("/")[0]
@@ -97,7 +103,7 @@ PY
 chmod +x "$WORK/hub"
 export PATH="$WORK/path:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_HUB_CURL="$WORK/hub" \
   STUB_STATE="$WORK/state.json" FLEET_AGENT=claude FLEET_ID_PUSH=0 FLEET_REPO=o/r
-unset TMUX TMUX_PANE FLEET_SESSION FLEET_LAUNCH_CONTEXT STUB_PARENT STUB_OLD_HUB FLEET_ID_LIVE FLEET_ID_LIVE_CMD
+unset TMUX TMUX_PANE FLEET_SESSION FLEET_LAUNCH_CONTEXT STUB_PARENT STUB_OLD_HUB STUB_UNCLAIMED FLEET_ID_LIVE FLEET_ID_LIVE_CMD
 
 jq_() { python3 -c 'import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[1], {"d": d}))' "$1"; }
 tick() { python3 "$BIN/fleet-epic-tick.py" status --task "$P" "$@"; }
@@ -244,6 +250,27 @@ rm -f "$WORK/path/tmux"
 out=$(FLEET_ID_SWITCH=off python3 "$BIN/fleet_task_control.py" progress --pane %1 --event tick-31 --summary x)
 eq "G: switch off: the ID's ledger is not written" 2 "$(grep -c '"ev":"progress"' "$WORK/conf/ids/$DRV.ndjson")"
 
+# --- H. the ID switch: records nobody claims --------------------------------------
+T_E=$(STUB_UNCLAIMED=1 dispatch "C3 · 记录没人认领" "加在范围内")
+T_F=$(STUB_UNCLAIMED=1 dispatch "C4 · 还没开窗" "加在范围内")
+eq "H: the records carry no worker" "" "$(python3 -c 'import json,os,sys; print(json.load(open(os.environ["STUB_STATE"]))["tasks"][sys.argv[1]]["worker_id"])' "$T_E")"
+ID_E=eeeeeeee-0000-4000-8000-00000000000e ID_F=ffffffff-0000-4000-8000-00000000000f
+bash "$BIN/fleet-id.sh" open "$ID_E" --parent "$DRV" --task "$T_E" --title "C3 · 记录没人认领" >/dev/null
+S=$(tick)
+eq "H: C3 runs under the ID opened on its record" "running $ID_E" "$(mem C3 '["state"]') $(mem C3 '["id"]')"
+bash "$BIN/fleet-id.sh" result "$ID_E" --state merged --pr 13 >/dev/null
+bash "$BIN/fleet-id.sh" close "$ID_E" --reason merged >/dev/null
+S=$(tick)
+eq "H: C3 succeeded off that ID" "succeeded 13 $ID_E" "$(mem C3 '["state"]') $(mem C3 '["pr"]') $(mem C3 '["ids"][0]["id"]')"
+eq "H: one ID on C3's chain" 1 "$(mem C3 '["ids"].__len__()')"
+eq "H: C4, no ID opened on it, still runs" "running $T_F 0" "$(mem C4 '["state"]') $(mem C4 '["task"]') $(mem C4 '["ids"].__len__()')"
+hub_id "{\"id\":\"$ID_F\",\"short\":\"T-c4aaa\",\"parent\":\"$DRV\",\"task\":\"$T_F\",\"opened_at\":80,\"results\":[{\"state\":\"failed\"}],\"closed_at\":90}"
+ID_G=99999999-0000-4000-8000-000000000009
+hub_id "{\"id\":\"$ID_G\",\"short\":\"T-c4bbb\",\"parent\":\"$DRV\",\"task\":\"$T_F\",\"prev\":\"$ID_F\",\"opened_at\":95,\"results\":[{\"state\":\"merged\",\"pr\":\"14\"}]}"
+S=$(tick)
+eq "H: two IDs on one record: the newest down prev carries it" "succeeded 14 T-c4bbb" "$(mem C4 '["state"]') $(mem C4 '["pr"]') $(mem C4 '["short"]')"
+has "H: the line counts both" "$(tick --line)" "合 4"
+
 [ -e "$WORK/denied" ] && bad "gh ran: $(cat "$WORK/denied")" || ok
-[ "$BAD" = 0 ] && { printf 'fleet-epic-id-selftest: %d checks OK (a two-member batch by ID, one redone)\n' "$N"; exit 0; }
+[ "$BAD" = 0 ] && { printf 'fleet-epic-id-selftest: %d checks OK (a two-member batch by ID, one redone; unclaimed records)\n' "$N"; exit 0; }
 printf 'fleet-epic-id-selftest: %d of %d FAILED\n' "$BAD" "$N"; exit 1
