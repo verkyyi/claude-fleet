@@ -12,7 +12,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-repo-fixture.sh"
 . "$BIN/selftest-sections.sh"
-case "${1:-}" in --norepo) SELFTEST_PART=6 ;; --proxy-home) SELFTEST_PART=7 ;; esac
+case "${1:-}" in --norepo) export SELFTEST_PART=6 ;; --proxy-home) export SELFTEST_PART=7 ;; esac
 selftest_sections 7
 for dep in tmux python3 perl git; do
   command -v "$dep" >/dev/null 2>&1 || { printf 'fleet-transfer selftest: SKIP (%s missing)\n' "$dep"; exit 0; }
@@ -232,9 +232,9 @@ field() { TM display-message -p -t "$WIN" "#{@$1}"; }
 # in_pane <cmd…>: run as the source pane itself (inside its own turn).
 in_pane() { local sp; sp=$(TM display-message -p -t "$PANE" '#{socket_path}'); TMUX="$sp,0,0" TMUX_PANE="$PANE" "$@"; }
 stop_turn() { in_pane bash "$IBIN/set-claude-state.sh" "done" </dev/null; }
-# arm [args…]: the after-turn arm (IDLE / DEFER waits); REQUEST = its record.
+# arm: the after-turn arm (IDLE / DEFER waits); REQUEST = its record.
 arm() {
-  FLEET_TRANSFER_IDLE_WAIT=${IDLE:-20} FLEET_HANDOFF_DEFER_SECS=${DEFER:-0} transfer --after-turn --handoff "$WORK/notes.md" "$@"
+  FLEET_TRANSFER_IDLE_WAIT=${IDLE:-20} FLEET_HANDOFF_DEFER_SECS=${DEFER:-0} transfer --after-turn --handoff "$WORK/notes.md"
   local rc=$?; REQUEST=$(printf '%s\n' "$OUT" | sed -n 's/^after-turn request: //p'); return $rc
 }
 jget() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
