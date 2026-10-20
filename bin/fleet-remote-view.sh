@@ -594,7 +594,7 @@ rv_browser_cleanup() {
 }
 
 rv_attach_thin() {
-  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar newfar sp last lastgone caps
+  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar newfar sp last lastgone caps rh
   local browser='' bhome=''
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -731,8 +731,18 @@ rv_attach_thin() {
   case "${FLEET_CLIENT_VER:-}" in ''|*[!0-9A-Za-z._-]*) ;; *)
     ( ( behind=$( { [ -z "$setlang" ] || export FLEET_VIEW_LANG="$lang"; }
                   python3 "$BIN/fleet-client-behind.py" "$FLEET_CLIENT_VER" </dev/null 2>/dev/null )
-        [ -z "$behind" ] || T set-option -t "$gid" @view_flash "$behind" \; \
+        [ -z "$behind" ] || [ -n "${FLEET_CLIENT_REHOMED:-}" ] || T set-option -t "$gid" @view_flash "$behind" \; \
           set-option -t "$gid" @view_flash_until "$(( $(date +%s) + 20 ))" 2>/dev/null ) </dev/null >/dev/null 2>&1 & ) ;;
+  esac
+  # 换家 (T690): the thin loop gave up on its home and landed here — it brings the
+  # home it left as FLEET_CLIENT_REHOMED; the top line says so for 60 s (the
+  # client-behind word above stays quiet on this attach, never written over it).
+  # An older loop brings none: nothing is said.
+  case "${FLEET_CLIENT_REHOMED:-}" in ''|*[!0-9A-Za-z._-]*) ;; *)
+    rh=$( { [ -z "$setlang" ] || export FLEET_VIEW_LANG="$lang"; }
+          sh "$BIN/fleet-ui-lang.sh" t view_rehomed_fmt "$FLEET_CLIENT_REHOMED" "$(rv_node_label)" 2>/dev/null )
+    [ -z "$rh" ] || T set-option -t "$gid" @view_flash "$rh" \; \
+      set-option -t "$gid" @view_flash_until "$(( $(date +%s) + 60 ))" 2>/dev/null ;;
   esac
   # C4: a window per other (machine, login) your sessions are on, made now — off
   # the attach's path — so the first visit to another machine is already warm

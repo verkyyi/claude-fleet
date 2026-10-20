@@ -20,7 +20,11 @@
 #                           failed connections: back on the SAME home, the same
 #                           view, the same session — never 换家 to a fresh view
 #   thin-home-down          the home machine down, the hub reachable: 换家 to
-#                           another machine after three failures
+#                           another machine after three failures, said on the
+#                           screen and on the new home's top line (T690)
+#   thin-net-back-slow      (T690) the network back in the middle of a long
+#                           backoff: the same view within 3 s, the screen held
+#                           (「正在重连」 over its top row, never cleared)
 #   thin-home-alone-down    (issue #4829) the home down and no other machine: the
 #                           换家 finds none, the loop goes back to the home and is
 #                           on it again once it is up — never asking forever
@@ -129,7 +133,7 @@ EOF
     ln -s "$BIN/fleet-thin-upload-fixture.py" "$R/home/$m/.claude/fleet/bin/fleet-client-upload.py"
     cat > "$R/home/$m/.claude/fleet/bin/fleet-remote-view.sh" <<EOF
 #!/bin/bash
-echo "\$HOST_NAME \$*" >> "$R/rv.log"; echo \$\$ > "$R/rv.pid"
+echo "\$HOST_NAME \$*\${FLEET_CLIENT_REHOMED:+ rehomed=\$FLEET_CLIENT_REHOMED}" >> "$R/rv.log"; echo \$\$ > "$R/rv.pid"
 view= want= resume= token=
 while [ \$# -gt 0 ]; do
   case \$1 in
@@ -403,6 +407,42 @@ drill_thin_view_lost_on_drop() {
   WHAT="网断到连续 $(grep -c '	connect	' "$R/thin.log") 次连不上（入口也连不上）：不换家，其间动鼠标、打字不回显也不送进会话；网回来 ${SECS}s 内回到 m1 同一个看台（--resume）的 s1"
 }
 
+drill_thin_net_back_slow() {
+  CAP=3   # T690: the network back → the same view within 3 s, whatever the backoff had left
+  local t0 n
+  tc_rig
+  # a long backoff (8 s every time): only the line watch can make it 3 s
+  ( THIN_ENV='{"FLEET_THIN_BACKOFF": "8", "FLEET_THIN_LINE_PROBE_CMD": "sh -c \"[ ! -e '"$R"'/net.down ]\""}' \
+      THIN_ARGS='["--home", "m1", "s1"]' tc_drive nb '[["expect", "VIEW s1 ON m1"], ["linger", 40]]' & ) 2>/dev/null
+  until_ok 10 grep -q 'True' "$R/res.nb" || { WHY="the view never came up: $(cat "$R/res.nb")"; tc_done; return 1; }
+  n=$(wc -c < "$R/term.out")
+  touch "$R/net.down"; tc_drop_view
+  until_ok 12 sh -c '[ "$(grep -c "	connect	" "$1/thin.log")" -ge 2 ]' _ "$R" \
+    || { WHY="the loop did not try again while the network was down: $(cat "$R/thin.log")"; tc_done; return 1; }
+  sleep 1.2   # into the 8 s wait (or an ssh hanging on the dead network)
+  rm -f "$R/net.down"; t0=$(now)
+  until_ok 8 sh -c '[ "$(grep -ac "VIEW s1 ON m1" "$1/term.out")" -ge 2 ]' _ "$R" \
+    || { WHY="never back on s1: $(tail -n 4 "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
+  SECS=$(since "$t0")
+  le "$SECS" "$CAP" || { WHY="back ${SECS}s after the network returned (the backoff waited out): $(grep -a '	back	' "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
+  case $(tail -n 1 "$R/rv.log") in "m1 attach --thin --view "*" --resume "*) ;;
+    *) WHY="not --resume on the same home: $(tail -n 1 "$R/rv.log")"; tc_done; return 1 ;; esac
+  # the screen held: no leaving the alternate screen, no ssh error scrolled over it, 「正在重连」 said
+  python3 - "$R/term.out" "$n" <<'PY2' || { WHY="the screen was not held: $(tail -c 400 "$R/term.out" | cat -v)"; tc_done; return 1; }
+import sys
+b = open(sys.argv[1], "rb").read()[int(sys.argv[2]):]
+cut = b.find(b"VIEW s1 ON m1")
+gap = b[:cut]
+assert b"\x1b[?1049l" not in gap, "left the alternate screen"
+assert "正在重连".encode() in gap, "no 正在重连"
+assert b"unreachable" not in gap, "ssh's error reached the screen"
+assert b"\x1b7" in gap and b"\x1b8" in gap, "not written over the top row"
+PY2
+  grep -aq '	back	' "$R/thin.log" || { WHY="thin.log has no back line"; tc_done; return 1; }
+  tc_done; wait 2>/dev/null
+  WHAT="退避每次 8 s、网断后又回来：线路监视看到网回来就不再等完退避，${SECS}s 内 --resume 回到 m1 同一个看台的 s1；断线期间看台原画面留着（不离开备用屏、不清屏），顶行写「正在重连」，ssh 的报错不刷屏；thin.log 记 back"
+}
+
 drill_thin_stall_drops() {
   CAP=12   # an 8 s stall of the line → the session still there, no reconnect
   local t0 n bud
@@ -501,8 +541,13 @@ drill_thin_home_down() {
   n=$(grep '^m2 ' "$R/rv.log" | head -n 1)
   case $n in *--resume*) WHY="--resume on a home that has no view of ours: $n"; tc_done; return 1 ;; esac
   grep -aq 'rehome' "$R/thin.log" || { WHY="thin.log has no rehome line"; tc_done; return 1; }
+  # T690: the new home is told which home was given up (its top line says so),
+  # once — the first attach on m1 carried nothing
+  case $n in *' rehomed=m1') ;; *) WHY="the attach on m2 did not bring FLEET_CLIENT_REHOMED=m1: $n"; tc_done; return 1 ;; esac
+  grep -q '^m1 .*rehomed=' "$R/rv.log" && { WHY="an attach on m1 said rehomed: $(grep '^m1 ' "$R/rv.log")"; tc_done; return 1; }
+  grep -aq '家机器 m1 连不上，正在换到另一台' "$R/term.out" || { WHY="the screen never said it is moving off m1"; tc_done; return 1; }
   tc_done; wait 2>/dev/null
-  WHAT="家机器 m1 停了、入口在：连续 3 次连不上后 ${SECS}s 换到 m2，新的看台（没有 --resume，仍按 --want 打开 s1），thin.log 记了 rehome"
+  WHAT="家机器 m1 停了、入口在：连续 3 次连不上后 ${SECS}s 换到 m2，新的看台（没有 --resume，仍按 --want 打开 s1），thin.log 记了 rehome；换的时候屏上说「家机器 m1 连不上，正在换到另一台」，m2 的 attach 带 FLEET_CLIENT_REHOMED=m1（顶栏说换到了哪台）"
 }
 
 drill_thin_home_alone_down() {
