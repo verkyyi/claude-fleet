@@ -158,12 +158,9 @@ slow work, so they repaint instantly:
   quiet layer folds, the loud one does not) and an **orphan**, whose parent
   window is gone — there would be no row left to open it from. The live list
   keeps the bit on the window (`@expand`, so it dies with the window).
-- **Account pool / failover** — an optional set of Claude *subscription* accounts
-  (one `claude setup-token` OAuth token per file under `FLEET_ACCOUNTS_DIR`). The
-  launcher `bin/fleet-claude.sh` exports the **active** account's token per
-  session. A running session that fills is never moved: the credential pool
-  changes its subscription (the per-session failover planner is retired, T546).
-  Off unless token files exist. See
+- **Pool** — the hub's subscriptions, picked per request behind the credential
+  proxy; a session never chooses one, and with no pool it runs on the login's
+  own login (EPIC T542 retired the local pick, rotation and failover). See
   [MULTI-ACCOUNT](MULTI-ACCOUNT.md).
 
 ## What a computer is — client, hub, managed node
@@ -229,10 +226,8 @@ capability. When it matters, the docs say 承载.
   - `FLEET_CTX_WINDOW` — context size for the ctx% column (200000 / 1000000).
   - `FLEET_NOTIFY_CMD` / `FLEET_ESCALATE_AFTER` — detached-escalation notifier + delay.
   - `FLEET_STATUS_CONTAINER` — optional docker container to show as ●/○.
-  - `FLEET_ACCOUNTS_DIR` / `FLEET_ACCOUNTS` / `FLEET_ACCOUNT_LIMIT_TTL` — multi-account
-    failover pool (see [MULTI-ACCOUNT](MULTI-ACCOUNT.md)); off unless token files exist.
-    A benched account returns at the limit banner's own `resets …` instant; the TTL
-    is the fallback for banners that carry no clock time.
+  - `FLEET_ACCOUNTS_DIR` — the `accounts/` directory the credential proxy reads
+    (see [MULTI-ACCOUNT](MULTI-ACCOUNT.md)); nothing rotates over it any more.
 - **`FLEET_ID`** — the fleet's identity = its tmux session name. In the
   multi-fleet model this is the key that scopes a fleet's config and cache. See
   [ARCHITECTURE](ARCHITECTURE.md).
