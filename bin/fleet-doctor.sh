@@ -3491,7 +3491,8 @@ fi
 # 跟仓库 / 分到 (T673): does this machine follow its person's repo set, and where
 # did the hub send sessions in the last 24 hours — fleet-repo-follow.py's record,
 # never a hub call from here. No record ⇒ no rows.
-while IFS=$'\t' read -r rf_lv rf_name rf_txt; do
+rf_tab=$(printf '\t')
+while IFS="$rf_tab" read -r rf_lv rf_name rf_txt; do
   case "$rf_lv" in
     pass) pass "$rf_name" "$rf_txt" ;;
     info|warn) info "$rf_name" "$rf_txt" ;;   # the gap's WARN is the repos row's, counted once
@@ -3499,7 +3500,7 @@ while IFS=$'\t' read -r rf_lv rf_name rf_txt; do
 done <<EOF
 $rf_rows
 EOF
-unset rf_rows rf_gap rf_lv rf_name rf_txt
+unset rf_rows rf_gap rf_lv rf_name rf_txt rf_tab
 
 # --- alerts (issue #1238): what the status bar counts, READ off the one
 # producer's file ($G/alerts.ndjson, bin/fleet-alerts.sh) — the doctor computes

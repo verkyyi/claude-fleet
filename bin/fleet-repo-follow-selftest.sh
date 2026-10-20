@@ -10,6 +10,7 @@
 # real road does. bin/fleet-base-sync.sh calls the tick; bin/fleet-doctor.sh
 # reads `status --doctor`.
 set -uo pipefail
+# shellcheck disable=SC2034  # out / n are read inside chk's eval strings
 BIN="$(cd "$(dirname "$0")" && pwd)"
 T=$(mktemp -d "${TMPDIR:-/tmp}/repo-follow-st.XXXXXX")
 trap 'rm -rf "$T"' EXIT
