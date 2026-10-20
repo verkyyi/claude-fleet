@@ -13,6 +13,9 @@
 #   F. both halves (T599): a member is due only when its in-batch deps all
 #      succeeded AND its outside deps are all done; the cycle rule never lets
 #      through one that waits on another batch through an in-batch member.
+#   G. a redo, and the ID switch (T622): T542's C5 failed once, its redo merged —
+#      the hub's `children` row still says accepted (only the record read projects
+#      the window ID's result), so the newest baton's projected succeeded is done.
 #   D. the argv: `status --task T<n>`, `--task T<n> status`, and the ONE word
 #      `--task T<n>` zsh makes of `${P:+--task "$P"}` all read the batch.
 # Hermetic: a stub hub (FLEET_HUB_CURL), a sandbox FLEET_CONF_DIR, no network.
@@ -43,8 +46,8 @@ path = url[len("https://hub.test/v1/node/tasks"):].strip("/")
 if path.endswith("/children"):
     p = path.split("/")[0]
     out(dict(parent=p, children=[t for t in st.values() if t.get("parent_task") == p]))
-if path in st:
-    out(dict(task=st[path], live=None, pr_state="none"))
+if path in st:  # the record read projects an ID's result (`_got`); children never do
+    out(dict(task=dict(st[path], **st[path].get("_got", {})), live=None, pr_state="none"))
 out({"error": "no route"}, 404)
 PY
 chmod +x "$WORK/hub"
@@ -181,6 +184,23 @@ eq "F: C4 running ⇒ C6 not due" "waiting ['C4']" "$(mem C6 '["state"]') $(mem 
 both succeeded succeeded succeeded
 S=$(tick)
 eq "F: inside and outside both met ⇒ C6 and C8 due" "C6 C8" "$(due | tr ' ' '\n' | grep -E '^C[68]$' | tr '\n' ' ' | sed 's/ $//')"
+
+# --- G. a redo the ID switch closed (T622) ------------------------------------------
+redo() { # redo <T542 C5 redo's projected outcome>
+  state "({'T580': $PARENT,
+   'T600': dict(id='T600', parent_task='T542', title='C5 · 外批五', outcome='failed', state='failed'),
+   'T603': dict(id='T603', parent_task='T542', title='C5 · 外批五', outcome='', state='accepted',
+                _got=dict(outcome='$1', state='$1' or 'accepted')),
+   'T605': dict(id='T605', parent_task='T542', title='C7 · 外批七', outcome='succeeded'),
+   'T606': dict(id='T606', parent_task='T542', title='C8 · 外批八', outcome='succeeded'),
+   'T609': dict(id='T609', parent_task='T542', title='C9 · 外批九', outcome='succeeded')})"
+}
+redo ""
+S=$(tick)
+eq "G: redo still open ⇒ T542 C5 not done, C4 waits" "waiting T542 C5:False" "$(mem C4 '["state"]') $(mem C4 '["outside"]' | python3 -c 'import ast,sys; print(" ".join("%s:%s" % (o["ref"], o["done"]) for o in ast.literal_eval(sys.stdin.read())))')"
+redo succeeded
+S=$(tick)
+eq "G: redo succeeded (record read only) ⇒ T542 C5 done, C4 due" "T542 C5:True C4 C7" "$(mem C4 '["outside"]' | python3 -c 'import ast,sys; print(" ".join("%s:%s" % (o["ref"], o["done"]) for o in ast.literal_eval(sys.stdin.read())))') $(due)"
 
 # --- D. the argv ------------------------------------------------------------------
 argv_ok() { python3 "$BIN/fleet-epic-tick.py" "$@" >/dev/null 2>&1; eq "D: argv [$*] reads the batch" 0 "$?"; }

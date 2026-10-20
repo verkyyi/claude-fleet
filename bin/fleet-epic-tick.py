@@ -324,19 +324,63 @@ def parse_deps(text, members, self_ref=""):
 
 
 def outside_done(ext):
-    """{(T<n>, key): True when that batch's member succeeded} — one children read
-    per outside parent; an unreadable one counts as not done (waited on)."""
+    """{(T<n>, key): True when that batch's member succeeded} — each outside parent
+    read the way this batch is (batch_of + judge: a redo's newest baton, an ID's
+    result the record does not carry yet); an unreadable one counts as not done
+    (waited on)."""
     done = {}
     for ref in sorted({sc for refs in ext.values() for sc, _ in refs}):
-        try:
-            kids = record("children", ref).get("children") or []
+        try:  # the parent's record only names its ID; its children are the batch
+            parent = record("get", ref).get("task") or {}
         except (Fail, OSError, subprocess.SubprocessError):
-            kids = []
-        for c in kids:
+            parent = {}
+        try:
+            _, children, _, _, rows, _ = batch_of(ref, parent)
+        except (Fail, OSError, subprocess.SubprocessError):
+            continue
+        by_key = {}
+        for c in children:
             k, _ = child_key(c)
-            if k and (c.get("outcome") or "") == "succeeded":
+            if k:
+                by_key.setdefault(k, []).append(c)
+        for k, kids in by_key.items():
+            if judge(dict(key=k), kids, rows)["state"] == "succeeded":
                 done[(ref, k)] = True
     return done
+
+
+def projected(children):
+    """An open child's outcome off its own record read: with the ID switch on the
+    hub projects the window ID's result there, never into `children` (T622 — T542's
+    C5 merged, yet its children row still said accepted). One read per open child;
+    an unreadable one stays open."""
+    for c in children:
+        if c.get("outcome") or not TREF.match(str(c.get("id") or "")):
+            continue
+        try:
+            t = record("get", c["id"]).get("task") or {}
+        except (Fail, OSError, subprocess.SubprocessError):
+            continue
+        if t.get("id") == c["id"] and t.get("outcome"):
+            c["outcome"], c["state"] = t["outcome"], t.get("state") or c.get("state")
+    return children
+
+
+def batch_of(parent_ref, parent):
+    """One batch's children as the tick judges them: the hub's list, the ones the
+    driver's line adopted (C18), each open one's projected outcome, oldest first —
+    with the parent's ID, its family and ID rows. Own batch and outside batches alike."""
+    kids = record("children", parent_ref)
+    children = list(kids.get("children") or [])
+    # the parent's ID: its record's worker_id, else — a record the ID switch never
+    # claims — the ID this machine opened for it, where its line starts (C18)
+    pid = id_of(parent) or task_root(parent_ref)
+    fam = family_of(pid, [i for i in (id_of(c) for c in children) if i])
+    rows = [r for r in fam.get("ids") or [] if isinstance(r, dict) and FID.match(str(r.get("id", "")))]
+    line = [x for x in fam.get("lineage") or [pid] if x]
+    children += adopted(rows, line, {c.get("id") for c in children})
+    children = sorted(projected(children), key=lambda c: int(str(c.get("id", "T0"))[1:] or 0))
+    return kids, children, pid, fam, rows, line
 
 
 def child_key(child):
@@ -486,16 +530,7 @@ def status(parent_ref, cap):
     meta, members = parse_charter(text)
     if not members:
         raise Fail(2, "%s's record has no charter member list (- [ ] **C1** …)" % parent_ref)
-    kids = record("children", parent_ref)
-    children = list(kids.get("children") or [])
-    # the parent's ID: its record's worker_id, else — a record the ID switch never
-    # claims — the ID this machine opened for it, where its line starts (C18)
-    pid = id_of(parent) or task_root(parent_ref)
-    fam = family_of(pid, [i for i in (id_of(c) for c in children) if i])
-    rows = [r for r in fam.get("ids") or [] if isinstance(r, dict) and FID.match(str(r.get("id", "")))]
-    line = [x for x in fam.get("lineage") or [pid] if x]
-    children += adopted(rows, line, {c.get("id") for c in children})
-    children = sorted(children, key=lambda c: int(str(c.get("id", "T0"))[1:] or 0))
+    kids, children, pid, fam, rows, line = batch_of(parent_ref, parent)
     by_key = {}
     for c in children:
         k, t = child_key(c)
