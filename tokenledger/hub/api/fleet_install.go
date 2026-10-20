@@ -103,15 +103,8 @@ func (s *Server) installerScript(w http.ResponseWriter, r *http.Request, invite 
 		}
 	}
 	body := strings.ReplaceAll(string(tmpl), fleetclient.HubPlaceholder, s.hubURL(r))
-	// An older stable's installer still names the debug placeholder: the
-	// desk is gone (claude-fleet#4904), so it asks for no ticket. # compat-1v: 下一批删
-	body = strings.ReplaceAll(body, DebugPlaceholder, "")
 	return strings.ReplaceAll(body, InvitePlaceholder, invite), true
 }
-
-// DebugPlaceholder is where an older bin/fleet-install.sh learned the hub
-// handed out debug tickets (claude-fleet#2891); always "" now.
-const DebugPlaceholder = "__FLEET_DEBUG__"
 
 // InvitePlaceholder is where bin/fleet-install.sh takes the invite code
 // (claude-fleet#2260), filled the way fleetclient.HubPlaceholder is.

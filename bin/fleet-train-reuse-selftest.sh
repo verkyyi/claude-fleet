@@ -135,9 +135,8 @@ if leg D; then
 case "\$*" in
   *pulls/11*) echo "$P" ;;
   *pulls/12*) echo "" ;;
-  *workflows/ci.yml/runs*) [ -n "\${CIRUN:-}" ] && echo "\$CIRUN" ;;
-  *workflows/selftests.yml/runs*) echo 4242 ;;
-  "run download 4242 "*|"run download 4343 "*) d=\${@: -1}; cp "\$REC" "\$d/selection.txt" ;;
+  *workflows/ci.yml/runs*) echo 4242 ;;
+  "run download 4242 "*) d=\${@: -1}; cp "\$REC" "\$d/selection.txt" ;;
   *) exit 1 ;;
 esac
 SH
@@ -147,9 +146,6 @@ SH
   contains "D named reused" "$out" "named-selftest.sh	green on #11 (run 4242, tree ${TREE:0:7})"
   lacks "D steady touched since ⇒ runs" "$out" "steady-selftest.sh"
   contains "D says why for no number" "$(cat "$WORK/err")" "names no PR"
-  # the PR gate is ci.yml now (issue #4815): its run carries the record first
-  out=$(cd "$R" && CIRUN=4343 REC="$rec/good" FLEET_TRAIN_REUSE_GH="$WORK/gh" bash bin/fleet-train-reuse.sh --repo o/r --stable "$S" 2>"$WORK/err")
-  contains "D ci.yml run reused first" "$out" "named-selftest.sh	green on #11 (run 4343, tree ${TREE:0:7})"
   out=$(cd "$R" && REC="$rec/badtree" FLEET_TRAIN_REUSE_GH="$WORK/gh" bash bin/fleet-train-reuse.sh --repo o/r --stable "$S" 2>"$WORK/err"); rc=$?
   eq "D bad tree exit 0" 0 "$rc"
   eq "D bad tree reuses nothing" "" "$out"

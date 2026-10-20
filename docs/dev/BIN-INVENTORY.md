@@ -5,10 +5,10 @@
 组件、类别与归属模式来自 [COMPONENTS.md](COMPONENTS.md)，规则按表顺序首个匹配。
 
 ```text
-总数	1156
-已归类	1156
+总数	1155
+已归类	1155
 待删候选	5
-人工入口	8
+人工入口	7
 未归类	0
 ```
 
@@ -58,7 +58,6 @@ CI 自测引用链读到的数据文件（基线、夹具、表）。没人按�
 | 操作者终端集成（iterm2 / laptop-url-opener.sh） | 按需 | 2 |
 | 操作者设备位置（`mod/fleet/hooks/where.ts` / `bin/fleet-where-hook.sh`） | 核心 | 5 |
 | 收集与账本观察（collect / ledger-watch） | 待定 | 13 |
-| 更新说明（`bin/fleet-whats-new.sh`） | 移除 | 1 |
 | 构建与验证（ci-runner / workflows / 默认安装审计） | 核心 | 285 |
 | 浏览器（`fleet-browser`） | 按需 | 2 |
 | 版本维护（install-sync / base-sync） | 核心 | 60 |
@@ -90,7 +89,6 @@ CI 自测引用链读到的数据文件（基线、夹具、表）。没人按�
 | `bin/fleet-list.sh` | 终端看台与薄客户端 | 列出 fleet，README「bin/fleet-list.sh」 |
 | `bin/fleet-machine-policy.sh` | 承载节点（managed-node） | 管理员设每人可用机器，docs/public/*/admin/machines.md |
 | `bin/fleet-native-plugin-cli-selftest.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | 显式运行的原生插件探针，docs/dev/NATIVE-AGENT-BOUNDARY.md |
-| `bin/fleet-whats-new.sh` | 更新说明（`bin/fleet-whats-new.sh`） | 旧会话 hook 表里的静默兼容入口（#4324），下一批删 |
 | `bin/fleet_native_continue.py` | 执行会话（worker start hook） | 旧 Codex 会话一次续接（#4775），docs/dev/NATIVE-OBSERVE.md |
 | `bin/nogh_live_driver.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | C9 实测由 owner 手动跑（它的镜像与文档随 #4904 去掉） |
 

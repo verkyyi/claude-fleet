@@ -56,8 +56,7 @@
 # carries it: it is the one check that says every check its plan selected is green
 # and every other skipped. Present ⇒ it decides (pending until it completes — a
 # check still running elsewhere no longer holds the verdict once it is green),
-# except that any other red check still reads FAILING (fail fast while it waits,
-# and the old per-check reading for one version — # compat-1v: 下一批删). Absent
+# except that any other red check still reads FAILING (fail fast while it waits). Absent
 # (a branch from before ci.yml, a repo without it) ⇒ every check, as before.
 #
 # The CHECK ROLLUP fold reads none/fail/pending/pass and counts TIMED_OUT /
@@ -127,7 +126,7 @@ pr_rest_view() {
     runs="$runs
 $stats"
     # `CI 结论` decides when present (issue #4815) — another red still fails
-    # (# compat-1v: 下一批删); the same fold as the GraphQL read
+    # fast; the same fold as the GraphQL read
     if printf '%s\n' "$runs" | grep -q '^ci-'; then
       ci=CI
       if   printf '%s\n' "$runs" | grep -qE '^(ci-)?fail$'; then ck=fail

@@ -26,7 +26,6 @@
 | 会话状态钩子（`set-claude-state.sh`） | 核心 | 执行会话仍属核心；工作、等待、退出状态用于恢复和回收，保留既有钩子。 |
 | 会话恢复与事件记录（`fleet-codex-session.py`、`fleet-emit.sh`、`handoff-latch-reset-hook.sh`、`fleet_loop_mark.py`、历史/退出/压缩钩子） | 核心 | 维持会话身份、连续性和生命周期；本批不拆执行会话的恢复与合并流程。 |
 | 存活原生会话的观察登记（`fleet_native_observe.py`） | 核心 | #4510：原执行不重启，fresh 核实原 kernel/RPC/账号/reservation 后补登记；旧 hook 与消息消费单独报告。 |
-| 更新说明（`bin/fleet-whats-new.sh`） | 移除 | #4904 去掉工具与脚本；`bin/fleet-whats-new.sh` 只留一版静默兼容入口（旧会话 hook 表里的 `--hook`，#4324），下一批删。 |
 | 操作者设备位置（`mod/fleet/hooks/where.ts` / `bin/fleet-where-hook.sh`） | 核心 | 发起人 2026-10-15 拍板 5：保留「你在哪台设备」，让会话知道当前设备及打开网页、接收文件等能力。 |
 | 压缩后任务恢复（`bin/refocus-hook.sh`） | 核心 | 只在执行会话压缩后补回任务说明，保证原任务持续执行（EPIC #4322 统计口径）。 |
 | 上下文阈值自动干预（Stop 中的 auto-handoff / compact-prep） | 按需 | 原生 Agent 默认负责压缩；Fleet 的两个百分比阈值默认 0，不自动写恢复图、输入 `/compact` 或切换会话。显式百分比/Token 配置保留，手动交接、跨节点迁移和任务归属恢复仍属核心。源码候选已改，尚未发布。 |
@@ -142,7 +141,6 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 <!-- bin-inventory:rules -->
 | 组件名前缀 | bin/ 文件模式 | 说明 |
 |---|---|---|
-| 更新说明 | `fleet-whats-new*` | 按需读更新说明 |
 | 操作者设备位置 | `fleet-where-hook* fleet-client-where* fleet-client-lease* fleet-client-who*` | 当前设备及租约 |
 | 压缩后任务恢复 | `refocus-hook*` | 压缩恢复 |
 | 登录说明规则块 | `fleet-agent-defaults*` | 已退出默认，保留显式清理 |

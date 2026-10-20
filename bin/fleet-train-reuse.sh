@@ -59,14 +59,9 @@ for c in $merges; do
   head=$($gh api "repos/$repo/pulls/$pr" --jq '.head.sha' 2>/dev/null)
   [ -n "$head" ] || { say "#$pr: cannot read the PR"; continue; }
   # the newest green PR-gate run of exactly that head, with its record: ci.yml
-  # calls selftests.yml (issue #4815), so the record is the ci run's; a PR from
-  # before it ran selftests.yml itself (# compat-1v: 下一批删)
-  run=''
-  for wfy in ci.yml selftests.yml; do
-    run=$($gh api "repos/$repo/actions/workflows/$wfy/runs?event=pull_request&status=success&head_sha=$head&per_page=5" \
-            --jq '.workflow_runs[0].id // empty' 2>/dev/null)
-    [ -z "$run" ] || break
-  done
+  # calls selftests.yml (issue #4815), so the record is the ci run's
+  run=$($gh api "repos/$repo/actions/workflows/ci.yml/runs?event=pull_request&status=success&head_sha=$head&per_page=5" \
+          --jq '.workflow_runs[0].id // empty' 2>/dev/null)
   [ -n "$run" ] || { say "#$pr: no green selftests run of its final head ${head:0:7}"; continue; }
   rd="$work/$pr"; mkdir -p "$rd"
   if ! $gh run download "$run" --repo "$repo" --name selftests-selection --dir "$rd" >/dev/null 2>&1 \

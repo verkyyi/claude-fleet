@@ -60,7 +60,7 @@ func TestStableKnownColdCacheGitHubGoneServesImage(t *testing.T) {
 	}
 	resp, inst := getBody(t, h.http.URL+"/install")
 	img, _ := fleetclient.Files.ReadFile(fleetclient.Installer)
-	want := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(string(img), fleetclient.HubPlaceholder, h.http.URL), DebugPlaceholder, ""), InvitePlaceholder, "")
+	want := strings.ReplaceAll(strings.ReplaceAll(string(img), fleetclient.HubPlaceholder, h.http.URL), InvitePlaceholder, "")
 	if resp.StatusCode != 200 || inst != want {
 		t.Fatalf("/install: %d %.80q, want the image's installer", resp.StatusCode, inst)
 	}
