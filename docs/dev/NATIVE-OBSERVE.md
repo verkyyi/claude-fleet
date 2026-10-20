@@ -150,7 +150,7 @@ journal，`--apply` 再次执行时只有这一操作能接回（`adopt_transiti
 
 `bin/run-selftests.sh fleet-native-observe-selftest.sh` 覆盖严格 ACK、fresh 比较、
 丢 ACK/本地 pending、真实 socket peer 拒绝、真实隔离 tmux 的三项身份竞态和部分登记。
-账号与正常启动回归在 `fleet-account-provider-selftest.sh`、`fleet-codex-session-selftest.sh`；
+账号与正常启动回归在 `fleet-account-provider-selftest.py`、`fleet-codex-session-selftest.sh`；
 Hub store/API 测试覆盖原 reservation、认证范围、历史多义与只读 credential inspect。
 
 有真实 Codex 可执行文件时，可单独运行下列无真实账号的原生演练。脚本使用隔离 HOME、

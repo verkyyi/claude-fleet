@@ -1,5 +1,5 @@
 #!/usr/bin/env -S python3 -W ignore::ResourceWarning
-# fleet-node-core-selftest.sh — the machine's root core, sandboxed (issue #3555,
+# fleet-node-core-selftest.py — the machine's root core, sandboxed (issue #3555,
 # EPIC #3500 C13): bin/fleet-node-core.py (the fixed table, the peer check, run-as /
 # exec-as / kill / memguard / power, the signed switch + rollback, the alert),
 # bin/fleet_node_core.py (the client) and bin/fleet_ed25519.py. Cases in
@@ -7,7 +7,7 @@
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """fleet-node-core-selftest.py — the root core in a sandbox (issue #3555, EPIC #3500 C13).
 
-Driven by bin/fleet-node-core-selftest.sh. A real `fleet-node-core.py serve` on a
+Run by bin/run-selftests.sh (by its shebang). A real `fleet-node-core.py serve` on a
 socket in a temp dir (FLEET_NODE_TEST=1: the peer is this uid, a login is this uid
 under a fake passwd); nothing touches /var, /Library or a real login.
 

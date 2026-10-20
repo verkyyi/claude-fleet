@@ -839,7 +839,7 @@ PR 永远不上自家机器。没有 `/var/db/fleet-node/ci.env` = 什么都不�
   过得去的程序」不再算数。没有身份（建不出来）⇒ 如前，原样（ad-hoc）切过去，体检 `codesign` 行说为什么。
 - 新加一个特权动作 = 先加 BREAK-IT 行看它红，再进表。BREAK-IT：`root-core-off-list` ·
   `root-core-wrong-peer` · `root-core-unsigned-switch`（`bin/fleet-break-it-core-selftest.sh`）；
-  `bin/fleet-node-core-selftest.sh`，`fleet-node-supervisor-selftest.py` 的 `T_RootCore`
+  `bin/fleet-node-core-selftest.py`，`fleet-node-supervisor-selftest.py` 的 `T_RootCore`
   （有核心）与其余各组（无核心）。
 
 ## 21. 个人账号不跑整机服务（EPIC #3500 C14，#3556）
@@ -1047,7 +1047,7 @@ BREAK-IT：`fleetadmin-token-misissued`（`bin/fleet-break-it-admin-selftest.sh`
   （`FLEET_NODE_HANDOVER_EVERY`）；`fleet node install` 的「旧管理员agent」步在「座位agent」之后跑一次，没到时候就「跳过」。
 - **之后**：`seats` 行对旧 agent 本来就是 FAIL（座位已起），FAIL 的那一句写明它在等交接；交接完这一行不再有它。
 
-BREAK-IT：`admin-handover-cut-op`（`bin/fleet-break-it-admin-selftest.sh`）；`bin/fleet-admin-handover-selftest.sh`；
+BREAK-IT：`admin-handover-cut-op`（`bin/fleet-break-it-admin-selftest.sh`）；`bin/fleet-admin-handover-selftest.py`；
 `bin/fleet-node-update-selftest.py` Q_AdminAgent。
 
 ### 23.4 管理员登录的旧定时任务、单独一份的凭据代理（#4363，EPIC #4354 C10）
@@ -1065,7 +1065,7 @@ BREAK-IT：`admin-handover-cut-op`（`bin/fleet-break-it-admin-selftest.sh`）�
 它是开号的那个）。另：托管登录里还在**自己的**凭据代理上的（`fleet-credsep.py machine managed --json` 说 `own`），
 清扫跑一次 `fleet-credsep.py machine join --logins <login>`（不断档，共享代理不接就原样回自己的代理），并进整机那份；
 （#4674 起没有任何登录常驻自己的代理：账号表里没有 `cred-proxy` 这一行了，共享代理的租户只在代理要通行证时跑 `cred-relay`。）`FLEET_NODE_CREDSEP_JOIN=0` 不动。
-新开的登录本来就是共享代理的租户（#3155）。`bin/fleet-admin-old-jobs-selftest.sh`。
+新开的登录本来就是共享代理的租户（#3155）。`bin/fleet-admin-old-jobs-selftest.py`。
 
 ## 24. 机器级的活只跑一份（EPIC #3500 C1，#3546）
 

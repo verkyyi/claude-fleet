@@ -1,6 +1,6 @@
 #!/bin/bash
 # Shared upload helpers after #3008: local recv and inbox cleanup. Drag/drop,
-# clipboard input ordering and remote transactions live in fleet-thin-upload-selftest.sh.
+# clipboard input ordering and remote transactions live in fleet-thin-upload-selftest.py.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"; UP="$BIN/fleet-client-upload.py"
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT

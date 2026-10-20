@@ -2,8 +2,8 @@
 # Coverage of the issue #4500 families, including newly added cases, and of the
 # `# selftest-parts:` / `# selftest-part:` headers run-selftests.sh reads (T525).
 # Reads fleet-break-it-selftest.sh, fleet-break-it-node-selftest.sh,
-# fleet-break-it-thin-selftest.sh, fleet-cleanup-idle-selftest.sh,
-# fleet-hub-selftest.sh, fleet-quotawatch-selftest.sh, fleet-await-stall-selftest.sh,
+# fleet-break-it-thin-selftest.sh, fleet-cleanup-idle-selftest.py,
+# fleet-hub-selftest.py, fleet-quotawatch-selftest.sh, fleet-await-stall-selftest.sh,
 # fleet-break-it-part.py, break-it-durations.txt, selftest_part.py and fleet-hub.yml.
 # Also covers fleet-break-it-cred-sep-selftest.sh, fleet-break-it-hub-selftest.sh
 # and fleet-sleep-selftest.sh (issue #3884).
