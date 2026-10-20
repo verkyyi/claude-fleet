@@ -546,6 +546,13 @@ one-off drill / audit records do not go in the repo (issue #3576).
   stalled dialog is answered only through `bin/fleet-dialog-answer.sh` (`--by
   session`; its trail is the 代答记录 `fleets/<sess>/answers/answers-<day>.md`).
   `dialog-wait-selftest.sh`.
+- **New code never forks on an agent's name — it asks the adapter table**
+  (EPIC T580). What really differs between Claude and Codex is one row per agent
+  in `bin/fleet_agent_adapter.py` (`ADAPTERS`; shell readers source the generated
+  `bin/fleet-agent-adapter.sh`): never write `[ "$AGENT" = codex ]` — a step one
+  agent lacks is a value saying so, a new difference is a new column. Every column
+  and why it differs, plus what only Codex has (app-server, TOML, rollout, usage):
+  `docs/dev/AGENT-ADAPTER.md`.
 - **Navigate by name, not index.** The home window is placed at the lowest
   index once, at spawn; numbers still shift when a window closes
   (`renumber-windows on`).

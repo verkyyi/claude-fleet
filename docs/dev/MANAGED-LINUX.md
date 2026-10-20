@@ -1093,7 +1093,7 @@ This metadata is informational, not trusted activation input. It does not write
 Activation must regenerate from the verified administrator-owned release,
 check directory/interpreter ownership and preserve existing policy. Cross-login
 isolation, policy rollback, active-session lifetime and old-version garbage
-collection remain separate gates. See [candidate configuration](CODEX-RUNTIME.md#managed-guard-configuration-candidate).
+collection remain separate gates. See [candidate configuration](AGENT-ADAPTER.md).
 
 `FLEET_NODE_UPDATE_OWNER=node` (the image's default) keeps the supervisor's
 `update` task and its restart request, and the machine's node program lists

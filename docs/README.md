@@ -14,7 +14,7 @@
 **先读**
 
 - [PRODUCT-DIRECTION.md](dev/PRODUCT-DIRECTION.md) — 产品方向与设计原则（后续设计的依据）
-- [NATIVE-AGENT-BOUNDARY.md](dev/NATIVE-AGENT-BOUNDARY.md) — 原生 Agent 职责边界的迁移顺序、兼容盘点与验收
+- [AGENT-ADAPTER.md](dev/AGENT-ADAPTER.md) — 两种 Agent 有什么不同：适配表每列为什么不同、Codex 独有部分、原生迁移边界
 - [BIN-INVENTORY.md](dev/BIN-INVENTORY.md) — 程序归属汇总、静态调用方及待删候选
 - [COMPONENTS.md](dev/COMPONENTS.md) — 组件类别与保留理由（核心 / 按需 / 移除 / 待定）
 - [ARCHITECTURE.md](dev/ARCHITECTURE.md) — 整体设计
@@ -33,7 +33,8 @@
 - [WORKER.md](dev/WORKER.md) — 执行会话的规则背景与排障（流程由 SessionStart hook 给出）
 - [TASK-ACCEPTANCE.md](dev/TASK-ACCEPTANCE.md) — 无 GitHub 任务控制：夹具验收与独立的 live 演练单
 - [CODEX-AUTH-RECOVERY.md](dev/CODEX-AUTH-RECOVERY.md) — Codex 认证拒绝的恢复与验收
-- [SESSION-TRANSFER.md](dev/SESSION-TRANSFER.md) · [CODEX-RUNTIME.md](dev/CODEX-RUNTIME.md) — Claude / Codex 之间换手
+- [SESSION-TRANSFER.md](dev/SESSION-TRANSFER.md) — Claude / Codex 之间换手
+- [CODEX-RUNTIME.md](dev/CODEX-RUNTIME.md) · [NATIVE-AGENT-BOUNDARY.md](dev/NATIVE-AGENT-BOUNDARY.md) — 已合进 AGENT-ADAPTER.md，只留指路
 - [CODEX-AUTH-RECOVERY.md](dev/CODEX-AUTH-RECOVERY.md) — Codex 认证恢复与后续设计
 - [AGENT-CONFIG.md](dev/AGENT-CONFIG.md) — agent 配置的团队 / 个人 / 本机三层
 - [EMIT.md](dev/EMIT.md) — 会话事实外送

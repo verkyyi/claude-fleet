@@ -11,7 +11,7 @@
 
 2026-10-16 原生边界补充：上述「保留」指产品能力，不承诺永久保留重复实现。
 按 [Blueprint 的最终职责边界](PRODUCT-DIRECTION.md#fleet-与原生-agent-的最终职责边界) 分批迁移，
-具体替换清单与验收见 [原生 Agent 边界迁移](NATIVE-AGENT-BOUNDARY.md)。
+具体替换清单与验收见 [两种 Agent 有什么不同 · 迁移边界](AGENT-ADAPTER.md)。
 执行会话、跨节点协作、持久化和安全准入仍保留；原生 Worktree、resume/fork、MCP 与事件能力优先复用。
 此补充不自动更改下表待定项、现有用户配置或在线安装；每批替换通过验收后再更新实现归属。
 
