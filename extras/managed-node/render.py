@@ -693,8 +693,8 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
                            # meets that sshd, so the heartbeat carries its key
                            {'name': 'sshd-key', 'mountPath': '/run/sshd-key', 'readOnly': True}],
     }, **_probes())
-    # sshd: a host key of its own each start (the door never pins one — fleet-door.sh),
-    # the config pod-etc wrote
+    # sshd: a host key of its own each start (the hub hands it on — the jump's
+    # inner login checks it, #4193), the config pod-etc wrote
     sshd = {
         'name': 'sshd', 'image': image,
         'command': ['/bin/sh', '-ec', 'chmod 711 /run/sshd-key\nrm -f /run/sshd-key/host /run/sshd-key/host.pub\n'
@@ -711,8 +711,7 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
         'volumeMounts': [m for m in data if m['subPath'] == 'homes']
                         + [dict(m, readOnly=True) for m in data if m['subPath'] == 'node']
                         + shared + _etc_mounts(['passwd', 'group', 'gitconfig', 'fleet-devnet.env', 'sshd_config'])
-                        + [{'name': 'sshd-key', 'mountPath': '/run/sshd-key'},
-                           {'name': 'door', 'mountPath': '/run/fleet-door', 'readOnly': True}],
+                        + [{'name': 'sshd-key', 'mountPath': '/run/sshd-key'}],
     }
     etc = {
         'name': 'pod-etc', 'image': image,
@@ -750,11 +749,6 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
                                   # 0440 with fsGroup: the login reads its machine join code
                                   {'name': 'join', 'secret': {'secretName': name + '-join',
                                                            'optional': True, 'defaultMode': 0o440}},
-                                  # the door's public key (C4, #3549): the one key this
-                                  # pod's sshd takes, read at each login — a rotated
-                                  # Secret is the new key, no restart
-                                  {'name': 'door', 'secret': {'secretName': DOOR_PUB_SECRET,
-                                                           'optional': True, 'defaultMode': 0o444}},
                                   {'name': 'pod-etc', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '1Mi'}},
                                   {'name': 'tmp', 'emptyDir': {'sizeLimit': USER_POD_TMP}},
                                   {'name': 'run', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '16Mi'}},
@@ -765,14 +759,13 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
 
 # The cluster's one door (#3549, EPIC #3500 C4): ONE load balancer for every
 # person whose home is their own pod. Two replicas of the image in door mode —
-# the entry port's sshd (keys only, the hub's list, PerSourcePenalties) whose
-# ForceCommand hands each login to its own pod's Service (bin/fleet-door.sh).
-# Its Secret (DOOR_SECRET) holds what every replica shares: the host key, the
-# key to the pods and the node token; the pods mount DOOR_PUB_SECRET (the key's
-# public half alone).
+# the entry port's sshd (keys only, the hub's list, PerSourcePenalties) with ONE
+# account, the jump: a person's key opens a tunnel to their own pod's Service and
+# nothing else (design #4181 A2; the per-login accounts and the door's key to the
+# pods went with T647). Its Secret (DOOR_SECRET) holds what every replica
+# shares: the host key and the node token.
 DOOR_NAME = 'fleet-door'
 DOOR_SECRET = 'fleet-door'
-DOOR_PUB_SECRET = 'fleet-door-pub'
 # its disk (#4729): state holds the runtime the image stages at each start
 # (~1.3 GiB), logs the node's own; asked for and capped like a user pod's
 DOOR_STATE = '4Gi'

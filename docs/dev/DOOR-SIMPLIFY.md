@@ -1,4 +1,4 @@
-# 门简化方案：少一层登录（设计，待确认）
+# 门简化方案：少一层登录（设计；A2 已按第 3 节做完，T647）
 
 issue #4181。只出方案，不改代码、不动线上门和任何 pod；发起人确认后再拆单动手。
 
@@ -161,8 +161,12 @@ Match User fleet-jump
 6. **删旧路**（compat-1v，下一批）：门的记录里 per-login 账号的到达连续 N 天为 0（或已逐个通知手机用户换成新一行）后，
    删门的 per-login 账号 / keys 目录 / `fleet-door.sh` / `AcceptEnv FLEET_DOOR_*`、Secret `fleet-door` 和 `fleet-door-pub`、
    pod 的 `door.pub` 挂载和中转的 `Match LocalAddress` 例外；MANAGED-LINUX「The door」改写。
-   hub 一半已做（T643，2026-10-20）：pod 的 `entry` 路线只在跳转就绪时发、且必带 `jump`，入口页不再给 pod 家
-   `ssh://<login>@<门>` 的码；门上一半（账号 / keys 目录 / fleet-door.sh / Secret）随后另做。
+   **已做**。hub 一半（T643，2026-10-20）：pod 的 `entry` 路线只在跳转就绪时发、且必带 `jump`，入口页不再给 pod 家
+   `ssh://<login>@<门>` 的码；门上一半（T647，2026-10-20）：per-login 账号、keys 目录、`fleet-door.sh`、
+   `AcceptEnv FLEET_DOOR_*`、门进 pod 的钥匙（Secret `fleet-door` 的 `id_ed25519`、`fleet-door-pub`）、pod 的 `door.pub`
+   挂载都删了（`Match LocalAddress` 例外 #4193 时已去）；门上只剩 `fleet-jump`，表空时照样监听。Secret 的删法见
+   MANAGED-LINUX「The door」：先换门镜像，再删。BREAK-IT `door-account-locked` · `door-strictmodes` · `door-empty-table`
+   三行退休（后者的意思并进 `door-wrong-pod`）。
 
 ## 4. 待发起人定的
 

@@ -217,7 +217,7 @@ func TestDoorRouteListSendsPodsThroughTheDoor(t *testing.T) {
 	}
 }
 
-// The door ends a person's ssh itself (fleet-door.sh), so the host key their
+// A person's ssh meets the door first (the jump hop), so the host key their
 // ssh meets under fleet-<pod> is the DOOR's (claude-fleet#4127): a pod behind
 // the door is listed with the door's entry key, never the keys its own image
 // carried — those sent a person into 「REMOTE HOST IDENTIFICATION HAS CHANGED」

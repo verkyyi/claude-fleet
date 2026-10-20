@@ -313,7 +313,7 @@ NODE_ENV_KEYS = ("FLEET_NODE_ROOT", "FLEET_NODE_STATE", "FLEET_NODE_RUNTIME", "F
                  # the hub's in-cluster Service a pod's machine-to-hub calls dial
                  # (#4175): the node program's control link, a login's own proxy
                  "FLEET_HUB_INTERNAL_URL",
-                 # the cluster's one door (#3549): its switch and where its keys are mounted
+                 # the cluster's one door (#3549): its switch and where its host key is mounted
                  "FLEET_DOOR", "FLEET_DOOR_NAMESPACE", "FLEET_DOOR_SECRET",
                  # a container's entry= route (#3213): `entry reach` runs under the node
                  # program, and the hub must knock on the load balancer, not the NAT
@@ -5844,8 +5844,6 @@ class EntryPaths(object):
         self.revs = os.path.join(self.dir, "revocations.json")
         self.krl = os.path.join(self.dir, "revoked.krl")
         self.rev_ca = os.path.join(self.dir, "revocations-ca.pub")
-        # the door (#3549): its key to the pods, root:fleet-door 0640
-        self.door_key = os.path.join(self.dir, "door_key")
         # the door's jump account (#4193): each routed login's keys, 0644 — what
         # bin/fleet-door-keys.py reads as `nobody`
         self.jump = os.path.join(self.dir, "jump-keys")
@@ -5869,19 +5867,13 @@ def entry_sshd():
 # -- the cluster's one door (issue #3549, EPIC #3500 C4) -------------------------
 # The entry port above, in DOOR mode (FLEET_DOOR=1): the table comes from
 # GET /v1/node/entry-routes (every person whose home is their own pod — their
-# login, their keys, their pod's Service), each login is a door account made
-# here (no home, group fleet-door, never one this machine already had), and the
-# ForceCommand is bin/fleet-door.sh: it hands the connection to the ONE pod the
-# table names for the login sshd let in, with the door's own key — the only key
-# a user pod's sshd takes. The door's host key and its key to the pods come from
-# the Secret mounted at FLEET_DOOR_SECRET (every replica the same door). No
-# forwarding (it would land on the door, not the pod).
-DOOR_GROUP = "fleet-door"
-DOOR_GECOS = "fleet-door"
+# login, their keys, their pod's Service). The door makes no account and holds
+# no key into any pod (T647, design #4181 A2 step 6): its sshd takes ONE account,
+# the jump account baked into its image, and a person's key there opens one
+# tunnel — to that person's own pod — where the pod's sshd does the login. The
+# door's host key comes from the Secret mounted at FLEET_DOOR_SECRET (every
+# replica the same door).
 DOOR_SHADOW = "/etc/shadow"
-# AllowUsers of a door whose table is empty (issue #3554): a `-` no login of the
-# hub's (2-16 of a-z0-9) can carry, so no door account is ever this name
-DOOR_NOBODY = "fleet-door-closed"
 DOOR_SERVICE_RE = r"^u-[a-z0-9]{4,20}$"   # render.py USER_POD_RE
 
 
@@ -5938,8 +5930,9 @@ def door_route_rows(lst):
 # baked into the door image (never a useradd here), no shell, no session; a key
 # of a person whose home is a pod may open one tunnel — to that person's own
 # pod, port 22 — and nothing else (bin/fleet-door-keys.py writes the line). The
-# login itself is the pod's sshd's, with the person's own key. Beside the old
-# per-login road until that one is removed.
+# login itself is the pod's sshd's, with the person's own key. The door's only
+# account: always on AllowUsers, so a door whose table is empty still listens
+# (its startup probe is tcp on the port, #3554) and lets nobody through.
 DOOR_JUMP_USER = "fleet-jump"
 
 
@@ -5953,7 +5946,7 @@ def door_jump_user():
     except KeyError:
         return ""
     # a locked account (`!`) is refused by a `UsePAM no` sshd even with its key
-    # (door-account-locked, #4161): the image leaves `*`
+    # (#4161): the image leaves `*`
     return DOOR_JUMP_USER if pw.pw_uid != 0 and door_shadow(DOOR_JUMP_USER) in ("*", None) else ""
 
 
@@ -5973,7 +5966,7 @@ def door_jump_rows(lst, rows):
     with a key — whether or not it has a door account (the jump needs none)."""
     out = {}
     for login, (svc, _pl) in sorted(rows.items()):
-        if login in ("root", DOOR_NOBODY):
+        if login == "root":
             continue
         ent = lst["logins"].get(login) if isinstance(lst["logins"].get(login), dict) else {}
         lines, fps = [], []
@@ -6047,32 +6040,6 @@ def door_jump_config(ep, jump):
     ]
 
 
-def door_account(login):
-    """None when <login> is (now) a door account here, else why not. A login
-    this machine already has that the door did not make is never taken."""
-    fake = os.environ.get("FLEET_NODE_PASSWD") if env("FLEET_NODE_TEST", "") == "1" else None
-    if fake:
-        db = read_json(fake, {}) or {}
-        e = db.get(login)
-        if e is None:
-            db[login] = {"uid": 60000 + len(db), "gid": 60000, "home": "/nonexistent", "gecos": DOOR_GECOS}
-            write_json(fake, db)
-            return None
-        return None if e.get("gecos") == DOOR_GECOS else "a login of this machine, not a door account"
-    try:
-        pw = pwd.getpwnam(login)
-        if pw.pw_gecos != DOOR_GECOS:
-            return "a login of this machine, not a door account"
-        return door_unlock(login)
-    except KeyError:
-        pass
-    subprocess.run(["groupadd", "-f", DOOR_GROUP], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    r = subprocess.run(["useradd", "-M", "-d", "/nonexistent", "-s", "/bin/bash", "-g", DOOR_GROUP,
-                        "-c", DOOR_GECOS, "-K", "UID_MIN=60000", "-K", "UID_MAX=64999", login],
-                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=60)
-    return door_unlock(login) if r.returncode == 0 else "useradd: %s" % r.stdout.strip()[:200]
-
-
 def door_shadow(login):
     """The second field of <login>'s shadow line, None when there is none."""
     try:
@@ -6086,57 +6053,19 @@ def door_shadow(login):
     return None
 
 
-def door_unlock(login):
-    """None once <login>'s shadow field is `*`, else why not. useradd leaves `!`
-    (LOCKED); the door's sshd runs `UsePAM no`, and OpenSSH without PAM turns a
-    locked account away even with its key (door-account-locked, #4161 — the
-    door's twin of linux-login-locked, #3304). `*` matches no password but is not
-    a lock. Checked on every pass, so a door made before this heals itself."""
-    if door_shadow(login) in ("*", None):
-        return None
-    r = subprocess.run(["usermod", "--password", "*", login], stdout=subprocess.PIPE,
-                       stderr=subprocess.STDOUT, universal_newlines=True, timeout=60)
-    return None if r.returncode == 0 else "usermod: %s" % r.stdout.strip()[:200]
-
-
-def door_eligible(logins, routes):
-    out = {}
-    for login in logins:
-        if login in ("root", DOOR_NOBODY) or not re.match(r"^[A-Za-z0-9._-]{1,64}$", login):
-            out[login] = "not a login the door takes"
-        elif login not in routes:
-            out[login] = "no pod routed for it"
-        else:
-            out[login] = door_account(login)
-    return out
-
-
-def door_secrets(ep):
-    """The Secret's two keys into the door's own files: the host key (root 0600,
-    every replica the same host) and the key to the pods (root:fleet-door 0640 —
-    the door accounts' ForceCommand reads it, and runs nothing else). "" or why."""
+def door_hostkey(ep):
+    """The Secret's host key into the door's own file (root 0600, every replica
+    the same host). "" or why."""
     src = env("FLEET_DOOR_SECRET", "/run/fleet-door")
-    # root:fleet-door 0640 on the door; a drill's non-root sshd runs the ForceCommand
-    # as its own owner, and ssh refuses a key of its own that the group can read
-    key_mode = 0o640 if os.geteuid() == 0 else 0o600
-    for name, dst, mode in (("host_ed25519_key", ep.hostkey, 0o600), ("id_ed25519", ep.door_key, key_mode)):
-        text = _entry_read(os.path.join(src, name))
-        if not text:
-            return "the door's Secret has no %s (%s)" % (name, src)
-        if _entry_read(dst) != text:
-            _entry_put(dst, text, mode)
-        if os.geteuid() == 0:
-            gid = 0
-            if dst == ep.door_key:
-                try:
-                    gid = grp.getgrnam(DOOR_GROUP).gr_gid
-                except KeyError:
-                    subprocess.run(["groupadd", "-f", DOOR_GROUP], stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL)
-                    gid = grp.getgrnam(DOOR_GROUP).gr_gid
-            os.chown(dst, 0, gid)
-        if os.stat(dst).st_mode & 0o7777 != mode:
-            os.chmod(dst, mode)
+    text = _entry_read(os.path.join(src, "host_ed25519_key"))
+    if not text:
+        return "the door's Secret has no host_ed25519_key (%s)" % src
+    if _entry_read(ep.hostkey) != text:
+        _entry_put(ep.hostkey, text, 0o600)
+    if os.geteuid() == 0:
+        os.chown(ep.hostkey, 0, 0)
+    if os.stat(ep.hostkey).st_mode & 0o7777 != 0o600:
+        os.chmod(ep.hostkey, 0o600)
     pub = subprocess.run(["ssh-keygen", "-y", "-f", ep.hostkey], stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, universal_newlines=True)
     if pub.returncode == 0 and _entry_read(ep.hostkey + ".pub") != pub.stdout:
@@ -6185,9 +6114,9 @@ def _entry_root_dir(d, mode):
 def _entry_state_dir(d):
     """The state dir under AuthorizedKeysFile: made 0755 when missing; one that is
     there loses its group / other write. sshd's `StrictModes yes` refuses every key
-    under a group- or world-writable directory — the door mounts an emptyDir here,
-    which Kubernetes makes 0777 (door-strictmodes, #4161: `bad ownership or modes
-    for directory /var/db/fleet-node`, 0 Accepted). A sticky dir (/tmp) is left."""
+    under a group- or world-writable directory — an emptyDir here is 0777 (seen at
+    the door, #4161: `bad ownership or modes for directory /var/db/fleet-node`,
+    0 Accepted). A sticky dir (/tmp) is left."""
     if not os.path.isdir(d):
         _entry_root_dir(d, 0o755)
         return
@@ -6245,7 +6174,7 @@ def entry_dispatch(paths):
     """The ForceCommand (issue #3071, 共同约定 4): the runtime's bin/fleet-entry.sh
     through the `current` link, so a release switch moves it — only once the
     runtime carries it (before that: a plain login, as #3070 shipped)."""
-    script = os.path.join(paths.runtime, "bin", "fleet-door.sh" if door_on(paths) else "fleet-entry.sh")
+    script = os.path.join(paths.runtime, "bin", "fleet-entry.sh")
     return script if os.path.isfile(script) else None
 
 
@@ -6261,24 +6190,24 @@ def entry_config(ep, port, allow, paths=None):
     # the drill's seam (FLEET_NODE_TEST only) — ONE SetEnv line: sshd keeps only the first
     more = env("FLEET_ENTRY_TEST_SETENV", "") if env("FLEET_NODE_TEST", "") == "1" else ""
     if door:
-        # the door (#3549): the pod is where everything runs — a door that cannot
-        # say where to go lets nobody in (no ForceCommand ⇒ no config at all)
-        if not disp:
-            return None
+        # the door (#3549): the pod is where everything runs — the jump account is
+        # the door's one road (T647); a door without it lets nobody in (no config)
         jump = door_jump(paths)
+        if not jump:
+            return None
         return "".join(l + "\n" for l in [
             "# claude-fleet door (issue #3549) — written by fleet-node-supervisor.py; every",
-            "# change passes `sshd -t` first. Each login goes to its own pod and nowhere else.",
+            "# change passes `sshd -t` first. One account, the jump: a key opens a tunnel to its owner's pod.",
             "Port %d" % port,
             "HostKey %s" % ep.hostkey,
             "PidFile %s" % ep.pid,
-            "AllowUsers %s" % " ".join(sorted(allow)),
+            "AllowUsers %s" % jump[0],
             "AuthenticationMethods publickey",
             "PubkeyAuthentication yes",
             "PasswordAuthentication no",
             "KbdInteractiveAuthentication no",
             "PermitRootLogin no",
-            "AuthorizedKeysFile %s/%%u" % ep.keys,
+            "AuthorizedKeysFile none",
             "AuthorizedPrincipalsFile none",
             "TrustedUserCAKeys none",
         ] + (
@@ -6290,9 +6219,7 @@ def entry_config(ep, port, allow, paths=None):
             "UsePAM no",
             "PermitUserRC no",
             "PermitUserEnvironment no",
-            "ExposeAuthInfo yes",
-            "AcceptEnv LANG LC_*",
-            # the door forwards nothing: a forward would open on the door, not the pod
+            # nothing runs on the door: no session, no environment, no forward but the jump's
             "DisableForwarding yes",
             "PermitTunnel no",
             "GatewayPorts no",
@@ -6300,12 +6227,8 @@ def entry_config(ep, port, allow, paths=None):
             "LoginGraceTime 20",
             "MaxStartups 10:30:60",
             "LogLevel VERBOSE",
-            # sftp too goes to the pod: the ForceCommand hands its name on
-            "Subsystem sftp internal-sftp",
-            "ForceCommand /bin/bash %s" % shlex.quote(disp),
-            "SetEnv FLEET_ENTRY_BOOK=%s FLEET_DOOR_KEY=%s FLEET_DOOR_NAMESPACE=%s%s"
-            % (ep.book, ep.door_key, door_namespace(), (" " + more) if more else ""),
-        ] + (door_jump_config(ep, jump) if jump and jump[0] in allow else []))
+            "ForceCommand /usr/bin/false",
+        ] + door_jump_config(ep, jump))
     if disp:
         # the book (0644) names each key the hub registered — the 看台's device; the
         # drill's seam (FLEET_NODE_TEST only) adds its 看台 stand-in and conf dir.
@@ -6611,16 +6534,16 @@ def _entry_converge(paths, ep, port, lst, force):
             lst = {"version": 0, "logins": {}}
     book["error"] = ""
     door = door_on(paths)
-    why = door_secrets(ep) if door else _entry_hostkey(ep)
+    why = door_hostkey(ep) if door else _entry_hostkey(ep)
     if why:
         book["error"] = why
         write_json(ep.book, book)
         return book
     rows = door_route_rows(lst) if door else {}
-    routes = dict((l, v[0]) for l, v in rows.items())
-    verdict = door_eligible(sorted(lst["logins"]), routes) if door else entry_eligible(paths, sorted(lst["logins"]))
+    # the door's logins are its jump rows (below): no account, no keys/<login> of its own
+    verdict = {} if door else entry_eligible(paths, sorted(lst["logins"]))
     want, logins_book, skipped = {}, {}, 0
-    for login in sorted(lst["logins"]):
+    for login in ([] if door else sorted(lst["logins"])):
         ent = lst["logins"][login] if isinstance(lst["logins"][login], dict) else {}
         if verdict.get(login):
             continue
@@ -6641,14 +6564,11 @@ def _entry_converge(paths, ep, port, lst, force):
             continue
         want[login] = "".join(lines)
         logins_book[login] = {"person": str(ent.get("person") or ""), "fps": fps, "keys": len(lines)}
-        if door:
-            logins_book[login]["service"] = routes[login]
-            if rows[login][1] != login:
-                logins_book[login]["pod_login"] = rows[login][1]
         if names:
             logins_book[login]["names"] = names
     # the keys files: exactly <want>, each root 0644; what was there and is not
-    # wanted any more is a removed key — its connections are cut below
+    # wanted any more is a removed key — its connections are cut below (at the
+    # door <want> is empty: an older door's per-login files go, T647)
     removed, healed = set(), []
     try:
         present = [n for n in os.listdir(ep.keys) if not n.startswith(".")]
@@ -6683,20 +6603,18 @@ def _entry_converge(paths, ep, port, lst, force):
                 os.remove(p)
             _entry_put(p, text, 0o644)
     allow = sorted(want)
-    jump = door_jump(paths) if door else None
     if door:
-        # the jump account (#4193): every routed login's keys, account or none
+        # the jump account (#4193): every routed login's keys. It is the door's one
+        # account and always on AllowUsers — the config stays when the table is
+        # empty (issue #3554: the door's probe is tcp on the port), letting nobody through
+        jump = door_jump(paths)
         jrows = door_jump_rows(lst, rows)
         removed |= door_jump_files(ep, dict((l, v[1]) for l, v in jrows.items()))
         book["jump"] = dict((l, {"service": v[0], "person": v[2], "fps": v[3]}) for l, v in jrows.items())
         book["jump_user"] = jump[0] if jump else ""
-        if jump and jrows and jump[0] not in allow:
-            allow = sorted(allow + [jump[0]])
-    # the config: none (no listener) when no login has its home here — except at
-    # the door (issue #3554): its probe is tcp on the port, and its table is empty
-    # until the first person's home is a pod, so it listens letting nobody in
-    if not allow and door:
-        allow = [DOOR_NOBODY]
+        allow = [jump[0]] if jump else []
+        if not jump:
+            book["error"] = "not started — the door has no jump account (%s) or no bin/fleet-door-keys.py" % DOOR_JUMP_USER
     book["missing"], book["refused"] = [], dict((l, w) for l, w in verdict.items() if w)
     if not allow:
         for f in (ep.cfg,):
@@ -6711,7 +6629,7 @@ def _entry_converge(paths, ep, port, lst, force):
                 os.remove(ep.cfg)
             except OSError:
                 pass
-            book["error"] = "not started — the runtime has no bin/fleet-door.sh"
+            book["error"] = "not started — the door has no jump account"
         elif _entry_read(ep.cfg) != text:
             ok, why, missing = _entry_sshd_check(text, ep)
             book["missing"] = missing
