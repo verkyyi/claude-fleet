@@ -224,23 +224,42 @@ exit 0
                         self.assertNotIn("frozen", message)
                 self.assertFalse(self.windows.exists())
 
-    def test_panel_quick_draft_uses_real_compose_and_raw_entry(self):
-        # No client lease: the real quick/compose/place path uses the local
-        # node adapter. That adapter still has to pass the real Hub authority gate.
+    def test_panel_new_session_box_uses_real_raw_entry(self):
+        # The 「新会话」 box's 开 (T652, EPIC T651 C1): ONE road, `do new` → go_new,
+        # nothing typed. No client lease: the local adapter, which still has to
+        # pass the real Hub authority gate.
         state = fleet_view.bolt_new(dict(last=REGISTERED, agent="claude", missing={}))
         state["repo"] = REGISTERED
-        with patch.object(fleet_view, "view_fleet", return_value="fixture"):
-            argv, _, _ = fleet_view.bolt_argv(None, "test", "", state, "fixture draft")
-        self.command(*argv)
+        quick = type("Quick", (), {"__file__": str(BIN / "fleet-quickopen.py")})
+        argv, _, _ = fleet_view.bolt_argv(quick, "test", "", state, "fixture draft")
+        self.assertEqual(argv[2:4], ["do", "new"])
+        self.assertEqual(argv[argv.index("--repo") + 1], REGISTERED)
+        self.assertNotIn("--draft", argv)
+
+        def open_new():
+            err = io.StringIO()
+            here = os.getcwd()
+            os.chdir(self.root)
+            try:
+                with patch.dict(os.environ, self.env, clear=True), \
+                        patch.object(fleet_view, "view_fleet", return_value="fixture"), \
+                        patch.object(fleet_view, "go", return_value=0), \
+                        patch.object(fleet_view, "toast"), contextlib.redirect_stderr(err):
+                    rc = fleet_view.go_new(None, "test", repo=REGISTERED, agent="claude")
+            finally:
+                os.chdir(here)
+            return rc, err.getvalue()
+        rc, err = open_new()
+        self.assertEqual(rc, 0, err)
         self.assertFalse([body for _, body in self.requests if body])
         self.assert_person_road()
         self.assertIn(str(self.root / "Space-scratch-1"), self.windows.read_text())
         before = self.windows.read_bytes()
         self.mode = "frozen"
-        result = self.run_command(*argv)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("frozen", result.stdout + result.stderr)
-        self.assertIn("drain/cutover", result.stdout + result.stderr)
+        rc, err = open_new()
+        self.assertNotEqual(rc, 0)
+        self.assertIn("frozen", err)
+        self.assertIn("drain/cutover", err)
         self.assertEqual(self.windows.read_bytes(), before)
 
     def test_malformed_unknown_and_cross_repo_fail_closed(self):
