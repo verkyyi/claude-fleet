@@ -187,15 +187,53 @@ HOP = {"connection", "keep-alive", "proxy-connection", "transfer-encoding",
 PUBLIC = {"/api/hello"}
 
 
+# A restart that never drops a connection (T595): the next proxy takes this one's
+# listening sockets over <state>/handoff.sock (SCM_RIGHTS) — the same kernel
+# sockets, so a connection arriving in between waits in their backlog, never
+# ECONNREFUSED — and this one stops taking new ones, lets go of the lock and
+# finishes what it is serving (`drain`). HANDOFF: what a successor takes —
+# "tcp:<port>" -> its Server, "ctl" -> the control socket.
+DRAIN = {"on": False, "since": 0.0, "conns": 0, "busy": 0}
+DRAIN_LOCK = threading.Lock()
+HANDOFF = {}
+
+
 class Server(ThreadingHTTPServer):
     """http.server's bind looks its own address up (socket.getfqdn): a machine
     whose /etc/hosts lost `127.0.0.1 localhost` waits out a DNS timeout there —
     70 s on a GitHub macOS runner (issue #2319) — before the proxy answers at
-    all. The name is never used, so it is never asked for."""
+    all. The name is never used, so it is never asked for.
+    fd: a listening socket handed over by the proxy before (T595), used as is.
+    The listener has a timeout: two processes may hold it for a moment, and an
+    accept the other one won must return, not block (the accepted socket is
+    blocking either way — Python's accept for a socket with a timeout)."""
+    request_queue_size = 128
+
+    def __init__(self, addr, handler, fd=None):
+        if fd is None:
+            ThreadingHTTPServer.__init__(self, addr, handler)
+        else:
+            ThreadingHTTPServer.__init__(self, addr, handler, bind_and_activate=False)
+            self.socket.close()
+            self.socket = socket.socket(fileno=fd)
+            self.server_address = self.socket.getsockname()
+            self.server_name, self.server_port = self.server_address[:2]
+            self.socket.listen(self.request_queue_size)
+        self.socket.settimeout(1.0)
+
     def server_bind(self):
         import socketserver
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
+
+    def process_request_thread(self, request, client_address):
+        with DRAIN_LOCK:
+            DRAIN["conns"] += 1
+        try:
+            ThreadingHTTPServer.process_request_thread(self, request, client_address)
+        finally:
+            with DRAIN_LOCK:
+                DRAIN["conns"] -= 1
 OAUTH_BETA = "oauth-2025-04-20"
 LOCAL_TAG, HUB_TAG, NODE_TAG = "fcp1", "fcp-h1", "fcpn1"
 # a hub pass is fcp-h1 (HMAC, only the hub verifies it) or fcp-h2 (Ed25519 —
@@ -1296,6 +1334,32 @@ class Proxy(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *a):
         pass
+
+    # draining (T595): a request in flight is finished, the connection closed
+    # after it — said in the answer, so the client opens its next one to the new proxy
+    def parse_request(self):
+        ok = BaseHTTPRequestHandler.parse_request(self)
+        if ok:
+            self._busy = True
+            with DRAIN_LOCK:
+                DRAIN["busy"] += 1
+        return ok
+
+    def handle_one_request(self):
+        try:
+            BaseHTTPRequestHandler.handle_one_request(self)
+        finally:
+            if getattr(self, "_busy", False):
+                self._busy = False
+                with DRAIN_LOCK:
+                    DRAIN["busy"] -= 1
+            if DRAIN["on"]:
+                self.close_connection = True
+
+    def end_headers(self):
+        if DRAIN["on"] and not self.close_connection:
+            self.send_header("Connection", "close")
+        BaseHTTPRequestHandler.end_headers(self)
 
     def log(self, **kv):
         (self.t or Proxy.sink or Proxy.T).log(**kv)
@@ -2527,9 +2591,12 @@ def ctl_handle(req, t):
 
 
 def ctl_serve(sock, cfg):
-    while True:
+    sock.settimeout(1.0)    # shared with a successor for a moment (T595): never block in accept
+    while not DRAIN["on"]:
         try:
             c, _ = sock.accept()
+        except socket.timeout:
+            continue
         except OSError:
             return
         threading.Thread(target=ctl_conn, args=(c, cfg), daemon=True).start()
@@ -2735,20 +2802,25 @@ def tenant_cfg(base, spec):
     return c
 
 
-def legacy_serve(t, cfg):
+def legacy_serve(t, cfg, fd=None):
     """A login's old port (issue #2217): the port its running sessions carry in
     ANTHROPIC_BASE_URL. Bound as soon as the per-login proxy lets go of it, so a
-    session moves over on its next request; that port answers only that login."""
+    session moves over on its next request; that port answers only that login.
+    fd: the same port handed over by the proxy before (T595)."""
     h = type("ProxyOld_" + t.name, (Proxy,), {"fixed": t})
     while True:
+        if DRAIN["on"]:
+            return              # handed over before it was bound: the successor binds it
         try:
-            srv = Server(("127.0.0.1", t.cfg.legacy_port), h)
+            srv = Server(("127.0.0.1", t.cfg.legacy_port), h, fd=fd)
             break
         except OSError:
+            fd = None
             time.sleep(0.2)     # the own proxy lets go during `machine join` (#2432): take it at once
     srv.daemon_threads = True
     t.cfg.legacy_bound = t.cfg.legacy_port
-    t.log(ev="legacy_port", port=t.cfg.legacy_port)
+    HANDOFF["tcp:%d" % t.cfg.legacy_port] = srv
+    t.log(ev="legacy_port", port=t.cfg.legacy_port, handed=fd is not None)
     srv.serve_forever()
 
 
@@ -2778,6 +2850,19 @@ def shared_stale(shared):
     have = shared_logins(run)
     if have_v == want_v and have == want:
         return None
+    pid = shared_holder(run)
+    if not pid:
+        return None
+    if have is None:
+        why = "version %s (want %s), its logins unknown" % (have_v or "?", want_v)
+    else:
+        why = "version %s → %s, logins %s → %s" % (have_v or "?", want_v, ",".join(have) or "-", ",".join(want) or "-")
+    return pid, why
+
+
+def shared_holder(run):
+    """-> the pid of the live shared proxy <run>/pid names, else None (a pid
+    reused by someone else is never ours to stop)."""
     try:
         pid = int(open(os.path.join(run, "pid")).read().strip())
     except (OSError, ValueError):
@@ -2789,12 +2874,170 @@ def shared_stale(shared):
     except OSError:
         return None
     if "fleet-cred-proxy.py" not in argv or "--shared" not in argv:
-        return None      # a pid reused by someone else: never ours to stop
-    if have is None:
-        why = "version %s (want %s), its logins unknown" % (have_v or "?", want_v)
-    else:
-        why = "version %s → %s, logins %s → %s" % (have_v or "?", want_v, ",".join(have) or "-", ",".join(want) or "-")
-    return pid, why
+        return None
+    return pid
+
+
+def handoff_listen(st, lockf):
+    """The old half of a restart that drops nothing (T595): <state>/handoff.sock
+    (0600 in the 0700 state dir; the peer must be this uid or root) hands every
+    listening socket in HANDOFF to the next proxy, then this one drains."""
+    path = os.path.join(st, "handoff.sock")
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    hs = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    old = os.umask(0o177)
+    try:
+        hs.bind(path)
+    finally:
+        os.umask(old)
+    hs.listen(4)
+    threading.Thread(target=handoff_serve, args=(hs, lockf), daemon=True).start()
+
+
+def handoff_serve(hs, lockf):
+    while True:
+        try:
+            c, _ = hs.accept()
+        except OSError:
+            return
+        try:
+            c.settimeout(10)
+            u = peer_uid(c)
+            line = c.recv(4096).split(b"\n", 1)[0]
+            req = json.loads(line or b"{}")
+            if u not in (os.geteuid(), 0) or not isinstance(req, dict) or req.get("op") != "handoff":
+                Proxy.log_any(ev="deny", path="handoff", why="peer uid %d" % u)
+                c.close()
+                continue
+            held = sorted(HANDOFF.items())
+            keys = [k for k, _ in held]
+            fds = [o.fileno() for _, o in held]
+            head = json.dumps({"ok": True, "pid": os.getpid(), "keys": keys}).encode() + b"\n"
+            c.sendmsg([head], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, b"".join(
+                f.to_bytes(4, sys.byteorder, signed=True) for f in fds))])
+            if not c.recv(16).startswith(b"ok"):
+                c.close()       # it could not take them: this one keeps serving
+                continue
+        except (OSError, ValueError):
+            try:
+                c.close()
+            except OSError:
+                pass
+            continue
+        # handed over: take nothing new, let go of the lock, finish what runs
+        DRAIN.update(on=True, since=time.time())
+        hs.close()
+        Proxy.log_any(ev="handoff", to=req.get("pid"), keys=keys)
+        stops = [threading.Thread(target=o.shutdown, daemon=True) for k, o in held if k.startswith("tcp:")]
+        for th in stops:
+            th.start()
+        for th in stops:
+            th.join(10)
+        time.sleep(1.2)         # the control loop's accept timeout: it has stopped too
+        fcntl.flock(lockf, fcntl.LOCK_UN)
+        try:
+            c.sendall(b"released\n")
+            c.close()
+        except OSError:
+            pass
+        return
+
+
+def handoff_from(lockf, st):
+    """The new half (T595): ask the proxy holding the lock for its listening
+    sockets; once it says it let go, take the lock. -> {key: fd}, the lock held;
+    None when it cannot hand over (an older proxy, gone) — nothing changed then."""
+    path = os.path.join(st, "handoff.sock")
+    c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    c.settimeout(15)
+    try:
+        c.connect(path)
+        c.sendall(json.dumps({"op": "handoff", "pid": os.getpid()}).encode() + b"\n")
+        msg, anc, _, _ = c.recvmsg(65536, socket.CMSG_SPACE(64 * 4))
+    except OSError:
+        c.close()
+        return None
+    fds = []
+    for lvl, typ, data in anc:
+        if lvl == socket.SOL_SOCKET and typ == socket.SCM_RIGHTS:
+            fds += [int.from_bytes(data[i:i + 4], sys.byteorder, signed=True)
+                    for i in range(0, len(data) - len(data) % 4, 4)]
+    try:
+        head = json.loads(msg.split(b"\n", 1)[0] or b"{}")
+    except ValueError:
+        head = {}
+    keys = head.get("keys") if isinstance(head, dict) else None
+    if not head.get("ok") or not isinstance(keys, list) or len(keys) != len(fds):
+        for f in fds:
+            os.close(f)
+        c.close()
+        return None
+    try:
+        c.sendall(b"ok\n")
+    except OSError:
+        for f in fds:
+            os.close(f)
+        c.close()
+        return None
+    # from here the sockets are ours: whatever the old one does, we serve them
+    secs = float(env("FLEET_CRED_TAKEOVER_SECS", "10") or 10)
+    t0, pid = time.time(), int(head.get("pid") or 0)
+    try:
+        c.recv(16)              # «released» (or its end)
+    except OSError:
+        pass
+    c.close()
+    killed = False
+    while True:
+        try:
+            fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError:
+            pass
+        if not killed and time.time() - t0 >= secs and pid > 1:
+            killed = True
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        if time.time() - t0 >= 2 * secs:
+            sys.exit("fleet-cred-proxy: pid %d handed over but still holds %s/lock" % (pid, st))
+        time.sleep(0.05)
+    sys.stderr.write("fleet-cred-proxy: took over from pid %d in %.1fs, %d socket(s) handed over\n"
+                     % (pid, time.time() - t0, len(fds)))
+    return dict(zip(keys, fds))
+
+
+def drain_out(tenants):
+    """Handed over (T595): wait for the requests still in flight — every
+    connection closed, or none busy for FLEET_CRED_DRAIN_IDLE_SECS (an idle
+    keep-alive the client has not dropped yet), at most FLEET_CRED_DRAIN_SECS —
+    report what they used, and go, leaving the successor's files alone."""
+    cap = float(env("FLEET_CRED_DRAIN_SECS", "900") or 900)
+    idle = float(env("FLEET_CRED_DRAIN_IDLE_SECS", "30") or 30)
+    quiet = None
+    while time.time() - DRAIN["since"] < cap:
+        with DRAIN_LOCK:
+            conns, busy = DRAIN["conns"], DRAIN["busy"]
+        if conns <= 0:
+            break
+        if busy <= 0:
+            quiet = quiet or time.time()
+            if time.time() - quiet >= idle:
+                break
+        else:
+            quiet = None
+        time.sleep(0.2)
+    for t in tenants:
+        try:
+            t.budget.flush(t.log)
+        except Exception:
+            pass
+    Proxy.log_any(ev="drained", secs=round(time.time() - DRAIN["since"], 1), left=DRAIN["conns"])
+    os._exit(0)
 
 
 def subprocess_out(cmd):
@@ -2841,14 +3084,27 @@ def serve(a):
     st = a.state
     os.makedirs(st, mode=0o700, exist_ok=True)
     lockf = open(os.path.join(st, "lock"), "w")
+    inherited = {}
     try:
         fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        stale = shared_stale(shared) if shared else None
-        if not stale:
-            sys.stderr.write("fleet-cred-proxy: already running (%s/lock)\n" % st)
-            sys.exit(0)
-        shared_takeover(lockf, st, *stale)
+        # FLEET_CRED_HANDOFF=1 (the machine daemon's start, T595): this start
+        # replaces the holder without a moment of nobody listening — its sockets
+        # handed over, else (an older proxy) stopped as a stale one is
+        handing = env("FLEET_CRED_HANDOFF") == "1"
+        took = handoff_from(lockf, st) if handing else None
+        if took is not None:
+            inherited = took
+        else:
+            stale = shared_stale(shared) if shared else None
+            if not stale and handing and shared:
+                pid = shared_holder(shared.get("run") or "")
+                stale = (pid, "a new start (no handoff from it)") if pid else None
+            if not stale:
+                sys.stderr.write("fleet-cred-proxy: already running (%s/lock)\n" % st)
+                sys.exit(0)
+            shared_takeover(lockf, st, *stale)
+    handed = bool(inherited)
     cfg.anthropic_url = env("FLEET_CRED_ANTHROPIC_URL", "https://api.anthropic.com").rstrip("/")
     cfg.codex_url = env("FLEET_CRED_CODEX_URL", "https://chatgpt.com/backend-api/codex").rstrip("/")
     cfg.ttl = int(env("FLEET_CRED_PROXY_TTL", "86400"))
@@ -2944,7 +3200,7 @@ def serve(a):
     srv = None
     for p in want + [0]:
         try:
-            srv = Server(("127.0.0.1", p), Proxy)
+            srv = Server(("127.0.0.1", p), Proxy, fd=inherited.pop("tcp:%d" % p, None) if p else None)
             break
         except OSError:
             if a.port and p == a.port:
@@ -2955,22 +3211,32 @@ def serve(a):
     for c in everyone:
         c.bound_port = cfg.bound_port
 
+    HANDOFF["tcp:%d" % cfg.bound_port] = srv
     sockp, pidf = os.path.join(ctld, "ctl.sock"), os.path.join(ctld, "pid")
-    try:
-        os.unlink(sockp)
-    except OSError:
-        pass
-    ctl = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    old = os.umask(0o177)
-    try:
-        ctl.bind(sockp)
-    finally:
-        os.umask(old)
+    cfd = inherited.pop("ctl", None)
+    if cfd is not None and os.path.exists(sockp):
+        ctl = socket.socket(fileno=cfd)     # the same bound path, never unlinked (T595)
+    else:
+        if cfd is not None:
+            os.close(cfd)
+        try:
+            os.unlink(sockp)
+        except OSError:
+            pass
+        ctl = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        old = os.umask(0o177)
+        try:
+            ctl.bind(sockp)
+        finally:
+            os.umask(old)
     # 0666 only with the peer-uid gate (separated / shared: the login is another uid)
     os.chmod(sockp, 0o666 if gated else 0o600)
     ctl.listen(16)
+    HANDOFF["ctl"] = ctl
 
     def bye(*_):
+        if DRAIN["on"]:
+            os._exit(0)     # handed over: the pid, port and socket are the successor's
         for p in (sockp, pidf):
             try:
                 os.unlink(p)
@@ -2983,12 +3249,18 @@ def serve(a):
         signal.signal(signal.SIGALRM, bye); signal.alarm(a.max_seconds)
 
     tenants = [Proxy.T] if Proxy.T else list(Proxy.tenants.values())
-    for t in tenants:
-        t.router.refresh(t.log)
-        try:
-            t.budget.flush(t.log)
-        except Exception:
-            pass
+
+    def first_refresh():
+        for t in tenants:
+            t.router.refresh(t.log)
+            try:
+                t.budget.flush(t.log)
+            except Exception:
+                pass
+    if handed:      # the handed-over sockets queue meanwhile: serve first, ask after (T595)
+        threading.Thread(target=first_refresh, daemon=True).start()
+    else:
+        first_refresh()
     with open(portf + ".tmp", "w") as f:
         f.write("%d\n" % cfg.bound_port)
     os.replace(portf + ".tmp", portf)
@@ -3008,7 +3280,11 @@ def serve(a):
         files.append(lf)
         for t in tenants:
             if t.cfg.legacy_port and t.cfg.legacy_port != cfg.bound_port:
-                threading.Thread(target=legacy_serve, args=(t, cfg), daemon=True).start()
+                threading.Thread(target=legacy_serve, args=(t, cfg, inherited.pop("tcp:%d" % t.cfg.legacy_port, None)),
+                                 daemon=True).start()
+    for f in inherited.values():    # a handed-over port nobody here serves any more
+        os.close(f)
+    handoff_listen(st, lockf)
     if gated:   # separated / shared: the login (another uid) reads them
         for p in files:
             os.chmod(p, 0o644)
@@ -3030,6 +3306,8 @@ def serve(a):
                         t.budget.flush(t.log)
                     except Exception:
                         pass
+            if DRAIN["on"]:
+                continue    # handed over (T595): the successor refreshes and renews
             if time.time() - last >= every:
                 last = time.time()
                 for t in tenants:
@@ -3053,15 +3331,18 @@ def serve(a):
     nofile = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
     for t in tenants:
         order, why = t.router.candidates("claude", False)
-        t.log(ev="start", pid=os.getpid(), port=cfg.bound_port, route=order[0], reason=why, nofile=nofile)
+        t.log(ev="start", pid=os.getpid(), port=cfg.bound_port, route=order[0], reason=why, nofile=nofile,
+              handed=handed)
     if shared:
-        Proxy.sink.log(ev="start", pid=os.getpid(), port=cfg.bound_port, shared=True, logins=sorted(Proxy.tenants),
+        Proxy.sink.log(ev="start", pid=os.getpid(), port=cfg.bound_port, shared=True, logins=sorted(Proxy.tenants), handed=handed,
                        version=cfg.version, nofile=nofile)
         sys.stderr.write("fleet-cred-proxy: shared 127.0.0.1:%d · %d login(s) · nofile=%d\n"
                          % (cfg.bound_port, len(tenants), nofile))
     else:
         sys.stderr.write("fleet-cred-proxy: 127.0.0.1:%d · route %s (%s) · nofile=%d\n" % (cfg.bound_port, order[0], why, nofile))
     srv.serve_forever()
+    if DRAIN["on"]:
+        drain_out(tenants)
 
 
 def main():

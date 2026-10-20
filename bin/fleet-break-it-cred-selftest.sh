@@ -19,6 +19,10 @@
 #                                                   on the next request; HUB_RENEW_GRACE)
 #   cred-relay-hub-restart                          extras/cred-relay/fleet-relay-check.py (the relay's
 #                                                   forward_auth gate: cache + grace while the hub restarts)
+#   cred-proxy-restart-gap                          bin/fleet-cred-proxy.py (handoff.sock: the listening
+#                                                   sockets handed over, drain) + bin/fleet-credsep-launch.py
+#                                                   + bin/fleet-node-supervisor.py (keep_on_restart,
+#                                                   handoff) — T595
 #   cred-shared-down                                in bin/fleet-break-it-cred-shared-selftest.sh, which
 #                                                   sources this file's helpers (BREAK_CRED_LIB=1): this
 #                                                   run is at the macOS per-test cap already
@@ -238,6 +242,22 @@ cred_hubpass() {   # <id> <iat offset> <exp offset> — a pass the way the hub s
   python3 -c 'import base64, json, sys, time; n = int(time.time())
 c = json.dumps({"v": 1, "id": sys.argv[1], "iat": n + int(sys.argv[2]), "exp": n + int(sys.argv[3])}).encode()
 print("fcp-h1." + base64.urlsafe_b64encode(c).rstrip(b"=").decode() + ".sig")' "$@"
+}
+
+# The shared proxy restarting on a release (T595): for its seconds 18923 had
+# nobody listening and every session's request was ECONNREFUSED. Its recovery is
+# fleet-cred-handoff-selftest.sh's whole run (three handoffs under load, not one
+# request refused) and the supervisor's D2_NoGapRestart: held by name here.
+drill_cred_proxy_restart_gap() {
+  CAP=60
+  local t0
+  t0=$(now)
+  suite_holds fleet-cred-handoff-selftest.sh 'every request answered, none refused' \
+    'FLEET_CRED_HANDOFF=1 serve' || return 1
+  grep -q 'class D2_NoGapRestart' "$BIN/fleet-node-supervisor-selftest.py" \
+    || { WHY="fleet-node-supervisor-selftest.py no longer carries D2_NoGapRestart: this drill held it"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="发版时守护留下代理、新守护接管；代理代码变了时新代理接过监听套接字、旧的做完在途请求再走：持续压测下三次换手 0 个 ECONNREFUSED（fleet-cred-handoff-selftest.sh + 守护 D2_NoGapRestart 真跑，这里按名守住）"
 }
 
 drill_cred_relay_down() {

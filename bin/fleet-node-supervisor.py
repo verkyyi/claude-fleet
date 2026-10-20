@@ -787,7 +787,15 @@ def default_table(paths):
              # it runs root's code copy in LIB, which the updater refreshes from
              # `current` on every switch / rollback (issue #2435): a new copy (or a
              # login's <L>.conf) starts it again on the new bytes
-             "reload": cred_lib},
+             "reload": cred_lib,
+             # …without a moment of nobody listening on 18923 (T595): the new one
+             # takes the old one's listening sockets (FLEET_CRED_HANDOFF, the
+             # launcher passes it on) and the old one drains — so the reload starts
+             # the new one first and lets the old one go by itself
+             "env": {"FLEET_CRED_HANDOFF": "1"}, "handoff": True,
+             # …and the daemon's own restart onto a new release leaves it running:
+             # the next daemon adopts it, the reload above decides (T595)
+             "keep_on_restart": True},
             # The one node program for every login (C5, #2333): one link to the
             # hub with the machine's token, each login a tenant run as itself.
             # Waits until the machine has its token (machine.env) and at least
@@ -2282,6 +2290,8 @@ class Supervisor(object):
         self.state.setdefault("sweep", {})
         self.procs = {}       # child name -> Popen (started by us)
         self.adopted = {}     # child name -> pid (left alive by an earlier run)
+        self.retiring = []    # (name, Popen | None, pid, since): handed over, draining (T595)
+        self.restarting = False   # stopping onto a new release (restart_requested)
         self.running = {}     # task name -> (Popen, lock fd, t0, log fh)
         self.agent_running = {}  # "login/name" -> (Popen, t0, entry) of an agent task's attempt (#2529)
         self.notifies = []
@@ -2755,6 +2765,15 @@ class Supervisor(object):
                     cs["reload_sig"] = reload_sig(c["reload"])
                     self.dirty = True
                     continue
+                elif self.handoff_ok(c):
+                    # the new one first: it takes the old one's sockets and the old
+                    # one drains and exits by itself (T595) — never stopped before
+                    p = self.procs.pop(name, None)
+                    old = p.pid if p is not None else self.adopted.pop(name, None)
+                    self.retiring.append((name, p, old, t))
+                    self.log("child %s: %s changed — a new one takes over from pid %s" % (name, c["reload"], old))
+                    self.start_child(c, cs, t)
+                    continue
                 else:
                     why = "%s changed — starting it again" % c["reload"]
                     if since is not None:
@@ -2782,6 +2801,43 @@ class Supervisor(object):
             if t < (cs.get("next_start") or 0):
                 continue
             self.start_child(c, cs, t)
+
+    def handoff_ok(self, c):
+        """A child that hands its sockets to the next copy (T595) — only one this
+        daemon starts itself: a seat's / the core's job is stopped as before."""
+        return bool(c.get("handoff")) and not self.seated and self.core_cmd(c) is None
+
+    def tend_retiring(self, t):
+        """The copies that handed over (T595): reaped once they drained; one still
+        running past FLEET_NODE_HANDOFF_SECS (960) is stopped — unless it never
+        handed over and is still the one serving (its successor failed): then it
+        is the child again."""
+        cap = env_num("FLEET_NODE_HANDOFF_SECS", 960)
+        keep = []
+        for name, p, pid, since in self.retiring:
+            gone = (p.poll() is not None) if p is not None else not pid_alive(pid)
+            if gone:
+                self.log("child %s: pid %s drained and exited (%ds)" % (name, pid, t - since))
+                continue
+            if t - since < cap:
+                keep.append((name, p, pid, since))
+                continue
+            c = next((x for x in self.all_children() if x["name"] == name), None)
+            serving = c is not None and shared_proxy_pid(c) == pid
+            if serving:
+                # still the one listening: stopping it would be the very gap
+                if name not in self.procs and name not in self.adopted:
+                    self.adopted[name] = pid
+                    cs = self.state["children"].setdefault(name, {})
+                    cs.update(pid=pid, status="supervised")
+                    self.dirty = True
+                    self.log("child %s: pid %s never handed over — it is the child again" % (name, pid))
+                else:
+                    keep.append((name, p, pid, since))
+                continue
+            stop_processes([(pid, p is not None or child_group(pid))], reap=p.poll if p else None)
+            self.log("child %s: pid %s still ran %ds after handing over — stopped" % (name, pid, t - since))
+        self.retiring = keep
 
     def died(self, name, cs, rc, t):
         up = t - (cs.get("started") or t)
@@ -2845,6 +2901,17 @@ class Supervisor(object):
             self.procs.clear()
             self.adopted.clear()
             return
+        keep = self.kept_on_restart()
+        for name in keep:
+            if name in self.procs or name in self.adopted:
+                self.log("child %s left running (pid %s) for the next daemon to adopt"
+                         % (name, self.procs[name].pid if name in self.procs else self.adopted[name]))
+            self.procs.pop(name, None)
+            self.adopted.pop(name, None)
+        if not self.restarting:     # a copy still draining goes with a real stop
+            stop_processes([(pid, p is not None or child_group(pid)) for _, p, pid, _ in self.retiring
+                            if ((p.poll() is None) if p is not None else pid_alive(pid))])
+        self.retiring = []
         targets = [(p.pid, True) for p in self.procs.values()]
         for name, pid in self.adopted.items():
             if self.seated and not own_pid(pid):
@@ -2862,6 +2929,14 @@ class Supervisor(object):
         self.procs.clear()
         self.adopted.clear()
         self.dirty = True
+
+    def kept_on_restart(self):
+        """The children a restart onto a new release leaves up (T595): its
+        `keep_on_restart`, on launchd only — a child in its own session outlives
+        the daemon there; systemd's KillMode=mixed takes the whole group."""
+        if not self.restarting or self.seated or not MAC or env("FLEET_NODE_KEEP_ON_RESTART", "1") == "0":
+            return []
+        return [c["name"] for c in self.all_children() if c.get("keep_on_restart")]
 
     # -- tasks
     # -- the idle beat (issue #4359, EPIC #4354 共同约定 1 · 4)
@@ -3568,6 +3643,7 @@ class Supervisor(object):
             t = now()
             self.at("restart-request")
             if self.restart_requested():
+                self.restarting = True
                 break
             self.at("strays")
             try:
@@ -3576,6 +3652,7 @@ class Supervisor(object):
                 self.log("strays: %s" % e)
             self.at("children")
             self.tend_children()
+            self.tend_retiring(t)
             self.at("tasks")
             self.tend_tasks(t)
             self.at("agent-tasks")
