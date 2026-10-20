@@ -301,7 +301,8 @@ lease_has()   { grep -qF -- "$1" "$LEASE_LOG"; }
 place_has()   { grep -qF -- "$1" "$PLACE_LOG"; }
 # The gh log sorted: the spawn's issue read and open-PR probe run side by side
 # (issue #2237), so their order is not part of what "nothing changed" means.
-snap()        { cat "$WORK/spawn.rc" "$WORK/spawn.err"; sort "$GH_LOG"; cat "$TMUX_LOG" "$GIT_LOG"; }
+# place_ms (T672) is a clock reading: the same run twice differs only there.
+snap()        { cat "$WORK/spawn.rc"; sed -E 's/place_ms=[0-9]+/place_ms=N/; s/共 [0-9]+ ms/共 N ms/' "$WORK/spawn.err"; sort "$GH_LOG"; cat "$TMUX_LOG" "$GIT_LOG"; }
 
 unset CCQUOTA_FLEET FLEET_HUB_LEASE_CMD FLEET_HUB_PLACE_CMD FLEET_HUB_STATUS_CMD FLEET_NODE_ALIASES
 unset CCQUOTA_TOKEN CCQUOTA_HUB_URL   # a pane under the pre-#1491 stop-gap exports the token
