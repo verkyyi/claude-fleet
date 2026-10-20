@@ -820,7 +820,10 @@ fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
 # the short code lands as @task_short. Backgrounded: the hook fills a missing `opened`.
 # C4: its parent (the spawning session's ID), its prev (the ID it continues — given,
 # or the one whose segment --resume picks up) and its worktree ride along.
-_idpar=${ORIGIN_WID#*/}; fleet_is_fid "$_idpar" || _idpar=''
+# The parent is the spawning session's ID however it came (C9): a handed-over
+# worker_id, a keyless parent's own ID as --origin (every `task` dispatch from an
+# orchestrator / a driver), or the ID of the window its key names.
+_idpar=$(fleet_spawn_parent_id "$SESS" "$ORIGIN" "$ORIGIN_WID" "$SOCK") || _idpar=''
 _idwt=''; [ -n "${wt:-}" ] && [ "$NOREPO" != 1 ] && _idwt=$wt
 fleet_is_fid "$fid" && ( bash "$BIN/fleet-id.sh" open "$fid" --window "$win" --socket "$SOCK" \
   --agent "${AGENT:-claude}" ${REPO_ARG:+--repo "$REPO_ARG"} ${NAME:+--title "$NAME"} \

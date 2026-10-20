@@ -27,6 +27,10 @@
 #                                            continued one of them down `prev` (a redo),
 #                                            this machine's ledgers + the hub mirror's
 #                                            (EPIC T497 C5 — an EPIC driver's batch)
+#   fleet-id.sh parents [--apply] [<ID>…]   backfill (EPIC T497 C9): an ID opened for a
+#                                            task T<n> with no `parent` takes the one its
+#                                            hub record's parent_session names (dry unless
+#                                            --apply; pushed); rc 3 no hub here
 #   fleet-id.sh await <ID | T-code> [--timeout s] [--interval s]
 #                                            until it has a result or closes: MERGED /
 #                                            SUCCEEDED 0 · FAILED / BLOCKED … 1 · TIMEOUT 3 ·

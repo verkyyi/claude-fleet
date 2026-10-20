@@ -24,6 +24,10 @@
 #   AWAIT fleet-await.sh T-<code>: a result answers (rc 0 merged / 1 failed), a
 #         close with none is EXITED (4), nothing is TIMEOUT (3)
 #   KIDS  fleet-children.sh --ids lists the IDs whose parent it is
+#   TASKPAR a task dispatch's child ID names its parent however the parent came
+#         (a keyless parent's ID as --origin, a handed-over worker_id; the hub none),
+#         children lists it, and `fleet-id.sh parents` backfills an older one from
+#         its hub record's parent_session (dry, --apply, rc 3 with no hub) — C9
 #   WT    a worktree remembers its ID beside its T record (fleet_worktree_id)
 #   WIRE  the spawners open with --parent / --from-native / --worktree; the reap,
 #         cleanup, stop and exit closers pass a why; the accepted-task road writes
@@ -230,9 +234,49 @@ lib fleet_worktree_id_mark "$WORK/wt" "$F2"
 ok; [ "$(lib fleet_worktree_id "$WORK/wt")" = "$F2" ] || fail "WT: a worktree remembers its ID"
 ok; ! lib fleet_worktree_id_mark "$WORK/wt" T12 || fail "WT: a non-ID is refused"
 
+# ---- TASKPAR · a task dispatch's child ID names its parent (C9) --------------------
+# A keyless parent (an orchestrator, a driver) dispatches with ITS ID as --origin;
+# a hub-placed start hands a worker_id over; the hub itself names none.
+TP=$(mkfid); TC=$(mkfid)
+read -r WTP _ <<EOF
+$(newwin "$TP")
+EOF
+fid open "$TP" --window "$WTP" --socket "$L" >/dev/null
+ok; [ "$(lib fleet_spawn_parent_id "$L" "$TP" '' "$L")" = "$TP" ] || fail "TASKPAR: a keyless parent's ID as --origin is the parent"
+ok; [ "$(lib fleet_spawn_parent_id "$L" '' "u-u-i-d/$TP" "$L")" = "$TP" ] || fail "TASKPAR: a handed-over worker_id's ID is the parent"
+ok; ! lib fleet_spawn_parent_id "$L" issue-3 "u-u-i-d/issue-3" "$L" >/dev/null || fail "TASKPAR: a worker_id naming only a key is no parent here"
+ok; ! lib fleet_spawn_parent_id "$L" hub '' "$L" >/dev/null && ! lib fleet_spawn_parent_id "$L" '' '' "$L" >/dev/null \
+  || fail "TASKPAR: the hub names no parent"
+fid open "$TC" --task T77 --parent "$(lib fleet_spawn_parent_id "$L" "$TP" '' "$L")" >/dev/null
+ok; fid children "$TP" | grep -q '^1 children' || fail "TASKPAR: children lists the dispatched ID" "$(fid children "$TP")"
+# backfill: an ID opened for T78 before C9, no parent; its record names one
+TB=$(mkfid)
+python3 "$BIN/fleet_id.py" open "$TB" --task T78 --agent codex >/dev/null
+cat > "$WORK/taskget" <<EOS
+#!/bin/sh
+[ "\$1" = T78 ] && printf '{"task":{"id":"T78","parent_session":"u-u-i-d/$TP"}}\n' && exit 0
+printf '{"task":{"id":"\$1"}}\n'
+EOS
+chmod +x "$WORK/taskget"
+out=$(FLEET_ID_TASK_GET="$WORK/taskget" fid parents 2>&1)
+ok; printf '%s' "$out" | grep -q "T78  → $TP  (dry)" && [ -z "$(openedf "$TB" parent)" ] \
+  || fail "TASKPAR: the backfill is dry by default" "$out"
+out=$(FLEET_ID_TASK_GET="$WORK/taskget" fid parents --apply 2>&1)
+ok; [ "$(openedf "$TB" parent)" = "$TP" ] || fail "TASKPAR: --apply fills the record's parent" "$out"
+ok; [ "$(openedf "$TB" task)" = T78 ] && [ "$(openedf "$TB" agent)" = codex ] || fail "TASKPAR: the fill keeps what opened said"
+ok; fid children "$TP" | grep -q '^2 children' || fail "TASKPAR: the filled ID is a child" "$(fid children "$TP")"
+out=$(FLEET_ID_TASK_GET="$WORK/taskget" fid parents 2>&1)
+ok; printf '%s' "$out" | grep -q '^0 without a parent' || fail "TASKPAR: a second pass finds nothing" "$out"
+printf '#!/bin/sh\nexit 3\n' > "$WORK/taskget3"; chmod +x "$WORK/taskget3"
+python3 "$BIN/fleet_id.py" open "$(mkfid)" --task T79 >/dev/null
+FLEET_ID_TASK_GET="$WORK/taskget3" fid parents >/dev/null 2>&1; rc=$?
+ok; [ "$rc" = 3 ] || fail "TASKPAR: no hub here ⇒ rc 3" "$rc"
+
 # ---- WIRE --------------------------------------------------------------------------
 ok; grep -q -- '--parent "\$_idpar"' "$BIN/dash-raw-session.sh" && grep -q -- '--parent "\$_idpar"' "$BIN/dash-issue-session.sh" \
   || fail "WIRE: both spawners open the ID with its parent"
+ok; [ "$(grep -c '_idpar=$(fleet_spawn_parent_id "$SESS" "$ORIGIN" "$ORIGIN_WID" "$SOCK")' "$BIN/dash-raw-session.sh" "$BIN/dash-issue-session.sh" | grep -c ':1$')" = 2 ] \
+  || fail "WIRE: both spawners take the parent from --origin too, not only a handed-over worker_id (C9)"
 ok; grep -q -- '--from-native "\$RESUME_SID"' "$BIN/dash-raw-session.sh" || fail "WIRE: a --resume spawn records prev"
 ok; grep -q 'fleet_win_retire "\$target" "" reaped' "$BIN/dash-reap.sh" \
   && grep -q 'fleet_win_retire "\$WIN" "\$(fleet_socket "\$FLEET_SESSION")" landed' "$BIN/fleet-cleanup.sh" \
