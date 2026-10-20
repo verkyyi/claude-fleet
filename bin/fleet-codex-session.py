@@ -454,30 +454,88 @@ def follow(pane, owner, thread, socket="", own=()):
     tmux(["if-shell", "-F", "-t", pane, test, " ; ".join(shlex.join(c) for c in cmds)], socket)
     if identity(pane, socket).get("session_id") != sid:
         return ""
-    if not socket and os.environ.get("TMUX_PANE") == pane:
-        try:
-            sys.path.insert(0, str(Path(__file__).resolve().parent))
-            import fleet_id
-            # /clear and /new both open a fresh thread in the same window; the
-            # hook's own `clear` reading is the one this segment takes.
-            fleet_id.hook(json.dumps({"hook_event_name": "SessionStart", "session_id": sid, "source": "clear"}))
-        except Exception:
-            pass  # the first-turn hook records it then
+    # /clear and /new both open a fresh thread in the same window; the hook's own
+    # `clear` reading is the one this segment takes.
+    _ledger_hook(pane, socket, sid, "clear")
     return sid
+
+
+def _ledger_hook(pane, socket, sid, source):
+    """The ONE witness (T629, C5): the ID ledger's SessionStart entry, fed the start
+    as Claude's hook feeds it — only from the window's own runtime (its pane)."""
+    if socket or os.environ.get("TMUX_PANE") != pane:
+        return
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import fleet_id
+        fleet_id.hook(json.dumps({"hook_event_name": "SessionStart", "session_id": sid, "source": source}))
+    except Exception:
+        pass  # the first-turn hook records it then
+
+
+def witness(pane, owner, thread, home, remote="", socket=""):
+    """「起来了」 before the first turn (T629, C5). Codex 0.162 runs SessionStart only
+    at a thread's first turn, so a window that has not spoken yet named no
+    conversation and its ID had no segment — a dispatched task read as not started
+    (T351 …). The window's private server has the TUI's thread loaded at once; this
+    stamps it as the window's identity — only while the launch has none (same
+    launcher, no @codex_session_id) — and adds the ledger's first segment: resume
+    when it is the thread the launch was opened for (sid_pending / sid_thread), else
+    startup. The first-turn hook then finds the same thread and changes nothing.
+    Returns the id or ''."""
+    sid = thread.get("id") if isinstance(thread, dict) else None
+    if not tui_root(thread) or not owner.isdigit() or identity(pane, socket):
+        return ""
+    raw = tmux(["display-message", "-p", "-t", pane, "#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_session_id}"], socket)
+    if raw != "codex|" + owner + "|":
+        return ""
+    try:
+        import fleet_agent_adapter as adapter
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import fleet_agent_adapter as adapter
+    opened_for = adapter.session_id("codex", lambda o: tmux(["show-options", "-wqv", "-t", pane, o], socket), "fallback")
+    data = {"session_id": sid, "owner": owner, "home": str(Path(home or "~/.codex").expanduser().resolve()),
+            "transcript": thread.get("path") or "", "cwd": thread.get("cwd") or "",
+            "model": thread.get("model") or "", "remote": remote}
+    if os.environ.get("FLEET_CODEX_VERSION_WARNING"):
+        data["version_warning"] = os.environ["FLEET_CODEX_VERSION_WARNING"]
+    cmds = [["set-option", "-w", "-t", pane, "@codex_identity", json.dumps(data, separators=(",", ":"))],
+            ["set-option", "-w", "-t", pane, "@codex_session_id", sid]]
+    test = ("#{&&:#{==:#{@cc_agent},codex},#{&&:#{==:#{@cc_launcher_pid}," + owner
+            + "},#{==:#{@codex_session_id},}}}")
+    tmux(["if-shell", "-F", "-t", pane, test, " ; ".join(shlex.join(c) for c in cmds)], socket)
+    if identity(pane, socket).get("session_id") != sid:
+        return ""
+    _ledger_hook(pane, socket, sid, "resume" if sid == opened_for else "startup")
+    return sid
+
+
+def first_thread(client, own=()):
+    """The TUI's thread on its private server before anyone spoke, or None: the
+    newest loaded root thread fleet did not start, confirmed by verify_started."""
+    loaded = [t for t in (client.call("thread/loaded/list", {}) or {}).get("data") or [] if t not in own]
+    if not loaded:
+        return None
+    return verify_started(client, max(loaded, key=lambda t: (created_ms(t) or 0, t)), own)
 
 
 class Follow:
     """The runtime's thread follower (T540): one connection to the window's private
     server, read once a second for thread/started. Never raises. Off with
     FLEET_CODEX_FOLLOW=0 — then delivery's own check holds what the old thread
-    would have swallowed.
+    would have swallowed (and the start waits for the first-turn hook).
+    Until the window names a conversation it witnesses the TUI's first thread
+    (witness(), T629 C5) — the start's segment, before anyone spoke.
     A started thread is followed only once the server confirms it (T572): fleet's
     own starts are skipped, one whose start is still in flight waits a tick."""
 
     def __init__(self, env, rpc_client=None):
         self.pane, self.owner = env.get("TMUX_PANE", ""), env.get("FLEET_CODEX_LAUNCHER_PID", "")
         self.remote = env.get("FLEET_CODEX_REMOTE", "")
+        self.home = env.get("CODEX_HOME", "") or os.path.expanduser("~/.codex")
         self.off = env.get("FLEET_CODEX_FOLLOW", "1") == "0"
+        self.started = False   # the window named its conversation (witnessed, or its hook)
         self.rpc_client, self.own_threads = rpc_client, None
         self.client, self.retry_at = None, 0.0
         self.waiting = {}  # thread id -> when it was first seen
@@ -513,6 +571,18 @@ class Follow:
                     thread = (event.get("params") or {}).get("thread")
                     if tui_root(thread):
                         self.waiting.setdefault(thread["id"], now)
+            if not self.started:
+                if identity(self.pane):
+                    self.started = True
+                else:
+                    own, pending = self.own_threads(self.remote)
+                    thread = None if pending else first_thread(self.client, own)
+                    if thread is not None:
+                        got = witness(self.pane, self.owner, thread, self.home, self.remote)
+                        if got:
+                            self.started = True
+                            self.waiting.pop(got, None)
+                            moved = got
             if self.waiting:
                 own, pending = self.own_threads(self.remote)
                 for tid in sorted(self.waiting, key=lambda t: (created_ms(t) or 0, t)):

@@ -357,20 +357,17 @@ while :; do
   retry=$first; first=0
 
   agent=$(fleet_agent_or_default "$(opt @cc_agent)")
-  _o=$(fleet_agent_get "$agent" sid_window); sid=''; [ -n "$_o" ] && sid=$(opt "$_o")
+  # The window's conversation id: the table's one reader (T629, C5).
+  sid=$(fleet_agent_session_id "$agent" opt window)
   # The launcher may have cleared the id before it died (fleet-codex.sh does at
   # launch): keep the last one this window had.
   if [ -n "$sid" ]; then last_sid=$sid; last_agent=$agent
   elif [ "$agent" = "$last_agent" ]; then sid=$last_sid; fi
   # A resume that never reached its first hook (a review page, a fast death) still
   # names the thread it was opened for (the table's sid_pending — @codex_pending,
-  # issue #4728): ↵ resumes THAT, never a new conversation in its place.
-  _o=$(fleet_agent_get "$agent" sid_pending)
-  [ -n "$_o" ] && [ -z "$sid" ] \
-    && sid=$(opt "$_o" | sed -n 's/.*"session_id":"\([0-9A-Fa-f-]*\)".*/\1/p')
-  # no id: the window's own thread (sid_thread), never the home's latest (#1842 ④)
-  _o=$(fleet_agent_get "$agent" sid_thread)
-  [ -n "$_o" ] && [ -z "$sid" ] && sid=$(opt "$_o")
+  # issue #4728): ↵ resumes THAT, never a new conversation in its place; with no id
+  # at all, the window's own thread (sid_thread), never the home's latest (#1842 ④).
+  [ -n "$sid" ] || sid=$(fleet_agent_session_id "$agent" opt fallback)
   # Commits on no remote, so the page can say they are still here (#1842 ①).
   unp=0; br=''
   wtd=$(opt @worktree); [ -n "$wtd" ] && [ -d "$wtd" ] || wtd=$PWD

@@ -387,7 +387,9 @@ history_source() {
   case "${HIST_TASK:-}" in T[1-9]*) case "${HIST_TASK#T}" in *[!0-9]*) HIST_TASK='' ;; esac ;; *) HIST_TASK='' ;; esac
   [ -n "$HIST_TASK" ] || HIST_TASK_LINE=''
   [ -n "$HIST_AGENT" ] || HIST_AGENT="${FLEET_AGENT:-claude}"
-  if [ "$HIST_AGENT" = codex ]; then
+  # where its transcript lives is the adapter table's (T629, C5): its own home
+  # (the identity names it) or the login's ~/.claude/projects
+  if [ "$(fleet_agent_get "$HIST_AGENT" transcript 2>/dev/null)" = home ]; then
     [ -n "$record" ] || record='{}'
     raw=$(python3 "$BIN/fleet-codex-session.py" saved --identity "$record" --owner "$owner" 2>/dev/null) || raw=''
     IFS=$'\t' read -r HIST_SID HIST_HOME HIST_TDIR HIST_TRANSCRIPT <<< "$raw"
@@ -399,13 +401,14 @@ history_source() {
 }
 
 history_source_suffix() {
-  # Keep old Claude rows byte-compatible. Only Codex needs the extra provider,
+  # Keep old Claude rows byte-compatible. Only an agent whose transcript lives in
+  # its own home (the table's transcript=home: Codex) needs the extra provider,
   # account-home and full-rollout fields (12–14); no credentials are stored.
   # Col 15 (issue #3387) is the hub task record `T<n>` the session belonged to —
   # written only when it had one, so a Claude row with one fills 12–14 with '-';
   # without a task record (no hub) the row is byte for byte what it was.
-  if [ "$HIST_AGENT" = codex ]; then
-    printf '\tcodex\t%s\t%s' "$(oneline "${HIST_HOME:--}")" "$(oneline "${HIST_TRANSCRIPT:--}")"
+  if [ "$(fleet_agent_get "$HIST_AGENT" transcript 2>/dev/null)" = home ]; then
+    printf '\t%s\t%s\t%s' "$HIST_AGENT" "$(oneline "${HIST_HOME:--}")" "$(oneline "${HIST_TRANSCRIPT:--}")"
   elif [ -n "${HIST_TASK:-}" ]; then
     printf '\t-\t-\t-'
   fi
@@ -1119,7 +1122,8 @@ cmd_resume() {
   [ -z "$row" ] && { printf 'REVIEW-ONLY\tno ledger row for %s\n' "$key"; return 0; }
   local iss pr sha wt tdir sid agent chome ctrans
   IFS=$'\t' read -r _ iss _ pr sha wt tdir sid _ _ _ agent chome ctrans _ <<<"$row"
-  if [ "$agent" = codex ]; then
+  local where; where=$(fleet_agent_get "$(fleet_agent_or_default "$agent")" transcript 2>/dev/null)
+  if [ "$where" = home ]; then
     ctrans=$(python3 "$BIN/fleet-codex-session.py" locate --session "$sid" --home "$chome" --transcript "$ctrans" 2>/dev/null) || ctrans=''
     if [ ! -d "${chome:-/nonexistent}" ] || [ -z "$ctrans" ]; then
       printf 'REVIEW-ONLY\tCodex session home or exact rollout is unavailable for %s\n' "$(key_label "$iss")"
@@ -1147,7 +1151,7 @@ cmd_resume() {
   # An idle transcript may have been archived (issue #1299). A ledger row is a
   # reference, so the archiver never takes one — but a row from before, another
   # install's ledger, or a hand-run archive can still miss: bring it back first.
-  if [ -n "$do_exec" ] && [ "$agent" != codex ] && [ -n "$sid" ] && [ "$sid" != "-" ] \
+  if [ -n "$do_exec" ] && [ "$where" = project ] && [ -n "$sid" ] && [ "$sid" != "-" ] \
      && [ -n "$tdir" ] && [ "$tdir" != "-" ] && [ ! -f "$tdir/$sid.jsonl" ]; then
     bash "$BIN/fleet-transcript-archive.sh" --restore "$sid" --quiet >/dev/null 2>&1 || true
   fi
@@ -1168,7 +1172,7 @@ cmd_resume() {
       fi
     fi
     if [ -n "$have_wt" ]; then
-      if [ "$agent" = codex ]; then
+      if [ "$where" = home ]; then
         local mode=resume home_q sid_q
         [ -n "$fork" ] && mode=fork
         printf -v home_q '%q' "$chome"; printf -v sid_q '%q' "$sid"
@@ -1182,7 +1186,8 @@ cmd_resume() {
   fi
 
   # No resumable worktree — fall back to --from-pr if we have a PR.
-  if [ "$agent" != codex ] && [ -n "$pr" ] && [ "$pr" != "-" ]; then
+  if [ -n "$(fleet_agent_get "$(fleet_agent_or_default "$agent")" from_pr_flag 2>/dev/null)" ] \
+     && [ -n "$pr" ] && [ "$pr" != "-" ]; then
     printf 'FROM-PR\t%s\tclaude --from-pr %s %s\n' "${pr#\#}" "${pr#\#}" "$fork"
     return 0
   fi

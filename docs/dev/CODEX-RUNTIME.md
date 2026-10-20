@@ -6,6 +6,21 @@ sessions. SessionStart records the exact root session UUID, CODEX_HOME,
 transcript path and model in one `@codex_identity` JSON option. Hooks from an old
 launcher cannot overwrite a replacement. Stop refreshes only the current UUID.
 
+Codex 0.162 runs SessionStart only at a thread's first turn, so the identity
+does not wait for it (T629, EPIC T580 C5). The runtime's follower
+(`fleet-codex-session.py` `Follow`, ticked once a second by
+`fleet-codex-runtime.py`) asks the window's private server for the TUI's thread
+while the launch has named none and stamps it (`witness`: same launcher, no
+`@codex_session_id` yet); on a `thread/started` after that it re-points the
+window (`follow`, a `/clear` or `/new`). Both add the ID's segment through the
+ONE witness Claude's SessionStart also feeds, `fleet_id.hook` — startup, resume
+when it is the thread the launch was opened for, clear — so a dispatched task
+reads as started before anyone speaks. The adapter table says where each agent's
+conversation id comes from (`sid_source`), whether its start says /clear
+(`clear_said`), and `session_id` / `fleet_agent_session_id` is the one reader of
+a window's current id. `fleet-agent-witness-selftest.py` runs the start, the
+start before the first turn, the clear and the reopen once per agent.
+
 The opt-in offline `fleet-native-local-runtime-selftest.py --launch-flags`
 compares native worktree ownership with per-launch config, profiles and dedicated
 model/permission flags. A running daemon and readable history do not prove that
