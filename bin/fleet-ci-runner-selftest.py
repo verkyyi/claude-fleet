@@ -627,4 +627,11 @@ if __name__ == "__main__":
                else drill_hogs(float(sys.argv[3]) if len(sys.argv) > 3 else 60, sys.argv[2] == "hogs-already"))
         print("FAIL %s" % why if why else "OK")
         sys.exit(1 if why else 0)
+    # every case builds its own Box (temp dirs, a fake GitHub on a port of its own,
+    # its own heavy dir), so the cases run as three processes at once (T536)
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import selftest_part
+    if len(sys.argv) == 1:
+        os.environ["SELFTEST_PART"] = "1/1"
+        selftest_part.fan_out(3)
     unittest.main(verbosity=2)
