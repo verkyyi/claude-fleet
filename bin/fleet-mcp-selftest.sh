@@ -221,7 +221,7 @@ rows = {r["id"]: r for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip
 want = {10: 'unknown argument "force"', 11: "must be an integer", 12: 'missing required argument "issue"',
         13: "≤ 570", 14: "owner/name", 15: "not hosted by this fleet", 16: "acme/app, acme/lib",
         17: "takes no arguments", 18: "agent:<name>, fid:<uuid> or parent", 19: "unknown tool",
-        20: "must be an integer", 21: "removed (claude-fleet#4904)"}
+        20: "must be an integer", 21: "unknown tool"}
 for i, why in want.items():
     res = rows[i]["result"]
     assert res.get("isError") is True, (i, res)
@@ -231,7 +231,7 @@ PY
 # The repo check READS fleet-repo.sh list; nothing else may have run.
 ran=$(grep -v '^fleet-repo.sh list$' "$LOG")
 [ -z "$ran" ] || fail "B: a refused call ran a script" "$ran"
-ok "B unknown arg · wrong type · missing · out of range · bad/unhosted repo · unknown tool · a retired tool (its reason): refused, nothing ran"
+ok "B unknown arg · wrong type · missing · out of range · bad/unhosted repo · unknown tool · a removed tool: refused, nothing ran"
 
 # --- C: each tool runs its script once ----------------------------------------
 : > "$LOG"
@@ -353,8 +353,7 @@ import json, sys
 rows = {r["id"]: r for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 want = {50: "merged · blocked · failed · stopped · waiting", 51: "must be an integer", 52: "true or false",
         53: 'unknown argument "win"', 54: 'missing required argument "question"', 55: "question · permission",
-        56: "removed (claude-fleet#4898)", 59: "removed (claude-fleet#4898)",
-        60: "removed (claude-fleet#4898)", 61: "removed (claude-fleet#4898)",
+        56: "unknown tool", 59: "unknown tool", 60: "unknown tool", 61: "unknown tool",
         64: "check needs doc", 65: "slug applies to path only",
         66: "path · find · repo · check", 67: "apply with wait only", 68: "≤ 570",
         69: 'unknown argument "method"', 70: "≥ 1"}
@@ -366,7 +365,7 @@ for i, why in want.items():
 PY
 ran=$(grep -v '^fleet-repo.sh list$' "$LOG")
 [ -z "$ran" ] || fail "G: a refused 报问记合 call ran a script" "$ran"
-ok "G report · ask · handoff · pr_verdict · pr_merge: bad enum / combination / type refused; comment · evidence · file_issue · gh retired (#4898) — nothing ran"
+ok "G report · ask · handoff · pr_verdict · pr_merge: bad enum / combination / type refused; comment · evidence · file_issue · gh unknown (removed, #4898) — nothing ran"
 
 # --- H: each new tool runs its script, argv exact, text on stdin --------------
 : > "$LOG"
