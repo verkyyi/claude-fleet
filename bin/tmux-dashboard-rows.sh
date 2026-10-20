@@ -1437,7 +1437,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # for @norepo), never the heading it happens to sit under (置顶 · 已结束 name
     # none). Field 21 (the proof) stays, empty, before them. Only for a reader
     # that asks (FLEET_ROWS_COLS=1, ⌘P's produce): every other one reads its rows
-    # byte for byte as before.
+    # byte for byte as before. Field 25 (EPIC T644 C7): `1` when the row drives an
+    # EPIC (its @epic — another machine's off the hub's `epic=`), so the view hangs
+    # a batch under its driver whichever machine the driver runs on; else no field.
     if [ "${FLEET_ROWS_COLS:-0}" = 1 ]; then
       case "$wtask" in T[0-9]*) case "$wtask" in *[!T0-9]*) wtask='' ;; esac ;; *) wtask='' ;; esac
       _agw=${agent%%:*}
@@ -1446,7 +1448,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       while [ "$_nf" -lt 9 ]; do cfgf+=$US; _nf=$((_nf + 1)); done
       _rw=$wrepo; [ "$wnorepo" = 1 ] && _rw=''
       case "$_rw" in */*) _rw=${_rw//[[:cntrl:]]/} ;; *) _rw='' ;; esac
-      cfgf+="$US$wtask$US$_agw$US$_rw"
+      cfgf+="$US$wtask$US$_agw$US$_rw${wepic:+${US}1}"
     fi
     buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet$US${rnode:+$hnd}$US$issd$US$ptxt$US$pct$cfgf"$'\n'
     continue

@@ -666,7 +666,7 @@ inputs = [sys.argv[14], user, host, aliases, via, login,
           digest_file(jpath), digest_file(lpath), digest_file(mpath),
           [(p, digest_file(p)) for p in parent_paths]]
 key = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
-outputs = [wpath, str(Path(gdir) / "fleet_logins")] + [str(Path(gdir) / (pre + f["sess"]))
+outputs = [wpath, str(Path(gdir) / "fleet_logins"), str(Path(gdir) / "wid_ids")] + [str(Path(gdir) / (pre + f["sess"]))
            for f in local for pre in ("remote_", "epicstale_", "orphanrep_")]
 def output_digests():
     return {p: digest_file(p, rows=Path(p).name.startswith("remote_")) for p in outputs}
@@ -741,6 +741,12 @@ for s in sessions:
 write(wpath, "".join("%s\t%s\n" % (w, label(s.get("machine_name")))
                      for s in sessions if s.get("worker_id")
                      for w in (s["worker_id"], ident_wid(s)) if w))
+# …and each key-form worker_id's ID (EPIC T644 C7): a row is keyed by its key, its
+# short code / EPIC parent / result are its ID's — the view reads them off the ID
+# cache by this pair (`<worker_id>\t<ID>`, login-wide), so another machine's
+# session shows the same code whichever machine is home.
+write(os.path.join(gdir, "wid_ids"), "".join("%s\t%s\n" % (s["worker_id"], (s.get("worker") or {})["identity"])
+                                              for s in sessions if s.get("worker_id") and ident_wid(s)))
 
 # Another login's session on this machine (issue #3001: a node's answer may carry
 # every login of its person) is never this login's local row — its fleet may well
@@ -857,7 +863,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), orphans=orphans_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(?:[1-9][0-9]{0,9}|T[1-9][0-9]{0,9}|[A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z]{3,25})(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), orphans=orphans_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      tok=tok_of(s), pin=w.get("pin") is True, local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 

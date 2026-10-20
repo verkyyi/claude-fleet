@@ -138,3 +138,43 @@ func TestNodeIDFamily(t *testing.T) {
 		t.Fatalf("a bad parent: HTTP %d", st)
 	}
 }
+
+// The node's ID cache (EPIC T644 C7): ?since=<cursor> pages through every record
+// of the owner — what another machine opened too — and a later read from the
+// cursor answers only what changed since; another owner's never appear.
+func TestNodeIDSince(t *testing.T) {
+	h, _, n := peerHarness(t)
+	h.srv.FleetAdmins = []string{"frank"}
+	v5, v4, alice := n["verk5"].token, n["verk4"].token, n["alice4"].token
+	const drv, kid, other = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222",
+		"33333333-3333-4333-8333-333333333333"
+	push := func(tok, id string, evs ...map[string]any) {
+		t.Helper()
+		if st, got := nodeTaskCall(t, h, tok, http.MethodPost, NodeIDsPath, map[string]any{"id": id, "events": evs}); st != 200 {
+			t.Fatalf("push %s = %d %v", id, st, got)
+		}
+	}
+	push(v5, drv, map[string]any{"ev": "opened", "id": drv, "seq": 1, "ts": 10, "agent": "claude", "title": "driver", "task": "T9"})
+	push(v4, kid, map[string]any{"ev": "opened", "id": kid, "seq": 1, "ts": 11, "agent": "codex", "title": "member",
+		"parent": drv, "task": "T10"})
+	push(alice, other, map[string]any{"ev": "opened", "id": other, "seq": 1, "ts": 12, "title": "alice's"})
+	st, got := nodeTaskCall(t, h, v5, http.MethodGet, NodeIDsPath+"?since=", nil)
+	ids, _ := got["ids"].([]any)
+	if st != 200 || len(ids) != 2 || got["more"] != false || got["cursor"] == "" {
+		t.Fatalf("since='' = %d %v; want both of the owner's, no more", st, got)
+	}
+	m := ids[1].(map[string]any)
+	if m["id"] != kid || m["parent"] != drv || m["task"] != "T10" || m["short"] == "" || m["machine"] == "" {
+		t.Fatalf("the other machine's record = %v", m)
+	}
+	cur := got["cursor"].(string)
+	if st, got = nodeTaskCall(t, h, v5, http.MethodGet, NodeIDsPath+"?since="+cur, nil); st != 200 || len(got["ids"].([]any)) != 0 {
+		t.Fatalf("nothing changed = %d %v", st, got)
+	}
+	push(v4, kid, map[string]any{"ev": "result", "id": kid, "seq": 2, "ts": 20, "state": "merged", "summary": "ok"})
+	st, got = nodeTaskCall(t, h, v5, http.MethodGet, NodeIDsPath+"?since="+cur, nil)
+	ids, _ = got["ids"].([]any)
+	if st != 200 || len(ids) != 1 || ids[0].(map[string]any)["id"] != kid || len(ids[0].(map[string]any)["results"].([]any)) != 1 {
+		t.Fatalf("after a result = %d %v; want the one changed record", st, got)
+	}
+}

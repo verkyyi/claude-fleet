@@ -982,26 +982,71 @@ def fleet_id_mod():
 
 
 def id_record(fid):
-    """The ledger of `fid` folded (fleet_id.fold), kept until the file changes; None
-    without one."""
+    """`fid`'s one record (fleet_id.record: this machine's ledger filled from the ID
+    cache, else the cache's — another machine's ID, EPIC T644 C7), kept until either
+    file changes; None when neither has it — then the ID is queued for id_cache_kick
+    (a background pull) and the row shows its placeholder until the next frame."""
     fi = fleet_id_mod()
     if fi is None or not fi.is_fid(fid):
         return None
-    path = fi.ledger_path(fid)
-    try:
-        st = os.stat(path)
-    except OSError:
+    stamp = []
+    for path in (fi.ledger_path(fid), fi.cache_path(fid)):
+        try:
+            st = os.stat(path)
+            stamp.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            stamp.append(None)
+    stamp = tuple(stamp)
+    if stamp == (None, None):
+        _ID_CACHE.setdefault("ids_want", set()).add(fid)
         return None
-    stamp = (st.st_mtime_ns, st.st_size)
-    hit = _ID_CACHE.get(path)
+    key = "rec:" + fid
+    hit = _ID_CACHE.get(key)
     if hit and hit[0] == stamp:
         return hit[1]
     try:
-        rec = fi.fold(fi.read(fid))
+        rec = fi.record(fid)
     except Exception:
         return None
-    _ID_CACHE[path] = (stamp, rec)
+    _ID_CACHE[key] = (stamp, rec)
     return rec
+
+
+def far_fid(target):
+    """Another machine's row → its ID: the hub's pair (wid_ids, written by
+    fleet-hub-sessions.sh: a row is keyed `<fleet UUID>/<key>`, its ID is the
+    worker's identity), else the worker_id's own tail when it is one (EPIC T644 C7)."""
+    p = dash_global() / "wid_ids"
+    try:
+        st = p.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    hit = _ID_CACHE.get("wid_ids")
+    if not hit or hit[0] != stamp:
+        pairs = {}
+        if stamp is not None:
+            try:
+                for line in p.read_text(encoding="utf-8").splitlines():
+                    w, _, fid = line.partition("\t")
+                    if w and fid:
+                        pairs[w] = fid.strip()
+            except OSError:
+                pass
+        hit = _ID_CACHE["wid_ids"] = (stamp, pairs)
+    return hit[1].get(target) or target.rpartition("/")[2]
+
+
+def id_cache_kick():
+    """After a frame: the IDs it showed and had no record of, pulled in the
+    background (fleet_id.pull_later — single-flight); the next frame draws them."""
+    want = _ID_CACHE.pop("ids_want", set())
+    fi = fleet_id_mod()
+    if want and fi is not None:
+        try:
+            fi.pull_later(sorted(want))
+        except Exception:
+            pass
 
 
 def id_known(extra=()):
@@ -1301,8 +1346,15 @@ def id_apply(e, fid, known, live=True):
     e["fid"] = fid
     e["id"] = id_short(fid, rec, known)
     if rec is None:
+        # not here and not cached yet: its code as this login knows it, the rest a
+        # placeholder until the background pull lands (EPIC T644 C7)
+        e["id_pending"] = True
         return
     o = rec.get("opened") or {}
+    # a row whose window says no task (another machine's — the hub's rows carry
+    # none) takes its record's: the EPIC tree hangs members by it
+    if not e.get("task") and re.fullmatch(r"T\d+", str(o.get("task") or "")):
+        e["task"] = o["task"]
     if o.get("task") and o["task"] not in e["aliases"]:
         e["aliases"].append(o["task"])
     # the old code (`T-` + 5 lowercase) still addresses it for one version (C11, compat-1v: 下一批删)
@@ -1570,11 +1622,16 @@ def epic_tree(groups, ended, fleet, refresh=True, marks=None):
     """Hang every EPIC's open member rows under its driver (in place). `marks`:
     epic_windows' answer (read here when None)."""
     marks = epic_windows(fleet) if marks is None and fleet else (marks or {})
+    far_open = epic_far_expanded(fleet)
     drivers = {}
     for g in GROUPS:
         for e in groups[g]:
             t = e.get("task") or ""
-            if not e.get("far") and e["target"] in marks and re.fullmatch(r"T\d+", t) and t not in drivers:
+            # a driver here wears @epic; another machine's says so in the row's field
+            # 25 (its node's epic=) — the same batch hangs whichever machine is home
+            # (EPIC T644 C7)
+            mark = e["target"] in marks if not e.get("far") else bool(e.get("epic_mark"))
+            if mark and re.fullmatch(r"T\d+", t) and t not in drivers:
                 drivers[t] = e
     if not drivers:
         return
@@ -1604,7 +1661,7 @@ def epic_tree(groups, ended, fleet, refresh=True, marks=None):
         d["epic"] = {"done": done, "total": len(recs),
                      "needs": sum(1 for m in members if m.get("sym") == "needs"),
                      "fail": sum(1 for m in members if m.get("sym") == "fail")}
-        d["expanded"] = marks[d["target"]][1] == "1"
+        d["expanded"] = (d["target"] in far_open) if d.get("far") else marks[d["target"]][1] == "1"
         lst = groups[d["group"]]
         i = next(n for n, e in enumerate(lst) if e is d)
         lst[i + 1:i + 1] = members
@@ -1616,12 +1673,36 @@ def epic_hidden(e, drivers):
     return bool(f) and f in drivers and not drivers[f].get("expanded") and not epic_kept(e)
 
 
+def epic_far_file(fleet):
+    return views_dir() / ("epic-open-%s.json" % (fleet or "-"))
+
+
+def epic_far_expanded(fleet):
+    """The far drivers this view opened (→): their window is another machine's, so
+    the bit is kept here (EPIC T644 C7) — a set of row targets."""
+    try:
+        got = json.loads(epic_far_file(fleet).read_text())
+    except (OSError, ValueError):
+        return set()
+    return {x for x in got if isinstance(x, str)} if isinstance(got, list) else set()
+
+
 def epic_toggle(items, fleet, target, on):
-    """→ / ← on a driver: its window's @expand (⑭), and the list at once."""
-    if on:
-        tm("set-option", "-w", "-t", target, "@expand", "1")
+    """→ / ← on a driver: its window's @expand (⑭) — another machine's driver, this
+    view's own book — and the list at once."""
+    if target.startswith("@"):
+        if on:
+            tm("set-option", "-w", "-t", target, "@expand", "1")
+        else:
+            tm("set-option", "-wu", "-t", target, "@expand")
     else:
-        tm("set-option", "-wu", "-t", target, "@expand")
+        book = epic_far_expanded(fleet)
+        book = (book | {target}) if on else (book - {target})
+        try:
+            epic_far_file(fleet).parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(epic_far_file(fleet), json.dumps(sorted(book)))
+        except OSError:
+            pass
     for e in items:
         if e.get("epic") and e.get("target") == target:
             e["expanded"] = bool(on)
@@ -1692,7 +1773,7 @@ def entries(vid, now=None, hub=True):
             continue
         if len(f) < 15 or not f[0]:
             continue
-        f += [""] * (24 - len(f))
+        f += [""] * (25 - len(f))
         key = f[0]
         local = not key.startswith("wid:")
         target = key if local else key[4:]
@@ -1791,8 +1872,10 @@ def entries(vid, now=None, hub=True):
         # spawners' convention; another machine's says its own or 未知
         row_cols(e, f[21], f[22] or ("claude" if local else ""), title, name)
         e["task"] = f[21].strip() if re.fullmatch(r"T\d+", f[21].strip()) else ""
+        # field 25 (EPIC T644 C7): the row drives an EPIC — here or on another machine
+        e["epic_mark"] = f[24].strip() == "1"
         # the window's own ID (EPIC T497 C3): its short code, ledger agent and result
-        id_apply(e, wins.get(target, ("", "", 0))[0] if local else target.rpartition("/")[2], known)
+        id_apply(e, wins.get(target, ("", "", 0))[0] if local else far_fid(target), known)
         if not e["repo"]:
             norepo.append(e)
         if e["state"] in ("working", "looping", "idle") and task_ended(e):
@@ -1924,6 +2007,7 @@ def entries(vid, now=None, hub=True):
             out.append({"kind": "cmd", "cmd": "history", "act": "history", "sec": "gone", "n": older, "row": {},
                         "text": say("view_cmd_older_fmt", older)})
     task_cache_kick()
+    id_cache_kick()
     return out
 
 

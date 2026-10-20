@@ -857,3 +857,62 @@ func (s *Store) FleetIDLineage(owner, id string) ([]string, error) {
 	}
 	return line, nil
 }
+
+// IDSyncMax caps one page of a node's cache sync (FleetIDsSince).
+const IDSyncMax = 500
+
+// FleetIDsSince is one page of an owner's IDs changed after `since` (an
+// updated_at the previous page answered; "" = from the start), oldest change
+// first, at most limit — the node's ID cache (EPIC T644 C7: every machine's
+// panel reads the same records, whichever machine is its home). The cursor is
+// the last record's updated_at; more says another page follows.
+func (s *Store) FleetIDsSince(owner, since string, limit int) (recs []FleetIDRecord, cursor string, more bool, err error) {
+	if limit <= 0 || limit > IDSyncMax {
+		limit = IDSyncMax
+	}
+	rows, err := s.read.Query(`SELECT id, updated_at FROM fleet_ids WHERE owner = ? AND updated_at > ?
+		ORDER BY updated_at, id LIMIT ?`, owner, since, limit+1)
+	if err != nil {
+		return nil, "", false, err
+	}
+	type idAt struct{ id, at string }
+	var got []idAt
+	for rows.Next() {
+		var x idAt
+		if err := rows.Scan(&x.id, &x.at); err != nil {
+			rows.Close()
+			return nil, "", false, err
+		}
+		got = append(got, x)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, "", false, err
+	}
+	if len(got) > limit {
+		// never cut a page between two records of one instant: the next page
+		// starts strictly after the cursor
+		more = true
+		next := got[limit].at
+		got = got[:limit]
+		for len(got) > 1 && got[len(got)-1].at == next {
+			got = got[:len(got)-1]
+		}
+	}
+	recs = make([]FleetIDRecord, 0, len(got))
+	for _, x := range got {
+		rec, err := s.FleetIDOf(owner, x.id)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, "", false, err
+		}
+		recs = append(recs, rec)
+		cursor = x.at
+	}
+	if cursor == "" {
+		cursor = since
+	}
+	return recs, cursor, more, nil
+}
