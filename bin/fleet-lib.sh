@@ -45,6 +45,16 @@ if [ -f "$_FLEET_CORE_DIR/fleet-client-core.sh" ]; then
 else
   printf 'fleet-lib: fleet-client-core.sh not found beside %s\n' "${_flib_here:-?}" >&2
 fi
+# The agent adapter table (T620, EPIC T580 C4): what really differs between the
+# agents a session runs — every reader asks it, never an agent's name. Generated
+# from bin/fleet_agent_adapter.py; beside this file, else beside its link's target.
+_flib_ad="$_flib_here/fleet-agent-adapter.sh"
+[ -f "$_flib_ad" ] || _flib_ad="$(_s="${BASH_SOURCE[0]:-$0}"
+  while [ -L "$_s" ]; do _l=$(readlink "$_s"); if [ "${_l#/}" != "$_l" ]; then _s=$_l; else _s=${_s%/*}/$_l; fi; done
+  cd "${_s%/*}/" 2>/dev/null && pwd)/fleet-agent-adapter.sh" 2>/dev/null
+# shellcheck source=fleet-agent-adapter.sh
+[ -f "$_flib_ad" ] && . "$_flib_ad"
+unset _flib_ad
 
 # GLOBAL-ONLY FLEET_* keys (issue #237): read machine-wide — one daemon serving
 # EVERY fleet (collector, spinner, diskguard) or the SYSTEM-WIDE

@@ -48,7 +48,7 @@
 | `fleet_seat` / `fleet_scratch_key` 与 `bin/fleet-worktree.sh` | 部分座位、路径和身份使用历史命名约定 | 原生目录映射使用明确元数据与 Git 身份验证，不把任意目录前缀当授权 |
 | `hooks/base-readonly-guard.py` | 保护主检出及其真实路径下的后代 | Codex 本次实测生成主检出之外的目录，现有守卫允许；不能因为 Claude 的嵌套布局未适配，就整体放行 `.claude` / `.codex` |
 | `bin/fleet-restore.sh` / `bin/fleet-history.sh` | 恢复使用窗口与会话元数据，并兼容历史布局 | 写入真实工作目录、原生 ID 和账号 home；重启时恢复同一会话，不取最近修改的另一份历史 |
-| `bin/fleet-codex.sh` | 已将恢复参数转成原生 resume/fork | 保留薄适配，删除候选仅是重复外围逻辑；不能声称原生恢复尚未接入 |
+| `bin/fleet-codex.sh` | 已将恢复参数转成原生 resume/fork；与 Claude 共用的启动步骤已收进 `bin/fleet-launch-lib.sh`，真不同的写成适配表 `bin/fleet_agent_adapter.py`（T620） | 只剩 Codex 独有的薄适配（CODEX_HOME、TOML 钩子、posture、版本检查、`@codex_pending`）；不能声称原生恢复尚未接入 |
 | `bin/fleet-codex-runtime.py` | 默认由 Fleet 启动私有 app-server，再执行 `codex --remote`；固定订阅禁止直接降级 `--no-daemon` | 当前原生 `--worktree` 不支持 remote TUI；先验证原生运行时能否保留账号验证、hook 归属、事件与协作，不能先绕过固定订阅检查 |
 | `worktree-autoclean*` / `fleet-worktree-drop*` | 既有 Fleet 目录回收与安全检查 | 明确唯一清理所有者，原生管理目录不能被旧扫描器误删；未提交、未推送、活动会话及原生锁均纳入验证 |
 | `bin/scratch-prefill.py` | 有界就绪探测与不发送的草稿粘贴 | 尚无已验收的两种 Agent 通用原生未发送草稿入口；不能用 prompt 自动提交代替，也不能仅删等待计时器 |

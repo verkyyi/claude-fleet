@@ -233,7 +233,9 @@ has 'no codex binary here' "$out" "F no codex should be said"
 # ---- G: wiring ------------------------------------------------------------------------------
 hasnt 'fleet-codex-plugins.py" sync' "$(cat "$BIN/fleet-codex.sh")" "G the launcher still syncs plugins"
 hasnt '--plugin-dir' "$(grep -v '^#' "$BIN/fleet-codex.sh")" "G the launcher still merges plugin hooks"
-grep -q 'fleet-codex-plugins.py" mention' "$BIN/fleet-codex.sh" && grep -q 'fleet-codex-plugins.py" command' "$BIN/fleet-codex.sh" \
+# the seed's skill / command lookup is the adapter table's `seed` (T620): the launcher asks it
+grep -q '"mention", name' "$BIN/fleet_agent_adapter.py" && grep -q '"command", name' "$BIN/fleet_agent_adapter.py" \
+  && grep -q 'fleet_launch_seed' "$BIN/fleet-codex.sh" \
   || fail "G the launcher does not ask mention / command"; st_count
 grep -q 'fleet-codex-plugins.py" sync' "$BIN/fleet-install-apply.sh" || fail "G install-apply does not sync"; st_count
 grep -q 'fleet-codex-plugins.py' "$BIN/fleet-doctor.sh" || fail "G the doctor's plugins row does not ask"; st_count

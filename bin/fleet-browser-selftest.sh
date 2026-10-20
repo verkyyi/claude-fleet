@@ -361,9 +361,11 @@ res=$(FLEET_BROWSER=0 road --browser "$AUTH")
 # ---- F: WIRING -----------------------------------------------------------------
 grep -q 'fleet-browser.sh\\" hook' "$ROOT/plugins/fleet-browser/hooks/hooks.json" \
   && ok 'F the plugin SessionStart hook runs fleet-browser.sh hook' || bad 'F plugin hook'
+# the one shared step (bin/fleet-launch-lib.sh, T620) that both launchers run
+grep -q 'if bash "$BIN/fleet-browser.sh" enabled 2>/dev/null; then export BROWSER="$BIN/fleet-browser.sh"; fi' "$BIN/fleet-launch-lib.sh" \
+  && ok "F fleet-launch-lib.sh exports BROWSER only when enabled" || bad "F fleet-launch-lib.sh BROWSER wiring"
 for l in fleet-claude.sh fleet-codex.sh; do
-  grep -q 'if bash "$BIN/fleet-browser.sh" enabled 2>/dev/null; then export BROWSER="$BIN/fleet-browser.sh"; fi' "$BIN/$l" \
-    && ok "F $l exports BROWSER only when enabled" || bad "F $l BROWSER wiring"
+  grep -q '^fleet_launch_browser' "$BIN/$l" && ok "F $l runs it" || bad "F $l BROWSER wiring"
 done
 
 [ "$fail" = 0 ] && echo 'fleet-browser-selftest: all green' || echo 'fleet-browser-selftest: FAILED'

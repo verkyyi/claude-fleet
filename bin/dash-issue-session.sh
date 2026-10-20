@@ -48,8 +48,11 @@ set -uo pipefail
 # that needs the window id back stays synchronous).
 num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WORDS_FILE=""; FORCE_FLAG=0; ASYNC_FLAG=0; PRINT_FLAG=0; _pos=0; _want=""
 # Repeated explicit flags must agree; reject before any claim/window/worktree.
-set_agent() {
-  case "$1" in claude|codex) ;; *) printf 'dash-issue-session: unknown --agent %s (claude|codex)\n' "$1" >&2; exit 2 ;; esac
+set_agent() {   # a row of the adapter table (bin/fleet_agent_adapter.py beside this script or its link's target, T620)
+  local s=$0 d
+  d=$(cd "$(dirname "$s")" && pwd); [ -f "$d/fleet_agent_adapter.py" ] || { [ -L "$s" ] && d=$(cd "$(dirname "$s")" && cd "$(dirname "$(readlink "$s")")" && pwd); }
+  python3 "$d/fleet_agent_adapter.py" known "$1" 2>/dev/null \
+    || { printf 'dash-issue-session: unknown --agent %s (claude|codex)\n' "$1" >&2; exit 2; }
   [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-issue-session: contradictory --agent values\n' >&2; exit 2; }
   AGENT=$1
 }
@@ -185,6 +188,8 @@ fi
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
 . "$BIN/fleet-ui-lang.sh"   # fleet_ui_fail — the one failure line (issue #1618)
+# what this worker's agent can do is asked of its adapter-table row (T620) — never its name
+agent_col() { fleet_agent_get "$(fleet_agent_or_default "${AGENT:-${FLEET_AGENT:-}}")" "$1"; }
 # Internal re-entry (issue #303): the --async dispatch below backgrounds a
 # TAIL-ONLY re-invocation of THIS script through `tmux run-shell -b`, carrying the
 # resolved session name in FLEET_SPAWN_TAIL. A non-empty FLEET_SPAWN_TAIL therefore
@@ -256,7 +261,7 @@ refuse() {  # <reason> — stderr line + sticky red toast; the CALLER exits with
 # hosted; else the fleet's only repo; several ⇒ refuse, the caller asks.
 # A named agent file's `fleet: repo` is the repo when the spawn names none (#3122).
 # A start already known to be Codex never asks the Claude CLI for plugins (#4726).
-AS_FOR=claude; [ "${AGENT:-${FLEET_AGENT:-claude}}" = codex ] && AS_FOR=codex
+AS_FOR=$(fleet_agent_or_default "${AGENT:-${FLEET_AGENT:-}}")
 if [ -n "$AS_ARG" ] && [ -z "$REPO_ARG" ]; then
   REPO_ARG=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>/dev/null \
     | awk -F'\t' '$1 == "repo" { print $2; exit }')
@@ -455,8 +460,9 @@ fi
 # Codex needs this login's Codex login (`ccquota codex login`): asked for and not
 # there ⇒ refused, never quietly opened as Claude. A spawn the hub may place on
 # another machine is checked by the machine that opens it.
-if [ "$TAIL_ONLY" != 1 ] && [ "$PLACING" != 1 ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" = codex ] \
-   && [ "${FLEET_CODEX_READY_CHECK:-1}" != 0 ] && ! fleet_codex_ready; then
+_ready=$(agent_col ready_check)
+if [ "$TAIL_ONLY" != 1 ] && [ "$PLACING" != 1 ] && [ -n "$_ready" ] \
+   && [ "${FLEET_CODEX_READY_CHECK:-1}" != 0 ] && ! "$_ready"; then
   refuse "#$num should run in Codex, but this login has no valid Codex login — run \`ccquota codex login\` first (not opening it as Claude)"
   exit "$RC_INFRA"
 fi
@@ -735,7 +741,7 @@ SEED_WORDS=''
 _words=''
 [ -n "$WORDS_FILE" ] && [ -s "$WORDS_FILE" ] && _words=$(cat "$WORDS_FILE")
 [ -n "${_words//[[:space:]]/}" ] || _words=$title
-if [ "${FLEET_SEED_WORDS:-1}" != 0 ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" != codex ] \
+if [ "${FLEET_SEED_WORDS:-1}" != 0 ] && [ "$(agent_col seed_words)" = 1 ] \
    && [ -n "${_words//[[:space:]]/}" ]; then
   printf '%s' "$_words" > "$tf" && SEED_WORDS=1
 fi
@@ -745,9 +751,10 @@ if [ -z "$SEED_WORDS" ]; then
 fi
 unset _words
 # A parked session's return (--resume, issue #2671): the same conversation, its
-# own first turn — only when the transcript is still there and the agent is Claude.
+# own first turn — only when the transcript is still there and the agent comes back
+# into its own conversation (the table's park_resume: Claude).
 RESUME_ARG=''
-if [ -n "$RESUME_SID" ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" != codex ] \
+if [ -n "$RESUME_SID" ] && [ "$(agent_col park_resume)" = 1 ] \
    && [ -f "$(fleet_transcript_dir "$wt")/$RESUME_SID.jsonl" ]; then
   RESUME_ARG=" --resume $RESUME_SID"
   [ -n "$SEED_FILE" ] && [ -s "$SEED_FILE" ] && { cat "$SEED_FILE" > "$tf"; SEED_WORDS=''; }

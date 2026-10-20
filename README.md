@@ -575,9 +575,11 @@ of degrading to a pane-content heuristic.
 | questions and permission requests in the panel and notifications | ✅ | ✅ | Claude's AskUserQuestion / permission payload and Codex's app-server requests flow through `bin/fleet_needs_detail.py` into `@claude_needs_detail`. The node inventory and hub preserve the words; the native panel and `bin/fleet_notify.py` show them through the thin client's lease and OSC 9. |
 | orchestrating: an orchestrator session template (spawn agent:orchestrator); nothing opens or reopens a resident one | ✅ | ✅ | The template is a standard agent file (`conf/agent-defaults/claude/agents/orchestrator.md`, issue #4335): its body is Claude's system prompt and Codex's `model_instructions_file`, its model `fleet.codex_model`; the dispatch group ships with the core (issue #4334). No seat, no state hook (issue #4340). |
 
-That table says what the `MATRIX` block in
-[`bin/fleet-codex.sh`](bin/fleet-codex.sh)'s header grades — the source of truth,
-sitting next to the code it grades; edit a row there, then here.
+That table is the grading itself (it used to sit in `bin/fleet-codex.sh`'s
+header; T620 left that launcher only Codex's own launch steps): a ❌ says which
+kind of gap it is — Codex has no such mechanism, or it has one we have not
+adapted. What is really different per agent at launch is one table,
+[`bin/fleet_agent_adapter.py`](bin/fleet_agent_adapter.py).
 
 Codex context tracking, recovery/history, handoff, messaging, startup policy,
 native account quotas and panel answers are implemented in

@@ -1,136 +1,28 @@
 #!/bin/bash
-# fleet-codex.sh — launch OpenAI Codex CLI as a fleet session (issue #547).
-#
-# bin/fleet-claude.sh is the single door every spawn / restore / migrate walks
-# through; with FLEET_AGENT=codex (or a caller's `--agent codex`) it hands the
-# whole launch to THIS script instead of `exec claude`. Same contract: run in the
-# pane the spawner created (cwd = the issue-<N> / scratch-<N> worktree, $TMUX_PANE
-# set), take the seed prompt as the LAST positional, and run the agent. The
-# launcher waits for normal CLI exit to apply the shared close-on-exit policy.
-#
-# What Codex needs translated — everything else in the worker path is agent-
-# agnostic (the worktree, the @issue / @task binding, the PR map, the cleanup
-# daemon, the session cap):
-#
-#   * A seed may be a bare SLASH COMMAND (`/fleet-handoff pickup`, issue #299)
-#     because Claude Code expands one supplied as the initial prompt. Modern Codex has native
-#     skills under $CODEX_HOME/skills, invoked as `$name`, so a `/name [args]`
-#     seed becomes `$name [args]` when the installed Codex home carries that skill.
-#     Older Codex builds — or a home that has not been synced yet — still get the
-#     historic prose expansion from conf/codex-preamble.md + commands/name.md.
-#     The lifecycle text stays single-sourced in commands/; a non-slash prompt
-#     passes through verbatim.
-#   * Hooks. Codex's hook system IS Claude Code's schema (verified on codex-cli:
-#     the same event names, the same stdin JSON — `tool_name` "Bash" with
-#     `tool_input.command`, "apply_patch" with the patch text in `command` — exit 2
-#     blocks, and the hook inherits the pane env, $TMUX_PANE included). So the
-#     fleet's own hooks ride along inline as `-c hooks.<Event>=[…]`, resolved to
-#     THIS install's paths: PreToolUse → `busy` + bash-guard.py (Bash) +
-#     base-readonly-guard.py (apply_patch); PostToolUse / UserPromptSubmit →
-#     `working`; Stop → `done`. That is what colours a Codex window on the dash
-#     and keeps the two bypass-permissions rails (issue #355). SessionStart and
-#     SessionEnd emit lifecycle facts. The Claude handoff latch reset remains
-#     excluded.
-#     Codex reports `reason=other` for thread ends,
-#     so window cleanup follows a successful CLI process exit instead (#730).
-#     Hooks need persisted trust in Codex; the fleet vets its own, so
-#     --dangerously-bypass-hook-trust.
-#   * Posture: full access (approval_policy=never + sandbox_mode=danger-full-access)
-#     — the same footing as a bypassPermissions Claude worker (nobody is watching a
-#     fleet pane to approve; the hooks are the rails). Taken from the login's own
-#     config.toml when it already says so (the fleet's shipped default), else
-#     --dangerously-bypass-approvals-and-sandbox: as a CLI flag it would block
-#     every in-TUI /resume on the private runtime (issue #4724). A stricter workspace-write sandbox is a follow-up
-#     (issue #548): it may also fence AF_UNIX (the tmux socket every fleet script
-#     talks to) and the worktree's `.git` gitdir under the base checkout, and
-#     `codex sandbox` could not be driven here to prove either way.
-#   * Project doc: Codex reads AGENTS.md; `project_doc_fallback_filenames` makes
-#     it read a repo's CLAUDE.md when there is no AGENTS.md.
-#   * Model: FLEET_CODEX_MODEL → `-m` (Codex names ≠ Claude aliases, so FLEET_MODEL
-#     never applies); empty defers to ~/.codex/config.toml. Stamped as @cc_model.
-#   * Skipped on purpose: --model / FLEET_MODEL + the per-model cap fallback,
-#     Claude --mcp-config flags, CLAUDE_CODE_SUBAGENT_MODEL, and the
-#     CLAUDE_CODE_OAUTH_TOKEN token rotation. Codex uses its own home-based pool.
-#   * Project trust: Codex prompts once per project; a worktree inherits its main
-#     repo's trust, so the fleet needs $FLEET_MAIN trusted in ~/.codex/config.toml
-#     (one-time). The launcher pre-reads it and flags an untrusted base on the dash
-#     (`needs`) rather than letting the first pane stall silently — see below.
-#   * Stamps @cc_agent=codex on the window so the dash can tag it and the Claude-
-#     only tooling (migrate) can tell it apart; a Claude window
-#     carries no @cc_agent, so the default fleet is unchanged.
-#
-# --- CAPABILITY MATRIX · SOURCE OF TRUTH (issue #608) -------------------------
-# Everything above is the WHY; the block below is the public, per-capability
-# grading — and it lives HERE, next to the code it describes, so it cannot quietly
-# stop matching the launcher. README.md's "Agents: Claude Code and Codex" table
-# says the same: edit a row here, then the table (its renderer left with #4904).
-#
-# Grading rule (issue #608): a ❌ says WHICH kind of gap it is. "Codex has no such
-# mechanism" and "the mechanism exists, we have not adapted it" are different
-# claims, and collapsing them into one shrug is the dishonesty this matrix exists
-# to avoid. Cells are ` | `-separated, so no cell may contain a pipe.
-#
-# MATRIX-BEGIN
-# Capability | Claude Code | Codex | Why
-# worktree per task · `@issue` / `@task` binding · PR/CI map · cleanup · session caps | ✅ | ✅ | Not agent code at all — `git`, `gh` and tmux window options. The whole worker path is agent-agnostic.
-# hook state signals → task-list colours (busy / working / done) | ✅ | ✅ | Codex's hook system *is* Claude Code's schema — same event names, same stdin JSON, `exit 2` blocks, `$TMUX_PANE` inherited (measured on codex-cli, issue #1079). This launcher inlines the fleet's own hooks as `-c hooks.<Event>=[…]`.
-# bypass-permissions guardrails (bash-guard · base-checkout read-only) | ✅ | ✅ | full access from config.toml (else `--dangerously-bypass-approvals-and-sandbox`, issue #4724) + `--dangerously-bypass-hook-trust`; the base-checkout guard matches `apply_patch` on Codex where Claude matches Edit/Write/MultiEdit.
-# session keeps ONE language (non-English sessions stay non-English) | ✅ | ✅ | `bin/fleet-brief.sh` ends every worker's opening read with the seed rule, and every text the fleet injects later (resume nudge, quota warning, child report, auto-handoff directive) carries its own — one English sentence per injection point instead of a translated nudge per language (issue #620, `bin/fleet-lang.sh`). Codex additionally has the rule in `conf/codex-preamble.md`, where it originated.
-# project instructions file | `CLAUDE.md` | `AGENTS.md` | `-c project_doc_fallback_filenames=["CLAUDE.md"]` makes a Codex worker read this repo's `CLAUDE.md` when it has no `AGENTS.md`.
-# worker model pinned at spawn | `FLEET_MODEL` | `FLEET_CODEX_MODEL` | Two knobs on purpose: Codex model names are not Claude aliases, so `FLEET_MODEL` never reaches a Codex pane.
-# transferred recurring loop | Fleet adapter / native `/loop` | Fleet adapter | Active Fleet loops keep their ID, cadence and ownership generation across agent/account transfers. Codex uses private RPC; Claude inbox delivery requires transcript acknowledgement. Exact crash restore can reattach active owners; stopped or ambiguous deliveries never replay. Managed HOME transfers can preserve verified session-only calendar jobs, including one-shots.
-# optional plugins (fleet-epic · fleet-browser · …) | ✅ `/plugin` | ✅ native | Installed once with Claude Code's `/plugin`; `fleet-install-apply.sh` has `bin/fleet-codex-plugins.py sync` follow it in every Codex home with Codex's own installer (`codex plugin marketplace add` + `codex plugin add`), so skills (`<plugin>:<skill>`), commands, hooks and `.mcp.json` are Codex's own — nothing is synced at launch. Not carried: mod interface modules (/qd), PreCompact, an agent file's `tools` limits (issue #3123; T589; docs/dev/NATIVE-AGENT-BOUNDARY.md).
-# fleet command seed (`/fleet-handoff`) | native | native | Claude Code expands `/fleet-handoff`; Codex invokes the installed `$fleet-handoff` skill from `$CODEX_HOME/skills/fleet-handoff/SKILL.md`. If an old Codex build has no skills, or that home has not been synced, the launcher falls back to the prose expansion.
-# directory trust prompt | pre-granted | trusted-node pre-grant | `bin/fleet-trust.sh` fills missing trust for the fleet checkout and a managed no-repo launch in physical HOME on a trusted node. Codex entries persist through proxy config symlinks; explicit untrusted and pre-trust opt-out remain unchanged. Transfer checks readiness before source exit.
-# red `needs` + bell when a session is blocked on you | ✅ | ✅ | The private-server monitor reads native waitingOnUserInput/waitingOnApproval flags and marks the exact launcher/thread. No Notification hook is needed. Resolved native attention clears only its own subtype; explicit worker blockers survive.
-# `AskUserQuestion` + the panel's answer | ✅ | ✅ | Codex has native request_user_input. The panel replies to the replayed server request, including choices and free text; exact launcher/thread/request fingerprints prevent stale answers. Esc sends nothing; native resolution confirms completion.
-# permission prompts readable + refusable from the panel | ✅ | ✅ | Native command/file/additional-permission and MCP requests are readable. fleet-permission.sh --deny sends only the native refusal, requires the displayed request token and the existing opt-in. Default bypass posture normally suppresses command/file prompts; no approval is automated.
-# close the window when the operator exits the agent | ✅ | ✅ | The Codex launcher waits for a successful CLI exit, then calls the shared close-on-exit policy. Dirty/unmerged work survives, hubs/panels are excluded, and the global `FLEET_CLOSE_ON_EXIT=0` opt-out applies. Failed launches stay visible; thread `SessionEnd(reason=other)` never closes a window.
-# session lifecycle events | ✅ | ✅ | Both agents emit `session.start` and `session.end` through the shared hook table. Codex thread lifecycle events are separate from process-exit window cleanup.
-# `/fleet-handoff` + the auto-handoff nudge | ✅ | ✅ | Codex runs `fleet-transfer.sh --to codex --handoff NOTES --after-turn` directly. The same clean-Stop, typing hold, lease and source-identity checks preserve notes, exact rollout, account home and worktree before a fresh conversation. `FLEET_AUTO_HANDOFF_PCT` nudges this native path.
-# `/fleet-context` + the task list's ctx % | ✅ | ✅ | Run `fleet-context.sh` directly on Codex. SessionStart binds the exact root UUID, launcher lifetime and CODEX_HOME; rollout token telemetry supplies the current model/window. Missing data stays unknown; no Claude transcript or default denominator is reused.
-# peer messages + child reports | ✅ | ✅ | Fleet pane launches give each worker a private local app-server. `codex queue` reaches that exact endpoint, UUID and CODEX_HOME; failed delivery is never stamped as success. A guardian shuts down the owned server even if the launcher is killed. `FLEET_CODEX_SERVER=0` opts back into embedded mode without live queue delivery.
-# fleet tools (`status` / `repos` / `agents` / `brief` · `report` / `ask` / `handoff` / `pr_verdict` / `pr_merge` · `context` / `transfer` / `where` / `show` / `open` / `set_reap`; the dispatch group `spawn` / `task` / `await` / `children` / `send` / `answer_dialog` / `clear`) | ✅ | ✅ | Both launchers mount the one tool service `fleet` (`bin/fleet-mcp.py`, defined once in `conf/mcp-worker.json`, issues #1807 / #1808 / #1811) and its dispatch group `fleet-orch` (`conf/mcp-orch.json`): the same tools for Claude and Codex, each a checked wrapper over the existing script. The worker skills name only these tools — a script path appears only under a 排障 / 运营者 heading (`bin/skill-tools-selftest.sh`). Spec: `docs/dev/FLEET-MCP.md`. `FLEET_MCP=0` turns it off.
-# `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | ✅ | Crash snapshots and history retain the exact Codex UUID, CODEX_HOME and rollout. Native resume/fork stays in that home; account migration uses a durable packet to start fresh in a different home with source recovery preserved.
-# subscription choice | ✅ | ✅ | The credential pool picks: through this login's credential proxy each request runs on the pool's pick (Codex too — its default home, #4606), moved off a full account by the proxy; with no proxy the session runs on its own login (`~/.codex`, or the fleet's pinned `FLEET_CODEX_HOME`). Neither launcher picks among local accounts any more (T550, T560); only a caller-named account (a handoff's `--codex-profile`) is pinned.
-# model switch (same thread) | ✅ | ✅ | `fleet-codex-model.sh switch` changes an idle Codex thread's model through native thread/settings/update and verifies it without keystrokes or restart. Manual only: the quota-triggered fallback left with the local account registry (T560).
-# MCP servers + subagent model | ✅ | ✅ | `FLEET_MCP_CONFIG` translates stdio/HTTP allowlists — recommended value `~/.claude/fleet/conf/mcp-worker.json`, the minimal worker set shipped with the fleet (the `fleet` tool service only, issues #1078/#1807); `FLEET_CODEX_MCP_CONFIG` also accepts native JSON/TOML. Strict policies disable inherited servers and apps. Codex subagent model/effort use separate native knobs; explicit caller overrides win. Both TUI and private server receive the policy.
-# PR + check status in the session header (`PR #N ✓ 检查通过` · `… 检查中` · `✗ <check>`) | ⚠️ | ⚠️ | tmux would draw it, not the agent: `conf/tmux-attention.conf`'s `pane-border-format` reads `@pr_num` / `@pr_ci` / `@pr_fail`, which nothing stamps since the PR-map refresher left (issue #4899; it was #1954) — so the header draws no PR today. `pr_verdict` is the PR's one reading.
-# knows where the person is from the first turn (device · terminal · what it can do) | ✅ | ✅ | One reader, `bin/fleet-client-where.sh`. Claude Code gets the line from the mod (`where.ts`, every request); Codex gets the same text as SessionStart `additionalContext` from `bin/fleet-where-hook.sh`, in the shared hook table and gated to a Codex pane so Claude never reads it twice (issue #1954). A takeover mid-session reaches Codex through the `where` tool.
-# native panel prompts (rename · answer · message) | ✅ | ✅ | `bin/fleet_view.py` handles the prompts without changing the agent pane.
-# questions and permission requests in the panel and notifications | ✅ | ✅ | Claude's AskUserQuestion / permission payload and Codex's app-server requests flow through `bin/fleet_needs_detail.py` into `@claude_needs_detail`. The node inventory and hub preserve the words; the native panel and `bin/fleet_notify.py` show them through the thin client's lease and OSC 9.
-# orchestrating: an orchestrator session template (spawn agent:orchestrator); nothing opens or reopens a resident one | ✅ | ✅ | The template is a standard agent file (`conf/agent-defaults/claude/agents/orchestrator.md`, issue #4335): its body is Claude's system prompt and Codex's `model_instructions_file`, its model `fleet.codex_model`; the dispatch group ships with the core (issue #4334). No seat, no state hook (issue #4340).
-# MATRIX-END
+# fleet-codex.sh — launch OpenAI Codex CLI as a fleet session (issue #547). The one
+# door, bin/fleet-claude.sh, execs it for Codex: the pane the spawner made, the seed
+# LAST. The steps both agents share are bin/fleet-launch-lib.sh's and what really
+# differs is the table bin/fleet_agent_adapter.py (T620, EPIC T580 C4); what stays
+# here is Codex's alone — CODEX_HOME (a named profile, a pinned home, the proxy's
+# credential-free mirror), the hooks inlined as TOML, CLAUDE.md as the project doc,
+# the full-access posture, the version check, @codex_pending. What each agent can do
+# is README.md's «Agents» table.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-# A refusal to start the agent at all (issue #2404) says so on the pane before the
-# exit: fleet-session-wrap.sh then stops on the recovery page with the reason
-# (cred | account) instead of handing the window to the caller's bare shell.
-_fx_refused() { [ -n "${TMUX_PANE:-}" ] && tmux set-option -p -t "$TMUX_PANE" @launch_refused "$1" 2>/dev/null; return 0; }
 ROOT="$(cd "$BIN/.." && pwd)"
+# shellcheck disable=SC2034  # read by fleet-launch-lib.sh
+LAUNCH_AGENT=codex
+_fl_lib="$BIN/fleet-launch-lib.sh"   # beside this script, else beside its link's target
+[ -f "$_fl_lib" ] || _fl_lib="$(cd "$BIN" && cd "$(dirname "$(readlink "$0")")" && pwd)/fleet-launch-lib.sh"
 # shellcheck source=/dev/null
-[ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"     # also sources the sibling global fleet.conf
-# shellcheck source=/dev/null
-[ -f "$ROOT/fleet.conf" ] && . "$ROOT/fleet.conf"       # kept for a lib-less install
-# Per-fleet overlay (issue #472) — same as fleet-claude.sh: the spawned pane does
-# not inherit the spawner's env, so read the fleet's conf from $TMUX_PANE's session.
-if command -v fleet_load_conf >/dev/null 2>&1; then
-  _fx_sess="$(fleet_current_session 2>/dev/null)"
-  [ -n "$_fx_sess" ] && fleet_load_conf "$_fx_sess"
-  unset _fx_sess
-fi
-# The native usage pilot (#4557) is read by the private runtime from its
-# environment; a conf value reaches it only exported. Off unless set to 1.
-if [ "${FLEET_CODEX_NATIVE_USAGE:-0}" = 1 ]; then export FLEET_CODEX_NATIVE_USAGE=1; else unset FLEET_CODEX_NATIVE_USAGE; fi
+. "$_fl_lib"
+if [ "${FLEET_CODEX_NATIVE_USAGE:-0}" = 1 ]; then export FLEET_CODEX_NATIVE_USAGE=1; else unset FLEET_CODEX_NATIVE_USAGE; fi   # #4557: only exported reaches the runtime
 
-if ! command -v codex >/dev/null 2>&1; then
-  printf 'fleet-codex: FLEET_AGENT=codex but `codex` is not on PATH — install OpenAI Codex CLI (npm i -g @openai/codex) and `codex login`, or set FLEET_AGENT back to claude.\n' >&2
-  exit 127
-fi
+command -v codex >/dev/null 2>&1 || { fleet_launch_say 'FLEET_AGENT=codex but `codex` is not on PATH — install OpenAI Codex CLI (npm i -g @openai/codex) and `codex login`, or set FLEET_AGENT back to claude.'; exit 127; }
 
-# Fleet recovery callers carry the provider and account home explicitly. Convert
-# the shared resume spelling before parsing the final seed; native resume/fork
-# positional forms still pass through unchanged.
+# Recovery callers carry the account home explicitly, and the shared resume spelling
+# (Claude's --resume <id> [--fork-session]) becomes Codex's `resume|fork <id>` (the
+# table's resume_flag / fork_flag); native positional forms pass through unchanged.
 normal=(); resume_id=''; fork_session=0; _codex_home_explicit=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -141,11 +33,8 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] && [ -d "$2" ] || { echo 'fleet-codex: recorded CODEX_HOME is missing' >&2; exit 2; }
       export CODEX_HOME="$2"; _codex_home_explicit=1; shift 2
       # a session's credential-free home (issue #1972) names the account home it mirrors
-      if [ -f "$CODEX_HOME/.fleet-real-home" ]; then
-        _fx_rh=$(head -n 1 "$CODEX_HOME/.fleet-real-home")
-        [ -d "$_fx_rh" ] && export CODEX_HOME="$_fx_rh"
-        unset _fx_rh
-      fi ;;
+      _fx_rh=$(head -n 1 "$CODEX_HOME/.fleet-real-home" 2>/dev/null)
+      [ -n "$_fx_rh" ] && [ -d "$_fx_rh" ] && export CODEX_HOME="$_fx_rh" ;;
     --resume)
       [ "$#" -ge 2 ] || { echo 'fleet-codex: --resume requires a session id' >&2; exit 2; }
       resume_id="$2"; shift 2 ;;
@@ -157,27 +46,20 @@ _codex_resuming="$resume_id"
 for _arg in ${normal[@]+"${normal[@]}"}; do
   case "$_arg" in resume|fork) _codex_resuming=1; break ;; esac
 done
-# A pinned home (FLEET_CODEX_HOME) is the one this fleet names; nothing else here
-# picks one (T560, EPIC T542 C5): the local account pool (FLEET_CODEX_ACCOUNTS) and
-# its quota gate retired with fleet-codex-account.py — through the credential proxy
-# the pool picks per request, else the session runs on this CODEX_HOME's own login.
+# A pinned home (FLEET_CODEX_HOME) is the only one a fleet names (T560): through the
+# credential proxy the pool picks per request, else the session runs on its own login.
 if [ "$_codex_home_explicit" = 0 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] && [ -n "${FLEET_CODEX_HOME:-}" ]; then
   [ -d "$FLEET_CODEX_HOME" ] || { echo 'fleet-codex: FLEET_CODEX_HOME is missing' >&2; exit 2; }
   export CODEX_HOME="$FLEET_CODEX_HOME"
 fi
 if [ -n "$resume_id" ]; then
-  verb=resume; [ "$fork_session" = 1 ] && verb=fork
+  verb=$(fleet_agent_get codex resume_flag); [ "$fork_session" = 1 ] && verb=$(fleet_agent_get codex fork_flag)
   set -- "$verb" "$resume_id" ${normal[@]+"${normal[@]}"}
 else
   [ "$fork_session" = 0 ] || { echo 'fleet-codex: --fork-session requires --resume' >&2; exit 2; }
   set -- ${normal[@]+"${normal[@]}"}
 fi
-# The thread a resume reopens (issue #4728): kept on the window as @codex_pending
-# until its first SessionStart hook writes @codex_identity — a resume that sits on
-# a review page, or dies before that hook, still names its conversation to the
-# restore snapshot and to the recovery page's ↵. A fork is a new thread: none.
-_codex_pending_sid=''
-_pv=''
+_codex_pending_sid=''; _pv=''   # the thread a resume reopens (#4728), for @codex_pending; a fork is new
 for _arg in "$@"; do
   if [ "$_pv" = resume ]; then
     printf '%s' "$_arg" | grep -qiE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
@@ -186,27 +68,16 @@ for _arg in "$@"; do
   fi
   case "$_arg" in resume) _pv=resume ;; esac
 done
-unset _pv
 
-# A caller that NAMED a ccquota profile (--codex-profile: a handoff carrying a
-# session over) runs under ccquota's shared run lock and isolated credential
-# environment for the whole launcher/app-server/TUI lifetime. Nothing pins one on
-# its own any more (T560, EPIC T542 C5): FLEET_FAILOVER's `fleet-account.sh
-# profile` pin and the FLEET_CODEX_SUBSCRIPTION it derived are gone — an old conf
-# that still says FLEET_FAILOVER=1 changes nothing here.
-if [ -n "${FLEET_CODEX_PROFILE:-}" ]; then
-  if [ "${FLEET_CODEX_MANAGED:-0}" != 1 ]; then
-    export FLEET_CODEX_MANAGED=1
-    # ccquota's default profile is machine-local, not the invoking pane's home.
-    unset CODEX_HOME
-    exec "${FLEET_QUOTA_BIN:-ccquota}" codex --codex-bin "$BIN/fleet-codex.sh" run "$FLEET_CODEX_PROFILE" -- "$@"
-  fi
+# A NAMED ccquota profile (--codex-profile, a handoff) runs under ccquota's run lock
+# and isolated environment for the whole launch (its default profile: no pane's home)
+if [ -n "${FLEET_CODEX_PROFILE:-}" ] && [ "${FLEET_CODEX_MANAGED:-0}" != 1 ]; then
+  export FLEET_CODEX_MANAGED=1; unset CODEX_HOME
+  exec "${FLEET_QUOTA_BIN:-ccquota}" codex --codex-bin "$BIN/fleet-codex.sh" run "$FLEET_CODEX_PROFILE" -- "$@"
 fi
 
-# --- argv: the LAST argument is the seed prompt unless it looks like a flag ----
-# Every fleet caller puts the prompt last (`fleet-claude.sh "$(cat task)"`); flags
-# before it pass through to codex untouched (a caller that says `--agent codex`
-# means codex flags). A last arg that starts with `-` is a flag, not a prompt.
+# --- argv: the LAST argument is the seed prompt unless it looks like a flag; flags
+# before it pass through to codex untouched (`--agent codex` means codex flags)
 pass=(); prompt=''; have_prompt=0
 n=$#; i=0
 for a in "$@"; do
@@ -218,165 +89,33 @@ for a in "$@"; do
   fi
 done
 
-# --- the optional plugins (issue #3123; T589) ------------------------------------
-# Codex's own plugin manager holds them: fleet-install-apply.sh has
-# fleet-codex-plugins.py `codex plugin add` what the Claude side installed into
-# every Codex home, so a launch writes nothing and its hooks/skills/MCP are
-# Codex's own (no --plugin-dir merge any more).
-
-# --- convert a `/name [args]` seed to a native Codex skill when available -------
-codex_skills_supported() {
-  case "${FLEET_CODEX_NATIVE_SKILLS:-auto}" in
-    1|true|yes) return 0 ;;
-    0|false|no) return 1 ;;
-  esac
-  command -v codex >/dev/null 2>&1 || return 1
-  # codex-cli 0.157 exposes the model-visible skill list through this debug read.
-  # Old builds lack the subcommand; failures mean "use the historic expansion".
-  codex debug prompt-input '$fleet-context' 2>/dev/null | grep -q '<skills_instructions>'
-}
-native_slash() {
-  local p="$1" name rest home listed
-  case "$p" in /*) : ;; *) return 1 ;; esac
-  name="${p%%[[:space:]]*}"; name="${name#/}"
-  case "$name" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac
-  rest="${p#/"$name"}"
-  rest="${rest#"${rest%%[![:space:]]*}"}"       # trim leading whitespace
-  home="${CODEX_HOME:-$HOME/.codex}"
-  listed="$name"
-  if [ ! -r "$home/skills/$name/SKILL.md" ]; then
-    # a natively installed plugin's skill, listed by Codex as <plugin>:<name> (T589)
-    listed=$(python3 "$BIN/fleet-codex-plugins.py" mention "$name" --codex-home "$home" 2>/dev/null) || return 1
-  fi
-  codex_skills_supported || return 1
-  EXPANDED="\$$listed${rest:+ $rest}"
-  return 0
-}
-
-# --- expand a `/name [args]` seed into prose (old Codex / unsynced home) -------
-# Sets EXPANDED; returns 1 (prompt untouched) when it isn't a slash command or the
-# skill file is missing — then the literal text is still handed to codex, and a
-# one-line note says why, so a typo'd skill name is visible in the pane.
-expand_slash() {
-  local p="$1" name rest f body pre
-  case "$p" in /*) : ;; *) return 1 ;; esac
-  name="${p%%[[:space:]]*}"; name="${name#/}"
-  case "$name" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac
-  rest="${p#/"$name"}"
-  rest="${rest#"${rest%%[![:space:]]*}"}"       # trim leading whitespace
-  f="$ROOT/commands/$name.md"
-  # a natively installed plugin's command (T589): expanded from Codex's own copy
-  [ -r "$f" ] || f=$(python3 "$BIN/fleet-codex-plugins.py" command "$name" --codex-home "${CODEX_HOME:-$HOME/.codex}" 2>/dev/null) || f=''
-  if [ ! -r "$f" ]; then
-    printf 'fleet-codex: no commands/%s.md to expand — passing the prompt through verbatim\n' "$name" >&2
-    return 1
-  fi
-  body=$(cat "$f")
-  body="${body//\$ARGUMENTS/$rest}"
-  pre=$(cat "$ROOT/conf/codex-preamble.md" 2>/dev/null)
-  [ -n "$pre" ] || pre='You are a claude-fleet WORKER running on OpenAI Codex CLI. The text below is a Claude Code skill: slash commands and Claude-only tools (AskUserQuestion, SendMessage, Artifact, /fleet-handoff, /fleet-context) are not available to you — call each mcp__fleet__<name> it names as the tool <name> on your fleet MCP server (an mcp__fleet-orch__<name> on your fleet-orch server, when you have one), never wait on the operator, and every rail (worktree-only edits, no destructive tmux, land your own PR) applies unchanged.'
-  EXPANDED="$pre"$'\n\n'"$body"
-  return 0
-}
+# --- the seed: a `/name [args]` first turn in Codex's spelling (the table's `seed`):
+# an installed `$name` skill, else the prose expansion; anything else verbatim
 if [ "$have_prompt" = 1 ]; then
-  EXPANDED=''
-  if native_slash "$prompt"; then
-    prompt="$EXPANDED"
-  elif expand_slash "$prompt"; then
-    prompt="$EXPANDED"
-  fi
+  case "$prompt" in
+    /*) prompt=$(fleet_launch_seed "$prompt"; printf x); prompt=${prompt%x} ;;
+  esac
 fi
 
-# --- hooks, inline (Codex reads `-c hooks.<Event>=[…]` as TOML) ----------------
-# DERIVED, not hand-written (issue #611). This block used to carry its own copy of
-# the fleet's hook table, transcoded to TOML by hand — a second source that could
-# (and did) drift from hooks/settings-hooks.json. Now bin/fleet-hooks-emit.sh
-# materializes the ONE table for the codex target, applying the declared Codex
-# delta (hooks/codex-map.json): which events Codex has, `Edit|Write|MultiEdit|
-# NotebookEdit` → `apply_patch`, no Artifact tool, no Claude handoff/exit hooks.
-# Resolved against THIS install (--root defaults to it), so a selftest or a
-# re-homed install wires its own copies.
-#
-# Read as TAB-separated `<Event>\t<toml>` lines into the flag array below. A
-# failure here is NOT fatal: Codex still launches, just without the dash colours —
-# far better than refusing to spawn a worker over a hook table.
+# --- hooks as `-c hooks.<Event>=[…]`, derived from the ONE table (issue #611) with
+# the Codex delta (hooks/codex-map.json); a failure launches without them, said so
 hook_flags=()
-_hook_emit="$BIN/fleet-hooks-emit.sh"
-if [ -x "$_hook_emit" ]; then
+if [ -x "$BIN/fleet-hooks-emit.sh" ]; then
   while IFS=$'\t' read -r _ev _toml; do
     [ -n "$_ev" ] && [ -n "$_toml" ] && hook_flags+=(-c "hooks.$_ev=$_toml")
-  done < <("$_hook_emit" --target codex --root "$ROOT" 2>/dev/null)
+  done < <("$BIN/fleet-hooks-emit.sh" --target codex --root "$ROOT" 2>/dev/null)
 fi
 if [ "${#hook_flags[@]}" -eq 0 ]; then
-  printf 'fleet-codex: could not materialise the hook table from %s — launching WITHOUT\n' "$ROOT/hooks/settings-hooks.json" >&2
-  printf 'fleet-codex: hooks: this window will not colour on the dash and the two bypass-permissions\n' >&2
-  printf 'fleet-codex: guards (bash-guard / base-readonly-guard) are NOT wired for it.\n' >&2
+  fleet_launch_say "could not materialise the hook table from $ROOT/hooks/settings-hooks.json — launching WITHOUT hooks: this window will not colour on the dash and the two bypass-permissions guards (bash-guard / base-readonly-guard) are NOT wired for it."
 fi
-# The base-checkout guard resolves FLEET_MAIN from the env first (free) and only
-# then via fleet-lib + $TMUX; export what the overlay resolved so the hook never
-# has to.
-[ -n "${FLEET_MAIN:-}" ] && export FLEET_MAIN
+[ -n "${FLEET_MAIN:-}" ] && export FLEET_MAIN    # the base-checkout guard reads it off the env first
 
-# The agent's browser (issue #3236): with the fleet-browser plugin installed and
-# enabled for this login (the person's switch; off by default), the agent runs
-# `$BROWSER <url>` for an MCP authorization, /login or a page — fleet-browser.sh
-# hands it to the person's own computer and forwards an OAuth callback port back.
-# A plugin cannot set its agent's own environment, so the launcher does; off =
-# no BROWSER touched, byte for byte as before.
-if bash "$BIN/fleet-browser.sh" enabled 2>/dev/null; then export BROWSER="$BIN/fleet-browser.sh"; fi
+fleet_launch_browser
+fleet_launch_trust
 
-# --- project trust: Codex asks "Do you trust the contents of this directory?" ---
-# for a project it has not seen, and a fleet pane has NOBODY to press Enter — the
-# worker would sit on that prompt forever, reading `done` on the dash.
-# Measured: the prompt comes regardless of -a/-s/--dangerously-bypass flags, a `-c
-# projects.….trust_level` override does NOT satisfy it (trust is persisted state in
-# $CODEX_HOME/config.toml), and a git WORKTREE inherits the trust of its MAIN repo.
-# So the one thing this fleet needs is the BASE CHECKOUT ($FLEET_MAIN) trusted,
-# once per repo (`codex` in $FLEET_MAIN → "Yes"). This launcher never edits the
-# operator's config; it pre-reads it and, when the base is not trusted, says so in
-# the pane and stamps the window `needs` (red on the dash) so the one keypress the
-# first spawn needs is visible instead of a silent stall. Best-effort: a missing /
-# unreadable config just skips the check — Codex itself is still the authority.
-_trust_root=''
-[ -n "${FLEET_MAIN:-}" ] && _trust_root=$(cd "$FLEET_MAIN" 2>/dev/null && pwd -P)
-_codex_conf="${CODEX_HOME:-$HOME/.codex}/config.toml"
-_trust_home=0
-if [ -n "${TMUX_PANE:-}" ] && [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@norepo}' 2>/dev/null)" = 1 ] \
-   && [ "$(pwd -P)" = "$(cd "$HOME" && pwd -P)" ]; then
-  _trust_root=$(pwd -P); _trust_home=1
-fi
-# A TRUSTED NODE answers it (issue #2401, the Codex half of #2282's wide form): the
-# same `fleet-trust.sh node` word, then `codex-grant` writes that one table — fill
-# only, so a login's own "untrusted" stands and the warning below still fires.
-if [ "$_trust_home" = 1 ] && [ -f "$BIN/fleet-trust.sh" ]; then
-  sh "$BIN/fleet-trust.sh" codex-grant --home >/dev/null 2>&1 || :
-fi
-if [ "$_trust_home" != 1 ] && [ -n "$_trust_root" ] && [ "${FLEET_PRETRUST:-1}" != 0 ] && [ -f "$BIN/fleet-trust.sh" ] \
-   && sh "$BIN/fleet-trust.sh" node >/dev/null 2>&1 \
-   && _granted=$(sh "$BIN/fleet-trust.sh" codex-grant --main "$_trust_root" 2>/dev/null) \
-   && [ -n "$_granted" ]; then
-  printf 'fleet-codex: pre-trusted %s in %s (trusted node, issue #2401)\n' "$_granted" "$_codex_conf" >&2
-fi
-unset _granted
-if [ -n "$_trust_root" ] && [ -r "$_codex_conf" ] \
-   && ! python3 "$BIN/fleet_codex_trust.py" check "$_trust_root" >/dev/null 2>&1; then
-  printf '\nfleet-codex: the directory %s is not trusted in %s — Codex will ask\n' "$_trust_root" "$_codex_conf" >&2
-  printf 'fleet-codex: "Do you trust the contents of this directory?" below. Answer 1 (Yes) ONCE: Codex\n' >&2
-  if [ "$_trust_home" = 1 ]; then
-    printf 'fleet-codex: persists that choice for this login HOME.\n\n' >&2
-  else
-    printf 'fleet-codex: persists it for the repo, and every issue-<N>/scratch-<N> worktree inherits it.\n\n' >&2
-  fi
-  # </dev/null: the stamper's `needs` path reads a hook payload off a non-tty
-  # stdin; give it EOF so it can never sit on an inherited descriptor.
-  [ -n "${TMUX_PANE:-}" ] && sh "$BIN/set-claude-state.sh" needs </dev/null >/dev/null 2>&1
-fi
-unset _trust_root _codex_conf _trust_home
-
-# check_for_update_on_startup=false (issue #2401): a fresh $CODEX_HOME opens on an
-# "Update available! … 1. Update now 2. Skip" picker before anything else, and a
-# fleet pane has nobody to answer it. Codex's version is the release's to move
-# (release.json / the login's own updater), never a prompt's.
+# check_for_update_on_startup=false (issue #2401): a fresh home's «Update available!»
+# picker has nobody to answer it; Codex's version is the release's to move. Hooks need
+# persisted trust in Codex; the fleet vets its own (--dangerously-bypass-hook-trust).
 flags=(
   --dangerously-bypass-hook-trust
   -c 'check_for_update_on_startup=false'
@@ -384,30 +123,12 @@ flags=(
   -c 'project_doc_fallback_filenames=["CLAUDE.md"]'
   ${hook_flags[@]+"${hook_flags[@]}"}
 )
-# Codex's plugins are OFF in every fleet launch (issue #4848; #4696 did it for a
-# repo with no GitHub only): Codex's startup plugin sync fetches
-# github.com/openai/plugins.git (and raw.githubusercontent.com) on every start, and
-# Codex has no switch for that sync alone — only features.plugins. The fleet's own
-# parts reach Codex as skills and config.toml MCP servers, not Codex plugins, so
-# they are unaffected. A person who wants Codex's plugin marketplace says so in
-# agent-overrides.json: `"codex_plugins": "on"` (or "codex_plugins:on" in the
-# array form) — then the person's own config.toml decides, as before.
-if ! python3 - "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/agent-overrides.json" <<'PY' 2>/dev/null
-import json, sys
-try:
-    d = json.load(open(sys.argv[1]))
-except Exception:
-    sys.exit(1)
-if isinstance(d, list):
-    sys.exit(0 if any(str(x).replace(" ", "").lower() == "codex_plugins:on" for x in d) else 1)
-v = d.get("codex_plugins") if isinstance(d, dict) else None
-sys.exit(0 if v is True or str(v).strip().lower() in ("on", "true", "1", "yes") else 1)
-PY
-then
-  flags+=(-c 'features.plugins=false')
-fi
+# Codex's plugins OFF (issue #4848: its startup sync fetches github on every start)
+# unless agent-overrides.json says `"codex_plugins": "on"`
+python3 "$FLEET_LAUNCH_DIR/fleet-codex-posture.py" plugins-on "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/agent-overrides.json" 2>/dev/null \
+  || flags+=(-c 'features.plugins=false')
 
-# --- model: FLEET_CODEX_MODEL → -m, unless the caller already chose one ---------
+# --- model: FLEET_CODEX_MODEL → -m (the table's model_env / model_flag) unless the caller chose
 launch_model=''
 if [ -n "${FLEET_CODEX_MODEL:-}" ]; then
   case " ${pass[*]+"${pass[*]}"} " in
@@ -416,84 +137,18 @@ if [ -n "${FLEET_CODEX_MODEL:-}" ]; then
   esac
 fi
 
-# Native Codex policy. Fleet defaults precede the caller's -c overrides; the
-# runtime sends the same effective flags to the app-server and the TUI.
-_codex_mcp="${FLEET_CODEX_MCP_CONFIG-${FLEET_MCP_CONFIG:-}}"
-_codex_subagent="${FLEET_CODEX_SUBAGENT_MODEL-${launch_model:-}}"
-if [ -n "$_codex_mcp$_codex_subagent${FLEET_CODEX_SUBAGENT_EFFORT:-}" ] && [ -f "$BIN/fleet-codex-policy.py" ]; then
-  _policy=$(FLEET_CODEX_MCP_CONFIG="$_codex_mcp" FLEET_CODEX_SUBAGENT_MODEL="$_codex_subagent" \
-    FLEET_CODEX_SUBAGENT_EFFORT="${FLEET_CODEX_SUBAGENT_EFFORT:-}" \
-    python3 "$BIN/fleet-codex-policy.py" -- "$@") || exit 2
-  while IFS= read -r _value; do
-    [ -z "$_value" ] || flags+=(-c "$_value")
-  done <<< "$_policy"
-fi
-unset _codex_subagent _policy _value
+# MCP policy + the tool service, then the composed configuration (the lib) — ahead of
+# the caller's -c; the composer adds no MCP server under a policy
+fleet_launch_mcp "$launch_model" -- "$@"
+_cfg_args=(--lock "${FLEET_AGENT_LOCK:-warn}" --codex-home "${CODEX_HOME:-$HOME/.codex}")
+[ -z "$_codex_resuming" ] || _cfg_args+=(--resume-permissions)
+[ -n "${FLEET_CODEX_MCP_CONFIG-${FLEET_MCP_CONFIG:-}}" ] && _cfg_args+=(--no-mcp)
+fleet_launch_cfg "${_cfg_args[@]}"
+unset _cfg_args
 
-# The fleet's own tool service (issue #1807, EPIC #1813 C5) — the Codex half of
-# bin/fleet-claude.sh's mount: the MCP server `fleet` (bin/fleet-mcp.py, defined
-# once in conf/mcp-worker.json), so a Codex session sees the same fleet tools a
-# Claude one does. After the allowlist policy above, so it rides beside any
-# FLEET_MCP_CONFIG (and replaces the allowlist's own copy, which lacks the env
-# Codex withholds from a server: TMUX, TMUX_PANE, …). Before the caller's -c.
-# FLEET_MCP=0 or no file beside bin/ adds nothing.
-if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$BIN/../conf/mcp-worker.json" ] && [ -f "$BIN/fleet-mcp.py" ]; then
-  unset FLEET_MCP_ORCH
-  _mount=$(python3 "$BIN/fleet-mcp.py" --mount codex 2>/dev/null) && [ -n "$_mount" ] && {
-    export FLEET_MCP_BIN="$BIN"
-    flags+=(-c "$_mount")
-    # The dispatch group `fleet-orch` (issue #3113) — every fleet pane (issue #4703),
-    # as bin/fleet-claude.sh mounts it.
-    python3 "$BIN/fleet-mcp.py" --bridge-seat 2>/dev/null \
-      && _mount=$(python3 "$BIN/fleet-mcp.py" --mount codex --group orch 2>/dev/null) && [ -n "$_mount" ] \
-      && { flags+=(-c "$_mount"); export FLEET_MCP_ORCH=1; }
-  }
-  unset _mount
-fi
-
-# The session's configuration, fixed at launch (issue #1782, EPIC #1776 C6) — the
-# Codex half of bin/fleet-claude.sh's block: fleet-agent-team.py composes fleet
-# default < team < local for THIS CODEX_HOME and hands what its config.toml lacks
-# as `-c` values (top-level keys, [mcp_servers.<name>] — none under an MCP policy,
-# which governs), ahead of the caller's own -c so a caller still wins. The hook
-# table is already inlined above. The mod is Claude's: recorded as `na`. The
-# fingerprint lands as @agent_cfg / @agent_cfg_src. FLEET_AGENT_CFG=0 or no
-# composer beside bin/ adds nothing.
-_cfg_fp=''; _cfg_src=''; _cfg_ver=''; _cfg_man=''; _cfg_locks=''; _cfg_say=''
-if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && command -v python3 >/dev/null 2>&1; then
-  _cfg_args=(--lock "${FLEET_AGENT_LOCK:-warn}" --codex-home "${CODEX_HOME:-$HOME/.codex}")
-  [ -z "$_codex_resuming" ] || _cfg_args+=(--resume-permissions)
-  [ -n "$_codex_mcp" ] && _cfg_args+=(--no-mcp)
-  while IFS=$'\t' read -r _cfg_k _cfg_v; do
-    case "$_cfg_k" in
-      fp)   _cfg_fp="$_cfg_v" ;;
-      src)  _cfg_src="$_cfg_v" ;;
-      ver)  _cfg_ver="$_cfg_v" ;;
-      manifest) _cfg_man="$_cfg_v" ;;
-      say)  _cfg_say="$_cfg_v" ;;
-      c)    flags+=(-c "$_cfg_v") ;;
-      lock) _cfg_locks="${_cfg_locks:+$_cfg_locks; }$_cfg_v" ;;
-      note) printf 'fleet-codex: %s (issue #1862)\n' "$_cfg_v" >&2 ;;   # the personal layer written badly
-      hint) printf 'fleet-codex: 本机新加了 %s — 要带到别的机器：fleet config %s\n' "${_cfg_v#promote }" "$_cfg_v" >&2 ;;   # said once (issue #1863)
-    esac
-  done < <(FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}" \
-             python3 "$BIN/fleet-agent-team.py" session codex ${_cfg_args[@]+"${_cfg_args[@]}"} 2>/dev/null)
-  # the person-facing line (EPIC #1855 C6) — only with a personal layer
-  [ -n "$_cfg_say" ] && printf 'fleet-codex: 配置 %s\n' "$_cfg_say" >&2
-  [ -n "$_cfg_locks" ] && printf 'fleet-codex: locked agent config overridden on this login: %s (issue #1782)\n' "$_cfg_locks" >&2
-  unset _cfg_args _cfg_k _cfg_v _cfg_locks _cfg_say
-fi
-unset _codex_mcp
-
-# --- full access for a fresh thread (issue #4724) -------------------------------
-# Remote resume retains the native thread's permission policy and rejects CLI
-# permission overrides, so a resume never carries the flag. A fresh thread needs
-# the fleet's full access — but held as a CLI flag it is a SESSION override, and
-# Codex then refuses every in-TUI /resume on the private runtime («Permission
-# overrides are not supported when resuming a remote task»). When the login's own
-# config.toml already says approval_policy=never + sandbox_mode=danger-full-access
-# (the fleet's shipped default) and nothing above it moves that, the posture is
-# the same without the flag; fleet-codex-posture.py decides, anything else keeps it.
+# --- full access (a bypassPermissions worker's footing; the hooks are the rails) for a
+# fresh thread only, and not as a flag when config.toml already says it: a flag blocks
+# every in-TUI /resume (issue #4724)
 if [ -z "$_codex_resuming" ]; then
   if [ "${FLEET_CODEX_POSTURE_FROM_CONFIG:-1}" = 0 ] || [ ! -f "$BIN/fleet-codex-posture.py" ] \
      || ! python3 "$BIN/fleet-codex-posture.py" check --home "${CODEX_HOME:-$HOME/.codex}" --cwd "$PWD" \
@@ -502,137 +157,80 @@ if [ -z "$_codex_resuming" ]; then
   fi
 fi
 
-# --- version drift: warn once per launch, never block (issue #1079) ------------
-# fleet reads context% from Codex's rollout file, a format verified only on the
-# versions in fleet-codex-runtime.py. An unverified version launches anyway (the
-# operator's call: warn, don't block) — one stderr line, and the same line rides
-# FLEET_CODEX_VERSION_WARNING into the SessionStart hook, which records it in
-# @codex_identity as `version_warning`. The ccquota relaunch above execs BEFORE
-# this point, so a launch checks once. FLEET_CODEX_VERSION_CHECK=0 = off.
-unset FLEET_CODEX_VERSION_WARNING   # never inherit a parent's verdict
-unset FLEET_CODEX_NATIVE_COMPLETION
+# --- version drift: warn, never block (issue #1079); the line rides into @codex_identity
+unset FLEET_CODEX_VERSION_WARNING FLEET_CODEX_NATIVE_COMPLETION   # never inherit a parent's verdict
 if [ "${FLEET_CODEX_VERSION_CHECK:-1}" != 0 ] && [ -f "$BIN/fleet-codex-runtime.py" ]; then
-  _vline=$(python3 "$BIN/fleet-codex-runtime.py" version-check 2>/dev/null)
-  _vrc=$?
-  if [ "$_vrc" = 1 ]; then
-    printf 'fleet-codex: warning: %s\n' "$_vline" >&2
-    export FLEET_CODEX_VERSION_WARNING="$_vline"
-  fi
-  if [ "$_vrc" = 0 ]; then
-    case "$_vline" in
-      'codex 0.162.1 (rollout format verified '*) export FLEET_CODEX_NATIVE_COMPLETION=1 ;;
-    esac
-  fi
-  unset _vline _vrc
+  _vline=$(python3 "$BIN/fleet-codex-runtime.py" version-check 2>/dev/null); _vrc=$?
+  [ "$_vrc" = 1 ] && { fleet_launch_say "warning: $_vline"; export FLEET_CODEX_VERSION_WARNING="$_vline"; }
+  case "$_vrc:$_vline" in '0:codex 0.162.1 (rollout format verified '*) export FLEET_CODEX_NATIVE_COMPLETION=1 ;; esac
 fi
 
-# --- through this login's credential proxy (issue #1972, EPIC #1967 C5) ---------
-# The wrapper handed this launch a FLEET_CRED_SID (FLEET_CRED_PROXY=1). The proxy
-# mints a session credential for the account this CODEX_HOME is (an fcp1.; on an
-# untrusted machine an fcp-h1. pass from the hub), Codex reaches it as a custom
-# provider (共同约定 2: base_url + env_key, plugins / apps / analytics off), and
-# CODEX_HOME becomes this session's credential-free mirror of the account home —
-# everything linked but auth.json, so threads, trust and skills stay where they
-# were. The window still records the REAL home (@codex_home), and a recorded
-# mirror maps back (--codex-home above). A ccquota-managed profile keeps its own
-# isolated environment, untouched. Exit 4 = a home the proxy cannot read for →
-# today's launch; any other failure refuses.
+# --- through the credential proxy (the lib's mint): a custom provider (base_url +
+# env_key; plugins / apps / analytics off) and a credential-free mirror of the account
+# home as CODEX_HOME (@codex_home keeps the REAL one). Not for a ccquota profile.
 _fx_real_home=''; _fx_route=''
-if [ -n "${FLEET_CRED_SID:-}" ] && [ -z "${FLEET_CODEX_PROFILE:-}" ]; then
-  _fx_px=$(bash "$BIN/fleet-session-cred.sh" mint --provider codex --sid "$FLEET_CRED_SID" --codex-home "${CODEX_HOME:-$HOME/.codex}")
-  _fx_rc=$?
-  case "$_fx_rc" in
-    0)
-      IFS=$'\t' read -r _fx_route _fx_port FLEET_CODEX_SESSION_CRED <<< "$_fx_px"
-      export FLEET_CODEX_SESSION_CRED
-      _fx_real_home="${CODEX_HOME:-$HOME/.codex}"
-      _fx_home=$(bash "$BIN/fleet-session-cred.sh" codex-home --sid "$FLEET_CRED_SID" --real "$_fx_real_home") \
-        || { echo 'fleet-codex: could not make this session a credential-free CODEX_HOME — refusing to launch' >&2; _fx_refused cred; exit 1; }
-      export CODEX_HOME="$_fx_home"
-      # the proxy picks this session's account (issue #4606: a separated login's
-      # default home): every account out ⇒ say when each comes back; the gate refuses
-      _fx_out=''
-      if [ "$(sed -n 's/^account=//p' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/cred-proxy/sessions/$FLEET_CRED_SID" 2>/dev/null | tail -n 1)" = proxy ]; then
-        _fx_out=$(bash "$BIN/fleet-session-cred.sh" standing --provider codex) && _fx_out=''
-      fi
-      if [ -n "$_fx_out" ]; then
-        printf 'fleet-codex: %s\n' "$_fx_out" >&2
-        if [ -z "$_codex_resuming" ] && [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
-          echo 'fleet-codex: FLEET_CODEX_QUOTA_GATE=1 — not launching on an account with no quota' >&2
-          _fx_refused account; exit 2
-        fi
-      fi
-      unset _fx_out
-      flags+=(-c 'model_provider="fleet"'
-              -c "model_providers.fleet={name=\"fleet\",base_url=\"http://127.0.0.1:$_fx_port/codex\",env_key=\"FLEET_CODEX_SESSION_CRED\",wire_api=\"responses\"}"
-              -c 'features.apps=false' -c 'analytics.enabled=false')
-      # plugins off whatever agent-overrides says (the proxy's provider has no
-      # marketplace) — once: the default above may already have put it there
-      case " ${flags[*]} " in *" features.plugins=false "*) ;; *) flags+=(-c 'features.plugins=false') ;; esac # bash32-ok: flags is populated above
-      unset _fx_home _fx_port ;;
-    4) : ;;
-    5) echo 'fleet-codex: the hub does not know this session (404: not registered for this node) — refusing to launch; ↵ on the page re-registers it and retries' >&2
-       _fx_refused cred_unknown; exit 1 ;;
-    *) echo 'fleet-codex: FLEET_CRED_PROXY=1 but no session credential could be had from the proxy — refusing to launch (fleet-cred-proxy.sh status; logs/cred-proxy.log)' >&2
-       _fx_refused cred; exit 1 ;;
-  esac
-  unset _fx_px _fx_rc
+if [ -n "${FLEET_CRED_SID:-}" ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] \
+   && fleet_launch_mint --codex-home "${CODEX_HOME:-$HOME/.codex}"; then
+  # shellcheck disable=SC2154  # the lib's mint sets them
+  _fx_route=$_fl_route; export FLEET_CODEX_SESSION_CRED="$_fl_cred"; _fl_cred=''
+  _fx_real_home="${CODEX_HOME:-$HOME/.codex}"
+  _fx_home=$(bash "$BIN/fleet-session-cred.sh" codex-home --sid "$FLEET_CRED_SID" --real "$_fx_real_home") \
+    || { fleet_launch_say 'could not make this session a credential-free CODEX_HOME — refusing to launch'; fleet_launch_refused cred; exit 1; }
+  export CODEX_HOME="$_fx_home"
+  # every account out (#4606) ⇒ say when each is back; FLEET_CODEX_QUOTA_GATE=1 refuses
+  _fx_out=''
+  if [ "$(sed -n 's/^account=//p' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/cred-proxy/sessions/$FLEET_CRED_SID" 2>/dev/null | tail -n 1)" = proxy ]; then
+    _fx_out=$(bash "$BIN/fleet-session-cred.sh" standing --provider codex) && _fx_out=''
+  fi
+  if [ -n "$_fx_out" ]; then
+    fleet_launch_say "$_fx_out"
+    if [ -z "$_codex_resuming" ] && [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
+      fleet_launch_say 'FLEET_CODEX_QUOTA_GATE=1 — not launching on an account with no quota'
+      fleet_launch_refused account; exit 2
+    fi
+  fi
+  flags+=(-c 'model_provider="fleet"'
+          -c "model_providers.fleet={name=\"fleet\",base_url=\"http://127.0.0.1:$_fl_port/codex\",env_key=\"FLEET_CODEX_SESSION_CRED\",wire_api=\"responses\"}"
+          -c 'features.apps=false' -c 'analytics.enabled=false')
+  # plugins off whatever agent-overrides says (the proxy's provider has no marketplace)
+  case " ${flags[*]} " in *" features.plugins=false "*) ;; *) flags+=(-c 'features.plugins=false') ;; esac # bash32-ok: flags is populated above
+  unset _fx_home _fx_out; _fl_port=''
 fi
 
-# --- stamp THIS pane's window (issue #511: -t "$TMUX_PANE", never the current window)
-export FLEET_CODEX_LAUNCHER_PID="$$"
-export FLEET_CODEX_REMOTE=''
+# --- stamp THIS pane's window
+export FLEET_CODEX_LAUNCHER_PID="$$" FLEET_CODEX_REMOTE=''
 _remote_next=0
 for a in ${pass[@]+"${pass[@]}"}; do
   if [ "$_remote_next" = 1 ]; then FLEET_CODEX_REMOTE="$a"; _remote_next=0; fi
   case "$a" in --remote) _remote_next=1 ;; --remote=*) FLEET_CODEX_REMOTE="${a#--remote=}" ;; esac
 done
 if [ -n "${TMUX_PANE:-}" ]; then
+  _fx_home="${_fx_real_home:-${CODEX_HOME:-$HOME/.codex}}"
   tmux set-option -w -t "$TMUX_PANE" @cc_agent codex 2>/dev/null || true
-  tmux set-option -w -t "$TMUX_PANE" @codex_home "${_fx_real_home:-${CODEX_HOME:-$HOME/.codex}}" 2>/dev/null || true
-  [ -n "$_fx_route" ] && tmux set-option -w -t "$TMUX_PANE" @cred_route "$_fx_route" 2>/dev/null || true
+  fleet_launch_wset @codex_home "$_fx_home"
+  [ -n "$_fx_route" ] && fleet_launch_wset @cred_route "$_fx_route"
   # @cc_account names only an account a caller named (T560, as fleet-claude.sh T550)
-  tmux set-option -w -t "$TMUX_PANE" @cc_account "${FLEET_CODEX_PROFILE:+codex:$FLEET_CODEX_PROFILE}" 2>/dev/null || true
-  tmux set-option -w -t "$TMUX_PANE" @cc_launcher_pid "$$" 2>/dev/null || true
+  fleet_launch_wset @cc_account "${FLEET_CODEX_PROFILE:+codex:$FLEET_CODEX_PROFILE}"
+  fleet_launch_wset @cc_launcher_pid "$$"
   # New ownership invalidates the old JSON even if the process died before its
   # SessionEnd. Clear visible context too; the first root hook supplies truth.
   for _opt in @codex_identity @codex_session_id @codex_attention @ctx_pct @ctx_limit @ctx_band @ctx_left @ctx_ts @ctx_src @model @effort @cc_model @handoff_armed; do
-    tmux set-option -wu -t "$TMUX_PANE" "$_opt" 2>/dev/null || true
+    fleet_launch_wset -u "$_opt"
   done
-  # The resume's thread until its hook says so (issue #4728): the same JSON shape
-  # as @codex_identity — this launcher as owner, the REAL home — so a reader that
-  # falls back to it (`#{?@codex_identity,…,#{@codex_pending}}`) judges it alike.
-  if [ -n "$_codex_pending_sid" ]; then
-    _pend=$(python3 -c 'import json,os,sys; print(json.dumps({"session_id":sys.argv[1],"owner":sys.argv[2],"home":os.path.realpath(sys.argv[3]),"transcript":"","pending":True},separators=(",",":")))' \
-      "$_codex_pending_sid" "$$" "${_fx_real_home:-${CODEX_HOME:-$HOME/.codex}}" 2>/dev/null) || _pend=''
-    if [ -n "$_pend" ]; then tmux set-option -w -t "$TMUX_PANE" @codex_pending "$_pend" 2>/dev/null || true
-    else tmux set-option -wu -t "$TMUX_PANE" @codex_pending 2>/dev/null || true; fi
-    unset _pend
-  else
-    tmux set-option -wu -t "$TMUX_PANE" @codex_pending 2>/dev/null || true
-  fi
-  [ -n "$launch_model" ] && tmux set-option -w -t "$TMUX_PANE" @cc_model "$launch_model" 2>/dev/null || true
-  if [ -n "$_cfg_fp" ]; then                 # issue #1782
-    tmux set-option -w -t "$TMUX_PANE" @agent_cfg "$_cfg_fp" 2>/dev/null || true
-    tmux set-option -w -t "$TMUX_PANE" @agent_cfg_src "$_cfg_src" 2>/dev/null || true
-    # the fleet version it runs (issue #1895): differs from the expected ver ⇒ 待换新
-    if [ -n "$_cfg_ver" ]; then tmux set-option -w -t "$TMUX_PANE" @agent_ver "$_cfg_ver" 2>/dev/null || true
-    else tmux set-option -wu -t "$TMUX_PANE" @agent_ver 2>/dev/null || true; fi
-    # what it started with (issue #2076) — fleet-oldcfg-check.sh's input
-    if [ -n "$_cfg_man" ]; then tmux set-option -w -t "$TMUX_PANE" @agent_cfg_manifest "$_cfg_man" 2>/dev/null || true
-    else tmux set-option -wu -t "$TMUX_PANE" @agent_cfg_manifest 2>/dev/null || true; fi
-  fi
+  # a resume's thread until its first hook writes @codex_identity, in its shape (#4728)
+  _pend=''
+  [ -n "$_codex_pending_sid" ] && _pend=$(python3 -c 'import json,os,sys; print(json.dumps({"session_id":sys.argv[1],"owner":sys.argv[2],"home":os.path.realpath(sys.argv[3]),"transcript":"","pending":True},separators=(",",":")))' \
+      "$_codex_pending_sid" "$$" "$_fx_home" 2>/dev/null)
+  if [ -n "$_pend" ]; then fleet_launch_wset @codex_pending "$_pend"; else fleet_launch_wset -u @codex_pending; fi
+  [ -n "$launch_model" ] && fleet_launch_wset @cc_model "$launch_model"
+  fleet_launch_cfg_stamp                     # issue #1782
+  unset _fx_home _pend
 fi
-unset _cfg_fp _cfg_src _cfg_ver
 
-# Codex's SessionEnd reason is always `other`, including thread lifecycle ends
-# that do NOT mean the operator quit this TUI. Wait for the CLI itself instead
-# (issue #730). Only a successful exit closes the window; a failed launch/crash
-# stays visible. The shared hook owns the opt-out, panel/hub guards, and reap
-# policy. Its owner check prevents an old launcher closing a replacement session.
+# The runner: the pane's private app-server (a loop's own bridge), else codex. Only a
+# successful CLI exit closes the window (#730: SessionEnd always says reason=other).
 runner=(codex)
 if [ -n "${FLEET_LOOP_SPEC:-}" ]; then
-  # Recurring handoffs already own a private endpoint and scheduler.
   runner=(python3 "$BIN/fleet-loop.py" bridge --)
 elif [ -n "${TMUX:-}" ] && [ "${FLEET_CODEX_SERVER:-1}" != 0 ] && [ -z "$FLEET_CODEX_REMOTE" ] \
    && [ -f "$BIN/fleet-codex-runtime.py" ]; then
