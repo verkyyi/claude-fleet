@@ -1,6 +1,5 @@
 # T532 (EPIC T516 C6): every row refreshed from PR #5010's run 39362569881 (Ubuntu, all 504 drills, 930.3 s), after the held-by-name drills stopped re-running whole selftests.
 # Hub rows: median of release trains 39294587332 (4a8d5479) + 39300665899 (3ef4b26f), fleet-ack runners, all 80 drills (T372, issue #4544).
-# node-tmux-restart takes 26.2 on fleet-ack (10.1 on the old Ubuntu row): part 1/3 must hold on it.
 # The earlier hub row set was Ubuntu PR run38960548935 at 00faaac8 (all93 drills, issue #3884); run38955383651 at f2e86584 measured hub-2 at 65.1s as part 2/2, before #4420 cut it to 3.
 # Cred-sep rows: complete Ubuntu run38955383651 at f2e86584 (issue #3884); the whole file then 65.4s (74.4/70.8 earlier, 86.6/82.4 on fleet-ack).
 # T371: cred-sep drill rows refreshed from Ubuntu nightly 39081314546 at acb8c585 (six were 20.0 guesses for 0.1-1.1s drills,
