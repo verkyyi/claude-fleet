@@ -302,7 +302,7 @@ done
 
 # Automatic cleanup waits for GitHub mergedAt, before ANY mutation. Old/missing
 # closedAt must not become a substitute clock for a recent/missing mergedAt.
-for merged_time in "$(iso_ago 60)" "$(iso_ago -3600)" '' '-' 'garbled' 'yesterday' '2026-02-30T00:00:00Z'; do
+for merged_time in "$(iso_ago 30)" "$(iso_ago -3600)" '' '-' 'garbled' 'yesterday' '2026-02-30T00:00:00Z'; do
   : > "$LEDGER"
   tok="$(FAKE_MERGED_AT="$merged_time" run_clean merged --auto)"
   [ "$tok" = skip:grace ] || st_fail "automatic grace should retain mergedAt='$merged_time', got '$tok'" "$(cat "$WORK/err")"
@@ -310,26 +310,26 @@ for merged_time in "$(iso_ago 60)" "$(iso_ago -3600)" '' '-' 'garbled' 'yesterda
     && [ -f "$WORK/wt-issue-42/keep.txt" ] || st_fail 'grace mutated the worktree/base/ledger'
 done
 st_pass 'automatic recent/future/missing/invalid mergedAt defers before mutations'
-tok="$(FAKE_MERGED_AT="$(iso_ago 60)" run_clean merged --auto --dry-run)"
+tok="$(FAKE_MERGED_AT="$(iso_ago 30)" run_clean merged --auto --dry-run)"
 [ "$tok" = skip:grace ] || st_fail 'automatic dry-run must report the grace'
 st_pass 'automatic dry-run observes merged grace'
 tok="$(run_clean merged --auto)"
 case "$tok" in cleaned:*) ;; *) st_fail "expired automatic grace should clean, got '$tok'" "$(cat "$WORK/err")" ;; esac
 st_pass 'expired automatic grace proceeds through normal cleanup'
-tok="$(FAKE_NOW=1767226199 FAKE_MERGED_AT=2026-01-01T00:00:00Z run_clean merged --auto --dry-run)"
-[ "$tok" = skip:grace ] || st_fail '599 seconds must still defer'
-tok="$(FAKE_NOW=1767226200 FAKE_MERGED_AT=2026-01-01T00:00:00Z run_clean merged --auto --dry-run)"
-[ "$tok" = dry:would-clean-merged ] || st_fail "exactly 600 seconds must pass the grace, got $tok" "$(cat "$WORK/err")"
-st_pass 'automatic grace boundary is exact (599/600 seconds)'
+tok="$(FAKE_NOW=1767225659 FAKE_MERGED_AT=2026-01-01T00:00:00Z run_clean merged --auto --dry-run)"
+[ "$tok" = skip:grace ] || st_fail '59 seconds must still defer'
+tok="$(FAKE_NOW=1767225660 FAKE_MERGED_AT=2026-01-01T00:00:00Z run_clean merged --auto --dry-run)"
+[ "$tok" = dry:would-clean-merged ] || st_fail "exactly 60 seconds must pass the grace (T680), got $tok" "$(cat "$WORK/err")"
+st_pass 'automatic grace boundary is exact (59/60 seconds)'
 tok="$(WT_GONE=1 WIN_GONE=1 FAKE_MERGED_AT='' run_clean merged --auto)"
 [ "$tok" = skip:nothing ] || st_fail 'already-reaped automatic cleanup must remain idempotent'
 st_pass 'no debris needs no merge clock'
 
 # A non-exported fleet overlay wins over defaults/environment. Invalid knobs
-# fall back to 600; leading zeroes are decimal, not Bash octal arithmetic.
+# fall back to 60 (T680); leading zeroes are decimal, not Bash octal arithmetic.
 for grace in 3600 invalid -1 999999999999999999999999 31536001 00003600; do
   printf 'FLEET_CLEANUP_MERGED_GRACE=%s\n' "$grace" > "$WORK/conf/testsess.conf"
-  tok="$(FAKE_MERGED_AT="$(iso_ago 60)" run_clean merged --auto)"
+  tok="$(FAKE_MERGED_AT="$(iso_ago 30)" run_clean merged --auto)"
   [ "$tok" = skip:grace ] || st_fail "grace config '$grace' should retain recent merge, got '$tok'"
 done
 printf 'FLEET_CLEANUP_MERGED_GRACE=3600\n' > "$WORK/conf/testsess.conf"
@@ -390,7 +390,7 @@ lane_2() {
 # started) is reaped after the grace, not after FLEET_REAP_MIN_AGE; one spawned
 # onto an already-merged branch (agent started after the merge) keeps #565.
 # The waiver needs an agent older than the merge but younger than the gate, so
-# the gate is pinned above the default 600s grace here.
+# the gate is pinned above the default grace here.
 printf 'FLEET_REAP_MIN_AGE=1800\n' > "$WORK/conf/testsess.conf"
 : > "$LEDGER"
 tok="$(FAKE_AGENT_AGE=20:00 FAKE_MERGED_AT="$(iso_ago 900)" run_clean merged --auto)"
@@ -504,7 +504,7 @@ grep -q '@reap_due hold' "$WORK/tmux-set.log" && grep -q '@reap_hold PR #42 merg
 grep -q '@reap_due [0-9]' "$WORK/tmux-set.log" && st_fail '(1156-2) a held window must not get a countdown'
 st_pass 'bound-issue gate: PR closes another issue, #42 OPEN → skip:issue-open, held dash notice, nothing touched'
 # the hold wins over the grace: a fresh merge never shows a countdown it cannot keep
-tok="$(FAKE_ISSUE_STATE=OPEN FAKE_CLOSES='acme/widgets#43' FAKE_MERGED_AT="$(iso_ago 60)" run_clean merged --auto)"
+tok="$(FAKE_ISSUE_STATE=OPEN FAKE_CLOSES='acme/widgets#43' FAKE_MERGED_AT="$(iso_ago 30)" run_clean merged --auto)"
 [ "$tok" = skip:issue-open ] || st_fail "(1156-2b) within grace must still report the hold, got '$tok'"
 : > "$WORK/tmux-set.log"
 tok="$(FAKE_ISSUE_STATE=OPEN FAKE_CLOSES='acme/widgets#43' run_clean merged --auto --dry-run)"
@@ -724,7 +724,7 @@ st_pass "7 non-issue head, knob OFF → skip:nothing (default behavior unchanged
 
 # --- 8. knob ON + clean + tip==merged head + window done → reaped --------------
 : > "$LEDGER"
-tok="$(FAKE_MERGED_AT="$(iso_ago 60)" scratch scratch --auto)"
+tok="$(FAKE_MERGED_AT="$(iso_ago 30)" scratch scratch --auto)"
 [ "$tok" = skip:grace ] || st_fail 'automatic scratch cleanup needs merged grace too'
 [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
   && [ -f "$WORK/wt-scratch-99/keep.txt" ] || st_fail 'scratch grace allowed mutation'

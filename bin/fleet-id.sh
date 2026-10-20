@@ -226,5 +226,16 @@ print("\t".join(str(d.get(k) or "-") for k in ("id","native","agent","worktree",
   if [ "$cmd" = continue ]; then rargs+=(--prev "$p_id"); else rargs+=(--fid "$p_id"); fi
   exec bash "${FLEET_ID_SPAWN:-$BIN/dash-raw-session.sh}" "${rargs[@]}"
 fi
+# A final result starts its window's close (T680, fleet_reap_soon): written first,
+# then the watcher — the result's own exit code is the answer.
+if [ "$cmd" = result ]; then
+  rst='' prev=''
+  for a in "$@"; do [ "$prev" = --state ] && rst=$a; prev=$a; done
+  if [ -n "$scanned" ]; then FLEET_ID_LIVE="$live" FLEET_ID_NOAGENT="$noagent" python3 "$BIN/fleet_id.py" result "$@"
+  else python3 "$BIN/fleet_id.py" result "$@"; fi
+  rc=$?
+  if [ "$rc" = 0 ] && fleet_is_fid "${1:-}"; then fleet_reap_soon "$1" "$rst"; fi
+  exit "$rc"
+fi
 if [ -n "$scanned" ]; then FLEET_ID_LIVE="$live" FLEET_ID_NOAGENT="$noagent" exec python3 "$BIN/fleet_id.py" "$cmd" "$@"; fi
 exec python3 "$BIN/fleet_id.py" "$cmd" "$@"

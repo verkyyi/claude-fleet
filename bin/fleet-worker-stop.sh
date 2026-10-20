@@ -46,12 +46,18 @@
 # Refusals (nothing typed, nothing closed):
 #   refused:not-found    5   no live window holds this key on the fleet
 #   refused:ambiguous    6   more than one live window holds it — resolve on the fleet
-#   failed:no-exit       7   the agent did not exit within FLEET_STOP_EXIT_WAIT s —
-#                            left as is; the caller reads this as unconfirmed
+#   failed:no-exit       7   the agent did not exit within FLEET_STOP_EXIT_WAIT s and
+#                            FLEET_STOP_FORCE=0 — left as is; the caller reads this
+#                            as unconfirmed
 # Success (one token on stdout, exit 0):
 #   stopped:exit         agent exited, the SessionEnd hook closed the window
 #   stopped:closed       agent exited, no hook closed it — row recorded, window closed
 #   stopped:shell        no agent under the pane — row recorded, window closed
+#   stopped:forced       the agent did not exit on /exit (T680: a stuck loop, a
+#                        swallowed key — T580's driver sat on no-exit for hours), so
+#                        its process tree was ended: TERM, FLEET_STOP_FORCE_GRACE s
+#                        (10), KILL (fleet_kill_tree) — row recorded, window closed,
+#                        the worktree and transcript kept, resumable as any stop
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -198,8 +204,17 @@ for ((i = 1; i <= EXIT_WAIT; i++)); do
   [ "$i" = 6 ] && ! window_closed "$wid" && SK -t "$wid" Enter 2>/dev/null
   sleep 1
 done
+forced=0
 if [ "$alive" = 1 ]; then
-  printf 'failed:no-exit\n'; exit 7
+  [ "${FLEET_STOP_FORCE:-1}" != 0 ] || { printf 'failed:no-exit\n'; exit 7; }
+  # Escalate (T680): /exit did not take — end the agent's own tree, never the
+  # pane's shell or the wrapper above it. The SessionEnd hook may never run, so
+  # step 4 records the row and closes the window itself.
+  fgrace="${FLEET_STOP_FORCE_GRACE:-10}"
+  case "$fgrace" in ''|*[!0-9]*) fgrace=10 ;; esac
+  fleet_kill_tree "$cpid" "$fgrace"
+  if agent_alive "$cpid"; then printf 'failed:no-exit\n'; exit 7; fi
+  forced=1
 fi
 
 # --- 4. the SessionEnd hook closes the window and records the row … -----------
@@ -219,7 +234,8 @@ if window_closed "$wid"; then
   # it, so this is not a destructive kill.
   record_row
   TM kill-window -t "$wid" 2>/dev/null || :
-  printf 'stopped:exit\n'; exit 0
+  if [ "$forced" = 1 ]; then printf 'stopped:forced\n'; else printf 'stopped:exit\n'; fi
+  exit 0
 fi
 # … or it doesn't (FLEET_CLOSE_ON_EXIT=0): the agent is verified gone and the
 # pane sits at its `exec $SHELL`. Never close a pane a NEW agent came back under.
@@ -228,4 +244,5 @@ if fleet_pane_claude_pid "$wid" "$SOCK" >/dev/null 2>&1; then
 fi
 record_row
 TM kill-window -t "$wid" 2>/dev/null || :
-printf 'stopped:closed\n'; exit 0
+if [ "$forced" = 1 ]; then printf 'stopped:forced\n'; else printf 'stopped:closed\n'; fi
+exit 0

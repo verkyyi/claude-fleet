@@ -24,7 +24,7 @@ worker: brief → implement → ship + land (the flow its SessionStart hook give
                        └─ READY ⇒ gh pr merge --<FLEET_MERGE_METHOD> --delete-branch
 cleanup: com.claude-fleet.cleanup (~60s) sees the MERGED PR still has a worktree
          → bin/fleet-cleanup.sh <PR> --auto
-              ├─ wait until mergedAt + FLEET_CLEANUP_MERGED_GRACE (default 600s)
+              ├─ wait until mergedAt + FLEET_CLEANUP_MERGED_GRACE (default 60s)
               ├─ record the resume ledger (fleet-history.sh) BEFORE teardown
               ├─ git -C $FLEET_MAIN pull --ff-only   (under the shared land lease)
               └─ teardown: kill window → DROP worktree → delete branch
@@ -43,9 +43,9 @@ first, then the worktree, then the branch.
 
 ## The pieces
 
-Automatic MERGED cleanup waits **10 minutes after GitHub `mergedAt`** by default
-(#565). Set `FLEET_CLEANUP_MERGED_GRACE` per fleet to change the delay (seconds,
-0..31536000; invalid values use 600). `0` disables only this delay. A missing,
+Automatic MERGED cleanup waits **one minute after GitHub `mergedAt`** by default
+(#565; 10 minutes before T680). Set `FLEET_CLEANUP_MERGED_GRACE` per fleet to change the delay (seconds,
+0..31536000; invalid values use 60). `0` disables only this delay. A missing,
 invalid or future merge timestamp returns `skip:grace` while the delay is enabled;
 no ledger, lease, base pull or teardown runs on that path. This covers issue heads
 and opted-in scratch heads. Already-cleaned PRs remain no-ops. The timestamp comes
@@ -620,3 +620,24 @@ closed-unlanded rows too: a reaped-clean session no longer degrades to REVIEW-ON
 
 A scratch bound in place (issue #520) left this path for the worker route; the bind
 script left with issue #4898. Branch, not directory, is what the reapers read.
+
+## «做完» and the close a result starts (T680)
+
+A session's work is over — one rule, `fleet_cfg_work_over` — when its ID's newest
+result is merged / succeeded / failed, or its hub task record is closed. The
+result is often on the ID while the record still reads 已接受; the task route
+(`fleet-cleanup-idle.py` `task_session`, `fleet-cleanup.sh`'s task gate) takes
+either. The moment a final result lands (`fleet-report-parent.sh`, `fleet-id.sh
+result` → `fleet_reap_soon`) a detached `fleet-cleanup-idle.sh --now <ID>
+--after FLEET_REAP_NOW_AFTER` (60 s) watches that one window — a task session's (`@task_flow`); any other is left to the tick — every 10 s one pass
+over it (`--only`, `--grace`), so it closes about a minute after its turn ends,
+through every gate the tick has — history first, worktree kept, never while
+working, looping or holding a job. It ends when the window closes or is gone, or
+after 20 minutes (the tick takes over); one watcher an ID; `FLEET_REAP_NOW=0`
+turns it off; its lines go to `logs/reap-now.log`.
+
+A stop whose `/exit` never lands (`fleet-worker-stop.sh`) no longer answers
+`failed:no-exit` and leaves the window: the agent's own process tree is ended
+(TERM, `FLEET_STOP_FORCE_GRACE` 10 s, KILL), the row recorded, the window closed
+— `stopped:forced`. `FLEET_STOP_FORCE=0` keeps the old answer. BREAK-IT
+`done-window-lingers`, `stop-no-exit-hangs`.

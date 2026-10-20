@@ -1184,6 +1184,56 @@ class TaskSession(Rig):
         self.assertIn("reaped-task:" + self.win + " T42", out)
         self.assertFalse(self.exists())
 
+    FID = "5f0e7a1c-2b3d-4e5f-8a9b-0c1d2e3f4a5b"
+
+    def result(self, state):
+        """A report on the window's ID (fleet_id.py result, the ledger here)."""
+        self.set("@fleet_id", self.FID)
+        self.call("python3", str(BIN / "fleet_id.py"), "result", self.FID, "--state", state,
+                  "--summary", "t680")
+
+    def test_a_final_id_result_is_done_while_the_record_still_reads_open(self):
+        """T680: one «做完» — the ID's final result (merged / succeeded / failed)
+        closes the session even while the record is still 已接受; a non-final one
+        (blocked) does not."""
+        self.answer.write_text("1\n")
+        self.result("blocked")
+        out = self.due()
+        self.assertIn("skip:task-open " + self.win + " T42", out)
+        self.assertTrue(self.exists())
+        self.result("merged")
+        out = self.due()
+        self.assertIn("reaped-task:" + self.win + " T42", out)
+        self.assertFalse(self.exists())
+        self.assertTrue(self.wt.is_dir())
+
+    def test_now_watcher_closes_about_its_grace_after_the_turn(self):
+        """T680: `--now <ID> --after N` closes the finished window N s after its
+        turn, not at the next tick — and never while it is still working."""
+        self.answer.write_text("1\n")
+        self.result("succeeded")
+        self.set("@claude_state", "working")
+        self.set("@claude_state_ts", str(int(time.time())))
+        env = dict(self.env, FLEET_REAP_NOW_EVERY="1", FLEET_REAP_NOW_MAX="40")
+        t0 = time.time()
+        proc = subprocess.Popen(["bash", str(self.ibin / "fleet-cleanup-idle.sh"), "--now", self.FID,
+                                 "--after", "2", "--fg"], env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True)
+        time.sleep(3)
+        self.assertTrue(self.exists())                   # working: the watcher waits
+        self.set("@claude_state", "done")
+        self.set("@claude_state_ts", str(int(time.time())))
+        t1 = time.time()
+        out, _ = proc.communicate(timeout=60)
+        self.assertIn("reaped-task:" + self.win + " T42", out)
+        self.assertFalse(self.exists())
+        self.assertTrue(self.wt.is_dir())
+        self.assertGreaterEqual(time.time() - t1, 1.5)   # its grace, after the turn
+        self.assertLess(time.time() - t0, 30)
+        # the window gone, a second watcher ends at once
+        out = self.call("bash", str(self.ibin / "fleet-cleanup-idle.sh"), "--now", self.FID, "--fg")
+        self.assertNotIn("reaped", out)
+
     def test_other_policy_or_no_flow_takes_the_ordinary_roads(self):
         self.answer.write_text("1\n")
         self.set("@task_flow", "")

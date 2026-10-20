@@ -62,7 +62,7 @@ class Overdue(unittest.TestCase):
              win("@2", **{"@issue": "2", "@claude_state": "working"}),
              win("@3", **{"@issue": "3", "@claude_state": "done"})],
             prs={"issue-1": "11", "issue-2": "12", "issue-3": "13"},
-            landed={"1": NOW - 300, "2": NOW - 9000})
+            landed={"1": NOW - 30, "2": NOW - 9000})
         self.assertEqual(rows, [])
 
     def test_scratch_done_default_fifteen_minutes_claude_and_codex(self):

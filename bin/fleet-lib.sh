@@ -9204,6 +9204,22 @@ fleet_cfg_work_over() {
   return 1
 }
 
+# fleet_reap_soon <fleet_id> <state> — a result just landed on this ID (T680): a
+# final one (merged / succeeded / failed — fleet_cfg_work_over's «做完») starts the
+# window's watcher, `fleet-cleanup-idle.sh --now <ID> --after
+# FLEET_REAP_NOW_AFTER` (60 s), detached, which closes the window about a minute
+# after its turn ends through the reaper's own gates. Any other state, a non-ID or
+# FLEET_REAP_NOW=0 starts nothing. Never fails its caller.
+fleet_reap_soon() {
+  local fid="${1:-}" st="${2:-}" after="${FLEET_REAP_NOW_AFTER:-60}"
+  fleet_is_fid "$fid" || return 0
+  case "$st" in merged|succeeded|failed) ;; *) return 0 ;; esac
+  [ "${FLEET_REAP_NOW:-1}" != 0 ] || return 0
+  case "$after" in ''|*[!0-9]*) after=60 ;; esac
+  bash "$_FLEET_LIB_DIR/fleet-cleanup-idle.sh" --now "$fid" --after "$after" </dev/null >/dev/null 2>&1 || :
+  return 0
+}
+
 # fleet_handoff_cycle_live <session> <win> — is a fleet-handoff-cycle.sh pending on
 # <win> (issue #2937)? The cycle stamps @handoff_cycle <epoch>:<pid> once armed and
 # unsets it on exit; exit 0 = its pid is alive and the stamp younger than the

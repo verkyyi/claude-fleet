@@ -146,6 +146,9 @@
 #   reopen-reap-race                                fleet_cfg_restart_why / fleet_cfg_work_over (fleet-lib.sh),
 #                                                   bin/fleet-cleanup-idle.py (close: @migrating + the transition lock)
 #   stop-bare-path                                  bin/fleet-worker-stop.sh (fleet_path_fill)
+#   done-window-lingers                             bin/fleet-cleanup-idle.py (id_over, --only/--grace),
+#                                                   fleet-cleanup-idle.sh --now, fleet_reap_soon (fleet-lib.sh)
+#   stop-no-exit-hangs                              bin/fleet-worker-stop.sh (stopped:forced, fleet_kill_tree)
 #   report-parent-cleared                           bin/fleet-report-parent.sh + fleet_task_control.py receive
 #                                                   (the parent by its ID: fleet_id_take, fleet-id.sh route)
 #   id-switch-flip-report                           bin/fleet-report-parent.sh + fleet_task_control.py report
@@ -5703,6 +5706,50 @@ drill_reopen_reap_race() {
     || { WHY="the reaper still races a reopen: $(grep -E '^(FAIL|AssertionError)' "$d/race.out" | head -2 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="做完的会话（任务已收口 / ID 有结果）不再被换版重开；重开进行中回收不动它，重开出来的窗口按窗口照收"
+}
+
+# A finished session (T680) sat for hours: the reaper waited for the RECORD to close
+# while the result was only on the ID (skip:task-open), then a 10-minute grace, then
+# the next tick. One «做完» now — the ID's final result or the record closed — and
+# the watcher a result starts closes the window about a minute after its turn.
+drill_done_window_lingers() {
+  CAP=60; local t0 d="$WORK/dwl"
+  mkdir -p "$d"; t0=$(now)
+  python3 "$BIN/fleet-cleanup-idle-selftest.py" "$BIN" \
+    TaskSession.test_a_final_id_result_is_done_while_the_record_still_reads_open \
+    TaskSession.test_now_watcher_closes_about_its_grace_after_the_turn >"$d/out" 2>&1 \
+    || { WHY="a finished session still lingers: $(grep -E '^(FAIL|ERROR|AssertionError)' "$d/out" | head -2 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="ID 有了成功 / 失败结果即算做完（记录还停在已接受也一样），结果一落就盯住窗口、回合结束约 1 分钟收起"
+}
+
+# A stop whose /exit never landed (T680: T580's old driver, a loop that would not
+# end) answered failed:no-exit and left the window running for hours. Now the agent's
+# own tree is ended — TERM, a grace, KILL — the row recorded, the window closed.
+drill_stop_no_exit_hangs() {
+  CAP=30; local t0 d="$WORK/sne" w p out
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  mkdir -p "$d/tt" "$d/conf/fleets/sne"; : > "$d/conf/fleets/sne/conf"; fx_repo "$d/conf" sne acme/app FLEET_MAIN="$d"
+  printf '#!/bin/bash\nexec bash -c '"'"': FLEETFAKESNE; trap "" TERM; while :; do sleep 1; done'"'"'\n' > "$d/fs"; chmod +x "$d/fs"
+  TMUX_TMPDIR="$d/tt" "$REAL_TMUX" -L sne -f /dev/null new-session -d -s sne -n home 'sleep 120' \
+    || { WHY="cannot start the isolated tmux server"; return 1; }
+  w=$(TMUX_TMPDIR="$d/tt" "$REAL_TMUX" -L sne new-window -d -P -F '#{window_id}' "$d/fs; while :; do sleep 300; done")
+  TMUX_TMPDIR="$d/tt" "$REAL_TMUX" -L sne set-option -w -t "$w" @issue 12
+  for _ in $(seq 1 30); do p=$(pgrep -f FLEETFAKESNE | head -n 1); [ -n "$p" ] && break; sleep 0.1; done
+  t0=$(now)
+  out=$(env TMUX_TMPDIR="$d/tt" FLEET_CONF_DIR="$d/conf" FLEET_HISTORY_LEDGER="$d/ledger.tsv" FLEET_SKIP_GLOBAL_CONF=1 \
+          FLEET_CLAUDE_COMM=FLEETFAKESNE FLEET_STOP_EXIT_WAIT=2 FLEET_STOP_CLOSE_WAIT=0 FLEET_STOP_FORCE_GRACE=1 \
+          bash "$BIN/fleet-worker-stop.sh" sne issue-12 2>/dev/null)
+  SECS=$(since "$t0")
+  if TMUX_TMPDIR="$d/tt" "$REAL_TMUX" -L sne list-windows -t sne -F '#{window_id}' 2>/dev/null | grep -qx -- "$w"; then
+    TMUX_TMPDIR="$d/tt" FLEET_ALLOW_TMUX_DESTROY=1 "$REAL_TMUX" -L sne kill-server 2>/dev/null
+    WHY="the window of an agent that ignored /exit and TERM is still open [$out]"; return 1
+  fi
+  TMUX_TMPDIR="$d/tt" FLEET_ALLOW_TMUX_DESTROY=1 "$REAL_TMUX" -L sne kill-server 2>/dev/null
+  [ "$out" = stopped:forced ] || { WHY="a stop that /exit could not end answered [$out], want stopped:forced"; return 1; }
+  [ -n "$p" ] && kill -0 "$p" 2>/dev/null && { WHY="agent pid $p survived the forced stop"; return 1; }
+  grep -q 'issue-12\|	12	' "$d/ledger.tsv" 2>/dev/null || { WHY="no history row for the forced stop"; return 1; }
+  WHAT="/exit 不生效的会话：结束 agent 进程树（TERM → 宽限 → KILL），记历史、关窗，回 stopped:forced"
 }
 
 # A stop sent over ssh / the peerlink runs with a bare PATH (/usr/bin:/bin): no tmux

@@ -15,7 +15,9 @@
 #   3. a key two windows hold   → refused:ambiguous (6), both survive
 #   4. an old `sleeping` stamp (T548: read as empty) → stopped like any
 #   5. a window at a bare shell → stopped:shell, window closed, row recorded
-#   6. an agent that will not exit → failed:no-exit (7), window + pid survive
+#   6. an agent that will not exit → with FLEET_STOP_FORCE=0 failed:no-exit (7),
+#      window + pid survive; by default (T680) its tree is ended → stopped:forced,
+#      the window closed, the ledger row recorded
 #   7. a scratch key resolves through @raw + @worktree, Codex gets its bracketed /exit
 #   8. usage: a window NUMBER is not a key (2)
 #   9. multi-repo: `<repo>:issue-N` stops only that repo's window (issue #1018)
@@ -131,8 +133,13 @@ ledger_has 2 && st_miss "1: a row was recorded for the neighbour"
 #        writes no row and touches no other window); read back before leg 7 ------
 w6=$(mkwin six "$STUBBORN" 6); agents_up "$w6"
 p6=$(pid_of "$w6")
-( FLEET_STOP_EXIT_WAIT=2 bash "$BIN/fleet-worker-stop.sh" fleetS issue-6 >"$WORK/out6" 2>"$WORK/err6"; echo $? >"$WORK/rc6" ) &
+( FLEET_STOP_FORCE=0 FLEET_STOP_EXIT_WAIT=2 bash "$BIN/fleet-worker-stop.sh" fleetS issue-6 >"$WORK/out6" 2>"$WORK/err6"; echo $? >"$WORK/rc6" ) &
 leg6=$!
+# 6b (T680): the same stubborn agent, the default — escalated, not left hanging
+w16=$(mkwin sixteen "$STUBBORN" 16); agents_up "$w16"
+p16=$(pid_of "$w16")
+( FLEET_STOP_FORCE_GRACE=1 FLEET_STOP_EXIT_WAIT=2 bash "$BIN/fleet-worker-stop.sh" fleetS issue-16 >"$WORK/out16" 2>"$WORK/err16"; echo $? >"$WORK/rc16" ) &
+leg16=$!
 
 # --- 2. a key nobody holds -------------------------------------------------------
 run_stop fleetS issue-9
@@ -162,6 +169,11 @@ wait "$leg6"; out=$(cat "$WORK/out6"); rc=$(cat "$WORK/rc6")
 [ "$rc" = 7 ] && [ "$out" = failed:no-exit ] || st_miss "6: expected failed:no-exit/7" "rc=$rc out=$out"
 has_win "$w6" || st_miss "6: window of a still-running agent was closed"
 kill -0 "${p6:-0}" 2>/dev/null || st_miss "6: a stop that reported no-exit killed the agent"
+wait "$leg16"; out=$(cat "$WORK/out16"); rc=$(cat "$WORK/rc16")
+[ "$rc" = 0 ] && [ "$out" = stopped:forced ] || st_miss "6b: expected stopped:forced/0" "rc=$rc out=$out err=$(cat "$WORK/err16")"
+has_win "$w16" && st_miss "6b: a forced stop left window $w16 open"
+kill -0 "${p16:-0}" 2>/dev/null && st_miss "6b: a forced stop left agent pid $p16 alive"
+ledger_has 16 || st_miss "6b: no ledger row for the forced stop" "$(cat "$FLEET_HISTORY_LEDGER" 2>/dev/null)"
 
 # --- 7. scratch key via @raw + @worktree (pane dies with the agent, as when a
 #        hook closed it: stopped:exit — or stopped:closed where tmux never noticed
