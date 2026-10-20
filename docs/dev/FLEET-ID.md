@@ -22,6 +22,7 @@ EPIC T497 的 C1（节点账本）、C2（hub 镜像）、C3（⌘P 面板的编
 | `opened` | 两个 spawner（`dash-issue-session.sh` / `dash-raw-session.sh`，后台）；没有时由钩子补一条 `lazy` | agent（解析后的）· window · repo · title · key · task · short |
 | `native` | SessionStart 钩子 | 新的一段（agent · 原生 id · trigger · seg），或 `compact: true` 给当前段记一次压缩 |
 | `result` | `fleet-id.sh result`（C4 接 report） | state · summary · pr |
+| `progress` | `fleet-id.sh progress`；开关 on 时 `fleet_task_control.py progress`（C12：EPIC 驱动的 tick） | state · summary · event（同一 event 不再写）。只留最新一条，不是结果、不改状态；hub 镜像存在 `fleet_ids.progress*`，`fleet-epic-tick.py status` 的 `last_tick` 读它 |
 | `closed` | `fleet-id.sh close`（C4 接回收） | reason |
 | `short` | `fleet-id.sh push`（hub 回告） | hub 给的更长短码（只会变长） |
 | `moved` | fleet-move 的新机器（待接） | hub 把这个 ID 改挂到新机器 |

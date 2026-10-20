@@ -12,7 +12,8 @@ several ⇒ refused with the candidates (rc 2), never a pick.
 The ledger is $FLEET_CONF_DIR/ids/<ID>.ndjson, one event a line, each with its
 (ID, seq): `opened` (the spawn: agent, window, repo, title …), `native` (a native
 session the window went through — a new segment, or `compact: true` counting one
-compaction on the current segment), `result`, `closed`. Appends hold an flock;
+compaction on the current segment), `result`, `progress` (the window's newest
+progress word — an EPIC driver's tick, never a result: EPIC T497 C12), `closed`. Appends hold an flock;
 seq is the line's number. The ledger is double-written beside the old task record
 and nothing decides anything off it yet (EPIC rule: 先双写、后切换).
 
@@ -160,7 +161,7 @@ def append(fid, ev, decide=None):
 def fold(events):
     """The ledger read as one record: opened fields (first value wins), segments,
     results, closed."""
-    rec = {"opened": {}, "segments": [], "results": [], "closed": None}
+    rec = {"opened": {}, "segments": [], "results": [], "closed": None, "progress": None}
     lazy = None
     for ev in events:
         kind = ev.get("ev")
@@ -188,6 +189,8 @@ def fold(events):
             rec["segments"].append(seg)
         elif kind == "result":
             rec["results"].append({k: v for k, v in ev.items() if k not in ("ev", "id")})
+        elif kind == "progress":
+            rec["progress"] = {k: v for k, v in ev.items() if k not in ("ev", "id")}
         elif kind == "short":
             # the hub's code for this ID (EPIC T497 C2): only ever longer
             have = rec["opened"].get("short", "")
@@ -206,6 +209,33 @@ def fold(events):
     if lazy:
         rec["opened"]["lazy"] = True
     return rec
+
+
+def record_progress(fid, summary, state="", event=""):
+    """One progress word on an ID (EPIC T497 C12) — what an EPIC driver's tick wrote
+    on its task record before the switch. A repeated --event writes nothing (a
+    retried tick); → the written event, or None."""
+    def decide(evs):
+        if event and any(e.get("ev") == "progress" and e.get("event") == event for e in evs):
+            return None
+        ev = {"ev": "progress", "state": state, "summary": summary[:2000]}
+        if event:
+            ev["event"] = event
+        return ev
+    return append(fid, None, decide=decide)
+
+
+def progress_of(fid):
+    """An ID's newest progress word {summary, state, ts, seq, src}: this machine's
+    ledger, else the hub mirror's record; None when neither has one."""
+    if os.path.exists(ledger_path(fid)):
+        p = fold(read(fid))["progress"]
+        if p:
+            return dict(p, src="local")
+    one = _hub_record(fid)
+    if one and one.get("progress"):
+        return dict(one["progress"], src="hub")
+    return None
 
 
 def owner_of(native, skip=""):
@@ -507,6 +537,9 @@ def _hub_record(fid):
                         "ts": r.get("at")} for r in ans.get("results") or [] if isinstance(r, dict)]}
     if ans.get("closed_at"):
         rec["closed"] = {"ts": ans["closed_at"], "reason": ans.get("close_reason", "")}
+    pg = ans.get("progress")
+    rec["progress"] = {"summary": pg.get("summary", ""), "state": pg.get("state", ""), "ts": pg.get("at"),
+                       "seq": pg.get("seq")} if isinstance(pg, dict) and pg.get("summary") else None
     return rec
 
 
@@ -592,7 +625,12 @@ def family(fid, live, idx=None, seeds=()):
             rec["closed"] = {"ts": x["closed_at"], "reason": x.get("close_reason", "")}
         rows[x["id"]] = _family_row(x["id"], rec, _hub_status(x["id"], rec, x.get("short", "")), "hub")
     out = sorted(rows.values(), key=lambda r: (r.get("opened_at") or 0, r["id"]))
-    return {"parent": fid, "short": (idx.get(fid) or fold(read(fid)))["opened"].get("short")
+    if fid in idx:
+        pg = idx[fid]["progress"]
+        pg = dict(pg, src="local") if pg else None
+    else:
+        pg = progress_of(fid) if hub == "ok" or hub == "old" else None
+    return {"parent": fid, "progress": pg, "short": (idx.get(fid) or fold(read(fid)))["opened"].get("short")
             or short_for(fid, known_ids(idx.keys())), "hub": hub, "ids": out}
 
 
@@ -1109,6 +1147,9 @@ def render(fid):
     for r in rec["results"]:
         lines.append("  结果 %s  %s%s  %s" % (hhmm(r.get("ts")), r.get("state", ""),
                                              (" · PR #%s" % r["pr"]) if r.get("pr") else "", r.get("summary", "")))
+    if rec["progress"]:
+        p = rec["progress"]
+        lines.append("  进度 %s  %s" % (hhmm(p.get("ts")), p.get("summary", "")))
     if rec["closed"]:
         lines.append("  结束 %s  %s" % (hhmm(rec["closed"]["ts"]), rec["closed"]["reason"]))
     return "\n".join(lines)
@@ -1116,7 +1157,7 @@ def render(fid):
 
 def main(argv):
     if not argv:
-        print("usage: fleet_id.py short|open|native|result|close|get|resolve|push|hook|status|route|children|await|history|continue|reopen|family|parents …", file=sys.stderr)
+        print("usage: fleet_id.py short|open|native|result|progress|close|get|resolve|push|hook|status|route|children|await|history|continue|reopen|family|parents …", file=sys.stderr)
         return 2
     cmd, args = argv[0], argv[1:]
     # Live windows' IDs ride in as FLEET_ID_LIVE (newline-separated): fleet-id.sh fills it.
@@ -1269,6 +1310,16 @@ def main(argv):
             ev["issues"] = [x.strip() for x in opts["issues"].split(",") if x.strip()]
         append(target, ev)
         push_later(target)
+        return 0
+    if cmd == "progress":
+        summary = opts.get("summary", "").strip()
+        if not summary:
+            print("fleet-id: progress needs a --summary", file=sys.stderr)
+            return 2
+        ev = record_progress(target, summary, opts.get("state", ""), opts.get("event", ""))
+        if ev:
+            push_later(target)
+        print("RECORDED\nid: %s\nseq: %s" % (target, ev["seq"] if ev else "-"))
         return 0
     if cmd == "close":
         def decide(evs):

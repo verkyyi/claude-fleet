@@ -55,6 +55,10 @@ member's newest baton — by ID, not by which record it was (拍板 6).
 `next` is what to dispatch now: retries first, then unstarted core members in
 charter order, as many as the free slots (cap − running). `done` is true when
 every core (and added) member is succeeded or blocked and nothing runs.
+`last_tick` is the driver's newest progress word: its ID's (`fleet-id.sh progress`,
+which `fleet_task_control.py progress` writes with the ID switch on — EPIC T497
+C12), else the record's `progress` from before the switch (`last_tick_src` id |
+record); `report` is that word's `report: <pending | link>` (fleet-epic-run §4).
 `mark` is what the heartbeat stamps the batch as: the parent's short code
 (`T-xxxxx`), else its record `T<n>`.
 
@@ -76,6 +80,8 @@ LINE = re.compile(r"^\s*[-*] \[[ xX]\] \*\*([CR][1-9][0-9]*)\*\*\s+(.+?)\s*$")
 REPO = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s+(?:—|--|-)\s+(.+)$")
 AGENT = re.compile(r"^(.*?)\s*\((codex|claude)\)$")
 HEAD = re.compile(r"^#{2,4}\s+")
+# a closing tick's `report: <pending | link>` (fleet-epic-run §4, issue #852)
+REPORT_RE = re.compile(r"(?:^|·)\s*report:\s*([^\s·]+)")
 FID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 DEPS_HEAD = re.compile(r"^#{2,4}\s+依赖")
 DEP_RANGE = re.compile(r"([CR])([1-9][0-9]*)\s*[–—~-]\s*[CR]?([1-9][0-9]*)")
@@ -406,14 +412,19 @@ def status(parent_ref, cap):
     for m in counted:
         counts[m["state"]] += 1
     done = running == 0 and all(m["state"] in ("succeeded", "blocked") for m in counted)
-    progress = got.get("progress") or {}
+    # the newest tick: the parent's ID's progress word (EPIC T497 C12), else — an ID
+    # with none yet, or no ID — the one its record kept before the switch
+    progress = fam.get("progress") or got.get("progress") or {}
+    last = str(progress.get("summary") or "")
+    rep = REPORT_RE.search(last)
     pshort = str(fam.get("short") or code_of(pid)) if pid else ""
     return dict(parent=parent_ref, parent_id=pid, parent_short=pshort, mark=pshort or parent_ref,
                 ids=fam.get("hub", "none") if pid else "none",
                 title=parent.get("title", ""), short=meta.get("short", ""), repo=meta.get("repo", ""),
                 outcome=parent.get("outcome", ""), cap=cap, running=running, free=free, counts=counts, done=done,
                 members=[{k: v for k, v in m.items() if k != "detail"} for m in members],
-                next=nxt, no_repo=norepo, last_tick=progress.get("summary", ""), summary=kids.get("summary") or {})
+                next=nxt, no_repo=norepo, last_tick=last, last_tick_src=("id" if fam.get("progress") else "record") if last else "",
+                report=rep.group(1) if rep else "", summary=kids.get("summary") or {})
 
 
 def line(s):
@@ -428,7 +439,7 @@ def line(s):
     if s["no_repo"]:
         out += " · 没写仓库 " + " ".join(s["no_repo"])
     if s["done"]:
-        out += " · 核心空了，该写报告"
+        out += " · 核心空了，该写报告" if s.get("report") in ("", "pending") else " · 报告 " + s["report"]
     return out
 
 

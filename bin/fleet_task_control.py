@@ -187,7 +187,7 @@ def progress(pane, summary, state, event="", socket=""):
     if not summary.strip():
         raise ValueError("progress needs a --summary")
     if id_switch_on():
-        raise IDSwitched("progress is no longer recorded on the task record")
+        return id_progress(pane, summary, state, event, socket)
     c = context(pane, socket)
     t = call("get", c["task"])["task"]
     if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"), ("execution_owner", "worker_id"))):
@@ -203,6 +203,21 @@ def progress(pane, summary, state, event="", socket=""):
     if receipt.get("disposition", "progress") not in ("progress", "committed"):
         raise ValueError("progress disposition %s" % receipt.get("disposition"))
     print("RECORDED\ntask: %s\nevent_id: %s" % (r["task"], r["event_id"]))
+    return 0
+
+
+def id_progress(pane, summary, state, event="", socket=""):
+    """With the ID switch on (EPIC T497 C12) the progress word is the window's own
+    ID's: one `progress` event on its ledger, pushed to the hub mirror — the record
+    takes none. `fleet-epic-tick.py status` reads its last_tick there."""
+    import fleet_id
+    fid = launch.option(pane, "@fleet_id", socket) if pane else ""
+    if not fleet_id.is_fid(fid):
+        raise ValueError("this pane carries no ID (@fleet_id)")
+    ev = fleet_id.record_progress(fid, summary.strip(), state, event)
+    if ev:
+        fleet_id.push_later(fid)
+    print("RECORDED\nid: %s\nevent_id: %s" % (fid, event or (ev or {}).get("seq", "-")))
     return 0
 
 

@@ -33,6 +33,11 @@ import (
 //
 // Created only with the fleet module on (EnsureNodes), like every fleet table;
 // the old fleet_tasks is not touched.
+//
+// A `progress` event (EPIC T497 C12) is the window's latest progress word — an
+// EPIC driver's tick, which used to be the task record's `progress`: only the
+// newest is kept (progress · progress_state · progress_at · progress_seq), never a
+// result, so it changes no status.
 const fleetIDsSchema = `
 CREATE TABLE IF NOT EXISTS fleet_ids (
   id           TEXT PRIMARY KEY,
@@ -149,31 +154,40 @@ func NormIDCode(s string) string {
 
 // FleetIDRecord is one ID as the hub mirrors it.
 type FleetIDRecord struct {
-	ID          string          `json:"id"`
-	Short       string          `json:"short"`
-	Owner       string          `json:"-"`
-	EndpointID  string          `json:"-"`
-	Machine     string          `json:"machine"`
-	Login       string          `json:"login"`
-	Window      string          `json:"window,omitempty"`
-	Title       string          `json:"title,omitempty"`
-	Agent       string          `json:"agent,omitempty"`
-	Repo        string          `json:"repo,omitempty"`
-	Issues      []string        `json:"issues"`
-	Body        string          `json:"body,omitempty"`
-	Key         string          `json:"key,omitempty"`
-	Task        string          `json:"task,omitempty"`
-	Parent      string          `json:"parent,omitempty"`
-	Prev        string          `json:"prev,omitempty"`
-	Aliases     []string        `json:"aliases"`
-	Asked       string          `json:"asked,omitempty"`
-	Parked      string          `json:"parked,omitempty"`
-	OpenedAt    int64           `json:"opened_at"`
-	ClosedAt    int64           `json:"closed_at,omitempty"`
-	CloseReason string          `json:"close_reason,omitempty"`
-	Seq         int             `json:"seq"`
-	Natives     []FleetIDNative `json:"natives"`
-	Results     []FleetIDResult `json:"results"`
+	ID          string           `json:"id"`
+	Short       string           `json:"short"`
+	Owner       string           `json:"-"`
+	EndpointID  string           `json:"-"`
+	Machine     string           `json:"machine"`
+	Login       string           `json:"login"`
+	Window      string           `json:"window,omitempty"`
+	Title       string           `json:"title,omitempty"`
+	Agent       string           `json:"agent,omitempty"`
+	Repo        string           `json:"repo,omitempty"`
+	Issues      []string         `json:"issues"`
+	Body        string           `json:"body,omitempty"`
+	Key         string           `json:"key,omitempty"`
+	Task        string           `json:"task,omitempty"`
+	Parent      string           `json:"parent,omitempty"`
+	Prev        string           `json:"prev,omitempty"`
+	Aliases     []string         `json:"aliases"`
+	Asked       string           `json:"asked,omitempty"`
+	Parked      string           `json:"parked,omitempty"`
+	OpenedAt    int64            `json:"opened_at"`
+	ClosedAt    int64            `json:"closed_at,omitempty"`
+	CloseReason string           `json:"close_reason,omitempty"`
+	Seq         int              `json:"seq"`
+	Natives     []FleetIDNative  `json:"natives"`
+	Results     []FleetIDResult  `json:"results"`
+	Progress    *FleetIDProgress `json:"progress,omitempty"`
+}
+
+// FleetIDProgress is an ID's newest progress word (a `progress` event).
+type FleetIDProgress struct {
+	Seq     int    `json:"seq"`
+	State   string `json:"state,omitempty"`
+	Summary string `json:"summary"`
+	At      int64  `json:"at"`
 }
 
 // FleetIDNative is one native segment (a Claude session / Codex thread).
@@ -222,6 +236,13 @@ type FleetIDPushed struct {
 func (s *Store) ensureFleetIDs() error {
 	if _, err := s.write.Exec(s.d.ddl(fleetIDsSchema)); err != nil {
 		return fmt.Errorf("create fleet_ids tables: %w", err)
+	}
+	for _, c := range []struct{ col, spec string }{{"progress", "TEXT NOT NULL DEFAULT ''"},
+		{"progress_state", "TEXT NOT NULL DEFAULT ''"}, {"progress_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"progress_seq", "INTEGER NOT NULL DEFAULT 0"}} {
+		if err := s.addColumn("fleet_ids", c.col, c.spec); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -497,6 +518,11 @@ func (s *Store) applyIDEvent(tx *sql.Tx, r *idRow, ev map[string]any, seq int, t
 		if w := evStr(ev, "window", 32); w != "" {
 			r.Window = w
 		}
+	case "progress":
+		// The newest progress word (C12): kept on the row, never a result.
+		_, err := tx.Exec(`UPDATE fleet_ids SET progress = ?, progress_state = ?, progress_at = ?, progress_seq = ? WHERE id = ?`,
+			evStr(ev, "summary", 2000), evStr(ev, "state", 20), ts, seq, r.ID)
+		return err
 	case "short":
 		// The node writing down the code the hub gave it: only ever longer.
 		if c := NormIDCode(evStr(ev, "short", 32)); len(c) > len(r.Short) && strings.HasPrefix(r.code, c) {
@@ -512,15 +538,21 @@ func (s *Store) applyIDEvent(tx *sql.Tx, r *idRow, ev map[string]any, seq int, t
 // sql.ErrNoRows when there is none.
 func (s *Store) FleetIDOf(owner, id string) (FleetIDRecord, error) {
 	var r idRow
+	var pg FleetIDProgress
 	err := s.read.QueryRow(`SELECT id, owner, code, short, endpoint_id, machine, login, win, title, agent, repo, issues,
-		body, key, task, parent, prev, aliases, asked, parked, opened_at, closed_at, close_reason, seq
+		body, key, task, parent, prev, aliases, asked, parked, opened_at, closed_at, close_reason, seq,
+		progress, progress_state, progress_at, progress_seq
 		FROM fleet_ids WHERE id = ? AND owner = ?`, id, owner).Scan(&r.ID, &r.Owner, &r.code, &r.Short, &r.EndpointID,
 		&r.Machine, &r.Login, &r.Window, &r.Title, &r.Agent, &r.Repo, &r.issues, &r.Body, &r.Key, &r.Task,
-		&r.Parent, &r.Prev, &r.aliases, &r.Asked, &r.Parked, &r.OpenedAt, &r.ClosedAt, &r.CloseReason, &r.Seq)
+		&r.Parent, &r.Prev, &r.aliases, &r.Asked, &r.Parked, &r.OpenedAt, &r.ClosedAt, &r.CloseReason, &r.Seq,
+		&pg.Summary, &pg.State, &pg.At, &pg.Seq)
 	if err != nil {
 		return FleetIDRecord{}, err
 	}
 	rec := r.FleetIDRecord
+	if pg.Seq > 0 {
+		rec.Progress = &pg
+	}
 	rec.Short = "T-" + r.Short
 	_ = json.Unmarshal([]byte(r.issues), &rec.Issues)
 	_ = json.Unmarshal([]byte(r.aliases), &rec.Aliases)
