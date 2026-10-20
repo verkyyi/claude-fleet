@@ -31,6 +31,12 @@
 #      minting), its credential reaches the agent, its --wrap is the launcher (the
 #      pid the agent runs as / under), fd 7 is not left to the agent — and
 #      FLEET_LAUNCH_EARLY=0 mints in place with the same result; both agents
+#   H  the agent yields to the 看台 (T691): fleet_launch_yield is `taskpolicy -c
+#      utility|background` on a Mac, `nice -n 5|15` elsewhere, nothing for 0/off;
+#      on Linux the agent itself runs at nice 5 and with FLEET_AGENT_YIELD=0 at its
+#      parent's nice — both agents, the argv the agent sees unchanged; Claude's
+#      commands and hooks go through bin/fleet-tool-yield.sh (CLAUDE_CODE_SHELL_PREFIX,
+#      FLEET_TOOL_YIELD), never over a prefix of the person's own
 #
 # Hermetic: a temp install root (every bin/ file a symlink, the real conf/ hooks/
 # commands/ mod/), a temp HOME and FLEET_CONF_DIR, fake claude / codex / tmux.
@@ -107,6 +113,8 @@ for x in "\$@"; do printf '[%s]\n' "\$x"; done > "$WORK/argv.$a"
 { env | grep -E '^(CLAUDE_CODE_OAUTH_TOKEN|FLEET_CODEX_SESSION_CRED)='
   printf 'pid=%s ppid=%s\n' "\$\$" "\$PPID"
   if (exec 0<&7) 2>/dev/null; then echo fd7=open; else echo fd7=closed; fi; } > "$WORK/env.$a"
+ps -o nice= -p \$\$ 2>/dev/null | tr -d ' ' > "$WORK/nice.$a"
+printf '%s|%s' "\${CLAUDE_CODE_SHELL_PREFIX-}" "\${FLEET_TOOL_YIELD-}" > "$WORK/prefix.$a"
 EOF
   chmod +x "$WORK/fake/$a"
 done
@@ -128,7 +136,7 @@ launch() {
   [ "${1:-}" = -- ] && shift
   rm -f "$WORK"/argv.* "$WORK"/calls.* "$WORK/stamps" "$WORK/err"
   # shellcheck disable=SC2046  # word-split on purpose: one variable name per word
-  ( unset $(env | sed -n 's/^\(FLEET_[A-Za-z0-9_]*\)=.*/\1/p') TMUX CODEX_HOME CLAUDE_CONFIG_DIR CLAUDE_CODE_SUBAGENT_MODEL
+  ( unset $(env | sed -n 's/^\(FLEET_[A-Za-z0-9_]*\)=.*/\1/p') TMUX CODEX_HOME CLAUDE_CONFIG_DIR CLAUDE_CODE_SUBAGENT_MODEL CLAUDE_CODE_SHELL_PREFIX
     cd "$WORK/proj" || exit 2
     export PATH="$WORK/fake:/usr/bin:/bin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/cfg" TMUX_PANE=%0 \
            FLEET_PRETRUST=0 FLEET_CODEX_VERSION_CHECK=0 FLEET_STATUS_7501=0 FLEET_CODEX_NATIVE_SKILLS=0
@@ -257,5 +265,38 @@ for early in 1 0; do
   done
 done
 ok "G the mint runs beside the launch (credential to the agent, --wrap the launcher, no fd 7); FLEET_LAUNCH_EARLY=0 the same — both agents"
+# ---- H: the agent yields to the 看台 (T691) ------------------------------------------------------
+yl() { ( unset FLEET_AGENT_YIELD; [ -n "$2" ] && export FLEET_AGENT_YIELD="$2"
+         OSTYPE=$1; BIN="$BIN"; eval "$(sed -n '/^_fl_yield=()$/,/^}$/p' "$BIN/fleet-launch-lib.sh")"
+         fleet_launch_yield; printf '%s' "${_fl_yield[*]-}" ); }
+[ "$(yl darwin24 '')" = "/usr/sbin/taskpolicy -c utility" ] || [ ! -x /usr/sbin/taskpolicy ] || fail "H a Mac: [$(yl darwin24 '')]"
+[ "$(yl darwin24 background)" = "/usr/sbin/taskpolicy -c background" ] || [ ! -x /usr/sbin/taskpolicy ] || fail "H a Mac, background"
+[ "$(yl linux-gnu '')" = "nice -n 5" ] && [ "$(yl linux-gnu background)" = "nice -n 15" ] \
+  && [ "$(yl linux-gnu bogus)" = "nice -n 5" ] || fail "H linux: [$(yl linux-gnu '')] [$(yl linux-gnu background)]"
+for off in 0 off none; do [ -z "$(yl linux-gnu $off)" ] && [ -z "$(yl darwin24 $off)" ] || fail "H $off still yields"; done
+ok "H fleet_launch_yield: taskpolicy -c on a Mac, nice elsewhere, nothing for 0/off"
+# …and what Claude runs, one class lower again: CLAUDE_CODE_SHELL_PREFIX (Claude only —
+# Codex has no such prefix); FLEET_TOOL_YIELD=0 or a prefix of the person's own: none
+IBIN=$(cd "$INST/bin" && pwd)
+fresh; launch -- --agent claude x
+[ "$(cat "$WORK/prefix.claude")" = "$IBIN/fleet-tool-yield.sh|background" ] || fail "H claude's CLAUDE_CODE_SHELL_PREFIX: [$(cat "$WORK/prefix.claude")]"
+fresh; launch FLEET_TOOL_YIELD=utility -- --agent claude x
+[ "$(cat "$WORK/prefix.claude")" = "$IBIN/fleet-tool-yield.sh|utility" ] || fail "H FLEET_TOOL_YIELD=utility: [$(cat "$WORK/prefix.claude")]"
+fresh; launch FLEET_TOOL_YIELD=0 -- --agent claude x
+[ "$(cat "$WORK/prefix.claude")" = "|0" ] || fail "H FLEET_TOOL_YIELD=0 still set a prefix: [$(cat "$WORK/prefix.claude")]"
+fresh; launch CLAUDE_CODE_SHELL_PREFIX=/opt/mine.sh -- --agent claude x
+[ "$(cat "$WORK/prefix.claude")" = "/opt/mine.sh|" ] || fail "H the person's own prefix was replaced: [$(cat "$WORK/prefix.claude")]"
+ok "H Claude's commands go through fleet-tool-yield.sh; 0 or the person's own prefix: untouched"
+case "${OSTYPE:-}" in darwin*) ;; *)
+  base=$(ps -o nice= -p $$ | tr -d ' ')
+  for a in $AGENTS; do
+    fresh; launch -- --agent "$a" x
+    [ "$(cat "$WORK/nice.$a" 2>/dev/null)" = $((base + 5)) ] || fail "H $a runs at nice [$(cat "$WORK/nice.$a" 2>/dev/null)], want $((base + 5))" "$(cat "$WORK/err")"
+    grep -qx '\[x\]' "$WORK/argv.$a" || fail "H $a: the seed did not reach the agent" "$(argv "$a")"
+    fresh; launch FLEET_AGENT_YIELD=0 -- --agent "$a" x
+    [ "$(cat "$WORK/nice.$a" 2>/dev/null)" = "$base" ] || fail "H $a with FLEET_AGENT_YIELD=0 runs at nice [$(cat "$WORK/nice.$a" 2>/dev/null)]"
+  done
+  ok "H the agent itself runs at nice +5 (0: its parent's), both agents" ;;
+esac
 
 printf 'fleet-launch-lib selftest OK: %s checks (T620, EPIC T580 C4)\n' "$pass"

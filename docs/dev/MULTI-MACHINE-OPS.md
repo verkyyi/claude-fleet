@@ -364,6 +364,48 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
 | 6 | MacBook 连手机热点，连 3 次 | 选路应为 `entry`，没有一次 `relay` |
 | 7 | 收尾：Mac 已在 `entry` 上之后，发起人删掉路由器上旧的 22022 / 22023 两条转发（改约定 3） | 删前删后各连一次 |
 
+## 5⅞⅞⅞⅞. 家机器忙时看台不卡（T691）
+
+**现象**：会话几乎都在 mac-b（10 核 / 16G，平时负载 13–15，忙时 30–50）。满载时 ⌘P 面板起得慢、切会话卡。
+
+**原因**：看台靠的几样——tmux 服务器、sshd、面板的 python——和会话跑的命令（测试、构建、gh）同一档调度，
+满载时一起排队。macOS 上 `nice` 几乎不起作用（实测 p90 仍 345–453 ms），QoS 才有用。
+
+**改法**（`conf/fleet.conf.reference` 两个键，默认开，`0` 回到原样）：
+
+- `FLEET_AGENT_YIELD=utility`：agent 进程本身低一档（Mac `taskpolicy -c utility`，Linux `nice 5`）。只到
+  utility，因为它的屏幕要回显你打的字。
+- `FLEET_TOOL_YIELD=background`：agent **跑的命令**再低一档——`CLAUDE_CODE_SHELL_PREFIX` →
+  `bin/fleet-tool-yield.sh`，Mac `taskpolicy -c background`（只用能效核、磁盘让路；纯 CPU 的命令约慢 3 倍），
+  Linux `nice +10`。fleet 自己的钩子（`bash ~/.claude/fleet/…`）不降，它们写看台显示的状态。你自己设过的
+  `CLAUDE_CODE_SHELL_PREFIX` 不覆盖。Codex 没有这个前缀，只降 agent 那一档。
+- 换家后切到另一台：远端 `select` 的快路只认 `@fleet_id`，而入口给 scratch 会话的 id 是键
+  （`<uuid>/<slug>:scratch-N`），于是 141 次切换里 116 次走了慢路（在忙机器上加载整个 lib，空闲也
+  130–160 ms）。现在慢路解析一次就把「键 → `@fleet_id`」记在 `remote-views/.wid-fid`，快路只在还有
+  活窗口带着这个 id 时用它（20 ms），否则照旧走唯一的解析。
+
+**实测**（mac-b，`fleet-loadgen.sh --force`，每格 60 次，前后交替跑；面板 = 起一个 python 载入
+`fleet_view`，即 `timing/panel.ndjson` 的 boot 段；切换 = 新起 bash 列窗口 + select-window）：
+
+| 条件 | 面板 p50 / p90 / max ms | 切换 p50 / p90 / max ms |
+|---|---|---|
+| 30 个压力进程 + 本机负载 22–28，改前 | 131 / 346 / 789 | 48 / 59 / 77 |
+| 同上，命令经 `fleet-tool-yield.sh`（改后） | 88 / 284 / 433 | 48 / 54 / 71 |
+| 20 个 + 本机负载 30–50：默认档 | 274 / 588 / 796 | 50 / 74 / 114 |
+| 同上：utility | 200 / 654 / 1011 | 50 / 85 / 145 |
+| 同上：background | 71 / 182 / 306 | 34 / 53 / 84 |
+
+负载不高时（20 个压力进程、本机 10 左右）两档都不卡（面板 p90 91 / 111）。内存没法给看台保底：
+macOS 上没有不要 root 的内存预留，这一件没做。
+
+**家放在 mac-a（评估）**：mac-a（15 核 / 64G）当家时面板在 mac-a 起，和 mac-b 忙不忙无关——
+mac-b 压满时仍 p50 44–57 ms；代价是每次切到 mac-b 的会话都要过一条 ssh 通道 + mac-b 上的 `select`：
+链路 1 ms，但 mac-b 的 sshd 每开一个通道偶尔要 100–230 ms。近 24 小时 mac-a 的真实记录：切到 mac-b
+p50 275 / p90 385 / max 507 ms（多半是上面那条慢路），本机切换 p50 15 ms；面板 mac-a p50 93 / max 1073，
+mac-b p50 180 / max 1596。**结论**：不是哪边都更好——家在 mac-a 面板稳、切换多一跳；家在 mac-b
+切换快、面板吃负载（这次的降档已把它压到 300 ms 内）。所以不改默认，「我的连接」的「设为家」照旧是
+你自己选；这位操作者的家本来就在 mac-a，修掉慢路后切换应回到通道本身的 50–130 ms。
+
 ## 6. 速查
 
 | 要做的事 | 命令 / 接口 |

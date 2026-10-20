@@ -632,6 +632,30 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Agent state on your terminal: tmux depth @group=spawn @tier=internal @scope=global @edit=int
 #FLEET_STATUS_REPLAY_DEPTH=3
 
+# FLEET_AGENT_YIELD — agents run one scheduling class below the 看台 (T691). On a
+# full machine the agents took the CPU from the tmux server, sshd and the panel, and
+# ⌘P / a switch stalled behind them. The launcher starts the agent under
+# `taskpolicy -c <level>` on a Mac (a QoS clamp every child inherits; no root),
+# `nice -n 5` (background: 15) elsewhere — the relay in front of it stays as it was.
+# utility (default: the agent's own screen still echoes your typing promptly) ·
+# background (a Mac: E-cores only, throttled disk) · 0 = none, the argv byte for byte
+# as before. Login-wide; read at launch (a running session keeps what it started with).
+# @label=Agents yield to the 看台 (QoS / nice) @group=spawn @tier=internal @scope=global @edit=enum
+#FLEET_AGENT_YIELD=utility
+
+# FLEET_TOOL_YIELD — what a Claude session RUNS yields one class more (T691): every
+# Bash tool command and hook goes through bin/fleet-tool-yield.sh
+# (CLAUDE_CODE_SHELL_PREFIX), a Mac's `taskpolicy -c <level>`, elsewhere nice +10
+# (utility: +5); the fleet's own hooks (~/.claude/fleet/…) keep the agent's class.
+# Measured on mac-b (10 cores, load 30-50 + 20 burners): the panel's start p50 274 ·
+# p90 588 · max 796 ms with the load at the default class, 71 · 182 · 306 with it at
+# background (utility: 200 · 654 · 1011). A CPU-bound command takes ~3× as long on a
+# Mac's E-cores. background (default) · utility · 0 = no prefix. A prefix of your
+# own (CLAUDE_CODE_SHELL_PREFIX) is never replaced. Codex has no such prefix: its
+# commands keep FLEET_AGENT_YIELD's class. Login-wide; read at launch.
+# @label=Agent commands yield to the 看台 @group=spawn @tier=internal @scope=global @edit=enum
+#FLEET_TOOL_YIELD=background
+
 # FLEET_STREAM_RESUME — a turn an API error cut off goes on by itself (issue #4714).
 # «API Error: Connection lost mid-response» (a stream the credential proxy or the
 # upstream cut, a 5xx, overloaded) used to leave the session at its prompt until a
