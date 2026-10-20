@@ -342,6 +342,19 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
     # registered spelling. The context carries the canonical one, or every check
     # against the admission refuses a repo with capitals (issue #4789).
     repo = repo_identity(repo)
+    task = launch.option(pane, "@task")
+    if task and not native_raw and launch.id_switch_on():
+        # EPIC T497 C6: with the ID switch on a task's window opens unclaimed, no
+        # @launch, so it lands here; the start reservation is the claim-less
+        # road the hub refuses in hub mode. The window's accepted record is its
+        # admission (the same check gate() made before the window opened).
+        d = json.loads(launch.option(pane, "@dispatch") or "null")
+        if not isinstance(d, dict) or d.get("task") != task:
+            raise ValueError("task window carries no matching accepted dispatch")
+        t = launch.id_admission(d, ("accepted", "starting", "running"))
+        if repo_identity(t.get("repo", "")) != repo:
+            raise ValueError("accepted task belongs to another repo")
+        os.execvpe(argv[0], argv, os.environ)
     previous = None
     intent = None
     if native_raw:

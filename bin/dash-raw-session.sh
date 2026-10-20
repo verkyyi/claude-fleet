@@ -782,6 +782,10 @@ while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n 
   elif [ -n "${FLEET_LAUNCH:-}" ]; then
     _launch_fid=$(python3 -c 'import json,os; print(json.loads(os.environ["FLEET_LAUNCH"])["worker_id"].split("/")[1])') || exit 1
     stamp="$stamp$(fleet_win_stamp_cmd @launch "$FLEET_LAUNCH" @launch_seed "${tf:-}" @fleet_id "$_launch_fid" @dispatch "$DISPATCH")"
+  elif [ -n "$TASK_REF" ]; then
+    # ID switch on (EPIC T497 C6): no claim, no @launch; the session wrapper's
+    # repo admission reads the accepted dispatch, so it is there before launch
+    stamp="$stamp$(fleet_win_stamp_cmd @dispatch "$DISPATCH" @task "$TASK_REF")"
   fi
   [ -z "${FLEET_AUTHORITY_START:-}" ] || launch="FLEET_AUTHORITY_START='$(printf '%s' "$FLEET_AUTHORITY_START" | sed "s/'/'\\\\''/g")' $launch"
   launch_dir=$wt; [ "$NATIVE_WT" = 0 ] || launch_dir=$MAIN
