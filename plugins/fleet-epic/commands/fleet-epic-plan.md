@@ -9,7 +9,7 @@ description: Turn a theme into a confirmed, two-layer EPIC — one design page f
 PHASE 1 of the EPIC trio (`/fleet-epic-plan` → `/fleet-epic-run` →
 `/fleet-epic-report`). You name a **theme**; this proposes a bounded batch as
 **one design page** you read on your phone or computer, and — **only after you say
-yes** — opens ONE **parent task** on the hub (`T<n>`) whose record holds the
+yes** — opens ONE **parent task** on the hub (its code, `K5H0`) whose record holds the
 batch charter, with every member written into it as its own section. The parent
 task's session IS the batch's driver (`/fleet-epic-run`, started by the same
 call); each member becomes a **child task** of it when the driver dispatches it
@@ -403,8 +403,9 @@ this order:
    - [ ] **R1** <名称>
    ## 依赖顺序
    <the #order table, as a markdown table — a bare `C4` is THIS batch's member;
-    another batch's member carries its parent: `T542 C5` (`T542 C7、C8` — the
-    prefix holds until other words or a `+`), released once that member merged>
+    another batch's member carries its parent's CODE: `YRV3 C5` (`YRV3 C7、C8` —
+    the prefix holds until other words or a `+`; the old `T542 C5` is read one
+    more version), released once that member merged>
    ## 风险与拆分理由
    <the surface risks, then the fold's technical risks + 为什么这样切>
    ## 待决
@@ -453,20 +454,21 @@ this order:
 3. **Open the parent task — it starts the driver** (one call):
    `mcp__fleet-orch__task` with `title` 「EPIC: <主题>」, `body` the charter file's
    content, `agent` `epic-driver`, `spawn: true`, `reap` `loop-end`. Its first
-   stdout line is the parent's `T<n>`; the driver's window is the batch's parent
-   ID (`K3F9` on ⌘P), the one its members' IDs name as `parent` (EPIC T497 C5).
+   stdout line is the parent's code (`K5H0`; its `T<n>` the alias on the next
+   line — EPIC T644); the driver's window goes by the parent's ID, the one its
+   members' IDs name as `parent` (EPIC T497 C5).
    The driver opens bound to that record — it
    reads the charter off it every tick, its children are this batch's members, and
    its final report comes back here. No hub ⇒ exit 3: say so and stop.
-4. **Stamp the page** — the eyebrow's 「提案」 becomes `EPIC <T<n>>`, republished to
+4. **Stamp the page** — the eyebrow's 「提案」 becomes `EPIC <code>` (`EPIC K5H0`), republished to
    the same page (`publish_file` with its `proposal_id`), so the link the operator
    holds says what it became.
 
 ## 6. Report (keep it short)
 
-One line: the parent task `T<n>`, the design page link, core/reserve counts, and
-that its driver is running (`/fleet-epic-run` on `T<n>`; the batch shows on the
-hub's 任务 page and ⌘P as `T<n>` with the driver's latest tick). If you stopped at
+One line: the parent task's code, the design page link, core/reserve counts, and
+that its driver is running (`/fleet-epic-run` on that code; the batch shows on the
+hub's 任务 page and ⌘P by its code with the driver's latest tick). If you stopped at
 step 0 (no hub) or step 4 (awaiting the nod — the page link is the whole report
 then), say that instead, with the reason.
 

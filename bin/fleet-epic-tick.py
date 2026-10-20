@@ -9,8 +9,9 @@ charter, where it stands and what to dispatch next. It reads only the hub — no
 gh, no GitHub, no tmux, no local book — so a driver that lost its context
 re-reads the whole batch with one call.
 
-  fleet-epic-tick.py status [--task T<n>] [--cap N] [--line]
-      --task  the parent; default: this window's own @task (the driver's record)
+  fleet-epic-tick.py status [--task <code|T<n>>] [--cap N] [--line]
+      --task  the parent — its code (K5H0, EPIC T644) or T<n> (read one more
+              version, compat-1v: 下一批删); default: this window's own @task
       --cap   how many members may run at once (default: the charter's cap=, else 4)
       --line  one human line instead of the JSON
 
@@ -83,8 +84,23 @@ record); `report` is that word's `report: <pending | link>` (fleet-epic-run §4)
 `mark` is what the heartbeat stamps the batch as: the parent's short code
 (`K3F9`), else its record `T<n>`.
 
-Exit: 0 read · 1 the hub did not answer · 2 usage / no parent / no charter ·
-3 no hub here (fleet-task-record.sh exit 3).
+By the task's code (EPIC T644 C5). A task's record carries its own ID (`fid`, C1)
+and every session opened for it goes by that ID (C2): a member IS its record's ID,
+and its redo is that ID's next ATTEMPT — `fleet-task-record.sh respawn <code>
+--redo` on the same record, never a new task (`next`'s retry item carries it as
+`respawn`; a record from before C1 — no `fid` — keeps the old road: a new task
+whose body names the failed ID as its `prev`, read one more version). A baton's
+attempts are its ID's (`attempt` on its family row): the record's failure belongs
+to an earlier attempt once a later one runs, each attempt past the first is one
+try used, and the attempt that merges ends the member. Every name the answer gives
+a person is a CODE: `parent` (the parent's, else T<n>; `parent_task` keeps the
+T<n> — compat-1v: 下一批删), each member's `code`, `waits_on` / `outside` naming
+another batch by its parent's code; a dependency cell may write that batch either
+way — `K5H0 C5` (`#K5H0 C5`) or `T542 C5` (compat-1v) — and this batch's own code
+or T<n> as the prefix is the same as none.
+
+Exit: 0 read · 1 the hub did not answer · 2 usage / no parent / no charter (or a
+code naming several tasks) · 3 no hub here (fleet-task-record.sh exit 3).
 """
 import argparse
 import json
@@ -96,6 +112,10 @@ from pathlib import Path
 
 BIN = Path(__file__).resolve().parent
 TREF = re.compile(r"^T[1-9][0-9]{0,9}$")
+# a task's reference as a person writes it: its code (`K5H0`, `#k5h0`), its full ID
+# or T<n> — what fleet-task-record.sh's one resolver reads (EPIC T644 C3)
+TASK_REF = re.compile(r"^(?:T[1-9][0-9]{0,9}|#?[A-Za-z][0-9A-Za-z]{1,25}"
+                      r"|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
 MARK = re.compile(r"<!--\s*fleet:epic\b([^>]*)-->")
 LINE = re.compile(r"^\s*[-*] \[[ xX]\] \*\*([CR][1-9][0-9]*)\*\*\s+(.+?)\s*$")
 REPO = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s+(?:—|--|-)\s+(.+)$")
@@ -105,9 +125,13 @@ HEAD = re.compile(r"^#{2,4}\s+")
 REPORT_RE = re.compile(r"(?:^|·)\s*report:\s*([^\s·]+)")
 FID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 DEPS_HEAD = re.compile(r"^#{2,4}\s+依赖")
-# a dependency cell, token by token: an outside batch's parent (T<n>) or ticket
-# (#<n>) scopes the keys right after it; only these between them keep the scope
-DEP_TOK = re.compile(r"(?<![A-Za-z0-9])(?:(?P<scope>T[1-9][0-9]{0,9}|#[1-9][0-9]*)"
+# a dependency cell, token by token: an outside batch's parent — its code
+# (`K5H0`, `#K5H0`: a letter, then Crockford base32, 4–26 places — EPIC T644 C5) or
+# T<n> (compat-1v) — or a ticket (#<n>) scopes the keys right after it; only these
+# between them keep the scope. A member key (`C12`) is never read as a code.
+CODE_TOK = r"#?(?![CR][0-9]+(?![0-9A-Z]))[A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z]{3,25}(?![0-9A-Za-z])"
+DEP_TOK = re.compile(r"(?<![A-Za-z0-9])(?:(?P<scope>T[1-9][0-9]{0,9}(?![0-9A-Za-z])|#[1-9][0-9]*(?![0-9A-Za-z])|"
+                     + CODE_TOK + r")"
                      r"|(?P<a>[CR])(?P<lo>[1-9][0-9]*)(?:\s*[–—~-]\s*[CR]?(?P<hi>[1-9][0-9]*))?)(?![0-9])")
 DEP_GLUE = re.compile(r"^[\s、,，/:：]*$")
 DEP_LINE = re.compile(r"\*\*依赖\*\*\s*依赖\s*(.*?)(?:·|$)")
@@ -127,6 +151,8 @@ def record(*args):
                        capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     if p.returncode == 3:
         raise Fail(3, "no hub here")
+    if p.returncode == 2 and '"AMBIGUOUS"' in p.stdout:   # a code naming several tasks: never a pick
+        raise Fail(2, "%s names more than one task — name it longer" % (args[-1] if args else ""))
     if p.returncode:
         raise Fail(1, (p.stderr.strip() or "the hub did not answer").splitlines()[-1])
     try:
@@ -139,9 +165,34 @@ def own_task():
     p = subprocess.run(["bash", str(BIN / "fleet-task-record.sh"), "of"], capture_output=True, text=True,
                        timeout=10, stdin=subprocess.DEVNULL)
     t = p.stdout.strip()
-    if p.returncode or not TREF.match(t):
-        raise Fail(2, "this window carries no task (@task): name the parent with --task T<n>")
+    if p.returncode or not TASK_REF.match(t):
+        raise Fail(2, "this window carries no task (@task): name the parent with --task <code>")
     return t
+
+
+def code_rec(task):
+    """A record's written code (EPIC T644 C1): the hub's `short`, else this login's
+    book (fleet_id.task_code — every answer that carried one wrote it), else ''."""
+    c = str(task.get("short") or "")
+    if c or not TREF.match(str(task.get("id") or "")):
+        return c
+    try:
+        return ids().task_code(task["id"])
+    except (ImportError, OSError, ValueError):
+        return ""
+
+
+def is_self(scope, selves):
+    """Is a dependency's prefix this batch's own parent — its T<n>, or its code (any
+    prefix of it as long as the written one, either way round)?"""
+    sc = scope.lstrip("#")
+    for me in selves:
+        if not me:
+            continue
+        if sc == me or (not TREF.match(me) and not TREF.match(sc) and len(sc) >= 4 and
+                        (me.startswith(sc) or sc.startswith(me))):
+            return True
+    return False
 
 
 def id_of(task):
@@ -155,9 +206,13 @@ def id_of(task):
 
 
 def claimed_by(task, fam):
-    """A record's ID: its worker_id's, else — a record the ID switch dispatched
-    stays accepted and is never claimed (EPIC T497 C14) — the family's ID opened
-    on it (`task`), the newest down `prev` when several were."""
+    """A record's ID: the task's own (`fid`, EPIC T644 C1 — every session opened for
+    it goes by it, C2; one that could not take it continues it down `prev`), else its
+    worker_id's, else — a record the ID switch dispatched stays accepted and is never
+    claimed (EPIC T497 C14) — the family's ID opened on it (`task`), the newest down
+    `prev` when several were."""
+    if FID.match(str(task.get("fid") or "")):
+        return task["fid"]
     fid = id_of(task)
     if fid or not task.get("id"):
         return fid
@@ -282,16 +337,20 @@ def detail(text, key):
 
 
 def dep_refs(text, self_ref=""):
-    """[(scope, key)] in order: scope "" for a bare key (this batch), `T<n>` for
-    another batch's member, `#<n>` for a ticket's. `self_ref` (this batch's own
-    T<n>) written as a prefix is the same as none."""
+    """[(scope, key)] in order: scope "" for a bare key (this batch), a code
+    (`K5H0`, the `#` dropped) or `T<n>` for another batch's member, `#<n>` for a
+    ticket's. `self_ref` (this batch's own T<n> and / or code — a string or a tuple)
+    written as a prefix is the same as none."""
+    selves = (self_ref,) if isinstance(self_ref, str) else tuple(self_ref)
     out, scope, end = [], "", 0
     for m in DEP_TOK.finditer(text):
         if not DEP_GLUE.match(text[end:m.start()]):
             scope = ""
         end = m.end()
         if m.group("scope"):
-            scope = "" if m.group("scope") == self_ref else m.group("scope")
+            sc = m.group("scope")
+            sc = sc if re.match(r"^#[0-9]", sc) else sc.lstrip("#")
+            scope = "" if is_self(sc, selves) else sc
             continue
         a, lo, hi = m.group("a"), int(m.group("lo")), int(m.group("hi") or m.group("lo"))
         out += [(scope, "%s%d" % (a, i)) for i in range(lo, hi + 1)]
@@ -323,7 +382,7 @@ def parse_deps(text, members, self_ref=""):
     for k, cell in deps.items():
         refs = list(dict.fromkeys(dep_refs(cell, self_ref)))
         got = [x for sc, x in refs if not sc and x in known and x != k]
-        far = [(sc, x) for sc, x in refs if sc.startswith("T")]
+        far = [(sc, x) for sc, x in refs if sc and not sc.startswith("#")]
         if got:
             out[k] = got
         if far:
@@ -332,18 +391,21 @@ def parse_deps(text, members, self_ref=""):
 
 
 def outside_done(ext):
-    """{(T<n>, key): True when that batch's member succeeded} — each outside parent
-    read the way this batch is (batch_of + judge: a redo's newest baton, an ID's
-    result the record does not carry yet); an unreadable one counts as not done
-    (waited on)."""
-    done = {}
+    """({(ref, key): True when that batch's member succeeded}, {ref: its code}) —
+    each outside parent (written as its code or T<n>) read the way this batch is
+    (batch_of + judge: a redo's newest attempt or baton, an ID's result the record
+    does not carry yet); an unreadable one counts as not done (waited on), named as
+    written."""
+    done, names = {}, {}
     for ref in sorted({sc for refs in ext.values() for sc, _ in refs}):
         try:  # the parent's record only names its ID; its children are the batch
             parent = record("get", ref).get("task") or {}
         except (Fail, OSError, subprocess.SubprocessError):
             parent = {}
+        names[ref] = code_rec(parent) if parent.get("id") else ref
+        names[ref] = names[ref] or ref
         try:
-            _, children, _, _, rows, _ = batch_of(ref, parent)
+            _, children, _, _, rows, _ = batch_of(parent.get("id") or ref, parent)
         except (Fail, OSError, subprocess.SubprocessError):
             continue
         by_key = {}
@@ -354,7 +416,7 @@ def outside_done(ext):
         for k, kids in by_key.items():
             if judge(dict(key=k), kids, rows)["state"] == "succeeded":
                 done[(ref, k)] = True
-    return done
+    return done, names
 
 
 def ids():
@@ -395,7 +457,8 @@ def batch_of(parent_ref, parent):
     # the parent's ID: its record's worker_id, else — a record the ID switch never
     # claims — the ID this machine opened for it, where its line starts (C18)
     pid = id_of(parent) or task_root(parent_ref)
-    fam = family_of(pid, [i for i in (id_of(c) for c in children) if i])
+    seeds = [i for c in children for i in (str(c.get("fid") or ""), id_of(c)) if FID.match(i)]
+    fam = family_of(pid, list(dict.fromkeys(seeds)))
     rows = [r for r in fam.get("ids") or [] if isinstance(r, dict) and FID.match(str(r.get("id", "")))]
     line = [x for x in fam.get("lineage") or [pid] if x]
     children += adopted(rows, line, {c.get("id") for c in children})
@@ -419,13 +482,21 @@ def child_pr(child):
 
 def batons_of(kids, fam):
     """A member's chain: its records oldest first, each followed by the IDs that
-    continued it down `prev` (a redo, a 「从这一段继续」) — newest last."""
+    continued it down `prev` (an old-road redo, a 「从这一段继续」) — newest last. A
+    baton is one ID; its `attempts` are that ID's (EPIC T644 C5: a redo on the
+    task's own ID is its next attempt, not a new baton)."""
     rows = {r["id"]: r for r in fam}
     placed = set()
     out = []
 
-    def add(task, outcome, pr, fid, view=None):
+    def add(task, outcome, pr, fid, view=None, code="", rec_outcome=""):
         row = rows.get(fid) if fid else None
+        att = (row or {}).get("attempt")
+        att = att if isinstance(att, int) and att > 0 else 1
+        if row and att > 1 and outcome in FAILED:
+            # the record's failure is an earlier attempt's: the ID's current attempt
+            # (its family row reads only that one's results — C2) is where it stands
+            outcome = ""
         if not outcome and row:
             # exited = closed with no result; an ID still open whose window is gone
             # is the start word's to judge (T642): restarted on its record, never a new T
@@ -434,8 +505,15 @@ def batons_of(kids, fam):
                 ("exited" if row.get("state") == "exited" and not still_open else "")
         if not pr and row:
             pr = str((row.get("result") or {}).get("pr") or "")
-        out.append(dict(task=task, outcome=outcome, pr=pr, id=fid, short=(row or {}).get("short", "") or code_of(fid),
-                        prev=(row or {}).get("prev", ""), _view=view, _row=row))
+        short = (row or {}).get("short", "") or code or code_of(fid)
+        if not code and TREF.match(str(task or "")):
+            try:
+                code = ids().task_code(task)
+            except (ImportError, OSError, ValueError):
+                code = ""
+        out.append(dict(task=task, code=code or "", outcome=outcome, pr=pr, id=fid, short=short,
+                        prev=(row or {}).get("prev", ""), attempts=att, rec_outcome=rec_outcome,
+                        _view=view, _row=row))
         if fid:
             placed.add(fid)
             for r in fam:
@@ -447,7 +525,7 @@ def batons_of(kids, fam):
         fid = claimed_by(c, fam)
         if fid in placed:
             continue
-        add(c.get("id"), c.get("outcome") or "", child_pr(c), fid, c.get("_view"))
+        add(c.get("id"), c.get("outcome") or "", child_pr(c), fid, c.get("_view"), code_rec(c), c.get("outcome") or "")
     return out
 
 
@@ -455,10 +533,14 @@ def judge(member, kids, fam=()):
     tasks = batons_of(kids, list(fam))
     member["tasks"] = tasks
     won = [t for t in tasks if t["outcome"] == "succeeded"]
-    failed = [t for t in tasks if t["outcome"] in FAILED]
+    # tries used: every failed baton, and every attempt of an ID past its first (a
+    # redo on the task's own ID — EPIC T644 C5)
+    failed = sum(1 for t in tasks if t["outcome"] in FAILED) + sum(t["attempts"] - 1 for t in tasks)
     last = tasks[-1] if tasks else {}
     member.update(id=last.get("id", ""), short=last.get("short", ""),
-                  ids=[dict(id=t["id"], short=t["short"], task=t["task"], prev=t["prev"], outcome=t["outcome"])
+                  code=last.get("code", "") or last.get("short", ""), attempt=last.get("attempts", 1),
+                  ids=[dict(id=t["id"], short=t["short"], code=t["code"], task=t["task"], prev=t["prev"],
+                            attempt=t["attempts"], outcome=t["outcome"])
                        for t in tasks if t["id"]])
     # a running baton is judged by its agent, not only its record (T642): one that
     # never came up, or went down, is `stalled` — with what to do about it
@@ -470,29 +552,44 @@ def judge(member, kids, fam=()):
         t.pop("_row", None)
     if won:
         member.update(state="succeeded", task=won[0]["task"], pr=won[0]["pr"], id=won[0]["id"] or member["id"],
-                      short=won[0]["short"] or member["short"])
+                      short=won[0]["short"] or member["short"], code=won[0]["code"] or won[0]["short"] or member["code"])
     elif tasks and not last["outcome"] and word:
         member.update(state="stalled", task=last["task"],
-                      stall=dict(word, hint=ids().start_hint(word["word"], last["task"], last["id"], last["short"])))
+                      stall=dict(word, hint=ids().start_hint(word["word"], last["code"] or last["task"], last["id"],
+                                                              last["short"])))
     elif tasks and not last["outcome"]:
         member.update(state="running", task=last["task"])
-    elif any(t["outcome"] == "cancelled" for t in tasks) or len(failed) >= 2:
+    elif any(t["outcome"] == "cancelled" for t in tasks) or failed >= 2:
         member.update(state="blocked", task=last["task"])
     elif failed:
         member.update(state="retry", task=last["task"])
     else:
         member.update(state="unstarted", task="")
+    if member.get("state") == "retry":
+        member["redo"] = redo_of(last)
     return member
 
 
-def hold_on_deps(members, deps, ext=None, ext_done=None):
+def redo_of(last):
+    """How a failed member goes again (EPIC T644 C5): on its OWN record, its next
+    attempt — `fleet-task-record.sh respawn <code> --redo` (a record its ID's result
+    failed; `respawn` alone for one left open by an ID that closed with no result) —
+    when the record has a code; '' for one from before C1 (the old road: a new task,
+    prev = the failed ID)."""
+    t, code = str(last.get("task") or ""), str(last.get("code") or "")
+    if not code or not TREF.match(t):
+        return ""
+    return "fleet-task-record.sh respawn %s%s" % (code, " --redo" if last.get("rec_outcome") in FAILED else "")
+
+
+def hold_on_deps(members, deps, ext=None, ext_done=None, names=None):
     """An unstarted member whose dependencies have not all succeeded waits; one whose
     dependency is blocked is blocked too. Another batch's member (`ext`) holds it
     until `ext_done` says it succeeded. A cycle among this batch's own members
     (everything waiting, nothing to run) is let through rather than stalled — never
     a member still waiting on another batch, directly or through this batch's
     members it waits on: both halves must hold before a member is due."""
-    ext, ext_done = ext or {}, ext_done or {}
+    ext, ext_done, names = ext or {}, ext_done or {}, names or {}
     by = {m["key"]: m for m in members}
     for _ in range(len(members) + 1):
         moved = False
@@ -502,7 +599,7 @@ def hold_on_deps(members, deps, ext=None, ext_done=None):
             ds = [by[d] for d in deps.get(m["key"], []) if d in by]
             stuck = [d["key"] for d in ds if d["state"] == "blocked"]
             open_ = [d["key"] for d in ds if d["state"] != "succeeded"]
-            open_ += ["%s %s" % r for r in ext.get(m["key"], []) if not ext_done.get(tuple(r))]
+            open_ += ["%s %s" % (names.get(r[0], r[0]), r[1]) for r in ext.get(m["key"], []) if not ext_done.get(tuple(r))]
             if stuck:
                 new = dict(state="blocked", blocked_by=stuck)
             elif open_:
@@ -537,22 +634,25 @@ def dispatch_of(parent, member):
     title = "%s · %s" % (member["key"], member["title"])
     if len(title) > TITLE_MAX:
         title = title[:TITLE_MAX - 1] + "…"
-    body = ["父任务 %s（%s）的成员 %s：%s。" % (parent["id"], parent.get("title", ""), member["key"], member["title"]),
+    pname = code_rec(parent) or parent["id"]
+    body = ["父任务 %s（%s）的成员 %s：%s。" % (pname, parent.get("title", ""), member["key"], member["title"]),
             "做完开 PR，门禁绿了自己合并，然后 report merged；做不成就 report failed 写清原因。"]
     if member.get("detail"):
         body += ["", member["detail"]]
     retry = member["state"] == "retry"
     if retry:
-        who = member["task"] or member.get("short") or "上一棒"
-        if member.get("short") and member["task"]:
-            who = "%s，编号 %s" % (member["task"], member["short"])
+        who = member.get("code") or member["task"] or member.get("short") or "上一棒"
         body += ["", "这是重试：上一次（%s）失败了，先读它的结果再动手。" % who]
         if member.get("id"):
             # the spawner reads this into the new window's ledger as its prev
             # (dash-raw-session.sh): the redo is the next baton of the same member
             body += ["<!-- fleet:prev %s -->" % member["id"]]
+    # a retry on its own record keeps its code (EPIC T644 C5): `respawn` is the whole
+    # dispatch — no new task; `body` / `prev` are the old road's (a record with no code)
     return dict(key=member["key"], title=title, repo=member["repo"], agent=member["agent"],
-                retry_of=member["task"] if retry else "", prev=member.get("id", "") if retry else "",
+                retry_of=(member.get("code") or member["task"]) if retry else "",
+                prev=member.get("id", "") if retry else "",
+                respawn=member.get("redo", "") if retry else "",
                 body="\n".join(body))
 
 
@@ -561,6 +661,9 @@ def status(parent_ref, cap):
     parent = got.get("task") or {}
     if parent.get("authority_version") != 1:
         raise Fail(2, "%s is not an authoritative task: an EPIC is a parent task opened by /fleet-epic-plan" % parent_ref)
+    # the record answers to its code too: read on by its T<n>, name it by its code
+    parent_ref = parent.get("id") if TREF.match(str(parent.get("id") or "")) else parent_ref
+    pcode = code_rec(parent)
     text = charter_of(parent)
     meta, members = parse_charter(text)
     if not members:
@@ -580,12 +683,13 @@ def status(parent_ref, cap):
                                 layer="added", detail=""))
     for m in members:
         judge(m, by_key.get(m["key"], []), rows)
-    deps, ext = parse_deps(text, members, parent_ref)
-    ext_done = outside_done(ext)
-    hold_on_deps(members, deps, ext, ext_done)
+    deps, ext = parse_deps(text, members, (parent_ref, pcode))
+    ext_done, names = outside_done(ext)
+    hold_on_deps(members, deps, ext, ext_done, names)
     for m in members:   # another batch's members it depends on, and whether each merged
         if ext.get(m["key"]):
-            m["outside"] = [dict(ref="%s %s" % r, done=bool(ext_done.get(tuple(r)))) for r in ext[m["key"]]]
+            m["outside"] = [dict(ref="%s %s" % (names.get(r[0], r[0]), r[1]), done=bool(ext_done.get(tuple(r))))
+                            for r in ext[m["key"]]]
     if cap is None:
         try:
             cap = int(meta.get("cap", "4"))
@@ -610,20 +714,23 @@ def status(parent_ref, cap):
     last = str(progress.get("summary") or "")
     rep = REPORT_RE.search(last)
     pshort = str(fam.get("short") or code_of(pid)) if pid else ""
-    return dict(parent=parent_ref, parent_id=pid, parent_short=pshort, mark=pshort or parent_ref, lineage=line,
+    pshort = pcode if pcode and pid == parent.get("fid") else pshort
+    return dict(parent=pcode or parent_ref, parent_task=parent_ref,   # compat-1v: 下一批删 (parent_task)
+                parent_id=pid, parent_short=pshort, mark=pshort or pcode or parent_ref, lineage=line,
                 ids=fam.get("hub", "none") if pid else "none",
                 title=parent.get("title", ""), short=meta.get("short", ""), repo=meta.get("repo", ""),
                 outcome=parent.get("outcome", ""), cap=cap, running=running, free=free, counts=counts, done=done,
                 members=[{k: v for k, v in m.items() if k != "detail"} for m in members],
                 next=nxt, no_repo=norepo,
-                stalled=[dict(key=m["key"], task=m.get("task", ""), short=m.get("short", ""), **m["stall"]) for m in stalled],
+                stalled=[dict(key=m["key"], task=m.get("task", ""), code=m.get("code", ""), short=m.get("short", ""),
+                              **m["stall"]) for m in stalled],
                 last_tick=last, last_tick_src=("id" if fam.get("progress") else "record") if last else "",
                 report=rep.group(1) if rep else "", summary=kids.get("summary") or {})
 
 
 def line(s):
     c = s["counts"]
-    head = s["parent"] + (" (%s)" % s["parent_short"] if s.get("parent_short") else "")
+    head = s["parent"] + (" (%s)" % s["parent_short"] if s.get("parent_short") and s["parent_short"] != s["parent"] else "")
     out = "%s · 核心 %d：合 %d · 在跑 %d · 重试 %d · 卡住 %d · 未开始 %d · 空位 %d/%d" % (
         head, c["core"], c["succeeded"], c["running"], c["retry"], c["blocked"], c["unstarted"], s["free"], s["cap"])
     if c.get("waiting"):
@@ -632,7 +739,8 @@ def line(s):
         out += " · %s %s（%s）→ %s" % (st["key"], "未起来" if st["word"] == "not_started" else "已掉",
                                        st["why"], st["hint"])
     if s["next"]:
-        out += " · 该派 " + " ".join(n["key"] for n in s["next"])
+        out += " · 该派 " + " ".join(n["key"] + ("（%s 重做）" % n["retry_of"] if n.get("respawn") else "")
+                                    for n in s["next"])
     if s["no_repo"]:
         out += " · 没写仓库 " + " ".join(s["no_repo"])
     if s["done"]:
@@ -652,9 +760,9 @@ def main(argv=None):
             for w in (a.split(None, 1) if a.startswith("--") and " " in a.strip() else [a])]
     a = p.parse_args(argv)
     try:
-        ref = a.task or own_task()
-        if not TREF.match(ref):
-            raise Fail(2, "--task wants T<n>, got %r" % ref)
+        ref = (a.task or own_task()).lstrip("#")
+        if not TASK_REF.match(ref):
+            raise Fail(2, "--task wants the parent's code (or T<n>), got %r" % ref)
         s = status(ref, a.cap)
     except Fail as e:
         print("fleet-epic-tick: %s" % e, file=sys.stderr)

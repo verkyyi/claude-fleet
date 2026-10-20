@@ -7,14 +7,15 @@ description: What the batch actually did, as a page you can read — 改动前 /
 <!-- fleet skill · owner: hub -->
 
 PHASE 3 of the EPIC trio. Reconstructs a finished (or abandoned) EPIC from the
-hub — its parent task (`T<n>`, the charter and the driver's ticks) and its child
+hub — its parent task (its code `K5H0`, the charter and the driver's ticks) and its child
 tasks (the members' results) — plus the fleet's own records, renders a
 reader-friendly HTML page, **publishes it to 活页 privately and pushes it to the
 operator's WeChat**, and writes the link back onto the parent task (issue #4957).
 Nothing is read from or written to GitHub issues; a member's PR is linked as its
 child task recorded it.
 
-**Argument** (`$ARGUMENTS`): the parent task `T<n>`. Optional — with none, this
+**Argument** (`$ARGUMENTS`): the parent task's code (`T<n>` read one more version).
+Optional — with none, this
 session's own task (`fleet-task-record.sh of`: the driver's closing tick runs it
 that way). Works on any past EPIC, not just the one that just ended, so a report
 can be re-run after the fact.
@@ -30,21 +31,22 @@ same code path, not a special case.
 **Re-run it in two weeks.** Most of what a batch was *for* cannot be read on the
 day it ends — a metric with a 「2 周」 horizon is still blank when the last PR
 merges. That is not a reason to skip the metric or to invent one: write 「还读不
-出来，⟨date⟩ 再看」, and on that date run `/fleet-epic-report T<n>` again. Say this at
+出来，⟨date⟩ 再看」, and on that date run `/fleet-epic-report <code>` again. Say this at
 the bottom of the page too, with the date, so the operator knows to come back.
 
 ## 0. Resolve the parent (run FIRST, every time)
 
 ```sh
-P=<the T<n> argument, or empty>
+P=<the code argument, or empty>
 [ -n "$P" ] || P=$(bash ~/.claude/fleet/bin/fleet-task-record.sh of) || P=''
 echo "parent=${P:-none}"
 python3 ~/.claude/fleet/bin/fleet-epic-tick.py status --task "$P"          # the members, their results, their PRs
 bash ~/.claude/fleet/bin/fleet-task-record.sh get "$P"                       # the charter (request_payload.body); the last tick is the status' last_tick
 ```
 
-- **`parent=none`** → ask which `T<n>` and stop; never guess.
-- **The tick exits 3** (no hub) or **2** (not an EPIC parent) → say so and stop.
+- **`parent=none`** → ask which task and stop; never guess.
+- **The tick exits 3** (no hub) or **2** (not an EPIC parent, or a code naming
+  several tasks) → say so and stop.
 - **Exits 1** (the hub did not answer) → the report cannot be rebuilt now: say so;
   a driver leaves its `report: pending` standing.
 
@@ -66,10 +68,11 @@ bash ~/.claude/fleet/bin/fleet-task-record.sh get "$P"                       # t
 - **The members**: every member `fleet-epic-tick.py status` lists — the charter's
   core / reserve plus any child added within scope — with its `state` (succeeded ·
   blocked · retry · running · waiting · unstarted), its child tasks (a retried
-  member has two), its PR (the child's recorded result), and its **IDs** (EPIC T497
-  C5): `ids` lists every baton's short code `K3F9` oldest first — a redo is a new
-  ID whose `prev` names the one it replaced — and `short` is the newest. For a member's why, read its
-  child's record (`fleet-task-record.sh get <T<m>>`: outcome, evidence). Its
+  member from before the switch has two), its PR (the child's recorded result),
+  its `code` — the member's one name (EPIC T644: a redo keeps it, its `attempt`
+  says 第几次) — and, for a pre-switch batch, its `ids` (every baton oldest first,
+  a redo a new ID whose `prev` names the one it replaced). For a member's why, read its
+  child's record (`fleet-task-record.sh get <code>`: outcome, evidence). Its
   charter section carries a **上线证据** line (issue #809): the evidence the
   worker was asked to leave — a URL, a command's output, a pane — and what to look
   for per member (issue #810).
@@ -130,7 +133,7 @@ step 4 lists; the report takes five of them):
 - **Few words** — a section lede is one sentence or nothing.
 - **Execution detail is folded** — PR numbers, merge times, 占用时长, 依赖,
   来源单号, the whole of `#ops`.
-- **No keys on the surface** — `C1` / `R1`, task `T<m>` and PR numbers live in a
+- **No keys on the surface** — `C1` / `R1`, a task's code and PR numbers live in a
   card's 技术细节 (its 编号 / 来源 and PR fields); `#delivered`, `#gaps` and
   every card title name the member by its **name**.
 
@@ -143,7 +146,7 @@ reader never has to open a card to learn something did not ship.
 while its session still runs a `/loop` (watching production, a metric, a deploy).
 Merged is delivered — it counts as done in the band — but the reader must see that
 something of this batch is still running: a succeeded member whose child's live
-word (`fleet-task-record.sh get <T<m>>` → `live.state`) reads `looping` →
+word (`fleet-task-record.sh get <code>` → `live.state`) reads `looping` →
 pill 「已合并，仍在循环」; anything else → 「已合并」.
 
 What earns its place, in page order:
@@ -179,8 +182,8 @@ What earns its place, in page order:
      指标」. Do **not** back-fill a baseline — see step 1.
 3. **成员** (`#members`) — **the same card as the design page**: one line until
    tapped (name · one sentence · status pill), then 目标 · 为谁 · 解决什么 ·
-   怎么算成功 with the `.proof` grid; 编号 (the member's ID chain, `AAAA →
-   BBBB（重做）` off `ids`, then its records `T<m>`) / 来源, PR link, 占用时长, mirror id,
+   怎么算成功 with the `.proof` grid; 编号 (the member's `code`, `K5H0 · 第 2 次`
+   on a redo; a pre-switch chain `AAAA → BBBB（重做）` off `ids`) / 来源, PR link, 占用时长, mirror id,
    方案/接口/依赖/完成判据/上线证据 inside the card's `<details class="fold">`.
    For anything unfinished, *why* — quoted from its child's report or the tick that
    blocked it, not paraphrased — is the summary line's sentence, not buried in the
@@ -239,7 +242,7 @@ theme?*
 
 - **Yes → fleet 侧** (并发上限, 回收拒收, 占用时长口径…) — a fleet defect, not this
   batch's story. **Record it as a task** (`mcp__fleet-orch__task`, `repo` the fleet
-  repo, no `spawn`: the record waits for whoever picks it up); its `T<m>` goes in
+  repo, no `spawn`: the record waits for whoever picks it up); its code goes in
   the closing summary, never on the page. If the reader should know, it is a 下一步
   row in plain words.
 - **No → 产品侧** — what made a member hard lives in that member's card (its
@@ -310,7 +313,7 @@ parent task (`/fleet-epic-run` step 4.5): hand it those lines, in the page's ord
 so the record stands on its own without the page. Do **not** commit the report or
 the evidence into the repo — this skill ships to team repos too, and a batch
 report is not their artifact. Keep the source under
-`$FLEET_CONF_DIR/fleets/<sess>/epic/<T<n>>/`.
+`$FLEET_CONF_DIR/fleets/<sess>/epic/<$P>/`.
 
 ## 4. Close the loop
 

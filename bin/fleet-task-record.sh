@@ -79,10 +79,14 @@
 #                     → a blank session's record renamed ONCE (T652): from its
 #                       placeholder F to its first prompt's first line T — the
 #                       hub compares on F, so a second rename changes nothing.
-#   fleet-task-record.sh respawn T<n> [--prev <ID>] [--origin O] [--print] [<session>]
+#   fleet-task-record.sh respawn T<n> [--prev <ID>] [--redo] [--origin O] [--print] [<session>]
 #                     → a record whose session never came up (or went down, its
 #                       window gone) opened again on the SAME record (T642): its
 #                       words, repo, agent and reap; the new ID continues --prev.
+#                       --redo: a record that FAILED opened again for its next
+#                       attempt (EPIC T644 C5 — a batch member's retry keeps its
+#                       code; the window takes the task's ID, C2), its first turn
+#                       saying so.
 #                       FLEET_TASK_RESPAWN is the spawner seam.
 #   fleet-task-record.sh of [<window>]     → the window's @task (T<n>), rc 1 when none
 #   fleet-task-record.sh find-issue o/n#N  → … the live window's @task working that issue
@@ -377,18 +381,23 @@ JSON
     ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${origin:+--origin "$origin"} $pwin ${pfa:+"$pfa"} ${tsess:+"$tsess"}
 fi
 
-# respawn T<n> [--prev <ID>] [--origin O] [--print] [<fleet session>] (T642): a
+# respawn T<n> [--prev <ID>] [--redo] [--origin O] [--print] [<fleet session>] (T642): a
 # record whose session never came up — or went down with its window gone — opened
 # AGAIN, on the SAME record: the words, repo, agent file, provider and reap policy
 # it was dispatched with, the new window's ID continuing <ID> (--prev) so a batch
 # reads it as the next baton of the same member. Never a new T<n>. What
-# `fleet-epic-tick.py`'s and `await`'s hint names (fleet_id.start_hint).
+# `fleet-epic-tick.py`'s and `await`'s hint names (fleet_id.start_hint). --redo
+# (EPIC T644 C5): a record that failed — by its ID's result, never a cancel or a
+# refusal — is the retry's record too, so the member keeps its code; its window
+# takes the task's ID and opens its next attempt (dash-raw-session.sh, C2), and the
+# hub's write-through lets that attempt's end replace the failure (C6).
 if [ "$cmd" = respawn ]; then
   t="${1:-}"; is_task_ref "$t" || usage; shift   # its code too (EPIC T644 C3)
-  prev='' origin='' pwin='' tsess=''
+  prev='' origin='' pwin='' tsess='' redo=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --prev) prev="${2:-}"; shift ;;
+      --redo) redo=1 ;;
       --origin) origin="${2:-}"; shift ;;
       --print) pwin=--print ;;
       -*) usage ;;
@@ -403,9 +412,12 @@ if [ "$cmd" = respawn ]; then
   plan=$(printf '%s' "$got" | python3 -c '
 import json, sys
 d = json.load(sys.stdin); t = d.get("task") or {}
+redo = sys.argv[1] == "1"
 if t.get("authority_version") != 1:
     sys.exit("not an authoritative task record")
-if t.get("outcome"):
+if redo and t.get("outcome") not in ("failed", "exited"):
+    sys.exit("the record has not failed (%s): --redo restarts a failed one" % (t.get("outcome") or "still open"))
+if t.get("outcome") and not redo:
     sys.exit("the record is over (%s): nothing to respawn" % t["outcome"])
 raw = t.get("request_payload") or {}
 p = json.loads(raw) if isinstance(raw, str) and raw else (raw if isinstance(raw, dict) else {})
@@ -415,12 +427,16 @@ if disp:
 agent = t.get("resolved_agent") if t.get("resolved_agent") in ("claude", "codex") else ""
 print("\t".join([" ".join((t.get("title") or "-").split()), (p.get("repo") or t.get("repo") or "-").lower(), p.get("reap") or "-",
                  p.get("template") or "-", agent or "-", json.dumps(disp, separators=(",", ":")) if disp else "-"]))
-print(p.get("body") or "", end="")') || die 1 "$t: cannot respawn"
+print(p.get("body") or "", end="")' "$redo") || die 1 "$t: cannot respawn"
   IFS=$'\t' read -r r_title r_repo r_reap r_as r_agent r_disp <<< "$(printf '%s\n' "$plan" | head -n 1)"
   r_body=$(printf '%s\n' "$plan" | sed '1d')
   pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
   [ "$r_title" = - ] && r_title=$t
   if [ -n "$r_body" ]; then printf '%s\n\n%s\n' "$r_title" "$r_body" > "$pf"; else printf '%s\n' "$r_title" > "$pf"; fi
+  if [ "$redo" = 1 ]; then
+    r_code=$(printf '%s' "$got" | field task.short); [ -n "$r_code" ] || r_code=$t
+    printf '\n这是重试：同一个任务 %s 的下一次，上一次失败了——先读它的结果（fleet-id.sh get %s）再动手。\n' "$r_code" "$r_code" >> "$pf"
+  fi
   [ "$r_disp" = - ] || export FLEET_DISPATCH="$r_disp"
   ra=(--task "$t" --name "$r_title")
   if [ "$r_repo" = - ]; then ra=(--no-repo ${ra[@]+"${ra[@]}"}); [ "$r_reap" = - ] || ra+=(--reap "$r_reap")
