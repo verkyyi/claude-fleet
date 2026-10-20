@@ -426,7 +426,7 @@ print(int(o.get("ServerAliveInterval", 0)) * int(o.get("ServerAliveCountMax", 3)
 
 drill_thin_reconnect_slow_pick() {
   CAP=5   # remembered line dark, another LAN line up, a dead public one: not 2 + 3 × 2 s
-  local D="$WORK/slow-pick" t0 out port
+  local sp D="$WORK/slow-pick" t0 out port
   mkdir -p "$D/home/.ssh" "$D/home/.cache/claude-fleet"
   python3 - "$D" <<'PY' &
 import socket, sys
@@ -439,7 +439,8 @@ try:
 except Exception:
     pass
 PY
-  until_ok 5 test -s "$D/port" || { WHY="the fake sshd never listened"; return 1; }
+  sp=$!   # reaped below: left running it held the next drill's bare `wait` up to 30 s (T532)
+  until_ok 5 test -s "$D/port" || { kill "$sp" 2>/dev/null; WHY="the fake sshd never listened"; return 1; }
   port=$(cat "$D/port")
   # m1's lines: lan (answers — loopback stands in for the LAN address), lan-4
   # (remembered, gone dark: a v6 address that changed), public (a TEST-NET address nothing answers)
@@ -463,6 +464,7 @@ PY
         FLEET_CONNECT_LOCAL_ADDRS="192.0.2.5/24" FLEET_CONNECT_NET_KEY="192.0.2.1@192.0.2.0/24" \
         python3 "$BIN/fleet-connect.py" m1 --print 2>"$D/err")
   SECS=$(since "$t0")
+  kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
   case $out in *"-p $port 127.0.0.1"*) ;;
     *) WHY="not the lan line: '$out' $(head -c 300 "$D/err")"; return 1 ;; esac
   le "$SECS" "$CAP" || { WHY="the pick took ${SECS}s: it waited out the dead lines (remembered lan-4 2 s, public 3 × 2 s)"; return 1; }
@@ -582,7 +584,7 @@ drill_thin_home_login_no_fleet() {
 
 drill_route_lan_elsewhere() {
   CAP=2   # away from home: no handshake to home's dark LAN address (FLEET_CONNECT_TIMEOUT=4)
-  local D="$WORK/lan-elsewhere" t0 out port
+  local sp D="$WORK/lan-elsewhere" t0 out port
   mkdir -p "$D/home/.ssh" "$D/home/.cache/claude-fleet"
   # a fake sshd for the tailnet line (loopback — always measured)
   python3 - "$D" <<'PY' &
@@ -596,7 +598,8 @@ try:
 except Exception:
     pass
 PY
-  until_ok 5 test -s "$D/port" || { WHY="the fake sshd never listened"; return 1; }
+  sp=$!   # reaped below: left running it held the next drill's bare `wait` up to 30 s (T532)
+  until_ok 5 test -s "$D/port" || { kill "$sp" 2>/dev/null; WHY="the fake sshd never listened"; return 1; }
   port=$(cat "$D/port")
   # home's LAN line is a TEST-NET address nothing answers (as 192.168.1.249 is from a hotspot)
   printf 'Host m1 fleet-m1 fleet-m1-lan\n  HostName 192.0.2.10\n  User me\nHost fleet-m1-tailnet\n  HostName 127.0.0.1\n  Port %s\n  User me\n' "$port" > "$D/home/.ssh/fleet-ssh-config"
@@ -619,6 +622,7 @@ PY
         FLEET_CONNECT_LOCAL_ADDRS="172.20.10.3/28,100.101.2.3/32" FLEET_CONNECT_NET_KEY="172.20.10.1@172.20.10.0/28" \
         python3 "$BIN/fleet-connect.py" m1 --print 2>"$D/err")
   SECS=$(since "$t0")
+  kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
   case $out in *"-p $port 127.0.0.1"*) ;;
     *) WHY="not the tailnet line: '$out' $(head -c 300 "$D/err")"; return 1 ;; esac
   WHAT="离开家里的局域网（热点 172.20.10.0/28），记住的是家里的 lan 192.0.2.10：没对它握手，${SECS}s 选中 Tailscale"

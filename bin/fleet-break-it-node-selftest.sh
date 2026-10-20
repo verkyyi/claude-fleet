@@ -1225,12 +1225,12 @@ drill_user_pod_no_roll_road() {
 # FAIL, rolled back, and skipped that sha until stable moved again.
 drill_node_update_stale_fail() {
   CAP=60
-  local t0 out
+  local t0
   t0=$(now)
-  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-torn-read 2>&1) \
-    || { WHY="a past failure still rolls back / pins the machine: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  # these cases run for real in fleet-node-update-selftest.py's own parts
+  suite_holds fleet-node-update-selftest.py 'class O_TornReadPast' || return 1
   SECS=$(since "$t0")
-  WHAT="一条之后已有签名取包成功的 torn read：体检 key 行 PASS、新版提交不回退；仍是当下的 torn read 只 WARN；被回退的版本原因消失就重试、否则按 6h 起翻倍再试"
+  WHAT="一条之后已有签名取包成功的 torn read：体检 key 行 PASS、新版提交不回退；仍是当下的 torn read 只 WARN；被回退的版本原因消失就重试、否则按 6h 起翻倍再试（fleet-node-update-selftest.py 真跑，这里按名守住）"
 }
 
 # codex-helper-missing (#3017): the release carried codex alone, and codex 0.154
@@ -1238,24 +1238,24 @@ drill_node_update_stale_fail() {
 # was started from (~/.local/bin) — no session started from the release ran `ls`.
 drill_codex_helper_missing() {
   CAP=60
-  local t0 out
+  local t0
   t0=$(now)
-  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-helpers 2>&1) \
-    || { WHY="codex's helper is not beside it: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  # these cases run for real in fleet-node-update-selftest.py's own parts
+  suite_holds fleet-node-update-selftest.py 'class P_Helpers' || return 1
   SECS=$(since "$t0")
-  WHAT="发布版钉的 codex-code-mode-host 装进工具缓存、链在 current/tools/bin 和账号 ~/.local/bin 的 codex 旁；手放的副本换成链接；旧更新器装的版本下一轮补上（有制品就地装，没有再取）"
+  WHAT="发布版钉的 codex-code-mode-host 装进工具缓存、链在 current/tools/bin 和账号 ~/.local/bin 的 codex 旁；手放的副本换成链接；旧更新器装的版本下一轮补上（有制品就地装，没有再取）（fleet-node-update-selftest.py 真跑，这里按名守住）"
 }
 
 # credsep-stale-after-switch (#2435): the updater moved `current` but credsep's
 # root code copy and the shared proxy stayed on the old release.
 drill_credsep_stale_after_switch() {
   CAP=60
-  local t0 out
+  local t0
   t0=$(now)
-  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-credsep 2>&1) \
-    || { WHY="the proxy did not follow the release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  # these cases run for real in fleet-node-update-selftest.py's own parts
+  suite_holds fleet-node-update-selftest.py 'def test_supervised_proxy_follows_switch_and_rollback' || return 1
   SECS=$(since "$t0")
-  WHAT="换版两次再回退一次：每次 credsep 副本的 sha = 发布版，守护的共享代理子进程用新副本重启（pid 换了），回退时副本和代理一起回旧版，不另写 plist"
+  WHAT="换版两次再回退一次：每次 credsep 副本的 sha = 发布版，守护的共享代理子进程用新副本重启（pid 换了），回退时副本和代理一起回旧版，不另写 plist（fleet-node-update-selftest.py 真跑，这里按名守住）"
 }
 
 # admin-agent-stale (#3034): the admin login's agent (com.ccquota.agent.<admin>,
@@ -1263,12 +1263,12 @@ drill_credsep_stale_after_switch() {
 # `current` and the managed logins, never it.
 drill_admin_agent_stale() {
   CAP=60
-  local t0 out
+  local t0
   t0=$(now)
-  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-admin-agent 2>&1) \
-    || { WHY="the admin agent did not follow the release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  # these cases run for real in fleet-node-update-selftest.py's own parts
+  suite_holds fleet-node-update-selftest.py 'class Q_AdminAgent' || return 1
   SECS=$(since "$t0")
-  WHAT="管理员登录的 agent：credsep meta.json 的 agent_argv 指向 current/bin/ccquota，换版、回退各重启一次（同一版不重复）；托管登录不动；手放回旧二进制 → 体检 admin-agent WARN，下一轮再指回、重启"
+  WHAT="管理员登录的 agent：credsep meta.json 的 agent_argv 指向 current/bin/ccquota，换版、回退各重启一次（同一版不重复）；托管登录不动；手放回旧二进制 → 体检 admin-agent WARN，下一轮再指回、重启（fleet-node-update-selftest.py 真跑，这里按名守住）"
 }
 
 # admin-agent-gui-converted (#3508): a Mac's admin agent had started life as
@@ -1689,12 +1689,12 @@ drill_managed_login_install_stale() {
 # then move it with `current` — and every tick at the release puts one back.
 drill_managed_login_install_predates() {
   CAP=60
-  local t0 out
+  local t0
   t0=$(now)
-  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-login-follow 2>&1) \
-    || { WHY="the updater did not move a login install behind the release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  # these cases run for real in fleet-node-update-selftest.py's own parts
+  suite_holds fleet-node-update-selftest.py 'class M_FollowInstall' || return 1
   SECS=$(since "$t0")
-  WHAT="登录安装早于 #2688（自己的 install-sync 仍答 off · managed）：更新器把每个托管登录的 ~/.claude/fleet 指向 <root>/current（一个链接，不建树），换版 / 退回时随 current 一起动、各跑一次新版 apply（两目录模式），接管时当场做；旧版本目录过保留期后连 fleet.versions 一起删；放手时换回独立副本；钉在版本目录的客户端壳镜像改走登录链接"
+  WHAT="登录安装早于 #2688（自己的 install-sync 仍答 off · managed）：更新器把每个托管登录的 ~/.claude/fleet 指向 <root>/current（一个链接，不建树），换版 / 退回时随 current 一起动、各跑一次新版 apply（两目录模式），接管时当场做；旧版本目录过保留期后连 fleet.versions 一起删；放手时换回独立副本；钉在版本目录的客户端壳镜像改走登录链接（fleet-node-update-selftest.py 真跑，这里按名守住）"
 }
 
 # managed-login-own-copy (#2774, #4669): a managed login's ~/.claude/fleet pointed
@@ -1703,12 +1703,12 @@ drill_managed_login_install_predates() {
 # tick points it at <root>/current again — unless an EPIC batch with work holds it.
 drill_managed_login_own_copy() {
   CAP=60
-  local t0 out
+  local t0
   t0=$(now)
-  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-login-own-copy 2>&1) \
-    || { WHY="a login pointed at an own copy was not linked back: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  # these cases run for real in fleet-node-update-selftest.py's own parts
+  suite_holds fleet-node-update-selftest.py 'def test_own_copy_is_reclaimed' 'def test_switch_points_every_login' 'def test_rollback_moves_logins_back' || return 1
   SECS=$(since "$t0")
-  WHAT="托管登录被手动指回一份独立旧副本：fleet doctor --machine 的 install 行 WARN（不 FAIL、不回退整机），下一拍更新器把它重新指向 <root>/current；有活的批次在跑时先等（同 2 小时封顶）；换版时两个登录随 current 一起动、体检 FAIL 一起退回"
+  WHAT="托管登录被手动指回一份独立旧副本：fleet doctor --machine 的 install 行 WARN（不 FAIL、不回退整机），下一拍更新器把它重新指向 <root>/current；有活的批次在跑时先等（同 2 小时封顶）；换版时两个登录随 current 一起动、体检 FAIL 一起退回（fleet-node-update-selftest.py 真跑，这里按名守住）"
 }
 
 # managed-login-mod-escapes (#2964, #4669): Claude Code resolves a plugin file's
