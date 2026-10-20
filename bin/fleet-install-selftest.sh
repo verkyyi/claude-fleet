@@ -207,6 +207,9 @@ echo '{"token": "keep-me"}' > "$HOME/.config/claude-fleet/hub.json"
 # leftovers an earlier version left: a copy the manifest no longer lists, and
 # the #1470 layout's flat helper in ~/.local/bin (ours by its header)
 printf '#!/bin/sh\n# claude-fleet#0000 — gone from the manifest\n' > "$ROOT/bin/fleet-gone.sh"
+# …written by that install, so its installed.list names it (#4827: only a listed
+# copy is the fleet's to delete; no list ⇒ nothing goes)
+printf 'bin/fleet-gone.sh\t%s\n' "$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$ROOT/bin/fleet-gone.sh")" > "$ROOT/installed.list"
 printf '#!/usr/bin/env python3\n# claude-fleet#1470 flat copy\n' > "$HOME/.local/bin/fleet-connect.py"
 printf '#!/bin/sh\necho not ours\n' > "$HOME/.local/bin/fleet-login.py"   # no marker: someone else's, left alone
 # A PATH without ~/.local/bin, so the rc line is needed.
