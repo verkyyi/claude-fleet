@@ -241,7 +241,11 @@ type TaskMutation struct {
 }
 
 func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time.Time) (FleetTask, error) {
-	if s.IDSwitchOn() { // EPIC T497 C6: the execution authority is off with the switch
+	// EPIC T497 C6: the execution authority is off with the switch; only a
+	// person's cancel of a never-claimed record is still taken (C13), checked
+	// against the record below.
+	idSwitch := s.IDSwitchOn()
+	if idSwitch && !idSwitchCancel(m) {
 		return FleetTask{}, ErrIDSwitch
 	}
 	// A start is its owner's (claude-fleet#4896): take that person's authority
@@ -331,6 +335,11 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return FleetTask{}, err
+	}
+	if idSwitch {
+		if err = s.idSwitchCancelAllowed(tx, t); err != nil {
+			return FleetTask{}, err
+		}
 	}
 	if t.Generation != m.Generation || t.ExecutionOwner != m.ExpectedWorker ||
 		(m.Kind != "cancel_request" && t.ExecutionEndpoint != "" && t.ExecutionEndpoint != m.EndpointID) {

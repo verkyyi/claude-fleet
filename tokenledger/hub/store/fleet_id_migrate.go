@@ -213,7 +213,7 @@ func idMigBefore(t FleetTask) string {
 	return strings.Join(parts, " · ")
 }
 
-// IDMigrateCandidates lists the records not yet migrated, oldest first: owner
+// IDMigrateCandidates lists the old records not yet migrated, oldest first: owner
 // "" is everyone's (the operator's door); only, when given, narrows to those
 // refs (T<n>).
 func (s *Store) IDMigrateCandidates(owner string, only []string) ([]FleetTask, error) {
@@ -238,7 +238,32 @@ func (s *Store) IDMigrateCandidates(owner string, only []string) ([]FleetTask, e
 	if err != nil {
 		return nil, err
 	}
-	return scanFleetTasks(rows)
+	all, err := scanFleetTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+	// Only OLD records are migrated (C13). One written after the switch went
+	// on, or never claimed yet carried by an ID, is the ID world's: its window
+	// never claims, so «no worker» is no evidence it did not start — its end is
+	// read off the ID, and a dead one is closed by a cancel.
+	since := s.idSwitchSince()
+	out := all[:0]
+	for _, t := range all {
+		if !since.IsZero() && !t.CreatedAt.Before(since) {
+			continue
+		}
+		if f, _ := IDMigWorker(t); f == "" {
+			carried, _, err := idCarrying(s.read, "", t.Ref)
+			if err != nil {
+				return nil, err
+			}
+			if carried {
+				continue
+			}
+		}
+		out = append(out, t)
+	}
+	return out, nil
 }
 
 // ApplyIDMigration writes one record's verdict: its audit row, its end where it
@@ -354,4 +379,71 @@ func (s *Store) IDTaskOutcome(owner, ref string) (outcome, id string, err error)
 		return TaskFailed, id, nil
 	}
 	return TaskSucceeded, id, nil
+}
+
+// idSwitchSince is when the switch was last turned on; zero while it is off.
+func (s *Store) idSwitchSince() time.Time {
+	var v, at string
+	if err := s.read.QueryRow(`SELECT value, updated FROM fleet_settings WHERE key = ?`, IDSwitchSetting).Scan(&v, &at); err != nil || v != "on" {
+		return time.Time{}
+	}
+	t, _ := time.Parse(rfc, at)
+	return t
+}
+
+// idCarrying answers which IDs carry a record's number (the window opened for
+// it, or a live migration's alias): open is true when one of them is not yet
+// closed. owner "" is anyone's.
+func idCarrying(q querier, owner, ref string) (carried, open bool, err error) {
+	sq, args := `SELECT closed_at FROM fleet_ids WHERE (task = ? OR aliases LIKE ?)`, []any{ref, `%"` + ref + `"%`}
+	if owner != "" {
+		sq, args = sq+` AND owner = ?`, append(args, owner)
+	}
+	rows, err := q.Query(sq, args...)
+	if err != nil {
+		return false, false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var closed int64
+		if err = rows.Scan(&closed); err != nil {
+			return false, false, err
+		}
+		carried, open = true, open || closed == 0
+	}
+	return carried, open, rows.Err()
+}
+
+// idSwitchCancel is the one task mutation the switch still takes (EPIC T497
+// C13): a person's cancel of a record nobody ever claimed — the unclaimed
+// transition to cancelled fleet_task_control.py's cancel sends. It is not an
+// execution-authority write: there is no owner to fence and nothing to stop.
+func idSwitchCancel(m TaskMutation) bool {
+	return m.Kind == "transition" && m.State == TaskCancelled && m.ExpectedWorker == ""
+}
+
+// idSwitchCancelAllowed checks, inside the mutation's transaction, that the
+// record is one with no window left to read its end off: accepted, never
+// claimed, no outcome, and no open ID carrying its number. A record whose ID is
+// still open is that window's (ErrIDSwitch: cancel it there); one whose closed
+// ID left a result has ended on it (ErrTaskConflict).
+func (s *Store) idSwitchCancelAllowed(tx querier, t FleetTask) error {
+	if t.State != TaskAccepted || t.ExecutionOwner != "" || t.Outcome != "" {
+		return ErrIDSwitch
+	}
+	carried, open, err := idCarrying(tx, t.Owner, t.Ref)
+	if err != nil {
+		return err
+	}
+	if open {
+		return ErrIDSwitch
+	}
+	if carried {
+		if out, _, err := s.IDTaskOutcome(t.Owner, t.Ref); err != nil {
+			return err
+		} else if out != "" {
+			return ErrTaskConflict
+		}
+	}
+	return nil
 }
