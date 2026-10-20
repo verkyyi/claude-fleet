@@ -66,7 +66,12 @@ type placeRequest struct {
 	// It travels with a REMOTE start so the choice made on one machine holds
 	// on the one that opens it.
 	AccountClass string `json:"account_class"`
-	Idem         string `json:"idempotency_key"`
+	// NotHere is the asking machine's own admission refusal (claude-fleet
+	// T604: memory, its session caps): an auto placement then never picks
+	// the asker — it is a declined try from the start, its reason the
+	// candidate's — and no other machine is ALL_DECLINED, never LOCAL.
+	NotHere string `json:"not_here"`
+	Idem    string `json:"idempotency_key"`
 	// Wait is how many seconds a REMOTE start is waited on for its outcome
 	// (claude-fleet#1586): absent = placeWait, 0 = answer on acceptance.
 	Wait *int `json:"wait"`
@@ -291,7 +296,16 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		}
 		taskOwnsIssueLease = task.TicketRef != ""
 	}
-	pl, err := s.pickNode(p, req.Repo, req.Node, req.Agent, now)
+	declined := map[string]string{}
+	if req.NotHere != "" && req.Node == "auto" {
+		declined[fleetID] = oneLine(req.NotHere)
+	}
+	var pl Placement
+	if len(declined) > 0 {
+		pl, err = s.pickNodeAfter(p, req.Repo, "auto", req.Agent, now, declined, fleetID)
+	} else {
+		pl, err = s.pickNode(p, req.Repo, req.Node, req.Agent, now)
+	}
 	if err != nil {
 		s.placeAudit(p, fleetID, errorObject(err)["code"], now)
 		writeJSON(w, placeStatus(err), map[string]any{"error": errorObject(err), "placement": pl})
@@ -334,7 +348,6 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		tries = min(req.Tries, placeTriesMax)
 	}
 	deadline := now.Add(wait * time.Duration(tries))
-	declined := map[string]string{}
 	attempts := []placeAttempt{}
 	withAttempts := func(m map[string]any) map[string]any {
 		if req.Dispatch != nil {

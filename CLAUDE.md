@@ -425,7 +425,11 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `agentdef` row. The fleet adds ONE frontmatter key, `fleet:` (reap · repo · agent
   · codex_model · codex_effort), filling what the spawn left open. Named but not
   found or unreadable ⇒ the spawn refuses before any window, naming the file
-  (BREAK-IT `agent-file-broken`). No `--as` ⇒ the shipped `fleet-worker` when it
+  (BREAK-IT `agent-file-broken`). A file whose bytes the release carries
+  (`travels 1`: fleet-worker, a fleet plugin's epic-driver) does not pin the
+  spawn to this machine — the hub may place it and the opening machine reads the
+  same name (and a task's words) back off `T<n>`; a full machine asks for another
+  (`--not-here`, T604, docs/dev/FLEET-HUB.md «A dispatched task travels too»). No `--as` ⇒ the shipped `fleet-worker` when it
   is there, else a plain session given the task. The core ships
   `conf/agent-defaults/claude/agents/` (fleet-worker, orchestrator) into
   `~/.claude/agents` through

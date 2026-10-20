@@ -1405,6 +1405,47 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.assertEqual((crash["status"], crash["result"]["error"]["exit"]), ("unknown", 1))
         self.assertEqual(len((self.node.conf / "scratch.calls").read_text().splitlines()), 1)
 
+    def test_start_task_scratch_reads_its_record(self):
+        # T604: a dispatched task the hub placed here arrives with no words — its
+        # seed is the record's own (title + body) and so is the agent file it was
+        # dispatched as (`template`), read back off T<n>; a file not on this
+        # machine opens a plain session given the task, one stderr line.
+        rec = self.node.conf / "record.json"
+        self.node.script(self.node.bin / "fleet-task-record.sh", '''#!/bin/bash
+printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/record.calls"
+[ "$1" = get ] && cat "$FLEET_CONF_DIR/record.json"
+''')
+        self.node.script(self.node.bin / "fleet-agent-def.py", '''import sys
+sys.exit(0 if sys.argv[1:3] == ["find", "fleet-worker"] else 1)
+''')
+        def record(template):
+            payload = json.dumps({"title": "派发不再锁死本机", "body": "两行\n正文", "template": template})
+            rec.write_text(json.dumps({"task": {"id": "T604", "title": "派发不再锁死本机", "request_payload": payload}}))
+        record("fleet-worker")
+        op = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="t604-1",
+                                                           params={"kind": "scratch", "task": "T604"}))["operation_id"])
+        self.assertEqual((op["status"], op["result"]["window"]), ("succeeded", "@13"))
+        call = (self.node.conf / "scratch.calls").read_text()
+        self.assertRegex(call, r"--task T604 --as fleet-worker --prompt-file=\S+\n$")
+        self.assertEqual((self.node.conf / "scratch.seed").read_text(), "派发不再锁死本机\n\n两行\n正文\n")
+        self.assertEqual((self.node.conf / "record.calls").read_text(), "get T604\n")
+        (self.node.conf / "scratch.calls").unlink()
+        record("mine-only")
+        op = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="t604-2",
+                                                           params={"kind": "scratch", "task": "T604"}))["operation_id"])
+        self.assertEqual(op["status"], "succeeded")
+        call = (self.node.conf / "scratch.calls").read_text()
+        self.assertNotIn("--as", call)
+        self.assertIn("--prompt-file=", call)
+        # words that came with the start (stdin) are the seed: the record is not read
+        (self.node.conf / "scratch.calls").unlink()
+        (self.node.conf / "record.calls").unlink()
+        op = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="t604-3",
+                                                           params={"kind": "scratch", "task": "T604", "body": "自带的话"}))["operation_id"])
+        self.assertEqual(op["status"], "succeeded")
+        self.assertEqual((self.node.conf / "scratch.seed").read_text(), "自带的话")
+        self.assertFalse((self.node.conf / "record.calls").exists())
+
     def test_start_scratch_with_unsent_draft(self):
         draft = "检查 #42 完整文字 " * 40
         started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="draft-1",

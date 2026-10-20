@@ -113,6 +113,7 @@ func place(args []string, stdout, stderr io.Writer) (int, error) {
 	wait := fs.Int("wait", -1, "seconds the hub waits on a remote start's outcome (default: the hub's, 60; 0 = answer on acceptance)")
 	name := fs.String("name", "", "a scratch session's name (with `scratch` in place of the issue)")
 	reap := fs.String("reap", "", "when the session may be closed on its own: merged[:<dur>], done[:<dur>], loop-end, at:<time> or keep (claude-fleet#1902; default: its kind's)")
+	notHere := fs.String("not-here", "", "this machine's admission refused it (the reason): place it on any other machine, never this one (claude-fleet T604)")
 	fs.Usage = func() {
 		fmt.Fprint(stderr, `Usage: ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] <owner/repo> <issue> <worker_id>
        ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] [--name <n>] <owner/repo> scratch <fleet UUID>
@@ -182,6 +183,9 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 	}
 	if *reap != "" {
 		ask["reap"] = *reap
+	}
+	if *notHere != "" {
+		ask["not_here"] = *notHere
 	}
 	// Each machine tried is waited on in turn (claude-fleet#1610).
 	ask["tries"] = placeTries
