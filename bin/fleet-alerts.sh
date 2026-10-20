@@ -341,7 +341,7 @@ _fa_machine() {
 # `#carry-needs` asks the writer to keep the previous file's needs rows: the
 # quota watch writes from outside tmux, where no window is visible.
 fleet_alerts_compute() {
-  local kick=0 now qstale qblind qvb qspread cstale ckick trace dn du dnames
+  local kick=0 now qstale qblind qspread cstale ckick trace dn du dnames
   local qcarry qcage qcrest qcwhy qcfor qcmin qbwhy qbtxt
   local dkick dtrace free floor target af at nf label rest model until fb seen
   [ "${1:-}" = --kick ] && kick=1

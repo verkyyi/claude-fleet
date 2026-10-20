@@ -94,11 +94,9 @@ esac
 # neither cache has anything. ---
 usg=$(fleet_usage_summary_plain)
 
-# $active is only the before-value for the "did the pick change anything" test
-# below — it is NOT shown: the account new sessions get is re-picked per spawn
-# (ccquota headroom, #513), so a `[now: X]` in the header would be a stale
+# The active account is NOT shown: the account new sessions get is re-picked per
+# spawn (ccquota headroom, #513), so a `[now: X]` in the header would be a stale
 # snapshot of a moving target. The ● in the pool table marks it for the curious.
-active=$(bash "$BIN/fleet-account.sh" active 2>/dev/null)
 hdr="pick the account new sessions start from (re-picked per spawn on quota headroom)"
 [ -n "$usg" ] && hdr="${usg}"$'\n'"${hdr}"
 # The keys are the popup frame's bottom hint line (issue #1619), one line that
