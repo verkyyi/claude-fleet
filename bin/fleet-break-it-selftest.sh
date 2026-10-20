@@ -4256,6 +4256,11 @@ drill_place_slow_bypass() {
   # a shipped agent file travels (T604): --as fleet-worker is not refused elsewhere
   grep -q 'fleet_agent_file_travels "$AS_ARG"' "$BIN/dash-raw-session.sh" "$BIN/dash-issue-session.sh" \
     || { WHY="--as fleet-worker is refused on another machine again"; return 1; }
+  # the release's own ccquota first: a stale copy on PATH knows none of its flags
+  mkdir -p "$d/rel" "$d/path"
+  printf '#!/bin/sh\necho rel\n' > "$d/rel/ccquota"; printf '#!/bin/sh\necho path\n' > "$d/path/ccquota"; chmod +x "$d/rel/ccquota" "$d/path/ccquota"
+  out=$(PATH="$d/path:$PATH" bash -c '. "$1/fleet-lib.sh"; _FLEET_LIB_DIR=$2; eval "$(_fleet_ccquota)"' _ "$BIN" "$d/rel")
+  [ "$out" = rel ] || { WHY="the hub helpers run the ccquota on PATH ($out), not the release's"; return 1; }
   # every ask is timed, and the p90 is read off the log
   printf '#!/bin/sh\nprintf "LOCAL mac-b\\tchose mac-b\\n"\n' > "$d/place"; chmod +x "$d/place"
   for _ in 1 2 3; do
