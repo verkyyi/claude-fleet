@@ -160,14 +160,14 @@ Notes:
 
 ## 3b. By ID (EPIC T497 C4)
 
-Every window has one ID (`T-<code>`); its results, native segments and close are
+Every window has one ID (its short code `K3F9` — the old `T-<code>` still works for one version); its results, native segments and close are
 on its ledger. `$ARGUMENTS` starting with `ids` lists by ID instead of by key:
 
 ```sh
 bash ~/.claude/fleet/bin/fleet-history.sh ids [filter]        # code · 状态 · result · closed at · title
-bash ~/.claude/fleet/bin/fleet-history.sh show T-k3f9q        # its segments (agent · native id · span · trigger)
-bash ~/.claude/fleet/bin/fleet-history.sh continue T-k3f9q --seg 2 --exec   # 从这一段继续: new window, new ID, prev T-k3f9q
-bash ~/.claude/fleet/bin/fleet-history.sh reopen T-k3f9q --exec             # 恢复这个窗口: the same ID, its newest segment
+bash ~/.claude/fleet/bin/fleet-history.sh show K3F9        # its segments (agent · native id · span · trigger)
+bash ~/.claude/fleet/bin/fleet-history.sh continue K3F9 --seg 2 --exec   # 从这一段继续: new window, new ID, prev K3F9
+bash ~/.claude/fleet/bin/fleet-history.sh reopen K3F9 --exec             # 恢复这个窗口: the same ID, its newest segment
 ```
 
 `continue` leaves the old ID closed; `reopen` refuses an ID still open in a window.

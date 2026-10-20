@@ -64,10 +64,10 @@ r = st["ids"].get(fid)
 if r and r["ep"] != ep:
     out(409, {"code": "DUPLICATE_ID", "error": "taken"}); sys.exit(0)
 if not r:
-    code = fleet_id.encode(fid); n = 5
+    code = fleet_id.encode(fid); n = 4
     while n < 26 and any(fleet_id.encode(o)[:n] == code[:n] for o in st["ids"]):
         n += 1
-    r = st["ids"][fid] = {"ep": ep, "short": "T-" + code[:n], "events": []}
+    r = st["ids"][fid] = {"ep": ep, "short": code[:n], "events": []}
 for e in sorted(evs, key=lambda e: e["seq"]):
     if e["seq"] <= len(r["events"]):
         continue
@@ -115,25 +115,27 @@ fid push >/dev/null
 st_count; [ "$(hub_has "$I2")" = "$(mine "$I2")" ] || fail "S10: a rebuilt hub did not get the whole ledger of I2" "$(hub_has "$I2" | wc -l)"
 st_count; [ "$(mine "$I2" | wc -l | tr -d ' ')" = 5 ] || fail "S10: the ledger of I2 should hold 5 events" "$(mine "$I2" | wc -l)"
 
-# ---- S12 · two machines, one 5-character code ------------------------------------
+# ---- S12 · two machines, one 4-character code (C11: FF1W…, the old 7ym5y…) ------
 rm -f "$HUB" "$POSTS"
-A=3fa85f64-5717-4562-b3fc-2c963f66afa6 B=3fa85f74-5717-4562-b3fc-2c963f66afa6   # 7ym5ys… / 7ym5yx…
+A=3fa85f64-5717-4562-b3fc-2c963f66afa6 B=3fa85f74-5717-4562-b3fc-2c963f66afa6   # FF1W35… / FF1W37… (old 7ym5ys… / 7ym5yx…)
 machine m1; fid open "$A" --agent claude >/dev/null; fid push >/dev/null
 machine m2
 WB=$(tf new-window -d -P -F '#{window_id}' -t "$L:" 'while :; do sleep 300; done')
 tf set-window-option -t "$WB" @fleet_id "$B"
 sb=$(fid open "$B" --agent claude --window "$WB" --socket "$L")
-st_count; [ "$sb" = T-7ym5y ] || fail "S12: offline, m2 sees no collision" "$sb"
+st_count; [ "$sb" = FF1W ] || fail "S12: offline, m2 sees no collision" "$sb"
 FLEET_ID_WINDOWS="$B	$L	$WB" python3 "$BIN/fleet_id.py" push "$B"
-st_count; [ "$(fid short "$B")" = T-7ym5yx ] || fail "S12: the later ID takes the hub's 6-character code" "$(fid short "$B")"
-st_count; [ "$(tf show-options -wqv -t "$WB" @task_short)" = T-7ym5yx ] || fail "S12: @task_short follows the hub" "$(tf show-options -wqv -t "$WB" @task_short)"
+st_count; [ "$(fid short "$B")" = FF1W37 ] || fail "S12: the later ID takes the hub's 6-character code" "$(fid short "$B")"
+st_count; [ "$(tf show-options -wqv -t "$WB" @task_short)" = FF1W37 ] || fail "S12: @task_short follows the hub" "$(tf show-options -wqv -t "$WB" @task_short)"
 st_count; grep -q '"ev":"short"' "$FLEET_CONF_DIR/ids/$B.ndjson" || fail "S12: the hub's code is not written down in the ledger"
 fid push >/dev/null   # the `short` event goes up too; and the hub's list comes down
 st_count; [ "$(hub_has "$B")" = "$(mine "$B")" ] || fail "S12: the hub's B is not the ledger"
 st_count; grep -qx "$A" "$FLEET_CONF_DIR/ids/.known" || fail "S12: the hub's list did not reach .known" "$(cat "$FLEET_CONF_DIR/ids/.known" 2>/dev/null)"
-err=$(fid resolve T-7ym5y 2>&1 >/dev/null); rc=$?
+err=$(fid resolve ff1w 2>&1 >/dev/null); rc=$?
 st_count; { [ "$rc" = 2 ] && printf '%s' "$err" | grep -q "$A" && printf '%s' "$err" | grep -q "$B"; } \
-  || fail "S12: a 5-character code naming both IDs is refused with both" "rc=$rc $err"
+  || fail "S12: a 4-character code naming both IDs is refused with both" "rc=$rc $err"
+err=$(fid resolve T-7ym5y 2>&1 >/dev/null); rc=$?
+st_count; [ "$rc" = 2 ] || fail "S12: the old 5-character T- code naming both is refused too (compat-1v)" "rc=$rc $err"
 
 # ---- S13 · a cloned machine -----------------------------------------------------
 machine m3

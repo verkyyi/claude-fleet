@@ -16,12 +16,14 @@
 #        `--resume`): same native id ⇒ nothing, another ⇒ one segment, resume
 #   S11  a Codex window restored before its first turn: the ID answers with no
 #        segment at all, the first turn adds segment 1 (startup)
-#   CODE short codes: `T-` + 5 lowercase Crockford base32, one longer when another
-#        known ID shares the prefix; `T-<code>` resolves (case-folded, i/l/o read
-#        as 1/1/0); a prefix two IDs share is refused with both named (rc 2);
-#        fleet_win_for_addr takes a code, fleet-peer-send.sh a `T-` target (an
-#        ambiguous one refused, a unique one lands on that window), the MCP send
-#        tool lets `T-<code>` through
+#   CODE short codes (C11): 4 uppercase Crockford base32, the first a letter (never
+#        a number), one longer when another known ID shares the prefix; `K3F9` /
+#        `#k3f9` resolves (case-folded, I/L/O read as 1/1/0), a number never does;
+#        a prefix two IDs share is refused with both named (rc 2); the old `T-` +
+#        lowercase code still resolves (compat-1v) and an old `T-` short in a ledger
+#        is read as nothing; fleet_win_for_addr takes a code, fleet-peer-send.sh a
+#        code target (an ambiguous one refused, a unique one lands on that window,
+#        its receipt naming `#CODE`), the MCP send tool lets a code through
 #   HOOK never blocks: no tmux / a headless child / garbage stdin ⇒ exit 0, no
 #        output, nothing written; a ledger it cannot write is kept on the window
 #        (@id_retry) and flushed by the next hook
@@ -84,7 +86,7 @@ read -r W1 P1 <<EOF
 $(newwin "$F1")
 EOF
 short=$(bash "$BIN/fleet-id.sh" open "$F1" --window "$W1" --socket "$L" --agent claude --repo acme/app --title 'S1 work')
-ok; case "$short" in T-[0-9a-z][0-9a-z][0-9a-z][0-9a-z][0-9a-z]) ;; *) fail "S1: open prints a 5-character T- code" "$short" ;; esac
+ok; case "$short" in [A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z]) ;; *) fail "S1: open prints a 4-character code, letter first" "$short" ;; esac
 ok; [ "$(opt "$W1" @task_short)" = "$short" ] || fail "S1: open stamps @task_short on --window" "$(opt "$W1" @task_short)"
 hook "$P1" startup aaaa0001
 python3 "$BIN/fleet_id.py" result "$F1" --state succeeded --summary 'first' --pr 7
@@ -164,8 +166,14 @@ ok; [ "$(segs "$F11")" = "codex:dddd0001:startup:0" ] || fail "S11: the first tu
 
 # ---- CODE · short codes and addressing ------------------------------------------
 enc=$(python3 "$BIN/fleet_id.py" encode "$U1")
-ok; [ "${#enc}" = 26 ] && [ "$(printf '%s' "$enc" | tr -d '0-9abcdefghjkmnpqrstvwxyz')" = '' ] \
-  || fail "CODE: the full code is 26 lowercase Crockford characters" "$enc"
+ok; [ "${#enc}" = 26 ] && [ "$(printf '%s' "$enc" | tr -d '0-9ABCDEFGHJKMNPQRSTVWXYZ')" = '' ] \
+  && case "$enc" in [A-Z]*) true ;; *) false ;; esac \
+  || fail "CODE: the full code is 26 uppercase Crockford characters, a letter first" "$enc"
+# every ID's code starts with a letter — the lowest and highest IDs included
+for u in 00000000-0000-4000-8000-000000000000 ffffffff-ffff-4fff-bfff-ffffffffffff; do
+  e=$(python3 "$BIN/fleet_id.py" encode "$u")
+  ok; case "$e" in [A-HJKMNP-TV-Z]*) ;; *) fail "CODE: a code's first character is a letter" "$u → $e" ;; esac
+done
 # two IDs whose codes share 5 characters: the second one's code is 6 long
 CA=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_id, uuid
 a = uuid.UUID(int=(0x12345 << 108) | (4 << 76) | (2 << 62) | 1); print(a)' "$BIN")
@@ -173,16 +181,28 @@ CB=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_id, u
 b = uuid.UUID(int=(0x12345 << 108) | (1 << 100) | (4 << 76) | (2 << 62) | 2); print(b)' "$BIN")
 sa=$(bash "$BIN/fleet-id.sh" open "$CA" --agent claude)
 sb=$(bash "$BIN/fleet-id.sh" open "$CB" --agent claude)
-ok; [ "${#sa}" = 7 ] && [ "${#sb}" = 8 ] && [ "${sb:0:7}" = "$sa" ] \
-  || fail "CODE: the first takes 5 characters, the one sharing them 6" "$sa $sb"
+ok; [ "${#sa}" = 4 ] && [ "${#sb}" -gt 4 ] && [ "${sb:0:4}" = "$sa" ] \
+  || fail "CODE: the first takes 4 characters, the one sharing them more" "$sa $sb"
 out=$(bash "$BIN/fleet-id.sh" resolve "$sa" 2>&1); rc=$?
 ok; [ "$rc" = 2 ] && printf '%s' "$out" | grep -q "$CA" && printf '%s' "$out" | grep -q "$CB" \
-  || fail "CODE: the shared 5-character prefix is refused, both IDs named (rc 2)" "rc=$rc $out"
+  || fail "CODE: the shared 4-character prefix is refused, both IDs named (rc 2)" "rc=$rc $out"
 ok; [ "$(bash "$BIN/fleet-id.sh" resolve "$sb")" = "$CB" ] || fail "CODE: the 6-character code names one ID"
-upper="T-$(printf '%s' "${short#T-}" | tr 'a-z' 'A-Z')"
-ok; [ "$(bash "$BIN/fleet-id.sh" resolve "$upper")" = "$F1" ] || fail "CODE: a code resolves case-folded" "$upper"
+lower="#$(printf '%s' "$short" | tr 'A-Z' 'a-z')"
+ok; [ "$(bash "$BIN/fleet-id.sh" resolve "$lower")" = "$F1" ] || fail "CODE: a code resolves case-folded, # or not" "$lower"
+bash "$BIN/fleet-id.sh" resolve 4539 >/dev/null 2>&1; rc=$?
+ok; [ "$rc" = 1 ] || fail "CODE: a number is never a code" "$rc"
+# the old code (`T-` + 5 lowercase) still resolves for one version (compat-1v)
+old5=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_id; print("T-" + fleet_id.legacy_encode(sys.argv[2])[:5])' "$BIN" "$F1")
+ok; [ "$(bash "$BIN/fleet-id.sh" resolve "$old5")" = "$F1" ] || fail "CODE: the old T- code still resolves" "$old5"
+bash "$BIN/fleet-id.sh" resolve "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_id; print("T-" + fleet_id.legacy_encode(sys.argv[2])[:5])' "$BIN" "$CA")" >/dev/null 2>&1; rc=$?
+ok; [ "$rc" = 2 ] || fail "CODE: an old T- code two IDs share is refused (rc 2)" "$rc"
+# a ledger written before C11 (its `short` is `T-…`) reads as today's code
+FO=$(mkfid)
+printf '{"ev":"opened","agent":"claude","short":"T-abcde","id":"%s","seq":1,"ts":1}\n' "$FO" > "$FLEET_CONF_DIR/ids/$FO.ndjson"
+so=$(bash "$BIN/fleet-id.sh" short "$FO")
+ok; [ "$so" = "$(python3 "$BIN/fleet_id.py" encode "$FO" | cut -c1-4)" ] || fail "CODE: an old T- short in a ledger is recomputed" "$so"
 ok; [ "$(bash "$BIN/fleet-id.sh" resolve "$F1")" = "$F1" ] || fail "CODE: a full ID resolves to itself"
-bash "$BIN/fleet-id.sh" resolve T-zzzzzz >/dev/null 2>&1; rc=$?
+bash "$BIN/fleet-id.sh" resolve ZZZZZZ >/dev/null 2>&1; rc=$?
 ok; [ "$rc" = 1 ] || fail "CODE: a code nobody has is rc 1" "$rc"
 # a live window with no ledger is still an ID a code names
 FL=$(mkfid); read -r WL PL <<EOF
@@ -190,19 +210,21 @@ $(newwin "$FL")
 EOF
 cl=$(python3 "$BIN/fleet_id.py" short "$FL")
 ok; [ "$(lib fleet_win_for_addr "$cl" "$L")" = "$WL" ] || fail "CODE: a live window with no ledger answers to its code" "$(lib fleet_win_for_addr "$cl" "$L" 2>&1)"
-ok; [ "$(lib fleet_win_for_addr "$short" "$L")" = "$W1" ] || fail "CODE: fleet_win_for_addr takes a T- code"
+ok; [ "$(lib fleet_win_for_addr "$short" "$L")" = "$W1" ] || fail "CODE: fleet_win_for_addr takes a code"
+ok; [ "$(lib fleet_win_for_addr "#$short" "$L")" = "$W1" ] || fail "CODE: fleet_win_for_addr takes a #code"
+ok; [ "$(lib fleet_win_for_addr "$old5" "$L")" = "$W1" ] || fail "CODE: fleet_win_for_addr takes the old T- code"
 lib fleet_win_for_addr "$sa" "$L" >/dev/null 2>&1; rc=$?
 ok; [ "$rc" = 2 ] || fail "CODE: fleet_win_for_addr refuses an ambiguous code (rc 2)" "$rc"
 # fleet-peer-send.sh: an ambiguous code refused with the candidates; a unique one
 # lands on its window (no Claude there: it is queued for that window's identity)
 out=$(bash "$BIN/fleet-peer-send.sh" "$sa" hello 2>&1); rc=$?
 ok; [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'ambiguous' && printf '%s' "$out" | grep -q "$CB" \
-  || fail "CODE: peer-send refuses an ambiguous T- target, naming the candidates" "rc=$rc $out"
+  || fail "CODE: peer-send refuses an ambiguous code target, naming the candidates" "rc=$rc $out"
 s6=$(python3 "$BIN/fleet_id.py" short "$F6")
 out=$(bash "$BIN/fleet-peer-send.sh" "$s6" hello 2>&1); rc=$?
-ok; { [ "$rc" = 3 ] || [ "$rc" = 0 ]; } && printf '%s' "$out" | grep -q "$W6b" \
-  || fail "CODE: peer-send takes a T- target to its window" "rc=$rc $out"
-ok; grep -qF '|[Tt]-[0-9A-Za-z]{4,26}' "$BIN/fleet-mcp.py" || fail "CODE: the MCP send tool lets T-<code> through"
+ok; { [ "$rc" = 3 ] || [ "$rc" = 0 ]; } && printf '%s' "$out" | grep -q "#$s6" \
+  || fail "CODE: peer-send takes a code target to its window, the receipt naming #CODE" "rc=$rc $out"
+ok; grep -qF '|#[A-Za-z][0-9A-Za-z]{3,25}|[A-Z][0-9A-Z]{3,25}' "$BIN/fleet-mcp.py" || fail "CODE: the MCP send tool lets a code through"
 
 # ---- HOOK · never blocks, never speaks ------------------------------------------
 n0=$(ls "$FLEET_CONF_DIR/ids" | wc -l | tr -d ' ')

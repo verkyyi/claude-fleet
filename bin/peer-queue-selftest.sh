@@ -177,7 +177,7 @@ ok; [ "$a$b$c$d" = 0113 ] || fail "F: wait DELIVERED 0 · FAILED 1 · EXPIRED 1 
 W=$(win worker-80); tf set-window-option -t "$W" @issue 80
 WFID=$(fleet_window_fid "$L" "$W" "$L")
 out=$(bash "$BIN/fleet-peer-send.sh" -L "$L" "$W" 'hello, 80' 2>&1); rc=$?
-ok; [ "$rc" = 3 ] && case "$out" in "queued → $W"*) true ;; *) false ;; esac \
+ok; [ "$rc" = 3 ] && case "$out" in "queued → #"*" ($W · "*) true ;; *) false ;; esac \
   && grep -q "\"to_fid\": \"$WFID\"" "$Q"/*.json || fail "G: no live Claude ⇒ queued for its @fleet_id, exit 3" "rc=$rc $out"
 claude_up "$W" || fail "G: no fake claude came up under the worker"
 PQ drain -L "$L" >/dev/null

@@ -87,15 +87,15 @@ run "$F1" --socket "$L" --by tester
 ok; [ "$rc" = 0 ] && [ "$(segs "$F1")" = "claude:cc-1:clear claude:cc-2:clear" ] \
   || fail "A: a full ID works too; a second clear is a second segment" "rc=$rc $(segs "$F1")"
 
-# ---- B · Codex, the bare code in upper case, through fleet-id.sh clear -------------
+# ---- B · Codex, the bare code in lower case, through fleet-id.sh clear -------------
 F2=$(mkfid)
 read -r W2 _ <<EOF
 $(agentwin "$F2" codex cx)
 EOF
 S2=$(bash "$BIN/fleet-id.sh" open "$F2" --window "$W2" --socket "$L" --agent codex --title 'B work')
-UP=$(printf '%s' "${S2#T-}" | tr '[:lower:]' '[:upper:]')
+UP=$(printf '%s' "$S2" | tr '[:upper:]' '[:lower:]')   # any case (C11)
 out=$(bash "$BIN/fleet-id.sh" clear "$UP" --socket "$L" 2>"$WORK/err"); rc=$?
-ok; [ "$rc" = 0 ] || fail "B: an idle Codex session is cleared by its upper-case bare code" "rc=$rc $(cat "$WORK/err")"
+ok; [ "$rc" = 0 ] || fail "B: an idle Codex session is cleared by its lower-case bare code" "rc=$rc $(cat "$WORK/err")"
 ok; [ "$(segs "$F2")" = "codex:cx-1:clear" ] || fail "B: a codex clear segment" "$(segs "$F2")"
 
 # ---- C · busy: refused, nothing typed ----------------------------------------------
@@ -121,7 +121,7 @@ run "$F3" --socket "$L"
 ok; [ "$rc" = 2 ] || fail "D: two windows carrying one ID is refused (rc 2)" "rc=$rc $err"
 A1=22222222-2222-4222-8222-222222222221 A2=22222222-2222-4222-8222-222222222222
 agentwin "$A1" claude e1 >/dev/null; agentwin "$A2" claude e2 >/dev/null
-run "T-$(python3 "$BIN/fleet_id.py" encode "$A1" | cut -c1-6)" --socket "$L"
+run "$(python3 "$BIN/fleet_id.py" encode "$A1" | cut -c1-6)" --socket "$L"
 ok; [ "$rc" = 2 ] && case "$err" in *"$A1"*"$A2"*|*"$A2"*"$A1"*) true ;; *) false ;; esac \
   || fail "D: a code two IDs share is refused (rc 2), both named" "rc=$rc $err"
 

@@ -16,7 +16,7 @@ once, answers what the charter already answers, rides out quota ceilings, and
 stops when the core is empty — with the report (issue #4957).
 
 **Every session is a window ID** (EPIC T497 C5, docs/dev/FLEET-ID.md): this driver
-is the parent ID (`T-xxxxx`, the short code ⌘P shows), each member's session is a
+is the parent ID (`K3F9`, the short code ⌘P shows), each member's session is a
 child ID, and a member's **redo is a new ID whose `prev` is the one it replaces** —
 so a member is a chain of batons and the tick reads the newest one. Records
 (`T<n>`) are still written beside the IDs; the tick reads both. It reads and writes
@@ -62,7 +62,7 @@ that dies at the boundary. Therefore:
   counts, done, members[], next[], no_repo[], last_tick}` — every member of the
   charter (and every child added within scope) with its `state` (succeeded ·
   running · retry · blocked · waiting · unstarted), its newest baton's `id` /
-  `short` (`T-xxxxx`), its `ids` (every baton, a redo's `prev` naming the one it
+  `short` (`K3F9`), its `ids` (every baton, a redo's `prev` naming the one it
   replaced), its child tasks, its PR; `waiting` = a member the charter's 依赖顺序
   says waits on one that has not succeeded (`waits_on`) — released by that
   member's newest ID, never dispatched before (拍板 6); a `waits_on` entry
@@ -85,7 +85,7 @@ that dies at the boundary. Therefore:
     --short <short> --title "<title>"
   ```
 
-  `<mark>` is the read's `mark` — the parent's ID code `T-xxxxx` (its record
+  `<mark>` is the read's `mark` — the parent's ID code `K3F9` (its record
   `T<n>` while it has no ID); `--task "$P"` keeps the record beside it. It marks the batch running on this login (`fleet doctor`'s `epic` row; the
   person's opt-in EPIC hold, off by default — issue #2934) and renames this window
   `<简称>·批次` (issue #2544). A lease, not a lock — fresh 45 min, so a loop that
@@ -182,7 +182,7 @@ loop.
 A member reporting `BLOCKED` on work it found inside the charter's scope: dispatch
 that work as a new member (`C<next> · <名称>`, its repo, a body saying which member
 waits on it); when it lands tell the waiting one to go on —
-`mcp__fleet-orch__send` with `to:` the waiting member's `short` (`T-xxxxx`, the
+`mcp__fleet-orch__send` with `to:` the waiting member's `short` (`K3F9`, the
 tick's newest baton — routed by ID: a closed ID's message goes on to the ID that
 continued it, docs/dev/FLEET-ID.md). The charter's own 依赖顺序 needs no send: the
 tick holds a `waiting` member and puts it in `next` once what it waits on

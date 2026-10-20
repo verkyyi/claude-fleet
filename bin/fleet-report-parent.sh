@@ -391,6 +391,12 @@ case "$label" in
       _cr=$(fleet_window_repo "$sess" "$selfwin"); [ -n "$_cr" ] && label="$_cr $label"
     fi ;;
 esac
+# The child is named by its ID first (EPIC T497 C11): `#K3F9 · <label>`; a task
+# record's `T<n>` rides only as an alias note on the header (one version, then gone).
+if fleet_is_fid "$selffid" && _idc=$(bash "$BIN/fleet-id.sh" short "$selffid" 2>/dev/null) && [ -n "$_idc" ]; then
+  label="#$_idc · $label"
+fi
+idalias=''; case "${wtask:-}" in T[1-9]*) idalias=" (别名 $wtask)" ;; esac
 branch_arg="$BRANCH"
 [ -n "$BRANCH" ] || BRANCH="${selfkey##*:}"
 # The ledger spells the child the way its window and its placement do (issue
@@ -618,7 +624,7 @@ envelope() {
     waiting) st="WAITING${VERDICT:+ ($VERDICT)}" ;;
     idle)    st="IDLE${VERDICT:+ ($VERDICT)}" ;;
   esac
-  msg="[child-report] $label${wname:+ \"$wname\"}"$'\n'"state: $st · branch $BRANCH"
+  msg="[child-report] $label${wname:+ \"$wname\"}$idalias"$'\n'"state: $st · branch $BRANCH"
   # the stand-in note rides the state line: the envelope's size is the point of it
   [ -n "${RELAY_FROM:-}" ] && msg="$msg · 原 parent $RELAY_FROM 已回收，代收"
   if [ -n "$SUMMARY" ]; then

@@ -68,7 +68,7 @@ func TestIDMigrateSampleTable(t *testing.T) {
 		}
 	}
 	live := store.ClassifyIDMigration(sampleRecords()[7], answer)
-	if live.ID != fid488 || live.Short != "T-"+store.FleetIDCode(fid488)[:5] {
+	if live.ID != fid488 || live.Short != store.FleetIDCode(fid488)[:4] {
 		t.Fatalf("T488 → %+v; want its own @fleet_id and its short code", live)
 	}
 	// Today T488's record says succeeded while its window still runs: alive, the

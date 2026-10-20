@@ -649,7 +649,7 @@ Keyed by socket label as well as pane id: a pane id is unique per tmux server on
 **Making another session run a command — the sanctioned roads.** A raw
 `tmux send-keys` into a live fleet pane is refused by `hooks/bash-guard.py`; each
 of these finds the window, gates on it being idle, delivers (mod first) and checks:
-`/clear` — `fleet-id.sh clear <ID | T-code>` (`bin/fleet-clear-send.sh`, the
+`/clear` — `fleet-id.sh clear <ID | code>` (`bin/fleet-clear-send.sh`, the
 `clear` tool of `fleet-orch`, T592: by ID, this machine only, refused unless the
 turn is over (done / idle) or while a person types there, confirmed by a new native
 segment on the ID's ledger, audited in `logs/clear-send.log`; Claude and Codex

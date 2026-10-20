@@ -6082,7 +6082,26 @@ EOF
   return 2
 }
 
-# fleet_id_resolve <T-code | fleet_id> [<sock>] → the one full ID a short code names
+# fleet_is_idcode <s> — rc 0 when <s> is written as an ID's short code (EPIC T497
+# C11): `#K3F9`, a bare `K3F9` (any case — letter first, Crockford base32, 4–26),
+# or the old `T-hfkc7` (compat-1v: 下一批删). A key (`issue-<N>`, `scratch-<N>`,
+# `<slug>:…`, `agent:…`) always has a `-` or `:`, so the two never meet.
+fleet_is_idcode() {
+  case "${1:-}" in
+    [Tt]-?*) return 0 ;;
+    '#'?*) _fleet_bare_code "${1#\#}" ;;
+    *) _fleet_bare_code "${1:-}" ;;
+  esac
+}
+_fleet_bare_code() {
+  case "${1:-}" in
+    [A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z]*) case "$1" in *[!0-9A-Za-z]*|*[Uu]*) return 1 ;; esac
+       [ "${#1}" -le 26 ] ;;
+    *) return 1 ;;
+  esac
+}
+
+# fleet_id_resolve <code | fleet_id> [<sock>] → the one full ID a short code names
 # (EPIC T497 C1): every ID the ledger knows plus every live window's on <sock> (else
 # this pane's server). rc 1 none, rc 2 AMBIGUOUS — the candidates on one stderr line,
 # never a pick (bin/fleet_id.py resolve).
@@ -6093,16 +6112,17 @@ fleet_id_resolve() {
   FLEET_ID_LIVE="$live" python3 "$_FLEET_LIB_DIR/fleet_id.py" resolve "$code"
 }
 
-# fleet_win_for_addr <key | fleet_id | T-code> [<sock>] — the one entry for an
+# fleet_win_for_addr <key | fleet_id | code> [<sock>] — the one entry for an
 # address that may be any: an identity goes to fleet_win_for_fid, a short code
-# (`T-k3f9q`, EPIC T497 C1) through fleet_id_resolve first, a key to fleet_win_for_key.
+# (`K3F9` / `#K3F9`, EPIC T497 C11; the old `T-k3f9q` for one version) through
+# fleet_id_resolve first, a key to fleet_win_for_key.
 fleet_win_for_addr() {
   local f
-  case "${1:-}" in
-    [Tt]-?*) f=$(fleet_id_resolve "$1" "${2:-}") || return $?
-             fleet_win_for_fid "$f" "${2:-}" ;;
-    *) if fleet_is_fid "${1:-}"; then fleet_win_for_fid "$@"; else fleet_win_for_key "$@"; fi ;;
-  esac
+  if fleet_is_fid "${1:-}"; then fleet_win_for_fid "$@"
+  elif fleet_is_idcode "${1:-}"; then
+    f=$(fleet_id_resolve "$1" "${2:-}") || return $?
+    fleet_win_for_fid "$f" "${2:-}"
+  else fleet_win_for_key "$@"; fi
 }
 
 # fleet_worker_id <sess> <window> → that window's worker_id, `<fleet UUID>/<fleet_id>`

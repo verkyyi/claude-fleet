@@ -194,15 +194,15 @@ eq "C: C2 is released" "C2" "$(printf '%s' "$S" | jq_ '" ".join(n["key"] for n i
 # --- D. C2 on another machine, continued by hand ---------------------------------
 T_C=$(dispatch "C2 · 用上这个开关" "$(printf '%s' "$S" | jq_ 'd["next"][0]["body"]')")
 ID_C=$(wid "$T_C") ID_D=dddddddd-0000-4000-8000-00000000000d
-hub_id "{\"id\":\"$ID_C\",\"short\":\"T-c2aaa\",\"parent\":\"$DRV\",\"task\":\"$T_C\",\"opened_at\":50,\"results\":[],\"closed_at\":60}"
+hub_id "{\"id\":\"$ID_C\",\"short\":\"C2AA\",\"parent\":\"$DRV\",\"task\":\"$T_C\",\"opened_at\":50,\"results\":[],\"closed_at\":60}"
 S=$(tick)
-eq "D: its window closed with no result — a failure, not running forever" "retry T-c2aaa" "$(mem C2 '["state"]') $(mem C2 '["short"]')"
-hub_id "{\"id\":\"$ID_D\",\"short\":\"T-c2bbb\",\"prev\":\"$ID_C\",\"opened_at\":70,\"results\":[{\"state\":\"merged\",\"pr\":\"12\"}]}"
+eq "D: its window closed with no result — a failure, not running forever" "retry C2AA" "$(mem C2 '["state"]') $(mem C2 '["short"]')"
+hub_id "{\"id\":\"$ID_D\",\"short\":\"C2BB\",\"prev\":\"$ID_C\",\"opened_at\":70,\"results\":[{\"state\":\"merged\",\"pr\":\"12\"}]}"
 S=$(tick)
-eq "D: the continued ID carries C2" "succeeded 12 T-c2bbb" "$(mem C2 '["state"]') $(mem C2 '["pr"]') $(mem C2 '["short"]')"
+eq "D: the continued ID carries C2" "succeeded 12 C2BB" "$(mem C2 '["state"]') $(mem C2 '["pr"]') $(mem C2 '["short"]')"
 eq "D: nothing more to send" 0 "$(printf '%s' "$S" | jq_ 'len(d["next"])')"
 eq "D: the batch is done" True "$(printf '%s' "$S" | jq_ 'd["done"]')"
-eq "D: the report's read: every member's IDs" "C1:$(mem C1 '["ids"][0]["short"]'),$(mem C1 '["ids"][1]["short"]') C2:T-c2aaa,T-c2bbb" \
+eq "D: the report's read: every member's IDs" "C1:$(mem C1 '["ids"][0]["short"]'),$(mem C1 '["ids"][1]["short"]') C2:C2AA,C2BB" \
   "$(printf '%s' "$S" | jq_ '" ".join(m["key"]+":"+",".join(i["short"] for i in m["ids"]) for m in d["members"])')"
 has "D: the line says write the report" "$(tick --line)" "该写报告"
 
@@ -213,13 +213,18 @@ eq "E: C1 still read off this machine's ledgers" "succeeded" "$(mem C1 '["state"
 
 # --- F. the heartbeat by the ID's code -------------------------------------------
 bash "$BIN/fleet-epic-heartbeat.sh" "$P" --tick 1 >/dev/null
+# a mark by the old code, before C11 (compat-1v): replaced by the new one too
+printf 'epoch: %s\nepic: T-abcde\ntask: %s\n' "$(date +%s)" "$P" > "$WORK/conf/global/epic-running.d/o-r-T-abcde"
 H=$(bash "$BIN/fleet-epic-heartbeat.sh" "$DSHORT" --task "$P" --tick 2 --live 0 --inflight 0)
+case "$DSHORT" in [A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z]*) r=ok ;; *) r=$DSHORT ;; esac
+eq "F: the parent's code is today's (letter first, upper case — C11)" ok "$r"
 has "F: stamped by the parent's code" "$H" "stamped epic=$DSHORT"
-eq "F: one batch, one mark (the record's older one replaced)" "o-r-$DSHORT" "$(ls "$WORK/conf/global/epic-running.d")"
+eq "F: one batch, one mark (the record's and the old code's replaced)" "o-r-$DSHORT" "$(ls "$WORK/conf/global/epic-running.d")"
 has "F: the record beside it" "$(cat "$WORK/conf/global/epic-running.d/o-r-$DSHORT")" "task: $P"
 has "F: cleared by the record" "$(bash "$BIN/fleet-epic-heartbeat.sh" --clear "$P")" "cleared"
 eq "F: nothing left" "" "$(ls "$WORK/conf/global/epic-running.d")"
 bash "$BIN/fleet-epic-heartbeat.sh" "T-ab!" >/dev/null 2>&1; eq "F: a bad code is refused" 2 "$?"
+bash "$BIN/fleet-epic-heartbeat.sh" "KUUU" >/dev/null 2>&1; eq "F: a code with U is refused" 2 "$?"
 
 # --- G. the driver's progress word, on its ID ------------------------------------
 python3 - "$P" <<'PY'
@@ -269,11 +274,11 @@ S=$(tick)
 eq "H: C3 succeeded off that ID" "succeeded 13 $ID_E" "$(mem C3 '["state"]') $(mem C3 '["pr"]') $(mem C3 '["ids"][0]["id"]')"
 eq "H: one ID on C3's chain" 1 "$(mem C3 '["ids"].__len__()')"
 eq "H: C4, no ID opened on it, still runs" "running $T_F 0" "$(mem C4 '["state"]') $(mem C4 '["task"]') $(mem C4 '["ids"].__len__()')"
-hub_id "{\"id\":\"$ID_F\",\"short\":\"T-c4aaa\",\"parent\":\"$DRV\",\"task\":\"$T_F\",\"opened_at\":80,\"results\":[{\"state\":\"failed\"}],\"closed_at\":90}"
+hub_id "{\"id\":\"$ID_F\",\"short\":\"C4AA\",\"parent\":\"$DRV\",\"task\":\"$T_F\",\"opened_at\":80,\"results\":[{\"state\":\"failed\"}],\"closed_at\":90}"
 ID_G=99999999-0000-4000-8000-000000000009
-hub_id "{\"id\":\"$ID_G\",\"short\":\"T-c4bbb\",\"parent\":\"$DRV\",\"task\":\"$T_F\",\"prev\":\"$ID_F\",\"opened_at\":95,\"results\":[{\"state\":\"merged\",\"pr\":\"14\"}]}"
+hub_id "{\"id\":\"$ID_G\",\"short\":\"C4BB\",\"parent\":\"$DRV\",\"task\":\"$T_F\",\"prev\":\"$ID_F\",\"opened_at\":95,\"results\":[{\"state\":\"merged\",\"pr\":\"14\"}]}"
 S=$(tick)
-eq "H: two IDs on one record: the newest down prev carries it" "succeeded 14 T-c4bbb" "$(mem C4 '["state"]') $(mem C4 '["pr"]') $(mem C4 '["short"]')"
+eq "H: two IDs on one record: the newest down prev carries it" "succeeded 14 C4BB" "$(mem C4 '["state"]') $(mem C4 '["pr"]') $(mem C4 '["short"]')"
 has "H: the line counts both" "$(tick --line)" "合 4"
 
 # --- I. the driver continued (C18): its successor's dispatches are the batch's ---

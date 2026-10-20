@@ -1,16 +1,31 @@
 # 一个窗口一个 ID：节点账本与原生段
 
-EPIC T497 的 C1（节点账本）、C2（hub 镜像）、C3（⌘P 面板的编号列）、C4（结果、父子、通信）、C5（EPIC 批次）、C6（迁移命令与切换开关）与 C8（删执行权层）。设计页：「会话与 hub 任务（T）的关系 · 设计稿」第 6 版（§3、§4.1、§4.2、§4.6、§6）。
+EPIC T497 的 C1（节点账本）、C2（hub 镜像）、C3（⌘P 面板的编号列）、C4（结果、父子、通信）、C5（EPIC 批次）、C6（迁移命令与切换开关）、C8（删执行权层）与 C11（一律用短码称呼会话）。设计页：「会话与 hub 任务（T）的关系 · 设计稿」第 6 版（§3、§4.1、§4.2、§4.6、§6）。
 开关 2026-10-20 打开（C7）；C8 起节点上不再有执行权：窗口的 ID 就是会话，任务记录 T<n> 只是派单的 ticket（见文末「C8」）。
 
-## ID 与短码
+## ID 与短码（设计页 §3.1a；C11 起的规则）
 
-- 完整 ID 就是窗口的 `@fleet_id`（UUIDv4，`fleet_fid_mint` 开窗时铸），形状不变。
-- 短码 = `T-` + 完整 ID 的小写 Crockford base32 前缀（去掉 `i l o u`），默认 5 位；
-  本登录已知的另一个 ID 与它同前缀时加长一位，以此类推（像 git 的短 SHA）。
+- 完整 ID 就是窗口的 `@fleet_id`（UUIDv4，`fleet_fid_mint` 开窗时铸），形状不变（128 位）。
+- **短码**是从完整 ID **重新算出的显示码**，不另存一列、不是真相：把 128 位按比例铺到 26 位上——第 1 位取 22 个字母之一、
+  后 25 位是 base32（Crockford，**大写**，不用 `I L O U`）——所以**第一位永远是字母**，短码永远不是纯数字，
+  不和 issue / PR 号混（搜 `4539` 不会命中 ID），而且前缀仍是 ID 自己的前缀、顺序与 ID 一致。
+  默认取前 **4 位**；本登录已知的另一个 ID 与它同前缀时加长一位，以此类推（像 git 的短 SHA），只在同一用户内唯一。
+  `fleet_id.py encode` / hub 的 `FleetIDCode` 逐字节相同（`TestFleetIDCodeMatchesNode`）。
+- **怎么写**：面板与编号列、回报里**不带前缀**——⌘P 编号列只显示 `K3F9`；纯文字消息里写 `#K3F9`（`fleet_id.tag`），
+  如 `[child-report] #K3F9 · acme/app issue #12 "…" (别名 T486)`、`id: #K3F9 (<完整 ID>)`、send 回执 `sent → #K3F9 (…)`。
+  hub 任务记录的 `T<n>` 只作别名附注（一个版本后去掉，见 [ID-SWITCH.md](ID-SWITCH.md)「短码与旧 T 号的退场」）。
 - 「已知」= 账本里的 ID + `ids/.known`（hub 镜像回写，C2）+ 活着的窗口。
-- 寻址接受短码或完整 ID：`fleet_win_for_addr`、`fleet-peer-send.sh`、MCP `send` 的 `to`。
-  一个短码对上两个 ID 就拒绝并列出两个候选（rc 2），从不猜。输入大小写不敏感，`i/l/o` 按 `1/1/0` 读。
+- **寻址**接受短码或完整 ID：`fleet_win_for_addr`、`fleet-peer-send.sh`、`fleet-await.sh`、`fleet-children.sh`、
+  `fleet-clear-send.sh`、MCP `send` 的 `to` / `await` 的 `id` / `clear` 的 `id`（`fleet_is_idcode` 认得：`#K3F9`、裸 `K3F9`、
+  旧 `T-…`；键总带 `-` 或 `:`，两者不会撞）。输入大小写都认，`I/L` 读作 `1`、`O` 读作 `0`；`#` 可带可不带
+  （`#4539` 首位是数字，仍是 issue）。MCP `send` 的 `to` 里裸写要大写（`K3F9`），小写要带 `#`——一个普通英文词不会被当成短码。
+  一个短码对上两个 ID 就拒绝并列出两个候选（rc 2），从不猜。
+- **旧写法兼容一个版本**（compat-1v）：`T-hfkc7`（`T-` + 完整 ID 的**小写** base32 前缀，C1–C10 用的那种）照样寻址——
+  按旧编码（`legacy_encode` / `FleetIDLegacyCode`，同样是算出来的）比前缀；⌘P 搜得到，Tab 页把它列在别名里。
+- **已存的旧短码怎么过渡**：账本里 `opened.short` 与 `short` 事件存的 `T-xxxxx`、窗口的 `@task_short` 都**按没有读**——
+  显示时重新算新短码；下一次钩子把 `@task_short` 改成新码；hub 镜像 `fleet_ids` 的 `code` / `short` 两列在 hub 启动时
+  就地改成新码（`backfillFleetIDCodes`：认首位不是大写字母的行，按 owner、开窗先后重算，撞了加长后来的；幂等）。
+  ID 本身不动；旧 hub 回的 `T-…` 短码节点也按没有读（`hub_short`）。
 - 窗口上 `@task_short` 记它的短码（开窗时 `fleet-id.sh open` 盖，之后钩子补）。
 
 ## 账本
@@ -47,8 +62,8 @@ Codex 用同一张表，在每个线程的第一轮跑到它。
 ## 命令
 
 ```
-fleet-id.sh get <ID | T-code> [--json]   ID、短码、opened、各段（agent · 原生 id · 起止 · trigger · 压缩次数）、结果
-fleet-id.sh resolve <ID | T-code>        → 完整 ID；rc 1 没有，rc 2 有歧义（候选在 stderr）
+fleet-id.sh get <ID | code> [--json]   ID、短码、opened、各段（agent · 原生 id · 起止 · trigger · 压缩次数）、结果
+fleet-id.sh resolve <ID | code>        → 完整 ID；rc 1 没有，rc 2 有歧义（候选在 stderr）
 fleet-id.sh short <ID>
 fleet-id.sh open|native|result|close …   见脚本头
 fleet-id.sh push [<ID>…]                 把账本推给 hub 镜像（C2）
@@ -68,7 +83,7 @@ fleet-id.sh status|route|children|await|history|continue|reopen …   结果、�
 - **接班与转交**（`fleet-id.sh route`，`fleet_id_take`）：发给一个 ID 的回报 / 消息——它开着就给它；
   关了就顺「谁的 prev 是它」找最新的活 ID（接班）；没有就交给它的 `parent`（同样规则往上）；
   再没有 ⇒ 你的提醒（`global/orphan-reports.ndjson`）。本机账本不认识的 ID 走旧路（hub、键）。
-  `fleet-report-parent.sh`、`fleet_task_control.py receive`（切换前排着的子回报）、`fleet-peer-send.sh T-<code>`
+  `fleet-report-parent.sh`、`fleet_task_control.py receive`（切换前排着的子回报）、`fleet-peer-send.sh K3F9`
   都按它走；回报**不核父任务代次与原生进程**——/clear、交接、换 Agent、重开都不换 ID（BREAK-IT `report-parent-cleared`）。
 - **父子**：两个派单入口开账本时记 `--parent`（派它的会话的 ID，`fleet_spawn_parent_id`：交来的 worker_id 的后半；
   否则 `--origin` 本身就是 ID 时就是它——编排、驱动、no-repo 会话这类没有键的父会话，`task` 派单都走这条；
@@ -76,7 +91,7 @@ fleet-id.sh status|route|children|await|history|continue|reopen …   结果、�
   `fleet-children.sh --ids` 列出 parent 是它的 ID。C9 之前 `task` 派出的子 ID 没记上父：
   `fleet-id.sh parents [--apply]` 按它 `opened` 的 `task` 读 hub 记录的 parent_session（后半）补一条只填空的
   `opened {parent}` 并推给 hub 镜像（默认只列不写；没有 hub ⇒ 3）。
-- **等待**：`fleet-await.sh T-<code> | fid:<ID> | <ID>` → `fleet-id.sh await`：有不是回合边界（waiting / idle）的
+- **等待**：`fleet-await.sh K3F9 | fid:<ID> | <ID>`（MCP `await` 的 `id`） → `fleet-id.sh await`：有不是回合边界（waiting / idle）的
   结果就答（MERGED / SUCCEEDED 0，其余 1），关了没结果 EXITED 4，超时 3；本机没有账本时读 hub 镜像那一条。
 - **历史**（`fleet-history.sh ids|show|continue|reopen`）：按 ID 一行（短码 · 状态 · 结果 · 关闭时间 · 标题），
   `show` 展开原生段。「从这一段继续」= `continue <ID> --seg N --exec`：新窗口、新 ID、`prev` = 它，它保持已关（S8）；
@@ -106,7 +121,7 @@ fleet-id.sh status|route|children|await|history|continue|reopen …   结果、�
   `--id-task` / `--id-parent`，不认领、不进准入）；线上任一 ID 派的子 ID 都是这批的成员——哪怕它的记录没挂
   `parent_task`（只带 parent_session）；进度词取线上最新的一条。父记录没人认领（ID 开关）时，父 ID 是本机为它开的、
   prev 链起点的那个 ID。外批依赖（`T542 C7`）没合并就在 `waits_on`；合了就放行，并在成员的 `outside` 里写明 `done`。
-- **批次标记**：`epic-running.d/<slug>-T-xxxxx`（tick 的 `mark`，父 ID 的短码）带一行 `task: T<n>`；
+- **批次标记**：`epic-running.d/<slug>-K3F9`（tick 的 `mark`，父 ID 的短码；C11 之前打的 `<slug>-T-xxxxx` 下一个 tick 换掉）带一行 `task: T<n>`；
   盖新标记时删掉同一批旧的 `<slug>-T<n>`，`--clear T<n>` 也清得掉它。
 - tick 的 JSON 多了 `parent_id` · `parent_short` · `mark`，每个成员的 `id` · `short` · `ids`（每一棒，带 prev），
   重试项的 `prev`。没有 ID、没有 hub ⇒ 只读记录，跟以前一样。
@@ -127,8 +142,8 @@ issues · body · parent · prev · aliases · asked · parked · opened_at · c
   没有 hub / 节点令牌 ⇒ exit 3，什么都不发；hub 没应 ⇒ 75，下一轮接着推。`FLEET_ID_PUSH=0` 关掉自动推送。
 - **短码在用户内唯一**：hub 登记时按本 owner 全部 ID 核一次，撞了就把**后登记的**加长；
   回答里带上，节点写一条 `short` 事件并改窗口的 `@task_short`（S12）。`GET /v1/node/ids` 是本 owner
-  的 ID 表，每 10 分钟最多拉一次写进 `ids/.known`，本机选短码、解析短码都把它算进去——5 位对上两个就拒绝并列候选。
-  `GET /v1/node/ids/<ID|T-code>` 读一条，歧义回 409 `AMBIGUOUS`。
+  的 ID 表，每 10 分钟最多拉一次写进 `ids/.known`，本机选短码、解析短码都把它算进去——4 位对上两个就拒绝并列候选。
+  `GET /v1/node/ids/<ID|code>`（`K3F9`，或旧的 `T-…`）读一条，歧义回 409 `AMBIGUOUS`。
 - **完整 ID 重复即拒**：hub 已有、来自另一台机器（或另一个 owner）的同一个完整 ID ⇒ 409 `DUPLICATE_ID`，
   什么都不存（整机克隆，S13）。节点记 `ids/.hub/<ID>.refused`、在那个窗口上盖 `@id_hub_error`、
   发一条 `id-duplicate` 提醒，这本账不再推；窗口照常跑，新开的窗口不受影响。只有以 `moved` 开头的推送能把 ID 改挂到别的机器。

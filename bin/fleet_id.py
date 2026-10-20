@@ -3,11 +3,16 @@
 (EPIC T497 C1; design page §3, §4.1, §4.2).
 
 A window's ID is its @fleet_id (a UUIDv4, minted once at spawn — fleet_fid_mint).
-What a person reads is its SHORT CODE: `T-` + the ID's first characters in
-lowercase Crockford base32 (no i l o u), 5 by default, one longer for as long as
-another ID this login knows shares the prefix (like git's short SHA). An address
-`T-<prefix>` resolves to every known ID whose code starts with it: one ⇒ that ID,
-several ⇒ refused with the candidates (rc 2), never a pick.
+What a person reads is its SHORT CODE (EPIC T497 C11): the first characters of the
+ID's display code — uppercase Crockford base32 (no I L O U) whose FIRST character is
+always a letter, so a code is never a number an issue or PR could be — 4 by default,
+one longer for as long as another ID this login knows shares the prefix (like git's
+short SHA). It is recomputed from the 128-bit ID, never stored as the truth. Panels
+print it bare (`K3F9`), a message `#K3F9`. An address (`K3F9`, `#k3f9`, any case;
+I/L read 1, O read 0) resolves to every known ID whose code starts with it: one ⇒
+that ID, several ⇒ refused with the candidates (rc 2), never a pick. The old code
+`T-` + 5 lowercase (`T-hfkc7`, the ID's plain base32) still resolves for one version
+(compat-1v), and a ledger's stored `T-…` short is read as nothing.
 
 The ledger is $FLEET_CONF_DIR/ids/<ID>.ndjson, one event a line, each with its
 (ID, seq): `opened` (the spawn: agent, window, repo, title …), `native` (a native
@@ -40,9 +45,13 @@ import sys
 import time
 import uuid
 
-ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"   # Crockford base32, lowercase
-SHORT_MIN = 5
+ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"   # Crockford base32, lowercase — the old code (compat-1v)
+DIGITS = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"     # the display code: Crockford base32, uppercase
+LETTERS = "ABCDEFGHJKMNPQRSTVWXYZ"              # its first character: a letter, never a digit
+SHORT_MIN = 4
 ADDR_MIN = 4
+LEGACY_MIN = 4   # an old `T-` address's least length (compat-1v)
+CODE_SPAN = 22 * 32 ** 25   # 26 places: one letter, 25 base32 — more than 2^128, so no two IDs share a full code
 FID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 TRIGGERS = ("startup", "clear", "handoff", "transfer", "resume", "new", "migrated")
 NEXT_TRIGGER_TTL = 600   # @id_next_trigger older than this is stale
@@ -61,31 +70,73 @@ def is_fid(s):
 
 
 def encode(fid):
-    """The ID's full code: 128 bits → 26 base32 characters, most significant first."""
+    """The ID's full display code: 26 places, most significant first — the 128 bits
+    scaled onto one letter place (22) and 25 base32 places, so the order and the
+    prefixes are the ID's own and the first character is always a letter."""
+    v = (int(fid.replace("-", ""), 16) * CODE_SPAN) >> 128
+    out = []
+    for _ in range(25):
+        v, d = divmod(v, 32)
+        out.append(DIGITS[d])
+    out.append(LETTERS[v])
+    return "".join(reversed(out))
+
+
+def legacy_encode(fid):
+    """The OLD full code (`T-` addresses, compat-1v: 下一批删): 128 bits → 26
+    lowercase base32 characters, most significant first."""
     n = int(fid.replace("-", ""), 16) << 2   # 130 bits = 26 × 5
     return "".join(ALPHABET[(n >> (5 * (25 - i))) & 31] for i in range(26))
 
 
-def norm_code(s):
-    """A typed code → its canonical lowercase form, or None. Takes `T-` / `t-` or bare;
-    Crockford's reading of i/l (1) and o (0); u is no digit."""
+def parse_code(s):
+    """A typed code → (canonical code, legacy?) or None. `K3F9` / `#k3f9` / any case,
+    Crockford's reading of I/L (1) and O (0), U no digit, the first character a letter;
+    `T-…` / `t-…` is the old lowercase code (compat-1v: 下一批删)."""
     s = (s or "").strip()
     if s[:2] in ("T-", "t-"):
-        s = s[2:]
-    s = s.lower().replace("i", "1").replace("l", "1").replace("o", "0")
-    if len(s) < ADDR_MIN or len(s) > 26 or any(c not in ALPHABET for c in s):
+        s = s[2:].lower().replace("i", "1").replace("l", "1").replace("o", "0")
+        if len(s) < LEGACY_MIN or len(s) > 26 or any(c not in ALPHABET for c in s):
+            return None
+        return s, True
+    if s[:1] == "#":
+        s = s[1:]
+    s = s.upper().replace("I", "1").replace("L", "1").replace("O", "0")
+    if len(s) < ADDR_MIN or len(s) > 26 or s[0] not in LETTERS or any(c not in DIGITS for c in s):
         return None
-    return s
+    return s, False
+
+
+def norm_code(s):
+    """A typed NEW code → its canonical uppercase form, or None (an old `T-` code is None)."""
+    p = parse_code(s)
+    return p[0] if p and not p[1] else None
+
+
+def is_short(s):
+    """A stored short in today's form (`K3F9`), not an old `T-…` one."""
+    return isinstance(s, str) and norm_code(s) == s
 
 
 def short_for(fid, known):
-    """The shortest code (≥ SHORT_MIN) no other known ID shares, as `T-<code>`."""
+    """The shortest code (≥ SHORT_MIN) no other known ID shares: `K3F9`."""
     me = encode(fid)
     others = [encode(k) for k in known if is_fid(k) and k != fid]
     n = SHORT_MIN
     while n < 26 and any(o[:n] == me[:n] for o in others):
         n += 1
-    return "T-" + me[:n]
+    return me[:n]
+
+
+def hub_short(fid, s):
+    """A short the hub answered: today's form as is; an old hub's `T-…` (compat-1v) or
+    none ⇒ recomputed here."""
+    return s if is_short(s) else short_for(fid, known_ids([fid]))
+
+
+def tag(short):
+    """A short code as a message writes it: `#K3F9` (bare in a panel's column)."""
+    return "#" + short if short else ""
 
 
 def ledger_path(fid):
@@ -174,6 +225,8 @@ def fold(events):
             for k, v in ev.items():
                 if k in ("ev", "seq", "id", "lazy"):
                     continue
+                if k == "short" and not is_short(v):
+                    continue   # an old `T-…` code (compat-1v): today's is recomputed from the ID
                 if v not in (None, "") and k not in rec["opened"]:
                     rec["opened"][k] = v
         elif kind == "native":
@@ -196,7 +249,7 @@ def fold(events):
         elif kind == "short":
             # the hub's code for this ID (EPIC T497 C2): only ever longer
             have = rec["opened"].get("short", "")
-            if isinstance(ev.get("short"), str) and len(ev["short"]) > len(have):
+            if is_short(ev.get("short")) and len(ev["short"]) > len(have):
                 rec["opened"]["short"] = ev["short"]
         elif kind == "closed":
             if rec["closed"] is None:
@@ -326,10 +379,12 @@ def resolve(addr, extra_known=()):
     a = (addr or "").strip()
     if is_fid(a):
         return 0, [a]
-    code = norm_code(a)
-    if code is None:
+    p = parse_code(a)
+    if p is None:
         return 1, []
-    hits = sorted(f for f in known_ids(extra_known) if encode(f).startswith(code))
+    code, legacy = p
+    enc = legacy_encode if legacy else encode
+    hits = sorted(f for f in known_ids(extra_known) if enc(f).startswith(code))
     if not hits:
         return 1, []
     return (0 if len(hits) == 1 else 2), hits
@@ -604,7 +659,7 @@ def _hub_record(fid):
     code, ans = _poster()("GET", "/v1/node/ids/" + fid)
     if code != 200 or not isinstance(ans, dict):
         return None
-    rec = {"opened": {"short": ans.get("short", ""), "title": ans.get("title", ""), "parent": ans.get("parent", ""),
+    rec = {"opened": {"short": hub_short(fid, ans.get("short", "")), "title": ans.get("title", ""), "parent": ans.get("parent", ""),
                       "prev": ans.get("prev", "")}, "segments": [], "closed": None,
            "results": [{"state": r.get("state", ""), "summary": r.get("summary", ""), "pr": r.get("pr", ""),
                         "ts": r.get("at")} for r in ans.get("results") or [] if isinstance(r, dict)]}
@@ -731,14 +786,14 @@ def family(fid, live, idx=None, seeds=()):
             continue
         if "parent" not in x and "prev" not in x and "results" not in x:
             continue   # an older hub: the owner's bare id list
-        rec = {"opened": {"short": x.get("short", ""), "title": x.get("title", ""), "parent": x.get("parent", ""),
+        rec = {"opened": {"short": hub_short(x["id"], x.get("short", "")), "title": x.get("title", ""), "parent": x.get("parent", ""),
                           "prev": x.get("prev", ""), "task": x.get("task", ""), "ts": x.get("opened_at")},
                "segments": [], "closed": None,
                "results": [{"state": r.get("state", ""), "summary": r.get("summary", ""), "pr": r.get("pr", ""),
                             "ts": r.get("at")} for r in x.get("results") or [] if isinstance(r, dict)]}
         if x.get("closed_at"):
             rec["closed"] = {"ts": x["closed_at"], "reason": x.get("close_reason", "")}
-        rows[x["id"]] = _family_row(x["id"], rec, _hub_status(x["id"], rec, x.get("short", "")), "hub")
+        rows[x["id"]] = _family_row(x["id"], rec, _hub_status(x["id"], rec, rec["opened"]["short"]), "hub")
     out = sorted((r for r in rows.values() if r["id"] not in line), key=lambda r: (r.get("opened_at") or 0, r["id"]))
     pg = None
     for f in line:   # the newest word down the line (C18)
@@ -769,7 +824,7 @@ def await_id(fid, timeout, interval, live_fn):
             short = rec["opened"].get("short") or short_for(fid, known_ids())
             if r and r.get("state") not in SILENT_STATES:
                 word = r.get("state", "").upper() or "RESULT"
-                lines = [word, "id: %s (%s)" % (short, fid)]
+                lines = [word, "id: %s (%s)" % (tag(short), fid)]
                 if r.get("pr"):
                     lines.append("pr: #%s" % str(r["pr"]).lstrip("#"))
                 if r.get("summary"):
@@ -778,7 +833,7 @@ def await_id(fid, timeout, interval, live_fn):
                 st = r.get("state")
                 return 0 if st in DONE_STATES else 1
             if rec["closed"] is not None:
-                print("EXITED\nid: %s (%s)\nnote: the window closed without a result" % (short, fid))
+                print("EXITED\nid: %s (%s)\nnote: the window closed without a result" % (tag(short), fid))
                 return 4
         left = end - time.time()
         if left <= 0:
@@ -1067,7 +1122,7 @@ def push_one(fid, call, where=None):
         got = ans["seq"]
         short = ans.get("short") or ""
         have = fold(read(fid))["opened"].get("short", "")
-        if short.startswith("T-") and len(short) > len(have):
+        if is_short(short) and len(short) > len(have):
             append(fid, {"ev": "short", "short": short, "by": "hub"})
             _wset_any(where, "@task_short", short)
         if got > seq or got < seq:
@@ -1222,7 +1277,8 @@ def hook(stdin):
             # a new window that resumed another ID's segment is a new ID whose prev is
             # that one (S9; a spawn with --resume already wrote it — first value wins)
             open_id(fid, {"prev": ev["from"].split("#")[0]})
-        short = fold(read(fid))["opened"].get("short")
+        # an old `T-…` stamp (compat-1v) is replaced by today's code on the next hook
+        short = fold(read(fid))["opened"].get("short") or short_for(fid, known_ids([fid]))
         if short and wopt(pane, "@task_short") != short:
             wset(pane, "@task_short", short)
         push_later(fid)

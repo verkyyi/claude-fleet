@@ -110,7 +110,7 @@
 #           restorer name the resumed window from the title + bind @issue (#319).
 #   ids [<filter>] [--all] [--json]  By ID (EPIC T497 C4): one row per window ID —
 #           code · 状态 · result · closed at · title (fleet-id.sh history).
-#   show <ID|T-code>                 its native segments (agent · id · span · trigger).
+#   show <ID|code>                 its native segments (agent · id · span · trigger).
 #   continue <ID> [--seg N] [--exec] 「从这一段继续」: a new window, a new ID, prev = it.
 #   reopen <ID> [--exec]             「恢复这个窗口」: the same ID, its newest segment.
 # <key> is an issue number (a worker) or a `scratch-<N>` slug (a scratch, #466).

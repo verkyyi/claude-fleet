@@ -114,8 +114,11 @@ func (s *Server) handleNodeIDs(w http.ResponseWriter, r *http.Request) {
 		id := ref
 		if !store.IsFleetID(id) {
 			code := store.NormIDCode(ref)
+			if lc := store.LegacyIDCode(ref); code == "" && lc != "" {
+				code = "T-" + lc // the old `T-…` (compat-1v: 下一批删): FleetIDsOf reads it as such
+			}
 			if code == "" {
-				httpError(w, http.StatusBadRequest, "an ID or a short code T-<4+ base32>")
+				httpError(w, http.StatusBadRequest, "an ID or a short code (K3F9: Crockford base32, letter first, 4+)")
 				return
 			}
 			hits, err := s.Store.FleetIDsOf(owner, code)

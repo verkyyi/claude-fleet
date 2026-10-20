@@ -27,7 +27,7 @@ key the charter does not list (`C5 · …`, a member added within scope) is a
 member too.
 
 By ID (EPIC T497 C5). Every session is a window ID (`@fleet_id`, short code
-`T-xxxxx` — docs/dev/FLEET-ID.md): the parent's ID is the driver's (the second
+`K3F9` — docs/dev/FLEET-ID.md): the parent's ID is the driver's (the second
 half of the parent record's worker_id), each child's is its record's. One read of
 `fleet-id.sh family <parent ID>` (this machine's ledgers + the hub mirror's
 `?parent=`) gives every member's ID, its results, and every ID that continued it
@@ -74,7 +74,7 @@ which `fleet_task_control.py progress` writes with the ID switch on — EPIC T49
 C12), else the record's `progress` from before the switch (`last_tick_src` id |
 record); `report` is that word's `report: <pending | link>` (fleet-epic-run §4).
 `mark` is what the heartbeat stamps the batch as: the parent's short code
-(`T-xxxxx`), else its record `T<n>`.
+(`K3F9`), else its record `T<n>`.
 
 Exit: 0 read · 1 the hub did not answer · 2 usage / no parent / no charter ·
 3 no hub here (fleet-task-record.sh exit 3).
@@ -196,14 +196,14 @@ def adopted(rows, line, have):
 
 
 def code_of(fid):
-    """An ID with no record anywhere still has a code: its first five (fleet_id.py's
+    """An ID with no record anywhere still has a code: its first four (fleet_id.py's
     encoding — a longer one only where the ledger or the hub says so)."""
     if not fid:
         return ""
     sys.path.insert(0, str(BIN))
     try:
         import fleet_id
-        return "T-" + fleet_id.encode(fid)[:fleet_id.SHORT_MIN]
+        return fleet_id.encode(fid)[:fleet_id.SHORT_MIN]
     except (ImportError, ValueError):
         return ""
     finally:

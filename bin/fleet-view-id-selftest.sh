@@ -2,10 +2,11 @@
 # fleet-view-id-selftest.sh — ⌘P's ID column is the window's own short code
 # (EPIC T497 C3, design page §8; fleet_view.py's id_* over bin/fleet_id.py's ledger).
 #
-#   A  the ID column: `T-` + 5 (a window's ledger `short`, else the prefix this login
-#      knows no other ID to share); two IDs sharing 5 ⇒ 6; no @fleet_id ⇒ blank,
-#      never a `T?`; a hub task's T<n> is an alias only (searched, not drawn);
-#      another machine's row gets its code off its worker_id; offline the same (S9)
+#   A  the ID column: 4 uppercase, a letter first, no `T-` (C11 — a window's ledger
+#      `short`, else the prefix this login knows no other ID to share); two IDs
+#      sharing 4 ⇒ 5; no @fleet_id ⇒ blank, never a `T?`; a hub task's T<n> and the
+#      old `T-` code are aliases only (searched, not drawn); another machine's row
+#      gets its code off its worker_id; offline the same (S9)
 #   B  Agent: the newest native segment's (S4: a transfer reads Codex), else the one
 #      it was opened with, else the window's @cc_agent (a window opened before C1 —
 #      EPIC T497 C17), else the hub record's actual_agent, else 未知 (grey)
@@ -53,7 +54,7 @@ import fleet_id as fi
 US = "\x1f"
 now = int(time.time())
 
-F = {   # @2 and @3 share their first 7 hex digits ⇒ their first 5 code characters
+F = {   # @2 and @3 share their first 7 hex digits ⇒ their first 4 code characters
     "@1": "11111111-1111-4111-8111-111111111111",
     "@2": "2222222f-2222-4222-8222-222222222222",
     "@3": "22222220-3333-4333-8333-333333333333",
@@ -145,17 +146,18 @@ code = lambda w: by[w]["id"]
 
 # --- A: the ID column
 for w in ("@1", "@4", "@5", "@6"):
-    assert re.fullmatch(r"T-[0-9a-hjkmnp-tv-z]{5}", code(w)), (w, code(w))
+    assert re.fullmatch(r"[A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z]{3}", code(w)), (w, code(w))
 assert code("@1") == fi.fold(fi.read(F["@1"]))["opened"].get("short") or code("@1") == fi.short_for(F["@1"], fi.known_ids())
-assert len(code("@2")) == len(code("@3")) == 8 and code("@2")[:7] == code("@3")[:7] and code("@2") != code("@3"), \
+assert len(code("@2")) == len(code("@3")) == 5 and code("@2")[:4] == code("@3")[:4] and code("@2") != code("@3"), \
     (code("@2"), code("@3"))
 assert code("@7") == "" and "T?" not in json.dumps([e.get("id") for e in by.values()]), code("@7")
-assert by["@2"]["aliases"] == ["T367"], by["@2"]["aliases"]
-assert re.fullmatch(r"T-\w{5}", by["MU/" + FAR]["id"]), by["MU/" + FAR]["id"]
-assert fi.resolve(code("@2"))[1] == [F["@2"]] and fi.resolve(code("@2")[:7])[0] == 2
+old2 = "T-" + fi.legacy_encode(F["@2"])[:5]
+assert by["@2"]["aliases"] == ["T367", old2], by["@2"]["aliases"]
+assert re.fullmatch(r"[A-Z]\w{3}", by["MU/" + FAR]["id"]), by["MU/" + FAR]["id"]
+assert fi.resolve(code("@2"))[1] == [F["@2"]] and fi.resolve(code("@2")[:4])[0] == 2
 lines = fv.paint(fv.visible(it, "", set()), -1, 100, qo.cells, qo.clip)
 drawn = ["".join(t for t, _ in l) for l in lines]
-assert any(code("@2") + " " in d for d in drawn) and not any("T367" in d or "#4539" in d for d in drawn), drawn
+assert any(code("@2") + " " in d for d in drawn) and not any("T367" in d or "#4539" in d or old2 in d for d in drawn), drawn
 
 # --- B: Agent
 assert by["@2"]["agent"] == "codex" and by["@1"]["agent"] == "claude", (by["@2"]["agent"], by["@1"]["agent"])
@@ -172,7 +174,7 @@ assert by["@6"]["sym"] == "work", by["@6"]         # working keeps ↻ over a do
 it2, by2 = read(dict(STATES, **{"@6": "idle"}))
 assert by2["@6"]["sym"] == "done" and by2["@6"]["group"] == "done", by2["@6"]
 g = {e["issue"]: e for e in it if e.get("gone")}
-assert g["#4700"]["sym"] == "exited" and g["#4700"]["word"] == "已退出" and re.fullmatch(r"T-\w{5}", g["#4700"]["id"]) \
+assert g["#4700"]["sym"] == "exited" and g["#4700"]["word"] == "已退出" and re.fullmatch(r"[A-Z]\w{3}", g["#4700"]["id"]) \
     and g["#4700"]["agent"] == "codex", g["#4700"]
 assert g["#4701"]["sym"] == "done", g["#4701"]
 
@@ -191,12 +193,14 @@ assert sess("4539") == ["@2"] and sess("#4539") == ["@2"], sess("4539")
 assert fv.match_why(by["@2"], "#4539") == "匹配：关联 issue #4539"
 assert sess("45390") == [] and sess("4601") == ["@3"] and sess("4600") == ["@3"], (sess("45390"), sess("4601"))
 assert sess(code("@4").lower()) == ["@4"] and sess("T367") == ["@2"], (sess(code("@4")), sess("T367"))
+old6 = "t-" + fi.legacy_encode(F["@2"])[:6]   # the old 5 are shared by @2 and @3, like the new 4
+assert sess("#" + code("@4")) == ["@4"] and sess(old6) == ["@2"], (sess("#" + code("@4")), sess(old6))
 
 # --- F: the actions page's block
 txt = lambda e: [(t.strip(), st) for t, st in fv.id_page(e, 100)]
 p2 = txt(by["@2"])
 assert ("编号 %s  ·  %s" % (code("@2"), F["@2"]), ("dim",)) in p2, p2
-assert ("别名 T367", ("dim",)) in p2, p2
+assert ("别名 T367 " + old2, ("dim",)) in p2, p2
 segs = [t for t, _ in p2 if t.startswith("段 ")]
 assert len(segs) == 2 and "Claude" in segs[0] and "startup" in segs[0] and "压缩×2" in segs[0] \
     and "Codex" in segs[1] and "transfer" in segs[1], segs
@@ -306,7 +310,7 @@ assert len(bh) >= 200 and sum(1 for e in bh if e["agent"]) >= 200, (len(bh), sum
 assert min(runs) < 100, runs
 print("   read with %d closed rows: %.0f ms (best of 3)" % (len(bh), min(runs)))
 PY
-pass "A  ID column: T- + 5 (6 when two share), blank without an ID, T<n> an alias, far rows too"
+pass "A  ID column: 4 uppercase, letter first (5 when two share), blank without an ID, T<n> and the old T- code aliases, far rows too"
 pass "B  Agent: newest segment (transfer → Codex), else opened, else @cc_agent, else the hub's actual_agent, else 未知 (grey)"
 pass "C  results: newest wins (done → failed = ✗ 等你), working keeps ↻, reaped without one = ◌ 已退出"
 pass "D  conflict: two live windows on one segment both red 等你; closing one clears it"

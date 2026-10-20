@@ -15,18 +15,18 @@
 #                                            is the ID's `progress` (get, family, the hub
 #                                            mirror); a repeated --event writes nothing
 #   fleet-id.sh close  <ID> [--reason r]
-#   fleet-id.sh get    <ID | T-code> [--json]  the ID, its segments (agent · native id ·
+#   fleet-id.sh get    <ID | code> [--json]  the ID, its segments (agent · native id ·
 #                                            start–end · trigger · compactions), results
-#   fleet-id.sh short  <ID>                  its short code, T-<5+>
-#   fleet-id.sh resolve <ID | T-code>        → the full ID; rc 1 none, rc 2 ambiguous
+#   fleet-id.sh short  <ID>                  its short code, K3F9 (4+, letter first)
+#   fleet-id.sh resolve <ID | code>        → the full ID; rc 1 none, rc 2 ambiguous
 #                                            (the candidates on stderr — never a pick)
-#   fleet-id.sh status <ID | T-code>         {state, label, result, conflict}: the one word a
+#   fleet-id.sh status <ID | code>         {state, label, result, conflict}: the one word a
 #                                            reader shows (EPIC T497 C4 — S2 / S7 / S9)
-#   fleet-id.sh route <ID | T-code>          who takes what was meant for it: `<ID>\t<how>`,
+#   fleet-id.sh route <ID | code>          who takes what was meant for it: `<ID>\t<how>`,
 #                                            how = self · successor (down the prev chain) ·
 #                                            parent · unknown (no ledger here); rc 1 nobody
-#   fleet-id.sh children <ID | T-code> [--json]   the IDs it spawned (their `parent`)
-#   fleet-id.sh family <ID | T-code> [<member ID>…]   JSON: the IDs it spawned (and
+#   fleet-id.sh children <ID | code> [--json]   the IDs it spawned (their `parent`)
+#   fleet-id.sh family <ID | code> [<member ID>…]   JSON: the IDs it spawned (and
 #                                            the members named), every ID that
 #                                            continued one of them down `prev` (a redo),
 #                                            this machine's ledgers + the hub mirror's
@@ -42,7 +42,7 @@
 #                                            @codex_session_id as segment 1, trigger
 #                                            migrated). Fill-only, idempotent; dry unless
 #                                            --apply; pushed. FLEET_ID_BACKFILL_CMD: seam
-#   fleet-id.sh await <ID | T-code> [--timeout s] [--interval s]
+#   fleet-id.sh await <ID | code> [--timeout s] [--interval s]
 #                                            until it has a result or closes: MERGED /
 #                                            SUCCEEDED 0 · FAILED / BLOCKED … 1 · TIMEOUT 3 ·
 #                                            EXITED 4 (closed with no result)
@@ -64,7 +64,7 @@
 #                                            window ⇒ 已退出 / 已取消 · never claimed ⇒ 已关闭 ·
 #                                            没开起来 · the machine silent ⇒ 等节点回答 (never
 #                                            moved). Dry by default; --apply writes (audited)
-#   fleet-id.sh clear <ID | T-code> [--timeout s] [--by who]
+#   fleet-id.sh clear <ID | code> [--timeout s] [--by who]
 #                                            run /clear in that session (T592): only while
 #                                            its turn is over, confirmed by a new segment
 #                                            on its ledger — bin/fleet-clear-send.sh (rc 0
