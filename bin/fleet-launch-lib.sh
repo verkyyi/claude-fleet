@@ -25,6 +25,8 @@
 #   fleet_launch_cfg [args…]              the session's composed configuration (#1782)
 #   fleet_launch_cfg_stamp                its fingerprint on the window
 #   fleet_launch_mint [args…]             a session credential from the proxy (#1972)
+#   fleet_launch_end <rc>                 the agent exited: the one close, when the
+#                                         table's `end` says its exit code is the word (T631)
 
 # shellcheck source=/dev/null
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"     # also sources the sibling global fleet.conf
@@ -283,4 +285,18 @@ fleet_launch_mint() {   # [mint args…]
     *) fleet_launch_say 'FLEET_CRED_PROXY=1 but no session credential could be had from the proxy — refusing to launch (fleet-cred-proxy.sh status; logs/cred-proxy.log)'
        fleet_launch_refused cred; exit 1 ;;
   esac
+}
+
+# fleet_launch_end <rc> — the agent this launcher waited on has exited with <rc>
+# (T631, EPIC T580 C8). Where the table's `end` column is `exit`, an exit 0 is the
+# person walking away and runs the ONE close (session-end-hook.sh --agent-exit, the
+# same gates a SessionEnd hook passes); a non-zero exit (killed, crashed) closes
+# nothing — the recovery page / the reapers decide. `hook` agents (exec'd, their
+# SessionEnd hook is the word) never reach here. Outside a tmux pane: nothing.
+fleet_launch_end() {
+  [ "$(fleet_agent_get "$LAUNCH_AGENT" end)" = exit ] || return 0
+  [ "${1:-}" = 0 ] && [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] \
+    && [ -f "$BIN/session-end-hook.sh" ] || return 0
+  bash "$BIN/session-end-hook.sh" --agent-exit "$LAUNCH_AGENT" "$$" </dev/null
+  return 0
 }

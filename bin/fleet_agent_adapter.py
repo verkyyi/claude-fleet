@@ -88,6 +88,25 @@ Columns
                   no-repo identity asks for the session
   account_resume  1 = a cutover may reopen the SAME conversation under another
                   account (--native-resume); 0 = not supported
+  end             how the fleet hears that the person walked away (T631, C8): hook =
+                  the agent's SessionEnd hook, reason prompt_input_exit|logout (the
+                  launcher execs the agent, so there is no exit code to read); exit =
+                  the launcher's own wait on the agent: exit code 0 is the walk-away
+                  (its SessionEnd says reason=other for thread changes too, #730).
+                  Either way ONE close runs: session-end-hook.sh --agent-exit (exit,
+                  through fleet_launch_end) or its hook entry (hook).
+  procs           the process names (comm) an agent of this kind runs as
+  proc_js         a regex on a node/bun argv that is this agent's CLI
+  bg_probe        how a finished turn's leftover work is asked (fleet_window_bg_busy):
+                  pid = the agent process's own Bash-tool children; native = the
+                  agent's own inventory over its app-server, where an answer that is
+                  not a clean «idle» keeps the window at reap (its resident MCP /
+                  helper services are infrastructure, not work — #4318)
+  daemon          an argv word of a service the agent leaves running after its
+                  session (a PPID=1 orphan carrying the session credential); empty = none
+  cred_home       the credential proxy's dir of this agent's per-session homes
+                  (cred-proxy/<dir>/<sid>) — how such a daemon is tied to its
+                  session; empty = none
 
 One reader for a window's CURRENT conversation id: session_id(agent, read) /
 fleet_agent_session_id <agent> <reader> [window|fallback] — sid_window, else
@@ -106,7 +125,8 @@ COLUMNS = ("launcher", "model_env", "model_flag", "resume_flag", "fork_flag", "f
            "seed", "seed_words", "park_resume", "ready_check", "trust", "mcp",
            "deliver", "sid_source", "clear_said", "transcript", "from_pr_flag",
            "transfer_source", "home_flag", "account_env", "loop_settled", "exit_paste",
-           "armed_cycle", "native_cron", "bind_proof", "account_resume")
+           "armed_cycle", "native_cron", "bind_proof", "account_resume",
+           "end", "procs", "proc_js", "bg_probe", "daemon", "cred_home")
 
 ADAPTERS = {
     "claude": {
@@ -122,6 +142,8 @@ ADAPTERS = {
         "transfer_source": "registry", "home_flag": "", "account_env": "FLEET_ACCOUNT_LABEL:label",
         "loop_settled": "loop-mark", "exit_paste": "0", "armed_cycle": "1", "native_cron": "1",
         "bind_proof": "session", "account_resume": "1",
+        "end": "hook", "procs": "claude", "proc_js": r"claude-code/cli\.js|/claude(?:\s|$)",
+        "bg_probe": "pid", "daemon": "", "cred_home": "",
     },
     "codex": {
         "launcher": "fleet-codex.sh", "model_env": "FLEET_CODEX_MODEL", "model_flag": "-m",
@@ -135,6 +157,8 @@ ADAPTERS = {
         "transfer_source": "thread", "home_flag": "--codex-home", "account_env": "FLEET_CODEX_PROFILE:profile",
         "loop_settled": "thread-idle", "exit_paste": "1", "armed_cycle": "0", "native_cron": "0",
         "bind_proof": "process", "account_resume": "0",
+        "end": "exit", "procs": "codex codex-real", "proc_js": r"@openai/codex/|/codex\.js(?:\s|$)",
+        "bg_probe": "native", "daemon": "app-server", "cred_home": "codex-homes",
     },
 }
 DEFAULT = "claude"
@@ -166,6 +190,27 @@ def session_id(agent, read, part="all"):
         if m:
             return m.group(1)
     return (read(row["sid_thread"]) or "") if row["sid_thread"] else ""
+
+
+# --- the procs / proc_js columns ------------------------------------------------------
+def agent_of_process(comm, command):
+    """(agent, name) when this process is a coding agent, else None: its comm one
+    of a row's procs (name = that comm), or a node/bun whose argv is a row's CLI
+    (name = the agent). One reader for every reaper (T631, C8)."""
+    name = Path(comm).name
+    for agent, row in ADAPTERS.items():
+        if name in row["procs"].split():
+            return agent, name
+    if re.fullmatch(r"node\d*|bun", name):
+        for agent, row in ADAPTERS.items():
+            if row["proc_js"] and re.search(row["proc_js"], command or ""):
+                return agent, agent
+    return None
+
+
+def all_procs():
+    """Every agent process name the table knows, in table order."""
+    return tuple(n for row in ADAPTERS.values() for n in row["procs"].split())
 
 
 # --- the deliver column ---------------------------------------------------------------

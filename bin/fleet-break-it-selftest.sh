@@ -51,6 +51,8 @@
 #   restore-peer-window / restore-role-lost        bin/fleet-restore.sh (snapshot drops @peer windows; role_handback)
 #   codex-thread-lost                               bin/fleet-codex.sh (@codex_pending), fleet-restore.sh (snapshot),
 #                                                   bin/.fleet-restore-resolve.py (--prior-map), fleet-session-wrap.sh
+#   reap-agent-split                                bin/fleet-agent-end-selftest.py (both agents, T631),
+#                                                   fleet_window_bg_busy (fleet-lib.sh), fleet-codex.sh
 #   codex-clear-lost                                bin/fleet-codex-session.py (Follow, check_current: T540),
 #                                                   bin/fleet-agent-deliver-selftest.py (both agents, T626),
 #                                                   fleet-codex-runtime.py, fleet-peer-send.sh, fleet-report-parent.sh
@@ -6268,6 +6270,25 @@ drill_open_other_cli() {
   suite_holds fleet-launch-lib-selftest.sh "D⑧ starting one agent (as an agent file too) never runs the other's CLI" \
     '--as fleet-worker' || return 1
   WHAT='起一种 Agent（按 agent 文件起也一样）从不去跑另一种的命令行：起 Codex 不跑任何 claude（不跑 claude plugin list），起 Claude 不跑 codex；两种 Agent 各跑一遍（D⑧）'
+  SECS=$(since "$t0")
+}
+# ⑤ a reaper took a Codex's resident MCP / app-server for work, or the other way
+# round (#4466 #4538) — reaping is one road now (T631, EPIC T580 C8): the end, the
+# agent processes, the leftover-work probe and the left-behind service are the
+# adapter table's; the four legs run once per agent in fleet-agent-end-selftest.py.
+drill_reap_agent_split() {
+  CAP=10; local t0
+  t0=$(now)
+  grep -qF 'probe=$(fleet_agent_get' "$BIN/fleet-lib.sh" \
+    || { WHY="fleet_window_bg_busy no longer asks the adapter table's bg_probe"; return 1; }
+  grep -qF 'fleet_launch_end "$rc"' "$BIN/fleet-codex.sh" \
+    || { WHY="fleet-codex.sh no longer ends through the one close (fleet_launch_end)"; return 1; }
+  suite_holds fleet-agent-end-selftest.py 'def leg_exit' 'def leg_killed' 'def leg_daemon' 'def leg_work' \
+    'def test_claude' 'def test_codex' || return 1
+  suite_holds fleet-codex-busy-selftest.sh 'fleet-codex-busy-selftest.py' || return 1
+  grep -qF 'def test_idle_persistent_mcp_is_not_work' "$BIN/fleet-codex-busy-selftest.py" \
+    || { WHY="fleet-codex-busy-selftest.py no longer holds an idle resident MCP is not work"; return 1; }
+  WHAT='回收一条路：结束（钩子 / 退出码）、认 Agent 进程、问还有没有活、收它留下的服务都问适配表；正常退出、被杀、后台服务还在、真有活四条腿两种 Agent 各跑一遍（fleet-agent-end-selftest.py，这里按名守住）；常驻 MCP 不算活（fleet-codex-busy-selftest.py）'
   SECS=$(since "$t0")
 }
 

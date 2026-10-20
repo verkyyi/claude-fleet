@@ -228,7 +228,8 @@ if [ -n "${TMUX_PANE:-}" ]; then
 fi
 
 # The runner: the pane's private app-server (a loop's own bridge), else codex. Only a
-# successful CLI exit closes the window (#730: SessionEnd always says reason=other).
+# successful CLI exit closes the window (#730: SessionEnd always says reason=other) —
+# the table's `end` column, run by fleet_launch_end.
 runner=(codex)
 if [ -n "${FLEET_LOOP_SPEC:-}" ]; then
   runner=(python3 "$BIN/fleet-loop.py" bridge --)
@@ -242,8 +243,5 @@ else
   "${runner[@]}" "${flags[@]}" ${pass[@]+"${pass[@]}"} # bash32-ok: runner and flags are always populated
 fi
 rc=$?
-if [ "$rc" = 0 ] && [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] \
-   && [ -f "$BIN/session-end-hook.sh" ]; then
-  bash "$BIN/session-end-hook.sh" --codex-exit "$$" </dev/null
-fi
+fleet_launch_end "$rc"                       # the one close (T631): the table's end = exit
 exit "$rc"

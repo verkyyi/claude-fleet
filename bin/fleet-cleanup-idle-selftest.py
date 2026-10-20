@@ -1644,12 +1644,6 @@ class StuckReaps(unittest.TestCase):
     """Issue #4822: the finished windows nothing closed on a multi-repo fleet.
     Last in the module on purpose — a case added above would move every later
     case to another stride part (part 4/4's groups are named one by one)."""
-    NAMES = ("@raw", "@issue", "@repo", "@norepo", "@worktree", "@claude_state", "@claude_state_ts",
-             "@cc_agent", "@cc_launcher_pid", "@codex_identity", "@handoff_manifest",
-             "@agent_transfer_until", "window_name", "@reap_policy", "@loop",
-             "@wrap_gone", "pane_dead", "@fleet_role", "@reap_skip", "@test_identity", "@born",
-             "@fleet_id", "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted", "@agent_status")
-
     def cleaner(self, repo, opts):
         args = argparse.Namespace(session="s", socket_name="s", main="/nonexistent", repo=repo,
                                   base="master", limit=4, forge="github", window_repo=True,
@@ -1659,8 +1653,8 @@ class StuckReaps(unittest.TestCase):
 
         def tm(*argv):
             if argv[0] == "display-message":
-                return "\x1f".join(opts.get(n, "") for n in self.NAMES) if "\x1f" in argv[-1] \
-                    else opts.get(argv[-1][2:-1], "")
+                # the one-call snapshot asks "#{a}\x1f#{b}…": answer each name it asked
+                return "\x1f".join(opts.get(n[2:-1], "") for n in argv[-1].split("\x1f"))
             self.writes.append(argv)
             return ""
         c.tm = tm
