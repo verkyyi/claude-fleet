@@ -826,6 +826,9 @@ fi
 if [ -n "${FLEET_LAUNCH:-}" ]; then
   _launch_fid=$(python3 -c 'import json,os; print(json.loads(os.environ["FLEET_LAUNCH"])["worker_id"].split("/")[1])') || exit 1
   stamp="$stamp$(fleet_win_stamp_cmd @launch "$FLEET_LAUNCH" @launch_seed "$tf" @fleet_id "$_launch_fid" @dispatch "$DISPATCH" @task "$TASK_REF")"
+elif [ -n "$TASK_REF" ]; then
+  # ID switch on (EPIC T497 C6): as dash-raw-session.sh, before the launch
+  stamp="$stamp$(fleet_win_stamp_cmd @dispatch "$DISPATCH" @task "$TASK_REF")"
 fi
 if [ -n "$TASK_REF" ]; then
   printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1

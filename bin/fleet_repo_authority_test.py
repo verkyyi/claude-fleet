@@ -437,6 +437,35 @@ class RepoAuthorityTests(unittest.TestCase):
                 self.assertEqual(migration.supervise(["fixture-native"]), 0)
             self.assertEqual(writes, ["begin"] if replaced else ["begin", "stopped"])
 
+    def test_id_switch_task_window_starts_on_its_record_not_a_reservation(self):
+        # EPIC T497 C6: an ID-switch task window has no @launch; its repo
+        # supervise must not reserve a start (the hub refuses that in hub mode)
+        d = dict(task="T9", generation=1, attempt_id="task:T9:g1", resolved_agent="claude")
+        record = dict(d, authority_version=1, state="accepted", repo="org/a")
+        opts = {"@task": "T9", "@dispatch": json.dumps(d)}
+        def run(env, opts, record):
+            with patch.dict(os.environ, dict({"TMUX_PANE": "%1", "FLEET_ID_SWITCH": "on"}, **env)), \
+                    patch.object(migration.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "org/a\tfleet/session", "")), \
+                    patch.object(migration.launch, "option", side_effect=lambda pane, key, *a: opts.get(key, "")), \
+                    patch.object(migration.launch, "task_call", return_value=record), \
+                    patch.object(migration, "start_call", side_effect=AssertionError("reserved a start")) as start, \
+                    patch.object(migration.os, "execvpe", side_effect=SystemExit("exec")) as ex:
+                try:
+                    migration.supervise(["fixture-native"])
+                except SystemExit:
+                    pass
+                return ex.called, start.called
+        for state in ("accepted", "running"):
+            self.assertEqual(run({}, opts, dict(record, state=state)), (True, False))
+        for env, o, changed in (({}, opts, dict(outcome="succeeded")), ({}, opts, dict(execution_owner="x")),
+                                ({}, opts, dict(repo="org/b")), ({}, opts, dict(generation=2)),
+                                ({}, dict(opts, **{"@dispatch": ""}), {}),
+                                ({}, dict(opts, **{"@task": "T8"}), {})):
+            with self.assertRaises(ValueError, msg=(o, changed)):
+                run(env, o, dict(record, **changed))
+        # switch off: the old road (a reservation) as before
+        self.assertRaisesRegex(AssertionError, "reserved a start", run, {"FLEET_ID_SWITCH": "off"}, opts, record)
+
     def test_stop_receipt_requires_positive_proof(self):
         proof = dict(worker_id="fleet/session", native_session="native", pid=123, birth="birth", executable="/bin/codex")
         authority = dict(legacy_owners=[dict(worker_id=proof["worker_id"], native_identity=proof)])
