@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Linux/container managed lifecycle contracts (#3022).
+# fleet-node-supervisor.py fleet-node-update.py fleet-node-install.sh
+# fleet-node-linux.py fleet-credsep.py extras/managed-node/render.py extras/gh-relay/gh-relay.py
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Linux managed lifecycle contracts (#3022), isolated from the live install."""
 import importlib.util
 import io

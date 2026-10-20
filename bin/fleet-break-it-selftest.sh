@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 21 BREAK_PART
 # fleet-break-it-selftest.sh — every known way to break the fleet, done for real
 # in a sandbox, and the fleet putting itself back (issue #1786, EPIC #1776 C10).
 #

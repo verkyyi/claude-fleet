@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 6 BREAK_PART
 # fleet-break-it-node-selftest.sh — docs/dev/BREAK-IT.md row `node-supervisor-dead`
 # (issue #2331, EPIC #2329 C3): the machine's one daemon dies. Its own file, like
 # the cred-shared drill whose runner it sources (BREAK_CRED_LIB=1);

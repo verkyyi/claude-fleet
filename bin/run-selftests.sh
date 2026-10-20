@@ -108,10 +108,28 @@
 #               the N slices --shard K/N would deal (K is ignored). The release
 #               train sizes its matrix and step bound by it (issue #3241,
 #               bin/fleet-train-plan.sh). Seconds are the durations table's.
+#   --ids       run nothing: print the test ids of the named tests (every test with no
+#               NAME), one per line, exit 0 — what the durations and quarantine tools
+#               check their rows against.
 #   NAME        run only the named tests. The `-selftest.sh` suffix is optional, and a
 #               shell glob works (`run-selftests.sh 'dash-*'`), so chasing one red test
 #               still goes through the same hermetic prelude CI uses. A NAME that
-#               matches nothing is an error, never a silent all-green.
+#               matches nothing is an error, never a silent all-green. A NAME is every
+#               part of that test; `foo#2` (or `foo-selftest.sh#2`) is the one part.
+#
+# TEST IDS (T525, EPIC T516 C3). A test is an ENTRY file — every *-selftest.sh, and a
+# *-selftest.py carrying a line `# selftest-entry` (run by its own shebang, no .sh
+# around it) — or one PART of an entry. An entry cut into parts says so in its own
+# header, never with a file per part:
+#   # selftest-parts: N [VAR]     ids <entry>#1..#N, part k runs with VAR=k/N in its
+#                                 environment (VAR: SELFTEST_PART, else e.g. BREAK_PART)
+#   # selftest-part: K [V=x ...] [ARG ...]
+#                                 id <entry>#K runs with exactly that environment and
+#                                 argv instead (a part regrouped by case names)
+# The shards, --changed, --proven, --passed, the quarantine, the durations tables and
+# the PASS/FAIL lines all count ids. A part file's old name (`foo-2-selftest.sh`, a
+# `.sh` that only ran a `.py`) still reads as its id in a durations table or the
+# quarantine list for one version (legacy_map below).
 #
 # Env: FLEET_SELFTEST_SLOWEST       how many slow tests to list (default 10, 0 = none)
 #      FLEET_SELFTEST_TEST_TIMEOUT  per-test ceiling in seconds (default 600, 0 = none);
@@ -213,8 +231,8 @@ if [ -z "${FLEET_SELFTEST_ROOT:-}" ] && [ -z "${FLEET_SELFTEST_NO_SHADOW:-}" ]; 
     for a in "$@"; do
       case "$a" in -*|*'*'*|*'?'*|*'['*|'') light=0 ;; esac
     done
-    # --list-only runs nothing (issue #3871): never a slot of the queue
-    for a in "$@"; do [ "$a" = --list-only ] && light=1; done
+    # --list-only / --ids run nothing (issue #3871): never a slot of the queue
+    for a in "$@"; do case "$a" in --list-only|--ids) light=1 ;; esac; done
   fi
   heavy=''
   if [ "$light" = 0 ] && [ "${FLEET_HEAVY:-1}" != 0 ] && [ -x "$script_dir/fleet-heavy.sh" ]; then
@@ -272,7 +290,7 @@ fi
 # works. Forwarded verbatim through the shadow re-exec above, so it is only ever
 # parsed here, in the inner run.
 shard_k=1 shard_n=1 changed_base='' dur_spec='' q_list='' q_prev='' drill_red='' plan=0
-retry_red=0 drill_flaky='' solo=0 list_only=0 among='' exact=0 proven='' passed_before=''
+retry_red=0 drill_flaky='' solo=0 list_only=0 among='' exact=0 proven='' passed_before='' ids_only=0
 # a relative path is the caller's, not this bin dir's
 abspath() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$start_dir" "$1" ;; esac; }
 
@@ -298,6 +316,7 @@ while [ "$#" -gt 0 ]; do
     --shard=*) shard_spec=${1#--shard=}; shift ;;
     --plan)  plan=1; shift; continue ;;
     --list-only) list_only=1; shift; continue ;;
+    --ids)   ids_only=1; shift; continue ;;
     --exact) exact=1; shift; continue ;;
     --proven) [ "$#" -ge 2 ] && [ -f "$2" ] \
                 || { echo "run-selftests: --proven needs a file of test names" >&2; exit 2; }
@@ -338,6 +357,76 @@ while [ "$#" -gt 0 ]; do
     || { echo "run-selftests: --shard K must be 1..N, got '$shard_spec'" >&2; exit 2; }
 done
 
+# The test ids (see TEST IDS at the top). selftest_entries: the entry files, in name
+# order. id_rows FILE…: `<id><TAB><spec>` per test id, the spec being what the part
+# runs with (`VAR=k/N`, or a `# selftest-part:` line's words; empty for a whole file).
+selftest_entries() {
+  { ls -- *-selftest.sh 2>/dev/null; grep -lE '^# selftest-entry([[:space:]]|$)' -- *-selftest.py 2>/dev/null; } | LC_ALL=C sort
+}
+id_rows() {
+  [ "$#" -gt 0 ] || return 0
+  awk '
+    function flush(   k, top) {
+      top = (n > mx) ? n : mx
+      if (!top) { print f "\t"; if (self > 1) print "!\t" f "\t" self; return }
+      for (k = 1; k <= top; k++)
+        if (k in ex) print f "#" k "\t" ex[k]
+        else print f "#" k "\t" var "=" k "/" n
+    }
+    FNR == 1 { if (f != "") flush(); f = FILENAME; n = 0; mx = 0; self = 0; var = "SELFTEST_PART"; split("", ex) }
+    # a test that slices itself by default (`${SELFTEST_PART:-1/N}`, `${BREAK_PART:=1/N}`)
+    match($0, /\$\{(SELFTEST|BREAK)_PART:[-=]1\/[0-9]+\}/) {
+      d = substr($0, RSTART, RLENGTH); sub(/^.*1\//, "", d); sub(/\}$/, "", d); if (d + 0 > self) self = d + 0
+    }
+    /^# selftest-parts: [0-9]+([ \t]|$)/ { n = $3 + 0; if (NF >= 4) var = $4 }
+    /^# selftest-part: [0-9]+([ \t]|$)/ {
+      k = $3 + 0; s = $0; sub(/^# selftest-part: [0-9]+[ \t]*/, "", s); ex[k] = s; if (k > mx) mx = k
+    }
+    END { if (f != "") flush() }' "$@"
+}
+# shellcheck disable=SC2046  # intentional: entry names carry no whitespace
+all_rows=$(id_rows $(selftest_entries))
+# A test that runs 1/N of itself by default but declares no parts would run as ONE
+# id — its other N-1 slices never, and the gate green (BREAK-IT
+# selftest-part-id-mismatch). Refused here, before anything runs or is listed.
+undeclared=$(printf '%s\n' "$all_rows" | awk -F '\t' '$1 == "!" { printf "  %s slices itself 1/%s by default\n", $2, $3 }')
+if [ -n "$undeclared" ]; then
+  printf 'run-selftests: a test cut into parts must declare them (`# selftest-parts: N`):\n%s\n' "$undeclared" >&2
+  exit 2
+fi
+all_rows=$(printf '%s\n' "$all_rows" | awk -F '\t' '$1 != "!"')
+# ids_of FILE… — the ids of those entry files, in order.
+ids_of() {
+  printf '%s\n' "$all_rows" | awk -F '\t' -v files=" $* " '
+    NF { f = $1; sub(/#[0-9]+$/, "", f); if (index(files, " " f " ")) print $1 }'
+}
+# legacy_map — `L <old name> <id>` for every name a test had before ids (T525): a
+# part file `foo-<k>-selftest.sh` (k ≥ 2), the entry's own name for part 1, and a
+# `foo-selftest.sh` that only ran `foo-selftest.py`. Read by the durations deal and
+# the quarantine below, never by a NAME argument.  # compat-1v: 下一批删
+legacy_map() {
+  printf '%s\n' "$all_rows" | awk -F '\t' '
+    NF {
+      id = $1; f = id; k = 0
+      if (match(f, /#[0-9]+$/)) { k = substr(f, RSTART + 1) + 0; f = substr(f, 1, RSTART - 1) }
+      stem = f; sub(/-selftest\.(sh|py)$/, "", stem)
+      if (k > 1) print "L " stem "-" k "-selftest.sh " id
+      else if (f ~ /\.py$/) print "L " stem "-selftest.sh " id
+      else if (k == 1) print "L " f " " id
+    }'
+}
+# legacy_rename — rows on stdin, after legacy_map's lines: a first field that is an
+# old name becomes its id.  # compat-1v: 下一批删
+legacy_rename() {
+  { legacy_map; cat; } | awk '
+    $1 == "L" && NF == 3 { to[$2] = $3; next }
+    NF && ($1 in to) { $1 = to[$1] }
+    { print }'
+}
+if [ "$ids_only" = 1 ] && [ -z "$changed_base" ]; then
+  if [ "$#" -eq 0 ]; then printf '%s\n' "$all_rows" | cut -f1; exit 0; fi
+fi
+
 # --changed <base> — run only the tests RELATED to what changed since <base>
 # (issue #1374). Every PR used to run the full 270-test suite three times (branch
 # push, pull_request, master push) plus once more on the worker's own box; this is
@@ -352,8 +441,10 @@ done
 #      side, so a removed function still selects its callers' tests);
 #   d) it is in SELFTEST_ALWAYS — the lint-type tests that scan the whole tree, so
 #      no filename rule could ever pick them.
-#   e) it is a PART of a selected test — a line `# selftest-part-of: <test>` —
-#      running a slice of that test's checks (issue #2955).
+#   e) it goes WITH a selected test — a line `# selftest-part-of: <test>` (issue
+#      #2955): a test of its own whose files are named only in that one.
+# A selected entry runs as every one of its ids (TEST IDS above); --list-only prints
+# the ids.
 # A change to the harness itself (SELFTEST_HARNESS) — or a base that does not
 # resolve — falls back to the FULL suite: never trust a selector to vet its own
 # edit. The diff is base...HEAD (from the merge base), committed changes only.
@@ -434,7 +525,7 @@ if [ -n "$changed_base" ]; then
   fi
   picks=''   # "test<TAB>reason" lines; the first reason per test wins
   # The files a change is matched against: the selftests, or --among's list.
-  if [ -n "$among" ]; then pool=$among; else pool=$(printf '%s ' *-selftest.sh); fi
+  if [ -n "$among" ]; then pool=$among; else pool=$(selftest_entries | tr '\n' ' '); fi
   if [ -z "$full_reason" ]; then
     touch_known=1
     nl='
@@ -448,9 +539,8 @@ if [ -n "$changed_base" ]; then
           [ "$pf" = "$f" ] && picks="$picks$p${tab}changed itself$nl"
         done
       else
-        case "$f" in
-          bin/*-selftest.sh)
-            [ -f "$b" ] && picks="$picks$b${tab}changed itself$nl" ;;
+        case " $pool " in
+          *" $b "*) [ "bin/$b" = "$f" ] && picks="$picks$b${tab}changed itself$nl" ;;
         esac
       fi
       case "$f" in
@@ -498,7 +588,8 @@ if [ -n "$changed_base" ]; then
       done
     }
     picks="$picks$(parts_of "$picks")$nl"
-    touched=$(printf '%s' "$picks" | awk -F '\t' 'NF { print $1 }' | sort -u)
+    # shellcheck disable=SC2046  # intentional: test names carry no whitespace
+    [ -n "$among" ] || touched=$(ids_of $(printf '%s' "$picks" | awk -F '\t' 'NF { print $1 }' | sort -u))
     for f in $changed_files; do
       for h in $SELFTEST_HARNESS; do
         # shellcheck disable=SC2254  # intentional: $h is a glob pattern
@@ -509,9 +600,10 @@ if [ -n "$changed_base" ]; then
   if [ -n "$full_reason" ]; then
     # shellcheck disable=SC2086  # intentional: $among is a file list
     [ -n "$among" ] && { printf '%s\n' $among; exit 0; }
-    [ "$list_only" = 1 ] && { ls *-selftest.sh 2>/dev/null; exit 0; }
+    [ "$list_only" = 1 ] && { printf '%s\n' "$all_rows" | cut -f1; exit 0; }
     printf 'select: * ← full suite (%s)\n' "$full_reason"
-    set -- *-selftest.sh
+    # shellcheck disable=SC2046  # intentional: test ids carry no whitespace
+    set -- $(printf '%s\n' "$all_rows" | cut -f1)
   else
     always=''
     [ -n "$among" ] || for a in $SELFTEST_ALWAYS; do
@@ -524,10 +616,15 @@ if [ -n "$changed_base" ]; then
       echo 'select: (none) ← no change maps to a selftest'
       exit 0
     fi
-    [ "$list_only" = 1 ] && { printf '%s\n' "$picks" | cut -f1; exit 0; }
-    printf '%s\n' "$picks" | awk -F '\t' '{ printf "select: %s ← %s\n", $1, $2 }'
     # shellcheck disable=SC2046  # intentional: test names carry no whitespace
-    set -- $(printf '%s\n' "$picks" | cut -f1)
+    [ -n "$among" ] || picked_ids=$(ids_of $(printf '%s\n' "$picks" | cut -f1))
+    if [ "$list_only" = 1 ]; then
+      if [ -n "$among" ]; then printf '%s\n' "$picks" | cut -f1; else printf '%s\n' "$picked_ids"; fi
+      exit 0
+    fi
+    printf '%s\n' "$picks" | awk -F '\t' '{ printf "select: %s ← %s\n", $1, $2 }'
+    # shellcheck disable=SC2086  # intentional: test ids carry no whitespace
+    set -- $picked_ids
   fi
 fi
 
@@ -539,21 +636,33 @@ if [ -n "$changed_base" ]; then
 elif [ "$#" -gt 0 ]; then
   selected=''
   for a in "$@"; do
-    hit=0
+    hit=0 part=''
+    case "$a" in *'#'*) part=${a##*#}; a=${a%#*} ;; esac   # foo#2: that part only
+    files=''
     # shellcheck disable=SC2086  # intentional: $a may be a glob the caller passed
-    for t in $a $a-selftest.sh; do
-      case "$t" in *-selftest.sh) ;; *) continue ;; esac   # never run a non-test
-      [ -f "$t" ] || continue
-      case " $selected " in *" $t "*) continue ;; esac     # dedup overlapping args
-      selected="$selected $t"; hit=1
+    for t in $a $a-selftest.sh $a-selftest.py; do
+      case "$t" in                                       # never run a non-test
+        *-selftest.sh) [ -f "$t" ] || continue ;;
+        *-selftest.py) grep -qE '^# selftest-entry([[:space:]]|$)' "$t" 2>/dev/null || continue ;;
+        *) continue ;;
+      esac
+      files="$files $t"
     done
-    [ "$hit" -eq 1 ] || { echo "run-selftests: no selftest matches '$a'" >&2; exit 2; }
+    # shellcheck disable=SC2086  # intentional: entry names carry no whitespace
+    for id in $(ids_of $files); do
+      [ -z "$part" ] || [ "${id##*#}" = "$part" ] || continue
+      case " $selected " in *" $id "*) continue ;; esac   # dedup overlapping args
+      selected="$selected $id"; hit=1
+    done
+    [ "$hit" -eq 1 ] || { echo "run-selftests: no selftest matches '$a${part:+#$part}'" >&2; exit 2; }
   done
   # shellcheck disable=SC2086  # intentional: re-split the space-separated list
   set -- $selected
 else
-  set -- *-selftest.sh
+  # shellcheck disable=SC2046  # intentional: test ids carry no whitespace
+  set -- $(printf '%s\n' "$all_rows" | cut -f1)
 fi
+if [ "$ids_only" = 1 ]; then printf '%s\n' "$@"; exit 0; fi
 
 # THE TRAIN'S QUARANTINE (issue #3243). A test the list holds in force is skipped —
 # unless this change touches it, then it runs like any other. Before the deal, so
@@ -565,6 +674,7 @@ if [ -n "$q_list" ]; then
   else
     q_on=$(sh "$script_dir/fleet-train-quarantine.sh" active "$q_list") \
       || { echo "run-selftests: could not read the quarantine list $q_list" >&2; exit 2; }
+    q_on=$(printf '%s\n' "$q_on" | legacy_rename)   # an entry from before ids  # compat-1v: 下一批删
     keep=''
     for t in "$@"; do
       q_row=$(printf '%s\n' "$q_on" | awk -v t="$t" '$1 == t' | head -1)
@@ -607,7 +717,7 @@ if [ -n "$proven" ]; then
   fi
 fi
 q_prev_names=''
-[ -z "$q_prev" ] || q_prev_names=$(awk 'NF { print $1 }' "$q_prev")
+[ -z "$q_prev" ] || q_prev_names=$(awk 'NF { print $1 }' "$q_prev" | legacy_rename)
 
 # Settle the work list, then PACK the shards by recorded cost (issue #1390).
 #
@@ -637,14 +747,16 @@ fi
 discovered=0 listed=''
 for t in "$@"; do
   # No matches → the glob stays literal; the -f guard drops that phantom entry.
-  [ -f "$t" ] || continue
+  [ -f "${t%#*}" ] || continue
   discovered=$((discovered + 1))
   listed="$listed$t
 "
 done
 # "<shard> <cost> <test>" per test, in the original (name) order, then "= <K> <load>"
 # for every shard.
-deal=$(printf '%s' "$listed" | awk -v n="$shard_n" -v tbl="$dur_table" -v solo="$solo" '
+# A row under a test's old name (a part file, a .sh that only ran a .py) costs its id
+# when the id has no row of its own: legacy_map's `L` lines go in first.
+deal=$( { legacy_map; printf '%s' "$listed"; } | awk -v n="$shard_n" -v tbl="$dur_table" -v solo="$solo" '
   BEGIN {
     while ((getline l < tbl) > 0) {
       if (l ~ /^[[:space:]]*(#|$)/) continue
@@ -653,6 +765,7 @@ deal=$(printf '%s' "$listed" | awk -v n="$shard_n" -v tbl="$dur_table" -v solo="
     for (i = 2; i <= nv; i++) { x = v[i]; for (j = i - 1; j >= 1 && v[j] > x; j--) v[j + 1] = v[j]; v[j + 1] = x }
     dflt = nv ? ((nv % 2) ? v[(nv + 1) / 2] : (v[nv / 2] + v[nv / 2 + 1]) / 2) : 1
   }
+  $1 == "L" && NF == 3 { if (!($3 in cost) && ($2 in cost)) cost[$3] = cost[$2]; next }   # compat-1v: 下一批删
   { name[++m] = $0; c[m] = ($0 in cost) ? cost[$0] : dflt; ord[m] = m }
   END {
     # Longest first; equal costs keep name order (insertion sort is stable).
@@ -771,12 +884,12 @@ supervise=0
 # shellcheck disable=SC2016  # a perl program: its $vars are perl's, not the shell's
 SUPERVISOR='
 use strict; use POSIX ();
-my ($limit, $t) = @ARGV; my $grace = 5;
+my ($limit, $t, @cmd) = @ARGV; my $grace = 5;
 my $pid = fork(); defined $pid or die "run-selftests: fork: $!\n";
 if ($pid == 0) {
   setpgrp(0, 0);
   alarm($limit + 3 * $grace);          # the in-test backstop: survives execve
-  exec("bash", $t) or POSIX::_exit(127);
+  exec(@cmd) or POSIX::_exit(127);
 }
 setpgrp($pid, $pid);                   # from both sides: no window where it is unset
 sub group_alive { waitpid($pid, POSIX::WNOHANG()); kill(0, -$pid) }   # reap first: a zombie still answers kill 0
@@ -826,14 +939,27 @@ trap 'tt_sweep; exit 143' TERM
 total=0 passed=0 failed=0 quarantined=0 flaky=0
 failures='' timings='' quarantines='' flakies=''
 
-# run_test <test> → its exit code: the test under the supervisor (or bare), in its
-# own tmux socket dir, swept after.
+# run_test <id> → its exit code: the test under the supervisor (or bare), in its
+# own tmux socket dir, swept after. A .sh runs under bash, a .py entry by its own
+# shebang; a part gets its spec (TEST IDS above) — leading VAR=x words into its
+# environment, the rest as its argv.
 run_test() {
+  rt_spec=$(printf '%s\n' "$all_rows" | awk -F '\t' -v t="$1" '$1 == t { print $2; exit }')
+  rt_env='' rt_args=''
+  for w in $rt_spec; do
+    case "$rt_args:$w" in :[A-Za-z_]*=*) rt_env="$rt_env $w" ;; *) rt_args="$rt_args $w" ;; esac
+  done
+  # a .py by its absolute path, as its old `exec python3 "$BIN/…"` shell did: a test
+  # that finds its siblings off __file__ / argv[0] must not get a relative `./`
+  case "${1%#*}" in *.py) rt_run="$PWD/${1%#*}" ;; *) rt_run="bash ./${1%#*}" ;; esac
+  # shellcheck disable=SC2086  # intentional: word lists; test names carry no whitespace
+  set -- "$1" env $rt_env $rt_run $rt_args
   tt_dir=$(mktemp -d /tmp/selftest-tt.XXXXXX 2>/dev/null) || tt_dir=''
   if [ "$supervise" -eq 1 ]; then
-    if TMUX_TMPDIR="${tt_dir:-${TMUX_TMPDIR:-}}" perl -e "$SUPERVISOR" "$test_timeout" "./$1" </dev/null; then rc=0; else rc=$?; fi
+    if TMUX_TMPDIR="${tt_dir:-${TMUX_TMPDIR:-}}" perl -e "$SUPERVISOR" "$test_timeout" "$@" </dev/null; then rc=0; else rc=$?; fi
   else
-    if TMUX_TMPDIR="${tt_dir:-${TMUX_TMPDIR:-}}" bash "./$1" </dev/null; then rc=0; else rc=$?; fi
+    shift
+    if TMUX_TMPDIR="${tt_dir:-${TMUX_TMPDIR:-}}" "$@" </dev/null; then rc=0; else rc=$?; fi
   fi
   tt_sweep
   return "$rc"

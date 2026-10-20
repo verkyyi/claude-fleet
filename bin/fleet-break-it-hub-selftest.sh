@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 3 BREAK_PART
 # fleet-break-it-hub-selftest.sh — the BREAK-IT rows whose drill needs none of
 # bin/fleet-break-it-selftest.sh's tmux sandbox: a release, the hub's shape and
 # its Go-tested halves (placement, leases, invites, trust, the machine agent), a

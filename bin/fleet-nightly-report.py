@@ -32,7 +32,7 @@ import subprocess
 import sys
 
 SHARD_RE = re.compile(r"^Linux / shard (\d+)$")
-TIME_RE = re.compile(r"^(PASS|FAIL|TIMEOUT|FLAKY) +([A-Za-z0-9_.+-]+-selftest\.sh) +([0-9]+(?:\.[0-9]+)?)s")
+TIME_RE = re.compile(r"^(PASS|FAIL|TIMEOUT|FLAKY) +([A-Za-z0-9_.+-]+-selftest\.(?:sh|py)(?:#[0-9]+)?) +([0-9]+(?:\.[0-9]+)?)s")
 RED_RE = re.compile(r"^(FAIL|TIMEOUT) +(\S+)")
 REFUSED_RE = re.compile(r"fleet-ci: .*refused: .*")
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Provider inventory/selection contracts; fixtures only, no real logins or hub.
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Behavioral fixtures for the shared account selector and ccquota adapters."""
 import importlib.util
 import json

@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 3
 # fleet-quotawatch-selftest.sh — the ccquota pre-emptive rotation as its OWN tick
 # (issue #551): policy, once-per-window markers, overlap lock, heartbeat, and the
 # staleness alarm. Drives the REAL bin/fleet-quotawatch.sh + fleet-account.sh

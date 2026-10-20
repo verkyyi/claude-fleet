@@ -345,7 +345,7 @@ jobs:
         run: |
           grep -E '^(FAIL|TIMEOUT|QUARANTINE|FLAKY) ' selftests.log > train-result.txt 2>/dev/null || true
           # every test's seconds, for the nightly's durations-table check (issue #4819)
-          grep -E '^(PASS|FAIL|TIMEOUT|FLAKY) +[^ ]+-selftest\.sh +[0-9.]+s' selftests.log > train-times.txt 2>/dev/null || true
+          grep -E '^(PASS|FAIL|TIMEOUT|FLAKY) +[^ ]+-selftest\.(sh|py)(#[0-9]+)? +[0-9.]+s' selftests.log > train-times.txt 2>/dev/null || true
           sh bin/fleet-train-quarantine.sh heads --log selftests.log --out . || true
       - name: Upload this shard's verdicts
         if: always() && inputs.record

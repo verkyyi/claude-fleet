@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 2
 # fleet-await-stall-selftest.sh — fleet-await.sh's STALL LADDER (issue #1268).
 #
 # What is load-bearing, and therefore what is pinned (FLEET_AWAIT_STALL_SECS=2):

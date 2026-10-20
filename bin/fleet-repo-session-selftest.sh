@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 4
 # fleet-repo-session-selftest.sh — every session knows its repo (issue #789).
 #
 # On a throwaway two-repo fleet (o/a = the fleet conf's repo, o/b = an overlay)

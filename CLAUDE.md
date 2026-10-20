@@ -720,7 +720,15 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   suite locally**: push, open the PR, read the gate. Locally run only the one
   test that reproduces a CI failure (`run-selftests.sh <name>`), never the full
   gate or `--changed`. A new selftest is selected when its own file changes or
-  a file it NAMES does — name the scripts you drive.
+  a file it NAMES does — name the scripts you drive. **A test is an ID, never a
+  file per part** (T525, EPIC T516 C3): an entry is a `*-selftest.sh` or a
+  `*-selftest.py` carrying `# selftest-entry` (run by its shebang, no `.sh` around
+  it); a test cut into parts declares `# selftest-parts: N [VAR]` (or
+  `# selftest-part: K <words>`) in its own header and runs as `<entry>#1..#N`, each
+  with `VAR=K/N`. Shards, `--changed`, `--proven`, the quarantine and the durations
+  tables count ids; `run-selftests.sh foo` runs every part, `foo#2` one. A test that
+  slices itself by default but declares nothing is refused (BREAK-IT
+  `selftest-part-id-mismatch`).
 - **CI SHARDS the gate; the tests themselves still run one at a time**
   (issue #681). `run-selftests.sh --shard K/N` packs the N slices by each
   test's recorded cost — `bin/selftest-durations.txt`, longest first into the

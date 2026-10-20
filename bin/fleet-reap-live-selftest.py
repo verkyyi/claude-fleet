@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Read-only liveness probes; the optional tmux server uses its own named socket.
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Fake process snapshots plus a bounded agent on an isolated tmux socket."""
 
 import importlib.util
@@ -14,7 +16,7 @@ import unittest
 from unittest.mock import patch
 
 sys.dont_write_bytecode = True
-BIN = Path(sys.argv.pop(1))
+BIN = (Path(sys.argv.pop(1)) if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]) else Path(__file__).absolute().parent)
 spec = importlib.util.spec_from_file_location("live", BIN / "fleet-reap-live.py")
 live = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(live)

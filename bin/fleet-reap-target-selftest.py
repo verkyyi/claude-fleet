@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Identity resolution and actual tmux renumbering, without live-server access."""
 import importlib.util
 from pathlib import Path
@@ -10,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 sys.dont_write_bytecode = True
-BIN = Path(sys.argv.pop(1))
+BIN = (Path(sys.argv.pop(1)) if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]) else Path(__file__).absolute().parent)
 spec = importlib.util.spec_from_file_location('target', BIN / 'fleet-reap-target.py')
 target = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(target)

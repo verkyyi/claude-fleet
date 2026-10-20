@@ -1,5 +1,5 @@
 #!/bin/bash
-# Selection and entry-point coverage for bin/selftest-sections.sh (#3884).
+# Selection and declared-part coverage for bin/selftest-sections.sh (#3884, T525).
 set -eu
 BIN="$(cd "$(dirname "$0")" && pwd)"
 python3 - "$BIN" <<'PY'
@@ -29,12 +29,15 @@ assert run().stdout == '1\n'
 parts = [run(str(n)) for n in range(1, 4)]
 assert all(p.returncode == 0 for p in parts)
 assert ''.join(p.stdout for p in parts) == run('all').stdout == '1\n2\n3\n'
-for invalid in ('0', '01', '4', '-1', '2/3', 'garbage'):
+# run-selftests.sh hands K/N off the `# selftest-parts: N` header (T525)
+assert [run('%d/3' % n).stdout for n in range(1, 4)] == ['1\n', '2\n', '3\n']
+for invalid in ('0', '01', '4', '-1', 'garbage', '2/4', '4/3', '0/3', '/3'):
     result = run(invalid)
     assert result.returncode == 2 and not result.stdout, (invalid, result)
 
-# Every declared section has a discoverable entry point. A missing wrapper
-# would otherwise silently drop assertions from both full and --changed runs.
+# Every section is a declared part (`# selftest-parts: N`, T525), so the runner
+# gives each its id; a count off by one would silently drop assertions from both
+# full and --changed runs.
 parents = 0
 for parent in bin_dir.glob('*-selftest.sh'):
     source = parent.read_text()
@@ -44,14 +47,9 @@ for parent in bin_dir.glob('*-selftest.sh'):
     parents += 1
     count = int(match[1])
     stem = parent.name.removesuffix('-selftest.sh')
-    for number in range(2, count + 1):
-        wrapper = bin_dir / f'{stem}-{number}-selftest.sh'
-        text = wrapper.read_text()
-        assert f'# selftest-part-of: {parent.name}\n' in text, wrapper
-        assert f'SELFTEST_PART={number} exec bash ' in text, wrapper
-        assert f'/{parent.name}" "$@"' in text, wrapper
-        assert os.access(wrapper, os.X_OK), wrapper
+    assert re.search(r'^# selftest-parts: %d$' % count, source, re.M), (parent.name, count)
+    assert not list(bin_dir.glob(f'{stem}-[0-9]*-selftest.sh')), (parent.name, 'a part file')
 # The ninth original parent (sidebar) retired with the old client in #4423.
 assert parents >= 8, parents
-print(f'PASS section selection and complete entry points ({parents} parents)')
+print(f'PASS section selection and every section a declared part ({parents} parents)')
 PY

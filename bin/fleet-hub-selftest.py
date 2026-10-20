@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Hub/bridge regression tests run entirely inside temporary fixtures.
+# part 1 of 4 here, the rest in its part files (bin/selftest_part.py, issue #2694)
+# selftest-parts: 4
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Hermetic Hub/SSH-bridge tests. No live tmux, SSH, GitHub or model calls."""
 
 import asyncio

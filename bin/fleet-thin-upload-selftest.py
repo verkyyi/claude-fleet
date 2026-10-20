@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Slow capture/transfer, ordering, cancellation and lifetime on isolated PTYs.
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Isolated PTYs and bounded stand-ins; never a live Fleet socket."""
 import importlib.util
 import os

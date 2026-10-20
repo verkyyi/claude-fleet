@@ -1,4 +1,10 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -W ignore::ResourceWarning
+# fleet-admin-handover-selftest.sh — the admin login's old node agent handed over to
+# the seat (issue #3725, EPIC #3500 C15·b-4): bin/fleet-node-supervisor.py
+# admin-handover / its sweep, bin/fleet_admin_seat.py seat_connected,
+# bin/fleet-node-update.py's follow skipping a handed-over login and
+# bin/fleet-credsep.py's agent_reload. Cases in bin/fleet-admin-handover-selftest.py.
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """fleet-admin-handover-selftest.py — the old admin agent's handover (issue #3725,
 EPIC #3500 C15·b-4): bin/fleet-node-supervisor.py admin-handover (and the sweep that
 runs it) + bin/fleet_admin_seat.py seat_connected. Driven by

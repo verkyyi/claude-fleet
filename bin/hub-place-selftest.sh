@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 3
 # hub-place-selftest.sh — placement in bin/dash-issue-session.sh (issue #1425,
 # EPIC #1419 C6): with CCQUOTA_FLEET=1 a spawn names no machine (`--node auto`),
 # and after the hub lease (issue-lease-selftest.sh) it asks the hub which machine

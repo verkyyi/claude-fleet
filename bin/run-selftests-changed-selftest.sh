@@ -12,6 +12,7 @@
 #   3. the selftests workflow → the full suite (the harness never vets its own edit)
 #   4. docs only          → the lint group alone
 #   5. bin/fleet (no extension) → only the test naming it as a path, `/fleet`
+#   6. a test declaring `# selftest-parts: N` and a `.py` entry → their ids (T525)
 #
 # plus: each pick prints `select: <test> ← <reason>`; a shard left empty under
 # --changed passes, while the same empty shard WITHOUT --changed still refuses
@@ -144,6 +145,26 @@ ran=$(printf '%s\n' "$out" | awk '/^PASS /{print $2}' | sort | tr '\n' ' ')
 [ "$rc" -eq 0 ] && [ "$ran" = 'alpha-2-selftest.sh alpha-3-selftest.sh alpha-selftest.sh portability-selftest.sh ' ] \
   && ok "a family source selects its parent and every part once" \
   || fail "family selection: rc=$rc ran=$ran"
+
+# Parts declared in the test's header (T525): a change selecting the test runs and
+# lists every id once, each with its K/N; a `.py` entry naming the changed file is
+# selected by its own words and runs by its shebang.
+g checkout -q -B s-ids base
+printf '#!/bin/sh\n# selftest-parts: 3\n# drives tool-a.sh\necho "part $SELFTEST_PART"\n' > "$R/bin/alpha-selftest.sh"
+printf '#!/bin/sh\n# selftest-entry\n# drives tool-a.sh\nexit 0\n' > "$R/bin/zeta-selftest.py"
+chmod +x "$R/bin/zeta-selftest.py"
+g add -A && g commit -qm ids && g tag ids-base
+echo changed >> "$R/bin/tool-a.sh"
+g add -A && g commit -qm ids-source
+list=$(FLEET_HEAVY=0 sh "$R/bin/run-selftests.sh" --changed ids-base --list-only 2>&1 | tr '\n' ' ')
+[ "$list" = 'alpha-selftest.sh#1 alpha-selftest.sh#2 alpha-selftest.sh#3 portability-selftest.sh zeta-selftest.py ' ] \
+  && ok "--list-only prints the ids of a declared test and a .py entry" || fail "id list: $list"
+out=$(env -u FLEET_SELFTEST_ROOT -u FLEET_SELFTEST_NO_SHADOW FLEET_HEAVY=0 \
+      sh "$R/bin/run-selftests.sh" --changed ids-base </dev/null 2>&1); rc=$?
+ran=$(printf '%s\n' "$out" | awk '/^PASS /{print $2}' | tr '\n' ' ')
+parts=$(printf '%s\n' "$out" | grep -c '^part [123]/3$')
+[ "$rc" -eq 0 ] && [ "$ran" = "$list" ] && [ "$parts" -eq 3 ] \
+  && ok "every id runs once, each part with its K/N" || fail "id run: rc=$rc ran=$ran parts=$parts"
 
 [ "$FAILS" -eq 0 ] || { echo "run-selftests-changed-selftest: $FAILS failure(s)"; exit 1; }
 echo "run-selftests-changed-selftest: all green"

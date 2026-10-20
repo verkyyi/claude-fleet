@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Hermetic homes, quota fixtures and fake native app-server. No model/network calls.
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 import importlib.util
 import json
 import os

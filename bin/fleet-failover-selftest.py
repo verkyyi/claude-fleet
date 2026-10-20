@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Isolated policy/state tests; no live tmux or provider calls.
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Quota episodes, recovery, exact owners, drafts and transfer launch contracts."""
 import importlib.util
 import contextlib

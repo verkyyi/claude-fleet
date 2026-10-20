@@ -1,9 +1,15 @@
 #!/bin/bash
 # Shared by the linear shell selftests split in #3884. Each entry point runs
 # one section in a fresh sandbox; SELFTEST_PART=all retains the full sequence.
-# No background execution: run-selftests.sh schedules the ordinary part files.
+# No background execution: run-selftests.sh runs each part as its own test id.
 selftest_sections() {
   SELFTEST_SECTION=${SELFTEST_PART:-1}
+  # run-selftests.sh hands a part K/N (its `# selftest-parts: N` header, T525)
+  case "$SELFTEST_SECTION" in
+    */*) [ "${SELFTEST_SECTION#*/}" = "$1" ] || {
+           echo "selftest: SELFTEST_PART=$SELFTEST_SECTION is not one of $1 parts" >&2; exit 2; }
+         SELFTEST_SECTION=${SELFTEST_SECTION%%/*} ;;
+  esac
   case "$SELFTEST_SECTION" in
     all) ;;
     ''|0*|*[!0-9]*) echo 'selftest: SELFTEST_PART must be all or a section number' >&2; exit 2 ;;

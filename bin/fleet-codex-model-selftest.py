@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Native model settings and model-specific quota evidence, with no model calls.
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 import importlib.util
 import io
 import json

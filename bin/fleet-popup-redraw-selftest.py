@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Real terminal regression for bin/fleet-quickopen.py Heal + bin/fleet_view.py,
+# through bin/dash-popup.sh and bin/fleet-popup-lib.sh (issue #4410).
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Two isolated tmux servers: the outer terminal parses the real popup output.
 
 Measure repeated frame writes as well as final cells (a screenshot misses the
@@ -210,5 +213,7 @@ if __name__ == "__main__":
         panel(sys.argv[-1])
     elif "--background" in sys.argv:
         background()
+    elif not shutil.which("tmux"):
+        print("SKIP: tmux absent")
     else:
         sys.exit(main())
