@@ -334,6 +334,19 @@ TASKCODE、`fleet-id-results-selftest.sh` NAMES、`fleet-brief-selftest.sh` CODE
   哪怕原生 id 没变。交接（handoff）、`/clear`、换 Codex 本来就是同一 ID 的新一段（上表）。
 - **两个活窗口带同一编号** ⇒ `status` 是冲突（`conflict` 里写它自己），面板两行都红「等你」（`fleet_view.id_conflicts`，
   沿用 S9）；关掉一个另一个就恢复。
-- 还没做的：hub 镜像不存 attempt（`fleet_id_results` 没有这一列；C6 起记录随最新的结局结果改写，重做成功覆盖上一次的失败）；批次按编号排先后是 C5。
+- 还没做的：hub 镜像不存 attempt（`fleet_id_results` 没有这一列；C6 起记录随最新的结局结果改写，重做成功覆盖上一次的失败）。
+
+## 批次也按这个编号排先后（EPIC T644 C5）
+
+- **成员就是它那条记录的编号**：`fleet-epic-tick.py` 认一个成员 = 它子任务记录的 `fid`（C1），重做 = 同一编号的下一次
+  （family 行的 `attempt`）：这一次在跑时，记录上上一次的失败不算；第一次之后每多一次算用掉一次，第 2 次也失败就是 blocked。
+  旧批次（记录没有 `fid`）照旧沿 `prev` 一棒一棒读（读一个版本）。
+- **重试不开新任务**：`next` 里的重试带 `respawn: fleet-task-record.sh respawn <编号> --redo`——同一条记录、同一编号的下一次，
+  第一句告诉它这是重试；`--redo` 只收被它 ID 的结果记成 failed 的记录（取消、拒绝不算），没 `--redo` 的 `respawn` 仍只收没收尾的。
+- **对人只写编号**：`parent` 是父任务的编号（`parent_task` 留 `T<n>` 一个版本），每个成员带 `code`；`--task` 收编号 / `#编号` / `T<n>`，
+  多义退出码 2。依赖表里外批写 `YRV3 C5`（`#YRV3 C5`）或旧的 `T542 C5`，输出一律写成外批父任务的编号；本批自己的编号或 T 号当前缀等于没写。
+  `fleet-epic-floor.sh` 的批次和成员都收编号。
+
+`bin/fleet-epic-code-selftest.sh` 钉住它。
 
 `bin/fleet-task-id-selftest.sh` 钉住 take / 开窗 / ↵ 新段 / 重做 / 冲突；BREAK-IT `task-many-ids`。

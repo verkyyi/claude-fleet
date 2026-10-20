@@ -3,6 +3,7 @@
 # and how many versions the batch spanned (issue #2934).
 #
 #   fleet-epic-floor.sh record <epic> <member> [--repo <owner/name>]   # at each spawn
+#   (an EPIC on hub tasks names the parent and its members by their codes — K5H0)
 #   fleet-epic-floor.sh show <epic> [--repo <owner/name>]              # the report's line
 #
 # WHY. Until #2934 a running batch held every install still (the EPIC hold), so a
@@ -30,21 +31,31 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-usage() { sed -n '5,6p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '5,7p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 MODE=${1:-}; shift 2>/dev/null || :
 case "$MODE" in record|show) ;; *) usage ;; esac
 EPIC=${1:-}; shift 2>/dev/null || :
-# An EPIC is a parent hub task since issue #4957 (`T<n>`), or an older issue number.
+# An EPIC is a parent hub task since issue #4957 — its code (`K5H0`, EPIC T644 C5)
+# or `T<n>` (read one more version — compat-1v: 下一批删) — or an older issue number.
 tref() { case "$1" in T[1-9]*) case "${1#T}" in *[!0-9]*) return 1 ;; esac ;; *) return 1 ;; esac; }
-case "$EPIC" in ''|*[!0-9]*) tref "$EPIC" || usage ;; esac
+# tcode — a task's written code: a letter, then Crockford base32, 4–26 places
+tcode() {
+  case "$1" in [A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z]*) ;; *) return 1 ;; esac
+  case "$1" in *[!0-9A-HJKMNP-TV-Z]*) return 1 ;; esac
+  [ "${#1}" -le 26 ]
+}
+upper() { printf '%s' "$1" | tr 'a-z' 'A-Z'; }
+EPIC=${EPIC#\#}
+case "$EPIC" in ''|*[!0-9]*) tref "$EPIC" || { EPIC=$(upper "$EPIC"); tcode "$EPIC"; } || usage ;; esac
 MEMBER=''
 if [ "$MODE" = record ]; then
   MEMBER=${1:-}; shift 2>/dev/null || :
   MEMBER=${MEMBER#\#}
-  # a member is its child task (T<n>), its charter key (C<n> / R<n>) or an issue number
+  # a member is its child task (its code, or T<n>), its charter key (C<n> / R<n>)
+  # or an issue number
   case "$MEMBER" in
-    [CR][1-9]*) case "${MEMBER#?}" in *[!0-9]*) usage ;; esac ;;
-    ''|*[!0-9]*) tref "$MEMBER" || usage ;;
+    [CR][1-9]*) case "${MEMBER#?}" in *[!0-9]*) MEMBER=$(upper "$MEMBER"); tcode "$MEMBER" || usage ;; esac ;;
+    ''|*[!0-9]*) tref "$MEMBER" || { MEMBER=$(upper "$MEMBER"); tcode "$MEMBER"; } || usage ;;
   esac
 fi
 REPO="${FLEET_REPO:-}"

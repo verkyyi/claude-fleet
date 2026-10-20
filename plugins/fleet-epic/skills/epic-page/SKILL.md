@@ -195,7 +195,7 @@ task's words, both layers, inside the record's 16 KB.
 Reading orders that fall out of the file order — plan: `#metrics` `#charter`
 `#members` `#risks` `#signoff` `#preflight` `#order`; report: `#delivered`
 `#metrics` `#members` `#gaps` `#ops`. `#preflight` is optional (above); there is
-no obstacles section — a fleet-side defect is RECORDED as a task, its `T<n>` goes in
+no obstacles section — a fleet-side defect is RECORDED as a task, its code goes in
 the closing summary only, and if the reader needs it, it is a 下一步 row in plain
 words.
 

@@ -8,7 +8,8 @@
 #   B. show: `versions: K` + one line per version in first-seen order with its
 #      members, a member recorded twice listed once; per (repo, epic) file;
 #   C. nothing recorded → `versions: 0`; bad arguments → exit 2, nothing written.
-#   D. an EPIC on hub tasks (issue #4957): `T<n>` parent, `T<n>` / `C<n>` members.
+#   D. an EPIC on hub tasks (issue #4957): `T<n>` parent, `T<n>` / `C<n>` members;
+#      by code (EPIC T644 C5): `K5H0` parent and members, `#k5h0` read upper.
 # Hermetic: a sandbox FLEET_CONF_DIR and FLEET_LIVE_DIR. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -64,6 +65,13 @@ f record T40 C2; eq "D: a charter key records" 0 "$RC"
 f show T40; has "D: show lists them bare" "$OUT" "T41 C2"
 f record T0 T41; eq "D: T0 is usage" 2 "$RC"
 f record T40 Tx; eq "D: a bad task member is usage" 2 "$RC"
+# by the task's code (EPIC T644 C5): the parent and its members are their codes
+f record K5H0 YRV3; eq "D: a code parent + a code member" 0 "$RC"; has "D: says the member's code" "$OUT" "recorded YRV3 on"
+f record '#k5h0' C3; eq "D: #code read upper" 0 "$RC"
+f show K5H0; has "D: one file per code" "$OUT" "YRV3 C3"
+f record K5H0 C1234X; eq "D: a code starting with C reads as a code" 0 "$RC"
+f record K5I0 YRV3; eq "D: not Crockford is usage" 2 "$RC"
+f record K5H YRV3; eq "D: under 4 places is usage" 2 "$RC"
 
 [ "$BAD" = 0 ] && { printf 'fleet-epic-floor-selftest: %d checks OK\n' "$N"; exit 0; }
 printf 'fleet-epic-floor-selftest: %d of %d FAILED\n' "$BAD" "$N"; exit 1
