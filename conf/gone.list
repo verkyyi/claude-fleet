@@ -165,3 +165,11 @@ re   title="\$node\s                   #3008  bin/fleet-remote-view.sh
 path launchd/com.claude-fleet.sleep.plist.tmpl  T544
 path systemd/claude-fleet-sleep.service         T544
 path systemd/claude-fleet-sleep.timer           T544
+# --- the quota failover planner: a full subscription is the pool's (T546, EPIC T542 C2)
+path bin/.fleet-failover.py                     T546
+path bin/fleet-failover-selftest.py             T546
+path bin/dash-quota-stuck-selftest.sh           T546
+func fleet_quota_via_banner                     T546  bin/
+func fleet_limit_axis                           T546  bin/
+func account_reconcile                          T546  bin/
+func qw_failover_enabled                        T546  bin/
