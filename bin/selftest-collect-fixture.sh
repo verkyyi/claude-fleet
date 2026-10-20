@@ -46,8 +46,9 @@ cfx_sandbox() {
 }
 
 cfx_copy() {
-  local f
-  for f in ${@:-$CFX_FILES}; do
+  local f list="$*"
+  [ -n "$list" ] || list=$CFX_FILES
+  for f in $list; do
     [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
     cp "$BIN/$f" "$WORK/bin/"
   done

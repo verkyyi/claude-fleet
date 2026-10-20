@@ -33,7 +33,7 @@ case_guard() {
   issues() { grep -c '^issue ' "$L/gh.log"; }
 
   cfx_run || cfx_fail "1: a full tick must exit 0"
-  st_eq "1: phase=done after a clean tick" done "$(cfx_hb phase)"
+  st_eq "1: phase=done after a clean tick" 'done' "$(cfx_hb phase)"
   [ -n "$(cfx_hb end)" ] && [ -n "$(cfx_hb dur)" ] || cfx_fail "1: end= and dur= written"
   ph=$(cfx_hb phases)
   st_hasnt "1: the retired quota watch is no phase" "$ph" quotawatch=
@@ -223,7 +223,7 @@ case_phases() {
   survivors() { sleep 2; pgrep -f "$CFX_HANG" 2>/dev/null | wc -l | tr -d ' '; }
 
   cfx_run || cfx_fail "1: a full tick must exit 0"
-  st_eq "1: phase=done" done "$(cfx_hb phase)"
+  st_eq "1: phase=done" 'done' "$(cfx_hb phase)"
   st_eq "1: the historical phase order" \
     'sockets guide sessmap issues git ctx usage scrape banner escalate agentcfg snapshot ' "$(order)"
   st_eq "1: over= empty on a clean tick" '' "$(cfx_hb over)"
@@ -234,7 +234,7 @@ case_phases() {
 
   FAKE_GIT_HANG=/wt1 FLEET_COLLECT_GIT_BUDGET=3 FLEET_COLLECT_TICK_BUDGET=120 cfx_run \
     || cfx_fail "3: a wedged phase must not fail the tick"
-  st_eq "3: phase=done with a wedged phase" done "$(cfx_hb phase)"
+  st_eq "3: phase=done with a wedged phase" 'done' "$(cfx_hb phase)"
   st_has "3: over= names the phase" " $(cfx_hb over) " ' git '
   st_eq "3: nothing deferred" '' "$(cfx_hb skipped)"
   grep -q 'phase git hit the 3s budget (FLEET_COLLECT_GIT_BUDGET)' "$L/err" || cfx_fail "3: stderr names phase, budget, knob"
@@ -244,7 +244,7 @@ case_phases() {
   rm -f "$G/collect.phase.cursor"
   FAKE_GIT_HANG=/wt1 FLEET_COLLECT_GIT_BUDGET=20 FLEET_COLLECT_TICK_BUDGET=10 FLEET_COLLECT_SOCKETS_BUDGET=0 \
     FLEET_COLLECT_SESSMAP_BUDGET=0 FLEET_COLLECT_ISSUES_BUDGET=0 cfx_run || cfx_fail "4: a truncated tick must exit 0"
-  st_eq "4: phase=done" done "$(cfx_hb phase)"
+  st_eq "4: phase=done" 'done' "$(cfx_hb phase)"
   st_has "4: the wedge is in over=" " $(cfx_hb over) " ' git '
   clamp=$(sed -n 's/^fleet-collect: phase git hit the \([0-9]*\)s budget (FLEET_COLLECT_GIT_BUDGET).*/\1/p' "$L/err" | head -1)
   [ -n "$clamp" ] && [ "$clamp" -le 10 ] || cfx_fail "4: git's budget is CLAMPED to the tick's room (≤10s), got [${clamp}]"
@@ -281,7 +281,7 @@ case_git() {
     printf '%s' "$WT3" > "$G/collect.git.cursor"   # ⇒ this tick starts at wt1
     FAKE_GIT_HANG=/wt1 FLEET_COLLECT_GIT_BUDGET=2 cfx_run || cfx_fail "3: the tick exits 0 with a wedged worktree"
     grep -q 'hit the 2s budget' "$L/err" || cfx_fail "3: stderr names the blown budget"
-    st_eq "3: a blown git budget does not abort the tick" done "$(cfx_hb phase)"
+    st_eq "3: a blown git budget does not abort the tick" 'done' "$(cfx_hb phase)"
     st_eq "3: the cursor names the wedged worktree" "$WT1" "$(cursor)"
     st_eq "3: worktrees behind the wedge are not reached" '' "$(cache "$WT2")"
     FAKE_GIT_HANG=/wt1 FLEET_COLLECT_GIT_BUDGET=2 cfx_run || cfx_fail "4: the follow-up tick exits 0"
@@ -294,7 +294,7 @@ case_git() {
   grep -q status "$L/git.log" && cfx_fail "1: the git phase never runs \`git status\`"
   for wt in "$WT1" "$WT2" "$WT3"; do st_eq "1: $wt cached as branch+ahead-behind<TAB>" "$(br "$wt")" "$(cache "$wt")"; done
   st_has "1: phases= names git" "$(cfx_hb phases)" git=
-  st_eq "1: phase=done" done "$(cfx_hb phase)"
+  st_eq "1: phase=done" 'done' "$(cfx_hb phase)"
   st_eq "1: the cursor parks on the last worktree" "$WT3" "$(cursor)"
   printf '%s' "$WT1" > "$G/collect.git.cursor"
   cfx_run || cfx_fail "2: a full tick must exit 0"
@@ -470,7 +470,7 @@ STUB
   tick() { FLEET_COLLECT_TICK_BUDGET=120 FLEET_COLLECT_BANNER_BUDGET=2 FAKE_CAP_SLEEP=0.2 cfx_run; }
   rm -f "$G/banner.cursor" "$G/collect.phase.cursor" "$G"/collect.banner.prog.*
   FLEET_COLLECT_BANNER_PER_WINDOW_MS=500 tick || cfx_fail 'C: the tick must exit 0'
-  st_eq 'C: phase=done' done "$(cfx_hb phase)"
+  st_eq 'C: phase=done' 'done' "$(cfx_hb phase)"
   st_hasnt 'C: banner not killed with a window-scaled budget' " $(cfx_hb over) " ' banner '
   grep -q 'phase banner hit' "$L/err" && cfx_fail 'C: stderr says the banner phase hit its budget'
   st_eq 'C: heartbeat banner_scanned/total' 24/24 "$(cfx_hb banner_scanned)/$(cfx_hb banner_total)"
@@ -487,6 +487,6 @@ STUB
 
 CASES="${*:-guard sessmap account phases git issues banner}"
 for c in $CASES; do
-  ( ST_LEG=$c; "case_$c" ) || exit 1
+  ( export ST_LEG="$c"; "case_$c" ) || exit 1
 done
 printf 'selftest PASS: collector — %s\n' "$CASES"
