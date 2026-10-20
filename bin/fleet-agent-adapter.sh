@@ -4,6 +4,8 @@
 # columns. fleet_agent_known <agent> · fleet_agent_get <agent> <column> · fleet_agent_or_default
 # <agent> (an unknown or empty one reads as claude).
 FLEET_AGENTS='claude codex'
+# shellcheck disable=SC2034  # read by the sourcing script
+FLEET_DELIVER_HELD=3   # one held code for every agent (deliver column)
 _fa_claude_launcher='fleet-claude.sh'   # wrap-ok: the table names it; spawners launch the wrapper
 _fa_claude_model_env='FLEET_MODEL'
 _fa_claude_model_flag='--model'
@@ -21,6 +23,7 @@ _fa_claude_park_resume='1'
 _fa_claude_ready_check=''
 _fa_claude_trust='claude-json'
 _fa_claude_mcp='flags'
+_fa_claude_deliver='inbox'
 _fa_codex_launcher='fleet-codex.sh'
 _fa_codex_model_env='FLEET_CODEX_MODEL'
 _fa_codex_model_flag='-m'
@@ -38,11 +41,12 @@ _fa_codex_park_resume='0'
 _fa_codex_ready_check='fleet_codex_ready'
 _fa_codex_trust='codex-toml'
 _fa_codex_mcp='config'
+_fa_codex_deliver='queue'
 fleet_agent_known() { case "${1:-}" in ''|*[!a-z0-9_]*) return 1 ;; esac; case " $FLEET_AGENTS " in *" $1 "*) return 0 ;; esac; return 1; }
 fleet_agent_or_default() { if fleet_agent_known "${1:-}"; then printf '%s' "$1"; else printf claude; fi; }
 fleet_agent_get() {   # <agent> <column> — prints the value; exit 1 unknown
   fleet_agent_known "${1:-}" || return 1
   case "${2:-}" in ''|*[!a-z0-9_]*) return 1 ;; esac
-  case " launcher model_env model_flag resume_flag fork_flag fork_replaces continue_flag preset_sid_flag sid_window sid_pending sid_thread seed seed_words park_resume ready_check trust mcp " in *" $2 "*) : ;; *) return 1 ;; esac
+  case " launcher model_env model_flag resume_flag fork_flag fork_replaces continue_flag preset_sid_flag sid_window sid_pending sid_thread seed seed_words park_resume ready_check trust mcp deliver " in *" $2 "*) : ;; *) return 1 ;; esac
   eval "printf '%s' \"\${_fa_${1}_${2}}\""
 }

@@ -52,6 +52,7 @@
 #   codex-thread-lost                               bin/fleet-codex.sh (@codex_pending), fleet-restore.sh (snapshot),
 #                                                   bin/.fleet-restore-resolve.py (--prior-map), fleet-session-wrap.sh
 #   codex-clear-lost                                bin/fleet-codex-session.py (Follow, check_current: T540),
+#                                                   bin/fleet-agent-deliver-selftest.py (both agents, T626),
 #                                                   fleet-codex-runtime.py, fleet-peer-send.sh, fleet-report-parent.sh
 #   tool-wait-idle                                  fleet_window_tool_busy / fleet_window_wait (fleet-lib.sh),
 #                                                   fleet-state-reconcile.py, bin/set-claude-state.sh (Stop),
@@ -1591,10 +1592,13 @@ drill_codex_thread_lost() {
 # and the old thread stays LOADED, so peer-send said «sent → codex <old>» and a
 # child's report read DELIVERED — into a thread nobody sees. Now the runtime follows
 # thread/started at once, and a delivery the window's server says is not into its
-# current thread is held (exit 4 → queued for the window's identity, replayed).
-# The recovery is fleet-codex-session-selftest.sh's own leg against a fixture
-# app-server (bin/fleet_codex_fake_appserver.py): held, followed, drained into the
-# new thread, DELIVERED only then — held here by name, not run twice.
+# current thread is held (exit 3 since T626, 4 before → queued for the window's
+# identity, replayed). The recovery is fleet-codex-session-selftest.sh's own leg
+# against a fixture app-server (bin/fleet_codex_fake_appserver.py): held, followed,
+# drained into the new thread, DELIVERED only then — and since T626 the one delivery
+# road runs the same /clear leg for BOTH agents (fleet-agent-deliver-selftest.py:
+# Claude's inbox reaches the new conversation at once, Codex holds then replays) —
+# both held here by name, not run twice.
 drill_codex_clear_lost() {
   CAP=30; local t0
   t0=$(now)
@@ -1604,7 +1608,11 @@ drill_codex_clear_lost() {
     || { WHY="fleet-codex-runtime.py no longer runs the thread follower"; return 1; }
   suite_holds fleet-codex-session-selftest.sh 'def test_clear_holds_then_follows_into_the_new_thread' \
     "'held is never DELIVERED'" || return 1
-  WHAT='Codex 父 /clear 后：投递先留待（不投旧线程、不写 DELIVERED），runtime 收 thread/started 立刻换到新线程、记段，留待的回报重放进新线程才算送达（fleet-codex-session-selftest.sh 真跑，这里按名守住）'
+  suite_holds fleet-agent-deliver-selftest.py 'def test_clear_reaches_the_new_conversation' \
+    "for agent in ('claude', 'codex')" "'the replay lands in the new thread'" || return 1
+  grep -q 'fleet_agent_deliver "\$pwin"' "$ROOT/bin/fleet-report-parent.sh" \
+    || { WHY="fleet-report-parent.sh no longer takes the one delivery road (fleet_agent_deliver)"; return 1; }
+  WHAT='Codex 父 /clear 后：投递先留待（不投旧线程、不写 DELIVERED），runtime 收 thread/started 立刻换到新线程、记段，留待的回报重放进新线程才算送达（fleet-codex-session-selftest.sh 真跑；同一条腿 Claude / Codex 各一遍在 fleet-agent-deliver-selftest.py，这里按名守住）'
   SECS=$(since "$t0")
 }
 

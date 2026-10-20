@@ -44,6 +44,12 @@ Columns
                   a trusted node; else the pane says so and goes `needs`)
   mcp             how the fleet's tool service is mounted: flags (--mcp-config files)
                   | config (-c mcp_servers.<name>=…)
+  deliver         how a message is put into a live session (T626, C6): inbox = the
+                  Claude process's peer inbox socket (fleet_peer_send <pid>); queue =
+                  the window's app-server thread queue (fleet-codex-session.py send),
+                  held while the window has not followed a /clear. Everything around
+                  it — the journaled route, the held code, the peer queue, the receipt —
+                  is one road: fleet_agent_deliver (fleet-lib.sh).
 """
 import os
 import re
@@ -55,7 +61,8 @@ HERE = Path(__file__).resolve().parent
 
 COLUMNS = ("launcher", "model_env", "model_flag", "resume_flag", "fork_flag", "fork_replaces",
            "continue_flag", "preset_sid_flag", "sid_window", "sid_pending", "sid_thread",
-           "seed", "seed_words", "park_resume", "ready_check", "trust", "mcp")
+           "seed", "seed_words", "park_resume", "ready_check", "trust", "mcp",
+           "deliver")
 
 ADAPTERS = {
     "claude": {
@@ -66,6 +73,7 @@ ADAPTERS = {
         "sid_window": "@cc_session_id", "sid_pending": "", "sid_thread": "",
         "seed": "slash", "seed_words": "1", "park_resume": "1",
         "ready_check": "", "trust": "claude-json", "mcp": "flags",
+        "deliver": "inbox",
     },
     "codex": {
         "launcher": "fleet-codex.sh", "model_env": "FLEET_CODEX_MODEL", "model_flag": "-m",
@@ -74,6 +82,7 @@ ADAPTERS = {
         "sid_window": "@codex_session_id", "sid_pending": "@codex_pending", "sid_thread": "@codex_thread_id",
         "seed": "skill", "seed_words": "0", "park_resume": "0",
         "ready_check": "fleet_codex_ready", "trust": "codex-toml", "mcp": "config",
+        "deliver": "queue",
     },
 }
 DEFAULT = "claude"
@@ -84,6 +93,14 @@ def get(agent, column):
     if column not in COLUMNS:
         raise KeyError(column)
     return ADAPTERS[agent][column]
+
+
+# --- the deliver column ---------------------------------------------------------------
+# One delivery outcome code for every agent (T626, C6): 0 handed over, HELD = it waits
+# for the recipient (the caller queues it for the window's identity and the peer queue
+# replays it), anything else = refused. Codex's old held code 4 is read one more version
+# (fleet_agent_deliver; compat-1v: 下一批删).
+HELD = 3
 
 
 # --- the seed column ----------------------------------------------------------------
@@ -165,7 +182,9 @@ def emit_sh():
            "# The agent adapter table for shell readers (T620, EPIC T580 C4): see the .py for the",
            "# columns. fleet_agent_known <agent> · fleet_agent_get <agent> <column> · fleet_agent_or_default",
            "# <agent> (an unknown or empty one reads as %s)." % DEFAULT,
-           "FLEET_AGENTS=%s" % q(" ".join(ADAPTERS))]
+           "FLEET_AGENTS=%s" % q(" ".join(ADAPTERS)),
+           "# shellcheck disable=SC2034  # read by the sourcing script",
+           "FLEET_DELIVER_HELD=%d   # one held code for every agent (deliver column)" % HELD]
     for agent, row in ADAPTERS.items():
         for col in COLUMNS:
             line = "_fa_%s_%s=%s" % (agent, col, q(row[col]))

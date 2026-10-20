@@ -835,7 +835,10 @@ parent_agent=$(TM display-message -p -t "$pwin" '#{@cc_agent}' 2>/dev/null)
 ppid=''
 parent_evidence=$(TM display-message -p -t "$pwin" '#{@sleep_evidence}' 2>/dev/null)
 noclaude=''
-if [ "$parent_agent" != codex ] && [ -z "$parent_evidence" ]; then
+# Only an agent taken over its process's inbox needs that process now (the adapter's
+# deliver column, T626); a thread queue holds its own conversation.
+if [ "$(fleet_agent_get "$(fleet_agent_or_default "$parent_agent")" deliver 2>/dev/null)" != queue ] \
+   && [ -z "$parent_evidence" ]; then
   ppid=$(fleet_pane_claude_pid "$pwin" "$SOCK" 2>/dev/null) || ppid=''
   [ -n "$ppid" ] || noclaude=1
 fi
@@ -871,24 +874,11 @@ queue_local() {
 }
 [ -n "$noclaude" ] && queue_local 'no live Claude under it'
 
-send_report() {
-  # The lib's copy is the one the digest shares; this body is the half-synced
-  # install's fallback (a lib without children_send).
-  if command -v children_send >/dev/null 2>&1; then
-    children_send "$sess" "$SOCK" "$pwin" "$msg"
-    return $?
-  fi
-  if [ -n "$parent_evidence" ] && [ -f "$BIN/fleet_worker_life.py" ]; then
-    printf '%s' "$msg" | python3 "$BIN/fleet_worker_life.py" deliver --session "$sess" "$pwin"
-    return $?
-  fi
-  if [ "$parent_agent" = codex ]; then
-    printf '%s' "$msg" | python3 "$BIN/fleet-codex-session.py" send --pane "$pwin" --socket "$SOCK"
-  else
-    fleet_peer_send "$ppid" "$msg" "${FLEET_REPORT_FROM:-fleet-report}"
-  fi
-}
-send_report; src=$?
+# The one road into a live session of any agent (fleet_agent_deliver, T626): held =
+# nobody there to take it now (a Codex parent not on the thread its window names —
+# a /clear not followed yet, T540; a Claude whose inbox will not answer) — queued
+# for its identity and replayed, never «reported».
+fleet_agent_deliver "$pwin" "$SOCK" "$msg" "${FLEET_REPORT_FROM:-fleet-report}"; src=$?
 if [ "$src" -eq 0 ]; then
   # The stamp is what keeps the reaper fallback from sending a second, blunter
   # report for the same session ~a minute later.
@@ -899,9 +889,7 @@ if [ "$src" -eq 0 ]; then
   printf 'reported → %s (%s): %s%s\n' "$SENDKEY" "$pwin" "$st" "${RELAY_FROM:+ (relayed for reaped $RELAY_FROM)}"
   exit 0
 fi
-# 4 = a Codex parent not on the thread its window names (T540: a /clear not
-# followed yet) — held for its identity and replayed, never «reported».
-[ "$src" -eq 4 ] && queue_local 'is on a new Codex thread its window has not named yet'
+[ "$src" -eq "${FLEET_DELIVER_HELD:-3}" ] && queue_local "cannot take it now: $FLEET_DELIVER_NOTE"
 # A parent that is alive but unreachable (no registry record / no key / no socket):
 # queued for it, never dropped.
 queue_local "has no reachable inbox${ppid:+ (pid $ppid)}"

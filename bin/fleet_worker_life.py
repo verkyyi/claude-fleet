@@ -60,6 +60,13 @@ ARGV = LazyModule('fleet_agent_argv.py')
 MCP = LazyModule('fleet_agent_mcp.py')
 
 
+HELD = 3   # the adapter's one held code (fleet_agent_adapter.HELD, T626)
+
+
+class Held(ValueError):
+    """The recipient cannot take it now: exit HELD, the caller queues it."""
+
+
 class NotAWorker(ValueError):
     """A window that structurally cannot be a worker (a panel or the hub): the
     scan skips it silently instead of logging a per-tick skip record for it."""
@@ -162,14 +169,18 @@ class Worker:
             source=self.inspect()
             if message['session_id']!=source['session_id']:raise ValueError('pending message belongs to an earlier conversation')
             self.stamp('@sleep_evidence','')
+            # The one road into a live session of any agent (T626): the evidence is
+            # cleared above, so fleet_agent_deliver puts it straight in by the
+            # adapter's deliver column. Held stays held (exit 3), never «sent».
             try:
-                if source['agent']=='codex':
-                    run(['python3',BIN/'fleet-codex-session.py','send','--pane',self.pane,'--socket',self.session],input=text,timeout=20)
-                else:
-                    run(['bash','-c','. "$1"; text=$(cat); fleet_peer_send "$2" "$text" "${FLEET_REPORT_FROM:-fleet}"',
-                         'sleep-delivery',BIN/'fleet-lib.sh',str(source['pid'])],input=text,timeout=20)
+                run(['bash','-c','. "$1"; text=$(cat); fleet_agent_deliver "$2" "$3" "$text" "${FLEET_REPORT_FROM:-fleet}"; rc=$?; '
+                     '[ "$rc" -eq 0 ] || printf "%s\\n" "$FLEET_DELIVER_NOTE" >&2; exit "$rc"',
+                     'sleep-delivery',BIN/'fleet-lib.sh',self.pane,self.session],input=text,timeout=20)
             except subprocess.TimeoutExpired:
                 message['state']='uncertain'; save(msgpath,message); raise
+            except subprocess.CalledProcessError as e:
+                if e.returncode==HELD: raise Held((e.stderr or '').strip() or 'held') from None
+                raise ValueError((e.stderr or '').strip() or 'delivery failed (exit %d)' % e.returncode) from None
             msgpath.unlink()
 
     def inbox(self):
@@ -447,5 +458,7 @@ if __name__=='__main__':
     def interrupted(signum,frame): raise SystemExit(128+signum)
     signal.signal(signal.SIGTERM,interrupted)
     try: sys.exit(main())
+    except Held as exc:
+        print('fleet-sleep: held: '+str(exc),file=sys.stderr); sys.exit(HELD)
     except (ValueError,KeyError,OSError,subprocess.SubprocessError) as exc:
         print('fleet-sleep: '+str(exc),file=sys.stderr); sys.exit(2 if 'busy' in sys.argv[1:2] else 1)

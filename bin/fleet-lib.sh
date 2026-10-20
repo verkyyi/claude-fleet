@@ -9862,6 +9862,55 @@ PY
   fi
 }
 
+# fleet_agent_deliver <window|pane> <socket> <text> [from-name] — THE one road a
+# message takes into a live session of ANY agent (T626, EPIC T580 C6): a child
+# report, a peer message, the peer queue's replay, a digest. What is common is
+# written here once — the journaled route of a window whose Stop hook left
+# @sleep_evidence (fleet_worker_life.py deliver), one outcome code, the note — and
+# only «how it is put in» comes from the adapter table's `deliver` column:
+#   inbox  the Claude under the pane, over its peer inbox (fleet_peer_send)
+#   queue  the window's app-server thread (fleet-codex-session.py send), HELD while
+#          the window has not followed a /clear (T540)
+# Returns 0 handed over · $FLEET_DELIVER_HELD (3) held — nobody there to take it
+# now, the caller queues it for the window's identity · 1 refused. Sets
+# FLEET_DELIVER_NOTE: who took it (`pid <n>` / `codex <thread>` / `<win> via
+# delivery`), else why not — so call it bare, never in $( ).
+_fad_tm() { if [ -n "$1" ]; then _fad_s=$1; shift; tmux -L "$_fad_s" "$@"; else shift; tmux "$@"; fi; }
+# shellcheck disable=SC2034  # FLEET_DELIVER_NOTE is read by the caller
+fleet_agent_deliver() {
+  local tgt="${1:-}" sock="${2:-}" text="${3:-}" from="${4:-fleet}" agent ev pid out rc sess
+  local held="${FLEET_DELIVER_HELD:-3}" lib="${_FLEET_LIB_DIR:-}"
+  FLEET_DELIVER_NOTE=""
+  [ -n "$tgt" ] || { FLEET_DELIVER_NOTE="no target"; return 1; }
+  ev=$(_fad_tm "$sock" display-message -p -t "$tgt" '#{@sleep_evidence}' 2>/dev/null)
+  if [ -n "$ev" ] && [ -f "$lib/fleet_worker_life.py" ]; then
+    sess=$(_fad_tm "$sock" display-message -p -t "$tgt" "$FLEET_SESSION_FMT" 2>/dev/null)
+    out=$(printf '%s' "$text" | FLEET_REPORT_FROM="$from" python3 "$lib/fleet_worker_life.py" deliver --session "$sess" "$tgt" 2>&1 >/dev/null); rc=$?
+    if [ "$rc" -eq 0 ]; then FLEET_DELIVER_NOTE="$tgt via delivery"; return 0; fi
+    out=${out#fleet-sleep: }; FLEET_DELIVER_NOTE="${out#held: }"
+    [ -n "$out" ] || FLEET_DELIVER_NOTE="delivery to $tgt failed (exit $rc)"
+    [ "$rc" -eq "$held" ] && return "$held"
+    return 1
+  fi
+  agent=$(fleet_agent_or_default "$(_fad_tm "$sock" display-message -p -t "$tgt" '#{@cc_agent}' 2>/dev/null)")
+  case "$(fleet_agent_get "$agent" deliver)" in
+    queue)
+      out=$(printf '%s' "$text" | python3 "$lib/fleet-codex-session.py" send --pane "$tgt" --socket "$sock" 2>&1); rc=$?
+      case "$rc" in
+        0) FLEET_DELIVER_NOTE="codex ${out##* }"; return 0 ;;
+        "$held"|4)   # 4: the held code before T626 — compat-1v: 下一批删
+          out=${out#fleet-codex-session: }; FLEET_DELIVER_NOTE=${out#held, not delivered: }; return "$held" ;;
+      esac
+      FLEET_DELIVER_NOTE="${out:-Codex queue to $tgt failed (exit $rc)}"; return 1 ;;
+    *)
+      pid=$(fleet_pane_claude_pid "$tgt" "$sock" 2>/dev/null)
+      [ -n "$pid" ] || { FLEET_DELIVER_NOTE="no live Claude session for '$tgt'"; return "$held"; }
+      if fleet_peer_send "$pid" "$text" "$from"; then FLEET_DELIVER_NOTE="pid $pid"; return 0; fi
+      FLEET_DELIVER_NOTE="pid $pid has no reachable inbox (not a registered session, or no key/socket)"
+      return "$held" ;;
+  esac
+}
+
 # ============================================================================
 # --- per-fleet window handles: `@wid` (issue #566) --------------------------
 # ============================================================================
