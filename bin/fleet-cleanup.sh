@@ -324,15 +324,10 @@ issue_open_gate() {
   case "$WIN" in *$'\n'*) return 0 ;; esac
   # A session that carries a hub task record (issue #4897, EPIC #4895 批 0): its
   # worktree's mark (fleet_worktree_task — a development task with no issue, or
-  # an issue worker's accepted task), else its window's @task beside @launch. The
-  # work is over when the RECORD is closed (收口) — the issue is not read at all.
+  # an issue worker's accepted task). The work is over when the RECORD is closed
+  # (收口) — the issue is not read at all.
   # Open or unknown defers, like an open issue.
   [ -n "$WT" ] && [ -d "$WT" ] && wtask=$(fleet_worktree_task "$WT" 2>/dev/null)
-  if [ -z "$wtask" ] && [[ "$WIN" =~ ^@[0-9]+$ ]] \
-     && [ -n "$(ftmux show-options -wqv -t "$WIN" @launch 2>/dev/null)" ]; then
-    wtask=$(ftmux show-options -wqv -t "$WIN" @task 2>/dev/null)
-    case "$wtask" in T[1-9]*) case "${wtask#T}" in *[!0-9]*) wtask='' ;; esac ;; *) wtask='' ;; esac
-  fi
   if [ -n "$wtask" ]; then
     tv=$(fleet_task_closed "$wtask") && return 0
     verb=merged; [ "$st" = CLOSED ] && verb=closed

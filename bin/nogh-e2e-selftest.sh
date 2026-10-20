@@ -333,6 +333,10 @@ ok "WeChat scan bound by the invite: signed in as $PID (via wechat)"
 # The operator gives the person their login on that machine (fleet hub set).
 out=$(env -i PATH="$WORK/shim:$PATH" HOME="$WORK/op" CCQUOTA_VIEWER_TOKEN="$VT" FLEET_CONF_DIR="$WORK/op/conf" \
         python3 "$BIN/fleet-hub-admin.py" set --hub "$HUB" "user.$PID.machine_login" "$L" 2>&1) || die 'fleet hub set user.<id>.machine_login failed' "$out"
+# The hub reads sessions by their window's ID (EPIC T497, switched on in
+# production before C8 retired the launch proof): a record's end is its ID's.
+out=$(env -i PATH="$WORK/shim:$PATH" HOME="$WORK/op" CCQUOTA_VIEWER_TOKEN="$VT" FLEET_CONF_DIR="$WORK/op/conf" \
+        python3 "$BIN/fleet-hub-admin.py" set --hub "$HUB" fleet.id_switch on 2>&1) || die 'fleet hub set fleet.id_switch on failed' "$out"
 # The terminal: fleet login, confirmed in the person's browser.
 PH="$WORK/person"; mkdir -p "$PH/.ssh"; chmod 700 "$PH/.ssh"
 # The person's terminal is this machine, where their login lives — a managed
@@ -369,11 +373,10 @@ cat > "$WORK/shim/tmux" <<EOF
 while [ "\${1:-}" = -L ] || [ "\${1:-}" = -S ]; do shift 2; done
 exec "$REAL_TMUX" -S "$SOCK" "\$@"
 EOF
-# The agent is a NATIVE stand-in (a few lines of Go, built here): the launch's
-# receipt is only ever written for a process whose kernel executable is named
-# claude and answers `--version` as Claude Code, with the SessionStart hooks run
-# by that process — so the record's claim, and the merged report that closes it,
-# go through the real proof (fleet_launch.py hook / check_receipt), never a stub.
+# The agent is a NATIVE stand-in (a few lines of Go, built here): a process whose
+# kernel executable is named claude and answers `--version` as Claude Code, with
+# the SessionStart hooks run by that process — the ID's segment, and the merged
+# report on that ID that closes the record, come from the real hooks.
 mkdir -p "$WORK/fakeclaude"
 cat > "$WORK/fakeclaude/main.go" <<'GO'
 package main
@@ -522,8 +525,9 @@ passed
 # =============================================================================
 step 3 '派活: a session opens on the record'
 # The same words again with --spawn: the same record (one per caller + words), and
-# its session opens here bound to it (dash-raw-session.sh --repo --task, a local
-# launch that claims the record) — once the hub has heard this machine host $R.
+# its session opens here bound to it (dash-raw-session.sh --repo --task: the
+# window's ID is the session, nothing claims the record) — once the hub has heard
+# this machine host $R.
 waitfor 60 hosted || die "the hub never heard this machine host $R" "$(api "$HUB/v1/fleet/fleet_list" 2>&1 | head -c 600)"
 T2=$(printf '在 NOTES 里加一行 hello。\n\n上线证据：`cat NOTES` 的输出\n' \
       | FLEET_SESSION="$S" bash "$BIN/fleet-task-record.sh" dispatch --title '在 NOTES 里加一行 hello' --body-file - --repo "$R" --spawn \
@@ -537,13 +541,12 @@ BR=$(git -C "$WT" symbolic-ref --short HEAD 2>/dev/null)
 [ "$(fleet_worktree_task "$WT")" = "$T" ] || die 'the worktree does not remember its record' "$(fleet_worktree_task "$WT")"
 seen() { [ -s "$WORK/rec/$W.args" ]; }
 waitfor 20 seen || die 'the agent never started in the window' "$(tmux capture-pane -p -t "$W" | tail -20)"
-# an accepted launch (the record's claim) hands its first turn over once the agent
-# is ready — the words wait in its @launch_seed, never on the command line
-LS=$(tmux display-message -p -t "$W" '#{@launch_seed}')
-grep -q 'NOTES' "$LS" 2>/dev/null || die "the session's first turn is not the person's words" "$(cat "$LS" 2>&1)"
-[ -n "$(tmux display-message -p -t "$W" '#{@launch}')" ] || die 'the session holds no launch of its record'
+# its first turn is the person's words; no launch proof binds the window (EPIC T497 C8)
+grep -q 'NOTES' "$WORK/rec/$W.args" 2>/dev/null || die "the session's first turn is not the person's words" "$(cat "$WORK/rec/$W.args" 2>&1)"
+[ -z "$(tmux display-message -p -t "$W" '#{@launch}')" ] || die 'the session holds a retired launch binding'
+fleet_is_fid "$(tmux display-message -p -t "$W" '#{@fleet_id}')" || die 'the session has no ID'
 [ "$(ghcalls)" = 0 ] || die 'the dispatch asked gh' "$(cat "$GHLOG")"
-ok "window $W · worktree $(basename "$WT") on $BR · bound to $T by its launch · its first turn the words · gh 0"
+ok "window $W · worktree $(basename "$WT") on $BR · its ID bound to $T · its first turn the words · gh 0"
 passed
 
 # =============================================================================

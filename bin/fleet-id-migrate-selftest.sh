@@ -13,14 +13,13 @@
 #            answer; no hub ⇒ 3, a silent hub ⇒ 75 — nothing moved either way
 #   SWITCH   `fleet-id.sh switch` writes the hub's word to ids/.switch; on/off
 #            post it; no hub ⇒ the last word heard, rc 3
-#   LAUNCH   switch on: an accepted dispatch opens unclaimed (fleet_launch.py
-#            local → nothing, admit passes with no binding); off: admit still
-#            demands the binding
-#   GATE     a window with @launch: switch on ⇒ fleet_task_control.py answers 5 and
-#            the report is a result on the window's ID (--outcome becomes its
-#            state); switch off ⇒ the old road, nothing written on the ID; a window
-#            with @task and no @launch takes --outcome only with the switch on —
-#            twice round, the window keeps reporting
+#   LAUNCH   the launch proof is retired (EPIC T497 C8): an accepted dispatch opens
+#            unclaimed whatever the switch says (fleet_launch.py local → nothing,
+#            admit passes with no binding)
+#   GATE     a task's window, with or without a pre-C8 @launch: the report is a
+#            result on the window's ID (--outcome becomes its state) whatever the
+#            switch says; fleet_task_control.py report answers 5 — twice round,
+#            the window keeps reporting
 #   WIRE     the cleanup tick asks the switch; fleet-task-record.sh writes the
 #            hub's ID_SWITCH refusal down; the hub's read list carries id_presence
 # tmux / python3 absent → SKIP. Exit 0 = pass.
@@ -169,16 +168,16 @@ ok; [ "$rc" = 1 ] && [ "$(sw)" = on ] || fail "SWITCH: a refused set changes not
 rm -f "$WORK/person"
 bash "$BIN/fleet-id.sh" switch off >/dev/null
 
-# ---- LAUNCH · on: no claim, no binding demanded ------------------------------------
+# ---- LAUNCH · no claim, no binding demanded, whatever the switch -----------------
 disp='{"task":"T42","generation":1,"attempt_id":"a1","resolved_agent":"claude"}'
-got=$(printf '%s' "$disp" | FLEET_ID_SWITCH=on python3 "$BIN/fleet_launch.py" local 11111111-1111-4111-8111-111111111111 2>&1); rc=$?
-ok; [ "$rc" = 0 ] && [ -z "$got" ] || fail "LAUNCH: switch on ⇒ local opens unclaimed (no binding)" "$rc · $got"
-printf '%s' "$disp" | FLEET_ID_SWITCH=on python3 "$BIN/fleet_launch.py" admit >/dev/null 2>&1; rc=$?
-ok; [ "$rc" = 0 ] || fail "LAUNCH: switch on ⇒ admit needs no binding" "$rc"
-printf '%s' "$disp" | FLEET_ID_SWITCH=off python3 "$BIN/fleet_launch.py" admit >/dev/null 2>&1; rc=$?
-ok; [ "$rc" != 0 ] || fail "LAUNCH: switch off ⇒ admit still demands the binding"
+for word in on off; do
+  got=$(printf '%s' "$disp" | FLEET_ID_SWITCH=$word python3 "$BIN/fleet_launch.py" local 11111111-1111-4111-8111-111111111111 2>&1); rc=$?
+  ok; [ "$rc" = 0 ] && [ -z "$got" ] || fail "LAUNCH: switch $word ⇒ local opens unclaimed (no binding)" "$rc · $got"
+  printf '%s' "$disp" | FLEET_ID_SWITCH=$word python3 "$BIN/fleet_launch.py" admit >/dev/null 2>&1; rc=$?
+  ok; [ "$rc" = 0 ] || fail "LAUNCH: switch $word ⇒ admit needs no binding" "$rc"
+done
 
-# ---- GATE · the report's road follows the switch, twice round ----------------------
+# ---- GATE · a task's report is a result on its ID, twice round ---------------------
 F=$(python3 -c 'import uuid; print(uuid.uuid4())')
 W=$(tf new-window -d -P -F '#{window_id}' -t "$L:" 'while :; do sleep 300; done')
 P=$(tf display-message -p -t "$W" '#{pane_id}')
@@ -190,28 +189,22 @@ nres() { python3 "$BIN/fleet_id.py" get "$F" --json | python3 -c 'import json,sy
 rep() { env "$INT" TMUX_PANE="$P" bash "$BIN/fleet-report-parent.sh" "$@" 2>&1; }
 n=0
 for round in 1 2; do
-  out=$(FLEET_ID_SWITCH=off rep --state waiting --outcome succeeded --summary "off $round"); rc=$?
-  ok; [ "$rc" != 5 ] && [ "$(nres)" = "$n $( [ $n = 0 ] && echo - || echo succeeded)" ] \
-    || fail "GATE: switch off ⇒ the old road (round $round), nothing on the ID" "$rc · $(nres) · $out"
-  out=$(FLEET_ID_SWITCH=on rep --state waiting --outcome succeeded --summary "on $round"); rc=$?
-  n=$((n + 1))
-  ok; [ "$(nres)" = "$n succeeded" ] || fail "GATE: switch on ⇒ a result on the ID (round $round)" "$rc · $(nres) · $out"
+  for word in off on; do
+    out=$(FLEET_ID_SWITCH=$word rep --state waiting --outcome succeeded --summary "$word $round"); rc=$?
+    n=$((n + 1))
+    ok; [ "$(nres)" = "$n succeeded" ] || fail "GATE: switch $word ⇒ a result on the ID (round $round)" "$rc · $(nres) · $out"
+  done
 done
-out=$(FLEET_ID_SWITCH=on env "$INT" TMUX_PANE="$P" python3 "$BIN/fleet_task_control.py" report --pane "$P" --state waiting --summary x 2>&1); rc=$?
-ok; [ "$rc" = 5 ] && printf '%s' "$out" | grep -q '^ID_SWITCH' || fail "GATE: fleet_task_control.py answers 5 with the switch on" "$rc · $out"
+out=$(env "$INT" TMUX_PANE="$P" python3 "$BIN/fleet_task_control.py" report --pane "$P" --state waiting --summary x 2>&1); rc=$?
+ok; [ "$rc" = 5 ] && printf '%s' "$out" | grep -q '^ID_SWITCH' || fail "GATE: fleet_task_control.py report answers 5" "$rc · $out"
 tf set-window-option -u -t "$W" @launch
-out=$(FLEET_ID_SWITCH=off rep --state waiting --outcome succeeded --summary nolaunch); rc=$?
-ok; [ "$rc" = 2 ] || fail "GATE: no @launch, switch off ⇒ --outcome refused as before" "$rc · $out"
-out=$(FLEET_ID_SWITCH=on rep --state waiting --outcome failed --summary nolaunch); rc=$?
-ok; [ "$(nres)" = "$((n + 1)) failed" ] || fail "GATE: no @launch, switch on ⇒ the outcome is the ID's result" "$rc · $(nres) · $out"
+out=$(FLEET_ID_SWITCH=off rep --state waiting --outcome failed --summary nolaunch); rc=$?
+ok; [ "$(nres)" = "$((n + 1)) failed" ] || fail "GATE: no @launch ⇒ the outcome is the ID's result" "$rc · $(nres) · $out"
 
 # ---- WIRE ----------------------------------------------------------------------------
 ok; grep -q 'fleet-id.sh" switch' "$BIN/fleet-cleanup-daemon.sh" || fail "WIRE: the cleanup tick asks the switch"
-# T604: asked on a login with no ids/ yet too — its guard is not the push's
-awk '/^if / { guard = $0 } /fleet-id.sh" switch/ { print guard }' "$BIN/fleet-cleanup-daemon.sh" | grep -q 'FLEET_CONF_DIR/ids' \
-  && fail "WIRE: the switch is asked only where ids/ exists — a login with no ID never hears it (T604)"
 ok; grep -q 'ID_SWITCH' "$BIN/fleet-task-record.sh" || fail "WIRE: fleet-task-record.sh writes the hub's ID_SWITCH down"
-ok; grep -q 'id_switch_on()' "$BIN/fleet_launch.py" || fail "WIRE: the launch reads the switch"
+ok; ! grep -q 'id_switch_on\|execution_owner' "$BIN/fleet_launch.py" || fail "WIRE: the retired launch reads no switch, no executor"
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'fleet-id-migrate selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2

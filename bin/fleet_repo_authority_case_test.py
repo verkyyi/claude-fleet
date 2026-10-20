@@ -173,8 +173,9 @@ exit 0
                 self.assertIn(str(self.root / ("Space-issue-%d" % (7 + i))), windows)
                 self.assertIn(REGISTERED, windows)
                 self.assertEqual(before, self.overlay.read_bytes())
-        reserves = [body for _, body in self.requests if body and body.get("action") == "reserve"]
-        self.assertEqual(len(reserves), 2 * len(REPO_CASES))
+        # A start is admitted by its window's ID (EPIC T497 C8): the person's
+        # mode is read, nothing is reserved.
+        self.assertFalse([body for _, body in self.requests if body])
         self.assert_person_road()
 
     def panel_new(self, repo):
@@ -231,7 +232,7 @@ exit 0
         with patch.object(fleet_view, "view_fleet", return_value="fixture"):
             argv, _, _ = fleet_view.bolt_argv(None, "test", "", state, "fixture draft")
         self.command(*argv)
-        self.assertTrue(any(body and body.get("action") == "reserve" for _, body in self.requests))
+        self.assertFalse([body for _, body in self.requests if body])
         self.assert_person_road()
         self.assertIn(str(self.root / "Space-scratch-1"), self.windows.read_text())
         before = self.windows.read_bytes()
@@ -246,13 +247,6 @@ exit 0
         for repo in ("../space", "exampleorg/..", "exampleorg/space/extra", " exampleorg/space", "https://github.com/exampleorg/space"):
             self.assertNotEqual(self.cli(repo, "--gate").returncode, 0, repo)
         self.assertEqual(self.requests, [])
-        c = dict(task="T9", owner="alice", generation=1, worker_id="fleet/session")
-        with patch.object(authority.hubrest, "api", return_value=dict(mode="hub")), \
-                patch.dict(os.environ, {"FLEET_LAUNCH": "{}"}), \
-                patch.object(authority.launch, "validate_context", return_value=c), \
-                patch.object(authority.launch, "current_task", return_value=dict(repo="other/space")):
-            with self.assertRaisesRegex(ValueError, "another repo"):
-                authority.gate(CANONICAL, True)
 
     def test_aliases_and_added_repo_keep_existing_paths_and_keys(self):
         script = '. "$1/fleet-lib.sh"; r=$(fleet_target_repo fixture "$2") || exit; fleet_load_repo_conf fixture "$r" || exit; printf "%s\\t%s\\t%s" "$r" "$FLEET_MAIN" "$(fleet_issue_key fixture "$r" 7)"'
@@ -336,56 +330,15 @@ exit 0
                 with self.assertRaisesRegex(ValueError, "fresh dry-run"):
                     run("--apply", "--manifest", str(file))
 
-    def test_accepted_identity_keeps_generation_owner_and_reference(self):
-        c = dict(task="T9", owner="alice", generation=1, worker_id="fleet/session")
-        task = dict(repo=CANONICAL, owner="alice", generation=1, execution_owner="fleet/session",
-                    ticket_ref="gh:ExampleOrg/Space#7")
-        with patch.dict(os.environ, {"FLEET_LAUNCH": "{}"}), \
-                patch.object(authority.hubrest, "api", return_value=dict(mode="hub")), \
-                patch.object(authority.launch, "validate_context", return_value=c), \
-                patch.object(authority.launch, "current_task", return_value=task), \
-                patch.object(authority.launch, "task_call", return_value=task):
-            with contextlib.redirect_stdout(io.StringIO()) as out:
-                authority.gate(REGISTERED, True)
-            self.assertEqual(json.loads(out.getvalue())["ticket_ref"], task["ticket_ref"])
-            for field in ("owner", "generation", "execution_owner"):
-                with patch.dict(task, {field: "wrong"}), patch.object(authority.sys, "stdin", io.StringIO("{}")):
-                    with self.assertRaisesRegex(ValueError, "owner/generation"):
-                        authority.ticket_ref(REGISTERED, "7")
+    def test_ticket_ref_match_is_exact(self):
         for ref in ("gh:other/space#7", "gh:exampleorg/space#8", "gh:exampleorg/space#07", "GH:exampleorg/space#7", "gh:../space#7"):
             with self.assertRaises((ValueError, authority.hubrest.Fail)):
                 authority.match_ticket_ref(REGISTERED, "7", ref)
         self.assertEqual(authority.match_ticket_ref(REGISTERED, "7", "gh:exampleorg/space#7"), "gh")
 
-    def test_id_switch_admits_by_the_accepted_record_never_bare(self):
-        # EPIC T497 C6: with the ID switch on a task's window opens unclaimed, so
-        # --finish has no FLEET_LAUNCH; the hub's accepted record is the admission
-        d = dict(task="T9", generation=1, attempt_id="task:T9:g1", resolved_agent="claude")
-        record = dict(d, authority_version=1, state="accepted", repo=CANONICAL,
-                      ticket_ref="gh:ExampleOrg/Space#7")
-        env = {"FLEET_LAUNCH": "", "FLEET_ID_DISPATCH": json.dumps(d), "FLEET_ID_SWITCH": "on"}
-        with patch.dict(os.environ, env), \
-                patch.object(authority.hubrest, "api", return_value=dict(mode="hub")), \
-                patch.object(authority.launch, "task_call", return_value=record) as call:
-            with contextlib.redirect_stdout(io.StringIO()) as out:
-                authority.gate(REGISTERED, True)
-            self.assertEqual(json.loads(out.getvalue()), dict(mode="hub", ticket_ref=record["ticket_ref"]))
-            call.assert_called_once_with({"task": "T9"})
-        refusals = (({}, dict(state="starting")), ({}, dict(execution_owner="fleet/x")),
-                    ({}, dict(outcome="succeeded")), ({}, dict(generation=2)),
-                    ({}, dict(repo="other/space")), ({"FLEET_ID_SWITCH": "off"}, {}),
-                    ({"FLEET_ID_DISPATCH": ""}, {}), ({"FLEET_ID_DISPATCH": json.dumps(dict(d, task=""))}, {}))
-        for more_env, changed in refusals:
-            with patch.dict(os.environ, dict(env, **more_env)), \
-                    patch.object(authority.hubrest, "api", return_value=dict(mode="hub")), \
-                    patch.object(authority.launch, "task_call", return_value=dict(record, **changed)):
-                with self.assertRaises(ValueError, msg=(more_env, changed)):
-                    authority.gate(REGISTERED, True)
-
-    def test_every_spawner_hands_its_dispatch_to_the_finish_gate(self):
-        # EPIC T497 C19 (T598): with the ID switch on there is no claim, so a spawner
-        # whose --finish call does not carry FLEET_ID_DISPATCH is refused on every
-        # task start. Every entry that runs the finish gate hands it over.
+    def test_no_spawner_hands_a_claim_to_the_finish_gate(self):
+        # EPIC T497 C8: the finish gate asks the person's mode only — a spawner
+        # hands it no launch binding, no dispatch, no reservation to carry.
         entries = {}
         for f in sorted(BIN.glob("*.sh")):
             if f.name.endswith("-selftest.sh") or f.name == "fleet-lib.sh":
@@ -393,13 +346,12 @@ exit 0
             lines = f.read_text(errors="replace").splitlines()
             for i, line in enumerate(lines):
                 if "fleet_repo_authority_guard" in line and "--finish" in line and not line.lstrip().startswith("#"):
-                    stmt = " ".join(lines[max(0, i - 1):i + 1])
-                    entries.setdefault(f.name, []).append(stmt)
-        self.assertEqual(sorted(entries), ["dash-issue-session.sh", "dash-raw-session.sh"],
-                         "a new spawner runs the finish gate: hand it FLEET_ID_DISPATCH and list it here")
+                    entries.setdefault(f.name, []).append(" ".join(lines[max(0, i - 1):i + 1]))
+        self.assertEqual(sorted(entries), ["dash-issue-session.sh", "dash-raw-session.sh"])
         for name, stmts in entries.items():
             for stmt in stmts:
-                self.assertIn('FLEET_ID_DISPATCH="${TASK_REF:+$DISPATCH}"', stmt, name)
+                for retired in ("FLEET_ID_DISPATCH", "FLEET_LAUNCH", "FLEET_AUTHORITY_START"):
+                    self.assertNotIn(retired, stmt, name)
 
     def test_unavailable_and_invalid_json_are_not_frozen(self):
         self.bad_json = True

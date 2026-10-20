@@ -1428,19 +1428,8 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # (or a session from before #1782) emits its rows byte for byte as before.
     # field 20 (issue #4225) said a merged PR's deploy was still to come; the rows
     # carry no PR since #4902, so it is never written — the slot stays for field 21.
-    # #4504: explicit single-row reads only. This is a bounded cache read,
-    # never a provider/process probe; original proof times remain untouched.
-    _proof=''
-    if [ -z "$rnode" ] && [[ "$wfid" =~ ^[A-Za-z0-9-]+$ ]] &&
-       [ -f "$G/status-proof-$sess-$wfid" ]; then
-      IFS= read -r -n 65537 _proof < "$G/status-proof-$sess-$wfid" || true
-      [ "${#_proof}" -le 65536 ] || _proof=''
-    fi
-    if [ -n "$_proof" ]; then
-      _nf=${cfgf//[!$US]/}; _nf=${#_nf}
-      while [ "$_nf" -lt 8 ]; do cfgf+=$US; _nf=$((_nf + 1)); done
-      cfgf+="$US$_proof"
-    fi
+    # Field 21 carried a launch-proof session's status proof (#4504); nothing
+    # writes one since EPIC T497 C8, so it stays empty.
     # fields 22-24 (T493, the ⌘P list's ID · Agent · repo columns): the session's
     # hub task (@task, `T<n>`), its agent — `claude` / `codex`; a window here with
     # no @cc_agent is Claude (the spawners' convention), another machine's row

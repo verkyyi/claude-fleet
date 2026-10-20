@@ -164,7 +164,7 @@ case "$NUM" in T*)
   tget() { printf '%s' "$trec" | python3 -c 'import json,sys
 try: print((json.load(sys.stdin).get("task") or {}).get(sys.argv[1]) or "")
 except ValueError: pass' "$1" 2>/dev/null; }
-  if [ "$trc" -ne 0 ] && { [ "$trc" -ne 3 ] || [ -n "$(fleet_pane_fmt '#{@launch}')" ]; }; then
+  if [ "$trc" -ne 0 ] && [ "$trc" -ne 3 ]; then
     printf 'UNKNOWN\ntask: %s\nnote: task authority unavailable; no replacement authorized\n' "$TASK"
     exit 3
   fi
@@ -494,21 +494,6 @@ if [ -n "${REMOTE:-}" ]; then
 fi
 row=$(child_win)
 wid=${row%%|*}; worigin=${row#*|}; [ -n "$row" ] || { wid=''; worigin=''; }
-# An accepted task is never waited on by its issue number (issue #4398, EPIC #4390
-# C8 — the compatibility window closed). Its worker reports on the task route only
-# (C4), so this ledger never hears its outcome, and adopting @origin here would
-# give accepted work a parent its dispatch never named. Wait on the task instead;
-# in a hub-authority repo a new start is a task (the `task` tool), never a spawn
-# by number (refused at the spawn below). Any other repo: byte for byte.
-if [ -n "$wid" ] && [ -n "$(TM display-message -p -t "$wid" '#{@launch}' 2>/dev/null)" ]; then
-  wtask=$(TM display-message -p -t "$wid" '#{@task}' 2>/dev/null)
-  case "$wtask" in
-    T[1-9]*) TASK=$wtask
-      printf 'fleet-await: #%s is accepted task %s — waiting on the task, not the issue\n' "$NUM" "$TASK" >&2
-      exec python3 "$BIN/fleet_task_control.py" await --task "$TASK" --timeout "$((TIMEOUT - SECONDS > 0 ? TIMEOUT - SECONDS : 1))" --interval "$INTERVAL" ;;
-  esac
-  finish NO-WORKER "#$NUM is an accepted launch with no task reference — no issue-number wait on accepted work"
-fi
 if [ -n "$wid" ]; then
   if [ -z "$worigin" ]; then
     # Hub-spawned: nobody will ever read its report. Make it ours.

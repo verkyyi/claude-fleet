@@ -49,10 +49,10 @@ else:
     raise AssertionError("unknown trace silently counted as zero")
 with tempfile.TemporaryDirectory() as temp:
     h = m.Harness(Path(temp))
-    assert h.finish() == 1  # empty/missing evidence is never twelve green rows
+    assert h.finish() == 1  # empty/missing evidence is never a green row
     import json
     report = json.loads((Path(temp)/"evidence/acceptance.json").read_text())
-    assert len(report["rows"]) == 12 and all(r["live"] == "NOT RUN" for r in report["rows"])
+    assert len(report["rows"]) == len(m.ROWS) and all(r["live"] == "NOT RUN" for r in report["rows"])
     if sys.platform == "linux":
         import subprocess
         cleanup = Path(temp)/"cleanup.json"

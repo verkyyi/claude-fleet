@@ -74,11 +74,6 @@
 #           --origin-wid) is never placed again, stamps the parent verbatim and
 #           prints its --print receipt; a full machine still places elsewhere;
 #           the dash's --bg hands --node to the background pass.
-#   T604    a released agent file (`travels 1`: fleet-worker's bytes) and a
-#           dispatched task's own words (FLEET_TASK_SEED=record) no longer pin a
-#           scratch here — auto asks the hub; a file only this machine has (or an
-#           edited copy) opens here; a full machine sends `--not-here <reason>`,
-#           and no other machine / hub down refuses with its reason (exit 2).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -857,61 +852,6 @@ tmux_has 'new-window'                            && fail "SCRATCH-CAP must not s
 INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_raw --node local
 [ "$(rc)" = 2 ] && [ ! -s "$PLACE_LOG" ]         || fail "SCRATCH-CAP --node local refuses at the cap without asking (rc=$(rc))"
 ok "SCRATCH CAP a full machine still places elsewhere; opening here keeps the cap"
-
-# ===== T604: dispatch is not pinned here by a released agent file or a task's own
-# words, and a full machine asks the hub for ANY OTHER machine (--not-here) =====
-mkdir -p "$WORK/main/.claude/agents"
-cp "$BIN/../conf/agent-defaults/claude/agents/fleet-worker.md" "$WORK/main/.claude/agents/fleet-worker.md"
-printf -- '---\nname: mine-only\ndescription: this machine alone\n---\nbody\n' > "$WORK/main/.claude/agents/mine-only.md"
-export FLEET_AGENT_PLUGINS_CMD=true
-PLACE_ANSWER="$REMOTE_LINE" run_raw --as fleet-worker
-[ "$(rc)" = 0 ] && err_has 'scratch → mac-a'        || fail "T604-AS a released agent file (fleet-worker's bytes) is placed by the hub (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-place_has "--node auto --agent claude acme/widgets scratch $UUID" || fail "T604-AS asked with auto" "$(cat "$PLACE_LOG")"
-tmux_has 'new-window'                            && fail "T604-AS placed elsewhere ⇒ nothing opens here"
-PLACE_ANSWER="$REMOTE_LINE" run_raw --as mine-only
-[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "T604-AS a file only this machine has opens here (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-[ -s "$PLACE_LOG" ]                              && fail "T604-AS a file only this machine has never asks the hub" "$(cat "$PLACE_LOG")"
-PLACE_ANSWER="$REMOTE_LINE" run_raw --as mine-only --node mac-a
-[ "$(rc)" = 1 ] && err_has 'is here alone), not on mac-a' || fail "T604-AS that file named onto mac-a is refused (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-printf -- '\n<!-- edited -->\n' >> "$WORK/main/.claude/agents/fleet-worker.md"
-PLACE_ANSWER="$REMOTE_LINE" run_raw --as fleet-worker
-[ -s "$PLACE_LOG" ]                              && fail "T604-AS an EDITED fleet-worker is this machine's own: never placed" "$(cat "$PLACE_LOG")"
-tmux_has 'new-window'                            || fail "T604-AS an edited fleet-worker opens here" "$(cat "$WORK/spawn.err")"
-rm -rf "$WORK/main/.claude"; unset FLEET_AGENT_PLUGINS_CMD
-ok "T604 AS a released agent file travels (auto asks the hub); a file only this machine has — or an edited copy — opens here, named elsewhere refused"
-
-T604_DISPATCH='{"version":1,"request_id":"t604-r1","requested_agent":"default","resolved_agent":"claude","agent_source":"default","task":"T5","generation":1,"attempt_id":"task:T5:g1"}'
-FLEET_TASK_SEED=record FLEET_DISPATCH="$T604_DISPATCH" PLACE_ANSWER="$REMOTE_LINE" run_raw --task T5 --prompt 'T5 的原话'
-[ "$(rc)" = 0 ] && err_has 'scratch → mac-a'        || fail "T604-SEED a task's own words (FLEET_TASK_SEED=record) travel (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-tmux_has 'new-window'                            && fail "T604-SEED placed elsewhere ⇒ nothing opens here"
-PLACE_ANSWER="$REMOTE_LINE" run_raw --node mac-a --prompt 'T5 的原话'
-[ "$(rc)" = 1 ] && [ ! -s "$PLACE_LOG" ]          || fail "T604-SEED a seed that is no record's words still never travels (rc=$(rc))"
-# no place command and no ccquota here: the hub cannot be asked ⇒ opens here, as before T604
-FLEET_HUB_PLACE_CMD='' PATH="$WORK/fakebin:/usr/bin:/bin" FLEET_TASK_SEED=record FLEET_DISPATCH="$T604_DISPATCH" run_raw --task T5 --prompt 'T5 的原话'
-err_has 'no local fallback'                      && fail "T604-SEED with no way to ask the hub a task still opens here" "$(cat "$WORK/spawn.err")"
-{ grep -q 'new-window' "$TMUX_LOG" || err_has 'claimed for a local launch'; } \
-                                                 || fail "T604-SEED unaskable hub ⇒ it takes the local road (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-ok "T604 SEED a dispatched task's words travel (the opening machine reads them off T<n>); any other seed stays here"
-
-PLACE_ANSWER="$REMOTE_LINE" INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_raw
-[ "$(rc)" = 0 ] && err_has 'scratch → mac-a'        || fail "T604-NOTHERE a full machine is placed elsewhere (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-grep -q -- '--not-here .*capacity.* acme/widgets scratch' "$PLACE_LOG" || fail "T604-NOTHERE the hub is told this machine said no, and why" "$(cat "$PLACE_LOG")"
-PLACE_ANSWER="$REMOTE_LINE" run_raw
-place_has '--not-here'                           && fail "T604-NOTHERE a machine with room asks as before" "$(cat "$PLACE_LOG")"
-PLACE_ANSWER=$'REFUSED ALL_DECLINED\tevery machine that could take it said no — mac-b: at capacity' PLACE_RC=4 INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_raw
-[ "$(rc)" = 2 ] && err_has 'at capacity' && err_has '也没有别的机器能接' || fail "T604-NOTHERE no other machine ⇒ refused with this machine's reason, exit 2 (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-tmux_has 'new-window'                            && fail "T604-NOTHERE must not spawn past the cap"
-PLACE_RC=1 INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_raw
-[ "$(rc)" = 2 ] && err_has 'at capacity'         || fail "T604-NOTHERE hub down ⇒ this machine's cap reason, exit 2 (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-# the release's own ccquota (beside the scripts) beats a stale one first on PATH
-mkdir -p "$WORK/rel bin" "$WORK/stalebin"
-printf '#!/bin/sh\necho release "$@"\n' > "$WORK/rel bin/ccquota"; printf '#!/bin/sh\necho stale "$@"\n' > "$WORK/stalebin/ccquota"
-chmod +x "$WORK/rel bin/ccquota" "$WORK/stalebin/ccquota"
-got=$(PATH="$WORK/stalebin:$PATH" bash -c '. "$1/fleet-lib.sh"; _FLEET_LIB_DIR="$2"; c=$(fleet_ccquota_cmd) && bash -c "$c \"\$@\"" x place a' _ "$BIN" "$WORK/rel bin")
-[ "$got" = 'release place a' ]                   || fail "T604-CCQUOTA the release's ccquota beside the scripts wins over PATH's" "$got"
-got=$(PATH="$WORK/stalebin:$PATH" bash -c '. "$1/fleet-lib.sh"; _FLEET_LIB_DIR="$2"; c=$(fleet_ccquota_cmd) && bash -c "$c \"\$@\"" x place a' _ "$BIN" "$WORK/none")
-[ "$got" = 'stale place a' ]                     || fail "T604-CCQUOTA none beside the scripts ⇒ PATH's, as before" "$got"
-ok "T604 NOTHERE a full machine asks for any other (--not-here <reason>); none / hub down ⇒ refused with its own reason (2)"
 
 # The dash's ⌃s is `--bg`: the keypress returns at once and the BACKGROUND pass
 # does the asking — so --node (and --origin-wid) must ride the re-exec.

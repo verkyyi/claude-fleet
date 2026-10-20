@@ -518,7 +518,7 @@ TASK_REF_RE = re.compile(r"T[1-9][0-9]{0,17}")
 def validate_write(action, params):
     if action == "worker_start":
         fields(params, (), ("issue", "kind", "name", "title", "body", "draft", "agent", "repo", "no_repo", "origin_wid",
-                            "account_class", "reap", "attachments", "test", "task", "dispatch", "launch", "ticket_ref"))
+                            "account_class", "reap", "attachments", "test", "task", "dispatch", "ticket_ref"))
         if "ticket_ref" in params:
             ref = params["ticket_ref"]
             # a GitHub issue only: the hub's own tickets are gone (T477)
@@ -532,23 +532,6 @@ def validate_write(action, params):
                     raise ValueError("dispatch task does not match start")
             except (ValueError, TypeError) as e:
                 raise Fault("INVALID_ARGUMENT", str(e)) from e
-        if "launch" in params:
-            from fleet_launch import validate_context
-            try:
-                c = validate_context(params["launch"])
-                d = params.get("dispatch", {})
-                if any(c[k] != d.get(k) for k in ("task", "generation", "attempt_id")) or c["provider"] != d.get("resolved_agent"):
-                    raise ValueError("launch differs from accepted dispatch")
-            except (ValueError, TypeError, KeyError) as e:
-                raise Fault("INVALID_ARGUMENT", str(e)) from e
-        elif params.get("dispatch", {}).get("task"):
-            # With the hub's ID switch on (EPIC T497 C6) nothing claims a record:
-            # the hub sends a placed task start with no launch contract and the
-            # window's ID is the binding (T604: such a start was refused on every
-            # machine but the asker's). Off: the contract is still required.
-            from fleet_launch import id_switch_on
-            if not id_switch_on():
-                raise Fault("INVALID_ARGUMENT", "accepted dispatch requires verified launch contract")
         # kind (issue #1541): "issue" (the default — a worker on an issue, `issue`
         # required) or "scratch" (a raw scratch session: no issue, an optional
         # name — dash-raw-session.sh opens it). Held to the hub's own rule

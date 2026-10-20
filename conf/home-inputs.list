@@ -42,6 +42,7 @@ bin/tmux-spinner.sh
 bin/tmux-spinner.py
 bin/fleet-render-watch.py
 bin/fleet_pending_tool.py
+bin/fleet_native_proc.py
 bin/fleet_launch.py
 bin/fleet_agent_argv.py
 bin/fleet_runtime.py

@@ -279,53 +279,13 @@ class PretrustTests(unittest.TestCase):
         self.assertIn("'--dangerously-bypass-hook-trust' in options", src)
         self.assertLess(src.index('trust_launch_hooks(remote'), src.index("client = subprocess.Popen(['codex', '--remote'"))
 
-class LaunchWitnessTests(unittest.TestCase):
-    """T485: Codex 0.162 runs SessionStart only at the first turn, which an accepted
-    launch holds until a receipt exists — the runtime witnesses its own server's
-    one root thread instead, with the socket's kernel peer as the native PID."""
-    def fake(self, threads, peer=4242):
-        calls = []
-        class Client:
-            def __init__(self, remote, timeout=10): calls.append(('open', remote))
-            def peer_pid(self): return peer
-            def call(self, method, params):
-                calls.append((method, params))
-                if method == 'thread/loaded/list':
-                    return {'data': [t['id'] for t in threads]}
-                return {'thread': next(t for t in threads if t['id'] == params['threadId'])}
-            def close(self): calls.append(('close',))
-        class Launch:
-            seen = []
-            def witness_codex(self, pid, payload, remote): self.seen.append((pid, payload, remote))
-        return Client, Launch(), calls
-    def test_no_thread_yet_waits(self):
-        Client, launch, calls = self.fake([])
-        self.assertTrue(runtime.LaunchWitness('unix:///x/s', rpc_client=Client, launch=launch).tick())
-        self.assertEqual(launch.seen, [])
-        self.assertEqual(calls[-1], ('close',))
-    def test_one_root_thread_is_witnessed_once(self):
-        Client, launch, _ = self.fake([{'id': 'T1', 'cwd': '/w'},
-                                       {'id': 'S1', 'cwd': '/w', 'parentThreadId': 'T1'}])
-        self.assertFalse(runtime.LaunchWitness('unix:///x/s', rpc_client=Client, launch=launch).tick())
-        self.assertEqual(launch.seen, [(4242, {'hook_event_name': 'SessionStart', 'session_id': 'T1', 'cwd': '/w'},
-                                        'unix:///x/s')])
-    def test_two_root_threads_are_not_guessed(self):
-        Client, launch, _ = self.fake([{'id': 'T1', 'cwd': '/w'}, {'id': 'T2', 'cwd': '/w'}])
-        self.assertTrue(runtime.LaunchWitness('unix:///x/s', rpc_client=Client, launch=launch).tick())
-        self.assertEqual(launch.seen, [])
-    def test_refusal_retries_until_the_deadline(self):
-        Client, _, _ = self.fake([{'id': 'T1', 'cwd': '/w'}])
-        class Refuse:
-            def witness_codex(self, *a): raise ValueError('native process is outside this launch')
-        witness = runtime.LaunchWitness('unix:///x/s', rpc_client=Client, launch=Refuse())
-        self.assertTrue(witness.tick())
-        self.assertIn('outside this launch', witness.error)
-        witness.deadline = 0
-        self.assertFalse(witness.tick())
-    def test_run_witnesses_only_an_accepted_launch(self):
+class LaunchWitnessRetiredTests(unittest.TestCase):
+    """EPIC T497 C8: the runtime witnesses no launch receipt any more (T485's
+    witness served the retired launch proof); nothing reads FLEET_LAUNCH_CONTEXT."""
+    def test_no_launch_witness(self):
         src = RUNTIME.read_text()
-        self.assertIn("if env.get('FLEET_LAUNCH_CONTEXT'):", src)
-        self.assertLess(src.index('witness = LaunchWitness(remote)'), src.index("client = subprocess.Popen(['codex', '--remote'"))
+        self.assertNotIn('LaunchWitness', src)
+        self.assertNotIn('FLEET_LAUNCH_CONTEXT', src)
 
 unittest.main(argv=['codex-runtime'],verbosity=2)
 PY

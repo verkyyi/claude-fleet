@@ -478,18 +478,10 @@ operator is typing. It never catches up missed intervals with a burst.
 (a Stop with a pending Loop) is re-asked — the children / bg / tool / human
 reasons are read fresh and only `loop`, this ledger's own pending wakeup, is
 dropped; `working` / `needs` / lifecycle / transfer / quota / handoff / 30 s of
-typing / an unsent draft still hold it. Then two tiers. A pane with a C3 launch
-(`@launch`) takes a fresh `fleet_runtime.read` (same native session, `idle`) and
-`accept_if_idle` (docs/dev/FLEET-MCP.md «Conditional idle acceptance»): only
-`accepted` counts a delivery; `rejected` keeps the wakeup due; `unknown` keeps
-`pending_delivery` and the next tick settles it with the same delivery id and
-text, never a new send. Codex and Claude keep the same contract — Claude through
-the fleet mod's entry boundary (#4618; wired here by #4658, a C3 Claude pane
-never takes the legacy inbox road; a pane whose mod lacks it is `rejected`,
-still due) — and a provider the adapter has no accept for is not sent at all.
-A pane without C3 — a local spawn without `FLEET_LAUNCH`, and
-this transfer bridge — keeps the original road (Codex `thread/read` idle +
-`turn/start`, Claude inbox + transcript ack): `last_attempt.fence` says
+typing / an unsent draft still hold it. Then the pane's own road (the C3 launch-proof
+tier left with EPIC T497 C8; a `pending_delivery` it left is dropped, the round still due) —
+every pane, this transfer bridge too: Codex `thread/read` idle +
+`turn/start`, Claude inbox + transcript ack. `last_attempt.fence` says
 `legacy_unfenced`, which is **not** an atomic accept. The ledger carries
 `due_since`, `deferred_reason`, `last_attempt` (at · fence · state · reason ·
 delivery id · native session · task / owner generation · observed_at) and
@@ -515,7 +507,7 @@ record and source provenance before arranging a new explicit continuation.
 ## Verification
 
 ```sh
-bin/run-selftests.sh fleet-loop fleet-loop-idle-native fleet-transfer fleet-codex fleet-handoff auto-handoff session-end-hook fleet-cleanup
+bin/run-selftests.sh fleet-loop fleet-transfer fleet-codex fleet-handoff auto-handoff session-end-hook fleet-cleanup
 ```
 
 The transfer test uses its own named tmux socket, fake agents and real temporary

@@ -181,92 +181,15 @@ def bus_fields(stats, home):
     return out
 
 
-def start_identity(payload):
-    data = {"session_id": payload["session_id"], "owner": os.environ.get('FLEET_CODEX_LAUNCHER_PID', ''),
-            "home": str(Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().resolve()),
-            "transcript": payload.get("transcript_path", ""),
-            "cwd": payload.get("cwd", ""), "model": payload.get("model", ""),
-            "remote": os.environ.get("FLEET_CODEX_REMOTE", "")}
-    if os.environ.get("FLEET_CODEX_VERSION_WARNING"):
-        data["version_warning"] = os.environ["FLEET_CODEX_VERSION_WARNING"]
-    # compat-1v: 下一批删 — only a session launched before T560 still carries FLEET_CODEX_SUBSCRIPTION
-    if os.environ.get('FLEET_CODEX_SUBSCRIPTION'):
-        subscription = json.loads(os.environ['FLEET_CODEX_SUBSCRIPTION'])
-        data['subscription'] = {key: subscription[key] for key in ('account', 'profile', 'home')}
-    return data
-
-
-def refusal_log(payload, exc):
-    """One line in $FLEET_CONF_DIR/logs/authority.log per refused registration."""
-    try:
-        from fleet_repo_authority import error_reason
-        event = payload.get('hook_event_name', '?') if isinstance(payload, dict) else '?'
-        conf = os.environ.get('FLEET_CONF_DIR') or str(Path.home() / '.config/claude-fleet')
-        path = Path(conf) / 'logs' / 'authority.log'
-        path.parent.mkdir(parents=True, exist_ok=True)
-        line = '%s pane=%s event=%s refused: %s\n' % (
-            time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), os.environ.get('TMUX_PANE', '-'), event,
-            error_reason(exc) or type(exc).__name__)
-        fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        with os.fdopen(fd, 'a') as out:
-            out.write(line)
-    except Exception:
-        pass  # the refusal itself still stands
-
-
 def hook():
-    payload = None
-    if os.environ.get("FLEET_AUTHORITY_CONTEXT"):
-        from fleet_repo_authority import observe_native
-        from fleet_hub_rest import Fail
-        try:
-            payload = json.load(sys.stdin)
-            if not isinstance(payload, dict):
-                raise ValueError('unknown hook payload')
-            event = payload.get('hook_event_name')
-            if event == 'UserPromptSubmit':
-                # This is also wired in the shared table; Claude has no Codex
-                # launcher and retains its existing hooks/authority behavior.
-                if os.environ.get('FLEET_CODEX_LAUNCHER_PID'):
-                    from fleet_native_registration import verify_registered
-                    verify_registered(payload)
-                return
-            if event == 'SessionStart' and os.environ.get('FLEET_CODEX_LAUNCHER_PID'):
-                data = start_identity(payload)
-                observe_native(payload, data)
-                # All three identity fields have already committed atomically.
-                # Optional telemetry cannot undo or repeat authority admission.
-                try:
-                    feed(os.environ['TMUX_PANE'], data['owner'], telemetry(data), data['home'])
-                except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
-                    pass
-                return
-            observe_native(payload)
-        except (Fail, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
-            # Authority is not telemetry. 0.160.1 honors this control output
-            # only on successful hook exit; a nonzero exit merely warns. This
-            # handles returned errors, NOT native timeout/kill. Later inputs
-            # have their own read-only UserPromptSubmit gate above. The reason
-            # stays out of the agent's view but is kept for a person (issue
-            # #4789: every start of one repo was refused and nobody could say why).
-            refusal_log(payload, exc)
-            reason = 'Fleet authority registration unconfirmed; preserve execution for reconciliation.'
-            if isinstance(payload, dict) and payload.get('hook_event_name') == 'UserPromptSubmit':
-                print(json.dumps({'decision': 'block', 'reason': reason}))
-            else:
-                print(json.dumps({'continue': False, 'stopReason': reason}))
-            return
-    if os.environ.get("FLEET_LAUNCH_CONTEXT"):
-        from fleet_launch import hook as launch_hook
-        if payload is None:
-            payload = json.load(sys.stdin)
-        launch_hook(payload)
+    # A window's ID is its session (EPIC T497 C8): nothing is observed for a hub
+    # authority or a launch proof here any more — a session started under either
+    # before C8 still carries its context in the environment; it is not read.
     owner = os.environ.get("FLEET_CODEX_LAUNCHER_PID", "")
     pane = os.environ.get("TMUX_PANE", "")
     if not owner.isdigit() or not pane or not os.environ.get("TMUX"):
         return
-    if payload is None:
-        payload = json.load(sys.stdin)
+    payload = json.load(sys.stdin)
     if not isinstance(payload, dict) or not valid_id(payload.get("session_id")):
         return
     current = tmux(["display-message", "-p", "-t", pane,
@@ -520,8 +443,6 @@ def follow(pane, owner, thread, socket="", own=()):
     if (not tui_root(thread, own) or not data or data.get("owner") != owner or not owner.isdigit()
             or data.get("session_id") == sid or not newer(sid, data.get("session_id"))):
         return ""
-    if tmux(["display-message", "-p", "-t", pane, "#{@authority_receipt}"], socket):
-        return ""  # a registered execution moves only through its own hook
     old = data["session_id"]
     data = dict(data, session_id=sid, transcript=thread.get("path") or "",
                 cwd=thread.get("cwd") or data.get("cwd", ""), model=thread.get("model") or data.get("model", ""))
@@ -546,16 +467,16 @@ def follow(pane, owner, thread, socket="", own=()):
 
 class Follow:
     """The runtime's thread follower (T540): one connection to the window's private
-    server, read once a second for thread/started. Never raises. Off under an
-    authority context (its receipt binds the thread) or FLEET_CODEX_FOLLOW=0 —
-    then delivery's own check holds what the old thread would have swallowed.
+    server, read once a second for thread/started. Never raises. Off with
+    FLEET_CODEX_FOLLOW=0 — then delivery's own check holds what the old thread
+    would have swallowed.
     A started thread is followed only once the server confirms it (T572): fleet's
     own starts are skipped, one whose start is still in flight waits a tick."""
 
     def __init__(self, env, rpc_client=None):
         self.pane, self.owner = env.get("TMUX_PANE", ""), env.get("FLEET_CODEX_LAUNCHER_PID", "")
         self.remote = env.get("FLEET_CODEX_REMOTE", "")
-        self.off = bool(env.get("FLEET_AUTHORITY_CONTEXT")) or env.get("FLEET_CODEX_FOLLOW", "1") == "0"
+        self.off = env.get("FLEET_CODEX_FOLLOW", "1") == "0"
         self.rpc_client, self.own_threads = rpc_client, None
         self.client, self.retry_at = None, 0.0
         self.waiting = {}  # thread id -> when it was first seen
@@ -656,23 +577,8 @@ def context(args):
 
 
 def send(args):
-    proof = os.environ.get("FLEET_LAUNCH_DELIVERY", "")
-    if proof:
-        from fleet_launch import inspect
-        expected = json.loads(proof)
-        current = inspect(json.loads(os.environ["FLEET_LAUNCH_CONTEXT"]), args.pane, args.socket)
-        if current != expected:
-            raise ValueError("Codex launch identity changed before delivery")
-        # Address the endpoint and thread witnessed by this root native hook;
-        # a pane label or a later @codex_identity cannot redirect first input.
-        data = dict(session_id=current["native_session"], remote=current.get("native_remote", ""),
-                    home=current.get("native_home", ""))
-        cli = current["executable"]
-        if not os.path.isabs(data["home"]):
-            raise ValueError("Codex launch has no verified native home")
-    else:
-        data = identity(args.pane, args.socket)
-        cli = "codex"
+    data = identity(args.pane, args.socket)
+    cli = "codex"
     if not data:
         raise ValueError("no current Codex session identity")
     # --remote is mandatory: an embedded `codex queue` process is not the TUI's

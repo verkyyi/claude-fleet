@@ -887,18 +887,16 @@ def _poster():
 #
 # The switch is the hub's (`fleet.id_switch`); this node keeps its last word in
 # $ids/.switch («on» / «off») — written by `fleet-id.sh switch` (the cleanup tick
-# asks every round) and by any old-road call the hub refused with ID_SWITCH. Off,
-# or never heard: every old road as before. On: a spawn claims nothing (the window
-# has its ID and its @task), a report is a result on the window's ID — the one
-# gate is «the window has an ID». A stale «off» costs one refused call, which
-# flips it here; nothing waits on the hub to read it.
+# asks every round). Since C8 nothing here reads it to decide: the old road is
+# gone, a spawn claims nothing and a report is a result on the window's ID
+# whatever the word — the one gate is «the window has an ID». It is shown only.
 
 def switch_path():
     return os.path.join(ids_dir(), ".switch")
 
 
 def switch_on():
-    """The hub's last word on the switch here; never heard = off (the old road)."""
+    """The hub's last word on the switch here; never heard = off. Shown only."""
     if os.environ.get("FLEET_ID_SWITCH") in ("on", "off"):   # the selftests' seam
         return os.environ["FLEET_ID_SWITCH"] == "on"
     try:

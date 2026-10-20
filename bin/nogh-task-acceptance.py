@@ -24,19 +24,20 @@ GO_DIRS = {"agent": ROOT/"tokenledger/agent"}
 
 # A row passes only when every named boundary actually ran. Shared boundaries
 # run once; their real command, exit, log and counters are linked from each row.
+# A2 (reconnect and adapter restart) retired with the launch proof and the
+# task-receipt journal it exercised (EPIC T497 C8).
 ROWS = {
-    "A1": ("forge-none explicit Codex", ["baseline", "dispatch", "launch", "provider"]),
-    "A2": ("reconnect and adapter restart", ["launch", "recovery"]),
+    "A1": ("forge-none explicit Codex", ["baseline", "dispatch", "provider"]),
     "A3": ("remote child, wait and report", ["children", "collaboration"]),
     "A4": ("GitHub repo, blocked then restored PR gate", ["cutover", "landing", "pr-gate"]),
     "A5": ("stale labels and defaults", ["dispatch", "provider"]),
-    "A6": ("duplicate requests and lost ack", ["authority", "dispatch", "launch", "recovery"]),
+    "A6": ("duplicate requests and lost ack", ["authority", "dispatch"]),
     "A7": ("late report and ownership transfer", ["authority", "collaboration", "children"]),
     "A8": ("same issue number and foreign owner", ["authority", "collaboration"]),
-    "A9": ("hub outage and bounded journal", ["recovery", "outbox", "projection", "browser"]),
-    "A10": ("cancel/recover race with partition", ["collaboration", "recovery", "launch"]),
+    "A9": ("hub outage and bounded journal", ["outbox", "projection", "browser"]),
+    "A10": ("cancel/recover race with partition", ["collaboration"]),
     "A11": ("migration and rollback with active sessions", ["migration", "cutover", "repo-cli"]),
-    "A12": ("portal, thin client and native agent UX", ["projection", "browser", "thin", "launch"]),
+    "A12": ("portal, thin client and native agent UX", ["projection", "browser", "thin"]),
 }
 
 
@@ -281,11 +282,9 @@ class Harness:
                  env={"NOGH_E2E_SUMMARY": str(self.evidence/"baseline-summary.json")})
         self.go("dispatch", "api", "TestAcceptedCodingAgentDispatch", "TestCodingAgentRejectsBeforeWork", "TestNodeCodingAgentAcceptedBeforeLocalOrRemote")
         self.run("provider", ["bash", ROOT/"bin/fleet-dispatch-selftest.sh"])
-        self.python("launch", "fleet-launch-selftest.py", "Supervisor", "Journal", "Transfer", "NativeInbox")
         self.python("children", "fleet_task_control_test.py")
         self.go("collaboration", "store", "TestTaskChildReportsFenced", "TestTaskCancelNeedsAcknowledgement", "TestTaskParentGenerationAndRetainedSession", "TestTaskCompletionRetainsExecutionFence")
         self.go("authority", "store", "TestTaskAuthorityLifecycle", "TestTaskAuthorityTransferAndPinnedLease", "TestTaskAuthorityRaces", "TestTaskAuthorityTicketScopeAndMigration")
-        self.python("recovery", "fleet_task_recovery_test.py")
         self.go("outbox", "agent", "TestTaskReceiptOutboxAckAndExpiry", "TestTaskReceiptReconnectCapabilityAndOnePass")
         self.go("migration", "store", "TestOwnerAuthorityDryRunAndPerOwnerCutover", "TestRepoAuthorityPausedAfterFinalGate", "TestRepoAuthorityStopBoundToCurrentNative", "TestRepoAuthorityRollbackRetainsCompletedExecution", "TestRepoAuthorityFreezeSerializesClaim")
         self.go("cutover", "api", "TestRepoAuthorityAPICleanCutoverNoGitHub", "TestRepoAuthorityAPIManifestCutoverAndCapabilities")
@@ -303,11 +302,11 @@ class Harness:
             rows.append(dict(id=key, scenario=scenario, fixture="PASS" if passed else "FAIL",
                              live="NOT RUN", evidence=[s+".json" for s in steps]))
         count = sum(r["fixture"] == "PASS" for r in rows)
-        ok = count == 12 and error is None and all(r["fixture"] == "PASS" for r in self.results.values())
+        ok = count == len(ROWS) and error is None and all(r["fixture"] == "PASS" for r in self.results.values())
         write(self.evidence/"acceptance.json", dict(finished_at=utc(), rows=rows, error=error,
-              fixture_pass=count, fixture_total=12, result="PASS" if ok else "FAIL",
+              fixture_pass=count, fixture_total=len(ROWS), result="PASS" if ok else "FAIL",
               merged="UNVERIFIED", deployed="NOT RUN", live_accepted="NOT RUN"))
-        print(f"fixture acceptance: {count}/12; result={'PASS' if ok else 'FAIL'}; live: NOT RUN", flush=True)
+        print(f"fixture acceptance: {count}/{len(ROWS)}; result={'PASS' if ok else 'FAIL'}; live: NOT RUN", flush=True)
         return 0 if ok else 1
 
 

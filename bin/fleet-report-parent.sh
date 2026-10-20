@@ -180,22 +180,10 @@ wagent=${row%%|*};   wname=${row#*|}   # its agent (T493): claude / codex; blank
 case "$wagent" in codex|codex:*) wagent=codex ;; *) wagent=claude ;; esac
 case "$wtask" in T[1-9]*) case "${wtask#T}" in *[!0-9]*) wtask='' ;; esac ;; *) wtask='' ;; esac
 
-# A verified accepted task never falls back to the issue/key report route —
-# while the hub's ID switch is off (EPIC T497 C6). On, the gate is «the window has
-# an ID»: fleet_task_control.py answers 5 (ID_SWITCH) before or instead of the
-# record, and the report goes on below as a result of the window's ID. A window
-# opened with the switch on has no @launch at all and comes here directly.
+# A task's report is a result of the window's ID (EPIC T497 C8: the record takes
+# no fenced report — the gate is «the window has an ID»).
 idswitch=0
-if [ -n "$(TM display-message -p -t "$target" '#{@launch}' 2>/dev/null)" ]; then
-  task_args=(report --pane "$target" --socket "$SOCK" --state "$STATE" --summary "$SUMMARY" --pr "$PR")
-  [ -n "$OUTCOME" ] && task_args+=(--outcome "$OUTCOME")
-  [ "$DRY" = 1 ] && task_args+=(--dry)
-  tout=$(python3 "$BIN/fleet_task_control.py" "${task_args[@]}"); trc=$?
-  [ "$trc" = 5 ] || { [ -z "$tout" ] || printf '%s\n' "$tout"; exit "$trc"; }
-  idswitch=1
-elif [ -n "$wtask" ] && python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_id; sys.exit(0 if fleet_id.switch_on() else 1)' "$BIN" 2>/dev/null; then
-  idswitch=1
-fi
+[ -n "$wtask" ] && idswitch=1
 if [ "$idswitch" = 1 ] && [ -n "$OUTCOME" ]; then
   # The record's explicit outcome is the ID's result state (merged stays merged:
   # it is checked against the PR below).

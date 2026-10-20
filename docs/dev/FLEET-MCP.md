@@ -240,327 +240,42 @@ mutations and its own tickets with T477). A task's `ticket_ref`, when its caller
 names one, is a GitHub issue `gh:<repo>#<N>` matching the start's repo and issue
 — it keys the issue lease; `hub:` is refused.
 
-### Task children and results (#4394)
+### Task children and results (#4394; EPIC T497 C8)
 
-An accepted task (`authority_version: 1`, verified `@launch`) uses its T record
-for `children`, `await` and `report`. `children` without a key uses the calling
-accepted parent; an explicit `T<n>` reads that parent's current generation.
-Its JSON contains `parent`, `parent_session`, `parent_generation`, `children`.
-The legacy ledger's `--since` cursor is refused on this path. An unavailable
-authority returns `UNKNOWN`, never a local-cache success or another launch.
+A task's session is its window's ID (EPIC T497 C8): nothing claims the record,
+fences a report on a generation or proves a native process. `report` is a
+result on the calling window's ID (`fleet-report-parent.sh`; `outcome:
+"succeeded"` / `"failed"` becomes the result's state, `state: "merged"` still
+needs a confirmed merged PR); the hub reads the record's end off that ID's
+newest result. Several results are fine, the newest counts. `state: "failed"`
+alone remains workflow progress (for example a red CI check).
 
-Use `report(state: "waiting", outcome: "succeeded", summary: "…")` for completed
-work without a PR, or `outcome: "failed"` for an explicit final failure. Existing
-`state: "failed"` alone remains workflow progress (for example a red CI check).
-`state: "merged"` requires a confirmed merged PR and commits success. The result
-commits before parent delivery; `QUEUED` describes delivery, while `await T<n>`
-already returns `SUCCEEDED`/`FAILED`. The persistent native CLI may remain alive.
+`bin/fleet_task_control.py` keeps the record's reads and one write:
+`closed` (one read — 0 closed · 1 open · 3 unknown, the reapers' reader),
+`await --task T<n>`, `children --task T<n> [--json]` (a `summary` — one count per
+outcome), `cancel --task T<n> --event E` (a record no window ever opened, the one
+change the hub still takes — EPIC T497 C13), `progress` (an EPIC driver's tick:
+a `progress` event on the calling window's ID, relayed to nobody — issue #4957,
+C12) and `receive` (a child report a relay carried here from before C8: delivered
+to the parent by its ID — the window carrying it, else down its `prev` chain,
+else up its parent, else the person's reminder; one event delivered once across
+reconnects). An unavailable or non-authoritative record answers `UNKNOWN`, never
+a local-cache success. `report` (answers 5) and `finalize` (answers 0) stay one
+version for an older caller (compat-1v).
 
-Completion retains the execution lease until an independent confirmed stop.
-`cancel_request` records intent; only the current executor's `cancel_ack` with
-the matching request ID and `execution_stopped: true` may commit cancellation.
-After success/failure, `stop_ack` releases the execution lease without changing
-the outcome. The launch supervisor verifies native exit using its receipt
-(PID, birth, executable) before sending either acknowledgement. Native exit
-alone never invents success/failure. Retry needs a terminal result and released
-lease or fresh stopped proof; transfer requires stopped proof. Lease expiry or
-an unavailable node never authorizes replacement.
-
-During a hub outage (#4396), accepted-task reports, cancellation requests and
-verified native-stop receipts remain in the node's existing operation journal.
-`RECONCILIATION_PENDING` means the hub commit is unconfirmed; it is not a work
-result. Reconnect or the next task command replays the same event and generation,
-without replaying command input. The existing relay outbox uses one file per
-receipt and retains it until a positive hub acknowledgement. Running native
-processes survive; new starts, resumes and ownership changes still need the hub.
-Native resume and stop replay share a local exclusion lock. Stop replay also
-rechecks the saved window binding and native incarnation; an earlier process's
-stop proof cannot release a later resume in the same task generation.
-
-Pending receipts are limited to 1,000 per login and a seven-day replay window.
-Overflow refuses the new write; expiry retains the old record and reason as
-`RECONCILIATION_REQUIRED`. Neither grants another owner. Cached task observations
-carry their original `observed_at` and `stale: true` during an outage and never
-authorize a launch or prove success. `fleet-hub-node.sh recovery` lists unresolved
-receipts and overflow evidence; `fleet-hub-node.sh replay` makes one bounded pass.
-These are on-demand commands, with no added daemon or polling cadence.
-
-The node API adds `GET /v1/node/tasks/T<n>/children` and
-`POST /v1/node/tasks/T<n>/reports`. A report carries `event_id`, task, account
-owner, accepted `ticket_ref` (empty for unticketed work), child generation and
-worker UUID, parent task/session/generation, explicit outcome and evidence.
-The existing operation journal commits and deduplicates the event; stale
-reports remain historical. The existing outbox delivers to the stable parent
-identity and rechecks both generations. Parent retirement produces the existing
-orphan reminder; an unknown destination remains pending. Reconnect preserves
-one event/ledger row even with a different transport ID. Native notification is
-at least once across a crash between inbox delivery and writing its sent marker.
-
-**An EPIC is a parent task and its children** (issue #4957). The children read
-also carries `summary` — one count per outcome (`open`, `succeeded`, `failed`,
-`cancelled`, `refused`). A progress report (no outcome, a `status`) from the
-task's CURRENT execution is projected as the task's `progress`
-(`{status, summary, at}`) on the node's `GET /v1/node/tasks/T<n>` and the person's
-task list; an earlier generation's or another executor's word is history, never
-shown. `fleet_task_control.py progress --summary … [--event …]` writes one for the
-calling session's own task and relays nothing — an EPIC driver's tick.
+**An EPIC is a parent task and its children** (issue #4957);
 `bin/fleet-epic-tick.py status` is the batch's one read: the charter off the
-parent's dispatch body, each member's state off its children.
+parent's dispatch body, each member's state off its children and their IDs
+(docs/dev/FLEET-ID.md «EPIC 批次»).
 
-Legacy task records and sessions keep their previous path; a downlevel report
-from an accepted execution is refused. Backlog migration/attachment is C5's
-boundary: these consumers preserve the accepted ticket reference, never infer
-a backend from an issue number. Isolated store/API/consumer tests are fixture
-evidence; deployment and live remote acceptance belong to C9.
+### Conditional idle acceptance and provider observations — retired (EPIC T497 C8)
 
-### Conditional idle acceptance (#4524, #4617, #4618)
-
-`fleet_runtime.idle_accept_capability(provider)` (CLI:
-`fleet_runtime.py idle-accept-capability`, JSON stdin `{"provider":"codex"}`)
-returns this adapter's version 1 `idle-accept` capability — what the adapter
-implements, not a live probe:
-
-| provider | `state` | `native_method` | notes |
-| --- | --- | --- | --- |
-| `codex` | `available` (exit 0) | `thread/queue/start` | `fence: {idle: native, turn: precheck}`, `min_native_version: 0.162`; the live call re-checks the app-server's version |
-| `claude` | `available` (exit 0) | `mod/prompt.submit` | `fence: {idle: entry_boundary, turn: entry_boundary}`, `min_native_version: 2.1.295`, `min_mod_version: 0.6.0`; a pane whose mod does not stamp `@mod_accept idle.v1` is refused per call (`rejected mod_accept_unavailable`, nothing sent) |
-| anything else | `unavailable` (exit 2) | `null` | no conditional accept in this adapter |
-
-The entry is `fleet_runtime.accept_if_idle(pane, expected, delivery_id, text, socket="")`;
-CLI `fleet_runtime.py accept-if-idle --pane %N [--socket fleet]` takes JSON
-`{"expected":<read/project v1 snapshot>,"delivery_id":<UUID>,"text":<message>}`
-and exits 0 only on `accepted`. The explicit pane, complete C3/native/turn
-identity, UUID and nonempty message (≤ 65536 characters) are checked first
-(`invalid_request`). The message is never echoed.
-
-**Result** (v1): `state` `accepted` · `rejected` · `unknown`, a `reason`,
-`submitted` (a native queue item was written, by this or an earlier attempt —
-the queued stage, never acceptance), `receipt` (only when accepted),
-`delivery_id`, `request_identity`. A receipt is
-`{delivery_id, method: "thread/queue" | "mod/prompt.submit", native_session, turn_id,
-previous_turn_id, anchor_turn_id, intervening_turn, queued_submission_id, accepted_at, source}` —
-`turn_id` is the native turn whose `userMessage.clientId == delivery_id` (Codex), or the
-turn the mod saw start with this prompt (Claude);
-`source` is `native`, or `journal` when a repeated call is answered from the
-record of an earlier acceptance.
-
-**Codex protocol.** The app-server's queue extension starts a queued user
-message through the core's `start_turn_if_idle`, under a per-thread dispatch
-lock that `thread/queue/delete` also takes, refusing an active **or pending**
-turn; every item is persisted with its `clientUserMessageId`, which the accepted
-turn's `userMessage` item carries as `clientId` (codex `rust-v0.162.1`:
-`ext/queue/src/service.rs`, `app-server/src/request_processors/thread_queue_processor.rs`).
-One call:
-
-1. A per-delivery lock and journal (`$FLEET_CONF_DIR/global/idle-accept/<delivery_id>.json`,
-   no message text — its sha256 only; pruned after 7 days). A journal for
-   another C3/native identity ⇒ `unknown delivery_identity_changed`; the same id
-   with other text ⇒ `rejected delivery_id_reused`; an accepted one ⇒ answered
-   from the journal, no native call.
-2. A fresh `read(pane, expected=expected)` (the #4434 reader, full identity
-   including `turn_id`), the receipt's native fields and the endpoint re-checked;
-   a native version below 0.162 ⇒ `unknown native_version_untested`, no write.
-3. An earlier **pending** attempt is settled first, never resent: its queue
-   item (found by `clientUserMessageId`) goes through step 5; no item ⇒ the
-   receipt scan decides (found ⇒ accepted; anchor reached and the session idle ⇒
-   not delivered; otherwise `unknown`).
-4. Not idle at the precheck ⇒ `rejected precheck_<reason|state>`, nothing written.
-   Otherwise the journal is written `pending` (fsync) **before**
-   `thread/queue/add` (`clientUserMessageId = delivery_id`). An idle session's
-   queue starts the item on the add itself.
-5. Settle: `thread/queue/start` → started ⇒ `accepted native_started`;
-   refused as not idle ⇒ `thread/queue/delete` under the same lock —
-   `deleted: true` ⇒ `rejected native_not_idle` (it can never run later);
-   `deleted: false` or "not found" ⇒ the native idle dispatch took it ⇒ the
-   receipt scan (bounded wait) ⇒ `accepted native_idle_dispatch`, else `unknown`.
-   A transport error after the add ⇒ `unknown`, journal stays `pending`.
-
-The receipt scan reads `thread/turns/list` (`itemsView: summary`, newest
-first) back to the anchor turn (the `expected` turn of the first attempt), at
-most 20 pages of 50; a young thread whose store has no paginated history falls
-back to `thread/read includeTurns`. Not reaching the anchor ⇒ `unknown
-receipt_scan_incomplete`, never "not delivered".
-
-What is native-atomic and what is not: **idle** (no active or pending turn) is
-checked by Codex at acceptance; the **turn revision** is checked by the
-precheck only — Codex has no expected-last-turn parameter. A user turn that
-starts *and finishes* between the precheck and the acceptance therefore cannot
-be refused; the receipt says so (`intervening_turn: true`, `previous_turn_id`).
-The loop message then still runs as its own turn on an idle session — never
-steered into the user's turn (#4524's counterexample). A typed-but-unsent draft
-is not native state; the consumer's draft / recent-input gates stay #4431's, as
-do attention / tool / bg / transfer. `unknown` is never delivery and never a
-reason to resend; consumers keep their own pending record until a call answers
-`accepted` or `rejected`. Never fall back to `turn/start`, `turn/steer`,
-`fleet_peer_send` or the mod's `command.run`. The first consumer is the
-loop's due wakeup (`fleet-loop.py`, #4431; docs/dev/SESSION-TRANSFER.md «When
-a due wakeup is sent»).
-
-**Claude protocol (#4618).** Nothing outside the session can condition an
-entry: the peer `auth` + `user` frame has no expected-turn condition
-(`fleet_peer_send` exit 0 = frame written; #4524's counterexample) and the mod
-inbox's `command.run` runs `/commands` only. Inside it, the fleet mod (≥ 0.6.0,
-`mod/fleet/hooks/accept.ts`) uses what the engine verifiably gives (2.1.295,
-`fleet-idle-accept-claude-selftest.sh`):
-
-- `$.prompt.submit` is a turn of its own once idle, never folded into a running
-  one; called while a turn runs, the `prompt.submit` hooks run when it is
-  dequeued, right before it enters — **the entry boundary**;
-- a `prompt.submit` hook's `{ drop }` keeps it out: no turn, never re-queued;
-  the call resolves `{ drop }`;
-- while one prompt's chain runs, a person's Enter waits behind it (never
-  between the hook's check and the entry);
-- a `$` call made from a module **timer** skips every hook of its own plugin —
-  so the submit is made from an engine frame: the inbox poll bumps an atom and
-  the band's redraw (`ui.render` AbovePrompt) calls `$.prompt.submit`, which the
-  plugin's own `prompt.submit` hook then sees (`origin {kind: plugin, name: fleet}`).
-
-One call: steps 1 and the journal as for Codex (`method: mod/prompt.submit`,
-the request's `deadline` recorded). An earlier **pending** attempt is settled
-by its receipt first — the mod's durable `idle-accept-<delivery_id>.receipt`
-beside the inbox (names the turn), else the hidden-context line
-`fleet idle-accept receipt delivery_id=<id>` in the session's transcript (a
-delivery whose turn id is unknown ⇒ `unknown receipt_turn_unknown`); neither,
-and the attempt's deadline + grace has passed ⇒ it never ran (the mod drops a
-fleet prompt that matches no live slot) ⇒ a new attempt; no transcript to read
-⇒ `unknown`. Then: no `@mod_accept idle.v1` on the pane ⇒ `rejected
-mod_accept_unavailable`; a fresh `read` not idle ⇒ `rejected precheck_…`;
-otherwise the journal goes `pending` and ONE request goes to the inbox's fixed
-slot (`idle-accept.json`, a nonce, the C3 launch, `delivery_id`,
-`expected_turn` = the read's turn, the text, `deadline` = now + 5 s). The mod:
-
-1. refuses a launch / nonce / id / deadline that does not hold (`ok: false` ⇒
-   `rejected mod_refused`); takes the one slot (`slot_busy` otherwise);
-2. **precheck in-process**: the last finished main turn is `expected_turn`,
-   finished `idle`, none running, no `session.end` (a `/clear`, a `/resume`)
-   since ⇒ else `rejected precheck_not_idle`, nothing submitted;
-3. queues the slot and redraws the band; the render hook submits (`asUser`);
-   no redraw by the deadline ⇒ `rejected not_submitted` (never handed over);
-4. **at the entry boundary**, its `prompt.submit` hook checks again, after its
-   last await: the same live slot, the deadline, step 2's fence, the prompt box
-   empty (a person's draft ⇒ `draft_present`) — any miss ⇒ `{ drop }` ⇒
-   `rejected <why>`; passed ⇒ the receipt line rides as hidden `context`, and
-   the turn that starts is the answer: `accepted native_entry` + `turn_id`,
-   `previous_turn_id = expected_turn`, the durable receipt written;
-5. handed over and unanswered 3 s past the deadline ⇒ `unknown entry_unanswered`;
-   a late arrival then finds no live slot and is dropped.
-
-The python side waits deadline + 3 s grace + 2 s; a request the mod never took
-is withdrawn by the same rename the mod claims with (`rejected not_taken`);
-taken and unanswered ⇒ `unknown`, the journal `pending`. Never `command.run`,
-a peer frame, or a bare `$.prompt.submit` from a timer.
-
-What is checked where: **idle**, the **turn revision** and the **draft** are
-all checked at the entry boundary, in the engine's own serialized submit path —
-unlike Codex there is no window for a person's turn between the check and the
-entry (`intervening_turn` is always false). What the mod cannot see stays
-#4431's gates (attention / tool / bg / transfer — none of which is idle in its
-own turn bookkeeping anyway).
-
-**Verification.** Claude: `fleet-runtime-selftest.py` `ClaudeIdleAccept` /
-`ClaudePostAccept` (the journal, the settle, the inbox slot on real files) and
-`mod/fleet/tests/accept.test.tsx` (the mod's precheck, entry drop, receipt);
-`fleet-idle-accept-claude-selftest.sh` runs the REAL engine (≥ 2.1.295, a copy
-of mod/fleet, a loopback model, isolated HOME; SKIP elsewhere): idle ⇒ accepted,
-the receipt durable and in the hidden context; a person's turn running ⇒
-refused before any submit, never run after; a draft ⇒ dropped at entry, the
-draft untouched, never re-queued; a person's Enter racing the request ⇒ either
-refused or the loop's turn first, never after; `/clear` ⇒ refused (BREAK-IT
-`runtime-idle-accept-claude`). Codex: `fleet-runtime-selftest.py` `CodexIdleAccept` drives the full
-`accept_if_idle` path through a fake app-server with the semantics the real one
-showed (BREAK-IT `runtime-idle-accept-codex`); `fleet-idle-accept-native-selftest.sh`
-runs `codex_settle` / `codex_receipt` / `codex_queued` against a real
-`codex app-server` ≥ 0.162 (loopback model fixture, isolated HOME; SKIP where no
-such codex is installed, as on CI): idle ⇒ accepted with the receipt readable
-from a new connection; busy ⇒ refused, deleted, never run; disconnect after the
-add while busy ⇒ the retry settles the same item; the native idle edge first ⇒
-the retry finds the receipt (`intervening_turn`). Neither is a fleet pane with a
-C3 launch, a loop due tick or a live deployment — #4431 owns that acceptance;
-its due tick runs end to end against the real engines in
-`fleet-loop-idle-native-selftest.sh` (Codex) and `fleet-loop-idle-claude-selftest.sh`
-(Claude + the fleet mod, #4658).
-
-### Read-only provider observations (#4434)
-
-`bin/fleet_runtime.py read --pane %N [--socket fleet]` is the shared local
-entry point (Python: `fleet_runtime.read(pane, context=None, expected=None,
-socket="")`). JSON stdin is `{}`, or `{"launch": <C3 context>, "expected":
-<previous snapshot>}`. It observes only: no resume, turn start, command execution,
-task transition, cancellation or reclamation. Exit 0 means a known runtime
-observation; exit 2 means unknown. Neither exit authorizes delivery.
-
-The version 1 result separates these fields:
-
-| Field | Meaning |
-| --- | --- |
-| `version` | Integer `1`; unsupported versions fail closed. |
-| `identity` | C3's complete `version/operation_id/task/owner/generation/worker_id/provider/attempt_id`, plus `native_session/pid/birth/executable/native_remote/turn_id`. No inferred task or owner for legacy launches. |
-| `source` | `codex:rpc`, `claude:native-event`, `claude:native-query`, or `none`. |
-| `observed_at`, `expires_at` | Unix seconds of the evidence, with a fixed maximum lifetime of 5 seconds. Reading or forwarding a saved snapshot never renews them. |
-| `runtime.state` | `active`, `idle`, `ask`, `approval`, `interrupted`, or `unknown`. A completed native turn is not a successful task result. |
-| `runtime.reason` | Stable rejection reason; empty only for a known observation. |
-| `runtime.socket_ready`, `runtime.thread_ready` | Independent observations. `null` means unverified; socket connection alone never proves a thread or turn exists. Claude has no RPC readiness assertion. |
-| `runtime.first_thread_deadline` | Pane kernel birth plus 45 seconds, fixed across rereads; missing proof after this deadline is unknown, never permission to restart. |
-| `task_result.state` | Independently read C1 outcome, `pending`, or `unknown`; never inferred from Stop, idle, exit or a displayed MERGED label. |
-| `controller_delivery.state` | `unknown`: this observer has no delivery or acceptance receipt. |
-| `reclaim` | Always `eligible: false`, `reason: separate_gates_required`. This observer cannot grant reclamation. |
-
-A read verifies C3's receipt and kernel process/pane binding, reads current C1
-ownership, observes the provider, then repeats both identity and authority
-checks. Codex reuses the existing identity reader and bounded local RPC client:
-metadata-only `thread/read` and `thread/turns/list` (one newest turn,
-`itemsView: notLoaded`). Both reads are repeated to reject a changed turn or
-status. A different SID/cwd, nested thread, unloaded thread, unsupported flags,
-failed turn or unavailable RPC is unknown. An interrupted turn stays interrupted.
-The adapter never fetches full message/tool contents and never resumes a thread.
-
-Claude uses the existing mod's native `turn.start`, `turn.complete` and
-`AskUserQuestion` edges, preserving their actual `turnId`. Only accepted C3
-launches publish one `@runtime_claude` observation through the `event` entry;
-root process ancestry, current native registry SID, receipt, event sequence
-and turn are checked under a local mutex. Late, duplicate, nested or old-turn
-events cannot replace the observation. An aborted/non-answer completion stays
-interrupted; settings `Stop` hooks never publish idle. Native registry idle
-must corroborate a completed turn. These observations expire after 5 seconds.
-When an event expires, the reader sends one `runtime.v1` query through the
-existing mod inbox callback. A fixed temporary request slot carries a nonce,
-the complete C3 launch context and a 3-second deadline. It never calls
-`command.run`, adds no timer, and creates no recovery journal. The native module
-answers from its current turn-bound state through the same ancestry-checked
-event publisher. Only that nonce's fresh native response can renew evidence;
-rereading a file or the mod heartbeat cannot. This allows long tools and long
-idle periods to be observed without starting a model turn. An inbox occupied
-by a command, an absent/old mod, a lost native process or a changed identity
-returns unknown; it never retries a command or changes recovery state.
-Unknown results retain the rejected event's source, turn and evidence times.
-Claude approval prompts with no native attention edge remain active/unknown,
-never idle. There is no transcript or display fallback.
-
-For a same-identity reread, supply the complete earlier snapshot as `expected`.
-Every identity field, including native process birth and turn, must match.
-This fresh read may obtain new RPC evidence or a new native mod reply; it never
-changes a saved event's source time. `project` with `{"snapshot": <saved>, "expected": <optional previous>}`
-only validates/project ages an existing observation, including remote copies.
-Expiry or a backwards clock returns unknown while retaining evidence times.
-Remote time comparisons assume synchronized clocks; future evidence is refused.
-Neither a reread nor a matching identity is an atomic acceptance fence: a new
-turn can begin immediately afterwards. #4431 owns consumer wiring and must keep
-active-turn/attention/bg/loop/transfer/dirty/unpersisted-work and task acceptance
-gates. C4/C6 retain outcomes, recovery, delivery and stop receipts.
-
-Typical unknown reasons are `missing_launch`, `missing_launch_receipt`,
-`first_thread_timeout`, `task_fence_changed`, `identity_or_authority_unavailable`,
-`endpoint_identity_changed`, `native_identity_changed`, `thread_unavailable`,
-`thread_not_loaded`, `no_turn`, `turn_not_completed`, `rpc_unavailable`,
-`native_changed_during_read`, `identity_changed_during_read`,
-`no_turn_observation`, `event_identity_changed`, `event_expired`,
-`registry_contradicts_event`, `identity_changed`, `expired`, and
-`clock_regressed`. Unknown is a refusal to infer readiness, not a retry order.
-
-Source/fixture verification is separate from native process verification and
-deployment/live acceptance. This interface neither changes the live install nor
-claims the independent #4474 process-cost budget. Native RPC semantics follow
-the [Codex app-server documentation](https://learn.chatgpt.com/docs/app-server).
+`fleet_runtime.py`'s observations of a launch-proof session (`read`, `project`,
+`idle-accept-capability`, `accept-if-idle`, the Claude mod's `event`) read the
+window's launch receipt, which nothing writes since C8. The file stays one version
+(compat-1v): `event` is taken and dropped, every read answers unknown. A due loop
+round goes the pane's own road (`fleet-loop.py`: the Claude inbox, the Codex
+thread); a pending delivery the old road left is dropped and the round stays due.
 
 ### Pending-tool observations (#4474)
 
@@ -606,9 +321,8 @@ kernel process identities, registry SID and transcript inode/size/timestamps.
 A failed process scan, PID reuse, process exit, recycled window, other socket,
 malformed transcript or changed identity returns code 4. Transport exceptions
 at the first read propagate: the consumer must retain **all** candidates.
-An observation taking 5 seconds expires, using `fleet_runtime.TTL`; consumers
-must also reject results at or after `expires_at`. No TTL or provider policy is
-added to `fleet_runtime`. Two checks 20 seconds apart collect two process tables.
+An observation taking 5 seconds expires (`fleet_pending_tool.TTL`); consumers
+must also reject results at or after `expires_at`. Two checks 20 seconds apart collect two process tables.
 
 | Entry / condition | Output and exit/code |
 |---|---|
@@ -621,9 +335,9 @@ added to `fleet_runtime`. Two checks 20 seconds apart collect two process tables
 | Batch no native, missing birth, stale or unknown identity | 4, retain; no code 3 inference |
 
 `Processes.collect()` uses one bounded `ps` on Linux/macOS; argv comes from the
-existing kernel reader. `fleet_launch.process(pid, ps_row=(ppid, lstart))`
+existing kernel reader. `fleet_native_proc.process(pid, ps_row=(ppid, lstart))`
 reuses that row but still checks kernel birth/executable and rejects a changed
-parent/start. Its original one-argument C3 contract and birth format remain.
+parent/start. Its one-argument contract and birth format remain.
 `fleet_pane_claude_pids` uses one interpreter plus that one ps, preserving BFS,
 node/bun recognition, explicit fake-shell override and zombie rejection.
 
@@ -838,10 +552,10 @@ The legacy-mode path stays byte for byte: legacy relays, the version-0 record,
 the issue lease, label resolution at a first dispatch, and `gh:` ticket refs.
 A person who has not cut over still runs on it, in every repo.
 
-The one superseded branch was the issue-number wait. `fleet-await.sh <N>` no
-longer reads the legacy ledger, or adopts `@origin`, for a window carrying
-`@launch`. It waits on that window's `T<n>`, and a login whose person is on the
-hub (`fleet_task_authority` = `hub`) refuses a by-number spawn.
+The one superseded branch was the issue-number wait: a login whose person is
+on the hub (`fleet_task_authority` = `hub`) refuses a by-number spawn. (Its other
+half — a window carrying `@launch` waited on as its `T<n>` — left with the launch
+proof, EPIC T497 C8.)
 
 Before deleting more, confirm per person with `fleet-repo.sh authority
 --dry-run`: hub mode with zero legacy owners. A person still in `legacy` keeps

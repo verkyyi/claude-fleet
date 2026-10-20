@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Task-authoritative collaboration over the existing task API and relay outbox.
+"""A hub task record, read from a machine — and a child report routed to its parent.
 
-A source result, delivery and native process observation remain separate. No
-GitHub reader, background poller, replacement launch or local task store.
+The record is the ticket (issue #4897); the session is its window's ID (EPIC T497
+C8): nothing here claims a record, holds it, fences a report on a generation or
+proves a native process. A session's report is a result of its ID
+(fleet-report-parent.sh, fleet_id.py); this reads whether a record is over, waits
+on it, lists its children, writes an EPIC driver's progress word on its ID, cancels
+a record no window ever opened, and delivers a child report a relay carried here.
 """
 import argparse
 import fcntl
@@ -14,94 +18,32 @@ import subprocess
 import sys
 import time
 
-import fleet_launch as launch
-
 BIN = Path(__file__).resolve().parent
+TERMINAL = ("succeeded", "failed", "cancelled", "refused")
 
 
-def call(action, task, payload=None, timeout=15, stale=False):
+def call(action, task, payload=None, timeout=15):
     env = dict(os.environ, FLEET_HUB_TIMEOUT=str(max(1, min(10, int(timeout)))))
-    if stale:
-        env["FLEET_TASK_STALE_READ"] = "1"
     result = subprocess.run(["bash", str(BIN / "fleet-task-record.sh"), action, task],
                             input=json.dumps(payload) if payload is not None else None,
                             text=True, capture_output=True, timeout=timeout, env=env)
     if result.returncode:
-        if "ID_SWITCH" in result.stderr:
-            raise IDSwitched("the hub reads sessions by ID now")
-        raise ValueError(result.stderr.strip() or "task authority unavailable/refused")
+        raise ValueError(result.stderr.strip() or "task record unavailable/refused")
     return json.loads(result.stdout)
-
-
-class IDSwitched(Exception):
-    """The hub's ID switch is on (EPIC T497 C6): the record takes no claim, no
-    fenced report. The gate is «the window has an ID» — a report is a result of
-    that ID (fleet-report-parent.sh's ID road); exit 5 tells it to take it."""
-
-
-def id_switch_on():
-    try:
-        import fleet_id
-        return fleet_id.switch_on()
-    except ImportError:
-        return False
 
 
 def verdict(task):
     if task is None:
         return "UNKNOWN"
     outcome = task.get("outcome")
-    return outcome.upper() if outcome in ("succeeded", "failed", "cancelled", "refused") else "WAITING"
+    return outcome.upper() if outcome in TERMINAL else "WAITING"
 
 
-def blocker_projection(task, stale=False):
-    """Read-only task-blockers.v1. Unknown is never an empty blocker set.
-
-    Native ask/approval, runtime TTL, controller and terminal outcome are separate
-    inputs: none is read or changed here, and this result grants no action.
-    """
-    unknown = dict(version=1, state="unknown", active_ids=[], actionable=False)
-    if not isinstance(task, dict) or stale or task.get("_stale") or task.get("authority_version") != 1:
-        return unknown
-    projection = task.get("task_blockers")
-    if not isinstance(projection, dict) or projection.get("version") != 1 or projection.get("generation") != task.get("generation"):
-        return unknown
-    items = projection.get("items")
-    if not isinstance(items, list):
-        return unknown
-    scope = dict(task=task.get("id"), owner=task.get("owner"), repo=task.get("repo", ""),
-                 ticket_ref=task.get("ticket_ref", ""), generation=task.get("generation"), worker_id=task.get("execution_owner", ""))
-    active, seen, revoked = [], set(), False
-    for item in items:
-        if (not isinstance(item, dict) or item.get("scope") != scope or
-                not isinstance(item.get("blocker_id"), str) or not item["blocker_id"] or
-                item["blocker_id"] in seen or item.get("state") not in ("active", "resolved", "revoked")):
-            return unknown
-        seen.add(item["blocker_id"])
-        if item["state"] == "active": active.append(item["blocker_id"])
-        if item["state"] == "revoked": revoked = True
-    return dict(version=1, state="blocked" if active else "revoked" if revoked else "clear",
-                active_ids=active, actionable=False)
-
-
-def blockers(task):
-    data = call("get", task, stale=True)
-    print(json.dumps(dict(task=task, projection=blocker_projection(data.get("task"), stale=data.get("stale", False)),
-                         task_blockers=data.get("task", {}).get("task_blockers")), ensure_ascii=False))
-    return 0
-
-
-def blocker(pane, command, event, socket=""):
-    """An explicit blocker travels through the accepted task report/outbox."""
-    if not event or not isinstance(command, dict):
-        raise ValueError("blocker needs a stable --event and one JSON command")
-    c = context(pane, socket)
-    t = call("get", c["task"])["task"]
-    if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"), ("execution_owner", "worker_id"))):
-        raise ValueError("stale blocker owner/generation")
-    r = report_input(c, t, "", command.get("reason", ""), command.get("evidence", ""), event=event)
-    r.update(blocker=command, status="blocked" if command.get("action") == "create" else "waiting")
-    return publish_report(r)
+def record(task, timeout=15):
+    t = call("get", task, timeout=timeout).get("task")
+    if not isinstance(t, dict) or t.get("authority_version") != 1:
+        raise ValueError("task record is not authoritative")
+    return t
 
 
 def wait_task(task, timeout, interval):
@@ -109,22 +51,13 @@ def wait_task(task, timeout, interval):
     while True:
         left = end - time.monotonic()
         try:
-            record = call("get", task, timeout=max(0.1, min(15, left))).get("task")
-            if not record or record.get("authority_version") != 1:
-                raise ValueError("task is not authoritative")
+            t = record(task, timeout=max(0.1, min(15, left)))
         except (ValueError, OSError, subprocess.SubprocessError):
-            print("UNKNOWN\ntask: %s\nnote: task authority unavailable; no replacement authorized" % task)
-            try:
-                from fleet_task_recovery import Journal
-                cached = Journal().cached(task)
-                print("stale: true\nobserved_at: %s" % cached["observed_at"])
-            except (ValueError, OSError, subprocess.SubprocessError):
-                pass
+            print("UNKNOWN\ntask: %s\nnote: task record unavailable" % task)
             return 3
-        state = verdict(record)
+        state = verdict(t)
         if state != "WAITING" or time.monotonic() >= end:
-            print("%s\ntask: %s\ngeneration: %s\nworker_id: %s" %
-                  (state, task, record["generation"], record.get("execution_owner", "")))
+            print("%s\ntask: %s" % (state, task))
             return {"SUCCEEDED": 0, "FAILED": 1, "CANCELLED": 2, "REFUSED": 2}.get(state, 3)
         time.sleep(min(interval, max(0, end - time.monotonic())))
 
@@ -132,17 +65,15 @@ def wait_task(task, timeout, interval):
 def closed(task):
     """Is the task record closed (收口, issue #4897)? ONE read, never a wait:
     SUCCEEDED / FAILED / CANCELLED / REFUSED → exit 0; WAITING (still open) →
-    exit 1; the hub unreadable or the record not authoritative → UNKNOWN, exit 3.
-    The reapers (fleet-cleanup-idle.py, fleet-cleanup.sh, worktree-autoclean.sh)
-    read a task session's end here — never its PR or an issue."""
+    exit 1; the hub unreadable or the record not authoritative → UNKNOWN, exit 3. The reapers
+    (fleet-cleanup-idle.py, fleet-cleanup.sh, worktree-autoclean.sh) read a task
+    session's end here — never its PR or an issue."""
     try:
-        record = call("get", task, timeout=10).get("task")
-        if not record or record.get("authority_version") != 1:
-            raise ValueError("task is not authoritative")
+        t = record(task, timeout=10)
     except (ValueError, OSError, subprocess.SubprocessError):
         print("UNKNOWN\ntask: %s" % task)
         return 3
-    state = verdict(record)
+    state = verdict(t)
     print("%s\ntask: %s" % (state, task))
     return 1 if state == "WAITING" else 0
 
@@ -161,57 +92,36 @@ def child_summary(data):
 
 
 def children(task, as_json):
-    record = call("get", task)["task"]
-    if record.get("authority_version") != 1:
-        return 4  # explicit compatibility result; never an unavailable fallback
     data = call("children", task)
     data["summary"] = child_summary(data)
     if as_json:
         print(json.dumps(data, ensure_ascii=False))
-    else:
-        print("children of %s · generation %s" % (task, data["parent_generation"]))
-        for child in data["children"]:
-            print("%s g%s %s %s %s %s" % (child["id"], child["generation"], verdict(child),
-                  child.get("ticket_ref", ""), child.get("execution_owner", ""), child.get("title", "")))
-        sm = data["summary"]
-        print("%d children · open %d · succeeded %d · failed %d · cancelled %d · refused %d" % (
-            len(data["children"]), sm.get("open", 0), sm.get("succeeded", 0), sm.get("failed", 0),
-            sm.get("cancelled", 0), sm.get("refused", 0)))
+        return 0
+    print("children of %s" % task)
+    for child in data.get("children") or []:
+        print("%s %s %s %s" % (child["id"], verdict(child), child.get("ticket_ref", ""), child.get("title", "")))
+    sm = data["summary"]
+    print("%d children · open %d · succeeded %d · failed %d · cancelled %d · refused %d" % (
+        len(data.get("children") or []), sm.get("open", 0), sm.get("succeeded", 0), sm.get("failed", 0),
+        sm.get("cancelled", 0), sm.get("refused", 0)))
     return 0
+
+
+def option(pane, key, socket=""):
+    sock = ["-S" if os.path.isabs(socket) else "-L", socket] if socket else []
+    return subprocess.run(["tmux", *sock, "display-message", "-p", "-t", pane, "#{" + key + "}"],
+                          capture_output=True, text=True, timeout=5).stdout.strip()
 
 
 def progress(pane, summary, state, event="", socket=""):
-    """The session's own task gets one progress word (issue #4957): an EPIC
-    driver's tick on its parent task — recorded on the hub (the task's `progress`,
-    ⌘P / the 任务 page read it), never relayed: a tick is not a child report."""
+    """The session's own progress word (issue #4957): an EPIC driver's tick. It is
+    the window's ID's (EPIC T497 C12): one `progress` event on its ledger, pushed
+    to the hub mirror — `fleet-epic-tick.py status` reads its last_tick there.
+    Never relayed: a tick is not a child report."""
     if not summary.strip():
         raise ValueError("progress needs a --summary")
-    if id_switch_on():
-        return id_progress(pane, summary, state, event, socket)
-    c = context(pane, socket)
-    t = call("get", c["task"])["task"]
-    if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"), ("execution_owner", "worker_id"))):
-        raise ValueError("stale progress owner/generation")
-    if t.get("outcome"):
-        print("%s\ntask: %s" % (verdict(t), c["task"])); return 0
-    r = report_input(c, t, "", summary.strip()[:2000], "progress: " + state, event=event)
-    r["status"] = state
-    receipt = call("report", r["task"], r)
-    if receipt.get("_recovery_event"):
-        from fleet_task_recovery import Journal
-        Journal().ack_report(r["task"], r)  # recorded, nothing to deliver
-    if receipt.get("disposition", "progress") not in ("progress", "committed"):
-        raise ValueError("progress disposition %s" % receipt.get("disposition"))
-    print("RECORDED\ntask: %s\nevent_id: %s" % (r["task"], r["event_id"]))
-    return 0
-
-
-def id_progress(pane, summary, state, event="", socket=""):
-    """With the ID switch on (EPIC T497 C12) the progress word is the window's own
-    ID's: one `progress` event on its ledger, pushed to the hub mirror — the record
-    takes none. `fleet-epic-tick.py status` reads its last_tick there."""
     import fleet_id
-    fid = launch.option(pane, "@fleet_id", socket) if pane else ""
+    fid = option(pane, "@fleet_id", socket) if pane else ""
     if not fleet_id.is_fid(fid):
         raise ValueError("this pane carries no ID (@fleet_id)")
     ev = fleet_id.record_progress(fid, summary.strip(), state, event)
@@ -221,194 +131,19 @@ def id_progress(pane, summary, state, event="", socket=""):
     return 0
 
 
-def context(pane, socket=""):
-    c = launch.validate_context(json.loads(launch.option(pane, "@launch", socket)))
-    if launch.option(pane, "@fleet_id", socket) != c["worker_id"].split("/")[1]:
-        raise ValueError("launch binding does not belong to this session")
-    return c
-
-
-def report_input(c, t, outcome, summary, evidence, stopped=False, event=""):
-    r = dict(task=c["task"], owner=c["owner"], generation=c["generation"], worker_id=c["worker_id"],
-             ticket_ref=t.get("ticket_ref", ""), parent_task=t.get("parent_task", ""),
-             parent_session=t.get("parent_session", ""), parent_generation=t.get("parent_generation", 0),
-             outcome=outcome, summary=summary, evidence=evidence, execution_stopped=stopped)
-    r["event_id"] = event or hashlib.sha256(json.dumps(r, sort_keys=True).encode()).hexdigest()
-    return r
-
-
-def publish_report(r):
-    receipt = call("report", r["task"], r)
-    result = deliver_report(r, receipt)
-    if receipt.get("_recovery_event"):
-        from fleet_task_recovery import Journal
-        Journal().ack_report(r["task"], r, receipt.get("_delivery_file", ""))
-    return result
-
-
-def deliver_report(r, receipt):
-    if receipt.get("_recovery_done"):
-        print("COMMITTED\ntask: %s\nevent_id: %s" % (r["task"], r["event_id"]))
-        return 0
-    if receipt.get("_delivery_file"):
-        from fleet_task_recovery import Journal
-        if Journal().delivery_pending(receipt["_recovery_event"]):
-            print("QUEUED\ntask: %s\nevent_id: %s" % (r["task"], r["event_id"]))
-            return 3
-    if receipt["disposition"] not in ("committed", "progress"):
-        raise ValueError("report disposition %s; reconciliation required" % receipt["disposition"])
-    if not r["parent_session"]:
-        print("COMMITTED\ntask: %s\nevent_id: %s" % (r["task"], r["event_id"]))
-        return 0
-    # No parent generation / execution-owner gate (EPIC T497 C4): the parent is its
-    # session's ID, which a /clear, a handoff or a re-launch never changes; the
-    # receiving machine routes a closed one to its successor or parent (receive).
-    # Existing outbox, including same-machine parents: one durable address and
-    # one event ID across reconnects, never a timestamp allocated on each retry.
-    suffix = hashlib.sha256((r["task"] + ":" + r["event_id"]).encode()).hexdigest()
-    payload = dict(task_report={k: v for k, v in r.items() if k != "_native"}, child=r["task"], state=(r["outcome"].upper() or "WAITING"), tier="quiet",
-                   msg="[child-report] %s\nstate: %s · generation %s\nsummary: %s\nno reply needed" %
-                   (r["task"], (r["outcome"].upper() or "WAITING"), r["generation"], r["summary"]))
-    if receipt.get("_recovery_event"):
-        payload.update(task_recovery=receipt["_recovery_event"], expires_at=receipt["_recovery_expires"])
-    if receipt.get("_recovery_event"):
-        from fleet_task_recovery import Journal
-        receipt["_delivery_file"] = Journal().put_report(r, payload)
-    else:
-        command = '. "$1/fleet-lib.sh"; fleet_hub_put child_report "$2" "$3" "$4" "$(cat)"'
-        sent = subprocess.run(["bash", "-c", command, "task-report", str(BIN), r["worker_id"],
-                               r["parent_session"], suffix], input=json.dumps(payload), text=True,
-                              capture_output=True, timeout=15)
-        if sent.returncode:
-            raise ValueError("result committed; delivery unavailable (retry the same event)")
-    print("QUEUED\ntask: %s\nevent_id: %s\nparent: %s" % (r["task"], r["event_id"], r["parent_session"]))
-    return 3
-
-
-def id_result(c, state, summary, pr):
-    """The report as a result of the session's ID (EPIC T497 C4, S2) — beside the
-    task record (双写); never fails the report."""
-    fid = c["worker_id"].split("/")[1]
-    ev = {"ev": "result", "state": state, "summary": summary}
-    if c.get("provider"):
-        ev["agent"] = c["provider"]
-    if pr:
-        ev["pr"] = str(pr).lstrip("#")
-    try:
-        import fleet_id   # in-process: the ledger append runs no command
-        if fleet_id.is_fid(fid):
-            fleet_id.append(fid, ev)
-            fleet_id.push_later(fid)
-    except (ImportError, OSError, ValueError):
-        pass
-
-
-def report(pane, state, summary, pr, dry, socket="", outcome=""):
-    if id_switch_on():
-        raise IDSwitched("the report is a result of the window's ID")
-    c = context(pane, socket)
-    observation = call("get", c["task"], stale=True)
-    t = observation["task"]
-    if observation.get("stale"):
-        print("STALE task observation at %s; receipt requires reconciliation" % observation["observed_at"], file=sys.stderr)
-    if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"), ("execution_owner", "worker_id"))):
-        raise ValueError("stale report owner/generation")
-    if state != "merged" and not outcome:
-        # A red CI gate or a completed turn is workflow progress, never a
-        # terminal result. Still notify the exact parent with a fenced event.
-        if t.get("outcome"):
-            print("%s\ntask: %s" % (verdict(t), c["task"])); return 0
-        r = report_input(c, t, "", summary, "workflow: " + state)
-        r["status"] = state
-        if dry:
-            print(json.dumps(r)); return 0
-        id_result(c, outcome or state, summary, pr)
-        return publish_report(r)
-    # Keep the existing code-landing gate. Work outcome and code landing can be
-    # reported independently using `fleet-task-record.sh report` with a result.
-    if state == "merged":
-        if outcome not in ("", "succeeded"):
-            raise ValueError("merged report requires a success outcome")
-        # No PR: a repo the fleet lands itself (FLEET_LAND=fleet, issue #3602) —
-        # the gate reads the window's own branch, as pr_verdict with no pr does.
-        gate = subprocess.run(["bash", str(BIN / "fleet-pr-verdict.sh")] + ([pr] if pr else []),
-                              capture_output=True, text=True, timeout=20)
-        if gate.stdout.strip() != "MERGED":
-            raise ValueError("the merge is unconfirmed; task result not recorded")
-    outcome = outcome or "succeeded"
-    if outcome not in ("succeeded", "failed") or not summary.strip():
-        raise ValueError("explicit completion needs succeeded/failed and a summary")
-    receipt = launch.check_receipt(c, json.loads(launch.option(pane, "@launch_receipt", socket)))
-    evidence = json.dumps(dict(native_session=receipt["native_session"], provider=receipt["actual_provider"],
-                               work_result=outcome, pr=pr,
-                               pr_state="merged" if state == "merged" else "waiting" if pr else "none"), sort_keys=True)
-    r = report_input(c, t, outcome, summary, evidence)
-    r["status"] = state  # landing projection is separate from terminal work outcome
-    if dry:
-        print(json.dumps(r)); return 0
-    id_result(c, "merged" if state == "merged" else outcome, summary, pr)
-    return publish_report(r)
-
-
-def finalize(pane):
-    if id_switch_on():
-        return 0   # EPIC T497 C6: nothing holds the record, nothing to release
-    c = context(pane)
-    t = call("get", c["task"], stale=True)["task"]
-    if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"), ("execution_owner", "worker_id"))):
-        raise ValueError("stale finalization generation")
-    proof = launch.check_receipt(c, json.loads(launch.option(pane, "@launch_receipt")))
-    # A failed process probe is unknown. Only ESRCH or a positively observed
-    # different birth/executable proves the witnessed native is gone.
-    try:
-        os.kill(proof["pid"], 0)
-    except ProcessLookupError:
-        pass
-    else:
-        observed = launch.process(proof["pid"])
-        if launch.same_identity(observed, proof):
-            raise ValueError("native execution is still alive")
-    evidence = json.dumps({k: proof[k] for k in ("pid", "birth", "executable", "native_session")}, sort_keys=True)
-    # Record the stopped native even if a cancel request/result was accepted
-    # while this node was offline. Replay reads the current fenced task before
-    # acknowledging cancellation; exit alone never invents a work outcome.
-    event = "stop:" + hashlib.sha256(evidence.encode()).hexdigest()
-    call("stopped", c["task"], dict(idempotency_key=event,
-         generation=c["generation"], expected_worker=c["worker_id"], execution_stopped=True, evidence=evidence,
-         _native=dict(launch=c, pane=pane, socket=launch.option(pane, "socket_path"))))
-    return 0
-
-
 def cancel(task, event):
-    t = call("get", task)["task"]
-    # An unclaimed record carries no execution_owner key at all (claude-fleet#4964).
-    worker = t.get("execution_owner", "")
-    if not worker and t.get("state") == "accepted":
-        # Nothing runs and nobody would ever acknowledge a request: end it.
-        call("mutate", task, dict(kind="transition", idempotency_key=event, generation=t["generation"],
-             expected_worker="", state="cancelled", evidence="explicit cancel request; unclaimed, no execution owner"))
-        print("CANCELLED\ntask: %s\nnote: unclaimed; nothing to stop" % task)
-        return 2
-    result = call("mutate", task, dict(kind="cancel_request", idempotency_key=event,
-                  generation=t["generation"], expected_worker=worker, evidence="explicit cancel request"))
-    print("CANCEL_REQUESTED\ntask: %s\nevent_id: %s\nnote: owner retained until stopped acknowledgement" % (task, result["cancel_request"]))
-    return 3
-
-
-def release(task, event):
-    """An execution whose native and window are both gone (claude-fleet#4964):
-    proven from this node's retained stop receipt, never from a lease's age."""
-    from fleet_task_recovery import Journal
-    r = Journal().release(task, event)
-    print("RELEASED\ntask: %s\noutcome: %s\nevent_id: %s\nevidence: %s; %s" %
-          (task, r.get("outcome") or "", event, r["evidence"]["window"], r["evidence"]["process"]))
-    return 0
-
-
-def parent_matches(report, parent):
-    return (parent.get("id") == report["parent_task"] and parent.get("owner") == report["owner"]
-            and parent.get("generation") == report["parent_generation"]
-            and parent.get("execution_owner") == report["parent_session"] and not parent.get("outcome"))
+    """A person's cancel of a record no window ever opened (EPIC T497 C13): the
+    one change the hub still takes on a record. A record an ID carries is that
+    window's — the hub answers so, and the session is closed there."""
+    t = record(task)
+    if t.get("outcome"):
+        print("%s\ntask: %s" % (verdict(t), task))
+        return 0
+    call("mutate", task, dict(kind="transition", idempotency_key=event, generation=t.get("generation", 1),
+                              expected_worker="", state="cancelled",
+                              evidence="explicit cancel request; no window ever opened it"))
+    print("CANCELLED\ntask: %s\nnote: no window opened it; nothing to stop" % task)
+    return 2
 
 
 def orphan(r, why):
@@ -420,7 +155,7 @@ def orphan(r, why):
         stream.seek(0)
         rows = [json.loads(line) for line in stream if line.strip()]
         if not any(row.get("event_id") == r["event_id"] and row.get("task") == r["task"] for row in rows):
-            row = dict(ts=int(time.time()), child_key=r["task"] + ":g" + str(r["generation"]), task=r["task"],
+            row = dict(ts=int(time.time()), child_key=r["task"], task=r["task"],
                        event_id=r["event_id"], state=(r["outcome"].upper() or "WAITING"), summary=r["summary"],
                        parent=r["parent_session"], reason=why)
             stream.write(json.dumps(row) + "\n")
@@ -428,20 +163,17 @@ def orphan(r, why):
 
 
 def receive(file):
+    """A child report a relay carried here (a session that reported before EPIC
+    T497 C8 still has one queued on the hub). The parent by its ID (design §4.3):
+    the window carrying it, whatever native session it runs now; one that has
+    closed hands the report to its successor (down the prev chain), else up its
+    parent (fleet_id_take); nobody ⇒ the person's reminder."""
     envelope = json.loads(Path(file).read_text())
     r = envelope["payload"]["task_report"]
     if envelope["from"] != r["worker_id"] or envelope["to"] != r["parent_session"]:
         raise ValueError("relay task identity mismatch")
-    t = call("get", r["task"])["task"]
-    if (t["owner"], t["generation"], t["execution_owner"], t.get("outcome", "")) != (r["owner"], r["generation"], r["worker_id"], r["outcome"]):
-        print("historical child generation; no delivery"); return 0
-    if any(t.get(k, "" if k != "parent_generation" else 0) != r[k] for k in ("ticket_ref", "parent_task", "parent_session", "parent_generation")):
-        raise ValueError("relay differs from accepted parent/ticket binding")
-    # The parent by its ID (EPIC T497 C4, design §4.3) — the window carrying it, whatever
-    # native session it runs now (a /clear, a handoff, an agent switch keep the ID).
-    # An ID that has closed hands the report to its successor (down the prev chain),
-    # else up its parent (fleet_id_take); nobody ⇒ the person's reminder. No
-    # generation, execution owner or native-process proof gates the delivery.
+    r.setdefault("outcome", "")
+    r.setdefault("summary", "")
     cmd = r''' . "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh"
 task_home=$(fleet_wid_home "wid:$2") || exit 75
 sock=$(fleet_socket "$task_home")
@@ -468,9 +200,10 @@ printf "%s\n%s\n%s\n%s\n" "$sock" "$win" "$dir" "$how"
     if located.returncode:
         return 75
     socket, pane, directory, how = located.stdout.strip().splitlines()
-    native = None
-    # Existing child ledger directory; task + generation is the file's identity.
-    path = Path(directory) / ((r["parent_task"] or r["parent_session"].split("/")[1]) + "-g%d.ndjson" % r["parent_generation"])
+    # The child ledger directory; the parent task (else its ID) names the file,
+    # as the report's producer named it.
+    path = Path(directory) / ((r.get("parent_task") or r["parent_session"].split("/")[1])
+                              + "-g%d.ndjson" % int(r.get("parent_generation") or 0))
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -484,24 +217,12 @@ printf "%s\n%s\n%s\n%s\n" "$sock" "$win" "$dir" "$how"
         sent_key = "task-report:" + hashlib.sha256((r["task"] + ":" + r["event_id"]).encode()).hexdigest()
         if sentfile.exists() and sent_key in sentfile.read_text().splitlines():
             print("already delivered"); return 0
-        msg = "[child-report] %s\nstate: %s · generation %s%s\nsummary: %s\nno reply needed" % (
-            r["task"], (r["outcome"].upper() or "WAITING"), r["generation"],
+        msg = "[child-report] %s\nstate: %s%s\nsummary: %s\nno reply needed" % (
+            r["task"], (r["outcome"].upper() or "WAITING"),
             "" if how == "self" else " · 原 parent 已关闭，代收 (%s)" % how, r["summary"])
-        delivery_env = dict(os.environ)
-        if native:
-            # No sleeper/peer queue can outlive this generation check. An
-            # unavailable inbox leaves the same relay pending on the hub.
-            if native["actual_provider"] == "codex":
-                # Keep the exact generation/native endpoint through the final
-                # send. Re-reading a pane identity alone could target a transfer.
-                delivery_env.update(FLEET_LAUNCH_CONTEXT=json.dumps(c),
-                                    FLEET_LAUNCH_DELIVERY=json.dumps(native))
-                argv = [sys.executable, str(BIN / "fleet-codex-session.py"), "send", "--pane", pane, "--socket", socket]
-            else:
-                argv = ["bash", "-c", '. "$1/fleet-lib.sh"; fleet_peer_send "$2" "$(cat)" fleet-report', "task", str(BIN), str(native["pid"])]
-        else:
-            argv = ["bash", "-c", '. "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh"; children_send "" "$2" "$3" "$(cat)"', "task", str(BIN), socket, pane]
-        delivered = subprocess.run(argv, input=msg, capture_output=True, text=True, timeout=20, env=delivery_env)
+        argv = ["bash", "-c", '. "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh"; children_send "" "$2" "$3" "$(cat)"',
+                "task", str(BIN), socket, pane]
+        delivered = subprocess.run(argv, input=msg, capture_output=True, text=True, timeout=20)
         if delivered.returncode:
             return 75
         with sentfile.open("a") as stream:
@@ -512,7 +233,10 @@ printf "%s\n%s\n%s\n%s\n" "$sock" "$win" "$dir" "$how"
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("action", choices=("children", "await", "closed", "report", "progress", "finalize", "cancel", "release", "receive", "blocker", "blockers"))
+    # report / finalize: compat-1v: 下一批删 — an older caller (a pre-C8 launch
+    # supervisor finalizing on exit, an older fleet-report-parent.sh).
+    p.add_argument("action", choices=("children", "await", "closed", "progress", "cancel", "receive",
+                                      "report", "finalize"))
     p.add_argument("--task", default="")
     p.add_argument("--file", default="")
     p.add_argument("--pane", default=os.environ.get("TMUX_PANE", ""))
@@ -528,35 +252,18 @@ def main():
     p.add_argument("--dry", action="store_true")
     args = p.parse_args()
     try:
-        if args.action == "closed":
-            return closed(args.task)
-        if args.action not in ("receive",) and not args.dry:
-            # Explicit next command, never a resident loop. Failed replay does
-            # not stop a native process or authorize a replacement.
-            from fleet_task_recovery import Journal
-            try:
-                recovery = Journal().replay(budget=5)
-                if recovery["pending"]:
-                    print("RECONCILIATION_PENDING: %d retained receipts" % recovery["pending"], file=sys.stderr)
-            except (ValueError, OSError, subprocess.SubprocessError):
-                pass  # the requested operation below still fails closed
-        if args.action == "blockers": return blockers(args.task)
-        if args.action == "blocker": return blocker(args.pane, json.load(sys.stdin), args.event, args.socket)
+        if args.action == "closed": return closed(args.task)
         if args.action == "children": return children(args.task, args.json)
         if args.action == "await": return wait_task(args.task, max(1, args.timeout), max(1, args.interval))
         if args.action == "progress": return progress(args.pane, args.summary, args.state, args.event, args.socket)
-        if args.action == "report": return report(args.pane, args.state, args.summary, args.pr, args.dry, args.socket, args.outcome)
-        if args.action == "finalize": return finalize(args.pane)
         if args.action == "receive": return receive(args.file)
+        if args.action == "finalize": return 0
+        if args.action == "report":
+            print("ID_SWITCH\nnote: a report is a result of the window's ID (fleet-report-parent.sh)")
+            return 5
         if args.action == "cancel":
             if not args.event: raise ValueError("cancel needs a stable --event")
             return cancel(args.task, args.event)
-        if args.action == "release":
-            if not args.event: raise ValueError("release needs a stable --event")
-            return release(args.task, args.event)
-    except IDSwitched as e:
-        print("ID_SWITCH\nnote: %s" % e)
-        return 5
     except (ValueError, KeyError, OSError, subprocess.SubprocessError) as e:
         print("UNKNOWN\nnote: %s" % e)
         return 75 if args.action == "receive" else 3

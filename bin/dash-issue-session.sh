@@ -166,7 +166,8 @@ RESUME_SID=$(printf '%s' "$RESUME_SID" | LC_ALL=C tr -cd '0-9a-f-')
 case "$AS_ARG" in
   '') ;;
   *[!A-Za-z0-9_.:-]*|[!A-Za-z0-9]*) printf 'dash-issue-session: not an agent name: %s\n' "$AS_ARG" >&2; exit 1 ;;
-esac   # where it may open is decided once the file is found (travels, below)
+  *) [ -z "$NODE_ARG" ] && NODE_ARG=local ;;   # the agent file is on this machine
+esac
 [ "$_want" != agent ] || { printf 'dash-issue-session: --agent needs a value\n' >&2; exit 2; }
 EXPLICIT_AGENT=$AGENT
 case "$ACCOUNT_ARG" in
@@ -287,18 +288,11 @@ unset _r _rc
 # key fills what the spawn left open.
 AS_KV=''; TEMPLATE_AGENT=''
 if [ -n "$AS_ARG" ]; then
+  if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG"; then
+    refuse "#$num: --as $AS_ARG opens on this machine (the agent file is here), not on $NODE_ARG"; exit "$RC_INFRA"
+  fi
   AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>&1) \
     || { refuse "#$num: ${AS_KV##*fleet-agent-def: }"; exit "$RC_INFRA"; }
-  # Only a file this machine alone has pins it here (T604). An issue start the
-  # hub sends elsewhere names no file — that machine starts its own fleet-worker —
-  # so only fleet-worker, as the release carries it (`travels 1`), may be placed.
-  if [ "$AS_ARG" != fleet-worker ] \
-     || [ "$(printf '%s\n' "$AS_KV" | awk -F'\t' '$1 == "travels" { print $2; exit }')" != 1 ]; then
-    if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG"; then
-      refuse "#$num: --as $AS_ARG opens on this machine (the agent file is here), not on $NODE_ARG"; exit "$RC_INFRA"
-    fi
-    [ -z "$NODE_ARG" ] && NODE_ARG=local
-  fi
 elif AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch fleet-worker --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>/dev/null); then
   AS_ARG=fleet-worker
 else
@@ -549,9 +543,7 @@ if [ "$PLACING" = 1 ]; then
     _wait=''; [ "$ASYNC_FLAG" = 1 ] && _wait=0
     python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
     _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
-    # This machine's admission said no (T604): any other machine, never this one.
-    _nothere=''; [ -n "$CAP_HELD" ] && [ "$NODE" = auto ] && _nothere=$(printf '%s' "$CAP_HELD" | head -n 1)
-    place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP" "$_nothere"); place_rc=$?
+    place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
     if [ -s "$_dispatch_result" ]; then
       DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$AGENT" --accepted "$(cat "$_dispatch_result")") || { rm -f "$_dispatch_result"; exit 2; }
       TASK_REF=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')
@@ -704,7 +696,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # pane-scoped knob the tail needs must be BAKED into the command. FLEET_SPAWN_TAIL
   # selects tail-only mode + names the fleet; FLEET_SPAWN_FOCUS is carried through
   # so "focus the new worker when ready" still works (default no-focus otherwise).
-  _bg="FLEET_SPAWN_TAIL=$(shq "$SESS") FLEET_DISPATCH=$(shq "$DISPATCH") FLEET_LAUNCH=$(shq "${FLEET_LAUNCH:-}")"
+  _bg="FLEET_SPAWN_TAIL=$(shq "$SESS") FLEET_DISPATCH=$(shq "$DISPATCH")"
   [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && _bg="$_bg FLEET_SPAWN_FOCUS=1"
   # >/dev/null 2>&1 on the detached tail (belt-and-suspenders for issue #401):
   # `tmux run-shell` DISPLAYS its command's stdout in an Esc-to-dismiss view, so
@@ -825,33 +817,16 @@ stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree 
 # @seed_words (issue #3331): the first turn is the person's words, so the
 # SessionStart hook carries the flow — on the window before its agent starts.
 [ -n "$SEED_WORDS" ] && stamp="$stamp$(fleet_win_stamp_cmd @seed_words "$SEED_WORDS")"
-# An accepted task opening HERE (issue #4754): the hub binds only a remote start,
-# so a local one claims the task itself and carries the same launch binding —
-# refused, never opened unbound.
-if [ -n "$TASK_REF" ] && [ -z "${FLEET_LAUNCH:-}" ]; then
-  _fu=$(fleet_uuid "$SESS" 2>/dev/null) || _fu=''   # none: `local` refuses a tasked dispatch
-  FLEET_LAUNCH=$(printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" local "$_fu") \
-    || { refuse "#$num: $TASK_REF could not be claimed for a local launch"; exit "$RC_INFRA"; }
-  [ -z "$FLEET_LAUNCH" ] || export FLEET_LAUNCH   # empty: the dispatch carries no task
-fi
-if [ -n "${FLEET_LAUNCH:-}" ]; then
-  _launch_fid=$(python3 -c 'import json,os; print(json.loads(os.environ["FLEET_LAUNCH"])["worker_id"].split("/")[1])') || exit 1
-  stamp="$stamp$(fleet_win_stamp_cmd @launch "$FLEET_LAUNCH" @launch_seed "$tf" @fleet_id "$_launch_fid" @dispatch "$DISPATCH" @task "$TASK_REF")"
-elif [ -n "$TASK_REF" ]; then
-  # ID switch on (EPIC T497 C6): as dash-raw-session.sh, before the launch
-  stamp="$stamp$(fleet_win_stamp_cmd @dispatch "$DISPATCH" @task "$TASK_REF")"
-fi
+# A task's record rides on the window before its agent starts (EPIC T497 C8: no
+# claim, no launch binding — the window's ID is the session).
 if [ -n "$TASK_REF" ]; then
-  printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
+  stamp="$stamp$(fleet_win_stamp_cmd @task "$TASK_REF")"
   # The worktree remembers its record (issue #4897): the reapers ask the record,
   # not the issue, whether the work is over (fleet-cleanup.sh, worktree-autoclean.sh).
   fleet_worktree_task_mark "$wt" "$TASK_REF" || :
 fi
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
-# FLEET_ID_DISPATCH: as dash-raw-session.sh (EPIC T497 C6)
-FLEET_ID_DISPATCH="${TASK_REF:+$DISPATCH}" \
-  fleet_repo_authority_guard "$REPO" --finish "$SESS" >/dev/null || { refuse "$FLEET_AUTHORITY_ERROR"; exit "$RC_INFRA"; }
-[ -z "${FLEET_AUTHORITY_START:-}" ] || pend="$pend FLEET_AUTHORITY_START=$(shq "$FLEET_AUTHORITY_START") "
+fleet_repo_authority_guard "$REPO" --finish "$SESS" >/dev/null || { refuse "$FLEET_AUTHORITY_ERROR"; exit "$RC_INFRA"; }
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
        _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"  # issue #2477
@@ -876,8 +851,7 @@ fleet_admit_confirm >/dev/null   # the window is open: its admission holds on it
 #   and the reapers copy it into the history ledger's origin column before the
 #   window dies. @origin_wid: a hub-placed start (issue #1425) was handed its
 #   parent's worker_id outright — the parent lives on another machine.
-if [ -n "${_launch_fid:-}" ]; then _fid=$_launch_fid
-else _fid=$(fleet_fid_mint 2>/dev/null) && fleet_is_fid "$_fid" || _fid=''; fi
+_fid=$(fleet_fid_mint 2>/dev/null) && fleet_is_fid "$_fid" || _fid=''
 _sw=(set-window-option -t "$win" @issue "$num")
 _sw+=(\; set-window-option -t "$win" @born "$(date +%s)")
 _sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-merged}")

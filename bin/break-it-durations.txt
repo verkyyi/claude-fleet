@@ -180,7 +180,6 @@
 0.2 land-squash-unseen
 0.2 last-window
 0.2 launch-binary-renamed
-0.7 launch-receipt-fence
 0.1 lease-unseparated-user
 1.7 linux-admit-burst
 0.6 linux-admit-host-load
@@ -205,7 +204,6 @@
 0.2 linux-stale-lane-door-down
 0.2 linux-tenant-cross-read
 0.2 linux-uid-reuse
-5.2 local-task-unbound
 5.5 login-browser-silent
 1.2 login-remove-dscl-denied
 2.2 login-remove-managed
@@ -232,12 +230,6 @@
 1.4 mirror-private-unlisted
 1.0 module-skip-wrong
 2.2 module-split-digest
-3.1 native-authority-ack
-23.2 native-cleanup-fencing
-0.4 native-continue-mcp-remount
-0.7 native-continue-once
-0.3 native-continue-stop-loop
-0.7 native-observe-missing
 5.6 native-resume-default-permissions
 1.0 new-login-first-run-dialog
 0.5 new-login-unseparated
@@ -325,7 +317,6 @@
 0.5 quarantine-touched
 0.1 reap-other-repo-clears
 0.2 reap-reopen-restarts-clock
-2.3 reap-shadow-race
 0.3 reap-stale-stamp
 0.1 recycle-old-cert
 0.2 recycle-rejoins
@@ -342,10 +333,6 @@
 8.5 release-unverified
 0.1 remove-pending-machine-gone
 13.8 repo-authority-case
-0.7 repo-authority-spelling
-0.2 repo-cutover-inflight
-0.2 repo-cutover-stop-binding
-43.6 repo-start-unobserved
 1.0 report-parent-cleared
 4.9 report-parent-gone
 0.2 restart-done-not-pinned
@@ -363,10 +350,6 @@
 0.4 root-log-in-home
 0.2 route-lan-elsewhere
 3.1 runtime-gc-admin-tree
-1.1 runtime-idle-accept-claude
-0.2 runtime-idle-accept-codex
-0.2 runtime-idle-accept-unavailable
-0.3 runtime-stale-idle
 3.4 sa-token-in-user-pod
 0.5 sandbox-home-real-uid
 0.2 seat-blind-to-homes
@@ -420,14 +403,9 @@
 0.1 svc-usage-crosses-tenant
 0.4 sweep-admin-agent
 2.0 switch-no-session-save
-0.2 task-blocker-fence
-0.2 task-execution-retained-window-gone
 2.1 task-fail-silent
-9.2 task-outage-recovery
-0.1 task-reopen-rebind
 1.7 task-report-fence
 1.8 task-rerun-root-only
-0.2 task-stop-replay-resumed
 0.1 tcc-disclaim-sigpipe
 2.8 tcc-prompt-wedge
 0.6 tenant-admin-adopted
@@ -514,3 +492,4 @@
 2.1 worker-inventory-rs
 0.1 wx-relay-forged
 0.8 mcp-release-path-pinned
+5.0 c8-old-supervisor-reopen

@@ -397,12 +397,6 @@ target_support() {
   HOOKS=$(bash "$BIN/fleet-hooks-emit.sh" --target "$TO" --root "$BIN/..") || die 'cannot materialize target guard hooks'
   case "$HOOKS" in *base-readonly-guard.py*bash-guard.py*|*bash-guard.py*base-readonly-guard.py*) : ;; *) die 'Codex guard hooks are incomplete' ;; esac
 }
-# Accepted task switches use the same authority before any source exit.
-TASK_LAUNCH=$(opt '#{@launch}')
-if [ -n "$TASK_LAUNCH" ]; then
-  python3 "$BIN/fleet_launch.py" --socket "$SOCK" --pane "$PANE" transfer-check \
-    || die 'task launch identity/authority is unavailable; source retained'
-fi
 INPUT_VIEW=''
 if [ "$NOREPO" = 1 ] && [ "$PREPARE" != 1 ]; then
   if ! target_auth; then
@@ -680,10 +674,6 @@ ROLLBACK_VALS=()
 for key in "${ROLLBACK_KEYS[@]}"; do ROLLBACK_VALS+=("$(opt "#{$key}")"); done
 rollback() {
   local why=$1 st note cmd back='' got rest i _recovery=''
-  if [ -n "$TASK_LAUNCH" ]; then
-    python3 "$HELPER" state "$BUNDLE" target_failed "$why; task generation requires explicit recovery" || :
-    die "$why; accepted task retained for recovery — no automatic provider rollback"
-  fi
   # The target's last screen + exit status, before the respawn wipes them; it is
   # private to the package (0600) and never copied into a note or an alert.
   TM capture-pane -p -S - -t "$PANE" > "$BUNDLE/pane-target-failed.txt" 2>/dev/null && chmod 600 "$BUNDLE/pane-target-failed.txt"
@@ -765,10 +755,6 @@ rollback() {
 [ -z "$DFID" ] || python3 "$DURABLE" handed "$DFID" || rollback 'durable handover is not settled'
 # The helper quotes metadata as argv; conversation text is only ever data.
 python3 "$HELPER" launcher "$BUNDLE" "$LAUNCH" || rollback 'cannot write the target launcher'
-if [ -n "$TASK_LAUNCH" ]; then
-  python3 "$BIN/fleet_launch.py" --socket "$SOCK" --pane "$PANE" --target "$TO" --bundle "$BUNDLE" transfer-commit \
-    || die 'task generation transfer was refused/unknown; source stopped, no replacement started'
-fi
 # The source agent's measurement-bus stamps go too — ALL of them (issue #3461:
 # @ctx_left / @ctx_ts / @ctx_src were left behind, so the top line read the old
 # agent's context % until the new one's first reading).

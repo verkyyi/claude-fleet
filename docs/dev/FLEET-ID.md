@@ -1,7 +1,7 @@
 # 一个窗口一个 ID：节点账本与原生段
 
-EPIC T497 的 C1（节点账本）、C2（hub 镜像）、C3（⌘P 面板的编号列）、C4（结果、父子、通信）、C5（EPIC 批次）与 C6（迁移命令与切换开关）。设计页：「会话与 hub 任务（T）的关系 · 设计稿」第 6 版（§3、§4.1、§4.2、§4.6）。
-这一层目前**只双写**：旧 T 记录与执行权照旧，谁都不读这里做决定，直到 C7 打开切换开关。
+EPIC T497 的 C1（节点账本）、C2（hub 镜像）、C3（⌘P 面板的编号列）、C4（结果、父子、通信）、C5（EPIC 批次）、C6（迁移命令与切换开关）与 C8（删执行权层）。设计页：「会话与 hub 任务（T）的关系 · 设计稿」第 6 版（§3、§4.1、§4.2、§4.6、§6）。
+开关 2026-10-20 打开（C7）；C8 起节点上不再有执行权：窗口的 ID 就是会话，任务记录 T<n> 只是派单的 ticket（见文末「C8」）。
 
 ## ID 与短码
 
@@ -57,9 +57,9 @@ fleet-id.sh status|route|children|await|history|continue|reopen …   结果、�
 
 ## 结果、父子、通信（C4，§4.3–§4.5）
 
-- **结果挂在 ID 上**：会话自己的 `report`（`fleet-report-parent.sh`，没有 `--win`；已接任务那条路在
-  `fleet_task_control.py report` 里）在 ID 账本上写一条 `result`（state · summary · pr · agent），
-  可以多次，**最新的算**（S2）；合并检查改判的状态（armed ⇒ waiting）照实写。仍双写旧 T 记录。
+- **结果挂在 ID 上**：会话自己的 `report`（`fleet-report-parent.sh`，没有 `--win`）在 ID 账本上写一条
+  `result`（state · summary · pr · agent），可以多次，**最新的算**（S2）；合并检查改判的状态（armed ⇒ waiting）
+  照实写。任务窗口的 `--outcome` 成为结果状态；任务记录的终态由 hub 读这个 ID 的最新结果（C8 起不再写记录）。
 - **关窗即结束**：fleet 有意关窗（回收 `dash-reap.sh`、合并后 `fleet-cleanup.sh`、`fleet-worker-stop.sh`、
   agent 退出 `session-end-hook.sh`、闲置回收）走 `fleet_win_retire <win> <sock> <why>`，第三个词让账本记 `closed`；
   move / migrate / park 不给 why，ID 在下一个窗口接着用。关了没报过结果 = **已退出**（S7）。
@@ -68,8 +68,8 @@ fleet-id.sh status|route|children|await|history|continue|reopen …   结果、�
 - **接班与转交**（`fleet-id.sh route`，`fleet_id_take`）：发给一个 ID 的回报 / 消息——它开着就给它；
   关了就顺「谁的 prev 是它」找最新的活 ID（接班）；没有就交给它的 `parent`（同样规则往上）；
   再没有 ⇒ 你的提醒（`global/orphan-reports.ndjson`）。本机账本不认识的 ID 走旧路（hub、键）。
-  `fleet-report-parent.sh`、`fleet_task_control.py receive`、`fleet-peer-send.sh T-<code>` 都按它走；
-  已接任务的回报**不再核父任务代次与原生进程**——/clear、交接、换 Agent、重开都不换 ID（BREAK-IT `report-parent-cleared`）。
+  `fleet-report-parent.sh`、`fleet_task_control.py receive`（切换前排着的子回报）、`fleet-peer-send.sh T-<code>`
+  都按它走；回报**不核父任务代次与原生进程**——/clear、交接、换 Agent、重开都不换 ID（BREAK-IT `report-parent-cleared`）。
 - **父子**：两个派单入口开账本时记 `--parent`（派它的会话的 ID，`fleet_spawn_parent_id`：交来的 worker_id 的后半；
   否则 `--origin` 本身就是 ID 时就是它——编排、驱动、no-repo 会话这类没有键的父会话，`task` 派单都走这条；
   否则那个键对上的唯一窗口的 ID。hub 派的没有父）；`fleet-id.sh children <ID>` /
@@ -192,14 +192,29 @@ Tab 操作页在动作下面列出：编号 + 完整 ID、别名、每一段（a
   ID 还开着 ⇒ ID_SWITCH（到那个窗口去收），ID 关了但留下结果 ⇒ 409 冲突（它已按 ID 的结果结束）；有 owner 的照旧拒。
   已排队的子回报照常送给父会话（不丢）；记录的终态改读它对应 ID 的最新结果（`IDTaskOutcome`：窗口 `opened` 记的 `task`，
   或迁移给活窗口加的别名；merged/succeeded ⇒ succeeded，failed ⇒ failed），所以 `await T<n>`、回收、⌘P 照常。
-- 节点把 hub 的话记在 `ids/.switch`：清理 tick 每轮问一次，任何一次被 ID_SWITCH 拒收也写下（`fleet-task-record.sh`）。
-  开：派单开窗不认领（`fleet_launch.py local` / `admit`），`fleet_task_control.py report` 答 5，`fleet-report-parent.sh`
-  把回报写成窗口 ID 的结果（`--outcome` 成为结果状态，PR 照旧核 merged）。关回来：带 `@launch` 的窗口照走旧路。
-  来回切不丢会话：窗口、ID、账本都不动（BREAK-IT `id-switch-flip-report`）。
-  开着时重开一个切换前开的窗口（带 `@launch`：退出页 ↵、版本过期重开、恢复）也走 ID：`fleet_launch.py supervise`
-  不问任务记录，窗口的 `@fleet_id` 就是这次会话，按账本最新段 resume 原生会话（provider、worktree、原进程已不在照核），
-  不 publish、不 finalize；对不上就以 `ID road · <项>` 说出是哪一项（C15，BREAK-IT `launch-preswitch-reopen`）。
-- 打开开关（迁移 `--apply` + `switch on`，§5.1 第 5 步）由操作者 MacBook 上、不在任何 fleet 里的会话来做（C7），照 [ID-SWITCH.md](ID-SWITCH.md) 做；出问题 `switch off` 回退，旧表没删、写侧双写还在。
+- 节点把 hub 的话记在 `ids/.switch`：清理 tick 每轮问一次。C8 起只用来显示——节点上的每条路都按「开」走（下节）。
+- 打开开关（迁移 `--apply` + `switch on`，§5.1 第 5 步）由操作者 MacBook 上、不在任何 fleet 里的会话来做（C7），照 [ID-SWITCH.md](ID-SWITCH.md) 做。
+  C8 之后关掉开关**不再是回退**：节点上已没有旧路。
+
+## C8：执行权层删掉之后（设计页 §6 A / B）
+
+- **门是「窗口有 ID」**：派单开窗不认领、不签启动合约、不做本机启动预留；`fleet_repo_authority.py --gate|--finish`
+  只问这个人的任务权限（frozen 拒，读不到拒，从不回退），`--supervise` 直接起启动器、去掉退役层的环境
+  （`FLEET_LAUNCH*` · `FLEET_AUTHORITY_*` · `FLEET_ID_DISPATCH`）。
+- **回报**：任务窗口的回报是它的 ID 的结果（`fleet-report-parent.sh`）；`fleet_task_control.py` 只剩读
+  （`closed` · `await` · `children`）、EPIC 驱动的进度词（写在 ID 上）、取消「没有窗口开过」的记录、
+  和送达切换前排着的子回报（`receive`）。
+- **删掉的**：启动证明（`fleet_launch.py` 的回执、扣首轮、rebind、transfer 的代次移交）、回执重放与 release
+  （`fleet_task_recovery.py`）、Codex 执行权登记（`fleet_native_registration.py`）、存活会话补登记与一次续接
+  （`fleet_native_observe.py` · `fleet_native_continue.py`）、回收影子与状态证据（`fleet_reap_shadow*.py` ·
+  `fleet_status_evidence.py`，⌘P 的「状态证据」）、`fleet_runtime.py` 的观察与条件接受、`LaunchWitness`、
+  `dash-raw-session.sh --native-worktree`（它的准入就是启动证明 / 本机预留）。进程与工作树的身份读法留在
+  `fleet_native_proc.py`。
+- **老会话兼容一个版本**（compat-1v）：`fleet_launch.py` 是转发——还跑着旧 `fleet-session-wrap.sh` 的会话调
+  `fleet_launch.py supervise`，它拿掉窗口的 `@launch*` 选项、走普通路；新包装器见 `@launch` 也一样。切换前开的、
+  旧启动监督进程还在的窗口在 C8 版本上重开（ver-stale、↵、恢复）是同一个窗口、同一个 ID（BREAK-IT
+  `c8-old-supervisor-reopen`）。`fleet_runtime.py event` 安静收下（旧 mod），`fleet_task_control.py report` 答 5、
+  `finalize` 答 0（旧监督进程退出时调）。
 
 `bin/fleet-id-migrate-selftest.sh` 钉节点这一半；hub 那一半是 `hub/store/fleet_id_migrate_test.go`（§5 样例表逐条、
 反例、apply 一次、开关两轮）与 `hub/api/fleet_id_migrate_test.go`（机器只问一次、失联不动、开关两轮下旧路拒收、记录读 ID 的结果）。

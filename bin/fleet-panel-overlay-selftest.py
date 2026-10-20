@@ -287,50 +287,17 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(len(self.actions()), count)
         self.evidence.append("PASS numbers run on the page's row; [ ] steps; esc from a question returns to the page; a vanished source refuses")
 
-    def test_real_producer_cache_roundtrip(self):
-        import runpy
-        import fleet_reap_shadow
-        import fleet_status_evidence
-        b = runpy.run_path(str(BIN / "fleet-reap-shadow-selftest.py"))["fixture"]()
-        proof = fleet_reap_shadow.project(b, now=101)
-        fid = proof["identity"]["worker_id"].split("/")[1]
-        wid = self.tm("display-message", "-p", "-t", "test", "#{window_id}").strip()
-        for name, value in (("@fleet_id", fid), ("@claude_state", "done"), ("@norepo", "1")):
-            self.tm("set-option", "-w", "-t", wid, name, value)
+    def test_view_cache_is_private(self):
+        # The view's own row cache is the person's: never world-readable.
         cache = self.root / "tmp" / ".claude-dash" / "global"
         cache.mkdir(parents=True)
-        path = cache / ("status-proof-test-" + fid)
-        path.write_text(json.dumps(proof) + "\n")
-        env = dict(os.environ, HOME=str(self.root / "home"), TMPDIR=str(self.root / "tmp"),
-                   FLEET_CONF_DIR=str(self.root / "conf"), FLEET_STATUS_G=str(cache),
-                   FLEET_SESSION="test", FLEET_ROWS_UNFOLD="1", TMUX=str(self.root / "sock") + ",0,0")
-        env.pop("TMUX_PANE", None)
-        produced = subprocess.check_output(["bash", str(BIN / "tmux-dashboard-rows.sh"), "--rows"],
-                                          env=env, text=True, timeout=15)
-        matches = [line.split(v.US) for line in produced.split("\n") if line.startswith(wid + v.US)]
-        self.assertTrue(matches, repr(produced))
-        row = matches[0]
-        self.assertEqual(json.loads(row[20]), proof)
-        # The view's second cache must not make a private proof world-readable.
         view_cache = cache / "view-rows-test"
         view_cache.write_text("old public cache")
         view_cache.chmod(0o644)
-        v.atomic_write(view_cache, produced)
+        v.atomic_write(view_cache, "rows\n")
         self.assertEqual(view_cache.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(view_cache.read_text(), produced)
-        with patch.object(v, "view_row", return_value={}), patch.object(v, "view_fleet", return_value="test"), \
-                patch.object(v, "windows", return_value={wid: (fid, "worker", 0)}), \
-                patch.object(v, "produce", return_value=produced), patch.object(v, "names_raw", return_value={}), \
-                patch.object(v, "fleet_only_slug", return_value=""), patch.object(v, "gone_text", return_value=""), \
-                patch.object(v, "fleet_logins", return_value={}), patch.object(v, "conf_word", return_value=""), \
-                patch.object(v, "hub_age", return_value=None):
-            parsed = next(e for e in v.entries("test", hub=False) if e.get("target") == wid)
-        self.assertEqual(parsed["status_proof"], proof)
-        display = fleet_status_evidence.project(parsed["status_proof"], now=102)
-        self.assertTrue(all(r["state"] == "unknown" for r in display["rows"]))
-        self.assertEqual(display["rows"][0]["observed_at"], 100)
-        self.assertEqual(json.loads(path.read_text()), proof)
-        self.evidence.append("PASS real producer cache -> optional column 21 -> parser; original times retained; missing current binding unknown")
+        self.assertEqual(view_cache.read_text(), "rows\n")
+        self.evidence.append("PASS the view's row cache is written 0600")
 
     def test_mouse_clicks_a_page_item_once(self):
         self.keys("Tab")

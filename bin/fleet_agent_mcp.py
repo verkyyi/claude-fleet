@@ -325,7 +325,7 @@ def _expand(nodes, env):
 # env_vars + env (issue #4537: real app-server, every hook in its environment,
 # none reached the child; one named in env_vars did). Another release gets no
 # shell-exec identity until it is measured and added here.
-SHELL_EXEC_CODEX = ('0.160.1', '0.162.1')   # 0.162.1: bin/fleet_native_continue_native_test.py (#4775)
+SHELL_EXEC_CODEX = ('0.160.1', '0.162.1')   # 0.162.1: measured in #4775
 
 
 def codex_version(client):

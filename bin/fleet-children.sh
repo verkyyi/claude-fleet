@@ -81,9 +81,6 @@ fi
 # Accepted parents read the task graph. No local key/cache fallback on outage.
 task_parent=''
 case "$KEY" in T[1-9]*) task_parent="$KEY" ;; esac
-if [ -z "$KEY" ] && [ -n "$(fleet_pane_fmt '#{@launch}')" ]; then
-  task_parent=$(fleet_pane_fmt '#{@task}')
-fi
 if [ -n "$task_parent" ]; then
   [ "$SINCE" = 0 ] || { printf 'fleet-children: --since is a legacy ledger cursor; omit it for task children\n' >&2; exit 2; }
   task_args=(children --task "$task_parent")

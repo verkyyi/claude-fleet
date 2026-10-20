@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
-# Keep fleet_transfer_source.py (fleet-transfer-source-selftest.py) paired with missing/untrusted auth refusals.
 """Transfer auth uses the target tenant's proxy, without exporting credentials."""
 import base64
 import importlib.util

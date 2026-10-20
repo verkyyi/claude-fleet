@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Real wrapper/rollback recipe, isolated tmux and HTTP authority; fake native."""
+"""Real wrapper/rollback recipe, isolated tmux and HTTP authority; fake native.
+
+EPIC T497 C8: a window's start is admitted by its ID — the wrapper asks the hub
+nothing, and a window stamped by the retired launch proof (or a pre-C8 wrapper
+still calling fleet_launch.py supervise) reopens as itself."""
 import http.server
 import json
 import os
@@ -32,7 +36,7 @@ class CredentialStartTests(unittest.TestCase):
         self.install = self.root / 'bin'
         self.install.mkdir()
         for name in ('fleet-session-wrap.sh', 'fleet-lib.sh', 'fleet-client-core.sh', 'usage-lib.sh', 'fleet-lang.sh',
-                     'fleet_repo_authority.py', 'fleet_hub_rest.py', 'fleet_launch.py'):
+                     'fleet_repo_authority.py', 'fleet_hub_rest.py', 'fleet_launch.py', 'fleet_native_proc.py'):
             shutil.copy2(BIN / name, self.install / name)
         self.requests = []
         self.reads = []
@@ -85,7 +89,7 @@ class CredentialStartTests(unittest.TestCase):
         native.write_text('#!' + sys.executable + '\n' + '''import json, os, pathlib, sys
 pathlib.Path(os.environ['NATIVE_RECORD']).write_text(json.dumps(dict(
     argv=sys.argv[1:], cwd=os.getcwd(), pid=os.getpid(), executable=sys.executable,
-    context=json.loads(os.environ['FLEET_AUTHORITY_CONTEXT']))))
+    env={k: v for k, v in os.environ.items() if k.startswith(('FLEET_LAUNCH', 'FLEET_AUTHORITY'))})))
 sys.exit(37)
 ''')
         native.chmod(0o755)
@@ -124,49 +128,57 @@ sys.exit(37)
             time.sleep(.05)
         self.fail('wrapper did not finish: ' + self.tm('capture-pane', '-p', '-t', self.pane))
 
-    def assert_admitted(self, expected):
+    def assert_started(self, expected):
         self.assertTrue(self.native_record.exists(), self.tm('capture-pane', '-p', '-S', '-', '-t', self.pane))
         record = json.loads(self.native_record.read_text())
         self.assertEqual(record['argv'], expected)
         self.assertEqual(record['cwd'], str(self.worktree))
-        self.assertEqual(record['context']['worker_id'],
-                         '11111111-1111-4111-8111-111111111111/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
-        # The fixture native exits with no receipt: the start is closed on the
-        # hub as never observed (issue #4792), same reservation, same worker.
-        self.assertEqual([r[2]['action'] for r in self.requests], ['reserve', 'begin', 'unobserved'])
-        self.assertEqual(self.requests[2][2]['reservation'], self.requests[1][2]['reservation'])
-        self.assertEqual(self.requests[2][2]['worker_id'], self.requests[1][2]['worker_id'])
-        self.assertEqual(self.order, ['reserve', 'read', 'begin', 'unobserved'])
-        self.assertEqual(len(self.reads), 1)
-        self.assertEqual(self.reads[0][1:], ('Bearer fixture-node',
-                         {'repo': ['org/a'], 'reservation': [self.reservation]}))
-        self.assertEqual(self.requests[0][2]['reservation'], self.requests[1][2]['reservation'])
-        self.assertTrue(all(r[0].startswith('/v1/fleet/authority/start?repo=org%2Fa') and
-                            r[1] == 'Bearer fixture-node' for r in self.requests))
-        # A fake native has no hook receipt: admission may succeed, but uncertainty
-        # must NOT turn into a fabricated stopped/observe report.
-        self.assertIn('execution retained', self.tm('capture-pane', '-p', '-S', '-', '-t', self.pane))
+        # No reservation, no claim, no observation: the hub is not asked, and no
+        # retired layer's environment reaches the agent.
+        self.assertEqual((self.requests, self.reads), ([], []))
+        self.assertEqual(record['env'], {})
+        self.assertEqual(self.tm('display-message', '-p', '-t', self.pane, '#{@fleet_id}'),
+                         'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
         self.assertEqual((self.worktree / 'uncommitted').read_text(), 'preserved work\n')
 
-    def test_legacy_wrapper_start_from_url_only_tmux(self):
+    def stamp_pre_c8_launch(self):
+        # A window a launch proof stamped before C8 (T505's @1156, the T497
+        # driver's @1052): @launch and its receipt, its task.
+        launch = dict(version=1, task='T505', worker_id='11111111-1111-4111-8111-111111111111/'
+                      'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', provider='codex')
+        for key, value in (('@launch', json.dumps(launch)), ('@launch_receipt', json.dumps(dict(launch, pid=1))),
+                           ('@launch_started', '1'), ('@launch_error', 'old'), ('@task', 'T505')):
+            self.tm('set-option', '-w', '-t', self.pane, key, value)
+
+    def assert_launch_retired(self):
+        for key in ('@launch', '@launch_receipt', '@launch_started', '@launch_error'):
+            self.assertEqual(self.tm('display-message', '-p', '-t', self.pane, '#{%s}' % key), '', key)
+        self.assertEqual(self.tm('display-message', '-p', '-t', self.pane, '#{@task}'), 'T505')
+
+    def test_wrapper_start_asks_the_hub_nothing(self):
         args = ['--agent', 'codex', 'fixture task']
         self.launch([str(self.install / 'fleet-session-wrap.sh'), *args])
-        self.assert_admitted(args)
+        self.assert_started(args)
 
-    def test_bound_resume_launches_from_saved_worktree_not_wrapper_cwd(self):
-        self.tm('set-option', '-w', '-t', self.pane, '@worktree', str(self.worktree))
+    def test_pre_c8_launch_window_reopens_as_itself(self):
+        # A version-stale reopen of a window an old launch supervisor ran: the
+        # same window, the same ID, its conversation resumed — not refused, not new.
+        self.stamp_pre_c8_launch()
         args = ['--agent', 'codex', 'resume', 'fixture-session']
-        self.launch([str(self.install / 'fleet-session-wrap.sh'), *args], directory=self.main)
-        self.assert_admitted(args)
-        binding = json.loads(self.native_record.read_text())['context']['worktree']
-        self.assertEqual(binding['root'], str(self.worktree))
-        self.assertEqual(binding['common_dir'], str(self.main / '.git'))
+        self.launch(['env', 'FLEET_LAUNCH_CONTEXT={"version":1}', 'FLEET_LAUNCH_SUPERVISOR=1',
+                     'FLEET_AUTHORITY_CONTEXT={}', str(self.install / 'fleet-session-wrap.sh'), *args])
+        self.assert_started(args)
+        self.assert_launch_retired()
 
-    def test_bound_main_checkout_refuses_without_admission_or_native(self):
-        self.tm('set-option', '-w', '-t', self.pane, '@worktree', str(self.main))
-        self.launch([str(self.install / 'fleet-session-wrap.sh'), '--agent', 'codex'])
-        self.assertFalse(self.native_record.exists())
-        self.assertEqual(self.requests, [])
+    def test_an_older_wrapper_through_the_retired_supervisor(self):
+        # A session still running a pre-C8 fleet-session-wrap.sh calls
+        # `fleet_launch.py supervise -- <launcher> …` for its @launch window.
+        self.stamp_pre_c8_launch()
+        args = ['--agent', 'codex', 'resume', 'fixture-session']
+        self.launch([sys.executable, str(self.install / 'fleet_launch.py'), 'supervise', '--',
+                     str(self.root / 'fixture-native'), *args])
+        self.assert_started(args)
+        self.assert_launch_retired()
 
     def test_same_session_source_rollback_from_url_only_tmux(self):
         transcript = self.root / 'source.jsonl'
@@ -180,19 +192,9 @@ sys.exit(37)
             '--launcher', str(self.install / 'fleet-session-wrap.sh'), '--handle', 'a1', '--issue', '1',
             '--origin', 'scratch-1', '--repo', 'org/a', '--source-agent', 'codex'))
         self.launch(['bash', str(packet / 'resume-source.sh'), '--run-source'])
-        self.assert_admitted(['--agent', 'codex', '--codex-home', '', 'resume', 'source'])
+        self.assert_started(['--agent', 'codex', '--codex-home', '', 'resume', 'source'])
         self.assertEqual((packet / 'source.jsonl').read_bytes(), transcript.read_bytes())
         self.assertEqual(json.loads((packet / 'manifest.json').read_text())['source']['session_id'], 'source')
-
-    def test_explicit_invalid_pair_refuses_before_native(self):
-        self.status = 401
-        self.tm('set-environment', '-g', 'CCQUOTA_HUB_URL', self.endpoint)
-        self.tm('set-environment', '-g', 'CCQUOTA_TOKEN', 'fixture-invalid')
-        self.launch([str(self.install / 'fleet-session-wrap.sh'), '--agent', 'codex'])
-        self.assertFalse(self.native_record.exists())
-        self.assertEqual(len(self.requests), 1)
-        self.assertEqual(self.requests[0][1], 'Bearer fixture-invalid')
-        self.assertEqual(self.requests[0][2]['action'], 'reserve')
 
 
 if __name__ == '__main__':

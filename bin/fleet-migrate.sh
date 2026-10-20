@@ -505,32 +505,6 @@ migrate_one_body() {
       || { bgerr=$(tail -1 "$MIGRATE_TMP/bg.err" 2>/dev/null); bgjson=""; }
     [ "$(bg_count "$bgjson")" -gt 0 ] || bgjson=""
   fi
-  # A hub task's session (@launch, claude-fleet#4974) is the SAME executor in its
-  # new window: its launch binding rides the move — stamped before the launcher
-  # reads it — and fleet_launch.py supervise resumes it as the one the record
-  # names; without it the new window was a fresh start the hub refused (409), and
-  # the session was gone. Asked BEFORE the /exit: the record must still name this
-  # window's live native (transfer-check), or the session is left running.
-  local tlaunch tlr='' tl_why='' tlstamp='' ttask=''
-  tlaunch=$(wopt "$wid" '#{@launch}')
-  if [ -n "$tlaunch" ]; then
-    local tl_rc
-    if [ -n "${FLEET_MIGRATE_TASK_CHECK:-}" ]; then   # selftest seam: <socket> <window>, rc 0 = bound
-      tl_why=$("$FLEET_MIGRATE_TASK_CHECK" "$SOCK" "$wid" 2>&1 >/dev/null); tl_rc=$?
-    else tl_why=$(python3 "$BIN/fleet_launch.py" --socket "$SOCK" --pane "$wid" transfer-check 2>&1 >/dev/null); tl_rc=$?; fi
-    if [ "$tl_rc" = 0 ]; then tl_why=''
-    else tl_why=$(printf '%s' "$tl_why" | tail -n 1); tl_why=${tl_why#launch: }; tl_why=${tl_why:-the task binding check failed}; fi
-    tlr=$(wopt "$wid" '#{@launch_receipt}')
-    local tlo tlv tlpairs=(@launch "$tlaunch" @launch_receipt "$tlr" @launch_started 1)
-    for tlo in @fleet_id @worktree @native_worktree @task @task_flow @dispatch @agent_def; do
-      tlv=$(wopt "$wid" "#{$tlo}"); [ -n "$tlv" ] && tlpairs+=("$tlo" "$tlv")
-    done
-    tlstamp=$(fleet_win_stamp_cmd ${tlpairs[@]+"${tlpairs[@]}"})
-    ttask=$(wopt "$wid" '#{@task}')
-  fi
-  if [ "$DRY" = 1 ] && [ -n "$tl_why" ]; then
-    say "    ! task binding: $tl_why — would be left running"
-  fi
   if [ "$DRY" = 1 ] && [ "${AGENT:-claude}" = codex ]; then
     say "  ↻ $name ($wid) [codex · $cxhome] would /exit launcher $cpid and codex resume ${sid%%-*}… in $cwd${nudge:+ (nudged)}"
     return 0
@@ -543,12 +517,6 @@ migrate_one_body() {
       else say "    no background commands to stop"; fi
     fi
     return 0
-  fi
-  if [ -n "$tl_why" ]; then
-    say "  – $name ($wid): task binding: $tl_why — left running (its record must still name this session)"
-    [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event ${SOCK:+-L "$SOCK"} transfer-refused \
-      "$name: 未重开：hub 任务的绑定对不上，原会话留着 · not reopened: $tl_why" >/dev/null 2>&1 || :
-    skipped=$((skipped+1)); return 0
   fi
   if [ -n "$bgjson" ]; then
     bgdir="$MIGRATE_TMP/bg-${wid//[^A-Za-z0-9]/_}"; mkdir -p "$bgdir"
@@ -645,16 +613,11 @@ migrate_one_body() {
   # fleet-claude.sh sees an explicit model and skips its FLEET_MODEL default.
   local mflag=""; [ -n "$MODEL" ] && mflag=" --model '$MODEL'"
   local cmd="'$LAUNCH'$mflag --resume '$sid'${nudge:+ '$nudge'} || '$LAUNCH'$mflag; exec \$SHELL"
-  # A hub task's session never falls back to a fresh start (the record names this
-  # conversation): the resume once more after a breath — the old launch's stop
-  # reconciliation may still hold its native fence — then the shell.
-  [ -z "$tlaunch" ] || cmd="'$LAUNCH'$mflag --resume '$sid'${nudge:+ '$nudge'} || { sleep 3; '$LAUNCH'$mflag --resume '$sid'; }; exec \$SHELL"
   # Codex (issue #1896): `codex resume <thread>` in the SAME home — fleet-codex.sh
   # turns `--resume` into the native verb; the explicit --agent keeps it Codex.
   if [ "${AGENT:-claude}" = codex ]; then
     local cxh; cxh=$(printf '%s' "$cxhome" | tr -d "'")
     cmd="'$LAUNCH' --agent codex --codex-home '$cxh' --resume '$sid'${nudge:+ '$nudge'} || '$LAUNCH' --agent codex --codex-home '$cxh'; exec \$SHELL"
-    [ -z "$tlaunch" ] || cmd="'$LAUNCH' --agent codex --codex-home '$cxh' --resume '$sid'${nudge:+ '$nudge'} || { sleep 3; '$LAUNCH' --agent codex --codex-home '$cxh' --resume '$sid'; }; exec \$SHELL"
   fi
   # 3. the SessionEnd hook closes the window (and records the ledger row) …
   for ((i=1; i<=CLOSE_WAIT; i++)); do
@@ -685,8 +648,9 @@ migrate_one_body() {
     [ "$norepo" = 1 ] && stamp=$(fleet_win_stamp_cmd @norepo 1 ${nsid:+@norepo_sid "$nsid"})
     # Before the launcher runs, as a spawn stamps them (a set-option after
     # new-window would race it).
-    stamp="$stamp$(fleet_win_stamp_cmd @fleet_role "$role" ${cpairs[@]+"${cpairs[@]}"})"
-    stamp="$stamp$tlstamp"   # a hub task's binding (#4974): before the launcher reads @launch
+    # Its ID and worktree too (EPIC T497 C8): the same session, before its
+    # launcher and hooks look for them.
+    stamp="$stamp$(fleet_win_stamp_cmd @fleet_role "$role" ${cpairs[@]+"${cpairs[@]}"} ${fid:+@fleet_id "$fid"} ${wt:+@worktree "$wt"})"
     nw=$(TM new-window -d -t "$SESS:" -n "$name" -c "$cwd" -P -F '#{window_id}' "$stamp$cmd" 2>/dev/null)
     # Stamped first thing (issue #870): a cold `claude --resume` takes seconds to
     # render the old wall, this takes one tmux call.
@@ -761,8 +725,6 @@ migrate_one_body() {
   [ -n "$ncp" ] && TM clear-history -t "$nw" 2>/dev/null
   if [ -z "$ncp" ]; then
     say "  ? $name ($wid → $nw): resumed window opened but no Claude seen within ${BOOT_WAIT}s — check it"
-    [ -z "$tlaunch" ] || { [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event ${SOCK:+-L "$SOCK"} transfer-refused \
-      "$name: hub 任务会话重开后没起来（${ttask:-?}），请看 $nw · reopened task session did not start" >/dev/null 2>&1 || :; }
   else
     say "  ✓ $name ($wid → $nw): ${label:-own login} → ${nl:-own login}${MODEL:+ on $MODEL} (pid $ncp, session ${sid%%-*}…)"
   fi

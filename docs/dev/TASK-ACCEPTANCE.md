@@ -4,6 +4,11 @@ This is the repeatable C9 procedure for [EPIC #4390](https://github.com/verkyyi/
 It preserves #3570's **7/7 automated fixture** baseline and adds twelve contract
 rows. A fixture pass is never a deployed-version or live-provider claim.
 
+EPIC T497 C8 retired the launch proof and the task-receipt journal: the fixture
+run no longer has its `launch` and `recovery` boundaries, and row A2 (reconnect
+and adapter restart — a launch's receipt replayed) left with them. The rows below
+keep their numbers; A2's live steps are history.
+
 ## Automated fixture run
 
 [task-acceptance.yml](../../.github/workflows/task-acceptance.yml) is the complete
@@ -59,7 +64,7 @@ No load generator is needed. If a later live drill requires load, use only
 
 The `task-acceptance-fixtures` CI artifact contains:
 
-- `acceptance.json`: A1–A12, each linked to executed boundary records; separate
+- `acceptance.json`: A1 and A3–A12, each linked to executed boundary records; separate
   fixture and live statuses. Live always starts **NOT RUN**.
 - `provenance.json` and `deny-policy.json`: source SHA, binary hashes, UTC time,
   network policy and the independent merged/deployed/live columns.

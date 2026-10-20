@@ -18,12 +18,10 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import signal
 import time
-import uuid
 
 import fleet_hub_rest as hubrest
-import fleet_launch as launch
+import fleet_native_proc as proc
 
 BIN = Path(__file__).resolve().parent
 
@@ -130,7 +128,6 @@ def sync(repo=None):
 
 
 NATIVE_KEYS = ("worker_id", "native_session", "pid", "birth", "executable")
-START_KEYS = ("reservation", "repo", "owner", "endpoint_id", "worker_id")
 
 
 def init_new(repo):
@@ -142,45 +139,6 @@ def init_new(repo):
     print("task authority: a new repo selects nothing — it is this login's person's (issue #4901)", file=sys.stderr)
 
 
-def check_start_ack(expected, ack, phase, proof=None):
-    if (not isinstance(expected, dict)
-            or any(not isinstance(expected.get(k), str) or not expected[k] for k in START_KEYS)
-            or not isinstance(ack, dict) or set(ack) - set(START_KEYS) - {'phase', 'native_identity'}
-            or any(not isinstance(ack.get(k), str) or not ack[k] for k in START_KEYS)
-            or any(ack.get(k) != expected[k] for k in START_KEYS)
-            or ack.get('phase') != phase
-            or ack.get('native_identity') != proof):
-        raise ValueError('authority acknowledgement differs from the exact admission/execution')
-    return ack
-
-
-def reserved_scope(repo, key, worker):
-    # Only read BEFORE begin. GET on an observed successor belongs to #4510's
-    # recovery fence and deliberately rejects competing history (even stopped).
-    row = hubrest.api('GET', '/authority/start', query={'repo': repo, 'reservation': key})
-    if (not isinstance(row, dict) or set(row) - set(START_KEYS) - {'phase', 'native_identity'}
-            or any(not isinstance(row.get(k), str) or not row[k]
-                   for k in ('repo', 'reservation', 'owner', 'endpoint_id'))
-            or row['repo'] != repo_identity(repo) or row['reservation'] != key
-            or row.get('worker_id') or row.get('native_identity') or row.get('phase') != 'reserved'):
-        raise ValueError('independent reserved admission unavailable; no begin authorized')
-    return dict(row, worker_id=worker)
-
-
-def stopped_receipt(path, authority):
-    proof = json.loads(Path(path).read_text())
-    for key in ("worker_id", "native_session", "birth", "executable"):
-        if not isinstance(proof.get(key), str) or not proof[key]:
-            raise ValueError("stop acknowledgement needs a saved native identity receipt")
-    if type(proof.get("pid")) is not int or proof["pid"] <= 0:
-        raise ValueError("invalid native PID")
-    owners = [o for o in authority.get("legacy_owners", []) if o.get("worker_id") == proof["worker_id"]]
-    if not owners or any(not o.get("native_identity") or any(
-            o["native_identity"].get(k) != proof[k] for k in NATIVE_KEYS) for o in owners):
-        raise ValueError("native receipt is unbound or differs from the frozen owner; refresh the manifest")
-    return prove_stopped(proof)
-
-
 def prove_stopped(proof):
     # Permission/probe failure is UNKNOWN. Only ESRCH or a positively observed
     # different identity confirms the witnessed process stopped.
@@ -189,46 +147,26 @@ def prove_stopped(proof):
     except ProcessLookupError:
         pass
     else:
-        observed = launch.process(proof["pid"])
-        if launch.same_identity(observed, proof):
+        observed = proc.process(proof["pid"])
+        if proc.same_identity(observed, proof):
             raise ValueError("native execution is still alive")
     proof["execution_stopped"] = True
     return proof
 
 
 def gate(repo, finish):
-    # The person's authority decides (issue #4901); the repo only names the
-    # local start the last gate reserves, and the accepted task it must match.
-    repo = repo_identity(repo)
+    # The person's authority decides (issue #4901): frozen refuses every start,
+    # unknown is never a fallback. Nothing is claimed or reserved any more (EPIC
+    # T497 C8, design §6 B): a window's start is admitted by its own ID, which
+    # every spawner stamps before its agent runs. <finish> is the spawner's last
+    # look before the window opens — the same question, asked again.
+    repo_identity(repo)
     a = hubrest.api("GET", "/authority", query={"gate": "1"})
     if not isinstance(a, dict) or a.get("mode") not in ("legacy", "frozen", "hub"):
         raise ValueError("task authority is unknown; no local fallback")
     if a["mode"] == "frozen":
         raise ValueError("your dispatch is frozen; drain/cutover must finish first")
-    ref = ""
-    if a["mode"] == "hub":
-        if os.environ.get("FLEET_LAUNCH"):
-            c = launch.validate_context(json.loads(os.environ["FLEET_LAUNCH"]))
-            t = launch.current_task(c)
-            if repo_identity(t.get("repo", "")) != repo:
-                raise ValueError("accepted task belongs to another repo")
-            ref = t.get("ticket_ref", "")
-        elif finish and os.environ.get("FLEET_ID_DISPATCH") and launch.id_switch_on():
-            # EPIC T497 C6: the switch opens a task's window with its ID and no
-            # claim; the hub's accepted record is the admission (the spawner
-            # hands the dispatch over for this one check)
-            t = launch.id_admission(json.loads(os.environ["FLEET_ID_DISPATCH"]))
-            if repo_identity(t.get("repo", "")) != repo:
-                raise ValueError("accepted task belongs to another repo")
-            ref = t.get("ticket_ref", "")
-        elif finish:
-            raise ValueError("hub authority requires an accepted, verified launch; no local fallback")
-    result = dict(mode=a["mode"], ticket_ref=ref)
-    if finish and a["mode"] == "legacy" and not os.environ.get("FLEET_LAUNCH"):
-        key = str(uuid.uuid4())
-        start = start_call(repo, key, "reserve")
-        result["reservation"] = start["reservation"]
-    print(json.dumps(result))
+    print(json.dumps(dict(mode=a["mode"], ticket_ref="")))
 
 
 def start_call(repo, key, action, **fields):
@@ -236,202 +174,21 @@ def start_call(repo, key, action, **fields):
                       body=dict(action=action, reservation=key, **fields))
 
 
-def observe_native(payload, codex_identity=None):
-    raw = os.environ.get("FLEET_AUTHORITY_CONTEXT")
-    if not raw or payload.get("hook_event_name") != "SessionStart":
-        return
-    c = json.loads(raw)
-    if os.environ.get('FLEET_CODEX_LAUNCHER_PID'):
-        from fleet_native_registration import observe
-        return observe(payload, codex_identity)
-    native = launch.native_parent()
-    if not launch.valid_uuid(payload.get("session_id")) or not launch.root_native(native, c["supervisor"]):
-        raise ValueError("local reservation does not own this native execution")
-    if native.get('actual_provider') == 'codex':
-        raise ValueError('Codex authority requires its verified launcher binding')
-    # Keep the original four-field authority context contract unchanged (#4510).
-    expected = json.loads(os.environ.get('FLEET_AUTHORITY_ADMISSION', '{}'))
-    if any(expected.get(k) != c[k] for k in ('reservation', 'worker_id')) \
-            or expected.get('repo') != repo_identity(c['repo']):
-        raise ValueError('admission context differs')
-    binding = c.get("worktree")
-    intent = c.get("native_worktree")
-    pane = os.environ["TMUX_PANE"]
-    if intent:
-        if native["actual_provider"] != "claude":
-            raise ValueError("local native worktree creation requires Claude")
-        previous_raw = launch.option(pane, "@authority_receipt")
-        previous = json.loads(previous_raw) if previous_raw else {}
-        if previous.get("reservation") == c["reservation"]:
-            if previous.get("native_worktree") != intent:
-                raise ValueError("late local hook cannot replace native creation intent")
-            previous_proof = previous.get("native_identity", {})
-            if not launch.same_identity(previous_proof, native) \
-                    or previous_proof.get("native_session") != payload["session_id"]:
-                raise ValueError("late local hook cannot replace native identity")
-            binding = previous.get("worktree", binding)
-        binding = launch.observe_native_worktree(pane, payload, intent, binding)
-    elif "worktree" in c:
-        launch.bind_native_worktree(payload, c["worktree"])
-        launch.check_worktree_window(pane, c["worktree"])
-    proof = {k: native[k] for k in ("pid", "birth", "executable")}
-    proof.update(worker_id=c["worker_id"], native_session=payload["session_id"])
-    ack = start_call(c["repo"], c["reservation"], "observe", native_identity=proof)
-    check_start_ack(expected, ack, 'observed', proof)
-    receipt = dict(c, native_identity=proof, hub_confirmation=ack)
-    if os.environ.get('FLEET_AUTHORITY_ADMISSION'):
-        receipt['admission'] = expected
-    if intent:
-        receipt["worktree"] = binding
-        launch.tmux("set-option", "-w", "-t", pane, "@worktree", binding["root"])
-    launch.stamp(pane, "@authority_receipt", receipt)
-
-
-def restore_native_worktree(receipt, directory, session, provider, fleet_id, repo):
-    if not isinstance(receipt, dict):
-        raise ValueError("invalid saved repository authority receipt")
-    if "native_worktree" not in receipt:
-        raise ValueError("saved repository receipt has no native creation intent")
-    proof = receipt.get("native_identity", {})
-    if not isinstance(proof, dict) or not isinstance(receipt.get("worker_id"), str):
-        raise ValueError("invalid saved native repository identity")
-    worker = receipt.get("worker_id", "").split("/")
-    if (provider != "claude" or repo_identity(receipt.get("repo", "")) != repo_identity(repo)
-            or len(worker) != 2 or not all(launch.valid_uuid(part) for part in worker)
-            or worker[1] != fleet_id or proof.get("worker_id") != receipt["worker_id"]
-            or not launch.valid_uuid(receipt.get("reservation"))
-            or not launch.valid_uuid(session) or proof.get("native_session") != session
-            or type(proof.get("pid")) is not int or proof["pid"] <= 0
-            or not isinstance(proof.get("birth"), str) or not proof["birth"]
-            or not isinstance(proof.get("executable"), str) or not os.path.isabs(proof["executable"])):
-        raise ValueError("restore row differs from its native repository authority receipt")
-    intent = launch.validate_native_worktree(receipt["native_worktree"])
-    binding = launch.validate_worktree(receipt.get("worktree"))
-    launch.check_native_repository(intent)
-    if (directory != binding["root"] or directory != str(launch.native_worktree_path(intent))
-            or binding["common_dir"] != intent["common_dir"] or launch.worktree_identity(directory) != binding):
-        raise ValueError("restored local native worktree lost its saved Git binding")
-    return intent
+# The environment of the layers C8 retired (the launch proof, the local start
+# reservation, the ID switch's admission): a session they started hands none on.
+RETIRED_ENV = ("FLEET_LAUNCH", "FLEET_LAUNCH_CONTEXT", "FLEET_LAUNCH_SUPERVISOR", "FLEET_LAUNCH_NATIVE",
+               "FLEET_LAUNCH_WORKTREE", "FLEET_LAUNCH_CREATE", "FLEET_LAUNCH_DELIVERY",
+               "FLEET_AUTHORITY_CONTEXT", "FLEET_AUTHORITY_ADMISSION", "FLEET_AUTHORITY_START",
+               "FLEET_AUTHORITY_EXPECTED", "FLEET_AUTHORITY_RESUME_SID", "FLEET_ID_DISPATCH")
 
 
 def supervise(argv):
-    # All existing restart/transfer roads already use the session wrapper. This
-    # is a one-shot admission and its native wait, not another runtime observer.
-    script = '''. "$1/fleet-lib.sh"
-s=$(fleet_current_session)
-fleet_load_conf "$s"
-r=$(fleet_window_repo "$s" "$TMUX_PANE")
-if [ -z "$r" ] || { [ "${CCQUOTA_FLEET:-0}" != 1 ] && [ -z "$(fleet_task_authority "$s" "$r")" ]; }; then exit 0; fi
-u=$(fleet_uuid "$s") || exit 1
-f=$(fleet_window_fid "$s" "$TMUX_PANE") || exit 1
-printf '%s\\t%s/%s' "$r" "$u" "$f"
-'''
-    result = subprocess.run(["bash", "-c", script, "_", str(BIN)], capture_output=True, text=True, check=True)
-    pane = os.environ["TMUX_PANE"]
-    native_raw = launch.option(pane, "@native_worktree")
-    saved = launch.option(pane, "@authority_receipt")
-    saved_receipt = json.loads(saved) if saved else None
-    if not native_raw and isinstance(saved_receipt, dict) and saved_receipt.get("native_worktree"):
-        raise ValueError("native recovery lost its creation intent")
-    if not result.stdout:
-        if native_raw:
-            raise ValueError("native creation requires explicit repository admission")
-        os.execvpe(argv[0], argv, os.environ)
-    repo, worker = result.stdout.strip().split("\t")
-    # The hub answers in the canonical owner/repo; the window's @repo keeps the
-    # registered spelling. The context carries the canonical one, or every check
-    # against the admission refuses a repo with capitals (issue #4789).
-    repo = repo_identity(repo)
-    task = launch.option(pane, "@task")
-    if task and not native_raw and launch.id_switch_on():
-        # EPIC T497 C6: with the ID switch on a task's window opens unclaimed, no
-        # @launch, so it lands here; the start reservation is the claim-less
-        # road the hub refuses in hub mode. The window's accepted record is its
-        # admission (the same check gate() made before the window opened).
-        d = json.loads(launch.option(pane, "@dispatch") or "null")
-        if not isinstance(d, dict) or d.get("task") != task:
-            raise ValueError("task window carries no matching accepted dispatch")
-        t = launch.id_admission(d, ("accepted", "starting", "running"))
-        if repo_identity(t.get("repo", "")) != repo:
-            raise ValueError("accepted task belongs to another repo")
-        os.execvpe(argv[0], argv, os.environ)
-    previous = None
-    intent = None
-    if native_raw:
-        previous = saved_receipt
-        if previous:
-            if (previous.get("repo") or "").lower() != repo or previous.get("worker_id") != worker or not previous.get("native_worktree"):
-                raise ValueError("native recovery belongs to another repository or worker")
-            if launch.same_process(previous["native_identity"]):
-                raise ValueError("original native execution is alive; reconnect instead")
-        argv, provider, _ = launch.held_argv(argv, "", False, previous["native_identity"] if previous else None)
-        worktree = launch.prepare_worktree(pane, previous)
-        intent = launch.prepare_native_worktree(pane, provider, worktree, previous)
-        argv += ["--worktree", intent["name"], "--name", intent["name"]]
-    else:
-        worktree = launch.prepare_worktree(pane)
-    key = os.environ.get("FLEET_AUTHORITY_START") or str(uuid.uuid4())
-    if not os.environ.get("FLEET_AUTHORITY_START"):
-        start_call(repo, key, "reserve")
-    expected = reserved_scope(repo, key, worker)
-    if os.environ.get('FLEET_AUTHORITY_EXPECTED'):
-        # A controlled continuation already witnessed its source admission and
-        # fresh reserve. A credential/scope change must fail BEFORE begin/native.
-        prior = json.loads(os.environ['FLEET_AUTHORITY_EXPECTED'])
-        check_start_ack(prior, expected, 'reserved')
-    try:
-        admission = start_call(repo, key, "begin", worker_id=worker)
-    except (hubrest.Fail, ValueError):
-        # A refused begin leaves the reservation reserved; cancel is CAS from
-        # reserved only. An accepted begin whose ACK differs (below) is retained.
-        try:
-            start_call(repo, key, "cancel")
-        except (hubrest.Fail, ValueError):
-            pass
-        raise
-    check_start_ack(expected, admission, 'starting')
-    c = dict(repo=repo, worker_id=worker, reservation=key, supervisor=os.getpid())
-    if worktree:
-        c["worktree"] = worktree
-    if intent:
-        c["native_worktree"] = intent
-    env = dict(os.environ, FLEET_AUTHORITY_CONTEXT=json.dumps(c),
-               FLEET_AUTHORITY_ADMISSION=json.dumps(admission))
-    env.pop("FLEET_AUTHORITY_START", None)
-    env.pop('FLEET_AUTHORITY_EXPECTED', None)
-    if intent:
-        for variable in ("FLEET_LAUNCH_CREATE", "FLEET_LAUNCH_WORKTREE", "FLEET_LAUNCH_CONTEXT"):
-            env.pop(variable, None)
-    # The terminal delivers these signals to the child too. Keep the waiter
-    # alive to save a confirmed native stop; an interrupted waiter is UNKNOWN.
-    for sig in (signal.SIGINT, signal.SIGQUIT):
-        signal.signal(sig, lambda *_: None)
-    directory = intent["root"] if intent else worktree["root"] if worktree else None
-    child = subprocess.Popen(argv, env=env, **({"cwd": directory} if directory else {}))
-    rc = child.wait()
-    try:
-        raw = launch.option(os.environ["TMUX_PANE"], "@authority_receipt")
-        if not (raw or "").strip():
-            # The agent exited before its native start was observed (a refused
-            # launch, issue #4764; a warm Codex window that never got its first
-            # turn — Codex runs SessionStart only then — issue #4792). Close the
-            # start on the hub: only a `starting` with no native bound may end
-            # as `abandoned`, and a late observe is then fenced, so nothing
-            # unregistered ever gets authority. Never a bare JSON parse error.
-            try:
-                check_start_ack(admission, start_call(repo, key, "unobserved", worker_id=worker), "abandoned")
-                closed = "start closed as abandoned"
-            except (hubrest.Fail, ValueError) as exc:
-                closed = "start left open: " + error_reason(exc)
-            raise ValueError("no local native receipt: the agent exited (rc=%s) before its start was observed; %s (why: logs/authority.log)" % (rc, closed))
-        receipt = json.loads(raw)
-        if any(receipt.get(k) != v for k, v in c.items()):
-            raise ValueError("local native receipt was replaced or never observed")
-        proof = prove_stopped(receipt["native_identity"])
-        start_call(repo, key, "stopped", native_identity={k: proof[k] for k in NATIVE_KEYS}, execution_stopped=True)
-    except (hubrest.Fail, ValueError, KeyError, OSError, subprocess.SubprocessError) as exc:
-        print("repo authority: execution retained: " + error_reason(exc), file=sys.stderr)
-    return rc
+    """A window's agent start (EPIC T497 C8). The gate is «the window has an ID»
+    — its @fleet_id, stamped by the spawner before the agent runs — so nothing is
+    reserved, claimed or observed: the launcher is exec'd as it is, without the
+    environment a retired layer may have handed a session started before it."""
+    env = {k: v for k, v in os.environ.items() if k not in RETIRED_ENV}
+    os.execvpe(argv[0], argv, env)
 
 
 SETTLE_MIN_AGE = 600  # a start that moved within this is still on its way: left alone
@@ -688,17 +445,6 @@ def match_ticket_ref(repo, number, ref):
     return backend
 
 
-def ticket_ref(repo, number):
-    c = launch.validate_context(json.load(sys.stdin))
-    t = launch.task_call(c)
-    if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"),
-                                      ("execution_owner", "worker_id"))):
-        raise ValueError("ticket identity needs the accepted owner/generation")
-    ref = t.get("ticket_ref")
-    match_ticket_ref(repo, number, ref)
-    print(ref)
-
-
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     # The repo is a parameter, never the authority's scope (issue #4901): it names
@@ -709,7 +455,6 @@ def main(argv=None):
     actions = p.add_mutually_exclusive_group()
     for a in ("dry-run", "freeze", "apply", "rollback", "gate", "finish", "sync", "settle"):
         actions.add_argument("--" + a, action="store_true")
-    actions.add_argument("--stop-receipt")
     actions.add_argument("--cancel-start", help="revoke one never-begun local reservation; a started/unknown native refuses")
     actions.add_argument("--init-new", action="store_true", help=argparse.SUPPRESS)  # compat-1v: 下一批删
     p.add_argument("--tickets", default="github", help=argparse.SUPPRESS)  # compat-1v: 下一批删
@@ -741,8 +486,6 @@ def main(argv=None):
         print(json.dumps(start_call(repo, args.cancel_start, "cancel"), indent=2))
         return
     action = next((x for x in ("freeze", "apply", "rollback") if getattr(args, x)), "")
-    if args.stop_receipt:
-        action = "stop_ack"
     if not action:
         print(json.dumps(manifest(repo), indent=2))
         return
@@ -766,9 +509,6 @@ def main(argv=None):
             raise ValueError("this login's settings changed since manifest; take a fresh dry-run")
         key = "owner-" + hashlib.sha256(json.dumps([before.get("owner", ""), action, a["revision"]]).encode()).hexdigest()
         data = dict(action=action, expected_revision=a["revision"], idempotency_key=key)
-        if action == "stop_ack":
-            proof = stopped_receipt(args.stop_receipt, a)
-            data.update(worker_id=proof["worker_id"], evidence=json.dumps(proof, sort_keys=True))
         result = hubrest.api("POST", "/authority", body=data)
         if wanted:
             current = hubrest.api("GET", "/authority", query={"gate": "1"})
@@ -803,14 +543,6 @@ if __name__ == "__main__":
     try:
         if sys.argv[1:2] == ["--supervise"]:
             sys.exit(supervise(sys.argv[3:]))
-        if sys.argv[1:2] == ["--restore-native-worktree"]:
-            restored = restore_native_worktree(json.load(sys.stdin), *sys.argv[2:])
-            if restored:
-                print(json.dumps(restored))
-            sys.exit(0)
-        if sys.argv[1:2] == ["--ticket-ref"]:
-            ticket_ref(*sys.argv[2:])
-            sys.exit(0)
         if sys.argv[1:2] == ["--match-ticket-ref"]:
             print(match_ticket_ref(*sys.argv[2:]))
             sys.exit(0)

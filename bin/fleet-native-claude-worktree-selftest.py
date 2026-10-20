@@ -15,17 +15,18 @@ import threading
 
 def capture_hook(destination, fleet_root, supervisor):
     sys.path.insert(0, str(fleet_root / 'bin'))
-    import fleet_launch
+    import fleet_native_proc
     payload = json.load(sys.stdin)
-    native = fleet_launch.native_parent()
-    if not fleet_launch.root_native(native, supervisor):
+    native = fleet_native_proc.native_parent()
+    if not fleet_native_proc.root_native(native, supervisor):
         raise ValueError('hook native process is outside the fixture supervisor')
     record = {key: payload.get(key) for key in ('hook_event_name', 'source', 'session_id', 'cwd', 'transcript_path')}
     record.update(process=native, hook_cwd=os.getcwd(), project_dir=os.environ.get('CLAUDE_PROJECT_DIR'))
     try:
-        expected = os.environ.get('FLEET_LAUNCH_WORKTREE')
-        record['worktree'] = (fleet_launch.bind_native_worktree(payload, json.loads(expected)) if expected
-                              else fleet_launch.worktree_identity(payload.get('cwd')))
+        expected = os.environ.get('FLEET_PROBE_WORKTREE')
+        record['worktree'] = fleet_native_proc.worktree_identity(payload.get('cwd'))
+        if expected and record['worktree'] != json.loads(expected):
+            raise ValueError('native cwd differs from the bound worktree')
     except (OSError, ValueError, subprocess.SubprocessError):
         record['worktree_refused'] = True
     with destination.open('x') as output:
@@ -109,7 +110,7 @@ def main():
                 hook_path = root / (label + '-hook.json')
                 if arguments.with_hooks:
                     if hooks:
-                        native_environment['FLEET_LAUNCH_WORKTREE'] = json.dumps(hooks[0]['worktree'])
+                        native_environment['FLEET_PROBE_WORKTREE'] = json.dumps(hooks[0]['worktree'])
                     command = shlex.join([sys.executable, str(Path(__file__).resolve()),
                         '--fleet-root', str(arguments.fleet_root.resolve()), '--capture-hook', str(hook_path),
                         '--supervisor', str(os.getpid())])
