@@ -1,7 +1,9 @@
 // Task authority, session observation and code landing are independent facts.
 // This adapter consumes /v1/fleet/tasks; it never infers a result from inventory.
 export type Task = {
-  id: string; title: string; via?: string; device?: string; repo?: string;
+  // id is T<n>, the record's old number (compat-1v: 下一批删); fid is the task's
+  // ID and short its written code (EPIC T644 C1) — the one number a person reads.
+  id: string; fid?: string; short?: string; task?: string; title: string; via?: string; device?: string; repo?: string;
   session_key?: string; worker_id?: string; state?: string; task_state?: string;
   issue?: string; ticket_ref?: string; parked?: string; asked?: string;
   created_at: string; updated_at?: string; authority_version?: number;
@@ -28,6 +30,43 @@ export function taskBlockerItems(t: Task): TaskBlocker[] | null {
 export type TasksResponse = { tasks: Task[]; observed_at?: string; stale?: boolean };
 
 const terminal = new Set(["succeeded", "failed", "cancelled", "refused"]);
+
+// A task's code (EPIC T644, shared rule 2), the same arithmetic as bin/fleet_id.py
+// encode / display_short: the ID's 128 bits scaled onto one letter place and 25
+// base32 places, so a code's prefixes are the ID's own.
+const DIGITS = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const LETTERS = "ABCDEFGHJKMNPQRSTVWXYZ";
+const FID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const DISPLAY_MIN = 2;
+export function idCode(fid: string): string {
+  if (!FID_RE.test(fid)) return "";
+  let v = (BigInt("0x" + fid.replaceAll("-", "")) * (22n * 32n ** 25n)) >> 128n;
+  let out = "";
+  for (let i = 0; i < 25; i++) { out = DIGITS[Number(v % 32n)] + out; v /= 32n; }
+  return LETTERS[Number(v)] + out;
+}
+
+// Unfinished = the record not closed (convention 3): anything but a committed end.
+export const taskOpen = (t: Task) => !terminal.has(taskStatus(t));
+
+// The written code (≥ 4, unique in the person's whole history — details, copies),
+// from the hub; a record from before C1 has none and keeps its T<n>.
+export const writtenCode = (t: Task) => t.short || t.id;
+
+// What a list row shows (display_short): an unfinished task, the shortest prefix
+// (≥ 2) no other unfinished task shares — the panel's rule, the same open set; a
+// finished one, its written code (never a 2-place code an open task may take).
+export function displayCodes(tasks: Task[]): Map<Task, string> {
+  const open = tasks.filter((t) => taskOpen(t) && t.fid && idCode(t.fid)).map((t) => [t, idCode(t.fid!)] as const);
+  const out = new Map<Task, string>();
+  for (const t of tasks) out.set(t, writtenCode(t));
+  for (const [t, me] of open) {
+    let n = DISPLAY_MIN;
+    while (n < 26 && open.some(([o, c]) => o !== t && c !== me && c.slice(0, n) === me.slice(0, n))) n++;
+    out.set(t, me.slice(0, n));
+  }
+  return out;
+}
 export function taskStatus(t: Task): string {
   if (t.authority_version === 1) {
     if (terminal.has(t.outcome || "")) return t.outcome!;

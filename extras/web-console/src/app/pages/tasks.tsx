@@ -1,21 +1,24 @@
 // tasks.tsx — 任务 (EPIC #3923 C5, claude-fleet#3928): everything the person
-// sent out — the hub's task records, T<n>, /v1/fleet/tasks. A task links to its
+// sent out — the hub's task records, /v1/fleet/tasks. A task goes by its code
+// (EPIC T644 R2): a row shows the panel's display code, a search asks the hub's
+// resolver, the details show the written code and the old T<n>. A task links to its
 // session and, when it has one, its GitHub issue; the record is its ticket (the
 // hub's own tickets and 「建 GitHub 单」 left with claude-fleet#4898, T477).
 // Stock shadcn/ui only.
-import type { FC } from "react";
+import { useState, type FC, type FormEvent } from "react";
 import { Link } from "react-router";
-import { ArrowUpRight, ListChecks } from "lucide-react";
+import { ArrowUpRight, ListChecks, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { tr } from "@/shared/i18n";
 import { usePage } from "../Shell";
 import { Empty, Failed, Loading, PageHeader, ago } from "../parts";
 import { terminalLink } from "@/shared/terminal";
-import { agentMismatch, taskBlockerItems, taskLanding, taskPR, taskStatus, taskTicket, type Task } from "../task-state";
-import { useTasks } from "../use-tasks";
+import { agentMismatch, displayCodes, taskBlockerItems, taskLanding, taskPR, taskStatus, taskTicket, writtenCode, type Task } from "../task-state";
+import { findTask, useTasks, type TaskFind } from "../use-tasks";
 
 const STATUS: Record<string, [string, string]> = {
   accepted: ["已接收", "Accepted"], starting: ["正在开", "Starting"],
@@ -35,7 +38,7 @@ const observedWords = (t: Task) => {
   return tr(...(words[t.live.state] || STATUS.unknown));
 };
 
-const TaskCard: FC<{ t: Task; stale?: boolean }> = ({ t, stale }) => {
+const TaskCard: FC<{ t: Task; code: string; stale?: boolean }> = ({ t, code, stale }) => {
   const state = taskStatus(t);
   const ref = taskTicket(t);
   const pr = taskPR(t);
@@ -48,10 +51,10 @@ const TaskCard: FC<{ t: Task; stale?: boolean }> = ({ t, stale }) => {
   const meta = [t.via, t.device, ago(t.created_at)].filter(Boolean).join(" · ");
   const linkCls = "text-clay hover:text-clay/80 no-underline";
   return (
-    <Card className="gap-2 py-4" data-task-id={t.id}>
+    <Card className="gap-2 py-4" data-task-id={t.fid || t.id}>
       <CardContent className="space-y-2">
         <div className="flex items-start gap-2">
-          <span className="text-muted-foreground mt-0.5 font-mono text-xs">{t.id}</span>
+          <span className="text-clay mt-0.5 font-mono text-xs" title={writtenCode(t)}>{code}</span>
           <p className="min-w-0 flex-1 leading-snug font-medium break-words">{t.title}</p>
           <Badge variant="outline" className={cn("shrink-0 rounded-full", tone)}>{statusWords(state)}</Badge>
         </div>
@@ -78,6 +81,8 @@ const TaskCard: FC<{ t: Task; stale?: boolean }> = ({ t, stale }) => {
         <details className="text-muted-foreground text-[13px]">
           <summary className="cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-ring">{tr("任务详情", "Task details")}</summary>
           <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 [&>dd]:break-words">
+            <dt>{tr("编号", "Code")}</dt><dd className="font-mono">{writtenCode(t)}{t.fid ? <span className="break-all"> · {t.fid}</span> : null}</dd>
+            {t.short ? <><dt>{tr("旧编号", "Old number")}</dt><dd className="font-mono">{t.task || t.id}</dd></> : null}
             <dt>{tr("请求代理", "Requested agent")}</dt><dd>{t.requested_agent || statusWords("unknown")}</dd>
             <dt>{tr("确定代理", "Resolved agent")}</dt><dd>{t.resolved_agent || statusWords("unknown")}</dd>
             <dt>{tr("已核实代理", "Verified actual agent")}</dt><dd>{t.actual_agent || statusWords("unknown")}</dd>
@@ -113,11 +118,50 @@ const TaskCard: FC<{ t: Task; stale?: boolean }> = ({ t, stale }) => {
   );
 };
 
+const CANDIDATE_STATE: Record<string, string> = { open: "accepted", placing: "starting" };
+
+// The search: a code (K5, #k5h0), the task's ID, or the old T<n> — the hub
+// resolves it; several ⇒ they are listed to pick from, never guessed.
+const TaskSearch: FC<{ codes: Map<Task, string>; stale?: boolean }> = ({ codes, stale }) => {
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [found, setFound] = useState<TaskFind | null>(null);
+  const look = async (ref: string) => {
+    setBusy(true);
+    setFound(await findTask(ref));
+    setBusy(false);
+  };
+  const submit = (e: FormEvent) => { e.preventDefault(); if (q.trim()) void look(q); else setFound(null); };
+  const codeOf = (t: Task) => [...codes].find(([o]) => (o.fid && o.fid === t.fid) || o.id === t.id)?.[1] || writtenCode(t);
+  return (
+    <div className="mb-4 space-y-3">
+      <form role="search" onSubmit={submit} className="flex gap-2">
+        <Input value={q} onChange={(e) => { setQ(e.target.value); if (!e.target.value.trim()) setFound(null); }}
+          placeholder={tr("输入编号前缀，如 K5", "Type a code prefix, e.g. K5")} aria-label={tr("按编号找任务", "Find a task by code")}
+          className="font-mono" autoCapitalize="characters" autoComplete="off" spellCheck={false} />
+        <Button type="submit" variant="outline" disabled={busy}><Search aria-hidden />{tr("找", "Find")}</Button>
+      </form>
+      {found?.kind === "one" ? <TaskCard t={found.task} code={codeOf(found.task)} stale={stale} /> : null}
+      {found?.kind === "many" ? <div className="space-y-1 text-sm">
+        <p className="text-muted-foreground">{tr(`「${q.trim()}」对上 ${found.candidates.length} 个任务，选一个：`, `"${q.trim()}" names ${found.candidates.length} tasks — pick one:`)}</p>
+        {found.candidates.map((c) => <button key={c.id} type="button" onClick={() => { setQ(c.short); void look(c.id); }}
+          className="hover:bg-muted flex w-full gap-2 rounded-md px-2 py-1 text-left">
+          <span className="text-clay font-mono">{c.short}</span><span className="min-w-0 flex-1 truncate">{c.title}</span>
+          <span className="text-muted-foreground">{statusWords(CANDIDATE_STATE[c.state] || c.state)}</span>
+        </button>)}
+      </div> : null}
+      {found?.kind === "none" ? <p className="text-muted-foreground text-sm">{tr("找不到这个编号的任务", "No task has that code")}</p> : null}
+      {found?.kind === "failed" ? <p className="text-clay text-sm">{tr("暂时查不到 · 请重试", "Couldn't look it up · try again")}</p> : null}
+    </div>
+  );
+};
+
 export default function TasksPage() {
   usePage(tr("任务", "Tasks"));
   const tasks = useTasks();
   const stale = tasks.failed || tasks.data?.stale;
   const taskList = tasks.data?.tasks || [];
+  const codes = displayCodes(taskList);
 
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-5 md:px-6 md:py-8">
@@ -131,14 +175,15 @@ export default function TasksPage() {
           {tasks.loading ? tr("正在读取…", "Reading…") : stale ? tr("重试读取", "Retry read") : tr("刷新", "Refresh")}
         </Button>
       </div> : null}
+      {tasks.data ? <TaskSearch codes={codes} stale={stale} /> : null}
       {!tasks.data && tasks.loading ? <Loading /> : !tasks.data && tasks.failed ? <Failed what={tr("任务", "tasks")} onRetry={tasks.reload} /> : taskList.length ? (
         <div className="space-y-3">
-          {taskList.map((t) => <TaskCard key={t.id} t={t} stale={stale} />)}
+          {taskList.map((t) => <TaskCard key={t.fid || t.id} t={t} code={codes.get(t) || writtenCode(t)} stale={stale} />)}
         </div>
       ) : (
         <Empty icon={<ListChecks />} title={stale ? tr("任务数量未知", "Task count unknown") : tr("还没派过任务", "No tasks yet")}
           body={stale ? tr("当前来源不可用，请重试读取。空的陈旧快照不代表没有任务。", "The source is unavailable. Retry the read; an empty stale snapshot does not mean zero tasks.")
-            : tr("派出去的每件事都会在这里留一条记录，编号以 T 开头。", "Everything you send out leaves a record here, numbered from T.")}
+            : tr("派出去的每件事都会在这里留一条记录，带一个编号，如 K5。", "Everything you send out leaves a record here, with a code such as K5.")}
           action={<Button asChild><Link to="/" className="no-underline">{tr("去派一件", "Send one")}</Link></Button>} />
       )}
     </div>

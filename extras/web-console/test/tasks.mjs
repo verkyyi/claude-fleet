@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { taskStatus, taskLanding, taskPR, taskTicket, agentMismatch, taskRead, taskBlockerItems } from '../src/app/task-state.ts';
+import { taskStatus, taskLanding, taskPR, taskTicket, agentMismatch, taskRead, taskBlockerItems, idCode, displayCodes, writtenCode, taskOpen } from '../src/app/task-state.ts';
 
 const running = { id: 'T7001', title: 'Fixture', created_at: '2026-10-16T06:00:00Z',
   authority_version: 1, state: 'running', requested_agent: 'codex', resolved_agent: 'codex', actual_agent: 'codex' };
@@ -63,3 +63,30 @@ assert.equal(blocked.asked, 'still asking');
 assert.equal(taskBlockerItems({ ...blocked, generation: 3 }), null);
 assert.equal(taskBlockerItems(running), null);
 assert.equal(taskBlockerItems({ ...blocked, task_blockers: { version: 1, generation: 2, items: [] } }).length, 0);
+
+// A task goes by its code (EPIC T644 R2): the same encoding as bin/fleet_id.py
+// encode (vectors from it), the panel's display rule over the unfinished set.
+assert.equal(idCode('00000000-0000-0000-0000-000000000000'), 'A0000000000000000000000000');
+assert.equal(idCode('ffffffff-ffff-ffff-ffff-ffffffffffff'), 'ZZZZZZZZZZZZZZZZZZZZZZZZZX');
+assert.equal(idCode('3f2504e0-4f89-11d3-9a0c-0305e82c3301'), 'FDMQ6PHPNRY42YF888A0Z7K322');
+assert.equal(idCode('e42de263-a50c-47cc-bf28-7d4a8c2ae93d'), 'XKFRQ941F1RNSGVBTRHM0QC0B7');
+assert.equal(idCode('T627'), '');
+const withFid = (fid, short, extra = {}) => ({ ...running, id: 'T' + short, task: 'T' + short, fid, short, ...extra });
+const a = withFid('3f2504e0-4f89-11d3-9a0c-0305e82c3301', 'FDMQ');
+const b = withFid('3f2504e0-0000-11d3-9a0c-0305e82c3301', 'FDMP'); // shares FD — and the next place?
+const c = withFid('e42de263-a50c-47cc-bf28-7d4a8c2ae93d', 'XKFR');
+const done = withFid('e42de263-a50c-0000-bf28-7d4a8c2ae93d', 'XKFP', { outcome: 'succeeded' });
+const legacy = { id: 'T12', title: 'old', created_at: '2026-10-01T00:00:00Z', state: 'open' };
+assert.equal(idCode(b.fid).slice(0, 2), idCode(a.fid).slice(0, 2));
+const codes = displayCodes([a, b, c, done, legacy]);
+const n = [...idCode(a.fid)].findIndex((ch, i) => ch !== idCode(b.fid)[i]) + 1;
+assert.equal(codes.get(a), idCode(a.fid).slice(0, n)); // two open ones sharing a prefix both grow
+assert.equal(codes.get(b), idCode(b.fid).slice(0, n));
+assert.equal(codes.get(c), 'XK'); // a finished neighbour does not make it grow
+assert.equal(codes.get(done), 'XKFP'); // a finished task shows its written code
+assert.equal(codes.get(legacy), 'T12'); // a record with no ID yet keeps its number
+assert.equal(displayCodes([a, { ...b, outcome: 'cancelled' }]).get(a), 'FD'); // its neighbour ended: back to 2
+assert.equal(writtenCode(a), 'FDMQ');
+assert.equal(taskOpen(done), false);
+assert.equal(taskOpen(a), true);
+console.log('PASS task codes: encode vectors, display among the unfinished, written code for the finished and the old');
