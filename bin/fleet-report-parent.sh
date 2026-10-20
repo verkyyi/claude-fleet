@@ -837,7 +837,7 @@ parent_evidence=$(TM display-message -p -t "$pwin" '#{@sleep_evidence}' 2>/dev/n
 noclaude=''
 # Only an agent taken over its process's inbox needs that process now (the adapter's
 # deliver column, T626); a thread queue holds its own conversation.
-if [ "$(fleet_agent_get "$(fleet_agent_or_default "$parent_agent")" deliver 2>/dev/null)" != queue ] \
+if [ "$(fleet_agent_get "$(fleet_agent_or_default "$parent_agent" 2>/dev/null)" deliver 2>/dev/null)" != queue ] \
    && [ -z "$parent_evidence" ]; then
   ppid=$(fleet_pane_claude_pid "$pwin" "$SOCK" 2>/dev/null) || ppid=''
   [ -n "$ppid" ] || noclaude=1

@@ -9892,8 +9892,8 @@ fleet_agent_deliver() {
     [ "$rc" -eq "$held" ] && return "$held"
     return 1
   fi
-  agent=$(fleet_agent_or_default "$(_fad_tm "$sock" display-message -p -t "$tgt" '#{@cc_agent}' 2>/dev/null)")
-  case "$(fleet_agent_get "$agent" deliver)" in
+  agent=$(fleet_agent_or_default "$(_fad_tm "$sock" display-message -p -t "$tgt" '#{@cc_agent}' 2>/dev/null)" 2>/dev/null)
+  case "$(fleet_agent_get "$agent" deliver 2>/dev/null)" in
     queue)
       out=$(printf '%s' "$text" | python3 "$lib/fleet-codex-session.py" send --pane "$tgt" --socket "$sock" 2>&1); rc=$?
       case "$rc" in
