@@ -137,15 +137,13 @@ func (s *Server) taskViews(tasks []store.FleetTask) ([]taskView, error) {
 	landings := map[[2]string]map[string]map[string]any{}
 	out := make([]taskView, 0, len(tasks))
 	for _, t := range tasks {
-		// A record's end is its window's ID's result (EPIC T497 C6 / C8), and its
-		// progress word that ID's (C12).
+		// A record's end is on the record itself — written through the moment its
+		// ID's result lands (EPIC T644 C6, store/fleet_task_state.go); never
+		// projected here. Its progress word is its ID's (EPIC T497 C12).
 		id := ""
 		if t.AuthorityVersion == store.TaskAuthorityVersion {
-			if o, i, err := s.Store.IDTaskOutcome(t.Owner, t.Ref); err == nil {
+			if _, i, err := s.Store.IDTaskOutcome(t.Owner, t.Ref); err == nil {
 				id = i
-				if t.Outcome == "" && o != "" {
-					t.Outcome, t.State = o, o
-				}
 			}
 		}
 		live := s.taskLive(&t, rows)

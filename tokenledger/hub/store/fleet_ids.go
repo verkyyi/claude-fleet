@@ -623,8 +623,13 @@ func (s *Store) applyIDEvent(tx *sql.Tx, r *idRow, ev map[string]any, seq int, t
 				r.Issues = addIssue(r.Issues, strings.TrimSpace(v))
 			}
 		}
-		_, err := tx.Exec(`INSERT INTO fleet_id_results (id, seq, state, summary, pr, agent, at) VALUES (?,?,?,?,?,?,?)`,
-			r.ID, seq, evStr(ev, "state", 20), evStr(ev, "summary", 2000), evStr(ev, "pr", 210), evStr(ev, "agent", 20), ts)
+		st, pr := evStr(ev, "state", 20), evStr(ev, "pr", 210)
+		if _, err := tx.Exec(`INSERT INTO fleet_id_results (id, seq, state, summary, pr, agent, at) VALUES (?,?,?,?,?,?,?)`,
+			r.ID, seq, st, evStr(ev, "summary", 2000), pr, evStr(ev, "agent", 20), ts); err != nil {
+			return err
+		}
+		// EPIC T644 C6: the record it carries ends in the same transaction.
+		_, err := writeTaskResult(tx, r.Owner, r.ID, r.taskID, taskRefsOf(r.Task, r.Aliases), st, pr, seq, time.Now())
 		return err
 	case "closed":
 		if r.ClosedAt == 0 {

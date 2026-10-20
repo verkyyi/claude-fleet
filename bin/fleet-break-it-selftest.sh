@@ -5384,13 +5384,33 @@ drill_authority_legacy_task_unclosable() {
   CAP=120;  # a cold go test build is ~40 s on a CI runner
   local t0 f="$ROOT/tokenledger/hub/store/fleet_repo_authority.go" b="$BIN/fleet-task-record.sh"
   t0=$(now)
-  grep -q "state NOT IN (?, ?)\`, owner, TaskClosed, TaskRefused" "$f" \
+  grep -q "owner, TaskClosed, TaskRefused" "$f" \
     || { WHY="the legacy-owner blocker query no longer honours TaskClosed"; return 1; }
   grep -q 'call POST /v1/node/tasks/settle' "$b" \
     || { WHY="fleet-task-record.sh has no settle command"; return 1; }
   _drill_go_tests 'TestSettleLegacyTaskWorkerLive' "$ROOT/tokenledger/hub/store/fleet_task_settle_test.go" x ./hub/store || return 1
   _drill_go_tests 'TestNodeTaskSettleLegacy' "$ROOT/tokenledger/hub/api/fleet_task_settle_test.go" \
     '旧式 T 记录：issue 已关且 worker 不占 lease / local start / inventory 才结成 closed 不再挡；issue 还开着或 worker 还活着照样挡；默认 dry，迟到的写不重开（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- task-state-behind-result (EPIC T644 C6): a record's end lived only on
+# its ID (fleet_id_results) and was projected onto the record at read time, so
+# every reader of the row — a list, a count, the 「没结束」 set — saw ended tasks
+# as running (71 on 2026-10-20). Now the result writes the record in the same
+# transaction, and the reconcile catches the old ones once.
+drill_task_state_behind_result() {
+  CAP=120;  # a cold go test build is ~40 s on a CI runner
+  local t0 f="$ROOT/tokenledger/hub/store/fleet_ids.go" a="$ROOT/tokenledger/hub/api/fleet_tasks.go" b="$BIN/fleet-task-record.sh"
+  t0=$(now)
+  grep -q 'writeTaskResult(tx, r.Owner, r.ID' "$f" \
+    || { WHY="an ID's result no longer writes its task record (fleet_ids.go applyIDEvent)"; return 1; }
+  grep -q 't.Outcome, t.State = o, o' "$a" \
+    && { WHY="taskViews projects the ID's result again: the record's columns are the one source"; return 1; }
+  grep -q 'call POST /v1/node/tasks/reconcile' "$b" \
+    || { WHY="fleet-task-record.sh has no reconcile command"; return 1; }
+  _drill_go_tests 'TestTaskEndsWhenItsIDResultLands TestReconcileTaskStates' "$ROOT/tokenledger/hub/store/fleet_task_state_test.go" \
+    '任务记录与它编号的结果：结果落地同一事务写实，单条 / 列表 / children 三处一致；回填幂等、dry 与 apply 同数，切换前没人占的旧记录收为已取消、可退回（go test）' ./hub/store || return 1
   SECS=$(since "$t0")
 }
 

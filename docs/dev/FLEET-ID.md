@@ -265,3 +265,23 @@ Tab 操作页在动作下面列出：编号 + 完整 ID、别名、每一段（a
 
 `hub/store/fleet_task_ids_test.go`（建即得 ID、三种引用同一条、两位码多义 / 未结束优先 / 全史多义、回填 dry / apply /
 幂等）与 `hub/api/fleet_task_ids_test.go`（节点路一整圈、409 候选、回填路由、能力位）钉住它。
+
+## 记录的状态就是它的列（EPIC T644 C6：记录的状态和实际一致）
+
+- **结果落地即写实**（`hub/store/fleet_task_state.go`）：一条编号的结果写进 `fleet_id_results`（`ApplyFleetIDEvents`
+  的 `result` 事件）时，同一事务改它带的任务记录——`fid` 是它、`fleet_ids.task_id` 指过去的、名字里的 `T<n>`、
+  迁移别名——只限同一个人的：`merged` / `succeeded` / `done` → `succeeded`，`failed` → `failed`（别的结果词不收尾），
+  `state` 与 `outcome` 同写，`pr` 空才填，`observation = id_result:<ID>#<seq>`。同一任务更新的结局结果覆盖这样写的
+  旧结果（失败后重做成功）；取消、拒收、旧报告写的结局一律不碰。收尾的记录迟到的 node 写不再改开
+  （`UpdateFleetTask`），blocker / settle 查询也认这些收尾状态。
+- **读时投影删掉**：`taskViews` 不再把 `IDTaskOutcome` 投到记录上，列表、children、单条、计数读的是同一列；
+  `IDTaskOutcome` 只留给取消检查和迁移。
+- **旧账一次收**：`fleet-task-record.sh reconcile [--before T<n>] [--apply] | --undo`（`POST /v1/node/tasks/reconcile`，
+  `store.ReconcileTaskStates`，只动这台机器主人的记录），默认 dry（unfinished · ended · cancelled · kept · left · items）：
+  未收口、编号已有结局结果的照写实；`--before` 以下仍未收口、没有活会话（没有开着的编号带它，worker 没有租约 /
+  没收口的 local start / 不在 inventory）的收为 `cancelled`，`observation = reconcile_cancel:<旧状态>`；`--undo` 放回。
+  重跑是空操作。
+- **能力位**：`/version` 的 `capabilities` 含 `task_state`。
+
+`hub/store/fleet_task_state_test.go`（结果后单条 / 列表 / children 一致、新结果覆盖、取消不覆盖、别人的编号不碰、
+回填 dry = apply、幂等、可退回）与 BREAK-IT `task-state-behind-result` 钉住它。

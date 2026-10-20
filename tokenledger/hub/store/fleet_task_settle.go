@@ -27,8 +27,8 @@ const TaskClosed = "closed"
 // (`Org/Name`), so both sides are compared normalized (claude-fleet#4963);
 // repo "" lists the records that name no repo (an EPIC driver's).
 func (s *Store) LegacySettleCandidates(repo, owner string) ([]FleetTask, error) {
-	q, args := `SELECT `+fleetTaskCols+` FROM fleet_tasks WHERE LOWER(TRIM(repo)) = ? AND authority_version = 0 AND worker_id <> '' AND state NOT IN (?, ?)`,
-		[]any{NormRepo(repo), TaskClosed, TaskRefused}
+	q, args := `SELECT `+fleetTaskCols+` FROM fleet_tasks WHERE LOWER(TRIM(repo)) = ? AND authority_version = 0 AND worker_id <> '' AND state NOT IN (?, ?, ?, ?, ?)`,
+		[]any{NormRepo(repo), TaskClosed, TaskRefused, TaskSucceeded, TaskFailed, TaskCancelled}
 	if owner != "" {
 		q, args = q+` AND owner = ?`, append(args, owner)
 	}
@@ -101,7 +101,7 @@ func (s *Store) SettleLegacyTask(id int64, worker, evidence string, now time.Tim
 	if err = tx.QueryRow(`SELECT repo, owner, state, worker_id, authority_version FROM fleet_tasks WHERE id = ?`, id).Scan(&repo, &owner, &state, &w, &version); err != nil {
 		return err
 	}
-	if version != 0 || w == "" || w != worker || state == TaskClosed || state == TaskRefused {
+	if version != 0 || w == "" || w != worker || taskFinished(state) {
 		return ErrTaskConflict
 	}
 	if err = s.lockOwnerAuthority(tx, owner); err != nil {

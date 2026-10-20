@@ -34,6 +34,13 @@ import (
 //	POST /v1/node/tasks/ids-backfill {apply?} → give this owner's records from
 //	                              before C1 their ID (store.BackfillTaskIDs); dry
 //	                              unless apply
+//	POST /v1/node/tasks/reconcile {apply?, before?: "T480", undo?} → bring
+//	                              this owner's records in line with what
+//	                              happened (store.ReconcileTaskStates, EPIC
+//	                              T644 C6): ended on their ID's result, and —
+//	                              with before — the older unfinished ones no
+//	                              live session holds cancelled; dry unless
+//	                              apply; undo puts the cancelled back
 //	POST /v1/node/tasks/<T>      {asked?, parked?, issue?, pr?, worker_id?,
 //	                              key?, state?, note?, rule?, clear?: [asked,
 //	                              parked, note]} → the record
@@ -239,6 +246,10 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 		s.nodeTaskSettle(w, r, owner)
 		return
 	}
+	if ref == nodeTaskReconcileRef {
+		s.nodeTaskReconcile(w, r, owner)
+		return
+	}
 	if ref == nodeTaskIDsBackfillRef {
 		s.nodeTaskIDsBackfill(w, r, owner)
 		return
@@ -434,6 +445,51 @@ func (s *Server) nodeTaskIDsBackfill(w http.ResponseWriter, r *http.Request, own
 		}
 	}
 	out, err := s.Store.BackfillTaskIDs(owner, in.Apply, time.Now())
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// nodeTaskReconcileRef is the route that brings records in line with what
+// happened (EPIC T644 C6); matched before any code is read.
+const nodeTaskReconcileRef = "reconcile"
+
+func (s *Server) nodeTaskReconcile(w http.ResponseWriter, r *http.Request, owner string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		httpError(w, http.StatusMethodNotAllowed, "POST "+NodeTasksPath+"/"+nodeTaskReconcileRef)
+		return
+	}
+	var in struct {
+		Apply  bool   `json:"apply"`
+		Before string `json:"before"`
+		Undo   bool   `json:"undo"`
+	}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&in); err != nil {
+			httpError(w, http.StatusBadRequest, `the body is {"apply": true|false, "before": "T<n>", "undo": true|false}`)
+			return
+		}
+	}
+	if in.Undo {
+		n, err := s.Store.UndoReconcileCancel(owner, time.Now())
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"undone": n})
+		return
+	}
+	var before int64
+	if in.Before != "" {
+		if before = store.ParseTaskRef(in.Before); before == 0 || !strings.HasPrefix(in.Before, "T") {
+			httpError(w, http.StatusBadRequest, "before is a record number, T<n>")
+			return
+		}
+	}
+	out, err := s.Store.ReconcileTaskStates(owner, before, in.Apply, time.Now())
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
