@@ -129,6 +129,36 @@ def wj(path, obj):
         json.dump(obj, f)
 
 
+def rj(path):
+    with open(path) as f:
+        return json.load(f)
+
+
+def module(name, path):
+    import importlib.util
+    sp = importlib.util.spec_from_file_location(name, path)
+    m = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(m)
+    return m
+
+
+def until(fn, secs, step=0.1):
+    """fn()'s first truthy answer within <secs>, else its last."""
+    end = time.time() + secs
+    while True:
+        v = fn()
+        if v or time.time() >= end:
+            return v
+        time.sleep(step)
+
+
+def wx(path, body):
+    """An executable file."""
+    with open(path, "w") as f:
+        f.write(body)
+    os.chmod(path, 0o755)
+
+
 # The updater's ~3k lines (and the daemon's ~9k) run as a script, which Python
 # never loads from bytecode: every tick compiled them again. UPD_RUN = the same argv through a loader that
 # keeps the bytecode in a per-run cache (still `__main__`, its argv, path and
@@ -157,11 +187,7 @@ def warm_bytecode(d, sha):
         if n.endswith(".py"):
             os.utime(os.path.join(b, n), (PYC_MTIME, PYC_MTIME))
     if sha not in _PYC:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("fnu_core", os.path.join(BIN, "fleet_node_core.py"))
-        core = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(core)
-        core.compile_release(d)
+        module("fnu_core", os.path.join(BIN, "fleet_node_core.py")).compile_release(d)
         if not _PYC:
             atexit.register(lambda: [shutil.rmtree(x, ignore_errors=True) for x in _PYC.values()])
         _PYC[sha] = tempfile.mkdtemp(prefix="fnu-pyc.")
@@ -172,7 +198,7 @@ def warm_bytecode(d, sha):
 
 
 def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=(), drop=(), drill_fail=False,
-                 sessions_log=None, sync_log=None, sync_fail=False, apply_log=None, ccquota_src=None, ccquota_says=None,
+                 sessions_log=None, apply_log=None, ccquota_src=None, ccquota_says=None,
                  seq=0, mark=None, home_list=False):
     """A release dir as `ccquota release fetch --artifacts` leaves it, under <rel>/<sha>."""
     d = os.path.join(rel, sha)
@@ -196,24 +222,8 @@ def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=
     if sessions_log:
         # issue #2484: a fleet-sessions-snapshot.sh that records who ran it, from which release
         sc = os.path.join(d, "bin", "fleet-sessions-snapshot.sh")
-        with open(sc, "w") as f:
-            f.write('#!/bin/bash\necho "$1|$HOME|${TMPDIR:+tmp}|%s" >> %s\n'
-                    '[ "$1" = restore ] && printf "back\\toc\\tissue-1\\t/w\\n"\nexit 0\n' % (sha, sessions_log))
-        os.chmod(sc, 0o755)
-    if sync_log:
-        # issue #2714: a fleet-install-sync.sh that records who ran it, from which
-        # release, and follows the machine's release the way #2688's does (a
-        # versions link switch) — or, sync_fail, refuses and moves nothing
-        sc = os.path.join(d, "bin", "fleet-install-sync.sh")
-        with open(sc, "w") as f:
-            f.write('#!/bin/bash\necho "$1 $2|$HOME|$USER|${TMPDIR:+tmp}|$FLEET_NODE_ROOT|%s" >> %s\n' % (sha, sync_log))
-            if sync_fail:
-                f.write('echo "fleet-install-sync: refused tracked local changes" >&2\nexit 1\n')
-            else:
-                f.write('t=$(readlink "$FLEET_NODE_ROOT/current"); t=${t##*/}\n'
-                        'mkdir -p "$HOME/.claude/fleet.versions/$t" && ln -sfn "$HOME/.claude/fleet.versions/$t" "$2"'
-                        '\necho "fleet-install-sync: switched to $t"\n')
-        os.chmod(sc, 0o755)
+        wx(sc, '#!/bin/bash\necho "$1|$HOME|${TMPDIR:+tmp}|%s" >> %s\n'
+               '[ "$1" = restore ] && printf "back\\toc\\tissue-1\\t/w\\n"\nexit 0\n' % (sha, sessions_log))
     # the version's own code beyond bin/ (issue #2774: a login's tree links each file)
     os.makedirs(os.path.join(d, "conf", "agent-defaults"))
     with open(os.path.join(d, "conf", "agent-defaults", "MARK"), "w") as f:
@@ -231,9 +241,7 @@ def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=
     if apply_log:
         # issue #2774: the version's fleet-install-apply.sh, recording how it was run
         ap = os.path.join(d, "bin", "fleet-install-apply.sh")
-        with open(ap, "w") as f:
-            f.write('#!/bin/bash\necho "$*|$HOME|%s" >> %s\necho "apply: ok — fixture %s"\n' % (mark or sha, apply_log, (mark or sha)[:7]))
-        os.chmod(ap, 0o755)
+        wx(ap, '#!/bin/bash\necho "$*|$HOME|%s" >> %s\necho "apply: ok — fixture %s"\n' % (mark or sha, apply_log, (mark or sha)[:7]))
     warm_bytecode(d, sha)
     if drill_fail:
         open(os.path.join(d, "conf", "drill-fail"), "w").close()
@@ -278,9 +286,7 @@ class Sandbox(unittest.TestCase):
             os.makedirs(x)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("FLEET_")}
         cq = os.path.join(self.d, "ccquota")
-        with open(cq, "w") as f:
-            f.write(FAKE_CCQUOTA)
-        os.chmod(cq, 0o755)
+        wx(cq, FAKE_CCQUOTA)
         self.env.update({
             "FLEET_NODE_STATE": os.path.join(self.d, "db"),
             "FLEET_NODE_LOG": os.path.join(self.d, "log"),
@@ -326,26 +332,30 @@ class Sandbox(unittest.TestCase):
         shutil.rmtree(self.d, ignore_errors=True)
 
     # -- helpers
-    def wj(self, path, obj):
-        with open(path, "w") as f:
-            json.dump(obj, f)
-
-    def rj(self, path):
-        with open(path) as f:
-            return json.load(f)
+    wj, rj = staticmethod(wj), staticmethod(rj)
 
     def release(self, sha, **kw):
         return make_release(self.rel, sha, **kw)
 
-    def tick(self, target, **extra):
-        e = dict(self.env, FLEET_NODE_UPDATE_TARGET=target, **extra)
+    def tick(self, target=None, **extra):
+        """One `tick` (<target> pinned, else the hub's stable)."""
+        e = dict(self.env, **extra)
+        if target:
+            e["FLEET_NODE_UPDATE_TARGET"] = target
         r = subprocess.run(UPD_RUN + ["tick"], env=e, capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return self.state()
 
-    def cmd(self, *args):
-        return subprocess.run(UPD_RUN + list(args), env=self.env, capture_output=True, text=True,
-                              timeout=60)
+    def cmd(self, *args, input=None, timeout=60, **extra):
+        return subprocess.run(UPD_RUN + list(args), env=dict(self.env, **extra), input=input, capture_output=True,
+                              text=True, timeout=timeout)
+
+    def epic_lib(self, body):
+        """FLEET_NODE_UPDATE_LIB's stand-in: fleet_epic_holding() { <body> }."""
+        lib = os.path.join(self.d, "lib.sh")
+        with open(lib, "w") as f:
+            f.write("fleet_epic_holding() { %s; }\n" % body)
+        return lib
 
     def state(self):
         return self.rj(os.path.join(self.d, "db", "update.json"))
@@ -362,14 +372,66 @@ class Sandbox(unittest.TestCase):
         p = os.path.join(self.root, "current", "tools", "bin", tool)
         return subprocess.run([p], capture_output=True, text=True).stdout.strip()
 
+    def hub(self, data):
+        """A hub on 127.0.0.1 answering every GET with <data>, named in machine.env."""
+        import http.server
+        import threading
+        paths = self.paths = []
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                paths.append(self.path)
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
+            f.write("CCQUOTA_HUB_URL=http://127.0.0.1:%d\n" % srv.server_address[1])
+
+    def sup(self, wait_up=False):
+        """The daemon (`run`, a 0.1 s tick) as a child; <wait_up>: until its heartbeat names it."""
+        e = dict(self.env, FLEET_NODE_TICK="0.1")
+        p = subprocess.Popen([sys.executable, "-c", _LOADER, _UPD_PYC, SUP, "run"], env=e,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.procs.append(p)
+        st = os.path.join(self.d, "db", "state.json")
+
+        def up():
+            try:
+                return (rj(st).get("supervisor") or {}).get("pid") == p.pid
+            except (IOError, OSError, ValueError):
+                return False
+        if wait_up:
+            until(up, 15)
+        return p
+
+    def log(self):
+        try:
+            with open(os.path.join(self.d, "log", "update.log")) as f:
+                return f.read()
+        except OSError:
+            return ""
+
+    def verify(self, sha, result="committed", **extra):
+        """Switch to a staged <sha>, the daemon back on it, the verify tick's <result>."""
+        st = self.tick(sha)
+        self.assertEqual(st["phase"], "switched", st)
+        self.assertEqual(self.current(), sha)
+        self.daemon_on(sha)
+        st = self.tick(sha, **extra)
+        self.assertEqual(st["result"], result, st)
+        return st
+
     def install(self, sha, **kw):
         """Bring the sandbox to <sha>, committed."""
         self.release(sha, **kw)
-        st = self.tick(sha)
-        self.assertEqual(st["phase"], "switched", st)
-        self.daemon_on(sha)
-        st = self.tick(sha)
-        self.assertEqual(st["result"], "committed", st)
+        self.verify(sha)
 
     def assert_all_on(self, sha, claude):
         self.assertEqual(self.current(), sha)
@@ -500,38 +562,12 @@ class P_Helpers(Sandbox):
         self.assertEqual(self.current(), V1)
 
 
-class B_RollbackWhole(Sandbox):
-    def test_new_fail_rolls_every_part_back(self):
-        self.install(V1, claude="2.1.1")
-        self.release(V2, claude="2.1.9", codex="0.155.0", broken=("claude-",))
-        st = self.tick(V2)
-        self.assertEqual(st["phase"], "switched")
-        self.assertEqual(self.current(), V2)
-        self.daemon_on(V2)
-        st = self.tick(V2)
-        self.assertEqual(st["result"], "rolled-back", st)
-        self.assertIn("claude", st["reason"])
-        # every part is the old release's again
-        self.assert_all_on(V1, "2.1.1")
-        self.assertEqual(self.out("codex"), "codex-cli 0.154.0")
-        self.assertEqual(os.path.basename(os.readlink(os.path.join(self.root, ".prev"))), V2)
-        self.assertEqual(self.rj(os.path.join(self.d, "db", "update-restart.json"))["to"], V1)
-        # not retried until the target moves
-        self.daemon_on(V1)
-        self.assertEqual(self.tick(V2)["result"], "skipped")
-        self.assertEqual(self.current(), V1)
-        self.assertNotEqual(self.cmd("status", "--check").returncode, 0)
-
-
 class C_DaemonAndCommit(Sandbox):
     def test_drill_fail_marker_rolls_back(self):
         # issue #2336: the drill's rollback release fails its own doctor
         self.install(V1)
         self.release(V2, drill_fail=True)
-        self.tick(V2)
-        self.daemon_on(V2)
-        st = self.tick(V2)
-        self.assertEqual(st["result"], "rolled-back", st)
+        st = self.verify(V2, "rolled-back")
         self.assertIn("drill", st["reason"])
         self.assertEqual(self.current(), V1)
         self.assertNotIn("drill", self.cmd("doctor").stdout)
@@ -541,15 +577,10 @@ class C_DaemonAndCommit(Sandbox):
         # than its commit's (the hub image's of the day) fails its own doctor
         src = "a" * 64
         self.release(V1, ccquota_src=src, ccquota_says='echo "ccquota prod-%s"; echo "src %s"' % (V1[:7], src))
-        self.tick(V1)
-        self.daemon_on(V1)
-        self.assertEqual(self.tick(V1)["result"], "committed")
+        self.verify(V1)
         self.assertRegex(self.cmd("doctor").stdout, r"PASS\s+ccquota\b.*Go source aaaaaaaaaaaa")
         self.release(V2, ccquota_src="b" * 64, ccquota_says='echo "ccquota prod-old1234"; echo "src %s"' % src)
-        self.tick(V2)
-        self.daemon_on(V2)
-        st = self.tick(V2)
-        self.assertEqual(st["result"], "rolled-back", st)
+        st = self.verify(V2, "rolled-back")
         self.assertIn("ccquota", st["reason"])
         self.assertEqual(self.current(), V1)
 
@@ -557,9 +588,7 @@ class C_DaemonAndCommit(Sandbox):
         # a release from before #2930 names no source: another commit's build is
         # a WARN (its Go may be the same), never a rollback
         self.release(V1, ccquota_says='echo "ccquota prod-343c92b"')
-        self.tick(V1)
-        self.daemon_on(V1)
-        self.assertEqual(self.tick(V1)["result"], "committed")
+        self.verify(V1)
         out = self.cmd("doctor").stdout
         self.assertRegex(out, r"WARN\s+ccquota\b.*prod-343c92b.*%s" % V1[:12])
 
@@ -577,10 +606,7 @@ class C_DaemonAndCommit(Sandbox):
     def test_good_upgrade_commits(self):
         self.install(V1, claude="2.1.1")
         self.release(V2, claude="2.1.2", codex="0.155.0")
-        self.tick(V2)
-        self.daemon_on(V2)
-        st = self.tick(V2)
-        self.assertEqual(st["result"], "committed", st)
+        st = self.verify(V2)
         self.assert_all_on(V2, "2.1.2")
         self.assertEqual(self.out("codex"), "codex-cli 0.155.0")
         self.assertEqual(os.path.basename(os.readlink(os.path.join(self.root, ".prev"))), V1)
@@ -590,10 +616,7 @@ class C_DaemonAndCommit(Sandbox):
         self.assertTrue(os.path.isdir(os.path.join(self.root, V1)))
         # a third release retires V1 (KEEP 0): V1 goes, V2 (prev) stays
         self.release(V3, claude="2.1.3")
-        self.tick(V3)
-        self.daemon_on(V3)
-        st = self.tick(V3, FLEET_NODE_UPDATE_KEEP_SECS="0")
-        self.assertEqual(st["result"], "committed", st)
+        st = self.verify(V3, FLEET_NODE_UPDATE_KEEP_SECS="0")
         self.assertFalse(os.path.exists(os.path.join(self.root, V1)))
         self.assertTrue(os.path.isdir(os.path.join(self.root, V2)))
         tools = os.listdir(os.path.join(self.root, "tools", "claude"))
@@ -636,8 +659,7 @@ class R_Prune(Sandbox):
         self.assertTrue(os.path.isdir(os.path.join(self.root, V2)), "the daemon's runtime was pruned")
         self.assertEqual(sorted(e for e in os.listdir(self.root) if len(e) == 40), [V2, V3])
         # the doctor counts them
-        r = subprocess.run([sys.executable, UPD, "doctor"], env=dict(self.env, FLEET_NODE_VERSIONS_WARN="1"),
-                           capture_output=True, text=True, timeout=60)
+        r = self.cmd("doctor", FLEET_NODE_VERSIONS_WARN="1")
         self.assertRegex(r.stdout, r"WARN\s+versions\s+2 release\(s\) under .* GB")
 
 
@@ -714,21 +736,17 @@ class F_EpicHold(Sandbox):
         person turned the hold on — a new stable switches at once, and status
         says the hold is off."""
         self.install(V1)
-        lib = os.path.join(self.d, "lib.sh")
-        with open(lib, "w") as f:
-            f.write('fleet_epic_holding() { echo "active epic=2329 live=1"; return 0; }\n')
+        lib = self.epic_lib('echo "active epic=2329 live=1"; return 0')
         self.release(V2)
         st = self.tick(V2, FLEET_NODE_UPDATE_LIB=lib)
         self.assertEqual(st["phase"], "switched", st)
         self.assertNotIn("hold", st)
-        self.assertNotIn("hold released", open(os.path.join(self.d, "log", "update.log")).read())
+        self.assertNotIn("hold released", self.log())
         self.assertIn("hold    off", self.cmd("status").stdout)
 
     def test_batch_with_work_defers_until_the_cap(self):
         self.install(V1)
-        lib = os.path.join(self.d, "lib.sh")
-        with open(lib, "w") as f:
-            f.write('fleet_epic_holding() { echo "active epic=2329 conf=$FLEET_CONF_DIR"; return 0; }\n')
+        lib = self.epic_lib('echo "active epic=2329 conf=$FLEET_CONF_DIR"; return 0')
         self.release(V2)
         st = self.tick(V2, FLEET_NODE_UPDATE_LIB=lib, FLEET_EPIC_HOLD_CAP_SECS="7200")
         self.assertEqual(st["result"], "deferred", st)
@@ -740,10 +758,9 @@ class F_EpicHold(Sandbox):
         self.wj(os.path.join(self.d, "db", "update.json"), st)
         st = self.tick(V2, FLEET_NODE_UPDATE_LIB=lib, FLEET_EPIC_HOLD_CAP_SECS="7200")
         self.assertEqual(st["phase"], "switched", st)
-        self.assertIn("hold released", open(os.path.join(self.d, "log", "update.log")).read())
+        self.assertIn("hold released", self.log())
         # an idle batch (fleet_epic_holding rc 1) never holds
-        with open(lib, "w") as f:
-            f.write('fleet_epic_holding() { echo idle; return 1; }\n')
+        self.epic_lib('echo idle; return 1')
         self.daemon_on(V2)
         self.tick(V2, FLEET_NODE_UPDATE_LIB=lib, FLEET_EPIC_HOLD_CAP_SECS="7200")
         self.release(V3)
@@ -759,9 +776,7 @@ class F_EpicHold(Sandbox):
         mark = os.path.join(self.d, "mark-2770")
         with open(mark, "w") as f:
             f.write("epic: 2770\nrepo: o/r\n")
-        lib = os.path.join(self.d, "lib.sh")
-        with open(lib, "w") as f:
-            f.write('fleet_epic_holding() { printf "active\\t%s\\tepic=2770 live=1\\n" "%s"; return 0; }\n' % (mark, mark))
+        lib = self.epic_lib('printf "active\\t%s\\tepic=2770 live=1\\n" "%s"; return 0' % (mark, mark))
         notes = os.path.join(self.d, "notes.log")
         note = os.path.join(self.d, "note.sh")
         with open(note, "w") as f:
@@ -790,7 +805,7 @@ class F_EpicHold(Sandbox):
         st = self.tick(V3, FLEET_NODE_UPDATE_LIB=lib, FLEET_EPIC_HOLD_NOTE_CMD="sh " + note)
         self.assertEqual(st["phase"], "switched", st)
         self.assertNotIn("hold", st)
-        log = open(os.path.join(self.d, "log", "update.log")).read()
+        log = self.log()
         self.assertIn("hold released", log)
         self.assertIn("one clock for the machine", log)
         said = open(notes).read()
@@ -827,10 +842,7 @@ class N_ReleaseKey(Sandbox):
         is signed by the train's key, vouched for through the manifest's
         key_chain — the stage accepts it, so the doctor's key row must too; a
         signer the pin does not vouch for stays FAIL."""
-        import importlib.util
-        sp = importlib.util.spec_from_file_location("rv", os.path.join(BIN, "fleet-release-verify.py"))
-        rv = importlib.util.module_from_spec(sp)
-        sp.loader.exec_module(rv)
+        rv = module("rv", os.path.join(BIN, "fleet-release-verify.py"))
         self.install(V1)
         root, signer = b"\x02" * 32, b"\x03" * 32
         rpub, spub = rv.pub_of(root), rv.pub_of(signer)
@@ -881,24 +893,8 @@ class O_TornReadPast(Sandbox):
         self.assertEqual(self.current(), V2)
 
     def test_fresh_torn_read_is_a_warn(self):
-        import http.server
-        import threading
-        key = "ed25519 %s\n" % base64.b64encode(b"\x01" * 32).decode()
-
-        class H(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(key.encode())
-
-            def log_message(self, *a):
-                pass
-        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.addCleanup(srv.shutdown)
         self.install(V1)
-        with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
-            f.write("CCQUOTA_HUB_URL=http://127.0.0.1:%d\n" % srv.server_address[1])
+        self.hub(("ed25519 %s\n" % base64.b64encode(b"\x01" * 32).decode()).encode())
         self.stale_failure(int(time.time()) + 5)             # after every landed stage: still current
         r = self.cmd("doctor")
         self.assertIn("WARN  key", r.stdout)
@@ -906,26 +902,28 @@ class O_TornReadPast(Sandbox):
         self.assertEqual(r.returncode, 0, r.stdout)
 
     def test_skip_is_retried(self):
+        """A new FAIL rolls every part back (was B_RollbackWhole); the skip is retried."""
         self.install(V1, claude="2.1.1")
-        self.release(V2, claude="2.1.9", broken=("claude-",))
-        self.tick(V2)
-        self.daemon_on(V2)
-        st = self.tick(V2)
-        self.assertEqual(st["result"], "rolled-back", st)
+        self.release(V2, claude="2.1.9", codex="0.155.0", broken=("claude-",))
+        st = self.verify(V2, "rolled-back")
+        self.assertIn("claude", st["reason"])
         self.assertEqual(st["skip"][V2]["tries"], 1)
         self.assertEqual(st["skip"][V2]["rows"], ["claude"])
+        # every part is the old release's again
+        self.assert_all_on(V1, "2.1.1")
+        self.assertEqual(self.out("codex"), "codex-cli 0.154.0")
+        self.assertEqual(os.path.basename(os.readlink(os.path.join(self.root, ".prev"))), V2)
+        self.assertEqual(self.rj(os.path.join(self.d, "db", "update-restart.json"))["to"], V1)
         self.daemon_on(V1)
         st = self.tick(V2)
         self.assertEqual(st["result"], "skipped", st)
         self.assertIn("retried at", st["reason"])
+        self.assertEqual(self.current(), V1)
+        self.assertNotEqual(self.cmd("status", "--check").returncode, 0)
         # the skip ran out: tried again, rolled back again, the wait doubles
         st["skip"][V2]["at"] -= 21601
         self.wj(os.path.join(self.d, "db", "update.json"), st)
-        st = self.tick(V2)
-        self.assertEqual(st["phase"], "switched", st)
-        self.daemon_on(V2)
-        st = self.tick(V2)
-        self.assertEqual(st["result"], "rolled-back", st)
+        st = self.verify(V2, "rolled-back")
         self.assertEqual(st["skip"][V2]["tries"], 2)
         st["skip"][V2]["at"] -= 21601                        # 6h is not 12h
         self.wj(os.path.join(self.d, "db", "update.json"), st)
@@ -946,30 +944,11 @@ class O_TornReadPast(Sandbox):
                                                            "2026-10-10T00:17:46Z against pinned f82f: a torn read" % V9[:12]}}
         st["failed"] = {V9: {"at": int(time.time()) - 3600, "reason": TORN}}
         self.wj(os.path.join(self.d, "db", "update.json"), st)
-        st = self.tick(V2)
-        self.assertEqual(st["phase"], "switched", st)
-        self.daemon_on(V2)
-        self.assertEqual(self.tick(V2)["result"], "committed")
-        self.assertIn("its cause is gone", open(os.path.join(self.d, "log", "update.log")).read())
+        self.verify(V2)
+        self.assertIn("its cause is gone", self.log())
 
 
 class G_DaemonRestart(Sandbox):
-    def sup(self):
-        e = dict(self.env, FLEET_NODE_TICK="0.1")
-        p = subprocess.Popen([sys.executable, SUP, "run"], env=e, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        self.procs.append(p)
-        st = os.path.join(self.d, "db", "state.json")
-
-        def up():
-            try:
-                return (self.rj(st).get("supervisor") or {}).get("pid") == p.pid
-            except (IOError, OSError, ValueError):
-                return False
-        end = time.time() + 15
-        while time.time() < end and not up():
-            time.sleep(0.1)
-        return p
-
     def test_restart_request(self):
         for s in (V1, V2):
             os.makedirs(os.path.join(self.root, s))
@@ -977,11 +956,9 @@ class G_DaemonRestart(Sandbox):
         os.symlink(os.path.join(self.root, V1), cur)
         req = os.path.join(self.d, "db", "update-restart.json")
         # a stale request (current did not move) is removed, the daemon stays
-        p = self.sup()
+        p = self.sup(wait_up=True)
         self.wj(req, {"to": V2})
-        end = time.time() + 10
-        while time.time() < end and os.path.exists(req):
-            time.sleep(0.1)
+        self.assertTrue(until(lambda: not os.path.exists(req), 10))
         self.assertFalse(os.path.exists(req))
         self.assertIsNone(p.poll())
         # current moved: the daemon stops (launchd starts the new code)
@@ -991,20 +968,13 @@ class G_DaemonRestart(Sandbox):
         self.assertEqual(p.wait(timeout=15), 0)
         self.assertTrue(os.path.exists(req))
         # the new one runs V2 and clears the request
-        p2 = self.sup()
-        end = time.time() + 10
-        while time.time() < end and os.path.exists(req):
-            time.sleep(0.1)
+        p2 = self.sup(wait_up=True)
+        self.assertTrue(until(lambda: not os.path.exists(req), 10))
         self.assertFalse(os.path.exists(req))
         self.assertIsNone(p2.poll())
         self.assertEqual(self.rj(os.path.join(self.d, "db", "state.json"))["supervisor"]["runtime"], V2)
         p2.send_signal(signal.SIGTERM)
         p2.wait(timeout=15)
-
-    def test_default_table_has_update(self):
-        e = {k: v for k, v in self.env.items() if k != "FLEET_NODE_TABLE"}
-        r = subprocess.run([sys.executable, SUP, "status"], env=e, capture_output=True, text=True, timeout=30)
-        self.assertIn("update", r.stdout)
 
 
 class H_ReleaseJson(Sandbox):
@@ -1033,12 +1003,10 @@ class H_ReleaseJson(Sandbox):
         ]
         # how a running client takes it (issue #2737): hot or restart pass
         for ok in (dict(good, client_reload="hot"), dict(good, client_reload="restart")):
-            r = subprocess.run([sys.executable, UPD, "check-release", "-"], input=json.dumps(ok), env=self.env,
-                               capture_output=True, text=True, timeout=30)
+            r = self.cmd("check-release", "-", input=json.dumps(ok), timeout=30)
             self.assertEqual(r.returncode, 0, r.stderr)
         for b in bad:
-            r = subprocess.run([sys.executable, UPD, "check-release", "-"], input=json.dumps(b), env=self.env,
-                               capture_output=True, text=True, timeout=30)
+            r = self.cmd("check-release", "-", input=json.dumps(b), timeout=30)
             self.assertEqual(r.returncode, 1, b)
         # status before any tick: not set up
         self.assertEqual(self.cmd("status", "--check").returncode, 2)
@@ -1097,31 +1065,13 @@ class I_Credsep(Sandbox):
             return None, None
 
     def wait_live(self, want, timeout=15):
-        end = time.time() + timeout
-        while time.time() < end:
-            v, pid = self.live()
-            if v == want:
-                return pid
-            time.sleep(0.1)
+        got = until(lambda: [vp for vp in [self.live()] if vp[0] == want], timeout)
+        if got:
+            return got[0][1]
         self.fail("the proxy never ran %s (it runs %s)" % (want, self.live()[0]))
 
-    def sup(self):
-        e = dict(self.env, FLEET_NODE_TICK="0.1")
-        p = subprocess.Popen([sys.executable, "-c", _LOADER, _UPD_PYC, SUP, "run"], env=e,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.procs.append(p)
-        return p
-
-    def log(self):
-        try:
-            with open(os.path.join(self.d, "log", "update.log")) as f:
-                return f.read()
-        except OSError:
-            return ""
-
     def doctor(self, **extra):
-        r = subprocess.run([sys.executable, UPD, "doctor"], env=dict(self.env, **extra), capture_output=True, text=True,
-                           timeout=60)
+        r = self.cmd("doctor", **extra)
         rows = [l.split(None, 2) for l in r.stdout.splitlines() if l.split()[1:2] == ["credsep"]]
         return rows[0][0] + " " + rows[0][2] if rows else None
 
@@ -1432,7 +1382,7 @@ class M_FollowInstall(Sandbox):
         self.assertIn("--tree-from %s --tree-to %s --root %s --from %s --to %s" % (
             os.path.realpath(os.path.join(self.live("alice") + ".versions", self.V0)),
             os.path.join(self.root, V1), self.live("alice"), self.V0, V1), a)
-        self.assertRegex(open(os.path.join(self.env["FLEET_NODE_LOG"], "update.log")).read(),
+        self.assertRegex(self.log(),
                          r"install alice: %s → %s · rc 0 · pointed %s → %s" % (self.V0[:12], V1[:12], self.V0[:12], V1[:12]))
         self.daemon_on(V1)
         self.assertEqual(self.tick(V1)["result"], "committed")
@@ -1488,9 +1438,7 @@ class M_FollowInstall(Sandbox):
         r = self.cmd("doctor")
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertRegex(r.stdout, r"WARN\s+install\s+alice: .*the updater points it at .* every tick")
-        lib = os.path.join(self.d, "lib.sh")
-        with open(lib, "w") as f:
-            f.write('fleet_epic_holding() { echo "active epic=2770"; return 0; }\n')
+        lib = self.epic_lib('echo "active epic=2770"; return 0')
         st = self.tick(V1, FLEET_NODE_UPDATE_LIB=lib, FLEET_EPIC_HOLD_CAP_SECS="7200")
         self.assertIn("install alice: not pointed at %s yet — an EPIC batch with work" % V1[:12], st["reason"])
         self.assertEqual(os.path.realpath(self.live("alice")), os.path.realpath(own))
@@ -1599,15 +1547,11 @@ class J_OneSwitch(Sandbox):
         version that changes only bin/ — nothing saved, nothing reopened, the
         login not entered, its ~/.claude/fleet (what every hook runs) the new one."""
         self.rel_(V1, "m1")
-        self.assertEqual(self.tick(V1)["phase"], "switched")
-        self.daemon_on(V1)
-        self.assertEqual(self.tick(V1)["result"], "committed")
+        self.verify(V1)
         self.assertEqual(len(self.lines(self.A)), 1, self.lines(self.A))   # pointed + applied once
         n = len(self.ulog())
         self.rel_(V2, "m1")
-        self.assertEqual(self.tick(V2)["phase"], "switched")
-        self.daemon_on(V2)
-        self.assertEqual(self.tick(V2)["result"], "committed")
+        self.verify(V2)
         self.assertEqual(self.lines(self.S), [], "sessions saved / restored on a switch")
         self.assertEqual(len(self.lines(self.A)), 1, "a login entered with nothing of its own changed")
         new = self.ulog()[n:]
@@ -1618,9 +1562,7 @@ class J_OneSwitch(Sandbox):
 
     def test_changed_inputs_enter_once_and_rollback(self):
         self.rel_(V1, "m1")
-        self.tick(V1)
-        self.daemon_on(V1)
-        self.tick(V1)
+        self.verify(V1)
         self.rel_(V2, "m2")
         self.assertEqual(self.tick(V2)["phase"], "switched")
         runs = self.lines(self.A)
@@ -1634,9 +1576,7 @@ class J_OneSwitch(Sandbox):
         self.assertEqual(len(self.lines(self.A)), 2)     # the verify enters nobody again
         # a version that fails its doctor: the login goes back with the machine, entered once
         self.rel_(V3, "m3", claude="2.1.9", broken=("claude-",))
-        self.tick(V3)
-        self.daemon_on(V3)
-        self.assertEqual(self.tick(V3)["result"], "rolled-back")
+        self.verify(V3, "rolled-back")
         runs = self.lines(self.A)
         self.assertEqual(len(runs), 4, runs)
         self.assertIn("--tree-from %s --tree-to %s " % (os.path.join(self.root, V3), os.path.join(self.root, V2)),
@@ -1645,9 +1585,7 @@ class J_OneSwitch(Sandbox):
 
     def test_resumed_switch_enters_no_login_twice(self):
         self.rel_(V1, "m1")
-        self.tick(V1)
-        self.daemon_on(V1)
-        self.tick(V1)
+        self.verify(V1)
         self.rel_(V2, "m2")
         self.tick(V2)
         self.assertEqual(len(self.lines(self.A)), 2)
@@ -1661,9 +1599,7 @@ class J_OneSwitch(Sandbox):
     def test_release_without_a_list_enters(self):
         """An older release (no conf/home-inputs.list) says nothing: enter, as before."""
         self.rel_(V1, "m1")
-        self.tick(V1)
-        self.daemon_on(V1)
-        self.tick(V1)
+        self.verify(V1)
         self.release(V2, apply_log=self.A, mark="m1")
         self.tick(V2)
         self.assertEqual(len(self.lines(self.A)), 2)
@@ -1675,7 +1611,7 @@ class J_OneSwitch(Sandbox):
         named = set(re.findall(r"touched ((?:bin|conf|hooks)/[A-Za-z0-9_./-]+)", src))
         named |= {"bin/" + n for n in re.search(r"for file in (.*?); do", src, re.S).group(1).replace("\\", " ").split()}
         sys.path.insert(0, BIN)
-        upd = load_upd()
+        upd = module("fnu", UPD)
         pats = upd.home_patterns(REPO)
         self.assertTrue(pats)
         for n in sorted(named):
@@ -1691,9 +1627,7 @@ class L_ResumableFetch(Sandbox):
     def setUp(self):
         Sandbox.setUp(self)
         cq = os.path.join(self.d, "ccquota-resume")
-        with open(cq, "w") as f:
-            f.write(FAKE_CCQUOTA_RESUME)
-        os.chmod(cq, 0o755)
+        wx(cq, FAKE_CCQUOTA_RESUME)
         self.env["FLEET_NODE_CCQUOTA"] = cq
 
     def test_pinned_cached_and_resumed(self):
@@ -1750,25 +1684,21 @@ class Q_AdminAgent(Sandbox):
         Sandbox.setUp(self)
         self.lc = os.path.join(self.d, "launchctl.log")
         fake = os.path.join(self.d, "launchctl")
-        with open(fake, "w") as f:
-            f.write('#!/bin/sh\necho "$*" >> %s\n' % self.lc)
-        os.chmod(fake, 0o755)
+        wx(fake, '#!/bin/sh\necho "$*" >> %s\n' % self.lc)
         self.env["FLEET_NODE_LAUNCHCTL"] = fake
         self.own = os.path.join(self.d, "Users", "frank", ".local", "bin", "ccquota")
         os.makedirs(os.path.dirname(self.own))
-        with open(self.own, "w") as f:
-            f.write("#!/bin/sh\necho ccquota prod-e715029\n")
-        os.chmod(self.own, 0o755)
+        wx(self.own, "#!/bin/sh\necho ccquota prod-e715029\n")
         self.meta("frank", self.own)
         self.meta("alice", self.own)     # taken over: the machine program's tenant
 
-    def meta(self, login, prog):
+    def meta(self, login, prog, agent=None):
         d = os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], login)
         if not os.path.isdir(d):
             os.makedirs(d)
         mp = os.path.join(d, "meta.json")
-        self.wj(mp, {"login": login, "agent": {"kind": "launchd-system", "path": "/x.plist",
-                                               "label": "com.ccquota.agent.%s" % login},
+        self.wj(mp, {"login": login, "agent": agent or {"kind": "launchd-system", "path": "/x.plist",
+                                                        "label": "com.ccquota.agent.%s" % login},
                      "agent_argv": [prog, "agent", "--state", "/s"], "path": "/usr/bin:/bin"})
         os.chmod(mp, 0o600)
 
@@ -1816,9 +1746,7 @@ class Q_AdminAgent(Sandbox):
         self.daemon_on(V2)
         self.assertEqual(self.tick(V2)["result"], "committed")
         self.release(V3, claude="2.1.9", broken=("claude-",))
-        self.tick(V3)
-        self.daemon_on(V3)
-        self.assertEqual(self.tick(V3)["result"], "rolled-back")
+        self.verify(V3, "rolled-back")
         self.assertEqual(self.current(), V2)
         self.assertEqual(len(self.kicks()), 4)                     # onto V3, back onto V2
         self.assertEqual(self.state()["admin_agents"]["frank"]["sha"], V2)
@@ -1847,9 +1775,7 @@ class Q_AdminAgent(Sandbox):
         os.makedirs(units)
         self.env["FLEET_ADMIN_UNIT_DIR"] = units
         sc = os.path.join(self.d, "systemctl")
-        with open(sc, "w") as f:
-            f.write('#!/bin/sh\necho "$*" >> %s\n' % self.lc)
-        os.chmod(sc, 0o755)
+        wx(sc, '#!/bin/sh\necho "$*" >> %s\n' % self.lc)
         self.env["FLEET_NODE_SYSTEMCTL"] = sc
         key = "com.claude-fleet.admin-agent" if mac else "fleet-admin-agent.service"
         want = "kickstart -k system/%s" % key if mac else "restart %s" % key
@@ -1881,13 +1807,8 @@ class Q_AdminAgent(Sandbox):
     def gui_meta(self, login, prog):
         """A Mac admin whose agent was a LaunchAgent: credsep keeps that in
         meta.json for `release` and runs it as LaunchDaemon com.ccquota.agent.<login>."""
-        mp = os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], login, "meta.json")
-        if not os.path.isdir(os.path.dirname(mp)):
-            os.makedirs(os.path.dirname(mp))
-        self.wj(mp, {"login": login, "agent": {"kind": "launchd-gui", "label": "com.ccquota.agent",
-                                               "path": "/Users/%s/Library/LaunchAgents/com.ccquota.agent.plist" % login},
-                     "agent_argv": [prog, "agent", "--state", "/s"], "path": "/usr/bin:/bin"})
-        os.chmod(mp, 0o600)
+        self.meta(login, prog, {"kind": "launchd-gui", "label": "com.ccquota.agent",
+                                "path": "/Users/%s/Library/LaunchAgents/com.ccquota.agent.plist" % login})
 
     def test_converted_gui_agent_is_followed(self):
         # issue #3508: a Mac's admin stayed on its own ccquota (no login_join) because
@@ -2003,9 +1924,7 @@ class T_Codesign(Sandbox):
         Sandbox.setUp(self)
         self.env["FLEET_NODE_CODESIGN"] = "1"
         lc = os.path.join(self.d, "launchctl")
-        with open(lc, "w") as f:
-            f.write("#!/bin/sh\nexit 0\n")
-        os.chmod(lc, 0o755)
+        wx(lc, "#!/bin/sh\nexit 0\n")
         self.env["FLEET_NODE_LAUNCHCTL"] = lc
         d = os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "frank")
         os.makedirs(d)
@@ -2030,14 +1949,6 @@ class T_Codesign(Sandbox):
                 a["sha256"], a["size"] = sh256(b), len(b)
         self.wj(mp, m)
 
-    def commit(self, sha):
-        """install() for a release already made."""
-        st = self.tick(sha)
-        self.assertEqual(st["phase"], "switched", st)
-        self.daemon_on(sha)
-        st = self.tick(sha)
-        self.assertEqual(st["result"], "committed", st)
-
     def cs(self, *args):
         return subprocess.run(["/usr/bin/codesign"] + list(args), capture_output=True, text=True, timeout=60)
 
@@ -2048,7 +1959,7 @@ class T_Codesign(Sandbox):
 
     def test_identity_survives_the_switch(self):
         self.release_macho(V1, "/usr/bin/true")
-        self.commit(V1)
+        self.verify(V1)
         req = self.requirement()
         self.assertTrue(req and "com.claude-fleet.ccquota" in req, req)
         kc = os.path.join(self.d, "db", "codesign")
@@ -2061,10 +1972,8 @@ class T_Codesign(Sandbox):
         before = sh256(open(self.agent, "rb").read())
         # a new release, different bytes: same path, same identity, the old grant still holds
         self.release_macho(V2, "/bin/echo")
-        self.assertEqual(self.tick(V2)["phase"], "switched")
-        self.daemon_on(V2)
-        self.assertEqual(self.tick(V2)["result"], "committed")
-        self.assertNotEqual(sha256_of(self.agent), before)
+        self.verify(V2)
+        self.assertNotEqual(sh256(open(self.agent, "rb").read()), before)
         self.assertEqual(self.requirement(), req)
         self.assertEqual(self.cs("--verify", "--strict", "-R=" + req, self.agent).returncode, 0)
         self.assertEqual(self.cs("--verify", "--strict", "-R=" + req,
@@ -2073,12 +1982,10 @@ class T_Codesign(Sandbox):
 
     def test_bad_signature_refuses_the_stage(self):
         self.release_macho(V1, "/usr/bin/true")
-        self.commit(V1)
+        self.verify(V1)
         # a codesign that claims success and signs nothing: the check refuses the stage
         fake = os.path.join(self.d, "codesign")
-        with open(fake, "w") as f:
-            f.write('#!/bin/sh\ncase "$1" in --force) exit 0 ;; esac\nexec /usr/bin/codesign "$@"\n')
-        os.chmod(fake, 0o755)
+        wx(fake, '#!/bin/sh\ncase "$1" in --force) exit 0 ;; esac\nexec /usr/bin/codesign "$@"\n')
         self.release_macho(V2, "/bin/echo")
         st = self.tick(V2, FLEET_NODE_CODESIGN_CODESIGN=fake)
         self.assertEqual(st["result"], "failed", st)
@@ -2088,7 +1995,7 @@ class T_Codesign(Sandbox):
     def test_unsigned_current_is_signed_next_tick(self):
         self.release_macho(V1, "/usr/bin/true")
         self.env["FLEET_NODE_CODESIGN"] = "0"
-        self.commit(V1)                       # staged ad-hoc, as before #3433
+        self.verify(V1)                       # staged ad-hoc, as before #3433
         self.env["FLEET_NODE_CODESIGN"] = "1"
         self.cmd("codesign", "ensure")
         req = self.requirement()
@@ -2106,38 +2013,13 @@ class U_OneLine(Sandbox):
     (a lower seq on stable's chain) is refused, never switched to."""
 
     def hub(self, body):
-        import http.server
-        import threading
-        data = json.dumps(body).encode()
-        paths = self.paths = []
-
-        class H(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                paths.append(self.path)
-                self.send_response(200)
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-
-            def log_message(self, *a):
-                pass
-        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.addCleanup(srv.shutdown)
-        with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
-            f.write("CCQUOTA_HUB_URL=http://127.0.0.1:%d\n" % srv.server_address[1])
-
-    def follow(self, plat, **extra):
-        e = dict(self.env, FLEET_PLATFORM=plat, **extra)
-        r = subprocess.run(UPD_RUN + ["tick"], env=e, capture_output=True, text=True, timeout=60)
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        return self.state()
+        Sandbox.hub(self, json.dumps(body).encode())
 
     def test_mac_follows_stable(self):
         self.install(V1)
         self.release(V2)
         self.hub({"stable": V2, "client_version_macos": V1})   # an older hub's Mac lane
-        st = self.follow("darwin")
+        st = self.tick(FLEET_PLATFORM="darwin")
         self.assertEqual(st["target_seen"]["sha"], V2, st)
         self.assertEqual(st["phase"], "switched", st)
 
@@ -2148,7 +2030,7 @@ class U_OneLine(Sandbox):
         self.install(V1)
         self.release(V2)
         self.hub({"stable": V2})
-        self.follow("darwin")
+        self.tick(FLEET_PLATFORM="darwin")
         asked = [p for p in self.paths if p.startswith("/version")]
         self.assertTrue(asked, self.paths)
         self.assertIn("machine=" + socket.gethostname(), asked[0])
@@ -2157,13 +2039,13 @@ class U_OneLine(Sandbox):
         self.install(V2, seq=5)
         self.release(V1, seq=4)
         self.hub({"stable": V1})   # stable rolled back on the hub
-        st = self.follow("darwin")
+        st = self.tick(FLEET_PLATFORM="darwin")
         self.assertEqual(st["result"], "refused", st)
         self.assertIn("only moves forward", st["reason"])
         self.assertEqual(self.current(), V2)
         self.assertEqual(st["phase"], "idle", st)
         rows = [h for h in st["history"] if h["result"] == "refused"]
-        st = self.follow("darwin")   # again: still refused, one history row per target
+        st = self.tick(FLEET_PLATFORM="darwin")   # again: still refused, one history row per target
         self.assertEqual(st["result"], "refused", st)
         self.assertEqual(len([h for h in st["history"] if h["result"] == "refused"]), len(rows))
         self.assertEqual(self.cmd("status", "--check").returncode, 1)
@@ -2177,53 +2059,39 @@ class U_OneLine(Sandbox):
         self.install(V1, seq=4)
         self.release(V2, seq=5)
         self.hub({"stable": V2})
-        st = self.follow("linux")
+        st = self.tick(FLEET_PLATFORM="linux")
         self.assertEqual(st["phase"], "switched", st)
         self.assertNotIn("behind", st)
 
 
-def load_upd():
-    import importlib.util
-    sp = importlib.util.spec_from_file_location("fnu", UPD)
-    m = importlib.util.module_from_spec(sp)
-    sp.loader.exec_module(m)
-    return m
-
-
-def sha256_of(path):
-    with open(path, "rb") as f:
-        return sh256(f.read())
+# Each BREAK-IT drill runs its cases here (flag → cases).
+DRILLS = {
+    # switch-no-session-save (issue #4670): nothing saved, no login entered
+    "--drill-one-switch": ["J_OneSwitch.test_switch_no_session_save"],
+    # admin-agent-gui-converted (issue #3508)
+    "--drill-admin-agent-gui": ["Q_AdminAgent.test_converted_gui_agent_is_followed"],
+    # codesign-identity-switch (issue #3433): the identity survives a version switch
+    "--drill-codesign": ["T_Codesign"],
+    # runtime-gc-admin-tree (issue #3248): moves with the machine, FAILs when gone
+    "--drill-admin-tree": ["S_AdminTree"],
+    # release-fetch-slow: the updater half
+    "--drill-fetch": ["L_ResumableFetch"],
+    # managed-login-install-stale: the doctor half
+    "--drill-login-install": ["K_LoginInstall"],
+}
 
 
 if __name__ == "__main__":
     # the BREAK-IT drill (node-update-half) builds its fixtures with the same code
     if len(sys.argv) > 1 and sys.argv[1] == "--fake-ccquota":
-        with open(sys.argv[2], "w") as f:
-            f.write(FAKE_CCQUOTA)
-        os.chmod(sys.argv[2], 0o755)
+        wx(sys.argv[2], FAKE_CCQUOTA)
         sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "--make-release":
         kw = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
         make_release(sys.argv[2], sys.argv[3], **kw)
         sys.exit(0)
-    if len(sys.argv) > 1 and sys.argv[1] == "--drill-one-switch":
-        # BREAK-IT switch-no-session-save (issue #4670): nothing saved, no login entered
-        unittest.main(argv=[sys.argv[0], "J_OneSwitch.test_switch_no_session_save"], verbosity=1)
-    if len(sys.argv) > 1 and sys.argv[1] == "--drill-admin-agent-gui":
-        # BREAK-IT admin-agent-gui-converted (issue #3508)
-        unittest.main(argv=[sys.argv[0], "Q_AdminAgent.test_converted_gui_agent_is_followed"], verbosity=1)
-    if len(sys.argv) > 1 and sys.argv[1] == "--drill-codesign":
-        # BREAK-IT codesign-identity-switch (issue #3433): the identity survives a version switch
-        unittest.main(argv=[sys.argv[0], "T_Codesign"], verbosity=1)
-    if len(sys.argv) > 1 and sys.argv[1] == "--drill-admin-tree":
-        # BREAK-IT runtime-gc-admin-tree (issue #3248): moves with the machine, FAILs when gone
-        unittest.main(argv=[sys.argv[0], "S_AdminTree"], verbosity=1)
-    if len(sys.argv) > 1 and sys.argv[1] == "--drill-fetch":
-        # BREAK-IT release-fetch-slow: the updater half
-        unittest.main(argv=[sys.argv[0], "L_ResumableFetch"], verbosity=1)
-    if len(sys.argv) > 1 and sys.argv[1] == "--drill-login-install":
-        # BREAK-IT managed-login-install-stale: the doctor half
-        unittest.main(argv=[sys.argv[0], "K_LoginInstall"], verbosity=1)
+    if len(sys.argv) > 1 and sys.argv[1] in DRILLS:
+        unittest.main(argv=[sys.argv[0]] + DRILLS[sys.argv[1]], verbosity=1)
     import selftest_part  # SELFTEST_PART=K/N runs one slice of the cases (issue #2694)
     # each part's cases as two processes at once, a class's cases together (every
     # case its own sandbox; T_Codesign shares a keychain across its cases)

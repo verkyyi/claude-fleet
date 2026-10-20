@@ -23,6 +23,67 @@ BIN = Path(__file__).resolve().parent
 REAL_RUN = subprocess.run
 
 
+RENDER = str(BIN.parent / 'extras/managed-node/render.py')
+IMG = 'example/image@sha256:' + 'a' * 64
+CENTRAL = 'http://fleet-credproxy.fleet-workers.svc.cluster.local'
+# render.py's plain machine, and one person's pod (--cred-central stays last)
+NODE = [sys.executable, RENDER, '--image', IMG, '--hub', 'https://hub.example', '--storage-class', 'essd']
+USER_POD = NODE + ['--user-pod', 'u-drill1', '--login', 'fleetu7', '--uid', '10002', '--cred-central', CENTRAL]
+
+
+def rendered(argv):
+    """render.py's items for <argv>."""
+    return json.loads(subprocess.check_output(argv))['items']
+
+
+def pod_of(argv):
+    """The pod spec of the last item <argv> renders."""
+    return rendered(argv)[-1]['spec']['template']['spec']
+
+
+# an administrator's Codex requirements, kept under the fleet's managed hooks
+ADMIN_POLICY = ('# administrator requirements\nallowed_approval_policies=["on-request"]\n'
+                '[features]\nremote_plugin=false\n[mcp_servers.docs.identity]\nurl="https://docs.example/mcp"\n')
+
+
+def source_profile(d, ef, expr, **env):
+    """devnet/profile.sh (reading <ef>) sourced by sh; <expr> echoed."""
+    pf = os.path.join(d, 'profile.sh')
+    Path(pf).write_text((BIN.parent / 'extras/managed-node/devnet/profile.sh').read_text()
+                        .replace('/etc/fleet-devnet.env', ef))
+    return subprocess.check_output(['sh', '-c', '. "$1"; echo "%s"' % expr, 'sh', pf],
+                                   env=dict(env, PATH=os.environ.get('PATH', '')), text=True).strip()
+
+
+_KUSTOMIZED = []
+
+
+def kustomize_docs():
+    """deploy/k8s/fleet-workers rendered by kubectl (once), else None."""
+    if not _KUSTOMIZED:
+        kubectl = subprocess.run(['sh', '-c', 'command -v kubectl'], capture_output=True, text=True).stdout.strip()
+        out = kubectl and subprocess.check_output([kubectl, 'kustomize', str(BIN.parent / 'deploy/k8s/fleet-workers')],
+                                                  text=True)
+        _KUSTOMIZED.append([x for x in out.split('\n---\n') if x.strip()] if out else None)
+    return _KUSTOMIZED[0]
+
+
+def assert_selftest(case, script):
+    r = subprocess.run([sys.executable, '-I', str(BIN.parent / script), '--selftest'], capture_output=True, text=True)
+    case.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
+def seed_dirs(tmp, runtime='runtime'):
+    """An image seed, a runtime and a state dir under <tmp> (state made), and two shas."""
+    (Path(tmp) / 'state').mkdir()
+    return Path(tmp, 'seed'), Path(tmp, runtime), Path(tmp, 'state'), 'a' * 40, 'b' * 40
+
+
+def fake_write(path, data, uid=0, gid=0):
+    """private_write's stand-in: the bytes, no owner."""
+    Path(path).write_text(data)
+
+
 def module(name):
     spec = importlib.util.spec_from_file_location(name.replace('-', '_'), BIN / (name + '.py'))
     mod = importlib.util.module_from_spec(spec)
@@ -56,8 +117,6 @@ class LinuxNode(unittest.TestCase):
             self.assertNotIn('update', [x['name'] for x in s.default_table(s.Paths())['tasks']])
             pool = next(x for x in s.default_table(s.Paths())['tasks'] if x['name'] == 'credential-pool')
             self.assertEqual(pool['cmd'][-2:], ['machine', 'pool-sync'])
-        with patch.dict(os.environ, {'FLEET_NODE_UPDATE_OWNER': 'hub'}):
-            self.assertIn('update', [x['name'] for x in s.default_table(s.Paths())['tasks']])
 
     def test_sshd_path_and_supervision_are_independent(self):
         s = module('fleet-node-supervisor')
@@ -99,32 +158,47 @@ class LinuxNode(unittest.TestCase):
             self.assertIn('work', kept[0].read_text())
 
             # foreground: a failed restore on the container's own login still reaches ready
-            state, run = Path(d, 'state'), Path(d, 'run')
-            run.mkdir()
+            run = Path(d, 'run')
             seen = []
-            real = m.Path
-
-            def path(*parts):
-                p = real(*parts)
-                return run / p.name if str(p).startswith('/run/') or str(p).startswith('/etc/ssh') else p
-
             (run / 'cred/.shared').mkdir(parents=True)
             (run / 'cred/.shared/ctl.sock').write_text('')
-            loop = Mock()
-            loop.bin.return_value = Path(d)
-            loop.tend.side_effect = lambda: seen.append((run / 'fleet-node-ready').exists()) or 0
-            with patch.dict(os.environ, {'FLEET_NODE_STATE': str(state), 'FLEET_CREDSEP_RUN_BASE': str(run / 'cred')}), \
-                    patch.object(m, 'Path', side_effect=path), patch.object(m, 'boot'), \
-                    patch.object(m, 'lib_owner_heal'), patch.object(m, 'route_heal'), \
-                    patch.object(m, 'Loop', return_value=loop), patch.object(m, 'load'), \
-                    patch.object(m, 'tenants', return_value=[]), \
-                    patch.object(m, 'as_tenant', return_value=Mock(returncode=1)), \
-                    patch.object(m, 'tenant_env', return_value=(None, env)), \
-                    patch.object(m.subprocess, 'run'), patch.object(m.signal, 'signal'):
-                (state / 'ssh').mkdir(parents=True)
-                (state / 'ssh/ssh_host_ed25519_key').write_text('k')
-                m.foreground(Mock(login='fleet', hub='h', join_file='j', machine_join_file=''))
+            loop = self.foreground(m, d, Mock(login='fleet', hub='h', join_file='j', machine_join_file=''),
+                                   {'FLEET_CREDSEP_RUN_BASE': str(run / 'cred')}, [],
+                                   patch.object(m, 'as_tenant', return_value=Mock(returncode=1)),
+                                   patch.object(m, 'tenant_env', return_value=(None, env)),
+                                   tend=lambda: seen.append((run / 'fleet-node-ready').exists()) or 0)
             self.assertEqual(seen, [True])  # ready was written, the loop ran
+
+    @staticmethod
+    def foreground(m, d, ns, env, tenants, *patches, tend=None, run=None):
+        """m.foreground(ns) in <d>: /run and /etc/ssh under <d>/run, a host key,
+        the boot / heal / loop stand-ins and <patches>; -> the loop mock."""
+        import contextlib
+        state, rundir = Path(d, 'state'), Path(d, 'run')
+        rundir.mkdir(exist_ok=True)
+        real = m.Path
+
+        def path(*parts):
+            p = real(*parts)
+            return rundir / p.name if str(p).startswith('/run/') or str(p).startswith('/etc/ssh') else p
+        loop = Mock()
+        loop.bin.return_value = Path(d)
+        if tend:
+            loop.tend.side_effect = tend
+        else:
+            loop.tend.return_value = 0
+        with contextlib.ExitStack() as stack:
+            for p in (patch.dict(os.environ, dict(env, FLEET_NODE_STATE=str(state))),
+                      patch.object(m, 'Path', side_effect=path), patch.object(m, 'boot'),
+                      patch.object(m, 'lib_owner_heal'), patch.object(m, 'route_heal'),
+                      patch.object(m, 'Loop', return_value=loop), patch.object(m, 'load'),
+                      patch.object(m, 'tenants', return_value=tenants),
+                      patch.object(m.subprocess, 'run', side_effect=run), patch.object(m.signal, 'signal')) + patches:
+                stack.enter_context(p)
+            (state / 'ssh').mkdir(parents=True)
+            (state / 'ssh/ssh_host_ed25519_key').write_text('k')
+            m.foreground(ns)
+        return loop
 
     def test_image_replacement_and_rollback_keep_home_and_retry_failed_apply(self):
         m = module('fleet-node-linux')
@@ -157,7 +231,6 @@ class LinuxNode(unittest.TestCase):
                 cur.unlink()
                 cur.symlink_to('b' * 40)
                 # The previous image's runtime disappears, as on Kubernetes.
-                import shutil
                 shutil.rmtree(root / ('a' * 40))
                 (home / 'fail-apply').touch()
                 with self.assertRaises(subprocess.CalledProcessError):
@@ -228,17 +301,6 @@ class LinuxNode(unittest.TestCase):
         with self.assertRaises(m.Refuse):
             m.bootstrap(Mock(login='none'))
         with tempfile.TemporaryDirectory() as d:
-            state, run = Path(d, 'state'), Path(d, 'run')
-            run.mkdir()
-            real = m.Path
-
-            def path(*parts):
-                p = real(*parts)
-                return run / p.name if str(p).startswith('/run/') or str(p).startswith('/etc/ssh') else p
-
-            loop = Mock()
-            loop.bin.return_value = Path(d)
-            loop.tend.return_value = 0
             booted, installs = [], []
 
             def boot(ns):
@@ -250,17 +312,11 @@ class LinuxNode(unittest.TestCase):
                 installs.append(cmd)
                 return Mock(returncode=0)
 
-            with patch.dict(os.environ, {'FLEET_NODE_STATE': str(state)}), \
-                    patch.object(m, 'Path', side_effect=path), patch.object(m, 'boot'), \
-                    patch.object(m, 'lib_owner_heal'), patch.object(m, 'route_heal'), patch.object(m, 'devnet'), \
-                    patch.object(m, 'Loop', return_value=loop), patch.object(m, 'load'), \
-                    patch.object(m, 'tenants', return_value={'24acme': {}, 'drill2': {}}), \
-                    patch.object(m, 'bootstrap', side_effect=boot), patch.object(m, 'as_tenant'), \
-                    patch.object(m, 'login_open') as opened, patch.object(m, 'ensure_login') as ensured, \
-                    patch.object(m.subprocess, 'run', side_effect=run_cmd), patch.object(m.signal, 'signal'):
-                (state / 'ssh').mkdir(parents=True)
-                (state / 'ssh/ssh_host_ed25519_key').write_text('k')
-                m.foreground(Mock(login='none', hub='h', join_file='/run/fleet-join/login', machine_join_file=''))
+            with patch.object(m, 'login_open') as opened, patch.object(m, 'ensure_login') as ensured:
+                loop = self.foreground(m, d, Mock(login='none', hub='h', join_file='/run/fleet-join/login',
+                                                  machine_join_file=''), {}, {'24acme': {}, 'drill2': {}},
+                                       patch.object(m, 'devnet'), patch.object(m, 'bootstrap', side_effect=boot),
+                                       patch.object(m, 'as_tenant'), run=run_cmd)
             self.assertEqual(booted, ['24acme', 'drill2'])
             install = [c for c in installs if any(str(x).endswith('fleet-node-install.sh') for x in c)]
             self.assertEqual(len(install), 1)
@@ -273,11 +329,7 @@ class LinuxNode(unittest.TestCase):
         docker = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
         self.assertIn('FLEET_NODE_LOGIN=none', docker)
         self.assertNotIn('FLEET_NODE_LOGIN=fleet', docker)
-        raw = subprocess.check_output([sys.executable, str(BIN.parent / 'extras/managed-node/render.py'),
-                                       '--image', 'example/image@sha256:' + 'a' * 64,
-                                       '--hub', 'https://hub.example', '--storage-class', 'essd'])
-        env = {e['name']: e.get('value') for e in
-               json.loads(raw)['items'][-1]['spec']['template']['spec']['containers'][0]['env']}
+        env = {e['name']: e.get('value') for e in pod_of(NODE)['containers'][0]['env']}
         self.assertEqual(env.get('FLEET_NODE_LOGIN'), 'none')
         self.assertNotIn('FLEET_LOGIN_JOIN_FILE', env)
 
@@ -309,12 +361,10 @@ class LinuxNode(unittest.TestCase):
             c = Mock(ROOT_BASE=str(cred), LIB=str(lib))
             c.proxy_mod.return_value.loopback_ok.return_value = True
 
-            def write(path, data, uid=0, gid=0):
-                Path(path).write_text(data)
 
             args = Mock(hub='', relay='https://relay.example')
             with patch.object(m, 'load', side_effect=lambda n: {'fleet-node-supervisor': s, 'fleet-credsep': c}[n]), \
-                    patch.object(m, 'private_write', side_effect=write):
+                    patch.object(m, 'private_write', side_effect=fake_write):
                 m.route_heal(args)
                 conf = m.env_read(lib / '24acme.conf')
                 self.assertEqual(conf['FLEET_CRED_RELAY_URL'], 'https://relay.example')
@@ -346,15 +396,17 @@ class LinuxNode(unittest.TestCase):
             c.proxy_mod.return_value = module('fleet-cred-proxy')
             (d / 'db').mkdir()
 
-            def write(path, data, uid=0, gid=0):
-                Path(path).write_text(data)
             old = os.umask(0o077)
             try:
                 with patch.dict(os.environ, {'FLEET_NODE_STATE': str(d / 'db')}), \
-                        patch.object(m, 'private_write', side_effect=write), \
+                        patch.object(m, 'private_write', side_effect=fake_write), \
                         patch.object(m, 'central_url', return_value='') as cu:
                     m.route_settings(c, 'alice', 'https://hub.example.org', '')
-                    self.assertNotIn('FLEET_CRED_RELAY_URL', m.env_read(Path(c.LIB) / 'alice.conf'))
+                    conf = m.env_read(Path(c.LIB) / 'alice.conf')
+                    self.assertNotIn('FLEET_CRED_RELAY_URL', conf)       # the code names no relay (#3577)
+                    self.assertEqual(conf['FLEET_CRED_ALLOW_HOSTS'], 'hub.example.org')
+                    with patch.dict(os.environ, {'FLEET_NODE_STATE': str(d / 'no-db')}):
+                        self.assertEqual(m.hub_relay(), '')
                     (d / 'db' / 'expected.json').write_text(json.dumps({'version': 1, 'cred_relay_url': 'https://relay.example.net/'}))
                     m.route_settings(c, 'bob', 'https://hub.example.org', '')
                     conf = m.env_read(Path(c.LIB) / 'bob.conf')
@@ -373,28 +425,9 @@ class LinuxNode(unittest.TestCase):
                 self.assertEqual(p.stat().st_mode & 0o777, 0o755, p)
 
     def test_relay_is_configured_never_built_in(self):
-        """issue #3577: the code names no relay of its own. No --relay /
-        FLEET_CRED_RELAY_URL ⇒ no relay route, whatever the hub."""
-        m = module('fleet-node-linux')
-        with tempfile.TemporaryDirectory() as d:
-            d = Path(d)
-            c = Mock(LIB=str(d / 'lib'))
-            c.proxy_mod.return_value = module('fleet-cred-proxy')
-
-            def write(path, data, uid=0, gid=0):
-                Path(path).write_text(data)
-
-            with patch.dict(os.environ, {'FLEET_NODE_STATE': str(d / 'db')}), \
-                    patch.object(m, 'private_write', side_effect=write), patch.object(m, 'central_url', return_value=''):
-                m.route_settings(c, 'alice', 'https://hub.example.org', '')
-                conf = m.env_read(d / 'lib' / 'alice.conf')
-                self.assertNotIn('FLEET_CRED_RELAY_URL', conf)
-                self.assertEqual(conf['FLEET_CRED_ALLOW_HOSTS'], 'hub.example.org')
-                m.route_settings(c, 'carol', 'https://hub.example.com', 'https://relay.example.net')
-                self.assertEqual(m.env_read(d / 'lib' / 'carol.conf')['FLEET_CRED_RELAY_URL'],
-                                 'https://relay.example.net')                 # given wins
-        # the separated proxy's allow-list: the public upstreams + the hosts root's
-        # config names — no hub or relay of ours written in the code
+        """issue #3577: the code names no relay of its own (route_settings: the
+        relay test above). The separated proxy's allow-list: the public upstreams
+        + the hosts root's config names — no hub or relay of ours in the code."""
         px = module('fleet-cred-proxy')
         self.assertEqual(px.allowed_hosts(''), set(px.UPSTREAM_HOSTS))
         self.assertIn('relay.example.com', px.allowed_hosts('', ['https://relay.example.com/x', '']))
@@ -430,6 +463,36 @@ class LinuxNode(unittest.TestCase):
             self.assertIn(str(Path(d, 'usr/local')), fixed)
             self.assertNotIn(str(lib), fixed)
 
+    @staticmethod
+    def login_open_fixture(m, d, login, uid, hub):
+        """login_open's world: a machine, a join code, the daemon and credsep
+        stand-ins, <hub> answering; -> (supervisor mock, args, the patches)."""
+        import contextlib
+        (d / 'state').mkdir()
+        (d / 'state/machine.env').write_text('fixture')
+        code = d / 'join'
+        code.write_text('fj_' + 'a' * 26)
+        s = Mock()
+        s.Paths.return_value = Mock(state=str(d / 'state'))
+        s.account_adopt.return_value = 0
+        c = Mock(ROOT_BASE=str(d / 'cred'), LIB=str(d / 'lib'), SHARED_RUN=str(d / 'run/.shared'), ROLE='fleetcred')
+        c.proxy_mod.return_value.loopback_ok.return_value = True
+
+        def write(path, data, uid=0, gid=0):
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(data)
+        me = Mock(pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(d / 'home'))
+        args = Mock(login=login, uid=uid, hub='https://hub.example', join_file=str(code),
+                    relay='https://relay.example', full_name='', start=False)
+        args.name = login
+        opened = contextlib.ExitStack()
+        for p in (patch.object(m, 'load', side_effect=lambda n: {'fleet-node-supervisor': s, 'fleet-credsep': c}[n]),
+                  patch.object(m, 'ensure_login', return_value=me), patch.object(m, 'as_tenant'),
+                  patch.object(m, 'request', side_effect=hub), patch.object(m, 'private_write', side_effect=write),
+                  patch.object(m.pwd, 'getpwnam', return_value=me), patch.object(m.os, 'chown')):
+            opened.enter_context(p)
+        return s, args, opened
+
     def test_every_login_leases_its_credentials(self):
         """issue #3211: the node program leases a login's pool / own accounts (and
         writes accounts/hub:<label>) only when its env says CCQUOTA_FLEET_CREDS=1 —
@@ -437,34 +500,14 @@ class LinuxNode(unittest.TestCase):
         m = module('fleet-node-linux')
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            (d / 'state').mkdir()
-            (d / 'state/machine.env').write_text('fixture')
-            code = d / 'join'
-            code.write_text('fj_' + 'a' * 26)
             written = {}
-            s = Mock()
-            s.Paths.return_value = Mock(state=str(d / 'state'))
-            s.account_adopt.return_value = 0
-            s.write_login_env.side_effect = lambda _p, login, kv: written.__setitem__(login, dict(kv))
-            c = Mock(ROOT_BASE=str(d / 'cred'), LIB=str(d / 'lib'), SHARED_RUN=str(d / 'run/.shared'), ROLE='fleetcred')
-            c.proxy_mod.return_value.loopback_ok.return_value = True
 
             def hub(_hub, path, token=None, body=None):
                 return {'/v1/node/join': {'token': 'tenant-tok'},
                         '/v1/node/relay-credential': {'token': 'frl1.x'}}.get(path, {})
-
-            def write(path, data, uid=0, gid=0):
-                Path(path).parent.mkdir(parents=True, exist_ok=True)
-                Path(path).write_text(data)
-
-            me = Mock(pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(d / 'home'))
-            args = Mock(login='fleet', uid=10001, hub='https://hub.example', join_file=str(code),
-                        relay='https://relay.example', full_name='', start=False)
-            args.name = 'fleet'
-            with patch.object(m, 'load', side_effect=lambda n: {'fleet-node-supervisor': s, 'fleet-credsep': c}[n]), \
-                    patch.object(m, 'ensure_login', return_value=me), patch.object(m, 'as_tenant'), \
-                    patch.object(m, 'request', side_effect=hub), patch.object(m, 'private_write', side_effect=write), \
-                    patch.object(m.pwd, 'getpwnam', return_value=me), patch.object(m.os, 'chown'):
+            s, args, opened = self.login_open_fixture(m, d, 'fleet', 10001, hub)
+            s.write_login_env.side_effect = lambda _p, login, kv: written.__setitem__(login, dict(kv))
+            with opened:
                 m.login_open(args)
                 store = d / 'cred/fleet/node.env'
                 self.assertIn('CCQUOTA_FLEET_CREDS=1', store.read_text().splitlines())
@@ -493,34 +536,14 @@ class LinuxNode(unittest.TestCase):
         m = module('fleet-node-linux')
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            (d / 'state').mkdir()
-            (d / 'state/machine.env').write_text('fixture')
-            code = d / 'join'
-            code.write_text('fj_' + 'a' * 26)
-            s = Mock()
-            s.Paths.return_value = Mock(state=str(d / 'state'))
-            s.account_adopt.return_value = 0
-            c = Mock(ROOT_BASE=str(d / 'cred'), LIB=str(d / 'lib'), SHARED_RUN=str(d / 'run/.shared'), ROLE='fleetcred')
-            c.proxy_mod.return_value.loopback_ok.return_value = True
             relay_code = [403]
 
             def hub(_hub, path, token=None, body=None):
                 if path == '/v1/node/relay-credential':
                     raise m.HubHTTPError(path, relay_code[0])
                 return {'/v1/node/join': {'token': 'tenant-tok'}}.get(path, {})
-
-            def write(path, data, uid=0, gid=0):
-                Path(path).parent.mkdir(parents=True, exist_ok=True)
-                Path(path).write_text(data)
-
-            me = Mock(pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(d / 'home'))
-            args = Mock(login='dana2', uid=10003, hub='https://hub.example', join_file=str(code),
-                        relay='https://relay.example', full_name='', start=False)
-            args.name = 'dana2'
-            with patch.object(m, 'load', side_effect=lambda n: {'fleet-node-supervisor': s, 'fleet-credsep': c}[n]), \
-                    patch.object(m, 'ensure_login', return_value=me), patch.object(m, 'as_tenant'), \
-                    patch.object(m, 'request', side_effect=hub), patch.object(m, 'private_write', side_effect=write), \
-                    patch.object(m.pwd, 'getpwnam', return_value=me), patch.object(m.os, 'chown'):
+            s, args, opened = self.login_open_fixture(m, d, 'dana2', 10003, hub)
+            with opened:
                 m.login_open(args)
                 s.account_adopt.assert_called_once()
                 self.assertFalse((d / 'cred/dana2/cred-proxy/relay.token').exists())
@@ -551,13 +574,10 @@ class LinuxNode(unittest.TestCase):
             self.assertFalse(c.shared_supervised())
 
     def test_manifest_requires_digest_and_keeps_pvc(self):
-        render = BIN.parent / 'extras/managed-node/render.py'
-        r = subprocess.run([sys.executable, str(render), '--image', 'example/image:latest',
-                            '--hub', 'https://hub.example', '--storage-class', 'essd'], capture_output=True)
-        self.assertNotEqual(r.returncode, 0)
-        raw = subprocess.check_output([sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
-                                       '--hub', 'https://hub.example', '--storage-class', 'essd'])
-        items = json.loads(raw)['items']
+        bad = [sys.executable, RENDER, '--image', 'example/image:latest', '--hub', 'https://hub.example',
+               '--storage-class', 'essd']
+        self.assertNotEqual(subprocess.run(bad, capture_output=True).returncode, 0)
+        items = rendered(NODE)
         st = items[-1]['spec']
         self.assertEqual(st['replicas'], 1)
         self.assertEqual(st['persistentVolumeClaimRetentionPolicy'], {'whenDeleted': 'Retain', 'whenScaled': 'Retain'})
@@ -575,11 +595,8 @@ class LinuxNode(unittest.TestCase):
         ReadWriteOncePod home disk; no Kubernetes token, no entry port, no
         fleet/principal (written once ready). Moving the ceiling changes that
         Deployment alone; a ceiling under the idle request refuses."""
-        render = BIN.parent / 'extras/managed-node/render.py'
-        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
-                '--hub', 'https://hub.example', '--storage-class', 'essd', '--user-pod', 'u-drill1',
-                '--login', 'fleetu7', '--uid', '10002', '--cred-central', 'http://fleet-credproxy.fleet-workers.svc.cluster.local']
-        items = json.loads(subprocess.check_output(base))['items']
+        base = USER_POD
+        items = rendered(base)
         self.assertEqual([i['kind'] for i in items], ['PersistentVolumeClaim', 'Service', 'Deployment'])
         pvc, svc, dep = items
         self.assertEqual({i['metadata']['name'] for i in items}, {'u-drill1'})
@@ -647,11 +664,11 @@ class LinuxNode(unittest.TestCase):
                     base[:-2]):
             self.assertNotEqual(subprocess.run(bad, capture_output=True).returncode, 0, bad)
         # the person's ceiling: the same text as the hub's fleet.user_pod_limits.<principal>
-        moved = json.loads(subprocess.check_output(base + ['--limits', 'cpu=4,memory=8Gi']))['items']
+        moved = rendered(base + ['--limits', 'cpu=4,memory=8Gi'])
         self.assertEqual(moved[:2], items[:2])
         self.assertEqual(moved[2]['spec']['template']['spec']['containers'][0]['resources']['limits'],
                          {'cpu': '4', 'memory': '8Gi', 'ephemeral-storage': '8Gi'})
-        patch_ = json.loads(subprocess.check_output([sys.executable, str(render), '--limits-patch',
+        patch_ = json.loads(subprocess.check_output([sys.executable, RENDER, '--limits-patch',
                                                      '--limits', 'cpu=4,memory=8Gi']))
         self.assertEqual(patch_['spec']['template']['spec']['containers'],
                          [{'name': 'fleet', 'resources': moved[2]['spec']['template']['spec']['containers'][0]['resources']}])
@@ -820,10 +837,8 @@ class LinuxNode(unittest.TestCase):
         control (the provisioner's only caller); the image's own ccquota as a
         plain agent, not root, read-only root, the token down a pipe from its
         Secret — never the environment."""
-        render = BIN.parent / 'extras/managed-node/render.py'
-        img = 'example/image@sha256:' + 'a' * 64
-        items = json.loads(subprocess.check_output([sys.executable, str(render), '--ops', 'ack-sz', '--image', img,
-                                                    '--hub', 'https://hub.example']))['items']
+        img = IMG
+        items = rendered([sys.executable, RENDER, '--ops', 'ack-sz', '--image', img, '--hub', 'https://hub.example'])
         self.assertEqual([(i['kind'], i['metadata']['name']) for i in items], [('Deployment', 'fleet-ops')])
         dep = items[0]
         self.assertEqual((dep['spec']['replicas'], dep['spec']['strategy']['type']), (1, 'Recreate'))
@@ -847,7 +862,7 @@ class LinuxNode(unittest.TestCase):
                     ['ack-sz', '--image', img, '--hub', 'http://hub.example'],
                     ['Not_A_Name', '--image', img, '--hub', 'https://hub.example'],
                     ['ack-sz', '--image', img, '--hub', 'https://hub.example', '--provisioner', 'file:///x']):
-            self.assertNotEqual(subprocess.run([sys.executable, str(render), '--ops'] + bad, capture_output=True).returncode, 0, bad)
+            self.assertNotEqual(subprocess.run([sys.executable, RENDER, '--ops'] + bad, capture_output=True).returncode, 0, bad)
 
     def test_door_template(self):
         """#3549 (EPIC #3500 C4): the cluster's one door — ONE LoadBalancer
@@ -855,10 +870,9 @@ class LinuxNode(unittest.TestCase):
         Deployment in door mode, its Secret shared (host key, key to the pods,
         token); no disk, no Kubernetes token. A user pod mounts the key's public
         half and its sshd takes it alone; pod 22 is open to the door only."""
-        render = BIN.parent / 'extras/managed-node/render.py'
-        img = 'example/image@sha256:' + 'a' * 64
-        items = json.loads(subprocess.check_output([sys.executable, str(render), '--door', '--image', img,
-                                                    '--hub', 'https://hub.example']))['items']
+        img = IMG
+        door = [sys.executable, RENDER, '--door']
+        items = rendered(door + ['--image', img, '--hub', 'https://hub.example'])
         self.assertEqual([(i['kind'], i['metadata']['name']) for i in items],
                          [('Service', 'fleet-door'), ('Deployment', 'fleet-door')])
         svc, dep = items
@@ -881,17 +895,15 @@ class LinuxNode(unittest.TestCase):
         self.assertNotIn('CCQUOTA_FLEET_NODE_ROUTES', env)
         # the load balancer's address, once it has one: the door's reach knocks
         # there, not on the NAT (#4112)
-        lb = json.loads(subprocess.check_output([sys.executable, str(render), '--door', '--image', img,
-                                                 '--hub', 'https://hub.example', '--entry-host', '203.0.113.7']))['items'][1]
+        lb = rendered(door + ['--image', img, '--hub', 'https://hub.example', '--entry-host', '203.0.113.7'])[1]
         lbenv = {e['name']: e['value'] for e in lb['spec']['template']['spec']['containers'][0]['env']}
         self.assertEqual(lbenv['CCQUOTA_FLEET_NODE_ROUTES'], 'entry=203.0.113.7:22022')
         for bad in (['--image', 'example/image:latest', '--hub', 'https://hub.example'],
                     ['--image', img, '--hub', 'http://hub.example'], ['--image', img, '--hub', 'https://h', '--door-replicas', '9']):
-            self.assertNotEqual(subprocess.run([sys.executable, str(render), '--door'] + bad, capture_output=True).returncode, 0, bad)
+            self.assertNotEqual(subprocess.run(door + bad, capture_output=True).returncode, 0, bad)
         # a user pod: the door's public key mounted, read at each login
-        upod = json.loads(subprocess.check_output([sys.executable, str(render), '--image', img, '--hub', 'https://hub.example',
-                                                   '--storage-class', 'essd', '--user-pod', 'u-drill1',
-                                                   '--login', 'drill1', '--uid', '10002', '--cred-central', 'http://fleet-credproxy.fleet-workers.svc.cluster.local']))['items'][-1]
+        upod = rendered(NODE + ['--user-pod', 'u-drill1', '--login', 'drill1', '--uid', '10002',
+                              '--cred-central', CENTRAL])[-1]
         spec = upod['spec']['template']['spec']
         self.assertIn({'name': 'door', 'secret': {'secretName': 'fleet-door-pub', 'optional': True, 'defaultMode': 0o444}},
                       spec['volumes'])
@@ -1005,14 +1017,10 @@ class LinuxNode(unittest.TestCase):
     def test_pull_secret_is_a_flag(self):
         """#3290: ACK's password-free ACR plugin names its Secret acr-credential-<hash>;
         --pull-secret (repeatable) replaces the acr-pull default, a bad name refuses."""
-        render = BIN.parent / 'extras/managed-node/render.py'
-        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
-                '--hub', 'https://hub.example', '--storage-class', 'essd']
-        pod = lambda extra: json.loads(subprocess.check_output(base + extra))['items'][-1]['spec']['template']['spec']
-        self.assertEqual(pod(['--pull-secret', 'x'])['imagePullSecrets'], [{'name': 'x'}])
-        self.assertEqual(pod(['--pull-secret', 'acr-credential-560b', '--pull-secret', 'y'])['imagePullSecrets'],
+        self.assertEqual(pod_of(NODE + ['--pull-secret', 'x'])['imagePullSecrets'], [{'name': 'x'}])
+        self.assertEqual(pod_of(NODE + ['--pull-secret', 'acr-credential-560b', '--pull-secret', 'y'])['imagePullSecrets'],
                          [{'name': 'acr-credential-560b'}, {'name': 'y'}])
-        r = subprocess.run(base + ['--pull-secret', 'Bad Name'], capture_output=True)
+        r = subprocess.run(NODE + ['--pull-secret', 'Bad Name'], capture_output=True)
         self.assertNotEqual(r.returncode, 0)
         doc = (BIN.parent / 'docs/dev/MANAGED-LINUX.md').read_text()
         self.assertIn('--pull-secret', doc)
@@ -1024,10 +1032,8 @@ class LinuxNode(unittest.TestCase):
         cloud metadata address, the pod and service ranges and every private range;
         the fleet container never holds NET_ADMIN / NET_RAW, so root there cannot
         undo them. The ranges are flags, and a bad one refuses to render."""
-        render = BIN.parent / 'extras/managed-node/render.py'
-        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
-                '--hub', 'https://hub.example', '--storage-class', 'essd']
-        pod = json.loads(subprocess.check_output(base))['items'][-1]['spec']['template']['spec']
+        base = NODE
+        pod = pod_of(base)
         self.assertEqual([c['name'] for c in pod['initContainers']], ['egress-guard'])
         g = pod['initContainers'][0]
         self.assertEqual(g['image'], 'example/image@sha256:' + 'a' * 64)
@@ -1054,9 +1060,9 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual(cut[0], '100.100.100.200/32')
         self.assertIn('exit 1', script)  # no backend took the rules: the pod never starts
         # the ranges are flags
-        pod = json.loads(subprocess.check_output(base + [
+        pod = pod_of(base + [
             '--egress-dns', '10.96.0.10', '--egress-pod-cidr', '10.244.0.0/16', '--egress-service-cidr',
-            '10.96.0.0/12', '--egress-private', '10.0.0.0/8']))['items'][-1]['spec']['template']['spec']
+            '10.96.0.0/12', '--egress-private', '10.0.0.0/8'])
         script = pod['initContainers'][0]['command'][-1]
         self.assertIn('-A OUTPUT -d 10.96.0.10/32 -p udp -m udp --dport 53 -j ACCEPT', script)
         self.assertIn('-A OUTPUT -d 10.244.0.0/16 -j REJECT', script)
@@ -1078,16 +1084,14 @@ class LinuxNode(unittest.TestCase):
         the relay for the gh wrapper) for every login at each start. The guard
         lets exactly the named in-cluster destination through; the image carries
         the toolchain."""
-        render = BIN.parent / 'extras/managed-node/render.py'
         mirror = ('git://git-mirror.arc-runners.svc.cluster.local/mono.git='
                   'https://github.com/Org/mono.git')
-        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
-                '--hub', 'https://hub.example', '--storage-class', 'essd']
-        plain = json.loads(subprocess.check_output(base))['items'][-1]['spec']['template']['spec']
+        base = NODE
+        plain = pod_of(base)
         self.assertFalse([e for e in plain['containers'][0]['env'] if e['name'].startswith(('FLEET_GIT', 'FLEET_CN'))])
-        pod = json.loads(subprocess.check_output(base + [
+        pod = pod_of(base + [
             '--github-proxy', 'http://203.0.113.211:3128', '--git-mirror', mirror, '--cn-mirrors',
-            '--egress-allow', '172.21.5.6:9418']))['items'][-1]['spec']['template']['spec']
+            '--egress-allow', '172.21.5.6:9418'])
         env = {e['name']: e['value'] for e in pod['containers'][0]['env']}
         self.assertEqual(env['FLEET_GITHUB_PROXY'], 'http://203.0.113.211:3128')
         self.assertEqual(env['FLEET_GIT_MIRRORS'], mirror)
@@ -1125,12 +1129,8 @@ class LinuxNode(unittest.TestCase):
                          'GOPROXY=https://goproxy.cn,direct', 'FNM_NODE_DIST_MIRROR=https://npmmirror.com/mirrors/node'):
                 self.assertIn(line + '\n', shell)
             # what every shell sees, and a login's own value still wins
-            prof = (BIN.parent / 'extras/managed-node/devnet/profile.sh').read_text().replace('/etc/fleet-devnet.env', ef)
-            pf = os.path.join(d, 'profile.sh')
-            Path(pf).write_text(prof)
-            out = subprocess.check_output(['sh', '-c', '. "$1"; echo "$GOPROXY|$npm_config_registry"', 'sh', pf],
-                                          env={'PATH': os.environ.get('PATH', ''), 'npm_config_registry': 'mine'}, text=True)
-            self.assertEqual(out.strip(), 'https://goproxy.cn,direct|mine')
+            self.assertEqual(source_profile(d, ef, '$GOPROXY|$npm_config_registry', npm_config_registry='mine'),
+                             'https://goproxy.cn,direct|mine')
             # nothing set: the node's files go, a hand-made one stays
             n.devnet({}, gc, ef)
             self.assertFalse(os.path.exists(gc) or os.path.exists(ef))
@@ -1140,12 +1140,10 @@ class LinuxNode(unittest.TestCase):
             with self.assertRaises(ValueError):
                 n.devnet_settings({'FLEET_GIT_MIRRORS': 'git://m/x.git=https://github.com/a/b'})
         # the relay refuses everything but GitHub :443 from the cluster egress
-        r = subprocess.run([sys.executable, '-I', str(BIN.parent / 'extras/gh-relay/gh-relay.py'), '--selftest'],
-                           capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        assert_selftest(self, 'extras/gh-relay/gh-relay.py')
         df = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
-        for tool in ('NODE_SHA256', 'GO_SHA256', 'KUBECTL_SHA256', 'FNM_SHA256', 'ALIYUN_SHA256', 'corepack enable',
-                     'sha256sum -c', '/usr/local/bin/gh', 'fleet-devnet.sh'):
+        # the toolchain's pins: test_release_train_builds_the_image_in_the_cluster
+        for tool in ('corepack enable', 'sha256sum -c', '/usr/local/bin/gh', 'fleet-devnet.sh'):
             self.assertIn(tool, df)
         self.assertIn('devnet', (BIN.parent / 'extras/managed-node/prepare-image.sh').read_text())
 
@@ -1155,10 +1153,8 @@ class LinuxNode(unittest.TestCase):
         (deploy/k8s/caches: fleet-npm:4873, fleet-pypi:3141, fleet-goproxy:3000)
         instead of the CN mirrors, Go falling through to goproxy.cn; the image
         carries the default MCP servers so a session starts them from disk."""
-        render = BIN.parent / 'extras/managed-node/render.py'
-        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
-                '--hub', 'https://hub.example', '--storage-class', 'essd']
-        pod = json.loads(subprocess.check_output(base + ['--cluster-caches']))['items'][-1]['spec']['template']['spec']
+        base = NODE
+        pod = pod_of(base + ['--cluster-caches'])
         env = {e['name']: e['value'] for e in pod['containers'][0]['env']}
         self.assertEqual(env['FLEET_CLUSTER_CACHES'], 'fleet-workers')
         self.assertNotIn('FLEET_CN_MIRRORS', env)
@@ -1182,12 +1178,7 @@ class LinuxNode(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             ef = os.path.join(d, 'devnet.env')
             n.devnet({'FLEET_CLUSTER_CACHES': 'fleet-workers'}, os.path.join(d, 'gitconfig'), ef)
-            prof = (BIN.parent / 'extras/managed-node/devnet/profile.sh').read_text().replace('/etc/fleet-devnet.env', ef)
-            pf = os.path.join(d, 'profile.sh')
-            Path(pf).write_text(prof)
-            out = subprocess.check_output(['sh', '-c', '. "$1"; echo "$GOPROXY"', 'sh', pf],
-                                          env={'PATH': os.environ.get('PATH', '')}, text=True)
-            self.assertEqual(out.strip(), goproxy)
+            self.assertEqual(source_profile(d, ef, '$GOPROXY'), goproxy)
         # the caches: read-only npm, devpi re-pointed at each start, two replicas a disk apiece
         caches = BIN.parent / 'deploy/k8s/caches'
         verdaccio = (caches / 'base/verdaccio.yaml').read_text()
@@ -1199,10 +1190,8 @@ class LinuxNode(unittest.TestCase):
         pol = (BIN.parent / 'deploy/k8s/fleet-workers/networkpolicy.yaml').read_text()
         for port in ('4873', '3141', '3000', '9418'):
             self.assertIn('port: %s}' % port, pol)
-        kubectl = subprocess.run(['sh', '-c', 'command -v kubectl'], capture_output=True, text=True).stdout.strip()
-        if kubectl:
-            out = subprocess.check_output([kubectl, 'kustomize', str(BIN.parent / 'deploy/k8s/fleet-workers')], text=True)
-            docs = [x for x in out.split('\n---\n') if x.strip()]
+        docs = kustomize_docs()
+        if docs:
             for name, port in (('fleet-npm', 4873), ('fleet-pypi', 3141), ('fleet-goproxy', 3000)):
                 sts = [x for x in docs if '\nkind: StatefulSet' in '\n' + x and '\n  name: %s\n' % name in x]
                 self.assertEqual(len(sts), 1, name)
@@ -1215,7 +1204,7 @@ class LinuxNode(unittest.TestCase):
         # the default MCP servers ship in the image, pinned; uv by sha256
         df = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
         for want in ('@upstash/context7-mcp@', '@playwright/mcp@', '@modelcontextprotocol/server-github@',
-                     'mcp-server-fetch==', 'UV_SHA256', 'echo "$UV_SHA256  uv.tgz" | sha256sum -c -'):
+                     'mcp-server-fetch==', 'echo "$UV_SHA256  uv.tgz" | sha256sum -c -'):
             self.assertIn(want, df)
 
     def test_hub_internal_dial(self):
@@ -1224,12 +1213,9 @@ class LinuxNode(unittest.TestCase):
         instead of the public door the egress does not carry (#4112/#4172: 403).
         FLEET_HUB_URL stays the public identity; only an http(s)
         NAME.NS.svc.cluster.local URL is taken; none named = byte for byte."""
-        render = BIN.parent / 'extras/managed-node/render.py'
         internal = 'http://ccquota-hub.new-deploy.svc.cluster.local'
-        img = 'example/image@sha256:' + 'a' * 64
-        base = [sys.executable, str(render), '--image', img,
-                '--hub', 'https://hub.example', '--storage-class', 'essd', '--user-pod', 'u-drill1',
-                '--login', 'fleetu7', '--uid', '10002', '--cred-central', 'http://fleet-credproxy.fleet-workers.svc.cluster.local']
+        img = IMG
+        base = USER_POD
 
         def fleet_env(argv):
             dep = json.loads(subprocess.check_output(argv))['items'][-1]
@@ -1243,7 +1229,7 @@ class LinuxNode(unittest.TestCase):
                     internal + '/v1', 'http://ccquota-hub.new-deploy.svc'):
             r = subprocess.run(base + ['--hub-internal', bad], capture_output=True)
             self.assertNotEqual(r.returncode, 0, bad)
-        run = [sys.executable, str(render), '--svc-run', 'R7', '--image', img, '--hub', 'https://hub.example.com',
+        run = [sys.executable, RENDER, '--svc-run', 'R7', '--image', img, '--hub', 'https://hub.example.com',
                '--cred-central', 'http://fleet-credproxy.fleet-workers.svc.cluster.local',
                '--egress-proxy', 'http://fleet-egress-run.fleet-workers.svc.cluster.local:3128',
                '--egress-allow', '198.51.100.40:3128', '--egress-allow', '198.51.100.41:80']
@@ -1303,15 +1289,13 @@ class LinuxNode(unittest.TestCase):
         (fleet-credproxy:80) and fetches the outside through the one egress
         (fleet-egress:3128); no subscription credential is leased into it or
         kept on its volume, and its own guard rejects the public internet."""
-        render = BIN.parent / 'extras/managed-node/render.py'
-        central = 'http://fleet-credproxy.fleet-workers.svc.cluster.local'
+        central = CENTRAL
         egress = 'http://fleet-egress.fleet-workers.svc.cluster.local:3128'
-        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
-                '--hub', 'https://hub.example', '--storage-class', 'essd']
-        items = json.loads(subprocess.check_output(base + [
+        base = NODE
+        items = rendered(base + [
             '--cred-central', central, '--egress-proxy', egress, '--egress-closed',
             '--egress-allow', '172.21.3.4:80', '--egress-allow', '172.21.3.5:3128',
-            '--egress-allow', '203.0.113.9:443']))['items']
+            '--egress-allow', '203.0.113.9:443'])
         sts = items[-1]['spec']
         self.assertEqual(sts['template']['metadata']['labels']['fleet/role'], 'user')
         self.assertNotIn('fleet/role', sts['selector']['matchLabels'])   # a selector never changes
@@ -1328,7 +1312,7 @@ class LinuxNode(unittest.TestCase):
                      '-A OUTPUT -d 203.0.113.9/32 -p tcp -m tcp --dport 443 -j ACCEPT'):
             self.assertLess(v4.index(want), v4.index('-A OUTPUT -d 172.21.0.0/20 -j REJECT'))
         # open (no flag): byte for byte as before — no catch-all
-        plain = json.loads(subprocess.check_output(base))['items'][-1]['spec']['template']
+        plain = rendered(base)[-1]['spec']['template']
         self.assertNotIn('-A OUTPUT -j REJECT', plain['spec']['initContainers'][0]['command'][-1])
         self.assertFalse([e for e in plain['spec']['containers'][0]['env']
                           if e['name'] in ('FLEET_CRED_CENTRAL_URL', 'FLEET_EGRESS_PROXY')])
@@ -1380,11 +1364,9 @@ class LinuxNode(unittest.TestCase):
             c = Mock(ROOT_BASE=str(cred), LIB=str(lib), SHARED_DIR=str(cred / '.shared'), ROLE='fleetcred')
             c.proxy_mod.return_value = px
 
-            def write(path, data, uid=0, gid=0):
-                Path(path).write_text(data)
             me = Mock(pw_uid=os.getuid(), pw_gid=os.getgid())
             with patch.object(m, 'load', side_effect=lambda n: {'fleet-node-supervisor': s, 'fleet-credsep': c}[n]), \
-                    patch.object(m, 'private_write', side_effect=write), patch.object(m.pwd, 'getpwnam', return_value=me), \
+                    patch.object(m, 'private_write', side_effect=fake_write), patch.object(m.pwd, 'getpwnam', return_value=me), \
                     patch.dict(os.environ, {'FLEET_CRED_CENTRAL_URL': central}):
                 self.assertEqual(m.creds_flag(), '0')
                 m.route_heal(Mock(hub='', relay='https://relay.example'))
@@ -1424,15 +1406,11 @@ class LinuxNode(unittest.TestCase):
             with patch.dict(os.environ, {'FLEET_CRED_CENTRAL_URL': ''}):
                 self.assertEqual(m.creds_flag(), '1')
         # the egress itself: a host allow-list, the pod range only, GitHub via its parent
-        r = subprocess.run([sys.executable, '-I', str(BIN.parent / 'deploy/k8s/egress/base/fleet-egress.py'),
-                            '--selftest'], capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        assert_selftest(self, 'deploy/k8s/egress/base/fleet-egress.py')
         # the cluster's shared layer renders: one of each, two replicas, a PDB, no
         # public path, no Kubernetes token (kubectl where the runner has it)
-        kubectl = subprocess.run(['sh', '-c', 'command -v kubectl'], capture_output=True, text=True).stdout.strip()
-        if kubectl:
-            out = subprocess.check_output([kubectl, 'kustomize', str(BIN.parent / 'deploy/k8s/fleet-workers')], text=True)
-            docs = [x for x in out.split('\n---\n') if x.strip()]
+        docs = kustomize_docs()
+        if docs:
             kinds = [(re.search(r'^kind: (\S+)', x, re.M).group(1), re.search(r'^  name: (\S+)', x, re.M).group(1))
                      for x in docs]
             for want in (('Service', 'fleet-credproxy'), ('Service', 'fleet-egress'), ('Deployment', 'fleet-credproxy'),
@@ -1459,10 +1437,8 @@ class LinuxNode(unittest.TestCase):
         the entry on and names the load balancer as its entry= route, which reaches
         `entry reach` through the supervisor's filtered environment; the door's sshd
         takes keys from root's list only — no password, no root, no ~/.ssh."""
-        render = BIN.parent / 'extras/managed-node/render.py'
-        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
-                '--hub', 'https://hub.example', '--storage-class', 'essd']
-        items = json.loads(subprocess.check_output(base + ['--entry-host', '47.1.2.3']))['items']
+        base = NODE
+        items = rendered(base + ['--entry-host', '47.1.2.3'])
         svcs = {i['metadata']['name']: i for i in items if i['kind'] == 'Service'}
         door = svcs['fleet-linux-entry']['spec']
         self.assertEqual(door['type'], 'LoadBalancer')
@@ -1487,7 +1463,7 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual(env['CCQUOTA_FLEET_NODE_ROUTES'], 'entry=47.1.2.3:22022')
         self.assertIn(22022, [x['containerPort'] for x in c['ports']])
         # before the CLB has an address: the door is rendered, no route is guessed
-        items = json.loads(subprocess.check_output(base + ['--entry-lb-spec', 'clcu']))['items']
+        items = rendered(base + ['--entry-lb-spec', 'clcu'])
         c = items[-1]['spec']['template']['spec']['containers'][0]
         self.assertNotIn('CCQUOTA_FLEET_NODE_ROUTES', [e['name'] for e in c['env']])
         ann = [i for i in items if i['metadata']['name'] == 'fleet-linux-entry'][0]['metadata']['annotations']
@@ -1512,9 +1488,7 @@ class LinuxNode(unittest.TestCase):
         self.assertFalse([l for l in lines if l.startswith('AuthorizedKeysCommand')])
 
     def test_image_stages_and_verifies_codex_helper(self):
-        spec = importlib.util.spec_from_file_location('image_stage', BIN.parent / 'extras/managed-node/image-stage.py')
-        m = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(m)
+        m = self.stage_mod()
         with tempfile.TemporaryDirectory() as d:
             src, dest = Path(d, 'src'), Path(d, 'dest')
             artifacts = src / '.release/artifacts'
@@ -1621,9 +1595,7 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
         import tomllib
         image = self.stage_mod()
         with tempfile.TemporaryDirectory() as temporary:
-            seed, runtime, state = (Path(temporary, name) for name in ('seed', 'runtime', 'state'))
-            state.mkdir()
-            first, second = 'a' * 40, 'b' * 40
+            seed, runtime, state, first, second = seed_dirs(temporary)
             for sequence, revision in enumerate((first, second), 1):
                 release = self.fake_release(seed, revision, sequence)
                 self.managed_release(release)
@@ -1660,47 +1632,59 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
             self.assertEqual((runtime / second / '.release/staged.json').read_bytes(), second_preview)
             self.assertFalse(list(Path(temporary).rglob('requirements.toml')))
 
+    def managed_runtime_release(self, root, sha, seq):
+        d = self.fake_release(root, sha, seq)
+        self.managed_release(d)
+        shutil.copyfile(BIN / 'fleet-codex-runtime.py', d / 'bin/fleet-codex-runtime.py')
+        return d
+
     def managed_install_fixture(self, root):
         runtime, system = Path(root, 'runtime'), Path(root, 'system')
         system.mkdir()
-        first = self.fake_release(runtime, 'a' * 40, 1)
-        self.managed_release(first)
-        shutil.copyfile(BIN / 'fleet-codex-runtime.py', first / 'bin/fleet-codex-runtime.py')
+        first = self.managed_runtime_release(runtime, 'a' * 40, 1)
         current = runtime / 'current'
         current.symlink_to(first.name)
         return current, system, first
 
+    def guard_install_roundtrip(self, image, temporary, loads, no_tomllib=False):
+        """install_managed_guards on an administrator's policy: would-install,
+        installed (the policy kept, hooks on), kept across a swap and back; with
+        <no_tomllib> the swaps are check-only and a policy it cannot carry refuses."""
+        current, system, source = self.managed_install_fixture(temporary)
+        target = system / 'requirements.toml'
+        target.write_text(ADMIN_POLICY)
+        with patch.object(image.os, 'geteuid', return_value=0), patch.object(image, 'managed_root_owned', return_value=True):
+            self.assertEqual(image.install_managed_guards(current, system, check_only=True), 'would-install')
+            self.assertEqual(target.read_text(), ADMIN_POLICY)
+            self.assertEqual(image.install_managed_guards(current, system), 'installed')
+            installed = target.read_bytes()
+            policy = loads(installed.decode())
+            self.assertEqual(policy['allowed_approval_policies'], ['on-request'])
+            self.assertEqual(policy['mcp_servers'], {'docs': {'identity': {'url': 'https://docs.example/mcp'}}})
+            self.assertEqual(policy['features'], {'remote_plugin': False, 'hooks': True})
+            self.assertEqual(policy['hooks']['managed_dir'], str(current / 'hooks'))
+            self.assertEqual(len(policy['hooks']['PreToolUse']), 2)
+            self.assertNotIn(source.name, installed.decode())
+            self.assertEqual(image.install_managed_guards(current, system), 'kept')
+            self.assertEqual(target.read_bytes(), installed)
+            second = self.managed_runtime_release(current.parent, 'b' * 40, 2)
+            for revision in (second.name, source.name):
+                image.swap(current, revision)
+                self.assertEqual(image.install_managed_guards(current, system, check_only=no_tomllib), 'kept')
+                self.assertEqual(target.read_bytes(), installed)
+            for refused in ('[features]\nhooks=false\n', 'updated=2026-01-01T00:00:00Z\n', 's = """x"""\n') if no_tomllib else ():
+                with self.subTest(refused=refused):
+                    target.write_text(refused)
+                    with self.assertRaises(ValueError):
+                        image.install_managed_guards(current, system)
+                    self.assertEqual(target.read_text(), refused)
+        self.assertEqual(sorted(path.name for path in system.iterdir()), ['requirements.toml'])
+
     def test_managed_guard_install_is_explicit_preserves_policy_and_is_idempotent(self):
         import tomllib
-        image = self.stage_mod()
+        self.assertEqual(tomllib.loads(ADMIN_POLICY)['mcp_servers'], {'docs': {'identity': {'url': 'https://docs.example/mcp'}}})
         with tempfile.TemporaryDirectory() as temporary:
-            current, system, source = self.managed_install_fixture(temporary)
-            target = system / 'requirements.toml'
-            original = ('# administrator requirements\nallowed_approval_policies=["on-request"]\n'
-                        '[features]\nremote_plugin=false\n[mcp_servers.docs.identity]\nurl="https://docs.example/mcp"\n')
-            target.write_text(original)
-            with patch.object(image.os, 'geteuid', return_value=0), patch.object(image, 'managed_root_owned', return_value=True):
-                self.assertEqual(image.install_managed_guards(current, system, check_only=True), 'would-install')
-                self.assertEqual(target.read_text(), original)
-                self.assertEqual(image.install_managed_guards(current, system), 'installed')
-                installed = target.read_bytes()
-                policy = tomllib.loads(installed.decode())
-                self.assertEqual(policy['allowed_approval_policies'], ['on-request'])
-                self.assertEqual(policy['mcp_servers'], tomllib.loads(original)['mcp_servers'])
-                self.assertEqual(policy['features'], {'remote_plugin': False, 'hooks': True})
-                self.assertEqual(policy['hooks']['managed_dir'], str(current / 'hooks'))
-                self.assertEqual(len(policy['hooks']['PreToolUse']), 2)
-                self.assertNotIn(source.name, installed.decode())
-                self.assertEqual(image.install_managed_guards(current, system), 'kept')
-                self.assertEqual(target.read_bytes(), installed)
-                second = self.fake_release(current.parent, 'b' * 40, 2)
-                self.managed_release(second)
-                shutil.copyfile(BIN / 'fleet-codex-runtime.py', second / 'bin/fleet-codex-runtime.py')
-                for revision in (second.name, source.name):
-                    image.swap(current, revision)
-                    self.assertEqual(image.install_managed_guards(current, system), 'kept')
-                    self.assertEqual(target.read_bytes(), installed)
-            self.assertEqual(sorted(path.name for path in system.iterdir()), ['requirements.toml'])
+            self.guard_install_roundtrip(self.stage_mod(), temporary, tomllib.loads)
 
     def test_managed_guard_install_fails_on_conflicting_or_unserializable_policy(self):
         image = self.stage_mod()
@@ -1865,44 +1849,13 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
         with tempfile.TemporaryDirectory() as temporary, patch.dict(sys.modules, {'tomllib': None}):
             with self.assertRaises(ImportError):
                 import tomllib  # noqa: F401
-            current, system, source = self.managed_install_fixture(temporary)
-            target = system / 'requirements.toml'
-            original = ('# administrator requirements\nallowed_approval_policies=["on-request"]\n'
-                        '[features]\nremote_plugin=false\n[mcp_servers.docs.identity]\nurl="https://docs.example/mcp"\n')
-            target.write_text(original)
-            with patch.object(image.os, 'geteuid', return_value=0), patch.object(image, 'managed_root_owned', return_value=True):
-                self.assertEqual(image.install_managed_guards(current, system, check_only=True), 'would-install')
-                self.assertEqual(target.read_text(), original)
-                self.assertEqual(image.install_managed_guards(current, system), 'installed')
-                installed = target.read_bytes()
-                policy = image.toml_loads(installed.decode())
-                self.assertEqual(policy['allowed_approval_policies'], ['on-request'])
-                self.assertEqual(policy['mcp_servers'], {'docs': {'identity': {'url': 'https://docs.example/mcp'}}})
-                self.assertEqual(policy['features'], {'remote_plugin': False, 'hooks': True})
-                self.assertEqual(policy['hooks']['managed_dir'], str(current / 'hooks'))
-                self.assertEqual(image.install_managed_guards(current, system), 'kept')
-                second = self.fake_release(current.parent, 'b' * 40, 2)
-                self.managed_release(second)
-                shutil.copyfile(BIN / 'fleet-codex-runtime.py', second / 'bin/fleet-codex-runtime.py')
-                for revision in (second.name, source.name):
-                    image.swap(current, revision)
-                    self.assertEqual(image.install_managed_guards(current, system, check_only=True), 'kept')
-                    self.assertEqual(target.read_bytes(), installed)
-                for refused in ('[features]\nhooks=false\n', 'updated=2026-01-01T00:00:00Z\n', 's = """x"""\n'):
-                    with self.subTest(refused=refused):
-                        target.write_text(refused)
-                        with self.assertRaises(ValueError):
-                            image.install_managed_guards(current, system)
-                        self.assertEqual(target.read_text(), refused)
-            self.assertEqual(sorted(path.name for path in system.iterdir()), ['requirements.toml'])
+            self.guard_install_roundtrip(image, temporary, image.toml_loads, no_tomllib=True)
 
     def test_personal_pod_guard_preview_uses_image_seed_across_upgrade_and_rollback(self):
         import tomllib
         image = self.stage_mod()
         with tempfile.TemporaryDirectory() as temporary:
-            seed, runtime, state = (Path(temporary, name) for name in ('seed', 'login-runtime', 'state'))
-            state.mkdir()
-            first, second = 'a' * 40, 'b' * 40
+            seed, runtime, state, first, second = seed_dirs(temporary, 'login-runtime')
             for sequence, revision in enumerate((first, second), 1):
                 self.managed_release(self.fake_release(seed, revision, sequence))
             for revision in (first, second, first):
@@ -1918,9 +1871,7 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
     def test_managed_guard_staging_failure_preserves_current_and_retries(self):
         image = self.stage_mod()
         with tempfile.TemporaryDirectory() as temporary:
-            seed, runtime, state = (Path(temporary, name) for name in ('seed', 'runtime', 'state'))
-            state.mkdir()
-            first, second = 'a' * 40, 'b' * 40
+            seed, runtime, state, first, second = seed_dirs(temporary)
             self.fake_release(seed, first, 1)
             candidate = self.fake_release(seed, second, 2)
             self.managed_release(candidate)
@@ -2173,10 +2124,7 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
         s = module('fleet-node-supervisor')
         with patch.dict(os.environ, {'FLEET_NODE_UPDATE_OWNER': 'node'}):
             self.assertIn('update', [x['name'] for x in s.default_table(s.Paths())['tasks']])
-        raw = subprocess.check_output([sys.executable, str(BIN.parent / 'extras/managed-node/render.py'),
-                                       '--image', 'example/image@sha256:' + 'a' * 64,
-                                       '--hub', 'https://hub.example', '--storage-class', 'essd'])
-        c = json.loads(raw)['items'][-1]['spec']['template']['spec']['containers'][0]
+        c = pod_of(NODE)['containers'][0]
         self.assertEqual(c['livenessProbe']['exec']['command'][-2:], ['/usr/local/lib/fleet-image-stage.py', 'live'])
         self.assertIn('/var/db/fleet-node/runtime/current/bin/fleet-node-linux.py',
                       c['readinessProbe']['exec']['command'])

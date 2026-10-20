@@ -311,7 +311,6 @@
 30.7 fleet-node-core-selftest.py
 0.3 fleet-node-hosted-selftest.sh
 26.8 fleet-node-install-selftest.sh
-2.7 fleet-node-join-selftest.sh
 4.9 fleet-node-leave-selftest.sh
 9.3 fleet-node-linux-os-selftest.sh
 4.8 fleet-node-linux-selftest.py
@@ -319,7 +318,7 @@
 20.0 fleet-node-orphans-selftest.py
 3.1 fleet-node-probe-selftest.sh
 1.3 fleet-node-revoke-selftest.sh
-10.2 fleet-node-selftest.sh
+12.9 fleet-node-selftest.sh
 3.1 fleet-node-shell-retire-selftest.sh
 1.4 fleet-node-sig-selftest.sh
 0.7 fleet-node-supervisor-core-recovery-selftest.sh

@@ -24,30 +24,8 @@ trap 'rm -rf "$WORK"' EXIT
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
 mkdir -p "$HOME" "$FLEET_CONF_DIR"
 unset CCQUOTA_TOKEN CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_URL FLEET_HUB_CURL FLEET_HUB_TIMEOUT
-STUB="$WORK/curl"
-cat > "$STUB" <<'EOF'
-#!/bin/bash
-printf '%s\n' "$*" >> "$STUB_LOG"
-body='' url='' method=GET hdr=''
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --data-binary) body="$2"; shift 2 ;;
-    -X) method="$2"; shift 2 ;;
-    -H) [ "$2" = @- ] && hdr=$(cat); shift 2 ;;
-    http*) url="$1"; shift ;;
-    *) shift ;;
-  esac
-done
-printf '%s\n' "$hdr" >> "$STUB_HDR"
-printf '%s %s %s\n' "$method" "$url" "$body" >> "$STUB_BODY"
-[ "${FAKE_RC:-0}" -eq 0 ] || exit "$FAKE_RC"
-printf '%s\n%s' "$(cat "$FAKE_DIR/body" 2>/dev/null || printf '{}')" "$(cat "$FAKE_DIR/code" 2>/dev/null || printf 200)"
-EOF
-chmod +x "$STUB"
-export STUB_LOG="$WORK/curl.log" STUB_HDR="$WORK/curl.hdr" STUB_BODY="$WORK/curl.body" FLEET_HUB_CURL="$STUB" FAKE_DIR="$WORK/fake"
-mkdir -p "$FAKE_DIR"
-reset() { rm -f "$STUB_LOG" "$STUB_HDR" "$STUB_BODY" "$FAKE_DIR"/*; unset FAKE_RC; }
-fake() { printf '%s' "$1" > "$FAKE_DIR/body"; printf '%s' "${2:-200}" > "$FAKE_DIR/code"; }
+. "$BIN/selftest-hub-curl.sh"   # the stub curl: reset · fake <body> [code]
+hc_stub
 VIEWER='viewer-SECRET-3824'
 P=gh:2987262
 

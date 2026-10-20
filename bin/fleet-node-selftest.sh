@@ -31,12 +31,31 @@
 #   D. denied    「不是我」 on the page: exit 1, no node.env
 #   E. status    `fleet node status`: online → ✓ and exit 0; not a node → the
 #                「fleet node join」 hint and exit 1
+#
+# And the join script on its own (bin/fleet-node-join.sh --token, issue #1418;
+# the old fleet-node-join-selftest.sh), the same fake hub answering
+# /v1/node/join with its own token; the no-GitHub join is
+# dist-no-github-selftest.sh's node-join leg (issue #2862):
+#   JA. join      a fresh login: exit 0, `online:` line; node.env is 0600 with
+#                the hub URL, the node pass, and both CCQUOTA_FLEET and CCQUOTA_FLEET_ADMIN on;
+#                ccquota came from the hub; the token is never printed
+#   JB. rerun     a second run with a NEW code reuses the saved registration and
+#                leaves the code unspent (one redemption on the hub)
+#   JC. refused   a code the hub refuses: exit 1, the "mint a new one" line, no
+#                node.env
+#   JD. sha       a binary whose SHA-256 does not match the header is refused,
+#                nothing installed
+#   JE. format    a malformed code exits 2 before any request reaches the hub
+#   JF. no-admin  --no-admin writes no CCQUOTA_FLEET_ADMIN line
+#   JG. kind      the SPOT nodes are gone (issue #4797): a join an older hub
+#                answers "kind":"ephemeral" writes no CCQUOTA_FLEET_NODE_KIND,
+#                and a rerun drops the line an older join wrote
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB="$(mktemp -d "${TMPDIR:-/tmp}/fleet-node-st.XXXXXX")"
 HUB_PID=""
 cleanup() {
-  for p in "$SB"/h*/.ccquota/agent.pid; do [ -f "$p" ] && kill "$(cat "$p")" 2>/dev/null; done
+  for p in "$SB"/[hj]*/.ccquota/agent.pid; do [ -f "$p" ] && kill "$(cat "$p")" 2>/dev/null; done
   [ -n "$HUB_PID" ] && kill "$HUB_PID" 2>/dev/null
   rm -rf "$SB"
 }
@@ -52,6 +71,7 @@ cat >"$SB/ccquota" <<EOF
 case "\$1" in
   version) echo "ccquota stub" ;;
   agent)
+    printf '%s %s\n' "\${CCQUOTA_FLEET:-}" "\${CCQUOTA_FLEET_ADMIN:-}" > "$SB/agent-env"
     curl -fsS -H "Authorization: Bearer \$CCQUOTA_TOKEN" "\$CCQUOTA_HUB_URL/fake/hello" >/dev/null
     exec sleep 20 ;;
 esac
@@ -63,8 +83,10 @@ import hashlib, json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 SB = sys.argv[1]
 BIN = open(os.path.join(SB, "ccquota"), "rb").read()
-TOKEN = "ccq_nodepass0123456789abcdefXYZ"
-state = {"starts": 0, "polls": {}, "online": False, "last_start": None, "codes": {}}
+TOKEN = "ccq_nodepass0123456789abcdefXYZ"        # the scan's node pass
+JTOKEN = "ccq_testtoken0123456789abcdefXYZ"       # a join code's (fleet-node-join.sh --token)
+state = {"starts": 0, "polls": {}, "online": False, "last_start": None, "codes": {},
+         "redeemed": 0, "online_join": False, "requests": 0}
 def flag(n): return os.path.exists(os.path.join(SB, n))
 def save(): json.dump(state, open(os.path.join(SB, "state.json"), "w"))
 class H(BaseHTTPRequestHandler):
@@ -75,7 +97,16 @@ class H(BaseHTTPRequestHandler):
         for k, v in (headers or {}).items(): self.send_header(k, v)
         self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def do_POST(self):
+        state["requests"] += 1
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if self.path == "/v1/node/join":
+            if flag("refuse"):
+                save(); return self.reply(401, {"error": "join code is unknown, used or expired"})
+            state["redeemed"] += 1; state["last_join"] = body; save()
+            return self.reply(200, {"endpoint_id": "ep_1", "label": body["hostname"] + "-" + body["os_user"],
+                "token": JTOKEN, "hub": "x", "admin": True, "ssh_ca": "ssh-ed25519 AAAA test-ca",
+                "dist": ["darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64"],
+                "kind": "ephemeral" if flag("ephemeral") else "fixed"})
         if self.path == "/v1/fleet/login/start":
             state["starts"] += 1; state["last_start"] = body
             dc = "dc%d" % state["starts"]; state["codes"][dc] = body; save()
@@ -98,16 +129,24 @@ class H(BaseHTTPRequestHandler):
             return self.reply(200, res)
         self.reply(404, {"error": "no"})
     def do_GET(self):
-        if self.headers.get("Authorization") != "Bearer " + TOKEN:
-            return self.reply(401, {"error": "unrecognised enrollment token"})
+        state["requests"] += 1
+        auth = self.headers.get("Authorization")
+        if auth not in ("Bearer " + TOKEN, "Bearer " + JTOKEN):
+            save(); return self.reply(401, {"error": "unrecognised enrollment token"})
+        joined = auth == "Bearer " + JTOKEN
         if self.path.startswith("/v1/node/dist/"):
             sha = "0" * 64 if flag("badsha") else hashlib.sha256(BIN).hexdigest()
             self.send_response(200); self.send_header("X-Ccquota-Sha256", sha)
             self.send_header("Content-Length", str(len(BIN))); self.end_headers(); self.wfile.write(BIN)
-            return
+            save(); return
         if self.path == "/fake/hello":
-            state["online"] = True; save(); return self.reply(200, {})
+            state["online_join" if joined else "online"] = True; save(); return self.reply(200, {})
         if self.path == "/v1/node/self":
+            save()
+            if joined:
+                if state["online_join"]:
+                    return self.reply(200, {"endpoint_id": "ep_1", "status": "online", "admin": True, "ssh_ca": "trusted"})
+                return self.reply(200, {"endpoint_id": "ep_1", "status": "never"})
             st = "online" if state["online"] else "never"
             return self.reply(200, {"endpoint_id": "ep_1", "hostname": "box", "status": st})
         self.reply(404, {"error": "no"})
@@ -142,10 +181,10 @@ fleet_in() {
   [ -f "$h/.config/claude-fleet/fleet.conf" ] || HOME="$h" FLEET_CONF_DIR="$h/.config/claude-fleet" \
     "$BIN/fleet-conf.sh" set-hub "$HUB" --role client >/dev/null 2>&1
   HOME="$h" FLEET_CONF_DIR="$h/.config/claude-fleet" XDG_CONFIG_HOME="$h/.config" FLEET_HUB_URL="" FLEET_LOGIN_BROWSER=0 \
-    FLEET_JOIN_POLL=1 FLEET_JOIN_SUDO="" FLEET_NODE_JOIN_ARGS="--no-deps --no-fleet --service detached --wait 15" \
+    FLEET_NODE_STATE="$SB/not-managed" FLEET_JOIN_POLL=1 FLEET_JOIN_SUDO="" FLEET_NODE_JOIN_ARGS="--no-deps --no-fleet --service detached --wait 15" \
     FLEET_PROBE_CURL="$SB/probe-curl" FLEET_PROBE_PMSET=false FLEET_PROBE_OS=Darwin \
     "$BIN/fleet" "$@" >"$SB/out" 2>&1 </dev/null
-  echo $? >"$SB/rc"
+  rc=$?
 }
 # norm — what varies run to run (home, hub port, host, login) → placeholders;
 # the QR block rows → one <QR> line.
@@ -156,7 +195,6 @@ norm() {
 
 # ── A. join ──────────────────────────────────────────────────────────────
 fleet_in h1 node join
-rc=$(cat "$SB/rc")
 ENVF="$SB/h1/.config/claude-fleet/node.env"
 [ "$rc" = 0 ] && ok "A fleet node join (no argument) exits 0" || bad "A rc=$rc: $(cat "$SB/out")"
 python3 - "$SB/state.json" "$SB/h1/.ssh/fleet-cert.pub" <<'PY' && ok "A the scan is purpose=node, with fleet login's key, the login and the device name" || bad "A start body: $(hubstate last_start)"
@@ -214,7 +252,7 @@ $(cat "$SB/diff")"
 # The scan half is fleet login's own, line for line.
 fleet_in h9 login
 norm <"$SB/out" >"$SB/login.out"
-if [ "$(cat "$SB/rc")" = 0 ] && [ "$(head -n 10 "$SB/login.out")" = "$(head -n 10 "$SB/node.out")" ]; then
+if [ "$rc" = 0 ] && [ "$(head -n 10 "$SB/login.out")" = "$(head -n 10 "$SB/node.out")" ]; then
   ok "A the scan and certificate lines are fleet login's, line for line"
 else bad "A fleet login vs fleet node join:
 $(diff <(head -n 10 "$SB/login.out") <(head -n 10 "$SB/node.out"))"; fi
@@ -223,38 +261,120 @@ $(diff <(head -n 10 "$SB/login.out") <(head -n 10 "$SB/node.out"))"; fi
 kill "$(cat "$SB/h1/.ccquota/agent.pid")" 2>/dev/null
 starts=$(hubstate starts)
 fleet_in h1 node join
-if [ "$(cat "$SB/rc")" = 0 ] && [ "$(hubstate starts)" = "$starts" ] && grep -q "^✓ 已登记在 $HUB" "$SB/out" \
+if [ "$rc" = 0 ] && [ "$(hubstate starts)" = "$starts" ] && grep -q "^✓ 已登记在 $HUB" "$SB/out" \
    && ! grep -q 用手机扫码 "$SB/out"; then
   ok "B a rerun does not scan again"
-else bad "B rc=$(cat "$SB/rc") starts ${starts}→$(hubstate starts): $(cat "$SB/out")"; fi
+else bad "B rc=$rc starts ${starts}→$(hubstate starts): $(cat "$SB/out")"; fi
 
 # ── C. resume ────────────────────────────────────────────────────────────
 touch "$SB/badsha"
 fleet_in h2 node join
-if [ "$(cat "$SB/rc")" = 1 ] && [ "$(grep -c '^✗' "$SB/out")" = 1 ] && grep -q '^✗ 装 agent失败：' "$SB/out" \
+if [ "$rc" = 1 ] && [ "$(grep -c '^✗' "$SB/out")" = 1 ] && grep -q '^✗ 装 agent失败：' "$SB/out" \
    && grep -q '^  重跑同一条命令即可：fleet node join' "$SB/out" && ! grep -q '^agent:' "$SB/out"; then
   ok "C a mid-way failure is one ✗ line + 重跑同一条命令即可"
-else bad "C rc=$(cat "$SB/rc"): $(cat "$SB/out")"; fi
+else bad "C rc=$rc: $(cat "$SB/out")"; fi
 rm -f "$SB/badsha"
 starts=$(hubstate starts)
 fleet_in h2 node join
-if [ "$(cat "$SB/rc")" = 0 ] && [ "$(hubstate starts)" = "$starts" ] && grep -q '^✓ 已上线' "$SB/out"; then
+if [ "$rc" = 0 ] && [ "$(hubstate starts)" = "$starts" ] && grep -q '^✓ 已上线' "$SB/out"; then
   ok "C the same command again finishes it without a new scan"
-else bad "C rerun rc=$(cat "$SB/rc") starts ${starts}→$(hubstate starts): $(cat "$SB/out")"; fi
+else bad "C rerun rc=$rc starts ${starts}→$(hubstate starts): $(cat "$SB/out")"; fi
 
 # ── D. denied ────────────────────────────────────────────────────────────
 touch "$SB/deny"
 fleet_in h3 node join
-if [ "$(cat "$SB/rc")" = 1 ] && [ ! -e "$SB/h3/.config/claude-fleet/node.env" ]; then
+if [ "$rc" = 1 ] && [ ! -e "$SB/h3/.config/claude-fleet/node.env" ]; then
   ok "D a denied scan exits 1, writes no node.env"
-else bad "D rc=$(cat "$SB/rc"): $(cat "$SB/out")"; fi
+else bad "D rc=$rc: $(cat "$SB/out")"; fi
 rm -f "$SB/deny"
 
 # ── E. status ────────────────────────────────────────────────────────────
 fleet_in h1 node status
-[ "$(cat "$SB/rc")" = 0 ] && grep -q "^✓ .* 连着 ${HUB}：在线" "$SB/out" && ok "E status: online" || bad "E status rc=$(cat "$SB/rc"): $(cat "$SB/out")"
+[ "$rc" = 0 ] && grep -q "^✓ .* 连着 ${HUB}：在线" "$SB/out" && ok "E status: online" || bad "E status rc=$rc: $(cat "$SB/out")"
 fleet_in h4 node status
-[ "$(cat "$SB/rc")" = 1 ] && grep -q '还没登记到入口 — 运行：fleet host on' "$SB/out" && ok "E status: not a node" || bad "E status (none) rc=$(cat "$SB/rc"): $(cat "$SB/out")"
+[ "$rc" = 1 ] && grep -q '还没登记到入口 — 运行：fleet host on' "$SB/out" && ok "E status: not a node" || bad "E status (none) rc=$rc: $(cat "$SB/out")"
+
+# ── J. fleet-node-join.sh --token ─────────────────────────────────────────
+CODE1=fj_abcdefghijklmnopqrstuvwxyz
+CODE2=fj_zyxwvutsrqponmlkjihgfedcba
+
+run_join() { # $1 = home dir name, rest = extra args
+  local h="$SB/$1"; shift
+  mkdir -p "$h"
+  HOME="$h" FLEET_CONF_DIR="$h/.config/claude-fleet" FLEET_JOIN_POLL=1 FLEET_JOIN_SUDO="" "$BIN/fleet-node-join.sh" --hub "$HUB" \
+    --no-deps --no-fleet --service detached --wait 15 "$@" >"$SB/out" 2>&1
+  rc=$?
+}
+
+# ── JA. join ──────────────────────────────────────────────────────────────
+run_join j1 --token "$CODE1"
+ENVF="$SB/j1/.config/claude-fleet/node.env"
+if [ "$rc" = 0 ] && grep -q '^online: the hub sees this login · admin agent · ssh CA: trusted' "$SB/out"; then ok "JA join exits 0 and reports online"; else bad "JA join rc=$rc: $(cat "$SB/out")"; fi
+mode=$(python3 -c 'import os,sys;print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$ENVF")
+[ "$mode" = 600 ] && ok "JA node.env is 0600" || bad "JA node.env mode $mode"
+if grep -qx "CCQUOTA_HUB_URL=$HUB" "$ENVF" && grep -qx 'CCQUOTA_TOKEN=ccq_testtoken0123456789abcdefXYZ' "$ENVF" \
+   && grep -qx 'CCQUOTA_FLEET=1' "$ENVF" && grep -qx 'CCQUOTA_FLEET_ADMIN=1' "$ENVF"; then
+  ok "JA node.env carries hub, token, fleet + admin"
+else bad "JA node.env: $(cat "$ENVF")"; fi
+grep -q NODE_KIND "$ENVF" && bad "JA a fixed join wrote a node kind: $(grep NODE_KIND "$ENVF")" || ok "JA a fixed join writes no node kind"
+[ "$(cat "$SB/agent-env" 2>/dev/null)" = "1 1" ] && ok "JA the agent started with node.env's settings" || bad "JA agent env: $(cat "$SB/agent-env" 2>/dev/null)"
+cmp -s "$SB/ccquota" "$SB/j1/.local/bin/ccquota" && grep -q '^agent: ccquota-.* from the hub (sha256 ' "$SB/out" \
+  && ok "JA ccquota installed from the hub, hash checked" || bad "JA ccquota not from the hub: $(grep '^agent:' "$SB/out")"
+grep -q ccq_testtoken "$SB/out" && bad "JA the token was printed" || ok "JA the token is never printed"
+[ "$(hubstate redeemed)" = 1 ] && ok "JA one redemption" || bad "JA redemptions: $(hubstate redeemed)"
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]))["last_join"];sys.exit(0 if d["code"]==sys.argv[2] and d["os_user"] else 1)' "$SB/state.json" "$CODE1" \
+  && ok "JA join sent the code, hostname and login" || bad "JA join body: $(hubstate last_join)"
+
+# ── JB. rerun ─────────────────────────────────────────────────────────────
+kill "$(cat "$SB/j1/.ccquota/agent.pid")" 2>/dev/null
+run_join j1 --token "$CODE2"
+if [ "$rc" = 0 ] && grep -q '^join: already registered' "$SB/out" && [ "$(hubstate redeemed)" = 1 ]; then
+  ok "JB rerun reuses the registration, code unspent"
+else bad "JB rerun rc=$rc redeemed=$(hubstate redeemed): $(cat "$SB/out")"; fi
+
+# ── JC. refused ───────────────────────────────────────────────────────────
+touch "$SB/refuse"
+run_join j2 --token "$CODE1"
+if [ "$rc" = 1 ] && grep -q 'refused the code.*Mint a new one' "$SB/out" && [ ! -e "$SB/j2/.config/claude-fleet/node.env" ]; then
+  ok "JC a refused code exits 1, writes nothing"
+else bad "JC rc=$rc: $(cat "$SB/out")"; fi
+rm -f "$SB/refuse"
+
+# ── JD. sha ───────────────────────────────────────────────────────────────
+touch "$SB/badsha"
+run_join j3 --token "$CODE1"
+if [ "$rc" = 1 ] && grep -q 'did not match its SHA-256' "$SB/out" && [ ! -e "$SB/j3/.local/bin/ccquota" ]; then
+  ok "JD a hash mismatch is refused, nothing installed"
+else bad "JD rc=$rc: $(cat "$SB/out")"; fi
+rm -f "$SB/badsha"
+
+# ── JE. format ────────────────────────────────────────────────────────────
+before=$(hubstate requests)
+run_join j4 --token "fj_TOO-short"
+if [ "$rc" = 2 ] && [ "$(hubstate requests)" = "$before" ]; then ok "JE a malformed code exits 2, no request"; else bad "JE rc=$rc: $(cat "$SB/out")"; fi
+
+# ── JF. no-admin ──────────────────────────────────────────────────────────
+run_join j5 --token "$CODE1" --no-admin
+if [ "$rc" = 0 ] && ! grep -q ADMIN "$SB/j5/.config/claude-fleet/node.env"; then
+  ok "JF --no-admin writes no admin line"
+else bad "JF rc=$rc: $(cat "$SB/j5/.config/claude-fleet/node.env" 2>/dev/null)"; fi
+
+# ── JG. kind ──────────────────────────────────────────────────────────────
+# The SPOT nodes are gone (issue #4797): an older hub's "kind":"ephemeral"
+# writes no kind line, and a rerun drops one an older join left behind.
+touch "$SB/ephemeral"
+run_join j6 --token "$CODE1"
+if [ "$rc" = 0 ] && ! grep -q 'NODE_KIND' "$SB/j6/.config/claude-fleet/node.env" \
+   && ! grep -q 'SPOT' "$SB/out"; then
+  ok "JG an ephemeral answer writes no node kind"
+else bad "JG rc=$rc: $(cat "$SB/j6/.config/claude-fleet/node.env" 2>/dev/null; grep join: "$SB/out")"; fi
+rm -f "$SB/ephemeral"
+printf 'CCQUOTA_FLEET_NODE_KIND=ephemeral\n' >> "$SB/j6/.config/claude-fleet/node.env"
+run_join j6 --token "$CODE2"
+if [ "$rc" = 0 ] && ! grep -q 'NODE_KIND' "$SB/j6/.config/claude-fleet/node.env"; then
+  ok "JG a rerun drops an old node kind"
+else bad "JG rerun rc=$rc: $(cat "$SB/j6/.config/claude-fleet/node.env" 2>/dev/null)"; fi
+
 
 [ "$fail" = 0 ] && echo "PASS fleet-node-selftest" || echo "FAIL fleet-node-selftest"
 exit "$fail"
