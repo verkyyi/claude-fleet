@@ -271,8 +271,8 @@ if [ -n "$idcode" ]; then
            tw=''
            while IFS= read -r s; do
              [ -n "$s" ] || continue
-             if [ "$s" = "-" ]; then rows=$(tmux list-windows -a -F '#{window_id}	#{@task}' 2>/dev/null)
-             else rows=$(tmux -L "$s" list-windows -a -F '#{window_id}	#{@task}' 2>/dev/null); fi
+             if [ "$s" = "-" ]; then rows=$(fleet_lw '#{window_id}	#{@task}')
+             else rows=$(fleet_lw '#{window_id}	#{@task}' tmux -L "$s"); fi
              tw=$(printf '%s\n' "$rows" | awk -F'\t' -v t="$tt" '$2 == t { print $1; exit }')
              [ -n "$tw" ] && { [ "$s" = "-" ] || SOCK=$s; break; }
            done <<EOF_TASKS
