@@ -812,7 +812,7 @@ buf=""
 # frame — every row below is a compare against it, no fork.
 fleet_cfg_expected_load; fleet_cfg_broken_load
 CFG_STALE_T='' CFG_RENEW_T='' CFG_BROKEN_T=''
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo _ _ wloop wtitle wborn wcfg wittl wreap wepic wbf wakind wask wctx wman wfid wtask; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo _ _ wloop wtitle wborn wcfg wittl wreap wepic wbf wakind wask wctx wman _ wtask; do
   [ -z "$name" ] && continue
   # A local window's title slot is its @task_line (issue #2359): the first
   # sentence of a session bound to no issue, the title's fallback below.
