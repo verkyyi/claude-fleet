@@ -5475,7 +5475,7 @@ drill_authority_owner_cutover() {
   t0=$(now)
   grep -q '"task_authority_"+action, "owner:"+owner' "$a" \
     || { WHY="a task authority change is no longer audited"; return 1; }
-  _drill_go_tests 'TestRepoAuthorityStopBoundToCurrentNative TestRepoAuthorityRollbackRetainsCompletedExecution' "$ROOT/tokenledger/hub/store/fleet_repo_authority_test.go" x ./hub/store || return 1
+  _drill_go_tests 'TestRepoAuthorityStopBoundToCurrentNative' "$ROOT/tokenledger/hub/store/fleet_repo_authority_test.go" x ./hub/store || return 1
   _drill_go_tests 'TestOwnerAuthorityTwoPeopleOneRepo' "$ROOT/tokenledger/hub/api/fleet_repo_authority_test.go" \
     '一个人的全程：dry-run 零写入，freeze 只挡本人，本人 legacy 会话凭原生停止回执 stop_ack 后 apply，再 freeze → rollback；每步按 revision CAS、幂等、写审计（go test）' || return 1
   _drill_authority_logins || return 1

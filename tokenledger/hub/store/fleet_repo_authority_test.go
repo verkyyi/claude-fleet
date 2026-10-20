@@ -170,30 +170,6 @@ func TestRepoAuthorityStopBoundToCurrentNative(t *testing.T) {
 	}
 }
 
-func TestRepoAuthorityRollbackRetainsCompletedExecution(t *testing.T) {
-	s := taskStore(t)
-	a, _ := s.OwnerAuthority("alice")
-	a = repoChange(t, s, a, "freeze")
-	a = repoChange(t, s, a, "apply")
-	rec := startTask(t, s, acceptedTask(t, s, "retained", "gh:org/a#9"))
-	rec = mutateTask(t, s, rec, TaskMutation{Key: "complete", Kind: "transition", State: TaskSucceeded, Evidence: `{"work_result":"succeeded","pr":"org/a#10","pr_state":"waiting"}`})
-	a = repoChange(t, s, a, "freeze")
-	if _, err := s.ChangeOwnerAuthority("alice", OwnerAuthorityChange{Action: "rollback", Revision: a.Revision, Key: "unsafe"}, time.Now()); !errors.Is(err, ErrRepoAuthority) {
-		t.Fatal("terminal outcome released authority", err)
-	}
-	rec = mutateTask(t, s, rec, TaskMutation{Key: "native-stop", Kind: "stop_ack", ExecutionStopped: true, Evidence: "fixture native exit"})
-	a = repoChange(t, s, a, "rollback")
-	if rec.Outcome != TaskSucceeded || a.Mode != "legacy" {
-		t.Fatal(rec, a)
-	}
-	var proof map[string]string
-	_ = json.Unmarshal([]byte(rec.Evidence), &proof)
-	if proof["pr_state"] != "waiting" {
-		t.Fatal("PR marked merged", proof)
-	}
-	t.Log("fixture work succeeded; GitHub PR waiting; native stop independently required for rollback")
-}
-
 func TestRepoAuthorityFreezeSerializesClaim(t *testing.T) {
 	s := taskStore(t)
 	var wg sync.WaitGroup
@@ -220,29 +196,38 @@ func TestRepoAuthorityFreezeSerializesClaim(t *testing.T) {
 }
 
 func TestRepoAuthorityLandingAfterWorkCompleted(t *testing.T) {
+	// A pre-C8 landing lives in the archived report journal (EPIC T497 C8): it is
+	// projected beside the record's own outcome and never rewrites it; a waiting
+	// word or another generation's never counts.
 	s := taskStore(t)
-	rec := startTask(t, s, acceptedTask(t, s, "landing", "gh:org/a#7"))
-	r := TaskReport{EventID: "work", Task: rec.Ref, Owner: rec.Owner, TicketRef: rec.TicketRef, Generation: rec.Generation, WorkerID: rec.ExecutionOwner, Outcome: TaskSucceeded, Status: "waiting", Evidence: `{"pr":"10","pr_state":"waiting"}`}
-	work, err := s.RecordFleetTaskReport(rec.Owner, rec.ExecutionEndpoint, r, time.Now())
-	if err != nil {
+	rec := acceptedTask(t, s, "landing", "gh:org/a#7")
+	if _, err := s.write.Exec(`UPDATE fleet_tasks SET state = ?, outcome = ?, evidence = ? WHERE id = ?`,
+		TaskSucceeded, TaskSucceeded, `{"pr":"10","pr_state":"waiting"}`, rec.ID); err != nil {
 		t.Fatal(err)
 	}
 	before, err := s.RepoTaskInventory("org/a", rec.Owner)
 	if err != nil || len(before) != 1 || before[0]["pr_state"] != "waiting" {
 		t.Fatal(before, err)
 	}
-	r.EventID, r.Status, r.Evidence = "merge", "merged", `{"pr":"10","pr_state":"merged"}`
-	merge, err := s.RecordFleetTaskReport(rec.Owner, rec.ExecutionEndpoint, r, time.Now())
-	if err != nil || merge.Disposition != "historical" {
-		t.Fatal(merge, err)
-	}
-	current, _ := s.FleetTask(rec.ID)
-	if current.Evidence != work.Task.Evidence || current.Outcome != work.Task.Outcome {
-		t.Fatal("landing rewrote work outcome", current)
-	}
-	after, err := s.RepoTaskInventory("org/a", rec.Owner)
-	if err != nil || after[0]["pr_state"] != "merged" || after[0]["work_outcome"] != TaskSucceeded {
-		t.Fatal(after, err)
+	ts := time.Now().UTC().Format(rfc)
+	for i, r := range []struct {
+		gen    int64
+		status string
+	}{{2, "merged"}, {1, "waiting"}, {1, "merged"}} {
+		body := fmt.Sprintf(`{"report":{"task":%q,"ticket_ref":%q,"generation":%d,"status":%q,"evidence":"{\"pr\":\"10\",\"pr_state\":\"%s\"}"}}`,
+			rec.Ref, rec.TicketRef, r.gen, r.status, r.status)
+		if _, err := s.write.Exec(`INSERT INTO fleet_operations (id, fleet_id, action, request, actor, idem, status, created, updated, result, worker_id)
+			VALUES (?, '', 'task_report', '{}', ?, ?, 'recorded', ?, ?, ?, '')`, fmt.Sprintf("r%d", i), rec.Owner, fmt.Sprintf("task-report:%s:%d", rec.Ref, i), ts, ts, body); err != nil {
+			t.Fatal(err)
+		}
+		after, err := s.RepoTaskInventory("org/a", rec.Owner)
+		want := "waiting"
+		if i == 2 {
+			want = "merged"
+		}
+		if err != nil || after[0]["pr_state"] != want || after[0]["work_outcome"] != TaskSucceeded {
+			t.Fatal(i, after, err)
+		}
 	}
 }
 

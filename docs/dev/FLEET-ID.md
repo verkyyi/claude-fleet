@@ -216,5 +216,11 @@ Tab 操作页在动作下面列出：编号 + 完整 ID、别名、每一段（a
   `c8-old-supervisor-reopen`）。`fleet_runtime.py event` 安静收下（旧 mod），`fleet_task_control.py report` 答 5、
   `finalize` 答 0（旧监督进程退出时调）。
 
+- **hub 这一半**：执行权状态机（认领 · 转移 · 重试 · 取消请求/确认 · 带围栏的回报）、它钉的任务 lease、
+  `task_attempt` 历史、启动合约（`launchContract` · `claimLaunch` · `verifyLaunchResult`）与 blocker 契约都删了；
+  `mutate` / `report` 一律 409 `ID_SWITCH`，只剩 C13 的「从没开过窗口」取消（`CancelUnopenedTask`）。
+  节点再报一个版本 `launch_v1`、收下并忽略旧 hub 发来的 `params.launch`。记录上的 `execution_owner` /
+  `generation` 列只当档案读（C8 之前绑的父、ID 迁移）。旧式记录的 settle（#4867）不属执行权层，留着。
+
 `bin/fleet-id-migrate-selftest.sh` 钉节点这一半；hub 那一半是 `hub/store/fleet_id_migrate_test.go`（§5 样例表逐条、
 反例、apply 一次、开关两轮）与 `hub/api/fleet_id_migrate_test.go`（机器只问一次、失联不动、开关两轮下旧路拒收、记录读 ID 的结果）。

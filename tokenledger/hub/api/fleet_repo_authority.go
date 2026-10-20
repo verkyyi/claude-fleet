@@ -16,12 +16,15 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
+// canRepoAuthority: the node enforces a person's authority (frozen refuses a
+// start) at its own gate. The launch proof it once needed beside it is gone
+// (EPIC T497 C8): a start is admitted by its window's ID.
 func (s *Server) canRepoAuthority(ctx context.Context, endpoint string) bool {
 	if c := s.nodes.get(endpoint); c != nil {
-		return c.canRepoAuthority && c.canLaunch
+		return c.canRepoAuthority
 	}
 	if p, ok := s.peerOf(ctx, endpoint); ok {
-		return p.HasCap(control.CapRepoAuthority) && p.HasCap(control.CapLaunch)
+		return p.HasCap(control.CapRepoAuthority)
 	}
 	return false
 }
@@ -254,10 +257,10 @@ func (s *Server) ownerAuthorityInventory(ctx context.Context, a store.OwnerAutho
 			blockers = append(blockers, "unknown workers: "+f.FleetID)
 			continue
 		}
-		// Every session of the owner's that is not an accepted task's
-		// execution is legacy, whatever repo it works in — or none.
+		// Every session of the owner's that works no task record is legacy,
+		// whatever repo it works in — or none (EPIC T497 C8: by its ID).
 		for _, w := range ws {
-			known, e := s.Store.TaskExecutionKnown(a.Owner, w.WorkerID)
+			known, e := s.Store.SessionOfTask(a.Owner, w.WorkerID)
 			if e != nil {
 				err = e
 				return

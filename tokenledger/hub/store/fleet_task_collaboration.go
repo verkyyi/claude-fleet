@@ -1,16 +1,22 @@
 package store
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"fmt"
+	"strings"
 	"time"
 )
 
-// The task graph and result history extend T records and the operation journal.
-// Neither a local issue key nor a transport acknowledgement is a task result.
+// The task graph: a child record names its parent record and the session that
+// dispatched it. Neither a local issue key nor a transport acknowledgement is a
+// task result — a session's result is its window's ID's (EPIC T497 C8).
+
+// bindTaskParentTx names a child's parent record. The parent is the dispatching
+// session — its ID (parent_session, checked to be this account's by the caller,
+// EPIC T497 C16) — and parent_task only names that session's record; no record is
+// asked for an executor. A parent_session alone names a record only through a
+// pre-C8 record's archived executor (a session a launch proof ran, still
+// dispatching its batch on the C8 release).
 func (s *Store) bindTaskParentTx(tx *sql.Tx, child *FleetTask) error {
 	var parent FleetTask
 	var err error
@@ -21,7 +27,7 @@ func (s *Store) bindTaskParentTx(tx *sql.Tx, child *FleetTask) error {
 		err = tx.QueryRow(`SELECT id FROM fleet_tasks WHERE owner = ? AND authority_version = 1 AND execution_owner = ? ORDER BY id DESC LIMIT 1`, child.Owner, child.ParentSession).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
-		} // a pinned legacy parent
+		}
 		if err == nil {
 			parent, err = s.taskInTx(tx, id)
 		}
@@ -37,24 +43,13 @@ func (s *Store) bindTaskParentTx(tx *sql.Tx, child *FleetTask) error {
 	if parent.AuthorityVersion == 0 {
 		return nil
 	}
-	if s.IDSwitchOn() {
-		// EPIC T497 C16: with the switch on no record is claimed, so the parent is
-		// the dispatching session — its ID (parent_session, checked to be this
-		// account's by the caller) — and parent_task only names its record. The
-		// record's executor is never asked for: it is empty for every session
-		// opened after the switch, Claude or Codex alike.
-		child.ParentTask, child.ParentGeneration = parent.Ref, parent.Generation
-		return nil
-	}
-	if parent.ExecutionOwner == "" || taskTerminal(parent.State) || (child.ParentSession != "" && child.ParentSession != parent.ExecutionOwner) {
-		return ErrTaskFence
-	}
-	child.ParentTask, child.ParentSession, child.ParentGeneration = parent.Ref, parent.ExecutionOwner, parent.Generation
+	child.ParentTask, child.ParentGeneration = parent.Ref, parent.Generation
 	return nil
 }
 
-func (s *Store) FleetTaskChildren(owner, parent, session string, generation int64) ([]FleetTask, error) {
-	rows, err := s.read.Query(`SELECT `+fleetTaskCols+` FROM fleet_tasks WHERE owner = ? AND authority_version = 1 AND parent_task = ? AND parent_session = ? AND parent_generation = ? ORDER BY id`, owner, parent, session, generation)
+// FleetTaskChildren lists the records that name parent as theirs.
+func (s *Store) FleetTaskChildren(owner, parent string) ([]FleetTask, error) {
+	rows, err := s.read.Query(`SELECT `+fleetTaskCols+` FROM fleet_tasks WHERE owner = ? AND authority_version = 1 AND parent_task = ? ORDER BY id`, owner, parent)
 	if err != nil {
 		return nil, err
 	}
@@ -62,236 +57,33 @@ func (s *Store) FleetTaskChildren(owner, parent, session string, generation int6
 	if out == nil {
 		out = []FleetTask{}
 	}
-	if err != nil {
-		return nil, err
-	}
-	for i := range out {
-		if err = projectTaskBlockers(s.read, &out[i]); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
+	return out, err
 }
 
-// TaskReport is the node's explicit result, independently scoped to the child
-// and to its accepted parent. Success/failure finalize work even while the native
-// session is retained. ExecutionStopped confirms runtime stop/fencing: cancellation
-// requires it; success/failure only release the execution lease when it is present.
-type TaskReport struct {
-	EventID          string              `json:"event_id"`
-	Task             string              `json:"task"`
-	Owner            string              `json:"owner"`
-	TicketRef        string              `json:"ticket_ref"`
-	Generation       int64               `json:"generation"`
-	WorkerID         string              `json:"worker_id"`
-	ParentTask       string              `json:"parent_task"`
-	ParentSession    string              `json:"parent_session"`
-	ParentGeneration int64               `json:"parent_generation"`
-	Outcome          string              `json:"outcome"`
-	Status           string              `json:"status,omitempty"`
-	Evidence         string              `json:"evidence"`
-	Summary          string              `json:"summary,omitempty"`
-	ExecutionStopped bool                `json:"execution_stopped"`
-	CancelRequest    string              `json:"cancel_request,omitempty"`
-	Blocker          *TaskBlockerCommand `json:"blocker,omitempty"`
-}
-
-type TaskReportReceipt struct {
-	Report      TaskReport `json:"report"`
-	Task        FleetTask  `json:"task"`
-	Disposition string     `json:"disposition"` // progress | committed | historical
-}
-
-func (s *Store) RecordFleetTaskReport(owner, endpoint string, r TaskReport, now time.Time) (TaskReportReceipt, error) {
-	empty := TaskReportReceipt{}
-	if s.IDSwitchOn() { // EPIC T497 C6: a result is the window's ID's now
-		return empty, ErrIDSwitch
-	}
-	if r.EventID == "" || len(r.EventID) > 200 || ParseTaskRef(r.Task) == 0 || r.Generation < 1 || r.Evidence == "" || endpoint == "" ||
-		(r.Outcome != "" && r.Outcome != TaskSucceeded && r.Outcome != TaskFailed && r.Outcome != TaskCancelled) {
-		return empty, ErrTaskInvalid
-	}
-	if r.Outcome == "" && (r.Status == "" || r.ExecutionStopped) {
-		return empty, ErrTaskInvalid
-	}
-	if r.Blocker != nil && (r.Outcome != "" || r.ExecutionStopped || r.CancelRequest != "") {
-		return empty, ErrTaskInvalid
-	}
-	if r.Owner != owner {
-		return empty, ErrTaskFence
-	}
-	tx, err := s.write.Begin()
-	if err != nil {
-		return empty, err
-	}
-	defer tx.Rollback()
-	if err = s.d.claimWrites(tx, "fleet_tasks"); err != nil {
-		return empty, err
-	}
-	if err = s.d.lockKey(tx, "fleet_tasks", "task-blockers:"+owner); err != nil {
-		return empty, err
-	}
-	t, err := s.taskInTx(tx, ParseTaskRef(r.Task))
-	if errors.Is(err, sql.ErrNoRows) {
-		return empty, ErrTaskFence
-	}
-	if err != nil {
-		return empty, err
-	}
-	if t.Owner != owner || t.AuthorityVersion != 1 {
-		return empty, ErrTaskFence
-	}
-	// Validate against the ORIGINAL attempt even for a stale report. A foreign
-	// endpoint or guessed task cannot pollute another owner's history.
-	attempt := t
-	if t.Generation != r.Generation {
-		var raw string
-		if err = tx.QueryRow(`SELECT result FROM fleet_operations WHERE id = ? AND action = 'task_attempt'`, taskAttemptID(t.ID, r.Generation)).Scan(&raw); err != nil {
-			return empty, ErrTaskFence
-		}
-		if err = json.Unmarshal([]byte(raw), &attempt); err != nil {
-			return empty, err
-		}
-	}
-	if attempt.ExecutionOwner == "" || attempt.ExecutionOwner != r.WorkerID || attempt.ExecutionEndpoint != endpoint || attempt.TicketRef != r.TicketRef ||
-		attempt.ParentTask != r.ParentTask || attempt.ParentSession != r.ParentSession || attempt.ParentGeneration != r.ParentGeneration {
-		return empty, ErrTaskFence
-	}
-	raw, _ := json.Marshal(struct {
-		Report   TaskReport
-		Endpoint string
-	}{r, endpoint})
-	idem := "task-report:" + r.Task + ":" + r.EventID
-	var oldRequest, oldResult string
-	err = tx.QueryRow(`SELECT request, result FROM fleet_operations WHERE actor = ? AND idem = ?`, owner, idem).Scan(&oldRequest, &oldResult)
-	if err == nil {
-		if oldRequest != string(raw) {
-			return empty, ErrTaskConflict
-		}
-		var old TaskReportReceipt
-		if err = json.Unmarshal([]byte(oldResult), &old); err != nil {
-			return empty, err
-		}
-		return old, tx.Commit()
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return empty, err
-	}
-	id := fmt.Sprintf("task-report:%x", sha256.Sum256([]byte(owner+"\x00"+idem)))
-	disposition := "progress"
-	if t.Generation != r.Generation || taskTerminal(t.State) {
-		disposition = "historical"
-	} else if r.Blocker != nil {
-		if err = s.applyTaskBlockerTx(tx, t, endpoint, id, *r.Blocker, now); err != nil {
-			return empty, err
-		}
-	} else if r.Outcome != "" {
-		if !taskTransition(t.State, r.Outcome) {
-			return empty, ErrTaskConflict
-		}
-		if r.Outcome == TaskCancelled && (!r.ExecutionStopped || t.CancelRequest == "" || r.CancelRequest != t.CancelRequest) {
-			return empty, ErrTaskConflict
-		}
-		t.State, t.Outcome, t.Evidence, t.UpdatedAt = r.Outcome, r.Outcome, r.Evidence, now.UTC()
-		if r.ExecutionStopped {
-			if err = releaseTaskLeaseTx(tx, t); err != nil {
-				return empty, err
-			}
-		}
-		if err = s.saveTaskTx(tx, t, now); err != nil {
-			return empty, err
-		}
-		if err = taskAttemptResultTx(tx, t, now); err != nil {
-			return empty, err
-		}
-		disposition = "committed"
-	}
-	if err = projectTaskBlockers(tx, &t); err != nil {
-		return empty, err
-	}
-	receipt := TaskReportReceipt{r, t, disposition}
-	result, _ := json.Marshal(receipt)
-	ts := now.UTC().Format(rfc)
-	_, err = tx.Exec(`INSERT INTO fleet_operations (id, fleet_id, action, request, actor, idem, status, created, updated, result, worker_id)
-        VALUES (?, '', 'task_report', ?, ?, ?, 'recorded', ?, ?, ?, ?)`, id, string(raw), owner, idem, ts, ts, string(result), r.WorkerID)
-	if err != nil {
-		return empty, err
-	}
-	if disposition == "committed" {
-		if err = s.resolveTaskDependenciesTx(tx, t, id, now); err != nil {
-			return empty, err
-		}
-	}
-	return receipt, tx.Commit()
-}
-
-// Recheck at delivery, too: an accepted relay can wait across a parent transfer.
-// Generation is distinct from the lifelong session ID retained by that transfer.
-func (s *Store) TaskReportDeliverable(r TaskReport) (bool, error) {
-	t, err := s.FleetTask(ParseTaskRef(r.Task))
-	if err != nil {
-		return false, err
-	}
-	if t.Owner != r.Owner || t.Generation != r.Generation || t.ExecutionOwner != r.WorkerID || t.Outcome != r.Outcome || t.ParentSession != r.ParentSession || t.ParentTask != r.ParentTask || t.ParentGeneration != r.ParentGeneration {
-		return false, nil
-	}
-	if r.ParentTask == "" {
-		return r.ParentSession != "", nil
-	}
-	p, err := s.FleetTask(ParseTaskRef(r.ParentTask))
-	if err != nil {
-		return false, err
-	}
-	return p.Owner == r.Owner && p.Generation == r.ParentGeneration && p.ExecutionOwner == r.ParentSession && !taskTerminal(p.State), nil
-}
-
-// A downlevel relay from an accepted execution cannot bypass task fencing.
-// Attempt history keeps this true after transfer, too; legacy sessions have no
-// entry here and continue through their existing report route.
-func (s *Store) TaskExecutionKnown(owner, worker string) (bool, error) {
-	var count int
-	err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_operations WHERE action = 'task_attempt' AND actor = ? AND worker_id = ?`, owner, worker).Scan(&count)
-	return count > 0, err
-}
-
-// TaskProgress is a task's newest workflow word (claude-fleet#4957): the last
-// progress report (no outcome, no blocker) its CURRENT execution sent — an EPIC
-// driver's tick line on its parent task, a worker's red gate. A report of an
-// earlier generation or another executor is history, never projected.
+// TaskProgress is a task's newest workflow word (claude-fleet#4957): an EPIC
+// driver's tick line on its parent task. Since EPIC T497 C12 it is the progress
+// word of the ID that carries the record (fleet_ids.progress).
 type TaskProgress struct {
 	Status  string    `json:"status"`
 	Summary string    `json:"summary,omitempty"`
 	At      time.Time `json:"at"`
 }
 
-// FleetTaskProgress reads t's newest progress word off the report journal
-// (fleet_operations, action task_report); nil when it has none. Read-only.
-func (s *Store) FleetTaskProgress(t FleetTask) (*TaskProgress, error) {
-	if t.AuthorityVersion != TaskAuthorityVersion || t.ExecutionOwner == "" {
-		return nil, nil
-	}
-	rows, err := s.read.Query(`SELECT result, created FROM fleet_operations WHERE action = 'task_report' AND actor = ? AND idem LIKE ? ORDER BY created DESC, id DESC LIMIT 50`,
-		t.Owner, "task-report:"+t.Ref+":%")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var raw, created string
-		if err = rows.Scan(&raw, &created); err != nil {
-			return nil, err
+// SessionOfTask answers whether owner's session worker (`<fleet>/<ID>`) works a
+// task record: its window's ID carries one (EPIC T497 C8), or — a pre-C8 session
+// — a launch proof once claimed a record for it (the archived task_attempt row).
+// Any other session of owner's is legacy work for a person's authority cutover.
+func (s *Store) SessionOfTask(owner, worker string) (bool, error) {
+	if _, id, ok := strings.Cut(worker, "/"); ok && id != "" {
+		var n int
+		if err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_ids WHERE id = ? AND owner = ? AND task != ''`, id, owner).Scan(&n); err != nil {
+			return false, err
 		}
-		var rc TaskReportReceipt
-		if json.Unmarshal([]byte(raw), &rc) != nil {
-			continue
+		if n > 0 {
+			return true, nil
 		}
-		r := rc.Report
-		if rc.Disposition != "progress" || r.Outcome != "" || r.Blocker != nil || r.Status == "" ||
-			r.Task != t.Ref || r.Generation != t.Generation || r.WorkerID != t.ExecutionOwner {
-			continue
-		}
-		at, _ := time.Parse(rfc, created)
-		return &TaskProgress{Status: r.Status, Summary: r.Summary, At: at}, nil
 	}
-	return nil, rows.Err()
+	var count int
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_operations WHERE action = 'task_attempt' AND actor = ? AND worker_id = ?`, owner, worker).Scan(&count)
+	return count > 0, err
 }

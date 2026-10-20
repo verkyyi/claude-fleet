@@ -22,7 +22,7 @@ func TestAcceptedCodingAgentDispatch(t *testing.T) {
 		t.Fatalf("provider/identity lost: %v", params)
 	}
 	task, err := h.srv.Store.FleetTask(store.ParseTaskRef(d["task"].(string)))
-	if err != nil || task.AuthorityVersion != 1 || task.ActualAgent != "" || task.State != "starting" || task.AttemptID == "" {
+	if err != nil || task.AuthorityVersion != 1 || task.ActualAgent != "" || task.State != store.TaskAccepted || task.ExecutionOwner != "" || task.AttemptID == "" {
 		t.Fatalf("accepted task (not execution proof): %+v %v", task, err)
 	}
 	journal, err := h.srv.Store.FleetOperation(op["operation_id"].(string))
@@ -48,6 +48,12 @@ func TestAcceptedCodingAgentDispatch(t *testing.T) {
 	t.Logf("fixture request -> journal: task=%s generation=%d requested=%s resolved=%s source=explicit attempt=%s; one launch, replay unchanged, changed payload refused; actual provider unverified", task.Ref, task.Generation, task.RequestedAgent, task.ResolvedAgent, task.AttemptID)
 }
 
+// startedFixture is a node's answer to a start: the window it opened. There is
+// no launch receipt to verify (EPIC T497 C8): a window is its ID.
+func startedFixture(env map[string]any) (any, *control.Error) {
+	return finished("succeeded", map[string]any{"window": "@7", "window_id": "@7"})(env)
+}
+
 func TestCodingAgentRejectsBeforeWork(t *testing.T) {
 	h, first, second, _, _ := twoNodesCaps(t, control.CapLaunch)
 	for _, pair := range [][2]string{{"unknown", ""}, {"codex", "claude"}, {"", "unknown"}} {
@@ -61,7 +67,7 @@ func TestCodingAgentRejectsBeforeWork(t *testing.T) {
 func TestClientCodingAgentKeepsAcceptedChoice(t *testing.T) {
 	h, _, target, _, _ := twoNodesCaps(t, control.CapLaunch)
 	lease, key := clientLeaseFor(t, h)
-	target.setOpGet(verifiedLaunchFixture)
+	target.setOpGet(startedFixture)
 	input := map[string]any{"repo": writeRepo, "kind": "scratch", "coding_agent": "codex", "idempotency_key": "client-provider"}
 	status, out := clientPlace(t, h, lease, key, input)
 	if status != 200 || out.Task == "" {
@@ -109,7 +115,7 @@ func TestNodeCodingAgentAcceptedBeforeLocalOrRemote(t *testing.T) {
 	for _, local := range []bool{false, true} {
 		t.Run(map[bool]string{false: "remote", true: "local"}[local], func(t *testing.T) {
 			h, first, target, f5, f4 := twoNodesCaps(t, control.CapLaunch)
-			target.setOpGet(verifiedLaunchFixture)
+			target.setOpGet(startedFixture)
 			tok, fid := h.tokens["mac-d"], f5.FleetID
 			if local {
 				tok, fid = h.tokens["mac-c"], f4.FleetID

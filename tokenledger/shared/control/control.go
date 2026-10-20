@@ -199,7 +199,9 @@ const CapTestIdentity = "test_identity"
 // the unknown field, and its start opens as before.
 const CapTask = "task"
 
-// CapLaunch requires process/native-session verification before initial input.
+// CapLaunch was the launch proof's (retired with EPIC T497 C8): a node still says
+// it for one version so a hub from before C8 keeps placing accepted tasks on it;
+// the hub asks for it no more. compat-1v: 下一批删
 const CapLaunch = "launch_v1"
 
 // CapRepoAuthority enforces the central repo freeze on local starts too.

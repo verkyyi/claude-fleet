@@ -1,7 +1,6 @@
 package store
 
 import (
-	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -11,8 +10,9 @@ import (
 	"time"
 )
 
-// Version 1 is additive and opt-in. No existing record is adopted implicitly.
-// Account owner authorizes the request; execution owner is a worker identity.
+// Version 1 is a dispatched task's record: its ticket — who asked, for what, in
+// which repo, by which agent. It holds no execution (EPIC T497 C8): the session
+// is its window's ID, and the record's end is that ID's result.
 const TaskAuthorityVersion = 1
 const (
 	TaskAccepted  = "accepted"
@@ -52,14 +52,6 @@ func taskTicket(ref string) (repo string, number int64, err error) {
 	return r, num, nil
 }
 
-func taskLeaseKey(t FleetTask) (string, int64) {
-	if t.TicketRef == "" {
-		return "task:" + t.Ref, 0
-	}
-	r, n, _ := taskTicket(t.TicketRef)
-	return r, n
-}
-
 // acceptedTaskInput is immutable even after a later generation or result.
 // The opaque payload carries the complete dispatch input for later consumers.
 type acceptedTaskInput struct {
@@ -70,7 +62,7 @@ type acceptedTaskInput struct {
 
 func taskAcceptedInput(t *FleetTask) (string, error) {
 	if t.AuthorityVersion != TaskAuthorityVersion || t.Owner == "" || t.Title == "" || t.RequestedAgent == "" || t.ResolvedAgent == "" ||
-		(t.State != "" && t.State != TaskAccepted) || t.ExecutionOwner != "" || t.WorkerID != "" || t.ActualAgent != "" || t.Generation != 0 {
+		(t.State != "" && t.State != TaskAccepted) || t.WorkerID != "" || t.ActualAgent != "" || t.Generation != 0 {
 		return "", ErrTaskInvalid
 	}
 	if t.TicketRef != "" {
@@ -180,114 +172,30 @@ func (s *Store) acceptFleetTask(t FleetTask, token string, now time.Time) (Fleet
 		return FleetTask{}, err
 	}
 	if n == 0 {
-		// The original accepted result, even if the current row has since advanced.
-		var raw string
-		err = tx.QueryRow(`SELECT request FROM fleet_operations WHERE id = ?`, taskAttemptID(id, 1)).Scan(&raw)
-		if err != nil {
-			return FleetTask{}, err
-		}
-		// Fields omitted from the accepted JSON must not retain the current
-		// row's later ticket/native/result values when replaying acceptance.
-		rec = FleetTask{}
-		if err = json.Unmarshal([]byte(raw), &rec); err != nil {
-			return FleetTask{}, err
-		}
-		rec.ID = id
+		// The same token again: the same record, as it stands now.
 		return rec, tx.Commit()
 	}
-	// Snapshot the parent generation only on the first acceptance. Replaying
-	// the original request after a parent restart never re-parents the child.
+	// The parent named on the first acceptance only: replaying the request never
+	// re-parents the child.
 	if err = s.bindTaskParentTx(tx, &rec); err != nil {
 		return FleetTask{}, err
 	}
-	rec.AttemptID = taskAttemptID(id, 1)
-	if err = s.saveTaskTx(tx, rec, now); err != nil {
-		return FleetTask{}, err
-	}
-	if err = taskAttemptTx(tx, rec, now); err != nil {
+	// attempt_id names the one dispatch the envelope carries (`task:T<n>:g1`) —
+	// a name a node's dispatch check still reads, not an attempt journal.
+	rec.AttemptID = fmt.Sprintf("task:%s:g%d", rec.Ref, rec.Generation)
+	if _, err = tx.Exec(`UPDATE fleet_tasks SET parent_task = ?, parent_session = ?, parent_generation = ?, attempt_id = ? WHERE id = ?`,
+		rec.ParentTask, rec.ParentSession, rec.ParentGeneration, rec.AttemptID, rec.ID); err != nil {
 		return FleetTask{}, err
 	}
 	return rec, tx.Commit()
 }
 
-func taskAttemptID(id, generation int64) string {
-	return fmt.Sprintf("task:%s:g%d", TaskRef(id), generation)
-}
-
-// TaskMutation is one fenced, idempotent command. A retry is allowed only
-// after a terminal result and release of its pinned execution lease. A transfer
-// requires explicit stopped evidence from the current executor; lease expiry
-// alone never authorizes either command. stop_ack releases a retained terminal
-// execution without changing its task outcome.
-// EndpointID is the authenticated node, not a field to accept from JSON.
-type TaskMutation struct {
-	Key              string              `json:"idempotency_key"`
-	Kind             string              `json:"kind"` // claim | transition | retry | transfer | cancel_request | cancel_ack | stop_ack | blocker
-	ExpectedWorker   string              `json:"expected_worker"`
-	Generation       int64               `json:"generation"`
-	WorkerID         string              `json:"worker_id,omitempty"`
-	EndpointID       string              `json:"-"`
-	FleetID          string              `json:"-"`
-	State            string              `json:"state,omitempty"`
-	ActualAgent      string              `json:"actual_agent,omitempty"`
-	RequestedAgent   string              `json:"requested_agent,omitempty"`
-	ResolvedAgent    string              `json:"resolved_agent,omitempty"`
-	Evidence         string              `json:"evidence,omitempty"`
-	ExecutionStopped bool                `json:"execution_stopped,omitempty"`
-	Observation      string              `json:"observation,omitempty"`
-	SessionKey       string              `json:"session_key,omitempty"`
-	CancelRequest    string              `json:"cancel_request,omitempty"`
-	Blocker          *TaskBlockerCommand `json:"blocker,omitempty"`
-}
-
-func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time.Time) (FleetTask, error) {
-	// EPIC T497 C6: the execution authority is off with the switch; only a
-	// person's cancel of a never-claimed record is still taken (C13), checked
-	// against the record below.
-	idSwitch := s.IDSwitchOn()
-	if idSwitch && !idSwitchCancel(m) {
-		return FleetTask{}, ErrIDSwitch
-	}
-	// A start is its owner's (claude-fleet#4896): take that person's authority
-	// lock before the task row lock, in the same order as acceptance/cutover;
-	// lifecycle reports remain open. The row's owner is fenced below.
-	starts := m.Kind == "claim" || m.Kind == "retry" || m.Kind == "transfer"
-	// Refuse fields that this command cannot apply, rather than silently
-	// accepting a requested provider/owner change on a transition.
-	if m.CancelRequest != "" && m.Kind != "cancel_ack" {
-		return FleetTask{}, ErrTaskInvalid
-	}
-	if (m.Kind == "blocker") != (m.Blocker != nil) {
-		return FleetTask{}, ErrTaskInvalid
-	}
-	switch m.Kind {
-	case "blocker":
-		if m.WorkerID != "" || m.State != "" || m.ActualAgent != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" || m.Observation != "" || m.SessionKey != "" || m.ExecutionStopped || m.Evidence != "" {
-			return FleetTask{}, ErrTaskInvalid
-		}
-	case "cancel_request", "cancel_ack", "stop_ack":
-		if m.WorkerID != "" || m.State != "" || m.ActualAgent != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" || m.Observation != "" || m.SessionKey != "" || m.Evidence == "" {
-			return FleetTask{}, ErrTaskInvalid
-		}
-		if m.Kind == "cancel_request" && m.ExecutionStopped {
-			return FleetTask{}, ErrTaskInvalid
-		}
-	case "claim":
-		if m.State != "" || m.ActualAgent != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" || m.Evidence != "" || m.ExecutionStopped || m.Observation != "" {
-			return FleetTask{}, ErrTaskInvalid
-		}
-	case "transition":
-		if m.WorkerID != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" {
-			return FleetTask{}, ErrTaskInvalid
-		}
-	case "retry", "transfer":
-		if m.WorkerID != "" || m.State != "" || m.ActualAgent != "" || m.Observation != "" || m.SessionKey != "" {
-			return FleetTask{}, ErrTaskInvalid
-		}
-	default:
-		return FleetTask{}, ErrTaskInvalid
-	}
-	if m.Key == "" || m.Generation < 1 || m.EndpointID == "" || (m.Observation != "" && m.Observation != "unknown" && m.Observation != "stale") {
+// CancelUnopenedTask ends a record no window ever opened (EPIC T497 C13, kept by
+// C8): accepted, no outcome, and no open ID carrying its number. It is the one
+// change the hub still takes on a task record — a session's end is its ID's
+// result (IDTaskOutcome). A record already cancelled answers itself.
+func (s *Store) CancelUnopenedTask(id int64, owner, evidence string, now time.Time) (FleetTask, error) {
+	if evidence == "" {
 		return FleetTask{}, ErrTaskInvalid
 	}
 	tx, err := s.write.Begin()
@@ -295,15 +203,7 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 		return FleetTask{}, err
 	}
 	defer tx.Rollback()
-	if starts {
-		if err = s.ownerStartTx(tx, owner, true); err != nil {
-			return FleetTask{}, err
-		}
-	}
 	if err = s.d.claimWrites(tx, "fleet_tasks"); err != nil {
-		return FleetTask{}, err
-	}
-	if err = s.d.lockKey(tx, "fleet_tasks", "task-blockers:"+owner); err != nil {
 		return FleetTask{}, err
 	}
 	t, err := s.taskInTx(tx, id)
@@ -313,264 +213,16 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 	if t.AuthorityVersion != TaskAuthorityVersion || t.Owner != owner {
 		return FleetTask{}, ErrTaskFence
 	}
-	// Include server-authenticated identities in the idempotency payload too.
-	raw, _ := json.Marshal(struct {
-		Task            string
-		Command         TaskMutation
-		Endpoint, Fleet string
-	}{t.Ref, m, m.EndpointID, m.FleetID})
-	idem := "task-event:" + t.Ref + ":" + m.Key
-	var request, result string
-	err = tx.QueryRow(`SELECT request, result FROM fleet_operations WHERE actor = ? AND idem = ?`, owner, idem).Scan(&request, &result)
-	if err == nil {
-		if request != string(raw) {
-			return FleetTask{}, ErrTaskConflict
-		}
-		var old FleetTask
-		if err = json.Unmarshal([]byte(result), &old); err != nil {
-			return FleetTask{}, err
-		}
-		old.ID = id
-		return old, tx.Commit()
+	if t.Outcome == TaskCancelled {
+		return t, tx.Commit()
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	if err = s.unopenedCancelAllowed(tx, t); err != nil {
 		return FleetTask{}, err
 	}
-	if idSwitch {
-		if err = s.idSwitchCancelAllowed(tx, t); err != nil {
-			return FleetTask{}, err
-		}
-	}
-	if t.Generation != m.Generation || t.ExecutionOwner != m.ExpectedWorker ||
-		(m.Kind != "cancel_request" && t.ExecutionEndpoint != "" && t.ExecutionEndpoint != m.EndpointID) {
-		return FleetTask{}, ErrTaskFence
-	}
-	eventID := fmt.Sprintf("task-event:%x", sha256.Sum256([]byte(owner+"\x00"+idem)))
-	switch m.Kind {
-	case "blocker":
-		if err = s.applyTaskBlockerTx(tx, t, m.EndpointID, eventID, *m.Blocker, now); err != nil {
-			return FleetTask{}, err
-		}
-	case "stop_ack":
-		if !taskTerminal(t.State) || t.ExecutionOwner == "" || !m.ExecutionStopped {
-			return FleetTask{}, ErrTaskConflict
-		}
-		if err = releaseTaskLeaseTx(tx, t); err != nil {
-			return FleetTask{}, err
-		}
-	case "cancel_request":
-		if taskTerminal(t.State) || t.CancelRequest != "" {
-			return FleetTask{}, ErrTaskConflict
-		}
-		t.CancelRequest = m.Key // Intent only: retain execution owner and lease.
-	case "cancel_ack":
-		if taskTerminal(t.State) || t.CancelRequest == "" || t.CancelRequest != m.CancelRequest || !m.ExecutionStopped {
-			return FleetTask{}, ErrTaskConflict
-		}
-		t.State, t.Outcome, t.Evidence = TaskCancelled, TaskCancelled, m.Evidence
-		if err = releaseTaskLeaseTx(tx, t); err != nil {
-			return FleetTask{}, err
-		}
-	case "claim":
-		if t.State != TaskAccepted || t.ExecutionOwner != "" || m.WorkerID == "" || m.FleetID == "" {
-			return FleetTask{}, ErrTaskConflict
-		}
-		if err = s.claimTaskLeaseTx(tx, t, m, now); err != nil {
-			return FleetTask{}, err
-		}
-		t.ExecutionOwner, t.WorkerID, t.ExecutionEndpoint = m.WorkerID, m.WorkerID, m.EndpointID
-		t.State, t.LeaseRef, t.SessionKey = TaskStarting, t.TicketRef, m.SessionKey
-		if t.LeaseRef == "" {
-			t.LeaseRef = "task:" + t.Ref
-		}
-	case "transition":
-		if m.State == TaskCancelled && t.ExecutionOwner != "" {
-			return FleetTask{}, ErrTaskConflict
-		}
-		if taskTerminal(t.State) {
-			return FleetTask{}, ErrTaskConflict
-		}
-		if t.ExecutionOwner == "" && m.State != TaskRefused && m.State != TaskCancelled && m.State != "" {
-			return FleetTask{}, ErrTaskConflict
-		}
-		if m.ActualAgent != "" {
-			if t.ExecutionOwner == "" || m.ActualAgent != t.ResolvedAgent || (t.ActualAgent != "" && t.ActualAgent != m.ActualAgent) || m.Evidence == "" {
-				return FleetTask{}, ErrTaskConflict
-			}
-			t.ActualAgent = m.ActualAgent
-		}
-		if m.State != "" && m.State != t.State {
-			if !taskTransition(t.State, m.State) {
-				return FleetTask{}, ErrTaskConflict
-			}
-			if m.State == TaskRunning && t.ActualAgent == "" {
-				return FleetTask{}, ErrTaskConflict
-			}
-			if taskTerminal(m.State) {
-				if m.Evidence == "" || (m.State == TaskRefused && t.ExecutionOwner != "" && !m.ExecutionStopped) {
-					return FleetTask{}, ErrTaskConflict
-				}
-				if m.State == TaskRefused && t.ActualAgent != "" {
-					return FleetTask{}, ErrTaskConflict
-				}
-				t.Outcome = m.State
-				if m.ExecutionStopped {
-					if err = releaseTaskLeaseTx(tx, t); err != nil {
-						return FleetTask{}, err
-					}
-				}
-			}
-			t.State = m.State
-		}
-		if m.Evidence != "" {
-			t.Evidence = m.Evidence
-		}
-		if m.Observation != "" {
-			t.Observation = m.Observation
-		}
-		if m.SessionKey != "" {
-			t.SessionKey = m.SessionKey
-		}
-	case "retry", "transfer":
-		if m.RequestedAgent == "" || m.ResolvedAgent == "" || m.Evidence == "" {
-			return FleetTask{}, ErrTaskInvalid
-		}
-		if m.Kind == "retry" && !taskTerminal(t.State) {
-			return FleetTask{}, ErrTaskConflict
-		}
-		if m.Kind == "retry" && !m.ExecutionStopped {
-			// A terminal result alone does not retire the native executor.
-			// Old terminal records already released their lease with stop proof.
-			var held int
-			if err = tx.QueryRow(`SELECT COUNT(*) FROM fleet_leases WHERE task_id = ? AND generation = ?`, t.ID, t.Generation).Scan(&held); err != nil {
-				return FleetTask{}, err
-			}
-			if held != 0 {
-				return FleetTask{}, ErrTaskConflict
-			}
-		}
-		if m.Kind == "transfer" && (t.ExecutionOwner == "" || taskTerminal(t.State) || !m.ExecutionStopped) {
-			return FleetTask{}, ErrTaskConflict
-		}
-		if err = releaseTaskLeaseTx(tx, t); err != nil {
-			return FleetTask{}, err
-		}
-		// Preserve the old attempt before clearing any execution/provider fields.
-		if err = taskAttemptResultTx(tx, t, now); err != nil {
-			return FleetTask{}, err
-		}
-		t.Generation++
-		t.UpdatedAt = now.UTC()
-		t.State, t.RequestedAgent, t.ResolvedAgent = TaskAccepted, m.RequestedAgent, m.ResolvedAgent
-		t.ExecutionOwner, t.ExecutionEndpoint, t.WorkerID, t.ActualAgent, t.LeaseRef = "", "", "", "", ""
-		t.Outcome, t.Evidence, t.Observation, t.SessionKey, t.CancelRequest = "", "", "", "", ""
-		t.AttemptID = taskAttemptID(t.ID, t.Generation)
-		if err = taskAttemptTx(tx, t, now); err != nil {
-			return FleetTask{}, err
-		}
-	default:
-		return FleetTask{}, ErrTaskInvalid
-	}
-	t.UpdatedAt = now.UTC()
-	if err = s.saveTaskTx(tx, t, now); err != nil {
+	t.State, t.Outcome, t.Evidence, t.UpdatedAt = TaskCancelled, TaskCancelled, evidence, now.UTC()
+	if _, err = tx.Exec(`UPDATE fleet_tasks SET state = ?, outcome = ?, evidence = ?, updated_at = ? WHERE id = ? AND owner = ? AND authority_version = 1`,
+		t.State, t.Outcome, t.Evidence, now.UTC().Format(rfc), t.ID, t.Owner); err != nil {
 		return FleetTask{}, err
-	}
-	if err = taskAttemptResultTx(tx, t, now); err != nil {
-		return FleetTask{}, err
-	}
-	if err = projectTaskBlockers(tx, &t); err != nil {
-		return FleetTask{}, err
-	}
-	resultJSON, err := json.Marshal(t)
-	if err != nil {
-		return FleetTask{}, err
-	}
-	ts := now.UTC().Format(rfc)
-	eventWorker := m.WorkerID
-	if eventWorker == "" {
-		eventWorker = m.ExpectedWorker
-	}
-	_, err = tx.Exec(`INSERT INTO fleet_operations (id, fleet_id, action, request, actor, idem, status, created, updated, result, worker_id)
-  VALUES (?, ?, 'task_event', ?, ?, ?, 'recorded', ?, ?, ?, ?)`, eventID, m.FleetID, string(raw), owner, idem, ts, ts, string(resultJSON), eventWorker)
-	if err != nil {
-		return FleetTask{}, err
-	}
-	if (m.Kind == "transition" || m.Kind == "cancel_ack") && taskTerminal(t.State) {
-		if err = s.resolveTaskDependenciesTx(tx, t, eventID, now); err != nil {
-			return FleetTask{}, err
-		}
 	}
 	return t, tx.Commit()
-}
-
-func taskTransition(from, to string) bool {
-	switch from {
-	case TaskAccepted:
-		return to == TaskRefused || to == TaskCancelled
-	case TaskStarting:
-		return to == TaskRunning || to == TaskFailed || to == TaskCancelled || to == TaskRefused
-	case TaskRunning:
-		return to == TaskWaiting || to == TaskSucceeded || to == TaskFailed || to == TaskCancelled
-	case TaskWaiting:
-		return to == TaskRunning || to == TaskSucceeded || to == TaskFailed || to == TaskCancelled
-	}
-	return false
-}
-
-func (s *Store) claimTaskLeaseTx(tx *sql.Tx, t FleetTask, m TaskMutation, now time.Time) error {
-	repo, n := taskLeaseKey(t)
-	ts, exp := now.UTC().Format(rfc), now.Add(5*time.Minute).UTC().Format(rfc)
-	// Existing rows are never stolen, even when expired. A legacy holder must
-	// explicitly release before adoption; migration/drain belongs to C5.
-	res, err := tx.Exec(`INSERT INTO fleet_leases (`+leaseCols+`, task_id, generation, account_owner)
-  VALUES (?, ?, ?, ?, ?, '', '', ?, ?, ?, 0, 0, ?, ?, ?) ON CONFLICT(repo, issue) DO NOTHING`,
-		repo, n, m.WorkerID, m.FleetID, m.EndpointID, ts, ts, exp, t.ID, t.Generation, t.Owner)
-	if err != nil {
-		return err
-	}
-	count, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if count == 0 {
-		return ErrTaskConflict
-	}
-	return nil
-}
-
-func releaseTaskLeaseTx(tx *sql.Tx, t FleetTask) error {
-	repo, n := taskLeaseKey(t)
-	_, err := tx.Exec(`DELETE FROM fleet_leases WHERE repo = ? AND issue = ? AND task_id = ? AND generation = ? AND worker_id = ? AND account_owner = ?`,
-		repo, n, t.ID, t.Generation, t.ExecutionOwner, t.Owner)
-	return err
-}
-
-func (s *Store) saveTaskTx(tx *sql.Tx, t FleetTask, now time.Time) error {
-	_, err := tx.Exec(`UPDATE fleet_tasks SET state = ?, generation = ?, execution_owner = ?, execution_endpoint = ?,
-  worker_id = ?, requested_agent = ?, resolved_agent = ?, actual_agent = ?, lease_ref = ?, outcome = ?, evidence = ?, observation = ?,
-  attempt_id = ?, session_key = ?, parent_task = ?, parent_session = ?, parent_generation = ?, cancel_request = ?, updated_at = ? WHERE id = ? AND owner = ? AND authority_version = 1`,
-		t.State, t.Generation, t.ExecutionOwner, t.ExecutionEndpoint, t.WorkerID, t.RequestedAgent, t.ResolvedAgent, t.ActualAgent,
-		t.LeaseRef, t.Outcome, t.Evidence, t.Observation, t.AttemptID, t.SessionKey, t.ParentTask, t.ParentSession, t.ParentGeneration, t.CancelRequest, now.UTC().Format(rfc), t.ID, t.Owner)
-	return err
-}
-
-func taskAttemptTx(tx *sql.Tx, t FleetTask, now time.Time) error {
-	b, err := json.Marshal(t)
-	if err != nil {
-		return err
-	}
-	ts := now.UTC().Format(rfc)
-	_, err = tx.Exec(`INSERT INTO fleet_operations (id, fleet_id, action, request, actor, idem, status, created, updated, result, worker_id)
-  VALUES (?, '', 'task_attempt', ?, ?, ?, 'recorded', ?, ?, ?, ?)`,
-		t.AttemptID, string(b), t.Owner, t.AttemptID, ts, ts, string(b), t.ExecutionOwner)
-	return err
-}
-func taskAttemptResultTx(tx *sql.Tx, t FleetTask, now time.Time) error {
-	b, err := json.Marshal(t)
-	if err != nil {
-		return err
-	}
-	_, err = tx.Exec(`UPDATE fleet_operations SET result = ?, updated = ?, worker_id = ? WHERE id = ? AND action = 'task_attempt'`,
-		string(b), now.UTC().Format(rfc), t.ExecutionOwner, t.AttemptID)
-	return err
 }

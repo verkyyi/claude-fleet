@@ -81,9 +81,10 @@ type relayPaths struct {
 	test bool
 	// task is whether claude-fleet takes the hub's task record on a start
 	// (claude-fleet#3325); false on one that predates it.
-	task          bool
+	task bool
+	// launch: claude-fleet still says launch_v1 for one version so a hub from
+	// before C8 (EPIC T497) keeps placing on it; nothing reads the contract.
 	launch        bool
-	taskRecovery  bool
 	repoAuthority bool
 	// authoritySync: this claude-fleet answers `authority-sync <repo>`
 	// (claude-fleet#4730); false on one that predates it.
@@ -140,8 +141,6 @@ func relaySetup(ctx context.Context, home string) (relayPaths, bool) {
 			p.test = v == "1"
 		case "launch_v1":
 			p.launch = v == "1"
-		case "task_recovery_v1":
-			p.taskRecovery = v == "1"
 		case "repo_authority_v1":
 			p.repoAuthority = v == "1"
 		case "repo_authority_sync":
@@ -206,18 +205,6 @@ func (a *Agent) relayOutboxOnce(ctx context.Context, conn nodeLink, p relayPaths
 			relayQuarantine(p, file, "not a relay: unreadable JSON or no id")
 			continue
 		}
-		var receipt struct {
-			ID      string  `json:"task_recovery"`
-			Expires float64 `json:"expires_at"`
-		}
-		_ = json.Unmarshal(r.Payload, &receipt)
-		if receipt.ID != "" && receipt.Expires <= float64(now.Unix()) {
-			// Preserve the file and a reason, including when quarantine cannot
-			// be written. Expiry is never an acknowledgement or permission.
-			_ = os.WriteFile(file+".why", []byte("expired: task reconciliation required\n"), 0o600)
-			ownPath(file + ".why")
-			continue
-		}
 		st.mu.Lock()
 		f, sent := st.inflight[r.ID]
 		st.mu.Unlock()
@@ -252,29 +239,6 @@ func (a *Agent) relayAcked(opID string) bool {
 	delete(st.inflight, opID)
 	st.mu.Unlock()
 	if ok {
-		if raw, err := os.ReadFile(f.file); err == nil {
-			var r control.Relay
-			var p struct {
-				ID string `json:"task_recovery"`
-			}
-			if json.Unmarshal(raw, &r) == nil && json.Unmarshal(r.Payload, &p) == nil && p.ID != "" {
-				// The receipt journal retires delivery only on this positive hub
-				// acknowledgement, never on a missing outbox file.
-				ack, err := os.OpenFile(f.file+".acked", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-				if err != nil {
-					return true
-				}
-				_, err = ack.WriteString(p.ID)
-				if err == nil {
-					err = ack.Sync()
-				}
-				closeErr := ack.Close()
-				if err != nil || closeErr != nil {
-					return true
-				}
-				ownPath(f.file + ".acked")
-			}
-		}
 		_ = os.Remove(f.file)
 	}
 	return ok

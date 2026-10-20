@@ -1423,12 +1423,17 @@ work. Existing machine/Fleet capacity limits still apply.
 
 A window's start is admitted by its own ID (docs/dev/FLEET-ID.md «C8»): nothing
 claims the task's execution owner, signs a launch contract (`params.launch`) or
-holds the seed until a native receipt. A node refuses `params.launch` as an
-unknown field. With the ID switch on (2026-10-20) the hub already sent none; its
-`launchContract` / `claimLaunch` and the execution state machine leave with C8's
-hub half. A node still lists `launch_v1` until then — the hub places an accepted
-dispatch only on a node that does — and the seed rides the launcher's command line
-as for any other start.
+holds the seed until a native receipt, and the hub places an accepted dispatch on
+any node (`launch_v1` is no longer asked). Gone from the hub: the execution state
+machine (claim · transfer · retry · cancel request/ack · fenced reports), the
+task leases it pinned, the `task_attempt` history, `launchContract` /
+`claimLaunch` / `verifyLaunchResult` and the blockers contract (`task-blockers.v1`).
+`POST /v1/node/tasks/<T>/mutate` and `…/report` answer 409 `ID_SWITCH`, except
+C13's cancel of a record no window ever opened (`CancelUnopenedTask`); `children`
+lists a parent's records with their ID's summary. For one version (compat-1v) a
+node still lists `launch_v1` and accepts — and ignores — a `params.launch` from a
+hub before C8. A record's `execution_owner` / `generation` columns stay, read only
+as an archive (a parent bound before C8, the ID migration).
 
 Remote configuration writes are limited to:
 

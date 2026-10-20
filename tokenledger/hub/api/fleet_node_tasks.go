@@ -83,29 +83,70 @@ func (s *Server) nodeTaskOwner(ep *store.Endpoint) string {
 	return o
 }
 
+// nodeTaskMutation is the one change a node still posts on a record (EPIC T497
+// C13, kept by C8): fleet_task_control.py cancel's transition to cancelled of a
+// record no window ever opened. Any other kind an older node sends (a claim, a
+// fenced transition, a stop or cancel acknowledgement) is answered ID_SWITCH
+// (compat-1v: 下一批删), so it records on its window's ID instead; the fields
+// those carried are taken and ignored.
+type nodeTaskMutation struct {
+	Key            string `json:"idempotency_key"`
+	Kind           string `json:"kind"`
+	ExpectedWorker string `json:"expected_worker"`
+	Generation     int64  `json:"generation"`
+	State          string `json:"state,omitempty"`
+	Evidence       string `json:"evidence,omitempty"`
+}
+
+// UnmarshalJSON keeps the cancel's fields and drops the rest.
+func (m *nodeTaskMutation) UnmarshalJSON(b []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(b, &all); err != nil {
+		return err
+	}
+	type plain nodeTaskMutation
+	var p plain
+	keep := map[string]json.RawMessage{}
+	for _, k := range []string{"idempotency_key", "kind", "expected_worker", "generation", "state", "evidence"} {
+		if v, ok := all[k]; ok {
+			keep[k] = v
+		}
+	}
+	kb, _ := json.Marshal(keep)
+	if err := json.Unmarshal(kb, &p); err != nil {
+		return err
+	}
+	*m = nodeTaskMutation(p)
+	return nil
+}
+
+func (m nodeTaskMutation) cancelsUnopened() bool {
+	return m.Kind == "transition" && m.State == store.TaskCancelled && m.ExpectedWorker == ""
+}
+
 type nodeTaskWrite struct {
-	AuthorityVersion int                 `json:"authority_version"`
-	RequestedAgent   string              `json:"requested_agent"`
-	ResolvedAgent    string              `json:"resolved_agent"`
-	TicketRef        string              `json:"ticket_ref"`
-	ParentTask       string              `json:"parent_task"`
-	ParentSession    string              `json:"parent_session"`
-	RequestPayload   json.RawMessage     `json:"request_payload"`
-	Mutation         *store.TaskMutation `json:"mutation"`
-	Token            string              `json:"token"`
-	Title            string              `json:"title"`
-	Via              string              `json:"via"`
-	Repo             string              `json:"repo"`
-	Rule             string              `json:"rule"`
-	Issue            string              `json:"issue"`
-	PR               string              `json:"pr"`
-	WorkerID         string              `json:"worker_id"`
-	Key              string              `json:"key"`
-	State            string              `json:"state"`
-	Note             string              `json:"note"`
-	Asked            string              `json:"asked"`
-	Parked           string              `json:"parked"`
-	Clear            []string            `json:"clear"`
+	AuthorityVersion int               `json:"authority_version"`
+	RequestedAgent   string            `json:"requested_agent"`
+	ResolvedAgent    string            `json:"resolved_agent"`
+	TicketRef        string            `json:"ticket_ref"`
+	ParentTask       string            `json:"parent_task"`
+	ParentSession    string            `json:"parent_session"`
+	RequestPayload   json.RawMessage   `json:"request_payload"`
+	Mutation         *nodeTaskMutation `json:"mutation"`
+	Token            string            `json:"token"`
+	Title            string            `json:"title"`
+	Via              string            `json:"via"`
+	Repo             string            `json:"repo"`
+	Rule             string            `json:"rule"`
+	Issue            string            `json:"issue"`
+	PR               string            `json:"pr"`
+	WorkerID         string            `json:"worker_id"`
+	Key              string            `json:"key"`
+	State            string            `json:"state"`
+	Note             string            `json:"note"`
+	Asked            string            `json:"asked"`
+	Parked           string            `json:"parked"`
+	Clear            []string          `json:"clear"`
 }
 
 // clipText is s on one line, at most n characters.
@@ -142,23 +183,6 @@ func (in *nodeTaskWrite) check(s *Server, ep *store.Endpoint) string {
 			if !nodeTaskTokenRE.MatchString(m.Key) || len(m.Evidence) > 8000 {
 				return "mutation needs a bounded idempotency key and evidence"
 			}
-			if m.SessionKey != "" && !nodeTaskKeyRE.MatchString(m.SessionKey) {
-				return "invalid session_key"
-			}
-			for _, worker := range []string{m.ExpectedWorker, m.WorkerID} {
-				if worker == "" {
-					continue
-				}
-				fid, sid, err := fleetid.ParseWorkerID(worker)
-				if err != nil || !fleetid.IsUUID(sid) {
-					return "authoritative worker_id requires a stable session UUID"
-				}
-				if f, err := s.Store.Fleet(fid); err != nil || f.EndpointID != ep.ID && m.Kind != "cancel_request" {
-					return "worker_id names a fleet this node does not report"
-				}
-				m.FleetID = fid
-			}
-			m.EndpointID = ep.ID
 		}
 		return ""
 	}
@@ -305,7 +329,11 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 				taskWriteError(w, store.ErrTaskFence)
 				return
 			}
-			rec, err := s.Store.MutateFleetTask(t.ID, owner, *in.Mutation, now)
+			if !in.Mutation.cancelsUnopened() {
+				taskWriteError(w, store.ErrIDSwitch)
+				return
+			}
+			rec, err := s.Store.CancelUnopenedTask(t.ID, owner, in.Mutation.Evidence, now)
 			if err != nil {
 				taskWriteError(w, err)
 				return

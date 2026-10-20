@@ -212,7 +212,7 @@ func TestRepoAuthorityAPICleanCutoverNoGitHub(t *testing.T) {
 	postFleet(t, h, "worker_start", map[string]any{"kind": "scratch", "repo": writeRepo, "idempotency_key": "old-after"}, 409)
 	// Legacy/home refs remain explicit; no GitHub reader is involved in task
 	// acceptance, launch journaling, or lifecycle writes.
-	target.setOpGet(verifiedLaunchFixture)
+	target.setOpGet(startedFixture)
 	op := postFleet(t, h, "worker_start", map[string]any{"kind": "scratch", "repo": writeRepo, "coding_agent": "codex", "idempotency_key": "hub-start"}, 200)
 	if target.count() != 1 {
 		t.Fatal("accepted start missing")

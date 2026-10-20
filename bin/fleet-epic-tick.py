@@ -138,7 +138,8 @@ def own_task():
 
 
 def id_of(task):
-    """A record's window ID: the second half of its worker_id (`<fleet>/<ID>`)."""
+    """A record's window ID: the second half of its worker_id (`<fleet>/<ID>`);
+    a record from before C8 (EPIC T497) may name it as execution_owner only."""
     for k in ("worker_id", "execution_owner"):
         tail = str(task.get(k) or "").rpartition("/")[2]
         if FID.match(tail):
