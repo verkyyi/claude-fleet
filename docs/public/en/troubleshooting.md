@@ -231,6 +231,13 @@ From `fleet doctor` and `fleet doctor --machine`.
 - **What it is**: on this login, whether the subscription token files are all there and readable by their owner only. Machine-wide, whether each account's claude · codex · tmux are linked to the release.
 - **On WARN / FAIL**: token file permissions: `chmod 600 <file>`; an empty token: `claude setup-token` to get a new one. The machine-wide half: the updater relinks on its next round.
 
+#### `account-pool`
+
+From `fleet doctor`.
+
+- **What it is**: this login's accounts directory holds pool accounts (`hub:`), but the login is not separated yet (no `credsep.json`). A session no longer picks among this login's accounts (T550): with no proxy to pick for it, it runs on the login's own Claude login.
+- **On WARN / FAIL**: hand the login to the pool: separate its credentials with `fleet-credsep.sh` (on a managed machine the daemon's credsep-enforce takes it in by itself).
+
 #### `cache`
 
 From `fleet doctor --machine`.

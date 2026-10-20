@@ -1,13 +1,12 @@
 #!/bin/bash
-# fleet-claude.sh — launch `claude` under the fleet's currently-active
-# subscription account, then hand off with exec. Transparent passthrough when
-# no accounts are registered (bin/fleet-account.sh prints nothing) — so the
-# spawn scripts can route EVERY session through this without changing behavior
-# for single-account installs.
+# fleet-claude.sh — launch `claude` for a fleet session, then hand off with exec.
 #
-# It exports CLAUDE_CODE_OAUTH_TOKEN for the active account and stamps the
-# window's @cc_account option with that account's label, so the collector can
-# attribute a "hit your … limit" banner back to the right account and rotate.
+# It never chooses a subscription (T550, EPIC T542 C4): through this login's
+# credential proxy (FLEET_CRED_SID) the pool picks one per request; otherwise the
+# session runs on this login's own Claude login, exactly as with no accounts/ at
+# all. The one exception is a caller that already NAMED the account — a migrate or
+# a handoff carrying a session over (FLEET_ACCOUNT_LABEL): that account's token is
+# exported and the window's @cc_account says so.
 #
 # Since issue #547 it is also the AGENT switch: FLEET_AGENT=codex (or a caller's
 # `--agent codex`) execs bin/fleet-codex.sh instead — see the dispatch block below.
@@ -43,25 +42,10 @@ if command -v fleet_load_conf >/dev/null 2>&1; then
   unset _fc_sess
 fi
 
-# Account CLASS (issue #1540, EPIC #1529 R2): which kind of subscription this
-# session may run on — `local` (this login's own token files), `pool` (the hub's
-# leased `hub:<label>` accounts, #1415) or `any` (the pick as it always was). The
-# window's @account_class — stamped by dash-issue-session.sh --account inside the
-# pane's own command, before this runs — wins over the FLEET_ACCOUNT_CLASS the
-# fleet conf / environment carry: a session's choice beats the fleet's default.
-# Exported so fleet-account.sh (`active`, and `launch` under FLEET_FAILOVER)
-# narrows its pick; a class from the conf is stamped back so the window says what
-# it runs on. `any` / unset / garbage: the variable is gone and nothing changes.
-_fc_cls=''
-[ -n "${TMUX_PANE:-}" ] && _fc_cls=$(tmux show-options -wqv -t "$TMUX_PANE" @account_class 2>/dev/null)
-case "$_fc_cls" in local|pool) : ;; *) _fc_cls="${FLEET_ACCOUNT_CLASS:-}" ;; esac
-case "$_fc_cls" in
-  local|pool)
-    export FLEET_ACCOUNT_CLASS="$_fc_cls"
-    [ -n "${TMUX_PANE:-}" ] && tmux set-option -w -t "$TMUX_PANE" @account_class "$_fc_cls" 2>/dev/null ;;
-  *) unset FLEET_ACCOUNT_CLASS ;;
-esac
-unset _fc_cls
+# The account CLASS (issue #1540) chose among this login's accounts — gone with the
+# pick (T550): the class only ever narrowed `fleet-account.sh active`. An older
+# window's @account_class changes nothing here.
+unset FLEET_ACCOUNT_CLASS
 
 # Agent CLI dispatch (issue #547). FLEET_AGENT — per-fleet overlay ▸ global ▸
 # `claude` — picks which agent a spawned session runs; a caller's `--agent <a>`
@@ -107,8 +91,8 @@ if [ "$_fc_explicit" != 1 ]; then
 fi
 # A SEPARATED login (credsep.json, #1971) through its credential proxy does not
 # choose its subscription (issue #2412): the session credential names no account
-# and the proxy picks one per request, moving it when it fills — so no pick, no
-# failover planner, no @cc_account here. Byte for byte as before anywhere else.
+# and the proxy picks one per request, moving it when it fills — so no @cc_account
+# here, not even a caller-named one.
 _fc_sep=0
 # …and so does a person's own pod (render.py --cred-central): no credsep.json, and
 # nothing is ever leased into it (node.env CCQUOTA_FLEET_CREDS=0) — the hub's
@@ -116,16 +100,6 @@ _fc_sep=0
 [ -n "${FLEET_CRED_SID:-}" ] && { [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" ] \
   || { [ -n "${FLEET_CRED_CENTRAL_URL:-}" ] && command -v _fleet_node_env_val >/dev/null 2>&1 \
        && [ "$(_fleet_node_env_val CCQUOTA_FLEET_CREDS 2>/dev/null)" = 0 ]; }; } && _fc_sep=1
-# Opted-in fresh launches use the same strict subscription planner as recovery.
-# Native resume/model-specific calls retain their explicit provider contract.
-if [ "${FLEET_FAILOVER:-0}" = 1 ] && [ "${FLEET_ACCOUNT_SELECTED:-0}" != 1 ] \
-  && [ -z "${FLEET_HANDOFF_MANIFEST:-}" ] && [ "$_fc_sep" != 1 ]; then
-  case " $* " in
-    *" --resume "*|*" --continue "*|*" --from-pr "*|*" --fork-session "*|*" resume "*|*" fork "*|*" --codex-home "*|*" --codex-profile "*) : ;;
-    *) export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_MODEL
-       exec bash "$BIN/fleet-account.sh" launch --agent "${_fc_agent:-claude}" -- ${_fc_as:+--as "$_fc_as"} "$@" ;;
-  esac
-fi
 # The agent file's launch (`fleet-agent-def.py launch`, key TAB value): its sha,
 # model and spawn grant, and the argv words it adds. A file gone since the spawn
 # looked opens a plain session and says so — never no session at all.
@@ -258,44 +232,19 @@ unset _fc_tr_args _fc_fleet
 # defer to the user's own `claude` default. Skipped if the caller already passed
 # an explicit --model (so an intentional override still wins).
 #
-# Per-MODEL cap fallback (issue #524). "You've hit your Fable 5 limit · resets Sep 6"
-# walls ONE model on ONE account while the subscription keeps its 5h/7d headroom;
-# fleet-account.sh records that per (account, model) — `model-limited-until`,
-# stamped by the collector off the banner — and this launcher, the single door
-# every spawn / restore / migrate walks through, swaps FLEET_MODEL for
-# FLEET_MODEL_FALLBACK (default opus) while the cap holds. So autofill and hand
-# spawns stop dying at their first turn, and once the cap resets new sessions are
-# back on FLEET_MODEL with nobody flipping a switch. Same rules as --model: an
-# explicit caller --model wins, an empty knob disables it, and a fallback equal
-# to FLEET_MODEL is a no-op (the cap IS the fallback — nothing to swap to). The
-# active account is resolved here (the token export below reuses it).
-# FLEET_PICK_MODEL: this fleet's model, resolved here with its per-fleet overlay
-# (fleet-account.sh re-sources only the global conf) — the account pick prefers
-# one whose cap ledger leaves it free (issue #1073).
+# The account: only one a caller NAMED (a migrate / handoff carrying a session over,
+# FLEET_ACCOUNT_LABEL) — never a pick among this login's accounts (T550, EPIC T542
+# C4). The pool picks behind the credential proxy; with no proxy the session runs
+# on this login's own login, as with no accounts/ at all.
 label="${FLEET_ACCOUNT_LABEL:-}"
 [ "$_fc_sep" = 1 ] && label=''      # the proxy picks (issue #2412)
-[ -n "$label" ] || [ "$_fc_sep" = 1 ] || label=$(FLEET_PICK_MODEL="${FLEET_MODEL-opus}" "$BIN/fleet-account.sh" active 2>/dev/null)
-# --account pool with no pool account registered here (issue #1540): refuse rather
-# than fall to this login's own subscription — the one thing the choice ruled out.
-# (`local` with no local token file is the ambient login, which IS local.)
-if [ -z "$label" ] && [ "${FLEET_ACCOUNT_CLASS:-}" = pool ] && [ "$_fc_sep" != 1 ]; then
-  echo 'fleet-claude: --account pool, but no hub-pool account is registered on this login (fleet-account.sh list) — refusing to launch on its own subscription' >&2
-  _fc_refused account; exit 1
-fi
 model_flag=()
 launch_model=""
-if [ -z "${FLEET_MODEL_FALLBACK+x}" ]; then FLEET_MODEL_FALLBACK="opus"; fi
 if [ -n "$FLEET_MODEL" ]; then
   case " $* " in
     *" --model "*|*" --model="*) : ;;               # caller already chose a model
     *)
       launch_model="$FLEET_MODEL"
-      if [ -n "$label" ] && [ -n "$FLEET_MODEL_FALLBACK" ] && [ "$FLEET_MODEL_FALLBACK" != "$FLEET_MODEL" ]; then
-        _fc_until=$("$BIN/fleet-account.sh" model-limited-until "$label" "$FLEET_MODEL" 2>/dev/null)
-        case "$_fc_until" in ''|*[!0-9]*) _fc_until=0 ;; esac
-        [ "$_fc_until" -gt "$(date +%s)" ] && launch_model="$FLEET_MODEL_FALLBACK"
-        unset _fc_until
-      fi
       model_flag=(--model "$launch_model") ;;
   esac
 fi
@@ -313,8 +262,7 @@ fi
 # overrides even the pinned built-ins (claude-code-guide=haiku, statusline=sonnet).
 # Defaults to FLEET_MODEL; set FLEET_SUBAGENT_MODEL=inherit in fleet.conf to let
 # each subagent resolve normally, or empty to not touch it at all.
-# Subagents follow the EFFECTIVE model (a Fable-capped launch on opus must not spawn
-# Fable subagents that die at their first turn); an explicit FLEET_SUBAGENT_MODEL wins.
+# Subagents follow the EFFECTIVE model; an explicit FLEET_SUBAGENT_MODEL wins.
 if [ -z "${FLEET_SUBAGENT_MODEL+x}" ]; then FLEET_SUBAGENT_MODEL="${launch_model:-$FLEET_MODEL}"; fi
 [ -n "$FLEET_SUBAGENT_MODEL" ] && export CLAUDE_CODE_SUBAGENT_MODEL="$FLEET_SUBAGENT_MODEL"
 
@@ -427,8 +375,8 @@ if [ -n "${FLEET_CRED_SID:-}" ]; then
       unset _fc_cred _fc_port
       if [ -n "${TMUX_PANE:-}" ]; then
         tmux set-option -w -t "$TMUX_PANE" @cred_route "$_fc_route" 2>/dev/null || true
-        if [ "$_fc_sep" = 1 ]; then tmux set-option -wu -t "$TMUX_PANE" @cc_account 2>/dev/null || true
-        elif [ "$_fc_route" != central ]; then tmux set-option -w -t "$TMUX_PANE" @cc_account "$label" 2>/dev/null || true; fi
+        if [ -n "$label" ] && [ "$_fc_route" != central ]; then tmux set-option -w -t "$TMUX_PANE" @cc_account "$label" 2>/dev/null || true
+        else tmux set-option -wu -t "$TMUX_PANE" @cc_account 2>/dev/null || true; fi
       fi ;;
     4) : ;;
     5) echo 'fleet-claude: the hub does not know this session (404: not registered for this node) — refusing to launch; ↵ on the page re-registers it and retries' >&2
@@ -439,7 +387,7 @@ if [ -n "${FLEET_CRED_SID:-}" ]; then
   unset _fc_px _fc_rc
 fi
 
-if [ -n "$label" ] && [ -z "$_fc_route" ]; then          # (resolved above, with the model)
+if [ -n "$label" ] && [ -z "$_fc_route" ]; then          # a caller-named account (above)
   tok=$("$BIN/fleet-account.sh" token "$label" 2>/dev/null)
   if [ -n "$tok" ]; then
     if [ -n "${FLEET_ACCOUNT_TARGET:-}" ]; then
@@ -452,7 +400,7 @@ if [ -n "$label" ] && [ -z "$_fc_route" ]; then          # (resolved above, with
     # Stamp THIS pane's window (issue #511). An untargeted `set-option -w` resolves
     # to the session's CURRENT window, and every spawn is `new-window -d` (the hub
     # stays current on purpose) — so the label used to land on the hub while the
-    # worker stayed unstamped, invisible to the collector's banner attribution.
+    # worker stayed unstamped.
     # No $TMUX_PANE (launched outside tmux) → nothing to stamp.
     if [ -n "${TMUX_PANE:-}" ]; then
       tmux set-option -w -t "$TMUX_PANE" @cc_account "$label" 2>/dev/null || true
@@ -467,7 +415,7 @@ PY
         tmux set-option -w -t "$TMUX_PANE" @subscription_identity "$_fc_binding" 2>/dev/null || true
       fi
     fi
-  elif [ -n "${FLEET_ACCOUNT_LABEL:-}" ]; then
+  else
     echo 'fleet-claude: pinned subscription is unavailable; refusing an ambient login fallback' >&2
     _fc_refused account; exit 1
   fi

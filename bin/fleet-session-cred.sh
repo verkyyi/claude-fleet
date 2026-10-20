@@ -264,17 +264,9 @@ case "$cmd" in
     elif [ "$provider" = claude ] && separated; then
       # separated (issue #2412): the session names no account — the proxy picks
       # one per request and moves it when it fills; a --account here is not ours
-      # to give. A proxy older than #2412 still wants one: the login's own pick,
-      # for that proxy's last version.
-      err=$(mktemp "${TMPDIR:-/tmp}/fsc-mint.XXXXXX")
-      cred=$(bash "$PROXY" mint --provider claude --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>"$err")
-      if [ -z "$cred" ] && grep -q -- '--account LABEL' "$err"; then
-        account=$(bash "$BIN/fleet-account.sh" active 2>/dev/null)
-        [ -n "$account" ] && cred=$(bash "$PROXY" mint --account "$account" --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null)
-      else
-        account=proxy
-      fi
-      rm -f "$err"
+      # to give (and the login has no pick of its own to offer since T550).
+      cred=$(bash "$PROXY" mint --provider claude --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null)
+      account=proxy
       [ -n "$cred" ] || die "the proxy would not mint a session credential"
       rec_set "$sid" account "$account"
     elif [ "$provider" = codex ] && separated && [ -z "$account" ] \

@@ -402,11 +402,10 @@ the repository. Account choice is per launch through `CLAUDE_CODE_OAUTH_TOKEN`;
 settings, hooks and transcripts continue to use the shared Claude configuration.
 
 The **usage + account modal** (`bin/usage-modal.sh`; its `prefix u` door left the
-node with #1714 — #1739 decides the client's): selecting an
-account changes the starting choice and migrates this fleet's idle Claude
-windows; working and looping windows are left alone by this manual path. A new
-spawn can reselect an account using the quota policy, so the selection is not a
-permanent pin. From inside a fleet pane, check that session's actual account:
+node with #1714 — #1739 decides the client's) is read-only: a Claude session's
+subscription is the pool's pick behind the credential proxy, else the login's
+own (T550) — nothing here, and no sidebar item, picks one. From inside a fleet
+pane, check that session's actual account:
 
 ```sh
 ~/.claude/fleet/bin/fleet-account.sh whoami

@@ -393,14 +393,11 @@ FLEET_CTX_WINDOW=200000
 
 # When an account hits a PER-MODEL cap ("You've hit your Fable 5 limit · resets
 # Sep 6 …" / "You've reached your Fable limit …") while its subscription still
-# has 5h/7d headroom, the fleet does NOT bench the account (that rotation is for
-# the subscription wall — benching on a model cap moved every session onto an
-# account with the same cap). It records the (account, model) cap until the
-# banner's reset, relaunches the walled sessions on THIS model (close + `--resume
-# --model`, same transcript), and every new session on that account launches on
-# it until the cap resets — hand spawns, restores alike; subagents
-# follow. Set empty to disable (a model cap then behaves like a subscription
-# wall: bench + rotate). Machine-wide policy: one value for every fleet.
+# has 5h/7d headroom, the fleet does NOT bench the account. It records the
+# (account, model) cap until the banner's reset and relaunches the walled
+# sessions on THIS model (close + `--resume --model`, same transcript). A new
+# session is no longer moved onto it at launch (T550: the launcher picks no
+# account). Set empty to disable. Machine-wide policy: one value for every fleet.
 # @label=Model-cap fallback @group=spawn @tier=common @scope=global @edit=enum
 #FLEET_MODEL_FALLBACK="opus"
 
@@ -1578,12 +1575,10 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # Which KIND of subscription this fleet's new sessions run on (issue #1540, EPIC
 # #1529 R2). Two kinds share the accounts dir: `local` — this login's own token
 # files — and `pool` — accounts the cross-machine hub leases out (a `hub:<label>`
-# file, docs/dev/FLEET-HUB.md). `any` (the default) is the pick as it always was.
-# One session chooses for itself with `dash-issue-session.sh --account
-# local|pool|any`, which wins over this line; the choice is stamped on the
-# window (@account_class) and travels with a remote placement, so the machine
-# that opens the session honours it. `pool` with no pool account on the login
-# refuses to launch rather than fall back to the login's own subscription.
+# file, docs/dev/FLEET-HUB.md). `any` is the default. Since the launcher's pick
+# retired (T550, EPIC T542 C4) it changes nothing: a session's subscription is
+# the pool's pick behind the credential proxy, else the login's own. Still
+# accepted (`dash-issue-session.sh --account`, a remote placement carries it).
 # Off the default config-panel face (@tier=internal, issue #1101 — the face is at
 # its 120-row cap, and the per-session flag is the usual way to say this); the
 # panel's `--all` edits it.
@@ -1607,10 +1602,9 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_ACCOUNT_LIMIT_TTL=18000
 # The ccquota hub (issue #513): `export` the URL HERE so every fleet script and
 # daemon sees it; ccquota reads the viewer token from ~/.ccquota/viewer-token, or
-# CCQUOTA_VIEWER_TOKEN. Spawns read each pool account's 5h/7d utilization off it
-# to prefer the eligible account with the most headroom (kept while within
-# FLEET_ACCOUNT_PICK_HYST points of the best) — see FLEET_ACCOUNT_PICK below. The
-# per-minute quota watch that warned / benched / moved sessions off it retired
+# CCQUOTA_VIEWER_TOKEN. `fleet-account.sh list` reads each account's 5h/7d
+# utilization off it (ranked by FLEET_ACCOUNT_PICK below; nothing picks by it
+# since T550 — a session's subscription is the pool's). The per-minute quota watch that warned / benched / moved sessions off it retired
 # (T549): a full subscription is the credential pool's to change.
 # @label=ccquota hub URL @group=accounts @tier=advanced @scope=global @edit=str
 #export CCQUOTA_HUB_URL="http://100.x.y.z:8787"
@@ -1735,11 +1729,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #           rollback, not as a recommendation.
 # @label=Spawn ranking @group=accounts @tier=advanced @scope=global @edit=str
 #FLEET_ACCOUNT_PICK=pace
-# Keep the CURRENT account while it is within this many points of the best, so
-# new spawns don't flip-flop between near-equal accounts. Points are 5h-headroom
-# equivalents (the score above), so 10 ≈ "10% of a 5-hour window".
-# @label=Spawn ranking hysteresis @group=accounts @tier=advanced @scope=global @edit=int
-#FLEET_ACCOUNT_PICK_HYST=10
 # The weekly PACE rails (issue #1231; `pace` mode only). LEAD: a weekly lead of
 # this many points outweighs a whole 5h window in the score. HOLD / MARGIN: an
 # account more than HOLD points ahead, or with its 7d within MARGIN of the

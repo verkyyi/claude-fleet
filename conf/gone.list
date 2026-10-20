@@ -97,7 +97,7 @@ re   display-message[^|]*'Tasks:       #3008  conf/
 path bin/fleet-keys.sh                 #4902
 re   ^bin/fleet-keys\.sh               #4902  tokenledger/hub/api/fleetclient/manifest
 re   --title["',\s]*popup_             #4902  bin/,conf/
-re   dash-popup\.sh|fleet_popup\s      #1620  bin/fleet-restore-pick.sh,bin/dash-reap.sh,bin/dash-migrate.sh,bin/open-url.sh,bin/dash-repo-add.sh,bin/fleet-row-remote.sh
+re   dash-popup\.sh|fleet_popup\s      #1620  bin/fleet-restore-pick.sh,bin/dash-reap.sh,bin/open-url.sh,bin/dash-repo-add.sh,bin/fleet-row-remote.sh
 # --- a working spawn / reap says nothing (#1618) -------------------------------
 re   display-message(?![^|]*\s-p\s)[^|]*(✓|spawned|reaped|closed\sscratch|filed|checking\s#|spawning\s#)  #1618  bin/dash-issue-session.sh,bin/dash-raw-session.sh,bin/dash-reap.sh
 # --- the old alert wording (#1714) ----------------------------------------------
@@ -191,3 +191,15 @@ func fleet_session_sleepers            T548
 func fleet_cap_full                    T548
 func sleep_snapshot                    T548
 func zage_v                            T548
+# --- a Claude session's subscription is the pool's pick (T550, EPIC T542 C4) ------
+path bin/dash-migrate.sh                        T550
+path bin/fleet-manual-sub.sh                    T550
+path bin/dash-migrate-selftest.sh               T550
+func pick_active                                T550  bin/
+func pick_best                                  T550  bin/
+func pick_active_rr                             T550  bin/
+func cmd_active                                 T550  bin/
+func cmd_use                                    T550  bin/
+func cmd_rotate                                 T550  bin/
+func migrate_rebind                             T550  bin/
+func sub_choices                                T550  bin/

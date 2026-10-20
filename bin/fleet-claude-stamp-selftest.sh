@@ -1,16 +1,18 @@
 #!/bin/bash
-# fleet-claude-stamp-selftest.sh — the launcher must stamp @cc_account on ITS OWN
-# window (issue #511).
+# fleet-claude-stamp-selftest.sh — the launcher stamps @cc_account on ITS OWN
+# window, and only for an account a caller NAMED (issues #511, T550).
 #
-# bin/fleet-claude.sh tags the window it launches in with the active account's
-# label, and that tag is what the collector uses to attribute a "hit your … limit"
-# banner back to an account (and rotate). It used to stamp with an UNTARGETED
-# `tmux set-option -w` — which resolves to the session's CURRENT window, not the
-# pane the launcher runs in. Every spawn path is `new-window -d` (the hub stays
-# current on purpose), so every stamp landed on the hub: workers were unstamped
-# (invisible to rotation) and the hub carried whatever spawned last. `-t
-# "$TMUX_PANE"` is the fix; this pins it against a REAL tmux on an isolated socket,
-# in exactly the production shape (hub current, worker spawned detached).
+# bin/fleet-claude.sh tags the window it launches in with the label of the
+# account a migrate / handoff pinned (FLEET_ACCOUNT_LABEL). It used to stamp with
+# an UNTARGETED `tmux set-option -w` — which resolves to the session's CURRENT
+# window, not the pane the launcher runs in. Every spawn path is `new-window -d`
+# (the hub stays current on purpose), so every stamp landed on the hub. `-t
+# "$TMUX_PANE"` is the fix; this pins it against a REAL tmux on an isolated
+# socket, in exactly the production shape (hub current, worker spawned detached).
+#
+# Since T550 (EPIC T542 C4) the launcher picks no account: with two accounts in
+# accounts/ and nothing named, it asks fleet-account.sh nothing, exports no
+# token and stamps nothing — the session runs on this login's own login.
 #
 # Hermetic: private socket via a PATH shim (the SUT's bare `tmux` and ours), fake
 # `claude` + fake `fleet-account.sh`, scratch HOME/FLEET_CONF_DIR. Exit 0 = pass.
@@ -44,9 +46,10 @@ trap 'exit 130' INT TERM HUP
 # The SUT resolves its siblings via its own dir: real script + lib, fake accounts.
 ln -s "$SUT" "$WORK/bin/fleet-claude.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
-cat > "$WORK/bin/fleet-account.sh" <<'EOF'
+cat > "$WORK/bin/fleet-account.sh" <<EOF
 #!/bin/sh
-case "${1:-}" in active) echo acctA ;; token) echo tok-a ;; esac
+echo "\$*" >> "$WORK/account.calls"
+case "\${1:-}" in active) echo acctA ;; token) [ -n "\${2:-}" ] && echo tok-a ;; esac
 exit 0
 EOF
 chmod +x "$WORK/bin/fleet-account.sh"
@@ -56,8 +59,23 @@ fail() { printf 'fleet-claude-stamp selftest FAIL: %s\n' "$1" >&2; exit 1; }
 # Production shape: the hub is the session's current window; the worker is spawned
 # DETACHED (-d) so the hub stays current while the launcher runs.
 tmux new-session -d -s t -n hub 'sleep 20' || fail "could not start the isolated server"
+mkdir -p "$WORK/accounts"; printf 'tok-a\n' > "$WORK/accounts/acctA"; printf 'tok-b\n' > "$WORK/accounts/acctB"
+
+# --- 1. nothing named: no pick, no token, no stamp (T550) ----------------------
+tmux new-window -d -t t: -n plain \
+  "env PATH='$PATH' HOME='$WORK' FLEET_CONF_DIR='$WORK/conf' FLEET_ACCOUNTS_DIR='$WORK/accounts' bash '$WORK/bin/fleet-claude.sh'" \
+  || fail "new-window failed"
+for _ in $(seq 1 30); do
+  [ -n "$(tmux show-options -wv -t t:plain @cc_agent 2>/dev/null)" ] && break
+  sleep 0.2
+done
+[ -n "$(tmux show-options -wv -t t:plain @cc_agent 2>/dev/null)" ] || fail "the plain launch never ran"
+[ -z "$(tmux show-options -wv -t t:plain @cc_account 2>/dev/null)" ] || fail "a launch that named no account must stamp no @cc_account"
+[ ! -s "$WORK/account.calls" ] || fail "a launch that named no account must ask fleet-account.sh nothing: $(cat "$WORK/account.calls")"
+
+# --- 2. a named account: stamped on the worker's own window, not the hub (#511) --
 tmux new-window -d -t t: -n worker \
-  "env PATH='$PATH' HOME='$WORK' FLEET_CONF_DIR='$WORK/conf' bash '$WORK/bin/fleet-claude.sh'" \
+  "env PATH='$PATH' HOME='$WORK' FLEET_CONF_DIR='$WORK/conf' FLEET_ACCOUNTS_DIR='$WORK/accounts' FLEET_ACCOUNT_LABEL=acctA bash '$WORK/bin/fleet-claude.sh'" \
   || fail "new-window failed"
 
 # wait for the launcher to have stamped SOMETHING (or give up after ~6s)
@@ -67,7 +85,8 @@ for _ in $(seq 1 30); do
   [ -n "$h$w" ] && break
   sleep 0.2
 done
-[ "$w" = "acctA" ] || fail "the worker window must carry the stamp (got worker='$w' hub='$h')"
+[ "$w" = "acctA" ] || fail "the worker window must carry the named account (got worker='$w' hub='$h')"
 [ -z "$h" ]        || fail "the stamp must not land on the hub (the session's current window); got hub='$h'"
+grep -q '^active' "$WORK/account.calls" && fail "the launcher must never ask fleet-account.sh active (T550)"
 
-printf 'selftest OK: fleet-claude.sh stamps @cc_account on its own window, not the hub (issue #511)\n'
+printf 'selftest OK: fleet-claude.sh picks no account; a named one is stamped on its own window (issues #511, T550)\n'

@@ -260,13 +260,6 @@ awk -F'\\t' -v n="$n" '!($2 == n || $1 == n)' "$FLEET_CONF_DIR/workers.tsv" > "$
 mv "$FLEET_CONF_DIR/workers.new" "$FLEET_CONF_DIR/workers.tsv"
 if [ -f "$FLEET_CONF_DIR/reap-dirty" ]; then echo reaped:keep; else echo reaped:full; fi
 ''')
-        # worker_switch (issue #2102): dash-migrate.sh <window> to [<account>] —
-        # its own dry-run refuses with one line and exit 1, else dispatches.
-        self.script(self.bin / "dash-migrate.sh", '''#!/bin/bash
-printf '%s\\n' "$* TMUX=${TMUX:-}" >> "$FLEET_CONF_DIR/migrate.calls"
-[ ! -f "$FLEET_CONF_DIR/switch-same" ] || { echo 'guide: already on gmail'; exit 1; }
-exit 0
-''')
         # worker_transfer (issue #4184): fleet-transfer.sh's --dry-run refuses with
         # a `fleet-transfer: <why>` line and exit 1, or says the source is mid-turn
         self.script(self.bin / "fleet-transfer.sh", '''#!/bin/bash
@@ -743,25 +736,19 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.assertEqual(missing["result"]["error"]["code"], "NOT_FOUND", missing)
         self.assertEqual(len(self.node.calls("reap")), 1)
 
-    def test_switch_moves_the_window_by_key_or_identity(self):
-        # worker_switch (issue #2102): the Fleet Shell's 「换到可用订阅」. The worker
-        # resolves to its WINDOW — by key, or by identity alone (the no-repo guide
-        # has no key) — and dash-migrate.sh `to` runs on the fleet's own server;
-        # its one-line refusal comes back verbatim, a bad label never reaches it.
+    def test_switch_is_retired(self):
+        # worker_switch (issue #2102) retired with the account pick (T550, EPIC
+        # T542 C4): the worker still resolves — by key or by identity alone, an
+        # unknown one is NOT_FOUND — and every switch is refused with one line
+        # (已不用：订阅由池子挑); nothing touches the window. A bad label or an extra
+        # field never reaches the node, and the scope gate holds as before.
         ident = str(uuid.uuid4())
         self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@4", None, True, "/fixture/project-scratch-4", "", "", ident))
-        done = self.lifecycle("worker_switch")
-        self.assertEqual((done["status"], done["result"]["window"], done["result"]["to"]), ("succeeded", "@12", "active"), done)
-        named = self.lifecycle("worker_switch", ident, idem="guide", account="gmail")
-        self.assertEqual((named["status"], named["result"]["window"]), ("succeeded", "@4"), named)
-        self.assertEqual(self.node.calls("migrate"), ["@12 to TMUX=/tmp/fleet-hub-selftest.sock,0,0",
-                                                      "@4 to gmail TMUX=/tmp/fleet-hub-selftest.sock,0,0"])
-        (self.node.conf / "switch-same").touch()
-        same = self.lifecycle("worker_switch", ident, idem="same", account="gmail")
-        self.assertEqual((same["status"], same["result"]["error"]["code"]), ("failed", "INVALID_STATE"))
-        self.assertIn("already on gmail", same["result"]["error"]["message"])
-        (self.node.conf / "switch-same").unlink()
-        n = len(self.node.calls("migrate"))
+        for got in (self.lifecycle("worker_switch"),
+                    self.lifecycle("worker_switch", ident, idem="guide", account="gmail")):
+            self.assertEqual((got["status"], got["result"]["error"]["code"]), ("failed", "INVALID_STATE"), got)
+            self.assertIn("已不用：订阅由池子挑", got["result"]["error"]["message"])
+        self.assertEqual(self.node.calls("migrate"), [])
         for bad in ("", "a b", "x;rm", "../x", 3, True):
             with self.subTest(bad=bad), self.assertRaises(Fault):
                 self.call("worker_switch", {"worker_id": self.worker(), "account": bad, "idempotency_key": "bad"})
@@ -772,7 +759,6 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         reader = self.hub.grant("answerer", [self.fleet], ["fleet:read", "worker:answer"])
         with self.assertRaisesRegex(Fault, "outside this caller"):
             self.lifecycle("worker_switch", idem="no-scope", token=reader["token"])
-        self.assertEqual(len(self.node.calls("migrate")), n)
 
     def test_transfer_hands_the_window_to_the_other_agent(self):
         # worker_transfer (issue #4184): 换 Codex / 换 Claude on a row here from

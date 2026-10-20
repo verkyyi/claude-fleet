@@ -5,7 +5,7 @@
 # name on a row — #1475); no machine status line on top (#1531); a lost machine's rows dimmed
 # where they stand (#1882). Drives tmux-dashboard-rows.sh, fleet-hub-sessions.sh,
 # fleet-control-read.sh + fleet_control.py, and the read-only guards in
-# dash-pin-toggle.sh and dash-migrate.sh.
+# dash-pin-toggle.sh.
 #
 # Legs:
 #   A. degenerate — CCQUOTA_FLEET unset: a remote cache on disk changes NOTHING
@@ -702,10 +702,9 @@ PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 # ============================================================================
 : > "$TMUX_LOG"
 rm -f "$G/remote_fold_$S"; cp "$G/remote_$S" "$WORK/remote.f"; remote_cache "$NOW"   # B's tree
-# (the fold toggle went with the dash, issue #4902: pin and migrate stay)
+# (the fold toggle went with the dash, issue #4902; migrate with the account pick, T550: pin stays)
 PATH="$SHIMPATH" FLEET_SESSION=$S bash "$BIN/dash-pin-toggle.sh" "wid:$F/issue-1423" >/dev/null 2>&1
-PATH="$SHIMPATH" FLEET_SESSION=$S bash "$BIN/dash-migrate.sh" "wid:$F/issue-1423" >/dev/null 2>&1
-hasnt "F: pin/migrate on a remote row set no tmux option" "$(cat "$TMUX_LOG")" "set-"
+hasnt "F: pin on a remote row sets no tmux option" "$(cat "$TMUX_LOG")" "set-"
 mv "$WORK/remote.f" "$G/remote_$S"; rm -f "$G/remote_fold_$S"
 
 # ============================================================================

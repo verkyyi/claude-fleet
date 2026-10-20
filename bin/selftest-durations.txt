@@ -47,7 +47,6 @@
 1.7 dash-issue-session-name-selftest.sh
 5.1 dash-issue-session-prompt-selftest.sh
 13.1 dash-keymap-selftest.sh
-4.1 dash-migrate-selftest.sh
 0.0 dash-pin-selftest.sh
 16.7 dash-popup-selftest.sh
 11.3 dash-raw-session-selftest.sh

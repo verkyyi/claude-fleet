@@ -1,12 +1,12 @@
 #!/bin/bash
-# fleet-migrate.sh — move LIVE Claude sessions onto the fleet's active subscription
-# account (issue #512; `fleet-account.sh migrate …` delegates here).
+# fleet-migrate.sh — reopen LIVE Claude sessions by close + `--resume` (issue #512;
+# `fleet-account.sh migrate …` delegates here): onto the current configuration
+# (--cfg-stale), onto another model (--model), or as they are.
 #
-# THROUGH THE CREDENTIAL PROXY (FLEET_CRED_PROXY=1, issue #1972) it IS an in-place
-# swap: the session holds only a session credential (@cred_sid, @cred_route
-# direct|relay) and the move is `fleet-session-cred.sh rebind` — the window, its
-# @fleet_id and pane pid stay; the next request runs on the new account
-# (migrate_rebind). Everything below is the road for every other window.
+# It moves no session between subscriptions any more (T550, EPIC T542 C4): there
+# is no account to move onto — the pool picks behind the credential proxy, and
+# without one a session runs on this login's own login. A reopened session lands
+# wherever its launcher puts it (fleet-claude.sh).
 #
 # WHY a close + resume, never an in-place swap: a running `claude` bakes its OAuth
 # token in at launch (CLAUDE_CODE_OAUTH_TOKEN, exported by fleet-claude.sh) and has
@@ -28,10 +28,9 @@
 #      row); when no hook closes it (FLEET_CLOSE_ON_EXIT=0) relaunch in the surviving
 #      shell instead;
 #   4. open a NEW window in the same cwd running
-#      `fleet-claude.sh --resume <sid> [<nudge>]` — fleet-claude.sh exports the
-#      ACTIVE account's token, applies the fleet model/MCP flags and stamps
-#      @cc_account — re-bind the window options, then VERIFY by reading the new
-#      process's token out of its environment (truth, not a stamp).
+#      `fleet-claude.sh --resume <sid> [<nudge>]` — fleet-claude.sh applies the
+#      fleet model/MCP flags — re-bind the window options, then VERIFY that a
+#      Claude came up (and which account's token it carries, when it carries one).
 #
 #   fleet-migrate.sh [opts] <window>…           a @wid handle (b3), tmux id or index
 #   fleet-migrate.sh [opts] --account <label>   every window running on <label>
@@ -50,9 +49,7 @@
 #                             launcher takes it as the caller's explicit choice; the
 #                             default nudge then names the MODEL cap, not the account.
 #         --cfg-stale         reopen the named window(s) onto the CURRENT configuration
-#                             (issue #1783): the same close + resume, on the active
-#                             account, exempt from "already on it" like --model —
-#                             but only while fleet_cfg_restart_why still says yes
+#                             (issue #1783): the same close + resume — but only while fleet_cfg_restart_why still says yes
 #                             (stale @agent_cfg, `done` and idle, no /loop round, no
 #                             Bash-tool job), asked again right before the /exit; a
 #                             reopened session leaves a `reason=cfg-stale` row
@@ -79,9 +76,8 @@
 #                             #871). Without it the move
 #                             does not look at background work at all (the historic
 #                             behaviour). --dry-run lists what it would stop.
-#         --target-account L  operator-selected destination for ONE explicit window;
-#                             requires fresh 5h and 7d quota below 95% (the 85%
-#                             automatic ceiling is unchanged).
+#         --target-account    retired with the account pick (T550): answers
+#                             「已不用：订阅由池子挑」 and exits 2.
 #         --force-self        move the CALLER'S OWN window anyway (issue #1474) — from
 #                             a detached process (nohup + its own session, cwd /)
 #                             that first waits for the caller's turn to end. Without
@@ -91,14 +87,7 @@
 #
 # Never touched: panels (dash/plan/backlog), the operator hub (@hub), windows with no
 # Claude process, raw scratch windows whose cwd is FLEET_MAIN without a registry
-# session id — and a window with NO MOVE AVAILABLE (issue #567): one already on
-# the active account, or any window while the active account is itself benched.
-# When every pool account is benched `fleet-account.sh active` keeps the current
-# one (the right answer for a fresh spawn — there is no better), so an
-# `--account X` fan-out would close N sessions and cold-boot each
-# one (~25 s) straight back onto X — or onto another wall — still walled. Such a
-# window is reported as a skip; only a `--model` move is exempt (it is a
-# same-account relaunch on purpose, #524).
+# session id.
 # Windows are moved ONE AT A TIME (each is a cold `claude` boot).
 # Exit 0 (per-window outcomes are printed); 2 = usage; 3 = the only window asked
 # for was the caller's own and nothing moved (issue #1474, below).
@@ -116,11 +105,11 @@ ACCT_DIR="${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}"
 LAUNCH="${FLEET_MIGRATE_LAUNCH:-$BIN/fleet-session-wrap.sh}"   # selftest seam: a fake launcher
 # The window options a moved session keeps besides its identity (issue #2970) —
 # what the reapers (@reap_policy, @reap_hold, @pin, @epic, @test_identity), the
-# report chain (@origin_gen, @origin_retired), the launcher (@account_class) and
+# report chain (@origin_gen, @origin_retired) and
 # the lists (@task_line, @name_manual — issue #3317) read. @fleet_role rides
 # apart: it defaults to worker. A hub task's record (@task, @task_flow — issue
 # #4974) rides too: its reapers and top bar read it off the window.
-MIGRATE_CARRY="@reap_policy @reap_hold @pin @epic @test_identity @origin_gen @origin_retired @account_class @task_line @name_manual @task @task_flow"
+MIGRATE_CARRY="@reap_policy @reap_hold @pin @epic @test_identity @origin_gen @origin_retired @task_line @name_manual @task @task_flow"
 EXIT_WAIT="${FLEET_MIGRATE_EXIT_WAIT:-30}"                 # s to wait for Claude to exit
 CLOSE_WAIT="${FLEET_MIGRATE_CLOSE_WAIT:-15}"               # s to wait for the hook to close the window
 BOOT_WAIT="${FLEET_MIGRATE_BOOT_WAIT:-15}"                 # s to wait for the resumed Claude to appear
@@ -148,7 +137,6 @@ NUDGE_MODEL_DEFAULT="$NUDGE_MODEL_BUILTIN"
 # ---------------------------------------------------------------- helpers ----
 # (file scope, so fleet-migrate-selftest.sh can source the pure ones)
 note() { REPORT="${REPORT}${REPORT:+; }$1"; }
-acct_benched() { [ "$("$BIN/fleet-account.sh" limited-until "$1" 2>/dev/null || echo 0)" -gt "$(now)" ]; }
 # acct_of_pid <claude-pid> — the pool label whose token the process carries
 # (empty: no token / not a pool token, i.e. the ambient login).
 acct_of_pid() {
@@ -166,6 +154,23 @@ window_account() {
   else
     printf '%s' "$stamp"
   fi
+}
+# pool_whoami <wid> — 0 + one line when the pool picks this window's subscription
+# (T550): a session on this login's credential proxy, separated (the proxy picks
+# per request — `picks` says where it runs now) or on the hub's central route
+# (the hub picks). 1 = not the pool's: the token truth below answers.
+pool_whoami() {
+  local csid route acct
+  csid=$(wopt "$1" '#{@cred_sid}'); [ -n "$csid" ] || return 1
+  route=$(wopt "$1" '#{@cred_route}')
+  if [ "$route" = central ]; then
+    printf '本会话由池子挑，当前用 hub 的中心代理 · picked by the pool, through the hub\n'; return 0
+  fi
+  [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" ] || return 1
+  acct=$(bash "$BIN/fleet-cred-proxy.sh" picks 2>/dev/null | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("picks", {}).get("claude:" + sys.argv[1], ""))
+except Exception: pass' "$csid" 2>/dev/null)
+  printf '本会话由池子挑，当前用 %s · picked by the pool, now on %s\n' "${acct:-?}" "${acct:-(no request yet)}"
 }
 # --- session id -----------------------------------------------------------------
 # The registry record is exact. Fallback: the newest top-level transcript in the
@@ -321,15 +326,6 @@ migrate_eligible() {
   if [ "$raw" = 1 ] && [ -n "$main" ] && [ "${cwd%/}" = "${main%/}" ] && [ -z "$sid" ]; then return 1; fi
   return 0
 }
-# migrate_noop <label> <active> <model> <active-benched> → 0 iff there is no move
-# to make (issue #567): the target is the account the window already runs on
-# (target == source is "no move available", never a move), or the target is
-# benched itself — `active` names a benched account only when NONE is eligible,
-# and a cold boot onto another wall is no better than staying on this one. A
-# --model relaunch is exempt (same account, other model — the #524 per-model cap
-# fallback); no pool at all (empty active) is left alone so a pool-less install
-# keeps its explicit-restart behaviour.
-migrate_noop() { [ -z "$3" ] && [ -n "$2" ] && { [ "$1" = "$2" ] || [ "${4:-0}" = 1 ]; }; }
 # migrate_selected <mode> <label> <wanted> → 0 iff selected; <wanted> is the
 # --account label in `account` mode.
 migrate_selected() {
@@ -392,51 +388,6 @@ reported_restore() {
   # …and the @migrating marker (issue #2321) goes with it: every road that calls
   # this is one where the move is over (or abandoned) on a window that lives on.
   TM set-window-option -t "$1" -u @migrating 2>/dev/null
-  return 0
-}
-
-# migrate_rebind <wid> <label> — the move for a session that runs through this
-# login's credential proxy (issue #1972, EPIC #1967 C5): its window carries
-# @cred_sid (fleet-session-wrap.sh) and a direct/relay @cred_route
-# (fleet-claude.sh), so the proxy is told to put $ACTIVE's credential on the
-# sid's next request — the window, its @fleet_id, the pane and every running tool
-# stay as they are. 0 = handled here (rebound, skipped or dry-run, counted);
-# 1 = not this road: a Codex window, a --model / --cfg-stale move (those relaunch
-# on purpose), a central route (the cluster picks the account), the proxy off, or
-# a rebind that failed — then the close + resume below, as before.
-#
-# SEPARATED (credsep.json, issue #2412) the proxy picks the account and moves the
-# session itself when it fills: an account move is never the login's — skipped,
-# never closed and resumed.
-migrate_rebind() {
-  local wid="$1" label="$2" csid route name
-  [ "${AGENT:-claude}" = claude ] && [ -z "$MODEL" ] && [ "$CFG" != 1 ] || return 1
-  csid=$(wopt "$wid" '#{@cred_sid}'); route=$(wopt "$wid" '#{@cred_route}')
-  [ -n "$csid" ] || return 1
-  case "$route" in direct|relay) ;; *) return 1 ;; esac
-  bash "$BIN/fleet-session-cred.sh" on 2>/dev/null || return 1
-  name=$(wopt "$wid" '#{window_name}')
-  if [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" ]; then
-    say "  – $name ($wid): the credential proxy picks its account (separated login) — skipped"
-    skipped=$((skipped+1)); return 0
-  fi
-  [ -n "$ACTIVE" ] || return 1
-  if migrate_noop "$label" "$ACTIVE" "$MODEL" "$ACTIVE_BENCHED"; then
-    if [ "$label" = "$ACTIVE" ]; then say "  – $name ($wid): already on $label — skipped"
-    else say "  – $name ($wid): nowhere to move (${label:-ambient login} → $ACTIVE, benched too) — skipped"; fi
-    skipped=$((skipped+1)); return 0
-  fi
-  if [ "$DRY" = 1 ]; then
-    say "  → $name ($wid): would rebind ${label:-?} → $ACTIVE in place (credential proxy, $route; no restart)"
-    return 0
-  fi
-  if ! bash "$BIN/fleet-session-cred.sh" rebind --sid "$csid" --account "$ACTIVE" 2>/dev/null; then
-    say "  ! $name ($wid): the proxy refused the rebind — closing and resuming instead"
-    return 1
-  fi
-  TM set-window-option -t "$wid" @cc_account "$ACTIVE" 2>/dev/null
-  say "  ✓ $name ($wid): ${label:-?} → $ACTIVE, rebound in place (credential proxy, $route; window and process kept)"
-  moved=$((moved+1)); note "$name"
   return 0
 }
 
@@ -524,11 +475,6 @@ migrate_one_body() {
     [ -n "$iss" ] && [ -z "$raw" ] && cfgpr=$(wopt "$wid" '#{@pr_num}')   # an OPEN PR only
     [ "$NUDGE_SET" = 1 ] || CFG_NUDGE=$(cfg_update_nudge "$(wopt "$wid" '#{@agent_ver}')" "$CFG_NEWVER" "$CFG_REASON" "$cfgpr")
   fi
-  if [ "$CFG" != 1 ] && migrate_noop "$label" "$ACTIVE" "$MODEL" "$ACTIVE_BENCHED"; then
-    if [ "$label" = "$ACTIVE" ]; then say "  – $name ($wid): already on $label — skipped"
-    else say "  – $name ($wid): nowhere to move (${label:-ambient login} → $ACTIVE, benched too) — skipped"; fi
-    skipped=$((skipped+1)); return 0
-  fi
   [ -n "$sid" ] || { say "  – $name ($wid): no session id (registry + transcript lookup failed) — skipped"; skipped=$((skipped+1)); return 0; }
   local nudge="$NUDGE"
   if [ "$NUDGE_SET" = 0 ]; then
@@ -558,18 +504,6 @@ migrate_one_body() {
     bgjson=$(bg_inventory "$cpid" "${wt:-$cwd}" 2>"$MIGRATE_TMP/bg.err") \
       || { bgerr=$(tail -1 "$MIGRATE_TMP/bg.err" 2>/dev/null); bgjson=""; }
     [ "$(bg_count "$bgjson")" -gt 0 ] || bgjson=""
-  fi
-  # The target account must be able to START before this session is asked to exit
-  # (issue #1667, EPIC #1665 C3): a label marked by mark-reauth, a hub token that
-  # expired, an unreadable token file. One judge — fleet-account.sh target-auth —
-  # read here, immediately before the plan is printed or the first state change;
-  # a refusal leaves the window running and says so (a close + resume onto an
-  # account that cannot log in is the 10-05 shape: window dead, conversation gone).
-  # A Codex reopen stays on its own CODEX_HOME — no account to switch, no check.
-  local ta_why=''
-  if [ "${AGENT:-claude}" != codex ]; then
-    ta_why=$(bash "$BIN/fleet-account.sh" target-auth --agent claude --label "$ACTIVE" 2>&1 >/dev/null) && ta_why='' \
-      || { ta_why=${ta_why##*fleet-account: }; ta_why=${ta_why#target-auth: }; ta_why=${ta_why:-the login check itself failed}; }
   fi
   # A hub task's session (@launch, claude-fleet#4974) is the SAME executor in its
   # new window: its launch binding rides the move — stamped before the launcher
@@ -602,8 +536,7 @@ migrate_one_body() {
     return 0
   fi
   if [ "$DRY" = 1 ]; then
-    say "  ↻ $name ($wid) [${label:-?} → ${ACTIVE:-?}${MODEL:+ on $MODEL}] would /exit pid $cpid and resume ${sid%%-*}… in $cwd${nudge:+ (nudged)}"
-    [ -z "$ta_why" ] || say "    ! target-auth: $ta_why — would be left running"
+    say "  ↻ $name ($wid) [${label:-own login}${MODEL:+ on $MODEL}] would /exit pid $cpid and resume ${sid%%-*}… in $cwd${nudge:+ (nudged)}"
     if [ "$FORCE_BG" = 1 ]; then
       if [ -n "$bgerr" ]; then say "    ! background inventory failed: ${bgerr#fleet-transfer-source: } — whatever it owns is stopped UNLISTED"
       elif [ -n "$bgjson" ]; then say "    would stop $(bg_count "$bgjson") background command(s):"; bg_lines "$bgjson"
@@ -611,22 +544,10 @@ migrate_one_body() {
     fi
     return 0
   fi
-  # The preview and the actual move are separate invocations. Re-read the chosen
-  # account after inventory, immediately before the first state change or /exit.
-  if [ -n "$TARGET_ACCOUNT" ] && ! bash "$BIN/fleet-manual-sub.sh" check "$SESS" "$TARGET_ACCOUNT"; then
-    say "  – $name ($wid): target quota changed or cannot be verified — left running"
-    skipped=$((skipped+1)); return 0
-  fi
   if [ -n "$tl_why" ]; then
     say "  – $name ($wid): task binding: $tl_why — left running (its record must still name this session)"
     [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event ${SOCK:+-L "$SOCK"} transfer-refused \
       "$name: 未重开：hub 任务的绑定对不上，原会话留着 · not reopened: $tl_why" >/dev/null 2>&1 || :
-    skipped=$((skipped+1)); return 0
-  fi
-  if [ -n "$ta_why" ]; then
-    say "  – $name ($wid): target-auth: $ta_why — left running (log in to ${ACTIVE:-the target}, then retry)"
-    [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event ${SOCK:+-L "$SOCK"} transfer-refused \
-      "$name: 未切换：${ACTIVE:-claude} 需要重新登录 · not switched: $ta_why" >/dev/null 2>&1 || :
     skipped=$((skipped+1)); return 0
   fi
   if [ -n "$bgjson" ]; then
@@ -723,19 +644,11 @@ migrate_one_body() {
   # --model rides BEFORE --resume (and on the fresh-launch fallback too) so
   # fleet-claude.sh sees an explicit model and skips its FLEET_MODEL default.
   local mflag=""; [ -n "$MODEL" ] && mflag=" --model '$MODEL'"
-  local pin=''
-  # A per-window binding also clears any ambient API-key auth in fleet-claude.sh
-  # and replaces an inherited Codex FLEET_ACCOUNT_TARGET from the caller.
-  if [ -n "$TARGET_ACCOUNT" ]; then
-    local target_json
-    printf -v target_json '{"agent":"claude","label":"%s"}' "$ACTIVE"
-    pin="FLEET_ACCOUNT_SELECTED=1 FLEET_ACCOUNT_LABEL='$ACTIVE' FLEET_ACCOUNT_TARGET='$target_json' "
-  fi
-  local cmd="${pin}'$LAUNCH'$mflag --resume '$sid'${nudge:+ '$nudge'} || ${pin}'$LAUNCH'$mflag; exec \$SHELL"
+  local cmd="'$LAUNCH'$mflag --resume '$sid'${nudge:+ '$nudge'} || '$LAUNCH'$mflag; exec \$SHELL"
   # A hub task's session never falls back to a fresh start (the record names this
   # conversation): the resume once more after a breath — the old launch's stop
   # reconciliation may still hold its native fence — then the shell.
-  [ -z "$tlaunch" ] || cmd="${pin}'$LAUNCH'$mflag --resume '$sid'${nudge:+ '$nudge'} || { sleep 3; ${pin}'$LAUNCH'$mflag --resume '$sid'; }; exec \$SHELL"
+  [ -z "$tlaunch" ] || cmd="'$LAUNCH'$mflag --resume '$sid'${nudge:+ '$nudge'} || { sleep 3; '$LAUNCH'$mflag --resume '$sid'; }; exec \$SHELL"
   # Codex (issue #1896): `codex resume <thread>` in the SAME home — fleet-codex.sh
   # turns `--resume` into the native verb; the explicit --agent keeps it Codex.
   if [ "${AGENT:-claude}" = codex ]; then
@@ -766,12 +679,12 @@ migrate_one_body() {
     # before the hook's detached kill-window ran); reap the pane-less ghost so the
     # dash never shows it — nothing runs in it, so this is not a destructive kill.
     TM display-message -p -t "$wid" '' >/dev/null 2>&1 && TM kill-window -t "$wid" 2>/dev/null
-    # 4. a NEW window, same name + cwd, resumed under the active account.
+    # 4. a NEW window, same name + cwd, resumed through its launcher.
     local stamp=''
     [ -n "$wrepo" ] && stamp=$(fleet_win_stamp_cmd @repo "$wrepo")
     [ "$norepo" = 1 ] && stamp=$(fleet_win_stamp_cmd @norepo 1 ${nsid:+@norepo_sid "$nsid"})
-    # Before the launcher runs, as a spawn stamps them (@account_class is read by
-    # fleet-claude.sh; a set-option after new-window would race it).
+    # Before the launcher runs, as a spawn stamps them (a set-option after
+    # new-window would race it).
     stamp="$stamp$(fleet_win_stamp_cmd @fleet_role "$role" ${cpairs[@]+"${cpairs[@]}"})"
     stamp="$stamp$tlstamp"   # a hub task's binding (#4974): before the launcher reads @launch
     nw=$(TM new-window -d -t "$SESS:" -n "$name" -c "$cwd" -P -F '#{window_id}' "$stamp$cmd" 2>/dev/null)
@@ -850,10 +763,8 @@ migrate_one_body() {
     say "  ? $name ($wid → $nw): resumed window opened but no Claude seen within ${BOOT_WAIT}s — check it"
     [ -z "$tlaunch" ] || { [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event ${SOCK:+-L "$SOCK"} transfer-refused \
       "$name: hub 任务会话重开后没起来（${ttask:-?}），请看 $nw · reopened task session did not start" >/dev/null 2>&1 || :; }
-  elif [ -n "$ACTIVE" ] && [ "$nl" != "$ACTIVE" ]; then
-    say "  ? $name ($wid → $nw): resumed as pid $ncp on '${nl:-ambient login}', expected '$ACTIVE' — check it"
   else
-    say "  ✓ $name ($wid → $nw): ${label:-?} → ${nl:-?}${MODEL:+ on $MODEL} (pid $ncp, session ${sid%%-*}…)"
+    say "  ✓ $name ($wid → $nw): ${label:-own login} → ${nl:-own login}${MODEL:+ on $MODEL} (pid $ncp, session ${sid%%-*}…)"
   fi
   fi
   # A configuration reopen leaves its row in /fleet-history (issue #1783): the
@@ -871,7 +782,7 @@ migrate_one_body() {
 # Sourced (fleet-migrate-selftest.sh pins the pure matrices) → define only; a
 # direct run dispatches. Same guard idiom as fleet-account.sh.
 migrate_main() {
-  MODE=""; ACCOUNT=""; TARGET_ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=(); FORCE_BG=0; MAX=0; FORCE_SELF=0; CFG=0
+  MODE=""; ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=(); FORCE_BG=0; MAX=0; FORCE_SELF=0; CFG=0
   local verified=0
   FLEET_MIGRATION_LOCKED=''
   MIGRATE_TMP=''
@@ -879,7 +790,8 @@ migrate_main() {
   while [ $# -gt 0 ]; do
     case "$1" in
       # The quota failover's and the pace rebalance's roads (T546). compat-1v: 下一批删
-      --limited|--idle|--all|--stuck|--from|--from=*|--target-file|--quota-request|--loop)
+      # …and the operator's pick of a destination subscription (T550). compat-1v: 下一批删
+      --limited|--idle|--all|--stuck|--from|--from=*|--target-file|--quota-request|--loop|--target-account|--target-account=*)
         echo "fleet-migrate: ${1%%=*} 已不用：订阅由池子挑 · no longer used: the pool picks the subscription" >&2; return 2 ;;
       --force-bg) FORCE_BG=1; shift ;;
       --force-self) FORCE_SELF=1; shift ;;
@@ -888,8 +800,6 @@ migrate_main() {
       --account=*) MODE=account; ACCOUNT="${1#--account=}"; shift ;;
       --max) MAX="${2:-}"; case "$MAX" in ''|*[!0-9]*) echo 'fleet-migrate: --max needs a number' >&2; return 2 ;; esac; shift 2 ;;
       --max=*) MAX="${1#--max=}"; case "$MAX" in ''|*[!0-9]*) echo 'fleet-migrate: --max needs a number' >&2; return 2 ;; esac; shift ;;
-      --target-account) [ -n "${2:-}" ] || { echo 'fleet-migrate: --target-account needs a label' >&2; return 2; }; TARGET_ACCOUNT="$2"; shift 2 ;;
-      --target-account=*) TARGET_ACCOUNT="${1#--target-account=}"; [ -n "$TARGET_ACCOUNT" ] || { echo 'fleet-migrate: --target-account needs a label' >&2; return 2; }; shift ;;
       --session) SESS="${2:-}"; shift 2 ;;
       --session=*) SESS="${1#--session=}"; shift ;;
       --nudge) NUDGE="${2:-}"; NUDGE_SET=1; shift 2 ;;
@@ -901,17 +811,13 @@ migrate_main() {
       --alert) TOAST=2; shift ;;
       whoami) MODE=whoami; shift ;;
       --verified) verified=1; shift ;;
-      -h|--help) sed -n '2,104p' "$0"; return 0 ;;
+      -h|--help) sed -n '2,93p' "$0"; return 0 ;;
       --*) echo "fleet-migrate: unknown option '$1'" >&2; return 2 ;;
       *) WIDS+=("$1"); shift ;;
     esac
   done
-  [ -n "$MODE" ] || [ "${#WIDS[@]}" -gt 0 ] || { sed -n '36,104p' "$0" >&2; return 2; }
+  [ -n "$MODE" ] || [ "${#WIDS[@]}" -gt 0 ] || { sed -n '35,93p' "$0" >&2; return 2; }
   [ "$MODE" = account ] && [ -z "$ACCOUNT" ] && { echo "fleet-migrate: --account needs a label" >&2; return 2; }
-  if [ -n "$TARGET_ACCOUNT" ]; then
-    [ -z "$MODE" ] && [ "${#WIDS[@]}" = 1 ] \
-      || { echo 'fleet-migrate: --target-account needs exactly one explicit window' >&2; return 2; }
-  fi
   MODEL=$(printf '%s' "$MODEL" | LC_ALL=C tr -cd 'A-Za-z0-9._-')   # embedded single-quoted in the launch line
 
   [ -n "$SESS" ] || SESS=$(fleet_current_session)
@@ -973,13 +879,6 @@ migrate_main() {
       [ -n "$s" ] && SHA2LABEL="${SHA2LABEL}${s}"$'\t'"${l}"$'\n' ;;
     esac
   done
-  ACTIVE=$("$BIN/fleet-account.sh" active 2>/dev/null)
-  ACTIVE_BENCHED=0; [ -n "$ACTIVE" ] && acct_benched "$ACTIVE" && ACTIVE_BENCHED=1   # ⇒ no account is eligible (#567)
-  if [ -n "$TARGET_ACCOUNT" ]; then
-    bash "$BIN/fleet-manual-sub.sh" check "$SESS" "$TARGET_ACCOUNT" || return 1
-    ACTIVE="$TARGET_ACCOUNT"
-    ACTIVE_BENCHED=0 # operator confirmed the fresh 85–95% exception
-  fi
 
   moved=0; skipped=0; REPORT=""
   MIGRATE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fleet-migrate.XXXXXX") || return 1
@@ -1009,6 +908,9 @@ migrate_main() {
     fi
     for wid in ${WIDS[@]+"${WIDS[@]}"}; do
       cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || { echo "$wid: no Claude process" >&2; continue; }
+      # Through the pool (T550, EPIC T542 C4): the session names no account, so
+      # the answer is the pool's — and which account it runs on right now.
+      [ "$verified" = 1 ] || ! pool_whoami "$wid" || continue
       stamp=$(TM display-message -p -t "$wid" '#{@cc_account}' 2>/dev/null)
       if [ "$verified" = 1 ]; then
         truth=$(acct_of_pid "$cpid")
@@ -1050,7 +952,7 @@ migrate_main() {
   if [ "$MAX" -gt 0 ] && [ "${#targets[@]}" -gt "$MAX" ]; then
     targets=("${targets[@]:0:$MAX}")
   fi
-  say "fleet-migrate: $MODE${ACCOUNT:+ from $ACCOUNT} → ${ACTIVE:-<no active account>} (${#targets[@]} window$([ "${#targets[@]}" = 1 ] || printf s))"
+  say "fleet-migrate: $MODE${ACCOUNT:+ from $ACCOUNT}${MODEL:+ → $MODEL} (${#targets[@]} window$([ "${#targets[@]}" = 1 ] || printf s))"
   self_refused=0; detached=0
   for wid in ${targets[@]+"${targets[@]}"}; do
     # --cfg-stale reopens a Codex window too (issue #1896): its pid is the bound
@@ -1065,10 +967,6 @@ migrate_main() {
     stamp=$(TM display-message -p -t "$wid" '#{@cc_account}' 2>/dev/null)
     label=$(window_account "$wid" "$cpid" "$stamp")
     fi
-    # Through the credential proxy (issue #1972): the session holds a session
-    # credential, so the move is the proxy's rebind — no /exit, no new window, not
-    # even for the caller's own. Anything else takes the road below.
-    migrate_rebind "$wid" "$label" && continue
     # The caller's own window (issue #1474): refuse, or hand it to the detached
     # re-exec; --dry-run only says so and still prints the plan.
     if migrate_is_self "$wid" "$cpid"; then
@@ -1082,11 +980,10 @@ migrate_main() {
         [ -n "$MODEL" ] && _args+=(--model "$MODEL")
         [ "$NUDGE_SET" = 1 ] && _args+=(--nudge "$NUDGE")
         [ "$FORCE_BG" = 1 ] && _args+=(--force-bg)
-        [ -n "$TARGET_ACCOUNT" ] && _args+=(--target-account "$TARGET_ACCOUNT")
         _args+=("$wid")
         printf '%s self-move of %s (%s) asked for by pid %s — detaching\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_nm" "$wid" "$$" >> "$_log" 2>/dev/null
         migrate_detach_self "$_log" ${_args[@]+"${_args[@]}"}
-        say "  ↻ $_nm ($wid): the caller's own window — the move runs DETACHED (log: $_log): it waits for this turn to end, /exits, and resumes ${label:-ambient login} → ${ACTIVE:-?}${MODEL:+ on $MODEL} in a new window"
+        say "  ↻ $_nm ($wid): the caller's own window — the move runs DETACHED (log: $_log): it waits for this turn to end, /exits, and resumes it${MODEL:+ on $MODEL} in a new window"
         detached=$((detached+1))
         continue
       else
@@ -1102,7 +999,7 @@ migrate_main() {
   if [ "$TOAST" != 0 ] && [ "$moved" -gt 0 ] && [ "$CFG" = 1 ]; then
     migrate_report migrate-moved "fleet: 已把 $moved 个配置旧的会话重开到当前配置 · reopened $moved session$([ "$moved" = 1 ] || printf s) on the current configuration ($REPORT)"
   elif [ "$TOAST" != 0 ] && [ "$moved" -gt 0 ]; then
-    migrate_report migrate-moved "fleet: moved $moved session$([ "$moved" = 1 ] || printf s) onto ${ACTIVE:-the active account} ($REPORT)"
+    migrate_report migrate-moved "fleet: reopened $moved session$([ "$moved" = 1 ] || printf s)${MODEL:+ on $MODEL} ($REPORT)"
   elif [ "$TOAST" != 0 ] && [ "$skipped" -gt 0 ]; then
     # The dash key runs this detached (#873): a move that did not happen must still
     # say so, or the keypress looks dead.

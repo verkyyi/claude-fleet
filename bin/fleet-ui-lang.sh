@@ -637,12 +637,8 @@ fleet_ui_t() {
     en:view_act_resume)         printf 'Resume' ;;
     zh:view_act_restore)        printf '恢复' ;;
     en:view_act_restore)        printf 'Restore' ;;
-    zh:view_act_sub)            printf '换账号…' ;;
-    en:view_act_sub)            printf 'Switch account…' ;;
     # another machine's row (issue #4184): its accounts are that login's — the
     # hub's worker_switch picks the active one there
-    zh:view_act_switch)         printf '换到可用订阅' ;;
-    en:view_act_switch)         printf 'Switch to an available subscription' ;;
     zh:view_act_agent_fmt)      printf '换成 %s' "${1:-}" ;;
     en:view_act_agent_fmt)      printf 'Switch to %s' "${1:-}" ;;
     zh:view_act_reap)           printf '回收…' ;;
@@ -726,8 +722,6 @@ fleet_ui_t() {
     en:repo_add_other)          printf '✗ Not added — see the lines above' ;;
     zh:hint_alerts)             printf '↵ 处理 · 1✖ 2▲ 3● 0全部 · m 静音1h · [✕ 关闭]' ;;
     en:hint_alerts)             printf '↵ act · 1✖ 2▲ 3● 0 all · m mute 1h · [✕ close]' ;;
-    zh:hint_usage)              printf '↵ 新会话用它 · Esc 取消 · [✕ 关闭]' ;;
-    en:hint_usage)              printf '↵ new sessions use it · esc · [✕ close]' ;;
     zh:toast_url_copied_fmt)    printf 'fleet: 链接已复制到剪贴板 — %s' "${1:-}" ;;
     en:toast_url_copied_fmt)    printf 'fleet: link copied to your clipboard — %s' "${1:-}" ;;
     zh:clip_hint)               printf 'fleet: 这个终端可能收不到会话里的复制 — Mac 上按住 ⌥ 拖选、iPad / 手机上长按选字，用终端自己的复制' ;;
@@ -755,8 +749,6 @@ fleet_ui_t() {
     # a remote row's action, named for its toast / popup (fleet-row-remote.sh)
     zh:remote_label_stop_fmt)    printf '停 %s（在 %s）' "${1:-}" "${2:-}" ;;
     en:remote_label_stop_fmt)    printf 'stop %s (on %s)' "${1:-}" "${2:-}" ;;
-    zh:remote_label_switch_fmt)  printf '%s 换订阅（在 %s）' "${1:-}" "${2:-}" ;;
-    en:remote_label_switch_fmt)  printf 'switch %s to an available subscription (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_resume_fmt)  printf '继续 %s（在 %s）' "${1:-}" "${2:-}" ;;
     en:remote_label_resume_fmt)  printf 'resume %s (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_reap_fmt)    printf '回收 %s（在 %s）' "${1:-}" "${2:-}" ;;
@@ -1143,12 +1135,6 @@ fleet_ui_t() {
     en:sidebar_ask_answer_hint) printf 'option number(s), or y / n' ;;
     zh:sidebar_ask_perm_hint)   printf '允许？y / n' ;;
     en:sidebar_ask_perm_hint)   printf 'allow? y / n' ;;
-    zh:sidebar_ask_sub)         printf '切到› ' ;;
-    en:sidebar_ask_sub)         printf 'switch to› ' ;;
-    zh:sidebar_ask_sub_loading) printf '读额度…' ;;
-    en:sidebar_ask_sub_loading) printf 'reading quota…' ;;
-    zh:sidebar_ask_sub_hint)    printf 'Tab 选账号 · ↵ 迁移' ;;
-    en:sidebar_ask_sub_hint)    printf 'Tab picks an account · ↵ moves' ;;
     zh:sidebar_ask_restore)     printf 'y 先 reopen · r 直接恢复› ' ;;
     en:sidebar_ask_restore)     printf 'y reopen first · r restore› ' ;;
     zh:sidebar_ask_keys)        printf '↵ 确定 · esc 取消' ;;
@@ -1159,7 +1145,6 @@ fleet_ui_t() {
 pin	t	置顶 / 取消置顶
 pr	p	打开 PR（没有时置灰）
 answer	a	回答提问 — 跳到那个会话，在它自己的提问里答（红色 ? 行；否则置灰）
-sub	s	切换 sub — 在输入行写账号，Tab 逐个看额度，↵ 迁移
 reappol	l	改回收方式 — 合并后 / 做完就收 / 循环停了 / 到点 / 常驻
 agent	v	新会话 claude ⇄ codex
 reap	x	回收 — 先确认 y/n（别机行：经入口让那台机器回收）
@@ -1177,7 +1162,6 @@ quit	z	退出 fleet — 只在客户端：关掉这台电脑上客户端的全�
 pin	t	pin / unpin the row to the top
 pr	p	open its PR (greyed when it has none)
 answer	a	answer its question — jumps to that session, to answer in its own picker (a red ? row; greyed otherwise)
-sub	s	switch subscription — the account on the input line, Tab through them with their quota, ↵ moves
 reappol	l	reap policy — after merge / when done / after the loop / at a time / keep
 agent	v	flip new sessions claude ⇄ codex
 reap	x	reap it — asks y/n first (a row on another machine: through the hub, there)
@@ -1199,8 +1183,6 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:menu_r_stop)             printf 'Stop (/exit)' ;;
     zh:menu_r_resume)           printf '继续（恢复）' ;;
     en:menu_r_resume)           printf 'Resume' ;;
-    zh:menu_r_switch)           printf '换到可用订阅（同一对话）' ;;
-    en:menu_r_switch)           printf 'Move to an available subscription' ;;
     zh:menu_r_answer)           printf '答授权 / 回答…' ;;
     en:menu_r_answer)           printf 'Answer prompt…' ;;
     zh:menu_r_answer_none)      printf '答授权 / 回答（没有在等）' ;;
@@ -1349,10 +1331,6 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:menu_answer)             printf 'Answer question…' ;;
     zh:menu_answer_none)        printf '回答它的提问（没有）' ;;
     en:menu_answer_none)        printf 'Answer question (none)' ;;
-    zh:menu_sub)                printf '迁移到…（换账号）' ;;
-    en:menu_sub)                printf 'Move to… (another account)' ;;
-    zh:menu_sub_none)           printf '迁移到…（只有运行中的 Claude 会话能迁）' ;;
-    en:menu_sub_none)           printf 'Move to… (a running Claude session only)' ;;
     zh:menu_agent_fmt)          printf '新会话改用 %s' "${1:-}" ;;
     en:menu_agent_fmt)          printf 'New sessions use %s' "${1:-}" ;;
     zh:menu_reap)               printf '回收…' ;;

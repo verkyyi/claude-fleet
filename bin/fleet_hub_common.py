@@ -42,13 +42,11 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
 # worker_reap (issue #1487, EPIC #1479 C8) are what a sidebar on another machine
 # runs on a row here: answer the pane's open prompt (fleet-answer.sh /
 # fleet-permission.sh) and reap the row (dash-reap.sh --yes).
-# worker_switch (issue #2102): the sidebar's 「换到可用订阅」 on a row here —
-# dash-migrate.sh <window> to [<account>]: the same conversation resumed on the
-# fleet's active (or the named) subscription.
+# worker_switch (issue #2102): retired with the account pick (T550) — the node
+# answers it 「已不用：订阅由池子挑」 (kept one version for an older hub / client).
 WORKER_ACTIONS = ("worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap",
                   "worker_switch", "worker_rename", "worker_reap_policy", "worker_pin", "worker_transfer")
-# worker_switch's optional `account`: a label in the accounts dir, one argv word
-# (fleet-manual-sub.sh check's own rule).
+# worker_switch's optional `account`: a label in the accounts dir, one argv word.
 ACCOUNT_RE = re.compile(r"[A-Za-z0-9._@-]{1,64}")
 # worker_rename's `name` (issue #2358): a window name — 1 to 64 characters, no
 # control character (a tab or newline would split the inventory's columns), not

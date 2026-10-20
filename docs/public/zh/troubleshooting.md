@@ -121,7 +121,7 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：节点上还会打开的选择框（换账号、添加仓库）要 fzf 0.59 以上。
+- **是什么**：节点上还会打开的选择框（添加仓库）要 fzf 0.59 以上。
 - **WARN / FAIL 怎么办**：`brew install fzf`（或包管理器）。只用新客户端（⌘P）的话不影响会话本身。
 
 #### `perl`
@@ -230,6 +230,13 @@ fleet doctor --json
 
 - **是什么**：本机：订阅令牌文件是否齐全、权限是否只有自己可读。整机：每个账号的 claude · codex · tmux 是否链到发布版。
 - **WARN / FAIL 怎么办**：令牌文件权限：`chmod 600 <文件>`；令牌空了：`claude setup-token` 重领。整机那半：更新器下一轮重链。
+
+#### `account-pool`
+
+来自 `fleet doctor`。
+
+- **是什么**：这个登录的账号目录里有池子的账号（`hub:` 开头），但这个登录还没做凭据隔离（没有 `credsep.json`）。开会话不再在本机账号里挑（T550）：没有代理替它挑，会话用的是这个登录自己登着的账号。
+- **WARN / FAIL 怎么办**：把这个登录交给池子：`fleet-credsep.sh` 做凭据隔离（托管机器上运维的 credsep-enforce 会自己收进来）。
 
 #### `cache`
 

@@ -533,10 +533,9 @@ credential pool's to change — the session keeps running where it is. The two o
 entry points answer 「已不用：订阅由池子挑」 for one version. What a manual move
 still borrows from it lives in `bin/fleet_transfer_source.py`: `settled` (a
 `looping` Codex between rounds), `background` and `terminate-background`
-(`fleet-migrate.sh --force-bg`, issue #873). A row's subscription is still
-switched by hand (`dash-migrate.sh`, the hub's `worker_switch`): it shows
-`fleet-migrate.sh`'s own dry run and a confirm runs `fleet-migrate.sh --force-bg
---toast <window>`.
+(`fleet-migrate.sh --force-bg`, issue #873). Switching a row's subscription by
+hand is retired too (T550): the sidebar item, `dash-migrate.sh` and the hub's
+`worker_switch` are gone or answer 「已不用」 — the pool picks.
 
 A fully visible single-line draft is saved as `unsent-draft.txt`, marked `unsent`
 and referenced by path. Its text is never submitted as the pickup prompt. An

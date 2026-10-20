@@ -210,20 +210,19 @@ argv="$(run 'Work GitHub issue #2109 in this repo')"
 case "$argv" in *"Work GitHub issue #2109 in this repo"*) : ;; *) fail "a multi-word prompt was mangled" "$argv" ;; esac
 ok "a multi-word seed prompt passes through intact"
 
-# --- #524: a model-capped account launches on the FALLBACK model ----------------
-# The Fable weekly cap walls FLEET_MODEL=fable on one account while the subscription
-# is fine. fleet-account.sh keeps that per (account, model) — `model-limited-until`
-# — and the launcher, the one door every spawn/restore/migrate walks through, must
-# pick FLEET_MODEL_FALLBACK (default opus) while it is set, so autofill and hand
-# spawns stop dying at their first turn. Subagents follow the effective model, the
-# pane is stamped @cc_model, and — the rules --model already follows — an explicit
-# caller --model still wins and an empty knob turns it off.
+# --- #524 → T550: the launcher no longer swaps the model off a model cap -------
+# The per-(account, model) cap ledger (`model-limited-until`) was read here against
+# the account the launcher PICKED. There is no pick since T550 (EPIC T542 C4): the
+# pool picks behind the credential proxy, so the launch runs FLEET_MODEL and asks
+# fleet-account.sh nothing; relaunching a walled session on the fallback stays
+# fleet-model-switch.sh's.
 cat > "$WORK/bin/fleet-account.sh" <<EOF
 #!/bin/sh
+echo "\$*" >> "$WORK/account.calls"
 case "\$1" in
   active) echo acctA ;;
   token)  echo tok-A ;;
-  model-limited-until) if [ "\$2" = acctA ] && [ "\$3" = "\${LIMITED_MODEL:-}" ]; then echo "\${LIMITED_UNTIL:-0}"; else echo 0; fi ;;
+  model-limited-until) echo \$(( \$(date +%s) + 3600 )) ;;
   *) : ;;
 esac
 exit 0
@@ -232,42 +231,17 @@ chmod +x "$WORK/bin/fleet-account.sh"
 printf 'f1' > "$SESS_FILE"
 printf 'FLEET_MODEL="fable"\n' > "$WORK/conf/fleets/f1/conf"
 printf 'FLEET_MODEL="opus"\n' > "$WORK/fleet.conf"
-far=$(( $(date +%s) + 3600 )); : > "$WORK/tmuxlog"
-argv="$(LIMITED_MODEL=fable LIMITED_UNTIL=$far run)"
-has "$argv" "--model opus" || fail "a Fable-capped account must launch on the fallback (opus)" "$argv"
-case "$argv" in *"--model fable"*) fail "the capped model was still passed" "$argv" ;; esac
-[ "$(cat "$WORK/subm")" = opus ] || fail "subagents must follow the effective model (got '$(cat "$WORK/subm")')"
-grep -q '@cc_model opus' "$WORK/tmuxlog" 2>/dev/null || fail "the pane must be stamped @cc_model opus (tmux: $(cat "$WORK/tmuxlog" 2>/dev/null))"
-ok "a model-capped account launches on FLEET_MODEL_FALLBACK, subagents follow, @cc_model stamped"
-
-argv="$(LIMITED_MODEL=fable LIMITED_UNTIL=$(( $(date +%s) - 10 )) run)"
-has "$argv" "--model fable" || fail "an EXPIRED cap must launch the configured model again" "$argv"
-ok "an expired cap goes back to FLEET_MODEL"
-
-argv="$(LIMITED_MODEL=opus LIMITED_UNTIL=$far run)"
-has "$argv" "--model fable" || fail "a cap on ANOTHER model must not trigger the fallback" "$argv"
-ok "a cap on another model is ignored"
-
-argv="$(LIMITED_MODEL=fable LIMITED_UNTIL=$far run --model haiku)"
-has "$argv" "--model haiku" || fail "caller --model was dropped under a cap" "$argv"
-case "$argv" in *"--model opus"*) fail "the fallback was added ALONGSIDE the caller's --model" "$argv" ;; esac
-ok "an explicit caller --model still wins over the fallback"
-
-printf 'FLEET_MODEL="opus"\nFLEET_MODEL_FALLBACK=""\n' > "$WORK/fleet.conf"
-argv="$(LIMITED_MODEL=fable LIMITED_UNTIL=$far run)"
-has "$argv" "--model fable" || fail "FLEET_MODEL_FALLBACK='' must disable the fallback" "$argv"
-ok "an empty FLEET_MODEL_FALLBACK turns the fallback off"
-
-printf 'FLEET_MODEL="opus"\nFLEET_MODEL_FALLBACK="sonnet"\n' > "$WORK/fleet.conf"
-argv="$(LIMITED_MODEL=fable LIMITED_UNTIL=$far run)"
-has "$argv" "--model sonnet" || fail "a configured fallback model must be used" "$argv"
-ok "FLEET_MODEL_FALLBACK picks the fallback model"
-
-printf 'FLEET_MODEL="opus"\n' > "$WORK/fleet.conf"
+: > "$WORK/tmuxlog"; rm -f "$WORK/account.calls"
+argv="$(run)"
+has "$argv" "--model fable" || fail "the launch must run FLEET_MODEL — no cap ledger is read (T550)" "$argv"
+[ "$(cat "$WORK/subm")" = fable ] || fail "subagents follow the launch model (got '$(cat "$WORK/subm")')"
+grep -q '@cc_model fable' "$WORK/tmuxlog" 2>/dev/null || fail "the pane must be stamped @cc_model fable (tmux: $(cat "$WORK/tmuxlog" 2>/dev/null))"
+[ ! -s "$WORK/account.calls" ] || fail "the launcher must ask fleet-account.sh nothing (T550): $(cat "$WORK/account.calls")"
+ok "no pick, no cap swap: FLEET_MODEL launches, subagents follow, @cc_model stamped (T550)"
+argv="$(run --model haiku)"
+has "$argv" "--model haiku" || fail "caller --model was dropped" "$argv"
+ok "an explicit caller --model still wins"
 printf 'FLEET_MODEL="opus"\n' > "$WORK/conf/fleets/f1/conf"
-argv="$(LIMITED_MODEL=opus LIMITED_UNTIL=$far run)"
-has "$argv" "--model opus" || fail "fallback == FLEET_MODEL must be a no-op, not an empty model" "$argv"
-ok "a cap on the fallback model itself leaves the launch alone"
 
 # --- #563: the launcher pre-trusts THIS fleet's checkout before exec ------------
 # Claude Code parks an untrusted project on "trust this folder?" — with nobody in

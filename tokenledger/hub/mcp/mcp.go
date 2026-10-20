@@ -1265,11 +1265,11 @@ func fleetToolSpecs() []toolSpec {
 		},
 		{
 			Name:  "worker_switch",
-			Title: "Move a worker to an available subscription",
-			Description: "Close the session and resume the same conversation on another subscription " +
-				"(fleet-migrate.sh): account names one, omitted = the fleet's active pick. Refused with the " +
-				"node's reason when the target is the source, benched or above its quota gate, or the pane " +
-				"has no Claude. Success means the move started. Needs worker:stop." + fleetWriteCaveat,
+			Title: "Retired: a worker's subscription is the pool's pick",
+			Description: "Retired (T550): a session's subscription is picked by the pool behind the " +
+				"credential proxy, so there is nothing to switch it to — the node answers every call " +
+				"failed INVALID_STATE 「已不用：订阅由池子挑」 and touches nothing. Kept one version for an " +
+				"older client. Needs worker:stop." + fleetWriteCaveat,
 			InputSchema: obj(map[string]any{"worker_id": workerIDProp,
 				"account":         map[string]any{"type": "string", "description": "subscription label (optional)"},
 				"idempotency_key": idemProp}, "worker_id", "idempotency_key"),
