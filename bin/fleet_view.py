@@ -1000,13 +1000,36 @@ def id_known(extra=()):
         return set()
 
 
+def id_short_fast(fid, known):
+    """fleet_id.short_for over a frame's `known`, each ID encoded once per frame and
+    its nearest neighbours found by bisection (T593: short_for re-encodes every
+    known ID for every row — rows × IDs per frame)."""
+    import bisect
+    fi = fleet_id_mod()
+    key = hash(frozenset(known))
+    hit = _ID_CACHE.get("codes")
+    if not hit or hit[0] != key:
+        codes = sorted(fi.encode(k) for k in known if fi.is_fid(k))
+        hit = _ID_CACHE["codes"] = (key, codes)
+    codes, me = hit[1], fi.encode(fid)
+    i = bisect.bisect_left(codes, me)
+    lcp = 0
+    for o in (codes[i - 1] if i > 0 else "", codes[i + 1] if i + 1 < len(codes) and codes[i] == me else
+              (codes[i] if i < len(codes) and codes[i] != me else "")):
+        n = 0
+        while n < min(len(o), 26) and o[n] == me[n]:
+            n += 1
+        lcp = max(lcp, n)
+    return "T-" + me[:min(26, max(fi.SHORT_MIN, lcp + 1))]
+
+
 def id_short(fid, rec, known):
     fi = fleet_id_mod()
     if fi is None or not fi.is_fid(fid):
         return ""
     have = ((rec or {}).get("opened") or {}).get("short") or ""
     try:
-        mine = fi.short_for(fid, known | {fid})
+        mine = id_short_fast(fid, known)
     except Exception:
         mine = ""
     # the longer one: the hub may have lengthened it (S12), a newer ID may share it now
@@ -1055,45 +1078,46 @@ EPIC_MARK_RE = re.compile(r"<!--\s*fleet:epic\b([^>]*)-->")   # fleet-epic-tick.
 SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
+def task_cache_file():
+    return dash_global() / "view-tasks.json"
+
+
+def task_cache():
+    """The hub task records' panel words on disk, {T<n>: [read at, agent, repo]} —
+    one file read per change (mtime), never a hub call (T593: a popup is a new
+    process each time, so an in-process cache bought nothing and every ⌘P waited
+    on the hub)."""
+    p = task_cache_file()
+    try:
+        st = p.stat()
+    except OSError:
+        return {}
+    hit = _ID_CACHE.get("tasks")
+    if hit and hit[0] == (st.st_mtime_ns, st.st_size):
+        return hit[1]
+    try:
+        got = json.loads(p.read_text())
+        got = got if isinstance(got, dict) else {}
+    except (OSError, ValueError):
+        got = {}
+    _ID_CACHE["tasks"] = ((st.st_mtime_ns, st.st_size), got)
+    return got
+
+
 def hub_task(task):
-    """What the panel reads off a hub task record — {agent: actual_agent, repo: its
-    repo, else the EPIC charter marker's `repo=` in its words (T593)} ('' none /
-    unread), kept FLEET_VIEW_TASK_AGENT_SECS (300 s) per task. Same read as task_pr:
-    `fleet-task-record.sh get`, bounded by FLEET_VIEW_PR_TIMEOUT; FLEET_VIEW_TASK_GET
-    (a command, the T<n> appended) is the selftest's seam."""
+    """What the panel knows of a hub task record — {agent: actual_agent, repo: its
+    repo, else the EPIC charter marker's `repo=` in its words (T593)}, off
+    task_cache only. A task it lacks, or read longer ago than
+    FLEET_VIEW_TASK_AGENT_SECS (300 s), is queued for task_cache_kick: a detached
+    read fills it for the next frame."""
     if not re.match(r"^T[1-9][0-9]*$", task or ""):
         return {}
-    now = time.time()
-    hit = _ID_CACHE.get("task:" + task)
-    if hit and now - hit[0] < fenv("FLEET_VIEW_TASK_AGENT_SECS", 300):
-        return hit[1]
-    secs = fenv("FLEET_VIEW_PR_TIMEOUT", 3)
-    got = {}
-    try:
-        seam = os.environ.get("FLEET_VIEW_TASK_GET", "")
-        p = subprocess.run(seam.split() + [task] if seam else sh("fleet-task-record.sh", "get", task),
-                           capture_output=True, text=True,
-                           timeout=secs + 1, env=dict(os.environ, FLEET_HUB_TIMEOUT=str(secs)),
-                           stdin=subprocess.DEVNULL)
-        rec = json.loads(p.stdout) if p.returncode == 0 else None
-        if isinstance(rec, dict):
-            t = rec.get("task") or rec
-            agent = str(t.get("actual_agent") or "")
-            repo = str(t.get("repo") or "")
-            if not SLUG_RE.match(repo):
-                words = str(t.get("body") or "")
-                try:
-                    pl = t.get("request_payload") or ""
-                    words += "\n" + str((json.loads(pl) if isinstance(pl, str) and pl else pl or {}).get("body") or "")
-                except (ValueError, AttributeError):
-                    pass
-                m = EPIC_MARK_RE.search(words)
-                repo = (re.search(r"\brepo=(\S+)", m.group(1)) or [None, ""])[1] if m else ""
-            got = {"agent": agent if agent in AGENTS else "", "repo": repo if SLUG_RE.match(repo) else ""}
-    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
-        got = {}
-    _ID_CACHE["task:" + task] = (now, got)
-    return got
+    hit = task_cache().get(task)
+    if not (isinstance(hit, list) and len(hit) == 3 and time.time() - (hit[0] or 0) < fenv("FLEET_VIEW_TASK_AGENT_SECS", 300)):
+        _ID_CACHE.setdefault("tasks_want", set()).add(task)
+    if not isinstance(hit, list) or len(hit) != 3:
+        return {}
+    return {"agent": hit[1] if hit[1] in AGENTS else "", "repo": hit[2] if SLUG_RE.match(hit[2] or "") else ""}
 
 
 def hub_task_agent(task):
@@ -1102,22 +1126,106 @@ def hub_task_agent(task):
     return hub_task(task).get("agent", "")
 
 
-def hub_tasks_warm(tasks):
-    """Read the uncached records of `tasks` side by side (each read is a hub round
-    trip, ~1-2 s) so a frame waits for one, not for all of them in a row."""
-    now = time.time()
-    todo = sorted({t for t in tasks if re.match(r"^T[1-9][0-9]*$", t or "") and not (
-        _ID_CACHE.get("task:" + t) and now - _ID_CACHE["task:" + t][0] < fenv("FLEET_VIEW_TASK_AGENT_SECS", 300))})
-    if len(todo) < 2:
-        for t in todo:
-            hub_task(t)
-        return
+def task_read(task):
+    """One record off the hub → [now, agent, repo] (None unread). `fleet-task-record.sh
+    get`, bounded by FLEET_VIEW_PR_TIMEOUT; FLEET_VIEW_TASK_GET (a command, the T<n>
+    appended) is the selftest's seam. Only task_cache_fill calls it — never a frame."""
+    secs = fenv("FLEET_VIEW_PR_TIMEOUT", 3)
+    try:
+        seam = os.environ.get("FLEET_VIEW_TASK_GET", "")
+        p = subprocess.run(seam.split() + [task] if seam else sh("fleet-task-record.sh", "get", task),
+                           capture_output=True, text=True,
+                           timeout=secs + 1, env=dict(os.environ, FLEET_HUB_TIMEOUT=str(secs)),
+                           stdin=subprocess.DEVNULL)
+        rec = json.loads(p.stdout) if p.returncode == 0 else None
+        if not isinstance(rec, dict):
+            return None
+        t = rec.get("task") or rec
+        agent = str(t.get("actual_agent") or "")
+        repo = str(t.get("repo") or "")
+        if not SLUG_RE.match(repo):
+            words = str(t.get("body") or "")
+            try:
+                pl = t.get("request_payload") or ""
+                words += "\n" + str((json.loads(pl) if isinstance(pl, str) and pl else pl or {}).get("body") or "")
+            except (ValueError, AttributeError):
+                pass
+            m = EPIC_MARK_RE.search(words)
+            repo = (re.search(r"\brepo=(\S+)", m.group(1)) or [None, ""])[1] if m else ""
+        return [time.time(), agent if agent in AGENTS else "", repo if SLUG_RE.match(repo) else ""]
+    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
+        return None
+
+
+def task_cache_fill(tasks):
+    """Read `tasks` side by side and merge them into task_cache's file (the detached
+    filler; the selftest calls it directly). An unread one keeps its old words."""
     import threading
-    th = [threading.Thread(target=hub_task, args=(t,), daemon=True) for t in todo[:16]]
+    tasks = sorted({t for t in tasks if re.match(r"^T[1-9][0-9]*$", t or "")})[:32]
+    got = {}
+    def one(t):
+        got[t] = task_read(t)
+    th = [threading.Thread(target=one, args=(t,), daemon=True) for t in tasks]
     for t in th:
         t.start()
     for t in th:
         t.join(fenv("FLEET_VIEW_PR_TIMEOUT", 3) + 2)
+    p = task_cache_file()
+    try:
+        cur = json.loads(p.read_text())
+        cur = cur if isinstance(cur, dict) else {}
+    except (OSError, ValueError):
+        cur = {}
+    for t, v in got.items():
+        if v:
+            cur[t] = v
+        elif t in cur and isinstance(cur[t], list) and len(cur[t]) == 3:
+            cur[t][0] = time.time()       # unread: tried again after the TTL, not every frame
+        else:
+            cur[t] = [time.time(), "", ""]
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(str(p) + ".%d" % os.getpid())
+        tmp.write_text(json.dumps(cur, ensure_ascii=False))
+        os.replace(str(tmp), str(p))
+    except OSError:
+        pass
+
+
+def task_cache_spawn(tasks):
+    """Start task_cache_fill detached, single-flight (a `.lock` dir; one older than
+    two minutes is a dead filler's) — the frame never waits for it."""
+    lock = Path(str(task_cache_file()) + ".lock")
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.mkdir()
+    except FileExistsError:
+        try:
+            if time.time() - lock.stat().st_mtime < 120:
+                return
+            os.utime(str(lock))
+        except OSError:
+            return
+    except OSError:
+        return
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); import fleet_view as fv, os\n"
+            "try: fv.task_cache_fill(sys.argv[3:])\nfinally: os.rmdir(sys.argv[2])")
+    try:
+        subprocess.Popen([sys.executable, "-c", code, str(Path(__file__).absolute().parent), str(lock)] + sorted(tasks),
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except OSError:
+        try:
+            lock.rmdir()
+        except OSError:
+            pass
+
+
+def task_cache_kick():
+    """After a frame: the records it wanted and lacked, read in the background."""
+    want = _ID_CACHE.pop("tasks_want", set())
+    if want:
+        task_cache_spawn(want)
 
 
 def id_repo_ref(rec, task="", depth=0):
@@ -1139,10 +1247,10 @@ def id_repo_ref(rec, task="", depth=0):
 
 
 def repo_fill(rows, repos):
-    """Give each row of `rows` the repo id_repo_ref finds it (the hub's records
-    read side by side); a slug new to `repos` joins it."""
+    """Give each row of `rows` the repo id_repo_ref finds it (a hub record off
+    task_cache — one it lacks fills for the next frame); a slug new to `repos`
+    joins it."""
     refs = [(e, id_repo_ref(id_record(e.get("fid") or ""), e.get("task") or "")) for e in rows]
-    hub_tasks_warm(t for _, (_, t) in refs if t)
     for e, (full, task) in refs:
         full = full or (hub_task(task).get("repo", "") if task else "")
         if full:
@@ -1749,6 +1857,7 @@ def entries(vid, now=None, hub=True):
         if older:
             out.append({"kind": "cmd", "cmd": "history", "act": "history", "sec": "gone", "n": older, "row": {},
                         "text": say("view_cmd_older_fmt", older)})
+    task_cache_kick()
     return out
 
 

@@ -24,6 +24,8 @@
 #      record's / an EPIC charter marker's `repo=` (a relay through opened.prev);
 #      none ⇒ blank. A closed row finds its ID by its conversation (a scratch key is
 #      recycled); a closed ID no history row lists is a row of its own, with its Agent
+#   H  the read path with 200 closed IDs starts no process and asks no hub (records
+#      come off view-tasks.json, a detached filler fills it) and takes < 100 ms
 # Exit 0 = pass.
 set -uo pipefail
 
@@ -32,7 +34,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-view-id selftest: python3 absent — SKIP'; exit 0; }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fvid-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
-export FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+export FLEET_CONF_DIR="$WORK/conf" FLEET_STATUS_G="$WORK/g" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 unset NO_COLOR FLEET_COLOR FLEET_GLYPHS FLEET_ID_DIR
 mkdir -p "$WORK/conf"
 
@@ -86,6 +88,10 @@ TG = os.path.join(os.environ["FLEET_CONF_DIR"], "taskget")
 open(TG, "w").write('#!/bin/sh\n[ "$1" = T901 ] && echo \'{"task":{"id":"T901","actual_agent":"codex"}}\' && exit 0\necho \'{"task":{}}\'\n')
 os.chmod(TG, 0o755)
 os.environ["FLEET_VIEW_TASK_GET"] = TG
+# a frame reads the hub records off view-tasks.json only; what it lacks is queued
+# for the detached filler (T593) — here the filler runs in line, nothing spawned
+SPAWNED = []
+fv.task_cache_spawn = lambda tasks: SPAWNED.append(sorted(tasks))
 ev(F["@5"], ev="opened", agent="claude", key="scratch-5")
 ev(F["@5"], ev="native", agent="claude", native="nat-A", trigger="resume", seg=1)   # @1's segment
 ev(F["@6"], ev="opened", agent="claude", key="scratch-6")
@@ -131,6 +137,9 @@ def read(states, wins=None):
     fv.produce = lambda fleet, **kw: rows(states)
     it = fv.entries("v1")
     return it, {e["target"]: e for e in it if e["kind"] == "sess"}
+it, by = read(STATES)
+assert by["@9"]["agent"] == "" and SPAWNED and "T901" in SPAWNED[-1], (by["@9"], SPAWNED)   # not waited for
+fv.task_cache_fill(SPAWNED[-1])
 it, by = read(STATES)
 code = lambda w: by[w]["id"]
 
@@ -229,8 +238,7 @@ T912) echo '{"task":{"id":"T912","repo":"o/other-repo"}}' ;;
 *) echo '{"task":{}}' ;;
 esac
 ''')
-for k in [k for k in fv._ID_CACHE if k.startswith("task:")]:
-    fv._ID_CACHE.pop(k)
+fv.task_cache_fill(["T910", "T911", "T912"])
 def rows_g():
     out = [US.join(("hdr", "o/claude-fleet", "", "claude-fleet (1)", " ")),
            full("@1", "idle", "·", "w1", " ", "", "0", "", "", "", "—", "·", "ok", "会话1", "merged", agent="claude",
@@ -260,6 +268,43 @@ assert "id:" + DEAD not in bg and "id:" + DRV0 in bg and bg["id:" + DRV0]["agent
 assert "id:" + OLDGEN in bg and bg["id:" + OLDGEN]["agent"] == "codex", sorted(bg)
 assert not any(a[0]["id"] == "resume" for a in fv.page_of(al)) and any(a[0]["id"] == "resume" for a in fv.page_of(h42)), \
     (fv.page_of(al), fv.page_of(h42))   # nothing to restore off a ledger alone
+
+# --- H: the read path with 200 closed IDs — no process started, no hub asked, < 100 ms (T593)
+import subprocess, shutil
+for i in range(200):
+    f = "%08x-0000-4000-8000-%012x" % (0xe0000000 + i, i)
+    ev(f, ev="opened", agent=("claude", "codex")[i % 2], key="scratch-%d" % (i % 30), task="T%d" % (2000 + i),
+       title="关掉的 %d" % i)
+    ev(f, ev="native", agent=("claude", "codex")[i % 2], native="nat-p%d" % i, trigger="startup", seg=1)
+    ev(f, ev="result", state="merged", pr=str(i))
+    ev(f, ev="closed", reason="reaped")
+txt = "".join("landed:scratch:scratch-%d@o/claude-fleet%snat-p%d%sx\n" % (i % 30, US, i, US) for i in range(200))
+fv.gone_text = lambda fleet: txt
+fv.gone_rows = lambda text, _now=None: [("landed:scratch:scratch-%d@o/claude-fleet" % (i % 30), "✓", "~%d" % (i % 30),
+                                         "g%d" % i, "关掉的 %d" % i, "1 hour", "#%d" % i, now - 60) for i in range(30)]
+runs = []
+real = (subprocess.run, subprocess.Popen)
+def no_proc(real_one):
+    def call(argv, *a, **k):
+        # tmux is the read path's own (the windows, the EPIC marks); a fleet script,
+        # a hub read or a filler would be this change's — none may run in a frame
+        if (argv or [""])[0] != "tmux":
+            raise AssertionError("the read path started a process: %r" % (argv,))
+        return real_one(argv, *a, **k)
+    return call
+for _ in range(3):
+    fv._ID_CACHE.clear()          # a popup is a new process: nothing in memory
+    subprocess.run, subprocess.Popen = no_proc(real[0]), no_proc(real[1])
+    try:
+        t0 = time.perf_counter()
+        ith = fv.entries("v1", hub=False)
+        runs.append((time.perf_counter() - t0) * 1000)
+    finally:
+        subprocess.run, subprocess.Popen = real
+bh = [e for e in ith if e["kind"] == "sess" and e.get("gone")]
+assert len(bh) >= 200 and sum(1 for e in bh if e["agent"]) >= 200, (len(bh), sum(1 for e in bh if e["agent"]))
+assert min(runs) < 100, runs
+print("   read with %d closed rows: %.0f ms (best of 3)" % (len(bh), min(runs)))
 PY
 pass "A  ID column: T- + 5 (6 when two share), blank without an ID, T<n> an alias, far rows too"
 pass "B  Agent: newest segment (transfer → Codex), else opened, else @cc_agent, else the hub's actual_agent, else 未知 (grey)"
@@ -268,3 +313,4 @@ pass "D  conflict: two live windows on one segment both red 等你; closing one 
 pass "E  search: 4539 / #4539 via the ID's issues, not 45390; code and alias find their row"
 pass "F  actions page: code + ID, aliases, segments, 未登记到 hub / refusal red, conflict reason"
 pass "G  repo: an EPIC driver's charter repo= (its relay too), a record's repo, none ⇒ blank; a closed row by its conversation, a closed ID alone is its own row (T593)"
+pass "H  read path, 200 closed IDs: no process, no hub call, < 100 ms (T593)"
