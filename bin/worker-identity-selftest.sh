@@ -169,7 +169,7 @@ tf set-window-option -t "$C3" @origin_fid 00000000-0000-4000-8000-000000000000
 hout=$(lib fleet_origin_heal "$L" "$L")
 # C3's parent is not live: its bare @origin is only spelled whole (issue #1939), gen kept.
 st_count; [ "$hout" = "healed $C2 scratch-5 → ${Q}issue-99
-healed $C3 scratch-5 → ${Q}scratch-5" ] || fail "C: heal re-points the one child, and spells the other's bare key whole" "$hout"
+healed $C3 scratch-5 → ${Q}scratch-5" ] || st_miss "C: heal re-points the one child, and spells the other's bare key whole" "$hout"
 st_count; [ "$(opt "$C2" @origin)" = "${Q}issue-99" ] && [ -z "$(opt "$C2" @origin_gen)" ] || st_miss "C: @origin re-pointed, the old key's @origin_gen dropped" "$(opt "$C2" @origin)|$(opt "$C2" @origin_gen)"
 st_count; [ "$(opt "$C3" @origin)" = "${Q}scratch-5" ] || st_miss "C: a child whose parent is not live keeps its parent's key" "$(opt "$C3" @origin)"
 st_count; [ -z "$(lib fleet_origin_heal "$L" "$L")" ] || st_miss "C: a second heal has nothing to do"

@@ -187,7 +187,7 @@ assert [r["name"] for r in rows] == ["status", "spawn", "await"], rows
 for r in rows:
     assert r["description"] and r["inputSchema"]["additionalProperties"] is False, r
 assert set(rows[1]["inputSchema"]["required"]) == {"issue"} and "reap" in rows[1]["inputSchema"]["properties"], rows[1]
-' || fail "E: --spec did not print the three closed schemas" "$spec"
+' || st_fail "E: --spec did not print the three closed schemas" "$spec"
 python3 "$BIN/fleet-mcp.py" --spec status nope >/dev/null 2>&1; rc=$?
 [ "$rc" = 2 ] || st_fail "E: --spec of an unknown tool exited $rc, want 2"
 for f in Lifecycle Usage State Compose Tools Accept; do

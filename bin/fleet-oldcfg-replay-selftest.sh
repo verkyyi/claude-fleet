@@ -241,7 +241,7 @@ kinds = sorted(set(i["kind"] for i in d["items"]))
 assert kinds == ["hook", "mcp", "tool"], kinds
 assert all(i["verdict"] in ("ok", "none") for i in d["items"]), d["items"]
 assert d["old"]["sha"] and d["new"]["sha"], d
-' || fail "H: the JSON shape is wrong" "$OUT"
+' || st_fail "H: the JSON shape is wrong" "$OUT"
 run --old stable --new "$N2" --json
 st_eq "H: --json exits 1 on a finding" 1 "$RC" "$OUT"
 printf '%s' "$OUT" | python3 -c '
@@ -250,7 +250,7 @@ d = json.load(sys.stdin)
 assert d["verdict"] == "RED" and d["findings"] == 1, d
 f = [i for i in d["items"] if i["verdict"] == "MISSING"]
 assert len(f) == 1 and f[0]["kind"] == "hook" and f[0]["name"] == "Stop" and "bin/h-stop.sh" in f[0]["detail"], f
-' || fail "H: the RED JSON shape is wrong" "$OUT"
+' || st_fail "H: the RED JSON shape is wrong" "$OUT"
 run --old stable --new "$N10" -q
 st_eq "H: -q on green prints the header and the summary only" 2 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "$OUT"
 run --old stable --new "$N2" -q

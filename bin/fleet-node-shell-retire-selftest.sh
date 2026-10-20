@@ -72,7 +72,7 @@ alive=0; for p in ${PIDS[@]+"${PIDS[@]}"}; do kill -0 "$p" 2>/dev/null && alive=
 [ "$(cat "$H/.zshrc")" = "$pathl
 
 # source ~/.claude/fleet/shell/fleet-login.zsh
-$own" ] && ok "zshrc: PATH line, comment and own lines kept, hooks gone" || { bad "zshrc now:"; cat "$H/.zshrc"; }
+$own" ] && st_ok_all "zshrc: PATH line, comment and own lines kept, hooks gone" || { st_miss "zshrc now:"; cat "$H/.zshrc"; }
 [ "$(cat "$H/.zshrc.pre-shell-retire")" = "$before" ] && st_ok_all "old zshrc kept beside" || st_miss "no backup"
 rt --login "$ME"
 [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -c ': skip — ')" = 3 ] && st_ok_all "rerun: every step skip, rc 0" || st_miss "rerun rc $rc: $out"

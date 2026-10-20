@@ -221,7 +221,7 @@ import json,sys
 d=json.load(sys.stdin)
 assert d["tool"]=="Bash", d
 assert d["input"]["command"]=="rm \"$G\"/*.tick", d
-' || fail "--show --json must carry the tool + command" "$js"
+' || st_fail "--show --json must carry the tool + command" "$js"
 nothing_sent || st_fail "--show --json must never send a keystroke" "$(injected)"
 printf 'selftest: SHOW legs PASS (command + tool + reason readable WITHOUT attaching · json · zero keystrokes)\n' >&2
 

@@ -229,7 +229,7 @@ else
   login -i
   [ "$fn" = 0 ] && st_ok "no SSH_TTY → no client" || st_miss "no SSH_TTY → client ${fn}×"
   [ "$out" = "INTRO
-AFTER" ] && ok "no SSH_TTY → banner only" || bad "no SSH_TTY out: $out"
+AFTER" ] && st_ok "no SSH_TTY → banner only" || st_miss "no SSH_TTY out: $out"
   login -i SSH_TTY=/dev/ttys999 TMUX=/tmp/x,1,0
   [ "$fn" = 0 ] && [ "$out" = AFTER ] && st_ok "inside tmux → nothing" || st_miss "in tmux: client ${fn}× out=$out"
   # a managed machine (issue #2702): no banner, no client — a plain shell
@@ -246,7 +246,7 @@ AFTER" ] && ok "no SSH_TTY → banner only" || bad "no SSH_TTY out: $out"
   rm -f "$T/home/.hushfleet"; : > "$T/calls"; touch "$T/home/.hushfleet-attach"
   out=$(env -u TMUX HOME="$T/home" FLEET_NODE_STATE="$T/node-none" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/r/shell/fleet-login.zsh'; echo AFTER" 2>&1)
   [ ! -s "$T/calls" ] && [ "$out" = "INTRO
-AFTER" ] && ok "hush file .hushfleet-attach → banner, nothing run" || bad "hushfleet-attach: $out"
+AFTER" ] && st_ok "hush file .hushfleet-attach → banner, nothing run" || st_miss "hushfleet-attach: $out"
   rm -f "$T/home/.hushfleet-attach"
   # a cf defined earlier in .zshrc is neither called nor needed
   : > "$T/calls"

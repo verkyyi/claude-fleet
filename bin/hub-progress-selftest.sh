@@ -155,7 +155,7 @@ st_count; python3 -c 'import json, sys; d = json.loads(sys.argv[1]); k = {c["chi
 assert k["issue-5"]["bucket"] == "✓" and k["issue-5"]["progress"] == "merged" and k["issue-5"]["last"]["state"] == "STOPPED", k["issue-5"]
 assert k["issue-5"]["settled"]["state"] == "MERGED", k["issue-5"]
 assert k["issue-6"]["bucket"] == "✓" and k["issue-6"]["progress"] == "merged", k["issue-6"]
-assert d["summary"]["text"] == "2/2 ✓", d["summary"]' "$fo" 2>"$WORK/err" || fail "F: STOPPED after MERGED (or a merged PR) reads ✓ merged" "$(cat "$WORK/err")"
+assert d["summary"]["text"] == "2/2 ✓", d["summary"]' "$fo" 2>"$WORK/err" || st_miss "F: STOPPED after MERGED (or a merged PR) reads ✓ merged" "$(cat "$WORK/err")"
 ft=$(python3 "$BIN/fleet-children.py" show --dir "$WORK/f" --parent scratch-1 --prmap "$WORK/f/prmap" < /dev/null)
 st_count; case "$ft" in *'✓ issue-5'*'MERGED #70'*) ;; *) st_miss "F: the text row shows the MERGED" "$ft" ;; esac
 

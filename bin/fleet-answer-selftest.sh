@@ -234,7 +234,7 @@ assert len(qs)==1, qs
 assert qs[0]["header"]=="Button color", qs
 assert [o["label"] for o in qs[0]["options"]]==["Red","Blue"], qs
 assert qs[0]["multiSelect"] is False, qs
-' || fail "--show --json must emit the parsed questions" "$js"
+' || st_fail "--show --json must emit the parsed questions" "$js"
 printf 'selftest: SHOW legs PASS (header · question · numbered labels · --json parses; no keystrokes)\n' >&2
 
 # ============================ LABEL-GATE ====================================
