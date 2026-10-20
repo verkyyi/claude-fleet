@@ -318,7 +318,7 @@ GEN_WORDS = {
     'zh': {'where': '在哪', 'press': '按', 'mac': 'Mac 上的 iTerm2', 'phone': '手机（Termius）或别的终端',
            'or': ' 或 ', 'then': '再按', 'key': '键', 'does': '做什么', 'nokey': '—',
            'action': '名字', 'mac_x': 'Mac 上（⌘）', 'phone_x': '手机上（⌃] 再按）', 'space': '空格',
-           'home': '任何画面：家里这台机器的命令行（$HOME），不需要会话、不需要 hub；再按一次回来'},
+           'home': '任何画面：家里这台机器的命令行（在 $HOME 下），不需要会话、不需要 hub；再按一次回来'},
     'en': {'where': 'Where', 'press': 'Press', 'mac': 'iTerm2 on a Mac', 'phone': 'A phone (Termius) or another terminal',
            'or': ' or ', 'then': 'then', 'key': 'Key', 'does': 'What it does', 'nokey': '—',
            'action': 'Name', 'mac_x': 'On a Mac (⌘)', 'phone_x': 'On a phone (⌃] then)', 'space': 'Space',
