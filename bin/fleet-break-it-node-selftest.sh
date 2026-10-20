@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 6 BREAK_PART
 # fleet-break-it-node-selftest.sh — docs/dev/BREAK-IT.md row `node-supervisor-dead`
 # (issue #2331, EPIC #2329 C3): the machine's one daemon dies. Its own file, like
 # the cred-shared drill whose runner it sources (BREAK_CRED_LIB=1);
@@ -1674,7 +1675,7 @@ drill_node_versioned_python_script() {
   CAP=15
   local t0 out
   t0=$(now)
-  out=$(bash "$BIN/fleet-node-orphans-selftest.sh" Orphans.test_versioned_python_script_identity 2>&1) \
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-orphans-selftest.py" Orphans.test_versioned_python_script_identity 2>&1) \
     || { WHY="versioned Python hid the managed script: $(printf '%s' "$out" | tail -8 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="python3.14、python3.15 和框架 Python 仍取实际脚本；账号孤儿匹配保留精确路径与参数，拒绝 inline payload、别的作业和相似解释器名称"
@@ -1684,7 +1685,7 @@ drill_node_restart_shared_orphan() {
   CAP=120
   local t0 out
   t0=$(now)
-  out=$(bash "$BIN/fleet-node-orphans-selftest.sh" 2>&1) \
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-orphans-selftest.py" 2>&1) \
     || { WHY="daemon restart left a shared lock holder / process group: $(printf '%s' "$out" | tail -8 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="隔离代理持有真实 flock：守护接管 exec 后的进程，根核心收回无账的旧锁，连续三次重启仍一份；组长先退后仍收顽固子进程，参数里提及脚本的活动作业不碰"

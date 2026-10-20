@@ -1,4 +1,9 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -W ignore::ResourceWarning
+# fleet-admin-old-jobs-selftest.py — the admin login's old jobs, cleared by the
+# machine daemon's sweep (issue #4363, EPIC #4354 C10): bin/fleet-node-supervisor.py
+# admin_old_retire; the credential store is never asked (a fake records it).
+# Cases in bin/fleet-admin-old-jobs-selftest.py.
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """fleet-admin-old-jobs-selftest.py — the sweep's two steps for issue #4363 (EPIC
 #4354 C10), on a sandbox state / LaunchDaemons / passwd / runtime and a fake
 launchctl (nothing reaches a real launchd domain — FLEET_NODE_LAUNCHCTL):

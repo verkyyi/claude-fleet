@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# selftest-part-of: tmux-spinner.sh tmux-spinner.py fleet-render-watch.py
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Resident transport: human/control viewers, multiple consumers, lost servers.
 
 Private sockets and HOME. The lease seam is deliberately offline; no live fleet

@@ -1,7 +1,14 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -W ignore::ResourceWarning
+# fleet-node-update-selftest.py — the machine's one updater, sandboxed (issue #2334):
+# bin/fleet-node-update.py (every part to the release or none, the doctor's
+# rollback gate, a tick killed half way, the EPIC hold) and the restart request
+# bin/fleet-node-supervisor.py honours. Cases in bin/fleet-node-update-selftest.py.
+# part 1 of 2 here, the rest in its part files (bin/selftest_part.py, issue #2694)
+# selftest-parts: 2
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """fleet-node-update-selftest.py — the machine's one updater in a sandbox (issue #2334).
 
-Driven by bin/fleet-node-update-selftest.sh. Every path goes through the
+Run by bin/run-selftests.sh (by its shebang). Every path goes through the
 FLEET_NODE_* seams; a fake ccquota "fetches" a release from a fixture directory
 the way `ccquota release fetch --artifacts` lays one out (C7). Nothing touches
 /Library, /var or a real login.

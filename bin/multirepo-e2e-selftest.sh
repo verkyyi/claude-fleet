@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 7
 # multirepo-e2e-selftest.sh — one fleet, two repos, end to end (issue #795).
 #
 # The per-slice selftests (#788–#794) each prove one piece alone. This one runs the

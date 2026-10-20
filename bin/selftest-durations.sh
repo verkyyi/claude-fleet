@@ -82,13 +82,14 @@ if [ -n "$drills" ]; then
   { if [ -n "$job" ]; then grep -F -- "$job" "$tmp"; else cat "$tmp"; fi; } \
     | sed -nE 's/.*(PASS|FAIL) +([a-z0-9-]+) .*\[wall ([0-9.]+)s\]$/\2 \3/p' > "$tmp.new"
 else
-# The tests that exist now: the table never keeps a row for a deleted test.
-present=$(cd "$here" && ls ./*-selftest.sh 2>/dev/null | sed 's|^\./||')
+# The test ids that exist now (a part is `<test>#k`, T525): the table never keeps a
+# row for a deleted test.
+present=$(FLEET_SELFTEST_NO_SHADOW=1 FLEET_HEAVY=0 sh "$here/run-selftests.sh" --ids 2>/dev/null)
 
 # Observations: `PASS  name  12.3s`, `FAIL  name  4.0s (exit 1)`, `TIMEOUT name 240.0s
 # (limit 240s)` — anywhere on the line, so a CI log's job/step/timestamp prefix is fine.
 { if [ -n "$job" ]; then grep -F -- "$job" "$tmp"; else cat "$tmp"; fi; } \
-  | grep -oE '(PASS|FAIL|TIMEOUT) +[A-Za-z0-9_.+-]+-selftest\.sh +[0-9]+(\.[0-9]+)?s' \
+  | grep -oE '(PASS|FAIL|TIMEOUT) +[A-Za-z0-9_.+-]+-selftest\.(sh|py)(#[0-9]+)? +[0-9]+(\.[0-9]+)?s' \
   | awk '{ v = $3; sub(/s$/, "", v); print $2, v }' > "$tmp.new"
 fi
 

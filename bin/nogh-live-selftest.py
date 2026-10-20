@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -B
+# selftest-deps: nogh_live_contract.py nogh_live_observer.py nogh_live_runtime.py nogh_live_gateway.py nogh_live_http.py nogh_live_identity.py nogh_live_evidence.py nogh_live_driver.py nogh_live_render.py nogh-live-selftest.py extras/managed-node/render.py extras/managed-node/c9/Dockerfile
+# Offline C9 contract checks only; full live acceptance belongs to its owner.
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """C9 live isolation contracts, offline; never a live acceptance receipt.
 
 Each entry includes setup/cleanup and has a 15-second hard bound.

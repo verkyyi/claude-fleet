@@ -57,7 +57,7 @@ check_rules() {
     shellcheck)
       globs='bin/* hooks/* shell/* extras/* .shellcheckrc .shellcheck-version .github/workflows/shellcheck.yml' ;;
     task_acceptance|task-acceptance)
-      among='nogh-task-acceptance.py nogh-live-selftest.sh nogh_live_kernel_test.py nogh_live_http_test.py fleet-client-pack.sh'
+      among='nogh-task-acceptance.py nogh-live-selftest.py nogh_live_kernel_test.py nogh_live_http_test.py fleet-client-pack.sh'
       paths='bin/* tokenledger/* extras/web-console/* .github/workflows/task-acceptance.yml'
       globs='tokenledger/* extras/web-console/* .github/workflows/task-acceptance.yml' ;;
     client_e2e|client-e2e)
@@ -66,8 +66,8 @@ check_rules() {
       paths='bin/* shell/* conf/* tokenledger/* .github/workflows/client-e2e.yml'
       globs='tokenledger/* .github/workflows/client-e2e.yml' ;;
     fleet_hub_mcp|fleet-hub-mcp)
-      # run-selftests.sh fleet-hub 'fleet-hub-[0-9]*', with the MCP SDK installed
-      among=$(cd "$bin" && printf '%s ' fleet-hub-selftest.sh fleet-hub-selftest.py fleet-hub-[0-9]*-selftest.sh)
+      # run-selftests.sh fleet-hub (every part), with the MCP SDK installed
+      among='fleet-hub-selftest.py'
       paths='bin/fleet* requirements-mcp.txt .github/workflows/fleet-hub.yml'
       globs='requirements-mcp.txt .github/workflows/fleet-hub.yml' ;;
     browser_attachment)

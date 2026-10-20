@@ -69,6 +69,12 @@ ME=fleet-train-quarantine
 
 die() { printf '%s: %s\n' "$ME" "$*" >&2; exit 2; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# test_key <id> — the stable word a said red is keyed on: `foo-selftest.sh` → foo,
+# a part `foo-selftest.sh#3` → foo-3 (the key its old part file `foo-3-selftest.sh` had, T525)
+test_key() {
+  case "$1" in *'#'*) _tk=${1%#*}; printf '%s-%s' "${_tk%-selftest.*}" "${1##*#}" ;;
+               *) printf '%s' "${1%-selftest.*}" ;; esac
+}
 file_issue() {
   if [ -n "${FLEET_TQ_FILER:-}" ]; then "$FLEET_TQ_FILER" "$@"; else bash "$BIN/fleet-ci-say.sh" "$@"; fi
 }
@@ -85,12 +91,12 @@ n = datetime.datetime.strptime(sys.argv[1], "%Y-%m-%dT%H:%M:%SZ")
 print((n - datetime.timedelta(days=int(sys.argv[2]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$now" "$_days") || _since=$now
   # the sightings still inside the window (ISO 8601 UTC compares as text)
   if [ -n "$flaky_hist" ] && [ -f "$flaky_hist" ]; then
-    awk -v since="$_since" 'NF >= 3 && $1 ~ /-selftest\.sh$/ && $2 > since' "$flaky_hist" > "$out/flaky"
+    awk -v since="$_since" 'NF >= 3 && $1 ~ /-selftest\.(sh|py)(#[0-9]+)?$/ && $2 > since' "$flaky_hist" > "$out/flaky"
   else : > "$out/flaky"; fi
   : > "$out/flaky-now"
   _new=$(printf '%s\n' "$1" | awk '$1 == "FLAKY" { print $2 }' | sort -u)
   for _t in $_new; do
-    _key="flaky-${_t%-selftest.sh}"
+    _key="flaky-$(test_key "$_t")"
     _heads=$(cat "$results"/train-flaky-"$_t".txt "$results"/*/train-flaky-"$_t".txt 2>/dev/null | head -40)
     _num=''
     if [ -n "$repo" ]; then
@@ -138,7 +144,7 @@ entries() {
     /^[[:space:]]*(#|$)/ { next }
     {
       t = $1; i = $2; e = $3; a = $4; b = $5; sub(/^#/, "", i)
-      if (NF < 5 || t !~ /^[A-Za-z0-9._-]+-selftest\.sh$/ || i !~ /^[0-9]+$/ ||
+      if (NF < 5 || t !~ /^[A-Za-z0-9._-]+-selftest\.(sh|py)(#[0-9]+)?$/ || i !~ /^[0-9]+$/ ||
           e !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ ||
           a !~ /^[0-9]+$/ || b !~ /^[0-9]+$/) {
         printf "%s: ignoring malformed line %s:%d: %s\n", me, FILENAME, FNR, $0 > "/dev/stderr"; next
@@ -273,7 +279,7 @@ case "$cmd" in
       if [ -n "$issue" ]; then num=$issue
       else
         [ -n "$repo" ] || die "record: --repo is needed to file the breakage issue"
-        key="selftest-quarantine.${t%-selftest.sh}"
+        key="selftest-quarantine.$(test_key "$t")"
         url=$(file_issue --repo "$repo" --breakage-key "$key" --fault-sha "$sha" --fault-link "https://github.com/$repo/actions/runs/$run" \
                 --label bug --title "列车隔离了 ${t}：连红两趟" \
                 --body "$t 在连续两趟发布列车上红（run ${prev_run:-?} 与 run ${run}，TRAIN_SHA ${sha}），这趟的改动没碰它，也没碰它点名的文件，所以列车隔离它最多 ${hours} 小时（issue #3243）。PR 与夜里的全量照跑它；碰到它的列车也照跑。修好它，隔离就失效；到期自动恢复。

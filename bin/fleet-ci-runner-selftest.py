@@ -1,7 +1,13 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -W ignore::ResourceWarning
+# fleet-ci-runner-selftest.py — the machine's test runner, sandboxed (issue #3144,
+# EPIC #3139 C5): bin/fleet-ci-runner.py (yield, the login, the pinned runner, one
+# JIT runner at a time, the App credential), bin/fleet-ci-job-gate.sh and
+# bin/fleet-node-supervisor.py's ci-runner child / word / line / tenant.
+# Cases in bin/fleet-ci-runner-selftest.py.
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """fleet-ci-runner-selftest.py — the machine's test runner, sandboxed (issue #3144).
 
-Driven by bin/fleet-ci-runner-selftest.sh; bin/fleet-break-it-ci-selftest.sh runs
+Run by bin/run-selftests.sh (by its shebang); bin/fleet-break-it-ci-selftest.sh runs
 its `drill <name>` mode. Nothing touches GitHub, /var or a real login: GitHub's
 API is a server on 127.0.0.1, the runner a fake archive (file://, its SHA-256 in
 a sandbox lock), the test login a FLEET_NODE_PASSWD entry.

@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 4
 # fleet-model-switch-selftest.sh — hermetic tests for bin/fleet-model-switch.sh
 # (issue #569: clear a per-model usage cap IN PLACE with `/model <fallback>`
 # instead of the close + `--resume` dance #524 inherited from account rotation).

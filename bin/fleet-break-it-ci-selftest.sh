@@ -21,6 +21,9 @@
 #   train-ack-down      FLEET_TRAIN_RUNNER=fleet-ack but no fleet-ack runner online,
 #                       no token or no answer: the Linux half runs on ubuntu-latest,
 #                       saying 深圳不可用; the variable empty asks nothing (#3864)
+#   selftest-part-id-mismatch  a test that runs 1/N of itself by default declares
+#                       no `# selftest-parts: N`: the runner refuses (exit 2) instead
+#                       of running one slice as the whole test (T525)
 #   nightly-refused-by-runner  the nightly's shards sent to the train's pool, whose
 #                       job gate refused every one: it runs on ubuntu-latest, and a
 #                       shard that never ran is said 拒收, not a red test (T517)
@@ -1415,6 +1418,36 @@ drill_nightly_refused_by_runner() {
   [ "$out" = '3 55.5 40.0 True True' ] || { WHY="the baseline: $out (want 3 55.5 40.0 True True)"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="夜跑不再排去只收列车的 fleet-ack；分片被拒收时夜跑红、摘要写「拒收，不是测试红」；跑了的红照名字列出；当晚的数存成 selftests-baseline"
+}
+
+# ---- selftest-part-id-mismatch (T525, EPIC T516 C3): parts are declared in the
+# test's own header, not a file per part. A test that slices itself by default
+# (`${SELFTEST_PART:-1/3}`) but declares nothing would run as ONE id — its other
+# slices never, the gate green. The drill builds a sandbox bin with the runner and
+# such a test: refused; declared, it lists its ids and each part gets its K/N.
+drill_selftest_part_id_mismatch() {
+  CAP=30
+  local t0 d out rc
+  d=$(mktemp -d "${TMPDIR:-/tmp}/part-ids.XXXXXX"); t0=$(now)
+  cp "$BIN/run-selftests.sh" "$d/"
+  printf '#!/bin/bash\npart=${SELFTEST_PART:-1/3}\necho "$part" >> "%s/ran"\n' "$d" > "$d/foo-selftest.sh"
+  rs() { (cd "$d" && env -u SELFTEST_PART FLEET_SELFTEST_NO_SHADOW=1 FLEET_HEAVY=0 FLEET_SELFTEST_SLOWEST=0 sh ./run-selftests.sh "$@" 2>&1); }
+  out=$(rs --ids); rc=$?
+  [ "$rc" = 2 ] && case "$out" in *'foo-selftest.sh slices itself 1/3'*) true ;; *) false ;; esac \
+    || { WHY="an undeclared self-slicing test was not refused (exit $rc): $out"; rm -rf "$d"; return 1; }
+  out=$(rs foo); rc=$?
+  [ "$rc" = 2 ] && [ ! -e "$d/ran" ] || { WHY="the runner ran an undeclared self-slicing test (exit $rc)"; rm -rf "$d"; return 1; }
+  sed -i.bak '1a\
+# selftest-parts: 3
+' "$d/foo-selftest.sh" && rm -f "$d/foo-selftest.sh.bak"
+  out=$(rs --ids)
+  [ "$out" = "$(printf 'foo-selftest.sh#1\nfoo-selftest.sh#2\nfoo-selftest.sh#3')" ] \
+    || { WHY="declared 3 parts, the ids: $out"; rm -rf "$d"; return 1; }
+  out=$(rs foo); rc=$?
+  [ "$rc" = 0 ] && [ "$(sort "$d/ran" | tr '\n' ' ')" = '1/3 2/3 3/3 ' ] \
+    || { WHY="every part once with its K/N: exit $rc, ran [$(tr '\n' ' ' < "$d/ran" 2>/dev/null)]"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="片在测试头部声明：默认只跑 1/N 却没声明的测试，运行器拒绝（exit 2），不再把一片当整个测试跑绿；声明了就每片一个编号、各拿自己的 K/N"
 }
 
 cred_run_drills "$0"

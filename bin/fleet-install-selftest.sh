@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 7
 # fleet-install-selftest.sh — the one-line install (issues #1470, #1486):
 # bin/fleet-install.sh, as the hub serves it at /install, against a fake hub
 # (stdlib python3 on 127.0.0.1) that serves /install/manifest and

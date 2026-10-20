@@ -344,7 +344,7 @@ demoter inside it, had just spent 15h wedged in a busy loop. `logs/stuck.log` he
 300 missed-Stop demotions averaging 757s late, 39 of them past 30 min, and the
 sleep daemon's largest rejection (`worker is not done`, 34% of verdicts) was fed by
 the same windows. Pinned by
-[`bin/fleet-state-reconcile-selftest.sh`](../../bin/fleet-state-reconcile-selftest.sh).
+[`bin/fleet-state-reconcile-selftest.py`](../../bin/fleet-state-reconcile-selftest.py).
 
 ## The backstop — stuck-working demotion (#101)
 

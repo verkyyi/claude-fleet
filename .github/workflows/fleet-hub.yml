@@ -29,6 +29,6 @@ jobs:
           python-version: '3.10'
       - run: python -m pip install -r requirements-mcp.txt
       - name: Verify registry, SSH bridge, MCP and OAuth in isolated fixtures
-        # The parent is part 1; include every numeric part with the optional SDK.
+        # Every part (`# selftest-parts:`) runs with the optional SDK installed.
         # Plain selftests intentionally skip SDK cases when it is not installed.
-        run: bash bin/run-selftests.sh fleet-hub 'fleet-hub-[0-9]*'
+        run: bash bin/run-selftests.sh fleet-hub

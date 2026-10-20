@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 3 BREAK_PART
 # fleet-break-it-thin-selftest.sh — docs/dev/BREAK-IT.md rows thin-* (issue #3005,
 # EPIC #2999 C8): a thin client has no loop of its own, so its home machine keeps
 # its lease and writes to its 看台's terminal itself. Its own file, like the
@@ -210,7 +211,7 @@ drill_view_popup_idle_redraw() {
   CAP=30
   local t0 out
   t0=$(now)
-  out=$(bash "$BIN/fleet-popup-redraw-selftest.sh" --idle 2>&1) || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet-popup-redraw-selftest.py" --idle 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT="真实 tmux 弹窗开着、背后持续中英输出：静止 2.25 秒整框重画 0 次、框线单元格不变；关闭后后台显示恢复"
 }

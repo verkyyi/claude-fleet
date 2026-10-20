@@ -216,7 +216,7 @@ your Mac). The few that do something else on purpose say so below.
 | ⌥← ⌥→ | 按词移动光标 | 一样 | 左 ⌥ 当 Esc+（fleet 的 iTerm2 配置） | `1b1b5b44` · `1b1b5b43` · `1b62` · `1b66` · `1b5b313b3344` · `1b5b313b3343` |
 | ⇥ | 补全路径 / 命令 | 一样 | | `09` |
 | ⌃B | 把正在跑的命令放到后台 | 一样 | 看台的前缀是 ⌃]，⌃B 原样给会话 | `02` |
-| ⌃V | 贴图 | 一样 | 客户端先把图送到会话那台机器（#2757，`fleet-thin-upload-selftest.sh`） | |
+| ⌃V | 贴图 | 一样 | 客户端先把图送到会话那台机器（#2757，`fleet-thin-upload-selftest.py`） | |
 | ⌘V 多行 | 粘贴多行文字 | 一样 | 括号粘贴原样到会话 | `1b5b3230307e6f6e650d74776f1b5b3230317e` |
 | 拖文件 | 得到文件路径 | 一样 | 客户端先把文件送过去（#2757） | |
 | 选中 / ⌘C | 复制到本机 | 一样 | 见上一节「复制」（#2758，`clipboard-osc52-selftest.sh`） | |

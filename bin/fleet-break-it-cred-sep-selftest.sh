@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 2 BREAK_PART
 # fleet-break-it-cred-sep-selftest.sh — docs/dev/BREAK-IT.md rows `cred-sep-proxy-off`
 # and `cred-sep-bootstrap-fails` (issue #2273): on 2026-10-07 mac-a's
 # `sudo -n bash …/fleet-credsep.sh machine install` moved the credentials before

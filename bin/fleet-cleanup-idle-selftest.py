@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# selftest-parts: 4
+# selftest-part: 4 DoneNoPr.test_driver_scratch_closes_once_its_epic_is_closed DoneNoPr.test_recent_is_kept_and_said_once
+# selftest-part: 5 DoneNoPr.test_working_pr_open_issue_and_keep_are_kept HomeReap.test_no_policy_or_keep_is_never_closed_a_pin_keeps_nothing NoticeTests.test_notice_has_visible_tick_and_resets_on_activity_or_stale_tick PolicyGrammar.test_idle_owned_holds_off_the_reopen
+# selftest-part: 6 ReapPolicy.test_done_waits_its_own_idle_then_reaps_keeping_unpushed_work ReapPolicy.test_sleep_on_considers_only_windows_with_a_policy
+# selftest-part: 7 RoundTrip.test_dry_cap_off_and_rate_limit
+# selftest-part: 8 RoundTrip.test_unmerged_pr_requires_strict_ancestor_and_activity_recheck TaskSession.test_open_or_unknown_record_keeps_the_session
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Policy tests and a real isolated tmux -> history -> restore round trip."""
 import time
 RIG_IMPORT_START = time.monotonic()
@@ -19,7 +26,7 @@ import unittest
 from unittest.mock import patch
 
 sys.dont_write_bytecode = True
-BIN = Path(sys.argv.pop(1))
+BIN = (Path(sys.argv.pop(1)) if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]) else Path(__file__).absolute().parent)
 sys.path.insert(0, str(BIN))
 from fleet_reap_notice import notice
 spec = importlib.util.spec_from_file_location("idle", BIN / "fleet-cleanup-idle.py")

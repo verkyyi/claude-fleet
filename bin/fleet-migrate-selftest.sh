@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 4
 # fleet-migrate-selftest.sh — hermetic tests for bin/fleet-migrate.sh (issue #512:
 # move a live session onto the active account by close + `--resume` in a new window).
 #

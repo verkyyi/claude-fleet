@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 2
 # fleet-login-reset-selftest.sh — bin/fleet-login-reset.sh in a sandbox (issue
 # #3505, EPIC #3500 C20; BREAK-IT `spare-reuse-leaks`).
 #

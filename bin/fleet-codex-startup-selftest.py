@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Native startup policy and unused-TUI readiness, without MCP/model requests.
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 import importlib.util
 import json
 import os

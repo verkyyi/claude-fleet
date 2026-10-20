@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 5
 # dash-reap-selftest.sh — hermetic smoke test for the dash reaper (issue #100).
 #
 # Three layers, no network / no tmux server / no real GitHub:

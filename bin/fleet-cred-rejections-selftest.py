@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -W ignore::ResourceWarning -I
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 import hashlib
 import importlib.util
 import json

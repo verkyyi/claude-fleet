@@ -1,4 +1,6 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -W ignore::ResourceWarning
+# #3135: isolated supervisor/core restarts and whole-group cleanup.
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """#3135: only sandbox paths, bounded dummy processes, no real credentials.
 The proxy fixture models exec + flock, not the credential service's logic.
 """

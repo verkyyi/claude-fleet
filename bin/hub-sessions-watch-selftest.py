@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Drives bin/hub-sessions-watch-selftest.py, bin/fleet-hub-sessions.sh,
+# bin/fleet-render-watch.py, bin/fleet_view.py and bin/tmux-spinner.py.
+# Also drives bin/hub-sessions-watch-schedule-selftest.py.
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Real list loop, private HOME/socket: requests, broadcast, memo and cleanup.
 
 selftest-part-of: fleet-hub-sessions.sh fleet-render-watch.py fleet_view.py tmux-spinner.py

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Real isolated tmux panes + a fake Claude registry: the native-truth reconcile (#806)."""
 import json
 import os
@@ -12,7 +13,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-BIN = Path(sys.argv.pop(1)).absolute()
+BIN = (Path(sys.argv.pop(1)) if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]) else Path(__file__).absolute().parent).absolute()
 MOD = runpy.run_path(str(BIN / 'fleet-state-reconcile.py'))
 LIVE = MOD['reconcile'].__globals__   # run_path returns a copy; patch the functions' real globals
 

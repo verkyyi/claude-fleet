@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Native request fixtures, exact identity checks and private tmux state races.
+# selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 import copy
 import importlib.util
 import json

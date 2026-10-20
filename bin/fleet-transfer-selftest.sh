@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 5
 # Recheck source/idle refusals when fleet-failover-selftest.py changes its package fixtures.
 # Single-session transfer tests on a PRIVATE named socket, real worktrees and
 # fake Claude/Codex processes. No model requests, GitHub calls or live hooks.

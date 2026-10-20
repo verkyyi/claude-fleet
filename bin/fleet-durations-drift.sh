@@ -72,7 +72,7 @@ fi
 # the artifact's directory name (train-result-Linux-4 → Linux-4).
 rows=$(for f in $files; do
          d=$(dirname -- "$f"); s=${d##*/}; s=${s#train-result-}
-         grep -oE '(PASS|FAIL|TIMEOUT|FLAKY) +[A-Za-z0-9_.+-]+-selftest\.sh +[0-9]+(\.[0-9]+)?s' "$f" \
+         grep -oE '(PASS|FAIL|TIMEOUT|FLAKY) +[A-Za-z0-9_.+-]+-selftest\.(sh|py)(#[0-9]+)? +[0-9]+(\.[0-9]+)?s' "$f" \
            | awk -v s="$s" '{ v = $3; sub(/s$/, "", v); print s, $2, v }'
        done | awk -v tbl="$table" -v pct="$pct" -v floor="$floor" '
   BEGIN {

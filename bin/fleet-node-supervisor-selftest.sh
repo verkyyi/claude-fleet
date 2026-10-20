@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-parts: 4
 # fleet-node-supervisor-selftest.sh — the machine's one daemon, sandboxed (issue #2331):
 # bin/fleet-node-supervisor.py (children + backoff, one copy per task, the attic
 # sweep, state across a restart, status --check) and fleet-diskguard.sh's
