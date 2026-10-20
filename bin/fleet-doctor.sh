@@ -894,6 +894,12 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
     esac
   done
   [ "$bad" -eq 0 ] && pass account "$n subscription token(s) in ${acct_dir} (per-account windows honored)"
+  # A login that holds POOL accounts (`hub:<label>`) but is not separated: since
+  # T550 (EPIC T542 C4) the launcher picks none of them — with no credential proxy
+  # to pick per request, every session runs on this login's own login. Say so.
+  if [ ! -f "$conf_dir/credsep.json" ] && grep -lq '^hub:' "$acct_dir"/* 2>/dev/null; then
+    warn account-pool "这个登录还没交给池子：accounts/ 里有池子的账号，但没有隔离（没有 credsep.json），开会话用的是这个登录自己的账号 · this login is not handed to the pool yet: its sessions run on its own login (fleet-credsep.sh)"
+  fi
   # --- the per-fleet model-cap probe (issue #706) ----------------------------
   # The state-reconcile tick probes each fleet for a window walled on ONE model
   # (fleet-model-switch.sh --capped); a probe that times out is not a slow tick, it

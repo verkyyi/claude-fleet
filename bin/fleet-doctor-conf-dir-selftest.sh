@@ -20,6 +20,7 @@
 #   2. the default path is actually READ: a socket-heal.log line planted under
 #      $HOME/.config/claude-fleet surfaces on the socket line;
 #   3. an explicit FLEET_CONF_DIR still wins over the default.
+# (Also: retired rows stay gone; a pool account on a login not separated WARNs.)
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -84,6 +85,18 @@ printf '{"state":"waiting","detail":"same veto","same_detail_streak":7,"stuck_no
 run_doctor FLEET_CONF_DIR="$WORK/explicit"
 grep -Eq '^[[:space:]]+(PASS|WARN|FAIL)[[:space:]]+(failover|failover-stuck|account-pick)([[:space:]]|$)' "$WORK/stdout" \
   && fail "a retired failover / failover-stuck / account-pick row still printed"
+ok
+
+# 5. a login holding pool accounts but not separated is told so (T550): the
+#    launcher picks none of them, its sessions run on its own login
+mkdir -p "$WORK/acc"; printf 'hub:p1\n' > "$WORK/acc/p1"; chmod 600 "$WORK/acc/p1"
+run_doctor FLEET_CONF_DIR="$WORK/explicit" FLEET_ACCOUNTS_DIR="$WORK/acc"
+grep -Eq '^[[:space:]]+WARN[[:space:]]+account-pool[[:space:]].*还没交给池子' "$WORK/stdout" \
+  || fail "a not-separated login with a pool account must WARN account-pool"
+: > "$WORK/explicit/credsep.json"
+run_doctor FLEET_CONF_DIR="$WORK/explicit" FLEET_ACCOUNTS_DIR="$WORK/acc"
+grep -Eq '[[:space:]]account-pool[[:space:]]' "$WORK/stdout" && fail "a separated login must not WARN account-pool"
+rm -f "$WORK/explicit/credsep.json"
 ok
 
 printf 'fleet-doctor-conf-dir-selftest: %d checks passed\n' "$CHECKS"

@@ -56,8 +56,8 @@
 #           not affect each other whichever way the login-wide value points; a
 #           fleet's FLEET_SPAWN_NODE beats the login's; no line ⇒ the login's.
 #   ACCOUNT (issue #1540) --account local|pool rides to the hub as `--account <c>`
-#           on the place command and onto the window as @account_class (stamped
-#           in the window's own command, before fleet-claude.sh); `any`, no flag
+#           on the place command — never onto the window since the launcher's
+#           pick retired (T550: no @account_class stamp); `any`, no flag
 #           and garbage (named on stderr) add nothing; the fleet conf's
 #           FLEET_ACCOUNT_CLASS is the default and `--account any` turns it off;
 #           with the hub off the window is still stamped, nothing is placed.
@@ -663,7 +663,7 @@ for c in local pool; do
   CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258 --account "$c"
   [ "$(rc)" = 0 ]                                || fail "ACCOUNT --account $c spawns (rc=$(rc))" "$(cat "$WORK/spawn.err")"
   place_has "--account $c acme/widgets 258 $WID" || fail "ACCOUNT --account $c is asked for on the place command"
-  tmux_has "@account_class '$c'"                 || fail "ACCOUNT --account $c stamps @account_class in the window's own command"
+  tmux_has '@account_class'                      && fail "ACCOUNT --account $c stamps no @account_class (T550)"
   tmux_has 'new-window'                          || fail "ACCOUNT --account $c: a LOCAL answer opens it here"
 done
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 --account pool
@@ -671,12 +671,12 @@ place_has '--account pool acme/widgets'          || fail "ACCOUNT remote: the cl
 tmux_has 'new-window'                            && fail "ACCOUNT remote: nothing opens here"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258 "--account local"
 place_has '--account local acme/widgets'         || fail "ACCOUNT a fused \"--account local\" (zsh's unsplit \$var) is read"
-ok "ACCOUNT --account local|pool → --account on the place command + @account_class on the window; fused form read"
+ok "ACCOUNT --account local|pool → --account on the place command, no window stamp; fused form read"
 
 printf 'CCQUOTA_FLEET=1\nFLEET_ACCOUNT_CLASS=local\n' > "$WORK/conf/fleets/testsess/conf"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258
 place_has '--account local acme/widgets'         || fail "ACCOUNT the fleet conf's FLEET_ACCOUNT_CLASS is the default"
-tmux_has "@account_class 'local'"                || fail "ACCOUNT the conf default is stamped too"
+tmux_has '@account_class'                        && fail "ACCOUNT the conf default stamps nothing either (T550)"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258 --account pool
 place_has '--account pool acme/widgets'          || fail "ACCOUNT --account beats the conf default"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258 --account any
@@ -687,9 +687,9 @@ ok "ACCOUNT FLEET_ACCOUNT_CLASS in the fleet conf is the default; --account wins
 
 CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET='' FLEET_HUB_PLACE_CMD='' FLEET_HUB_LEASE_CMD='' run_spawn 258 --account local
 [ -s "$PLACE_LOG" ]                              && fail "ACCOUNT hub off: nothing is placed"
-tmux_has "@account_class 'local'"                || fail "ACCOUNT hub off: the window is still stamped — the class is the local picker's too"
+tmux_has '@account_class'                        && fail "ACCOUNT hub off: no stamp — there is no local picker (T550)"
 tmux_has 'new-window'                            || fail "ACCOUNT hub off: opens here"
-ok "ACCOUNT with the hub off the class still reaches the window; nothing is placed"
+ok "ACCOUNT with the hub off nothing is placed and nothing stamped"
 
 # ===== TOKEN: node.env's token reaches the place command only (issue #1491) =======
 NODE_ENV="$WORK/conf/node.env"

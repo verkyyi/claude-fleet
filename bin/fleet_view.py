@@ -3060,19 +3060,6 @@ def reap_choices(r, fleet):
     return [(v, ("● " if cur and cur == v.partition(":")[0] else "") + say(k)) for v, k in REAP_CHOICES]
 
 
-def sub_choices(r, fleet):
-    """fleet-manual-sub.sh list → (account, `account · 5h · 7d · note`), as the
-    sidebar's 迁移到… stepped through them."""
-    try:
-        out = subprocess.run(sh("fleet-manual-sub.sh", "list", fleet), capture_output=True, text=True, timeout=15,
-                             env=act_env(fleet), stdin=subprocess.DEVNULL).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    rows = [l.split("\t") for l in out.splitlines()[1:] if l.count("\t") >= 3]
-    return [(x[0], " · ".join(y for y in (x[0], "5h " + x[1] if x[1] else "", "7d " + x[2] if x[2] else "", x[3]) if y))
-            for x in rows]
-
-
 def answer_ask(r):
     """A permission prompt is y / n, a question its option number(s); anything
     else (a login, a blocked worker) is answered in its own pane: go there."""
@@ -3147,12 +3134,6 @@ ACTIONS = [
      "when": lambda r: r.get("gone") or (r.get("state") == "exited" and (r.get("far") or r.get("page"))),
      "local": lambda r, a, f: "restore" if r.get("gone") else "resume", "far": far("resume"), "ask": None,
      "slow": True, "keys": "yYrR"},
-    # another machine's row (issue #4184): its accounts are that login's, never
-    # this machine's list — the hub's worker_switch, the active subscription there
-    {"id": "sub", "label": lambda r: say("view_act_switch" if r.get("far") else "view_act_sub"),
-     "when": lambda r: (live(r) or far_live(r)) and r.get("agent") != "codex",
-     "local": lambda r, a, f: sh("dash-migrate.sh", r["target"], "to", a), "far": far("switch"),
-     "ask": lambda r: None if r.get("far") else "choice", "choices": sub_choices, "slow": True},
     # another machine's row (issue #4184): the hub's worker_transfer — the same
     # fleet-transfer.sh, run on that machine, its --dry-run's refusal said here
     {"id": "agent", "label": lambda r: say("view_act_agent_fmt", other_agent(r)),
@@ -3192,7 +3173,7 @@ ACTION = {a["id"]: a for a in ACTIONS}
 # The sidebar menu's letters (fleet-ui-lang.sh menu_keys) → the action here; the
 # row-less ones (no row to act on) live elsewhere — the list's top lines (C2), the
 # client's own keys (C7). fleet-view-actions-selftest.sh holds the two lists in step.
-SIDEBAR_ACTIONS = {"rename": "rename", "pin": "pin", "pr": "pr", "answer": "answer", "sub": "sub",
+SIDEBAR_ACTIONS = {"rename": "rename", "pin": "pin", "pr": "pr", "answer": "answer",
                    "reappol": "reappol", "agent": "agent", "reap": "reap", "open": "enter",
                    "message": "message", "stop": "stop", "resume": "resume", "restore": "resume"}
 ROWLESS = {"new": "C2", "newto": "C2", "repo": "C2", "clients": "C7", "quit": "C7", "lang": "#3329",

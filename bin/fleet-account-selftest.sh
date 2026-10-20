@@ -1,8 +1,9 @@
 #!/bin/bash
-# fleet-account-selftest.sh — hermetic unit tests for the pure ROTATION MATH in
-# bin/fleet-account.sh (the multi-account usage-limit failover). Correctness here
-# decides whether the fleet fails over to a fresh subscription cleanly or thrashes
-# straight back into a limited one, so the branching logic is worth pinning.
+# fleet-account-selftest.sh — hermetic unit tests for the pure READINGS in
+# bin/fleet-account.sh: this login's accounts, their benches, scores, paces,
+# phase plan and logins. Since T550 (EPIC T542 C4) nothing here PICKS an
+# account — a session's subscription is the pool's pick behind the credential
+# proxy — and the retired pick commands answer 「已不用」.
 #
 # Covered (all pure / deterministic — real `date` only, no network, no real tokens):
 #   • dur_secs   — s/m/h/d suffixes, bare seconds, and garbage → empty.
@@ -12,23 +13,18 @@
 #   • acct_limited_until / acct_eligible — read known epochs from a temp
 #                  account.limited (future = benched, past/absent = eligible;
 #                  duplicate rows → the furthest-future epoch wins).
-#   • pick_active — keep-current-if-eligible, rotate-past-limited round-robin
-#                  (incl. wraparound), and the all-limited best-effort fallback.
 #   • quota_parse — ccquota's `budget --json` → TSV rows, incl. the #628 rail:
 #                  an account ccquota says it cannot read (available:false) and one
 #                  whose payload carries neither window get NO row + a complaint on
 #                  stderr, instead of a confident `0% used, 0% headroom`.
-#   • pick_score / pick_best — the ranking (issue #598): the 5h window counts
-#                  double because it expires, the 7d window still gates, the
-#                  hysteresis keeps a near-equal current account, and
-#                  FLEET_ACCOUNT_PICK=minmax restores the pre-#598 answer. The
-#                  headline case is the LIVE 2026-09-13 pool, which the old
-#                  ranking got backwards.
+#   • pick_score — the ranking reading (issue #598): the 5h window counts
+#                  double because it expires, and FLEET_ACCOUNT_PICK=minmax
+#                  restores the pre-#598 score. The headline case is the LIVE
+#                  2026-09-13 pool, which the old ranking got backwards.
 #   • acct_phase_hold / phase_plan — the 5h-window phase stagger (issue #598):
 #                  the `5h / N` grid, live windows keeping their real phase,
 #                  benched accounts excluded, slots self-expiring, the
-#                  FLEET_ACCOUNT_PHASE=0 kill switch, and pick_active failing
-#                  OPEN when the holds would otherwise starve the pool.
+#                  FLEET_ACCOUNT_PHASE=0 kill switch.
 #   • banner_reset_epoch — the limit banner's "resets <time> (<zone>)" → epoch:
 #                  zone travels with the banner (host TZ must not change it),
 #                  midnight wrap, 12h-clock edges, a DST-transition day, and
@@ -36,16 +32,16 @@
 #   • cmd_mark_limited — benches to that instant (+RESET_BUFFER) when there is
 #                  one, and to now+LIMIT_TTL (per-account conf included) when not.
 #   • acct_paused — a PAUSED pool account (issue #2083): FLEET_ACCOUNT_PAUSED or
-#                  the fetched account.paused takes a `hub:` label out of every
-#                  automatic pick (rr, rotate, ranking), a local label is never
-#                  paused, un-pausing brings it back, the hub fetch keeps the
-#                  list across a blink, and with nothing paused nothing moves.
+#                  the fetched account.paused marks a `hub:` label paused in
+#                  `list`, a local label is never paused, and the hub fetch
+#                  keeps the list across a blink.
 #   • acct_class / FLEET_ACCOUNT_CLASS — the account CLASS (issue #1540): a
 #                  `hub:<label>` file is `pool`, anything else `local`; the filter
 #                  narrows acct_labels (pinned list and directory listing alike),
-#                  pick_active never leaves the class, cmd_active prints the
-#                  narrowed pick but never moves account.active, and `any` /
-#                  unset / garbage leave every answer byte for byte as it was.
+#                  and `any` / unset / garbage leave every answer as it was.
+#   • the retired pick (T550): `active` / `env` print nothing, `use` / `rotate`
+#                  / `launch` / `blind` answer 「已不用」, `token` needs a label,
+#                  and no command writes account.active.
 #
 # Sourced (not run): fleet-account.sh guards its bottom dispatch with
 # `[ "${BASH_SOURCE[0]}" = "$0" ]`, so sourcing defines the helpers WITHOUT
@@ -79,13 +75,11 @@ ACCT_DIR="$WORK/accounts"
 TTL=18000
 FLEET_C="$WORK/cache"; mkdir -p "$FLEET_C"
 STATE_LIMITED="$FLEET_C/account.limited"   # only the limited-state file is read by the tested fns
-# pick_best/cmd_list read the phase plan too (issue #598) — repoint it, or a plan
-# armed on the DEVELOPER's real pool would silently steer these assertions.
+# cmd_list reads the phase plan too (issue #598) — repoint it, or a plan armed on
+# the DEVELOPER's real pool would silently steer these assertions.
 STATE_PHASE="$FLEET_C/account.phase"
-# Every pick reads the reauth marks and may stamp an auth alert (issue #1670) —
-# both onto the scratch tree from the first pick on, never the operator's.
+# The reauth marks (issue #1667) — onto the scratch tree, never the operator's.
 STATE_REAUTH="$FLEET_C/account.reauth"
-STATE_AUTH_ALERT="$FLEET_C/account.auth-alert"
 # …and the hub's paused list (issue #2083) — never the operator's.
 STATE_PAUSED="$FLEET_C/account.paused"
 
@@ -163,49 +157,15 @@ acct_eligible acctA; rc_is "eligible: benched acct is NOT eligible" 1 $?
 acct_eligible acctB; rc_is "eligible: expired acct IS eligible" 0 $?
 acct_eligible acctZ; rc_is "eligible: unknown acct IS eligible" 0 $?
 
+# a pool of three for the readings below
 # ============================================================================
-# pick_active — keep / rotate round-robin / all-limited fallback
-# ============================================================================
-# Three real token files; pin their order with FLEET_ACCOUNTS so the round-robin
-# is deterministic regardless of readdir/sort locale.
-# A token in each: an EMPTY file is a login with no credentials (issue #1670),
-# which no automatic pick lands on.
+# Three real token files; pin their order with FLEET_ACCOUNTS so every listing is
+# deterministic regardless of readdir/sort locale.
 printf 'tok-a\n' > "$ACCT_DIR/a"; printf 'tok-b\n' > "$ACCT_DIR/b"; printf 'tok-c\n' > "$ACCT_DIR/c"
 export FLEET_ACCOUNTS="a b c"
 
 limit() { printf '%s\t%s\ttest\n' "$1" "$((NOW + 10000))" >> "$STATE_LIMITED"; }
 clear_limits() { : > "$STATE_LIMITED"; }
-
-# 1. current is eligible → keep it (no rotation).
-clear_limits
-eq "pick_active: keep eligible current" b "$(pick_active b)"
-
-# 2. current limited, next eligible → rotate to the next round-robin.
-clear_limits; limit a
-eq "pick_active: rotate past limited current → next" b "$(pick_active a)"
-
-# 3. current + next both limited → skip to the first eligible after them.
-clear_limits; limit a; limit b
-eq "pick_active: skip two limited → c" c "$(pick_active a)"
-
-# 4. wraparound: current is the LAST and limited → wrap to the first eligible.
-clear_limits; limit c
-eq "pick_active: wraparound from last → a" a "$(pick_active c)"
-
-# 5. current not in the pool (start<0), all eligible → first eligible.
-clear_limits
-eq "pick_active: unknown current → first eligible" a "$(pick_active zzz)"
-
-# 6. empty current, all eligible → first in order.
-clear_limits
-eq "pick_active: empty current → first" a "$(pick_active '')"
-
-# 7. ALL limited, current present → best-effort keep current (sessions still launch).
-clear_limits; limit a; limit b; limit c
-eq "pick_active: all limited, keep current" b "$(pick_active b)"
-
-# 8. ALL limited, current NOT in pool → fall back to the first label.
-eq "pick_active: all limited, unknown current → L[0]" a "$(pick_active zzz)"
 
 # ── banner_reset_epoch + its wiring into mark-limited (issue #490) ────────────
 # The banner carries the account's real refresh instant; benching for a duration
@@ -264,27 +224,26 @@ eq "banner: hour out of 12h range" '' \
 # --- wiring: mark-limited must bench to the PARSED instant, not now+TTL -------
 # Repoint the write-side state too (the read-side already is), and pin now() so
 # the assertion is exact.
-STATE_ACTIVE="$FLEET_C/account.active"
 # shellcheck disable=SC2034  # both read by the sourced cmd_mark_limited at CALL time
 STATE_DIR="$FLEET_C"
 # shellcheck disable=SC2034
 LOCK="$FLEET_C/account.lock"
 now() { printf '%s' "${NOW_FIXED:-1787454480}"; }
-: > "$STATE_LIMITED"; printf 'a\n' > "$STATE_ACTIVE"
+: > "$STATE_LIMITED"
 
 cmd_mark_limited a "$B_1020" >/dev/null
 eq "mark-limited: benches to the banner instant + buffer" \
    "$((1787462400 + RESET_BUFFER))" "$(awk -F'\t' '$1=="a"{print $2}' "$STATE_LIMITED")"
 
 # Same call, banner with no parseable instant → the LIMIT_TTL path, unchanged.
-: > "$STATE_LIMITED"; printf 'a\n' > "$STATE_ACTIVE"
+: > "$STATE_LIMITED"
 cmd_mark_limited a 'hit your weekly limit · resets Monday' >/dev/null
 eq "mark-limited: no instant → now + LIMIT_TTL (unchanged)" \
    "$((1787454480 + TTL))" "$(awk -F'\t' '$1=="a"{print $2}' "$STATE_LIMITED")"
 
 # And a per-account LIMIT_TTL still wins on that fallback path.
 printf 'LIMIT_TTL=7d\n' > "$ACCT_DIR/a.conf"
-: > "$STATE_LIMITED"; printf 'a\n' > "$STATE_ACTIVE"
+: > "$STATE_LIMITED"
 # --- mark-reauth / clear-reauth / reauth-since (issue #1667) ---------------------
 # A rejected LOGIN is not a bench: one row per label, no reset ends it, only
 # clear-reauth does. Repointed like the limited file above; the lock follows so
@@ -315,21 +274,15 @@ eq "mark-limited: fallback still honours per-account LIMIT_TTL" \
 rm -f "$ACCT_DIR/a.conf"; : > "$STATE_LIMITED"
 
 # ============================================================================
-# ccquota (issue #513): quota_parse fixture → rows; pick_active prefers headroom
-# under the ceiling (with hysteresis) and falls back to round-robin; cmd_bench
-# benches to an exact instant (+RESET_BUFFER) and rotates the active pointer.
+# ccquota (issue #513): quota_parse fixture → rows; cmd_bench benches to an
+# exact instant (+RESET_BUFFER) — a reading since T550, no pointer to rotate.
 # ============================================================================
 STATE_QUOTA="$FLEET_C/account.quota"; STATE_QUOTA_TS="$FLEET_C/account.quota.ts"
-# shellcheck disable=SC2034  # read by the sourced pick_active at call time
+# shellcheck disable=SC2034  # read by the sourced pace_held at call time
 CEILING=85
-# This block pre-dates the pace ranking (issue #1231) and its fixtures carry
-# epoch-1/2 (i.e. long-past) 7d resets, which `pace` reads as a fully-elapsed
-# week; it exercises the mode-independent machinery (headroom, hysteresis,
-# ceiling gate, round-robin), so pin the documented `5h` score here. The pace
-# ranking has its own block below.
-# shellcheck disable=SC2034  # read by the sourced pick_score/pick_best at call time
+# shellcheck disable=SC2034  # read by the sourced pick_score at call time
 PICK_MODE=5h
-: > "$STATE_LIMITED"; rm -f "$STATE_QUOTA"; printf 'a\n' > "$STATE_ACTIVE"
+: > "$STATE_LIMITED"; rm -f "$STATE_QUOTA"
 # labels a b c already exist as token files; pin c to a uuid via c.conf
 printf 'CCQUOTA_ACCOUNT=uuid-cccc\n' > "$ACCT_DIR/c.conf"
 fixture='{"verdict":"go","accounts":[
@@ -353,7 +306,7 @@ eq "quota_field: missing label → empty" "" "$(quota_field "$rows" nope 4)"
 # windows). The old parser read neither `available` nor the missing windows and
 # published `d 0 0 0 0 0 0` — 0% used AND 0% headroom — so the account was never
 # benched and was the first landing spot a ceiling fan-out would pick. Three
-# labels, live only for this block, so the pick_active cases below keep their pool.
+# labels, live only for this block.
 printf 'tok-d\n' > "$ACCT_DIR/d"; printf 'tok-e\n' > "$ACCT_DIR/e"; printf 'tok-f\n' > "$ACCT_DIR/f"
 export FLEET_ACCOUNTS="a b c d e f"
 fix628='{"verdict":"go","accounts":[
@@ -377,36 +330,21 @@ eq "quota_parse(#628): only the readable account gets a row" 1 "$(printf '%s\n' 
 eq "quota_parse(#628): a clean payload complains about nothing" "" "$(printf '%s' "$fixture" | quota_parse 2>&1 >/dev/null)"
 rm -f "$ACCT_DIR/d" "$ACCT_DIR/e" "$ACCT_DIR/f"; export FLEET_ACCOUNTS="a b c"
 
-printf '%s' "$rows" > "$STATE_QUOTA"; NOW > "$STATE_QUOTA_TS" 2>/dev/null || date +%s > "$STATE_QUOTA_TS"
-eq "pick_active(quota): most headroom wins (a 24 → b 75)"          b "$(pick_active a)"
-eq "pick_active(quota): keep current within 10 points of best"      b "$(pick_active b)"
-eq "pick_active(quota): c is at the ceiling → never picked"         b "$(pick_active c)"
-rows2=$(printf '%s\n' "$rows" | sed 's/^a	76	34	24/a	5	34	70/')   # a now 70 headroom vs b 75 → within 10 → keep a
-printf '%s' "$rows2" > "$STATE_QUOTA"
-eq "pick_active(quota): hysteresis keeps current within 10 points" a "$(pick_active a)"
-limit b                                                            # b benched → a is the only candidate
-eq "pick_active(quota): benched accounts are skipped"               a "$(pick_active b)"
-clear_limits
-printf 'a	90	34	10	1	2	0\nb	95	1	5	1	2	0\nc	100	21	0	1	2	0\n' > "$STATE_QUOTA"
-eq "pick_active(quota): everyone at the ceiling → round-robin keeps current" b "$(pick_active b)"
-rm -f "$STATE_QUOTA"
-eq "pick_active(no quota): plain round-robin"                       b "$(pick_active b)"
-
-# cmd_bench: exact instant + buffer, rotates when the benched one was active (exit 10)
-: > "$STATE_LIMITED"; printf 'a\n' > "$STATE_ACTIVE"
+# cmd_bench: exact instant + buffer — a reading, never a rotation (T550)
+: > "$STATE_LIMITED"
 until=$(( $(now) + 3600 ))                                          # NB: now() is the selftest's fixed clock
 out=$(cmd_bench a "$until" "ccquota: 5-hour window at 86%"); rc=$?
 eq "cmd_bench: benched until the instant + buffer" "$(( until + RESET_BUFFER ))" "$(awk -F'\t' '$1=="a"{print $2}' "$STATE_LIMITED")"
 eq "cmd_bench: note recorded"                       "ccquota: 5-hour window at 86%" "$(awk -F'\t' '$1=="a"{print $3}' "$STATE_LIMITED")"
-rc_is "cmd_bench: rotated the active away → exit 10" 10 "$rc"
-eq "cmd_bench: new active printed"                  b "$out"
+rc_is "cmd_bench: rc 0, nothing rotated" 0 "$rc"
+eq "cmd_bench: prints nothing (no active pointer)"  "" "$out"
 out=$(cmd_bench c "$(( $(now) - 5 ))" past); rc=$?
 eq "cmd_bench: a past instant falls back to now+LIMIT_TTL" "$(( $(now) + TTL ))" "$(awk -F'\t' '$1=="c"{print $2}' "$STATE_LIMITED")"
-rc_is "cmd_bench: benching a non-active account does not rotate" 0 "$rc"
+rc_is "cmd_bench: a second bench is rc 0 too" 0 "$rc"
 rm -f "$ACCT_DIR/c.conf"; : > "$STATE_LIMITED"; rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS"
 
 # ============================================================================
-# the RANKING (issue #598) — which account a new spawn lands on
+# the RANKING (issue #598) — how the score reads an account
 # ============================================================================
 # The regression this pins is a real loss, not a hypothetical. Live pool,
 # 2026-09-13: ly297 sat at `5h 0% · 7d 80%` for a whole 5-hour window while
@@ -415,7 +353,7 @@ rm -f "$ACCT_DIR/c.conf"; : > "$STATE_LIMITED"; rm -f "$STATE_QUOTA" "$STATE_QUO
 # landing on the account that was already burning — and ly297's window then reset
 # with nothing spent. 5h capacity is use-it-or-lose-it; that is why it counts
 # double here. The two rows below ARE that pool.
-: > "$STATE_LIMITED"; : > "$STATE_PHASE"; printf 'b\n' > "$STATE_ACTIVE"
+: > "$STATE_LIMITED"; : > "$STATE_PHASE"
 export FLEET_ACCOUNTS="a b"
 PN=$(now)                                            # the PINNED clock (see now() above)
 PFUT=$((PN + 10000)); PPAST=$((PN - 10000))
@@ -425,23 +363,19 @@ printf '%s' "$live" > "$STATE_QUOTA"; now > "$STATE_QUOTA_TS"
 
 eq "pick_score: a fresh 5h window outranks a burning one" 220 "$(pick_score "$live" a)"
 eq "pick_score: burning 5h window, healthy week"           95 "$(pick_score "$live" b)"
-eq "pick_active(#598): the idle 5h window wins — the 2026-09-13 loss" a "$(pick_active b)"
-# the old ranking, kept as a one-line rollback
+# the old ranking, kept as a one-line rollback: it scored them the other way round
 PICK_MODE=minmax
-eq "pick_active(minmax): reproduces the pre-#598 answer" b "$(pick_active b)"
+eq "pick_score(minmax): the pre-#598 score of a"  40 "$(pick_score "$live" a)"
+eq "pick_score(minmax): the pre-#598 score of b"  46 "$(pick_score "$live" b)"
 # shellcheck disable=SC2034  # read by the sourced pick_score at CALL time
 PICK_MODE=5h
 
-# the 7d window still GATES (ceiling) and still counts in the score: an account
-# one spawn from its weekly ceiling must not win on a fresh 5h window alone.
+# the 7d window still counts in the score: a fresh 5h window and a nearly-spent
+# week scores below most of a window and a fresh week.
 doomed=$(printf 'a\t0\t84\t16\t%s\t%s\t0\nb\t30\t0\t70\t%s\t%s\t0\n' "$R5" "$R7" "$R5" "$R7")
-printf '%s' "$doomed" > "$STATE_QUOTA"
-eq "pick_active: fresh 5h + nearly-spent week loses to most-of-a-window + fresh week" \
-   b "$(pick_active zzz)"
-# equal 5h → the weekly is the tie-break
+eq "pick_score: fresh 5h + nearly-spent week"   216 "$(pick_score "$doomed" a)"
+eq "pick_score: most-of-a-window + fresh week"  240 "$(pick_score "$doomed" b)"
 tie=$(printf 'a\t10\t20\t80\t%s\t%s\t0\nb\t10\t60\t40\t%s\t%s\t0\n' "$R5" "$R7" "$R5" "$R7")
-printf '%s' "$tie" > "$STATE_QUOTA"
-eq "pick_active: equal 5h → more weekly headroom wins" a "$(pick_active zzz)"
 eq "pick_score: no ccquota row → no opinion" "" "$(pick_score "$tie" nosuch)"
 
 # ============================================================================
@@ -468,45 +402,20 @@ eq "pace_of: 90% only 10% into the week is far ahead" 82 "$(pace_of 90 "$EARLY" 
 eq "pace_of: 45% with 90% of the week gone is behind" -32 "$(pace_of 45 "$LATE" "$PN")"
 eq "pace_of: no 7d reset → no opinion (0)"            0  "$(pace_of 45 0 "$PN")"
 
-# equal 5h, one behind pace and one far ahead → the behind account wins, and the
-# far-ahead one is HELD out of new spawns entirely (fail-open below proves it
-# still can be picked when it is the only one left).
+# equal 5h, one behind pace and one far ahead → the behind account scores
+# higher, and the far-ahead one reads HELD.
 pace2=$(printf 'a\t10\t40\t50\t%s\t%s\t0\nb\t10\t80\t10\t%s\t%s\t0\n' "$R5" "$HALF" "$R5" "$HALF")
-printf '%s' "$pace2" > "$STATE_QUOTA"; now > "$STATE_QUOTA_TS"
-eq "pace: behind-pace account outranks a far-ahead one at equal 5h" a "$(pick_active zzz)"
+CHECKS=$((CHECKS + 1)); [ "$(pick_score "$pace2" a)" -gt "$(pick_score "$pace2" b)" ] \
+  || fail "pace: a behind-pace account must outscore a far-ahead one at equal 5h"
 eq "pace_verdict: the far-ahead account reads held" held "$(pace_verdict "$pace2" b)"
 eq "pace_verdict: the behind account reads ok"       ok   "$(pace_verdict "$pace2" a)"
 eq "pace_held: the far-ahead account is held"        0    "$(pace_held "$pace2" b; echo $?)"
-
-# the 2026-09-25 loss: gmail (fresh-ish 5h, most of its week left in real time)
-# beats an account at 7d 90% with a brand-new 5h window — under `5h` the 90%
-# account would have won on its fresh 5h alone.
-# a = a 24helpful-style account (fresh 5h, 7d 78% — UNDER the ceiling — but only
-# 10% into its week, so far ahead of pace); b = a gmail-style account (busier 5h,
-# 7d 45% with 90% of the week gone, so behind). The ceiling never fires here: the
-# pace HOLD is the only thing keeping the spawn off a, which `5h` would pick.
-loss=$(printf 'a\t2\t78\t8\t%s\t%s\t0\nb\t72\t45\t28\t%s\t%s\t9\n' "$R5" "$EARLY" "$R5" "$LATE")
-printf '%s' "$loss" > "$STATE_QUOTA"; export FLEET_ACCOUNTS="a b"
-eq "pace: a nearly-spent week loses to a mostly-unspent one despite a fresh 5h" b "$(pick_active zzz)"
-# rollback: `5h` puts the fresh 5h window first again (the #598 answer)
-# shellcheck disable=SC2034  # read by the sourced pick_score at CALL time
-PICK_MODE=5h
-eq "pace(rollback): FLEET_ACCOUNT_PICK=5h picks the fresh 5h window" a "$(pick_active zzz)"
-# shellcheck disable=SC2034  # read by the sourced pick_score at CALL time
-PICK_MODE=pace
-
-# fail-open: EVERY account held ⇒ the pool must not starve — pick the best of them
-allhot=$(printf 'a\t10\t82\t18\t%s\t%s\t0\nb\t10\t80\t20\t%s\t%s\t0\n' "$R5" "$EARLY" "$R5" "$EARLY")
-printf '%s' "$allhot" > "$STATE_QUOTA"; export FLEET_ACCOUNTS="a b"
-eq "pace: all accounts held ⇒ fail open to the best (never starve the pool)" b "$(pick_active zzz)"
-export FLEET_ACCOUNTS="a b c"
-rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS"
 
 # ============================================================================
 # the PHASE stagger (issue #598) — acct_phase_hold + phase_plan
 # ============================================================================
 export FLEET_ACCOUNTS="a b c"
-: > "$STATE_LIMITED"; printf 'a\n' > "$STATE_ACTIVE"
+: > "$STATE_LIMITED"
 
 # --- acct_phase_hold: self-expiring, and killable ---------------------------
 rm -f "$STATE_PHASE"
@@ -520,19 +429,6 @@ PHASE_ON=0
 eq "phase_hold: FLEET_ACCOUNT_PHASE=0 is a hard kill switch" 0 "$(acct_phase_hold a)"
 # shellcheck disable=SC2034  # read by the sourced acct_phase_hold at CALL time
 PHASE_ON=1
-
-# --- pick_active honours a hold, but NEVER starves the pool -----------------
-# a is held; b is the only unheld candidate → b, even though a scores higher.
-held=$(printf 'a\t0\t0\t100\t%s\t%s\t0\nb\t40\t10\t60\t%s\t%s\t0\n' "$R5" "$R7" "$R5" "$R7")
-printf '%s' "$held" > "$STATE_QUOTA"
-eq "pick_active: a pending phase slot keeps a new spawn off that account" b "$(pick_active b)"
-# now hold BOTH: the plan can no longer be honoured, so it is ignored wholesale
-# rather than leaving a spawn with nothing to run on.
-{ printf 'a\t%s\t%s\tslot 1\n' "$PFUT" "$PN"
-  printf 'b\t%s\t%s\tslot 2\n' "$PFUT" "$PN"; } > "$STATE_PHASE"
-eq "pick_active: holds must never starve the pool — fail open to the best account" \
-   a "$(pick_active b)"
-rm -f "$STATE_PHASE"
 
 # --- phase_plan: the 5h / N grid --------------------------------------------
 # Nothing running anywhere (every account at 5h 0%) → the issue's own example:
@@ -587,19 +483,19 @@ NOW_FIXED=$PT phase_write "$(phase_plan "$mixed" "$PT")"
 eq "phase_write: a running account is reported but never held" "" "$(grep '^b	' "$STATE_PHASE" || true)"
 eq "phase_write: a missed slot is reported but never held"      "" "$(grep '^a	' "$STATE_PHASE" || true)"
 eq "phase_write: only the genuine wait becomes a hold" 1 "$(grep -c . "$STATE_PHASE")"
-eq "phase_write: the slot epoch is what pick_best reads" \
+eq "phase_write: the slot epoch is what acct_phase_hold reads" \
    "$((BSTART + 12000))" "$(awk -F'\t' '$1=="c"{print $2}' "$STATE_PHASE")"
 rm -f "$STATE_PHASE" "$STATE_QUOTA" "$STATE_QUOTA_TS"
 export FLEET_ACCOUNTS="a b c"
 
 # ============================================================================
 # model-specific caps (issue #524): banner_reset_epoch's DATED form + the
-# account.model-limited ledger — separate from the subscription bench, no rotation
+# account.model-limited ledger — separate from the subscription bench
 # ============================================================================
-# (STATE_ACTIVE / STATE_DIR / LOCK already point at the scratch tree — see the
+# (STATE_DIR / LOCK already point at the scratch tree — see the
 #  cmd_mark_limited section above; only the model ledger is new here)
 STATE_MODEL_LIMITED="$FLEET_C/account.model-limited"
-: > "$STATE_LIMITED"; printf 'a\n' > "$STATE_ACTIVE"; rm -f "$STATE_MODEL_LIMITED"
+: > "$STATE_LIMITED"; rm -f "$STATE_MODEL_LIMITED"
 # The weekly model cap's banner carries a DATE: "resets Sep 6 at 10pm (zone)".
 # 2026-09-06 22:00 America/Los_Angeles = 1788757200 (what ccquota reports too).
 FABLE_HIT="hit your Fable 5 limit · resets Sep 6 at 10pm $Z"
@@ -613,8 +509,7 @@ eq "banner: dated reset already past this year → next year" 1798794000 \
 eq "banner: clock-only form still works beside the dated one" 1787462400 "$(banner_reset_epoch "$B_1020" 1787454480)"
 
 # cmd_model_limited <label> <model> [banner] → benches (label, model) to the banner's
-# reset (+RESET_BUFFER); the SUBSCRIPTION ledger and the active pointer are untouched
-# — a model cap must never rotate accounts, that rotation was the cascade.
+# reset (+RESET_BUFFER); the SUBSCRIPTION ledger is untouched.
 # (the ledger uses the REAL clock, so the expected instant is the parser's answer
 #  for now — the parse itself is pinned above with fixed clocks)
 exp=$(( $(banner_reset_epoch "$FABLE_HIT" "$(now)") + RESET_BUFFER ))
@@ -627,7 +522,6 @@ eq "model-limited: a model id containing the alias matches" "$exp" "$(acct_model
 eq "model-limited: other model → 0"   0 "$(acct_model_limited_until a opus)"
 eq "model-limited: other account → 0" 0 "$(acct_model_limited_until b fable)"
 eq "model-limited: subscription ledger untouched" "" "$(cat "$STATE_LIMITED")"
-eq "model-limited: active pointer untouched"      a  "$(cat "$STATE_ACTIVE")"
 # no parseable reset in the banner → now + MODEL_TTL (a weekly cap: 7 days by default)
 : > "$STATE_MODEL_LIMITED"
 t0=$(now); u=$(cmd_model_limited b fable "reached your Fable limit. Run /usage-credits to continue or switch models with /model.")
@@ -683,8 +577,7 @@ eq "model reader: missing ledger" 0 "$(acct_model_limited_until a fable)"
 # FLEET_ACCOUNT_CLASS — one session, one kind of subscription (issue #1540)
 # ============================================================================
 # A `hub:<label>` token file is a POOL account the hub leases (#1415); any other
-# content is this login's own, LOCAL. The class filter narrows acct_labels — so
-# every pick downstream — and never writes the pool-wide active.
+# content is this login's own, LOCAL. The class filter narrows acct_labels.
 rm -f "$STATE_QUOTA"; : > "$STATE_LIMITED"
 printf 'tok-a\n' > "$ACCT_DIR/a"; printf 'tok-b\n' > "$ACCT_DIR/b"
 printf 'hub:h1\n' > "$ACCT_DIR/h1"; printf 'hub:h2\n' > "$ACCT_DIR/h2"
@@ -709,167 +602,58 @@ eq "labels(dir): local" own "$(FLEET_ACCOUNTS='' FLEET_ACCOUNT_CLASS=local acct_
 eq "labels(dir): pool" lease "$(FLEET_ACCOUNTS='' FLEET_ACCOUNT_CLASS=pool acct_labels)"
 eq "labels(dir): none → both" $'lease\nown' "$(FLEET_ACCOUNTS='' acct_labels)"
 ACCT_DIR="$_ad"
-# pick_active never leaves the class — here the pool-wide active is a hub account.
-eq "pick(local): active is pool → first local" a "$(FLEET_ACCOUNT_CLASS=local pick_active h1)"
-limit a
-eq "pick(local): first local limited → next local, never h1" b "$(FLEET_ACCOUNT_CLASS=local pick_active h1)"
-limit b
-eq "pick(local): every local limited → best effort stays local" a "$(FLEET_ACCOUNT_CLASS=local pick_active h1)"
-eq "pick(pool): active is local → first pool" h1 "$(FLEET_ACCOUNT_CLASS=pool pick_active a)"
-eq "pick(any): unchanged — keeps the eligible current" h1 "$(pick_active h1)"
-: > "$STATE_LIMITED"
-# cmd_active: a narrowed pick prints, but never moves account.active.
-printf 'h1\n' > "$STATE_ACTIVE"
-eq "active(local): prints a local label" a "$(FLEET_ACCOUNT_CLASS=local cmd_active)"
-eq "active(local): account.active untouched" h1 "$(cat "$STATE_ACTIVE")"
-eq "active(pool): the pool-wide current, eligible → kept" h1 "$(FLEET_ACCOUNT_CLASS=pool cmd_active)"
-printf 'zz\n' > "$STATE_ACTIVE"
-eq "active(pool): picks the first pool account" h1 "$(FLEET_ACCOUNT_CLASS=pool cmd_active)"
-eq "active(pool): account.active still zz" zz "$(cat "$STATE_ACTIVE")"
-eq "active(none): the ordinary pick" a "$(cmd_active)"
-eq "active(none): …and it IS written, as before" a "$(cat "$STATE_ACTIVE")"
-# A class with no account of its kind → nothing: the launcher decides what that
-# means (local = the ambient login; pool = refuse).
-eq "active(pool) with no pool account → empty" "" "$(FLEET_ACCOUNTS='a b' FLEET_ACCOUNT_CLASS=pool cmd_active)"
-# End to end, as a pane runs it: the class fleet-claude.sh EXPORTS wins over the
-# conf the script sources (a login conf saying `pool` cannot override a window
-# that chose `local`); with nothing in the environment the conf's line applies.
-mkdir -p "$WORK/sroot/bin" "$WORK/sconf"
-for f in "$BIN"/* "$BIN"/.fleet-*.py; do ln -s "$f" "$WORK/sroot/bin/${f##*/}"; done   # the dot-named python judges too (#1670)
-printf 'FLEET_ACCOUNT_CLASS=pool\n' > "$WORK/sroot/fleet.conf"
-printf 'h1\n' > "$STATE_ACTIVE"
-_run() { env -i HOME="$WORK" PATH="$PATH" FLEET_CONF_DIR="$WORK/sconf" FLEET_ACCOUNTS_DIR="$ACCT_DIR" FLEET_ACCOUNTS="a h1 b h2" \
-           TMPDIR="$WORK" "$@" bash "$WORK/sroot/bin/fleet-account.sh" active 2>/dev/null; }
-eq "e2e: env local beats the conf's pool" a "$(_run FLEET_ACCOUNT_CLASS=local)"
-eq "e2e: no env → the conf's pool" h1 "$(_run FLEET_C="$FLEET_C")"
-eq "e2e: env any beats the conf's pool — the ordinary pick (first label, nothing pinned)" a "$(_run FLEET_ACCOUNT_CLASS=any FLEET_C="$FLEET_C")"
 rm -rf "$ACCT_DIR/h1" "$ACCT_DIR/h2" "$ACCT_DIR/h1.hub" "$ACCT_DIR/h2.hub"; export FLEET_ACCOUNTS="a b c"
 
 # ============================================================================
-# the LOGIN filter (issue #1670, EPIC #1665 C6) — an automatic pick never lands
-# on a login that is not valid; with none valid it stays put and alerts
+# a PAUSED pool account (issue #2083) — the hub's pool.paused.<account>, a reading
 # ============================================================================
-rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS" "$STATE_AUTH_ALERT"; : > "$STATE_LIMITED"; : > "$STATE_REAUTH"
-printf 'tok-a\n' > "$ACCT_DIR/a"; printf 'tok-b\n' > "$ACCT_DIR/b"; printf 'tok-c\n' > "$ACCT_DIR/c"
-printf 'hub:d\n' > "$ACCT_DIR/d"; mkdir -p "$ACCT_DIR/d.hub"
-printf '{"claudeAiOauth":{"accessToken":"at","expiresAt":%s000}}\n' "$(( $(date +%s) + 86400 ))" > "$ACCT_DIR/d.hub/.credentials.json"
-export FLEET_ACCOUNTS="a b c d"
-# fleet-alerts.sh writes its events under $TMPDIR — the scratch tree here.
-_tmpd="${TMPDIR:-}"; export TMPDIR="$WORK"
-_alerts() { cat "$WORK/.claude-dash/global/alerts.events" 2>/dev/null | grep -c $'\taccount-auth\t'; }
-eq "auth: a plain token is valid" valid "$(acct_login a)"
-eq "auth: an unexpired hub credential is valid" valid "$(acct_login d)"
-cmd_mark_reauth b 'auth error' >/dev/null
-eq "auth: a mark-reauth label is reauth_required" reauth_required "$(acct_login b)"
-# Four candidates, b reauth_required: whatever the cursor, the round-robin and
-# rotate never stop on it; the quota ranking never picks it even when it has
-# by far the most headroom.
-eq "auth: rr — current b is skipped → c" c "$(pick_active b)"
-eq "auth: rr — from a, rotate past b → keeps a" a "$(pick_active a)"
-limit a
-eq "auth: rr — a benched, next after a is b → c" c "$(pick_active a)"
-: > "$STATE_LIMITED"
-printf 'a\n' > "$STATE_ACTIVE"
-eq "auth: rotate from a skips b → c" c "$(cmd_rotate)"
-_q() { printf '%s\t%s\t%s\t50\t0\t0\t1\n' "$1" "$2" "$3"; }
-printf '%s\n%s\n%s\n%s\n' "$(_q a 80 80)" "$(_q b 1 1)" "$(_q c 50 50)" "$(_q d 70 70)" > "$STATE_QUOTA"; date +%s > "$STATE_QUOTA_TS"
-eq "auth: quota ranking — b has the most headroom, never picked" c "$(pick_active b)"
-eq "auth: quota ranking — from a, best login-valid is c" c "$(pick_active a)"
-rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS"
-eq "auth: no alert while a login is valid" 0 "$(_alerts)"
-# The hub credential expires → d is out too; an empty token file is out.
-printf '{"claudeAiOauth":{"accessToken":"at","expiresAt":1000}}\n' > "$ACCT_DIR/d.hub/.credentials.json"
-eq "auth: an expired hub credential is expired" expired "$(acct_login d)"
-: > "$ACCT_DIR/c"
-eq "auth: an empty token file is no_credentials" no_credentials "$(acct_login c)"
-eq "auth: excluded rows carry auth:<state>" "b auth:reauth_required; c auth:no_credentials; d auth:expired" "$(acct_auth_excluded)"
-eq "auth: only a is left" a "$(pick_active d)"
-# Every login bad → never a switch: the current one stays, and one ▲ event says so.
-cmd_mark_reauth a 'revoked' >/dev/null
-eq "auth: all bad — current d stays (no hard switch)" d "$(pick_active d 2>/dev/null)"
-eq "auth: all bad — current b stays" b "$(pick_active b 2>/dev/null)"
-eq "auth: all bad — one account-auth alert, not one per pick" 1 "$(_alerts)"
-grep -q 'a auth:reauth_required; b auth:reauth_required' "$STATE_AUTH_ALERT" || fail "auth: the alert stamp must name every excluded login"
-printf 'b\n' > "$STATE_ACTIVE"
-eq "auth: all bad — rotate stays on b" b "$(cmd_rotate 2>/dev/null)"
-eq "auth: all bad — rotate adds no second alert for the same set" 1 "$(_alerts)"
-cmd_clear_reauth a
-eq "auth: a re-login brings a back" a "$(pick_active b)"
-rm -rf "$ACCT_DIR/d" "$ACCT_DIR/d.hub"; : > "$STATE_REAUTH"; : > "$STATE_LIMITED"
-printf 'tok-c\n' > "$ACCT_DIR/c"; export FLEET_ACCOUNTS="a b c"
-
-# ============================================================================
-# a PAUSED pool account (issue #2083) — the hub's pool.paused.<account> keeps a
-# new session off it; a session already there is not the pick's business
-# ============================================================================
-rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS" "$STATE_AUTH_ALERT" "$STATE_PAUSED"; : > "$STATE_LIMITED"; : > "$STATE_REAUTH"
+rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS" "$STATE_PAUSED"; : > "$STATE_LIMITED"; : > "$STATE_REAUTH"
 for h in h1 h2; do
   printf 'hub:%s\n' "$h" > "$ACCT_DIR/$h"; mkdir -p "$ACCT_DIR/$h.hub"
   printf '{"claudeAiOauth":{"accessToken":"at","expiresAt":%s000}}\n' "$(( $(date +%s) + 86400 ))" > "$ACCT_DIR/$h.hub/.credentials.json"
 done
 export FLEET_ACCOUNTS="a h1 h2"; unset FLEET_ACCOUNT_PAUSED
-eq "paused: nothing paused — h1 stays" h1 "$(pick_active h1)"
-eq "paused: nothing paused — h1 is valid" valid "$(acct_login h1)"
-eq "paused: nothing paused — no exclusion" "" "$(acct_auth_excluded)"
+CHECKS=$((CHECKS + 1)); acct_paused h1 && fail "paused: nothing paused — h1 is not"
 # the conf / environment name (the hub's client-settings pool key)
 export FLEET_ACCOUNT_PAUSED="h1 a"
-eq "paused: FLEET_ACCOUNT_PAUSED pauses a hub label" paused "$(acct_login h1)"
-eq "paused: a LOCAL label is never paused" valid "$(acct_login a)"
-eq "paused: current h1 paused → the next one, h2" h2 "$(pick_active h1)"
-printf 'h1\n' > "$STATE_ACTIVE"
-eq "paused: rotate from h1 never stops on it" h2 "$(cmd_rotate)"
-eq "paused: rotate from a skips h1 → h2" h2 "$(printf 'a\n' > "$STATE_ACTIVE"; cmd_rotate)"
-eq "paused: excluded row says paused, not auth" "h1 paused" "$(acct_auth_excluded)"
-printf '%s\n%s\n%s\n' "$(_q a 80 80)" "$(_q h1 1 1)" "$(_q h2 50 50)" > "$STATE_QUOTA"; date +%s > "$STATE_QUOTA_TS"
-eq "paused: ranking — h1 has the most headroom, never picked" h2 "$(pick_active h1)"
-rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS"
+CHECKS=$((CHECKS + 1)); acct_paused h1 || fail "paused: FLEET_ACCOUNT_PAUSED pauses a hub label"
+CHECKS=$((CHECKS + 1)); acct_paused a && fail "paused: a LOCAL label is never paused"
 cmd_list 2>/dev/null | sed "s/$(printf '\033')\[[0-9;]*m//g" | grep -q '^h1 .*paused' || fail "paused: list must show h1 paused"
 unset FLEET_ACCOUNT_PAUSED
 # the hub's list as the quota tick fetched it — through the seam, never the network
 _fetch() { FLEET_ACCOUNT_PAUSED_CMD="$1" quota_paused_fetch; }
 _fetch "printf '%s' '{\"pool\":{\"FLEET_ACCOUNT_PAUSED\":\"h2 ghost\"}}'"
 eq "paused: the fetch writes the hub's list" "h2 ghost" "$(tr '\n' ' ' < "$STATE_PAUSED" | sed 's/ $//')"
-eq "paused: fetched h2 is paused" paused "$(acct_login h2)"
-eq "paused: current h2 paused → wraps to a" a "$(pick_active h2)"
+CHECKS=$((CHECKS + 1)); acct_paused h2 || fail "paused: fetched h2 is paused"
 _fetch "exit 7"
 eq "paused: a hub that does not answer keeps the list" "h2 ghost" "$(tr '\n' ' ' < "$STATE_PAUSED" | sed 's/ $//')"
 _fetch "printf 'not json'"
 eq "paused: a garbled answer keeps the list" "h2 ghost" "$(tr '\n' ' ' < "$STATE_PAUSED" | sed 's/ $//')"
 _fetch "printf '%s' '{\"pool\":{\"FLEET_ACCOUNT_CEILING\":\"85\"}}'"
 eq "paused: a hub with no key (pre-#1990) empties it" "" "$(cat "$STATE_PAUSED")"
-eq "paused: un-paused h2 is picked again" h2 "$(pick_active h2)"
-# every pool label paused and the local one out: stay, and say so once
-export FLEET_ACCOUNTS="h1 h2" FLEET_ACCOUNT_PAUSED="h1 h2"
-eq "paused: all paused — current h2 stays (no hard switch)" h2 "$(pick_active h2 2>/dev/null)"
-grep -q 'h1 paused; h2 paused' "$STATE_AUTH_ALERT" || fail "paused: the alert stamp must name the paused accounts"
-unset FLEET_ACCOUNT_PAUSED
-rm -rf "$ACCT_DIR/h1" "$ACCT_DIR/h2" "$ACCT_DIR/h1.hub" "$ACCT_DIR/h2.hub" "$STATE_PAUSED" "$STATE_AUTH_ALERT"
+rm -rf "$ACCT_DIR/h1" "$ACCT_DIR/h2" "$ACCT_DIR/h1.hub" "$ACCT_DIR/h2.hub" "$STATE_PAUSED"
 export FLEET_ACCOUNTS="a b c"
-# ============================================================================
-# a BLIND pick (issue #2412): every login out and no quota row — never stay on a
-# benched account, and the doctor's account-pick says so; a SEPARATED login is
-# never blind (its credential proxy picks the account per request)
-# ============================================================================
-rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS" "$STATE_AUTH_ALERT"; : > "$STATE_LIMITED"; : > "$STATE_REAUTH"
-_cd="$FLEET_CONF_DIR"; export FLEET_CONF_DIR="$WORK/sepconf"; mkdir -p "$FLEET_CONF_DIR"
-: > "$ACCT_DIR/gm"; : > "$ACCT_DIR/ic"; : > "$ACCT_DIR/ly"
-export FLEET_ACCOUNTS="gm ic ly"
-eq "blind: every login out, no quota row → the doctor's account-pick names them" \
-   "gm auth:no_credentials; ic auth:no_credentials; ly auth:no_credentials" "$(cmd_blind)"
-printf 'gm\t1\t1\t99\t0\t0\t0\n' > "$STATE_QUOTA"
-eq "blind: not once a quota row exists" "" "$(cmd_blind)"
-rm -f "$STATE_QUOTA"
-: > "$FLEET_CONF_DIR/credsep.json"
-eq "blind: a separated login is never blind (the proxy picks)" "" "$(cmd_blind)"
-rm -f "$FLEET_CONF_DIR/credsep.json"
-limit gm
-eq "blind: all logins out, gm benched → the next one not benched" ic "$(pick_active gm 2>/dev/null)"
-eq "blind: all logins out, current not benched → it stays (#1670)" ic "$(pick_active ic 2>/dev/null)"
-limit ic; limit ly
-eq "blind: all logins out AND all benched → current stays" gm "$(pick_active gm 2>/dev/null)"
-: > "$STATE_LIMITED"
-rm -f "$ACCT_DIR/gm" "$ACCT_DIR/ic" "$ACCT_DIR/ly" "$STATE_AUTH_ALERT"
-export FLEET_CONF_DIR="$_cd"; export FLEET_ACCOUNTS="a b c"
-if [ -n "$_tmpd" ]; then export TMPDIR="$_tmpd"; else unset TMPDIR; fi
 
-printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger, #1231 weekly pace, #1540 account class, #1670 login filter, #2083 paused pool, #2412 blind pick)\n' "$CHECKS"
+# ============================================================================
+# the retired pick (T550, EPIC T542 C4): run as a pane would, the commands that
+# chose an account answer 「已不用」, `active` / `env` print nothing, `token`
+# needs a label, and nothing writes account.active
+# ============================================================================
+mkdir -p "$WORK/sroot/bin" "$WORK/sconf"
+for f in "$BIN"/* "$BIN"/.fleet-*.py; do ln -s "$f" "$WORK/sroot/bin/${f##*/}"; done
+_run() { env -i HOME="$WORK" PATH="$PATH" FLEET_CONF_DIR="$WORK/sconf" FLEET_ACCOUNTS_DIR="$ACCT_DIR" FLEET_ACCOUNTS="a b c" \
+           TMPDIR="$WORK" FLEET_C="$FLEET_C" bash "$WORK/sroot/bin/fleet-account.sh" "$@"; }
+for c in active env; do
+  eq "retired: $c prints nothing" "" "$(_run "$c" 2>/dev/null)"
+done
+for c in active env use rotate launch blind; do
+  out=$(_run "$c" a 2>&1 >/dev/null); rc=$?
+  CHECKS=$((CHECKS + 1)); [ "$rc" = 0 ] && case "$out" in *已不用*) true ;; *) false ;; esac \
+    || fail "retired: $c must answer 已不用 and exit 0 (rc $rc): $out"
+done
+eq "token: a named account" tok-b "$(_run token b 2>/dev/null)"
+eq "token: no label → nothing (no pick to default to)" "" "$(_run token 2>/dev/null)"
+CHECKS=$((CHECKS + 1)); [ ! -e "$FLEET_C/global/account.active" ] && [ ! -e "$FLEET_C/account.active" ] \
+  || fail "retired: nothing may write account.active"
+
+printf 'selftest OK: fleet-account readings (%s assertions — dur/human, acct_ttl, limited/eligible, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 score + phase stagger, #1231 weekly pace, #1540 account class, #2083 paused pool, T550 retired pick)\n' "$CHECKS"

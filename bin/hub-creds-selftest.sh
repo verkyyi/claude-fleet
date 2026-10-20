@@ -18,14 +18,15 @@
 #                   inherited one would win over the file)
 #   • EXPORT-PLAIN  a plain token is exported exactly as before, and a stale
 #                   hub directory from the parent is dropped
-#   • HELPER        fleet_helper_claude_auth on a hub-managed active account, and
-#                   an inherited hub directory is kept (the hook path)
-#   • ENV           `fleet-account.sh env` prints the directory, not the marker
+#   • HELPER        an inherited hub directory is kept by fleet_helper_claude_auth
+#                   (the hook path); it picks no account itself since T550
+#   • ENV           `fleet-account.sh env` is retired (T550): it prints nothing
 #   • LIST          `fleet-account.sh list` says the account is from the hub and
 #                   when its token runs out; expired / nothing leased read as such
 #   • TRUTH         fleet-account-truth.py maps a process's
 #                   CLAUDE_SECURESTORAGE_CONFIG_DIR back to its label
-#   • CLAUDE-SH     bin/fleet-claude.sh launches claude with the directory
+#   • CLAUDE-SH     bin/fleet-claude.sh launches claude with the directory for a
+#                   NAMED hub account (FLEET_ACCOUNT_LABEL, a migrate / handoff pin)
 #
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
 set -uo pipefail
@@ -75,21 +76,16 @@ got="$( CLAUDE_SECURESTORAGE_CONFIG_DIR=/stale/x.hub; export CLAUDE_SECURESTORAG
 ok "a plain token is exported as before, and a parent's hub dir does not leak through"
 
 # --- HELPER -----------------------------------------------------------------------
-bash "$ACCT" use hubbed >/dev/null 2>&1 || fail "could not pin the active account"
-got="$( fleet_helper_claude_auth; printf '%s|%s' "${CLAUDE_SECURESTORAGE_CONFIG_DIR:-}" "${CLAUDE_CODE_OAUTH_TOKEN:-}" )"
-[ "$got" = "$FLEET_ACCOUNTS_DIR/hubbed.hub|" ] || fail "helper on a hub account exported [$got]"
-ok "fleet_helper_claude_auth points a helper claude at the hub-managed file"
 got="$( CLAUDE_SECURESTORAGE_CONFIG_DIR=/inherited/x.hub; export CLAUDE_SECURESTORAGE_CONFIG_DIR
-        bash "$ACCT" use plain >/dev/null 2>&1; fleet_helper_claude_auth
+        fleet_helper_claude_auth
         printf '%s|%s' "${CLAUDE_SECURESTORAGE_CONFIG_DIR:-}" "${CLAUDE_CODE_OAUTH_TOKEN:-}" )"
 [ "$got" = "/inherited/x.hub|" ] || fail "an inherited hub dir was overridden by the helper: [$got]"
 ok "an inherited hub dir always wins (the hook path keeps its worker's account)"
-bash "$ACCT" use hubbed >/dev/null 2>&1
 
 # --- ENV --------------------------------------------------------------------------
 got="$(bash "$ACCT" env 2>/dev/null)"
-[ "$got" = "CLAUDE_SECURESTORAGE_CONFIG_DIR=$FLEET_ACCOUNTS_DIR/hubbed.hub" ] || fail "env printed [$got]"
-ok "fleet-account.sh env prints the directory, never the marker as a token"
+[ -z "$got" ] || fail "the retired env printed [$got]"
+ok "fleet-account.sh env is retired: it prints nothing (T550)"
 
 # --- LIST -------------------------------------------------------------------------
 ESC=$(printf '\033')
@@ -121,18 +117,16 @@ PY
 ok "fleet-account-truth.py maps CLAUDE_SECURESTORAGE_CONFIG_DIR back to its pool label"
 
 # --- CLAUDE-SH --------------------------------------------------------------------
-# A leased token again, and hubbed re-pinned: while it had none, the pick moved
-# the active account off it for its login (#1670).
+# A leased token again; the launch NAMES hubbed (a migrate / handoff pin).
 printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-short","refreshToken":null,"expiresAt":%s,"scopes":["user:inference"]}}' \
   "$exp_ms" > "$FLEET_ACCOUNTS_DIR/hubbed.hub/.credentials.json"
-bash "$ACCT" use hubbed >/dev/null 2>&1
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/claude" <<EOF
 #!/bin/sh
 printf '%s|%s' "\${CLAUDE_SECURESTORAGE_CONFIG_DIR:-}" "\${CLAUDE_CODE_OAUTH_TOKEN:-}" > "$WORK/claude-env"
 EOF
 chmod +x "$WORK/bin/claude"
-( unset TMUX TMUX_PANE; PATH="$WORK/bin:$PATH" CLAUDE_CODE_OAUTH_TOKEN=tok-inherited \
+( unset TMUX TMUX_PANE; PATH="$WORK/bin:$PATH" CLAUDE_CODE_OAUTH_TOKEN=tok-inherited FLEET_ACCOUNT_LABEL=hubbed \
     bash "$BIN/fleet-claude.sh" -p hi >/dev/null 2>&1 )
 got="$(cat "$WORK/claude-env" 2>/dev/null)"
 [ "$got" = "$FLEET_ACCOUNTS_DIR/hubbed.hub|" ] || fail "fleet-claude.sh launched claude with [$got]"

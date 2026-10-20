@@ -30,7 +30,6 @@
 7.4 dash-issue-cold-overlap-selftest.sh
 0.9 dash-issue-session-name-selftest.sh
 3.3 dash-issue-session-prompt-selftest.sh
-3.7 dash-migrate-selftest.sh
 0.0 dash-pin-selftest.sh
 16.2 dash-popup-selftest.sh
 8.5 dash-raw-session-selftest.sh

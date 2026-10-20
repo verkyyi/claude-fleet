@@ -65,6 +65,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | 行 | 来自 | 去哪 | 先做什么 |
 |---|---|---|---|
 | `account` | node · machine | [login-lifecycle] | 本机：`chmod 600` 令牌文件或 `claude setup-token` 重领；`--machine`：账号的 claude · codex · tmux 下一轮重链 |
+| `account-pool` | node | [login-lifecycle] | 这个登录有池子的账号却没做凭据隔离：会话用的是它自己的账号（T550 起开会话不再本机挑号）；`fleet-credsep.sh` 隔离，托管机器上 credsep-enforce 会自己收 |
 | `admin-agent` | machine | [mac-node-enroll] [runbook-tcc-stuck] | 更新器下一轮重指；没重启就 `sudo launchctl kickstart -k system/com.ccquota.agent.<admin>` |
 | `admit` | node | [node-doctor] | 容量门全关了：`FLEET_GLOBAL_MAX_SESSIONS` / `FLEET_MACHINE_MAX_SESSIONS` / `FLEET_ADMIT` 至少开一个 |
 | `agent` | node | [release-rules] | 登录的 ccquota agent 落后 stable：照行内命令先 `--dry-run` 再逐个重启 |

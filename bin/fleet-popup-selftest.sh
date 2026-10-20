@@ -20,7 +20,7 @@
 #      one-door lint).
 #
 # Drives bin/dash-popup.sh, bin/fleet-popup-lib.sh, bin/fleet-alerts.sh,
-# bin/usage-modal.sh and bin/fleet-ui-lang.sh.
+# and bin/fleet-ui-lang.sh.
 # tmux absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 
@@ -71,11 +71,11 @@ done
 echo "ok: every key line fits a 54-column popup ($(printf '%s ' $keys))"
 
 # --- D. wired ------------------------------------------------------------------
-for f in fleet-alerts.sh usage-modal.sh; do
-  grep -q 'fleet_fzf_hint ' "$BIN/$f" || fail "wired: $f does not take its key line from fleet_fzf_hint"
-  grep -n -- '--border=rounded' "$BIN/$f" | grep -v 'FZF_FRAME=' | grep -qv '^[0-9]*:[[:space:]]*#' \
-    && fail "wired: $f draws its own border inside the popup's"
-done
+# (usage-modal.sh opens no picker since T550: fleet-alerts.sh is the one left)
+f=fleet-alerts.sh
+grep -q 'fleet_fzf_hint ' "$BIN/$f" || fail "wired: $f does not take its key line from fleet_fzf_hint"
+grep -n -- '--border=rounded' "$BIN/$f" | grep -v 'FZF_FRAME=' | grep -qv '^[0-9]*:[[:space:]]*#' \
+  && fail "wired: $f draws its own border inside the popup's"
 echo "ok: wired — hints and frames (the node conf opens none, #1714: conf/gone.list)"
 
 # --- A. 54 columns, for real ---------------------------------------------------

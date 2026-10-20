@@ -358,14 +358,13 @@ def claude_paused():
 
 
 def claude_profile(label=''):
-    """profile() for Claude: the pool label a launch would run on (given, else
-    FLEET_ACCOUNT_LABEL, else the active account), or ValueError. An empty label
-    with multi-account off is not a profile at all — raise, the caller decides."""
+    """profile() for Claude: the NAMED account a launch would run on (given, else
+    FLEET_ACCOUNT_LABEL), or ValueError. No name is not a profile at all — the
+    pool or the ambient login runs it (no pick here since T550); raise, the
+    caller decides."""
     label = label or os.environ.get('FLEET_ACCOUNT_LABEL', '')
     if not label:
-        label = run(['bash', BIN / 'fleet-account.sh', 'active'])
-    if not label:
-        raise ValueError('multi-account is off; no Claude pool account to verify')
+        raise ValueError('no Claude account named; the pool or the ambient login runs it')
     login = claude_login(label)
     if login not in LOGIN_OK:
         raise ValueError('target-auth: Claude account %s needs a new login (%s)' % (label, login))
@@ -488,15 +487,11 @@ def target_auth(agent, label='', profile_name='', home='', account=''):
     else a FLEET_CODEX_ACCOUNTS pool pick, else ~/.codex — so the verdict is
     about the profile the launch would actually run."""
     if agent == 'claude':
+        # No pick among this login's accounts (T550): a target is a NAMED one.
         label = label or os.environ.get('FLEET_ACCOUNT_LABEL', '')
         if not label:
-            try:
-                label = run(['bash', BIN / 'fleet-account.sh', 'active'])
-            except (OSError, subprocess.SubprocessError):
-                label = ''
-        if not label:
             return dict(verdict='unknown', agent=agent, key='', login='unknown',
-                        reason='multi-account off; the ambient Claude login runs the target')
+                        reason='no account named; the pool or the ambient Claude login runs the target')
         login = claude_login(label)
         row = dict(agent=agent, key='claude/' + label, label=label, login=login)
         if login in LOGIN_OK:
@@ -920,31 +915,6 @@ def stamp_all_capped(data):
         pass
 
 
-def launch(agent, argv):
-    allowed = os.environ.get('FLEET_FAILOVER_AGENTS', 'claude,codex').split(',')
-    # Provider-specific flags cannot silently become another CLI's flags.
-    if len(argv) > 1 or (argv and argv[0].startswith('-')):
-        allowed = [agent]
-    data = inventory()
-    result = choose_spawn(data, agent, allowed=allowed)
-    if result['target'] is None:
-        stamp_all_capped(data)
-        print('fleet-account: ' + result['reason'], file=sys.stderr)
-        return 3
-    stamp_all_capped(None)
-    target = result['target']
-    env = dict(os.environ, FLEET_ACCOUNT_TARGET=json.dumps(target), FLEET_ACCOUNT_SELECTED='1')
-    if target['agent'] == 'codex':
-        env.update(FLEET_CODEX_PROFILE=target['profile'], FLEET_CODEX_ACCOUNT=target['account'],
-                   CODEX_HOME=target['home'])
-        if target.get('model') and not any(a in ('-m','--model') or a.startswith('--model=') for a in argv):
-            argv = ['-m',target['model'],*argv]
-    else:
-        env['FLEET_ACCOUNT_LABEL'] = target['label']
-    # wrap-ok: called FROM fleet-claude.sh, already under fleet-session-wrap.sh (#1784)
-    os.execve(str(BIN / 'fleet-claude.sh'), [str(BIN / 'fleet-claude.sh'), '--agent', target['agent'], *argv], env)  # wrap-ok: see above
-
-
 def main():
     os.umask(0o077)
     p = argparse.ArgumentParser(description=__doc__)
@@ -969,7 +939,6 @@ def main():
     q = sub.add_parser('claude-login')  # issue #1670: the spawn-path pick's judge for hub labels
     q.add_argument('labels', nargs='+')
     q = sub.add_parser('bench-codex'); q.add_argument('key'); q.add_argument('until', type=int); q.add_argument('reason')
-    q = sub.add_parser('launch'); q.add_argument('--agent', choices=('claude', 'codex'), required=True); q.add_argument('argv', nargs=argparse.REMAINDER)
     a = p.parse_args()
     if a.command == 'profile': result = profile(a.name, a.home, a.account)
     elif a.command == 'inventory': result = inventory(a.refresh)
@@ -992,7 +961,6 @@ def main():
             print('%s\t%s' % (label, claude_login(label)))
         return 0
     elif a.command == 'bench-codex': bench(a.key, a.until, a.reason); return 0
-    elif a.command == 'launch': return launch(a.agent, a.argv[1:] if a.argv[:1] == ['--'] else a.argv)
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

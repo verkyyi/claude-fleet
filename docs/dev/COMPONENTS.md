@@ -147,7 +147,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 会话状态钩子 | `set-claude-state*` | 状态写入 |
 | 会话恢复与事件记录 | `classify-* fleet-codex-session* fleet-id.sh fleet-id-selftest* fleet-id-results-selftest* fleet-id-migrate-selftest* fleet_id.py fleet-emit* handoff-latch-reset-hook* fleet_loop_mark* precompact-hook* session-end-hook* fleet-restore* .fleet-restore* fleet-state-* fleet-status* fleet-sessions-snapshot* fleet-transcript* fleet-idle-* fleet-loop* fleet_cron* fleet_sample* fleet_timing* fleet_runtime.py fleet-compat* fleet-stream-resume*` | 状态、历史与恢复；mod 的 lifecycle/state 钩子通过 fleet_runtime.py 记录原生运行态观察 |
 | 上下文连续性 | `fleet-ladder-log* fleet-context* fleet-compact* fleet-handoff* fleet-transfer* .fleet-transfer* fleet_transfer*` | 上下文与代理交接 |
-| 会话迁移与历史 | `fleet-move* fleet-history* fleet-migrate* dash-migrate* dash-restore-session*` | 迁移与恢复历史 |
+| 会话迁移与历史 | `fleet-move* fleet-history* fleet-migrate* dash-restore-session*` | 迁移与恢复历史 |
 | 首次使用 | `fleet-onboard* fleet-guide* fleet-doctor-onboard*` | 新人入口与验收 |
 | 内容送达与阅读 | `fleet-open* fleet_open* fleet-show* open-url*` | 打开与文件送达 |
 | 仓库接入与帮助 | `fleet-repo.sh fleet-repo-* fleet_repo_authority* dash-repo-add*` | 仓库注册与选择；显式分阶段选择这个 login 的人的任务权威（#4395、#4901），没有常驻进程 |
@@ -167,7 +167,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 承载节点 | `fleet-node* fleet_node* fleet-spotlight* fleet-evacuate* fleet-provisioner* fleet-host* fleet-machine* fleet-svc* fleet-service* fleet-services* fleet-job* fleet_job* fleet-daemon* fleet-launchd* fleet-wallpaper*` | 节点与宿主服务 |
 | 接入中继 | `fleet-relay* fleet-peer-cert* fleet-peer-trust* fleet-trust* fleet_ed25519* fleet_tls*` | 中继与节点信任 |
 | 配置与插件装配 | `fleet-conf* fleet_config* fleet-config* fleet-settings* fleet-hook* fleet-agent-bundle* fleet-agent-team* fleet-agent-def* fleet_agent_allow* fleet-plugins* fleet-codex-plugins* fleet-cfg-restart* mcp-fetch* mcp-github*` | 配置与插件注册 |
-| 账号与代理启动 | `fleet-account* .fleet-account* fleet_agent_argv* fleet_agent_mcp* fleet-manual-sub* fleet-codex* fleet_codex* fleet-claude* fleet_dispatch.py fleet_launch.py fleet-model* fleet-cred* fleet-creds* fleet-credsep* fleet-session-cred* fleet-redact* fleet_redact* fleet-lang*` | 代理、账号与凭据；投递及会话启动入口通过 fleet_dispatch 解析、校验已接受的代理选择 |
+| 账号与代理启动 | `fleet-account* .fleet-account* fleet_agent_argv* fleet_agent_mcp* fleet-codex* fleet_codex* fleet-claude* fleet_dispatch.py fleet_launch.py fleet-model* fleet-cred* fleet-creds* fleet-credsep* fleet-session-cred* fleet-redact* fleet_redact* fleet-lang*` | 代理、账号与凭据；投递及会话启动入口通过 fleet_dispatch 解析、校验已接受的代理选择 |
 | Fleet MCP（ | `fleet-mcp* fleet-peer-mcp* fleet-doctor* fleet-control* fleet_control*` | 工具读写与诊断 |
 | 执行会话与跨会话协作 MCP | `fleet_worker_life* fleet-answer* fleet-await* fleet-children* fleet-brief* fleet-pr-* fleet-report-parent* fleet-peer-send* fleet-permission* fleet-dialog* fleet_dialog* fleet-ask* fleet_ticket_url* fleet-task* fleet_task_control.py fleet_task_recovery.py fleet-wait-reeval* fleet-land* fleet-gate-check* fleet-workflow-perms*` | 任务与协作、PR 和合并；brief 读任务记录（#4898 起不再认领 issue），await/children/report-parent 通过 fleet_task_control.py 协作，task-record/hub-node 通过 fleet_task_recovery.py 保存并重放已接受任务的回执 |
 | 执行会话（ | `fleet-worker-start-hook* fleet-worktree* fleet-session-wrap* fleet-session-command* fleet-session-shell-agent* fleet-run* dash-issue-session* dash-raw-session* scratch-prefill* fleet-home-session* fleet-home-template* fleet-lib.sh fleet_iso.py session-shell/* fleet-degenerate* fleet_native_observe.py fleet_native_registration.py fleet_native_continue.py` | 执行会话与共用运行库 |

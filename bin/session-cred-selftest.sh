@@ -24,9 +24,8 @@
 #   E  central (an untrusted machine): an fcp-h1. pass from the hub (node token +
 #      the session's assertion), no account needed; revoke DELETEs the pass; a hub
 #      with the relay key answers the node's ask with fcp-h2., which goes central too
-#   F  migrate_rebind on an isolated tmux server: the window's @fleet_id and pane
-#      pid unchanged, @cc_account + the proxy's binding moved; a central window and
-#      a --model move are left to the old road
+#   F  fleet-migrate.sh moves no account in place any more (T550): no
+#      migrate_rebind — a session's subscription is the pool's pick
 #   G  the Codex daemon a session leaves behind: a PPID=1 app-server holding a file
 #      in the session's home is a reap candidate only once its session is revoked
 #   H  the ambient login (no account) on a trusted route: exit 4, launch as before;
@@ -277,38 +276,15 @@ rm -f "$SB/h2"
 echo trusted > "$SB/trust"; rm -f "$FLEET_CONF_DIR/node.env"
 bash "$BIN/fleet-cred-proxy.sh" route --refresh >/dev/null 2>&1
 
-# ── F: migrate_rebind on an isolated tmux server ─────────────────────────────
-if command -v tmux >/dev/null 2>&1; then
-  tm() { tmux -S "$TSOCK" "$@"; }
-  tm -f /dev/null new-session -d -s mg -n w1 'sleep 600' && tm new-window -d -t mg: -n w2 'sleep 600' && tm new-window -d -t mg: -n w3 'sleep 600'
-  bash "$BIN/fleet-session-cred.sh" mint --provider claude --sid sF --account a1 >/dev/null
-  for w in w1 w2 w3; do tm set-option -w -t "mg:$w" @fleet_id "fid-$w"; tm set-option -w -t "mg:$w" @cc_account a1; done
-  tm set-option -w -t mg:w1 @cred_sid sF; tm set-option -w -t mg:w1 @cred_route direct
-  tm set-option -w -t mg:w2 @cred_sid sX; tm set-option -w -t mg:w2 @cred_route central
-  before=$(tm display-message -p -t mg:w1 '#{window_id} #{@fleet_id} #{pane_pid}')
-  # shellcheck disable=SC2034  # the globals migrate_rebind reads, set for the sourced script
-  out=$(
-    # shellcheck source=/dev/null
-    . "$BIN/fleet-migrate.sh"
-    TM() { tmux -S "$TSOCK" "$@"; }
-    say() { printf '%s\n' "$*"; }
-    ACTIVE=a2 MODEL='' CFG=0 DRY=0 ACTIVE_BENCHED=0 AGENT=claude moved=0 skipped=0 REPORT=''
-    migrate_rebind "$(tm display-message -p -t mg:w1 '#{window_id}')" a1; echo "w1=$? moved=$moved"
-    migrate_rebind "$(tm display-message -p -t mg:w2 '#{window_id}')" a1; echo "w2=$?"
-    MODEL=sonnet; migrate_rebind "$(tm display-message -p -t mg:w1 '#{window_id}')" a2; echo "model=$?"
-    MODEL=''; migrate_rebind "$(tm display-message -p -t mg:w3 '#{window_id}')" a1; echo "w3=$?"
-  )
-  case "$out" in *"w1=0 moved=1"*) pass "F: a direct window is rebound in place" ;; *) fail "F: w1 not rebound: $out" ;; esac
-  check "F: window id, @fleet_id and pane pid unchanged" "$before" "$(tm display-message -p -t mg:w1 '#{window_id} #{@fleet_id} #{pane_pid}')"
-  check "F: @cc_account moved" a2 "$(tm display-message -p -t mg:w1 '#{@cc_account}')"
-  check "F: the proxy binding moved" a2 "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("sF",""))' "$FLEET_CONF_DIR/cred-proxy/bind.json")"
-  case "$out" in *"w2=1"*) pass "F: a central window takes the old road" ;; *) fail "F: w2: $out" ;; esac
-  case "$out" in *"model=1"*) pass "F: a --model move takes the old road" ;; *) fail "F: model: $out" ;; esac
-  case "$out" in *"w3=1"*) pass "F: a window with no @cred_sid takes the old road" ;; *) fail "F: w3: $out" ;; esac
-  bash "$BIN/fleet-session-cred.sh" revoke --sid sF
-else
-  pass "F: tmux absent — SKIP"
-fi
+# ── F: no account move in place (T550) ───────────────────────────────────────
+# The proxy's `rebind` stays (root pins, an older caller), but fleet-migrate.sh no
+# longer moves a session onto another account: there is none to move onto.
+out=$(
+  # shellcheck source=/dev/null
+  . "$BIN/fleet-migrate.sh"
+  if declare -f migrate_rebind >/dev/null 2>&1; then echo present; else echo gone; fi
+)
+check "F: fleet-migrate.sh has no in-place account move" gone "$out"
 
 # ── G: the Codex daemon a session leaves behind ──────────────────────────────
 bash "$BIN/fleet-session-cred.sh" mint --provider codex --sid sG --codex-home "$HOME/.codex-accounts/cx1" >/dev/null

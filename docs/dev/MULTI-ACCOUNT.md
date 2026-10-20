@@ -1,5 +1,11 @@
 # claude-fleet — multiple subscription accounts, with auto-failover
 
+> **Retired (T550, EPIC T542 C4).** A Claude session no longer picks among this
+> login's accounts: the pool picks behind the credential proxy, else the session
+> runs on the login's own login. `fleet-account.sh active` / `use` / `rotate` /
+> `env`, the failover's `launch` and the sidebar's 「换账号…」 / 「换到可用订阅」 are
+> gone; the rest of this page describes the old design for its history.
+
 > Answers issue #20: *"how does a fleet support multiple Claude subscription
 > accounts, and auto-switch to another subscription when the window limit is
 > reached?"*

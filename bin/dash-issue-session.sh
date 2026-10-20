@@ -108,10 +108,10 @@ for _a in "$@"; do
     --origin-wid=*) ORIGIN_WID="${_a#--origin-wid=}" ;;
     # --account (issue #1540, EPIC #1529 R2): which kind of subscription THIS
     # session runs on — `local` (this login's own token files), `pool` (the hub's
-    # leased accounts, #1415) or `any` (the pick as always). Default: the fleet
-    # conf's / login's FLEET_ACCOUNT_CLASS, else any. Stamped on the window as
-    # @account_class before the launcher runs, and sent along with a remote
-    # placement so the machine that opens it honours the same choice.
+    # leased accounts, #1415) or `any`. Default: the fleet conf's / login's
+    # FLEET_ACCOUNT_CLASS, else any. Sent along with a remote placement; since the
+    # launcher's pick retired (T550) it no longer changes which subscription a
+    # session runs on, and the window carries no @account_class.
     --account) _want=account ;;
     --account=*) ACCOUNT_ARG="${_a#--account=}" ;;
     # --reap (issue #1902): when the fleet may close this session on its own —
@@ -807,10 +807,6 @@ detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detac
 # the launcher's fleet_load_conf is window-aware, and a set-option from here after
 # new-window would race it (repo A's trust/model/MCP for a repo-B worker).
 stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree "$wt")
-# The session's account class (issue #1540) rides the same way: @account_class is on
-# the window before fleet-claude.sh reads it, and it is the window's — a conf
-# default changed later does not move a running session.
-[ -n "$ACCOUNT" ] && stamp="$stamp$(fleet_win_stamp_cmd @account_class "$ACCOUNT")"
 # @seed_words (issue #3331): the first turn is the person's words, so the
 # SessionStart hook carries the flow — on the window before its agent starts.
 [ -n "$SEED_WORDS" ] && stamp="$stamp$(fleet_win_stamp_cmd @seed_words "$SEED_WORDS")"

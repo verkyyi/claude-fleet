@@ -717,26 +717,14 @@ class Control:
                 "worker": matches[0], "by": actor or "hub", "observed_at": now()}
 
     def execute_switch(self, fleet, key, account=""):
-        """worker_switch (issue #2102): the sidebar's 「换到可用订阅」 on a row here.
-        dash-migrate.sh <window> to [<account>] — its own dry-run gates the move
-        (the same account, a benched or quota-unverified target, a window with no
-        Claude) and refuses with one line, touching nothing: a clean `failed`.
-        A plan that moves is dispatched detached (a cold `claude --resume` takes
-        ~25 s) and reports through the fleet's alerts, so success here means the
-        move started, never that it landed."""
-        matches, _ = self.target(fleet, key, "worker_switch")
-        window = matches[0].get("window_id", "")
-        code, output, err = self.adapter("switch", fleet["name"], window, *([account] if account else []),
-                                         timeout=120)
-        said = last_line(output if (output or b"").strip() else err)
-        if code == 2:
-            raise Unattempted("INVALID_ARGUMENT", "Switch refused on the fleet: " + said)
-        if code:
-            raise Unattempted("INVALID_STATE", "Switch refused on the fleet: " + said)
-        return {"switching": matches[0], "to": account or "active", "window": window,
-                "how": "dispatched: closes the session and resumes the same conversation on the new "
-                       "subscription; the fleet's alerts report the outcome",
-                "observed_at": now()}
+        """worker_switch (issue #2102), retired with the account pick (T550, EPIC
+        T542 C4): a session's subscription is the pool's to pick behind the
+        credential proxy, so there is nothing here to switch it to. The worker
+        still resolves (an unknown one is NOT_FOUND, as before); the write is
+        refused with one line and nothing touches the window. compat-1v: 下一批删"""
+        self.target(fleet, key, "worker_switch")
+        raise Unattempted("INVALID_STATE", "Switch refused on the fleet: 已不用：订阅由池子挑 · "
+                                           "no longer used: the pool picks the subscription")
 
     def execute_rename(self, fleet, key, new_name):
         """worker_rename (issue #2358): the sidebar's 「改名…」 on a row here — the

@@ -1,10 +1,10 @@
 #!/bin/bash
 # usage-modal-selftest.sh — hermetic wiring test for bin/usage-modal.sh (issue
-# #289 usage/account modal). The pick sets the account pointer only: moving the
-# fleet's idle sessions onto it (`migrate --idle`) and the collector's
-# `migrate --limited` on a rotation are retired (T546) — a full subscription is
-# the pool's to change. Pinned here:
-#   • neither dispatch is back;
+# #289 usage/account modal). It picks nothing since T550 (the pool picks the
+# subscription): the account table is read-only. Moving the fleet's idle
+# sessions (`migrate --idle`) and the collector's `migrate --limited` on a
+# rotation are retired (T546) too. Pinned here:
+#   • no pick (`fleet-account.sh use`) and neither dispatch is back;
 #   • none of the retired in-place restart helpers linger (they typed into panes).
 # The selection matrices themselves live in fleet-migrate-selftest.sh.
 #
@@ -28,8 +28,10 @@ fail() { printf 'usage-modal selftest FAIL: %s\n' "$1" >&2; exit 1; }
 command -v render_usage_detail >/dev/null 2>&1 \
   || fail "render_usage_detail not defined after sourcing (the modal's header renderer)"
 
-# --- the retired moves (T546): the pick no longer moves idle sessions, the
+# --- the retired pick (T550) and moves (T546): the modal sets no account, the
 # collector no longer moves a benched account's sessions
+CHECKS=$((CHECKS + 1))
+grep -Eq 'fleet-account\.sh" use|^[^#]*fzf ' "$SCRIPT" && fail "the modal must not pick an account any more (T550)"
 CHECKS=$((CHECKS + 1))
 grep -Eq "migrate --idle" "$SCRIPT" && fail "the account switch must not dispatch 'migrate --idle' any more (T546)"
 CHECKS=$((CHECKS + 1))

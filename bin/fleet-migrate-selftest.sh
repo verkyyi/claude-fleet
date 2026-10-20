@@ -1,13 +1,13 @@
 #!/bin/bash
 # selftest-parts: 4
 # fleet-migrate-selftest.sh — hermetic tests for bin/fleet-migrate.sh (issue #512:
-# move a live session onto the active account by close + `--resume` in a new window).
+# reopen a live session by close + `--resume` in a new window; since T550 it moves
+# no session between subscriptions — the pool picks behind the credential proxy).
 #
 # Two layers:
 #   1. PURE matrices, sourced: migrate_eligible (panels / hub / raw@FLEET_MAIN),
 #      migrate_selected (--account / explicit; --limited / --idle / --all /
-#      --stuck are retired, T546) and
-#      migrate_noop (target == source is no move, #567; --model exempt).
+#      --stuck are retired, T546; --target-account too, T550).
 #   2. END-TO-END on a DEDICATED tmux server on its own -L label (never the live
 #      server), the way the fleet itself isolates (issue #159) — it must be -L,
 #      not a -S shim, because fleet-migrate.sh targets servers as `tmux -L
@@ -19,14 +19,13 @@
 #        own window (= the SessionEnd hook, #403) or drops to a fake shell that
 #        RECORDS typed lines (= FLEET_CLOSE_ON_EXIT=0);
 #      • a fake launcher (FLEET_MIGRATE_LAUNCH) that logs its argv and re-runs the
-#        fake claude under the ACTIVE account's token, so the token-truth verify
-#        step has something real to read.
+#        fake claude under the token of the account it was NAMED (none: no token,
+#        the login's own), so the token-truth verify step has something to read.
 #      Cases: the hook path (new window, options carried, argv has --resume <sid>
-#      + the interrupted-turn nudge, account A → B verified), the stuck path (a
-#      claude that ignores /exit is left alone, nothing typed), the no-hook path
+#      + the interrupted-turn nudge, A → the own login verified), the stuck path
+#      (a claude that ignores /exit is left alone, nothing typed), the no-hook path
 #      (relaunch typed in place), --dry-run (nothing moves), whoami (truth heals a
-#      stale stamp), and the every-account-benched case (#567: `--account <the
-#      active one>` reports each window as already there and launches nothing).
+#      stale stamp; a pool session answers 「本会话由池子挑」).
 #
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
@@ -81,19 +80,6 @@ sel   "explicit: always"              explicit ""    ""
 # The quota failover's and the pace rebalance's selectors are retired (T546):
 # no mode selects, and the CLI refuses each with 「已不用」 (exit 2).
 for m in limited idle all stuck; do unsel "$m: retired" "$m" acctA ""; done
-
-# migrate_noop <label> <active> <model> <active-benched> — the #567 guard, every
-# caller goes through it
-noop() { ok; migrate_noop "$2" "$3" "$4" "$5" || fail "$1 — expected a no-op (no move available)"; }
-move() { ok; migrate_noop "$2" "$3" "$4" "$5" && fail "$1 — expected a real move"; }
-#      desc                                    label active model benched
-noop "same account, no model"                 acctB acctB ""   0
-move "different account"                      acctA acctB ""   0
-move "same account but --model (#524)"        acctB acctB opus 0
-move "ambient login → the pool"               ""    acctB ""   0
-move "no pool at all (empty active)"          ""    ""    ""   0
-noop "other account, but the target is benched" acctA acctB "" 1
-move "target benched, --model still relaunches" acctB acctB opus 1
 
 # ============================================================================
 # 2. end-to-end on an isolated tmux server
@@ -174,7 +160,7 @@ WIN=\$(tmux display-message -p -t "\$TMUX_PANE" '#{window_id}')
 "$FB/claude" "$WORK/claude.pl" </dev/tty
 tmux run-shell -b "tmux kill-window -t '\$WIN'"
 EOS
-# fake launcher (= fleet-claude.sh): log argv, run the fake claude on the ACTIVE token
+# fake launcher (= fleet-claude.sh): log argv, run the fake claude on the NAMED account's token
 cat > "$FB/launcher" <<EOS
 #!/bin/bash
 printf '%s\n' "\$*" >> "$WORK/launched"
@@ -193,11 +179,6 @@ chmod +x "$FB"/*
 export PATH="$FB:$PATH" FLEET_MIGRATE_LAUNCH="$FB/launcher" FLEET_TOKEN_PROBE="$FB/tokprobe"
 cleanup() { tmux -L "$LBL" kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT; trap 'exit 130' INT TERM HUP
-
-# account state: A benched (limited), B active
-bash "$BIN/fleet-account.sh" use acctB >/dev/null || fail "use acctB"
-bash "$BIN/fleet-account.sh" mark-limited acctA >/dev/null
-[ "$(bash "$BIN/fleet-account.sh" active)" = acctB ] || fail "rig: active should be acctB"
 
 mkdir -p "$WORK/wt1" "$WORK/wt2" "$WORK/wt3" "$WORK/wt4" "$WORK/wt5"
 WALL="hit your weekly limit · resets Sep 25 at 7am (Asia/Shanghai)"
@@ -225,18 +206,6 @@ TM set-window-option -t "$w1" @epic 'acme/repo#7'
 sleep 1.5
 diag() { printf 'windows: %s\nlaunched: %s\ntyped: %s\n' "$(TM list-windows -t "$SESS" -F '#{window_id}:#{window_name}' | tr '\n' ' ')" "$(cat "$WORK/launched" 2>/dev/null)" "$(cat "$WORK/typed" 2>/dev/null)"; }
 
-cat > "$FB/manual-quota" <<'EOS'
-#!/bin/bash
-[ "$1" = quota ] && [ "$2" = --refresh ] || exit 2
-state="${TMPDIR}/.claude-dash/global"
-mkdir -p "$state"
-date +%s > "$state/account.quota.ts.$$"
-mv "$state/account.quota.ts.$$" "$state/account.quota.ts"
-printf 'acctA\t2\t25\t75\t0\t0\t0\nacctB\t3\t%s\t%s\t0\t0\t0\n' "${FAKE_MANUAL_PCT:-89}" "$((100 - ${FAKE_MANUAL_PCT:-89}))"
-EOS
-chmod +x "$FB/manual-quota"
-export FLEET_MANUAL_ACCOUNT_BIN="$FB/manual-quota"
-
 SP=$(TM display-message -p '#{socket_path}')
 
 if selftest_section 1; then
@@ -244,6 +213,14 @@ if selftest_section 1; then
 TM set-window-option -t "$w1" @cc_account acctB
 ok; [ "$(bash "$SCRIPT" whoami --session "$SESS" "$w1")" = acctA ] || fail "whoami must read the token (acctA) not the stamp (acctB)"
 ok; [ "$(TM display-message -p -t "$w1" '#{@cc_account}')" = acctA ] || fail "whoami must heal the stale @cc_account stamp"
+
+# --- whoami on a pool session (T550): the session names no account — the pool
+# picks — so the answer says so; the hub's central route here (a separated login
+# reads the proxy's `picks` the same way)
+TM set-window-option -t "$w1" @cred_sid sid-pool; TM set-window-option -t "$w1" @cred_route central
+ok; bash "$SCRIPT" whoami --session "$SESS" "$w1" | grep -q '^本会话由池子挑' || fail "whoami on a pool session must say the pool picks: $(bash "$SCRIPT" whoami --session "$SESS" "$w1" 2>&1)"
+ok; [ "$(bash "$SCRIPT" whoami --verified --session "$SESS" "$w1")" = acctA ] || fail "whoami --verified still reads the token truth"
+TM set-window-option -t "$w1" -u @cred_sid; TM set-window-option -t "$w1" -u @cred_route
 
 # --- whoami with NO window id (issue #703)
 # The bug: WIDS stayed empty, and the bare "${WIDS[@]}" is a FATAL unbound variable
@@ -284,44 +261,10 @@ ok; printf '%s' "$out" | grep -q 'would /exit' || fail "dry-run must print the p
 ok; [ ! -f "$WORK/launched" ] || fail "dry-run must not launch anything"
 ok; TM display-message -p -t "$w1" '#{pane_pid}' >/dev/null 2>&1 || fail "dry-run must not close windows"
 
-# Operator-selected destinations can cross the 85% automatic ceiling, but a
-# fresh reading at/above 95% (or an unknown reading) must refuse before /exit.
-ok; out=$(FAKE_MANUAL_PCT=89 bash "$SCRIPT" --session "$SESS" --target-account acctB --dry-run "$w1")
-printf '%s' "$out" | grep -q 'would /exit' || fail "89% explicit target must be previewable: $out"
-ok; FAKE_MANUAL_PCT=95 bash "$SCRIPT" --session "$SESS" --target-account acctB "$w1" >"$WORK/manual-block.out" 2>&1 \
-  && fail '95% explicit target must be refused'
-ok; TM display-message -p -t "$w1" '#{pane_pid}' >/dev/null 2>&1 || fail '95% refusal must leave original worker alive'
-ok; bash "$SCRIPT" --session "$SESS" --target-account '../acctB' "$w1" >/dev/null 2>&1 \
-  && fail 'invalid manual target must be refused'
-ok; bash "$SCRIPT" --session "$SESS" --target-account acctB --account acctA >/dev/null 2>&1 \
-  && fail 'manual target must reject bulk migration'
-
-# --- a target that cannot log in is refused BEFORE /exit (issue #1667): acctB
-# marked by mark-reauth → the AUTOMATIC pick never lands on it (issue #1670: w1
-# stays on acctA, nothing launched); NAMED explicitly, the move leaves w1 running
-# and launches nothing, --dry-run says so, the alerts popup gets a
-# transfer-refused row; clear-reauth → the same preview no longer refuses.
-bash "$BIN/fleet-account.sh" mark-reauth acctB 'auth error on a session' >/dev/null || fail 'mark-reauth acctB'
-ok; out=$(bash "$SCRIPT" --session "$SESS" --dry-run "$w1" 2>&1)
-printf '%s' "$out" | grep -q 'already on acctA — skipped' \
-  || fail "the automatic pick must never choose a login-bad acctB (#1670): $out"
-ok; out=$(bash "$SCRIPT" --session "$SESS" --target-account acctB --dry-run "$w1" 2>&1)
-printf '%s' "$out" | grep -q 'target-auth: Claude account acctB needs a new login (reauth_required) — would be left running' \
-  || fail "dry-run must name the login refusal: $out"
-ok; out=$(bash "$SCRIPT" --session "$SESS" --target-account acctB "$w1" 2>&1)
-printf '%s' "$out" | grep -q 'target-auth: Claude account acctB needs a new login (reauth_required) — left running' \
-  || fail "a marked target must be refused: $out"
-ok; TM display-message -p -t "$w1" '#{pane_pid}' >/dev/null 2>&1 && [ ! -f "$WORK/launched" ] \
-  || fail 'a refused target must leave w1 alive and launch nothing'
-ok; grep -q $'\ttransfer-refused\t.*acctB' "$WORK/.claude-dash/global/alerts.events" 2>/dev/null \
-  || fail "a migrate refusal must record a transfer-refused event: $(cat "$WORK/.claude-dash/global/alerts.events" 2>/dev/null)"
-bash "$BIN/fleet-account.sh" clear-reauth acctB
-ok; out=$(bash "$SCRIPT" --session "$SESS" --target-account acctB --dry-run "$w1" 2>&1)
-printf '%s' "$out" | grep -q 'target-auth' && fail "a cleared mark must not refuse: $out"
-ok; printf '%s' "$out" | grep -q 'would /exit' || fail "a cleared mark must preview the move again: $out"
-unset FLEET_MANUAL_ACCOUNT_BIN
-ok; out=$(bash "$SCRIPT" --session "$SESS" --dry-run "$w1" 2>&1)
-printf '%s' "$out" | grep -q 'would /exit' || fail "a cleared mark lets the automatic pick choose acctB again: $out"
+# --- the operator's pick of a destination is retired (T550)
+out=$(bash "$SCRIPT" --session "$SESS" --target-account acctB "$w1" 2>&1); rc=$?
+ok; [ "$rc" = 2 ] && printf '%s' "$out" | grep -q '已不用' || fail "--target-account must answer 已不用 and exit 2 (rc $rc): $out"
+ok; TM display-message -p -t "$w1" '#{pane_pid}' >/dev/null 2>&1 && [ ! -f "$WORK/launched" ] || fail '--target-account must touch nothing'
 
 # --- the real thing: --account acctA moves w1 (hook), leaves w2 (stuck), relaunches w3 in place
 out=$(bash "$SCRIPT" --session "$SESS" --account acctA 2>&1)
@@ -347,7 +290,7 @@ ok; [ "$(TM display-message -p -t "$nw1" '#{@migrated_banner}')" = "$WALL" ] || 
 ok; [ "$(TM display-message -p -t "$nw1" '#{history_size}')" = 0 ] || fail "new w1's scrollback must be cleared after the resume verified"
 ok; grep -q -- '--resume sid-1111 Your previous turn was interrupted' "$WORK/launched" 2>/dev/null \
   || fail "the launcher must get --resume <sid> + the interrupted-turn nudge (launched: $(cat "$WORK/launched" 2>/dev/null))"
-ok; printf '%s' "$out" | grep -q 'w1 .*acctA → acctB' || fail "the report must verify A → B off the new process's token: $out"
+ok; printf '%s' "$out" | grep -q 'w1 .*acctA → own login' || fail "the report must verify A → the own login off the new process's token: $out"
 # #936: a DELIVERED report survives the move — cleared, the resumed session's next
 # Stop sends the parent a late "stopped" duplicate after its MERGED
 ok; [ "$(TM display-message -p -t "$nw1" '#{@reported}')" = 1 ] \
@@ -370,7 +313,7 @@ ok; [ -z "$(TM display-message -p -t "$w3" '#{@reported}')" ] \
 ok; printf '%s' "$out" | grep -q 'moved 2, skipped 1' || fail "summary must be 'moved 2, skipped 1': $out"
 
 # --- the quota failover's and the pace rebalance's selectors are retired (T546)
-for sel in --limited --idle --all --stuck "--from acctA" --quota-request; do
+for sel in --limited --idle --all --stuck "--from acctA" --quota-request "--target-account acctB"; do
   # shellcheck disable=SC2086  # "--from acctA" is two words on purpose
   out=$(bash "$SCRIPT" --session "$SESS" $sel 2>&1); rc=$?
   ok; [ "$rc" = 2 ] && printf '%s' "$out" | grep -q '已不用' || fail "$sel must answer 已不用 and exit 2 (rc $rc): $out"
@@ -385,23 +328,22 @@ if [ "$SELFTEST_SECTION" = 4 ]; then
   TM set-window-option -t "$w1" @cc_account acctB
   TM respawn-pane -k -t "$w3" "$FB/fakeshell"
   nw1=$w1
-  unset FLEET_MANUAL_ACCOUNT_BIN
   sleep 1.5
 fi
 if selftest_section 4; then
 # --- --force-bg (issue #873): a walled worker held by a background command,
-# moved by hand. Rig: w5 on A (benched; B active) with a live `sleep 97` child.
+# moved by hand. Rig: w5 on A with a live `sleep 97` child.
 w5=$(spawn w5 runner-hook-bg sid-5555 "$WORK/wt5"); sleep 1.5
 bgpid=$(cat "$WORK/bg.pid" 2>/dev/null)
 ok; [ -n "$bgpid" ] && kill -0 "$bgpid" 2>/dev/null || fail "rig: w5's background command must be running (pid '$bgpid')"
 out=$(bash "$SCRIPT" --session "$SESS" --dry-run --force-bg "$w5" 2>&1)
-ok; printf '%s' "$out" | grep -q 'w5 .*\[acctA → acctB\] would /exit' || fail "--dry-run --force-bg must plan the named window: $out $(diag)"
+ok; printf '%s' "$out" | grep -q 'w5 .*\[acctA\] would /exit' || fail "--dry-run --force-bg must plan the named window: $out $(diag)"
 ok; printf '%s' "$out" | grep -q "would stop 1 background command" && printf '%s' "$out" | grep -q "$bgpid  sleep 97" \
   || fail "--dry-run --force-bg must list the background command it would stop: $out"
 ok; kill -0 "$bgpid" 2>/dev/null || fail "--dry-run must not stop anything"
 : > "$WORK/launched"
 out=$(bash "$SCRIPT" --session "$SESS" --force-bg "$w5" 2>&1)
-ok; printf '%s' "$out" | grep -q 'w5 .*acctA → acctB' || fail "--force-bg must move w5 A → B: $out $(diag)"
+ok; printf '%s' "$out" | grep -q 'w5 .*acctA → own login' || fail "--force-bg must move w5 off A: $out $(diag)"
 nw5=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="w5"{print $1}' | head -1)
 ok; [ -n "$nw5" ] && [ "$nw5" != "$w5" ] && [ -z "$(TM display-message -p -t "$nw5" '#{@reported}')" ] \
   && printf 'case #936 unreported: new w5 @reported=%s (was empty)\n' "'$(TM display-message -p -t "$nw5" '#{@reported}')'" \
@@ -415,22 +357,16 @@ ok; grep -q -- '--resume sid-5555 Your previous turn was interrupted.* Backgroun
   || fail "the resume nudge must name the stopped command (launched: $(cat "$WORK/launched" 2>/dev/null))"
 ok; [ "$(wc -l < "$WORK/launched" | tr -d ' ')" = 1 ] || fail "the nudge must stay ONE line (the no-hook branch types it): $(cat "$WORK/launched")"
 
-# --- explicit window ids need no account filter: move w1 (now on B) again, onto
-# A — un-benched and pinned active for it (a move onto the account a window
-# already runs on is a no-op since #567, see below).
-bash "$BIN/fleet-account.sh" clear acctA >/dev/null; bash "$BIN/fleet-account.sh" use acctA >/dev/null
-ok; [ "$(bash "$BIN/fleet-account.sh" active)" = acctA ] || fail "rig: active should be acctA now"
+# --- explicit window ids need no account filter: reopen w1 again.
 : > "$WORK/launched"
 out=$(bash "$SCRIPT" --session "$SESS" --nudge 'custom nudge' "$nw1" 2>&1)
 ok; grep -q -- '--resume sid-1111 custom nudge' "$WORK/launched" 2>/dev/null || fail "--nudge must replace the default nudge (launched: $(cat "$WORK/launched"); out: $out)"
-ok; printf '%s' "$out" | grep -q 'w1 .*acctB → acctA' || fail "the explicit move must verify B → A: $out"
+ok; printf '%s' "$out" | grep -q 'w1 .*→ own login' || fail "the explicit reopen must verify where it landed: $out"
 
 # --- --model <m> (issue #524): a model-capped session is relaunched on the fallback
 # model. The launcher gets --model BEFORE --resume (fleet-claude.sh then sees an
 # explicit model and skips its FLEET_MODEL default), the default nudge names the
-# MODEL cap rather than the subscription, and the report says which model. w1 is
-# on A and A is active: a same-account relaunch, which is exactly what --model
-# is for — the #567 no-op guard must not catch it.
+# MODEL cap rather than the subscription, and the report says which model.
 nw1=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="w1"{print $1}' | head -1)
 : > "$WORK/launched"
 out=$(bash "$SCRIPT" --session "$SESS" --model opus "$nw1" 2>&1)
@@ -441,57 +377,6 @@ ok; grep -q -- 'model usage limit' "$WORK/launched" 2>/dev/null || fail "--model
 ok; grep -q -- 'Continue replying in the language this session was using' "$WORK/launched" 2>/dev/null \
   || fail "the default nudge must carry the language rule (issue #620) (launched: $(cat "$WORK/launched" 2>/dev/null))"
 ok; printf '%s' "$out" | grep -q -- 'on opus' || fail "the report must name the fallback model: $out"
-
-# --- every account benched (issue #567). State: w1 on A (moved above), w2 on A
-# (stuck), w3 has no Claude any more (its fake shell only records), plus a fresh
-# w4 on B; active = A. Bench B first (pointer stays on A), then A: nothing is
-# eligible, so the pointer stays on A — there is nowhere better. `--account
-# acctA` — what the quota watch's ceiling branch fans out after benching A — must
-# NOT close + resume w1/w2 onto A again: each is reported as already there (w2
-# before any /exit is typed), nothing is launched, the windows survive, exit 0.
-# And a benched window on ANOTHER benched account (w4 on B) is not bounced onto A
-# either: nowhere to move.
-nw1=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="w1"{print $1}' | head -1)
-w4=$(spawn w4 runner-hook-b sid-4444 "$WORK/wt4"); TM set-window-option -t "$w4" @cc_account acctB; sleep 1.5
-bash "$BIN/fleet-account.sh" mark-limited acctB >/dev/null
-bash "$BIN/fleet-account.sh" mark-limited acctA >/dev/null
-ok; [ "$(bash "$BIN/fleet-account.sh" active)" = acctA ] || fail "rig: with A and B both benched, active must fall back to acctA (got $(bash "$BIN/fleet-account.sh" active))"
-: > "$WORK/launched"
-out=$(bash "$SCRIPT" --session "$SESS" --account acctA 2>&1); rc=$?
-ok; [ "$rc" = 0 ] || fail "--account onto itself must still exit 0 (got $rc): $out"
-ok; printf '%s' "$out" | grep -q 'w1 .*already on acctA — skipped' || fail "w1 (on A, active A) must be reported as already there: $out $(diag)"
-ok; printf '%s' "$out" | grep -q 'w2 .*already on acctA — skipped' || fail "w2 (stuck, on A) must be skipped BEFORE any /exit is typed: $out $(diag)"
-ok; printf '%s' "$out" | grep -q 'moved 0, skipped 2' || fail "summary must be 'moved 0, skipped 2': $out"
-ok; [ ! -s "$WORK/launched" ] || fail "a same-account move must launch nothing (launched: $(cat "$WORK/launched"))"
-ok; TM display-message -p -t "$nw1" '#{pane_pid}' >/dev/null 2>&1 || fail "a same-account move must not close the window — $out $(diag)"
-# --dry-run explains the same skip, for --account and for named windows (w4: B → A, both benched)
-out=$(bash "$SCRIPT" --session "$SESS" --dry-run --account acctA 2>&1)
-ok; printf '%s' "$out" | grep -q 'already on acctA — skipped' || fail "--dry-run must print the same-account skip: $out"
-ok; ! printf '%s' "$out" | grep -q 'would /exit' || fail "--dry-run must plan no /exit for a same-account move: $out"
-out=$(bash "$SCRIPT" --session "$SESS" --dry-run "$nw1" "$w4" 2>&1)
-ok; printf '%s' "$out" | grep -q 'w1 .*already on acctA — skipped' || fail "a benched window whose account is still the active one must be skipped: $out"
-ok; printf '%s' "$out" | grep -q 'w4 .*nowhere to move (acctB → acctA, benched too) — skipped' || fail "w4 must not bounce from benched B onto benched A: $out $(diag)"
-ok; ! printf '%s' "$out" | grep -q 'would /exit' || fail "with every account benched nothing must be planned: $out"
-# …and so is the dash key's move (#873): a row with no account to go to is
-# refused by the same guard, background override or not
-out=$(bash "$SCRIPT" --session "$SESS" --dry-run --force-bg "$w4" 2>&1)
-ok; printf '%s' "$out" | grep -q 'w4 .*nowhere to move' && ! printf '%s' "$out" | grep -q 'would /exit' \
-  || fail "--force-bg with every account benched must refuse: $out"
-# …but the SAME windows move once another account is eligible again
-bash "$BIN/fleet-account.sh" clear acctB >/dev/null
-ok; [ "$(bash "$BIN/fleet-account.sh" active)" = acctB ] || fail "rig: B un-benched ⇒ active rotates to acctB (got $(bash "$BIN/fleet-account.sh" active))"
-out=$(bash "$SCRIPT" --session "$SESS" --dry-run --account acctA 2>&1)
-ok; printf '%s' "$out" | grep -q 'w1 .*\[acctA → acctB\] would /exit' || fail "with B eligible again, --account acctA must plan the move A → B: $out"
-
-# Manual choice can select a soft-benched A while global active stays B. The
-# resumed process must carry A's token and a Claude binding, never B or an
-# inherited Codex target.
-export FLEET_MANUAL_ACCOUNT_BIN="$FB/manual-quota"
-out=$(FAKE_MANUAL_PCT=89 bash "$SCRIPT" --session "$SESS" --target-account acctA "$w4" 2>&1)
-ok; printf '%s' "$out" | grep -q 'w4 .*acctB → acctA' || fail "manual choice must move B → soft-benched A: $out"
-ok; [ "$(sed -n '1p' "$WORK/manual-env")" = acctA ] || fail 'launcher must be pinned to the selected account'
-ok; sed -n '2p' "$WORK/manual-env" | grep -q '"agent":"claude","label":"acctA"' || fail 'launcher must receive the Claude target binding'
-ok; [ "$(bash "$BIN/fleet-account.sh" active)" = acctB ] || fail 'manual move must leave global active account unchanged'
 
 fi
 
@@ -506,7 +391,6 @@ if selftest_section 2; then
 # $TMUX_PANE sits in, or the target's Claude among the caller's ancestors — and
 # `--force-self` runs the move from a detached process that waits for the turn to
 # end, so SessionEnd killing the caller's whole tree still leaves a new window.
-# State here: acctA benched, acctB active — a window on A is a real move.
 
 # pure: pid_is_ancestor
 ok; pid_is_ancestor 1 $$ || fail "pid_is_ancestor: pid 1 is everyone's ancestor"
@@ -600,7 +484,7 @@ ok; TM display-message -p -t "$w9" '#{pane_pid}' >/dev/null 2>&1 && kill -0 "$cp
 ok; ! grep -q 'sid-9999' "$WORK/launched" 2>/dev/null || fail "…and must not relaunch yet (launched: $(cat "$WORK/launched"))"
 # the turn ends (the Stop hook marks `done`): /exit, the runner kills the window —
 # the SessionEnd that killed the caller's whole tree in the incident — and a NEW
-# window still opens, resumed on acctB
+# window still opens, resumed
 TM set-window-option -t "$w9" @claude_state "done"
 LOG="$FLEET_CONF_DIR/fleets/$SESS/migrate-self.log"
 nw9=''
@@ -613,7 +497,7 @@ ok; [ -n "$nw9" ] || fail "--force-self: a NEW self9 window must open after Sess
 ok; ! kill -0 "$cp9" 2>/dev/null || fail "the old Claude (pid $cp9) must be gone after the move"
 ok; grep -q -- '--resume sid-9999' "$WORK/launched" 2>/dev/null || fail "the detached move must resume the same session (launched: $(cat "$WORK/launched" 2>/dev/null))"
 ok; [ "$(TM display-message -p -t "$nw9" '#{@worktree}')" = "$WORK/x-scratch-7" ] || fail "the new window must carry the worktree binding"
-ok; grep -q '✓ self9 .*acctA → acctB' "$LOG" 2>/dev/null || fail "the detached move must log its verified result: $(cat "$LOG" 2>/dev/null)"
+ok; grep -q '✓ self9 .*acctA → own login' "$LOG" 2>/dev/null || fail "the detached move must log its verified result: $(cat "$LOG" 2>/dev/null)"
 ok; grep -q 'turn ended after' "$LOG" 2>/dev/null || fail "the detached move must log that it waited for the turn to end: $(cat "$LOG" 2>/dev/null)"
 # part 3: the children's parent pointer. @origin is the KEY (scratch-7), never a
 # window id, so the resumed window — same worktree, new id — IS the parent again:
@@ -650,13 +534,13 @@ wl=$(spawn wloop runner-hook sid-loop "$WORK/wtl"); wn=$(spawn wnoloop runner-ho
 TM set-window-option -t "$wl" @claude_state 'done'; TM set-window-option -t "$wn" @claude_state 'done'
 sleep 1.5
 : > "$WORK/launched"
-out=$(bash "$SCRIPT" --session "$SESS" --target-account acctB "$wl" 2>&1)
+out=$(bash "$SCRIPT" --session "$SESS" "$wl" 2>&1)
 for _ in $(seq 1 30); do grep -q 'sid-loop' "$WORK/launched" 2>/dev/null && break; sleep 0.5; done
 ok; printf '%s' "$out" | grep -q "wloop ($wl): a pending Loop rides the resume: /loop check CI, it's slow" \
   || fail "a pending Loop must be named on the move: $out $(diag)"
 ok; grep -qF -- "--resume sid-loop /loop check CI, it's slow" "$WORK/launched" 2>/dev/null \
   || fail "the resume's first turn must re-enter the Loop, its text whole (launched: $(cat "$WORK/launched" 2>/dev/null))"
-out=$(bash "$SCRIPT" --session "$SESS" --target-account acctB "$wn" 2>&1)
+out=$(bash "$SCRIPT" --session "$SESS" "$wn" 2>&1)
 for _ in $(seq 1 30); do grep -q 'sid-noloop' "$WORK/launched" 2>/dev/null && break; sleep 0.5; done
 ok; grep -qx -- "--resume sid-noloop" "$WORK/launched" 2>/dev/null \
   || fail "nothing pending ⇒ a bare resume, as before (launched: $(cat "$WORK/launched" 2>/dev/null)) $out"
@@ -677,12 +561,12 @@ printf '#!/bin/sh\n[ "$2" = "%s" ] || { echo "launch: wrong window $2" >&2; exit
 chmod +x "$FB/tcheck-no" "$FB/tcheck-ok"
 sleep 1.5
 : > "$WORK/launched"; : > "$WORK/launch-opts"
-out=$(FLEET_MIGRATE_TASK_CHECK="$FB/tcheck-no" bash "$SCRIPT" --session "$SESS" --target-account acctB "$wt9" 2>&1)
+out=$(FLEET_MIGRATE_TASK_CHECK="$FB/tcheck-no" bash "$SCRIPT" --session "$SESS" "$wt9" 2>&1)
 ok; printf '%s' "$out" | grep -q "task binding: task generation is terminal — left running" \
   || fail "#4974: a binding the record no longer holds must leave the session running: $out"
 ok; TM display-message -p -t "$wt9" '#{pane_pid}' >/dev/null 2>&1 && [ ! -s "$WORK/launched" ] \
   || fail "#4974: a refused task binding must close nothing and launch nothing ($(diag))"
-out=$(FLEET_MIGRATE_TASK_CHECK="$FB/tcheck-ok" bash "$SCRIPT" --session "$SESS" --target-account acctB "$wt9" 2>&1)
+out=$(FLEET_MIGRATE_TASK_CHECK="$FB/tcheck-ok" bash "$SCRIPT" --session "$SESS" "$wt9" 2>&1)
 for _ in $(seq 1 30); do grep -q 'sid-task' "$WORK/launched" 2>/dev/null && break; sleep 0.5; done
 nwt=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="wtask"{print $1}' | head -1)
 ok; [ -n "$nwt" ] && [ "$nwt" != "$wt9" ] || fail "#4974: the task session must reopen in a new window: $out $(diag)"

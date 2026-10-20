@@ -180,7 +180,6 @@ inert reap    bash "$BIN/dash-reap.sh" hdr;                has "C: ⌃x reap ref
 inert restore bash "$BIN/dash-restore-session.sh" hdr;     eq  "C: ⌃o restore restores nothing" "$out" ""
 inert pin     bash "$BIN/dash-pin-toggle.sh" hdr;          eq  "C: pin" "$out" ""
 inert rename  bash "$BIN/dash-rename.sh" hdr;              eq  "C: rename arms nothing" "$out" ""
-inert migrate bash "$BIN/dash-migrate.sh" hdr;             eq  "C: migrate" "$out" ""
 # (the dash's enter / PR / fold / answer binds went with the dash, issue #4902;
 # these are the row scripts ⌘P still runs)
 

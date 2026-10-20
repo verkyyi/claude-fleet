@@ -926,7 +926,7 @@ too. `ccquota place … <repo> scratch <fleet UUID>` is the CLI form.
 | `worker_resume(worker_id, idempotency_key)` | Reopen a stopped worker from its `/fleet-history` row in a new window (`dash-restore-session.sh`) | `worker:resume` on the worker's Fleet |
 | `worker_answer(worker_id, answer, idempotency_key)` | Answer what the worker's pane is asking (#1487): `answer` = `yes` / `no` presses the plain Yes / the No of an open **permission prompt** in the caller's name (`fleet-permission.sh --allow` / `--deny --by <actor>`; never a "don't ask again" row); option numbers (`2`, `1,3`; one per question, space-separated) answer an `AskUserQuestion` (`fleet-answer.sh --answer`). Refused — the script's own reason verbatim — when nothing is pending or the screen does not show the row | `worker:answer` on the worker's Fleet |
 | `worker_reap(worker_id, idempotency_key)` | The dash's confirmed reap (#1487): `dash-reap.sh <key> --yes` — close the window, remove the worktree when clean (a dirty one is KEPT); an unlanded Issue stays open with its claim released (#1542); a live or too-young agent is refused with the reason (`skip:live`) | `worker:reap` on the worker's Fleet |
-| `worker_switch(worker_id, idempotency_key, account?)` | Move a session onto an available subscription (#2102): `dash-migrate.sh <window> to [<account>]` — close + `claude --resume` of the same conversation; refused with the migrate's one-line reason when the target is the source, benched or over its quota gate | `worker:stop` on the worker's Fleet |
+| `worker_switch(worker_id, idempotency_key, account?)` | Retired (T550): a session's subscription is the pool's pick, so the node answers every call `failed` · `INVALID_STATE` 「已不用：订阅由池子挑」 and touches nothing (kept one version for an older client) | `worker:stop` on the worker's Fleet |
 | `worker_rename(worker_id, name, idempotency_key)` | Change the window's display name (#2358): `rename-window` + `automatic-rename off` on the one window holding the worker's `@fleet_id` (checked at action time — a recycled window id is refused); the key, Issue, identity and reap policy are untouched. `name`: 1–64 characters, no control character | `worker:message` on the worker's Fleet |
 | `worker_reap_policy(worker_id, policy, idempotency_key)` | Change when the fleet may close the session on its own (#2368): `fleet-reap-policy.sh set <policy>` — the setter the session's own `set_reap` runs — on the one window holding the worker's `@fleet_id` (checked at action time, as for a rename); the result carries the canonical policy (an `at:HH:MM` resolved on the node). `policy`: `merged[:<dur>]` · `done[:<dur>]` · `loop-end` · `at:<ISO|HH:MM|epoch>` · `keep` (`bin/fleet_reap_policy.py`'s grammar, checked by the hub and again by the node) | `worker:reap` on the worker's Fleet |
 | `worker_pin(worker_id, pin, idempotency_key)` | Pin (`on`) or unpin (`off`) a session to the top of its person's lists (#3517): `@pin` set or unset on the one window holding the worker's `@fleet_id` (checked at action time, as for a rename); a set, never a toggle, so a retry lands the same way. The inventory's column 32 `pin=` carries it back to every list | `worker:message` on the worker's Fleet |
@@ -1346,18 +1346,11 @@ with a code, never `unknown`:
   malformed pick (`INVALID_ARGUMENT`), no named human (`FORBIDDEN`); keys sent
   but never confirmed are `unknown`. A hibernating worker asks nothing
   (`INVALID_STATE`).
-- `worker_switch` (issue #2102) is the sidebar's 「换到可用订阅」 on a row on
-  another machine — the Fleet Shell's only way to move a walled session, the
-  no-repo guide included, since every row it draws is remote. The node resolves
-  the worker (key or identity: a no-repo session has only its identity) to its
-  window and runs `dash-migrate.sh <window> to [<account>]` on the fleet's own
-  server: the migrate's own dry-run refuses the same, a benched or an
-  unverifiable target, or a pane with no Claude, in one line (`failed`,
-  `INVALID_STATE`); a plan that moves is dispatched detached and the fleet's
-  alerts report the landing — `succeeded` means the move started. `account`
-  (optional, one label) names the target, else the fleet's active pick. It
-  needs `worker:stop`: a switch is a stop + resume of the same conversation, so
-  no grant gains a new scope.
+- `worker_switch` (issue #2102) was the sidebar's 「换到可用订阅」 on a row on
+  another machine. Retired with the account pick (T550, EPIC T542 C4): the node
+  still resolves the worker (an unknown one is `NOT_FOUND`) and answers
+  `failed` · `INVALID_STATE` 「已不用：订阅由池子挑」, touching nothing; the menu
+  item is gone. Kept one version for an older client.
 - `worker_rename` (issue #2358) is the sidebar's 「改名…」 on a row on another
   machine — every row the Fleet Shell draws is remote, so without it a client
   could not rename at all. The new name is typed on the view's own input line
@@ -1379,9 +1372,7 @@ with a code, never `unknown`:
   runs — `fleet-transfer.sh --session <fleet> --window <id> --to <agent>` — after
   its `--dry-run` passes; a rollback or failure later is that machine's ▲ alert
   and the row's `@transfer_note`. It needs `worker:stop`, as a switch: the
-  session exits and its task continues in the other agent. The menu's 「换到可用订阅」
-  on such a row is `worker_switch` (that login's active subscription — its
-  accounts are not this machine's list). 打开 PR · 唤醒 · 保持唤醒 stay local: a far
+  session exits and its task continues in the other agent. 打开 PR · 唤醒 · 保持唤醒 stay local: a far
   row carries no PR number and no sleep state, and a wake past that machine's
   session cap is that machine's call.
 - `worker_reap_policy` (issue #2368) is ⌘P's 「改回收方式…」 on a row on another machine, and `fleet reap` on a

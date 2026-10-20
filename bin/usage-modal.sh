@@ -8,14 +8,8 @@
 #   • usage DETAIL as the header — the local 5h/7d proxy + the official
 #     weekly/N-hour limit line (which limit + reset), read via usage-lib.sh — the
 #     SAME shared reader the status bar's limit alarms use, so they can't drift;
-#   • the account POOL as the selectable body — Enter sets the account new
-#     sessions START FROM (via bin/fleet-claude.sh); a running session keeps its
-#     account (moving the idle ones onto it is retired, T546: a full
-#     subscription is the pool's to change); Esc cancels.
-#     There is NO fixed account: the pick is a starting point, not a pin — every
-#     spawn re-picks on ccquota headroom (issue #513) and a limited account is
-#     rotated past. So the header names no "current" account (the old
-#     `[now: X]` was a stale snapshot) and the footer shows no ◉ chip.
+#   • this login's accounts as a READ-ONLY table (fleet-account.sh list): nothing
+#     here picks one since T550 — the pool picks behind the credential proxy.
 # On a SINGLE-account install (no token files) there is no pool to pick: it shows
 # the usage detail only + a pointer to register accounts, and holds for a key.
 # Run inside a fleet popup.
@@ -81,54 +75,20 @@ case "$listing" in
     # for a key — a read-only usage popup (issue #289 folded the old usage-popup
     # here). NB no `--summary` consumer remains, so that mode was dropped.
     render_usage_detail
-    printf '\n  %sregister accounts to switch here — see docs/dev/MULTI-ACCOUNT.md%s\n' "$UDIM" "$UR"
+    printf '\n  %sno accounts registered on this login — the pool picks the subscription%s\n' "$UDIM" "$UR"
     printf '  %spress any key to close%s\n' "$UDIM" "$UR"
     IFS= read -rsn1 _ 2>/dev/null || true
     exit 0 ;;
 esac
 
-# --- MULTI-account: usage/limit DETAIL as the header, the account pool as the
-# selectable body. The 5h/7d proxy + the official weekly/N-hour % (fresh-gated)
-# come from usage-lib.sh, the same shared reader the footer colors and the
-# single-account branch above renders, so the header can't drift. Empty when
-# neither cache has anything. ---
-usg=$(fleet_usage_summary_plain)
-
-# The active account is NOT shown: the account new sessions get is re-picked per
-# spawn (ccquota headroom, #513), so a `[now: X]` in the header would be a stale
-# snapshot of a moving target. The ● in the pool table marks it for the curious.
-hdr="pick the account new sessions start from (re-picked per spawn on quota headroom)"
-[ -n "$usg" ] && hdr="${usg}"$'\n'"${hdr}"
-# The keys are the popup frame's bottom hint line (issue #1619), one line that
-# fits 54 columns; a tap on its ✕ closes, as the header chip did.
-. "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-popup-lib.sh"
-fleet_fzf_hint "$(fleet_ui_t hint_usage)" "$hdr"
-fleet_fzf_click 'transform:case "$FZF_CLICK_FOOTER_WORD$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac'
-
-# --header-lines=1 pins the table's column-title row (line 1 of `list`) so it
-# stays aligned with the data rows and out of the selectable set; the usage
-# summary rides above it via --header. Data rows lead with the bare label, so
-# `awk '{print $1}'` recovers the pick even with the trailing ANSI in STATE.
-# The `[✕ close]` button chip in $hdr + the click-header bind add an iPad/Termius
-# tap-to-dismiss where Escape is a reach (issue #346): tapping ✕/close aborts fzf
-# → empty pick → exit. Bracketed as a button (issue #381), so the clicked word is
-# `[✕` or `close]` — the case globs *✕*|*close*. The pinned column-title row
-# carries no ✕/close, so a tap there never fires the bind.
-pick=$(printf '%s\n' "$listing" \
-  | fzf --ansi --no-sort --layout=reverse --height=100% --header-lines=1 \
-        --prompt='account ▸ ' \
-        ${FZF_HINT[@]+"${FZF_HINT[@]}"} ${FZF_CLICK[@]+"${FZF_CLICK[@]}"} \
-  | awk '{print $1}')
-
-[ -n "$pick" ] || exit 0
-if bash "$BIN/fleet-account.sh" use "$pick" >/dev/null 2>&1; then
-  now=$(bash "$BIN/fleet-account.sh" active 2>/dev/null)
-  if [ "$now" = "$pick" ]; then
-    msg="fleet: new sessions start from  ${pick}"
-  else
-    msg="fleet: ${pick} is limited — new sessions start from  ${now}"
-  fi
-  tmux display-message "$msg"
-fi
+# --- MULTI-account: the usage detail, then this login's accounts as a READ-ONLY
+# table. Nothing here picks one any more (T550, EPIC T542 C4): a session's
+# subscription is the pool's pick behind the credential proxy, else this login's
+# own login — so there is nothing to choose, only to read.
+render_usage_detail
+printf '\n%s\n' "$listing"
+printf '\n  %s订阅由池子挑 · the pool picks the subscription%s\n' "$UDIM" "$UR"
+printf '  %spress any key to close%s\n' "$UDIM" "$UR"
+IFS= read -rsn1 _ 2>/dev/null || true
 
 fi

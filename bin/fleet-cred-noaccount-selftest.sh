@@ -11,6 +11,10 @@
 #   C  leased, but zero Claude accounts (the allowlists): 403 says none is allowed
 #   D  a bad state is refused; a verdict that does not change is not rewritten
 #   E  the 403 carries no token; the verdict file holds none
+#   F  no pool, two labels in accounts/ (T550, EPIC T542 C4): bin/fleet-claude.sh
+#      opens the session on the login's own login — it asks fleet-account.sh
+#      nothing and exports no account's token; a NAMED account (a migrate /
+#      handoff pin) is the one exception
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d "/tmp/cred-noacct-st.XXXXXX")
@@ -68,5 +72,33 @@ n1=$(grep -c '"ev": "lease"' "$SB/proxy.log" 2>/dev/null)
 # E
 ! grep -q 'fcp1\.' "$ST/lease.json" "$SB/proxy.log" 2>/dev/null && pass "E no session credential in the verdict or the log" \
   || fail "E a credential leaked"
+
+# F — the launcher picks no account (T550)
+mkdir -p "$SB/fbin" "$SB/fconf" "$SB/facc"
+ln -s "$BIN/fleet-claude.sh" "$SB/fbin/fleet-claude.sh"; ln -s "$BIN/fleet-lib.sh" "$SB/fbin/fleet-lib.sh"
+[ -f "$BIN/fleet-client-core.sh" ] && ln -s "$BIN/fleet-client-core.sh" "$SB/fbin/fleet-client-core.sh"
+cat > "$SB/fbin/fleet-account.sh" <<EOF
+#!/bin/sh
+echo "\$*" >> "$SB/account.calls"
+case "\${1:-}" in active) echo acct-one ;; token) case "\${2:-}" in acct-one) echo tok-one ;; acct-two) echo tok-two ;; esac ;; esac
+exit 0
+EOF
+cat > "$SB/fbin/claude" <<EOF
+#!/bin/sh
+printf '%s|%s' "\${CLAUDE_CODE_OAUTH_TOKEN:-}" "\${CLAUDE_SECURESTORAGE_CONFIG_DIR:-}" > "$SB/claude.env"
+EOF
+chmod +x "$SB/fbin/fleet-account.sh" "$SB/fbin/claude"
+printf 'tok-one\n' > "$SB/facc/acct-one"; printf 'tok-two\n' > "$SB/facc/acct-two"
+launch() { env -i HOME="$SB" PATH="$SB/fbin:/usr/bin:/bin" FLEET_CONF_DIR="$SB/fconf" FLEET_ACCOUNTS_DIR="$SB/facc" \
+             FLEET_MOD=0 FLEET_AGENT_CFG=0 FLEET_PRETRUST=0 FLEET_STATUS_7501=0 "$@" bash "$SB/fbin/fleet-claude.sh" -p hi >/dev/null 2>&1; }
+rm -f "$SB/account.calls" "$SB/claude.env"; launch
+[ "$(cat "$SB/claude.env" 2>/dev/null)" = "|" ] && pass "F no pool, two accounts: the login's own login, no token exported" \
+  || fail "F the launcher exported an account: '$(cat "$SB/claude.env" 2>/dev/null)'"
+[ ! -s "$SB/account.calls" ] && pass "F …and fleet-account.sh was asked nothing (accounts/ unread)" \
+  || fail "F the launcher asked fleet-account.sh: $(cat "$SB/account.calls")"
+rm -f "$SB/account.calls" "$SB/claude.env"; launch FLEET_ACCOUNT_LABEL=acct-two
+[ "$(cat "$SB/claude.env" 2>/dev/null)" = "tok-two|" ] && ! grep -q '^active' "$SB/account.calls" 2>/dev/null \
+  && pass "F a named account (a handoff pin) is the one exported, never a pick" \
+  || fail "F named: '$(cat "$SB/claude.env" 2>/dev/null)' calls: $(cat "$SB/account.calls" 2>/dev/null)"
 
 [ "$FAIL" = 0 ] && echo "fleet-cred-noaccount-selftest: OK" || { echo "fleet-cred-noaccount-selftest: FAILED"; exit 1; }

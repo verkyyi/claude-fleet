@@ -13,9 +13,9 @@
 #   • model_quota_sync (every fetch) — seeds the model-limited ledger with the
 #     REAL reset, drops ccquota's row once the window is available again, and
 #     treats a banner row as a refresh hint: an OLDER reading cannot clear it.
-#   • the spawn, end to end through the REAL fleet-claude.sh + fleet-account.sh:
-#     A capped / B allowed → launches on B with FLEET_MODEL; both capped → the
-#     fallback; no banner in any pane at any point.
+#   • the spawn, end to end through the REAL fleet-claude.sh: since T550 (EPIC
+#     T542 C4) it picks no account and swaps no model, whatever the caps say —
+#     the login's own login, FLEET_MODEL; no banner in any pane at any point.
 #   • the provider-aware selector ranks an account that runs FLEET_MODEL first.
 #   • the degenerate case: a payload with no `models` leaves the ledger unopened
 #     and the spawn exactly where it was.
@@ -107,7 +107,7 @@ fetch
 eq "no models: model-quota prints nothing" "" "$(acct model-quota)"
 eq "no models: the ledger is never opened" no "$([ -e "$LEDGER" ] && echo yes || echo no)"
 rows_plain=$(cat "$G/account.quota")
-eq "no models: the spawn lands on the best-5h account with FLEET_MODEL" "tok-a fable" "$(spawn)"
+eq "no models: the spawn picks no account, runs FLEET_MODEL (T550)" " fable" "$(spawn)"
 
 # --- parse ----------------------------------------------------------------------
 reset_state; payload "$(fm rejected 100 $RA)" "$(fm allowed 9 $RB)"
@@ -132,27 +132,25 @@ fetch
 eq "sync: A's cap is in the ledger until ccquota's reset + buffer" "$(( RA + 60 ))" "$(acct model-limited-until a fable)"
 eq "sync: B has no cap" 0 "$(acct model-limited-until b fable)"
 eq "sync: the row names ccquota, not a banner" "ccquota: claude-fable-5-1 rejected 100%" "$(awk -F'\t' '$1=="a"{print $4}' "$LEDGER")"
-eq "spawn: lands on B with FLEET_MODEL (before any turn)" "tok-b fable" "$(spawn)"
+eq "spawn: A capped — still no pick, FLEET_MODEL (the pool picks; T550)" " fable" "$(spawn)"
 eq "spawn: no pane was ever read for a banner" 0 "$(cat "$WORK/tmux.log" 2>/dev/null | grep -c capture-pane)"
 eq "inventory: model_primary is 0 on A, 1 on B (the selector's field 11)" "a 0 b 1" \
    "$(run env FLEET_MODEL=fable bash "$WORK/bin/fleet-account.sh" _claude-inventory 2>/dev/null | awk -F'\t' '{printf "%s%s %s",s,$1,$11; s=" "}')"
 m1=$(cksum < "$LEDGER"); fetch
 eq "sync: the same reading again does not rewrite the ledger" "$m1" "$(cksum < "$LEDGER")"
 
-# --- every account capped → the fallback ------------------------------------------
+# --- every account capped → still FLEET_MODEL at launch (T550: no cap swap) -------
 payload "$(fm rejected 100 $RA)" "$(fm rejected 100 $RB)"
 fetch
 eq "both capped: B's cap is recorded too" "$(( RB + 60 ))" "$(acct model-limited-until b fable)"
-got=$(spawn)
-eq "both capped: the spawn launches on FLEET_MODEL_FALLBACK" opus "${got#* }"
-eq "both capped: …on the ordinary best account" tok-a "${got% *}"
+eq "both capped: the launcher swaps nothing (relaunch is fleet-model-switch.sh's)" " fable" "$(spawn)"
 
 # --- the window opens again → ccquota's own row is dropped -------------------------
 payload "$(fm allowed 0 $((RA + 7 * 86400)))" "$(fm rejected 100 $RB)"
 fetch
 eq "reopened: A's ccquota row dropped" 0 "$(acct model-limited-until a fable)"
 eq "reopened: B still capped" "$(( RB + 60 ))" "$(acct model-limited-until b fable)"
-eq "reopened: the spawn is back on A with FLEET_MODEL" "tok-a fable" "$(spawn)"
+eq "reopened: the spawn is unchanged — no pick, FLEET_MODEL" " fable" "$(spawn)"
 
 # --- a banner is a refresh hint: only a NEWER reading clears it ----------------
 reset_state

@@ -55,7 +55,7 @@ LOG="$W/calls.log"; : > "$LOG"
 
 # --- the stubs: one line per call, `name|arg|arg|…` ----------------------------------
 for s in fleet-task-record.sh open-url.sh fleet-permission.sh fleet-answer.sh fleet-peer-send.sh dash-pin-toggle.sh \
-         fleet-reap-policy.sh fleet-worker-stop.sh fleet-manual-sub.sh dash-migrate.sh \
+         fleet-reap-policy.sh fleet-worker-stop.sh \
          fleet-transfer.sh dash-reap.sh dash-rename.sh fleet-row-remote.sh; do
   cat > "$W/stub/$s" <<EOF
 #!/bin/bash
@@ -63,7 +63,6 @@ for s in fleet-task-record.sh open-url.sh fleet-permission.sh fleet-answer.sh fl
 case "$s:\$*" in
   fleet-task-record.sh:get\ T5) printf '{"task":{"id":"T5","pr":"acme/app#41"},"live":{}}\n' ;;
   fleet-task-record.sh:get\ T6) exit 1 ;;
-  fleet-manual-sub.sh:list*) printf 'account\t5h\t7d\tstate\nacct1\t20%%\t40%%\t可迁入\nacct2\t5%%\t9%%\t可迁入\n' ;;
   dash-rename.sh:*) exec bash "$BIN/dash-rename.sh" "\$@" ;;
   fleet-row-remote.sh:*) exec bash "$BIN/fleet-row-remote.sh" "\$@" ;;
   dash-reap.sh:*) printf 'reaped:clean\n' ;;
@@ -72,7 +71,7 @@ exit 0
 EOF
 done
 export FLEET_VIEW_ACT_BIN="$W/stub"
-calls() { grep -v -e '^fleet-task-record.sh|get|' -e '^fleet-manual-sub.sh|list' "$LOG"; }
+calls() { grep -v -e '^fleet-task-record.sh|get|' "$LOG"; }
 reset() { : > "$LOG"; }
 
 # --- the fleet, its 看台 and the rows --------------------------------------------------
@@ -146,10 +145,10 @@ pass "A  every sidebar menu item is an action here (or row-less, C2 / C7); each 
 # --- B: which actions a row gets -----------------------------------------------------
 ids() { qo view-menu --view fl@view-v1 "$1" | awk -F '\t' '{ print $1 }' | tr '\n' ' '; }
 m1=$(ids "$W1")
-for a in enter shell pr message rename pin reappol stop sub agent reap; do
+for a in enter shell pr message rename pin reappol stop agent reap; do
   case " $m1 " in *" $a "*) ;; *) fail "B: done row lacks $a: $m1" ;; esac
 done
-for a in answer wake awake resume; do case " $m1 " in *" $a "*) fail "B: done row has $a: $m1" ;; esac; done
+for a in answer wake awake resume sub; do case " $m1 " in *" $a "*) fail "B: done row has $a: $m1" ;; esac; done
 qo view-menu --view fl@view-v1 "$W1" | grep -q $'^pr\t打开 PR #41' || fail "B: PR label: $(qo view-menu --view fl@view-v1 "$W1")"
 qo view-menu --view fl@view-v1 "$W4" | grep -q $'^pr\tPR ?（入口没响应）' || fail "B: a hub that does not answer reads PR ?: $(qo view-menu --view fl@view-v1 "$W4")"
 case " $(ids "$W2") " in *" pr "*) fail "B: a row with no task record offers a PR" ;; esac
@@ -158,13 +157,14 @@ case " $(ids "$W5") " in *" wake "*|*" awake "*) fail "B: an old sleeping window
 case " $(ids "$W5") " in *" stop "*) ;; *) fail "B: an old sleeping window lacks stop: $(ids "$W5")" ;; esac
 m3=$(qo view-menu --view fl@view-v1 "$W3")
 grep -q $'^resume\t恢复' <<< "$m3" || fail "B: ended exited row lacks 恢复: $m3"
-# 换账号 / 换 Codex on another machine's row (issue #4184): its hub writes; pr
-# stays this machine's (no PR on a far row)
-[ "$(ids "$MU/far1")" = "enter shell message rename pin reappol stop sub agent evidence reap " ] || fail "B: another machine's row: $(ids "$MU/far1")"
+# 换 Codex on another machine's row (issue #4184): its hub writes; pr stays this
+# machine's (no PR on a far row). No 换账号 / 换到可用订阅 on any row since T550:
+# the pool picks.
+[ "$(ids "$MU/far1")" = "enter shell message rename pin reappol stop agent evidence reap " ] || fail "B: another machine's row: $(ids "$MU/far1")"
 mf=$(qo view-menu --view fl@view-v1 "$MU/far1")
 grep -q $'^agent\t换成 Codex\t$' <<< "$mf" || fail "B: a far row's agent item: $mf"
-grep -q $'^sub\t换到可用订阅\t$' <<< "$mf" || fail "B: a far row's sub item asks nothing, names the active pick: $mf"
-case " $(ids "$MU/far4") " in *" agent "*|*" sub "*) fail "B: a far exited row offers agent/sub: $(ids "$MU/far4")" ;; esac
+grep -q '换到可用订阅\|换账号' <<< "$mf$(qo view-menu --view fl@view-v1 "$W1")" && fail "B: a row still offers 换账号 / 换到可用订阅 (T550): $mf"
+case " $(ids "$MU/far4") " in *" agent "*) fail "B: a far exited row offers agent: $(ids "$MU/far4")" ;; esac
 case " $(ids "$MU/far2") " in *" answer "*) ;; *) fail "B: a far asking row lacks answer: $(ids "$MU/far2")" ;; esac
 case " $(ids "$MU/far4") " in *" resume "*) ;; *) fail "B: a far exited row lacks resume: $(ids "$MU/far4")" ;; esac
 pass "B  a row's menu: done · asking · an old sleeping window · ended (恢复) · another machine's (its hub writes)"
@@ -188,7 +188,6 @@ one message "fleet-peer-send.sh|$W1|合并了吗 hello" "$W1" message --text '�
 one pin "dash-pin-toggle.sh|$W1" "$W1" pin
 one reappol "fleet-reap-policy.sh|set|done:2h|--win|$W1|--session|fl" "$W1" reappol --text done:2h
 one stop "fleet-worker-stop.sh|fl|fid:f1" "$W1" stop
-one sub "dash-migrate.sh|$W1|to|acct2" "$W1" sub --text acct2
 one agent "fleet-transfer.sh|--from-panel|--session|fl|--window|$W1|--to|codex" "$W1" agent
 one rename "dash-rename.sh|--wid|$W1|新名字" "$W1" rename --text '新名字'
 [ "$(ti display-message -p -t "$W1" '#{window_name}')" = '新名字' ] || fail "C: rename did not rename the window"
@@ -339,15 +338,9 @@ case "$out" in *"换成 codex"*) ;; *) fail "E: the far agent outcome does not n
 awk -F '\037' -v OFS='\037' -v w="wid:$MU/far1" '$1 == w { $7 = "codex" } { print }' "$G/remote_fl" > "$G/remote_fl.new" \
   && mv "$G/remote_fl.new" "$G/remote_fl"
 qo view-menu --view fl@view-v1 "$MU/far1" | grep -q $'^agent\t换成 Claude' || fail "E: a far codex row does not offer Claude"
-case " $(ids "$MU/far1") " in *" sub "*) fail "E: a far codex row offers 换到可用订阅" ;; esac
 far far1 agent worker_transfer '"to":"claude"'
 awk -F '\037' -v OFS='\037' -v w="wid:$MU/far1" '$1 == w { $7 = "" } { print }' "$G/remote_fl" > "$G/remote_fl.new" \
   && mv "$G/remote_fl.new" "$G/remote_fl"
-# 换到可用订阅 (issue #4184): the menu's sub on a far row is the hub's worker_switch
-reset; : > "$WRITES"
-qo view-act --view fl@view-v1 "$MU/far1" sub >/dev/null 2>&1 || fail "E: a far sub failed"
-[ "$(calls)" = "fleet-row-remote.sh|switch|fl|wid:$MU/far1" ] || fail "E: a far sub ran «$(calls)»"
-[ "$(cut -f1 "$WRITES")" = worker_switch ] || fail "E: a far sub wrote «$(cat "$WRITES")»"
 # the node refuses (a mid-turn session): its words, verbatim, and a non-zero exit
 printf '{"operation_id":"op2","status":"failed","result":{"error":{"code":"INVALID_STATE","message":"Transfer refused on the fleet: transfer: the session is mid-turn; switch it once its turn is over"}}}\n' > "$FLEET_CONF_DIR/hub.answer"
 reset
