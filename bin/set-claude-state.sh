@@ -310,7 +310,7 @@ esac
 # `done` (Stop, the mod, OSC 7501). Once the transcript holds an assistant line the
 # window is stamped @task_started and this costs one tmux read; no @task, or no
 # transcript yet (an agent's `idle` before its seed lands): nothing changes.
-if [ "$sem" = done ] && [ -z "$wstate" ]; then
+if [ "$sem" = 'done' ] && [ -z "$wstate" ]; then
   _ft=$(tmux display-message -p -t "$TMUX_PANE" '#{@task}|#{@task_started}|#{@cc_session_id}' 2>/dev/null)
   _ftask=${_ft%%|*}; _fr=${_ft#*|}; _fstarted=${_fr%%|*}; _fsid=${_fr#*|}
   if [ -n "$_ftask" ] && [ "$_fstarted" != 1 ]; then

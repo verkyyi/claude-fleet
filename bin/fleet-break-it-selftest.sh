@@ -4302,7 +4302,7 @@ drill_epic_driver_unknown_command() {
   eu_say() { printf '\033]7501;state=%s:app=claude-code\033\\' "$1" \
     | sp_env CLAUDE_CONFIG_DIR="$WORK/eu-cc" TMUX_PANE="$SPP" python3 "$BIN/fleet-status-7501.py" pipe; }
   t0=$(now)
-  eu_say done
+  eu_say 'done'
   st=$(sp_state)
   [ "$st" = needs/nostart/7501 ] || { WHY="a first turn that never reached the model left [$st] — it reads 做完待收"; return 1; }
   case "$(o "$SPW" @claude_needs_detail)" in *'Unknown command: /fleet-epic-run'*) : ;;
@@ -4313,7 +4313,7 @@ drill_epic_driver_unknown_command() {
     || { WHY="a reaper reads the agent's done over needs/nostart and may close it"; return 1; }
   # someone sends the right words: the model answers, and a done is a done again
   printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"tick 1"}]}}' >> "$tp"
-  eu_say working; eu_say done
+  eu_say working; eu_say 'done'
   st=$(sp_state)
   [ "$st" = done//7501 ] || { WHY="after a reply the turn's done left [$st]"; return 1; }
   [ "$(o "$SPW" @task_started)" = 1 ] || { WHY="@task_started not stamped once the model answered"; return 1; }
