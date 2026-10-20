@@ -583,6 +583,24 @@ def local_launch(d, fleet_uuid):
     return c
 
 
+def id_admission(d):
+    """An accepted task opening with the ID switch on (EPIC T497 C6).
+
+    local_launch claims nothing then, so no FLEET_LAUNCH exists for the repo
+    gate's --finish to verify. The hub's own accepted record stands in: the same
+    task, generation, attempt and agent the dispatch names, still accepted, no
+    owner, no outcome. No such record, no start. Returns the record.
+    """
+    if not d.get("task"):
+        raise ValueError("accepted dispatch carries no task")
+    t = task_call({"task": d["task"]})
+    if (t.get("authority_version") != 1 or t.get("generation") != d.get("generation")
+            or t.get("attempt_id") != d.get("attempt_id") or t.get("resolved_agent") != d.get("resolved_agent")
+            or t.get("state") != "accepted" or t.get("execution_owner") or t.get("outcome")):
+        raise ValueError("accepted task is not open for this launch")
+    return t
+
+
 class NotBound(ValueError):
     """rebind: the record holds no live binding for this native session."""
 

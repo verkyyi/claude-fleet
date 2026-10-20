@@ -213,6 +213,14 @@ def gate(repo, finish):
             if repo_identity(t.get("repo", "")) != repo:
                 raise ValueError("accepted task belongs to another repo")
             ref = t.get("ticket_ref", "")
+        elif finish and os.environ.get("FLEET_ID_DISPATCH") and launch.id_switch_on():
+            # EPIC T497 C6: the switch opens a task's window with its ID and no
+            # claim; the hub's accepted record is the admission (the spawner
+            # hands the dispatch over for this one check)
+            t = launch.id_admission(json.loads(os.environ["FLEET_ID_DISPATCH"]))
+            if repo_identity(t.get("repo", "")) != repo:
+                raise ValueError("accepted task belongs to another repo")
+            ref = t.get("ticket_ref", "")
         elif finish:
             raise ValueError("hub authority requires an accepted, verified launch; no local fallback")
     result = dict(mode=a["mode"], ticket_ref=ref)
