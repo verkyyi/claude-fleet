@@ -83,7 +83,7 @@ applicable() {
 
 # call METHOD PATH [JSON] → the answer's body on stdout; rc 0 on HTTP 200.
 call() {
-  local m="$1" p="$2" body="${3:-}" pair url tok resp rc code
+  local m="$1" p="$2" body="${3:-}" pair url tok resp rc code why
   pair=$(fleet_node_pair) || die 3 "no node token here"
   url=${pair%%	*}; tok=${pair#*	}
   [ -z "${FLEET_TASK_RECOVERY_URL:-}" ] || [ "$url" = "$FLEET_TASK_RECOVERY_URL" ] || die 1 "task authority changed; reconciliation required"
@@ -103,7 +103,11 @@ call() {
          printf 'on %s\n' "$(date +%s)" > "$FLEET_CONF_DIR/ids/.switch" 2>/dev/null || :
          printf 'fleet-task-record: ID_SWITCH — the hub reads sessions by ID now (HTTP %s)\n' "$code" >&2; return 1 ;;
        esac
-       printf 'fleet-task-record: the hub refused (HTTP %s)\n' "$code" >&2; return 1 ;;
+       # The hub's own words ride along (EPIC T497 C16): a bare code hid a fence.
+       why=$(printf '%s\n' "$resp" | sed '$d' | python3 -c 'import json,sys
+try: print(" ".join(str(json.load(sys.stdin).get("error","")).split())[:300])
+except Exception: pass' 2>/dev/null)
+       printf 'fleet-task-record: the hub refused (HTTP %s)%s\n' "$code" "${why:+: $why}" >&2; return 1 ;;
   esac
 }
 
