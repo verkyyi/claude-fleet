@@ -36,7 +36,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/fleet-base-sync.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s not found/executable\n' "$SRC" >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not on PATH — SKIP\n'; exit 0; }
+st_need git
 
 st_sandbox "${TMPDIR:-/tmp}/fbs-selftest.XXXXXX"
 

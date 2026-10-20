@@ -34,6 +34,7 @@
 #                 budgets leaves `people` byte for byte
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 real="$BIN/fleet-config.py"
 while [ -L "$real" ]; do
   link="$(readlink "$real")"
@@ -44,7 +45,6 @@ C="$REPO/bin/fleet-config.py"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-config-selftest.XXXXXX") || exit 2
 trap 'rm -rf "${WORK:?}"' EXIT INT TERM HUP
 fail=0
-ok()  { echo "ok   $*"; }
 bad() { echo "FAIL $*"; fail=1; }
 PY="$(command -v python3)"
 # The personal layer's MCP commands exist on this "machine": a server whose command
@@ -125,10 +125,10 @@ row() { printf '%s\n' "$1" | awk -v p="$2" '$1 == p {print $2; exit}'; }
 # ── A — no hub ───────────────────────────────────────────────────────────────
 out=$(HUB=0 cfg show); rc=$?
 [ $rc = 0 ] && [ "$(row "$out" claude.mcp.context7)" = fleet ] && [ "$(row "$out" claude.mcp.mine)" = 本机 ] \
-  && ok "A show works with no hub (fleet + 本机 rows)" || bad "A show without a hub: rc=$rc $out"
+  && st_ok_all "A show works with no hub (fleet + 本机 rows)" || bad "A show without a hub: rc=$rc $out"
 nohub() {
   out=$(HUB=0 cfg "$@"); rc=$?
-  { [ $rc = 3 ] && printf '%s' "$out" | grep -q '没有入口'; } && ok "A $* → exit 3 没有入口" || bad "A $*: rc=$rc $out"
+  { [ $rc = 3 ] && printf '%s' "$out" | grep -q '没有入口'; } && st_ok_all "A $* → exit 3 没有入口" || bad "A $*: rc=$rc $out"
 }
 nohub add --personal mcp x '{"command": "x"}'
 nohub promote claude.mcp.mine
@@ -143,16 +143,16 @@ env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" CODEX_HOME="$H/.codex" FLEE
 v0=$(ver)
 out=$(cfg add --personal mcp perstool '{"command": "pers-mcp", "args": ["--p"]}'); rc=$?
 [ $rc = 0 ] && [ "$(ver)" = $((v0 + 1)) ] && pb | grep -q '"perstool"' \
-  && ok "C add → v$((v0 + 1)), perstool in the personal layer" || bad "C add: rc=$rc v=$(ver) $out"
+  && st_ok_all "C add → v$((v0 + 1)), perstool in the personal layer" || bad "C add: rc=$rc v=$(ver) $out"
 out=$(cfg add --personal settings verbose true); rc=$?
 [ $rc = 0 ] && [ "$(ver)" = $((v0 + 2)) ] && pb | grep -q '"claude_settings": {"verbose": true}' \
-  && ok "C a second add → +1, both kept" || bad "C second add: rc=$rc $(pb) $out"
+  && st_ok_all "C a second add → +1, both kept" || bad "C second add: rc=$rc $(pb) $out"
 out=$(cfg add --personal settings verbose false); rc=$?
-[ $rc = 2 ] && printf '%s' "$out" | grep -q 'set' && ok "C add over a different value refuses (use set)" || bad "C add-over: rc=$rc $out"
+[ $rc = 2 ] && printf '%s' "$out" | grep -q 'set' && st_ok_all "C add over a different value refuses (use set)" || bad "C add-over: rc=$rc $out"
 out=$(cfg set --personal settings verbose false); rc=$?
-[ $rc = 0 ] && pb | grep -q '"verbose": false' && ok "C set replaces" || bad "C set: rc=$rc $(pb)"
+[ $rc = 0 ] && pb | grep -q '"verbose": false' && st_ok_all "C set replaces" || bad "C set: rc=$rc $(pb)"
 out=$(cfg rm --personal settings verbose); rc=$?
-[ $rc = 0 ] && ! pb | grep -q claude_settings && ok "C rm takes it out" || bad "C rm: rc=$rc $(pb)"
+[ $rc = 0 ] && ! pb | grep -q claude_settings && st_ok_all "C rm takes it out" || bad "C rm: rc=$rc $(pb)"
 
 # ── B — show: one row of each source ─────────────────────────────────────────
 out=$(cfg show); rc=$?
@@ -160,23 +160,23 @@ r_d=$(row "$out" claude.mcp.context7); r_t=$(row "$out" claude.mcp.teamtool)
 r_p=$(row "$out" claude.mcp.perstool); r_l=$(row "$out" claude.mcp.mine)
 want_p=个人 want_ps=personal
 [ $rc = 0 ] && [ "$r_d" = fleet ] && [ "$r_t" = 团队 ] && [ "$r_p" = "$want_p" ] && [ "$r_l" = 本机 ] \
-  && ok "B show: fleet · 团队 · 个人 · 本机" || bad "B show sources: d=$r_d t=$r_t p=$r_p l=$r_l
+  && st_ok_all "B show: fleet · 团队 · 个人 · 本机" || bad "B show sources: d=$r_d t=$r_t p=$r_p l=$r_l
 $out"
 js=$(cfg show --json claude.mcp.)
 srcs=$(printf '%s' "$js" | "$PY" -c 'import json,sys; d=json.load(sys.stdin)["items"]; print(" ".join(d.get(k, {}).get("source", "") for k in ("claude.mcp.context7","claude.mcp.teamtool","claude.mcp.perstool","claude.mcp.mine")))' 2>&1)
-[ "$srcs" = "default team $want_ps local" ] && ok "B --json sources: $srcs" || bad "B --json: $srcs"
-out=$(cfg show claude.mcp.nosuch); [ $? = 2 ] && ok "B show of an unknown item exits 2" || bad "B unknown item: $out"
+[ "$srcs" = "default team $want_ps local" ] && st_ok_all "B --json sources: $srcs" || bad "B --json: $srcs"
+out=$(cfg show claude.mcp.nosuch); [ $? = 2 ] && st_ok_all "B show of an unknown item exits 2" || bad "B unknown item: $out"
 
 # ── D — 409: re-read, retry once ─────────────────────────────────────────────
 touch "$WORK/hub/bump"; v1=$(ver)
 out=$(cfg add --personal mcp racer '{"command": "r"}'); rc=$?
 [ $rc = 0 ] && [ "$(ver)" = $((v1 + 2)) ] && pb | grep -q '"racer"' && pb | grep -q '"perstool"' \
-  && ok "D a 409 re-reads and lands on top of the other write" || bad "D 409: rc=$rc v=$(ver) $out"
+  && st_ok_all "D a 409 re-reads and lands on top of the other write" || bad "D 409: rc=$rc v=$(ver) $out"
 
 # ── E — promote a local MCP ──────────────────────────────────────────────────
 out=$(cfg promote claude.mcp.mine); rc=$?
 [ $rc = 0 ] && pb | grep -q '"mine": {"args": \["--mine"\], "command": "my-mcp"}' \
-  && ok "E promote: mine is in the personal layer" || bad "E promote: rc=$rc $(pb) $out"
+  && st_ok_all "E promote: mine is in the personal layer" || bad "E promote: rc=$rc $(pb) $out"
 # identical here and in the layer, it composes as 个人; changed here, 本机 wins
 "$PY" - "$H/.claude.json" <<'PYEOF'
 import json, sys
@@ -185,8 +185,8 @@ json.dump(d, open(p, "w"))
 PYEOF
 out=$(cfg show claude.mcp.mine)
 [ "$(row "$out" claude.mcp.mine)" = 本机 ] && printf '%s' "$out" | grep -q -- '--here' \
-  && ok "E a local change still wins over the personal layer" || bad "E local over personal: $out"
-grep -q '"mine"' "$H/.claude.json" && ok "E the local file is untouched" || bad "E local file changed"
+  && st_ok_all "E a local change still wins over the personal layer" || bad "E local over personal: $out"
+grep -q '"mine"' "$H/.claude.json" && st_ok_all "E the local file is untouched" || bad "E local file changed"
 
 # ── F — a credential is refused, naming the field ─────────────────────────────
 "$PY" - "$H/.claude.json" <<'EOF'
@@ -198,7 +198,7 @@ EOF
 v2=$(ver)
 out=$(cfg promote claude.mcp.leaky); rc=$?
 [ $rc = 2 ] && printf '%s' "$out" | grep -q 'bundle.mcp.leaky.env.GITHUB_TOKEN' && printf '%s' "$out" | grep -q '${GITHUB_TOKEN}' \
-  && [ "$(ver)" = "$v2" ] && ok "F token promote refused: names the field, suggests \${GITHUB_TOKEN}, nothing sent" \
+  && [ "$(ver)" = "$v2" ] && st_ok_all "F token promote refused: names the field, suggests \${GITHUB_TOKEN}, nothing sent" \
   || bad "F secret: rc=$rc v=$(ver) $out"
 
 # ── G — a value naming this computer asks first ──────────────────────────────
@@ -210,23 +210,23 @@ json.dump(d, open(p, "w"))
 EOF
 out=$(cfg promote claude.mcp.homey); rc=$?
 [ $rc = 4 ] && printf '%s' "$out" | grep -q '只在本机有效' && [ "$(ver)" = "$v2" ] \
-  && ok "G a home path asks for --yes (exit 4)" || bad "G machine-bound: rc=$rc $out"
+  && st_ok_all "G a home path asks for --yes (exit 4)" || bad "G machine-bound: rc=$rc $out"
 out=$(cfg promote claude.mcp.homey --yes); rc=$?
-[ $rc = 0 ] && pb | grep -q '"homey"' && ok "G --yes takes it" || bad "G --yes: rc=$rc $out"
+[ $rc = 0 ] && pb | grep -q '"homey"' && st_ok_all "G --yes takes it" || bad "G --yes: rc=$rc $out"
 
 # ── H — restore ──────────────────────────────────────────────────────────────
 v3=$(ver); prev_body=$("$PY" -c 'import json,sys; s=json.load(open(sys.argv[1])); print(json.dumps(s["versions"][-2]["bundle"], sort_keys=True))' "$WORK/hub/p.json")
 out=$(cfg restore $((v3 - 1))); rc=$?
 [ $rc = 0 ] && [ "$(ver)" = $((v3 + 1)) ] && [ "$(pb)" = "$prev_body" ] \
-  && ok "H restore v$((v3 - 1)) → v$((v3 + 1)) with its body" || bad "H restore: rc=$rc v=$(ver) $out"
-out=$(cfg history); printf '%s' "$out" | grep -q "当前 v$((v3 + 1))" && ok "H history lists the versions" || bad "H history: $out"
+  && st_ok_all "H restore v$((v3 - 1)) → v$((v3 + 1)) with its body" || bad "H restore: rc=$rc v=$(ver) $out"
+out=$(cfg history); printf '%s' "$out" | grep -q "当前 v$((v3 + 1))" && st_ok_all "H history lists the versions" || bad "H history: $out"
 
 # ── I — the package ──────────────────────────────────────────────────────────
-grep -q '^bin/fleet-config.py' "$REPO/conf/agent-bundle.manifest" && ok "I agent-bundle.manifest carries it" || bad "I not in agent-bundle.manifest"
+grep -q '^bin/fleet-config.py' "$REPO/conf/agent-bundle.manifest" && st_ok_all "I agent-bundle.manifest carries it" || bad "I not in agent-bundle.manifest"
 # the Agent configuration is 承载's (issue #4826): the client package carries none of it
 # (the client package does not carry it — 承载's since #4826: conf/gone.list)
 out=$(env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" CODEX_HOME="$H/.codex" sh "$REPO/bin/fleet" config show claude.mcp.context7 2>&1)
-printf '%s' "$out" | grep -q 'claude.mcp.context7' && ok "I \`fleet config\` dispatches" || bad "I dispatch: $out"
+printf '%s' "$out" | grep -q 'claude.mcp.context7' && st_ok_all "I \`fleet config\` dispatches" || bad "I dispatch: $out"
 
 # ── J — people: every person's version, the operator's ───────────────────────
 cat > "$WORK/hub/people.json" <<'EOF'
@@ -236,12 +236,12 @@ EOF
 out=$(cfg people); rc=$?
 { [ $rc = 0 ] && printf '%s\n' "$out" | grep 'wx-alice' | grep -q 'v4.*3.*2026-10-06 08:00:00.*operator' \
   && printf '%s\n' "$out" | grep 'wx-bob' | grep -q '未写过'; } \
-  && ok "J people lists two people: version · items · when · by whom" || bad "J people: rc=$rc $out"
+  && st_ok_all "J people lists two people: version · items · when · by whom" || bad "J people: rc=$rc $out"
 out=$(cfg people --json); rc=$?
 [ $rc = 0 ] && [ "$(printf '%s' "$out" | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))')" = 2 ] \
-  && ! printf '%s' "$out" | grep -q '"bundle"' && ok "J --json: two rows, no bundle" || bad "J --json: rc=$rc $out"
+  && ! printf '%s' "$out" | grep -q '"bundle"' && st_ok_all "J --json: two rows, no bundle" || bad "J --json: rc=$rc $out"
 out=$(env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" "$PY" "$C" people --hub http://127.0.0.1:9 2>&1); rc=$?
-[ $rc = 2 ] && printf '%s' "$out" | grep -q 'CCQUOTA_VIEWER_TOKEN' && ok "J no viewer token → exit 2 before asking the hub" || bad "J no token: rc=$rc $out"
+[ $rc = 2 ] && printf '%s' "$out" | grep -q 'CCQUOTA_VIEWER_TOKEN' && st_ok_all "J no viewer token → exit 2 before asking the hub" || bad "J no token: rc=$rc $out"
 # ── K — export / import ──────────────────────────────────────────────────────
 mkdir -p "$WORK/hub2"
 HUBCMD2="HUBDIR='$WORK/hub2' '$PY' '$WORK/fakehub.py'"
@@ -252,26 +252,26 @@ cfg2() {
 ver2() { "$PY" -c 'import json,sys; s=json.load(open(sys.argv[1])); print(s["versions"][-1]["version"] if s["versions"] else 0)' "$WORK/hub2/p.json" 2>/dev/null || echo 0; }
 pb2()  { "$PY" -c 'import json,sys; s=json.load(open(sys.argv[1])); print(json.dumps(s["versions"][-1]["bundle"], sort_keys=True))' "$WORK/hub2/p.json" 2>/dev/null; }
 out=$(HUB=0 cfg export); rc=$?
-[ $rc = 3 ] && ok "K export with no hub → exit 3" || bad "K export no hub: rc=$rc $out"
+[ $rc = 3 ] && st_ok_all "K export with no hub → exit 3" || bad "K export no hub: rc=$rc $out"
 cfg export > "$WORK/exp.json" 2>"$WORK/exp.err"; rc=$?
 vx=$(ver)
 from=$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("_from"))' "$WORK/exp.json" 2>&1)
 body=$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("_from"); print(json.dumps(d, sort_keys=True))' "$WORK/exp.json" 2>&1)
 [ $rc = 0 ] && [ "$from" = "personal v$vx" ] && [ "$body" = "$(pb)" ] \
-  && ok "K export: the bundle + _from=\"$from\"" || bad "K export: rc=$rc from=$from $(cat "$WORK/exp.err")"
+  && st_ok_all "K export: the bundle + _from=\"$from\"" || bad "K export: rc=$rc from=$from $(cat "$WORK/exp.err")"
 # the importer already has one item of their own
 cfg2 add --personal settings verbose true >/dev/null 2>&1
 v20=$(ver2)
 out=$(cfg2 import "$WORK/exp.json" 2>&1); rc=$?
 [ $rc = 4 ] && [ "$(ver2)" = "$v20" ] && printf '%s' "$out" | grep -q '^  + mcp.perstool' \
   && printf '%s' "$out" | grep -q '^  - claude_settings.verbose' && printf '%s' "$out" | grep -q -- '--yes' \
-  && ok "K import lists the differences (+ / -), nothing sent without --yes (exit 4)" || bad "K import no --yes: rc=$rc v=$(ver2) $out"
+  && st_ok_all "K import lists the differences (+ / -), nothing sent without --yes (exit 4)" || bad "K import no --yes: rc=$rc v=$(ver2) $out"
 out=$(cfg2 import "$WORK/exp.json" --yes 2>&1); rc=$?
 [ $rc = 0 ] && [ "$(ver2)" = $((v20 + 1)) ] && [ "$(pb2)" = "$(pb)" ] \
-  && ok "K round trip: importer v$v20 → v$((v20 + 1)), content identical to the exporter's" || bad "K round trip: rc=$rc v=$(ver2) $(pb2) $out"
+  && st_ok_all "K round trip: importer v$v20 → v$((v20 + 1)), content identical to the exporter's" || bad "K round trip: rc=$rc v=$(ver2) $(pb2) $out"
 out=$(cfg2 import - < "$WORK/exp.json" 2>&1); rc=$?
 [ $rc = 0 ] && [ "$(ver2)" = $((v20 + 1)) ] && printf '%s' "$out" | grep -q '一致' \
-  && ok "K the same file again (stdin) sends nothing" || bad "K same again: rc=$rc v=$(ver2) $out"
+  && st_ok_all "K the same file again (stdin) sends nothing" || bad "K same again: rc=$rc v=$(ver2) $out"
 # a file carrying a credential
 "$PY" - "$WORK/exp.json" "$WORK/leak.json" <<'EOF'
 import json, sys
@@ -281,7 +281,7 @@ EOF
 v21=$(ver2)
 out=$(cfg2 import "$WORK/leak.json" --yes 2>&1); rc=$?
 [ $rc = 2 ] && [ "$(ver2)" = "$v21" ] && printf '%s' "$out" | grep -q 'bundle.mcp.leaky.env.GITHUB_TOKEN' \
-  && ok "K a file with a credential is refused, naming the field, nothing sent" || bad "K secret import: rc=$rc v=$(ver2) $out"
+  && st_ok_all "K a file with a credential is refused, naming the field, nothing sent" || bad "K secret import: rc=$rc v=$(ver2) $out"
 # --merge only adds
 cfg2 add --personal settings verbose true >/dev/null 2>&1
 echo '{"_from": "personal v9", "mcp": {"extra": {"command": "x"}}}' > "$WORK/small.json"
@@ -289,12 +289,12 @@ v22=$(ver2)
 out=$(cfg2 import "$WORK/small.json" --merge --yes 2>&1); rc=$?
 [ $rc = 0 ] && [ "$(ver2)" = $((v22 + 1)) ] && pb2 | grep -q '"extra"' && pb2 | grep -q '"perstool"' \
   && pb2 | grep -q '"verbose": true' && ! printf '%s' "$out" | grep -q '^  - ' \
-  && ok "K --merge only adds: extra in, perstool + verbose kept" || bad "K merge: rc=$rc $(pb2) $out"
+  && st_ok_all "K --merge only adds: extra in, perstool + verbose kept" || bad "K merge: rc=$rc $(pb2) $out"
 # a base that moved meanwhile is refused, not retried over
 touch "$WORK/hub2/bump"; v23=$(ver2)
 out=$(cfg2 import "$WORK/exp.json" --yes 2>&1); rc=$?
 [ $rc = 1 ] && [ "$(ver2)" = $((v23 + 1)) ] && printf '%s' "$out" | grep -q '重跑' \
-  && ok "K a base that moved is refused (exit 1), not written over" || bad "K 409: rc=$rc v=$(ver2) $out"
+  && st_ok_all "K a base that moved is refused (exit 1), not written over" || bad "K 409: rc=$rc v=$(ver2) $out"
 
 # ── L — per-person budgets (issue #1977) ─────────────────────────────────────
 cat > "$WORK/budgethub.py" <<'EOF'
@@ -324,23 +324,23 @@ bcfg() {
 out=$(bcfg people); rc=$?
 { [ $rc = 0 ] && printf '%s\n' "$out" | grep 'wx-alice' | grep -q '⛔250k/200k *900k' \
   && printf '%s\n' "$out" | grep 'wx-bob' | grep -q '  0 ' && printf '%s\n' "$out" | grep -q '^wx-carol.*1200'; } \
-  && ok "L people: 5h / 7-day usage against the budget, ⛔ on the window that is over; usage-only people listed" \
+  && st_ok_all "L people: 5h / 7-day usage against the budget, ⛔ on the window that is over; usage-only people listed" \
   || bad "L people: rc=$rc $out"
 out=$(bcfg budget Alice 5h=200k week=2M); rc=$?
 [ $rc = 0 ] && [ "$(cat "$WORK/hub/put.json")" = '{"key": "fleet.person_budget.wx-alice", "value": "5h=200k,week=2M"}' ] \
   && printf '%s' "$out" | grep -q '已达个人额度' \
-  && ok "L budget Alice 5h=… week=…: the display name resolves, one PUT of fleet.person_budget.wx-alice" \
+  && st_ok_all "L budget Alice 5h=… week=…: the display name resolves, one PUT of fleet.person_budget.wx-alice" \
   || bad "L budget set: rc=$rc $(cat "$WORK/hub/put.json" 2>/dev/null) $out"
 out=$(bcfg budget wx-alice off); rc=$?
-[ $rc = 0 ] && grep -q '"value": ""' "$WORK/hub/put.json" && ok "L budget … off clears it" || bad "L off: rc=$rc $out"
+[ $rc = 0 ] && grep -q '"value": ""' "$WORK/hub/put.json" && st_ok_all "L budget … off clears it" || bad "L off: rc=$rc $out"
 out=$(bcfg budget); rc=$?
-[ $rc = 0 ] && printf '%s' "$out" | grep -q 'wx-carol' && ok "L budget: everyone's usage" || bad "L list: rc=$rc $out"
+[ $rc = 0 ] && printf '%s' "$out" | grep -q 'wx-carol' && st_ok_all "L budget: everyone's usage" || bad "L list: rc=$rc $out"
 # a hub before #1977: people exactly as before, budget says why it cannot
 before=$(cfg people)
 after=$(OLDHUB=1 bcfg people)
-[ "$before" = "$after" ] && ok "L a hub with no budgets: people byte for byte" || bad "L degenerate: $after"
+[ "$before" = "$after" ] && st_ok_all "L a hub with no budgets: people byte for byte" || bad "L degenerate: $after"
 out=$(OLDHUB=1 bcfg budget); rc=$?
-[ $rc = 1 ] && printf '%s' "$out" | grep -q '还不认按人额度' && ok "L budget on such a hub → exit 1, says why" || bad "L old hub: rc=$rc $out"
+[ $rc = 1 ] && printf '%s' "$out" | grep -q '还不认按人额度' && st_ok_all "L budget on such a hub → exit 1, says why" || bad "L old hub: rc=$rc $out"
 
 [ "$fail" = 0 ] && echo "fleet-config-selftest: PASS" || echo "fleet-config-selftest: FAIL"
 exit "$fail"

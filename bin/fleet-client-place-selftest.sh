@@ -43,7 +43,8 @@
 # python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-command -v python3 >/dev/null 2>&1 || { printf 'fleet-client-place selftest: python3 absent — SKIP\n'; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fcp-st.XXXXXX")" || exit 2
 mkdir -p "$WORK/tmp"; export TMPDIR="$WORK/tmp"   # the client cache (fleet_logins, #2430) stays in the sandbox
@@ -59,10 +60,7 @@ KEY=0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f
 UUID=11111111-1111-4111-8111-111111111111
 NEW=0123456789abcdef01234567
 
-FAIL=0; CHECKS=0
-fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 (want '$2')" "$3"; }
-has() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 (want '$3')" "$2" ;; esac; }
+st_tally count miss
 HUBPID=''
 cleanup() { [ -n "$HUBPID" ] && kill "$HUBPID" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
@@ -202,13 +200,13 @@ lastreq() { tail -n1 "$WORK/log"; }
 
 # --- D. degenerate first: no hub, no fleet ------------------------------------------
 run "$P" verkyyi/claude-fleet scratch
-eq "D: no hub + no fleet exit" 1 "$RC"
-eq "D: no hub + no fleet stdout" "" "$OUT"
-eq "D: no hub + no fleet line" "这台电脑没有 fleet，也连不上入口" "$ERR"
+st_eq "D: no hub + no fleet exit" 1 "$RC"
+st_eq "D: no hub + no fleet stdout" "" "$OUT"
+st_eq "D: no hub + no fleet line" "这台电脑没有 fleet，也连不上入口" "$ERR"
 # a hub but no lease to sign with: the same (nothing asked)
 FLEET_HUB_URL=$HUB FLEET_HUB_TOKEN=tok run "$P" verkyyi/claude-fleet scratch
-eq "D: no lease exit" 1 "$RC"
-[ -f "$WORK/log" ] && fail "D: a request went out without a lease" "$(cat "$WORK/log")"
+st_eq "D: no lease exit" 1 "$RC"
+[ -f "$WORK/log" ] && st_miss "D: a request went out without a lease" "$(cat "$WORK/log")"
 
 printf '%s\n' "$LEASE" > "$FLEET_CLIENT_DIR/client.lease"
 printf '%s\n' "$KEY" > "$FLEET_CLIENT_KEY_FILE"
@@ -216,155 +214,155 @@ export FLEET_HUB_URL=$HUB FLEET_HUB_TOKEN=tok
 
 # --- A. the three kinds ---------------------------------------------------------------
 run "$P" verkyyi/claude-fleet scratch --node auto --title '看看日志'
-eq "A: scratch exit" 0 "$RC"
-eq "A: scratch line" "REMOTE mac-b op1 done $UUID/scratch-3	mac-a excluded: load 1.00/core > 0.8" "$OUT"
-has "A: scratch payload kind" "$(lastreq)" '"kind": "scratch"'
-has "A: scratch payload node" "$(lastreq)" '"node": "auto"'
-has "A: scratch payload title" "$(lastreq)" '"title": "看看日志"'
-has "A: scratch payload repo" "$(lastreq)" '"repo": "verkyyi/claude-fleet"'
+st_eq "A: scratch exit" 0 "$RC"
+st_eq "A: scratch line" "REMOTE mac-b op1 done $UUID/scratch-3	mac-a excluded: load 1.00/core > 0.8" "$OUT"
+st_has "A: scratch payload kind" "$(lastreq)" '"kind": "scratch"'
+st_has "A: scratch payload node" "$(lastreq)" '"node": "auto"'
+st_has "A: scratch payload title" "$(lastreq)" '"title": "看看日志"'
+st_has "A: scratch payload repo" "$(lastreq)" '"repo": "verkyyi/claude-fleet"'
 # issue #2430: the login it landed under is remembered against its fleet
-eq "A: scratch login remembered (candidate os_user)" "$UUID	erin" "$(tail -n1 "$TMPDIR/.claude-dash/global/fleet_logins" 2>/dev/null)"
+st_eq "A: scratch login remembered (candidate os_user)" "$UUID	erin" "$(tail -n1 "$TMPDIR/.claude-dash/global/fleet_logins" 2>/dev/null)"
 
 # `fleet codex` (issue #2403): a HOME session carries its agent to the hub
 run "$P" - home --agent codex
-eq "A: home exit" 0 "$RC"
-has "A: home payload no_repo" "$(lastreq)" '"no_repo": true'
-has "A: home payload agent" "$(lastreq)" '"agent": "codex"'
+st_eq "A: home exit" 0 "$RC"
+st_has "A: home payload no_repo" "$(lastreq)" '"no_repo": true'
+st_has "A: home payload agent" "$(lastreq)" '"agent": "codex"'
 
 # --- H. back to the last home session (issue #2564) -------------------------------------
-has "H: home payload home" "$(lastreq)" '"home": true'
-case "$(lastreq)" in *'"new"'*) fail "H: a plain home carried new" "$(lastreq)" ;; esac
+st_has "H: home payload home" "$(lastreq)" '"home": true'
+case "$(lastreq)" in *'"new"'*) st_miss "H: a plain home carried new" "$(lastreq)" ;; esac
 FLEET_PLACE_RESULT="$WORK/res.json" run "$P" - home --agent claude
-eq "H: RESUME exit" 0 "$RC"
-eq "H: RESUME line" "RESUME mac-a $UUID/scratch-1	回到你上一次的会话（mac-a）" "$OUT"
-eq "H: RESUME result" "{\"machine\": \"mac-a\", \"worker_id\": \"$UUID/scratch-1\", \"resume\": true, \"also_open\": [\"MacBook\"]}" \
+st_eq "H: RESUME exit" 0 "$RC"
+st_eq "H: RESUME line" "RESUME mac-a $UUID/scratch-1	回到你上一次的会话（mac-a）" "$OUT"
+st_eq "H: RESUME result" "{\"machine\": \"mac-a\", \"worker_id\": \"$UUID/scratch-1\", \"resume\": true, \"also_open\": [\"MacBook\"]}" \
   "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps({k: d[k] for k in ("machine","worker_id","resume","also_open")}, ensure_ascii=False))' "$WORK/res.json" 2>/dev/null)"
 run "$P" - home --agent claude --new
-eq "H: --new exit (a new one)" 0 "$RC"
-has "H: --new line" "$OUT" "REMOTE mac-b op1 done"
-has "H: --new payload" "$(lastreq)" '"new": true'
+st_eq "H: --new exit (a new one)" 0 "$RC"
+st_has "H: --new line" "$OUT" "REMOTE mac-b op1 done"
+st_has "H: --new payload" "$(lastreq)" '"new": true'
 run "$P" - scratch --new
-eq "H: --new on a scratch: exit 2" 2 "$RC"
+st_eq "H: --new on a scratch: exit 2" 2 "$RC"
 
 run "$P" verkyyi/claude-fleet 7 --node mac-b --agent codex
-eq "A: issue exit (after one status poll)" 0 "$RC"
-eq "A: issue line" "REMOTE mac-b op7 done $UUID/issue-7	mac-a excluded: full" "$OUT"
-has "A: issue polled its operation" "$(lastreq)" '"operation_id": "op7"'
-has "A: issue payload" "$(tail -n2 "$WORK/log" | head -n1)" '"issue": 7'
-has "A: issue payload node" "$(tail -n2 "$WORK/log" | head -n1)" '"node": "mac-b"'
-has "A: issue payload agent" "$(tail -n2 "$WORK/log" | head -n1)" '"agent": "codex"'
+st_eq "A: issue exit (after one status poll)" 0 "$RC"
+st_eq "A: issue line" "REMOTE mac-b op7 done $UUID/issue-7	mac-a excluded: full" "$OUT"
+st_has "A: issue polled its operation" "$(lastreq)" '"operation_id": "op7"'
+st_has "A: issue payload" "$(tail -n2 "$WORK/log" | head -n1)" '"issue": 7'
+st_has "A: issue payload node" "$(tail -n2 "$WORK/log" | head -n1)" '"node": "mac-b"'
+st_has "A: issue payload agent" "$(tail -n2 "$WORK/log" | head -n1)" '"agent": "codex"'
 
 run "$P" verkyyi/claude-fleet restore:issue-21
-eq "A: restore exit" 0 "$RC"
-eq "A: restore line" "REMOTE mac-a op3 done $UUID/issue-21	its /fleet-history row is on mac-a" "$OUT"
-has "A: restore payload" "$(lastreq)" '"key": "issue-21"'
-has "A: restore payload kind" "$(lastreq)" '"kind": "restore"'
-eq "A: restore login remembered (the hub's login)" "$UUID	bob" "$(tail -n1 "$TMPDIR/.claude-dash/global/fleet_logins" 2>/dev/null)"
+st_eq "A: restore exit" 0 "$RC"
+st_eq "A: restore line" "REMOTE mac-a op3 done $UUID/issue-21	its /fleet-history row is on mac-a" "$OUT"
+st_has "A: restore payload" "$(lastreq)" '"key": "issue-21"'
+st_has "A: restore payload kind" "$(lastreq)" '"kind": "restore"'
+st_eq "A: restore login remembered (the hub's login)" "$UUID	bob" "$(tail -n1 "$TMPDIR/.claude-dash/global/fleet_logins" 2>/dev/null)"
 
 # --- B. refusals keep their codes -----------------------------------------------------
 printf '完整文字 #42 %s' "$(printf 'literal %.0s' {1..40})" > "$WORK/draft.txt"
 run "$P" verkyyi/claude-fleet scratch --name short --draft-file "$WORK/draft.txt"
-eq "draft: placement succeeds" 0 "$RC"
-has "draft: old hubs must reject the new action" "$(lastreq)" '"action": "draft"'
-python3 - "$WORK/log" "$WORK/draft.txt" <<'PY' || fail "draft text was truncated or became a submitted seed"
+st_eq "draft: placement succeeds" 0 "$RC"
+st_has "draft: old hubs must reject the new action" "$(lastreq)" '"action": "draft"'
+python3 - "$WORK/log" "$WORK/draft.txt" <<'PY' || st_miss "draft text was truncated or became a submitted seed"
 import json, pathlib, sys
 request = json.loads(pathlib.Path(sys.argv[1]).read_text().splitlines()[-1])
 assert request['draft'] == pathlib.Path(sys.argv[2]).read_text()
 assert not any(field in request for field in ('body', 'task', 'attachments'))
 PY
 run "$P" verkyyi/claude-fleet scratch --name old-hub --draft-file "$WORK/draft.txt"
-eq "draft: old hub refusal is not silently downgraded" 1 "$RC"
+st_eq "draft: old hub refusal is not silently downgraded" 1 "$RC"
 run "$P" verkyyi/claude-fleet scratch --draft-file "$WORK/draft.txt" --body-file "$WORK/draft.txt"
-eq "draft: ambiguous seed rejected before placement" 2 "$RC"
+st_eq "draft: ambiguous seed rejected before placement" 2 "$RC"
 
 run "$P" verkyyi/claude-fleet issue-9
-eq "B: held exit" 3 "$RC"; eq "B: held line" "HELD mac-a	#9 is leased to mac-a" "$OUT"
+st_eq "B: held exit" 3 "$RC"; st_eq "B: held line" "HELD mac-a	#9 is leased to mac-a" "$OUT"
 run "$P" verkyyi/claude-fleet 11
-eq "B: all full exit" 4 "$RC"
-has "B: all full reasons as the hub said" "$OUT" "mac-b: at cap 8/8; mac-a: at cap 4/4"
+st_eq "B: all full exit" 4 "$RC"
+st_has "B: all full reasons as the hub said" "$OUT" "mac-b: at cap 8/8; mac-a: at cap 4/4"
 run "$P" verkyyi/claude-fleet 12
-eq "B: declined exit" 5 "$RC"; eq "B: declined line" "DECLINED mac-a op12 2	fleet-mac-a is full" "$OUT"
+st_eq "B: declined exit" 5 "$RC"; st_eq "B: declined line" "DECLINED mac-a op12 2	fleet-mac-a is full" "$OUT"
 FLEET_CLIENT_PLACE_WAIT=2 run "$P" verkyyi/claude-fleet 13
-eq "B: unknown exit" 6 "$RC"; has "B: unknown line" "$OUT" "UNKNOWN mac-b op13"
+st_eq "B: unknown exit" 6 "$RC"; st_has "B: unknown line" "$OUT" "UNKNOWN mac-b op13"
 
 # issue #1610: the hub tried the next machine — each decline on stderr, the
 # first answer's `after …` field kept on the line a status poll ends with
 run "$P" verkyyi/claude-fleet 14
-eq "B: next machine exit" 0 "$RC"
-eq "B: next machine line keeps who declined first" "REMOTE m3 op14 done $UUID/issue-14	chose m3	after mac-d:op140:1" "$OUT"
-has "B: next machine stderr names the decline" "$ERR" "mac-d declined (exit 1): fleet discover: fork/exec fleet-control.py: invalid argument"
+st_eq "B: next machine exit" 0 "$RC"
+st_eq "B: next machine line keeps who declined first" "REMOTE m3 op14 done $UUID/issue-14	chose m3	after mac-d:op140:1" "$OUT"
+st_has "B: next machine stderr names the decline" "$ERR" "mac-d declined (exit 1): fleet discover: fork/exec fleet-control.py: invalid argument"
 run "$P" verkyyi/claude-fleet 15
-eq "B: all declined exit" 4 "$RC"
-has "B: all declined line" "$OUT" "REFUSED ALL_DECLINED	every machine that could take it said no — mac-d: declined: fork; m3: declined: full	after mac-d:op150:1,m3:op151:2"
-has "B: all declined stderr, one per machine" "$ERR" "m3 declined (exit 2): full"
+st_eq "B: all declined exit" 4 "$RC"
+st_has "B: all declined line" "$OUT" "REFUSED ALL_DECLINED	every machine that could take it said no — mac-d: declined: fork; m3: declined: full	after mac-d:op150:1,m3:op151:2"
+st_has "B: all declined stderr, one per machine" "$ERR" "m3 declined (exit 2): full"
 
 # issue #2480: why THIS computer was not chosen — after the line, in a person's words
 USER=erin run "$P" verkyyi/claude-fleet 16
-eq "B: self declined exit" 5 "$RC"
-eq "B: self declined line as it was" "DECLINED mac-a op16 1	fleet discover: INTERNAL: Local controller failed" "$OUT"
-has "B: self — this login's compute off, and how to open it" "$ERR" "fleet-client-place: 你这台（${SELF}/erin）没被选：compute off（只协调）——在这台运行 fleet host on 打开"
-has "B: self — the policy named too" "$ERR" "fleet.compute_auto"
-has "B: self — both reasons of this login on one line" "$ERR" "；这台 fleet 的 tmux 服务没在跑——在这台运行 fleet up 拉起"
-has "B: self — another login here, by its name" "$ERR" "这台的另一个登录（${SELF}/alice）没被选：compute off"
-has "B: self — another login's fix is run as that login" "$ERR" "以 alice 登录在这台运行 fleet host on"
-case "$ERR" in *mac-a*没被选*) fail "B: self — a hint about another machine" "$ERR" ;; esac
+st_eq "B: self declined exit" 5 "$RC"
+st_eq "B: self declined line as it was" "DECLINED mac-a op16 1	fleet discover: INTERNAL: Local controller failed" "$OUT"
+st_has "B: self — this login's compute off, and how to open it" "$ERR" "fleet-client-place: 你这台（${SELF}/erin）没被选：compute off（只协调）——在这台运行 fleet host on 打开"
+st_has "B: self — the policy named too" "$ERR" "fleet.compute_auto"
+st_has "B: self — both reasons of this login on one line" "$ERR" "；这台 fleet 的 tmux 服务没在跑——在这台运行 fleet up 拉起"
+st_has "B: self — another login here, by its name" "$ERR" "这台的另一个登录（${SELF}/alice）没被选：compute off"
+st_has "B: self — another login's fix is run as that login" "$ERR" "以 alice 登录在这台运行 fleet host on"
+case "$ERR" in *mac-a*没被选*) st_miss "B: self — a hint about another machine" "$ERR" ;; esac
 WHY="$WORK/why"; : > "$WHY"
 USER=erin FLEET_PLACE_WHY="$WHY" run "$P" verkyyi/claude-fleet 16
-case "$ERR" in *没被选*) fail "B: self — on stderr though FLEET_PLACE_WHY was set" "$ERR" ;; esac
-has "B: self — written to FLEET_PLACE_WHY" "$(head -n1 "$WHY")" "你这台（${SELF}/erin）没被选：compute off"
-eq "B: self — one line per login" 2 "$(wc -l < "$WHY" | tr -d ' ')"
+case "$ERR" in *没被选*) st_miss "B: self — on stderr though FLEET_PLACE_WHY was set" "$ERR" ;; esac
+st_has "B: self — written to FLEET_PLACE_WHY" "$(head -n1 "$WHY")" "你这台（${SELF}/erin）没被选：compute off"
+st_eq "B: self — one line per login" 2 "$(wc -l < "$WHY" | tr -d ' ')"
 run "$P" verkyyi/claude-fleet 17
-eq "B: self absent exit" 4 "$RC"
-has "B: self absent — said so" "$ERR" "你这台（${SELF}）不在入口的候选里"
+st_eq "B: self absent exit" 4 "$RC"
+st_has "B: self absent — said so" "$ERR" "你这台（${SELF}）不在入口的候选里"
 # … but not to a newcomer's client, nor beside this login's own place elsewhere
 # (issue #2953): their sessions run on the login the hub opened, and the hint
 # sent them after the wrong computer
 rm -f "$FLEET_CONF_DIR/home-session.first"
 run "$P" verkyyi/claude-fleet 17
 : > "$FLEET_CONF_DIR/home-session.first"
-case "$ERR" in *候选*) fail "B: self absent — said to a solo (newcomer) client" "$ERR" ;; esac
+case "$ERR" in *候选*) st_miss "B: self absent — said to a solo (newcomer) client" "$ERR" ;; esac
 USER=bob run "$P" verkyyi/claude-fleet 17
-case "$ERR" in *候选*) fail "B: self absent — said though this login is a candidate elsewhere" "$ERR" ;; esac
+case "$ERR" in *候选*) st_miss "B: self absent — said though this login is a candidate elsewhere" "$ERR" ;; esac
 run "$P" verkyyi/claude-fleet 12
-case "$ERR" in *没被选*|*候选*) fail "B: no placement — a self hint anyway" "$ERR" ;; esac
+case "$ERR" in *没被选*|*候选*) st_miss "B: no placement — a self hint anyway" "$ERR" ;; esac
 
 # --- C. a key that does not check (and no lease to take again) ---------------------------
 printf '%s\n' "$(printf '%s' "$KEY" | tr 0f f0)" > "$FLEET_CLIENT_KEY_FILE"
 run "$P" verkyyi/claude-fleet scratch
-eq "C: wrong key exit" 1 "$RC"; eq "C: wrong key stdout" "" "$OUT"
-has "C: wrong key says 401" "$ERR" "HTTP 401"
+st_eq "C: wrong key exit" 1 "$RC"; st_eq "C: wrong key stdout" "" "$OUT"
+st_has "C: wrong key says 401" "$ERR" "HTTP 401"
 printf '%s\n' "$KEY" > "$FLEET_CLIENT_KEY_FILE"
 printf 'ffffffffffffffffffffffff\n' > "$FLEET_CLIENT_DIR/client.lease"
 run "$P" verkyyi/claude-fleet scratch
-eq "C: taken-over lease exit" 1 "$RC"
+st_eq "C: taken-over lease exit" 1 "$RC"
 
 # --- F. the hub no longer holds our lease: take it again once (issue #2464) ---------------
 printf '%s\n' "$LEASE" > "$FLEET_CLIENT_DIR/client.lease"
 printf '%s\n' "$NEW" > "$WORK/curlease"; printf '%s\n' "$NEW" > "$WORK/next"; : > "$WORK/lease.log"
 printf '{"device": "iPhone"}\n' > "$FLEET_CLIENT_DIR/client.where.json"
 run "$P" verkyyi/claude-fleet scratch
-eq "F: re-acquired exit" 0 "$RC"
-has "F: re-acquired line" "$OUT" "REMOTE mac-b op1 done $UUID/scratch-3"
-has "F: re-acquired said" "$ERR" "fleet-client-place: lease re-acquired once"
-has "F: the old lease released" "$(cat "$WORK/lease.log")" "release --lease $LEASE"
-has "F: acquired on the same device" "$(tail -n1 "$WORK/lease.log")" "acquire --where-file $FLEET_CLIENT_DIR/client.where.json"
-eq "F: the new lease kept" "$NEW" "$(cat "$FLEET_CLIENT_DIR/client.lease")"
+st_eq "F: re-acquired exit" 0 "$RC"
+st_has "F: re-acquired line" "$OUT" "REMOTE mac-b op1 done $UUID/scratch-3"
+st_has "F: re-acquired said" "$ERR" "fleet-client-place: lease re-acquired once"
+st_has "F: the old lease released" "$(cat "$WORK/lease.log")" "release --lease $LEASE"
+st_has "F: acquired on the same device" "$(tail -n1 "$WORK/lease.log")" "acquire --where-file $FLEET_CLIENT_DIR/client.where.json"
+st_eq "F: the new lease kept" "$NEW" "$(cat "$FLEET_CLIENT_DIR/client.lease")"
 # the new lease asked nothing again: one acquire, one release
-eq "F: one release + one acquire" 2 "$(wc -l < "$WORK/lease.log" | tr -d ' ')"
+st_eq "F: one release + one acquire" 2 "$(wc -l < "$WORK/lease.log" | tr -d ' ')"
 # a second 401: exit 1, the hub's words on stderr, no third ask
 printf '%s\n' "$LEASE" > "$FLEET_CLIENT_DIR/client.lease"
 printf 'eeeeeeeeeeeeeeeeeeeeeeee\n' > "$WORK/next"; : > "$WORK/lease.log"
 run "$P" verkyyi/claude-fleet scratch
-eq "F: twice 401 exit" 1 "$RC"; eq "F: twice 401 stdout" "" "$OUT"
-has "F: twice 401 re-acquired once" "$ERR" "lease re-acquired once"
-has "F: twice 401 words" "$ERR" "HTTP 401: not your client: the lease is not held"
-eq "F: twice 401 one acquire" 1 "$(grep -c '^acquire' "$WORK/lease.log")"
+st_eq "F: twice 401 exit" 1 "$RC"; st_eq "F: twice 401 stdout" "" "$OUT"
+st_has "F: twice 401 re-acquired once" "$ERR" "lease re-acquired once"
+st_has "F: twice 401 words" "$ERR" "HTTP 401: not your client: the lease is not held"
+st_eq "F: twice 401 one acquire" 1 "$(grep -c '^acquire' "$WORK/lease.log")"
 # an acquire that fails: exit 1, the 401's words and what to do
 printf '%s\n' "$LEASE" > "$FLEET_CLIENT_DIR/client.lease"; : > "$WORK/next"
 run "$P" verkyyi/claude-fleet scratch
-eq "F: acquire failed exit" 1 "$RC"
-has "F: acquire failed words" "$ERR" "HTTP 401: not your client"
-has "F: acquire failed hint" "$ERR" "restart the client"
+st_eq "F: acquire failed exit" 1 "$RC"
+st_has "F: acquire failed words" "$ERR" "HTTP 401: not your client"
+st_has "F: acquire failed hint" "$ERR" "restart the client"
 rm -f "$WORK/curlease"
 
 # --- G. attachments go with the start (issue #2393) -----------------------------------------
@@ -372,20 +370,20 @@ printf '\211PNG the error in the screenshot' > "$WORK/shot 1.png"
 python3 -c 'import sys; open(sys.argv[1], "wb").write(b"x" * (10 * 1024 * 1024 + 1))' "$WORK/big.bin"
 printf '看这张 %s\n\n附件:\n- %s\n- %s' "$WORK/shot 1.png" "$WORK/shot 1.png" "$WORK/big.bin" > "$WORK/body"
 run "$P" verkyyi/claude-fleet new --title '看这张' --body-file "$WORK/body" --attach "$WORK/shot 1.png" --attach "$WORK/big.bin"
-eq "G: attach exit" 0 "$RC"
-eq "G: the hub received the file's bytes" "ok" "$(lastreq | python3 -c '
+st_eq "G: attach exit" 0 "$RC"
+st_eq "G: the hub received the file's bytes" "ok" "$(lastreq | python3 -c '
 import base64, hashlib, json, sys
 p = json.loads(sys.stdin.read()); a = p.get("attachments") or []
 want = open(sys.argv[1], "rb").read()
 print("ok" if len(a) == 1 and base64.b64decode(a[0]["data"]) == want and a[0]["name"] == "shot 1.png"
       and a[0]["from"] == sys.argv[1] and a[0]["sha256"] == hashlib.sha256(want).hexdigest() else a)' "$WORK/shot 1.png")"
-has "G: the big one is said on the line" "$OUT" "	附件没带过去：big.bin（超过 10 MB）"
-has "G: … and on stderr" "$ERR" "附件没带过去：big.bin（超过 10 MB）"
-has "G: … and beside its path in the body" "$(lastreq)" "big.bin（附件没带过去：超过 10 MB）"
+st_has "G: the big one is said on the line" "$OUT" "	附件没带过去：big.bin（超过 10 MB）"
+st_has "G: … and on stderr" "$ERR" "附件没带过去：big.bin（超过 10 MB）"
+st_has "G: … and beside its path in the body" "$(lastreq)" "big.bin（附件没带过去：超过 10 MB）"
 run "$P" verkyyi/claude-fleet new --title 'old hub' --attach "$WORK/shot 1.png"
-eq "G: older hub exit" 0 "$RC"
-has "G: an older hub's start says the file did not go" "$OUT" "附件没带过去：shot 1.png（入口还不收附件"
-run "$P" verkyyi/claude-fleet 7 --attach "$WORK/shot 1.png";  eq "G: --attach on an issue start" 2 "$RC"
+st_eq "G: older hub exit" 0 "$RC"
+st_has "G: an older hub's start says the file did not go" "$OUT" "附件没带过去：shot 1.png（入口还不收附件"
+run "$P" verkyyi/claude-fleet 7 --attach "$WORK/shot 1.png";  st_eq "G: --attach on an issue start" 2 "$RC"
 
 # --- I. no hub, a fleet here: the local road names its window (issue #3097) ----------
 IB="$WORK/i-bin"; mkdir -p "$IB" "$FLEET_CONF_DIR/fleets/tf"
@@ -425,68 +423,63 @@ Path(os.environ["WORK"], "connect-loaded").write_text("loaded")
 raise RuntimeError("fixture connection reader")
 PY
 PYTHONPATH="$WORK/import-guard" FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web new --title 'x' --agent codex
-eq "I: cold local start exit" 0 "$RC"
-CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/connect-loaded" ] || fail "I: no lease must not load the connection reader"
-has "I: the LOCAL line" "$OUT" "LOCAL $H"
-has "I: the adapter was asked for codex" "$(cat "$WORK/i-args")" "start tf new codex acme/web"
-eq "I: the window it opened" '@17' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("window_id"))' "$WORK/i.json")"
-eq "I: the issue filed" 'https://github.com/acme/web/issues/42' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("filed"))' "$WORK/i.json")"
-eq "I: this machine" "$H" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("machine"))' "$WORK/i.json")"
+st_eq "I: cold local start exit" 0 "$RC"
+CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/connect-loaded" ] || st_miss "I: no lease must not load the connection reader"
+st_has "I: the LOCAL line" "$OUT" "LOCAL $H"
+st_has "I: the adapter was asked for codex" "$(cat "$WORK/i-args")" "start tf new codex acme/web"
+st_eq "I: the window it opened" '@17' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("window_id"))' "$WORK/i.json")"
+st_eq "I: the issue filed" 'https://github.com/acme/web/issues/42' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("filed"))' "$WORK/i.json")"
+st_eq "I: this machine" "$H" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("machine"))' "$WORK/i.json")"
 rm -f "$WORK/i.json"
 I_MODE=warm FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web new --title 'x'
-eq "I: a warm start's window" '@18' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("window_id"))' "$WORK/i.json")"
+st_eq "I: a warm start's window" '@18' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("window_id"))' "$WORK/i.json")"
 rm -f "$WORK/i.json"
 PYTHONPATH="$WORK/import-guard" I_MODE=scratch FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web scratch --name short --agent codex --draft-file "$WORK/draft.txt"
-eq "I: cold draft start exit" 0 "$RC"
-eq "I: a cold draft's tab-separated window" '@19' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("window_id"))' "$WORK/i.json")"
-eq "I: a cold draft does not file an issue" '' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("filed", ""))' "$WORK/i.json")"
+st_eq "I: cold draft start exit" 0 "$RC"
+st_eq "I: a cold draft's tab-separated window" '@19' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("window_id"))' "$WORK/i.json")"
+st_eq "I: a cold draft does not file an issue" '' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("filed", ""))' "$WORK/i.json")"
 rm -f "$WORK/i.json"
 I_MODE=no FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web new --title 'x' --agent codex
-eq "I: a declined start" 5 "$RC"
-has "I: …keeps the spawn's reason on its line" "$OUT" "no Codex login"
-CHECKS=$((CHECKS + 1)); [ -s "$WORK/i.json" ] && fail "I: a declined start named a window" "$(cat "$WORK/i.json")"
+st_eq "I: a declined start" 5 "$RC"
+st_has "I: …keeps the spawn's reason on its line" "$OUT" "no Codex login"
+CHECKS=$((CHECKS + 1)); [ -s "$WORK/i.json" ] && st_miss "I: a declined start named a window" "$(cat "$WORK/i.json")"
 mv "$WORK/lease.kept" "$FLEET_CLIENT_DIR/client.lease"
 mv "$FLEET_CLIENT_KEY_FILE" "$WORK/key.kept"
 PYTHONPATH="$WORK/import-guard" I_MODE=scratch run "$IB/fleet-client-place.sh" acme/web scratch --agent codex
-eq "I: missing key keeps the local route" 0 "$RC"
-CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/connect-loaded" ] || fail "I: no key must not load the connection reader"
+st_eq "I: missing key keeps the local route" 0 "$RC"
+CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/connect-loaded" ] || st_miss "I: no key must not load the connection reader"
 mv "$WORK/key.kept" "$FLEET_CLIENT_KEY_FILE"
 rm -f "$WORK/i-args"
 PYTHONPATH="$WORK/import-guard" run "$IB/fleet-client-place.sh" acme/web scratch --agent codex
-eq "I: live lease requires the HTTP implementation" 1 "$RC"
-has "I: HTTP dependency failure is reported" "$ERR" 'fixture HTTP imports forbidden'
-CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/i-args" ] || fail "I: failed HTTP preparation must not launch locally"
+st_eq "I: live lease requires the HTTP implementation" 1 "$RC"
+st_has "I: HTTP dependency failure is reported" "$ERR" 'fixture HTTP imports forbidden'
+CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/i-args" ] || st_miss "I: failed HTTP preparation must not launch locally"
 run "$IB/fleet-client-place.sh" acme/web scratch --agent codex
-eq "I: live lease keeps connection-reader failures fail-closed" 1 "$RC"
-CHECKS=$((CHECKS + 1)); [ -f "$WORK/connect-loaded" ] || fail "I: live lease must load the connection reader"
-CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/i-args" ] || fail "I: failed hub preparation must not launch locally"
+st_eq "I: live lease keeps connection-reader failures fail-closed" 1 "$RC"
+CHECKS=$((CHECKS + 1)); [ -f "$WORK/connect-loaded" ] || st_miss "I: live lease must load the connection reader"
+CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/i-args" ] || st_miss "I: failed hub preparation must not launch locally"
 rm -rf "$FLEET_CONF_DIR/fleets"
 
 # --- T. a task (issue #3325): the record first, its number back -----------------------------
 rm -f "$WORK/t.json"
 FLEET_PLACE_RESULT="$WORK/t.json" run "$P" - scratch --name 看看风扇 --task --via ⌘P
-eq "T: a task opens" 0 "$RC"
-has "T: …asked as a task" "$(lastreq)" '"task": true'
-has "T: …from ⌘P" "$(lastreq)" '"via": "⌘P"'
-has "T: …a no-repo scratch" "$(lastreq)" '"no_repo": true'
-has "T: the record's number on stderr" "$ERR" 'task: T218'
-eq "T: …and in the result" 'T218' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("task"))' "$WORK/t.json")"
+st_eq "T: a task opens" 0 "$RC"
+st_has "T: …asked as a task" "$(lastreq)" '"task": true'
+st_has "T: …from ⌘P" "$(lastreq)" '"via": "⌘P"'
+st_has "T: …a no-repo scratch" "$(lastreq)" '"no_repo": true'
+st_has "T: the record's number on stderr" "$ERR" 'task: T218'
+st_eq "T: …and in the result" 'T218' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("task"))' "$WORK/t.json")"
 run "$P" verkyyi/claude-fleet scratch
-CHECKS=$((CHECKS + 1)); case "$(lastreq)" in *'"task"'*|*'"via"'*) fail "T: a plain start asks for no task" "$(lastreq)" ;; esac
-case "$ERR" in *'task:'*) fail "T: a plain start says no record" "$ERR" ;; esac
-run "$P" acme/web issue-3 --task;          eq "T: --task is for new / a no-repo scratch" 2 "$RC"
-run "$P" acme/web scratch --task;          eq "T: …not a repo scratch" 2 "$RC"
-run "$P" - home --task;                    eq "T: …not a home" 2 "$RC"
-run "$P" - scratch --via ⌘P;               eq "T: --via goes with --task" 2 "$RC"
+CHECKS=$((CHECKS + 1)); case "$(lastreq)" in *'"task"'*|*'"via"'*) st_miss "T: a plain start asks for no task" "$(lastreq)" ;; esac
+case "$ERR" in *'task:'*) st_miss "T: a plain start says no record" "$ERR" ;; esac
+run "$P" acme/web issue-3 --task;          st_eq "T: --task is for new / a no-repo scratch" 2 "$RC"
+run "$P" acme/web scratch --task;          st_eq "T: …not a repo scratch" 2 "$RC"
+run "$P" - home --task;                    st_eq "T: …not a home" 2 "$RC"
+run "$P" - scratch --via ⌘P;               st_eq "T: --via goes with --task" 2 "$RC"
 
 # --- E. usage -----------------------------------------------------------------------------
-run "$P" verkyyi/claude-fleet bogus;  eq "E: bad kind" 2 "$RC"
-run "$P" claude-fleet scratch;        eq "E: bad repo" 2 "$RC"
-run "$P" verkyyi/claude-fleet;        eq "E: no kind" 2 "$RC"
+run "$P" verkyyi/claude-fleet bogus;  st_eq "E: bad kind" 2 "$RC"
+run "$P" claude-fleet scratch;        st_eq "E: bad repo" 2 "$RC"
+run "$P" verkyyi/claude-fleet;        st_eq "E: no kind" 2 "$RC"
 
-if [ "$FAIL" -eq 0 ]; then
-  printf 'fleet-client-place selftest: PASS (%d checks)\n' "$CHECKS"
-  exit 0
-fi
-printf 'fleet-client-place selftest: %d FAIL of %d\n' "$FAIL" "$CHECKS" >&2
-exit 1
+st_done

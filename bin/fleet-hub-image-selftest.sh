@@ -27,15 +27,13 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 HI="$BIN/fleet-hub-image.sh"
 [ -f "$HI" ] || { printf 'selftest: %s not found\n' "$HI" >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { echo "fleet-hub-image-selftest SKIP (no git)"; exit 0; }
-command -v curl >/dev/null 2>&1 || { echo "fleet-hub-image-selftest SKIP (no curl)"; exit 0; }
+st_need git curl
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-hub-image-selftest.XXXXXX")" || exit 2
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM HUP
 
-CHECKS=0
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+st_tally count
 contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]:
 $2";; esac; }
 lacks() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 — output contains [$3]:
@@ -64,7 +62,7 @@ field() { printf '%s\n' "$OUT" | sed -n "s/^$1:  *//p"; }
 
 # --- A. no hub ---------------------------------------------------------------
 run
-eq "A: no hub exits 1" 1 "$RC"; eq "A: verdict NOHUB" NOHUB "$(field verdict)"
+st_eq "A: no hub exits 1" 1 "$RC"; st_eq "A: verdict NOHUB" NOHUB "$(field verdict)"
 if [ -f "$BIN/fleet-doctor.sh" ]; then
   DOUT=$(FLEET_LIVE_DIR="$CO" sh "$BIN/fleet-doctor.sh" 2>&1)
   lacks "A: doctor prints no hub-image row without a hub" "$DOUT" "  hub-image "
@@ -72,26 +70,26 @@ fi
 
 # --- B. hub down -------------------------------------------------------------
 run --hub "file://$WORK/nohub"
-eq "B: exit 0" 0 "$RC"; eq "B: UNREACHABLE" UNREACHABLE "$(field verdict)"
+st_eq "B: exit 0" 0 "$RC"; st_eq "B: UNREACHABLE" UNREACHABLE "$(field verdict)"
 
 # --- C. hub without /version -------------------------------------------------
 run --hub "file://$HUB"
-eq "C: UNSTAMPED" UNSTAMPED "$(field verdict)"; contains "C: names #1696" "$OUT" "predates #1696"
+st_eq "C: UNSTAMPED" UNSTAMPED "$(field verdict)"; contains "C: names #1696" "$OUT" "predates #1696"
 
 # --- D. stamp without a sha ----------------------------------------------------
 stamp docker ""
 run --hub "file://$HUB"
-eq "D: UNSTAMPED" UNSTAMPED "$(field verdict)"; eq "D: image" docker "$(field image)"
+st_eq "D: UNSTAMPED" UNSTAMPED "$(field verdict)"; st_eq "D: image" docker "$(field image)"
 
 # --- E. same commit -------------------------------------------------------------
 stamp "prod-$C3" "$C3"
 run --hub "file://$HUB/"
-eq "E: CURRENT" CURRENT "$(field verdict)"; eq "E: behind 0" 0 "$(field behind)"; eq "E: commit" "$C3" "$(field commit)"
+st_eq "E: CURRENT" CURRENT "$(field verdict)"; st_eq "E: behind 0" 0 "$(field behind)"; st_eq "E: commit" "$C3" "$(field commit)"
 
 # --- F. image older than stable -----------------------------------------------------
 stamp "prod-$C1" "$C1"
 run --hub "file://$HUB"
-eq "F: BEHIND" BEHIND "$(field verdict)"; eq "F: behind 2" 2 "$(field behind)"
+st_eq "F: BEHIND" BEHIND "$(field verdict)"; st_eq "F: behind 2" 2 "$(field behind)"
 if [ -f "$BIN/fleet-doctor.sh" ]; then
   DOUT=$(FLEET_LIVE_DIR="$CO" FLEET_HUB_URL="file://$HUB" sh "$BIN/fleet-doctor.sh" 2>&1)
   contains "F: doctor WARNs hub-image" "$DOUT" "WARN  hub-image "
@@ -102,37 +100,37 @@ fi
 # --- G. image newer than stable -------------------------------------------------------
 stamp "prod-$C4" "$C4"
 run --hub "file://$HUB"
-eq "G: AHEAD" AHEAD "$(field verdict)"; eq "G: ahead 1" 1 "$(field ahead)"
+st_eq "G: AHEAD" AHEAD "$(field verdict)"; st_eq "G: ahead 1" 1 "$(field ahead)"
 
 # --- H. no stable tag ---------------------------------------------------------------------
 git -C "$SEED" push -q origin :refs/tags/stable
 run --hub "file://$HUB"
-eq "H: UNKNOWN" UNKNOWN "$(field verdict)"; eq "H: stable none" none "$(field stable)"
+st_eq "H: UNKNOWN" UNKNOWN "$(field verdict)"; st_eq "H: stable none" none "$(field stable)"
 git -C "$SEED" push -q origin "$C3:refs/tags/stable"
 
 # --- I. hub URL from the machine's one config file --------------------------------------------
 printf '# [common]\nexport FLEET_HUB_URL="file://%s"\nexport CCQUOTA_HUB_URL="$FLEET_HUB_URL"\n' "$HUB" > "$FLEET_CONF_DIR/fleet.conf"
 stamp "prod-$C3" "$C3"
 run
-eq "I: hub read from fleet.conf" "file://$HUB" "$(field hub)"; eq "I: CURRENT" CURRENT "$(field verdict)"
+st_eq "I: hub read from fleet.conf" "file://$HUB" "$(field hub)"; st_eq "I: CURRENT" CURRENT "$(field verdict)"
 
 # --- J. the hub image's Go source vs its stable release's (issue #3142) ---------------------------
 mkdir -p "$HUB/v1/fleet/release"
 run --hub "file://$HUB"
-eq "J: neither names a source → ?" '?' "$(field source)"
+st_eq "J: neither names a source → ?" '?' "$(field source)"
 printf '{"artifacts":["ccquota-darwin-arm64"],"ccquota_src":"aaaa"}\n' > "$HUB/v1/fleet/release/artifacts"
 run --hub "file://$HUB"
-eq "J: no stable release source → ?" '?' "$(field source)"; contains "J: says which side" "$OUT" "for its stable release"
+st_eq "J: no stable release source → ?" '?' "$(field source)"; contains "J: says which side" "$OUT" "for its stable release"
 printf '{"sha":"x","ccquota_src":"aaaa"}\n' > "$HUB/v1/fleet/release/stable"
 run --hub "file://$HUB"
-eq "J: same source → SAME" SAME "$(field source)"; eq "J: CURRENT still" CURRENT "$(field verdict)"
+st_eq "J: same source → SAME" SAME "$(field source)"; st_eq "J: CURRENT still" CURRENT "$(field verdict)"
 if [ -f "$BIN/fleet-doctor.sh" ]; then
   DOUT=$(FLEET_LIVE_DIR="$CO" FLEET_HUB_URL="file://$HUB" sh "$BIN/fleet-doctor.sh" 2>&1)
   lacks "J: no 不同源 warning on SAME" "$DOUT" "不同源"
 fi
 printf '{"sha":"x","ccquota_src":"bbbb"}\n' > "$HUB/v1/fleet/release/stable"
 run --hub "file://$HUB"
-eq "J: another source → SPLIT" SPLIT "$(field source)"; contains "J: says the next train closes it" "$OUT" "release train"
+st_eq "J: another source → SPLIT" SPLIT "$(field source)"; contains "J: says the next train closes it" "$OUT" "release train"
 if [ -f "$BIN/fleet-doctor.sh" ]; then
   DOUT=$(FLEET_LIVE_DIR="$CO" FLEET_HUB_URL="file://$HUB" sh "$BIN/fleet-doctor.sh" 2>&1)
   contains "J: doctor WARNs 入口镜像与 stable 不同源" "$DOUT" "入口镜像与 stable 不同源"

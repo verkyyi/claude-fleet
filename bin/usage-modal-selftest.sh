@@ -16,6 +16,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SCRIPT="$BIN/usage-modal.sh"
 [ -f "$SCRIPT" ] || { printf 'selftest: %s not found\n' "$SCRIPT" >&2; exit 2; }
 
@@ -23,19 +24,18 @@ SCRIPT="$BIN/usage-modal.sh"
 . "$SCRIPT"
 
 CHECKS=0
-fail() { printf 'usage-modal selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 command -v render_usage_detail >/dev/null 2>&1 \
-  || fail "render_usage_detail not defined after sourcing (the modal's header renderer)"
+  || st_fail "render_usage_detail not defined after sourcing (the modal's header renderer)"
 
 # --- the retired pick (T550) and moves (T546): the modal sets no account, the
 # collector no longer moves a benched account's sessions
 CHECKS=$((CHECKS + 1))
-grep -Eq 'fleet-account\.sh" use|^[^#]*fzf ' "$SCRIPT" && fail "the modal must not pick an account any more (T550)"
+grep -Eq 'fleet-account\.sh" use|^[^#]*fzf ' "$SCRIPT" && st_fail "the modal must not pick an account any more (T550)"
 CHECKS=$((CHECKS + 1))
-grep -Eq "migrate --idle" "$SCRIPT" && fail "the account switch must not dispatch 'migrate --idle' any more (T546)"
+grep -Eq "migrate --idle" "$SCRIPT" && st_fail "the account switch must not dispatch 'migrate --idle' any more (T546)"
 CHECKS=$((CHECKS + 1))
-grep -Eq "migrate --limited" "$BIN/tmux-dash-collect.sh" && fail "the collector must not dispatch 'migrate --limited' any more (T546)"
+grep -Eq "migrate --limited" "$BIN/tmux-dash-collect.sh" && st_fail "the collector must not dispatch 'migrate --limited' any more (T546)"
 
 # (The retired restart subcommands and the in-place restart helpers — they typed into
 # panes, #511, and could never move a session under the SessionEnd hook, #512 — and
@@ -43,9 +43,9 @@ grep -Eq "migrate --limited" "$BIN/tmux-dash-collect.sh" && fail "the collector 
 
 # --- fleet-account.sh exposes migrate + whoami (the modal's and collector's callee)
 CHECKS=$((CHECKS + 1))
-grep -Eq '^  migrate\)' "$BIN/fleet-account.sh" || fail "fleet-account.sh must dispatch 'migrate' to fleet-migrate.sh"
+grep -Eq '^  migrate\)' "$BIN/fleet-account.sh" || st_fail "fleet-account.sh must dispatch 'migrate' to fleet-migrate.sh"
 CHECKS=$((CHECKS + 1))
-[ -x "$BIN/fleet-migrate.sh" ] || fail "bin/fleet-migrate.sh missing or not executable"
+[ -x "$BIN/fleet-migrate.sh" ] || st_fail "bin/fleet-migrate.sh missing or not executable"
 
 # --- once-per-reset-window markers compare with tolerance (fleet_same_window):
 # ccquota's resets_at jitters by ~1s between polls, and an exact compare re-armed
@@ -53,11 +53,11 @@ CHECKS=$((CHECKS + 1))
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 _t=$(mktemp); printf '1788375599' > "$_t"
-CHECKS=$((CHECKS + 1)); fleet_same_window "$_t" 1788375600 || fail "fleet_same_window: 1s jitter is the same window"
-CHECKS=$((CHECKS + 1)); fleet_same_window "$_t" 1788393600 && fail "fleet_same_window: the next 5h window is a new episode"
+CHECKS=$((CHECKS + 1)); fleet_same_window "$_t" 1788375600 || st_fail "fleet_same_window: 1s jitter is the same window"
+CHECKS=$((CHECKS + 1)); fleet_same_window "$_t" 1788393600 && st_fail "fleet_same_window: the next 5h window is a new episode"
 printf 'junk' > "$_t"
-CHECKS=$((CHECKS + 1)); fleet_same_window "$_t" 1788375600 && fail "fleet_same_window: a non-numeric marker is not a match"
-CHECKS=$((CHECKS + 1)); fleet_same_window "$_t.missing" 1788375600 && fail "fleet_same_window: a missing marker is not a match"
+CHECKS=$((CHECKS + 1)); fleet_same_window "$_t" 1788375600 && st_fail "fleet_same_window: a non-numeric marker is not a match"
+CHECKS=$((CHECKS + 1)); fleet_same_window "$_t.missing" 1788375600 && st_fail "fleet_same_window: a missing marker is not a match"
 rm -f "$_t"
 
 printf 'usage-modal selftest: OK (%d checks)\n' "$CHECKS"

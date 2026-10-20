@@ -5,7 +5,8 @@
 # no-client fallback, forward/file payload and private acquisition key.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-command -v python3 >/dev/null 2>&1 || { printf 'fleet-client-actions selftest: python3 absent — SKIP\n'; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fca-st.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -16,11 +17,7 @@ unset FLEET_CLIENT_WHERE_CMD FLEET_OPEN_WHERE_CMD FLEET_REMOTE_SSH
 export NO_PROXY='*' no_proxy='*'   # a runner's proxy must not stand between us and 127.0.0.1
 HUBPID=''
 
-FAIL=0; CHECKS=0
-fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 (want '$2')" "$3"; }
-has() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 (want '$3')" "$2" ;; esac; }
-hasnt() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 (must not hold '$3')" "$2" ;; esac; }
+st_tally count miss
 cleanup() { [ -n "$HUBPID" ] && kill "$HUBPID" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
 
@@ -77,7 +74,7 @@ PY
 python3 "$WORK/hub.py" "$WORK" "$KEY" "$LEASE" & HUBPID=$!
 n=300; while [ ! -s "$WORK/hub.port" ] && [ "$n" -gt 0 ]; do sleep 0.1; n=$((n - 1)); done
 PORT=$(cat "$WORK/hub.port" 2>/dev/null)
-[ -n "$PORT" ] || { fail "the fake hub never listened"; exit 1; }
+[ -n "$PORT" ] || { st_miss "the fake hub never listened"; exit 1; }
 HUB="http://127.0.0.1:$PORT"
 
 # The node's side: node.env carries the hub + this node's token (read, never sourced).
@@ -86,37 +83,33 @@ printf 'CCQUOTA_HUB_URL=%s\nCCQUOTA_TOKEN=NODETOK\n' "$HUB" > "$FLEET_CONF_DIR/n
 printf '{"device":"MacBook","caps":["open_url","show_file"]}\n' > "$WORK/where.json"
 send() { python3 "$BIN/fleet-client-actions.py" send "$@"; }
 out=$(send --kind open_url --url https://example.com/report)
-has "A queued response" "$out" '"state": "queued"'
-has "A target client retained" "$out" '"device": "MacBook"'
-has "A URL sent" "$(cat "$WORK/sent.log")" '"url": "https://example.com/report"'
+st_has "A queued response" "$out" '"state": "queued"'
+st_has "A target client retained" "$out" '"device": "MacBook"'
+st_has "A URL sent" "$(cat "$WORK/sent.log")" '"url": "https://example.com/report"'
 out=$(send --kind open_url --from-addr '{"kind":"forward","rport":8765,"path":"/d/x/","scheme":"http"}' --tailnet-link https://tail.example/d/x/)
-has "B forward port" "$(tail -n 1 "$WORK/sent.log")" '"rport": 8765'
-has "B forward path" "$(tail -n 1 "$WORK/sent.log")" '"path": "/d/x/"'
-has "B fallback link" "$(tail -n 1 "$WORK/sent.log")" '"tailnet": "https://tail.example/d/x/"'
+st_has "B forward port" "$(tail -n 1 "$WORK/sent.log")" '"rport": 8765'
+st_has "B forward path" "$(tail -n 1 "$WORK/sent.log")" '"path": "/d/x/"'
+st_has "B fallback link" "$(tail -n 1 "$WORK/sent.log")" '"tailnet": "https://tail.example/d/x/"'
 printf 'file-bytes' > "$WORK/report.txt"
 out=$(send --kind show_file --file "$WORK/report.txt" --inline)
-has "C file metadata" "$(tail -n 1 "$WORK/sent.log")" '"name": "report.txt", "size": 10, "inline": true'
+st_has "C file metadata" "$(tail -n 1 "$WORK/sent.log")" '"name": "report.txt", "size": 10, "inline": true'
 before=$(wc -l < "$WORK/sent.log")
 send --kind show_file --file "$WORK/missing" >/dev/null 2>&1; rc=$?
-eq "C missing file refuses before sending" 2 "$rc"
-eq "C missing file made no request" "$before" "$(wc -l < "$WORK/sent.log")"
+st_eq "C missing file refuses before sending" 2 "$rc"
+st_eq "C missing file made no request" "$before" "$(wc -l < "$WORK/sent.log")"
 rm -f "$WORK/where.json"
 out=$(send --kind open_url --url https://example.com/report)
-has "D no client" "$out" '"state": "none"'
+st_has "D no client" "$out" '"state": "none"'
 mv "$FLEET_CONF_DIR/node.env" "$WORK/node.env.away"
-eq "D no hub" '{"state": "nohub"}' "$(send --kind open_url --url https://example.com/report)"
+st_eq "D no hub" '{"state": "nohub"}' "$(send --kind open_url --url https://example.com/report)"
 mv "$WORK/node.env.away" "$FLEET_CONF_DIR/node.env"
 # --- H. the key: written 0600 by the acquire, never printed ----------------------------
 rm -f "$WORK/k"
 out=$(env FLEET_HUB_URL="$HUB" FLEET_HUB_TOKEN=CLIENTTOK FLEET_CLIENT_KEY_FILE="$WORK/k" python3 "$BIN/fleet-client-lease.py" acquire --device MacBook 2>&1)
-eq "H the key file holds the hub's key" "$KEY" "$(cat "$WORK/k" 2>/dev/null)"
+st_eq "H the key file holds the hub's key" "$KEY" "$(cat "$WORK/k" 2>/dev/null)"
 mode=$(python3 -c 'import os, sys; print("%o" % (os.stat(sys.argv[1]).st_mode & 0o777))' "$WORK/k" 2>/dev/null)
-eq "H … mode 0600" "600" "$mode"
-hasnt "H … and is never printed" "$out" "$KEY"
-has "H the lease line as before" "$out" "active	$LEASE"
+st_eq "H … mode 0600" "600" "$mode"
+st_hasnt "H … and is never printed" "$out" "$KEY"
+st_has "H the lease line as before" "$out" "active	$LEASE"
 
-if [ "$FAIL" -gt 0 ]; then
-  printf 'fleet-client-actions selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2
-  exit 1
-fi
-printf 'fleet-client-actions selftest: %d checks passed\n' "$CHECKS"
+st_done

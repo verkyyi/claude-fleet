@@ -51,29 +51,28 @@ exit 0
 EOF
 chmod +x "$WORK/bin/fleet-account.sh"
 
-fail() { printf 'fleet-claude-stamp selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 # Production shape: the hub is the session's current window; the worker is spawned
 # DETACHED (-d) so the hub stays current while the launcher runs.
-tmux new-session -d -s t -n hub 'sleep 20' || fail "could not start the isolated server"
+tmux new-session -d -s t -n hub 'sleep 20' || st_fail "could not start the isolated server"
 mkdir -p "$WORK/accounts"; printf 'tok-a\n' > "$WORK/accounts/acctA"; printf 'tok-b\n' > "$WORK/accounts/acctB"
 
 # --- 1. nothing named: no pick, no token, no stamp (T550) ----------------------
 tmux new-window -d -t t: -n plain \
   "env PATH='$PATH' HOME='$WORK' FLEET_CONF_DIR='$WORK/conf' FLEET_ACCOUNTS_DIR='$WORK/accounts' bash '$WORK/bin/fleet-claude.sh'" \
-  || fail "new-window failed"
+  || st_fail "new-window failed"
 for _ in $(seq 1 30); do
   [ -n "$(tmux show-options -wv -t t:plain @cc_agent 2>/dev/null)" ] && break
   sleep 0.2
 done
-[ -n "$(tmux show-options -wv -t t:plain @cc_agent 2>/dev/null)" ] || fail "the plain launch never ran"
-[ -z "$(tmux show-options -wv -t t:plain @cc_account 2>/dev/null)" ] || fail "a launch that named no account must stamp no @cc_account"
-[ ! -s "$WORK/account.calls" ] || fail "a launch that named no account must ask fleet-account.sh nothing: $(cat "$WORK/account.calls")"
+[ -n "$(tmux show-options -wv -t t:plain @cc_agent 2>/dev/null)" ] || st_fail "the plain launch never ran"
+[ -z "$(tmux show-options -wv -t t:plain @cc_account 2>/dev/null)" ] || st_fail "a launch that named no account must stamp no @cc_account"
+[ ! -s "$WORK/account.calls" ] || st_fail "a launch that named no account must ask fleet-account.sh nothing: $(cat "$WORK/account.calls")"
 
 # --- 2. a named account: stamped on the worker's own window, not the hub (#511) --
 tmux new-window -d -t t: -n worker \
   "env PATH='$PATH' HOME='$WORK' FLEET_CONF_DIR='$WORK/conf' FLEET_ACCOUNTS_DIR='$WORK/accounts' FLEET_ACCOUNT_LABEL=acctA bash '$WORK/bin/fleet-claude.sh'" \
-  || fail "new-window failed"
+  || st_fail "new-window failed"
 
 # wait for the launcher to have stamped SOMETHING (or give up after ~6s)
 for _ in $(seq 1 30); do
@@ -82,8 +81,8 @@ for _ in $(seq 1 30); do
   [ -n "$h$w" ] && break
   sleep 0.2
 done
-[ "$w" = "acctA" ] || fail "the worker window must carry the named account (got worker='$w' hub='$h')"
-[ -z "$h" ]        || fail "the stamp must not land on the hub (the session's current window); got hub='$h'"
-grep -q '^active' "$WORK/account.calls" && fail "the launcher must never ask fleet-account.sh active (T550)"
+[ "$w" = "acctA" ] || st_fail "the worker window must carry the named account (got worker='$w' hub='$h')"
+[ -z "$h" ]        || st_fail "the stamp must not land on the hub (the session's current window); got hub='$h'"
+grep -q '^active' "$WORK/account.calls" && st_fail "the launcher must never ask fleet-account.sh active (T550)"
 
 printf 'selftest OK: fleet-claude.sh picks no account; a named one is stamped on its own window (issues #511, T550)\n'

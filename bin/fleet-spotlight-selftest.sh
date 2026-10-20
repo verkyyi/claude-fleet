@@ -18,8 +18,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 SP="$BIN/fleet-spotlight.sh"
 st_sandbox "${TMPDIR:-/tmp}/spotlight-selftest.XXXXXX"
-FAILS=0
-bad() { printf 'FAIL %s\n' "$1"; FAILS=$((FAILS + 1)); }
+st_tally
 
 mkdir -p "$WORK/state" "$WORK/bin"
 # mdutil: $WORK/vols holds `<volume> on|off`; -i off turns all off, every call logged
@@ -54,9 +53,9 @@ reset() {
 # A
 reset
 out=$(sp status --check); rc=$?
-[ "$rc" = 2 ] && [ -z "$out" ] && st_ok "A status --check off a managed machine: no row" || bad "A status rc=$rc out=[$out]"
+[ "$rc" = 2 ] && [ -z "$out" ] && st_ok "A status --check off a managed machine: no row" || st_miss "A status rc=$rc out=[$out]"
 sp off >/dev/null 2>&1; rc=$?
-[ "$rc" = 1 ] && [ ! -s "$WORK/mdutil.log" ] && st_ok "A off refuses a person's own Mac" || bad "A off rc=$rc, mdutil: $(cat "$WORK/mdutil.log")"
+[ "$rc" = 1 ] && [ ! -s "$WORK/mdutil.log" ] && st_ok "A off refuses a person's own Mac" || st_miss "A off rc=$rc, mdutil: $(cat "$WORK/mdutil.log")"
 : > "$WORK/state/machine.env"
 
 # B
@@ -64,19 +63,19 @@ reset
 printf '/ off\n/System/Volumes/Data on\n' > "$WORK/vols"
 out=$(sp status --check); rc=$?
 [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'indexing on: /System/Volumes/Data' && printf '%s' "$out" | grep -q 'fleet-spotlight.sh off' \
-  && st_ok "B a volume indexing → WARN with the fix" || bad "B rc=$rc out=[$out]"
+  && st_ok "B a volume indexing → WARN with the fix" || st_miss "B rc=$rc out=[$out]"
 out=$(sp off); rc=$?
 grep -qx -- '-a -i off' "$WORK/mdutil.log" && grep -qx -- '-a -E' "$WORK/mdutil.log" && [ "$rc" = 0 ] \
   && printf '%s' "$out" | grep -q 'index erased on: /System/Volumes/Data' \
-  && st_ok "B off: mdutil -a -i off + -a -E" || bad "B off rc=$rc out=[$out] mdutil=[$(tr '\n' '|' < "$WORK/mdutil.log")]"
+  && st_ok "B off: mdutil -a -i off + -a -E" || st_miss "B off rc=$rc out=[$out] mdutil=[$(tr '\n' '|' < "$WORK/mdutil.log")]"
 out=$(sp status --check); rc=$?
-[ "$rc" = 0 ] && st_ok "B after off: PASS" || bad "B after rc=$rc out=[$out]"
+[ "$rc" = 0 ] && st_ok "B after off: PASS" || st_miss "B after rc=$rc out=[$out]"
 
 # C
 reset
 printf 'dave 07:13:04 0.4 /System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged\n' >> "$WORK/ps"
 out=$(sp status --check); rc=$?
-[ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'knowledge agent running for: dave' && st_ok "C knowledge agent running (volumes off) → WARN" || bad "C rc=$rc out=[$out]"
+[ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'knowledge agent running for: dave' && st_ok "C knowledge agent running (volumes off) → WARN" || st_miss "C rc=$rc out=[$out]"
 sp off >/dev/null; rc=$?
 n=0
 for u in 501 504; do for s in com.apple.spotlightknowledged com.apple.spotlightknowledged.importer com.apple.spotlightknowledged.updater; do
@@ -84,42 +83,42 @@ for u in 501 504; do for s in com.apple.spotlightknowledged com.apple.spotlightk
 done; done
 if [ "$rc" = 0 ] && [ "$n" = 12 ] && ! grep -q -- '-a -i off' "$WORK/mdutil.log"; then
   st_ok "C off disables + boots out 3 agents × gui/user × each uid, leaves mdutil alone"
-else bad "C off rc=$rc, $n/12 disable+bootout, mdutil=[$(tr '\n' '|' < "$WORK/mdutil.log")]"; fi
+else st_miss "C off rc=$rc, $n/12 disable+bootout, mdutil=[$(tr '\n' '|' < "$WORK/mdutil.log")]"; fi
 out=$(sp status --check); rc=$?
-[ "$rc" = 0 ] && st_ok "C after off: PASS" || bad "C after rc=$rc out=[$out]"
+[ "$rc" = 0 ] && st_ok "C after off: PASS" || st_miss "C after rc=$rc out=[$out]"
 
 # D
 reset
 printf 'root 01:02:03 115.0 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd\n' >> "$WORK/ps"
 out=$(sp status --check); rc=$?
-[ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'fseventsd(root) 115.0%' && st_ok "D fseventsd 115% for an hour → WARN" || bad "D rc=$rc out=[$out]"
+[ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'fseventsd(root) 115.0%' && st_ok "D fseventsd 115% for an hour → WARN" || st_miss "D rc=$rc out=[$out]"
 reset
 printf 'root 05:00 115.0 /x/mds_stores\nroot 2-01:00:00 3.0 /x/mds\n' >> "$WORK/ps"
 out=$(sp status --check); rc=$?
-[ "$rc" = 0 ] && st_ok "D 5 minutes hot, or days at 3%: not hot" || bad "D2 rc=$rc out=[$out]"
+[ "$rc" = 0 ] && st_ok "D 5 minutes hot, or days at 3%: not hot" || st_miss "D2 rc=$rc out=[$out]"
 
 # E
 reset
 printf '/ on\n' > "$WORK/vols"
 : > "$WORK/state/spotlight.keep"
 out=$(sp status --check); rc=$?
-[ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'kept on' && st_ok "E spotlight.keep: PASS «kept on»" || bad "E rc=$rc out=[$out]"
-sp off >/dev/null; [ ! -s "$WORK/mdutil.log" ] && [ ! -s "$WORK/launchctl.log" ] && st_ok "E off leaves a kept machine alone" || bad "E off acted"
+[ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'kept on' && st_ok "E spotlight.keep: PASS «kept on»" || st_miss "E rc=$rc out=[$out]"
+sp off >/dev/null; [ ! -s "$WORK/mdutil.log" ] && [ ! -s "$WORK/launchctl.log" ] && st_ok "E off leaves a kept machine alone" || st_miss "E off acted"
 rm -f "$WORK/state/spotlight.keep"
 
 # F
 reset
 out=$(sp off --tick); rc=$?
-[ "$rc" = 0 ] && [ -z "$out" ] && st_ok "F tick with nothing to do is quiet" || bad "F rc=$rc out=[$out]"
+[ "$rc" = 0 ] && [ -z "$out" ] && st_ok "F tick with nothing to do is quiet" || st_miss "F rc=$rc out=[$out]"
 if [ "$(id -u)" != 0 ]; then
   out=$(FLEET_NODE_STATE="$WORK/state" FLEET_SPOTLIGHT_MDUTIL="$WORK/bin/mdutil" bash "$SP" off 2>&1); rc=$?
-  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'needs root' && st_ok "F off without root refuses" || bad "F root rc=$rc out=[$out]"
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'needs root' && st_ok "F off without root refuses" || st_miss "F root rc=$rc out=[$out]"
 fi
 
 # G
 grep -q '/fleet-spotlight.sh"' "$BIN/fleet-doctor.sh" && grep -q '_nspot" status --check' "$BIN/fleet-doctor.sh" && grep -q 'warn spotlight' "$BIN/fleet-doctor.sh" \
-  && st_ok "G doctor's spotlight row reads status --check" || bad "G doctor has no spotlight row"
+  && st_ok "G doctor's spotlight row reads status --check" || st_miss "G doctor has no spotlight row"
 grep -q '"fleet-spotlight.sh"), "off", "--tick"' "$BIN/fleet-node-supervisor.py" \
-  && st_ok "G the machine daemon's spotlight task runs off --tick" || bad "G no spotlight task in the supervisor"
+  && st_ok "G the machine daemon's spotlight task runs off --tick" || st_miss "G no spotlight task in the supervisor"
 
-[ "$FAILS" = 0 ] && echo "fleet-spotlight-selftest: all passed" || { echo "fleet-spotlight-selftest: $FAILS failed"; exit 1; }
+st_done

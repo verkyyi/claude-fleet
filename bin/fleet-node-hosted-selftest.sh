@@ -27,6 +27,7 @@
 # Drives: bin/fleet, bin/fleet-client-lease.py.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 REAL_TMUX=''
 _ifs=$IFS; IFS=:
 for d in $PATH; do
@@ -35,12 +36,11 @@ for d in $PATH; do
 done
 IFS=$_ifs
 [ -n "$REAL_TMUX" ] || { printf 'fleet-node-hosted selftest: tmux not installed — SKIP\n'; exit 0; }
-command -v python3 >/dev/null 2>&1 || { printf 'fleet-node-hosted selftest: python3 absent — SKIP\n'; exit 0; }
+st_need python3
 
 W="$(mktemp -d /tmp/fnh.XXXXXX)" || exit 2
-CHECKS=0; FAILS=0
-eq()  { CHECKS=$((CHECKS + 1)); if [ "$2" = "$3" ]; then :; else FAILS=$((FAILS + 1)); printf 'FAIL %s\n  got:  %s\n  want: %s\n' "$1" "$2" "$3"; fi; }
-has() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) FAILS=$((FAILS + 1)); printf 'FAIL %s\n  got: %s\n  missing: %s\n' "$1" "$2" "$3" ;; esac; }
+st_tally count miss
+eq()  { st_eq "$1" "$3" "$2"; }   # <leg> <got> <want>
 cleanup() { rm -rf "$W"; }
 trap cleanup EXIT INT TERM
 
@@ -95,20 +95,20 @@ fa -- mac-a
 eq "A fleet mac-a → the runtime's thin loop" "$calls" "fakert fleet-thin.py --local --home mac-a|hosted=1"
 fa -- --old
 eq "A fleet --old → the runtime's thin loop" "$calls" "fakert fleet-thin.py --local|hosted=1"
-has "A … saying the old client is gone" "$out" "旧客户端已删除（#3008）"
+st_has "A … saying the old client is gone" "$out" "旧客户端已删除（#3008）"
 fa FLEET_CLIENT=shell --
 eq "A FLEET_CLIENT=shell → the runtime's thin loop all the same" "$calls" "fakert fleet-thin.py --local|hosted=1"
-has "A … and says so" "$out" "FLEET_CLIENT=shell"
+st_has "A … and says so" "$out" "FLEET_CLIENT=shell"
 fa SSH_CONNECTION='203.0.113.9 50000 10.0.0.3 22' --
 eq "A over ssh (a phone, #3006): the same" "$calls" "fakert fleet-thin.py --local|hosted=1"
 fa -- quit
 eq "A fleet quit → fleet-client-retire.sh stop" "$calls" "inst fleet-client-retire.sh stop|hosted=1"
 fa -- status
-has "A fleet status → fleet-client-retire.sh running" "$calls" "inst fleet-client-retire.sh running|hosted=1"
-has "A … then the who line" "$calls" "inst fleet-client-who.sh |hosted=1"
+st_has "A fleet status → fleet-client-retire.sh running" "$calls" "inst fleet-client-retire.sh running|hosted=1"
+st_has "A … then the who line" "$calls" "inst fleet-client-who.sh |hosted=1"
 fa -- claude
 eq "A fleet claude → exit 3" "$rc" 3
-has "A … says to type fleet or --here" "$out" "敲 fleet 在这台上开客户端，或 fleet claude --here"
+st_has "A … says to type fleet or --here" "$out" "敲 fleet 在这台上开客户端，或 fleet claude --here"
 fa -- claude --here
 eq "A fleet claude --here → its road as before" "$calls" "inst fleet-home-session.sh claude --here|hosted=1"
 fa -- codex hello
@@ -125,7 +125,7 @@ nr() { printf '%s\n' "$1" | grep -v '^inst fleet-client-retire.sh stop --quiet -
 mkdir -p "$W/home/.cache/claude-fleet/shell/bin"
 fa --
 rm -rf "$W/home/.cache/claude-fleet/shell"
-has "A … an old resident client's files still here: the retire command (#2904)" "$out" "fleet-node-shell-retire.sh --login"
+st_has "A … an old resident client's files still here: the retire command (#2904)" "$out" "fleet-node-shell-retire.sh --login"
 fa FLEET_NODE_CLIENT=1 --
 eq "A the hatch: the install's own thin loop, the update asked, no line" "$(nr "$calls")|$out" "inst fleet-client-update.sh start|hosted=
 inst fleet-thin.py |hosted=|"
@@ -139,13 +139,9 @@ inst fleet-thin.py |hosted=|"
 # ---- D. the where -------------------------------------------------------------
 echo "D. the where"
 w=$(cd "$W" && FLEET_NODE_HOSTED=1 SSH_CONNECTION='203.0.113.9 5 10.0.0.3 22' python3 "$BIN/fleet-client-lease.py" device --save "$W/w1.json" </dev/null >/dev/null 2>&1; cat "$W/w1.json")
-has "D node-hosted: via" "$w" '"via": "node-hosted"'
-has "D … caps link only" "$w" '"caps": ["link"]'
+st_has "D node-hosted: via" "$w" '"via": "node-hosted"'
+st_has "D … caps link only" "$w" '"caps": ["link"]'
 w=$(cd "$W" && SSH_CONNECTION='203.0.113.9 5 10.0.0.3 22' python3 "$BIN/fleet-client-lease.py" device --save "$W/w2.json" </dev/null >/dev/null 2>&1; cat "$W/w2.json")
-has "D without it: as before (via public)" "$w" '"via": "public"'
+st_has "D without it: as before (via public)" "$w" '"via": "public"'
 
-if [ "$FAILS" -gt 0 ]; then
-  printf 'fleet-node-hosted selftest: %d of %d checks FAILED\n' "$FAILS" "$CHECKS"
-  exit 1
-fi
-printf 'fleet-node-hosted selftest: %d checks passed\n' "$CHECKS"
+st_done

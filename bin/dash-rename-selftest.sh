@@ -34,38 +34,37 @@ cleanup() { tmux kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
 trap 'exit 1' INT TERM HUP
 
-fail() { printf 'FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '  got: %s\n' "$2" >&2; exit 1; }
 
-tmux -f /dev/null new-session -d -s t -n first 'sleep 600' || fail "could not start the isolated tmux server"
+tmux -f /dev/null new-session -d -s t -n first 'sleep 600' || st_fail "could not start the isolated tmux server"
 tmux new-window -d -t t: -n second 'sleep 600'
 W1=$(tmux list-windows -t t -F '#{window_id} #{window_name}' | awk '$2=="first"{print $1}')
 W2=$(tmux list-windows -t t -F '#{window_id} #{window_name}' | awk '$2=="second"{print $1}')
-[ -n "$W1" ] && [ -n "$W2" ] || fail "setup: no window ids"
+[ -n "$W1" ] && [ -n "$W2" ] || st_fail "setup: no window ids"
 tmux set-option -w -t "$W1" @issue 42
 name() { tmux display-message -p -t "$1" '#{window_name}'; }
 opt()  { tmux show-options -wqv -t "$1" "$2"; }
 
 # --- A + B --------------------------------------------------------------------
 out=$(bash "$REN" --wid "$W1" "修登录 bug")
-[ -z "$out" ] || fail "A: prints nothing" "$out"
-[ "$(name "$W1")" = "修登录 bug" ] || fail "A: $W1 not renamed" "$(name "$W1")"
-[ "$(opt "$W1" @name_manual)" = "修登录 bug" ] || fail "A: @name_manual not stamped" "$(opt "$W1" @name_manual)"
-[ "$(name "$W2")" = second ] || fail "A: another window renamed" "$(name "$W2")"
+[ -z "$out" ] || st_fail "A: prints nothing" "$out"
+[ "$(name "$W1")" = "修登录 bug" ] || st_fail "A: $W1 not renamed" "$(name "$W1")"
+[ "$(opt "$W1" @name_manual)" = "修登录 bug" ] || st_fail "A: @name_manual not stamped" "$(opt "$W1" @name_manual)"
+[ "$(name "$W2")" = second ] || st_fail "A: another window renamed" "$(name "$W2")"
 st_ok "A a window id + a name renames that window and stamps @name_manual"
-[ "$(opt "$W1" @issue)" = 42 ] || fail "B: @issue lost" "$(opt "$W1" @issue)"
+[ "$(opt "$W1" @issue)" = 42 ] || st_fail "B: @issue lost" "$(opt "$W1" @issue)"
 st_ok "B the @issue binding survives"
 
 # --- C ------------------------------------------------------------------------
 bash "$REN" --wid "$W2" ""
-[ "$(name "$W2")" = second ] || fail "C: an empty name renamed" "$(name "$W2")"
-[ -z "$(opt "$W2" @name_manual)" ] || fail "C: an empty name stamped @name_manual"
+[ "$(name "$W2")" = second ] || st_fail "C: an empty name renamed" "$(name "$W2")"
+[ -z "$(opt "$W2" @name_manual)" ] || st_fail "C: an empty name stamped @name_manual"
 st_ok "C an empty name renames nothing"
 
 # --- D ------------------------------------------------------------------------
 tmux set-option -w -t "$W2" @rename_to "从选项来"
 bash "$REN" --wid "$W2"
-[ "$(name "$W2")" = "从选项来" ] || fail "D: @rename_to not used" "$(name "$W2")"
-[ -z "$(opt "$W2" @rename_to)" ] || fail "D: @rename_to not cleared"
+[ "$(name "$W2")" = "从选项来" ] || st_fail "D: @rename_to not used" "$(name "$W2")"
+[ -z "$(opt "$W2" @rename_to)" ] || st_fail "D: @rename_to not cleared"
 st_ok "D no name reads @rename_to, then clears it"
 
 # --- E ------------------------------------------------------------------------
@@ -73,19 +72,19 @@ for t in "t:1" "first" "修登录 bug" ""; do
   bash "$REN" --wid "$t" "nope"
 done
 case " $(tmux list-windows -t t -F '#{window_name}' | tr '\n' ' ') " in
-  *" nope "*) fail "E: a non-id target was renamed" "$(tmux list-windows -t t -F '#{window_name}' | tr '\n' ' ')" ;;
+  *" nope "*) st_fail "E: a non-id target was renamed" "$(tmux list-windows -t t -F '#{window_name}' | tr '\n' ' ')" ;;
 esac
 st_ok "E a position or a bare name is never a target"
 
 # --- F ------------------------------------------------------------------------
 bash "$REN" --wid "$W2" "$(printf 'a\tb')"
-[ "$(name "$W2")" = "a b" ] || fail "F: a tab kept" "$(name "$W2")"
+[ "$(name "$W2")" = "a b" ] || st_fail "F: a tab kept" "$(name "$W2")"
 st_ok "F a tab in the name becomes a space"
 
 # --- G ------------------------------------------------------------------------
 out=$(bash "$REN" "t:1" 2>&1); rc=$?
-[ "$rc" = 0 ] && [ -z "$out" ] || fail "G: a call without --wid acted (rc $rc)" "$out"
-[ "$(name "$W2")" = "a b" ] || fail "G: renamed without --wid"
+[ "$rc" = 0 ] && [ -z "$out" ] || st_fail "G: a call without --wid acted (rc $rc)" "$out"
+[ "$(name "$W2")" = "a b" ] || st_fail "G: renamed without --wid"
 st_ok "G no --wid does nothing"
 
 printf 'PASS: dash-rename.sh --wid renames by id only\n'

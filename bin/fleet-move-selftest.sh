@@ -41,13 +41,12 @@
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 MOVE="$BIN/fleet-move.sh"; REMOTE="$BIN/fleet-move-remote.sh"
 [ -f "$MOVE" ] && [ -f "$REMOTE" ] || { printf 'selftest: fleet-move.sh/-remote.sh not found\n' >&2; exit 2; }
 
 CHECKS=0
-fail() { printf 'fleet-move selftest FAIL: %s\n' "$1" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
 
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 if [ -z "$REAL_TMUX" ] || ! command -v perl >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1; then
@@ -236,29 +235,29 @@ seed_transcript "$WORK/src-home" "$WT1" "$SID1"
 w1=$(spawn_source b1 issue-42 "$SID1" "$WT1" 42 working)
 sleep 1
 out=$(HOME="$WORK/src-home" "$MOVE" b1 --to "$TO" --session "$LSRC" --dry-run 2>&1); rc=$?
-[ "$rc" -eq 0 ] || fail "dry-run should exit 0, got $rc: $out"
-printf '%s\n' "$out" | grep -q 'target ready' || fail "dry-run must probe the target: $out"
-printf '%s\n' "$out" | grep -q 'ahead of master' || fail "dry-run must report the branch is ahead of base: $out"
-win_alive TSRC "$w1" || fail "dry-run must not touch the source window"
-git -C "$WORK/dst-home/projects/repo" worktree list | grep -q scratch && fail "dry-run must not provision anything on the target"
-ok
+[ "$rc" -eq 0 ] || st_fail "dry-run should exit 0, got $rc: $out"
+printf '%s\n' "$out" | grep -q 'target ready' || st_fail "dry-run must probe the target: $out"
+printf '%s\n' "$out" | grep -q 'ahead of master' || st_fail "dry-run must report the branch is ahead of base: $out"
+win_alive TSRC "$w1" || st_fail "dry-run must not touch the source window"
+git -C "$WORK/dst-home/projects/repo" worktree list | grep -q scratch && st_fail "dry-run must not provision anything on the target"
+st_count
 
 # ============================================================ case 2: the real move
 out=$(HOME="$WORK/src-home" FLEET_MOVE_EXIT_WAIT=10 FLEET_MOVE_CLOSE_WAIT=6 \
   "$MOVE" b1 --to "$TO" --session "$LSRC" 2>&1); rc=$?
-[ "$rc" -eq 0 ] || fail "the real move should exit 0, got $rc: $out"
-win_alive TSRC "$w1" && fail "source window must be closed after a verified move: $out"
+[ "$rc" -eq 0 ] || st_fail "the real move should exit 0, got $rc: $out"
+win_alive TSRC "$w1" && st_fail "source window must be closed after a verified move: $out"
 nw=$(TDST list-windows -F '#{window_id} #{@issue}' | awk '$2==42{print $1; exit}')
-[ -n "$nw" ] || fail "no target window carries @issue=42 after the move: $out"
+[ -n "$nw" ] || st_fail "no target window carries @issue=42 after the move: $out"
 dwt=$(TDST display-message -p -t "$nw" '#{@worktree}')
-[ -d "$dwt" ] || fail "target window's @worktree does not exist: $dwt"
-[ "$(git -C "$dwt" branch --show-current)" = issue-42 ] || fail "target worktree is not on branch issue-42"
-[ -f "$dwt/work.txt" ] || fail "target worktree is missing the pushed commit's file"
+[ -d "$dwt" ] || st_fail "target window's @worktree does not exist: $dwt"
+[ "$(git -C "$dwt" branch --show-current)" = issue-42 ] || st_fail "target worktree is not on branch issue-42"
+[ -f "$dwt/work.txt" ] || st_fail "target worktree is missing the pushed commit's file"
 git -C "$WORK/origin.git" show-ref --verify --quiet refs/heads/issue-42 \
-  || fail "the branch was never pushed to origin"
+  || st_fail "the branch was never pushed to origin"
 denc="$(printf '%s' "$dwt" | tr '/.' '--')"
-[ -f "$WORK/dst-home/.claude/projects/$denc/$SID1.jsonl" ] || fail "transcript was not copied to the target"
-ok
+[ -f "$WORK/dst-home/.claude/projects/$denc/$SID1.jsonl" ] || st_fail "transcript was not copied to the target"
+st_count
 
 # ============================================================ case 3: refused:dirty
 SID2="22222222-2222-2222-2222-222222222222"
@@ -270,13 +269,13 @@ seed_transcript "$WORK/src-home" "$WT2" "$SID2"
 w2=$(spawn_source b2 issue-43 "$SID2" "$WT2" 43 working)
 sleep 1
 out=$(HOME="$WORK/src-home" "$MOVE" b2 --to "$TO" --session "$LSRC" 2>&1); rc=$?
-[ "$rc" -eq 6 ] || fail "a dirty worktree must refuse with rc 6, got $rc: $out"
-printf '%s\n' "$out" | grep -q 'refused:dirty' || fail "must name refused:dirty: $out"
-win_alive TSRC "$w2" || fail "a refused move must leave the source window alone"
-git -C "$WORK/dst-home/projects/repo" worktree list | grep -q issue-43 && fail "a refused move must not touch the target"
+[ "$rc" -eq 6 ] || st_fail "a dirty worktree must refuse with rc 6, got $rc: $out"
+printf '%s\n' "$out" | grep -q 'refused:dirty' || st_fail "must name refused:dirty: $out"
+win_alive TSRC "$w2" || st_fail "a refused move must leave the source window alone"
+git -C "$WORK/dst-home/projects/repo" worktree list | grep -q issue-43 && st_fail "a refused move must not touch the target"
 TSRC send-keys -t "$w2" -l '/exit'; TSRC send-keys -t "$w2" Enter; sleep 1
 TSRC kill-window -t "$w2" 2>/dev/null
-ok
+st_count
 
 # ============================================================ case 4: --keep-source
 SID3="33333333-3333-3333-3333-333333333333"
@@ -287,14 +286,14 @@ seed_transcript "$WORK/src-home" "$WT3" "$SID3"
 w3=$(spawn_source b3 issue-44 "$SID3" "$WT3" 44 'done')
 sleep 1
 out=$(HOME="$WORK/src-home" "$MOVE" b3 --to "$TO" --session "$LSRC" --keep-source 2>&1); rc=$?
-[ "$rc" -eq 0 ] || fail "--keep-source should still exit 0 on a verified move, got $rc: $out"
-printf '%s\n' "$out" | grep -q 'SOURCE LEFT RUNNING' || fail "--keep-source must say the source is left running: $out"
-win_alive TSRC "$w3" || fail "--keep-source must NOT close the source window"
+[ "$rc" -eq 0 ] || st_fail "--keep-source should still exit 0 on a verified move, got $rc: $out"
+printf '%s\n' "$out" | grep -q 'SOURCE LEFT RUNNING' || st_fail "--keep-source must say the source is left running: $out"
+win_alive TSRC "$w3" || st_fail "--keep-source must NOT close the source window"
 nw3=$(TDST list-windows -F '#{window_id} #{@issue}' | awk '$2==44{print $1; exit}')
-[ -n "$nw3" ] || fail "--keep-source must still resume on the target"
+[ -n "$nw3" ] || st_fail "--keep-source must still resume on the target"
 TSRC send-keys -t "$w3" -l '/exit'; TSRC send-keys -t "$w3" Enter; sleep 1
 TSRC kill-window -t "$w3" 2>/dev/null
-ok
+st_count
 
 # ============================================================ case 5: stuck agent → SIGTERM fallback
 SID4="44444444-4444-4444-4444-444444444444"
@@ -306,17 +305,17 @@ w4=$(spawn_source b4 issue-45 "$SID4" "$WT4" 45 working src-runner-stuck)
 sleep 1
 out=$(HOME="$WORK/src-home" FLEET_MOVE_EXIT_WAIT=3 FLEET_MOVE_TERM_WAIT=6 FLEET_MOVE_CLOSE_WAIT=5 \
   "$MOVE" b4 --to "$TO" --session "$LSRC" 2>&1); rc=$?
-[ "$rc" -eq 0 ] || fail "a stuck agent must still complete via the SIGTERM fallback, got $rc: $out"
-win_alive TSRC "$w4" && fail "a stuck agent, once SIGTERM'd, must still have its window closed: $out"
+[ "$rc" -eq 0 ] || st_fail "a stuck agent must still complete via the SIGTERM fallback, got $rc: $out"
+win_alive TSRC "$w4" && st_fail "a stuck agent, once SIGTERM'd, must still have its window closed: $out"
 nw4=$(TDST list-windows -F '#{window_id} #{@issue}' | awk '$2==45{print $1; exit}')
-[ -n "$nw4" ] || fail "the stuck-agent case must still resume on the target: $out"
-ok
+[ -n "$nw4" ] || st_fail "the stuck-agent case must still resume on the target: $out"
+st_count
 
 # ============================================================ case 6: refused:not-found
 out=$(HOME="$WORK/src-home" "$MOVE" @9999 --to "$TO" --session "$LSRC" 2>&1); rc=$?
-[ "$rc" -eq 3 ] || fail "a bogus window must refuse with rc 3, got $rc: $out"
-printf '%s\n' "$out" | grep -q 'refused:not-found' || fail "must name refused:not-found: $out"
-ok
+[ "$rc" -eq 3 ] || st_fail "a bogus window must refuse with rc 3, got $rc: $out"
+printf '%s\n' "$out" | grep -q 'refused:not-found' || st_fail "must name refused:not-found: $out"
+st_count
 
 # ============================================================ case 7: stale branch on target refuses cleanly
 SID5="55555555-5555-5555-5555-555555555555"
@@ -333,12 +332,12 @@ seed_transcript "$WORK/src-home" "$WT5" "$SID5"
 w5=$(spawn_source b5 issue-46 "$SID5" "$WT5" 46 working)
 sleep 1
 out=$(HOME="$WORK/src-home" "$MOVE" b5 --to "$TO" --session "$LSRC" 2>&1); rc=$?
-[ "$rc" -eq 8 ] || fail "a branch already checked out elsewhere on the target must refuse (failed:target), got $rc: $out"
-printf '%s\n' "$out" | grep -qi 'already checked out\|failed:target' || fail "must name the stale-worktree reason: $out"
-win_alive TSRC "$w5" || fail "a target-side refusal must never touch the source"
+[ "$rc" -eq 8 ] || st_fail "a branch already checked out elsewhere on the target must refuse (failed:target), got $rc: $out"
+printf '%s\n' "$out" | grep -qi 'already checked out\|failed:target' || st_fail "must name the stale-worktree reason: $out"
+win_alive TSRC "$w5" || st_fail "a target-side refusal must never touch the source"
 TSRC send-keys -t "$w5" -l '/exit'; TSRC send-keys -t "$w5" Enter; sleep 1
 TSRC kill-window -t "$w5" 2>/dev/null
-ok
+st_count
 
 # ============================================================ case 8: another login on THIS machine (issue #2210)
 # The hub signs no certificate to the machine itself: `--to <login>@<this host>`
@@ -370,20 +369,20 @@ w6=$(spawn_source b6 issue-47 "$SID6" "$WT6" 47 working)
 sleep 1
 out=$(PATH="$WORK/shim-local:$PATH" HOME="$WORK/src-home" FLEET_MOVE_LOCAL_HOST=samehost FLEET_MOVE_EXIT_WAIT=10 FLEET_MOVE_CLOSE_WAIT=6 \
   "$MOVE" b6 --to dstuser@samehost --session "$LSRC" 2>&1); rc=$?
-[ "$rc" -eq 0 ] || fail "a same-machine move should exit 0, got $rc: $out"
-printf '%s\n' "$out" | grep -q 'is this machine' || fail "a same-machine move must say it runs through sudo: $out"
-[ -s "$WORK/ssh-local.log" ] && fail "a same-machine move ran ssh: $(cat "$WORK/ssh-local.log")"
-win_alive TSRC "$w6" && fail "source window must be closed after a verified same-machine move: $out"
+[ "$rc" -eq 0 ] || st_fail "a same-machine move should exit 0, got $rc: $out"
+printf '%s\n' "$out" | grep -q 'is this machine' || st_fail "a same-machine move must say it runs through sudo: $out"
+[ -s "$WORK/ssh-local.log" ] && st_fail "a same-machine move ran ssh: $(cat "$WORK/ssh-local.log")"
+win_alive TSRC "$w6" && st_fail "source window must be closed after a verified same-machine move: $out"
 nw6=$(TDST list-windows -F '#{window_id} #{@issue}' | awk '$2==47{print $1; exit}')
-[ -n "$nw6" ] || fail "no target window carries @issue=47 after the same-machine move: $out"
+[ -n "$nw6" ] || st_fail "no target window carries @issue=47 after the same-machine move: $out"
 dwt6=$(TDST display-message -p -t "$nw6" '#{@worktree}')
-[ -f "$dwt6/local.txt" ] || fail "same-machine target worktree is missing the pushed commit"
+[ -f "$dwt6/local.txt" ] || st_fail "same-machine target worktree is missing the pushed commit"
 [ -f "$WORK/dst-home/.claude/projects/$(printf '%s' "$dwt6" | tr '/.' '--')/$SID6.jsonl" ] \
-  || fail "same-machine move did not copy the transcript"
+  || st_fail "same-machine move did not copy the transcript"
 # a host that is not this machine still goes through ssh (and its certificate)
 out=$(PATH="$WORK/shim-local:$PATH" HOME="$WORK/src-home" FLEET_MOVE_LOCAL_HOST=samehost \
   "$MOVE" @9999 --to dstuser@otherhost --session "$LSRC" 2>&1)
-printf '%s\n' "$out" | grep -q 'is this machine' && fail "another host was taken for this machine: $out"
-ok
+printf '%s\n' "$out" | grep -q 'is this machine' && st_fail "another host was taken for this machine: $out"
+st_count
 
 printf 'fleet-move selftest: OK (%d checks)\n' "$CHECKS"

@@ -53,8 +53,7 @@ export CLAUDE_PROJECTS_DIR="$WORK/projects"
 export TMPDIR="$WORK"                       # so the dash summary cache lands under $WORK
 mkdir -p "$CLAUDE_PROJECTS_DIR"
 
-CHECKS=0
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+st_tally count
 contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — [$2] does not contain [$3]";; esac; }
 
 run() { bash "$H" "$@"; }
@@ -86,18 +85,18 @@ row=$(cat "$FLEET_HISTORY_LEDGER")
 # exactly 11 tab-separated columns (count tabs = 10) — the 10th is `state` (#320),
 # the 11th the spawn provenance `origin` (#503).
 tabs=$(printf '%s' "$row" | tr -cd '\t' | wc -c | tr -d ' ')
-eq "record: row has 11 columns (10 tabs)" "10" "$tabs"
+st_eq "record: row has 11 columns (10 tabs)" "10" "$tabs"
 
 IFS=$'\t' read -r c_when c_iss _ c_pr c_sha c_wt c_td c_sid c_smry c_state c_origin <<<"$row"
-eq "record: issue col"            "9"      "$c_iss"
-eq "record: pr degrades to dash"  "-"      "$c_pr"
-eq "record: sha degrades to dash" "-"      "$c_sha"
-eq "record: worktree col"         "$WT"    "$c_wt"
-eq "record: transcript-dir col"   "$TDIR"  "$c_td"
-eq "record: newest session id"    "new-session-2222" "$c_sid"
-eq "record: summary tab/nl flattened to spaces" "fixed the thing" "$c_smry"
-eq "record: state column is 'landed'" "landed" "$c_state"
-eq "record: origin degrades to dash (#503)" "-" "$c_origin"
+st_eq "record: issue col"            "9"      "$c_iss"
+st_eq "record: pr degrades to dash"  "-"      "$c_pr"
+st_eq "record: sha degrades to dash" "-"      "$c_sha"
+st_eq "record: worktree col"         "$WT"    "$c_wt"
+st_eq "record: transcript-dir col"   "$TDIR"  "$c_td"
+st_eq "record: newest session id"    "new-session-2222" "$c_sid"
+st_eq "record: summary tab/nl flattened to spaces" "fixed the thing" "$c_smry"
+st_eq "record: state column is 'landed'" "landed" "$c_state"
+st_eq "record: origin degrades to dash (#503)" "-" "$c_origin"
 # mergedAt auto-stamped (non-empty, dash-free ISO-ish) when not provided
 case "$c_when" in ''|-) st_fail "record: mergedAt should auto-stamp, got [$c_when]";; esac
 CHECKS=$((CHECKS + 1))
@@ -115,7 +114,7 @@ mkdir -p "$CLAUDE_PROJECTS_DIR/$ENC10"; : > "$CLAUDE_PROJECTS_DIR/$ENC10/sess-10
 printf 'summary from the dash cache\n' > "$DC/summary_fleetA_77"
 run record --issue 10 --worktree "$WT10" --win '@77' --session fleetA >/dev/null
 last=$(tail -n1 "$FLEET_HISTORY_LEDGER"); smry_col=$(printf '%s' "$last" | awk -F'\t' '{print $9}')
-eq "record: --win without --summary leaves col 9 '-' (no dash-cache fallback, #535)" "-" "$smry_col"
+st_eq "record: --win without --summary leaves col 9 '-' (no dash-cache fallback, #535)" "-" "$smry_col"
 
 # …and the same for a second fleet (the row count downstream relies on both records).
 WT11="/w/repo_v1.2/.claude-worktrees/issue-11"
@@ -123,7 +122,7 @@ ENC11=$(printf '%s' "$WT11" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
 mkdir -p "$CLAUDE_PROJECTS_DIR/$ENC11"; : > "$CLAUDE_PROJECTS_DIR/$ENC11/sess-11.jsonl"
 run record --issue 11 --worktree "$WT11" --win '@77' --session fleetB >/dev/null
 last=$(tail -n1 "$FLEET_HISTORY_LEDGER"); smry_col=$(printf '%s' "$last" | awk -F'\t' '{print $9}')
-eq "record: second fleet's --win record also leaves col 9 '-'" "-" "$smry_col"
+st_eq "record: second fleet's --win record also leaves col 9 '-'" "-" "$smry_col"
 
 # landed record is IDEMPOTENT (#384): record-before-remove now runs from TWO
 # reapers (fleet-cleanup.sh AND worktree-autoclean.sh, both via fleet_reap_record),
@@ -134,7 +133,7 @@ before_dup=$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')
 outdup=$(run record --issue 9 --worktree "$WT" --summary "second write, same session")
 after_dup=$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')
 contains "record: idempotent re-record is reported as skipped" "$outdup" "already in ledger"
-eq "record: idempotent (#384) — same session writes no duplicate landed row" "$before_dup" "$after_dup"
+st_eq "record: idempotent (#384) — same session writes no duplicate landed row" "$before_dup" "$after_dup"
 
 # ============================================================================
 # A2. record-closed — landed-less closed-unlanded row (idempotent, no-shadow) #320
@@ -148,21 +147,21 @@ outc=$(run record-closed --repo o/r --issue 42 --worktree "$WTC" --title "fix-wi
 contains "record-closed: reports the closed-unlanded record" "$outc" "closed-unlanded #42"
 rowc=$(cat "$FLEET_HISTORY_LEDGER")
 tabsc=$(printf '%s' "$rowc" | tr -cd '\t' | wc -c | tr -d ' ')
-eq "record-closed: row has 11 columns (10 tabs)" "10" "$tabsc"
+st_eq "record-closed: row has 11 columns (10 tabs)" "10" "$tabsc"
 IFS=$'\t' read -r cc_when cc_iss _ cc_pr cc_sha cc_wt _ cc_sid cc_smry cc_state _ <<<"$rowc"
-eq "record-closed: issue col"       "42"                "$cc_iss"
-eq "record-closed: no pr (dash)"    "-"                 "$cc_pr"
-eq "record-closed: no sha (dash)"   "-"                 "$cc_sha"
-eq "record-closed: worktree col"    "$WTC"              "$cc_wt"
-eq "record-closed: session id"      "sess-c-42"         "$cc_sid"
-eq "record-closed: summary col"     "poking the widget" "$cc_smry"
-eq "record-closed: state marker"    "closed-unlanded"   "$cc_state"
+st_eq "record-closed: issue col"       "42"                "$cc_iss"
+st_eq "record-closed: no pr (dash)"    "-"                 "$cc_pr"
+st_eq "record-closed: no sha (dash)"   "-"                 "$cc_sha"
+st_eq "record-closed: worktree col"    "$WTC"              "$cc_wt"
+st_eq "record-closed: session id"      "sess-c-42"         "$cc_sid"
+st_eq "record-closed: summary col"     "poking the widget" "$cc_smry"
+st_eq "record-closed: state marker"    "closed-unlanded"   "$cc_state"
 case "$cc_when" in ''|-) st_fail "record-closed: closedAt should auto-stamp, got [$cc_when]";; esac
 CHECKS=$((CHECKS + 1))
 
 # idempotent: a second record-closed for the same session adds NO new row.
 run record-closed --repo o/r --issue 42 --worktree "$WTC" >/dev/null
-eq "record-closed: idempotent (no duplicate row)" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+st_eq "record-closed: idempotent (no duplicate row)" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
 
 # no-shadow: a LANDED row already present for this session → record-closed skips
 # (dedup on session-id keeps a merged session from getting a second, closed row).
@@ -170,7 +169,7 @@ eq "record-closed: idempotent (no duplicate row)" "1" "$(wc -l < "$FLEET_HISTORY
 run record --repo o/r --issue 42 --worktree "$WTC" --summary "landed the widget" >/dev/null
 outs=$(run record-closed --repo o/r --issue 42 --worktree "$WTC")
 contains "record-closed: skips when a landed row exists" "$outs" "already in ledger"
-eq "record-closed: landed row not shadowed (still 1 row)" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+st_eq "record-closed: landed row not shadowed (still 1 row)" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
 
 # no transcript → recorded TRANSCRIPT-LESS (issue #547: a Codex worker never writes
 # a ~/.claude/projects transcript; a Claude one that died before its first turn is
@@ -179,11 +178,11 @@ eq "record-closed: landed row not shadowed (still 1 row)" "1" "$(wc -l < "$FLEET
 WTN="$WORK/wtn/issue-77"; mkdir -p "$WTN"
 outn=$(run record-closed --repo o/r --issue 77 --worktree "$WTN")
 contains "record-closed: no transcript → still recorded" "$outn" "closed-unlanded"
-eq "record-closed: no-transcript writes ONE row" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
-eq "record-closed: transcript-less row has '-' for dir + session" "-	-" "$(cut -f7,8 "$FLEET_HISTORY_LEDGER")"
+st_eq "record-closed: no-transcript writes ONE row" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+st_eq "record-closed: transcript-less row has '-' for dir + session" "-	-" "$(cut -f7,8 "$FLEET_HISTORY_LEDGER")"
 outn2=$(run record-closed --repo o/r --issue 77 --worktree "$WTN")
 contains "record-closed: transcript-less repeat is deduped" "$outn2" "already in ledger"
-eq "record-closed: transcript-less repeat writes no 2nd row" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+st_eq "record-closed: transcript-less repeat writes no 2nd row" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
 
 # ============================================================================
 # A3. A reused scratch cwd is not a session identity (#543)
@@ -202,15 +201,15 @@ for mode in record-closed record; do
   : > "$TDIRR/slot-session-2.jsonl"
   touch -t 203001010000 "$TDIRR/slot-session-2.jsonl"
   run "$mode" --key scratch-9 --worktree "$WTR" >/dev/null
-  eq "$mode: reused scratch slot keeps both session ids" \
+  st_eq "$mode: reused scratch slot keeps both session ids" \
     $'slot-session-1\nslot-session-2' "$(cut -f8 "$FLEET_HISTORY_LEDGER")"
-  eq "$mode: both sessions share the same transcript directory" \
+  st_eq "$mode: both sessions share the same transcript directory" \
     "$TDIRR" "$(cut -f7 "$FLEET_HISTORY_LEDGER" | sort -u)"
   repeated=$(run "$mode" --key scratch-9 --worktree "$WTR")
   contains "$mode: retry of the new session is skipped" "$repeated" "already in ledger"
   # Binding that same session to an issue must not create a third history row.
   run record-closed --issue 543 --worktree "$WTR" >/dev/null
-  eq "$mode: retry and issue bind keep exactly two rows" \
+  st_eq "$mode: retry and issue bind keep exactly two rows" \
     "2" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
 done
 
@@ -352,12 +351,12 @@ contains "rows: empty ledger yields a placeholder" "$rows3" "no landed sessions"
 : > "$FLEET_HISTORY_LEDGER"
 printf '2026-03-01T00:00:00Z\t42\tPolish the dash\t61\tabc1234\t-\t-\tsid-m\t-\n' >> "$FLEET_HISTORY_LEDGER"
 m=$(run meta 42)
-eq "meta: issue column by issue key" "42"              "$(printf '%s' "$m" | cut -f1)"
-eq "meta: title column by issue key" "Polish the dash" "$(printf '%s' "$m" | cut -f2)"
+st_eq "meta: issue column by issue key" "42"              "$(printf '%s' "$m" | cut -f1)"
+st_eq "meta: title column by issue key" "Polish the dash" "$(printf '%s' "$m" | cut -f2)"
 # by #PR the row still resolves to its issue + title (a #PR resume binds @issue).
-eq "meta: #PR key resolves to the row's issue" "42" "$(run meta '#61' | cut -f1)"
+st_eq "meta: #PR key resolves to the row's issue" "42" "$(run meta '#61' | cut -f1)"
 # unknown key → nothing (no crash, no stray row).
-eq "meta: unknown key prints nothing" "" "$(run meta 999)"
+st_eq "meta: unknown key prints nothing" "" "$(run meta 999)"
 
 # ============================================================================
 # F. state glyph (#320): a landed row lists/renders ✓, a closed-unlanded row ✗. A
@@ -389,13 +388,13 @@ out=$(run record-closed --key scratch-7 --worktree "$SWT" --title "scratch-7" \
 contains "scratch: record-closed labels the row ~<N>, not #<N>" "$out" "~7"
 IFS=$'\t' read -r _ g_key _ g_pr g_sha g_wt g_td g_sid _ g_state _ \
   <<<"$(cat "$FLEET_HISTORY_LEDGER")"
-eq "scratch: col 2 carries the scratch key"          "scratch-7"       "$g_key"
-eq "scratch: pr degrades to dash (no PR)"            "-"               "$g_pr"
-eq "scratch: sha column carries the recorded HEAD"   "deadbee1234"     "$g_sha"
-eq "scratch: worktree column"                        "$SWT"            "$g_wt"
-eq "scratch: transcript dir resolved from the path"  "$STDIR"          "$g_td"
-eq "scratch: session id is the newest transcript"    "sess-scr"        "$g_sid"
-eq "scratch: state is closed-unlanded"               "closed-unlanded" "$g_state"
+st_eq "scratch: col 2 carries the scratch key"          "scratch-7"       "$g_key"
+st_eq "scratch: pr degrades to dash (no PR)"            "-"               "$g_pr"
+st_eq "scratch: sha column carries the recorded HEAD"   "deadbee1234"     "$g_sha"
+st_eq "scratch: worktree column"                        "$SWT"            "$g_wt"
+st_eq "scratch: transcript dir resolved from the path"  "$STDIR"          "$g_td"
+st_eq "scratch: session id is the newest transcript"    "sess-scr"        "$g_sid"
+st_eq "scratch: state is closed-unlanded"               "closed-unlanded" "$g_state"
 
 # list + rows render it as a scratch, not as issue #7.
 lst=$(run list)
@@ -417,14 +416,14 @@ contains "scratch: dash row names the scratch window" "$rws" "scratch-7"
 # is reconstructable — the verdict points at the ORIGINAL path (where the transcript
 # is keyed) and the recorded session id. This is the reaped-clean-scratch case.
 v=$(run resume --main /w/main scratch-7)
-eq "scratch: resume verdict RESUME (rebuild off the recorded sha)" "RESUME" "$(printf '%s' "$v" | cut -f1)"
-eq "scratch: resume targets the original worktree path"           "$SWT"      "$(printf '%s' "$v" | cut -f2)"
-eq "scratch: resume carries the recorded session id"              "sess-scr"  "$(printf '%s' "$v" | cut -f3)"
+st_eq "scratch: resume verdict RESUME (rebuild off the recorded sha)" "RESUME" "$(printf '%s' "$v" | cut -f1)"
+st_eq "scratch: resume targets the original worktree path"           "$SWT"      "$(printf '%s' "$v" | cut -f2)"
+st_eq "scratch: resume carries the recorded session id"              "sess-scr"  "$(printf '%s' "$v" | cut -f3)"
 # meta feeds the restorer the key + title for BOTH shapes.
-eq "scratch: meta returns the scratch key"   "scratch-7" "$(run meta scratch-7 | cut -f1)"
-eq "scratch: meta returns the scratch title" "scratch-7" "$(run meta scratch-7 | cut -f2)"
+st_eq "scratch: meta returns the scratch key"   "scratch-7" "$(run meta scratch-7 | cut -f1)"
+st_eq "scratch: meta returns the scratch title" "scratch-7" "$(run meta scratch-7 | cut -f2)"
 # an issue lookup must never match a scratch row (keys share one column).
-eq "scratch: issue key 7 does not match scratch-7" "" "$(run meta 7)"
+st_eq "scratch: issue key 7 does not match scratch-7" "" "$(run meta 7)"
 
 # No sha and no PR (a pre-#466 row, or a worktree that was already gone at record
 # time) → nothing to rebuild from: REVIEW-ONLY, never a pointer to a missing dir.
@@ -432,20 +431,20 @@ eq "scratch: issue key 7 does not match scratch-7" "" "$(run meta 7)"
 printf '2026-04-01T00:00:00Z\tscratch-8\tscratch-8\t-\t-\t%s\t%s\tsess-scr\t-\tclosed-unlanded\n' \
   "$SWT" "$STDIR" >> "$FLEET_HISTORY_LEDGER"
 v2=$(run resume --main /w/main scratch-8)
-eq "scratch: no sha + no PR degrades to REVIEW-ONLY" "REVIEW-ONLY" "$(printf '%s' "$v2" | cut -f1)"
+st_eq "scratch: no sha + no PR degrades to REVIEW-ONLY" "REVIEW-ONLY" "$(printf '%s' "$v2" | cut -f1)"
 contains "scratch: REVIEW-ONLY names the row ~8, not #8" "$v2" "~8"
 
 # --sha is optional: with no worktree on disk to read a HEAD from, it degrades to '-'
 # (the auto-capture only fires for a worktree that is still there).
 : > "$FLEET_HISTORY_LEDGER"
 run record-closed --key scratch-7 --worktree "$SWT" --title "scratch-7" >/dev/null
-eq "scratch: sha degrades to dash when the worktree is gone" "-" \
+st_eq "scratch: sha degrades to dash when the worktree is gone" "-" \
    "$(cut -f5 "$FLEET_HISTORY_LEDGER")"
 
 # --issue remains an accepted ALIAS for --key (a partially-synced install keeps working).
 : > "$FLEET_HISTORY_LEDGER"
 run record-closed --issue scratch-7 --worktree "$SWT" --title "alias" >/dev/null
-eq "scratch: --issue is still accepted as an alias of --key" "scratch-7" \
+st_eq "scratch: --issue is still accepted as an alias of --key" "scratch-7" \
    "$(cut -f2 "$FLEET_HISTORY_LEDGER")"
 
 # An UNTITLED row rendered right after a titled one must fall back to its OWN
@@ -479,7 +478,7 @@ touch -t 203001010000 "$TDIRB/sess-399.jsonl"     # newest by mtime
 : > "$FLEET_HISTORY_LEDGER"
 out=$(run record --key 4242 --worktree "$WTBUSY" --summary 'busy dir')
 contains "busy transcript dir (400 sessions) still resolves its session" "$out" "sess-399"
-eq "busy dir: session-id landed in col 8" "sess-399" "$(cut -f8 "$FLEET_HISTORY_LEDGER")"
+st_eq "busy dir: session-id landed in col 8" "sess-399" "$(cut -f8 "$FLEET_HISTORY_LEDGER")"
 
 # H2. Dedup when the transcript CANNOT be resolved. sid AND tdir both land as '-'
 # (the observed shape: a caller that passed no --worktree), so the primary dedup
@@ -492,18 +491,18 @@ mkrow() {   # <key> <pr> <sha> <worktree> — a transcript-less row, as recorded
     >> "$FLEET_HISTORY_LEDGER"
 }
 mkrow scratch-1 1088 27e8a9b5 -
-eq "fixture: one transcript-less row" 1 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
+st_eq "fixture: one transcript-less row" 1 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
 run record --key scratch-1 --pr 1088 --summary 'retry, no worktree' >/dev/null 2>&1
-eq "transcript-less retry dedups on key+pr (not appended twice)" 1 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
+st_eq "transcript-less retry dedups on key+pr (not appended twice)" 1 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
 # A DIFFERENT pr under the same reused scratch key is a different session → recorded.
 run record --key scratch-1 --pr 2222 --summary 'later reuse of the slot' >/dev/null 2>&1
-eq "same key, different PR → still recorded (scratch slots are reused)" 2 \
+st_eq "same key, different PR → still recorded (scratch slots are reused)" 2 \
    "$(grep -c . "$FLEET_HISTORY_LEDGER")"
 # The worktree corroborator covers the no-PR shape.
 : > "$FLEET_HISTORY_LEDGER"
 mkrow scratch-9 - - /w/repo-scratch-9
 run record --key scratch-9 --worktree /w/repo-scratch-9 --summary 'again' >/dev/null 2>&1
-eq "transcript-less retry dedups on key+worktree too" 1 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
+st_eq "transcript-less retry dedups on key+worktree too" 1 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
 
 # H2b. A transcript-less row must not POISON the worktree's transcript key: it
 # used to store the speculative encoded path, and the later REAL session at that
@@ -511,12 +510,12 @@ eq "transcript-less retry dedups on key+worktree too" 1 "$(grep -c . "$FLEET_HIS
 : > "$FLEET_HISTORY_LEDGER"
 WTP2="/w/repo-late-transcript"
 run record --key 55 --worktree "$WTP2" --summary 'no transcript yet' >/dev/null 2>&1
-eq "transcript-less row stores no transcript dir" "-" "$(cut -f7 "$FLEET_HISTORY_LEDGER")"
+st_eq "transcript-less row stores no transcript dir" "-" "$(cut -f7 "$FLEET_HISTORY_LEDGER")"
 ENCP2=$(printf '%s' "$WTP2" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
 mkdir -p "$CLAUDE_PROJECTS_DIR/$ENCP2"; : > "$CLAUDE_PROJECTS_DIR/$ENCP2/real-sid.jsonl"
 out=$(run record --key 55 --pr 9 --worktree "$WTP2" --summary 'now it has one')
 contains "the later REAL session at that worktree is still recorded" "$out" "real-sid"
-eq "  …as its own row" 2 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
+st_eq "  …as its own row" 2 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
 
 # H2c. The fleet's OWN helper transcripts must not be indexed as "the session".
 # The status classifier (and, until #535, the dashboard summarizer) runs `claude -p`
@@ -543,7 +542,7 @@ touch -t 203001010000 "$TDIRH/helper-new.jsonl"
 : > "$FLEET_HISTORY_LEDGER"
 out=$(run record --key 66 --worktree "$WTH" --summary 'skip the helpers')
 contains "helper transcripts are skipped for the real session" "$out" "real-session"
-eq "  …and the real session id is what lands in the row" "real-session" \
+st_eq "  …and the real session id is what lands in the row" "real-session" \
    "$(cut -f8 "$FLEET_HISTORY_LEDGER")"
 
 # A dir with ONLY helper transcripts resolves NO session — since #547 that is a
@@ -555,8 +554,8 @@ printf '{"type":"user","message":{"content":"%s"}}\n' "$CLS" > "$CLAUDE_PROJECTS
 : > "$FLEET_HISTORY_LEDGER"
 out=$(run record-closed --key scratch-77 --worktree "$WTHO")
 contains "an all-helper dir is recorded transcript-less (#547)" "$out" "closed-unlanded"
-eq "  …one row, with NO session id (helper never promoted)" "-" "$(cut -f8 "$FLEET_HISTORY_LEDGER")"
-eq "  …and no transcript dir" "-" "$(cut -f7 "$FLEET_HISTORY_LEDGER")"
+st_eq "  …one row, with NO session id (helper never promoted)" "-" "$(cut -f8 "$FLEET_HISTORY_LEDGER")"
+st_eq "  …and no transcript dir" "-" "$(cut -f7 "$FLEET_HISTORY_LEDGER")"
 
 # Every rubric must still be in the filter (fleet_newest_human_session): the
 # classifier's and the summarizer's scripts are gone (#2543, #535), but their old
@@ -578,7 +577,7 @@ done
   printf '2026-08-22T00:00:00Z\t22\tnewest\t-\t-\t-\t-\t-\t-\tlanded\n'
   printf '2026-07-01T00:00:00Z\t33\toldest-but-appended-last\t-\t-\t-\t-\t-\t-\tlanded\n'
 } >> "$FLEET_HISTORY_LEDGER"
-eq "list is ordered newest-first by timestamp" "22 11 33" \
+st_eq "list is ordered newest-first by timestamp" "22 11 33" \
    "$(run list --repo o/r | sed -n 's/^. *#\([0-9]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
 # find_row's "newest wins" rides on the same order.
 contains "find_row picks by the same time order" "$(run meta --repo o/r 22)" "newest"
@@ -601,34 +600,34 @@ run record-closed --repo o/r --issue 88 --worktree "$WTI" --title "widget-88" --
 contains "resumed: before — the closed row is listed" "$(run list --repo o/r)" "#88"
 outr=$(run resumed --session-id sess-i-88 --repo o/r)
 contains "resumed: reports the superseded row" "$outr" "resumed #88"
-eq "resumed: appends ONE marker row (append-only, nothing rewritten)" "2" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
-eq "resumed: the closed row itself is untouched" "closed-unlanded" "$(sed -n '1p' "$FLEET_HISTORY_LEDGER" | cut -f10)"
+st_eq "resumed: appends ONE marker row (append-only, nothing rewritten)" "2" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+st_eq "resumed: the closed row itself is untouched" "closed-unlanded" "$(sed -n '1p' "$FLEET_HISTORY_LEDGER" | cut -f10)"
 IFS=$'\t' read -r ri_when ri_iss ri_title _ _ ri_wt _ ri_sid _ ri_state ri_origin <<<"$(tail -n1 "$FLEET_HISTORY_LEDGER")"
-eq "resumed: marker keeps the key"       "88"        "$ri_iss"
-eq "resumed: marker keeps the title"     "widget-88" "$ri_title"
-eq "resumed: marker keeps the worktree"  "$WTI"      "$ri_wt"
-eq "resumed: marker keeps the session"   "sess-i-88" "$ri_sid"
-eq "resumed: marker keeps the origin"    "scratch-3" "$ri_origin"
-eq "resumed: state column"               "resumed"   "$ri_state"
+st_eq "resumed: marker keeps the key"       "88"        "$ri_iss"
+st_eq "resumed: marker keeps the title"     "widget-88" "$ri_title"
+st_eq "resumed: marker keeps the worktree"  "$WTI"      "$ri_wt"
+st_eq "resumed: marker keeps the session"   "sess-i-88" "$ri_sid"
+st_eq "resumed: marker keeps the origin"    "scratch-3" "$ri_origin"
+st_eq "resumed: state column"               "resumed"   "$ri_state"
 case "$ri_when" in ''|-) st_fail "resumed: marker must be stamped now, got [$ri_when]";; esac
 CHECKS=$((CHECKS + 1))
 # hidden wherever a reader looks: the list, and find_row (meta / resume / path)
 CHECKS=$((CHECKS + 1)); case "$(run list --repo o/r)" in *'#88'*) st_fail "resumed: a live-again session must not be listed as closed";; esac
-eq "resumed: meta finds no row for a live-again session" "" "$(run meta --repo o/r 88)"
+st_eq "resumed: meta finds no row for a live-again session" "" "$(run meta --repo o/r 88)"
 # idempotent: a second `resumed` for the same session writes nothing more…
 run resumed --session-id sess-i-88 --repo o/r >/dev/null
-eq "resumed: a repeat writes no second marker" "2" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+st_eq "resumed: a repeat writes no second marker" "2" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
 # …and a session with NO closed-unlanded row writes nothing (every ordinary resume)
 outn=$(run resumed --session-id never-closed --repo o/r)
 contains "resumed: unknown session → nothing to supersede" "$outn" "nothing to supersede"
-eq "resumed: unknown session writes nothing" "2" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+st_eq "resumed: unknown session writes nothing" "2" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
 # the session ends AGAIN: record-closed records afresh — the dedup forgot the
 # superseded row — and the list shows exactly the fresh close
 outc2=$(run record-closed --repo o/r --issue 88 --worktree "$WTI" --title "widget-88 again")
 contains "resumed: the next close records afresh (not 'already in ledger')" "$outc2" "closed-unlanded #88"
-eq "resumed: 3 rows now (closed · resumed · closed)" "3" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+st_eq "resumed: 3 rows now (closed · resumed · closed)" "3" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
 contains "resumed: the fresh close is listed" "$(run list --repo o/r)" "widget-88 again"
-eq "resumed: exactly one #88 row listed" "1" "$(run list --repo o/r | grep -c '#88')"
+st_eq "resumed: exactly one #88 row listed" "1" "$(run list --repo o/r | grep -c '#88')"
 contains "resumed: meta sees the fresh close" "$(run meta --repo o/r 88)" "widget-88 again"
 # a closed → resumed session that then LANDS gets its landed row (before this the
 # closed row shadowed it: every hook-path migrate left its session ✗ for good)
@@ -637,22 +636,22 @@ run record-closed --repo o/r --issue 88 --worktree "$WTI" --title "widget-88" >/
 run resumed --session-id sess-i-88 --repo o/r >/dev/null
 outl=$(run record --repo o/r --issue 88 --worktree "$WTI" --summary "landed the widget")
 contains "resumed: a later land records (the closed row no longer shadows it)" "$outl" "landed #88"
-eq "resumed: the landed row is the session's final word" "landed" "$(tail -n1 "$FLEET_HISTORY_LEDGER" | cut -f10)"
+st_eq "resumed: the landed row is the session's final word" "landed" "$(tail -n1 "$FLEET_HISTORY_LEDGER" | cut -f10)"
 contains "resumed: the list shows the landed row ✓" "$(run list --repo o/r)" "✓"
 # a landed session is never superseded: `resumed` on it writes nothing
 run resumed --session-id sess-i-88 --repo o/r >/dev/null
-eq "resumed: never supersedes a landed row" "3" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+st_eq "resumed: never supersedes a landed row" "3" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
 # the SessionStart hook form: session_id + source off the payload; source=resume
 # only; NOTHING on stdout (a SessionStart hook's stdout becomes model context)
 : > "$FLEET_HISTORY_LEDGER"
 run record-closed --repo o/r --issue 88 --worktree "$WTI" --title "widget-88" >/dev/null
 printf '{"session_id":"sess-i-88","source":"startup","hook_event_name":"SessionStart"}' \
   | run resumed --stdin-json --repo o/r >/dev/null 2>&1
-eq "resumed --stdin-json: source=startup writes nothing" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+st_eq "resumed --stdin-json: source=startup writes nothing" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
 outj=$(printf '{"session_id":"sess-i-88","source":"resume","hook_event_name":"SessionStart"}' \
   | run resumed --stdin-json --repo o/r 2>"$WORK/res.err")
-eq "resumed --stdin-json: prints NOTHING on stdout" "" "$outj"
-eq "resumed --stdin-json: source=resume supersedes" "2" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+st_eq "resumed --stdin-json: prints NOTHING on stdout" "" "$outj"
+st_eq "resumed --stdin-json: source=resume supersedes" "2" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
 contains "resumed --stdin-json: says so on stderr" "$(cat "$WORK/res.err")" "superseded"
 # WIRED: settings-hooks.json runs it on SessionStart(resume)
 HOOKS_JSON="$BIN/../hooks/settings-hooks.json"
@@ -678,12 +677,12 @@ TTDIR="$CLAUDE_PROJECTS_DIR/$(printf '%s' "$TWT" | LC_ALL=C tr -c 'A-Za-z0-9' '-
 mkdir -p "$TTDIR"; : > "$TTDIR/sess-task.jsonl"
 run record-closed --key scratch-12 --worktree "$TWT" --title scratch-12 --sha cafe1234 \
   --task T41 --task-line '把周报做成一页' >/dev/null
-eq "task: the row has 15 columns" "14" "$(tr -cd '\t' < "$FLEET_HISTORY_LEDGER" | wc -c | tr -d ' ')"
+st_eq "task: the row has 15 columns" "14" "$(tr -cd '\t' < "$FLEET_HISTORY_LEDGER" | wc -c | tr -d ' ')"
 IFS=$'\t' read -r _ t_key t_title _ _ _ _ t_sid _ _ _ t_ag t_h t_tr t_task <<<"$(cat "$FLEET_HISTORY_LEDGER")"
-eq "task: col 15 is the record" "T41" "$t_task"
-eq "task: a Claude row fills 12–14 with '-'" "-|-|-" "$t_ag|$t_h|$t_tr"
-eq "task: the title is the session's own words" "把周报做成一页" "$t_title"
-eq "task: still keyed by the session" "scratch-12|sess-task" "$t_key|$t_sid"
+st_eq "task: col 15 is the record" "T41" "$t_task"
+st_eq "task: a Claude row fills 12–14 with '-'" "-|-|-" "$t_ag|$t_h|$t_tr"
+st_eq "task: the title is the session's own words" "把周报做成一页" "$t_title"
+st_eq "task: still keyed by the session" "scratch-12|sess-task" "$t_key|$t_sid"
 contains "task: list marks the row T41" "$(run list)" "~12   "
 contains "task: list shows T41 + its words" "$(run list)" "T41 把周报做成一页"
 contains "task: dash rows show T41 + its words" "$(run rows)" "T41 把周报做成一页"
@@ -693,10 +692,10 @@ CHECKS=$((CHECKS + 1))
 case "$(run resume --main /w/main scratch-12)" in *T41*) st_fail "task: col 15 leaked into resume's verdict";; esac
 : > "$FLEET_HISTORY_LEDGER"
 run record-closed --key scratch-12 --worktree "$TWT" --title 'a named scratch' --task T41 --task-line 'words' >/dev/null
-eq "task: a real title wins over the words" "a named scratch" "$(cut -f3 "$FLEET_HISTORY_LEDGER")"
+st_eq "task: a real title wins over the words" "a named scratch" "$(cut -f3 "$FLEET_HISTORY_LEDGER")"
 : > "$FLEET_HISTORY_LEDGER"
 run record-closed --key scratch-12 --worktree "$TWT" --title scratch-12 --task X9 --task-line 'words' >/dev/null
-eq "task: a bad ref ⇒ the 11-column row, title untouched" "10|scratch-12" \
+st_eq "task: a bad ref ⇒ the 11-column row, title untouched" "10|scratch-12" \
   "$(tr -cd '\t' < "$FLEET_HISTORY_LEDGER" | wc -c | tr -d ' ')|$(cut -f3 "$FLEET_HISTORY_LEDGER")"
 
 printf 'selftest OK: fleet-history (%s assertions — record/record-closed/resumed/list/find/resume/reuse/meta/rows/state/scratch/busy-dir/helper-transcripts/dedup/time-order/task)\n' "$CHECKS"

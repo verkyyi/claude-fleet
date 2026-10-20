@@ -56,9 +56,7 @@ export FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_CONF_DIR="$WORK/conf"
 mkdir -p "$WORK/bin" "$WORK/.claude-dash/global" "$WORK/conf"
 
-CHECKS=0
-has()  { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) st_fail "$1" "$2";; esac; }
-hasnt(){ CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) st_fail "$1" "$2";; *) : ;; esac; }
+st_tally count
 
 # ============================ STAMP =========================================
 # Shim: record every set-window-option — one line each, also when several ride one
@@ -93,8 +91,8 @@ hook() {  # hook <arg...> < payload — run the state hook against the shim
 }
 
 out=$(printf '%s' '{"hook_event_name":"Notification","message":"Claude needs your permission to use Bash"}' | hook needs bell)
-has "a permission Notification sets needs"          "$out" '@claude_state needs'
-has "a permission Notification stamps perm"         "$out" '@claude_needs perm'
+st_has "a permission Notification sets needs"          "$out" '@claude_state needs'
+st_has "a permission Notification stamps perm"         "$out" '@claude_needs perm'
 
 # --- #656: the SUBTYPE is settled by the TRANSCRIPT, never by the wording -----
 # Every leg below sends the EXACT payload 2.1.272 emits for an open dialog (measured
@@ -134,39 +132,39 @@ sh "$BIN/fleet-pending-tool.sh" "$T_DONE" >/dev/null 2>&1 \
   && st_fail "fleet-pending-tool.sh must exit non-zero when the newest tool_use is answered"
 
 out=$(notif "$T_ASK" | hook needs bell)
-has "a question behind a permission_prompt still sets needs" "$out" '@claude_state needs'
-has "a question behind a permission_prompt stamps ask"       "$out" '@claude_needs ask'
-hasnt "…and must NOT stamp perm (that is the #656 regression)" "$out" '@claude_needs perm'
+st_has "a question behind a permission_prompt still sets needs" "$out" '@claude_state needs'
+st_has "a question behind a permission_prompt stamps ask"       "$out" '@claude_needs ask'
+st_hasnt "…and must NOT stamp perm (that is the #656 regression)" "$out" '@claude_needs perm'
 
 out=$(notif "$T_BASH" | hook needs bell)
-has "a REAL permission prompt still stamps perm"             "$out" '@claude_needs perm'
-hasnt "a real permission prompt must not stamp ask"          "$out" '@claude_needs ask'
+st_has "a REAL permission prompt still stamps perm"             "$out" '@claude_needs perm'
+st_hasnt "a real permission prompt must not stamp ask"          "$out" '@claude_needs ask'
 
 # Fail-safe both ways: nothing pending, or no transcript at all, keeps the wording's
 # answer (`perm`) — the direction that sends the operator to the pane rather than
 # promising an answer channel that is not there.
 out=$(notif "$T_DONE" | hook needs bell)
-has "an already-answered transcript falls back to perm"      "$out" '@claude_needs perm'
+st_has "an already-answered transcript falls back to perm"      "$out" '@claude_needs perm'
 out=$(notif "$WORK/nope.jsonl" | hook needs bell)
-has "an unreadable transcript falls back to perm"            "$out" '@claude_needs perm'
+st_has "an unreadable transcript falls back to perm"            "$out" '@claude_needs perm'
 out=$(notif | hook needs bell)
-has "a payload with no transcript_path falls back to perm"   "$out" '@claude_needs perm'
+st_has "a payload with no transcript_path falls back to perm"   "$out" '@claude_needs perm'
 
 out=$(printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{}}' | hook busy)
-has "an AskUserQuestion PreToolUse sets needs"      "$out" '@claude_state needs'
-has "an AskUserQuestion PreToolUse stamps ask"      "$out" '@claude_needs ask'
+st_has "an AskUserQuestion PreToolUse sets needs"      "$out" '@claude_state needs'
+st_has "an AskUserQuestion PreToolUse stamps ask"      "$out" '@claude_needs ask'
 
 out=$(printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{}}' | hook busy)
-has "an ordinary PreToolUse stays working"          "$out" '@claude_state working'
-has "an ordinary PreToolUse CLEARS the reason"      "$out" "$CLEARED"
-hasnt "an ordinary PreToolUse leaves no perm"       "$out" '@claude_needs perm'
-hasnt "an ordinary PreToolUse leaves no ask"        "$out" '@claude_needs ask'
+st_has "an ordinary PreToolUse stays working"          "$out" '@claude_state working'
+st_has "an ordinary PreToolUse CLEARS the reason"      "$out" "$CLEARED"
+st_hasnt "an ordinary PreToolUse leaves no perm"       "$out" '@claude_needs perm'
+st_hasnt "an ordinary PreToolUse leaves no ask"        "$out" '@claude_needs ask'
 
 out=$(printf '%s' '{"hook_event_name":"PostToolUse"}' | hook working)
-has "PostToolUse CLEARS the reason"                 "$out" "$CLEARED"
+st_has "PostToolUse CLEARS the reason"                 "$out" "$CLEARED"
 out=$(printf '%s' '{"hook_event_name":"Stop","stop_hook_active":false}' | hook 'done')
-has "a Stop sets done"                              "$out" '@claude_state done'
-has "a Stop CLEARS the reason"                      "$out" "$CLEARED"
+st_has "a Stop sets done"                              "$out" '@claude_state done'
+st_has "a Stop CLEARS the reason"                      "$out" "$CLEARED"
 
 # The benign idle_prompt must still write NOTHING AT ALL — the #105/#330 rule. If it
 # started writing an empty @claude_needs it would erase the reason behind a state it
@@ -229,29 +227,29 @@ r1=$(row_of 1); r2=$(row_of 2); r3=$(row_of 3); r4=$(row_of 4); r5=$(row_of 5); 
 for pair in "1:ask" "2:perm" "3:other" "5:blocked"; do
   idx=${pair%%:*}; kind=${pair#*:}
   r=$(row_of "$idx")
-  has "needs/$kind → the one red !" "$r" "${RD}!"
-  has "needs/$kind → its act cell names the kind" "$r" "$(fleet_ui_t "needs_$kind")"
-  for old in '?' '⊘' '⊠' '↺'; do hasnt "needs/$kind never draws the retired $old" "$r" "${RD}$old"; done
+  st_has "needs/$kind → the one red !" "$r" "${RD}!"
+  st_has "needs/$kind → its act cell names the kind" "$r" "$(fleet_ui_t "needs_$kind")"
+  for old in '?' '⊘' '⊠' '↺'; do st_hasnt "needs/$kind never draws the retired $old" "$r" "${RD}$old"; done
 done
 
 # A stale-looking subtype on a window that is NOT red changes nothing: the reason is
 # only ever consulted under `needs`, so a `working` row keeps its spinner.
-hasnt "a working row must not take the red !" "$r4" "${RD}!"
-hasnt "… nor a needs word" "$r4" "$(fleet_ui_t needs_perm)"
-hasnt "a done row must not take the red !" "$r6" "${RD}!"
+st_hasnt "a working row must not take the red !" "$r4" "${RD}!"
+st_hasnt "… nor a needs word" "$r4" "$(fleet_ui_t needs_perm)"
+st_hasnt "a done row must not take the red !" "$r6" "${RD}!"
 
 # Width: the glyph is ONE display cell, so the columns after it line up.
 # Asserted by the `<glyph> <space> <grey handle cell>` shape every row shares.
 for idx in 1 2 3 5; do
-  has "row $idx keeps the glyph slot's trailing space" "$(row_of "$idx")" "!"$'\033'"[0m "
+  st_has "row $idx keeps the glyph slot's trailing space" "$(row_of "$idx")" "!"$'\033'"[0m "
 done
 # The sidebar carries the kind in its detail field (the 8th), for the selected
 # row's line under the list.
 side=$(FLEET_SESSION="$SESS" bash "$ROWS" --rows 2>&1)
 det_of() { printf '%s\n' "$side" | awk -F"$US" -v w="$1" '$1 == w { print $3 "|" $8; exit }'; }
-has "sidebar: ask → ! + its detail"     "$(det_of @1)" "!|$(fleet_ui_t needs_ask)"
-has "sidebar: perm → ! + its detail"    "$(det_of @2)" "!|$(fleet_ui_t needs_perm)"
-has "sidebar: blocked → ! + its detail" "$(det_of @5)" "!|$(fleet_ui_t needs_blocked)"
+st_has "sidebar: ask → ! + its detail"     "$(det_of @1)" "!|$(fleet_ui_t needs_ask)"
+st_has "sidebar: perm → ! + its detail"    "$(det_of @2)" "!|$(fleet_ui_t needs_perm)"
+st_has "sidebar: blocked → ! + its detail" "$(det_of @5)" "!|$(fleet_ui_t needs_blocked)"
 case "$(det_of @4)" in *'|') CHECKS=$((CHECKS+1)) ;; *) st_fail "sidebar: a working row has no detail" "$(det_of @4)" ;; esac
 printf 'selftest: GLYPH legs PASS (one red ! · the kind in words · one cell · never on a non-needs row)\n' >&2
 

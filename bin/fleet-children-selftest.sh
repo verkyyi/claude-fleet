@@ -30,6 +30,7 @@
 # because tmux ≤3.4 vis-escapes the 0x1f separator the dash producer asks for.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 CLI="$BIN/fleet-children.sh"; RP="$BIN/fleet-report-parent.sh"; ROWS="$BIN/tmux-dashboard-rows.sh"
 for f in "$CLI" "$RP" "$ROWS" "$BIN/fleet-children.py" "$BIN/fleet-children-lib.sh"; do
@@ -37,9 +38,8 @@ for f in "$CLI" "$RP" "$ROWS" "$BIN/fleet-children.py" "$BIN/fleet-children-lib.
 done
 
 CHECKS=0
-fail() { printf 'fleet-children selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()   { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1" "expected: [$2]"$'\n'"got:      [$3]"; }
-has()  { CHECKS=$((CHECKS + 1)); case "$3" in *"$2"*) : ;; *) fail "$1" "$3" ;; esac; }
+eq()   { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1" "expected: [$2]"$'\n'"got:      [$3]"; }
+has()  { CHECKS=$((CHECKS + 1)); case "$3" in *"$2"*) : ;; *) st_fail "$1" "$3" ;; esac; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-children.XXXXXX")" || exit 2
 export TMPDIR="$WORK"
@@ -58,7 +58,7 @@ F="$WORK/pure.ndjson"
 ap() { printf '%s' "$1" | python3 "$BIN/fleet-children.py" append --file "$F"; }
 ap '{"child":"issue-1","state":"merged","pr":"#7","summary":"a <b> \"c\""}' >/dev/null
 eq "append writes one line" 1 "$(wc -l < "$F" | tr -d ' ')"
-python3 - "$F" <<'PY' || fail "append must normalise state/pr and scrub <>\" (see above)"
+python3 - "$F" <<'PY' || st_fail "append must normalise state/pr and scrub <>\" (see above)"
 import json, sys
 e = json.loads(open(sys.argv[1]).readline())
 assert e["seq"] == 1 and e["state"] == "MERGED" and e["pr"] == "7", e
@@ -108,9 +108,9 @@ printf '#!/bin/sh\ncase "$*" in *pulls?state=open*) echo 0 ;; *pulls/*) echo "tr
 chmod +x "$WORK/ghshim/gh"; export PATH="$WORK/ghshim:$PATH"
 trap 'tmux -L "$LBL" kill-server 2>/dev/null; rm -rf "$WORK"' EXIT
 TM() { tmux -L "$LBL" "$@"; }
-TM new-session -d -s "$LBL" -n dash -c "$WORK" "sleep 600" 2>/dev/null || fail "could not start the selftest tmux server"
+TM new-session -d -s "$LBL" -n dash -c "$WORK" "sleep 600" 2>/dev/null || st_fail "could not start the selftest tmux server"
 WID=''
-new_win() { WID=$(TM new-window -d -P -F '#{window_id}' -n "$1" -c "$WORK" "sleep 600" 2>/dev/null); [ -n "$WID" ] || fail "could not create window $1"; }
+new_win() { WID=$(TM new-window -d -P -F '#{window_id}' -n "$1" -c "$WORK" "sleep 600" 2>/dev/null); [ -n "$WID" ] || st_fail "could not create window $1"; }
 opt() { TM set-window-option -t "$1" "$2" "$3" 2>/dev/null; }
 
 mkdir -p "$WORK/repo-scratch-7"
@@ -125,12 +125,12 @@ RUN() { bash "$RP" -L "$LBL" "$@" >/dev/null 2>&1; }
 RUN --win "$K1" --state merged --pr 501 --summary 'landed'
 RUN --win "$K2" --state failed --pr 502 --summary 'CI red'
 RUN --win "$K3" --state stopped
-[ -f "$LEDGER" ] || fail "no ledger written at $LEDGER" "$(find "$FLEET_CONF_DIR" 2>/dev/null)"
+[ -f "$LEDGER" ] || st_fail "no ledger written at $LEDGER" "$(find "$FLEET_CONF_DIR" 2>/dev/null)"
 eq "three reports ⇒ three ledger lines (recorded though the parent runs no Claude)" 3 "$(wc -l < "$LEDGER" | tr -d ' ')"
 RUN --win "$K1" --state merged --pr 501 --summary 'landed, again'
 RUN --win "$K3" --state stopped
 eq "repeat reports add no lines" 3 "$(wc -l < "$LEDGER" | tr -d ' ')"
-python3 - "$LEDGER" <<'PY' || fail "ledger events are not what was reported (see above)"
+python3 - "$LEDGER" <<'PY' || st_fail "ledger events are not what was reported (see above)"
 import json, sys
 ev = [json.loads(l) for l in open(sys.argv[1])]
 got = [(e["seq"], e["child"], e["state"], e["pr"]) for e in ev]
@@ -150,14 +150,7 @@ dash_badge() {
   mkdir -p "$WORK/shim"
   TM list-windows -a -F "#{session_name}|#{window_index}|#{window_name}|#{pane_current_path}|#{@claude_state}|#{@claude_state_ts}|#{window_id}|#{@issue}|#{@origin}|#{@worktree}|#{@cc_agent}|#{@wid}|#{@claude_needs}|#{@expand}|#{@pin}|||||||||#{@loop}" \
     | tr '|' "$US" > "$WORK/wlist"
-  cat > "$WORK/shim/tmux" <<'SHIM'
-#!/bin/sh
-US=$(printf '\037'); lw=0; fmt=0
-for a in "$@"; do [ "$a" = list-windows ] && lw=1; case "$a" in *"$US"*) fmt=1 ;; esac; done
-[ "$lw" = 1 ] && [ "$fmt" = 1 ] && cat "$WLIST_FILE"
-exit 0
-SHIM
-  chmod +x "$WORK/shim/tmux"
+  st_fake_tmux_wlist "$WORK/shim"
   WLIST_FILE="$WORK/wlist" PATH="$WORK/shim:$PATH" FLEET_SESSION="$LBL" FZF_COLUMNS=140 bash "$ROWS" 2>/dev/null \
     | grep -F "$LBL:$(TM display-message -p -t "${1:-$PARENT}" '#{window_index}')$US" \
     | perl -pe 's/\e\[[0-9;]*m//g' | grep -oE '[0-9]+/[0-9]+' | head -1
@@ -176,7 +169,7 @@ out=$(bash "$CLI" -L "$LBL" scratch-7 2>&1)
 has "a row per child: the FAILED one is loud" '! acme-app:issue-102' "$out"
 has "…the MERGED one is done, with its PR"   'MERGED #501' "$out"
 has "…the hub task record before its title (#3330)" 'T218 kid-failed' "$out"
-case "$out" in *issue-900*) fail "a hub-spawned window is nobody's child" "$out" ;; esac
+case "$out" in *issue-900*) st_fail "a hub-spawned window is nobody's child" "$out" ;; esac
 CHECKS=$((CHECKS + 1))
 
 # --json: the stable machine shape.
@@ -189,7 +182,7 @@ assert (s["total"], s["done"], s["needs"], s["text"]) == (3, 2, 1, "2/3 ✓ · 1
 k = {c["child"]: c for c in d["children"]}
 assert k["acme-app:issue-101"]["last"]["state"] == "MERGED" and k["acme-app:issue-101"]["live"], k
 assert k["acme-app:issue-102"]["task"] == "T218" and "task" not in k["acme-app:issue-101"], k   # TASK (#3330)
-' || fail "--json shape"
+' || st_fail "--json shape"
 CHECKS=$((CHECKS + 1))
 bash "$CLI" -L "$LBL" scratch-7 --json --since 2 | python3 -c '
 import json, sys
@@ -197,14 +190,14 @@ d = json.load(sys.stdin)
 assert [c["child"] for c in d["children"]] == ["acme-app:issue-103"], d["children"]
 assert [e["seq"] for e in d["events"]] == [3], d["events"]
 assert d["summary"]["total"] == 3, d["summary"]
-' || fail "--since filters children + lists events, summary stays whole"
+' || st_fail "--since filters children + lists events, summary stays whole"
 CHECKS=$((CHECKS + 1))
 
 # --- SURVIVE: migrate the parent (new window id, same key) ----------------------
 old="$PARENT"
 TM kill-window -t "$PARENT"
 new_win '分拆方案'; PARENT="$WID"; opt "$PARENT" @raw 1; opt "$PARENT" @worktree "$WORK/repo-scratch-7"; opt "$PARENT" @claude_state idle
-[ "$PARENT" != "$old" ] || fail "the migrated parent must carry a NEW window id"
+[ "$PARENT" != "$old" ] || st_fail "the migrated parent must carry a NEW window id"
 CHECKS=$((CHECKS + 1))
 eq "after migration the summary is unchanged" "2/3 ✓ · 1!" "$(summ scratch-7)"
 eq "…and still equals the dash badge"          "$(dash_badge)" "$(kn "$(summ scratch-7)")"
@@ -244,11 +237,11 @@ eq "…on the dash too" "1/2" "$(dash_badge)"
 # counts it under the new one. Without a session: nothing minted (as before).
 GR="$WORK/gen/repo"; mkdir -p "$GR"
 git -C "$GR" init -q -b master 2>/dev/null || { git -C "$GR" init -q && git -C "$GR" checkout -q -b master; }
-git -C "$GR" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init || fail "gen: could not seed a repo"
+git -C "$GR" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init || st_fail "gen: could not seed a repo"
 CD="$FLEET_CONF_DIR/fleets/$LBL/children"
 printf '%s' '{"child":"issue-501","state":"MERGED","pr":"51"}' \
   | python3 "$BIN/fleet-children.py" append --file "$CD/${P}scratch-1.ndjson" >/dev/null \
-  || fail "gen: could not seed the last holder's book"
+  || st_fail "gen: could not seed the last holder's book"
 new_win gen-oldkid; GK="$WID"; opt "$GK" @issue 502; opt "$GK" @origin scratch-1; opt "$GK" @origin_wid "u/scratch-1"
 eq "gen: before re-allocation scratch-1 has the old book's child + the live one" 2 \
   "$(bash "$CLI" -L "$LBL" scratch-1 --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["children"]))')"
@@ -257,7 +250,7 @@ eq "gen: the free number is allocated" scratch-1 "${alloc%%$'\t'*}"
 eq "gen: the last holder's book is moved aside" no "$([ -e "$CD/${P}scratch-1.ndjson" ] && echo yes || echo no)"
 has "gen: …and kept, readable, in its retired book" "\"child\": \"${P}issue-501\"" "$(cat "$CD/${P}scratch-1.ndjson.0" 2>/dev/null)"
 G1=$(awk -F'\t' -v k="${P}scratch-1" '$1 == k { g = $2 } END { print g }' "$CD/.gen" 2>/dev/null)
-case "$G1" in [0-9]*.[0-9]*) CHECKS=$((CHECKS + 1)) ;; *) fail "gen: no generation minted for scratch-1" "$(cat "$CD/.gen" 2>/dev/null)" ;; esac
+case "$G1" in [0-9]*.[0-9]*) CHECKS=$((CHECKS + 1)) ;; *) st_fail "gen: no generation minted for scratch-1" "$(cat "$CD/.gen" 2>/dev/null)" ;; esac
 NEWOUT=$(bash "$CLI" -L "$LBL" scratch-1 --json 2>&1)
 eq "gen: the new scratch-1 has no children" 0 \
   "$(printf '%s' "$NEWOUT" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["children"]))')"
@@ -324,7 +317,7 @@ JOUT=$(printf '%s\n' \
   "@2|working||r-b:issue-1317|r-a:scratch-5||kid-b" \
   "@3|working||r-a:issue-1400|r-a:scratch-5|$FID1|kid-bound" \
   | python3 "$BIN/fleet-children.py" show --dir "$JD" --parent r-a:scratch-5 --json)
-python3 - "$JOUT" <<'PY' || fail "join: the three sources must make one row per child (see above)" "$JOUT"
+python3 - "$JOUT" <<'PY' || st_fail "join: the three sources must make one row per child (see above)" "$JOUT"
 import json, sys
 d = json.loads(sys.argv[1])
 kids = {k["child"]: k for k in d["children"]}
@@ -347,7 +340,7 @@ eq "join: wake-state answers for the bare spelling too" "0 0" \
 printf '%s\n' '{"seq": 1, "ts": "2026-10-05T00:00:00Z", "child": "issue-7", "state": "MERGED"}' > "$JD/scratch-5.ndjson"
 JOUT=$(printf '%s\n' "@1|done||issue-7|scratch-5|a|b" \
   | python3 "$BIN/fleet-children.py" show --dir "$JD" --parent scratch-5 --json)
-python3 - "$JOUT" <<'PY' || fail "join: a one-repo book must read as before" "$JOUT"
+python3 - "$JOUT" <<'PY' || st_fail "join: a one-repo book must read as before" "$JOUT"
 import json, sys
 d = json.loads(sys.argv[1])
 assert [k["child"] for k in d["children"]] == ["issue-7"], d
@@ -373,7 +366,7 @@ printf '%s\n' '{"seq": 1, "ts": "2026-10-05T00:00:00Z", "child": "issue-501", "s
   '{"seq": 4, "ts": "2026-10-05T00:00:00Z", "child": "issue-504", "state": "WAITING", "node": "mac-a"}' > "$RD/scratch-5.ndjson"
 ROUT=$(printf '%s\n' "mac-a|remote||issue-502|scratch-5||" \
   | python3 "$BIN/fleet-children.py" show --dir "$RD" --parent scratch-5 --hub-cache "$RD/g/remote_s" --json)
-python3 - "$ROUT" <<'PY2' || fail "remote: a child on another machine must carry that machine's word (see above)" "$ROUT"
+python3 - "$ROUT" <<'PY2' || st_fail "remote: a child on another machine must carry that machine's word (see above)" "$ROUT"
 import json, sys
 k = {c["child"]: c for c in json.loads(sys.argv[1])["children"]}
 assert (k["issue-501"]["remote_state"], k["issue-501"]["remote_node"]) == ("bg", "mac-a"), k["issue-501"]
@@ -412,7 +405,7 @@ printf '%s\n' \
 printf '%s\n' "$now" > "$SD/g/hub_ok"
 SOUT=$(printf '%s\n' "@5|working||issue-605|scratch-8||kid" \
   | python3 "$BIN/fleet-children.py" show --dir "$SD" --parent scratch-8 --hub-cache "$SD/g/remote_s" --json)
-python3 - "$SOUT" <<'PY3' || fail "stale: only a send nobody saw open, anywhere, is a stale claim (see above)" "$SOUT"
+python3 - "$SOUT" <<'PY3' || st_fail "stale: only a send nobody saw open, anywhere, is a stale claim (see above)" "$SOUT"
 import json, sys
 d = json.loads(sys.argv[1])
 k = {c["child"]: c for c in d["children"]}

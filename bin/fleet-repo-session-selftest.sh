@@ -30,12 +30,12 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 . "$BIN/selftest-sections.sh"
 selftest_sections 4
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
+st_need git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-repo-session-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -74,10 +74,8 @@ mkdir -p "$FLEET_CONF_DIR" "$TMPDIR"
 unset TMUX TMUX_PANE FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_MODEL FLEET_AGENT
 . "$BIN/fleet-lib.sh"
 
-FAILS=0
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-ok()   { printf 'ok   %s\n' "$*"; }
-eq()   { if [ "$2" = "$3" ]; then ok "$1"; else fail "$1: expected [$3], got [$2]"; fi; }
+st_tally
+eq()   { if [ "$2" = "$3" ]; then st_ok_all "$1"; else st_miss "$1: expected [$3], got [$2]"; fi; }
 
 mkrepo() {   # $1=dir $2=owner/name — a checkout with one commit and an origin/master
   git init -q "$1" && git -C "$1" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
@@ -115,30 +113,30 @@ if selftest_section 1; then
 # ---- A. issue spawn --------------------------------------------------------------
 spawn 12 "$S"; rc=$?
 eq "A 2+ repos, no --repo → refused (infra)" "$rc" 1
-grep -q -- '--repo' "$WORK/err" || fail "A the refusal names --repo: $(cat "$WORK/err")"
-[ -z "$(wins_for "$S" 12)" ] || fail "A the refused spawn opened a window"
+grep -q -- '--repo' "$WORK/err" || st_miss "A the refusal names --repo: $(cat "$WORK/err")"
+[ -z "$(wins_for "$S" 12)" ] || st_miss "A the refused spawn opened a window"
 
 spawn 12 "$S" --repo o/zzz; rc=$?
 eq "A an unhosted --repo → refused" "$rc" 1
 
-spawn 12 "$S" --repo o/b || fail "A --repo o/b spawn failed: $(cat "$WORK/err")"
+spawn 12 "$S" --repo o/b || st_miss "A --repo o/b spawn failed: $(cat "$WORK/err")"
 wB=$(wins_for "$S" 12 | head -1)
 eq "A @repo stamped" "$(opt "$wB" @repo)" o/b
-case "$(opt "$wB" window_name)" in *·*|'') fail "A window name carries a repo tag (#1023): [$(opt "$wB" window_name)]" ;;
-  *) ok "A the window name is bare — no repo tag (#1023)" ;; esac
+case "$(opt "$wB" window_name)" in *·*|'') st_miss "A window name carries a repo tag (#1023): [$(opt "$wB" window_name)]" ;;
+  *) st_ok_all "A the window name is bare — no repo tag (#1023)" ;; esac
 eq "A @worktree under B's checkout" "$(opt "$wB" @worktree)" "$WORK/mainB-issue-12"
-[ -d "$WORK/mainB-issue-12" ] || fail "A B's worktree was not created"
+[ -d "$WORK/mainB-issue-12" ] || st_miss "A B's worktree was not created"
 eq "A the worktree is B's" "$(git -C "$WORK/mainB-issue-12" remote get-url origin)" https://github.com/o/b.git
-case "$(opt "$wB" pane_start_command)" in *"@repo 'o/b'"*) ok "A the window self-stamps @repo" ;;
-  *) fail "A the window command carries no self-stamp: $(opt "$wB" pane_start_command)" ;; esac
-wait_rec "$wB" || fail "A the launcher never reached claude"
+case "$(opt "$wB" pane_start_command)" in *"@repo 'o/b'"*) st_ok_all "A the window self-stamps @repo" ;;
+  *) st_miss "A the window command carries no self-stamp: $(opt "$wB" pane_start_command)" ;; esac
+wait_rec "$wB" || st_miss "A the launcher never reached claude"
 eq "A the launcher saw its own repo" "$(cat "$WORK/rec/$wB.seen" 2>/dev/null)" "o/b||$WORK/mainB-issue-12"
 grep -qF "$WORK/mainB-issue-12" "$WORK/cc/.claude.json" 2>/dev/null \
-  && ok "A B's worktree pre-trusted (under B's MAIN)" \
-  || fail "A B's worktree was not pre-trusted: $(cat "$WORK/cc/.claude.json" 2>/dev/null)"
+  && st_ok_all "A B's worktree pre-trusted (under B's MAIN)" \
+  || st_miss "A B's worktree was not pre-trusted: $(cat "$WORK/cc/.claude.json" 2>/dev/null)"
 
 # ---- B. (repo, N) dedup ------------------------------------------------------------
-spawn 12 "$S" --repo o/a || fail "B A#12 spawn failed: $(cat "$WORK/err")"
+spawn 12 "$S" --repo o/a || st_miss "B A#12 spawn failed: $(cat "$WORK/err")"
 eq "B B#12 does not block A#12" "$(wins_for "$S" 12 | wc -l | tr -d ' ')" 2
 wA=$(wins_for "$S" 12 | grep -vxF "$wB" | head -1)
 eq "B A#12's repo" "$(opt "$wA" @repo)" o/a
@@ -149,28 +147,28 @@ spawn 12 "$S" --repo o/b
 eq "B a second B#12 is deduped" "$(wins_for "$S" 12 | wc -l | tr -d ' ')" 2
 
 # ---- C. no-repo + repo scratch -------------------------------------------------------
-raw --no-repo "$S" || fail "C --no-repo spawn failed: $(cat "$WORK/err")"
+raw --no-repo "$S" || st_miss "C --no-repo spawn failed: $(cat "$WORK/err")"
 wN=$(newest "$S")
 eq "C @norepo" "$(opt "$wN" @norepo)" 1
 eq "C no @repo/@worktree/@raw" "$(opt "$wN" @repo)|$(opt "$wN" @worktree)|$(opt "$wN" @raw)" "||"
-wait_rec "$wN" || fail "C the no-repo launcher never reached claude"
+wait_rec "$wN" || st_miss "C the no-repo launcher never reached claude"
 eq "C runs in \$HOME" "$(cat "$WORK/rec/$wN.cwd" 2>/dev/null)" "$(cd "$HOME" && pwd -P)"
 nsid=$(opt "$wN" @norepo_sid)
-case "$nsid" in ????????-????-????-????-????????????) ok "C @norepo_sid is a uuid" ;; *) fail "C @norepo_sid: [$nsid]" ;; esac
-case "$(cat "$WORK/rec/$wN.args" 2>/dev/null)" in *"--session-id $nsid"*) ok "C launched with --session-id = @norepo_sid" ;;
-  *) fail "C claude args: $(cat "$WORK/rec/$wN.args" 2>/dev/null)" ;; esac
+case "$nsid" in ????????-????-????-????-????????????) st_ok_all "C @norepo_sid is a uuid" ;; *) st_miss "C @norepo_sid: [$nsid]" ;; esac
+case "$(cat "$WORK/rec/$wN.args" 2>/dev/null)" in *"--session-id $nsid"*) st_ok_all "C launched with --session-id = @norepo_sid" ;;
+  *) st_miss "C claude args: $(cat "$WORK/rec/$wN.args" 2>/dev/null)" ;; esac
 eq "C @norepo stamped before the launcher" "$(cut -d'|' -f2 "$WORK/rec/$wN.seen" 2>/dev/null)" 1
 
-raw --repo o/b "$S" || fail "C --repo o/b scratch failed: $(cat "$WORK/err")"
+raw --repo o/b "$S" || st_miss "C --repo o/b scratch failed: $(cat "$WORK/err")"
 wS=$(newest "$S")
 eq "C repo scratch @repo" "$(opt "$wS" @repo)" o/b
-case "$(opt "$wS" @worktree)" in "$WORK/mainB-scratch-"*) ok "C repo scratch worktree under B" ;;
-  *) fail "C repo scratch worktree: $(opt "$wS" @worktree)" ;; esac
+case "$(opt "$wS" @worktree)" in "$WORK/mainB-scratch-"*) st_ok_all "C repo scratch worktree under B" ;;
+  *) st_miss "C repo scratch worktree: $(opt "$wS" @worktree)" ;; esac
 eq "C repo scratch @raw" "$(opt "$wS" @raw)" 1
-case "$(opt "$wS" window_name)" in scratch-*) ok "C repo scratch name is bare (#1023)" ;;
-  *) fail "C repo scratch name: $(opt "$wS" window_name)" ;; esac
-case "$(opt "$wN" window_name)" in *·*) fail "C a no-repo session has no repo tag: $(opt "$wN" window_name)" ;;
-  *) ok "C no-repo name untagged" ;; esac
+case "$(opt "$wS" window_name)" in scratch-*) st_ok_all "C repo scratch name is bare (#1023)" ;;
+  *) st_miss "C repo scratch name: $(opt "$wS" window_name)" ;; esac
+case "$(opt "$wN" window_name)" in *·*) st_miss "C a no-repo session has no repo tag: $(opt "$wN" window_name)" ;;
+  *) st_ok_all "C no-repo name untagged" ;; esac
 
 fi
 
@@ -196,20 +194,20 @@ eq "D origin key, 2+ repos (scratch)" "$(inpane "$wS" fleet_origin_key)" "o-b:$(
 eq "D origin key, no-repo session → its identity (issue #4341)" "$(inpane "$wN" fleet_origin_key)" "$(opt "$wN" @fleet_id)"
 eq "D qualified key → B's window" "$(fleet_win_for_key o-b:issue-12 "$S")" "$wB"
 eq "D qualified key → A's window" "$(fleet_win_for_key o-a:issue-12 "$S")" "$wA"
-fleet_win_for_key o-c:issue-12 "$S" >/dev/null && fail "D an unhosted slug matched a window" || ok "D an unhosted slug matches nothing"
+fleet_win_for_key o-c:issue-12 "$S" >/dev/null && st_miss "D an unhosted slug matched a window" || st_ok_all "D an unhosted slug matches nothing"
 eq "D canon keeps a qualified key" "$(fleet_origin_canon o-b:issue-12 '')" o-b:issue-12
 eq "D canon folds a qualified basename" "$(fleet_origin_canon o-b:mainB-scratch-4 '')" o-b:scratch-4
 eq "D canon: plain keys unchanged" "$(fleet_origin_canon cd-scratch-52 '')" scratch-52
 
-spawn 5 "$D" || fail "D one-repo spawn failed: $(cat "$WORK/err")"
+spawn 5 "$D" || st_miss "D one-repo spawn failed: $(cat "$WORK/err")"
 wD=$(wins_for "$D" 5 | head -1)
 eq "D origin key, one-repo fleet (qualified too, issue #1939)" "$(inpane "$wD" fleet_origin_key)" o-d:issue-5
 eq "D bare key still resolves (the one repo's alias)" "$(fleet_win_for_key issue-5 "$D")" "$wD"
 eq "D …and so does the qualified one" "$(fleet_win_for_key o-d:issue-5 "$D")" "$wD"
 
 # ---- F. one road (issue #1943): a one-repo spawn stamps itself like any other -----------
-case "$(opt "$wD" pane_start_command)" in *set-option*@repo*o/d*) ok "F one-repo spawn command self-stamps its repo" ;;
-  *) fail "F one-repo spawn command carries no self-stamp: $(opt "$wD" pane_start_command)" ;; esac
+case "$(opt "$wD" pane_start_command)" in *set-option*@repo*o/d*) st_ok_all "F one-repo spawn command self-stamps its repo" ;;
+  *) st_miss "F one-repo spawn command carries no self-stamp: $(opt "$wD" pane_start_command)" ;; esac
 eq "F one-repo window's @repo" "$(opt "$wD" @repo)" o/d
 eq "F one-repo worktree" "$(opt "$wD" @worktree)" "$WORK/mainD-issue-5"
 
@@ -217,22 +215,22 @@ fi
 
 # Restore starts with the same bindings, without re-running spawn assertions.
 if [ "$SELFTEST_SECTION" = 2 ]; then
-  spawn 12 "$S" --repo o/b || fail 'restore fixture: issue spawn'
+  spawn 12 "$S" --repo o/b || st_miss 'restore fixture: issue spawn'
   wB=$(wins_for "$S" 12 | head -1)
-  raw --no-repo "$S" || fail 'restore fixture: no-repo spawn'
+  raw --no-repo "$S" || st_miss 'restore fixture: no-repo spawn'
   wN=$(newest "$S"); nsid=$(opt "$wN" @norepo_sid)
-  spawn 5 "$D" || fail 'restore fixture: one-repo spawn'
-  wait_rec "$wB" && wait_rec "$wN" || fail 'restore fixture: launcher'
+  spawn 5 "$D" || st_miss 'restore fixture: one-repo spawn'
+  wait_rec "$wB" && wait_rec "$wN" || st_miss 'restore fixture: launcher'
 fi
 if selftest_section 2; then
 # ---- E. restore round-trip -------------------------------------------------------------
 bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1
 MS="$FLEET_CONF_DIR/fleets/$S/restore.map"; MD="$FLEET_CONF_DIR/fleets/$D/restore.map"
-[ -f "$MS" ] || fail "E no two-repo map written"
+[ -f "$MS" ] || st_miss "E no two-repo map written"
 rowB=$(awk -F'\t' -v p="$WORK/mainB-issue-12" '$1=="WIN" && $3==p' "$MS")
 eq "E B row's repo column" "$(printf '%s' "$rowB" | awk -F'\t' '{print $16}')" o/b
 rowN=$(awk -F'\t' '$1=="WIN" && $16=="-"' "$MS" | head -1)
-[ -n "$rowN" ] || fail "E no no-repo row (column 16 = -)"
+[ -n "$rowN" ] || st_miss "E no no-repo row (column 16 = -)"
 eq "E no-repo row carries its own session id" "$(printf '%s' "$rowN" | awk -F'\t' '{print $4}' | grep -c "$nsid")" 1
 eq "E one-repo rows carry their repo too (#1943)" "$(awk -F'\t' '$1=="WIN" {print $16}' "$MD" | sort -u)" o/d
 
@@ -248,29 +246,29 @@ bash "$BIN/fleet-restore.sh" >/dev/null 2>&1
 rB=$(tmux list-windows -t "$S" -F '#{@worktree} #{window_id}' | awk -v p="$WORK/mainB-issue-12" '$1==p{print $2; exit}')
 rN=$(tmux list-windows -t "$S" -F '#{window_name} #{window_id}' | awk -v n="$nameN" '$1==n{print $2; exit}')
 rO=$(tmux list-windows -t "$S" -F '#{window_name} #{window_id}' | awk '$1=="old-b"{print $2; exit}')
-[ -n "$rB" ] && eq "E restore round-trips @repo" "$(opt "$rB" @repo)" o/b || fail "E B window not restored"
+[ -n "$rB" ] && eq "E restore round-trips @repo" "$(opt "$rB" @repo)" o/b || st_miss "E B window not restored"
 if [ -n "$rN" ]; then
   eq "E restored no-repo session keeps @norepo" "$(opt "$rN" @norepo)" 1
-  wait_rec "$rN" || fail "E restored no-repo launcher never reached claude"
-  case "$(cat "$WORK/rec/$rN.args" 2>/dev/null)" in *"--resume $nsid"*) ok "E no-repo session resumed by its own id" ;;
-    *) fail "E no-repo resume args: $(cat "$WORK/rec/$rN.args" 2>/dev/null)" ;; esac
+  wait_rec "$rN" || st_miss "E restored no-repo launcher never reached claude"
+  case "$(cat "$WORK/rec/$rN.args" 2>/dev/null)" in *"--resume $nsid"*) st_ok_all "E no-repo session resumed by its own id" ;;
+    *) st_miss "E no-repo resume args: $(cat "$WORK/rec/$rN.args" 2>/dev/null)" ;; esac
   eq "E no-repo session resumed in \$HOME" "$(cat "$WORK/rec/$rN.cwd" 2>/dev/null)" "$(cd "$HOME" && pwd -P)"
 else
-  fail "E no-repo window not restored"
+  st_miss "E no-repo window not restored"
 fi
 if [ -n "$rO" ]; then
-  wait_rec "$rO" || fail "E old-row launcher never reached claude"
+  wait_rec "$rO" || st_miss "E old-row launcher never reached claude"
   eq "E old row: repo derived from @worktree before launch" "$(cut -d'|' -f1 "$WORK/rec/$rO.seen" 2>/dev/null)" o/b
 else
-  fail "E old row not restored"
+  st_miss "E old row not restored"
 fi
 
 fi
 
 if [ "$SELFTEST_SECTION" = 3 ]; then
-  raw --repo o/b "$S" || fail 'resume fixture: scratch spawn'
+  raw --repo o/b "$S" || st_miss 'resume fixture: scratch spawn'
   wS=$(newest "$S")
-  wait_rec "$wS" || fail 'resume fixture: launcher'
+  wait_rec "$wS" || st_miss 'resume fixture: launcher'
 fi
 if selftest_section 3; then
 # ---- G. a fleet with no repo (issue #1937): a bare spawn is a no-repo session ----
@@ -279,12 +277,12 @@ mkdir -p "$FLEET_CONF_DIR/fleets/$Z"
 printf '# a fleet with no repo\nFLEET_CTX_WINDOW="7"\n' > "$FLEET_CONF_DIR/fleets/$Z/conf"
 tmux new-session -d -s "$Z" -n plan
 eq "G no repo hosted" "$(fleet_repos "$Z")" ""
-raw "$Z" || fail "G a bare spawn in a fleet with no repo failed: $(cat "$WORK/err")"
+raw "$Z" || st_miss "G a bare spawn in a fleet with no repo failed: $(cat "$WORK/err")"
 wZ=$(newest "$Z")
 eq "G @norepo" "$(opt "$wZ" @norepo)" 1
 eq "G no @repo" "$(opt "$wZ" @repo)" ""
 eq "G no @worktree" "$(opt "$wZ" @worktree)" ""
-wait_rec "$wZ" || fail "G the no-repo launcher never reached claude"
+wait_rec "$wZ" || st_miss "G the no-repo launcher never reached claude"
 eq "G it runs in \$HOME" "$(cat "$WORK/rec/$wZ.cwd" 2>/dev/null)" "$(cd "$HOME" && pwd -P)"
 
 # ---- H. a parked session with no issue comes back (issue #3387) -------------------
@@ -294,36 +292,35 @@ eq "G it runs in \$HOME" "$(cat "$WORK/rec/$wZ.cwd" 2>/dev/null)" "$(cd "$HOME" 
 printf 'read your handoff, go on' > "$WORK/seed.txt"
 hsid=$(python3 -c 'import uuid; print(uuid.uuid4())')
 mkdir -p "$(fleet_transcript_dir "$HOME")" && : > "$(fleet_transcript_dir "$HOME")/$hsid.jsonl"
-raw --no-repo --resume "$hsid" --seed-file "$WORK/seed.txt" --task T5 "$S" || fail "H no-repo resume failed: $(cat "$WORK/err")"
+raw --no-repo --resume "$hsid" --seed-file "$WORK/seed.txt" --task T5 "$S" || st_miss "H no-repo resume failed: $(cat "$WORK/err")"
 wH=$(newest "$S")
-wait_rec "$wH" || fail "H the no-repo resume never reached claude"
+wait_rec "$wH" || st_miss "H the no-repo resume never reached claude"
 eq "H @norepo_sid is the SAME conversation" "$(opt "$wH" @norepo_sid)" "$hsid"
 case "$(cat "$WORK/rec/$wH.args" 2>/dev/null)" in
   *"--resume $hsid"*"read your handoff, go on"*) case "$(cat "$WORK/rec/$wH.args")" in
-    *--session-id*) fail "H a resume also minted a --session-id: $(cat "$WORK/rec/$wH.args")" ;;
-    *) ok "H launched --resume <sid> with the seed as its first turn" ;; esac ;;
-  *) fail "H claude args: $(cat "$WORK/rec/$wH.args" 2>/dev/null)" ;; esac
+    *--session-id*) st_miss "H a resume also minted a --session-id: $(cat "$WORK/rec/$wH.args")" ;;
+    *) st_ok_all "H launched --resume <sid> with the seed as its first turn" ;; esac ;;
+  *) st_miss "H claude args: $(cat "$WORK/rec/$wH.args" 2>/dev/null)" ;; esac
 wtS=$(opt "$wS" @worktree)
 ssid=$(python3 -c 'import uuid; print(uuid.uuid4())')
 mkdir -p "$(fleet_transcript_dir "$wtS")" && : > "$(fleet_transcript_dir "$wtS")/$ssid.jsonl"
 nwt=$(git -C "$WORK/mainB" worktree list | grep -c .)
-raw --repo o/b --worktree "$wtS" --resume "$ssid" --seed-file "$WORK/seed.txt" "$S" || fail "H scratch resume failed: $(cat "$WORK/err")"
+raw --repo o/b --worktree "$wtS" --resume "$ssid" --seed-file "$WORK/seed.txt" "$S" || st_miss "H scratch resume failed: $(cat "$WORK/err")"
 wR=$(newest "$S")
-wait_rec "$wR" || fail "H the scratch resume never reached claude"
+wait_rec "$wR" || st_miss "H the scratch resume never reached claude"
 eq "H reopened in its own kept worktree" "$(opt "$wR" @worktree)|$(cat "$WORK/rec/$wR.cwd" 2>/dev/null)" "$wtS|$(cd "$wtS" && pwd -P)"
 eq "H no new worktree allocated" "$(git -C "$WORK/mainB" worktree list | grep -c .)" "$nwt"
-case "$(cat "$WORK/rec/$wR.args" 2>/dev/null)" in *"--resume $ssid"*"read your handoff"*) ok "H the scratch resumes its conversation" ;;
-  *) fail "H scratch args: $(cat "$WORK/rec/$wR.args" 2>/dev/null)" ;; esac
-raw --no-repo --resume "$(python3 -c 'import uuid; print(uuid.uuid4())')" --seed-file "$WORK/seed.txt" "$S" || fail "H gone-transcript spawn failed"
+case "$(cat "$WORK/rec/$wR.args" 2>/dev/null)" in *"--resume $ssid"*"read your handoff"*) st_ok_all "H the scratch resumes its conversation" ;;
+  *) st_miss "H scratch args: $(cat "$WORK/rec/$wR.args" 2>/dev/null)" ;; esac
+raw --no-repo --resume "$(python3 -c 'import uuid; print(uuid.uuid4())')" --seed-file "$WORK/seed.txt" "$S" || st_miss "H gone-transcript spawn failed"
 wG=$(newest "$S")
-wait_rec "$wG" || fail "H the gone-transcript launcher never reached claude"
-case "$(cat "$WORK/rec/$wG.args" 2>/dev/null)" in *--resume*) fail "H resumed a conversation with no transcript" ;;
-  *"--session-id"*"read your handoff"*) ok "H no transcript ⇒ a fresh session given the seed" ;;
-  *) fail "H gone-transcript args: $(cat "$WORK/rec/$wG.args" 2>/dev/null)" ;; esac
+wait_rec "$wG" || st_miss "H the gone-transcript launcher never reached claude"
+case "$(cat "$WORK/rec/$wG.args" 2>/dev/null)" in *--resume*) st_miss "H resumed a conversation with no transcript" ;;
+  *"--session-id"*"read your handoff"*) st_ok_all "H no transcript ⇒ a fresh session given the seed" ;;
+  *) st_miss "H gone-transcript args: $(cat "$WORK/rec/$wG.args" 2>/dev/null)" ;; esac
 raw --repo o/b --worktree "$WORK/nope-scratch-9" --seed-file "$WORK/seed.txt" "$S" \
-  && fail "H a gone --worktree opened a window" || ok "H a gone --worktree is refused"
+  && st_miss "H a gone --worktree opened a window" || st_ok_all "H a gone --worktree is refused"
 
 fi
 
-[ "$FAILS" = 0 ] && { printf 'PASS fleet-repo-session-selftest\n'; exit 0; }
-printf '%s failure(s)\n' "$FAILS" >&2; exit 1
+st_done

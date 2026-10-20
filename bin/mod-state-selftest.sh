@@ -32,18 +32,14 @@ for f in "$SCS" "$BIN/fleet-lib.sh" "$BIN/fleet_loop_mark.py"; do
   [ -f "$f" ] || { printf 'selftest: %s not found\n' "$f" >&2; exit 2; }
 done
 st_real_tmux
-command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
+st_need python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mod-state-selftest.XXXXXX")" || exit 2
 pass=0
 
 SOCK="$WORK/tmux.sock"
 mkdir -p "$WORK/bin"
-cat > "$WORK/bin/tmux" <<EOS
-#!/bin/sh
-exec "$REAL_TMUX" -S "$SOCK" "\$@"
-EOS
-chmod +x "$WORK/bin/tmux"
+st_tmux_socket "$WORK/bin" "$SOCK"
 export PATH="$WORK/bin:$PATH"
 
 cleanup() { tmux kill-server 2>/dev/null; rm -rf "$WORK"; }

@@ -14,7 +14,8 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-command -v python3 >/dev/null 2>&1 || { echo 'fleet-node-sig selftest: python3 absent — SKIP'; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need python3
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/nodesig-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
 export FLEET_CONF_DIR="$WORK/conf"
@@ -25,11 +26,11 @@ unset CCQUOTA_NODE_KEY
 SIG="$BIN/fleet_node_sig.py"
 HUB=https://hub.test
 
-pass=0 fail=0
+pass=0 FAIL=0
 check() {
   local name="$1"; shift
   if "$@"; then printf '  ok   %s\n' "$name"; pass=$((pass + 1))
-  else printf '  FAIL %s\n' "$name"; fail=$((fail + 1)); fi
+  else st_miss "$name"; fi
 }
 
 echo "A  no confirmed key → the bearer"
@@ -73,5 +74,5 @@ check "a separated login (credsep.json) → Bearer" [ "$(fleet_node_auth GET "$H
 check "  … unless CCQUOTA_NODE_KEY names its key" bash -c "CCQUOTA_NODE_KEY='$FLEET_CONF_DIR/node.key' && export CCQUOTA_NODE_KEY && . '$BIN/fleet-lib.sh' && fleet_node_auth GET '$HUB/x' tok-1 | grep -q '^FleetSig '"
 rm -f "$FLEET_CONF_DIR/credsep.json"
 
-printf '\nfleet-node-sig-selftest: %d passed, %d failed\n' "$pass" "$fail"
-[ "$fail" = 0 ]
+printf '\nfleet-node-sig-selftest: %d passed, %d failed\n' "$pass" "$FAIL"
+st_done

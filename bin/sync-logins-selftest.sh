@@ -67,8 +67,7 @@ KH=''   # section K's closed home — reopened first, or rm -rf cannot enter it
 cleanup() { [ -n "$KH" ] && chmod 700 "$KH" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM HUP
 
-CHECKS=0
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+st_tally count
 ok() { CHECKS=$((CHECKS + 1)); eval "$2" || st_fail "$1 — [$2] is false${OUT:+ — output:
 $OUT}"; }
 contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]:
@@ -174,45 +173,45 @@ snap() { (cd "$H" && find . -type f -exec cksum {} + | sort) ; }
 # ============================================================================
 before=$(snap)
 run --source "$SRC" --dry-run
-eq "dry-run: exit 1 (drift)" 1 "$RC"
+st_eq "dry-run: exit 1 (drift)" 1 "$RC"
 contains "dry-run: alice is a git checkout, 2 behind" "$OUT" "2 commit(s) behind"
 ok "dry-run: alice listed as sync" 'printf "%s\n" "$OUT" | grep -q "^alice  *git .* sync"'
 ok "dry-run: bob listed as a copy to sync" 'printf "%s\n" "$OUT" | grep -q "^bob  *copy .* sync"'
 contains "dry-run: says so" "$OUT" "dry run — nothing changed"
-eq "dry-run: nothing changed" "$before" "$(snap)"
+st_eq "dry-run: nothing changed" "$before" "$(snap)"
 
 run --source "$SRC" --summary
-eq "summary: exit 1" 1 "$RC"
-eq "summary: one line" 1 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')"
+st_eq "summary: exit 1" 1 "$RC"
+st_eq "summary: one line" 1 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')"
 contains "summary: counts" "$OUT" "2 other · 0 current · 2 drifted"
 
 # ============================================================================
 # B. act
 # ============================================================================
 run --source "$SRC"
-eq "act: exit 0" 0 "$RC"
+st_eq "act: exit 0" 0 "$RC"
 contains "act: final line" "$OUT" "other logins on this machine: 2 synced / 0 skipped"
 # alice — every tracked entry, HEAD aligned, clean
-eq "alice: HEAD at the source commit" "$C3" "$(g "$A" rev-parse HEAD)"
-eq "alice: clean status" "" "$(g "$A" status --porcelain --untracked-files=no)"
-eq "alice: modified file" "v2" "$(cat "$A/bin/a.sh")"
+st_eq "alice: HEAD at the source commit" "$C3" "$(g "$A" rev-parse HEAD)"
+st_eq "alice: clean status" "" "$(g "$A" status --porcelain --untracked-files=no)"
+st_eq "alice: modified file" "v2" "$(cat "$A/bin/a.sh")"
 ok "alice: added file" '[ -f "$A/bin/b.sh" ]'
 ok "alice: deleted file gone" '[ ! -e "$A/bin/old.sh" ]'
 ok "alice: new top-level entry" '[ -f "$A/skills/s/SKILL.md" ]'
 ok "alice: exec bit kept" '[ -x "$A/bin/a.sh" ]'
-eq "alice: fleet.conf untouched" "FLEET_REPO=alice/x" "$(cat "$A/fleet.conf")"
+st_eq "alice: fleet.conf untouched" "FLEET_REPO=alice/x" "$(cat "$A/fleet.conf")"
 ok "alice: logs untouched" '[ -f "$A/logs/x.log" ]'
 ok "alice: ignored cache kept" '[ -f "$A/bin/__pycache__/m.pyc" ]'
 # bob — only what it had, plus a marker
-eq "bob: modified file" "v2" "$(cat "$B/bin/a.sh")"
+st_eq "bob: modified file" "v2" "$(cat "$B/bin/a.sh")"
 ok "bob: deleted file gone" '[ ! -e "$B/bin/old.sh" ]'
 ok "bob: no full-install entries grown" '[ ! -e "$B/commands" ] && [ ! -e "$B/skills" ] && [ ! -e "$B/README.md" ]'
-eq "bob: marker records the commit" "$C3" "$(awk '{print $1}' "$B/.fleet-synced-from")"
-eq "bob: fleet.conf untouched" "FLEET_REPO=bob/y" "$(cat "$B/fleet.conf")"
+st_eq "bob: marker records the commit" "$C3" "$(awk '{print $1}' "$B/.fleet-synced-from")"
+st_eq "bob: fleet.conf untouched" "FLEET_REPO=bob/y" "$(cat "$B/fleet.conf")"
 # backups hold the pre-sync content
 bak=$(ls -d "$H"/alice/.claude/fleet.bak-* | head -1)
-eq "alice: backup has the old file" "v1" "$(cat "$bak/bin/a.sh")"
-eq "alice: backup records the old HEAD" "$C1" "$(cat "$bak/.fleet-prior-head")"
+st_eq "alice: backup has the old file" "v1" "$(cat "$bak/bin/a.sh")"
+st_eq "alice: backup records the old HEAD" "$C1" "$(cat "$bak/.fleet-prior-head")"
 ok "bob: backup has the deleted file" '[ -f "$(ls -d "$H"/bob/.claude/fleet.bak-* | head -1)/bin/old.sh" ]'
 # daemons
 L=$(cat "$WORK/launchctl.log")
@@ -227,12 +226,12 @@ ok "staging cleaned up" '[ -z "$(ls "$WORK/tmp")" ]'
 # ============================================================================
 : > "$WORK/launchctl.log"
 run --source "$SRC"
-eq "rerun: exit 0" 0 "$RC"
+st_eq "rerun: exit 0" 0 "$RC"
 contains "rerun: nothing synced" "$OUT" "0 synced / 0 skipped · 2 already current"
-eq "rerun: no daemon touched" "" "$(cat "$WORK/launchctl.log")"
+st_eq "rerun: no daemon touched" "" "$(cat "$WORK/launchctl.log")"
 run --source "$SRC" --summary
-eq "rerun summary: exit 0" 0 "$RC"
-eq "rerun summary" "2 other · 2 current · 0 drifted" "$OUT"
+st_eq "rerun summary: exit 0" 0 "$RC"
+st_eq "rerun summary" "2 other · 2 current · 0 drifted" "$OUT"
 
 # ============================================================================
 # D. local edits
@@ -240,13 +239,13 @@ eq "rerun summary" "2 other · 2 current · 0 drifted" "$OUT"
 echo 'v4' > "$SRC/bin/a.sh"; g "$SRC" commit -qam four   # (drops the uncommitted edit too)
 echo 'my own work' > "$A/bin/b.sh"
 run --source "$SRC" --logins alice
-eq "edit: blocked exit 4" 4 "$RC"
+st_eq "edit: blocked exit 4" 4 "$RC"
 contains "edit: names the file" "$OUT" "local edits: bin/b.sh"
-eq "edit: not overwritten" "my own work" "$(cat "$A/bin/b.sh")"
+st_eq "edit: not overwritten" "my own work" "$(cat "$A/bin/b.sh")"
 
 run --source "$SRC" --logins alice --force
-eq "force: exit 0" 0 "$RC"
-eq "force: synced" "v4" "$(cat "$A/bin/a.sh")"
+st_eq "force: exit 0" 0 "$RC"
+st_eq "force: synced" "v4" "$(cat "$A/bin/a.sh")"
 ok "force: backup keeps the edit" 'grep -rqx "my own work" "$H"/alice/.claude/fleet.bak-*/bin/b.sh'
 
 # footprint: the tree holds a version the source KNOWS but HEAD is older — what
@@ -254,8 +253,8 @@ ok "force: backup keeps the edit" 'grep -rqx "my own work" "$H"/alice/.claude/fl
 g "$A" reset -q "$C1"                                   # HEAD back, tree stays at C4
 ok "footprint: git calls it dirty" '[ -n "$(g "$A" status --porcelain --untracked-files=no)" ]'
 run --source "$SRC" --logins alice
-eq "footprint: synced, not blocked" 0 "$RC"
-eq "footprint: HEAD realigned" "$(g "$SRC" rev-parse HEAD)" "$(g "$A" rev-parse HEAD)"
+st_eq "footprint: synced, not blocked" 0 "$RC"
+st_eq "footprint: HEAD realigned" "$(g "$SRC" rev-parse HEAD)" "$(g "$A" rev-parse HEAD)"
 
 # ============================================================================
 # E. no downgrade
@@ -266,13 +265,13 @@ echo 'newer' > "$CR/bin/a.sh"; g "$CR" commit -qam newer
 mkdir -p "$H/dave/.claude/fleet"; cp -Rp "$SRC/bin" "$H/dave/.claude/fleet/"   # unmarked copy
 echo 'stale' > "$H/dave/.claude/fleet/bin/a.sh"                                  # …that drifted
 run --source "$SRC" --dry-run
-eq "newer: exit 4" 4 "$RC"
+st_eq "newer: exit 4" 4 "$RC"
 ok "newer: carol blocked" 'printf "%s\n" "$OUT" | grep -q "^carol .*blocked — its install is NEWER"'
 ok "newer: unmarked dave blocked" 'printf "%s\n" "$OUT" | grep -q "^dave .*blocked — unversioned copy"'
 ok "newer: marked bob still syncs" 'printf "%s\n" "$OUT" | grep -q "^bob .*sync"'
 run --source "$SRC" --logins carol
-eq "newer: act refuses" 4 "$RC"
-eq "newer: carol untouched" "newer" "$(cat "$CR/bin/a.sh")"
+st_eq "newer: act refuses" 4 "$RC"
+st_eq "newer: carol untouched" "newer" "$(cat "$CR/bin/a.sh")"
 rm -rf "$H/carol" "$H/dave"
 
 # ============================================================================
@@ -281,27 +280,27 @@ rm -rf "$H/carol" "$H/dave"
 echo 'v5' > "$SRC/bin/a.sh"; g "$SRC" commit -qam five
 : > "$WORK/sudo.log"
 OUT=$(FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO="$WORK/shim/sudo -n" bash "$SL" --source "$SRC" --logins bob 2>&1); RC=$?
-eq "sudo: exit 0" 0 "$RC"
-eq "sudo: synced" "v5" "$(cat "$B/bin/a.sh")"
+st_eq "sudo: exit 0" 0 "$RC"
+st_eq "sudo: synced" "v5" "$(cat "$B/bin/a.sh")"
 contains "sudo: rsync ran as the owner, with the owner's HOME" "$(cat "$WORK/sudo.log")" "-n -u $(id -un) env HOME=$H/bob rsync"
 
 echo 'v6' > "$SRC/bin/a.sh"; g "$SRC" commit -qam six
 OUT=$(FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO="false" bash "$SL" --source "$SRC" --logins bob 2>&1); RC=$?
-eq "no sudo: exit 5" 5 "$RC"
+st_eq "no sudo: exit 5" 5 "$RC"
 contains "no sudo: prints the admin command" "$OUT" "sudo $SL --source $SRC --logins bob"
-eq "no sudo: nothing changed" "v5" "$(cat "$B/bin/a.sh")"
+st_eq "no sudo: nothing changed" "v5" "$(cat "$B/bin/a.sh")"
 
 # ============================================================================
 # G. usage
 # ============================================================================
 run --source "$SRC" --logins nobody
-eq "unknown login: exit 2" 2 "$RC"
+st_eq "unknown login: exit 2" 2 "$RC"
 run --source "$SRC" --bogus
-eq "bad flag: exit 2" 2 "$RC"
+st_eq "bad flag: exit 2" 2 "$RC"
 run --source "$B"
-eq "non-git source: exit 3" 3 "$RC"
+st_eq "non-git source: exit 3" 3 "$RC"
 run --source "$SRC" --homes "$WORK/nohomes"
-eq "no other logins: exit 0" 0 "$RC"
+st_eq "no other logins: exit 0" 0 "$RC"
 contains "no other logins: says so" "$OUT" "nothing to sync"
 
 # ============================================================================
@@ -338,23 +337,23 @@ C7=$(g "$SRC" rev-parse HEAD)
 hrun() { OUT=$(PATH="$WORK/gshim:$PATH" FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO="$WORK/gshim/osudo -n" bash "$SL" --source "$SRC" --logins alice "$@" 2>&1); RC=$?; }
 ok "unreadable: the shim really refuses the caller" '! PATH="$WORK/gshim:$PATH" git -C "$A" rev-parse HEAD >/dev/null 2>&1'
 hrun --summary
-eq "unreadable summary: behind = drifted" "1 other · 0 current · 1 drifted (alice:1)" "$OUT"
+st_eq "unreadable summary: behind = drifted" "1 other · 0 current · 1 drifted (alice:1)" "$OUT"
 : > "$WORK/sudo.log"
 hrun
-eq "unreadable: exit 0" 0 "$RC"
+st_eq "unreadable: exit 0" 0 "$RC"
 contains "unreadable: synced, not FAILED" "$OUT" "alice: synced to"
 not_contains "unreadable: no FAILED" "$OUT" "FAILED"
-eq "unreadable: HEAD aligned" "$C7" "$(g "$A" rev-parse HEAD)"
+st_eq "unreadable: HEAD aligned" "$C7" "$(g "$A" rev-parse HEAD)"
 contains "unreadable: verify read HEAD as the owner" "$(cat "$WORK/sudo.log")" "-u $(id -un) git -c safe.directory=* -C $A rev-parse HEAD"
-eq "unreadable: owner probed once, not per git call" 1 "$(grep -c -- '-u [^ ]* true$' "$WORK/sudo.log")"
+st_eq "unreadable: owner probed once, not per git call" 1 "$(grep -c -- '-u [^ ]* true$' "$WORK/sudo.log")"
 hrun --summary
-eq "unreadable summary: current" "1 other · 1 current · 0 drifted" "$OUT"
-eq "unreadable summary: exit 0" 0 "$RC"
+st_eq "unreadable summary: current" "1 other · 1 current · 0 drifted" "$OUT"
+st_eq "unreadable summary: exit 0" 0 "$RC"
 # no reachable owner (no sudo): the caller's read is all there is — unchanged
 hrun_nosudo() { OUT=$(PATH="$WORK/gshim:$PATH" FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO=false bash "$SL" --source "$SRC" --logins alice --summary 2>&1); RC=$?; }
 hrun_nosudo
 not_contains "no sudo: does not claim current" "$OUT" "1 current"
-eq "no sudo: an unread checkout is drifted, not a copy" "1 other · 0 current · 1 drifted (alice:0)" "$OUT"
+st_eq "no sudo: an unread checkout is drifted, not a copy" "1 other · 0 current · 1 drifted (alice:0)" "$OUT"
 
 # ============================================================================
 # I. --to-git — a copy install becomes a clone (issue #1121)
@@ -364,7 +363,7 @@ eq "no sudo: an unread checkout is drifted, not a copy" "1 other · 0 current ·
 # caches. erin is an UNMARKED copy of the current tree. frank has a local edit
 # the source never saw; gina's marker names a commit the source lacks.
 C5=$(g "$SRC" rev-parse HEAD~2)
-eq "to-git: bob's marker is C5" "$C5" "$(awk '{print $1}' "$B/.fleet-synced-from")"
+st_eq "to-git: bob's marker is C5" "$C5" "$(awk '{print $1}' "$B/.fleet-synced-from")"
 echo 'log line' > "$B/logs/x.log"; echo 'mine' > "$B/conf/local.txt"; echo 'old conf' > "$B/fleet.conf.bak-x"
 mkdir -p "$B/bin/__pycache__"; echo 'c' > "$B/bin/__pycache__/m.pyc"; echo 'ds' > "$B/bin/.DS_Store"
 touch "$WORK/daemons/com.claude-fleet.bob.spinner.plist"
@@ -376,22 +375,22 @@ GI="$H/gina/.claude/fleet"; mkdir -p "$GI"; cp -Rp "$SRC/bin" "$GI/"
 printf '%s me now\n' 0123456789abcdef0123456789abcdef01234567 > "$GI/.fleet-synced-from"
 
 run --source "$SRC" --to-git --summary
-eq "to-git --summary: exclusive, exit 2" 2 "$RC"
+st_eq "to-git --summary: exclusive, exit 2" 2 "$RC"
 run --source "$SRC" --to-git --dry-run
-eq "to-git: no https origin on the source → exit 3" 3 "$RC"
+st_eq "to-git: no https origin on the source → exit 3" 3 "$RC"
 contains "to-git: says how" "$OUT" "pass --origin"
 g "$SRC" remote add origin git@github.com:o/r.git
 
 before=$(snap)
 run --source "$SRC" --to-git --dry-run
-eq "to-git dry-run: blocked logins → exit 4" 4 "$RC"
+st_eq "to-git dry-run: blocked logins → exit 4" 4 "$RC"
 ok "to-git dry-run: a checkout is skipped" 'printf "%s\n" "$OUT" | grep -q "^alice  *git .* skip — already a git checkout"'
 ok "to-git dry-run: bob converts at its marker, origin rewritten to https" 'printf "%s\n" "$OUT" | grep -q "^bob  *copy .* to-git — clone at $(g "$SRC" rev-parse --short "$C5") · origin https://github.com/o/r.git"'
 ok "to-git dry-run: an unmarked copy converts at the source HEAD" 'printf "%s\n" "$OUT" | grep -q "^erin  *copy .* to-git — unversioned copy → clone at $(g "$SRC" rev-parse --short "$C7")"'
 ok "to-git dry-run: a local edit blocks, named" 'printf "%s\n" "$OUT" | grep -q "^frank  *copy .* blocked — local edits: bin/a.sh"'
 ok "to-git dry-run: a marker the source lacks blocks" 'printf "%s\n" "$OUT" | grep -q "^gina  *copy .* blocked — its marker names 0123456, a commit the source does not have"'
 contains "to-git dry-run: tail counts" "$OUT" "5 · 2 to convert · 1 already git checkouts · 2 blocked (dry run — nothing changed)"
-eq "to-git dry-run: nothing changed" "$before" "$(snap)"
+st_eq "to-git dry-run: nothing changed" "$before" "$(snap)"
 
 : > "$WORK/launchctl.log"
 run --source "$SRC" --to-git --logins bob,erin
@@ -399,49 +398,49 @@ ok "to-git act: exit 0" '[ "$RC" -eq 0 ]'
 contains "to-git act: bob line" "$OUT" "bob: converted to a git checkout @ $(g "$SRC" rev-parse --short "$C5") · origin https://github.com/o/r.git · old copy kept at $H/bob/.claude/fleet.copy-"
 contains "to-git act: final line" "$OUT" "other logins on this machine: 2 converted / 0 skipped · 0 already git checkouts"
 ok "bob: is a checkout now" '[ -d "$B/.git" ]'
-eq "bob: HEAD = its marker's commit" "$C5" "$(g "$B" rev-parse HEAD)"
-eq "bob: on the source's branch" "master" "$(g "$B" symbolic-ref --short HEAD)"
-eq "bob: origin is the public https URL" "https://github.com/o/r.git" "$(g "$B" remote get-url origin)"
-eq "bob: upstream set" "origin" "$(g "$B" config branch.master.remote)"
-eq "bob: tracked tree clean" "" "$(g "$B" status --porcelain --untracked-files=no)"
-eq "bob: tracked file at the marker's version" "v5" "$(cat "$B/bin/a.sh")"
+st_eq "bob: HEAD = its marker's commit" "$C5" "$(g "$B" rev-parse HEAD)"
+st_eq "bob: on the source's branch" "master" "$(g "$B" symbolic-ref --short HEAD)"
+st_eq "bob: origin is the public https URL" "https://github.com/o/r.git" "$(g "$B" remote get-url origin)"
+st_eq "bob: upstream set" "origin" "$(g "$B" config branch.master.remote)"
+st_eq "bob: tracked tree clean" "" "$(g "$B" status --porcelain --untracked-files=no)"
+st_eq "bob: tracked file at the marker's version" "v5" "$(cat "$B/bin/a.sh")"
 ok "bob: the full tree, not the copy's subset" '[ -f "$B/commands/c.md" ] && [ -f "$B/README.md" ]'
-eq "bob: fleet.conf carried" "FLEET_REPO=bob/y" "$(cat "$B/fleet.conf")"
-eq "bob: conf backup carried" "old conf" "$(cat "$B/fleet.conf.bak-x")"
-eq "bob: logs carried" "log line" "$(cat "$B/logs/x.log")"
-eq "bob: untracked local file carried" "mine" "$(cat "$B/conf/local.txt")"
+st_eq "bob: fleet.conf carried" "FLEET_REPO=bob/y" "$(cat "$B/fleet.conf")"
+st_eq "bob: conf backup carried" "old conf" "$(cat "$B/fleet.conf.bak-x")"
+st_eq "bob: logs carried" "log line" "$(cat "$B/logs/x.log")"
+st_eq "bob: untracked local file carried" "mine" "$(cat "$B/conf/local.txt")"
 ok "bob: local file is untracked, not lost" 'g "$B" status --porcelain | grep -q "^?? conf/local.txt"'
 ok "bob: marker and caches left behind" '[ ! -e "$B/.fleet-synced-from" ] && [ ! -e "$B/bin/__pycache__" ] && [ ! -e "$B/bin/.DS_Store" ]'
 bakc=$(ls -d "$H"/bob/.claude/fleet.copy-* | head -1)
-eq "bob: old copy kept whole" "" "$(for f in bin/a.sh fleet.conf .fleet-synced-from logs/x.log bin/__pycache__/m.pyc; do [ -f "$bakc/$f" ] || echo "missing $f"; done)"
+st_eq "bob: old copy kept whole" "" "$(for f in bin/a.sh fleet.conf .fleet-synced-from logs/x.log bin/__pycache__/m.pyc; do [ -f "$bakc/$f" ] || echo "missing $f"; done)"
 ok "bob: no half-built clone left" '[ -z "$(ls -d "$H"/bob/.claude/fleet.to-git.* 2>/dev/null)" ]'
-eq "erin: HEAD = source HEAD (unmarked copy)" "$C7" "$(g "$E" rev-parse HEAD)"
-eq "erin: fleet.conf carried" "FLEET_REPO=erin/z" "$(cat "$E/fleet.conf")"
+st_eq "erin: HEAD = source HEAD (unmarked copy)" "$C7" "$(g "$E" rev-parse HEAD)"
+st_eq "erin: fleet.conf carried" "FLEET_REPO=erin/z" "$(cat "$E/fleet.conf")"
 ok "erin: no logs dir made in the install (records are the conf dir's, #4668)" '[ ! -e "$E/logs" ]'
 contains "to-git: bob's daemons kicked" "$(cat "$WORK/launchctl.log")" "kickstart -k system/com.claude-fleet.bob.spinner"
 ok "to-git: staging cleaned up" '[ -z "$(ls "$WORK/tmp")" ]'
 
 run --source "$SRC" --to-git --dry-run --logins bob,erin
-eq "to-git rerun: nothing to convert, exit 0" 0 "$RC"
+st_eq "to-git rerun: nothing to convert, exit 0" 0 "$RC"
 contains "to-git rerun: both skipped as checkouts" "$OUT" "2 · 0 to convert · 2 already git checkouts · 0 blocked"
 
 # the converted login is an ordinary checkout to the plain sync
 run --source "$SRC" --dry-run --logins bob
-eq "after to-git: plain dry-run sees a checkout behind" 1 "$RC"
+st_eq "after to-git: plain dry-run sees a checkout behind" 1 "$RC"
 ok "after to-git: bob is git, 2 behind" 'printf "%s\n" "$OUT" | grep -q "^bob  *git .* sync — 2 commit(s) behind"'
 run --source "$SRC" --logins bob
-eq "after to-git: plain sync lands" 0 "$RC"
-eq "after to-git: bob at the source HEAD" "$C7" "$(g "$B" rev-parse HEAD)"
-eq "after to-git: fleet.conf still there" "FLEET_REPO=bob/y" "$(cat "$B/fleet.conf")"
+st_eq "after to-git: plain sync lands" 0 "$RC"
+st_eq "after to-git: bob at the source HEAD" "$C7" "$(g "$B" rev-parse HEAD)"
+st_eq "after to-git: fleet.conf still there" "FLEET_REPO=bob/y" "$(cat "$B/fleet.conf")"
 
 # local edits: blocked, then forced — the old copy keeps the edit
 run --source "$SRC" --to-git --logins frank
-eq "to-git edit: exit 4" 4 "$RC"
+st_eq "to-git edit: exit 4" 4 "$RC"
 ok "to-git edit: untouched" '[ ! -e "$F/.git" ] && [ "$(cat "$F/bin/a.sh")" = "my edit" ]'
 run --source "$SRC" --to-git --logins frank --force
 ok "to-git edit forced: exit 0" '[ "$RC" -eq 0 ]'
 contains "to-git edit forced: says what it left behind" "$OUT" "local edits left in the old copy (forced): bin/a.sh"
-eq "to-git edit forced: the clone's file wins" "v7" "$(cat "$F/bin/a.sh")"
+st_eq "to-git edit forced: the clone's file wins" "v7" "$(cat "$F/bin/a.sh")"
 ok "to-git edit forced: the old copy keeps the edit" 'grep -qx "my edit" "$H"/frank/.claude/fleet.copy-*/bin/a.sh'
 
 # another owner: through the sudo prefix; without sudo nothing changes, exit 5
@@ -449,23 +448,23 @@ HK="$H/hank/.claude/fleet"; mkdir -p "$HK"; cp -Rp "$SRC/bin" "$HK/"; printf '%s
 : > "$WORK/sudo.log"
 OUT=$(FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO="$WORK/shim/sudo -n" bash "$SL" --source "$SRC" --to-git --logins hank 2>&1); RC=$?
 ok "to-git sudo: exit 0" '[ "$RC" -eq 0 ]'
-eq "to-git sudo: converted" "$C7" "$(g "$HK" rev-parse HEAD)"
+st_eq "to-git sudo: converted" "$C7" "$(g "$HK" rev-parse HEAD)"
 ok "to-git sudo: the owner-side shell ran as the owner" 'grep -q -- "-n -u $(id -un) env HOME=$H/hank sh $WORK/tmp/.*/to-git.sh" "$WORK/sudo.log"'
 ok "to-git sudo: the copy was listed as the owner" 'grep -q -- "-n -u $(id -un) find $HK" "$WORK/sudo.log"'
 IV="$H/ivy/.claude/fleet"; mkdir -p "$IV"; cp -Rp "$SRC/bin" "$IV/"; printf '%s me now\n' "$C7" > "$IV/.fleet-synced-from"
 OUT=$(FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO="false" bash "$SL" --source "$SRC" --to-git --logins ivy 2>&1); RC=$?
-eq "to-git no sudo: exit 5" 5 "$RC"
+st_eq "to-git no sudo: exit 5" 5 "$RC"
 contains "to-git no sudo: prints the admin command with the mode" "$OUT" "sudo $SL --source $SRC --logins ivy --to-git --origin https://github.com/o/r.git"
 ok "to-git no sudo: nothing changed" '[ ! -e "$IV/.git" ]'
 # a marker the source cannot resolve: --force clones at the source HEAD
 run --source "$SRC" --to-git --logins gina --force
 ok "to-git unknown marker forced: exit 0" '[ "$RC" -eq 0 ]'
 contains "to-git unknown marker forced: says so" "$OUT" "gina: converted to a git checkout @ $(g "$SRC" rev-parse --short "$C7")"
-eq "to-git unknown marker forced: at the source HEAD" "$C7" "$(g "$GI" rev-parse HEAD)"
+st_eq "to-git unknown marker forced: at the source HEAD" "$C7" "$(g "$GI" rev-parse HEAD)"
 # --origin overrides the source's origin
 run --source "$SRC" --to-git --origin https://example.com/x.git --logins ivy
 ok "to-git --origin: exit 0" '[ "$RC" -eq 0 ]'
-eq "to-git --origin: used as given" "https://example.com/x.git" "$(g "$IV" remote get-url origin)"
+st_eq "to-git --origin: used as given" "https://example.com/x.git" "$(g "$IV" remote get-url origin)"
 
 # ============================================================================
 # J. auto-update off — FLEET_INSTALL_SYNC=0 (issue #1122)
@@ -487,49 +486,49 @@ snap2() { (cd "$H2" && find . -type f -exec cksum {} + | sort) ; }
 
 before=$(snap2)
 jrun --dry-run
-eq "off dry-run: exit 1 — liam drifts; off is no error" 1 "$RC"
+st_eq "off dry-run: exit 1 — liam drifts; off is no error" 1 "$RC"
 ok "off dry-run: judy listed off, with the way in" 'printf "%s\n" "$OUT" | grep -q "^judy  *git .* off — auto-update off (FLEET_INSTALL_SYNC=0) — left alone; --logins judy or --include-off syncs it anyway"'
 ok "off dry-run: a quoted 0 in a copy install's conf counts" 'printf "%s\n" "$OUT" | grep -q "^mia  *copy .* off — auto-update off"'
 ok "off dry-run: liam (unset = on) still syncs" 'printf "%s\n" "$OUT" | grep -q "^liam  *git .* sync — 1 commit(s) behind"'
 contains "off dry-run: tail counts off apart" "$OUT" "3 · 0 current · 1 to sync · 0 blocked · 2 off (dry run — nothing changed)"
-eq "off dry-run: nothing changed" "$before" "$(snap2)"
+st_eq "off dry-run: nothing changed" "$before" "$(snap2)"
 jrun --summary
-eq "off summary: off before drifted, neither current nor drifted" "3 other · 0 current · 2 off · 1 drifted (liam:1)" "$OUT"
-eq "off summary: exit 1 (liam)" 1 "$RC"
+st_eq "off summary: off before drifted, neither current nor drifted" "3 other · 0 current · 2 off · 1 drifted (liam:1)" "$OUT"
+st_eq "off summary: exit 1 (liam)" 1 "$RC"
 
 : > "$WORK/launchctl.log"
 jrun
-eq "off act: exit 0" 0 "$RC"
+st_eq "off act: exit 0" 0 "$RC"
 ok "off act: tail" 'printf "%s\n" "$OUT" | grep -qx "other logins on this machine: 1 synced / 0 skipped · 0 already current · 2 off"'
-eq "off act: liam synced" "$C8" "$(g "$LM" rev-parse HEAD)"
-eq "off act: judy untouched" "$C7" "$(g "$J" rev-parse HEAD)"
-eq "off act: mia untouched" "v7" "$(cat "$MI/bin/a.sh")"
+st_eq "off act: liam synced" "$C8" "$(g "$LM" rev-parse HEAD)"
+st_eq "off act: judy untouched" "$C7" "$(g "$J" rev-parse HEAD)"
+st_eq "off act: mia untouched" "v7" "$(cat "$MI/bin/a.sh")"
 ok "off act: no backup made for an off login" '[ -z "$(ls -d "$H2"/judy/.claude/fleet.bak-* "$H2"/mia/.claude/fleet.bak-* 2>/dev/null)" ]'
 jrun --summary
-eq "off summary, liam current: still 0 drifted" "3 other · 1 current · 2 off · 0 drifted" "$OUT"
-eq "off summary, liam current: exit 0" 0 "$RC"
+st_eq "off summary, liam current: still 0 drifted" "3 other · 1 current · 2 off · 0 drifted" "$OUT"
+st_eq "off summary, liam current: exit 0" 0 "$RC"
 
 # off wins over blocked: judy's local edit is not this run's to report
 echo 'judy work' > "$J/bin/b.sh"
 jrun --dry-run
-eq "off + edit: exit 0, not 4" 0 "$RC"
+st_eq "off + edit: exit 0, not 4" 0 "$RC"
 ok "off + edit: still off, not blocked" 'printf "%s\n" "$OUT" | grep -q "^judy  *git .* off — auto-update off"'
 # named in --logins: off is overruled — and now the edit is what blocks
 jrun --dry-run --logins judy
-eq "named: --logins overrules off, so the edit blocks (exit 4)" 4 "$RC"
+st_eq "named: --logins overrules off, so the edit blocks (exit 4)" 4 "$RC"
 ok "named: blocked row names the file" 'printf "%s\n" "$OUT" | grep -q "^judy  *git .* blocked — local edits: bin/b.sh"'
 g "$J" checkout -q -- bin/b.sh
 jrun --logins judy
-eq "named: synced" 0 "$RC"
-eq "named: judy at the source commit" "$C8" "$(g "$J" rev-parse HEAD)"
+st_eq "named: synced" 0 "$RC"
+st_eq "named: judy at the source commit" "$C8" "$(g "$J" rev-parse HEAD)"
 
 # --include-off: every off login, named or not
 g "$J" reset -q --hard "$C7"
 jrun --include-off
-eq "include-off: exit 0" 0 "$RC"
+st_eq "include-off: exit 0" 0 "$RC"
 ok "include-off: both off logins synced, none reported off" 'printf "%s\n" "$OUT" | grep -qx "other logins on this machine: 2 synced / 0 skipped · 1 already current"'
-eq "include-off: judy at the source commit" "$C8" "$(g "$J" rev-parse HEAD)"
-eq "include-off: mia synced" "v8" "$(cat "$MI/bin/a.sh")"
+st_eq "include-off: judy at the source commit" "$C8" "$(g "$J" rev-parse HEAD)"
+st_eq "include-off: mia synced" "v8" "$(cat "$MI/bin/a.sh")"
 
 # the settings file wins over the install conf, both ways; a relocated
 # FLEET_CONF_DIR ($HOME-prefixed) is followed; `export KEY=` counts
@@ -545,16 +544,16 @@ printf 'FLEET_REPO=judy/x\nFLEET_CONF_DIR="$HOME/cfg"\n' > "$J/fleet.conf"
 mkdir -p "$H2/judy/cfg"; echo 'export FLEET_INSTALL_SYNC=0' > "$H2/judy/cfg/fleet.settings"
 jrun --dry-run
 ok "relocated FLEET_CONF_DIR: its settings file is the one read" 'printf "%s\n" "$OUT" | grep -q "^judy  *git .* off — auto-update off"'
-eq "off never moves the exit code: judy + mia off, liam current → 0" 0 "$RC"
+st_eq "off never moves the exit code: judy + mia off, liam current → 0" 0 "$RC"
 
 # --to-git leaves an off copy alone the same way
 jrun --to-git --dry-run
-eq "to-git: an off copy is not converted, exit 0" 0 "$RC"
+st_eq "to-git: an off copy is not converted, exit 0" 0 "$RC"
 ok "to-git: mia off" 'printf "%s\n" "$OUT" | grep -q "^mia  *copy .* off — auto-update off"'
 contains "to-git: tail counts off" "$OUT" "3 · 0 to convert · 2 already git checkouts · 0 blocked · 1 off (dry run — nothing changed)"
 ok "to-git: mia still a copy" '[ ! -e "$MI/.git" ]'
 jrun --to-git --dry-run --logins mia
-eq "to-git named: a copy to convert (dry-run exit 1)" 1 "$RC"
+st_eq "to-git named: a copy to convert (dry-run exit 1)" 1 "$RC"
 ok "to-git named: mia converts at its marker" 'printf "%s\n" "$OUT" | grep -q "^mia  *copy .* to-git — clone at $(g "$SRC" rev-parse --short "$C8")"'
 
 # ============================================================================
@@ -603,41 +602,41 @@ else
 
   # no sudo: unreadable, never "nothing to sync"
   FLEET_SYNC_LOGINS_SUDO=false krun --summary
-  eq "closed no-sudo summary: counted unreadable" "0 other · 0 current · 0 drifted · 1 login(s) unreadable: kim" "$OUT"
-  eq "closed no-sudo summary: exit 5 (needs sudo)" 5 "$RC"
+  st_eq "closed no-sudo summary: counted unreadable" "0 other · 0 current · 0 drifted · 1 login(s) unreadable: kim" "$OUT"
+  st_eq "closed no-sudo summary: exit 5 (needs sudo)" 5 "$RC"
   FLEET_SYNC_LOGINS_SUDO=false krun --dry-run
-  eq "closed no-sudo dry-run: exit 5" 5 "$RC"
+  st_eq "closed no-sudo dry-run: exit 5" 5 "$RC"
   not_contains "closed no-sudo: never nothing to sync" "$OUT" "nothing to sync"
   ok "closed no-sudo: kim's row says unreadable" 'printf "%s\n" "$OUT" | grep -q "^kim  *? .* unreadable — "'
   not_contains "closed no-sudo: an open home without an install is not unreadable" "$OUT" "plain"
   contains "closed no-sudo: the tail counts it" "$OUT" "other logins on this machine: 0 readable · 1 login(s) unreadable: kim — needs sudo"
   contains "closed no-sudo: the admin command" "$OUT" "sudo $SL --source $SRC --logins kim"
   FLEET_SYNC_LOGINS_SUDO=false krun --dry-run --logins kim
-  eq "closed no-sudo --logins kim: needs sudo, not an unknown login" 5 "$RC"
+  st_eq "closed no-sudo --logins kim: needs sudo, not an unknown login" 5 "$RC"
   FLEET_SYNC_LOGINS_SUDO=false krun --dry-run --logins plain
-  eq "closed no-sudo --logins plain: still no install (exit 2)" 2 "$RC"
+  st_eq "closed no-sudo --logins plain: still no install (exit 2)" 2 "$RC"
 
   # with sudo: found and read through the owner
   : > "$WORK/sudo.log"; : > "$WORK/launchctl.log"
   FLEET_SYNC_LOGINS_SUDO="$WORK/shim/ksudo -n" krun --summary
-  eq "closed sudo summary: kim is planned, behind" "1 other · 0 current · 1 drifted (kim:1)" "$OUT"
+  st_eq "closed sudo summary: kim is planned, behind" "1 other · 0 current · 1 drifted (kim:1)" "$OUT"
 
   # a failing owner command: the FAILED row carries ITS stderr (issue #1162)
   KFAIL=rsync FLEET_SYNC_LOGINS_SUDO="$WORK/shim/ksudo -n" krun
-  eq "closed act failure: exit 6 (a login failed)" 6 "$RC"
+  st_eq "closed act failure: exit 6 (a login failed)" 6 "$RC"
   ok "closed act failure: the row names the step and its stderr" 'printf "%s\n" "$OUT" | grep -q "^kim: FAILED — rsync [^ ]* failed: rsync: boom from the owner side"'
-  eq "closed act failure: nothing moved" "$(g "$SRC" rev-parse HEAD~1)" "$(chmod 700 "$KH"; g "$K" rev-parse HEAD; chmod 000 "$KH")"
+  st_eq "closed act failure: nothing moved" "$(g "$SRC" rev-parse HEAD~1)" "$(chmod 700 "$KH"; g "$K" rev-parse HEAD; chmod 000 "$KH")"
   contains "closed sudo: discovery asked the owner" "$(cat "$WORK/sudo.log")" "-u $(id -un) test -d $K"
   FLEET_SYNC_LOGINS_SUDO="$WORK/shim/ksudo -n" krun
-  eq "closed sudo act: exit 0" 0 "$RC"
+  st_eq "closed sudo act: exit 0" 0 "$RC"
   contains "closed sudo act: synced" "$OUT" "kim: synced to"
   not_contains "closed sudo act: no FAILED" "$OUT" "FAILED"
   contains "closed sudo act: its LaunchAgent (listed as the owner) was kicked" "$(cat "$WORK/launchctl.log")" "com.claude-fleet.collect"
   ok "closed: the shim closed the home again" '[ ! -x "$KH" ]'
   FLEET_SYNC_LOGINS_SUDO="$WORK/shim/ksudo -n" krun --summary
-  eq "closed sudo: current after the sync" "1 other · 1 current · 0 drifted" "$OUT"
+  st_eq "closed sudo: current after the sync" "1 other · 1 current · 0 drifted" "$OUT"
   chmod 700 "$KH"
-  eq "closed sudo: HEAD at the source commit" "$(g "$SRC" rev-parse HEAD)" "$(g "$K" rev-parse HEAD)"
+  st_eq "closed sudo: HEAD at the source commit" "$(g "$SRC" rev-parse HEAD)" "$(g "$K" rev-parse HEAD)"
 fi
 
 # ============================================================================
@@ -666,23 +665,23 @@ EOF
   chmod 600 "$BP"
   BNE="$H/bob/.config/claude-fleet/node.env"
   run --source "$SRC" --logins bob,alice
-  eq "node.env: the sync itself exits 0" 0 "$RC"
+  st_eq "node.env: the sync itself exits 0" 0 "$RC"
   contains "node.env: bob's was written from its LaunchAgent" "$OUT" "bob: node.env: written from $BP — keys: CCQUOTA_HUB_URL CCQUOTA_TOKEN CCQUOTA_FLEET"
   not_contains "node.env: the token's value is never printed" "$OUT" "fn_bob_SECRET"
   not_contains "node.env: alice runs no agent → no line" "$OUT" "alice: node.env"
   ok "node.env: bob's file exists" '[ -f "$BNE" ]'
-  eq "node.env: 0600" "-rw-------" "$(ls -ld "$BNE" | cut -c1-10)"
-  eq "node.env: the token is in" "CCQUOTA_TOKEN=fn_bob_SECRET" "$(grep '^CCQUOTA_TOKEN=' "$BNE")"
+  st_eq "node.env: 0600" "-rw-------" "$(ls -ld "$BNE" | cut -c1-10)"
+  st_eq "node.env: the token is in" "CCQUOTA_TOKEN=fn_bob_SECRET" "$(grep '^CCQUOTA_TOKEN=' "$BNE")"
   ok "node.env: alice got none" '[ ! -e "$H/alice/.config/claude-fleet/node.env" ]'
   # a second run: already present → silent
   run --source "$SRC" --logins bob,alice
-  eq "node.env rerun: exit 0" 0 "$RC"
+  st_eq "node.env rerun: exit 0" 0 "$RC"
   not_contains "node.env rerun: nothing to say" "$OUT" "node.env"
   # a plist that carries no token is said, as a WARN beside the row, never a failure
   rm -f "$BNE"
   sed -i.bak '/CCQUOTA_TOKEN/d' "$BP"; rm -f "$BP.bak"
   run --source "$SRC" --logins bob
-  eq "node.env no-token plist: exit 0" 0 "$RC"
+  st_eq "node.env no-token plist: exit 0" 0 "$RC"
   contains "node.env no-token plist: WARN names it" "$OUT" "bob: WARN node.env: $BP carries no CCQUOTA_TOKEN in EnvironmentVariables — nothing written"
   ok "node.env no-token plist: nothing written" '[ ! -e "$BNE" ]'
   # --dry-run never writes

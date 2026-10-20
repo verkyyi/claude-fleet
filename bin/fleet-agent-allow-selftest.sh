@@ -20,10 +20,9 @@
 #      fleet-remote-view.sh attach --thin reads it
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd)
+. "$BIN/selftest-lib.sh"
 W=$(mktemp -d "${TMPDIR:-/tmp}/agent-allow.XXXXXX")
-fails=0
-fail() { printf 'FAIL %s\n' "$*"; fails=$((fails + 1)); }
-ok() { printf 'ok   %s\n' "$*"; }
+st_tally
 export FLEET_CONF_DIR="$W/conf" HOME="$W/home" FLEET_UI_LANG=zh
 mkdir -p "$FLEET_CONF_DIR/global" "$HOME"
 unset FLEET_AGENTS_BLOCKED FLEET_HUB_CLIENT_VERSION TMUX TMUX_PANE
@@ -59,39 +58,39 @@ python3 "$W/hub.py" "$W/port" "$W/answer.json" "$W/hub.log" &
 HUBPID=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$W/port" ] && break; sleep 0.2; done
 PORT=$(cat "$W/port" 2>/dev/null)
-[ -n "$PORT" ] || fail "A: the fake hub did not start"
+[ -n "$PORT" ] || st_miss "A: the fake hub did not start"
 
 got=$(CCQUOTA_HUB_URL="http://127.0.0.1:$PORT" CCQUOTA_TOKEN=tok-a python3 "$BIN/fleet_agent_allow.py" blocked)
-[ "$got" = claude ] && ok "A: the hub's verdict read: claude blocked" || fail "A: blocked = '$got'"
-grep -q '^/v1/node/agents Bearer tok-a$' "$W/hub.log" && ok "A: asked with the node token" || fail "A: hub log: $(cat "$W/hub.log")"
-[ -s "$FLEET_CONF_DIR/global/agent-allow.json" ] && ok "A: the answer is kept" || fail "A: nothing kept"
+[ "$got" = claude ] && st_ok_all "A: the hub's verdict read: claude blocked" || st_miss "A: blocked = '$got'"
+grep -q '^/v1/node/agents Bearer tok-a$' "$W/hub.log" && st_ok_all "A: asked with the node token" || st_miss "A: hub log: $(cat "$W/hub.log")"
+[ -s "$FLEET_CONF_DIR/global/agent-allow.json" ] && st_ok_all "A: the answer is kept" || st_miss "A: nothing kept"
 n=$(wc -l < "$W/hub.log" | tr -d ' ')
 CCQUOTA_HUB_URL="http://127.0.0.1:$PORT" CCQUOTA_TOKEN=tok-a python3 "$BIN/fleet_agent_allow.py" blocked >/dev/null
-[ "$(wc -l < "$W/hub.log" | tr -d ' ')" = "$n" ] && ok "A: a second read inside the TTL asks nothing" || fail "A: asked the hub again"
+[ "$(wc -l < "$W/hub.log" | tr -d ' ')" = "$n" ] && st_ok_all "A: a second read inside the TTL asks nothing" || st_miss "A: asked the hub again"
 rm -f "$FLEET_CONF_DIR/global/agent-allow.json"
 got=$(CCQUOTA_HUB_URL="http://127.0.0.1:1" CCQUOTA_TOKEN=tok-a FLEET_AGENT_ALLOW_TIMEOUT=1 python3 "$BIN/fleet_agent_allow.py" blocked)
-[ -z "$got" ] && ok "A: no hub ⇒ nothing blocked (fails open)" || fail "A: no hub still blocked '$got'"
-[ -e "$FLEET_CONF_DIR/global/agent-allow.json" ] && fail "A: an unanswered ask was kept as a verdict"
+[ -z "$got" ] && st_ok_all "A: no hub ⇒ nothing blocked (fails open)" || st_miss "A: no hub still blocked '$got'"
+[ -e "$FLEET_CONF_DIR/global/agent-allow.json" ] && st_miss "A: an unanswered ask was kept as a verdict"
 kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null
 
 # ---- B: ⌘T / the ⚡ grid and the ⌘N pick ---------------------------------------
 export FLEET_DISPATCH_AGENTS_HERE=claude,codex FLEET_AGENT=claude
 g=$(FLEET_AGENTS_BLOCKED=claude python3 "$BIN/fleet-quick-dispatch.py" grid --view fl@view-v1)
-python3 - "$g" <<'PY' && ok "B: grid: claude grey 「管理员暂未开放」, blocked=[claude]" || fail "B: grid $g"
+python3 - "$g" <<'PY' && st_ok_all "B: grid: claude grey 「管理员暂未开放」, blocked=[claude]" || st_miss "B: grid $g"
 import json, sys
 g = json.loads(sys.argv[1])
 assert g["missing"] == {"claude": "Claude：管理员暂未开放"}, g
 assert g["blocked"] == ["claude"] and g["agent"] == "claude", g
 PY
 a=$(FLEET_AGENTS_BLOCKED=claude python3 "$BIN/fleet-quick-dispatch.py" agent --view fl@view-v1)
-[ "$a" = '{"agent": "codex", "why": "Claude：管理员暂未开放"}' ] && ok "B: ⌘N's pick is Codex, with why" || fail "B: agent $a"
+[ "$a" = '{"agent": "codex", "why": "Claude：管理员暂未开放"}' ] && st_ok_all "B: ⌘N's pick is Codex, with why" || st_miss "B: agent $a"
 a=$(FLEET_AGENTS_BLOCKED='' python3 "$BIN/fleet-quick-dispatch.py" agent --view fl@view-v1)
-[ "$a" = '{"agent": "claude", "why": ""}' ] && ok "B: nothing blocked ⇒ the default, no why" || fail "B: unblocked agent $a"
+[ "$a" = '{"agent": "claude", "why": ""}' ] && st_ok_all "B: nothing blocked ⇒ the default, no why" || st_miss "B: unblocked agent $a"
 g=$(FLEET_AGENTS_BLOCKED='' python3 "$BIN/fleet-quick-dispatch.py" grid --view fl@view-v1)
-case "$g" in *'"missing": {}'*'"blocked": []'*) ok "B: nothing blocked ⇒ the grid as before" ;; *) fail "B: unblocked grid $g" ;; esac
+case "$g" in *'"missing": {}'*'"blocked": []'*) st_ok_all "B: nothing blocked ⇒ the grid as before" ;; *) st_miss "B: unblocked grid $g" ;; esac
 
 # ---- C: fleet_view's ⚡ cells and ⌘N ---------------------------------------------
-FLEET_AGENTS_BLOCKED=claude python3 - "$BIN" <<'PY' && ok "C: ⚡ shows Agent ‹Codex› + 「只开放了 Codex」, ↵ rides --agent codex; ⌘N picks Codex" || fail "C: see above"
+FLEET_AGENTS_BLOCKED=claude python3 - "$BIN" <<'PY' && st_ok_all "C: ⚡ shows Agent ‹Codex› + 「只开放了 Codex」, ↵ rides --agent codex; ⌘N picks Codex" || st_miss "C: see above"
 import sys
 sys.path.insert(0, sys.argv[1])
 import fleet_view as v
@@ -112,7 +111,7 @@ a, why = v.new_agent("fl", "v1")
 assert (a, why) == ("codex", "Claude：管理员暂未开放"), (a, why)
 assert v.say("view_new_agent_fmt", why, "Codex") == "Claude：管理员暂未开放 — 这次用 Codex 开"
 PY
-FLEET_AGENTS_BLOCKED='' python3 - "$BIN" <<'PY' && ok "C: nothing blocked ⇒ ⌘N names no agent and runs nothing" || fail "C: unblocked ⌘N"
+FLEET_AGENTS_BLOCKED='' python3 - "$BIN" <<'PY' && st_ok_all "C: nothing blocked ⇒ ⌘N names no agent and runs nothing" || st_miss "C: unblocked ⌘N"
 import subprocess, sys
 sys.path.insert(0, sys.argv[1])
 import fleet_view as v
@@ -121,23 +120,23 @@ def boom(*a, **k):
 subprocess.run = boom
 assert v.new_agent("fl", "v1") == ("", "")
 PY
-grep -q 'agent, why = new_agent(fleet, vid)' "$BIN/fleet_view.py" && ok "C: go_new asks new_agent when no agent is named" || fail "C: go_new does not ask"
+grep -q 'agent, why = new_agent(fleet, vid)' "$BIN/fleet_view.py" && st_ok_all "C: go_new asks new_agent when no agent is named" || st_miss "C: go_new does not ask"
 
 # ---- D: 请更新客户端 ------------------------------------------------------------------
 out=$(FLEET_HUB_CLIENT_VERSION=bbbbbbbbbb python3 "$BIN/fleet-client-behind.py" bbbbbbbbbb)
-[ -z "$out" ] && ok "D: the latest client ⇒ nothing said" || fail "D: same version said '$out'"
+[ -z "$out" ] && st_ok_all "D: the latest client ⇒ nothing said" || st_miss "D: same version said '$out'"
 out=$(FLEET_HUB_CLIENT_VERSION=bbbbbbbbbb python3 "$BIN/fleet-client-behind.py" aaaaaaaaaa)
-case "$out" in *客户端不是最新*aaaaaaa*bbbbbbb*'fleet update'*) ok "D: behind ⇒ 「${out}」" ;; *) fail "D: behind said '$out'" ;; esac
+case "$out" in *客户端不是最新*aaaaaaa*bbbbbbb*'fleet update'*) st_ok_all "D: behind ⇒ 「${out}」" ;; *) st_miss "D: behind said '$out'" ;; esac
 out=$(FLEET_HUB_CLIENT_VERSION=bbbbbbbbbb python3 "$BIN/fleet-client-behind.py" '')
-[ -z "$out" ] && ok "D: an older client (no version) ⇒ nothing said" || fail "D: no version said '$out'"
+[ -z "$out" ] && st_ok_all "D: an older client (no version) ⇒ nothing said" || st_miss "D: no version said '$out'"
 out=$(FLEET_HUB_CLIENT_VERSION='' python3 "$BIN/fleet-client-behind.py" aaaaaaaaaa)
-[ -z "$out" ] && ok "D: the hub names no client ⇒ nothing said" || fail "D: unknown latest said '$out'"
+[ -z "$out" ] && st_ok_all "D: the hub names no client ⇒ nothing said" || st_miss "D: unknown latest said '$out'"
 
 # ---- E: the thin client carries it ------------------------------------------------
 mkdir -p "$W/thin/bin"
 cp "$BIN/fleet-thin.py" "$W/thin/bin/"
 printf 'version=cafe1234cafe1234\ncompat=1\ncommit=cafe1234\nhub=https://h\nat=1\n' > "$W/thin/.client-version"
-python3 - "$W/thin/bin/fleet-thin.py" <<'PY' && ok "E: fleet-thin.py hands FLEET_CLIENT_VER to the home" || fail "E: thin remote()"
+python3 - "$W/thin/bin/fleet-thin.py" <<'PY' && st_ok_all "E: fleet-thin.py hands FLEET_CLIENT_VER to the home" || st_miss "E: thin remote()"
 import importlib.util, sys, types
 spec = importlib.util.spec_from_file_location("thin", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
@@ -147,8 +146,7 @@ cmd = m.Thin.remote(self, "tok", "r")
 assert cmd.startswith("FLEET_CLIENT_VER=cafe1234cafe1234 FLEET_CLIENT_CAPS=show bash "), cmd
 PY
 grep -q 'fleet-client-behind.py" "$FLEET_CLIENT_VER"' "$BIN/fleet-remote-view.sh" \
-  && ok "E: attach --thin asks fleet-client-behind.py with it" || fail "E: attach --thin does not read FLEET_CLIENT_VER"
+  && st_ok_all "E: attach --thin asks fleet-client-behind.py with it" || st_miss "E: attach --thin does not read FLEET_CLIENT_VER"
 
 rm -rf "$W"
-[ "$fails" -eq 0 ] && { echo "PASS fleet-agent-allow-selftest"; exit 0; }
-echo "FAIL fleet-agent-allow-selftest ($fails)"; exit 1
+st_done

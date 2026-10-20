@@ -16,7 +16,8 @@
 # (fleet_repo_register, fleet_task_authority, fleet_ticket_hub_ready), bin/fleet-conf.sh.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-command -v git >/dev/null 2>&1 || { echo 'selftest: git not installed — SKIP' >&2; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/authority-default.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -29,10 +30,8 @@ export FLEET_SKIP_GLOBAL_CONF=1 _FLEET_REGISTER_NO_KICK=1 GIT_TERMINAL_PROMPT=0 
 unset TMUX TMUX_PANE CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_URL FLEET_TICKETS FLEET_SESSION \
       FLEET_TASK_AUTHORITY FLEET_HUB_AUTHORITY_CMD CCQUOTA_FLEET
 
-FAILS=0
-ok()   { printf 'ok   %s\n' "$*"; }
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-chk()  { if [ "$2" = "$3" ]; then ok "$1"; else fail "$1: expected [$3], got [$2]"; fi; }
+st_tally
+chk()  { if [ "$2" = "$3" ]; then st_ok_all "$1"; else st_miss "$1: expected [$3], got [$2]"; fi; }
 
 # ---- the hub stand-in: answers anything, logs every request to $WORK/hub.log.
 cat > "$WORK/hub.py" <<'PY'
@@ -90,7 +89,7 @@ chk "B add o/b" "$out" "added:o-b"
 chk "B a hub ⇒ still no line" "$(auth b)" ""
 chk "B …and the hub is not asked" "$(asked)" 0
 chk "B no FLEET_TICKETS line (the ticket store left, #4898)" "$(grep -c '^FLEET_TICKETS=' "$(conf b)")" 0
-cmp -s "$WORK/a.before" "$(conf a)" && ok "B o/a's conf unchanged by adding o/b" || fail "B o/a's conf changed"
+cmp -s "$WORK/a.before" "$(conf a)" && st_ok_all "B o/a's conf unchanged by adding o/b" || st_miss "B o/a's conf changed"
 
 # ---- C: an overlay's old line is read by nothing; migrate comments it out ----
 printf 'FLEET_TASK_AUTHORITY="hub"\n' >> "$(conf a)"
@@ -99,10 +98,9 @@ chk "C an old overlay line is read by nothing" "$(ta)" ""
 chk "C …the login's line is" "$(FLEET_TASK_AUTHORITY=legacy ta)" legacy
 bash "$BIN/fleet-conf.sh" migrate --quiet >/dev/null 2>&1
 grep -q '^# moved to fleet.conf \[node\] #4901: FLEET_TASK_AUTHORITY="hub"$' "$(conf a)" \
-  && ok "C migrate comments it out" || fail "C overlay: $(cat "$(conf a)")"
+  && st_ok_all "C migrate comments it out" || st_miss "C overlay: $(cat "$(conf a)")"
 head -n "$(wc -l < "$WORK/a.before")" "$(conf a)" | cmp -s - "$WORK/a.before" \
-  && ok "C …the rest of the overlay byte for byte" || fail "C overlay changed: $(cat "$(conf a)")"
+  && st_ok_all "C …the rest of the overlay byte for byte" || st_miss "C overlay changed: $(cat "$(conf a)")"
 chk "C …and it is still read by nothing" "$(ta)" ""
 
-[ "$FAILS" = 0 ] && { echo "fleet-authority-default-selftest: PASS"; exit 0; }
-echo "fleet-authority-default-selftest: $FAILS failure(s)" >&2; exit 1
+st_done

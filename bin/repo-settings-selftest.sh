@@ -27,8 +27,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 st_real_tmux
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
-command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
+st_need git python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/repo-settings-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -59,14 +58,11 @@ unset FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SL
 unset FLEET_CHECK_REQUIRED FLEET_CLEANUP
 . "$BIN/fleet-lib.sh"
 
-FAILS=0
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-eq()   { [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
-has()  { case "$2" in *"$3"*) ;; *) fail "$1: [$3] not in: $2" ;; esac; }
-hasnt(){ case "$2" in *"$3"*) fail "$1: [$3] unexpectedly in: $2" ;; esac; }
+st_tally miss
+eq()   { [ "$2" = "$3" ] || st_miss "$1: expected [$3], got [$2]"; }
 leg()  { # leg <name> — PASS when no new failure since the last leg
-  if [ "$FAILS" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi
-  _legf=$FAILS
+  if [ "$FAIL" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi
+  _legf=$FAIL
 }
 
 mkrepo() { # origin = a local bare repo: base-sync's fetch never leaves the box
@@ -172,14 +168,14 @@ leg setup
 
 # --- basesync --------------------------------------------------------------------
 out=$(bash "$BIN/fleet-base-sync.sh" --dry-run $M 2>&1)
-has   'base-sync a'        "$out" "base $WORK/mainA already current"
-has   'base-sync b'        "$out" "base $WORK/mainB already current"
-has   'base-sync e'        "$out" "base $WORK/mainE already current"
-has   'b deps (overlay)'   "$out" "would keep $WORK/mainB's shared deps current"
-hasnt 'a deps off'         "$out" "would keep $WORK/mainA's shared deps"
+st_has   'base-sync a'        "$out" "base $WORK/mainA already current"
+st_has   'base-sync b'        "$out" "base $WORK/mainB already current"
+st_has   'base-sync e'        "$out" "base $WORK/mainE already current"
+st_has   'b deps (overlay)'   "$out" "would keep $WORK/mainB's shared deps current"
+st_hasnt 'a deps off'         "$out" "would keep $WORK/mainA's shared deps"
 out=$(bash "$BIN/fleet-base-sync.sh" --dry-run $D 2>&1)
-has   'degenerate base'    "$out" "base $WORK/mainC already current"
-hasnt 'degenerate deps'    "$out" "shared deps"
+st_has   'degenerate base'    "$out" "base $WORK/mainC already current"
+st_hasnt 'degenerate deps'    "$out" "shared deps"
 leg basesync
 
 # --- sleep -----------------------------------------------------------------------
@@ -210,18 +206,17 @@ m = runpy.run_path(sys.argv[1] + '/fleet_agent_mcp.py')
 print(m['contract_hint']({'session': 'M'}, {'bmcp'}, 'x', Path(sys.argv[2])))
 PY
 )
-has 'hint names overlay' "$hint" "FLEET_SLEEP_MCP_RESTARTABLE=bmcp,x to $(fleet_repo_conf_file $M o/b)"
+st_has 'hint names overlay' "$hint" "FLEET_SLEEP_MCP_RESTARTABLE=bmcp,x to $(fleet_repo_conf_file $M o/b)"
 leg sleep
 
 # --- switches --------------------------------------------------------------------
 out=$(bash "$BIN/fleet-cleanup-daemon.sh" --dry-run $M 2>&1)
-has   'cleanup b off'        "$out" "[o/b] cleanup off (FLEET_CLEANUP=0)"
-hasnt 'cleanup a runs'       "$out" "[o/a] cleanup off"
-hasnt 'cleanup e runs'       "$out" "[o/e] cleanup off"
-hasnt 'fleet not skipped'    "$out" "$M: cleanup off"
+st_has   'cleanup b off'        "$out" "[o/b] cleanup off (FLEET_CLEANUP=0)"
+st_hasnt 'cleanup a runs'       "$out" "[o/a] cleanup off"
+st_hasnt 'cleanup e runs'       "$out" "[o/e] cleanup off"
+st_hasnt 'fleet not skipped'    "$out" "$M: cleanup off"
 out=$(bash "$BIN/fleet-cleanup-daemon.sh" --dry-run $D 2>&1)
-has   'cleanup one repo'     "$out" "$D: [o/c] cleanup off (FLEET_CLEANUP=0) — skip"   # one road (#1941)
+st_has   'cleanup one repo'     "$out" "$D: [o/c] cleanup off (FLEET_CLEANUP=0) — skip"   # one road (#1941)
 leg switches
 
-if [ "$FAILS" -eq 0 ]; then echo "repo-settings-selftest: all PASS"; exit 0; fi
-echo "repo-settings-selftest: $FAILS failure(s)"; exit 1
+st_done

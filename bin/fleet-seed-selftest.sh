@@ -35,7 +35,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 st_real_tmux
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
+st_need git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-seed-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -64,12 +64,9 @@ unset TMUX TMUX_PANE FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_SESSION FLEET
 unset _FLEET_GLOBAL_CONF_SOURCED FLEET_GLOBAL_MAX_SESSIONS FLEET_SEED FLEET_AUTOFILL FLEET_ISSUE_BRIDGE
 export FLEET_ONBOARD=0     # no first-fleet guide here (#1169)
 
-FAILS=0
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-eq()   { [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
-has()  { case "$2" in *"$3"*) ;; *) fail "$1: [$3] not in: $2" ;; esac; }
-hasnt(){ case "$2" in *"$3"*) fail "$1: [$3] unexpectedly in: $2" ;; esac; }
-leg()  { if [ "$FAILS" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi; _legf=$FAILS; }
+st_tally miss
+eq()   { [ "$2" = "$3" ] || st_miss "$1: expected [$3], got [$2]"; }
+leg()  { if [ "$FAIL" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi; _legf=$FAIL; }
 
 # ---- sandbox install root: the real scripts, hub/collector/gates stubbed ----
 SB="$WORK/root/bin"
@@ -98,19 +95,19 @@ OV() { printf '%s/fleets/fleet/repos/o-%s.conf' "$FLEET_CONF_DIR" "$1"; }
 
 # ---- 1. no --seed: the conf holds the fleet, o/a its own overlay ----
 out=$(up o/a "$WORK/src/a"); eq "1 rc" "$?" 0
-hasnt "1 no seed line" "$out" "seed repo"
-hasnt "1 attaches as always (no --no-attach)" "$out" "not attaching"
+st_hasnt "1 no seed line" "$out" "seed repo"
+st_hasnt "1 attaches as always (no --no-attach)" "$out" "not attaching"
 want=$(printf '%s\n' \
   "# Overlays the global fleet.conf for this fleet's tmux session. Add any other" \
   '# FLEET_* keys (see conf/fleet.conf.reference) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.')
 eq "1 conf: the header, no repo" "$(nohdr "$C")" "$want"
 head -1 "$C" | grep -qE "^# claude-fleet: fleet 'fleet' — written by fleet-up\.sh [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8}\$" \
-  || fail "1 header line: $(head -1 "$C")"
+  || st_miss "1 header line: $(head -1 "$C")"
 eq "1 o/a's overlay: identity" "$(grep -v '^#' "$(OV a)")" "$(printf 'FLEET_REPO="o/a"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"' "$WORK/src/a")"
 eq "1 repos/.order" "$(cat "$FLEET_CONF_DIR/fleets/fleet/repos/.order")" o-a
 eq "1 fleet_repos" "$(lib 'fleet_repos fleet')" o/a
 eq "1 FLEET_REPO resolves as always" "$(lib 'fleet_load_conf fleet; printf %s "$FLEET_REPO|$FLEET_BASE_BRANCH"')" "o/a|master"
-lib 'fleet_repo_is_seed fleet o/a' && fail "1: o/a reads as the seed without --seed"
+lib 'fleet_repo_is_seed fleet o/a' && st_miss "1: o/a reads as the seed without --seed"
 down
 leg "1 no --seed: the repo in repos/, the conf holds none"
 
@@ -118,84 +115,84 @@ leg "1 no --seed: the repo in repos/, the conf holds none"
 export FLEET_CONF_DIR="$WORK/conf2"; C="$FLEET_CONF_DIR/fleets/fleet/conf"
 out=$(up o/a "$WORK/src/a" --seed); eq "2 rc" "$?" 0
 [ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '$ fleet-up o/a --seed\n%s\n' "$out"
-has "2 says so" "$out" "o/a is this fleet's seed repo"
+st_has "2 says so" "$out" "o/a is this fleet's seed repo"
 eq "2 seed" "$(val "$(OV a)" FLEET_SEED)" 1
 eq "2 no autofill key (#3120)" "$(grep -c '^FLEET_AUTOFILL=' "$(OV a)")" 0
 eq "2 no bridge key (#4899)" "$(grep -c '^FLEET_ISSUE_BRIDGE=' "$(OV a)")" 0
 eq "2 none of them in the fleet conf" "$(grep -cE '^FLEET_(SEED|AUTOFILL|ISSUE_BRIDGE)=' "$C")" 0
-lib 'fleet_repo_is_seed fleet o/a' || fail "2: o/a is not read as the seed"
+lib 'fleet_repo_is_seed fleet o/a' || st_miss "2: o/a is not read as the seed"
 out=$(up o/a "$WORK/src/a" --seed --no-attach); eq "2 re-run rc" "$?" 0
-has "2 --no-attach stops short (#1165)" "$out" "not attaching (--no-attach)"
-hasnt "2 --no-attach never tries" "$out" "attach:  tmux"
+st_has "2 --no-attach stops short (#1165)" "$out" "not attaching (--no-attach)"
+st_hasnt "2 --no-attach never tries" "$out" "attach:  tmux"
 eq "2 no dup keys" "$(grep -cE '^FLEET_(SEED|AUTOFILL|ISSUE_BRIDGE)=' "$(OV a)")" 1
-[ -e "$C.tmp.$$" ] && fail "2: temp file left behind"
+[ -e "$C.tmp.$$" ] && st_miss "2: temp file left behind"
 leg "2 --seed writes SEED=1 into the seed's overlay"
 
 # ---- 5. repo-scoped: an added repo is not the seed ----
 out=$(up o/b "$WORK/src/b"); eq "5 add rc" "$?" 0
-has "5 added" "$out" "added o/b to fleet 'fleet'"
-lib 'fleet_repo_is_seed fleet o/b' && fail "5: the added o/b inherited FLEET_SEED"
-lib 'fleet_repo_is_seed fleet o/a' || fail "5: o/a lost its seed mark once o/b was added"
+st_has "5 added" "$out" "added o/b to fleet 'fleet'"
+lib 'fleet_repo_is_seed fleet o/b' && st_miss "5: the added o/b inherited FLEET_SEED"
+lib 'fleet_repo_is_seed fleet o/a' || st_miss "5: o/a lost its seed mark once o/b was added"
 eq "5 order" "$(lib 'fleet_repos fleet' | tr '\n' ' ')" "o/a o/b "
 leg "5 FLEET_SEED is the seed's alone"
 
 # ---- 6. --seed for a repo the fleet would add beside another: refused ----
 mkrepo "$WORK/src/d" o/d
 out=$(up o/d "$WORK/src/d" --seed); eq "6 rc" "$?" 1
-has "6 refused" "$out" "--seed marks a fleet's only repo"
-[ -e "$(OV d)" ] && fail "6: a refused --seed still wrote o/d's overlay"
+st_has "6 refused" "$out" "--seed marks a fleet's only repo"
+[ -e "$(OV d)" ] && st_miss "6: a refused --seed still wrote o/d's overlay"
 down
 leg "6 --seed on an added repo refused"
 
 # ---- 7. fleet-settings merge: FLEET_SEED stays in the seed's overlay ----
 out=$(bash "$SB/fleet-settings.sh" merge 2>&1); eq "7 rc" "$?" 0
 eq "7 overlay keeps seed" "$(val "$(OV a)" FLEET_SEED)" 1
-grep -q '^FLEET_SEED=' "$FLEET_CONF_DIR/fleet.settings" 2>/dev/null && fail "7: FLEET_SEED moved into the login-wide settings"
-lib 'fleet_repo_is_seed fleet o/a' || fail "7: o/a lost its seed mark in the merge"
+grep -q '^FLEET_SEED=' "$FLEET_CONF_DIR/fleet.settings" 2>/dev/null && st_miss "7: FLEET_SEED moved into the login-wide settings"
+lib 'fleet_repo_is_seed fleet o/a' || st_miss "7: o/a lost its seed mark in the merge"
 leg "7 settings merge keeps the seed mark repo-scoped"
 
 # ---- 8. doctor: the seed line, only where seeded ----
 out=$(sh "$SB/fleet-doctor.sh" 2>&1)
-has "8 seed line" "$out" "o/a — 起步仓库，只读"
+st_has "8 seed line" "$out" "o/a — 起步仓库，只读"
 export FLEET_CONF_DIR="$WORK/conf"
 out=$(sh "$SB/fleet-doctor.sh" 2>&1)
-hasnt "8 no seed line unseeded" "$out" "起步仓库"
+st_hasnt "8 no seed line unseeded" "$out" "起步仓库"
 leg "8 doctor names the seed repo"
 
 # ---- 9. the starter goes like any repo (issues #1172, #1937) ----
 # The seed fleet of legs 2–7 (o/a seed + o/b), its server up with the guide — a
 # scratch of the seed, as fleet-up opens it — and an issue window of the seed.
 export FLEET_CONF_DIR="$WORK/conf2"; C="$FLEET_CONF_DIR/fleets/fleet/conf"
-tmux -L fleet new-session -d -s fleet -n plan -x 120 -y 30 || fail "9: could not start the isolated server"
+tmux -L fleet new-session -d -s fleet -n plan -x 120 -y 30 || st_miss "9: could not start the isolated server"
 tmux -L fleet new-window -d -t fleet -n guide 'sleep 300'
 tmux -L fleet set-option -w -t fleet:guide @repo o/a; tmux -L fleet set-option -w -t fleet:guide @raw 1
 tmux -L fleet new-window -d -t fleet -n issue-7 'sleep 300'
 tmux -L fleet set-option -w -t fleet:issue-7 @repo o/a; tmux -L fleet set-option -w -t fleet:issue-7 @issue 7
 before=$(cat "$C"); ovb=$(cat "$(OV b)")
 list0=$(bash "$SB/fleet-repo.sh" list --session fleet 2>&1)
-has "9 list before: the seed" "$list0" "[repos/o-a.conf]"
-has "9 list before: o/b" "$list0" "[repos/o-b.conf]"
+st_has "9 list before: the seed" "$list0" "[repos/o-a.conf]"
+st_has "9 list before: o/b" "$list0" "[repos/o-b.conf]"
 out=$(bash "$SB/fleet-repo.sh" remove --session fleet o/a 2>&1); eq "9 an issue window of the seed refuses" "$?" 1
-has "9 the refusal names it" "$out" "issue-7"
-[ -f "$(OV a)" ] || fail "9: a refused remove dropped o/a's overlay"
+st_has "9 the refusal names it" "$out" "issue-7"
+[ -f "$(OV a)" ] || st_miss "9: a refused remove dropped o/a's overlay"
 tmux -L fleet kill-window -t fleet:issue-7
 out=$(bash "$SB/fleet-repo.sh" remove --session fleet o/a 2>&1); eq "9 remove rc" "$?" 0
 [ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '$ fleet-repo.sh list   (before)\n%s\n$ fleet-repo.sh remove o/a\n%s\n' "$list0" "$out"
-has "9 one road: says what is left" "$out" "fleet no longer hosts o/a (1 repo(s) left)"
-hasnt "9 no promotion" "$out" "promot"
+st_has "9 one road: says what is left" "$out" "fleet no longer hosts o/a (1 repo(s) left)"
+st_hasnt "9 no promotion" "$out" "promot"
 eq "9 the fleet conf untouched" "$(cat "$C")" "$before"
 eq "9 o/b's overlay untouched" "$(cat "$(OV b)")" "$ovb"
-[ -e "$(OV a)" ] && fail "9: o/a's overlay left behind"
+[ -e "$(OV a)" ] && st_miss "9: o/a's overlay left behind"
 eq "9 fleet_repos" "$(lib 'fleet_repos fleet')" o/b
 eq "9 FLEET_REPO now resolves to o/b" "$(lib 'fleet_load_conf fleet; printf %s "$FLEET_REPO"')" o/b
-lib 'fleet_repo_is_seed fleet o/b' && fail "9: o/b became the seed"
-tmux -L fleet list-windows -t fleet -F '#{window_name}' | grep -qx guide || fail "9: the guide window was killed"
+lib 'fleet_repo_is_seed fleet o/b' && st_miss "9: o/b became the seed"
+tmux -L fleet list-windows -t fleet -F '#{window_name}' | grep -qx guide || st_miss "9: the guide window was killed"
 out=$(sh "$SB/fleet-doctor.sh" 2>&1)
-hasnt "9 doctor prints no seed line" "$out" "起步仓库"
+st_hasnt "9 doctor prints no seed line" "$out" "起步仓库"
 out=$(bash "$SB/fleet-onboard.sh" brief --session fleet --no-gh 2>&1)
-hasnt "9 the wizard's brief tags no seed" "$out" "[seed]"
+st_hasnt "9 the wizard's brief tags no seed" "$out" "[seed]"
 out=$(bash "$SB/fleet-repo.sh" remove --session fleet o/b 2>&1); eq "9 the last repo goes the same way" "$?" 0
-has "9 …leaving none" "$out" "(0 repo(s) left)"
+st_has "9 …leaving none" "$out" "(0 repo(s) left)"
 eq "9 fleet_repos: none" "$(lib 'fleet_repos fleet')" ""
 eq "9 no repo key resolves" "$(lib 'fleet_load_conf fleet; printf %s "${FLEET_REPO:-}|${FLEET_MAIN:-}"')" "|"
 down
@@ -212,39 +209,38 @@ mk10() {   # $1=conf dir → seed o/a in the conf + o/b (identity) + o/c (FLEET_
 mkdir -p "$WORK/src/c"
 mk10 "$WORK/conf5"
 eq "10 old layout: the conf's repo is not read (#4806)" "$(lib 'fleet_repos fleet' | tr '\n' ' ')" "o/b o/c "
-lib 'fleet_repo_is_seed fleet o/a' && fail "10: the old layout's seed was read"
+lib 'fleet_repo_is_seed fleet o/a' && st_miss "10: the old layout's seed was read"
 out=$(bash "$SB/fleet-repo.sh" remove --session fleet o/a 2>&1); eq "10 remove rc" "$?" 0
 [ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '$ fleet-repo.sh remove o/a   (old layout)\n%s\n' "$out"
-has "10 moved first" "$out" "moved out of"
-[ -f "$C.bak" ] || fail "10: the fleet conf was not kept as .bak"
+st_has "10 moved first" "$out" "moved out of"
+[ -f "$C.bak" ] || st_miss "10: the fleet conf was not kept as .bak"
 eq "10 the conf names no repo" "$(grep -cE '^FLEET_(REPO|MAIN|BASE_BRANCH|SEED|DEPLOY_REF)=' "$C")" 0
 eq "10 the seed's AUTOFILL=0 went with it" "$(grep -c '^FLEET_AUTOFILL=' "$C")" 0
 eq "10 a switch the operator set stays" "$(val "$C" FLEET_ISSUE_BRIDGE)" 1
 eq "10 a fleet-wide key stays" "$(val "$C" FLEET_CTX_WINDOW)" 7
 eq "10 hosts after" "$(lib 'fleet_repos fleet' | tr '\n' ' ')" "o/b o/c "
-[ "$(lib 'fleet_repo_conf_get fleet o/b FLEET_MODEL')" != sonnet ] || fail "10: o/b reads o/c's FLEET_MODEL"
+[ "$(lib 'fleet_repo_conf_get fleet o/b FLEET_MODEL')" != sonnet ] || st_miss "10: o/b reads o/c's FLEET_MODEL"
 eq "10 o/c reads its own" "$(lib 'fleet_repo_conf_get fleet o/c FLEET_MODEL')" sonnet
 eq "10 o/b is first now" "$(lib 'fleet_load_conf fleet; printf %s "$FLEET_REPO|$FLEET_BASE_BRANCH"')" "o/b|master"
-lib 'fleet_repo_is_seed fleet o/b' && fail "10: o/b became the seed"
+lib 'fleet_repo_is_seed fleet o/b' && st_miss "10: o/b became the seed"
 leg "10 old layout: moved into repos/ first, then removed like any repo"
 
 # ---- 11. a fleet with no repo comes up (issue #1937) ----
 export FLEET_CONF_DIR="$WORK/conf9"; C="$FLEET_CONF_DIR/fleets/fleet/conf"
 out=$(cd "$HOME" && bash "$UP" --no-attach </dev/null 2>&1); eq "11 rc" "$?" 0
 [ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '$ fleet-up --no-attach   (no repo)\n%s\n' "$out"
-has "11 says it has none" "$out" "0 repo(s)"
-[ -f "$C" ] || fail "11: no fleet conf written"
+st_has "11 says it has none" "$out" "0 repo(s)"
+[ -f "$C" ] || st_miss "11: no fleet conf written"
 eq "11 the conf names no repo" "$(grep -c '^FLEET_REPO=' "$C")" 0
 eq "11 fleet_repos: none" "$(lib 'fleet_repos fleet')" ""
-tmux -L fleet has-session -t fleet 2>/dev/null || fail "11: the fleet's session is not up"
+tmux -L fleet has-session -t fleet 2>/dev/null || st_miss "11: the fleet's session is not up"
 eq "11 the hub opens in \$HOME" "$(tmux -L fleet display-message -p -t fleet:plan '#{pane_current_path}' 2>/dev/null)" "$HOME"
 # then a repo, the same way as any: it is the fleet's one repo, and the hub's next start opens there
 out=$(up o/a "$WORK/src/a" --no-attach); eq "11 add rc" "$?" 0
-has "11 added" "$out" "added o/a to fleet 'fleet'"
+st_has "11 added" "$out" "added o/a to fleet 'fleet'"
 eq "11 fleet_repos after" "$(lib 'fleet_repos fleet')" o/a
 eq "11 the conf still names no repo" "$(grep -c '^FLEET_REPO=' "$C")" 0
 down
 leg "11 a fleet with no repo comes up, and takes one later the same way"
 
-[ "$FAILS" = 0 ] || { printf 'selftest FAIL: %d assertion(s)\n' "$FAILS" >&2; exit 1; }
-printf 'selftest PASS: the seed repo only looks — repo-scoped (issue #1167) — and goes like any repo (issues #1172, #1937)\n'
+st_done

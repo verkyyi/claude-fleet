@@ -17,17 +17,15 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'fleet-timing: python3 absent — SKIP'; exit 0; }
+st_need python3
 st_sandbox "${TMPDIR:-/tmp}/ftiming.XXXXXX"
 export FLEET_CONF_DIR="$WORK/conf"
 unset FLEET_TIMING_PANEL_MS FLEET_TIMING_SESSION_MS
-fails=0
-ok() { echo "ok   $1"; }
-fail() { echo "FAIL $1"; fails=$((fails + 1)); }
+FAIL=0
 T() { python3 "$BIN/fleet_timing.py" "$@"; }
 
 # --- A ---------------------------------------------------------------------------
-python3 - "$BIN" <<'PY' && ok "A add: {ts, what, seg, ms} per segment, one ts a run; a Clock's marks sum to its total" || fail "A add / Clock"
+python3 - "$BIN" <<'PY' && st_ok "A add: {ts, what, seg, ms} per segment, one ts a run; a Clock's marks sum to its total" || st_miss "A add / Clock"
 import json, os, sys, time
 sys.path.insert(0, sys.argv[1])
 import fleet_timing as t
@@ -54,23 +52,23 @@ printf '%s\n' "$out" | grep -qx '| total | 200 | 300 | 3 |' \
   && printf '%s\n' "$out" | grep -q '^session · 2 次 · 其中冷启 1 次' \
   && printf '%s\n' "$out" | grep -qx '| total（不算冷启） | 300 | 300 | 1 |' \
   && [ "$(T table --last 2 panel | grep '^| total ')" = '| total | 250 | 300 | 2 |' ] \
-  && ok "B table: median · max per segment over the last N; cold counted, the total without it" \
-  || fail "B table: $out"
+  && st_ok "B table: median · max per segment over the last N; cold counted, the total without it" \
+  || st_miss "B table: $out"
 
 # --- C ---------------------------------------------------------------------------
-f0=$fails
+f0=$FAIL
 out=$(T check); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx 'panel n=3 p50=200 limit=500 over=0 cold=0' \
   && printf '%s\n' "$out" | grep -qx 'session n=2 p50=300 limit=8000 over=0 cold=1' \
-  || fail "C check under the limits: rc=$rc $out"
+  || st_miss "C check under the limits: rc=$rc $out"
 out=$(FLEET_TIMING_PANEL_MS=150 T check); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -qx 'panel n=3 p50=200 limit=150 over=1 cold=0' \
-  || fail "C check over the panel limit: rc=$rc $out"
-[ -z "$(FLEET_CONF_DIR="$WORK/none" T check)" ] || fail "C no file printed something"
-[ "$fails" = "$f0" ] && ok "C check: medians against the limits, cold not judged, over ⇒ exit 1, no file ⇒ nothing"
+  || st_miss "C check over the panel limit: rc=$rc $out"
+[ -z "$(FLEET_CONF_DIR="$WORK/none" T check)" ] || st_miss "C no file printed something"
+[ "$FAIL" = "$f0" ] && st_ok "C check: medians against the limits, cold not judged, over ⇒ exit 1, no file ⇒ nothing"
 
 # --- D ---------------------------------------------------------------------------
-python3 - "$BIN" "$WORK" <<'PY' && ok "D a long file keeps its newest half; an unwritable home costs only the line" || fail "D rotation / unwritable"
+python3 - "$BIN" "$WORK" <<'PY' && st_ok "D a long file keeps its newest half; an unwritable home costs only the line" || st_miss "D rotation / unwritable"
 import os, sys
 sys.path.insert(0, sys.argv[1])
 import fleet_timing as t
@@ -86,7 +84,7 @@ t.add("panel", [("total", 1)])                          # no raise
 PY
 
 # --- E ---------------------------------------------------------------------------
-python3 - "$BIN" <<'PY' && ok "E proc_start: Linux the process's own start, else None" || fail "E proc_start"
+python3 - "$BIN" <<'PY' && st_ok "E proc_start: Linux the process's own start, else None" || st_miss "E proc_start"
 import os, sys, time
 t1 = time.time()
 sys.path.insert(0, sys.argv[1])
@@ -102,17 +100,16 @@ PY
 # the doctor's row, cut out of fleet-doctor.sh and run with its two helpers
 sed -n '/^# --- timing: ⌘P/,/^# --- perl/p' "$BIN/fleet-doctor.sh" | sed "s#\$(dirname \"\$0\")#$BIN#" > "$WORK/row.sh"
 row() { bash -c 'pass() { echo "PASS $1 $2"; }; warn() { echo "WARN $1 $2"; }; . "$1"' _ "$WORK/row.sh"; }
-f0=$fails
+f0=$FAIL
 out=$(row)
 printf '%s\n' "$out" | grep -q '^PASS timing ⌘P → 面板 p50 0.20s (3 次) · 新会话 → 能打字 p50 0.30s (2 次，冷启 1)$' \
-  || fail "F PASS under the limits: $out"
+  || st_miss "F PASS under the limits: $out"
 out=$(FLEET_TIMING_PANEL_MS=150 row)
-printf '%s\n' "$out" | grep -q '^WARN timing ⌘P → 面板 p50 0.20s (3 次) > 0.1s' || fail "F WARN over a limit: $out"
+printf '%s\n' "$out" | grep -q '^WARN timing ⌘P → 面板 p50 0.20s (3 次) > 0.1s' || st_miss "F WARN over a limit: $out"
 rm -f "$FLEET_CONF_DIR/timing/session.ndjson"; T add session start=9000 go=10 total=9010
 out=$(row)
-printf '%s\n' "$out" | grep -q '^WARN timing .*新会话 → 能打字 p50 9.01s (1 次) > 8.0s' || fail "F WARN a slow start: $out"
-[ -z "$(FLEET_CONF_DIR="$WORK/none" row)" ] || fail "F no run printed a row"
-[ "$fails" = "$f0" ] && ok "F doctor timing: PASS under, WARN over (a slow start too), no row with nothing measured"
+printf '%s\n' "$out" | grep -q '^WARN timing .*新会话 → 能打字 p50 9.01s (1 次) > 8.0s' || st_miss "F WARN a slow start: $out"
+[ -z "$(FLEET_CONF_DIR="$WORK/none" row)" ] || st_miss "F no run printed a row"
+[ "$FAIL" = "$f0" ] && st_ok "F doctor timing: PASS under, WARN over (a slow start too), no row with nothing measured"
 
-[ "$fails" = 0 ] || { echo "fleet-timing-selftest: $fails failed"; exit 1; }
-echo "fleet-timing-selftest: all passed"
+st_done

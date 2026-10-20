@@ -25,6 +25,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SRC="$BIN/fleet-quotaguard.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s not found/executable\n' "$SRC" >&2; exit 2; }
 
@@ -43,15 +44,14 @@ exit "$(cat "$RC_FILE")"
 FAKE
 chmod +x "$FAKEBIN/ccquota"
 
-FAILED=0
-fail() { printf 'FAIL: %s\n' "$1" >&2; FAILED=1; }
+st_tally
 
 # run <expected-rc> <label> — invokes the guard with the current env, capturing
 # stderr. Sets $STDERR for the caller.
 run() {
   local want="$1" label="$2" rc
   STDERR=$("$SRC" --gate 2>&1 >/dev/null); rc=$?
-  [ "$rc" -eq "$want" ] || fail "$label: exit $rc, want $want (stderr: $STDERR)"
+  [ "$rc" -eq "$want" ] || st_miss "$label: exit $rc, want $want (stderr: $STDERR)"
 }
 
 export ARGV_FILE="$ARGV" RC_FILE="$TMP/rc"
@@ -75,11 +75,11 @@ PATH="$FAKEBIN:$PATH" CCQUOTA_HUB_URL=http://hub.invalid \
   FLEET_QUOTA_GATE=1 FLEET_QUOTA_CEILING=77 run 3 "armed + hold must refuse"
 case "$STDERR" in
   *"window nearly spent"*) ;;
-  *) fail "the reason from ccquota did not survive into our stderr: $STDERR" ;;
+  *) st_miss "the reason from ccquota did not survive into our stderr: $STDERR" ;;
 esac
 case "$(cat "$ARGV")" in
   *"--ceiling 77"*) ;;
-  *) fail "configured ceiling never reached ccquota: $(cat "$ARGV")" ;;
+  *) st_miss "configured ceiling never reached ccquota: $(cat "$ARGV")" ;;
 esac
 
 # --- 5. armed + go ---
@@ -98,8 +98,7 @@ PATH="$FAKEBIN:$PATH" CCQUOTA_HUB_URL=http://hub.invalid \
   FLEET_QUOTA_GATE=1 FLEET_QUOTA_ACCOUNT=all run 0 "account override"
 case "$(cat "$ARGV")" in
   *"--account all"*) ;;
-  *) fail "FLEET_QUOTA_ACCOUNT never reached ccquota: $(cat "$ARGV")" ;;
+  *) st_miss "FLEET_QUOTA_ACCOUNT never reached ccquota: $(cat "$ARGV")" ;;
 esac
 
-[ "$FAILED" = 0 ] && { echo "fleet-quotaguard-selftest: PASS"; exit 0; }
-exit 1
+st_done

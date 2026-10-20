@@ -30,7 +30,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 st_real_tmux
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
+st_need git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/new-session-sel.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -54,10 +54,9 @@ unset TMUX TMUX_PANE FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_MODEL FLEET_A
 mkdir -p "$FLEET_CONF_DIR"
 . "$BIN/fleet-lib.sh"
 
-FAILS=0
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-eq()   { if [ "$2" = "$3" ]; then st_ok_all "$1"; else fail "$1: expected [$3], got [$2]"; fi; }
-has()  { case "$2" in *"$3"*) st_ok_all "$1" ;; *) fail "$1: [$3] not in: $2" ;; esac; }
+st_tally
+eq()   { if [ "$2" = "$3" ]; then st_ok_all "$1"; else st_miss "$1: expected [$3], got [$2]"; fi; }
+has()  { case "$2" in *"$3"*) st_ok_all "$1" ;; *) st_miss "$1: [$3] not in: $2" ;; esac; }
 
 g() { git -c user.email=t@t -c user.name=t "$@" >/dev/null 2>&1; }
 mkrepo() {
@@ -96,8 +95,8 @@ spawned() {
 }
 
 # Two sessions to highlight: a beta scratch and a no-repo one.
-raw --name beta-row --repo o/beta "$S" || fail "setup: beta scratch: $(cat "$WORK/err")"; wB=$(newest "$S")
-raw --name norepo-row --no-repo "$S"   || fail "setup: no-repo: $(cat "$WORK/err")";      wN=$(newest "$S")
+raw --name beta-row --repo o/beta "$S" || st_miss "setup: beta scratch: $(cat "$WORK/err")"; wB=$(newest "$S")
+raw --name norepo-row --no-repo "$S"   || st_miss "setup: no-repo: $(cat "$WORK/err")";      wN=$(newest "$S")
 
 # ==== A. the resolver ================================================================
 eq "A: a beta row → o/beta"                "$(fleet_selection_repo "$S" "$wB")" o/beta
@@ -185,7 +184,4 @@ eq "G: a spawn off the beta row's fields lands in beta (⌃s on a session row)" 
 eq "G: …and off the no-repo row's fields, in no repo" \
    "$(spawned "$S" --name g2 --selection "$(row_sel norepo-row)")" "|1"
 
-if [ "$FAILS" -gt 0 ]; then
-  printf 'new-session-selection-selftest: %s failure(s)\n' "$FAILS" >&2; exit 1
-fi
-printf 'new-session-selection-selftest: all passed\n'
+st_done

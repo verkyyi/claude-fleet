@@ -20,7 +20,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
-command -v python3 >/dev/null 2>&1 || { printf 'fleet-home-session selftest: python3 absent — SKIP\n'; exit 0; }
+st_need python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fhs-st.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -32,10 +32,9 @@ export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" XDG_CONFIG_HOME="$WORK/home
 export FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$WORK/tmp" FLEET_NODE_STATE="$WORK/no-node"
 unset TMUX TMUX_PANE FLEET_HUB_URL FLEET_HUB_TOKEN CCQUOTA_FLEET CCQUOTA_HUB_URL FLEET_HOME_THIN_CMD
 
-FAILS=0; CHECKS=0
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS + 1)); }
-eq()   { CHECKS=$((CHECKS + 1)); if [ "$2" = "$3" ]; then st_ok_all "$1"; else fail "$1: expected [$3], got [$2]"; fi; }
-has()  { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_ok_all "$1" ;; *) fail "$1: [$2] lacks [$3]" ;; esac; }
+FAIL=0; CHECKS=0
+eq()   { CHECKS=$((CHECKS + 1)); if [ "$2" = "$3" ]; then st_ok_all "$1"; else st_miss "$1: expected [$3], got [$2]"; fi; }
+has()  { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_ok_all "$1" ;; *) st_miss "$1: [$2] lacks [$3]" ;; esac; }
 
 # --- A. the dispatch ------------------------------------------------------------------
 # the home's one-shot ssh: runs the command it was handed, here
@@ -105,5 +104,5 @@ eq "F a session's fleet codex is a client start" "$(g 'fleet codex hi')" 2
 eq "F fleet claude --here is not" "$(g 'fleet claude --here')" 0
 eq "F fleet --test-identity codex passes" "$(g 'fleet --test-identity codex')" 0
 
-printf '%s checks, %s failed\n' "$CHECKS" "$FAILS"
-[ "$FAILS" = 0 ]
+printf '%s checks, %s failed\n' "$CHECKS" "$FAIL"
+st_done

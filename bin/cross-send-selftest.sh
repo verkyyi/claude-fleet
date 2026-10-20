@@ -22,9 +22,10 @@
 # tmux / python3 absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX=$(command -v tmux) || { echo 'cross-send selftest: tmux absent — SKIP'; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo 'cross-send selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/cross-send.XXXXXX")" || exit 2
 L="xsnd$$"
@@ -37,9 +38,7 @@ fx_repo "$FLEET_CONF_DIR" "$L" acme/app FLEET_MAIN="$WORK/main"
 unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_HUB_STATUS_CMD FLEET_HUB_CACHE_SECS FLEET_HUB_RETAIN_SECS \
   FLEET_HUB_WRITE_CMD FLEET_PEER_RECEIPT_SECS FLEET_WORKER_ASSERT
 
-FAIL=0; CHECKS=0
-fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
-ok() { CHECKS=$((CHECKS + 1)); }
+st_tally
 tf() { "$REAL_TMUX" -L "$L" "$@"; }
 cleanup() { "$REAL_TMUX" -L "$L" kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
@@ -91,17 +90,17 @@ export FLEET_HUB_SENT_WAIT=0
 from_pane "$po" "wid:$F/issue-42" 'hello from the orchestrator'
 f=$(outbox | head -1)
 fid=$(tf display-message -p -t "$wo" '#{@fleet_id}')
-ok; [ "$rc" = 3 ] && [ -n "$f" ] || fail "G: the orchestrator's message is queued at the hub" "rc=$rc out=$out err=$err"
-ok; [ -n "$fid" ] && [ -n "$f" ] && [ "$(jget "$f" from)" = "$U/$fid" ] \
-  || fail "G: from = <fleet UUID>/<the window's fleet_id>" "fid=$fid $(cat "$f" 2>/dev/null)"
-ok; [ -n "$f" ] && hub_ok "$(jget "$f" from)" && case "$(jget "$f" id)" in "$U/$fid#"*) true ;; *) false ;; esac \
-  || fail "G: the hub's worker_id grammar accepts it, the id scoped to it" "$(cat "$f" 2>/dev/null)"
-ok; ! hub_ok "$U/orchestrator" || fail "G: (premise) <uuid>/orchestrator is no worker_id the hub accepts"
+st_count; [ "$rc" = 3 ] && [ -n "$f" ] || st_miss "G: the orchestrator's message is queued at the hub" "rc=$rc out=$out err=$err"
+st_count; [ -n "$fid" ] && [ -n "$f" ] && [ "$(jget "$f" from)" = "$U/$fid" ] \
+  || st_miss "G: from = <fleet UUID>/<the window's fleet_id>" "fid=$fid $(cat "$f" 2>/dev/null)"
+st_count; [ -n "$f" ] && hub_ok "$(jget "$f" from)" && case "$(jget "$f" id)" in "$U/$fid#"*) true ;; *) false ;; esac \
+  || st_miss "G: the hub's worker_id grammar accepts it, the id scoped to it" "$(cat "$f" 2>/dev/null)"
+st_count; ! hub_ok "$U/orchestrator" || st_miss "G: (premise) <uuid>/orchestrator is no worker_id the hub accepts"
 rm -f "$OUTBOX"/*.json
 from_pane "$p7" "wid:$F/issue-42" 'hello from a worker'
 f=$(outbox | head -1)
-ok; [ "$rc" = 3 ] && [ -n "$f" ] && [ "$(jget "$f" from)" = "$U/acme-app:issue-7" ] \
-  || fail "G: a worker pane still sends as its key" "rc=$rc $(cat "$f" 2>/dev/null)"
+st_count; [ "$rc" = 3 ] && [ -n "$f" ] && [ "$(jget "$f" from)" = "$U/acme-app:issue-7" ] \
+  || st_miss "G: a worker pane still sends as its key" "rc=$rc $(cat "$f" 2>/dev/null)"
 rm -f "$OUTBOX"/*.json
 
 # --- H: the hub refused it ----------------------------------------------------------------
@@ -119,29 +118,29 @@ unset FLEET_HUB_SENT_WAIT
 agent=$!
 from_pane "$po" "wid:$F/issue-42" 'this one is refused'
 wait "$agent" 2>/dev/null
-ok; [ "$rc" = 1 ] && [ -z "$out" ] || fail "H: a refused relay is exit 1, nothing on stdout" "rc=$rc out=$out err=$err"
-ok; case "$err" in *"refused"*"INVALID_ARGUMENT: from: worker_id must be"*) true ;; *) false ;; esac \
-  || fail "H: stderr carries the hub's reason" "$err"
-ok; tail -1 "$BOOK" 2>/dev/null | grep -q '"state": "FAILED".*refused by the hub: INVALID_ARGUMENT' \
-  || fail "H: the delivery book says FAILED, with the reason" "$(tail -1 "$BOOK" 2>/dev/null)"
+st_count; [ "$rc" = 1 ] && [ -z "$out" ] || st_miss "H: a refused relay is exit 1, nothing on stdout" "rc=$rc out=$out err=$err"
+st_count; case "$err" in *"refused"*"INVALID_ARGUMENT: from: worker_id must be"*) true ;; *) false ;; esac \
+  || st_miss "H: stderr carries the hub's reason" "$err"
+st_count; tail -1 "$BOOK" 2>/dev/null | grep -q '"state": "FAILED".*refused by the hub: INVALID_ARGUMENT' \
+  || st_miss "H: the delivery book says FAILED, with the reason" "$(tail -1 "$BOOK" 2>/dev/null)"
 rm -rf "$OUTBOX"/*.json "$OUTBOX/refused"
 
 # --- I: a send still queued after the receipt window is told to its sender -------------------
 export FLEET_HUB_SENT_WAIT=0
 notices() { grep -l -F '[delivery]' "$QDIR"/*.json 2>/dev/null | wc -l | tr -d ' '; }
 FLEET_PEER_RECEIPT_SECS=1 from_pane "$p7" "wid:$F/issue-42" 'ping that never lands'
-ok; [ "$rc" = 3 ] || fail "I: queued (exit 3)" "rc=$rc out=$out err=$err"
+st_count; [ "$rc" = 3 ] || st_miss "I: queued (exit 3)" "rc=$rc out=$out err=$err"
 for _ in $(seq 1 60); do [ "$(notices)" -ge 1 ] && break; sleep 0.2; done
-ok; [ "$(notices)" = 1 ] || fail "I: after the window, the sender is told it was not delivered" "$(ls "$QDIR" 2>/dev/null)"
-ok; grep -q -F 'ping that never lands' "$QDIR"/*.json 2>/dev/null && grep -q 'issue-42' "$QDIR"/*.json 2>/dev/null \
-  || fail "I: the notice names the recipient and the message" "$(cat "$QDIR"/*.json 2>/dev/null | head -c 400)"
+st_count; [ "$(notices)" = 1 ] || st_miss "I: after the window, the sender is told it was not delivered" "$(ls "$QDIR" 2>/dev/null)"
+st_count; grep -q -F 'ping that never lands' "$QDIR"/*.json 2>/dev/null && grep -q 'issue-42' "$QDIR"/*.json 2>/dev/null \
+  || st_miss "I: the notice names the recipient and the message" "$(cat "$QDIR"/*.json 2>/dev/null | head -c 400)"
 rm -rf "$QDIR" "$OUTBOX"/*.json
 FLEET_PEER_RECEIPT_SECS=2 from_pane "$p7" "wid:$F/issue-42" 'ping that lands'
 f=$(outbox | head -1)
 [ -n "$f" ] && bash "$BIN/fleet-peer-queue.sh" note -L "$L" --rid "$(jget "$f" id)" --state DELIVERED \
   --to "$F/issue-42" --kind receipt --via hub --detail sent
 sleep 4
-ok; [ "$(notices)" = 0 ] || fail "I: delivered within the window ⇒ no notice" "$(cat "$QDIR"/*.json 2>/dev/null | head -c 300)"
+st_count; [ "$(notices)" = 0 ] || st_miss "I: delivered within the window ⇒ no notice" "$(cat "$QDIR"/*.json 2>/dev/null | head -c 300)"
 rm -rf "$QDIR" "$OUTBOX"/*.json
 unset FLEET_PEER_RECEIPT_SECS
 
@@ -154,42 +153,39 @@ OPID='"operation_id":"00000000-0000-4000-8000-000000000042"'
 fa() { out=$(env -u TMUX -u TMUX_PANE bash "$BIN/fleet-answer.sh" --session "$L" "$@" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err"); }
 answer '{'"$OPID"',"status":"succeeded","result":{"answered":"2 1,3","how":"confirmed"}}'
 fa --answer "wid:$F/issue-42" 2 1,3
-ok; [ "$rc" = 0 ] && case "$out" in "answered → $F/issue-42 on mac-a"*) true ;; *) false ;; esac \
-  || fail "J: succeeded ⇒ answered, exit 0" "rc=$rc out=$out err=$err"
-ok; [ "$(nwrites)" = 1 ] && [ "$(cut -f1 "$WRITES")" = worker_answer ] \
+st_count; [ "$rc" = 0 ] && case "$out" in "answered → $F/issue-42 on mac-a"*) true ;; *) false ;; esac \
+  || st_miss "J: succeeded ⇒ answered, exit 0" "rc=$rc out=$out err=$err"
+st_count; [ "$(nwrites)" = 1 ] && [ "$(cut -f1 "$WRITES")" = worker_answer ] \
   && python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d["worker_id"]==sys.argv[2] and d["answer"]=="2 1,3" else 1)' \
        "$(cut -f2 "$WRITES")" "$F/issue-42" \
-  || fail "J: ONE worker_answer naming the map's worker_id and the picks" "$(cat "$WRITES" 2>/dev/null)"
+  || st_miss "J: ONE worker_answer naming the map's worker_id and the picks" "$(cat "$WRITES" 2>/dev/null)"
 fa --answer acme-app:issue-43 1
-ok; [ "$rc" = 0 ] && tail -1 "$WRITES" | grep -q "$F/acme-app:issue-43" \
-  || fail "J: <slug>:issue-N goes through the hub as its worker_id" "rc=$rc $err $(tail -1 "$WRITES")"
+st_count; [ "$rc" = 0 ] && tail -1 "$WRITES" | grep -q "$F/acme-app:issue-43" \
+  || st_miss "J: <slug>:issue-N goes through the hub as its worker_id" "rc=$rc $err $(tail -1 "$WRITES")"
 # issue #4938: a target already `wid:` that ends in `<slug>:issue-N` is NOT a key to
 # prefix again — the caller's full worker_id, and the node adapter's own call
 # (fleet-control-read.sh: `--answer "wid:$key"`, key `<slug>:issue-N`), never `wid:wid:`.
 fa --answer "wid:$F/acme-app:issue-43" 1
-ok; [ "$rc" = 0 ] && tail -1 "$WRITES" | grep -q "\"worker_id\":\"$F/acme-app:issue-43\"" \
-  || fail "J: wid:<uuid>/<slug>:issue-N goes through the hub once, unprefixed" "rc=$rc $err $(tail -1 "$WRITES")"
+st_count; [ "$rc" = 0 ] && tail -1 "$WRITES" | grep -q "\"worker_id\":\"$F/acme-app:issue-43\"" \
+  || st_miss "J: wid:<uuid>/<slug>:issue-N goes through the hub once, unprefixed" "rc=$rc $err $(tail -1 "$WRITES")"
 tf set-window-option -t "$w7" @repo acme/app
 n0=$(nwrites)
 fa --answer wid:acme-app:issue-7 1
-ok; [ "$(nwrites)" = "$n0" ] && case "$err" in *"wid:wid:"*|*"bad worker id"*|*"no live worker"*) false ;; *) true ;; esac \
-  || fail "J: the node's wid:<slug>:issue-N resolves to its window here" "rc=$rc err=$err"
+st_count; [ "$(nwrites)" = "$n0" ] && case "$err" in *"wid:wid:"*|*"bad worker id"*|*"no live worker"*) false ;; *) true ;; esac \
+  || st_miss "J: the node's wid:<slug>:issue-N resolves to its window here" "rc=$rc err=$err"
 answer '{'"$OPID"',"status":"failed","result":{"error":{"code":"INVALID_STATE","message":"nothing is pending on the pane"}}}'
 fa --answer "wid:$F/issue-42" 1
-ok; [ "$rc" = 1 ] && case "$err" in *"nothing is pending on the pane"*) true ;; *) false ;; esac \
-  || fail "J: a refusal is exit 1, the node's reason verbatim" "rc=$rc err=$err"
+st_count; [ "$rc" = 1 ] && case "$err" in *"nothing is pending on the pane"*) true ;; *) false ;; esac \
+  || st_miss "J: a refusal is exit 1, the node's reason verbatim" "rc=$rc err=$err"
 answer '{'"$OPID"',"status":"unknown","result":{"error":{"code":"UNKNOWN_OUTCOME","message":"Keys were sent but not confirmed"}}}'
 fa --answer "wid:$F/issue-42" 1
-ok; [ "$rc" = 4 ] || fail "J: unknown ⇒ exit 4 (sent, not confirmed)" "rc=$rc err=$err"
+st_count; [ "$rc" = 4 ] || st_miss "J: unknown ⇒ exit 4 (sent, not confirmed)" "rc=$rc err=$err"
 n0=$(nwrites)
 fa --show "wid:$F/issue-42"
-ok; [ "$rc" = 1 ] && [ "$(nwrites)" = "$n0" ] && case "$err" in *"lives on mac-a"*--answer*) true ;; *) false ;; esac \
-  || fail "J: --show elsewhere refuses, says where, writes nothing" "rc=$rc err=$err"
+st_count; [ "$rc" = 1 ] && [ "$(nwrites)" = "$n0" ] && case "$err" in *"lives on mac-a"*--answer*) true ;; *) false ;; esac \
+  || st_miss "J: --show elsewhere refuses, says where, writes nothing" "rc=$rc err=$err"
 fa --answer "wid:$F/issue-44" 1
-ok; [ "$rc" = 1 ] && [ "$(nwrites)" = "$n0" ] && case "$err" in *offline*) true ;; *) false ;; esac \
-  || fail "J: a machine that is offline: nothing sent" "rc=$rc err=$err"
+st_count; [ "$rc" = 1 ] && [ "$(nwrites)" = "$n0" ] && case "$err" in *offline*) true ;; *) false ;; esac \
+  || st_miss "J: a machine that is offline: nothing sent" "rc=$rc err=$err"
 
-if [ "$FAIL" -gt 0 ]; then
-  printf 'cross-send selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2; exit 1
-fi
-printf 'cross-send selftest: all %d checks passed\n' "$CHECKS"
+st_done

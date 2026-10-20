@@ -33,9 +33,10 @@
 # http.server on 127.0.0.1 that dies with the test. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
 HOOK="$BIN/set-claude-state.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'hub-nudge selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hubnudge-selftest.XXXXXX")" || exit 2
 SRV_PID='' LANE_E=''
@@ -51,12 +52,8 @@ NUDGE="$FLEET_CONF_DIR/global/hub-nudge"
 mkdir -p "$G" "$FLEET_CONF_DIR/fleets/$S" "$FLEET_CONF_DIR/global" "$WORK/bin" "$HOME" "$WORK/main"
 printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$WORK" > "$FLEET_CONF_DIR/fleets/$S/conf"
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
-has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1 — no [$3]" "$2";; esac; }
-hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
-absent() { CHECKS=$((CHECKS+1)); [ ! -e "$2" ] || fail "$1 — $2 exists"; }
+st_tally count
+absent() { CHECKS=$((CHECKS+1)); [ ! -e "$2" ] || st_fail "$1 — $2 exists"; }
 
 # mtime in ns: GNU stat first (BSD's -c is "filesystem status"), python as the
 # tie-breaker for sub-second resolution on both.
@@ -106,10 +103,10 @@ hook() {
 # ============================================================================
 # A. OFF — nothing is written anywhere
 # ============================================================================
-( . "$BIN/fleet-lib.sh"; fleet_hub_nudge ) || fail "A: fleet_hub_nudge (off) exited non-zero"
+( . "$BIN/fleet-lib.sh"; fleet_hub_nudge ) || st_fail "A: fleet_hub_nudge (off) exited non-zero"
 absent "A: off — fleet_hub_nudge writes nothing" "$NUDGE"
 FAKE_PREV='done/' hook needs
-has "A: the hook still stamps the state" "$(cat "$SETOPT_LOG")" "@claude_state needs"
+st_has "A: the hook still stamps the state" "$(cat "$SETOPT_LOG")" "@claude_state needs"
 absent "A: off — the hook touches no nudge file" "$NUDGE"
 : > "$SETOPT_LOG"
 
@@ -117,13 +114,13 @@ absent "A: off — the hook touches no nudge file" "$NUDGE"
 # B. ON — the file, its mtime, and a fake agent's poll
 # ============================================================================
 export CCQUOTA_FLEET=1
-( . "$BIN/fleet-lib.sh"; fleet_hub_nudge ) || fail "B: fleet_hub_nudge exited non-zero"
-CHECKS=$((CHECKS+1)); [ -f "$NUDGE" ] || fail "B: fleet_hub_nudge must create $NUDGE"
+( . "$BIN/fleet-lib.sh"; fleet_hub_nudge ) || st_fail "B: fleet_hub_nudge exited non-zero"
+CHECKS=$((CHECKS+1)); [ -f "$NUDGE" ] || st_fail "B: fleet_hub_nudge must create $NUDGE"
 m1=$(mtime_ns "$NUDGE"); sleep 0.05
 ( . "$BIN/fleet-lib.sh"; fleet_hub_nudge )
 m2=$(mtime_ns "$NUDGE")
-CHECKS=$((CHECKS+1)); [ "$m2" -gt "$m1" ] || fail "B: a second nudge must MOVE the mtime ($m1 -> $m2) — the agent polls exactly that"
-eq "B: the file stays empty (a marker, never a log)" "0" "$(wc -c < "$NUDGE" | tr -d ' ')"
+CHECKS=$((CHECKS+1)); [ "$m2" -gt "$m1" ] || st_fail "B: a second nudge must MOVE the mtime ($m1 -> $m2) — the agent polls exactly that"
+st_eq "B: the file stays empty (a marker, never a log)" "0" "$(wc -c < "$NUDGE" | tr -d ' ')"
 # The fake agent: the Go watcher's loop — stat every 250 ms, report when the
 # mtime moves. Nudge 400 ms in; the signal must land within 500 ms of it.
 python3 - "$NUDGE" "$BIN" > "$WORK/agent.out" 2>&1 <<'PY' &
@@ -143,25 +140,25 @@ while time.monotonic() < deadline:
 print("missed")
 sys.exit(1)
 PY
-wait $! ; CHECKS=$((CHECKS+1)); [ $? = 0 ] || fail "B: the fake agent never saw the nudge" "$(cat "$WORK/agent.out")"
+wait $! ; CHECKS=$((CHECKS+1)); [ $? = 0 ] || st_fail "B: the fake agent never saw the nudge" "$(cat "$WORK/agent.out")"
 seen=$(sed -n 's/^seen //p' "$WORK/agent.out")
-CHECKS=$((CHECKS+1)); [ -n "$seen" ] && [ "$seen" -le 500 ] || fail "B: nudge seen after ${seen:-?} ms, want ≤ 500 (one 250 ms poll)"
+CHECKS=$((CHECKS+1)); [ -n "$seen" ] && [ "$seen" -le 500 ] || st_fail "B: nudge seen after ${seen:-?} ms, want ≤ 500 (one 250 ms poll)"
 
 # ============================================================================
 # C. the hook: a CHANGE nudges, a re-stamp does not
 # ============================================================================
 rm -f "$NUDGE"
 FAKE_PREV='done/' hook needs
-CHECKS=$((CHECKS+1)); [ -f "$NUDGE" ] || fail "C: done → needs must nudge"
-has "C: …and still stamps the state" "$(cat "$SETOPT_LOG")" "@claude_state needs"
+CHECKS=$((CHECKS+1)); [ -f "$NUDGE" ] || st_fail "C: done → needs must nudge"
+st_has "C: …and still stamps the state" "$(cat "$SETOPT_LOG")" "@claude_state needs"
 rm -f "$NUDGE"; : > "$SETOPT_LOG"
 printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Bash"}' \
   | PATH="$SHIMPATH" TMUX="$WORK/fake-sock,1,0" TMUX_PANE='%1' FAKE_PREV='working/' sh "$HOOK" busy >/dev/null 2>&1
-has "C: a busy on a working window still re-stamps working" "$(cat "$SETOPT_LOG")" "@claude_state working"
+st_has "C: a busy on a working window still re-stamps working" "$(cat "$SETOPT_LOG")" "@claude_state working"
 absent "C: …but the same state again is no nudge (the hub already knows)" "$NUDGE"
 printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Bash"}' \
   | PATH="$SHIMPATH" TMUX="$WORK/fake-sock,1,0" TMUX_PANE='%1' FAKE_PREV='done/' sh "$HOOK" busy >/dev/null 2>&1
-CHECKS=$((CHECKS+1)); [ -f "$NUDGE" ] || fail "C: done → working (a new turn) must nudge"
+CHECKS=$((CHECKS+1)); [ -f "$NUDGE" ] || st_fail "C: done → working (a new turn) must nudge"
 rm -f "$NUDGE"; : > "$SETOPT_LOG"
 
 # ============================================================================
@@ -206,58 +203,58 @@ python3 "$WORK/hub.py" "$WORK" & SRV_PID=$!
 # Up to 30 s: a cold python3 on a loaded CI runner (macOS shards) takes well over
 # the 2 s the first cut allowed — the same budget the other loopback-hub tests use.
 for _ in $(seq 1 300); do [ -s "$WORK/hub.port" ] && break; kill -0 "$SRV_PID" 2>/dev/null || break; sleep 0.1; done
-[ -s "$WORK/hub.port" ] || fail "D: the loopback hub did not start"
+[ -s "$WORK/hub.port" ] || st_fail "D: the loopback hub did not start"
 hubport=$(cat "$WORK/hub.port")
 export CCQUOTA_HUB_URL="http://127.0.0.1:$hubport" CCQUOTA_VIEWER_TOKEN=tok FLEET_HUB_SESSIONS_USER='*'
 US=$'\x1f'
 row_state() { LC_ALL=C awk -F"$US" -v w="wid:$F/issue-7" '$1 == w { print $6 }' "$G/remote_$S" 2>/dev/null; }
 ts_of() { head -1 "$G/remote_$S" | cut -d"$US" -f2; }
 
-PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err" || fail "D: first --refresh failed" "$(cat "$WORK/err")"
-eq  "D: the first fetch sends no validator"     "GET inm=- auth=y" "$(sed -n 1p "$WORK/hub.log")"
-eq  "D: …and writes the row"                    "working" "$(row_state)"
-eq  "D: …and keeps the hub's ETag"              '"A"' "$(head -n1 "$G/hubsess.etag" 2>/dev/null)"
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err" || st_fail "D: first --refresh failed" "$(cat "$WORK/err")"
+st_eq  "D: the first fetch sends no validator"     "GET inm=- auth=y" "$(sed -n 1p "$WORK/hub.log")"
+st_eq  "D: …and writes the row"                    "working" "$(row_state)"
+st_eq  "D: …and keeps the hub's ETag"              '"A"' "$(head -n1 "$G/hubsess.etag" 2>/dev/null)"
 t1=$(ts_of); sleep 1
-PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err" || fail "D: a 304 refresh must succeed" "$(cat "$WORK/err")"
-eq  "D: the second fetch sends If-None-Match"   'GET inm="A" auth=y' "$(sed -n 2p "$WORK/hub.log")"
-eq  "D: a 304 keeps the rows"                   "working" "$(row_state)"
-CHECKS=$((CHECKS+1)); [ "$(ts_of)" -gt "$t1" ] || fail "D: a 304 must re-stamp #ts ($t1 -> $(ts_of)) — else the rows read 失联 while the hub answers"
-eq  "D: …and says nothing on stderr"            "" "$(cat "$WORK/err")"
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err" || st_fail "D: a 304 refresh must succeed" "$(cat "$WORK/err")"
+st_eq  "D: the second fetch sends If-None-Match"   'GET inm="A" auth=y' "$(sed -n 2p "$WORK/hub.log")"
+st_eq  "D: a 304 keeps the rows"                   "working" "$(row_state)"
+CHECKS=$((CHECKS+1)); [ "$(ts_of)" -gt "$t1" ] || st_fail "D: a 304 must re-stamp #ts ($t1 -> $(ts_of)) — else the rows read 失联 while the hub answers"
+st_eq  "D: …and says nothing on stderr"            "" "$(cat "$WORK/err")"
 printf 'B needs\n' > "$WORK/hub.mode"
-PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "D: refresh after a change failed"
-eq  "D: a new validator comes with the new rows" "needs" "$(row_state)"
-eq  "D: …and replaces the stored ETag"          '"B"' "$(head -n1 "$G/hubsess.etag")"
-has "D: …with the mapping it was kept under (issue #2397)" "$(sed -n 2p "$G/hubsess.etag")" "map "
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || st_fail "D: refresh after a change failed"
+st_eq  "D: a new validator comes with the new rows" "needs" "$(row_state)"
+st_eq  "D: …and replaces the stored ETag"          '"B"' "$(head -n1 "$G/hubsess.etag")"
+st_has "D: …with the mapping it was kept under (issue #2397)" "$(sed -n 2p "$G/hubsess.etag")" "map "
 # A validator another mapping stored (issue #2397): an ETag vouches for the hub's
 # answer, not for the rows older code kept of it — cj's client, updated past
 # #2390, kept sending the ETag stored beside the old code's empty cache and every
 # 304 kept it empty. One with no stamp (or another) is not sent: a full body.
 printf '"B"\n' > "$G/hubsess.etag"
 printf '#ts\037%s\n' "$(date +%s)" > "$G/remote_$S"   # the old code's empty cache
-PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "D: refresh over another mapping's validator failed"
-eq  "D: another mapping's validator is not sent" "GET inm=- auth=y" "$(sed -n 4p "$WORK/hub.log")"
-eq  "D: …and the rows are mapped again"           "needs" "$(row_state)"
-has "D: …and the validator carries this mapping" "$(sed -n 2p "$G/hubsess.etag")" "map "
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || st_fail "D: refresh over another mapping's validator failed"
+st_eq  "D: another mapping's validator is not sent" "GET inm=- auth=y" "$(sed -n 4p "$WORK/hub.log")"
+st_eq  "D: …and the rows are mapped again"           "needs" "$(row_state)"
+st_has "D: …and the validator carries this mapping" "$(sed -n 2p "$G/hubsess.etag")" "map "
 # A cache the validator vouches for that is gone from disk: the body is fetched.
 rm -f "$G/remote_$S"
-PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "D: refresh with a missing cache failed"
-eq  "D: a missing cache sends no validator"      "GET inm=- auth=y" "$(sed -n 5p "$WORK/hub.log")"
-eq  "D: …and the row is back"                   "needs" "$(row_state)"
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || st_fail "D: refresh with a missing cache failed"
+st_eq  "D: a missing cache sends no validator"      "GET inm=- auth=y" "$(sed -n 5p "$WORK/hub.log")"
+st_eq  "D: …and the row is back"                   "needs" "$(row_state)"
 # A hub without ETags (older than #1481): full fetches, no validator kept.
 printf 'noetag done\n' > "$WORK/hub.mode"
-PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "D: refresh against a no-ETag hub failed"
-eq  "D: an older hub's rows still land"          "done" "$(row_state)"
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || st_fail "D: refresh against a no-ETag hub failed"
+st_eq  "D: an older hub's rows still land"          "done" "$(row_state)"
 absent "D: …and no validator is kept for it"      "$G/hubsess.etag"
 # A failed fetch keeps the rows and the validator they came with.
 printf 'C working\n' > "$WORK/hub.mode"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-eq  "D: a validator is back once the hub sends one" '"C"' "$(head -n1 "$G/hubsess.etag" 2>/dev/null)"
+st_eq  "D: a validator is back once the hub sends one" '"C"' "$(head -n1 "$G/hubsess.etag" 2>/dev/null)"
 kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=''
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err"
-eq  "D: a dead hub returns 1"                    "1" "$?"
-eq  "D: …keeps the last rows"                    "working" "$(row_state)"
-has "D: …and says so"                            "$(cat "$WORK/err")" "hub unreachable"
-eq  "D: …and keeps the validator of the rows on disk" '"C"' "$(head -n1 "$G/hubsess.etag" 2>/dev/null)"
+st_eq  "D: a dead hub returns 1"                    "1" "$?"
+st_eq  "D: …keeps the last rows"                    "working" "$(row_state)"
+st_has "D: …and says so"                            "$(cat "$WORK/err")" "hub unreachable"
+st_eq  "D: …and keeps the validator of the rows on disk" '"C"' "$(head -n1 "$G/hubsess.etag" 2>/dev/null)"
 
 # ============================================================================
 # E. cadence: 2 s while someone is attached, 10 s otherwise
@@ -281,15 +278,15 @@ rm -f "$WORK/fetches" "$G/hubsess.pid"
 view_on
 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
 n=$(wc -c < "$WORK/fetches" | tr -d ' ')
-CHECKS=$((CHECKS+1)); [ "$n" -ge 2 ] || fail "E: watched — a 5 s loop fetched $n times, want ≥ 2 (every 2 s)"
+CHECKS=$((CHECKS+1)); [ "$n" -ge 2 ] || st_fail "E: watched — a 5 s loop fetched $n times, want ≥ 2 (every 2 s)"
 rm -f "$WORK/fetches" "$G/hubsess.pid"
 view_off
 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
-eq  "E: unwatched — a 5 s loop fetches once (60 s fallback)" "1" "$(wc -c < "$WORK/fetches" | tr -d ' ')"
+st_eq  "E: unwatched — a 5 s loop fetches once (60 s fallback)" "1" "$(wc -c < "$WORK/fetches" | tr -d ' ')"
 rm -f "$WORK/fetches" "$G/hubsess.pid"
 view_on
 FLEET_HUB_SESSIONS_WATCHED_EVERY=10 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
-eq  "E: FLEET_HUB_SESSIONS_WATCHED_EVERY sets the watched cadence" "1" "$(wc -c < "$WORK/fetches" | tr -d ' ')"
+st_eq  "E: FLEET_HUB_SESSIONS_WATCHED_EVERY sets the watched cadence" "1" "$(wc -c < "$WORK/fetches" | tr -d ' ')"
 # OFF: the loop is a no-op — nothing fetched, no pid file.
 rm -f "$WORK/fetches" "$G/hubsess.pid"
 CCQUOTA_FLEET='' PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
@@ -347,7 +344,7 @@ printf 'A working\n' > "$WORK/hub2.mode"
 rm -f "$G/hubsess.etag" "$G/hubsess.pid"
 python3 "$WORK/hub2.py" "$WORK" & SRV_PID=$!
 for _ in $(seq 1 300); do [ -s "$WORK/hub2.port" ] && break; kill -0 "$SRV_PID" 2>/dev/null || break; sleep 0.1; done
-[ -s "$WORK/hub2.port" ] || fail "F: the loopback hub did not start"
+[ -s "$WORK/hub2.port" ] || st_fail "F: the loopback hub did not start"
 hubport=$(cat "$WORK/hub2.port")
 export CCQUOTA_HUB_URL="http://127.0.0.1:$hubport" FLEET_HUB_SESSIONS_WAIT=3
 nget() { grep -c '^GET' "$WORK/hub2.log" 2>/dev/null || echo 0; }
@@ -356,8 +353,8 @@ nget() { grep -c '^GET' "$WORK/hub2.log" 2>/dev/null || echo 0; }
 view_on
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-eq  "F: --refresh sends no wait (validator held)" 'GET inm="A" wait=- held=n' "$(sed -n 2p "$WORK/hub2.log")"
-eq  "F: …and the row is there"                 "working" "$(row_state)"
+st_eq  "F: --refresh sends no wait (validator held)" 'GET inm="A" wait=- held=n' "$(sed -n 2p "$WORK/hub2.log")"
+st_eq  "F: …and the row is there"                 "working" "$(row_state)"
 
 # watched loop: the ask carries wait and is held; a change lands within 1 s
 : > "$WORK/hub2.log"; rm -f "$G/hubsess.pid"
@@ -371,33 +368,33 @@ printf 'B needs\n' > "$WORK/hub2.mode.tmp" && mv "$WORK/hub2.mode.tmp" "$WORK/hu
 t0=$(python3 -c 'import time; print(time.time())')
 for _ in $(seq 1 100); do [ "$(row_state)" = needs ] && break; sleep 0.02; done
 dt=$(python3 -c "import time; print(int((time.time() - $t0) * 1000))")
-eq  "F: watched — the change reached the cache" "needs" "$(row_state)"
-CHECKS=$((CHECKS+1)); [ "$dt" -le 1500 ] || fail "F: watched — the change took ${dt} ms to land, want ≤ 1500 ms (long poll; the held=y line is the mechanism, this bound is CI slack)" "$(cat "$WORK/hub2.log")"
-has "F: …through a held ask"                   "$(cat "$WORK/hub2.log")" 'GET inm="A" wait=3 held=y'
+st_eq  "F: watched — the change reached the cache" "needs" "$(row_state)"
+CHECKS=$((CHECKS+1)); [ "$dt" -le 1500 ] || st_fail "F: watched — the change took ${dt} ms to land, want ≤ 1500 ms (long poll; the held=y line is the mechanism, this bound is CI slack)" "$(cat "$WORK/hub2.log")"
+st_has "F: …through a held ask"                   "$(cat "$WORK/hub2.log")" 'GET inm="A" wait=3 held=y'
 wait "$LOOP_PID"
 n=$(nget)
-CHECKS=$((CHECKS+1)); [ "$n" -le 8 ] || fail "F: a holding hub — $n asks in a ~4 s loop, want few (each one held)" "$(cat "$WORK/hub2.log")"
+CHECKS=$((CHECKS+1)); [ "$n" -le 8 ] || st_fail "F: a holding hub — $n asks in a ~4 s loop, want few (each one held)" "$(cat "$WORK/hub2.log")"
 
 # an older hub that ignores wait: immediate 304s keep the 2 s cadence, no spin
 : > "$WORK/hub2.log"; rm -f "$G/hubsess.pid"; : > "$WORK/hub2.nowait"
 view_on
 FLEET_HUB_SESSIONS_LOOP_SECS=5 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
 n=$(nget)
-CHECKS=$((CHECKS+1)); [ "$n" -ge 2 ] && [ "$n" -le 4 ] || fail "F: a hub ignoring wait — $n asks in a 5 s loop, want 2–4 (every 2 s)" "$(cat "$WORK/hub2.log")"
+CHECKS=$((CHECKS+1)); [ "$n" -ge 2 ] && [ "$n" -le 4 ] || st_fail "F: a hub ignoring wait — $n asks in a 5 s loop, want 2–4 (every 2 s)" "$(cat "$WORK/hub2.log")"
 rm -f "$WORK/hub2.nowait"
 
 # FLEET_HUB_SESSIONS_LONGPOLL=0, and nobody looking: no wait at all
 : > "$WORK/hub2.log"; rm -f "$G/hubsess.pid"
 FLEET_HUB_SESSIONS_LONGPOLL=0 FLEET_HUB_SESSIONS_LOOP_SECS=3 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
-hasnt "F: LONGPOLL=0 sends no wait"            "$(cat "$WORK/hub2.log")" 'wait=3'
-has   "F: …but still asks"                     "$(cat "$WORK/hub2.log")" 'wait=-'
+st_hasnt "F: LONGPOLL=0 sends no wait"            "$(cat "$WORK/hub2.log")" 'wait=3'
+st_has   "F: …but still asks"                     "$(cat "$WORK/hub2.log")" 'wait=-'
 : > "$WORK/hub2.log"; rm -f "$G/hubsess.pid"
 view_off
 FLEET_HUB_SESSIONS_LOOP_SECS=3 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
-eq  "F: unwatched — one ask, no wait"          'GET inm="B" wait=- held=n' "$(cat "$WORK/hub2.log")"
+st_eq  "F: unwatched — one ask, no wait"          'GET inm="B" wait=- held=n' "$(cat "$WORK/hub2.log")"
 kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=''
 
-wait "$LANE_E" || fail "E: the cadence lane failed (its FAIL line is above)"
+wait "$LANE_E" || st_fail "E: the cadence lane failed (its FAIL line is above)"
 CHECKS=$((CHECKS + $(cat "$WORK/checks.E")))
 
 printf 'PASS: hub-nudge — %d checks (nudge file + mtime, hook change-only, ETag/304 with #ts re-stamp, 2 s viewed / 60 s idle, long poll)\n' "$CHECKS"

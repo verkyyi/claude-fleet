@@ -162,16 +162,23 @@ PR 模板里有一行勾选：改了上面任何一样就勾上，并在 PR 里�
 
 新的 shell 自测先 `. "$BIN/selftest-lib.sh"`，用 `st_fail` / `st_ok`、
 `st_eq <说明> <期望> <实际>`、`st_has` / `st_hasnt <说明> <文本> <字面子串>`。
-断言不计数；失败退出 1，输出一行 `FAIL: <leg>: <msg>`，`ST_LEG` 可指定腿名，
+断言默认不计数；失败退出 1，输出一行 `FAIL: <leg>: <msg>`，`ST_LEG` 可指定腿名，
 默认是测试文件名。旧测试的计数可用 `st_count`（`CHECKS`）或 `st_pass`（`pass`，
-同时输出 ok），调用方初始化计数器。累计失败后继续执行的测试保留自己的断言。
+同时输出 ok），调用方初始化计数器。要一次报完所有失败的测试用 `st_miss`
+（同一行格式，不退出，`FAIL` 加一），并设 `ST_MISS=1` 让 `st_eq` / `st_has` /
+`st_hasnt` 也走它；`ST_COUNT=1` 让这三个断言各给 `CHECKS` 加一。这类测试最后一行写
+`st_done`：有失败退出 1，否则输出一行 ok 退出 0。缺工具就跳过的测试用
+`st_need <工具>...`。
 
 `st_sandbox <mktemp模板> [physical]` 设置 `WORK` 并安装删除它的 EXIT trap；
 有自定义清理、信号处理或 KEEP 的测试保留原来的沙盒。
 `st_fake_tmux <bin目录> [日志]` 创建总是成功的假 tmux，
 `st_fake_gh <bin目录>` 创建总是失败的离线 gh，均不访问真实服务。
 需要真实 tmux 时，先 `st_real_tmux`（缺失就 SKIP），再
-`st_tmux_socket <bin目录> <私有socket>` 创建转发脚本；PATH 和私有 server 的清理
-仍由测试负责。带特殊命令响应或 socket 重映射的夹具保留原实现。
+`st_tmux_socket <bin目录> <私有socket> [strip]` 创建转发脚本（strip 先去掉调用方
+自带的一对 -L/-S）；PATH 和私有 server 的清理仍由测试负责。读 `$WLIST_FILE` 当
+窗口列表的假 tmux 是 `st_fake_tmux_wlist <bin目录>`，窗口选项存在 `$FAKE_OPTS`
+里的假 tmux 是 `st_fake_tmux_opts <bin目录> [list-panes] [set-option] [session-S]
+[no-send]`。其余带特殊命令响应或 socket 重映射的夹具保留原实现。
 公共库只给测试使用，不进入客户端清单。迁移只匹配已核对的完整模板，不改
 断言条件或时限；其余变体另行整理。

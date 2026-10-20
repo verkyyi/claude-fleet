@@ -27,13 +27,12 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 SRC="$BIN/worktree-autoclean.sh"
 LIB="$BIN/fleet-lib.sh"
 for f in "$SRC" "$LIB"; do [ -f "$f" ] || { echo "selftest: $f missing" >&2; exit 2; }; done
-command -v git >/dev/null 2>&1 || { echo "selftest: git absent — SKIP" >&2; exit 0; }
+st_need git
 
 st_sandbox "${TMPDIR:-/tmp}/wac-idle.XXXXXX"
 WORK="$(cd "$WORK" && pwd -P)"
 
 pass=0
-fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/conf/logs"
 ln -s "$SRC" "$WORK/bin/worktree-autoclean.sh"
@@ -107,66 +106,66 @@ run_wac() {
 }
 norm() { sed -E 's/lease [0-9]+s/lease Ns/'; }   # the lease age ticks between runs
 ( export FLEET_CONF_DIR="$WORK/conf"; . "$LIB"; fleet_rotate_lease_take "$WORK/base-scratch-4" "selftest" ) \
-  || fail "could not take a rotation lease on scratch-4"
+  || st_fail "could not take a rotation lease on scratch-4"
 
 # ======================= DEFAULT (key absent / 0): #290 exactly ==============
 write_conf ""
 out_absent="$(run_wac --dry-run | norm)"
 write_conf "FLEET_SCRATCH_MAX_IDLE=0"
 out_zero="$(run_wac --dry-run | norm)"
-[ "$out_absent" = "$out_zero" ] || fail "FLEET_SCRATCH_MAX_IDLE=0 must equal the key being absent" "$out_absent
+[ "$out_absent" = "$out_zero" ] || st_fail "FLEET_SCRATCH_MAX_IDLE=0 must equal the key being absent" "$out_absent
 === vs ===
 $out_zero"
 printf '%s\n' "$out_absent" | grep -Eq 'KEEP +scratch-1 .*session ran here — scratch experiment' \
-  || fail "default: an old conversation scratch must stay KEEP+surface (#290)" "$out_absent"
+  || st_fail "default: an old conversation scratch must stay KEEP+surface (#290)" "$out_absent"
 printf '%s\n' "$out_absent" | grep -Eq 'KEEP +scratch-7 .*unmerged work — scratch experiment' \
-  || fail "default: tip == base scratch must stay 'unmerged work' (#565)" "$out_absent"
+  || st_fail "default: tip == base scratch must stay 'unmerged work' (#565)" "$out_absent"
 printf '%s\n' "$out_absent" | grep -Eq 'KEEP +scratch-5 .*dirty — scratch experiment' \
-  || fail "default: dirty scratch keeps the surface-once wording" "$out_absent"
+  || st_fail "default: dirty scratch keeps the surface-once wording" "$out_absent"
 printf '%s\n' "$out_absent" | grep -Eq 'scratch idle|^DIGEST|^PRUNE' \
-  && fail "default: no idle tag, no digest, no prune on this fixture" "$out_absent"
+  && st_fail "default: no idle tag, no digest, no prune on this fixture" "$out_absent"
 st_pass "DEFAULT: key absent ≡ 0 ≡ the #290 decisions (no age gate, no digest)"
 
 # ======================= ON: dry-run decisions ==============================
 write_conf "FLEET_SCRATCH_MAX_IDLE=259200"
 out="$(run_wac --dry-run)"
-printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-1 .*scratch idle [0-9]+d' || fail "idle conversation scratch-1 should PRUNE" "$out"
-printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-2 .*session ran here — scratch experiment' || fail "recent scratch-2 must stay KEEP+surface" "$out"
-printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-3 .*live tmux session' || fail "live scratch-3 must KEEP" "$out"
-printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-4 .*account rotation in flight' || fail "leased scratch-4 must KEEP" "$out"
-printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-5 .*dirty — scratch idle [0-9]+d, in the daily digest' || fail "idle dirty scratch-5 → digest" "$out"
-printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-6 .*unmerged work — scratch idle [0-9]+d, in the daily digest' || fail "idle unmerged scratch-6 → digest" "$out"
-printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-7 .*scratch idle [0-9]+d' || fail "idle tip==base scratch-7 should PRUNE" "$out"
-[ "$(printf '%s\n' "$out" | grep -c '^DIGEST')" = 1 ] || fail "exactly ONE digest line expected" "$out"
-printf '%s\n' "$out" | grep -E '^DIGEST' | grep -q 'scratch-5.*scratch-6' || fail "the digest lists every idle kept scratch" "$out"
-[ -d "$WORK/base-scratch-1" ] || fail "dry run must not remove anything"
-[ -s "$EVENTS" ] && fail "dry run must not notify" "$(cat "$EVENTS")"
+printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-1 .*scratch idle [0-9]+d' || st_fail "idle conversation scratch-1 should PRUNE" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-2 .*session ran here — scratch experiment' || st_fail "recent scratch-2 must stay KEEP+surface" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-3 .*live tmux session' || st_fail "live scratch-3 must KEEP" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-4 .*account rotation in flight' || st_fail "leased scratch-4 must KEEP" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-5 .*dirty — scratch idle [0-9]+d, in the daily digest' || st_fail "idle dirty scratch-5 → digest" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-6 .*unmerged work — scratch idle [0-9]+d, in the daily digest' || st_fail "idle unmerged scratch-6 → digest" "$out"
+printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-7 .*scratch idle [0-9]+d' || st_fail "idle tip==base scratch-7 should PRUNE" "$out"
+[ "$(printf '%s\n' "$out" | grep -c '^DIGEST')" = 1 ] || st_fail "exactly ONE digest line expected" "$out"
+printf '%s\n' "$out" | grep -E '^DIGEST' | grep -q 'scratch-5.*scratch-6' || st_fail "the digest lists every idle kept scratch" "$out"
+[ -d "$WORK/base-scratch-1" ] || st_fail "dry run must not remove anything"
+[ -s "$EVENTS" ] && st_fail "dry run must not notify" "$(cat "$EVENTS")"
 st_pass "DRY: idle clean → PRUNE; recent/live/leased → KEEP; idle dirty/unmerged → one digest"
 
 # ======================= ON: real run =======================================
 run_wac >/dev/null
-[ -d "$WORK/base-scratch-1" ] && fail "idle scratch-1 should be gone"
-[ -d "$WORK/base-scratch-7" ] && fail "idle scratch-7 should be gone"
-for n in 2 3 4 5 6; do [ -d "$WORK/base-scratch-$n" ] || fail "scratch-$n must be KEPT"; done
+[ -d "$WORK/base-scratch-1" ] && st_fail "idle scratch-1 should be gone"
+[ -d "$WORK/base-scratch-7" ] && st_fail "idle scratch-7 should be gone"
+for n in 2 3 4 5 6; do [ -d "$WORK/base-scratch-$n" ] || st_fail "scratch-$n must be KEPT"; done
 # Recoverable = DROPPED into .fleet-trash (the run's own budgeted trash sweep may
 # already have paid for the bytes by the time we look, so read the logged target).
 LOG="$WORK/conf/logs/worktree-autoclean.log"
 grep -Eq 'autoclean: scratch idle [0-9]+d → trash .*/\.fleet-trash/base-scratch-1\.' "$LOG" \
-  || fail "missing the 'autoclean: scratch idle <Nd> → trash <path>' line for scratch-1" "$(cat "$LOG")"
-[ "$(grep -c 'autoclean: scratch idle' "$LOG")" = 2 ] || fail "exactly two idle-reclaim log lines expected" "$(cat "$LOG")"
-[ "$(grep -c 'idle scratch worktree' "$EVENTS")" = 1 ] || fail "ONE digest notify expected" "$(cat "$EVENTS")"
-grep -q 'scratch-2 kept (clean, but a session ran here)' "$EVENTS" || fail "recent scratch-2 still surfaces once" "$(cat "$EVENTS")"
-grep -Eq 'scratch-(5|6) kept' "$EVENTS" && fail "idle kept scratches go to the digest, not one notify each" "$(cat "$EVENTS")"
-[ -s "$NOTIFY_LOG" ] && fail "a kept scratch is recorded in the alerts, never flashed (issue #1617)" "$(cat "$NOTIFY_LOG")"
+  || st_fail "missing the 'autoclean: scratch idle <Nd> → trash <path>' line for scratch-1" "$(cat "$LOG")"
+[ "$(grep -c 'autoclean: scratch idle' "$LOG")" = 2 ] || st_fail "exactly two idle-reclaim log lines expected" "$(cat "$LOG")"
+[ "$(grep -c 'idle scratch worktree' "$EVENTS")" = 1 ] || st_fail "ONE digest notify expected" "$(cat "$EVENTS")"
+grep -q 'scratch-2 kept (clean, but a session ran here)' "$EVENTS" || st_fail "recent scratch-2 still surfaces once" "$(cat "$EVENTS")"
+grep -Eq 'scratch-(5|6) kept' "$EVENTS" && st_fail "idle kept scratches go to the digest, not one notify each" "$(cat "$EVENTS")"
+[ -s "$NOTIFY_LOG" ] && st_fail "a kept scratch is recorded in the alerts, never flashed (issue #1617)" "$(cat "$NOTIFY_LOG")"
 st_pass "REAL: idle clean scratches trashed + logged; kept work announced in one digest"
 
 # ======================= digest cadence: once per 24h ======================
 n1="$(grep -c 'idle scratch worktree' "$EVENTS")"
 run_wac >/dev/null
-[ "$(grep -c 'idle scratch worktree' "$EVENTS")" = "$n1" ] || fail "a second sweep within 24h must not re-send the digest" "$(cat "$EVENTS")"
+[ "$(grep -c 'idle scratch worktree' "$EVENTS")" = "$n1" ] || st_fail "a second sweep within 24h must not re-send the digest" "$(cat "$EVENTS")"
 touch -t "$OLD" "$WORK/conf/logs/.scratch-idle-digest"   # the last digest is now > 24h old
 run_wac >/dev/null
-[ "$(grep -c 'idle scratch worktree' "$EVENTS")" = $((n1 + 1)) ] || fail "after 24h the digest must repeat" "$(cat "$EVENTS")"
+[ "$(grep -c 'idle scratch worktree' "$EVENTS")" = $((n1 + 1)) ] || st_fail "after 24h the digest must repeat" "$(cat "$EVENTS")"
 st_pass "DIGEST: at most once per 24h, and it repeats while the work is still there"
 
 printf '\nselftest OK: %s assertions passed (scratch idle age gate, #884)\n' "$pass"

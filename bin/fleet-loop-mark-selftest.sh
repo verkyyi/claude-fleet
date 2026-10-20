@@ -17,14 +17,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
-command -v python3 >/dev/null 2>&1 || { printf 'fleet-loop-mark: python3 absent — SKIP\n'; exit 0; }
-CHECKS=0
-fail() { printf 'fleet-loop-mark-selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')"; }
+st_need python3
+st_tally count
 
 # --- 1. the value model ------------------------------------------------------
-python3 - "$BIN" <<'PY' || fail "value model (see traceback above)"
+python3 - "$BIN" <<'PY' || st_fail "value model (see traceback above)"
 import json, os, runpy, sys, tempfile
 from pathlib import Path
 M = runpy.run_path(os.path.join(sys.argv[1], 'fleet_loop_mark.py'))
@@ -147,16 +146,11 @@ tf() { "$REAL_TMUX" -S "$SOCK" "$@"; }
 trap 'tf kill-server 2>/dev/null; rm -rf "$WORK"' EXIT
 trap 'exit 130' INT TERM HUP
 mkdir -p "$WORK/path" "$WORK/conf"
-cat > "$WORK/path/tmux" <<SH
-#!/bin/sh
-case "\${1:-}" in -L|-S) shift 2 ;; esac
-exec "$REAL_TMUX" -S "$SOCK" "\$@"
-SH
-chmod +x "$WORK/path/tmux"
+st_tmux_socket "$WORK/path" "$SOCK" strip
 PATH="$WORK/path:$PATH"; export PATH
 export FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
 SESS=fleet1331
-tf -f /dev/null new-session -d -s "$SESS" -n worker 'exec sleep 300' || fail "cannot start isolated tmux"
+tf -f /dev/null new-session -d -s "$SESS" -n worker 'exec sleep 300' || st_fail "cannot start isolated tmux"
 PANE=$(tf display-message -p -t "$SESS:worker" '#{pane_id}')
 WIN=$(tf display-message -p -t "$PANE" '#{window_id}')
 tf set-window-option -t "$PANE" @issue 1331
@@ -173,51 +167,51 @@ stop() { env TMUX="$TMUXV" TMUX_PANE="$PANE" sh "$BIN/set-claude-state.sh" 'done
 
 # --- 2. the PostToolUse hook ----------------------------------------------------
 hookpost '{"hook_event_name":"PostToolUse","tool_name":"ScheduleWakeup","tool_input":{"delaySeconds":1800,"prompt":"/loop check"}}'
-case "$(loopv)" in "kind=wakeup next="*" ttl=1800") CHECKS=$((CHECKS+1)) ;; *) fail "ScheduleWakeup must write @loop" "$(loopv)" ;; esac
+case "$(loopv)" in "kind=wakeup next="*" ttl=1800") CHECKS=$((CHECKS+1)) ;; *) st_fail "ScheduleWakeup must write @loop" "$(loopv)" ;; esac
 hookpost '{"tool_name":"ScheduleWakeup","tool_input":{"stop":true}}'
-eq "ScheduleWakeup stop:true clears @loop" "" "$(loopv)"
+st_eq "ScheduleWakeup stop:true clears @loop" "" "$(loopv)"
 hookpost '{"tool_name":"ScheduleWakeup","tool_input":{"delaySeconds":600}}' sdk-cli
-eq "a headless claude -p's schedule is not this pane's" "" "$(loopv)"
+st_eq "a headless claude -p's schedule is not this pane's" "" "$(loopv)"
 hookpost '{"tool_name":"Bash","tool_input":{"command":"true"}}'
-eq "an unrelated tool writes nothing" "" "$(loopv)"
+st_eq "an unrelated tool writes nothing" "" "$(loopv)"
 hookpost 'not json'
-eq "a malformed payload writes nothing" "" "$(loopv)"
+st_eq "a malformed payload writes nothing" "" "$(loopv)"
 hookpost '{"tool_name":"CronCreate","tool_input":{"cron":"7 * * * *","prompt":"x"},"tool_response":{"id":"ab12cd34"}}'
-case "$(loopv)" in "kind=cron id=ab12cd34@"*) CHECKS=$((CHECKS+1)) ;; *) fail "CronCreate must record the job id" "$(loopv)" ;; esac
+case "$(loopv)" in "kind=cron id=ab12cd34@"*) CHECKS=$((CHECKS+1)) ;; *) st_fail "CronCreate must record the job id" "$(loopv)" ;; esac
 
 # --- 3. the Stop hook + 4. every reader agree -----------------------------------
 stop
-eq "Stop with a pending cron job stamps looping" looping "$(st)"
+st_eq "Stop with a pending cron job stamps looping" looping "$(st)"
 . "$BIN/fleet-lib.sh"
 out=$(fleet_window_loop "$SESS" "$WIN"); rc=$?
-eq "fleet_window_loop answers active" "0 active cron:ab12cd34" "$rc $out"
+st_eq "fleet_window_loop answers active" "0 active cron:ab12cd34" "$rc $out"
 out=$(python3 "$BIN/fleet-reap-live.py" "$WIN" --socket-name "$SESS"); rc=$?
-eq "fleet-reap-live.py retains it" "1 retained:loop" "$rc $out"
+st_eq "fleet-reap-live.py retains it" "1 retained:loop" "$rc $out"
 # even a classifier/demote `done` stamped over it: the mark, not the state, decides
 tf set-window-option -t "$PANE" @claude_state 'done'
 out=$(FLEET_REAP_MIN_AGE=0 python3 "$BIN/fleet-reap-live.py" "$WIN" --socket-name "$SESS"); rc=$?
-eq "…ahead of the state and age gates" "1 retained:loop" "$rc $out"
+st_eq "…ahead of the state and age gates" "1 retained:loop" "$rc $out"
 
 hookpost '{"tool_name":"CronDelete","tool_input":{"id":"ab12cd34"}}'
-eq "CronDelete of the last job clears @loop" "" "$(loopv)"
+st_eq "CronDelete of the last job clears @loop" "" "$(loopv)"
 stop
-eq "Stop with no Loop stamps done (today's behaviour)" 'done' "$(st)"
+st_eq "Stop with no Loop stamps done (today's behaviour)" 'done' "$(st)"
 out=$(fleet_window_loop "$SESS" "$WIN"); rc=$?
-eq "fleet_window_loop answers none" "1 none unset" "$rc $out"
+st_eq "fleet_window_loop answers none" "1 none unset" "$rc $out"
 out=$(FLEET_REAP_MIN_AGE=0 python3 "$BIN/fleet-reap-live.py" "$WIN" --socket-name "$SESS"); rc=$?
-case "$out" in retained:loop) fail "no @loop must never answer retained:loop" "$out" ;; esac
+case "$out" in retained:loop) st_fail "no @loop must never answer retained:loop" "$out" ;; esac
 CHECKS=$((CHECKS+1))
 
 # a wakeup nobody renewed: past next + grace the Loop has stopped on its own
 now=$(date +%s)
 tf set-window-option -t "$PANE" @loop "kind=wakeup next=$((now - 3600)) ttl=1800"
 stop
-eq "Stop after an unrenewed wakeup lapsed stamps done" 'done' "$(st)"
+st_eq "Stop after an unrenewed wakeup lapsed stamps done" 'done' "$(st)"
 out=$(fleet_window_loop "$SESS" "$WIN"); rc=$?
-eq "fleet_window_loop: the lapsed mark reads expired" "1 none expired" "$rc $out"
+st_eq "fleet_window_loop: the lapsed mark reads expired" "1 none expired" "$rc $out"
 tf set-window-option -t "$PANE" @loop "kind=wakeup next=$((now + 600)) ttl=600"
 stop
-eq "a live wakeup stamps looping" looping "$(st)"
+st_eq "a live wakeup stamps looping" looping "$(st)"
 
 # a fleet-loop.py ledger loop with no @loop mark (a transferred Codex/Claude loop)
 tf set-window-option -u -t "$PANE" @loop
@@ -225,9 +219,9 @@ mkdir -p "$WORK/handoff/loop"
 printf '{"status":"active"}\n' > "$WORK/handoff/loop/state.json"
 tf set-window-option -t "$PANE" @handoff_manifest "$WORK/handoff/manifest.json"
 stop
-eq "a live loop ledger stamps looping" looping "$(st)"
+st_eq "a live loop ledger stamps looping" looping "$(st)"
 printf '{"status":"stopped"}\n' > "$WORK/handoff/loop/state.json"
 stop
-eq "a stopped loop ledger stamps done" 'done' "$(st)"
+st_eq "a stopped loop ledger stamps done" 'done' "$(st)"
 
 printf 'fleet-loop-mark-selftest: OK (%d checks)\n' "$CHECKS"

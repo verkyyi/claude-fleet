@@ -104,6 +104,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 S="$BIN/fleet-login-new.sh"
 [ -f "$S" ] || { printf 'selftest: %s not found\n' "$S" >&2; exit 2; }
 BASH_BIN=/bin/bash; [ -x "$BASH_BIN" ] || BASH_BIN=bash
@@ -113,12 +114,10 @@ WORK=$(cd "$WORK" && pwd -P)
 LPID='' FPID='' HPID='' SRUN=''
 trap 'kill $LPID $FPID $HPID 2>/dev/null; chmod -R u+rwX "$WORK" 2>/dev/null; rm -rf "$WORK" ${SRUN:+"$SRUN"}' EXIT INT TERM HUP
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
-contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — output does not contain [$3]:
+st_tally count
+contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]:
 $2";; esac; }
-not_contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 — output unexpectedly contains [$3]:
+not_contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 — output unexpectedly contains [$3]:
 $2";; esac; }
 mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 
@@ -212,7 +211,7 @@ done > "$FLEET_CREDSEP_PW"
 export HOME="$WORK/admin" FLEET_INSTALL_DAEMON_DIR="$WORK/LaunchDaemons" FLEET_INSTALL_BREW_PREFIX=/opt/homebrew
 mkdir -p "$HOME" "$FLEET_INSTALL_DAEMON_DIR" "$CALLER"
 # the fixture GitHub: the real launchd/ templates + fleet-install-apply.sh, at stable
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
+st_need git
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 FX="$WORK/fx"; mkdir -p "$FX/bin" "$FX/launchd"
@@ -242,7 +241,7 @@ BS
 chmod +x "$FX/bin/fleet-node-join.sh" "$FX/bin/fleet-login-bootstrap.sh"
 cp "$BIN/../launchd/"com.claude-fleet.*.plist.tmpl "$FX/launchd/" 2>/dev/null
 NTMPL=$(ls "$FX/launchd" | wc -l | tr -d ' ')
-[ "$NTMPL" -gt 0 ] || fail "no launchd/*.plist.tmpl beside bin/ — the fixture needs the real templates"
+[ "$NTMPL" -gt 0 ] || st_fail "no launchd/*.plist.tmpl beside bin/ — the fixture needs the real templates"
 git init -q -b master "$FX" && git -C "$FX" add -A && git -C "$FX" commit -qm stable && git -C "$FX" tag stable
 GB="$WORK/gh"; mkdir -p "$GB/erin"; git clone -q --bare "$FX" "$GB/verkyyi/claude-fleet.git"
 export FLEET_BOOTSTRAP_GIT_BASE="$GB"
@@ -279,7 +278,7 @@ mutations() { printf '%s\n' "$CALLS" | grep -v '^dscl ' | grep -c . ; }
 
 # --- A. dry run -------------------------------------------------------------
 run frank --full-name 'Frank V' --pubkey "$KEY" --share-pool --pool-src "$POOL"
-eq "A dry run exit" 0 "$RC"
+st_eq "A dry run exit" 0 "$RC"
 contains "A banner" "$OUT" "DRY RUN"
 contains "A addUser" "$OUT" "sudo sysadminctl -addUser frank -fullName Frank\\ V -shell /usr/bin/false"
 not_contains "A addUser has no password argv (#2396)" "$OUT" "-password"
@@ -287,7 +286,7 @@ contains "A password on dscl's stdin" "$OUT" "sudo dscl .   < passwd /Users/fran
 contains "A the shell back" "$OUT" "sudo dscl . -create /Users/frank UserShell /bin/zsh"
 not_contains "A never prompts (#1192)" "$OUT" "-password -"
 contains "A would write the password" "$OUT" "would write a random password to $HOME/frank-onboard/password.txt"
-[ -e "$HOME/frank-onboard" ] && fail "A dry run wrote the password file"
+[ -e "$HOME/frank-onboard" ] && st_fail "A dry run wrote the password file"
 contains "A home" "$OUT" 'sudo createhomedir -c -u frank'
 contains "A home 700 right after (#2414)" "$OUT" "sudo createhomedir -c -u frank
   \$ sudo chmod 700 $FLEET_LOGIN_HOMES/frank
@@ -300,16 +299,16 @@ not_contains "A no pool cp into the login" "$OUT" "sudo cp -p $POOL/alpha"
 contains "A pool into the store" "$OUT" "the tokens go into frank's credential store in step 7b"
 contains "A conf switches" "$OUT" "sudo install -m 600 <fleet.conf: [common] export FLEET_CRED_PROXY=1, export FLEET_CRED_SEPARATE=1> $FLEET_LOGIN_HOMES/frank/.config/claude-fleet/fleet.conf"
 contains "A credsep install" "$OUT" "sudo bash $BIN/fleet-credsep.sh install --login frank --fresh --install-dir $FLEET_LOGIN_HOMES/frank/.claude/fleet --pool-src $POOL"
-if [ -z "$DAEMONS" ]; then case "$OUT" in *"--fresh"*"[8] install frank"*) ;; *) fail "A 7b is not before the daemons (8)" ;; esac; fi
+if [ -z "$DAEMONS" ]; then case "$OUT" in *"--fresh"*"[8] install frank"*) ;; *) st_fail "A 7b is not before the daemons (8)" ;; esac; fi
 # --no-credsep is gone (issues #4607, #4675): an unknown option, nothing runs —
 # with the retired FLEET_CREDSEP_OPTIONAL=1 too
 for opt_ in 0 1; do
   if [ "$opt_" = 1 ]; then export FLEET_CREDSEP_OPTIONAL=1; fi
   run frank --full-name 'Frank V' --pubkey "$KEY" --share-pool --pool-src "$POOL" --no-credsep
   unset FLEET_CREDSEP_OPTIONAL
-  eq "A --no-credsep refused (optional=$opt_)" 2 "$RC"
+  st_eq "A --no-credsep refused (optional=$opt_)" 2 "$RC"
   contains "A --no-credsep unknown (optional=$opt_)" "$OUT" "unknown option: --no-credsep"
-  eq "A --no-credsep refused: nothing ran (optional=$opt_)" "" "$CALLS"
+  st_eq "A --no-credsep refused: nothing ran (optional=$opt_)" "" "$CALLS"
 done
 run frank --full-name 'Frank V' --pubkey "$KEY" --share-pool --pool-src "$POOL"
 not_contains "A no dotfile" "$OUT" ".DS_Store"
@@ -326,12 +325,12 @@ contains "A daemon install" "$OUT" "sudo install -m 644 <com.claude-fleet.frank.
 contains "A daemon bootstrap" "$OUT" "sudo launchctl bootstrap system $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.frank.spinner.plist"
 contains "A password path at the end" "$OUT" "password: $HOME/frank-onboard/password.txt (mode 600"
 contains "A says it was installed" "$OUT" "claude-fleet + Claude Code were installed for frank above (step 8b)"
-eq "A nothing executed" 0 "$(mutations)"
-eq "A nothing created" "" "$(ls "$FLEET_LOGIN_HOMES")"
-eq "A no daemon written" "" "$(ls "$FLEET_INSTALL_DAEMON_DIR")"
+st_eq "A nothing executed" 0 "$(mutations)"
+st_eq "A nothing created" "" "$(ls "$FLEET_LOGIN_HOMES")"
+st_eq "A no daemon written" "" "$(ls "$FLEET_INSTALL_DAEMON_DIR")"
 # --no-daemons: step 8 gone, the GUI sign-in is back as a human step
 run frank --full-name 'Frank V' --pubkey "$KEY" --no-daemons
-eq "A --no-daemons exit" 0 "$RC"
+st_eq "A --no-daemons exit" 0 "$RC"
 not_contains "A --no-daemons no step 8" "$OUT" "system LaunchDaemons"
 contains "A --no-daemons GUI step" "$OUT" "1. sign in as frank ONCE in the GUI"
 contains "A --no-daemons codex is 2" "$OUT" "2. as frank: ccquota codex login"
@@ -340,97 +339,97 @@ contains "A --no-daemons: installed, daemons wait" "$OUT" "claude-fleet + Claude
 # --- B. apply ---------------------------------------------------------------
 run frank --full-name 'Frank V' --pubkey "$KEY" --share-pool --pool-src "$POOL" --machine box --apply $DAEMONS
 BOUT=$OUT
-eq "B apply exit" 0 "$RC"
+st_eq "B apply exit" 0 "$RC"
 H="$FLEET_LOGIN_HOMES/frank"
 # the home was never opened to the admin's own process (#1213): still 000, and a
 # bare read of the clone inside it fails — the script got everything via sudo
-locked "$H" || fail "B home is readable to the admin after the run (mode $(mode "$H")) — the sudo shim did not relock it"
+locked "$H" || st_fail "B home is readable to the admin after the run (mode $(mode "$H")) — the sudo shim did not relock it"
 if [ "$LOCK_BITES" = 1 ]; then
-  ls "$H/.claude/fleet/launchd" >/dev/null 2>&1 && fail "B the admin can list the clone's launchd/ in a locked home — the lock model is broken"
+  ls "$H/.claude/fleet/launchd" >/dev/null 2>&1 && st_fail "B the admin can list the clone's launchd/ in a locked home — the lock model is broken"
 fi
 unlock_homes
 ORDER=$(printf '%s\n' "$CALLS" | grep -Ev '^(sudo|dscl) ' | awk '{print $1}' | uniq | tr '\n' ' ')
-eq "B call order" "sysadminctl createhomedir dseditgroup chown$([ -z "$DAEMONS" ] && echo " launchctl") " "$ORDER"
+st_eq "B call order" "sysadminctl createhomedir dseditgroup chown$([ -z "$DAEMONS" ] && echo " launchctl") " "$ORDER"
 # B2. the password (#1192): generated into the admin's home, 600, on argv, never in the output
 PWF="$HOME/frank-onboard/password.txt"
-[ -f "$PWF" ] || fail "B2 no password file at $PWF"
+[ -f "$PWF" ] || st_fail "B2 no password file at $PWF"
 PW=$(cat "$PWF")
-eq "B2 password length" 24 "${#PW}"
-eq "B2 password file mode" 600 "$(mode "$PWF")"
-eq "B2 onboard dir mode" 700 "$(mode "$HOME/frank-onboard")"
+st_eq "B2 password length" 24 "${#PW}"
+st_eq "B2 password file mode" 600 "$(mode "$PWF")"
+st_eq "B2 onboard dir mode" 700 "$(mode "$HOME/frank-onboard")"
 # no argv any shim saw carries it (#2396) — addUser, dscl, sudo, chown, …
 contains "B2 addUser shell-less, no password" "$CALLS" "sysadminctl -addUser frank -fullName Frank V -shell /usr/bin/false"
 not_contains "B2 no argv carries it" "$CALLS" "$PW"
 not_contains "B2 no -password argv at all" "$CALLS" "-password"
-eq "B2 dscl stdin carries it" "passwd /Users/frank $PW" "$(cat "$DLOG")"
+st_eq "B2 dscl stdin carries it" "passwd /Users/frank $PW" "$(cat "$DLOG")"
 ORD2=$(printf '%s\n' "$CALLS" | grep -E '^(sysadminctl -addUser|dscl \.$|dscl \. -create /Users/frank UserShell /bin/zsh$|createhomedir)' | awk '{print $1 $2 $3}' | tr '\n' ' ')
-eq "B2 addUser → passwd → shell → home" "sysadminctl-addUserfrank dscl. dscl.-create createhomedir-c-u " "$ORD2"
+st_eq "B2 addUser → passwd → shell → home" "sysadminctl-addUserfrank dscl. dscl.-create createhomedir-c-u " "$ORD2"
 not_contains "B2 never printed" "$OUT" "$PW"
 contains "B2 redacted on screen" "$OUT" "<redacted: $PWF>"
 contains "B2 path at the end" "$OUT" "password: $PWF (mode 600"
 contains "B ssh group argv" "$CALLS" "dseditgroup -o edit -a frank -t user com.apple.access_ssh"
-eq "B key content" "$(cat "$KEY")" "$(cat "$H/.ssh/authorized_keys")"
-eq "B .ssh mode" 700 "$(mode "$H/.ssh")"
-eq "B key mode" 600 "$(mode "$H/.ssh/authorized_keys")"
+st_eq "B key content" "$(cat "$KEY")" "$(cat "$H/.ssh/authorized_keys")"
+st_eq "B .ssh mode" 700 "$(mode "$H/.ssh")"
+st_eq "B key mode" 600 "$(mode "$H/.ssh/authorized_keys")"
 contains "B .ssh chown" "$CALLS" "chown -R frank:staff $H/.ssh"
 D="$H/.config/claude-fleet/accounts"
-eq "B pool set" "alpha alpha.conf beta beta.conf" "$(ls -A "$D" | tr '\n' ' ' | sed 's/ $//')"
-eq "B pool: the login holds the marker" "store:beta" "$(cat "$D/beta")"
-eq "B pool: the .conf travels" "CCQUOTA_ACCOUNT=beta" "$(cat "$D/beta.conf")"
-eq "B pool: the token is in the store" "tok-beta" "$(cat "$FLEET_CREDSEP_ROOT_BASE/frank/accounts/beta" 2>/dev/null)"
-eq "B pool: store token mode" 600 "$(mode "$FLEET_CREDSEP_ROOT_BASE/frank/accounts/beta")"
-eq "B pool dir mode" 700 "$(mode "$D")"
-for f in alpha alpha.conf beta beta.conf; do eq "B pool $f mode" 600 "$(mode "$D/$f")"; done
+st_eq "B pool set" "alpha alpha.conf beta beta.conf" "$(ls -A "$D" | tr '\n' ' ' | sed 's/ $//')"
+st_eq "B pool: the login holds the marker" "store:beta" "$(cat "$D/beta")"
+st_eq "B pool: the .conf travels" "CCQUOTA_ACCOUNT=beta" "$(cat "$D/beta.conf")"
+st_eq "B pool: the token is in the store" "tok-beta" "$(cat "$FLEET_CREDSEP_ROOT_BASE/frank/accounts/beta" 2>/dev/null)"
+st_eq "B pool: store token mode" 600 "$(mode "$FLEET_CREDSEP_ROOT_BASE/frank/accounts/beta")"
+st_eq "B pool dir mode" 700 "$(mode "$D")"
+for f in alpha alpha.conf beta beta.conf; do st_eq "B pool $f mode" 600 "$(mode "$D/$f")"; done
 contains "B config chown" "$CALLS" "chown frank:staff $H/.config $H/.config/claude-fleet"
 contains "B machine" "$OUT" "ccquota enroll --name box-frank"
-eq "B only .claude + .config + .ssh + .zshrc written" ".claude .config .ssh .zshrc" "$(ls -A "$H" | tr '\n' ' ' | sed 's/ $//')"
+st_eq "B only .claude + .config + .ssh + .zshrc written" ".claude .config .ssh .zshrc" "$(ls -A "$H" | tr '\n' ' ' | sed 's/ $//')"
 # B3. the clone (#1192): at stable, as the login; logs/ ready for the daemons' StandardErrorPath
 # in the login's conf dir, never the install (#4668)
-eq "B3 clone at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$H/.claude/fleet" rev-parse HEAD 2>/dev/null)"
-[ -d "$H/.config/claude-fleet/logs" ] || fail "B3 no logs/ in the login's conf dir"
-[ ! -e "$H/.claude/fleet/logs" ] || fail "B3 a logs/ in the install"
-eq "B3 only the clone under .claude" "fleet" "$(ls -A "$H/.claude" | tr '\n' ' ' | sed 's/ $//')"
+st_eq "B3 clone at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$H/.claude/fleet" rev-parse HEAD 2>/dev/null)"
+[ -d "$H/.config/claude-fleet/logs" ] || st_fail "B3 no logs/ in the login's conf dir"
+[ ! -e "$H/.claude/fleet/logs" ] || st_fail "B3 a logs/ in the install"
+st_eq "B3 only the clone under .claude" "fleet" "$(ls -A "$H/.claude" | tr '\n' ' ' | sed 's/ $//')"
 if [ -z "$DAEMONS" ]; then
   # B3. the daemons: every template, system shape, installed + bootstrapped
-  eq "B3 $NTMPL plists installed" "$NTMPL" "$(ls "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.frank.*.plist | wc -l | tr -d ' ')"
-  eq "B3 $NTMPL bootstraps" "$NTMPL" "$(grep -c '^launchctl bootstrap system ' "$LOG")"
+  st_eq "B3 $NTMPL plists installed" "$NTMPL" "$(ls "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.frank.*.plist | wc -l | tr -d ' ')"
+  st_eq "B3 $NTMPL bootstraps" "$NTMPL" "$(grep -c '^launchctl bootstrap system ' "$LOG")"
   for f in "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.frank.*.plist; do
     u=${f##*/com.claude-fleet.frank.}; u=${u%.plist}
-    eq "B3 $u Label" "com.claude-fleet.frank.$u" "$(plutil -extract Label raw -o - "$f")"
-    eq "B3 $u UserName" frank "$(plutil -extract UserName raw -o - "$f")"
-    eq "B3 $u mode" 644 "$(mode "$f")"
+    st_eq "B3 $u Label" "com.claude-fleet.frank.$u" "$(plutil -extract Label raw -o - "$f")"
+    st_eq "B3 $u UserName" frank "$(plutil -extract UserName raw -o - "$f")"
+    st_eq "B3 $u mode" 644 "$(mode "$f")"
     contains "B3 $u runs the login's clone" "$(plutil -extract ProgramArguments.2 raw -o - "$f")" "$H/.claude/fleet/"
-    ok_bs=$(grep -c "^launchctl bootstrap system $f$" "$LOG"); eq "B3 $u bootstrapped once" 1 "$ok_bs"
+    ok_bs=$(grep -c "^launchctl bootstrap system $f$" "$LOG"); st_eq "B3 $u bootstrapped once" 1 "$ok_bs"
   done
   # #1213: the templates were listed + read AS THE LOGIN (the admin cannot read a
   # 700 home), rendered here, and the count printed matches what was installed
   contains "B3 templates listed as the login" "$OUT" "sudo -u frank -H ls -1 $H/.claude/fleet/launchd"
   contains "B3 read as the login" "$OUT" "read as frank"
-  eq "B3 $NTMPL templates + the apply script + its fleet-daemon-lib.sh read as the login (#1495)" "$((NTMPL + 2))" "$(grep -c '^sudo cat$' "$LOG")"
+  st_eq "B3 $NTMPL templates + the apply script + its fleet-daemon-lib.sh read as the login (#1495)" "$((NTMPL + 2))" "$(grep -c '^sudo cat$' "$LOG")"
   contains "B3 installed N/N" "$OUT" "installed $NTMPL/$NTMPL"
   not_contains "B3 never 'nothing to install'" "$OUT" "nothing to install"
   # the login's own first-login apply must find them current: same render, from its clone
   same=$(FLEET_INSTALL_LOGIN=frank FLEET_INSTALL_HOME="$H" bash "$H/.claude/fleet/bin/fleet-install-apply.sh" --render-system spinner --root "$H/.claude/fleet" | plutil -convert xml1 -o - -)
-  eq "B3 render matches the bootstrap's" "$same" "$(plutil -convert xml1 -o - "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.frank.spinner.plist")"
+  st_eq "B3 render matches the bootstrap's" "$same" "$(plutil -convert xml1 -o - "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.frank.spinner.plist")"
   not_contains "B3 no GUI step" "$OUT" "ONCE in the GUI"
 fi
 # ~/.zshrc (issues #1191, #2702): the ~/.local/bin PATH line ALONE — no banner,
 # no client on login, no cw.zsh — exactly what the bootstrap prints, owned by the login
 BS="$BIN/fleet-login-bootstrap.sh"
-eq "B zshrc = the PATH line alone" "$(bash "$BS" --print-path-line)" "$(cat "$H/.zshrc")"
+st_eq "B zshrc = the PATH line alone" "$(bash "$BS" --print-path-line)" "$(cat "$H/.zshrc")"
 not_contains "B no login block (#2702)" "$(cat "$H/.zshrc")" "claude-fleet/shell/"
-eq "B zshrc mode" 644 "$(mode "$H/.zshrc")"
+st_eq "B zshrc mode" 644 "$(mode "$H/.zshrc")"
 contains "B zshrc chown" "$CALLS" "chown frank:staff $H/.zshrc"
 # B2. --password-file: its first line, nothing generated
 printf 'hunter2-from-file\nsecond line ignored\n' > "$WORK/pw.txt"
 : > "$LOG"; : > "$DLOG"; OUT=$("$BASH_BIN" "$S" pam --full-name P --pubkey "$KEY" --password-file "$WORK/pw.txt" --apply --no-daemons 2>&1); RC=$?
 CALLS=$(cat "$LOG"); unlock_homes
-eq "B2 --password-file exit" 0 "$RC"
+st_eq "B2 --password-file exit" 0 "$RC"
 not_contains "B2 --password-file on no argv" "$CALLS" "hunter2-from-file"
-eq "B2 --password-file on dscl's stdin" "passwd /Users/pam hunter2-from-file" "$(cat "$DLOG")"
+st_eq "B2 --password-file on dscl's stdin" "passwd /Users/pam hunter2-from-file" "$(cat "$DLOG")"
 not_contains "B2 --password-file never printed" "$OUT" "hunter2-from-file"
 contains "B2 --password-file redacted" "$OUT" "<redacted: $WORK/pw.txt>"
-[ -e "$HOME/pam-onboard/password.txt" ] && fail "B2 --password-file still generated one"
+[ -e "$HOME/pam-onboard/password.txt" ] && st_fail "B2 --password-file still generated one"
 contains "B2 --password-file at the end" "$OUT" "password: the first line of $WORK/pw.txt (--password-file)"
 
 # --- M. separated from the first moment (issue #2294, EPIC #2293 C1) ---------
@@ -440,11 +439,11 @@ contains "B2 --password-file at the end" "$OUT" "password: the first line of $WO
 # through the proxy (the store's token on the way out).
 unlock_homes
 CD="$H/.config/claude-fleet"
-eq "M no credential file in the home" "" "$(cd "$H" && find . \( -name .credentials.json -o -name auth.json -o -name node.env \) -print)"
-eq "M no pool token in the home" "" "$(grep -rl 'tok-alpha\|tok-beta' "$H" 2>/dev/null)"
+st_eq "M no credential file in the home" "" "$(cd "$H" && find . \( -name .credentials.json -o -name auth.json -o -name node.env \) -print)"
+st_eq "M no pool token in the home" "" "$(grep -rl 'tok-alpha\|tok-beta' "$H" 2>/dev/null)"
 contains "M fleet.conf: the proxy" "$(cat "$CD/fleet.conf")" "export FLEET_CRED_PROXY=1"
 contains "M fleet.conf: separated" "$(cat "$CD/fleet.conf")" "export FLEET_CRED_SEPARATE=1"
-eq "M fleet.conf mode" 600 "$(mode "$CD/fleet.conf")"
+st_eq "M fleet.conf mode" 600 "$(mode "$CD/fleet.conf")"
 contains "M nothing to move: a fresh login" "$BOUT" "credentials: 0 moved"
 contains "M pool into the store" "$BOUT" "pool: 2 account(s) from $POOL"
 st=$(FLEET_CONF_DIR="$CD" bash "$H/.claude/fleet/bin/fleet-credsep.sh" status 2>&1)
@@ -452,7 +451,7 @@ contains "M status separated (as the login, its own clone)" "$st" "separated · 
 contains "M the hub reads the verdict last" "$(printf '%s\n' "$BOUT" | tail -n 1)" "credsep: pending"
 # the login's account judge reads a pool label as usable (the picker names it,
 # and the proxy then mints for it) — a `hub:` marker with no lease file would not
-eq "M the account judge: beta usable" "beta	valid" "$(FLEET_CONF_DIR="$CD" FLEET_STATE_DIR="$WORK/acct-state" python3 "$BIN/.fleet-account.py" claude-login beta 2>&1)"
+st_eq "M the account judge: beta usable" "beta	valid" "$(FLEET_CONF_DIR="$CD" FLEET_STATE_DIR="$WORK/acct-state" python3 "$BIN/.fleet-account.py" claude-login beta 2>&1)"
 # the machine's one proxy, as its service starts it (root's code copy), against a
 # fake far end — frank is its tenant (#4674: no login gets a proxy of its own)
 cat > "$WORK/fake.py" <<'PY2'
@@ -479,7 +478,7 @@ for _ in $(seq 1 300); do [ -s "$WORK/fake.port" ] && break; sleep 0.1; done
 FP=$(cat "$WORK/fake.port" 2>/dev/null)
 # root's settings for frank (issue #2290), which install wrote; the shared proxy's
 # upstream is the process's (the sandbox launcher hands its FLEET_CRED_* through)
-[ -f "$FLEET_CREDSEP_LIB/frank.conf" ] || fail "M install wrote no root settings $FLEET_CREDSEP_LIB/frank.conf"
+[ -f "$FLEET_CREDSEP_LIB/frank.conf" ] || st_fail "M install wrote no root settings $FLEET_CREDSEP_LIB/frank.conf"
 # every login here is one uid (the sandbox): the launcher writes the tenants file,
 # and the proxy serves frank alone from it — a control socket tells logins by uid
 HOME="$WORK/admin" FLEET_CRED_ANTHROPIC_URL="http://127.0.0.1:$FP" \
@@ -488,17 +487,17 @@ TF="$FLEET_CREDSEP_ROOT_BASE/.shared/tenants.json"
 for _ in $(seq 1 300); do [ -s "$FLEET_CREDSEP_RUN_BASE/.shared/port" ] && break; sleep 0.1; done
 kill "$(cat "$FLEET_CREDSEP_RUN_BASE/.shared/pid" 2>/dev/null)" "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["tenants"]=[t for t in d["tenants"] if t["login"]=="frank"]; json.dump(d, open(sys.argv[2],"w"))' \
-  "$TF" "$WORK/frank-tenants.json" || fail "M the launcher wrote no tenants file: $(cat "$WORK/launch.err")"
+  "$TF" "$WORK/frank-tenants.json" || st_fail "M the launcher wrote no tenants file: $(cat "$WORK/launch.err")"
 rm -f "$FLEET_CREDSEP_RUN_BASE/.shared/port"
 HOME="$WORK/admin" FLEET_CREDSEP_TEST=1 FLEET_CRED_ANTHROPIC_URL="http://127.0.0.1:$FP" \
   python3 -I "$FLEET_CREDSEP_LIB/fleet-cred-proxy.py" serve --shared "$WORK/frank-tenants.json" --max-seconds 120 2>>"$WORK/launch.err" & LPID=$!
 for _ in $(seq 1 300); do [ -s "$FLEET_CREDSEP_RUN_BASE/.shared/port" ] && [ -S "$FLEET_CREDSEP_RUN_BASE/.shared/ctl.sock" ] && break; sleep 0.1; done
 PORT=$(cat "$FLEET_CREDSEP_RUN_BASE/.shared/port" 2>/dev/null)
-[ -n "$PORT" ] || fail "M the proxy did not start: $(cat "$WORK/launch.err" | tr "\n" " ")"
+[ -n "$PORT" ] || st_fail "M the proxy did not start: $(cat "$WORK/launch.err" | tr "\n" " ")"
 tok=$(FLEET_CONF_DIR="$CD" bash "$H/.claude/fleet/bin/fleet-cred-proxy.sh" mint --account beta --sid s1 2>&1)
-case "$tok" in fcp1.*) ;; *) fail "M mint: $tok" ;; esac
+case "$tok" in fcp1.*) ;; *) st_fail "M mint: $tok" ;; esac
 code=$(curl -s --max-time 60 -o "$WORK/l.body" -w '%{http_code}' -H "Authorization: Bearer $tok" -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$PORT/v1/messages")
-eq "M a session's request is answered through the proxy" 200 "$code"
+st_eq "M a session's request is answered through the proxy" 200 "$code"
 contains "M ... carrying the store's token, which the login never held" "$(cat "$WORK/fake.log" 2>/dev/null)" "POST /v1/messages auth=Bearer tok-"
 kill "$LPID" "$FPID" 2>/dev/null; wait "$LPID" "$FPID" 2>/dev/null; LPID='' FPID=''
 # a pool token put back at the login's path is a leak the doctor names (the
@@ -514,36 +513,36 @@ printf 'store:beta\n' > "$CD/accounts/beta"
 # --no-credsep is gone (issue #4675): no run copies a pool token into a login
 : > "$LOG"; OUT=$(FLEET_CREDSEP_OPTIONAL=1 "$BASH_BIN" "$S" uma --full-name N --pubkey "$KEY" --share-pool --pool-src "$POOL" --no-credsep --apply --no-daemons 2>&1); RC=$?
 unlock_homes
-eq "M --no-credsep refused" 2 "$RC"
-[ -e "$FLEET_LOGIN_HOMES/uma/.config/claude-fleet/accounts/beta" ] && fail "M --no-credsep: a pool token in the login"
+st_eq "M --no-credsep refused" 2 "$RC"
+[ -e "$FLEET_LOGIN_HOMES/uma/.config/claude-fleet/accounts/beta" ] && st_fail "M --no-credsep: a pool token in the login"
 # 7b refused (a login that is not fresh, a store that cannot be made) → the run fails, never hands it out
 : > "$LOG"; OUT=$(FLEET_CREDSEP_ROOT_BASE=/dev/null/nope "$BASH_BIN" "$S" vee --full-name V --pubkey "$KEY" --apply --no-daemons 2>&1); RC=$?
 unlock_homes
-eq "M 7b failing → exit 1" 1 "$RC"
+st_eq "M 7b failing → exit 1" 1 "$RC"
 contains "M 7b failing stops at it" "$OUT" "FAILED at step"
 not_contains "M 7b failing: never 'separated'" "$OUT" "credsep: separated"
 
 # --- C. already exists -------------------------------------------------------
 run frank --full-name V --pubkey "$KEY"
-eq "C home exists → 3" 3 "$RC"
-eq "C home exists nothing run" 0 "$(mutations)"
+st_eq "C home exists → 3" 3 "$RC"
+st_eq "C home exists nothing run" 0 "$(mutations)"
 for m in "" --apply; do
   : > "$LOG"; OUT=$(FAKE_EXISTING='root victor2' "$BASH_BIN" "$S" victor2 --full-name V --pubkey "$KEY" $m 2>&1); RC=$?
   CALLS=$(cat "$LOG"); unlock_homes
-  eq "C login exists → 3 ($m)" 3 "$RC"
+  st_eq "C login exists → 3 ($m)" 3 "$RC"
   contains "C says exists ($m)" "$OUT" "already exists"
-  eq "C nothing run ($m)" 0 "$(mutations)"
+  st_eq "C nothing run ($m)" 0 "$(mutations)"
 done
-[ -e "$FLEET_LOGIN_HOMES/victor2" ] && fail "C created a home for an existing login"
+[ -e "$FLEET_LOGIN_HOMES/victor2" ] && st_fail "C created a home for an existing login"
 
 # --- D. no ssh access group --------------------------------------------------
 : > "$LOG"; OUT=$(FAKE_SSH_GROUP=0 "$BASH_BIN" "$S" dora --full-name D --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
 CALLS=$(cat "$LOG"); unlock_homes
-eq "D exit" 0 "$RC"
+st_eq "D exit" 0 "$RC"
 contains "D skipped" "$OUT" "skipped: no com.apple.access_ssh"
 not_contains "D no dseditgroup" "$CALLS" "dseditgroup"
-eq "D key mode" 600 "$(mode "$FLEET_LOGIN_HOMES/dora/.ssh/authorized_keys")"
-[ -e "$FLEET_LOGIN_HOMES/dora/.config/claude-fleet/accounts" ] && fail "D wrote accounts/ without --share-pool"
+st_eq "D key mode" 600 "$(mode "$FLEET_LOGIN_HOMES/dora/.ssh/authorized_keys")"
+[ -e "$FLEET_LOGIN_HOMES/dora/.config/claude-fleet/accounts" ] && st_fail "D wrote accounts/ without --share-pool"
 
 # --- E. usage ---------------------------------------------------------------
 : > "$WORK/empty.pub"
@@ -566,32 +565,32 @@ for args in "Bad!Name --full-name X --pubkey $KEY" \
             ""; do
   # shellcheck disable=SC2086  # deliberate word-split of the case's argv
   run $args
-  eq "E exit 2 [$args]" 2 "$RC"
-  eq "E nothing run [$args]" 0 "$(mutations)"
+  st_eq "E exit 2 [$args]" 2 "$RC"
+  st_eq "E nothing run [$args]" 0 "$(mutations)"
   not_contains "E bash32 [$args]" "$OUT" "unbound variable"
 done
-[ -e "$FLEET_LOGIN_HOMES/eve" ] && fail "E created a home on a usage error"
+[ -e "$FLEET_LOGIN_HOMES/eve" ] && st_fail "E created a home on a usage error"
 # a digit-leading login is a login (macOS allows it — issue #2105, `24acme`)
 run 24acme --full-name X --pubkey "$KEY"
-eq "E digit-leading dry run exit" 0 "$RC"
+st_eq "E digit-leading dry run exit" 0 "$RC"
 contains "E digit-leading addUser" "$OUT" "sysadminctl -addUser 24acme"
 # an empty key is fine for a PREVIEW (the evidence run uses /dev/null) — it warns
 run eve --full-name X --pubkey /dev/null
-eq "E empty key dry run exit" 0 "$RC"
+st_eq "E empty key dry run exit" 0 "$RC"
 contains "E empty key warns" "$OUT" "WARN"
 
 # --- F. a failing step stops the run ------------------------------------------
 : > "$LOG"; OUT=$(FAKE_FAIL=dseditgroup "$BASH_BIN" "$S" fay --full-name F --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
 unlock_homes
-eq "F exit 1" 1 "$RC"
+st_eq "F exit 1" 1 "$RC"
 contains "F says where" "$OUT" "FAILED at step 3"
-[ -e "$FLEET_LOGIN_HOMES/fay/.ssh" ] && fail "F kept going after a failed step"
+[ -e "$FLEET_LOGIN_HOMES/fay/.ssh" ] && st_fail "F kept going after a failed step"
 
 # --- G. bash 3.2 --------------------------------------------------------------
 not_contains "G bash32 failed step" "$OUT" "unbound variable"
 run gus --full-name G --pubkey "$KEY"
 not_contains "G bash32 no pool" "$OUT" "unbound variable"
-eq "G no pool exit" 0 "$RC"
+st_eq "G no pool exit" 0 "$RC"
 
 # --- H. a cwd the login cannot read (issue #1216) ------------------------------
 # docs/dev/SHARED-MACHINE.md's example, typed where the admin actually is: inside
@@ -600,33 +599,33 @@ eq "G no pool exit" 0 "$RC"
 # family as sync-logins' #1162). The script runs them from / — and resolves
 # every relative path argument first, so they are still found.
 cp "$KEY" "$CALLER/hal.pub"; mkdir -p "$CALLER/pool"; cp -p "$POOL"/alpha "$POOL"/alpha.conf "$POOL"/beta "$POOL"/beta.conf "$CALLER/pool/"; printf 'pw-from-cwd\n' > "$CALLER/pw.txt"
-( cd "$CALLER" && "$WORK/shim/sudo" -u hal -H git --version >/dev/null 2>&1 ) && fail "H the shim does not refuse a -u run from the closed cwd"
-( cd "$CALLER" && "$WORK/shim/sudo" tee /dev/null </dev/null >/dev/null 2>&1 ) || fail "H the shim refuses a root (no -u) run from the closed cwd"
+( cd "$CALLER" && "$WORK/shim/sudo" -u hal -H git --version >/dev/null 2>&1 ) && st_fail "H the shim does not refuse a -u run from the closed cwd"
+( cd "$CALLER" && "$WORK/shim/sudo" tee /dev/null </dev/null >/dev/null 2>&1 ) || st_fail "H the shim refuses a root (no -u) run from the closed cwd"
 hrun() { : > "$LOG"; : > "$DLOG"; OUT=$(cd "$CALLER" && "$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS=$(cat "$LOG"); unlock_homes; }
 hrun hal --full-name 'Hal H' --pubkey hal.pub --share-pool --pool-src ./pool --password-file pw.txt --apply $DAEMONS
-eq "H apply from the closed cwd: exit 0" 0 "$RC"
+st_eq "H apply from the closed cwd: exit 0" 0 "$RC"
 not_contains "H no getcwd death" "$OUT" "Unable to read current working directory"
 not_contains "H no failed step" "$OUT" "FAILED at step"
 HH="$FLEET_LOGIN_HOMES/hal"
 contains "H the install ran as the login (sudo -u … env … fleet-login-install.sh)" "$CALLS" "sudo env"
-eq "H clone at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$HH/.claude/fleet" rev-parse HEAD 2>/dev/null)"
-eq "H relative --pubkey found" "$(cat "$KEY")" "$(cat "$HH/.ssh/authorized_keys")"
-eq "H relative --pool-src found" "alpha alpha.conf beta beta.conf" "$(ls -A "$HH/.config/claude-fleet/accounts" | tr '\n' ' ' | sed 's/ $//')"
-eq "H relative --password-file found" "passwd /Users/hal pw-from-cwd" "$(cat "$DLOG")"
+st_eq "H clone at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$HH/.claude/fleet" rev-parse HEAD 2>/dev/null)"
+st_eq "H relative --pubkey found" "$(cat "$KEY")" "$(cat "$HH/.ssh/authorized_keys")"
+st_eq "H relative --pool-src found" "alpha alpha.conf beta beta.conf" "$(ls -A "$HH/.config/claude-fleet/accounts" | tr '\n' ' ' | sed 's/ $//')"
+st_eq "H relative --password-file found" "passwd /Users/hal pw-from-cwd" "$(cat "$DLOG")"
 contains "H transcript: key path absolute" "$OUT" "sudo tee -a $HH/.ssh/authorized_keys < $CALLER/hal.pub"
 contains "H transcript: pool path absolute" "$OUT" "--pool-src $CALLER/pool"
 contains "H transcript: password path absolute" "$OUT" "<redacted: $CALLER/pw.txt>"
-[ -e "$HOME/hal-onboard/password.txt" ] && fail "H --password-file still generated one"
+[ -e "$HOME/hal-onboard/password.txt" ] && st_fail "H --password-file still generated one"
 # a dry run from there: the same absolute paths on screen, nothing executed
 hrun ian --full-name I --pubkey hal.pub --share-pool --pool-src pool
-eq "H dry run exit" 0 "$RC"
+st_eq "H dry run exit" 0 "$RC"
 contains "H dry run: key path absolute" "$OUT" "sudo tee -a $FLEET_LOGIN_HOMES/ian/.ssh/authorized_keys < $CALLER/hal.pub"
 contains "H dry run: pool path absolute" "$OUT" "--pool-src $CALLER/pool"
-eq "H dry run nothing executed" 0 "$(mutations)"
-[ -e "$FLEET_LOGIN_HOMES/ian" ] && fail "H dry run created a home"
+st_eq "H dry run nothing executed" 0 "$(mutations)"
+[ -e "$FLEET_LOGIN_HOMES/ian" ] && st_fail "H dry run created a home"
 # a relative path that does not exist is still the usual exit 2, from there too
 hrun jo --full-name J --pubkey nope.pub
-eq "H missing relative key → 2" 2 "$RC"
+st_eq "H missing relative key → 2" 2 "$RC"
 not_contains "H bash32" "$OUT" "unbound variable"
 # --- I. 0 templates (#1213) -----------------------------------------------------
 # a stable whose clone carries no launchd/*.plist.tmpl: --apply FAILS at step 8,
@@ -637,26 +636,26 @@ GB2="$WORK/gh2"; mkdir -p "$GB2/erin"; git clone -q --bare "$FX2" "$GB2/verkyyi/
 if [ -z "$DAEMONS" ]; then
   : > "$LOG"; OUT=$(FLEET_BOOTSTRAP_GIT_BASE="$GB2" "$BASH_BIN" "$S" kim --full-name K --pubkey "$KEY" --share-pool --pool-src "$POOL" --apply 2>&1); RC=$?
   CALLS=$(cat "$LOG"); unlock_homes
-  eq "I 0 templates → exit 1" 1 "$RC"
+  st_eq "I 0 templates → exit 1" 1 "$RC"
   contains "I fails at step 8" "$OUT" "FAILED at step 8"
   contains "I names the dir + who read it" "$OUT" "no launchd/com.claude-fleet.*.plist.tmpl in $FLEET_LOGIN_HOMES/kim/.claude/fleet/launchd (read as kim)"
   contains "I says 0" "$OUT" "0 background services"
   not_contains "I never 'nothing to install'" "$OUT" "nothing to install"
-  for f in "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.kim.*; do [ -e "$f" ] && fail "I installed $f with 0 templates"; done
+  for f in "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.kim.*; do [ -e "$f" ] && st_fail "I installed $f with 0 templates"; done
   not_contains "I nothing bootstrapped" "$CALLS" "launchctl bootstrap"
-  eq "I clone happened first" "$(git -C "$FX2" rev-parse stable)" "$(git -C "$FLEET_LOGIN_HOMES/kim/.claude/fleet" rev-parse HEAD 2>/dev/null)"
+  st_eq "I clone happened first" "$(git -C "$FX2" rev-parse stable)" "$(git -C "$FLEET_LOGIN_HOMES/kim/.claude/fleet" rev-parse HEAD 2>/dev/null)"
 fi
 # a dry run has no clone: it previews from THIS install's launchd/ — none there
 # is a WARN, not a failure (--apply reads the clone's)
 NL="$WORK/nolaunchd/bin"; mkdir -p "$NL"; ln -s "$BIN"/* "$NL/"
 : > "$LOG"; OUT=$("$BASH_BIN" "$NL/fleet-login-new.sh" lou --full-name L --pubkey "$KEY" 2>&1); RC=$?
 CALLS=$(cat "$LOG")
-eq "I dry run without launchd/ exits 0" 0 "$RC"
+st_eq "I dry run without launchd/ exits 0" 0 "$RC"
 contains "I dry run warns" "$OUT" "WARN: no launchd/*.plist.tmpl in $NL/../launchd"
 contains "I dry run says 0" "$OUT" "[7] install lou's 0 background services"
 not_contains "I dry run never 'nothing to install'" "$OUT" "nothing to install"
-eq "I dry run nothing executed" 0 "$(mutations)"
-[ -e "$FLEET_LOGIN_HOMES/lou" ] && fail "I dry run created a home"
+st_eq "I dry run nothing executed" 0 "$(mutations)"
+[ -e "$FLEET_LOGIN_HOMES/lou" ] && st_fail "I dry run created a home"
 
 # --- J. the welcome letter + the temporary key (issue #1195) --------------------
 # No --pubkey: a temporary ed25519 pair in the ADMIN's onboard dir (700), its
@@ -667,21 +666,21 @@ eq "I dry run nothing executed" 0 "$(mutations)"
 if command -v ssh-keygen >/dev/null 2>&1; then
   : > "$LOG"; OUT=$(FLEET_SSH_PUBLIC_HOST=ssh.example.test FLEET_SSH_PUBLIC_PORT=22022 "$BASH_BIN" "$S" wen --full-name 'Wen W' --machine box --apply --no-daemons 2>&1); RC=$?
   CALLS=$(cat "$LOG"); unlock_homes
-  eq "J apply with no --pubkey: exit 0" 0 "$RC"
+  st_eq "J apply with no --pubkey: exit 0" 0 "$RC"
   not_contains "J no failed step" "$OUT" "FAILED at step"
   not_contains "J bash32" "$OUT" "unbound variable"
   OB="$HOME/wen-onboard"; KF="$OB/id_ed25519"; WF="$OB/welcome.txt"; KH="$FLEET_LOGIN_HOMES/wen"
-  [ -f "$KF" ] && [ -f "$KF.pub" ] || fail "J no temporary key pair at $KF"
-  eq "J onboard dir mode" 700 "$(mode "$OB")"
-  eq "J private key mode" 600 "$(mode "$KF")"
-  eq "J welcome mode" 600 "$(mode "$WF")"
-  eq "J password file beside it" 600 "$(mode "$OB/password.txt")"
-  eq "J the onboard dir holds exactly the four" "id_ed25519 id_ed25519.pub password.txt welcome.txt" "$(ls -A "$OB" | tr '\n' ' ' | sed 's/ $//')"
-  eq "J the pub half is the installed key" "$(cat "$KF.pub")" "$(cat "$KH/.ssh/authorized_keys")"
-  eq "J key mode" 600 "$(mode "$KH/.ssh/authorized_keys")"
+  [ -f "$KF" ] && [ -f "$KF.pub" ] || st_fail "J no temporary key pair at $KF"
+  st_eq "J onboard dir mode" 700 "$(mode "$OB")"
+  st_eq "J private key mode" 600 "$(mode "$KF")"
+  st_eq "J welcome mode" 600 "$(mode "$WF")"
+  st_eq "J password file beside it" 600 "$(mode "$OB/password.txt")"
+  st_eq "J the onboard dir holds exactly the four" "id_ed25519 id_ed25519.pub password.txt welcome.txt" "$(ls -A "$OB" | tr '\n' ' ' | sed 's/ $//')"
+  st_eq "J the pub half is the installed key" "$(cat "$KF.pub")" "$(cat "$KH/.ssh/authorized_keys")"
+  st_eq "J key mode" 600 "$(mode "$KH/.ssh/authorized_keys")"
   contains "J key comment (greppable for the swap)" "$(cat "$KF.pub")" " wen-onboard-temp"
-  eq "J private key parses back to the public line" "$(ssh-keygen -y -f "$KF" | cut -d' ' -f1,2)" "$(cut -d' ' -f1,2 "$KF.pub")"
-  eq "J only .claude + .config (7b: fleet.conf + credsep.json) + .ssh + .zshrc in the login's home" ".claude .config .ssh .zshrc" "$(ls -A "$KH" | tr '\n' ' ' | sed 's/ $//')"
+  st_eq "J private key parses back to the public line" "$(ssh-keygen -y -f "$KF" | cut -d' ' -f1,2)" "$(cut -d' ' -f1,2 "$KF.pub")"
+  st_eq "J only .claude + .config (7b: fleet.conf + credsep.json) + .ssh + .zshrc in the login's home" ".claude .config .ssh .zshrc" "$(ls -A "$KH" | tr '\n' ' ' | sed 's/ $//')"
   contains "J transcript: the temp pub is what tee'd" "$OUT" "sudo tee -a $KH/.ssh/authorized_keys < $KF.pub"
   contains "J transcript: key=temporary" "$OUT" "key=temporary (generated)  welcome=zh"
   contains "J transcript: step 9" "$OUT" "write the welcome letter (zh) → $WF (mode 600"
@@ -716,13 +715,13 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   not_contains "J letter: never even the password path" "$W" "password.txt"
   # the swap step's grep really drops that line and only that line
   printf '%s\nssh-ed25519 AAAAOWN wen@own\n' "$(cat "$KF.pub")" > "$WORK/ak"
-  eq "J swap grep keeps the own key only" "ssh-ed25519 AAAAOWN wen@own" "$(grep -v ' wen-onboard-temp$' "$WORK/ak")"
+  st_eq "J swap grep keeps the own key only" "ssh-ed25519 AAAAOWN wen@own" "$(grep -v ' wen-onboard-temp$' "$WORK/ak")"
   # J2. --pubkey + --lang en: their own key, no private key block, English
   : > "$LOG"; OUT=$(FLEET_SSH_PUBLIC_HOST=ssh.example.test FLEET_SSH_PUBLIC_PORT=22022 "$BASH_BIN" "$S" lee --full-name 'Lee L' --pubkey "$KEY" --lang en --apply --no-daemons 2>&1); RC=$?
   unlock_homes
-  eq "J2 --pubkey --lang en exit" 0 "$RC"
-  [ -e "$HOME/lee-onboard/id_ed25519" ] && fail "J2 generated a temporary key although --pubkey was given"
-  eq "J2 onboard dir: password + letter only" "password.txt welcome.txt" "$(ls -A "$HOME/lee-onboard" | tr '\n' ' ' | sed 's/ $//')"
+  st_eq "J2 --pubkey --lang en exit" 0 "$RC"
+  [ -e "$HOME/lee-onboard/id_ed25519" ] && st_fail "J2 generated a temporary key although --pubkey was given"
+  st_eq "J2 onboard dir: password + letter only" "password.txt welcome.txt" "$(ls -A "$HOME/lee-onboard" | tr '\n' ' ' | sed 's/ $//')"
   W=$(cat "$HOME/lee-onboard/welcome.txt")
   contains "J2 English" "$W" "How to connect"
   not_contains "J2 not Chinese" "$W" "怎么连"
@@ -736,7 +735,7 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   # J3. host unset: a visible placeholder in the letter + a WARN on the terminal; port 22
   : > "$LOG"; OUT=$(env -u FLEET_SSH_PUBLIC_HOST -u FLEET_SSH_PUBLIC_PORT "$BASH_BIN" "$S" max --full-name M --pubkey "$KEY" --apply --no-daemons 2>&1); RC=$?
   unlock_homes
-  eq "J3 host unset: exit 0" 0 "$RC"
+  st_eq "J3 host unset: exit 0" 0 "$RC"
   contains "J3 WARN names the key" "$OUT" "WARN: FLEET_SSH_PUBLIC_HOST is unset"
   W=$(cat "$HOME/max-onboard/welcome.txt")
   contains "J3 placeholder + default port" "$W" "ssh -p 22 max@<HOST>"
@@ -746,44 +745,44 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   printf 'FLEET_SSH_PUBLIC_HOST=mini.example.test\nFLEET_SSH_PUBLIC_PORT=2222\n' > "$HOME/.config/claude-fleet/fleet.settings"
   : > "$LOG"; OUT=$(env -u FLEET_SKIP_GLOBAL_CONF -u FLEET_SSH_PUBLIC_HOST -u FLEET_SSH_PUBLIC_PORT FLEET_CONF_DIR="$HOME/.config/claude-fleet" "$BASH_BIN" "$S" ned --full-name N --pubkey "$KEY" --apply --no-daemons 2>&1); RC=$?
   unlock_homes; rm -f "$HOME/.config/claude-fleet/fleet.settings"
-  eq "J4 from fleet.settings: exit 0" 0 "$RC"
+  st_eq "J4 from fleet.settings: exit 0" 0 "$RC"
   not_contains "J4 no WARN" "$OUT" "WARN: FLEET_SSH_PUBLIC_HOST"
   contains "J4 letter reads fleet.settings" "$(cat "$HOME/ned-onboard/welcome.txt")" "ssh -p 2222 ned@mini.example.test"
   # a bad port is a usage error before anything runs
   : > "$LOG"; OUT=$(FLEET_SSH_PUBLIC_PORT=abc "$BASH_BIN" "$S" oda --full-name O --pubkey "$KEY" 2>&1); RC=$?; CALLS=$(cat "$LOG")
-  eq "J4 bad port → 2" 2 "$RC"
+  st_eq "J4 bad port → 2" 2 "$RC"
   contains "J4 bad port named" "$OUT" "FLEET_SSH_PUBLIC_PORT: not a port number: 'abc'"
-  eq "J4 bad port: nothing run" 0 "$(mutations)"
+  st_eq "J4 bad port: nothing run" 0 "$(mutations)"
 else
   echo "selftest: ssh-keygen not installed — SKIP leg J (temporary key + welcome letter)" >&2
 fi
 # J5. usage: --no-welcome needs --pubkey (nothing would carry a temp key); --lang is zh|en
 run oli --full-name O --no-welcome
-eq "J5 --no-welcome without --pubkey → 2" 2 "$RC"
+st_eq "J5 --no-welcome without --pubkey → 2" 2 "$RC"
 contains "J5 says why" "$OUT" "--pubkey <file> is required with --no-welcome"
 run oli --full-name O --pubkey "$KEY" --lang fr
-eq "J5 --lang fr → 2" 2 "$RC"
+st_eq "J5 --lang fr → 2" 2 "$RC"
 contains "J5 --lang names the choices" "$OUT" "--lang: zh or en (got 'fr')"
-eq "J5 nothing run" 0 "$(mutations)"
-[ -e "$HOME/oli-onboard" ] && fail "J5 a usage error created the onboard dir"
+st_eq "J5 nothing run" 0 "$(mutations)"
+[ -e "$HOME/oli-onboard" ] && st_fail "J5 a usage error created the onboard dir"
 # --no-welcome with a key: no step 9, no letter, everything else as before
 : > "$LOG"; OUT=$("$BASH_BIN" "$S" pat --full-name P --pubkey "$KEY" --no-welcome --apply --no-daemons 2>&1); RC=$?
 unlock_homes
-eq "J5 --no-welcome --apply exit" 0 "$RC"
+st_eq "J5 --no-welcome --apply exit" 0 "$RC"
 not_contains "J5 --no-welcome: no letter step" "$OUT" "welcome letter"
 contains "J5 --no-welcome: banner" "$OUT" "welcome=no"
-[ -e "$HOME/pat-onboard/welcome.txt" ] && fail "J5 --no-welcome still wrote the letter"
-eq "J5 --no-welcome: password only" "password.txt" "$(ls -A "$HOME/pat-onboard" | tr '\n' ' ' | sed 's/ $//')"
+[ -e "$HOME/pat-onboard/welcome.txt" ] && st_fail "J5 --no-welcome still wrote the letter"
+st_eq "J5 --no-welcome: password only" "password.txt" "$(ls -A "$HOME/pat-onboard" | tr '\n' ' ' | sed 's/ $//')"
 # J6. a dry run without --pubkey plans the key + the letter and creates nothing
 run quin --full-name Q
-eq "J6 dry run exit" 0 "$RC"
+st_eq "J6 dry run exit" 0 "$RC"
 contains "J6 plans the keygen" "$OUT" "would run: ssh-keygen -q -t ed25519 -N '' -C quin-onboard-temp -f $HOME/quin-onboard/id_ed25519"
 contains "J6 plans the key install from the temp pub" "$OUT" "sudo tee -a $FLEET_LOGIN_HOMES/quin/.ssh/authorized_keys < $HOME/quin-onboard/id_ed25519.pub"
 contains "J6 plans the letter" "$OUT" "would write it — a dry run writes nothing"
 not_contains "J6 no empty-key warning for a planned key" "$OUT" "holds no public key line"
-eq "J6 nothing executed" 0 "$(mutations)"
-[ -e "$HOME/quin-onboard" ] && fail "J6 dry run created the onboard dir"
-[ -e "$FLEET_LOGIN_HOMES/quin" ] && fail "J6 dry run created a home"
+st_eq "J6 nothing executed" 0 "$(mutations)"
+[ -e "$HOME/quin-onboard" ] && st_fail "J6 dry run created the onboard dir"
+[ -e "$FLEET_LOGIN_HOMES/quin" ] && st_fail "J6 dry run created a home"
 not_contains "J6 bash32" "$OUT" "unbound variable"
 # --- K. --daemons-only (issue #1223) ------------------------------------------
 # an existing login with its home + its own clone (first login already ran),
@@ -794,61 +793,61 @@ chmod 000 "$KH"
 konly() { : > "$LOG"; OUT=$(FAKE_EXISTING='kai nohome' "$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS=$(cat "$LOG"); unlock_homes; }
 steps_1to7() { printf '%s\n' "$CALLS" | grep -Ec '^(sysadminctl|createhomedir|dseditgroup|chown|sudo (tee|mkdir|cp|chmod|git|ssh-keygen))( |$)'; }
 konly kai --daemons-only
-eq "K dry run exit" 0 "$RC"
+st_eq "K dry run exit" 0 "$RC"
 contains "K dry run banner" "$OUT" "DRY RUN"
 contains "K step is 8" "$OUT" "[8] install kai's $NTMPL background services as system LaunchDaemons"
 not_contains "K no step 1" "$OUT" "[1]"
 not_contains "K no addUser" "$OUT" "sysadminctl"
 not_contains "K no letter" "$OUT" "welcome letter"
-eq "K dry run nothing executed" 0 "$(mutations)"
-for f in "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.kai.*; do [ -e "$f" ] && fail "K dry run wrote $f"; done
+st_eq "K dry run nothing executed" 0 "$(mutations)"
+for f in "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.kai.*; do [ -e "$f" ] && st_fail "K dry run wrote $f"; done
 if [ -z "$DAEMONS" ]; then
   konly kai --daemons-only --apply
-  eq "K apply exit" 0 "$RC"
-  eq "K $NTMPL installs" "$NTMPL" "$(grep -c '^sudo install$' "$LOG")"
-  eq "K $NTMPL bootstraps" "$NTMPL" "$(grep -c '^launchctl bootstrap system ' "$LOG")"
-  eq "K steps 1–7: zero calls" 0 "$(steps_1to7)"
+  st_eq "K apply exit" 0 "$RC"
+  st_eq "K $NTMPL installs" "$NTMPL" "$(grep -c '^sudo install$' "$LOG")"
+  st_eq "K $NTMPL bootstraps" "$NTMPL" "$(grep -c '^launchctl bootstrap system ' "$LOG")"
+  st_eq "K steps 1–7: zero calls" 0 "$(steps_1to7)"
   contains "K installed N/N" "$OUT" "installed $NTMPL/$NTMPL"
   contains "K read as the login" "$OUT" "sudo -u kai -H ls -1 $KH/.claude/fleet/launchd"
-  eq "K $NTMPL plists" "$NTMPL" "$(ls "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.kai.*.plist | wc -l | tr -d ' ')"
-  eq "K Label" com.claude-fleet.kai.spinner "$(plutil -extract Label raw -o - "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.spinner.plist")"
-  [ -e "$HOME/kai-onboard" ] && fail "K wrote an onboard dir"
+  st_eq "K $NTMPL plists" "$NTMPL" "$(ls "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.kai.*.plist | wc -l | tr -d ' ')"
+  st_eq "K Label" com.claude-fleet.kai.spinner "$(plutil -extract Label raw -o - "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.spinner.plist")"
+  [ -e "$HOME/kai-onboard" ] && st_fail "K wrote an onboard dir"
   # again: everything already in place → left alone, nothing bootstrapped twice
   konly kai --daemons-only --apply
-  eq "K rerun exit" 0 "$RC"
-  eq "K rerun no bootstrap" 0 "$(grep -c '^launchctl ' "$LOG")"
+  st_eq "K rerun exit" 0 "$RC"
+  st_eq "K rerun no bootstrap" 0 "$(grep -c '^launchctl ' "$LOG")"
   contains "K rerun installed N/N" "$OUT" "installed $NTMPL/$NTMPL ($NTMPL already in place)"
   # one unit missing → only that one
   rm -f "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.spinner.plist"
   konly kai --daemons-only --apply
-  eq "K fill one: exit" 0 "$RC"
-  eq "K fill one: one bootstrap" "launchctl bootstrap system $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.spinner.plist" "$(grep '^launchctl ' "$LOG")"
+  st_eq "K fill one: exit" 0 "$RC"
+  st_eq "K fill one: one bootstrap" "launchctl bootstrap system $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.spinner.plist" "$(grep '^launchctl ' "$LOG")"
   # a login with no clone yet: fails at step 8 naming what is missing
   LH="$FLEET_LOGIN_HOMES/nohome"; mkdir -p "$LH"; chmod 000 "$LH"
   konly nohome --daemons-only --apply
-  eq "K no clone → 1" 1 "$RC"
+  st_eq "K no clone → 1" 1 "$RC"
   contains "K no clone says why" "$OUT" "--daemons-only needs nohome's own clone"
-  eq "K no clone nothing bootstrapped" 0 "$(grep -c '^launchctl ' "$LOG")"
+  st_eq "K no clone nothing bootstrapped" 0 "$(grep -c '^launchctl ' "$LOG")"
   rm -rf "$LH"
 fi
 # refusals: no such login, a login with no home → 4, nothing run
 for m in "" --apply; do
   konly ghost --daemons-only $m
-  eq "K no login → 4 ($m)" 4 "$RC"
+  st_eq "K no login → 4 ($m)" 4 "$RC"
   contains "K no login says so ($m)" "$OUT" "--daemons-only: no login ghost"
-  eq "K no login nothing run ($m)" 0 "$(mutations)"
+  st_eq "K no login nothing run ($m)" 0 "$(mutations)"
   konly nohome --daemons-only $m
-  eq "K no home → 4 ($m)" 4 "$RC"
+  st_eq "K no home → 4 ($m)" 4 "$RC"
   contains "K no home says so ($m)" "$OUT" "has no home at $FLEET_LOGIN_HOMES/nohome"
-  eq "K no home nothing run ($m)" 0 "$(mutations)"
+  st_eq "K no home nothing run ($m)" 0 "$(mutations)"
 done
 # the options of other steps are refused, not silently dropped
 for args in "kai --daemons-only --no-daemons" "kai --daemons-only --share-pool --pool-src $POOL" \
             "kai --daemons-only --pubkey $KEY" "kai --daemons-only --password-file $WORK/pw.txt"; do
   # shellcheck disable=SC2086
   konly $args
-  eq "K usage → 2 ($args)" 2 "$RC"
-  eq "K usage nothing run ($args)" 0 "$(mutations)"
+  st_eq "K usage → 2 ($args)" 2 "$RC"
+  st_eq "K usage nothing run ($args)" 0 "$(mutations)"
 done
 not_contains "K bash32" "$OUT" "unbound variable"
 # --- L. the machine's Claude Code cache (#2297); no claude-fleet mirror (#2775) --
@@ -856,17 +855,17 @@ CC="$WORK/cache"; mkdir -p "$WORK/l-bin"
 printf '#!/bin/sh\necho "9.9.9 (Claude Code)"\n' > "$WORK/l-bin/claude"; chmod +x "$WORK/l-bin/claude"
 export FLEET_BOOTSTRAP_CACHE="$CC"
 PATH="$WORK/l-bin:$PATH" run lena --full-name 'Lena L' --pubkey "$KEY" --no-daemons
-eq "L dry run exit" 0 "$RC"
+st_eq "L dry run exit" 0 "$RC"
 contains "L dry: refresh, Claude Code only" "$OUT" "sudo env FLEET_BOOTSTRAP_CACHE=$CC bash $BIN/fleet-bootstrap-cache.sh refresh --claude $WORK/l-bin/claude"
 not_contains "L dry: no cached clone" "$OUT" "claude-fleet.git clone"
-[ -e "$CC" ] && fail "L dry run made the cache"
+[ -e "$CC" ] && st_fail "L dry run made the cache"
 PATH="$WORK/l-bin:$PATH" run lena --full-name 'Lena L' --pubkey "$KEY" --no-daemons --apply
-eq "L apply exit" 0 "$RC"
+st_eq "L apply exit" 0 "$RC"
 unlock_homes
 LH="$FLEET_LOGIN_HOMES/lena"
-eq "L install at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$LH/.claude/fleet" rev-parse HEAD 2>/dev/null)"
-eq "L claude cached" 9.9.9 "$(cat "$CC/claude/current")"
-[ -e "$CC/claude-fleet.git" ] && fail "L the retired claude-fleet mirror was written"
+st_eq "L install at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$LH/.claude/fleet" rev-parse HEAD 2>/dev/null)"
+st_eq "L claude cached" 9.9.9 "$(cat "$CC/claude/current")"
+[ -e "$CC/claude-fleet.git" ] && st_fail "L the retired claude-fleet mirror was written"
 not_contains "L bash32" "$OUT" "unbound variable"
 export FLEET_BOOTSTRAP_CACHE=off FLEET_BOOTSTRAP_GIT_BASE="$GB"
 # --- P. a managed machine: the runtime, then account adopt (#2775) -------------
@@ -882,36 +881,36 @@ ln -s "$PNR/$PSHA" "$PNR/current"
 OUT=$(FLEET_NODE_ROOT="$PNR" "$BASH_BIN" "$S" pru --full-name Pru --pubkey "$KEY" --apply 2>&1); RC=$?; CALLS=$(cat "$LOG")
 unlock_homes
 PH="$FLEET_LOGIN_HOMES/pru"
-[ "$RC" = 0 ] || printf "%s\n" "$OUT" | tail -n 8 >&2; eq "P exit" 0 "$RC"
+[ "$RC" = 0 ] || printf "%s\n" "$OUT" | tail -n 8 >&2; st_eq "P exit" 0 "$RC"
 contains "P step 7 names the runtime" "$OUT" "this machine's runtime $PNR/$(printf '%.7s' "$PSHA")"
 contains "P install line" "$OUT" "install: runtime — linked to this machine's runtime $PNR/current → $PSHA"
-[ -L "$PH/.claude/fleet" ] || fail "P ~/.claude/fleet is not linked (got $(ls -ld "$PH/.claude/fleet" 2>&1))"
-eq "P ~/.claude/fleet → <runtime>/current (#4669)" "$PNR/current" "$(readlink "$PH/.claude/fleet")"
-[ -d "$PH/.claude/fleet/.git" ] && fail "P the linked install is a checkout"
+[ -L "$PH/.claude/fleet" ] || st_fail "P ~/.claude/fleet is not linked (got $(ls -ld "$PH/.claude/fleet" 2>&1))"
+st_eq "P ~/.claude/fleet → <runtime>/current (#4669)" "$PNR/current" "$(readlink "$PH/.claude/fleet")"
+[ -d "$PH/.claude/fleet/.git" ] && st_fail "P the linked install is a checkout"
 contains "P step 8 is account adopt" "$OUT" "sudo python3 $PNR/current/bin/fleet-node-supervisor.py account adopt pru"
-eq "P adopted once" "account adopt pru" "$(cat "$WORK/adopt.log")"
+st_eq "P adopted once" "account adopt pru" "$(cat "$WORK/adopt.log")"
 not_contains "P no per-login LaunchDaemon" "$CALLS" "launchctl bootstrap system"
-for f in "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.pru.*; do [ -e "$f" ] && fail "P a per-login plist was written: $f"; done
+for f in "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.pru.*; do [ -e "$f" ] && st_fail "P a per-login plist was written: $f"; done
 not_contains "P bash32" "$OUT" "unbound variable"
 # --no-daemons: linked, not adopted, a WARN naming the command
 : > "$WORK/adopt.log"
 OUT=$(FLEET_NODE_ROOT="$PNR" "$BASH_BIN" "$S" pry --full-name Pry --pubkey "$KEY" --no-daemons --apply 2>&1); RC=$?
 unlock_homes
-eq "P no-daemons exit" 0 "$RC"
-eq "P no-daemons: not adopted" "" "$(cat "$WORK/adopt.log")"
+st_eq "P no-daemons exit" 0 "$RC"
+st_eq "P no-daemons: not adopted" "" "$(cat "$WORK/adopt.log")"
 contains "P no-daemons WARN" "$OUT" "linked to the runtime but not adopted"
 
 # --- N. a full name already taken (issue #2210) --------------------------------
 : > "$LOG"; OUT=$(FAKE_REALNAMES='erin=erin;root=System Administrator' "$BASH_BIN" "$S" pia --full-name erin --pubkey "$KEY" $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
-eq "N dry exit" 0 "$RC"
+st_eq "N dry exit" 0 "$RC"
 contains "N note" "$OUT" "full name erin is already login erin's — using erin (pia)"
 contains "N alt name" "$OUT" "-fullName erin\\ \\(pia\\)"
 : > "$LOG"; OUT=$(FAKE_REALNAMES='erin=erin;x=erin (pia)' "$BASH_BIN" "$S" pia --full-name erin --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
-eq "N both taken exit" 3 "$RC"
-eq "N both taken: nothing run" 0 "$(mutations)"
+st_eq "N both taken exit" 3 "$RC"
+st_eq "N both taken: nothing run" 0 "$(mutations)"
 : > "$LOG"; OUT=$(FAKE_NOCREATE=1 "$BASH_BIN" "$S" pia --full-name Pia --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
 unlock_homes
-eq "N no login exit" 1 "$RC"
+st_eq "N no login exit" 1 "$RC"
 contains "N no login named" "$OUT" "sysadminctl did not create login pia"
 contains "N stops at 1" "$OUT" "FAILED at step 1"
 not_contains "N no home" "$CALLS" "createhomedir"
@@ -921,7 +920,7 @@ not_contains "N no home" "$CALLS" "createhomedir"
 # never the password on screen, nothing after it run
 : > "$LOG"; : > "$DLOG"; OUT=$(FAKE_DSCL_ERR=1 "$BASH_BIN" "$S" pia --full-name Pia --pubkey "$KEY" --password-file "$WORK/pw.txt" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
 unlock_homes
-eq "B2 DS error exit" 1 "$RC"
+st_eq "B2 DS error exit" 1 "$RC"
 contains "B2 DS error named" "$OUT" "could not set the password of pia"
 contains "B2 DS error stops at 1" "$OUT" "FAILED at step 1"
 not_contains "B2 DS error: password never shown" "$OUT" "hunter2-from-file"
@@ -962,18 +961,18 @@ JC=fj_abcdefghijklmnopqrstuvwxyz
 : > "$LOG"; OUT=$(FLEET_DIST_SOURCE=github FLEET_LOGIN_JOIN_CODE=$JC FLEET_LOGIN_HUB=$HUBU "$BASH_BIN" "$S" oli --full-name Oli --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
 unlock_homes
 OH="$FLEET_LOGIN_HOMES/oli"
-eq "O exit" 0 "$RC"
+st_eq "O exit" 0 "$RC"
 contains "O the code redeemed for the login" "$(cat "$WORK/hub.log" 2>/dev/null)" "/v1/node/join $JC oli"
 not_contains "O FLEET_DIST_SOURCE=github: the git road by name, the hub's empty store not asked (#4848)" "$(cat "$WORK/hub.log" 2>/dev/null)" "GET /v1/fleet/release/stable"
 not_contains "O the code never on a shim's argv" "$CALLS" "$JC"
 not_contains "O the code never in the output" "$OUT" "$JC"
 not_contains "O the node token never in the output" "$OUT" "ntok-secret"
 contains "O node-join as the login, --joined, nothing started" "$(cat "$WORK/nj.log" 2>/dev/null)" "--no-fleet --service none --compute 1"
-[ -e "$OH/.fleet-join-pass.json" ] && fail "O the node pass was left in the home"
+[ -e "$OH/.fleet-join-pass.json" ] && st_fail "O the node pass was left in the home"
 contains "O the agent's definition for 7b" "$(cat "$FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.oli.plist" 2>/dev/null)" "<string>$OH/.ccquota/run-agent.sh</string>"
 contains "O ... runs as the login" "$(cat "$FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.oli.plist" 2>/dev/null)" "<key>UserName</key><string>oli</string>"
-[ -L "$OH/.config/claude-fleet/node.env" ] || fail "O 7b did not move node.env into the store (still $(ls -l "$OH/.config/claude-fleet/node.env" 2>&1))"
-eq "O 7b: the token in the store" "CCQUOTA_TOKEN=ntok-secret" "$(cat "$FLEET_CREDSEP_ROOT_BASE/oli/node.env" 2>/dev/null)"
+[ -L "$OH/.config/claude-fleet/node.env" ] || st_fail "O 7b did not move node.env into the store (still $(ls -l "$OH/.config/claude-fleet/node.env" 2>&1))"
+st_eq "O 7b: the token in the store" "CCQUOTA_TOKEN=ntok-secret" "$(cat "$FLEET_CREDSEP_ROOT_BASE/oli/node.env" 2>/dev/null)"
 contains "O the fleet brought up as the login, after 8 (its conf; the sudo shim keeps HOME)" "$(cat "$WORK/bs.log" 2>/dev/null)" "conf=$OH/.config/claude-fleet"
 contains "O a new login keeps the bootstrap's doctor report" "$(cat "$WORK/bs.log" 2>/dev/null)" "doctor=1"
 contains "O the hub's detail says so" "$(printf '%s\n' "$OUT" | tail -n 3)" "fleet: up"
@@ -982,18 +981,18 @@ contains "O credsep stays last" "$(printf '%s\n' "$OUT" | tail -n 1)" "credsep:"
 # a code the hub refuses: the login still opens, the line says why
 : > "$WORK/bs.log"; : > "$LOG"; OUT=$(FLEET_DIST_SOURCE=github FLEET_LOGIN_JOIN_CODE=fj_zzzzzzzzzzzzzzzzzzzzzzzzzz FLEET_LOGIN_HUB=$HUBU "$BASH_BIN" "$S" oda --full-name Oda --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
 unlock_homes
-eq "O refused code: still opened" 0 "$RC"
+st_eq "O refused code: still opened" 0 "$RC"
 contains "O refused code: named" "$OUT" "node: WARN — the hub did not take the join code (HTTP 401)"
 # no join code: no node step; the bring-up runs for every login (#2702)
 : > "$WORK/nj.log"; : > "$WORK/bs.log"; : > "$LOG"; OUT=$("$BASH_BIN" "$S" lou --full-name Lou --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
 unlock_homes
-eq "O no code: exit" 0 "$RC"
-eq "O no code: no node-join" "" "$(cat "$WORK/nj.log")"
+st_eq "O no code: exit" 0 "$RC"
+st_eq "O no code: no node-join" "" "$(cat "$WORK/nj.log")"
 contains "O no code: the fleet brought up all the same (#2702: no login shell does it)" "$(cat "$WORK/bs.log")" "conf=$FLEET_LOGIN_HOMES/lou/.config/claude-fleet"
 not_contains "O no code: no node line" "$OUT" "node:"
 # a malformed code is refused before anything runs
 : > "$LOG"; OUT=$(FLEET_LOGIN_JOIN_CODE='fj_x;rm' FLEET_LOGIN_HUB=$HUBU "$BASH_BIN" "$S" kai --full-name Kai --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
-eq "O malformed code: usage" 2 "$RC"
+st_eq "O malformed code: usage" 2 "$RC"
 not_contains "O malformed code: nothing ran" "$CALLS" "addUser"
 kill "$HPID" 2>/dev/null; wait "$HPID" 2>/dev/null; HPID=''
 
@@ -1004,30 +1003,30 @@ kill "$HPID" 2>/dev/null; wait "$HPID" 2>/dev/null; HPID=''
 OPI=c15b9c43230eafe5f971f0dc15eff5d0
 : > "$LOG"; OUT=$(FLEET_LOGIN_OP_ID=$OPI "$BASH_BIN" "$S" qen --full-name Qen --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
 unlock_homes
-eq "Q exit" 0 "$RC"
+st_eq "Q exit" 0 "$RC"
 MK="$HOME/qen-onboard/op"
-eq "Q mark: this op" "op=$OPI" "$(sed -n 1p "$MK" 2>/dev/null)"
+st_eq "Q mark: this op" "op=$OPI" "$(sed -n 1p "$MK" 2>/dev/null)"
 contains "Q mark: the run's pid" "$(cat "$MK" 2>/dev/null)" "pid="
 contains "Q mark: finished" "$(cat "$MK" 2>/dev/null)" "done="
-eq "Q mark: the result's last line is the output's (credsep)" "line=$(printf '%s\n' "$OUT" | tail -n 1)" "$(tail -n 1 "$MK" 2>/dev/null)"
-eq "Q mark: yours only" 600 "$(mode "$MK")"
+st_eq "Q mark: the result's last line is the output's (credsep)" "line=$(printf '%s\n' "$OUT" | tail -n 1)" "$(tail -n 1 "$MK" 2>/dev/null)"
+st_eq "Q mark: yours only" 600 "$(mode "$MK")"
 # a run that stops half way leaves the op but no done= (the agent rolls it back)
 : > "$LOG"; OUT=$(FAKE_FAIL=dseditgroup FLEET_LOGIN_OP_ID=$OPI "$BASH_BIN" "$S" qix --full-name Qix --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
 unlock_homes
-eq "Q half way: exit 1" 1 "$RC"
-eq "Q half way: marked this op's" "op=$OPI" "$(sed -n 1p "$HOME/qix-onboard/op" 2>/dev/null)"
+st_eq "Q half way: exit 1" 1 "$RC"
+st_eq "Q half way: marked this op's" "op=$OPI" "$(sed -n 1p "$HOME/qix-onboard/op" 2>/dev/null)"
 not_contains "Q half way: never done" "$(cat "$HOME/qix-onboard/op" 2>/dev/null)" "done="
 # the same op again on a login now there: exit 3, the mark left as the first run wrote it
 before=$(cat "$MK")
 : > "$LOG"; OUT=$(FAKE_EXISTING=qen FLEET_LOGIN_OP_ID=$OPI "$BASH_BIN" "$S" qen --full-name Qen --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
-eq "Q again: the script still refuses (the agent decides first)" 3 "$RC"
-eq "Q again: the mark untouched" "$before" "$(cat "$MK")"
+st_eq "Q again: the script still refuses (the agent decides first)" 3 "$RC"
+st_eq "Q again: the mark untouched" "$before" "$(cat "$MK")"
 # a malformed op id is refused before anything runs
 : > "$LOG"; OUT=$(FLEET_LOGIN_OP_ID='x;rm' "$BASH_BIN" "$S" kim --full-name Kim --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
-eq "Q malformed op id: usage" 2 "$RC"
+st_eq "Q malformed op id: usage" 2 "$RC"
 not_contains "Q malformed op id: nothing ran" "$CALLS" "addUser"
 # no op id (a hand run): no mark
-[ -e "$HOME/lou-onboard/op" ] && fail "Q a run with no op id wrote a mark"
+[ -e "$HOME/lou-onboard/op" ] && st_fail "Q a run with no op id wrote a mark"
 
 # --- R. --recycle (issue #3505): a washed login, kept — new password, no addUser --
 printf 'rex:%s:%s:%s\n' "$(/usr/bin/id -u)" "$(/usr/bin/id -g)" "$FLEET_LOGIN_HOMES/rex" >> "$FLEET_CREDSEP_PW"
@@ -1040,7 +1039,7 @@ for _ in $(seq 1 100); do
   sleep 0.1
 done
 unlock_homes
-eq "R exit" 0 "$RC"
+st_eq "R exit" 0 "$RC"
 not_contains "R no addUser" "$CALLS" "sysadminctl"
 contains "R a new password on dscl's stdin" "$(cat "$DLOG")" "passwd /Users/rex "
 contains "R shell-less while it changes" "$CALLS" "dscl . -create /Users/rex UserShell /usr/bin/false"
@@ -1051,14 +1050,14 @@ contains "R the fleet starts off the clock (#4196)" "$OUT" "fleet: starting (fle
 contains "R the detached bootstrap ran, without its doctor report (#4044)" "$(tail -n 1 "$WORK/bs.log" 2>/dev/null)" "doctor=0"
 contains "R its output in its own log, never this run's (#4196)" "$(cat "$RH/.config/claude-fleet/logs/bootstrap.log" 2>/dev/null)" "fleet: ok"
 contains "R its own name when none is given" "$OUT" "full-name=rex"
-eq "R the key installed" "$(cat "$KEY")" "$(cat "$RH/.ssh/authorized_keys")"
+st_eq "R the key installed" "$(cat "$KEY")" "$(cat "$RH/.ssh/authorized_keys")"
 contains "R the last line is credsep's (pending in a sandbox, as leg M)" "$(printf '%s\n' "$OUT" | tail -n 1)" "credsep: pending"
-[ -s "$HOME/rex-onboard/password.txt" ] || fail "R no new password file"
+[ -s "$HOME/rex-onboard/password.txt" ] || st_fail "R no new password file"
 : > "$LOG"; OUT=$("$BASH_BIN" "$S" ghost --recycle --pubkey "$KEY" --apply 2>&1); RC=$?; CALLS=$(cat "$LOG")
-eq "R no such login → 4" 4 "$RC"
-eq "R no such login: nothing ran" 0 "$(mutations)"
+st_eq "R no such login → 4" 4 "$RC"
+st_eq "R no such login: nothing ran" 0 "$(mutations)"
 : > "$LOG"; OUT=$(FAKE_EXISTING=rex "$BASH_BIN" "$S" rex --recycle --daemons-only 2>&1); RC=$?
-eq "R with --daemons-only → 2" 2 "$RC"
+st_eq "R with --daemons-only → 2" 2 "$RC"
 
 # --- R2. --recycle with a kept node token (issue #4195): no join, the token back
 # into the new store from root (credsep setenv), never through the home ---------
@@ -1066,16 +1065,16 @@ KDIR="$WORK/keep-rex"; mkdir -p "$KDIR"; chmod 700 "$KDIR"
 printf 'CCQUOTA_TOKEN=tok-kept-rex\nCCQUOTA_HUB_URL=%s\n' "https://hub.example" > "$KDIR/node.env"; chmod 600 "$KDIR/node.env"
 : > "$LOG"; OUT=$(FLEET_LOGIN_KEEP_NODE="$KDIR" FLEET_LOGIN_JOIN_CODE=fj_zzzzzzzzzzzzzzzzzzzzzzzzzz FLEET_LOGIN_HUB=https://hub.example \
   FAKE_EXISTING=rex "$BASH_BIN" "$S" rex --recycle --pubkey "$KEY" --share-pool --pool-src "$POOL" $DAEMONS 2>&1); RC=$?
-eq "R2 dry run exit" 0 "$RC"
+st_eq "R2 dry run exit" 0 "$RC"
 contains "R2 7a keeps instead of joining" "$OUT" "keep rex's node token (no join"
 not_contains "R2 no join" "$OUT" "/v1/node/join"
 contains "R2 the token back through credsep setenv" "$OUT" "fleet-credsep.sh setenv --login rex < $KDIR/node.env"
 contains "R2 the answer says node: kept" "$OUT" "node: kept"
 not_contains "R2 the token is never shown" "$OUT" "tok-kept-rex"
 : > "$LOG"; OUT=$(FLEET_LOGIN_KEEP_NODE="$KDIR" "$BASH_BIN" "$S" kim --full-name Kim --pubkey "$KEY" 2>&1); RC=$?
-eq "R2 a kept token without --recycle → 2" 2 "$RC"
+st_eq "R2 a kept token without --recycle → 2" 2 "$RC"
 : > "$LOG"; OUT=$(FLEET_LOGIN_KEEP_NODE=rel/dir FAKE_EXISTING=rex "$BASH_BIN" "$S" rex --recycle --pubkey "$KEY" 2>&1); RC=$?
-eq "R2 a relative keep dir → 2" 2 "$RC"
+st_eq "R2 a relative keep dir → 2" 2 "$RC"
 
 # --- S. root under the admin gate (issue #3723) -------------------------------
 GATE="$WORK/gate"; mkdir -p "$GATE/accounts"; chmod 755 "$GATE"
@@ -1083,42 +1082,42 @@ cp -p "$POOL/alpha" "$POOL/alpha.conf" "$GATE/accounts/"
 for l in sam sid; do printf '%s:%s:%s:%s\n' "$l" "$(/usr/bin/id -u)" "$(/usr/bin/id -g)" "$FLEET_LOGIN_HOMES/$l"; done >> "$FLEET_CREDSEP_PW"
 groot() { : > "$LOG"; : > "$DLOG"; OUT=$(FAKE_NOLOCK=1 FLEET_LOGIN_TEST_EUID=0 FLEET_LOGIN_ADMIN_DIR="$GATE" "$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS=$(cat "$LOG"); }
 groot sam --full-name Sam --share-pool $DAEMONS
-eq "S dry run exit" 0 "$RC"
+st_eq "S dry run exit" 0 "$RC"
 contains "S a root step takes no sudo" "$OUT" "  \$ sysadminctl -addUser sam -fullName Sam -shell /usr/bin/false"
 not_contains "S no sudo on any root step" "$(printf '%s\n' "$OUT" | grep '^  \$ ' | grep -v '^  \$ sudo -u ')" "sudo "
 contains "S the password stdin line" "$OUT" "  \$ dscl .   < passwd /Users/sam <redacted: $GATE/sam-onboard/password.txt>"
 contains "S the drop to the login stays" "$OUT" "sudo -u sam -H"
 contains "S the pool is the gate dir's" "$OUT" "--pool-src $GATE/accounts"
 contains "S the key pair under the gate dir" "$OUT" "$GATE/sam-onboard/id_ed25519"
-[ -e "$GATE/sam-onboard" ] && fail "S a dry run made the onboard dir"
+[ -e "$GATE/sam-onboard" ] && st_fail "S a dry run made the onboard dir"
 OPS=3723c15b9c43230eafe5f971f0dc15ef
 : > "$LOG"; : > "$DLOG"; OUT=$(FAKE_NOLOCK=1 FLEET_LOGIN_TEST_EUID=0 FLEET_LOGIN_ADMIN_DIR="$GATE" FLEET_LOGIN_OP_ID=$OPS \
   "$BASH_BIN" "$S" sam --full-name Sam --share-pool --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
-eq "S apply exit" 0 "$RC"
+st_eq "S apply exit" 0 "$RC"
 SO="$GATE/sam-onboard"
-eq "S onboard dir 755 (the agent reads the mark)" 755 "$(mode "$SO")"
-eq "S op mark 644" 644 "$(mode "$SO/op")"
-eq "S op mark: this op" "op=$OPS" "$(sed -n 1p "$SO/op")"
+st_eq "S onboard dir 755 (the agent reads the mark)" 755 "$(mode "$SO")"
+st_eq "S op mark 644" 644 "$(mode "$SO/op")"
+st_eq "S op mark: this op" "op=$OPS" "$(sed -n 1p "$SO/op")"
 contains "S op mark: finished" "$(cat "$SO/op")" "done="
-eq "S password 600" 600 "$(mode "$SO/password.txt")"
-eq "S key 600" 600 "$(mode "$SO/id_ed25519")"
-eq "S letter 600" 600 "$(mode "$SO/welcome.txt")"
-eq "S the temporary key installed" "$(cat "$SO/id_ed25519.pub")" "$(cat "$FLEET_LOGIN_HOMES/sam/.ssh/authorized_keys")"
-[ -e "$HOME/sam-onboard" ] && fail "S a root run wrote into the admin's home"
+st_eq "S password 600" 600 "$(mode "$SO/password.txt")"
+st_eq "S key 600" 600 "$(mode "$SO/id_ed25519")"
+st_eq "S letter 600" 600 "$(mode "$SO/welcome.txt")"
+st_eq "S the temporary key installed" "$(cat "$SO/id_ed25519.pub")" "$(cat "$FLEET_LOGIN_HOMES/sam/.ssh/authorized_keys")"
+[ -e "$HOME/sam-onboard" ] && st_fail "S a root run wrote into the admin's home"
 contains "S the login made" "$CALLS" "sysadminctl -addUser sam"
-eq "S no step went through sudo but the drops" 0 "$(printf '%s\n' "$CALLS" | grep -cE '^sudo (sysadminctl|createhomedir|dseditgroup|dscl|tee|chmod|chown|install|bash)( |$)')"
+st_eq "S no step went through sudo but the drops" 0 "$(printf '%s\n' "$CALLS" | grep -cE '^sudo (sysadminctl|createhomedir|dseditgroup|dscl|tee|chmod|chown|install|bash)( |$)')"
 not_contains "S the letter names no admin login" "$(cat "$SO/welcome.txt")" "开号人 $ME"
 contains "S the last line is credsep's" "$(printf '%s\n' "$OUT" | tail -n 1)" "credsep:"
 # EUID 0 with no gate dir: refused as before, nothing run
 : > "$LOG"; OUT=$(FLEET_LOGIN_TEST_EUID=0 "$BASH_BIN" "$S" sid --full-name Sid --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
-eq "S root without the gate dir → 2" 2 "$RC"
+st_eq "S root without the gate dir → 2" 2 "$RC"
 contains "S says why" "$OUT" "not under sudo"
-eq "S root without the gate dir: nothing ran" 0 "$(mutations)"
+st_eq "S root without the gate dir: nothing ran" 0 "$(mutations)"
 : > "$LOG"; OUT=$(FLEET_LOGIN_TEST_EUID=0 FLEET_LOGIN_ADMIN_DIR=relative "$BASH_BIN" "$S" sid --full-name Sid $DAEMONS 2>&1); RC=$?
-eq "S a relative gate dir → 2" 2 "$RC"
+st_eq "S a relative gate dir → 2" 2 "$RC"
 # the dir without root: the admin login's road, byte for byte
 : > "$LOG"; OUT=$(FLEET_LOGIN_ADMIN_DIR="$GATE" "$BASH_BIN" "$S" sid --full-name Sid $DAEMONS 2>&1); RC=$?
-eq "S not root: exit" 0 "$RC"
+st_eq "S not root: exit" 0 "$RC"
 contains "S not root: the admin's home" "$OUT" "$HOME/sid-onboard/password.txt"
 contains "S not root: sudo per step" "$OUT" "sudo sysadminctl -addUser sid"
 

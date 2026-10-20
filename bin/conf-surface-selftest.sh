@@ -22,16 +22,15 @@ EX="$ROOT/conf/fleet.conf.reference"
 WL="$ROOT/conf/fleet-env-internal.list"
 pass=0
 ok()   { pass=$((pass+1)); }
-fail() { printf 'conf-surface FAIL: %s\n' "$1" >&2; exit 1; }
-[ -f "$EX" ] || fail "no conf/fleet.conf.reference at $EX"
-[ -f "$WL" ] || fail "no conf/fleet-env-internal.list at $WL"
+[ -f "$EX" ] || st_fail "no conf/fleet.conf.reference at $EX"
+[ -f "$WL" ] || st_fail "no conf/fleet-env-internal.list at $WL"
 
 st_sandbox "${TMPDIR:-/tmp}/conf-surface.XXXXXX"
 
 # The scanned scripts: bin/ + hooks/, minus selftests. -L follows the shadow
 # root's symlinked bin/ (run-selftests.sh), which holds links, not files.
 find -L "$BIN" "$ROOT/hooks" -maxdepth 1 -type f ! -name '*selftest*' 2>/dev/null | sort > "$WORK/scripts"
-[ -s "$WORK/scripts" ] || fail 'found no scripts to scan'
+[ -s "$WORK/scripts" ] || st_fail 'found no scripts to scan'
 # Readers for A also include the skills/commands (a key read only by a slash
 # command's markdown is still read), minus the config writer, which names keys
 # generically.
@@ -46,20 +45,20 @@ sort -u "$WORK/listed" > "$WORK/listed.u"
 
 # --- C: the list itself -------------------------------------------------------
 dup=$(uniq -d "$WORK/listed")
-[ -z "$dup" ] || fail "listed twice in fleet-env-internal.list: $dup"; ok
+[ -z "$dup" ] || st_fail "listed twice in fleet-env-internal.list: $dup"; ok
 bad=$(grep -vE '^[[:space:]]*(#|$)' "$WL" | awk 'NF < 3 || $1 !~ /^FLEET_[A-Z0-9_]+$/ {print $1}')
-[ -z "$bad" ] || fail "fleet-env-internal.list lines need 'NAME kind: reason': $bad"; ok
+[ -z "$bad" ] || st_fail "fleet-env-internal.list lines need 'NAME kind: reason': $bad"; ok
 both=$(comm -12 "$WORK/listed.u" "$WORK/example")
-[ -z "$both" ] || fail "in BOTH the example and fleet-env-internal.list (keep one): $both"; ok
+[ -z "$both" ] || st_fail "in BOTH the example and fleet-env-internal.list (keep one): $both"; ok
 
 # --- B: every ${FLEET_X:-…} a script reads is documented or listed -----------
 # shellcheck disable=SC2046
 tr '\n' '\0' < "$WORK/scripts" | xargs -0 grep -ohE '\$\{FLEET_[A-Z0-9_]+:?[-=]' 2>/dev/null \
   | sed -E 's/^\$\{//; s/:?[-=]$//' | sort -u > "$WORK/read"
-[ -s "$WORK/read" ] || fail 'scan found no ${FLEET_X:-…} reads at all — the scanner is broken'; ok
+[ -s "$WORK/read" ] || st_fail 'scan found no ${FLEET_X:-…} reads at all — the scanner is broken'; ok
 cat "$WORK/example" "$WORK/listed.u" | sort -u > "$WORK/known"
 new=$(comm -23 "$WORK/read" "$WORK/known")
-[ -z "$new" ] || fail "read by a script but neither in conf/fleet.conf.reference nor conf/fleet-env-internal.list:
+[ -z "$new" ] || st_fail "read by a script but neither in conf/fleet.conf.reference nor conf/fleet-env-internal.list:
 $new
 — a setting an operator might change goes in the example (with a tag line; @tier=internal
   if it is pacing); an env handoff / test seam / path goes in the list, with a reason."
@@ -72,15 +71,15 @@ mentions() { xargs -0 grep -hwE 'FLEET_[A-Z0-9_]+' 2>/dev/null | grep -vE '^[[:s
                | grep -owE 'FLEET_[A-Z0-9_]+' | sort -u; }
 tr '\n' '\0' < "$WORK/readers" | mentions > "$WORK/mentioned"
 dead=$(comm -23 "$WORK/example" "$WORK/mentioned")
-[ -z "$dead" ] || fail "in conf/fleet.conf.reference but read by nothing (a dead row): $dead"; ok
+[ -z "$dead" ] || st_fail "in conf/fleet.conf.reference but read by nothing (a dead row): $dead"; ok
 # (C counts a comment: B reads one too, so a name only a comment spells stays listed.)
 cat "$WORK/scripts" "$WORK/readers" | tr '\n' '\0' | xargs -0 grep -ohwE 'FLEET_[A-Z0-9_]+' 2>/dev/null \
   | sort -u > "$WORK/mentioned.all"
 stale=$(comm -23 "$WORK/listed.u" "$WORK/mentioned.all")
-[ -z "$stale" ] || fail "in fleet-env-internal.list but read by nothing (drop the line): $stale"; ok
+[ -z "$stale" ] || st_fail "in fleet-env-internal.list but read by nothing (drop the line): $stale"; ok
 
 # --- the short sample at the root is generated from the reference (issue #3576) ---
-bash "$BIN/fleet-conf-example.sh" --check || fail "fleet.conf.example is stale — bin/fleet-conf-example.sh > fleet.conf.example"; ok
+bash "$BIN/fleet-conf-example.sh" --check || st_fail "fleet.conf.example is stale — bin/fleet-conf-example.sh > fleet.conf.example"; ok
 
 # --- the global-only list == the @scope=global tags (issue #237) -------------
 # fleet_load_conf strips exactly fleet-lib's $_FLEET_GLOBAL_ONLY from a per-fleet
@@ -101,7 +100,7 @@ ex_global=$(awk '
     }
   }' "$EX" | sort -u | tr '\n' ' ')
 lib_global=$( . "$BIN/fleet-lib.sh" >/dev/null 2>&1; printf '%s' "$_FLEET_GLOBAL_ONLY" | tr ' ' '\n' | grep . | sort -u | tr '\n' ' ' )
-[ "$ex_global" = "$lib_global" ] || fail "_FLEET_GLOBAL_ONLY (bin/fleet-lib.sh) != the @scope=global keys of conf/fleet.conf.reference:
+[ "$ex_global" = "$lib_global" ] || st_fail "_FLEET_GLOBAL_ONLY (bin/fleet-lib.sh) != the @scope=global keys of conf/fleet.conf.reference:
   only in the lib:       $(comm -23 <(tr ' ' '\n' <<< "$lib_global" | grep .) <(tr ' ' '\n' <<< "$ex_global" | grep .) | tr '\n' ' ')
   only in the reference: $(comm -13 <(tr ' ' '\n' <<< "$lib_global" | grep .) <(tr ' ' '\n' <<< "$ex_global" | grep .) | tr '\n' ' ')"
 ok

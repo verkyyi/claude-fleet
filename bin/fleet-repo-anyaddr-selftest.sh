@@ -28,7 +28,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
+st_need git
 
 st_sandbox "${TMPDIR:-/tmp}/fleet-repo-anyaddr.XXXXXX" physical
 mkdir -p "$WORK/shim" "$WORK/home" "$WORK/srv/acme" "$WORK/srv/repos" "$WORK/srv/gh/o" "$WORK/tmp"
@@ -42,11 +42,10 @@ export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PR
 unset TMUX TMUX_PANE FLEET_SESSION FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH
 . "$BIN/fleet-lib.sh"
 
-FAILS=0; CHECKS=0
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-eq()   { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
-has()  { CHECKS=$((CHECKS+1)); printf '%s' "$2" | grep -qF -- "$3" || fail "$1: no [$3] in: $(printf '%s' "$2" | tail -3 | tr '\n' ' ')"; }
-hasnt() { CHECKS=$((CHECKS+1)); printf '%s' "$2" | grep -qE -- "$3" && fail "$1: [$3] should be absent"; return 0; }
+st_tally
+eq()   { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_miss "$1: expected [$3], got [$2]"; }
+has()  { CHECKS=$((CHECKS+1)); printf '%s' "$2" | grep -qF -- "$3" || st_miss "$1: no [$3] in: $(printf '%s' "$2" | tail -3 | tr '\n' ' ')"; }
+hasnt() { CHECKS=$((CHECKS+1)); printf '%s' "$2" | grep -qE -- "$3" && st_miss "$1: [$3] should be absent"; return 0; }
 
 # bare <dir> <head-branch> — a bare repo with one commit on <head-branch>, HEAD on it
 bare() {
@@ -133,7 +132,7 @@ for row in "https://gitlab.com/acme/widgets.git|acme/widgets|develop" \
   eq "B: fleet_repo_forge $name" "$(fleet_repo_forge "$name" "$S")" none
   eq "C(n): adding $name leaves the other confs alone" "$(snap "$(fleet_slug "$name")")" "$before"
   case "$(cat "$FLEET_CONF_DIR/fleets/$S/repos/.order")" in
-    "$order0"*) CHECKS=$((CHECKS+1)) ;; *) fail "C(n): adding $name reordered .order" ;;
+    "$order0"*) CHECKS=$((CHECKS+1)) ;; *) st_miss "C(n): adding $name reordered .order" ;;
   esac
 done
 
@@ -196,5 +195,4 @@ has "E: main passes off FLEET_REMOTE" "$doc" "mac-c/demo: $WORK/home/projects/de
 has "E: base is the remote's HEAD" "$doc" 'mac-c/demo: base "trunk" is the repo default'
 hasnt "E: the repo block asked gh nothing" "$(cat "$WORK/gh.calls")" 'repo view|label list'
 
-if [ "$FAILS" -gt 0 ]; then printf 'selftest FAIL: %d of %d checks\n' "$FAILS" "$CHECKS" >&2; exit 1; fi
-printf 'selftest PASS: a repo is any git address — %d checks held (issue #3600)\n' "$CHECKS"
+st_done

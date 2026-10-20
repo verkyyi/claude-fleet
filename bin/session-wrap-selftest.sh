@@ -42,7 +42,8 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-command -v python3 >/dev/null 2>&1 || { printf 'session-wrap: python3 absent — SKIP\n'; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need python3
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'session-wrap: tmux absent — SKIP\n'; exit 0; }
 
@@ -55,10 +56,8 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 CHECKS=0
 fail() {
-  printf 'session-wrap FAIL: %s\n' "$1" >&2
-  [ $# -gt 1 ] && printf '%s\n' "$2" >&2
   case "$1" in *D:*) home_trace failure; cat "$WORK/home.trace" >&2 ;; esac
-  exit 1
+  st_fail "$@"
 }
 eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
 waitfor() {  # <what> <command…> — up to 10s

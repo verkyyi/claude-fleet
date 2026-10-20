@@ -21,6 +21,7 @@
 #      control socket's status
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SB=$(mktemp -d /tmp/crst.XXXXXX)   # short: the proxy's ctl.sock must fit AF_UNIX's 104 bytes
 SB=$(cd "$SB" && pwd -P)
 PXPID=''
@@ -35,9 +36,7 @@ mkdir -p "$HOME" "$FLEET_CONF_DIR" "$XDG_CONFIG_HOME"
 unset FLEET_CRED_PROXY FLEET_CRED_RELAY_URL FLEET_HUB_URL CCQUOTA_HUB_URL CCQUOTA_TOKEN CCQUOTA_FLEET FLEET_PROBE_FORCE_UNREACHABLE
 export FLEET_CRED_ROLLOUT_WAIT=120 FLEET_CRED_ROLLOUT_PROCS="$SB/procs"
 
-FAIL=0
-pass() { printf 'PASS %s\n' "$*"; }
-fail() { printf 'FAIL %s\n' "$*"; FAIL=1; }
+st_tally
 waitfor() { local i=0; while [ "$i" -lt 300 ]; do "$@" && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
 up() { [ -S "$FLEET_CONF_DIR/cred-proxy/ctl.sock" ] && kill -0 "$(cat "$FLEET_CONF_DIR/cred-proxy/pid" 2>/dev/null)" 2>/dev/null; }
 R() { bash "$BIN/fleet-cred-rollout.sh" "$@"; }
@@ -88,23 +87,23 @@ cp "$FLEET_CONF_DIR/fleet.conf" "$SB/orig.conf"
 # ── A: off ─────────────────────────────────────────────────────────────────
 out=$(R status); rc=$?
 if [ "$rc" = 0 ] && [ "$out" = 'off · - · sessions 0/4' ] && cmp -s "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf" && ! up; then
-  pass "A off: '$out', conf untouched, no proxy"
-else fail "A off: rc=$rc out='$out'"; fi
+  st_ok_all "A off: '$out', conf untouched, no proxy"
+else st_miss "A off: rc=$rc out='$out'"; fi
 
 # ── C: a login's own switch is gone (#4674) ────────────────────────────────
 for v in enable disable; do
   out=$(R "$v" 2>&1); rc=$?
   if [ "$rc" = 2 ] && case "$out" in *"fleet cred-proxy $v --machine"*) true ;; *) false ;; esac \
      && cmp -s "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf" && ! up; then
-    pass "C $v: a login has no proxy of its own to $v — exit 2, names --machine, nothing written"
-  else fail "C $v rc=$rc: $out"; fi
+    st_ok_all "C $v: a login has no proxy of its own to $v — exit 2, names --machine, nothing written"
+  else st_miss "C $v rc=$rc: $out"; fi
 done
 out=$(R disable --machine 2>&1); rc=$?
-case "$rc:$out" in "2:"*"disable --machine is gone (issue #4675)"*) pass "C disable --machine: gone — exit 2, no way back to a home (#4675)" ;; *) fail "C disable --machine rc=$rc: $out" ;; esac
+case "$rc:$out" in "2:"*"disable --machine is gone (issue #4675)"*) st_ok_all "C disable --machine: gone — exit 2, no way back to a home (#4675)" ;; *) st_miss "C disable --machine rc=$rc: $out" ;; esac
 out=$(R enable --all-logins 2>&1); rc=$?
-[ "$rc" = 2 ] && cmp -s "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf" && pass "C enable --all-logins: exit 2 too" || fail "C --all-logins rc=$rc: $out"
+[ "$rc" = 2 ] && cmp -s "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf" && st_ok_all "C enable --all-logins: exit 2 too" || st_miss "C --all-logins rc=$rc: $out"
 out=$(bash "$BIN/fleet-cred-proxy.sh" run 2>&1); rc=$?
-[ "$rc" = 2 ] && ! up && pass "C the per-login launcher's old entry \`run\` is gone (exit 2), starts nothing" || fail "C run rc=$rc: $out"
+[ "$rc" = 2 ] && ! up && st_ok_all "C the per-login launcher's old entry \`run\` is gone (exit 2), starts nothing" || st_miss "C run rc=$rc: $out"
 
 # ── B: on, through the proxy this login's sessions use ─────────────────────
 printf 'export FLEET_CRED_PROXY=1\n' >> "$FLEET_CONF_DIR/fleet.conf"
@@ -116,16 +115,16 @@ json.dump({"state":st,"run":st,"user":"me","version":"-","port":0,"tenants":[{"l
 open(os.path.join(c,"machine.json"),"w"))' "$FLEET_CONF_DIR"
 mkdir -p "$FLEET_CONF_DIR/cred-proxy"
 python3 -I "$BIN/fleet-cred-proxy.py" serve --shared "$FLEET_CONF_DIR/machine.json" --max-seconds 300 2>"$SB/proxy.err" & PXPID=$!
-waitfor up || fail "B the proxy did not start: $(cat "$SB/proxy.err")"
+waitfor up || st_miss "B the proxy did not start: $(cat "$SB/proxy.err")"
 PORT=$(cat "$FLEET_CONF_DIR/cred-proxy/port" 2>/dev/null); procs "$PORT"
 out=$(R status)
 case "$out" in
-  'on · down ·'*|'on · - ·'*) fail "B status: route missing — $out" ;;
-  'on · '*' · sessions 2/4') pass "B status: '$out' (its port counts, no other)" ;;
-  *) fail "B status: $out" ;;
+  'on · down ·'*|'on · - ·'*) st_miss "B status: route missing — $out" ;;
+  'on · '*' · sessions 2/4') st_ok_all "B status: '$out' (its port counts, no other)" ;;
+  *) st_miss "B status: $out" ;;
 esac
-case "$out" in *"$SECRET"*|*fcp1.*) fail "G status printed an environment value" ;; *) pass "G status prints counts only" ;; esac
-bash "$BIN/fleet-cred-proxy.sh" status --ctl >/dev/null 2>&1; [ $? != 2 ] && pass "G status --ctl still reaches the control socket's status" || fail "G status --ctl"
+case "$out" in *"$SECRET"*|*fcp1.*) st_miss "G status printed an environment value" ;; *) st_ok_all "G status prints counts only" ;; esac
+bash "$BIN/fleet-cred-proxy.sh" status --ctl >/dev/null 2>&1; [ $? != 2 ] && st_ok_all "G status --ctl still reaches the control socket's status" || st_miss "G status --ctl"
 kill "$PXPID" 2>/dev/null; wait "$PXPID" 2>/dev/null; PXPID=''
 cp "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf"
 
@@ -135,7 +134,7 @@ cp -R "$BIN" "$SRC/bin"
 # no background auto-gc: it packs the loose objects away while the clones below
 # copy them ("failed to copy file … No such file") and a login went missing
 ( cd "$SRC" && git init -q && git config gc.auto 0 && git config maintenance.auto false && git add -A \
-  && git -c user.email=t@t -c user.name=t commit -qm src ) || fail "F source repo"
+  && git -c user.email=t@t -c user.name=t commit -qm src ) || st_miss "F source repo"
 for u in alice bob; do
   mkdir -p "$SB/homes/$u/.claude"
   git clone -q "$SRC" "$SB/homes/$u/.claude/fleet" 2>/dev/null
@@ -158,13 +157,12 @@ if printf '%s\n' "$out" | grep -qx "$me: off · - · sessions 0/4" \
    && printf '%s\n' "$out" | grep -qx 'alice: off · - · sessions 0/4' \
    && printf '%s\n' "$out" | grep -q '^bob: no fleet-cred-rollout.sh in its install — sync it first' \
    && printf '%s\n' "$out" | grep -qx 'all: on 0/2 logins · sessions 0/8' && [ "$rc" = 6 ]; then
-  pass "F status --all-logins: each login's own line, the stale install named, the all: line (rc 6)"
-else fail "F status --all-logins rc=$rc:"; printf '%s\n' "$out"; fi
+  st_ok_all "F status --all-logins: each login's own line, the stale install named, the all: line (rc 6)"
+else st_miss "F status --all-logins rc=$rc:"; printf '%s\n' "$out"; fi
 out=$(bash "$SB/sync.sh" --cred-proxy enable --logins alice 2>&1); rc=$?
 [ "$rc" = 2 ] && cmp -s "$SB/alice.conf" "$SB/homes/alice/.config/claude-fleet/fleet.conf" \
-  && pass "F --cred-proxy enable: refused (a login has no proxy of its own to switch), alice untouched" \
-  || fail "F sync enable rc=$rc: $out"
+  && st_ok_all "F --cred-proxy enable: refused (a login has no proxy of its own to switch), alice untouched" \
+  || st_miss "F sync enable rc=$rc: $out"
 unset FLEET_SYNC_LOGINS_SUDO FLEET_SYNC_LOGINS_ME FLEET_LIVE_DIR
 
-[ "$FAIL" = 0 ] && echo "fleet-cred-rollout-selftest: OK" || echo "fleet-cred-rollout-selftest: FAILED"
-exit "$FAIL"
+st_done

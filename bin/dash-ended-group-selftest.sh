@@ -34,11 +34,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 st_real_tmux
 
-CHECKS=0 FAILS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; FAILS=$((FAILS+1)); }
-has()  { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1" "$2";; esac; }
-hasnt(){ CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1" "$2";; *) : ;; esac; }
-eq()   { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
+st_tally count miss
+eq()   { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_miss "$1: expected [$3], got [$2]"; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dash-ended.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -74,12 +71,12 @@ opt()   { tmux show-option -t '=alpha:' -qv @repo_fold; }
 
 # --- A. folded by default -------------------------------------------------------
 n=$(names)
-has   "A: the foot is the folded 已结束 heading with its count" "$n" "▸ 已结束 · 还开着 (2)"
-hasnt "A: the done no-issue row is off the list" "$n" "donehome"
-hasnt "A: …and so is the exited one" "$n" "gone"
-has   "A: a done row WITH an issue stays" "$n" "issue-1"
-has   "A: a working no-issue row stays" "$n" "live"
-has   "A: a pinned done row stays in 置顶" "$n" "pinned"
+st_has   "A: the foot is the folded 已结束 heading with its count" "$n" "▸ 已结束 · 还开着 (2)"
+st_hasnt "A: the done no-issue row is off the list" "$n" "donehome"
+st_hasnt "A: …and so is the exited one" "$n" "gone"
+st_has   "A: a done row WITH an issue stays" "$n" "issue-1"
+st_has   "A: a working no-issue row stays" "$n" "live"
+st_has   "A: a pinned done row stays in 置顶" "$n" "pinned"
 eq    "A: the heading's sidebar key is hdr:ended, last" "$(keys | awk '{ print $NF }')" "hdr:ended"
 eq    "A: the hub list's heading carries 'ended' as its 4th field" \
       "$(raw | grep '已结束' | awk -F '\037' '{ print $4 }')" "ended"
@@ -90,43 +87,43 @@ before=$(names)
 # token is set by hand here, the rows' reading of it is what is pinned)
 tmux set-option -t '=alpha:' @repo_fold ended:open
 n=$(names)
-has   "B: the heading is open" "$n" "已结束 · 还开着 (2) "
-hasnt "B: …no fold caret" "$n" "▸ 已结束"
-has   "B: the ended rows show under it" "$n" "donehome"
-has   "B: …both of them" "$n" "gone"
+st_has   "B: the heading is open" "$n" "已结束 · 还开着 (2) "
+st_hasnt "B: …no fold caret" "$n" "▸ 已结束"
+st_has   "B: the ended rows show under it" "$n" "donehome"
+st_has   "B: …both of them" "$n" "gone"
 tmux set-option -u -t '=alpha:' @repo_fold
 eq    "B: the token gone, the list is A's again" "$(names)" "$before"
 
 # --- C. rails -------------------------------------------------------------------
 n=$(FLEET_SIDEBAR_CURRENT="$W_DONE" names)
-has   "C: the sidebar's current window stays on the list while folded" "$n" "donehome"
+st_has   "C: the sidebar's current window stays on the list while folded" "$n" "donehome"
 win kid @issue 7 @claude_state working @origin o-claude-fleet:scratch-9 >/dev/null
 tmux set -wu -t "$W_DONE" @norepo; tmux set -w -t "$W_DONE" @repo o/claude-fleet; tmux set -w -t "$W_DONE" @raw 1; tmux set -w -t "$W_DONE" @worktree "$WORK/cf-scratch-9"
 n=$(names)
-has   "C: a done row with a child keeps its place" "$n" "issue-1 donehome"
-has   "C: …the heading counts only the one left" "$n" "▸ 已结束 · 还开着 (1)"
+st_has   "C: a done row with a child keeps its place" "$n" "issue-1 donehome"
+st_has   "C: …the heading counts only the one left" "$n" "▸ 已结束 · 还开着 (1)"
 
 # --- D. nothing ended -----------------------------------------------------------
 for w in $(tmux list-windows -t alpha -F '#{window_id}'); do
   case "$(tmux show -w -t "$w" -qv @claude_state)" in done|exited) tmux set -w -t "$w" @claude_state working ;; esac
 done
 n=$(names)
-hasnt "D: no ended row, no heading" "$n" "已结束"
+st_hasnt "D: no ended row, no heading" "$n" "已结束"
 eq    "D: …and no option written" "$(opt)" ""
 
 # --- E. fleet ls ----------------------------------------------------------------
 TSV="$WORK/rows.tsv"
 printf 'a1\tworking\t·\tlive\tm1\tclaude-fleet (1)\t\t\t\t\t\to/claude-fleet\nb2\tdone\t✓\tdonehome\tm1\t▸ 已结束 (1)\t\t\t\t\t\t\t1\n' > "$TSV"
 out=$(FLEET_SESSION_CLI_ROWS="$TSV" python3 "$BIN/fleet-session-cli.py" ls --json)
-has   "E: fleet ls lists the live session" "$out" '"live"'
-hasnt "E: …and hides the ended one" "$out" 'donehome'
+st_has   "E: fleet ls lists the live session" "$out" '"live"'
+st_hasnt "E: …and hides the ended one" "$out" 'donehome'
 out=$(FLEET_SESSION_CLI_ROWS="$TSV" python3 "$BIN/fleet-session-cli.py" ls --all --json)
-has   "E: fleet ls --all lists the ended one too" "$out" 'donehome'
+st_has   "E: fleet ls --all lists the ended one too" "$out" 'donehome'
 # issue #3731: the table names the group the sidebar and ⌘P do
 out=$(FLEET_SESSION_CLI_ROWS="$TSV" python3 "$BIN/fleet-session-cli.py" ls --all)
-has   "E: fleet ls --all heads the ended ones 已结束 · 还开着" "$out" '已结束 · 还开着 1 个'
-has   "E: …below the live one" "$(printf '%s\n' "$out" | sed -n '/已结束 · 还开着/,$p')" 'donehome'
-hasnt "E: …the live one not under it" "$(printf '%s\n' "$out" | sed -n '/已结束 · 还开着/,$p')" 'live'
+st_has   "E: fleet ls --all heads the ended ones 已结束 · 还开着" "$out" '已结束 · 还开着 1 个'
+st_has   "E: …below the live one" "$(printf '%s\n' "$out" | sed -n '/已结束 · 还开着/,$p')" 'donehome'
+st_hasnt "E: …the live one not under it" "$(printf '%s\n' "$out" | sed -n '/已结束 · 还开着/,$p')" 'live'
 FLEET_SESSION_CLI_ROWS="$TSV" python3 "$BIN/fleet-session-cli.py" ls --bogus >/dev/null 2>&1
 eq    "E: an unknown flag is usage (2)" "$?" "2"
 out=$(python3 - "$BIN" <<'PY'
@@ -153,12 +150,12 @@ win idlehome  @norepo 1 @claude_state done   @reap_policy done:2h     >/dev/null
 win barehome  @norepo 1 @claude_state done                            >/dev/null
 win keptgone  @norepo 1 @claude_state exited @reap_policy keep        >/dev/null
 n=$(names)
-has   "G: a kept, done home session stays on the list" "$n" "keephome"
-has   "G: …so does one closed at a time its person chose" "$n" "athome"
-hasnt "G: a done:2h one still ends" "$n" "idlehome"
-hasnt "G: …so does one with no policy" "$n" "barehome"
-hasnt "G: an exited one ends whatever its policy" "$n" "keptgone"
-has   "G: the heading counts the three" "$n" "▸ 已结束 · 还开着 (3)"
+st_has   "G: a kept, done home session stays on the list" "$n" "keephome"
+st_has   "G: …so does one closed at a time its person chose" "$n" "athome"
+st_hasnt "G: a done:2h one still ends" "$n" "idlehome"
+st_hasnt "G: …so does one with no policy" "$n" "barehome"
+st_hasnt "G: an exited one ends whatever its policy" "$n" "keptgone"
+st_has   "G: the heading counts the three" "$n" "▸ 已结束 · 还开着 (3)"
 
 # --- H. a turn is not the end (issue #3496) ----------------------------------------
 for w in $(tmux list-windows -t alpha -F '#{window_id}'); do
@@ -172,13 +169,13 @@ win stale     @norepo 1 @claude_state done @claude_state_ts "$((T - 1200))"     
 win overdue   @norepo 1 @claude_state done @claude_state_ts "$((T - 660))" @reap_policy done:10m   >/dev/null
 win exitnow   @norepo 1 @claude_state exited @claude_state_ts "$T"                                  >/dev/null
 n=$(names)
-has   "H: a session that just finished its turn stays on the list" "$n" "justdone"
-has   "H: …so does one 2 minutes into its done:15m window" "$n" "firstdone"
-has   "H: …and one an hour into done:2h" "$n" "longidle"
-hasnt "H: idle past the 15m default, it ends" "$n" "stale"
-hasnt "H: idle past its done:10m, it ends" "$n" "overdue"
-hasnt "H: exited ends at once" "$n" "exitnow"
-has   "H: the heading counts the three" "$n" "▸ 已结束 · 还开着 (3)"
+st_has   "H: a session that just finished its turn stays on the list" "$n" "justdone"
+st_has   "H: …so does one 2 minutes into its done:15m window" "$n" "firstdone"
+st_has   "H: …and one an hour into done:2h" "$n" "longidle"
+st_hasnt "H: idle past the 15m default, it ends" "$n" "stale"
+st_hasnt "H: idle past its done:10m, it ends" "$n" "overdue"
+st_hasnt "H: exited ends at once" "$n" "exitnow"
+st_has   "H: the heading counts the three" "$n" "▸ 已结束 · 还开着 (3)"
 TSV="$WORK/rows-h.tsv"
 FLEET_SESSION=alpha FLEET_ROWS_UNFOLD=1 python3 - "$BIN" "$TSV" <<'PY'
 import importlib.util, sys
@@ -190,8 +187,8 @@ open(sys.argv[2], "w").write("".join("\t".join([r["key"], r["state"], r["glyph"]
                                                  r["ended"]]) + "\n" for r in rs or []))
 PY
 out=$(FLEET_SESSION_CLI_ROWS="$TSV" python3 "$BIN/fleet-session-cli.py" ls --json)
-has   "H: fleet ls lists the session that just answered" "$out" '"justdone"'
-hasnt "H: …and not the stale one" "$out" '"stale"'
+st_has   "H: fleet ls lists the session that just answered" "$out" '"justdone"'
+st_hasnt "H: …and not the stale one" "$out" '"stale"'
 
-printf 'dash-ended-group-selftest: %d checks, %d failed\n' "$CHECKS" "$FAILS"
-[ "$FAILS" = 0 ]
+printf 'dash-ended-group-selftest: %d checks, %d failed\n' "$CHECKS" "$FAIL"
+st_done

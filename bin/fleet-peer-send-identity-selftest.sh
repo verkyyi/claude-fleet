@@ -16,8 +16,9 @@
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 REAL_TMUX=$(command -v tmux) || { printf 'fleet-peer-send-identity selftest: tmux absent — SKIP\n'; exit 0; }
-command -v python3 >/dev/null 2>&1 || { printf 'fleet-peer-send-identity selftest: python3 absent — SKIP\n'; exit 0; }
+st_need python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-peer-ident.XXXXXX")" || exit 2
 L="fpsid$$"
@@ -26,9 +27,7 @@ export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR"
 export FLEET_CLAUDE_COMM='FLEETFAKECLAUDE'
 unset TMUX TMUX_PANE
 
-FAIL=0; CHECKS=0
-fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
-ok() { CHECKS=$((CHECKS + 1)); }
+st_tally
 tf() { "$REAL_TMUX" -L "$L" "$@"; }
 LISTENER=""
 cleanup() { [ -n "$LISTENER" ] && kill "$LISTENER" 2>/dev/null; "$REAL_TMUX" -L "$L" kill-server 2>/dev/null; rm -rf "$WORK"; }
@@ -61,7 +60,7 @@ sleep 0.6
 socks=""
 for w in "$wA" "$wB" "$wC"; do
   p=$(. "$BIN/fleet-lib.sh"; fleet_pane_claude_pid "$w" "$L")
-  [ -n "$p" ] || { fail "rig: no fake Claude under $w"; exit 1; }
+  [ -n "$p" ] || { st_miss "rig: no fake Claude under $w"; exit 1; }
   n=${w#@}
   printf '{"pid":%s,"sessionId":"sid-%s","cwd":"%s","messagingSocketPath":"%s","name":"w%s"}\n' \
     "$p" "$n" "$WORK/wt-$n" "$WORK/in-$n.sock" "$n" > "$FLEET_CC_SESSIONS_DIR/$p.json"
@@ -109,66 +108,66 @@ landed() {
   for _ in $(seq 1 30); do grep -q "$2" "$WORK/got" 2>/dev/null && break; sleep 0.1; done
   [ "$(grep "$2" "$WORK/got" | cut -f1)" = "in-${1#@}.sock" ]
 }
-one_line() { ok; [ "$lines" -eq 1 ] || fail "$1: exactly one outcome line" "out=[$out] err=[$err]"; }
+one_line() { st_count; [ "$lines" -eq 1 ] || st_miss "$1: exactly one outcome line" "out=[$out] err=[$err]"; }
 
 # --- 1. the drift: remember B's neighbour A's index, then close the filler ------
 staleA="$L:$(idx_of "$wA")"
 tf kill-window -t "$filler"; sleep 0.2
-ok; [ "$(tf display-message -p -t "$staleA" '#{window_id}')" = "$wB" ] \
-  || fail "rig: closing the filler must renumber B onto A's old index"
+st_count; [ "$(tf display-message -p -t "$staleA" '#{window_id}')" = "$wB" ] \
+  || st_miss "rig: closing the filler must renumber B onto A's old index"
 
 send -L "$L" issue:11 "m-issue-colon"
-ok; [ "$rc" = 0 ] || fail "issue:11 after renumber → exit 0" "$err"
-ok; landed "$wA" m-issue-colon || fail "issue:11 must reach A, not whoever sits at its old index" "$(cat "$WORK/got")"
+st_count; [ "$rc" = 0 ] || st_miss "issue:11 after renumber → exit 0" "$err"
+st_count; landed "$wA" m-issue-colon || st_miss "issue:11 must reach A, not whoever sits at its old index" "$(cat "$WORK/got")"
 exp="sent → pid $(eval echo "\$pid_${wA#@}") (issue-11 · "
-ok; case "$out" in "$exp"*) ;; *) fail "success echo names pid + window + worktree" "$out" ;; esac
+st_count; case "$out" in "$exp"*) ;; *) st_miss "success echo names pid + window + worktree" "$out" ;; esac
 one_line "issue:11"
 
 send -L "$L" '#12' "m-hash"
-ok; [ "$rc" = 0 ] && landed "$wB" m-hash || fail "#12 → B" "$out $err"
+st_count; [ "$rc" = 0 ] && landed "$wB" m-hash || st_miss "#12 → B" "$out $err"
 one_line "#12"
 send -L "$L" issue-11 "m-dash"
-ok; [ "$rc" = 0 ] && landed "$wA" m-dash || fail "issue-11 → A" "$out $err"
+st_count; [ "$rc" = 0 ] && landed "$wA" m-dash || st_miss "issue-11 → A" "$out $err"
 
 # --- 2. scratch by its -scratch-<N> worktree (window renamed); a NAME refuses ----
 send -L "$L" scratch-5 "m-scratch"
-ok; [ "$rc" = 0 ] && landed "$wC" m-scratch || fail "scratch-5 → the @raw window in *-scratch-5" "$out $err"
+st_count; [ "$rc" = 0 ] && landed "$wC" m-scratch || st_miss "scratch-5 → the @raw window in *-scratch-5" "$out $err"
 one_line "scratch-5"
 send -L "$L" sc-renamed "m-byname"
-ok; [ "$rc" = 2 ] && [ -z "$out" ] || fail "a window NAME is not an address → exit 2 (issue #1537)" "rc=$rc $out $err"
-ok; sleep 0.3; grep -q m-byname "$WORK/got" && fail "a refused name must deliver NOTHING" "$(cat "$WORK/got")"
+st_count; [ "$rc" = 2 ] && [ -z "$out" ] || st_miss "a window NAME is not an address → exit 2 (issue #1537)" "rc=$rc $out $err"
+st_count; sleep 0.3; grep -q m-byname "$WORK/got" && st_miss "a refused name must deliver NOTHING" "$(cat "$WORK/got")"
 one_line "name refusal"
 
 # --- 3. a position refuses (issue #1537); --expect-issue pins an @id -------------
 send -L "$L" "$staleA" "m-stale"
-ok; [ "$rc" = 2 ] || fail "a <sess>:<idx> position → exit 2" "rc=$rc $out"
-ok; [ -z "$out" ] || fail "a refusal prints nothing on stdout" "$out"
-ok; sleep 0.3; grep -q m-stale "$WORK/got" && fail "a refused send must deliver NOTHING" "$(cat "$WORK/got")"
-ok; case "$err" in *position*) ;; *) fail "refusal says it is a position" "$err" ;; esac
+st_count; [ "$rc" = 2 ] || st_miss "a <sess>:<idx> position → exit 2" "rc=$rc $out"
+st_count; [ -z "$out" ] || st_miss "a refusal prints nothing on stdout" "$out"
+st_count; sleep 0.3; grep -q m-stale "$WORK/got" && st_miss "a refused send must deliver NOTHING" "$(cat "$WORK/got")"
+st_count; case "$err" in *position*) ;; *) st_miss "refusal says it is a position" "$err" ;; esac
 one_line "position refusal"
 send -L "$L" --expect-issue 12 "$staleA" "m-pinned-pos"
-ok; [ "$rc" = 2 ] || fail "--expect-issue does not make a position acceptable" "rc=$rc $out $err"
+st_count; [ "$rc" = 2 ] || st_miss "--expect-issue does not make a position acceptable" "rc=$rc $out $err"
 send -L "$L" --expect-issue 11 "$wB" "m-wrong-pin"
-ok; [ "$rc" = 1 ] && case "$err" in *refused*issue-12*) true ;; *) false ;; esac \
-  || fail "@id with the wrong --expect-issue → refused, names the window there" "rc=$rc $err"
+st_count; [ "$rc" = 1 ] && case "$err" in *refused*issue-12*) true ;; *) false ;; esac \
+  || st_miss "@id with the wrong --expect-issue → refused, names the window there" "rc=$rc $err"
 one_line "--expect-issue refusal"
 send -L "$L" --expect-issue 12 "$wB" "m-pinned"
-ok; [ "$rc" = 0 ] && landed "$wB" m-pinned || fail "@id with a matching --expect-issue → sends" "$out $err"
+st_count; [ "$rc" = 0 ] && landed "$wB" m-pinned || st_miss "@id with a matching --expect-issue → sends" "$out $err"
 
 # --- 4. zero / ambiguous / --repo --------------------------------------------------
 send -L "$L" issue:99 "m-none"
-ok; [ "$rc" = 1 ] || fail "issue:99 (no window) → exit 1" "rc=$rc"
+st_count; [ "$rc" = 1 ] || st_miss "issue:99 (no window) → exit 1" "rc=$rc"
 one_line "no match"
 wD=$(mkwin other-11 11 acme/b)
 send -L "$L" issue:11 "m-ambig"
-ok; [ "$rc" = 1 ] || fail "two windows bound to #11 → exit 1" "rc=$rc $out"
-ok; case "$err" in *ambiguous*issue-11*other-11*) ;; *) fail "ambiguity lists every candidate" "$err" ;; esac
+st_count; [ "$rc" = 1 ] || st_miss "two windows bound to #11 → exit 1" "rc=$rc $out"
+st_count; case "$err" in *ambiguous*issue-11*other-11*) ;; *) st_miss "ambiguity lists every candidate" "$err" ;; esac
 one_line "ambiguous"
 send -L "$L" --repo acme/a issue:11 "m-repo"
-ok; [ "$rc" = 0 ] && landed "$wA" m-repo || fail "--repo acme/a issue:11 → A" "$out $err"
+st_count; [ "$rc" = 0 ] && landed "$wA" m-repo || st_miss "--repo acme/a issue:11 → A" "$out $err"
 tf kill-window -t "$wD"
 send -L "$L" issue:abc "x"
-ok; [ "$rc" = 2 ] || fail "issue:abc → usage exit 2" "rc=$rc"
+st_count; [ "$rc" = 2 ] || st_miss "issue:abc → usage exit 2" "rc=$rc"
 one_line "bad issue"
 
 # --- 5. the formerly silent journaled-delivery path now echoes ---------------------
@@ -177,13 +176,12 @@ ln -s "$BIN/fleet-peer-send.sh" "$SB/fleet-peer-send.sh"; ln -s "$BIN/fleet-lib.
 printf 'import sys\nsys.stdin.read()\nsys.exit(0)\n' > "$SB/fleet_worker_life.py"
 tf set-window-option -t "$wB" @sleep_evidence '{"session_id":"x"}'
 out=$(bash "$SB/fleet-peer-send.sh" -L "$L" issue:12 "m-wake" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err")
-ok; [ "$rc" = 0 ] || fail "journaled delivery success → exit 0" "$err"
-ok; case "$out" in "sent → $wB via delivery (issue-12 · "*) ;; *) fail "journaled delivery must echo sent →" "[$out]" ;; esac
-ok; [ -z "$err" ] || fail "journaled delivery success: nothing on stderr" "$err"
+st_count; [ "$rc" = 0 ] || st_miss "journaled delivery success → exit 0" "$err"
+st_count; case "$out" in "sent → $wB via delivery (issue-12 · "*) ;; *) st_miss "journaled delivery must echo sent →" "[$out]" ;; esac
+st_count; [ -z "$err" ] || st_miss "journaled delivery success: nothing on stderr" "$err"
 printf 'import sys\nsys.stdin.read()\nsys.exit(1)\n' > "$SB/fleet_worker_life.py"
 out=$(bash "$SB/fleet-peer-send.sh" -L "$L" issue:12 "m-wake2" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err")
-ok; [ "$rc" = 1 ] && [ -z "$out" ] && [ "$(printf '%s\n' "$err" | grep -c .)" = 1 ] \
-  || fail "a silent delivery failure still gets one stderr line + exit 1" "rc=$rc out=[$out] err=[$err]"
+st_count; [ "$rc" = 1 ] && [ -z "$out" ] && [ "$(printf '%s\n' "$err" | grep -c .)" = 1 ] \
+  || st_miss "a silent delivery failure still gets one stderr line + exit 1" "rc=$rc out=[$out] err=[$err]"
 
-[ "$FAIL" -eq 0 ] || { printf 'fleet-peer-send-identity selftest: %d FAIL\n' "$FAIL" >&2; exit 1; }
-printf 'fleet-peer-send-identity selftest: OK (%d checks)\n' "$CHECKS"
+st_done

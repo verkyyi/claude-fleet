@@ -37,16 +37,16 @@
 #      keep theirs
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT/bin/selftest-lib.sh"
 BUILD="$ROOT/bin/site-build.sh"
 T="$(mktemp -d "${TMPDIR:-/tmp}/site-build-st.XXXXXX")"
 trap 'rm -rf "$T"' EXIT
 fail=0
-ok()  { echo "ok   $*"; }
 bad() { echo "FAIL $*"; fail=1; }
 NOW=2026-10-12
 
 # A — no drill
-if out="$("$BUILD" --out "$T/a" --drill "$T/none.json" --now "$NOW" 2>&1)"; then ok "A build: $out"; else bad "A build failed: $out"; echo FAIL; exit 1; fi
+if out="$("$BUILD" --out "$T/a" --drill "$T/none.json" --now "$NOW" 2>&1)"; then st_ok_all "A build: $out"; else bad "A build failed: $out"; echo FAIL; exit 1; fi
 
 python3 - "$T/a" "$ROOT" <<'PY' || fail=1
 import html, json, os, re, struct, subprocess, sys
@@ -146,7 +146,7 @@ if out="$("$BUILD" --out "$T/d" --drill "$T/fast.json" --now "$NOW" 2>&1)"; then
   for s in '<em>60 seconds</em>' '>8 s<' 'Try it<' 'slowest of 2 runs'; do
     grep -qF "$s" "$T/d/en/index.html" || miss="$miss $s"
   done
-  [ -z "$miss" ] && ok "D a drill of 46 s: 60 秒, the steps 8/6/32, 00:46, its date" || bad "D missing:$miss"
+  [ -z "$miss" ] && st_ok_all "D a drill of 46 s: 60 秒, the steps 8/6/32, 00:46, its date" || bad "D missing:$miss"
 else bad "D build failed: $out"; fi
 
 # T — fleet.trial off (issue #4269): apply/index.html + apply/en/index.html, served
@@ -222,7 +222,7 @@ for f in sys.argv[1:]:
 print('; '.join(bad))
 sys.exit(1 if bad else 0)
 PY
-)"; then ok "S the hero is a service: no GitHub / 开源 up top, the footer keeps 开源 / 自托管"
+)"; then st_ok_all "S the hero is a service: no GitHub / 开源 up top, the footer keeps 开源 / 自托管"
   else bad "S $out"; fi
 else bad "S no built page from D"; fi
 
@@ -237,7 +237,7 @@ if [ -f "$T/d/index.html" ]; then
   for s in '>Open console<' 'name="to" value="site-en">' '>Sign out</button>'; do
     grep -qF "$s" "$T/d/en/index.html" || miss="$miss [$s]"
   done
-  [ -z "$miss" ] && ok "K signed in: 进入控制台 · 退出, back to the site" || bad "K missing:$miss"
+  [ -z "$miss" ] && st_ok_all "K signed in: 进入控制台 · 退出, back to the site" || bad "K missing:$miss"
 else bad "K no built page from D"; fi
 
 # E — a drill over 60 s
@@ -246,7 +246,7 @@ if out="$("$BUILD" --out "$T/e" --drill "$T/slow.json" --now "$NOW" 2>&1)"; then
   if grep -qE '60 秒|60 seconds' "$T/e/index.html" "$T/e/en/index.html"; then bad "E a 131 s drill still says 60"
   elif ! grep -qF '约 2 分钟' "$T/e/index.html" || ! grep -qF 'about 2 minutes' "$T/e/en/index.html"; then bad "E the measured time is not on the page"
   elif ! printf '%s\n' "$out" | grep -q '^RED: '; then bad "E no RED: line: $out"
-  else ok "E a 131 s drill: 约 2 分钟 in place of 60 秒, RED"; fi
+  else st_ok_all "E a 131 s drill: 约 2 分钟 in place of 60 秒, RED"; fi
 else bad "E build failed: $out"; fi
 
 # F — a stale drill
@@ -254,7 +254,7 @@ printf '{"date":"2026-09-01","runs":[{"total":40,"steps":{"login":8,"machine":6,
 if out="$("$BUILD" --out "$T/f" --drill "$T/old.json" --now "$NOW" 2>&1)"; then
   if grep -qE '[0-9]+ 秒|[0-9]+ seconds|[0-9]+ s<' "$T/f/index.html" "$T/f/en/index.html"; then bad "F a 41-day-old drill still shows seconds"
   elif ! printf '%s\n' "$out" | grep -q '^RED: .*days old'; then bad "F no RED: line: $out"
-  else ok "F a 41-day-old drill: no seconds, RED"; fi
+  else st_ok_all "F a 41-day-old drill: no seconds, RED"; fi
 else bad "F build failed: $out"; fi
 
 # G — a string claiming seconds no drill measured
@@ -266,7 +266,7 @@ d['fine'] = '免费试用 · 开源 MIT · 60 秒上手'
 json.dump(d, open(p, 'w', encoding='utf-8'), ensure_ascii=False)
 PY
 out="$("$BUILD" --site "$T/site" --out "$T/g" --drill "$T/none.json" --now "$NOW" 2>&1)"; rc=$?
-if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'not a drill result'; then ok "G an unmeasured 「60 秒上手」 is refused"
+if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'not a drill result'; then st_ok_all "G an unmeasured 「60 秒上手」 is refused"
 else bad "G the build took an unmeasured number of seconds (rc $rc): $out"; fi
 [ ! -e "$T/g/index.html" ] || bad "G a refused build still wrote its pages"
 
@@ -274,7 +274,7 @@ else bad "G the build took an unmeasured number of seconds (rc $rc): $out"; fi
 # page names is a built file, and a new character the cut lacks fails the build
 missing="$(grep -o 'url(/site/fonts/[^)]*)' "$T/a/index.html" | sed 's#url(/site/##; s#)$##' | sort -u |
   while read -r f; do [ -f "$T/a/$f" ] || echo "$f"; done)"
-[ -z "$missing" ] && ok "K every @font-face file is built" || bad "K a face names a missing file: $missing"
+[ -z "$missing" ] && st_ok_all "K every @font-face file is built" || bad "K a face names a missing file: $missing"
 mkdir -p "$T/ksite" && cp -RL "$ROOT/site/." "$T/ksite/"
 python3 - "$T/ksite/strings.en.json" <<'PY'
 import json, sys
@@ -283,7 +283,7 @@ d['fine'] = d['fine'] + ' · café'
 json.dump(d, open(p, 'w', encoding='utf-8'), ensure_ascii=False)
 PY
 out="$("$BUILD" --site "$T/ksite" --out "$T/k" --drill "$T/none.json" --now "$NOW" 2>&1)"; rc=$?
-if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'the fonts lack U+00E9'; then ok "K a character the font cut lacks (é) fails the build"
+if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'the fonts lack U+00E9'; then st_ok_all "K a character the font cut lacks (é) fails the build"
 else bad "K the build took a character its fonts lack (rc $rc): $out"; fi
 
 # J — robots.txt · sitemap.xml · llms.txt · llms-zh.txt · llms-full.txt
@@ -431,7 +431,7 @@ for f in sys.argv[2:]:
                 print('%s:%d %s' % (f.rsplit('/', 2)[-2] + '/' + f.rsplit('/', 1)[-1], n, rid))
 PY2
 )
-  [ -z "$hits" ] && ok "I no internal name or address in the built pages" || bad "I internal names: $(printf '%s' "$hits" | tr '\n' ' ')"
+  [ -z "$hits" ] && st_ok_all "I no internal name or address in the built pages" || bad "I internal names: $(printf '%s' "$hits" | tr '\n' ' ')"
 fi
 
 [ "$fail" = 0 ] && echo "PASS" || echo "FAIL"

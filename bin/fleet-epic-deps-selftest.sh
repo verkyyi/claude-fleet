@@ -22,12 +22,12 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/epic-deps.XXXXXX") || exit 2
 trap 'rm -rf "${WORK:?}"' EXIT
-N=0 BAD=0
-ok()  { N=$((N + 1)); }
-bad() { N=$((N + 1)); BAD=$((BAD + 1)); printf 'FAIL %s\n' "$1"; }
-eq()  { if [ "$2" = "$3" ]; then ok; else bad "$1: want [$2] got [$3]"; fi; }
+st_tally
+bad() { st_count; st_miss "$1"; }
+eq()  { if [ "$2" = "$3" ]; then st_count; else bad "$1: want [$2] got [$3]"; fi; }
 
 mkdir -p "$WORK/conf"
 printf 'CCQUOTA_HUB_URL=https://hub.test\nCCQUOTA_TOKEN=fixture\n' > "$WORK/conf/node.env"
@@ -209,5 +209,5 @@ argv_ok --task T580 status
 argv_ok status "--task T580" --line      # zsh: status ${P:+--task "$P"} --line
 argv_ok status --task=T580
 
-printf 'fleet-epic-deps-selftest: %d/%d passed\n' "$((N - BAD))" "$N"
-[ "$BAD" -eq 0 ]
+printf 'fleet-epic-deps-selftest: %d/%d passed\n' "$((CHECKS - FAIL))" "$CHECKS"
+st_done

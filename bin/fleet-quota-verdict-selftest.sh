@@ -20,7 +20,7 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
-command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
+st_need python3
 
 st_sandbox "${TMPDIR:-/tmp}/quota-verdict-selftest.XXXXXX" physical
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/accounts" "$WORK/conf" "$WORK/.claude-dash/global"
@@ -47,9 +47,7 @@ esac
 FAKE
 chmod +x "$WORK/fakepath/ccquota"
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf -- '--- got ---\n%s\n' "$2" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
+st_tally count
 
 HUB="http://hub.test:8787"
 run() {
@@ -64,35 +62,35 @@ age_cache() { printf '%s' "$(( $(date +%s) - $1 ))" > "$G/account.quota.ts"; }
 
 # --- quota-verdict ------------------------------------------------------------
 reset_state; echo fresh > "$MODE"
-eq "no cache + no --refresh → unknown (nothing read yet)" unknown "$(verdict a)"
-eq "…and it never fetched" 0 "$(calls)"
-eq "--refresh fetches → 7d 34% is ok"           ok "$(verdict a --axis 7d --refresh)"
-eq "…exactly one fetch" 1 "$(calls)"
-eq "a second --refresh inside the dedupe window does not refetch" ok "$(verdict a --axis 7d --refresh)"
-eq "…still one fetch" 1 "$(calls)"
+st_eq "no cache + no --refresh → unknown (nothing read yet)" unknown "$(verdict a)"
+st_eq "…and it never fetched" 0 "$(calls)"
+st_eq "--refresh fetches → 7d 34% is ok"           ok "$(verdict a --axis 7d --refresh)"
+st_eq "…exactly one fetch" 1 "$(calls)"
+st_eq "a second --refresh inside the dedupe window does not refetch" ok "$(verdict a --axis 7d --refresh)"
+st_eq "…still one fetch" 1 "$(calls)"
 age_cache 30
-eq "past FLEET_ACCOUNT_VERDICT_REFETCH it refetches" ok "$(verdict a --refresh)"
-eq "…two fetches" 2 "$(calls)"
+st_eq "past FLEET_ACCOUNT_VERDICT_REFETCH it refetches" ok "$(verdict a --refresh)"
+st_eq "…two fetches" 2 "$(calls)"
 echo hot > "$MODE"; age_cache 30
-eq "7d 99% on the weekly axis → limited until ccquota's 7d reset" "limited $R7" "$(verdict a --axis 7d --refresh)"
-eq "…the 5h axis of the same account is ok (2%)"   ok "$(verdict a --axis 5h)"
-eq "…no axis weighs both → limited"               "limited $R7" "$(verdict a)"
-eq "a healthy account in the same payload → ok"   ok "$(verdict b)"
+st_eq "7d 99% on the weekly axis → limited until ccquota's 7d reset" "limited $R7" "$(verdict a --axis 7d --refresh)"
+st_eq "…the 5h axis of the same account is ok (2%)"   ok "$(verdict a --axis 5h)"
+st_eq "…no axis weighs both → limited"               "limited $R7" "$(verdict a)"
+st_eq "a healthy account in the same payload → ok"   ok "$(verdict b)"
 echo expired > "$MODE"; age_cache 30
 expired_until="$(verdict a --axis 5h --refresh)"
-case "$expired_until" in "limited "*) expired_until="${expired_until#limited }" ;; *) fail "expired high reading did not remain a short limit" "$expired_until" ;; esac
+case "$expired_until" in "limited "*) expired_until="${expired_until#limited }" ;; *) st_fail "expired high reading did not remain a short limit" "$expired_until" ;; esac
 now_s="$(date +%s)"
 [ "$expired_until" -ge "$((now_s + 55))" ] && [ "$expired_until" -le "$((now_s + 65))" ] \
-  || fail "expired reset was extended too far instead of retried in ~60s" "$expired_until"
+  || st_fail "expired reset was extended too far instead of retried in ~60s" "$expired_until"
 CHECKS=$((CHECKS+1))
 age_cache 700
-eq "stale cache (> FLEET_ACCOUNT_QUOTA_STALE) → unknown" unknown "$(verdict a)"
+st_eq "stale cache (> FLEET_ACCOUNT_QUOTA_STALE) → unknown" unknown "$(verdict a)"
 echo only-b > "$MODE"; age_cache 30
-eq "account absent from the hub → unknown"        unknown "$(verdict a --refresh)"
+st_eq "account absent from the hub → unknown"        unknown "$(verdict a --refresh)"
 echo empty > "$MODE"; age_cache 30
-eq "blind hub (empty answer) → unknown"           unknown "$(verdict b --refresh)"
-eq "no hub configured → unknown" unknown "$(HUB='' verdict b)"
-eq "bad axis → usage (exit 2)" 2 "$(run bash "$WORK/bin/fleet-account.sh" quota-verdict a --axis 1y >/dev/null 2>&1; echo $?)"
+st_eq "blind hub (empty answer) → unknown"           unknown "$(verdict b --refresh)"
+st_eq "no hub configured → unknown" unknown "$(HUB='' verdict b)"
+st_eq "bad axis → usage (exit 2)" 2 "$(run bash "$WORK/bin/fleet-account.sh" quota-verdict a --axis 1y >/dev/null 2>&1; echo $?)"
 
 # --- ph_banner, the real phase --------------------------------------------------
 python3 - "$BIN/tmux-dash-collect.sh" "$WORK/phase.sh" <<'PY'
@@ -130,16 +128,16 @@ for m in fresh empty hot; do
   reset_state; echo "$m" > "$MODE"; : > "$WORK/bg.log"
   printf "You've hit your weekly limit · resets Sep 25, 7pm (Asia/Shanghai)\n" > "$WORK/banner"
   tick
-  eq "①② $m + weekly banner → NO account.limited row" "" "$(limited_row a)"
-  eq "①② $m …no fetch" 0 "$(calls)"
-  eq "①② $m …no migrate/reconcile started" "" "$(cat "$WORK/bg.log")"
+  st_eq "①② $m + weekly banner → NO account.limited row" "" "$(limited_row a)"
+  st_eq "①② $m …no fetch" 0 "$(calls)"
+  st_eq "①② $m …no migrate/reconcile started" "" "$(cat "$WORK/bg.log")"
 done
 # ③ a per-MODEL cap keeps its own signal, whatever ccquota says.
 reset_state; echo fresh > "$MODE"; : > "$WORK/bg.log"
 printf "You've hit your Fable 5 limit · resets Sep 26, 3am (Asia/Shanghai)\n" > "$WORK/banner"
 tick
-eq "③ Fable banner → model-limited recorded" 1 "$(grep -c '^a	fable	' "$G/account.model-limited" 2>/dev/null)"
-eq "③ …never a subscription bench" "" "$(limited_row a)"
-eq "③ …and no verdict fetch was needed" 0 "$(calls)"
+st_eq "③ Fable banner → model-limited recorded" 1 "$(grep -c '^a	fable	' "$G/account.model-limited" 2>/dev/null)"
+st_eq "③ …never a subscription bench" "" "$(limited_row a)"
+st_eq "③ …and no verdict fetch was needed" 0 "$(calls)"
 
 printf 'quota-verdict selftest: %d checks passed\n' "$CHECKS"

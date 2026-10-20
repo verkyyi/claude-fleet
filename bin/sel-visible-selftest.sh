@@ -14,7 +14,8 @@
 # the 看台's own list is fleet_view.py's.)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-command -v python3 >/dev/null 2>&1 || { echo 'selftest SKIP: python3 missing'; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need python3
 python3 - "$BIN" <<'PY'
 import importlib.util, re, sys
 from pathlib import Path

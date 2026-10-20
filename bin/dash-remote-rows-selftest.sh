@@ -126,11 +126,12 @@ set -uo pipefail
 export FLEET_DASH_ORDER=status
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
 CREAD="$BIN/fleet-control-read.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'dash-remote-rows selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 REAL_TMUX=$(command -v tmux || true)
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dashremote-selftest.XXXXXX")" || exit 2
@@ -146,11 +147,7 @@ mkdir -p "$G" "$WORK/conf/fleets/$S" "$WORK/bin" "$WORK/main"
 : > "$WORK/conf/fleets/$S/conf"
 fx_repo "$WORK/conf" "$S" acme/app FLEET_MAIN="$WORK/main"
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
-has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1 — no [$3]" "$2";; esac; }
-hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
+st_tally count
 
 US=$'\x1f'
 # tmux shim: replays the fixture for a list-windows with a US format, logs the rest.
@@ -220,15 +217,15 @@ remote_cache() {   # $1 = the #ts epoch; $2 = mac-a's #node line availability; $
 # A. degenerate
 # ============================================================================
 base_s=$(side); base_h=$(hub)
-[ -n "$base_s" ] || fail "the sidebar producer printed nothing"
+[ -n "$base_s" ] || st_fail "the sidebar producer printed nothing"
 remote_cache "$NOW"
-eq "A: hub off — a remote cache changes nothing (sidebar)" "$base_s" "$(side)"
-eq "A: hub off — a remote cache changes nothing (hub)"     "$base_h" "$(hub)"
-hasnt "A: hub off — no machine anywhere" "$(side)$(hub)" "mac-a"
-hasnt "A: hub off — no status line" "$(side)$(hub)" "●"
+st_eq "A: hub off — a remote cache changes nothing (sidebar)" "$base_s" "$(side)"
+st_eq "A: hub off — a remote cache changes nothing (hub)"     "$base_h" "$(hub)"
+st_hasnt "A: hub off — no machine anywhere" "$(side)$(hub)" "mac-a"
+st_hasnt "A: hub off — no status line" "$(side)$(hub)" "●"
 mv "$G/remote_$S" "$WORK/remote.keep"
-eq "A: hub on, no cache — the same bytes (sidebar)" "$base_s" "$(CCQUOTA_FLEET=1 side)"
-eq "A: hub on, no cache — the same bytes (hub)"     "$base_h" "$(CCQUOTA_FLEET=1 hub)"
+st_eq "A: hub on, no cache — the same bytes (sidebar)" "$base_s" "$(CCQUOTA_FLEET=1 side)"
+st_eq "A: hub on, no cache — the same bytes (hub)"     "$base_h" "$(CCQUOTA_FLEET=1 hub)"
 mv "$WORK/remote.keep" "$G/remote_$S"
 
 # ============================================================================
@@ -238,41 +235,41 @@ export CCQUOTA_FLEET=1
 # A remote parent starts FOLDED, as a local one does (issue #1749): its bit is
 # this machine's global/remote_fold_<sess>, absent ⇒ collapsed.
 s=$(side)
-eq "B: a remote parent starts folded — its done grandchild hidden" "solo;草稿;EPIC;C1;侧边栏;" "$(sorder "$s")"
-eq "B: …its caret says so" "wid:$F/issue-1423|└▸|1/1|1|mac-a" "$(srow "$s" '侧边栏')"
+st_eq "B: a remote parent starts folded — its done grandchild hidden" "solo;草稿;EPIC;C1;侧边栏;" "$(sorder "$s")"
+st_eq "B: …its caret says so" "wid:$F/issue-1423|└▸|1/1|1|mac-a" "$(srow "$s" '侧边栏')"
 printf '%s/issue-1423\n' "$F" > "$G/remote_fold_$S"   # opened HERE: the rows below read it open
 s=$(side)
-eq "B: mixed with the local rows, each under its real parent; the lost one where it would be online (#1882)" \
+st_eq "B: mixed with the local rows, each under its real parent; the lost one where it would be online (#1882)" \
    "solo;草稿;EPIC;C1;侧边栏;孙;" "$(sorder "$s")"
-eq "B: the local parent counts its remote descendants" "@1|▾|1/3|0|" "$(srow "$s" EPIC)"
-eq "B: a remote child under a LOCAL parent: depth 1, its own subtree, its machine in field 9" \
+st_eq "B: the local parent counts its remote descendants" "@1|▾|1/3|0|" "$(srow "$s" EPIC)"
+st_eq "B: a remote child under a LOCAL parent: depth 1, its own subtree, its machine in field 9" \
    "wid:$F/issue-1423|└▾|1/1|1|mac-a" "$(srow "$s" '侧边栏')"
-eq "B: a remote grandchild under its REMOTE parent: depth 2" \
+st_eq "B: a remote grandchild under its REMOTE parent: depth 2" \
    "wid:$F/issue-1500|  └||2|mac-a" "$(srow "$s" '孙')"
-eq "B: a local sibling is untouched" "@2|└||1|" "$(srow "$s" C1)"
+st_eq "B: a local sibling is untouched" "@2|└||1|" "$(srow "$s" C1)"
 # fields 10-12 (issue #1532) are the info column's issue · PR · ctx%, after it.
-eq "B: a local row carries the 9th field too, empty" "12" "$(nfields "$s" C1)"
-eq "B: a remote row has it" "12" "$(nfields "$s" '侧边栏')"
-hasnt "B: no [mac-a] in any name" "$s" "[mac-a"
+st_eq "B: a local row carries the 9th field too, empty" "12" "$(nfields "$s" C1)"
+st_eq "B: a remote row has it" "12" "$(nfields "$s" '侧边栏')"
+st_hasnt "B: no [mac-a] in any name" "$s" "[mac-a"
 h=$(hub)
-has "B: the hub row shows the issue" "$h" "#1423"
+st_has "B: the hub row shows the issue" "$h" "#1423"
 hrow=$(printf '%s\n' "$h" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1423" '$2 == w { print $3; exit }')
-has "B: the hub row ends its tags in @mac-a too (#1780)" "$hrow" "@mac-a"
-hasnt "B: the hub row carries no [mac-a]" "$hrow" "[mac-a"
+st_has "B: the hub row ends its tags in @mac-a too (#1780)" "$hrow" "@mac-a"
+st_hasnt "B: the hub row carries no [mac-a]" "$hrow" "[mac-a"
 widths=$(printf '%s\n' "$h" | python3 -c 'import sys, unicodedata
 w = lambda t: sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in t)
 print("\n".join(sorted({str(w(l.split("\x1f")[2])) for l in sys.stdin.read().split("\n")[1:] if l.count("\x1f") >= 2 and not l.startswith("hdr")})))')
-eq "B: every hub session row is the same width, the remote ones included" "136" "$widths"
-hasnt "B: no @title_info is written for a remote row" "$(cat "$TMUX_LOG")" "wid:"
+st_eq "B: every hub session row is the same width, the remote ones included" "136" "$widths"
+st_hasnt "B: no @title_info is written for a remote row" "$(cat "$TMUX_LOG")" "wid:"
 
 # ============================================================================
 # S. no machine status line (issue #1531)
 # ============================================================================
-hasnt "S: no machine status line in the sidebar — no ● mac-b / ● mac-a row" "$(shdrs "$s")" "●"
-eq "S: the sidebar's first row is the first group (the pin tier's heading)" \
+st_hasnt "S: no machine status line in the sidebar — no ● mac-b / ● mac-a row" "$(shdrs "$s")" "●"
+st_eq "S: the sidebar's first row is the first group (the pin tier's heading)" \
    "$(sfirst "$base_s")" "$(sfirst "$s")"
-hasnt "S: …nor in the hub list" "$h" "● m"
-eq "S: the hub list's first row is its column header, as with the hub off" \
+st_hasnt "S: …nor in the hub list" "$h" "● m"
+st_eq "S: the hub list's first row is its column header, as with the hub off" \
    "$(printf '%s\n' "$base_h" | head -1)" "$(printf '%s\n' "$h" | head -1)"
 
 # ============================================================================
@@ -282,38 +279,38 @@ eq "S: the hub list's first row is its column header, as with the hub off" \
 # and its parent; only field 9 gains `!` (the view dims the row off it). So the
 # whole frame with every row lost is the online frame with `mac-a` → `mac-a!`.
 online_s=$(side); online_h=$(hub)
-eq "C: a row the hub calls lost: in its place, at its depth, mac-a! for the view" \
+st_eq "C: a row the hub calls lost: in its place, at its depth, mac-a! for the view" \
    "wid:$F/scratch-2| ||0|mac-a!" "$(srow "$online_s" '草稿')"
-hasnt "C: …no lost heading of its own (#1882 — no ─ mac-a 失联 ─ group)" "$(shdrs "$online_s")" "失联"
+st_hasnt "C: …no lost heading of its own (#1882 — no ─ mac-a 失联 ─ group)" "$(shdrs "$online_s")" "失联"
 unlost() { LC_ALL=C sed -e 's/mac-a!/mac-a/g'; }
 remote_cache $((NOW - 600)) online $((NOW - 600))
 s=$(side)
-eq "C: a stale cache: every remote row is lost — the SAME order as online" \
+st_eq "C: a stale cache: every remote row is lost — the SAME order as online" \
    "$(sorder "$online_s")" "$(sorder "$s")"
-eq "C: …each mac-a!" "mac-a!|mac-a!|mac-a!" \
+st_eq "C: …each mac-a!" "mac-a!|mac-a!|mac-a!" \
    "$(printf '%s|%s|%s' "$(srow "$s" '侧边栏' | cut -d'|' -f5)" "$(srow "$s" '孙' | cut -d'|' -f5)" "$(srow "$s" '草稿' | cut -d'|' -f5)")"
-eq "C: …still nested under its real parent" "wid:$F/issue-1423|└▾|1/1|1|mac-a!" "$(srow "$s" '侧边栏')"
-eq "C: …the local parent still counts them" "$(srow "$online_s" EPIC)" "$(srow "$s" EPIC)"
-eq "C: …the whole sidebar frame is the online one but for the ! (line by line)" \
+st_eq "C: …still nested under its real parent" "wid:$F/issue-1423|└▾|1/1|1|mac-a!" "$(srow "$s" '侧边栏')"
+st_eq "C: …the local parent still counts them" "$(srow "$online_s" EPIC)" "$(srow "$s" EPIC)"
+st_eq "C: …the whole sidebar frame is the online one but for the ! (line by line)" \
    "$(printf '%s\n' "$online_s" | unlost)" "$(printf '%s\n' "$s" | unlost)"
 h=$(hub)
-hasnt "C: the hub list draws no lost heading either" "$h" "失联"
-eq "C: …and keeps its row order" \
+st_hasnt "C: the hub list draws no lost heading either" "$h" "失联"
+st_eq "C: …and keeps its row order" \
    "$(printf '%s\n' "$online_h" | LC_ALL=C awk -F"$US" '{ print $2 }')" "$(printf '%s\n' "$h" | LC_ALL=C awk -F"$US" '{ print $2 }')"
 remote_cache "$NOW" lost $((NOW - 180))
 s=$(side)
-eq "C: the hub says the machine is lost: the same order" "$(sorder "$online_s")" "$(sorder "$s")"
-hasnt "C: …no heading" "$(shdrs "$s")" "失联"
-eq "C: …and every row of it is lost, whatever its own word" "mac-a!" "$(srow "$s" '侧边栏' | cut -d'|' -f5)"
+st_eq "C: the hub says the machine is lost: the same order" "$(sorder "$online_s")" "$(sorder "$s")"
+st_hasnt "C: …no heading" "$(shdrs "$s")" "失联"
+st_eq "C: …and every row of it is lost, whatever its own word" "mac-a!" "$(srow "$s" '侧边栏' | cut -d'|' -f5)"
 # 维护中 (#1427): the hub's third word for a machine — heard, the operator is
 # taking it down. The bar's machine cell says so; nothing about its rows
 # changes: not lost, not dimmed (no mac-a!), nesting intact.
 remote_cache "$NOW" maintenance "$NOW"
 s=$(side)
-eq "C: a 维护中 machine: no heading, the same order" "$(sorder "$online_s")" "$(sorder "$s")"
-eq "C: …its online rows are live rows (no mac-a!), still nested under the local parent, their own child counted" \
+st_eq "C: a 维护中 machine: no heading, the same order" "$(sorder "$online_s")" "$(sorder "$s")"
+st_eq "C: …its online rows are live rows (no mac-a!), still nested under the local parent, their own child counted" \
    "wid:$F/issue-1423|└▾|1/1|1|mac-a" "$(srow "$s" '侧边栏')"
-eq "C: …only the row the hub itself calls lost is lost" "mac-a!" "$(srow "$s" '草稿' | cut -d'|' -f5)"
+st_eq "C: …only the row the hub itself calls lost is lost" "mac-a!" "$(srow "$s" '草稿' | cut -d'|' -f5)"
 remote_cache "$NOW"
 
 # ============================================================================
@@ -321,15 +318,15 @@ remote_cache "$NOW"
 # ============================================================================
 printf 'wid:%s/issue-1600\037mac-a\037online\0371600\037acme/app\037needs\037claude\037问\037\037ask\n' "$F" >> "$G/remote_$S"
 s=$(side)
-eq "N: a remote row that is asking draws the local ! and says which" "!|在问你" "$(sneed "$s" '问')"
+st_eq "N: a remote row that is asking draws the local ! and says which" "!|在问你" "$(sneed "$s" '问')"
 remote_cache "$NOW"
 
 # ============================================================================
 # D. no network on the render path
 # ============================================================================
 : > "$NET_LOG"; side >/dev/null; hub >/dev/null
-eq "D: rendering with the hub on makes no network call" "" "$(cat "$NET_LOG")"
-eq "D: the producer's code names no network tool and not the refresher" "0" \
+st_eq "D: rendering with the hub on makes no network call" "" "$(cat "$NET_LOG")"
+st_eq "D: the producer's code names no network tool and not the refresher" "0" \
    "$(grep -v '^[[:space:]]*#' "$ROWS" | grep -cE '(^|[^A-Za-z_])(curl|wget|nc|ccquota)([^A-Za-z_]|$)|fleet-hub-sessions')"
 
 # ============================================================================
@@ -350,26 +347,26 @@ new_cache() {   # the #1480 shape: `local` + `wid` on every row, this machine's 
 srow9() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" '$1 != "hdr" && $4 == n { print $1 "|" $2 "|" $5 "|" $6 "|" $7 "|" $9; exit }'; }
 golden_s=$(side); golden_h=$(hub)                # the pre-#1480 cache, default source
 new_cache
-eq "H: default source — a cache carrying this machine's rows is byte for byte the golden (sidebar)" "$golden_s" "$(side)"
-eq "H: …and the hub list" "$golden_h" "$(hub)"
-eq "H: …FLEET_SIDEBAR_SOURCE=local says the same" "$golden_s" "$(FLEET_SIDEBAR_SOURCE=local side)"
+st_eq "H: default source — a cache carrying this machine's rows is byte for byte the golden (sidebar)" "$golden_s" "$(side)"
+st_eq "H: …and the hub list" "$golden_h" "$(hub)"
+st_eq "H: …FLEET_SIDEBAR_SOURCE=local says the same" "$golden_s" "$(FLEET_SIDEBAR_SOURCE=local side)"
 hs=$(FLEET_SIDEBAR_SOURCE=hub side)
-eq "H: hub source — the row set is the cache's: the local rows it names, the remote rows; solo (unnamed), gone (@9), nowin (no window) are not rows" \
+st_eq "H: hub source — the row set is the cache's: the local rows it names, the remote rows; solo (unnamed), gone (@9), nowin (no window) are not rows" \
    "草稿;EPIC;C1;侧边栏;孙;" "$(sorder "$hs")"
-eq "H: a local row is its tmux line: its @ id, its LIVE state (tmux says looping, the cache said done), its caret + k/N, no machine" \
+st_eq "H: a local row is its tmux line: its @ id, its LIVE state (tmux says looping, the cache said done), its caret + k/N, no machine" \
    "@1|looping|▾|1/3|0|" "$(srow9 "$hs" EPIC)"
-eq "H: …its child nests under it as today" "@2|└||1|" "$(srow "$hs" C1)"
-eq "H: …and the remote child under the local parent, as today" "wid:$F/issue-1423|└▾|1/1|1|mac-a" "$(srow "$hs" '侧边栏')"
-hasnt "H: hub source — no machine status line either" "$(shdrs "$hs")" "●"
-eq "H: the sidebar's own window stays on its list before the hub has it" \
+st_eq "H: …its child nests under it as today" "@2|└||1|" "$(srow "$hs" C1)"
+st_eq "H: …and the remote child under the local parent, as today" "wid:$F/issue-1423|└▾|1/1|1|mac-a" "$(srow "$hs" '侧边栏')"
+st_hasnt "H: hub source — no machine status line either" "$(shdrs "$hs")" "●"
+st_eq "H: the sidebar's own window stays on its list before the hub has it" \
    "solo;草稿;EPIC;C1;侧边栏;孙;" "$(sorder "$(FLEET_SIDEBAR_SOURCE=hub FLEET_SIDEBAR_CURRENT=@3 side)")"
-eq "H: the hub list ignores the switch" "$golden_h" "$(FLEET_SIDEBAR_SOURCE=hub hub)"
-eq "H: hub off — \`hub\` is the no-cache output" "$base_s" "$(CCQUOTA_FLEET='' FLEET_SIDEBAR_SOURCE=hub side)"
+st_eq "H: the hub list ignores the switch" "$golden_h" "$(FLEET_SIDEBAR_SOURCE=hub hub)"
+st_eq "H: hub off — \`hub\` is the no-cache output" "$base_s" "$(CCQUOTA_FLEET='' FLEET_SIDEBAR_SOURCE=hub side)"
 mv "$G/remote_$S" "$WORK/remote.keep"
-eq "H: no cache — \`hub\` is the no-cache output" "$base_s" "$(FLEET_SIDEBAR_SOURCE=hub side)"
+st_eq "H: no cache — \`hub\` is the no-cache output" "$base_s" "$(FLEET_SIDEBAR_SOURCE=hub side)"
 mv "$WORK/remote.keep" "$G/remote_$S"
 : > "$NET_LOG"; FLEET_SIDEBAR_SOURCE=hub side >/dev/null
-eq "H: …and still no network on the render path" "" "$(cat "$NET_LOG")"
+st_eq "H: …and still no network on the render path" "" "$(cat "$NET_LOG")"
 # a pinned or @norepo window the cache does not name stays (issue #1643): the hub
 # never lists one — a `@norepo` session has no worker_id, a pin is this machine's
 # own mark — so the pinned guide and every no-repo session vanished with the switch.
@@ -383,10 +380,10 @@ wf 4   向导    /home/op            'done'   @4   ''     1   1          # the g
 wf 5   无仓库  /home/op            working  @5   ''     ''  1          # a no-repo session
 wf 6   钉住    /w/app-issue-1431   'done'   @6   1431   1   ''         # pinned, keyed, not in the cache
 hs=$(FLEET_SIDEBAR_SOURCE=hub side)
-eq "H: hub source — a pinned or @norepo window the cache does not name is still a row; the keyed, unpinned one (solo) still is not" \
+st_eq "H: hub source — a pinned or @norepo window the cache does not name is still a row; the keyed, unpinned one (solo) still is not" \
    "向导;钉住;无仓库;草稿;EPIC;C1;侧边栏;孙;" "$(sorder "$hs")"   # 无仓库 is working: it sorts ahead of looping as on the local source
-has "H: …in the 置顶 group" "$(shdrs "$hs")" "置顶 (2)"
-eq "H: …the local source's rows minus solo (keyed, unlisted: #1480's rule stands)" "$(sorder "$(side)" | sed 's/solo;//')" "$(sorder "$hs")"
+st_has "H: …in the 置顶 group" "$(shdrs "$hs")" "置顶 (2)"
+st_eq "H: …the local source's rows minus solo (keyed, unlisted: #1480's rule stands)" "$(sorder "$(side)" | sed 's/solo;//')" "$(sorder "$hs")"
 mv "$WORK/wlist.keep" "$WLIST_FILE"
 remote_cache "$NOW"
 
@@ -400,31 +397,31 @@ stamp_cache() { { printf '#ts\037%s\n' "$1"; tail -n +2 "$G/remote_$S"; } > "$WO
 new_cache
 hs=$(FLEET_SIDEBAR_SOURCE=hub side)
 date +%s > "$G/hub_ok"   # fresh as of NOW, not the test's start: a slow run passes FLEET_HUB_SESSIONS_STALE (#3902)
-eq "L: a fresh hub_ok changes nothing on the hub source" "$hs" "$(FLEET_SIDEBAR_SOURCE=hub side)"
-eq "L: …nor on the default source" "$golden_s" "$(side)"
+st_eq "L: a fresh hub_ok changes nothing on the hub source" "$hs" "$(FLEET_SIDEBAR_SOURCE=hub side)"
+st_eq "L: …nor on the default source" "$golden_s" "$(side)"
 printf '%s\n' $(( NOW - 600 )) > "$G/hub_ok"            # silent 10 minutes; the cache itself fresh
 ls_=$(FLEET_SIDEBAR_SOURCE=hub side)
-eq "L: hub source, the hub silent — this machine's rows are tmux's set again (solo, never in the cache, is back), the other machine's where they were (#1882)" \
+st_eq "L: hub source, the hub silent — this machine's rows are tmux's set again (solo, never in the cache, is back), the other machine's where they were (#1882)" \
    "solo;草稿;EPIC;C1;侧边栏;孙;" "$(sorder "$ls_")"
-eq "L: …byte for byte the local source under the same silence: one code path, not a second" "$(FLEET_SIDEBAR_SOURCE=local side)" "$ls_"
-hasnt "L: …the other machine's rows are 失联 without a heading of their own (#1882)" "$(shdrs "$ls_")" "失联"
-eq "L: …each of them mac-a! for the view, still nested" "wid:$F/issue-1423|└▾|1/1|1|mac-a!" "$(srow "$ls_" '侧边栏')"
-eq "L: …a local row is still its tmux line: its @ id, its live state" "@1|looping" "$(srow9 "$ls_" EPIC | cut -d'|' -f1,2)"
+st_eq "L: …byte for byte the local source under the same silence: one code path, not a second" "$(FLEET_SIDEBAR_SOURCE=local side)" "$ls_"
+st_hasnt "L: …the other machine's rows are 失联 without a heading of their own (#1882)" "$(shdrs "$ls_")" "失联"
+st_eq "L: …each of them mac-a! for the view, still nested" "wid:$F/issue-1423|└▾|1/1|1|mac-a!" "$(srow "$ls_" '侧边栏')"
+st_eq "L: …a local row is still its tmux line: its @ id, its live state" "@1|looping" "$(srow9 "$ls_" EPIC | cut -d'|' -f1,2)"
 cp "$WLIST_FILE" "$WORK/wlist.keep"
 LC_ALL=C awk -F"$US" -v OFS="$US" '$3 == "EPIC" { $5 = "working" } 1' "$WORK/wlist.keep" > "$WLIST_FILE"
-eq "L: …and follows tmux while the hub is silent (looping → working)" "@1|working" "$(srow9 "$(FLEET_SIDEBAR_SOURCE=hub side)" EPIC | cut -d'|' -f1,2)"
+st_eq "L: …and follows tmux while the hub is silent (looping → working)" "@1|working" "$(srow9 "$(FLEET_SIDEBAR_SOURCE=hub side)" EPIC | cut -d'|' -f1,2)"
 cp "$WORK/wlist.keep" "$WLIST_FILE"
 : > "$NET_LOG"; FLEET_SIDEBAR_SOURCE=hub side >/dev/null
-eq "L: …no network call on the render path, silent or not" "" "$(cat "$NET_LOG")"
-eq "L: FLEET_HUB_SESSIONS_STALE is the knob here too" "$hs" "$(FLEET_HUB_SESSIONS_STALE=900 FLEET_SIDEBAR_SOURCE=hub side)"
-eq "L: hub off — the no-cache output, hub_ok or not" "$base_s" "$(CCQUOTA_FLEET='' FLEET_SIDEBAR_SOURCE=hub side)"
+st_eq "L: …no network call on the render path, silent or not" "" "$(cat "$NET_LOG")"
+st_eq "L: FLEET_HUB_SESSIONS_STALE is the knob here too" "$hs" "$(FLEET_HUB_SESSIONS_STALE=900 FLEET_SIDEBAR_SOURCE=hub side)"
+st_eq "L: hub off — the no-cache output, hub_ok or not" "$base_s" "$(CCQUOTA_FLEET='' FLEET_SIDEBAR_SOURCE=hub side)"
 date +%s > "$G/hub_ok"   # fresh as of NOW, not the test's start: a slow run passes FLEET_HUB_SESSIONS_STALE (#3902)
-eq "L: hub_ok fresh again — the hub's row set is back on the next render, nothing restarted" "$hs" "$(FLEET_SIDEBAR_SOURCE=hub side)"
+st_eq "L: hub_ok fresh again — the hub's row set is back on the next render, nothing restarted" "$hs" "$(FLEET_SIDEBAR_SOURCE=hub side)"
 # degenerate: a loop from before #1483 writes no hub_ok — the cache's own #ts is
 # the clock, as it always was, and renders the very same bytes
 rm -f "$G/hub_ok"; stamp_cache $(( NOW - 600 ))
-eq "L: no hub_ok, a stale #ts (the pre-#1483 cache) — the local source renders the bytes the silence did" "$ls_" "$(FLEET_SIDEBAR_SOURCE=local side)"
-eq "L: …and so does the hub source" "$ls_" "$(FLEET_SIDEBAR_SOURCE=hub side)"
+st_eq "L: no hub_ok, a stale #ts (the pre-#1483 cache) — the local source renders the bytes the silence did" "$ls_" "$(FLEET_SIDEBAR_SOURCE=local side)"
+st_eq "L: …and so does the hub source" "$ls_" "$(FLEET_SIDEBAR_SOURCE=hub side)"
 stamp_cache "$NOW"
 remote_cache "$NOW"
 
@@ -435,7 +432,7 @@ unset CCQUOTA_FLEET
 U=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
 f=[x for x in c.Control(sys.argv[1]).inventory() if x["name"]==sys.argv[2]]
 print(f[0]["fleet_id"] if f else "")' "$FLEET_CONF_DIR" "$S")
-[ -n "$U" ] || fail "E: could not mint this fleet's UUID"
+[ -n "$U" ] || st_fail "E: could not mint this fleet's UUID"
 ME=$(id -un)
 MYHOST=$(hostname | cut -d. -f1)
 mkdir -p "$WORK/.claude-dash/fleets/acme-app"
@@ -477,47 +474,47 @@ PY
 export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mac-d=mac-a box3=mac-n box8=mac-m"
 rm -f "$G/remote_$S"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-CHECKS=$((CHECKS+1)); [ ! -e "$G/remote_$S" ] || fail "E: off — --refresh must write nothing"
-CHECKS=$((CHECKS+1)); [ ! -e "$G/hub_ok" ] || fail "E: off — --refresh must not write hub_ok"
+CHECKS=$((CHECKS+1)); [ ! -e "$G/remote_$S" ] || st_fail "E: off — --refresh must write nothing"
+CHECKS=$((CHECKS+1)); [ ! -e "$G/hub_ok" ] || st_fail "E: off — --refresh must not write hub_ok"
 PATH="$SHIMPATH" bash "$HUBS" --ensure 2>/dev/null
-CHECKS=$((CHECKS+1)); [ ! -e "$G/hubsess.pid" ] || fail "E: off — --ensure must start nothing"
+CHECKS=$((CHECKS+1)); [ ! -e "$G/hubsess.pid" ] || st_fail "E: off — --ensure must start nothing"
 
 export CCQUOTA_FLEET=1
-PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err" || fail "E: --refresh failed" "$(cat "$WORK/err")"
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err" || st_fail "E: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
 rrow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { print $2 "|" $3 "|" $6 "|" $8 "|" $9 "|" $10 }'; }
-has  "E: a #ts line leads the cache" "$(printf '%s\n' "$R" | head -1)" "#ts$US"
-eq   "E: #me is this machine's label" "#me$US$MYHOST" "$(printf '%s\n' "$R" | sed -n 2p)"
+st_has  "E: a #ts line leads the cache" "$(printf '%s\n' "$R" | head -1)" "#ts$US"
+st_eq   "E: #me is this machine's label" "#me$US$MYHOST" "$(printf '%s\n' "$R" | sed -n 2p)"
 ep() { python3 -c 'from datetime import datetime, timezone; import sys; print(int(datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00")).timestamp()))' "$1"; }
-eq   "E: one #node per other machine from the hub's list: YOUR session count, its observation; 维护中 (#1427) passes through as its own word" \
+st_eq   "E: one #node per other machine from the hub's list: YOUR session count, its observation; 维护中 (#1427) passes through as its own word" \
      "#node${US}mac-a${US}online${US}7$US$(ep 2026-10-04T10:07:00Z)${US}hub;#node${US}mac-m${US}maintenance${US}0$US$(ep 2026-10-04T10:06:00Z)${US}hub;#node${US}mac-n${US}lost${US}0$US$(ep 2026-10-04T09:00:00Z)${US}hub;" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '$1 == "#node" { printf "%s;", $0 }')"
-eq   "E: parent in THIS fleet → its bare key"  "mac-a|online|working|侧边栏|issue-1419|" "$(rrow issue-1423)"
-eq   "E: parent elsewhere → its worker_id"     "mac-a|online|working|孙|$F/issue-1423|" "$(rrow issue-1500)"
-eq   "E: no @origin_wid → the sub-issue parent (local)"  "mac-a|online|working|epic-kid|acme-app:issue-1419|" "$(rrow issue-1600)"
-eq   "E: the node's busy word rides as field 14 (#1607), empty where it has none" "bg|" \
+st_eq   "E: parent in THIS fleet → its bare key"  "mac-a|online|working|侧边栏|issue-1419|" "$(rrow issue-1423)"
+st_eq   "E: parent elsewhere → its worker_id"     "mac-a|online|working|孙|$F/issue-1423|" "$(rrow issue-1500)"
+st_eq   "E: no @origin_wid → the sub-issue parent (local)"  "mac-a|online|working|epic-kid|acme-app:issue-1419|" "$(rrow issue-1600)"
+st_eq   "E: the node's busy word rides as field 14 (#1607), empty where it has none" "bg|" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v a="wid:$F/issue-1600" -v b="wid:$F/issue-1423" '$1 == a { x = $14 } $1 == b { y = $14 } END { print x "|" y }')"
-eq   "E: no @origin_wid → the sub-issue parent (remote)" "mac-a|online|working|remote-sub|$F/issue-1500|" "$(rrow issue-1501)"
-eq   "E: a sleeping lifecycle is the row's state" "mac-a|online|sleeping|sleeper||" "$(rrow issue-1700)"
-eq   "E: what the window needs rides along (field 10)" "mac-a|online|needs|asker||ask" "$(rrow issue-1800)"
-eq   "E: a lost machine's row is kept, marked lost" "mac-a|lost|working|草稿||" "$(rrow scratch-4)"
-eq   "E: this fleet's own session is a LOCAL row (#1480): local=1, this machine's label, no window here → empty wid" \
+st_eq   "E: no @origin_wid → the sub-issue parent (remote)" "mac-a|online|working|remote-sub|$F/issue-1500|" "$(rrow issue-1501)"
+st_eq   "E: a sleeping lifecycle is the row's state" "mac-a|online|sleeping|sleeper||" "$(rrow issue-1700)"
+st_eq   "E: what the window needs rides along (field 10)" "mac-a|online|needs|asker||ask" "$(rrow issue-1800)"
+st_eq   "E: a lost machine's row is kept, marked lost" "mac-a|lost|working|草稿||" "$(rrow scratch-4)"
+st_eq   "E: this fleet's own session is a LOCAL row (#1480): local=1, this machine's label, no window here → empty wid" \
      "local-one|1||$MYHOST|online" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$U/acme-app:issue-1420" '$1 == w { print $8 "|" $11 "|" $12 "|" $2 "|" $3 }')"
-eq   "E: a row on another machine says local=0, no wid" "0|" \
+st_eq   "E: a row on another machine says local=0, no wid" "0|" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1423" '$1 == w { print $11 "|" $12 }')"
 # (a needs row that says what it asks runs on to fields 27-28 — #2538)
-eq   "E: every row carries the six appended fields (local, wid, via, busy, born, cfg — #1480, #1488, #1607, #1750, #1783)" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && NF != 16 && !(NF == 28 && $6 == "needs")')"
-eq   "E: a hub answer's rows are via=hub" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && $13 != "hub"')"
-hasnt "E: another login's session is not shown" "$R" "theirs"
-hasnt "E: a session with no worker_id is not shown" "$R" "no-id"
-has  "E: the C1 locator cache is written" "$(cat "$FLEET_CONF_DIR/control/hub-workers.tsv" 2>/dev/null)" "$F/issue-1423	mac-a"
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-old.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (old hub) failed"
-eq   "E: a hub without a nodes list: #node derived from the sessions (newest observation)" \
+st_eq   "E: every row carries the six appended fields (local, wid, via, busy, born, cfg — #1480, #1488, #1607, #1750, #1783)" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && NF != 16 && !(NF == 28 && $6 == "needs")')"
+st_eq   "E: a hub answer's rows are via=hub" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && $13 != "hub"')"
+st_hasnt "E: another login's session is not shown" "$R" "theirs"
+st_hasnt "E: a session with no worker_id is not shown" "$R" "no-id"
+st_has  "E: the C1 locator cache is written" "$(cat "$FLEET_CONF_DIR/control/hub-workers.tsv" 2>/dev/null)" "$F/issue-1423	mac-a"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-old.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || st_fail "E: --refresh (old hub) failed"
+st_eq   "E: a hub without a nodes list: #node derived from the sessions (newest observation)" \
      "#node${US}mac-a${US}online${US}7$US$(ep 2026-10-04T10:05:00Z)${US}hub;" \
      "$(LC_ALL=C awk -F"$US" '$1 == "#node" { printf "%s;", $0 }' "$G/remote_$S")"
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-unk.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (unknown count) failed"
-eq   "E: the hub's sessions null (a fleet it could not read, #1465) → that #node's count is ?, never the rows held" \
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-unk.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || st_fail "E: --refresh (unknown count) failed"
+st_eq   "E: the hub's sessions null (a fleet it could not read, #1465) → that #node's count is ?, never the rows held" \
      "#node${US}mac-a${US}online${US}?$US$(ep 2026-10-04T10:07:00Z)${US}hub;" \
      "$(LC_ALL=C awk -F"$US" '$1 == "#node" && $2 == "mac-a" { printf "%s;", $0 }' "$G/remote_$S")"
 # #1795: an unread machine is "could not read", never "no windows" — a hub answer
@@ -525,12 +522,12 @@ eq   "E: the hub's sessions null (a fleet it could not read, #1465) → that #no
 # collapse to the row it stands on for the seconds a node's read times out
 m4rows() { LC_ALL=C awk -F"$US" '/^wid:/ && $2 == "mac-a" { print $1 }' "$G/remote_$S" | sort | tr '\n' ' '; }
 MAC_A=$(m4rows)
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-blank.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (blanked rows) failed"
-eq   "E: the hub's sessions null and none of that machine's rows (#1795) → its last rows stay, none lost" "$MAC_A" "$(m4rows)"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-blank.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || st_fail "E: --refresh (blanked rows) failed"
+st_eq   "E: the hub's sessions null and none of that machine's rows (#1795) → its last rows stay, none lost" "$MAC_A" "$(m4rows)"
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-blank.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-eq   "E: …round after round while it stays unread" "$MAC_A" "$(m4rows)"
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-gone.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (read empty) failed"
-eq   "E: …and a read that stands with no rows takes them away" "" "$(m4rows)"
+st_eq   "E: …round after round while it stays unread" "$MAC_A" "$(m4rows)"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-gone.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || st_fail "E: --refresh (read empty) failed"
+st_eq   "E: …and a read that stands with no rows takes them away" "" "$(m4rows)"
 # X. the test identity's session (issue #2505): in the cache (field 26), never a
 # sidebar row — but `fleet ls` (FLEET_ROWS_TEST=1) lists it
 python3 - "$WORK/sessions.json" "$WORK/sessions-test.json" "$F" <<'PY'
@@ -546,13 +543,13 @@ d["sessions"].append(dict(worker_id=f + "/" + tid, machine_name="mac-d.local", o
 json.dump(d, open(dst, "w"), ensure_ascii=False)
 PY
 TID=7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-test.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "X: --refresh (test identity) failed"
-eq   "X: the cache keeps its line, field 26 = 1 after five empty measurement fields" "test-norepo|done:10m||||||1" \
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-test.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || st_fail "X: --refresh (test identity) failed"
+st_eq   "X: the cache keeps its line, field 26 = 1 after five empty measurement fields" "test-norepo|done:10m||||||1" \
      "$(LC_ALL=C awk -F"$US" -v w="wid:$F/$TID" '$1 == w { print $8 "|" $18 "|" $21 "|" $22 "|" $23 "|" $24 "|" $25 "|" $26 }' "$G/remote_$S")"
-hasnt "X: the sidebar draws no row for it" "$(side)" "test-norepo"
-has  "X: …the other rows are all there" "$(side)" "侧边栏"
-hasnt "X: …nor does the hub list" "$(hub)" "test-norepo"
-has  "X: FLEET_ROWS_TEST=1 (fleet ls) lists it" "$(FLEET_ROWS_TEST=1 side)" "test-norepo"
+st_hasnt "X: the sidebar draws no row for it" "$(side)" "test-norepo"
+st_has  "X: …the other rows are all there" "$(side)" "侧边栏"
+st_hasnt "X: …nor does the hub list" "$(hub)" "test-norepo"
+st_has  "X: FLEET_ROWS_TEST=1 (fleet ls) lists it" "$(FLEET_ROWS_TEST=1 side)" "test-norepo"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 # O. orchestrator (issue #1957): in the cache and orch_<sess>; a row like any other (#3119)
 python3 - "$WORK/sessions.json" "$WORK/sessions-orch.json" "$F" <<'PY'
@@ -568,15 +565,15 @@ d["sessions"].append(dict(worker_id=f + "/" + oid, machine_name="mac-d.local", o
 json.dump(d, open(dst, "w"), ensure_ascii=False)
 PY
 OID=0d1e2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O: --refresh (orchestrator) failed"
-eq   "O: the orchestrator keeps its line in the cache (open finds it there)" "mac-a|编排" \
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || st_fail "O: --refresh (orchestrator) failed"
+st_eq   "O: the orchestrator keeps its line in the cache (open finds it there)" "mac-a|编排" \
      "$(LC_ALL=C awk -F"$US" -v w="wid:$F/$OID" '$1 == w { print $2 "|" $8 }' "$G/remote_$S")"
-eq   "O: no orch_<sess> / orch_multi_<sess> file (issue #3118)" "00" \
+st_eq   "O: no orch_<sess> / orch_multi_<sess> file (issue #3118)" "00" \
      "$([ -e "$G/orch_$S" ] && echo 1 || echo 0)$([ -e "$G/orch_multi_$S" ] && echo 1 || echo 0)"
 s=$(side)
-has  "O: the sidebar draws its row (issue #3119: no session is special)" "$s" "编排"
-has  "O: …the other rows are all there" "$s" "侧边栏"
-has  "O: …so does the hub list" "$(hub)" "编排"
+st_has  "O: the sidebar draws its row (issue #3119: no session is special)" "$s" "编排"
+st_has  "O: …the other rows are all there" "$s" "侧边栏"
+st_has  "O: …so does the hub list" "$(hub)" "编排"
 orow=$(printf '%s\n' "$s" | grep "编排")
 python3 - "$WORK/sessions-orch.json" "$WORK/sessions-plain.json" <<'PY'
 import json, sys
@@ -584,9 +581,9 @@ d = json.load(open(sys.argv[1], encoding="utf-8"))
 d["sessions"][-1]["worker"].pop("role")
 json.dump(d, open(sys.argv[2], "w"), ensure_ascii=False)
 PY
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-plain.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O: --refresh (unmarked) failed"
-eq   "O: …byte for byte the row of the same worker with no role" "$(side | grep "编排")" "$orow"
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O: --refresh (orchestrator) failed"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-plain.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || st_fail "O: --refresh (unmarked) failed"
+st_eq   "O: …byte for byte the row of the same worker with no role" "$(side | grep "编排")" "$orow"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || st_fail "O: --refresh (orchestrator) failed"
 # O2. two machines answer as orchestrator (issue #2117 once kept one line): both are
 # rows (#3119), and nothing is written for the doctor (issue #3118).
 python3 - "$WORK/sessions-orch.json" "$WORK/sessions-orch2.json" "$F" <<'PY'
@@ -599,70 +596,70 @@ o["worker_id"], o["machine_name"], o["worker"]["identity"] = f + "/" + oid, "zz9
 d["sessions"].append(o)
 json.dump(d, open(dst, "w"), ensure_ascii=False)
 PY
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch2.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O2: --refresh (two orchestrators) failed"
-eq "O2: the sidebar draws both, as rows (#3119)" "2" "$(side | grep -c "编排")"
-eq "O2: …no orch_multi_ / orch_all_ file" "00" \
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch2.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || st_fail "O2: --refresh (two orchestrators) failed"
+st_eq "O2: the sidebar draws both, as rows (#3119)" "2" "$(side | grep -c "编排")"
+st_eq "O2: …no orch_multi_ / orch_all_ file" "00" \
    "$([ -e "$G/orch_multi_$S" ] && echo 1 || echo 0)$([ -e "$G/orch_all_$S" ] && echo 1 || echo 0)"
 
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null; R=$(cat "$G/remote_$S")
 OK=$(cat "$G/hub_ok" 2>/dev/null)
 case "$OK" in
-  [0-9]*) [ "$OK" -ge "$NOW" ] || fail "E: hub_ok is not a fresh epoch (#1483)" "$OK" ;;
-  *) fail "E: a round that stood must write global/hub_ok (#1483)" "$OK" ;;
+  [0-9]*) [ "$OK" -ge "$NOW" ] || st_fail "E: hub_ok is not a fresh epoch (#1483)" "$OK" ;;
+  *) st_fail "E: a round that stood must write global/hub_ok (#1483)" "$OK" ;;
 esac; CHECKS=$((CHECKS+1))
 FLEET_HUB_SESSIONS_CMD='exit 1' PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err"
-eq   "E: a failed fetch returns 1"          "1" "$?"
-eq   "E: …and keeps the last cache"         "$R" "$(cat "$G/remote_$S")"
-eq   "E: …and hub_ok as it was: the silence dates from the last answer (#1483)" "$OK" "$(cat "$G/hub_ok")"
-has  "E: …and says so on stderr"            "$(cat "$WORK/err")" "hub unreachable for"
+st_eq   "E: a failed fetch returns 1"          "1" "$?"
+st_eq   "E: …and keeps the last cache"         "$R" "$(cat "$G/remote_$S")"
+st_eq   "E: …and hub_ok as it was: the silence dates from the last answer (#1483)" "$OK" "$(cat "$G/hub_ok")"
+st_has  "E: …and says so on stderr"            "$(cat "$WORK/err")" "hub unreachable for"
 # The refreshed cache renders: the epic's sub-issue nests under the local EPIC.
 s=$(side)
-eq "E: the refreshed cache renders under the local parent" "$F/issue-1600" \
+st_eq "E: the refreshed cache renders under the local parent" "$F/issue-1600" \
    "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$4 == "epic-kid" && $7 == 1 { sub(/^wid:/, "", $1); print $1 }')"
-hasnt "E: …and the #node lines draw no machine status line (#1531)" \
+st_hasnt "E: …and the #node lines draw no machine status line (#1531)" \
    "$(shdrs "$(FLEET_HUB_SESSIONS_STALE=99999999 side)")" "●"
 
 # ============================================================================
 # I. identity — who asks the hub (#1475)
 # ============================================================================
-eq "I: a seam command is the identity" "cmd FLEET_HUB_SESSIONS_CMD" "$(bash "$HUBS" --identity)"
+st_eq "I: a seam command is the identity" "cmd FLEET_HUB_SESSIONS_CMD" "$(bash "$HUBS" --identity)"
 unset FLEET_HUB_SESSIONS_CMD
 export HOME="$WORK/home"; mkdir -p "$HOME/.ssh" "$HOME/.ccquota"
 id_out=$(bash "$HUBS" --identity 2>/dev/null); id_rc=$?
-eq  "I: nothing: --identity exits 1" "1" "$id_rc"
-has "I: …and says why" "$id_out" "none no connection certificate"
+st_eq  "I: nothing: --identity exits 1" "1" "$id_rc"
+st_has "I: …and says why" "$id_out" "none no connection certificate"
 : > "$NET_LOG"; : > "$WORK/err"
 CCQUOTA_HUB_URL=http://hub.test PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err"
-eq  "I: nothing: no fetch at all" "" "$(cat "$NET_LOG")"
-has "I: …one note" "$(cat "$WORK/err")" "no connection certificate"
+st_eq  "I: nothing: no fetch at all" "" "$(cat "$NET_LOG")"
+st_has "I: …one note" "$(cat "$WORK/err")" "no connection certificate"
 # the viewer token: a bearer GET
 printf 'tok-123\n' > "$HOME/.ccquota/viewer-token"
-eq  "I: a viewer token file" "token ~/.ccquota/viewer-token" "$(bash "$HUBS" --identity)"
-eq  "I: …the env wins" "token CCQUOTA_VIEWER_TOKEN" "$(CCQUOTA_VIEWER_TOKEN=x bash "$HUBS" --identity)"
+st_eq  "I: a viewer token file" "token ~/.ccquota/viewer-token" "$(bash "$HUBS" --identity)"
+st_eq  "I: …the env wins" "token CCQUOTA_VIEWER_TOKEN" "$(CCQUOTA_VIEWER_TOKEN=x bash "$HUBS" --identity)"
 : > "$NET_LOG"
 CCQUOTA_HUB_URL=http://hub.test PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-has   "I: token → a bearer GET of fleet_sessions" "$(cat "$NET_LOG")" "Bearer tok-123"
-has   "I: …at the hub URL" "$(cat "$NET_LOG")" "http://hub.test/v1/fleet/fleet_sessions"
-hasnt "I: …not a POST" "$(cat "$NET_LOG")" "POST"
+st_has   "I: token → a bearer GET of fleet_sessions" "$(cat "$NET_LOG")" "Bearer tok-123"
+st_has   "I: …at the hub URL" "$(cat "$NET_LOG")" "http://hub.test/v1/fleet/fleet_sessions"
+st_hasnt "I: …not a POST" "$(cat "$NET_LOG")" "POST"
 # the hub URL from hub.json (what `fleet login` wrote), when no env names one
 mkdir -p "$HOME/.config/claude-fleet"; printf '{"url": "http://json.hub/"}\n' > "$HOME/.config/claude-fleet/hub.json"
 : > "$NET_LOG"; PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-has   "I: the hub URL falls back to hub.json" "$(cat "$NET_LOG")" "http://json.hub/v1/fleet/fleet_sessions"
+st_has   "I: the hub URL falls back to hub.json" "$(cat "$NET_LOG")" "http://json.hub/v1/fleet/fleet_sessions"
 : > "$NET_LOG"; FLEET_HUB_URL=http://env.hub PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-has   "I: …FLEET_HUB_URL before it" "$(cat "$NET_LOG")" "http://env.hub/v1/fleet/fleet_sessions"
+st_has   "I: …FLEET_HUB_URL before it" "$(cat "$NET_LOG")" "http://env.hub/v1/fleet/fleet_sessions"
 # a connection certificate: a signed POST, no token used
 if command -v ssh-keygen >/dev/null 2>&1; then
   ssh-keygen -q -t ed25519 -N '' -f "$WORK/ca" >/dev/null 2>&1
   ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/fleet-cert" >/dev/null 2>&1
   ssh-keygen -q -s "$WORK/ca" -I 'gh:a' -n alice -V '-5m:+1h' "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1 \
-    || fail "I: could not sign a test certificate"
-  has "I: a valid certificate is the identity, before the token" "$(bash "$HUBS" --identity)" "cert $HOME/.ssh/fleet-cert-cert.pub "
+    || st_fail "I: could not sign a test certificate"
+  st_has "I: a valid certificate is the identity, before the token" "$(bash "$HUBS" --identity)" "cert $HOME/.ssh/fleet-cert-cert.pub "
   : > "$NET_LOG"
   CCQUOTA_HUB_URL=http://hub.test PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-  has   "I: cert → a POST of fleet_sessions" "$(cat "$NET_LOG")" "POST"
-  has   "I: …carrying the certificate line" "$(cat "$NET_LOG")" "ssh-ed25519-cert-v01@openssh.com"
-  has   "I: …and an ssh-keygen signature" "$(cat "$NET_LOG")" "BEGIN SSH SIGNATURE"
-  hasnt "I: …and never the token" "$(cat "$NET_LOG")" "tok-123"
+  st_has   "I: cert → a POST of fleet_sessions" "$(cat "$NET_LOG")" "POST"
+  st_has   "I: …carrying the certificate line" "$(cat "$NET_LOG")" "ssh-ed25519-cert-v01@openssh.com"
+  st_has   "I: …and an ssh-keygen signature" "$(cat "$NET_LOG")" "BEGIN SSH SIGNATURE"
+  st_hasnt "I: …and never the token" "$(cat "$NET_LOG")" "tok-123"
   sigok=$(printf '%s\n' "$(cat "$NET_LOG")" | python3 -c '
 import json, re, subprocess, sys, tempfile, os
 line = sys.stdin.read()
@@ -679,17 +676,17 @@ r = subprocess.run(["ssh-keygen", "-Y", "verify", "-f", os.path.join(d, "allowed
                    input=("fleet-sessions %d" % body["ts"]).encode(), capture_output=True)
 print("ok" if r.returncode == 0 else "bad:" + r.stderr.decode(errors="replace").strip())
 ' "$HOME/.ssh/fleet-cert.pub" 2>&1)
-  eq "I: …the signature verifies under fleet-sessions@claude-fleet over the timestamp" "ok" "$sigok"
+  st_eq "I: …the signature verifies under fleet-sessions@claude-fleet over the timestamp" "ok" "$sigok"
   # an expired certificate is skipped: the token again, and --identity says expired without one
   ssh-keygen -q -s "$WORK/ca" -I 'gh:a' -n alice -V '-2h:-1h' "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1
-  eq  "I: an expired certificate falls back to the token" "token ~/.ccquota/viewer-token" "$(bash "$HUBS" --identity)"
+  st_eq  "I: an expired certificate falls back to the token" "token ~/.ccquota/viewer-token" "$(bash "$HUBS" --identity)"
   rm -f "$HOME/.ccquota/viewer-token"
-  has "I: …and with no token says it expired" "$(bash "$HUBS" --identity 2>/dev/null)" "none certificate expired"
+  st_has "I: …and with no token says it expired" "$(bash "$HUBS" --identity 2>/dev/null)" "none certificate expired"
   # FLEET_CERT names another pair
   ssh-keygen -q -s "$WORK/ca" -I 'gh:a' -n alice -V '-5m:+1h' "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1
   cp "$HOME/.ssh/fleet-cert" "$WORK/other"; cp "$HOME/.ssh/fleet-cert-cert.pub" "$WORK/other-cert.pub"
   rm -f "$HOME/.ssh/fleet-cert" "$HOME/.ssh/fleet-cert-cert.pub"
-  has "I: FLEET_CERT names the pair" "$(FLEET_CERT="$WORK/other" bash "$HUBS" --identity)" "cert $WORK/other-cert.pub "
+  st_has "I: FLEET_CERT names the pair" "$(FLEET_CERT="$WORK/other" bash "$HUBS" --identity)" "cert $WORK/other-cert.pub "
 else
   printf 'dash-remote-rows selftest: no ssh-keygen — the certificate legs of I skipped\n' >&2
 fi
@@ -704,7 +701,7 @@ PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 rm -f "$G/remote_fold_$S"; cp "$G/remote_$S" "$WORK/remote.f"; remote_cache "$NOW"   # B's tree
 # (the fold toggle went with the dash, issue #4902; migrate with the account pick, T550: pin stays)
 PATH="$SHIMPATH" FLEET_SESSION=$S bash "$BIN/dash-pin-toggle.sh" "wid:$F/issue-1423" >/dev/null 2>&1
-hasnt "F: pin on a remote row sets no tmux option" "$(cat "$TMUX_LOG")" "set-"
+st_hasnt "F: pin on a remote row sets no tmux option" "$(cat "$TMUX_LOG")" "set-"
 mv "$WORK/remote.f" "$G/remote_$S"; rm -f "$G/remote_fold_$S"
 
 # ============================================================================
@@ -730,43 +727,43 @@ qhub()  { PATH="$SHIMPATH" FLEET_SESSION=$QS FZF_COLUMNS=140 bash "$ROWS" 2>/dev
 MARK="$WORK/conf/global/epic-running.d/acme-app-1949"
 printf 'epoch: %s\nttl: 2700\nepic: 1949\nrepo: acme/app\nlanded: 1\nmembers: 3\n' "$NOW" > "$MARK"
 q=$(unset CCQUOTA_FLEET; qside)
-eq "Q: the EPIC is one row, its three members right under it" \
+st_eq "Q: the EPIC is one row, its three members right under it" \
    "单干;侧栏改版;只看只点;底栏;工具活 ⇢too;" "$(sorder "$q")" "$q"
-eq "Q: …badged landed/members off its heartbeat mark, a root with its caret" "@1|▾|1/3|0|" "$(srow "$q" '侧栏改版')"
-eq "Q: …the member in the other repo hangs under it, tagged with its repo" "@4|└||1|" "$(srow "$q" '工具活 ⇢too')"
-eq "Q: …once — never again in its own repo's group" "1" "$(printf '%s\n' "$q" | LC_ALL=C grep -c '工具活')"
-eq "Q: …its title travels as the row's title field" "EPIC: 侧栏改版：只看只点" \
+st_eq "Q: …badged landed/members off its heartbeat mark, a root with its caret" "@1|▾|1/3|0|" "$(srow "$q" '侧栏改版')"
+st_eq "Q: …the member in the other repo hangs under it, tagged with its repo" "@4|└||1|" "$(srow "$q" '工具活 ⇢too')"
+st_eq "Q: …once — never again in its own repo's group" "1" "$(printf '%s\n' "$q" | LC_ALL=C grep -c '工具活')"
+st_eq "Q: …its title travels as the row's title field" "EPIC: 侧栏改版：只看只点" \
    "$(printf '%s\n' "$q" | LC_ALL=C awk -F"$US" '$4 == "侧栏改版" { print $14; exit }')"
-has "Q: the hub list names it the same way" "$(unset CCQUOTA_FLEET; qhub)" "侧栏改版"
+st_has "Q: the hub list names it the same way" "$(unset CCQUOTA_FLEET; qhub)" "侧栏改版"
 # issue #2355: the batch reads as its theme (the title's `EPIC:` and 「：…」 cut),
 # its number in the issue cell — the bar's detail line under a highlight
-eq "Q: …its number in the issue cell, not the label" "#1949" \
+st_eq "Q: …its number in the issue cell, not the label" "#1949" \
    "$(printf '%s\n' "$q" | LC_ALL=C awk -F"$US" '$4 == "侧栏改版" { print $10; exit }')"
-eq "Q: a nested member's 简称· prefix is the parent row's word — dropped" "@3|└||1|" "$(srow "$q" '底栏')"
+st_eq "Q: a nested member's 简称· prefix is the parent row's word — dropped" "@3|└||1|" "$(srow "$q" '底栏')"
 cp "$WLIST_FILE" "$WORK/wl.n"
 we 6  issue-1961  /w/app-issue-1961   working  @6  1961  ''  acme/app
-eq "Q: a window named only issue-N shows its issue's title (#2355)" "@6" \
+st_eq "Q: a window named only issue-N shows its issue's title (#2355)" "@6" \
    "$(srow "$(unset CCQUOTA_FLEET; qside)" '底部数字' | cut -d'|' -f1)"
 cp "$WORK/wl.n" "$WLIST_FILE"
 rm -f "$MARK"
-eq "Q: no mark — the subtree's own k/N" "@1|▾|1/3|0|" "$(srow "$(unset CCQUOTA_FLEET; qside)" '侧栏改版')"
+st_eq "Q: no mark — the subtree's own k/N" "@1|▾|1/3|0|" "$(srow "$(unset CCQUOTA_FLEET; qside)" '侧栏改版')"
 printf 'epoch: %s\nlanded: 2\nmembers: 8\n' "$NOW" > "$MARK"
-eq "Q: the mark's count wins over the live subtree" "@1|▾|2/8|0|" "$(srow "$(unset CCQUOTA_FLEET; qside)" '侧栏改版')"
+st_eq "Q: the mark's count wins over the live subtree" "@1|▾|2/8|0|" "$(srow "$(unset CCQUOTA_FLEET; qside)" '侧栏改版')"
 # issue #2544: a driver the heartbeat renamed `<简称>·批次` reads as that name
 # (over the theme), badged as ever; its members still drop their 简称· prefix,
 # and the driver's own name is never cut to `批次`
 cp "$WLIST_FILE" "$WORK/wl.r"
 LC_ALL=C sed "s/${US}scratch-7${US}\/w\/app-scratch-7${US}/${US}侧栏·批次${US}\/w\/app-scratch-7${US}/" "$WORK/wl.r" > "$WLIST_FILE"
 qn=$(unset CCQUOTA_FLEET; qside)
-eq "Q: a renamed driver (#2544) is named <简称>·批次, landed/members beside it" "@1|▾|2/8|0|" "$(srow "$qn" '侧栏·批次')"
-eq "Q: …its members keep their place, the 简称· prefix dropped" "单干;侧栏·批次;只看只点;底栏;工具活 ⇢too;" "$(sorder "$qn")"
-eq "Q: …its EPIC still the issue cell" "#1949" \
+st_eq "Q: a renamed driver (#2544) is named <简称>·批次, landed/members beside it" "@1|▾|2/8|0|" "$(srow "$qn" '侧栏·批次')"
+st_eq "Q: …its members keep their place, the 简称· prefix dropped" "单干;侧栏·批次;只看只点;底栏;工具活 ⇢too;" "$(sorder "$qn")"
+st_eq "Q: …its EPIC still the issue cell" "#1949" \
    "$(printf '%s\n' "$qn" | LC_ALL=C awk -F"$US" '$4 == "侧栏·批次" { print $10; exit }')"
 cp "$WORK/wl.r" "$WLIST_FILE"
 LC_ALL=C sed "s/${US}acme\/app#1949\$/$US/" "$WLIST_FILE" > "$WORK/wl.noepic"; cp "$WLIST_FILE" "$WORK/wl.epic"; cp "$WORK/wl.noepic" "$WLIST_FILE"
 q0=$(unset CCQUOTA_FLEET; qside)
-eq "Q: no @epic — the window's own name, the members nested as ever" "单干;scratch-7;只看只点;底栏;工具活 ⇢too;" "$(sorder "$q0")"
-eq "Q: …byte for byte the frame with no @epic field at all" "$q0" \
+st_eq "Q: no @epic — the window's own name, the members nested as ever" "单干;scratch-7;只看只点;底栏;工具活 ⇢too;" "$(sorder "$q0")"
+st_eq "Q: …byte for byte the frame with no @epic field at all" "$q0" \
    "$(LC_ALL=C sed "s/$US\$//" "$WORK/wl.noepic" > "$WLIST_FILE"; unset CCQUOTA_FLEET; qside)"
 cp "$WORK/wl.epic" "$WLIST_FILE"
 # another machine's driver: the cache's 19th field, its title the 17th
@@ -782,11 +779,11 @@ FQ=44444444-5555-6666-7777-999999999999
 date +%s > "$G/hub_ok"   # fresh as of NOW, not the test's start: a slow run passes FLEET_HUB_SESSIONS_STALE (#3902)
 printf '%s/acme-app:scratch-9\n' "$FQ" > "$G/remote_fold_$QS"
 qr=$(CCQUOTA_FLEET=1 qside)
-eq "Q: a remote driver is one row too, named and badged off its node's cell" "wid:$FQ/acme-app:scratch-9|▾|2/5|0|mac-a" "$(srow "$qr" '另一批')"
-eq "Q: …its member under it" "wid:$FQ/acme-app:issue-1983|└||1|mac-a" "$(srow "$qr" '成员甲')"
-eq "Q: a remote renamed driver with no title (#2544) — its name, its badge" "新批·批次|3/7|#1984" \
+st_eq "Q: a remote driver is one row too, named and badged off its node's cell" "wid:$FQ/acme-app:scratch-9|▾|2/5|0|mac-a" "$(srow "$qr" '另一批')"
+st_eq "Q: …its member under it" "wid:$FQ/acme-app:issue-1983|└||1|mac-a" "$(srow "$qr" '成员甲')"
+st_eq "Q: a remote renamed driver with no title (#2544) — its name, its badge" "新批·批次|3/7|#1984" \
    "$(printf '%s\n' "$qr" | LC_ALL=C awk -F"$US" '$1 ~ /scratch-10$/ { print $4 "|" $6 "|" $10; exit }')"
-eq "Q: a remote row whose issue was never filed (#2235): sidebar field 16 failed, 13-15 empty before it" "|||failed" \
+st_eq "Q: a remote row whose issue was never filed (#2235): sidebar field 16 failed, 13-15 empty before it" "|||failed" \
    "$(printf '%s\n' "$qr" | LC_ALL=C awk -F"$US" '$4 == "没建上的" { print $13 "|" $14 "|" $15 "|" $16 }')"
 # the refresher writes the cell: the worker's `epic` → field 19, title + reap kept before it
 python3 - "$WORK/sessions.json" "$WORK/sessions-epic.json" "$F" <<'PY2'
@@ -803,23 +800,23 @@ w3 = dict(w, key="acme-app:scratch-4", name="scratch-4", title="", epic=None, ba
 d["sessions"].append(dict(d["sessions"][-1], worker_id=f + "/acme-app:scratch-4", worker=w3))
 json.dump(d, open(dst, "w"), ensure_ascii=False)
 PY2
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-epic.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null || fail "Q: --refresh (epic) failed"
-eq "Q: the refresher carries the cell as field 19, the title before it" "第三批||acme/app#1990:0/4" \
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-epic.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null || st_fail "Q: --refresh (epic) failed"
+st_eq "Q: the refresher carries the cell as field 19, the title before it" "第三批||acme/app#1990:0/4" \
    "$(LC_ALL=C awk -F"$US" -v w="wid:$F/acme-app:scratch-5" '$1 == w { print $17 "|" $18 "|" $19 }' "$G/remote_$S")"
-eq "Q: …and drops a cell that is not one" "" \
+st_eq "Q: …and drops a cell that is not one" "" \
    "$(LC_ALL=C awk -F"$US" -v w="wid:$F/acme-app:scratch-6" '$1 == w { print $19 }' "$G/remote_$S")"
-eq "Q: …backfill=failed as field 20 (#2235), the empty 17-19 kept before it" "|||failed" \
+st_eq "Q: …backfill=failed as field 20 (#2235), the empty 17-19 kept before it" "|||failed" \
    "$(LC_ALL=C awk -F"$US" -v w="wid:$F/acme-app:scratch-4" '$1 == w { print $17 "|" $18 "|" $19 "|" $20 }' "$G/remote_$S")"
 got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
 p = ["@5", "", "1", "/w/app-scratch-7", "looping", "claude", "a1", "", "acme/app", "scratch-7", "", "", "", "busy=", "born=", "cfg=", "title=侧栏改版", "reap=", "detail=", "role="]
 print(h.inventory_row(p + ["epic=acme/app#1949:1/3"])[1].get("epic"), h.inventory_row(p + ["epic=#7"])[1].get("epic"),
       h.inventory_row(p + ["epic=x;y"])[1].get("epic"), h.inventory_row(p)[1].get("epic"), h.inventory_row(p)[1].get("title"))' 2>&1)
-eq "Q: inventory column 21 — a cell, a bare #N, junk dropped, absent on a 20-column row" "acme/app#1949:1/3 #7 None None 侧栏改版" "$got"
+st_eq "Q: inventory column 21 — a cell, a bare #N, junk dropped, absent on a 20-column row" "acme/app#1949:1/3 #7 None None 侧栏改版" "$got"
 got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
 p = ["@5", "", "1", "/w/x", "idle", "claude", "a1", "", "", "test-norepo", "", "", "", "busy=", "born=", "cfg=", "title=", "reap=", "detail="]
 x = lambda r: (lambda e: (e.get("role"), e.get("coordinator")))(h.inventory_row(p + ["role=" + r])[1])
 print(x("worker"), x("orchestrator"), x(""))' 2>&1)
-eq "Q: column 20 role= is read as nothing (#4341)" "(None, None) (None, None) (None, None)" "$got"
+st_eq "Q: column 20 role= is read as nothing (#4341)" "(None, None) (None, None) (None, None)" "$got"
 rm -f "$G/remote_$QS" "$G/remote_fold_$QS" "$G/hub_ok" "$MARK"; rm -rf "$WORK/conf/fleets/$QS"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null   # leave leg E's cache as it was
 cp "$WORK/wlist.q" "$WLIST_FILE"
@@ -841,48 +838,48 @@ tside() { PATH="$SHIMPATH" FLEET_SESSION=$TS bash "$ROWS" --rows 2>/dev/null | s
 EDIR="$WORK/conf/global/epic-running.d"; rm -rf "$EDIR"
 t0=$(unset CCQUOTA_FLEET; tside)
 mkdir -p "$EDIR"
-eq "T: an empty mark directory changes nothing" "$t0" "$(unset CCQUOTA_FLEET; tside)"
+st_eq "T: an empty mark directory changes nothing" "$t0" "$(unset CCQUOTA_FLEET; tside)"
 TM="$EDIR/acme-app-1949"
 printf 'epoch: %s\nttl: 2700\nepic: 1949\nrepo: acme/app\ntick: 12\n' "$((NOW - 5400))" > "$TM"
 t=$(unset CCQUOTA_FLEET; tside)
-eq "T: a stale mark, its EPIC open, nobody wearing it — one grey row on top of its repo's group" \
+st_eq "T: a stale mark, its EPIC open, nobody wearing it — one grey row on top of its repo's group" \
    "#1949 侧栏改版;只看只点;工具活;" "$(sorder "$t")" "$t"
-eq "T: …keyed epicstale:<ref>, badged 没人在跑, a root" "epicstale:acme/app#1949| |没人在跑|0|" "$(srow "$t" '#1949 侧栏改版')"
-eq "T: …its state epicstale, the minutes in its detail, the EPIC as its issue cell" \
+st_eq "T: …keyed epicstale:<ref>, badged 没人在跑, a root" "epicstale:acme/app#1949| |没人在跑|0|" "$(srow "$t" '#1949 侧栏改版')"
+st_eq "T: …its state epicstale, the minutes in its detail, the EPIC as its issue cell" \
    "epicstale|○|心跳 90 分钟前停了 · 再点一下重开驱动会话|#1949" \
    "$(printf '%s\n' "$t" | LC_ALL=C awk -F"$US" '$1 ~ /^epicstale:/ { print $2 "|" $3 "|" $8 "|" $10; exit }')"
-eq "T: …under the acme/app heading, above the tool group" "app (1);#1949 侧栏改版;只看只点;tool (1);工具活;" \
+st_eq "T: …under the acme/app heading, above the tool group" "app (1);#1949 侧栏改版;只看只点;tool (1);工具活;" \
    "$(printf '%s\n' "$t" | LC_ALL=C awk -F"$US" '{ printf "%s;", $4 }')"
 got=$(FLEET_SESSION=$TS bash -c '. "$1/fleet-lib.sh"; fleet_epic_stale_list' _ "$BIN" 2>&1)
-eq "T: fleet_epic_stale_list says the same" "acme/app	1949	5400	侧栏改版" "$(printf '%s' "$got" | LC_ALL=C sed 's/	54[0-9][0-9]	/	5400	/')"
-eq "T: …a driven ref is skipped" "" "$(bash -c '. "$1/fleet-lib.sh"; fleet_epic_stale_list "acme/tool#3 acme/app#1949"' _ "$BIN" 2>&1)"
+st_eq "T: fleet_epic_stale_list says the same" "acme/app	1949	5400	侧栏改版" "$(printf '%s' "$got" | LC_ALL=C sed 's/	54[0-9][0-9]	/	5400	/')"
+st_eq "T: …a driven ref is skipped" "" "$(bash -c '. "$1/fleet-lib.sh"; fleet_epic_stale_list "acme/tool#3 acme/app#1949"' _ "$BIN" 2>&1)"
 printf 'epoch: %s\nttl: 2700\nepic: 1949\nrepo: acme/app\n' "$NOW" > "$TM"
-hasnt "T: a fresh mark — no grey row" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
-eq "T: …and the lib lists none" "" "$(bash -c '. "$1/fleet-lib.sh"; fleet_epic_stale_list' _ "$BIN" 2>&1)"
+st_hasnt "T: a fresh mark — no grey row" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
+st_eq "T: …and the lib lists none" "" "$(bash -c '. "$1/fleet-lib.sh"; fleet_epic_stale_list' _ "$BIN" 2>&1)"
 printf 'epoch: %s\nttl: 2700\nepic: 1951\nrepo: acme/app\n' "$((NOW - 5400))" > "$TM"
-hasnt "T: the EPIC closed (not on the open list) — none" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
-eq "T: …nor in the lib" "" "$(bash -c '. "$1/fleet-lib.sh"; fleet_epic_stale_list' _ "$BIN" 2>&1)"
+st_hasnt "T: the EPIC closed (not on the open list) — none" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
+st_eq "T: …nor in the lib" "" "$(bash -c '. "$1/fleet-lib.sh"; fleet_epic_stale_list' _ "$BIN" 2>&1)"
 printf 'epoch: %s\nttl: 2700\nepic: 1949\nrepo: -\n' "$((NOW - 5400))" > "$TM"
-hasnt "T: a mark with no repo — never guessed" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
+st_hasnt "T: a mark with no repo — never guessed" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
 printf 'epoch: %s\nttl: 2700\nepic: 1949\nrepo: acme/app\n' "$((NOW - 5400))" > "$TM"
 cp "$WLIST_FILE" "$WORK/wl.t0"
 wt_ 3  scratch-9  /w/app-scratch-9    'done'   @3  ''    acme/app  acme/app#1949
-hasnt "T: a window still wearing its @epic — its own row says it, no grey one" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
+st_hasnt "T: a window still wearing its @epic — its own row says it, no grey one" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
 cp "$WORK/wl.t0" "$WLIST_FILE"
 rm -f "$TM"
-eq "T: the mark gone — byte for byte the frame without one" "$t0" "$(unset CCQUOTA_FLEET; tside)"
+st_eq "T: the mark gone — byte for byte the frame without one" "$t0" "$(unset CCQUOTA_FLEET; tside)"
 # another machine's, off the hub cache
 printf '#ts\037%s\n#me\037mac-b\n#node\037mac-a\037online\0370\037%s\n' "$NOW" "$NOW" > "$G/remote_$TS"
 date +%s > "$G/hub_ok"   # fresh as of NOW, not the test's start: a slow run passes FLEET_HUB_SESSIONS_STALE (#3902)
 printf 'acme/tool#77\037mac-a\037online\0373600\037工具批\0370\nacme/app#1949\037mac-b\037online\03760\037本机的\0371\nbad ref\037mac-a\037online\0371\037x\0370\n' > "$G/epicstale_$TS"
 t=$(CCQUOTA_FLEET=1 tside)
-eq "T: a remote batch nobody drives — its machine on the row, in its repo's group" \
+st_eq "T: a remote batch nobody drives — its machine on the row, in its repo's group" \
    "epicstale:acme/tool#77@mac-a| |没人在跑|0|mac-a" "$(srow "$t" '#77 工具批')"
-hasnt "T: …a local=1 line is left to this machine's own marks; junk dropped" "$t" "本机的"
-eq "T: …one grey row in all" "1" "$(printf '%s\n' "$t" | LC_ALL=C grep -c '^epicstale:')"
+st_hasnt "T: …a local=1 line is left to this machine's own marks; junk dropped" "$t" "本机的"
+st_eq "T: …one grey row in all" "1" "$(printf '%s\n' "$t" | LC_ALL=C grep -c '^epicstale:')"
 printf 'acme/tool#77\037mac-a\037lost\0373600\037工具批\0370\n' > "$G/epicstale_$TS"
-eq "T: …a lost machine's is dimmed (mac-a!)" "epicstale:acme/tool#77@mac-a| |没人在跑|0|mac-a!" "$(srow "$(CCQUOTA_FLEET=1 tside)" '#77 工具批')"
-hasnt "T: …the hub off draws no remote one" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
+st_eq "T: …a lost machine's is dimmed (mac-a!)" "epicstale:acme/tool#77@mac-a| |没人在跑|0|mac-a!" "$(srow "$(CCQUOTA_FLEET=1 tside)" '#77 工具批')"
+st_hasnt "T: …the hub off draws no remote one" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
 rm -f "$G/epicstale_$TS" "$G/remote_$TS" "$G/hub_ok"
 # the refresher: a worker's epic_stale → epicstale_<sess>, one line per (machine, EPIC)
 python3 - "$WORK/sessions.json" "$WORK/sessions-stale.json" "$F" <<'PY3'
@@ -895,54 +892,54 @@ for s in d["sessions"]:
         s["worker"]["epic_stale"] = st
 json.dump(d, open(dst, "w"), ensure_ascii=False)
 PY3
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-stale.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null || fail "T: --refresh (epic_stale) failed"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-stale.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null || st_fail "T: --refresh (epic_stale) failed"
 got=$(LC_ALL=C awk -F"$US" '{ print $1 "|" $3 "|" $4 "|" $5 "|" $6 }' "$G/epicstale_$S" | LC_ALL=C sort -u)
-has "T: the refresher writes epicstale_<sess> off the workers' epic_stale" "$got" "acme/app#1949|online|5400|侧栏改版|"
-hasnt "T: …a bad ref is dropped" "$got" "x;y"
-eq "T: …once per machine" "$(LC_ALL=C cut -d"$US" -f2 "$G/epicstale_$S" | LC_ALL=C sort | uniq -d)" ""
+st_has "T: the refresher writes epicstale_<sess> off the workers' epic_stale" "$got" "acme/app#1949|online|5400|侧栏改版|"
+st_hasnt "T: …a bad ref is dropped" "$got" "x;y"
+st_eq "T: …once per machine" "$(LC_ALL=C cut -d"$US" -f2 "$G/epicstale_$S" | LC_ALL=C sort | uniq -d)" ""
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null
-eq "T: …and empties it when no worker carries one" "" "$(cat "$G/epicstale_$S" 2>/dev/null)"
+st_eq "T: …and empties it when no worker carries one" "" "$(cat "$G/epicstale_$S" 2>/dev/null)"
 got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
 p = ["@5", "", "1", "/w/x", "looping", "claude", "a1", "", "acme/app", "scratch-7", "", "", "", "busy=", "born=", "cfg=", "title=t", "reap=", "detail=", "role=", "epic="]
 a = h.inventory_row(p + ["epicstale=acme/app#1949\x1f5400\x1f侧栏改版\x1ejunk\x1f1\x1fx\x1eacme/tool#3\x1fzz\x1fy\x1eacme/tool#4\x1f7\x1fa\x07b"])[1]
 print(a.get("epic_stale"), h.inventory_row(p + ["epicstale="])[1].get("epic_stale"), h.inventory_row(p)[1].get("title"), a.get("title"))' 2>&1)
-eq "T: inventory column 22 — valid entries kept, junk dropped, absent when empty, the columns before it intact" \
+st_eq "T: inventory column 22 — valid entries kept, junk dropped, absent when empty, the columns before it intact" \
    "[{'epic': 'acme/app#1949', 'age': 5400, 'title': '侧栏改版'}, {'epic': 'acme/tool#4', 'age': 7, 'title': 'a b'}] None t t" "$got"
 got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
 p = ["@5", "", "1", "/w/x", "looping", "claude", "a1", "", "acme/app", "scratch-7", "", "", "", "busy=", "born=", "cfg=", "title=t", "reap=", "detail=", "role=", "epic=", "epicstale="]
 print(h.inventory_row(p + ["backfill=failed"])[1].get("backfill"), h.inventory_row(p + ["backfill="])[1].get("backfill"),
       h.inventory_row(p + ["backfill=junk"])[1].get("backfill"), h.inventory_row(p + ["backfill=failed"])[1].get("title"))' 2>&1)
-eq "T: inventory column 23 (#2235) — backfill=failed kept, empty / junk absent, the columns before it intact" "failed None None t" "$got"
+st_eq "T: inventory column 23 (#2235) — backfill=failed kept, empty / junk absent, the columns before it intact" "failed None None t" "$got"
 got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
 p = ["@5", "", "1", "/w/x", "idle", "claude", "a1", "", "", "test-norepo", "", "", "", "busy=", "born=", "cfg=", "title=", "reap=done:10m", "detail=", "role=", "epic=", "epicstale=", "backfill=", "ctxleft=", "ctxband=", "ctxts=", "model=", "effort=", "agentstatus="]
 print(h.inventory_row(p + ["test=1"])[1].get("test"), h.inventory_row(p + ["test="])[1].get("test"),
       h.inventory_row(p)[1].get("test"), h.inventory_row(p + ["test=1"])[1].get("reap"))' 2>&1)
-eq "X: inventory column 30 (#2505) — test=1 kept, empty / absent none, the columns before it intact" "True None None done:10m" "$got"
+st_eq "X: inventory column 30 (#2505) — test=1 kept, empty / absent none, the columns before it intact" "True None None done:10m" "$got"
 # --- U. a result nobody took (issue #3369) ---------------------------------------
 OF="$WORK/conf/global/orphan-reports.ndjson"
 rm -f "$EDIR"/* 2>/dev/null
 printf '{"ts": %s, "child_key": "issue-41", "state": "MERGED", "pr": "12", "summary": "落地了 修好侧栏", "repo": "acme/app"}\n' "$((NOW - 60))" > "$OF"
 OID=$(python3 "$BIN/fleet-orphan-reports.py" list | cut -f1)
 t=$(unset CCQUOTA_FLEET; tside)
-eq "U: an unread orphan report — one row, keyed orphanrep:<id>, badged 结果给你, a root" \
+st_eq "U: an unread orphan report — one row, keyed orphanrep:<id>, badged 结果给你, a root" \
    "orphanrep:$OID| |结果给你|0|" "$(srow "$t" 'issue-41 MERGED PR #12')"
-eq "U: …its state orphanrep, the result as its detail, the issue as its cell" "orphanrep|✉|落地了 修好侧栏|#41" \
+st_eq "U: …its state orphanrep, the result as its detail, the issue as its cell" "orphanrep|✉|落地了 修好侧栏|#41" \
    "$(printf '%s\n' "$t" | LC_ALL=C awk -F"$US" '$1 ~ /^orphanrep:/ { print $2 "|" $3 "|" $8 "|" $10; exit }')"
-has "U: …under the acme/app heading" "$(printf '%s\n' "$t" | LC_ALL=C awk -F"$US" '{ printf "%s;", $4 }')" "app ("
+st_has "U: …under the acme/app heading" "$(printf '%s\n' "$t" | LC_ALL=C awk -F"$US" '{ printf "%s;", $4 }')" "app ("
 python3 "$BIN/fleet-orphan-reports.py" read "$OID"
-hasnt "U: read — the row is gone" "$(unset CCQUOTA_FLEET; tside)" "orphanrep"
+st_hasnt "U: read — the row is gone" "$(unset CCQUOTA_FLEET; tside)" "orphanrep"
 rm -f "$OF" "$WORK/conf/global/orphan-reports.read"
-eq "U: no report file — byte for byte the frame without one" "$t0" "$(unset CCQUOTA_FLEET; tside)"
+st_eq "U: no report file — byte for byte the frame without one" "$t0" "$(unset CCQUOTA_FLEET; tside)"
 # another machine's, off the hub cache; what this computer read is skipped
 printf '#ts\037%s\n#me\037mac-b\n#node\037mac-a\037online\0370\037%s\n' "$NOW" "$NOW" > "$G/remote_$TS"
 date +%s > "$G/hub_ok"   # fresh as of NOW, not the test's start: a slow run passes FLEET_HUB_SESSIONS_STALE (#3902)
 printf 'aaaaaaaaaaaa\037mac-a\037online\037%s\037acme/tool\037issue-77\037BLOCKED\037\037要一个 token\0370\nbbbbbbbbbbbb\037mac-b\037online\0371\037acme/app\037issue-5\037MERGED\0373\037本机的\0371\ncccccccccccc\037mac-a\037online\0371\037acme/tool\037issue-78\037MERGED\0379\037已读的\0370\n' "$NOW" > "$G/orphanrep_$TS"
 printf 'mac-a/cccccccccccc\n' > "$G/orphanrep_read"
 t=$(CCQUOTA_FLEET=1 tside)
-eq "U: a remote report — its machine on the row" "orphanrep:aaaaaaaaaaaa@mac-a| |结果给你|0|mac-a" "$(srow "$t" 'issue-77 BLOCKED')"
-hasnt "U: …a local=1 line is left to this machine's own file" "$t" "本机的"
-hasnt "U: …one this computer read is skipped" "$t" "issue-78"
-hasnt "U: …the hub off draws no remote one" "$(unset CCQUOTA_FLEET; tside)" "orphanrep"
+st_eq "U: a remote report — its machine on the row" "orphanrep:aaaaaaaaaaaa@mac-a| |结果给你|0|mac-a" "$(srow "$t" 'issue-77 BLOCKED')"
+st_hasnt "U: …a local=1 line is left to this machine's own file" "$t" "本机的"
+st_hasnt "U: …one this computer read is skipped" "$t" "issue-78"
+st_hasnt "U: …the hub off draws no remote one" "$(unset CCQUOTA_FLEET; tside)" "orphanrep"
 rm -f "$G/orphanrep_$TS" "$G/orphanrep_read" "$G/remote_$TS" "$G/hub_ok"
 # the refresher: a worker's orphan_reports → orphanrep_<sess>, one line per (machine, id)
 python3 - "$WORK/sessions.json" "$WORK/sessions-orphan.json" <<'PY3'
@@ -956,12 +953,12 @@ for s in d["sessions"]:
         s["worker"]["orphan_reports"] = orr
 json.dump(d, open(dst, "w"), ensure_ascii=False)
 PY3
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orphan.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null || fail "U: --refresh (orphan_reports) failed"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orphan.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null || st_fail "U: --refresh (orphan_reports) failed"
 got=$(LC_ALL=C awk -F"$US" '{ print $1 "|" $4 "|" $5 "|" $6 "|" $7 "|" $8 "|" $9 }' "$G/orphanrep_$S" | LC_ALL=C sort -u)
-eq "U: the refresher writes orphanrep_<sess> off the workers' orphan_reports (junk dropped)" "aaaaaaaaaaaa|100|acme/app|issue-41|MERGED|12|landed" "$got"
-eq "U: …once per machine" "" "$(LC_ALL=C cut -d"$US" -f1,2 "$G/orphanrep_$S" | LC_ALL=C sort | uniq -d)"
+st_eq "U: the refresher writes orphanrep_<sess> off the workers' orphan_reports (junk dropped)" "aaaaaaaaaaaa|100|acme/app|issue-41|MERGED|12|landed" "$got"
+st_eq "U: …once per machine" "" "$(LC_ALL=C cut -d"$US" -f1,2 "$G/orphanrep_$S" | LC_ALL=C sort | uniq -d)"
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null
-eq "U: …and empties it when no worker carries one" "" "$(cat "$G/orphanrep_$S" 2>/dev/null)"
+st_eq "U: …and empties it when no worker carries one" "" "$(cat "$G/orphanrep_$S" 2>/dev/null)"
 rm -rf "$WORK/conf/fleets/$TS" "$EDIR"
 cp "$WORK/wlist.t" "$WLIST_FILE"
 
@@ -977,24 +974,24 @@ if [ -n "$REAL_TMUX" ] && "$REAL_TMUX" -L "$S" -f /dev/null new-session -d -s "$
 ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
 w = [x for x in ctl.workers(f)["workers"] if x["issue"] == 1423][0]
 print(w["name"] + "|" + str(w["origin_wid"]) + "|" + w["key"] + "|" + str(w["needs"]))' "$FLEET_CONF_DIR" "$S" 2>&1)
-  eq "G: the adapter hands over the window name, @origin_wid and @claude_needs" "侧边栏 x|$F/issue-1419|acme-app:issue-1423|ask" "$got"   # the internal key carries the repo (#1939); the name is unchanged
+  st_eq "G: the adapter hands over the window name, @origin_wid and @claude_needs" "侧边栏 x|$F/issue-1419|acme-app:issue-1423|ask" "$got"   # the internal key carries the repo (#1939); the name is unchanged
   # 置顶 (issue #3517): the hub's worker_pin lands through the adapter — a set,
   # checked against the window's @fleet_id — and column 32 carries it back as `pin`
   pinw() { cd "$BIN" && python3 -c 'import sys, fleet_control as c
 ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
 print([x for x in ctl.workers(f)["workers"] if x["issue"] == 1423][0].get("pin", False))' "$FLEET_CONF_DIR" "$S" 2>&1; }
-  eq "P: an unpinned window: no pin" "False" "$(pinw)"
+  st_eq "P: an unpinned window: no pin" "False" "$(pinw)"
   "$REAL_TMUX" -L "$S" set-window-option -t "$wi" @fleet_id fid-pin
-  eq "P: the adapter's pin on" "pinned" "$(bash "$CREAD" pin "$S" "$wi" fid-pin on 2>&1)"
-  eq "P: …@pin is 1" "1" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wi" @pin)"
-  eq "P: …and the inventory says pin" "True" "$(pinw)"
+  st_eq "P: the adapter's pin on" "pinned" "$(bash "$CREAD" pin "$S" "$wi" fid-pin on 2>&1)"
+  st_eq "P: …@pin is 1" "1" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wi" @pin)"
+  st_eq "P: …and the inventory says pin" "True" "$(pinw)"
   bash "$CREAD" pin "$S" "$wi" fid-other off >/dev/null 2>&1; rc=$?
-  eq "P: a window that is no longer that session is refused (exit 5), the pin kept" "5|1" "$rc|$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wi" @pin)"
+  st_eq "P: a window that is no longer that session is refused (exit 5), the pin kept" "5|1" "$rc|$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wi" @pin)"
   bash "$CREAD" pin "$S" "$wi" fid-pin toggle >/dev/null 2>&1; rc=$?
-  eq "P: anything but on / off is refused (exit 2)" "2" "$rc"
-  eq "P: the adapter's pin off" "unpinned" "$(bash "$CREAD" pin "$S" "$wi" fid-pin off 2>&1)"
-  eq "P: …@pin unset, never a parked 0" "" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wi" @pin)"
-  eq "P: …and the inventory no longer says pin" "False" "$(pinw)"
+  st_eq "P: anything but on / off is refused (exit 2)" "2" "$rc"
+  st_eq "P: the adapter's pin off" "unpinned" "$(bash "$CREAD" pin "$S" "$wi" fid-pin off 2>&1)"
+  st_eq "P: …@pin unset, never a parked 0" "" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wi" @pin)"
+  st_eq "P: …and the inventory no longer says pin" "False" "$(pinw)"
   "$REAL_TMUX" -L "$S" set-window-option -t "$wi" -u @fleet_id
   # X (issue #2505): a test identity's window here — the adapter says test, the
   # list (on this real server) draws no row for it, FLEET_ROWS_TEST=1 does
@@ -1005,23 +1002,23 @@ print([x for x in ctl.workers(f)["workers"] if x["issue"] == 1423][0].get("pin",
 ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
 ws = ctl.workers(f)["workers"]
 print(",".join(sorted("%s:%s" % (x["name"], x.get("test", False)) for x in ws if x["name"] in ("test-norepo", "侧边栏 x"))))' "$FLEET_CONF_DIR" "$S" 2>&1)
-  eq "X: the adapter marks the test window, and only it" "test-norepo:True,侧边栏 x:False" "$got"
+  st_eq "X: the adapter marks the test window, and only it" "test-norepo:True,侧边栏 x:False" "$got"
   SP=$("$REAL_TMUX" -L "$S" display-message -p '#{socket_path}')
   got=$(TMUX="$SP,1,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>/dev/null | strip)
-  hasnt "X: the list on this machine draws no row for a test window" "$got" "test-norepo"
-  has  "X: …the other windows are there" "$got" "侧边栏 x"
-  has  "X: FLEET_ROWS_TEST=1 lists it" "$(TMUX="$SP,1,0" FLEET_SESSION=$S FLEET_ROWS_TEST=1 bash "$ROWS" --rows 2>/dev/null | strip)" "test-norepo"
+  st_hasnt "X: the list on this machine draws no row for a test window" "$got" "test-norepo"
+  st_has  "X: …the other windows are there" "$got" "侧边栏 x"
+  st_has  "X: FLEET_ROWS_TEST=1 lists it" "$(TMUX="$SP,1,0" FLEET_SESSION=$S FLEET_ROWS_TEST=1 bash "$ROWS" --rows 2>/dev/null | strip)" "test-norepo"
   "$REAL_TMUX" -L "$S" kill-window -t "$wt5" 2>/dev/null
   # The refresher maps a LOCAL row to the window that holds it now (#1480) —
   # through this same adapter on the real server, by the hub's own key rule.
   wl=$("$REAL_TMUX" -L "$S" new-window -d -P -F '#{window_id}' -n 'local-one' 'while :; do sleep 300; done')
   "$REAL_TMUX" -L "$S" set-window-option -t "$wl" @issue 1420
-  CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>"$WORK/err" || fail "G: --refresh (real server) failed" "$(cat "$WORK/err")"
-  eq "G: a local row's wid is the live window of its worker_id" "1|$wl" \
+  CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>"$WORK/err" || st_fail "G: --refresh (real server) failed" "$(cat "$WORK/err")"
+  st_eq "G: a local row's wid is the live window of its worker_id" "1|$wl" \
      "$(LC_ALL=C awk -F"$US" -v w="wid:$U/acme-app:issue-1420" '$1 == w { print $11 "|" $12 }' "$G/remote_$S")"
   "$REAL_TMUX" -L "$S" kill-window -t "$wl" 2>/dev/null
   CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null
-  eq "G: …and empty again once that window is gone" "1|" \
+  st_eq "G: …and empty again once that window is gone" "1|" \
      "$(LC_ALL=C awk -F"$US" -v w="wid:$U/acme-app:issue-1420" '$1 == w { print $11 "|" $12 }' "$G/remote_$S")"
   # The driver wears its batch (issue #2544): fleet-epic-heartbeat.sh --short
   # renames ITS OWN pane's window `<简称>·批次` beside the @epic stamp — only from a
@@ -1031,14 +1028,14 @@ print(",".join(sorted("%s:%s" % (x["name"], x.get("test", False)) for x in ws if
   hb() { env PATH="$PATH" TMUX="$hbsock,1,0" TMUX_PANE="$hbp" bash "$BIN/fleet-epic-heartbeat.sh" "$@" >/dev/null 2>&1; }
   hbname() { "$REAL_TMUX" -L "$S" display-message -p -t "$hbp" '#{window_name}|#{@epic}'; }
   hb 2482 --repo acme/app --tick 1
-  eq "G: no --short — the stamp marks @epic, the name untouched" "scratch-12|acme/app#2482" "$(hbname)"
+  st_eq "G: no --short — the stamp marks @epic, the name untouched" "scratch-12|acme/app#2482" "$(hbname)"
   hb 2482 --repo acme/app --tick 2 --short '像本地 x#'
-  eq "G: --short renames the driver <简称>·批次 (fleet_epic_short: 4 letters, no junk)" "像本地x·批次|acme/app#2482" "$(hbname)"
+  st_eq "G: --short renames the driver <简称>·批次 (fleet_epic_short: 4 letters, no junk)" "像本地x·批次|acme/app#2482" "$(hbname)"
   hb 2482 --repo acme/app --tick 3 --short 本地
-  eq "G: …a changed 简称 renames it again" "本地·批次|acme/app#2482" "$(hbname)"
+  st_eq "G: …a changed 简称 renames it again" "本地·批次|acme/app#2482" "$(hbname)"
   "$REAL_TMUX" -L "$S" rename-window -t "$hbp" 我的批
   hb 2482 --repo acme/app --tick 4 --short 本地
-  eq "G: …a name the person gave it stays" "我的批|acme/app#2482" "$(hbname)"
+  st_eq "G: …a name the person gave it stays" "我的批|acme/app#2482" "$(hbname)"
   hb --clear 2482
   "$REAL_TMUX" -L "$S" kill-window -t "$hbp" 2>/dev/null
   # Every session the node's own list shows is reported (issue #1749): a no-repo
@@ -1057,8 +1054,8 @@ ws = {w["name"]: w for w in ctl.workers(f)["workers"]}
 g, r = ws.get("guide") or {}, ws.get("SPACE") or {}
 print(str(g.get("key")) + "|" + str(g.get("worker_id")) + "|" + str(r.get("key")) + "|" + str("plan" in ws))' "$FLEET_CONF_DIR" "$S" 2>&1)
   gfid=$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wg" @fleet_id)
-  case "$gfid" in ????????-????-????-????-????????????) ;; *) fail "G: the adapter minted no @fleet_id for a keyless window (got '$gfid')" ;; esac
-  eq "G: a keyless no-repo window is listed under its minted identity; a raw scratch keys off its cwd; no panel" \
+  case "$gfid" in ????????-????-????-????-????????????) ;; *) st_fail "G: the adapter minted no @fleet_id for a keyless window (got '$gfid')" ;; esac
+  st_eq "G: a keyless no-repo window is listed under its minted identity; a raw scratch keys off its cwd; no panel" \
      "None|$U/$gfid|acme-app:scratch-21|False" "$got"   # the scratch key carries the repo (#1939)
   # Issue #1958: the heartbeat marks the driver's OWN window, the adapter's column
   # 21 hands its EPIC (+ the mark's counts) on, its title is the EPIC's; --clear
@@ -1072,22 +1069,22 @@ print(str(g.get("key")) + "|" + str(g.get("worker_id")) + "|" + str(r.get("key")
   sp=$("$REAL_TMUX" -L "$S" display-message -p '#{socket_path}')
   tdir=$(dirname "$REAL_TMUX")
   hb() { TMUX="$sp,1,0" TMUX_PANE="$pd" PATH="$tdir:$PATH" bash "$BIN/fleet-epic-heartbeat.sh" "$@" >/dev/null 2>&1; }
-  hb 1949 --repo acme/app --landed 1 --members 3 || fail "G: the heartbeat stamp failed"
-  eq "G: the stamp marks its own pane's window @epic <repo>#<N>" "acme/app#1949" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wd" @epic)"
-  has "G: …and writes the counts into this batch's mark" "$(cat "$FLEET_CONF_DIR/global/epic-running.d/acme-app-1949")" "landed: 1"
+  hb 1949 --repo acme/app --landed 1 --members 3 || st_fail "G: the heartbeat stamp failed"
+  st_eq "G: the stamp marks its own pane's window @epic <repo>#<N>" "acme/app#1949" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wd" @epic)"
+  st_has "G: …and writes the counts into this batch's mark" "$(cat "$FLEET_CONF_DIR/global/epic-running.d/acme-app-1949")" "landed: 1"
   got=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
 ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
 w = [x for x in ctl.workers(f)["workers"] if x["name"] == "scratch-22"][0]
 print(str(w.get("epic")) + "|" + str(w.get("title")) + "|" + str(w.get("key")))' "$FLEET_CONF_DIR" "$S" 2>&1)
-  eq "G: column 21 carries the EPIC + its counts; the title is the EPIC's" "acme/app#1949:1/3|侧栏改版|acme-app:scratch-22" "$got"
+  st_eq "G: column 21 carries the EPIC + its counts; the title is the EPIC's" "acme/app#1949:1/3|侧栏改版|acme-app:scratch-22" "$got"
   got=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
 ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
 print(";".join(sorted(str(w.get("epic")) for w in ctl.workers(f)["workers"] if w["name"] != "scratch-22")))' "$FLEET_CONF_DIR" "$S" 2>&1)
-  hasnt "G: …no other window carries one" "$got" "#"
+  st_hasnt "G: …no other window carries one" "$got" "#"
   hb --clear 1950
-  eq "G: --clear of another EPIC leaves the window marked" "acme/app#1949" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wd" @epic)"
+  st_eq "G: --clear of another EPIC leaves the window marked" "acme/app#1949" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wd" @epic)"
   hb --clear 1949
-  eq "G: --clear <N> unmarks it" "" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wd" @epic)"
+  st_eq "G: --clear <N> unmarks it" "" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wd" @epic)"
   # Issue #1916: a batch nobody drives rides EVERY window's column 22 (it has no
   # window of its own); a window wearing its @epic takes it off the list.
   mkdir -p "$FLEET_CONF_DIR/global/epic-running.d"
@@ -1096,12 +1093,12 @@ print(";".join(sorted(str(w.get("epic")) for w in ctl.workers(f)["workers"] if w
 ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
 ws = ctl.workers(f)["workers"]
 print(len(ws) > 1, sorted({str([(e["epic"], e["title"]) for e in w.get("epic_stale") or []]) for w in ws}))' "$FLEET_CONF_DIR" "$S" 2>&1)
-  eq "G: every window carries the login's batch nobody drives (column 22)" "True [\"[('acme/app#1949', '侧栏改版')]\"]" "$got"
+  st_eq "G: every window carries the login's batch nobody drives (column 22)" "True [\"[('acme/app#1949', '侧栏改版')]\"]" "$got"
   "$REAL_TMUX" -L "$S" set-window-option -t "$wd" @epic acme/app#1949
   got=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
 ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
 print(sum(1 for w in ctl.workers(f)["workers"] if w.get("epic_stale")))' "$FLEET_CONF_DIR" "$S" 2>&1)
-  eq "G: …and none once a window wears its @epic again" "0" "$got"
+  st_eq "G: …and none once a window wears its @epic again" "0" "$got"
   "$REAL_TMUX" -L "$S" set-window-option -t "$wd" -u @epic
   rm -f "$FLEET_CONF_DIR/global/epic-running.d/acme-app-1949"
   "$REAL_TMUX" -L "$S" kill-window -t "$wd" 2>/dev/null
@@ -1113,14 +1110,14 @@ ctl = c.Control(sys.argv[1]); f = {"name": "x", "agent": "claude", "fleet_id": s
 ctl.adapter = lambda *a, **k: (0, b"@5\t7\t0\t/w/app-issue-7\tworking\tclaude\ta1\t\t\n", b"")
 w = ctl.workers(f)["workers"][0]
 print("name" in w, "origin_wid" in w, "needs" in w, w["key"])' "$FLEET_CONF_DIR" "$U" 2>&1)
-eq "G: a 9-column adapter still parses, with no new keys" "False False False issue-7" "$got"
+st_eq "G: a 9-column adapter still parses, with no new keys" "False False False issue-7" "$got"
 got=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
 ctl = c.Control(sys.argv[1]); f = {"name": "x", "agent": "claude", "fleet_id": sys.argv[2], "repo": "acme/app"}
 # the adapter 13-column shape (issue #1646: column 13 is @fleet_id, the identity)
 ctl.adapter = lambda *a, **k: (0, b"@5\t7\t0\t/w/app-issue-7\tworking\tclaude\ta1\t\t\ta\tb\t\t\t9d1c6b7e-2f4a-4c3b-8e5d-6a7b8c9d0e1f\n", b"")
 w = ctl.workers(f)["workers"][0]
 print(w["name"] + "|" + str(w["origin_wid"]) + "|" + str(w["needs"]) + "|" + str(w["identity"]))' "$FLEET_CONF_DIR" "$U" 2>&1)
-eq "G: a tab inside the window name is absorbed — kept as the tab it is (#1698), never a protocol error" \
+st_eq "G: a tab inside the window name is absorbed — kept as the tab it is (#1698), never a protocol error" \
    $'a\tb|None|None|9d1c6b7e-2f4a-4c3b-8e5d-6a7b8c9d0e1f' "$got"
 
 # ============================================================================
@@ -1135,53 +1132,53 @@ printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/security"
 chmod +x "$WORK/bin/gh" "$WORK/bin/security"
 rdy() { PATH="$SHIMPATH" bash "$CREAD" ready 2>/dev/null | python3 -c 'import json, sys
 d = json.load(sys.stdin); print("%s|%s|%s|%s|%s" % (d["ready"], d["gh"], d["creds"], d["checkouts"], ",".join(d["missing"])))'; }
-eq "R: nothing in place: not ready, gh + creds named" "False|False|False|True|gh,creds" "$(rdy)"
+st_eq "R: nothing in place: not ready, gh + creds named" "False|False|False|True|gh,creds" "$(rdy)"
 touch "$WORK/gh-ok"
-eq "R: a gh login" "False|True|False|True|creds" "$(rdy)"
+st_eq "R: a gh login" "False|True|False|True|creds" "$(rdy)"
 mkdir -p "$HOME/.claude"; printf '{}' > "$HOME/.claude/.credentials.json"
-eq "R: Claude Code's own credential file counts" "True|True|True|True|" "$(rdy)"
+st_eq "R: Claude Code's own credential file counts" "True|True|True|True|" "$(rdy)"
 rm -f "$HOME/.claude/.credentials.json"; mkdir -p "$HOME/.codex"; printf '{}' > "$HOME/.codex/auth.json"
-eq "R: Codex's auth.json counts" "True|True|True|True|" "$(rdy)"
+st_eq "R: Codex's auth.json counts" "True|True|True|True|" "$(rdy)"
 rm -f "$HOME/.codex/auth.json"; mkdir -p "$FLEET_CONF_DIR/accounts"; printf 'sk-x\n' > "$FLEET_CONF_DIR/accounts/alpha"
-eq "R: a pool token file counts" "True|True|True|True|" "$(rdy)"
+st_eq "R: a pool token file counts" "True|True|True|True|" "$(rdy)"
 rm -f "$FLEET_CONF_DIR/accounts/alpha"; mkdir -p "$FLEET_CONF_DIR/accounts/beta.hub"; printf '{}' > "$FLEET_CONF_DIR/accounts/beta.hub/.credentials.json"
-eq "R: a pool account's hub credential counts" "True|True|True|True|" "$(rdy)"
+st_eq "R: a pool account's hub credential counts" "True|True|True|True|" "$(rdy)"
 rmdir "$WORK/main"
-eq "R: a missing checkout is named" "False|True|True|False|checkout:$S/app" "$(rdy)"
+st_eq "R: a missing checkout is named" "False|True|True|False|checkout:$S/app" "$(rdy)"
 mkdir -p "$WORK/main"
 got=$(cd "$BIN" && PATH="$SHIMPATH" python3 -c 'import sys, fleet_control as c
 ctl = c.Control(sys.argv[1])
 r = ctl.dispatch(dict(protocol=1, method="ready", params={}))
 print("%s|%s|%s" % (r["ready"], r["gh"], ",".join(r["missing"])))' "$FLEET_CONF_DIR" 2>&1)
-eq "R: fleet_control.py's ready method hands the verdict on, no fleet identity needed" "True|True|" "$got"
+st_eq "R: fleet_control.py's ready method hands the verdict on, no fleet identity needed" "True|True|" "$got"
 # a login hosting no repo — the one the hub just opened for a newcomer, whose
 # first session is a HOME one (#2953): no gh login is no reason to refuse it;
 # `gh` still says false, nothing is missing, it is ready. With a repo,
 # the same login is not.
 mkdir -p "$WORK/conf-norepo/fleets/solo$$"; printf 'FLEET_SESSION=solo%s\n' "$$" > "$WORK/conf-norepo/fleets/solo$$/conf"
 rm -f "$WORK/gh-ok"; printf '{}' > "$HOME/.claude/.credentials.json"   # the pool above lives in the other conf dir
-eq "R: no repo hosted, no gh login: ready all the same" "True|False|True|True|" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rdy)"
-eq "R: a repo hosted, no gh login: not ready, gh named" "False|False|True|True|gh" "$(rdy)"
+st_eq "R: no repo hosted, no gh login: ready all the same" "True|False|True|True|" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rdy)"
+st_eq "R: a repo hosted, no gh login: not ready, gh named" "False|False|True|True|gh" "$(rdy)"
 # the same newcomer once fleet-login-bootstrap.sh put it up on its STARTER
 # (fleet-up --seed: FLEET_SEED=1 in the repo's overlay, #1167) — a repo it only
 # looks at needs no GitHub credential (#2973): ready, nothing missing
 mkdir -p "$WORK/conf-seed/fleets/solo$$/repos" "$WORK/seedmain"
 printf 'FLEET_SESSION=solo%s\n' "$$" > "$WORK/conf-seed/fleets/solo$$/conf"
 printf 'FLEET_REPO=verkyyi/claude-fleet\nFLEET_MAIN=%s\nFLEET_SEED=1\n' "$WORK/seedmain" > "$WORK/conf-seed/fleets/solo$$/repos/verkyyi-claude-fleet.conf"
-eq "R: only the seed repo hosted, no gh login: ready all the same" "True|False|True|True|" "$(FLEET_CONF_DIR="$WORK/conf-seed" rdy)"
+st_eq "R: only the seed repo hosted, no gh login: ready all the same" "True|False|True|True|" "$(FLEET_CONF_DIR="$WORK/conf-seed" rdy)"
 # …for a start with no repo only (#3424): a start ON a repo — the seed one too —
 # reads the issue and opens a PR, so repo_ready says no and names gh, and
 # fleet_control.py hands that half on to the agent's heartbeat
 rrdy() { PATH="$SHIMPATH" bash "$CREAD" ready 2>/dev/null | python3 -c 'import json, sys
 d = json.load(sys.stdin); print("%s|%s" % (d["repo_ready"], ",".join(d["repo_missing"])))'; }
-eq "R: only the seed repo hosted, no gh login: a repo start is not ready, gh named" "False|gh" "$(FLEET_CONF_DIR="$WORK/conf-seed" rrdy)"
-eq "R: no repo hosted, no gh login: nothing to start a repo on, repo_ready as ready" "True|" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rrdy)"
+st_eq "R: only the seed repo hosted, no gh login: a repo start is not ready, gh named" "False|gh" "$(FLEET_CONF_DIR="$WORK/conf-seed" rrdy)"
+st_eq "R: no repo hosted, no gh login: nothing to start a repo on, repo_ready as ready" "True|" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rrdy)"
 got=$(cd "$BIN" && PATH="$SHIMPATH" FLEET_CONF_DIR="$WORK/conf-seed" python3 -c 'import sys, fleet_control as c
 r = c.Control(sys.argv[1]).dispatch(dict(protocol=1, method="ready", params={}))
 print("%s|%s|%s" % (r["ready"], r["repo_ready"], ",".join(r["repo_missing"])))' "$WORK/conf-seed" 2>&1)
-eq "R: fleet_control.py hands repo_ready on" "True|False|gh" "$got"
+st_eq "R: fleet_control.py hands repo_ready on" "True|False|gh" "$got"
 printf 'FLEET_REPO=o/own\nFLEET_MAIN=%s\n' "$WORK/seedmain" > "$WORK/conf-seed/fleets/solo$$/repos/o-own.conf"
-eq "R: the seed plus a repo of its own, no gh login: not ready, gh named" "False|False|True|True|gh" "$(FLEET_CONF_DIR="$WORK/conf-seed" rdy)"
+st_eq "R: the seed plus a repo of its own, no gh login: not ready, gh named" "False|False|True|True|gh" "$(FLEET_CONF_DIR="$WORK/conf-seed" rdy)"
 # a repo with no GitHub (FLEET_FORGE=none, #3600) needs no gh (#4645): a login
 # whose every hosted repo is forge-none runs gh not even once, and gh is neither
 # missing nor needed for a start on it; a GitHub repo beside it asks as today
@@ -1190,27 +1187,27 @@ mkdir -p "$WORK/conf-none/fleets/solo$$/repos"
 printf 'FLEET_SESSION=solo%s\n' "$$" > "$WORK/conf-none/fleets/solo$$/conf"
 printf 'FLEET_REPO=o/bare\nFLEET_MAIN=%s\nFLEET_FORGE="none"\nFLEET_LAND="fleet"\n' "$WORK/seedmain" > "$WORK/conf-none/fleets/solo$$/repos/o-bare.conf"
 rm -f "$WORK/gh.calls"
-eq "R: only forge-none repos hosted, no gh login: ready, gh not named" "True|False|True|True|" "$(FLEET_CONF_DIR="$WORK/conf-none" rdy)"
-eq "R: only forge-none repos hosted: a repo start is ready too" "True|" "$(FLEET_CONF_DIR="$WORK/conf-none" rrdy)"
-eq "R: only forge-none repos hosted: gh never exec'd" "0" "$(ghn)"
+st_eq "R: only forge-none repos hosted, no gh login: ready, gh not named" "True|False|True|True|" "$(FLEET_CONF_DIR="$WORK/conf-none" rdy)"
+st_eq "R: only forge-none repos hosted: a repo start is ready too" "True|" "$(FLEET_CONF_DIR="$WORK/conf-none" rrdy)"
+st_eq "R: only forge-none repos hosted: gh never exec'd" "0" "$(ghn)"
 rm -f "$WORK/gh.calls"
-eq "R: a GitHub repo hosted, no gh login: not ready, gh named" "False|False|True|True|gh" "$(rdy)"
-eq "R: a GitHub repo hosted: gh asked once, as before" "1" "$(ghn)"
+st_eq "R: a GitHub repo hosted, no gh login: not ready, gh named" "False|False|True|True|gh" "$(rdy)"
+st_eq "R: a GitHub repo hosted: gh asked once, as before" "1" "$(ghn)"
 printf 'FLEET_REPO=o/own\nFLEET_MAIN=%s\n' "$WORK/seedmain" > "$WORK/conf-none/fleets/solo$$/repos/o-own.conf"
 rm -f "$WORK/gh.calls"
-eq "R: forge-none beside a GitHub repo, no gh login: not ready, gh named" "False|False|True|True|gh" "$(FLEET_CONF_DIR="$WORK/conf-none" rdy)"
-eq "R: forge-none beside a GitHub repo: gh asked once" "1" "$(ghn)"
+st_eq "R: forge-none beside a GitHub repo, no gh login: not ready, gh named" "False|False|True|True|gh" "$(FLEET_CONF_DIR="$WORK/conf-none" rdy)"
+st_eq "R: forge-none beside a GitHub repo: gh asked once" "1" "$(ghn)"
 # a person's pod holds no credential by design (render.py --cred-central, #3554 /
 # #4185): node.env says CCQUOTA_FLEET_CREDS=0 and fleet.conf names the central
 # proxy — that road is its credential, or a bare `fleet` never gets its first
 # session there (#4255). Either half alone is not.
 rm -f "$HOME/.claude/.credentials.json"
 printf 'FLEET_CRED_PROXY=1\nFLEET_CRED_CENTRAL_URL=https://hub.example\n' > "$WORK/conf-norepo/fleet.conf"
-eq "R: central proxy named, node.env silent: creds still missing" "False|False|False|True|creds" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rdy)"
+st_eq "R: central proxy named, node.env silent: creds still missing" "False|False|False|True|creds" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rdy)"
 printf 'CCQUOTA_FLEET_CREDS=0\n' > "$WORK/conf-norepo/node.env"
-eq "R: a pod on the central road (CCQUOTA_FLEET_CREDS=0): ready" "True|False|True|True|" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rdy)"
+st_eq "R: a pod on the central road (CCQUOTA_FLEET_CREDS=0): ready" "True|False|True|True|" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rdy)"
 printf 'CCQUOTA_FLEET_CREDS=1\n' > "$WORK/conf-norepo/node.env"
-eq "R: a login that leases (CCQUOTA_FLEET_CREDS=1): the road is not its credential" "False|False|False|True|creds" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rdy)"
+st_eq "R: a login that leases (CCQUOTA_FLEET_CREDS=1): the road is not its credential" "False|False|False|True|creds" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rdy)"
 rm -f "$WORK/conf-norepo/fleet.conf" "$WORK/conf-norepo/node.env"
 touch "$WORK/gh-ok"; rm -f "$HOME/.claude/.credentials.json"
 HOME="$(cd ~ && pwd)"; export HOME
@@ -1228,7 +1225,7 @@ on = h.inventory_row(base + tail + ["pin=1"])[1]
 off = h.inventory_row(base + tail + ["pin="])[1]
 old = h.inventory_row(base + tail)[1]
 print(on.get("pin"), "pin" in off, "pin" in old, on.get("name"))')
-eq "P2: inventory_row — pin=1 → pin, pin= and an older node's row → none" "True False False name" "$got"
+st_eq "P2: inventory_row — pin=1 → pin, pin= and an older node's row → none" "True False False name" "$got"
 python3 - "$WORK/sessions-pin.json" "$F" "$(id -un)" <<'PY'
 import json, sys
 path, f, me = sys.argv[1:4]
@@ -1239,11 +1236,11 @@ json.dump({"machines": [], "nodes": [], "sessions": [dict(worker_id=f + "/issue-
            observed_at="2026-10-04T10:00:00Z")]}, open(path, "w"), ensure_ascii=False)
 PY
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-pin.json'" CCQUOTA_FLEET=1 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null \
-  || fail "P2: --refresh (a pinned session) failed"
-eq "P2: the cache's field 30 is 1, the row 30 fields long" "1|30" \
+  || st_fail "P2: --refresh (a pinned session) failed"
+st_eq "P2: the cache's field 30 is 1, the row 30 fields long" "1|30" \
    "$(LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1950" '$1 == w { print $30 "|" NF }' "$G/remote_$S")"
 s=$(CCQUOTA_FLEET=1 side)
-has "P2: the list grows a 置顶 heading" "$(shdrs "$s")" "置顶 (1)"
-eq "P2: …and the pinned remote row is its first row" "钉住的" "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$1 != "hdr" { print $4; exit }')"
+st_has "P2: the list grows a 置顶 heading" "$(shdrs "$s")" "置顶 (1)"
+st_eq "P2: …and the pinned remote row is its first row" "钉住的" "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$1 != "hdr" { print $4; exit }')"
 
 printf 'dash-remote-rows selftest: PASS (%d checks)\n' "$CHECKS"

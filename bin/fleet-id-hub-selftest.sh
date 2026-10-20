@@ -22,7 +22,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 REAL_TMUX=$(command -v tmux) || { echo 'fleet-id-hub selftest: tmux absent — SKIP'; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo 'fleet-id-hub selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-id-hub.XXXXXX")" || exit 2
 L="fidhub$$"
@@ -30,8 +30,7 @@ export TMPDIR="$WORK"
 export FLEET_SKIP_GLOBAL_CONF=1 FLEET_ID_PUSH=0 FLEET_ID_ALERT=1
 unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_ID_HOOK
 
-FAIL=0; CHECKS=0
-fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
+st_tally
 tf() { "$REAL_TMUX" -L "$L" "$@"; }
 cleanup() { FLEET_ALLOW_TMUX_DESTROY=1 "$REAL_TMUX" -L "$L" kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
@@ -97,23 +96,23 @@ for i in "$I1" "$I2" "$I3"; do
   fid close "$i" --reason reaped
 done
 fid push; rc=$?
-st_count; [ "$rc" = 75 ] || fail "S10: a push with the hub down answers 75" "rc=$rc"
-st_count; [ ! -s "$HUB" ] || fail "S10: the hub down stored something" "$(cat "$HUB")"
+st_count; [ "$rc" = 75 ] || st_miss "S10: a push with the hub down answers 75" "rc=$rc"
+st_count; [ ! -s "$HUB" ] || st_miss "S10: the hub down stored something" "$(cat "$HUB")"
 rm -f "$HUB.down"
 fid push; rc=$?
-st_count; [ "$rc" = 0 ] || fail "S10: the push once the hub is back" "rc=$rc"
+st_count; [ "$rc" = 0 ] || st_miss "S10: the push once the hub is back" "rc=$rc"
 for i in "$I1" "$I2" "$I3"; do
-  st_count; [ "$(hub_has "$i")" = "$(mine "$i")" ] || fail "S10: the hub's $i is not the ledger, event for event" "$(hub_has "$i" | head -3)"
+  st_count; [ "$(hub_has "$i")" = "$(mine "$i")" ] || st_miss "S10: the hub's $i is not the ledger, event for event" "$(hub_has "$i" | head -3)"
 done
 before=$(nposts)
 fid push >/dev/null
-st_count; [ "$(nposts)" = "$before" ] || fail "S10: a second push sent again" "$(tail -n 3 "$POSTS")"
+st_count; [ "$(nposts)" = "$before" ] || st_miss "S10: a second push sent again" "$(tail -n 3 "$POSTS")"
 # a hub rebuilt empty: the cursor is ahead of it, the node replays from its answer
 printf '{"ids":{}}' > "$HUB"
 fid result "$I2" --state failed --summary later
 fid push >/dev/null
-st_count; [ "$(hub_has "$I2")" = "$(mine "$I2")" ] || fail "S10: a rebuilt hub did not get the whole ledger of I2" "$(hub_has "$I2" | wc -l)"
-st_count; [ "$(mine "$I2" | wc -l | tr -d ' ')" = 5 ] || fail "S10: the ledger of I2 should hold 5 events" "$(mine "$I2" | wc -l)"
+st_count; [ "$(hub_has "$I2")" = "$(mine "$I2")" ] || st_miss "S10: a rebuilt hub did not get the whole ledger of I2" "$(hub_has "$I2" | wc -l)"
+st_count; [ "$(mine "$I2" | wc -l | tr -d ' ')" = 5 ] || st_miss "S10: the ledger of I2 should hold 5 events" "$(mine "$I2" | wc -l)"
 
 # ---- S12 · two machines, one 4-character code (C11: FF1W…, the old 7ym5y…) ------
 rm -f "$HUB" "$POSTS"
@@ -123,44 +122,43 @@ machine m2
 WB=$(tf new-window -d -P -F '#{window_id}' -t "$L:" 'while :; do sleep 300; done')
 tf set-window-option -t "$WB" @fleet_id "$B"
 sb=$(fid open "$B" --agent claude --window "$WB" --socket "$L")
-st_count; [ "$sb" = FF1W ] || fail "S12: offline, m2 sees no collision" "$sb"
+st_count; [ "$sb" = FF1W ] || st_miss "S12: offline, m2 sees no collision" "$sb"
 FLEET_ID_WINDOWS="$B	$L	$WB" python3 "$BIN/fleet_id.py" push "$B"
-st_count; [ "$(fid short "$B")" = FF1W37 ] || fail "S12: the later ID takes the hub's 6-character code" "$(fid short "$B")"
-st_count; [ "$(tf show-options -wqv -t "$WB" @task_short)" = FF1W37 ] || fail "S12: @task_short follows the hub" "$(tf show-options -wqv -t "$WB" @task_short)"
-st_count; grep -q '"ev":"short"' "$FLEET_CONF_DIR/ids/$B.ndjson" || fail "S12: the hub's code is not written down in the ledger"
+st_count; [ "$(fid short "$B")" = FF1W37 ] || st_miss "S12: the later ID takes the hub's 6-character code" "$(fid short "$B")"
+st_count; [ "$(tf show-options -wqv -t "$WB" @task_short)" = FF1W37 ] || st_miss "S12: @task_short follows the hub" "$(tf show-options -wqv -t "$WB" @task_short)"
+st_count; grep -q '"ev":"short"' "$FLEET_CONF_DIR/ids/$B.ndjson" || st_miss "S12: the hub's code is not written down in the ledger"
 fid push >/dev/null   # the `short` event goes up too; and the hub's list comes down
-st_count; [ "$(hub_has "$B")" = "$(mine "$B")" ] || fail "S12: the hub's B is not the ledger"
-st_count; grep -qx "$A" "$FLEET_CONF_DIR/ids/.known" || fail "S12: the hub's list did not reach .known" "$(cat "$FLEET_CONF_DIR/ids/.known" 2>/dev/null)"
+st_count; [ "$(hub_has "$B")" = "$(mine "$B")" ] || st_miss "S12: the hub's B is not the ledger"
+st_count; grep -qx "$A" "$FLEET_CONF_DIR/ids/.known" || st_miss "S12: the hub's list did not reach .known" "$(cat "$FLEET_CONF_DIR/ids/.known" 2>/dev/null)"
 err=$(fid resolve ff1w 2>&1 >/dev/null); rc=$?
 st_count; { [ "$rc" = 2 ] && printf '%s' "$err" | grep -q "$A" && printf '%s' "$err" | grep -q "$B"; } \
-  || fail "S12: a 4-character code naming both IDs is refused with both" "rc=$rc $err"
+  || st_miss "S12: a 4-character code naming both IDs is refused with both" "rc=$rc $err"
 err=$(fid resolve T-7ym5y 2>&1 >/dev/null); rc=$?
-st_count; [ "$rc" = 2 ] || fail "S12: the old 5-character T- code naming both is refused too (compat-1v)" "rc=$rc $err"
+st_count; [ "$rc" = 2 ] || st_miss "S12: the old 5-character T- code naming both is refused too (compat-1v)" "rc=$rc $err"
 
 # ---- S13 · a cloned machine -----------------------------------------------------
 machine m3
 mkdir -p "$FLEET_CONF_DIR/ids"; cp "$WORK/m1/ids/$A.ndjson" "$FLEET_CONF_DIR/ids/"
 WA=$(tf new-window -d -P -F '#{window_id}' -t "$L:" 'while :; do sleep 300; done')
 FLEET_ALERTS_EVENTS="$WORK/alerts.events" FLEET_ID_WINDOWS="$A	$L	$WA" python3 "$BIN/fleet_id.py" push "$A"
-st_count; [ -s "$FLEET_CONF_DIR/ids/.hub/$A.refused" ] || fail "S13: the clone's push is not kept as refused"
-st_count; tf show-options -wqv -t "$WA" @id_hub_error | grep -q '另一台机器' || fail "S13: the window is not told" "$(tf show-options -wqv -t "$WA" @id_hub_error)"
+st_count; [ -s "$FLEET_CONF_DIR/ids/.hub/$A.refused" ] || st_miss "S13: the clone's push is not kept as refused"
+st_count; tf show-options -wqv -t "$WA" @id_hub_error | grep -q '另一台机器' || st_miss "S13: the window is not told" "$(tf show-options -wqv -t "$WA" @id_hub_error)"
 before=$(nposts)
 fid native "$A" --agent claude --native later --source clear >/dev/null
 fid push "$A" >/dev/null
-st_count; [ "$(nposts)" = "$before" ] || fail "S13: a refused ID was pushed again"
+st_count; [ "$(nposts)" = "$before" ] || st_miss "S13: a refused ID was pushed again"
 C=44444444-4444-4444-8444-444444444444
 fid open "$C" --agent claude >/dev/null; fid push "$C"; rc=$?
-st_count; { [ "$rc" = 0 ] && [ "$(hub_has "$C")" = "$(mine "$C")" ]; } || fail "S13: a new window on the clone is affected" "rc=$rc"
-st_count; [ "$(hub_has "$A" | wc -l | tr -d ' ')" = 1 ] || fail "S13: the first machine's record changed"
+st_count; { [ "$rc" = 0 ] && [ "$(hub_has "$C")" = "$(mine "$C")" ]; } || st_miss "S13: a new window on the clone is affected" "rc=$rc"
+st_count; [ "$(hub_has "$A" | wc -l | tr -d ' ')" = 1 ] || st_miss "S13: the first machine's record changed"
 
 # ---- no hub here: nothing sent, exit 3 ------------------------------------------
 ( unset FLEET_ID_HUB_POST; FLEET_CONF_DIR="$WORK/nohub"; export FLEET_CONF_DIR; mkdir -p "$FLEET_CONF_DIR"; bash "$BIN/fleet-id.sh" push ); rc=$?
-st_count; [ "$rc" = 3 ] || fail "no node token: push exits 3" "rc=$rc"
+st_count; [ "$rc" = 3 ] || st_miss "no node token: push exits 3" "rc=$rc"
 
 # ---- WIRE ------------------------------------------------------------------------
-st_count; grep -q 'fleet-id.sh" push' "$BIN/fleet-cleanup-daemon.sh" || fail "WIRE: the cleanup tick does not push"
-st_count; grep -q 'fleet-id.sh" push "$1"' "$BIN/fleet-id.sh" || fail "WIRE: the spawn's open does not push"
-st_count; [ "$(grep -c 'push_later(' "$BIN/fleet_id.py")" -ge 4 ] || fail "WIRE: the hook / result / close do not push"
+st_count; grep -q 'fleet-id.sh" push' "$BIN/fleet-cleanup-daemon.sh" || st_miss "WIRE: the cleanup tick does not push"
+st_count; grep -q 'fleet-id.sh" push "$1"' "$BIN/fleet-id.sh" || st_miss "WIRE: the spawn's open does not push"
+st_count; [ "$(grep -c 'push_later(' "$BIN/fleet_id.py")" -ge 4 ] || st_miss "WIRE: the hook / result / close do not push"
 
-if [ "$FAIL" -gt 0 ]; then echo "fleet-id-hub selftest: $FAIL of $CHECKS checks FAILED"; exit 1; fi
-echo "fleet-id-hub selftest: all $CHECKS checks passed"
+st_done

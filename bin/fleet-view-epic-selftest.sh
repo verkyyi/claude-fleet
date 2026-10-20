@@ -18,7 +18,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'fleet-view-epic selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fvepic-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
 export FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8

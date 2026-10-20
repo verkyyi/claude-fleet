@@ -22,10 +22,9 @@ SRC="$BIN/fleet-down.sh"
 
 st_sandbox "${TMPDIR:-/tmp}/fleet-down-selftest.XXXXXX"
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- %s\n' "$2" >&2; exit 1; }
 CHECKS=0
-exists()  { CHECKS=$((CHECKS+1)); [ -e "$1" ] || fail "expected to survive: $1"; }
-absent()  { CHECKS=$((CHECKS+1)); [ -e "$1" ] && fail "expected removed: $1"; return 0; }
+exists()  { CHECKS=$((CHECKS+1)); [ -e "$1" ] || st_fail "expected to survive: $1"; }
+absent()  { CHECKS=$((CHECKS+1)); [ -e "$1" ] && st_fail "expected removed: $1"; return 0; }
 
 mkdir -p "$WORK/fakepath"
 # fake tmux: no live session; `info`→1 (server "down") so fleet-down runs the
@@ -54,10 +53,10 @@ run() { PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$CONF_DIR" TMPDIR="$WORK" \
 
 # --- refused: path-traversal names must die BEFORE any rm ----------------------
 for bad in ".." "." "a/b" "x/../y" "../evil"; do
-  if run "$bad" --purge; then fail "'$bad' should be REFUSED (fleet-down exited 0)" "$(cat "$WORK/err")"; fi
+  if run "$bad" --purge; then st_fail "'$bad' should be REFUSED (fleet-down exited 0)" "$(cat "$WORK/err")"; fi
   st_count
   grep -qiE 'refus|traversal' "$WORK/err" \
-    || fail "'$bad' refusal should print a clear guard error" "$(cat "$WORK/err")"
+    || st_fail "'$bad' refusal should print a clear guard error" "$(cat "$WORK/err")"
   # nothing must have been removed
   exists "$CONF_DIR/accounts/personal"
   exists "$CONF_DIR/diskguard"
@@ -71,10 +70,10 @@ mkdir -p "$CONF_DIR/fleets/fleet-my.app" "$CACHE/fleets/acme-widgets"
 fx_repo "$CONF_DIR" "fleet-my.app" acme/widgets
 : > "$CACHE/fleets/acme-widgets/issues"
 
-run "fleet-my.app" --purge || fail "a legit dotted name must be ALLOWED" "$(cat "$WORK/err")"
+run "fleet-my.app" --purge || st_fail "a legit dotted name must be ALLOWED" "$(cat "$WORK/err")"
 st_count
 grep -qiE 'refus|traversal' "$WORK/err" \
-  && fail "a legit dotted name must NOT trip the traversal guard" "$(cat "$WORK/err")"
+  && st_fail "a legit dotted name must NOT trip the traversal guard" "$(cat "$WORK/err")"
 absent "$CONF_DIR/fleets/fleet-my.app"      # its own durable state removed
 absent "$CACHE/fleets/acme-widgets"         # its slug cache removed
 exists "$CONF_DIR/accounts/personal"        # globals + siblings survive

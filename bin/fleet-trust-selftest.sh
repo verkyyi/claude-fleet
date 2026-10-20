@@ -22,18 +22,16 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SUT="$BIN/fleet-trust.sh"
 [ -f "$SUT" ] || { printf 'selftest: %s missing\n' "$SUT" >&2; exit 2; }
-command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 missing — SKIP (the helper needs it)\n' >&2; exit 0; }
-command -v git >/dev/null 2>&1 || { printf 'selftest: git missing — SKIP\n' >&2; exit 0; }
+st_need python3 git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-trust.XXXXXX")" || exit 2
 trap '[ -n "${KEEP:-}" ] || rm -rf "$WORK"' EXIT
 trap 'exit 130' INT TERM HUP
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 export HOME="$WORK/home"; mkdir -p "$HOME"
 unset CLAUDE_CONFIG_DIR FLEET_TRUST_RACE_HOOK
@@ -44,7 +42,7 @@ CFG="$HOME/.claude.json"
 MAIN="$WORK/proj/repo"; mkdir -p "$WORK/proj"
 git init -q "$MAIN" && git -C "$MAIN" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 MAIN_P=$(cd "$MAIN" && pwd -P)
-git -C "$MAIN" worktree add -q "$WORK/proj/repo-issue-7" -b issue-7 >/dev/null 2>&1 || fail "fixture: worktree add"
+git -C "$MAIN" worktree add -q "$WORK/proj/repo-issue-7" -b issue-7 >/dev/null 2>&1 || st_fail "fixture: worktree add"
 WT_P=$(cd "$WORK/proj/repo-issue-7" && pwd -P)
 OTHER="$WORK/elsewhere"; mkdir -p "$OTHER"; git init -q "$OTHER"
 OTHER_P=$(cd "$OTHER" && pwd -P)
@@ -76,64 +74,64 @@ mode_of() { python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 
 # --- A. check verdicts + exit codes --------------------------------------------
 write_cfg
 out=$(sh "$SUT" check "$MAIN"); rc=$?
-[ "$out" = untrusted ] && [ "$rc" = 1 ] || fail "A check on an untrusted main must say untrusted/exit 1" "got '$out' rc=$rc"
+[ "$out" = untrusted ] && [ "$rc" = 1 ] || st_fail "A check on an untrusted main must say untrusted/exit 1" "got '$out' rc=$rc"
 out=$(sh "$SUT" check /Users/someone/old 2>/dev/null); rc=$?   # not a dir here → unknown
-[ "$out" = unknown ] && [ "$rc" = 2 ] || fail "A check on a nonexistent dir must say unknown/exit 2" "got '$out' rc=$rc"
+[ "$out" = unknown ] && [ "$rc" = 2 ] || st_fail "A check on a nonexistent dir must say unknown/exit 2" "got '$out' rc=$rc"
 rm -f "$CFG"
 out=$(sh "$SUT" check "$MAIN"); rc=$?
-[ "$out" = unknown ] && [ "$rc" = 2 ] || fail "A check with no config file must say unknown/exit 2" "got '$out' rc=$rc"
-[ "$(sh "$SUT" file)" = "$CFG" ] || fail "A file must print \$HOME/.claude.json" "$(sh "$SUT" file)"
-ok "A check: untrusted→1, unknown→2 (missing dir / missing file), file names ~/.claude.json"
+[ "$out" = unknown ] && [ "$rc" = 2 ] || st_fail "A check with no config file must say unknown/exit 2" "got '$out' rc=$rc"
+[ "$(sh "$SUT" file)" = "$CFG" ] || st_fail "A file must print \$HOME/.claude.json" "$(sh "$SUT" file)"
+st_pass "A check: untrusted→1, unknown→2 (missing dir / missing file), file names ~/.claude.json"
 
 # --- B. grant on the base checkout: key flipped, everything else preserved ------
 write_cfg
 before_mode=$(mode_of "$CFG")
 out=$(sh "$SUT" grant --main "$MAIN" 2>"$WORK/err"); rc=$?
-[ "$rc" = 0 ] || fail "B grant exited $rc" "$(cat "$WORK/err")"
-[ "$out" = "$MAIN_P" ] || fail "B grant must print the newly trusted path (physical)" "got '$out'"
-valid_json "$CFG" || fail "B result is not valid JSON" "$(cat "$CFG")"
-[ "$(jget projects "$MAIN_P" hasTrustDialogAccepted)" = true ] || fail "B hasTrustDialogAccepted not set on main" "$(cat "$CFG")"
-[ "$(jget projects "$MAIN_P" allowedTools)" = '["Read"]' ] || fail "B other keys of the project entry were lost" "$(cat "$CFG")"
-[ "$(jget projects "$MAIN_P" mcpServers)" = '{"a": {"x": 1}}' ] || fail "B nested project key lost" "$(cat "$CFG")"
-[ "$(jget projects "$MAIN_P" lastSessionId)" = '"s1"' ] || fail "B lastSessionId lost" "$(cat "$CFG")"
-[ "$(jget numStartups)" = 42 ] || fail "B top-level numStartups lost" "$(cat "$CFG")"
-[ "$(jget oauthAccount emailAddress)" = '"x@y"' ] || fail "B top-level nested key lost" "$(cat "$CFG")"
-[ "$(jget projects /Users/someone/old hasTrustDialogAccepted)" = true ] || fail "B the other project entry was lost" "$(cat "$CFG")"
-[ "$(jget projects /Users/someone/old lastCost)" = 1.5 ] || fail "B the other project's keys were lost" "$(cat "$CFG")"
-[ "$(mode_of "$CFG")" = "$before_mode" ] || fail "B file mode changed" "was $before_mode now $(mode_of "$CFG")"
-ls "$HOME"/.claude.json.fleet-trust.* >/dev/null 2>&1 && fail "B temp file left behind" "$(ls "$HOME")"
-[ "$(sh "$SUT" check "$MAIN")" = trusted ] || fail "B check must now say trusted"
-ok "B grant flips main's key; every other top-level + project key preserved; mode kept; valid JSON; no temp litter"
+[ "$rc" = 0 ] || st_fail "B grant exited $rc" "$(cat "$WORK/err")"
+[ "$out" = "$MAIN_P" ] || st_fail "B grant must print the newly trusted path (physical)" "got '$out'"
+valid_json "$CFG" || st_fail "B result is not valid JSON" "$(cat "$CFG")"
+[ "$(jget projects "$MAIN_P" hasTrustDialogAccepted)" = true ] || st_fail "B hasTrustDialogAccepted not set on main" "$(cat "$CFG")"
+[ "$(jget projects "$MAIN_P" allowedTools)" = '["Read"]' ] || st_fail "B other keys of the project entry were lost" "$(cat "$CFG")"
+[ "$(jget projects "$MAIN_P" mcpServers)" = '{"a": {"x": 1}}' ] || st_fail "B nested project key lost" "$(cat "$CFG")"
+[ "$(jget projects "$MAIN_P" lastSessionId)" = '"s1"' ] || st_fail "B lastSessionId lost" "$(cat "$CFG")"
+[ "$(jget numStartups)" = 42 ] || st_fail "B top-level numStartups lost" "$(cat "$CFG")"
+[ "$(jget oauthAccount emailAddress)" = '"x@y"' ] || st_fail "B top-level nested key lost" "$(cat "$CFG")"
+[ "$(jget projects /Users/someone/old hasTrustDialogAccepted)" = true ] || st_fail "B the other project entry was lost" "$(cat "$CFG")"
+[ "$(jget projects /Users/someone/old lastCost)" = 1.5 ] || st_fail "B the other project's keys were lost" "$(cat "$CFG")"
+[ "$(mode_of "$CFG")" = "$before_mode" ] || st_fail "B file mode changed" "was $before_mode now $(mode_of "$CFG")"
+ls "$HOME"/.claude.json.fleet-trust.* >/dev/null 2>&1 && st_fail "B temp file left behind" "$(ls "$HOME")"
+[ "$(sh "$SUT" check "$MAIN")" = trusted ] || st_fail "B check must now say trusted"
+st_pass "B grant flips main's key; every other top-level + project key preserved; mode kept; valid JSON; no temp litter"
 
 # --- C. idempotent: a second grant is a no-op (no output, file untouched) ------
 cp "$CFG" "$WORK/snap"
 out=$(sh "$SUT" grant --main "$MAIN" 2>"$WORK/err"); rc=$?
-[ "$rc" = 0 ] && [ -z "$out" ] || fail "C re-grant must be silent + exit 0" "rc=$rc out='$out' $(cat "$WORK/err")"
-cmp -s "$CFG" "$WORK/snap" || fail "C re-grant rewrote an already-trusted file" "$(diff "$WORK/snap" "$CFG")"
-ok "C an already-trusted main is a no-op — no write, no output"
+[ "$rc" = 0 ] && [ -z "$out" ] || st_fail "C re-grant must be silent + exit 0" "rc=$rc out='$out' $(cat "$WORK/err")"
+cmp -s "$CFG" "$WORK/snap" || st_fail "C re-grant rewrote an already-trusted file" "$(diff "$WORK/snap" "$CFG")"
+st_pass "C an already-trusted main is a no-op — no write, no output"
 
 # --- D. scope: a worktree OF main is trusted alongside it; anything else refused --
 write_cfg
 out=$(sh "$SUT" grant --main "$MAIN" "$WORK/proj/repo-issue-7" 2>"$WORK/err"); rc=$?
-[ "$rc" = 0 ] || fail "D grant main+worktree exited $rc" "$(cat "$WORK/err")"
-printf '%s\n' "$out" | grep -qxF "$MAIN_P" || fail "D main not reported" "$out"
-printf '%s\n' "$out" | grep -qxF "$WT_P"   || fail "D worktree not reported" "$out"
-[ "$(jget projects "$WT_P" hasTrustDialogAccepted)" = true ] || fail "D worktree entry not written" "$(cat "$CFG")"
-[ "$(jget projects "$MAIN_P" hasTrustDialogAccepted)" = true ] || fail "D main entry not written" "$(cat "$CFG")"
+[ "$rc" = 0 ] || st_fail "D grant main+worktree exited $rc" "$(cat "$WORK/err")"
+printf '%s\n' "$out" | grep -qxF "$MAIN_P" || st_fail "D main not reported" "$out"
+printf '%s\n' "$out" | grep -qxF "$WT_P"   || st_fail "D worktree not reported" "$out"
+[ "$(jget projects "$WT_P" hasTrustDialogAccepted)" = true ] || st_fail "D worktree entry not written" "$(cat "$CFG")"
+[ "$(jget projects "$MAIN_P" hasTrustDialogAccepted)" = true ] || st_fail "D main entry not written" "$(cat "$CFG")"
 # a stranger checkout: refused (exit 3), never written — main still handled
 write_cfg
 out=$(sh "$SUT" grant --main "$MAIN" "$OTHER" 2>"$WORK/err"); rc=$?
-[ "$rc" = 3 ] || fail "D a non-worktree dir must be refused with exit 3" "rc=$rc $(cat "$WORK/err")"
-grep -q "refusing $OTHER_P" "$WORK/err" || fail "D refusal must name the dir on stderr" "$(cat "$WORK/err")"
-[ "$(jget projects "$OTHER_P")" = null ] || fail "D the stranger dir was written anyway" "$(cat "$CFG")"
-[ "$(jget projects "$MAIN_P" hasTrustDialogAccepted)" = true ] || fail "D main must still be granted when a sibling arg is refused"
+[ "$rc" = 3 ] || st_fail "D a non-worktree dir must be refused with exit 3" "rc=$rc $(cat "$WORK/err")"
+grep -q "refusing $OTHER_P" "$WORK/err" || st_fail "D refusal must name the dir on stderr" "$(cat "$WORK/err")"
+[ "$(jget projects "$OTHER_P")" = null ] || st_fail "D the stranger dir was written anyway" "$(cat "$CFG")"
+[ "$(jget projects "$MAIN_P" hasTrustDialogAccepted)" = true ] || st_fail "D main must still be granted when a sibling arg is refused"
 # a main that is not a git checkout: refused outright, file untouched
 write_cfg; cp "$CFG" "$WORK/snap"
 sh "$SUT" grant --main "$WORK/proj" >/dev/null 2>"$WORK/err"; rc=$?
-[ "$rc" = 3 ] || fail "D --main on a non-checkout must exit 3" "rc=$rc $(cat "$WORK/err")"
-cmp -s "$CFG" "$WORK/snap" || fail "D a refused --main must not touch the file"
-sh "$SUT" grant >/dev/null 2>&1; [ $? = 2 ] || fail "D grant without --main must be a usage error (2)"
-ok "D scope: main + its worktree written; a stranger checkout / non-checkout main refused (3), never written"
+[ "$rc" = 3 ] || st_fail "D --main on a non-checkout must exit 3" "rc=$rc $(cat "$WORK/err")"
+cmp -s "$CFG" "$WORK/snap" || st_fail "D a refused --main must not touch the file"
+sh "$SUT" grant >/dev/null 2>&1; [ $? = 2 ] || st_fail "D grant without --main must be a usage error (2)"
+st_pass "D scope: main + its worktree written; a stranger checkout / non-checkout main refused (3), never written"
 
 # --- E. concurrent writer between read and rename loses nothing -------------------
 # The race hook runs inside the helper after it has READ the file and before it
@@ -153,78 +151,78 @@ PY
 RACER
 chmod +x "$WORK/racer.sh"
 out=$(FLEET_TRUST_RACE_HOOK="$WORK/racer.sh" sh "$SUT" grant --main "$MAIN" 2>"$WORK/err"); rc=$?
-[ "$rc" = 0 ] || fail "E grant under a race exited $rc" "$(cat "$WORK/err")"
-[ "$out" = "$MAIN_P" ] || fail "E grant under a race must still report main" "got '$out'"
-valid_json "$CFG" || fail "E result is not valid JSON" "$(cat "$CFG")"
-[ "$(jget projects "$MAIN_P" hasTrustDialogAccepted)" = true ] || fail "E our key did not land" "$(cat "$CFG")"
-[ "$(jget numStartups)" = 43 ] || fail "E the concurrent writer's top-level change was LOST (stale write won)" "$(cat "$CFG")"
-[ "$(jget projects /Users/someone/new lastCost)" = 9 ] || fail "E the concurrent writer's new project entry was LOST" "$(cat "$CFG")"
-[ "$(jget projects "$MAIN_P" lastSessionId)" = '"s2"' ] || fail "E the concurrent writer's change to OUR entry was LOST" "$(cat "$CFG")"
-ok "E a writer landing between read and rename keeps every one of its keys; ours lands too"
+[ "$rc" = 0 ] || st_fail "E grant under a race exited $rc" "$(cat "$WORK/err")"
+[ "$out" = "$MAIN_P" ] || st_fail "E grant under a race must still report main" "got '$out'"
+valid_json "$CFG" || st_fail "E result is not valid JSON" "$(cat "$CFG")"
+[ "$(jget projects "$MAIN_P" hasTrustDialogAccepted)" = true ] || st_fail "E our key did not land" "$(cat "$CFG")"
+[ "$(jget numStartups)" = 43 ] || st_fail "E the concurrent writer's top-level change was LOST (stale write won)" "$(cat "$CFG")"
+[ "$(jget projects /Users/someone/new lastCost)" = 9 ] || st_fail "E the concurrent writer's new project entry was LOST" "$(cat "$CFG")"
+[ "$(jget projects "$MAIN_P" lastSessionId)" = '"s2"' ] || st_fail "E the concurrent writer's change to OUR entry was LOST" "$(cat "$CFG")"
+st_pass "E a writer landing between read and rename keeps every one of its keys; ours lands too"
 
 # --- F. invalid JSON is left alone; a missing file is created 0600 ---------------
 printf '{ this is not json' > "$CFG"; cp "$CFG" "$WORK/snap"
 sh "$SUT" grant --main "$MAIN" >/dev/null 2>"$WORK/err"; rc=$?
-[ "$rc" = 5 ] || fail "F invalid JSON must exit 5" "rc=$rc $(cat "$WORK/err")"
-cmp -s "$CFG" "$WORK/snap" || fail "F invalid JSON was rewritten"
-grep -q "not valid JSON" "$WORK/err" || fail "F must say why on stderr" "$(cat "$WORK/err")"
+[ "$rc" = 5 ] || st_fail "F invalid JSON must exit 5" "rc=$rc $(cat "$WORK/err")"
+cmp -s "$CFG" "$WORK/snap" || st_fail "F invalid JSON was rewritten"
+grep -q "not valid JSON" "$WORK/err" || st_fail "F must say why on stderr" "$(cat "$WORK/err")"
 rm -f "$CFG"
 out=$(sh "$SUT" grant --main "$MAIN" 2>"$WORK/err"); rc=$?
-[ "$rc" = 0 ] && [ -f "$CFG" ] || fail "F a missing config must be created" "rc=$rc $(cat "$WORK/err")"
-valid_json "$CFG" || fail "F created file is not valid JSON" "$(cat "$CFG")"
-[ "$(jget projects "$MAIN_P" hasTrustDialogAccepted)" = true ] || fail "F created file lacks our entry" "$(cat "$CFG")"
-[ "$(mode_of "$CFG")" = 600 ] || fail "F created file must be 0600" "mode $(mode_of "$CFG")"
-ok "F invalid JSON untouched (5); a missing file is created 0600 with just our entry"
+[ "$rc" = 0 ] && [ -f "$CFG" ] || st_fail "F a missing config must be created" "rc=$rc $(cat "$WORK/err")"
+valid_json "$CFG" || st_fail "F created file is not valid JSON" "$(cat "$CFG")"
+[ "$(jget projects "$MAIN_P" hasTrustDialogAccepted)" = true ] || st_fail "F created file lacks our entry" "$(cat "$CFG")"
+[ "$(mode_of "$CFG")" = 600 ] || st_fail "F created file must be 0600" "mode $(mode_of "$CFG")"
+st_pass "F invalid JSON untouched (5); a missing file is created 0600 with just our entry"
 
 # --- G. CLAUDE_CONFIG_DIR relocates the file ---------------------------------------
 mkdir -p "$WORK/ccd"
 out=$(CLAUDE_CONFIG_DIR="$WORK/ccd" sh "$SUT" grant --main "$MAIN" 2>"$WORK/err"); rc=$?
-[ "$rc" = 0 ] && [ -f "$WORK/ccd/.claude.json" ] || fail "G CLAUDE_CONFIG_DIR not honoured" "rc=$rc $(ls -a "$WORK/ccd") $(cat "$WORK/err")"
-[ "$(CLAUDE_CONFIG_DIR="$WORK/ccd" sh "$SUT" file)" = "$WORK/ccd/.claude.json" ] || fail "G file must follow CLAUDE_CONFIG_DIR"
-[ "$(CLAUDE_CONFIG_DIR="$WORK/ccd" sh "$SUT" check "$MAIN")" = trusted ] || fail "G check must read the relocated file"
-ok "G CLAUDE_CONFIG_DIR/.claude.json is used when set"
+[ "$rc" = 0 ] && [ -f "$WORK/ccd/.claude.json" ] || st_fail "G CLAUDE_CONFIG_DIR not honoured" "rc=$rc $(ls -a "$WORK/ccd") $(cat "$WORK/err")"
+[ "$(CLAUDE_CONFIG_DIR="$WORK/ccd" sh "$SUT" file)" = "$WORK/ccd/.claude.json" ] || st_fail "G file must follow CLAUDE_CONFIG_DIR"
+[ "$(CLAUDE_CONFIG_DIR="$WORK/ccd" sh "$SUT" check "$MAIN")" = trusted ] || st_fail "G check must read the relocated file"
+st_pass "G CLAUDE_CONFIG_DIR/.claude.json is used when set"
 
 # --- H. node: the trusted-node reader (issue #2282) — fail closed ----------------
 NC="$WORK/nconf"; mkdir -p "$NC/cred-proxy"
 node_is() { # <want word> <want rc> <label>
   out=$(FLEET_CONF_DIR="$NC" sh "$SUT" node); rc=$?
-  [ "${out%%	*}" = "$1" ] && [ "$rc" = "$2" ] || fail "H $3: want $1/$2" "got '$out' rc=$rc"
+  [ "${out%%	*}" = "$1" ] && [ "$rc" = "$2" ] || st_fail "H $3: want $1/$2" "got '$out' rc=$rc"
 }
 node_is unknown 2 "no trust.json"
 printf '{"trust": "trusted", "why": "hub: trusted", "ts": %s}\n' "$(date +%s)" > "$NC/cred-proxy/trust.json"
 node_is trusted 0 "a fresh trusted word"
-printf '%s\n' "$out" | grep -q 'hub: trusted' || fail "H the why must carry the proxy's reason" "$out"
+printf '%s\n' "$out" | grep -q 'hub: trusted' || st_fail "H the why must carry the proxy's reason" "$out"
 printf '{"trust": "untrusted", "why": "hub: untrusted", "ts": %s}\n' "$(date +%s)" > "$NC/cred-proxy/trust.json"
 node_is untrusted 1 "an untrusted word"
 printf '{"trust": "trusted", "why": "hub: trusted", "ts": %s}\n' "$(( $(date +%s) - 200000 ))" > "$NC/cred-proxy/trust.json"
 node_is unknown 2 "a trusted word older than the max age"
 printf 'not json' > "$NC/cred-proxy/trust.json"
 node_is unknown 2 "an unparseable trust.json"
-ok "H node: trusted only on a fresh cached trusted word; none / stale / untrusted / garbage → not trusted"
+st_pass "H node: trusted only on a fresh cached trusted word; none / stale / untrusted / garbage → not trusted"
 
 # --- I. the wide grant: several checkouts + --home, still a whitelist -------------
 MAIN2="$WORK/proj/two"; git init -q "$MAIN2" && git -C "$MAIN2" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 MAIN2_P=$(cd "$MAIN2" && pwd -P)
-git -C "$MAIN2" worktree add -q "$WORK/proj/two-issue-9" -b issue-9 >/dev/null 2>&1 || fail "fixture: worktree 2"
+git -C "$MAIN2" worktree add -q "$WORK/proj/two-issue-9" -b issue-9 >/dev/null 2>&1 || st_fail "fixture: worktree 2"
 WT2_P=$(cd "$WORK/proj/two-issue-9" && pwd -P)
 HOME_P=$(cd "$HOME" && pwd -P)
 write_cfg
 out=$(sh "$SUT" grant --main "$MAIN" --main "$MAIN2" "$WORK/proj/two-issue-9" 2>"$WORK/err"); rc=$?
-[ "$rc" = 0 ] || fail "I grant two mains + a worktree of the second exited $rc" "$(cat "$WORK/err")"
+[ "$rc" = 0 ] || st_fail "I grant two mains + a worktree of the second exited $rc" "$(cat "$WORK/err")"
 for p in "$MAIN_P" "$MAIN2_P" "$WT2_P"; do
-  [ "$(jget projects "$p" hasTrustDialogAccepted)" = true ] || fail "I $p not trusted" "$(cat "$CFG")"
+  [ "$(jget projects "$p" hasTrustDialogAccepted)" = true ] || st_fail "I $p not trusted" "$(cat "$CFG")"
 done
-[ "$(jget projects "$HOME_P")" = null ] || fail "I \$HOME trusted without --home" "$(cat "$CFG")"
+[ "$(jget projects "$HOME_P")" = null ] || st_fail "I \$HOME trusted without --home" "$(cat "$CFG")"
 out=$(sh "$SUT" grant --home "$HOME" 2>"$WORK/err"); rc=$?
-[ "$rc" = 0 ] && [ "$out" = "$HOME_P" ] || fail "I --home must trust exactly the physical \$HOME" "rc=$rc out='$out' $(cat "$WORK/err")"
+[ "$rc" = 0 ] && [ "$out" = "$HOME_P" ] || st_fail "I --home must trust exactly the physical \$HOME" "rc=$rc out='$out' $(cat "$WORK/err")"
 write_cfg
 out=$(sh "$SUT" grant --main "$MAIN2" --home "$OTHER" "$WORK" 2>"$WORK/err"); rc=$?
-[ "$rc" = 3 ] || fail "I a stranger dir in the wide form must still exit 3" "rc=$rc $(cat "$WORK/err")"
+[ "$rc" = 3 ] || st_fail "I a stranger dir in the wide form must still exit 3" "rc=$rc $(cat "$WORK/err")"
 [ "$(jget projects "$OTHER_P")" = null ] && [ "$(jget projects "$(cd "$WORK" && pwd -P)")" = null ] \
-  || fail "I a stranger dir (or \$HOME's parent) was written" "$(cat "$CFG")"
+  || st_fail "I a stranger dir (or \$HOME's parent) was written" "$(cat "$CFG")"
 [ "$(jget projects "$MAIN2_P" hasTrustDialogAccepted)" = true ] && [ "$(jget projects "$HOME_P" hasTrustDialogAccepted)" = true ] \
-  || fail "I the allowed paths must still land when a sibling is refused" "$(cat "$CFG")"
-ok "I wide grant: every --main + their worktrees, \$HOME only with --home; strangers refused (3), never written"
+  || st_fail "I the allowed paths must still land when a sibling is refused" "$(cat "$CFG")"
+st_pass "I wide grant: every --main + their worktrees, \$HOME only with --home; strangers refused (3), never written"
 
 # --- J. the launcher end to end, on an isolated tmux socket -----------------------
 # A two-repo fleet: a worktree of the SECOND repo (no @repo stamped, so the overlay
@@ -251,10 +249,10 @@ else
     [ "$2" = - ] || "$REAL_TMUX" -S "$SOCK" set-option -w -t "$w" @norepo "$2"
     : > "$go"
     for _ in $(seq 1 100); do [ -f "$go.out" ] && ! "$REAL_TMUX" -S "$SOCK" list-windows -t tst -F '#{window_id}' | grep -qx "$w" && return 0; sleep 0.1; done
-    fail "J the launch in $1 never finished" "$(cat "$go.out" 2>/dev/null)"
+    st_fail "J the launch in $1 never finished" "$(cat "$go.out" 2>/dev/null)"
   }
   three() { launch "$WORK/proj/two-issue-9" -; launch "$HOME" 1; launch "$HOME" -; }
-  "$REAL_TMUX" -S "$SOCK" -f /dev/null new-session -d -s tst -n home || fail "J cannot start the isolated tmux server"
+  "$REAL_TMUX" -S "$SOCK" -f /dev/null new-session -d -s tst -n home || st_fail "J cannot start the isolated tmux server"
   # the reference: what the #563 launcher does for those three cwds
   write_cfg
   for d in "$WORK/proj/two-issue-9" "$HOME" "$HOME"; do sh "$SUT" grant --main "$MAIN" "$d" >/dev/null 2>&1; done
@@ -262,20 +260,20 @@ else
   write_cfg
   printf '{"trust": "untrusted", "why": "hub: untrusted", "ts": %s}\n' "$(date +%s)" > "$JC/cred-proxy/trust.json"
   three
-  cmp -s "$CFG" "$WORK/ref" || fail "J untrusted node: ~/.claude.json differs from the #563 launcher's" "$(diff "$WORK/ref" "$CFG")"
+  cmp -s "$CFG" "$WORK/ref" || st_fail "J untrusted node: ~/.claude.json differs from the #563 launcher's" "$(diff "$WORK/ref" "$CFG")"
   write_cfg; rm -f "$JC/cred-proxy/trust.json"; three
-  cmp -s "$CFG" "$WORK/ref" || fail "J no trust word: ~/.claude.json differs from the #563 launcher's" "$(diff "$WORK/ref" "$CFG")"
+  cmp -s "$CFG" "$WORK/ref" || st_fail "J no trust word: ~/.claude.json differs from the #563 launcher's" "$(diff "$WORK/ref" "$CFG")"
   write_cfg
   printf '{"trust": "trusted", "why": "hub: trusted", "ts": %s}\n' "$(date +%s)" > "$JC/cred-proxy/trust.json"
   launch "$HOME" -
-  [ "$(jget projects "$HOME_P")" = null ] || fail "J trusted node: a plain window in \$HOME trusted \$HOME" "$(cat "$CFG")"
+  [ "$(jget projects "$HOME_P")" = null ] || st_fail "J trusted node: a plain window in \$HOME trusted \$HOME" "$(cat "$CFG")"
   launch "$WORK/proj/two-issue-9" -
   [ "$(jget projects "$MAIN2_P" hasTrustDialogAccepted)" = true ] && [ "$(jget projects "$WT2_P" hasTrustDialogAccepted)" = true ] \
-    || fail "J trusted node: the second repo's worktree was not pre-trusted" "$(cat "$CFG")"
+    || st_fail "J trusted node: the second repo's worktree was not pre-trusted" "$(cat "$CFG")"
   launch "$HOME" 1
-  [ "$(jget projects "$HOME_P" hasTrustDialogAccepted)" = true ] || fail "J trusted node: the @norepo window's \$HOME was not pre-trusted" "$(cat "$CFG")"
-  [ "$(jget projects "$(cd "$WORK" && pwd -P)")" = null ] || fail "J trusted node: \$HOME's parent was written" "$(cat "$CFG")"
-  ok "J launcher: untrusted / no word ⇒ byte for byte the #563 grant; trusted ⇒ every hosted repo + the @norepo \$HOME, nothing else"
+  [ "$(jget projects "$HOME_P" hasTrustDialogAccepted)" = true ] || st_fail "J trusted node: the @norepo window's \$HOME was not pre-trusted" "$(cat "$CFG")"
+  [ "$(jget projects "$(cd "$WORK" && pwd -P)")" = null ] || st_fail "J trusted node: \$HOME's parent was written" "$(cat "$CFG")"
+  st_pass "J launcher: untrusted / no word ⇒ byte for byte the #563 grant; trusted ⇒ every hosted repo + the @norepo \$HOME, nothing else"
 fi
 
 printf 'selftest PASS: %d checks — fleet-trust.sh is scoped, lossless under a concurrent writer, atomic, idempotent\n' "$pass"

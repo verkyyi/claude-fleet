@@ -30,14 +30,13 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 ROW="$BIN/fleet-epic-stable-row.sh"
 [ -f "$ROW" ] || { printf 'selftest: %s not found\n' "$ROW" >&2; exit 2; }
 [ -f "$BIN/fleet-stable.sh" ] || { printf 'selftest: fleet-stable.sh not found\n' >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { echo "fleet-epic-stable-row-selftest SKIP (no git)"; exit 0; }
+st_need git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-epic-stable-row-selftest.XXXXXX")" || exit 2
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM HUP
 
-CHECKS=0
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+st_tally count
 contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]:
 $2";; esac; }
 lacks() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 — output should not contain [$3]:
@@ -90,63 +89,63 @@ kind() { printf '%s\n' "$OUT" | sed -n 's/^kind:[[:space:]]*//p'; }
 
 # --- A. gate ---------------------------------------------------------------------
 run --merged "$C3"
-eq "A: no bin/fleet-stable.sh in --main → exit 1" 1 "$RC"
-eq "A: kind skip" skip "$(kind)"
+st_eq "A: no bin/fleet-stable.sh in --main → exit 1" 1 "$RC"
+st_eq "A: kind skip" skip "$(kind)"
 lacks "A: no row" "$OUT" "row:"
 mkdir -p "$CO/bin" && cp "$BIN/fleet-stable.sh" "$CO/bin/fleet-stable.sh"
 
 # --- B. none ---------------------------------------------------------------------
 deltag
 run --merged "$C2" --merged "$C3"
-eq "B: no tag → a row is due (exit 0)" 0 "$RC"
-eq "B: kind none" none "$(kind)"
+st_eq "B: no tag → a row is due (exit 0)" 0 "$RC"
+st_eq "B: kind none" none "$(kind)"
 contains "B: row says there is no stable mark" "$OUT" "还没有稳定版标记"
 lacks "B: no move command" "$OUT" "fleet-stable.sh move"
-eq "B: the tag was NOT created" none "$(tag)"
+st_eq "B: the tag was NOT created" none "$(tag)"
 
 # --- C. behind: the train's result ----------------------------------------------
 settag "$C1"
 rm -f "$WORK/train"
 run --merged "$C3" --merged "$C2"          # reverse order on purpose
-eq "C: train unreadable → exit 0" 0 "$RC"
-eq "C: kind trainunknown" trainunknown "$(kind)"
+st_eq "C: train unreadable → exit 0" 0 "$RC"
+st_eq "C: kind trainunknown" trainunknown "$(kind)"
 contains "C: target is the newest merge (C3), not the last argument" "$OUT" "target:  $(sh3 "$C3")"
 contains "C: count is stable..target" "$OUT" "behind:  2"
 printf 'in_progress\t-\t%s\thttps://x/run/9\ncompleted\tfailure\t%s\thttps://x/run/8\n' "$C3" "$C3" > "$WORK/train"
 run --merged "$C3"
-eq "C: a train in progress → kind running" running "$(kind)"
+st_eq "C: a train in progress → kind running" running "$(kind)"
 contains "C: line 列车在跑" "$OUT" "line:    列车在跑（https://x/run/9）"
 lacks "C: running → no mark" "$OUT" "mark:"
 printf 'completed\tfailure\t%s\thttps://x/run/8\n' "$C4" > "$WORK/train"
 run --merged "$C3"
-eq "C: last train red, it boarded the batch → kind red" red "$(kind)"
+st_eq "C: last train red, it boarded the batch → kind red" red "$(kind)"
 contains "C: line 卡在红车 <run>" "$OUT" "line:    卡在红车 https://x/run/8"
 contains "C: tr" "$OUT" "<tr><td>本批最后一次合并"
 contains "C: red → a human mark naming the run" "$OUT" "mark:    <!-- fleet:followup kind=human what=列车红在 https://x/run/8"
 printf 'completed\tfailure\t%s\thttps://x/run/7\n' "$C1" > "$WORK/train"
 run --merged "$C3"
-eq "C: red train that never boarded the batch → waiting" waiting "$(kind)"
+st_eq "C: red train that never boarded the batch → waiting" waiting "$(kind)"
 printf 'completed\tsuccess\t%s\thttps://x/run/6\n' "$C1" > "$WORK/train"
 run --merged "$C3"
-eq "C: green train before the batch → waiting" waiting "$(kind)"
+st_eq "C: green train before the batch → waiting" waiting "$(kind)"
 contains "C: waiting names the next train" "$OUT" "等下一趟"
 contains "C: tr renders the command as <code>" "$OUT" "<code>gh workflow run release-train.yml</code>"
 lacks "C: never a move command" "$OUT" "fleet-stable.sh move"
 lacks "C: never 挪稳定版" "$OUT" "挪稳定版"
 lacks "C: never a kind=stable followup" "$OUT" "kind=stable"
-eq "C: the tag did not move" "$C1" "$(tag)"
+st_eq "C: the tag did not move" "$C1" "$(tag)"
 
 # --- D. current ------------------------------------------------------------------
 settag "$C3"
 run --merged "$C2" --merged "$C3"
-eq "D: stable AT the last merge → exit 1" 1 "$RC"
-eq "D: kind current" current "$(kind)"
+st_eq "D: stable AT the last merge → exit 1" 1 "$RC"
+st_eq "D: kind current" current "$(kind)"
 contains "D: 已随列车上线" "$OUT" "line:    已随列车上线（stable = $(sh3 "$C3")）"
 lacks "D: no row" "$OUT" "row:"
 settag "$C4"
 run --merged "$C3"
-eq "D: stable AHEAD of the batch → exit 1" 1 "$RC"
-eq "D: kind current (ahead)" current "$(kind)"
+st_eq "D: stable AHEAD of the batch → exit 1" 1 "$RC"
+st_eq "D: kind current (ahead)" current "$(kind)"
 lacks "D: no row (ahead)" "$OUT" "row:"
 
 # --- E. --epic via gh ------------------------------------------------------------
@@ -155,35 +154,35 @@ printf '10\n11\n12\n' > "$WORK/subs"
 printf '%s\n' "$C2" > "$WORK/prs/issue-10"
 printf '%s\n' "$C3" > "$WORK/prs/issue-11"      # issue-12: no merged PR
 run --epic 7
-eq "E: --epic → exit 0" 0 "$RC"
-eq "E: kind waiting" waiting "$(kind)"
+st_eq "E: --epic → exit 0" 0 "$RC"
+st_eq "E: kind waiting" waiting "$(kind)"
 contains "E: target = newest member merge" "$OUT" "target:  $(sh3 "$C3")"
 contains "E: behind 2" "$OUT" "behind:  2"
 printf '12\n' > "$WORK/subs"
 run --epic 7
-eq "E: no member merged → exit 1" 1 "$RC"
-eq "E: kind nomerge" nomerge "$(kind)"
+st_eq "E: no member merged → exit 1" 1 "$RC"
+st_eq "E: kind nomerge" nomerge "$(kind)"
 lacks "E: no row" "$OUT" "row:"
 run --epic x
-eq "E: --epic wants a number → exit 2" 2 "$RC"
+st_eq "E: --epic wants a number → exit 2" 2 "$RC"
 # an EPIC spanning repos (issue #1942): another repo's member #12 is NOT this
 # repo's issue-12 branch — only o/r's own members name a merge here
 printf 'o/r\t10\no/b\t12\n' > "$WORK/subs"
 printf '%s\n' "$C4" > "$WORK/prs/issue-12"
 run --epic 7
-eq "E: cross-repo EPIC → exit 0" 0 "$RC"
+st_eq "E: cross-repo EPIC → exit 0" 0 "$RC"
 contains "E: target = this repo's member merge" "$OUT" "target:  $(sh3 "$C2")"
 lacks "E: o/b#12 never read as o/r's issue-12" "$OUT" "$(sh3 "$C4")"
 run --epic o/b#7                                  # the parent lives in o/b
-eq "E: --epic owner/name#N (a parent in another repo) → exit 0" 0 "$RC"
+st_eq "E: --epic owner/name#N (a parent in another repo) → exit 0" 0 "$RC"
 contains "E: …still only this repo's members" "$OUT" "target:  $(sh3 "$C2")"
 rm -f "$WORK/prs/issue-12"
 
 # --- F. unknown ------------------------------------------------------------------
 settag "$C1"
 run --merged "$C3" --remote nowhere
-eq "F: unreadable remote → still a row (exit 0)" 0 "$RC"
-eq "F: kind unknown" unknown "$(kind)"
+st_eq "F: unreadable remote → still a row (exit 0)" 0 "$RC"
+st_eq "F: kind unknown" unknown "$(kind)"
 contains "F: says it could not read, not 0" "$OUT" "不是 0"
 lacks "F: no move command" "$OUT" "fleet-stable.sh move"
 contains "F: a human mark" "$OUT" "kind=human"
@@ -191,20 +190,20 @@ contains "F: a human mark" "$OUT" "kind=human"
 # --- G. offtrunk -----------------------------------------------------------------
 settag "$S1"
 run --merged "$C3"
-eq "G: offtrunk → exit 0" 0 "$RC"
-eq "G: kind offtrunk" offtrunk "$(kind)"
+st_eq "G: offtrunk → exit 0" 0 "$RC"
+st_eq "G: kind offtrunk" offtrunk "$(kind)"
 contains "G: row says stable is off trunk" "$OUT" "不在 origin/master 上"
 lacks "G: no move promised in the next cell" "$OUT" "挪稳定版"
-eq "G: the tag did not move" "$S1" "$(tag)"
+st_eq "G: the tag did not move" "$S1" "$(tag)"
 
 # --- H. unknown sha --------------------------------------------------------------
 settag "$C1"
 run --merged 0000000000000000000000000000000000000000 --merged "$C2"
-eq "H: an unknown sha is skipped, the rest still counts" 0 "$RC"
+st_eq "H: an unknown sha is skipped, the rest still counts" 0 "$RC"
 contains "H: skip note" "$OUT" "skipping 0000000"
 contains "H: target = the known one" "$OUT" "target:  $(sh3 "$C2")"
 run --merged 0000000000000000000000000000000000000000
-eq "H: only unknown shas → nomerge" 1 "$RC"
-eq "H: kind nomerge" nomerge "$(kind)"
+st_eq "H: only unknown shas → nomerge" 1 "$RC"
+st_eq "H: kind nomerge" nomerge "$(kind)"
 
 echo "fleet-epic-stable-row-selftest OK ($CHECKS checks)"

@@ -35,13 +35,12 @@
 #      Claude start still asks; the spawners pass --for
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 WORK=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/agent-as-st.XXXXXX")" && pwd)
 trap 'rm -rf "$WORK"' EXIT
-fails=0
-ok()  { printf 'PASS  %s\n' "$1"; }
-bad() { printf 'FAIL  %s\n' "$1"; fails=$((fails + 1)); }
-eq()  { [ "$2" = "$3" ] && ok "$1" || bad "$1 — got [$2], want [$3]"; }
+st_tally
+eq()  { [ "$2" = "$3" ] && st_ok "$1" || st_miss "$1 — got [$2], want [$3]"; }
 
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_AGENT_PLUGINS_CMD="cat '$WORK/plugins.json'"
@@ -76,11 +75,11 @@ agent "$HOME/.claude/agents/reviewer.md" reviewer
 eq "A: the user layer beats a plugin" "$(kv reviewer --dir "$WORK" | field file)" "$HOME/.claude/agents/reviewer.md"
 err=$(AD launch nobody --dir "$WORK/repo" 2>&1); rc=$?
 [ "$rc" = 1 ] && case "$err" in *"no agent file 'nobody'"*"$WORK/repo/.claude/agents"*"$HOME/.claude/agents"*"$WORK/plug/agents"*) true ;; *) false ;; esac \
-  && ok "A: nowhere ⇒ exit 1 naming every place looked" || bad "A: missing file: rc=$rc [$err]"
+  && st_ok "A: nowhere ⇒ exit 1 naming every place looked" || st_miss "A: missing file: rc=$rc [$err]"
 printf -- '---\nname: broken\nthis line is no field\n---\n' > "$HOME/.claude/agents/broken.md"
 err=$(AD launch broken --dir "$WORK" 2>&1); rc=$?
 [ "$rc" = 1 ] && case "$err" in *"$HOME/.claude/agents/broken.md"*) true ;; *) false ;; esac \
-  && ok "A: an unreadable file ⇒ exit 1 naming the file" || bad "A: broken file: rc=$rc [$err]"
+  && st_ok "A: an unreadable file ⇒ exit 1 naming the file" || st_miss "A: broken file: rc=$rc [$err]"
 AD launch '../x' >/dev/null 2>&1; eq "A: a name with a path in it is refused" "$?" 1
 
 # --- B the fleet: key -----------------------------------------------------------
@@ -112,8 +111,8 @@ eq "C: no --as — byte for byte as before" "$(fc bash "$BIN/fleet-claude.sh" /f
 eq "C: --as doc-only ⇒ --agent doc-only, its model the default" "$(fc bash "$BIN/fleet-claude.sh" --as doc-only x)" "--model sonnet --agent doc-only x"
 eq "C: --as=doc-only" "$(fc bash "$BIN/fleet-claude.sh" --as=doc-only x)" "--model sonnet --agent doc-only x"
 eq "C: a fleet's FLEET_MODEL still wins" "$(fc env FLEET_MODEL=fable bash "$BIN/fleet-claude.sh" --as doc-only x)" "--model fable --agent doc-only x"
-case "$(fc bash "$BIN/fleet-claude.sh" x)" in *--agent*|*--role*|*append-system-prompt*) bad "C: a plain launch carries a role argument" ;;
-  *) ok "C: a plain launch carries no agent / role argument" ;; esac
+case "$(fc bash "$BIN/fleet-claude.sh" x)" in *--agent*|*--role*|*append-system-prompt*) st_miss "C: a plain launch carries a role argument" ;;
+  *) st_ok "C: a plain launch carries no agent / role argument" ;; esac
 python3 "$BIN/fleet-agent-def.py" ship >/dev/null
 # epic-driver is the fleet-epic plugin's (issue #3116): installed, it answers
 printf '[{"id": "fleet-epic@claude-fleet", "enabled": true, "installPath": "%s"}]\n' "$ROOT/plugins/fleet-epic" > "$WORK/plugins.json"
@@ -132,7 +131,7 @@ orch() { env -u TMUX -u TMUX_PANE -u FLEET_CRED_SID -u FLEET_CRED_PROXY -u FLEET
 eq "C: an agent file that grants spawn (epic-driver) mounts the dispatch group" "$(orch --as epic-driver x)" 1
 eq "C: …so does fleet-worker (it may spawn too, issue #4591)" "$(orch --as fleet-worker x)" 1
 eq "C: …and a file that grants no spawn, and a plain launch (any session may spawn, issue #4703)" "$(orch --as doc-only x)$(orch x)" 11
-grep -q "no agent file 'gone-now'.*starting a plain session" "$WORK/fc.err" && ok "C: …and one stderr line says so" || bad "C: no stderr line: $(cat "$WORK/fc.err")"
+grep -q "no agent file 'gone-now'.*starting a plain session" "$WORK/fc.err" && st_ok "C: …and one stderr line says so" || st_miss "C: no stderr line: $(cat "$WORK/fc.err")"
 printf '[]\n' > "$WORK/plugins.json"; rm -f "$FLEET_CONF_DIR/agents/plugins.json"
 eq "C: fleet-epic not installed ⇒ no epic-driver: a plain session" "$(fc bash "$BIN/fleet-claude.sh" --as epic-driver x)" "--model opus x"
 
@@ -140,14 +139,14 @@ eq "C: fleet-epic not installed ⇒ no epic-driver: a plain session" "$(fc bash 
 agent "$HOME/.claude/agents/ro.md" ro 'model: sonnet' 'tools: Read, Grep' 'disallowedTools:' '  - Edit'
 got=$(FCBIN="$WORK/claude-old" fc bash "$BIN/fleet-claude.sh" --as ro x)
 case "$got" in "--model sonnet --tools=Read,Grep --disallowedTools=Edit --append-system-prompt-file $FLEET_CONF_DIR/agents/ro-"*".md x")
-  ok "D: no --agent ⇒ --tools / --disallowedTools / --append-system-prompt-file" ;; *) bad "D: fallback launch [$got]" ;; esac
+  st_ok "D: no --agent ⇒ --tools / --disallowedTools / --append-system-prompt-file" ;; *) st_miss "D: fallback launch [$got]" ;; esac
 f=$(printf '%s\n' "$got" | grep -o "$FLEET_CONF_DIR/agents/ro-[0-9a-f]*\.md")
-[ "$(cat "$f" 2>/dev/null)" = '正文 ro' ] && ok "D: …the appended file is the body" || bad "D: body copy [$(cat "$f" 2>/dev/null)]"
+[ "$(cat "$f" 2>/dev/null)" = '正文 ro' ] && st_ok "D: …the appended file is the body" || st_miss "D: body copy [$(cat "$f" 2>/dev/null)]"
 eq "D: the answer is kept per binary (a second launch asks no --help)" "$(set -- "$FLEET_CONF_DIR"/agents/agent-flag.*; echo $#)" 2
 printf '#!/bin/sh\nif [ "$1" = --help ]; then exec sleep 60; fi\nfor a in "$@"; do printf "%%s\\n" "$a"; done\n' > "$WORK/claude-hang"; chmod +x "$WORK/claude-hang"
 t0=$(date +%s); got=$(FCBIN="$WORK/claude-hang" fc bash "$BIN/fleet-claude.sh" --as doc-only x); dt=$(( $(date +%s) - t0 ))
 [ "$got" = "--model sonnet --agent doc-only x" ] && [ "$dt" -le 10 ] \
-  && ok "D: a binary that hangs on --help costs ≤ ~5 s and launches as the file says (${dt}s)" || bad "D: hung --help: ${dt}s [$got]"
+  && st_ok "D: a binary that hangs on --help costs ≤ ~5 s and launches as the file says (${dt}s)" || st_miss "D: hung --help: ${dt}s [$got]"
 
 # --- E Codex ----------------------------------------------------------------------
 mkdir -p "$WORK/cbin"
@@ -155,27 +154,27 @@ cp "$BIN/fleet-claude.sh" "$BIN/fleet-launch-lib.sh" "$BIN/fleet-agent-adapter.s
 printf '#!/bin/sh\nfor a in "$@"; do printf "%%s\\n" "$a"; done\n' > "$WORK/cbin/fleet-codex.sh"; chmod +x "$WORK/cbin/fleet-codex.sh"
 got=$(env -u TMUX -u TMUX_PANE FLEET_FAILOVER=0 bash "$WORK/cbin/fleet-claude.sh" --agent codex --as keyed x 2>/dev/null | paste -sd' ' -)
 case "$got" in "-m gpt-5.5 -c model_reasoning_effort=\"high\" -c model_instructions_file=\"$FLEET_CONF_DIR/agents/keyed-"*".md\" x")
-  ok "E: Codex — codex_model ⇒ -m, codex_effort, the body as its instructions file" ;; *) bad "E: codex launch [$got]" ;; esac
+  st_ok "E: Codex — codex_model ⇒ -m, codex_effort, the body as its instructions file" ;; *) st_miss "E: codex launch [$got]" ;; esac
 f=$(printf '%s\n' "$got" | grep -o "$FLEET_CONF_DIR/agents/keyed-[0-9a-f]*\.md")
-[ "$(cat "$f" 2>/dev/null)" = '正文 keyed' ] && ok "E: …the instructions file holds the body" || bad "E: codex body [$(cat "$f" 2>/dev/null)]"
+[ "$(cat "$f" 2>/dev/null)" = '正文 keyed' ] && st_ok "E: …the instructions file holds the body" || st_miss "E: codex body [$(cat "$f" 2>/dev/null)]"
 case "$(env -u TMUX -u TMUX_PANE FLEET_FAILOVER=0 bash "$WORK/cbin/fleet-claude.sh" --agent codex --as ro x 2>/dev/null | paste -sd' ' -)" in
-  *tools*|*Grep*) bad "E: a tools list reached Codex" ;; *) ok "E: no tools list carried to Codex" ;; esac
+  *tools*|*Grep*) st_miss "E: a tools list reached Codex" ;; *) st_ok "E: no tools list carried to Codex" ;; esac
 eq "E: no --as ⇒ nothing added for Codex" "$(env -u TMUX -u TMUX_PANE FLEET_FAILOVER=0 bash "$WORK/cbin/fleet-claude.sh" --agent codex x 2>/dev/null | paste -sd' ' -)" "x"
 
 # --- F ship -------------------------------------------------------------------------
 export CLAUDE_CONFIG_DIR="$WORK/cc" FLEET_CONF_DIR="$WORK/conf2"
 out=$(AD ship); n=$(ls "$WORK/cc/agents" 2>/dev/null | wc -l | tr -d ' ')
 [ "$n" -ge 2 ] && [ ! -e "$WORK/cc/agents/epic-driver.md" ] && cmp -s "$WORK/cc/agents/fleet-worker.md" "$ROOT/conf/agent-defaults/claude/agents/fleet-worker.md" \
-  && ok "F: ship writes the core's agent files ($n)" || bad "F: first ship [$out]"
+  && st_ok "F: ship writes the core's agent files ($n)" || st_miss "F: first ship [$out]"
 eq "F: a second ship changes nothing" "$(AD ship | grep -c '^wrote')" 0
-[ ! -e "$WORK/cc/agents/steward.md" ] && ok "F: no steward is shipped (issue #4900)" || bad "F: a steward agent file was shipped"
+[ ! -e "$WORK/cc/agents/steward.md" ] && st_ok "F: no steward is shipped (issue #4900)" || st_miss "F: a steward agent file was shipped"
 printf '\nextra: 1\n' >> "$WORK/cc/agents/orchestrator.md"
 rm -f "$WORK/cc/agents/fleet-worker.md"
 out=$(AD ship)
 printf '%s\n' "$out" | grep -q '^theirs   orchestrator' && grep -q '^extra: 1' "$WORK/cc/agents/orchestrator.md" \
-  && ok "F: an edited file is the person's — kept" || bad "F: edited [$out]"
+  && st_ok "F: an edited file is the person's — kept" || st_miss "F: edited [$out]"
 printf '%s\n' "$out" | grep -q '^deleted  fleet-worker' && [ ! -f "$WORK/cc/agents/fleet-worker.md" ] \
-  && ok "F: a deleted one stays deleted" || bad "F: deleted [$out]"
+  && st_ok "F: a deleted one stays deleted" || st_miss "F: deleted [$out]"
 # a login an older release shipped epic-driver into (issue #3116): retired
 oldepic() {  # oldepic <bytes> — the file + the record an older release left
   printf '%s' "$1" > "$WORK/cc/agents/epic-driver.md"
@@ -191,13 +190,13 @@ kept"
 out=$(AD ship)
 printf '%s\n' "$out" | grep -q '^retired  epic-driver' && [ ! -e "$WORK/cc/agents/epic-driver.md" ] \
   && ! grep -q epic-driver "$FLEET_CONF_DIR/agents-shipped.json" \
-  && ok "F: a shipped file the core no longer ships is retired (the plugin's copy answers)" || bad "F: retire [$out]"
+  && st_ok "F: a shipped file the core no longer ships is retired (the plugin's copy answers)" || st_miss "F: retire [$out]"
 eq "F: …once" "$(AD ship | grep -c epic-driver)" 0
 oldepic "$(printf -- '---\nname: epic-driver\nmodel: opus\n---\n')"
 printf '\nmine: 1\n' >> "$WORK/cc/agents/epic-driver.md"
 out=$(AD ship)
 printf '%s\n' "$out" | grep -q '^theirs   epic-driver' && grep -q '^mine: 1' "$WORK/cc/agents/epic-driver.md" \
-  && ok "F: …but an edited one is the person's — kept" || bad "F: retire edited [$out]"
+  && st_ok "F: …but an edited one is the person's — kept" || st_miss "F: retire edited [$out]"
 rm -f "$WORK/cc/agents/epic-driver.md"
 python3 - "$FLEET_CONF_DIR/agents-shipped.json" <<'EOF'
 import json, sys; p = sys.argv[1]; d = json.load(open(p)); d['fleet-worker'] = 'an older release'; json.dump(d, open(p, 'w'))
@@ -209,17 +208,17 @@ d['fleet-worker'] = hashlib.sha256(open(sys.argv[2], 'rb').read()).hexdigest(); 
 EOF
 out=$(AD ship)
 printf '%s\n' "$out" | grep -q '^wrote    fleet-worker' && cmp -s "$WORK/cc/agents/fleet-worker.md" "$ROOT/conf/agent-defaults/claude/agents/fleet-worker.md" \
-  && ok "F: an unedited older copy follows the release" || bad "F: follow [$out]"
+  && st_ok "F: an unedited older copy follows the release" || st_miss "F: follow [$out]"
 eq "F: --check writes nothing" "$(rm -f "$WORK/cc/agents/fleet-worker.md"; AD ship --check | grep -c '^would write'; [ -f "$WORK/cc/agents/fleet-worker.md" ] && echo written)" 0
 unset CLAUDE_CONFIG_DIR; export FLEET_CONF_DIR="$WORK/conf"
 
 # --- G wiring -------------------------------------------------------------------------
 grep -q -- "\${AS_ARG:+ --as \$AS_ARG}" "$BIN/dash-issue-session.sh" && grep -q -- "\${AS_ARG:+ --as \$AS_ARG}" "$BIN/dash-raw-session.sh" \
-  && ok "G: both spawners hand --as to the wrapper" || bad "G: a spawner does not pass --as"
+  && st_ok "G: both spawners hand --as to the wrapper" || st_miss "G: a spawner does not pass --as"
 # (no spawner passes --role, #3122: conf/gone.list)
 pol=$(sed -n '/^policy=(); want=/,/^done/p' "$BIN/fleet-session-wrap.sh")
-case "$pol" in *'|--as)'*'--as=*'*) ok "G: the wrapper's resume keeps --as" ;; *) bad "G: the wrapper's resume drops --as" ;; esac
-grep -q '"--as", args\["agent"\]' "$BIN/fleet-mcp.py" && ok "G: the spawn tool's agent ⇒ --as" || bad "G: the spawn tool does not pass --as"
+case "$pol" in *'|--as)'*'--as=*'*) st_ok "G: the wrapper's resume keeps --as" ;; *) st_miss "G: the wrapper's resume drops --as" ;; esac
+grep -q '"--as", args\["agent"\]' "$BIN/fleet-mcp.py" && st_ok "G: the spawn tool's agent ⇒ --as" || st_miss "G: the spawn tool does not pass --as"
 for f in conf/agent-defaults/claude/agents/fleet-worker.md plugins/fleet-epic/agents/epic-driver.md; do
   b=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import importlib; m = importlib.import_module("fleet-agent-def"); print(repr(m.parse(open(sys.argv[2]).read())[1]))' \
         "$BIN" "$ROOT/$f")
@@ -227,32 +226,31 @@ for f in conf/agent-defaults/claude/agents/fleet-worker.md plugins/fleet-epic/ag
 done
 # (the core ships no epic-driver — fleet-epic carries it, #3116: conf/gone.list)
 python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("agents") == [] else 1)' "$ROOT/.claude-plugin/plugin.json" \
-  && ok "G: plugin.json still says \"agents\": []" || bad "G: .claude-plugin/plugin.json must say \"agents\": []"
+  && st_ok "G: plugin.json still says \"agents\": []" || st_miss "G: .claude-plugin/plugin.json must say \"agents\": []"
 
 # --- H a Codex start never asks the Claude CLI (issue #4726) --------------------------
 rm -rf "$WORK/conf/agents/plugins.json" "$WORK/asked"
 printf '[{"id": "acme@market", "enabled": true, "installPath": "%s"}]\n' "$WORK/plug" > "$WORK/plugins.json"
 H_CMD="touch '$WORK/asked'; cat '$WORK/plugins.json'"
 FLEET_AGENT_PLUGINS_CMD=$H_CMD AD launch nobody-h --dir "$WORK" --agent codex >/dev/null 2>&1; rc=$?
-[ "$rc" = 1 ] && [ ! -e "$WORK/asked" ] && ok "H: Codex launch, no file anywhere ⇒ exit 1, no claude plugin list" \
-  || bad "H: codex launch rc=$rc asked=$([ -e "$WORK/asked" ] && echo yes || echo no)"
+[ "$rc" = 1 ] && [ ! -e "$WORK/asked" ] && st_ok "H: Codex launch, no file anywhere ⇒ exit 1, no claude plugin list" \
+  || st_miss "H: codex launch rc=$rc asked=$([ -e "$WORK/asked" ] && echo yes || echo no)"
 FLEET_AGENT_PLUGINS_CMD=$H_CMD AD launch nobody-h --dir "$WORK" --for codex >/dev/null 2>&1
-[ ! -e "$WORK/asked" ] && ok "H: a spawner's --for codex asks nothing either" || bad "H: --for codex ran the plugin command"
+[ ! -e "$WORK/asked" ] && st_ok "H: a spawner's --for codex asks nothing either" || st_miss "H: --for codex ran the plugin command"
 FLEET_AGENT_PLUGINS_CMD=$H_CMD AD spawn-tools nobody-h --dir "$WORK" --for codex >/dev/null 2>&1
-[ ! -e "$WORK/asked" ] && ok "H: spawn-tools --for codex asks nothing" || bad "H: spawn-tools --for codex ran the plugin command"
+[ ! -e "$WORK/asked" ] && st_ok "H: spawn-tools --for codex asks nothing" || st_miss "H: spawn-tools --for codex ran the plugin command"
 mkdir -p "$WORK/conf/agents"
 printf '{"stamp": ["stale"], "rows": [{"id": "acme@market", "enabled": true, "installPath": "%s"}]}\n' "$WORK/plug" > "$WORK/conf/agents/plugins.json"
 eq "H: Codex takes the cached plugin answer, stale or not" \
   "$(FLEET_AGENT_PLUGINS_CMD=$H_CMD kv acme:reviewer --dir "$WORK" --agent codex | field file)" "$WORK/plug/agents/reviewer.md"
-[ ! -e "$WORK/asked" ] && ok "H: …without running the command" || bad "H: a cached answer still ran the plugin command"
+[ ! -e "$WORK/asked" ] && st_ok "H: …without running the command" || st_miss "H: a cached answer still ran the plugin command"
 FLEET_AGENT_PLUGINS_CMD=$H_CMD AD launch nobody-h --dir "$WORK" >/dev/null 2>&1
-[ -e "$WORK/asked" ] && ok "H: a Claude start still asks (the stale stamp is refreshed)" || bad "H: a Claude start did not ask"
+[ -e "$WORK/asked" ] && st_ok "H: a Claude start still asks (the stale stamp is refreshed)" || st_miss "H: a Claude start did not ask"
 rm -f "$WORK/asked" "$WORK/conf/agents/plugins.json"; printf '[]\n' > "$WORK/plugins.json"
 for f in dash-issue-session.sh dash-raw-session.sh; do
   n=$(grep -c 'fleet-agent-def.py" launch' "$BIN/$f"); m=$(grep 'fleet-agent-def.py" launch' "$BIN/$f" | grep -c -- '--for "$AS_FOR"')
   eq "H: every $f lookup passes --for" "$m" "$n"
 done
-grep -q -- '--for "$as_for"' "$BIN/fleet-task-record.sh" && ok "H: fleet-task-record.sh passes --for" || bad "H: fleet-task-record.sh does not pass --for"
+grep -q -- '--for "$as_for"' "$BIN/fleet-task-record.sh" && st_ok "H: fleet-task-record.sh passes --for" || st_miss "H: fleet-task-record.sh does not pass --for"
 
-[ "$fails" = 0 ] && { echo "fleet-agent-as selftest: all green"; exit 0; }
-echo "fleet-agent-as selftest: $fails FAILED"; exit 1
+st_done

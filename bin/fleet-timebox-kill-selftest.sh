@@ -51,11 +51,12 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 [ -f "$BIN/fleet-lib.sh" ] || { printf 'selftest: %s not found\n' "$BIN/fleet-lib.sh" >&2; exit 2; }
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-command -v pgrep >/dev/null 2>&1 || { printf 'selftest: no pgrep(1) — SKIP\n' >&2; exit 0; }
+st_need pgrep
 
 # A marker unique to this run, so we never count (or kill) a peer test's processes.
 #
@@ -90,9 +91,7 @@ done
 kill -9 "$_probe" 2>/dev/null; wait "$_probe" 2>/dev/null
 [ "$_seen" = 1 ] || { printf 'selftest: a marked process is invisible to `pgrep -f` — every survivor count here would be vacuous\n' >&2; exit 2; }
 
-fails=0
-ok()   { printf '  ok   %s\n' "$1"; }
-fail() { printf '  FAIL %s\n' "$1"; fails=$((fails+1)); }
+FAIL=0
 
 # survivors — how many marked processes are still alive. Given a moment first:
 # a tree that is dying is not a tree that leaked — up to 2s, read every 0.1s, so
@@ -115,7 +114,7 @@ survivors() {
 lane() {
   ( MARK="$MARK.$1"; HELPER="${TMPDIR:-/tmp}/$MARK.sleeper"
     printf '#!/bin/bash\nexec -a "%s" sleep 120\n' "$MARK" > "$HELPER" && chmod +x "$HELPER" || exit 99
-    fails=0; "lane_$1"; rm -f "$HELPER"; exit "$fails" ) > "$LANES/$1" 2>&1 &
+    FAIL=0; "lane_$1"; rm -f "$HELPER"; exit "$FAIL" ) > "$LANES/$1" 2>&1 &
   eval "lane_pid_$1=\$!"
 }
 LANES=$(mktemp -d "${TMPDIR:-/tmp}/tbkill-lanes.XXXXXX") || exit 2
@@ -140,13 +139,13 @@ lane_1() {
 t0=$SECONDS; fleet_timebox "$BUDGET" forker >/dev/null 2>&1; rc=$?; el=$(( SECONDS - t0 ))
 n=$(survivors)
 if [ "$rc" != 124 ]; then
-  fail "1: a blown budget must return 124, got $rc"
+  st_miss "1: a blown budget must return 124, got $rc"
 elif [ "$el" -gt "$CEILING" ]; then
-  fail "1: the budget took ${el}s (ceiling ${CEILING}s)"
+  st_miss "1: the budget took ${el}s (ceiling ${CEILING}s)"
 elif [ "$n" != 0 ]; then
-  fail "1: $n orphan(s) outlived the kill — the budget bounded the ledger, not the processes"
+  st_miss "1: $n orphan(s) outlived the kill — the budget bounded the ledger, not the processes"
 else
-  ok "a continuously-forking tree is fully gone after its budget (${el}s, 0 orphans)"
+  st_ok "a continuously-forking tree is fully gone after its budget (${el}s, 0 orphans)"
 fi
 cleanup
 }
@@ -156,11 +155,11 @@ lane_2() {
 t0=$SECONDS; fleet_timebox "$BUDGET" stubborn >/dev/null 2>&1; rc=$?; el=$(( SECONDS - t0 ))
 n=$(survivors)
 if [ "$el" -gt "$CEILING" ]; then
-  fail "2: a TERM-ignoring tree took ${el}s (ceiling ${CEILING}s)"
+  st_miss "2: a TERM-ignoring tree took ${el}s (ceiling ${CEILING}s)"
 elif [ "$n" != 0 ]; then
-  fail "2: $n process(es) ignored SIGTERM and were never SIGKILLed"
+  st_miss "2: $n process(es) ignored SIGTERM and were never SIGKILLed"
 else
-  ok "a tree that traps SIGTERM is still killed (${el}s, 0 orphans)"
+  st_ok "a tree that traps SIGTERM is still killed (${el}s, 0 orphans)"
 fi
 cleanup
 }
@@ -173,13 +172,13 @@ lane_3() {
 t0=$SECONDS; out=$(fleet_timebox "$BUDGET" forker 2>/dev/null); rc=$?; el=$(( SECONDS - t0 ))
 n=$(survivors)
 if [ "$el" -gt "$CEILING" ]; then
-  fail "3: \$( ) blocked ${el}s on a ${BUDGET}s budget — an orphan is holding the pipe open (captured: ${out:-<empty>})"
+  st_miss "3: \$( ) blocked ${el}s on a ${BUDGET}s budget — an orphan is holding the pipe open (captured: ${out:-<empty>})"
 elif [ "$rc" != 124 ]; then
-  fail "3: a budget blown inside \$( ) must still return 124, got $rc"
+  st_miss "3: a budget blown inside \$( ) must still return 124, got $rc"
 elif [ "$n" != 0 ]; then
-  fail "3: $n orphan(s) survived a budget blown inside \$( )"
+  st_miss "3: $n orphan(s) survived a budget blown inside \$( )"
 else
-  ok "a budget blown inside \$( ) returns at the budget, pipe closed (${el}s, 0 orphans)"
+  st_ok "a budget blown inside \$( ) returns at the budget, pipe closed (${el}s, 0 orphans)"
 fi
 cleanup
 }
@@ -190,22 +189,22 @@ lane 1; lane 2; lane 3
 # became the same log line. 0 = the tree is gone; 1 = something outlived SIGKILL.
 sleep 120 & victim=$!
 if fleet_kill_tree "$victim" 1; then
-  kill -0 "$victim" 2>/dev/null && fail "4: reported the tree gone while $victim is alive" \
-                                || ok "fleet_kill_tree returns 0 for a tree it actually killed"
+  kill -0 "$victim" 2>/dev/null && st_miss "4: reported the tree gone while $victim is alive" \
+                                || st_ok "fleet_kill_tree returns 0 for a tree it actually killed"
 else
-  fail "4: could not kill a plain background sleep"
+  st_miss "4: could not kill a plain background sleep"
 fi
 wait "$victim" 2>/dev/null
 
 # An already-dead pid is not an error — a caller racing a normally-exiting child
 # must not be failed by it.
 sleep 0.1 & gone=$!; wait "$gone" 2>/dev/null
-fleet_kill_tree "$gone" 1 && ok "an already-exited pid reads as gone (no false failure)" \
-                          || fail "4: an already-exited pid must read as gone"
+fleet_kill_tree "$gone" 1 && st_ok "an already-exited pid reads as gone (no false failure)" \
+                          || st_miss "4: an already-exited pid must read as gone"
 
 # A pid that is not ours to signal must be refused outright, not walked.
-fleet_kill_tree 1 1 && ok "pid 1 is refused" || fail "4: pid 1 must be refused"
-fleet_kill_tree "" 1 && ok "an empty pid is refused" || fail "4: an empty pid must be refused"
+fleet_kill_tree 1 1 && st_ok "pid 1 is refused" || st_miss "4: pid 1 must be refused"
+fleet_kill_tree "" 1 && st_ok "an empty pid is refused" || st_miss "4: an empty pid must be refused"
 
 # --- 5. SOAK: twenty rounds, no accumulation ------------------------------------
 # The shape of the #682 incident, compressed: a daemon tick after tick, most of
@@ -241,7 +240,7 @@ while [ "$r" -le "$SOAK_ROUNDS" ]; do
     fleet_timebox "$SOAK_BUDGET" quick >/dev/null 2>&1; rc=$?; cleans=$((cleans+1))
   else
     fleet_timebox "$SOAK_BUDGET" forker >/dev/null 2>&1; rc=$?; timeouts=$((timeouts+1))
-    [ "$rc" = 124 ] || fail "5: round $r blew its ${SOAK_BUDGET}s budget but returned $rc, not 124"
+    [ "$rc" = 124 ] || st_miss "5: round $r blew its ${SOAK_BUDGET}s budget but returned $rc, not 124"
   fi
   # Sampled WITHOUT a settle delay, deliberately: fleet_kill_tree only returns 0
   # once it has RE-READ the tree and found it gone (#682), so by the time
@@ -258,15 +257,15 @@ soak_el=$(( SECONDS - t0 ))
 left=$(survivors)
 
 if [ "$soak_el" -gt "$SOAK_CEILING" ]; then
-  fail "5: $SOAK_ROUNDS rounds took ${soak_el}s (ceiling ${SOAK_CEILING}s) — a round is no longer bounded by its budget"
+  st_miss "5: $SOAK_ROUNDS rounds took ${soak_el}s (ceiling ${SOAK_CEILING}s) — a round is no longer bounded by its budget"
 elif [ "$left" != 0 ]; then
-  fail "5: $left process(es) survived $SOAK_ROUNDS rounds ($timeouts over budget, $cleans clean) — the residue ACCUMULATES; per-round live counts:$series"
+  st_miss "5: $left process(es) survived $SOAK_ROUNDS rounds ($timeouts over budget, $cleans clean) — the residue ACCUMULATES; per-round live counts:$series"
 elif [ "$ratchet" -gt 0 ]; then
-  fail "5: the live count climbed round-on-round $ratchet time(s) — a leak per tick, which is the #682 pile-up; per-round live counts:$series"
+  st_miss "5: the live count climbed round-on-round $ratchet time(s) — a leak per tick, which is the #682 pile-up; per-round live counts:$series"
 elif [ "$peak" -gt 2 ]; then
-  fail "5: peak of $peak live process(es) between rounds — a round is leaving work behind for the next one; per-round live counts:$series"
+  st_miss "5: peak of $peak live process(es) between rounds — a round is leaving work behind for the next one; per-round live counts:$series"
 else
-  ok "$SOAK_ROUNDS rounds ($timeouts over budget, $cleans clean) leave 0 residue and never ratchet (${soak_el}s, peak $peak)"
+  st_ok "$SOAK_ROUNDS rounds ($timeouts over budget, $cleans clean) leave 0 residue and never ratchet (${soak_el}s, peak $peak)"
 fi
 cleanup
 }
@@ -275,12 +274,8 @@ lane 5
 for l in 1 2 3 5; do
   eval "wait \$lane_pid_$l"; rc=$?
   cat "$LANES/$l"
-  [ "$rc" = 0 ] || { [ "$rc" = 99 ] && printf '  FAIL lane %s: cannot write its helper\n' "$l"; fails=$((fails + (rc == 99 ? 1 : rc))); }
+  [ "$rc" = 0 ] || { [ "$rc" = 99 ] && printf '  FAIL lane %s: cannot write its helper\n' "$l"; FAIL=$((FAIL + (rc == 99 ? 1 : rc))); }
 done
 
 printf '\n'
-if [ "$fails" -gt 0 ]; then
-  printf 'fleet-timebox-kill-selftest: %s FAILED\n' "$fails" >&2
-  exit 1
-fi
-printf 'fleet-timebox-kill-selftest: all checks passed\n'
+st_done

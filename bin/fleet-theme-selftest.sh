@@ -33,10 +33,10 @@ while [ -L "$real" ]; do
   case "$link" in /*) real="$link" ;; *) real="$(dirname "$real")/$link" ;; esac
 done
 REPO="$(cd "$(dirname "$real")/.." && pwd)"
+. "$REPO/bin/selftest-lib.sh"
 THEME="$REPO/extras/fleet-theme"
-pass=0 fail=0
+pass=0 FAIL=0
 ok()  { printf 'ok   %s\n' "$*"; pass=$((pass + 1)); }
-bad() { printf 'FAIL %s\n' "$*"; fail=$((fail + 1)); }
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 
 # scan <root> <file list> — prints `SOURCE <dir>`, `EXEMPT <file> <owner>`,
@@ -96,24 +96,24 @@ PY
 # --- A: the package -----------------------------------------------------------
 if grep -q '/\* fleet:tokens \*/' "$THEME/theme.css" 2>/dev/null && grep -q '/\* /fleet:tokens \*/' "$THEME/theme.css"; then
   ok "A theme.css carries the fleet:tokens block"
-else bad "A theme.css has no fleet:tokens block"; fi
+else st_miss "A theme.css has no fleet:tokens block"; fi
 missing=""
 for f in $(grep -o 'url(\./fonts/[^)]*\.woff2)' "$THEME/fonts.css" 2>/dev/null | sed 's#url(\./##; s#)$##'); do
   [ -f "$THEME/$f" ] || missing="$missing $f"
 done
 if [ -z "$missing" ] && grep -q 'url(\./fonts/' "$THEME/fonts.css" 2>/dev/null; then ok "A every face in fonts.css is a file in fonts/"
-else bad "A fonts.css names missing files:${missing:- (none listed)}"; fi
+else st_miss "A fonts.css names missing files:${missing:- (none listed)}"; fi
 missing=""
-[ -f "$THEME/logo.svg" ] && ok "A logo.svg is in the package" || bad "A no extras/fleet-theme/logo.svg"
+[ -f "$THEME/logo.svg" ] && ok "A logo.svg is in the package" || st_miss "A no extras/fleet-theme/logo.svg"
 for v in $(grep -o -- '--fleet-[a-z0-9-]*:' "$THEME/theme.css" | tr -d : | sort -u); do
   grep -q -- "\`$v\`" "$THEME/README.md" 2>/dev/null || missing="$missing $v"
 done
-[ -z "$missing" ] && ok "A README.md has a line for every --fleet- variable" || bad "A README.md lacks:$missing"
+[ -z "$missing" ] && ok "A README.md has a line for every --fleet- variable" || st_miss "A README.md lacks:$missing"
 # the console's 深浅色 (claude-fleet#3931): the chosen dark is the system's dark, line for line
 sysdark=$(awk '/:root:not\(\[data-theme="light"\]\) \{/{f=1;next} f&&/^  \}/{exit} f{sub(/^ +/,"");print}' "$THEME/theme.css")
 pickdark=$(awk '/^:root\[data-theme="dark"\] \{/{f=1;next} f&&/^\}/{exit} f{sub(/^ +/,"");print}' "$THEME/theme.css")
 if [ -n "$sysdark" ] && [ "$sysdark" = "$pickdark" ]; then ok "A the data-theme=\"dark\" block is the system dark block, line for line"
-else bad "A theme.css: the system dark block and :root[data-theme=\"dark\"] differ (or one is missing)"; fi
+else st_miss "A theme.css: the system dark block and :root[data-theme=\"dark\"] differ (or one is missing)"; fi
 
 # --- B: the repo --------------------------------------------------------------
 git -C "$REPO" ls-files > "$T/files" 2>/dev/null || find "$REPO" -type f | sed "s#^$REPO/##" > "$T/files"
@@ -121,21 +121,21 @@ out="$(scan "$REPO" "$T/files")"; rc=$?
 printf '%s\n' "$out" | sed 's/^/     /'
 src="$(printf '%s\n' "$out" | grep -c '^SOURCE ')"
 if [ "$rc" = 0 ] && [ "$src" = 1 ]; then ok "B colours and fonts come from 1 source (extras/fleet-theme), nothing else defines them"
-else bad "B a theme colour / font / logo is defined outside extras/fleet-theme (the HIT lines above)"; fi
+else st_miss "B a theme colour / font / logo is defined outside extras/fleet-theme (the HIT lines above)"; fi
 
 # --- C: the consumers ---------------------------------------------------------
 grep -q '/\*{{fleet_theme}}\*/' "$REPO/site/template.html" && ok "C the website's template takes the theme through its slot" \
-  || bad "C site/template.html has no /*{{fleet_theme}}*/ slot"
+  || st_miss "C site/template.html has no /*{{fleet_theme}}*/ slot"
 grep -q '@import "../../../fleet-theme/theme.css"' "$REPO/extras/web-chat/ui/src/theme.css" && ok "C the web chat imports the package" \
-  || bad "C extras/web-chat/ui/src/theme.css does not import extras/fleet-theme/theme.css"
+  || st_miss "C extras/web-chat/ui/src/theme.css does not import extras/fleet-theme/theme.css"
 grep -q 'THEME="$REPO/extras/fleet-theme"' "$REPO/bin/web-console-pack.sh" \
   && grep -q 'themePrefix + `theme.css' "$REPO/tokenledger/hub/api/entry_pages.go" \
   && ok "C the way-in pages link the theme web-console-pack.sh packs" \
-  || bad "C the way-in pages (entry_pages.go) do not take extras/fleet-theme through web-console-pack.sh"
+  || st_miss "C the way-in pages (entry_pages.go) do not take extras/fleet-theme through web-console-pack.sh"
 grep -q '@import "../../../fleet-theme/theme.css"' "$REPO/extras/web-console/src/shared/index.css" && ok "C the console imports the package (#3926)" \
-  || bad "C extras/web-console/src/shared/index.css does not import extras/fleet-theme/theme.css"
+  || st_miss "C extras/web-console/src/shared/index.css does not import extras/fleet-theme/theme.css"
 for s in site-build.sh site-images.sh; do
-  grep -q "extras.*fleet-theme\|'extras', 'fleet-theme'" "$REPO/bin/$s" && ok "C $s reads extras/fleet-theme" || bad "C $s does not read extras/fleet-theme"
+  grep -q "extras.*fleet-theme\|'extras', 'fleet-theme'" "$REPO/bin/$s" && ok "C $s reads extras/fleet-theme" || st_miss "C $s does not read extras/fleet-theme"
 done
 
 # --- D: the guard bites -------------------------------------------------------
@@ -151,7 +151,7 @@ if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q '^HIT x/a.css:1 a theme colou
    && printf '%s\n' "$out" | grep -q '^HIT x/b.html:1 a theme font family' \
    && printf '%s\n' "$out" | grep -q '^HIT x/logo.svg' && ! printf '%s\n' "$out" | grep -q 'fine.css'; then
   ok "D a planted colour, family and logo are red; an unrelated colour is not"
-else bad "D the guard missed a planted definition (rc $rc): $out"; fi
+else st_miss "D the guard missed a planted definition (rc $rc): $out"; fi
 
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
-[ "$fail" = 0 ]
+printf '\n%d passed, %d failed\n' "$pass" "$FAIL"
+st_done

@@ -52,20 +52,16 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need git
 BASH_BIN=/bin/bash; [ -x "$BASH_BIN" ] || BASH_BIN=bash
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-login-bootstrap-selftest.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/fleet-login-bootstrap-selftest.XXXXXX" physical
 trap 'exit 130' INT TERM HUP
 
-FAILS=0
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-eq()   { [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
-has()  { case "$2" in *"$3"*) ;; *) fail "$1: [$3] not in: $2" ;; esac; }
-hasnt(){ case "$2" in *"$3"*) fail "$1: [$3] unexpectedly in: $2" ;; esac; }
-leg()  { if [ "$FAILS" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi; _legf=$FAILS; }
+st_tally miss
+eq()   { [ "$2" = "$3" ] || st_miss "$1: expected [$3], got [$2]"; }
+leg()  { if [ "$FAIL" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi; _legf=$FAIL; }
 
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
@@ -142,8 +138,8 @@ eq "A master tracks origin/master" "$(git -C "$R" rev-parse --abbrev-ref 'master
 ap=$(grep '^fleet-install-apply.sh ' "$CALLS")
 from=$(printf '%s' "$ap" | sed -n 's/.*--from \([0-9a-f]*\) .*/\1/p')
 eq "A apply --to HEAD" "${ap##*--to }" "$STABLE"
-hasnt "A no launchd: apply without --no-daemons" "$ap" "--no-daemons"
-hasnt "A no launchd: no daemons WARN" "$out" "daemons: WARN"
+st_hasnt "A no launchd: apply without --no-daemons" "$ap" "--no-daemons"
+st_hasnt "A no launchd: no daemons WARN" "$out" "daemons: WARN"
 eq "A apply --from the empty tree" "$(git -C "$R" rev-parse "$from^{tree}" 2>/dev/null)" 4b825dc642cb6eb9a060e54bf8d69288fbee4904
 eq "A applied stamp" "$(cat "$FLEET_CONF_DIR/global/bootstrap.applied" 2>/dev/null)" "$STABLE"
 eq "A tmux line once" "$(grep -c tmux-attention.conf "$HOME/.tmux.conf")" 1
@@ -151,24 +147,24 @@ eq "A zshrc = the PATH line alone (#2702)" "$(cat "$HOME/.zshrc")" "$(boot --pri
 eq "A PATH line once" "$(grep -c '\.local/bin' "$HOME/.zshrc")" 1
 # claude (issue #1191): installed once, before fleet-up, which runs with ~/.local/bin first
 eq "A claude installed once" "$(grep -c '^claude-install' "$CALLS")" 1
-has "A claude ok line" "$out" "claude: ok — installed $HOME/.local/bin/claude"
-[ -x "$HOME/.local/bin/claude" ] || fail "A: no ~/.local/bin/claude after the install"
+st_has "A claude ok line" "$out" "claude: ok — installed $HOME/.local/bin/claude"
+[ -x "$HOME/.local/bin/claude" ] || st_miss "A: no ~/.local/bin/claude after the install"
 eq "A claude before fleet-up" "$(awk '{print $1}' "$CALLS" | grep -Ex 'claude-install|fleet-up\.sh' | tr '\n' ' ')" "claude-install fleet-up.sh "
-case "$(cat "$UPPATH")" in "$HOME/.local/bin:"*) ;; *) fail "A: fleet-up ran without ~/.local/bin first on PATH: $(cat "$UPPATH")" ;; esac
+case "$(cat "$UPPATH")" in "$HOME/.local/bin:"*) ;; *) st_miss "A: fleet-up ran without ~/.local/bin first on PATH: $(cat "$UPPATH")" ;; esac
 eq "A fleet-up quiet + no attach" "$(grep '^fleet-up.sh ' "$CALLS")" \
   "fleet-up.sh verkyyi/claude-fleet $HOME/projects/claude-fleet --seed --no-attach"
 eq "A seed checkout cloned" "$(git -C "$HOME/projects/claude-fleet" rev-parse --is-inside-work-tree 2>/dev/null)" true
-has "A doctor passed through" "$out" "    PASS doctor-stub all green"
-has "A install line names the source" "$out" "install: ok — from the git:"
+st_has "A doctor passed through" "$out" "    PASS doctor-stub all green"
+st_has "A install line names the source" "$out" "install: ok — from the git:"
 case "$(cat "$FLEET_CONF_DIR/global/bootstrap.timing" 2>/dev/null)" in
   *" source=git total="*" install="*" claude="*" tmux="*" apply="*" zshrc="*" onboard="*" fleet="*" doctor="*) ;;
-  *) fail "A bootstrap.timing: [$(cat "$FLEET_CONF_DIR/global/bootstrap.timing" 2>/dev/null)]" ;;
+  *) st_miss "A bootstrap.timing: [$(cat "$FLEET_CONF_DIR/global/bootstrap.timing" 2>/dev/null)]" ;;
 esac
-has "A timing printed" "$out" "timing: "
+st_has "A timing printed" "$out" "timing: "
 eq "A seed origin = GitHub, cloned from the install" "$(git -C "$HOME/projects/claude-fleet" remote get-url origin 2>/dev/null)" "$GB/verkyyi/claude-fleet.git"
 eq "A seed at the install's HEAD" "$(git -C "$HOME/projects/claude-fleet" rev-parse HEAD 2>/dev/null)" "$STABLE"
-[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "A: no global/bootstrapped"
-python3 - "$HOME" <<'PY' || fail 'A first-run Claude defaults absent'
+[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || st_miss "A: no global/bootstrapped"
+python3 - "$HOME" <<'PY' || st_miss 'A first-run Claude defaults absent'
 import json, pathlib, sys
 home = pathlib.Path(sys.argv[1])
 state = json.loads((home / '.claude.json').read_text())
@@ -184,7 +180,7 @@ leg "A first run installs everything, fleet-up --seed --no-attach"
 # ---- B. second run: zero changes ----
 before=$(snap); : > "$CALLS"
 out=$(boot); eq "B rc" "$?" 0
-has "B says done" "$out" "already bootstrapped"
+st_has "B says done" "$out" "already bootstrapped"
 eq "B nothing called" "$(cat "$CALLS")" ""
 eq "B HOME byte-identical" "$(snap)" "$before"
 leg "B second run changes nothing"
@@ -195,18 +191,18 @@ mkdir -p "$FLEET_CONF_DIR/fleets/mine" && echo 'FLEET_REPO="me/mine"' > "$FLEET_
 echo '# mine' > "$HOME/.zshrc"
 before=$(snap)
 out=$(boot); eq "C rc" "$?" 0
-has "C says so" "$out" "already has a fleet"
+st_has "C says so" "$out" "already has a fleet"
 eq "C nothing called" "$(cat "$CALLS")" ""
 eq "C HOME byte-identical" "$(snap)" "$before"
-[ -e "$HOME/.claude" ] && fail "C: cloned into a hand-made login"
+[ -e "$HOME/.claude" ] && st_miss "C: cloned into a hand-made login"
 leg "C an existing fleet is left alone"
 
 # ---- D. apply fails, the next run fills in only that ----
 newhome "$WORK/d"
 out=$(APPLY_RC=1 boot); eq "D rc" "$?" 1
-has "D names the step" "$out" "apply: FAIL"
-[ -e "$FLEET_CONF_DIR/global/bootstrapped" ] && fail "D: marked done after a failed apply"
-[ -e "$FLEET_CONF_DIR/global/bootstrap.applied" ] && fail "D: apply stamped after failing"
+st_has "D names the step" "$out" "apply: FAIL"
+[ -e "$FLEET_CONF_DIR/global/bootstrapped" ] && st_miss "D: marked done after a failed apply"
+[ -e "$FLEET_CONF_DIR/global/bootstrap.applied" ] && st_miss "D: apply stamped after failing"
 eq "D fleet still up" "$(grep -c '^fleet-up.sh ' "$CALLS")" 1
 eq "D zshrc PATH line still written" "$(grep -c '\.local/bin' "$HOME/.zshrc")" 1
 : > "$CALLS"
@@ -214,80 +210,80 @@ out=$(boot); eq "D re-run rc" "$?" 0
 eq "D re-run: apply + doctor only" "$(awk '{print $1}' "$CALLS" | tr '\n' ' ')" "fleet-install-apply.sh fleet-doctor.sh "
 eq "D zshrc PATH line still once" "$(grep -c '\.local/bin' "$HOME/.zshrc")" 1
 eq "D tmux line still once" "$(grep -c tmux-attention.conf "$HOME/.tmux.conf")" 1
-[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "D: re-run did not mark done"
+[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || st_miss "D: re-run did not mark done"
 leg "D a failed step is retried alone"
 
 # ---- E. macOS, neither a GUI session nor system LaunchDaemons (#1214, #1210 ①②) ----
 newhome "$WORK/e"
 out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=false boot); eq "E rc" "$?" 0
 ap=$(grep '^fleet-install-apply.sh ' "$CALLS")
-[ -n "$ap" ] || fail "E: apply did not run without a gui domain — the tools never land"
-has "E apply --no-daemons" "$ap" " --no-daemons"
+[ -n "$ap" ] || st_miss "E: apply did not run without a gui domain — the tools never land"
+st_has "E apply --no-daemons" "$ap" " --no-daemons"
 eq "E apply --to HEAD" "$(printf '%s' "$ap" | sed -n 's/.*--to \([0-9a-f]*\).*/\1/p')" "$STABLE"
-has "E apply ok names the tools" "$out" "apply: ok — installed at ${STABLE:0:7} (hooks, commands, skills, settings"
-has "E daemons WARN" "$out" "daemons: WARN — not installed: no system LaunchDaemons com.claude-fleet.tester.* and no GUI session for tester"
-has "E WARN names the admin's command" "$out" "fleet-login-new.sh"
-has "E WARN names the doc" "$out" "docs/dev/SHARED-MACHINE.md"
-has "E WARN names the console path" "$out" "sign in once at the console"
-has "E WARN names the re-apply, ~-relative" "$out" "rm -f ~/.config/claude-fleet/global/bootstrap.applied ~/.config/claude-fleet/global/bootstrapped"
-hasnt "E no FAIL" "$out" "FAIL"
+st_has "E apply ok names the tools" "$out" "apply: ok — installed at ${STABLE:0:7} (hooks, commands, skills, settings"
+st_has "E daemons WARN" "$out" "daemons: WARN — not installed: no system LaunchDaemons com.claude-fleet.tester.* and no GUI session for tester"
+st_has "E WARN names the admin's command" "$out" "fleet-login-new.sh"
+st_has "E WARN names the doc" "$out" "docs/dev/SHARED-MACHINE.md"
+st_has "E WARN names the console path" "$out" "sign in once at the console"
+st_has "E WARN names the re-apply, ~-relative" "$out" "rm -f ~/.config/claude-fleet/global/bootstrap.applied ~/.config/claude-fleet/global/bootstrapped"
+st_hasnt "E no FAIL" "$out" "FAIL"
 eq "E one daemons line" "$(printf '%s\n' "$out" | grep -c '^fleet-login-bootstrap: daemons: WARN')" 1
 eq "E apply line, then daemons line, then zshrc" \
   "$(printf '%s\n' "$out" | grep -oE '^fleet-login-bootstrap: (apply: ok|daemons: WARN|zshrc: ok)' | sed 's/^fleet-login-bootstrap: //' | tr '\n' '|')" "apply: ok|daemons: WARN|zshrc: ok|"
 eq "E applied stamp" "$(cat "$FLEET_CONF_DIR/global/bootstrap.applied" 2>/dev/null)" "$STABLE"
-[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "E: not marked done — the tools are in and the fleet is up"
+[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || st_miss "E: not marked done — the tools are in and the fleet is up"
 eq "E fleet up" "$(grep -c '^fleet-up.sh ' "$CALLS")" 1
 # the second login: nothing to do, the WARN is not a retry loop
 : > "$CALLS"
 out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=false boot); eq "E re-run rc" "$?" 0
-has "E re-run says done" "$out" "already bootstrapped"
+st_has "E re-run says done" "$out" "already bootstrapped"
 eq "E re-run nothing called" "$(cat "$CALLS")" ""
 # the printed re-apply: after a console sign-in (a gui domain now), the two
 # markers removed and one more login — apply runs again, this time with daemons
 rm -f "$FLEET_CONF_DIR/global/bootstrap.applied" "$FLEET_CONF_DIR/global/bootstrapped"
 out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=true boot); eq "E re-apply rc" "$?" 0
 eq "E re-apply: apply + doctor only" "$(awk '{print $1}' "$CALLS" | tr '\n' ' ')" "fleet-install-apply.sh fleet-doctor.sh "
-hasnt "E re-apply: with daemons" "$(grep '^fleet-install-apply.sh ' "$CALLS")" "--no-daemons"
-hasnt "E re-apply: no WARN" "$out" "daemons: WARN"
-[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "E: re-apply did not mark done"
+st_hasnt "E re-apply: with daemons" "$(grep '^fleet-install-apply.sh ' "$CALLS")" "--no-daemons"
+st_hasnt "E re-apply: no WARN" "$out" "daemons: WARN"
+[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || st_miss "E: re-apply did not mark done"
 # a gui domain from the start: the historic gui path — no flag, no WARN, plain apply line
 newhome "$WORK/e-gui"
 out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=true boot); eq "E gui rc" "$?" 0
-hasnt "E gui: apply without --no-daemons" "$(grep '^fleet-install-apply.sh ' "$CALLS")" "--no-daemons"
-hasnt "E gui: no WARN" "$out" "daemons: WARN"
-has "E gui: plain apply line" "$out" "apply: ok — installed at ${STABLE:0:7}"
-hasnt "E gui: no tools parenthesis" "$out" "(hooks, commands"
+st_hasnt "E gui: apply without --no-daemons" "$(grep '^fleet-install-apply.sh ' "$CALLS")" "--no-daemons"
+st_hasnt "E gui: no WARN" "$out" "daemons: WARN"
+st_has "E gui: plain apply line" "$out" "apply: ok — installed at ${STABLE:0:7}"
+st_hasnt "E gui: no tools parenthesis" "$out" "(hooks, commands"
 leg "E no GUI session, no system daemons → the tools install, the daemons are a WARN"
 
 # ---- E2. system-shape daemons installed by the admin (#1192): no GUI needed ----
 newhome "$WORK/e2"
 mkdir -p "$WORK/sysd" && : > "$WORK/sysd/com.claude-fleet.tester.spinner.plist"
 out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=false FLEET_INSTALL_DAEMON_DIR="$WORK/sysd" boot); eq "E2 rc" "$?" 0
-has "E2 says why" "$out" "apply: system LaunchDaemons com.claude-fleet.tester.* are installed — no GUI sign-in needed"
-hasnt "E2 no GUI complaint" "$out" "no GUI session"
-hasnt "E2 no daemons WARN (#1214 leaves this path as it was)" "$out" "daemons: WARN"
-hasnt "E2 apply in full, no --no-daemons" "$(grep '^fleet-install-apply.sh ' "$CALLS")" "--no-daemons"
-has "E2 plain apply line" "$out" "apply: ok — installed at ${STABLE:0:7}
+st_has "E2 says why" "$out" "apply: system LaunchDaemons com.claude-fleet.tester.* are installed — no GUI sign-in needed"
+st_hasnt "E2 no GUI complaint" "$out" "no GUI session"
+st_hasnt "E2 no daemons WARN (#1214 leaves this path as it was)" "$out" "daemons: WARN"
+st_hasnt "E2 apply in full, no --no-daemons" "$(grep '^fleet-install-apply.sh ' "$CALLS")" "--no-daemons"
+st_has "E2 plain apply line" "$out" "apply: ok — installed at ${STABLE:0:7}
 "
-grep -q '^fleet-install-apply.sh ' "$CALLS" || fail "E2: apply did not run"
+grep -q '^fleet-install-apply.sh ' "$CALLS" || st_miss "E2: apply did not run"
 eq "E2 applied stamp" "$(cat "$FLEET_CONF_DIR/global/bootstrap.applied" 2>/dev/null)" "$STABLE"
-[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "E2: not marked done"
+[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || st_miss "E2: not marked done"
 # another login's daemons do not count: the tools install, this login's daemons are the WARN
 newhome "$WORK/e3"
 mkdir -p "$WORK/sysd3" && : > "$WORK/sysd3/com.claude-fleet.someoneelse.spinner.plist"
 out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=false FLEET_INSTALL_DAEMON_DIR="$WORK/sysd3" boot); eq "E2 other login rc" "$?" 0
-has "E2 other login: --no-daemons" "$(grep '^fleet-install-apply.sh ' "$CALLS")" " --no-daemons"
-has "E2 other login: the WARN" "$out" "daemons: WARN — not installed: no system LaunchDaemons com.claude-fleet.tester.*"
-hasnt "E2 other login: not the admin's line" "$out" "are installed — no GUI sign-in needed"
+st_has "E2 other login: --no-daemons" "$(grep '^fleet-install-apply.sh ' "$CALLS")" " --no-daemons"
+st_has "E2 other login: the WARN" "$out" "daemons: WARN — not installed: no system LaunchDaemons com.claude-fleet.tester.*"
+st_hasnt "E2 other login: not the admin's line" "$out" "are installed — no GUI sign-in needed"
 leg "E2 system LaunchDaemons installed → apply runs in full without a GUI session"
 
 # ---- F. the PATH line; no login block any more (#2702) ----
 out=$(boot --print-zshrc 2>&1); eq "F --print-zshrc gone (rc 2)" "$?" 2
 pl=$(boot --print-path-line)
 eq "F path line is one line" "$(printf '%s\n' "$pl" | wc -l | tr -d ' ')" 1
-has "F path line exports the dir" "$pl" 'export PATH="$HOME/.local/bin:$PATH"'
+st_has "F path line exports the dir" "$pl" 'export PATH="$HOME/.local/bin:$PATH"'
 if command -v zsh >/dev/null 2>&1; then
-  printf '%s\n' "$pl" | zsh -n || fail "F: path line does not parse as zsh"
+  printf '%s\n' "$pl" | zsh -n || st_miss "F: path line does not parse as zsh"
   n=$(HOME=/h PATH=/usr/bin:/bin zsh -f -c "$pl
 $pl
 print -r -- \"\$PATH\"" 2>/dev/null | tr ':' '\n' | grep -cx /h/.local/bin)
@@ -304,20 +300,20 @@ leg "F --print-path-line; --print-zshrc gone"
 newhome "$WORK/g"
 mkdir -p "$WORK/g-bin"; printf '#!/bin/sh\necho elsewhere\n' > "$WORK/g-bin/claude"; chmod +x "$WORK/g-bin/claude"
 out=$(PATH="$WORK/g-bin:$PATH" boot); eq "G rc" "$?" 0
-has "G found, left alone" "$out" "claude: ok — $WORK/g-bin/claude"
-grep -q '^claude-install' "$CALLS" && fail "G: installed over a claude already on PATH"
-[ -e "$HOME/.local/bin/claude" ] && fail "G: a second claude dropped in ~/.local/bin"
+st_has "G found, left alone" "$out" "claude: ok — $WORK/g-bin/claude"
+grep -q '^claude-install' "$CALLS" && st_miss "G: installed over a claude already on PATH"
+[ -e "$HOME/.local/bin/claude" ] && st_miss "G: a second claude dropped in ~/.local/bin"
 newhome "$WORK/g2"
 out=$(CLAUDE_INSTALL_RC=7 boot); eq "G2 rc" "$?" 1
-has "G2 names the step" "$out" "claude: FAIL"
-has "G2 names the command" "$out" "$WORK/claude-install"
-[ -e "$FLEET_CONF_DIR/global/bootstrapped" ] && fail "G2: marked done without claude"
+st_has "G2 names the step" "$out" "claude: FAIL"
+st_has "G2 names the command" "$out" "$WORK/claude-install"
+[ -e "$FLEET_CONF_DIR/global/bootstrapped" ] && st_miss "G2: marked done without claude"
 eq "G2 the rest still ran" "$(grep -c '^fleet-up.sh ' "$CALLS")" 1
 : > "$CALLS"
 out=$(boot); eq "G2 re-run rc" "$?" 0
 eq "G2 re-run: claude + doctor only" "$(awk '{print $1}' "$CALLS" | tr '\n' ' ')" "claude-install fleet-doctor.sh "
-has "G2 re-run installed" "$out" "claude: ok — installed $HOME/.local/bin/claude"
-[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "G2: re-run did not mark done"
+st_has "G2 re-run installed" "$out" "claude: ok — installed $HOME/.local/bin/claude"
+[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || st_miss "G2: re-run did not mark done"
 leg "G claude: on PATH → nothing; failed install → retried alone"
 
 # ---- H. the PATH line: appended once, an older block left as it is (#1191, #2702) ----
@@ -327,12 +323,12 @@ old='# >>> claude-fleet (bin/fleet-login-bootstrap.sh, issue #1165) >>>
 # <<< claude-fleet <<<'
 { echo '# mine'; printf '%s\n' "$old"; } > "$HOME/.zshrc"        # an older login: the block, no PATH line
 out=$(boot); eq "H rc" "$?" 0
-has "H says so" "$out" "zshrc: ok — added the ~/.local/bin PATH line to ~/.zshrc"
+st_has "H says so" "$out" "zshrc: ok — added the ~/.local/bin PATH line to ~/.zshrc"
 eq "H = the old file, blank, the PATH line" "$(cat "$HOME/.zshrc")" "$(echo '# mine'; printf '%s\n\n' "$old"; boot --print-path-line)"
 newhome "$WORK/h2"
 echo 'export PATH="$HOME/.local/bin:$PATH"' > "$HOME/.zshrc"   # a line of the login's own
 out=$(boot); eq "H2 rc" "$?" 0
-has "H2 already" "$out" "zshrc: ok — ~/.zshrc already puts ~/.local/bin on PATH"
+st_has "H2 already" "$out" "zshrc: ok — ~/.zshrc already puts ~/.local/bin on PATH"
 eq "H2 file untouched" "$(cat "$HOME/.zshrc")" 'export PATH="$HOME/.local/bin:$PATH"'
 leg "H the PATH line, once; nothing else written"
 
@@ -342,7 +338,7 @@ mkdir -p "$HOME/.claude"
 printf '{"hasCompletedOnboarding":false,"theme":"light","mine":7}\n' > "$HOME/.claude.json"
 printf '{"permissions":{"allow":["Bash(my-command)"]},"mine":8}\n' > "$HOME/.claude/settings.json"
 out=$(boot); eq "I rc" "$?" 0
-python3 - "$HOME" "$BIN/../commands/fleet-onboard.md" "$BIN/fleet-onboard-defaults.py" <<'PY' || fail 'I values/rules or wizard coverage'
+python3 - "$HOME" "$BIN/../commands/fleet-onboard.md" "$BIN/fleet-onboard-defaults.py" <<'PY' || st_miss 'I values/rules or wizard coverage'
 import fnmatch, importlib.util, json, pathlib, re, sys
 home, md, module = map(pathlib.Path, sys.argv[1:])
 state = json.loads((home / '.claude.json').read_text())
@@ -385,9 +381,9 @@ mkdir -p "$WORK/j-claude"
 printf '#!/bin/sh\necho "9.9.9 (Claude Code)"\n' > "$WORK/j-claude/claude"; chmod +x "$WORK/j-claude/claude"
 out=$(FLEET_BOOTSTRAP_CACHE="$CC" "$BASH_BIN" "$BIN/fleet-bootstrap-cache.sh" refresh --claude "$WORK/j-claude/claude" 2>&1)
 eq "J refresh rc" "$?" 0
-has "J refresh: claude" "$out" "claude: 9.9.9"
-hasnt "J refresh: no claude-fleet half" "$out" "claude-fleet:"
-[ -e "$CC/claude-fleet.git" ] && fail "J: refresh still writes the retired claude-fleet mirror"
+st_has "J refresh: claude" "$out" "claude: 9.9.9"
+st_hasnt "J refresh: no claude-fleet half" "$out" "claude-fleet:"
+[ -e "$CC/claude-fleet.git" ] && st_miss "J: refresh still writes the retired claude-fleet mirror"
 eq "J claude current" "$(cat "$CC/claude/current")" 9.9.9
 newhome "$WORK/j"
 out=$(FLEET_BOOTSTRAP_CACHE="$CC" FLEET_CLAUDE_INSTALL_CMD='exit 9' boot); rc=$?
@@ -397,14 +393,14 @@ R="$HOME/.claude/fleet"
 eq "J install at stable" "$(git -C "$R" rev-parse HEAD)" "$STABLE"
 eq "J claude symlink" "$(readlink "$HOME/.local/bin/claude")" "$HOME/.local/share/claude/versions/9.9.9"
 eq "J claude runs" "$("$HOME/.local/bin/claude" --version)" "9.9.9 (Claude Code)"
-has "J claude line" "$out" "claude: installed 9.9.9 from $CC"
-grep -q '^claude-install' "$CALLS" && fail "J: the claude.ai installer ran"
-[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "J: not marked done"
+st_has "J claude line" "$out" "claude: installed 9.9.9 from $CC"
+grep -q '^claude-install' "$CALLS" && st_miss "J: the claude.ai installer ran"
+[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || st_miss "J: not marked done"
 # an empty cache dir: the installer, untouched
 mkdir -p "$WORK/cache-empty"; newhome "$WORK/j2"
 out=$(FLEET_BOOTSTRAP_CACHE="$WORK/cache-empty" boot); eq "J2 rc" "$?" 0
 eq "J2 installer ran once" "$(grep -c '^claude-install' "$CALLS")" 1
-hasnt "J2 no cache line" "$out" "from $WORK/cache-empty"
+st_hasnt "J2 no cache line" "$out" "from $WORK/cache-empty"
 leg "J the machine's Claude Code cache: no claude.ai; no claude-fleet mirror"
 
 # ---- K. a managed machine: the runtime, never a clone (#2775) ----
@@ -426,30 +422,30 @@ out=$(PATH="$WORK/k-bin:$PATH" FLEET_NODE_ROOT="$NR" FLEET_BOOTSTRAP_GIT_BASE="$
 eq "K rc" "$rc" 0
 eq "K never a git clone" "$(cat "$WORK/k-clone.log")" ""
 R="$HOME/.claude/fleet"
-[ -L "$R" ] || fail "K: ~/.claude/fleet is not a link to the runtime's current"
+[ -L "$R" ] || st_miss "K: ~/.claude/fleet is not a link to the runtime's current"
 eq "K ~/.claude/fleet → <runtime>/current (#4669)" "$(readlink "$R")" "$NR/current"
 eq "K it resolves to the release" "$(cd "$R" && pwd -P)" "$(cd "$NR/$STABLE" && pwd -P)"
-[ -e "$HOME/.claude/fleet.versions" ] && fail "K: a versions dir was made for the login"
-[ -d "$R/.git" ] && fail "K: the linked install has a .git"
-has "K install line" "$out" "install: ok — from the runtime: linked to this machine's runtime $NR/current → $STABLE"
+[ -e "$HOME/.claude/fleet.versions" ] && st_miss "K: a versions dir was made for the login"
+[ -d "$R/.git" ] && st_miss "K: the linked install has a .git"
+st_has "K install line" "$out" "install: ok — from the runtime: linked to this machine's runtime $NR/current → $STABLE"
 ap=$(grep '^fleet-install-apply.sh ' "$CALLS")
-has "K apply --tree-from" "$ap" "--tree-from $FLEET_CONF_DIR/global/.empty-tree"
-has "K apply --tree-to the linked tree" "$ap" "--tree-to $(cd "$R" && pwd -P) --root $R --from none --to $STABLE"
+st_has "K apply --tree-from" "$ap" "--tree-from $FLEET_CONF_DIR/global/.empty-tree"
+st_has "K apply --tree-to the linked tree" "$ap" "--tree-to $(cd "$R" && pwd -P) --root $R --from none --to $STABLE"
 eq "K applied stamp" "$(cat "$FLEET_CONF_DIR/global/bootstrap.applied" 2>/dev/null)" "$STABLE"
 S="$HOME/projects/claude-fleet"
 eq "K seed is one commit of the runtime's tree" "$(git -C "$S" log --format=%s 2>/dev/null)" "fleet-release: $STABLE (this machine's runtime)"
 eq "K seed on master" "$(git -C "$S" symbolic-ref --short HEAD 2>/dev/null)" master
 eq "K seed clean" "$(git -C "$S" status --porcelain 2>/dev/null)" ""
-[ -L "$S/bin/fleet-up.sh" ] && fail "K: the seed's files are links into the runtime"
+[ -L "$S/bin/fleet-up.sh" ] && st_miss "K: the seed's files are links into the runtime"
 eq "K seed tree = stable's tree" "$(git -C "$S" rev-parse 'HEAD^{tree}')" "$(git -C "$FX" rev-parse 'stable^{tree}')"
 eq "K seed origin names GitHub" "$(git -C "$S" remote get-url origin)" "$WORK/abroad-unreachable/verkyyi/claude-fleet.git"
 eq "K fleet-up once" "$(grep -c '^fleet-up.sh ' "$CALLS")" 1
 case "$(cat "$FLEET_CONF_DIR/global/bootstrap.timing" 2>/dev/null)" in
   *" source=runtime total="*" install="*" doctor="*) ;;
-  *) fail "K bootstrap.timing: [$(cat "$FLEET_CONF_DIR/global/bootstrap.timing" 2>/dev/null)]" ;;
+  *) st_miss "K bootstrap.timing: [$(cat "$FLEET_CONF_DIR/global/bootstrap.timing" 2>/dev/null)]" ;;
 esac
-[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "K: not marked done"
+[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || st_miss "K: not marked done"
 leg "K a managed machine: linked to the runtime, no clone anywhere, timed"
 
-[ "$FAILS" = 0 ] || { printf 'selftest FAIL: %s failure(s)\n' "$FAILS"; exit 1; }
+[ "$FAIL" = 0 ] || { printf 'selftest FAIL: %s failure(s)\n' "$FAIL"; exit 1; }
 printf 'selftest PASS: a new login sets itself up once, and only once — Claude Code included, the tools even without daemons (issues #1165, #1191, #1214) — bash %s\n' "$("$BASH_BIN" -c 'echo $BASH_VERSION')"

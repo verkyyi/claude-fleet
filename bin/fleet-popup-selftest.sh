@@ -25,9 +25,9 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { echo 'selftest: tmux not installed — SKIP' >&2; exit 0; }
+st_real_tmux
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fpop-selftest.XXXXXX")" || exit 2
 ISOCK="$WORK/in.sock"; OSOCK="$WORK/out.sock"
 cleanup() {
@@ -37,35 +37,34 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 export FLEET_UI_LANG=zh TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
 . "$BIN/fleet-ui-lang.sh"
 
 # --- B. only palette colours --------------------------------------------------
 pal=$(sed -n "s/^%hidden PAL_[A-Z]*='\(#[0-9a-fA-F]*\)'.*/\1/p" "$ROOT/conf/fleet-palette.conf" | tr 'A-F' 'a-f')
-[ -n "$pal" ] || fail "palette: conf/fleet-palette.conf read nothing"
+[ -n "$pal" ] || st_fail "palette: conf/fleet-palette.conf read nothing"
 used=$(bash -c '. "$1/fleet-popup-lib.sh"; fleet_fzf_opts; printf "%s\n" "$FLEET_FZF_OPTS"' _ "$BIN" \
   | grep -o '#[0-9a-fA-F]\{6\}' | tr 'A-F' 'a-f' | sort -u)
-[ -n "$used" ] || fail "palette: FLEET_FZF_OPTS names no colour"
+[ -n "$used" ] || st_fail "palette: FLEET_FZF_OPTS names no colour"
 for c in $used; do
-  printf '%s\n' "$pal" | grep -qxF "$c" || fail "palette: $c is not a conf/fleet-palette.conf colour"
+  printf '%s\n' "$pal" | grep -qxF "$c" || st_fail "palette: $c is not a conf/fleet-palette.conf colour"
 done
 for k in bg: fg: hl: fg+: bg+: hl+: prompt: pointer: header: border:; do
   case "$(bash -c '. "$1/fleet-popup-lib.sh"; fleet_fzf_opts; printf %s "$FLEET_FZF_OPTS"' _ "$BIN")" in
-    *"$k"*) ;; *) fail "palette: FLEET_FZF_OPTS leaves fzf's $k to fzf's default" ;;
+    *"$k"*) ;; *) st_fail "palette: FLEET_FZF_OPTS leaves fzf's $k to fzf's default" ;;
   esac
 done
 echo "ok: only palette colours — fzf and the menu frame"
 
 # --- C. key lines fit 54 columns ---------------------------------------------
 keys=$(grep -o '^ *zh:hint_[a-z_]*)' "$BIN/fleet-ui-lang.sh" | sed 's/^ *zh://; s/)$//')
-[ -n "$keys" ] || fail "fit: no hint_* strings in fleet-ui-lang.sh"
+[ -n "$keys" ] || st_fail "fit: no hint_* strings in fleet-ui-lang.sh"
 for k in $keys; do
   for l in zh en; do
     t=$(FLEET_UI_LANG=$l fleet_ui_t "$k")
-    [ "$t" != "$k" ] || fail "fit: $k has no $l text"
+    [ "$t" != "$k" ] || st_fail "fit: $k has no $l text"
     w=$(printf '%s' "$t" | python3 -c 'import sys,unicodedata as u; print(sum(2 if u.east_asian_width(c) in "WF" else 1 for c in sys.stdin.read()))')
-    [ "$w" -le 47 ] || fail "fit: $l $k is $w columns, > 47: $t"
+    [ "$w" -le 47 ] || st_fail "fit: $l $k is $w columns, > 47: $t"
   done
 done
 echo "ok: every key line fits a 54-column popup ($(printf '%s ' $keys))"
@@ -73,22 +72,22 @@ echo "ok: every key line fits a 54-column popup ($(printf '%s ' $keys))"
 # --- D. wired ------------------------------------------------------------------
 # (usage-modal.sh opens no picker since T550: fleet-alerts.sh is the one left)
 f=fleet-alerts.sh
-grep -q 'fleet_fzf_hint ' "$BIN/$f" || fail "wired: $f does not take its key line from fleet_fzf_hint"
+grep -q 'fleet_fzf_hint ' "$BIN/$f" || st_fail "wired: $f does not take its key line from fleet_fzf_hint"
 grep -n -- '--border=rounded' "$BIN/$f" | grep -v 'FZF_FRAME=' | grep -qv '^[0-9]*:[[:space:]]*#' \
-  && fail "wired: $f draws its own border inside the popup's"
+  && st_fail "wired: $f draws its own border inside the popup's"
 echo "ok: wired — hints and frames (the node conf opens none, #1714: conf/gone.list)"
 
 # --- A. 54 columns, for real ---------------------------------------------------
 T() { "$REAL_TMUX" -S "$ISOCK" "$@"; }
-T -f /dev/null new-session -d -s ev -x 54 -y 50 'sleep 600' || fail "54: no isolated server"
+T -f /dev/null new-session -d -s ev -x 54 -y 50 'sleep 600' || st_fail "54: no isolated server"
 T set -g status off
 "$REAL_TMUX" -S "$OSOCK" -f /dev/null new-session -d -s o -x 54 -y 50 \
-  "env -u TMUX '$REAL_TMUX' -S '$ISOCK' attach -t ev" || fail "54: no outer server"
+  "env -u TMUX '$REAL_TMUX' -S '$ISOCK' attach -t ev" || st_fail "54: no outer server"
 "$REAL_TMUX" -S "$OSOCK" set -g status off
 cl=''
 for _ in $(seq 1 50); do cl=$(T list-clients -F '#{client_name}' 2>/dev/null | head -1); [ -n "$cl" ] && break; sleep 0.1; done
-[ -n "$cl" ] || fail "54: the client never attached"
-[ "$(T display-message -p -c "$cl" '#{client_width}')" = 54 ] || fail "54: the client is not 54 columns"
+[ -n "$cl" ] || st_fail "54: the client never attached"
+[ "$(T display-message -p -c "$cl" '#{client_width}')" = 54 ] || st_fail "54: the client is not 54 columns"
 export TMUX="$ISOCK,$$,0" TMUX_PANE
 TMUX_PANE=$(T list-panes -t ev -F '#{pane_id}' | head -1)
 # the hub on: the sidebar's cache names this machine, so titles are their longest
@@ -116,12 +115,12 @@ for spec in popup_usage:M popup_alerts:M; do
   key=${spec%:*}; title="$(fleet_ui_t "$key") · mac-b"
   WANT_LAST='' open_popup "$key" "${spec#*:}" sh -c "$hold"
   top=$(printf '%s\n' "$SHOT" | grep -m1 '╭')
-  [ -n "$top" ] || fail "54: $key drew no rounded border: $(printf '%s' "$SHOT" | head -3)"
-  case "$top" in *"╭"*"─ $title ─"*"╮"*) ;; *) fail "54: $key's title is not whole on the border: [$top]" ;; esac
+  [ -n "$top" ] || st_fail "54: $key drew no rounded border: $(printf '%s' "$SHOT" | head -3)"
+  case "$top" in *"╭"*"─ $title ─"*"╮"*) ;; *) st_fail "54: $key's title is not whole on the border: [$top]" ;; esac
   # 96% of 54 = 51 columns wide, border to border
   inner=${top#*╭}; inner=${inner%╮*}
   w=$(printf '%s' "$inner" | python3 -c 'import sys,unicodedata as u; print(sum(2 if u.east_asian_width(c) in "WF" else 1 for c in sys.stdin.read()))')
-  [ "$w" -ge 47 ] || fail "54: $key is $((w + 2)) columns wide, not the narrow 96%: [$top]"
+  [ "$w" -ge 47 ] || st_fail "54: $key is $((w + 2)) columns wide, not the narrow 96%: [$top]"
 done
 echo "ok: 54 columns — two popups, rounded, 96%, every title whole"
 
@@ -129,7 +128,7 @@ if command -v fzf >/dev/null 2>&1; then
   hint=$(fleet_ui_t hint_alerts)
   body=". '$BIN/fleet-popup-lib.sh'; fleet_fzf_hint '$hint'; printf 'a\nb\n' | fzf --layout=reverse \"\${FZF_HINT[@]}\" & p=\$!; $hold; kill \$p"
   WANT_LAST="$hint" open_popup popup_alerts M bash -c "$body"
-  printf '%s\n' "$SHOT" | grep -qF -- "$hint" || fail "54: the alerts key line is not whole: $(printf '%s\n' "$SHOT" | grep '│' | tail -3)"
+  printf '%s\n' "$SHOT" | grep -qF -- "$hint" || st_fail "54: the alerts key line is not whole: $(printf '%s\n' "$SHOT" | grep '│' | tail -3)"
   echo "ok: 54 columns — the key line is whole at the bottom"
 else
   echo "skip: no fzf — the key-line leg"

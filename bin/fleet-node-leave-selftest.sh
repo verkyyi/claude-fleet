@@ -8,6 +8,7 @@
 # nothing local changes.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/node-leave-selftest.XXXXXX") || exit 2
 trap 'rm -rf "${WORK:?}"' EXIT INT TERM HUP
 H="$WORK/home"; CONF="$H/.config/claude-fleet"; LOG="$WORK/calls.log"
@@ -32,7 +33,7 @@ done
 printf '#!/bin/sh\nprintf "sudo %%s\\n" "$*" >> "$FAKE_LOG"\nexec "$@"\n' > "$WORK/shim/sudo"
 chmod +x "$WORK/shim/"*
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -f "$WORK/out" ] && cat "$WORK/out" >&2; exit 1; }
+fail() { [ ! -f "$WORK/out" ] || cat "$WORK/out" >&2; st_fail "$1"; }
 has() { grep -aFq -- "$2" "$1" || fail "$3"; }
 not_has() { ! grep -aFq -- "$2" "$1" || fail "$3"; }
 fixture() {

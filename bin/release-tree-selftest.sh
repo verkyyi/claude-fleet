@@ -25,9 +25,7 @@ BIN=$(cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(cd -- "$BIN/.." && pwd)
 LIST="$ROOT/conf/release-tree.list"
 st_sandbox "${TMPDIR:-/tmp}/release-tree-st.XXXXXX"
-fails=0
-pass() { echo "PASS  $*"; }
-fail() { echo "FAIL  $*"; fails=$((fails + 1)); }
+FAIL=0
 
 [ -f "$LIST" ] || { echo "FAIL  no $LIST"; exit 1; }
 
@@ -82,29 +80,27 @@ lint() {
 n=$(cut -d' ' -f1 "$WORK/reads" | sort -u | grep -cxFf "$WORK/top")
 lint "$LIST" > "$WORK/miss"
 if [ -s "$WORK/miss" ]; then
-  fail "A conf/release-tree.list leaves out what bin/ reads — add it to the list:"
+  st_miss "A conf/release-tree.list leaves out what bin/ reads — add it to the list:"
   sed 's/^/        /' "$WORK/miss"
 else
-  pass "A conf/release-tree.list covers every top-level item bin/ reads ($n items)"
+  st_ok_all "A conf/release-tree.list covers every top-level item bin/ reads ($n items)"
 fi
 
 # B
 for it in .claude-plugin extras bin conf hooks mod; do
-  covered "$LIST" "$it" 1 || fail "B $it/ is not in the list"
+  covered "$LIST" "$it" 1 || st_miss "B $it/ is not in the list"
 done
 for it in tokenledger deploy .github; do
-  covered "$LIST" "$it" 1 && fail "B $it/ is in the list (never shipped)"
+  covered "$LIST" "$it" 1 && st_miss "B $it/ is in the list (never shipped)"
 done
-[ "$fails" -eq 0 ] && pass "B .claude-plugin/ extras/ shipped; tokenledger/ deploy/ .github/ not"
+[ "$FAIL" -eq 0 ] && st_ok_all "B .claude-plugin/ extras/ shipped; tokenledger/ deploy/ .github/ not"
 
 # C: a list without extras/ must red
 grep -v '^extras/' "$LIST" > "$WORK/drop.list"
 if grep -q '^extras$' "$WORK/top" && grep -q '^extras ' "$WORK/reads" && lint "$WORK/drop.list" | grep -q '^extras '; then
-  pass "C a list that drops extras/ is caught"
+  st_ok_all "C a list that drops extras/ is caught"
 else
-  fail "C the lint did not catch a list without extras/"
+  st_miss "C the lint did not catch a list without extras/"
 fi
 
-[ "$fails" -eq 0 ] && { echo "release-tree-selftest: OK"; exit 0; }
-echo "release-tree-selftest: $fails failure(s)"
-exit 1
+st_done

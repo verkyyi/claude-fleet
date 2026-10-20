@@ -23,8 +23,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 SPINNER="$BIN/tmux-spinner.sh"
-command -v tmux >/dev/null 2>&1 || { echo 'selftest: tmux not installed — SKIP' >&2; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo 'selftest: python3 not installed — SKIP' >&2; exit 0; }
+st_need tmux python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/degen.XXXXXX")" || exit 2
 export TMUX_TMPDIR="$WORK/t"; mkdir -p "$TMUX_TMPDIR"
@@ -35,9 +34,8 @@ fx_repo "$FLEET_CONF_DIR" "$LBL" acme/degen
 trap 'tmux -L "$LBL" kill-server 2>/dev/null; rm -rf "$WORK"' EXIT
 TM() { tmux -L "$LBL" "$@"; }
 
-FAIL=0 CHECKS=0
-fail() { CHECKS=$((CHECKS + 1)); FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '      %s\n' "$2" >&2; }
-check() { if eval "$1"; then st_count; else fail "$2" "${3:-}"; fi; }
+st_tally
+check() { if eval "$1"; then st_count; else st_miss "$2" "${3:-}"; fi; }
 
 # --- A: the detector ------------------------------------------------------------
 det() { bash "$BIN/fleet-degenerate.sh" --detect >/dev/null 2>&1; }
@@ -96,7 +94,7 @@ touch "$WORK/keys-br" "$WORK/keys-table" "$WORK/keys-idle"
 
 i=0
 until [ "$(TM capture-pane -p -t w-br | grep -c '<br><br>')" -ge 20 ] && TM capture-pane -p -t w-table | grep -q '└'; do
-  i=$((i + 1)); [ "$i" -lt 100 ] || { fail 'fixture: the fake panes never filled'; break; }; sleep 0.1
+  i=$((i + 1)); [ "$i" -lt 100 ] || { st_miss 'fixture: the fake panes never filled'; break; }; sleep 0.1
 done
 
 STRIKE_F="$BIN/../logs/.degenerate-strikes"
@@ -144,5 +142,4 @@ check '[ -n "$dflt" ] && [ $(( dflt * 2 )) -le 60 ]' 'E: two default sweeps must
 grep -q 'degen_check=self.degen_secs' "$BIN/tmux-spinner.py"; check '[ $? = 0 ]' 'E: the loop schedules degen_check'
 
 rm -f "$STRIKE_F"
-if [ "$FAIL" -gt 0 ]; then printf 'fleet-degenerate-selftest: %d/%d FAILED\n' "$FAIL" "$CHECKS"; exit 1; fi
-printf 'fleet-degenerate-selftest: %d checks passed\n' "$CHECKS"
+st_done

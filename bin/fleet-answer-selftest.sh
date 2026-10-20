@@ -81,7 +81,6 @@ INJECT="$WORK/inject.log"
 STEP="$WORK/step"
 PANE='%7'
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '  got: %s\n' "$2" >&2; exit 1; }
 
 # --- fake tmux ---------------------------------------------------------------
 # send-keys      → append the args to INJECT, advance STEP, maybe append the result
@@ -188,18 +187,18 @@ inject_count() { awk 'NF' "$INJECT" 2>/dev/null | wc -l | tr -d ' '; }
 nothing_sent() { [ "$(inject_count)" = "0" ]; }
 
 # ============================ USAGE =========================================
-run >/dev/null 2>&1;                    [ $? = 2 ] || fail "no args must exit 2"
-run --show >/dev/null 2>&1;             [ $? = 2 ] || fail "--show without a target must exit 2"
+run >/dev/null 2>&1;                    [ $? = 2 ] || st_fail "no args must exit 2"
+run --show >/dev/null 2>&1;             [ $? = 2 ] || st_fail "--show without a target must exit 2"
 T="$WORK/t-single.jsonl"; mk_transcript "$T" "$Q_SINGLE"
 clear_screens; printf '%s\n' "$SCR_SINGLE" | screen 0
 run --answer "$PANE" --transcript "$T" 'x' >/dev/null 2>&1
-[ $? = 2 ] || fail "a non-numeric pick must exit 2"
-nothing_sent || fail "a malformed pick must send nothing" "$(injected)"
+[ $? = 2 ] || st_fail "a non-numeric pick must exit 2"
+nothing_sent || st_fail "a malformed pick must send nothing" "$(injected)"
 run --answer "$PANE" --transcript "$T" 9 >/dev/null 2>&1
-[ $? = 2 ] || fail "a pick past the option count must exit 2"
-nothing_sent || fail "an out-of-range pick must send nothing" "$(injected)"
+[ $? = 2 ] || st_fail "a pick past the option count must exit 2"
+nothing_sent || st_fail "an out-of-range pick must send nothing" "$(injected)"
 run --answer "$PANE" --transcript "$T" 1 2 >/dev/null 2>&1
-[ $? = 2 ] || fail "more picks than questions must exit 2"
+[ $? = 2 ] || st_fail "more picks than questions must exit 2"
 printf 'selftest: USAGE legs PASS (no verb/target · non-numeric · out-of-range · pick arity — nothing sent)\n' >&2
 
 # ============================ NO-PENDING ====================================
@@ -208,25 +207,25 @@ TA="$WORK/t-answered.jsonl"; mk_transcript "$TA" "$Q_SINGLE"
 result_line 'Your questions have been answered: "Should the button be red or blue?"="Blue".' >> "$TA"
 clear_screens; printf '%s\n' "$SCR_IDLE" | screen 0
 run --show "$PANE" --transcript "$TA" >/dev/null 2>&1
-[ $? = 1 ] || fail "--show on an answered question must exit 1"
+[ $? = 1 ] || st_fail "--show on an answered question must exit 1"
 run --answer "$PANE" --transcript "$TA" 1 >/dev/null 2>&1
-[ $? = 1 ] || fail "--answer on an answered question must exit 1"
-nothing_sent || fail "NO-PENDING must send nothing — a needs pane may hold a permission prompt" "$(injected)"
+[ $? = 1 ] || st_fail "--answer on an answered question must exit 1"
+nothing_sent || st_fail "NO-PENDING must send nothing — a needs pane may hold a permission prompt" "$(injected)"
 TE="$WORK/t-empty.jsonl"; : > "$TE"
 run --answer "$PANE" --transcript "$TE" 1 >/dev/null 2>&1
-[ $? = 1 ] || fail "--answer with no AskUserQuestion at all must exit 1"
-nothing_sent || fail "an empty transcript must send nothing" "$(injected)"
+[ $? = 1 ] || st_fail "--answer with no AskUserQuestion at all must exit 1"
+nothing_sent || st_fail "an empty transcript must send nothing" "$(injected)"
 printf 'selftest: NO-PENDING legs PASS (answered / absent → exit 1, ZERO keystrokes)\n' >&2
 
 # ============================ SHOW ==========================================
 clear_screens; printf '%s\n' "$SCR_SINGLE" | screen 0
-out=$(run --show "$PANE" --transcript "$T" 2>&1) || fail "--show on a pending question must exit 0" "$out"
-case "$out" in *'Button color'*) : ;; *) fail "--show must print the header" "$out" ;; esac
-case "$out" in *'Should the button be red or blue?'*) : ;; *) fail "--show must print the question" "$out" ;; esac
-case "$out" in *Red*) : ;; *) fail "--show must print the option labels" "$out" ;; esac
-case "$out" in *'2'*Blue*) : ;; *) fail "--show must number the options" "$out" ;; esac
-nothing_sent || fail "--show must never send a keystroke" "$(injected)"
-js=$(run --show "$PANE" --transcript "$T" --json 2>&1) || fail "--show --json must exit 0" "$js"
+out=$(run --show "$PANE" --transcript "$T" 2>&1) || st_fail "--show on a pending question must exit 0" "$out"
+case "$out" in *'Button color'*) : ;; *) st_fail "--show must print the header" "$out" ;; esac
+case "$out" in *'Should the button be red or blue?'*) : ;; *) st_fail "--show must print the question" "$out" ;; esac
+case "$out" in *Red*) : ;; *) st_fail "--show must print the option labels" "$out" ;; esac
+case "$out" in *'2'*Blue*) : ;; *) st_fail "--show must number the options" "$out" ;; esac
+nothing_sent || st_fail "--show must never send a keystroke" "$(injected)"
+js=$(run --show "$PANE" --transcript "$T" --json 2>&1) || st_fail "--show --json must exit 0" "$js"
 printf '%s' "$js" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
@@ -235,7 +234,7 @@ assert len(qs)==1, qs
 assert qs[0]["header"]=="Button color", qs
 assert [o["label"] for o in qs[0]["options"]]==["Red","Blue"], qs
 assert qs[0]["multiSelect"] is False, qs
-' || fail "--show --json must emit the parsed questions" "$js"
+' || st_fail "--show --json must emit the parsed questions" "$js"
 printf 'selftest: SHOW legs PASS (header · question · numbered labels · --json parses; no keystrokes)\n' >&2
 
 # ============================ LABEL-GATE ====================================
@@ -247,8 +246,8 @@ clear_screens; printf '%s\n' 'Do you want to proceed?
 
 Enter to select · Esc to cancel' | screen 0
 run --answer "$PANE" --transcript "$T" 2 >/dev/null 2>&1
-[ $? = 3 ] || fail "a screen without the chosen label must exit 3"
-nothing_sent || fail "LABEL-GATE must send nothing — never answer a dialog we cannot see" "$(injected)"
+[ $? = 3 ] || st_fail "a screen without the chosen label must exit 3"
+nothing_sent || st_fail "LABEL-GATE must send nothing — never answer a dialog we cannot see" "$(injected)"
 printf 'selftest: LABEL-GATE leg PASS (chosen label absent from the screen → exit 3, ZERO keystrokes)\n' >&2
 
 # ============================ SINGLE ========================================
@@ -258,11 +257,11 @@ clear_screens; printf '%s\n' "$SCR_SINGLE" | screen 0; printf '%s\n' "$SCR_IDLE"
 FAKE_TRANSCRIPT="$TS" FAKE_RESULT_AT_STEP=1 \
 FAKE_RESULT_LINE="$(result_line 'Your questions have been answered: "Should the button be red or blue?"="Blue".')" \
   run --answer "$PANE" --transcript "$TS" 2 >"$WORK/out.txt" 2>&1 \
-  || fail "single-select answer must exit 0" "$(cat "$WORK/out.txt")"
-[ "$(inject_count)" = "1" ] || fail "single-select must send EXACTLY one keystroke (the digit)" "$(injected)"
-case "$(injected)" in *' 2'*) : ;; *) fail "single-select must send the digit for the chosen label" "$(injected)" ;; esac
-case "$(injected)" in *Enter*) fail "single-select must NOT send Enter (the digit submits)" "$(injected)" ;; esac
-case "$(cat "$WORK/out.txt")" in *Blue*) : ;; *) fail "the recorded answer must be echoed" "$(cat "$WORK/out.txt")" ;; esac
+  || st_fail "single-select answer must exit 0" "$(cat "$WORK/out.txt")"
+[ "$(inject_count)" = "1" ] || st_fail "single-select must send EXACTLY one keystroke (the digit)" "$(injected)"
+case "$(injected)" in *' 2'*) : ;; *) st_fail "single-select must send the digit for the chosen label" "$(injected)" ;; esac
+case "$(injected)" in *Enter*) st_fail "single-select must NOT send Enter (the digit submits)" "$(injected)" ;; esac
+case "$(cat "$WORK/out.txt")" in *Blue*) : ;; *) st_fail "the recorded answer must be echoed" "$(cat "$WORK/out.txt")" ;; esac
 printf 'selftest: SINGLE leg PASS (one digit, no Enter, answer echoed from the transcript)\n' >&2
 
 # ============================ MULTISELECT ===================================
@@ -293,14 +292,14 @@ printf '%s\n' "$SCR_IDLE" | screen 7   # Enter → submitted
 FAKE_TRANSCRIPT="$TM" FAKE_RESULT_AT_STEP=7 \
 FAKE_RESULT_LINE="$(result_line 'Your questions have been answered: "Which colors?"="Red, Blue".')" \
   run --answer "$PANE" --transcript "$TM" '1,3' >"$WORK/out.txt" 2>&1 \
-  || fail "multiSelect answer must exit 0" "$(cat "$WORK/out.txt")"
+  || st_fail "multiSelect answer must exit 0" "$(cat "$WORK/out.txt")"
 inj=$(injected)
 [ "$(printf '%s\n' "$inj" | grep -c 'Down')" = "4" ] \
-  || fail "multiSelect must walk Down until the cursor sits on Submit (4 here)" "$inj"
-[ "$(printf '%s\n' "$inj" | grep -c 'Enter')" = "1" ] || fail "multiSelect must send exactly one Enter" "$inj"
-printf '%s\n' "$inj" | head -2 | grep -q ' 1' || fail "multiSelect must toggle the first pick" "$inj"
-printf '%s\n' "$inj" | head -2 | grep -q ' 3' || fail "multiSelect must toggle the second pick" "$inj"
-printf '%s\n' "$inj" | tail -1 | grep -q 'Enter' || fail "Enter must come LAST" "$inj"
+  || st_fail "multiSelect must walk Down until the cursor sits on Submit (4 here)" "$inj"
+[ "$(printf '%s\n' "$inj" | grep -c 'Enter')" = "1" ] || st_fail "multiSelect must send exactly one Enter" "$inj"
+printf '%s\n' "$inj" | head -2 | grep -q ' 1' || st_fail "multiSelect must toggle the first pick" "$inj"
+printf '%s\n' "$inj" | head -2 | grep -q ' 3' || st_fail "multiSelect must toggle the second pick" "$inj"
+printf '%s\n' "$inj" | tail -1 | grep -q 'Enter' || st_fail "Enter must come LAST" "$inj"
 printf 'selftest: MULTISELECT leg PASS (digit per pick · Down to Submit read off the SCREEN · one trailing Enter)\n' >&2
 
 # ============================ PARTIAL-SEND ==================================
@@ -313,8 +312,8 @@ clear_screens
 { printf '☐ Colors\n\nWhich colors?\n\n❯ 1. [ ] Red\n  2. [ ] Green\n     Submit\n\nEnter to select · Esc to cancel\n'; } | screen 0
 { printf '☐ Colors\n\nWhich colors?\n\n❯ 1. [✔] Red\n  2. [ ] Green\n     Submit\n\nEnter to select · Esc to cancel\n'; } | screen 1
 out=$(run --answer "$PANE" --transcript "$TP" '1,3' 2>&1); rc=$?
-[ "$rc" = 4 ] || fail "a pick missing AFTER a keystroke already went out must exit 4 (got $rc)" "$out"
-[ "$(inject_count)" = "1" ] || fail "PARTIAL-SEND must have delivered exactly the first toggle" "$(injected)"
+[ "$rc" = 4 ] || st_fail "a pick missing AFTER a keystroke already went out must exit 4 (got $rc)" "$out"
+[ "$(inject_count)" = "1" ] || st_fail "PARTIAL-SEND must have delivered exactly the first toggle" "$(injected)"
 printf 'selftest: PARTIAL-SEND leg PASS (label missing after the first toggle → exit 4, not 3)\n' >&2
 
 # ============================ MULTIQUESTION =================================
@@ -332,13 +331,13 @@ printf '%s\n' "$SCR_IDLE" | screen 8
 FAKE_TRANSCRIPT="$TT" FAKE_RESULT_AT_STEP=8 \
 FAKE_RESULT_LINE="$(result_line 'Your questions have been answered: "Which fruit?"="Apple", "Which colors?"="Green".')" \
   run --answer "$PANE" --transcript "$TT" 1 2 >"$WORK/out.txt" 2>&1 \
-  || fail "two-question answer must exit 0" "$(cat "$WORK/out.txt")"
+  || st_fail "two-question answer must exit 0" "$(cat "$WORK/out.txt")"
 inj=$(injected)
-printf '%s\n' "$inj" | head -1 | grep -q ' 1' || fail "question 1's pick must go first" "$inj"
-printf '%s\n' "$inj" | grep -q 'Down' || fail "the multiSelect tab must still walk to Submit" "$inj"
+printf '%s\n' "$inj" | head -1 | grep -q ' 1' || st_fail "question 1's pick must go first" "$inj"
+printf '%s\n' "$inj" | grep -q 'Down' || st_fail "the multiSelect tab must still walk to Submit" "$inj"
 printf '%s\n' "$inj" | tail -1 | grep -q ' 1' \
-  || fail "the review screen's 'Submit answers' digit must come last" "$inj"
-case "$(cat "$WORK/out.txt")" in *Apple*) : ;; *) fail "both recorded answers must be echoed" "$(cat "$WORK/out.txt")" ;; esac
+  || st_fail "the review screen's 'Submit answers' digit must come last" "$inj"
+case "$(cat "$WORK/out.txt")" in *Apple*) : ;; *) st_fail "both recorded answers must be echoed" "$(cat "$WORK/out.txt")" ;; esac
 printf 'selftest: MULTIQUESTION leg PASS (pick per tab in order · review screen submitted · answers echoed)\n' >&2
 
 # ============================ WRAPPED =======================================
@@ -378,9 +377,9 @@ for pick in 3 4; do
   FAKE_TRANSCRIPT="$TW" FAKE_RESULT_AT_STEP=1 \
   FAKE_RESULT_LINE="$(result_line 'Your questions have been answered.')" \
     run --answer "$PANE" --transcript "$TW" "$pick" >"$WORK/out.txt" 2>&1 \
-    || fail "a wrapped dialog must still answer (pick $pick)" "$(cat "$WORK/out.txt")"
-  [ "$(inject_count)" = "1" ] || fail "pick $pick on a wrapped dialog must send exactly one digit" "$(injected)"
-  case "$(injected)" in *" $pick"*) : ;; *) fail "pick $pick must resolve to the digit its WRAPPED row shows" "$(injected)" ;; esac
+    || st_fail "a wrapped dialog must still answer (pick $pick)" "$(cat "$WORK/out.txt")"
+  [ "$(inject_count)" = "1" ] || st_fail "pick $pick on a wrapped dialog must send exactly one digit" "$(injected)"
+  case "$(injected)" in *" $pick"*) : ;; *) st_fail "pick $pick must resolve to the digit its WRAPPED row shows" "$(injected)" ;; esac
 done
 
 # …and the gate still refuses when the label genuinely is not there: whitespace is
@@ -391,8 +390,8 @@ clear_screens; printf '%s\n' 'Do you want to proceed?
 ❯ 1. Yes
   2. No' | screen 0
 run --answer "$PANE" --transcript "$TWX" 3 >/dev/null 2>&1
-[ $? = 3 ] || fail "a wrap-tolerant gate must still refuse a dialog that is not ours"
-nothing_sent || fail "the wrap-tolerant gate must still send nothing when it refuses" "$(injected)"
+[ $? = 3 ] || st_fail "a wrap-tolerant gate must still refuse a dialog that is not ours"
+nothing_sent || st_fail "the wrap-tolerant gate must still send nothing when it refuses" "$(injected)"
 printf 'selftest: WRAPPED legs PASS (CJK + Latin wrapped labels and a wrapped question resolve; a foreign dialog still refuses)\n' >&2
 
 # ============================ ENTER-VARIANT =================================
@@ -406,11 +405,11 @@ clear_screens; wrap_screen 1 0; wrap_screen 3 1; printf '%s\n' "$SCR_IDLE" | scr
 FAKE_TRANSCRIPT="$TEV" FAKE_RESULT_AT_STEP=2 \
 FAKE_RESULT_LINE="$(result_line 'Your questions have been answered.')" \
   run --answer "$PANE" --transcript "$TEV" 3 >"$WORK/out.txt" 2>&1 \
-  || fail "a digit-only-moves TUI must still answer" "$(cat "$WORK/out.txt")"
+  || st_fail "a digit-only-moves TUI must still answer" "$(cat "$WORK/out.txt")"
 inj=$(injected)
-[ "$(inject_count)" = "2" ] || fail "the Enter variant must send the digit and ONE Enter" "$inj"
-printf '%s\n' "$inj" | head -1 | grep -q ' 3' || fail "the digit must go first" "$inj"
-printf '%s\n' "$inj" | tail -1 | grep -q 'Enter' || fail "Enter must come last" "$inj"
+[ "$(inject_count)" = "2" ] || st_fail "the Enter variant must send the digit and ONE Enter" "$inj"
+printf '%s\n' "$inj" | head -1 | grep -q ' 3' || st_fail "the digit must go first" "$inj"
+printf '%s\n' "$inj" | tail -1 | grep -q 'Enter' || st_fail "Enter must come last" "$inj"
 
 # A cursor that never settles on the chosen row is NOT an invitation to press Enter:
 # the dialog is left open and a human is told, because Enter at a row we did not read
@@ -418,9 +417,9 @@ printf '%s\n' "$inj" | tail -1 | grep -q 'Enter' || fail "Enter must come last" 
 TEX="$WORK/t-enterstuck.jsonl"; mk_transcript "$TEX" "$Q_WRAP"
 clear_screens; wrap_screen 1 0; wrap_screen 1 1
 out=$(run --answer "$PANE" --transcript "$TEX" 3 2>&1); rc=$?
-[ "$rc" = 4 ] || fail "a dialog that neither closed nor moved the cursor must exit 4 (got $rc)" "$out"
-[ "$(inject_count)" = "1" ] || fail "that case must have sent the digit and NOTHING else" "$(injected)"
-case "$(injected)" in *Enter*) fail "Enter must never be sent at an unverified row" "$(injected)" ;; esac
+[ "$rc" = 4 ] || st_fail "a dialog that neither closed nor moved the cursor must exit 4 (got $rc)" "$out"
+[ "$(inject_count)" = "1" ] || st_fail "that case must have sent the digit and NOTHING else" "$(injected)"
+case "$(injected)" in *Enter*) st_fail "Enter must never be sent at an unverified row" "$(injected)" ;; esac
 printf 'selftest: ENTER-VARIANT legs PASS (digit-only-moves → one verified Enter · cursor never settles → exit 4, no Enter)\n' >&2
 
 # ============================ SCROLLED ======================================
@@ -455,17 +454,17 @@ clear_screens; scroll_screen 0; printf '%s\n' "$SCR_IDLE" | screen 1
 FAKE_TRANSCRIPT="$TSC" FAKE_RESULT_AT_STEP=1 \
 FAKE_RESULT_LINE="$(result_line 'Your questions have been answered.')" \
   run --answer "$PANE" --transcript "$TSC" 2 >"$WORK/out.txt" 2>&1 \
-  || fail "a question scrolled off the top must still answer (#702)" "$(cat "$WORK/out.txt")"
-[ "$(inject_count)" = "1" ] || fail "the scrolled dialog must send exactly one digit" "$(injected)"
-case "$(injected)" in *' 2'*) : ;; *) fail "the scrolled dialog must send the digit its ROW shows" "$(injected)" ;; esac
+  || st_fail "a question scrolled off the top must still answer (#702)" "$(cat "$WORK/out.txt")"
+[ "$(inject_count)" = "1" ] || st_fail "the scrolled dialog must send exactly one digit" "$(injected)"
+case "$(injected)" in *' 2'*) : ;; *) st_fail "the scrolled dialog must send the digit its ROW shows" "$(injected)" ;; esac
 
 # …and the gate is still a gate: the CHOSEN row is off the top as well → refuse.
 TSX="$WORK/t-scroll-x.jsonl"; mk_transcript "$TSX" "$Q_SCROLL"
 clear_screens; scroll_screen 0
 out=$(TMO=1 run --answer "$PANE" --transcript "$TSX" 1 2>&1); rc=$?
-[ "$rc" = 3 ] || fail "a chosen row that is off the screen must exit 3 (got $rc)" "$out"
-nothing_sent || fail "an off-screen chosen row must send NOTHING" "$(injected)"
-case "$out" in *'照 issue 原样'*) : ;; *) fail "the refusal must name the ROW it could not find" "$out" ;; esac
+[ "$rc" = 3 ] || st_fail "a chosen row that is off the screen must exit 3 (got $rc)" "$out"
+nothing_sent || st_fail "an off-screen chosen row must send NOTHING" "$(injected)"
+case "$out" in *'照 issue 原样'*) : ;; *) st_fail "the refusal must name the ROW it could not find" "$out" ;; esac
 printf 'selftest: SCROLLED legs PASS (question off the top → answered by row · chosen row off the top → exit 3, ZERO keystrokes)\n' >&2
 
 # ============================ PREVIEW-PANEL =================================
@@ -500,9 +499,9 @@ for pick in 1 2 3; do
   FAKE_TRANSCRIPT="$TPP" FAKE_RESULT_AT_STEP=1 \
   FAKE_RESULT_LINE="$(result_line 'Your questions have been answered.')" \
     run --answer "$PANE" --transcript "$TPP" "$pick" >"$WORK/out.txt" 2>&1 \
-    || fail "a preview-panel dialog must answer (pick $pick)" "$(cat "$WORK/out.txt")"
-  [ "$(inject_count)" = "1" ] || fail "preview-panel pick $pick must send exactly one digit" "$(injected)"
-  case "$(injected)" in *" $pick"*) : ;; *) fail "preview-panel pick $pick must resolve to its own row" "$(injected)" ;; esac
+    || st_fail "a preview-panel dialog must answer (pick $pick)" "$(cat "$WORK/out.txt")"
+  [ "$(inject_count)" = "1" ] || st_fail "preview-panel pick $pick must send exactly one digit" "$(injected)"
+  case "$(injected)" in *" $pick"*) : ;; *) st_fail "preview-panel pick $pick must resolve to its own row" "$(injected)" ;; esac
 done
 
 # The column cut is not a licence to match loosely: a label that is not there refuses.
@@ -512,8 +511,8 @@ mk_transcript "$TPX" '[{"question":"`fleet-account.sh whoami` 不带 window id �
             {"label":"改成读 ~/.claude.json 的 oauthAccount","description":"另一条路"}]}]'
 clear_screens; panel_screen 0 1
 out=$(TMO=1 run --answer "$PANE" --transcript "$TPX" 2 2>&1); rc=$?
-[ "$rc" = 3 ] || fail "a label absent from a preview-panel screen must exit 3 (got $rc)" "$out"
-nothing_sent || fail "the panel-aware matcher must still send nothing when it refuses" "$(injected)"
+[ "$rc" = 3 ] || st_fail "a label absent from a preview-panel screen must exit 3 (got $rc)" "$out"
+nothing_sent || st_fail "the panel-aware matcher must still send nothing when it refuses" "$(injected)"
 # The panel's text is the option's own `preview`, so it is ARBITRARY — and the
 # multiSelect walk stops when it reads the cursor on the `Submit` row. A preview that
 # merely CONTAINS the word "Submit" used to satisfy that from an OPTION row, so the
@@ -546,12 +545,12 @@ printf '%s\n' "$SCR_IDLE" | screen 6
 FAKE_TRANSCRIPT="$TPS" FAKE_RESULT_AT_STEP=6 \
 FAKE_RESULT_LINE="$(result_line 'Your questions have been answered: "Which colors?"="Red, Blue".')" \
   run --answer "$PANE" --transcript "$TPS" '1,3' >"$WORK/out.txt" 2>&1 \
-  || fail "a multiSelect behind a preview panel must answer" "$(cat "$WORK/out.txt")"
+  || st_fail "a multiSelect behind a preview panel must answer" "$(cat "$WORK/out.txt")"
 inj=$(injected)
 [ "$(printf '%s\n' "$inj" | grep -c 'Down')" = "3" ] \
-  || fail "a preview saying 'Submit' must NOT stop the walk early (3 Downs expected)" "$inj"
-[ "$(printf '%s\n' "$inj" | grep -c 'Enter')" = "1" ] || fail "exactly one Enter, on the real Submit row" "$inj"
-printf '%s\n' "$inj" | tail -1 | grep -q 'Enter' || fail "Enter must come LAST" "$inj"
+  || st_fail "a preview saying 'Submit' must NOT stop the walk early (3 Downs expected)" "$inj"
+[ "$(printf '%s\n' "$inj" | grep -c 'Enter')" = "1" ] || st_fail "exactly one Enter, on the real Submit row" "$inj"
+printf '%s\n' "$inj" | tail -1 | grep -q 'Enter' || st_fail "Enter must come LAST" "$inj"
 printf 'selftest: PREVIEW-PANEL legs PASS (3 labels behind a right-hand panel resolve, one of them wrapped too · absent label → exit 3 · a preview saying "Submit" does not fake the Submit row)\n' >&2
 
 # ============================ WRONG-TAB =====================================
@@ -571,32 +570,32 @@ clear_screens
   printf '❯ 1. No\n     keep prod\n  2. Yes\n     delete prod\n  3. Type something.\n\n'
   printf 'Enter to select · ↑/↓ to navigate · Esc to cancel\n'; } | screen 0
 out=$(TMO=1 run --answer "$PANE" --transcript "$TWT" 1 1 2>&1); rc=$?
-[ "$rc" = 3 ] || fail "another question's tab must refuse even when the label resolves (got $rc)" "$out"
-nothing_sent || fail "WRONG-TAB must send NOTHING — the digit would answer the other question" "$(injected)"
-case "$out" in *tab*) : ;; *) fail "the refusal must say it is the wrong tab" "$out" ;; esac
+[ "$rc" = 3 ] || st_fail "another question's tab must refuse even when the label resolves (got $rc)" "$out"
+nothing_sent || st_fail "WRONG-TAB must send NOTHING — the digit would answer the other question" "$(injected)"
+case "$out" in *tab*) : ;; *) st_fail "the refusal must say it is the wrong tab" "$out" ;; esac
 printf 'selftest: WRONG-TAB leg PASS (label resolves on ANOTHER tab of the same dialog → exit 3, ZERO keystrokes)\n' >&2
 
 # ============================ VERIFY ========================================
 # The keystrokes land but the tool_result NEVER does → exit 4, and say so.
 clear_screens; printf '%s\n' "$SCR_SINGLE" | screen 0; printf '%s\n' "$SCR_IDLE" | screen 1
 out=$(run --answer "$PANE" --transcript "$T" 2 2>&1); rc=$?
-[ "$rc" = 4 ] || fail "an unconfirmed answer must exit 4 (got $rc)" "$out"
-case "$out" in *confirm*) : ;; *) fail "exit 4 must say the answer was not confirmed" "$out" ;; esac
+[ "$rc" = 4 ] || st_fail "an unconfirmed answer must exit 4 (got $rc)" "$out"
+case "$out" in *confirm*) : ;; *) st_fail "exit 4 must say the answer was not confirmed" "$out" ;; esac
 printf 'selftest: VERIFY leg PASS (no tool_result within the budget → exit 4, reported)\n' >&2
 
 # ============================ CANCEL + DRY-RUN + GONE PANE ==================
 clear_screens; printf '%s\n' "$SCR_SINGLE" | screen 0
-run --cancel "$PANE" --transcript "$T" >/dev/null 2>&1 || fail "--cancel must exit 0"
-[ "$(inject_count)" = "1" ] || fail "--cancel must send exactly one key" "$(injected)"
-case "$(injected)" in *Escape*) : ;; *) fail "--cancel must send Escape" "$(injected)" ;; esac
+run --cancel "$PANE" --transcript "$T" >/dev/null 2>&1 || st_fail "--cancel must exit 0"
+[ "$(inject_count)" = "1" ] || st_fail "--cancel must send exactly one key" "$(injected)"
+case "$(injected)" in *Escape*) : ;; *) st_fail "--cancel must send Escape" "$(injected)" ;; esac
 
-out=$(run --answer "$PANE" --transcript "$T" 2 --dry-run 2>&1) || fail "--dry-run must exit 0" "$out"
-nothing_sent || fail "--dry-run must send NOTHING" "$(injected)"
-case "$out" in *2*) : ;; *) fail "--dry-run must print the planned keystroke" "$out" ;; esac
+out=$(run --answer "$PANE" --transcript "$T" 2 --dry-run 2>&1) || st_fail "--dry-run must exit 0" "$out"
+nothing_sent || st_fail "--dry-run must send NOTHING" "$(injected)"
+case "$out" in *2*) : ;; *) st_fail "--dry-run must print the planned keystroke" "$out" ;; esac
 
 FAKE_PANE_DEAD=1 run --answer "$PANE" --transcript "$T" 2 >/dev/null 2>&1
-[ $? = 1 ] || fail "a gone pane must exit 1"
-nothing_sent || fail "a gone pane must send nothing" "$(injected)"
+[ $? = 1 ] || st_fail "a gone pane must exit 1"
+nothing_sent || st_fail "a gone pane must send nothing" "$(injected)"
 printf 'selftest: CANCEL/DRY-RUN/GONE-PANE legs PASS (one Escape · plan-only · dead pane refused)\n' >&2
 
 printf 'selftest PASS: fleet-answer — pending gate + row-anchored screen gate + single/multiSelect/multi-question key plans + wrapped/scrolled/preview-panel screens + wrong-tab refusal + transcript verify (#605, #656, #702)\n'

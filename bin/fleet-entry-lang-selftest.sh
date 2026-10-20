@@ -17,13 +17,12 @@
 # python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-command -v python3 >/dev/null 2>&1 || { printf 'fleet-entry-lang selftest: python3 absent — SKIP\n'; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fel-st.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
-FAIL=0; CHECKS=0
-fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 (want '$2')" "$3"; }
+st_tally count miss
 
 # the 看台 stand-in: what it was handed, one line
 cat > "$WORK/view.sh" <<'EOF'
@@ -59,47 +58,47 @@ seen() { sed -n 's/^lang=\[\(.*\)\] set=.*/\1/p' "$WORK/view.out"; }
 logged() { python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).readlines()[-1]).get("client_lang","<none>"))' "$WORK/conf/logs/entry.ndjson" 2>/dev/null; }
 
 arrive LANG=en_US.UTF-8
-eq "A: LANG=en_US.UTF-8 ⇒ handed to the 看台" "en_US.UTF-8" "$(seen)"
-eq "A: … entry.ndjson's client_lang" "en_US.UTF-8" "$(logged)"
+st_eq "A: LANG=en_US.UTF-8 ⇒ handed to the 看台" "en_US.UTF-8" "$(seen)"
+st_eq "A: … entry.ndjson's client_lang" "en_US.UTF-8" "$(logged)"
 
 arrive
-eq "B: no LANG ⇒ empty, not the door's fill" "" "$(seen)"
-eq "B: … still set (the 看台 records none)" "1" "$(sed -n 's/.* set=\([^ ]*\) .*/\1/p' "$WORK/view.out")"
-eq "B: … entry.ndjson's client_lang empty" "" "$(logged)"
+st_eq "B: no LANG ⇒ empty, not the door's fill" "" "$(seen)"
+st_eq "B: … still set (the 看台 records none)" "1" "$(sed -n 's/.* set=\([^ ]*\) .*/\1/p' "$WORK/view.out")"
+st_eq "B: … entry.ndjson's client_lang empty" "" "$(logged)"
 
 arrive LANG=en_US.UTF-8 LC_ALL=zh_CN.UTF-8
-eq "C: LC_ALL wins over LANG" "zh_CN.UTF-8" "$(seen)"
+st_eq "C: LC_ALL wins over LANG" "zh_CN.UTF-8" "$(seen)"
 arrive LANG=en_US.UTF-8 LC_MESSAGES=ja_JP.UTF-8
-eq "C: LC_MESSAGES wins over LANG" "ja_JP.UTF-8" "$(seen)"
+st_eq "C: LC_MESSAGES wins over LANG" "ja_JP.UTF-8" "$(seen)"
 arrive LC_CTYPE=UTF-8
-eq "C: LC_CTYPE alone (macOS ssh's) says no language" "" "$(seen)"
+st_eq "C: LC_CTYPE alone (macOS ssh's) says no language" "" "$(seen)"
 
 for v in C POSIX C.UTF-8; do
   arrive LANG="$v"
-  eq "D: LANG=$v ⇒ empty" "" "$(seen)"
+  st_eq "D: LANG=$v ⇒ empty" "" "$(seen)"
 done
 arrive LANG=en_US.UTF-8 LC_ALL=C
-eq "D: LC_ALL=C ⇒ empty (it is the one setlocale reads)" "" "$(seen)"
+st_eq "D: LC_ALL=C ⇒ empty (it is the one setlocale reads)" "" "$(seen)"
 
 hello() { tr -d '\r' < "$WORK/tty.out" | sed -n 2p; }
 arrive
-eq "F: no LANG ⇒ the welcome in 中文" "欢迎回来。⌃空格 打开面板。" "$(hello)"
+st_eq "F: no LANG ⇒ the welcome in 中文" "欢迎回来。⌃空格 打开面板。" "$(hello)"
 has_line() { tr -d '\r' < "$WORK/tty.out" | grep -qx "$1"; }
-CHECKS=$((CHECKS + 1)); has_line "fleet · $(hostname -s) · $(id -un)" || fail "F: the welcome's first line" "$(cat "$WORK/tty.out")"
+CHECKS=$((CHECKS + 1)); has_line "fleet · $(hostname -s) · $(id -un)" || st_miss "F: the welcome's first line" "$(cat "$WORK/tty.out")"
 arrive LANG=en_US.UTF-8
-eq "F: en_US ⇒ English" "Welcome back. ⌃Space opens the panel." "$(hello)"
+st_eq "F: en_US ⇒ English" "Welcome back. ⌃Space opens the panel." "$(hello)"
 PERSON='{"version": 3, "bundle": {"ui_lang": "zh"}}' arrive LANG=en_US.UTF-8
-eq "F: the person chose 中文 ⇒ 中文, whatever the client says" "欢迎回来。⌃空格 打开面板。" "$(hello)"
+st_eq "F: the person chose 中文 ⇒ 中文, whatever the client says" "欢迎回来。⌃空格 打开面板。" "$(hello)"
 PERSON='{"version": 4, "bundle": {"ui_lang": "en"}}' arrive
-eq "F: the person chose English ⇒ English with no LANG" "Welcome back. ⌃Space opens the panel." "$(hello)"
+st_eq "F: the person chose English ⇒ English with no LANG" "Welcome back. ⌃Space opens the panel." "$(hello)"
 
 rm -rf "$WORK/conf"
 env -i HOME="$WORK" PATH="$PATH" SHELL=/bin/sh SSH_CONNECTION='10.0.0.9 5 10.0.0.1 22022' \
   FLEET_CONF_DIR="$WORK/conf" SSH_ORIGINAL_COMMAND=true LANG=de_DE.UTF-8 bash "$BIN/fleet-entry.sh" </dev/null >/dev/null 2>&1
-eq "E: a command arrival logs client_lang" "de_DE.UTF-8" "$(logged)"
-eq "E: a command arrival prints no welcome" "" "$(env -i HOME="$WORK" PATH="$PATH" SHELL=/bin/sh SSH_CONNECTION='10.0.0.9 5 10.0.0.1 22022' \
+st_eq "E: a command arrival logs client_lang" "de_DE.UTF-8" "$(logged)"
+st_eq "E: a command arrival prints no welcome" "" "$(env -i HOME="$WORK" PATH="$PATH" SHELL=/bin/sh SSH_CONNECTION='10.0.0.9 5 10.0.0.1 22022' \
   FLEET_CONF_DIR="$WORK/conf2" SSH_ORIGINAL_COMMAND=true LANG=de_DE.UTF-8 bash "$BIN/fleet-entry.sh" </dev/null 2>&1)"
-eq "E: … how=exec" "exec" "$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).readline())["how"])' "$WORK/conf/logs/entry.ndjson" 2>/dev/null)"
+st_eq "E: … how=exec" "exec" "$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).readline())["how"])' "$WORK/conf/logs/entry.ndjson" 2>/dev/null)"
 
 printf 'fleet-entry-lang selftest: %d checks, %d failed\n' "$CHECKS" "$FAIL"
-[ "$FAIL" -eq 0 ]
+st_done

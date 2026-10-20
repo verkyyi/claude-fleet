@@ -18,7 +18,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'hub-sessions-inv selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hubinv-selftest.XXXXXX")" || exit 2
 S="hubi$$"

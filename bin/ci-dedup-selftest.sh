@@ -21,27 +21,26 @@ BIN=$(cd -- "$(dirname -- "$0")" && pwd)
 . "$BIN/selftest-lib.sh"
 ROOT=$(cd -- "$BIN/.." && pwd)
 WF="$ROOT/.github/workflows"
-command -v git >/dev/null 2>&1 || { echo "SKIP: git not installed"; exit 0; }
+st_need git
 
-FAILS=0
-fail() { printf 'FAIL %s\n' "$*"; FAILS=$((FAILS + 1)); }
+FAIL=0
 
 # the `on:` block's top-level keys of a workflow
 on_keys() { awk '/^on:/{o=1; next} o && /^[^ #]/{o=0} o && /^  [a-z_]+:/{sub(/:.*/, ""); sub(/^ +/, ""); print}' "$1"; }
 
 # ── A ──
 for f in selftests shellcheck tokenledger fleet-hub client-e2e task-acceptance browser-attachment web-console web-chat-ui; do
-  [ -f "$WF/$f.yml" ] || { fail "A: $f.yml is gone"; continue; }
+  [ -f "$WF/$f.yml" ] || { st_miss "A: $f.yml is gone"; continue; }
   keys=$(on_keys "$WF/$f.yml" | tr '\n' ' ')
-  case " $keys" in *" push "*) fail "A: $f.yml still re-runs on push ($keys)" ;; esac
-  case " $keys" in *" workflow_call "*) ;; *) fail "A: $f.yml is not callable by the PR gate ($keys)" ;; esac
-  grep -q "uses: ./.github/workflows/$f.yml" "$WF/ci.yml" || fail "A: ci.yml does not call $f.yml"
+  case " $keys" in *" push "*) st_miss "A: $f.yml still re-runs on push ($keys)" ;; esac
+  case " $keys" in *" workflow_call "*) ;; *) st_miss "A: $f.yml is not callable by the PR gate ($keys)" ;; esac
+  grep -q "uses: ./.github/workflows/$f.yml" "$WF/ci.yml" || st_miss "A: ci.yml does not call $f.yml"
 done
 ckeys=$(on_keys "$WF/ci.yml" | tr '\n' ' ')
-[ "$ckeys" = "pull_request " ] || fail "A: ci.yml runs on [$ckeys], want pull_request alone"
+[ "$ckeys" = "pull_request " ] || st_miss "A: ci.yml runs on [$ckeys], want pull_request alone"
 { on_keys "$WF/ci-nightly.yml" | grep -qx schedule && grep -q 'uses: ./.github/workflows/shellcheck.yml' "$WF/ci-nightly.yml"; } \
-  || fail "A: shellcheck.yml lost its nightly full run (ci-nightly.yml, on a schedule, calls it)"
-[ "$FAILS" -eq 0 ] && st_ok_all "A: no PR check re-runs on a master push; ci.yml calls each on its PR; shellcheck has a nightly"
+  || st_miss "A: shellcheck.yml lost its nightly full run (ci-nightly.yml, on a schedule, calls it)"
+[ "$FAIL" -eq 0 ] && st_ok_all "A: no PR check re-runs on a master push; ci.yml calls each on its PR; shellcheck has a nightly"
 
 # ── B ──
 T=$(mktemp -d "${TMPDIR:-/tmp}/ci-dedup-selftest.XXXXXX") || exit 1
@@ -54,38 +53,37 @@ echo 'print(1)' > "$R/bin/p.py"; echo '# d' > "$R/docs/d.md"
 echo 'disable=SC1091' > "$R/.shellcheckrc"; echo 0.11.0 > "$R/.shellcheck-version"
 echo 'name: shellcheck' > "$R/.github/workflows/shellcheck.yml"
 g() { git -C "$R" -c user.name=t -c user.email=t@example.invalid "$@"; }
-g init -q && g add -A && g commit -qm base || { fail "B: git init"; exit 1; }
+g init -q && g add -A && g commit -qm base || { st_miss "B: git init"; exit 1; }
 base=$(g rev-parse HEAD)
 list() { (cd "$R" && sh bin/ci-shellcheck.sh "$@" --list 2>/dev/null) | tr '\n' ' '; }
 all=$(list)
 [ "$all" = "bin/a.sh bin/b.sh bin/ci-shellcheck.sh extras/x/e.sh hooks/h.sh shell/s.sh " ] \
-  || fail "B: no --changed should list every script, got: $all"
+  || st_miss "B: no --changed should list every script, got: $all"
 
 echo 'echo more' >> "$R/bin/a.sh"; echo 'x=1' >> "$R/bin/p.py"; echo more >> "$R/docs/d.md"
 g rm -q bin/b.sh; printf '#!/bin/sh\n' > "$R/hooks/new.sh"; g add -A; g commit -qm change
 got=$(list --changed "$base")
-[ "$got" = "bin/a.sh hooks/new.sh " ] || fail "B: --changed should list the added + modified *.sh only, got: $got"
+[ "$got" = "bin/a.sh hooks/new.sh " ] || st_miss "B: --changed should list the added + modified *.sh only, got: $got"
 
 g reset -q --hard "$base"; echo more >> "$R/docs/d.md"; g commit -qam docs
 got=$(list --changed "$base")
-[ -z "$got" ] || fail "B: a change with no script should list nothing, got: $got"
+[ -z "$got" ] || st_miss "B: a change with no script should list nothing, got: $got"
 (cd "$R" && sh bin/ci-shellcheck.sh --changed "$base" >/dev/null 2>&1) \
-  || fail "B: a change with no script should pass (nothing to lint), not fail"
+  || st_miss "B: a change with no script should pass (nothing to lint), not fail"
 
 for cfg in .shellcheckrc .shellcheck-version bin/ci-shellcheck.sh .github/workflows/shellcheck.yml; do
   g reset -q --hard "$base"; echo '# x' >> "$R/$cfg"; g commit -qam cfg
   got=$(list --changed "$base")
-  [ "$got" = "$all" ] || fail "B: a change to $cfg should lint the whole tree, got: $got"
+  [ "$got" = "$all" ] || st_miss "B: a change to $cfg should lint the whole tree, got: $got"
 done
 got=$(list --changed no-such-rev)
-[ "$got" = "$all" ] || fail "B: an unresolvable base should lint the whole tree, got: $got"
-[ "$FAILS" -eq 0 ] && st_ok_all "B: --changed lints what the change touches; config / unresolvable base ⇒ everything"
+[ "$got" = "$all" ] || st_miss "B: an unresolvable base should lint the whole tree, got: $got"
+[ "$FAIL" -eq 0 ] && st_ok_all "B: --changed lints what the change touches; config / unresolvable base ⇒ everything"
 
 # ── C ──
 grep -q 'set -- --changed HEAD^1' "$WF/shellcheck.yml" && grep -q 'sh bin/ci-shellcheck.sh' "$WF/shellcheck.yml" \
   && grep -q 'fetch-depth: 2' "$WF/shellcheck.yml" \
   && st_ok_all "C: shellcheck.yml runs ci-shellcheck.sh --changed HEAD^1 on a PR, depth 2" \
-  || fail "C: shellcheck.yml does not run bin/ci-shellcheck.sh --changed HEAD^1 with fetch-depth 2"
+  || st_miss "C: shellcheck.yml does not run bin/ci-shellcheck.sh --changed HEAD^1 with fetch-depth 2"
 
-[ "$FAILS" -eq 0 ] && { echo "ci-dedup-selftest: all green"; exit 0; }
-echo "ci-dedup-selftest: $FAILS failure(s)"; exit 1
+st_done

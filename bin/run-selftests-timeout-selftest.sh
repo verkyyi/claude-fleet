@@ -26,16 +26,16 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 RUNNER="$BIN/run-selftests.sh"
 MK="$BIN/selftest-shadow-root.sh"
 [ -f "$RUNNER" ] || { printf 'selftest: %s missing\n' "$RUNNER" >&2; exit 2; }
-command -v perl >/dev/null 2>&1 || { echo "selftest: SKIP — no perl, the runner runs tests unsupervised"; exit 0; }
+st_need perl
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '%s\n' "$2" | sed 's/^/  /' >&2; exit 1; }
 ok()   { CHECKS=$((CHECKS + 1)); printf 'ok   %s\n' "$1"; }
-has()  { printf '%s\n' "$2" | grep -qE -- "$3" || fail "$1" "$2"; ok "$1"; }
-hasnt() { printf '%s\n' "$2" | grep -qE -- "$3" && fail "$1" "$2"; ok "$1"; }
+has()  { printf '%s\n' "$2" | grep -qE -- "$3" || st_fail "$1" "$2"; ok "$1"; }
+hasnt() { printf '%s\n' "$2" | grep -qE -- "$3" && st_fail "$1" "$2"; ok "$1"; }
 
 TOP="$(mktemp -d "${TMPDIR:-/tmp}/run-selftests-timeout-selftest.XXXXXX")" || exit 2
 # A unique sleep length marks every process this test starts, so the residue check
@@ -77,16 +77,16 @@ mk c-after  'echo after ran'
 t0=$(date +%s)
 out=$(run env FLEET_SELFTEST_TEST_TIMEOUT=2 sh ./run-selftests.sh </dev/null); rc=$?
 el=$(( $(date +%s) - t0 ))
-[ "$rc" -eq 1 ] || fail "a timed-out test must fail the gate (exit 1), got $rc" "$out"; ok "TIMEOUT fails the gate"
+[ "$rc" -eq 1 ] || st_fail "a timed-out test must fail the gate (exit 1), got $rc" "$out"; ok "TIMEOUT fails the gate"
 has   "TIMEOUT line names the test and the limit" "$out" '^TIMEOUT b-hang-selftest\.sh +[0-9]+\.[0-9]s \(limit 2s\)$'
 has   "the stuck process group is printed (pid, argv)" "$out" "pid [0-9]+ .*sleep $MARK"
 has   "the test after it still ran" "$out" '^PASS  c-after-selftest\.sh'
 has   "failed: names the timed-out test" "$out" '^failed: b-hang-selftest\.sh$'
 has   "summary counts it as a failure" "$out" '^3 test\(s\): 2 passed, 1 failed$'
 has   "the timed-out test heads the slowest table" "$out" '^ +[0-9]+\.[0-9]s  b-hang-selftest\.sh$'
-[ "$el" -lt 15 ] || fail "the gate took ${el}s with a 2s ceiling" "$out"; ok "the run ends near the ceiling (${el}s)"
+[ "$el" -lt 15 ] || st_fail "the gate took ${el}s with a 2s ceiling" "$out"; ok "the run ends near the ceiling (${el}s)"
 sleep 0.3; r=$(residue)
-[ -z "$r" ] || fail "processes from the timed-out test survived: $r"; ok "no process of the hung test survives"
+[ -z "$r" ] || st_fail "processes from the timed-out test survived: $r"; ok "no process of the hung test survives"
 rm -f "$WORK/bin/"[abc]-*-selftest.sh
 }
 
@@ -96,7 +96,7 @@ mk stubborn "trap '' TERM; sleep $MARK"
 out=$(run env FLEET_SELFTEST_TEST_TIMEOUT=1 sh ./run-selftests.sh </dev/null)
 has "a TERM-ignoring test is still a TIMEOUT" "$out" '^TIMEOUT stubborn-selftest\.sh'
 sleep 0.3; r=$(residue)
-[ -z "$r" ] || fail "a TERM-ignoring test survived: $r"; ok "…and KILL after the grace takes it"
+[ -z "$r" ] || st_fail "a TERM-ignoring test survived: $r"; ok "…and KILL after the grace takes it"
 rm -f "$WORK/bin/stubborn-selftest.sh"
 }
 
@@ -127,12 +127,12 @@ mk orphan "echo \$\$ > '$WORK/orphan.pid'; sleep $MARK"
 run env FLEET_SELFTEST_TEST_TIMEOUT=1 sh ./run-selftests.sh </dev/null > "$WORK/orphan.out" &
 for _ in $(seq 1 50); do [ -s "$WORK/orphan.pid" ] && break; sleep 0.1; done
 tpid=$(cat "$WORK/orphan.pid" 2>/dev/null)
-[ -n "$tpid" ] || fail "the backstop fixture never started"
+[ -n "$tpid" ] || st_fail "the backstop fixture never started"
 sup=$(ps -o ppid= -p "$tpid" | tr -d ' ')
-kill -KILL "$sup" 2>/dev/null || fail "could not SIGKILL the supervisor ($sup)"
+kill -KILL "$sup" 2>/dev/null || st_fail "could not SIGKILL the supervisor ($sup)"
 gone=0
 for _ in $(seq 1 300); do kill -0 "$tpid" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
-[ "$gone" -eq 1 ] || fail "the test outlived its SIGKILLed supervisor by 30s — no in-test deadline"
+[ "$gone" -eq 1 ] || st_fail "the test outlived its SIGKILLed supervisor by 30s — no in-test deadline"
 ok "the test dies on its own alarm after its supervisor is SIGKILLed"
 wait
 pkill -KILL -f "sleep $MARK" 2>/dev/null   # its child sleep is an orphan by design here
@@ -156,12 +156,12 @@ has "the gate runs under fleet-heavy.sh --label selftests" "$(cat "$WORK/heavy.l
 has "the suite sees FLEET_HEAVY_HELD=1, the wrapper's other keys scrubbed" "$out" '^probe HELD=1 DIR=unset SLOTS=unset$'
 rm -f "$WORK/heavy.log"
 out=$(shadow_run env FLEET_HEAVY=0)
-[ ! -e "$WORK/heavy.log" ] || fail "FLEET_HEAVY=0 must skip the queue" "$(cat "$WORK/heavy.log")"; ok "FLEET_HEAVY=0 skips the queue"
+[ ! -e "$WORK/heavy.log" ] || st_fail "FLEET_HEAVY=0 must skip the queue" "$(cat "$WORK/heavy.log")"; ok "FLEET_HEAVY=0 skips the queue"
 has "…and the gate still runs" "$out" '^PASS  env-probe-selftest\.sh'
 # A NAMED run (no glob, no option) is light (issue #1313): it never queues.
 rm -f "$WORK/heavy.log"
 out=$(PROBE_ARG=env-probe shadow_run env)
-[ ! -e "$WORK/heavy.log" ] || fail "a named test run must skip the queue" "$(cat "$WORK/heavy.log")"; ok "a named test run skips the queue"
+[ ! -e "$WORK/heavy.log" ] || st_fail "a named test run must skip the queue" "$(cat "$WORK/heavy.log")"; ok "a named test run skips the queue"
 has "…and it still runs" "$out" '^PASS  env-probe-selftest\.sh'
 }
 

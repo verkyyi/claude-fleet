@@ -55,9 +55,7 @@ done
 
 st_sandbox "${TMPDIR:-/tmp}/handoff-invariant-selftest.XXXXXX"
 
-fails=0
-ok()   { printf '  ok   %s\n' "$1"; }
-fail() { printf '  FAIL %s\n' "$1"; fails=$((fails+1)); }
+st_tally
 
 NOCONF="$WORK/no-such.conf"          # a conf path that does not exist = no overlay
 export FLEET_CONF_DIR="$WORK/confdir"   # nothing here unless a case puts it there
@@ -78,10 +76,10 @@ printf 'fleet-handoff-invariant-selftest\n'
 # raises FLEET_STUCK_WORKING_SECS's, or slows the sweep, this is what goes red.
 run_inv --conf "$NOCONF"
 if [ "$RC" = 0 ]; then
-  ok "SHIPPED: this tree's defaults hold the invariant"
+  st_ok "SHIPPED: this tree's defaults hold the invariant"
   printf '       %s\n' "$("$INV" --conf "$NOCONF" --oneline 2>&1)"
 else
-  fail "SHIPPED: the defaults in this tree VIOLATE the handoff invariant (rc=$RC)"
+  st_miss "SHIPPED: the defaults in this tree VIOLATE the handoff invariant (rc=$RC)"
   printf '%s\n' "$OUT" | sed 's/^/       /'
 fi
 
@@ -93,9 +91,9 @@ fi
 f_low="$(fixture cycle-low.sh 's/FLEET_HANDOFF_IDLE_TIMEOUT:-[0-9]*/FLEET_HANDOFF_IDLE_TIMEOUT:-1/' "$CYCLE")"
 run_inv --conf "$NOCONF" --cycle "$f_low"
 if [ "$RC" = 1 ] && printf '%s' "$OUT" | grep -q 'VIOLATED'; then
-  ok "FLOOR: a wait-idle ceiling under the demote worst case is a VIOLATION"
+  st_ok "FLOOR: a wait-idle ceiling under the demote worst case is a VIOLATION"
 else
-  fail "FLOOR: expected rc=1 + VIOLATED, got rc=$RC: $OUT"
+  st_miss "FLOOR: expected rc=1 + VIOLATED, got rc=$RC: $OUT"
 fi
 
 # --- 2b. THIN ------------------------------------------------------------------
@@ -111,9 +109,9 @@ f_thin_s="$(fixture spin-thin.sh 's/FLEET_STUCK_WORKING_SECS:-[0-9]*/FLEET_STUCK
 f_thin_c="$(fixture cycle-thin.sh 's/FLEET_HANDOFF_IDLE_TIMEOUT:-[0-9]*/FLEET_HANDOFF_IDLE_TIMEOUT:-240/' "$CYCLE")"
 OUT="$(FLEET_HANDOFF_MARGIN_MIN=100000 "$INV" --conf "$NOCONF" --spinner "$f_thin_s" --cycle "$f_thin_c" 2>&1)"; RC=$?
 if [ "$RC" = 1 ] && printf '%s' "$OUT" | grep -q 'THIN'; then
-  ok "THIN: a positive but too-small margin reds instead of passing"
+  st_ok "THIN: a positive but too-small margin reds instead of passing"
 else
-  fail "THIN: expected rc=1 + THIN for an unreachable margin floor, got rc=$RC: $OUT"
+  st_miss "THIN: expected rc=1 + THIN for an unreachable margin floor, got rc=$RC: $OUT"
 fi
 
 # --- 3. DISABLED ---------------------------------------------------------------
@@ -122,9 +120,9 @@ fi
 f_off="$(fixture spin-off.sh 's/FLEET_STUCK_WORKING_SECS:-[0-9]*/FLEET_STUCK_WORKING_SECS:-0/' "$SPIN")"
 run_inv --conf "$NOCONF" --spinner "$f_off"
 if [ "$RC" = 1 ] && printf '%s' "$OUT" | grep -q 'OFF'; then
-  ok "DISABLED: FLEET_STUCK_WORKING_SECS=0 reads as a violation, not as no limit"
+  st_ok "DISABLED: FLEET_STUCK_WORKING_SECS=0 reads as a violation, not as no limit"
 else
-  fail "DISABLED: expected rc=1 naming the disabled backstop, got rc=$RC: $OUT"
+  st_miss "DISABLED: expected rc=1 naming the disabled backstop, got rc=$RC: $OUT"
 fi
 
 # --- 4. CEILING ----------------------------------------------------------------
@@ -134,9 +132,9 @@ fi
 f_hard="$(fixture cycle-hard.sh 's/FLEET_HANDOFF_VERIFY_TIMEOUT:-[0-9]*/FLEET_HANDOFF_VERIFY_TIMEOUT:-9000/' "$CYCLE")"
 run_inv --conf "$NOCONF" --cycle "$f_hard"
 if [ "$RC" = 1 ] && printf '%s' "$OUT" | grep -q 'hard timeout'; then
-  ok "CEILING: wait-idle + verify past the cycle's own watchdog is a VIOLATION"
+  st_ok "CEILING: wait-idle + verify past the cycle's own watchdog is a VIOLATION"
 else
-  fail "CEILING: expected rc=1 naming the hard timeout, got rc=$RC: $OUT"
+  st_miss "CEILING: expected rc=1 naming the hard timeout, got rc=$RC: $OUT"
 fi
 
 # --- 5. PARSE ------------------------------------------------------------------
@@ -145,9 +143,9 @@ fi
 printf 'IDLE_TIMEOUT=$(compute_it)\n' > "$WORK/cycle-renamed.sh"
 run_inv --conf "$NOCONF" --cycle "$WORK/cycle-renamed.sh"
 if [ "$RC" = 2 ]; then
-  ok "PARSE: a reshaped tunable exits 2 rather than passing off an invented 0"
+  st_ok "PARSE: a reshaped tunable exits 2 rather than passing off an invented 0"
 else
-  fail "PARSE: expected rc=2 for an unparseable source, got rc=$RC: $OUT"
+  st_miss "PARSE: expected rc=2 for an unparseable source, got rc=$RC: $OUT"
 fi
 
 # --- 6. CONF -------------------------------------------------------------------
@@ -157,9 +155,9 @@ FLEET_HANDOFF_IDLE_TIMEOUT=1
 CONF
 run_inv --conf "$WORK/fleet.conf"
 if [ "$RC" = 1 ] && printf '%s' "$OUT" | grep -q 'ceiling = 1s'; then
-  ok "CONF: a global fleet.conf value overrides the file default and is judged"
+  st_ok "CONF: a global fleet.conf value overrides the file default and is judged"
 else
-  fail "CONF: expected rc=1 resolving IDLE to the conf's 1s, got rc=$RC: $OUT"
+  st_miss "CONF: expected rc=1 resolving IDLE to the conf's 1s, got rc=$RC: $OUT"
 fi
 
 # --- 7. OVERLAY ----------------------------------------------------------------
@@ -172,18 +170,18 @@ FLEET_STUCK_WORKING_SECS=9999
 CONF
 run_inv --conf "$NOCONF" --session fleet-probe
 if [ "$RC" = 1 ] && printf '%s' "$OUT" | grep -q 'ceiling = 2s' && ! printf '%s' "$OUT" | grep -q '9999'; then
-  ok "OVERLAY: per-fleet IDLE applies; per-fleet FLEET_STUCK_WORKING_SECS is ignored (global-only)"
+  st_ok "OVERLAY: per-fleet IDLE applies; per-fleet FLEET_STUCK_WORKING_SECS is ignored (global-only)"
 else
-  fail "OVERLAY: expected rc=1 with IDLE=2 and the overlay's STUCK=9999 ignored, got rc=$RC: $OUT"
+  st_miss "OVERLAY: expected rc=1 with IDLE=2 and the overlay's STUCK=9999 ignored, got rc=$RC: $OUT"
 fi
 # …and without --session that same overlay must not leak in. Asserted on the
 # RESOLVED VALUE rather than on a passing exit code, so a genuinely broken default
 # reds case 1 alone instead of scattering misleading failures across the file.
 run_inv --conf "$NOCONF"
 if ! printf '%s' "$OUT" | grep -q 'ceiling = 2s'; then
-  ok "OVERLAY: an unrelated fleet's overlay does not colour the sessionless verdict"
+  st_ok "OVERLAY: an unrelated fleet's overlay does not colour the sessionless verdict"
 else
-  fail "OVERLAY: a sessionless run resolved IDLE from fleet-probe's overlay: $OUT"
+  st_miss "OVERLAY: a sessionless run resolved IDLE from fleet-probe's overlay: $OUT"
 fi
 
 # --- 8. ONELINE ----------------------------------------------------------------
@@ -192,24 +190,24 @@ fi
 f_both="$(fixture cycle-both.sh 's/FLEET_HANDOFF_IDLE_TIMEOUT:-[0-9]*/FLEET_HANDOFF_IDLE_TIMEOUT:-1/; s/FLEET_HANDOFF_VERIFY_TIMEOUT:-[0-9]*/FLEET_HANDOFF_VERIFY_TIMEOUT:-9000/' "$CYCLE")"
 n=$("$INV" --conf "$NOCONF" --cycle "$f_both" --oneline 2>&1 | wc -l | tr -d ' ')
 if [ "$n" = 1 ]; then
-  ok "ONELINE: two simultaneous violations still render as exactly one line"
+  st_ok "ONELINE: two simultaneous violations still render as exactly one line"
 else
-  fail "ONELINE: expected 1 line, got $n"
+  st_miss "ONELINE: expected 1 line, got $n"
 fi
 n=$("$INV" --conf "$NOCONF" --oneline 2>&1 | wc -l | tr -d ' ')
-[ "$n" = 1 ] || fail "ONELINE: a passing run printed $n lines, expected 1"
+[ "$n" = 1 ] || st_miss "ONELINE: a passing run printed $n lines, expected 1"
 
 # --- 9. WIRED ------------------------------------------------------------------
 # An invariant nothing reads is a comment. Pin each consumer by name.
 grep -q 'fleet-handoff-invariant.sh' "$BIN/fleet-doctor.sh" \
-  && ok "WIRED: fleet-doctor.sh evaluates the invariant" \
-  || fail "WIRED: fleet-doctor.sh no longer calls fleet-handoff-invariant.sh"
+  && st_ok "WIRED: fleet-doctor.sh evaluates the invariant" \
+  || st_miss "WIRED: fleet-doctor.sh no longer calls fleet-handoff-invariant.sh"
 grep -q 'backstop_diag' "$CYCLE" \
-  && ok "WIRED: fleet-handoff-cycle.sh diagnoses a wait-idle abort" \
-  || fail "WIRED: fleet-handoff-cycle.sh lost its wait-idle abort diagnosis"
+  && st_ok "WIRED: fleet-handoff-cycle.sh diagnoses a wait-idle abort" \
+  || st_miss "WIRED: fleet-handoff-cycle.sh lost its wait-idle abort diagnosis"
 grep -q 'spinner.heartbeat' "$BIN/tmux-spinner.py" && grep -q 'spinner.heartbeat' "$BIN/fleet-doctor.sh" \
-  && ok "WIRED: the spinner stamps a heartbeat and the doctor reads it" \
-  || fail "WIRED: the spinner liveness heartbeat is not stamped and/or not read"
+  && st_ok "WIRED: the spinner stamps a heartbeat and the doctor reads it" \
+  || st_miss "WIRED: the spinner liveness heartbeat is not stamped and/or not read"
 
 # --- 10. HEARTBEAT -------------------------------------------------------------
 # The heartbeat is what makes "is the demoter running?" answerable at all (this
@@ -229,15 +227,14 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
 done
 kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null
 case "$hb" in
-  ''|*[!0-9]*) fail "HEARTBEAT: the spinner wrote no usable stamp with no fleet up (got '${hb}')" ;;
+  ''|*[!0-9]*) st_miss "HEARTBEAT: the spinner wrote no usable stamp with no fleet up (got '${hb}')" ;;
   *) age=$(( $(date +%s) - hb ))
      if [ "$age" -ge 0 ] && [ "$age" -le 60 ]; then
-       ok "HEARTBEAT: the spinner stamps liveness even with no fleet up (${age}s old)"
+       st_ok "HEARTBEAT: the spinner stamps liveness even with no fleet up (${age}s old)"
      else
-       fail "HEARTBEAT: stamp is ${age}s off now — not a current epoch second"
+       st_miss "HEARTBEAT: stamp is ${age}s off now — not a current epoch second"
      fi ;;
 esac
 
 printf '\n'
-if [ "$fails" = 0 ]; then printf 'fleet-handoff-invariant-selftest: PASS\n'; exit 0; fi
-printf 'fleet-handoff-invariant-selftest: %d FAILURE(S)\n' "$fails"; exit 1
+st_done

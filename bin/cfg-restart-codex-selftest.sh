@@ -28,8 +28,8 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-command -v python3 >/dev/null 2>&1 || { echo 'cfg-restart-codex selftest: python3 absent — SKIP'; exit 0; }
-command -v tmux >/dev/null 2>&1 || { echo 'cfg-restart-codex selftest: tmux absent — SKIP'; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need python3 tmux
 REAL_TMUX=$(command -v tmux)
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/cfgcdx.XXXXXX")" || exit 2
 S="cfgcdx$$"
@@ -41,11 +41,7 @@ mkdir -p "$WORK/conf/fleets/$S" "$WORK/conf/global" "$WORK/fb" "$WORK/home-a" "$
 printf 'FLEET_REPO=acme/app\n' > "$WORK/conf/fleets/$S/conf"
 printf 'claude aaaaaaaaaaaa fleet=1\ncodex cccccccccccc fleet=1\nver 222222222222\n' > "$WORK/conf/global/agent-cfg.expected"
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
-has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1 — no [$3]" "$2";; esac; }
-hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
+st_tally count
 T() { "$REAL_TMUX" -L "$S" "$@"; }
 
 # --- the fake Codex: bind the window like fleet-codex.sh + its SessionStart hook,
@@ -77,7 +73,7 @@ EOS
 chmod +x "$WORK/fb/"*
 export FLEET_MIGRATE_LAUNCH="$WORK/fb/launcher"
 
-T new-session -d -s "$S" -n home -x 200 -y 50 2>/dev/null || fail "could not start an isolated tmux server"
+T new-session -d -s "$S" -n home -x 200 -y 50 2>/dev/null || st_fail "could not start an isolated tmux server"
 OLD=$(( $(date +%s) - 3600 ))
 TH1=11111111-2222-3333-4444-555555555555
 TH2=21111111-2222-3333-4444-555555555555
@@ -100,80 +96,80 @@ sleep 1
 # the runner's state options are written after the window opens: set them again
 for w in "$W1" "$W4"; do T set-option -w -t "$w" @claude_state done; T set-option -w -t "$w" @claude_state_ts "$OLD"; done
 why() { bash -c '. "$1/fleet-lib.sh"; fleet_cfg_restart_why "$2" "$3"; echo "rc=$?"' _ "$BIN" "$S" "$1" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'; }
-eq "A: the judge — an idle 待换新 Codex qualifies" "rc=0" "$(why "$W1")"
+st_eq "A: the judge — an idle 待换新 Codex qualifies" "rc=0" "$(why "$W1")"
 
 # ============================================================================
 # B. never — working / looping: migrate itself refuses (the judge asked again)
 # ============================================================================
 mig() { bash "$BIN/fleet-migrate.sh" --cfg-stale --session "$S" "$@" 2>&1; }
 o=$(mig "$W2")
-has "B: working Codex — refused" "$o" "not reopened for its configuration — state:working"
+st_has "B: working Codex — refused" "$o" "not reopened for its configuration — state:working"
 o=$(mig "$W3")
-has "B: looping Codex — refused" "$o" "not reopened for its configuration — state:looping"
-eq "B: …nothing launched" "" "$(cat "$WORK/launched" 2>/dev/null)"
-eq "B: …the working window untouched" "$W2" "$(T display-message -p -t "$W2" '#{window_id}' 2>/dev/null)"
+st_has "B: looping Codex — refused" "$o" "not reopened for its configuration — state:looping"
+st_eq "B: …nothing launched" "" "$(cat "$WORK/launched" 2>/dev/null)"
+st_eq "B: …the working window untouched" "$W2" "$(T display-message -p -t "$W2" '#{window_id}' 2>/dev/null)"
 
 # ============================================================================
 # C. unbound — the window's launcher is not the identity's owner
 # ============================================================================
 o=$(mig "$W4")
-has "C: no live Codex session bound — skipped" "$o" "no live Codex session bound — skipped"
-eq "C: …nothing launched" "" "$(cat "$WORK/launched" 2>/dev/null)"
+st_has "C: no live Codex session bound — skipped" "$o" "no live Codex session bound — skipped"
+st_eq "C: …nothing launched" "" "$(cat "$WORK/launched" 2>/dev/null)"
 
 # ============================================================================
 # A. reopen — through the tick, the real migrate, the fake Codex
 # ============================================================================
 o=$(bash "$BIN/fleet-cfg-restart.sh" -- "$S" 2>&1)
-has "A: the tick reopens the idle Codex" "$o" "reopen: $S:w41 ($W1)"
+st_has "A: the tick reopens the idle Codex" "$o" "reopen: $S:w41 ($W1)"
 for _ in $(seq 1 60); do [ -s "$WORK/launched" ] && T list-windows -t "$S" -F '#{window_name} #{@codex_identity}' | grep -q "w41 .*$TH1" && break; sleep 0.5; done
 L=$(cat "$WORK/launched" 2>/dev/null)
-has "A: codex resume — the explicit agent" "$L" "--agent codex"
-has "A: …in its own CODEX_HOME" "$L" "--codex-home $WORK/home-a"
-has "A: …the SAME thread" "$L" "--resume $TH1"
-has "A: …told 「fleet 已从 X 更新到 Y」" "$L" "fleet 已从 111111111111 更新到 222222222222"
-eq "A: …one launch, one line" "1" "$(printf '%s\n' "$L" | grep -c .)"
+st_has "A: codex resume — the explicit agent" "$L" "--agent codex"
+st_has "A: …in its own CODEX_HOME" "$L" "--codex-home $WORK/home-a"
+st_has "A: …the SAME thread" "$L" "--resume $TH1"
+st_has "A: …told 「fleet 已从 X 更新到 Y」" "$L" "fleet 已从 111111111111 更新到 222222222222"
+st_eq "A: …one launch, one line" "1" "$(printf '%s\n' "$L" | grep -c .)"
 NW=$(T list-windows -t "$S" -F '#{window_id} #{window_name}' | awk '$2 == "w41" {print $1}')
-[ -n "$NW" ] || fail "A: no w41 window after the reopen" "$(T list-windows -t "$S" -F '#{window_id} #{window_name}')"
-hasnt "A: a NEW window" "$NW" "$W1"
-has "A: bound to the same thread" "$(T display-message -p -t "$NW" '#{@codex_identity}')" "$TH1"
-eq "A: keeps @issue / @worktree / @fleet_id" "41 $WORK/wt1 fid-w41" \
+[ -n "$NW" ] || st_fail "A: no w41 window after the reopen" "$(T list-windows -t "$S" -F '#{window_id} #{window_name}')"
+st_hasnt "A: a NEW window" "$NW" "$W1"
+st_has "A: bound to the same thread" "$(T display-message -p -t "$NW" '#{@codex_identity}')" "$TH1"
+st_eq "A: keeps @issue / @worktree / @fleet_id" "41 $WORK/wt1 fid-w41" \
    "$(T display-message -p -t "$NW" '#{@issue} #{@worktree} #{@fleet_id}')"
-eq "A: carries @cc_agent codex and @ver_told" "codex 222222222222" "$(T display-message -p -t "$NW" '#{@cc_agent} #{@ver_told}')"
+st_eq "A: carries @cc_agent codex and @ver_told" "codex 222222222222" "$(T display-message -p -t "$NW" '#{@cc_agent} #{@ver_told}')"
 for _ in $(seq 1 20); do grep -q "reason=ver-stale" "$FLEET_HISTORY_LEDGER" 2>/dev/null && break; sleep 0.3; done
-has "A: /fleet-history row reason=ver-stale" "$(cat "$FLEET_HISTORY_LEDGER" 2>/dev/null)" "$TH1	reason=ver-stale	resumed"
-has "A: cfg-restart.log says ver-stale" "$(cat "$FLEET_CONF_DIR/logs/cfg-restart.log" 2>/dev/null)" "$S:w41 ($W1) reason=ver-stale"
+st_has "A: /fleet-history row reason=ver-stale" "$(cat "$FLEET_HISTORY_LEDGER" 2>/dev/null)" "$TH1	reason=ver-stale	resumed"
+st_has "A: cfg-restart.log says ver-stale" "$(cat "$FLEET_CONF_DIR/logs/cfg-restart.log" 2>/dev/null)" "$S:w41 ($W1) reason=ver-stale"
 
 # ============================================================================
 # D. the notice
 # ============================================================================
 n=$(bash -c 'set -u; . "$1/fleet-migrate.sh"; FLEET_LANG_RULE_RESUME=KEEP-LANG; cfg_update_nudge 111 222 ver-stale' _ "$BIN")
-has "D: ver-stale names both versions" "$n" "fleet 已从 111 更新到 222"
-has "D: …and the language rule" "$n" "KEEP-LANG"
-eq "D: …one line" "1" "$(printf '%s\n' "$n" | wc -l | tr -d ' ')"
+st_has "D: ver-stale names both versions" "$n" "fleet 已从 111 更新到 222"
+st_has "D: …and the language rule" "$n" "KEEP-LANG"
+st_eq "D: …one line" "1" "$(printf '%s\n' "$n" | wc -l | tr -d ' ')"
 n=$(bash -c 'set -u; . "$1/fleet-migrate.sh"; cfg_update_nudge "" 222 ver-stale' _ "$BIN")
-has "D: no old version stamped — 旧版" "$n" "fleet 已从 旧版 更新到 222"
+st_has "D: no old version stamped — 旧版" "$n" "fleet 已从 旧版 更新到 222"
 n=$(bash -c 'set -u; . "$1/fleet-migrate.sh"; cfg_update_nudge 222 222 cfg-stale' _ "$BIN")
-has "D: cfg-stale names the configuration" "$n" "fleet 的会话配置已更新"
-hasnt "D: …no PR — nothing to act on stays" "$n" "continue the ship"
-has "D: …\"Nothing to act on\"" "$n" "Nothing to act on"
+st_has "D: cfg-stale names the configuration" "$n" "fleet 的会话配置已更新"
+st_hasnt "D: …no PR — nothing to act on stays" "$n" "continue the ship"
+st_has "D: …\"Nothing to act on\"" "$n" "Nothing to act on"
 # a worker mid-ship (an OPEN PR on @pr_num, issue #2189): told to carry the ship on
 n=$(bash -c 'set -u; . "$1/fleet-migrate.sh"; FLEET_LANG_RULE_RESUME=KEEP-LANG; cfg_update_nudge 222 222 cfg-stale "#77"' _ "$BIN")
-has "D: an open PR — continue the ship" "$n" "Your PR #77 is still open"
-has "D: …verdict → merge → report" "$n" "continue the ship — read the verdict (pr_verdict, wait on PENDING), merge on READY, then report"
-hasnt "D: …never \"nothing to act on\"" "$n" "Nothing to act on"
-has "D: …the language rule" "$n" "KEEP-LANG"
-eq "D: …one line" "1" "$(printf '%s\n' "$n" | wc -l | tr -d ' ')"
+st_has "D: an open PR — continue the ship" "$n" "Your PR #77 is still open"
+st_has "D: …verdict → merge → report" "$n" "continue the ship — read the verdict (pr_verdict, wait on PENDING), merge on READY, then report"
+st_hasnt "D: …never \"nothing to act on\"" "$n" "Nothing to act on"
+st_has "D: …the language rule" "$n" "KEEP-LANG"
+st_eq "D: …one line" "1" "$(printf '%s\n' "$n" | wc -l | tr -d ' ')"
 n=$(bash -c 'set -u; . "$1/fleet-migrate.sh"; cfg_update_nudge 111 222 ver-stale 77' _ "$BIN")
-has "D: a bare number reads as #N, ver-stale too" "$n" "fleet 已从 111 更新到 222"
-has "D: …" "$n" "Your PR #77 is still open"
+st_has "D: a bare number reads as #N, ver-stale too" "$n" "fleet 已从 111 更新到 222"
+st_has "D: …" "$n" "Your PR #77 is still open"
 
 # ============================================================================
 # E. Claude — the judge answers a Claude window as before
 # ============================================================================
 WC=$(T new-window -d -t "$S:" -n claudew -P -F '#{window_id}' 'sleep 600')
 T set-option -w -t "$WC" @agent_cfg bbbbbbbbbbbb; T set-option -w -t "$WC" @claude_state done; T set-option -w -t "$WC" @claude_state_ts "$OLD"
-eq "E: Claude, 配置旧 + idle → reopen" "rc=0" "$(why "$WC")"
+st_eq "E: Claude, 配置旧 + idle → reopen" "rc=0" "$(why "$WC")"
 T set-option -w -t "$WC" @claude_state working
-eq "E: Claude working → never" "state:working rc=1" "$(why "$WC")"
+st_eq "E: Claude working → never" "state:working rc=1" "$(why "$WC")"
 
 printf 'cfg-restart-codex selftest: PASS (%s checks)\n' "$CHECKS"

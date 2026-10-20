@@ -4,9 +4,8 @@
 # wall-clock gate. The runner supplies the usual shadow-root isolation.
 set -eu
 BIN="$(cd "$(dirname "$0")" && pwd)"
-for dep in tmux perl python3; do
-  command -v "$dep" >/dev/null || { echo "model-switch-scale: $dep absent — SKIP"; exit 0; }
-done
+. "$BIN/selftest-lib.sh"
+st_need tmux perl python3
 python3 - "$BIN" <<'PY'
 import collections
 import os

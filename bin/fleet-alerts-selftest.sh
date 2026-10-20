@@ -51,11 +51,10 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/  /' >&2; exit 1; }
-ok() { CHECKS=$((CHECKS+1)); }
-eq() { [ "$2" = "$3" ] || fail "$1" "want: [$2]
- got: [$3]"; ok; }
+eq() { [ "$2" = "$3" ] || st_fail "$1" "want: [$2]
+ got: [$3]"; st_count; }
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-alerts-selftest.XXXXXX") || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -80,21 +79,21 @@ row() {  # id severity subject condition value since action → one ndjson row
 eq "1: no alerts → the bar draws nothing at all (issue #1616)" "" "$(fa bar)"
 row a1 alarm quota stale 47m "$(now)" accounts > "$G/alerts.ndjson"
 b1=$(fa bar)
-case "$b1" in *"✖ 1"*) ok ;; *) fail "1: one alarm does not read ✖ 1" "$b1" ;; esac
-case "$b1" in *"▲"*) fail "1: no warning → no ▲ slot" "$b1" ;; *) ok ;; esac
+case "$b1" in *"✖ 1"*) st_count ;; *) st_fail "1: one alarm does not read ✖ 1" "$b1" ;; esac
+case "$b1" in *"▲"*) st_fail "1: no warning → no ▲ slot" "$b1" ;; *) st_count ;; esac
 { for i in 1 2 3; do row "a$i" alarm dash stale 1m "$(now)" kick-collect; done
   for i in 1 2 3 4; do row "w$i" warning quota uneven '37 pts' "$(now)" accounts; done; } > "$G/alerts.ndjson"
 b7=$(fa bar)
-case "$b7" in *"✖ 3"*"▲ 4"*) ok ;; *) fail "1: the 7-alert bar does not read ✖ 3 ▲ 4" "$b7" ;; esac
-case "$b7" in *"range=user|alarm"*"range=user|warning"*) ok ;; *) fail "1: the counts are not clickable ranges" "$b7" ;; esac
+case "$b7" in *"✖ 3"*"▲ 4"*) st_count ;; *) st_fail "1: the 7-alert bar does not read ✖ 3 ▲ 4" "$b7" ;; esac
+case "$b7" in *"range=user|alarm"*"range=user|warning"*) st_count ;; *) st_fail "1: the counts are not clickable ranges" "$b7" ;; esac
 eq "1: ✖ 3 ▲ 4 is 7 columns, no blanks around it" 7 "$(vis "$b7")"
 { for i in 1 2 3 4; do row "w$i" warning quota uneven '37 pts' "$(now)" accounts; done; } > "$G/alerts.ndjson"
 b4=$(fa bar)
-case "$b4" in *"✖"*|*"range=user|alarm"*) fail "1: warnings only → no ✖ slot, no alarm range" "$b4" ;; *) ok ;; esac
+case "$b4" in *"✖"*|*"range=user|alarm"*) st_fail "1: warnings only → no ✖ slot, no alarm range" "$b4" ;; *) st_count ;; esac
 eq "1: ▲ 4 alone is 3 columns" 3 "$(vis "$b4")"
 { for i in $(seq 1 120); do row "a$i" alarm dash stale 1m "$(now)" kick-collect; done; } > "$G/alerts.ndjson"
-case "$(fa bar)" in *"✖ 99#"*) ok ;; *) fail "1: a count past 99 reads 99" "$(fa bar)" ;; esac
-case "$(fa bar)" in *quota*|*stale*|*"·"*) fail "1: a sentence leaked onto the bar" "$(fa bar)" ;; *) ok ;; esac
+case "$(fa bar)" in *"✖ 99#"*) st_count ;; *) st_fail "1: a count past 99 reads 99" "$(fa bar)" ;; esac
+case "$(fa bar)" in *quota*|*stale*|*"·"*) st_fail "1: a sentence leaked onto the bar" "$(fa bar)" ;; *) st_count ;; esac
 
 # ------------------------------------------------------------------ 2. quota ----
 # The quota watch retired (T549): a stale or empty quota cache raises nothing.
@@ -103,7 +102,7 @@ export FLEET_ACCOUNTS_DIR="$WORK/acc" CCQUOTA_HUB_URL=http://127.0.0.1:9
 printf '%s\n' $(( $(now) - 1800 )) > "$G/account.quota.ts"      # no fetch for 30m
 printf 'a\t90\t40\tahead\nb\t10\t-5\tbehind\n' > "$G/quota.pace"
 fa write
-case "$(cat "$G/alerts.ndjson")" in *'"subject":"quota"'*) fail "2: a quota row was raised" "$(cat "$G/alerts.ndjson")" ;; *) ok ;; esac
+case "$(cat "$G/alerts.ndjson")" in *'"subject":"quota"'*) st_fail "2: a quota row was raised" "$(cat "$G/alerts.ndjson")" ;; *) st_count ;; esac
 rm -f "$G/account.quota.ts" "$G/quota.pace"
 unset FLEET_ACCOUNTS_DIR CCQUOTA_HUB_URL
 
@@ -112,28 +111,28 @@ rm -f "$G"/alerts.*
 export FLEET_STATUS_DISK=1 FLEET_DISK_FLOOR_GB=99999999
 fa write
 s1=$(sed -n 's/.*"id":"disk-low".*"since":\([0-9]*\).*/\1/p' "$G/alerts.ndjson")
-[ -n "$s1" ] || fail "3: the disk floor raised no disk-low row" "$(cat "$G/alerts.ndjson")"
+[ -n "$s1" ] || st_fail "3: the disk floor raised no disk-low row" "$(cat "$G/alerts.ndjson")"
 sed "s/\"since\":$s1/\"since\":$(( s1 - 600 ))/" "$G/alerts.ndjson" > "$G/x" && mv "$G/x" "$G/alerts.ndjson"
 fa write
 eq "3: a standing alert keeps its first-seen time" "$(( s1 - 600 ))" \
   "$(sed -n 's/.*"id":"disk-low".*"since":\([0-9]*\).*/\1/p' "$G/alerts.ndjson")"
-case "$(fa list --plain)" in *"✖  disk · low · "*"10m"*) ok ;; *) fail "3: row wording/duration" "$(fa list --plain)" ;; esac
+case "$(fa list --plain)" in *"✖  disk · low · "*"10m"*) st_count ;; *) st_fail "3: row wording/duration" "$(fa list --plain)" ;; esac
 unset FLEET_DISK_FLOOR_GB
 fa write
-case "$(cat "$G/alerts.ndjson")" in *'"id":"disk-low"'*'"healed_at":0'*) fail "3: recovered disk-low still counted" "$(cat "$G/alerts.ndjson")" ;; *) ok ;; esac
-case "$(fa list --plain)" in *"↻  disk · low"*"healed"*) ok ;; *) fail "3: recovery left no ↻ trace" "$(fa list --plain)" ;; esac
+case "$(cat "$G/alerts.ndjson")" in *'"id":"disk-low"'*'"healed_at":0'*) st_fail "3: recovered disk-low still counted" "$(cat "$G/alerts.ndjson")" ;; *) st_count ;; esac
+case "$(fa list --plain)" in *"↻  disk · low"*"healed"*) st_count ;; *) st_fail "3: recovery left no ↻ trace" "$(fa list --plain)" ;; esac
 FLEET_ALERTS_TRACE=0 fa write
-case "$(fa list --plain)" in *"disk · low"*) fail "3: the trace ends at FLEET_ALERTS_TRACE" "$(fa list --plain)" ;; *) ok ;; esac
+case "$(fa list --plain)" in *"disk · low"*) st_fail "3: the trace ends at FLEET_ALERTS_TRACE" "$(fa list --plain)" ;; *) st_count ;; esac
 export FLEET_STATUS_DISK=0
 
 # ------------------------------------------------------------------- 4. mute ----
 { row q1 alarm quota stale 5m "$(now)" accounts; row w1 warning quota uneven '37 pts' "$(now)" accounts; } > "$G/alerts.ndjson"
 eq "4: before muting" "1 1 0" "$(fa counts)"
 fa mute q1 2>/dev/null; eq "4: an alarm refuses to mute (exit 3)" 3 "$?"
-fa mute w1 || fail "4: muting a warning failed"
+fa mute w1 || st_fail "4: muting a warning failed"
 eq "4: a muted warning leaves the count; the alarm stays" "1 0 0" "$(fa counts)"
-case "$(fa list --plain)" in *"(muted)"*) ok ;; *) fail "4: the popup does not mark the muted row" "$(fa list --plain)" ;; esac
-case "$(cat "$G/alerts.mute")" in "w1	"*) ok ;; *) fail "4: mute file shape" "$(cat "$G/alerts.mute")" ;; esac
+case "$(fa list --plain)" in *"(muted)"*) st_count ;; *) st_fail "4: the popup does not mark the muted row" "$(fa list --plain)" ;; esac
+case "$(cat "$G/alerts.mute")" in "w1	"*) st_count ;; *) st_fail "4: mute file shape" "$(cat "$G/alerts.mute")" ;; esac
 printf 'w1\t%s\n' $(( $(now) - 1 )) > "$G/alerts.mute"
 eq "4: an expired mute counts again" "1 1 0" "$(fa counts)"
 
@@ -146,17 +145,17 @@ unset FLEET_DISK_FLOOR_GB; export FLEET_STATUS_DISK=0
 n=0
 while IFS= read -r l; do
   n=$((n+1))
-  case "$l" in *'"action":""'*) fail "5: a row with no action" "$l" ;; esac
-  case "$l" in *'"action":"accounts"'*|*'"action":"kick-collect"'*|*'"action":"kick-daemons"'*|*'"action":"disk"'*|*'"action":"jump"'*) ok ;;
-    *) fail "5: unknown action" "$l" ;; esac
+  case "$l" in *'"action":""'*) st_fail "5: a row with no action" "$l" ;; esac
+  case "$l" in *'"action":"accounts"'*|*'"action":"kick-collect"'*|*'"action":"kick-daemons"'*|*'"action":"disk"'*|*'"action":"jump"'*) st_count ;;
+    *) st_fail "5: unknown action" "$l" ;; esac
 done < "$G/alerts.ndjson"
-[ "$n" -ge 2 ] || fail "5: expected at least disk + all-capped rows" "$(cat "$G/alerts.ndjson")"
-case "$(fa list --plain)" in *"✖  disk · low · "*" GB"*"see disk"*) ok ;; *) fail "5: disk under the floor is not an alarm" "$(fa list --plain)" ;; esac
+[ "$n" -ge 2 ] || st_fail "5: expected at least disk + all-capped rows" "$(cat "$G/alerts.ndjson")"
+case "$(fa list --plain)" in *"✖  disk · low · "*" GB"*"see disk"*) st_count ;; *) st_fail "5: disk under the floor is not an alarm" "$(fa list --plain)" ;; esac
 
 # --------------------------------------------------------------- 6. accounts ----
 rm -f "$G"/alerts.*
 if command -v python3 >/dev/null 2>&1; then
-  FLEET_C="$WORK/.claude-dash" python3 - "$BIN" <<'PY' || fail "6: stamp_all_capped raised"
+  FLEET_C="$WORK/.claude-dash" python3 - "$BIN" <<'PY' || st_fail "6: stamp_all_capped raised"
 import importlib.util, sys, time
 spec = importlib.util.spec_from_file_location('fa', sys.argv[1] + '/.fleet-account.py')
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -165,14 +164,14 @@ m.stamp_all_capped({'accounts': [{'reset_at': t + 7200}, {'limited_until': t + 3
 PY
   nf=$(cut -f2 "$G/account.all-capped")
   [ "$nf" -gt "$(( $(now) + 3000 ))" ] && [ "$nf" -lt "$(( $(now) + 3700 ))" ] \
-    || fail "6: next-free is not the earliest future reset" "$(cat "$G/account.all-capped")"; ok
+    || st_fail "6: next-free is not the earliest future reset" "$(cat "$G/account.all-capped")"; st_count
 fi
 printf 'acctA\tfable\t%s\tbanner\nacctB\tfable\t%s\tb\nacctC\tsonnet\t%s\told\n' \
   $(( $(now) + 3600 )) $(( $(now) + 60 )) $(( $(now) - 60 )) > "$G/account.model-limited"
 FLEET_MODEL_FALLBACK=opus fa write
 out=$(fa list --plain)
-case "$out" in *"▲  accounts · all capped · next free "[0-9][0-9]:[0-9][0-9]*) ok ;; *) fail "6: no accounts · all capped row" "$out" ;; esac
-case "$out" in *"▲  model · capped · fable → opus"*) ok ;; *) fail "6: no model · capped row" "$out" ;; esac
+case "$out" in *"▲  accounts · all capped · next free "[0-9][0-9]:[0-9][0-9]*) st_count ;; *) st_fail "6: no accounts · all capped row" "$out" ;; esac
+case "$out" in *"▲  model · capped · fable → opus"*) st_count ;; *) st_fail "6: no model · capped row" "$out" ;; esac
 eq "6: one row per capped model; an expired cap is none" 1 "$(printf '%s\n' "$out" | grep -c 'model · capped')"
 if command -v python3 >/dev/null 2>&1; then
   FLEET_C="$WORK/.claude-dash" python3 - "$BIN" <<'PY'
@@ -181,7 +180,7 @@ spec = importlib.util.spec_from_file_location('fa', sys.argv[1] + '/.fleet-accou
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 m.stamp_all_capped(None)
 PY
-  [ ! -e "$G/account.all-capped" ] || fail "6: a successful pick did not clear the stamp"; ok
+  [ ! -e "$G/account.all-capped" ] || st_fail "6: a successful pick did not clear the stamp"; st_count
 fi
 rm -f "$G/account.model-limited"
 
@@ -205,16 +204,16 @@ chmod +x "$WORK/shim/tmux"
 TMUX=/tmp/fake,1,0 PATH="$WORK/shim:$PATH" fa write
 out=$(fa list --plain)
 eq "7: five needs rows (dash panel + a working window excluded)" "0 0 5" "$(fa counts)"
-case "$out" in *"●  plan · question"*) ok ;; *) fail "7: a window with no @issue is named by its window" "$out" ;; esac
-case "$out" in *"●  #7 · permission"*"↵ go to window"*) ok ;; *) fail "7: perm → permission + jump" "$out" ;; esac
-case "$out" in *"●  #8 · blocked"*) ok ;; *) fail "7: blocked" "$out" ;; esac
-case "$out" in *"●  #9 · failed"*) ok ;; *) fail "7: failed" "$out" ;; esac
-case "$out" in *"●  #10 · waiting"*) ok ;; *) fail "7: undifferentiated needs → waiting" "$out" ;; esac
-case "$(cat "$G/alerts.ndjson")" in *'"target":"s1:@2"'*) ok ;; *) fail "7: jump target" "$(cat "$G/alerts.ndjson")" ;; esac
+case "$out" in *"●  plan · question"*) st_count ;; *) st_fail "7: a window with no @issue is named by its window" "$out" ;; esac
+case "$out" in *"●  #7 · permission"*"↵ go to window"*) st_count ;; *) st_fail "7: perm → permission + jump" "$out" ;; esac
+case "$out" in *"●  #8 · blocked"*) st_count ;; *) st_fail "7: blocked" "$out" ;; esac
+case "$out" in *"●  #9 · failed"*) st_count ;; *) st_fail "7: failed" "$out" ;; esac
+case "$out" in *"●  #10 · waiting"*) st_count ;; *) st_fail "7: undifferentiated needs → waiting" "$out" ;; esac
+case "$(cat "$G/alerts.ndjson")" in *'"target":"s1:@2"'*) st_count ;; *) st_fail "7: jump target" "$(cat "$G/alerts.ndjson")" ;; esac
 nd=$(cat "$G/alerts.ndjson")
-case "$nd" in *'"target":"s1:@1","detail":"演练放在 mac-b 还是只在 mac-a？ 两个都 要"'*) ok ;; *) fail "7: a question's words ride in detail (#1951)" "$nd" ;; esac
-case "$nd" in *'"target":"s1:@2","detail":"Bash: git push"'*) ok ;; *) fail "7: a permission's command rides in detail" "$nd" ;; esac
-case "$nd" in *'"target":"s1:@3","detail":""'*) ok ;; *) fail "7: no question → an empty detail (never the window name)" "$nd" ;; esac
+case "$nd" in *'"target":"s1:@1","detail":"演练放在 mac-b 还是只在 mac-a？ 两个都 要"'*) st_count ;; *) st_fail "7: a question's words ride in detail (#1951)" "$nd" ;; esac
+case "$nd" in *'"target":"s1:@2","detail":"Bash: git push"'*) st_count ;; *) st_fail "7: a permission's command rides in detail" "$nd" ;; esac
+case "$nd" in *'"target":"s1:@3","detail":""'*) st_count ;; *) st_fail "7: no question → an empty detail (never the window name)" "$nd" ;; esac
 fa write                                                      # no $TMUX: the quota watch's view
 eq "7: a writer that cannot see tmux keeps the needs rows" "0 0 5" "$(fa counts)"
 # ------------------------------------------------------------- 8. degenerate ----
@@ -222,7 +221,7 @@ rm -f "$G"/*
 fa write
 eq "8: nothing configured → no rows" "" "$(cat "$G/alerts.ndjson")"
 eq "8: …and the bar draws nothing at all" "" "$(fa bar)"
-case "$(fa bar | sed 's/#\[[^]]*\]//g')" in *✖*|*▲*|*[0-9]*) fail "8: a count on an empty fleet" "$(fa bar)" ;; *) ok ;; esac
+case "$(fa bar | sed 's/#\[[^]]*\]//g')" in *✖*|*▲*|*[0-9]*) st_fail "8: a count on an empty fleet" "$(fa bar)" ;; *) st_count ;; esac
 
 # ------------------------------------------------------------------- 10. act ----
 # A sandbox bin/: the real producer + libs, a fake fleet-daemon-watch.sh that is
@@ -262,22 +261,22 @@ await_toast() {  # <pattern> — the background half's closing toast, ≤10s
 rm -f "$G"/alerts.* "$WORK/toasts" "$WORK/watch.args"
 printf '{"id":"daemon-stale","severity":"alarm","subject":"daemon","condition":"stale","value":"2 units","since":%s,"action":"kick-daemons","healed_at":0,"target":"","detail":"reconcile,cleanup,bogus"}\n' "$(now)" > "$G/alerts.ndjson"
 t0=$(now); sact daemon-stale; t1=$(now)
-[ $(( t1 - t0 )) -lt 2 ] || fail "10: act blocked on the kick ($(( t1 - t0 ))s; the watch sleeps 3s)"; ok
-case "$(cat "$WORK/toasts" 2>/dev/null)" in *"requested: reconcile,cleanup"*) ok ;; *) fail "10: no immediate toast naming the units" "$(cat "$WORK/toasts" 2>/dev/null)" ;; esac
-await_toast 'daemon restart ·' || fail "10: the background kick never toasted its outcome" "$(cat "$WORK/toasts" 2>/dev/null)"; ok
+[ $(( t1 - t0 )) -lt 2 ] || st_fail "10: act blocked on the kick ($(( t1 - t0 ))s; the watch sleeps 3s)"; st_count
+case "$(cat "$WORK/toasts" 2>/dev/null)" in *"requested: reconcile,cleanup"*) st_count ;; *) st_fail "10: no immediate toast naming the units" "$(cat "$WORK/toasts" 2>/dev/null)" ;; esac
+await_toast 'daemon restart ·' || st_fail "10: the background kick never toasted its outcome" "$(cat "$WORK/toasts" 2>/dev/null)"; st_count
 eq "10: only the row's units, no --force, unknown names dropped" "--unit reconcile --unit cleanup" "$(cat "$WORK/watch.args")"
 last=$(tail -1 "$WORK/toasts")
-case "$last" in *"running, not touched reconcile"*"cooldown cleanup"*) ok ;; *) fail "10: outcome toast" "$last" ;; esac
-case "$last" in *kicked*) fail "10: nothing was kicked, the toast says kicked" "$last" ;; *) ok ;; esac
+case "$last" in *"running, not touched reconcile"*"cooldown cleanup"*) st_count ;; *) st_fail "10: outcome toast" "$last" ;; esac
+case "$last" in *kicked*) st_fail "10: nothing was kicked, the toast says kicked" "$last" ;; *) st_count ;; esac
 rm -f "$WORK/toasts" "$WORK/watch.args"
 printf '{"id":"daemon-stale","severity":"healed","subject":"daemon","condition":"stale","value":"kicked","since":%s,"action":"kick-daemons","healed_at":%s,"target":"","detail":"self-healed by a kick"}\n' "$(now)" "$(now)" > "$G/alerts.ndjson"
 sact daemon-stale
-case "$(cat "$WORK/toasts")" in *"nothing to do"*) ok ;; *) fail "10: a healed row should kick nothing" "$(cat "$WORK/toasts")" ;; esac
-sleep 0.5; [ ! -e "$WORK/watch.args" ] || fail "10: a healed row ran the watch" "$(cat "$WORK/watch.args")"; ok
+case "$(cat "$WORK/toasts")" in *"nothing to do"*) st_count ;; *) st_fail "10: a healed row should kick nothing" "$(cat "$WORK/toasts")" ;; esac
+sleep 0.5; [ ! -e "$WORK/watch.args" ] || st_fail "10: a healed row ran the watch" "$(cat "$WORK/watch.args")"; st_count
 printf '{"id":"dash-stale","severity":"alarm","subject":"dash","condition":"stale","value":"5m","since":%s,"action":"kick-collect","healed_at":0,"target":"","detail":"x"}\n' "$(now)" > "$G/alerts.ndjson"
 t0=$(now); sact dash-stale; t1=$(now)
-[ $(( t1 - t0 )) -lt 2 ] || fail "10: kick-collect blocked ($(( t1 - t0 ))s)"; ok
-await_toast 'kicked collect' || fail "10: kick-collect outcome toast" "$(cat "$WORK/toasts" 2>/dev/null)"; ok
+[ $(( t1 - t0 )) -lt 2 ] || st_fail "10: kick-collect blocked ($(( t1 - t0 ))s)"; st_count
+await_toast 'kicked collect' || st_fail "10: kick-collect outcome toast" "$(cat "$WORK/toasts" 2>/dev/null)"; st_count
 eq "10: kick-collect = --unit collect --force" "--unit collect --force" "$(cat "$WORK/watch.args")"
 rm -f "$G"/alerts.* "$WORK/toasts"
 
@@ -293,31 +292,31 @@ fev() { PATH="$WORK/shim:$PATH" fa event "$@"; }
 EV="$G/alerts.events"
 fev -L sA quota-benched 'fleet: a at 90% → benched; moving its sessions to b'
 eq "11: a background event is recorded once" 1 "$(grep -c 'quota-benched' "$EV" 2>/dev/null)"
-grep -q 'display-message' "$WORK/calls11" 2>/dev/null && fail "11: a non-whitelisted event must NOT flash" "$(cat "$WORK/calls11")"; ok
+grep -q 'display-message' "$WORK/calls11" 2>/dev/null && st_fail "11: a non-whitelisted event must NOT flash" "$(cat "$WORK/calls11")"; st_count
 fa write
 eq "11: …and the bar's ▲ goes up by one" "0 1 0" "$(fa counts)"
 out=$(fa list --plain)
-case "$out" in *"▲  fleet: a at 90% → benched; moving its sessions to b"*"↵ read"*) ok ;; *) fail "11: the popup row is the event's own text" "$out" ;; esac
+case "$out" in *"▲  fleet: a at 90% → benched; moving its sessions to b"*"↵ read"*) st_count ;; *) st_fail "11: the popup row is the event's own text" "$out" ;; esac
 fev -L sB quota-benched 'fleet: a at 90% → benched; moving its sessions to b'   # the same news off another socket
 eq "11: the same kind + text within 60s is ONE event" 1 "$(grep -c 'quota-benched' "$EV")"
 fev -L sA disk-red 'fleet: b at 95% — nowhere to move'
 eq "11: a whitelisted kind flashes once on its socket" 1 "$(grep -c '^-L sA display-message fleet: b at 95% — nowhere to move$' "$WORK/calls11")"
-grep -q 'disk-red	fleet: b at 95%' "$EV" || fail "11: …and is recorded too" "$(cat "$EV")"; ok
+grep -q 'disk-red	fleet: b at 95%' "$EV" || st_fail "11: …and is recorded too" "$(cat "$EV")"; st_count
 fa write
 eq "11: two events → ▲ 2" "0 2 0" "$(fa counts)"
 id=$(awk -F '\t' '$3 == "quota-benched" { print $2 }' "$EV")
-case "$(fa act "$id" </dev/null)" in *"quota-benched"*"moving its sessions to b"*) ok ;; *) fail "11: ↵ on an event prints its full text" "$(fa act "$id" </dev/null)" ;; esac
+case "$(fa act "$id" </dev/null)" in *"quota-benched"*"moving its sessions to b"*) st_count ;; *) st_fail "11: ↵ on an event prints its full text" "$(fa act "$id" </dev/null)" ;; esac
 fa event 2>/dev/null; eq "11: no kind / text → usage, exit 2" 2 "$?"
 # an hour later: out of the count, no ↻ trace, still in the popup's history
 awk -F '\t' -v OFS='\t' -v o=$(( $(now) - 7200 )) '{ $1 = o; print }' "$EV" > "$EV.t" && mv "$EV.t" "$EV"
 fa write
 eq "11: past FLEET_ALERTS_EVENT_LIVE the count drops back" "0 0 0" "$(fa counts)"
-grep -q healed "$G/alerts.ndjson" && fail "11: an aged-out event is history, not a ↻ recovery" "$(cat "$G/alerts.ndjson")"; ok
-case "$(fa list --plain)" in *benched*) fail "11: list (no --history) is the live rows only" "$(fa list --plain)" ;; *) ok ;; esac
+grep -q healed "$G/alerts.ndjson" && st_fail "11: an aged-out event is history, not a ↻ recovery" "$(cat "$G/alerts.ndjson")"; st_count
+case "$(fa list --plain)" in *benched*) st_fail "11: list (no --history) is the live rows only" "$(fa list --plain)" ;; *) st_count ;; esac
 hist=$(fa list --plain --history --level warning)
-case "$hist" in *"·  fleet: a at 90% → benched"*"2h"*) ok ;; *) fail "11: --history lists the older event with its age" "$hist" ;; esac
-case "$(fa rows warning)" in *"nowhere to move"*) ok ;; *) fail "11: the popup's ▲ view carries the history" "$(fa rows warning)" ;; esac
-case "$(fa list --plain --history --level alarm)" in *benched*) fail "11: history is not an alarm" ;; *) ok ;; esac
+case "$hist" in *"·  fleet: a at 90% → benched"*"2h"*) st_count ;; *) st_fail "11: --history lists the older event with its age" "$hist" ;; esac
+case "$(fa rows warning)" in *"nowhere to move"*) st_count ;; *) st_fail "11: the popup's ▲ view carries the history" "$(fa rows warning)" ;; esac
+case "$(fa list --plain --history --level alarm)" in *benched*) st_fail "11: history is not an alarm" ;; *) st_count ;; esac
 # 30 days: the next event prunes it
 awk -F '\t' -v OFS='\t' -v o=$(( $(now) - 31 * 86400 )) 'NR == 1 { $1 = o } { print }' "$EV" > "$EV.t" && mv "$EV.t" "$EV"
 fev handoff 'fleet-handoff %9: could not confirm a fresh session'
@@ -337,7 +336,7 @@ for f in $bg; do
   lint="$lint$(awk -v F="$f" '/display-message/ && !/^[[:space:]]*#/ && !/display-message -[A-Za-z]*p/ && !/toast-ok:/ { print F ":" NR ": " $0 "\n" }' "$BIN/../$f")"
 done
 eq "12: no bare display-message on a background path (mark a keypress-only one # toast-ok:)" "" "$lint"
-[ "$(grep -l "^FLEET_ALERT_FLASH_KINDS=" "$BIN"/*.sh | sed "s|.*/||" | grep -cv -- "-selftest\.sh$")" = 1 ] || fail "12: the flash whitelist must be written in ONE place" "$(grep -n FLEET_ALERT_FLASH_KINDS= "$BIN"/*.sh)"; ok
+[ "$(grep -l "^FLEET_ALERT_FLASH_KINDS=" "$BIN"/*.sh | sed "s|.*/||" | grep -cv -- "-selftest\.sh$")" = 1 ] || st_fail "12: the flash whitelist must be written in ONE place" "$(grep -n FLEET_ALERT_FLASH_KINDS= "$BIN"/*.sh)"; st_count
 eq "12: the whitelist is the three that need you now (quota-nowhere left with the quota watch, T549)" "hub-lost disk-red account-reauth" "$(bash -c '. "$1"; printf %s "$FLEET_ALERT_FLASH_KINDS"' _ "$FA")"
 
 # --------------------------------------------------------------- 13. machine ----
@@ -357,17 +356,17 @@ rm -f "$G"/*
 mshim 3.60 400000 7373                      # 3.6 / 4 = 0.9 per core; 7373 of 8192 MB = 90 %
 mfa write
 rows=$(cat "$G/alerts.ndjson")
-case "$rows" in *'"id":"machine-load","severity":"warning","subject":"machine","condition":"load high","value":"0.9/core"'*'"action":"machine"'*) ok ;;
-  *) fail "13: load 0.9 per core → ▲ machine · load high · 0.9/core" "$rows" ;; esac
-case "$rows" in *'"id":"machine-mem","severity":"warning","subject":"machine","condition":"memory high","value":"90%"'*) ok ;;
-  *) fail "13: memory 90 % → ▲ machine · memory high · 90%" "$rows" ;; esac
+case "$rows" in *'"id":"machine-load","severity":"warning","subject":"machine","condition":"load high","value":"0.9/core"'*'"action":"machine"'*) st_count ;;
+  *) st_fail "13: load 0.9 per core → ▲ machine · load high · 0.9/core" "$rows" ;; esac
+case "$rows" in *'"id":"machine-mem","severity":"warning","subject":"machine","condition":"memory high","value":"90%"'*) st_count ;;
+  *) st_fail "13: memory 90 % → ▲ machine · memory high · 90%" "$rows" ;; esac
 eq "13: …two warnings, no alarm" "0 2 0" "$(fa counts)"
-case "$(fa list --plain)" in *"▲  machine · load high · 0.9/core"*"see top"*) ok ;; *) fail "13: the popup row names its action" "$(fa list --plain)" ;; esac
-case "$(fa bar)" in *"▲ 2"*) ok ;; *) fail "13: the bar counts them" "$(fa bar)" ;; esac
+case "$(fa list --plain)" in *"▲  machine · load high · 0.9/core"*"see top"*) st_count ;; *) st_fail "13: the popup row names its action" "$(fa list --plain)" ;; esac
+case "$(fa bar)" in *"▲ 2"*) st_count ;; *) st_fail "13: the bar counts them" "$(fa bar)" ;; esac
 mshim 1.20 100000 2685                      # 0.3 per core; 2685 of 8192 MB = 32 %
 mfa write
 eq "13: under the bands → no machine warning (a ↻ trace, as every cleared alert)" "" "$(grep '"severity":"warning","subject":"machine"' "$G/alerts.ndjson")"
-case "$(cat "$G/alerts.ndjson")" in *'"id":"machine-load","severity":"healed"'*) ok ;; *) fail "13: a cleared load warning leaves its ↻ trace" "$(cat "$G/alerts.ndjson")" ;; esac
+case "$(cat "$G/alerts.ndjson")" in *'"id":"machine-load","severity":"healed"'*) st_count ;; *) st_fail "13: a cleared load warning leaves its ↻ trace" "$(cat "$G/alerts.ndjson")" ;; esac
 mshim 3.20 373824 6964                      # exactly 0.8 per core; 6964 of 8192 MB = 85 %
 mfa write
 eq "13: the bands' edges count (0.8 / 85 %)" "2" "$(grep -c '"severity":"warning","subject":"machine"' "$G/alerts.ndjson")"
@@ -403,12 +402,12 @@ reauth_json reauth_required
 fa14 write
 eq "14: one warning — the standing row, not the event too" "0 1 0" "$(fa14 counts)"
 l14=$(fa14 list --plain)
-case "$l14" in *"▲  accounts · reauth · work"*"↵ re-login"*) ok ;; *) fail "14: no accounts · reauth row (↵ re-login) for the dead profile" "$l14" ;; esac
-case "$l14" in *fine*) fail "14: the valid profile drew a row" "$l14" ;; *) ok ;; esac
+case "$l14" in *"▲  accounts · reauth · work"*"↵ re-login"*) st_count ;; *) st_fail "14: no accounts · reauth row (↵ re-login) for the dead profile" "$l14" ;; esac
+case "$l14" in *fine*) st_fail "14: the valid profile drew a row" "$l14" ;; *) st_count ;; esac
 r14=$(grep '"id":"account-reauth-codex-work"' "$G/alerts.ndjson")
-case "$r14" in *'"detail":"codex ops@example.com needs re-login — run: codex login --device-auth"'*) ok ;; *) fail "14: the row does not carry the login command" "$r14" ;; esac
-case "$r14" in *'"action":"relogin","healed_at":0,"target":"codex/work"'*) ok ;; *) fail "14: ↵ must re-login codex/work (issue #1669)" "$r14" ;; esac
-case "$(head -n 1 "$G/account.reauth")" in [0-9]*"	checked") ok ;; *) fail "14: the stamp has no checked header" "$(cat "$G/account.reauth")" ;; esac
+case "$r14" in *'"detail":"codex ops@example.com needs re-login — run: codex login --device-auth"'*) st_count ;; *) st_fail "14: the row does not carry the login command" "$r14" ;; esac
+case "$r14" in *'"action":"relogin","healed_at":0,"target":"codex/work"'*) st_count ;; *) st_fail "14: ↵ must re-login codex/work (issue #1669)" "$r14" ;; esac
+case "$(head -n 1 "$G/account.reauth")" in [0-9]*"	checked") st_count ;; *) st_fail "14: the stamp has no checked header" "$(cat "$G/account.reauth")" ;; esac
 eq "14: a new dead profile is ONE account-reauth event" 1 "$(grep -c '	account-reauth	' "$G/alerts.events")"
 eq "14: …and it flashed once" 1 "$(grep -c 'display-message accounts: codex ops@example.com needs re-login' "$WORK/calls14")"
 s14a=$(sed -n 's/.*"since":\([0-9]*\),.*/\1/p' <<< "$r14")
@@ -420,24 +419,24 @@ eq "14: …and still one row" "0 1 0" "$(fa14 counts)"
 s14b=$(sed -n 's/.*"since":\([0-9]*\),.*/\1/p' <<< "$(grep '"id":"account-reauth-codex-work"' "$G/alerts.ndjson")")
 eq "14: the row keeps its first-seen time across stamps" "$s14a" "$s14b"
 lg14=$(FLEET_QUOTA_BIN="$WORK/shim/ccquota" FLEET_C="$WORK/.claude-dash" python3 "$BIN/.fleet-account.py" logins)
-case "$lg14" in *'"profile": "work"'*'"login": "reauth_required"'*) ok ;; *) fail "14: logins does not list the state" "$lg14" ;; esac
+case "$lg14" in *'"profile": "work"'*'"login": "reauth_required"'*) st_count ;; *) st_fail "14: logins does not list the state" "$lg14" ;; esac
 reauth_json valid
 fa14 write
 eq "14: signed in again → the row heals" "0 0 0" "$(fa14 counts)"
-case "$(fa14 list --plain)" in *"↻"*"accounts · reauth · work"*) ok ;; *) fail "14: no ↻ trace for the healed reauth row" "$(fa14 list --plain)" ;; esac
+case "$(fa14 list --plain)" in *"↻"*"accounts · reauth · work"*) st_count ;; *) st_fail "14: no ↻ trace for the healed reauth row" "$(fa14 list --plain)" ;; esac
 eq "14: recovery adds no event" 1 "$(grep -c '	account-reauth	' "$G/alerts.events")"
 # no ccquota at all: the header says so, nothing is drawn, nothing flashes
 rm -f "$G"/alerts.* "$G/account.reauth" "$WORK/calls14"
 FLEET_QUOTA_BIN="$WORK/nonexistent" FLEET_C="$WORK/.claude-dash" FLEET_ALERTS_REAUTH_SECS=0 PATH="$WORK/shim:$PATH" bash "$FA" write
 eq "14: no ccquota → no rows" "" "$(FLEET_C="$WORK/.claude-dash" bash "$FA" list --plain)"
-case "$(head -n 1 "$G/account.reauth")" in [0-9]*"	unavailable") ok ;; *) fail "14: no ccquota → header should say unavailable" "$(cat "$G/account.reauth" 2>&1)" ;; esac
-[ -f "$WORK/calls14" ] && fail "14: no ccquota must not flash" "$(cat "$WORK/calls14")"; ok
+case "$(head -n 1 "$G/account.reauth")" in [0-9]*"	unavailable") st_count ;; *) st_fail "14: no ccquota → header should say unavailable" "$(cat "$G/account.reauth" 2>&1)" ;; esac
+[ -f "$WORK/calls14" ] && st_fail "14: no ccquota must not flash" "$(cat "$WORK/calls14")"; st_count
 # a shell-only client (#1484): fleet-alerts.sh with no .fleet-account.py beside it draws nothing and runs no python
 mkdir -p "$WORK/bin14"
 for f in fleet-alerts.sh usage-lib.sh fleet-daemon-lib.sh fleet-lib.sh fleet-client-core.sh; do [ -e "$BIN/$f" ] && ln -sf "$BIN/$f" "$WORK/bin14/$f"; done
 rm -f "$G"/alerts.* "$G/account.reauth"
 FLEET_QUOTA_BIN="$WORK/shim/ccquota" FLEET_C="$WORK/.claude-dash" FLEET_ALERTS_REAUTH_SECS=0 PATH="$WORK/shim:$PATH" bash "$WORK/bin14/fleet-alerts.sh" write
-[ -e "$G/account.reauth" ] && fail "14: a client with no .fleet-account.py wrote a stamp" "$(cat "$G/account.reauth")"; ok
+[ -e "$G/account.reauth" ] && st_fail "14: a client with no .fleet-account.py wrote a stamp" "$(cat "$G/account.reauth")"; st_count
 eq "14: …and drew nothing" "" "$(FLEET_C="$WORK/.claude-dash" bash "$FA" list --plain)"
 # issue #1669: ↵ on the row runs fleet-relogin.sh login <agent>/<profile>; a
 # pending retry record makes the refresh hand `resume` off, detached — and with
@@ -458,7 +457,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/relogin14" ] && break; sleep 0.2; 
 eq "14: a pending retry → resume, detached" "resume" "$(cat "$WORK/relogin14" 2>/dev/null)"
 rm -f "$WORK/relogin14" "$WORK/conf14/handoffs/retry/x-1/pending"
 fa14r write; sleep 0.5
-[ -e "$WORK/relogin14" ] && fail "14: no pending record must not resume" "$(cat "$WORK/relogin14")"; ok
+[ -e "$WORK/relogin14" ] && st_fail "14: no pending record must not resume" "$(cat "$WORK/relogin14")"; st_count
 rm -f "$WORK/shim/ccquota" "$WORK/shim/tmux"
 # the flash whitelist names the kind, in the ONE place it is written
 eq "14: account-reauth is a flash kind" 1 "$(grep -c "^FLEET_ALERT_FLASH_KINDS='.*account-reauth" "$FA")"

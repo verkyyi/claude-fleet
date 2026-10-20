@@ -27,7 +27,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 SRC="$BIN/worktree-autoclean.sh"
 LIB="$BIN/fleet-lib.sh"
 for f in "$SRC" "$LIB"; do [ -f "$f" ] || { echo "selftest: $f missing" >&2; exit 2; }; done
-command -v git >/dev/null 2>&1 || { echo "selftest: git absent — SKIP" >&2; exit 0; }
+st_need git
 
 st_sandbox "${TMPDIR:-/tmp}/wac-scratch.XXXXXX"
 # Normalize to the physical path (macOS /var → /private/var, and collapse any `//`
@@ -35,7 +35,6 @@ st_sandbox "${TMPDIR:-/tmp}/wac-scratch.XXXXXX"
 WORK="$(cd "$WORK" && pwd -P)"
 
 pass=0
-fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/conf/logs"
 ln -s "$SRC" "$WORK/bin/worktree-autoclean.sh"
@@ -133,44 +132,44 @@ run_wac() {   # run worktree-autoclean.sh with the fakes; args forwarded (--dry-
 
 # ============================ DRY RUN: decisions ============================
 out="$(run_wac --dry-run)"
-printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-1 ' || fail "clean+ancestor scratch-1 (helper-only transcripts) should PRUNE" "$out"
-printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-4 ' || fail "merged scratch-4 should PRUNE (escalation)" "$out"
-printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-2 .*unmerged work — scratch experiment' || fail "unmerged scratch-2 should KEEP + surface" "$out"
-printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-3 .*dirty — scratch experiment' || fail "dirty scratch-3 should KEEP + surface" "$out"
-printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-5 .*live tmux session' || fail "live scratch-5 should KEEP (attached)" "$out"
-printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-6 .*session ran here — scratch experiment' || fail "clean scratch-6 with a HUMAN transcript should KEEP + surface (conversation-only)" "$out"
-printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-6 ' && fail "conversation-only scratch-6 must never PRUNE" "$out"
-printf '%s\n' "$out" | grep -Eq 'KEEP +issue-7 .*dirty — uncommitted changes' || fail "issue-7 must keep the ISSUE wording, not scratch" "$out"
-printf '%s\n' "$out" | grep -Eq 'issue-7 .*scratch experiment' && fail "issue-7 must NOT be treated as a scratch experiment" "$out"
+printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-1 ' || st_fail "clean+ancestor scratch-1 (helper-only transcripts) should PRUNE" "$out"
+printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-4 ' || st_fail "merged scratch-4 should PRUNE (escalation)" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-2 .*unmerged work — scratch experiment' || st_fail "unmerged scratch-2 should KEEP + surface" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-3 .*dirty — scratch experiment' || st_fail "dirty scratch-3 should KEEP + surface" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-5 .*live tmux session' || st_fail "live scratch-5 should KEEP (attached)" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-6 .*session ran here — scratch experiment' || st_fail "clean scratch-6 with a HUMAN transcript should KEEP + surface (conversation-only)" "$out"
+printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-6 ' && st_fail "conversation-only scratch-6 must never PRUNE" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +issue-7 .*dirty — uncommitted changes' || st_fail "issue-7 must keep the ISSUE wording, not scratch" "$out"
+printf '%s\n' "$out" | grep -Eq 'issue-7 .*scratch experiment' && st_fail "issue-7 must NOT be treated as a scratch experiment" "$out"
 # dry run mutates nothing
-[ -d "$WORK/base-scratch-1" ] || fail "dry run must not remove scratch-1"
+[ -d "$WORK/base-scratch-1" ] || st_fail "dry run must not remove scratch-1"
 st_pass "DRY: pristine/merged scratch → PRUNE; conversation/dirty/unmerged → KEEP+surface; live → KEEP; issue unaffected"
 
 # ============================ REAL RUN: reap + surface once ================
 run_wac >/dev/null
-[ -d "$WORK/base-scratch-1" ] && fail "real run should remove clean scratch-1"
-git -C "$BASE" show-ref --verify -q refs/heads/scratch-1 && fail "real run should delete branch scratch-1"
-[ -d "$WORK/base-scratch-4" ] && fail "real run should remove merged scratch-4"
-[ -d "$WORK/base-scratch-2" ] || fail "real run must KEEP unmerged scratch-2"
-[ -d "$WORK/base-scratch-3" ] || fail "real run must KEEP dirty scratch-3"
-[ -d "$WORK/base-scratch-5" ] || fail "real run must KEEP live scratch-5"
-[ -d "$WORK/base-scratch-6" ] || fail "real run must KEEP conversation-only scratch-6"
-[ -d "$WORK/base-issue-7" ]   || fail "real run must KEEP dirty issue-7"
+[ -d "$WORK/base-scratch-1" ] && st_fail "real run should remove clean scratch-1"
+git -C "$BASE" show-ref --verify -q refs/heads/scratch-1 && st_fail "real run should delete branch scratch-1"
+[ -d "$WORK/base-scratch-4" ] && st_fail "real run should remove merged scratch-4"
+[ -d "$WORK/base-scratch-2" ] || st_fail "real run must KEEP unmerged scratch-2"
+[ -d "$WORK/base-scratch-3" ] || st_fail "real run must KEEP dirty scratch-3"
+[ -d "$WORK/base-scratch-5" ] || st_fail "real run must KEEP live scratch-5"
+[ -d "$WORK/base-scratch-6" ] || st_fail "real run must KEEP conversation-only scratch-6"
+[ -d "$WORK/base-issue-7" ]   || st_fail "real run must KEEP dirty issue-7"
 # surface markers exist for the three kept experiments
 SURF="$WORK/conf/logs/.scratch-surfaced"
-[ "$(ls -1 "$SURF" 2>/dev/null | wc -l | tr -d ' ')" = 3 ] || fail "exactly three scratch surface markers expected" "$(ls -la "$SURF" 2>/dev/null)"
+[ "$(ls -1 "$SURF" 2>/dev/null | wc -l | tr -d ' ')" = 3 ] || st_fail "exactly three scratch surface markers expected" "$(ls -la "$SURF" 2>/dev/null)"
 # notify fired for scratch-2 + scratch-3 + scratch-6
-grep -q 'scratch-2 kept (unmerged work)' "$EVENTS" || fail "scratch-2 should have surfaced a notify" "$(cat "$EVENTS")"
-grep -q 'scratch-3 kept (dirty)' "$EVENTS" || fail "scratch-3 should have surfaced a notify" "$(cat "$EVENTS")"
-grep -q 'scratch-6 kept (clean, but a session ran here)' "$EVENTS" || fail "scratch-6 should have surfaced a notify" "$(cat "$EVENTS")"
-[ -s "$NOTIFY_LOG" ] && fail "a kept scratch is recorded in the alerts, never flashed (issue #1617)" "$(cat "$NOTIFY_LOG")"
+grep -q 'scratch-2 kept (unmerged work)' "$EVENTS" || st_fail "scratch-2 should have surfaced a notify" "$(cat "$EVENTS")"
+grep -q 'scratch-3 kept (dirty)' "$EVENTS" || st_fail "scratch-3 should have surfaced a notify" "$(cat "$EVENTS")"
+grep -q 'scratch-6 kept (clean, but a session ran here)' "$EVENTS" || st_fail "scratch-6 should have surfaced a notify" "$(cat "$EVENTS")"
+[ -s "$NOTIFY_LOG" ] && st_fail "a kept scratch is recorded in the alerts, never flashed (issue #1617)" "$(cat "$NOTIFY_LOG")"
 n1="$(wc -l < "$EVENTS" | tr -d ' ')"
 st_pass "REAL: pristine/merged scratch reaped; conversation/dirty/unmerged kept + surfaced once (markers + notify)"
 
 # ============================ SURFACE-ONCE dedup ===========================
 run_wac >/dev/null
 n2="$(wc -l < "$EVENTS" | tr -d ' ')"
-[ "$n1" = "$n2" ] || fail "a second sweep must NOT re-notify a still-kept scratch (surface once)" "before=$n1 after=$n2"
+[ "$n1" = "$n2" ] || st_fail "a second sweep must NOT re-notify a still-kept scratch (surface once)" "before=$n1 after=$n2"
 st_pass "SURFACE-ONCE: a kept scratch is surfaced only on the first sweep, not every cycle"
 
 # ============================ TASK: the record decides (issue #4897) ============
@@ -185,10 +184,10 @@ for b in scratch-8 scratch-9 issue-10 scratch-11; do
 done
 fleet_worktree_task_mark "$WORK/base-scratch-8" T81 && fleet_worktree_task_mark "$WORK/base-scratch-9" T91 \
   && fleet_worktree_task_mark "$WORK/base-issue-10" T101 && fleet_worktree_task_mark "$WORK/base-scratch-11" T111 \
-  || fail "fleet_worktree_task_mark could not mark a worktree"
-[ "$(fleet_worktree_task "$WORK/base-scratch-8")" = T81 ] || fail "fleet_worktree_task must read the mark back"
-[ -z "$(git -C "$WORK/base-scratch-8" status --porcelain)" ] || fail "the mark must not dirty the tree"
-fleet_worktree_task "$WORK/base-scratch-2" >/dev/null && fail "an unmarked worktree has no task"
+  || st_fail "fleet_worktree_task_mark could not mark a worktree"
+[ "$(fleet_worktree_task "$WORK/base-scratch-8")" = T81 ] || st_fail "fleet_worktree_task must read the mark back"
+[ -z "$(git -C "$WORK/base-scratch-8" status --porcelain)" ] || st_fail "the mark must not dirty the tree"
+fleet_worktree_task "$WORK/base-scratch-2" >/dev/null && st_fail "an unmarked worktree has no task"
 git -C "$BASE" commit --allow-empty -qm base-advance-2
 mkdir -p "$PROJ/$(enc "$WORK/base-scratch-8")"
 printf '{"type":"user","message":{"content":"the task conversation"}}\n' > "$PROJ/$(enc "$WORK/base-scratch-8")/s.jsonl"
@@ -198,15 +197,15 @@ case "$1" in T81|T101) echo SUCCEEDED; exit 0 ;; T91) echo WAITING; exit 1 ;; *)
 TC
 chmod +x "$WORK/task-closed"
 out="$(FLEET_TASK_CLOSED_CMD="$WORK/task-closed" run_wac --dry-run)"
-printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-8 ' || fail "TASK a closed task's conversation scratch should PRUNE" "$out"
-printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-9 .*skip:task-open .*T91 is WAITING' || fail "TASK an open record must KEEP" "$out"
-printf '%s\n' "$out" | grep -Eq 'PRUNE +issue-10 ' || fail "TASK a closed record prunes an issue worktree whatever the issue says" "$out"
-printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-11 .*skip:task-open .*T111 is unknown' || fail "TASK an unknown record must KEEP" "$out"
+printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-8 ' || st_fail "TASK a closed task's conversation scratch should PRUNE" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-9 .*skip:task-open .*T91 is WAITING' || st_fail "TASK an open record must KEEP" "$out"
+printf '%s\n' "$out" | grep -Eq 'PRUNE +issue-10 ' || st_fail "TASK a closed record prunes an issue worktree whatever the issue says" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-11 .*skip:task-open .*T111 is unknown' || st_fail "TASK an unknown record must KEEP" "$out"
 FLEET_TASK_CLOSED_CMD="$WORK/task-closed" run_wac >/dev/null
-[ -d "$WORK/base-scratch-8" ] && fail "TASK real run should remove the closed task's scratch-8"
-[ -d "$WORK/base-issue-10" ] && fail "TASK real run should remove the closed task's issue-10"
-[ -d "$WORK/base-scratch-9" ] || fail "TASK real run must KEEP the open task's scratch-9"
-[ -d "$WORK/base-scratch-11" ] || fail "TASK real run must KEEP the unknown task's scratch-11"
+[ -d "$WORK/base-scratch-8" ] && st_fail "TASK real run should remove the closed task's scratch-8"
+[ -d "$WORK/base-issue-10" ] && st_fail "TASK real run should remove the closed task's issue-10"
+[ -d "$WORK/base-scratch-9" ] || st_fail "TASK real run must KEEP the open task's scratch-9"
+[ -d "$WORK/base-scratch-11" ] || st_fail "TASK real run must KEEP the unknown task's scratch-11"
 st_pass "TASK the worktree's record decides: closed ⇒ prune (even a conversation / an open issue); open / unknown ⇒ keep"
 
 printf '\nselftest OK: %s assertions passed (janitor scratch reap rules, #290)\n' "$pass"

@@ -51,6 +51,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 RUNNER="$BIN/run-selftests.sh"
 MK="$BIN/selftest-shadow-root.sh"
 # The matrix lives in the reusable selftests-shards.yml since issue #3141 (the PR
@@ -61,12 +62,10 @@ GATE_WF="$BIN/../.github/workflows/selftests.yml"
 [ -f "$MK" ]     || { printf 'selftest: %s missing\n' "$MK" >&2; exit 2; }
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '  %s\n' "$2" >&2; exit 1; }
 ok()   { CHECKS=$((CHECKS + 1)); printf 'ok   %s\n' "$1"; }
-eq()   { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; printf 'ok   %s\n' "$1"; }
+eq()   { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; printf 'ok   %s\n' "$1"; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/run-selftests-shard.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/run-selftests-shard.XXXXXX"
 trap 'rm -rf "$WORK"; exit 130' INT TERM HUP
 
 # A sandbox install root: the runner + the shadow builder it re-execs through, and
@@ -121,7 +120,7 @@ if [ -f "$GATE_WF" ]; then
   wf_n=$(sed -n "s/^[[:space:]]*shards:[^[]*\[\([0-9, ]*\)\].*/\1/p" "$GATE_WF" \
            | tr ',' '\n' | grep -c '[0-9]')
   case "$wf_n" in
-    ''|*[!0-9]*|0) fail "could not read the shards: matrix width out of $GATE_WF" ;;
+    ''|*[!0-9]*|0) st_fail "could not read the shards: matrix width out of $GATE_WF" ;;
   esac
   # A width past the 12-test fixture is checked below on a fixture grown to it
   # (an empty shard is refused by design); one inside it joins the loops here.
@@ -133,9 +132,9 @@ for N in $WIDTHS; do
   union=''
   k=1
   while [ "$k" -le "$N" ]; do
-    out=$(run --shard "$k/$N") || fail "shard $k/$N went red on all-passing fakes" "$out"
+    out=$(run --shard "$k/$N") || st_fail "shard $k/$N went red on all-passing fakes" "$out"
     got=$(ran "$out")
-    [ -n "$got" ] || fail "shard $k/$N ran nothing" "$out"
+    [ -n "$got" ] || st_fail "shard $k/$N ran nothing" "$out"
     union="$union$got
 "
     k=$((k + 1))
@@ -151,7 +150,7 @@ done
 
 # STRIDE, not contiguous blocks: with N=4, shard 1 must be f01 f05 f09 — neighbours
 # spread across shards. A block split would hand it f01 f02 f03.
-out=$(run --shard 1/4) || fail "shard 1/4 went red" "$out"
+out=$(run --shard 1/4) || st_fail "shard 1/4 went red" "$out"
 eq "the split strides (every Nth), so adjacent names land in different shards" \
    "f01-selftest.sh
 f05-selftest.sh
@@ -165,7 +164,7 @@ mkfake f13
 ALL13=$(cd "$WORK/bin" && ls ./*-selftest.sh | sed 's|^\./||' | sort)
 union=''
 for k in 1 2 3 4; do
-  out=$(run --shard "$k/4") || fail "shard $k/4 went red after a test was added" "$out"
+  out=$(run --shard "$k/4") || st_fail "shard $k/4 went red after a test was added" "$out"
   union="$union$(ran "$out")
 "
 done
@@ -173,7 +172,7 @@ eq "a NEW selftest re-deals the shards by itself — nothing to bump, remainder 
    "$ALL13" "$(printf '%s' "$union" | sed '/^$/d' | sort)"
 
 # No --shard at all = the whole suite, unchanged from before sharding existed.
-out=$(run) || fail "an unsharded run went red" "$out"
+out=$(run) || st_fail "an unsharded run went red" "$out"
 eq "no --shard runs everything" "$ALL13" "$(ran "$out" | sort)"
 
 # ---------------------------------------------------------------------------
@@ -190,10 +189,10 @@ TABLE="$WORK/bin/selftest-durations.txt"
 } > "$TABLE"
 slowin=''
 for k in 1 2 3 4; do
-  out=$(run --shard "$k/4") || fail "shard $k/4 went red with a cost table" "$out"
+  out=$(run --shard "$k/4") || st_fail "shard $k/4 went red with a cost table" "$out"
   slowin="$slowin$(ran "$out" | grep -cE '^f(01|05|09|13)-')"
   case "$out" in *"shard $k/4 — predicted ~"*"s (heaviest of 4"*) ;;
-    *) fail "shard $k/4 must print its predicted load when a table exists" "$out" ;; esac
+    *) st_fail "shard $k/4 must print its predicted load when a table exists" "$out" ;; esac
 done
 eq "slow tests whose positions differ by a multiple of N are spread one per shard" 1111 "$slowin"
 
@@ -202,7 +201,7 @@ for N in $WIDTHS; do
   k=1
   while [ "$k" -le "$N" ]; do
     out=$(run --shard "$k/$N"); rc=$?
-    [ "$rc" = 0 ] || fail "shard $k/$N went red with a cost table" "$out"
+    [ "$rc" = 0 ] || st_fail "shard $k/$N went red with a cost table" "$out"
     union="$union$(ran "$out")
 "
     k=$((k + 1))
@@ -217,41 +216,41 @@ union=''
 for k in 1 2 3 4; do union="$union$(ran "$(run --shard "$k/4")")
 "; done
 CHECKS=$((CHECKS + 1))
-printf '%s' "$union" | grep -qx 'f14-selftest.sh' || fail "a test with no row in the table was never scheduled" "$union"
+printf '%s' "$union" | grep -qx 'f14-selftest.sh' || st_fail "a test with no row in the table was never scheduled" "$union"
 ok "a test with no row in the table is still scheduled (costed at the median)"
 rm -f "$WORK/bin/f14-selftest.sh"
 
 out=$(run --shard 1/4)
-case "$out" in *WARN*) fail "a ~100s shard must not WARN" "$out" ;; *) ok "a light shard does not WARN" ;; esac
+case "$out" in *WARN*) st_fail "a ~100s shard must not WARN" "$out" ;; *) ok "a light shard does not WARN" ;; esac
 sed -i.bak 's/^100 f01/450 f01/' "$TABLE" && rm -f "$TABLE.bak"
-out=$(run --shard 2/4) || fail "a WARN must not turn the shard red" "$out"
+out=$(run --shard 2/4) || st_fail "a WARN must not turn the shard red" "$out"
 case "$out" in *"WARN heaviest shard predicted ~450s"*) ok "a heaviest shard past 400s WARNs — on every shard's log, not just its own" ;;
-  *) fail "a 450s shard must WARN" "$out" ;; esac
+  *) st_fail "a 450s shard must WARN" "$out" ;; esac
 # --durations (issue #3145): our own Macs pack by THEIR table — here a flat one, so
 # the 450s row of the default table is not what this shard reads.
 { echo '# own machines'; for n in 01 02 03 04 05 06 07 08 09 10 11 12 13; do echo "2 f$n-selftest.sh"; done; } > "$WORK/bin/own-durations.txt"
-out=$(run --durations own-durations.txt --shard 2/4) || fail "--durations went red" "$out"
-case "$out" in *"by own-durations.txt"*) ;; *) fail "--durations must pack by the named table" "$out" ;; esac
-case "$out" in *WARN*) fail "--durations still read the default table's 450s row" "$out" ;; *) ok "--durations packs by the named table (our own Macs keep their own costs)" ;; esac
-out=$(run --durations no-such.txt --shard 2/4) || fail "a missing --durations table went red" "$out"
+out=$(run --durations own-durations.txt --shard 2/4) || st_fail "--durations went red" "$out"
+case "$out" in *"by own-durations.txt"*) ;; *) st_fail "--durations must pack by the named table" "$out" ;; esac
+case "$out" in *WARN*) st_fail "--durations still read the default table's 450s row" "$out" ;; *) ok "--durations packs by the named table (our own Macs keep their own costs)" ;; esac
+out=$(run --durations no-such.txt --shard 2/4) || st_fail "a missing --durations table went red" "$out"
 case "$out" in *"no durations table no-such.txt"*"WARN heaviest shard predicted ~450s"*) ok "a missing --durations table falls back to selftest-durations.txt" ;;
-  *) fail "a missing --durations table must fall back to the default, saying so" "$out" ;; esac
+  *) st_fail "a missing --durations table must fall back to the default, saying so" "$out" ;; esac
 # --solo S (issue #3865): a test over S seconds runs alone in its slice, while one
 # slice is left for the rest. Table now: f01 450 · f05 f09 f13 100 · the rest 1.
 for k in 1 2 3; do
-  out=$(run --solo 75 --shard "$k/4") || fail "--solo shard $k/4 went red" "$out"
+  out=$(run --solo 75 --shard "$k/4") || st_fail "--solo shard $k/4 went red" "$out"
   eq "--solo 75, N=4: slice $k holds one slow test and nothing else" 1 "$(ran "$out" | wc -l | tr -d ' ')"
 done
 out=$(run --solo 75 --shard 4/4)
 eq "--solo 75, N=4: the last open slice takes the fourth slow test and every light one" 10 "$(ran "$out" | wc -l | tr -d ' ')"
 out=$(run --shard 2/4)
 CHECKS=$((CHECKS + 1))
-[ "$(ran "$out" | wc -l | tr -d ' ')" -gt 1 ] || fail "without --solo a slow test's slice must still take light ones" "$out"
+[ "$(ran "$out" | wc -l | tr -d ' ')" -gt 1 ] || st_fail "without --solo a slow test's slice must still take light ones" "$out"
 ok "without --solo the deal is the old longest-first deal"
 union=''
 for k in 1 2 3 4 5 6; do
-  out=$(run --solo 75 --shard "$k/6") || fail "--solo shard $k/6 went red" "$out"
-  [ "$k" -gt 4 ] || [ "$(ran "$out" | wc -l | tr -d ' ')" = 1 ] || fail "--solo 75, N=6: slice $k is not one slow test" "$out"
+  out=$(run --solo 75 --shard "$k/6") || st_fail "--solo shard $k/6 went red" "$out"
+  [ "$k" -gt 4 ] || [ "$(ran "$out" | wc -l | tr -d ' ')" = 1 ] || st_fail "--solo 75, N=6: slice $k is not one slow test" "$out"
   union="$union$(ran "$out")
 "
 done
@@ -264,12 +263,12 @@ eq "--solo wants whole seconds (exit 2)" 2 "$rc"
 out=$(run --shard 4/4); slice=$(ran "$out" | sort)
 first=$(printf '%s\n' "$slice" | head -2)
 printf '%s\n' "$first" > "$WORK/passed"
-out=$(run --passed "$WORK/passed" --shard 4/4) || fail "--passed went red" "$out"
+out=$(run --passed "$WORK/passed" --shard 4/4) || st_fail "--passed went red" "$out"
 eq "--passed: the rerun runs the slice minus what already passed" \
    "$(printf '%s\n' "$slice" | sed 1,2d)" "$(ran "$out" | sort)"
 eq "--passed: each one left out is named" 2 "$(printf '%s\n' "$out" | grep -c '^PASSED-BEFORE ')"
 printf '%s\n' "$slice" > "$WORK/passed"
-out=$(run --passed "$WORK/passed" --shard 4/4) || fail "--passed with the whole slice done went red" "$out"
+out=$(run --passed "$WORK/passed" --shard 4/4) || st_fail "--passed with the whole slice done went red" "$out"
 eq "--passed: a slice already all passed runs nothing, green" "" "$(ran "$out")"
 out=$(run --passed "$WORK/no-such" --shard 4/4); rc=$?
 eq "--passed needs a file (exit 2)" 2 "$rc"
@@ -283,7 +282,7 @@ if [ "${wf_n:-0}" -gt 13 ]; then
   ALLW=$(cd "$WORK/bin" && ls ./*-selftest.sh | sed 's|^\./||' | sort)
   union='' k=1
   while [ "$k" -le "$wf_n" ]; do
-    out=$(run --shard "$k/$wf_n") || fail "shard $k/$wf_n went red on all-passing fakes" "$out"
+    out=$(run --shard "$k/$wf_n") || st_fail "shard $k/$wf_n went red on all-passing fakes" "$out"
     union="$union$(ran "$out")
 "
     k=$((k + 1))
@@ -298,7 +297,7 @@ fi
 # ---------------------------------------------------------------------------
 UPD="$BIN/selftest-durations.sh"
 if [ ! -f "$UPD" ]; then
-  fail "$UPD missing"
+  st_fail "$UPD missing"
 fi
 ln -s "$UPD" "$WORK/bin/selftest-durations.sh"
 { echo '# header kept'; echo '7.0 f02-selftest.sh'; echo '9.0 f03-selftest.sh'; echo '5.0 gone-selftest.sh'; } > "$TABLE"
@@ -309,7 +308,7 @@ log="$WORK/run.log"
   echo 'TIMEOUT f04-selftest.sh  240.0s (limit 240s)'
   echo 'PASS  gone-selftest.sh   2.0s'
 } > "$log"
-msg=$(sh "$WORK/bin/selftest-durations.sh" "$log") || fail "selftest-durations.sh failed" "$msg"
+msg=$(sh "$WORK/bin/selftest-durations.sh" "$log") || st_fail "selftest-durations.sh failed" "$msg"
 eq "the updater reports what it did" "selftest-durations: 1 updated, 1 added, 1 kept, 1 dropped" "$msg"
 eq "the table: median of observations, unseen kept, deleted test dropped, header kept, sorted by name" \
    "# header kept
@@ -329,7 +328,7 @@ DT="$WORK/bin/break-it-durations.txt"
   echo 'PASS  fleet-break-it-x-selftest.sh   9.0s'
   echo 'FAIL  lint: drill_x has no row in docs/dev/BREAK-IT.md'
 } > "$log"
-msg=$(sh "$WORK/bin/selftest-durations.sh" --drills "$log") || fail "selftest-durations.sh --drills failed" "$msg"
+msg=$(sh "$WORK/bin/selftest-durations.sh" --drills "$log") || st_fail "selftest-durations.sh --drills failed" "$msg"
 eq "--drills reports what it did" "selftest-durations: 1 updated, 0 added, 1 kept, 1 dropped" "$msg"
 eq "--drills: the median wall time per drill, unseen kept, a deleted drill dropped" \
    "# drills
@@ -359,14 +358,14 @@ rm -f "$DT"
 # ---------------------------------------------------------------------------
 out=$(run --shard 2/2 f01); rc=$?
 eq "an EMPTY shard is exit 2, not an all-green" 2 "$rc"
-case "$out" in *empty*) ok "…and says so" ;; *) fail "the empty-shard refusal must name the shard" "$out" ;; esac
-case "$out" in *"all green"*) fail "an empty shard printed 'all green'" "$out" ;; *) ok "…and never prints 'all green'" ;; esac
+case "$out" in *empty*) ok "…and says so" ;; *) st_fail "the empty-shard refusal must name the shard" "$out" ;; esac
+case "$out" in *"all green"*) st_fail "an empty shard printed 'all green'" "$out" ;; *) ok "…and never prints 'all green'" ;; esac
 
 for spec in abc 1 1/ /4 1/4/5 1/x 0/4 5/4; do
   out=$(run --shard "$spec"); rc=$?
   CHECKS=$((CHECKS + 1))
-  [ "$rc" = 2 ] || fail "--shard '$spec' must be refused with exit 2, got $rc" "$out"
-  case "$out" in *"all green"*) fail "--shard '$spec' ran the suite instead of refusing" "$out" ;; esac
+  [ "$rc" = 2 ] || st_fail "--shard '$spec' must be refused with exit 2, got $rc" "$out"
+  case "$out" in *"all green"*) st_fail "--shard '$spec' ran the suite instead of refusing" "$out" ;; esac
 done
 ok "every malformed or out-of-range --shard K/N is exit 2, before any test runs"
 
@@ -380,35 +379,35 @@ mkfake f05 3           # f05 is in shard 1 of 4, per the stride asserted above
 out=$(run --shard 1/4); rc=$?
 eq "a failing test fails its shard" 1 "$rc"
 case "$out" in *"failed: f05-selftest.sh"*|*"failed: "*f05*) ok "…and is named in the failed: line" ;;
-  *) fail "the failed: line must name the test" "$out" ;; esac
+  *) st_fail "the failed: line must name the test" "$out" ;; esac
 case "$out" in *"FAIL  f05-selftest.sh"*) ok "…with its exit code on the FAIL line" ;;
-  *) fail "no FAIL line for f05" "$out" ;; esac
+  *) st_fail "no FAIL line for f05" "$out" ;; esac
 # A red in one shard says nothing about the others: they must still pass on their own.
-out=$(run --shard 2/4) || fail "a sibling shard went red because shard 1 did" "$out"
+out=$(run --shard 2/4) || st_fail "a sibling shard went red because shard 1 did" "$out"
 ok "a red shard does not redden its siblings"
 mkfake f05             # back to green
 
 # ---------------------------------------------------------------------------
 # TIMINGS (#681: the number that names the slow test before it eats the budget)
 # ---------------------------------------------------------------------------
-out=$(run --shard 1/4) || fail "shard 1/4 went red" "$out"
+out=$(run --shard 1/4) || st_fail "shard 1/4 went red" "$out"
 CHECKS=$((CHECKS + 1))
 printf '%s\n' "$out" | grep -qE '^PASS  f01-selftest\.sh +[0-9]+\.[0-9]s$' \
-  || fail "every PASS line must carry the test's duration" "$(printf '%s\n' "$out" | grep '^PASS')"
+  || st_fail "every PASS line must carry the test's duration" "$(printf '%s\n' "$out" | grep '^PASS')"
 ok "each PASS/FAIL line carries a duration"
 
 CHECKS=$((CHECKS + 1))
 slow=$(printf '%s\n' "$out" | sed -n '/slowest/,/^$/p' | sed -n '2p' | awk '{print $2}')
 [ "$slow" = "f01-selftest.sh" ] \
-  || fail "the slowest table must lead with the slowest test (f01 sleeps 0.4s), got [$slow]" "$out"
+  || st_fail "the slowest table must lead with the slowest test (f01 sleeps 0.4s), got [$slow]" "$out"
 ok "the slowest table is ordered slowest-first"
 
 CHECKS=$((CHECKS + 1))
 out=$( ( cd "$WORK/bin" && env -u FLEET_SELFTEST_ROOT -u FLEET_SELFTEST_NO_SHADOW \
            FLEET_SELFTEST_SLOWEST=0 sh ./run-selftests.sh --shard 1/4 </dev/null 2>&1 ) )
-case "$out" in *slowest*) fail "FLEET_SELFTEST_SLOWEST=0 must drop the table" "$out" ;; esac
+case "$out" in *slowest*) st_fail "FLEET_SELFTEST_SLOWEST=0 must drop the table" "$out" ;; esac
 case "$out" in *"all green"*) ok "FLEET_SELFTEST_SLOWEST=0 drops the table and still reports the verdict" ;;
-  *) fail "FLEET_SELFTEST_SLOWEST=0 broke the run" "$out" ;; esac
+  *) st_fail "FLEET_SELFTEST_SLOWEST=0 broke the run" "$out" ;; esac
 
 # ---------------------------------------------------------------------------
 # THE SHIPPED WORKFLOW — the two ways CI and the runner can silently disagree
@@ -417,7 +416,7 @@ if [ ! -f "$WF" ]; then
   printf 'selftest: %s absent — SKIP the workflow half\n' "$WF" >&2
 else
   CHECKS=$((CHECKS + 1))
-  grep -q -- '--shard' "$WF" || fail "the workflow no longer shards the gate — it is back to one ~9-minute job against its timeout (#681)"
+  grep -q -- '--shard' "$WF" || st_fail "the workflow no longer shards the gate — it is back to one ~9-minute job against its timeout (#681)"
   ok "the shipped workflow runs the gate sharded"
 
   # N must come from strategy.job-total, not a literal, ON THE --shard LINE ITSELF.
@@ -426,13 +425,13 @@ else
   # what this line exists to prevent, so it checks the argument, not the file.
   CHECKS=$((CHECKS + 1))
   grep -A2 -- '--shard' "$WF" | grep -q 'strategy\.job-total' \
-    || fail "the --shard argument must take N from strategy.job-total, so editing the shard: matrix cannot leave the runner splitting by a stale N" \
+    || st_fail "the --shard argument must take N from strategy.job-total, so editing the shard: matrix cannot leave the runner splitting by a stale N" \
             "$(grep -n -A2 -- '--shard' "$WF")"
   ok "the shard width has one source of truth (strategy.job-total)"
 
   CHECKS=$((CHECKS + 1))
   grep -qE '^\s*fail-fast:\s*false' "$WF" \
-    || fail "fail-fast must stay false: one red shard cancelling its siblings hides whether the rest were green, which is what makes people re-run instead of read"
+    || st_fail "fail-fast must stay false: one red shard cancelling its siblings hides whether the rest were green, which is what makes people re-run instead of read"
   ok "a red shard does not cancel the others (fail-fast: false)"
 
   # mac-follow runs THIS workflow on a stable that can predate an option master
@@ -440,9 +439,9 @@ else
   # every shard). Every option but --shard / --changed is asked of the checked-out
   # run-selftests.sh first (`has`), and a missing shard runner falls back.
   _bad=$(awk '/set -- --[a-z-]+ / && !/set -- --(shard|changed) / && !/! has --/ && !(prev ~ /&& has --/) { print } { prev = $0 }' "$WF")
-  [ -z "$_bad" ] || fail "selftests-shards.yml passes an option without asking the tree's run-selftests.sh (has --<opt>)" "$_bad"
+  [ -z "$_bad" ] || st_fail "selftests-shards.yml passes an option without asking the tree's run-selftests.sh (has --<opt>)" "$_bad"
   grep -qE '\[ -n "\$SHARD_BUDGET_SECS" \] && \[ -f bin/fleet-shard-run\.sh \]' "$WF" \
-    || fail "selftests-shards.yml runs fleet-shard-run.sh without checking the tree has it"
+    || st_fail "selftests-shards.yml runs fleet-shard-run.sh without checking the tree has it"
   ok "an option the tested tree's run-selftests.sh lacks is left off, not passed (#3915)"
 
   # The durations tables price a BREAK-IT drill's Go half as skipped (ubuntu has
@@ -450,17 +449,17 @@ else
   # two shards went past 150 s (issue #3970). The Go gate owns those tests.
   CHECKS=$((CHECKS + 1))
   grep -qE "^[[:space:]]*BREAK_GO:[[:space:]]*'0'" "$WF" \
-    || fail "selftests-shards.yml must set BREAK_GO: '0' — a runner with a Go module cache runs the drills' go test halves the forecast never priced (#3970)"
+    || st_fail "selftests-shards.yml must set BREAK_GO: '0' — a runner with a Go module cache runs the drills' go test halves the forecast never priced (#3970)"
   _cut=$(printf '=== a-selftest.sh ===\nPASS  a-selftest.sh 1s\n=== b-selftest.sh ===\nPASS  inner-drill 1s\n' \
     | awk "$(grep -m1 -o "/^=== /{h=\$2}[^']*" "$WF")")
   [ "$_cut" = '  b-selftest.sh' ] \
-    || fail "a cut-short shard's summary must name the test in flight past a drill's inner PASS line (#3970)" "$_cut"
+    || st_fail "a cut-short shard's summary must name the test in flight past a drill's inner PASS line (#3970)" "$_cut"
   ok "the shards run no unpriced go test, and a cut names its test (#3970)"
 
   if [ -f "$GATE_WF" ]; then
     CHECKS=$((CHECKS + 1))
     grep -qE '^[[:space:]]*uses:[[:space:]]*\./\.github/workflows/selftests-shards\.yml' "$GATE_WF" \
-      || fail "selftests.yml (the PR gate) no longer calls selftests-shards.yml — the gate and the release train would run different matrices"
+      || st_fail "selftests.yml (the PR gate) no longer calls selftests-shards.yml — the gate and the release train would run different matrices"
     ok "the PR gate runs the one shared matrix (selftests-shards.yml)"
   fi
 fi

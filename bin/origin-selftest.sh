@@ -20,6 +20,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 LIB="$BIN/fleet-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
@@ -33,11 +34,9 @@ export FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_CONF_DIR="$WORK/conf"     # keep #566's @wid allocation lock in the sandbox
 mkdir -p "$WORK/conf"
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
-contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — output does not contain [$3]";; esac; }
-not_contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 — output unexpectedly contains [$3]";; esac; }
+st_tally count
+contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]";; esac; }
+not_contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 — output unexpectedly contains [$3]";; esac; }
 
 # ============================================================================
 # B. history: ledger col 11, fleet_reap_record arg 11, rows ↳ tag, meta field 3
@@ -60,22 +59,22 @@ WT3="$WORK/wt/repo-scratch-901"; mk_wt "$WT3"
 bash "$HIST" record-closed --key 77 --worktree "$WT1" --session s \
   --title t77 --origin issue-42 >/dev/null 2>&1
 row=$(grep -m1 "	77	" "$FLEET_HISTORY_LEDGER")
-eq "record-closed --origin → col 11" "issue-42" "$(printf '%s' "$row" | awk -F'\t' '{print $11}')"
-eq "record-closed --origin → col 10 still state" "closed-unlanded" "$(printf '%s' "$row" | awk -F'\t' '{print $10}')"
+st_eq "record-closed --origin → col 11" "issue-42" "$(printf '%s' "$row" | awk -F'\t' '{print $11}')"
+st_eq "record-closed --origin → col 10 still state" "closed-unlanded" "$(printf '%s' "$row" | awk -F'\t' '{print $10}')"
 
 # record-closed WITHOUT --origin → '-' (hub), 11 columns still.
 bash "$HIST" record-closed --key 78 --worktree "$WT2" --session s \
   --title t78 >/dev/null 2>&1
 row=$(grep -m1 "	78	" "$FLEET_HISTORY_LEDGER")
-eq "origin-less record → col 11 is '-'" "-" "$(printf '%s' "$row" | awk -F'\t' '{print $11}')"
+st_eq "origin-less record → col 11 is '-'" "-" "$(printf '%s' "$row" | awk -F'\t' '{print $11}')"
 
 # fleet_reap_record threads its 11th arg into the ledger row.
 # shellcheck source=/dev/null
 . "$LIB"
 fleet_reap_record "unmerged" "fake/repo" "" "" "$WT3" "" "s" "" "scratch-901" "scrX" "issue-100"
 row=$(grep -m1 "	scratch-901	" "$FLEET_HISTORY_LEDGER")
-[ -n "$row" ] || fail "fleet_reap_record: no scratch-901 row written"
-eq "fleet_reap_record arg 11 → col 11" "issue-100" "$(printf '%s' "$row" | awk -F'\t' '{print $11}')"
+[ -n "$row" ] || st_fail "fleet_reap_record: no scratch-901 row written"
+st_eq "fleet_reap_record arg 11 → col 11" "issue-100" "$(printf '%s' "$row" | awk -F'\t' '{print $11}')"
 
 # fleet_origin_canon <explicit> <detected> [<target-sess>] [<src-sess>] — the
 # spawners' single provenance decision. An explicit --origin is canonicalized to
@@ -87,28 +86,28 @@ eq "fleet_reap_record arg 11 → col 11" "issue-100" "$(printf '%s' "$row" | awk
 # that names some other window on the target's dash) applies to whatever was
 # detected. Canonical keys + the known literals pass through untouched.
 canon() { fleet_origin_canon "$@" 2>/dev/null; }
-eq "canon: worktree basename → scratch key"              "scratch-52" "$(canon cd-conductor-scratch-52 scratch-52)"
-eq "canon: basename alone (tail re-entry, no pane)"      "scratch-52" "$(canon cd-conductor-scratch-52 '')"
-eq "canon: issue worktree basename → issue key"          "issue-4591" "$(canon repo-issue-4591 '')"
-eq "canon: a canonical key passes through"               "issue-77"   "$(canon issue-77 scratch-5)"
-eq "canon: a known literal wins over detection"          "autofill"   "$(canon autofill scratch-5)"
-eq "canon: garbage explicit yields to detected"          "scratch-52" "$(canon foo scratch-52)"
-eq "canon: garbage explicit, headless → kept as label"   "foo"        "$(canon foo '')"
-eq "canon: sanitized to the key charset"                 "badvalue"   "$(canon 'bad value!' '')"
-eq "canon: no explicit → detected"                       "scratch-52" "$(canon '' scratch-52)"
-eq "canon: cross-fleet → source fleet"                   "srcfleet"   "$(canon '' scratch-5 dstfleet srcfleet)"
-eq "canon: same fleet keeps the key"                     "scratch-5"  "$(canon '' scratch-5 srcfleet srcfleet)"
-eq "canon: no target ≡ own fleet"                        "scratch-5"  "$(canon '' scratch-5 '' srcfleet)"
-eq "canon: garbage explicit + cross-fleet → source fleet" "srcfleet"  "$(canon foo scratch-5 dstfleet srcfleet)"
-eq "canon: explicit key honoured across fleets (#516)"   "issue-77"   "$(canon issue-77 scratch-5 dstfleet srcfleet)"
-eq "canon: nothing anywhere ≡ hub"                       ""           "$(canon '' '')"
-eq "canon: explicit hub beats a detected worker (#896)"  ""           "$(canon hub issue-42)"
-eq "canon: explicit hub, cross-fleet → still hub"        ""           "$(canon hub scratch-5 dstfleet srcfleet)"
+st_eq "canon: worktree basename → scratch key"              "scratch-52" "$(canon cd-conductor-scratch-52 scratch-52)"
+st_eq "canon: basename alone (tail re-entry, no pane)"      "scratch-52" "$(canon cd-conductor-scratch-52 '')"
+st_eq "canon: issue worktree basename → issue key"          "issue-4591" "$(canon repo-issue-4591 '')"
+st_eq "canon: a canonical key passes through"               "issue-77"   "$(canon issue-77 scratch-5)"
+st_eq "canon: a known literal wins over detection"          "autofill"   "$(canon autofill scratch-5)"
+st_eq "canon: garbage explicit yields to detected"          "scratch-52" "$(canon foo scratch-52)"
+st_eq "canon: garbage explicit, headless → kept as label"   "foo"        "$(canon foo '')"
+st_eq "canon: sanitized to the key charset"                 "badvalue"   "$(canon 'bad value!' '')"
+st_eq "canon: no explicit → detected"                       "scratch-52" "$(canon '' scratch-52)"
+st_eq "canon: cross-fleet → source fleet"                   "srcfleet"   "$(canon '' scratch-5 dstfleet srcfleet)"
+st_eq "canon: same fleet keeps the key"                     "scratch-5"  "$(canon '' scratch-5 srcfleet srcfleet)"
+st_eq "canon: no target ≡ own fleet"                        "scratch-5"  "$(canon '' scratch-5 '' srcfleet)"
+st_eq "canon: garbage explicit + cross-fleet → source fleet" "srcfleet"  "$(canon foo scratch-5 dstfleet srcfleet)"
+st_eq "canon: explicit key honoured across fleets (#516)"   "issue-77"   "$(canon issue-77 scratch-5 dstfleet srcfleet)"
+st_eq "canon: nothing anywhere ≡ hub"                       ""           "$(canon '' '')"
+st_eq "canon: explicit hub beats a detected worker (#896)"  ""           "$(canon hub issue-42)"
+st_eq "canon: explicit hub, cross-fleet → still hub"        ""           "$(canon hub scratch-5 dstfleet srcfleet)"
 # Issue #1939: in a fleet of ONE repo a bare key is written qualified, never bare.
 mkdir -p "$FLEET_CONF_DIR/fleets/onerepo"; : > "$FLEET_CONF_DIR/fleets/onerepo/conf"; fx_repo "$FLEET_CONF_DIR" "onerepo" acme/app
-eq "canon: a bare explicit key in a one-repo fleet → qualified" "acme-app:issue-77" "$(canon issue-77 '' onerepo)"
-eq "canon: a worktree basename too"                      "acme-app:scratch-52" "$(canon cd-conductor-scratch-52 '' onerepo)"
-eq "canon: a qualified key passes through"               "acme-lib:issue-77" "$(canon acme-lib:issue-77 '' onerepo)"
+st_eq "canon: a bare explicit key in a one-repo fleet → qualified" "acme-app:issue-77" "$(canon issue-77 '' onerepo)"
+st_eq "canon: a worktree basename too"                      "acme-app:scratch-52" "$(canon cd-conductor-scratch-52 '' onerepo)"
+st_eq "canon: a qualified key passes through"               "acme-lib:issue-77" "$(canon acme-lib:issue-77 '' onerepo)"
 
 # rows: the ↳ tag renders on tagged rows only (strip ANSI + the US field bytes).
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g' -e $'s/\x1f/ /g'; }
@@ -119,8 +118,8 @@ r78=$(printf '%s\n' "$rows_out" | grep 't78')
 not_contains "rows: hub row has no tag" "$r78" "↳"
 
 # meta: origin rides as field 3 ('-' for a hub row).
-eq "meta: origin field" "issue-42" "$(bash "$HIST" meta 77 | awk -F'\t' '{print $3}')"
-eq "meta: hub row origin field" "-" "$(bash "$HIST" meta 78 | awk -F'\t' '{print $3}')"
+st_eq "meta: origin field" "issue-42" "$(bash "$HIST" meta 77 | awk -F'\t' '{print $3}')"
+st_eq "meta: hub row origin field" "-" "$(bash "$HIST" meta 78 | awk -F'\t' '{print $3}')"
 
 printf 'origin-selftest: part B ok (%d checks)\n' "$CHECKS"
 
@@ -136,11 +135,7 @@ fi
 # Isolated server via PATH shim (never the live server; see dash-marker-selftest).
 SOCK="$WORK/tmux.sock"
 mkdir -p "$WORK/bin"
-cat > "$WORK/bin/tmux" <<EOF
-#!/bin/sh
-exec "$REAL_TMUX" -S "$SOCK" "\$@"
-EOF
-chmod +x "$WORK/bin/tmux"
+st_tmux_socket "$WORK/bin" "$SOCK"
 export PATH="$WORK/bin:$PATH"
 export TMPDIR="$WORK"     # scope the dash cache under WORK
 cleanup() { tmux kill-server 2>/dev/null; rm -rf "$WORK"; }
@@ -150,7 +145,7 @@ trap 'exit 130' INT TERM HUP
 # US round-trip probe (some Linux tmux builds octal-escape 0x1f in -F output —
 # the producer can't parse there for reasons unrelated to #503; see #208's test).
 US=$(printf '\037')
-tmux new-session -d -s probe -x 80 -y 24 'sleep 300' 2>/dev/null || fail "could not start isolated tmux server"
+tmux new-session -d -s probe -x 80 -y 24 'sleep 300' 2>/dev/null || st_fail "could not start isolated tmux server"
 probe_out=$(tmux list-windows -t probe -F "a${US}b" 2>/dev/null | od -An -tx1 | tr -d ' \n')
 tmux kill-session -t probe 2>/dev/null
 case "$probe_out" in
@@ -165,7 +160,7 @@ mkdir -p "$WORK/wt/repo-scratch-7" "$WORK/wt/repo-scratch-9"
 # -c "$WORK" on the session AND every pane: a pane must never inherit the INVOKING
 # cwd — run from a checkout named `…-scratch-<N>` the plain pane would otherwise
 # key as that scratch (detection is path-based below, like the dash's okey_v).
-tmux new-session -d -s ok -x 200 -y 50 -c "$WORK" 'sleep 300' || fail "could not start 'ok' session"
+tmux new-session -d -s ok -x 200 -y 50 -c "$WORK" 'sleep 300' || st_fail "could not start 'ok' session"
 mk_pane() { # <name> [cwd] → pane id of a fresh window running sleep
   tmux new-window -d -P -F '#{pane_id}' -t ok: -n "$1" -c "${2:-$WORK}" 'sleep 300'
 }
@@ -182,23 +177,23 @@ p_bare=$(mk_pane w-bare "$WORK/wt/repo-scratch-9")
 
 og() { TMUX="fake,1,1" TMUX_PANE="$1" bash -c ". '$LIB'; fleet_origin_key"; }
 # No repo at all: nothing to qualify with, nothing to confuse — the bare key.
-eq "origin_key: a fleet hosting no repo keys bare" "issue-42" "$(og "$p_iss")"
+st_eq "origin_key: a fleet hosting no repo keys bare" "issue-42" "$(og "$p_iss")"
 mkdir -p "$FLEET_CONF_DIR/fleets/ok"; : > "$FLEET_CONF_DIR/fleets/ok/conf"; fx_repo "$FLEET_CONF_DIR" "ok" acme/app
-eq "origin_key: @issue pane" "acme-app:issue-42" "$(og "$p_iss")"
-eq "origin_key: @raw pane (from @worktree)" "acme-app:scratch-7" "$(og "$p_raw")"
-eq "origin_key: plain pane ≡ hub (empty)" "" "$(og "$p_plain")"
-eq "origin_key: unstamped scratch pane (cwd only)" "acme-app:scratch-9" "$(og "$p_bare")"
+st_eq "origin_key: @issue pane" "acme-app:issue-42" "$(og "$p_iss")"
+st_eq "origin_key: @raw pane (from @worktree)" "acme-app:scratch-7" "$(og "$p_raw")"
+st_eq "origin_key: plain pane ≡ hub (empty)" "" "$(og "$p_plain")"
+st_eq "origin_key: unstamped scratch pane (cwd only)" "acme-app:scratch-9" "$(og "$p_bare")"
 noenv=$(env -u TMUX -u TMUX_PANE bash -c ". '$LIB'; fleet_origin_key")
-eq "origin_key: no \$TMUX ≡ hub (empty)" "" "$noenv"
+st_eq "origin_key: no \$TMUX ≡ hub (empty)" "" "$noenv"
 # The same calls from ZSH (issue #1633): a skill's `source fleet-lib.sh` in Claude
 # Code's Bash tool runs in the login shell, zsh here, where `local path` emptied
 # PATH and the scratch key came back empty — /fleet-epic-run stamped its members
 # with the EPIC's key. portability-selftest.sh lints the cause repo-wide.
 if command -v zsh >/dev/null 2>&1; then
   ogz() { TMUX="fake,1,1" TMUX_PANE="$1" zsh -fc ". '$LIB'; fleet_origin_key"; }
-  eq "origin_key (zsh): @issue pane" "acme-app:issue-42" "$(ogz "$p_iss")"
-  eq "origin_key (zsh): @raw pane (from @worktree)" "acme-app:scratch-7" "$(ogz "$p_raw")"
-  eq "origin_key (zsh): unstamped scratch pane (cwd only)" "acme-app:scratch-9" "$(ogz "$p_bare")"
+  st_eq "origin_key (zsh): @issue pane" "acme-app:issue-42" "$(ogz "$p_iss")"
+  st_eq "origin_key (zsh): @raw pane (from @worktree)" "acme-app:scratch-7" "$(ogz "$p_raw")"
+  st_eq "origin_key (zsh): unstamped scratch pane (cwd only)" "acme-app:scratch-9" "$(ogz "$p_bare")"
 else
   printf 'origin-selftest: zsh not installed — zsh legs of part A SKIPPED\n'
 fi
@@ -212,7 +207,7 @@ mkdir -p "$WORK/wt/repo-scratch-5"
 # -c "$WORK": the initial window must NOT inherit the invoking cwd — running this
 # selftest from a checkout whose dir name happens to end `-scratch-<N>` would give
 # that window the same scratch key as scrP and shadow the parent lookup.
-tmux new-session -d -s fleetC -x 220 -y 50 -c "$WORK" 'sleep 300' || fail "could not start 'fleetC' session"
+tmux new-session -d -s fleetC -x 220 -y 50 -c "$WORK" 'sleep 300' || st_fail "could not start 'fleetC' session"
 # One repo (issue #1939): the grouping keys and the @origins a spawn stamps are
 # `acme-app:`-qualified, the same spelling in a fleet of one repo or five.
 mkdir -p "$FLEET_CONF_DIR/fleets/fleetC"; : > "$FLEET_CONF_DIR/fleets/fleetC/conf"; fx_repo "$FLEET_CONF_DIR" "fleetC" acme/app
@@ -236,23 +231,23 @@ mk_win scrP  ''  ''  "$WORK/wt/repo-scratch-5" >/dev/null
 mk_win kidS  104 acme-app:scratch-5 >/dev/null
 
 out=$(FLEET_SESSION=fleetC FZF_COLUMNS=180 bash "$ROWS" 2>/dev/null | strip)
-[ -n "$out" ] || fail "grouping: rows produced no output"
+[ -n "$out" ] || st_fail "grouping: rows produced no output"
 [ "${ORIGIN_SELFTEST_DEBUG:-0}" = 1 ] && printf '%s\n' "$out" | cat -n | cut -c1-100 >&2
 
 lineno() { printf '%s\n' "$out" | grep -n -- "$1" | head -1 | cut -d: -f1; }
 l_rootA=$(lineno ' rootA'); l_rootB=$(lineno ' rootB'); l_kidA=$(lineno 'kidA')
 l_orphX=$(lineno 'orphX');  l_scrP=$(lineno ' scrP');   l_kidS=$(lineno 'kidS')
 for v in l_rootA l_rootB l_kidA l_orphX l_scrP l_kidS; do
-  [ -n "${!v}" ] || fail "grouping: window ${v#l_} missing from rows output"
+  [ -n "${!v}" ] || st_fail "grouping: window ${v#l_} missing from rows output"
 done
 CHECKS=$((CHECKS + 6))
 
 # children directly under their parents; orphan below every live group
-[ "$l_kidA" -eq $((l_rootA + 1)) ] || fail "grouping: kidA (↳#100) must sit directly under rootA (rootA=$l_rootA kidA=$l_kidA)"
-[ "$l_rootB" -gt "$l_kidA" ]       || fail "grouping: rootB must follow rootA's group (rootB=$l_rootB kidA=$l_kidA)"
-[ "$l_kidS" -eq $((l_scrP + 1)) ]  || fail "grouping: kidS (↳~5) must sit directly under scrP (scrP=$l_scrP kidS=$l_kidS)"
+[ "$l_kidA" -eq $((l_rootA + 1)) ] || st_fail "grouping: kidA (↳#100) must sit directly under rootA (rootA=$l_rootA kidA=$l_kidA)"
+[ "$l_rootB" -gt "$l_kidA" ]       || st_fail "grouping: rootB must follow rootA's group (rootB=$l_rootB kidA=$l_kidA)"
+[ "$l_kidS" -eq $((l_scrP + 1)) ]  || st_fail "grouping: kidS (↳~5) must sit directly under scrP (scrP=$l_scrP kidS=$l_kidS)"
 for v in "$l_rootA" "$l_rootB" "$l_kidA" "$l_scrP" "$l_kidS"; do
-  [ "$l_orphX" -gt "$v" ] || fail "grouping: orphX (dead parent) must sink below every live group (orphX=$l_orphX vs $v)"
+  [ "$l_orphX" -gt "$v" ] || st_fail "grouping: orphX (dead parent) must sink below every live group (orphX=$l_orphX vs $v)"
 done
 CHECKS=$((CHECKS + 8))
 
@@ -266,13 +261,13 @@ row_of() { printf '%s\n' "$out" | grep -- "$1" | head -1; }
 dout=$(FLEET_SESSION=fleetC FZF_COLUMNS=180 bash "$ROWS" 2>/dev/null \
          | awk -F"$US" 'NR>1 {print $3}' | LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g')
 tree_of() { local r; r=$(printf '%s\n' "$dout" | grep -- "$1" | head -1); printf '%s' "${r:8:2}"; }   # 2-cell tree column (#1328)
-eq "grouping: kidA draws └ in the tree cell" "└ " "$(tree_of 'kidA')"
+st_eq "grouping: kidA draws └ in the tree cell" "└ " "$(tree_of 'kidA')"
 not_contains "grouping: a direct child drops the ↳ tag — the tree cell already says it" "$(row_of 'kidA')" "↳"
-eq "grouping: kidS draws └ under its scratch parent" "└ " "$(tree_of 'kidS')"
+st_eq "grouping: kidS draws └ under its scratch parent" "└ " "$(tree_of 'kidS')"
 not_contains "grouping: … and drops its ↳~5 tag for the same reason" "$(row_of 'kidS')" "↳"
-eq "grouping: an orphan's tree cell is blank" "  " "$(tree_of 'orphX')"
+st_eq "grouping: an orphan's tree cell is blank" "  " "$(tree_of 'orphX')"
 not_contains "grouping: orphX wears no ↳ tag either (issue #1328)" "$out" "↳#999"
-eq "grouping: a hub root's tree cell is blank too" "  " "$(tree_of ' rootB')"
+st_eq "grouping: a hub root's tree cell is blank too" "  " "$(tree_of ' rootB')"
 rootA_line=$(row_of ' rootA')
 not_contains "grouping: a hub root has no tag" "$rootA_line" "↳"
 
@@ -288,7 +283,7 @@ not_contains "grouping: a hub root has no tag" "$rootA_line" "↳"
 # never relays up the old holder's ancestry. Then the mod inbox: a new server
 # empties what the last one left.
 RP="$BIN/fleet-report-parent.sh"
-tmux new-session -d -s fleetD -x 200 -y 50 -c "$WORK" 'sleep 300' || fail "could not start 'fleetD' session"
+tmux new-session -d -s fleetD -x 200 -y 50 -c "$WORK" 'sleep 300' || st_fail "could not start 'fleetD' session"
 CDD="$FLEET_CONF_DIR/fleets/fleetD/children"; mkdir -p "$CDD" "$WORK/wt/repo-scratch-6"
 dwin() { # <name> [issue] → window id
   local w; w=$(tmux new-window -d -P -F '#{window_id}' -t fleetD: -n "$1" -c "$WORK" 'sleep 300')
@@ -303,8 +298,8 @@ GEN="$(date +%s).7"
 printf 'scratch-6\t1.1\nscratch-6\t%s\n' "$GEN" > "$CDD/.gen"
 gNEW=$(dwin gen-new 604);  tmux set-window-option -t "$gNEW" @origin scratch-6
 ( . "$LIB"; fleet_stamp_origin_gen fleetD "$gNEW" scratch-6 fleetD )
-eq "gen: a spawn stamps the parent's current generation" "$GEN" "$(tmux display-message -p -t "$gNEW" '#{@origin_gen}')"
-eq "gen: fleet_key_gen reads the LAST mint" "$GEN" "$( . "$LIB"; fleet_key_gen fleetD scratch-6 )"
+st_eq "gen: a spawn stamps the parent's current generation" "$GEN" "$(tmux display-message -p -t "$gNEW" '#{@origin_gen}')"
+st_eq "gen: fleet_key_gen reads the LAST mint" "$GEN" "$( . "$LIB"; fleet_key_gen fleetD scratch-6 )"
 
 rp() { bash "$RP" -L fleetD --win "$1" --state blocked --summary "gen leg" 2>&1; }
 out=$(rp "$gOLD")
@@ -339,23 +334,23 @@ map=$(cat "$( . "$LIB"; fleet_origin_map fleetD )")
 not_contains "gen: the map skips the previous scratch-6's parent link" "$map" "scratch-6	issue-700"
 contains "gen: …and keeps a generation-0 key's" "$map" "scratch-8	issue-700"
 anc=$( . "$LIB"; fleet_live_ancestor scratch-6 fleetD fleetD ); rc=$?
-eq "gen: no climb up the old holder's ancestry (rc 1)" "1|" "$rc|$anc"
+st_eq "gen: no climb up the old holder's ancestry (rc 1)" "1|" "$rc|$anc"
 printf '%s\n' "{\"seq\":3,\"child\":\"scratch-6\",\"child_gen\":\"$GEN\",\"state\":\"MERGED\"}" >> "$CDD/issue-700.ndjson"
 map=$(cat "$( . "$LIB"; fleet_origin_map fleetD )")
 contains "gen: the current scratch-6's own link is kept" "$map" "scratch-6	issue-700"
 anc=$( . "$LIB"; fleet_live_ancestor scratch-6 fleetD fleetD )
-eq "gen: …and the climb follows it" "issue-700	$gGP" "$anc"
+st_eq "gen: …and the climb follows it" "issue-700	$gGP" "$anc"
 
 # The mod inbox (#1337): a pane id is per SERVER lifetime — a dir left by the last
 # server is emptied before anything is posted to this one.
 IB="$FLEET_CONF_DIR/global/mod-inbox/fleetD"; mkdir -p "$IB/7"
 printf '{"cmd":"/clear"}\n' > "$IB/7/1-1-1.json"; printf '1.1\n' > "$IB/.server"
 ( . "$LIB"; fleet_mod_inbox_reset fleetD )
-eq "gen: a restarted server's inbox has no leftover command" no "$([ -e "$IB/7/1-1-1.json" ] && echo yes || echo no)"
-eq "gen: …and remembers the server it now belongs to" "$(tmux display-message -p '#{pid}.#{start_time}')" "$(cat "$IB/.server")"
+st_eq "gen: a restarted server's inbox has no leftover command" no "$([ -e "$IB/7/1-1-1.json" ] && echo yes || echo no)"
+st_eq "gen: …and remembers the server it now belongs to" "$(tmux display-message -p '#{pid}.#{start_time}')" "$(cat "$IB/.server")"
 mkdir -p "$IB/7"; printf '{"cmd":"/clear"}\n' > "$IB/7/2-2-2.json"
 ( . "$LIB"; fleet_mod_inbox_reset fleetD )
-eq "gen: the same server keeps a pending command" yes "$([ -e "$IB/7/2-2-2.json" ] && echo yes || echo no)"
+st_eq "gen: the same server keeps a pending command" yes "$([ -e "$IB/7/2-2-2.json" ] && echo yes || echo no)"
 
 # ============================================================================
 # T. fleet_target_repo — ONE rule for one repo and two (issue #1938): a given
@@ -371,13 +366,13 @@ printf 'FLEET_REPO=o/b\n' > "$TR/fleets/two/repos/o-b.conf"
 tr_run() { ( unset TMUX TMUX_PANE; FLEET_CONF_DIR="$TR"; . "$LIB"
              out=$(fleet_target_repo "$@"); rc=$?; printf '%s rc=%s' "$out" "$rc" ); }
 for f in one two; do
-  eq "T: $f — a hosted --repo is itself"       "o/a rc=0" "$(tr_run "$f" o/a)"
-  eq "T: $f — an unhosted --repo is refused"   " rc=1"    "$(tr_run "$f" o/zzz)"
+  st_eq "T: $f — a hosted --repo is itself"       "o/a rc=0" "$(tr_run "$f" o/a)"
+  st_eq "T: $f — an unhosted --repo is refused"   " rc=1"    "$(tr_run "$f" o/zzz)"
 done
-eq "T: one — no repo named → its only repo"  "o/a rc=0" "$(tr_run one)"
-eq "T: two — no repo named → ASK (4)"        " rc=4"    "$(tr_run two)"
-eq "T: two — the second repo named is itself" "o/b rc=0" "$(tr_run two o/b)"
+st_eq "T: one — no repo named → its only repo"  "o/a rc=0" "$(tr_run one)"
+st_eq "T: two — no repo named → ASK (4)"        " rc=4"    "$(tr_run two)"
+st_eq "T: two — the second repo named is itself" "o/b rc=0" "$(tr_run two o/b)"
 rm -f "$TR/fleets/two/repos/o-b.conf"
-eq "T: two minus its overlay answers like one" "$(tr_run one)" "$(tr_run two)"
+st_eq "T: two minus its overlay answers like one" "$(tr_run one)" "$(tr_run two)"
 
 printf 'origin-selftest OK (%d checks)\n' "$CHECKS"

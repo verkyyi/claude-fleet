@@ -33,17 +33,14 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 SUT="$BIN/fleet-oldcfg-replay.py"
 [ -f "$SUT" ] || { printf 'selftest: %s not found\n' "$SUT" >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { echo "fleet-oldcfg-replay-selftest SKIP (no git)"; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo "fleet-oldcfg-replay-selftest SKIP (no python3)"; exit 0; }
+st_need git python3
 
 st_sandbox "${TMPDIR:-/tmp}/oldcfg-selftest.XXXXXX" physical
 trap 'exit 130' INT TERM HUP
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]" "${4:-}"; }
-contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — output does not contain [$3]" "$2";; esac; }
-lacks() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 — output contains [$3]" "$2";; esac; }
+st_tally count
+contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]" "$2";; esac; }
+lacks() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 — output contains [$3]" "$2";; esac; }
 
 export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -118,15 +115,15 @@ secs() { python3 -c 'import time; print(int(time.time()))'; }
 # --- A. degenerate ----------------------------------------------------------------
 t0=$(secs)
 run --old stable --new stable
-eq "A: old == new exits 0" 0 "$RC" "$OUT"
+st_eq "A: old == new exits 0" 0 "$RC" "$OUT"
 contains "A: says nothing changed" "$OUT" "nothing changed, GREEN"
 lacks "A: runs nothing" "$OUT" "hook  ok"
-[ $(( $(secs) - t0 )) -le 2 ] || fail "A: the degenerate case took more than 2s"
+[ $(( $(secs) - t0 )) -le 2 ] || st_fail "A: the degenerate case took more than 2s"
 
 # --- B. green ---------------------------------------------------------------------
 printf 'x\n' > "$REPO/bin/new-thing.sh"; N1=$(commit "a new script nobody old calls")
 run --old stable --new "$N1"
-eq "B: a harmless release is GREEN" 0 "$RC" "$OUT"
+st_eq "B: a harmless release is GREEN" 0 "$RC" "$OUT"
 contains "B: summary line" "$OUT" "oldcfg-replay: GREEN — 5 hook(s) · 3 mod tool(s) · 1 MCP server(s) replayed"
 contains "B: SessionStart hook ok" "$OUT" "hook  ok       SessionStart                 sh ~/.claude/fleet/bin/h-start.sh"
 contains "B: matcher hook ok" "$OUT" "hook  ok       PreToolUse[Bash]             python3 ~/.claude/fleet/hooks/g-bash.py"
@@ -139,34 +136,34 @@ contains "B: new named" "$OUT" "new=${N1:0:8} 「a new script nobody old calls�
 # --- C. a hook script deleted ----------------------------------------------------------
 git -C "$REPO" rm -q bin/h-stop.sh; N2=$(commit "drop h-stop.sh")
 run --old stable --new "$N2"
-eq "C: a deleted hook script is RED" 1 "$RC" "$OUT"
+st_eq "C: a deleted hook script is RED" 1 "$RC" "$OUT"
 contains "C: names the event and the script" "$OUT" "hook  MISSING  Stop                         sh ~/.claude/fleet/bin/h-stop.sh — bin/h-stop.sh not in the new tree"
 contains "C: summary RED, one finding" "$OUT" "oldcfg-replay: RED — 1 finding(s): an old session of ${S:0:8} would break on ${N2:0:8}"
 restore bin/h-stop.sh; N3=$(commit "h-stop.sh back")
 run --old stable --new "$N3"
-eq "C: restored ⇒ GREEN" 0 "$RC" "$OUT"
+st_eq "C: restored ⇒ GREEN" 0 "$RC" "$OUT"
 
 # --- D. a mod tool's handler dropped ---------------------------------------------------
 sed -i.bak 's/(status|spawn|await)/(spawn|await)/' "$REPO/mod/fleet/hooks/tools.ts"; rm -f "$REPO/mod/fleet/hooks/tools.ts.bak"
 N4=$(commit "drop the status handler")
 run --old stable --new "$N4"
-eq "D: a dropped handler is RED" 1 "$RC" "$OUT"
+st_eq "D: a dropped handler is RED" 1 "$RC" "$OUT"
 contains "D: names the tool" "$OUT" "tool  MISSING  mcp__fleet__fleet_status     no tool.call handler in the new mod/fleet/hooks/tools.ts (TOOL_RE)"
 contains "D: the other two still ok" "$OUT" "tool  ok       mcp__fleet__fleet_spawn"
 contains "D: one finding" "$OUT" "RED — 1 finding(s)"
 git -C "$REPO" rm -q mod/fleet/hooks/tools.ts; N4b=$(commit "no tools.ts at all")
 run --old stable --new "$N4b"
-eq "D: tools.ts gone ⇒ RED" 1 "$RC" "$OUT"
+st_eq "D: tools.ts gone ⇒ RED" 1 "$RC" "$OUT"
 contains "D: every old tool named" "$OUT" "RED — 3 finding(s)"
 restore mod/fleet/hooks/tools.ts; N5=$(commit "tools.ts back")
 run --old stable --new "$N5"
-eq "D: restored ⇒ GREEN" 0 "$RC" "$OUT"
+st_eq "D: restored ⇒ GREEN" 0 "$RC" "$OUT"
 
 # --- E. an MCP tool dropped; a forward the service no longer knows -------------------------
 sed -i.bak 's/"await", "brief"\]/"await"]/' "$REPO/bin/fleet-mcp.py"; rm -f "$REPO/bin/fleet-mcp.py.bak"
 N6=$(commit "drop brief from the service")
 run --old stable --new "$N6"
-eq "E: a dropped service tool is RED" 1 "$RC" "$OUT"
+st_eq "E: a dropped service tool is RED" 1 "$RC" "$OUT"
 contains "E: names server.tool" "$OUT" "mcp   MISSING  fleet.brief                  the new server does not list it"
 contains "E: one finding" "$OUT" "RED — 1 finding(s)"
 sed -i.bak 's/"spawn", "await"\]/"spawn"]/' "$REPO/bin/fleet-mcp.py"; rm -f "$REPO/bin/fleet-mcp.py.bak"
@@ -177,7 +174,7 @@ contains "E: but the service's own list is red for both" "$OUT" "mcp   MISSING  
 contains "E: two findings" "$OUT" "RED — 2 finding(s)"
 restore bin/fleet-mcp.py; N7=$(commit "service back")
 run --old stable --new "$N7"
-eq "E: restored ⇒ GREEN" 0 "$RC" "$OUT"
+st_eq "E: restored ⇒ GREEN" 0 "$RC" "$OUT"
 
 # --- E2. unlisted but still answered (issue #3113): the new service lists only three of
 # the four, yet its --probe names a handler for every one — an old session's call is
@@ -191,50 +188,50 @@ s = s.replace('TOOLS = ["status", "spawn", "await", "brief"]',
 open(p, "w").write(s)
 PY
 sed -i.bak 's/for t in TOOLS\]/for t in LISTED]/' "$REPO/bin/fleet-mcp.py"; rm -f "$REPO/bin/fleet-mcp.py.bak"
-grep -q 'for t in LISTED\]' "$REPO/bin/fleet-mcp.py" || fail "E2: the fake service's list did not take LISTED"
+grep -q 'for t in LISTED\]' "$REPO/bin/fleet-mcp.py" || st_fail "E2: the fake service's list did not take LISTED"
 N7b=$(commit "spawn unlisted, still answered")
 run --old stable --new "$N7b"
-eq "E2: an unlisted tool the new server still answers ⇒ GREEN" 0 "$RC" "$OUT"
+st_eq "E2: an unlisted tool the new server still answers ⇒ GREEN" 0 "$RC" "$OUT"
 contains "E2: says so" "$OUT" "mcp   ok       fleet.spawn                  no longer listed, still answered"
 contains "E2: the server line counts it" "$OUT" "(1 unlisted, still answered)"
 sed -i.bak 's/^TOOLS = \["status", "spawn", "await", "brief"\]/TOOLS = ["status", "await", "brief"]/' "$REPO/bin/fleet-mcp.py"; rm -f "$REPO/bin/fleet-mcp.py.bak"
 N7c=$(commit "spawn gone for good")
 run --old stable --new "$N7c"
-eq "E2: unlisted AND no handler ⇒ RED" 1 "$RC" "$OUT"
+st_eq "E2: unlisted AND no handler ⇒ RED" 1 "$RC" "$OUT"
 contains "E2: names it" "$OUT" "mcp   MISSING  fleet.spawn"
 restore bin/fleet-mcp.py; N7=$(commit "service back again")
 run --old stable --new "$N7"
-eq "E2: restored ⇒ GREEN" 0 "$RC" "$OUT"
+st_eq "E2: restored ⇒ GREEN" 0 "$RC" "$OUT"
 
 # --- F. a hook that errors, a hook that hangs -----------------------------------------
 printf '#!/bin/sh\necho "no such fleet" >&2\nexit 3\n' > "$REPO/bin/h-stop.sh"; N8=$(commit "h-stop errors")
 run --old stable --new "$N8"
-eq "F: a failing hook is RED" 1 "$RC" "$OUT"
+st_eq "F: a failing hook is RED" 1 "$RC" "$OUT"
 contains "F: ERROR with the exit code and stderr" "$OUT" "hook  ERROR    Stop                         sh ~/.claude/fleet/bin/h-stop.sh — exit 3 (a hook error, every turn): no such fleet"
 printf '#!/bin/sh\nexit 2\n' > "$REPO/bin/h-stop.sh"; N8b=$(commit "h-stop blocks")
 run --old stable --new "$N8b"
 contains "F: exit 2 is named a BLOCK" "$OUT" "exit 2 (BLOCKS the call)"
 printf '#!/bin/sh\nsleep 30\n' > "$REPO/bin/h-stop.sh"; N9=$(commit "h-stop hangs")
 run --old stable --new "$N9" --timeout 1
-eq "F: a hanging hook is RED" 1 "$RC" "$OUT"
+st_eq "F: a hanging hook is RED" 1 "$RC" "$OUT"
 contains "F: TIMEOUT named" "$OUT" "hook  TIMEOUT  Stop                         sh ~/.claude/fleet/bin/h-stop.sh — no answer within 1.0s"
 restore bin/h-stop.sh; N10=$(commit "h-stop back")
 run --old stable --new "$N10"
-eq "F: restored ⇒ GREEN" 0 "$RC" "$OUT"
+st_eq "F: restored ⇒ GREEN" 0 "$RC" "$OUT"
 
 # --- G. --new-dir: the working tree ----------------------------------------------------
 rm "$REPO/bin/h-end.sh"
 run --old stable --new-dir "$REPO"
-eq "G: an uncommitted deletion is RED" 1 "$RC" "$OUT"
+st_eq "G: an uncommitted deletion is RED" 1 "$RC" "$OUT"
 contains "G: names it" "$OUT" "hook  MISSING  SessionEnd[prompt_input_exit|logout] bash ~/.claude/fleet/bin/h-end.sh — bin/h-end.sh not in the new tree"
 contains "G: the dir is the new side" "$OUT" "new=$REPO"
 git -C "$REPO" checkout -q -- bin/h-end.sh
 run --old stable --new-dir "$REPO"
-eq "G: back ⇒ GREEN" 0 "$RC" "$OUT"
+st_eq "G: back ⇒ GREEN" 0 "$RC" "$OUT"
 
 # --- H. --json and -q ----------------------------------------------------------------------
 run --old stable --new "$N10" --json
-eq "H: --json exits 0" 0 "$RC" "$OUT"
+st_eq "H: --json exits 0" 0 "$RC" "$OUT"
 printf '%s' "$OUT" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
@@ -244,26 +241,26 @@ kinds = sorted(set(i["kind"] for i in d["items"]))
 assert kinds == ["hook", "mcp", "tool"], kinds
 assert all(i["verdict"] in ("ok", "none") for i in d["items"]), d["items"]
 assert d["old"]["sha"] and d["new"]["sha"], d
-' || fail "H: the JSON shape is wrong" "$OUT"
+' || st_fail "H: the JSON shape is wrong" "$OUT"
 run --old stable --new "$N2" --json
-eq "H: --json exits 1 on a finding" 1 "$RC" "$OUT"
+st_eq "H: --json exits 1 on a finding" 1 "$RC" "$OUT"
 printf '%s' "$OUT" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d["verdict"] == "RED" and d["findings"] == 1, d
 f = [i for i in d["items"] if i["verdict"] == "MISSING"]
 assert len(f) == 1 and f[0]["kind"] == "hook" and f[0]["name"] == "Stop" and "bin/h-stop.sh" in f[0]["detail"], f
-' || fail "H: the RED JSON shape is wrong" "$OUT"
+' || st_fail "H: the RED JSON shape is wrong" "$OUT"
 run --old stable --new "$N10" -q
-eq "H: -q on green prints the header and the summary only" 2 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "$OUT"
+st_eq "H: -q on green prints the header and the summary only" 2 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "$OUT"
 run --old stable --new "$N2" -q
-eq "H: -q on red prints header, finding, summary" 3 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "$OUT"
+st_eq "H: -q on red prints header, finding, summary" 3 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "$OUT"
 contains "H: -q keeps the finding" "$OUT" "hook  MISSING  Stop"
 
 # --- I. the sandbox ---------------------------------------------------------------------
 rm -f "$WORK/env.out"
 run --old stable --new "$N10"
-[ -f "$WORK/env.out" ] || fail "I: the compact SessionStart hook did not run" "$OUT"
+[ -f "$WORK/env.out" ] || st_fail "I: the compact SessionStart hook did not run" "$OUT"
 ENV_OUT=$(cat "$WORK/env.out")
 lacks "I: HOME is not the caller's" "$ENV_OUT" "HOME=$HOME "
 contains "I: HOME is the replay's" "$ENV_OUT" "HOME=/"; contains "I: HOME is under the replay work dir" "$ENV_OUT" "oldcfg-replay."
@@ -278,11 +275,11 @@ if [ -z "$RROOT" ] || [ ! -f "$ROOT/hooks/settings-hooks.json" ]; then
   printf 'skip J: no git checkout behind %s (or no hooks/settings-hooks.json beside bin/)\n' "$SUT"
 else
   OUT=$(python3 "$SUT" --dir "$RROOT" --old HEAD --new-dir "$ROOT" 2>&1); RC=$?
-  eq "J: the repo's own hook table replays GREEN against its own tree" 0 "$RC" "$OUT"
+  st_eq "J: the repo's own hook table replays GREEN against its own tree" 0 "$RC" "$OUT"
   contains "J: the real mod's fallback tools are read and forwarded" "$OUT" "tool  ok       mcp__fleet__fleet_status     handler in mod/fleet/hooks/tools.ts → fleet-mcp.py --call status"
   contains "J: the real fleet server lists its tools" "$OUT" "mcp   ok       fleet "
   n=$(printf '%s\n' "$OUT" | grep -c '^hook  ok ')
-  [ "$n" -ge 15 ] || fail "J: only $n hooks replayed — the real table has more" "$OUT"
+  [ "$n" -ge 15 ] || st_fail "J: only $n hooks replayed — the real table has more" "$OUT"
   lacks "J: no hook of the real table is red" "$OUT" "hook  ERROR"
   lacks "J: no hook of the real table hangs" "$OUT" "hook  TIMEOUT"
 fi
@@ -290,7 +287,7 @@ fi
 # --- K. stable → HEAD, when the tag is here ------------------------------------------
 if [ -n "$RROOT" ] && git -C "$RROOT" rev-parse -q --verify 'refs/tags/stable^{commit}' >/dev/null 2>&1; then
   OUT=$(python3 "$SUT" --dir "$RROOT" --old stable --new HEAD -q 2>&1); RC=$?
-  eq "K: an old session of the current stable runs on HEAD (what the next release gates on)" 0 "$RC" "$OUT"
+  st_eq "K: an old session of the current stable runs on HEAD (what the next release gates on)" 0 "$RC" "$OUT"
 else
   printf 'skip K: no refs/tags/stable in this checkout (git fetch origin +refs/tags/stable:refs/tags/stable)\n'
 fi

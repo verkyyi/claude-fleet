@@ -32,14 +32,14 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'fleet-view-id selftest: python3 absent — SKIP'; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need python3
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fvid-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
 export FLEET_CONF_DIR="$WORK/conf" FLEET_STATUS_G="$WORK/g" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 unset NO_COLOR FLEET_COLOR FLEET_GLYPHS FLEET_ID_DIR
 mkdir -p "$WORK/conf"
 
-pass() { echo "ok   $*"; }
 
 python3 - "$BIN" <<'PY' || st_fail "ID column"
 import importlib.util, json, os, re, sys, time
@@ -310,11 +310,11 @@ assert len(bh) >= 200 and sum(1 for e in bh if e["agent"]) >= 200, (len(bh), sum
 assert min(runs) < 100, runs
 print("   read with %d closed rows: %.0f ms (best of 3)" % (len(bh), min(runs)))
 PY
-pass "A  ID column: 4 uppercase, letter first (5 when two share), blank without an ID, T<n> and the old T- code aliases, far rows too"
-pass "B  Agent: newest segment (transfer → Codex), else opened, else @cc_agent, else the hub's actual_agent, else 未知 (grey)"
-pass "C  results: newest wins (done → failed = ✗ 等你), working keeps ↻, reaped without one = ◌ 已退出"
-pass "D  conflict: two live windows on one segment both red 等你; closing one clears it"
-pass "E  search: 4539 / #4539 via the ID's issues, not 45390; code and alias find their row"
-pass "F  actions page: code + ID, aliases, segments, 未登记到 hub / refusal red, conflict reason"
-pass "G  repo: an EPIC driver's charter repo= (its relay too), a record's repo, none ⇒ blank; a closed row by its conversation, a closed ID alone is its own row (T593)"
-pass "H  read path, 200 closed IDs: no process, no hub call, < 100 ms (T593)"
+st_ok_all "A  ID column: 4 uppercase, letter first (5 when two share), blank without an ID, T<n> and the old T- code aliases, far rows too"
+st_ok_all "B  Agent: newest segment (transfer → Codex), else opened, else @cc_agent, else the hub's actual_agent, else 未知 (grey)"
+st_ok_all "C  results: newest wins (done → failed = ✗ 等你), working keeps ↻, reaped without one = ◌ 已退出"
+st_ok_all "D  conflict: two live windows on one segment both red 等你; closing one clears it"
+st_ok_all "E  search: 4539 / #4539 via the ID's issues, not 45390; code and alias find their row"
+st_ok_all "F  actions page: code + ID, aliases, segments, 未登记到 hub / refusal red, conflict reason"
+st_ok_all "G  repo: an EPIC driver's charter repo= (its relay too), a record's repo, none ⇒ blank; a closed row by its conversation, a closed ID alone is its own row (T593)"
+st_ok_all "H  read path, 200 closed IDs: no process, no hub call, < 100 ms (T593)"

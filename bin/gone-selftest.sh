@@ -34,9 +34,10 @@
 # Usage: gone-selftest.sh [--list]
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$BIN/.."
 LIST="${GONE_LIST:-$ROOT/conf/gone.list}"
-[ -f "$LIST" ] || { echo "gone FAIL: no list at $LIST" >&2; exit 1; }
+[ -f "$LIST" ] || st_fail "no list at $LIST"
 
 exec python3 - "$ROOT" "$LIST" "${1:-}" <<'PY'
 import os, re, subprocess, sys, tempfile

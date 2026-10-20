@@ -24,7 +24,6 @@ SCRIPT="$BIN/hub-session.sh"
 st_sandbox "${TMPDIR:-/tmp}/hubsess-selftest.XXXXXX"
 trap 'exit 1' INT TERM HUP
 
-fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 
 SESS=tf
 CONF="$WORK/conf"
@@ -38,14 +37,14 @@ EOF
 
 # --- the print seam: `home`, where -------------------------------------------
 d=$(env FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 bash "$SCRIPT")
-[ "$d" = home ] || fail "default: hub-session must build the 'home' window, not the dash: $d"
+[ "$d" = home ] || st_fail "default: hub-session must build the 'home' window, not the dash: $d"
 d=$(env FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=cwd bash "$SCRIPT")
-[ "$d" = "$HOME" ] || fail "default: home must open in \$HOME (a fleet has no main repo, #1941), got: $d"
+[ "$d" = "$HOME" ] || st_fail "default: home must open in \$HOME (a fleet has no main repo, #1941), got: $d"
 d=$(env FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_CWD="$MAIN" HUB_PRINT_CMD=cwd bash "$SCRIPT")
-[ "$d" = "$MAIN" ] || fail "HUB_CWD must still pin the hub's cwd, got: $d"
+[ "$d" = "$MAIN" ] || st_fail "HUB_CWD must still pin the hub's cwd, got: $d"
 # The retired knobs bring nothing back (issue #4902): a hub claude.
 d=$(HUB_RESUME_ID=abc FLEET_HUB_CMD=claude FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 bash "$SCRIPT")
-[ "$d" = home ] || fail "HUB_RESUME_ID / FLEET_HUB_CMD must change nothing, got: $d"
+[ "$d" = home ] || st_fail "HUB_RESUME_ID / FLEET_HUB_CMD must change nothing, got: $d"
 
 # A real build, on an isolated server (never the live one): fleet-up's throwaway
 # first window, then hub-session.sh — `home` at index 1, no `plan`, and a second
@@ -63,19 +62,19 @@ EOF
   chmod +x "$WORK/shim/tmux"
   trap '"$REAL_TMUX" -S "$WORK/sock" kill-server 2>/dev/null; rm -rf "$WORK"' EXIT
   T() { "$REAL_TMUX" -S "$WORK/sock" "$@"; }
-  T -f /dev/null new-session -d -s "$SESS" -n work 'sleep 600' || fail "could not start the isolated tmux server"
+  T -f /dev/null new-session -d -s "$SESS" -n work 'sleep 600' || st_fail "could not start the isolated tmux server"
   T set-option -g default-shell /bin/sh
   T set-option -g base-index 1
   live() { env -u TMUX PATH="$WORK/shim:$PATH" FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" bash "$SCRIPT"; }
-  live || fail "default: hub-session.sh exited non-zero"
+  live || st_fail "default: hub-session.sh exited non-zero"
   names=$(T list-windows -t "$SESS" -F '#{window_index}:#{window_name}' | tr '\n' ' ')
-  case " $names" in *":plan "*) fail "default: a 'plan' window was built: $names" ;; esac
-  case " $names" in *" 1:home "*) : ;; *) fail "default: 'home' must sit at index 1: $names" ;; esac
-  [ "$(T display-message -p -t "$SESS:" '#{window_name}')" = home ] || fail "default: home must be selected"
-  [ -z "$(T list-panes -s -t "$SESS" -F '#{@dash}' | tr -d '\n')" ] || fail "default: no dash pane may exist"
-  live || fail "default: a second hub-session.sh exited non-zero"
+  case " $names" in *":plan "*) st_fail "default: a 'plan' window was built: $names" ;; esac
+  case " $names" in *" 1:home "*) : ;; *) st_fail "default: 'home' must sit at index 1: $names" ;; esac
+  [ "$(T display-message -p -t "$SESS:" '#{window_name}')" = home ] || st_fail "default: home must be selected"
+  [ -z "$(T list-panes -s -t "$SESS" -F '#{@dash}' | tr -d '\n')" ] || st_fail "default: no dash pane may exist"
+  live || st_fail "default: a second hub-session.sh exited non-zero"
   [ "$(T list-windows -t "$SESS" -F '#{window_name}' | grep -c '^home$')" = 1 ] \
-    || fail "default: a second run must not build a second home: $(T list-windows -t "$SESS" -F '#{window_name}' | tr '\n' ' ')"
+    || st_fail "default: a second run must not build a second home: $(T list-windows -t "$SESS" -F '#{window_name}' | tr '\n' ' ')"
 fi
 
 printf 'PASS: hub-session builds `home` (no plan window, no dash, no claude by any route)\n'

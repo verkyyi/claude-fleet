@@ -22,13 +22,12 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/bin/selftest-lib.sh"
 LA="$ROOT/launchd"
 SD="$ROOT/systemd"
 [ -d "$LA" ] || { printf 'selftest: %s not found\n' "$LA" >&2; exit 2; }
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
 
 # --- the classification ------------------------------------------------------
 # IO: bulk filesystem work on a latency-sensitive path — must NOT be Background.
@@ -75,8 +74,8 @@ ptype() {  # $1 = unit → the ProcessType string, or the empty string if absent
 for f in "$LA"/com.claude-fleet.*.plist.tmpl; do
   u="$(basename "$f" .plist.tmpl)"; u="${u#com.claude-fleet.}"
   case " $IO_UNITS $CADENCE_UNITS $POLL_UNITS " in
-    *" $u "*) ok ;;
-    *) fail "daemon '$u' has a plist but no ProcessType classification in this test —
+    *" $u "*) st_count ;;
+    *) st_fail "daemon '$u' has a plist but no ProcessType classification in this test —
       decide whether it does bulk filesystem I/O (→ Standard) or only polls
       (→ Standard), is a fork-heavy tick whose cadence matters (→ Standard,
       CADENCE_UNITS, issue #651), or only polls (→ Background), then add it to
@@ -87,45 +86,45 @@ done
 # --- 2. …and every classified unit still has a plist (no stale table rows) ----
 for u in $IO_UNITS $CADENCE_UNITS $POLL_UNITS; do
   [ -f "$LA/com.claude-fleet.$u.plist.tmpl" ] \
-    || fail "classified unit '$u' has no launchd/com.claude-fleet.$u.plist.tmpl — retired? drop it from the table"
-  ok
+    || st_fail "classified unit '$u' has no launchd/com.claude-fleet.$u.plist.tmpl — retired? drop it from the table"
+  st_count
 done
 
 # --- 3. the I/O-heavy daemons are Standard, never Background -----------------
 for u in $IO_UNITS; do
   p="$(ptype "$u")"
   [ "$p" = "Standard" ] \
-    || fail "$u: ProcessType is '${p:-<absent>}', expected 'Standard' — Background throttles
+    || st_fail "$u: ProcessType is '${p:-<absent>}', expected 'Standard' — Background throttles
       its disk I/O ~100x (issue #588). Absent is NOT good enough: launchd.plist(5)
       says an unspecified ProcessType also gets 'light resource limits ... throttling
       its CPU usage and I/O bandwidth', so the value is written out explicitly."
-  ok
+  st_count
 done
 
 # --- 3b. the cadence-critical daemons are Standard too ----------------------
 for u in $CADENCE_UNITS; do
   p="$(ptype "$u")"
   [ "$p" = "Standard" ] \
-    || fail "$u: ProcessType is '${p:-<absent>}', expected 'Standard' — Background makes every
+    || st_fail "$u: ProcessType is '${p:-<absent>}', expected 'Standard' — Background makes every
       fork of its tick ~8x dearer, so the tick outruns its 60s StartInterval and the
       dash shows a minutes-old world (issue #651)"
-  ok
+  st_count
 done
 
 # --- 4. the pollers keep Background (don't unthrottle the whole fleet) -------
 for u in $POLL_UNITS; do
   p="$(ptype "$u")"
   [ "$p" = "Background" ] \
-    || fail "$u: ProcessType is '${p:-<absent>}', expected 'Background' — it only polls
+    || st_fail "$u: ProcessType is '${p:-<absent>}', expected 'Background' — it only polls
       gh/tmux/network, so it should stay out of the foreground's way (issue #588)"
-  ok
+  st_count
 done
 
 # --- 5. exactly one ProcessType key per plist (a dupe silently wins/loses) ----
 for f in "$LA"/com.claude-fleet.*.plist.tmpl; do
   n="$(grep -c '<key>ProcessType</key>' "$f")"
-  [ "$n" = 1 ] || fail "$(basename "$f"): $n ProcessType keys, expected exactly 1"
-  ok
+  [ "$n" = 1 ] || st_fail "$(basename "$f"): $n ProcessType keys, expected exactly 1"
+  st_count
 done
 
 # --- 6. the systemd twins carry no Linux equivalent of the same throttle -----
@@ -136,12 +135,12 @@ if [ -d "$SD" ]; then
     s="$SD/claude-fleet-$u.service"
     [ -f "$s" ] || continue          # not every launchd unit has a systemd twin
     if grep -qE '^[[:space:]]*IOSchedulingClass[[:space:]]*=[[:space:]]*(idle|3)' "$s"; then
-      fail "$(basename "$s"): IOSchedulingClass=idle throttles the same bulk I/O launchd's Background did (issue #588)"
+      st_fail "$(basename "$s"): IOSchedulingClass=idle throttles the same bulk I/O launchd's Background did (issue #588)"
     fi
     if grep -qE '^[[:space:]]*Nice[[:space:]]*=[[:space:]]*[1-9]' "$s"; then
-      fail "$(basename "$s"): a positive Nice deprioritises a reclaim path others wait on (issue #588)"
+      st_fail "$(basename "$s"): a positive Nice deprioritises a reclaim path others wait on (issue #588)"
     fi
-    ok
+    st_count
   done
 fi
 
@@ -153,16 +152,16 @@ WANT=65536
 # shellcheck disable=SC2043  # one long-lived per-login unit left (#4899)
 for u in spinner; do
   f="$ROOT/launchd/com.claude-fleet.$u.plist.tmpl"
-  [ -f "$f" ] || fail "$f missing"
+  [ -f "$f" ] || st_fail "$f missing"
   for k in SoftResourceLimits HardResourceLimits; do
     v=$(tr -d '\n' < "$f" | sed -n "s|.*<key>$k</key>[[:space:]]*<dict>[[:space:]]*<key>NumberOfFiles</key>[[:space:]]*<integer>\([0-9]*\)</integer>.*|\1|p")
-    [ "$v" = "$WANT" ] || fail "$u plist: $k NumberOfFiles is '${v:-absent}', want $WANT"; ok
+    [ "$v" = "$WANT" ] || st_fail "$u plist: $k NumberOfFiles is '${v:-absent}', want $WANT"; st_count
   done
   if command -v plutil >/dev/null 2>&1; then
-    sed "s|__HOME__|/h|g; s|__BREW_PREFIX__|/b|g" "$f" | plutil -lint - >/dev/null || fail "$u plist no longer lints"; ok
+    sed "s|__HOME__|/h|g; s|__BREW_PREFIX__|/b|g" "$f" | plutil -lint - >/dev/null || st_fail "$u plist no longer lints"; st_count
   fi
   f="$ROOT/systemd/claude-fleet-$u.service"
-  grep -qx "LimitNOFILE=$WANT" "$f" || fail "$u systemd unit: no LimitNOFILE=$WANT"; ok
+  grep -qx "LimitNOFILE=$WANT" "$f" || st_fail "$u systemd unit: no LimitNOFILE=$WANT"; st_count
 done
 
 # The hub's plist is generated by fleet-hub-service.py's launch_agent().
@@ -174,17 +173,17 @@ d = m.launch_agent(pathlib.Path("/h"), pathlib.Path("/h/py"), pathlib.Path("/h/h
                    pathlib.Path("/h/state"), "https://mini.example:8450/mcp", 8766)
 print(d["SoftResourceLimits"]["NumberOfFiles"], d["HardResourceLimits"]["NumberOfFiles"])
 PY
-) || fail "could not build the hub plist"
-[ "$got" = "$WANT $WANT" ] || fail "hub plist NumberOfFiles soft/hard is '$got', want $WANT $WANT"; ok
+) || st_fail "could not build the hub plist"
+[ "$got" = "$WANT $WANT" ] || st_fail "hub plist NumberOfFiles soft/hard is '$got', want $WANT $WANT"; st_count
 
 # The start lines: each daemon logs nofile=<its limit> once per start.
-grep -q 'nofile=.*ulimit -n' "$ROOT/bin/tmux-spinner.sh"  || fail "tmux-spinner.sh: no nofile= start line"; ok
-grep -q '"nofile=".*RLIMIT_NOFILE' "$ROOT/bin/fleet_hub.py" || fail "fleet_hub.py: no nofile= start line"; ok
-grep -q 'nofile=%d.*nofile)' "$ROOT/bin/fleet-cred-proxy.py" || fail "fleet-cred-proxy.py: no nofile= start line"; ok
+grep -q 'nofile=.*ulimit -n' "$ROOT/bin/tmux-spinner.sh"  || st_fail "tmux-spinner.sh: no nofile= start line"; st_count
+grep -q '"nofile=".*RLIMIT_NOFILE' "$ROOT/bin/fleet_hub.py" || st_fail "fleet_hub.py: no nofile= start line"; st_count
+grep -q 'nofile=%d.*nofile)' "$ROOT/bin/fleet-cred-proxy.py" || st_fail "fleet-cred-proxy.py: no nofile= start line"; st_count
 
 # The spinner's line really prints, and reports the limit it was started with.
 line=$(cd "$ROOT/bin" && ( ulimit -n 1000 2>/dev/null; sh -c 'BIN=.; eval "$(sed -n "/nofile=/p" tmux-spinner.sh)"' 2>&1 >/dev/null ))
-case "$line" in *"nofile=1000"*) ok ;; *) fail "spinner start line printed '$line', want nofile=1000" ;; esac
+case "$line" in *"nofile=1000"*) st_count ;; *) st_fail "spinner start line printed '$line', want nofile=1000" ;; esac
 
 
 n_io=0;   for u in $IO_UNITS;   do : "$u"; n_io=$((n_io + 1));     done

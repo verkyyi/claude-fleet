@@ -18,8 +18,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'hub-sessions-cert-scope selftest: python3 absent — SKIP'; exit 0; }
-command -v ssh-keygen >/dev/null 2>&1 || { echo 'hub-sessions-cert-scope selftest: ssh-keygen absent — SKIP'; exit 0; }
+st_need python3 ssh-keygen
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/certscope-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -54,29 +53,27 @@ SHIM
 chmod +x "$WORK/bin/curl"
 PATH="$WORK/bin:$PATH"
 
-CHECKS=0
-has()   { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 (want: $3)" "$2" ;; esac; }
-hasnt() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 (unwanted: $3)" "$2" ;; esac; }
+st_tally count
 refresh() { rm -f "$G/remote_$S" "$G"/hubsess.etag* 2>/dev/null
            bash "$HUBS" --refresh 2>"$WORK/err"; cat "$G/remote_$S" 2>/dev/null; }
 
 ssh-keygen -q -t ed25519 -N '' -f "$WORK/ca" >/dev/null 2>&1
 printf 'tok-123\n' > "$HOME/.ccquota/viewer-token"
 out=$(refresh)
-has   "B: node + viewer token keeps \`id -un\`'s row" "$out" "wid:$F/issue-9"
-hasnt "B: …and drops another login's (the operator sees every login)" "$out" "wid:$F/issue-7"
+st_has   "B: node + viewer token keeps \`id -un\`'s row" "$out" "wid:$F/issue-9"
+st_hasnt "B: …and drops another login's (the operator sees every login)" "$out" "wid:$F/issue-7"
 
 ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/fleet-cert" >/dev/null 2>&1
 ssh-keygen -q -s "$WORK/ca" -I 'gh:cj' -n cj -V '-5m:+1h' "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1
 out=$(FLEET_HUB_SESSIONS_USER=cj refresh)
-has "C: FLEET_HUB_SESSIONS_USER selects the requested login" "$out" "wid:$F/issue-7"
-hasnt "C: …and drops the local login" "$out" "wid:$F/issue-9"
+st_has "C: FLEET_HUB_SESSIONS_USER selects the requested login" "$out" "wid:$F/issue-7"
+st_hasnt "C: …and drops the local login" "$out" "wid:$F/issue-9"
 
 rm -f "$G/remote_$S"
 bash "$HUBS" --refresh 2>"$WORK/err"
 out=$(cat "$G/remote_$S" 2>/dev/null)
-has   "D: a node + certificate still writes its cache" "$out" "wid:$F/issue-9"
-hasnt "D: …with \`id -un\`'s rows only, as before" "$out" "wid:$F/issue-7"
+st_has   "D: a node + certificate still writes its cache" "$out" "wid:$F/issue-9"
+st_hasnt "D: …with \`id -un\`'s rows only, as before" "$out" "wid:$F/issue-7"
 
 # F (issue #3001): node mode over the node token keeps the person's other logins.
 HERE=$(hostname 2>/dev/null); HERE=${HERE%%.*}
@@ -96,14 +93,14 @@ rm -f "$G/remote_$S" "$G"/hubsess.etag* "$G/fleet_logins" "$G/hubsess.nodetok.re
 printf 'CCQUOTA_TOKEN=node-tok\n' > "$WORK/conf/node.env"
 bash "$HUBS" --refresh 2>"$WORK/err"
 out=$(cat "$G/remote_$S" 2>/dev/null)
-has   "F: node + node token keeps another login's row elsewhere" "$out" "wid:$F/issue-7"
-has   "F: …and this login's own" "$out" "wid:$F/issue-9"
+st_has   "F: node + node token keeps another login's row elsewhere" "$out" "wid:$F/issue-7"
+st_has   "F: …and this login's own" "$out" "wid:$F/issue-9"
 row=$(printf '%s\n' "$out" | grep "^wid:$G2/issue-8")
-has   "F: …and another login's row on THIS machine" "$row" "admin-here"
+st_has   "F: …and another login's row on THIS machine" "$row" "admin-here"
 CHECKS=$((CHECKS + 1)); [ "$(printf '%s' "$row" | cut -d$'\037' -f11)" = 0 ] \
   || st_fail "F: another login's row here is not this login's local row" "$row"
-hasnt "F: no #node line for this machine" "$out" "#node"$'\037'"$HERE"$'\037'
-has   "F: the fleet → login map carries the other login" "$(cat "$G/fleet_logins" 2>/dev/null)" "$G2	admin"
+st_hasnt "F: no #node line for this machine" "$out" "#node"$'\037'"$HERE"$'\037'
+st_has   "F: the fleet → login map carries the other login" "$(cat "$G/fleet_logins" 2>/dev/null)" "$G2	admin"
 printf 401 > "$WORK/code"; rm -f "$G/remote_$S" "$G"/hubsess.etag*
 bash "$HUBS" --refresh 2>/dev/null
 CHECKS=$((CHECKS + 1)); [ -f "$G/hubsess.nodetok.refused" ] \
@@ -115,14 +112,14 @@ rm -f "$WORK/conf/node.env" "$WORK/code" "$G/hubsess.nodetok.refused"
 printf 401 > "$WORK/code"; rm -f "$G/hub_why"
 bash "$HUBS" --refresh 2>/dev/null
 w=$(cat "$G/hub_why" 2>/dev/null)
-has   "E: a 401 writes hub_why refused" "$w" "refused	"
-has   "E: …with the code" "$w" "HTTP 401"
+st_has   "E: a 401 writes hub_why refused" "$w" "refused	"
+st_has   "E: …with the code" "$w" "HTTP 401"
 since1=$(printf '%s' "$w" | cut -f2)
 sleep 1; bash "$HUBS" --refresh 2>/dev/null
 CHECKS=$((CHECKS + 1)); [ "$(cut -f2 "$G/hub_why")" = "$since1" ] || st_fail "E: the since holds while the hub keeps refusing" "$(cat "$G/hub_why")"
 printf 000 > "$WORK/code"
 bash "$HUBS" --refresh 2>/dev/null
-has   "E: no answer writes hub_why unreachable" "$(cat "$G/hub_why" 2>/dev/null)" "unreachable	"
+st_has   "E: no answer writes hub_why unreachable" "$(cat "$G/hub_why" 2>/dev/null)" "unreachable	"
 printf 200 > "$WORK/code"
 bash "$HUBS" --refresh 2>/dev/null
 CHECKS=$((CHECKS + 1)); [ ! -f "$G/hub_why" ] || st_fail "E: an answer that stands removes hub_why" "$(cat "$G/hub_why")"

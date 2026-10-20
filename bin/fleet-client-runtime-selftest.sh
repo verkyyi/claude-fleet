@@ -23,20 +23,20 @@
 #      hand-written `agent` / `dispatch` uses survive a rebuild (leg D)
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd)
+. "$BIN/selftest-lib.sh"
 RT="$BIN/fleet-client-runtime.sh"
 T=$(mktemp -d "${TMPDIR:-/tmp}/client-runtime.XXXXXX")
 trap 'rm -rf "${T:?}"' EXIT
 fail=0
-ok() { echo "PASS  $1"; }
 no() { echo "FAIL  $1"; fail=1; }
 tab=$(printf '\t')
 
 # A — the committed list
-if out=$(bash "$RT" --check 2>&1); then ok "A the committed list passes --check"; else no "A --check: $out"; fi
+if out=$(bash "$RT" --check 2>&1); then st_ok "A the committed list passes --check"; else no "A --check: $out"; fi
 n=$(grep -vc '^#' "$BIN/../conf/client-runtime.list")
-[ "$n" -gt 30 ] && ok "A the list has $n files" || no "A only $n files on the list"
+[ "$n" -gt 30 ] && st_ok "A the list has $n files" || no "A only $n files on the list"
 grep -q "^bin/fleet${tab}" "$BIN/../conf/client-runtime.list" && grep -q "^bin/fleet-thin.py${tab}.*view" "$BIN/../conf/client-runtime.list" \
-  && ok "A bin/fleet and the thin client's view are on it" || no "A bin/fleet / fleet-thin.py view missing"
+  && st_ok "A bin/fleet and the thin client's view are on it" || no "A bin/fleet / fleet-thin.py view missing"
 
 # B — a bad list
 cat > "$T/bad.list" <<EOF
@@ -49,9 +49,9 @@ bin/fleet-connect.py${tab}static:read
 bin/fleet-login.py
 EOF
 out=$(bash "$RT" --check "$T/bad.list" 2>&1); rc=$?
-[ "$rc" = 1 ] && ok "B a bad list → exit 1" || no "B rc=$rc"
+[ "$rc" = 1 ] && st_ok "B a bad list → exit 1" || no "B rc=$rc"
 for w in 'bin/fleet twice' 'bin/no-such-file.sh is not in the client manifest' "unknown action 'fly'" "unknown action 'static:read'" 'not <path> TAB <actions>'; do
-  case $out in *"$w"*) ok "B named: $w" ;; *) no "B not named: $w — $out" ;; esac
+  case $out in *"$w"*) st_ok "B named: $w" ;; *) no "B not named: $w — $out" ;; esac
 done
 
 # C — parse a synthetic strace -ff run
@@ -89,42 +89,42 @@ got=$(bash "$RT" parse "$P" "$R" view | sort)
 want=$(printf '%s\n' "bin/fleet${tab}view" "bin/fleet-lib.sh${tab}view" "bin/fleet-login.py${tab}view" \
   "bin/fleet-shape.awk${tab}view" "bin/fleet-thin.py${tab}view" "bin/fleet_tls.py${tab}view" \
   "bin/fleet-connect.py${tab}view:read" "conf/secret-shapes.list${tab}view:read" "hooks/bash-guard.py${tab}view:read" | sort)
-[ "$got" = "$want" ] && ok "C parse: ran · imported · sourced · awk -f; data reads :read; tools / failures / dirs / outside nothing" \
+[ "$got" = "$want" ] && st_ok "C parse: ran · imported · sourced · awk -f; data reads :read; tools / failures / dirs / outside nothing" \
   || { no "C parse"; diff <(printf '%s\n' "$want") <(printf '%s\n' "$got"); }
-ls "$P".* >/dev/null 2>&1 && no "C the per-process files are left" || ok "C the per-process files are removed"
+ls "$P".* >/dev/null 2>&1 && no "C the per-process files are left" || st_ok "C the per-process files are removed"
 
 # D — build
 mkdir -p "$T/d1" "$T/d2"
 printf '%s\n' "bin/fleet-host.sh${tab}host-on" "bin/fleet-connect.py${tab}view:read" "conf/secret-shapes.list${tab}view:read" > "$T/d1/used.tsv"
 printf '%s\n' "bin/fleet-connect.py${tab}view" "bin/not-in-manifest.sh${tab}view" > "$T/d2/used.tsv"
 bash "$RT" build "$T/d1" "$T/d2" --write "$T/built.list" 2>"$T/build.err"
-grep -q "^bin/fleet-connect.py${tab}view$" "$T/built.list" && ok "D run beats read for one action" || no "D connect: $(grep fleet-connect "$T/built.list")"
-grep -q "^conf/secret-shapes.list${tab}view:read$" "$T/built.list" && ok "D a read alone stays :read" || no "D secret-shapes: $(grep secret-shapes "$T/built.list")"
-grep -q "^bin/fleet-host-install.sh${tab}static$" "$T/built.list" && ok "D one static hop from a file that ran" || no "D no static fleet-host-install.sh"
-grep -q 'not-in-manifest' "$T/built.list" && no "D a path off the manifest was listed" || ok "D a path off the manifest is dropped"
+grep -q "^bin/fleet-connect.py${tab}view$" "$T/built.list" && st_ok "D run beats read for one action" || no "D connect: $(grep fleet-connect "$T/built.list")"
+grep -q "^conf/secret-shapes.list${tab}view:read$" "$T/built.list" && st_ok "D a read alone stays :read" || no "D secret-shapes: $(grep secret-shapes "$T/built.list")"
+grep -q "^bin/fleet-host-install.sh${tab}static$" "$T/built.list" && st_ok "D one static hop from a file that ran" || no "D no static fleet-host-install.sh"
+grep -q 'not-in-manifest' "$T/built.list" && no "D a path off the manifest was listed" || st_ok "D a path off the manifest is dropped"
 # fleet-release-sign.py is named by fleet-release-key.sh (static here), not by fleet-host.sh
-grep -q '^bin/fleet-release-sign.py' "$T/built.list" && no "D a static file's names were followed (fleet-release-sign.py)" || ok "D no hop from a static file"
+grep -q '^bin/fleet-release-sign.py' "$T/built.list" && no "D a static file's names were followed (fleet-release-sign.py)" || st_ok "D no hop from a static file"
 # well formed (a list off two actions misses most installed files — that half is F's)
 out=$(bash "$RT" --check "$T/built.list" 2>&1 | grep -v 'is installed by the client manifest but on no line')
-[ -z "$out" ] && ok "D the built list passes --check's line rules" || no "D built list fails --check: $out"
+[ -z "$out" ] && st_ok "D the built list passes --check's line rules" || no "D built list fails --check: $out"
 printf '%s\n' "bin/fleet-client-core.sh${tab}ls" > "$T/d1/used.tsv"
 bash "$RT" build "$T/d1" --write "$T/lib.list" 2>/dev/null
-[ "$(grep -vc '^#' "$T/lib.list")" = 1 ] && ok "D nothing followed out of fleet-client-core.sh" || no "D fleet-client-core.sh: $(grep -v '^#' "$T/lib.list" | head -5)"
+[ "$(grep -vc '^#' "$T/lib.list")" = 1 ] && st_ok "D nothing followed out of fleet-client-core.sh" || no "D fleet-client-core.sh: $(grep -v '^#' "$T/lib.list" | head -5)"
 # the hand-written uses (issue #4826) carry over from the list a build replaces
 printf '%s\n' "bin/fleet-node-leave.sh${tab}agent" "bin/fleet-route.py${tab}dispatch" >> "$T/lib.list"
 bash "$RT" build "$T/d1" --write "$T/lib.list" 2>/dev/null
 grep -q "^bin/fleet-node-leave.sh${tab}agent$" "$T/lib.list" && grep -q "^bin/fleet-route.py${tab}dispatch$" "$T/lib.list" \
-  && ok "D agent / dispatch carry over a rebuild" || no "D hand uses lost: $(grep -v '^#' "$T/lib.list")"
+  && st_ok "D agent / dispatch carry over a rebuild" || no "D hand uses lost: $(grep -v '^#' "$T/lib.list")"
 
 # F — the other way (issue #4826): a file the manifest INSTALLS is on the list;
 # a `served` one need not be
 grep -v '^#' "$BIN/../conf/client-runtime.list" | grep -v "^bin/fleet-route.py${tab}" > "$T/short.list"
 out=$(bash "$RT" --check "$T/short.list" 2>&1); rc=$?
 [ "$rc" = 1 ] && case $out in *'bin/fleet-route.py is installed by the client manifest but on no line'*) true ;; *) false ;; esac \
-  && ok "F an installed file off the list → exit 1, named" || no "F rc=$rc $out"
+  && st_ok "F an installed file off the list → exit 1, named" || no "F rc=$rc $out"
 grep -v '^#' "$BIN/../conf/client-runtime.list" | grep -v "^bin/fleet-node-join.sh${tab}" > "$T/served.list"
 grep -q '^bin/fleet-node-join.sh[[:space:]]\{1,\}served$' "$BIN/../tokenledger/hub/api/fleetclient/manifest" \
-  && bash "$RT" --check "$T/served.list" >/dev/null 2>&1 && ok "F a served file off the list is fine" || no "F served: $(bash "$RT" --check "$T/served.list" 2>&1)"
+  && bash "$RT" --check "$T/served.list" >/dev/null 2>&1 && st_ok "F a served file off the list is fine" || no "F served: $(bash "$RT" --check "$T/served.list" 2>&1)"
 
 # G — what the installed scripts name (issue #4826, BREAK-IT client-pack-file-missing):
 # a file the package forgot is named; one of NOT_HERE (fleet-hub-sessions.sh) is not
@@ -132,12 +132,12 @@ grep -v '^bin/fleet_iso.py$' "$BIN/../tokenledger/hub/api/fleetclient/manifest" 
 grep -v "^bin/fleet_iso.py${tab}" "$BIN/../conf/client-runtime.list" > "$T/forgot.list"
 out=$(bash "$RT" --check "$T/forgot.list" "$T/forgot.manifest" 2>&1); rc=$?
 [ "$rc" = 1 ] && case $out in *'bin/fleet-services.py:'*'names bin/fleet_iso.py, which the client package neither installs nor serves'*) true ;; *) false ;; esac \
-  && ok "G a forgotten file a client script names → exit 1, file:line named" || no "G rc=$rc $out"
-printf '%s' "$out" | grep -q 'fleet-hub-sessions.sh' && no "G a NOT_HERE file was reported" || ok "G a home-side file (NOT_HERE) is not reported"
+  && st_ok "G a forgotten file a client script names → exit 1, file:line named" || no "G rc=$rc $out"
+printf '%s' "$out" | grep -q 'fleet-hub-sessions.sh' && no "G a NOT_HERE file was reported" || st_ok "G a home-side file (NOT_HERE) is not reported"
 
 # E — usage
-bash "$RT" >/dev/null 2>&1; [ $? = 2 ] && ok "E no command → 2" || no "E usage rc"
-bash "$RT" parse x >/dev/null 2>&1; [ $? = 2 ] && ok "E parse with one argument → 2" || no "E parse usage rc"
+bash "$RT" >/dev/null 2>&1; [ $? = 2 ] && st_ok "E no command → 2" || no "E usage rc"
+bash "$RT" parse x >/dev/null 2>&1; [ $? = 2 ] && st_ok "E parse with one argument → 2" || no "E parse usage rc"
 
 [ "$fail" = 0 ] && echo "fleet-client-runtime-selftest: ok" || echo "fleet-client-runtime-selftest: FAILED"
 exit "$fail"

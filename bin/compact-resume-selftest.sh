@@ -62,60 +62,7 @@ exit "${FAKE_SC_RC:-0}"
 SC
 
 # --- stateful fake tmux: options in $OPTS ("key<TAB>value"), send-keys logged ----
-cat > "$WORK/fakepath/tmux" <<'FAKE'
-#!/usr/bin/env python3
-import os, re, sys
-a = sys.argv[1:]
-if a[:1] in (["-L"], ["-S"]): a = a[2:]
-path = os.environ["FAKE_OPTS"]
-def load():
-    d = {}
-    try:
-        for line in open(path):
-            k, _, v = line.rstrip("\n").partition("\t"); d[k] = v
-    except FileNotFoundError: pass
-    return d
-def save(d):
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        for k, v in d.items(): f.write("%s\t%s\n" % (k, v))
-    os.replace(tmp, path)
-# a format: innermost #{name} from the table; #{?cond,a,b} picks a or b — tmux's
-# conditional, which the fleet's session read is since #1489
-# (`#{?#{session_group},#{session_group},#{session_name}}`)
-def _fx(d, f):
-    r = re.compile(r"#\{([^#{}]*)\}")
-    while True:
-        m = r.search(f)
-        if not m:
-            return f
-        k = m.group(1)
-        if k.startswith("?"):
-            p = k[1:].split(",", 2) + ["", ""]
-            v = p[1] if p[0] else p[2]
-        else:
-            v = d.get(k, "")
-        f = f[:m.start()] + v + f[m.end():]
-verb = a[0] if a else ""
-if verb == "display-message":
-    d = load(); fmt = a[-1]
-    fmt = fmt.replace("#S", "#{session_name}")
-    print(_fx(d, fmt))
-elif verb == "set-window-option":
-    d = load(); unset = "-u" in a
-    rest = [x for x in a[1:] if x != "-u"]
-    i = rest.index("-t"); rest = rest[:i] + rest[i+2:]
-    if unset: d.pop(rest[0], None)
-    else: d[rest[0]] = rest[1] if len(rest) > 1 else ""
-    save(d)
-elif verb == "send-keys":
-    with open(os.environ["FAKE_SENDLOG"], "a") as f: f.write(" ".join(a) + "\n")
-elif verb == "list-clients":
-    sys.stdout.write(os.environ.get("FAKE_CLIENTS", "").replace("\\n", "\n"))
-else:
-    sys.exit(1)
-FAKE
-chmod +x "$WORK/fakepath/tmux"
+st_fake_tmux_opts "$WORK/fakepath" session-S
 
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2
          printf -- '--- opts ---\n' >&2; cat "$OPTS" >&2 2>/dev/null

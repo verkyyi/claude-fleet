@@ -40,7 +40,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 st_real_tmux
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
+st_need git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-one-per-login-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -78,12 +78,9 @@ unset TMUX TMUX_PANE FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_SESSION FLEET
 unset _FLEET_GLOBAL_CONF_SOURCED FLEET_GLOBAL_MAX_SESSIONS
 export FLEET_ONBOARD=0     # legs 1-6: no guide (#1169) — leg 7 turns it back on
 
-FAILS=0
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-eq()   { [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
-has()  { case "$2" in *"$3"*) ;; *) fail "$1: [$3] not in: $2" ;; esac; }
-hasnt(){ case "$2" in *"$3"*) fail "$1: [$3] unexpectedly in: $2" ;; esac; }
-leg()  { if [ "$FAILS" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi; _legf=$FAILS; }
+st_tally miss
+eq()   { [ "$2" = "$3" ] || st_miss "$1: expected [$3], got [$2]"; }
+leg()  { if [ "$FAIL" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi; _legf=$FAIL; }
 
 # ---- sandbox install root: the real scripts, hub/collector/gates stubbed ----
 # (a REAL root dir holding bin/, so fleet-lib's <bin>/../fleet.conf is $WORK/root/)
@@ -118,8 +115,8 @@ lib()  {
 # ---- 1. a login with no fleet: the new fleet is called "fleet" ----
 out=$(up o/a "$WORK/src/a"); rc=$?
 eq "1 rc" "$rc" 0
-has "1 up" "$out" "fleet 'fleet' is up (1 repo(s): o/a"
-[ -f "$FLEET_CONF_DIR/fleets/fleet/conf" ] || fail "1: no fleets/fleet/conf"
+st_has "1 up" "$out" "fleet 'fleet' is up (1 repo(s): o/a"
+[ -f "$FLEET_CONF_DIR/fleets/fleet/conf" ] || st_miss "1: no fleets/fleet/conf"
 eq "1 conf names no repo" "$(val "$FLEET_CONF_DIR/fleets/fleet/conf" FLEET_REPO)" ""
 eq "1 the repo's overlay" "$(val "$(lib 'fleet_repo_conf_file fleet o/a')" FLEET_REPO)" o/a
 eq "1 servers" "$(live)" 1
@@ -130,25 +127,25 @@ printf 'o/a\n' > "$FLEET_CONF_DIR/fleets/fleet/current-repo"   # left by the old
 out=$(up o/b "$WORK/src/b"); rc=$?
 [ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '$ fleet-up o/b\n%s\n' "$out"
 eq "2 rc" "$rc" 0
-has "2 added" "$out" "added o/b to fleet 'fleet'"
-hasnt "2 no current-repo pick" "$out" "current repo →"
-[ -e "$FLEET_CONF_DIR/fleets/fleet/current-repo" ] && fail "2: fleet-up left the stale current-repo file (#1034)"
+st_has "2 added" "$out" "added o/b to fleet 'fleet'"
+st_hasnt "2 no current-repo pick" "$out" "current repo →"
+[ -e "$FLEET_CONF_DIR/fleets/fleet/current-repo" ] && st_miss "2: fleet-up left the stale current-repo file (#1034)"
 eq "2 hosts" "$(lib 'fleet_repos fleet' | tr '\n' ' ')" "o/a o/b "
 eq "2 conf still names no repo" "$(val "$FLEET_CONF_DIR/fleets/fleet/conf" FLEET_REPO)" ""
 eq "2 overlay main" "$(val "$(lib 'fleet_repo_conf_file fleet o/b')" FLEET_MAIN)" "$WORK/src/b"
 eq "2 servers" "$(live)" 1
 out=$(up o/b "$WORK/src/b"); rc=$?
 eq "2 re-add rc" "$rc" 0
-has "2 re-add" "$out" "already hosts o/b"
+st_has "2 re-add" "$out" "already hosts o/b"
 leg "2 new repo → added to the fleet, stale filter dropped"
 
 # ---- 3. a second fleet is refused ----
 out=$(up o/c "$WORK/src/c" --name other); rc=$?
 [ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '$ fleet-up o/c --name other\n%s\n' "$out"
 eq "3 rc" "$rc" 1
-has "3 refused" "$out" "refusing a second fleet 'other'"
-has "3 names the fleet" "$out" "already has 'fleet'"
-[ -e "$FLEET_CONF_DIR/fleets/other/conf" ] && fail "3: a conf was written for 'other'"
+st_has "3 refused" "$out" "refusing a second fleet 'other'"
+st_has "3 names the fleet" "$out" "already has 'fleet'"
+[ -e "$FLEET_CONF_DIR/fleets/other/conf" ] && st_miss "3: a conf was written for 'other'"
 eq "3 servers" "$(live)" 1
 leg "3 second fleet refused"
 
@@ -160,10 +157,10 @@ c5="$FLEET_CONF_DIR/fleets/fleet/conf"; before=$(cat "$c5")
 o5=$(lib 'fleet_repo_conf_file fleet o/a'); obefore=$(cat "$o5")
 out=$(up o/a "$WORK/src/a"); rc=$?
 eq "5 rc" "$rc" 0
-has "5 already up" "$out" "fleet 'fleet' is already up"
-hasnt "5 no add" "$out" "added"
+st_has "5 already up" "$out" "fleet 'fleet' is already up"
+st_hasnt "5 no add" "$out" "added"
 eq "5 conf unchanged" "$(cat "$c5")" "$before"
-[ -e "$FLEET_CONF_DIR/fleets/fleet/current-repo" ] && fail "5: a repo filter was written for a one-repo fleet"
+[ -e "$FLEET_CONF_DIR/fleets/fleet/current-repo" ] && st_miss "5: a repo filter was written for a one-repo fleet"
 eq "5 overlay unchanged" "$(cat "$o5")" "$obefore"
 eq "5 one repo" "$(lib 'fleet_repos fleet')" o/a
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
@@ -176,20 +173,20 @@ printf 'FLEET_REPO="o/a"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="trunk"\nFLEET_MODE
   "$WORK/src/a" > "$FLEET_CONF_DIR/fleets/fleet-cf/conf"
 out=$(cd "$WORK/src/d" && bash "$UP" </dev/null 2>&1); rc=$?
 eq "4 rc" "$rc" 0
-has "4 own name" "$out" "fleet 'fleet-cf' is up (2 repo(s): o/a o/d"
-has "4 its repo moved into repos/ first" "$out" "moved o/a"
-has "4 added" "$out" "added o/d to fleet 'fleet-cf'"
-[ -S "$SOCKD/fleet-cf" ] || fail "4: fleet-cf's server is not up"
+st_has "4 own name" "$out" "fleet 'fleet-cf' is up (2 repo(s): o/a o/d"
+st_has "4 its repo moved into repos/ first" "$out" "moved o/a"
+st_has "4 added" "$out" "added o/d to fleet 'fleet-cf'"
+[ -S "$SOCKD/fleet-cf" ] || st_miss "4: fleet-cf's server is not up"
 eq "4 its repo kept, first" "$(lib 'fleet_repos fleet-cf' | head -1)" o/a
 eq "4 conf keeps its keys" "$(val "$FLEET_CONF_DIR/fleets/fleet-cf/conf" FLEET_MODEL)" opus
-[ -d "$FLEET_CONF_DIR/fleets/fleet" ] && fail "4: a fleet named 'fleet' was created"
+[ -d "$FLEET_CONF_DIR/fleets/fleet" ] && st_miss "4: a fleet named 'fleet' was created"
 out=$(cd "$WORK/tmp" && bash "$UP" </dev/null 2>&1); rc=$?
 eq "4 outside a checkout rc" "$rc" 0
-has "4 outside a checkout" "$out" "fleet 'fleet-cf' is already up"
+st_has "4 outside a checkout" "$out" "fleet 'fleet-cf' is already up"
 "$REAL_TMUX" -S "$SOCKD/fleet-cf" kill-server 2>/dev/null
 out=$(cd "$WORK/tmp" && bash "$UP" </dev/null 2>&1); rc=$?
 eq "4 down, outside a checkout rc" "$rc" 0
-has "4 down, outside a checkout" "$out" "fleet 'fleet-cf' is up (2 repo(s): o/a o/d"
+st_has "4 down, outside a checkout" "$out" "fleet 'fleet-cf' is up (2 repo(s): o/a o/d"
 eq "4 base kept" "$(lib 'fleet_repo_conf_get fleet-cf o/a FLEET_BASE_BRANCH')" trunk
 leg "4 existing fleet keeps its name"
 
@@ -209,20 +206,20 @@ eq "6 two-file loads" "$(lib "$probe")" "$want"
 eq "6 not a fleet" "$(lib 'fleet_each_conf | cut -f1 | tr "\n" " "')" "fleet-cf "
 out=$(bash "$SB/fleet-settings.sh" merge --dry-run 2>&1); rc=$?
 eq "6 dry rc" "$rc" 0
-[ -e "$FLEET_CONF_DIR/fleet.settings" ] && fail "6: --dry-run wrote the settings file"
+[ -e "$FLEET_CONF_DIR/fleet.settings" ] && st_miss "6: --dry-run wrote the settings file"
 out=$(bash "$SB/fleet-settings.sh" merge 2>&1); rc=$?
 eq "6 merge rc" "$rc" 0
-has "6 dropped" "$out" "FLEET_GLOBAL_MAX_SESSIONS"
-[ -f "$FLEET_CONF_DIR/fleet.settings" ] || fail "6: no fleet.settings"
-[ -e "$WORK/root/fleet.conf" ] && fail "6: the install fleet.conf was not moved aside"
-[ -f "$WORK/root/fleet.conf.pre-merge" ] || fail "6: no fleet.conf.pre-merge"
+st_has "6 dropped" "$out" "FLEET_GLOBAL_MAX_SESSIONS"
+[ -f "$FLEET_CONF_DIR/fleet.settings" ] || st_miss "6: no fleet.settings"
+[ -e "$WORK/root/fleet.conf" ] && st_miss "6: the install fleet.conf was not moved aside"
+[ -f "$WORK/root/fleet.conf.pre-merge" ] || st_miss "6: no fleet.conf.pre-merge"
 eq "6 merged loads the same" "$(lib "$probe")" "$want"
 eq "6 conf keeps no setting" "$(grep -c '^FLEET_' "$FLEET_CONF_DIR/fleets/fleet-cf/conf")" 0
 eq "6 still not a fleet" "$(lib 'fleet_each_conf | cut -f1 | tr "\n" " "')" "fleet-cf "
 eq "6 hook resolver" "$(bash "$SB/fleet-hook-conf.sh" --session fleet-cf FLEET_X FLEET_GLOBAL_MAX_SESSIONS | tr '\n' ' ')" "fleet 7 "
 out=$(bash "$SB/fleet-settings.sh" merge 2>&1); rc=$?
 eq "6 re-merge rc" "$rc" 1
-has "6 re-merge" "$out" "already merged"
+st_has "6 re-merge" "$out" "already merged"
 # the settings file wins over an install fleet.conf that reappears (dual-read)
 printf 'FLEET_Y=reinstalled\nFLEET_GLOBAL_MAX_SESSIONS=3\n' > "$WORK/root/fleet.conf"
 eq "6 settings win" "$(lib "$probe")" "o/a fleet install 7 7"
@@ -231,7 +228,7 @@ mkdir -p "$FLEET_CONF_DIR/fleets/two"; printf 'FLEET_REPO="o/b"\n' > "$FLEET_CON
 rm -f "$FLEET_CONF_DIR/fleet.settings"
 out=$(bash "$SB/fleet-settings.sh" merge 2>&1); rc=$?
 eq "6 two fleets rc" "$rc" 1
-has "6 two fleets" "$out" "several fleets"
+st_has "6 two fleets" "$out" "several fleets"
 leg "6 one settings file per login (dual-read)"
 
 # ---- 7. the first fleet on a login opens the guide, pinned (issue #1169) ----
@@ -257,21 +254,21 @@ marker="$FLEET_CONF_DIR/global/onboarded"
 out=$(up o/g "$g"); rc=$?
 [ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '$ fleet-up o/g (first fleet)\n%s\n' "$out"
 eq "7 rc" "$rc" 0
-has "7 says so" "$out" "opened the onboarding guide"
+st_has "7 says so" "$out" "opened the onboarding guide"
 eq "7 one guide" "$(wins '#{window_name}' | grep -cx guide)" 1
 # no repo (issue #3320): the guide is a conversation, not a checkout of the starter
 eq "7 guide pinned, no repo" "$(wins '#{window_name} #{@pin} #{@norepo}' | grep '^guide ')" "guide 1 1"
-[ -f "$marker" ] || fail "7: global/onboarded not written"
-[ -f "$FLEET_CONF_DIR/global/guide.spoke" ] || fail "7: brief did not leave global/guide.spoke"
-[ ! -e "$FLEET_CONF_DIR/global/onboard.pending" ] || fail "7: pending marker left behind a spoken guide"
+[ -f "$marker" ] || st_miss "7: global/onboarded not written"
+[ -f "$FLEET_CONF_DIR/global/guide.spoke" ] || st_miss "7: brief did not leave global/guide.spoke"
+[ ! -e "$FLEET_CONF_DIR/global/onboard.pending" ] || st_miss "7: pending marker left behind a spoken guide"
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/guide-seed" ] && break; sleep 0.3; done
-has "7 seeded" "$(cat "$WORK/guide-seed" 2>/dev/null)" "/fleet-onboard"
+st_has "7 seeded" "$(cat "$WORK/guide-seed" 2>/dev/null)" "/fleet-onboard"
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
 # an existing fleet coming back up never reads the marker — even with none
 rm -f "$marker"
 out=$(up o/g "$g"); eq "7 existing rc" "$?" 0
 eq "7 existing: no guide" "$(wins '#{window_name}' | grep -cx guide)" 0
-[ -e "$marker" ] && fail "7: an existing fleet wrote the marker"
+[ -e "$marker" ] && st_miss "7: an existing fleet wrote the marker"
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
 # a second NEW fleet on an onboarded login vs FLEET_ONBOARD=0: same bytes, no guide
 date > "$marker"; rm -rf "$FLEET_CONF_DIR/fleets"
@@ -281,10 +278,10 @@ eq "7 second: no guide" "$(wins '#{window_name}' | grep -cx guide)" 0
 rm -f "$marker"; rm -rf "$FLEET_CONF_DIR/fleets"
 out3=$(FLEET_ONBOARD=0 up o/g "$g" | nohms)
 eq "7 off: no guide" "$(wins '#{window_name}' | grep -cx guide)" 0
-[ -e "$marker" ] && fail "7: FLEET_ONBOARD=0 wrote the marker"
-has "7 off: up" "$out3" "fleet 'fleet' is up (1 repo(s): o/g"
+[ -e "$marker" ] && st_miss "7: FLEET_ONBOARD=0 wrote the marker"
+st_has "7 off: up" "$out3" "fleet 'fleet' is up (1 repo(s): o/g"
 eq "7 second == off, byte for byte" "$out2" "$out3"
-hasnt "7 off: silent" "$out3" "guide"
+st_hasnt "7 off: silent" "$out3" "guide"
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
 leg "7 first fleet opens the pinned guide, once"
 
@@ -302,25 +299,25 @@ EOF
 chmod +x "$SB/fleet-claude.sh"
 out=$(FLEET_GUIDE_WAIT_SECS=2 up o/g "$g"); rc=$?
 eq "8 rc" "$rc" 0
-has "8 silence explained" "$out" "has not spoken yet"
-has "8 collector named" "$out" "collector will"
+st_has "8 silence explained" "$out" "has not spoken yet"
+st_has "8 collector named" "$out" "collector will"
 marker="$FLEET_CONF_DIR/global/onboarded"
-[ ! -e "$marker" ] || fail "8: silent agent wrote onboarded"
-[ ! -e "$FLEET_CONF_DIR/global/guide.spoke" ] || fail "8: silent agent left guide.spoke"
-[ -f "$FLEET_CONF_DIR/global/onboard.pending" ] || fail "8: missing retry marker"
+[ ! -e "$marker" ] || st_miss "8: silent agent wrote onboarded"
+[ ! -e "$FLEET_CONF_DIR/global/guide.spoke" ] || st_miss "8: silent agent left guide.spoke"
+[ -f "$FLEET_CONF_DIR/global/onboard.pending" ] || st_miss "8: missing retry marker"
 eq "8 first attempt" "$(wc -l < "$launches" | tr -d ' ')" 1
 eq "8 one guide window" "$(wins '#{window_name}' | grep -cx guide)" 1
-lib 'fleet_guide_running fleet' || fail "8: silent agent not seen as running"
-lib 'fleet_guide_alive fleet' && fail "8: silent agent counted as alive"
+lib 'fleet_guide_running fleet' || st_miss "8: silent agent not seen as running"
+lib 'fleet_guide_alive fleet' && st_miss "8: silent agent counted as alive"
 _pane=$(tmux -L fleet capture-pane -p -J -t fleet:guide)
-has "8 pane shows the failure" "$_pane" "Unknown command:"
-has "8 pane shows the seed" "$_pane" "/fleet-onboard"
+st_has "8 pane shows the failure" "$_pane" "Unknown command:"
+st_has "8 pane shows the seed" "$_pane" "/fleet-onboard"
 
 # A tick inside the speak grace leaves the silent agent alone — a real claude may
 # just be slow to reach its brief. cf --guide reuses it too, never kills it.
 FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
 eq "8 in grace" "$(wc -l < "$launches" | tr -d ' ')" 1
-lib 'fleet_guide_open fleet' || fail "8: open refused a running guide"
+lib 'fleet_guide_open fleet' || st_miss "8: open refused a running guide"
 eq "8 open reuses a running guide" "$(wc -l < "$launches" | tr -d ' ')" 1
 # The grace elapsed (retry=0) and it still has not spoken: respawn in the same
 # window and scratch — and a still-silent restart is STILL not onboarded.
@@ -334,7 +331,7 @@ eq "8 silent: restarted once" "$(wc -l < "$launches" | tr -d ' ')" 2
 eq "8 reused guide window" "$(wins '#{window_name}' | grep -cx guide)" 1
 sleep 1.2
 FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
-[ ! -e "$marker" ] || fail "8: restarted silent agent wrote onboarded"
+[ ! -e "$marker" ] || st_miss "8: restarted silent agent wrote onboarded"
 eq "8 silent restart stays put" "$(wc -l < "$launches" | tr -d ' ')" 2
 
 # A DEAD agent (exits at once, window at a bare shell) takes the shorter clock;
@@ -353,8 +350,8 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 eq "8 dead: restarted once" "$(wc -l < "$launches" | tr -d ' ')" 3
 for _ in 1 2 3 4 5 6 7 8 9 10; do lib 'fleet_guide_running fleet' || break; sleep 0.2; done
-lib 'fleet_guide_running fleet' && fail "8: exited agent still seen as running"
-[ ! -e "$marker" ] || fail "8: dead agent wrote onboarded"
+lib 'fleet_guide_running fleet' && st_miss "8: exited agent still seen as running"
+[ ! -e "$marker" ] || st_miss "8: dead agent wrote onboarded"
 FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
 eq "8 dead: cooldown holds" "$(wc -l < "$launches" | tr -d ' ')" 3
 
@@ -374,7 +371,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
   sleep 0.2
 done
 eq "8 speaking: restarted once" "$(wc -l < "$launches" | tr -d ' ')" 4
-[ -f "$FLEET_CONF_DIR/global/guide.spoke" ] || fail "8: brief did not leave guide.spoke"
+[ -f "$FLEET_CONF_DIR/global/guide.spoke" ] || st_miss "8: brief did not leave guide.spoke"
 eq "8 reused guide window" "$(wins '#{window_name}' | grep -cx guide)" 1
 # guide.spoke lands at the START of the brief; the stub is bash, so until it
 # reaches `exec sleep` the pane holds only shells (zsh → bash → brief's bash
@@ -386,8 +383,8 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
   sleep 0.2
 done
 FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
-[ -f "$marker" ] || fail "8: spoken agent not marked onboarded"
-[ ! -e "$FLEET_CONF_DIR/global/onboard.pending" ] || fail "8: pending marker not cleared"
+[ -f "$marker" ] || st_miss "8: spoken agent not marked onboarded"
+[ ! -e "$FLEET_CONF_DIR/global/onboard.pending" ] || st_miss "8: pending marker not cleared"
 printf '0\n' > "$FLEET_CONF_DIR/global/onboard.retry"
 lib 'fleet_guide_tick fleet'
 eq "8 no extra restart" "$(wc -l < "$launches" | tr -d ' ')" 4
@@ -449,7 +446,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   lib 'fleet_guide_running fleet' || break
   sleep 0.2
 done
-lib 'fleet_guide_running fleet' && fail "9: killed agent still considered running"
+lib 'fleet_guide_running fleet' && st_miss "9: killed agent still considered running"
 tmux -L fleet select-window -t fleet:plan
 out=$(guide); eq "9 bare-shell rc" "$?" 0
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -489,17 +486,17 @@ for n in 2 3; do
   eq "10 reopened ($n)" "$(wc -l < "$launches" | tr -d ' ')" "$n"
 done
 eq "10 three tries" "$(cat "$gdir/onboard.tries" 2>/dev/null)" 3
-[ -e "$gdir/onboard.stuck" ] && fail "10: stuck before the budget ran out"
+[ -e "$gdir/onboard.stuck" ] && st_miss "10: stuck before the budget ran out"
 for _ in 1 2 3 4 5 6 7 8 9 10; do lib 'fleet_guide_running fleet' || break; sleep 0.2; done
 printf '0\n' > "$gdir/onboard.retry"
 FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
 sleep 0.6
 eq "10 fourth tick reopens nothing" "$(wc -l < "$launches" | tr -d ' ')" 3
-[ -s "$gdir/onboard.stuck" ] || fail "10: no onboard.stuck after three silent tries"
-has "10 stuck names the id clash" "$(cat "$gdir/onboard.stuck" 2>/dev/null)" "会话编号被占用"
-has "10 stuck counts the tries" "$(cat "$gdir/onboard.stuck" 2>/dev/null)" "连续 3 次没开口"
-[ -f "$gdir/onboard.pending" ] || fail "10: a stop is not a dismissal — pending must stay"
-has "10 the window says why" "$(wins '#{window_name}|#{@claude_state}|#{@claude_needs_detail}' | grep '^guide|')" "guide|needs|引导停了：会话编号被占用"
+[ -s "$gdir/onboard.stuck" ] || st_miss "10: no onboard.stuck after three silent tries"
+st_has "10 stuck names the id clash" "$(cat "$gdir/onboard.stuck" 2>/dev/null)" "会话编号被占用"
+st_has "10 stuck counts the tries" "$(cat "$gdir/onboard.stuck" 2>/dev/null)" "连续 3 次没开口"
+[ -f "$gdir/onboard.pending" ] || st_miss "10: a stop is not a dismissal — pending must stay"
+st_has "10 the window says why" "$(wins '#{window_name}|#{@claude_state}|#{@claude_needs_detail}' | grep '^guide|')" "guide|needs|引导停了：会话编号被占用"
 printf '0\n' > "$gdir/onboard.retry"
 FLEET_GUIDE_COOLDOWN=0 FLEET_GUIDE_SPEAK_SECS=0 lib 'fleet_guide_tick fleet'
 sleep 0.4
@@ -509,12 +506,12 @@ tmux -L fleet select-window -t fleet:plan
 out=$(guide); eq "10 fleet guide rc" "$?" 0
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(wc -l < "$launches" | tr -d ' ')" = 4 ] && break; sleep 0.2; done
 eq "10 fleet guide reopens once" "$(wc -l < "$launches" | tr -d ' ')" 4
-[ -e "$gdir/onboard.stuck" ] && fail "10: fleet guide left the stop in place"
+[ -e "$gdir/onboard.stuck" ] && st_miss "10: fleet guide left the stop in place"
 eq "10 fresh budget" "$(cat "$gdir/onboard.tries" 2>/dev/null)" 1
 # a spent account reads as such
 "$REAL_TMUX" -S "$SOCKD/fleet" respawn-window -k -t fleet:guide "printf 'You have hit your limit · resets Oct 10\\n'; exec sh"
 sleep 0.4
-has "10 limit reason" "$(lib 'fleet_guide_why fleet')" "账号额度用尽"
+st_has "10 limit reason" "$(lib 'fleet_guide_why fleet')" "账号额度用尽"
 leg "10 three silent tries, then the guide stops and says why"
 
 # ---- 11. a no-repo guide reopens with a FRESH session id (issue #2424 ①) ----
@@ -525,15 +522,15 @@ leg "10 three silent tries, then the guide stops and says why"
 TMUX='' bash "$SB/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin --no-repo fleet >/dev/null 2>&1
 eq "11 a no-repo guide" "$(wins '#{window_name}|#{@pin}|#{@norepo}' | grep '^guide|')" "guide|1|1"
 sid1=$(wins '#{window_name}|#{@norepo_sid}' | sed -n 's/^guide|//p')
-[ -n "$sid1" ] || fail "11: no @norepo_sid on the no-repo guide"
+[ -n "$sid1" ] || st_miss "11: no @norepo_sid on the no-repo guide"
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$launches" ] && break; sleep 0.2; done
-has "11 first launch carries its id" "$(head -n 1 "$launches")" "--session-id $sid1"
+st_has "11 first launch carries its id" "$(head -n 1 "$launches")" "--session-id $sid1"
 lib 'fleet_guide_respawn fleet' >/dev/null 2>&1; eq "11 respawn rc" "$?" 0
 sid2=$(wins '#{window_name}|#{@norepo_sid}' | sed -n 's/^guide|//p')
-[ -n "$sid2" ] && [ "$sid2" != "$sid1" ] || fail "11: reopened with the same id ($sid1 → $sid2)"
+[ -n "$sid2" ] && [ "$sid2" != "$sid1" ] || st_miss "11: reopened with the same id ($sid1 → $sid2)"
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(wc -l < "$launches" | tr -d ' ')" = 2 ] && break; sleep 0.2; done
-has "11 relaunch carries the new id" "$(sed -n 2p "$launches")" "--session-id $sid2"
-hasnt "11 never the old id" "$(sed -n 2p "$launches")" "$sid1"
+st_has "11 relaunch carries the new id" "$(sed -n 2p "$launches")" "--session-id $sid2"
+st_hasnt "11 never the old id" "$(sed -n 2p "$launches")" "$sid1"
 eq "11 still one pinned guide" "$(wins '#{window_name}|#{@pin}' | grep -c '^guide|1$')" 1
 leg "11 a no-repo guide reopens with a fresh session id"
 
@@ -547,8 +544,8 @@ FLEET_GUIDE_COOLDOWN=0 FLEET_GUIDE_SPEAK_SECS=0 lib 'fleet_guide_tick fleet'
 sleep 0.4
 eq "12 not reopened" "$(wins '#{window_name}' | grep -cx guide)" 0
 eq "12 nothing launched" "$(wc -l < "$launches" | tr -d ' ')" 0
-[ -e "$gdir/onboard.dismissed" ] || fail "12: closing the guide was not recorded as dismissed"
-[ ! -e "$gdir/onboard.pending" ] || fail "12: pending left behind a dismissal"
+[ -e "$gdir/onboard.dismissed" ] || st_miss "12: closing the guide was not recorded as dismissed"
+[ ! -e "$gdir/onboard.pending" ] || st_miss "12: pending left behind a dismissal"
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
 leg "12 a guide the person closed stays closed"
 
@@ -569,10 +566,10 @@ exec sleep 3600
 EOF
 chmod +x "$SB/fleet-claude.sh"
 out=$(bash "$UP" o/g "$g" --base master --no-attach </dev/null 2>&1); eq "13 up rc" "$?" 0
-has "13 says it waits" "$out" "waits for a person"
+st_has "13 says it waits" "$out" "waits for a person"
 eq "13 no guide on a login nobody has reached" "$(wins '#{window_name}' | grep -cx guide)" 0
-[ -f "$gdir/onboard.pending" ] || fail "13: the guide is not left pending"
-[ ! -e "$gdir/onboard.person" ] || fail "13: a --no-attach fleet-up counted as a person"
+[ -f "$gdir/onboard.pending" ] || st_miss "13: the guide is not left pending"
+[ ! -e "$gdir/onboard.person" ] || st_miss "13: a --no-attach fleet-up counted as a person"
 printf '0\n' > "$gdir/onboard.retry"
 FLEET_GUIDE_COOLDOWN=0 FLEET_GUIDE_SPEAK_SECS=0 lib 'fleet_guide_tick fleet'
 sleep 0.4
@@ -582,20 +579,20 @@ TMUX='' bash "$SB/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pi
 eq "13 residue guide up" "$(wins '#{window_name}|#{@pin}' | grep -c '^guide|1$')" 1
 FLEET_GUIDE_COOLDOWN=0 FLEET_GUIDE_SPEAK_SECS=0 lib 'fleet_guide_tick fleet'
 eq "13 residue closed" "$(wins '#{window_name}' | grep -cx guide)" 0
-[ ! -e "$gdir/onboard.dismissed" ] || fail "13: closing the residue counted as a no"
-[ -f "$gdir/onboard.pending" ] || fail "13: closing the residue dropped the pending guide"
+[ ! -e "$gdir/onboard.dismissed" ] || st_miss "13: closing the residue counted as a no"
+[ -f "$gdir/onboard.pending" ] || st_miss "13: closing the residue dropped the pending guide"
 # a person arrives (the attach roads call this): the guide opens now, once
 : > "$launches"
 lib 'fleet_guide_arrive fleet attach'
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$launches" ] && break; sleep 0.2; done
 eq "13 arrival opens the guide" "$(wins '#{window_name}|#{@pin}' | grep -c '^guide|1$')" 1
 eq "13 one launch" "$(wc -l < "$launches" | tr -d ' ')" 1
-has "13 person marked" "$(cat "$gdir/onboard.person" 2>/dev/null)" "attach"
+st_has "13 person marked" "$(cat "$gdir/onboard.person" 2>/dev/null)" "attach"
 lib 'fleet_guide_arrive fleet attach'
 sleep 0.4
 eq "13 a second arrival opens nothing" "$(wc -l < "$launches" | tr -d ' ')" 1
 FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
-[ -e "$gdir/onboard.shown" ] || fail "13: the tick did not note the guide shown"
+[ -e "$gdir/onboard.shown" ] || st_miss "13: the tick did not note the guide shown"
 # fleet-worker-stop closes it; a stop's lift had reset the tries to 0
 wid=$(lib 'fleet_guide_wid fleet')
 lib "fleet_win_retire '$wid' fleet"; "$REAL_TMUX" -S "$SOCKD/fleet" kill-window -t "$wid" 2>/dev/null
@@ -605,9 +602,8 @@ FLEET_GUIDE_COOLDOWN=0 FLEET_GUIDE_SPEAK_SECS=0 lib 'fleet_guide_tick fleet'
 sleep 0.4
 eq "13 closed stays closed" "$(wins '#{window_name}' | grep -cx guide)" 0
 eq "13 never relaunched" "$(wc -l < "$launches" | tr -d ' ')" 1
-[ -e "$gdir/onboard.dismissed" ] || fail "13: a shown-then-closed guide was not dismissed"
+[ -e "$gdir/onboard.dismissed" ] || st_miss "13: a shown-then-closed guide was not dismissed"
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
 leg "13 the guide waits for a person, a spare's leftover closes, closed stays closed"
 
-[ "$FAILS" = 0 ] && { echo "fleet-one-per-login-selftest: all passed"; exit 0; }
-echo "fleet-one-per-login-selftest: $FAILS failure(s)"; exit 1
+st_done

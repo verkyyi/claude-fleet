@@ -22,13 +22,12 @@
 # the peer send is stubbed at fleet_peer_send so every delivery is counted exactly.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 FLUSH="$BIN/fleet-children-flush.sh"
 [ -f "$FLUSH" ] || { printf 'selftest: %s missing\n' "$FLUSH" >&2; exit 2; }
 
 CHECKS=0
-fail() { printf 'fleet-children-flush selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
-eq()   { ok; [ "$2" = "$3" ] || fail "$1" "expected: [$2]"$'\n'"got:      [$3]"; }
+eq()   { st_count; [ "$2" = "$3" ] || st_fail "$1" "expected: [$2]"$'\n'"got:      [$3]"; }
 has()  { case "$2" in *"$1"*) return 0 ;; esac; return 1; }
 
 for t in tmux perl python3; do
@@ -69,9 +68,9 @@ FAKEBIN="$WORK/fakebin"; mkdir -p "$FAKEBIN"
 ln -sf "$(command -v perl)" "$FAKEBIN/claude"   # comm = claude, as fleet_pane_claude_pid wants
 
 TM() { tmux -L "$LBL" "$@"; }
-TM new-session -d -s "$LBL" -n dash -c "$WORK" "sleep 600" 2>/dev/null || fail "could not start the selftest tmux server"
+TM new-session -d -s "$LBL" -n dash -c "$WORK" "sleep 600" 2>/dev/null || st_fail "could not start the selftest tmux server"
 WID=''
-new_win() { WID=$(TM new-window -d -P -F '#{window_id}' -n "$1" -c "$WORK" "$2" 2>/dev/null); [ -n "$WID" ] || fail "could not create window $1"; }
+new_win() { WID=$(TM new-window -d -P -F '#{window_id}' -n "$1" -c "$WORK" "$2" 2>/dev/null); [ -n "$WID" ] || st_fail "could not create window $1"; }
 # new_parent <issue> — a window with a live fake Claude, bound to <issue>.
 new_parent() {
   new_win "parent-$1" "PATH='$FAKEBIN:\$PATH' exec claude -e 'sleep 600'"
@@ -81,7 +80,7 @@ new_parent() {
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     p=$(fleet_pane_claude_pid "$WID" "$LBL" 2>/dev/null) && [ -n "$p" ] && break; sleep 0.3
   done
-  [ -n "$p" ] || fail "no fake claude under parent $1"
+  [ -n "$p" ] || st_fail "no fake claude under parent $1"
 }
 # new_child <issue> <parent-issue> <state> — sets $WID.
 new_child() {
@@ -133,9 +132,9 @@ eq '…and so does the next one' 0 "$(sends)"
 age_ledger issue-900 301
 out=$(TICK)
 eq 'the oldest news past BATCH_SECS → exactly one digest' 1 "$(sends)"
-ok; has 'digest → issue-900' "$out" && has '· age ·' "$out" || fail "the tick must name the parent and the reason" "$out"
+st_count; has 'digest → issue-900' "$out" && has '· age ·' "$out" || st_fail "the tick must name the parent and the reason" "$out"
 msg=$(last_send)
-python3 - "$msg" <<'PY' || fail "the digest is not the fixed shape (see above)" "$msg"
+python3 - "$msg" <<'PY' || st_fail "the digest is not the fixed shape (see above)" "$msg"
 import sys
 l = sys.argv[1].rstrip('\n').split('\n')
 assert l[0] == '[children-digest] 2/5 ✓', l[0]
@@ -160,11 +159,11 @@ TM set-window-option -t "$K905" @claude_state needs   # set-claude-state.sh bloc
 out=$(REPORT --win "$K905" --state blocked --summary 'needs a token only the operator has')
 eq 'LOUD: a blocked report is delivered at once' 2 "$(sends)"
 msg=$(last_send)
-ok; has '  ! issue #905 "kid-905" BLOCKED — needs a token only the operator has' "$msg" \
-  || fail "the loud line must be in the digest" "$msg"
-ok; has '  ✓ issue #904 "kid-904" MERGED (PR #14)' "$msg" \
-  || fail "the quiet news queued ahead must ride along" "$msg"
-ok; has 'issue #901' "$msg" && fail "an already-delivered child must not be re-listed" "$msg"
+st_count; has '  ! issue #905 "kid-905" BLOCKED — needs a token only the operator has' "$msg" \
+  || st_fail "the loud line must be in the digest" "$msg"
+st_count; has '  ✓ issue #904 "kid-904" MERGED (PR #14)' "$msg" \
+  || st_fail "the quiet news queued ahead must ride along" "$msg"
+st_count; has 'issue #901' "$msg" && st_fail "an already-delivered child must not be re-listed" "$msg"
 eq 'LOUD: …and the cursor moved past both' 5 "$(tr -d ' \n' < "$LDIR/issue-900.cursor")"
 TICK >/dev/null
 eq 'LOUD: the tick after it sends nothing' 2 "$(sends)"
@@ -174,7 +173,7 @@ eq 'LOUD: the tick after it sends nothing' 2 "$(sends)"
 # ============================================================================
 TM kill-window -t "$P900"
 new_parent 900; P900B="$WID"
-ok; [ "$P900B" != "$P900" ] || fail "the migrated parent should be a new window id"
+st_count; [ "$P900B" != "$P900" ] || st_fail "the migrated parent should be a new window id"
 TICK >/dev/null
 eq 'a parent migrated onto a new window id is not re-sent old news' 2 "$(sends)"
 
@@ -188,7 +187,7 @@ eq 'a working parent + a working kid + young news: hold' 2 "$(sends)"
 TM set-window-option -t "$P900B" @claude_state 'done'
 out=$(TICK)
 eq 'IDLE: the parent went idle → delivered' 3 "$(sends)"
-ok; has '· idle ·' "$out" || fail "the reason must be idle" "$out"
+st_count; has '· idle ·' "$out" || st_fail "the reason must be idle" "$out"
 TM set-window-option -t "$P900B" @claude_state working
 
 # ============================================================================
@@ -205,8 +204,8 @@ TM set-window-option -t "$K912" @claude_state 'done'
 REPORT --win "$K912" --state merged --pr 22 >/dev/null
 out=$(TICK)
 eq 'BARRIER: all children terminal → one digest' 4 "$(sends)"
-ok; has 'digest → issue-910' "$out" && has '· barrier ·' "$out" || fail "the reason must be barrier" "$out"
-ok; has '[children-digest] 2/2 ✓' "$(last_send)" || fail "the barrier digest header" "$(last_send)"
+st_count; has 'digest → issue-910' "$out" && has '· barrier ·' "$out" || st_fail "the reason must be barrier" "$out"
+st_count; has '[children-digest] 2/2 ✓' "$(last_send)" || st_fail "the barrier digest header" "$(last_send)"
 
 # ============================================================================
 # OVERFLOW — more than 6 changed children fold into one line
@@ -220,7 +219,7 @@ TICK >/dev/null
 msg=$(last_send)
 eq 'OVERFLOW: 8 terminal kids → one digest' 5 "$(sends)"
 eq 'OVERFLOW: header + 6 lines + fold + no-reply = 9 lines' 9 "$(printf '%s\n' "$msg" | grep -c .)"
-ok; has '  … 2 more — fleet-children.sh' "$msg" || fail "the overflow must fold" "$msg"
+st_count; has '  … 2 more — fleet-children.sh' "$msg" || st_fail "the overflow must fold" "$msg"
 
 # ============================================================================
 # REAPED parent — events stay in the ledger, nothing errors
@@ -236,9 +235,9 @@ out=$(TICK); rc=$?
 eq 'REAPED: the tick exits 0' 0 "$rc"
 eq 'REAPED: nothing sent' 5 "$(sends)"
 eq 'REAPED: the event stays in the ledger' 1 "$(grep -c '"issue-931"' "$LDIR/issue-930.ndjson" | tr -d ' ')"
-ok; [ -f "$LDIR/issue-930.cursor" ] && fail "REAPED: no cursor may move for an undelivered digest"
+st_count; [ -f "$LDIR/issue-930.cursor" ] && st_fail "REAPED: no cursor may move for an undelivered digest"
 out=$(TICK --dry-run)
-ok; has 'kept in the ledger' "$out" || fail "--dry-run must say why a reaped parent is skipped" "$out"
+st_count; has 'kept in the ledger' "$out" || st_fail "--dry-run must say why a reaped parent is skipped" "$out"
 
 # Stale news (older than a day) is history: never turned into a surprise digest.
 new_parent 940
@@ -256,7 +255,7 @@ new_parent 950
 new_child 951 950 'done'; K951="$WID"
 REPORT --win "$K951" --state merged --pr 61 >/dev/null
 eq 'IMMEDIATE: sent one by one, as before' 6 "$(sends)"
-ok; has '[child-report] issue #951' "$(last_send)" || fail "immediate still sends a [child-report]" "$(last_send)"
+st_count; has '[child-report] issue #951' "$(last_send)" || st_fail "immediate still sends a [child-report]" "$(last_send)"
 eq 'IMMEDIATE: the cursor follows the delivery' 1 "$(tr -d ' \n' < "$LDIR/issue-950.cursor")"
 TICK >/dev/null
 eq 'IMMEDIATE: the tick does nothing in immediate mode' 6 "$(sends)"
@@ -269,6 +268,6 @@ out=$(bash "$FLUSH" --bogus 2>&1); rc=$?
 eq 'an unknown flag exits 2' 2 "$rc"
 out=$(bash "$FLUSH" -h 2>&1); rc=$?
 eq '-h exits 0' 0 "$rc"
-ok; has 'children-digest' "$out" || fail "-h must print the header" "$out"
+st_count; has 'children-digest' "$out" || st_fail "-h must print the header" "$out"
 
 printf 'fleet-children-flush selftest: %s checks passed\n' "$CHECKS"

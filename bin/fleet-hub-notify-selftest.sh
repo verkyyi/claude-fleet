@@ -14,9 +14,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
 N="$ROOT/tokenledger/notify/fleet-hub-notify.sh"
 st_sandbox "${TMPDIR:-/tmp}/hub-notify-selftest.XXXXXX"
-fail=0
-ok() { echo "ok   $*"; }
-bad() { echo "FAIL $*"; fail=1; }
+st_tally
 
 mkdir -p "$WORK/stub"
 printf '#!/bin/sh\nfor a in "$@"; do printf "%%s\\n" "$a"; done > "$STUB_LOG"\nexit 7\n' > "$WORK/stub/ccquota"
@@ -26,14 +24,13 @@ msg='svc_degraded svc:livepage: 3 "failed"
 code=infra_error'
 PATH="$WORK/stub:$PATH" sh "$N" "$msg"; rc=$?
 want=$(printf 'notify\n--\n%s' "$msg")
-[ "$rc" = 7 ] && [ "$(cat "$STUB_LOG")" = "$want" ] && ok "A execs ccquota notify with the message" \
-  || bad "A rc=$rc argv=$(cat "$STUB_LOG" 2>/dev/null)"
+[ "$rc" = 7 ] && [ "$(cat "$STUB_LOG")" = "$want" ] && st_ok_all "A execs ccquota notify with the message" \
+  || st_miss "A rc=$rc argv=$(cat "$STUB_LOG" 2>/dev/null)"
 
 grep -qx 'COPY notify/fleet-hub-notify.sh /usr/local/bin/fleet-hub-notify' "$ROOT/tokenledger/Dockerfile" \
-  && ok "B Dockerfile copies it" || bad "B Dockerfile line missing"
+  && st_ok_all "B Dockerfile copies it" || st_miss "B Dockerfile line missing"
 if git -C "$ROOT" ls-files -s tokenledger/notify/fleet-hub-notify.sh 2>/dev/null | grep -q '^100755'; then
-  ok "B executable in git"
-elif [ -x "$N" ]; then ok "B executable (not a checkout)"; else bad "B not executable"; fi
+  st_ok_all "B executable in git"
+elif [ -x "$N" ]; then st_ok_all "B executable (not a checkout)"; else st_miss "B not executable"; fi
 
-[ "$fail" = 0 ] && echo "hub-notify selftest: PASS" || echo "hub-notify selftest: FAIL"
-exit "$fail"
+st_done

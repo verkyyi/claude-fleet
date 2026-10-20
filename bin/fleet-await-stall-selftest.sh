@@ -21,19 +21,19 @@
 # The BUSY pane spins under a kernel alarm(2) — no trap, nothing to leak (#697).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 for f in fleet-await.sh fleet-children.sh fleet-children.py fleet-children-lib.sh fleet-alerts.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s missing\n' "$f" >&2; exit 2; }
 done
-command -v tmux >/dev/null 2>&1 || { printf 'fleet-await-stall selftest: tmux absent — skipped\n'; exit 0; }
+st_need tmux
 
 # SELFTEST_PART=all keeps the original sequential execution available.
 part=${SELFTEST_PART:-1/2}
 unset SELFTEST_PART
 
 CHECKS=0
-fail() { printf 'fleet-await-stall selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()   { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1" "expected: [$2]"$'\n'"got:      [$3]"; }
-has()  { CHECKS=$((CHECKS + 1)); case "$3" in *"$2"*) : ;; *) fail "$1" "$3" ;; esac; }
+eq()   { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1" "expected: [$2]"$'\n'"got:      [$3]"; }
+has()  { CHECKS=$((CHECKS + 1)); case "$3" in *"$2"*) : ;; *) st_fail "$1" "$3" ;; esac; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-await-stall.XXXXXX")" || exit 2
 export TMPDIR="$WORK"
@@ -59,7 +59,7 @@ AW="$SB/fleet-await.sh"
 LBL="fawstall-selftest-$$"
 trap 'tmux -L "$LBL" kill-server 2>/dev/null; rm -rf "$WORK"' EXIT
 TM() { tmux -L "$LBL" "$@"; }
-TM new-session -d -s "$LBL" -n dash -c "$WORK" "sleep 600" 2>/dev/null || fail "could not start the selftest tmux server"
+TM new-session -d -s "$LBL" -n dash -c "$WORK" "sleep 600" 2>/dev/null || st_fail "could not start the selftest tmux server"
 # mkparent <key> — the parent window the children below report to: PK its key,
 # P its window, LEDGER its child ledger. The ladder's lane has a parent of its own
 # (its summary and --json read every child of it); the other lanes share scratch-7.
@@ -110,7 +110,7 @@ eq "rungs 1-3 go to the child, rung 4 to the parent" \
    "issue:301 issue:301 issue:301 $P" "$(cut -f1 "$PEER_LOG" | tr '\n' ' ' | sed 's/ $//')"
 has "rung 3 re-sends the task (the brief)" 'brief' "$(sed -n 3p "$PEER_LOG")"
 has "rung 4 names the stuck child" '#301' "$(sed -n 4p "$PEER_LOG")"
-[ -f "$STALLF" ] || fail "rung 5 raised no stall alert" "$(cat "$WORK/err$L")"
+[ -f "$STALLF" ] || st_fail "rung 5 raised no stall alert" "$(cat "$WORK/err$L")"
 CHECKS=$((CHECKS + 1))
 alerts=$(bash "$SB/fleet-alerts.sh" write >/dev/null 2>&1; cat "$WORK/.claude-dash/global/alerts.ndjson")
 has "…and it is a needs row: #301 · stalled" '"severity":"needs","subject":"#301","condition":"stalled"' "$alerts"
@@ -120,7 +120,7 @@ eq "nothing climbs past rung 5" 5 "$(wakes 301 | wc -w | tr -d ' ')"
 report --win "$W" --state merged --pr 601
 collect
 eq "the child lands: MERGED" "0 MERGED" "$RC $(head -1 <<< "$OUT")"
-[ ! -f "$STALLF" ] || fail "the landing did not clear the stall alert"
+[ ! -f "$STALLF" ] || st_fail "the landing did not clear the stall alert"
 CHECKS=$((CHECKS + 1))
 
 # READERS: wake rows are not reports.

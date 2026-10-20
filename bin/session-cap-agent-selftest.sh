@@ -19,6 +19,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'session-cap-agent: tmux absent — SKIP\n'; exit 0; }
 
@@ -28,9 +29,7 @@ SOCK="$WORK/s"
 cleanup() { "$REAL_TMUX" -S "$SOCK" kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
-CHECKS=0
-fail() { printf 'session-cap-agent FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '%s\n' "$2" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
+st_tally count
 
 # Every `tmux -L <label> …` the lib runs lands on the isolated server.
 mkdir -p "$WORK/shim" "$WORK/conf"
@@ -47,7 +46,7 @@ export PATH="$WORK/shim:$PATH" FLEET_CONF_DIR="$WORK/conf"
 unset TMUX TMUX_PANE
 
 tf() { "$REAL_TMUX" -S "$SOCK" "$@"; }
-tf -f /dev/null new-session -d -s capf -n home -x 100 -y 30 'sleep 600' || fail "cannot start the isolated tmux server"
+tf -f /dev/null new-session -d -s capf -n home -x 100 -y 30 'sleep 600' || st_fail "cannot start the isolated tmux server"
 tf set-option -g remain-on-exit on
 tf set-option -w -t capf:home @fleet_role home
 w() {  # <name> <command> — a worker window; prints its id
@@ -71,25 +70,25 @@ fleet_sockets() { printf 'capf\n'; }      # the one fleet on the isolated server
 # prep: an old window's `preparing` stamp is read as empty since T548 — no agent
 for c in "gone:$gone:1" "exd:$exd:1" "dead:$dead:1" "live:$live:0" "prep:$prep:1"; do
   n=${c%%:*}; rest=${c#*:}; id=${rest%%:*}; want=${rest#*:}
-  fleet_window_has_agent "$id"; eq "A/$n: fleet_window_has_agent rc" "$want" "$?"
+  fleet_window_has_agent "$id"; st_eq "A/$n: fleet_window_has_agent rc" "$want" "$?"
 done
-fleet_window_has_agent '@999'; eq "A: no such window → rc 2" 2 "$?"
+fleet_window_has_agent '@999'; st_eq "A: no such window → rc 2" 2 "$?"
 
 # ------------------------------------- B: three shells + one agent hold 1 ----
 tf kill-window -t "$prep"
-eq "B: per-fleet count — only the live agent" 1 "$(fleet_session_count_for capf)"
-eq "B: global count — the same rule" 1 "$(fleet_session_count)"
+st_eq "B: per-fleet count — only the live agent" 1 "$(fleet_session_count_for capf)"
+st_eq "B: global count — the same rule" 1 "$(fleet_session_count)"
 msg=$(FLEET_MAX_SESSIONS=4 FLEET_ADMIT=0 fleet_session_cap_ok capf); rc=$?
-eq "B: FLEET_MAX_SESSIONS=4 still admits a new session" 0 "$rc"
-eq "B: and says nothing" "" "$msg"
+st_eq "B: FLEET_MAX_SESSIONS=4 still admits a new session" 0 "$rc"
+st_eq "B: and says nothing" "" "$msg"
 
 # ------------------------------------ C: four live agents — named refusal ----
 w live2 'sleep 600' >/dev/null; w live3 'sleep 600' >/dev/null; w live4 'sleep 600' >/dev/null
-eq "C: four live agents count 4" 4 "$(fleet_session_count_for capf)"
+st_eq "C: four live agents count 4" 4 "$(fleet_session_count_for capf)"
 msg=$(FLEET_MAX_SESSIONS=4 FLEET_ADMIT=0 fleet_session_cap_ok capf); rc=$?
-eq "C: the fifth is refused" 1 "$rc"
-CHECKS=$((CHECKS + 1)); case "$msg" in *"4/4"*"占着名额："*"$live live"*"live4"*) ;; *) fail "C: the refusal names the slot holders" "$msg" ;; esac
-CHECKS=$((CHECKS + 1)); case "$msg" in *"fleet-worker-stop.sh capf fid:fid-live"*) ;; *) fail "C: the refusal gives a command that closes one" "$msg" ;; esac
-CHECKS=$((CHECKS + 1)); case "$msg" in *gone*|*exd*|*dead*) fail "C: an agent-less window is named as a holder" "$msg" ;; esac
+st_eq "C: the fifth is refused" 1 "$rc"
+CHECKS=$((CHECKS + 1)); case "$msg" in *"4/4"*"占着名额："*"$live live"*"live4"*) ;; *) st_fail "C: the refusal names the slot holders" "$msg" ;; esac
+CHECKS=$((CHECKS + 1)); case "$msg" in *"fleet-worker-stop.sh capf fid:fid-live"*) ;; *) st_fail "C: the refusal gives a command that closes one" "$msg" ;; esac
+CHECKS=$((CHECKS + 1)); case "$msg" in *gone*|*exd*|*dead*) st_fail "C: an agent-less window is named as a holder" "$msg" ;; esac
 
 printf 'session-cap-agent: OK (%d checks)\n' "$CHECKS"

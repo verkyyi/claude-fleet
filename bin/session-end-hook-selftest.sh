@@ -39,7 +39,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 SRC="$BIN/session-end-hook.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s missing/not executable\n' "$SRC" >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
+st_need git
 
 st_sandbox "${TMPDIR:-/tmp}/seh-selftest.XXXXXX"
 # Physical path (macOS /var → /private/var) so the paths git reports match the ones
@@ -47,7 +47,6 @@ st_sandbox "${TMPDIR:-/tmp}/seh-selftest.XXXXXX"
 WORK="$(cd "$WORK" && pwd -P)"
 
 pass=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- log ---\n%s\n' "$2" >&2; exit 1; }
 
 # worktree path → transcript-dir under CLAUDE_PROJECTS_DIR, encoded the way Claude
 # Code (and fleet-history.sh transcript_dir_for) do: every non-alnum byte → '-'.
@@ -208,36 +207,36 @@ mkdir -p "$CONFDIR/rotating"
 LEASE_FILE="$CONFDIR/rotating/$(printf '%s' "$SWT" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
 printf '%s %s 900 transfer-test\n' "$$" "$(date +%s)" > "$LEASE_FILE"
 clr; TRANSFER_UNTIL=$(( $(date +%s) + 120 )) REASON=prompt_input_exit RAW=1 WT="$SWT" run_hook
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail 'active transfer must retain the window and skip ledger/reap'
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail 'active transfer must retain the window and skip ledger/reap'
 st_pass 'active transfer marker + lease → no SessionEnd cleanup'
 clr; TRANSFER_UNTIL=1 REASON=prompt_input_exit RAW=1 WT="$SWT" run_hook
-grep -q 'KILL' "$TMLOG" || fail 'expired transfer marker must not suppress cleanup'
+grep -q 'KILL' "$TMLOG" || st_fail 'expired transfer marker must not suppress cleanup'
 st_pass 'expired transfer marker → ordinary exit cleanup'
 rm "$LEASE_FILE"
 clr; TRANSFER_UNTIL=$(( $(date +%s) + 120 )) REASON=prompt_input_exit RAW=1 WT="$SWT" run_hook
-grep -q 'KILL' "$TMLOG" || fail 'marker without a lease must not suppress cleanup'
+grep -q 'KILL' "$TMLOG" || st_fail 'marker without a lease must not suppress cleanup'
 st_pass 'transfer marker without lease → ordinary exit cleanup'
 unset CONFDIR
 : > "$LEDGER"
 
 # T1: reason=clear → the in-pane gate returns BEFORE dispatch (no RUNSHELL/KILL, no row).
 clr; REASON=clear ISS=2 WID='@2' run_hook
-grep -q 'RUNSHELL' "$TMLOG" && fail "clear must not dispatch a reap" "$(cat "$TMLOG")"
-grep -q 'KILL' "$TMLOG" && fail "clear must not close a window"
-[ -d "$WT2" ] || fail "clear must not touch the worktree"
-[ "$(rows 2 closed-unlanded)" = 0 ] || fail "clear must not write a ledger row"
+grep -q 'RUNSHELL' "$TMLOG" && st_fail "clear must not dispatch a reap" "$(cat "$TMLOG")"
+grep -q 'KILL' "$TMLOG" && st_fail "clear must not close a window"
+[ -d "$WT2" ] || st_fail "clear must not touch the worktree"
+[ "$(rows 2 closed-unlanded)" = 0 ] || st_fail "clear must not write a ledger row"
 st_pass "reason=clear → complete no-op (no dispatch, no reap, no row)"
 
 # T2: reason=resume → same no-op.
 clr; REASON=resume ISS=2 WID='@2' run_hook
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "resume must be a no-op" "$(cat "$TMLOG")"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "resume must be a no-op" "$(cat "$TMLOG")"
 st_pass "reason=resume → complete no-op"
 
 # T3: GLOBAL FLEET_CLOSE_ON_EXIT=0 (the machine-wide opt-out) + a real exit reason →
 # complete no-op. run_hook passes the value in the env, snapshotted as the global one.
 clr; REASON=prompt_input_exit CLOSE=0 ISS=2 WID='@2' run_hook
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "global FLEET_CLOSE_ON_EXIT=0 must be a no-op" "$(cat "$TMLOG")"
-[ -d "$WT2" ] || fail "global opt-out must not touch the worktree"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "global FLEET_CLOSE_ON_EXIT=0 must be a no-op" "$(cat "$TMLOG")"
+[ -d "$WT2" ] || st_fail "global opt-out must not touch the worktree"
 st_pass "global FLEET_CLOSE_ON_EXIT=0 → complete no-op (the machine-wide opt-out)"
 
 # T3b: NOTHING set (FLEET_CLOSE_ON_EXIT genuinely UNSET, no global conf) → the hook is
@@ -252,10 +251,10 @@ clr
       FLEET_HISTORY_LEDGER="$LEDGER" CLAUDE_PROJECTS_DIR="$PROJECTS" \
       TMUX="fake-sock" TMUX_PANE="%1" PATH="$WORK/fakepath:$PATH" \
       bash "$SRC" )
-grep -q 'RUNSHELL' "$TMLOG" || fail "default-on: unset FLEET_CLOSE_ON_EXIT must ACT" "$(cat "$TMLOG")"
-grep -q 'KILL' "$TMLOG" || fail "default-on exit must close the window"
-[ -d "$WT6" ] || fail "default-on unmerged #6 worktree must be KEPT (resumable)"
-[ "$(rows 6 closed-unlanded)" = 1 ] || fail "default-on exit must write ONE closed-unlanded row for #6" "$(cat "$LEDGER")"
+grep -q 'RUNSHELL' "$TMLOG" || st_fail "default-on: unset FLEET_CLOSE_ON_EXIT must ACT" "$(cat "$TMLOG")"
+grep -q 'KILL' "$TMLOG" || st_fail "default-on exit must close the window"
+[ -d "$WT6" ] || st_fail "default-on unmerged #6 worktree must be KEPT (resumable)"
+[ "$(rows 6 closed-unlanded)" = 1 ] || st_fail "default-on exit must write ONE closed-unlanded row for #6" "$(cat "$LEDGER")"
 st_pass "nothing set → ON by default (#409): acts on prompt_input_exit"
 
 # T3c: a PER-FLEET FLEET_CLOSE_ON_EXIT=1 while the GLOBAL value is 0 → STILL a no-op.
@@ -266,9 +265,9 @@ st_pass "nothing set → ON by default (#409): acts on prompt_input_exit"
 PFCONF="$WORK/pfconf"; mkdir -p "$PFCONF/fleets/s1"
 printf 'FLEET_CLOSE_ON_EXIT=1\n' > "$PFCONF/fleets/s1/conf"
 clr; REASON=prompt_input_exit CLOSE=0 CONFDIR="$PFCONF" ISS=2 WID='@2' run_hook
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "per-fleet=1 while global=0 must STILL be a no-op (global-authoritative)" "$(cat "$TMLOG")"
-[ -d "$WT2" ] || fail "global-authoritative no-op must not touch the worktree"
-[ "$(rows 2 closed-unlanded)" = 0 ] || fail "global-authoritative no-op must write no ledger row" "$(cat "$LEDGER")"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "per-fleet=1 while global=0 must STILL be a no-op (global-authoritative)" "$(cat "$TMLOG")"
+[ -d "$WT2" ] || st_fail "global-authoritative no-op must not touch the worktree"
+[ "$(rows 2 closed-unlanded)" = 0 ] || st_fail "global-authoritative no-op must write no ledger row" "$(cat "$LEDGER")"
 st_pass "per-fleet FLEET_CLOSE_ON_EXIT=1 while global=0 → still a no-op (global wins)"
 
 # T4: operator hub pane (@hub=1) → defensive bail (no dispatch), even opted-in.
@@ -276,112 +275,112 @@ st_pass "per-fleet FLEET_CLOSE_ON_EXIT=1 while global=0 → still a no-op (globa
 # @hub bail this row would dispatch a worker reap — so it's what makes this a
 # test of the bail itself rather than of the panel fall-through T5 already covers.
 clr; REASON=prompt_input_exit HUB=1 ISS=6 WID='@1' run_hook
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "the hub pane must never be touched" "$(cat "$TMLOG")"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "the hub pane must never be touched" "$(cat "$TMLOG")"
 st_pass "operator hub pane (@hub=1) → never touched (bails even with an @issue)"
 
 # T5: panel (no @issue, no @raw, no @hub) → no dispatch.
 clr; REASON=prompt_input_exit ISS='' RAW='' HUB='' WID='@1' run_hook
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "a panel row must not dispatch" "$(cat "$TMLOG")"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "a panel row must not dispatch" "$(cat "$TMLOG")"
 st_pass "panel (no @issue/@raw) → never touched"
 
 # ============================ ACTING PATHS ===================================
 # T6: MERGED worker → reap worktree+branch, landed row (PR resolved), window gone; the
 # issue is GitHub's to close (a PR's Closes #N — issue #4898), never the hook's.
 clr; REASON=prompt_input_exit ISS=1 WID='@1' GH_MERGED_HEAD=issue-1 GH_MERGED_PR=111 GH_CLOSES='closes #1' run_hook
-grep -q 'RUNSHELL' "$TMLOG" || fail "merged exit must dispatch the reap" "$(cat "$TMLOG")"
-grep -q 'KILL' "$TMLOG" || fail "merged exit must close the window"
-[ -d "$WT1" ] && fail "merged worktree must be removed"
-git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-1 && fail "issue-1 branch must be deleted"
-[ "$(rows 1 landed)" = 1 ] || fail "merged exit must write ONE landed row for #1" "$(cat "$LEDGER")"
+grep -q 'RUNSHELL' "$TMLOG" || st_fail "merged exit must dispatch the reap" "$(cat "$TMLOG")"
+grep -q 'KILL' "$TMLOG" || st_fail "merged exit must close the window"
+[ -d "$WT1" ] && st_fail "merged worktree must be removed"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-1 && st_fail "issue-1 branch must be deleted"
+[ "$(rows 1 landed)" = 1 ] || st_fail "merged exit must write ONE landed row for #1" "$(cat "$LEDGER")"
 lp="$(awk -F'\t' '$2==1{print $4}' "$LEDGER")"
-[ "$lp" = 111 ] || fail "landed #1 row must carry the resolved PR 111 (got [$lp])"
-grep -q 'CLOSE' "$GHLOG" && fail "the hook never closes an issue (#4898: the PR's Closes does)" "$(cat "$GHLOG")"
+[ "$lp" = 111 ] || st_fail "landed #1 row must carry the resolved PR 111 (got [$lp])"
+grep -q 'CLOSE' "$GHLOG" && st_fail "the hook never closes an issue (#4898: the PR's Closes does)" "$(cat "$GHLOG")"
 st_pass "prompt_input_exit on MERGED → wt+branch reaped, landed row (PR 111), window gone, issue left to GitHub"
 
 # T6b-e (issue #2949): a merged PR is not a finished issue.
 # A merged PR that only REFERS to the issue (an intermediate fix) → reaped, issue open.
 clr; REASON=prompt_input_exit ISS=8 WID='@8' GH_MERGED_HEAD=issue-8 GH_MERGED_PR=118 \
   GH_CLOSES="$(printf 'drill script fix (#8)\nRefs #8, closes #80')" run_hook
-[ -d "$WT8" ] && fail "merged #8 worktree must still be reaped"
-[ "$(rows 8 landed)" = 1 ] || fail "merged #8 must still write its landed row" "$(cat "$LEDGER")"
-grep -q 'CLOSE' "$GHLOG" && fail "a merged PR that does not close #8 must KEEP the issue open" "$(cat "$GHLOG")"
+[ -d "$WT8" ] && st_fail "merged #8 worktree must still be reaped"
+[ "$(rows 8 landed)" = 1 ] || st_fail "merged #8 must still write its landed row" "$(cat "$LEDGER")"
+grep -q 'CLOSE' "$GHLOG" && st_fail "a merged PR that does not close #8 must KEEP the issue open" "$(cat "$GHLOG")"
 st_pass "merged PR that does not say it closes the issue → issue KEPT open"
 
 # A park's stop: merged PR that even says Closes, but the window is @parking →
 # issue OPEN, worktree + branch KEPT, row still recorded.
 clr; REASON=prompt_input_exit ISS=9 WID='@9' PARKING='fake/repo#9' GH_MERGED_HEAD=issue-9 GH_MERGED_PR=119 \
   GH_CLOSES='closes #9' run_hook
-grep -q 'KILL' "$TMLOG" || fail "a parked exit must still close the window"
-[ -d "$WT9" ] || fail "a parked worktree must be KEPT"
-git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-9 || fail "a parked branch must be KEPT"
-[ "$(rows 9 landed)" = 1 ] || fail "a parked exit must still record its row" "$(cat "$LEDGER")"
-grep -q 'CLOSE' "$GHLOG" && fail "a parked issue that merged a PR must stay OPEN" "$(cat "$GHLOG")"
+grep -q 'KILL' "$TMLOG" || st_fail "a parked exit must still close the window"
+[ -d "$WT9" ] || st_fail "a parked worktree must be KEPT"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-9 || st_fail "a parked branch must be KEPT"
+[ "$(rows 9 landed)" = 1 ] || st_fail "a parked exit must still record its row" "$(cat "$LEDGER")"
+grep -q 'CLOSE' "$GHLOG" && st_fail "a parked issue that merged a PR must stay OPEN" "$(cat "$GHLOG")"
 st_pass "merged PR + parked → issue OPEN, worktree + branch kept, row recorded"
 
 clr; REASON=prompt_input_exit ISS=10 WID='@10' GH_MERGED_HEAD=issue-10 GH_MERGED_PR=120 \
   GH_CLOSES='Closes #10' GH_ISSUE_REASON=REOPENED run_hook
-grep -q 'CLOSE' "$GHLOG" && fail "a REOPENED issue must stay open" "$(cat "$GHLOG")"
-[ -d "$WT10" ] && fail "a reopened issue's merged worktree is still reaped"
+grep -q 'CLOSE' "$GHLOG" && st_fail "a REOPENED issue must stay open" "$(cat "$GHLOG")"
+[ -d "$WT10" ] && st_fail "a reopened issue's merged worktree is still reaped"
 st_pass "merged closing PR but the issue was reopened → issue KEPT open"
 
 clr; REASON=prompt_input_exit ISS=11 WID='@11' GH_MERGED_HEAD=issue-11 GH_MERGED_PR=121 \
   GH_CLOSES='fixes #11' GH_ISSUE_LABELS='bug,blocked' run_hook
-grep -q 'CLOSE' "$GHLOG" && fail "a blocked issue must stay open" "$(cat "$GHLOG")"
-[ -d "$WT11" ] && fail "a blocked issue's merged worktree is still reaped"
+grep -q 'CLOSE' "$GHLOG" && st_fail "a blocked issue must stay open" "$(cat "$GHLOG")"
+[ -d "$WT11" ] && st_fail "a blocked issue's merged worktree is still reaped"
 st_pass "merged closing PR but the issue is labelled blocked → issue KEPT open"
 
 # T7: UNMERGED worker → KEEP worktree + issue, closed-unlanded row, window gone, no gh close.
 clr; REASON=prompt_input_exit ISS=2 WID='@2' run_hook
-grep -q 'RUNSHELL' "$TMLOG" || fail "unmerged exit must dispatch" "$(cat "$TMLOG")"
-grep -q 'KILL' "$TMLOG" || fail "unmerged exit must close the window"
-[ -d "$WT2" ] || fail "unmerged worktree must be KEPT (resumable)"
-git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-2 || fail "unmerged branch must be KEPT"
-[ "$(rows 2 closed-unlanded)" = 1 ] || fail "unmerged exit must write ONE closed-unlanded row for #2" "$(cat "$LEDGER")"
-grep -q 'CLOSE' "$GHLOG" && fail "unmerged exit must NOT close the issue"
+grep -q 'RUNSHELL' "$TMLOG" || st_fail "unmerged exit must dispatch" "$(cat "$TMLOG")"
+grep -q 'KILL' "$TMLOG" || st_fail "unmerged exit must close the window"
+[ -d "$WT2" ] || st_fail "unmerged worktree must be KEPT (resumable)"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-2 || st_fail "unmerged branch must be KEPT"
+[ "$(rows 2 closed-unlanded)" = 1 ] || st_fail "unmerged exit must write ONE closed-unlanded row for #2" "$(cat "$LEDGER")"
+grep -q 'CLOSE' "$GHLOG" && st_fail "unmerged exit must NOT close the issue"
 st_pass "prompt_input_exit on UNMERGED → wt+issue KEPT, closed-unlanded row, window gone"
 
 # T8: DIRTY worker → KEEP worktree (git refuses forceless remove), closed-unlanded row, window gone.
 clr; REASON=prompt_input_exit ISS=3 WID='@3' run_hook
-grep -q 'KILL' "$TMLOG" || fail "dirty exit must close the window"
-[ -d "$WT3" ] || fail "dirty worktree must be KEPT (never force-removed)"
-[ -f "$WT3/untracked" ] || fail "dirty worktree's uncommitted file must survive"
-[ "$(rows 3 closed-unlanded)" = 1 ] || fail "dirty exit must write ONE closed-unlanded row for #3" "$(cat "$LEDGER")"
-grep -q 'CLOSE' "$GHLOG" && fail "dirty exit must NOT close the issue"
+grep -q 'KILL' "$TMLOG" || st_fail "dirty exit must close the window"
+[ -d "$WT3" ] || st_fail "dirty worktree must be KEPT (never force-removed)"
+[ -f "$WT3/untracked" ] || st_fail "dirty worktree's uncommitted file must survive"
+[ "$(rows 3 closed-unlanded)" = 1 ] || st_fail "dirty exit must write ONE closed-unlanded row for #3" "$(cat "$LEDGER")"
+grep -q 'CLOSE' "$GHLOG" && st_fail "dirty exit must NOT close the issue"
 st_pass "prompt_input_exit on DIRTY → wt KEPT (not force-removed), closed-unlanded row, window gone"
 
 # T9: ANCESTOR worker → reap worktree+branch, closed-unlanded row, window gone, issue KEPT OPEN.
 clr; REASON=prompt_input_exit ISS=4 WID='@4' run_hook
-grep -q 'KILL' "$TMLOG" || fail "ancestor exit must close the window"
-[ -d "$WT4" ] && fail "ancestor worktree must be removed"
-git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-4 && fail "ancestor branch must be deleted"
-[ "$(rows 4 closed-unlanded)" = 1 ] || fail "ancestor exit must write ONE closed-unlanded row for #4" "$(cat "$LEDGER")"
-grep -q 'CLOSE' "$GHLOG" && fail "ancestor (no merged PR) must KEEP the issue open (no gh close)"
+grep -q 'KILL' "$TMLOG" || st_fail "ancestor exit must close the window"
+[ -d "$WT4" ] && st_fail "ancestor worktree must be removed"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-4 && st_fail "ancestor branch must be deleted"
+[ "$(rows 4 closed-unlanded)" = 1 ] || st_fail "ancestor exit must write ONE closed-unlanded row for #4" "$(cat "$LEDGER")"
+grep -q 'CLOSE' "$GHLOG" && st_fail "ancestor (no merged PR) must KEEP the issue open (no gh close)"
 st_pass "prompt_input_exit on ANCESTOR → wt+branch reaped, closed-unlanded row, issue KEPT OPEN"
 
 # A manually-ended zero-commit session still closes its window, but never
 # discards its worktree/branch or closes the issue just because tip == base.
 clr; REASON=prompt_input_exit ISS=7 WID='@7' run_hook
-grep -q KILL "$TMLOG" || fail "manual zero-commit exit must close the window"
-[ -d "$WT7" ] || fail "zero-commit worktree must be KEPT"
-git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-7 || fail "zero-commit branch must be KEPT"
-[ "$(rows 7 closed-unlanded)" = 1 ] || fail "zero-commit exit must remain indexed"
-grep -q CLOSE "$GHLOG" && fail "zero-commit exit must KEEP issue open"
+grep -q KILL "$TMLOG" || st_fail "manual zero-commit exit must close the window"
+[ -d "$WT7" ] || st_fail "zero-commit worktree must be KEPT"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-7 || st_fail "zero-commit branch must be KEPT"
+[ "$(rows 7 closed-unlanded)" = 1 ] || st_fail "zero-commit exit must remain indexed"
+grep -q CLOSE "$GHLOG" && st_fail "zero-commit exit must KEEP issue open"
 st_pass "zero-commit manual exit → window closed, worktree/branch/issue kept, history recorded"
 
 # T10: IDEMPOTENT — a SECOND fire on the still-kept unmerged #2 records NO extra row
 # (record-closed dedups on session-id, so racing the cleanup daemon / ledger-watch is safe).
 clr; REASON=prompt_input_exit ISS=2 WID='@2' run_hook
-[ "$(rows 2 closed-unlanded)" = 1 ] || fail "a second fire must NOT add a duplicate row for #2 (idempotent)" "$(cat "$LEDGER")"
+[ "$(rows 2 closed-unlanded)" = 1 ] || st_fail "a second fire must NOT add a duplicate row for #2 (idempotent)" "$(cat "$LEDGER")"
 st_pass "idempotent — a second fire records ONE row (dedup vs cleanup/ledger-watch)"
 
 # T11: @raw scratch with NO resolvable scratch worktree (a pre-#290 window, or one
 # whose cwd wandered) → close the window ONLY, nothing to record.
 before="$(wc -l < "$LEDGER" | tr -d ' ')"
 clr; REASON=prompt_input_exit ISS='' RAW=1 WID='@9' run_hook
-grep -q 'RUNSHELL' "$TMLOG" || fail "raw scratch exit must dispatch (window close)" "$(cat "$TMLOG")"
-grep -q 'KILL' "$TMLOG" || fail "raw scratch exit must close the window"
-[ -s "$GHLOG" ] && fail "a worktree-less raw exit must not touch gh"
-[ "$(wc -l < "$LEDGER" | tr -d ' ')" = "$before" ] || fail "a worktree-less raw exit must write NO ledger row" "$(cat "$LEDGER")"
+grep -q 'RUNSHELL' "$TMLOG" || st_fail "raw scratch exit must dispatch (window close)" "$(cat "$TMLOG")"
+grep -q 'KILL' "$TMLOG" || st_fail "raw scratch exit must close the window"
+[ -s "$GHLOG" ] && st_fail "a worktree-less raw exit must not touch gh"
+[ "$(wc -l < "$LEDGER" | tr -d ' ')" = "$before" ] || st_fail "a worktree-less raw exit must write NO ledger row" "$(cat "$LEDGER")"
 st_pass "@raw with no scratch worktree → window closed only (nothing to record)"
 
 # T11b (issue #466): @raw scratch IN its scratch-<N> worktree → ONE closed-unlanded
@@ -389,15 +388,15 @@ st_pass "@raw with no scratch worktree → window closed only (nothing to record
 # SessionEnd records a scratch, it never reaps one (#290: never silently delete an
 # experiment). A second fire must not duplicate the row.
 clr; REASON=prompt_input_exit ISS='' RAW=1 WID='@9' WT="$SWT" run_hook
-grep -q 'KILL' "$TMLOG" || fail "scratch exit must close the window"
-[ -d "$SWT" ] || fail "SessionEnd must KEEP the scratch worktree (never reaps an experiment)"
-git -C "$BASEDIR" show-ref --verify -q refs/heads/scratch-3 || fail "the scratch branch must survive"
-[ "$(rows scratch-3 closed-unlanded)" = 1 ] || fail "scratch exit must write ONE closed-unlanded row keyed scratch-3" "$(cat "$LEDGER")"
+grep -q 'KILL' "$TMLOG" || st_fail "scratch exit must close the window"
+[ -d "$SWT" ] || st_fail "SessionEnd must KEEP the scratch worktree (never reaps an experiment)"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/scratch-3 || st_fail "the scratch branch must survive"
+[ "$(rows scratch-3 closed-unlanded)" = 1 ] || st_fail "scratch exit must write ONE closed-unlanded row keyed scratch-3" "$(cat "$LEDGER")"
 # the row must be resumable: worktree + transcript + a HEAD sha to rebuild from.
 awk -F'\t' '$2=="scratch-3"{exit !($5 ~ /^[0-9a-f]{7,}$/)}' "$LEDGER" \
-  || fail "the scratch row must carry the worktree HEAD sha (resume rebuilds off it)" "$(cat "$LEDGER")"
+  || st_fail "the scratch row must carry the worktree HEAD sha (resume rebuilds off it)" "$(cat "$LEDGER")"
 clr; REASON=prompt_input_exit ISS='' RAW=1 WID='@9' WT="$SWT" run_hook
-[ "$(rows scratch-3 closed-unlanded)" = 1 ] || fail "a second scratch exit must NOT duplicate the row" "$(cat "$LEDGER")"
+[ "$(rows scratch-3 closed-unlanded)" = 1 ] || st_fail "a second scratch exit must NOT duplicate the row" "$(cat "$LEDGER")"
 st_pass "@raw scratch → closed-unlanded row keyed scratch-3 (idempotent), worktree KEPT, window closed"
 
 # ======================= STDIN JSON REASON PARSE =============================
@@ -412,9 +411,9 @@ printf '{"hook_event_name":"SessionEnd","reason":"prompt_input_exit","cwd":"/x"}
       FLEET_HISTORY_LEDGER="$LEDGER" CLAUDE_PROJECTS_DIR="$PROJECTS" \
       TMUX="fake-sock" TMUX_PANE="%1" PATH="$WORK/fakepath:$PATH" \
       bash "$SRC"
-grep -q 'RUNSHELL' "$TMLOG" || fail "stdin reason=prompt_input_exit must act" "$(cat "$TMLOG")"
-[ -d "$WT5" ] || fail "unmerged #5 worktree must be KEPT"
-[ "$(rows 5 closed-unlanded)" = 1 ] || fail "stdin prompt_input_exit must write a closed-unlanded row for #5" "$(cat "$LEDGER")"
+grep -q 'RUNSHELL' "$TMLOG" || st_fail "stdin reason=prompt_input_exit must act" "$(cat "$TMLOG")"
+[ -d "$WT5" ] || st_fail "unmerged #5 worktree must be KEPT"
+[ "$(rows 5 closed-unlanded)" = 1 ] || st_fail "stdin prompt_input_exit must write a closed-unlanded row for #5" "$(cat "$LEDGER")"
 st_pass "stdin JSON reason=prompt_input_exit → parsed + acted"
 
 # T13: stdin reason=clear → no-op (verifies the parse gate the other way).
@@ -426,42 +425,42 @@ printf '{"reason":"clear"}' | \
       FLEET_HISTORY_LEDGER="$LEDGER" CLAUDE_PROJECTS_DIR="$PROJECTS" \
       TMUX="fake-sock" TMUX_PANE="%1" PATH="$WORK/fakepath:$PATH" \
       bash "$SRC"
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "stdin reason=clear must be a no-op" "$(cat "$TMLOG")"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "stdin reason=clear must be a no-op" "$(cat "$TMLOG")"
 st_pass "stdin JSON reason=clear → no-op"
 
 # Codex uses the foreground process exit, never SessionEnd(reason=other).
 clr; AGENT=codex LAUNCH_PID=123 REASON=other ISS=2 run_hook
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "Codex thread SessionEnd(other) must not close a window"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "Codex thread SessionEnd(other) must not close a window"
 clr; AGENT=codex LAUNCH_PID=123 REASON=process_exit ISS=2 run_hook
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "a hook reason cannot impersonate launcher process exit"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "a hook reason cannot impersonate launcher process exit"
 clr; AGENT=codex LAUNCH_PID=456 ISS=2 run_hook --codex-exit 123
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "a replaced Codex launcher must not close the new session"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "a replaced Codex launcher must not close the new session"
 clr; AGENT=claude LAUNCH_PID=123 ISS=2 run_hook --codex-exit 123
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "Codex cleanup must not close a Claude pane"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "Codex cleanup must not close a Claude pane"
 st_pass "Codex thread ends and stale/mismatched launchers never close a window"
 
 clr; AGENT=codex LAUNCH_PID=123 ISS=2 run_hook --codex-exit 123
-grep -q 'KILL' "$TMLOG" || fail "Codex normal exit must close an issue worker"
-[ -d "$WT2" ] || fail "Codex exit must preserve unmerged work"
-[ ! -s "$GHLOG" ] || fail "Codex unmerged exit must keep the issue open"
+grep -q 'KILL' "$TMLOG" || st_fail "Codex normal exit must close an issue worker"
+[ -d "$WT2" ] || st_fail "Codex exit must preserve unmerged work"
+[ ! -s "$GHLOG" ] || st_fail "Codex unmerged exit must keep the issue open"
 clr; AGENT=codex LAUNCH_PID=123 ISS=3 run_hook --codex-exit 123
-grep -q 'KILL' "$TMLOG" || fail "Codex normal exit must close a dirty worker's window"
-[ -f "$WT3/untracked" ] || fail "Codex exit must preserve dirty work"
+grep -q 'KILL' "$TMLOG" || st_fail "Codex normal exit must close a dirty worker's window"
+[ -f "$WT3/untracked" ] || st_fail "Codex exit must preserve dirty work"
 clr; AGENT=codex LAUNCH_PID=123 ISS='' RAW=1 WT="$SWT" run_hook --codex-exit 123
-grep -q 'KILL' "$TMLOG" || fail "Codex normal exit must close a scratch window"
-[ -d "$SWT" ] || fail "Codex exit must preserve the scratch worktree"
+grep -q 'KILL' "$TMLOG" || st_fail "Codex normal exit must close a scratch window"
+[ -d "$SWT" ] || st_fail "Codex exit must preserve the scratch worktree"
 st_pass "Codex process exit shares close-on-exit policy: close windows, keep dirty/unmerged/scratch work"
 
 clr; AGENT=codex LAUNCH_PID=123 CLOSE=0 ISS=2 run_hook --codex-exit 123
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "Codex exit must honor the global opt-out"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "Codex exit must honor the global opt-out"
 clr; AGENT=codex LAUNCH_PID=123 HUB=1 ISS=2 run_hook --codex-exit 123
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "Codex exit must never close the hub"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "Codex exit must never close the hub"
 clr; AGENT=codex LAUNCH_PID=123 ISS='' RAW='' HUB='' run_hook --codex-exit 123
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "Codex exit must never close a panel"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "Codex exit must never close a panel"
 printf '%s %s 900 transfer-test\n' "$$" "$(date +%s)" > "$LEASE_FILE"
 clr; AGENT=codex LAUNCH_PID=123 TRANSFER_UNTIL=$(( $(date +%s) + 120 )) \
   CONFDIR="$WORK/transfer-conf" ISS='' RAW=1 WT="$SWT" run_hook --codex-exit 123
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "Codex exit must honor an in-progress agent transfer"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "Codex exit must honor an in-progress agent transfer"
 rm "$LEASE_FILE"
 st_pass "Codex close-on-exit honors the global switch, hub/panel scope, and transfer protection"
 
@@ -473,17 +472,17 @@ for ag in claude codex; do
   clr
   if [ "$end" = hook ]; then AGENT=$ag LAUNCH_PID=123 REASON=prompt_input_exit ISS=2 run_hook
   else AGENT=$ag LAUNCH_PID=123 ISS=2 run_hook --agent-exit "$ag" 123; fi
-  grep -q 'KILL' "$TMLOG" || fail "$ag ($end): its walk-away must run the one close"
-  [ -d "$WT2" ] || fail "$ag ($end): the close must keep unmerged work"
+  grep -q 'KILL' "$TMLOG" || st_fail "$ag ($end): its walk-away must run the one close"
+  [ -d "$WT2" ] || st_fail "$ag ($end): the close must keep unmerged work"
   clr
   if [ "$end" = hook ]; then AGENT=$ag LAUNCH_PID=123 ISS=2 run_hook --agent-exit "$ag" 123
   else AGENT=$ag LAUNCH_PID=123 REASON=other ISS=2 run_hook; fi
-  grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "$ag ($end): the other agent's end road must not close it"
+  grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "$ag ($end): the other agent's end road must not close it"
   clr; AGENT=$ag LAUNCH_PID=456 ISS=2 run_hook --agent-exit "$ag" 123
-  grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "$ag: a launcher that no longer owns the pane must not close it"
+  grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "$ag: a launcher that no longer owns the pane must not close it"
 done
 clr; AGENT=codex LAUNCH_PID=123 ISS=2 run_hook --agent-exit nosuch 123
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "an agent the table does not know must close nothing"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && st_fail "an agent the table does not know must close nothing"
 st_pass "T631: claude (hook) and codex (exit) each reach the one close by their table's end road only"
 
 # GitHub connecting but never answering (issue #4842, EPIC #4839 C3): the exit itself
@@ -496,13 +495,13 @@ clr; t0=$(date +%s)
 GH_HANG="$HANG" RUNSHELL_BG=1 CONFDIR="$GHDOWN" \
   REASON=prompt_input_exit ISS=2 WID='@2' run_hook </dev/null
 t1=$(date +%s)
-[ $((t1 - t0)) -le 2 ] || fail "the exit waited on GitHub: $((t1 - t0))s (≤ 2 s)" "$(cat "$TMLOG")"
+[ $((t1 - t0)) -le 2 ] || st_fail "the exit waited on GitHub: $((t1 - t0))s (≤ 2 s)" "$(cat "$TMLOG")"
 i=0; while ! grep -q '^DONE' "$TMLOG" && [ "$i" -lt 250 ]; do sleep 0.1; i=$((i + 1)); done
 t2=$(date +%s)
-grep -q 'KILL' "$TMLOG" || fail "a black-holed GitHub kept the window open" "$(cat "$TMLOG")"
-[ $((t2 - t0)) -le 20 ] || fail "the window closed only after $((t2 - t0))s (the key bound is 5 s a read)"
-[ -d "$WT2" ] || fail "an unread merged-PR answer must never reap the worktree"
-grep -q 'CLOSE' "$GHLOG" && fail "an unread GitHub must not close the issue"
+grep -q 'KILL' "$TMLOG" || st_fail "a black-holed GitHub kept the window open" "$(cat "$TMLOG")"
+[ $((t2 - t0)) -le 20 ] || st_fail "the window closed only after $((t2 - t0))s (the key bound is 5 s a read)"
+[ -d "$WT2" ] || st_fail "an unread merged-PR answer must never reap the worktree"
+grep -q 'CLOSE' "$GHLOG" && st_fail "an unread GitHub must not close the issue"
 st_pass "GitHub black-holed → exit in $((t1 - t0))s, window closed in $((t2 - t0))s, nothing reaped (#4842)"
 
 printf '\nselftest PASS: %s assertions (SessionEnd hook — reason gate, default-on + global opt-out, seat scope, gate-reap by verdict, record-now, idempotent, @raw record+window-close, stdin parse) [#403, #409, #466]\n' "$pass"

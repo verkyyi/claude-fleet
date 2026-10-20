@@ -28,10 +28,10 @@
 #      (claude-fleet#2891)
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd -P)
+. "$BIN/selftest-lib.sh"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/hub-admin-selftest.XXXXXX")
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); echo "ok   $*"; }
-bad() { FAIL=$((FAIL+1)); echo "FAIL $*"; }
 
 LOG="$WORK/requests.ndjson"; PORTF="$WORK/port"
 # The fake hub: answers like /v1/fleet/users and /v1/fleet/settings, logs each
@@ -168,7 +168,7 @@ field() { python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get(sys.arg
 # A — no credential
 run FLEET_HUB_URL="$HUB" "$BIN/fleet" users list >"$WORK/out" 2>"$WORK/err"; rc=$?
 if [ "$rc" = 3 ] && [ ! -s "$LOG" ] && grep -q 'no credential' "$WORK/err"; then ok "A no credential → exit 3, nothing sent"
-else bad "A rc=$rc err=$(cat "$WORK/err")"; fi
+else st_miss "A rc=$rc err=$(cat "$WORK/err")"; fi
 
 # B — add, with a machine login
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" users add alice --machine-login alice2 >"$WORK/out" 2>"$WORK/err"; rc=$?
@@ -178,26 +178,26 @@ if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" 
    && [ "$(field "$r" body)" = '{"login": "alice", "machine_login": "alice2"}' ] \
    && grep -q 'added alice (GitHub ID 200)' "$WORK/out" && grep -q 'erin' "$WORK/out"; then
   ok "B fleet users add → POST {login, machine_login} with the token; prints the list"
-else bad "B rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
+else st_miss "B rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
 
 # C — a refusal
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" users add ghost >"$WORK/out" 2>"$WORK/err"; rc=$?
 if [ "$rc" = 1 ] && grep -q 'answered 400: GitHub has no user named ghost' "$WORK/err"; then ok "C a refusal → exit 1 with the hub's reason"
-else bad "C rc=$rc err=$(cat "$WORK/err")"; fi
+else st_miss "C rc=$rc err=$(cat "$WORK/err")"; fi
 
 # D — remove
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet-users.py" remove alice >"$WORK/out" 2>"$WORK/err"; rc=$?
 r=$(last)
 if [ "$rc" = 0 ] && [ "$(field "$r" method)" = DELETE ] && [ "$(field "$r" query)" = login=alice ] \
    && grep -q '2 device(s) revoked' "$WORK/out"; then ok "D fleet users remove → DELETE ?login=; devices revoked printed"
-else bad "D rc=$rc req=$r out=$(cat "$WORK/out")"; fi
+else st_miss "D rc=$rc req=$r out=$(cat "$WORK/out")"; fi
 
 # E — fleet hub set, through bin/fleet-hub.py's forward
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py" set pool.skip_pct 90 >"$WORK/out" 2>"$WORK/err"; rc=$?
 r=$(last)
 if [ "$rc" = 0 ] && [ "$(field "$r" method)" = PUT ] && [ "$(field "$r" body)" = '{"key": "pool.skip_pct", "value": "90"}' ] \
    && [ "$(cat "$WORK/out")" = 'pool.skip_pct = 90' ]; then ok "E fleet hub set → PUT {key, value}; prints the value now"
-else bad "E rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
+else st_miss "E rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
 
 # F — get, unset, settings
 g=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub get pool.skip_pct 2>&1)
@@ -205,25 +205,25 @@ u=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub unset poo
 l=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub settings 2>&1)
 if [ "$g" = 90 ] && [ "$u" = 'pool.skip_pct = 85' ] && printf '%s\n' "$l" | grep -q '^pool.skip_pct  default  85$'; then
   ok "F fleet hub get / unset / settings"
-else bad "F get=$g unset=$u settings=$l"; fi
+else st_miss "F get=$g unset=$u settings=$l"; fi
 
 # G — the session cookie instead of the token
 run FLEET_HUB_URL="$HUB" FLEET_HUB_SESSION=sessval "$BIN/fleet" users list >"$WORK/out" 2>"$WORK/err"; rc=$?
 r=$(last)
 if [ "$rc" = 0 ] && [ "$(field "$r" cookie)" = ccq_sess=sessval ] && [ -z "$(field "$r" auth)" ]; then
   ok "G FLEET_HUB_SESSION → the ccq_sess cookie, no bearer"
-else bad "G rc=$rc req=$r"; fi
+else st_miss "G rc=$rc req=$r"; fi
 
 # H — no hub anywhere
 run CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" users list >"$WORK/out" 2>"$WORK/err"; rc=$?
 if [ "$rc" = 3 ] && grep -q 'no hub configured' "$WORK/err"; then ok "H no hub → exit 3"
-else bad "H rc=$rc err=$(cat "$WORK/err")"; fi
+else st_miss "H rc=$rc err=$(cat "$WORK/err")"; fi
 
 # I — add onto a login an old identity held (claude-fleet#2094): the move is printed
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" users add cjilyy --machine-login acme >"$WORK/out" 2>"$WORK/err"; rc=$?
 if [ "$rc" = 0 ] && grep -q '已把 acme（mac-c）从旧身份 CaoJian 转给 cjilyy' "$WORK/out"; then
   ok "I users add onto an old identity's login → the move is printed"
-else bad "I rc=$rc out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
+else st_miss "I rc=$rc out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
 
 # J — fleet hub accounts rekey / list (through bin/fleet-hub.py's forward)
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py" accounts rekey zx 4001 >"$WORK/out" 2>"$WORK/err"; rc=$?
@@ -238,7 +238,7 @@ if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" 
    && printf '%s\n' "$l" | grep -q '^old  *Old  *-$' \
    && ! printf '%s\n' "$l" | grep -q 'principal  *login'; then
   ok "J fleet hub accounts rekey → POST {action: rekey}; accounts lists the records"
-else bad "J rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") list=$l"; fi
+else st_miss "J rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") list=$l"; fi
 
 # K — fleet hub accounts relogin (claude-fleet#2210): one POST, the machine and the new login
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py" accounts relogin gh:2718137 mac-c verkydev >"$WORK/out" 2>"$WORK/err"; rc=$?
@@ -247,7 +247,7 @@ if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" 
    && [ "$(field "$r" body)" = '{"action": "relogin", "principal_id": "gh:2718137", "hostname": "mac-c", "login": "verkydev"}' ] \
    && grep -q 'relogin gh:2718137 on mac-c → verkydev: create queued' "$WORK/out"; then
   ok "K fleet hub accounts relogin → POST {action: relogin, hostname, login}"
-else bad "K rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
+else st_miss "K rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
 
 # K2 — fleet hub accounts rename (claude-fleet#2456): one POST, the machine whose login the record takes
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py" accounts rename gh:2718137 mac-c >"$WORK/out" 2>"$WORK/err"; rc=$?
@@ -256,7 +256,7 @@ if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" 
    && [ "$(field "$r" body)" = '{"action": "rename", "principal_id": "gh:2718137", "hostname": "mac-c"}' ] \
    && grep -q 'rename gh:2718137: login erin → dave (as on mac-c)' "$WORK/out"; then
   ok "K2 fleet hub accounts rename → POST {action: rename, hostname}"
-else bad "K2 rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
+else st_miss "K2 rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
 
 # N — fleet hub accounts assign / remove on a Linux managed machine (claude-fleet#3210)
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts assign zx --host linux-b --login zx >"$WORK/out" 2>"$WORK/err"; rc=$?
@@ -274,7 +274,7 @@ if [ "$rc" = 0 ] && [ "$(field "$r" body)" = '{"action": "assign", "principal_id
    && [ "$rc3" = 0 ] && [ "$(field "$r3" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "linux-b"}' ] \
    && [ "$rc4" = 0 ] && [ "$(field "$r4" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "linux-a", "delete": true}' ]; then
   ok "N fleet hub accounts assign / remove → POST {assign|remove, hostname} (--login ⇒ own_name: never a spare; remove --delete ⇒ delete: never recycled, #3504); a --login not theirs is refused before the POST"
-else bad "N rc=$rc/$rc2/$rc3/$rc4 req=$r req3=$r3 req4=$r4 out=$(cat "$WORK/out") err2=$(cat "$WORK/err2") n=$n1/$n2"; fi
+else st_miss "N rc=$rc/$rc2/$rc3/$rc4 req=$r req3=$r3 req4=$r4 out=$(cat "$WORK/out") err2=$(cat "$WORK/err2") n=$n1/$n2"; fi
 
 # G2 — fleet hub accounts forget --machine-gone (claude-fleet#3957): the operator's
 # explicit end for a remove that never reached a machine that will not come back
@@ -286,7 +286,7 @@ n2=$(wc -l <"$LOG")
 if [ "$rc" = 0 ] && [ "$(field "$r" body)" = '{"action": "forget", "principal_id": "zx", "hostname": "linux-a", "machine_gone": true}' ] \
    && grep -q 'NOT archived' "$WORK/out" && [ "$rc2" = 2 ] && [ "$n1" = "$n2" ] && grep -q -- '--host' "$WORK/err2"; then
   ok "G2 fleet hub accounts forget --machine-gone → POST {forget, hostname, machine_gone}; says the home was not archived; no --host → exit 2, nothing sent"
-else bad "G2 rc=$rc/$rc2 req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") err2=$(cat "$WORK/err2") n=$n1/$n2"; fi
+else st_miss "G2 rc=$rc/$rc2 req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") err2=$(cat "$WORK/err2") n=$n1/$n2"; fi
 
 # L — fleet hub invite (claude-fleet#2261): mint, list, revoke
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub invite @alice >"$WORK/out" 2>"$WORK/err"; rc=$?
@@ -296,7 +296,7 @@ v=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub invite --
 rv=$(last)
 if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/invites ]    && [ "$(field "$r" body)" = '{"github_login": "alice"}' ]    && grep -q 'GitHub 用户 alice' "$WORK/out" && grep -qF 'curl -fsSL http://h/i/secretcodesecretcode | sh' "$WORK/out"    && printf '%s\n' "$l" | grep -q '^inv_abc .*used .*anyone.*erin → gh:300$'    && [ "$v" = 'revoked inv_abc' ] && [ "$(field "$rv" query)" = id=inv_abc ]; then
   ok "L fleet hub invite → POST {github_login}, the command printed; --list; --revoke"
-else bad "L rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") list=$l revoke=$v"; fi
+else st_miss "L rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") list=$l revoke=$v"; fi
 
 # M — fleet hub machines (claude-fleet#2263): spares off, then on
 off=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub machines 2>&1); rc1=$?
@@ -311,7 +311,7 @@ if [ "$rc1" = 0 ] && [ "$rc2" = 0 ] && [ "$(field "$r" method)" = GET ] && [ "$(
    && printf '%s\n' "$on" | grep -q '^mac-d .*maintenance .*? .*备用 0 · 已用 9 / 上限 9 · 回收中 1 · 坏了 2$' \
    && printf '%s\n' "$acc" | grep -q '^spare:mac-c:abcd1234 .*mac-c · flk2m9qa (active)$'; then
   ok "M fleet hub machines → GET /v1/nodes, 连接 N + its logins (not the link) per machine, 备用 N (hint while off); accounts lists spares apart"
-else bad "M rc=$rc1/$rc2 req=$r off=$off on=$on acc=$acc"; fi
+else st_miss "M rc=$rc1/$rc2 req=$r off=$off on=$on acc=$acc"; fi
 
 echo "fleet-hub-admin-selftest: $PASS passed, $FAIL failed"
-[ "$FAIL" = 0 ]
+st_done

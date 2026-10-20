@@ -30,7 +30,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 st_real_tmux
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
+st_need git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-fold-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -58,12 +58,9 @@ unset TMUX TMUX_PANE FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_SESSION FLEET
 unset FLEET_SLEEP_MCP_RESTARTABLE FLEET_MAX_SESSIONS
 . "$BIN/fleet-lib.sh"
 
-FAILS=0
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-eq()   { [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
-has()  { case "$2" in *"$3"*) ;; *) fail "$1: [$3] not in: $2" ;; esac; }
-hasnt(){ case "$2" in *"$3"*) fail "$1: [$3] unexpectedly in: $2" ;; esac; }
-leg()  { if [ "$FAILS" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi; _legf=$FAILS; }
+st_tally miss
+eq()   { [ "$2" = "$3" ] || st_miss "$1: expected [$3], got [$2]"; }
+leg()  { if [ "$FAIL" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi; _legf=$FAIL; }
 
 # ---- sandbox bin/: the real scripts, with the three movers stubbed ---------
 for f in "$BIN"/*; do ln -s "$f" "$WORK/sbin/$(basename "$f")"; done
@@ -176,24 +173,24 @@ eq "seeded side stores" "$SIDE_B" 8
 # ---- 1. dry run: the plan, and nothing else --------------------------------
 dry=$(bash "$FR" fold "$B" --into "$A" --dry-run 2>&1); rc=$?
 eq "dry rc" "$rc" 0
-has "dry header"  "$dry" "fold $B → $A (o/b)"
-has "dry add"     "$dry" "add o/b main=$WORK/mainB base=main"
-has "dry model"   "$dry" "carry:   FLEET_MODEL=\"opus\""
-has "dry mcp"     "$dry" "carry:   FLEET_MCP_CONFIG=\"\""
-has "dry sleep"   "$dry" "carry:   FLEET_SLEEP_MCP_RESTARTABLE=\"plugin:playwright:playwright\""
-has "dry warn"    "$dry" "not carried: FLEET_MAX_SESSIONS: $B=\"4\" $A=\"8\""
-hasnt "dry same"  "$dry" "FLEET_SESSION_BANNER"
+st_has "dry header"  "$dry" "fold $B → $A (o/b)"
+st_has "dry add"     "$dry" "add o/b main=$WORK/mainB base=main"
+st_has "dry model"   "$dry" "carry:   FLEET_MODEL=\"opus\""
+st_has "dry mcp"     "$dry" "carry:   FLEET_MCP_CONFIG=\"\""
+st_has "dry sleep"   "$dry" "carry:   FLEET_SLEEP_MCP_RESTARTABLE=\"plugin:playwright:playwright\""
+st_has "dry warn"    "$dry" "not carried: FLEET_MAX_SESSIONS: $B=\"4\" $A=\"8\""
+st_hasnt "dry same"  "$dry" "FLEET_SESSION_BANNER"
 for row in "panel    -           dash —" "move     issue-12" \
            "move     scratch-4" "move     issue-15    issue-15 — needs/blocked" "left     issue-13" "move     issue-14" "left     -           notes —"; do
-  has "dry row [$row]" "$dry" "$row"
+  st_has "dry row [$row]" "$dry" "$row"
 done
-has "dry retire"  "$dry" "retire:  NO — 2 window(s) stay in $B"
-has "dry side failover" "$dry" "side:    archive 4 failover request(s)"
-has "dry side restore"  "$dry" "side:    archive 1 legacy restore map(s)"
-has "dry side cache"    "$dry" "side:    delete  3 runtime cache file(s)"
+st_has "dry retire"  "$dry" "retire:  NO — 2 window(s) stay in $B"
+st_has "dry side failover" "$dry" "side:    archive 4 failover request(s)"
+st_has "dry side restore"  "$dry" "side:    archive 1 legacy restore map(s)"
+st_has "dry side cache"    "$dry" "side:    delete  3 runtime cache file(s)"
 eq "dry side untouched" "$(side_left "$B" | grep -c .)" "$SIDE_B"
-[ -e "$OVL" ] && fail "dry run wrote the overlay"
-[ -e "$CALLS" ] && fail "dry run called a mover: $(cat "$CALLS")"
+[ -e "$OVL" ] && st_miss "dry run wrote the overlay"
+[ -e "$CALLS" ] && st_miss "dry run called a mover: $(cat "$CALLS")"
 eq "dry B untouched" "$(bnames)" "$B_BEFORE"
 leg "1 dry run = plan only"
 
@@ -201,19 +198,19 @@ leg "1 dry run = plan only"
 real=$(bash "$FR" fold "$B" --into "$A" 2>&1); rc=$?
 eq "real rc (not retired)" "$rc" 1
 eq "real plan = dry run" "$(printf '%s\n' "$real" | head -n "$(printf '%s\n' "$dry" | wc -l)")" "$dry"
-has "real overlay model" "$(cat "$OVL" 2>/dev/null)" 'FLEET_MODEL="opus"'
-has "real overlay sleep" "$(cat "$OVL" 2>/dev/null)" 'FLEET_SLEEP_MCP_RESTARTABLE="plugin:playwright:playwright"'
+st_has "real overlay model" "$(cat "$OVL" 2>/dev/null)" 'FLEET_MODEL="opus"'
+st_has "real overlay sleep" "$(cat "$OVL" 2>/dev/null)" 'FLEET_SLEEP_MCP_RESTARTABLE="plugin:playwright:playwright"'
 eq "real overlay mcp get" "$(fleet_repo_conf_get "$A" o/b FLEET_MCP_CONFIG)" ""
 eq "real fleet mcp kept" "$(fleet_repo_conf_get "$A" o/a FLEET_MCP_CONFIG)" "mcp-image"
 eq "real overlay model get" "$(fleet_repo_conf_get "$A" o/b FLEET_MODEL)" "opus"
 eq "real fleet model kept" "$(fleet_repo_conf_get "$A" o/a FLEET_MODEL)" "fable"
 eq "A windows" "$(anames)" "dash| issue-12|o/b issue-14|o/b issue-15|o/b scratch-4|o/b "
 eq "B windows" "$(bnames)" "dash issue-13 notes "
-has "restore scratch"  "$(cat "$CALLS")" "restore landed:scratch:scratch-4 $A --repo o/b"
-has "restore issue"    "$(cat "$CALLS")" "restore landed:issue:12 $A --repo o/b"
-hasnt "no down"        "$(cat "$CALLS")" "down "
-has "real says not retired" "$real" "$B NOT retired — 2 session(s)"
-[ -f "$FLEET_CONF_DIR/fleets/$B/conf" ] || fail "B's conf gone before retire"
+st_has "restore scratch"  "$(cat "$CALLS")" "restore landed:scratch:scratch-4 $A --repo o/b"
+st_has "restore issue"    "$(cat "$CALLS")" "restore landed:issue:12 $A --repo o/b"
+st_hasnt "no down"        "$(cat "$CALLS")" "down "
+st_has "real says not retired" "$real" "$B NOT retired — 2 session(s)"
+[ -f "$FLEET_CONF_DIR/fleets/$B/conf" ] || st_miss "B's conf gone before retire"
 eq "not retired: side untouched" "$(side_left "$B" | grep -c .)" "$SIDE_B"
 leg "2 real run moves the idle, leaves busy + unbound"
 
@@ -235,36 +232,36 @@ FLEET_FOLD_POLL=1 FLEET_FOLD_WAIT=30 bash "$FR" fold "$B" --into "$A" --wait > "
 out=$(cat "$WOUT")
 wait "$flip" 2>/dev/null
 eq "wait rc" "$rc" 0
-has "wait hosted"  "$out" "$A already hosts o/b — its overlay is left as is"
-has "wait row"     "$out" "wait     issue-13"
-has "wait moved"   "$out" "issue-13: moved (stopped:exit) → $A"
+st_has "wait hosted"  "$out" "$A already hosts o/b — its overlay is left as is"
+st_has "wait row"     "$out" "wait     issue-13"
+st_has "wait moved"   "$out" "issue-13: moved (stopped:exit) → $A"
 eq "overlay untouched" "$(cat "$OVL")" "$ovl_before"
-has "A has 13" "$(anames)" "issue-13|o/b"
-has "down called" "$(cat "$CALLS")" "down $B"
-TB has-session -t "=$B" 2>/dev/null && fail "B's server still up"
-[ -e "$FLEET_CONF_DIR/fleets/$B" ] && fail "B's conf dir still in fleets/"
+st_has "A has 13" "$(anames)" "issue-13|o/b"
+st_has "down called" "$(cat "$CALLS")" "down $B"
+TB has-session -t "=$B" 2>/dev/null && st_miss "B's server still up"
+[ -e "$FLEET_CONF_DIR/fleets/$B" ] && st_miss "B's conf dir still in fleets/"
 arch=$(ls -d "$FLEET_CONF_DIR/archive/$B-folded-into-$A-"* 2>/dev/null | head -1)
-[ -f "$arch/conf" ] || fail "B's conf not archived under archive/$B-folded-into-$A-<date>"
-has "archived conf intact" "$(cat "$arch/repos/o-b.conf" 2>/dev/null)" 'FLEET_REPO="o/b"'
-has "retired line" "$out" "fold: $B retired"
-has "side line" "$out" "fold: $B side state archived at $arch/side"
+[ -f "$arch/conf" ] || st_miss "B's conf not archived under archive/$B-folded-into-$A-<date>"
+st_has "archived conf intact" "$(cat "$arch/repos/o-b.conf" 2>/dev/null)" 'FLEET_REPO="o/b"'
+st_has "retired line" "$out" "fold: $B retired"
+st_has "side line" "$out" "fold: $B side state archived at $arch/side"
 eq "no store left keyed by B" "$(side_left "$B")" ""
 for p in failover/rb1/request.json failover/rb2/request.json "failover/unsupported-$B-3.json" \
          "failover/$B.cursor.json" "restore/$B.map"; do
-  [ -f "$arch/side/$p" ] || fail "side not archived: $p"
+  [ -f "$arch/side/$p" ] || st_miss "side not archived: $p"
 done
-[ -e "$arch/side/cache" ] && fail "caches were archived, not deleted"
+[ -e "$arch/side/cache" ] && st_miss "caches were archived, not deleted"
 for p in "$Q/ra1/request.json" "$Q/rn1/request.json" "$Q/unsupported-$B-2-3.json" "$Q/$A.cursor.json" \
          "$G/dash_view_$B-2" "$G/dash_view_$A"; do
-  [ -f "$p" ] || fail "neighbour swept: $p"
+  [ -f "$p" ] || st_miss "neighbour swept: $p"
 done
 leg "3 --wait moves the late finisher, then retires + archives"
 
 # ---- 4. refusals --------------------------------------------------------------
 out=$(bash "$FR" fold "$A" --into "$A" 2>&1); rc=$?
-eq "self rc" "$rc" 1; has "self msg" "$out" "cannot fold $A into itself"
+eq "self rc" "$rc" 1; st_has "self msg" "$out" "cannot fold $A into itself"
 out=$(bash "$FR" fold fz --into "$A" 2>&1); rc=$?
-eq "no such source rc" "$rc" 1; has "no such source msg" "$out" "'fz' is not a fleet"
+eq "no such source rc" "$rc" 1; st_has "no such source msg" "$out" "'fz' is not a fleet"
 out=$(bash "$FR" fold "$A" 2>&1); rc=$?
 eq "no --into = usage" "$rc" 2
 # a source that already hosts two repos
@@ -273,7 +270,7 @@ mkdir -p "$FLEET_CONF_DIR/fleets/$C"
 : > "$FLEET_CONF_DIR/fleets/$C/conf"
 fx_repo "$FLEET_CONF_DIR" "$C" o/c FLEET_MAIN="$WORK/mainC" FLEET_BASE_BRANCH="master"
 out=$(bash "$FR" fold "$A" --into "$C" --dry-run 2>&1); rc=$?
-eq "2-repo source rc" "$rc" 1; has "2-repo source msg" "$out" "$A hosts 2 repos"
+eq "2-repo source rc" "$rc" 1; st_has "2-repo source msg" "$out" "$A hosts 2 repos"
 leg "4 refusals"
 
 # ---- 5. a stopped target / a failed restore never retires the source ----------
@@ -285,36 +282,35 @@ tmux -L "$D" new-session -d -s "$D" -n dash 'sleep 3600'
 w=$(tmux -L "$D" new-window -d -P -F '#{window_id}' -t "$D:" -n issue-7 'sleep 3600')
 tmux -L "$D" set -w -t "$w" @issue 7
 out=$(bash "$FR" fold "$D" --into "$C" 2>&1); rc=$?
-eq "stopped target rc" "$rc" 1; has "stopped target msg" "$out" "$C is not running"
-fleet_repo_hosted "$C" o/d && fail "stopped target: repo added anyway"
+eq "stopped target rc" "$rc" 1; st_has "stopped target msg" "$out" "$C is not running"
+fleet_repo_hosted "$C" o/d && st_miss "stopped target: repo added anyway"
 tmux -L "$C" new-session -d -s "$C" -n dash 'sleep 3600'
 : > "$CALLS"
 out=$(FAIL_RESTORE=issue-7 bash "$FR" fold "$D" --into "$C" 2>&1); rc=$?
 eq "failed restore rc" "$rc" 1
-has "failed restore msg" "$out" "issue-7: stopped (stopped:exit) but not resumed in $C"
-hasnt "failed restore: no down" "$(cat "$CALLS")" "down "
-[ -f "$FLEET_CONF_DIR/fleets/$D/conf" ] || fail "failed restore: D's conf archived anyway"
+st_has "failed restore msg" "$out" "issue-7: stopped (stopped:exit) but not resumed in $C"
+st_hasnt "failed restore: no down" "$(cat "$CALLS")" "down "
+[ -f "$FLEET_CONF_DIR/fleets/$D/conf" ] || st_miss "failed restore: D's conf archived anyway"
 leg "5 stopped target / failed restore keep the source"
 
 # ---- 6. a fleet retired before #1014: a re-run sweeps just the side state ------
 out=$(bash "$FR" fold "$B" --into "$A" --dry-run 2>&1); rc=$?
 eq "retired re-run rc" "$rc" 0
-has "retired re-run header" "$out" "fold $B → $A: already retired — its conf is archived at $arch"
-has "retired re-run clean" "$out" "side:    none keyed by $B"
+st_has "retired re-run header" "$out" "fold $B → $A: already retired — its conf is archived at $arch"
+st_has "retired re-run clean" "$out" "side:    none keyed by $B"
 req rb3 "$B" ambiguous; : > "$G/spawn_last_ms_$B"
 out=$(bash "$FR" fold "$B" --into "$A" --dry-run 2>&1); rc=$?
-has "retired dry lists" "$out" "side:    archive 1 failover request(s)"
-has "retired dry cache" "$out" "side:    delete  1 runtime cache file(s)"
-[ -f "$Q/rb3/request.json" ] || fail "retired dry run moved a record"
+st_has "retired dry lists" "$out" "side:    archive 1 failover request(s)"
+st_has "retired dry cache" "$out" "side:    delete  1 runtime cache file(s)"
+[ -f "$Q/rb3/request.json" ] || st_miss "retired dry run moved a record"
 : > "$CALLS"
 out=$(bash "$FR" fold "$B" --into "$A" 2>&1); rc=$?
 eq "retired sweep rc" "$rc" 0
-has "retired sweep line" "$out" "fold: $B side state swept into $arch/side"
-[ -f "$arch/side/failover/rb3/request.json" ] || fail "retired sweep: rb3 not archived"
-[ -e "$G/spawn_last_ms_$B" ] && fail "retired sweep: cache not deleted"
-[ -s "$CALLS" ] && fail "retired sweep called a mover: $(cat "$CALLS")"
-[ -f "$Q/ra1/request.json" ] || fail "retired sweep touched A's record"
+st_has "retired sweep line" "$out" "fold: $B side state swept into $arch/side"
+[ -f "$arch/side/failover/rb3/request.json" ] || st_miss "retired sweep: rb3 not archived"
+[ -e "$G/spawn_last_ms_$B" ] && st_miss "retired sweep: cache not deleted"
+[ -s "$CALLS" ] && st_miss "retired sweep called a mover: $(cat "$CALLS")"
+[ -f "$Q/ra1/request.json" ] || st_miss "retired sweep touched A's record"
 leg "6 side state: listed, archived on retire, swept on a retired re-run"
 
-[ "$FAILS" = 0 ] && { printf 'fleet-fold-selftest: all passed\n'; exit 0; }
-printf 'fleet-fold-selftest: %d failure(s)\n' "$FAILS"; exit 1
+st_done

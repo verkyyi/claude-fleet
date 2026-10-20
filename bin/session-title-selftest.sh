@@ -22,11 +22,12 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
 CREAD="$BIN/fleet-control-read.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'session-title selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 REAL_TMUX=$(command -v tmux || true)
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/sesstitle-selftest.XXXXXX")" || exit 2
 S="stitle$$"
@@ -45,16 +46,14 @@ printf '%s\tacme-app\tacme/app\n' "$S" > "$G/sessmap"
 # the collector's issue cache: milestone<TAB>#num<TAB>assignee<TAB>title
 issues() { printf '\t#7\tme\t修复侧栏：显示 issue 标题\n\t#9\t\tA\ttabbed title\n' > "$IC/issues"; }
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
+st_tally count
 
 # ============================================================================
 # A. adapter — fleet-control-read.sh workers on an isolated socket
 # ============================================================================
 if [ -n "$REAL_TMUX" ]; then
   T() { "$REAL_TMUX" -L "$S" "$@"; }
-  T -f /dev/null new-session -d -s "$S" -n home 'sleep 600' || fail "A: could not start the isolated server"
+  T -f /dev/null new-session -d -s "$S" -n home 'sleep 600' || st_fail "A: could not start the isolated server"
   T new-window -d -t "=$S:" -n fix-sidebar-slug 'sleep 600'
   T new-window -d -t "=$S:" -n tabbed 'sleep 600'
   T new-window -d -t "=$S:" -n uncached 'sleep 600'
@@ -66,14 +65,14 @@ if [ -n "$REAL_TMUX" ]; then
   T set-option -w -t "=$S:draft" @worktree "$WORK/app-scratch-3"
   col17() { printf '%s\n' "$1" | awk -F'\t' -v n="$2" '$10 == n { print $17 }'; }
   rm -f "$IC/issues"
-  out0=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A: no issue cache — the column is there, empty" "title=" "$(col17 "$out0" fix-sidebar-slug)"
+  out0=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
+  st_eq "A: no issue cache — the column is there, empty" "title=" "$(col17 "$out0" fix-sidebar-slug)"
   issues
-  out=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A: an issue window carries its title (column 17)" "title=修复侧栏：显示 issue 标题" "$(col17 "$out" fix-sidebar-slug)"
-  eq "A: a tab inside a title becomes a space" "title=A tabbed title" "$(col17 "$out" tabbed)"
-  eq "A: an issue the cache does not hold → empty" "title=" "$(col17 "$out" uncached)"
-  eq "A: a scratch → empty" "title=" "$(col17 "$out" draft)"
+  out=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
+  st_eq "A: an issue window carries its title (column 17)" "title=修复侧栏：显示 issue 标题" "$(col17 "$out" fix-sidebar-slug)"
+  st_eq "A: a tab inside a title becomes a space" "title=A tabbed title" "$(col17 "$out" tabbed)"
+  st_eq "A: an issue the cache does not hold → empty" "title=" "$(col17 "$out" uncached)"
+  st_eq "A: a scratch → empty" "title=" "$(col17 "$out" draft)"
   # column 18 is the reap policy (issue #1902): 16 before the title as they were
   # column 19 is the question a `needs` session asks (issue #1951), empty otherwise
   # column 20 is role=orchestrator on the orchestrating session (issue #1957), empty otherwise
@@ -83,52 +82,52 @@ if [ -n "$REAL_TMUX" ]; then
   # columns 24-28 are the measurement bus (issue #2431), 29 agentstatus= (#2536),
   # 30 test= (#2505), 31 orphanrep= (#3369), 32 pin= (#3517) — the last (columns
   # 31-37 went with #3118); NF - 12 keeps the count of the 20
-  eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23 (NF counts through column 32, #3517); 16 before it as they were" "20 reap= detail= role= epic= epicstale= backfill= test= orphanrep= pin=" \
+  st_eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23 (NF counts through column 32, #3517); 16 before it as they were" "20 reap= detail= role= epic= epicstale= backfill= test= orphanrep= pin=" \
      "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 12, $18, $19, $20, $21, $22, $23, $30, $31, $32 }')"
   T set-option -w -t "=$S:draft" @backfill failed
   T set-option -w -t "=$S:uncached" @backfill filing
-  out2=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A: @backfill failed → backfill=failed (column 23, #2235); still filing → empty" "backfill=failed backfill=" \
+  out2=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
+  st_eq "A: @backfill failed → backfill=failed (column 23, #2235); still filing → empty" "backfill=failed backfill=" \
      "$(printf '%s\n' "$out2" | awk -F'\t' '$10 == "draft" { d = $23 } $10 == "uncached" { u = $23 } END { print d, u }')"
   T set-option -wu -t "=$S:draft" @backfill; T set-option -wu -t "=$S:uncached" @backfill
   # columns 24-28 (issue #2431): ctxleft= ctxband= ctxts= model= effort= off the bus;
   # an unmeasured window the five keys empty; no @ctx_left → 100 - @ctx_pct; the
   # launcher's @cc_model alone gives no model=
-  eq "A: an unmeasured window → columns 24-28 empty" "ctxleft= ctxband= ctxts= model= effort=" \
+  st_eq "A: an unmeasured window → columns 24-28 empty" "ctxleft= ctxband= ctxts= model= effort=" \
      "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "draft" { print $24, $25, $26, $27, $28 }')"
   T set-option -w -t "=$S:draft" @ctx_pct 38; T set-option -w -t "=$S:draft" @ctx_left 62
   T set-option -w -t "=$S:draft" @ctx_band ok; T set-option -w -t "=$S:draft" @ctx_ts 1800000000
   T set-option -w -t "=$S:draft" @model 'Opus 5.5'; T set-option -w -t "=$S:draft" @effort high
   T set-option -w -t "=$S:uncached" @ctx_pct 53; T set-option -w -t "=$S:uncached" @cc_agent codex
   T set-option -w -t "=$S:uncached" @cc_model gpt-6-astra; T set-option -w -t "=$S:uncached" @ctx_band 'x;y'
-  out3=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A: the bus → columns 24-28" "ctxleft=62|ctxband=ok|ctxts=1800000000|model=Opus 5.5|effort=high" \
+  out3=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
+  st_eq "A: the bus → columns 24-28" "ctxleft=62|ctxband=ok|ctxts=1800000000|model=Opus 5.5|effort=high" \
      "$(printf '%s\n' "$out3" | awk -F'\t' '$10 == "draft" { print $24 "|" $25 "|" $26 "|" $27 "|" $28 }')"
-  eq "A: no @ctx_left → 100 - @ctx_pct; @cc_model alone no model; a bad band dropped" "ctxleft=47|ctxband=|model=" \
+  st_eq "A: no @ctx_left → 100 - @ctx_pct; @cc_model alone no model; a bad band dropped" "ctxleft=47|ctxband=|model=" \
      "$(printf '%s\n' "$out3" | awk -F'\t' '$10 == "uncached" { print $24 "|" $25 "|" $27 }')"
   # column 29 (issue #2536): agentstatus= — @agent_status as fleet-status-7501.py
   # stamped it, verbatim; empty when the agent said nothing, a non-JSON value dropped
-  eq "A: no @agent_status → column 29 empty" "agentstatus=" \
+  st_eq "A: no @agent_status → column 29 empty" "agentstatus=" \
      "$(printf '%s\n' "$out3" | awk -F'\t' '$10 == "draft" { print $29 }')"
   T set-option -w -t "=$S:draft" @agent_status '{"state":"blocked","kind":"permission","msg":"Bash: git push","app":"claude-code","ts":1800000000}'
   T set-option -w -t "=$S:uncached" @agent_status 'not json'
-  out4=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A: @agent_status → column 29; a malformed one dropped" 'agentstatus={"state":"blocked","kind":"permission","msg":"Bash: git push","app":"claude-code","ts":1800000000}|agentstatus=' \
+  out4=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
+  st_eq "A: @agent_status → column 29; a malformed one dropped" 'agentstatus={"state":"blocked","kind":"permission","msg":"Bash: git push","app":"claude-code","ts":1800000000}|agentstatus=' \
      "$(printf '%s\n' "$out4" | awk -F'\t' '$10 == "draft" { d = $29 } $10 == "uncached" { u = $29 } END { print d "|" u }')"
   T set-option -wu -t "=$S:draft" @agent_status; T set-option -wu -t "=$S:uncached" @agent_status
   # no orchq= column (issue #3118): an old seat's @orch_queue rides nowhere — the
   # row ends at orphanrep= (column 31, issue #3369), empty with no orphan report
   T set-option -w -t "=$S:draft" @fleet_role orchestrator; T set-option -w -t "=$S:draft" @orch_queue 3
-  oq=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A: an old seat's @orch_queue → no orchq=, the row ends at pin= (issues #3118, #3369, #3517)" "32|pin=" \
+  oq=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
+  st_eq "A: an old seat's @orch_queue → no orchq=, the row ends at pin= (issues #3118, #3369, #3517)" "32|pin=" \
      "$(printf '%s\n' "$oq" | awk -F'\t' '$10 == "draft" { print NF "|" $NF }')"
   for o in @orch_queue @fleet_role; do T set-option -wu -t "=$S:draft" "$o"; done
   # column 31 (issue #3369): the login's unread orphan reports, the same cell on every row
   mkdir -p "$FLEET_CONF_DIR/global"
   printf '{"ts": %s, "child_key": "issue-41", "state": "MERGED", "pr": "12", "summary": "landed\\tit", "repo": "o/r"}\n' "$(date +%s)" \
     > "$FLEET_CONF_DIR/global/orphan-reports.ndjson"
-  orr=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A: an orphan report → orphanrep= on every row (column 31, #3369)" "all" \
+  orr=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
+  st_eq "A: an orphan report → orphanrep= on every row (column 31, #3369)" "all" \
      "$(printf '%s\n' "$orr" | awk -F'\t' '$31 ~ /^orphanrep=[0-9a-f]+\037[0-9]+\037o\/r\037issue-41\037MERGED\03712\037landed it$/ { n++ } END { print (n == NR && n > 0 ? "all" : n "/" NR) }')"
   rm -f "$FLEET_CONF_DIR/global/orphan-reports.ndjson"
   for o in @ctx_pct @ctx_left @ctx_band @ctx_ts @model @effort @cc_agent @cc_model; do
@@ -137,13 +136,13 @@ if [ -n "$REAL_TMUX" ]; then
   T set-option -w -t "=$S:uncached" @claude_state needs
   T set-option -w -t "=$S:uncached" @claude_needs_detail '演练放在 mac-b 还是只在 mac-a？'
   T set-option -w -t "=$S:draft" @claude_needs_detail 'a stale question'
-  out1=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A: a needs session carries its question (column 19, #1951)" "detail=演练放在 mac-b 还是只在 mac-a？" \
+  out1=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
+  st_eq "A: a needs session carries its question (column 19, #1951)" "detail=演练放在 mac-b 还是只在 mac-a？" \
      "$(printf '%s\n' "$out1" | awk -F'\t' '$10 == "uncached" { print $19 }')"
-  eq "A: not in needs → no question, whatever the option says" "detail=" \
+  st_eq "A: not in needs → no question, whatever the option says" "detail=" \
      "$(printf '%s\n' "$out1" | awk -F'\t' '$10 == "draft" { print $19 }')"
   T set-option -wu -t "=$S:uncached" @claude_state
-  eq "A: every other column is unchanged by the cache" \
+  st_eq "A: every other column is unchanged by the cache" \
      "$(printf '%s\n' "$out0" | awk -F'\t' '{ $17 = ""; print }' OFS='\t' | sort)" \
      "$(printf '%s\n' "$out" | awk -F'\t' '{ $17 = ""; print }' OFS='\t' | sort)"
   # @task_line (issue #2359): a window bound to no issue sends its first sentence
@@ -153,32 +152,32 @@ if [ -n "$REAL_TMUX" ]; then
   T set-option -w -t "=$S:我的会话" @task_line '帮我看下 mac-d 的日志'
   T set-option -w -t "=$S:draft" @task_line '试一下新的侧栏'
   T set-option -w -t "=$S:fix-sidebar-slug" @task_line '/fleet-history'
-  out5=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A: a no-repo session → its @task_line as title= (#2359)" "title=帮我看下 mac-d 的日志" "$(col17 "$out5" '我的会话')"
-  eq "A: a scratch → its @task_line as title=" "title=试一下新的侧栏" "$(col17 "$out5" draft)"
-  eq "A: an issue window keeps its issue's title" "title=修复侧栏：显示 issue 标题" "$(col17 "$out5" fix-sidebar-slug)"
-  eq "A: …and the line moves no other column (32 columns, #3369, #3517)" "20 reap= detail= role= epic=" \
+  out5=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
+  st_eq "A: a no-repo session → its @task_line as title= (#2359)" "title=帮我看下 mac-d 的日志" "$(col17 "$out5" '我的会话')"
+  st_eq "A: a scratch → its @task_line as title=" "title=试一下新的侧栏" "$(col17 "$out5" draft)"
+  st_eq "A: an issue window keeps its issue's title" "title=修复侧栏：显示 issue 标题" "$(col17 "$out5" fix-sidebar-slug)"
+  st_eq "A: …and the line moves no other column (32 columns, #3369, #3517)" "20 reap= detail= role= epic=" \
      "$(printf '%s\n' "$out5" | awk -F'\t' '$10 == "draft" { print NF - 12, $18, $19, $20, $21 }')"
   # A3 (issue #3317): a name the person gave the window beats the issue title and
   # the first sentence — both rename roads stamp @name_manual, and the inventory
   # sends it as title= while the window still wears it
   w7=$(T display-message -p -t "=$S:fix-sidebar-slug" '#{window_id}')
   wd=$(T display-message -p -t "=$S:draft" '#{window_id}')
-  bash "$CREAD" rename "$S" "$w7" '' '登录页 · 重做' >/dev/null 2>"$WORK/err" || fail "A3: the hub's rename road failed" "$(cat "$WORK/err")"
-  eq "A3: the hub's rename road stamps @name_manual" "登录页 · 重做" "$(T show-options -wqv -t "$w7" @name_manual)"
+  bash "$CREAD" rename "$S" "$w7" '' '登录页 · 重做' >/dev/null 2>"$WORK/err" || st_fail "A3: the hub's rename road failed" "$(cat "$WORK/err")"
+  st_eq "A3: the hub's rename road stamps @name_manual" "登录页 · 重做" "$(T show-options -wqv -t "$w7" @name_manual)"
   TMUX="$(T display-message -p '#{socket_path}'),0,0" bash "$BIN/dash-rename.sh" --wid "$wd" '草稿 2' \
-    || fail "A3: dash-rename.sh --wid failed"
-  eq "A3: the local rename road renames and stamps @name_manual" "草稿 2|草稿 2" \
+    || st_fail "A3: dash-rename.sh --wid failed"
+  st_eq "A3: the local rename road renames and stamps @name_manual" "草稿 2|草稿 2" \
      "$(T display-message -p -t "$wd" '#{window_name}|#{@name_manual}')"
-  out6=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A3: a renamed issue window → its name as title=" "title=登录页 · 重做" "$(col17 "$out6" '登录页 · 重做')"
-  eq "A3: a renamed scratch → its name over its first sentence" "title=草稿 2" "$(col17 "$out6" '草稿 2')"
-  eq "A3: …and the rename moves no other column" \
+  out6=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
+  st_eq "A3: a renamed issue window → its name as title=" "title=登录页 · 重做" "$(col17 "$out6" '登录页 · 重做')"
+  st_eq "A3: a renamed scratch → its name over its first sentence" "title=草稿 2" "$(col17 "$out6" '草稿 2')"
+  st_eq "A3: …and the rename moves no other column" \
      "$(printf '%s\n' "$out5" | awk -F'\t' '$10 == "fix-sidebar-slug" { $10 = ""; $17 = ""; print }' OFS='\t')" \
      "$(printf '%s\n' "$out6" | awk -F'\t' '$10 == "登录页 · 重做" { $10 = ""; $17 = ""; print }' OFS='\t')"
   T rename-window -t "$w7" fix-sidebar-slug
-  out7=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A3: a window that no longer wears the name → the issue title again" "title=修复侧栏：显示 issue 标题" \
+  out7=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
+  st_eq "A3: a window that no longer wears the name → the issue title again" "title=修复侧栏：显示 issue 标题" \
      "$(col17 "$out7" fix-sidebar-slug)"
   T kill-server 2>/dev/null
 else
@@ -246,7 +245,7 @@ assert (x["status_kind"], x["status_msg"], x["needs"]) == ("auth", "/login", "pe
 print("ok")
 PY
 )
-eq "B: inventory_row parses title=, an older row has none" "ok" "$out"
+st_eq "B: inventory_row parses title=, an older row has none" "ok" "$out"
 
 # ============================================================================
 # C. cache — fleet-hub-sessions.sh --refresh, field 17
@@ -274,20 +273,20 @@ nodes = [dict(machine_name="mac-d.local", availability="online", sessions=3, obs
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 PY
 export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mac-d=mac-a"
-bash "$HUBS" --refresh 2>"$WORK/err" || fail "C: --refresh failed" "$(cat "$WORK/err")"
+bash "$HUBS" --refresh 2>"$WORK/err" || st_fail "C: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
 US=$'\x1f'
 crow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { print NF "|" $NF }'; }
-eq "C: a titled worker's row ends in field 17 = the title" "17|远程的 issue 标题" "$(crow issue-21)"
-eq "C: a null title keeps the row's 16 fields" "16|" "$(crow issue-22)"
-eq "C: no title key keeps the row's 16 fields" "16|" "$(crow issue-23)"
+st_eq "C: a titled worker's row ends in field 17 = the title" "17|远程的 issue 标题" "$(crow issue-21)"
+st_eq "C: a null title keeps the row's 16 fields" "16|" "$(crow issue-22)"
+st_eq "C: no title key keeps the row's 16 fields" "16|" "$(crow issue-23)"
 # fields 21-25 (issue #2431): the bus, all five, the empty optional ones before kept
-eq "C: a measured session's row carries fields 21-25" "25|81|ok|1800000000|gpt-6-astra|high" \
+st_eq "C: a measured session's row carries fields 21-25" "25|81|ok|1800000000|gpt-6-astra|high" \
    "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-26" '$1 == w { print NF "|" $21 "|" $22 "|" $23 "|" $24 "|" $25 }')"
-eq "C: nulls for every bus key keep the row's 16 fields" "16|" "$(crow issue-27)"
+st_eq "C: nulls for every bus key keep the row's 16 fields" "16|" "$(crow issue-27)"
 # Questions travel in the shared rows (fields 27-28); the old client's separate
 # needs_<sess> cache retired with its layout (#3008).
-eq "C: shared rows keep questions, permissions and failed state" \
+st_eq "C: shared rows keep questions, permissions and failed state" \
    "wid:$F/issue-24|needs|ask|question|演练放在 mac-b 还是只在 mac-a？
 wid:$F/scratch-5|needs|perm|permission|Bash: git push
 wid:$F/issue-25|failed|||" \
@@ -296,14 +295,7 @@ wid:$F/issue-25|failed|||" \
 # ============================================================================
 # D. sidebar — field 14
 # ============================================================================
-cat > "$WORK/bin/tmux" <<'SHIM'
-#!/bin/sh
-US=$(printf '\037'); lw=0; fmt=0
-for a in "$@"; do [ "$a" = list-windows ] && lw=1; case "$a" in *"$US"*) fmt=1 ;; esac; done
-[ "$lw" = 1 ] && [ "$fmt" = 1 ] && cat "$WLIST_FILE"
-exit 0
-SHIM
-chmod +x "$WORK/bin/tmux"
+st_fake_tmux_wlist "$WORK/bin"
 export WLIST_FILE="$WORK/wlist"
 SHIMPATH="$WORK/bin:$PATH"
 # The 27 WFMT fields: session idx name path state ts window_id @issue … born @agent_cfg
@@ -319,16 +311,16 @@ w 3 draft @3 ''
 unset CCQUOTA_FLEET
 rm -f "$IC/issues"
 s0=$(side)
-eq "D: no issue cache — no field 14" "-" "$(fld "$s0" fix-sidebar-slug 14)"
+st_eq "D: no issue cache — no field 14" "-" "$(fld "$s0" fix-sidebar-slug 14)"
 issues
 s=$(side)
-eq "D: a local issue row carries its title as field 14" "修复侧栏：显示 issue 标题" "$(fld "$s" fix-sidebar-slug 14)"
-eq "D: …with field 13 (cfg, unknown here) empty" "" "$(fld "$s" fix-sidebar-slug 13)"
-eq "D: …and the label is still the window name" "fix-sidebar-slug" \
+st_eq "D: a local issue row carries its title as field 14" "修复侧栏：显示 issue 标题" "$(fld "$s" fix-sidebar-slug 14)"
+st_eq "D: …with field 13 (cfg, unknown here) empty" "" "$(fld "$s" fix-sidebar-slug 13)"
+st_eq "D: …and the label is still the window name" "fix-sidebar-slug" \
    "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$4 == "fix-sidebar-slug" { print $4 }')"
-eq "D: an uncached issue row is byte for byte as before" \
+st_eq "D: an uncached issue row is byte for byte as before" \
    "$(printf '%s\n' "$s0" | grep "${US}uncached$US")" "$(printf '%s\n' "$s" | grep "${US}uncached$US")"
-eq "D: a scratch row is byte for byte as before" \
+st_eq "D: a scratch row is byte for byte as before" \
    "$(printf '%s\n' "$s0" | grep "${US}draft$US")" "$(printf '%s\n' "$s" | grep "${US}draft$US")"
 # another machine's rows: field 17 of the hub cache
 export CCQUOTA_FLEET=1
@@ -338,10 +330,10 @@ NOW=$(date +%s); printf '%s\n' "$NOW" > "$G/hub_ok"
   printf 'wid:%s/issue-22\037mac-a\037online\03722\037acme/app\037done\037claude\037RN\037\037\0370\037\037hub\037\0371759000000\n' "$F"
 } > "$G/remote_$S"
 s=$(side)
-eq "D: a remote row carries its node's title as field 14" "远程的 issue 标题" "$(fld "$s" RT 14)"
-eq "D: …beside its cfg verdict (field 13)" "stale" "$(fld "$s" RT 13)"
-eq "D: a remote row with no title (an older cache) has no field 14" "-" "$(fld "$s" RN 14)"
-eq "D: …nor field 13" "-" "$(fld "$s" RN 13)"
+st_eq "D: a remote row carries its node's title as field 14" "远程的 issue 标题" "$(fld "$s" RT 14)"
+st_eq "D: …beside its cfg verdict (field 13)" "stale" "$(fld "$s" RT 13)"
+st_eq "D: a remote row with no title (an older cache) has no field 14" "-" "$(fld "$s" RN 14)"
+st_eq "D: …nor field 13" "-" "$(fld "$s" RN 13)"
 
 # D2 (issue #2359): a session bound to no issue reads as what it is about — its
 # @task_line (WFMT field 28) as field 14, and as the label when the name is only
@@ -359,17 +351,17 @@ wl 4 '我的会话-2' @4 '' 1 '第二个'
 wl 5 issue-12 @5 12 '' '/fleet-history'
 s=$(side)
 lbl() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v w="$2" '$1 == w { print $4 }'; }
-eq "D2: an unbound scratch → its first sentence as the label" "试一下新的侧栏" "$(lbl "$s" @1)"
-eq "D2: …and as field 14" "试一下新的侧栏" "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$1 == "@1" { print $14 }')"
-eq "D2: a no-repo session → 我的会话 · <line>" "我的会话 · 帮我看下 mac-d 的日志" "$(lbl "$s" @2)"
-eq "D2: an older norepo-N with no line → 我的会话" "我的会话" "$(lbl "$s" @3)"
-eq "D2: a deduped 我的会话-2 → 我的会话 · <line>" "我的会话 · 第二个" "$(lbl "$s" @4)"
-eq "D2: an issue window with no cached title keeps its name" "issue-12" "$(lbl "$s" @5)"
-eq "D2: …and no field 14 (the line is not its title)" "-" \
+st_eq "D2: an unbound scratch → its first sentence as the label" "试一下新的侧栏" "$(lbl "$s" @1)"
+st_eq "D2: …and as field 14" "试一下新的侧栏" "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$1 == "@1" { print $14 }')"
+st_eq "D2: a no-repo session → 我的会话 · <line>" "我的会话 · 帮我看下 mac-d 的日志" "$(lbl "$s" @2)"
+st_eq "D2: an older norepo-N with no line → 我的会话" "我的会话" "$(lbl "$s" @3)"
+st_eq "D2: a deduped 我的会话-2 → 我的会话 · <line>" "我的会话 · 第二个" "$(lbl "$s" @4)"
+st_eq "D2: an issue window with no cached title keeps its name" "issue-12" "$(lbl "$s" @5)"
+st_eq "D2: …and no field 14 (the line is not its title)" "-" \
    "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$1 == "@5" { print (NF >= 14 ? $14 : "-") }')"
-eq "D2: no row reads norepo" "" "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$4 ~ /norepo/')"
+st_eq "D2: no row reads norepo" "" "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$4 ~ /norepo/')"
 # fleet ls reads these same rows (fleet-quickopen.py full_rows → parse_rows)
-eq "D2: fleet ls's parse of them — names, no norepo" "试一下新的侧栏|我的会话 · 帮我看下 mac-d 的日志|我的会话|我的会话 · 第二个|issue-12" \
+st_eq "D2: fleet ls's parse of them — names, no norepo" "试一下新的侧栏|我的会话 · 帮我看下 mac-d 的日志|我的会话|我的会话 · 第二个|issue-12" \
    "$(printf '%s\n' "$s" | python3 -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("qo", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -389,10 +381,10 @@ wm 2 '草稿 2' @2 '' '试一下新的侧栏' '草稿 2'
 wm 3 fix-sidebar-slug @3 7 '' ''
 s=$(side)
 f14() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v w="$2" '$1 == w { print (NF >= 14 ? $14 : "-") }'; }
-eq "D3: a renamed issue window → its name as field 14, over the issue title" "登录页 · 重做" "$(f14 "$s" @1)"
-eq "D3: …and as the label" "登录页 · 重做" "$(lbl "$s" @1)"
-eq "D3: a renamed scratch → its name over its first sentence" "草稿 2" "$(f14 "$s" @2)"
-eq "D3: no manual name → the issue title as before" "修复侧栏：显示 issue 标题" "$(f14 "$s" @3)"
+st_eq "D3: a renamed issue window → its name as field 14, over the issue title" "登录页 · 重做" "$(f14 "$s" @1)"
+st_eq "D3: …and as the label" "登录页 · 重做" "$(lbl "$s" @1)"
+st_eq "D3: a renamed scratch → its name over its first sentence" "草稿 2" "$(f14 "$s" @2)"
+st_eq "D3: no manual name → the issue title as before" "修复侧栏：显示 issue 标题" "$(f14 "$s" @3)"
 
 # E (issue #2355): ccquota's agent runs the adapter with no TMPDIR (a
 # LaunchDaemon) — it must find the SAME cache the login's daemons write, or
@@ -400,12 +392,12 @@ eq "D3: no manual name → the issue title as before" "修复侧栏：显示 iss
 # fixes $FLEET_C off it.
 _tl=$(grep -n 'DARWIN_USER_TEMP_DIR' "$BIN/fleet-control-read.sh" | head -n1 | cut -d: -f1)
 _ll=$(grep -n '^\. "\$BIN/fleet-lib.sh"' "$BIN/fleet-control-read.sh" | head -n1 | cut -d: -f1)
-eq "E: fleet-control-read.sh sets TMPDIR before it sources fleet-lib.sh" "yes" \
+st_eq "E: fleet-control-read.sh sets TMPDIR before it sources fleet-lib.sh" "yes" \
    "$([ -n "$_tl" ] && [ -n "$_ll" ] && [ "$_tl" -lt "$_ll" ] && echo yes || echo no)"
 if _ut=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && [ -d "$_ut" ]; then
   got=$(env -u TMPDIR bash -c 'BIN=$1; eval "$(sed -n "/DARWIN_USER_TEMP_DIR/,/^fi/p" "$BIN/fleet-control-read.sh")"; . "$BIN/fleet-lib.sh"; printf %s "$FLEET_C"' _ "$BIN")
   CHECKS=$((CHECKS+1))
-  case "$got" in "${_ut%/}"/*.claude-dash) ;; *) fail "E: with no TMPDIR the cache must be the per-user one (got '$got', want under '$_ut')" ;; esac
+  case "$got" in "${_ut%/}"/*.claude-dash) ;; *) st_fail "E: with no TMPDIR the cache must be the per-user one (got '$got', want under '$_ut')" ;; esac
 fi
 
 printf 'session-title selftest: PASS (%s checks)\n' "$CHECKS"

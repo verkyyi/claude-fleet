@@ -31,7 +31,6 @@ export TMPDIR="$WORK" FLEET_LIVE_ROOT="$WORK/nonexistent"
 unset FLEET_DAEMON_IDLE_AFTER FLEET_DAEMON_ROOT
 G="$WORK/.claude-dash/global"
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$*" >&2; exit 1; }
 
 # gate <epoch> <live> — one tick of the gate at a pinned clock; prints W or S.
 gate() {
@@ -50,73 +49,73 @@ T0=1000000
 # last worked — tick 10 — and from there 1 in 5.
 reset
 seq_=$(ticks $T0 20)
-[ "$seq_" = WWWWWSSSSWSSSSWSSSSW ] || fail "grace+cadence: expected WWWWWSSSSWSSSSWSSSSW, got $seq_"; st_count
+[ "$seq_" = WWWWWSSSSWSSSSWSSSSW ] || st_fail "grace+cadence: expected WWWWWSSSSWSSSSWSSSSW, got $seq_"; st_count
 # The issue's own statement: of N consecutive zero-socket ticks past the grace,
 # only the 1st and the 6th work.
 seg=${seq_:9:6}
-[ "$seg" = WSSSSW ] || fail "cadence: ticks 10-15 should be WSSSSW (1st and 6th), got $seg"; st_count
+[ "$seg" = WSSSSW ] || st_fail "cadence: ticks 10-15 should be WSSSSW (1st and 6th), got $seg"; st_count
 # An hour of 60s ticks, well into the spell: ≤ 12 real ones (the metric).
 reset; ticks $T0 5 >/dev/null
 hour=$(ticks $((T0 + 300)) 60)
 nw=$(printf '%s' "$hour" | tr -cd W | wc -c | tr -d ' ')
-[ "$nw" -le 12 ] || fail "an idle hour must do ≤ 12 working ticks, did $nw ($hour)"; st_count
-[ "$nw" -ge 11 ] || fail "an idle hour must still work ~every 300s, did only $nw"; st_count
+[ "$nw" -le 12 ] || st_fail "an idle hour must do ≤ 12 working ticks, did $nw ($hour)"; st_count
+[ "$nw" -ge 11 ] || st_fail "an idle hour must still work ~every 300s, did only $nw"; st_count
 # jittery launchd (61s) keeps the bound
 reset; ticks $T0 5 61 >/dev/null
 nw=$(ticks $((T0 + 305)) 59 61 | tr -cd W | wc -c | tr -d ' ')
-[ "$nw" -le 12 ] || fail "61s ticks: ≤ 12 working in an hour, did $nw"; st_count
+[ "$nw" -le 12 ] || st_fail "61s ticks: ≤ 12 working in an hour, did $nw"; st_count
 # the counters in the idle file say what happened
 read -r _s _l _w _k < "$G/collect.idle"
-[ "$_w" -ge 1 ] && [ "$_k" -ge 1 ] || fail "idle file should count worked + skipped, got: $(cat "$G/collect.idle")"; st_count
+[ "$_w" -ge 1 ] && [ "$_k" -ge 1 ] || st_fail "idle file should count worked + skipped, got: $(cat "$G/collect.idle")"; st_count
 
 # 3. live socket: works at once, spell forgotten, next zero tick starts a new grace
 reset; ticks $T0 12 >/dev/null
-[ "$(gate $((T0 + 720)) 0)" = S ] || fail "setup: deep in the spell a tick is skipped"; st_count
-[ "$(gate $((T0 + 780)) 2)" = W ] || fail "live: a live socket works immediately"; st_count
-[ ! -f "$G/collect.idle" ] || fail "live: the idle file is removed once a fleet is live"; st_count
-[ "$(ticks $((T0 + 840)) 5)" = WWWWW ] || fail "live: after a live tick a new spell starts with its grace"; st_count
+[ "$(gate $((T0 + 720)) 0)" = S ] || st_fail "setup: deep in the spell a tick is skipped"; st_count
+[ "$(gate $((T0 + 780)) 2)" = W ] || st_fail "live: a live socket works immediately"; st_count
+[ ! -f "$G/collect.idle" ] || st_fail "live: the idle file is removed once a fleet is live"; st_count
+[ "$(ticks $((T0 + 840)) 5)" = WWWWW ] || st_fail "live: after a live tick a new spell starts with its grace"; st_count
 
 # 4. wake marker
 reset; ticks $T0 12 >/dev/null
-[ "$(gate $((T0 + 720)) 0)" = S ] || fail "setup: gated before the wake"; st_count
+[ "$(gate $((T0 + 720)) 0)" = S ] || st_fail "setup: gated before the wake"; st_count
 wake_at $((T0 + 730))
-[ -f "$G/wake" ] || fail "wake: fleet_daemon_wake writes <state>/wake"; st_count
-[ "$(gate $((T0 + 780)) 0)" = W ] || fail "wake: the tick after a spawn works at once"; st_count
-[ "$(ticks $((T0 + 840)) 4)" = WWWW ] || fail "wake: the grace window restarts after a wake"; st_count
+[ -f "$G/wake" ] || st_fail "wake: fleet_daemon_wake writes <state>/wake"; st_count
+[ "$(gate $((T0 + 780)) 0)" = W ] || st_fail "wake: the tick after a spawn works at once"; st_count
+[ "$(ticks $((T0 + 840)) 4)" = WWWW ] || st_fail "wake: the grace window restarts after a wake"; st_count
 # a wake from BEFORE the spell began does not hold the gate open
 reset; wake_at $((T0 - 10))
-[ "$(ticks $T0 7)" = WWWWWSS ] || fail "wake: a stale wake (older than the spell) is ignored"; st_count
+[ "$(ticks $T0 7)" = WWWWWSS ] || st_fail "wake: a stale wake (older than the spell) is ignored"; st_count
 
 # 5. off
 reset
 seq_=$(FLEET_DAEMON_IDLE_AFTER=0 ticks $T0 12)
-[ "$seq_" = WWWWWWWWWWWW ] || fail "off: IDLE_AFTER=0 works every tick, got $seq_"; st_count
-[ ! -f "$G/collect.idle" ] || fail "off: IDLE_AFTER=0 writes no idle state"; st_count
+[ "$seq_" = WWWWWWWWWWWW ] || st_fail "off: IDLE_AFTER=0 works every tick, got $seq_"; st_count
+[ ! -f "$G/collect.idle" ] || st_fail "off: IDLE_AFTER=0 writes no idle state"; st_count
 reset
 seq_=$(FLEET_DAEMON_IDLE_AFTER=junk ticks $T0 7)
-[ "$seq_" = WWWWWSS ] || fail "a malformed knob falls back to the 300s default, got $seq_"; st_count
+[ "$seq_" = WWWWWSS ] || st_fail "a malformed knob falls back to the 300s default, got $seq_"; st_count
 reset
 seq_=$(FLEET_DAEMON_IDLE_AFTER=120 ticks $T0 8)
-[ "$seq_" = WWSWSWSW ] || fail "IDLE_AFTER=120 tunes both the grace and the cadence, got $seq_"; st_count
+[ "$seq_" = WWSWSWSW ] || st_fail "IDLE_AFTER=120 tunes both the grace and the cadence, got $seq_"; st_count
 
 # 6. fail open: no live count passed and no fleet_sockets defined
 reset; ticks $T0 12 >/dev/null
 r=$(sh -c '. "$1"; if fleet_idle_gate collect ""; then echo W; else echo S; fi' _ "$LIB")
-[ "$r" = W ] || fail "open: without a socket enumerator the gate works"; st_count
+[ "$r" = W ] || st_fail "open: without a socket enumerator the gate works"; st_count
 # ... and with an enumerator that sees nothing, it gates like any zero count
 r=$(sh -c '. "$1"; fleet_sockets() { :; }; _FLEET_NOW=$2; _FLEET_NOW_PID=$$; _FLEET_NOW_S0=; if fleet_idle_gate collect ""; then echo W; else echo S; fi' _ "$LIB" $((T0 + 740)) 2>/dev/null)
-[ "$r" = S ] || fail "enumerator: an empty fleet_sockets counts as zero live"; st_count
+[ "$r" = S ] || st_fail "enumerator: an empty fleet_sockets counts as zero live"; st_count
 r=$(sh -c '. "$1"; fleet_sockets() { echo a; }; _FLEET_NOW=$2; _FLEET_NOW_PID=$$; _FLEET_NOW_S0=; if fleet_idle_gate collect ""; then echo W; else echo S; fi' _ "$LIB" $((T0 + 800)))
-[ "$r" = W ] || fail "enumerator: a live fleet_sockets opens the gate"; st_count
+[ "$r" = W ] || st_fail "enumerator: a live fleet_sockets opens the gate"; st_count
 # a probe that hit its timebox found a (wedged) server: that is live, so work
 r=$(sh -c '. "$1"; fleet_sockets() { :; }; fleet_timebox() { return 124; }; _FLEET_NOW=$2; _FLEET_NOW_PID=$$; _FLEET_NOW_S0=; if fleet_idle_gate collect ""; then echo W; else echo S; fi' _ "$LIB" $((T0 + 1500)) 2>/dev/null)
-[ "$r" = W ] || fail "timebox: a timed-out socket probe counts as live"; st_count
+[ "$r" = W ] || st_fail "timebox: a timed-out socket probe counts as live"; st_count
 
 # 7. one log line per spell
 reset; ticks $T0 15 >/dev/null
 n=$(grep -c '^fleet-idle: collect' "$WORK/gate.err")
-[ "$n" = 1 ] || fail "log: one fleet-idle line per spell, got $n"; st_count
-grep -q 'FLEET_DAEMON_IDLE_AFTER=0' "$WORK/gate.err" || fail "log: the line names the off switch"; st_count
+[ "$n" = 1 ] || st_fail "log: one fleet-idle line per spell, got $n"; st_count
+grep -q 'FLEET_DAEMON_IDLE_AFTER=0' "$WORK/gate.err" || st_fail "log: the line names the off switch"; st_count
 
 # --- 8. the real collector in a sandbox -----------------------
 SB="$WORK/sb"; mkdir -p "$SB/bin" "$SB/fakepath" "$SB/conf/fleets/sessA" "$SB/tmp"
@@ -147,30 +146,30 @@ HB="$SB/tmp/.claude-dash/global/collect.heartbeat"
 
 deep_idle collect; rm -f "$HB" "$SG/collect.tick"
 FAKE_LIVE=0 run tmux-dash-collect.sh; rc=$?
-[ "$rc" = 0 ] || fail "collect: a gated tick exits 0 (got $rc): $(tail -3 "$SB/err")"; st_count
-[ ! -f "$HB" ] || fail "collect: a gated tick must not run the tick (heartbeat written)"; st_count
-[ -f "$SG/collect.tick" ] || fail "collect: a gated tick still stamps its scheduling tick (#639)"; st_count
-[ ! -f "$SB/tmp/.claude-dash/global/collect.pid" ] || fail "collect: the gate sits before the pid guard"; st_count
-grep -q '^fleet-idle: collect' "$SB/err" || fail "collect: the first gated tick logs the fleet-idle line"; st_count
+[ "$rc" = 0 ] || st_fail "collect: a gated tick exits 0 (got $rc): $(tail -3 "$SB/err")"; st_count
+[ ! -f "$HB" ] || st_fail "collect: a gated tick must not run the tick (heartbeat written)"; st_count
+[ -f "$SG/collect.tick" ] || st_fail "collect: a gated tick still stamps its scheduling tick (#639)"; st_count
+[ ! -f "$SB/tmp/.claude-dash/global/collect.pid" ] || st_fail "collect: the gate sits before the pid guard"; st_count
+grep -q '^fleet-idle: collect' "$SB/err" || st_fail "collect: the first gated tick logs the fleet-idle line"; st_count
 
 deep_idle collect; rm -f "$HB"
 FAKE_LIVE=1 run tmux-dash-collect.sh
-[ -f "$HB" ] || fail "collect: with a live socket the tick runs: $(tail -3 "$SB/err")"; st_count
-[ ! -f "$SG/collect.idle" ] || fail "collect: a live socket ends the spell"; st_count
+[ -f "$HB" ] || st_fail "collect: with a live socket the tick runs: $(tail -3 "$SB/err")"; st_count
+[ ! -f "$SG/collect.idle" ] || st_fail "collect: a live socket ends the spell"; st_count
 
 deep_idle collect; rm -f "$HB" "$SB/calls"
 FAKE_LIVE=0 run tmux-dash-collect.sh --issues acme/widgets
-grep -q '^issue list' "$SB/calls" 2>/dev/null || fail "collect: --issues (the webhook kick) is never gated"; st_count
+grep -q '^issue list' "$SB/calls" 2>/dev/null || st_fail "collect: --issues (the webhook kick) is never gated"; st_count
 
 deep_idle collect; rm -f "$HB"
 FAKE_LIVE=0 FLEET_DAEMON_IDLE_AFTER=0 run tmux-dash-collect.sh
-[ -f "$HB" ] || fail "collect: IDLE_AFTER=0 runs every tick"; st_count
+[ -f "$HB" ] || st_fail "collect: IDLE_AFTER=0 runs every tick"; st_count
 
 
 # --- 10. the spinner's idle nap ------------------------------------------------
 SP="$BIN/tmux-spinner.py"
 grep -q 'time.sleep(self.idle_delay(time.time()))' "$SP" \
-  || fail "spinner: the no-fleet branch must sleep the idle nap"; st_count
+  || st_fail "spinner: the no-fleet branch must sleep the idle nap"; st_count
 nap() {  # <now> [idle_after] — same cases against the resident loop's actual method
   TMPDIR="$WORK" FLEET_DAEMON_IDLE_AFTER="${2:-300}" python3 - "$SP" "$1" <<'PYNAP'
 import runpy, sys
@@ -184,19 +183,19 @@ PYNAP
 # the spinner's state dir follows ITS install root (a checkout ⇒ a private dir)
 SW="$(sh -c '. "$1"; fleet_daemon_state_dir "$2"' _ "$LIB" "$BIN/..")/wake"
 mkdir -p "$(dirname "$SW")"; rm -f "$SW"
-[ "$(nap 1100)" = 2 ] || fail "spinner: 2s inside the grace"; st_count
-[ "$(nap 1300)" = 60 ] || fail "spinner: the 60s nap past the grace"; st_count
-[ "$(nap 1300 0)" = 2 ] || fail "spinner: IDLE_AFTER=0 never naps"; st_count
+[ "$(nap 1100)" = 2 ] || st_fail "spinner: 2s inside the grace"; st_count
+[ "$(nap 1300)" = 60 ] || st_fail "spinner: the 60s nap past the grace"; st_count
+[ "$(nap 1300 0)" = 2 ] || st_fail "spinner: IDLE_AFTER=0 never naps"; st_count
 printf '1250\n' > "$SW"
-[ "$(nap 1300)" = 2 ] || fail "spinner: a wake inside the spell restarts the grace"; st_count
+[ "$(nap 1300)" = 2 ] || st_fail "spinner: a wake inside the spell restarts the grace"; st_count
 printf '900\n' > "$SW"
-[ "$(nap 1300)" = 60 ] || fail "spinner: a wake older than the spell is ignored"; st_count
-grep -q 'self.idle_t0 = None' "$SP" || fail "spinner: a live fleet must reset the spell"; st_count
-python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SP" || fail "spinner: syntax"; st_count   # no __pycache__ in a read-only bin/ (#4668)
+[ "$(nap 1300)" = 60 ] || st_fail "spinner: a wake older than the spell is ignored"; st_count
+grep -q 'self.idle_t0 = None' "$SP" || st_fail "spinner: a live fleet must reset the spell"; st_count
+python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SP" || st_fail "spinner: syntax"; st_count   # no __pycache__ in a read-only bin/ (#4668)
 
 # --- 11. who wakes -------------------------------------------------------------
 for f in bin/fleet-up.sh bin/dash-issue-session.sh bin/dash-raw-session.sh; do
-  grep -q 'fleet_daemon_wake' "$BIN/../$f" || fail "wakers: $f must touch the wake marker"; st_count
+  grep -q 'fleet_daemon_wake' "$BIN/../$f" || st_fail "wakers: $f must touch the wake marker"; st_count
 done
 
 printf 'selftest PASS: %s assertions (grace · cadence · live · wake · off · open · log · collect · quota · spinner · wakers)\n' "$CHECKS"

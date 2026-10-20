@@ -29,7 +29,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 st_real_tmux
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
+st_need git
 command -v jq  >/dev/null 2>&1 || { printf 'selftest: jq not installed — SKIP\n' >&2; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/multirepo-id-selftest.XXXXXX")" || exit 2
@@ -63,14 +63,11 @@ mkdir -p "$FLEET_CONF_DIR" "$TMPDIR"
 unset TMUX TMUX_PANE FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_SESSION
 . "$BIN/fleet-lib.sh"
 
-FAILS=0
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-eq()   { [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
-has()  { case "$2" in *"$3"*) ;; *) fail "$1: [$3] not in: $2" ;; esac; }
-hasnt(){ case "$2" in *"$3"*) fail "$1: [$3] unexpectedly in: $2" ;; esac; }
+st_tally miss
+eq()   { [ "$2" = "$3" ] || st_miss "$1: expected [$3], got [$2]"; }
 leg()  { # leg <name> — PASS when no new failure since the last leg
-  if [ "$FAILS" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi
-  _legf=$FAILS
+  if [ "$FAIL" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi
+  _legf=$FAIL
 }
 
 mkrepo() { git init -q "$1" && git -C "$1" remote add origin "https://github.com/$2.git"; }
@@ -141,19 +138,19 @@ iw=$(fleet_bound_windows "$D" | cut -f1 | sort | tr '\n' ' ')
 eq "keys: issue windows, one-repo" "$iw" "o/c#12 o/c#14 o/c#20 "
 eq "keys: repo by slug"  "$(fleet_repo_for_slug "$M" o-b)" "o/b"
 eq "keys: repo by name"  "$(fleet_repo_for_slug "$M" a)" "o/a"
-fleet_repo_for_slug "$M" o-z >/dev/null && fail "keys: an unhosted slug resolves"
+fleet_repo_for_slug "$M" o-z >/dev/null && st_miss "keys: an unhosted slug resolves"
 eq "keys: okey prefix, multi" "$(fleet_okey_prefix "$M" o/b)" "o-b:"
 eq "keys: okey prefix, one-repo" "$(fleet_okey_prefix "$D" o/c)" "o-c:"
 leg keys
 
 # --- reap: a destructive target never guesses ---------------------------------------
 reap() { in_pane "$M" "$M:plan" python3 "$BIN/fleet-reap-target.py" "$1" 2>&1; }
-out=$(reap '#12'); has "reap: bare #12 is ambiguous" "$out" "matched 2"
-has "reap: ...and names the qualified form" "$out" "<repo>#12"
+out=$(reap '#12'); st_has "reap: bare #12 is ambiguous" "$out" "matched 2"
+st_has "reap: ...and names the qualified form" "$out" "<repo>#12"
 eq "reap: o/a#12"        "$(reap 'o/a#12')" "$A12"
 eq "reap: o-b#12"        "$(reap 'o-b#12')" "$B12"
 eq "reap: b:issue-12"    "$(reap 'b:issue-12')" "$B12"
-out=$(reap 'o/a#16'); has "reap: unknown repo never matches" "$out" "matched 0"
+out=$(reap 'o/a#16'); st_has "reap: unknown repo never matches" "$out" "matched 0"
 eq "reap: unambiguous bare #14 still works" "$(reap '#14')" "$B14"
 eq "reap: one-repo #12" "$(in_pane "$D" "$D:plan" python3 "$BIN/fleet-reap-target.py" '#12')" "$D12"
 leg reap
@@ -165,7 +162,7 @@ snap=$(cut -f1 "$(fleet_state_dir "$M")/ledgerwatch.snap" | sort | tr '\n' ' ')
 eq "ledger: snapshot keys are repo-qualified; unknown skipped" "$snap" "o/a#12 o/a#20 o/b#12 o/b#14 o/b#21 "
 tmx "$M" kill-window -t "$A12"
 out=$(bash "$BIN/fleet-ledger-watch.sh" "$M" 2>&1)            # tick 2: A12 vanished, B12 lives
-has "ledger: A#12 recorded" "$out" "1 vanished"
+st_has "ledger: A#12 recorded" "$out" "1 vanished"
 [ -f "$(ledger o-a)" ] && a=$(cut -f2 "$(ledger o-a)" | tr '\n' ' ') || a=''
 [ -f "$(ledger o-b)" ] && b=$(cut -f2 "$(ledger o-b)" | tr '\n' ' ') || b=''
 eq "ledger: o/a's ledger holds its #12" "$a" "12 "
@@ -194,10 +191,10 @@ tmx "$D" set-option -w -t "$D12" @expand 1
 order() { in_pane "$1" "$1:plan" env FLEET_SESSION="$1" FZF_COLUMNS=160 bash "$BIN/tmux-dashboard-rows.sh" \
   | sed 's/\x1b\[[0-9;]*m//g' | grep -oE '(A12|B12|CA|CB|B14|U16|D12|D14|DC)( |$)' | tr -d ' ' | tr '\n' ' '; }
 o=$(order "$M")
-has "dash: CB under B12" "$o" "B12 CB "
-has "dash: CA under A12" "$o" "A12 CA "
+st_has "dash: CB under B12" "$o" "B12 CB "
+st_has "dash: CA under A12" "$o" "A12 CA "
 o=$(order "$D")
-has "dash: one-repo child under its issue-12 parent" "$o" "D12 DC "
+st_has "dash: one-repo child under its issue-12 parent" "$o" "D12 DC "
 leg dash
 
 # --- landed: the ledger's own <slug>: origins join; the fold file is per repo ----------
@@ -206,16 +203,16 @@ bash "$BIN/fleet-history.sh" record-closed --repo o/a --session "$M" --key 30 --
   --win @90 --title parent30 --origin '' >/dev/null 2>&1
 bash "$BIN/fleet-history.sh" record-closed --repo o/a --session "$M" --key 31 --worktree "$WORK/mainA" \
   --win @91 --title child31 --origin o-a:issue-30 >/dev/null 2>&1
-grep -q 'o-a:issue-30' "$L" || fail "landed: fixture origin not recorded"
+grep -q 'o-a:issue-30' "$L" || st_miss "landed: fixture origin not recorded"
 lrows() { FLEET_SESSION="$M" FZF_COLUMNS=160 bash "$BIN/fleet-history.sh" rows 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'; }
 out=$(lrows)
-has "landed: parent30 owns a block of 1" "$out" "0/1 ✓ parent30"
+st_has "landed: parent30 owns a block of 1" "$out" "0/1 ✓ parent30"
 FLEET_SESSION="$M" bash "$BIN/fleet-history.sh" fold expand 'landed:issue:30' >/dev/null 2>&1
-[ -f "$FLEET_C/global/dash_fold_landed_$M.o-a" ] || fail "landed: fold file is per repo (.o-a)"
-[ -f "$FLEET_C/global/dash_fold_landed_$M" ] && fail "landed: multi-repo wrote the shared fold file"
+[ -f "$FLEET_C/global/dash_fold_landed_$M.o-a" ] || st_miss "landed: fold file is per repo (.o-a)"
+[ -f "$FLEET_C/global/dash_fold_landed_$M" ] && st_miss "landed: multi-repo wrote the shared fold file"
 out=$(lrows)
-has "landed: child nests under its same-repo parent" "$out" "└  child31"
-hasnt "landed: origin prefix is not shown raw" "$out" "o-a:issue-30"
+st_has "landed: child nests under its same-repo parent" "$out" "└  child31"
+st_hasnt "landed: origin prefix is not shown raw" "$out" "o-a:issue-30"
 leg landed
 
 # --- hub adapter: the WINDOW's repo, not the fleet conf's ------------------------------
@@ -233,18 +230,17 @@ EOF
 hub() { bash "$HB/fleet-control-read.sh" "$@" </dev/null 2>&1; }
 out=$(hub resume "$M" issue-12); rc=$?
 eq "hub: resume 12 resumable in two repos is refused" "$rc" 5
-out=$(hub resume "$M" o-a:issue-12); has "hub: resume o-a:issue-12 → o/a" "$out" "restore landed:issue:12 $M --repo o/a"
-out=$(hub resume "$M" issue-40);    has "hub: resume 40 → the one repo that has it" "$out" "restore landed:issue:40 $M --repo o/b"
+out=$(hub resume "$M" o-a:issue-12); st_has "hub: resume o-a:issue-12 → o/a" "$out" "restore landed:issue:12 $M --repo o/a"
+out=$(hub resume "$M" issue-40);    st_has "hub: resume 40 → the one repo that has it" "$out" "restore landed:issue:40 $M --repo o/b"
 out=$(hub resume "$D" issue-12);     eq "hub: one-repo resume names its only repo (#1938)" "$out" "restore landed:issue:12 $D --repo o/c"
 # start (issue #984): a 2+ repo fleet needs the repo, resolved before any gate
 hub start "$M" 12 claude >/dev/null; eq "hub: start with no repo in a 2-repo fleet is refused" "$?" 6
 hub start "$M" 12 claude o/zz >/dev/null; eq "hub: start naming an unhosted repo is refused" "$?" 6
-out=$(hub start "$M" 12 claude o-b); has "hub: start o-b → --repo o/b" "$out" "spawn 12 $M --print --agent claude --origin hub --repo o/b"
-out=$(hub start "$M" 12 "" o/a);     has "hub: start o/a → --repo o/a" "$out" "--origin hub --repo o/a"
+out=$(hub start "$M" 12 claude o-b); st_has "hub: start o-b → --repo o/b" "$out" "spawn 12 $M --print --agent claude --origin hub --repo o/b"
+out=$(hub start "$M" 12 "" o/a);     st_has "hub: start o/a → --repo o/a" "$out" "--origin hub --repo o/a"
 out=$(hub start "$D" 12 claude);     eq "hub: one-repo start names its only repo (#1938)" "$out" "spawn 12 $D --print --agent claude --origin hub --repo o/c"
 out=$(hub start "$D" 12 claude o/c); eq "hub: one-repo start naming its repo" "$out" "spawn 12 $D --print --agent claude --origin hub --repo o/c"
 hub start "$D" 12 claude o/a >/dev/null; eq "hub: one-repo start naming another repo is refused" "$?" 6
 leg hub
 
-if [ "$FAILS" -gt 0 ]; then printf 'multirepo-identity-selftest: %d FAIL\n' "$FAILS" >&2; exit 1; fi
-printf 'multirepo-identity-selftest: all legs PASS\n'
+st_done

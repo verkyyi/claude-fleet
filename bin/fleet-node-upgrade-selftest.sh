@@ -42,9 +42,8 @@ W="$(cd "$W" && pwd -P)"
 trap 'rm -rf "$W"' EXIT
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
-contains() { case "$2" in *"$3"*) st_count ;; *) fail "$1 — lacks [$3]" "$2" ;; esac; }
-lacks() { case "$2" in *"$3"*) fail "$1 — carries [$3]" "$2" ;; *) st_count ;; esac; }
+contains() { case "$2" in *"$3"*) st_count ;; *) st_fail "$1 — lacks [$3]" "$2" ;; esac; }
+lacks() { case "$2" in *"$3"*) st_fail "$1 — carries [$3]" "$2" ;; *) st_count ;; esac; }
 
 FULL=bc4e8e1753e9470c1c896f4cd00b9af2c0e7d5cd
 ME=$(id -un) MYUID=$(id -u)
@@ -110,19 +109,19 @@ tree_sum() { (cd "$S" && find . -path ./home -prune -o -type f -print | LC_ALL=C
 setup
 before=$(tree_sum)
 out=$(run -- "$FULL" --dry-run); rc=$?
-[ "$rc" = 0 ] || fail "A: dry-run exit $rc" "$out"
+[ "$rc" = 0 ] || st_fail "A: dry-run exit $rc" "$out"
 contains "A: target" "$out" "target: prod-bc4e8e1"
 contains "A: would build" "$out" "would build tokenledger at bc4e8e1"
 for n in a1 a2 a3 a4; do contains "A: $n listed" "$out" "  $n  system/com.ccquota.agent.$n  $S/usr/ccquota  disk prod-9b7e562 · hub prod-02e8161b  → upgrade"; done
 contains "A: own LaunchAgent" "$out" "  $ME  gui/com.ccquota.agent  $S/usr/ccquota"
 contains "A: count" "$out" "dry-run: 5 login(s) would be upgraded"
 lacks "A: decoy" "$out" "bak-1453"
-after=$(tree_sum); [ "$after" = "$before" ] || fail "A: dry-run changed a file" "$(diff <(echo "$before") <(echo "$after"))"; st_count
-[ ! -e "$S/sudo.log" ] && [ ! -e "$S/launchctl.log" ] || fail "A: dry-run ran sudo/launchctl" "$out"; st_count
+after=$(tree_sum); [ "$after" = "$before" ] || st_fail "A: dry-run changed a file" "$(diff <(echo "$before") <(echo "$after"))"; st_count
+[ ! -e "$S/sudo.log" ] && [ ! -e "$S/launchctl.log" ] || st_fail "A: dry-run ran sudo/launchctl" "$out"; st_count
 
 # ── B status ────────────────────────────────────────────────────────────────
 out=$(run -- "$FULL" --status); rc=$?
-[ "$rc" = 0 ] || fail "B: status exit $rc" "$out"
+[ "$rc" = 0 ] || st_fail "B: status exit $rc" "$out"
 contains "B: header" "$out" "LOGIN      PATH"
 contains "B: a1 row" "$out" "prod-9b7e562   prod-02e8161b  connected 3s  behind"
 lacks "B: other host filtered" "$out" "prod-0000000"
@@ -133,18 +132,18 @@ contains "B: --no-hub summary" "$out" "summary: 5/5 behind"
 
 # ── C upgrade ───────────────────────────────────────────────────────────────
 out=$(run -- "$FULL" --binary "$S/new/ccquota" --wait 5); rc=$?
-[ "$rc" = 0 ] || fail "C: upgrade exit $rc" "$out"
-cmp -s "$S/usr/ccquota" "$S/new/ccquota" || fail "C: binary not installed" "$out"; st_count
-grep -q prod-9b7e562 "$S/usr/ccquota.prev" || fail "C: no .prev with the old bytes" "$out"; st_count
-[ ! -e "$S/usr/ccquota.new" ] || fail "C: .new left behind" "$out"; st_count
+[ "$rc" = 0 ] || st_fail "C: upgrade exit $rc" "$out"
+cmp -s "$S/usr/ccquota" "$S/new/ccquota" || st_fail "C: binary not installed" "$out"; st_count
+grep -q prod-9b7e562 "$S/usr/ccquota.prev" || st_fail "C: no .prev with the old bytes" "$out"; st_count
+[ ! -e "$S/usr/ccquota.new" ] || st_fail "C: .new left behind" "$out"; st_count
 contains "C: install line" "$out" "install: $S/usr/ccquota ← prod-bc4e8e1"
 want="kickstart -k system/com.ccquota.agent.a1
 kickstart -k system/com.ccquota.agent.a2
 kickstart -k system/com.ccquota.agent.a3
 kickstart -k system/com.ccquota.agent.a4
 kickstart -k gui/$MYUID/com.ccquota.agent"
-[ "$(cat "$S/launchctl.log")" = "$want" ] || fail "C: kickstart order/labels" "$(cat "$S/launchctl.log")"; st_count
-[ "$(grep -c kickstart "$S/sudo.log")" = 4 ] || fail "C: sudo only for the 4 system daemons" "$(cat "$S/sudo.log")"; st_count
+[ "$(cat "$S/launchctl.log")" = "$want" ] || st_fail "C: kickstart order/labels" "$(cat "$S/launchctl.log")"; st_count
+[ "$(grep -c kickstart "$S/sudo.log")" = 4 ] || st_fail "C: sudo only for the 4 system daemons" "$(cat "$S/sudo.log")"; st_count
 lacks "C: no sudo for a writable path" "$(cat "$S/sudo.log")" "install"
 contains "C: confirmed on hub" "$out" "restart: a1 — hub: connected on prod-bc4e8e1"
 contains "C: done" "$out" "done: 5/5 login(s) on prod-bc4e8e1"
@@ -156,7 +155,7 @@ contains "C: rerun nothing to do" "$out" "all 5 on prod-bc4e8e1 — nothing to d
 # ── D stuck ─────────────────────────────────────────────────────────────────
 setup
 out=$(run STUCK=a2 -- "$FULL" --binary "$S/new/ccquota" --wait 2); rc=$?
-[ "$rc" = 1 ] || fail "D: stuck exit $rc (want 1)" "$out"
+[ "$rc" = 1 ] || st_fail "D: stuck exit $rc (want 1)" "$out"
 contains "D: names a2" "$out" "a2: restarted, but no control channel on prod-bc4e8e1"
 contains "D: progress" "$out" "(1 done; the rest untouched)"
 lacks "D: a3 untouched" "$(cat "$S/launchctl.log")" "agent.a3"
@@ -164,21 +163,21 @@ lacks "D: a3 untouched" "$(cat "$S/launchctl.log")" "agent.a3"
 # ── E refuse ────────────────────────────────────────────────────────────────
 setup
 out=$(run -- "$FULL" --binary "$S/new/wrong"); rc=$?
-[ "$rc" = 1 ] || fail "E: wrong version exit $rc" "$out"
+[ "$rc" = 1 ] || st_fail "E: wrong version exit $rc" "$out"
 contains "E: says why" "$out" "says 'prod-1234567', not prod-bc4e8e1"
 out=$(run -- "$FULL" --binary "$S/new/ccquota" --sha256 deadbeef); rc=$?
-[ "$rc" = 1 ] || fail "E: sha mismatch exit $rc" "$out"
+[ "$rc" = 1 ] || st_fail "E: sha mismatch exit $rc" "$out"
 contains "E: sha" "$out" "≠ --sha256 deadbeef"
-grep -q prod-9b7e562 "$S/usr/ccquota" && [ ! -e "$S/usr/ccquota.prev" ] || fail "E: something was installed" "$out"; st_count
-[ ! -e "$S/launchctl.log" ] || fail "E: something was restarted" "$out"; st_count
+grep -q prod-9b7e562 "$S/usr/ccquota" && [ ! -e "$S/usr/ccquota.prev" ] || st_fail "E: something was installed" "$out"; st_count
+[ ! -e "$S/launchctl.log" ] || st_fail "E: something was restarted" "$out"; st_count
 
 # ── F --logins ──────────────────────────────────────────────────────────────
 setup
 out=$(run -- "$FULL" --binary "$S/new/ccquota" --logins a3 --wait 5); rc=$?
-[ "$rc" = 0 ] || fail "F: --logins a3 exit $rc" "$out"
-[ "$(cat "$S/launchctl.log")" = "kickstart -k system/com.ccquota.agent.a3" ] || fail "F: only a3" "$(cat "$S/launchctl.log")"; st_count
+[ "$rc" = 0 ] || st_fail "F: --logins a3 exit $rc" "$out"
+[ "$(cat "$S/launchctl.log")" = "kickstart -k system/com.ccquota.agent.a3" ] || st_fail "F: only a3" "$(cat "$S/launchctl.log")"; st_count
 out=$(run -- "$FULL" --dry-run --logins nobody); rc=$?
-[ "$rc" = 2 ] || fail "F: unknown login exit $rc (want 2)" "$out"
+[ "$rc" = 2 ] || st_fail "F: unknown login exit $rc (want 2)" "$out"
 contains "F: unknown" "$out" "no agent for login 'nobody'"
 
 # ── I --dist ────────────────────────────────────────────────────────────────
@@ -195,22 +194,22 @@ EOF
 chmod 755 "$W/distfake"
 setup; cp "$W/distfake" "$S/fake/dist"
 out=$(run DIST_BIN="$S/new/ccquota" FLEET_NODE_UPGRADE_DIST_CMD="$S/fake/dist" -- "$FULL" --dist --logins "$ME" --wait 5); rc=$?
-[ "$rc" = 0 ] || fail "I: --dist exit $rc" "$out"
+[ "$rc" = 0 ] || st_fail "I: --dist exit $rc" "$out"
 contains "I: from the hub" "$out" "dist: ccquota-"
 contains "I: hub version" "$out" "prod-bc4e8e1 from the hub (sha256"
 lacks "I: no build" "$out" "build: tokenledger"
-cmp -s "$S/usr/ccquota" "$S/new/ccquota" || fail "I: hub binary not installed" "$out"; st_count
-case "$(cat "$S/dist.log")" in darwin-arm64|darwin-amd64|linux-arm64|linux-amd64) st_count ;; *) fail "I: dist name" "$(cat "$S/dist.log")" ;; esac
+cmp -s "$S/usr/ccquota" "$S/new/ccquota" || st_fail "I: hub binary not installed" "$out"; st_count
+case "$(cat "$S/dist.log")" in darwin-arm64|darwin-amd64|linux-arm64|linux-amd64) st_count ;; *) st_fail "I: dist name" "$(cat "$S/dist.log")" ;; esac
 out=$(run -- "$FULL" --dist --dry-run)
 contains "I: dry-run says hub first" "$out" "would ask the hub for prod-bc4e8e1, else build"
 for c in "DIST_SUM=deadbeef|sha256" "DIST_BIN=$S/new/wrong|serves prod-1234567, not prod-bc4e8e1" "DIST_BIN=|HTTP 404"; do
   setup; cp "$W/distfake" "$S/fake/dist"
   var=${c%%|*} want=${c#*|}
   out=$(run DIST_BIN="$S/new/ccquota" "$var" FLEET_NODE_UPGRADE_DIST_CMD="$S/fake/dist" -- "$FULL" --dist --logins "$ME"); rc=$?
-  [ "$rc" = 1 ] || fail "I: $var exit $rc (no tokenledger here: the fallback build must fail)" "$out"
+  [ "$rc" = 1 ] || st_fail "I: $var exit $rc (no tokenledger here: the fallback build must fail)" "$out"
   contains "I: $var says why" "$out" "$want"
   contains "I: $var falls to the build" "$out" "building locally"
-  grep -q prod-9b7e562 "$S/usr/ccquota" || fail "I: $var installed something" "$out"; st_count
+  grep -q prod-9b7e562 "$S/usr/ccquota" || st_fail "I: $var installed something" "$out"; st_count
 done
 # No seam: the real curl path. No node token → says so, never calls curl.
 setup
@@ -218,7 +217,7 @@ mkdir -p "$S/conf"
 printf '#!/bin/sh\necho "$*" >> "%s/curl.log"\nexit 7\n' "$S" > "$S/fake/curl"; chmod 755 "$S/fake/curl"
 out=$(run PATH="$S/fake:$PATH" FLEET_CONF_DIR="$S/conf" CCQUOTA_HUB_URL=http://127.0.0.1:9 -- "$FULL" --dist --logins "$ME"); rc=$?
 contains "I: no token" "$out" "dist: no node token ($S/conf/node.env) — building locally"
-[ ! -e "$S/curl.log" ] || fail "I: curl ran with no token" "$(cat "$S/curl.log")"; st_count
+[ ! -e "$S/curl.log" ] || st_fail "I: curl ran with no token" "$(cat "$S/curl.log")"; st_count
 printf 'CCQUOTA_HUB_URL=http://127.0.0.1:9\nCCQUOTA_TOKEN=sekrit-node-token\n' > "$S/conf/node.env"
 out=$(run PATH="$S/fake:$PATH" FLEET_CONF_DIR="$S/conf" -- "$FULL" --dist --logins "$ME"); rc=$?
 contains "I: curl miss" "$out" "(HTTP 000) — building locally"
@@ -229,26 +228,26 @@ lacks "I: token not printed" "$out" "sekrit"
 # ── J --rollback ────────────────────────────────────────────────────────────
 setup
 out=$(run STUCK="$ME" -- "$FULL" --binary "$S/new/ccquota" --logins "$ME" --rollback --wait 2); rc=$?
-[ "$rc" = 1 ] || fail "J: rollback exit $rc (want 1)" "$out"
+[ "$rc" = 1 ] || st_fail "J: rollback exit $rc (want 1)" "$out"
 contains "J: names the login" "$out" "$ME: restarted, but no control channel on prod-bc4e8e1"
 contains "J: says rolled back" "$out" "rolled back: $S/usr/ccquota ($ME kickstarted on the old binary)"
-grep -q prod-9b7e562 "$S/usr/ccquota" || fail "J: old bytes not restored" "$out"; st_count
-[ ! -e "$S/usr/ccquota.prev" ] || fail "J: .prev should have moved back" "$out"; st_count
-[ "$(grep -c "gui/$MYUID/com.ccquota.agent" "$S/launchctl.log")" = 2 ] || fail "J: kickstarted twice (upgrade + rollback)" "$(cat "$S/launchctl.log")"; st_count
+grep -q prod-9b7e562 "$S/usr/ccquota" || st_fail "J: old bytes not restored" "$out"; st_count
+[ ! -e "$S/usr/ccquota.prev" ] || st_fail "J: .prev should have moved back" "$out"; st_count
+[ "$(grep -c "gui/$MYUID/com.ccquota.agent" "$S/launchctl.log")" = 2 ] || st_fail "J: kickstarted twice (upgrade + rollback)" "$(cat "$S/launchctl.log")"; st_count
 # Without --rollback the new bytes stay (the historic behaviour, D).
 setup
 out=$(run STUCK="$ME" -- "$FULL" --binary "$S/new/ccquota" --logins "$ME" --wait 2)
 lacks "J: no rollback unasked" "$out" "rolled back"
-cmp -s "$S/usr/ccquota" "$S/new/ccquota" || fail "J: without --rollback the new bytes stay" "$out"; st_count
+cmp -s "$S/usr/ccquota" "$S/new/ccquota" || st_fail "J: without --rollback the new bytes stay" "$out"; st_count
 
 # ── G none / non-macOS ──────────────────────────────────────────────────────
 setup
 rm -f "$S/daemons/"* "$S/agents/"*
 out=$(run -- stable --status); rc=$?   # stable unreadable here (no fleet-stable.sh): must not get that far
-[ "$rc" = 1 ] || fail "G: no agent exit $rc (want 1)" "$out"
+[ "$rc" = 1 ] || st_fail "G: no agent exit $rc (want 1)" "$out"
 contains "G: says so" "$out" "no ccquota agent service on testhost"
 out=$(run FLEET_NODE_UPGRADE_OS=Linux -- "$FULL" --status); rc=$?
-[ "$rc" = 1 ] || fail "G: Linux exit $rc" "$out"
+[ "$rc" = 1 ] || st_fail "G: Linux exit $rc" "$out"
 contains "G: macOS only" "$out" "macOS (launchd) only"
 
 # ── K release ───────────────────────────────────────────────────────────────
@@ -259,11 +258,11 @@ setup
 mkdir -p "$S/node root/current/bin"; cp "$S/usr/ccquota" "$S/node root/current/bin/ccquota"
 awk -v r="$S/node root/current/bin/ccquota" '$1 == 1003 { $3 = r } { print }' "$S/ps" > "$S/ps.new" && mv "$S/ps.new" "$S/ps"
 out=$(run FLEET_NODE_ROOT="$S/node root" -- "$FULL" --dry-run); rc=$?
-[ "$rc" = 0 ] || fail "K: dry-run exit $rc" "$out"
+[ "$rc" = 0 ] || st_fail "K: dry-run exit $rc" "$out"
 contains "K: a3 skipped" "$out" "  a3  system/com.ccquota.agent.a3  $S/node root/current/bin/ccquota  → the release's ccquota"
 contains "K: four left" "$out" "dry-run: 4 login(s) would be upgraded"
 out=$(run FLEET_NODE_ROOT="$S/node root" -- "$FULL" --binary "$S/new/ccquota" --wait 5)
-grep -q prod-9b7e562 "$S/node root/current/bin/ccquota" || fail "K: the release's ccquota was written over" "$out"; st_count
+grep -q prod-9b7e562 "$S/node root/current/bin/ccquota" || st_fail "K: the release's ccquota was written over" "$out"; st_count
 lacks "K: a3 not restarted" "$(cat "$S/launchctl.log")" "agent.a3"
 
 # ── H doctor `agent` line ───────────────────────────────────────────────────
@@ -271,7 +270,7 @@ DFILES="fleet-doctor.sh fleet-account.sh fleet-lib.sh fleet-client-core.sh usage
 setup
 mkdir -p "$S/dbin" "$S/conf"
 printf 'FLEET_HOST=1\n' > "$S/conf/fleet.conf"   # it 承载: the row is a host's (issue #2716)
-for f in $DFILES; do [ -f "$BIN/$f" ] || fail "H: $f missing"; cp "$BIN/$f" "$S/dbin/"; done
+for f in $DFILES; do [ -f "$BIN/$f" ] || st_fail "H: $f missing"; cp "$BIN/$f" "$S/dbin/"; done
 agent_line() {
   env HOME="$S/home" TMPDIR="$W" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$S/conf" \
     FLEET_DOCTOR_AGENT_TARGET="$FULL" \
@@ -294,10 +293,10 @@ contains "H: not restarted is behind" "$out" "1/5 login(s) behind stable prod-bc
 # A client computer (承载 off) has no node agent of the fleet's to follow: no row.
 printf 'FLEET_HOST=0\n' > "$S/conf/fleet.conf"
 out=$(agent_line)
-[ -z "$out" ] || fail "H: 承载 off must print no agent line" "$out"; st_count
+[ -z "$out" ] || st_fail "H: 承载 off must print no agent line" "$out"; st_count
 printf 'FLEET_HOST=1\n' > "$S/conf/fleet.conf"
 rm -f "$S/daemons/"* "$S/agents/"*
 out=$(agent_line)
-[ -z "$out" ] || fail "H: no agent service must print no agent line" "$out"; st_count
+[ -z "$out" ] || st_fail "H: no agent service must print no agent line" "$out"; st_count
 
 echo "fleet-node-upgrade-selftest: PASS ($CHECKS checks)"

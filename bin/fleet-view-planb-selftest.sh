@@ -21,14 +21,13 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'fleet-view-planb selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fvplanb-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
 export FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 unset NO_COLOR FLEET_COLOR FLEET_GLYPHS
 mkdir -p "$WORK/conf"
 
-pass() { echo "ok   $*"; }
 
 python3 - "$BIN" <<'PY' || st_fail "plan B rows"
 import importlib.util, os, sys, time, unicodedata
@@ -166,8 +165,8 @@ assert "会坏·需重开" in note and red, (note, red)
 note, red = fv.note_of(by["MU/far2"])
 assert "失联" in note and not red, (note, red)
 PY
-pass "A  short names: 来自 X：…, T<n> prefix → ID, 修 #N：/ brackets / paths dropped"
-pass "B  columns: ID blank without a window ID (T<n> an alias), Agent (here: Claude; far: 未知), the row's own repo"
-pass "C  ↻ ! ✓ ✗ ◌ ∙ ? — one cell each; ◌ only under 已结束; the legend"
-pass "D  paint: glyph · ID · Agent · name · repo(13, kept blank); only ! ✗ red; cut at punctuation"
-pass "E  search: issue number exact (4539 ≠ 45390), match_why; ID searched; note_of red on 会坏"
+st_ok_all "A  short names: 来自 X：…, T<n> prefix → ID, 修 #N：/ brackets / paths dropped"
+st_ok_all "B  columns: ID blank without a window ID (T<n> an alias), Agent (here: Claude; far: 未知), the row's own repo"
+st_ok_all "C  ↻ ! ✓ ✗ ◌ ∙ ? — one cell each; ◌ only under 已结束; the legend"
+st_ok_all "D  paint: glyph · ID · Agent · name · repo(13, kept blank); only ! ✗ red; cut at punctuation"
+st_ok_all "E  search: issue number exact (4539 ≠ 45390), match_why; ID searched; note_of red on 会坏"

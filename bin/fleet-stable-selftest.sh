@@ -54,14 +54,13 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 ST="$BIN/fleet-stable.sh"
 [ -f "$ST" ] || { printf 'selftest: %s not found\n' "$ST" >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { echo "fleet-stable-selftest SKIP (no git)"; exit 0; }
+st_need git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-stable-selftest.XXXXXX")" || exit 2
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM HUP
 
-CHECKS=0
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+st_tally count
 contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]:
 $2";; esac; }
 
@@ -106,29 +105,29 @@ tag() { git --git-dir="$BARE" rev-parse -q --verify refs/tags/stable 2>/dev/null
 
 # --- A. no tag ---------------------------------------------------------------
 run show
-eq "A: show without a tag exits 1" 1 "$RC"
+st_eq "A: show without a tag exits 1" 1 "$RC"
 contains "A: says none" "$OUT" "stable:  none"
 contains "A: verdict NONE" "$OUT" "verdict: NONE"
 
 # --- B. CI gate ----------------------------------------------------------------
 : > "$WORK/checks"
 run move "$C2"
-eq "B: zero check runs refused" 3 "$RC"; contains "B: says no check runs" "$OUT" "NO check runs"
+st_eq "B: zero check runs refused" 3 "$RC"; contains "B: says no check runs" "$OUT" "NO check runs"
 printf 'completed success a\nin_progress null shard 2\n' > "$WORK/checks"
 run move "$C2"
-eq "B: pending refused" 3 "$RC"; contains "B: names the pending run" "$OUT" "not green: in_progress null shard 2"
+st_eq "B: pending refused" 3 "$RC"; contains "B: names the pending run" "$OUT" "not green: in_progress null shard 2"
 printf 'completed failure shard 3\n' > "$WORK/checks"
 run move "$C2"
-eq "B: failure refused" 3 "$RC"; eq "B: tag untouched" none "$(tag)"
+st_eq "B: failure refused" 3 "$RC"; st_eq "B: tag untouched" none "$(tag)"
 
 # --- C. first move -------------------------------------------------------------
 green
 run move "$C2"
-eq "C: green move exits 0" 0 "$RC"; eq "C: tag at C2" "$C2" "$(tag)"
+st_eq "C: green move exits 0" 0 "$RC"; st_eq "C: tag at C2" "$C2" "$(tag)"
 run show
-eq "C: show exits 0" 0 "$RC"; contains "C: behind 1" "$OUT" "behind:  1"; contains "C: BEHIND" "$OUT" "verdict: BEHIND"
+st_eq "C: show exits 0" 0 "$RC"; contains "C: behind 1" "$OUT" "behind:  1"; contains "C: BEHIND" "$OUT" "verdict: BEHIND"
 run move
-eq "C: default target = trunk tip" 0 "$RC"; eq "C: tag at C3" "$C3" "$(tag)"
+st_eq "C: default target = trunk tip" 0 "$RC"; st_eq "C: tag at C3" "$C3" "$(tag)"
 run show
 contains "C: CURRENT" "$OUT" "verdict: CURRENT"; contains "C: behind 0" "$OUT" "behind:  0"
 
@@ -139,20 +138,20 @@ contains "D: behind 2" "$OUT" "behind:  2"; contains "D: BEHIND" "$OUT" "verdict
 
 # --- E. forward only ---------------------------------------------------------------
 run move "$C1"
-eq "E: backward refused" 3 "$RC"; contains "E: says forward" "$OUT" "FORWARD"; eq "E: tag still C3" "$C3" "$(tag)"
+st_eq "E: backward refused" 3 "$RC"; contains "E: says forward" "$OUT" "FORWARD"; st_eq "E: tag still C3" "$C3" "$(tag)"
 git -C "$SEED" checkout -q -b side "$C2"; SIDE=$(commit side); git -C "$SEED" push -q origin side; git -C "$SEED" checkout -q master
 run move "$SIDE"
-eq "E: off-trunk refused" 3 "$RC"; contains "E: says not on trunk" "$OUT" "is not on origin/master"; eq "E: tag still C3" "$C3" "$(tag)"
+st_eq "E: off-trunk refused" 3 "$RC"; contains "E: says not on trunk" "$OUT" "is not on origin/master"; st_eq "E: tag still C3" "$C3" "$(tag)"
 run move "$C3"
-eq "E: same target is a no-op" 0 "$RC"; contains "E: says already" "$OUT" "already at"
+st_eq "E: same target is a no-op" 0 "$RC"; contains "E: says already" "$OUT" "already at"
 : > "$WORK/checks"
 run move "$C4" --allow-no-checks
-eq "E: --allow-no-checks moves" 0 "$RC"; eq "E: tag at C4" "$C4" "$(tag)"
+st_eq "E: --allow-no-checks moves" 0 "$RC"; st_eq "E: tag at C4" "$C4" "$(tag)"
 green
 
 # --- F. dry-run ----------------------------------------------------------------------
 run move --dry-run
-eq "F: dry-run exits 0" 0 "$RC"; contains "F: prints the push" "$OUT" "force-with-lease=refs/tags/stable:$C4"; eq "F: tag not moved" "$C4" "$(tag)"
+st_eq "F: dry-run exits 0" 0 "$RC"; contains "F: prints the push" "$OUT" "force-with-lease=refs/tags/stable:$C4"; st_eq "F: tag not moved" "$C4" "$(tag)"
 
 # --- G. lease: someone else moves stable between our read and our push ----------------
 REALGIT=$(command -v git)
@@ -168,7 +167,7 @@ chmod +x "$WORK/racer/git"
 # The racer moves stable to C5 (forward from C4) while we try to move it to C6.
 C6=$(commit six); push
 OUT=$(PATH="$WORK/racer:$PATH" sh "$ST" move "$C6" --dir "$CO" --repo o/r 2>&1); RC=$?
-eq "G: lost lease exits 4" 4 "$RC"; contains "G: says lease" "$OUT" "lease lost"; eq "G: racer's C5 kept, not our C6" "$C5" "$(tag)"
+st_eq "G: lost lease exits 4" 4 "$RC"; contains "G: says lease" "$OUT" "lease lost"; st_eq "G: racer's C5 kept, not our C6" "$C5" "$(tag)"
 
 # --- H. doctor ---------------------------------------------------------------------------
 if [ -f "$BIN/fleet-doctor.sh" ]; then
@@ -184,16 +183,16 @@ mkdir -p "$SEED/bin"; printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$SEED/bin/
 git -C "$SEED" add -A; git -C "$SEED" commit -qm hooked; C7=$(git -C "$SEED" rev-parse HEAD); push
 green
 run move "$C7"
-eq "I: a table whose scripts exist moves" 0 "$RC"; contains "I: says GREEN" "$OUT" "oldcfg-replay: GREEN"; eq "I: tag at C7" "$C7" "$(tag)"
+st_eq "I: a table whose scripts exist moves" 0 "$RC"; contains "I: says GREEN" "$OUT" "oldcfg-replay: GREEN"; st_eq "I: tag at C7" "$C7" "$(tag)"
 git -C "$SEED" rm -q bin/h.sh; git -C "$SEED" commit -qm 'drop h.sh'; C8=$(git -C "$SEED" rev-parse HEAD); push
 run move "$C8"
-eq "I: a deleted hook script is refused" 3 "$RC"; contains "I: reason prefixed oldcfg:" "$OUT" "REFUSED — oldcfg:"
+st_eq "I: a deleted hook script is refused" 3 "$RC"; contains "I: reason prefixed oldcfg:" "$OUT" "REFUSED — oldcfg:"
 contains "I: names the script" "$OUT" "bin/h.sh not in the new tree"; contains "I: names the event" "$OUT" "MISSING  Stop"
-eq "I: tag still C7" "$C7" "$(tag)"
+st_eq "I: tag still C7" "$C7" "$(tag)"
 run move "$C8" --dry-run
-eq "I: --dry-run runs the gate too" 3 "$RC"; eq "I: tag still C7 after dry-run" "$C7" "$(tag)"
+st_eq "I: --dry-run runs the gate too" 3 "$RC"; st_eq "I: tag still C7 after dry-run" "$C7" "$(tag)"
 OUT=$(FLEET_STABLE_LOG="$WORK/stable-move.log" sh "$ST" move "$C8" --force --dir "$CO" --repo o/r 2>&1); RC=$?
-eq "I: --force moves" 0 "$RC"; eq "I: tag at C8" "$C8" "$(tag)"; contains "I: says FORCED" "$OUT" "oldcfg: FORCED past the replay"
+st_eq "I: --force moves" 0 "$RC"; st_eq "I: tag at C8" "$C8" "$(tag)"; contains "I: says FORCED" "$OUT" "oldcfg: FORCED past the replay"
 contains "I: one line logged" "$(cat "$WORK/stable-move.log" 2>/dev/null)" "	forced	old=$(git -C "$CO" rev-parse --short "$C7")	new=$(git -C "$CO" rev-parse --short "$C8")	by="
 contains "I: the log carries the replay's verdict" "$(cat "$WORK/stable-move.log" 2>/dev/null)" "oldcfg=oldcfg-replay: RED — 1 finding(s)"
 
@@ -207,19 +206,19 @@ git -C "$SEED" add -A; git -C "$SEED" commit -qm 'bsd half'; C9=$(git -C "$SEED"
 printf 'completed success shard 1\ncompleted cancelled macOS shard 1\n' > "$WORK/checks"
 printf '%s\tcompleted\tfailure\tpush\t11\tselftests (macOS)\n' "$C9" > "$WORK/macos"
 run move "$C9"
-eq "J: a red macOS run does not hold stable" 0 "$RC"; eq "J: tag at C9" "$C9" "$(tag)"
+st_eq "J: a red macOS run does not hold stable" 0 "$RC"; st_eq "J: tag at C9" "$C9" "$(tag)"
 case "$OUT" in *"not green: completed cancelled"*) st_fail "J: the generic gate counted a macOS shard" ;; esac
 case "$OUT" in *"macos:"*) st_fail "J: gate 5 still spoke: $OUT" ;; esac
 # No macOS run at all: nothing dispatched, nothing waited for.
 C10=$(commit ten); push; : > "$WORK/macos"
 run move "$C10"
-eq "J: no macOS run → moves" 0 "$RC"; eq "J: tag at C10" "$C10" "$(tag)"
-eq "J: dispatched nothing" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
+st_eq "J: no macOS run → moves" 0 "$RC"; st_eq "J: tag at C10" "$C10" "$(tag)"
+st_eq "J: dispatched nothing" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
 C11=$(commit eleven); push
 run move "$C11" --dry-run
-eq "J: dry-run passes with no macOS run" 0 "$RC"
+st_eq "J: dry-run passes with no macOS run" 0 "$RC"
 run move "$C11"
-eq "J: tag at C11" 0 "$RC"; eq "J: …C11" "$C11" "$(tag)"
+st_eq "J: tag at C11" 0 "$RC"; st_eq "J: …C11" "$C11" "$(tag)"
 
 # --- K. release.json (issue #2334) ---------------------------------------------------
 # A tree that ships the machine updater must declare what a managed machine runs.
@@ -229,18 +228,18 @@ mkdir -p "$SEED/bin"; printf '#!/usr/bin/env python3\n' > "$SEED/bin/fleet-node-
 git -C "$SEED" add -A; git -C "$SEED" commit -qm 'updater, no release.json'; C12=$(git -C "$SEED" rev-parse HEAD); push
 macos_green "$C12" 21
 run move "$C12"
-eq "K: the updater without release.json is refused" 3 "$RC"; contains "K: reason prefixed release:" "$OUT" "REFUSED — release:"
-contains "K: says what is missing" "$OUT" "no release.json"; eq "K: tag still C11" "$C11" "$(tag)"
+st_eq "K: the updater without release.json is refused" 3 "$RC"; contains "K: reason prefixed release:" "$OUT" "REFUSED — release:"
+contains "K: says what is missing" "$OUT" "no release.json"; st_eq "K: tag still C11" "$C11" "$(tag)"
 printf '{"schema": 2}\n' > "$SEED/release.json"
 git -C "$SEED" add -A; git -C "$SEED" commit -qm 'bad release.json'; C13=$(git -C "$SEED" rev-parse HEAD); push
 macos_green "$C13" 22
 run move "$C13"
-eq "K: an invalid release.json is refused" 3 "$RC"; contains "K: names the fault" "$OUT" "schema must be 1"
+st_eq "K: an invalid release.json is refused" 3 "$RC"; contains "K: names the fault" "$OUT" "schema must be 1"
 cp "$BIN/../release.json" "$SEED/release.json"
 git -C "$SEED" add -A; git -C "$SEED" commit -qm 'release.json'; C14=$(git -C "$SEED" rev-parse HEAD); push
 macos_green "$C14" 23
 run move "$C14"
-eq "K: a valid release.json moves" 0 "$RC"; eq "K: tag at C14" "$C14" "$(tag)"; contains "K: says valid" "$OUT" "carries a valid release.json"
+st_eq "K: a valid release.json moves" 0 "$RC"; st_eq "K: tag at C14" "$C14" "$(tag)"; contains "K: says valid" "$OUT" "carries a valid release.json"
 
 # --- L. --ignore-check (a CI caller's own job) -----------------------------------------------
 # The CI job that runs the move is a check run on the very commit it moves to, never
@@ -249,17 +248,17 @@ eq "K: a valid release.json moves" 0 "$RC"; eq "K: tag at C14" "$C14" "$(tag)"; 
 C15=$(commit fifteen); push; macos_green "$C15" 24
 printf 'completed success shard 1\nin_progress null move stable\n' > "$WORK/checks"
 run move "$C15" --dry-run
-eq "L: its own pending job refused without the flag" 3 "$RC"; contains "L: names it" "$OUT" "not green: in_progress null move stable"
+st_eq "L: its own pending job refused without the flag" 3 "$RC"; contains "L: names it" "$OUT" "not green: in_progress null move stable"
 run move "$C15" --ignore-check "move stable"
-eq "L: --ignore-check passes over its own job" 0 "$RC"; eq "L: tag at C15" "$C15" "$(tag)"
+st_eq "L: --ignore-check passes over its own job" 0 "$RC"; st_eq "L: tag at C15" "$C15" "$(tag)"
 C16=$(commit sixteen); push; macos_green "$C16" 25
 printf 'completed success shard 1\nin_progress null move stable\nqueued null deploy hub\n' > "$WORK/checks"
 run move "$C16" --ignore-check "move stable"
-eq "L: another pending run still refuses" 3 "$RC"; contains "L: names the other one" "$OUT" "not green: queued null deploy hub"
+st_eq "L: another pending run still refuses" 3 "$RC"; contains "L: names the other one" "$OUT" "not green: queued null deploy hub"
 case "$OUT" in *"not green: in_progress null move stable"*) st_fail "L: the ignored job was counted" ;; esac
-eq "L: tag still C15" "$C15" "$(tag)"
+st_eq "L: tag still C15" "$C15" "$(tag)"
 run move "$C16" --ignore-check "move stable" --ignore-check "deploy hub" --dry-run
-eq "L: a repeated --ignore-check passes over both" 0 "$RC"; contains "L: dry-run says so" "$OUT" "dry-run: would run"
+st_eq "L: a repeated --ignore-check passes over both" 0 "$RC"; contains "L: dry-run says so" "$OUT" "dry-run: would run"
 
 # --- M. publish (issue #2772) ------------------------------------------------------------
 # A moved stable is handed to the hub: outside CI the move dispatches stable-publish.yml
@@ -270,11 +269,11 @@ mkdir -p "$SEED/.github/workflows"; printf 'name: stable publish\n' > "$SEED/.gi
 git -C "$SEED" add -A; git -C "$SEED" commit -qm 'publish workflow'; C17=$(git -C "$SEED" rev-parse HEAD); push
 macos_green "$C17" 26
 OUT=$(GITHUB_ACTIONS=true sh "$ST" move "$C17" --dir "$CO" --repo o/r 2>&1); RC=$?
-eq "M: a move inside CI exits 0" 0 "$RC"; eq "M: tag at C17" "$C17" "$(tag)"
-eq "M: inside CI nothing dispatched" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
+st_eq "M: a move inside CI exits 0" 0 "$RC"; st_eq "M: tag at C17" "$C17" "$(tag)"
+st_eq "M: inside CI nothing dispatched" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
 C18=$(commit eighteen); push; macos_green "$C18" 27
 OUT=$(env -u GITHUB_ACTIONS sh "$ST" move "$C18" --dir "$CO" --repo o/r 2>&1); RC=$?
-eq "M: a move by hand exits 0" 0 "$RC"; eq "M: tag at C18" "$C18" "$(tag)"
+st_eq "M: a move by hand exits 0" 0 "$RC"; st_eq "M: tag at C18" "$C18" "$(tag)"
 contains "M: dispatched stable-publish.yml for the target" "$(cat "$WORK/dispatched" 2>/dev/null)" "workflow run stable-publish.yml --repo o/r --ref master -f sha=$C18"
 contains "M: says so" "$OUT" "publish: dispatched stable-publish.yml"
 
@@ -284,25 +283,25 @@ contains "M: says so" "$OUT" "publish: dispatched stable-publish.yml"
 C19=$(commit nineteen); push; : > "$WORK/macos"; rm -f "$WORK/dispatched"
 printf 'completed success shard 1\nin_progress null train / precheck\ncompleted failure deploy hub\n' > "$WORK/checks"
 run move "$C19" --precheck
-eq "N: precheck passes past red CI and no macOS run" 0 "$RC"; contains "N: says no tag pushed" "$OUT" "no tag pushed"
-eq "N: precheck moved nothing" "$C18" "$(tag)"
-eq "N: precheck dispatched nothing" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
+st_eq "N: precheck passes past red CI and no macOS run" 0 "$RC"; contains "N: says no tag pushed" "$OUT" "no tag pushed"
+st_eq "N: precheck moved nothing" "$C18" "$(tag)"
+st_eq "N: precheck dispatched nothing" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
 run move "$C17" --precheck
-eq "N: precheck still refuses backward" 3 "$RC"; contains "N: says forward" "$OUT" "only moves FORWARD"
+st_eq "N: precheck still refuses backward" 3 "$RC"; contains "N: says forward" "$OUT" "only moves FORWARD"
 printf '{"schema": 2}\n' > "$SEED/release.json"
 git -C "$SEED" add -A; git -C "$SEED" commit -qm 'bad release.json again'; C20=$(git -C "$SEED" rev-parse HEAD); push
 run move "$C20" --precheck
-eq "N: precheck refuses a bad release.json" 3 "$RC"; contains "N: reason release:" "$OUT" "REFUSED — release:"
+st_eq "N: precheck refuses a bad release.json" 3 "$RC"; contains "N: reason release:" "$OUT" "REFUSED — release:"
 cp "$BIN/../release.json" "$SEED/release.json"
 git -C "$SEED" add -A; git -C "$SEED" commit -qm 'release.json back'; C21=$(git -C "$SEED" rev-parse HEAD); push
 run move "$C21" --precheck
-eq "N: precheck passes once fixed" 0 "$RC"
+st_eq "N: precheck passes once fixed" 0 "$RC"
 # The shared matrix's `macOS / shard K` checks are no verdict; a red `mac follow: macOS`
 # status holds nothing (one release line, #4671).
 printf 'completed success shard 1\nin_progress null macOS / shard 2\n' > "$WORK/checks"; : > "$WORK/macos"
 printf 'failure\n' > "$WORK/statuses"; rm -f "$WORK/dispatched"
 run move "$C21"
-eq "N: a red mac follow holds nothing" 0 "$RC"; eq "N: tag at C21" "$C21" "$(tag)"
+st_eq "N: a red mac follow holds nothing" 0 "$RC"; st_eq "N: tag at C21" "$C21" "$(tag)"
 case "$OUT" in *"not green: in_progress null macOS / shard 2"*) st_fail "N: the generic gate counted a train macOS shard" ;; esac
 case "$(cat "$WORK/dispatched" 2>/dev/null)" in *selftests-macos*) st_fail "N: dispatched a full macOS run" ;; esac
 
@@ -311,17 +310,17 @@ C22=$(commit twentytwo); push; : > "$WORK/macos"; : > "$WORK/statuses"; rm -f "$
 printf 'completed failure some derived run\n' > "$WORK/checks"   # never read with --train
 printf 'completed success board\ncompleted success Linux / shard 1\nin_progress null hub / deploy\ncompleted success macOS / shard 1\nin_progress null release\n' > "$WORK/jobs"
 run move "$C22" --train 77 --ignore-check release
-eq "O: an unfinished job refuses" 3 "$RC"; contains "O: names it" "$OUT" "not green: in_progress null hub / deploy"
+st_eq "O: an unfinished job refuses" 3 "$RC"; contains "O: names it" "$OUT" "not green: in_progress null hub / deploy"
 printf 'in_progress null release\n' > "$WORK/jobs"
 run move "$C22" --train 77 --ignore-check release
-eq "O: nothing finished refuses" 3 "$RC"; contains "O: says no finished job" "$OUT" "no finished job"
+st_eq "O: nothing finished refuses" 3 "$RC"; contains "O: says no finished job" "$OUT" "no finished job"
 printf 'completed success board\ncompleted success Linux / shard 1\ncompleted skipped hub\ncompleted failure macOS / shard 1\nin_progress null release\n' > "$WORK/jobs"
 run move "$C22" --train 77 --ignore-check release
-eq "O: an all-green train moves (a red macOS shard is no verdict)" 0 "$RC"; eq "O: tag at C22" "$C22" "$(tag)"
+st_eq "O: an all-green train moves (a red macOS shard is no verdict)" 0 "$RC"; st_eq "O: tag at C22" "$C22" "$(tag)"
 contains "O: says the run" "$OUT" "job(s) of train run 77 green"
 case "$(cat "$WORK/dispatched" 2>/dev/null)" in *selftests-macos*) st_fail "O: dispatched a macOS run past a green train run" ;; esac
 run move --train abc
-eq "O: --train takes a run id" 2 "$RC"
+st_eq "O: --train takes a run id" 2 "$RC"
 
 # --- P. a release workflow's own red run is not the target's CI (issue #3143) ------------------
 # One failed publish and one failed move on the target used to block every move after
@@ -330,18 +329,18 @@ C23=$(commit twentythree); push; macos_green "$C23" 28; rm -f "$WORK/dispatched"
 printf '501 .github/workflows/selftests.yml\n502 .github/workflows/stable-publish.yml\n503 .github/workflows/stable-auto.yml\n504 .github/workflows/release-train.yml\n505 .github/workflows/hub-deploy.yml\n' > "$WORK/derived"
 printf '501 completed success shard 1\n502 completed failure publish stable\n503 completed failure move stable\n504 completed failure train\n505 completed cancelled deploy\n' > "$WORK/checks"
 run move "$C23" --dry-run
-eq "P: derived reds are passed over" 0 "$RC"
+st_eq "P: derived reds are passed over" 0 "$RC"
 contains "P: names the publish it passed over" "$OUT" "passed over (a release workflow's own run): completed failure publish stable"
 contains "P: names the move" "$OUT" "completed failure move stable"
 contains "P: counts the one real check" "$OUT" "checks: 1 green"
 printf '501 completed failure shard 1\n502 completed failure publish stable\n' > "$WORK/checks"
 run move "$C23" --dry-run
-eq "P: a red test run still refuses" 3 "$RC"; contains "P: names it" "$OUT" "not green: completed failure shard 1"
+st_eq "P: a red test run still refuses" 3 "$RC"; contains "P: names it" "$OUT" "not green: completed failure shard 1"
 printf '501 completed success shard 1\n502 completed failure publish stable\n' > "$WORK/checks"
 OUT=$(FLEET_STABLE_DERIVED_RE='' sh "$ST" move "$C23" --dry-run --dir "$CO" --repo o/r 2>&1); RC=$?
-eq "P: an empty FLEET_STABLE_DERIVED_RE counts every run" 3 "$RC"
+st_eq "P: an empty FLEET_STABLE_DERIVED_RE counts every run" 3 "$RC"
 OUT=$(FLEET_STABLE_DERIVED_RE='^selftests\.yml$' sh "$ST" move "$C23" --dry-run --dir "$CO" --repo o/r 2>&1); RC=$?
-eq "P: FLEET_STABLE_DERIVED_RE names the workflows" 3 "$RC"; contains "P: … the publish counts then" "$OUT" "not green: completed failure publish stable"
+st_eq "P: FLEET_STABLE_DERIVED_RE names the workflows" 3 "$RC"; contains "P: … the publish counts then" "$OUT" "not green: completed failure publish stable"
 : > "$WORK/derived"; green
 
 # --- Q. one release line (issue #4671) ---------------------------------------------------------
@@ -352,15 +351,15 @@ S0=$(tag)
 for w in "--ref stable-macos" "--seed" "--with-stable" "--macos-timeout 3"; do
   # shellcheck disable=SC2086  # the words are the flags
   run move $w
-  eq "Q: $w is an unknown flag" 2 "$RC"
-  eq "Q: $w pushed no lane" none "$(ltag)"; eq "Q: $w left stable" "$S0" "$(tag)"
+  st_eq "Q: $w is an unknown flag" 2 "$RC"
+  st_eq "Q: $w pushed no lane" none "$(ltag)"; st_eq "Q: $w left stable" "$S0" "$(tag)"
 done
-eq "Q: nothing dispatched" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
+st_eq "Q: nothing dispatched" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
 commit twentyfour >/dev/null; push
 C25=$(commit twentyfive); push
 printf '%s\tcompleted\tfailure\tpush\t32\tselftests (macOS)\n' "$C25" > "$WORK/macos"; printf 'failure\n' > "$WORK/statuses"
 run move "$C25"
-eq "Q: stable moves past a red macOS" 0 "$RC"; eq "Q: stable at C25" "$C25" "$(tag)"
+st_eq "Q: stable moves past a red macOS" 0 "$RC"; st_eq "Q: stable at C25" "$C25" "$(tag)"
 
 # --- S. no cn gate (issue #4904) -------------------------------------------------------------
 # gate 9 left with the China path probe: a red `cn path` status on stable holds nothing.
@@ -368,7 +367,7 @@ green
 C26=$(commit twentysix); push
 printf 'failure\thttps://github.com/o/r/issues/77\t不通：卡在 codex:entry — no answer\n' > "$WORK/cnstatus"
 run move "$C26"
-eq "S: a red cn path status moves" 0 "$RC"; eq "S: stable at C26" "$C26" "$(tag)"
+st_eq "S: a red cn path status moves" 0 "$RC"; st_eq "S: stable at C26" "$C26" "$(tag)"
 case "$OUT" in *'cn:'*) st_fail "S: the move still speaks of a cn gate: $OUT" ;; esac
 : > "$WORK/cnstatus"
 

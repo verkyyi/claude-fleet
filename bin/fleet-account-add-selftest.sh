@@ -23,6 +23,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 FLEET="$BIN/fleet"
 [ -x "$BIN/fleet-account-add.sh" ] || { printf 'selftest: fleet-account-add.sh not found / not executable\n' >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 required\n' >&2; exit 2; }
@@ -33,8 +34,6 @@ cleanup() { if [ -n "$HUB_PID" ]; then kill "$HUB_PID" 2>/dev/null; wait "$HUB_P
 trap cleanup EXIT
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 export HOME="$WORK/home"
 export TMPDIR="$WORK/tmp"
@@ -95,7 +94,7 @@ PY
 HUB_PID=$!
 i=0
 while [ ! -s "$WORK/port" ] && [ "$i" -lt 100 ]; do kill -0 "$HUB_PID" 2>/dev/null || break; sleep 0.2; i=$((i+1)); done
-[ -s "$WORK/port" ] || fail "fake hub did not start" "$(cat "$WORK/hub.err" 2>/dev/null)"
+[ -s "$WORK/port" ] || st_fail "fake hub did not start" "$(cat "$WORK/hub.err" 2>/dev/null)"
 HUBURL="http://127.0.0.1:$(cat "$WORK/port")"
 # the hub URL the way a machine has it: in fleet.conf, not the environment
 printf 'FLEET_HUB_URL="%s"\n' "$HUBURL" > "$FLEET_CONF_DIR/fleet.conf"
@@ -107,73 +106,73 @@ rows=[json.loads(l) for l in open(sys.argv[1])]
 r=rows[-1]; b=json.loads(r["body"])
 print(eval(sys.argv[2], {"r": r, "b": b}))' "$LOG" "$1"; }
 nreq() { wc -l < "$LOG" | tr -d ' '; }
-gone() { [ -z "$(ls -A "$TMPDIR" 2>/dev/null)" ] || fail "$1: a temp dir survived" "$(ls -la "$TMPDIR")"; }
-quiet() { case "$2" in *ZZZZZZZZZZ*|*QQQQQQQQQQ*|*viewer-SECRET*) fail "$1: a secret leaked into the output" "$2" ;; esac; }
+gone() { [ -z "$(ls -A "$TMPDIR" 2>/dev/null)" ] || st_fail "$1: a temp dir survived" "$(ls -la "$TMPDIR")"; }
+quiet() { case "$2" in *ZZZZZZZZZZ*|*QQQQQQQQQQ*|*viewer-SECRET*) st_fail "$1: a secret leaked into the output" "$2" ;; esac; }
 
 # --- CLAUDE ------------------------------------------------------------------
 out=$(printf '%s\n' "$TOK" | bash "$FLEET" account add --provider claude --label max-e 2>&1); rc=$?
-[ "$rc" = 0 ] || fail "CLAUDE: exit $rc" "$out"
-grep -q '^claude setup-token$' "$WORK/cli.log" || fail "CLAUDE: setup-token did not run" "$(cat "$WORK/cli.log")"
-[ "$(nreq)" = 1 ] || fail "CLAUDE: expected 1 request, got $(nreq)"
-[ "$(last 'r["path"]')" = /v1/fleet/credentials ] || fail "CLAUDE: path"
-[ "$(last 'r["auth"]')" = 'Bearer viewer-SECRET-1' ] || fail "CLAUDE: auth"
-[ "$(last 'b["provider"]+"/"+b["account"]+"/"+b["principal_id"]')" = claude/max-e/pool ] || fail "CLAUDE: body" "$(cat "$LOG")"
-[ "$(last 'b["secret"]["setup_token"]')" = "$TOK" ] || fail "CLAUDE: token"
-[ -z "$(ls -A "$FLEET_ACCOUNTS_DIR")" ] || fail "CLAUDE: something landed in the accounts dir" "$(ls -la "$FLEET_ACCOUNTS_DIR")"
+[ "$rc" = 0 ] || st_fail "CLAUDE: exit $rc" "$out"
+grep -q '^claude setup-token$' "$WORK/cli.log" || st_fail "CLAUDE: setup-token did not run" "$(cat "$WORK/cli.log")"
+[ "$(nreq)" = 1 ] || st_fail "CLAUDE: expected 1 request, got $(nreq)"
+[ "$(last 'r["path"]')" = /v1/fleet/credentials ] || st_fail "CLAUDE: path"
+[ "$(last 'r["auth"]')" = 'Bearer viewer-SECRET-1' ] || st_fail "CLAUDE: auth"
+[ "$(last 'b["provider"]+"/"+b["account"]+"/"+b["principal_id"]')" = claude/max-e/pool ] || st_fail "CLAUDE: body" "$(cat "$LOG")"
+[ "$(last 'b["secret"]["setup_token"]')" = "$TOK" ] || st_fail "CLAUDE: token"
+[ -z "$(ls -A "$FLEET_ACCOUNTS_DIR")" ] || st_fail "CLAUDE: something landed in the accounts dir" "$(ls -la "$FLEET_ACCOUNTS_DIR")"
 gone CLAUDE; quiet CLAUDE "$out"
-case "$out" in *'3/3'*) ;; *) fail "CLAUDE: no removal line" "$out" ;; esac
-ok "CLAUDE: one command → setup-token, put pool/claude/max-e, no local copy, no token printed"
+case "$out" in *'3/3'*) ;; *) st_fail "CLAUDE: no removal line" "$out" ;; esac
+st_pass "CLAUDE: one command → setup-token, put pool/claude/max-e, no local copy, no token printed"
 
 # a bad paste: nothing sent, nothing kept
 n0=$(nreq)
 out=$(printf 'not-a-token\n' | bash "$FLEET" account add --provider claude --label max-f 2>&1); rc=$?
-[ "$rc" = 1 ] && [ "$(nreq)" = "$n0" ] || fail "CLAUDE bad paste: rc=$rc requests $(nreq)" "$out"
+[ "$rc" = 1 ] && [ "$(nreq)" = "$n0" ] || st_fail "CLAUDE bad paste: rc=$rc requests $(nreq)" "$out"
 gone "CLAUDE bad paste"
 # a failed sign-in
 out=$(FAKE_FAIL=1 bash "$FLEET" account add --provider claude --label max-f </dev/null 2>&1); rc=$?
-[ "$rc" = 1 ] && [ "$(nreq)" = "$n0" ] || fail "CLAUDE failed login: rc=$rc" "$out"
+[ "$rc" = 1 ] && [ "$(nreq)" = "$n0" ] || st_fail "CLAUDE failed login: rc=$rc" "$out"
 gone "CLAUDE failed login"
 # a refused import
 out=$(printf '%s\n' "$TOK" | bash "$FLEET" account add --provider claude --label bad 2>&1); rc=$?
-[ "$rc" = 1 ] || fail "FAIL: hub 400 should exit 1, got $rc" "$out"
+[ "$rc" = 1 ] || st_fail "FAIL: hub 400 should exit 1, got $rc" "$out"
 gone FAIL; quiet FAIL "$out"
-ok "GONE/FAIL: a bad paste, a failed sign-in, a refused import → exit 1, nothing kept"
+st_pass "GONE/FAIL: a bad paste, a failed sign-in, a refused import → exit 1, nothing kept"
 
 # --- CODEX ------------------------------------------------------------------
 : > "$WORK/cli.log"
 out=$(bash "$FLEET" account add --provider codex --label cx2 2>&1 </dev/null); rc=$?
-[ "$rc" = 0 ] || fail "CODEX: exit $rc" "$out"
-grep -q '^codex login home=.*/codex/cx2$' "$WORK/cli.log" || fail "CODEX: browser login into a temp home" "$(cat "$WORK/cli.log")"
-grep -q '^ccquota' "$WORK/cli.log" && fail "CODEX: ccquota was consulted" "$(cat "$WORK/cli.log")"
-[ "$(last 'b["provider"]+"/"+b["account"]+"/"+b["principal_id"]')" = codex/cx2/pool ] || fail "CODEX: body" "$(tail -1 "$LOG")"
-[ "$(last 'b["secret"]["refresh_token"]')" = "$RT" ] || fail "CODEX: refresh token"
-[ -z "$(ls -A "$HOME/.codex-accounts")" ] && [ ! -e "$HOME/.codex" ] || fail "CODEX: a codex home was touched"
-case "$out" in *'stop refreshing'*) fail "CODEX: the holder reminder printed" "$out" ;; esac
+[ "$rc" = 0 ] || st_fail "CODEX: exit $rc" "$out"
+grep -q '^codex login home=.*/codex/cx2$' "$WORK/cli.log" || st_fail "CODEX: browser login into a temp home" "$(cat "$WORK/cli.log")"
+grep -q '^ccquota' "$WORK/cli.log" && st_fail "CODEX: ccquota was consulted" "$(cat "$WORK/cli.log")"
+[ "$(last 'b["provider"]+"/"+b["account"]+"/"+b["principal_id"]')" = codex/cx2/pool ] || st_fail "CODEX: body" "$(tail -1 "$LOG")"
+[ "$(last 'b["secret"]["refresh_token"]')" = "$RT" ] || st_fail "CODEX: refresh token"
+[ -z "$(ls -A "$HOME/.codex-accounts")" ] && [ ! -e "$HOME/.codex" ] || st_fail "CODEX: a codex home was touched"
+case "$out" in *'stop refreshing'*) st_fail "CODEX: the holder reminder printed" "$out" ;; esac
 gone CODEX; quiet CODEX "$out"
 : > "$WORK/cli.log"
 out=$(SSH_CONNECTION='1 2 3 4' bash "$FLEET" account add --provider codex --label cx3 2>&1 </dev/null); rc=$?
-[ "$rc" = 0 ] && grep -q '^codex login --device-auth ' "$WORK/cli.log" || fail "CODEX: --device-auth over ssh" "$out$(cat "$WORK/cli.log")"
+[ "$rc" = 0 ] && grep -q '^codex login --device-auth ' "$WORK/cli.log" || st_fail "CODEX: --device-auth over ssh" "$out$(cat "$WORK/cli.log")"
 gone "CODEX ssh"
-ok "CODEX: codex login in a temp home → put pool/codex/cx2, no ccquota, no reminder, device-auth over ssh"
+st_pass "CODEX: codex login in a temp home → put pool/codex/cx2, no ccquota, no reminder, device-auth over ssh"
 
 # --- READY / USAGE: refused before any CLI runs --------------------------------
 : > "$WORK/cli.log"; n0=$(nreq)
 mv "$HOME/.ccquota/viewer-token" "$WORK/vt"
 out=$(bash "$FLEET" account add --provider claude --label max-g 2>&1 </dev/null); rc=$?
-[ "$rc" = 2 ] || fail "READY: no viewer token should exit 2, got $rc" "$out"
+[ "$rc" = 2 ] || st_fail "READY: no viewer token should exit 2, got $rc" "$out"
 mv "$WORK/vt" "$HOME/.ccquota/viewer-token"
 mv "$FLEET_CONF_DIR/fleet.conf" "$WORK/fc"
 out=$(bash "$FLEET" account add --provider claude --label max-g 2>&1 </dev/null); rc=$?
-[ "$rc" = 2 ] || fail "READY: no hub URL should exit 2, got $rc" "$out"
+[ "$rc" = 2 ] || st_fail "READY: no hub URL should exit 2, got $rc" "$out"
 mv "$WORK/fc" "$FLEET_CONF_DIR/fleet.conf"
 for a in "--provider gemini --label x" "--provider claude --label .dot" "--provider claude --label a/b" \
          "--provider codex --label default" "--label x" "--provider claude"; do
   # shellcheck disable=SC2086
   bash "$FLEET" account add $a </dev/null >/dev/null 2>&1; rc=$?
-  [ "$rc" = 2 ] || fail "USAGE: '$a' should exit 2, got $rc"
+  [ "$rc" = 2 ] || st_fail "USAGE: '$a' should exit 2, got $rc"
 done
-[ ! -s "$WORK/cli.log" ] && [ "$(nreq)" = "$n0" ] || fail "READY/USAGE: a CLI ran or a request went out" "$(cat "$WORK/cli.log")"
+[ ! -s "$WORK/cli.log" ] && [ "$(nreq)" = "$n0" ] || st_fail "READY/USAGE: a CLI ran or a request went out" "$(cat "$WORK/cli.log")"
 gone READY
-ok "READY/USAGE: no token / no hub / bad args → exit 2 before any sign-in"
+st_pass "READY/USAGE: no token / no hub / bad args → exit 2 before any sign-in"
 
 printf 'PASS fleet-account-add-selftest (%d checks)\n' "$pass"

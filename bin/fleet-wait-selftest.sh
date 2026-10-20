@@ -30,12 +30,11 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
-command -v python3 >/dev/null 2>&1 || { printf 'fleet-wait-selftest: python3 absent — SKIP\n'; exit 0; }
+st_need python3
 [ -n "$REAL_TMUX" ] || { printf 'fleet-wait-selftest: tmux absent — SKIP\n'; exit 0; }
-CHECKS=0
-fail() { printf 'fleet-wait-selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
+st_tally count
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleetwait.XXXXXX")" || exit 2
 SOCK="$WORK/s"
@@ -45,12 +44,7 @@ tf() { "$REAL_TMUX" -S "$SOCK" "$@"; }
 trap 'tf kill-server 2>/dev/null; pkill -f "snapshot-fleetwait-$$" 2>/dev/null; for p in $(pgrep -f "$WORK/fbin/fleet-mcp.py" 2>/dev/null); do kill "$p" 2>/dev/null; done; rm -rf "$WORK"' EXIT
 trap 'exit 130' INT TERM HUP
 mkdir -p "$WORK/path" "$WORK/conf" "$WORK/proj/-w" "$WORK/sessions"
-cat > "$WORK/path/tmux" <<SH
-#!/bin/sh
-case "\${1:-}" in -L|-S) shift 2 ;; esac
-exec "$REAL_TMUX" -S "$SOCK" "\$@"
-SH
-chmod +x "$WORK/path/tmux"
+st_tmux_socket "$WORK/path" "$SOCK" strip
 PATH="$WORK/path:$PATH"; export PATH
 export FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_REAP_MIN_AGE=0
 export CLAUDE_PROJECTS_DIR="$WORK/proj" FLEET_CC_SESSIONS_DIR="$WORK/sessions"
@@ -98,7 +92,7 @@ SH
 chmod +x "$FAKE"
 
 SESS=fleet1370
-tf -f /dev/null new-session -d -s "$SESS" -n par "exec sleep 300" || fail "cannot start isolated tmux"
+tf -f /dev/null new-session -d -s "$SESS" -n par "exec sleep 300" || st_fail "cannot start isolated tmux"
 win() {   # <name> <@issue> [@origin] [command] → window id
   local w
   w=$(tf new-window -d -P -F '#{window_id}' -t "$SESS" -n "$1" "${4:-exec sleep 300}")
@@ -123,42 +117,42 @@ reap() { python3 "$BIN/fleet-reap-live.py" "$1" --socket-name "$SESS"; }
 K1=$(win kid1 101 issue-100)
 tf set-window-option -t "$K1" @claude_state working
 stop "$PAR"
-eq "A: a parent with a working child Stops looping" looping "$(opt "$PAR" @claude_state)"
-eq "A: …and says why" children "$(opt "$PAR" @claude_wait)"
+st_eq "A: a parent with a working child Stops looping" looping "$(opt "$PAR" @claude_state)"
+st_eq "A: …and says why" children "$(opt "$PAR" @claude_wait)"
 out=$(fleet_window_waiting_children "$SESS" "$PAR"); rc=$?
-eq "A: fleet_window_waiting_children → k/N" "0 0/1" "$rc $out"
+st_eq "A: fleet_window_waiting_children → k/N" "0 0/1" "$rc $out"
 tf set-window-option -t "$PAR" @claude_state 'done'      # stamped by anyone who never asked
 out=$(reap "$PAR"); rc=$?
-eq "A: reap-live retains a waiting parent over a done stamp" "1 retained:children" "$rc $out"
+st_eq "A: reap-live retains a waiting parent over a done stamp" "1 retained:children" "$rc $out"
 # a grandchild is part of the subtree (the dash's k/N counts every level)
 tf set-window-option -t "$K1" @claude_state 'done'
 K2=$(win kid2 102 issue-101)
 tf set-window-option -t "$K2" @claude_state needs
 out=$(fleet_window_waiting_children "$SESS" "$PAR"); rc=$?
-eq "A: an unfinished grandchild keeps the parent waiting" "0 1/2" "$rc $out"
+st_eq "A: an unfinished grandchild keeps the parent waiting" "0 1/2" "$rc $out"
 # a `done` child whose Loop is still pending is not finished either (#1331)
 tf set-window-option -t "$K2" @claude_state 'done'
 tf set-window-option -t "$K2" @loop "kind=wakeup next=$(( $(date +%s) + 900 )) ttl=900"
 out=$(fleet_window_waiting_children "$SESS" "$PAR"); rc=$?
-eq "A: a done child with a live @loop is unfinished" "0 1/2" "$rc $out"
+st_eq "A: a done child with a live @loop is unfinished" "0 1/2" "$rc $out"
 # the mod's own report (`--via mod done`) takes the same decision
 stop "$PAR" '' '--via mod'
-eq "A: the mod's done report also stamps looping" "looping children" "$(opt "$PAR" @claude_state) $(opt "$PAR" @claude_wait)"
+st_eq "A: the mod's done report also stamps looping" "looping children" "$(opt "$PAR" @claude_state) $(opt "$PAR" @claude_wait)"
 tf set-window-option -u -t "$K2" @loop
 stop "$PAR"
-eq "A: every child finished → done" 'done' "$(opt "$PAR" @claude_state)"
-hasopt "$PAR" @claude_wait && fail "A: a lapsed reason must be removed, not left behind" "$(tf show-options -w -t "$PAR")"
+st_eq "A: every child finished → done" 'done' "$(opt "$PAR" @claude_state)"
+hasopt "$PAR" @claude_wait && st_fail "A: a lapsed reason must be removed, not left behind" "$(tf show-options -w -t "$PAR")"
 CHECKS=$((CHECKS+1))
 out=$(fleet_window_waiting_children "$SESS" "$PAR"); rc=$?
-eq "A: …and the helper agrees" "1 " "$rc $out"
+st_eq "A: …and the helper agrees" "1 " "$rc $out"
 out=$(reap "$PAR"); rc=$?
-case "$out" in retained:*) fail "A: a parent with all children finished must not be retained" "$out" ;; esac
+case "$out" in retained:*) st_fail "A: a parent with all children finished must not be retained" "$out" ;; esac
 CHECKS=$((CHECKS+1))
 # a reaped child leaves the count; its orphaned grandchild counts toward nobody
 tf kill-window -t "$K1"
 tf set-window-option -t "$K2" @claude_state working
 out=$(fleet_window_waiting_children "$SESS" "$PAR"); rc=$?
-eq "A: a child's reaped window leaves the count (its orphan counts toward nobody)" "1 " "$rc $out"
+st_eq "A: a child's reaped window leaves the count (its orphan counts toward nobody)" "1 " "$rc $out"
 tf kill-window -t "$K2"
 # a scratch parent keys off its worktree, like the dash
 mkdir -p "$WORK/r-scratch-7"
@@ -167,7 +161,7 @@ tf set-window-option -t "$SCR" @worktree "$WORK/r-scratch-7"
 K3=$(win kid3 103 scratch-7)
 tf set-window-option -t "$K3" @claude_state looping
 out=$(fleet_window_waiting_children "$SESS" "$SCR"); rc=$?
-eq "A: a scratch parent finds its children by scratch key" "0 0/1" "$rc $out"
+st_eq "A: a scratch parent finds its children by scratch key" "0 0/1" "$rc $out"
 tf kill-window -t "$K3"; tf kill-window -t "$SCR"
 
 # --- B. bg ----------------------------------------------------------------------------
@@ -179,18 +173,18 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 stop "$BGW"
-eq "B: a Bash-tool job under the agent → looping + bg" "looping bg" "$(opt "$BGW" @claude_state) $(opt "$BGW" @claude_wait)"
+st_eq "B: a Bash-tool job under the agent → looping + bg" "looping bg" "$(opt "$BGW" @claude_state) $(opt "$BGW" @claude_wait)"
 tf set-window-option -t "$BGW" @claude_state 'done'
 out=$(reap "$BGW"); rc=$?
-eq "B: reap-live retains it" "1 retained:bg" "$rc $out"
+st_eq "B: reap-live retains it" "1 retained:bg" "$rc $out"
 stop "$IDW"
-eq "B: an agent with no tool shell under it → done" 'done' "$(opt "$IDW" @claude_state)"
-hasopt "$IDW" @claude_wait && fail "B: no reason, no option" "$(tf show-options -w -t "$IDW")"
+st_eq "B: an agent with no tool shell under it → done" 'done' "$(opt "$IDW" @claude_state)"
+hasopt "$IDW" @claude_wait && st_fail "B: no reason, no option" "$(tf show-options -w -t "$IDW")"
 CHECKS=$((CHECKS+1))
 pkill -f "snapshot-fleetwait-$$" 2>/dev/null
 for _ in $(seq 1 50); do pgrep -f "snapshot-fleetwait-$$" >/dev/null 2>&1 || break; sleep 0.1; done
 stop "$BGW"
-eq "B: the job ended → the next Stop is done" 'done' "$(opt "$BGW" @claude_state)"
+st_eq "B: the job ended → the next Stop is done" 'done' "$(opt "$BGW" @claude_state)"
 tf kill-window -t "$BGW"; tf kill-window -t "$IDW"
 
 # --- C. backfill ----------------------------------------------------------------------
@@ -206,12 +200,12 @@ T1="$WORK/proj/-w/t1.jsonl"; : > "$T1"
 tr_wake "$T1" $((NOW - 600)) '{"delaySeconds":1800,"prompt":"/loop check"}'
 stop "$LW" "{\"hook_event_name\":\"Stop\",\"transcript_path\":\"$T1\"}"
 case "$(opt "$LW" @loop)" in "kind=wakeup next=$((NOW + 1200)) ttl=1800") CHECKS=$((CHECKS+1)) ;;
-  *) fail "C: a pending pre-hook wakeup must be backfilled" "$(opt "$LW" @loop)" ;; esac
-eq "C: …and the Stop stamps looping + loop" "looping loop" "$(opt "$LW" @claude_state) $(opt "$LW" @claude_wait)"
+  *) st_fail "C: a pending pre-hook wakeup must be backfilled" "$(opt "$LW" @loop)" ;; esac
+st_eq "C: …and the Stop stamps looping + loop" "looping loop" "$(opt "$LW" @claude_state) $(opt "$LW" @claude_wait)"
 # only-add: an existing @loop is never rewritten from the transcript
 tf set-window-option -t "$LW" @loop "kind=cron id=keep01@$((NOW + 999))"
 stop "$LW" "{\"transcript_path\":\"$T1\"}"
-eq "C: an existing @loop is left as it is" "kind=cron id=keep01@$((NOW + 999))" "$(opt "$LW" @loop)"
+st_eq "C: an existing @loop is left as it is" "kind=cron id=keep01@$((NOW + 999))" "$(opt "$LW" @loop)"
 tf kill-window -t "$LW"
 for case_ in expired stop deleted mod subagent error; do
   W=$(win "c-$case_" 121)
@@ -232,8 +226,8 @@ for case_ in expired stop deleted mod subagent error; do
              printf '{"timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"e1","is_error":true,"content":"no"}]}}\n' "$(iso $((NOW-60)))" >> "$T" ;;
   esac
   stop "$W" "{\"transcript_path\":\"$T\"}"
-  eq "C: $case_ → no @loop written" "" "$(opt "$W" @loop)"
-  eq "C: $case_ → done" 'done' "$(opt "$W" @claude_state)"
+  st_eq "C: $case_ → no @loop written" "" "$(opt "$W" @loop)"
+  st_eq "C: $case_ → done" 'done' "$(opt "$W" @claude_state)"
   tf kill-window -t "$W"
 done
 # a cron job still alive is marked; the CLI says what it did
@@ -242,11 +236,11 @@ T="$WORK/proj/-w/c-cron.jsonl"; : > "$T"
 printf '{"timestamp":"%s","message":{"content":[{"type":"tool_use","id":"c1","name":"CronCreate","input":{"cron":"7 * * * *","prompt":"x"}}]}}\n{"timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"c1","content":"Scheduled recurring task ab12cd34 (7 * * * *)."}]}}\n' \
   "$(iso $((NOW-900)))" "$(iso $((NOW-900)))" >> "$T"
 out=$(python3 "$BIN/fleet_loop_mark.py" backfill "$W" --transcript "$T" --socket-name "$SESS"); rc=$?
-case "$rc $out" in "0 marked kind=cron id=ab12cd34@"*) CHECKS=$((CHECKS+1)) ;; *) fail "C: a live CronCreate is backfilled" "$rc $out" ;; esac
+case "$rc $out" in "0 marked kind=cron id=ab12cd34@"*) CHECKS=$((CHECKS+1)) ;; *) st_fail "C: a live CronCreate is backfilled" "$rc $out" ;; esac
 out=$(python3 "$BIN/fleet_loop_mark.py" backfill "$W" --transcript "$T" --socket-name "$SESS"); rc=$?
-eq "C: a second backfill is a no-op" "1 skip has-loop" "$rc $out"
+st_eq "C: a second backfill is a no-op" "1 skip has-loop" "$rc $out"
 # a torn first line (a tail read starts mid-line) is skipped, not fatal
-python3 - "$BIN" "$NOW" <<'PY' || fail "C: the tail reader (see traceback above)"
+python3 - "$BIN" "$NOW" <<'PY' || st_fail "C: the tail reader (see traceback above)"
 import json, runpy, sys, tempfile, os
 M = runpy.run_path(os.path.join(sys.argv[1], 'fleet_loop_mark.py'))
 now = int(sys.argv[2])
@@ -275,11 +269,11 @@ D3=$(win d3 132); tf set-window-option -t "$D3" @cc_agent codex
 tf new-window -d -t "$SESS" -n dash "exec sleep 300"
 out=$(python3 "$BIN/fleet_loop_mark.py" sweep --socket-name "$SESS"); rc=$?
 # par + d1 + d2 have no codex/panel exemption; par has no transcript → not counted
-eq "D: sweep marks the pending one of the two Claude windows it can read" "0 marked=1 windows=2" "$rc $out"
-case "$(opt "$D1" @loop)" in "kind=wakeup next="*) CHECKS=$((CHECKS+1)) ;; *) fail "D: d1 must be marked" "$(opt "$D1" @loop)" ;; esac
-eq "D: the lapsed one is not" "" "$(opt "$D2" @loop)"
+st_eq "D: sweep marks the pending one of the two Claude windows it can read" "0 marked=1 windows=2" "$rc $out"
+case "$(opt "$D1" @loop)" in "kind=wakeup next="*) CHECKS=$((CHECKS+1)) ;; *) st_fail "D: d1 must be marked" "$(opt "$D1" @loop)" ;; esac
+st_eq "D: the lapsed one is not" "" "$(opt "$D2" @loop)"
 out=$(python3 "$BIN/fleet_loop_mark.py" sweep --socket-name "$SESS"); rc=$?
-eq "D: a second sweep finds it already marked" "0 marked=0 windows=2" "$rc $out"
+st_eq "D: a second sweep finds it already marked" "0 marked=0 windows=2" "$rc $out"
 tf kill-window -t "$D1"; tf kill-window -t "$D2"; tf kill-window -t "$D3"; tf kill-window -t "$SESS:dash"
 
 # --- E. degenerate: nothing to wait on → today's Stop, byte for byte -------------------
@@ -288,12 +282,12 @@ stop "$E"
 got="$(tf show-options -w -t "$E" | grep '^@' | cut -d' ' -f1 | sort | tr '\n' ' ')$(opt "$E" @claude_state)/$(opt "$E" @claude_needs)"
 # …plus @claude_state_src (issue #2537): every state write says who made it.
 want="@claude_needs @claude_state @claude_state_src @claude_state_ts @issue done/"
-eq "E: the window carries exactly today's options" "$want" "$got"
+st_eq "E: the window carries exactly today's options" "$want" "$got"
 stop "$E" '{"hook_event_name":"Stop","transcript_path":"/nonexistent/x.jsonl"}'
 got="$(tf show-options -w -t "$E" | grep '^@' | cut -d' ' -f1 | sort | tr '\n' ' ')$(opt "$E" @claude_state)/$(opt "$E" @claude_needs)"
-eq "E: …with a payload too" "$want" "$got"
+st_eq "E: …with a payload too" "$want" "$got"
 out=$(fleet_window_wait "$SESS" "$E"); rc=$?
-eq "E: fleet_window_wait answers nothing" "1 " "$rc $out"
+st_eq "E: fleet_window_wait answers nothing" "1 " "$rc $out"
 
 # --- F. tool (issue #1880) -------------------------------------------------------------
 # Claude Code moves an MCP call past 120 s to a background task and the turn ends
@@ -307,38 +301,38 @@ for _ in $(seq 1 50); do
   [ -s "$WORK/tw.pid" ] && pgrep -f "fbin/fleet-mcp.py --probe" >/dev/null 2>&1 && break
   sleep 0.1
 done
-fleet_window_tool_busy "$SESS" "$TW"; eq "F: a server with a live call is busy" 0 $?
-fleet_window_tool_busy "$SESS" "$TI"; eq "F: an idle server is not a call" 1 $?
-fleet_window_tool_busy "$SESS" "$TP"; eq "F: a server probing a new version is not" 1 $?
-FLEET_TOOL_WAIT=0 fleet_window_tool_busy "$SESS" "$TW"; eq "F: FLEET_TOOL_WAIT=0 turns it off" 1 $?
+fleet_window_tool_busy "$SESS" "$TW"; st_eq "F: a server with a live call is busy" 0 $?
+fleet_window_tool_busy "$SESS" "$TI"; st_eq "F: an idle server is not a call" 1 $?
+fleet_window_tool_busy "$SESS" "$TP"; st_eq "F: a server probing a new version is not" 1 $?
+FLEET_TOOL_WAIT=0 fleet_window_tool_busy "$SESS" "$TW"; st_eq "F: FLEET_TOOL_WAIT=0 turns it off" 1 $?
 stop "$TW"
-eq "F: a fleet tool call in flight → looping + tool" "looping tool" "$(opt "$TW" @claude_state) $(opt "$TW" @claude_wait)"
+st_eq "F: a fleet tool call in flight → looping + tool" "looping tool" "$(opt "$TW" @claude_state) $(opt "$TW" @claude_wait)"
 out=$(fleet_child_busy "$SESS" "$TW"); rc=$?
-eq "F: fleet_child_busy says tool (gh never asked)" "0 tool" "$rc $out"
+st_eq "F: fleet_child_busy says tool (gh never asked)" "0 tool" "$rc $out"
 tf set-window-option -t "$TW" @claude_state 'done'
 out=$(reap "$TW"); rc=$?
-eq "F: reap-live retains it" "1 retained:tool" "$rc $out"
+st_eq "F: reap-live retains it" "1 retained:tool" "$rc $out"
 # the cfg-restart judge: a stale session stamped `done` by a writer that never asked
 # is still not reopened while its call runs
 mkdir -p "$WORK/conf/global"; printf 'claude fp-new x\n' > "$WORK/conf/global/agent-cfg.expected"
 tf set-window-option -t "$TW" @agent_cfg fp-old \; set-window-option -t "$TW" @claude_state_ts 1
 out=$(fleet_cfg_restart_why "$SESS" "$TW"); rc=$?
-eq "F: cfg-restart refuses: tool" "1 tool" "$rc $out"
+st_eq "F: cfg-restart refuses: tool" "1 tool" "$rc $out"
 rm -f "$WORK/conf/global/agent-cfg.expected"
 stop "$TI"
-eq "F: an idle server → done" 'done' "$(opt "$TI" @claude_state)"
-hasopt "$TI" @claude_wait && fail "F: no reason, no option" "$(tf show-options -w -t "$TI")"
+st_eq "F: an idle server → done" 'done' "$(opt "$TI" @claude_state)"
+hasopt "$TI" @claude_wait && st_fail "F: no reason, no option" "$(tf show-options -w -t "$TI")"
 CHECKS=$((CHECKS+1))
 stop "$TP"
-eq "F: a probing server → done" 'done' "$(opt "$TP" @claude_state)"
+st_eq "F: a probing server → done" 'done' "$(opt "$TP" @claude_state)"
 # the call returns: the re-ask (the sleep tick's fleet-wait-reeval.sh) writes done
 stop "$TW"
-eq "F: still in flight → still looping" "looping tool" "$(opt "$TW" @claude_state) $(opt "$TW" @claude_wait)"
+st_eq "F: still in flight → still looping" "looping tool" "$(opt "$TW" @claude_state) $(opt "$TW" @claude_wait)"
 kill "$(cat "$WORK/tw.pid")" 2>/dev/null
 for _ in $(seq 1 50); do kill -0 "$(cat "$WORK/tw.pid")" 2>/dev/null || break; sleep 0.1; done
 out=$(fleet_window_reeval "$SESS" "$TW"); rc=$?
-eq "F: the call returned → the re-ask writes done" "0 looping (tool) -> done" "$rc $out"
-hasopt "$TW" @claude_wait && fail "F: the reason goes with it" "$(tf show-options -w -t "$TW")"
+st_eq "F: the call returned → the re-ask writes done" "0 looping (tool) -> done" "$rc $out"
+hasopt "$TW" @claude_wait && st_fail "F: the reason goes with it" "$(tf show-options -w -t "$TW")"
 CHECKS=$((CHECKS+1))
 tf kill-window -t "$TW"; tf kill-window -t "$TI"; tf kill-window -t "$TP"
 

@@ -9,7 +9,7 @@
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'SKIP no python3'; exit 0; }
+st_need python3
 REAL_TMUX=''
 for t in $(type -ap tmux); do case "$t" in */tmux-shim/*) continue ;; esac; REAL_TMUX=$t; break; done
 [ -n "$REAL_TMUX" ] || { echo 'SKIP no tmux'; exit 0; }
@@ -17,7 +17,6 @@ WORK=$(mktemp -d /tmp/fcseed.XXXXXX) || exit 2
 SOCK="fcseed$$"
 cleanup() { "$REAL_TMUX" -L "$SOCK" kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
-fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 mkdir -p "$WORK/b"; ln -s "$REAL_TMUX" "$WORK/b/tmux"
 export PATH="$WORK/b:$PATH" FLEET_CONF_DIR="$WORK/conf"
 # A fake Codex composer: `› <prefill>` with the cursor at its end; a lone CR
@@ -61,21 +60,21 @@ turns() { [ -f "$WORK/$1.turns" ] && grep -c . "$WORK/$1.turns" || echo 0; }
 p=$(pane_for a 'hello OK'); sleep 0.5
 out=$(run "$p" 'hello OK')
 [ "$(turns a)" = 1 ] && grep -q '"hello OK"' "$WORK/a.turns" \
-  || fail 'A: a seed left in the composer was not submitted' "$out / $(cat "$WORK/a.turns" 2>/dev/null)"
-case "$out" in enters=1*) ;; *) fail "A: want exactly one Enter, got $out" ;; esac
+  || st_fail 'A: a seed left in the composer was not submitted' "$out / $(cat "$WORK/a.turns" 2>/dev/null)"
+case "$out" in enters=1*) ;; *) st_fail "A: want exactly one Enter, got $out" ;; esac
 st_ok 'A: seed left in the composer → one Enter, submitted'
 
 # B — already submitted (empty box): no key
 p=$(pane_for b ''); sleep 0.5
 out=$(run "$p" 'hello OK' 1.5)
-[ "$(turns b)" = 0 ] || fail 'B: an empty composer was typed into' "$out"
+[ "$(turns b)" = 0 ] || st_fail 'B: an empty composer was typed into' "$out"
 st_ok 'B: empty composer → nothing sent'
 
 # C — the window says working: never typed into
 p=$(pane_for c 'hello OK'); sleep 0.5
 nt set-option -w -t "$p" @claude_state working
 out=$(run "$p" 'hello OK')
-[ "$(turns c)" = 0 ] || fail 'C: a working window was typed into' "$out"
+[ "$(turns c)" = 0 ] || st_fail 'C: a working window was typed into' "$out"
 st_ok 'C: working window → nothing sent'
 
 # D — nothing to confirm: a multi-line seed, a resume, an option last
@@ -87,11 +86,11 @@ print(repr(m["seed_of"](["--remote", "unix://x", "-c", "a=b", "hello"])),
       m["SeedConfirm"]("%1", "line one\nline two").done)
 PY
 )
-[ "$d" = "'hello' '' '' True" ] || fail "D: seed_of / multi-line: $d"
+[ "$d" = "'hello' '' '' True" ] || st_fail "D: seed_of / multi-line: $d"
 st_ok 'D: seed_of picks the last word; resume / option / multi-line carry none'
 
 # E — the runtime consults it
 grep -q 'fleet-codex-seed.py' "$BIN/fleet-codex-runtime.py" && grep -q 'seeder.tick()' "$BIN/fleet-codex-runtime.py" \
-  || fail 'E: fleet-codex-runtime.py no longer runs the seed confirm'
+  || st_fail 'E: fleet-codex-runtime.py no longer runs the seed confirm'
 st_ok 'E: fleet-codex-runtime.py runs it beside the monitor'
 echo 'PASS fleet-codex-seed-selftest'

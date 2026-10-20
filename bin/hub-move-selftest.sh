@@ -37,14 +37,13 @@
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 MOVE="$BIN/fleet-move.sh"
 [ -f "$MOVE" ] && [ -f "$BIN/fleet-move-remote.sh" ] && [ -f "$BIN/fleet-control-read.sh" ] \
   || { printf 'selftest: fleet-move.sh / fleet-move-remote.sh / fleet-control-read.sh not found\n' >&2; exit 2; }
 
 CHECKS=0
-fail() { printf 'hub-move selftest FAIL: %s\n' "$1" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
 
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 if [ -z "$REAL_TMUX" ] || ! command -v perl >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1 \
@@ -226,22 +225,22 @@ sleep 1
 
 # ============================================================ 1: hub module off
 out=$(move b1 --via hub --to dsthost); rc=$?
-[ "$rc" -eq 2 ] || fail "--via hub with CCQUOTA_FLEET unset must refuse (2), got $rc: $out"
-printf '%s\n' "$out" | grep -q 'CCQUOTA_FLEET' || fail "the refusal must name CCQUOTA_FLEET: $out"
-[ -f "$WORK/hub/calls" ] && fail "the hub must not be asked while the module is off"
-win_alive TSRC "$w1" || fail "an off-module refusal must not touch the window"
-ok
+[ "$rc" -eq 2 ] || st_fail "--via hub with CCQUOTA_FLEET unset must refuse (2), got $rc: $out"
+printf '%s\n' "$out" | grep -q 'CCQUOTA_FLEET' || st_fail "the refusal must name CCQUOTA_FLEET: $out"
+[ -f "$WORK/hub/calls" ] && st_fail "the hub must not be asked while the module is off"
+win_alive TSRC "$w1" || st_fail "an off-module refusal must not touch the window"
+st_count
 export CCQUOTA_FLEET=1
 
 # ============================================================ 2: --dry-run
 out=$(move b1 --via hub --to dsthost --dry-run); rc=$?
-[ "$rc" -eq 0 ] || fail "dry-run should exit 0, got $rc: $out"
-printf '%s\n' "$out" | grep -q 'hub: REMOTE dsthost' || fail "dry-run must report the hub's plan: $out"
-grep -q '^plan ' "$WORK/hub/calls" || fail "dry-run must ask the hub's plan"
-grep -q '^send ' "$WORK/hub/calls" && fail "dry-run must never send"
-win_alive TSRC "$w1" || fail "dry-run must not touch the source window"
-git -C "$WORK/origin.git" show-ref --verify --quiet refs/heads/issue-42 && fail "dry-run must not push"
-ok
+[ "$rc" -eq 0 ] || st_fail "dry-run should exit 0, got $rc: $out"
+printf '%s\n' "$out" | grep -q 'hub: REMOTE dsthost' || st_fail "dry-run must report the hub's plan: $out"
+grep -q '^plan ' "$WORK/hub/calls" || st_fail "dry-run must ask the hub's plan"
+grep -q '^send ' "$WORK/hub/calls" && st_fail "dry-run must never send"
+win_alive TSRC "$w1" || st_fail "dry-run must not touch the source window"
+git -C "$WORK/origin.git" show-ref --verify --quiet refs/heads/issue-42 && st_fail "dry-run must not push"
+st_count
 
 # ============================================================ 3: refused:busy
 SID2="22222222-2222-4222-8222-222222222222"
@@ -250,33 +249,33 @@ w2=$(spawn_source b2 "$SID2" "$WT2" 43 working)
 sleep 1
 : > "$WORK/hub/calls"
 out=$(move b2 --via hub --to dsthost); rc=$?
-[ "$rc" -eq 11 ] || fail "a working session must refuse with 11, got $rc: $out"
-printf '%s\n' "$out" | grep -q 'refused:busy' || fail "must name refused:busy: $out"
-[ -s "$WORK/hub/calls" ] && fail "a busy refusal must not reach the hub: $(cat "$WORK/hub/calls")"
-win_alive TSRC "$w2" || fail "a busy session's window must be left alone"
-ok
+[ "$rc" -eq 11 ] || st_fail "a working session must refuse with 11, got $rc: $out"
+printf '%s\n' "$out" | grep -q 'refused:busy' || st_fail "must name refused:busy: $out"
+[ -s "$WORK/hub/calls" ] && st_fail "a busy refusal must not reach the hub: $(cat "$WORK/hub/calls")"
+win_alive TSRC "$w2" || st_fail "a busy session's window must be left alone"
+st_count
 
 # ============================================================ 4: the real move
 out=$(move b1 --via hub --to dsthost); rc=$?
-[ "$rc" -eq 0 ] || fail "the hub move should exit 0, got $rc: $out (target: $(cat "$WORK/hub/target.err" 2>/dev/null))"
-printf '%s\n' "$out" | grep -q 'moved through the hub' || fail "must report the hub move: $out"
-win_alive TSRC "$w1" && fail "the source window must close after a verified move"
-[ -f "$WORK/ssh-called" ] && fail "a hub move must never use ssh: $(cat "$WORK/ssh-called")"
-git -C "$WORK/origin.git" show-ref --verify --quiet refs/heads/issue-42 || fail "the branch was never pushed"
+[ "$rc" -eq 0 ] || st_fail "the hub move should exit 0, got $rc: $out (target: $(cat "$WORK/hub/target.err" 2>/dev/null))"
+printf '%s\n' "$out" | grep -q 'moved through the hub' || st_fail "must report the hub move: $out"
+win_alive TSRC "$w1" && st_fail "the source window must close after a verified move"
+[ -f "$WORK/ssh-called" ] && st_fail "a hub move must never use ssh: $(cat "$WORK/ssh-called")"
+git -C "$WORK/origin.git" show-ref --verify --quiet refs/heads/issue-42 || st_fail "the branch was never pushed"
 nw=$(TDST list-windows -F '#{window_id} #{@issue}' | awk '$2==42{print $1; exit}')
-[ -n "$nw" ] || fail "no target window carries @issue=42"
+[ -n "$nw" ] || st_fail "no target window carries @issue=42"
 dwt=$(TDST display-message -p -t "$nw" '#{@worktree}')
-[ "$(git -C "$dwt" branch --show-current)" = issue-42 ] || fail "target worktree is not on issue-42"
-[ "$(git -C "$dwt" rev-parse HEAD)" = "$(git -C "$WT1" rev-parse HEAD)" ] || fail "target branch tip differs from the source's"
-[ -f "$dwt/work-42.txt" ] || fail "target worktree is missing the moved commit"
-grep -q -- "--resume $SID1" "$WORK/dst-launched" || fail "the target must resume the SAME session id"
+[ "$(git -C "$dwt" branch --show-current)" = issue-42 ] || st_fail "target worktree is not on issue-42"
+[ "$(git -C "$dwt" rev-parse HEAD)" = "$(git -C "$WT1" rev-parse HEAD)" ] || st_fail "target branch tip differs from the source's"
+[ -f "$dwt/work-42.txt" ] || st_fail "target worktree is missing the moved commit"
+grep -q -- "--resume $SID1" "$WORK/dst-launched" || st_fail "the target must resume the SAME session id"
 denc="$WORK/dst-home/.claude/projects/$(printf '%s' "$dwt" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
-cmp -s "$PD1/$SID1.jsonl" "$denc/$SID1.jsonl" || fail "the transcript did not arrive byte-identical at $denc"
-[ -f "$denc/$SID1/note.txt" ] || fail "the transcript's sidecar dir did not travel"
-[ "$(cat "$WORK/hub/lease.42")" = "$DST_UUID/o-n:issue-42" ] || fail "the lease must now be the target's (keys carry the repo, #1939)" "$(cat "$WORK/hub/lease.42")"
-[ -z "$(ls "$WORK/dst-home/.config/claude-fleet/control/move-in" 2>/dev/null)" ] || fail "the bundle must be removed once used"
-grep -q '^send .* o/n [0-9a-f-]*/o-n:issue-42$' "$WORK/hub/calls" || fail "send must name the source worker_id"
-ok
+cmp -s "$PD1/$SID1.jsonl" "$denc/$SID1.jsonl" || st_fail "the transcript did not arrive byte-identical at $denc"
+[ -f "$denc/$SID1/note.txt" ] || st_fail "the transcript's sidecar dir did not travel"
+[ "$(cat "$WORK/hub/lease.42")" = "$DST_UUID/o-n:issue-42" ] || st_fail "the lease must now be the target's (keys carry the repo, #1939)" "$(cat "$WORK/hub/lease.42")"
+[ -z "$(ls "$WORK/dst-home/.config/claude-fleet/control/move-in" 2>/dev/null)" ] || st_fail "the bundle must be removed once used"
+grep -q '^send .* o/n [0-9a-f-]*/o-n:issue-42$' "$WORK/hub/calls" || st_fail "send must name the source worker_id"
+st_count
 
 # ============================================================ 5: a target that fails
 SID3="33333333-3333-4333-8333-333333333333"
@@ -287,12 +286,12 @@ git -C "$WORK/dst-home/projects/repo" worktree add -q -b issue-44 "$WORK/dst-hom
 w3=$(spawn_source b3 "$SID3" "$WT3" 44 'done')
 sleep 1
 out=$(move b3 --via hub --to dsthost); rc=$?
-[ "$rc" -eq 8 ] || fail "a failing target must be failed:target (8), got $rc: $out"
-printf '%s\n' "$out" | grep -q 'failed:target' || fail "must name failed:target: $out"
+[ "$rc" -eq 8 ] || st_fail "a failing target must be failed:target (8), got $rc: $out"
+printf '%s\n' "$out" | grep -q 'failed:target' || st_fail "must name failed:target: $out"
 src_wid=$(sed -n 's/^send .* o\/n \([^ ]*\)$/\1/p' "$WORK/hub/calls" | tail -n1)
-[ "$(cat "$WORK/hub/lease.44")" = "$src_wid" ] || fail "a failed move must give the lease back to the source ($src_wid)"
-TDST list-windows -F '#{@issue}' | grep -qx 44 && fail "a failed move must leave no window on the target"
-ok
+[ "$(cat "$WORK/hub/lease.44")" = "$src_wid" ] || st_fail "a failed move must give the lease back to the source ($src_wid)"
+TDST list-windows -F '#{@issue}' | grep -qx 44 && st_fail "a failed move must leave no window on the target"
+st_count
 
 # ============================================================ 6: --rebalance
 TSRC kill-window -t "$w3" 2>/dev/null
@@ -305,14 +304,14 @@ sleep 1
 : > "$WORK/hub/calls"
 printf 'REMOTE dsthost movable\tchose dsthost (score 0.9)\nLOCAL srchost\tchose srchost (score 0.8)\n' > "$WORK/hub/plan"
 out=$(move --rebalance --max 5); rc=$?
-[ "$rc" -eq 0 ] || fail "rebalance should exit 0, got $rc: $out"
-printf '%s\n' "$out" | grep -q 'rebalance moved 1' || fail "rebalance must move exactly one (then LOCAL): $out"
-win_alive TSRC "$w5" && fail "the longest-idle session must move first"
-win_alive TSRC "$w4" || fail "rebalance must stop at the hub's LOCAL answer"
-win_alive TSRC "$w2" || fail "rebalance must never touch a working session"
-TDST list-windows -F '#{@issue}' | grep -qx 46 || fail "the moved session must be on the target"
-grep -q '^plan --node auto ' "$WORK/hub/calls" || fail "rebalance must ask the hub with --node auto"
-ok
+[ "$rc" -eq 0 ] || st_fail "rebalance should exit 0, got $rc: $out"
+printf '%s\n' "$out" | grep -q 'rebalance moved 1' || st_fail "rebalance must move exactly one (then LOCAL): $out"
+win_alive TSRC "$w5" && st_fail "the longest-idle session must move first"
+win_alive TSRC "$w4" || st_fail "rebalance must stop at the hub's LOCAL answer"
+win_alive TSRC "$w2" || st_fail "rebalance must never touch a working session"
+TDST list-windows -F '#{@issue}' | grep -qx 46 || st_fail "the moved session must be on the target"
+grep -q '^plan --node auto ' "$WORK/hub/calls" || st_fail "rebalance must ask the hub with --node auto"
+st_count
 
 # ============================================================ 7: --rebalance skips a REFUSED one (#1513)
 # Three idle sessions; the hub refuses the longest-idle (no machine can take
@@ -326,14 +325,14 @@ sleep 1
 : > "$WORK/hub/calls"
 printf 'REFUSED NO_ELIGIBLE_NODE\tno node is eligible for this repo\n' > "$WORK/hub/plan"
 out=$(move --rebalance --max all); rc=$?
-[ "$rc" -eq 0 ] || fail "rebalance past a REFUSED should exit 0, got $rc: $out"
-printf '%s\n' "$out" | grep -q "↷ issue-47 ($w6): NO_ELIGIBLE_NODE — no node" || fail "the refused session must print a ↷ line: $out"
-printf '%s\n' "$out" | grep -q 'stopping' && fail "a REFUSED answer must not stop the rebalance: $out"
-printf '%s\n' "$out" | grep -q 'rebalance moved 2 · skipped 1 · left 1$' || fail "summary must read moved 2 · skipped 1 · left 1: $out"
-win_alive TSRC "$w6" || fail "the refused session must stay"
-win_alive TSRC "$w4" && fail "the second session must move"
-win_alive TSRC "$w7" && fail "the third session must move"
-[ "$(grep -c '^plan --node auto ' "$WORK/hub/calls")" -eq 3 ] || fail "the hub must be asked once per session: $(cat "$WORK/hub/calls")"
-ok
+[ "$rc" -eq 0 ] || st_fail "rebalance past a REFUSED should exit 0, got $rc: $out"
+printf '%s\n' "$out" | grep -q "↷ issue-47 ($w6): NO_ELIGIBLE_NODE — no node" || st_fail "the refused session must print a ↷ line: $out"
+printf '%s\n' "$out" | grep -q 'stopping' && st_fail "a REFUSED answer must not stop the rebalance: $out"
+printf '%s\n' "$out" | grep -q 'rebalance moved 2 · skipped 1 · left 1$' || st_fail "summary must read moved 2 · skipped 1 · left 1: $out"
+win_alive TSRC "$w6" || st_fail "the refused session must stay"
+win_alive TSRC "$w4" && st_fail "the second session must move"
+win_alive TSRC "$w7" && st_fail "the third session must move"
+[ "$(grep -c '^plan --node auto ' "$WORK/hub/calls")" -eq 3 ] || st_fail "the hub must be asked once per session: $(cat "$WORK/hub/calls")"
+st_count
 
 printf 'hub-move selftest: OK (%d checks)\n' "$CHECKS"

@@ -32,6 +32,7 @@
 #  12. a bare PATH (ssh / the peerlink: no tmux on it) still finds the window (#4822)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX=$(command -v tmux) || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 
@@ -52,8 +53,7 @@ export FLEET_CLAUDE_COMM='FLEETFAKECLAUDE'
 export FLEET_STOP_EXIT_WAIT=8 FLEET_STOP_CLOSE_WAIT=0
 unset TMUX TMUX_PANE
 
-FAIL=0
-fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
+st_tally
 tf() { "$REAL_TMUX" -L fleetS "$@"; }
 cleanup() { "$REAL_TMUX" -L fleetS kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
@@ -117,15 +117,15 @@ ledger_has() { [ -f "$FLEET_HISTORY_LEDGER" ] && awk -F'\t' -v k="$1" '$2==k{f=1
 w1=$(mkwin one "$SHELLED" 1); w2=$(mkwin two "$SHELLED" 2)
 agents_up "$w1" "$w2"
 p1=$(pid_of "$w1"); p2=$(pid_of "$w2")
-[ -n "$p1" ] && [ -n "$p2" ] || fail "fixture: fake agents not resolved under $w1/$w2" "p1=$p1 p2=$p2"
+[ -n "$p1" ] && [ -n "$p2" ] || st_miss "fixture: fake agents not resolved under $w1/$w2" "p1=$p1 p2=$p2"
 run_stop fleetS issue-1
-[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || fail "1: expected stopped:closed/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
-has_win "$w1" && fail "1: window $w1 still exists after the stop"
-has_win "$w2" || fail "1: neighbour window $w2 was closed"
-kill -0 "$p1" 2>/dev/null && fail "1: agent pid $p1 still alive after /exit"
-kill -0 "$p2" 2>/dev/null || fail "1: neighbour agent pid $p2 died"
-ledger_has 1 || fail "1: no closed-unlanded ledger row keyed 1" "$(cat "$FLEET_HISTORY_LEDGER" 2>/dev/null)"
-ledger_has 2 && fail "1: a row was recorded for the neighbour"
+[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || st_miss "1: expected stopped:closed/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w1" && st_miss "1: window $w1 still exists after the stop"
+has_win "$w2" || st_miss "1: neighbour window $w2 was closed"
+kill -0 "$p1" 2>/dev/null && st_miss "1: agent pid $p1 still alive after /exit"
+kill -0 "$p2" 2>/dev/null || st_miss "1: neighbour agent pid $p2 died"
+ledger_has 1 || st_miss "1: no closed-unlanded ledger row keyed 1" "$(cat "$FLEET_HISTORY_LEDGER" 2>/dev/null)"
+ledger_has 2 && st_miss "1: a row was recorded for the neighbour"
 
 # --- 6. an agent that will not exit — its 2 s wait runs beside legs 2–5 (it
 #        writes no row and touches no other window); read back before leg 7 ------
@@ -136,32 +136,32 @@ leg6=$!
 
 # --- 2. a key nobody holds -------------------------------------------------------
 run_stop fleetS issue-9
-[ "$rc" = 5 ] && [ "$out" = refused:not-found ] || fail "2: expected refused:not-found/5" "rc=$rc out=$out"
-has_win "$w2" || fail "2: a not-found stop closed a window"
+[ "$rc" = 5 ] && [ "$out" = refused:not-found ] || st_miss "2: expected refused:not-found/5" "rc=$rc out=$out"
+has_win "$w2" || st_miss "2: a not-found stop closed a window"
 
 # --- 3. a key two windows hold ---------------------------------------------------
 w3a=$(mkwin three-a "$SHELLED" 3); w3b=$(mkwin three-b "$SHELLED" 3); agents_up "$w3a" "$w3b"
 run_stop fleetS issue-3
-[ "$rc" = 6 ] && [ "$out" = refused:ambiguous ] || fail "3: expected refused:ambiguous/6" "rc=$rc out=$out"
-has_win "$w3a" && has_win "$w3b" || fail "3: an ambiguous stop closed a window"
+[ "$rc" = 6 ] && [ "$out" = refused:ambiguous ] || st_miss "3: expected refused:ambiguous/6" "rc=$rc out=$out"
+has_win "$w3a" && has_win "$w3b" || st_miss "3: an ambiguous stop closed a window"
 
 # --- 4. an old `sleeping` stamp refuses nothing since hibernation went (T548) -----
 w4=$(mkwin four "$SHELLED" 4 "" sleeping); agents_up "$w4"
 run_stop fleetS issue-4
-[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || fail "4: an old sleeping stamp must stop like any" "rc=$rc out=$out"
-has_win "$w4" && fail "4: window $w4 still exists after the stop"
+[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || st_miss "4: an old sleeping stamp must stop like any" "rc=$rc out=$out"
+has_win "$w4" && st_miss "4: window $w4 still exists after the stop"
 
 # --- 5. a window at a bare shell (no agent under the pane) -----------------------
 w5=$(mkwin five 'while :; do sleep 300; done' 5); sleep 0.3
 run_stop fleetS issue-5
-[ "$rc" = 0 ] && [ "$out" = stopped:shell ] || fail "5: expected stopped:shell/0" "rc=$rc out=$out"
-has_win "$w5" && fail "5: shell-only window $w5 survived the stop"
-ledger_has 5 || fail "5: no ledger row for the shell-only stop"
+[ "$rc" = 0 ] && [ "$out" = stopped:shell ] || st_miss "5: expected stopped:shell/0" "rc=$rc out=$out"
+has_win "$w5" && st_miss "5: shell-only window $w5 survived the stop"
+ledger_has 5 || st_miss "5: no ledger row for the shell-only stop"
 
 wait "$leg6"; out=$(cat "$WORK/out6"); rc=$(cat "$WORK/rc6")
-[ "$rc" = 7 ] && [ "$out" = failed:no-exit ] || fail "6: expected failed:no-exit/7" "rc=$rc out=$out"
-has_win "$w6" || fail "6: window of a still-running agent was closed"
-kill -0 "${p6:-0}" 2>/dev/null || fail "6: a stop that reported no-exit killed the agent"
+[ "$rc" = 7 ] && [ "$out" = failed:no-exit ] || st_miss "6: expected failed:no-exit/7" "rc=$rc out=$out"
+has_win "$w6" || st_miss "6: window of a still-running agent was closed"
+kill -0 "${p6:-0}" 2>/dev/null || st_miss "6: a stop that reported no-exit killed the agent"
 
 # --- 7. scratch key via @raw + @worktree (pane dies with the agent, as when a
 #        hook closed it: stopped:exit — or stopped:closed where tmux never noticed
@@ -172,12 +172,12 @@ agents_up "$w7" "$w8"
 bg_stop s7 env FLEET_STOP_CLOSE_WAIT=1 bash "$BIN/fleet-worker-stop.sh" fleetS scratch-7
 bg_stop s8 bash "$BIN/fleet-worker-stop.sh" fleetS issue-8
 bg_read s7
-case "$rc:$out" in 0:stopped:exit|0:stopped:closed) ;; *) fail "7: scratch key expected stopped:exit|closed/0" "rc=$rc out=$out err=$(cat "$WORK/s7.err")" ;; esac
-has_win "$w7" && fail "7: scratch window survived"
-ledger_has scratch-7 || fail "7: no ledger row keyed scratch-7" "$(cat "$FLEET_HISTORY_LEDGER" 2>/dev/null)"
+case "$rc:$out" in 0:stopped:exit|0:stopped:closed) ;; *) st_miss "7: scratch key expected stopped:exit|closed/0" "rc=$rc out=$out err=$(cat "$WORK/s7.err")" ;; esac
+has_win "$w7" && st_miss "7: scratch window survived"
+ledger_has scratch-7 || st_miss "7: no ledger row keyed scratch-7" "$(cat "$FLEET_HISTORY_LEDGER" 2>/dev/null)"
 bg_read s8
-[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || fail "7: codex expected stopped:closed/0" "rc=$rc out=$out"
-has_win "$w8" && fail "7: codex window survived"
+[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || st_miss "7: codex expected stopped:closed/0" "rc=$rc out=$out"
+has_win "$w8" && st_miss "7: codex window survived"
 
 # --- 8. usage: a window number / index is not a key ------------------------------
 refuse_all() {   # refuse_all <leg> <arg>… — each a usage refusal (2), run at once
@@ -188,11 +188,11 @@ refuse_all() {   # refuse_all <leg> <arg>… — each a usage refusal (2), run a
   done
   for p in $pids; do wait "$p"; done; i=0
   for bad in "$@"; do i=$((i + 1))
-    [ "$(cat "$WORK/u$i.rc")" = 2 ] || fail "$leg: '$bad' should be a usage refusal (2)" "rc=$(cat "$WORK/u$i.rc") out=$(cat "$WORK/u$i")"
+    [ "$(cat "$WORK/u$i.rc")" = 2 ] || st_miss "$leg: '$bad' should be a usage refusal (2)" "rc=$(cat "$WORK/u$i.rc") out=$(cat "$WORK/u$i")"
   done
 }
 refuse_all 8 "@12" "12" "issue-" "issue-x" "scratch-0"
-has_win "$w2" || fail "8: a usage refusal closed a window"
+has_win "$w2" || st_miss "8: a usage refusal closed a window"
 
 # --- 10. fid:<@fleet_id> (issue #1873) -------------------------------------------
 F1=11111111-1111-4111-8111-111111111111; F2=22222222-2222-4222-8222-222222222222
@@ -205,35 +205,35 @@ agents_up "$w10" "$w10n"
 p10=$(pid_of "$w10"); p10n=$(pid_of "$w10n")
 rows0=$(wc -l < "$FLEET_HISTORY_LEDGER" 2>/dev/null | tr -d ' ')
 run_stop fleetS "fid:$F1"
-[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || fail "10: no-repo by fid expected stopped:closed/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
-has_win "$w10" && fail "10: no-repo window survived its fid stop"
-kill -0 "${p10:-0}" 2>/dev/null && fail "10: no-repo agent still alive after /exit"
-has_win "$w10n" || fail "10: the other no-repo window was closed"
-kill -0 "${p10n:-0}" 2>/dev/null || fail "10: the other no-repo agent died"
+[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || st_miss "10: no-repo by fid expected stopped:closed/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w10" && st_miss "10: no-repo window survived its fid stop"
+kill -0 "${p10:-0}" 2>/dev/null && st_miss "10: no-repo agent still alive after /exit"
+has_win "$w10n" || st_miss "10: the other no-repo window was closed"
+kill -0 "${p10n:-0}" 2>/dev/null || st_miss "10: the other no-repo agent died"
 [ "$(wc -l < "$FLEET_HISTORY_LEDGER" 2>/dev/null | tr -d ' ')" = "$rows0" ] \
-  || fail "10: a no-repo stop wrote a ledger row" "$(tail -1 "$FLEET_HISTORY_LEDGER")"
+  || st_miss "10: a no-repo stop wrote a ledger row" "$(tail -1 "$FLEET_HISTORY_LEDGER")"
 run_stop fleetS "fid:$F3"
-[ "$rc" = 5 ] && [ "$out" = refused:not-found ] || fail "10: unknown fid expected refused:not-found/5" "rc=$rc out=$out"
+[ "$rc" = 5 ] && [ "$out" = refused:not-found ] || st_miss "10: unknown fid expected refused:not-found/5" "rc=$rc out=$out"
 refuse_all 10 "fid:" "fid:nope" "fid:AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA" "$F2" "daily-y"
-has_win "$w10n" || fail "10: a refused fid stop closed a window"
+has_win "$w10n" || st_miss "10: a refused fid stop closed a window"
 # two windows carrying one identity (a copy made by hand) — never a pick
 tf set-window-option -t "$w2" @fleet_id "$F2"
 run_stop fleetS "fid:$F2"
-[ "$rc" = 6 ] && [ "$out" = refused:ambiguous ] || fail "10: shared fid expected refused:ambiguous/6" "rc=$rc out=$out"
-has_win "$w10n" && has_win "$w2" || fail "10: an ambiguous fid stop closed a window"
+[ "$rc" = 6 ] && [ "$out" = refused:ambiguous ] || st_miss "10: shared fid expected refused:ambiguous/6" "rc=$rc out=$out"
+has_win "$w10n" && has_win "$w2" || st_miss "10: an ambiguous fid stop closed a window"
 tf set-window-option -u -t "$w2" @fleet_id
 # a keyed worker by fid: its row is keyed issue-<N>, exactly as a stop by key
 tf set-window-option -t "$w2" @fleet_id "$F4"
 run_stop fleetS "fid:$F4"
-[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || fail "10: worker by fid expected stopped:closed/0" "rc=$rc out=$out"
-has_win "$w2" && fail "10: worker window survived its fid stop"
-ledger_has 2 || fail "10: a worker stopped by fid recorded no row keyed 2"
+[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || st_miss "10: worker by fid expected stopped:closed/0" "rc=$rc out=$out"
+has_win "$w2" && st_miss "10: worker window survived its fid stop"
+ledger_has 2 || st_miss "10: a worker stopped by fid recorded no row keyed 2"
 # the hub never answers to an identity
 w10h=$(mkwin hubby 'while :; do sleep 300; done' -); tf set-window-option -t "$w10h" @hub 1
 tf set-window-option -t "$w10h" @fleet_id "$F3"
 run_stop fleetS "fid:$F3"
-[ "$rc" = 5 ] || fail "10: the hub answered to its fid" "rc=$rc out=$out"
-has_win "$w10h" || fail "10: a refused hub fid stop closed the window"
+[ "$rc" = 5 ] || st_miss "10: the hub answered to its fid" "rc=$rc out=$out"
+has_win "$w10h" || st_miss "10: a refused hub fid stop closed the window"
 
 # --- 11. dash-reap.sh on a no-repo row (issue #1873) -------------------------------
 #        Inside the fleet: bare tmux reaches the isolated server through $TMUX.
@@ -255,18 +255,18 @@ tf set-window-option -t "$w11d" @fleet_id "$F8"
 agents_up "$w11a" "$w11b" "$w11c"
 tf set-window-option -t "$w10n" @claude_state working
 reap "$w10n" --yes
-[ "$rc" = 3 ] && [ "$out" = skip:live ] || fail "11: a working no-repo row expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
-has_win "$w10n" || fail "11: a working no-repo row was closed"
+[ "$rc" = 3 ] && [ "$out" = skip:live ] || st_miss "11: a working no-repo row expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w10n" || st_miss "11: a working no-repo row was closed"
 # no state (issue #2505): a session that never took a turn
 tf set-window-option -u -t "$w11a" @claude_state 2>/dev/null; tf set-window-option -u -t "$w11b" @claude_state 2>/dev/null
 reap "$w11b" --yes
-[ "$rc" = 3 ] && [ "$out" = skip:live ] || fail "11: no state, an agent running expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
-has_win "$w11b" || fail "11: a no-state row with its agent was closed"
+[ "$rc" = 3 ] && [ "$out" = skip:live ] || st_miss "11: no state, an agent running expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w11b" || st_miss "11: a no-state row with its agent was closed"
 tf set-window-option -t "$w11c" @claude_state "done"
 tf set-window-option -t "$w11c" @agent_status '{"state":"blocked","kind":"permission","msg":"","app":"claude","ts":1}'
 reap "$w11c" --yes
-[ "$rc" = 3 ] && [ "$out" = skip:live ] || fail "11: 7501 blocked over a done stamp expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
-has_win "$w11c" || fail "11: a 7501-blocked row was closed"
+[ "$rc" = 3 ] && [ "$out" = skip:live ] || st_miss "11: 7501 blocked over a done stamp expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w11c" || st_miss "11: a 7501-blocked row was closed"
 # now the five that stop
 tf set-window-option -t "$w10n" @claude_state "done"
 tf set-window-option -t "$w11a" @test_identity 1
@@ -278,22 +278,22 @@ for w in w10n w11a w11b w11c w11d; do
   eval "bg_stop r_$w env TMUX=\"\$SPATH,1,0\" bash \"\$BIN/dash-reap.sh\" \"\$$w\" --yes"
 done
 bg_read r_w10n
-[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: a done no-repo row expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w10n.err")"
-has_win "$w10n" && fail "11: the done no-repo row survived ⌃x"
-kill -0 "${p10n:-0}" 2>/dev/null && fail "11: the reaped no-repo agent is still alive (not a graceful /exit)"
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || st_miss "11: a done no-repo row expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w10n.err")"
+has_win "$w10n" && st_miss "11: the done no-repo row survived ⌃x"
+kill -0 "${p10n:-0}" 2>/dev/null && st_miss "11: the reaped no-repo agent is still alive (not a graceful /exit)"
 bg_read r_w11a
-[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: a test identity's no-state row expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w11a.err")"
-has_win "$w11a" && fail "11: the test identity's row survived ⌃x"
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || st_miss "11: a test identity's no-state row expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w11a.err")"
+has_win "$w11a" && st_miss "11: the test identity's row survived ⌃x"
 bg_read r_w11b
-[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: no state, no agent expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w11b.err")"
-has_win "$w11b" && fail "11: the no-agent row survived ⌃x"
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || st_miss "11: no state, no agent expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w11b.err")"
+has_win "$w11b" && st_miss "11: the no-agent row survived ⌃x"
 bg_read r_w11c
-[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: 7501 done over a working stamp expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w11c.err")"
-has_win "$w11c" && fail "11: the 7501-done row survived ⌃x"
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || st_miss "11: 7501 done over a working stamp expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w11c.err")"
+has_win "$w11c" && st_miss "11: the 7501-done row survived ⌃x"
 # no word, no stamp, no agent process (an agent that never started): exited
 bg_read r_w11d
-[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: no word, no state, no agent process expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w11d.err")"
-has_win "$w11d" && fail "11: the agentless row survived ⌃x"
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || st_miss "11: no word, no state, no agent process expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/r_w11d.err")"
+has_win "$w11d" && st_miss "11: the agentless row survived ⌃x"
 
 # --- 12. a bare PATH (issue #4822): a stop sent over ssh / the peerlink runs with
 #         `/usr/bin:/bin` — no tmux on it — and every key answered not-found while
@@ -314,8 +314,8 @@ out=$(env -i HOME="$HOME" PATH="$WORK/pbin" FLEET_TOOL_DIRS="$WORK/tbin" TMUX_TM
         FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_HISTORY_LEDGER="$FLEET_HISTORY_LEDGER" \
         CLAUDE_PROJECTS_DIR="$CLAUDE_PROJECTS_DIR" FLEET_CC_SESSIONS_DIR="$FLEET_CC_SESSIONS_DIR" \
         "$WORK/pbin/bash" "$BIN/fleet-worker-stop.sh" fleetS issue-12 2>"$WORK/err"); rc=$?
-[ "$rc" = 0 ] && [ "$out" = stopped:shell ] || fail "12: a bare-PATH stop expected stopped:shell/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
-has_win "$w12" && fail "12: the window survived a bare-PATH stop"
+[ "$rc" = 0 ] && [ "$out" = stopped:shell ] || st_miss "12: a bare-PATH stop expected stopped:shell/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w12" && st_miss "12: the window survived a bare-PATH stop"
 
 # --- 9. a multi-repo fleet (issue #1018): `<repo>:issue-N` stops THAT repo's -----
 #        window only; a bare key two repos hold is ambiguous; an unhosted repo is
@@ -325,16 +325,15 @@ printf 'FLEET_REPO="acme/other"\n' > "$FLEET_CONF_DIR/fleets/fleetS/repos/acme-o
 w9a=$(mkwin nine-a "$SHELLED" 9); w9b=$(mkwin nine-b "$SHELLED" 9); agents_up "$w9a" "$w9b"
 tf set-window-option -t "$w9a" @repo acme/fleetS; tf set-window-option -t "$w9b" @repo acme/other
 run_stop fleetS issue-9
-[ "$rc" = 6 ] && [ "$out" = refused:ambiguous ] || fail "9: bare key held in two repos expected refused:ambiguous/6" "rc=$rc out=$out"
+[ "$rc" = 6 ] && [ "$out" = refused:ambiguous ] || st_miss "9: bare key held in two repos expected refused:ambiguous/6" "rc=$rc out=$out"
 run_stop fleetS nope:issue-9
-[ "$rc" = 2 ] || fail "9: an unhosted repo prefix should be a usage refusal (2)" "rc=$rc out=$out"
+[ "$rc" = 2 ] || st_miss "9: an unhosted repo prefix should be a usage refusal (2)" "rc=$rc out=$out"
 run_stop fleetS acme-other:issue-9
-[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || fail "9: expected stopped:closed/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
-has_win "$w9b" && fail "9: acme/other's window survived its stop"
-has_win "$w9a" || fail "9: acme/fleetS's issue-9 window was closed by acme/other's stop"
+[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || st_miss "9: expected stopped:closed/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w9b" && st_miss "9: acme/other's window survived its stop"
+has_win "$w9a" || st_miss "9: acme/fleetS's issue-9 window was closed by acme/other's stop"
 run_stop fleetS acme/fleetS:issue-9
-[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || fail "9: owner/name prefix expected stopped:closed/0" "rc=$rc out=$out"
-has_win "$w9a" && fail "9: acme/fleetS's window survived its stop"
+[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || st_miss "9: owner/name prefix expected stopped:closed/0" "rc=$rc out=$out"
+has_win "$w9a" && st_miss "9: acme/fleetS's window survived its stop"
 
-if [ "$FAIL" = 0 ]; then echo "fleet-worker-stop-selftest: OK"; exit 0; fi
-echo "fleet-worker-stop-selftest: $FAIL failure(s)"; exit 1
+st_done

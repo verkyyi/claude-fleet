@@ -37,21 +37,19 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 LIB="$BIN/fleet-lib.sh"
 [ -f "$LIB" ] || { printf 'selftest: %s not found\n' "$LIB" >&2; exit 2; }
 # shellcheck source=/dev/null
 . "$LIB" 2>/dev/null || { printf 'selftest: cannot source %s\n' "$LIB" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/win-name-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/win-name-selftest.XXXXXX"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 eq() {  # <desc> <expected> <actual>
   CHECKS=$((CHECKS + 1))
-  [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"
+  [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"
 }
-ok() { CHECKS=$((CHECKS + 1)); }
 
 # ===== A: a CJK title names the window after the WORK, not its number =========
 # The four titles from the #579 report (24globex-monorepo, 2026-09-13) — all four
@@ -91,20 +89,20 @@ cut_out="$(fleet_win_name "$LONG")"
 eq "C a long CJK title is cut to 16 glyphs (32 columns)" "很长的中文标题需要被截断到合理的" "$cut_out"
 fleet_clip_display 999 "$cut_out"
 CHECKS=$((CHECKS + 1))
-[ "${clip_w:-0}" -le 32 ] || fail "C the cut name must fit 32 columns, measured ${clip_w:-?}"
+[ "${clip_w:-0}" -le 32 ] || st_fail "C the cut name must fit 32 columns, measured ${clip_w:-?}"
 eq "C …and uses the whole budget"  "32" "$clip_w"
 # The real tofu guard: a byte/codepoint cut would leave a truncated UTF-8 sequence.
 CHECKS=$((CHECKS + 1))
 printf '%s' "$cut_out" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
-  || fail "C the cut name is not valid UTF-8 — a glyph was split"
+  || st_fail "C the cut name is not valid UTF-8 — a glyph was split"
 # Mixed ASCII+CJK: the budget is columns, so the cut lands wherever 32 columns do.
 mix_out="$(fleet_win_name 'gateway 统一模型路由与配额编排的长标题')"
 fleet_clip_display 999 "$mix_out"
 CHECKS=$((CHECKS + 1))
-[ "${clip_w:-0}" -le 32 ] || fail "C mixed ASCII+CJK must fit 32 columns, measured ${clip_w:-?}"
+[ "${clip_w:-0}" -le 32 ] || st_fail "C mixed ASCII+CJK must fit 32 columns, measured ${clip_w:-?}"
 CHECKS=$((CHECKS + 1))
 printf '%s' "$mix_out" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
-  || fail "C the mixed cut name is not valid UTF-8 — a glyph was split"
+  || st_fail "C the mixed cut name is not valid UTF-8 — a glyph was split"
 
 # ===== D: emoji / punctuation only still washes out to the slug fallback ======
 # Emoji and symbols are NOT letters, so opening the character set to Unicode must
@@ -119,7 +117,7 @@ eq "D no argument at all → empty" "" "$(fleet_win_name)"
 bad_out="$(fleet_win_name $'ab\xffcd')"
 CHECKS=$((CHECKS + 1))
 printf '%s' "$bad_out" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
-  || fail "D invalid UTF-8 leaked raw bytes into the name: [$bad_out]"
+  || st_fail "D invalid UTF-8 leaked raw bytes into the name: [$bad_out]"
 
 # ===== E: reserved panel names are never derived ==============================
 # dash/plan/backlog are how fleet_session_count, fleet_session_count_for and the
@@ -181,11 +179,11 @@ eq "H exactly one fleet_win_name definition" "1" "$defs"
 for f in dash-issue-session.sh dash-restore-session.sh fleet-history.sh; do
   CHECKS=$((CHECKS + 1))
   grep -q 'fleet_win_name\|fleet_issue_win_name' "$BIN/$f" \
-    || fail "H $f no longer derives its window name through fleet_win_name"
+    || st_fail "H $f no longer derives its window name through fleet_win_name"
 done
 stray=$(grep -rln "tr -c 'a-z0-9" "$BIN" --include='*.sh' | grep -v -e 'fleet-lib.sh$' -e 'win-name-selftest.sh$' || true)
 CHECKS=$((CHECKS + 1))
-[ -z "$stray" ] || fail "H a second byte-wise slugify appeared in: $stray"
+[ -z "$stray" ] || st_fail "H a second byte-wise slugify appeared in: $stray"
 
 # ---- I. EPIC members wear their batch's 简称 (issue #2355) -------------------
 epic_theme=''   # fleet_epic_theme_v's OUTPUT global
@@ -208,7 +206,7 @@ eq "I member name: 简称·title" "托管·一个节点程序服务" \
    "$(fleet_member_win_name '一个节点程序服务' '托管')"
 long='一个节点程序服务机器上所有账号的事情都由它来管而且标题非常非常长'
 got=$(fleet_member_win_name "$long" '托管')
-case "$got" in 托管·*) ok ;; *) fail "I member name: a long title must not cut the 简称 (got '$got')" ;; esac
+case "$got" in 托管·*) st_count ;; *) st_fail "I member name: a long title must not cut the 简称 (got '$got')" ;; esac
 eq "I member name: still within 32 columns" "31" "$(printf '%s' "$got" | perl -CS -ne 'my $w=0; for (split //) { $w += (ord($_) >= 0x1100 ? 2 : 1) } print $w')"
 eq "I member name: no 简称 ⇒ fleet_win_name byte for byte" "$(fleet_win_name "$long")" "$(fleet_member_win_name "$long" '')"
 eq "I member name: an ASCII non-EPIC title unchanged" "fix-the-widget-cache" "$(fleet_member_win_name 'Fix The Widget Cache' '')"

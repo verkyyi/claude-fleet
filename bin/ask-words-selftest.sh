@@ -22,7 +22,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'ask-words selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 REAL_TMUX=$(command -v tmux || true)
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/askwords-selftest.XXXXXX")" || exit 2
 S="askw$$"
@@ -38,8 +38,7 @@ printf 'FLEET_REPO=acme/app\n' > "$WORK/conf/fleets/$S/conf"
 printf '%s\tacme-app\tacme/app\n' "$S" > "$G/sessmap"
 US=$'\x1f'
 
-CHECKS=0
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
+st_tally count
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
 # fld <rows> <label> <k>: field k of the row labelled <label>, `-` when it has fewer
 fld() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" -v k="$3" '$4 == n { print (NF >= k ? $k : "-") }'; }
@@ -74,15 +73,15 @@ PY
   stamp asking "state=blocked:app=claude-code:kind=question:msg=$B64"
   stamp login "state=blocked:app=claude-code:kind=auth:msg=$(printf '/login' | base64)"
   stamp busy "state=working:app=claude-code"
-  eq "A: the window reads needs/ask with the question" "needs|ask|$Q" \
+  st_eq "A: the window reads needs/ask with the question" "needs|ask|$Q" \
      "$(T display-message -p -t "=$S:asking" '#{@claude_state}|#{@claude_needs}|#{@claude_needs_detail}')"
-  eq "A: kind=auth stamps its own subtype" "needs|auth" "$(T display-message -p -t "=$S:login" '#{@claude_state}|#{@claude_needs}')"
+  st_eq "A: kind=auth stamps its own subtype" "needs|auth" "$(T display-message -p -t "=$S:login" '#{@claude_state}|#{@claude_needs}')"
   SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
-  eq "A: the asking row's field 17 is its kind" "question" "$(fld "$SIDE" asking 17)"
-  eq "A: …field 18 its words" "$Q" "$(fld "$SIDE" asking 18)"
-  eq "A: a login request says auth" "auth|/login" "$(fld "$SIDE" login 17)|$(fld "$SIDE" login 18)"
-  eq "A: …in words on field 8 (the kind's label)" "待登录" "$(fld "$SIDE" login 8)"
-  eq "A: a working row has no field 17 (byte for byte as before)" "-" "$(fld "$SIDE" busy 17)"
+  st_eq "A: the asking row's field 17 is its kind" "question" "$(fld "$SIDE" asking 17)"
+  st_eq "A: …field 18 its words" "$Q" "$(fld "$SIDE" asking 18)"
+  st_eq "A: a login request says auth" "auth|/login" "$(fld "$SIDE" login 17)|$(fld "$SIDE" login 18)"
+  st_eq "A: …in words on field 8 (the kind's label)" "待登录" "$(fld "$SIDE" login 8)"
+  st_eq "A: a working row has no field 17 (byte for byte as before)" "-" "$(fld "$SIDE" busy 17)"
 else
   echo 'ask-words selftest: tmux absent — leg A skipped'
 fi
@@ -113,15 +112,15 @@ export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_
 bash "$HUBS" --refresh 2>"$WORK/err" || st_fail "C: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
 crow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { print NF "|" $21 "|" $27 "|" $28 }'; }
-eq "C: the agent's own report wins over the hook's words" "28||question|程序自报的话" "$(crow issue-31)"
-eq "C: no report — the needs subtype + detail" "28||permission|Bash: git push" "$(crow issue-32)"
-eq "C: a row not in needs carries no words" "16|||" "$(crow issue-33)"
-eq "C: beside a measured bus, the bus is kept" "28|40|question|哪一个？" "$(crow issue-34)"
+st_eq "C: the agent's own report wins over the hook's words" "28||question|程序自报的话" "$(crow issue-31)"
+st_eq "C: no report — the needs subtype + detail" "28||permission|Bash: git push" "$(crow issue-32)"
+st_eq "C: a row not in needs carries no words" "16|||" "$(crow issue-33)"
+st_eq "C: beside a measured bus, the bus is kept" "28|40|question|哪一个？" "$(crow issue-34)"
 if [ -n "$REAL_TMUX" ]; then
   NOW=$(date +%s); printf '%s\n' "$NOW" > "$G/hub_ok"
   S2=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
-  eq "C: a remote needs row's sidebar fields 17-18" "permission|Bash: git push" "$(fld "$S2" RP 17)|$(fld "$S2" RP 18)"
-  eq "C: a remote working row has none" "-" "$(fld "$S2" RW 17)"
+  st_eq "C: a remote needs row's sidebar fields 17-18" "permission|Bash: git push" "$(fld "$S2" RP 17)|$(fld "$S2" RP 18)"
+  st_eq "C: a remote working row has none" "-" "$(fld "$S2" RW 17)"
 fi
 
 printf 'selftest PASS: ask-words — 「在问你」带原话 on the sidebar and the hub cache (%s checks, #2538)\n' "$CHECKS"

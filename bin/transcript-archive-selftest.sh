@@ -20,15 +20,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 TA="$BIN/fleet-transcript-archive.sh"
 [ -x "$TA" ] || { echo "selftest: $TA not found" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/transcript-archive-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/transcript-archive-selftest.XXXXXX"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '%s\n' "$2" >&2; exit 1; }
-ok() { CHECKS=$((CHECKS + 1)); }
 
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" CLAUDE_PROJECTS_DIR="$WORK/projects"
 export FLEET_HISTORY_LEDGER="$WORK/ledger.tsv" FLEET_CC_SESSIONS_DIR="$WORK/home/.claude/sessions"
@@ -94,63 +92,63 @@ ARCH="$FLEET_CONF_DIR/transcript-archive"
 # ---- referenced set ----------------------------------------------------------
 refs=$("$TA" --referenced)
 for n in 2 3 4 165 6 12; do
-  printf '%s\n' "$refs" | grep -qx "$(id $n)" || fail "--referenced is missing $(id $n)" "$refs"; ok
+  printf '%s\n' "$refs" | grep -qx "$(id $n)" || st_fail "--referenced is missing $(id $n)" "$refs"; st_count
 done
 
 # ---- C. dry run moves nothing ------------------------------------------------
-out=$("$TA" --run --dry-run) || fail "dry run exit $?" "$out"
-case "$out" in *"would-archive 3 (stale 1, helper 2)"*) ok ;; *) fail "dry run summary" "$out" ;; esac
-present "$D" "$(id 1)" || fail "dry run moved a file"; ok
-[ ! -d "$ARCH" ] || [ -z "$(find "$ARCH" -name '*.tar.gz')" ] || fail "dry run wrote a tarball"; ok
+out=$("$TA" --run --dry-run) || st_fail "dry run exit $?" "$out"
+case "$out" in *"would-archive 3 (stale 1, helper 2)"*) st_count ;; *) st_fail "dry run summary" "$out" ;; esac
+present "$D" "$(id 1)" || st_fail "dry run moved a file"; st_count
+[ ! -d "$ARCH" ] || [ -z "$(find "$ARCH" -name '*.tar.gz')" ] || st_fail "dry run wrote a tarball"; st_count
 
 # ---- C. budget 0 → exit 75, nothing done -------------------------------------
 "$TA" --run --budget 0 >/dev/null; rc=$?
-[ "$rc" = 75 ] || fail "budget 0 should exit 75, got $rc"; ok
-present "$D" "$(id 1)" || fail "budget 0 still archived"; ok
+[ "$rc" = 75 ] || st_fail "budget 0 should exit 75, got $rc"; st_count
+present "$D" "$(id 1)" || st_fail "budget 0 still archived"; st_count
 
 # ---- A + B. the real pass ----------------------------------------------------
-out=$("$TA" --run) || fail "run exit $?" "$out"
-case "$out" in *"archived 3 (stale 1, helper 2)"*"left 0"*) ok ;; *) fail "run summary" "$out" ;; esac
-for n in 2 3 4 165 12; do present "$D" "$(id $n)" || fail "referenced $(id $n) was moved"; ok; done
-present "$LD" "$(id 6)" || fail "live window's newest transcript was moved"; ok
-present "$SP" "$(id 9)"  || fail "fresh helper was moved"; ok
-present "$D" "$(id 10)"  || fail "thin chat was moved"; ok
-present "$D" "$(id 11)"  || fail "recent session was moved"; ok
-[ -f "$D/not-a-session.jsonl" ] || fail "non-uuid file was moved"; ok
-present "$D" "$(id 1)"  && fail "stale session was not archived"; ok
-[ ! -e "$D/$(id 1)" ]   || fail "sibling dir left behind"; ok
-present "$SP" "$(id 8)" && fail "old helper was not archived"; ok
-present "$LD" "$(id 7)" && fail "old helper in a live dir was not archived"; ok
-[ -f "$ARCH/-w-a/$(id 1).tar.gz" ] || fail "no tarball for $(id 1)" "$(find "$ARCH")"; ok
-[ "$(grep -c $'\tarchived\t' "$ARCH/archive.log")" = 3 ] || fail "archive.log rows" "$(cat "$ARCH/archive.log")"; ok
-"$TA" --list | grep -q "$(id 8)" || fail "--list misses $(id 8)"; ok
+out=$("$TA" --run) || st_fail "run exit $?" "$out"
+case "$out" in *"archived 3 (stale 1, helper 2)"*"left 0"*) st_count ;; *) st_fail "run summary" "$out" ;; esac
+for n in 2 3 4 165 12; do present "$D" "$(id $n)" || st_fail "referenced $(id $n) was moved"; st_count; done
+present "$LD" "$(id 6)" || st_fail "live window's newest transcript was moved"; st_count
+present "$SP" "$(id 9)"  || st_fail "fresh helper was moved"; st_count
+present "$D" "$(id 10)"  || st_fail "thin chat was moved"; st_count
+present "$D" "$(id 11)"  || st_fail "recent session was moved"; st_count
+[ -f "$D/not-a-session.jsonl" ] || st_fail "non-uuid file was moved"; st_count
+present "$D" "$(id 1)"  && st_fail "stale session was not archived"; st_count
+[ ! -e "$D/$(id 1)" ]   || st_fail "sibling dir left behind"; st_count
+present "$SP" "$(id 8)" && st_fail "old helper was not archived"; st_count
+present "$LD" "$(id 7)" && st_fail "old helper in a live dir was not archived"; st_count
+[ -f "$ARCH/-w-a/$(id 1).tar.gz" ] || st_fail "no tarball for $(id 1)" "$(find "$ARCH")"; st_count
+[ "$(grep -c $'\tarchived\t' "$ARCH/archive.log")" = 3 ] || st_fail "archive.log rows" "$(cat "$ARCH/archive.log")"; st_count
+"$TA" --list | grep -q "$(id 8)" || st_fail "--list misses $(id 8)"; st_count
 
 # idempotent: a second pass finds nothing
-out=$("$TA" --run); case "$out" in *"archived 0 "*) ok ;; *) fail "second pass not a no-op" "$out" ;; esac
+out=$("$TA" --run); case "$out" in *"archived 0 "*) st_count ;; *) st_fail "second pass not a no-op" "$out" ;; esac
 
 # ---- D. restore ----------------------------------------------------------------
-"$TA" --restore "$(id 1)" >/dev/null || fail "restore failed"; ok
-present "$D" "$(id 1)" || fail "restore did not bring the jsonl back"; ok
-[ "$(cat "$D/$(id 1)/subagents/agent-x.jsonl" 2>/dev/null)" = sub ] || fail "restore lost the sibling dir"; ok
-[ ! -f "$ARCH/-w-a/$(id 1).tar.gz" ] || fail "restore left the tarball"; ok
-out=$("$TA" --run); case "$out" in *"archived 0 "*) ok ;; *) fail "a just-restored session was re-archived" "$out" ;; esac
-"$TA" --restore "$(id 999)" --quiet; [ $? = 1 ] || fail "restore of an unknown id should exit 1"; ok
-"$TA" --restore "$(id 1)" >/dev/null || fail "restore of a present id should exit 0"; ok
+"$TA" --restore "$(id 1)" >/dev/null || st_fail "restore failed"; st_count
+present "$D" "$(id 1)" || st_fail "restore did not bring the jsonl back"; st_count
+[ "$(cat "$D/$(id 1)/subagents/agent-x.jsonl" 2>/dev/null)" = sub ] || st_fail "restore lost the sibling dir"; st_count
+[ ! -f "$ARCH/-w-a/$(id 1).tar.gz" ] || st_fail "restore left the tarball"; st_count
+out=$("$TA" --run); case "$out" in *"archived 0 "*) st_count ;; *) st_fail "a just-restored session was re-archived" "$out" ;; esac
+"$TA" --restore "$(id 999)" --quiet; [ $? = 1 ] || st_fail "restore of an unknown id should exit 1"; st_count
+"$TA" --restore "$(id 1)" >/dev/null || st_fail "restore of a present id should exit 0"; st_count
 
 # ---- E. /fleet-history resume -------------------------------------------------
 v=$(bash "$BIN/fleet-history.sh" resume --exec --repo o/r 3 2>&1)
-case "$v" in RESUME*"$(id 3)"*) ok ;; *) fail "history resume of a kept ledger row" "$v" ;; esac
+case "$v" in RESUME*"$(id 3)"*) st_count ;; *) st_fail "history resume of a kept ledger row" "$v" ;; esac
 # A row whose transcript got archived anyway (no ledger pinned at archive time):
 WT13="$WORK/wt-13"; mkdir -p "$WT13"; real "$D/$(id 13).jsonl"; age "$D/$(id 13).jsonl" $((40*DAY))
 FLEET_HISTORY_LEDGER="$WORK/empty.tsv" "$TA" --run >/dev/null
-present "$D" "$(id 13)" && fail "fixture: $(id 13) should have been archived"; ok
+present "$D" "$(id 13)" && st_fail "fixture: $(id 13) should have been archived"; st_count
 printf '2026-01-02T00:00:00Z\t13\tt\t10\tdef\t%s\t%s\t%s\t-\tlanded\t-\n' "$WT13" "$D" "$(id 13)" >> "$FLEET_HISTORY_LEDGER"
 v=$(bash "$BIN/fleet-history.sh" resume --exec --repo o/r 13 2>&1)
-case "$v" in RESUME*"$(id 13)"*) ok ;; *) fail "history resume of an archived row" "$v" ;; esac
-present "$D" "$(id 13)" || fail "history resume did not restore the transcript"; ok
+case "$v" in RESUME*"$(id 13)"*) st_count ;; *) st_fail "history resume of an archived row" "$v" ;; esac
+present "$D" "$(id 13)" || st_fail "history resume did not restore the transcript"; st_count
 
 # ---- degenerate: no projects dir ----------------------------------------------
-CLAUDE_PROJECTS_DIR="$WORK/nope" "$TA" --run >/dev/null || fail "missing projects dir should exit 0"; ok
+CLAUDE_PROJECTS_DIR="$WORK/nope" "$TA" --run >/dev/null || st_fail "missing projects dir should exit 0"; st_count
 
 # ---- F. diskguard daily hook ---------------------------------------------------
 helper "$SP/$(id 20).jsonl"; age "$SP/$(id 20).jsonl" $((2*DAY))
@@ -164,6 +162,6 @@ helper "$SP/$(id 20).jsonl"; age "$SP/$(id 20).jsonl" $((2*DAY))
   [ -f "$SP/$(id 21).jsonl" ] || { echo "second tick the same day ran again" >&2; exit 1; }
   export FLEET_TRANSCRIPT_ARCHIVE=0; echo 0 > "$GDIR/last-transcript-archive"; transcript_watch
   [ -f "$SP/$(id 21).jsonl" ] || { echo "FLEET_TRANSCRIPT_ARCHIVE=0 still ran" >&2; exit 1; }
-) || fail "diskguard transcript_watch"; ok
+) || st_fail "diskguard transcript_watch"; st_count
 
 echo "transcript-archive-selftest: OK ($CHECKS checks)"

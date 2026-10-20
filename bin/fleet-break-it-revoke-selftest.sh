@@ -28,9 +28,10 @@
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 # shellcheck source=fleet-break-it-cred-selftest.sh
 BREAK_CRED_LIB=1 . "$BIN/fleet-break-it-cred-selftest.sh"
-command -v ssh-keygen >/dev/null 2>&1 || { printf 'fleet-break-it-revoke: ssh-keygen absent — SKIP\n'; exit 0; }
+st_need ssh-keygen
 CHK="$ROOT/extras/cred-relay/fleet-relay-check.py"
 SUP="$BIN/fleet-node-supervisor.py"
 

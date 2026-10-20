@@ -33,10 +33,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
 SCRIPT="$BIN/fleet-agent-defaults.py"
 pass=0
-ok()   { pass=$((pass+1)); printf '  ok  %s\n' "$1"; }
-fail() { printf 'fleet-agent-defaults-selftest FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '%s\n' "$2" >&2; exit 1; }
-[ -f "$SCRIPT" ] || fail "no $SCRIPT"
-command -v python3 >/dev/null 2>&1 || fail 'python3 missing'
+[ -f "$SCRIPT" ] || st_fail "no $SCRIPT"
+command -v python3 >/dev/null 2>&1 || st_fail 'python3 missing'
 st_sandbox "${TMPDIR:-/tmp}/agent-defaults.XXXXXX"
 
 # --- the sandbox install root: the REPO's conf/agent-defaults + its own skills/ ------
@@ -68,73 +66,73 @@ install_skills() { for n in sk1 sk2; do mkdir -p "$1/claude/skills/$n" "$1/codex
 # --- 1. the shipped defaults -----------------------------------------------------------
 D="$ROOT/conf/agent-defaults"
 for f in claude/mcp.default.json codex/config.default.toml AGENT.default.md; do
-  [ -r "$D/$f" ] || fail "conf/agent-defaults/$f missing"
+  [ -r "$D/$f" ] || st_fail "conf/agent-defaults/$f missing"
 done
 [ "$(json_get "$D/claude/mcp.default.json" 'sorted(d["mcpServers"])')" = "['context7', 'fetch', 'github', 'playwright']" ] \
-  || fail 'mcp.default.json must ship exactly context7 / fetch / github / playwright' "$(cat "$D/claude/mcp.default.json")"
-[ "$(json_get "$D/claude/mcp.default.json" 'set(d)')" = "{'mcpServers'}" ] || fail 'mcp.default.json has a key besides mcpServers'
-grep -q 'gh auth token' "$BIN/mcp-github.sh" || fail 'mcp-github.sh does not take the token from gh auth token'
+  || st_fail 'mcp.default.json must ship exactly context7 / fetch / github / playwright' "$(cat "$D/claude/mcp.default.json")"
+[ "$(json_get "$D/claude/mcp.default.json" 'set(d)')" = "{'mcpServers'}" ] || st_fail 'mcp.default.json has a key besides mcpServers'
+grep -q 'gh auth token' "$BIN/mcp-github.sh" || st_fail 'mcp-github.sh does not take the token from gh auth token'
 grep -q 'mcp-github.sh' "$D/claude/mcp.default.json" && grep -q 'mcp-github.sh' "$D/codex/config.default.toml" \
-  || fail 'the github server must run through bin/mcp-github.sh on both agents'
+  || st_fail 'the github server must run through bin/mcp-github.sh on both agents'
 if [ "$HAS_TOML" = 1 ]; then
   [ "$(toml_get "$D/codex/config.default.toml" 'sorted(k for k in d if k != "mcp_servers")')" = "['approval_policy', 'check_for_update_on_startup', 'model_reasoning_effort', 'sandbox_mode']" ] \
-    || fail 'config.default.toml top-level keys are not approval_policy / check_for_update_on_startup / model_reasoning_effort / sandbox_mode' "$(cat "$D/codex/config.default.toml")"
+    || st_fail 'config.default.toml top-level keys are not approval_policy / check_for_update_on_startup / model_reasoning_effort / sandbox_mode' "$(cat "$D/codex/config.default.toml")"
   [ "$(toml_get "$D/codex/config.default.toml" 'sorted(d["mcp_servers"])')" = "['context7', 'fetch', 'github', 'playwright']" ] \
-    || fail 'config.default.toml must ship the same four servers'
+    || st_fail 'config.default.toml must ship the same four servers'
   [ "$(toml_get "$D/codex/config.default.toml" 'd["approval_policy"], d["sandbox_mode"]')" = "('never', 'danger-full-access')" ] \
-    || fail 'config.default.toml posture is not never / danger-full-access'
+    || st_fail 'config.default.toml posture is not never / danger-full-access'
 fi
-grep -q '^model *=' "$D/codex/config.default.toml" && fail 'config.default.toml ships `model` — it stays the login'\''s'
+grep -q '^model *=' "$D/codex/config.default.toml" && st_fail 'config.default.toml ships `model` — it stays the login'\''s'
 # ONE doc for both agents (T588): each agent's block carries the markers, and the
 # two differ only inside the fleet:only lines
 for a in claude codex; do
-  python3 "$SCRIPT" doc "$a" --root "$ROOT" > "$WORK/doc.$a" || fail "doc $a failed"
+  python3 "$SCRIPT" doc "$a" --root "$ROOT" > "$WORK/doc.$a" || st_fail "doc $a failed"
   grep -q '<!-- fleet:agent-defaults begin -->' "$WORK/doc.$a" && grep -q '<!-- fleet:agent-defaults end -->' "$WORK/doc.$a" \
-    || fail "the $a block lacks the begin/end markers"
-  grep -q 'fleet:only' "$WORK/doc.$a" && fail "the $a block still carries a fleet:only marker"
+    || st_fail "the $a block lacks the begin/end markers"
+  grep -q 'fleet:only' "$WORK/doc.$a" && st_fail "the $a block still carries a fleet:only marker"
 done
-[ "$(diff "$WORK/doc.claude" "$WORK/doc.codex" | grep -c '^[<>]')" -le 6 ] || fail 'the two blocks differ by more than the marked lines' "$(diff "$WORK/doc.claude" "$WORK/doc.codex")"
-[ "$(grep -c '^<!-- fleet:only ' "$D/AGENT.default.md")" -le 4 ] || fail 'AGENT.default.md marks more than a few agent-only lines'
-python3 "$SCRIPT" doc --root "$ROOT" >/dev/null 2>&1 && fail 'doc with no agent was accepted'
+[ "$(diff "$WORK/doc.claude" "$WORK/doc.codex" | grep -c '^[<>]')" -le 6 ] || st_fail 'the two blocks differ by more than the marked lines' "$(diff "$WORK/doc.claude" "$WORK/doc.codex")"
+[ "$(grep -c '^<!-- fleet:only ' "$D/AGENT.default.md")" -le 4 ] || st_fail 'AGENT.default.md marks more than a few agent-only lines'
+python3 "$SCRIPT" doc --root "$ROOT" >/dev/null 2>&1 && st_fail 'doc with no agent was accepted'
 # the fleet's own TOML reader agrees with tomllib on the shipped file (check on an
 # empty login names every top key + server exactly once)
 fresh "$WORK/c1"
 run python3 check "$WORK/c1" > "$WORK/o1"; rc=$?
-[ "$rc" = 1 ] || fail "check on an empty login should exit 1 (got $rc)" "$(cat "$WORK/o1")"
-head -1 "$WORK/o1" | grep -q '^claude 4 missing · codex 8 missing · skills 4 missing$' || fail 'check head line on an empty login' "$(cat "$WORK/o1")"
-[ "$(grep -c '^missing    codex\[.*\] mcp ' "$WORK/o1")" = 4 ] || fail 'check did not name 4 missing Codex servers' "$(cat "$WORK/o1")"
-grep -q '^missing    codex\[.*\] approval_policy (default "never")$' "$WORK/o1" || fail 'check did not name approval_policy with its default' "$(cat "$WORK/o1")"
-grep -q ' doc ' "$WORK/o1" && fail 'check still requires a doc block'
-grep -q '^missing    claude skill sk1$' "$WORK/o1" && grep -q '^missing    codex\[.*\] skill sk2$' "$WORK/o1" || fail 'check did not count the skills' "$(cat "$WORK/o1")"
-ok '1 shipped defaults: four servers, three Codex keys, no model, marked doc blocks; check names each missing item once'
+[ "$rc" = 1 ] || st_fail "check on an empty login should exit 1 (got $rc)" "$(cat "$WORK/o1")"
+head -1 "$WORK/o1" | grep -q '^claude 4 missing · codex 8 missing · skills 4 missing$' || st_fail 'check head line on an empty login' "$(cat "$WORK/o1")"
+[ "$(grep -c '^missing    codex\[.*\] mcp ' "$WORK/o1")" = 4 ] || st_fail 'check did not name 4 missing Codex servers' "$(cat "$WORK/o1")"
+grep -q '^missing    codex\[.*\] approval_policy (default "never")$' "$WORK/o1" || st_fail 'check did not name approval_policy with its default' "$(cat "$WORK/o1")"
+grep -q ' doc ' "$WORK/o1" && st_fail 'check still requires a doc block'
+grep -q '^missing    claude skill sk1$' "$WORK/o1" && grep -q '^missing    codex\[.*\] skill sk2$' "$WORK/o1" || st_fail 'check did not count the skills' "$(cat "$WORK/o1")"
+st_pass '1 shipped defaults: four servers, three Codex keys, no model, marked doc blocks; check names each missing item once'
 
 # --- 2. empty login → every default in --------------------------------------------------
-run python3 apply "$WORK/c1" > "$WORK/o2" || fail 'apply on an empty login failed' "$(cat "$WORK/o2")"
-grep -q '^filled  claude 4 · codex 8$' "$WORK/o2" || fail 'apply summary' "$(cat "$WORK/o2")"
-[ "$(grep -c '^set ' "$WORK/o2")" = 12 ] || fail 'apply did not print one set per item' "$(cat "$WORK/o2")"
+run python3 apply "$WORK/c1" > "$WORK/o2" || st_fail 'apply on an empty login failed' "$(cat "$WORK/o2")"
+grep -q '^filled  claude 4 · codex 8$' "$WORK/o2" || st_fail 'apply summary' "$(cat "$WORK/o2")"
+[ "$(grep -c '^set ' "$WORK/o2")" = 12 ] || st_fail 'apply did not print one set per item' "$(cat "$WORK/o2")"
 [ "$(json_get "$WORK/c1/claude/.claude.json" 'sorted(d["mcpServers"])')" = "['context7', 'fetch', 'github', 'playwright']" ] \
-  || fail '.claude.json did not get the four servers' "$(cat "$WORK/c1/claude/.claude.json")"
+  || st_fail '.claude.json did not get the four servers' "$(cat "$WORK/c1/claude/.claude.json")"
 [ "$(json_get "$WORK/c1/claude/.claude.json" 'd["mcpServers"]["context7"]')" = "$(json_get "$D/claude/mcp.default.json" 'd["mcpServers"]["context7"]')" ] \
-  || fail 'the context7 entry is not the default object'
-toml_ok "$WORK/c1/codex/config.toml" || fail 'merged config.toml does not parse' "$(cat "$WORK/c1/codex/config.toml")"
-grep -q '^cli_auth_credentials_store = "file"$' "$WORK/c1/codex/config.toml" || fail 'the login'\''s own key vanished'
+  || st_fail 'the context7 entry is not the default object'
+toml_ok "$WORK/c1/codex/config.toml" || st_fail 'merged config.toml does not parse' "$(cat "$WORK/c1/codex/config.toml")"
+grep -q '^cli_auth_credentials_store = "file"$' "$WORK/c1/codex/config.toml" || st_fail 'the login'\''s own key vanished'
 grep -q '^approval_policy = "never"$' "$WORK/c1/codex/config.toml" && grep -q '^sandbox_mode = "danger-full-access"$' "$WORK/c1/codex/config.toml" \
-  && grep -q '^model_reasoning_effort = ' "$WORK/c1/codex/config.toml" || fail 'the three Codex keys are not in config.toml' "$(cat "$WORK/c1/codex/config.toml")"
+  && grep -q '^model_reasoning_effort = ' "$WORK/c1/codex/config.toml" || st_fail 'the three Codex keys are not in config.toml' "$(cat "$WORK/c1/codex/config.toml")"
 for n in context7 playwright github fetch; do
-  grep -q "^\[mcp_servers\.$n\]$" "$WORK/c1/codex/config.toml" || fail "config.toml lacks [mcp_servers.$n]" "$(cat "$WORK/c1/codex/config.toml")"
+  grep -q "^\[mcp_servers\.$n\]$" "$WORK/c1/codex/config.toml" || st_fail "config.toml lacks [mcp_servers.$n]" "$(cat "$WORK/c1/codex/config.toml")"
 done
 if [ "$HAS_TOML" = 1 ]; then
   [ "$(toml_get "$WORK/c1/codex/config.toml" 'd["mcp_servers"]["github"]["args"]')" = "$(toml_get "$D/codex/config.default.toml" 'd["mcp_servers"]["github"]["args"]')" ] \
-    || fail 'the merged github args differ from the default'
+    || st_fail 'the merged github args differ from the default'
 fi
 [ ! -e "$WORK/c1/claude/CLAUDE.md" ] && [ ! -e "$WORK/c1/codex/AGENTS.md" ] \
-  || fail 'apply created instruction files on a fresh login'
-grep -q '^skills  4 not installed yet' "$WORK/o2" || fail 'apply did not report the uninstalled skills' "$(cat "$WORK/o2")"
+  || st_fail 'apply created instruction files on a fresh login'
+grep -q '^skills  4 not installed yet' "$WORK/o2" || st_fail 'apply did not report the uninstalled skills' "$(cat "$WORK/o2")"
 # the skills passes install them → check reads all zeros
 install_skills "$WORK/c1"
-run python3 check "$WORK/c1" > "$WORK/o2c" || fail 'check after apply + skills still unhappy' "$(cat "$WORK/o2c")"
-grep -q '^ok claude 0 missing · codex 0 missing · skills 0 missing$' "$WORK/o2c" || fail 'check ok line' "$(cat "$WORK/o2c")"
-ok '2 empty login: configs filled, instruction files absent; check 0 missing'
+run python3 check "$WORK/c1" > "$WORK/o2c" || st_fail 'check after apply + skills still unhappy' "$(cat "$WORK/o2c")"
+grep -q '^ok claude 0 missing · codex 0 missing · skills 0 missing$' "$WORK/o2c" || st_fail 'check ok line' "$(cat "$WORK/o2c")"
+st_pass '2 empty login: configs filled, instruction files absent; check 0 missing'
 
 # --- 3. the login's own is never rewritten ---------------------------------------------------
 fresh "$WORK/c3"
@@ -165,18 +163,18 @@ cp "$WORK/c3/codex/config.toml" "$WORK/c3/toml.before"
 printf 'Personal Claude rules.\n' > "$WORK/c3/claude/CLAUDE.md"
 cp "$WORK/c3/codex/AGENTS.md" "$WORK/c3/agents.before"
 cp "$WORK/c3/claude/CLAUDE.md" "$WORK/c3/claude.before"
-run python3 apply "$WORK/c3" > "$WORK/o3" || fail 'apply over a login'\''s own failed' "$(cat "$WORK/o3")"
+run python3 apply "$WORK/c3" > "$WORK/o3" || st_fail 'apply over a login'\''s own failed' "$(cat "$WORK/o3")"
 [ "$(json_get "$WORK/c3/claude/.claude.json" 'd["mcpServers"]["playwright"]["args"]')" = "['@playwright/mcp@1.2.3', '--headless']" ] \
-  || fail 'the login'\''s playwright was rewritten' "$(cat "$WORK/c3/claude/.claude.json")"
+  || st_fail 'the login'\''s playwright was rewritten' "$(cat "$WORK/c3/claude/.claude.json")"
 [ "$(json_get "$WORK/c3/claude/.claude.json" 'sorted(d["mcpServers"])')" = "['context7', 'fetch', 'github', 'langfuse', 'playwright']" ] \
-  || fail 'the other servers were not added beside the login'\''s' "$(cat "$WORK/c3/claude/.claude.json")"
+  || st_fail 'the other servers were not added beside the login'\''s' "$(cat "$WORK/c3/claude/.claude.json")"
 [ "$(json_get "$WORK/c3/claude/.claude.json" 'd["numStartups"], d["projects"]')" = "(3, {'/x': {'hasTrustDialogAccepted': True}})" ] \
-  || fail 'another .claude.json key changed'
-grep -q '^own            claude mcp playwright — this login'\''s (npx @playwright/mcp@1.2.3 --headless)$' "$WORK/o3" || fail 'apply did not report the login'\''s playwright' "$(cat "$WORK/o3")"
-grep -q '^set            claude mcp context7$' "$WORK/o3" && ! grep -q '^set            claude mcp playwright' "$WORK/o3" || fail 'set lines wrong for the own case' "$(cat "$WORK/o3")"
+  || st_fail 'another .claude.json key changed'
+grep -q '^own            claude mcp playwright — this login'\''s (npx @playwright/mcp@1.2.3 --headless)$' "$WORK/o3" || st_fail 'apply did not report the login'\''s playwright' "$(cat "$WORK/o3")"
+grep -q '^set            claude mcp context7$' "$WORK/o3" && ! grep -q '^set            claude mcp playwright' "$WORK/o3" || st_fail 'set lines wrong for the own case' "$(cat "$WORK/o3")"
 # every original TOML line is still there, in order; the new keys sit before the first table
-toml_ok "$WORK/c3/codex/config.toml" || fail 'merged config.toml (own case) does not parse' "$(cat "$WORK/c3/codex/config.toml")"
-python3 - "$WORK/c3/toml.before" "$WORK/c3/codex/config.toml" <<'PY' || fail 'the login'\''s config.toml lines did not survive in order' "$(cat "$WORK/c3/codex/config.toml")"
+toml_ok "$WORK/c3/codex/config.toml" || st_fail 'merged config.toml (own case) does not parse' "$(cat "$WORK/c3/codex/config.toml")"
+python3 - "$WORK/c3/toml.before" "$WORK/c3/codex/config.toml" <<'PY' || st_fail 'the login'\''s config.toml lines did not survive in order' "$(cat "$WORK/c3/codex/config.toml")"
 import sys
 before = open(sys.argv[1]).read().split("\n"); after = open(sys.argv[2]).read().split("\n")
 i = 0
@@ -186,31 +184,31 @@ for line in before:
     i += 1
 PY
 grep -q '^approval_policy = "on-request"$' "$WORK/c3/codex/config.toml" && [ "$(grep -c '^approval_policy' "$WORK/c3/codex/config.toml")" = 1 ] \
-  || fail 'approval_policy was rewritten or doubled'
-grep -q '^model = "gpt-6-sol"$' "$WORK/c3/codex/config.toml" || fail 'the login'\''s model vanished'
+  || st_fail 'approval_policy was rewritten or doubled'
+grep -q '^model = "gpt-6-sol"$' "$WORK/c3/codex/config.toml" || st_fail 'the login'\''s model vanished'
 [ "$(grep -n '^sandbox_mode = ' "$WORK/c3/codex/config.toml" | cut -d: -f1)" -lt "$(grep -n '^\[mcp_servers.fetch\]' "$WORK/c3/codex/config.toml" | cut -d: -f1)" ] \
-  || fail 'sandbox_mode was not inserted before the first table' "$(cat "$WORK/c3/codex/config.toml")"
+  || st_fail 'sandbox_mode was not inserted before the first table' "$(cat "$WORK/c3/codex/config.toml")"
 [ "$(grep -c '^\[mcp_servers\.fetch\]' "$WORK/c3/codex/config.toml")" = 1 ] && grep -q 'fetch-mcp.sh' "$WORK/c3/codex/config.toml" \
-  || fail 'the login'\''s fetch table was rewritten or doubled'
+  || st_fail 'the login'\''s fetch table was rewritten or doubled'
 grep -q '^\[mcp_servers\.github\]$' "$WORK/c3/codex/config.toml" && grep -q '^\[mcp_servers\.context7\]$' "$WORK/c3/codex/config.toml" \
-  || fail 'the missing servers were not appended'
-grep -q '^own            codex\[.*\] approval_policy = "on-request" (default "never")$' "$WORK/o3" || fail 'apply did not report the login'\''s approval_policy' "$(cat "$WORK/o3")"
-grep -q '^own            codex\[.*\] mcp fetch — this login'\''s$' "$WORK/o3" || fail 'apply did not report the login'\''s fetch' "$(cat "$WORK/o3")"
+  || st_fail 'the missing servers were not appended'
+grep -q '^own            codex\[.*\] approval_policy = "on-request" (default "never")$' "$WORK/o3" || st_fail 'apply did not report the login'\''s approval_policy' "$(cat "$WORK/o3")"
+grep -q '^own            codex\[.*\] mcp fetch — this login'\''s$' "$WORK/o3" || st_fail 'apply did not report the login'\''s fetch' "$(cat "$WORK/o3")"
 cmp -s "$WORK/c3/codex/AGENTS.md" "$WORK/c3/agents.before" && cmp -s "$WORK/c3/claude/CLAUDE.md" "$WORK/c3/claude.before" \
-  || fail 'apply changed personal instruction files'
-grep -q '^filled  claude 3 · codex 6$' "$WORK/o3" || fail 'own-case summary' "$(cat "$WORK/o3")"
-ok '3 own: servers, keys and personal instruction files preserved'
+  || st_fail 'apply changed personal instruction files'
+grep -q '^filled  claude 3 · codex 6$' "$WORK/o3" || st_fail 'own-case summary' "$(cat "$WORK/o3")"
+st_pass '3 own: servers, keys and personal instruction files preserved'
 
 # --- 4. idempotent ----------------------------------------------------------------------
 for f in claude/.claude.json codex/config.toml claude/CLAUDE.md codex/AGENTS.md; do cp "$WORK/c3/$f" "$WORK/c3/$(echo "$f" | tr / _).before"; done
-run python3 apply "$WORK/c3" > "$WORK/o4" || fail 'second apply failed' "$(cat "$WORK/o4")"
-grep -q '^unchanged — ' "$WORK/o4" || fail 'second apply was not a no-op' "$(cat "$WORK/o4")"
-grep -q '^wrote ' "$WORK/o4" && fail 'second apply wrote a file' "$(cat "$WORK/o4")"
+run python3 apply "$WORK/c3" > "$WORK/o4" || st_fail 'second apply failed' "$(cat "$WORK/o4")"
+grep -q '^unchanged — ' "$WORK/o4" || st_fail 'second apply was not a no-op' "$(cat "$WORK/o4")"
+grep -q '^wrote ' "$WORK/o4" && st_fail 'second apply wrote a file' "$(cat "$WORK/o4")"
 for f in claude/.claude.json codex/config.toml claude/CLAUDE.md codex/AGENTS.md; do
-  cmp -s "$WORK/c3/$f" "$WORK/c3/$(echo "$f" | tr / _).before" || fail "no-op apply rewrote $f"
+  cmp -s "$WORK/c3/$f" "$WORK/c3/$(echo "$f" | tr / _).before" || st_fail "no-op apply rewrote $f"
 done
-[ -z "$(find "$WORK/c3/claude" "$WORK/c3/codex" -maxdepth 1 -name '*.bak.*' 2>/dev/null)" ] || fail 'apply left a backup'
-ok '4 idempotent: second apply writes nothing, no backup'
+[ -z "$(find "$WORK/c3/claude" "$WORK/c3/codex" -maxdepth 1 -name '*.bak.*' 2>/dev/null)" ] || st_fail 'apply left a backup'
+st_pass '4 idempotent: second apply writes nothing, no backup'
 
 # --- 5. legacy blocks are preserved; strip is an explicit, doc-only operation ---------
 install_skills "$WORK/c3"
@@ -218,100 +216,100 @@ for f in claude/CLAUDE.md codex/AGENTS.md; do
   printf 'Personal before.\r\n<!-- fleet:agent-defaults begin -->\r\nOLD HEADING\r\n<!-- fleet:agent-defaults end -->\r\nPersonal after.\r\n' > "$WORK/c3/$f"
   cp "$WORK/c3/$f" "$WORK/c3/$(echo "$f" | tr / _).before"
 done
-run python3 check "$WORK/c3" > "$WORK/o5c" || fail 'check requires an updated legacy block'
-run python3 apply "$WORK/c3" > "$WORK/o5" || fail 'apply over legacy blocks failed'
-run python3 strip "$WORK/c3" --dry-run > "$WORK/o5dry" || fail 'strip dry-run failed'
+run python3 check "$WORK/c3" > "$WORK/o5c" || st_fail 'check requires an updated legacy block'
+run python3 apply "$WORK/c3" > "$WORK/o5" || st_fail 'apply over legacy blocks failed'
+run python3 strip "$WORK/c3" --dry-run > "$WORK/o5dry" || st_fail 'strip dry-run failed'
 for f in claude/CLAUDE.md codex/AGENTS.md; do
-  cmp -s "$WORK/c3/$f" "$WORK/c3/$(echo "$f" | tr / _).before" || fail "apply/check/dry-run changed $f"
+  cmp -s "$WORK/c3/$f" "$WORK/c3/$(echo "$f" | tr / _).before" || st_fail "apply/check/dry-run changed $f"
 done
-run python3 strip "$WORK/c3" > "$WORK/o5s" || fail 'strip failed'
+run python3 strip "$WORK/c3" > "$WORK/o5s" || st_fail 'strip failed'
 printf 'Personal before.\r\nPersonal after.\r\n' > "$WORK/personal.expected"
 for f in claude/CLAUDE.md codex/AGENTS.md; do
-  cmp -s "$WORK/c3/$f" "$WORK/personal.expected" || fail "strip changed personal bytes in $f"
+  cmp -s "$WORK/c3/$f" "$WORK/personal.expected" || st_fail "strip changed personal bytes in $f"
 done
 for f in claude/.claude.json codex/config.toml; do
-  cmp -s "$WORK/c3/$f" "$WORK/c3/$(echo "$f" | tr / _).before" || fail "strip changed $f"
+  cmp -s "$WORK/c3/$f" "$WORK/c3/$(echo "$f" | tr / _).before" || st_fail "strip changed $f"
 done
-run python3 strip "$WORK/c3" > "$WORK/o5s2" || fail 'second strip failed'
-grep -q '^stripped 0 fleet block(s)$' "$WORK/o5s2" || fail 'strip is not idempotent'
+run python3 strip "$WORK/c3" > "$WORK/o5s2" || st_fail 'second strip failed'
+grep -q '^stripped 0 fleet block(s)$' "$WORK/o5s2" || st_fail 'strip is not idempotent'
 # A malformed second doc must refuse before changing the valid first doc.
 cp "$WORK/doc.claude" "$WORK/c3/claude/CLAUDE.md"
 printf '# mine\n<!-- fleet:agent-defaults begin -->\nhalf\n' > "$WORK/c3/codex/AGENTS.md"
 cp "$WORK/c3/codex/AGENTS.md" "$WORK/half.before"
-run python3 apply "$WORK/c3" > /dev/null || fail 'apply over a partial block failed'
-run python3 check "$WORK/c3" > /dev/null || fail 'check requires repair of a partial block'
-run python3 strip "$WORK/c3" > "$WORK/o5bad" 2>&1; [ $? = 2 ] || fail 'strip accepted partial markers'
+run python3 apply "$WORK/c3" > /dev/null || st_fail 'apply over a partial block failed'
+run python3 check "$WORK/c3" > /dev/null || st_fail 'check requires repair of a partial block'
+run python3 strip "$WORK/c3" > "$WORK/o5bad" 2>&1; [ $? = 2 ] || st_fail 'strip accepted partial markers'
 cmp -s "$WORK/c3/claude/CLAUDE.md" "$WORK/doc.claude" && cmp -s "$WORK/c3/codex/AGENTS.md" "$WORK/half.before" \
-  || fail 'strip wrote before preflight completed'
-run python3 strip "$WORK/c3" --skip codex.doc > /dev/null || fail 'strip did not honor doc override'
-cmp -s "$WORK/c3/codex/AGENTS.md" "$WORK/half.before" || fail 'strip changed a shielded doc'
+  || st_fail 'strip wrote before preflight completed'
+run python3 strip "$WORK/c3" --skip codex.doc > /dev/null || st_fail 'strip did not honor doc override'
+cmp -s "$WORK/c3/codex/AGENTS.md" "$WORK/half.before" || st_fail 'strip changed a shielded doc'
 cat "$WORK/doc.codex" "$WORK/doc.codex" > "$WORK/c3/codex/AGENTS.md"
-run python3 strip "$WORK/c3" > /dev/null 2>&1; [ $? = 2 ] || fail 'strip accepted duplicate blocks'
-run python3 strip "$WORK/c1" > /dev/null || fail 'strip with absent docs failed'
-[ ! -e "$WORK/c1/claude/CLAUDE.md" ] && [ ! -e "$WORK/c1/codex/AGENTS.md" ] || fail 'strip created absent docs'
-ok '5 legacy blocks untouched; strip preserves personal bytes, respects overrides, refuses malformed/duplicate blocks before writing'
+run python3 strip "$WORK/c3" > /dev/null 2>&1; [ $? = 2 ] || st_fail 'strip accepted duplicate blocks'
+run python3 strip "$WORK/c1" > /dev/null || st_fail 'strip with absent docs failed'
+[ ! -e "$WORK/c1/claude/CLAUDE.md" ] && [ ! -e "$WORK/c1/codex/AGENTS.md" ] || st_fail 'strip created absent docs'
+st_pass '5 legacy blocks untouched; strip preserves personal bytes, respects overrides, refuses malformed/duplicate blocks before writing'
 
 # --- 6. the override file and --skip -------------------------------------------------------
 fresh "$WORK/c6"; install_skills "$WORK/c6"
 printf '["playwright", "codex.sandbox_mode", "claude.doc"]\n' > "$WORK/ovr6.json"
-OVR="$WORK/ovr6.json" run python3 apply "$WORK/c6" > "$WORK/o6" || fail 'apply with an override failed' "$(cat "$WORK/o6")"
-[ "$(json_get "$WORK/c6/claude/.claude.json" 'sorted(d["mcpServers"])')" = "['context7', 'fetch', 'github']" ] || fail 'a bare server name did not shield it on Claude'
-grep -q '^\[mcp_servers\.playwright\]' "$WORK/c6/codex/config.toml" && fail 'a bare server name did not shield it on Codex'
-grep -q '^sandbox_mode' "$WORK/c6/codex/config.toml" && fail 'codex.sandbox_mode was not shielded'
-grep -q '^approval_policy = "never"$' "$WORK/c6/codex/config.toml" || fail 'the unshielded key was not filled'
-[ -e "$WORK/c6/claude/CLAUDE.md" ] && fail 'claude.doc was not shielded — CLAUDE.md written'
-[ ! -e "$WORK/c6/codex/AGENTS.md" ] || fail 'apply created AGENTS.md'
+OVR="$WORK/ovr6.json" run python3 apply "$WORK/c6" > "$WORK/o6" || st_fail 'apply with an override failed' "$(cat "$WORK/o6")"
+[ "$(json_get "$WORK/c6/claude/.claude.json" 'sorted(d["mcpServers"])')" = "['context7', 'fetch', 'github']" ] || st_fail 'a bare server name did not shield it on Claude'
+grep -q '^\[mcp_servers\.playwright\]' "$WORK/c6/codex/config.toml" && st_fail 'a bare server name did not shield it on Codex'
+grep -q '^sandbox_mode' "$WORK/c6/codex/config.toml" && st_fail 'codex.sandbox_mode was not shielded'
+grep -q '^approval_policy = "never"$' "$WORK/c6/codex/config.toml" || st_fail 'the unshielded key was not filled'
+[ -e "$WORK/c6/claude/CLAUDE.md" ] && st_fail 'claude.doc was not shielded — CLAUDE.md written'
+[ ! -e "$WORK/c6/codex/AGENTS.md" ] || st_fail 'apply created AGENTS.md'
 grep -q '^kept    3 item(s) left to this login: claude.mcp.playwright, codex\[.*\].sandbox_mode, codex\[.*\].mcp.playwright$' "$WORK/o6" \
-  || fail 'apply did not list the kept items' "$(cat "$WORK/o6")"
-OVR="$WORK/ovr6.json" run python3 check "$WORK/c6" > "$WORK/o6c" || fail 'check with the same override unhappy' "$(cat "$WORK/o6c")"
-grep -q '^ok claude 0 missing · codex 0 missing · skills 0 missing; 3 left to this login: ' "$WORK/o6c" || fail 'check did not list the kept items' "$(cat "$WORK/o6c")"
-run python3 check "$WORK/c6" > "$WORK/o6d"; [ $? = 1 ] || fail 'check without the override passed over the shielded items'
-head -1 "$WORK/o6d" | grep -q '^claude 1 missing · codex 2 missing · skills 0 missing$' || fail 'check without the override miscounted' "$(cat "$WORK/o6d")"
+  || st_fail 'apply did not list the kept items' "$(cat "$WORK/o6")"
+OVR="$WORK/ovr6.json" run python3 check "$WORK/c6" > "$WORK/o6c" || st_fail 'check with the same override unhappy' "$(cat "$WORK/o6c")"
+grep -q '^ok claude 0 missing · codex 0 missing · skills 0 missing; 3 left to this login: ' "$WORK/o6c" || st_fail 'check did not list the kept items' "$(cat "$WORK/o6c")"
+run python3 check "$WORK/c6" > "$WORK/o6d"; [ $? = 1 ] || st_fail 'check without the override passed over the shielded items'
+head -1 "$WORK/o6d" | grep -q '^claude 1 missing · codex 2 missing · skills 0 missing$' || st_fail 'check without the override miscounted' "$(cat "$WORK/o6d")"
 # `codex` alone shields that agent; --skip adds from the command line; an object override works too
 fresh "$WORK/c6b"; install_skills "$WORK/c6b"
 printf '{"codex": "my own Codex config"}\n' > "$WORK/ovr6b.json"
 cp "$WORK/c6b/codex/config.toml" "$WORK/c6b/toml.before"
-OVR="$WORK/ovr6b.json" run python3 apply "$WORK/c6b" --skip claude.mcp.github > "$WORK/o6b" || fail 'apply with codex shielded failed' "$(cat "$WORK/o6b")"
-cmp -s "$WORK/c6b/codex/config.toml" "$WORK/c6b/toml.before" && [ ! -e "$WORK/c6b/codex/AGENTS.md" ] || fail '`codex` in the override did not shield the agent'
-[ "$(json_get "$WORK/c6b/claude/.claude.json" 'sorted(d["mcpServers"])')" = "['context7', 'fetch', 'playwright']" ] || fail '--skip claude.mcp.github did not shield it'
-OVR="$WORK/ovr6b.json" run python3 check "$WORK/c6b" --skip claude.mcp.github > "$WORK/o6bc" || fail 'check with codex shielded unhappy' "$(cat "$WORK/o6bc")"
-grep -q '^ok claude 0 missing · codex kept · skills 0 missing' "$WORK/o6bc" || fail 'check did not say codex kept' "$(cat "$WORK/o6bc")"
-ok '6 override: a bare name shields a server on both agents, dotted paths shield a key / a doc, `codex` the agent; --skip adds one; check stops counting them'
+OVR="$WORK/ovr6b.json" run python3 apply "$WORK/c6b" --skip claude.mcp.github > "$WORK/o6b" || st_fail 'apply with codex shielded failed' "$(cat "$WORK/o6b")"
+cmp -s "$WORK/c6b/codex/config.toml" "$WORK/c6b/toml.before" && [ ! -e "$WORK/c6b/codex/AGENTS.md" ] || st_fail '`codex` in the override did not shield the agent'
+[ "$(json_get "$WORK/c6b/claude/.claude.json" 'sorted(d["mcpServers"])')" = "['context7', 'fetch', 'playwright']" ] || st_fail '--skip claude.mcp.github did not shield it'
+OVR="$WORK/ovr6b.json" run python3 check "$WORK/c6b" --skip claude.mcp.github > "$WORK/o6bc" || st_fail 'check with codex shielded unhappy' "$(cat "$WORK/o6bc")"
+grep -q '^ok claude 0 missing · codex kept · skills 0 missing' "$WORK/o6bc" || st_fail 'check did not say codex kept' "$(cat "$WORK/o6bc")"
+st_pass '6 override: a bare name shields a server on both agents, dotted paths shield a key / a doc, `codex` the agent; --skip adds one; check stops counting them'
 
 # --- 7. absent files are not created -------------------------------------------------------
 rm -rf "$WORK/c7"; mkdir -p "$WORK/c7/claude/skills"
-run python3 apply "$WORK/c7" > "$WORK/o7" || fail 'apply on a login with nothing failed' "$(cat "$WORK/o7")"
-[ -e "$WORK/c7/claude/.claude.json" ] && fail 'a .claude.json Claude Code never wrote was created'
-[ -e "$WORK/c7/codex" ] && fail 'a Codex home was created'
-grep -q '^absent  .*\.claude\.json — Claude Code has not run on this login yet; its 4 server(s) wait for the next sync$' "$WORK/o7" || fail 'apply did not say .claude.json is absent' "$(cat "$WORK/o7")"
-grep -q '^absent  .*/c7/codex — Codex is not set up on this login; nothing created$' "$WORK/o7" || fail 'apply did not say the Codex home is absent' "$(cat "$WORK/o7")"
-[ ! -e "$WORK/c7/claude/CLAUDE.md" ] || fail 'apply created CLAUDE.md'
-run python3 check "$WORK/c7" > "$WORK/o7c"; [ $? = 1 ] || fail 'check passed with no .claude.json'
-head -1 "$WORK/o7c" | grep -q '^claude 4 missing · codex n/a (no .*/c7/codex) · skills 2 missing$' || fail 'check head with no .claude.json / no Codex' "$(cat "$WORK/o7c")"
-grep -q '^missing    claude mcp context7 — Claude Code has not run on this login yet$' "$WORK/o7c" || fail 'check did not say why the servers are missing' "$(cat "$WORK/o7c")"
-ok '7 absent: no .claude.json / no Codex home is never created; check says n/a for Codex'
+run python3 apply "$WORK/c7" > "$WORK/o7" || st_fail 'apply on a login with nothing failed' "$(cat "$WORK/o7")"
+[ -e "$WORK/c7/claude/.claude.json" ] && st_fail 'a .claude.json Claude Code never wrote was created'
+[ -e "$WORK/c7/codex" ] && st_fail 'a Codex home was created'
+grep -q '^absent  .*\.claude\.json — Claude Code has not run on this login yet; its 4 server(s) wait for the next sync$' "$WORK/o7" || st_fail 'apply did not say .claude.json is absent' "$(cat "$WORK/o7")"
+grep -q '^absent  .*/c7/codex — Codex is not set up on this login; nothing created$' "$WORK/o7" || st_fail 'apply did not say the Codex home is absent' "$(cat "$WORK/o7")"
+[ ! -e "$WORK/c7/claude/CLAUDE.md" ] || st_fail 'apply created CLAUDE.md'
+run python3 check "$WORK/c7" > "$WORK/o7c"; [ $? = 1 ] || st_fail 'check passed with no .claude.json'
+head -1 "$WORK/o7c" | grep -q '^claude 4 missing · codex n/a (no .*/c7/codex) · skills 2 missing$' || st_fail 'check head with no .claude.json / no Codex' "$(cat "$WORK/o7c")"
+grep -q '^missing    claude mcp context7 — Claude Code has not run on this login yet$' "$WORK/o7c" || st_fail 'check did not say why the servers are missing' "$(cat "$WORK/o7c")"
+st_pass '7 absent: no .claude.json / no Codex home is never created; check says n/a for Codex'
 
 # --- 8. a held .claude.json.lock is never stolen -----------------------------------------------
 fresh "$WORK/c8"
 mkdir "$WORK/c8/claude/.claude.json.lock"
 FLEET_KEYS_LOCK_WAIT=0.3 run python3 apply "$WORK/c8" > "$WORK/o8" 2>&1; rc=$?
-[ "$rc" = 2 ] || fail "apply through a held lock should exit 2 (got $rc)" "$(cat "$WORK/o8")"
-[ "$(cat "$WORK/c8/claude/.claude.json")" = '{}' ] || fail 'apply wrote .claude.json while its lock was held'
-[ -d "$WORK/c8/claude/.claude.json.lock" ] || fail 'apply removed someone else'\''s lock'
+[ "$rc" = 2 ] || st_fail "apply through a held lock should exit 2 (got $rc)" "$(cat "$WORK/o8")"
+[ "$(cat "$WORK/c8/claude/.claude.json")" = '{}' ] || st_fail 'apply wrote .claude.json while its lock was held'
+[ -d "$WORK/c8/claude/.claude.json.lock" ] || st_fail 'apply removed someone else'\''s lock'
 rmdir "$WORK/c8/claude/.claude.json.lock"
-run python3 apply "$WORK/c8" > /dev/null || fail 'apply after the lock was released failed'
-[ -e "$WORK/c8/claude/.claude.json.lock" ] && fail 'apply left its lock behind'
-ok '8 a held .claude.json.lock: exit 2, nothing written, lock untouched; clean after release'
+run python3 apply "$WORK/c8" > /dev/null || st_fail 'apply after the lock was released failed'
+[ -e "$WORK/c8/claude/.claude.json.lock" ] && st_fail 'apply left its lock behind'
+st_pass '8 a held .claude.json.lock: exit 2, nothing written, lock untouched; clean after release'
 
 # --- 9. an inline mcp_servers table is not extended ----------------------------------------------
 fresh "$WORK/c9"
 printf 'mcp_servers = { mine = { command = "x" } }\n' > "$WORK/c9/codex/config.toml"
-run python3 apply "$WORK/c9" > "$WORK/o9" || fail 'apply over an inline mcp_servers failed' "$(cat "$WORK/o9")"
-toml_ok "$WORK/c9/codex/config.toml" || fail 'merged config.toml (inline case) does not parse' "$(cat "$WORK/c9/codex/config.toml")"
-grep -q '^\[mcp_servers\.' "$WORK/c9/codex/config.toml" && fail 'a [mcp_servers.x] header was appended under an inline table (invalid TOML)'
-grep -q '^approval_policy = "never"$' "$WORK/c9/codex/config.toml" || fail 'the top keys were not filled beside an inline table'
-[ "$(grep -c '^own            codex\[.*\] mcp .* — mcp_servers is an inline table, not extended$' "$WORK/o9")" = 4 ] || fail 'the inline table was not reported for each server' "$(cat "$WORK/o9")"
-ok '9 inline mcp_servers: top keys filled, servers reported not appended, file still parses'
+run python3 apply "$WORK/c9" > "$WORK/o9" || st_fail 'apply over an inline mcp_servers failed' "$(cat "$WORK/o9")"
+toml_ok "$WORK/c9/codex/config.toml" || st_fail 'merged config.toml (inline case) does not parse' "$(cat "$WORK/c9/codex/config.toml")"
+grep -q '^\[mcp_servers\.' "$WORK/c9/codex/config.toml" && st_fail 'a [mcp_servers.x] header was appended under an inline table (invalid TOML)'
+grep -q '^approval_policy = "never"$' "$WORK/c9/codex/config.toml" || st_fail 'the top keys were not filled beside an inline table'
+[ "$(grep -c '^own            codex\[.*\] mcp .* — mcp_servers is an inline table, not extended$' "$WORK/o9")" = 4 ] || st_fail 'the inline table was not reported for each server' "$(cat "$WORK/o9")"
+st_pass '9 inline mcp_servers: top keys filled, servers reported not appended, file still parses'
 
 # --- 10. malformed defaults are refused ----------------------------------------------------------
 BR="$WORK/badroot"; rm -rf "$BR"; mkdir -p "$BR/conf/agent-defaults" "$BR/skills"
@@ -320,32 +318,32 @@ fresh "$WORK/c10"
 bad() { # $1 label — apply from $BR must exit 2 and write nothing
   python3 "$SCRIPT" apply --root "$BR" --claude-config "$WORK/c10/claude/.claude.json" --claude-md "$WORK/c10/claude/CLAUDE.md" \
     --claude-skills "$WORK/c10/claude/skills" --codex-home "$WORK/c10/codex" --override "$WORK/no-override.json" > "$WORK/o10" 2>&1; rc=$?
-  [ "$rc" = 2 ] || fail "$1: expected exit 2, got $rc" "$(cat "$WORK/o10")"
-  [ "$(cat "$WORK/c10/claude/.claude.json")" = '{}' ] || fail "$1: wrote .claude.json anyway"
+  [ "$rc" = 2 ] || st_fail "$1: expected exit 2, got $rc" "$(cat "$WORK/o10")"
+  [ "$(cat "$WORK/c10/claude/.claude.json")" = '{}' ] || st_fail "$1: wrote .claude.json anyway"
 }
 printf 'model = "x"\napproval_policy = "never"\n' > "$BR/conf/agent-defaults/codex/config.default.toml"; bad 'defaults with model'
-grep -q 'model. is never shipped' "$WORK/o10" || fail 'model refusal did not say why' "$(cat "$WORK/o10")"
+grep -q 'model. is never shipped' "$WORK/o10" || st_fail 'model refusal did not say why' "$(cat "$WORK/o10")"
 cp "$ROOT/conf/agent-defaults/codex/config.default.toml" "$BR/conf/agent-defaults/codex/config.default.toml"
 printf '{"mcpServers": {"github": {"command": "x", "env": {"GITHUB_TOKEN": "ghp_abc"}}}}\n' > "$BR/conf/agent-defaults/claude/mcp.default.json"; bad 'defaults with a token key'
-grep -q 'credential-shaped key' "$WORK/o10" || fail 'token refusal did not say why' "$(cat "$WORK/o10")"
+grep -q 'credential-shaped key' "$WORK/o10" || st_fail 'token refusal did not say why' "$(cat "$WORK/o10")"
 cp "$ROOT/conf/agent-defaults/claude/mcp.default.json" "$BR/conf/agent-defaults/claude/mcp.default.json"
 # Legacy templates are not inputs to apply/check anymore.
 rm "$BR/conf/agent-defaults/AGENT.default.md"
 python3 "$SCRIPT" apply --root "$BR" --claude-config "$WORK/c10/claude/.claude.json" --codex-home "$WORK/c10/codex" \
-  --override "$WORK/no-override.json" >/dev/null || fail 'apply still needs legacy doc templates'
-python3 "$SCRIPT" apply --root "$WORK/nowhere" --claude-config "$WORK/c10/claude/.claude.json" --codex-home "$WORK/c10/codex" >/dev/null 2>&1; [ $? = 2 ] || fail 'a root without conf/agent-defaults was not refused with exit 2'
-ok '10 malformed defaults (model, a credential-shaped key, no defaults dir) exit 2 and write nothing'
+  --override "$WORK/no-override.json" >/dev/null || st_fail 'apply still needs legacy doc templates'
+python3 "$SCRIPT" apply --root "$WORK/nowhere" --claude-config "$WORK/c10/claude/.claude.json" --codex-home "$WORK/c10/codex" >/dev/null 2>&1; [ $? = 2 ] || st_fail 'a root without conf/agent-defaults was not refused with exit 2'
+st_pass '10 malformed defaults (model, a credential-shaped key, no defaults dir) exit 2 and write nothing'
 
 # --- 11. no token anywhere ---------------------------------------------------------------------
 TOKRE='gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|GITHUB_PERSONAL_ACCESS_TOKEN'
 grep -rEl "$TOKRE" "$ROOT/conf/agent-defaults" "$WORK/c1/claude/.claude.json" "$WORK/c1/codex/config.toml" "$WORK/c3/claude/.claude.json" "$WORK/c3/codex/config.toml" \
-  && fail 'a token (or the token env key) appears in a shipped or merged file'
-grep -E 'gh[pousr]_[A-Za-z0-9]{20,}|github_pat_' "$BIN/mcp-github.sh" && fail 'mcp-github.sh carries a token literal'
-grep -E '>>? *["$]?[A-Za-z0-9_./~$"-]*(conf|json|toml|log)' "$BIN/mcp-github.sh" && fail 'mcp-github.sh writes to a file'
-ok '11 no token in the shipped files, the wrappers or the merged configs; the token env key is set only by the wrapper'
+  && st_fail 'a token (or the token env key) appears in a shipped or merged file'
+grep -E 'gh[pousr]_[A-Za-z0-9]{20,}|github_pat_' "$BIN/mcp-github.sh" && st_fail 'mcp-github.sh carries a token literal'
+grep -E '>>? *["$]?[A-Za-z0-9_./~$"-]*(conf|json|toml|log)' "$BIN/mcp-github.sh" && st_fail 'mcp-github.sh writes to a file'
+st_pass '11 no token in the shipped files, the wrappers or the merged configs; the token env key is set only by the wrapper'
 
 # --- 12. the wrappers -------------------------------------------------------------------------------
-bash -n "$BIN/mcp-github.sh" && bash -n "$BIN/mcp-fetch.sh" || fail 'a wrapper does not parse'
+bash -n "$BIN/mcp-github.sh" && bash -n "$BIN/mcp-fetch.sh" || st_fail 'a wrapper does not parse'
 SH="$WORK/shim"; mkdir -p "$SH"
 cat > "$SH/gh" <<'EOF'
 #!/bin/bash
@@ -364,31 +362,31 @@ printf 'uvx %s\n' "$*"
 EOF
 chmod +x "$SH/gh" "$SH/github-mcp-server" "$SH/uvx"
 out=$(PATH="$SH:/usr/bin:/bin" SHIM_TOKEN=shim-secret-value bash "$BIN/mcp-github.sh" 2>&1); rc=$?
-[ "$rc" = 0 ] && [ "$out" = "$(printf 'argv=stdio\ntoken=shim-secret-value')" ] || fail "mcp-github.sh did not exec the server with stdio + the gh token (rc=$rc)" "$out"
+[ "$rc" = 0 ] && [ "$out" = "$(printf 'argv=stdio\ntoken=shim-secret-value')" ] || st_fail "mcp-github.sh did not exec the server with stdio + the gh token (rc=$rc)" "$out"
 out=$(PATH="$SH:/usr/bin:/bin" bash "$BIN/mcp-github.sh" 2>&1); rc=$?
-[ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'no GitHub token' || fail "mcp-github.sh without a token should exit 1 and say so (rc=$rc)" "$out"
+[ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'no GitHub token' || st_fail "mcp-github.sh without a token should exit 1 and say so (rc=$rc)" "$out"
 out=$(PATH="$SH:/usr/bin:/bin" bash "$BIN/mcp-fetch.sh" --extra 2>&1); rc=$?
-[ "$rc" = 0 ] && [ "$out" = 'uvx mcp-server-fetch --extra' ] || fail "mcp-fetch.sh did not exec uvx mcp-server-fetch (rc=$rc)" "$out"
+[ "$rc" = 0 ] && [ "$out" = 'uvx mcp-server-fetch --extra' ] || st_fail "mcp-fetch.sh did not exec uvx mcp-server-fetch (rc=$rc)" "$out"
 # an installed mcp-server-fetch (the managed Linux image's uv tool, #3548) wins: no index round trip
 SH2="$WORK/shim2"; mkdir -p "$SH2"
 printf '#!/bin/bash\nprintf "installed %%s\\n" "$*"\n' > "$SH2/mcp-server-fetch"; chmod +x "$SH2/mcp-server-fetch"
 out=$(PATH="$SH2:$SH:/usr/bin:/bin" bash "$BIN/mcp-fetch.sh" --extra 2>&1); rc=$?
-[ "$rc" = 0 ] && [ "$out" = 'installed --extra' ] || fail "mcp-fetch.sh should exec an installed mcp-server-fetch before uvx (rc=$rc)" "$out"
+[ "$rc" = 0 ] && [ "$out" = 'installed --extra' ] || st_fail "mcp-fetch.sh should exec an installed mcp-server-fetch before uvx (rc=$rc)" "$out"
 out=$(PATH="/usr/bin:/bin" bash "$BIN/mcp-fetch.sh" 2>&1); rc=$?
-[ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'brew install uv' || fail "mcp-fetch.sh with no runner should exit 1 naming the install (rc=$rc)" "$out"
-ok '12 wrappers: github execs the server with stdio + the gh token in env (exit 1 without one); fetch execs an installed mcp-server-fetch, else uvx, names the install when none'
+[ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'brew install uv' || st_fail "mcp-fetch.sh with no runner should exit 1 naming the install (rc=$rc)" "$out"
+st_pass '12 wrappers: github execs the server with stdio + the gh token in env (exit 1 without one); fetch execs an installed mcp-server-fetch, else uvx, names the install when none'
 
 # --- 13. the no-tomllib path: macOS /usr/bin/python3 (3.9) fills the same files -----------------
 if [ -x /usr/bin/python3 ] && ! /usr/bin/python3 -c 'import tomllib' 2>/dev/null; then
   fresh "$WORK/c13"
-  run /usr/bin/python3 apply "$WORK/c13" > "$WORK/o13" || fail 'apply under /usr/bin/python3 (no tomllib) failed' "$(cat "$WORK/o13")"
-  cmp -s "$WORK/c13/codex/config.toml" "$WORK/c1/codex/config.toml" || fail 'the no-tomllib merge differs from the tomllib one' "$(diff "$WORK/c13/codex/config.toml" "$WORK/c1/codex/config.toml")"
-  [ "$(json_get "$WORK/c13/claude/.claude.json" 'sorted(d["mcpServers"])')" = "['context7', 'fetch', 'github', 'playwright']" ] || fail 'no-tomllib: .claude.json servers'
-  run /usr/bin/python3 apply "$WORK/c13" > "$WORK/o13b" || fail 'second no-tomllib apply failed'
-  grep -q '^unchanged' "$WORK/o13b" || fail 'no-tomllib apply is not idempotent' "$(cat "$WORK/o13b")"
-  ok '13 /usr/bin/python3 without tomllib produces the same config.toml, idempotently'
+  run /usr/bin/python3 apply "$WORK/c13" > "$WORK/o13" || st_fail 'apply under /usr/bin/python3 (no tomllib) failed' "$(cat "$WORK/o13")"
+  cmp -s "$WORK/c13/codex/config.toml" "$WORK/c1/codex/config.toml" || st_fail 'the no-tomllib merge differs from the tomllib one' "$(diff "$WORK/c13/codex/config.toml" "$WORK/c1/codex/config.toml")"
+  [ "$(json_get "$WORK/c13/claude/.claude.json" 'sorted(d["mcpServers"])')" = "['context7', 'fetch', 'github', 'playwright']" ] || st_fail 'no-tomllib: .claude.json servers'
+  run /usr/bin/python3 apply "$WORK/c13" > "$WORK/o13b" || st_fail 'second no-tomllib apply failed'
+  grep -q '^unchanged' "$WORK/o13b" || st_fail 'no-tomllib apply is not idempotent' "$(cat "$WORK/o13b")"
+  st_pass '13 /usr/bin/python3 without tomllib produces the same config.toml, idempotently'
 else
-  ok '13 (skipped: no tomllib-less /usr/bin/python3 on this box — the macOS CI leg runs it)'
+  st_pass '13 (skipped: no tomllib-less /usr/bin/python3 on this box — the macOS CI leg runs it)'
 fi
 
 # --- 14. a new sandbox HOME, default paths (both agents), zero injected rules ---------
@@ -397,12 +395,12 @@ printf '{}\n' > "$LOGIN/.claude.json"
 printf 'cli_auth_credentials_store = "file"\n' > "$LOGIN/.codex/config.toml"
 : > "$LOGIN/.claude/CLAUDE.md"; : > "$LOGIN/.codex/AGENTS.md"
 HOME="$LOGIN" CLAUDE_CONFIG_DIR='' CODEX_HOME="$LOGIN/.codex" FLEET_CODEX_HOME='' FLEET_CONF_DIR="$LOGIN/.config/claude-fleet" \
-  python3 "$SCRIPT" apply --root "$SR" > "$WORK/o14" || fail 'sandbox HOME default apply failed'
+  python3 "$SCRIPT" apply --root "$SR" > "$WORK/o14" || st_fail 'sandbox HOME default apply failed'
 [ "$(grep -c 'claude-fleet' "$LOGIN/.claude/CLAUDE.md")" = 0 ] && [ "$(grep -c 'claude-fleet' "$LOGIN/.codex/AGENTS.md")" = 0 ] \
-  || fail 'sandbox HOME instruction files gained fleet rules'
-ok '14 sandbox HOME default apply: CLAUDE.md 0 · AGENTS.md 0 fleet lines'
+  || st_fail 'sandbox HOME instruction files gained fleet rules'
+st_pass '14 sandbox HOME default apply: CLAUDE.md 0 · AGENTS.md 0 fleet lines'
 
-python3 - "$SCRIPT" <<'PY' || fail 'native default writer contracts'
+python3 - "$SCRIPT" <<'PY' || st_fail 'native default writer contracts'
 import copy
 from pathlib import Path
 import runpy
@@ -476,6 +474,6 @@ with tempfile.TemporaryDirectory() as temporary:
         raise AssertionError('shared configuration symlink accepted')
     assert not client.calls and other.read_text() == 'keep=true\n'
 PY
-ok '15 native writer delegates atomic publication, preserves own values and refuses unsafe targets'
+st_pass '15 native writer delegates atomic publication, preserves own values and refuses unsafe targets'
 
 printf 'PASS  fleet-agent-defaults-selftest (%d checks)\n' "$pass"

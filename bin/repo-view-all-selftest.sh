@@ -31,11 +31,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 st_real_tmux
 
-CHECKS=0 FAILS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; FAILS=$((FAILS+1)); }
-has()  { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1" "$2";; esac; }
-hasnt(){ CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1" "$2";; *) : ;; esac; }
-eq()   { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
+st_tally count miss
+eq()   { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_miss "$1: expected [$3], got [$2]"; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/repo-view-all.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -93,7 +90,7 @@ CONF="$ROOT/conf/tmux-attention.conf"
 # --- A. the picker is gone -----------------------------------------------------
 # fleet-pick.sh, fleet-xfleet-jump.sh, every referrer and the fleet-lib functions
 # (#1034, #980, #1038) are conf/gone.list's, read by gone-selftest.sh.
-hasnt "A: the 看台's key table has no pick action" "$(bash "$BIN/dash-keymap.sh" --panel switch actions 2>/dev/null)" "pick"
+st_hasnt "A: the 看台's key table has no pick action" "$(bash "$BIN/dash-keymap.sh" --panel switch actions 2>/dev/null)" "pick"
 
 # --- B. the footer -------------------------------------------------------------
 # Render status-left's TEXT (style/range markup stripped: it draws nothing) on a
@@ -102,7 +99,7 @@ hasnt "A: the 看台's key table has no pick action" "$(bash "$BIN/dash-keymap.s
 # layout, so the reference is now that layout.
 BARCONF="$ROOT/conf/tmux-bar.conf"   # the bar's own file since issue #1534
 NEW_SL=$(sed -n 's/^set -g status-left "\(.*\)"$/\1/p' "$BARCONF")
-CHECKS=$((CHECKS+1)); [ -n "$NEW_SL" ] || fail "B: could not read status-left from $BARCONF"
+CHECKS=$((CHECKS+1)); [ -n "$NEW_SL" ] || st_miss "B: could not read status-left from $BARCONF"
 . "$BIN/fleet-palette.sh"; fleet_palette_load; fleet_palette_expand "$NEW_SL"
 # shellcheck disable=SC2154  # _fpe: fleet_palette_expand's result
 NEW_SL=$_fpe
@@ -113,43 +110,43 @@ tmux set -g @login op-login
 # names the login, and a waiting session changes nothing on it.
 eq    "B: one-repo fleet footer is the node's hint (#1714)" "$(render "$NEW_SL")" ' 请用 fleet 客户端 · run `fleet` · op-login 的节点会话，只跑执行会话 '
 tmux set -w -t alpha:plan @attn_needs 3 2>/dev/null; tmux set -t alpha @attn_needs 3
-hasnt "B: …with sessions waiting, still no badge" "$(render "$NEW_SL")" "●"
+st_hasnt "B: …with sessions waiting, still no badge" "$(render "$NEW_SL")" "●"
 tmux set -t alpha -u @attn_needs
-has   "B: the login name is drawn" "$(render "$NEW_SL")" " op-login "
-hasnt "B: the fleet name is not" "$(render "$NEW_SL")" "alpha"
-hasnt "B: the hub border title names the login, not #S" \
+st_has   "B: the login name is drawn" "$(render "$NEW_SL")" " op-login "
+st_hasnt "B: the fleet name is not" "$(render "$NEW_SL")" "alpha"
+st_hasnt "B: the hub border title names the login, not #S" \
       "$(sed -n 's/^set -g pane-border-format "\(.*\)"$/\1/p' "$CONF" | grep -o 'FLEET HUB · [^ ]*')" "#S"
 tmux set -gu @login
 me=$(id -un)
 if [ -n "$(tmux display-message -p '#{user}')" ]; then    # tmux ≥ 3.3
-  has "B: unstamped server falls back to #{user}" "$(render "$NEW_SL")" " $me "
+  st_has "B: unstamped server falls back to #{user}" "$(render "$NEW_SL")" " $me "
 fi
 bash "$BIN/tmux-conf-reload.sh" /dev/null "$CONF" "$CONF" >/dev/null 2>&1
 eq    "B: tmux-conf-reload.sh stamps @login" "$(tmux show -gv @login 2>/dev/null)" "$me"
 grep -q 'set -g @login "$(id -un)"' "$BIN/fleet-up.sh"
 eq    "B: fleet-up.sh stamps @login on the fleet's socket" "$?" 0
 tmux set -g @fleet_repo_label all      # a stale value left on a live server
-hasnt 'B: 2+ repo fleet: no "· all" tail, even from a stale option' "$(render "$NEW_SL")" "· all"
+st_hasnt 'B: 2+ repo fleet: no "· all" tail, even from a stale option' "$(render "$NEW_SL")" "· all"
 tmux set -gu @fleet_repo_label
 tmux source-file "$CONF" >/dev/null 2>&1
 # A node binds no status click of its own since issue #1714 (root keeps tmux's
 # stock click; the list's key table went with the list, #1713) — absence is
 # dash-keymap-selftest.sh leg 8's, on a server no ~/.tmux.conf reached.
 b=$(tmux list-keys -T root 2>/dev/null | grep ' MouseDown1Status ')
-has   "B: root MouseDown1Status is bound" "$b" "MouseDown1Status"
-hasnt "B: root MouseDown1Status has no fleet range" "$b" ",fleet}"
+st_has   "B: root MouseDown1Status is bound" "$b" "MouseDown1Status"
+st_hasnt "B: root MouseDown1Status has no fleet range" "$b" ",fleet}"
 
 # --- C. always all ------------------------------------------------------------
 # No script reads the retired picker's `current-repo` file (#1038, conf/gone.list):
 # the one live mention is fleet-up.sh deleting it. (E below and the other multi-repo
 # selftests pin the behaviour — a stale file changes no row, anchor, backlog or ledger.)
-has   "C: …to delete the stale file" "$(cat "$BIN/fleet-up.sh")" 'rm -f "$FLEET_CONF_DIR/fleets/$NAME/current-repo"'
+st_has   "C: …to delete the stale file" "$(cat "$BIN/fleet-up.sh")" 'rm -f "$FLEET_CONF_DIR/fleets/$NAME/current-repo"'
 
 # --- D. fleet-list ---------------------------------------------------------------
 # fleet-list.sh shows the fleet and its repos: a ↳ row per further hosted repo
 fl=$(bash "$BIN/fleet-list.sh")
-has   "D: fleet-list lists alpha's second repo under it" "$(printf '%s\n' "$fl" | grep -A1 ' alpha ')" "↳"
-has   "D: …with its checkout" "$(printf '%s\n' "$fl" | grep 'o/tokenledger')" "$WORK/tl"
+st_has   "D: fleet-list lists alpha's second repo under it" "$(printf '%s\n' "$fl" | grep -A1 ' alpha ')" "↳"
+st_has   "D: …with its checkout" "$(printf '%s\n' "$fl" | grep 'o/tokenledger')" "$WORK/tl"
 eq    "D: one-repo fleets print one row each (no ↳)" "$(printf '%s\n' "$fl" | grep -c '↳')" "1"
 tmux kill-session -t beta; tmux kill-session -t gamma
 
@@ -169,24 +166,24 @@ r=$(rows)
 eq    "E: all → claude-fleet row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^claude-fleet (1)' | tail -n1 | grep -c 'issue-1')" "1"
 eq    "E: all → tokenledger row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^tokenledger (2)' | tail -n1 | grep -c 'issue-2')" "1"
 eq    "E: all → no-repo row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^no repo (1)' | tail -n1 | grep -c norepo)" "1"
-hasnt "E: all → no per-row tag on the no-repo row" "$(printf '%s\n' "$r" | grep norepo | sed 's/.*norepo//')" "no repo"
+st_hasnt "E: all → no per-row tag on the no-repo row" "$(printf '%s\n' "$r" | grep norepo | sed 's/.*norepo//')" "no repo"
 eq    "E: all → no-repo group at the foot" "$(printf '%s\n' "$r" | tail -n1 | grep -c norepo)" "1"
-has   "E: qualified origin folds as a child (└)" "$(printf '%s\n' "$r" | grep 'kid')" "└"
-has   "E: its parent carries the subtree badge" "$(printf '%s\n' "$r" | grep 'issue-2')" "0/1"
+st_has   "E: qualified origin folds as a child (└)" "$(printf '%s\n' "$r" | grep 'kid')" "└"
+st_has   "E: its parent carries the subtree badge" "$(printf '%s\n' "$r" | grep 'issue-2')" "0/1"
 # a stale current-repo file naming a hosted repo filters nothing any more
 printf 'o/tokenledger\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 eq    "E: a stale current-repo file changes no row" "$(rows)" "$r"
 # the parent's block shut (its @expand off — ⌘P's fold; the dash's ←/→ went with
 # the dash, issue #4902): the repo-qualified child goes with it
 tmux set -wu -t 'alpha:issue-2' @expand
-hasnt "E: collapsed child hidden" "$(rows)" "kid"
+st_hasnt "E: collapsed child hidden" "$(rows)" "kid"
 # degenerate: no overlay → a stale current-repo file changes nothing
 mv "$FLEET_CONF_DIR/fleets/alpha/repos" "$WORK/repos.off"
 printf 'o/tokenledger\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 r=$(rows)
-has   "E: one-repo fleet shows every window" "$r" "issue-1"
-has   "E: …including no-repo" "$r" "norepo"
-hasnt "E: …with no badge" "$(printf '%s\n' "$r" | grep norepo)" "no repo"
+st_has   "E: one-repo fleet shows every window" "$r" "issue-1"
+st_has   "E: …including no-repo" "$r" "norepo"
+st_hasnt "E: …with no badge" "$(printf '%s\n' "$r" | grep norepo)" "no repo"
 mv "$WORK/repos.off" "$FLEET_CONF_DIR/fleets/alpha/repos"
 
 # --- F. short tags ------------------------------------------------------------
@@ -198,5 +195,4 @@ eq    "F: short_of reads the overlay" "$(fleet_repo_short_of alpha o/tokenledger
 printf 'FLEET_REPO_SHORT="cf"\n' >> "$FLEET_CONF_DIR/fleets/alpha/repos/o-tokenledger.conf"
 eq    "F: colliding shorts fall back to names" "$(fleet_repo_shorts alpha | cut -f3 | tr '\n' ' ')" "claude-fleet tokenledger "
 
-if [ "$FAILS" -gt 0 ]; then printf 'repo-view-all-selftest: %d of %d checks FAILED\n' "$FAILS" "$CHECKS" >&2; exit 1; fi
-printf 'repo-view-all-selftest: %d checks passed\n' "$CHECKS"
+st_done

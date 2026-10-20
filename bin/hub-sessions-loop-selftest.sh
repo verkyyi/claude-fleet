@@ -38,8 +38,9 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'hub-sessions-loop selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hubloop-selftest.XXXXXX")" || exit 2
 S="hubl$$"
@@ -61,7 +62,6 @@ printf '{"machines": [], "sessions": [], "nodes": []}\n' > "$WORK/sessions.json"
 export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_HUB_SESSIONS_EVERY=1 FLEET_HUB_SESSIONS_LOOP_SECS=30
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 # wait_for <secs> <cmd…> — poll every 0.2s until <cmd> succeeds; rc 1 on timeout
 wait_for() { local n=$(( $1 * 5 )); shift; while [ "$n" -gt 0 ]; do "$@" && return 0; sleep 0.2; n=$((n-1)); done; return 1; }
 # The top-level --loop processes only: a `$(…)` / `( … )` inside a round is a forked
@@ -83,19 +83,19 @@ leg_I() {
 docrow() { env HOME="$L" CCQUOTA_FLEET=1 bash "$BIN/fleet-doctor.sh" 2>/dev/null | grep -E "^ *(PASS|WARN|FAIL) +$1 "; }
 echo $(( $(date +%s) - 700 )) > "$G/hub_ok"
 out=$(docrow hub-sessions)
-case "$out" in *FAIL*hub-sessions*"loop none"*) : ;; *) fail "I: a 700s cache with no loop must be a hub-sessions FAIL" "$out" ;; esac
+case "$out" in *FAIL*hub-sessions*"loop none"*) : ;; *) st_fail "I: a 700s cache with no loop must be a hub-sessions FAIL" "$out" ;; esac
 CHECKS=$((CHECKS+1))
 printf 'quota\t%s\t%s\tHTTP 401: a viewer token is required\n' "$(( $(date +%s) - 2000 ))" "$(date +%s)" > "$G/hub_auth_fail"
 out=$(docrow hubauth)
 # 2000 s plus the doctor's own run time, which can pass a minute on a busy box
-case "$out" in *FAIL*hubauth*"quota refused 3"[345]"m"*) : ;; *) fail "I: a reader refused 2000s must be a hubauth FAIL" "$out" ;; esac
+case "$out" in *FAIL*hubauth*"quota refused 3"[345]"m"*) : ;; *) st_fail "I: a reader refused 2000s must be a hubauth FAIL" "$out" ;; esac
 CHECKS=$((CHECKS+1))
 printf 'quota\t%s\t%s\tHTTP 401\n' "$(( $(date +%s) - 100 ))" "$(date +%s)" > "$G/hub_auth_fail"
 out=$(docrow hubauth)
-case "$out" in *WARN*hubauth*) : ;; *) fail "I: a reader refused 100s must be a hubauth WARN" "$out" ;; esac
+case "$out" in *WARN*hubauth*) : ;; *) st_fail "I: a reader refused 100s must be a hubauth WARN" "$out" ;; esac
 CHECKS=$((CHECKS+1))
 rm -f "$G/hub_auth_fail"
-CHECKS=$((CHECKS+1)); [ -z "$(docrow hubauth)" ] || fail "I: nothing refused must print no hubauth row"
+CHECKS=$((CHECKS+1)); [ -z "$(docrow hubauth)" ] || st_fail "I: nothing refused must print no hubauth row"
 }
 ( L="$WORK/lane-I"; mkdir -p "$L/.claude-dash/global" "$L/bin"; cp -R "$WORK/conf" "$L/conf"
   cp "$WORK/bin/tmux" "$L/bin/tmux"
@@ -105,11 +105,11 @@ CHECKS=$((CHECKS+1)); [ -z "$(docrow hubauth)" ] || fail "I: nothing refused mus
 
 # --- D (off) ------------------------------------------------------------------
 out=$(bash "$HUBS" --status 2>&1); rc=$?
-CHECKS=$((CHECKS+1)); [ "$out" = off ] && [ "$rc" = 0 ] || fail "D: hub off — --status must say off, rc 0 (rc=$rc)" "$out"
+CHECKS=$((CHECKS+1)); [ "$out" = off ] && [ "$rc" = 0 ] || st_fail "D: hub off — --status must say off, rc 0 (rc=$rc)" "$out"
 export CCQUOTA_FLEET=1
 out=$(bash "$HUBS" --status 2>&1); rc=$?
-CHECKS=$((CHECKS+1)); [ "$rc" = 1 ] || fail "D: no loop — --status rc must be 1 (rc=$rc)" "$out"
-case "$out" in 'loop none · cache none') : ;; *) fail "D: no loop, no cache — wrong line" "$out" ;; esac
+CHECKS=$((CHECKS+1)); [ "$rc" = 1 ] || st_fail "D: no loop — --status rc must be 1 (rc=$rc)" "$out"
+case "$out" in 'loop none · cache none') : ;; *) st_fail "D: no loop, no cache — wrong line" "$out" ;; esac
 CHECKS=$((CHECKS+1))
 
 # --- A: launchd's group kill ------------------------------------------------------
@@ -123,96 +123,96 @@ time.sleep(0.5)                               # the loop is up and in its first 
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
 os.killpg(os.getpgid(0), signal.SIGKILL)      # launchd: the tick is over
 PY
-wait_for 5 loop_alive || fail "A: the loop died with the tick's process group"
+wait_for 5 loop_alive || st_fail "A: the loop died with the tick's process group"
 CHECKS=$((CHECKS+1))
 read -r P < "$G/hubsess.pid"
 pg=$(ps -o pgid= -p "$P" 2>/dev/null | tr -d ' ')
-CHECKS=$((CHECKS+1)); [ "$pg" = "$P" ] || fail "A: the loop must lead a process group of its own (pid $P pgid $pg)"
-wait_for 5 test -s "$G/hub_ok" || fail "A: the surviving loop never wrote hub_ok"
+CHECKS=$((CHECKS+1)); [ "$pg" = "$P" ] || st_fail "A: the loop must lead a process group of its own (pid $P pgid $pg)"
+wait_for 5 test -s "$G/hub_ok" || st_fail "A: the surviving loop never wrote hub_ok"
 read -r t1 < "$G/hub_ok"
-wait_for 6 sh -c '[ "$(cat "$1")" -gt "$2" ]' _ "$G/hub_ok" "$t1" || fail "A: hub_ok does not move — the loop is not refreshing"
+wait_for 6 sh -c '[ "$(cat "$1")" -gt "$2" ]' _ "$G/hub_ok" "$t1" || st_fail "A: hub_ok does not move — the loop is not refreshing"
 CHECKS=$((CHECKS+1))
 
 # --- D (alive) ----------------------------------------------------------------
 out=$(bash "$HUBS" --status 2>&1); rc=$?
-CHECKS=$((CHECKS+1)); [ "$rc" = 0 ] || fail "D: live loop + fresh cache — --status rc must be 0 (rc=$rc)" "$out"
-case "$out" in "loop $P · cache "[0-9]*s) : ;; *) fail "D: live loop — wrong line" "$out" ;; esac
+CHECKS=$((CHECKS+1)); [ "$rc" = 0 ] || st_fail "D: live loop + fresh cache — --status rc must be 0 (rc=$rc)" "$out"
+case "$out" in "loop $P · cache "[0-9]*s) : ;; *) st_fail "D: live loop — wrong line" "$out" ;; esac
 CHECKS=$((CHECKS+1))
 
 # --- B: one at a time ---------------------------------------------------------------
 bash "$HUBS" --ensure
 sleep 1
 read -r P2 < "$G/hubsess.pid"
-CHECKS=$((CHECKS+1)); [ "$P2" = "$P" ] || fail "B: a second --ensure replaced the live loop ($P → $P2)"
+CHECKS=$((CHECKS+1)); [ "$P2" = "$P" ] || st_fail "B: a second --ensure replaced the live loop ($P → $P2)"
 
 # --- C: a recycled pid ----------------------------------------------------------
-killloop; wait_for 5 sh -c '! kill -0 "$1" 2>/dev/null' _ "$P" || fail "C: could not stop the leg-A loop"
+killloop; wait_for 5 sh -c '! kill -0 "$1" 2>/dev/null' _ "$P" || st_fail "C: could not stop the leg-A loop"
 sleep 30 & DECOY=$!                           # alive, and not a --loop
 printf '%s\n' "$DECOY" > "$G/hubsess.pid"
 out=$(bash "$HUBS" --status 2>&1)
-case "$out" in 'loop none'*) : ;; *) kill "$DECOY" 2>/dev/null; fail "C: a recycled pid counted as the loop" "$out" ;; esac
+case "$out" in 'loop none'*) : ;; *) kill "$DECOY" 2>/dev/null; st_fail "C: a recycled pid counted as the loop" "$out" ;; esac
 CHECKS=$((CHECKS+1))
 bash "$HUBS" --ensure
 wait_for 5 sh -c 'read -r p < "$1" && [ "$p" != "$2" ] && kill -0 "$p"' _ "$G/hubsess.pid" "$DECOY" \
-  || { kill "$DECOY" 2>/dev/null; fail "C: --ensure trusted a recycled pid and started no loop"; }
+  || { kill "$DECOY" 2>/dev/null; st_fail "C: --ensure trusted a recycled pid and started no loop"; }
 CHECKS=$((CHECKS+1))
 kill "$DECOY" 2>/dev/null
 
 # --- E: systemd parity + the doctor row -----------------------------------------
 CHECKS=$((CHECKS+1)); grep -q '^KillMode=process$' "$BIN/../systemd/claude-fleet-collect.service" \
-  || fail "E: claude-fleet-collect.service must say KillMode=process (the loop outlives the tick)"
+  || st_fail "E: claude-fleet-collect.service must say KillMode=process (the loop outlives the tick)"
 CHECKS=$((CHECKS+1)); grep -q 'fleet-hub-sessions.sh" --status' "$BIN/fleet-doctor.sh" \
-  || fail "E: fleet-doctor must read fleet-hub-sessions.sh --status"
+  || st_fail "E: fleet-doctor must read fleet-hub-sessions.sh --status"
 CHECKS=$((CHECKS+1)); grep -q 'fleet-hub-sessions.sh" --ensure' "$BIN/tmux-dash-collect.sh" \
-  || fail "E: the collector no longer runs --ensure every tick"
+  || st_fail "E: the collector no longer runs --ensure every tick"
 
 # --- F: two loops at once --------------------------------------------------------
-killloop; wait_for 5 sh -c '! pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || fail "F: could not stop the leg-C loop"
+killloop; wait_for 5 sh -c '! pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || st_fail "F: could not stop the leg-C loop"
 bash "$HUBS" --loop & bash "$HUBS" --loop &
 sleep 2
 n=$(loop_pids | wc -l | tr -d ' ')
-CHECKS=$((CHECKS+1)); [ "$n" = 1 ] || fail "F: two --loop started together — $n stayed, want 1" "$(loop_pids)"
+CHECKS=$((CHECKS+1)); [ "$n" = 1 ] || st_fail "F: two --loop started together — $n stayed, want 1" "$(loop_pids)"
 read -r LP < "$G/hubsess.lock"
-CHECKS=$((CHECKS+1)); [ "$LP" = "$(loop_pids)" ] || fail "F: the lock names $LP, the loop is $(loop_pids)"
+CHECKS=$((CHECKS+1)); [ "$LP" = "$(loop_pids)" ] || st_fail "F: the lock names $LP, the loop is $(loop_pids)"
 out=$(bash "$HUBS" --status 2>&1)
-case "$out" in "loop $LP · "*) : ;; *) fail "F: --status does not name the lock holder $LP" "$out" ;; esac
+case "$out" in "loop $LP · "*) : ;; *) st_fail "F: --status does not name the lock holder $LP" "$out" ;; esac
 CHECKS=$((CHECKS+1))
 kill "$LP" 2>/dev/null; wait 2>/dev/null
-wait_for 5 sh -c '! kill -0 "$1" 2>/dev/null' _ "$LP" || fail "F: could not stop the loop"
+wait_for 5 sh -c '! kill -0 "$1" 2>/dev/null' _ "$LP" || st_fail "F: could not stop the loop"
 out=$(bash "$HUBS" --status 2>&1)
-case "$out" in 'loop none'*) : ;; *) fail "F: a killed holder still reads as the loop (the lock must die with it)" "$out" ;; esac
+case "$out" in 'loop none'*) : ;; *) st_fail "F: a killed holder still reads as the loop (the lock must die with it)" "$out" ;; esac
 CHECKS=$((CHECKS+1))
 
 # --- G: a nohup that cannot detach ---------------------------------------------------
 printf '#!/bin/sh\necho "nohup: can'"'"'t detach from console" >&2\nexit 127\n' > "$WORK/bin/nohup"; chmod +x "$WORK/bin/nohup"
 bash "$HUBS" --ensure
-wait_for 5 sh -c 'pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || fail "G: with a nohup that exits, --ensure started no loop (the LaunchDaemon case)"
+wait_for 5 sh -c 'pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || st_fail "G: with a nohup that exits, --ensure started no loop (the LaunchDaemon case)"
 CHECKS=$((CHECKS+1))
-CHECKS=$((CHECKS+1)); sed -n '/^ensure() {/,/^}/p' "$HUBS" | grep -q nohup && fail "G: ensure() must not go through nohup"
+CHECKS=$((CHECKS+1)); sed -n '/^ensure() {/,/^}/p' "$HUBS" | grep -q nohup && st_fail "G: ensure() must not go through nohup"
 rm -f "$WORK/bin/nohup"
-killloop; wait_for 5 sh -c '! pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || fail "G: could not stop the loop"
+killloop; wait_for 5 sh -c '! pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || st_fail "G: could not stop the loop"
 
 # --- J: a loop of other code gives way ------------------------------------------
 bash "$HUBS" --ensure
-wait_for 5 loop_alive || fail "J: --ensure started no loop"
-wait_for 5 test -s "$G/hubsess.loopcode" || fail "J: the loop wrote no hubsess.loopcode"
+wait_for 5 loop_alive || st_fail "J: --ensure started no loop"
+wait_for 5 test -s "$G/hubsess.loopcode" || st_fail "J: the loop wrote no hubsess.loopcode"
 read -r J1 < "$G/hubsess.pid"
 printf 'old-code\n' > "$G/hubsess.loopcode"         # what a loop of the version before wrote
 bash "$HUBS" --ensure
 wait_for 5 sh -c 'read -r p < "$1" && [ "$p" != "$2" ] && kill -0 "$p"' _ "$G/hubsess.pid" "$J1" \
-  || fail "J: a loop of other code was not replaced by --ensure"
+  || st_fail "J: a loop of other code was not replaced by --ensure"
 CHECKS=$((CHECKS+1))
-CHECKS=$((CHECKS+1)); ! kill -0 "$J1" 2>/dev/null || fail "J: the old loop $J1 still runs beside the new one"
+CHECKS=$((CHECKS+1)); ! kill -0 "$J1" 2>/dev/null || st_fail "J: the old loop $J1 still runs beside the new one"
 n=$(loop_pids | wc -l | tr -d ' ')
-CHECKS=$((CHECKS+1)); [ "$n" = 1 ] || fail "J: $n loops after the replacement, want 1"
+CHECKS=$((CHECKS+1)); [ "$n" = 1 ] || st_fail "J: $n loops after the replacement, want 1"
 read -r J2 < "$G/hubsess.pid"
-wait_for 5 sh -c '[ "$(cat "$1")" != old-code ]' _ "$G/hubsess.loopcode" || fail "J: the new loop did not restamp its code"
+wait_for 5 sh -c '[ "$(cat "$1")" != old-code ]' _ "$G/hubsess.loopcode" || st_fail "J: the new loop did not restamp its code"
 rm -f "$G/hubsess.loopcode"                          # a loop from before the stamp
 bash "$HUBS" --ensure
 wait_for 5 sh -c 'read -r p < "$1" && [ "$p" != "$2" ] && kill -0 "$p"' _ "$G/hubsess.pid" "$J2" \
-  || fail "J: a loop with no code stamp was not replaced"
+  || st_fail "J: a loop with no code stamp was not replaced"
 CHECKS=$((CHECKS+1))
-killloop; wait_for 5 sh -c '! pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || fail "J: could not stop the loop"
+killloop; wait_for 5 sh -c '! pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || st_fail "J: could not stop the loop"
 
 # --- H: the node token first, and a refusal on record --------------------------------
 cat > "$WORK/hub.py" <<'PY'
@@ -238,7 +238,7 @@ open(os.path.join(work, "hub.port"), "w").write(str(s.server_address[1]))
 s.serve_forever()
 PY
 python3 "$WORK/hub.py" "$WORK" & HUBPID=$!
-wait_for 5 test -s "$WORK/hub.port" || fail "H: the 127.0.0.1 test hub did not start"
+wait_for 5 test -s "$WORK/hub.port" || st_fail "H: the 127.0.0.1 test hub did not start"
 printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=node-tok-2630\n' "$(cat "$WORK/hub.port")" > "$WORK/conf/node.env"
 chmod 600 "$WORK/conf/node.env"
 # curl on PATH that records its argv, then runs the real one
@@ -246,26 +246,26 @@ REALCURL=$(command -v curl)
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/curl.argv"\nexec "%s" "$@"\n' "$WORK" "$REALCURL" > "$WORK/bin/curl"; chmod +x "$WORK/bin/curl"
 out=$(env -u FLEET_HUB_SESSIONS_CMD CCQUOTA_HUB_URL="http://127.0.0.1:$(cat "$WORK/hub.port")" FLEET_CERT="$WORK/no-cert" HOME="$WORK" \
       bash "$HUBS" --identity 2>&1)
-case "$out" in "node $WORK/conf/node.env") : ;; *) fail "H: --identity must name the node token first" "$out" ;; esac
+case "$out" in "node $WORK/conf/node.env") : ;; *) st_fail "H: --identity must name the node token first" "$out" ;; esac
 CHECKS=$((CHECKS+1))
 env -u FLEET_HUB_SESSIONS_CMD CCQUOTA_HUB_URL="http://127.0.0.1:$(cat "$WORK/hub.port")" FLEET_CERT="$WORK/no-cert" HOME="$WORK" \
   bash "$HUBS" --refresh >/dev/null 2>&1
 CHECKS=$((CHECKS+1)); grep -q '^/v1/fleet/fleet_sessions Bearer node-tok-2630$' "$WORK/hub.auth" \
-  || fail "H: the node token did not go out as the bearer" "$(cat "$WORK/hub.auth" 2>/dev/null)"
+  || st_fail "H: the node token did not go out as the bearer" "$(cat "$WORK/hub.auth" 2>/dev/null)"
 CHECKS=$((CHECKS+1)); grep -q $'^hub-sessions\t[0-9]*\t[0-9]*\tHTTP 401' "$G/hub_auth_fail" 2>/dev/null \
-  || fail "H: a refused round must be recorded in global/hub_auth_fail" "$(cat "$G/hub_auth_fail" 2>/dev/null)"
-CHECKS=$((CHECKS+1)); grep -q 'node-tok-2630' "$WORK/curl.argv" && fail "H: the node token is in curl's argv" "$(cat "$WORK/curl.argv")"
+  || st_fail "H: a refused round must be recorded in global/hub_auth_fail" "$(cat "$G/hub_auth_fail" 2>/dev/null)"
+CHECKS=$((CHECKS+1)); grep -q 'node-tok-2630' "$WORK/curl.argv" && st_fail "H: the node token is in curl's argv" "$(cat "$WORK/curl.argv")"
 : > "$WORK/hub.open"
 env -u FLEET_HUB_SESSIONS_CMD CCQUOTA_HUB_URL="http://127.0.0.1:$(cat "$WORK/hub.port")" FLEET_CERT="$WORK/no-cert" HOME="$WORK" \
   FLEET_HUB_SESSIONS_NODE_REFUSED_TTL=0 bash "$HUBS" --refresh >/dev/null 2>&1
-CHECKS=$((CHECKS+1)); [ ! -s "$G/hub_auth_fail" ] || fail "H: the round that stood must clear hub-sessions from hub_auth_fail" "$(cat "$G/hub_auth_fail")"
+CHECKS=$((CHECKS+1)); [ ! -s "$G/hub_auth_fail" ] || st_fail "H: the round that stood must clear hub-sessions from hub_auth_fail" "$(cat "$G/hub_auth_fail")"
 kill "$HUBPID" 2>/dev/null; HUBPID=''
 rm -f "$WORK/bin/curl" "$WORK/conf/node.env"
 
 # its verdict is its checks file (written only when every check held): leg F's
 # bare `wait` may already have reaped the lane, so its exit status is not read
 wait "$LANE_I" 2>/dev/null; cat "$WORK/lane-I.log"
-[ -s "$WORK/lane-I/checks" ] || fail "I: the doctor lane failed (its lines above)"
+[ -s "$WORK/lane-I/checks" ] || st_fail "I: the doctor lane failed (its lines above)"
 CHECKS=$((CHECKS + $(cat "$WORK/lane-I/checks")))
 
 printf 'hub-sessions-loop selftest: PASS (%s checks)\n' "$CHECKS"

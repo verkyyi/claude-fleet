@@ -17,6 +17,7 @@
 #      the answers are the same, and the one without never says fleet-lib
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 REPO="$(cd "$BIN/.." && pwd)"
 LIST="$REPO/conf/client-runtime.list"
 MANIFEST="$REPO/tokenledger/hub/api/fleetclient/manifest"
@@ -26,7 +27,6 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/client-core-st.XXXXXX")
 trap 'rm -rf "${WORK:?}"' EXIT
 PASS=0 FAIL=0
 ok() { PASS=$((PASS + 1)); printf 'ok   %s\n' "$1"; }
-no() { FAIL=$((FAIL + 1)); printf 'FAIL %s\n' "$1"; }
 
 # The client-package files that run only on a machine with a fleet (they are on
 # the list because a client file NAMES them — a command it sends to its home over
@@ -56,7 +56,7 @@ while IFS=$'\t' read -r p _; do
   hits=$(code "$REPO/$p" | grep 'fleet-lib\.sh')
   [ -z "$hits" ] || bad="$bad $p(${hits%%:*})"
 done < <(grep -v '^#' "$LIST")
-[ -z "$bad" ] && ok "A no client file names fleet-lib.sh in code" || no "A names fleet-lib.sh:$bad — read fleet-client-core.sh (fleet_host_lib for a machine-only branch), or add the file to MACHINE_SIDE with why"
+[ -z "$bad" ] && ok "A no client file names fleet-lib.sh in code" || st_miss "A names fleet-lib.sh:$bad — read fleet-client-core.sh (fleet_host_lib for a machine-only branch), or add the file to MACHINE_SIDE with why"
 stale=''
 while IFS=$'\t' read -r p _; do
   [ -n "$p" ] || continue
@@ -64,31 +64,31 @@ while IFS=$'\t' read -r p _; do
 done <<EOF
 $MACHINE_SIDE
 EOF
-[ -z "$stale" ] && ok "A every MACHINE_SIDE row still names fleet-lib.sh" || no "A MACHINE_SIDE rows that no longer need it (drop them):$stale"
+[ -z "$stale" ] && ok "A every MACHINE_SIDE row still names fleet-lib.sh" || st_miss "A MACHINE_SIDE rows that no longer need it (drop them):$stale"
 
 # --- B: one implementation ----------------------------------------------------------
 defs() { grep -oE '^[A-Za-z_][A-Za-z0-9_]*\(\)' "$1" | tr -d '()' | sort -u; }
 dup=$(comm -12 <(defs "$CORE") <(defs "$LIB") | tr '\n' ' ')
-[ -z "$dup" ] && ok "B no function defined in both" || no "B defined twice: $dup"
+[ -z "$dup" ] && ok "B no function defined in both" || st_miss "B defined twice: $dup"
 n=$(defs "$CORE" | wc -l | tr -d ' ')
 miss=$(bash -c '. "$1" >/dev/null 2>&1; for f in $2; do type "$f" >/dev/null 2>&1 || printf "%s " "$f"; done' _ "$LIB" "$(defs "$CORE" | tr '\n' ' ')")
-[ -z "$miss" ] && ok "B fleet-lib.sh defines all $n core functions (sourced from the core)" || no "B missing after sourcing fleet-lib.sh: $miss"
+[ -z "$miss" ] && ok "B fleet-lib.sh defines all $n core functions (sourced from the core)" || st_miss "B missing after sourcing fleet-lib.sh: $miss"
 mkdir -p "$WORK/link" "$WORK/alone"
 ln -s "$LIB" "$WORK/link/fleet-lib.sh"
 got=$(bash -c '. "$1/fleet-lib.sh" 2>&1; type fleet_each_conf >/dev/null 2>&1 && echo found' _ "$WORK/link")
-[ "$got" = found ] && ok "B a lone symlink to fleet-lib.sh finds the core beside its target" || no "B symlinked lib: $got"
+[ "$got" = found ] && ok "B a lone symlink to fleet-lib.sh finds the core beside its target" || st_miss "B symlinked lib: $got"
 got=$(zsh -c '. "$1" >/dev/null 2>&1; whence fleet_find_tool >/dev/null && echo found' _ "$LIB" 2>/dev/null)
 command -v zsh >/dev/null 2>&1 || got=found
-[ "$got" = found ] && ok "B zsh sources fleet-lib.sh → the core's functions" || no "B zsh: $got"
+[ "$got" = found ] && ok "B zsh sources fleet-lib.sh → the core's functions" || st_miss "B zsh: $got"
 cp "$CORE" "$WORK/alone/"
 got=$(bash -c '. "$1/fleet-client-core.sh"; fleet_host_lib; echo "rc=$? lib=${_FLEET_LIB_DIR:-}"' _ "$WORK/alone")
-[ "$got" = "rc=1 lib=" ] && ok "B fleet_host_lib answers 1 with no fleet-lib.sh beside it" || no "B fleet_host_lib alone: $got"
+[ "$got" = "rc=1 lib=" ] && ok "B fleet_host_lib answers 1 with no fleet-lib.sh beside it" || st_miss "B fleet_host_lib alone: $got"
 got=$(bash -c '. "$1/fleet-client-core.sh"; fleet_host_lib && type fleet_load_conf >/dev/null && echo loaded' _ "$BIN")
-[ "$got" = loaded ] && ok "B fleet_host_lib loads fleet-lib.sh where it is" || no "B fleet_host_lib: $got"
+[ "$got" = loaded ] && ok "B fleet_host_lib loads fleet-lib.sh where it is" || st_miss "B fleet_host_lib: $got"
 
 # --- C: the package and the list -----------------------------------------------------
-grep -qx 'bin/fleet-client-core.sh' "$MANIFEST" && ok "C the client package carries the core" || no "C bin/fleet-client-core.sh not in $MANIFEST"
-grep -q $'^bin/fleet-client-core.sh\t' "$LIST" && ok "C the runtime list names the core" || no "C core not on $LIST"
+grep -qx 'bin/fleet-client-core.sh' "$MANIFEST" && ok "C the client package carries the core" || st_miss "C bin/fleet-client-core.sh not in $MANIFEST"
+grep -q $'^bin/fleet-client-core.sh\t' "$LIST" && ok "C the runtime list names the core" || st_miss "C core not on $LIST"
 # (fleet-lib.sh is not on the client's runtime list, #4825: conf/gone.list)
 
 # --- D: smoke, with and without fleet-lib.sh ------------------------------------------
@@ -103,7 +103,7 @@ lay() {   # lay <root> [<extra>] — the client package (its installed files, no
 lay "$WORK/with" bin/fleet-lib.sh
 lay "$WORK/without"
 [ -f "$WORK/with/bin/fleet-lib.sh" ] && [ ! -e "$WORK/without/bin/fleet-lib.sh" ] \
-  && ok "D two packages: with and without fleet-lib.sh" || no "D the packages were not laid"
+  && ok "D two packages: with and without fleet-lib.sh" || st_miss "D the packages were not laid"
 # run <root> <name> <cmd…> — in a fresh HOME seeded as a signed-in client
 run() {
   local root=$1 name=$2 h; shift 2
@@ -121,9 +121,9 @@ side() {   # side <name> <cmd…> — both packages, the same answer, no fleet-l
   local name=$1; shift
   run "$WORK/with" "$name" "$@"; run "$WORK/without" "$name" "$@"
   if ! diff -q "$WORK/$name.with" "$WORK/$name.without" >/dev/null; then
-    no "D $name differs without fleet-lib.sh: $(diff "$WORK/$name.with" "$WORK/$name.without" | head -6 | tr '\n' '|')"
+    st_miss "D $name differs without fleet-lib.sh: $(diff "$WORK/$name.with" "$WORK/$name.without" | head -6 | tr '\n' '|')"
   elif grep -qiE 'fleet-lib|command not found|No such file|unbound variable' "$WORK/$name.without"; then
-    no "D $name: $(grep -iE 'fleet-lib|command not found|No such file|unbound variable' "$WORK/$name.without" | head -2 | tr '\n' '|')"
+    st_miss "D $name: $(grep -iE 'fleet-lib|command not found|No such file|unbound variable' "$WORK/$name.without" | head -2 | tr '\n' '|')"
   else
     ok "D $name: the same without fleet-lib.sh ($(tail -n 1 "$WORK/$name.without" | grep -o 'rc=[0-9]*' || grep -o 'rc=[0-9]*' "$WORK/$name.without" | head -1))"
   fi
@@ -144,4 +144,4 @@ m.tools_on_path(); print("road", m.road(), "here", repr(m.fleet_here()))'
 side hub-write    bash -c '"$R/bin/fleet-hub-write.sh" identity 2>&1 | head -n 3'
 
 printf '\nclient-core-selftest: %d passed, %d failed\n' "$PASS" "$FAIL"
-[ "$FAIL" = 0 ]
+st_done

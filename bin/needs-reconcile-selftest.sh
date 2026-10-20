@@ -59,7 +59,7 @@ ORACLE="$BIN/fleet-pending-tool.sh"
 [ -f "$ORACLE" ]  || { printf 'selftest: %s not found\n' "$ORACLE" >&2; exit 2; }
 
 st_real_tmux
-command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
+st_need python3
 
 # SHORT scratch name on purpose: a unix socket path is capped at ~104 bytes, and
 # macOS's $TMPDIR is already ~55 of them — "needs-reconcile-selftest.XXXXXX" put
@@ -88,7 +88,6 @@ FAIL=0 CHECKS=0
 # FAIL COUNTS, rather than latching at 1: PART B decides whether to print its
 # diagnostics by comparing the count before and after (issue #675), and a latch would
 # silence them on exactly the run where PART A had already failed too.
-fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
 tf() { "$REAL_TMUX" -L fleetR "$@"; }
 
 SPIN_PID=''
@@ -145,7 +144,7 @@ mkwin() {
   [ "$hasc" = yes ] || return 0
   # shellcheck source=/dev/null
   pid=$(. "$BIN/fleet-lib.sh" 2>/dev/null; fleet_pane_claude_pid "$name" fleetR 2>/dev/null)
-  [ -n "$pid" ] || { fail "fixture: no fake claude resolved under window $name"; return 0; }
+  [ -n "$pid" ] || { st_miss "fixture: no fake claude resolved under window $name"; return 0; }
   [ -n "$tool" ] || return 0                       # registered=no: the "unknown" case
   sid="sid-$name"
   # The resident oracle requires the native and fleet identities plus birth.
@@ -183,24 +182,24 @@ tf set-window-option -t w-codex @cc_agent codex
 # ---------------------------------------------------------------------------
 orc() { sh "$ORACLE" -L fleetR "$1" >/dev/null 2>&1; printf '%s' "$?"; }
 CHECKS=$((CHECKS+1)); [ "$(orc w-codex)" = 4 ] \
-  || fail "oracle: Codex is unknown to the Claude transcript oracle, never dead" "$(orc w-codex)"
-CHECKS=$((CHECKS+1)); [ "$(orc w-askfix)" = 0 ] || fail "oracle: a pending AskUserQuestion must exit 0" "$(orc w-askfix)"
+  || st_miss "oracle: Codex is unknown to the Claude transcript oracle, never dead" "$(orc w-codex)"
+CHECKS=$((CHECKS+1)); [ "$(orc w-askfix)" = 0 ] || st_miss "oracle: a pending AskUserQuestion must exit 0" "$(orc w-askfix)"
 CHECKS=$((CHECKS+1)); [ "$(sh "$ORACLE" -L fleetR w-askfix 2>/dev/null)" = AskUserQuestion ] \
-  || fail "oracle: …and must NAME it" "$(sh "$ORACLE" -L fleetR w-askfix 2>/dev/null)"
-CHECKS=$((CHECKS+1)); [ "$(orc w-stale)" = 1 ]  || fail "oracle: an answered transcript must exit 1 (nothing pending)" "$(orc w-stale)"
-CHECKS=$((CHECKS+1)); [ "$(orc w-dead)" = 3 ]   || fail "oracle: a pane with no Claude must exit 3, not 1 — 'nothing here' is not 'nothing pending'" "$(orc w-dead)"
-CHECKS=$((CHECKS+1)); [ "$(orc w-unreg)" = 4 ]  || fail "oracle: a live Claude with no resolvable transcript must exit 4 (unknown)" "$(orc w-unreg)"
-CHECKS=$((CHECKS+1)); [ "$(orc nosuchwindow)" = 3 ] || fail "oracle: a target with no pane must exit 3" "$(orc nosuchwindow)"
+  || st_miss "oracle: …and must NAME it" "$(sh "$ORACLE" -L fleetR w-askfix 2>/dev/null)"
+CHECKS=$((CHECKS+1)); [ "$(orc w-stale)" = 1 ]  || st_miss "oracle: an answered transcript must exit 1 (nothing pending)" "$(orc w-stale)"
+CHECKS=$((CHECKS+1)); [ "$(orc w-dead)" = 3 ]   || st_miss "oracle: a pane with no Claude must exit 3, not 1 — 'nothing here' is not 'nothing pending'" "$(orc w-dead)"
+CHECKS=$((CHECKS+1)); [ "$(orc w-unreg)" = 4 ]  || st_miss "oracle: a live Claude with no resolvable transcript must exit 4 (unknown)" "$(orc w-unreg)"
+CHECKS=$((CHECKS+1)); [ "$(orc nosuchwindow)" = 3 ] || st_miss "oracle: a target with no pane must exit 3" "$(orc nosuchwindow)"
 
 # The PATH form is unchanged — its hook callers depend on every one of these.
 T_ASK="$WORK/t-ask.jsonl"; mk_transcript "$T_ASK" AskUserQuestion
 CHECKS=$((CHECKS+1)); [ "$(sh "$ORACLE" "$T_ASK")" = AskUserQuestion ] \
-  || fail "oracle: the path form must still name a pending tool" "$(sh "$ORACLE" "$T_ASK")"
+  || st_miss "oracle: the path form must still name a pending tool" "$(sh "$ORACLE" "$T_ASK")"
 sh "$ORACLE" "$WORK/no-such-transcript.jsonl" >/dev/null 2>&1; rc=$?
 CHECKS=$((CHECKS+1)); [ "$rc" = 1 ] \
-  || fail "oracle: a MISSING path must stay exit 1 (the hooks' fail-safe), never be retried as a tmux target" "$rc"
+  || st_miss "oracle: a MISSING path must stay exit 1 (the hooks' fail-safe), never be retried as a tmux target" "$rc"
 sh "$ORACLE" >/dev/null 2>&1; rc=$?
-CHECKS=$((CHECKS+1)); [ "$rc" = 2 ] || fail "oracle: no argument must exit 2 (usage)" "$rc"
+CHECKS=$((CHECKS+1)); [ "$rc" = 2 ] || st_miss "oracle: no argument must exit 2 (usage)" "$rc"
 
 # ---------------------------------------------------------------------------
 # PART B — the reconcile, driven by the REAL spinner
@@ -306,50 +305,50 @@ FAIL_BEFORE_B="$FAIL"
 
 # The clears.
 CHECKS=$((CHECKS+1)); [ "$(st w-dead)" = needs ] \
-  || fail "a pane without a native identity is unknown and must remain needs" "state=$(st w-dead)"
-CHECKS=$((CHECKS+1)); [ "$(sb w-dead)" = perm ] || fail "…and its subtype must remain" "needs=$(sb w-dead)"
+  || st_miss "a pane without a native identity is unknown and must remain needs" "state=$(st w-dead)"
+CHECKS=$((CHECKS+1)); [ "$(sb w-dead)" = perm ] || st_miss "…and its subtype must remain" "needs=$(sb w-dead)"
 CHECKS=$((CHECKS+1)); [ "$(st w-stale)" = "done" ] \
-  || fail "a red 'perm' with nothing pending in the transcript must clear to done" "state=$(st w-stale)"
-CHECKS=$((CHECKS+1)); [ -z "$(sb w-stale)" ] || fail "…and drop the stale reason" "needs=$(sb w-stale)"
+  || st_miss "a red 'perm' with nothing pending in the transcript must clear to done" "state=$(st w-stale)"
+CHECKS=$((CHECKS+1)); [ -z "$(sb w-stale)" ] || st_miss "…and drop the stale reason" "needs=$(sb w-stale)"
 # #699: the guard that required ask|perm here produced NO verdict for an empty
 # subtype, so the class that goes stale most — the classifier writes an empty subtype
 # by design, and only ever at Stop, where nothing can be pending — was the one class
 # nothing could ever clear.
 CHECKS=$((CHECKS+1)); [ "$(st w-plainold)" = "done" ] \
-  || fail "an EMPTY-subtype red past FLEET_NEEDS_PLAIN_SECS with nothing pending must clear to done (#699)" "state=$(st w-plainold)"
-CHECKS=$((CHECKS+1)); [ -z "$(sb w-plainold)" ] || fail "…and stay subtype-less" "needs=$(sb w-plainold)"
+  || st_miss "an EMPTY-subtype red past FLEET_NEEDS_PLAIN_SECS with nothing pending must clear to done (#699)" "state=$(st w-plainold)"
+CHECKS=$((CHECKS+1)); [ -z "$(sb w-plainold)" ] || st_miss "…and stay subtype-less" "needs=$(sb w-plainold)"
 
 # The subtype re-settle — the live 2026-09-14 defect, in both directions. The window
 # stays RED: the operator still has to act, they were just told the wrong reflex.
 CHECKS=$((CHECKS+1)); [ "$(st w-askfix)" = needs ] \
-  || fail "a window with a pending AskUserQuestion must STAY red" "state=$(st w-askfix)"
+  || st_miss "a window with a pending AskUserQuestion must STAY red" "state=$(st w-askfix)"
 CHECKS=$((CHECKS+1)); [ "$(sb w-askfix)" = ask ] \
-  || fail "…and a stale 'perm' over an open AskUserQuestion must re-settle to 'ask' (#656's ⊘-on-a-question, corrected late)" "needs=$(sb w-askfix)"
+  || st_miss "…and a stale 'perm' over an open AskUserQuestion must re-settle to 'ask' (#656's ⊘-on-a-question, corrected late)" "needs=$(sb w-askfix)"
 CHECKS=$((CHECKS+1)); [ "$(st w-permfix)" = needs ] && [ "$(sb w-permfix)" = perm ] \
-  || fail "a stale 'ask' over a pending Bash must re-settle to 'perm'" "state=$(st w-permfix) needs=$(sb w-permfix)"
+  || st_miss "a stale 'ask' over a pending Bash must re-settle to 'perm'" "state=$(st w-permfix) needs=$(sb w-permfix)"
 
 # The rails: what must NOT be touched.
 CHECKS=$((CHECKS+1)); [ "$(st w-codex)" = needs ] && [ -z "$(sb w-codex)" ] \
-  || fail "a Codex blocker must stay red even though no Claude process exists" "state=$(st w-codex) needs=$(sb w-codex)"
+  || st_miss "a Codex blocker must stay red even though no Claude process exists" "state=$(st w-codex) needs=$(sb w-codex)"
 CHECKS=$((CHECKS+1)); [ "$(st w-plainnew)" = needs ] && [ -z "$(sb w-plainnew)" ] \
-  || fail "an EMPTY-subtype red inside its dwell must STAY red — it is the classifier's screen verdict, and a worker that stopped to ask a prose question waits with no tool_use open" "state=$(st w-plainnew) needs=$(sb w-plainnew)"
+  || st_miss "an EMPTY-subtype red inside its dwell must STAY red — it is the classifier's screen verdict, and a worker that stopped to ask a prose question waits with no tool_use open" "state=$(st w-plainnew) needs=$(sb w-plainnew)"
 CHECKS=$((CHECKS+1)); [ "$(st w-plainpnd)" = needs ] && [ -z "$(sb w-plainpnd)" ] \
-  || fail "an EMPTY-subtype red over a PENDING tool_use must be left exactly as it is — the reconcile re-settles a WRONG subtype, it never invents a missing one" "state=$(st w-plainpnd) needs=$(sb w-plainpnd)"
+  || st_miss "an EMPTY-subtype red over a PENDING tool_use must be left exactly as it is — the reconcile re-settles a WRONG subtype, it never invents a missing one" "state=$(st w-plainpnd) needs=$(sb w-plainpnd)"
 CHECKS=$((CHECKS+1)); [ "$(st w-real)" = needs ] && [ "$(sb w-real)" = perm ] \
-  || fail "a genuine permission prompt must be left alone" "state=$(st w-real) needs=$(sb w-real)"
+  || st_miss "a genuine permission prompt must be left alone" "state=$(st w-real) needs=$(sb w-real)"
 CHECKS=$((CHECKS+1)); [ "$(st w-unreg)" = needs ] && [ "$(sb w-unreg)" = perm ] \
-  || fail "an unresolvable transcript is UNKNOWN, not idle — the red must stand" "state=$(st w-unreg) needs=$(sb w-unreg)"
+  || st_miss "an unresolvable transcript is UNKNOWN, not idle — the red must stand" "state=$(st w-unreg) needs=$(sb w-unreg)"
 CHECKS=$((CHECKS+1)); [ "$(st w-fresh)" = needs ] \
-  || fail "a stamp younger than the grace window must not be reconciled yet" "state=$(st w-fresh)"
+  || st_miss "a stamp younger than the grace window must not be reconciled yet" "state=$(st w-fresh)"
 CHECKS=$((CHECKS+1)); [ "$(st w-working)" = working ] \
-  || fail "a 'working' window is not a reconcile candidate" "state=$(st w-working)"
+  || st_miss "a 'working' window is not a reconcile candidate" "state=$(st w-working)"
 
 # ONE DIRECTION ONLY: nothing that was not red may have BECOME red. Checked as a set
 # difference, not an exact list, so this assertion fails for exactly one reason.
 newreds=$(tf list-windows -a -F '#{window_name} #{@claude_state}' 2>/dev/null \
   | awk '$2=="needs"{print $1}' | grep -x -e home -e w-stale -e w-plainold -e w-working | tr '\n' ' ')
 CHECKS=$((CHECKS+1)); [ -z "$newreds" ] \
-  || fail "the reconcile must only ever CLEAR — these windows were not red and now are" "newly red: $newreds"
+  || st_miss "the reconcile must only ever CLEAR — these windows were not red and now are" "newly red: $newreds"
 
 # The trace itself is a rail, not a convenience (issue #675): it is what makes every
 # assertion above diagnosable, so a build that stopped emitting it must go red HERE —
@@ -357,7 +356,7 @@ CHECKS=$((CHECKS+1)); [ -z "$newreds" ] \
 # `state=needs`. Two passes is the floor: converging at all takes an arm and an act.
 npass=$(grep -c ' pass ' "$TRACE_F" 2>/dev/null); [ -n "$npass" ] || npass=0
 CHECKS=$((CHECKS+1)); [ "$npass" -ge 2 ] \
-  || fail "FLEET_NEEDS_TRACE=1 must leave one line per pass, acting or not — without it a stalled reconcile and an absent one are the same symptom (#675)" "pass lines: $npass"
+  || st_miss "FLEET_NEEDS_TRACE=1 must leave one line per pass, acting or not — without it a stalled reconcile and an absent one are the same symptom (#675)" "pass lines: $npass"
 
 # Everything PART B can assert is now asserted; if any of it went red, say what the
 # daemon DID. The spinner is still alive at this point (PART C kills it), so the
@@ -394,10 +393,10 @@ one_pass() {
 
 one_pass
 CHECKS=$((CHECKS+1)); [ "$(st w-debounce)" = needs ] \
-  || fail "the FIRST reconcile pass may only arm a strike, never act — a stamp gets one check of grace" "state=$(st w-debounce)"
+  || st_miss "the FIRST reconcile pass may only arm a strike, never act — a stamp gets one check of grace" "state=$(st w-debounce)"
 one_pass
 CHECKS=$((CHECKS+1)); [ "$(st w-debounce)" = "done" ] \
-  || fail "the SECOND pass agreeing with the first must act" "state=$(st w-debounce)"
+  || st_miss "the SECOND pass agreeing with the first must act" "state=$(st w-debounce)"
 
 # A strike table older than the TTL is not "the previous check" — after a restart (or
 # a one-shot from an hour ago) the grace starts over. $OLD is 600s back, well past the
@@ -411,7 +410,7 @@ DWID=$(tf display-message -p -t w-debounce '#{window_id}' 2>/dev/null)
 printf '%s |fleetR:%s:idle|\n' "$OLD" "$DWID" > "$STRIKE_F"
 one_pass
 CHECKS=$((CHECKS+1)); [ "$(st w-debounce)" = needs ] \
-  || fail "a STALE strike table must not count as the previous check" "state=$(st w-debounce)"
+  || st_miss "a STALE strike table must not count as the previous check" "state=$(st w-debounce)"
 
 # …and the TTL is a KNOB, not a synonym for 3x the interval (issue #691). The same
 # table aged 30s is FAR past the old hardcoded 3s window yet inside the injected 120,
@@ -425,7 +424,7 @@ AGED=$(( $(date +%s) - 30 ))
 printf '%s |fleetR:%s:idle|\n' "$AGED" "$DWID" > "$STRIKE_F"
 one_pass
 CHECKS=$((CHECKS+1)); [ "$(st w-debounce)" = "done" ] \
-  || fail "FLEET_NEEDS_STRIKE_TTL must govern the age gate — a strike past 3x the interval but inside the TTL still counts" "state=$(st w-debounce)"
+  || st_miss "FLEET_NEEDS_STRIKE_TTL must govern the age gate — a strike past 3x the interval but inside the TTL still counts" "state=$(st w-debounce)"
 
 # The knob must switch the whole errand off.
 kill "$SPIN_PID" 2>/dev/null; wait "$SPIN_PID" 2>/dev/null; SPIN_PID=''
@@ -437,7 +436,7 @@ env FLEET_NEEDS_RECONCILE_SECS=0 FLEET_STUCK_WORKING_SECS=0 SPIN_INTERVAL=0.05 \
 SPIN_PID=$!
 sleep 4
 CHECKS=$((CHECKS+1)); [ "$(st w-stale)" = needs ] \
-  || fail "FLEET_NEEDS_RECONCILE_SECS=0 must disable the reconcile entirely" "state=$(st w-stale)"
+  || st_miss "FLEET_NEEDS_RECONCILE_SECS=0 must disable the reconcile entirely" "state=$(st w-stale)"
 
 # ---------------------------------------------------------------------------
 # PART D — worker-declared blockers do not expire with the transcript (#704).
@@ -458,15 +457,15 @@ mkwin w-block-codex no  needs blocked "$OLD"
 tf set-window-option -t w-block-codex @cc_agent codex
 FLEET_NEEDS_PLAIN_SECS=1 one_pass
 CHECKS=$((CHECKS+1)); [ "$(st w-block-dead)" = needs ] \
-  || fail "dead blocked pane still gets the first-strike grace" "state=$(st w-block-dead)"
+  || st_miss "dead blocked pane still gets the first-strike grace" "state=$(st w-block-dead)"
 FLEET_NEEDS_PLAIN_SECS=1 one_pass
 for w in w-blocked w-block-pnd w-block-unreg w-block-codex; do
   got=$(tf display-message -p -t "$w" '#{@claude_state}/#{@claude_needs}/#{@claude_state_ts}')
   CHECKS=$((CHECKS+1)); [ "$got" = "needs/blocked/$OLD" ] \
-    || fail "$w must preserve the declaration and its age beyond the plain-needs dwell" "$got"
+    || st_miss "$w must preserve the declaration and its age beyond the plain-needs dwell" "$got"
 done
 CHECKS=$((CHECKS+1)); [ "$(st w-block-dead)" = needs ] && [ "$(sb w-block-dead)" = blocked ] \
-  || fail "a missing native identity cannot clear a worker declaration" "state=$(st w-block-dead) needs=$(sb w-block-dead)"
+  || st_miss "a missing native identity cannot clear a worker declaration" "state=$(st w-block-dead) needs=$(sb w-block-dead)"
 
 printf '%s checks\n' "$CHECKS"
 [ "$FAIL" = 0 ] || exit 1

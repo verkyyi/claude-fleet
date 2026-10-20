@@ -30,13 +30,11 @@ unset FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MACHINE_SESS
 export FLEET_ADMIT=0
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/machsess-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+. "$BIN/selftest-lib.sh"
+st_sandbox "${TMPDIR:-/tmp}/machsess-selftest.XXXXXX"
 SH="$WORK/shared/sessions"     # parent does not exist yet: publish creates the chain
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 # A fake tmux whose session windows come from $FAKE_WINDOWS (one fleet `f` with a
 # dash hub + N working windows); new-window is logged.
@@ -81,53 +79,53 @@ as() {
 lib() { local l="$1" w="$2"; shift 2; as "$l" "$w" bash -c 'source "$1/fleet-lib.sh"; shift; eval "$*"' _ "$BIN" "$@"; }
 
 # ===== A: publish ==============================================================
-lib alice 3 fleet_machine_sessions_publish || fail "A alice publish failed"
-lib bob   2 fleet_machine_sessions_publish || fail "A bob publish failed"
-lib carol 0 fleet_machine_sessions_publish || fail "A carol publish failed"
-read -r an ats az < "$SH/alice"; [ "$an" = 3 ] || fail "A alice's file must hold her live count 3 (got '$an')"
-[ -z "$az" ] || fail "A no third field since hibernation went (T548) (got '$az')"
-case "$ats" in ''|*[!0-9]*) fail "A the file's second field is an epoch (got '$ats')" ;; esac
-[ "$(cat "$SH/bob")" != "" ] && read -r bn _ < "$SH/bob"; [ "$bn" = 2 ] || fail "A bob's count (got '$bn')"
+lib alice 3 fleet_machine_sessions_publish || st_fail "A alice publish failed"
+lib bob   2 fleet_machine_sessions_publish || st_fail "A bob publish failed"
+lib carol 0 fleet_machine_sessions_publish || st_fail "A carol publish failed"
+read -r an ats az < "$SH/alice"; [ "$an" = 3 ] || st_fail "A alice's file must hold her live count 3 (got '$an')"
+[ -z "$az" ] || st_fail "A no third field since hibernation went (T548) (got '$az')"
+case "$ats" in ''|*[!0-9]*) st_fail "A the file's second field is an epoch (got '$ats')" ;; esac
+[ "$(cat "$SH/bob")" != "" ] && read -r bn _ < "$SH/bob"; [ "$bn" = 2 ] || st_fail "A bob's count (got '$bn')"
 perm=$(stat -c %a "$SH" 2>/dev/null || stat -f %Mp%Lp "$SH" 2>/dev/null)
-[ "$perm" = 1777 ] || fail "A the shared dir must be 1777 like the heavy queue (got $perm)"
+[ "$perm" = 1777 ] || st_fail "A the shared dir must be 1777 like the heavy queue (got $perm)"
 for t in "$SH"/.*; do
   case "${t##*/}" in
     .|..|.idle-alice|.idle-bob|.idle-carol) ;; # persistent activity markers, not temp files
-    *) [ -e "$t" ] && fail "A a publish must leave no temp file behind" "$t" ;;
+    *) [ -e "$t" ] && st_fail "A a publish must leave no temp file behind" "$t" ;;
   esac
 done
-lib alice 0 'fleet_machine_sessions_publish 7' && read -r an ats az < "$SH/alice"; [ "$an" = 7 ] || fail "A an explicit count wins (got '$an')"
-[ -z "$az" ] || fail "A an explicit count knows no sleepers: no third field (got '$az')"
+lib alice 0 'fleet_machine_sessions_publish 7' && read -r an ats az < "$SH/alice"; [ "$an" = 7 ] || st_fail "A an explicit count wins (got '$an')"
+[ -z "$az" ] || st_fail "A an explicit count knows no sleepers: no third field (got '$az')"
 # issue #4231's third field (asleep workers) is no longer written (T548): an old
 # window's `sleeping` stamp reads as empty — it counts like any window — and an
 # older publisher's three-field row still reads as its count
 FAKE_ASLEEP=2 lib dave 1 fleet_machine_sessions_publish
-read -r dn _ dz < "$SH/dave"; [ "$dn/$dz" = "3/" ] || fail "A dave: 3 windows, no asleep field (got '$dn/$dz')"
+read -r dn _ dz < "$SH/dave"; [ "$dn/$dz" = "3/" ] || st_fail "A dave: 3 windows, no asleep field (got '$dn/$dz')"
 printf '1 %s 2\n' "$(date +%s)" > "$SH/dave"
 r=$(lib erin 0 fleet_machine_sessions_rows | awk '$1 == "dave" { print $2, $4 }')
-[ "$r" = "1 fresh" ] || fail "A a three-field row reads as its count (got '$r')"
+[ "$r" = "1 fresh" ] || st_fail "A a three-field row reads as its count (got '$r')"
 rm -f "$SH/dave"
-lib alice 0 'fleet_machine_sessions_publish x' && fail "A a non-numeric count must be refused"
+lib alice 0 'fleet_machine_sessions_publish x' && st_fail "A a non-numeric count must be refused"
 lib alice 3 fleet_machine_sessions_publish
-ok "A one '<count> <epoch> [<asleep>]' file per login, dir 1777, atomic"
+st_pass "A one '<count> <epoch> [<asleep>]' file per login, dir 1777, atomic"
 
 # ===== B: rows / summary =======================================================
 r=$(lib alice 3 fleet_machine_sessions_summary)
-[ "$r" = "$(printf '5\talice 3 · bob 2 · carol 0')" ] || fail "B summary as alice (got '$r')"
+[ "$r" = "$(printf '5\talice 3 · bob 2 · carol 0')" ] || st_fail "B summary as alice (got '$r')"
 # self is LIVE, not its file: alice now has 4 windows though her file says 3.
-r=$(lib alice 4 fleet_machine_sessions_summary); [ "${r%%$'\t'*}" = 6 ] || fail "B self must be counted live (got '$r')"
+r=$(lib alice 4 fleet_machine_sessions_summary); [ "${r%%$'\t'*}" = 6 ] || st_fail "B self must be counted live (got '$r')"
 # a login with no file yet still counts itself.
 r=$(lib dave 1 fleet_machine_sessions_summary)
-[ "$r" = "$(printf '6\tdave 1 · alice 3 · bob 2 · carol 0')" ] || fail "B a login with no file counts itself live (got '$r')"
+[ "$r" = "$(printf '6\tdave 1 · alice 3 · bob 2 · carol 0')" ] || st_fail "B a login with no file counts itself live (got '$r')"
 # stale: bob's file 10 minutes old → 0 (stale); garbled → 0.
 printf '2 %s\n' "$(( $(date +%s) - 600 ))" > "$SH/bob"
 r=$(lib alice 3 fleet_machine_sessions_summary)
-[ "$r" = "$(printf '3\talice 3 · bob 0 (stale) · carol 0')" ] || fail "B a stale login reads 0 (got '$r')"
-r=$(lib alice 3 'FLEET_MACHINE_SESSIONS_STALE=900 fleet_machine_sessions_summary'); [ "${r%%$'\t'*}" = 5 ] || fail "B FLEET_MACHINE_SESSIONS_STALE widens the bound (got '$r')"
+[ "$r" = "$(printf '3\talice 3 · bob 0 (stale) · carol 0')" ] || st_fail "B a stale login reads 0 (got '$r')"
+r=$(lib alice 3 'FLEET_MACHINE_SESSIONS_STALE=900 fleet_machine_sessions_summary'); [ "${r%%$'\t'*}" = 5 ] || st_fail "B FLEET_MACHINE_SESSIONS_STALE widens the bound (got '$r')"
 printf 'garbage\n' > "$SH/carol"
-r=$(lib alice 3 fleet_machine_sessions_summary); [ "${r%%$'\t'*}" = 3 ] || fail "B a garbled file reads 0 (got '$r')"
+r=$(lib alice 3 fleet_machine_sessions_summary); [ "${r%%$'\t'*}" = 3 ] || st_fail "B a garbled file reads 0 (got '$r')"
 lib bob 2 fleet_machine_sessions_publish; lib carol 0 fleet_machine_sessions_publish
-ok "B self live, others from file; stale / garbled read 0 and are marked"
+st_pass "B self live, others from file; stale / garbled read 0 and are marked"
 
 # ===== C: the cap tier =========================================================
 cap() { local l="$1" w="$2"; shift 2; as "$l" "$w" env "$@" bash -c 'source "$1/fleet-lib.sh"; out=$(fleet_session_cap_ok f); printf "%s|%s" "$?" "$out"' _ "$BIN"; }
@@ -135,82 +133,82 @@ cap() { local l="$1" w="$2"; shift 2; as "$l" "$w" env "$@" bash -c 'source "$1/
 lib carol 1 fleet_machine_sessions_publish
 r=$(cap carol 1 FLEET_MACHINE_MAX_SESSIONS=6 FLEET_GLOBAL_MAX_SESSIONS=0)
 case "$r" in "1|machine at capacity — 全机会话已满: 6/6 Claude sessions across all logins (carol 1 · alice 3 · bob 2)"*FLEET_MACHINE_MAX_SESSIONS*) ;;
-  *) fail "C at the machine ceiling the 4th spawn must be refused with each login's share (got '$r')" ;; esac
-r=$(cap alice 3 FLEET_MACHINE_MAX_SESSIONS=6 FLEET_GLOBAL_MAX_SESSIONS=0); case "$r" in 1\|*"alice 3 · bob 2 · carol 1"*) ;; *) fail "C refused from alice too (got '$r')" ;; esac
-r=$(cap alice 3 FLEET_MACHINE_MAX_SESSIONS=7 FLEET_GLOBAL_MAX_SESSIONS=0); [ "$r" = "0|" ] || fail "C under the ceiling admits (got '$r')"
+  *) st_fail "C at the machine ceiling the 4th spawn must be refused with each login's share (got '$r')" ;; esac
+r=$(cap alice 3 FLEET_MACHINE_MAX_SESSIONS=6 FLEET_GLOBAL_MAX_SESSIONS=0); case "$r" in 1\|*"alice 3 · bob 2 · carol 1"*) ;; *) st_fail "C refused from alice too (got '$r')" ;; esac
+r=$(cap alice 3 FLEET_MACHINE_MAX_SESSIONS=7 FLEET_GLOBAL_MAX_SESSIONS=0); [ "$r" = "0|" ] || st_fail "C under the ceiling admits (got '$r')"
 # bob's collector stopped: his share frees.
 printf '2 %s\n' "$(( $(date +%s) - 600 ))" > "$SH/bob"
-r=$(cap alice 3 FLEET_MACHINE_MAX_SESSIONS=6 FLEET_GLOBAL_MAX_SESSIONS=0); [ "$r" = "0|" ] || fail "C a stale login's share must free (got '$r')"
+r=$(cap alice 3 FLEET_MACHINE_MAX_SESSIONS=6 FLEET_GLOBAL_MAX_SESSIONS=0); [ "$r" = "0|" ] || st_fail "C a stale login's share must free (got '$r')"
 lib bob 2 fleet_machine_sessions_publish
 # default 0: byte-identical — same admit, same at-capacity message, dir never read.
 mv "$SH" "$SH.off"; mkdir -p "$SH"; chmod 000 "$SH"
-r=$(cap alice 3 FLEET_GLOBAL_MAX_SESSIONS=0);             [ "$r" = "0|" ] || fail "C default 0 must admit as before (got '$r')"
+r=$(cap alice 3 FLEET_GLOBAL_MAX_SESSIONS=0);             [ "$r" = "0|" ] || st_fail "C default 0 must admit as before (got '$r')"
 r=$(cap alice 3 FLEET_GLOBAL_MAX_SESSIONS=3)
 [ "$r" = "1|fleet at capacity: 3/3 Claude sessions running (global) — raise FLEET_GLOBAL_MAX_SESSIONS or close one first" ] \
-  || fail "C default 0: the global refusal must be byte-identical (got '$r')"
-r=$(cap alice 3 FLEET_MACHINE_MAX_SESSIONS=0 FLEET_GLOBAL_MAX_SESSIONS=0); [ "$r" = "0|" ] || fail "C explicit 0 = unlimited (got '$r')"
+  || st_fail "C default 0: the global refusal must be byte-identical (got '$r')"
+r=$(cap alice 3 FLEET_MACHINE_MAX_SESSIONS=0 FLEET_GLOBAL_MAX_SESSIONS=0); [ "$r" = "0|" ] || st_fail "C explicit 0 = unlimited (got '$r')"
 chmod 755 "$SH"; rmdir "$SH"; mv "$SH.off" "$SH"
 # the per-login tiers still come first.
-r=$(cap alice 3 FLEET_MACHINE_MAX_SESSIONS=6 FLEET_GLOBAL_MAX_SESSIONS=2); case "$r" in "1|fleet at capacity: 3/2"*) ;; *) fail "C the global tier is checked first (got '$r')" ;; esac
-ok "C machine ceiling refuses with each login's share; stale frees; default 0 unchanged"
+r=$(cap alice 3 FLEET_MACHINE_MAX_SESSIONS=6 FLEET_GLOBAL_MAX_SESSIONS=2); case "$r" in "1|fleet at capacity: 3/2"*) ;; *) st_fail "C the global tier is checked first (got '$r')" ;; esac
+st_pass "C machine ceiling refuses with each login's share; stale frees; default 0 unchanged"
 
 # ===== D: dash-issue-session.sh ================================================
 : > "$NEWWIN_LOG"
 as carol 1 env FLEET_MACHINE_MAX_SESSIONS=6 FLEET_GLOBAL_MAX_SESSIONS=0 \
   FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master \
   "$BIN/dash-issue-session.sh" 77 --title "Machine cap probe" >"$WORK/spawn.out" 2>"$WORK/spawn.err"; rc=$?
-[ "$rc" = 2 ] || fail "D at the machine ceiling dash-issue-session.sh must exit RC_CAP=2 (got $rc)" "$(cat "$WORK/spawn.err")"
-grep -q '全机会话已满: 6/6.*carol 1 · alice 3 · bob 2' "$WORK/spawn.err" || fail "D the refusal must list every login's share" "$(cat "$WORK/spawn.err")"
-[ -s "$NEWWIN_LOG" ] && fail "D a refused spawn must not open a window" "$(cat "$NEWWIN_LOG")"
-ok "D dash-issue-session.sh: $(grep -m1 '全机' "$WORK/spawn.err" | cut -c1-110)…"
+[ "$rc" = 2 ] || st_fail "D at the machine ceiling dash-issue-session.sh must exit RC_CAP=2 (got $rc)" "$(cat "$WORK/spawn.err")"
+grep -q '全机会话已满: 6/6.*carol 1 · alice 3 · bob 2' "$WORK/spawn.err" || st_fail "D the refusal must list every login's share" "$(cat "$WORK/spawn.err")"
+[ -s "$NEWWIN_LOG" ] && st_fail "D a refused spawn must not open a window" "$(cat "$NEWWIN_LOG")"
+st_pass "D dash-issue-session.sh: $(grep -m1 '全机' "$WORK/spawn.err" | cut -c1-110)…"
 
 # ===== E: continuation paths ===================================================
 for f in fleet-restore.sh fleet-handoff-cycle.sh fleet-move.sh; do
   [ -f "$BIN/$f" ] || continue
   grep -vE '^[[:space:]]*#' "$BIN/$f" | grep -qE 'fleet_session_cap_ok|fleet_machine_sessions_summary' \
-    && fail "E $f re-houses a RUNNING session and must not pass the machine cap"
+    && st_fail "E $f re-houses a RUNNING session and must not pass the machine cap"
 done
-ok "E crash restore / handoff / move never reach the machine cap"
+st_pass "E crash restore / handoff / move never reach the machine cap"
 
 # ===== F: collector + doctor ===================================================
-grep -q 'fleet_machine_sessions_publish' "$BIN/tmux-dash-collect.sh" || fail "F the collector must publish this login's count"
+grep -q 'fleet_machine_sessions_publish' "$BIN/tmux-dash-collect.sh" || st_fail "F the collector must publish this login's count"
 out=$(env HOME="$WORK/home/alice" FLEET_CONF_DIR="$WORK/conf" FLEET_MACHINE_SESSIONS_DIR="$SH" FLEET_MACHINE_SESSIONS_OWNER_CHECK=0 sh "$BIN/fleet-doctor.sh" 2>&1)
 printf '%s\n' "$out" | grep -q 'sessions across logins: 6 across 3 login(s): alice 3 · bob 2 · carol 1 — no machine cap' \
-  || fail "F doctor must state the machine-wide total with each login's share" "$(printf '%s\n' "$out" | grep machine)"
+  || st_fail "F doctor must state the machine-wide total with each login's share" "$(printf '%s\n' "$out" | grep machine)"
 out=$(env HOME="$WORK/home/alice" FLEET_CONF_DIR="$WORK/conf" FLEET_MACHINE_SESSIONS_DIR="$WORK/none" sh "$BIN/fleet-doctor.sh" 2>&1)
-printf '%s\n' "$out" | grep -q 'sessions across logins: no login has published' || fail "F doctor with no files says so" "$(printf '%s\n' "$out" | grep machine)"
-ok "F collector publishes; doctor: $(printf '%s\n' "$out" | grep -m1 'across logins' | sed 's/^ *//' | cut -c1-80)…"
+printf '%s\n' "$out" | grep -q 'sessions across logins: no login has published' || st_fail "F doctor with no files says so" "$(printf '%s\n' "$out" | grep machine)"
+st_pass "F collector publishes; doctor: $(printf '%s\n' "$out" | grep -m1 'across logins' | sed 's/^ *//' | cut -c1-80)…"
 
 # ===== G: each login's file is its own (issue #2299) ===========================
 me=$(id -un); G="$WORK/g"; SH="$G/shared/sessions"; mkdir -p "$G"
-OWNER_CHECK=1 lib "$me" 2 fleet_machine_sessions_publish || fail "G $me's publish failed"
+OWNER_CHECK=1 lib "$me" 2 fleet_machine_sessions_publish || st_fail "G $me's publish failed"
 perm=$(stat -c %a "$SH/$me" 2>/dev/null || stat -f %Lp "$SH/$me" 2>/dev/null)
-[ "$perm" = 644 ] || fail "G a login's file must be 0644, not writable by others (got $perm)"
-grep -q 'mktemp "\$d/' "$BIN/fleet-lib.sh" || fail "G publish must write through a mktemp, never a predictable .<login>.\$\$ temp"
+[ "$perm" = 644 ] || st_fail "G a login's file must be 0644, not writable by others (got $perm)"
+grep -q 'mktemp "\$d/' "$BIN/fleet-lib.sh" || st_fail "G publish must write through a mktemp, never a predictable .<login>.\$\$ temp"
 printf '50 %s\n' "$(date +%s)" > "$SH/mallory"          # owned by $me, named mallory: a squat
 : > "$SH/.idle-mallory"
 ln -s "$SH/$me" "$SH/eve"                              # a symlink posing as a login
 r=$(OWNER_CHECK=1 lib "$me" 2 fleet_machine_sessions_summary)
-[ "$r" = "$(printf '2\t%s 2' "$me")" ] || fail "G a planted or symlinked login file must count nothing (got '$r')"
+[ "$r" = "$(printf '2\t%s 2' "$me")" ] || st_fail "G a planted or symlinked login file must count nothing (got '$r')"
 out=$(env HOME="$WORK/home/$me" FLEET_CONF_DIR="$WORK/conf" FLEET_MACHINE_SESSIONS_DIR="$SH" sh "$BIN/fleet-doctor.sh" 2>&1)
 printf '%s\n' "$out" | grep -q "sessions across logins: 2 across 1 login(s): $me 2 " \
-  || fail "G the doctor must skip a planted login file too" "$(printf '%s\n' "$out" | grep 'across logins')"
-python3 "$BIN/fleet-shared-dirs.py" --root "$G/shared" --slots 1 >/dev/null || fail "G fleet-shared-dirs.py failed"
-[ -e "$SH/mallory" ] || [ -L "$SH/eve" ] && fail "G fleet-shared-dirs.py must sweep the planted files"
-[ -f "$SH/$me" ] || fail "G fleet-shared-dirs.py must keep the login's own file"
-[ -f "$SH/.idle-$me" ] || fail "G fleet-shared-dirs.py must keep the login's activity marker"
-[ ! -e "$SH/.idle-mallory" ] || fail "G fleet-shared-dirs.py must sweep a planted activity marker"
+  || st_fail "G the doctor must skip a planted login file too" "$(printf '%s\n' "$out" | grep 'across logins')"
+python3 "$BIN/fleet-shared-dirs.py" --root "$G/shared" --slots 1 >/dev/null || st_fail "G fleet-shared-dirs.py failed"
+[ -e "$SH/mallory" ] || [ -L "$SH/eve" ] && st_fail "G fleet-shared-dirs.py must sweep the planted files"
+[ -f "$SH/$me" ] || st_fail "G fleet-shared-dirs.py must keep the login's own file"
+[ -f "$SH/.idle-$me" ] || st_fail "G fleet-shared-dirs.py must keep the login's activity marker"
+[ ! -e "$SH/.idle-mallory" ] || st_fail "G fleet-shared-dirs.py must sweep a planted activity marker"
 if [ "$(id -u)" != 0 ] && sudo -n -u nobody true 2>/dev/null; then
   chmod 755 "$WORK" "$G" "$G/shared"
   if sudo -n -u nobody test -r "$SH/$me"; then
-    sudo -n -u nobody rm -f "$SH/$me" 2>/dev/null; [ -f "$SH/$me" ] || fail "G another uid deleted this login's file"
+    sudo -n -u nobody rm -f "$SH/$me" 2>/dev/null; [ -f "$SH/$me" ] || st_fail "G another uid deleted this login's file"
     sudo -n -u nobody sh -c "printf '99 0\n' > '$SH/$me'" 2>/dev/null
-    read -r gn _ < "$SH/$me"; [ "$gn" = 2 ] || fail "G another uid rewrote this login's file (got '$gn')"
-    sudo -n -u nobody mv "$SH/$me" "$SH/x" 2>/dev/null; [ -f "$SH/$me" ] || fail "G another uid renamed this login's file away"
-    ok "G another uid (nobody) cannot delete, rewrite or rename this login's file"
+    read -r gn _ < "$SH/$me"; [ "$gn" = 2 ] || st_fail "G another uid rewrote this login's file (got '$gn')"
+    sudo -n -u nobody mv "$SH/$me" "$SH/x" 2>/dev/null; [ -f "$SH/$me" ] || st_fail "G another uid renamed this login's file away"
+    st_pass "G another uid (nobody) cannot delete, rewrite or rename this login's file"
   else echo "skip G: nobody cannot reach $SH"; fi
 else echo "skip G: no sudo -n -u nobody here — the other-uid leg runs where there is one (CI)"; fi
-ok "G a login's file is its own: 0644, planted/symlinked names count nothing, swept"
+st_pass "G a login's file is its own: 0644, planted/symlinked names count nothing, swept"
 
 printf '\nselftest OK: %s groups passed (machine-wide session total, issue #1301)\n' "$pass"
 exit 0

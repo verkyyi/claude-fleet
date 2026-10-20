@@ -35,8 +35,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 LIB="$BIN/fleet-lib.sh"
 [ -f "$LIB" ] || { printf 'selftest: %s missing\n' "$LIB" >&2; exit 2; }
-command -v lsof >/dev/null 2>&1 || { printf 'selftest: no lsof — SKIP\n' >&2; exit 0; }
-command -v tmux >/dev/null 2>&1 || { printf 'selftest: no tmux — SKIP\n' >&2; exit 0; }
+st_need lsof tmux
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/winreap.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"

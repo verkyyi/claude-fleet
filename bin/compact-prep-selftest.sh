@@ -39,6 +39,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-client-core.sh fleet-lang.sh fleet-compact-send.sh refocus-hook.sh handoff-latch-reset-hook.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
@@ -47,59 +48,7 @@ done
 TOP="$(mktemp -d "${TMPDIR:-/tmp}/compact-prep-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$TOP"' EXIT
 # --- stateful fake tmux: options in $OPTS ("key<TAB>value"), send-keys logged ----
-cat > "$TOP/tmux" <<'FAKE'
-#!/usr/bin/env python3
-import os, re, sys
-a = sys.argv[1:]
-if a[:1] in (["-L"], ["-S"]): a = a[2:]
-path = os.environ["FAKE_OPTS"]
-def load():
-    d = {}
-    try:
-        for line in open(path):
-            k, _, v = line.rstrip("\n").partition("\t"); d[k] = v
-    except FileNotFoundError: pass
-    return d
-def save(d):
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        for k, v in d.items(): f.write("%s\t%s\n" % (k, v))
-    os.replace(tmp, path)
-# a format: innermost #{name} from the table; #{?cond,a,b} picks a or b — tmux's
-# conditional, which the fleet's session read is since #1489
-# (`#{?#{session_group},#{session_group},#{session_name}}`)
-def _fx(d, f):
-    r = re.compile(r"#\{([^#{}]*)\}")
-    while True:
-        m = r.search(f)
-        if not m:
-            return f
-        k = m.group(1)
-        if k.startswith("?"):
-            p = k[1:].split(",", 2) + ["", ""]
-            v = p[1] if p[0] else p[2]
-        else:
-            v = d.get(k, "")
-        f = f[:m.start()] + v + f[m.end():]
-verb = a[0] if a else ""
-if verb == "display-message":
-    d = load(); fmt = a[-1]
-    print(_fx(d, fmt))
-elif verb == "set-window-option":
-    d = load(); unset = "-u" in a
-    rest = [x for x in a[1:] if x != "-u"]
-    i = rest.index("-t"); rest = rest[:i] + rest[i+2:]
-    if unset: d.pop(rest[0], None)
-    else: d[rest[0]] = rest[1] if len(rest) > 1 else ""
-    save(d)
-elif verb == "send-keys":
-    with open(os.environ["FAKE_SENDLOG"], "a") as f: f.write(" ".join(a) + "\n")
-elif verb == "list-clients":
-    sys.stdout.write(os.environ.get("FAKE_CLIENTS", "").replace("\\n", "\n"))
-else:
-    sys.exit(1)
-FAKE
-chmod +x "$TOP/tmux"
+st_fake_tmux_opts "$TOP"
 
 # fixture <dir> — one lane's whole world: the install copy, the two worktrees, the
 # fleet conf, the fake tmux; WORK and every path below it point there.
@@ -129,7 +78,6 @@ cp "$TOP/tmux" "$WORK/fakepath/tmux"
 }
 
 
-ok()   { printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2
          printf -- '--- opts ---\n' >&2; cat "$OPTS" >&2 2>/dev/null
          printf -- '--- send log ---\n' >&2; cat "$SENDLOG" >&2 2>/dev/null; exit 1; }
@@ -201,7 +149,7 @@ for context in 55 80 99; do
   [ "$(sent)" = 0 ] || fail "default must not type /compact"
   [ ! -f "$MAP" ] || fail "default must not create a recovery map"
 done
-ok "DEFAULT native context ownership: no block, map, latch or /compact at 55/80/99 percent"
+st_ok "DEFAULT native context ownership: no block, map, latch or /compact at 55/80/99 percent"
 conf 55 80
 reset @ctx_pct=54
 stop
@@ -214,7 +162,7 @@ case "$OUT" in *'compact-prep threshold'*"$MAP"*'issue #12'*) : ;;
 printf '%s' "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' || fail "prep output must be valid JSON" "$OUT"
 [ "$(getopt @compact_stage)" = prep ] || fail "step 1 must stamp @compact_stage=prep"
 [ "$(getopt @compact_rearm)" = 0 ] || fail "step 1 must disarm (@compact_rearm=0)"
-ok "STEP 1 ctx 55 (configured line) → prep: one block decision naming $MAP"
+st_ok "STEP 1 ctx 55 (configured line) → prep: one block decision naming $MAP"
 
 setopt @ctx_pct 75; printf 'map\n' > "$MAP"
 stop '{"stop_hook_active":true}'  # the map turn ends: this is the next idle Stop
@@ -225,7 +173,7 @@ grep -q -- "/compact Keep the fleet RECOVERY MAP.*$MAP" "$SENDLOG" || fail "/com
 [ "$(grep -c '' "$SENDLOG")" = 3 ] && sed -n 1p "$SENDLOG" | grep -q 'Escape$' && sed -n 3p "$SENDLOG" | grep -q 'Enter$' \
   || fail "keystrokes must be Escape, the text, Enter — three separate send-keys"
 [ "$(getopt @compact_stage)" = compacting ] || fail "step 2 must stamp @compact_stage=compacting"
-ok "STEP 2 ctx 75, idle → exactly one /compact (Esc · text · Enter), stage compacting"
+st_ok "STEP 2 ctx 75, idle → exactly one /compact (Esc · text · Enter), stage compacting"
 
 stop                             # a Stop before the compaction lands
 blocked && fail "a compacting stage must not block" "$OUT"
@@ -239,7 +187,7 @@ case "$OUT" in *'[fleet charter] #12'*'CHECK FIRST'*"$MAP"*) : ;;
 compact_start
 case "$OUT" in *'CHECK FIRST'*) fail "a second (auto) compaction must not repeat the check" "$OUT" ;; esac
 [ "$(getopt @compact_count)" = 1 ] || fail "a compaction the fleet did not type must not count"
-ok "STEP 3 SessionStart(compact) → restored + check line, once"
+st_ok "STEP 3 SessionStart(compact) → restored + check line, once"
 
 setopt @ctx_pct 30
 stop
@@ -247,7 +195,7 @@ blocked && fail "30% must not block" "$OUT"
 [ "$(getopt @compact_stage)" = restored ] || fail "restored must stay visible below the line"
 [ "$(getopt @compact_rearm)" = 1 ] || fail "a Stop below the line must re-arm"
 [ "$(sent)" = 1 ] || fail "no extra /compact after the cycle"
-ok "ctx 30 → re-armed, stage stays restored, nothing else sent"
+st_ok "ctx 30 → re-armed, stage stays restored, nothing else sent"
 
 # ===== GAP / REARM ===============================================================
 setopt @ctx_pct 76; stop
@@ -258,7 +206,7 @@ blocked && fail "never back below the line (@compact_rearm=0) must NOT prep" "$O
 reset @ctx_pct=76 @compact_stage=restored @compact_rearm=1 @compact_ts=1
 stop
 blocked || fail "re-armed + old compaction must prep again" "$OUT"
-ok "GAP/REARM ≥600 s apart and only after dropping below the line"
+st_ok "GAP/REARM ≥600 s apart and only after dropping below the line"
 }
 
 lane_2() {
@@ -276,7 +224,7 @@ conf 90 80
 reset @ctx_pct=85
 stop
 case "$OUT" in *'compact-prep'*) fail "prep line above the handoff line ⇒ empty band, never prep" "$OUT" ;; esac
-ok "HANDOFF ctx ≥ handoff % → handoff nudge, no compaction; band = [prep, handoff)"
+st_ok "HANDOFF ctx ≥ handoff % → handoff nudge, no compaction; band = [prep, handoff)"
 
 # ===== SCOPE / OFF ===============================================================
 conf 55 0
@@ -288,14 +236,14 @@ reset @ctx_pct=80; stop '{"stop_hook_active":true}'; blocked && fail "stop_hook_
 conf 0 0
 reset @ctx_pct=95;                             stop; blocked && fail "FLEET_COMPACT_PREP_PCT=0 must be off" "$OUT"
 [ -z "$(getopt @compact_stage)" ] || fail "off must stamp nothing"
-ok "SCOPE/OFF hub · codex (worker + scratch) · needs · stop_hook_active · 0 ⇒ nothing"
+st_ok "SCOPE/OFF hub · codex (worker + scratch) · needs · stop_hook_active · 0 ⇒ nothing"
 
 # ===== DEDUP =====================================================================
 conf 55 80
 reset @ctx_pct=75 @compact_stage=prep @compact_send_ts="$(date +%s)"
 stop; sleep 0.5
 [ "$(sent)" = 0 ] || fail "a sender < 60 s ago must not be re-spawned"
-ok "DEDUP prep stage re-sends at most once per 60 s"
+st_ok "DEDUP prep stage re-sends at most once per 60 s"
 
 # ===== TYPING HOLD ===============================================================
 reset @ctx_pct=75 @compact_stage=prep
@@ -306,14 +254,14 @@ sleep 3
 setopt @compact_send_ts 1        # past the 60 s dedup: the next Stop retries
 FAKE_CLIENTS="$(date +%s) @2" stop; wait_sent 1
 [ "$(sent)" = 1 ] || fail "a keypress on ANOTHER window must not hold"
-ok "TYPING HOLD keypress at this window holds the /compact; another window does not"
+st_ok "TYPING HOLD keypress at this window holds the /compact; another window does not"
 
 # ===== STALE stage below the line =================================================
 reset @ctx_pct=20 @compact_stage=compacting @compact_rearm=0
 stop
 [ -z "$(getopt @compact_stage)" ] || fail "a compacting stage seen below the line must be dropped"
 [ "$(getopt @compact_rearm)" = 1 ] || fail "below the line re-arms"
-ok "STALE compacting below the line → dropped + re-armed"
+st_ok "STALE compacting below the line → dropped + re-armed"
 }
 
 lane_3() {
@@ -333,7 +281,7 @@ for leg in git nogit; do
   printf '%s' "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' || fail "scratch prep output must be valid JSON" "$OUT"
   [ "$(getopt @compact_stage)" = prep ] || fail "scratch ($leg) step 1 must stamp prep"
   [ -d "$(dirname "$M")" ] || fail "scratch ($leg) prep must create the map's directory $(dirname "$M")"
-  ok "SCRATCH[$leg] step 1 ctx 72 → prep, map → ${M#"$WORK"/}"
+  st_ok "SCRATCH[$leg] step 1 ctx 72 → prep, map → ${M#"$WORK"/}"
 
   printf 'goal: drive EPIC #77\nnext: merge PR #78\n' > "$M"
   setopt @ctx_pct 75; stop '{"stop_hook_active":true}'
@@ -341,7 +289,7 @@ for leg in git nogit; do
   [ "$(sent)" = 1 ] || fail "scratch ($leg) step 2 must type exactly one /compact"
   grep -q -- "/compact Keep the fleet RECOVERY MAP.*$M" "$SENDLOG" || fail "scratch ($leg) /compact must name the map file"
   [ "$(getopt @compact_stage)" = compacting ] || fail "scratch ($leg) step 2 must stamp compacting"
-  ok "SCRATCH[$leg] step 2 idle → exactly one /compact naming the map, stage compacting"
+  st_ok "SCRATCH[$leg] step 2 idle → exactly one /compact naming the map, stage compacting"
 
   compact_start
   case "$OUT" in *'[fleet recovery map] scratch'*'CHECK FIRST'*"$M"*'drive EPIC #77'*'merge PR #78'*) : ;;
@@ -352,7 +300,7 @@ for leg in git nogit; do
   [ "$(getopt @compact_count)" = 1 ] || fail "scratch ($leg) compaction must count"
   compact_start
   [ -z "$OUT" ] || fail "scratch ($leg): an auto compaction (not ours) stays silent" "$OUT"
-  ok "SCRATCH[$leg] step 3 SessionStart(compact) → restored, map restated (no charter), counted"
+  st_ok "SCRATCH[$leg] step 3 SessionStart(compact) → restored, map restated (no charter), counted"
   unset CWD
 done
 # FLEET_REFOCUS=0 silences the scratch restatement too (stage still completes).
@@ -367,7 +315,7 @@ unset CWD
 # A worker's map path is unchanged: still its worktree's git dir.
 reset @ctx_pct=72; stop
 case "$OUT" in *"$MAP"*'issue #12, branch, PR'*) : ;; *) fail "the worker prep is unchanged by #1318" "$OUT" ;; esac
-ok "SCRATCH FLEET_REFOCUS=0 silences it; a worker's map path + directive are unchanged"
+st_ok "SCRATCH FLEET_REFOCUS=0 silences it; a worker's map path + directive are unchanged"
 }
 
 lane_4() {
@@ -380,7 +328,7 @@ for n in 0 1; do
     *) fail "count $n at the prep line must still prep" "$OUT" ;; esac
   [ "$(getopt @compact_stage)" = prep ] || fail "count $n must stamp prep"
 done
-ok "CAP count 0/1 at the prep line → prep, as before"
+st_ok "CAP count 0/1 at the prep line → prep, as before"
 
 reset @ctx_pct=72 @compact_count=2 @compact_stage=restored @compact_rearm=1 @compact_ts=1
 stop
@@ -394,7 +342,7 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' || fail 
 [ "$(getopt @compact_stage)" = restored ] || fail "the cap handoff must not start a compact stage"
 stop; blocked && fail "the latched pane must not be re-nudged" "$OUT"
 sleep 0.5; [ "$(sent)" = 0 ] || fail "past the cap no /compact may ever be typed"
-ok "CAP count 2, same 72% reading → handoff block ('compacted in place 2 times'), latched, no prep"
+st_ok "CAP count 2, same 72% reading → handoff block ('compacted in place 2 times'), latched, no prep"
 
 reset @ctx_pct=50 @compact_count=2; stop
 blocked && fail "count 2 below the prep line must not block" "$OUT"
@@ -413,7 +361,7 @@ reset @ctx_pct=72 @compact_count=2; stop
 case "$OUT" in *'compact-prep threshold). The fleet will compact'*) : ;; *) fail "the default cap 3 lets a 3rd compaction prep" "$OUT" ;; esac
 reset @ctx_pct=72 @compact_count=3; stop
 case "$OUT" in *'compacted in place 3 times (FLEET_COMPACT_MAX=3)'*) : ;; *) fail "unset cap ⇒ the default 3" "$OUT" ;; esac
-ok "CAP band [prep, handoff) only; the plain handoff keeps its line; FLEET_COMPACT_MAX moves the cap (default 3)"
+st_ok "CAP band [prep, handoff) only; the plain handoff keeps its line; FLEET_COMPACT_MAX moves the cap (default 3)"
 
 conf 55 80 2
 reset @ctx_pct=60 @compact_count=2; FAKE_CLIENTS="$(date +%s) @1" stop   # under the hold ceiling, prep+10
@@ -429,7 +377,7 @@ blocked && fail "the hub is untouched by the cap" "$OUT"
 reset @ctx_pct=72 @compact_count=2 @issue= @raw=1; CWD="$WORK/widgets-scratch-3" stop
 case "$OUT" in *'compacted in place 2 times (FLEET_COMPACT_MAX=2)'*) : ;; *) fail "a scratch at the cap must get the handoff block (#1318)" "$OUT" ;; esac
 [ "$(getopt @handoff_armed)" = 1 ] || fail "the scratch cap handoff must latch"
-ok "CAP typing hold · stop_hook_active · codex · hub untouched · scratch capped (#1318)"
+st_ok "CAP typing hold · stop_hook_active · codex · hub untouched · scratch capped (#1318)"
 }
 
 lane_5() {
@@ -452,7 +400,7 @@ reset @ctx_pct=60 @compact_count=3 @issue= @norepo=1; CWD="$WORK/nogit" stop
 case "$OUT" in *'compacted in place 3 times'*) : ;; *) fail "a no-repo session at the cap must be handed off" "$OUT" ;; esac
 reset @ctx_pct=60 @issue= @fleet_role=orchestrator; CWD="$WORK/nogit" stop
 blocked && fail "a role word alone puts no window on the ladder (issue #4341)" "$OUT"
-ok "NOREPO prep at 55 · /fleet-handoff at 80 (latched, no hub warning) · cap 3 → handoff · a role word decides nothing"
+st_ok "NOREPO prep at 55 · /fleet-handoff at 80 (latched, no hub warning) · cap 3 → handoff · a role word decides nothing"
 
 # SessionStart: clear/startup zero the count; compact/resume keep it.
 for src in compact resume; do
@@ -465,7 +413,7 @@ for src in clear startup; do
 done
 reset @ctx_pct=72 @compact_count=2; session_start clear; setopt @ctx_pct 72; stop
 case "$OUT" in *'compact-prep threshold). The fleet will compact'*) : ;; *) fail "after the handoff's clear the fresh session compacts again" "$OUT" ;; esac
-ok "CAP SessionStart clear/startup → count zeroed (fresh session preps again); compact/resume keep it"
+st_ok "CAP SessionStart clear/startup → count zeroed (fresh session preps again); compact/resume keep it"
 
 # FLEET_COMPACT_MAX=0 ⇒ byte for byte the uncapped hook, whatever the count.
 conf 55 80 0
@@ -473,7 +421,7 @@ reset @ctx_pct=72; stop; base_out=$OUT; base_opts=$(grep -v '_ts	' "$OPTS")
 reset @ctx_pct=72 @compact_count=7; stop
 [ "$OUT" = "$base_out" ] || fail "FLEET_COMPACT_MAX=0 must emit exactly the uncapped output" "$OUT"
 [ "$(grep -v '_ts	' "$OPTS" | grep -v '^@compact_count	')" = "$base_opts" ] || fail "FLEET_COMPACT_MAX=0 must write exactly the uncapped options"
-ok "CAP FLEET_COMPACT_MAX=0 → byte-identical to no cap (count 7 still preps)"
+st_ok "CAP FLEET_COMPACT_MAX=0 → byte-identical to no cap (count 7 still preps)"
 }
 
 for n in 1 2 3 4 5; do

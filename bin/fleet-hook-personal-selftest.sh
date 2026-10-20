@@ -21,6 +21,7 @@
 #                  layer alone writes (no wrapper anywhere)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 real="$BIN/fleet-hook-personal.sh"
 while [ -L "$real" ]; do
   link="$(readlink "$real")"
@@ -32,9 +33,7 @@ T="$REPO/bin/fleet-agent-team.py"
 M="$REPO/bin/fleet-hooks-merge.py"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-hook-personal-selftest.XXXXXX") || exit 2
 [ -n "${KEEP:-}" ] || trap 'rm -rf "${WORK:?}"' EXIT INT TERM HUP
-fail=0
-ok()  { echo "ok   $*"; }
-bad() { echo "FAIL $*"; fail=1; }
+st_tally
 PY="$(command -v python3)"
 j() { "$PY" -c "import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps(eval(sys.argv[2]), sort_keys=True))" "$@" 2>/dev/null; }
 
@@ -48,21 +47,21 @@ out=$(printf '%s' "$IN" | sh "$W" PreToolUse -- "sh $WORK/rewrite.sh" 2>"$WORK/e
 [ "$rc" = 0 ] && [ "$(printf '%s' "$out" | j /dev/stdin "d['hookSpecificOutput']")" = \
     '{"hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": "fine"}' ] \
   && grep -q 'updatedInput dropped' "$WORK/err" \
-  && ok "A updatedInput is dropped, the allow + reason kept" || bad "A rewrite rc=$rc: $out // $(cat "$WORK/err")"
+  && st_ok_all "A updatedInput is dropped, the allow + reason kept" || st_miss "A rewrite rc=$rc: $out // $(cat "$WORK/err")"
 printf '%s' "$IN" > "$WORK/in.json"
 out=$(printf '%s' "$IN" | sh "$W" PermissionRequest -- \
   "cat >/dev/null; echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\",\"updatedInput\":{\"command\":\"x\"}}}}'" 2>/dev/null)
 [ "$(printf '%s' "$out" | j /dev/stdin "d['hookSpecificOutput']['decision']")" = '{"behavior": "allow"}' ] \
-  && ok "A a PermissionRequest decision loses its updatedInput too" || bad "A permreq: $out"
+  && st_ok_all "A a PermissionRequest decision loses its updatedInput too" || st_miss "A permreq: $out"
 out=$(printf '%s' "$IN" | sh "$W" PreToolUse -- 'cat >/dev/null; echo "no pushing" >&2; exit 2' 2>"$WORK/err"); rc=$?
 [ "$rc" = 2 ] && [ -z "$out" ] && [ "$(cat "$WORK/err")" = "no pushing" ] \
-  && ok "A exit 2 + stderr (deny) goes through as it was" || bad "A deny rc=$rc: $out // $(cat "$WORK/err")"
+  && st_ok_all "A exit 2 + stderr (deny) goes through as it was" || st_miss "A deny rc=$rc: $out // $(cat "$WORK/err")"
 DENY='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"no"}}'
 out=$(printf '%s' "$IN" | sh "$W" PreToolUse -- "cat >/dev/null; printf '%s' '$DENY'"); rc=$?
-[ "$rc" = 0 ] && [ "$out" = "$DENY" ] && ok "A a JSON deny passes byte for byte" || bad "A json deny rc=$rc: $out"
+[ "$rc" = 0 ] && [ "$out" = "$DENY" ] && st_ok_all "A a JSON deny passes byte for byte" || st_miss "A json deny rc=$rc: $out"
 out=$(printf '%s' "$IN" | sh "$W" UserPromptSubmit -- 'cat; printf "x\ty\n"')
-[ "$out" = "$IN"$'x\ty' ] && ok "A stdin forwarded, other output byte for byte" || bad "A passthrough: $out"
-sh "$W" PreToolUse </dev/null >/dev/null 2>&1; [ "$?" = 2 ] && ok "A a malformed wiring exits 2" || bad "A usage"
+[ "$out" = "$IN"$'x\ty' ] && st_ok_all "A stdin forwarded, other output byte for byte" || st_miss "A passthrough: $out"
+sh "$W" PreToolUse </dev/null >/dev/null 2>&1; [ "$?" = 2 ] && st_ok_all "A a malformed wiring exits 2" || st_miss "A usage"
 
 # ── B — timeout ─────────────────────────────────────────────────────────────────
 t0=$(date +%s)
@@ -71,9 +70,9 @@ dt=$(( $(date +%s) - t0 ))
 sleep 0.3
 kid=$(cat "$WORK/kid" 2>/dev/null)
 [ "$rc" = 1 ] && [ "$dt" -le 4 ] && grep -q 'cut off after 1s' "$WORK/err" \
-  && ok "B a hung hook is cut off at 1s (${dt}s), exit 1, one line" || bad "B rc=$rc dt=$dt $(cat "$WORK/err")"
+  && st_ok_all "B a hung hook is cut off at 1s (${dt}s), exit 1, one line" || st_miss "B rc=$rc dt=$dt $(cat "$WORK/err")"
 [ -n "$kid" ] && ! kill -0 "$kid" 2>/dev/null \
-  && ok "B its background child dies with it" || { bad "B child $kid still alive"; kill "$kid" 2>/dev/null; }
+  && st_ok_all "B its background child dies with it" || { st_miss "B child $kid still alive"; kill "$kid" 2>/dev/null; }
 
 # ── C — wired by sync, left alone by the merge ─────────────────────────────────
 H="$WORK/home"
@@ -100,26 +99,26 @@ WANT="sh \"\$HOME/.claude/fleet/bin/fleet-hook-personal.sh\" PreToolUse -- 'my-c
 [ "$rc" = 0 ] && [ "$(j "$H/.claude/settings.json" "d['hooks']['PreToolUse']")" = \
     "$("$PY" -c 'import json,sys;print(json.dumps([{"hooks":[{"command":sys.argv[1],"type":"command"}],"matcher":"Bash"}],sort_keys=True))' "$WANT")" ] \
   && [ "$(j "$CONF/agent-effective.json" "d['items']['claude.hooks.personal.PreToolUse.$KEY']['source']")" = '"personal"' ] \
-  && ok "C sync wires it through the wrapper as claude.hooks.personal.PreToolUse.<key>" || bad "C sync rc=$rc: $out // $(cat "$H/.claude/settings.json")"
+  && st_ok_all "C sync wires it through the wrapper as claude.hooks.personal.PreToolUse.<key>" || st_miss "C sync rc=$rc: $out // $(cat "$H/.claude/settings.json")"
 [ "$(j "$H/.claude/settings.json" "[h['command'] for g in d['hooks']['Stop'] for h in g['hooks']]")" = '["echo team-stop"]' ] \
-  && ok "C a personal hook the team already hands is the team's, not added twice" || bad "C dedupe: $(cat "$H/.claude/settings.json")"
+  && st_ok_all "C a personal hook the team already hands is the team's, not added twice" || st_miss "C dedupe: $(cat "$H/.claude/settings.json")"
 inner=$("$PY" - "$M" "$WANT" <<'PY'
 import importlib.util, sys
 s = importlib.util.spec_from_file_location("m", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
 print(m.personal_inner(sys.argv[2]), m.identity("PreToolUse", {"matcher": "Bash"}, {"command": sys.argv[2]}))
 PY
 )
-[ "$inner" = "('PreToolUse', \"my-check 'it'\") None" ] && ok "C the wrapped line unwraps; identity() is None (not a fleet hook)" || bad "C unwrap: $inner"
+[ "$inner" = "('PreToolUse', \"my-check 'it'\") None" ] && st_ok_all "C the wrapped line unwraps; identity() is None (not a fleet hook)" || st_miss "C unwrap: $inner"
 cp "$H/.claude/settings.json" "$WORK/s0.json"
 for i in 1 2; do "$PY" "$M" merge --settings "$H/.claude/settings.json" --source "$REPO/hooks/settings-hooks.json" >"$WORK/merge$i" 2>&1; done
 n=$(j "$H/.claude/settings.json" "sum(1 for g in d['hooks'].get('PreToolUse', []) for h in g['hooks'] if 'fleet-hook-personal.sh' in h['command'])")
 [ "$n" = 1 ] && ! grep -q 'fleet-hook-personal\.sh' "$WORK/merge1" "$WORK/merge2" \
   && "$PY" "$M" check --settings "$H/.claude/settings.json" --source "$REPO/hooks/settings-hooks.json" >"$WORK/check" 2>&1 \
-  && ok "C two hook merges leave the personal hook once, untouched; check is ok" \
-  || bad "C merge: n=$n $(cat "$WORK/merge1" "$WORK/check")"
+  && st_ok_all "C two hook merges leave the personal hook once, untouched; check is ok" \
+  || st_miss "C merge: n=$n $(cat "$WORK/merge1" "$WORK/check")"
 cp "$WORK/s0.json" "$H/.claude/settings.json"
 out=$(PSEAM="cat $WORK/presp.json" team sync)
-cmp -s "$WORK/s0.json" "$H/.claude/settings.json" && ok "C a second sync writes nothing" || bad "C resync: $out"
+cmp -s "$WORK/s0.json" "$H/.claude/settings.json" && st_ok_all "C a second sync writes nothing" || st_miss "C resync: $out"
 
 # ── D — enforce keeps it ───────────────────────────────────────────────────────
 sess() {
@@ -143,7 +142,7 @@ r=$(PSEAM="cat $WORK/presp.json" sess)
 [ "$(printf '%s' "$r" | j /dev/stdin "d['rows'].get('$P')")" = '["personal", false]' ] \
   && [ "$(printf '%s' "$r" | j /dev/stdin "'$P' in d['ignored']")" = false ] \
   && [ "$(printf '%s' "$r" | j /dev/stdin "d['rows'].get('$TK')")" = '["team", true]' ] \
-  && ok "D enforce: the personal hook is a row, unlocked, not ignored (the team hook is locked)" || bad "D rows: $r"
+  && st_ok_all "D enforce: the personal hook is a row, unlocked, not ignored (the team hook is locked)" || st_miss "D rows: $r"
 "$PY" - "$H/.claude/settings.json" <<'PY'
 import json, sys
 p = sys.argv[1]; d = json.load(open(p))
@@ -154,7 +153,7 @@ PY
 r=$(PSEAM="cat $WORK/presp.json" sess)
 [ "$(printf '%s' "$r" | j /dev/stdin "'$P' in d['hand'] and '$P' not in d['ignored']")" = true ] \
   && [ "$(printf '%s' "$r" | j /dev/stdin "'$TK' in d['ignored']")" = true ] \
-  && ok "D enforce: a login without it is handed the personal hook; the edited team hook is ignored" || bad "D hand: $r"
+  && st_ok_all "D enforce: a login without it is handed the personal hook; the edited team hook is ignored" || st_miss "D hand: $r"
 s=$(cd "$WORK" && env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" FLEET_PERSON_BUNDLE_CMD="cat $WORK/presp.json" \
       "$PY" "$T" session claude --lock enforce --root "$LOCKROOT" --claude-config "$H/.claude.json" \
       --claude-settings "$H/.claude/settings.json" --claude-skills "$H/.claude/skills" 2>&1)
@@ -162,7 +161,7 @@ f=$(printf '%s\n' "$s" | sed -n 's/^settings	//p')
 [ -n "$f" ] && [ "$(j "$f" "[h['command'] for g in d['hooks']['PreToolUse'] for h in g['hooks'] if 'personal' in h['command']]")" = \
     "$("$PY" -c 'import json,sys;print(json.dumps([sys.argv[1]]))' "$WANT")" ] \
   && ! printf '%s\n' "$s" | grep -q "^lock	claude.hooks.personal" \
-  && ok "D the launch's --settings carries the wrapped personal hook under its own event" || bad "D launch: $s"
+  && st_ok_all "D the launch's --settings carries the wrapped personal hook under its own event" || st_miss "D launch: $s"
 
 # ── E — no personal layer: settings.json as the team alone writes it ──────────
 for d in a b; do
@@ -180,8 +179,7 @@ want='{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo team-stop","
 [ "$(j "$WORK/a/.claude/settings.json" "d")" = "$(printf '%s' "$want" | j /dev/stdin "d")" ] \
   && cmp -s "$WORK/a/.claude/settings.json" "$WORK/b/.claude/settings.json" \
   && ! grep -q fleet-hook-personal "$WORK/a/.claude/settings.json" \
-  && ok "E no personal layer (none / version 0) → settings.json byte for byte the team's alone" \
-  || bad "E degenerate: $(cat "$WORK/a/.claude/settings.json") // $(cat "$WORK/b/.claude/settings.json")"
+  && st_ok_all "E no personal layer (none / version 0) → settings.json byte for byte the team's alone" \
+  || st_miss "E degenerate: $(cat "$WORK/a/.claude/settings.json") // $(cat "$WORK/b/.claude/settings.json")"
 
-[ "$fail" = 0 ] && echo "fleet-hook-personal-selftest: PASS" || echo "fleet-hook-personal-selftest: FAIL"
-exit "$fail"
+st_done

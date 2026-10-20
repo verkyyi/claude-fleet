@@ -38,15 +38,14 @@ FL="$BIN/fleet-install-follow.sh" IV="$BIN/fleet-install-version.sh" DOC="$BIN/f
 for f in "$FL" "$IV" "$DOC" "$BIN/fleet-sync-logins.sh" "$BIN/fleet-stable.sh"; do
   [ -f "$f" ] || { printf 'selftest: %s not found\n' "$f" >&2; exit 2; }
 done
-command -v git >/dev/null 2>&1 || { echo 'install-follow-selftest SKIP (no git)'; exit 0; }
+st_need git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/install-follow-selftest.XXXXXX")" || exit 2
 WORK=$(cd "$WORK" && pwd -P)
 cleanup() { chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM HUP
 
-CHECKS=0
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+st_tally count
 contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]:
 $2";; esac; }
 not_contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 — output unexpectedly contains [$3]:
@@ -119,13 +118,13 @@ lane_1() {
 # ============================================================================
 mk_state "$CONF" current "install at stable $S7"
 fself
-eq "A: exit 0" 0 "$RC"
-eq "A: verdict OK" OK "$(fv verdict)"
-eq "A: follow on" on "$(fv follow)"
-eq "A: result current" current "$(fv result)"
+st_eq "A: exit 0" 0 "$RC"
+st_eq "A: verdict OK" OK "$(fv verdict)"
+st_eq "A: follow on" on "$(fv follow)"
+st_eq "A: result current" current "$(fv result)"
 contains "A: why names the sha" "$(fv why)" "at stable $S7"
 contains "A: checked is an age" "$(fv checked)" "<1m ago"
-eq "A: stable column" "$S7" "$(fv stable)"
+st_eq "A: stable column" "$S7" "$(fv stable)"
 D=$(doc_sync)
 contains "A: doctor PASS" "$D" "PASS"
 contains "A: doctor names install-sync" "$D" "install-sync on — at stable $S7"
@@ -133,7 +132,7 @@ contains "A: doctor names the tick age" "$D" "(last tick <1m ago)"
 not_contains "A: doctor no WARN" "$D" "WARN"
 mk_state "$CONF" switched "a -> b in one link switch (.prev a)"
 fself
-eq "A: switched is OK" OK "$(fv verdict)"
+st_eq "A: switched is OK" OK "$(fv verdict)"
 contains "A: switched named" "$(fv why)" "switched "
 contains "A: …with the reason" "$(fv why)" "in one link switch"
 
@@ -142,12 +141,12 @@ contains "A: …with the reason" "$(fv why)" "in one link switch"
 # ============================================================================
 mk_state "$CONF" deferred "disk gate closed (fleet-diskguard.sh --gate)" "$((NOW - 3 * 3600))"
 fself
-eq "B: 3h deferred is OK" OK "$(fv verdict)"
+st_eq "B: 3h deferred is OK" OK "$(fv verdict)"
 contains "B: 3h named" "$(fv why)" "deferred for 3h"
 contains "B: carries the daemon's reason" "$(fv why)" "disk gate closed"
 mk_state "$CONF" deferred "disk gate closed (fleet-diskguard.sh --gate)" "$((NOW - 26 * 3600))"
 fself
-eq "B: 26h deferred is STUCK" STUCK "$(fv verdict)"
+st_eq "B: 26h deferred is STUCK" STUCK "$(fv verdict)"
 contains "B: 26h named" "$(fv why)" "deferred for 26h"
 contains "B: carries the daemon's reason (26h)" "$(fv why)" "disk gate closed"
 D=$(doc_sync)
@@ -158,12 +157,12 @@ contains "B: doctor names the opt-out" "$D" "FLEET_INSTALL_SYNC=0"
 contains "B: opt-out names the file" "$D" "$CONF/fleet.settings"
 # the knob moves the line
 OUT=$(FLEET_INSTALL_FOLLOW_STUCK_SECS=$((48 * 3600)) sh "$FL" --self 2>&1)
-eq "B: 26h under a 48h knob is OK" OK "$(fv verdict)"
+st_eq "B: 26h under a 48h knob is OK" OK "$(fv verdict)"
 # the knob also comes from this login's settings file (this reader is /bin/sh
 # and cannot source fleet-lib.sh, so it reads the file itself)
 printf 'FLEET_INSTALL_FOLLOW_STUCK_SECS="%s"\n' "$((48 * 3600))" > "$CONF/fleet.settings"
 fself
-eq "B: 26h under a 48h knob from fleet.settings is OK" OK "$(fv verdict)"
+st_eq "B: 26h under a 48h knob from fleet.settings is OK" OK "$(fv verdict)"
 rm -f "$CONF/fleet.settings"
 }
 
@@ -173,7 +172,7 @@ lane_2() {
 # ============================================================================
 mk_state "$CONF" refused "tracked local changes in $LIVE (bin/x.sh) — not touching an edited install; commit or discard them, then the next tick follows"
 fself
-eq "C: refused is STUCK" STUCK "$(fv verdict)"
+st_eq "C: refused is STUCK" STUCK "$(fv verdict)"
 contains "C: why starts with the result" "$(fv why)" "refused — tracked local changes"
 D=$(doc_sync)
 contains "C: doctor WARN" "$D" "WARN"
@@ -185,7 +184,7 @@ contains "C: doctor names the opt-out" "$D" "FLEET_INSTALL_SYNC=0"
 # ============================================================================
 mk_state "$CONF" rolled-back "doctor FAIL after update: quota — back at $S7; stable abc1234 is not retried until it moves"
 fself
-eq "D: rolled-back is STUCK" STUCK "$(fv verdict)"
+st_eq "D: rolled-back is STUCK" STUCK "$(fv verdict)"
 contains "D: why names the FAIL" "$(fv why)" "rolled-back — doctor FAIL after update: quota"
 D=$(doc_sync)
 contains "D: doctor WARN" "$D" "WARN"
@@ -193,11 +192,11 @@ contains "D: doctor says rolled back" "$D" "rolled-back"
 contains "D: doctor says not retried" "$D" "not retried until it moves"
 mk_state "$CONF" skipped "stable abc1234 failed the doctor after the last update and was rolled back — not retried until stable moves (fleet-stable.sh move)"
 fself
-eq "D: skipped is STUCK" STUCK "$(fv verdict)"
+st_eq "D: skipped is STUCK" STUCK "$(fv verdict)"
 contains "D: skipped names the way out" "$(fv why)" "fleet-stable.sh move"
 mk_state "$CONF" failed "doctor FAIL (x) at abc1234 and git reset --hard $S7 FAILED — fix by hand"
 fself
-eq "D: failed is STUCK" STUCK "$(fv verdict)"
+st_eq "D: failed is STUCK" STUCK "$(fv verdict)"
 contains "D: failed says fix by hand" "$(fv why)" "fix by hand"
 }
 
@@ -208,8 +207,8 @@ lane_3() {
 mk_state "$CONF" refused "would be a WARN if on"
 printf 'FLEET_INSTALL_SYNC="0"\n' > "$CONF/fleet.settings"
 fself
-eq "E: conf off is OFF" OFF "$(fv verdict)"
-eq "E: follow off" off "$(fv follow)"
+st_eq "E: conf off is OFF" OFF "$(fv verdict)"
+st_eq "E: follow off" off "$(fv follow)"
 contains "E: why names the key" "$(fv why)" "FLEET_INSTALL_SYNC=0"
 contains "E: why says how to switch on" "$(fv why)" "set it to 1"
 D=$(doc_sync)
@@ -219,12 +218,12 @@ not_contains "E: doctor never WARNs an opted-out login" "$D" "WARN"
 rm -f "$CONF/fleet.settings"
 printf 'FLEET_INSTALL_SYNC=0\n' > "$LIVE/fleet.conf"
 fself
-eq "E: the install's fleet.conf is the fallback" OFF "$(fv verdict)"
+st_eq "E: the install's fleet.conf is the fallback" OFF "$(fv verdict)"
 rm -f "$LIVE/fleet.conf"
 printf 'FLEET_INSTALL_SYNC=1\n' > "$CONF/fleet.settings"
 mk_state "$CONF" off "FLEET_INSTALL_SYNC=0 — this login does not follow stable"
 fself
-eq "E: state off + conf on is OK (next tick follows)" OK "$(fv verdict)"
+st_eq "E: state off + conf on is OK (next tick follows)" OK "$(fv verdict)"
 contains "E: says switched on since" "$(fv why)" "switched on since the last tick"
 rm -f "$CONF/fleet.settings"
 
@@ -233,9 +232,9 @@ rm -f "$CONF/fleet.settings"
 # ============================================================================
 rm -f "$STATE"
 fself
-eq "F: no state is STUCK" STUCK "$(fv verdict)"
-eq "F: result no-tick" no-tick "$(fv result)"
-eq "F: checked never" never "$(fv checked)"
+st_eq "F: no state is STUCK" STUCK "$(fv verdict)"
+st_eq "F: result no-tick" no-tick "$(fv result)"
+st_eq "F: checked never" never "$(fv checked)"
 contains "F: why names the daemon" "$(fv why)" "com.claude-fleet.install-sync"
 D=$(doc_sync)
 contains "F: doctor WARN" "$D" "WARN"
@@ -248,7 +247,7 @@ lane_4() {
 # ============================================================================
 mk_state "$CONF" fetch-failed "could not read refs/tags/stable from origin (offline? timeout 30s)"
 fself
-eq "H: fetch-failed is UNSEEN" UNSEEN "$(fv verdict)"
+st_eq "H: fetch-failed is UNSEEN" UNSEEN "$(fv verdict)"
 D=$(doc_sync)
 contains "H: doctor INFO" "$D" "INFO"
 contains "H: doctor says not seen" "$D" "stable not seen at the last tick"
@@ -259,10 +258,10 @@ H_ST=$STABLESHA; STABLESHA=abfd579000000000000000000000000000000000
 mk_state "$CONF" fetch-failed "the hub's release abfd579 did not arrive or did not verify: old ccquota"
 printf 'stable_since: %s\n' "$(( $(date +%s) - 3600 ))" >> "$CONF/global/install-sync.state"
 fself
-eq "H: a seen stable untaken for 1h is STUCK" STUCK "$(fv verdict)"
+st_eq "H: a seen stable untaken for 1h is STUCK" STUCK "$(fv verdict)"
 contains "H: …says how long" "$(fv why)" "落后 1h"
 contains "H: …and why" "$(fv why)" "old ccquota"
-eq "H: …no alarm yet" 0 "$(fv alarm)"
+st_eq "H: …no alarm yet" 0 "$(fv alarm)"
 D=$(doc_sync)
 contains "H: doctor WARNs" "$D" "WARN"
 not_contains "H: …not a FAIL yet" "$D" "FAIL"
@@ -270,19 +269,19 @@ not_contains "H: …not a FAIL yet" "$D" "FAIL"
 mk_state "$CONF" fetch-failed "the hub's release abfd579 did not arrive or did not verify: old ccquota"
 printf 'stable_since: %s\n' "$(( $(date +%s) - 7200 ))" >> "$CONF/global/install-sync.state"
 fself
-eq "H: 2h untaken is an alarm" 1 "$(fv alarm)"
+st_eq "H: 2h untaken is an alarm" 1 "$(fv alarm)"
 contains "H: …the doctor's install row FAILs" "$(doc_sync)" "FAIL  install"
 mk_state "$CONF" fetch-failed "the hub's release abfd579 did not arrive: old ccquota"
 printf 'stable_since: %s\n' "$(( $(date +%s) - 60 ))" >> "$CONF/global/install-sync.state"
 fself
-eq "H: …under the bound it stays UNSEEN" UNSEEN "$(fv verdict)"
+st_eq "H: …under the bound it stays UNSEEN" UNSEEN "$(fv verdict)"
 STABLESHA=$H_ST
 mk_state "$CONF" none "no refs/tags/stable on origin yet"
 fself
-eq "H: none is UNSEEN" UNSEEN "$(fv verdict)"
+st_eq "H: none is UNSEEN" UNSEEN "$(fv verdict)"
 mk_state "$CONF" wat "a token from the future"
 fself
-eq "H: unknown token is UNKNOWN" UNKNOWN "$(fv verdict)"
+st_eq "H: unknown token is UNKNOWN" UNKNOWN "$(fv verdict)"
 contains "H: unknown names the token" "$(fv why)" "unrecognised result 'wat'"
 
 # ============================================================================
@@ -290,7 +289,7 @@ contains "H: unknown names the token" "$(fv why)" "unrecognised result 'wat'"
 # ============================================================================
 mk_state "$CONF" current "install at stable $S7" - "$((NOW - 2 * 86400 - 60))"
 fself
-eq "G: 2d-old current is STUCK" STUCK "$(fv verdict)"
+st_eq "G: 2d-old current is STUCK" STUCK "$(fv verdict)"
 contains "G: why names the age" "$(fv why)" "last tick 2d ago"
 contains "G: why keeps the last result" "$(fv why)" "before it stopped: at stable $S7"
 contains "G: checked shows the age" "$(fv checked)" "2d ago"
@@ -300,11 +299,11 @@ contains "G: checked shows the age" "$(fv checked)" "2d ago"
 # ============================================================================
 OLD="$WORK/old"; mkdir -p "$OLD/bin"
 OUT=$(sh "$FL" --self --dir "$OLD" 2>&1)
-eq "I: no daemon script is STUCK" STUCK "$(fv verdict)"
-eq "I: result no-daemon" no-daemon "$(fv result)"
+st_eq "I: no daemon script is STUCK" STUCK "$(fv verdict)"
+st_eq "I: result no-daemon" no-daemon "$(fv result)"
 contains "I: why names the fix" "$(fv why)" "fleet-sync-logins.sh --logins"
 OUT=$(sh "$FL" --self --dir "$WORK/nowhere" 2>&1)
-eq "I: no install is UNKNOWN" UNKNOWN "$(fv verdict)"
+st_eq "I: no install is UNKNOWN" UNKNOWN "$(fv verdict)"
 }
 
 lane_5() {
@@ -313,8 +312,8 @@ lane_5() {
 # ============================================================================
 mk_state "$CONF" current "install at stable $S7"
 OUT=$(sh "$FL" --summary 2>&1); RC=$?
-eq "K: no other login → exit 0" 0 "$RC"
-eq "K: no other login → no line" "" "$OUT"
+st_eq "K: no other login → exit 0" 0 "$RC"
+st_eq "K: no other login → no line" "" "$OUT"
 OUT=$(sh "$IV" --dir "$LIVE" --no-fetch 2>&1)
 contains "K: version follow line" "$OUT" "follow:   on · current · at stable $S7 · last tick <1m ago [OK]"
 not_contains "K: version has no logins line" "$OUT" "logins:"
@@ -336,14 +335,14 @@ other bob current "install at stable $S7"; printf 'FLEET_INSTALL_SYNC=0\n' > "$H
 other carol deferred "busy window(s) on f9:1 — waiting" "$((NOW - 26 * 3600))"
 other dave none
 OUT=$(sh "$FL" --summary 2>&1); RC=$?
-eq "J: stuck → exit 1" 1 "$RC"
+st_eq "J: stuck → exit 1" 1 "$RC"
 contains "J: alice token" "$OUT" "alice on/current <1m"
 contains "J: bob token" "$OUT" "bob off"
 contains "J: carol token" "$OUT" "carol on/deferred <1m ⚠"
 contains "J: dave token" "$OUT" "dave on/no-tick ⚠"
 contains "J: stuck count" "$OUT" "· 2 stuck"
 not_contains "J: bob (off) never stuck" "$OUT" "bob off ⚠"
-eq "J: one line" 1 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')"
+st_eq "J: one line" 1 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')"
 OUT=$(sh "$FL" 2>&1)
 contains "J: table header" "$OUT" "login        follow result"
 contains "J: table self first" "$OUT" "selfme       on     current"
@@ -411,7 +410,7 @@ sandbox "$WORK/lane0"
 for n in 1 2 3 4 5; do CHECKS=$((CHECKS + $(cat "$WORK/checks.$n"))); done
 
 # --- usage ----------------------------------------------------------------------
-sh "$FL" --bogus >/dev/null 2>&1; eq "usage: unknown flag exits 2" 2 "$?"
+sh "$FL" --bogus >/dev/null 2>&1; st_eq "usage: unknown flag exits 2" 2 "$?"
 OUT=$(sh "$FL" --help 2>&1); contains "usage: --help prints the header" "$OUT" "following refs/tags/stable"
 
 printf 'install-follow-selftest OK (%d checks)\n' "$CHECKS"

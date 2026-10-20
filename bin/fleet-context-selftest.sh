@@ -32,16 +32,15 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 CTX="$BIN/fleet-context.sh"
 [ -f "$CTX" ] || { printf 'selftest: %s not found\n' "$CTX" >&2; exit 2; }
-command -v jq >/dev/null 2>&1 || { printf 'fleet-context-selftest: jq absent — SKIP\n'; exit 0; }
+st_need jq
 
 st_sandbox "${TMPDIR:-/tmp}/fleet-context-selftest.XXXXXX"
 mkdir -p "$WORK/fakepath" "$WORK/projects/-tmp-someone-issue-7" "$WORK/projects/-tmp-elsewhere"
 
 fails=0
-ok()   { printf '  ok   %s\n' "$1"; }
 bad()  { printf '  FAIL %s\n     want: %s\n     got:  %s\n' "$1" "$2" "$3"; fails=$((fails+1)); }
-is()   { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "$3" "$2"; fi; }   # $2=got $3=want
-has()  { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1" "output containing '$3'" "$2" ;; esac; }
+is()   { if [ "$2" = "$3" ]; then st_ok "$1"; else bad "$1" "$3" "$2"; fi; }   # $2=got $3=want
+has()  { case "$2" in *"$3"*) st_ok "$1" ;; *) bad "$1" "output containing '$3'" "$2" ;; esac; }
 
 # --- fake tmux: answer @ctx_pct / @handoff_armed from FAKE_* -------------------
 cat > "$WORK/fakepath/tmux" <<'FAKE'
@@ -94,7 +93,7 @@ has "live = LAST main-thread row, not the max"      "$out" '"live_tokens":42802'
 has "sidechain row excluded from the turn count"    "$out" '"turns":2'
 has "output tokens sum main-thread rows only"       "$out" '"output_tokens":1300'
 has "peak folds main-thread rows"                   "$out" '"peak_tokens":42802'
-case "$out" in *900000*) bad "sidechain tokens leak into the fold" "no 900000 anywhere" "$out" ;; *) ok "sidechain tokens never leak" ;; esac
+case "$out" in *900000*) bad "sidechain tokens leak into the fold" "no 900000 anywhere" "$out" ;; *) st_ok "sidechain tokens never leak" ;; esac
 out=$(FLEET_CONTEXT_LIMIT=100000 run --transcript "$T" --json)
 has "FLEET_CONTEXT_LIMIT sets the denominator" "$out" '"derived_pct":43'
 # FLEET_CTX_WINDOW is the ONE context-window key; FLEET_CONTEXT_LIMIT its retired
@@ -191,7 +190,7 @@ has "the context line names the limit source" "$out" "limit=default"
 # autocompact reserve — the explanation must not claim otherwise.
 out=$(FAKE_CTX_PCT=41 run --transcript "$T")
 has "a wide gap blames the limit" "$out" "the derived figure used the default limit"
-case "$out" in *"autocompact reserve"*) bad "a wide gap must not blame the reserve" "no 'autocompact reserve'" "$out" ;; *) ok "a wide gap never blames the reserve" ;; esac
+case "$out" in *"autocompact reserve"*) bad "a wide gap must not blame the reserve" "no 'autocompact reserve'" "$out" ;; *) st_ok "a wide gap never blames the reserve" ;; esac
 # …while a narrow gap keeps the reserve explanation (21% derived vs 25% stamped).
 out=$(FAKE_CTX_PCT=25 run --transcript "$T")
 has "a narrow gap keeps the reserve explanation" "$out" "autocompact reserve"
@@ -205,12 +204,12 @@ out=$(run --transcript "$T" --json)
 has "the bus state is machine-readable"       "$out" '"bus":"unstamped"'
 # Stamped → nothing to warn about.
 out=$(FAKE_CTX_PCT=41 run --transcript "$T")
-case "$out" in *"not stamped on this pane"*) bad "a stamped pane must not warn" "no bus warning" "$out" ;; *) ok "a stamped pane raises no bus warning" ;; esac
+case "$out" in *"not stamped on this pane"*) bad "a stamped pane must not warn" "no bus warning" "$out" ;; *) st_ok "a stamped pane raises no bus warning" ;; esac
 out=$(FAKE_CTX_PCT=41 run --transcript "$T" --json)
 has "…and reports the bus as ok" "$out" '"bus":"ok"'
 # Outside tmux there is no bus to be dead — never warn (a CLI/cron caller).
 out=$(run_notmux --transcript "$T")
-case "$out" in *"not stamped on this pane"*) bad "outside tmux must not warn" "no bus warning" "$out" ;; *) ok "outside tmux raises no bus warning" ;; esac
+case "$out" in *"not stamped on this pane"*) bad "outside tmux must not warn" "no bus warning" "$out" ;; *) st_ok "outside tmux raises no bus warning" ;; esac
 out=$(run_notmux --transcript "$T" --json)
 has "…and reports the bus as n/a" "$out" '"bus":"n/a"'
 

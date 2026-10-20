@@ -42,9 +42,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 st_sandbox "${TMPDIR:-/tmp}/timebox-wallclock-selftest.XXXXXX"
 mkdir -p "$WORK/fakepath"
 
-fails=0
-ok()   { printf '  ok   %s\n' "$1"; }
-fail() { printf '  FAIL %s\n' "$1"; fails=$((fails+1)); }
+st_tally
 
 # Resolve the REAL sleep before the shim shadows it (the shim must not recurse).
 REAL_SLEEP="$(command -v sleep)"
@@ -88,11 +86,11 @@ endless() { sleep 600; }
 t0=$(date +%s); fleet_timebox "$BUDGET" endless 2>/dev/null; rc=$?; t1=$(date +%s)
 elapsed=$(( t1 - t0 ))
 if [ "$rc" != 124 ]; then
-  fail "1: an over-budget job must return 124 (got $rc after ${elapsed}s)"
+  st_miss "1: an over-budget job must return 124 (got $rc after ${elapsed}s)"
 elif [ "$elapsed" -gt "$CEILING" ]; then
-  fail "1: budget ${BUDGET}s was spent in ${elapsed}s of wall clock (ceiling ${CEILING}s) — the budget is still counting poll iterations, not the clock (#653)"
+  st_miss "1: budget ${BUDGET}s was spent in ${elapsed}s of wall clock (ceiling ${CEILING}s) — the budget is still counting poll iterations, not the clock (#653)"
 else
-  ok "an endless job is killed at ~${BUDGET}s wall clock (${elapsed}s), not after ${BUDGET} slow polls"
+  st_ok "an endless job is killed at ~${BUDGET}s wall clock (${elapsed}s), not after ${BUDGET} slow polls"
 fi
 
 # --- 2. EARLY-EXIT: the budget is a ceiling, never a floor ------------------------
@@ -102,30 +100,26 @@ quick() { sleep 0; return 0; }
 t0=$(date +%s); fleet_timebox 60 quick; rc=$?; t1=$(date +%s)
 elapsed=$(( t1 - t0 ))
 if [ "$rc" != 0 ]; then
-  fail "2: a job that finishes inside its budget must return its own status 0 (got $rc)"
+  st_miss "2: a job that finishes inside its budget must return its own status 0 (got $rc)"
 elif [ "$elapsed" -gt 20 ]; then
-  fail "2: a finished job must not be waited out to its budget (took ${elapsed}s of a 60s budget)"
+  st_miss "2: a finished job must not be waited out to its budget (took ${elapsed}s of a 60s budget)"
 else
-  ok "a job finishing inside the budget returns immediately with its own status (${elapsed}s)"
+  st_ok "a job finishing inside the budget returns immediately with its own status (${elapsed}s)"
 fi
 
 # --- 3. STATUS: a failing job's exit status is passed through ---------------------
 boom() { return 7; }
 fleet_timebox 60 boom; rc=$?
-[ "$rc" = 7 ] && ok "a failing job's exit status is passed through (7)" \
-               || fail "3: expected the job's status 7, got $rc"
+[ "$rc" = 7 ] && st_ok "a failing job's exit status is passed through (7)" \
+               || st_miss "3: expected the job's status 7, got $rc"
 
 # --- 4. UNBUDGETED: budget 0 / non-numeric runs the command directly --------------
 fleet_timebox 0 boom; rc=$?
-[ "$rc" = 7 ] && ok "budget 0 runs the command unbudgeted (status passed through)" \
-               || fail "4: budget 0 must run unbudgeted and pass status 7, got $rc"
+[ "$rc" = 7 ] && st_ok "budget 0 runs the command unbudgeted (status passed through)" \
+               || st_miss "4: budget 0 must run unbudgeted and pass status 7, got $rc"
 fleet_timebox "" boom; rc=$?
-[ "$rc" = 7 ] && ok "a non-numeric budget runs the command unbudgeted" \
-               || fail "4: a non-numeric budget must run unbudgeted and pass status 7, got $rc"
+[ "$rc" = 7 ] && st_ok "a non-numeric budget runs the command unbudgeted" \
+               || st_miss "4: a non-numeric budget must run unbudgeted and pass status 7, got $rc"
 
 printf '\n'
-if [ "$fails" -gt 0 ]; then
-  printf 'fleet-timebox-wallclock-selftest: %s FAILED\n' "$fails" >&2
-  exit 1
-fi
-printf 'fleet-timebox-wallclock-selftest: all checks passed\n'
+st_done

@@ -12,6 +12,7 @@
 set -uo pipefail
 unset FLEET_CLIENT
 here="$(cd "$(dirname "$0")" && pwd)"
+. "$here/selftest-lib.sh"
 RETIRE="$here/fleet-node-shell-retire.sh"
 T=$(mktemp -d "${TMPDIR:-/tmp}/fnsr.XXXXXX")
 PIDS=()
@@ -20,9 +21,7 @@ cleanup() {
   rm -rf "$T"
 }
 trap cleanup EXIT
-fail=0
-ok()  { echo "  ok: $*"; }
-bad() { echo "  FAIL: $*"; fail=1; }
+st_tally
 ME=$(id -un)
 
 # ---- B. the retire script ----------------------------------------------------
@@ -53,33 +52,33 @@ EOF
 before=$(cat "$H/.zshrc")
 rt() { out=$(FLEET_NODE_USERS="$U" FLEET_RETIRE_GRACE=1 FLEET_RETIRE_QUIT_WAIT=2 bash "$RETIRE" "$@" 2>&1); rc=$?; }
 rt --login "$ME" --dry-run
-[ "$rc" = 0 ] && ok "dry run rc 0" || bad "dry run rc $rc: $out"
-case "$out" in *"client: would stop 2 process(es)"*"cache: would remove"*"zshrc: would take out 9 line(s)"*"dry run — nothing changed"*) ok "dry run says what it would do" ;;
-  *) bad "dry run said: $out" ;; esac
+[ "$rc" = 0 ] && st_ok_all "dry run rc 0" || st_miss "dry run rc $rc: $out"
+case "$out" in *"client: would stop 2 process(es)"*"cache: would remove"*"zshrc: would take out 9 line(s)"*"dry run — nothing changed"*) st_ok_all "dry run says what it would do" ;;
+  *) st_miss "dry run said: $out" ;; esac
 [ -d "$C" ] && [ "$(cat "$H/.zshrc")" = "$before" ] && kill -0 "${PIDS[0]}" 2>/dev/null \
-  && ok "dry run changed nothing" || bad "dry run changed something"
+  && st_ok_all "dry run changed nothing" || st_miss "dry run changed something"
 rt --login "$ME" --if-idle
 [ "$rc" = 3 ] && [ -d "$C" ] && [ "$(cat "$H/.zshrc")" = "$before" ] && kill -0 "${PIDS[0]}" 2>/dev/null \
   && case "$out" in *"left for later (--if-idle), nothing changed"*) true ;; *) false ;; esac \
-  && ok "--if-idle with the client running: rc 3, nothing changed (issue #2981)" || bad "--if-idle rc $rc: $out"
+  && st_ok_all "--if-idle with the client running: rc 3, nothing changed (issue #2981)" || st_miss "--if-idle rc $rc: $out"
 rt --login "$ME"
-[ "$rc" = 0 ] && ok "run rc 0" || bad "run rc $rc: $out"
-case "$out" in *"client: stopped 2 process(es)"*"cache: removed $C"*"zshrc: took out 9 line(s)"*"retired: $ME"*) ok "each step said what it did" ;;
-  *) bad "run said: $out" ;; esac
+[ "$rc" = 0 ] && st_ok_all "run rc 0" || st_miss "run rc $rc: $out"
+case "$out" in *"client: stopped 2 process(es)"*"cache: removed $C"*"zshrc: took out 9 line(s)"*"retired: $ME"*) st_ok_all "each step said what it did" ;;
+  *) st_miss "run said: $out" ;; esac
 sleep 0.2
 alive=0; for p in ${PIDS[@]+"${PIDS[@]}"}; do kill -0 "$p" 2>/dev/null && alive=$((alive + 1)); done
-[ "$alive" = 0 ] && ok "every client process gone (the TERM-ignoring one too)" || bad "$alive still alive"
-[ ! -e "$C" ] && ok "cache removed" || bad "cache still there"
+[ "$alive" = 0 ] && st_ok_all "every client process gone (the TERM-ignoring one too)" || st_miss "$alive still alive"
+[ ! -e "$C" ] && st_ok_all "cache removed" || st_miss "cache still there"
 [ "$(cat "$H/.zshrc")" = "$pathl
 
 # source ~/.claude/fleet/shell/fleet-login.zsh
-$own" ] && ok "zshrc: PATH line, comment and own lines kept, hooks gone" || { bad "zshrc now:"; cat "$H/.zshrc"; }
-[ "$(cat "$H/.zshrc.pre-shell-retire")" = "$before" ] && ok "old zshrc kept beside" || bad "no backup"
+$own" ] && st_ok_all "zshrc: PATH line, comment and own lines kept, hooks gone" || { st_miss "zshrc now:"; cat "$H/.zshrc"; }
+[ "$(cat "$H/.zshrc.pre-shell-retire")" = "$before" ] && st_ok_all "old zshrc kept beside" || st_miss "no backup"
 rt --login "$ME"
-[ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -c ': skip — ')" = 3 ] && ok "rerun: every step skip, rc 0" || bad "rerun rc $rc: $out"
+[ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -c ': skip — ')" = 3 ] && st_ok_all "rerun: every step skip, rc 0" || st_miss "rerun rc $rc: $out"
 
 rt --login "$ME" --if-idle
-[ "$rc" = 0 ] && ok "--if-idle once nothing runs: rc 0" || bad "--if-idle idle rc $rc: $out"
+[ "$rc" = 0 ] && st_ok_all "--if-idle once nothing runs: rc 0" || st_miss "--if-idle idle rc $rc: $out"
 
 # the fleet's header comments an older retire left without their hook (issue #2991,
 # mac-c's guest logins): the same rule the daemon's status counts takes them out
@@ -93,18 +92,17 @@ EOF
 rt --login "$ME" --if-idle
 [ "$rc" = 0 ] && case "$out" in *"zshrc: took out 2 line(s)"*) true ;; *) false ;; esac \
   && [ "$(cat "$H/.zshrc")" = 'export PATH="$HOME/.local/bin:$PATH"' ] \
-  && ok "leftover fleet header comments taken out, PATH line kept" || { bad "headers rc $rc: $out"; cat "$H/.zshrc"; }
+  && st_ok_all "leftover fleet header comments taken out, PATH line kept" || { st_miss "headers rc $rc: $out"; cat "$H/.zshrc"; }
 
 # ---- C. refusals -------------------------------------------------------------
 echo "C. refusals"
 if [ "$(id -u)" != 0 ]; then
   mkdir -p "$U/someone-else/.cache/claude-fleet/shell"
   rt --login someone-else
-  [ "$rc" = 2 ] && [ -d "$U/someone-else/.cache/claude-fleet/shell" ] && ok "another login without root → rc 2, nothing touched" \
-    || bad "another login rc $rc: $out"
+  [ "$rc" = 2 ] && [ -d "$U/someone-else/.cache/claude-fleet/shell" ] && st_ok_all "another login without root → rc 2, nothing touched" \
+    || st_miss "another login rc $rc: $out"
 fi
 rt
-[ "$rc" = 2 ] && ok "no --login → rc 2" || bad "no --login rc $rc"
+[ "$rc" = 2 ] && st_ok_all "no --login → rc 2" || st_miss "no --login rc $rc"
 
-[ "$fail" -eq 0 ] && echo "PASS: fleet-node-shell-retire-selftest" || echo "FAIL: fleet-node-shell-retire-selftest"
-exit "$fail"
+st_done

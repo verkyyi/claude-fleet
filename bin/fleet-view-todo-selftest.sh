@@ -19,8 +19,9 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'fleet-view-todo selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fvtodo-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
 unset CCQUOTA_FLEET FLEET_DASH_ORDER TMUX TMUX_PANE FLEET_SIDEBAR_SOURCE FLEET_STATUS_G FLEET_VIEW_LANDED_SECS
@@ -31,21 +32,12 @@ mkdir -p "$G" "$FD" "$WORK/conf/fleets/$S/repos" "$WORK/bin"
 printf 'FLEET_REPO=acme/app\n' > "$WORK/conf/fleets/$S/conf"
 printf 'FLEET_REPO="acme/app"\n' > "$WORK/conf/fleets/$S/repos/acme-app.conf"
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-pass() { echo "ok   $*"; }
 
 # ============================================================================
 # B. the producer — a PATH-shimmed tmux replays a fixture window list
 # ============================================================================
 US=$'\x1f'
-cat > "$WORK/bin/tmux" <<'SHIM'
-#!/bin/sh
-US=$(printf '\037'); lw=0; fmt=0
-for a in "$@"; do [ "$a" = list-windows ] && lw=1; case "$a" in *"$US"*) fmt=1 ;; esac; done
-[ "$lw" = 1 ] && [ "$fmt" = 1 ] && cat "$WLIST_FILE"
-exit 0
-SHIM
-chmod +x "$WORK/bin/tmux"
+st_fake_tmux_wlist "$WORK/bin"
 export WLIST_FILE="$WORK/wlist"
 SHIMPATH="$WORK/bin:$PATH"
 NOW=$(date +%s); OLD=$((NOW - 2 * 86400)); NEW=$((NOW - 3600))
@@ -74,25 +66,25 @@ printf '· no milestone\t#12\t·\t在问的\n· no milestone\t#17\t·\t检查中
 printf 'issue-11\t#111\tMERGED\t✓\tready\ts11\nissue-12\t#112\tMERGED\t✓\tready\ts12\nissue-13\t#113\tMERGED\t✓\tready\ts13\nissue-14\t#114\tMERGED\t✓\tready\ts14\nissue-15\t#115\tMERGED\t✓\tready\ts15\nissue-16\t#116\tMERGED\t✓\tready\ts16\nissue-17\t#117\tOPEN\t…\tunknown\t\nissue-18\t#118\tOPEN\t✗\tready\t\n' > "$FD/prmap"
 : > "$FD/prmap.ts"
 printf 'unknown\t1\n' > "$FD/deploy_s14"
-out=$(PATH="$SHIMPATH" FLEET_SESSION=$S FLEET_ROWS_UNFOLD=1 bash "$ROWS" --rows 2>&1) || fail "B: the producer exited non-zero" "$out"
+out=$(PATH="$SHIMPATH" FLEET_SESSION=$S FLEET_ROWS_UNFOLD=1 bash "$ROWS" --rows 2>&1) || st_fail "B: the producer exited non-zero" "$out"
 ended=$(printf '%s\n' "$out" | awk -F"$US" '$1 == "hdr" && $2 == "ended" { on = 1; next } $1 == "hdr" { on = 0 } on { print $4 }' | sed 's/ .*//' | tr '\n' ' ')
-[ "$ended" = "over train " ] || fail "B: 已结束 should be exactly «over», got «${ended}»" "$out"
+[ "$ended" = "over train " ] || st_fail "B: 已结束 should be exactly «over», got «${ended}»" "$out"
 f20=$(printf '%s\n' "$out" | awk -F"$US" '$1 == "@4" { print (NF >= 20 ? $20 : "-") }')
-[ "$f20" = - ] || fail "B: the train row's field 20: «${f20}»" "$out"
+[ "$f20" = - ] || st_fail "B: the train row's field 20: «${f20}»" "$out"
 n20=$(printf '%s\n' "$out" | awk -F"$US" '$1 ~ /^@/ && NF >= 20' | wc -l | tr -d ' ')
-[ "$n20" = 0 ] || fail "B: field 20 on a row with nothing to say" "$out"
+[ "$n20" = 0 ] || st_fail "B: field 20 on a row with nothing to say" "$out"
 # T493: fields 22-24 — the hub task (none here), the agent (no @cc_agent on a
 # window here: Claude) and the row's own repo
 outc=$(PATH="$SHIMPATH" FLEET_SESSION=$S FLEET_ROWS_UNFOLD=1 FLEET_ROWS_COLS=1 bash "$ROWS" --rows 2>&1)
 f2224=$(printf '%s\n' "$outc" | awk -F"$US" '$1 == "@4" { print $22 "|" $23 "|" $24 }')
-[ "$f2224" = '|claude|acme/app' ] || fail "B: the train row's fields 22-24: «${f2224}»" "$outc"
+[ "$f2224" = '|claude|acme/app' ] || st_fail "B: the train row's fields 22-24: «${f2224}»" "$outc"
 # a FULL list (the collector's newest 300 open ones, issue #4225): #11 is older
 # than all of them — not on it says nothing; a number newer than its oldest does
 cp "$FD/issues" "$FD/issues.keep"
 i=1000; while [ "$i" -lt 1300 ]; do printf '· no milestone\t#%s\t·\tt\n' "$i"; i=$((i + 1)); done > "$FD/issues"
 outf=$(PATH="$SHIMPATH" FLEET_SESSION=$S FLEET_ROWS_UNFOLD=1 bash "$ROWS" --rows 2>&1)
-printf '%s\n' "$outf" | grep -q "^hdr${US}ended" && fail "B: an issue older than a full list went 已结束" "$outf"
-python3 - "$BIN" "$FD" <<'PY' || fail "B: open_ask on a full list"
+printf '%s\n' "$outf" | grep -q "^hdr${US}ended" && st_fail "B: an issue older than a full list went 已结束" "$outf"
+python3 - "$BIN" "$FD" <<'PY' || st_fail "B: open_ask on a full list"
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
 fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
@@ -110,9 +102,9 @@ mv "$FD/issues.keep" "$FD/issues"
 # no issue list read ⇒ nothing is closed
 mv "$FD/issues" "$FD/issues.off"
 out0=$(PATH="$SHIMPATH" FLEET_SESSION=$S FLEET_ROWS_UNFOLD=1 bash "$ROWS" --rows 2>&1)
-printf '%s\n' "$out0" | grep -q "^hdr${US}ended" && fail "B: with no open-issue list a bound row went 已结束" "$out0"
+printf '%s\n' "$out0" | grep -q "^hdr${US}ended" && st_fail "B: with no open-issue list a bound row went 已结束" "$out0"
 mv "$FD/issues.off" "$FD/issues"
-pass "B  producer: closed + past 24 h → 已结束 (no PR read, #4902); open / fresh / keep stay; no field 20"
+st_ok_all "B  producer: closed + past 24 h → 已结束 (no PR read, #4902); open / fresh / keep stay; no field 20"
 
 # ============================================================================
 # C + D + E. the panel and `fleet ls`
@@ -121,7 +113,7 @@ mkdir -p "$G/asks"
 printf '200\t%s\t要不要先合 #7？\n' "$NOW" > "$G/asks/acme-app#12"
 printf '201\t%s\t早就关了的单\n' "$NOW" > "$G/asks/acme-app#16"
 printf 'PATH=%q FLEET_SESSION=%q exec bash %q --rows\n' "$SHIMPATH" "$S" "$ROWS" > "$WORK/rows.sh"
-FLEET_VIEW_ROWS_CMD="sh '$WORK/rows.sh'" FLEET_SESSION=$S FV_FLEET=$S python3 - "$BIN" <<'PY' || fail "C/D/E: the panel"
+FLEET_VIEW_ROWS_CMD="sh '$WORK/rows.sh'" FLEET_SESSION=$S FV_FLEET=$S python3 - "$BIN" <<'PY' || st_fail "C/D/E: the panel"
 import importlib.util, os, sys
 B = sys.argv[1]
 def load(name, f):
@@ -188,9 +180,9 @@ PY
 for l in zh en; do
   for k in view_grp_done_fmt view_stage_checking view_stage_red view_stage_green view_stage_train view_stage_deploying view_stage_deploy_red view_ask_open; do
     v=$(FLEET_UI_LANG=$l sh "$BIN/fleet-ui-lang.sh" t "$k" 2>/dev/null)
-    [ -n "$v" ] && [ "$v" != "$k" ] || fail "E: $l:$k has no words"
+    [ -n "$v" ] && [ "$v" != "$k" ] || st_fail "E: $l:$k has no words"
   done
 done
-pass "C  panel: 等你 (ask on an open issue, its question) · 做完待收 · 其他 · 已结束"
-pass "D  fleet ls: 在问 from the same book; E stage_of / group_of on every PR cell, words zh + en"
+st_ok_all "C  panel: 等你 (ask on an open issue, its question) · 做完待收 · 其他 · 已结束"
+st_ok_all "D  fleet ls: 在问 from the same book; E stage_of / group_of on every PR cell, words zh + en"
 echo "fleet-view-todo-selftest: PASS"

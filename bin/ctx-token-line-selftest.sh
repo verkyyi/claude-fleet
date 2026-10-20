@@ -18,13 +18,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 FILES="set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-client-core.sh fleet-lang.sh fleet-compact-send.sh fleet-doctor.sh"
 for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/ctx-token-line-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/ctx-token-line-selftest.XXXXXX"
 mkdir -p "$WORK/fakepath" "$WORK/inst/bin" "$WORK/inst/logs" "$WORK/conf/fleets/s1" "$WORK/tmp" "$WORK/home" "$WORK/wt"
 for f in $FILES; do cp "$BIN/$f" "$WORK/inst/bin/$f"; done
 STATE="$WORK/inst/bin/set-claude-state.sh"
@@ -33,7 +33,6 @@ GCONF="$WORK/inst/fleet.conf"
 OPTS="$WORK/opts"
 printf 'FLEET_REPO=acme/widgets\nFLEET_MAIN=%s/main\nFLEET_BASE_BRANCH=trunk\n' "$WORK" > "$WORK/conf/fleets/s1/conf"
 
-ok()   { printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2
          printf -- '--- opts ---\n' >&2; cat "$OPTS" >&2 2>/dev/null; exit 1; }
 
@@ -48,7 +47,7 @@ line 0 1000000 >/dev/null && fail "0 tokens must return 1 (keep the PCT key)"
 line 350000 '' >/dev/null && fail "no limit must return 1"
 line 35k 1000000 >/dev/null && fail "a non-numeric line must return 1"
 line 350000 0 >/dev/null && fail "a zero limit must return 1"
-ok "CONVERT 350000 of 1M → 35 · of 200k → 100 · rounded up · bad input → rc 1"
+st_ok "CONVERT 350000 of 1M → 35 · of 200k → 100 · rounded up · bad input → rc 1"
 
 # ===== LOCKSTEP: doctor's _ctx_line ==============================================
 DOCFN=$(sed -n '/^_ctx_line() {/,/^}/p' "$BIN/fleet-doctor.sh")
@@ -60,59 +59,10 @@ for pair in "350000 1000000" "350000 200000" "550000 1000000" "1 7" "999999 1000
 _ctx_line "$1" "$2"' _ "$1" "$2")
   [ "$a" = "$b" ] || fail "doctor _ctx_line($1,$2)=$b but fleet_ctx_line=$a"
 done
-ok "LOCKSTEP doctor _ctx_line == fleet_ctx_line on the table"
+st_ok "LOCKSTEP doctor _ctx_line == fleet_ctx_line on the table"
 
 # --- stateful fake tmux (options in $OPTS) ---------------------------------------
-cat > "$WORK/fakepath/tmux" <<'FAKE'
-#!/usr/bin/env python3
-import os, re, sys
-a = sys.argv[1:]
-if a[:1] in (["-L"], ["-S"]): a = a[2:]
-path = os.environ["FAKE_OPTS"]
-def load():
-    d = {}
-    try:
-        for line in open(path):
-            k, _, v = line.rstrip("\n").partition("\t"); d[k] = v
-    except FileNotFoundError: pass
-    return d
-def save(d):
-    with open(path, "w") as f:
-        for k, v in d.items(): f.write("%s\t%s\n" % (k, v))
-# a format: innermost #{name} from the table; #{?cond,a,b} picks a or b — tmux's
-# conditional, which the fleet's session read is since #1489
-# (`#{?#{session_group},#{session_group},#{session_name}}`)
-def _fx(d, f):
-    r = re.compile(r"#\{([^#{}]*)\}")
-    while True:
-        m = r.search(f)
-        if not m:
-            return f
-        k = m.group(1)
-        if k.startswith("?"):
-            p = k[1:].split(",", 2) + ["", ""]
-            v = p[1] if p[0] else p[2]
-        else:
-            v = d.get(k, "")
-        f = f[:m.start()] + v + f[m.end():]
-verb = a[0] if a else ""
-if verb == "display-message":
-    d = load(); print(_fx(d, a[-1]))
-elif verb == "list-panes":
-    d = load(); print(_fx(d, a[-1]))
-elif verb == "set-window-option":
-    d = load(); unset = "-u" in a
-    rest = [x for x in a[1:] if x != "-u"]
-    i = rest.index("-t"); rest = rest[:i] + rest[i+2:]
-    if unset: d.pop(rest[0], None)
-    else: d[rest[0]] = rest[1] if len(rest) > 1 else ""
-    save(d)
-elif verb in ("send-keys", "list-clients"):
-    pass
-else:
-    sys.exit(1)
-FAKE
-chmod +x "$WORK/fakepath/tmux"
+st_fake_tmux_opts "$WORK/fakepath" list-panes
 
 # conf KEY=V … — the GLOBAL conf the hook resolves through fleet-hook-conf.
 conf() { printf 'FLEET_HANDOFF_DEFER_SECS=0\n' > "$GCONF"; for kv in "$@"; do printf '%s\n' "$kv" >> "$GCONF"; done; }
@@ -143,7 +93,7 @@ reset @ctx_pct=60 @ctx_limit=bogus; stop
 conf FLEET_AUTO_HANDOFF_PCT=0 FLEET_AUTO_HANDOFF_TOKENS=550000 FLEET_COMPACT_PREP_PCT=0
 reset @ctx_pct=56 @ctx_limit=1000000; stop
 [ "$(thr)" = "55 auto-handoff" ] || fail "a token line turns handoff ON even with PCT=0" "$OUT"
-ok "HOOK handoff: token line beats PCT · 200k ⇒ never · no/bad @ctx_limit ⇒ PCT"
+st_ok "HOOK handoff: token line beats PCT · 200k ⇒ never · no/bad @ctx_limit ⇒ PCT"
 
 conf FLEET_AUTO_HANDOFF_TOKENS=550000 FLEET_COMPACT_PREP_TOKENS=350000
 reset @ctx_pct=36 @ctx_limit=1000000; stop
@@ -152,7 +102,7 @@ reset @ctx_pct=34 @ctx_limit=1000000; stop
 [ -z "$OUT" ] || fail "34% < 35% must not prep" "$OUT"
 reset @ctx_pct=60 @ctx_limit=1000000; stop
 [ "$(thr)" = "55 auto-handoff" ] || fail "60% ≥ the 55% handoff line: handoff, not compaction" "$OUT"
-ok "HOOK compact-prep: 350000 of 1M → 35%, band [35, 55)"
+st_ok "HOOK compact-prep: 350000 of 1M → 35%, band [35, 55)"
 
 # PCT only: the output is exactly what the PCT path always printed.
 conf FLEET_AUTO_HANDOFF_PCT=55 FLEET_COMPACT_PREP_PCT=0
@@ -161,7 +111,7 @@ case "$OUT" in '{"decision":"block","reason":"Context is at 60% (>= 55% auto-han
   *) fail "PCT-only must read exactly as before" "$OUT" ;; esac
 reset @ctx_pct=60 @ctx_limit=200000; stop
 [ "$(thr)" = "55 auto-handoff" ] || fail "PCT-only ignores @ctx_limit" "$OUT"
-ok "HOOK PCT-only behaviour unchanged (window size ignored)"
+st_ok "HOOK PCT-only behaviour unchanged (window size ignored)"
 
 # ===== DOCTOR ====================================================================
 run_doctor() {
@@ -191,6 +141,6 @@ conf FLEET_AUTO_HANDOFF_PCT=55 FLEET_COMPACT_PREP_PCT=35
 out=$(run_doctor)
 case "$out" in *PASS*'auto-handoff at 55% · compact-prep 35%'*) : ;;
   *) fail "doctor PCT-only must PASS with the plain % ladder" "$out" ;; esac
-ok "DOCTOR prints tokens → % per window · WARNs on never-fires / empty band / ≥ Claude's compaction"
+st_ok "DOCTOR prints tokens → % per window · WARNs on never-fires / empty band / ≥ Claude's compaction"
 
 printf 'ctx-token-line-selftest: PASS\n'

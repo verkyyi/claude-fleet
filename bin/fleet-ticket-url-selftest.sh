@@ -13,9 +13,8 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 st_sandbox "${TMPDIR:-/tmp}/fleet-ticket-url-selftest.XXXXXX"
-fails=0
-bad()  { printf 'FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '     %s\n' "$2"; fails=$((fails + 1)); }
-same() { if [ "$2" = "$3" ]; then st_ok "$1"; else bad "$1" "want [$3] got [$2]"; fi; }
+st_tally
+same() { if [ "$2" = "$3" ]; then st_ok "$1"; else st_miss "$1" "want [$3] got [$2]"; fi; }
 
 export FLEET_CONF_DIR="$WORK/conf" HOME="$WORK/home"
 unset FLEET_HUB_URL CCQUOTA_HUB_URL FLEET_SESSION FLEET_TICKETS TMUX TMUX_PANE
@@ -37,13 +36,12 @@ same 'A python: the same' "$(pyurl o/a 12 f)" 'https://github.com/o/a/issues/12'
 for a in 'o 7' 'o/a 0' 'o/a 07' 'o/a x' 'o/a '; do
   # shellcheck disable=SC2086
   out=$(url $a); rc=$?
-  [ -z "$out" ] && [ "$rc" = 2 ] && st_ok "F shell: bad args [$a] → rc 2" || bad "F shell: bad args [$a]" "rc=$rc out=[$out]"
+  [ -z "$out" ] && [ "$rc" = 2 ] && st_ok "F shell: bad args [$a] → rc 2" || st_miss "F shell: bad args [$a]" "rc=$rc out=[$out]"
 done
 same 'F python: bad number → ""' "$(pyurl o/a 0)" ''
 
 left=$(grep -n 'github\.com/%s/issues/%s\|github\.com/\$repo/issues/' "$BIN/fleet-quickopen.py" "$BIN/fleet-topbar.py" \
          "$BIN/fleet-session-cli.py" "$BIN/fleet-human-menu.sh" 2>/dev/null)
-[ -z "$left" ] && st_ok 'G every caller asks the reader' || bad 'G a caller still spells the GitHub link' "$left"
+[ -z "$left" ] && st_ok 'G every caller asks the reader' || st_miss 'G a caller still spells the GitHub link' "$left"
 
-[ "$fails" = 0 ] || { printf 'fleet-ticket-url-selftest: %d failed\n' "$fails"; exit 1; }
-echo 'fleet-ticket-url-selftest: ok'
+st_done

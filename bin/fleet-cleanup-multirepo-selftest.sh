@@ -24,20 +24,16 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
-command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
+st_need git python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-cleanup-multirepo.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 SOCK="$WORK/tmux.sock"
 mkdir -p "$WORK/bin" "$WORK/leases" "$WORK/tmp"
-cat > "$WORK/bin/tmux" <<EOF
-#!/bin/sh
-exec "$REAL_TMUX" -S "$SOCK" "\$@"
-EOF
+st_tmux_socket "$WORK/bin" "$SOCK"
 # gh: one merged PR (o/a#101, head issue-12); every list is empty; all else fails.
 cat > "$WORK/bin/gh" <<'EOF'
 #!/bin/bash

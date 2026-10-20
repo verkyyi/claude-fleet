@@ -16,6 +16,7 @@
 #   G  bin/fleet-doctor.sh itself carries the row (B's text, PASS)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SB=$(mktemp -d "${TMPDIR:-/tmp}/cred-doctor-st.XXXXXX")
 cleanup() {
   kill "$(cat "$SB/conf/cred-proxy/pid" 2>/dev/null)" 2>/dev/null
@@ -27,20 +28,18 @@ export HOME="$SB/home" FLEET_CONF_DIR="$SB/conf" XDG_CONFIG_HOME="$SB/xdg"
 mkdir -p "$HOME" "$FLEET_CONF_DIR" "$XDG_CONFIG_HOME"
 unset FLEET_HUB_URL CCQUOTA_HUB_URL CCQUOTA_TOKEN CCQUOTA_FLEET FLEET_PROBE_FORCE_UNREACHABLE FLEET_CRED_SEPARATE
 
-FAIL=0
-pass() { printf 'PASS %s\n' "$*"; }
-fail() { printf 'FAIL %s\n' "$*"; FAIL=1; }
+st_tally
 row() { FLEET_CRED_PROXY="$1" bash "$BIN/fleet-cred-proxy.sh" doctor 2>&1; }
 # expect <label> <want rc> <want level> <want text…> — the row's level and every text piece
 expect() {
   local label="$1" wrc="$2" wlv="$3" out rc t; shift 3
   out=$(row 1); rc=$?
-  [ "$rc" = "$wrc" ] || { fail "$label: rc=$rc ($out)"; return; }
-  [ "$(printf '%s' "$out" | cut -f1)" = "$wlv" ] || { fail "$label: level, wanted $wlv: $out"; return; }
+  [ "$rc" = "$wrc" ] || { st_miss "$label: rc=$rc ($out)"; return; }
+  [ "$(printf '%s' "$out" | cut -f1)" = "$wlv" ] || { st_miss "$label: level, wanted $wlv: $out"; return; }
   for t in "$@"; do
-    case "$out" in *"$t"*) ;; *) fail "$label: no [$t] in: $out"; return ;; esac
+    case "$out" in *"$t"*) ;; *) st_miss "$label: no [$t] in: $out"; return ;; esac
   done
-  pass "$label: $(printf '%s' "$out" | cut -f2-)"
+  st_ok_all "$label: $(printf '%s' "$out" | cut -f2-)"
   printf '%s\n' "$out" >> "$SB/rows"
 }
 
@@ -80,7 +79,7 @@ PY
 echo trusted > "$SB/trust"
 python3 -I "$SB/fake.py" "$SB" & disown
 i=0; while [ ! -s "$SB/fake.port" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
-[ -s "$SB/fake.port" ] || { fail "start: the fake hub never came up"; exit 1; }
+[ -s "$SB/fake.port" ] || { st_miss "start: the fake hub never came up"; exit 1; }
 U="http://127.0.0.1:$(cat "$SB/fake.port")"
 DEAD=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
 printf 'CCQUOTA_HUB_URL=%s\nCCQUOTA_TOKEN=nodetok\n' "$U" > "$FLEET_CONF_DIR/node.env"
@@ -97,12 +96,12 @@ EOF
 
 # ── A: off ───────────────────────────────────────────────────────────────────
 out=$(row 0); rc=$?
-[ "$rc" = 3 ] && [ -z "$out" ] && pass "A off: doctor exits 3, says nothing" || fail "A off: rc=$rc ($out)"
+[ "$rc" = 3 ] && [ -z "$out" ] && st_ok_all "A off: doctor exits 3, says nothing" || st_miss "A off: rc=$rc ($out)"
 dr=$(FLEET_CRED_PROXY=0 sh "$BIN/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]*(PASS|WARN|FAIL|INFO)[[:space:]]+cred([[:space:]]|$)')
-[ -z "$dr" ] && pass "A off: fleet-doctor prints no cred row" || fail "A off: fleet-doctor printed [$dr]"
+[ -z "$dr" ] && st_ok_all "A off: fleet-doctor prints no cred row" || st_miss "A off: fleet-doctor printed [$dr]"
 
 # ── the proxy ────────────────────────────────────────────────────────────────
-out=$(FLEET_CRED_PROXY=1 bash "$BIN/fleet-cred-proxy.sh" ensure 2>&1) || { fail "start: ensure: $out"; exit 1; }
+out=$(FLEET_CRED_PROXY=1 bash "$BIN/fleet-cred-proxy.sh" ensure 2>&1) || { st_miss "start: ensure: $out"; exit 1; }
 PORT=$out
 
 # ── B / C / D: the three kinds of machine ────────────────────────────────────
@@ -120,29 +119,27 @@ c = json.dumps({"v": 1, "id": "p-due", "iat": n - 1000, "exp": n + 60}).encode()
 print("fcp-h1." + base64.urlsafe_b64encode(c).rstrip(b"=").decode() + ".sig")')
 curl -s -m 20 -o /dev/null -X POST -H "Authorization: Bearer $pass_due" -d '{}' "http://127.0.0.1:$PORT/v1/messages"
 expect "E renewal failing" 0 WARN "通行证续签失败 1 次" "hub answered 500"
-grep -q 'fcp-h1\.' "$SB/proxy.log" && fail "E: a hub pass in the proxy log" || pass "E: no hub pass in the proxy log"
+grep -q 'fcp-h1\.' "$SB/proxy.log" && st_miss "E: a hub pass in the proxy log" || st_ok_all "E: no hub pass in the proxy log"
 
 # ── G: fleet-doctor carries the row (B again) ────────────────────────────────
 echo trusted > "$SB/trust"; probe reachable
 FLEET_CRED_PROXY=1 bash "$BIN/fleet-cred-proxy.sh" route --refresh >/dev/null 2>&1
 dr=$(FLEET_CRED_PROXY=1 sh "$BIN/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]*(PASS|WARN|FAIL|INFO)[[:space:]]+cred([[:space:]]|$)')
-case "$dr" in *WARN*cred*'Claude 走 direct 直连（trusted + reachable）'*) pass "G fleet-doctor: $(printf '%s' "$dr" | sed 's/^ *//')" ;;
-  *) fail "G fleet-doctor: wanted the cred row (WARN — E's failed renewal is the newest), got [$dr]" ;; esac
+case "$dr" in *WARN*cred*'Claude 走 direct 直连（trusted + reachable）'*) st_ok_all "G fleet-doctor: $(printf '%s' "$dr" | sed 's/^ *//')" ;;
+  *) st_miss "G fleet-doctor: wanted the cred row (WARN — E's failed renewal is the newest), got [$dr]" ;; esac
 
 # ── H: a host's login still on a per-login proxy (#4674) ─────────────────────
 out=$(FLEET_HOST=1 row 1)
-case "$out" in "FAIL	"*"per-login 每登录代理（已删，#4674"*) pass "H host + per-login proxy: FAIL — $(printf '%s' "$out" | cut -f2- | cut -c1-80)" ;;
-  *) fail "H host + per-login proxy: $out" ;; esac
+case "$out" in "FAIL	"*"per-login 每登录代理（已删，#4674"*) st_ok_all "H host + per-login proxy: FAIL — $(printf '%s' "$out" | cut -f2- | cut -c1-80)" ;;
+  *) st_miss "H host + per-login proxy: $out" ;; esac
 
 # ── F: the proxy is dead ─────────────────────────────────────────────────────
 kill "$(cat "$FLEET_CONF_DIR/cred-proxy/pid")" 2>/dev/null
 i=0; while kill -0 "$(cat "$FLEET_CONF_DIR/cred-proxy/pid" 2>/dev/null)" 2>/dev/null && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 expect "F proxy dead (client)" 0 INFO "代理没在跑" "fleet run"
 out=$(FLEET_HOST=1 row 1)
-case "$out" in "FAIL	"*"没接整机代理"*"machine install"*) pass "F proxy dead (host): FAIL naming machine install" ;;
-  *) fail "F proxy dead (host): $out" ;; esac
+case "$out" in "FAIL	"*"没接整机代理"*"machine install"*) st_ok_all "F proxy dead (host): FAIL naming machine install" ;;
+  *) st_miss "F proxy dead (host): $out" ;; esac
 
 [ -n "${CRED_DOCTOR_OUT:-}" ] && cp "$SB/rows" "$CRED_DOCTOR_OUT"
-[ "$FAIL" = 0 ] && { printf 'fleet-cred-doctor selftest: OK\n'; exit 0; }
-printf 'fleet-cred-doctor selftest: FAILED\n' >&2
-exit 1
+st_done
