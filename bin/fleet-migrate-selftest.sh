@@ -5,7 +5,8 @@
 #
 # Two layers:
 #   1. PURE matrices, sourced: migrate_eligible (panels / hub / raw@FLEET_MAIN),
-#      migrate_selected (--limited / --idle / --all / --account / explicit) and
+#      migrate_selected (--account / explicit; --limited / --idle / --all /
+#      --stuck are retired, T546) and
 #      migrate_noop (target == source is no move, #567; --model exempt).
 #   2. END-TO-END on a DEDICATED tmux server on its own -L label (never the live
 #      server), the way the fleet itself isolates (issue #159) — it must be -L,
@@ -70,33 +71,16 @@ inel "plan hub"                    plan      ""  ""  "$WORK/main"   "$WORK/main"
 inel "backlog panel"               backlog   ""  ""  "$WORK/main"   "$WORK/main" sid
 inel "@hub pane"                   hub-claude 1  ""  "$WORK/wt"     "$WORK/main" sid
 
-sel()   { ok; migrate_selected "$2" "$3" "$4" "$5" "$6" "$7" || fail "$1 — expected selected"; }
-unsel() { ok; migrate_selected "$2" "$3" "$4" "$5" "$6" "$7" && fail "$1 — expected NOT selected"; }
-#       desc                          mode     label state    active benched wanted
-sel   "limited: benched, working"     limited  acctA working  acctB  1  ""
-sel   "limited: benched, done"        limited  acctA "done"     acctB  1  ""
-unsel "limited: not benched"          limited  acctA working  acctB  0  ""
-unsel "limited: unknown account"      limited  ""    "done"     acctB  1  ""
-sel   "idle: done off-active"         idle     acctA "done"     acctB  0  ""
-sel   "idle: needs off-active"        idle     acctA needs    acctB  0  ""
-unsel "idle: working off-active"      idle     acctA working  acctB  0  ""
-unsel "idle: done ON active"          idle     acctB "done"     acctB  0  ""
-sel   "all: working off-active"       all      acctA working  acctB  0  ""
-unsel "all: on active"                all      acctB working  acctB  0  ""
-sel   "account: match"                account  acctA "done"     acctB  0  acctA
-unsel "account: other"                account  acctB "done"     acctB  0  acctA
-# --from narrows --idle / --all to windows on that label (issue #1231: the pace
-# rebalance moves one idle session off the most-ahead account). <wanted> carries
-# the --from label; empty = any (the historic --idle / --all).
-sel   "idle --from: match"            idle     acctA "done"     acctB  0  acctA
-unsel "idle --from: other label"      idle     acctC "done"     acctB  0  acctA
-unsel "idle --from: match but active" idle     acctB "done"     acctB  0  acctB
-sel   "all --from: match"             all      acctA working  acctB  0  acctA
-unsel "all --from: other label"       all      acctC working  acctB  0  acctA
-sel   "explicit: always"              explicit ""    ""       ""     0  ""
-# --stuck (issue #873) selects on the failover planner's @quota_stuck mark alone
-ok; migrate_selected stuck acctA working acctB 0 "" 1 || fail "stuck: a @quota_stuck=1 window must be selected"
-ok; migrate_selected stuck acctA working acctB 1 "" "" && fail "stuck: an unmarked window (even benched) must NOT be selected"
+sel()   { ok; migrate_selected "$2" "$3" "$4" || fail "$1 — expected selected"; }
+unsel() { ok; migrate_selected "$2" "$3" "$4" && fail "$1 — expected NOT selected"; }
+#       desc                          mode     label wanted
+sel   "account: match"                account  acctA acctA
+unsel "account: other"                account  acctB acctA
+unsel "account: unknown label"        account  ""    acctA
+sel   "explicit: always"              explicit ""    ""
+# The quota failover's and the pace rebalance's selectors are retired (T546):
+# no mode selects, and the CLI refuses each with 「已不用」 (exit 2).
+for m in limited idle all stuck; do unsel "$m: retired" "$m" acctA ""; done
 
 # migrate_noop <label> <active> <model> <active-benched> — the #567 guard, every
 # caller goes through it
@@ -287,10 +271,10 @@ ok; env TMUX="$SP,0,0" TMUX_PANE="$P1" bash "$SCRIPT" whoami --session "not-$SES
   && fail "bare whoami must refuse when --session names a fleet other than the caller's"
 
 # --- dry-run moves nothing
-out=$(bash "$SCRIPT" --session "$SESS" --dry-run --limited)
+out=$(bash "$SCRIPT" --session "$SESS" --dry-run --account acctA)
 rig_diag() {  # on failure: what the walk saw (CI-only failures are otherwise blind)
-  printf '\n--all: %s\nlimited-until acctA: %s (now %s)\nlist:\n%s\nwindows:\n%s\nps:\n%s\n' \
-    "$(bash "$SCRIPT" --session "$SESS" --dry-run --all 2>&1)" \
+  printf '\n--account acctA: %s\nlimited-until acctA: %s (now %s)\nlist:\n%s\nwindows:\n%s\nps:\n%s\n' \
+    "$(bash "$SCRIPT" --session "$SESS" --dry-run --account acctA 2>&1)" \
     "$(bash "$BIN/fleet-account.sh" limited-until acctA 2>&1)" "$(date +%s)" \
     "$(bash "$BIN/fleet-account.sh" list 2>&1)" \
     "$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name} state=#{@claude_state} raw=#{@raw} acct=#{@cc_account} pid=#{pane_pid}' 2>&1)" \
@@ -309,7 +293,7 @@ ok; FAKE_MANUAL_PCT=95 bash "$SCRIPT" --session "$SESS" --target-account acctB "
 ok; TM display-message -p -t "$w1" '#{pane_pid}' >/dev/null 2>&1 || fail '95% refusal must leave original worker alive'
 ok; bash "$SCRIPT" --session "$SESS" --target-account '../acctB' "$w1" >/dev/null 2>&1 \
   && fail 'invalid manual target must be refused'
-ok; bash "$SCRIPT" --session "$SESS" --target-account acctB --all >/dev/null 2>&1 \
+ok; bash "$SCRIPT" --session "$SESS" --target-account acctB --account acctA >/dev/null 2>&1 \
   && fail 'manual target must reject bulk migration'
 
 # --- a target that cannot log in is refused BEFORE /exit (issue #1667): acctB
@@ -339,8 +323,8 @@ unset FLEET_MANUAL_ACCOUNT_BIN
 ok; out=$(bash "$SCRIPT" --session "$SESS" --dry-run "$w1" 2>&1)
 printf '%s' "$out" | grep -q 'would /exit' || fail "a cleared mark lets the automatic pick choose acctB again: $out"
 
-# --- the real thing: --limited moves w1 (hook), leaves w2 (stuck), relaunches w3 in place
-out=$(bash "$SCRIPT" --session "$SESS" --limited 2>&1)
+# --- the real thing: --account acctA moves w1 (hook), leaves w2 (stuck), relaunches w3 in place
+out=$(bash "$SCRIPT" --session "$SESS" --account acctA 2>&1)
 # w1: hook path → a NEW window named w1 in wt1, options carried, argv has --resume + nudge
 nw1=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="w1"{print $1}' | head -1)
 ok; [ -n "$nw1" ] && [ "$nw1" != "$w1" ] || fail "w1 must be re-opened as a NEW window — $out $(diag)"
@@ -385,10 +369,12 @@ ok; [ -z "$(TM display-message -p -t "$w3" '#{@reported}')" ] \
   || fail "#936: an unreported session relaunched in place still owes its report — @reported must be empty (got '$(TM display-message -p -t "$w3" '#{@reported}')')"
 ok; printf '%s' "$out" | grep -q 'moved 2, skipped 1' || fail "summary must be 'moved 2, skipped 1': $out"
 
-# --- a second pass finds nothing benched (w1 is on B now; w2's truth is still A but
-# it is stuck → it is reported again, not silently dropped)
-out=$(bash "$SCRIPT" --session "$SESS" --idle 2>&1)
-ok; printf '%s' "$out" | grep -q 'nothing to move' || fail "--idle after the move must find nothing (all working or on B): $out"
+# --- the quota failover's and the pace rebalance's selectors are retired (T546)
+for sel in --limited --idle --all --stuck "--from acctA" --quota-request; do
+  # shellcheck disable=SC2086  # "--from acctA" is two words on purpose
+  out=$(bash "$SCRIPT" --session "$SESS" $sel 2>&1); rc=$?
+  ok; [ "$rc" = 2 ] && printf '%s' "$out" | grep -q '已不用' || fail "$sel must answer 已不用 and exit 2 (rc $rc): $out"
+done
 
 fi
 
@@ -403,17 +389,13 @@ if [ "$SELFTEST_SECTION" = 4 ]; then
   sleep 1.5
 fi
 if selftest_section 4; then
-# --- --stuck + --force-bg (issue #873). A walled worker whose failover request is
-# stuck — here on a background command — is the dash key's target. Rig: w5 on A
-# (benched; B active) with a live `sleep 97` child, marked @quota_stuck=1; w2 is
-# on A too but NOT marked.
+# --- --force-bg (issue #873): a walled worker held by a background command,
+# moved by hand. Rig: w5 on A (benched; B active) with a live `sleep 97` child.
 w5=$(spawn w5 runner-hook-bg sid-5555 "$WORK/wt5"); sleep 1.5
-TM set-window-option -t "$w5" @quota_stuck 1
 bgpid=$(cat "$WORK/bg.pid" 2>/dev/null)
 ok; [ -n "$bgpid" ] && kill -0 "$bgpid" 2>/dev/null || fail "rig: w5's background command must be running (pid '$bgpid')"
-out=$(bash "$SCRIPT" --session "$SESS" --stuck --dry-run --force-bg 2>&1)
-ok; printf '%s' "$out" | grep -q 'w5 .*\[acctA → acctB\] would /exit' || fail "--stuck must plan the marked window: $out $(diag)"
-ok; ! printf '%s' "$out" | grep -q 'w2 ' || fail "--stuck must list ONLY @quota_stuck windows (w2 is unmarked): $out"
+out=$(bash "$SCRIPT" --session "$SESS" --dry-run --force-bg "$w5" 2>&1)
+ok; printf '%s' "$out" | grep -q 'w5 .*\[acctA → acctB\] would /exit' || fail "--dry-run --force-bg must plan the named window: $out $(diag)"
 ok; printf '%s' "$out" | grep -q "would stop 1 background command" && printf '%s' "$out" | grep -q "$bgpid  sleep 97" \
   || fail "--dry-run --force-bg must list the background command it would stop: $out"
 ok; kill -0 "$bgpid" 2>/dev/null || fail "--dry-run must not stop anything"
@@ -482,20 +464,19 @@ ok; printf '%s' "$out" | grep -q 'w2 .*already on acctA — skipped' || fail "w2
 ok; printf '%s' "$out" | grep -q 'moved 0, skipped 2' || fail "summary must be 'moved 0, skipped 2': $out"
 ok; [ ! -s "$WORK/launched" ] || fail "a same-account move must launch nothing (launched: $(cat "$WORK/launched"))"
 ok; TM display-message -p -t "$nw1" '#{pane_pid}' >/dev/null 2>&1 || fail "a same-account move must not close the window — $out $(diag)"
-# --dry-run explains the same skip, for --account and for --limited (w4: B → A, both benched)
+# --dry-run explains the same skip, for --account and for named windows (w4: B → A, both benched)
 out=$(bash "$SCRIPT" --session "$SESS" --dry-run --account acctA 2>&1)
 ok; printf '%s' "$out" | grep -q 'already on acctA — skipped' || fail "--dry-run must print the same-account skip: $out"
 ok; ! printf '%s' "$out" | grep -q 'would /exit' || fail "--dry-run must plan no /exit for a same-account move: $out"
-out=$(bash "$SCRIPT" --session "$SESS" --dry-run --limited 2>&1)
-ok; printf '%s' "$out" | grep -q 'w1 .*already on acctA — skipped' || fail "--limited must skip a benched window whose account is still the active one: $out"
-ok; printf '%s' "$out" | grep -q 'w4 .*nowhere to move (acctB → acctA, benched too) — skipped' || fail "--limited must not bounce w4 from benched B onto benched A: $out $(diag)"
-ok; ! printf '%s' "$out" | grep -q 'would /exit' || fail "--limited with every account benched must plan nothing: $out"
-# …and so is the dash key's move (#873): a stuck row with no account to go to is
+out=$(bash "$SCRIPT" --session "$SESS" --dry-run "$nw1" "$w4" 2>&1)
+ok; printf '%s' "$out" | grep -q 'w1 .*already on acctA — skipped' || fail "a benched window whose account is still the active one must be skipped: $out"
+ok; printf '%s' "$out" | grep -q 'w4 .*nowhere to move (acctB → acctA, benched too) — skipped' || fail "w4 must not bounce from benched B onto benched A: $out $(diag)"
+ok; ! printf '%s' "$out" | grep -q 'would /exit' || fail "with every account benched nothing must be planned: $out"
+# …and so is the dash key's move (#873): a row with no account to go to is
 # refused by the same guard, background override or not
-TM set-window-option -t "$w4" @quota_stuck 1
-out=$(bash "$SCRIPT" --session "$SESS" --dry-run --stuck --force-bg 2>&1)
+out=$(bash "$SCRIPT" --session "$SESS" --dry-run --force-bg "$w4" 2>&1)
 ok; printf '%s' "$out" | grep -q 'w4 .*nowhere to move' && ! printf '%s' "$out" | grep -q 'would /exit' \
-  || fail "--stuck --force-bg with every account benched must refuse: $out"
+  || fail "--force-bg with every account benched must refuse: $out"
 # …but the SAME windows move once another account is eligible again
 bash "$BIN/fleet-account.sh" clear acctB >/dev/null
 ok; [ "$(bash "$BIN/fleet-account.sh" active)" = acctB ] || fail "rig: B un-benched ⇒ active rotates to acctB (got $(bash "$BIN/fleet-account.sh" active))"

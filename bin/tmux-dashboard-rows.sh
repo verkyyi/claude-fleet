@@ -84,7 +84,7 @@ R="${E}0m"; US=$'\x1f'
 # cache's field 29 (issue #3377); a window here has none.
 _WTEST='#{?@test_identity,,'; _WTEND='}'
 [ "${FLEET_ROWS_TEST:-0}" = 1 ] && { _WTEST=''; _WTEND=''; }
-WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,${_WTEST}#{window_name}${_WTEND}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}${US}#{?@ctx_pct,#{?@ctx_left,#{@ctx_left},#{e|-:100,#{@ctx_pct}}}|#{@ctx_band}|#{@ctx_ts}|#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}|#{@effort},}${US}#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}${US}#{@fleet_id}${US}#{@task}"
+WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,${_WTEST}#{window_name}${_WTEND}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}${US}#{?@ctx_pct,#{?@ctx_left,#{@ctx_left},#{e|-:100,#{@ctx_pct}}}|#{@ctx_band}|#{@ctx_ts}|#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}|#{@effort},}${US}#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}${US}#{@fleet_id}${US}#{@task}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -1372,9 +1372,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # repo badge (issue #793): DROPPED under `all` (issue #995) — the only frame
   # that ever drew it is the grouped one (#974), where the heading above already
   # names the row's repo. A one-repo fleet never had one.
-  # A request retrying on the same reason past FLEET_FAILOVER_STUCK_ATTEMPTS is
-  # stamped @quota_stuck, which WFMT folds in as a `stuck:` prefix (issue #872):
-  # it reads `⚠ stuck`, not the ordinary `quota:waiting` it would otherwise be.
+  # The quota failover's `quota:<state>` / `⚠ stuck` tags left with it (T546).
   # memguard (issue #1292) SIGKILLed a command in this window for a memory spike;
   # @mem_killed rides the same WFMT field as a `mem:` prefix, so the row says so
   # (`⚠ mem·137` — the exit code the session saw) without one more field or fork.
@@ -1396,12 +1394,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   case $qwait in fat=*:*) fatv=${qwait%%:*}; qwait=${qwait#*:}; tagd="${tagd:+$tagd }⚠ mem ${fatv#fat=}" ;; esac
   # The hub reached the handoff line (issue #1319): the Stop hook never blocks the
   # operator's own seat, it stamps @ctx_warn and notifies once — `ctxw:` here.
-  case $qwait in ctxw:*) qwait=${qwait#ctxw:}; tagd="${tagd:+$tagd }⚠ ctx" ;; esac
-  case $qwait in
-    '') ;;
-    stuck:*) tagd="${tagd:+$tagd }⚠ stuck" ;;
-    *) tagd="${tagd:+$tagd }quota:${qwait%%:*}" ;;
-  esac
+  case $qwait in ctxw:*) tagd="${tagd:+$tagd }⚠ ctx" ;; esac
 
   # the tree cell (issues #836/#1328): 2 cells, the level said by WHERE the `└`
   # sits — left for a first-level child, right for a second, `┊└` deeper — and a

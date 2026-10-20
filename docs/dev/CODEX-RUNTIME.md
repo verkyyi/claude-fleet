@@ -541,13 +541,12 @@ unknown destination quotas prevent cutover. Attempt logs live under
 ## Unified subscription failover
 
 With `FLEET_FAILOVER=1`, the existing account commands use ccquota profiles and
-provider-aware budget readings; their standalone native quota collector and
-independent home migration give way to `fleet-account` reconciliation. This
-avoids two controllers moving the same session. `ccquota codex run` holds the
-profile's shared login lock for the complete launcher/server/TUI lifetime.
-Before a pickup starts, Fleet verifies the native ChatGPT login and provider
-against the pinned profile metadata. See [Session transfer](SESSION-TRANSFER.md#subscription-failover)
-for same-agent preference, cross-agent fallback, drafts and loop recovery.
+provider-aware budget readings to pick a subscription when a session STARTS;
+their standalone native quota collector gives way. `ccquota codex run` holds the
+profile's shared login lock for the complete launcher/server/TUI lifetime. A
+running session is no longer moved when it fills: the per-session planner is
+retired (T546, see [Session transfer](SESSION-TRANSFER.md#subscription-failover-retired)) —
+the credential pool changes the subscription.
 
 ## Operator attention and answers
 

@@ -11,12 +11,9 @@
 #     cache, blind hub, account absent).
 #   • ph_banner (the REAL phase, extracted from tmux-dash-collect.sh) against the
 #     REAL fleet-account.sh:
-#       ① fresh 7d 34% + weekly banner → no account.limited row, ONE forced fetch
-#       ② blind hub + banner → benched as before, `▲ quota · from banner` raised
+#       ①② a subscription banner → nothing benched, fetched or moved: the pool
+#          changes a full subscription (T546, EPIC T542)
 #       ③ Fable-cap banner → model-limited, whatever the reading says
-#       ④ fresh 7d at the ceiling + weekly banner → benched to ccquota's reset
-# The failover controller's half (a replayed banner is not HARD evidence) is in
-# fleet-failover-selftest.py (claude_wall).
 #
 # Hermetic: fake ccquota (switchable payload, counts its calls), fake tmux, stub
 # account-truth; scratch pool / conf / TMPDIR / HOME. No network, no tmux server.
@@ -63,7 +60,7 @@ run() {
 }
 verdict() { run bash "$WORK/bin/fleet-account.sh" quota-verdict "$@" 2>/dev/null; }
 calls() { wc -l < "$CALLS" | tr -d ' '; }
-reset_state() { rm -f "$G"/account.* "$G"/quota.via-banner "$G"/banner-hint.*; : > "$CALLS"; : > "$WORK/tick.err"; }
+reset_state() { rm -f "$G"/account.*; : > "$CALLS"; : > "$WORK/tick.err"; }
 age_cache() { printf '%s' "$(( $(date +%s) - $1 ))" > "$G/account.quota.ts"; }
 
 # --- quota-verdict ------------------------------------------------------------
@@ -126,32 +123,18 @@ tick() {
     ph_banner' tick "$WORK/bin" "$WORK/phase.sh" "$WORK/bg.log" "$G" 2>>"$WORK/tick.err"
 }
 limited_row() { awk -F'\t' -v l="$1" '$1==l' "$G/account.limited" 2>/dev/null; }
-via() { run bash -c '. "$0"; fleet_quota_via_banner' "$WORK/bin/usage-lib.sh"; }
 
-# ① the 2026-09-22 incident: fresh reading 7d 34%, a REPLAYED weekly banner.
-reset_state; echo fresh > "$MODE"; : > "$WORK/bg.log"
-printf "You've hit your weekly limit · resets Sep 25, 7pm (Asia/Shanghai)\n" > "$WORK/banner"
-run bash "$WORK/bin/fleet-account.sh" quota --refresh >/dev/null 2>&1; age_cache 45; : > "$CALLS"
-tick
-eq "① fresh 7d 34% + weekly banner → NO account.limited row" "" "$(limited_row a)"
-eq "① …exactly one forced refetch" 1 "$(calls)"
-eq "① …no migrate/reconcile started" "" "$(cat "$WORK/bg.log")"
-eq "① …no ▲ quota · from banner" "" "$(via)"
-grep -q 'a banner ignored — ccquota 7d reading has headroom' "$WORK/tick.err" || fail "① the ignored banner left no log line" "$(cat "$WORK/tick.err")"
-tick
-eq "① a second tick inside the dedupe window does not refetch" 1 "$(calls)"
-eq "① …and does not log the same banner again" 1 "$(grep -c 'banner ignored' "$WORK/tick.err")"
-eq "① …still no bench" "" "$(limited_row a)"
-
-# ② blind hub: no reading to overrule the banner → pre-#874 bench + the marker.
-reset_state; echo empty > "$MODE"; : > "$WORK/bg.log"
-tick
-[ -n "$(limited_row a)" ] || fail "② blind hub + banner did not bench (fallback lost)"
-eq "② …via the banner's own reset text, not ccquota" 1 "$(limited_row a | grep -c 'hit your weekly limit')"
-case "$(via)" in "a	"*) CHECKS=$((CHECKS+1)) ;; *) fail "② ▲ quota · from banner not raised" "$(via)" ;; esac
-grep -q "quota-banner warning quota 'from banner'" "$BIN/fleet-alerts.sh" || fail "② the alerts producer does not raise ▲ quota · from banner"
-eq "② the marker expires (VIA_BANNER_SECS)" "" "$(FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS=0 via)"
-
+# ①② a SUBSCRIPTION banner is the pool's (T546): whatever the reading says —
+# fresh 7d 34%, a blind hub, or 7d 99% — nothing is benched, nothing fetched,
+# nothing moved or reconciled.
+for m in fresh empty hot; do
+  reset_state; echo "$m" > "$MODE"; : > "$WORK/bg.log"
+  printf "You've hit your weekly limit · resets Sep 25, 7pm (Asia/Shanghai)\n" > "$WORK/banner"
+  tick
+  eq "①② $m + weekly banner → NO account.limited row" "" "$(limited_row a)"
+  eq "①② $m …no fetch" 0 "$(calls)"
+  eq "①② $m …no migrate/reconcile started" "" "$(cat "$WORK/bg.log")"
+done
 # ③ a per-MODEL cap keeps its own signal, whatever ccquota says.
 reset_state; echo fresh > "$MODE"; : > "$WORK/bg.log"
 printf "You've hit your Fable 5 limit · resets Sep 26, 3am (Asia/Shanghai)\n" > "$WORK/banner"
@@ -159,13 +142,5 @@ tick
 eq "③ Fable banner → model-limited recorded" 1 "$(grep -c '^a	fable	' "$G/account.model-limited" 2>/dev/null)"
 eq "③ …never a subscription bench" "" "$(limited_row a)"
 eq "③ …and no verdict fetch was needed" 0 "$(calls)"
-
-# ④ the reading agrees with the banner → bench to ccquota's reset (+ buffer).
-reset_state; echo hot > "$MODE"; : > "$WORK/bg.log"
-printf "You've hit your weekly limit · resets Sep 25, 7pm (Asia/Shanghai)\n" > "$WORK/banner"
-tick
-eq "④ fresh 7d 99% + weekly banner → benched until ccquota's 7d reset + 60s" "$(( R7 + 60 ))" "$(limited_row a | cut -f2)"
-eq "④ …the bench says ccquota decided" 1 "$(limited_row a | grep -c 'ccquota 7d at ceiling')"
-eq "④ …no ▲ quota · from banner" "" "$(via)"
 
 printf 'quota-verdict selftest: %d checks passed\n' "$CHECKS"

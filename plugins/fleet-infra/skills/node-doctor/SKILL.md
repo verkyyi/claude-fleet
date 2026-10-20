@@ -65,7 +65,6 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | 行 | 来自 | 去哪 | 先做什么 |
 |---|---|---|---|
 | `account` | node · machine | [login-lifecycle] | 本机：`chmod 600` 令牌文件或 `claude setup-token` 重领；`--machine`：账号的 claude · codex · tmux 下一轮重链 |
-| `account-pick` | node | [node-doctor] | 额度读不到——先看 `qwatch` / `quota` 行 |
 | `admin-agent` | machine | [mac-node-enroll] [runbook-tcc-stuck] | 更新器下一轮重指；没重启就 `sudo launchctl kickstart -k system/com.ccquota.agent.<admin>` |
 | `admit` | node | [node-doctor] | 容量门全关了：`FLEET_GLOBAL_MAX_SESSIONS` / `FLEET_MACHINE_MAX_SESSIONS` / `FLEET_ADMIT` 至少开一个 |
 | `agent` | node | [release-rules] | 登录的 ccquota agent 落后 stable：照行内命令先 `--dry-run` 再逐个重启 |
@@ -108,8 +107,6 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `emit` | node | [node-doctor] | 事件外发：装 curl，或修 `FLEET_EMIT_URL` 的接收端 |
 | `entry` | node | [runbook-door-down] | 入口端口：名单落后 / 配置被拒 / 有人却没在听 |
 | `epic` | node | [node-doctor] | 批次没人在跑：在一个不绑单的会话里重新 `/fleet-epic-run <N>` |
-| `failover` | node | [login-lifecycle] | 账号切换状态：`fleet-account.sh failover-status` |
-| `failover-stuck` | node | [login-lifecycle] | 迁移卡住：照行内 `fleet-account.sh migrate --stuck` |
 | `files` | node | [mac-node-prep] | 打开文件数快满：找出谁开的，必要时调高系统上限 |
 | `firstrun` | node | [mac-node-prep] | 首次运行检查没过：照行内修 |
 | `fleet` | node | [release-rules] | 常驻服务还跑切换前的版本：照行内重启；客户端落后：`fleet update` |

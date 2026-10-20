@@ -71,8 +71,6 @@ case "$1" in 201|206|207) echo token-A ;; 202|203|208|209) echo token-B ;; 204) 
 FAKE
 cat > "$WORK/bin/fleet-account.sh" <<'FAKE'
 #!/bin/sh
-# No ccquota reading here (issue #874) → the banner decides, as this test expects.
-[ "${1:-}" = quota-verdict ] && { echo unknown; exit 0; }
 printf '%s\n' "$*" >> "$ACLOG"
 exit 0
 FAKE
@@ -88,12 +86,9 @@ export TMLOG="$WORK/tmux.log" PSLOG="$WORK/ps.log" ACLOG="$WORK/account.log"
   ph_banner
 ) > "$WORK/out" 2> "$WORK/err"
 fail() { printf 'collect-account FAIL: %s\n' "$1" >&2; exit 1; }
-grep -q '^mark-limited acctA ' "$ACLOG" || fail 'stale acctB stamp hid acctA token truth'
-[ "$(wc -l < "$ACLOG" | tr -d ' ')" = 3 ] || fail 'unknown/non-Claude windows attributed, or unstamped window skipped'
-grep -q '^mark-limited acctB ' "$ACLOG" || fail 'unstamped acctB process was not attributed'
-# #870: the wall a migrated session left behind, replayed by --resume on the NEW
-# account's pane (@8), benches nobody; a different wall (@9: its own reset) still does.
-[ "$(grep -c '^mark-limited acctB ' "$ACLOG")" = 2 ] || fail "replayed banner benched the new account, or a new wall was ignored: $(cat "$ACLOG")"
+# T546: a SUBSCRIPTION banner is the pool's — nothing is benched or marked from
+# the screen any more, whatever account the process truly runs on.
+[ ! -s "$ACLOG" ] || fail "a subscription banner still reached fleet-account.sh: $(cat "$ACLOG")"
 grep -q -- '-L fixture set-window-option -t %1 @cc_account acctA' "$TMLOG" || fail 'stale stamp was not healed on its own socket/pane'
 grep -q -- '-L fixture set-window-option -t %2 @cc_account acctB' "$TMLOG" || fail 'empty stamp was not healed'
 grep -q -- '-L fixture set-window-option -t %6 @cc_account acctA' "$TMLOG" || fail 'quiet pane stamp was not healed'

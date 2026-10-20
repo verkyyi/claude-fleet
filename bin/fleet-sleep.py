@@ -275,10 +275,11 @@ class Worker(LIFE['Worker']):
         source['sleep_loop']=LOOP['sleep_snapshot'](source)
         if self.opt('@claude_state')=='looping' and not source['sleep_loop']:
             raise ValueError('looping worker has no verified loop schedule')
+        # A `waiting-quota` loop has no account to wait on any more: the quota
+        # failover planner that paused it is retired (T546) and fleet-loop.py
+        # releases the record. Empty shell until the sleep road goes (C8).
         if source['sleep_loop'] and source['sleep_loop']['record']['status']=='waiting-quota':
-            policy=runpy.run_path(str(BIN/'.fleet-failover.py'))
-            account=policy['source_account'](source,policy['ACCOUNT']['inventory']())
-            source['sleep_account_key']=account['key']
+            source['sleep_account_key']=''
         evidence = json.loads(self.opt('@sleep_evidence') or '{}')
         matching_stop = (evidence.get('session_id') == source['session_id']
                          and evidence.get('pane') == self.pane and evidence.get('pid') == source['pid'])

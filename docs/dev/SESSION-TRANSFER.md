@@ -212,7 +212,7 @@ which needs every id's CronDelete receipt, a later CronList without them (no
 scheduler call after it) and the table without them. Fleet never writes the native
 table on this road. Arm only after `confirm`.
 
-**Road 2 — the source cannot cooperate** (a quota failover, or `--durable-takeover`):
+**Road 2 — the source cannot cooperate** (`--durable-takeover`):
 the controller stages the records the source process itself created, `/exit`s it,
 and only after the exit withdraws them — inside the isolation boundary: Fleet holds
 the **launch gate** (`transfer-durable/launch.gate`; `fleet-session-wrap.sh` starts
@@ -288,10 +288,9 @@ real transfer ask `bin/fleet-account.sh target-auth` whether the TARGET account
 can log in (issue #1667): a Codex profile whose ccquota login state is not
 `valid` / `refresh_due`, or whose home is missing; a Claude pool label marked by
 `fleet-account.sh mark-reauth`, whose hub-managed token has expired, or whose
-token file is unreadable. The planner's pinned target goes through
+token file is unreadable. A pinned `--target-file` (a retry's) goes through
 `check-target` the same way. A refusal prints `fleet-transfer: target-auth: …`,
-exits 1, leaves the source running, writes `refused.json` into the quota
-request (so `fleet-account.sh failover-status` shows `target-auth: …`) and
+exits 1, leaves the source running and
 records a `▲ transfer-refused` row for the `prefix !` alerts popup. The same
 read happens once more right before `/exit`. With no registry to ask (no
 ccquota, multi-account off) the verdict is `unknown` and the launch behaves as
@@ -301,8 +300,7 @@ window's `/exit`; `clear-reauth <label>` lifts a mark after a new login.
 ## Re-login, then the switch finishes itself
 
 A switch stopped by the TARGET's login leaves a retry record (issue #1669):
-a target-auth refusal of a switch the failover planner does not own (the
-planner re-picks a target every tick on its own), or a rollback after which
+a target-auth refusal, or a rollback after which
 `target-auth` refuses the target. One record per window, under
 `$FLEET_CONF_DIR/handoffs/retry/<fleet>-<id>/` (0700): the window's
 `@fleet_id`, the source session id, `--to`, and copies of the target file,
@@ -524,70 +522,21 @@ The transfer test uses its own named tmux socket, fake agents and real temporary
 worktrees. Never test the cutover against a live fleet.
 
 
-## Subscription failover
+## Subscription failover (retired)
 
-Enable `FLEET_FAILOVER=1` globally or in a fleet overlay, with
-`FLEET_FAILOVER_AGENTS=claude,codex` (or a single allowed agent). Register Codex
-logins through `ccquota codex add NAME --codex-home DIR`; Fleet does not copy
-credentials or change the default login. The existing `FLEET_CODEX_ACCOUNTS`
-allowlist accepts ccquota profile names and previously registered home labels.
-Claude retains its existing account registry, phase and model fallback policy.
-
-The existing quotawatch/banner paths prefer an eligible subscription of the
-current agent, then the other allowed agent. Targets require current quota,
-local verified authentication, and headroom below `FLEET_ACCOUNT_CEILING`.
-Same-account aliases share an exclusion/bench key. Unknown readings are never
-migration destinations. All unavailable leaves the original session waiting;
-later ticks retry independently of alert deduplication. A confirmed reset can
-continue the original session once; an uncertain send is retained for inspection.
-
-```sh
-bin/fleet-account.sh inventory --refresh
-bin/fleet-account.sh choose --agent codex
-bin/fleet-account.sh reconcile --session my-fleet --dry-run
-bin/fleet-account.sh failover-status
-```
-
-Per-session attempts live under `$FLEET_CONF_DIR/handoffs/quota-requests/` and
-link to their transfer packet. `waiting-quota` means no eligible destination;
-`waiting` includes busy tools, recent typing and unreadable drafts;
-`ambiguous` requires inspection of the retained pane/packet and never starts a
-second writer. The dashboard shows the quota state; doctor shows its reason.
-A Claude `/loop` between rounds (`looping` with `@claude_wait` from a clean Stop,
-issue #1583) moves like `done` — the Codex `looping` rule's counterpart. Its last
-`ScheduleWakeup` is exported (`fleet-loop.py from-claude`) and passed as `--loop`,
-so the transfer confirms the source's exit dialog and the target continues the
-same cadence as a Fleet loop; a Fleet loop ledger is carried as-is. It keeps
-waiting, with its own reason, while a background job runs, the loop is a
-`CronCreate`, or the wakeup is due within `FLEET_FAILOVER_WAKE_MARGIN` seconds
-(default 90) — and `source Claude turn is still running` is a turn mid-flight,
-never a loop.
-A running background command (a dev server, a long test) keeps a request
-`waiting`, as it keeps a worker awake. After a **hard** wall that has waited
-`FLEET_FAILOVER_BG_GRACE` seconds (default 600; `0` disables), the move proceeds:
-the commands' pid/argv/cwd go to the request's `background.json`, they are
-stopped once the source has exited, and the resume prompt lists them under
-"Background commands terminated by migration" for the new session to restart
-as needed. Proactive moves and hibernation keep the veto.
-A request that records the same state and reason `FLEET_FAILOVER_STUCK_ATTEMPTS`
-times in a row (default 5, one per ~60s tick; digits are ignored so a countdown
-is one reason) is **stuck**: `FLEET_NOTIFY_CMD` fires once for that episode with
-the window, account, reason and the `fleet-account.sh migrate` command that
-unsticks it, the window is stamped `@quota_stuck=1` (task list: `⚠ stuck`), and
-doctor's `failover-stuck` line counts it. A new reason restarts the count and
-clears the mark; so does the request ending.
-The unstick is one action (issue #873): switching the row's subscription
-(`dash-migrate.sh`, the hub's `worker_switch` for a row on another machine) shows
-`fleet-migrate.sh`'s own dry run — the account it would land on and every
-background command the move will stop — and a confirm runs `fleet-migrate.sh --force-bg --toast <window>`. `--force-bg`
-takes the same inventory as the hard-wall grace before `/exit`, stops the
-survivors after it (fingerprint checked) and names them in the resume nudge.
-`fleet-account.sh migrate --stuck [--force-bg] [--dry-run]` does the same for
-every `@quota_stuck` window. Neither moves a window when no account has room
-(#567).
-Disable `FLEET_FAILOVER` to cancel pending requests on the next tick. Packets and
-source recovery recipes remain available. Existing sessions without a verified
-native identity stay `unsupported`; never infer a session from the newest file.
+The per-session quota failover planner (`.fleet-failover.py`: request queue under
+`handoffs/quota-requests/`, `fleet-account.sh reconcile` / `failover-status`, the
+`@quota_failover` / `@quota_stuck` marks, `fleet-migrate.sh --limited / --idle /
+--all / --stuck`, the doctor's `failover` / `failover-stuck` rows) is retired
+(T546, EPIC T542): it never completed a move, and a full subscription is the
+credential pool's to change — the session keeps running where it is. The two old
+entry points answer 「已不用：订阅由池子挑」 for one version. What a manual move
+still borrows from it lives in `bin/fleet_transfer_source.py`: `settled` (a
+`looping` Codex between rounds), `background` and `terminate-background`
+(`fleet-migrate.sh --force-bg`, issue #873). A row's subscription is still
+switched by hand (`dash-migrate.sh`, the hub's `worker_switch`): it shows
+`fleet-migrate.sh`'s own dry run and a confirm runs `fleet-migrate.sh --force-bg
+--toast <window>`.
 
 A fully visible single-line draft is saved as `unsent-draft.txt`, marked `unsent`
 and referenced by path. Its text is never submitted as the pickup prompt. An

@@ -33,7 +33,6 @@
 3.7 dash-migrate-selftest.sh
 0.0 dash-pin-selftest.sh
 16.2 dash-popup-selftest.sh
-0.0 dash-quota-stuck-selftest.sh
 8.5 dash-raw-session-selftest.sh
 5.2 dash-reap-hub-selftest.sh
 30.9 dash-reap-selftest.sh#1
@@ -141,7 +140,6 @@
 2.6 fleet-emit-selftest.sh
 0.3 fleet-epic-floor-selftest.sh
 1.0 fleet-epic-stable-row-selftest.sh
-1.5 fleet-failover-selftest.py
 6.2 fleet-fold-selftest.sh
 1.1 fleet-handoff-file-selftest.sh
 1.2 fleet-handoff-invariant-selftest.sh

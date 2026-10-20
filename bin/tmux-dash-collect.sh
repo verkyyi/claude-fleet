@@ -853,16 +853,12 @@ local p codex_socket
 if have_py3 && [ -f "$BIN/fleet-codex-account.py" ]; then
   # Registered homes only, oldest attempt first, bounded before transcript work.
   # No model call; offline pool accounts can recover quota without a live pane.
-  if [ "${FLEET_FAILOVER:-0}" != 1 ] && [ -f "$FLEET_CONF_DIR/codex/accounts.json" ]; then
+  if [ -f "$FLEET_CONF_DIR/codex/accounts.json" ]; then
     FLEET_CONF_DIR="$FLEET_CONF_DIR" python3 "$BIN/fleet-codex-account.py" refresh --budget 15
-  fi
-  for codex_socket in $SOCKETS; do
-    if ( fleet_load_conf "$codex_socket"; [ "${FLEET_FAILOVER:-0}" = 1 ]; ); then
-      fleet_bg -L "$codex_socket" "bash '$BIN/fleet-account.sh' reconcile --session '$codex_socket'"
-    elif [ -f "$FLEET_CONF_DIR/codex/accounts.json" ]; then
+    for codex_socket in $SOCKETS; do
       FLEET_CONF_DIR="$FLEET_CONF_DIR" "$BIN/fleet-codex-account.sh" watch --session "$codex_socket"
-    fi
-  done
+    done
+  fi
 fi
 if have_py3 && [ -f "$BIN/fleet-codex-session.py" ]; then
   # Exact Codex session identity; Claude's cwd cache below is never consumed by
@@ -1021,12 +1017,11 @@ done | grep -aoE "[0-9]+% of your (weekly|[0-9]+-hour) limit[^│]*" | tail -1)
 if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" | atomic_write "$G/ratelimit"; fi
 }
 
-# --- multi-account auto-switch (every run) ---
-# When a window running under a registered account shows the "You've hit your …
-# limit · resets …" banner, mark THAT account limited and rotate the active
-# pointer so NEW sessions spawn on a fresh subscription. Verify the process token
-# against the pool and heal @cc_account before attributing a banner (#511). A stale
-# stamp, an unreadable token, or a non-Claude pane cannot bench another account.
+# --- per-model limit banners (every run) ---
+# When a window running under a registered account shows a PER-MODEL cap banner
+# ("hit your Fable 5 limit"), switch it to the fallback model in place (#524/#569).
+# A subscription banner is the pool's to act on (T546). Verify the process token
+# against the pool and heal @cc_account before attributing a banner (#511).
 # No-op unless accounts are registered — so single-account installs skip it.
 ph_banner() {
 local sock wid win acct repair row working i n pos cur scanned=0 total
@@ -1080,14 +1075,14 @@ return 0
 # banner_scan_one SOCK WID PANE ACCT REPAIR — one verified window of the banner phase.
 banner_scan_one() {
 local sock="$1" wid="$2" win="$3" acct="$4" repair="$5"
-local banner kind lm fb muntil mig msw mk muntilt newact rc axis verdict hk
+local banner kind lm fb muntil mig msw mk muntilt
   # Target the exact pane whose process was checked, on this fleet's socket.
   if [ "$repair" = 1 ]; then
     tmux -L "$sock" set-window-option -t "$win" @cc_account "$acct" 2>/dev/null || return 0
   fi
   # fleet_limit_banner (usage-lib.sh, issue #511) prefers the classic "hit your
-  # <session|weekly|Opus> limit · resets …" line — its tail is what mark-limited
-  # benches to (issue #490), so the whole banner is passed, not just the head —
+  # <session|weekly|Opus> limit · resets …" line — its tail is what model-limited
+  # records (issue #490), so the whole banner is passed, not just the head —
   # and falls back to the newer sticky "Usage limit reached · continuing
   # automatically at …" footer, which outlives the classic line on screen.
   banner=$(tmux -L "$sock" capture-pane -p -S -200 -t "$win" 2>/dev/null | fleet_limit_banner)
@@ -1108,8 +1103,8 @@ local banner kind lm fb muntil mig msw mk muntilt newact rc axis verdict hk
   # and notify once per episode. @model_migrating guards the window across ticks
   # and is SHARED with the quotawatch sweep, which normally gets here first —
   # this branch is the backstop for a daemon set that predates #569. No usable
-  # fallback (knob empty, or it IS the capped model) → the pre-#524
-  # subscription path below, unchanged.
+  # fallback (knob empty, or it IS the capped model) → left to the pool, as a
+  # subscription banner is (below).
   kind=$(printf '%s\n' "$banner" | fleet_limit_kind)
   case "$kind" in
     model:*)
@@ -1138,59 +1133,10 @@ account **$acct** hit its **$lm** cap (until $muntilt); the subscription itself 
         return 0
       fi ;;
   esac
-  # A SUBSCRIPTION banner is a HINT, not a verdict (issue #874). The screen is a
-  # guess at a fact ccquota states exactly, and the guess false-benched healthy
-  # accounts twice (#782: a Codex banner; 2026-09-22: a `--resume` replayed an old
-  # weekly banner and benched an account at 7d 34%, cascading across the pool).
-  # So the banner buys one forced refetch (deduped across windows: quota-verdict
-  # skips it while the cache is younger than FLEET_ACCOUNT_VERDICT_REFETCH), and
-  # the refreshed reading of the window the banner names decides:
-  #   ok       → no bench. Either the banner is replayed history, or the hub is
-  #              still behind a real wall — the banner stays on screen, so the
-  #              next tick asks again; one stderr line per banner, not per tick.
-  #   limited  → bench until ccquota's own reset instant.
-  #   unknown  → no fresh reading (stale / blind / not on the hub): the pre-#874
-  #              banner bench, and $G/quota.via-banner raises `▲ quota · from banner`.
-  axis=$(printf '%s\n' "$banner" | fleet_limit_axis)
-  verdict=$("$BIN/fleet-account.sh" quota-verdict "$acct" ${axis:+--axis "$axis"} --refresh 2>/dev/null)
-  case "$verdict" in
-    ok)
-      hk="$G/banner-hint.$(printf '%s' "$acct" | tr -c 'A-Za-z0-9._@-' '_')"
-      if [ "$(cat "$hk" 2>/dev/null)" != "$banner" ]; then
-        printf '%s' "$banner" | atomic_write "$hk"
-        printf '%s collect: %s banner ignored — ccquota %s reading has headroom (quota-verdict ok): %s\n' \
-          "$(date '+%F %T')" "$acct" "${axis:-5h+7d}" "$banner" >&2
-      fi
-      return 0 ;;
-    "limited "*)
-      newact=$("$BIN/fleet-account.sh" bench "$acct" "${verdict#limited }" "ccquota ${axis:-5h+7d} at ceiling · $banner" 2>/dev/null); rc=$? ;;
-    *)
-      printf '%s\t%s\n' "$(now)" "$acct" | atomic_write "$G/quota.via-banner"
-      newact=$("$BIN/fleet-account.sh" mark-limited "$acct" "$banner" 2>/dev/null); rc=$? ;;
-  esac
-  # exit 10 = this call rotated the active account away → fires ONCE per bench.
-  # A running session cannot hot-swap its token (apiKeyHelper only carries
-  # API-key credentials, not subscription OAuth tokens — verified on #495), so
-  # following the rotation means moving sessions: every window still running on
-  # a benched account — the banner window and any other on that account, mid-
-  # turn or idle (their next request fails anyway) — is closed and `--resume`d
-  # in a new window under the new active account (fleet-migrate.sh, issue
-  # #512), backgrounded via fleet_bg so the collector never blocks on the
-  # per-window exit/boot waits. run-shell sets $TMUX for the job, so migrate's
-  # bare tmux calls stay on THIS fleet's server; --toast reports the count.
-  # fleet_bg, not a hand-rolled `run-shell -b` (#575): migrate's say() report is
-  # stdout, which run-shell would overlay on the operator's window (Esc to
-  # dismiss) — fleet_bg silences it; the summary goes to the alerts (--alert, #1617).
-  if ( fleet_load_conf "$sock"; [ "${FLEET_FAILOVER:-0}" = 1 ] ); then
-    fleet_bg -L "$sock" "bash '$BIN/fleet-account.sh' reconcile --session '$sock'"
-  elif [ "$rc" -eq 10 ]; then
-    fleet_bg -L "$sock" "bash '$BIN/fleet-account.sh' migrate --limited --session '$sock' --alert"
-    if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
-      $FLEET_NOTIFY_CMD "# subscription limit reached
-account **$acct** hit its usage limit — new sessions now use **${newact:-?}**; every session still on it is being moved (close + \`--resume\` in a new window)
-> ${banner}" >/dev/null 2>&1
-    fi
-  fi
+  # A SUBSCRIPTION banner is the pool's (T546, EPIC T542): the credential proxy
+  # changes the subscription when one fills, so nothing is benched, verified or
+  # moved from the screen any more: no verdict refetch, no bench, no move of
+  # the benched account's windows, no failover reconcile.
 return 0
 }
 

@@ -394,6 +394,15 @@ def dispatch(path, now=None):
                 # with the same delivery id and text, never a new send.
                 if r['status'] != 'delivering':
                     return
+            elif r['status'] == 'waiting-quota':
+                # The quota failover planner that paused it is retired (T546):
+                # release the wait, next round on the interval. compat-1v: 下一批删
+                r.update(status='active', detail='Quota wait released: the pool changes a full subscription')
+                r.pop('quota_request', None)
+                if r['schedule'].get('interval_seconds'):
+                    r['schedule']['next_run_at'] = now + r['schedule']['interval_seconds']
+                save(path, r)
+                return
             elif r['status'] != 'active' or now < r['schedule']['next_run_at']:
                 return
             if not pending and not durable_ready(r, now):
@@ -484,8 +493,6 @@ def hold(r, now):
         return 'lifecycle'
     if pane(r, '#{@agent_transfer_request}') or int(pane(r, '#{@agent_transfer_until}') or 0) > now:
         return 'transfer'
-    if pane(r, '#{@quota_failover}'):
-        return 'quota'
     if pane(r, '#{@handoff_armed}') == '1':
         return 'handoff'
     state = pane(r, '#{@claude_state}')

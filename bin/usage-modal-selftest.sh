@@ -1,14 +1,10 @@
 #!/bin/bash
 # usage-modal-selftest.sh — hermetic wiring test for bin/usage-modal.sh (issue
-# #289 usage/account modal). The modal's one side effect beyond the account
-# pointer is "move this fleet's idle sessions onto the account I just picked";
-# since issue #512 that is bin/fleet-migrate.sh's job (close + `--resume` in a new
-# window — the in-place `--continue` restart of #263/#495 could not work under
-# the SessionEnd hook), so what is worth pinning here is the DISPATCH:
-#   • the pick backgrounds `fleet-account.sh migrate --idle` via run-shell -b
-#     (issue #304: the popup must return instantly);
-#   • the collector backgrounds `migrate --limited` on a limit rotation
-#     (issue #495's intent, #512's mechanism);
+# #289 usage/account modal). The pick sets the account pointer only: moving the
+# fleet's idle sessions onto it (`migrate --idle`) and the collector's
+# `migrate --limited` on a rotation are retired (T546) — a full subscription is
+# the pool's to change. Pinned here:
+#   • neither dispatch is back;
 #   • none of the retired in-place restart helpers linger (they typed into panes).
 # The selection matrices themselves live in fleet-migrate-selftest.sh.
 #
@@ -32,18 +28,12 @@ fail() { printf 'usage-modal selftest FAIL: %s\n' "$1" >&2; exit 1; }
 command -v render_usage_detail >/dev/null 2>&1 \
   || fail "render_usage_detail not defined after sourcing (the modal's header renderer)"
 
-# --- the pick dispatches migrate --idle in the background (issues #263/#304/#512)
+# --- the retired moves (T546): the pick no longer moves idle sessions, the
+# collector no longer moves a benched account's sessions
 CHECKS=$((CHECKS + 1))
-# Via fleet_bg, not a hand-rolled `tmux run-shell -b` (issue #575): migrate reports on
-# stdout, and run-shell turns a backgrounded job's stdout into an Esc-to-dismiss view
-# over the operator's window. fleet_bg is the one place that silencing lives.
-grep -Eq "fleet_bg .*fleet-account.sh' migrate --idle" "$SCRIPT" \
-  || fail "the account switch must dispatch 'fleet-account.sh migrate --idle' via fleet_bg (silenced background, #304/#575)"
-
-# --- the collector dispatches migrate --limited on a rotation (issue #495 → #512)
+grep -Eq "migrate --idle" "$SCRIPT" && fail "the account switch must not dispatch 'migrate --idle' any more (T546)"
 CHECKS=$((CHECKS + 1))
-grep -Eq "fleet_bg .*fleet-account.sh' migrate --limited" "$BIN/tmux-dash-collect.sh" \
-  || fail "the collector must dispatch 'fleet-account.sh migrate --limited' via fleet_bg on a rotation (silenced background, #304/#575)"
+grep -Eq "migrate --limited" "$BIN/tmux-dash-collect.sh" && fail "the collector must not dispatch 'migrate --limited' any more (T546)"
 
 # (The retired restart subcommands and the in-place restart helpers — they typed into
 # panes, #511, and could never move a session under the SessionEnd hook, #512 — and

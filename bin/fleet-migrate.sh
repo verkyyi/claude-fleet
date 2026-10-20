@@ -34,18 +34,11 @@
 #      process's token out of its environment (truth, not a stamp).
 #
 #   fleet-migrate.sh [opts] <window>…           a @wid handle (b3), tmux id or index
-#   fleet-migrate.sh [opts] --limited           every window whose account is benched
-#                                               (working ones included: their turn is dead)
-#   fleet-migrate.sh [opts] --idle              done|needs windows NOT on the active account
-#   fleet-migrate.sh [opts] --all               every window NOT on the active account
 #   fleet-migrate.sh [opts] --account <label>   every window running on <label>
-#         --from <label>    narrow --idle / --all to the windows running on <label>
-#                           (the quota watch's pace rebalance, issue #1231:
-#                           `--idle --from <ahead> --max 1`)
 #         --max <n>         move at most <n> of the selected windows (0 = all)
-#   fleet-migrate.sh [opts] --stuck             every window whose quota failover request
-#                                               is STUCK (@quota_stuck=1: the same veto
-#                                               FLEET_FAILOVER_STUCK_ATTEMPTS times, #872)
+#   --limited / --idle / --all / --stuck / --from (the quota failover's and the
+#   pace rebalance's selectors) are retired (T546): a full subscription is the
+#   pool's to change, so each answers 「已不用：订阅由池子挑」 and exits 2.
 #   fleet-migrate.sh whoami [<window>]          print the account a window really runs
 #                                               (token truth; re-stamps a stale @cc_account).
 #                                               NO window ⇒ the CALLER'S OWN pane (#703)
@@ -82,8 +75,8 @@
 #                             processes (issue #873 — the dash's migrate key): they are
 #                             inventoried BEFORE /exit, stopped after Claude is gone
 #                             (start-fingerprint checked, SIGTERM then SIGKILL) and
-#                             named in the resume nudge — the same helpers as the
-#                             planner's hard-wall grace (#871). Without it the move
+#                             named in the resume nudge (fleet_transfer_source.py,
+#                             #871). Without it the move
 #                             does not look at background work at all (the historic
 #                             behaviour). --dry-run lists what it would stop.
 #         --target-account L  operator-selected destination for ONE explicit window;
@@ -102,7 +95,7 @@
 # the active account, or any window while the active account is itself benched.
 # When every pool account is benched `fleet-account.sh active` keeps the current
 # one (the right answer for a fresh spawn — there is no better), so an
-# `--account X` / `--limited` fan-out would close N sessions and cold-boot each
+# `--account X` fan-out would close N sessions and cold-boot each
 # one (~25 s) straight back onto X — or onto another wall — still walled. Such a
 # window is reported as a skip; only a `--model` move is exempt (it is a
 # same-account relaunch on purpose, #524).
@@ -337,17 +330,12 @@ migrate_eligible() {
 # fallback); no pool at all (empty active) is left alone so a pool-less install
 # keeps its explicit-restart behaviour.
 migrate_noop() { [ -z "$3" ] && [ -n "$2" ] && { [ "$1" = "$2" ] || [ "${4:-0}" = 1 ]; }; }
-# migrate_selected <mode> <label> <state> <active> <benched> <wanted> [<stuck>] → 0 iff selected
-# <wanted> is the --account label in `account` mode and the --from label (empty
-# = any) in `idle` / `all` (issue #1231).
+# migrate_selected <mode> <label> <wanted> → 0 iff selected; <wanted> is the
+# --account label in `account` mode.
 migrate_selected() {
-  local mode="$1" label="$2" state="$3" active="$4" benched="$5" wanted="$6"
+  local mode="$1" label="$2" wanted="$3"
   case "$mode" in
-    limited) [ -n "$label" ] && [ "$benched" = 1 ] ;;
-    idle)    case "$state" in done|needs) [ "$label" != "$active" ] && { [ -z "$wanted" ] || [ "$label" = "$wanted" ]; } ;; *) return 1 ;; esac ;;
-    all)     [ "$label" != "$active" ] && { [ -z "$wanted" ] || [ "$label" = "$wanted" ]; } ;;
     account) [ -n "$label" ] && [ "$label" = "$wanted" ] ;;
-    stuck)   [ "${7:-}" = 1 ] ;;
     explicit) return 0 ;;
     *) return 1 ;;
   esac
@@ -355,14 +343,14 @@ migrate_selected() {
 
 # --- background work (--force-bg, issue #873) -----------------------------------
 # One inventory of "what this move will terminate" (EPIC #875 contract 3): the
-# planner's own walk (.fleet-failover.py → fleet-sleep's quiet_processes), so the
-# popup, this move and the hard-wall grace can never disagree about what counts.
-FAILOVER_PY="${FLEET_MIGRATE_FAILOVER_PY:-$BIN/.fleet-failover.py}"
+# hibernation walk (fleet_transfer_source.py → fleet-sleep's quiet_processes),
+# so the popup and this move can never disagree about what counts.
+SOURCE_PY="${FLEET_MIGRATE_SOURCE_PY:-$BIN/fleet_transfer_source.py}"
 BG_WHY='The operator forced this move with a background override (fleet-migrate --force-bg)'
 # bg_inventory <claude-pid> <worktree> → the JSON list on stdout; exit 1 + why on stderr
 bg_inventory() {
   FLEET_SLEEP_MCP_RESTARTABLE="${FLEET_SLEEP_MCP_RESTARTABLE:-}" \
-    python3 "$FAILOVER_PY" background --pid "$1" --worktree "$2" --session "${SESS:-}"
+    python3 "$SOURCE_PY" background --pid "$1" --worktree "$2" --session "${SESS:-}"
 }
 # bg_lines <json> → one `  pid  argv  (cwd)` line per entry (for the plan + popup)
 bg_lines() {
@@ -617,7 +605,7 @@ migrate_one_body() {
     say "  ↻ $name ($wid) [${label:-?} → ${ACTIVE:-?}${MODEL:+ on $MODEL}] would /exit pid $cpid and resume ${sid%%-*}… in $cwd${nudge:+ (nudged)}"
     [ -z "$ta_why" ] || say "    ! target-auth: $ta_why — would be left running"
     if [ "$FORCE_BG" = 1 ]; then
-      if [ -n "$bgerr" ]; then say "    ! background inventory failed: ${bgerr#fleet-failover: } — whatever it owns is stopped UNLISTED"
+      if [ -n "$bgerr" ]; then say "    ! background inventory failed: ${bgerr#fleet-transfer-source: } — whatever it owns is stopped UNLISTED"
       elif [ -n "$bgjson" ]; then say "    would stop $(bg_count "$bgjson") background command(s):"; bg_lines "$bgjson"
       else say "    no background commands to stop"; fi
     fi
@@ -717,10 +705,10 @@ migrate_one_body() {
   # fold the note naming each command into the resume nudge (#871's helper).
   local bgnote=""
   if [ -n "$bgdir" ]; then
-    bgnote=$(python3 "$FAILOVER_PY" terminate-background "$bgdir" --note "$BG_WHY" 2>/dev/null)
+    bgnote=$(python3 "$SOURCE_PY" terminate-background "$bgdir" --note "$BG_WHY" 2>/dev/null)
     say "  ⏹ $name ($wid): stopped $(bg_count "$bgjson") background command(s):"; bg_lines "$bgjson"
   elif [ -n "$bgerr" ]; then
-    say "  ! $name ($wid): background inventory failed (${bgerr#fleet-failover: }) — nothing recorded"
+    say "  ! $name ($wid): background inventory failed (${bgerr#fleet-transfer-source: }) — nothing recorded"
     bgnote="Background commands this session was running may have been stopped by the move; the inventory failed, so check for any you started."
   fi
   if [ -n "$bgnote" ]; then
@@ -884,29 +872,26 @@ migrate_one_body() {
 # direct run dispatches. Same guard idiom as fleet-account.sh.
 migrate_main() {
   MODE=""; ACCOUNT=""; TARGET_ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=(); FORCE_BG=0; MAX=0; FORCE_SELF=0; CFG=0
-  local pinned_target='' quota_request='' pinned_loop='' verified=0
+  local verified=0
   FLEET_MIGRATION_LOCKED=''
   MIGRATE_TMP=''
   trap '[ -z "${FLEET_MIGRATION_LOCKED:-}" ] || fleet_transition_lock_drop "$FLEET_MIGRATION_LOCKED"; [ -z "${MIGRATE_TMP:-}" ] || rm -rf "$MIGRATE_TMP"' EXIT
   while [ $# -gt 0 ]; do
     case "$1" in
-      --limited|--idle|--all|--stuck) MODE="${1#--}"; shift ;;
+      # The quota failover's and the pace rebalance's roads (T546). compat-1v: 下一批删
+      --limited|--idle|--all|--stuck|--from|--from=*|--target-file|--quota-request|--loop)
+        echo "fleet-migrate: ${1%%=*} 已不用：订阅由池子挑 · no longer used: the pool picks the subscription" >&2; return 2 ;;
       --force-bg) FORCE_BG=1; shift ;;
       --force-self) FORCE_SELF=1; shift ;;
       --cfg-stale) CFG=1; shift ;;
       --account) MODE=account; ACCOUNT="${2:-}"; shift 2 ;;
       --account=*) MODE=account; ACCOUNT="${1#--account=}"; shift ;;
-      --from) ACCOUNT="${2:-}"; [ -n "$ACCOUNT" ] || { echo 'fleet-migrate: --from needs a label' >&2; return 2; }; shift 2 ;;
-      --from=*) ACCOUNT="${1#--from=}"; [ -n "$ACCOUNT" ] || { echo 'fleet-migrate: --from needs a label' >&2; return 2; }; shift ;;
       --max) MAX="${2:-}"; case "$MAX" in ''|*[!0-9]*) echo 'fleet-migrate: --max needs a number' >&2; return 2 ;; esac; shift 2 ;;
       --max=*) MAX="${1#--max=}"; case "$MAX" in ''|*[!0-9]*) echo 'fleet-migrate: --max needs a number' >&2; return 2 ;; esac; shift ;;
       --target-account) [ -n "${2:-}" ] || { echo 'fleet-migrate: --target-account needs a label' >&2; return 2; }; TARGET_ACCOUNT="$2"; shift 2 ;;
       --target-account=*) TARGET_ACCOUNT="${1#--target-account=}"; [ -n "$TARGET_ACCOUNT" ] || { echo 'fleet-migrate: --target-account needs a label' >&2; return 2; }; shift ;;
       --session) SESS="${2:-}"; shift 2 ;;
       --session=*) SESS="${1#--session=}"; shift ;;
-      --target-file) pinned_target="${2:-}"; shift 2 ;;
-      --quota-request) quota_request="${2:-}"; shift 2 ;;
-      --loop) pinned_loop="${2:-}"; shift 2 ;;   # a quota request's exported wakeup (issue #1583)
       --nudge) NUDGE="${2:-}"; NUDGE_SET=1; shift 2 ;;
       --nudge=*) NUDGE="${1#--nudge=}"; NUDGE_SET=1; shift ;;
       --model) MODEL="${2:-}"; shift 2 ;;
@@ -916,16 +901,15 @@ migrate_main() {
       --alert) TOAST=2; shift ;;
       whoami) MODE=whoami; shift ;;
       --verified) verified=1; shift ;;
-      -h|--help) sed -n '2,71p' "$0"; return 0 ;;
+      -h|--help) sed -n '2,104p' "$0"; return 0 ;;
       --*) echo "fleet-migrate: unknown option '$1'" >&2; return 2 ;;
       *) WIDS+=("$1"); shift ;;
     esac
   done
-  [ -n "$MODE" ] || [ "${#WIDS[@]}" -gt 0 ] || { sed -n '30,71p' "$0" >&2; return 2; }
+  [ -n "$MODE" ] || [ "${#WIDS[@]}" -gt 0 ] || { sed -n '36,104p' "$0" >&2; return 2; }
   [ "$MODE" = account ] && [ -z "$ACCOUNT" ] && { echo "fleet-migrate: --account needs a label" >&2; return 2; }
-  case "$MODE" in idle|all|account|"") ;; *) [ -z "$ACCOUNT" ] || { echo "fleet-migrate: --from only narrows --idle / --all" >&2; return 2; } ;; esac
   if [ -n "$TARGET_ACCOUNT" ]; then
-    [ -z "$MODE" ] && [ "${#WIDS[@]}" = 1 ] && [ -z "$pinned_target" ] \
+    [ -z "$MODE" ] && [ "${#WIDS[@]}" = 1 ] \
       || { echo 'fleet-migrate: --target-account needs exactly one explicit window' >&2; return 2; }
   fi
   MODEL=$(printf '%s' "$MODEL" | LC_ALL=C tr -cd 'A-Za-z0-9._-')   # embedded single-quoted in the launch line
@@ -933,16 +917,6 @@ migrate_main() {
   [ -n "$SESS" ] || SESS=$(fleet_current_session)
   [ -n "$SESS" ] || { echo "fleet-migrate: no tmux session (pass --session <fleet>)" >&2; return 2; }
   fleet_load_conf "$SESS" 2>/dev/null || :
-  # The quota planner pins ONE account for ONE exact session. Use the existing
-  # transfer transaction for its locks, packet, draft and loop, while retaining
-  # Claude's native --resume UUID (the legacy bulk mover below stays compatible).
-  [ -z "$pinned_loop" ] || [ -n "$pinned_target" ] || { echo 'fleet-migrate: --loop rides only a pinned quota target' >&2; return 2; }
-  if [ -n "$pinned_target" ]; then
-    [ "${#WIDS[@]}" = 1 ] && [ -n "$quota_request" ] || { echo 'fleet-migrate: pinned target needs one window and a quota request' >&2; return 2; }
-    exec bash "$BIN/fleet-transfer.sh" --session "$SESS" --window "${WIDS[0]}" --to claude \
-      --target-file "$pinned_target" --quota-request "$quota_request" --native-resume \
-      ${pinned_loop:+--loop "$pinned_loop"}
-  fi
   # Now that the per-fleet overlay is loaded, let it override the resume nudges
   # (issue #620). An operator value replaces the built-in ENTIRELY, so a fleet that
   # customises one owns its language rule too — that is why the built-ins carry the
@@ -1057,14 +1031,12 @@ migrate_main() {
     # rest per field via wopt — see the escaping note in migrate_one.
     while IFS= read -r wid; do
       [ -n "$wid" ] || continue
-      name=$(wopt "$wid" '#{window_name}'); state=$(wopt "$wid" '#{@claude_state}'); acct=$(wopt "$wid" '#{@cc_account}')
-      stuck=$(wopt "$wid" '#{@quota_stuck}')
+      name=$(wopt "$wid" '#{window_name}'); acct=$(wopt "$wid" '#{@cc_account}')
       printf '%s' "$name" | grep -qE "$PANEL_RE" && continue
       cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || continue
       [ -n "$cpid" ] || continue
       label=$(window_account "$wid" "$cpid" "$acct")
-      benched=0; [ -n "$label" ] && acct_benched "$label" && benched=1
-      migrate_selected "$MODE" "$label" "${state:--}" "$ACTIVE" "$benched" "$ACCOUNT" "$stuck" || continue
+      migrate_selected "$MODE" "$label" "$ACCOUNT" || continue
       targets+=("$wid")
     done < <(TM list-windows -t "$SESS" -F '#{window_id}' 2>/dev/null)
   fi
@@ -1073,9 +1045,8 @@ migrate_main() {
     say "fleet-migrate: nothing to move ($MODE${ACCOUNT:+ from $ACCOUNT})"
     return 0
   fi
-  # --max (issue #1231): the pace rebalance moves ONE idle window per tick — a
-  # gentler fan-out than the ceiling's, on purpose. The list order is tmux's
-  # (window index), so "the next idle worker" is the lowest one.
+  # --max (issue #1231): move at most N of the selected windows, lowest window
+  # index first (tmux's list order).
   if [ "$MAX" -gt 0 ] && [ "${#targets[@]}" -gt "$MAX" ]; then
     targets=("${targets[@]:0:$MAX}")
   fi

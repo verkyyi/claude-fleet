@@ -422,10 +422,10 @@ FLEET_MIGRATE_BOOT_WAIT            knob: internal pacing/limit, safe in-code def
 FLEET_MIGRATE_CLOSE_WAIT           knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)
 FLEET_MIGRATE_DETACHED             handoff: marks the --force-self re-exec so it skips the own-window refusal (fleet-migrate.sh, #1474)
 FLEET_MIGRATE_EXIT_WAIT            knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)
-FLEET_MIGRATE_FAILOVER_PY          seam: an injectable command/path for tests (fleet-migrate.sh)
 FLEET_MIGRATE_LAUNCH               seam: an injectable command/path for tests (fleet-migrate.sh)
 FLEET_MIGRATE_TASK_CHECK           seam: answers `<socket> <window>` instead of fleet_launch.py transfer-check — rc 0 = the record still names this session (fleet-migrate.sh, #4974)
 FLEET_MIGRATE_SELF_IDLE_WAIT       knob: how long a --force-self move waits for the caller's turn to end (fleet-migrate.sh, 1800)
+FLEET_MIGRATE_SOURCE_PY            seam: an injectable command/path for tests (fleet-migrate.sh)
 FLEET_MOVE_CMD                     seam: the fleet-move.sh fleet-evacuate.sh runs per fleet (default this bin's; #1428)
 FLEET_OFFBOARD_ARCHIVE_DIR         path: offboarding home-archive dir override; --archive-dir is the CLI form (fleet-login-remove.sh)
 FLEET_MIGRATION_LOCKED             handoff: a transition lock the caller already holds

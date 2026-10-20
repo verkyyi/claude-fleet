@@ -122,8 +122,6 @@ for pair in \
   "fleet-quotawatch.sh|fleet-model-switch.sh' --capped" \
   "fleet-quotawatch.sh|fleet-account.sh' migrate --account" \
   "tmux-dash-collect.sh|--model '\$fb'" \
-  "tmux-dash-collect.sh|fleet-account.sh' migrate --limited" \
-  "usage-modal.sh|fleet-account.sh' migrate --idle" \
   "session-end-hook.sh|session-end-hook.sh' --exec worker" \
   "session-end-hook.sh|session-end-hook.sh' --exec raw" ; do
   sf="${pair%%|*}"; pat="${pair#*|}"

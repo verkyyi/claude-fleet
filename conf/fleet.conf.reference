@@ -1612,9 +1612,9 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # panel's `--all` edits it.
 # @label=Account class @group=accounts @tier=internal @scope=fleet @edit=enum
 #FLEET_ACCOUNT_CLASS=any
-# Unified per-session subscription failover. Existing account/quota, transfer and
-# quotawatch components remain the owners. Prefer another eligible subscription
-# of the current agent, then the allowed other agent; all unavailable => wait.
+# Subscription choice AT LAUNCH across Coding Agents (fleet-claude.sh /
+# fleet-codex.sh). A running session is never moved when it fills: that is the
+# pool's (the per-session failover planner is retired, T546).
 # Codex logins/readings come from ccquota codex list + budget --source codex.
 # Existing FLEET_CODEX_ACCOUNTS labels/homes restrict the local Codex candidates.
 # Native resume and manual provider-specific CLI flags keep their agent.
@@ -1624,19 +1624,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # below FLEET_ACCOUNT_CEILING. No switch to unknown quota or pay-as-you-go credits.
 # @label=Failover allowed agents @group=accounts @tier=advanced @scope=fleet @edit=str
 #FLEET_FAILOVER_AGENTS=claude,codex
-# Background commands (a dev server, a long test) veto a move like they veto
-# hibernation. After a HARD wall the session cannot act on them anyway, so once
-# its request has waited this long they are recorded, stopped after /exit and
-# named in the resume prompt (issue #871). Proactive moves and sleep keep the
-# veto. 0 = never override (the old behaviour).
-# @label=Hard-wall background grace @group=accounts @tier=advanced @scope=fleet @edit=int @unit=sec
-#FLEET_FAILOVER_BG_GRACE=600
-# A request that records the SAME reason this many attempts in a row (one per
-# ~60s tick) is stuck: FLEET_NOTIFY_CMD fires once per stuck episode (window,
-# account, reason, the unstick command), the dash row shows `⚠ stuck` and
-# fleet-doctor counts it. A new reason restarts the count (issue #872).
-# @label=Failover stuck after @group=accounts @tier=internal @scope=fleet @edit=int @unit=attempts
-#FLEET_FAILOVER_STUCK_ATTEMPTS=5
 # How long a limited account stays out of rotation before it's eligible again
 # (seconds; default 18000 = the 5-hour session window).
 # @label=Account limit re-check @group=accounts @tier=internal @scope=global @edit=int @unit=sec
@@ -1784,12 +1771,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # one collector tick (or the failover controller right after it) cost one fetch.
 # @label=Banner refetch dedupe @group=accounts @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_ACCOUNT_VERDICT_REFETCH=20
-# When ccquota has NO fresh reading (stale / blind / account not on the hub), a
-# banner still benches by itself — the path that false-benched healthy accounts
-# twice — so the status bar shows `⚠ quota via banner` for this long after the
-# last time it happened (issue #874).
-# @label=Quota via banner shown for @group=accounts @tier=internal @scope=global @edit=int @unit=sec
-#FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS=600
 # How a new spawn RANKS the eligible accounts once the ceiling has thrown out the
 # ones that are too hot to use at all (issues #598, #1231):
 #   pace    (default) score = 5h-headroom × 2 + (100 − weekly pace) × 20. The

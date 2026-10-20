@@ -9,11 +9,9 @@
 #     weekly/N-hour limit line (which limit + reset), read via usage-lib.sh — the
 #     SAME shared reader the status bar's limit alarms use, so they can't drift;
 #   • the account POOL as the selectable body — Enter sets the account new
-#     sessions START FROM (via bin/fleet-claude.sh) AND moves this fleet's
-#     IDLE Claude windows onto it (`fleet-account.sh migrate --idle`: close +
-#     `--resume` in a new window, issue #512); mid-turn (working) and looping
-#     sessions keep their old account until their next natural restart or a
-#     limit rotation; Esc cancels.
+#     sessions START FROM (via bin/fleet-claude.sh); a running session keeps its
+#     account (moving the idle ones onto it is retired, T546: a full
+#     subscription is the pool's to change); Esc cancels.
 #     There is NO fixed account: the pick is a starting point, not a pin — every
 #     spawn re-picks on ccquota headroom (issue #513) and a limited account is
 #     rotated past. So the header names no "current" account (the old
@@ -28,7 +26,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/usage-lib.sh"
 # shellcheck source=/dev/null
-. "$BIN/fleet-lib.sh"          # fleet_bg — the ONE silenced run-shell dispatch (#575)
+. "$BIN/fleet-lib.sh"
 
 # --- colours (Tokyo Night; honour NO_COLOR + non-tty) -------------------------
 if [ -z "${NO_COLOR:-}" ] && [ -t 1 ]; then
@@ -96,11 +94,9 @@ esac
 # neither cache has anything. ---
 usg=$(fleet_usage_summary_plain)
 
-# $active is only the before-value for the "did the pick change anything" test
-# below — it is NOT shown: the account new sessions get is re-picked per spawn
-# (ccquota headroom, #513), so a `[now: X]` in the header would be a stale
+# The active account is NOT shown: the account new sessions get is re-picked per
+# spawn (ccquota headroom, #513), so a `[now: X]` in the header would be a stale
 # snapshot of a moving target. The ● in the pool table marks it for the curious.
-active=$(bash "$BIN/fleet-account.sh" active 2>/dev/null)
 hdr="pick the account new sessions start from (re-picked per spawn on quota headroom)"
 [ -n "$usg" ] && hdr="${usg}"$'\n'"${hdr}"
 # The keys are the popup frame's bottom hint line (issue #1619), one line that
@@ -125,26 +121,12 @@ pick=$(printf '%s\n' "$listing" \
   | awk '{print $1}')
 
 [ -n "$pick" ] || exit 0
-prev="$active"
 if bash "$BIN/fleet-account.sh" use "$pick" >/dev/null 2>&1; then
   now=$(bash "$BIN/fleet-account.sh" active 2>/dev/null)
   if [ "$now" = "$pick" ]; then
     msg="fleet: new sessions start from  ${pick}"
   else
     msg="fleet: ${pick} is limited — new sessions start from  ${now}"
-  fi
-  # Move this fleet's IDLE running sessions onto the new account too (issue #263,
-  # now fleet-migrate.sh per #512: close + --resume in a new window), but only when
-  # the active account actually changed — a re-pick of the current account moves
-  # nothing. Backgrounded (issue #304): each move is a cold claude boot and would
-  # otherwise hold the popup OPEN. fleet_bg returns instantly and sets $TMUX, so
-  # migrate's bare tmux calls stay on THIS fleet's server; --toast reports. Via
-  # fleet_bg, NOT a hand-rolled `run-shell -b` (issue #575): migrate's say() report
-  # goes to stdout, which run-shell would paint over the operator's window as an
-  # Esc-to-dismiss view — fleet_bg silences it, the status line still gets --toast.
-  if [ -n "$now" ] && [ "$now" != "$prev" ]; then
-    fleet_bg "bash '$BIN/fleet-account.sh' migrate --idle --toast"
-    msg="${msg}  ·  moving idle sessions…"
   fi
   tmux display-message "$msg"
 fi

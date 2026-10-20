@@ -49,7 +49,7 @@ sudo fleet doctor --machine               # 托管机器（装了整机守护的
 - 先看它是不是在等你：⌘P 面板「在等你的」一栏。
 - 窗口显示恢复页（会话退出了）：按 ↵ 接着原来的对话，`r` 开一个新的。
 - 新会话开不出来、一直排队：看 `admit` `memory` `machine` 三行——多半是这台电脑内存或负载到线了，已有会话不受影响，空出来就会开。
-- 会话说额度用完：看 `quota` `qwatch` `failover` 几行；订阅的 5 小时窗口到了会自动换到下一个订阅（有的话）。
+- 会话说额度用完：看 `quota` `qwatch` 两行；订阅满了由池子换到下一个订阅（有的话），会话不用挪。
 
 ### 「这台是客户端，任务在托管节点上跑」
 
@@ -593,27 +593,6 @@ fleet doctor --json
 
 - **是什么**：额度缓存有没有在刷新、有没有内容。
 - **WARN / FAIL 怎么办**：先修凭据（看 `cert` `node` 行，`fleet login`），再 `fleet-account.sh quota --refresh`。
-
-#### `account-pick`
-
-来自 `fleet doctor`。
-
-- **是什么**：开新会话时挑账号是不是「盲选」（一个账号的额度都读不到）。
-- **WARN / FAIL 怎么办**：先修 `qwatch` `quota` 两行。
-
-#### `failover`
-
-来自 `fleet doctor`。
-
-- **是什么**：有没有正在进行的订阅切换。
-- **WARN / FAIL 怎么办**：`fleet-account.sh failover-status` 看进度，一般等它做完。
-
-#### `failover-stuck`
-
-来自 `fleet doctor`。
-
-- **是什么**：有会话的订阅切换反复失败、卡住了。
-- **WARN / FAIL 怎么办**：照说明里的 `fleet-account.sh migrate --stuck` 命令处理。
 
 #### `modelcap`
 

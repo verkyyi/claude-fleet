@@ -3,7 +3,7 @@
 # (issue #239). Sourced by its consumers so the freshness gate, the % parse,
 # and the warn/crit thresholds live in ONE place and can't drift:
 #   • bin/fleet-alerts.sh  — the limit ALARMS (quota · stale / unreadable /
-#                            from banner / uneven, issue #1238); the bar only
+#                            uneven, issue #1238); the bar only
 #                            counts them, its 5h/7d usage stat is gone (#1100)
 #   • bin/usage-modal.sh   — the usage/limit detail header + account picker body
 #                            (issue #289 merged the old usage-popup + account-pick)
@@ -95,8 +95,8 @@ fleet_usage_summary_plain() {
 }
 
 # fleet_limit_banner — stdin: pane text. Print the ONE line that proves the account
-# hit its usage limit (the collector hands it to `fleet-account.sh mark-limited`),
-# or nothing. Two shapes exist (issue #511):
+# hit a usage limit (the collector acts only on a per-MODEL one, #524; a full
+# subscription is the pool's, T546), or nothing. Two shapes exist (issue #511):
 #   • the classic "hit your <session|weekly|Opus> limit · resets <t> (<zone>)" — its
 #     tail is the reset instant mark-limited benches to (#490), so it WINS whenever
 #     present (last occurrence, like the collector always took);
@@ -179,39 +179,6 @@ fleet_limit_kind() {
     ''|session|weekly|daily|monthly|usage|*hour*|*day) printf 'subscription\n' ;;
     *) printf 'model:%s\n' "$w" ;;
   esac
-}
-
-# fleet_limit_axis — stdin: a `subscription` fleet_limit_banner line. Prints the
-# ccquota window it names — `5h` for the session / N-hour wall, `7d` for the
-# weekly one — or nothing when the banner does not say (the sticky "Usage limit
-# reached" footer), in which case the verdict weighs both (issue #874).
-fleet_limit_axis() {
-  case "$(cat)" in
-    *"hit your weekly"*|*"reached your weekly"*) printf '7d\n' ;;
-    *"hit your session"*|*"reached your session"*|*"hit your "*-hour*|*"hit your "*" hour"*) printf '5h\n' ;;
-  esac
-}
-
-# --- "quota · from banner" (issues #874, #1238) --------------------------------
-# A limit banner may bench an account by itself ONLY when ccquota has no fresh
-# reading for it (fleet-account.sh quota-verdict → unknown). That fallback is the
-# path that false-benched a healthy account twice, so it is never silent: the
-# collector stamps $G/quota.via-banner ("<epoch>\t<label>") each time it takes it,
-# and this prints "<label>\t<age>" while the stamp is younger than
-# FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS (default 600) — the status bar's
-# `▲ quota · from banner` alert (bin/fleet-alerts.sh). Nothing otherwise.
-fleet_quota_via_banner() {
-  _qvb=''; _uf="$(fleet_usage_cache_dir)/quota.via-banner"
-  [ -f "$_uf" ] && IFS= read -r _qvb < "$_uf" 2>/dev/null
-  [ -n "$_qvb" ] || return 0
-  _qvbt=${_qvb%%	*}; _qvbl=""
-  case "$_qvb" in *'	'*) _qvbl=${_qvb#*	} ;; esac
-  case "$_qvbt" in ''|*[!0-9]*) return 0 ;; esac
-  _qvba=$(( $(fleet_usage_now) - _qvbt ))
-  [ "$_qvba" -lt 0 ] && _qvba=0
-  [ "$_qvba" -lt "${FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS:-600}" ] || return 0
-  printf '%s\t%s' "$_qvbl" "$_qvba"
-  return 0
 }
 
 # --- weekly PACE spread (issue #1231) ------------------------------------------
