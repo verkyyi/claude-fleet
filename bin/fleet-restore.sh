@@ -829,7 +829,10 @@ restore() {
           && tmux -L "$sock" set-window-option -t "$nw" @issue "$wissue" 2>/dev/null
         # The session's lifelong identity (issue #1646), as the snapshot saw it —
         # never re-minted: its children's @origin_fid still names it.
-        case "$wtag" in WIN:?*) tmux -L "$sock" set-window-option -t "$nw" @fleet_id "${wtag#WIN:}" 2>/dev/null ;; esac
+        # …and its start is a new segment of that ID (EPIC T644 C2: `reopen`, read by
+        # its SessionStart hook even on the same conversation id)
+        case "$wtag" in WIN:?*) tmux -L "$sock" set-window-option -t "$nw" @fleet_id "${wtag#WIN:}" 2>/dev/null
+                                tmux -L "$sock" set-window-option -t "$nw" @id_next_trigger "reopen:$(date +%s)" 2>/dev/null ;; esac
         # When the fleet may close it (issue #1902): the map's `REAP<TAB><fleet_id>
         # <TAB><policy>` row, keyed by that identity. No row (an older map, a
         # window with no policy) stamps nothing — its kind decides, as before.

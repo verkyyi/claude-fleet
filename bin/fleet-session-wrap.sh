@@ -509,6 +509,9 @@ while :; do
   case "$act" in
     10)  # ↵ — the same conversation; a Codex window with none starts a new one
       last=resume
+      # …as a new segment of the same ID (EPIC T644 C2): its SessionStart hook reads
+      # `reopen` (fleet_id.py hook_hint) even when the conversation id is the same
+      wset @id_next_trigger "reopen:$(date +%s)"
       cmd=(--agent "$agent" ${policy[@]+"${policy[@]}"})
       # the table's spelling: a resume by id; no id ⇒ its continue, or (none) a new one
       _o=$(fleet_agent_get "$agent" continue_flag)

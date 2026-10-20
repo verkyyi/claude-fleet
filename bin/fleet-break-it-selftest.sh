@@ -154,6 +154,9 @@
 #                                                   and goes the ordinary road), fleet-session-wrap.sh
 #   epic-member-dead-record                         bin/fleet-epic-tick.py (a member by its ID chain:
 #                                                   batons_of, fleet-id.sh family)
+#   task-many-ids                                   bin/fleet_id.py (take_task_id, next_attempt, the reopen
+#                                                   hint), dash-raw-session.sh / dash-issue-session.sh
+#                                                   (fleet_task_take, fleet-lib.sh)
 #   epic-driver-continued                           bin/fleet-epic-tick.py + bin/fleet_id.py (the driver's
 #                                                   line: lineage_of, task_root, adopted — C18)
 #   launch-binary-renamed                           bin/fleet_native_proc.py (same_executable / native_tool:
@@ -5894,6 +5897,45 @@ PY
   [ "$out" = "retry succeeded T-bbbbb 9" ] \
     || { WHY="a dead member read [$out], want «retry succeeded T-bbbbb 9» (its closed ID a failure, its continuation the newest baton)"; return 1; }
   WHAT="成员窗口关了没结果、记录还开着：按 ID 读成失败可重试；手动续上的新 ID 被认作它的最新一棒"
+}
+
+# One task, several IDs (EPIC T644 C2): the task record had an ID from its first
+# moment (C1), but the window opened for it minted its own, and every restart /
+# redo opened yet another (a new ID + prev) — so a redo that merged could not
+# close the task it redid. Now the window takes the task's ID, a redo here is the
+# same ID's next attempt (attempt 1's failure no longer counts), and the recovery
+# page's ↵ on the same conversation is a new segment of it.
+drill_task_many_ids() {
+  CAP=20; local t0 d="$WORK/tmi" out
+  mkdir -p "$d/conf"
+  t0=$(now)
+  out=$(cd "$d" && env FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_ID_PUSH=0 \
+        FLEET_ID_HUB_POST="false" python3 - "$BIN" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import fleet_id as f
+t = "aaaaaaaa-0000-4000-8000-0000000000c2"
+first = f.take_task_id(t) or "none"             # the hub silent, no ledger: never taken blind
+f.open_id(t, {"task": "T9", "agent": "claude"})
+f.record_native(t, "claude", "n1", "startup")
+f.record_native(t, "claude", "n1", "resume", "reopen")   # ↵ on the same conversation
+f.append(t, {"ev": "result", "state": "failed"})
+f.append(t, {"ev": "closed", "reason": "reaped"})
+redo = f.take_task_id(t)
+n = f.next_attempt(t)
+f.record_native(t, "claude", "n2", "startup")
+mid = f.status(t, [t])["state"]
+f.append(t, {"ev": "result", "state": "merged", "pr": "12"})
+rec = f.fold(f.read(t))
+print(first, redo, n, " ".join(s["trigger"] for s in rec["segments"]), mid, f.status(t, [t])["state"])
+PY
+)
+  SECS=$(since "$t0")
+  [ "$out" = "none here 2 startup reopen redo running done" ] \
+    || { WHY="one task's ID read [$out], want «none here 2 startup reopen redo running done»"; return 1; }
+  grep -q 'fleet_task_take "$TASK_REF"' "$BIN/dash-raw-session.sh" \
+    || { WHY="dash-raw-session.sh no longer opens a task's window on the task's ID"; return 1; }
+  WHAT="任务的窗口用任务的编号；同机重做是同一编号的第 2 次（上一次的失败不再算），恢复页 ↵ 是同一编号的新一段"
 }
 
 # An EPIC driver reaped mid-batch and continued (C18): the successor is a new ID

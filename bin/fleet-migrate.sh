@@ -650,7 +650,9 @@ migrate_one_body() {
     # new-window would race it).
     # Its ID and worktree too (EPIC T497 C8): the same session, before its
     # launcher and hooks look for them.
-    stamp="$stamp$(fleet_win_stamp_cmd @fleet_role "$role" ${cpairs[@]+"${cpairs[@]}"} ${fid:+@fleet_id "$fid"} ${wt:+@worktree "$wt"})"
+    # The reopen is a new segment of that ID (EPIC T644 C2): `reopen`, read by its
+    # SessionStart hook even on the same conversation id.
+    stamp="$stamp$(fleet_win_stamp_cmd @fleet_role "$role" ${cpairs[@]+"${cpairs[@]}"} ${fid:+@fleet_id "$fid"} ${wt:+@worktree "$wt"} ${fid:+@id_next_trigger "reopen:$(date +%s)"})"
     nw=$(TM new-window -d -t "$SESS:" -n "$name" -c "$cwd" -P -F '#{window_id}' "$stamp$cmd" 2>/dev/null)
     # Stamped first thing (issue #870): a cold `claude --resume` takes seconds to
     # render the old wall, this takes one tmux call.
