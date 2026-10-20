@@ -378,13 +378,8 @@ MON=0 mfa write
 eq "13: FLEET_ALERTS_MACHINE=0 → none" "" "$(grep '"severity":"warning","subject":"machine"' "$G/alerts.ndjson")"
 rm -f "$G"/*
 
-# ---------------------------------------------------------------- 9. wording ----
-hits=$(grep -rn 'pace spread\|quota blind\|via banner\|no locally reachable' "$BIN" 2>/dev/null | grep -v 'fleet-alerts-selftest.sh')
-eq "9: the old wording is gone from bin/" "" "$hits"
-# The node's door to the popup (prefix !, a click on ✖ / ▲) left with the person's
-# keys (issue #1714, EPIC #1710 C4): the node conf binds neither.
-grep -q 'fleet-alerts.sh popup' "$BIN/../conf/tmux-attention.conf" && fail "9: the node conf still opens the alerts popup (#1714)"; ok
-grep -q 'mouse_status_range' "$BIN/../conf/tmux-attention.conf" && fail "9: the node conf still binds a status click (#1714)"; ok
+# (9. the old wording, and the node conf's alerts popup / status click — gone with
+# #1714 — are conf/gone.list's, read by gone-selftest.sh)
 
 # ---------------------------------------------------------------- 14. reauth ----
 rm -f "$G"/alerts.* "$G/account.reauth" "$WORK/calls14"

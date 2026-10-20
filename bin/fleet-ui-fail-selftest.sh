@@ -60,13 +60,7 @@ fi
 
 # --- D. lint ---------------------------------------------------------------------
 SCRIPTS="dash-issue-session.sh dash-raw-session.sh dash-reap.sh"
-hits=''
-for f in $SCRIPTS; do
-  h=$(grep -nE 'display-message[^|]*(✓|spawned|reaped|closed scratch|filed|checking #|spawning #)' "$BIN/$f" \
-        | grep -v ' -p ' | grep -Ev ':[0-9]+:[[:space:]]*#' | sed "s|^|$f:|")
-  [ -n "$h" ] && hits="$hits$h"$'\n'
-done
-[ -z "$hits" ] || fail "D a success toast is back — a working spawn / reap says nothing (issue #1618)" "$hits"
+# (no success toast — a working spawn / reap says nothing, #1618: conf/gone.list)
 for f in $SCRIPTS; do
   grep -q 'fleet-ui-lang.sh"' "$BIN/$f" || grep -q 'fleet_ui_fail' "$BIN/$f" \
     || fail "D $f no longer reaches fleet_ui_fail — its failures need the one exit"

@@ -127,8 +127,7 @@ esac
 tmux set-window-option -t "$ww" @ctx_pct 38 \; set-window-option -t "$ww" @ctx_left 62 \; set-window-option -t "$ww" @ctx_band handoff \; \
      set-window-option -t "$ww" @model 'Opus 5.5' \; set-window-option -t "$ww" @effort high \; set-window-option -t "$ww" @ctx_ts "$(date +%s)"
 [ "$(render "$ww")" = " issue-267 #267 " ] || fail "the node header must not draw the ctx segment (#2717) — got [$(render "$ww")]"
-grep -vE '^[[:space:]]*#' "$CONF" | grep -qE 'fleet_ctx_hdr|@pct_sign' \
-  && fail "conf/tmux-attention.conf still carries the ctx segment (#2717)"
+# (conf/tmux-attention.conf carries no ctx segment, #2717: conf/gone.list)
 tmux set-window-option -u -t "$ww" @ctx_pct \; set-window-option -u -t "$ww" @ctx_left \; set-window-option -u -t "$ww" @ctx_band \; \
      set-window-option -u -t "$ww" @model \; set-window-option -u -t "$ww" @effort \; set-window-option -u -t "$ww" @ctx_ts
 

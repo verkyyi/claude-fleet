@@ -331,7 +331,7 @@ add_repo
 tmux -L "$SOCK" set -g @login "$(id -un)" 2>/dev/null || true
 # The retired repo filter (issue #1034): the dash always shows `all`, so a
 # `current-repo` file left by the old footer picker is dead state — drop it.
-rm -f "$FLEET_CONF_DIR/fleets/$NAME/current-repo" 2>/dev/null
+rm -f "$FLEET_CONF_DIR/fleets/$NAME/current-repo" 2>/dev/null # gone-ok: deletes the retired picker's file (#1038)
 
 # --- land the caller on the new fleet ---
 # Each fleet is its OWN tmux server now, so switch-client (same-server only) can't

@@ -284,7 +284,6 @@ ok; grep -q 'fleet_win_retire "\$target" "" reaped' "$BIN/dash-reap.sh" \
   && grep -q 'fleet_win_retire "\$win" "" exited' "$BIN/session-end-hook.sh" \
   || fail "WIRE: the reap / cleanup / stop / exit closers end the ID"
 ok; grep -q 'id_result(c,' "$BIN/fleet_task_control.py" && grep -q 'fleet_id_take' "$BIN/fleet_task_control.py" \
-  && ! grep -q 'parent_matches(r, parent)' "$BIN/fleet_task_control.py" \
   || fail "WIRE: the accepted-task road writes the ID result and routes by ID, no generation gate"
 ok; grep -q 'trap id_result EXIT' "$BIN/fleet-report-parent.sh" || fail "WIRE: a session's own report writes its result"
 

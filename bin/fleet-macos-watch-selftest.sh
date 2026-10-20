@@ -177,9 +177,7 @@ contains "J: diskguard's tick ran the watcher on the gated repo" "$(cat "$WORK/d
 contains "J: alerted on the fleet" "$(alerted)" "event -L fleet breakage"
 eq "J: a repo without the gate files is never read" 1 "$(alerted | grep -c 'actions/runs/30')"
 eq "J: nobody spawned" no "$(spawned)"
-lacks "J: the watcher has no spawner left" "$(cat "$W")" "dash-issue-session"
-eq "J: the retired dispatch shell is gone (#3576)" no "$([ -e "$BIN/fleet-dispatch.sh" ] && echo yes || echo no)"
-eq "J: no dispatch daemon template left" no "$([ -e "$BIN/../launchd/com.claude-fleet.dispatch.plist.tmpl" ] && echo yes || echo no)"
+# (no spawner, no dispatch shell or daemon template left, #3576: conf/gone.list)
 
 # --- K. the Mac lane held back past FLEET_MACOS_STALE_SECS (#3869) ----------------------
 reset

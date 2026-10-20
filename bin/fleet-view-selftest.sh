@@ -338,7 +338,7 @@ fv.fleet_logins = lambda: {"UU": "carol"}
 fv.windows = lambda fleet: {"@3": ("f3", "orchestrator", 0)}   # the holder here, too
 fv.produce = lambda fleet, **kw: ""
 assert fv.entries("v1") == [], fv.entries("v1")
-assert not hasattr(fv, "go_orch") and not hasattr(fv, "orch_target"), "the orchestrator readers are gone"
+# (the orchestrator readers go_orch / orch_target are gone, #3119: conf/gone.list)
 EOF
 pass "H  no session is special: orch_<fleet> and a holder window add no line (issue #3119)"
 

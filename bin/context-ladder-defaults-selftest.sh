@@ -51,12 +51,7 @@ site bin/fleet-context.sh       "\${FLEET_COMPACT_MAX:-$M}"              "compac
 site conf/statusline.sh         "[[ -z \"\$SL_PCT\" ]] && SL_PCT=$H"     "handoff $H"
 site bin/fleet-doctor.sh        "then d_h=$H d_c=$C d_m=$M;"             "$H / $C / $M"
 site bin/fleet-codex-session.py "for line in value.stdout.splitlines()] + ['$H', '0']" "handoff $H"
-# …and none of the retired numbers is left behind as a default.
-for f in bin/set-claude-state.sh bin/fleet-doctor.sh; do
-  if grep -nE "then _(cp|cm)=(70|2);|csees=70|\(unset ⇒ 2;" "$ROOT/$f" >/dev/null; then
-    bad "B $f still carries a pre-#1571 default" "$(grep -nE "then _(cp|cm)=(70|2);|csees=70|\(unset ⇒ 2;" "$ROOT/$f")"
-  fi
-done
+# (none of the retired numbers is left behind as a default: conf/gone.list #1571)
 
 # ---- C: fleet-context.sh with no conf at all ---------------------------------------
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ladder-defaults.XXXXXX")

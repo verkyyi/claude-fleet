@@ -214,9 +214,8 @@ tf fleetB set-window-option -t fleetB:plan @claude_state needs
 out="$(sl_at fleetB plan)"
 case "$out" in *"fleet"*) : ;; *) fail "node bar: the status-left must say to use fleet (#1714)" "$out" ;; esac
 case "$out" in *"☰"*|*"●"*) fail "node bar: no ☰ / ● on a node any more (#1714)" "$out" ;; esac
-grep -q 'range=' "$BARCONF" && fail "node bar: a click range is back in conf/tmux-bar.conf"
-grep -q 'range=user|xfleet\|attn_other_windows' "$CONF" "$BARCONF" && fail "other-fleet ●: conf still carries the xfleet range / @attn_other_windows"
-[ -e "$BIN/fleet-xfleet-jump.sh" ] && fail "other-fleet ●: fleet-xfleet-jump.sh must be removed (#980)"
+# no click range, no xfleet range / @attn_other_windows, no fleet-xfleet-jump.sh:
+# conf/gone.list (#1714, #980), read by gone-selftest.sh
 printf 'PART B ok: the node bar is the hint — no ☰, no ●, no click range, no other-fleet dot (#1714, #980)\n'
 
 printf 'selftest PASS: @attn_needs counts (#368) + the node draws no badge (#1714)\n'

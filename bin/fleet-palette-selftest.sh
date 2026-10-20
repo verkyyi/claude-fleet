@@ -47,7 +47,7 @@ hexes() { grep -nE '#[0-9a-fA-F]{6}\b' "$@" | grep -vE '^[0-9]+:[[:space:]]*#( |
 eq "A: conf/tmux-bar.conf spells no hex" "" "$(hexes "$ROOT/conf/tmux-bar.conf")"
 eq "A: fleet_alerts_bar spells no hex" "" "$(sed -n '/^fleet_alerts_bar()/,/^}/p' "$BIN/fleet-alerts.sh" | grep -E '#[0-9a-fA-F]{6}')"
 eq "A: tmux-dashboard-rows.sh spells no truecolour literal" "" "$(grep -nE '38;2;[0-9]' "$BIN/tmux-dashboard-rows.sh")"
-eq "A: tmux-attention.conf no longer sets the bar itself" "" "$(grep -nE '^set -g (status-(left|right|style)|message-style) ' "$ROOT/conf/tmux-attention.conf")"
+# (tmux-attention.conf no longer sets the bar itself, #1534: conf/gone.list)
 
 # ---- B: the readers agree
 . "$BIN/fleet-palette.sh"

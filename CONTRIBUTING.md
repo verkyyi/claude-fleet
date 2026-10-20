@@ -118,6 +118,15 @@ python3 bin/fleet-oldcfg-replay.py --new-dir .     # stable → 你的工作树
 
 PR 模板里有一行勾选：改了上面任何一样就勾上，并在 PR 里说兼容壳留在哪、留到哪一版。
 
+## 删掉的东西不回来：`conf/gone.list`（T537）
+
+删一个文件、函数、设置键或一句旧说法的 PR，往 `conf/gone.list` 加一行
+`<kind> <thing> <单号> [<范围>]`（kind：`path` · `func` · `word` · `key` · `text` · `re`，
+格式见文件头）。`bin/gone-selftest.sh` 每个 PR 都跑（`SELFTEST_ALWAYS`），任何一行回到
+树里就红，报出文件和行。不要在各自的测试里再写「它不许回来」的一腿——那是这张清单的事；
+写法规矩（怎么写，不是什么不许有）是 `bin/portability-selftest.sh` 的规则表。有意带回来的，
+删掉那一行，PR 里说为什么。
+
 ## 面向用户的改动：同一个 PR 里更新「怎么用」（issue #3216）
 
 人问「怎么用手机连」「⌘P 里能做什么」时，`fleet-help` skill（`skills/fleet-help/SKILL.md`）

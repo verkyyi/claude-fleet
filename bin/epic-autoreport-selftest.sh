@@ -35,15 +35,13 @@ REPORT="$ROOT/plugins/fleet-epic/commands/fleet-epic-report.md"
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 hasF() { CHECKS=$((CHECKS + 1)); grep -q -F -- "$2" "$1" || fail "$3 — [$2] not in ${1#"$ROOT"/}"; }
-lacksF() { CHECKS=$((CHECKS + 1)); grep -q -F -- "$2" "$1" && fail "$3 — [$2] still in ${1#"$ROOT"/}"; return 0; }
 
 [ -f "$RUN" ] || fail "plugins/fleet-epic/commands/fleet-epic-run.md is missing"
 [ -f "$REPORT" ] || fail "plugins/fleet-epic/commands/fleet-epic-report.md is missing"
 
 # 1. the report is a beat of the run, not something handed off to someone else.
-#    The old wording is the regression to catch: it reads as a contract and is
-#    not one, so it must not come back.
-lacksF "$RUN" 'hand off to `/fleet-epic-report' "run §4 must not delegate the report away again (#852)"
+#    The old wording ("hand off to `/fleet-epic-report`") reads as a contract and
+#    is not one: conf/gone.list keeps it out (#852).
 hasF "$RUN" 'Run `/fleet-epic-report` right here' "run §4 names the report command it runs"
 hasF "$RUN" 'in this session, now' "run §4: the report runs here, not elsewhere"
 hasF "$RUN" 'is not the end of the run' "run §4: an EPIC without a report is not finished"
@@ -71,8 +69,7 @@ hasF "$REPORT" '#852' "report: cites the seam's issue"
 #    changes in, and its child task opens there.
 PLAN="$ROOT/plugins/fleet-epic/commands/fleet-epic-plan.md"
 [ -f "$PLAN" ] || fail "plugins/fleet-epic/commands/fleet-epic-plan.md is missing"
-for f in "$PLAN" "$RUN" "$REPORT"; do
-  lacksF "$f" 'and an EPIC lives in' "the one-repo EPIC wording (#803) is retired"
+for f in "$PLAN" "$RUN" "$REPORT"; do   # (the one-repo wording, #803, is conf/gone.list's)
   hasF "$f" '#1942' "cites the cross-repo EPIC issue"
 done
 hasF "$PLAN" '**C2** owner/other — <名称> (codex)' "plan: a member in another repo names its repo in its line"
@@ -80,12 +77,10 @@ hasF "$RUN" '`repo` = its `repo`' "run: each child task opens in its member's re
 hasF "$REPORT" 'Once per repo the members landed in' "report: the stable row is asked per repo"
 
 # 7. hub tasks, not GitHub issues (issue #4957): the parent is a task, the members
-#    its children; the trio reads and writes the hub only.
+#    its children; the trio reads and writes the hub only (the GitHub road's words
+#    are conf/gone.list's).
 for f in "$PLAN" "$RUN" "$REPORT"; do
   hasF "$f" '#4957' "cites the hub-task EPIC issue"
-  for gone in 'gh issue' 'sub_issues' 'fleet_sub_issues' 'fleet-epic-preflight' 'fleet-epic-backstop' 'fleet-epic-loopers' 'epic-member' 'gh api'; do
-    lacksF "$f" "$gone" "the GitHub road is gone"
-  done
 done
 hasF "$PLAN" '`agent` `epic-driver`' "plan: the parent task starts the driver"
 hasF "$PLAN" 'mcp__fleet-orch__task' "plan: the parent is opened with the task tool"

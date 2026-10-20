@@ -1124,12 +1124,7 @@ case "$m" in
   'mcp_servers.fleet-orch={command="bash",args=["-c",'*'fleet-mcp.py'*'--group orch'*'],env_vars=['*'"FLEET_MCP_ORCH"],tool_timeout_sec=600}') : ;;
   *) fail "Q: the Codex mount of the dispatch group is wrong" "$m" ;;
 esac
-python3 - "$BIN/../plugins" <<'PY' || fail "Q: a plugin still registers the dispatch group (it ships with the core, #4334)"
-import glob, json, os, sys
-for f in glob.glob(os.path.join(sys.argv[1], "*", ".mcp.json")) + glob.glob(os.path.join(sys.argv[1], "*", ".codex-plugin", "plugin.json")):
-    d = json.load(open(f))
-    assert "fleet-orch" not in (d.get("mcpServers") or {}), f
-PY
+# (no plugin registers the dispatch group — it ships with the core, #4334: conf/gone.list)
 python3 - "$BIN/../conf/mcp-worker.json" "$BIN/../conf/mcp-orch.json" <<'PY' || fail "Q: the two configs do not name the two servers"
 import json, sys
 w, o = (json.load(open(f))["mcpServers"] for f in sys.argv[1:3])

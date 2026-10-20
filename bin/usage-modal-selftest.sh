@@ -44,18 +44,10 @@ grep -Eq "fleet_bg .*fleet-account.sh' migrate --idle" "$SCRIPT" \
 CHECKS=$((CHECKS + 1))
 grep -Eq "fleet_bg .*fleet-account.sh' migrate --limited" "$BIN/tmux-dash-collect.sh" \
   || fail "the collector must dispatch 'fleet-account.sh migrate --limited' via fleet_bg on a rotation (silenced background, #304/#575)"
-CHECKS=$((CHECKS + 1))
-grep -Eq -e '--restart-after-rotate' -e '--restart-idle' "$BIN/tmux-dash-collect.sh" "$SCRIPT" \
-  && fail "retired restart subcommands still referenced (--restart-idle / --restart-after-rotate)"
 
-# --- the in-place restart helpers are gone: they typed into panes (issue #511) and
-# could never move a session under the SessionEnd hook (issue #512).
-for fn in _ap_restart_window restart_idle_claude_windows _ap_restart_eligible _ap_pane_claude_pid; do
-  CHECKS=$((CHECKS + 1))
-  command -v "$fn" >/dev/null 2>&1 && fail "$fn still defined in usage-modal.sh — retired by issue #512 (fleet-migrate.sh)"
-done
-CHECKS=$((CHECKS + 1))
-grep -q 'send-keys' "$SCRIPT" && fail "usage-modal.sh must not send-keys into panes (issue #437/#511)"
+# (The retired restart subcommands and the in-place restart helpers — they typed into
+# panes, #511, and could never move a session under the SessionEnd hook, #512 — and
+# any send-keys in usage-modal.sh are conf/gone.list's, read by gone-selftest.sh.)
 
 # --- fleet-account.sh exposes migrate + whoami (the modal's and collector's callee)
 CHECKS=$((CHECKS + 1))

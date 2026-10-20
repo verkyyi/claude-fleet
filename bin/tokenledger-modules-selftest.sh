@@ -79,8 +79,8 @@ grep -qE "^replace $MOD/shared => \.\./shared$" "$TL/hub/go.mod" 2>/dev/null \
 grep -qE "$MOD/(agent|e2e)[[:space:]]" "$TL/hub/go.mod" 2>/dev/null \
   && fail "hub/go.mod names the node or e2e (the hub never builds them, not even a test)" \
   || ok "hub/go.mod names neither agent nor e2e"
-[ -e "$TL/go.mod" ] && fail "tokenledger/go.mod is back (the four blocks are each their own module)" \
-  || ok "no module at tokenledger/ itself"
+# (no module at tokenledger/ itself — the four blocks are each their own: leg 8's
+# tokenledger-split-hub.sh --check reds on a tokenledger/go.mod)
 miss=''
 for m in hub agent shared e2e; do
   grep -qE "^[[:space:]]*(use[[:space:]]+)?\./${m}[[:space:]]*\)?$" "$TL/go.work" 2>/dev/null || miss="$miss ./$m"
@@ -242,8 +242,9 @@ hits=''
 for d in hooks launchd systemd conf; do
   [ -d "$ROOT/$d" ] || continue
   # a line that only keeps it OUT (conf/release-tree.list's `!tokenledger/`,
-  # #2771) or a comment is not acting on it
-  h=$(grep -rlE '^[^#!]*tokenledger/' "$ROOT/$d" 2>/dev/null)
+  # #2771; conf/gone.list, whose every line is a thing that must stay gone) or a
+  # comment is not acting on it
+  h=$(grep -rlE --exclude=gone.list '^[^#!]*tokenledger/' "$ROOT/$d" 2>/dev/null)
   [ -n "$h" ] && hits="$hits$h
 "
 done

@@ -123,8 +123,7 @@ ok; [ "$rc" != 4 ] || fail "D: --origin hub passes the gate" "rc=$rc $(cat "$WOR
 ok; grep -q -- "--origin='\${ORIGIN:-hub}'" "$BIN/dash-raw-session.sh" || fail "D: the --bg re-exec always states its origin (run-shell -b has no pane)"
 
 # --- F: who may spawn ----------------------------------------------------------------
-ok; bash -c '. "$1/fleet-lib.sh"; type fleet_spawn_refused' _ "$BIN" >/dev/null 2>&1 \
-  && fail "F: fleet_spawn_refused is back — every session may spawn (issues #4591, #4790)"
+# (fleet_spawn_refused stays gone — every session may spawn, #4591 #4790: conf/gone.list)
 mkdir -p "$WORK/cc/agents"
 cp "$BIN/../conf/agent-defaults/claude/agents/"*.md "$WORK/cc/agents/"
 printf -- '---\nname: doc-only\ndescription: d\ntools: Read, Edit\n---\n只改文档。\n' > "$WORK/cc/agents/doc-only.md"

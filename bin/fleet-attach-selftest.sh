@@ -115,7 +115,6 @@ run FLEET_LIVE="fleet-a fleet-b" FLEET_ACT_fleet_a="100" FLEET_ACT_fleet_b="200"
 grep -q 'fleet-b' "$LOG" || fail "most-recent (higher activity) fleet-b should be attached" "$(cat "$LOG")"
 ok
 printf 'selftest: N-live-most-recent leg PASS (highest session_activity wins)\n' >&2
-grep -q 'fleet-pick' "$SRC" && fail "fleet-attach.sh must not open a fleet picker any more (#980)"
-ok
+# (no fleet picker any more, #980: conf/gone.list)
 
 printf 'selftest OK: fleet-attach fast-path (%s assertions — 0→exit10, single attach in/out of tmux, already-on no-op, multi→most-recent)\n' "$CHECKS"

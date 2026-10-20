@@ -301,20 +301,8 @@ echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh,
 # Issue #4902 deleted the last one, the keys sheet, with the dash and the
 # backlog: no script opens a popup_* popup any more — ⌘P draws its own
 # (fleet_view.py, --title view_title).
-kept=$(grep -ho -- '--title["'"'"', ]*popup_[a-z_]*' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
-  | grep -v '^$' | sed 's/.*\(popup_[a-z_]*\)$/\1/' | sort -u | paste -sd ' ' -)
-kept_hub=$(grep -lE -- '--title["'"'"', ]*popup_' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
-  | grep -v -- '-selftest\.' \
-  | xargs grep -ho -- '--title["'"'"', ]*popup_[a-z_]*' | sed 's/.*\(popup_[a-z_]*\)$/\1/' | sort -u | paste -sd ' ' -)
-[ -z "$kept_hub" ] \
-  || fail "kept popups: want none, got: $kept_hub (all: $kept)"
-# the one-field popups that moved onto a line open no popup at all
-for f in fleet-restore-pick.sh dash-reap.sh \
-         dash-migrate.sh open-url.sh dash-repo-add.sh fleet-row-remote.sh; do
-  grep -Ev '^[[:space:]]*#' "$BIN/$f" | grep -q 'dash-popup\.sh\|fleet_popup ' \
-    && fail "kept popups: $f still opens a popup"
-done
-echo "ok: no script opens a popup_* popup; one-field ones ask on a line"
+# No script opens a popup_* popup, and the one-field ones ask on a line (open no
+# popup at all): conf/gone.list (#4902, #1620), read by gone-selftest.sh.
 
 # Exercise the remaining real action scripts with no client AND rc=0 refusal.
 # All input cancels, and gh is a tripwire: no test can send a real issue mutation.

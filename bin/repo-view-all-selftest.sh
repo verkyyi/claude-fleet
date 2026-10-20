@@ -91,16 +91,8 @@ ROOT="$BIN/.."
 CONF="$ROOT/conf/tmux-attention.conf"
 
 # --- A. the picker is gone -----------------------------------------------------
-CHECKS=$((CHECKS+1)); [ -e "$BIN/fleet-pick.sh" ] && fail "A: bin/fleet-pick.sh must be gone (#1034)"
-CHECKS=$((CHECKS+1)); [ -e "$BIN/fleet-xfleet-jump.sh" ] && fail "A: fleet-xfleet-jump.sh must be gone (#980)"
-# no live referrer (a selftest may name them, to forbid them)
-refs=$(grep -rlE 'fleet-pick\.sh|fleet_repo_label|fleet_current_repo_set|DASH_KEY_PICK|range=user\|fleet[^a-z]|mouse_status_range\},fleet\}' \
-         "$ROOT/bin" "$ROOT/conf" "$ROOT/hooks" "$ROOT/commands" 2>/dev/null \
-       | grep -v -- '-selftest\.sh$')
-eq    "A: nothing in bin/conf/hooks/commands names the picker" "$refs" ""
-for fn in fleet_current_repo_set fleet_repo_label fleet_repo_label_sync fleet_current_repo; do
-  CHECKS=$((CHECKS+1)); declare -F "$fn" >/dev/null && fail "A: fleet-lib.sh still defines $fn"
-done
+# fleet-pick.sh, fleet-xfleet-jump.sh, every referrer and the fleet-lib functions
+# (#1034, #980, #1038) are conf/gone.list's, read by gone-selftest.sh.
 hasnt "A: the 看台's key table has no pick action" "$(bash "$BIN/dash-keymap.sh" --panel switch actions 2>/dev/null)" "pick"
 
 # --- B. the footer -------------------------------------------------------------
@@ -148,12 +140,9 @@ has   "B: root MouseDown1Status is bound" "$b" "MouseDown1Status"
 hasnt "B: root MouseDown1Status has no fleet range" "$b" ",fleet}"
 
 # --- C. always all ------------------------------------------------------------
-# No script reads the retired picker's `current-repo` file (#1038): the one live
-# mention is fleet-up.sh deleting it. (E below and the other multi-repo selftests
-# pin the behaviour — a stale file changes no row, anchor, backlog or ledger.)
-refs=$(grep -l 'current-repo' "$BIN"/*.sh 2>/dev/null \
-       | grep -v -- '-selftest\.sh$' | sed 's#.*/##' | sort | tr '\n' ' ')
-eq    "C: fleet-up.sh is the only script that names current-repo" "$refs" "fleet-up.sh "
+# No script reads the retired picker's `current-repo` file (#1038, conf/gone.list):
+# the one live mention is fleet-up.sh deleting it. (E below and the other multi-repo
+# selftests pin the behaviour — a stale file changes no row, anchor, backlog or ledger.)
 has   "C: …to delete the stale file" "$(cat "$BIN/fleet-up.sh")" 'rm -f "$FLEET_CONF_DIR/fleets/$NAME/current-repo"'
 
 # --- D. fleet-list ---------------------------------------------------------------

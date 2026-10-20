@@ -233,8 +233,7 @@ out=$(cx dirs --override "$WORK/no-override.json"); rc=$?
 # ---- H: wiring ----------------------------------------------------------------------------
 grep -q 'fleet-codex-plugins.py" sync' "$BIN/fleet-codex.sh" && grep -q -- '--plugin-dir' "$BIN/fleet-codex.sh" \
   || fail "H fleet-codex.sh does not sync / pass --plugin-dir"; ok
-if grep -q 'fleet-codex-plugins.py" sync --print-dirs' "$BIN/fleet-codex.sh" \
-  && ! grep -q 'fleet-codex-plugins.py" dirs' "$BIN/fleet-codex.sh"; then
+if grep -q 'fleet-codex-plugins.py" sync --print-dirs' "$BIN/fleet-codex.sh"; then   # (no second `dirs` read: conf/gone.list)
   ok
 else
   fail "H launcher must use a single plugin snapshot"

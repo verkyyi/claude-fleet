@@ -76,8 +76,7 @@ for f in fleet-alerts.sh usage-modal.sh; do
   grep -n -- '--border=rounded' "$BIN/$f" | grep -v 'FZF_FRAME=' | grep -qv '^[0-9]*:[[:space:]]*#' \
     && fail "wired: $f draws its own border inside the popup's"
 done
-grep -v '^[[:space:]]*#' "$ROOT/conf/tmux-attention.conf" | grep -q 'dash-popup\.sh' && fail "wired: the node conf still opens a popup (#1714)"
-echo "ok: wired — hints and frames; the node conf opens none"
+echo "ok: wired — hints and frames (the node conf opens none, #1714: conf/gone.list)"
 
 # --- A. 54 columns, for real ---------------------------------------------------
 T() { "$REAL_TMUX" -S "$ISOCK" "$@"; }

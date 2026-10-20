@@ -20,8 +20,7 @@ words=$(FLEET_UI_LANG=zh FLEET_SIDEBAR_HOST=mac-c.local FLEET_NODE_ALIASES="mac-
 [ "$words" = "mac-a|本机|本机|本机" ] && printf 'ok   E: the title'"'"'s machine word: mac-a elsewhere, 本机 here\n' \
   || fail "E: the title's machine word — got [$words] want [mac-a|本机|本机|本机]"
 CHECKS=$((CHECKS + 1))
-if grep -q 'title="${name:-${wid#\*/}} · @$(rv_machine_word "$node")"' "$BIN/fleet-remote-view.sh" \
-   && ! grep -q 'title="$node ' "$BIN/fleet-remote-view.sh"; then
+if grep -q 'title="${name:-${wid#\*/}} · @$(rv_machine_word "$node")"' "$BIN/fleet-remote-view.sh"; then   # (no machine prefix: conf/gone.list)
   printf 'ok   E: a proxy is titled <name> · @<machine>, no machine prefix\n'
 else
   fail "E: fleet-remote-view.sh titles a proxy <name> · @<machine>"

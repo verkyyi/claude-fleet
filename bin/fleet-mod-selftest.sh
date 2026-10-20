@@ -195,24 +195,9 @@ python3 "$BIN/fleet-mcp.py" --spec status nope >/dev/null 2>&1; rc=$?
 for f in Lifecycle Usage State Compose Tools Accept; do
   grep -q "^  register$f(on)\$" "$MOD/hooks/register.ts" || fail "E: register.ts no longer wires register$f"
 done
-# the PR progress band left with the rows' PR map (issue #4902)
-grep -q 'registerProgress' "$MOD/hooks/register.ts" && fail "E: mod/fleet wires the PR progress band — it was deleted (issue #4902)"
-# the steward's panels left with its plugin (issue #4339): nothing wires them anywhere
-grep -qE 'register(Panels|Sheet|Patrol|Batches)' "$MOD/hooks/register.ts" "$MOD/hooks/lifecycle.ts" \
-  && fail "E: mod/fleet wires the steward's panels — they were deleted (issue #4339)"
-[ -e "$BIN/../plugins/fleet-steward/hooks" ] && fail "E: plugins/fleet-steward/hooks is back — the plugin is retired (issue #4339)"
-# The resident orchestrator's parts left the mod with its seat (issue #3118): no
-# role section, no exit guard, no queue count — the mod puts no role in any prompt.
-for _gone in orchestrator.ts exit-guard.ts queue.ts qd.ts; do
-  [ -e "$MOD/hooks/$_gone" ] && fail "E: mod/fleet/hooks/$_gone is back — the resident orchestrator's part (issue #3118)"
-done
-grep -q 'orchestrator-role\|@orch_queue\|registerExitGuard\|registerQueue' "$MOD"/hooks/*.ts "$MOD"/hooks/*.tsx \
-  && fail "E: mod/fleet still carries the orchestrator's role section / exit guard / queue (issue #3118)"
-# /qd left with the fleet-orchestrate plugin's parts (issue #4340; ⌘P's ⚡ row is the
-# dispatch from anywhere, #3328): no mod registers it, the retired plugin carries nothing
-grep -q 'QuickDispatch\|qdCommand' "$MOD/hooks/register.ts" "$MOD/hooks/lifecycle.ts" \
-  && fail "E: mod/fleet registers /qd — it was retired with the fleet-orchestrate plugin (issue #4340)"
-[ -e "$BIN/../plugins/fleet-orchestrate/hooks" ] && fail "E: plugins/fleet-orchestrate/hooks is back — the plugin is retired (issue #4340)"
+# What left the mod stays out — the PR progress band (#4902), the steward's panels
+# and plugin (#4339), the resident orchestrator's role section / exit guard / queue
+# (#3118), /qd and the fleet-orchestrate plugin (#4340): conf/gone.list.
 ok "E fallback tools: registered only without the service, from --spec; every call forwarded to --call; no second copy of a schema, a check or a script"
 
 printf 'fleet-mod-selftest: %d passed\n' "$pass"

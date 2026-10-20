@@ -224,7 +224,7 @@ out=$(cfg history); printf '%s' "$out" | grep -q "当前 v$((v3 + 1))" && ok "H 
 # ── I — the package ──────────────────────────────────────────────────────────
 grep -q '^bin/fleet-config.py' "$REPO/conf/agent-bundle.manifest" && ok "I agent-bundle.manifest carries it" || bad "I not in agent-bundle.manifest"
 # the Agent configuration is 承载's (issue #4826): the client package carries none of it
-grep -q '^bin/fleet-config.py' "$REPO/tokenledger/hub/api/fleetclient/manifest" && bad "I the hub client manifest still carries it (承载's since #4826)" || ok "I the client package does not carry it (承载's, #4826)"
+# (the client package does not carry it — 承载's since #4826: conf/gone.list)
 out=$(env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" CODEX_HOME="$H/.codex" sh "$REPO/bin/fleet" config show claude.mcp.context7 2>&1)
 printf '%s' "$out" | grep -q 'claude.mcp.context7' && ok "I \`fleet config\` dispatches" || bad "I dispatch: $out"
 
