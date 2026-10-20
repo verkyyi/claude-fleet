@@ -2057,7 +2057,7 @@ vr() { TMUX_TMPDIR="$WORK/vt" "$REAL_TMUX" -L "$1" "${@:2}"; }
 vr_clients() { vr vrn list-clients -F '#{client_session}' 2>/dev/null | sort | tr '\n' ' '; }
 vr_pid() { cut -f5 "$WORK/vr/conf/remote-views/$1" 2>/dev/null; }
 vr_view_reconnect() {
-  CAP=5; local t0 one s opts
+  CAP=5; local t0 one s gid
   mkdir -p "$WORK/vt" "$WORK/vr/conf/fleets/vrn"
   : > "$WORK/vr/conf/fleets/vrn/conf"
   fx_repo "$WORK/vr/conf" "vrn" acme/app FLEET_MAIN="$WORK/vr"
