@@ -371,9 +371,6 @@ JSON
   # the record, opens its PR, merges it on a green gate and closes the record with
   # its report; it is reaped once the record is closed (`merged`). Not --spawn: the
   # record waits (await T<n> names it).
-  # The record is there; where it opens is the hub's word next (T672): said at
-  # once on stderr, the placement's own line follows.
-  [ "$spawn" = 1 ] && printf 'fleet-task-record: %s 分配中…\n' "$t" >&2
   if [ -n "$repo" ]; then
     [ "$spawn" = 1 ] || exit 0
     pfa=--placeholder
