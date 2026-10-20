@@ -51,9 +51,14 @@ Per member, off its batons:
   waiting    unstarted, and a member it depends on has not succeeded yet
   unstarted  no baton yet
 Dependencies are the charter's `## 依赖顺序` table (`| C5 | C4 | |`, `C1–C6` a
-range), else a section's `**依赖** 依赖 C4 · 被依赖 …` line; only member keys count
-(an outside ticket is the driver's to judge). A dependency is released by its
-member's newest baton — by ID, not by which record it was (拍板 6).
+range), else a section's `**依赖** 依赖 C4 · 被依赖 …` line; only a BARE `C<n>` is
+this batch's member. A key behind a `T<n>` — `T542 C5`, `T542 C7、C8` (the prefix
+holds over the keys that follow it, until other words or a `+` / `;`) — is the
+member of ANOTHER batch: released once that parent's child task titled `C5 · …`
+succeeded, waited on otherwise (`waits_on` names it `T542 C5`), never a node of
+this batch's graph and never let through by the cycle rule; a key behind `#<n>`
+(a GitHub ticket) is the driver's to judge and ignored here. A dependency is
+released by its member's newest baton — by ID, not by which record it was (拍板 6).
 `next` is what to dispatch now: retries first, then unstarted core members in
 charter order, as many as the free slots (cap − running). `done` is true when
 every core (and added) member is succeeded or blocked and nothing runs.
@@ -86,8 +91,11 @@ HEAD = re.compile(r"^#{2,4}\s+")
 REPORT_RE = re.compile(r"(?:^|·)\s*report:\s*([^\s·]+)")
 FID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 DEPS_HEAD = re.compile(r"^#{2,4}\s+依赖")
-DEP_RANGE = re.compile(r"([CR])([1-9][0-9]*)\s*[–—~-]\s*[CR]?([1-9][0-9]*)")
-DEP_KEY = re.compile(r"(?<![A-Za-z0-9])([CR][1-9][0-9]*)(?![0-9])")
+# a dependency cell, token by token: an outside batch's parent (T<n>) or ticket
+# (#<n>) scopes the keys right after it; only these between them keep the scope
+DEP_TOK = re.compile(r"(?<![A-Za-z0-9])(?:(?P<scope>T[1-9][0-9]{0,9}|#[1-9][0-9]*)"
+                     r"|(?P<a>[CR])(?P<lo>[1-9][0-9]*)(?:\s*[–—~-]\s*[CR]?(?P<hi>[1-9][0-9]*))?)(?![0-9])")
+DEP_GLUE = re.compile(r"^[\s、,，/:：]*$")
 DEP_LINE = re.compile(r"\*\*依赖\*\*\s*依赖\s*(.*?)(?:·|$)")
 FAILED = ("failed", "refused", "exited")
 KEYED = re.compile(r"^([CR][1-9][0-9]*)\s*·\s*(.*)$")
@@ -225,17 +233,28 @@ def detail(text, key):
     return "\n".join(out).strip()
 
 
-def dep_keys(text):
-    keys = []
-    for a, lo, hi in DEP_RANGE.findall(text):
-        keys += ["%s%d" % (a, i) for i in range(int(lo), int(hi) + 1)]
-    keys += DEP_KEY.findall(DEP_RANGE.sub(" ", text))
-    return keys
+def dep_refs(text, self_ref=""):
+    """[(scope, key)] in order: scope "" for a bare key (this batch), `T<n>` for
+    another batch's member, `#<n>` for a ticket's. `self_ref` (this batch's own
+    T<n>) written as a prefix is the same as none."""
+    out, scope, end = [], "", 0
+    for m in DEP_TOK.finditer(text):
+        if not DEP_GLUE.match(text[end:m.start()]):
+            scope = ""
+        end = m.end()
+        if m.group("scope"):
+            scope = "" if m.group("scope") == self_ref else m.group("scope")
+            continue
+        a, lo, hi = m.group("a"), int(m.group("lo")), int(m.group("hi") or m.group("lo"))
+        out += [(scope, "%s%d" % (a, i)) for i in range(lo, hi + 1)]
+    return out
 
 
-def parse_deps(text, members):
-    """{key: [keys it waits on]} off the `## 依赖顺序` table, else each section's
-    `**依赖**` line; only the charter's own member keys, never itself."""
+
+def parse_deps(text, members, self_ref=""):
+    """({key: [keys it waits on]}, {key: [(T<n>, key) of other batches]}) off the
+    `## 依赖顺序` table, else each section's `**依赖**` line; local ones only the
+    charter's own member keys, never itself; `#<n>` ones dropped."""
     known = {m["key"] for m in members}
     deps, on = {}, False
     for line in text.splitlines():
@@ -252,12 +271,32 @@ def parse_deps(text, members):
             d = DEP_LINE.search(m.get("detail") or "")
             if d:
                 deps[m["key"]] = d.group(1)
-    out = {}
+    out, ext = {}, {}
     for k, cell in deps.items():
-        got = [x for x in dict.fromkeys(dep_keys(cell)) if x in known and x != k]
+        refs = list(dict.fromkeys(dep_refs(cell, self_ref)))
+        got = [x for sc, x in refs if not sc and x in known and x != k]
+        far = [(sc, x) for sc, x in refs if sc.startswith("T")]
         if got:
             out[k] = got
-    return out
+        if far:
+            ext[k] = far
+    return out, ext
+
+
+def outside_done(ext):
+    """{(T<n>, key): True when that batch's member succeeded} — one children read
+    per outside parent; an unreadable one counts as not done (waited on)."""
+    done = {}
+    for ref in sorted({sc for refs in ext.values() for sc, _ in refs}):
+        try:
+            kids = record("children", ref).get("children") or []
+        except (Fail, OSError, subprocess.SubprocessError):
+            kids = []
+        for c in kids:
+            k, _ = child_key(c)
+            if k and (c.get("outcome") or "") == "succeeded":
+                done[(ref, k)] = True
+    return done
 
 
 def child_key(child):
@@ -327,19 +366,23 @@ def judge(member, kids, fam=()):
     return member
 
 
-def hold_on_deps(members, deps):
+def hold_on_deps(members, deps, ext=None, ext_done=None):
     """An unstarted member whose dependencies have not all succeeded waits; one whose
-    dependency is blocked is blocked too. A cycle (everything waiting, nothing to
-    run) is let through rather than stalled."""
+    dependency is blocked is blocked too. Another batch's member (`ext`) holds it
+    until `ext_done` says it succeeded. A cycle among this batch's own members
+    (everything waiting, nothing to run) is let through rather than stalled — never
+    a member still waiting on another batch."""
+    ext, ext_done = ext or {}, ext_done or {}
     by = {m["key"]: m for m in members}
-    for _ in range(len(members)):
+    for _ in range(len(members) + 1):
         moved = False
         for m in members:
-            if m["state"] not in ("unstarted", "waiting") or m["key"] not in deps:
+            if m["state"] not in ("unstarted", "waiting") or (m["key"] not in deps and m["key"] not in ext):
                 continue
-            ds = [by[d] for d in deps[m["key"]] if d in by]
+            ds = [by[d] for d in deps.get(m["key"], []) if d in by]
             stuck = [d["key"] for d in ds if d["state"] == "blocked"]
             open_ = [d["key"] for d in ds if d["state"] != "succeeded"]
+            open_ += ["%s %s" % r for r in ext.get(m["key"], []) if not ext_done.get(tuple(r))]
             if stuck:
                 new = dict(state="blocked", blocked_by=stuck)
             elif open_:
@@ -356,7 +399,7 @@ def hold_on_deps(members, deps):
     live = [m for m in members if m["layer"] != "reserve" and m["state"] in ("running", "retry", "unstarted")]
     if not live:
         for m in members:
-            if m["state"] == "waiting":
+            if m["state"] == "waiting" and not any(" " in w for w in m.get("waits_on", [])):
                 m["state"] = "unstarted"
                 m["cycle"] = True
 
@@ -412,7 +455,8 @@ def status(parent_ref, cap):
     rows = [r for r in fam.get("ids") or [] if isinstance(r, dict) and FID.match(str(r.get("id", "")))]
     for m in members:
         judge(m, by_key.get(m["key"], []), rows)
-    hold_on_deps(members, parse_deps(text, members))
+    deps, ext = parse_deps(text, members, parent_ref)
+    hold_on_deps(members, deps, ext, outside_done(ext))
     if cap is None:
         try:
             cap = int(meta.get("cap", "4"))
@@ -466,6 +510,10 @@ def main(argv=None):
     p.add_argument("--task", default="")
     p.add_argument("--cap", type=int, default=None)
     p.add_argument("--line", action="store_true")
+    # `status ${P:+--task "$P"}` under zsh is ONE word `--task T580`: split it, and
+    # let the options come before or after the action
+    argv = [w for a in (sys.argv[1:] if argv is None else argv)
+            for w in (a.split(None, 1) if a.startswith("--") and " " in a.strip() else [a])]
     a = p.parse_args(argv)
     try:
         ref = a.task or own_task()
