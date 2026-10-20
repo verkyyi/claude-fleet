@@ -53,9 +53,16 @@ fi
 # with issue #2362: the bar's 「! N 等你」 is still a tap to the one waiting, the
 # keys live in docs/dev/CLIENT.md. Their codes stay retired — never reuse 924 / 926:
 # an iTerm2 profile written before still sends them (the conf swallows both).
-# The LAST column (issue #3185, EPIC #3178 C7): `1` = bound by default — only
-# quickopen (⌘P, the panel); every other row is bound only when the person names
-# it (fleet.conf [client] FLEET_KEYS_EXTRA, bin/fleet_keys.py). `list` prints the
+# `home` (EPIC T651 C3): ⌘\, 回家命令行 — this machine's login shell in $HOME from
+# any screen of the 看台, no session and no hub needed (fleet_view.open_home_shell).
+# Its «code» is `x1c`: the profile sends ⌃\'s own byte (0x1c, «Send Hex Code»),
+# not a private code — tmux (3.7c) drops a user key while a popup is up, so a code
+# would never reach ⌘P's list or its 新会话 box; the byte does, and in a window it
+# is the 看台's ⌃\ binding (fleet_keys.HOME_CHORD), the same key for a terminal
+# with no ⌘. Neither macOS nor iTerm2 gives ⌘\ a default; the profile takes it.
+# The LAST column (issue #3185, EPIC #3178 C7): `1` = bound by default — quickopen
+# (⌘P, the panel) and home (⌘\, EPIC T651 C3); every other row is bound only when
+# the person names it (fleet.conf [client] FLEET_KEYS_EXTRA, bin/fleet_keys.py). `list` prints the
 # first five columns as it always did; `full` all six; `default` the default actions.
 TABLE='next ⌘↓ 0xf701-0x300000 920 n -
 prev ⌘↑ 0xf700-0x300000 921 p -
@@ -66,7 +73,8 @@ quickopen ⌘P 0x70-0x100000 927 / 1
 new ⌘N 0x6e-0x100000 928 c -
 fold ⌘. 0x2e-0x100000 929 . -
 quit ⌘Q 0x71-0x100000 931 Q -
-dispatch ⌘T 0x74-0x100000 932 t -'
+dispatch ⌘T 0x74-0x100000 932 t -
+home ⌘\ 0x5c-0x100000 x1c \ 1'
 # The 看台's ⌃] letters (issue #3006, EPIC #2999 C9): a terminal with no ⌘ — a
 # phone's Termius, an iPad's Blink — reaches a 看台's actions with ⌃] then ONE
 # letter (fleet_view.py's `fleet-view-pfx` table). Not the prefix column above:

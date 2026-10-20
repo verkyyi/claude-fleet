@@ -100,21 +100,23 @@ def has_iterm():
 
 
 def table():
-    out = subprocess.run(["bash", str(BIN / "dash-keymap.sh"), "--panel", "switch", "list"],
+    out = subprocess.run(["bash", str(BIN / "dash-keymap.sh"), "--panel", "switch", "full"],
                          capture_output=True, text=True, check=True).stdout
     rows = []
     for line in out.splitlines():
         f = line.split()
-        if len(f) == 5:
-            rows.append({"action": f[0], "glyph": f[1], "key": f[2], "code": f[3], "prefix": f[4]})
+        if len(f) == 6:
+            rows.append({"action": f[0], "glyph": f[1], "key": f[2], "code": f[3], "prefix": f[4],
+                         "default": f[5] == "1"})
     return rows
 
 
 def rows():
     """[(iTerm2 key, code)] — the ⌘ chords this profile turns into codes. A new
     client (issue #3185, EPIC #3178 C7): the panel, FLEET_KEY_PANEL (⌘P unless the
-    person moved it, none for `off`), plus each ⌘ chord of FLEET_KEYS_EXTRA — every
-    other ⌘ key stays the parent's, i.e. iTerm2's own."""
+    person moved it, none for `off`), ⌘\\ home (EPIC T651 C3: the table's other
+    default row), plus each ⌘ chord of FLEET_KEYS_EXTRA — every other ⌘ key stays
+    the parent's, i.e. iTerm2's own."""
     t = table()
     sys.path.insert(0, str(BIN))
     import fleet_keys
@@ -123,6 +125,12 @@ def rows():
     panel = fleet_keys.iterm_key(fleet_keys.panel())
     if panel and "quickopen" in codes:
         out.append((panel, codes["quickopen"]))
+    # the other rows bound by default (dash-keymap.sh's last column): ⌘\ home (EPIC
+    # T651 C3) — at its own chord, unless the panel or an extra took that chord
+    taken = {panel} | {fleet_keys.iterm_key(c) for _, c in fleet_keys.pairs(fleet_keys.client_extra(), set(codes))}
+    for r in t:
+        if r["default"] and r["action"] != "quickopen" and r["key"] not in taken:
+            out.append((r["key"], r["code"]))
     for action, chord in fleet_keys.pairs(fleet_keys.client_extra(), set(codes) | set(fleet_keys.CODELESS)):
         key = fleet_keys.iterm_key(chord)
         if key and action in codes:
@@ -173,7 +181,9 @@ def build(existing=None):
                 base[key] = val
             break
     for key, code in rows():
-        base[key] = {"Action": ACTION_ESCAPE, "Text": "[%s~" % code}
+        # a code `x<hex>` is a byte, sent as is (⌘\ home: ⌃\'s 0x1c — dash-keymap.sh)
+        base[key] = ({"Action": ACTION_HEX, "Text": "0x" + code[1:]} if code.startswith("x")
+                     else {"Action": ACTION_ESCAPE, "Text": "[%s~" % code})
     base.update(TEXT_KEYS)
     profile = {"Name": NAME, "Guid": GUID, "Keyboard Map": base,
                "Tags": ["claude-fleet"]}

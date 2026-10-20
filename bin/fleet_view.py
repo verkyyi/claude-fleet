@@ -19,7 +19,7 @@ fleet-quickopen.py (this module is its node half — the client never loads it):
                                               其他); 已结束 under them; ↵ goes there
     fleet-quickopen.py do next|prev|back|fwd --view <view>
                                               ⌘↓ ⌘↑ (the list's order) · ⌘[ ⌘] (history)
-    fleet-quickopen.py do new|quit|shell --view <view> [--target <session>]
+    fleet-quickopen.py do new|quit|shell|home --view <view> [--target <session>]
                                               C7 (issue #3004): ⌘N a new session (a
                                               no-repo one on this machine, #3119) ·
                                               ⌘Q OSC 7502 quit + detach · ⌃\ the
@@ -195,11 +195,11 @@ VIEW_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 # `dispatch` is the panel lit on its ⚡ row — the same send, one entry.
 VIEW_ACTIONS = {"next": "do next", "prev": "do prev", "back": "do back", "fwd": "do fwd",
                 "quickopen": "popup", "switcher": "popup",
-                "new": "forward", "quit": "do quit", "dispatch": "forward"}
+                "new": "forward", "quit": "do quit", "dispatch": "forward", "home": "do home"}
 PFX_KEY = "C-]"
 NARROW = 100      # a client narrower than this (a phone) gets the switcher full-screen (#3006)
-# ⌃\ (issue #3004, #2744's meaning): no ⌘ chord, so no row of the switch table —
-# the terminal sends the byte itself; ⌃] \ is the same on a keyboard with no ⌃\.
+# ⌃\ (issue #3004; EPIC T651 C3: ⌘\'s fallback, the home shell): the terminal
+# sends the byte itself; ⌃] \ is the same on a keyboard with no ⌃\.
 SHELL_KEY, SHELL_LETTER = "C-\\", "\\"
 HERE, ME = "here", "me"
 
@@ -2617,9 +2617,12 @@ def tell_cur(g):
 
 
 def do(qo, verb, vid, client="", target=None, new=None):
-    """⌘↓ ⌘↑ ⌘[ ⌘] in a 看台 — and C7's ⌘N (new) · ⌘Q (quit) · ⌃\\ (shell;
-    `--target <row>`: that session's, issue #3183). `new`: go_new's repo / agent /
-    prompt (⌘P's ⚡ row, issue #3327)."""
+    """⌘↓ ⌘↑ ⌘[ ⌘] in a 看台 — and C7's ⌘N (new) · ⌘Q (quit) · ⌃\\ (home: this
+    machine's command line, EPIC T651 C3; ⌘\\ too) · shell (`--target <row>`: that
+    session's, issue #3183). `new`: go_new's repo / agent / prompt (⌘P's ⚡ row,
+    issue #3327)."""
+    if verb == "home":
+        return open_home_shell(qo, vid, client)
     if verb == "new":
         return go_new(qo, vid, client, **(new or {}))
     if verb == "quit":
@@ -2884,8 +2887,8 @@ def open_shell(qo, vid, client="", target=None, meta=None):
     its shell the next ⌃\ is back on the session. Another machine's rides C5's
     standing link (`ssh -S <link> -tt … fleet-remote-view.sh shell-here <wid>`);
     a session reaped takes its shell along, never the other way. No session in
-    view: this machine's shell in $HOME. rc 0 · 3 that session is gone (a line on
-    the client)."""
+    view: the home shell (open_home_shell). rc 0 · 3 that session is gone (a line
+    on the client)."""
     row = view_row(vid)
     fleet = view_fleet(vid, row)
     if not fleet:
@@ -2938,8 +2941,36 @@ def open_shell(qo, vid, client="", target=None, meta=None):
         elif fid:
             m, l, wid, name, prog = here, me, w, TAG_RE.sub("", wname).strip() or w, "here"
         else:
-            m, l, wid, name, prog = here, me, "", "", "home"
-    key = "%s@%s:%s" % (m, l, wid) if wid else "local"
+            return open_home_shell(qo, vid, client)
+    return shell_window(qo, vid, client, fleet, g, prog, m, l, wid, name)
+
+
+def open_home_shell(qo, vid, client=""):
+    r"""⌘\ · ⌃\ (EPIC T651 C3): the command line of the machine this 看台 lives on —
+    this login's login shell in $HOME, from any screen, with no session and no
+    hub. ONE window of the 看台's group, marked `@view_shell home`: open ⇒ go to
+    it; on it ⇒ back to where you were. A web PTY's persistent home shell (C4)
+    keeps its own road (open_shell). rc 0 · 1 the window would not open · 2 no 看台."""
+    row = view_row(vid)
+    fleet = view_fleet(vid, row)
+    if not fleet:
+        return 2
+    g = "%s@view-%s" % (fleet, vid)
+    _, out = tm("display-message", "-p", "-t", "=" + g + ":", "#{@view_web_home}|#{@view_shell}")
+    web, vsh = (out.split("|") + [""])[:2]
+    if web:
+        return open_shell(qo, vid, client)
+    if vsh == "home":
+        code, _ = tm("last-window", "-t", "=" + g)
+        return 0 if code == 0 else 1
+    return shell_window(qo, vid, client, fleet, g, "home", here_label(row), getpass.getuser(), "", "")
+
+
+def shell_window(qo, vid, client, fleet, g, prog, m, l, wid, name):
+    r"""The ⌃\ window itself: the one already open for this key in this 看台, else a
+    new window running `view-shell <prog>` — a session's (`<machine>@<login>:<wid>`)
+    or the home shell (`home`)."""
+    key = "%s@%s:%s" % (m, l, wid) if wid else "home"
     _, lst = tm("list-windows", "-t", "=" + fleet, "-F", "#{window_id}|#{@view_shell}|#{@peer_view}")
     for line in lst.splitlines():
         sw, sk, sv = (line.split("|") + ["", ""])[:3]
@@ -3134,7 +3165,7 @@ def key_lines(me, extra=None, browser=False):
     popup = str(Path(me).parent / "dash-popup.sh")
 
     def cmd_of(action, forward=""):
-        verb = "do shell" if action == "shell" else VIEW_ACTIONS.get(action)
+        verb = "do " + action if action in fleet_keys.CODELESS else VIEW_ACTIONS.get(action)
         if verb == "forward":
             forward = forward or action
         if forward:
@@ -3163,7 +3194,8 @@ def key_lines(me, extra=None, browser=False):
 
     def bind_chord(chord, action):
         if fleet_keys.is_cmd(chord):
-            bind("fleet-view", "User%s" % codes[action] if action in codes else "", action)
+            # a code that is a byte (`x1c`, ⌘\ home) arrives as that key: bound below
+            bind("fleet-view", "User%s" % codes[action] if codes.get(action, "").isdigit() else "", action)
         else:
             tk = fleet_keys.tmux_key(chord)
             if tk and tk != ("fleet-view", PFX_KEY) and tk != ("fleet-view-pfx", PFX_KEY):
@@ -3171,7 +3203,7 @@ def key_lines(me, extra=None, browser=False):
 
     known = set(VIEW_ACTIONS) | set(fleet_keys.CODELESS)
     for action in defaults:                                   # ⌘P: User927, whatever chord the client picked
-        if action in VIEW_ACTIONS and action in codes:
+        if action in VIEW_ACTIONS and codes.get(action, "").isdigit():
             bind("fleet-view", "User%s" % codes[action], action)
     for chord in fleet_keys.phone():                          # ⌃空格 · F12 · ⌃] p
         bind_chord(chord, "quickopen")
@@ -3189,8 +3221,10 @@ def key_lines(me, extra=None, browser=False):
         bind_chord(chord, action)
     for action, chord in fleet_keys.pairs(fleet_keys.phone_extra(), known):
         bind_chord(chord, action)
-    shell_key = ("fleet-view", "C-\\")
-    fallback = binds.get(shell_key, "send-keys 'C-\\'")
+    # ⌃\ (EPIC T651 C3): ⌘\'s fallback, the home shell, unless the person bound it;
+    # a web PTY's persistent home shell (C4) keeps its own road
+    shell_key = fleet_keys.tmux_key(fleet_keys.HOME_CHORD)
+    fallback = binds.get(shell_key, cmd_of("home"))
     binds[shell_key] = "if-shell -F '#{@view_web_home}' { %s } { %s }" % (cmd_of("shell"), fallback)
     _OURS[0] = {tk for tk in binds if tk[0] == "fleet-view"}
     for (table, key), c in binds.items():
@@ -4155,7 +4189,7 @@ def popup(screen, qo, vid, client, forward=""):
 
 
 def _popup(screen, qo, vid, client, forward=""):
-    # raw: ⌃\ is a key here (a shell beside the lit row), never SIGQUIT
+    # raw: ⌃\ is a key here (the home shell), never SIGQUIT
     import fleet_panel as panel
     inputs = panel.Input()
     curses.raw()
@@ -4612,6 +4646,13 @@ def _popup(screen, qo, vid, client, forward=""):
             continue
         if busy:
             continue
+        if ch == "\x1c":
+            # ⌘\ · ⌃\ (EPIC T651 C3): the home shell from every page — the list, a row's
+            # Tab page, the new-session box; a session's own is its Tab page's 命令行
+            if open_home_shell(qo, vid, client) == 0:
+                return 0
+            msg = say("view_shell_failed_fmt", here_label(view_row(vid)))
+            continue
         if ch == curses.KEY_MOUSE:
             try:
                 _, mx, my, _, buttons = curses.getmouse()
@@ -4848,17 +4889,6 @@ def _popup(screen, qo, vid, client, forward=""):
             anchor(e)
             if pick(ACTION["pin"], act_row(fleet, e)):
                 return 0
-            continue
-        if ch == "\x1c":
-            # ⌃\ (issue #3183): a shell beside the lit session, on screen or not —
-            # a new window of the 看台, in the directory its agent is in
-            e = shown[at] if 0 <= at < len(shown) else {}
-            if e.get("kind") != "sess" or not e.get("target"):
-                continue
-            rc = open_shell(qo, vid, client, e["target"], e)
-            if rc == 0:
-                return 0
-            msg = say("view_gone") if rc == 3 else say("view_shell_failed_fmt", e.get("machine") or "?")
             continue
         if ch == "?" and not query:
             # an empty query: `?` is the legend, not a letter (with text it is one)
