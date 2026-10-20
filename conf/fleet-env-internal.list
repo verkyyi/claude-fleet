@@ -586,6 +586,7 @@ FLEET_VIEW_LANG                    handoff: the language a 看台's client broug
 FLEET_UI_PERSON_FILE               seam: the person-bundle.json fleet-ui-lang.sh reads the person's ui_lang from (default $FLEET_CONF_DIR/person-bundle.json, #3329)
 FLEET_VIEW_FIRST_CMD               seam: replaces `fleet-quickopen.py` when attach --thin lands a 看台 with no orchestrator here on ⌘N's road (`do new`) (fleet-remote-view.sh, #3007)
 FLEET_VIEW_KEEP_SECS               knob: seconds a thin client's 看台 (attach --thin) outlives its client for --resume before prune takes it (600, #2763)
+FLEET_ID_BACKFILL_CMD              seam: a shell command printing the live windows `fleet-id.sh backfill` reads (socket · @fleet_id · window · @cc_agent · repo · worktree · task · session ids · role, tab-separated) instead of tmux (EPIC T497 C17)
 FLEET_VIEW_PR_TIMEOUT              knob: seconds ⌘P's row menu waits on the hub for a task record's PR (fleet_view.py task_pr, #4902)
 FLEET_VIEW_ROWS_CMD                seam: a shell command printing the 看台 switcher's rows instead of tmux-dashboard-rows.sh --rows (fleet_view.py, #3000)
 FLEET_HUB_SESSIONS_USER            knob: whose sessions on the other machines the dash shows (os_user; default `id -un`, `*` = every login the hub shows; #1423)
