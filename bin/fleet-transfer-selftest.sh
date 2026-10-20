@@ -955,7 +955,7 @@ for ((attempt=0; attempt<30; attempt++)); do
   sleep 0.1
 done
 ok; [ -n "$RECOVERED" ] && [ "$(fleet_cc_session_id "$RECOVERED")" = "$SID" ] && [ -z "$(field cc_agent)" ] \
-  || fail "manual recovery must resume Claude and clear the Codex stamp: $(TM capture-pane -p -t "$PANE")"
+  || fail "manual recovery must resume Claude and clear the Codex stamp: pid=${RECOVERED:-none} sid=$( [ -z "$RECOVERED" ] || fleet_cc_session_id "$RECOVERED") cc_agent=$(field cc_agent) · $(TM capture-pane -p -t "$PANE")"
 
 spawn 45 issue tool
 transfer && fail 'live tool after source exit must refuse respawn'; ok
