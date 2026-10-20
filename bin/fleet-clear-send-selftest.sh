@@ -61,7 +61,7 @@ agentwin() {
   tf set-window-option -t "$w" @fleet_id "$1"
   tf set-window-option -t "$w" @cc_agent "$2"
   [ "$2" = codex ] && tf set-window-option -t "$w" @cc_launcher_pid 4242
-  tf set-window-option -t "$w" @claude_state done
+  tf set-window-option -t "$w" @claude_state 'done'
   p=$(tf display-message -p -t "$w" '#{pane_id}')
   printf '%s %s' "$w" "$p"
 }
@@ -73,7 +73,7 @@ AUDIT="$FLEET_CONF_DIR/logs/clear-send.log"
 
 # ---- A · Claude, idle ------------------------------------------------------------
 F1=$(mkfid)
-read -r W1 P1 <<EOF
+read -r W1 _ <<EOF
 $(agentwin "$F1" claude cc)
 EOF
 S1=$(bash "$BIN/fleet-id.sh" open "$F1" --window "$W1" --socket "$L" --agent claude --title 'A work')
@@ -89,7 +89,7 @@ ok; [ "$rc" = 0 ] && [ "$(segs "$F1")" = "claude:cc-1:clear claude:cc-2:clear" ]
 
 # ---- B · Codex, the bare code in upper case, through fleet-id.sh clear -------------
 F2=$(mkfid)
-read -r W2 P2 <<EOF
+read -r W2 _ <<EOF
 $(agentwin "$F2" codex cx)
 EOF
 S2=$(bash "$BIN/fleet-id.sh" open "$F2" --window "$W2" --socket "$L" --agent codex --title 'B work')
@@ -107,7 +107,7 @@ for st in working needs looping ''; do
 done
 sleep 1
 ok; [ "$(segs "$F1" | wc -w | tr -d ' ')" = 2 ] || fail "C: a refusal adds no segment" "$(segs "$F1")"
-tf set-window-option -t "$W1" @claude_state done
+tf set-window-option -t "$W1" @claude_state 'done'
 ok; grep -q "id=$F1 .*refused rc=3" "$AUDIT" || fail "C: a refusal is audited too" "$(cat "$AUDIT")"
 
 # ---- D · no such ID, ambiguous -----------------------------------------------------
@@ -132,7 +132,7 @@ ok; [ "$rc" = 0 ] && [ "$(segs "$F1" | wc -w | tr -d ' ')" = 3 ] \
 F4=$(mkfid)
 W4=$(tf new-window -d -P -F '#{window_id}' -t "$L:" 'while :; do sleep 300; done')
 tf set-window-option -t "$W4" @fleet_id "$F4"; tf set-window-option -t "$W4" @cc_agent shell
-tf set-window-option -t "$W4" @claude_state done
+tf set-window-option -t "$W4" @claude_state 'done'
 run "$F4" --socket "$L"
 ok; [ "$rc" = 3 ] || fail "E: a window that is no agent session is refused (rc 3)" "rc=$rc $err"
 
