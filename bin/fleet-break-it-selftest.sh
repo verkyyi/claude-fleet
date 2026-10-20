@@ -140,6 +140,8 @@
 #                                                   (the ID switch: ids/.switch, exit 5 → the ID road)
 #   epic-member-dead-record                         bin/fleet-epic-tick.py (a member by its ID chain:
 #                                                   batons_of, fleet-id.sh family)
+#   launch-binary-renamed                           bin/fleet_launch.py (same_executable / native_tool:
+#                                                   a hard-linked binary is one file, T524)
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
 #   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
@@ -6036,6 +6038,35 @@ PY
   [ "$out" = "retry succeeded T-bbbbb 9" ] \
     || { WHY="a dead member read [$out], want «retry succeeded T-bbbbb 9» (its closed ID a failure, its continuation the newest baton)"; return 1; }
   WHAT="成员窗口关了没结果、记录还开着：按 ID 读成失败可重试；手动续上的新 ID 被认作它的最新一棒"
+}
+
+# A version switch renames every running Claude (T524): one release binary is
+# hard-linked as tools/claude/<sha>/claude and <sha>/.release/artifacts/claude-<ver>-…,
+# and macOS names a process by whichever link was read last. The launch proof lost
+# its receipt (T510) and the hook refused the «non-native» ancestor (T522). Here the
+# kernel's answer is the other link: still the same process, still Claude.
+drill_launch_binary_renamed() {
+  CAP=10; local d="$WORK/lbr" t0 out
+  mkdir -p "$d/tools" "$d/rel/.release/artifacts"
+  printf '#!/bin/sh\necho "2.1.295 (Claude Code)"\n' > "$d/tools/claude"; chmod +x "$d/tools/claude"
+  ln "$d/tools/claude" "$d/rel/.release/artifacts/claude-2.1.295-darwin-arm64"
+  t0=$(now)
+  out=$(cd "$BIN" && python3 - "$d" <<'PY'
+import sys
+from unittest import mock
+import fleet_launch as launch
+d = sys.argv[1]
+receipt = dict(pid=50, ppid=49, birth="b", executable=d + "/tools/claude")
+seen = dict(receipt, executable=d + "/rel/.release/artifacts/claude-2.1.295-darwin-arm64")
+with mock.patch.object(launch, "process", return_value=seen), \
+     mock.patch.object(launch.os, "getppid", return_value=50):
+    print(launch.same_process(receipt), launch.native_parent()["actual_provider"])
+PY
+)
+  SECS=$(since "$t0")
+  [ "$out" = "True claude" ] \
+    || { WHY="a running Claude seen under its release artifact link read [$out], want «True claude»"; return 1; }
+  WHAT="版本切换让在跑的 Claude 换了个硬链接名：启动凭证照样认得同一个进程、同一个 Claude"
 }
 
 # ================================================================ run ====}

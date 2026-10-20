@@ -82,7 +82,7 @@ def verify_stopped(payload, task):
         except ProcessLookupError:
             return
         observed = launch.process(proof["pid"])
-        if all(observed[k] == proof[k] for k in ("pid", "birth", "executable")):
+        if launch.same_identity(observed, proof):
             raise Refused("native execution is still alive")
     except Refused:
         raise
@@ -135,7 +135,7 @@ def verify_retired(payload, task):
             observed = launch.process(pid)
         except (ValueError, OSError, subprocess.SubprocessError) as exc:
             raise Deferred("native process unreadable; reconciliation required") from exc
-        if all(observed[k] == proof.get(k) for k in ("pid", "birth", "executable")):
+        if launch.same_identity(observed, proof):
             raise Refused("native execution is still alive")
         gone = "pid %d is another process now" % pid
     return dict(binding_retired=True, window=window, process=gone, checked_at=int(time.time()))

@@ -394,7 +394,7 @@ def is_app_server(pid):
     try:
         argv = observe.process_argv(pid)
         return ('app-server' in argv and '--listen' in argv
-                and Path(observe.kernel(pid)['executable']).name == 'codex')
+                and launch.native_tool(observe.kernel(pid)['executable']) == 'codex')
     except (OSError, ValueError, subprocess.SubprocessError):
         return False
 
@@ -561,7 +561,7 @@ class Native:
         st, row = record['started'], plan['binding']
         authority.prove_stopped(dict(plan['proof']))
         native = observe.kernel(st['native_identity']['pid'])
-        require(all(native[k] == st['native_identity'][k] for k in ('pid', 'birth', 'executable')),
+        require(launch.same_identity(native, st['native_identity']),
                 'target lifetime changed')
         require(routing(row) == plan['routing'], 'target routing changed')
         return st
@@ -626,7 +626,7 @@ class Native:
             observe.check_ack(expected, proof, receipt.get('hub_confirmation'))
             require(proof == started, 'target bound a lifetime other than the started one')
             native = observe.kernel(proof['pid'])
-            require(all(native[k] == proof[k] for k in ('pid', 'birth', 'executable'))
+            require(launch.same_identity(native, proof)
                     and launch.root_native(native, receipt['supervisor']), 'target kernel differs from its authority receipt')
             scope = observe.process_scope(native['pid'])
             context = json.loads(scope.get('FLEET_AUTHORITY_CONTEXT', '{}'))
