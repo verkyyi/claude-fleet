@@ -16,9 +16,7 @@ hub/api/fleetclient/manifest and hub/api/fleetclient/pack/ (internal/ before #48
   --image   the hub IMAGE's — everything under hub/ (less hub/web/ and
             hub/apitest/, #4814), shared/ and agent/, and the hub's paths
             before it was a module (go.mod, go.sum, cmd/, internal/): what
-            fleet-train-hub.sh reads to
-            redeploy the hub, and the digest an image from before #4813 stamped
-            (compat-1v: 下一批删 — the stable gate accepts it for one version)
+            fleet-train-hub.sh reads to redeploy the hub
 sha256 over "<path>\\0<sha256 hex>\\n" per file, paths relative to
 tokenledger/, sorted.
 """

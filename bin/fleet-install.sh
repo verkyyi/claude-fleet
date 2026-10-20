@@ -523,10 +523,6 @@ PYV
   # the manifest first (its `installer` line is this very script, not a
   # download), then every file on it
   if [ "$BUNDLED" != 1 ]; then
-    # a stable from before the hub was its own module (claude-fleet#4814) keeps
-    # the manifest where the hub's code was: tokenledger/internal/api/fleetclient/manifest  # compat-1v: 下一批删
-    [ "$MPATH" = "$MANIFEST_PATH" ] && ! curl -fsS -o /dev/null "$FROM/$MPATH" 2>/dev/null \
-      && MPATH=tokenledger/internal/api/fleetclient/manifest  # compat-1v: 下一批删
     fetch manifest "$MPATH"
   fi
   # a `served` line (issue #4826) is the hub's to hand out on first use, never installed

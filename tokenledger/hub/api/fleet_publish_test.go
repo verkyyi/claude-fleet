@@ -513,9 +513,8 @@ func TestPublishRefusesStaleCCQuota(t *testing.T) {
 // claude-fleet#4813: the release's ccquota is the node's build, held to the
 // node's source (shared/ + agent/). A change to the hub alone (cmd/, internal/)
 // publishes over the same image — no machine runs it; a change to agent/ is a
-// 422. An image from before the split stamped the whole tree's digest
-// (compat-1v: 下一批删): it is accepted, and the release signs THAT in, so a
-// machine's ccquota row matches its binary's own src line.
+// 422 — and so is an image stamped with the whole tree's digest (the algorithm
+// before the split).
 func TestReleaseSourceIsTheNodes(t *testing.T) {
 	p := newPublishRig(t)
 	tok := p.oidc.token(nil)
@@ -545,11 +544,8 @@ func TestReleaseSourceIsTheNodes(t *testing.T) {
 		"tokenledger/shared/r/r.go":          []byte("package r\n"),
 	}
 	p.rs.DistSrc = release.ImageSourceDigest(whole)
-	if code, body := p.publish(tok, c, b, nil, nil); code != 200 {
-		t.Fatalf("C over a pre-split image of the same tree: %d %s", code, body)
-	}
-	if m := p.stable(t); m.SHA != c || m.CCQuotaSrc != p.rs.DistSrc {
-		t.Fatalf("stable %s ccquota_src %q, want the image's own %s", m.SHA, m.CCQuotaSrc, p.rs.DistSrc)
+	if code, body := p.publish(tok, c, b, nil, nil); code != 422 || !strings.Contains(body, "ccquota:") {
+		t.Fatalf("C over an image stamped with the whole tree's digest: %d %s", code, body)
 	}
 }
 

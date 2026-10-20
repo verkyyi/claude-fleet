@@ -182,7 +182,7 @@ func releaseTree(files map[string][]byte) (map[string][]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		keep = func(p string) bool { return isStableManifest(p) || l.Keep(p) }
+		keep = func(p string) bool { return p == StableManifestPath || l.Keep(p) }
 	}
 	out := make(map[string][]byte, len(files))
 	for p, b := range files {
@@ -197,7 +197,7 @@ func releaseTree(files map[string][]byte) (map[string][]byte, error) {
 // repo's top-level files and its runtime trees; never the Go source, the
 // deploy tree or the CI's files.
 func releasePathOK(p string) bool {
-	if isStableManifest(p) {
+	if p == StableManifestPath {
 		return true
 	}
 	if !releasePathSafe(p) {
@@ -245,18 +245,9 @@ func (rs *ReleaseStore) artifacts() map[string]string {
 
 // srcFor: the source digest a release of the commit's files is held to and
 // signs in as ccquota_src — the node's (release.SourceDigest: shared/ + agent/,
-// what the image's dist is built from since claude-fleet#4813). compat-1v: 下一批删
-// — an image from before the split stamped its dist with the whole tree's
-// (release.ImageSourceDigest); when that is what DistSrc names, the release
-// signs it in, so a machine's ccquota row still finds its binary's own src.
+// what the image's dist is built from since claude-fleet#4813).
 func (rs *ReleaseStore) srcFor(all map[string][]byte) string {
-	node := release.SourceDigest(all)
-	if rs.DistSrc != "" && rs.DistSrc != node {
-		if img := release.ImageSourceDigest(all); img == rs.DistSrc {
-			return img
-		}
-	}
-	return node
+	return release.SourceDigest(all)
 }
 
 // distSrcCheck: may a release whose commit's node source digests to src carry

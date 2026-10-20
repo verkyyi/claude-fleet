@@ -385,9 +385,7 @@ except Exception: pass' 2>/dev/null)
 ccquota_gate() {   # ccquota_gate <old> <new>
   git -C "$dir" cat-file -e "$2:bin/fleet-node-update.py" 2>/dev/null || return 0
   _want=$(python3 "$BIN_DIR/fleet-src-digest.py" "$dir" "$2" 2>/dev/null) || _want=""
-  # compat-1v: 下一批删 — a hub image from before #4813 stamps the whole tree's digest
-  _want_img=$(python3 "$BIN_DIR/fleet-src-digest.py" --image "$dir" "$2" 2>/dev/null) || _want_img=""
-  [ -n "$_want" ] || [ -n "$_want_img" ] || return 0   # no Go source in the target: no ccquota to hold to it
+  [ -n "$_want" ] || return 0   # no Go source in the target: no ccquota to hold to it
   _hub=$(hub_url)
   [ -n "$_hub" ] || { printf 'ccquota: no hub address here — the hub image'"'"'s ccquota not checked against %s\n' "$(short "$2")"; return 0; }
   _tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-stable-cq.XXXXXX") || die "mktemp failed"
@@ -409,13 +407,10 @@ print(json.load(sys.stdin).get("version") or "")' 2>/dev/null)
       none) printf 'ccquota: %s carries no ccquota binaries — nothing to check\n' "$_hub"; return 0 ;;
       -)    ccquota_behind_check "$1" "$2" "$_hub"; return ;;   # an older hub: #2927's check
     esac
-    if [ -n "$_want" ] && [ "$_have" = "$_want" ]; then
+    if [ "$_have" = "$_want" ]; then
       printf 'ccquota: the hub'"'"'s ccquota %sis %s'"'"'s node source (%s)\n' "${_ver:+$_ver }" "$(short "$2")" "$(printf '%.12s' "$_want")"; return 0
     fi
-    if [ -n "$_want_img" ] && [ "$_have" = "$_want_img" ]; then   # compat-1v: 下一批删
-      printf 'ccquota: the hub'"'"'s ccquota %sis %s'"'"'s Go source (%s, the whole tokenledger/ — a hub image from before the node split)\n' "${_ver:+$_ver }" "$(short "$2")" "$(printf '%.12s' "$_want_img")"; return 0
-    fi
-    _why="the hub's ccquota ${_ver:+$_ver }was built from Go source $(printf '%.12s' "$_have"), $(short "$2")'s node source (tokenledger/shared + agent) is $(printf '%.12s' "${_want:--}") — the hub would refuse the release (or a machine would run new scripts on an old ccquota, #2928)"
+    _why="the hub's ccquota ${_ver:+$_ver }was built from Go source $(printf '%.12s' "$_have"), $(short "$2")'s node source (tokenledger/shared + agent) is $(printf '%.12s' "$_want") — the hub would refuse the release (or a machine would run new scripts on an old ccquota, #2928)"
   fi
   if [ "$force" -eq 1 ]; then force_log "$1" "$2" ccquota "$_why" "the hub's ccquota"; return 0; fi
   refuse "ccquota: $_why — redeploy the hub image from $(short "$2") first (bin/fleet-hub-image.sh), or --force to move anyway (logged)"

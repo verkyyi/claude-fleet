@@ -182,9 +182,6 @@ func (s *Server) handleStableBundle(w http.ResponseWriter, r *http.Request, sha 
 	if !ok {
 		ctx := r.Context()
 		m, err := s.Stable.File(ctx, sha, StableManifestPath)
-		if err != nil { // a stable from before #4814
-			m, err = s.Stable.File(ctx, sha, stableManifestPathOld)
-		}
 		if err == nil {
 			b, err = buildBundle(m, func(p string) ([]byte, error) {
 				if !stablePathOK(p) {
