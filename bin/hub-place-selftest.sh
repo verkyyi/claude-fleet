@@ -903,6 +903,14 @@ PLACE_ANSWER=$'REFUSED ALL_DECLINED\tevery machine that could take it said no �
 tmux_has 'new-window'                            && fail "T604-NOTHERE must not spawn past the cap"
 PLACE_RC=1 INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_raw
 [ "$(rc)" = 2 ] && err_has 'at capacity'         || fail "T604-NOTHERE hub down ⇒ this machine's cap reason, exit 2 (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+# the release's own ccquota (beside the scripts) beats a stale one first on PATH
+mkdir -p "$WORK/rel bin" "$WORK/stalebin"
+printf '#!/bin/sh\necho release "$@"\n' > "$WORK/rel bin/ccquota"; printf '#!/bin/sh\necho stale "$@"\n' > "$WORK/stalebin/ccquota"
+chmod +x "$WORK/rel bin/ccquota" "$WORK/stalebin/ccquota"
+got=$(PATH="$WORK/stalebin:$PATH" bash -c '. "$1/fleet-lib.sh"; _FLEET_LIB_DIR="$2"; c=$(fleet_ccquota_cmd) && bash -c "$c \"\$@\"" x place a' _ "$BIN" "$WORK/rel bin")
+[ "$got" = 'release place a' ]                   || fail "T604-CCQUOTA the release's ccquota beside the scripts wins over PATH's" "$got"
+got=$(PATH="$WORK/stalebin:$PATH" bash -c '. "$1/fleet-lib.sh"; _FLEET_LIB_DIR="$2"; c=$(fleet_ccquota_cmd) && bash -c "$c \"\$@\"" x place a' _ "$BIN" "$WORK/none")
+[ "$got" = 'stale place a' ]                     || fail "T604-CCQUOTA none beside the scripts ⇒ PATH's, as before" "$got"
 ok "T604 NOTHERE a full machine asks for any other (--not-here <reason>); none / hub down ⇒ refused with its own reason (2)"
 
 # The dash's ⌃s is `--bg`: the keypress returns at once and the BACKGROUND pass

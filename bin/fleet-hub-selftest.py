@@ -1293,6 +1293,18 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.assertFalse((self.node.conf / "spawn.calls").exists())
         self.assertIn("worker_start %s failed EXPIRED" % op_id, (self.node.conf / "control" / "ops.log").read_text())
 
+    def test_task_start_without_launch_contract_follows_the_id_switch(self):
+        # T604: with the hub's ID switch on (EPIC T497 C6) a placed task start
+        # carries no launch contract — the window's ID is the binding — and is
+        # admitted; off, the contract is still required.
+        d = {"version": 1, "request_id": "r1", "requested_agent": "default", "resolved_agent": "claude",
+             "agent_source": "default", "task": "T9", "generation": 1, "attempt_id": "task:T9:g1"}
+        start = {"kind": "scratch", "repo": "example/project", "task": "T9", "dispatch": d}
+        with patch.dict(os.environ, {"FLEET_ID_SWITCH": "off"}), self.assertRaises(Fault):
+            validate_write("worker_start", dict(start))
+        with patch.dict(os.environ, {"FLEET_ID_SWITCH": "on"}):
+            validate_write("worker_start", dict(start))
+
     def test_task_record_on_a_start(self):
         # issue #3325: the hub's task record T<n> rides a new / scratch start
         # (FLEET_CONTROL_TASK to the adapter, never an argv word).
