@@ -68,7 +68,8 @@
 #           with the hub off the window is still stamped, nothing is placed.
 #   TOKEN   (issue #1491) the place command sees node.env's CCQUOTA_TOKEN; the
 #           spawned window never inherits it; the default `ccquota place` with no
-#           token anywhere is not run and says 「no node token」, not 「unreachable」.
+#           token anywhere is not run and says 「no node token」, not 「unreachable」 —
+#           and, never reached (T672), opens it here, @placed fallback-local.
 #   SCRATCH (issue #1541, EPIC #1529 R3) bin/dash-raw-session.sh is placed the
 #           same way, as `<repo> scratch <fleet UUID>` with its --name and parent:
 #           hub off ⇒ byte-identical and --node mac-a refused; REMOTE / done /
@@ -739,7 +740,9 @@ printf '%s\n' "\$*" >> "$WORK/ccq.log"; printf 'LOCAL mac-b\tchose mac-b\n'; exi
 CCQFAKE
 chmod +x "$WORK/fakebin/ccquota"
 FLEET_HUB_PLACE_CMD='' CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" run_spawn 258
-[ "$(rc)" = 1 ] && ! tmux_has 'new-window'         || fail "TOKEN-less default place still opens nothing here (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+# never reached (T672, rc 11): nothing was sent, so it opens here — said and stamped
+[ "$(rc)" = 0 ] && tmux_has 'new-window' && tmux_has "@placed 'fallback-local'" \
+                                                 || fail "TOKEN-less default place opens here, @placed fallback-local (rc=$(rc))" "$(cat "$WORK/spawn.err")"
 [ -e "$WORK/ccq.log" ]                           && fail "TOKEN-less: ccquota place must not be run without a token" "$(cat "$WORK/ccq.log")"
 err_has "no node token (CCQUOTA_TOKEN unset and $NODE_ENV missing)" || fail "TOKEN-less stderr names what is missing" "$(cat "$WORK/spawn.err")"
 err_has 'opening #258 here'                      || fail "TOKEN-less stderr says where it opens" "$(cat "$WORK/spawn.err")"
