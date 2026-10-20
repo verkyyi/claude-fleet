@@ -20,9 +20,8 @@
 # normally and nobody knew (EPIC #1645 ③④). Now it is QUEUED, addressed by the
 # recipient's lifelong identity (@fleet_id, issue #1646) — never a key another
 # window may answer to later — and delivered by `drain`: the cleanup daemon's tick
-# (60 s) and a sleeper's wake (fleet-sleep.py) run it. Delivery is the one path
-# every report takes (children_send: wake-delivery for a sleeper, the Codex queue,
-# the peer inbox). A recipient that never comes back: after FLEET_PEER_QUEUE_TTL
+# (60 s) runs it. Delivery is the one path every report takes (children_send:
+# the journaled delivery, the Codex queue, the peer inbox). A recipient that never comes back: after FLEET_PEER_QUEUE_TTL
 # (7 days, the hub's relay TTL) the item is dropped and the book says EXPIRED.
 #
 # The DELIVERY BOOK, $FLEET_CONF_DIR/fleets/<sess>/delivery.ndjson, is the sender's
@@ -203,12 +202,9 @@ EOF
   text=$(python3 -c 'import json, sys; sys.stdout.write(json.load(open(sys.argv[1], encoding="utf-8"))["text"])' "$c" 2>/dev/null)
   from=fleet-report; [ "$kind" = message ] && from=fleet-peer
   FLEET_REPORT_FROM="$from" children_send "$SESS" "$sock" "$w" "$text"; rc=$?
-  # 3 = a sleeper at a full fleet: fleet-sleep holds it now and delivers when a
-  # slot frees — handed over, so it leaves this queue.
-  if [ "$rc" -eq 0 ] || [ "$rc" -eq 3 ]; then
+  if [ "$rc" -eq 0 ]; then
     rm -f "$c"
-    _d=''; [ "$rc" -eq 3 ] && _d='held by the sleeper until a slot frees'
-    note "$rid" DELIVERED "$to" "$kind" local "$_d"
+    note "$rid" DELIVERED "$to" "$kind" local ""
     [ "$kind" = report ] && { _pk=$(fleet_window_okey "$SESS" "$w" 2>/dev/null) && [ -n "$_pk" ] && children_cursor_set "$_pk" "$SESS"; }
     sent=$((sent + 1))
   else

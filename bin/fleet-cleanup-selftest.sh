@@ -424,35 +424,28 @@ tok="$(FAKE_AGENT_AGE=04:00 run_clean merged --auto)"
   || fail "default gate: a 4-minute agent must stay protected, got '$tok'" "$(cat "$WORK/err")"
 ok 'default FLEET_REAP_MIN_AGE is 300s: 6-minute agent reaped, 4-minute agent kept'
 
-# Issue #1244: a SLEEPING merged worker is cleaned without a wake — its sleep
-# record retired (fleet_worker_life.py dispose) BEFORE the kill; a hold, an agent under
-# the sleeper, or a refused dispose all leave it standing.
+# Issue #1244 / T548: a merged worker an old version left stamped `sleeping` is
+# cleaned like any (the stamp reads as empty) — no fleet_worker_life.py call, the
+# history row first; a hold still leaves it standing.
 REAL_PY3=$(command -v python3)
 cat > "$WORK/fakebin/python3" <<PYFAKE
 #!/bin/bash
 case "\${1:-}" in *fleet_worker_life.py)
-  printf 'dispose %s\n' "\${!#}" >> "$ORDER_LOG"
-  [ "\${DISPOSE_FAILS:-0}" = 1 ] && exit 1; exit 0 ;; esac
+  printf 'dispose %s\n' "\${!#}" >> "$ORDER_LOG"; exit 0 ;; esac
 exec "$REAL_PY3" "\$@"
 PYFAKE
 chmod +x "$WORK/fakebin/python3"
 : > "$LEDGER"
 tok="$(FAKE_LIFE=sleeping FAKE_NO_AGENT=1 run_clean merged --auto)"
-case "$tok" in cleaned:*) ;; *) fail "a sleeping merged worker should be cleaned, got '$tok'" "$(cat "$WORK/err")" ;; esac
-case "$(tr '\n' ' ' < "$ORDER_LOG")" in "dispose @7 kill-window @7 "*) ;;
-  *) fail "sleeper teardown must dispose the record before the kill: [$(tr '\n' ' ' < "$ORDER_LOG")]" ;; esac
-[ -s "$LEDGER" ] || fail 'a sleeper cleanup must still write its history row'
+case "$tok" in cleaned:*) ;; *) fail "an old sleeping stamp must not stop a clean, got '$tok'" "$(cat "$WORK/err")" ;; esac
+case "$(tr '\n' ' ' < "$ORDER_LOG")" in "kill-window @7 "*) ;;
+  *) fail "teardown must kill without a sleep-record call: [$(tr '\n' ' ' < "$ORDER_LOG")]" ;; esac
+[ -s "$LEDGER" ] || fail 'the cleanup must still write its history row'
 : > "$LEDGER"
 tok="$(FAKE_LIFE=sleeping FAKE_NO_AGENT=1 FAKE_HOLD=1 run_clean merged --auto)"
-[ "$tok" = skip:live ] && [ ! -s "$ORDER_LOG" ] || fail "a held sleeper must be retained, got '$tok'"
-tok="$(FAKE_LIFE=sleeping run_clean merged --auto)"
-[ "$tok" = skip:live ] && [ ! -s "$ORDER_LOG" ] || fail "an agent under a sleeper must be retained, got '$tok'"
-tok="$(FAKE_LIFE=sleeping FAKE_NO_AGENT=1 DISPOSE_FAILS=1 run_clean merged --auto)"
-[ "$tok" = skip:live ] || fail "a refused dispose must defer, got '$tok'"
-grep -q kill-window "$ORDER_LOG" && fail 'a refused dispose still killed the sleeper'
-[ -f "$WORK/wt-issue-42/keep.txt" ] || fail 'a refused dispose dropped the worktree'
+[ "$tok" = skip:live ] && [ ! -s "$ORDER_LOG" ] || fail "a held worker must be retained, got '$tok'"
 rm -f "$WORK/fakebin/python3"
-ok 'sleeping merged worker cleaned without a wake; hold / agent / refused dispose retain it'
+ok 'an old sleeping stamp is cleaned like any; a hold retains it'
 tok="$(WIN_STATE_FAKE=working run_clean merged --auto --dry-run)"
 [ "$tok" = skip:live ] || fail 'dry-run must apply automatic liveness'
 printf 'FLEET_REAP_MIN_AGE=7200\n' > "$WORK/conf/testsess.conf"

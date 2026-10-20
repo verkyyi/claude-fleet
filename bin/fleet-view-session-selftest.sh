@@ -62,9 +62,9 @@ bad=$(grep -n -E "[\"']#\{session_name\}[\"'| ]" "$BIN"/*.sh "$BIN"/*.py "$ROOT"
   | grep -v -E 'list-sessions|list-clients|list-windows|fleet_lw|_fa_lw|lw_all|fleet_list_windows_all|WFMT=|_fmt=|session_group|view-ok:')
 eq "A2b: no bare #{session_name} format handed to a pane/window read helper (use \$FLEET_SESSION_FMT)" "" "$bad"
 # A2c. …nor the brace-less name a format helper wraps (issue #2622):
-# fleet-sleep.py's `self.opt('session_name')` became `#{session_name}` inside
+# the worker module's `self.opt('session_name')` became `#{session_name}` inside
 # opt(), so neither A2 nor A2b saw it — and with a view attached every worker
-# read `wrong fleet`, so no idle window ever slept.
+# read `wrong fleet` (issue #2622).
 bad=$(grep -n -E "[(,][[:space:]]*[\"']session_name[\"'][[:space:]]*\)" "$BIN"/*.sh "$BIN"/*.py "$ROOT"/hooks/*.py 2>/dev/null \
   | grep -v -- '-selftest\.' | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' | grep -v 'view-ok:')
 eq "A2c: no bare 'session_name' handed to a format-wrapping read helper (use \$FLEET_SESSION_FMT)" "" "$bad"

@@ -292,7 +292,7 @@ PY
   fi
   if [ -n "$WIN" ]; then
     [[ "$WIN" =~ ^@[0-9]+$ ]] || return 1
-    panes=$(ftmux list-panes -t "$WIN" -F '#{socket_path}|#{pid}|#{window_id}|#{pane_id}|#{pane_pid}|#{@fleet_id}|#{@repo}|#{@worktree}|#{@cc_agent}|#{@cc_launcher_pid}|#{@authority_receipt}|#{@codex_session_id}|#{@launch_receipt}|#{@worker_lifecycle}|#{@migrating}|#{@reap_hold}' 2>/dev/null) || return 1
+    panes=$(ftmux list-panes -t "$WIN" -F '#{socket_path}|#{pid}|#{window_id}|#{pane_id}|#{pane_pid}|#{@fleet_id}|#{@repo}|#{@worktree}|#{@cc_agent}|#{@cc_launcher_pid}|#{@authority_receipt}|#{@codex_session_id}|#{@launch_receipt}||#{@migrating}|#{@reap_hold}' 2>/dev/null) || return 1
     [ -n "$panes" ] || return 1
   fi
   printf '%s\n%s\n%s\n' "$WT" "$inode" "$panes" | shasum -a 256 | awk '{print $1}'
@@ -755,12 +755,6 @@ teardown() (
   if [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ]; then return 0; fi
   # Ordering is load-bearing: kill the window FIRST so the worker process dies and
   # releases the busy cwd, THEN drop the worktree, THEN delete the branch.
-  # A sleeper (issue #1244) is reaped without a wake: retire its sleep record
-  # first, and if that is refused (a wake raced us) leave everything standing.
-  if [ -n "$WIN" ] && ! fleet_sleep_dispose "$WIN" "$FLEET_SESSION"; then
-    note "  teardown: sleep record of $WIN could not be retired — deferred"
-    done_token skip:live; return 1
-  fi
   [ -n "$WIN" ] && fleet_win_retire "$WIN" "$(fleet_socket "$FLEET_SESSION")" landed   # the fleet's close, not one to pull back (#1840)
   [ -n "$WIN" ] && ftmux kill-window -t "$WIN" 2>/dev/null
   # A shell / view left in the worktree goes with it (issue #3352).

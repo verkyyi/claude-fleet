@@ -12,8 +12,8 @@
 #      the book says DELIVERED for each, the queue is empty.
 #   C  a drain for another identity (--fid) leaves an item alone; an item whose
 #      recipient is not live stays queued.
-#   D  a sleeping parent at a full fleet (fleet_worker_life.py deliver exit 3): the
-#      report is `queued →`, exit 3 — never `reported` — and not double-queued.
+#   D  a parent an old version left stamped `sleeping` (T548: read as empty) and
+#      with no live Claude: the report is `queued →` for its identity, exit 3, once.
 #   E  a recipient that never comes back: after FLEET_PEER_QUEUE_TTL the drain
 #      drops it and the book says EXPIRED.
 #   F  `wait`: DELIVERED 0, FAILED/EXPIRED 1, nothing yet 3.
@@ -44,7 +44,8 @@ cleanup() { tmux -L "$L" kill-server 2>/dev/null; [ -n "$INBOX_PID" ] && kill "$
 trap cleanup EXIT INT TERM
 
 # A shadow bin/: every script a symlink to the real one, except fleet_worker_life.py — a
-# fake whose `deliver` records the message and answers 3 (held at a full fleet).
+# fake whose `deliver` records the message and fails (no window here leaves Stop
+# evidence, so nothing should reach it since T548).
 SB="$WORK/bin"; mkdir -p "$SB"
 for f in "$BIN"/*; do ln -s "$f" "$SB/$(basename "$f")"; done
 rm -f "$SB/fleet_worker_life.py"
@@ -53,7 +54,7 @@ import os, sys
 if "deliver" in sys.argv:
     with open(os.path.join(os.environ["FLEET_CONF_DIR"], "sleep-held"), "a") as f:
         f.write(sys.stdin.read().replace("\n", " ") + "\n")
-    sys.exit(3)
+    sys.exit(1)
 sys.exit(0)
 PY
 
@@ -144,21 +145,21 @@ PQ drain -L "$L" >/dev/null
 ok; [ "$(frames)" = 3 ] || fail "B: a second drain delivers nothing again" "frames=$(frames)"
 ok; [ "$(rows DELIVERED)" = 3 ] || fail "B: three DELIVERED rows" "$(cat "$BOOK")"
 
-# --- D: a sleeper at a full fleet holds it: queued, never reported ---------------------
+# --- D: an old sleeping stamp is no hold: queued for its identity, never reported ------
 S=$(win sleeper); tf set-window-option -t "$S" @issue 70; tf set-window-option -t "$S" @worker_lifecycle sleeping
 c=$(win child-71); tf set-window-option -t "$c" @issue 71; tf set-window-option -t "$c" @origin issue-70
 before=$(qn)
 out=$(bash "$SB/fleet-report-parent.sh" -L "$L" --win "$c" --state merged 2>&1); rc=$?
-ok; [ "$rc" = 3 ] && case "$out" in "queued → issue-70"*"asleep at a full fleet"*) true ;; *) false ;; esac \
-  || fail "D: a sleeper at a full fleet ⇒ queued, exit 3" "rc=$rc $out"
-ok; grep -q 'issue #71' "$FLEET_CONF_DIR/sleep-held" 2>/dev/null && [ "$(qn)" = "$before" ] \
-  || fail "D: held by the sleeper, not queued twice" "queue=$(qn)"
+ok; [ "$rc" = 3 ] && case "$out" in "queued → issue-70"*"no live Claude under it"*) true ;; *) false ;; esac \
+  || fail "D: an old sleeping stamp, no Claude ⇒ queued, exit 3" "rc=$rc $out"
+ok; [ "$(qn)" = "$((before + 1))" ] || fail "D: queued once" "queue=$(qn) before=$before"
 
 # --- E: never comes back ⇒ EXPIRED -------------------------------------------------------
 G=$(win ghost); GFID=$(fleet_window_fid "$L" "$G" "$L"); tf kill-window -t "$G"
+eb=$(qn)
 printf 'are you there?' | PQ put -L "$L" --to-fid "$GFID" --kind message --rid r-ghost --to ghost >/dev/null
 PQ drain -L "$L" >/dev/null
-ok; [ "$(qn)" = 1 ] || fail "E: within the TTL a gone recipient's item waits" "queue=$(qn)"
+ok; [ "$(qn)" = "$((eb + 1))" ] || fail "E: within the TTL a gone recipient's item waits" "queue=$(qn)"
 sleep 1
 FLEET_PEER_QUEUE_TTL=0 PQ drain -L "$L" >/dev/null
 ok; [ "$(qn)" = 0 ] && grep -q '"rid": "r-ghost".*"state": "EXPIRED"' "$BOOK" || fail "E: past the TTL ⇒ dropped, EXPIRED" "queue=$(qn) $(tail -1 "$BOOK")"

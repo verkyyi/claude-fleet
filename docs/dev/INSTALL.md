@@ -76,12 +76,9 @@ For a managed Linux host or a persistent Aliyun ACK node, follow
 [MANAGED-LINUX.md](MANAGED-LINUX.md). It uses the managed installer and
 supervisor; the ACK image owns its runtime version.
 
-Worker hibernation is described in [WORKER-SLEEP.md](WORKER-SLEEP.md). Its scan runs on
-`com.claude-fleet.reconcile` / `claude-fleet-reconcile.timer` (the state-reconcile
-tick) with the other interval daemons in step 6. Its default `FLEET_SLEEP=observe` reports candidates only;
-after validating native sleep/resume, set `FLEET_SLEEP=on` to retain idle workers
-in the dashboard while releasing their agent processes. Existing sessions pick
-up the native Stop evidence writer through `set-claude-state.sh` without restart.
+Worker hibernation was deleted (T548): an idle session stays idle. The
+state-reconcile tick (`com.claude-fleet.reconcile` / `claude-fleet-reconcile.timer`)
+runs with the other interval daemons in step 6.
 
 1. **Preflight.** Run `sh ~/.claude/fleet/bin/fleet-doctor.sh` (or from the repo
    before copying) — it checks tmux ≥ 3.2 · fzf ≥ 0.59 · gh (+ auth) · python3 ·

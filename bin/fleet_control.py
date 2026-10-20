@@ -337,7 +337,7 @@ class Control:
             if row is None:
                 raise Fault("PROTOCOL_ERROR", "Invalid worker inventory")
             parts, extra = row
-            window, issue, scratch, worktree, state, agent, handle, lifecycle, repo = parts
+            window, issue, scratch, worktree, state, agent, handle, _lifecycle, repo = parts
             # A window with no key — a no-repo session, a pinned guide — is listed
             # under its identity (issue #1749): the adapter mints one for every
             # session window, so what the operator's own list shows, the other
@@ -354,7 +354,9 @@ class Control:
                                 window_id=window, issue=number,
                                 repo=repo if repo and repo != "?" else (None if repo else fleet.get("repo")),
                                 scratch=scratch == "1", worktree=worktree, state=state or "unknown",
-                                lifecycle=lifecycle or "awake",
+                                # Column 8 carried hibernation's stamp until T548 (C8);
+                                # kept on the wire, always awake now.
+                                lifecycle="awake",
                                 agent=agent or fleet["agent"], handle=handle, **extra))
         return {"state": "running", "workers": workers, "observed_at": now()}
 
@@ -621,8 +623,6 @@ class Control:
             return self.execute_inject(fleet, matches, params["text"])
         if action == "worker_stop":
             matches, _ = self.target(fleet, key, action)
-            if matches[0]["lifecycle"] != "awake":
-                raise Unattempted("INVALID_STATE", "Worker is hibernating; wake it on the fleet before stopping it")
             code, output, err = self.adapter("stop", fleet["name"], key, timeout=120)
             token = output.decode("utf-8").strip().splitlines()[-1:] or [""]
             if code in (5, 6, 8):
@@ -708,8 +708,6 @@ class Control:
         show the row, and the verdict is the transcript's tool_result. A refusal
         comes back verbatim — its last stderr line is the reason."""
         matches, _ = self.target(fleet, key, "worker_answer")
-        if matches[0]["lifecycle"] != "awake":
-            raise Unattempted("INVALID_STATE", "Worker is hibernating; nothing is asking")
         code, output, err = self.adapter("answer", fleet["name"], key, answer, actor or "hub", timeout=120)
         if code in self.ANSWER_REFUSALS:
             raise Unattempted(self.ANSWER_REFUSALS[code], "Answer refused on the fleet: " + last_line(err))
@@ -727,8 +725,6 @@ class Control:
         ~25 s) and reports through the fleet's alerts, so success here means the
         move started, never that it landed."""
         matches, _ = self.target(fleet, key, "worker_switch")
-        if matches[0].get("lifecycle", "awake") != "awake":
-            raise Unattempted("INVALID_STATE", "Worker is hibernating; wake it on the fleet before switching it")
         window = matches[0].get("window_id", "")
         code, output, err = self.adapter("switch", fleet["name"], window, *([account] if account else []),
                                          timeout=120)
@@ -808,8 +804,6 @@ class Control:
         tens of seconds); a rollback or failure after that raises the transfer's
         own ▲ alert on this machine and its @transfer_note on the row."""
         matches, _ = self.target(fleet, key, "worker_transfer")
-        if matches[0].get("lifecycle", "awake") != "awake":
-            raise Unattempted("INVALID_STATE", "Worker is hibernating; wake it on the fleet before switching its agent")
         window = matches[0].get("window_id", "")
         code, output, err = self.adapter("transfer", fleet["name"], window, matches[0].get("identity") or "", to,
                                          timeout=120)

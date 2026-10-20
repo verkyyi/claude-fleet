@@ -61,7 +61,7 @@ SOCK=$(fleet_socket "$NAME")
 DOWNMAP=''
 if tmux -L "$SOCK" has-session -t "$NAME" 2>/dev/null; then
   # What would stop: every session window (by role, issue #1844), with its state.
-  LIST=$(tmux -L "$SOCK" list-windows -t "$NAME" -F "#{window_name}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|$FLEET_ROLE_FMT" 2>/dev/null \
+  LIST=$(tmux -L "$SOCK" list-windows -t "$NAME" -F "#{window_name}|#{@claude_state}|$FLEET_ROLE_FMT" 2>/dev/null \
          | awk -F'|' "$FLEET_ROLE_AWK"'
              frole($3) == "worker" { printf "  %-28s %s\n", $1, ($2 == "" ? "-" : $2) }')
   N=$(printf '%s' "$LIST" | grep -c .)

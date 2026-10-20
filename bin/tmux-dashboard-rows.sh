@@ -54,7 +54,8 @@ R="${E}0m"; US=$'\x1f'
 # resolves a `#{@…}` format through the window's session when the window has no
 # option of that name, so the per-repo fold set rides the one list-windows call
 # every frame already makes — same value on every line, no extra fork. Both
-# passes name it so nothing lands glued to @sleep_since.
+# passes name it so nothing lands glued to the empty field before it (it carried
+# @sleep_since until hibernation went, T548).
 # A PROXY window (@remote, issue #1424) prints an EMPTY name, so both passes drop
 # it like a nameless line: the machine's own `[mac-a]` row already stands for it.
 # So does the one-session view's local shell (@solo_shell, issue #2566): a
@@ -84,7 +85,7 @@ R="${E}0m"; US=$'\x1f'
 # cache's field 29 (issue #3377); a window here has none.
 _WTEST='#{?@test_identity,,'; _WTEND='}'
 [ "${FLEET_ROWS_TEST:-0}" = 1 ] && { _WTEST=''; _WTEND=''; }
-WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,${_WTEST}#{window_name}${_WTEND}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}${US}#{?@ctx_pct,#{?@ctx_left,#{@ctx_left},#{e|-:100,#{@ctx_pct}}}|#{@ctx_band}|#{@ctx_ts}|#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}|#{@effort},}${US}#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}${US}#{@fleet_id}${US}#{@task}"
+WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,${_WTEST}#{window_name}${_WTEND}}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}${US}#{?@ctx_pct,#{?@ctx_left,#{@ctx_left},#{e|-:100,#{@ctx_pct}}}|#{@ctx_band}|#{@ctx_ts}|#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}|#{@effort},}${US}#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}${US}#{@fleet_id}${US}#{@task}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -111,14 +112,13 @@ FRAME=${SPINF[TICK % 10]}
 # FIVE glyphs, one per thing the operator does about a row (issue #1328 — there
 # were ten, and nobody could keep them apart):
 #
-#   ⠏  working — preparing / waking included: it is busy, not waiting on you
+#   ⠏  working — it is busy, not waiting on you
 #   ↻  turn over, waiting on background work (looping)
 #   !  needs YOU — every @claude_needs kind (ask / perm / blocked / restore /
 #      the classifier's undifferentiated one) AND failed. WHICH kind is said in
 #      words ($ndet below: the hub's act cell, the sidebar's selected-row line);
 #      $2, the @claude_needs subtype (#640), is unchanged and still drives ⌃k
 #   ✓  done
-#   z  asleep — the glyph alone; the hub's act cell still says for how long
 #   ⏏  exited — the agent left; the window waits on its recovery page (issue #1784)
 #
 # Every one is ONE display cell: the row's leading "${gc}${gl}${R} " slot is a
@@ -126,9 +126,7 @@ FRAME=${SPINF[TICK % 10]}
 # emoji here (🔒) would shear every red row.
 state_v() { case "$1" in
   needs)   gc=$RD; gl='!'; rk=0;;
-  sleeping) gc=$GY; gl='z'; rk=1;;
   exited)  gc=$AM; gl='⏏'; rk=1;;
-  preparing|waking) gc=$CY; gl=$FRAME; rk=1;;
   failed) gc=$RD; gl='!'; rk=0;;
   done)    gc=$GN; gl='✓';      rk=1;;
   working) gc=$CY; gl=$FRAME;   rk=2;;
@@ -181,23 +179,6 @@ loop_live_v() { local v="$1" n t g e
     done ;;
   esac
   return 1
-}
-
-# @sleep_since → "z <age>" (issue #1051): how long a sleeping row has slept, so a
-# stale sleeper reads as stale. The epoch is stamped by fleet-sleep.py's phase()
-# — one window option, no sleep-record read per row. m/h/d only, so it fits the
-# 8-cell act column; a missing/garbled stamp leaves the bare `z`. Sets $zage.
-# The field may carry `:cap` (issue #1058: @sleep_wake_deferred rides the same
-# column, so the count stays stable) — an automatic wake waiting for a slot;
-# $zwait is then the row's `z · waiting for a slot` text.
-zage_v() { zage=''; zwait=''
-  case "$1" in *:cap) zwait=$(fleet_ui_t wait_slot) ;; esac
-  set -- "${1%%:*}"
-  case "$1" in ''|*[!0-9]*) return 0;; esac
-  local d=$(( NOW - $1 )); [ "$d" -lt 0 ] && d=0
-  if   [ "$d" -lt 3600 ];  then zage="z $(( d / 60 ))m"
-  elif [ "$d" -lt 86400 ]; then zage="z $(( d / 3600 ))h"
-  else                          zage="z $(( d / 86400 ))d"; fi
 }
 
 # @pin → 0/1 (issue #623). `1` is the ONLY pinned value; anything else — unset,
@@ -575,7 +556,7 @@ fi
 # `scratch-<digits>` test could never match a @worktree-stamped scratch — the
 # #529 blind spot, reopened in pass A only (pass B reads every field by name).
 # $pin (#623) is named for the same reason: this pass needs it; so are @repo/
-# @norepo (#792), which trail WFMT, with a `_` to swallow @sleep_since, and
+# @norepo (#792), which trail WFMT, with a `_` to swallow the empty field, and
 # @repo_fold (#1037) last — the session's folded repo groups, one value on every
 # line of this fleet, taken off the first (panels included: a fleet whose only
 # windows are panels still draws its `(0)` headings, folded or not).
@@ -618,9 +599,8 @@ while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp
   [ -z "$okey" ] && continue
   state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"; seg_v "$rk" "$idx" "$wborn" "$rwid"
   KEYTAB+="$okey"$'\t'"$rk"$'\t'"$seg"$'\t'"$pin"$'\t'"$exp"$'\t'"$rgrp"$'\t'"$origin"$'\n'
-  # rank 1 is "quiet", not "finished" (issue #1331): a sleeper, a waking/preparing
-  # worker, and a `done` window whose @loop still holds a pending round all sort
-  # with done, but only a done window with NO Loop counts toward its parent's k/N.
+  # rank 1 is "quiet", not "finished" (issue #1331): an exited window and a
+  # `done` window whose @loop still holds a pending round sort with done, but only a done window with NO Loop counts toward its parent's k/N.
   [ "$rk" = 1 ] && { [ "$state" != 'done' ] || loop_live_v "$wloop"; } && UNFIN+="$okey"$'\n'
 done <<< "$WLIST"
 
@@ -833,7 +813,7 @@ buf=""
 # frame — every row below is a compare against it, no fork.
 fleet_cfg_expected_load; fleet_cfg_broken_load
 CFG_STALE_T='' CFG_RENEW_T='' CFG_BROKEN_T=''
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wittl wreap wepic wbf wakind wask wctx wman wfid wtask; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo _ _ wloop wtitle wborn wcfg wittl wreap wepic wbf wakind wask wctx wman wfid wtask; do
   [ -z "$name" ] && continue
   # A local window's title slot is its @task_line (issue #2359): the first
   # sentence of a session bound to no issue, the title's fallback below.
@@ -978,9 +958,6 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # No timestamp yet (a window that never took a turn) → a muted dot.
   fleet_reltime "$state_ts" "$NOW"; act=${reltime_out:-}
   acol=$GY; [ -z "$act" ] && act='·'
-  # a sleeper's act cell is how long it has slept (issue #1051), not its last turn
-  zwait=''
-  if [ "$state" = sleeping ]; then zage_v "$slept"; [ -n "$zage" ] && act=$zage; fi
   # WHICH `!` this is (issue #1328): the five needs glyphs are one red `!` now,
   # so the kind moves into words — the hub's act cell, the sidebar's selected-row
   # line. @claude_needs is unchanged; only its display moved. One lookup per
@@ -1423,7 +1400,6 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     else treed=$carg; fi
     label="$dname"
     [ -n "$repod" ] && label="$label $repod"       # cross-repo child (#1031)
-    [ -n "$zwait" ] && label="$label · ${zwait#z · }"
     [ -n "$degd" ] && label="$label $degd"           # #1557: output degenerated, Esc sent
     [ "$depth" -gt "$DEPTH_MAX" ] && depth=$DEPTH_MAX
     # WHY a ↻ row is idle-but-unfinished (issue #1370): the needs field carries
@@ -1525,9 +1501,6 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R}"; dwidth=${#tagd}; }
   [ -n "$kidd" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
                       tagpfx+="${GY}${kidd}${R}"; dwidth=$(( dwidth + ${#kidd} )); }
-  # An automatic wake held at the session limit (issue #1058) says so here.
-  [ -n "$zwait" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
-                       tagpfx+="${AM}${zwait}${R}"; dwidth=$(( dwidth + ${#zwait} )); }
   # 配置旧 (issue #1783), amber, just before the @ mark: the session runs an older
   # configuration than a fresh one would get (fleet_cfg_state above).
   # 待换新 (issue #1895) the same way: same configuration, older fleet version.

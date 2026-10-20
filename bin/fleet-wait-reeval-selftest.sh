@@ -7,7 +7,7 @@
 #   A. children  — an idle `done` parent whose child is unfinished → looping +
 #                  children; every child finished → done, the option removed; a
 #                  grandchild finishing cascades through its parent in one run
-#   B. untouched — working / needs / a sleep transition / a reasonless looping (the
+#   B. untouched — working / needs / a reasonless looping (the
 #                  classifier's screen read) are never rewritten
 #   C. bg        — a Bash-tool job under an idle agent → looping + bg; it ends → done
 #   D. counts    — the summary line (`changed= windows= fleets=`), --dry-run writes
@@ -43,7 +43,7 @@ export CLAUDE_PROJECTS_DIR="$WORK/proj" FLEET_CC_SESSIONS_DIR="$WORK/sessions"
 export FLEET_CLAUDE_COMM="fakeclaude-fleetreeval-$$"
 unset TMUX TMUX_PANE FLEET_MOD FLEET_WAIT_REEVAL
 # A private root (bin/ of symlinks) so the via=reeval log lands in $WORK/root/logs,
-# not the repo's; dotfiles too (fleet-sleep.py loads .fleet-transfer.py).
+# not the repo's; dotfiles too (fleet_worker_life.py loads .fleet-transfer.py).
 for f in "$BIN"/* "$BIN"/.[!.]*; do [ -e "$f" ] && ln -s "$f" "$WORK/root/bin/${f##*/}"; done
 RB="$WORK/root/bin"
 LOGF="$WORK/conf/logs/reconcile.log"
@@ -108,10 +108,6 @@ for st in working needs; do
   eq "B: a $st parent is never rewritten" "$st " "$(sw "$PAR")"
 done
 tf set-window-option -t "$PAR" @claude_state 'done'
-tf set-window-option -t "$PAR" @worker_lifecycle sleeping
-re -- "$SESS" >/dev/null
-eq "B: a window in a sleep transition is left" 'done ' "$(sw "$PAR")"
-tf set-window-option -u -t "$PAR" @worker_lifecycle
 tf set-window-option -t "$K1" @claude_state 'done'
 tf set-window-option -t "$PAR" @claude_state looping
 re -- "$SESS" >/dev/null

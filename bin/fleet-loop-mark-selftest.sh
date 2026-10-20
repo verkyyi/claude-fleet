@@ -108,7 +108,7 @@ assert status('', now=T) == ('none', 'unset')
 with tempfile.TemporaryDirectory() as d:
     (Path(d) / 'loop').mkdir()
     man = str(Path(d) / 'manifest.json')
-    for st, want in (('active', 'active'), ('waiting-quota', 'active'), ('hibernating', 'active'),
+    for st, want in (('active', 'active'), ('waiting-quota', 'active'),
                      ('delivering', 'active'), ('stopped', 'none'), ('complete', 'none')):
         (Path(d) / 'loop/state.json').write_text(json.dumps({'status': st}))
         assert status('', man, T)[0] == want, st

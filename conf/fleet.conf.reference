@@ -311,8 +311,8 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 #FLEET_ROTATE_LEASE_TTL=900
 
 # --- Helper `claude -p` calls carry no MCP (issue #468) -------------------------
-# ON by default, GLOBALLY. A fleet helper `claude -p` (today the sleep digest,
-# bin/fleet-sleep.py; the screen classifier retired in issue #2543, the dash
+# ON by default, GLOBALLY. A fleet helper `claude -p` (the sleep digest until
+# T548; the screen classifier retired in issue #2543, the dash
 # summarizer in #535) left unflagged boots the operator's whole MCP set — 4+ node
 # children, the remote connectors, and a cold `rg` scan: measured at 5.2s and up to
 # 517MB RSS per call. It passes --strict-mcp-config with an empty config (auth and
@@ -817,30 +817,11 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # with nothing beyond the base, else only the window closes. Default 7200 (2h).
 # @label=Cleanup finished sessions with no PR @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_REAP_DONE_NO_PR_SECS=7200
-# Preserve idle workers in their original windows; resume from the sleeping page
-# (see FLEET_SLEEP_WAKE below) or on a due loop / quota / message. Start in
-# observe mode (logs only); on supersedes the idle scratch-window disposal above.
-# Unknown native idle/input/background-task evidence always keeps the agent alive.
-# @label=Worker sleep @group=bridge @tier=advanced @scope=fleet @edit=enum @options=off,observe,on
-#FLEET_SLEEP=observe
-# Continuous idle interval in seconds. Native completion/Stop evidence required;
-# viewed workers, drafts, active jobs and ambiguous transfers prevent sleep.
-# @label=Worker sleep idle grace @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
-#FLEET_SLEEP_AFTER=1800
-# How a sleeping worker wakes when you go to it (issue #1050). confirm (default):
-# arriving, attaching or leaving it on screen only shows its sleeping page; press
-# its Wake button (⏎ or a tap) twice, or pick Wake in the sidebar row menu.
-# dwell: the old behaviour — wake once the window has stayed current for 2s.
-# Automatic wakes (due loop, quota back, incoming message) are unaffected.
-# @label=Worker wake on arrival @group=bridge @tier=advanced @scope=fleet @edit=enum @options=confirm,dwell
-#FLEET_SLEEP_WAKE=confirm
-# Seconds the sleeping page's Wake button stays armed after the first press;
-# the second press must land inside it (and ≥0.3s after the first).
-# @label=Worker wake confirm window @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
-#FLEET_SLEEP_WAKE_ARM=3
-# Comma-separated native MCP server names whose volatile state may be discarded.
-# Empty by default. Exact configured stdio launchers/package entrypoints only;
-# child jobs/browser processes still prevent sleep. Do not list stateful REPLs.
+# Comma-separated native MCP server names whose volatile state may be discarded
+# when a session is continued on a fresh process (a native continuation, a quota
+# move). Empty by default. Exact configured stdio launchers/package entrypoints
+# only; child jobs/browser processes still refuse it. Do not list stateful REPLs.
+# (The name is from worker sleep, which first needed it — gone since T548.)
 # Applies to Claude and Codex workers; a Claude worker's set is the names in its
 # FLEET_MCP_CONFIG (--mcp-config) document, e.g. mcp-image,playwright (#784). A
 # worker without FLEET_MCP_CONFIG also runs the enabled plugins' servers, named

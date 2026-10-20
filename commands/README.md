@@ -61,7 +61,7 @@ kinds**, distinguished by how they are invoked and what they may do:
 
 Everything under *The contract every fleet skill follows* below describes **kind
 A**. Kind B is a versioned prompt, not a playbook: today the daemons carry their
-prompt as a hardcoded heredoc (the sleep digest in `bin/fleet-sleep.py`);
+prompt as a hardcoded heredoc (the sleep digest did, until T548);
 kind B is where those prompts move so they can be reviewed, diffed, and reused.
 
 ### The two contracts a kind-B skill declares

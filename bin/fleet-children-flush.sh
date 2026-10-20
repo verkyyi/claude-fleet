@@ -79,7 +79,7 @@ flush_one() {
     return 0
   }
   pstate=$(tmux -L "$sock" display-message -p -t "$pwin" \
-             '#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}' 2>/dev/null)
+             '#{@claude_state}' 2>/dev/null)
   lock="$dir/.$key.flush.lock"
   fleet_wid_lock "$lock" || { log "$key: another flush holds the lock — next tick"; return 0; }
   args=(digest --dir "$dir" --parent "$key" --batch-secs "$(children_batch_secs)" --parent-state "$pstate")

@@ -9,7 +9,6 @@ or daemon manager is contacted. Exercises the default spinner and shared wait.
 import importlib.util
 import json
 import os
-import re
 from pathlib import Path
 import shutil
 import shlex
@@ -57,11 +56,6 @@ def main():
                    TMPDIR=tmp, PYTHONDONTWRITEBYTECODE='1', PATH=str(root/'shim') + ':' + env['PATH'])
         os.environ.clear()
         os.environ.update(env)
-        # The real navigation condition, with only the outward wake replaced.
-        hook = next(line for line in (BIN.parent / 'conf/tmux-attention.conf').read_text().splitlines()
-                    if line.startswith('set-hook -g client-attached[72] '))
-        hook = re.sub(r'run-shell -b ".*"', 'set-option -g @human_attach 1', hook)
-        (root / 'conf/tmux-attention.conf').write_text(hook + '\n')
         spec = importlib.util.spec_from_file_location('watch', root / 'bin/fleet-render-watch.py')
         w = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(w)
@@ -79,14 +73,12 @@ def main():
         try:
             for label in ('one', 'two'):
                 start(label)
-                tm(label, 'set-window-option', '-t', '@0', '@worker_lifecycle', 'sleeping')
                 tm(label, 'set-environment', '-g', 'DISPLAY', 'keep-server-environment')
             c1, c2, c3 = w.Control('one'), w.Control('two'), w.Control('one')
             controls.extend((c1, c2, c3))
             by_path = {c.path: c for c in controls}
             read = lambda path: by_path[path].command('list-clients', '-F', w.CLIENT_FORMAT)
             assert tm('one', 'show-environment', '-g', 'DISPLAY') == 'DISPLAY=keep-server-environment'
-            assert not tm('one', 'display-message', '-p', '#{@human_attach}'), 'internal attach woke a sleeper'
             assert not w.attached(by_path, read), 'internal control consumers must not be viewers'
             observer = w.Observer()
             reads = []
@@ -122,7 +114,6 @@ def main():
                 return observer.watched([c1, c2])
             until(observed, 1)
             until(lambda: w.attached(by_path, read))
-            assert tm('two', 'display-message', '-p', '#{@human_attach}') == '1'
             human.stdin.close(); human.wait(timeout=2); human = None
             until(lambda: not observed(), 1)
             observer.close()
@@ -151,8 +142,6 @@ def main():
             for c in controls:
                 c.close()
             controls.clear()
-            for label in ('one', 'two'):
-                tm(label, 'set-window-option', '-t', '@0', '@worker_lifecycle', '')
             # Deliver a real subscription event after a window snapshot was
             # read, before the renderer installs it. The stale snapshot must
             # not swallow this newer event now that idle reads back off.

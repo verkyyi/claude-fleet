@@ -9,13 +9,6 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 FLEET_SESSION="${1:?session required}"; shift
 fleet_load_conf "$FLEET_SESSION"
 # FLEET_CLEANUP is switched per repo (issue #978) — in the loop below.
-# Automatic sleep retains idle tasks in their original windows. Do not race its
-# observation/exit policy with the older raw-window disposal timer — but a session
-# that chose WHEN it is closed (@reap_policy, issue #1902) chose it over sleep:
-# with sleep on, only those are considered (--policy-only).
-only=()
-[ "${FLEET_SLEEP:-observe}" != on ] || only=(--policy-only)
-set -- ${only[@]+"${only[@]}"} "$@"
 export FLEET_SESSION
 export FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-300}"
 export FLEET_REAP_IDLE_DONE_MIN="${FLEET_REAP_IDLE_DONE_MIN:-30}"

@@ -626,7 +626,7 @@ def list_agents():
     one_repo = one[0] if len(one) == 1 else ""
     no_repo = not one
     fmt = "#{window_id}\t#{session_name}\t#{window_name}\t#{@issue}\t#{@cc_agent}\t" \
-          "#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}\t#{@claude_needs}\t" \
+          "#{@claude_state}\t#{@claude_needs}\t" \
           "#{@origin}\t#{@repo}\t#{@norepo}\t#{@worktree}\t#{pane_current_path}\t#{@fleet_role}\t#{@fleet_id}"
     out = tmux("list-windows", "-a", "-F", fmt)
     agents = []
@@ -821,7 +821,7 @@ def tool_status(_args):
     if os.environ.get("TMUX") and pane:
         window = run(["tmux", "display-message", "-p", "-t", pane,
                       "window #{window_name} · issue=#{@issue} repo=#{@repo} state=#{@claude_state} "
-                      "lifecycle=#{@worker_lifecycle} origin=#{@origin}"],
+                      "origin=#{@origin}"],
                      check=False, timeout=STATUS_TIMEOUT_S).stdout.strip() or None
     kids = script([str(BIN / "fleet-children.sh")], STATUS_TIMEOUT_S)
     repos, listed = hosted_repos()
@@ -1214,8 +1214,8 @@ TOOLS = {
         "description": "When the fleet may close THIS session on its own (bin/fleet-reap-policy.sh set; issue "
                        "#1902): merged (after its PR merged + the fleet's grace) · merged:48h (keep it 48 hours "
                        "after the merge, e.g. to wait for a read-back) · done:15m (its turn over and idle 15 minutes) "
-                       "· loop-end (once its /loop stops) · at:18:00 or at:<ISO time> · keep (never; it may still "
-                       "sleep). Every automatic close records history first and keeps unpushed work. Exit 0 set, "
+                       "· loop-end (once its /loop stops) · at:18:00 or at:<ISO time> · keep (never). "
+                       "Every automatic close records history first and keeps unpushed work. Exit 0 set, "
                        "2 not a policy, 1 no window.",
         "inputSchema": {"type": "object", "properties": {"policy": REAP_POLICY},
                         "required": ["policy"], "additionalProperties": False}}),

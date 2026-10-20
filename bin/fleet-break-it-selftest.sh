@@ -312,7 +312,7 @@ printf '%s|%s\n' "\$PWD" "\$*" >> "$WORK/claude-argv"
 printf '────────\n❯ \n────────\n'; exec sleep 600
 EOF
 chmod +x "$WORK/tbin/tmux" "$WORK/tbin/claude"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-hook-personal.sh fleet_repo_authority.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
+for f in fleet-session-wrap.sh fleet-session-page.py fleet-hook-personal.sh fleet_repo_authority.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/recycled"\n' "$WORK" > "$WORK/wbin/session-end-hook.sh"
 cat > "$WORK/fake-agent" <<'EOF'
 #!/bin/bash
@@ -1116,7 +1116,7 @@ drill_doctor_stricter_rollback() {
     export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
     export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
     c="$d/c"; git clone -q "$d/origin.git" "$c" 2>/dev/null
-    printf '[ -f "${FLEET_CONF_DIR:-}/logs/old-evidence" ] && echo "  FAIL  state    sleep judgments (last hour): wrong fleet x784"\nexit 0\n' > "$c/bin/fleet-doctor.sh"
+    printf '[ -f "${FLEET_CONF_DIR:-}/logs/old-evidence" ] && echo "  FAIL  state    hub-sessions cache 12499s (old evidence)"\nexit 0\n' > "$c/bin/fleet-doctor.sh"
     git -C "$c" add -A && git -C "$c" commit -qm three && git -C "$c" push -q origin master
     git --git-dir="$d/origin.git" update-ref refs/tags/stable master
   ) >/dev/null 2>&1
@@ -4380,7 +4380,7 @@ drill_cross_send_refused_unseen() {
 
 # A migrate opened the new window with its identity but not its @fleet_role /
 # @reap_policy; and a window with no policy bound to a closed ticket was «never»
-# — under FLEET_SLEEP=on not even looked at (#2970).
+# — under worker sleep (gone since T548) not even looked at (#2970).
 drill_migrate_loses_policy() {
   CAP=10; local t0 out
   t0=$(now)

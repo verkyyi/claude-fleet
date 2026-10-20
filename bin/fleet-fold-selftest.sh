@@ -2,12 +2,12 @@
 # fleet-fold-selftest.sh — fleet-repo.sh fold (issue #796): move a one-repo fleet
 # into another, then retire it. Two sandbox fleets, each on its OWN socket:
 #   A (target, hosts o/a) and B (source, hosts o/b) with a dash panel,
-#   idle workers (issue-12, scratch-4, needs/blocked issue-15), a hibernating one (issue-14),
+#   idle workers (issue-12, scratch-4, issue-14, needs/blocked issue-15),
 #   a busy one (issue-13) and a plain window with no worker binding.
 #   1. --dry-run prints the plan (carry / WARN / per-window action / retire: NO)
 #      and changes NOTHING: no overlay, no stop/restore/down call, B untouched.
 #   2. the real run prints the SAME plan, adds o/b with the carried keys, moves the
-#      idle + hibernating workers into A with @repo=o/b, leaves the busy and the
+#      idle workers into A with @repo=o/b, leaves the busy and the
 #      unbound window in B, and does NOT retire B (exit 1, conf in place).
 #   3. with those settled, a re-run keeps the overlay as is, --wait moves the
 #      worker that goes idle mid-wait, then fleet-down B and ARCHIVE its conf dir.
@@ -65,10 +65,10 @@ has()  { case "$2" in *"$3"*) ;; *) fail "$1: [$3] not in: $2" ;; esac; }
 hasnt(){ case "$2" in *"$3"*) fail "$1: [$3] unexpectedly in: $2" ;; esac; }
 leg()  { if [ "$FAILS" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi; _legf=$FAILS; }
 
-# ---- sandbox bin/: the real scripts, with the four movers stubbed ----------
+# ---- sandbox bin/: the real scripts, with the three movers stubbed ---------
 for f in "$BIN"/*; do ln -s "$f" "$WORK/sbin/$(basename "$f")"; done
 rm -f "$WORK/sbin/fleet-worker-stop.sh" "$WORK/sbin/dash-restore-session.sh" \
-      "$WORK/sbin/fleet-sleep.sh" "$WORK/sbin/fleet-down.sh"
+      "$WORK/sbin/fleet-down.sh"
 # stop <sess> <key>: the worker windows are NAMED by their key here.
 cat > "$WORK/sbin/fleet-worker-stop.sh" <<'EOF'
 #!/bin/bash
@@ -90,18 +90,13 @@ case "$k" in
 esac
 tmux -L "$2" set -w -t "$w" @repo "$4"
 EOF
-cat > "$WORK/sbin/fleet-sleep.sh" <<'EOF'
-#!/bin/bash
-printf 'sleep %s\n' "$*" >> "$CALLS"
-[ "$1" = wake ] && tmux -L "$2" set -wu -t "$3" @worker_lifecycle
-EOF
 cat > "$WORK/sbin/fleet-down.sh" <<'EOF'
 #!/bin/bash
 printf 'down %s\n' "$*" >> "$CALLS"
 tmux -L "$1" kill-session -t "=$1"
 EOF
 chmod +x "$WORK/sbin"/fleet-worker-stop.sh "$WORK/sbin"/dash-restore-session.sh \
-         "$WORK/sbin"/fleet-sleep.sh "$WORK/sbin"/fleet-down.sh
+         "$WORK/sbin"/fleet-down.sh
 FR="$WORK/sbin/fleet-repo.sh"
 
 mkrepo() { git init -q "$1" && git -C "$1" remote add origin "https://github.com/$2.git"; }
@@ -138,7 +133,7 @@ bwin() {  # bwin <name> <opt=val>... — a window of B, with its options
 bwin issue-12  @issue=12 @claude_state=done >/dev/null
 bwin scratch-4 @raw=1 @worktree=/wt/b-scratch-4 @claude_state=idle >/dev/null
 W13=$(bwin issue-13 @issue=13 @claude_state=working)
-bwin issue-14  @issue=14 @worker_lifecycle=sleeping >/dev/null
+bwin issue-14  @issue=14 @claude_state=done >/dev/null
 bwin notes >/dev/null
 bwin issue-15 @issue=15 @claude_state=needs @claude_needs=blocked >/dev/null
 bnames() { TB list-windows -t "=$B" -F '#{window_name}' 2>/dev/null | sort | tr '\n' ' '; }
@@ -189,7 +184,7 @@ has "dry sleep"   "$dry" "carry:   FLEET_SLEEP_MCP_RESTARTABLE=\"plugin:playwrig
 has "dry warn"    "$dry" "not carried: FLEET_MAX_SESSIONS: $B=\"4\" $A=\"8\""
 hasnt "dry same"  "$dry" "FLEET_SESSION_BANNER"
 for row in "panel    -           dash —" "move     issue-12" \
-           "move     scratch-4" "move     issue-15    issue-15 — needs/blocked" "left     issue-13" "wake     issue-14" "left     -           notes —"; do
+           "move     scratch-4" "move     issue-15    issue-15 — needs/blocked" "left     issue-13" "move     issue-14" "left     -           notes —"; do
   has "dry row [$row]" "$dry" "$row"
 done
 has "dry retire"  "$dry" "retire:  NO — 2 window(s) stay in $B"
@@ -202,7 +197,7 @@ eq "dry side untouched" "$(side_left "$B" | grep -c .)" "$SIDE_B"
 eq "dry B untouched" "$(bnames)" "$B_BEFORE"
 leg "1 dry run = plan only"
 
-# ---- 2. real run: same plan, moves the idle + hibernating, B stays -----------
+# ---- 2. real run: same plan, moves the idle ones, B stays -------------------
 real=$(bash "$FR" fold "$B" --into "$A" 2>&1); rc=$?
 eq "real rc (not retired)" "$rc" 1
 eq "real plan = dry run" "$(printf '%s\n' "$real" | head -n "$(printf '%s\n' "$dry" | wc -l)")" "$dry"
@@ -214,14 +209,13 @@ eq "real overlay model get" "$(fleet_repo_conf_get "$A" o/b FLEET_MODEL)" "opus"
 eq "real fleet model kept" "$(fleet_repo_conf_get "$A" o/a FLEET_MODEL)" "fable"
 eq "A windows" "$(anames)" "dash| issue-12|o/b issue-14|o/b issue-15|o/b scratch-4|o/b "
 eq "B windows" "$(bnames)" "dash issue-13 notes "
-has "wake before stop" "$(cat "$CALLS")" "sleep wake $B"
 has "restore scratch"  "$(cat "$CALLS")" "restore landed:scratch:scratch-4 $A --repo o/b"
 has "restore issue"    "$(cat "$CALLS")" "restore landed:issue:12 $A --repo o/b"
 hasnt "no down"        "$(cat "$CALLS")" "down "
 has "real says not retired" "$real" "$B NOT retired — 2 session(s)"
 [ -f "$FLEET_CONF_DIR/fleets/$B/conf" ] || fail "B's conf gone before retire"
 eq "not retired: side untouched" "$(side_left "$B" | grep -c .)" "$SIDE_B"
-leg "2 real run moves idle + hibernating, leaves busy + unbound"
+leg "2 real run moves the idle, leaves busy + unbound"
 
 # ---- 3. re-run with --wait: issue-13 finishes mid-wait → moved, B retired -----
 TB kill-window -t "=$B:notes"

@@ -3009,40 +3009,10 @@ else
   esac
   pass state "state reconcile ${rhb_age}s ago — $(rhb_get working) working window(s) checked against native idle, $(rhb_get demoted) demoted; rung_health: ${rung_n} contradiction(s) in reconcile.log, ${rung_live} live$rhb_cov$rhb_note"
 fi
-# The sleep-judgment distribution over the last hour (#837). Every scan record now
-# carries an `at` timestamp (#838), so the histogram the 2026-09-19 analysis built
-# by hand is a line here: without the number, the next approach to the ceiling is a
-# manual hunt across the whole log (the same reasoning as `over=` in #653). Info
-# only — a distribution is never a pass/fail (one exception: a `wrong fleet`
-# majority, issue #2622); the read is tail-bounded. FLEET_DOCTOR_SINCE=<epoch>
-# (install-sync's doctor after a switch, issue #2655) moves the window's start up
-# to then: what the OLD version's sleep judge wrote is not the new one's verdict.
-slog="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/sleep.log"
+# FLEET_DOCTOR_SINCE=<epoch> (install-sync's doctor after a switch, issue #2655)
+# moves a windowed row's start up to then: what the OLD version's daemons wrote
+# is not the new one's verdict.
 _dsince="${FLEET_DOCTOR_SINCE:-}"; case "$_dsince" in *[!0-9]*) _dsince='' ;; esac
-if [ -f "$slog" ] && command -v python3 >/dev/null 2>&1; then
-  sdist=$(tail -n 6000 "$slog" 2>/dev/null | FLEET_DOCTOR_SINCE="$_dsince" python3 -c '
-import os, sys, json, time, collections
-since = max(time.time() - 3600, float(os.environ.get("FLEET_DOCTOR_SINCE") or 0))
-cut = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(since))
-c = collections.Counter(); n = 0
-for line in sys.stdin:
-    line = line.strip()
-    if not line.startswith("{"): continue
-    try: d = json.loads(line)
-    except ValueError: continue
-    if d.get("at", "") < cut: continue           # pre-#838 records have no `at`
-    c[d.get("skip") or ("state:" + d.get("state", "?"))] += 1; n += 1
-if n:
-    top = ", ".join("%s x%d" % (k[:44], v) for k, v in c.most_common(5))
-    # issue #2622: a majority of `wrong fleet` is the judge refusing the fleet
-    # itself (a view session misread as another fleet), never a distribution.
-    print(("FAIL " if 2 * c["wrong fleet"] > n else "") + "%d judgments/hr across %d reasons; top: %s" % (n, len(c), top))
-' 2>/dev/null)
-  case "$sdist" in
-    "FAIL "*) fail state "sleep judgments (${_dsince:+since the switch, }last hour): ${sdist#FAIL } — most windows judged \`wrong fleet\`: the sleep judge cannot see this fleet's windows, nothing can sleep" ;;
-    ?*) pass state "sleep judgments (${_dsince:+since the switch, }last hour): $sdist" ;;
-  esac
-fi
 # Who the sidebar asks the cross-machine hub as (issue #1475): your connection
 # certificate, else the viewer token, else nobody — and then no other machine's
 # session ever shows. Only with the hub module on; a one-machine fleet says nothing.

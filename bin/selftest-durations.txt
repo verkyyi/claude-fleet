@@ -388,9 +388,6 @@
 5.3 fleet-session-shell-agent-selftest.sh
 7.4 fleet-sessions-snapshot-selftest.sh
 3.4 fleet-show-selftest.sh
-19.0 fleet-sleep-selftest.sh#1
-35.7 fleet-sleep-selftest.sh#2
-22.9 fleet-sleep-selftest.sh#3
 0.2 fleet-spotlight-selftest.sh
 0.2 fleet-src-digest-selftest.sh
 13.8 fleet-stable-selftest.sh
@@ -519,12 +516,10 @@
 0.2 session-cap-agent-selftest.sh
 8.1 session-cred-selftest.sh
 10.7 session-end-hook-selftest.sh
-0.3 session-slots-sleep-selftest.sh
 2.5 session-title-selftest.sh
 0.6 session-tokens-selftest.sh
 30.9 session-wrap-selftest.sh
 0.0 sidebar-machine-tag-selftest.sh
-0.1 sidebar-sleep-selftest.sh
 3.4 site-build-selftest.sh
 0.5 skill-tools-selftest.sh
 1.9 spawn-origin-gate-selftest.sh

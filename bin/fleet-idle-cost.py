@@ -262,7 +262,8 @@ class IdleGuard:
                 # FLEET_ROLE_AWK, for windows predating role stamps.
                 worker = role == "=worker" or (not role.startswith("=") and
                                                role not in {"home", "plan", "dash", "backlog"})
-                if worker and life not in {"sleeping", "remote"}:
+                # the 6th field is @remote (it carried hibernation's stamp until T548)
+                if worker and not life:
                     rows[(sock, wid)] = (state, changed, life, server)
         return rows
 
@@ -280,7 +281,7 @@ class IdleGuard:
         activity = st.st_mtime_ns
         rows = self.local()
         return {"ts": time.time(), "working": sum(v[0] == "working" for v in rows.values()),
-                "unknown": any(not v[0] or v[2] in {"preparing", "waking"} for v in rows.values()),
+                "unknown": any(not v[0] for v in rows.values()),
                 "changed": max([float(v[1] or 0) for v in rows.values()] or [0]),
                 "activity": activity}
 
@@ -338,7 +339,7 @@ class IdleGuard:
         if own and self.self_activity == (
                 self.activity_dir + caller[0] + "/" + own[3] + "/" + caller[1]):
             rows.pop(caller)
-        working = sum(v[0] == "working" or v[2] in {"preparing", "waking"} for v in rows.values())
+        working = sum(v[0] == "working" for v in rows.values())
         if working:
             return "working: %s session(s)" % working
         if any(not v[0] for v in rows.values()):

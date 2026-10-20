@@ -2,7 +2,7 @@
 # helper-auth-selftest.sh — a fleet helper `claude -p` must ride the account POOL
 # (issue #497).
 #
-# The sleep digest (bin/fleet-sleep.py) shells out to `claude -p` through
+# The sleep digest (until T548) shelled out to `claude -p` through
 # fleet_helper_claude_auth; the screen classifier that first needed this wire
 # retired with issue #2543. Every WORKER runs on a pool token
 # (bin/fleet-claude.sh exports CLAUDE_CODE_OAUTH_TOKEN before exec'ing claude); the

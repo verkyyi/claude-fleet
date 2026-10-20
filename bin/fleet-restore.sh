@@ -164,7 +164,7 @@ snapshot_unchanged() {
   local sdir n=0 kept='' every="${FLEET_RESTORE_SNAPSHOT_EVERY:-5}"
   case "$every" in ''|*[!0-9]*) every=5 ;; esac
   sdir="$(fleet_state_dir "$1")"
-  SNAP_KEY=$(tmux -L "$2" list-panes -s -t "$1" -F '#{window_id}|#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},#{@repo}}|#{?@remote,,#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{?@codex_identity,#{@codex_identity},#{@codex_pending}}|#{@desk}|#{@origin_wid}|#{@pin}|#{@hub}|#{@launch}|#{@launch_receipt}|#{@native_worktree}|#{@authority_receipt}' 2>/dev/null) || { SNAP_KEY=''; return 1; }
+  SNAP_KEY=$(tmux -L "$2" list-panes -s -t "$1" -F '#{window_id}|#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},#{@repo}}|#{?@remote,,#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}||#{?@codex_identity,#{@codex_identity},#{@codex_pending}}|#{@desk}|#{@origin_wid}|#{@pin}|#{@hub}|#{@launch}|#{@launch_receipt}|#{@native_worktree}|#{@authority_receipt}' 2>/dev/null) || { SNAP_KEY=''; return 1; }
   [ -n "$SNAP_KEY" ] && [ -f "$sdir/restore.map" ] || return 1
   { IFS= read -r n; IFS= read -r -d '' kept; } < "$sdir/.snapshot-key" 2>/dev/null
   case "$n" in ''|*[!0-9]*) return 1 ;; esac
@@ -308,7 +308,7 @@ snapshot() {
       rm -f "$tmp"
       return 1
     fi
-    { tmux -L "$sock" list-windows -t "$sess" -F "#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{?@codex_identity,#{@codex_identity},#{@codex_pending}}' 2>/dev/null
+    { tmux -L "$sock" list-windows -t "$sess" -F "#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}||#{?@codex_identity,#{@codex_identity},#{@codex_pending}}' 2>/dev/null
       [ -n "$spath" ] && printf '||||__HUB__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid --fid --reap --launch-map "$tmp" \
           ${priormap:+--prior-map "$priormap"} >> "$tmp" 2>/dev/null
@@ -459,7 +459,7 @@ pullback_file() { printf '%s/pullback.map' "$(fleet_state_dir "$1")"; }
 # pullback_scan <sess> <sock> <map> — append the vanished, unfinished, unretired
 # sessions of <map> to fleets/<sess>/pullback.map (FID + WIN rows, once each).
 pullback_scan() {
-  local sess="$1" sock="$2" mf="$3" live pb line fid wtag wname wpath wsid wstate wsleep
+  local sess="$1" sock="$2" mf="$3" live pb line fid wtag wname wpath wsid wstate
   [ "${FLEET_PULLBACK:-1}" = 0 ] && return 0
   [ -f "$mf" ] && grep -q '^FID' "$mf" 2>/dev/null || return 0
   # Every session on this server. An empty read is a transient, never "all killed".
@@ -485,11 +485,10 @@ pullback_scan() {
     fid=${wtag#WIN:}
     [ "$fid" != "$wtag" ] && fleet_is_fid "$fid" || continue   # no identity: never
     printf '%s\n' "$live" | grep -qxF "$fid" && continue
-    IFS=$'\t' read -r _ wname wpath wsid _ wstate _ _ _ _ _ _ _ _ wsleep _ <<<"$line"
+    IFS=$'\t' read -r _ wname wpath wsid _ wstate _ <<<"$line"
     echo "$wname" | grep -qE "$PANEL_RE" && continue
     [ -n "$wsid" ] && [ "$wsid" != - ] && printf '%s\n' "$lsid" | grep -qxF "$wsid" && continue
     case "$wstate" in done|exited) continue ;; esac            # finished: stays closed
-    [ -z "$wsleep" ] || [ "$wsleep" = - ] || continue           # a sleeper has its record
     fleet_fid_retired "$fid" && continue                        # the fleet closed it
     [ -d "$wpath" ] || continue
     grep -qxF "$(printf 'FID\t%s' "$fid")" "$pb" 2>/dev/null && continue
@@ -641,8 +640,8 @@ restore() {
     # map for completeness but restore does not replay them (see the re-stamp
     # note below). `reopened` tracks whether the reconcile path (issue #160)
     # actually had a window to reopen, for the "fully up" note after the loop.
-    local wname wpath wid wissue wstate wagent whome wmanifest wraw wsleep wrepo reopened=0
-    while IFS=$'\t' read -r wtag wname wpath wid wissue wstate _ _ worigin wagent whome _ wmanifest wraw wsleep wrepo; do
+    local wname wpath wid wissue wstate wagent whome wmanifest wraw wrepo reopened=0
+    while IFS=$'\t' read -r wtag wname wpath wid wissue wstate _ _ worigin wagent whome _ wmanifest wraw _ wrepo; do
       [ -z "$wname" ] && continue
       # A no-repo session (issue #789) lives in $HOME, not a worktree: its transcript
       # belongs to $HOME's project dir, so it resumes there whatever its cwd was.
@@ -727,8 +726,7 @@ restore() {
       # say whether the id came from the pane's own hook, and a hook-recorded short
       # session is still that window's conversation — the snapshot applied `thin`
       # to its guesses already.
-      if [ "$wagent" != codex ] && [ -n "$wid" ] && [ "$wid" != - ] \
-         && { [ -z "$wsleep" ] || [ "$wsleep" = - ]; }; then
+      if [ "$wagent" != codex ] && [ -n "$wid" ] && [ "$wid" != - ]; then
         local tdir; tdir=$(fleet_transcript_dir "$wpath")
         if fleet_is_helper_transcript "$tdir/$wid.jsonl" && [ "$FLEET_HELPER_REASON" = marker ]; then
           local repick skips
@@ -780,8 +778,7 @@ restore() {
       # quoted for the shell since it is the person's text. Nothing pending → a
       # plain resume, exactly as before.
       local loopq=''
-      if [ "$wstate" = looping ] && [ "$wagent" != codex ] && [ -n "$wid" ] && [ "$wid" != - ] \
-         && { [ -z "$wsleep" ] || [ "$wsleep" = - ]; }; then
+      if [ "$wstate" = looping ] && [ "$wagent" != codex ] && [ -n "$wid" ] && [ "$wid" != - ]; then
         local loopline sq="'" esc="'\\''"
         loopline=$(python3 "$BIN/fleet_loop_mark.py" rearm --transcript "$(fleet_transcript_dir "$wpath")/$wid.jsonl" 2>/dev/null)
         if [ -n "$loopline" ]; then
@@ -830,11 +827,6 @@ restore() {
         kind=awaiting
         cmd='exec "$SHELL"'
         say "    ⏸ $wname → awaiting you (no transcript found) — not starting a fresh $agent_label"
-      fi
-      if [ -n "$wsleep" ] && [ "$wsleep" != - ]; then
-        kind=sleeping
-        cmd='exec "$SHELL"'
-        say "    z $wname → retained sleeping worker"
       fi
       # The window stamps its repo identity BEFORE its launcher reads the conf (issue
       # #789): a no-repo session; else @worktree (+ @repo when the row carries it —
@@ -890,17 +882,6 @@ restore() {
         local nw
         nw=$(tmux -L "$sock" new-window -t "$sess:" -n "$wname" -c "$wpath" -P -F '#{window_id}' "$cmd" 2>/dev/null)
         [ -z "$nw" ] && nw="$sess:$wname"   # fall back to name if -P yielded nothing
-        if [ -n "$wsleep" ] && [ "$wsleep" != - ]; then
-          tmux -L "$sock" set-option -w -t "$nw" @worktree "$wpath"
-          tmux -L "$sock" set-option -w -t "$nw" @cc_agent "${wagent:-claude}"
-          if [ "$wraw" = 1 ]; then tmux -L "$sock" set-option -w -t "$nw" @raw 1
-          else tmux -L "$sock" set-option -w -t "$nw" @issue "$wissue"; fi
-          python3 "$BIN/fleet_worker_life.py" restore --session "$sess" "$nw" --record "$wsleep" || {
-            tmux -L "$sock" set-option -w -t "$nw" @worker_lifecycle failed
-            say "    ⚠ sleep restore failed; record retained: $wsleep"
-          }
-        fi
-
         [ -n "$wissue" ] && [ "$wissue" != "-" ] \
           && tmux -L "$sock" set-window-option -t "$nw" @issue "$wissue" 2>/dev/null
         # The session's lifelong identity (issue #1646), as the snapshot saw it —
@@ -997,10 +978,6 @@ restore() {
             OSEQ=$((OSEQ + 1))
             mark_outcome "$OSEQ" "$sock" "$nw" "$sess" "$wname" awaiting \
               "no transcript — fleet-restore.sh --fresh $wname --session $sess" ;;
-          sleeping)
-            OSEQ=$((OSEQ + 1))
-            OUTCOMES="$OUTCOMES$OSEQ	$sess	$wname	sleeping	sleep record restored
-" ;;
         esac
       fi
     done < <(fleet_restore_wins <(fleet_restore_map_prune "$mf"))

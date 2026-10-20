@@ -387,7 +387,7 @@ fleet_model_limited_until() {
 }
 
 # --- helper `claude -p` auth: ride the account POOL, not the ambient login (#497)
-# A fleet helper `claude -p` (today the sleep digest, bin/fleet-sleep.py; the screen
+# A fleet helper `claude -p` (the sleep digest used it until T548; the screen
 # classifier that first needed this wire retired in issue #2543, the dash summarizer
 # in #535). Left bare, that call authenticates from the machine's
 # AMBIENT login — the macOS Keychain entry / ~/.claude credentials — which is a
@@ -3099,22 +3099,6 @@ fleet_hub_pane() {
     | awk '$2=="1"{print $1; exit}'
 }
 
-# Retire a SLEEPING worker's sleep record before its window is killed (issue
-# #1244). A sleeper is reaped WITHOUT a wake — its pane is the park page, no agent
-# — so the record must stop describing a retained worker, or a crash-restore could
-# resurrect a window whose worktree the reap just removed. A non-sleeper is a
-# no-op (rc 0). rc 1 = the record could not be retired (a wake raced us, the lock
-# is held, the original agent is somehow alive) — the caller must NOT kill.
-# Args: <@window-id> <fleet-session>
-fleet_sleep_dispose() {
-  local _win="${1:-}" _sess="${2:-}" _life _bin
-  [ -n "$_win" ] && [ -n "$_sess" ] || return 0
-  _life=$(tmux -L "$(fleet_socket "$_sess")" display-message -p -t "$_win" '#{@worker_lifecycle}' 2>/dev/null) || return 0
-  [ "$_life" = sleeping ] || return 0
-  _bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
-  python3 "$_bin/fleet_worker_life.py" dispose --session "$_sess" "$_win" >/dev/null
-}
-
 # The "clean + merged?" gate shared by the worktree janitor (worktree-autoclean.sh)
 # and the dash reaper (dash-reap.sh) — ONE source for identical guarantees. Given a
 # worktree, decides whether it is safe to auto-remove. Prints a reason token on
@@ -3651,7 +3635,7 @@ EOF
 # it. tmux 3.4 (the Linux CI runner) sometimes never handles SIGCHLD for a pane
 # process, so an agent that quit on /exit lingers as `Z` for 40s+ and every
 # `kill -0` wait times out on a process that is already gone (issue #842, same
-# root as #781's `source_alive` in fleet_worker_life.py). A zombie is exited. Only a
+# root as #781's sleep-record check, retired with T548). A zombie is exited. Only a
 # positive `Z` reads as exited: a failed `ps` keeps the kill -0 answer (alive),
 # so a caller that launches a replacement on "exited" can never be told so early.
 fleet_pid_alive() {
@@ -8057,21 +8041,17 @@ fleet_hub_sessions() {
 # dash/plan/backlog are panels — everything else is a Claude working session
 # (the same rule the dashboard uses). Pure tmux + awk, no git/tmux-per-window
 # forks. Prints an integer (0 if tmux isn't running or no fleets are up).
-# A hibernated worker holds NO slot (issue #1058): a window whose
-# @worker_lifecycle is `sleeping` or `failed` has no live agent, so it is left out
-# and tallied apart — `fleet_session_sleepers` prints that tally (the slots chip's
-# `· z8`). preparing / waking still count: the agent is (about to be) live.
-# The lifecycle rides as a trailing ` @L=<value>` field, because a window NAME may
-# itself hold spaces; a reader that never sees the field (no sleepers, an old
-# server) counts exactly as before. A PROXY window onto another machine's session
-# (@remote, issue #1424) rides the same field as `remote` and is no session here.
+# A PROXY window onto another machine's session (@remote, issue #1424) rides a
+# trailing ` @L=remote` field (a window NAME may itself hold spaces) and is no
+# session here. (The field carried a hibernated worker's lifecycle stamp until
+# hibernation went with T548, C8; an old window's value is read as empty.)
 # A window with NO agent in it holds no slot either (issue #2404): the wrapper gone
 # (a launch that never came up fell to the caller's `exec $SHELL`), the pane dead,
 # or the session on its recovery page (`exited`) — FLEET_AGENT_FMT's `@A=0`. On
 # 2026-10-07 three such shells filled a login's 4/4 and refused the one real
-# start. A preparing / waking window still counts (its agent is on its way).
-_fleet_session_tally() {   # → "<awake> <sleepers>" across every fleet
-  fleet_list_windows_all "#{session_name} $FLEET_ROLE_FMT @A=$FLEET_AGENT_FMT @L=#{?@remote,remote,#{@worker_lifecycle}}" | awk "$FLEET_ROLE_AWK"'
+# start.
+_fleet_session_tally() {   # → "<awake>" across every fleet
+  fleet_list_windows_all "#{session_name} $FLEET_ROLE_FMT @A=$FLEET_AGENT_FMT @L=#{?@remote,remote,}" | awk "$FLEET_ROLE_AWK"'
     { rows[NR]=$0; r=frole($2); if (r=="home" || r=="panel") fleet[$1]=1 }
     END {
       for (i=1; i<=NR; i++) {
@@ -8079,43 +8059,39 @@ _fleet_session_tally() {   # → "<awake> <sleepers>" across every fleet
         if (n>=3 && a[n] ~ /^@L=/) l=substr(a[n], 4)
         if (n>=4 && a[n-1] ~ /^@A=/) ag=substr(a[n-1], 4)
         if (!fleet[s] || w!="worker" || l=="remote") continue
-        if (l=="sleeping" || l=="failed") z++
-        else if (ag!="0" || l=="preparing" || l=="waking") c++
+        if (ag!="0") c++
       }
-      print c+0, z+0
+      print c+0
     }'
 }
-fleet_session_count() { local t; t=$(_fleet_session_tally); printf '%s\n' "${t%% *}"; }
-fleet_session_sleepers() { local t; t=$(_fleet_session_tally); printf '%s\n' "${t##* }"; }
+fleet_session_count() { _fleet_session_tally; }
 
 # CHEAP: count the live Claude WORKING-session windows in ONE fleet session (the
 # per-fleet analogue of fleet_session_count, for issue #70's FLEET_MAX_SESSIONS).
 # Only counts if the session is a real fleet (owns a 'plan'/'dash' hub window);
 # inside it, dash/plan/backlog are panels, everything else is a working session —
 # the same rule the dashboard and the global count use. Prints an integer (0 if
-# the session isn't a fleet, doesn't exist, or tmux isn't running). Sleeping /
-# failed workers are left out the same way (issue #1058).
+# the session isn't a fleet, doesn't exist, or tmux isn't running).
 # NB: the role rule (home/panel = hub, only worker counts; FLEET_ROLE_FMT, #1844)
-# AND the sleeping/failed rule are duplicated in _fleet_session_tally above — keep BOTH in sync, or the global and
+# AND the agent/remote rule are duplicated in _fleet_session_tally above — keep BOTH in sync, or the global and
 # per-fleet caps count different sets.
-_fleet_session_tally_for() {   # <sess> → "<awake> <sleepers>" in that fleet
-  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "$FLEET_ROLE_FMT @A=$FLEET_AGENT_FMT @L=#{?@remote,remote,#{@worker_lifecycle}}" 2>/dev/null | awk "$FLEET_ROLE_AWK"'
+_fleet_session_tally_for() {   # <sess> → "<awake>" in that fleet
+  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "$FLEET_ROLE_FMT @A=$FLEET_AGENT_FMT @L=#{?@remote,remote,}" 2>/dev/null | awk "$FLEET_ROLE_AWK"'
     { l=""; ag=1; t=$0
       if (match(t, / @L=[^ ]*$/)) { l=substr(t, RSTART+4); t=substr(t, 1, RSTART-1) }
       if (match(t, / @A=[^ ]*$/)) { ag=substr(t, RSTART+4); t=substr(t, 1, RSTART-1) }
       role=frole(t)
       if (role=="home" || role=="panel") hub=1; rows[NR]=role; life[NR]=l; agent[NR]=ag }
     END {
-      if (!hub) { print 0, 0; exit }
+      if (!hub) { print 0; exit }
       for (i=1; i<=NR; i++) {
         if (rows[i]!="worker" || life[i]=="remote") continue
-        if (life[i]=="sleeping" || life[i]=="failed") z++
-        else if (agent[i]!="0" || life[i]=="preparing" || life[i]=="waking") c++
+        if (agent[i]!="0") c++
       }
-      print c+0, z+0
+      print c+0
     }'
 }
-fleet_session_count_for() { local t; t=$(_fleet_session_tally_for "$1"); printf '%s\n' "${t%% *}"; }
+fleet_session_count_for() { _fleet_session_tally_for "$1"; }
 
 # fleet_window_has_agent <window> [socket] — rc 0 while an agent runs (or is on
 # its way) in <window>, rc 1 when nothing does: the wrapper gone (@wrap_gone, a
@@ -8127,11 +8103,10 @@ FLEET_AGENT_FMT='#{?#{pane_dead},0,#{?#{@wrap_gone},0,#{?#{==:#{@claude_state},e
 fleet_window_has_agent() {
   local a
   # #{window_id} first: tmux answers an unknown target with empty formats, rc 0.
-  if [ -n "${2:-}" ]; then a=$(tmux -L "$2" display-message -p -t "$1" "#{window_id} $FLEET_AGENT_FMT @L=#{@worker_lifecycle}" 2>/dev/null)
-  else a=$(tmux display-message -p -t "$1" "#{window_id} $FLEET_AGENT_FMT @L=#{@worker_lifecycle}" 2>/dev/null); fi
+  if [ -n "${2:-}" ]; then a=$(tmux -L "$2" display-message -p -t "$1" "#{window_id} $FLEET_AGENT_FMT" 2>/dev/null)
+  else a=$(tmux display-message -p -t "$1" "#{window_id} $FLEET_AGENT_FMT" 2>/dev/null); fi
   case "$a" in @*) a=${a#* } ;; *) return 2 ;; esac
-  case "$a" in 0\ @L=preparing|0\ @L=waking) return 0 ;; 0\ *) return 1 ;; esac
-  return 0
+  [ "$a" != 0 ]
 }
 
 # fleet_reap_state <window> [socket] — the state every reaper judges a window by
@@ -8149,10 +8124,10 @@ fleet_reap_state() {
 # window that holds a slot in that fleet — the refusal names them (issue #2404 ③),
 # so 「4/4」 is never a mystery and the way out is one command.
 fleet_session_slot_holders() {
-  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "#{window_id} $FLEET_AGENT_FMT #{?@remote,remote,#{@worker_lifecycle}}	$FLEET_ROLE_FMT	#{@fleet_id}	#{window_name}" 2>/dev/null \
+  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "#{window_id} $FLEET_AGENT_FMT #{?@remote,remote,-}	$FLEET_ROLE_FMT	#{@fleet_id}	#{window_name}" 2>/dev/null \
     | awk -F'\t' "$FLEET_ROLE_AWK"'
-      { split($1, h, " "); if (frole($2)!="worker" || h[3]=="remote" || h[3]=="sleeping" || h[3]=="failed") next
-        if (h[1] ~ /^@/ && (h[2]!="0" || h[3]=="preparing" || h[3]=="waking")) print h[1] "\t" $3 "\t" $4 }'
+      { split($1, h, " "); if (frole($2)!="worker" || h[3]=="remote") next
+        if (h[1] ~ /^@/ && h[2]!="0") print h[1] "\t" $3 "\t" $4 }'
 }
 # _fleet_holders_note <sess> → ` — 占着名额：@15 #11805 · @44 norepo-2；收掉一个：
 # fleet-worker-stop.sh <sess> fid:<id>` (nothing when no window answers).
@@ -8165,7 +8140,6 @@ _fleet_holders_note() {
   [ -n "$fid" ] && printf '；收掉一个：%s/fleet-worker-stop.sh %s fid:%s' "$_FLEET_LIB_DIR" "$1" "$fid"
   return 0
 }
-fleet_session_sleepers_for() { local t; t=$(_fleet_session_tally_for "$1"); printf '%s\n' "${t##* }"; }
 
 # Cap on concurrent Claude working sessions (issues #28, #70). Returns 0 if a new
 # session may be spawned, non-zero if a cap is already reached. Two ceilings:
@@ -8176,9 +8150,8 @@ fleet_session_sleepers_for() { local t; t=$(_fleet_session_tally_for "$1"); prin
 #              session name is passed as $1 (so existing no-arg callers keep the
 #              global-only behaviour unchanged) AND the cap is a positive number.
 # On refusal, prints a human-readable reason on stdout for the caller to surface
-# (tmux display-message); prints nothing when allowed. Both ceilings count AWAKE
-# workers only — a sleeper holds no slot (issue #1058, docs/dev/WORKER-SLEEP.md) —
-# and a sleeper's own wake reads them through fleet_cap_full below.
+# (tmux display-message); prints nothing when allowed. Both ceilings count the
+# worker windows with an agent in them (FLEET_AGENT_FMT, issue #2404).
 # fleet_fetch_bounded <main> <base> — `git fetch origin <base>`, given at most
 # FLEET_POOL_FETCH_SECS seconds (default 20; 0 = no bound) — issue #3999. A remote
 # that never answers (a pod with no egress to GitHub) hung the fetch forever — and
@@ -8788,16 +8761,14 @@ fleet_machine_login() {
 # to the live awake sessions + in-flight spawns, what the caps count). Atomic:
 # a hidden temp in the same dir, then rename. Creates the dir chain 1777 when it
 # is the first login there. Never fails a caller that ignores its rc.
-# The default row carries a third field, the login's ASLEEP workers (issue #4231):
-# `<count> <epoch> <asleep>` — the node daemon runs a login's `worker`-class
-# tasks (conf/node-tasks.tsv) while count + asleep is above 0.
-# An explicit count writes no third field (the reader then knows no sleepers).
+# The row is `<count> <epoch>`; the third field (#4231, a login's ASLEEP
+# workers) is no longer written since hibernation went (T548, C8) — a reader
+# reads a missing one as none asleep.
 fleet_machine_sessions_publish() {
-  local n="${1:-}" d f tmp p z='' t aw activity
+  local n="${1:-}" d f tmp p aw activity
   if [ -z "$n" ]; then
-    t=$(_fleet_session_tally); aw=${t%% *}; z=${t##* }
+    aw=$(_fleet_session_tally)
     case "$aw" in ''|*[!0-9]*) aw=0 ;; esac
-    case "$z" in ''|*[!0-9]*) z='' ;; esac
     n=$(( aw + $(fleet_inflight_count) ))
   fi
   case "$n" in ''|*[!0-9]*) return 1 ;; esac
@@ -8809,11 +8780,11 @@ fleet_machine_sessions_publish() {
   [ -d "$d" ] || return 1
   f="$d/$(fleet_machine_login)"
   tmp=$(mktemp "$d/.$(fleet_machine_login).XXXXXX" 2>/dev/null) || return 1
-  # Keep the first line byte-compatible with the session-cap / sleeper readers.
+  # Keep the first line byte-compatible with the session-cap readers.
   # The optional second line is the idle observer's working-state snapshot. An
   # older publisher (or a failed scan) is UNKNOWN to that observer, never idle.
   activity=$(fleet_idle_probe snapshot 2>/dev/null) || activity=''
-  if { printf '%s %s%s\n' "$n" "$(date +%s)" "${z:+ $z}"; [ -z "$activity" ] || printf 'idle-v1 %s\n' "$activity"; } > "$tmp" 2>/dev/null && chmod 644 "$tmp" 2>/dev/null \
+  if { printf '%s %s\n' "$n" "$(date +%s)"; [ -z "$activity" ] || printf 'idle-v1 %s\n' "$activity"; } > "$tmp" 2>/dev/null && chmod 644 "$tmp" 2>/dev/null \
      && mv -f "$tmp" "$f" 2>/dev/null; then return 0; fi
   rm -f "$tmp" 2>/dev/null; return 1
 }
@@ -8858,7 +8829,7 @@ fleet_idle_probe() {
     --configs "$configs" --conf-dir "$FLEET_CONF_DIR" \
     --sessions-dir "$(fleet_machine_sessions_dir)" --login "$(fleet_machine_login)" \
     --self-window "${self:-}" --self-socket "${sock:-}" \
-    --window-format "$(fleet_lw_fmt "#{socket_path}|#{window_id}|$FLEET_ROLE_FMT|#{@claude_state}|#{@claude_state_ts}|#{@worker_lifecycle}")" "$@"
+    --window-format "$(fleet_lw_fmt "#{socket_path}|#{window_id}|$FLEET_ROLE_FMT|#{@claude_state}|#{@claude_state_ts}|#{@remote}")" "$@"
 }
 # fleet_machine_sessions_owned <dir> — the login files in <dir> their login owns,
 # one path a line: a regular file named after the account that owns it (or after
@@ -8919,20 +8890,18 @@ fleet_session_cap_ok() {
   if [ "$gmax" -ne 0 ]; then                   # 0 ⇒ unlimited
     # count LIVE session windows PLUS spawns still building their window (#531), so
     # a burst of concurrent spawns cannot all slip past before any lands a window.
-    # Sleepers hold no slot (issue #1058); the refusal names them so a full fleet
-    # of sleepers is legible, never a mystery (read only on a refusal).
     n=$(( $(fleet_session_count) + $(fleet_inflight_count) ))
     if [ "$n" -ge "$gmax" ]; then
-      printf 'fleet at capacity: %s/%s Claude sessions running (global)%s — raise FLEET_GLOBAL_MAX_SESSIONS or close one first' \
-        "$n" "$gmax" "$(_fleet_sleepers_note "$(fleet_session_sleepers)")"
+      printf 'fleet at capacity: %s/%s Claude sessions running (global) — raise FLEET_GLOBAL_MAX_SESSIONS or close one first' \
+        "$n" "$gmax"
       return 1
     fi
   fi
   if [ -n "$sess" ] && [ "$fmax" -ne 0 ]; then
     n=$(( $(fleet_session_count_for "$sess") + $(fleet_inflight_count "$sess") ))
     if [ "$n" -ge "$fmax" ]; then
-      printf 'fleet at capacity: %s/%s Claude sessions in this fleet%s — raise FLEET_MAX_SESSIONS or close one first%s' \
-        "$n" "$fmax" "$(_fleet_sleepers_note "$(fleet_session_sleepers_for "$sess")")" "$(_fleet_holders_note "$sess")"
+      printf 'fleet at capacity: %s/%s Claude sessions in this fleet — raise FLEET_MAX_SESSIONS or close one first%s' \
+        "$n" "$fmax" "$(_fleet_holders_note "$sess")"
       return 1
     fi
   fi
@@ -8971,29 +8940,6 @@ fleet_session_cap_ok() {
   rmdir "$lk" 2>/dev/null
   return "$rc"
 }
-_fleet_sleepers_note() { [ "${1:-0}" -gt 0 ] 2>/dev/null && printf ' · z%s sleeping' "$1"; return 0; }
-
-# fleet_cap_full [sess] — the same two ceilings as fleet_session_cap_ok, read for
-# a WAKE rather than a spawn (issue #1058): exit 0 + "<n> <max>" on stdout when a
-# cap is reached (the one that binds — global first), exit 1 + nothing when a
-# sleeper may wake into a free slot. An automatic wake (a due loop, a message)
-# defers on 0; the operator's own wake goes through and the sleeping page quotes
-# the pair as `fleet full N/M — waking makes N+1`.
-fleet_cap_full() {
-  local sess="${1:-}"
-  local gmax="${FLEET_GLOBAL_MAX_SESSIONS:-0}" fmax="${FLEET_MAX_SESSIONS:-0}" n
-  case "$gmax" in ''|*[!0-9]*) gmax=0;; esac
-  case "$fmax" in ''|*[!0-9]*) fmax=0;; esac
-  if [ "$gmax" -ne 0 ]; then
-    n=$(( $(fleet_session_count) + $(fleet_inflight_count) ))
-    [ "$n" -ge "$gmax" ] && { printf '%s %s\n' "$n" "$gmax"; return 0; }
-  fi
-  if [ -n "$sess" ] && [ "$fmax" -ne 0 ]; then
-    n=$(( $(fleet_session_count_for "$sess") + $(fleet_inflight_count "$sess") ))
-    [ "$n" -ge "$fmax" ] && { printf '%s %s\n' "$n" "$fmax"; return 0; }
-  fi
-  return 1
-}
 
 # Compact "slots N/max" chip (issue #331; its backlog header went with #4902): the
 # GLOBAL session cap (FLEET_GLOBAL_MAX_SESSIONS, default 0 = off) silently blocks EVERY
@@ -9001,26 +8947,22 @@ fleet_cap_full() {
 # This makes it expected: reuse fleet_session_count (the SAME cross-fleet count the
 # cap measures — pure tmux+awk, no network) and render an ANSI-truecolor chip:
 # dim with headroom, orange at the last free slot, red at/over the cap. Pass a
-# precomputed count as $1 (and sleeper count as $2, default 0 then) to avoid a
-# second scan (and for hermetic tests); sleepers render as `· zN` (#1058). With the
+# precomputed count as $1 to avoid a second scan (and for hermetic tests). With the
 # cap disabled (gmax=0 ⇒ unlimited) it shows a bare "slots N" (no denominator/color).
 fleet_slots_chip() {
-  local n="${1:-}" z="${2:-}" gmax="${FLEET_GLOBAL_MAX_SESSIONS:-0}" col reset t zs=''
+  local n="${1:-}" gmax="${FLEET_GLOBAL_MAX_SESSIONS:-0}" col reset
   reset=$(printf '\033[0m')                          # POSIX ESC[0m — $'…' is a bashism dash ignores
   case "$gmax" in ''|*[!0-9]*) gmax=0;; esac
-  if [ -z "$n" ]; then t=$(_fleet_session_tally); n=${t%% *}; [ -n "$z" ] || z=${t##* }; fi
+  [ -n "$n" ] || n=$(_fleet_session_tally)
   case "$n" in ''|*[!0-9]*) n=0;; esac
-  case "$z" in ''|*[!0-9]*) z=0;; esac
-  # Sleepers hold no slot (issue #1058) — shown apart as `· zN`, only when any.
-  [ "$z" -gt 0 ] && zs=" · z$z"
   if [ "$gmax" -eq 0 ]; then                     # unlimited → no denominator, no color
-    printf 'slots %s%s' "$n" "$zs"; return
+    printf 'slots %s' "$n"; return
   fi
   if   [ "$n" -ge "$gmax" ];       then col='247;118;142'   # full      → red    (P0)
   elif [ "$n" -ge $((gmax - 1)) ]; then col='224;175;104'   # last slot → orange (P1)
   else                                  col='86;95;137'     # headroom  → dim    (GY)
   fi
-  printf '\033[38;2;%sm slots %s/%s%s %s' "$col" "$n" "$gmax" "$zs" "$reset"
+  printf '\033[38;2;%sm slots %s/%s %s' "$col" "$n" "$gmax" "$reset"
 }
 
 # Pick the cache file for <base> (prmap|issues) for a session: the slug'd file if
@@ -9253,7 +9195,7 @@ fleet_cfg_state() {
 # fleet_cfg_restart_why <session> <win> [idle-secs] — may <win> be reopened onto
 # the current configuration NOW (issue #1783)? Exit 0 = yes. Else exit 1 and ONE
 # word on stdout says why not: gone · panel · remote · unknown · ok ·
-# state:<s> · recent · asleep · reap · handoff · looping · bg · tool · human. The ONE judge — fleet-cfg-restart.sh
+# state:<s> · recent · reap · handoff · looping · bg · tool · human. The ONE judge — fleet-cfg-restart.sh
 # picks with it and fleet-migrate.sh --cfg-stale asks it again right before /exit,
 # so a session that started a turn in between is never interrupted. Only a
 # session — Claude or Codex alike (issue #1896) — whose @agent_cfg differs from
@@ -9268,14 +9210,14 @@ fleet_cfg_state() {
 # fleet_reap_policy.py idle-owned, issue #4764) reads `reap`: a reopen would
 # restart the very idle clock that closes it, so `done:10m` never came due.
 fleet_cfg_restart_why() {
-  local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp av st ts lp slp rem hub nm bin h rp iss wrepo
+  local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp av st ts lp rem hub nm bin h rp iss wrepo
   case "$idle" in ''|*[!0-9]*) idle=600 ;; esac
   o=$(_fleet_tmux "$sess" display-message -p -t "$win" \
-        '#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@claude_state}|#{@claude_state_ts}|#{@loop}|#{@sleep_since}|#{@remote}|#{@hub}|#{@reap_policy}|#{@issue}|#{window_name}' 2>/dev/null) \
+        '#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@claude_state}|#{@claude_state_ts}|#{@loop}|#{@remote}|#{@hub}|#{@reap_policy}|#{@issue}|#{window_name}' 2>/dev/null) \
     && [ -n "$o" ] || { echo gone; return 1; }
   # parameter expansion, not a here-string: this lib is sourced by plain sh too
   ag=${o%%|*}; o=${o#*|}; fp=${o%%|*}; o=${o#*|}; av=${o%%|*}; o=${o#*|}; st=${o%%|*}; o=${o#*|}
-  ts=${o%%|*}; o=${o#*|}; lp=${o%%|*}; o=${o#*|}; slp=${o%%|*}; o=${o#*|}
+  ts=${o%%|*}; o=${o#*|}; lp=${o%%|*}; o=${o#*|}
   rem=${o%%|*}; o=${o#*|}; hub=${o%%|*}; o=${o#*|}; rp=${o%%|*}; o=${o#*|}
   iss=${o%%|*}; nm=${o#*|}
   case "$nm" in dash|plan|backlog|home) echo panel; return 1 ;; esac
@@ -9283,7 +9225,6 @@ fleet_cfg_restart_why() {
   fleet_cfg_expected_load; fleet_cfg_broken_load; fleet_cfg_state "$ag" "$fp" "$av" "$sess" "$win"
   # broken (#2076) is a stale session that will fail too: reopened the same way
   case "$FCFG_STATE" in stale|renew|broken) ;; *) echo "$FCFG_STATE"; return 1 ;; esac
-  [ -z "$slp" ] || { echo asleep; return 1; }
   [ "$st" = "done" ] || { echo "state:${st:-none}"; return 1; }
   bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
   if [ -n "$rp" ] && [ -f "$bin/fleet_reap_policy.py" ] \
@@ -9574,7 +9515,7 @@ fleet_window_waiting_children() {
   [ -n "$t" ] || return 1
   [ -n "$sess" ] || sess=$(fleet_current_session)
   key=$(fleet_window_okey "$sess" "$t"); [ -n "$key" ] || return 1
-  all=$(fleet_lw '#{session_name}|#{window_id}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@loop}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{window_name}' _fleet_tmux "$sess")
+  all=$(fleet_lw '#{session_name}|#{window_id}|#{@claude_state}|#{@loop}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{window_name}' _fleet_tmux "$sess")
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     ws=${line%%|*}; [ -n "$sess" ] && [ "$ws" != "$sess" ] && continue
@@ -9752,7 +9693,7 @@ fleet_stop_wait() {
 # that stopped before #1370 was synced stays as that edge left it until its next
 # Stop. This re-asks fleet_window_wait and rewrites ONLY the two things the Stop
 # decision owns: `done` ↔ `looping` and @claude_wait. It never touches
-# working/needs, a sleep transition (@worker_lifecycle), or a `looping` with no
+# working/needs, or a `looping` with no
 # @claude_wait (the classifier's screen read of a loop — not a reason it can
 # re-ask); it never backfills @loop (fleet_loop_mark.py sweep does) and leaves
 # @claude_state_ts alone — nothing ran in the pane. The write re-checks the state
@@ -9760,13 +9701,12 @@ fleet_stop_wait() {
 # Prints `<old>[ (<wait>)] -> <new>[ (<wait>)]` and exits 0 when it changed (or,
 # with dry=1, would change); exits 1 otherwise.
 fleet_window_reeval() {
-  local sess="${1:-}" t="${2:-}" dry="${3:-}" raw st cw lc sp nw ns cmd
+  local sess="${1:-}" t="${2:-}" dry="${3:-}" raw st cw sp nw ns cmd
   [ -n "$t" ] || return 1
   [ -n "$sess" ] || sess=$(fleet_current_session)
   raw=$(_fleet_tmux "$sess" display-message -p -t "$t" \
-          '#{@claude_state}|#{@worker_lifecycle}|#{@claude_wait}|#{socket_path}' 2>/dev/null) || return 1
-  st=${raw%%|*}; raw=${raw#*|}; lc=${raw%%|*}; raw=${raw#*|}; cw=${raw%%|*}; sp=${raw#*|}
-  [ -z "$lc" ] || return 1
+          '#{@claude_state}|#{@claude_wait}|#{socket_path}' 2>/dev/null) || return 1
+  st=${raw%%|*}; raw=${raw#*|}; cw=${raw%%|*}; sp=${raw#*|}
   case "$st" in
     'done') ;;
     looping) [ -n "$cw" ] || return 1 ;;

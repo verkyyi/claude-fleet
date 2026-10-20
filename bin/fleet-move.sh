@@ -96,8 +96,6 @@
 #   3   refused:not-found     the window/handle does not resolve to a live window
 #   4   refused:not-eligible  a panel/hub window, a window with no @worktree/cwd
 #                             worth moving, or one whose repo cannot be resolved
-#   5   refused:hibernating   @worker_lifecycle is set; the sleep controller owns
-#                             the pane (issue #808) — wake it there first
 #   6   refused:dirty         the worktree has uncommitted changes, or a detached
 #                             HEAD — commit/stash by hand, then retry
 #   7   failed:push           `git push` of the branch ahead of base failed
@@ -459,9 +457,6 @@ move_main() {
     if ! move_eligible "$name" "$hub"; then
       say "  – $name ($wid): not eligible (panel/hub) — refused:not-eligible"; return 4
     fi
-    if [ -n "$(wopt "$wid" '#{@worker_lifecycle}')" ]; then
-      say "  – $name ($wid): hibernating — wake it before moving — refused:hibernating"; return 5
-    fi
     if [ "$norepo" = 1 ]; then
       say "  – $name ($wid): a no-repo (\$HOME) session cannot be moved — refused:not-eligible"; return 4
     fi
@@ -594,8 +589,8 @@ move_main() {
   # everything that can move. Summary: `moved N · skipped M · left K`, where K is
   # the idle sessions still here (skipped + failed + never reached).
   if [ "$REBAL" = 1 ]; then
-    rwins=$(TM list-windows -t "=$SESS" -F '#{@claude_state_ts}|#{window_id}|#{@claude_state}|#{@hub}|#{window_name}|#{@worker_lifecycle}' 2>/dev/null \
-      | awk -F'|' -v pr="$PANEL_RE" '$3 == "done" && $4 != "1" && $6 == "" && $5 !~ pr { print ($1 == "" ? 0 : $1) "|" $2 }' \
+    rwins=$(TM list-windows -t "=$SESS" -F '#{@claude_state_ts}|#{window_id}|#{@claude_state}|#{@hub}|#{window_name}' 2>/dev/null \
+      | awk -F'|' -v pr="$PANEL_RE" '$3 == "done" && $4 != "1" && $5 !~ pr { print ($1 == "" ? 0 : $1) "|" $2 }' \
       | sort -t'|' -k1,1n | cut -d'|' -f2)
     skipped=0; ncand=0
     for wid in $rwins; do ncand=$((ncand + 1)); done

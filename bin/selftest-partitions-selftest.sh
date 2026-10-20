@@ -5,8 +5,8 @@
 # fleet-break-it-thin-selftest.sh, fleet-cleanup-idle-selftest.py,
 # fleet-hub-selftest.py, fleet-await-stall-selftest.sh,
 # fleet-break-it-part.py, break-it-durations.txt, selftest_part.py and fleet-hub.yml.
-# Also covers fleet-break-it-cred-sep-selftest.sh, fleet-break-it-hub-selftest.sh
-# and fleet-sleep-selftest.sh (issue #3884).
+# Also covers fleet-break-it-cred-sep-selftest.sh and fleet-break-it-hub-selftest.sh
+# (issue #3884; fleet-sleep-selftest.sh went with hibernation, T548).
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 python3 - "$BIN" <<'PY'
@@ -38,7 +38,6 @@ families = {
     'fleet-await-stall-selftest.sh': 'SELFTEST_PART',
     'fleet-break-it-cred-sep-selftest.sh': 'BREAK_PART',
     'fleet-break-it-hub-selftest.sh': 'BREAK_PART',
-    'fleet-sleep-selftest.sh': 'SELFTEST_PART',
 }
 
 def header(text):
@@ -91,7 +90,7 @@ for name, var in families.items():
     base = name.rsplit('-selftest.', 1)[0]
     pyfile = parent.with_suffix('.py')
 
-    if base in ('fleet-cleanup-idle', 'fleet-hub', 'fleet-sleep'):
+    if base in ('fleet-cleanup-idle', 'fleet-hub'):
         # Use unittest discovery itself, including inherited test methods.
         saved = sys.argv[:]
         sys.argv = [str(pyfile), str(root)]

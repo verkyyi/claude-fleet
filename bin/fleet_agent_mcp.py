@@ -662,27 +662,3 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
     else:
         source.pop('sleep_mcp_basis', None)
     return allowed
-
-
-def service_running(conf, processes):
-    """Claude readiness: exactly one child of the resumed agent runs the configured launcher."""
-    rows, server_pid, argv_reader, exe_reader = processes
-    live = [pid for pid, (parent, _) in rows.items()
-            if parent == server_pid and matched_services(pid, {'_': conf}, rows, argv_reader, exe_reader)]
-    return len(live) == 1
-
-
-def verify_resume(source, inventory, processes=None):
-    expected = source.get('sleep_mcp')
-    if not expected:
-        return True
-    config, statuses = inventory
-    for name, digest in expected.items():
-        if name not in config or fingerprint(config[name]) != digest:
-            raise ValueError('MCP service %s configuration changed during sleep' % name)
-        if statuses is not None:
-            if not runtime_ready(statuses.get(name, {})):
-                return False
-        elif not service_running(config[name], processes):
-            return False
-    return True

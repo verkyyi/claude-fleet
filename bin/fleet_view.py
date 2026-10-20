@@ -89,7 +89,7 @@ ID ⇒ blank, a hub task's T<n> only an alias) · Agent(7: Claude / Codex — th
 ID's newest native segment, else opened, else a grey 未知) · short name (short_name: no envelope, issue prefix,
 brackets or paths; cut at punctuation) · repo(13, its own, blank when none). A
 state is ONE glyph (↻ running · ! needs · ✓ done · ✗ failed · ◌ exited, only
-under 已结束 · ∙ idle · ☾ asleep · ? lost); only ! and ✗ are coloured — red,
+under 已结束 · ∙ idle · ? lost); only ! and ✗ are coloured — red,
 bold — unless NO_COLOR / FLEET_COLOR=0; ASCII with FLEET_GLYPHS=ascii. A lost
 row is grey; the selected one wears PAL_SEL behind (sel_color). Issue numbers,
 PRs, machines and the other tags are off the row: the lit row's bottom line
@@ -389,7 +389,7 @@ def reap_words(policy):
     return ""
 
 
-STATES = ("needs", "failed", "working", "looping", "idle", "done", "exited", "sleeping", "landed", "parked")
+STATES = ("needs", "failed", "working", "looping", "idle", "done", "exited", "landed", "parked")
 
 
 def state_words(state, needs=""):
@@ -636,19 +636,17 @@ def name_hold(fleet, target, name):
 # in UbuntuMono). FLEET_GLYPHS=ascii swaps in plain ASCII.
 # Plan B (T486 v14, T493): seven states and lost, each a one-cell character with
 # no emoji form — ↻ running · ! waiting on you · ✓ done · ✗ failed · ◌ exited (the
-# agent gone, its window up: only under 已结束 · 还开着) · ∙ idle · ☾ asleep · ? lost.
-GLYPHS = {"needs": "!", "fail": "✗", "work": "↻", "done": "✓", "exited": "◌", "idle": "∙", "sleep": "☾",
-          "lost": "?"}
-GLYPHS_ASCII = {"needs": "!", "fail": "x", "work": ">", "done": "+", "exited": "o", "idle": ".", "sleep": "z",
-                "lost": "?"}
+# agent gone, its window up: only under 已结束 · 还开着) · ∙ idle · ? lost (☾ asleep
+# went with hibernation, T548).
+GLYPHS = {"needs": "!", "fail": "✗", "work": "↻", "done": "✓", "exited": "◌", "idle": "∙", "lost": "?"}
+GLYPHS_ASCII = {"needs": "!", "fail": "x", "work": ">", "done": "+", "exited": "o", "idle": ".", "lost": "?"}
 # the 16-colour palette's numbers, present in every theme (the top line colours
 # every glyph by them). The ⌘P rows colour only the two a person has to act on —
 # ! and ✗, red and bold (ROW_RED); every other glyph keeps the row's colour.
-GLYPH_COLORS = {"needs": 1, "fail": 1, "work": 2, "done": 4, "exited": 8, "idle": 8, "sleep": 8, "lost": 3}
+GLYPH_COLORS = {"needs": 1, "fail": 1, "work": 2, "done": 4, "exited": 8, "idle": 8, "lost": 3}
 ROW_RED = ("needs", "fail")
-LEGEND = ("work", "needs", "done", "fail", "exited", "idle", "sleep", "lost")
+LEGEND = ("work", "needs", "done", "fail", "exited", "idle", "lost")
 GROUPS = ("pin", "ask", "work", "done", "other")
-SLEEP_STATES = ("sleeping", "preparing", "waking")
 MERGED_PR = ("merged", "live", "deploy…", "deploy✗")
 
 
@@ -675,8 +673,6 @@ def sym_of(state, lost=False):
         return "work"
     if state in ("done", "landed"):
         return "done"
-    if state in SLEEP_STATES:
-        return "sleep"
     return "idle"
 
 
@@ -2903,7 +2899,7 @@ def sh(name, *args):
 
 
 def facts(fleet, e):
-    """What a local row's window says now: pin · sleep · keep-awake · agent · the
+    """What a local row's window says now: pin · agent · the
     needs kind · @fleet_id · its name · the wrapper's page up · its PR."""
     t = e.get("target") or ""
     if e.get("far"):
@@ -2914,14 +2910,14 @@ def facts(fleet, e):
                 "pin": e.get("group") == "pin", "agent": far_agent(fleet, t) or "claude"}
     if not t.startswith("@"):
         return {}
-    rc, out = tm("display-message", "-p", "-t", t, "#{window_id}|#{@pin}|#{@worker_lifecycle}|#{@sleep_keep_awake}|"
+    rc, out = tm("display-message", "-p", "-t", t, "#{window_id}|#{@pin}|"
                  "#{@cc_agent}|#{@claude_needs}|#{@fleet_id}|#{window_name}|#{@wrap_exit_rc}|#{pane_id}|#{@task}")
-    f = (out.split("|") + [""] * 11)[:11] if rc == 0 else [""] * 11
+    f = (out.split("|") + [""] * 9)[:9] if rc == 0 else [""] * 9
     if f[0] != t:     # tmux answers a gone id with another window's format
         return {"gone": True}
-    pr, pr_url = task_pr(fleet, f[10])
-    return {"pin": f[1] == "1", "life": f[2], "keep": f[3] == "1", "agent": f[4] or "claude", "needs": f[5],
-            "fid": f[6], "wname": f[7], "page": f[8] != "", "pane": f[9], "pr": pr, "pr_url": pr_url}
+    pr, pr_url = task_pr(fleet, f[8])
+    return {"pin": f[1] == "1", "agent": f[2] or "claude", "needs": f[3],
+            "fid": f[4], "wname": f[5], "page": f[6] != "", "pane": f[7], "pr": pr, "pr_url": pr_url}
 
 
 PR_REF = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$")
@@ -3144,23 +3140,13 @@ ACTIONS = [
      "local": reappol_local, "far": far("reappol"), "ask": "choice", "choices": reap_choices,
      "then": {"at": ("text", lambda r: say("view_ask_at"))}},
     {"id": "stop", "label": lambda r: say("view_act_stop"),
-     "when": lambda r: (live(r) and bool(r.get("fid")) and r.get("life") != "sleeping") or far_live(r),
+     "when": lambda r: (live(r) and bool(r.get("fid"))) or far_live(r),
      "local": lambda r, a, f: sh("fleet-worker-stop.sh", f, "fid:" + r["fid"]), "far": far("stop"), "ask": None,
      "slow": True},
     {"id": "resume", "label": lambda r: say("view_act_restore" if ended(r) else "view_act_resume"),
      "when": lambda r: r.get("gone") or (r.get("state") == "exited" and (r.get("far") or r.get("page"))),
      "local": lambda r, a, f: "restore" if r.get("gone") else "resume", "far": far("resume"), "ask": None,
      "slow": True, "keys": "yYrR"},
-    # wake / awake far None (issue #4184): a far row carries no @worker_lifecycle
-    # nor @sleep_keep_awake, and a wake goes `--over-cap` — past THAT machine's
-    # session cap, its own capacity call, never one another machine makes for it
-    {"id": "wake", "label": lambda r: say("view_act_wake"), "when": lambda r: not r.get("far") and r.get("life") == "sleeping",
-     "local": lambda r, a, f: sh("fleet-sleep.sh", "wake", f, r["target"], "--over-cap"), "far": None, "ask": None,
-     "slow": True},
-    {"id": "awake", "label": lambda r: say("view_act_allow_sleep" if r.get("keep") else "view_act_keep_awake"),
-     "when": lambda r: not r.get("far") and not r.get("gone"),
-     "local": lambda r, a, f: sh("fleet-sleep.sh", "allow-sleep" if r.get("keep") else "keep-awake", f, r["target"]),
-     "far": None, "ask": None},
     # another machine's row (issue #4184): its accounts are that login's, never
     # this machine's list — the hub's worker_switch, the active subscription there
     {"id": "sub", "label": lambda r: say("view_act_switch" if r.get("far") else "view_act_sub"),
@@ -3206,8 +3192,8 @@ ACTION = {a["id"]: a for a in ACTIONS}
 # The sidebar menu's letters (fleet-ui-lang.sh menu_keys) → the action here; the
 # row-less ones (no row to act on) live elsewhere — the list's top lines (C2), the
 # client's own keys (C7). fleet-view-actions-selftest.sh holds the two lists in step.
-SIDEBAR_ACTIONS = {"rename": "rename", "pin": "pin", "pr": "pr", "answer": "answer", "sub": "sub", "wake": "wake",
-                   "awake": "awake", "reappol": "reappol", "agent": "agent", "reap": "reap", "open": "enter",
+SIDEBAR_ACTIONS = {"rename": "rename", "pin": "pin", "pr": "pr", "answer": "answer", "sub": "sub",
+                   "reappol": "reappol", "agent": "agent", "reap": "reap", "open": "enter",
                    "message": "message", "stop": "stop", "resume": "resume", "restore": "resume"}
 ROWLESS = {"new": "C2", "newto": "C2", "repo": "C2", "clients": "C7", "quit": "C7", "lang": "#3329",
            "reapall": "#3731", "history": "#3731"}
@@ -3248,7 +3234,7 @@ def menu_of(r):
 
 # The actions page (plan B, T486 v14 §2): five, in this order — the rest stay
 # in ACTIONS for `fleet view-act` and the command line, and are done from
-# elsewhere (进入 answers, resumes and wakes; ⌃\ the shell; ⌃T the pin). A
+# elsewhere (进入 answers and resumes; ⌃\ the shell; ⌃T the pin). A
 # reaped session's one item is 恢复.
 PAGE_ACTIONS = ("resume", "enter", "pr", "rename", "agent", "reap")
 

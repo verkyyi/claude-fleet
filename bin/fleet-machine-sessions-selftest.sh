@@ -53,7 +53,7 @@ case "\${1:-}" in
     case "\$*" in *session_name*) pre='f ' ;; *) pre='' ;; esac
     printf '%sdash @L=\n' "\$pre"
     i=0; while [ "\$i" -lt "\$n" ]; do printf '%sw%s @L=\n' "\$pre" "\$i"; i=\$((i+1)); done
-    i=0; while [ "\$i" -lt "\${FAKE_ASLEEP:-0}" ]; do printf '%sz%s @L=sleeping\n' "\$pre" "\$i"; i=\$((i+1)); done ;;
+    i=0; while [ "\$i" -lt "\${FAKE_ASLEEP:-0}" ]; do printf '%sz%s @L=sleeping\n' "\$pre" "\$i"; i=\$((i+1)); done ;;  # an old window's stamp (T548)
   has-session) exit 0 ;;
   display-message) case "\$*" in *-p*) case "\$*" in *window_id*) echo @9 ;; *session_name*) echo f ;; *) echo '' ;; esac ;; esac ;;
   new-window) printf '%s\n' "\$*" >> "$NEWWIN_LOG"; echo @9 ;;
@@ -85,7 +85,7 @@ lib alice 3 fleet_machine_sessions_publish || fail "A alice publish failed"
 lib bob   2 fleet_machine_sessions_publish || fail "A bob publish failed"
 lib carol 0 fleet_machine_sessions_publish || fail "A carol publish failed"
 read -r an ats az < "$SH/alice"; [ "$an" = 3 ] || fail "A alice's file must hold her live count 3 (got '$an')"
-[ "$az" = 0 ] || fail "A the third field is her asleep workers, 0 (got '$az')"
+[ -z "$az" ] || fail "A no third field since hibernation went (T548) (got '$az')"
 case "$ats" in ''|*[!0-9]*) fail "A the file's second field is an epoch (got '$ats')" ;; esac
 [ "$(cat "$SH/bob")" != "" ] && read -r bn _ < "$SH/bob"; [ "$bn" = 2 ] || fail "A bob's count (got '$bn')"
 perm=$(stat -c %a "$SH" 2>/dev/null || stat -f %Mp%Lp "$SH" 2>/dev/null)
@@ -98,10 +98,12 @@ for t in "$SH"/.*; do
 done
 lib alice 0 'fleet_machine_sessions_publish 7' && read -r an ats az < "$SH/alice"; [ "$an" = 7 ] || fail "A an explicit count wins (got '$an')"
 [ -z "$az" ] || fail "A an explicit count knows no sleepers: no third field (got '$az')"
-# issue #4231: asleep workers ride the third field — the daemon runs a login's
-# GitHub loops (class worker) while awake + asleep > 0; the readers take two
+# issue #4231's third field (asleep workers) is no longer written (T548): an old
+# window's `sleeping` stamp reads as empty — it counts like any window — and an
+# older publisher's three-field row still reads as its count
 FAKE_ASLEEP=2 lib dave 1 fleet_machine_sessions_publish
-read -r dn _ dz < "$SH/dave"; [ "$dn $dz" = "1 2" ] || fail "A dave: 1 awake, 2 asleep (got '$dn $dz')"
+read -r dn _ dz < "$SH/dave"; [ "$dn/$dz" = "3/" ] || fail "A dave: 3 windows, no asleep field (got '$dn/$dz')"
+printf '1 %s 2\n' "$(date +%s)" > "$SH/dave"
 r=$(lib erin 0 fleet_machine_sessions_rows | awk '$1 == "dave" { print $2, $4 }')
 [ "$r" = "1 fresh" ] || fail "A a three-field row reads as its count (got '$r')"
 rm -f "$SH/dave"

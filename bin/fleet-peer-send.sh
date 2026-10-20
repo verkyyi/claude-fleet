@@ -458,18 +458,12 @@ queue_here() {
 }
 case "$tgt" in
   @*|%*)
-    lifecycle=$("${tm[@]}" display-message -p -t "$tgt" '#{@worker_lifecycle}' 2>/dev/null)
     evidence=$("${tm[@]}" display-message -p -t "$tgt" '#{@sleep_evidence}' 2>/dev/null)
-    if [ -n "$lifecycle$evidence" ] && [ -f "$BIN/fleet_worker_life.py" ]; then
+    if [ -n "$evidence" ] && [ -f "$BIN/fleet_worker_life.py" ]; then
       session=$("${tm[@]}" display-message -p -t "$tgt" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
       err=$(printf '%s' "$text" | python3 "$BIN/fleet_worker_life.py" deliver --session "$session" "$tgt" 2>&1 >/dev/null); rc=$?
-      # A sleeper at a full fleet keeps the message and wakes when a slot frees
-      # (#1058): queued, exit 3 — never «sent» (issue #1647).
-      if [ "$rc" -eq 3 ]; then
-        echo "queued → $tgt: fleet at its session limit; delivers when a slot frees ($label)"; exit 3
-      fi
-      [ "$rc" -eq 0 ] || die 1 "${err:-sleep delivery to $tgt failed (exit $rc)}"
-      echo "sent → $tgt via wake-delivery ($label)"; exit 0
+      [ "$rc" -eq 0 ] || die 1 "${err:-delivery to $tgt failed (exit $rc)}"
+      echo "sent → $tgt via delivery ($label)"; exit 0
     fi
     agent=$("${tm[@]}" display-message -p -t "$tgt" '#{@cc_agent}' 2>/dev/null)
     if [ "$agent" = codex ]; then

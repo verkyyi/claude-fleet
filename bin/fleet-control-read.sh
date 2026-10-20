@@ -118,9 +118,9 @@ case "$mode" in
     fi
     # SSH forced commands often have no UTF-8 locale. Without -u, tmux
     # replaces tabs/non-ASCII in format output with underscores.
-    # @worker_lifecycle (issue #808): empty = awake; preparing|sleeping|waking|failed
-    # while hibernation owns the pane — a stop must not type into a parked pane.
-    fmt=$'#{window_id}\t#{@issue}\t#{@raw}\t#{@worktree}\t#{@claude_state}\t#{@cc_agent}\t#{@wid}\t#{@worker_lifecycle}\t'
+    # Column 8 was hibernation's lifecycle stamp (issue #808); it stays on the
+    # wire, empty (= awake), since hibernation went with T548 (C8).
+    fmt=$'#{window_id}\t#{@issue}\t#{@raw}\t#{@worktree}\t#{@claude_state}\t#{@cc_agent}\t#{@wid}\t\t'
     # Column 9 = the window's repo (issue #1018), so every key carries it: two
     # hosted repos can both have an issue-12, and since issue #1939 a one-repo
     # fleet's keys are `<slug>:issue-N` too — adding a second repo renames no

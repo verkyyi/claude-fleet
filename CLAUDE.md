@@ -404,7 +404,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `bin/fleet_reap_policy.py` is the ONE grammar. `fleet-cleanup.sh` honours
   keep / merged:<dur> and leaves the rest to `fleet-cleanup-idle.py`, which closes
   them through the same gates (history first, worktree kept, never while working,
-  looping or holding a background job) — with `FLEET_SLEEP=on` too. The map
+  looping or holding a background job). The map
   carries it as a `REAP<TAB><fleet_id><TAB><policy>` row, the inventory as
   `reap=`. **No @reap_policy = the kind's old rule, byte for byte** —
   `fleet-cleanup-idle-selftest.py` (`ReapPolicy`, `PolicyGrammar`) pins both.

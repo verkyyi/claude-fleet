@@ -99,7 +99,7 @@ class Cleaner:
         names = ("@raw", "@issue", "@repo", "@norepo", "@worktree", "@claude_state", "@claude_state_ts",
                  "@cc_agent", "@cc_launcher_pid", "@codex_identity",
                  "@handoff_manifest", "@agent_transfer_until", "window_name",
-                 "@reap_policy", "@loop", "@worker_lifecycle", "@wrap_gone", "pane_dead",
+                 "@reap_policy", "@loop", "@wrap_gone", "pane_dead",
                  "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
                  "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted", "@agent_status",
                  "@task", "@task_flow")
@@ -152,14 +152,12 @@ class Cleaner:
         this pass (keep, merged on a scratch). No policy is not «never» (issue
         #2970): a window bound to a ticket — its @issue, or the EPIC its @epic
         drives — goes the no-pr road, which closes it only once that ticket is
-        closed, sleep on or not."""
+        closed."""
         pol = self.policy(snap)
         if pol is not None:
             if pol[0] in ("done", "loop-end", "at"):
                 return "idle"
             return "no-pr" if pol[0] == "merged" and snap["@issue"] else None
-        if self.args.policy_only:
-            return "no-pr" if self.ticket(snap) else None
         if snap["@raw"] == "1" and not snap["@issue"]:
             return "no-pr" if self.ticket(snap) else "idle"
         return "no-pr"
@@ -203,21 +201,17 @@ class Cleaner:
 
     def eligible(self, window, snap, task=False):
         pol = self.policy(snap)
+        # A task session's `merged` is this pass's (issue #4897): the record
+        # closed is what task_session() checked; every gate below still applies.
         if task:
-            # A task session's `merged` is this pass's (issue #4897): the record
-            # closed is what task_session() checked; every gate below still applies.
-            if snap["@worker_lifecycle"] not in ("", "sleeping"):
-                return False
+            pass
         elif pol is not None:
             # An explicit policy decides which windows this pass may close: done /
             # loop-end / at, an issue session as well as a scratch. keep and merged
             # are never this pass's (merged is fleet-cleanup.sh's). Every gate
             # below still applies.
-            if (pol[0] not in ("done", "loop-end", "at")
-                    or snap["@worker_lifecycle"] not in ("", "sleeping")):
+            if pol[0] not in ("done", "loop-end", "at"):
                 return False
-        elif self.args.policy_only:
-            return False
         elif snap["@raw"] != "1" or snap["@issue"]:
             return False
         # A pin is only the list's order (issue #3119): it keeps no window —
@@ -327,7 +321,6 @@ class Cleaner:
         kinds = ("done", "loop-end", "at") if spawned else ("done",)
         ended = (("done", "exited") if spawned else ("exited",))
         if (pol is None or pol[0] not in kinds
-                or snap["@worker_lifecycle"] not in ("", "sleeping")
                 or snap["@fleet_role"] not in ("", "worker")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")
                 or (snap["@claude_state"] not in ended
@@ -377,7 +370,6 @@ class Cleaner:
         keep, so no history row — stopped by identity, test_session's road."""
         pol = self.policy(snap)
         if (pol is None or pol[0] != "done"
-                or snap["@worker_lifecycle"] not in ("", "sleeping")
                 or snap["@fleet_role"] not in ("", "worker")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")
                 or (snap["@claude_state"] not in ("", "done", "idle", "exited")
@@ -608,9 +600,8 @@ class Cleaner:
         in the history first, then its window closed; its worktree is dropped
         only when clean with nothing that is not on the base already — dirty or
         unpushed, it stays on disk (发起人拍板 3: 不干净只关窗口)."""
-        if (snap["@worker_lifecycle"] not in ("", "sleeping")
-                # an old role's window is an ordinary session (issue #4341)
-                or snap["@fleet_role"] in ("home", "panel")
+        if (# an old role's window is an ordinary session (issue #4341)
+                snap["@fleet_role"] in ("home", "panel")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")
                 or (self.finished(snap) not in ("done", "exited")
                     and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1")):
@@ -816,8 +807,6 @@ def main():
     p.add_argument("--window-repo", action="store_true",
                    help="only windows whose @repo is --repo (multi-repo fleet)")
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--policy-only", action="store_true",
-                   help="only windows with their own @reap_policy (issue #1902; FLEET_SLEEP=on)")
     return Cleaner(p.parse_args()).main()
 
 

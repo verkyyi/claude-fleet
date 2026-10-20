@@ -46,8 +46,6 @@
 # Refusals (nothing typed, nothing closed):
 #   refused:not-found    5   no live window holds this key on the fleet
 #   refused:ambiguous    6   more than one live window holds it — resolve on the fleet
-#   refused:hibernating  8   @worker_lifecycle is set: the sleep controller owns
-#                            the pane (issue #808); wake it there before stopping
 #   failed:no-exit       7   the agent did not exit within FLEET_STOP_EXIT_WAIT s —
 #                            left as is; the caller reads this as unconfirmed
 # Success (one token on stdout, exit 0):
@@ -151,10 +149,6 @@ wid="$found"
 # The stopped window's OWN repo for the ledger row (issue #791). An unknown/no-repo
 # window leaves FLEET_REPO/FLEET_MAIN unset, so its row lands in no guessed ledger.
 fleet_load_window_conf "$SESS" "$wid" || :
-# Hibernation owns the pane: its input is disabled and the agent is parked
-# (issue #808). Typing /exit there would either be swallowed or land in the
-# placeholder shell; the sleep controller is the only thing that may act on it.
-[ -n "$(wopt "$wid" '#{@worker_lifecycle}')" ] && { printf 'refused:hibernating\n'; exit 8; }
 
 # --- 2. read what the ledger row needs WHILE the window stands ----------------
 wname=$(wopt "$wid" '#{window_name}')
@@ -191,8 +185,7 @@ fleet_win_retire "$wid" "$SOCK" stopped   # the fleet stops it: never pulled bac
 TM set-option -w -t "$wid" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
 SK -t "$wid" Escape 2>/dev/null; sleep 0.6
 if [ "$agent" = codex ]; then
-  # Codex takes its slash command inside a bracketed paste (fleet-sleep.py does
-  # the same); Claude takes it as typed.
+  # Codex takes its slash command inside a bracketed paste; Claude takes it as typed.
   SK -t "$wid" -l $'\e[200~/exit\e[201~' 2>/dev/null
 else
   SK -t "$wid" -l '/exit' 2>/dev/null

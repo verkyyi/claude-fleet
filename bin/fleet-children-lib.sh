@@ -185,17 +185,16 @@ print(m)' "$f" 2>/dev/null)
 
 # children_send <sess> <sock> <parent-win> <msg> — the ONE delivery path, shared by
 # a per-report send (fleet-report-parent.sh) and a digest (fleet-children-flush.sh).
-# A hibernated parent gets it through fleet_worker_life.py (which wakes it with the
-# message); a Codex pane through its own sender; a live Claude through the peer
+# A window whose Stop hook left its evidence goes through fleet_worker_life.py
+# deliver (the journaled direct send); a Codex pane through its own sender; a live Claude through the peer
 # inbox (#513) — never tmux send-keys (#437). Returns 0 only when it was handed over.
 children_send() {
-  local sess="${1:-}" sock="${2:-}" pwin="${3:-}" msg="${4:-}" agent lc ev pid
+  local sess="${1:-}" sock="${2:-}" pwin="${3:-}" msg="${4:-}" agent ev pid
   [ -n "$pwin" ] || return 1
   _cs_tm() { if [ -n "$sock" ]; then tmux -L "$sock" "$@"; else tmux "$@"; fi; }
   agent=$(_cs_tm display-message -p -t "$pwin" '#{@cc_agent}' 2>/dev/null)
-  lc=$(_cs_tm display-message -p -t "$pwin" '#{@worker_lifecycle}' 2>/dev/null)
   ev=$(_cs_tm display-message -p -t "$pwin" '#{@sleep_evidence}' 2>/dev/null)
-  if [ -n "$lc$ev" ] && [ -f "$_CHILDREN_BIN/fleet_worker_life.py" ]; then
+  if [ -n "$ev" ] && [ -f "$_CHILDREN_BIN/fleet_worker_life.py" ]; then
     printf '%s' "$msg" | python3 "$_CHILDREN_BIN/fleet_worker_life.py" deliver --session "$sess" "$pwin"
     return $?
   fi

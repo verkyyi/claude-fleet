@@ -136,11 +136,9 @@
 #              too, so it is not the switch's fault (2026-10-09: two new doctor
 #              FAILs read the old daemons' last hour and rolled mac-c back).
 #              And the doctor after the switch judges only what happened after
-#              it: the apply's daemons get one sleep tick first (≤
-#              FLEET_INSTALL_SETTLE_SECS, 90; the hub-sessions loop --ensure'd),
-#              and FLEET_DOCTOR_SINCE=<switch epoch> makes the windowed rows
-#              (state's sleep judgments, hub-sessions' cache age) count only
-#              samples from then on → the link back to the old version (.prev
+#              it: the hub-sessions loop is --ensure'd first, and
+#              FLEET_DOCTOR_SINCE=<switch epoch> makes the windowed row
+#              (hub-sessions' cache age) count only samples from then on → the link back to the old version (.prev
 #              names the rejected one) → the OLD version's apply --from <stable>
 #              --to <old> → `skip: <stable>` recorded, so this version is not
 #              retried until stable moves.
@@ -737,29 +735,12 @@ doctor_fail_tags() {
   printf '%s\n' "$out" | awk '$1 == "FAIL" && NF >= 2 { print $2 }' | sort -u
 }
 
-# settle <epoch> — before the doctor after a switch, the daemons the apply
-# (re)loaded get to write once (issue #2655): the hub-sessions loop is started if
-# none runs, and the sleep tick (every 60 s) is awaited until logs/sleep.log is
-# newer than the switch, at most FLEET_INSTALL_SETTLE_SECS (90), looked at every
-# FLEET_INSTALL_SETTLE_POLL (5) seconds. No sleep.log → no wait. A tick that never
-# comes is not a verdict: the doctor judges what it has.
+# settle — before the doctor after a switch, the hub-sessions loop is started if
+# none runs (issue #2655). (It also awaited a sleep tick, for the doctor's sleep
+# judgments row; both went with hibernation, T548.)
 settle() {
-  local t0="$1" budget="${FLEET_INSTALL_SETTLE_SECS:-90}" poll="${FLEET_INSTALL_SETTLE_POLL:-5}" end slog m
-  case "$budget" in ''|*[!0-9]*) budget=90 ;; esac
-  case "$poll" in ''|*[!0-9.]*|.*|*.*.*) poll=5 ;; esac
   [ -f "$ROOT/bin/fleet-hub-sessions.sh" ] \
     && bash "$ROOT/bin/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 </dev/null
-  slog="$CONF_DIR/logs/sleep.log"
-  [ -f "$slog" ] || return 0
-  end=$(( t0 + budget ))
-  while :; do
-    m=$(stat -c %Y "$slog" 2>/dev/null || stat -f %m "$slog" 2>/dev/null)  # GNU first: its -f is the filesystem
-    case "$m" in ''|*[!0-9]*) return 0 ;; esac
-    [ "$m" -gt "$t0" ] && return 0
-    [ "$(now)" -lt "$end" ] || break
-    sleep "$poll"
-  done
-  say "no sleep tick within ${budget}s of the switch — the doctor judges what it has"
   return 0
 }
 
@@ -1244,7 +1225,7 @@ MAN
   fi
   printf '%s\n' "$oldkey" > "$VERS/.prev"; vers_retire "$oldkey"
   run_apply "$HEAD_C" "$STABLE_C" || :
-  settle "$t_switch"
+  settle
   post=$(FLEET_DOCTOR_SINCE="$t_switch" doctor_fail_tags)
   new=$(comm -13 <(printf '%s\n' "$pre" | sed '/^$/d') <(printf '%s\n' "$post" | sed '/^$/d') | tr '\n' ',')
   new=${new%,}

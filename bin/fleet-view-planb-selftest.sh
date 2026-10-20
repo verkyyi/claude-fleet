@@ -8,8 +8,8 @@
 #      blank, field 22's T<n> (else the name's prefix) an alias; the agent is field 23's (a window here with none
 #      is Claude, another machine's 未知); the repo is the row's own field 24, not
 #      its heading's (a pinned or no-repo row: blank)
-#   C  the seven glyphs + lost (one cell each, no emoji form), exited ⇒ ◌ under
-#      已结束 · 还开着 only, asleep ⇒ ☾; the legend lists all eight
+#   C  the six glyphs + lost (one cell each, no emoji form), exited ⇒ ◌ under
+#      已结束 · 还开着 only, an old `sleeping` ⇒ ∙ (☾ went with T548); the legend lists all seven
 #   D  paint: glyph(1) · ID(8, bold) · Agent(7) · name · repo(13); the repo column
 #      is kept blank; only ! and ✗ are coloured (red + bold); 未知 is dim; a long
 #      name is cut at its punctuation; no tag, issue or PR on the row
@@ -102,17 +102,17 @@ assert by["@1"]["repo"] == "" and by["@2"]["repo"] == "claude-fleet" and by["@4"
 
 # --- C: glyphs
 gl = fv.glyphs()
-assert gl == {"needs": "!", "fail": "✗", "work": "↻", "done": "✓", "exited": "◌", "idle": "∙", "sleep": "☾", "lost": "?"}, gl
+assert gl == {"needs": "!", "fail": "✗", "work": "↻", "done": "✓", "exited": "◌", "idle": "∙", "lost": "?"}, gl
 for c in gl.values():
     assert unicodedata.east_asian_width(c) in ("N", "Na") and len(c) == 1, c
 sym = {t: e["sym"] for t, e in by.items()}
-assert sym == {"@1": "work", "@2": "work", "@3": "done", "@4": "needs", "@5": "fail", "@6": "sleep", "@7": "exited",
+assert sym == {"@1": "work", "@2": "work", "@3": "done", "@4": "needs", "@5": "fail", "@6": "idle", "@7": "exited",
                "MU/far1": "idle", "MU/far2": "lost"}, sym
 grp = {t: e["group"] for t, e in by.items()}
 assert grp["@7"] == "ended" and by["@7"]["sec"] == "ended" and grp["@3"] == "done" and grp["@6"] == "other", grp
 assert not any(e["sym"] == "exited" and not e.get("sec") for e in by.values())
 leg = fv.legend()
-assert leg == "↻ 运行中  ! 等你  ✓ 已完成  ✗ 失败  ◌ 已退出  ∙ 空闲  ☾ 休眠  ? 失联", leg
+assert leg == "↻ 运行中  ! 等你  ✓ 已完成  ✗ 失败  ◌ 已退出  ∙ 空闲  ? 失联", leg
 
 # --- D: paint
 W = 100
@@ -168,6 +168,6 @@ assert "失联" in note and not red, (note, red)
 PY
 pass "A  short names: 来自 X：…, T<n> prefix → ID, 修 #N：/ brackets / paths dropped"
 pass "B  columns: ID blank without a window ID (T<n> an alias), Agent (here: Claude; far: 未知), the row's own repo"
-pass "C  ↻ ! ✓ ✗ ◌ ∙ ☾ ? — one cell each; ◌ only under 已结束; the legend"
+pass "C  ↻ ! ✓ ✗ ◌ ∙ ? — one cell each; ◌ only under 已结束; the legend"
 pass "D  paint: glyph · ID · Agent · name · repo(13, kept blank); only ! ✗ red; cut at punctuation"
 pass "E  search: issue number exact (4539 ≠ 45390), match_why; ID searched; note_of red on 会坏"

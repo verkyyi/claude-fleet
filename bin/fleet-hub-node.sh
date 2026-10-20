@@ -481,13 +481,8 @@ if [ "$rc" -eq 0 ]; then
   printf 'reported → %s (%s) from %s on %s\n' "$pkey" "$pwin" "$fkey" "${NODE:-?}" >&2
   exit 0
 fi
-if [ "$rc" -eq 3 ]; then
-  printf '%s\n' "$RID" >> "$sentf"
-  printf 'queued at %s: parent %s is asleep at a full fleet — delivered when a slot frees\n' "$(hostname -s 2>/dev/null)" "$pkey" >&2
-  exit 0
-fi
 # The window is here, its inbox will not answer now: this machine's peer queue
-# holds it for the parent's identity (drained every tick and on its wake).
+# holds it for the parent's identity (drained every tick).
 pfid=$(fleet_window_fid "$home" "$pwin" "$sock" 2>/dev/null) || pfid=''
 if printf '%s' "$(cat "$WORK/msg")" | bash "$BIN/fleet-peer-queue.sh" put -L "$home" --kind report \
      --rid "$RID" --to "$pkey" ${pfid:+--to-fid "$pfid"} --to-key "$pkey" >/dev/null; then

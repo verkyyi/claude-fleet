@@ -24,14 +24,14 @@ clock = watch.monotonic
 
 # Fleet window scans follow fleet_lw's grouped-view rule: discard @view- rows,
 # then deduplicate by window id. Targets are window IDs, never mutable positions.
-FIELDS = ('window_id', 'session_name', 'window_name', '@claude_state', '@worker_lifecycle',
+FIELDS = ('window_id', 'session_name', 'window_name', '@claude_state',
           '@claude_needs', '@claude_state_ts', '@cc_agent', 'window_activity',
           '@sidebar_worker', 'pane_id', '@degenerate_ts')
 WFMT = '\t'.join('#{' + name + '}' for name in FIELDS) + '\t.'
 GLYPHS = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 CYAN = '#3d6a85 #4a82a5 #5aa0c8 #6bb8e0 #7dcfff #a6e0ff #7dcfff #6bb8e0 #5aa0c8 #4a82a5'.split()
 INDIGO = '#5a4a8a #6a5a9e #7d6bb5 #9078c8 #a78bde #bb9af7 #a78bde #9078c8 #7d6bb5 #6a5a9e'.split()
-ANIMATED = {'working', 'looping', 'preparing', 'waking'}
+ANIMATED = {'working', 'looping'}
 
 
 def number(value, default=0):
@@ -68,7 +68,7 @@ def windows(control):
         if '@view-' in row['session_name'] or wid in seen:
             continue
         seen.add(wid)
-        row['state'] = row['@worker_lifecycle'] or row['@claude_state']
+        row['state'] = row['@claude_state']
         rows.append(row)
     return rows
 
@@ -426,15 +426,13 @@ class Spinner:
                 frame = self.frame if watched else 0
                 glyph, sfg, nfg, style = '  ', '#565f89', '#565f89', 'fg=#565f89'
                 if st in ANIMATED:
-                    glyph = (GLYPHS[frame] if st in ('working', 'looping') else '↻') + ' '
+                    glyph = GLYPHS[frame] + ' '
                     sfg = INDIGO[frame] if st == 'looping' else CYAN[frame]
                     nfg = '#9d7cd8' if st == 'looping' else '#a9b1d6'
                 elif st == 'done':
                     glyph, sfg, nfg = '✓ ', '#9ece6a', '#9ece6a'
-                elif st == 'sleeping':
-                    glyph = 'z '
-                elif st in ('failed', 'needs'):
-                    glyph = {'ask': '? ', 'perm': '⊘ ', 'blocked': '⊠ '}.get(sub, '! ') if st == 'needs' else '! '
+                elif st == 'needs':
+                    glyph = {'ask': '? ', 'perm': '⊘ ', 'blocked': '⊠ '}.get(sub, '! ')
                     sfg = nfg = '#7aa2f7'
                     style = 'fg=#7aa2f7,bold'
                 value = (glyph, sfg, nfg, style)

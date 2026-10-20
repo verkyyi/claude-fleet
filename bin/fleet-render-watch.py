@@ -259,21 +259,6 @@ class Control:
     def __init__(self, label, env=None):
         args = ['tmux', '-L', label, '-C']
         initial = 1
-        # Existing servers need the navigation guard before this first attach.
-        # Read the installed hook verbatim: sleeping policy still has ONE owner.
-        # A standalone fixture without that conf also has no fleet wake hook.
-        try:
-            for line in (BIN.parent / 'conf/tmux-attention.conf').read_text().splitlines():
-                prefix = 'set-hook -g client-attached[72] '
-                if line.startswith(prefix):
-                    body = line[len(prefix):].strip()
-                    if body.startswith('{') and body.endswith('}'):
-                        body = body[1:-1].strip()
-                    args += ['set-hook', '-g', 'client-attached[72]', body, ';']
-                    initial += 1
-                    break
-        except OSError:
-            pass
         # Also upgrade existing servers' broadcast hooks, as the shell loop did.
         for hook in ('client-attached[80]', 'client-detached[80]'):
             args += ['set-hook', '-g', hook, 'wait-for -S ' + CHANNEL, ';']
@@ -301,7 +286,7 @@ class Control:
             self.marker = Path(self.path + '.render-' + str(self.proc.pid))
             self.marker.write_text(json.dumps(dict(pid=row[0], created=row[1],
                                                   socket=[sock.st_dev, sock.st_ino])))
-            self.command('refresh-client', '-B', 'fleet-state:@*:#{@worker_lifecycle}|#{@claude_state}|#{@claude_needs}')
+            self.command('refresh-client', '-B', 'fleet-state:@*:#{@claude_state}|#{@claude_needs}')
         except BaseException:
             self.close()
             raise

@@ -22,7 +22,7 @@
 #   C. counts    — every level's badge is ITS subtree's `k/N`, nothing else: no
 #                  trailing ✓, no `· n!`
 #   D. glyphs    — every needs kind and failed draw `!` (the kind rides the
-#                  detail field); preparing/waking spin; a sleeper is a bare `z`
+#                  detail field); hibernation's states (gone, T548) are a plain `·`
 #
 # Hermetic: `tmux` is PATH-shimmed to replay a fixture window list (never a live
 # server). No gh, no git, no network. Exit 0 = pass.
@@ -165,8 +165,6 @@ for kind in ask perm blocked restore other; do
   i=$((i+1)); w "$i" "n-$kind" "/w/r-issue-$i" needs "@$i" "$i" '' "/w/r-issue-$i" '' "$kind"
 done
 w 6 n-failed /w/r-issue-6 failed    @6 6 '' /w/r-issue-6
-w 7 n-prep   /w/r-issue-7 preparing @7 7 '' /w/r-issue-7
-w 8 n-wake   /w/r-issue-8 waking    @8 8 '' /w/r-issue-8
 w 9 n-sleep  /w/r-issue-9 sleeping  @9 9 '' /w/r-issue-9
 s=$(side); h=$(hub)
 . "$BIN/fleet-ui-lang.sh"
@@ -176,12 +174,7 @@ for kind in ask perm blocked restore other; do
   has "D: needs/$kind → the hub's act cell names it" "$(hrow "$h" "n-$kind")" "$(fleet_ui_t "needs_$kind")"
 done
 eq "D: failed → ! + its kind" "!|$(fleet_ui_t needs_failed)" "$(gd n-failed)"
-SPIN='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-for v in n-prep n-wake; do
-  g=$(gd "$v"); g=${g%%|*}
-  case "$SPIN" in *"$g"*) CHECKS=$((CHECKS+1)) ;; *) fail "D: $v spins like working (got '$g')" ;; esac
-done
-eq "D: a sleeper is a bare z in the sidebar" "z|" "$(gd n-sleep)"
+eq "D: an old window's sleeping word is a plain · (T548)" "·|" "$(gd n-sleep)"
 for g in '?' '⊘' '⊠' '↺'; do
   hasnt "D: the retired $g glyph appears nowhere in the sidebar" "$(printf '%s\n' "$s" | awk -F"$US" '{print $3}')" "$g"
 done

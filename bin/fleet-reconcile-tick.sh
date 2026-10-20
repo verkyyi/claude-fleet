@@ -17,9 +17,8 @@
 #   7. alerts      — `fleet-alerts.sh write` re-raises / heals the alert set (#1238) ≤ 5 s
 # Each one's seconds land in the heartbeat as t_<phase>=, a phase the tick had
 # no room for in skipped_phases=.
-# then, until the worker-sleep half is deleted (C8), the per-fleet sleep scan
-# that this tick used to hang off (fleet-sleep-daemon.sh, which now forwards
-# here). Unit `reconcile` (com.claude-fleet.reconcile / claude-fleet-reconcile.timer);
+# (the per-fleet worker-sleep scan that used to end it went with hibernation,
+# T548 C8). Unit `reconcile` (com.claude-fleet.reconcile / claude-fleet-reconcile.timer);
 # heartbeat global/reconcile.heartbeat; logs/reconcile.log holds only the lines
 # that changed something. The whole tick stays ≤ 55 s under the 60 s interval.
 # All state and tmux calls stay on fleet sockets.
@@ -159,32 +158,4 @@ fi
 rhb="$G/reconcile.heartbeat"
 { grep -Ev '^(t_|skipped_phases=)' "$rhb" 2>/dev/null
   printf '%sskipped_phases=%s\n' "$PH_T" "$PH_SKIP"; } > "$rhb.$$" && mv -f "$rhb.$$" "$rhb"
-
-# --- the worker-sleep scan, still carried here until C8 deletes it -----------
-# Its judgments go to logs/sleep.log as before (fleet-doctor's sleep-judgment
-# row and install-sync's settle read it), never into reconcile.log.
-[ -f "$BIN/fleet-sleep.sh" ] || exit 0
-logd="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs"
-[ -d "$logd" ] || mkdir -p "$logd" 2>/dev/null || :
-slog="$logd/sleep.log"
-cursor="$(fleet_cache_global)/sleep.cursor"
-last=$(cat "$cursor" 2>/dev/null || :)
-# Rotate after the previous fleet so a slow fleet cannot starve later sockets.
-ordered=$(printf '%s\n' "$sockets" | awk -v last="$last" '
-  {a[NR]=$0; if ($0==last) start=NR}
-  END {for(i=start+1;i<=NR;i++)print a[i]; for(i=1;i<=start;i++)print a[i]}')
-# Divide the remaining budget across the fleets still to visit (issue #850): the
-# cursor rotation above gives fairness ACROSS ticks, this gives it within one. A
-# truncated fleet scan resumes from fleet-sleep.sh's own per-window cursor next
-# tick. No single-flight lock is needed: launchd/systemd never start a second
-# copy of a unit whose previous tick is still running, and this tick is bounded
-# to 55s under the 60s interval.
-count=$(printf '%s\n' "$ordered" | awk 'NF' | wc -l | tr -d ' ')
-for session in $ordered; do
-  [ "$SECONDS" -lt "$deadline" ] || break
-  budget=$(fleet_daemon_fair_budget "$((deadline - SECONDS))" "$count" 5)
-  count=$((count - 1))
-  printf '%s\n' "$session" > "$cursor"
-  fleet_timebox "$budget" bash "$BIN/fleet-sleep.sh" scan "$session" "$@" >> "$slog" 2>&1 || :
-done
 exit 0
