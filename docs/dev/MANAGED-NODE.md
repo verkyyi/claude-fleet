@@ -234,7 +234,7 @@ agent 跑的又是 `<sha>/bin/ccquota`，路径也每次变——所以人手给
 只算**节点源**：`tokenledger/shared/` 与 `tokenledger/agent/` 下的文件（含各自的 `go.mod` · `go.sum`，去掉测试、
 `testdata/`、`.md`；`release.SourceDigest`，git 一侧是 `bin/fleet-src-digest.py`）——只改 hub 的提交不动它。整个
 `tokenledger/`（hub 镜像编的全部）是另一个摘要（`release.ImageSourceDigest` / `fleet-src-digest.py --image`），列车靠它
-决定要不要重部署入口；拆分前的入口镜像盖的就是它，入口与第 8 道门认它一个版本（`# compat-1v`，认了就把它签进清单）。入口建发布版时按该提交
+决定要不要重部署入口，入口与第 8 道门都不拿它比 ccquota。入口建发布版时按该提交
 算同一摘要：不等就不建（发布 422 `ccquota:`，等入口镜像重新部署），等了就签进清单的 `ccquota_src`；补建沿用原包的 ccquota。
 所以 **节点源改了的提交要先重新部署入口镜像，stable 才挪得过去**：`fleet-stable.sh move` 第 8 道门先比入口
 `/v1/fleet/release/artifacts` 的 `ccquota_src` 与目标提交的摘要（`ccquota:`；入口不报 `ccquota_src` 时退回 #2927 按 `/version` 查提交的那条）。机器上 `fleet doctor --machine` 的 `ccquota`

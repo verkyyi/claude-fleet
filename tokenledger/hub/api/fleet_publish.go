@@ -601,11 +601,7 @@ func (rs *ReleaseStore) Accept(ctx context.Context, f *publishForm) (map[string]
 			all[p] = g.Data
 		}
 	}
-	_, hasManifest := all[StableManifestPath]
-	if _, old := all[stableManifestPathOld]; old { // a commit from before #4814
-		hasManifest = true
-	}
-	if !hasManifest {
+	if _, ok := all[StableManifestPath]; !ok {
 		return nil, publishErr(http.StatusBadRequest, "tree: no %s — not this repo", StableManifestPath)
 	}
 	files, err := releaseTree(all)

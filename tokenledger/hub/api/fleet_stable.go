@@ -60,13 +60,6 @@ const stableAwareMark = "fleet-install: stable-aware"
 // StableManifestPath is where the client's manifest sits in the repo.
 const StableManifestPath = "tokenledger/hub/api/fleetclient/manifest"
 
-// stableManifestPathOld is where it sat before the hub was its own module
-// (claude-fleet#4814): a stable (or a release) from before then has it there.
-const stableManifestPathOld = "tokenledger/internal/api/fleetclient/manifest" // compat-1v: 下一批删
-
-// isStableManifest: is p the client's manifest, at either place.
-func isStableManifest(p string) bool { return p == StableManifestPath || p == stableManifestPathOld }
-
 var shaRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // StableSource finds what refs/tags/stable names on GitHub and fetches the

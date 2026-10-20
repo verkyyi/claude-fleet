@@ -80,7 +80,7 @@
 #                       #4813) while the source digest still hashes all of tokenledger/:
 #                       a hub-only change would hold stable (or a hub-only digest stop
 #                       the hub redeploy) — the Dockerfile, fleet-src-digest.py (node ·
-#                       --image) and the stable gate (+ the old digest, one version)
+#                       --image) and the stable gate
 #   module-skip-wrong   the PR gate's Go map forgets a block (shared ⇒ hub only): a
 #                       shared change skips the node's and the 联调 tests and 「CI 结论」
 #                       reads green — bin/ci-plan-selftest.sh B reds on the broken plan
@@ -1028,8 +1028,8 @@ drill_hub_test_names_node() {
 # node's own module (agent/cmd/ccquota) and stamped with the digest of the NODE's
 # source (shared/ + agent/), which the hub's 422, the manifest's ccquota_src and
 # fleet-stable.sh's ccquota gate all compare; the whole tokenledger/ (the hub
-# image) is a second digest — what the train's hub-deploy decision reads, and the
-# old algorithm a hub image from before the split still stamps (compat-1v).
+# image) is a second digest — what the train's hub-deploy decision reads, never
+# what the gate holds a ccquota to.
 # Before: the dist came from the combined cmd/ccquota and one digest meant both —
 # hashing only the node would stop the hub redeploy on a hub-only change, hashing
 # everything holds stable on it. A git rig; the stable gate against a file:// hub.
@@ -1075,9 +1075,11 @@ drill_module_split_digest() {
     "$(for n in $pins; do printf '"%s",' "$n"; done | sed 's/,$//')" "$1" > "$d/hub/v1/fleet/release/artifacts"; }
   mv_to() { PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
               sh "$BIN/fleet-stable.sh" move "$1" --dir "$d/co" --repo o/r 2>&1; }
-  # a hub image that predates the split stamps the whole tree: accepted for one version
-  hub_src "$(sd --image "$d/co" "$c2")"
-  out=$(mv_to "$c2") || { WHY="the gate refused a hub stamped with the old (whole-tree) digest of the target: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  # a hub stamped with the whole tree's digest (the algorithm before the split) is refused
+  hub_src "$i2"
+  out=$(mv_to "$c2"); rc=$?
+  [ "$rc" = 3 ] && case "$out" in *'REFUSED — ccquota:'*) true ;; *) false ;; esac \
+    || { WHY="the gate took a hub stamped with the whole-tree digest of the target (exit $rc): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   # the hub's node build is c2's: the node change (c3) is refused, named
   hub_src "$n2"
   out=$(mv_to "$c3"); rc=$?
@@ -1089,7 +1091,7 @@ drill_module_split_digest() {
   SECS=$(since "$t0")
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c4" ] || { WHY="stable is not at the target after the green move"; rm -rf "$d"; return 1; }
   rm -rf "$d"
-  WHAT="发布的 ccquota 从 agent 模块编、盖节点源（shared+agent）的摘要：只改 hub 节点摘要不动、--image 照样变（列车照常重部署 hub）；旧算法的入口镜像认一个版本；节点改了而入口没跟上 ⇒ stable 拒挪 ccquota:，跟上后放行"
+  WHAT="发布的 ccquota 从 agent 模块编、盖节点源（shared+agent）的摘要：只改 hub 节点摘要不动、--image 照样变（列车照常重部署 hub）；盖整树摘要的入口拒；节点改了而入口没跟上 ⇒ stable 拒挪 ccquota:，跟上后放行"
 }
 
 # ---- module-skip-wrong (#4815, EPIC #4810 C5): the PR gate runs a Go block only

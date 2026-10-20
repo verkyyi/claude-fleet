@@ -37,9 +37,7 @@ import (
 //     agent/ — what the image compiles — and the paths the hub had before it
 //     was a module (tokenledger/'s go.mod, go.sum, cmd/, internal/), so an
 //     older commit hashes as it always did. bin/fleet-train-hub.sh reads it to decide whether a train
-//     redeploys the hub, and it is the one digest an image built before the split
-//     stamped (compat-1v: 下一批删 — the hub and the stable gate accept it as the
-//     node's for one version).
+//     redeploys the hub.
 //
 // Both leave out tests (*_test.go, testdata/), Markdown and the client's file
 // list and pack (hub/api/fleetclient/manifest and pack/, internal/ before #4814: the client follows
