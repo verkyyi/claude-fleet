@@ -31,7 +31,7 @@ done
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/doctor-node-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf "$WORK" "$WORK".lane*' EXIT
 mkdir -p "$WORK/bin" "$WORK/ccq" "$WORK/conf/fleets/sessA" "$WORK/.claude-dash/global"
 for f in fleet-doctor.sh fleet-account.sh fleet_iso.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-quotawatch.sh fleet-hub-node.sh fleet-daemon-lib.sh fleet-conf.sh; do cp "$BIN/$f" "$WORK/bin/"; done
 chmod +x "$WORK/bin/"*.sh
@@ -61,6 +61,11 @@ node_lines() {
 }
 
 # OFF
+# The groups below run as four lanes at once (each is a handful of whole-doctor
+# runs): every lane is a subshell on its own copy of the fixture — $WORK.lane<n>,
+# so its HOME, conf dir and node.env are its own; its count comes back in a file,
+# a FAIL as its exit code, its lines in order after the wait.
+lane_1() {
 l=$(node_lines)
 contains "OFF: the 承载 row says no hub" "$l" "PASS  承载"
 contains "OFF: 不接入口" "$l" "不接入口（只走本机）"
@@ -118,6 +123,9 @@ else
   contains "NOCCQ: ccquota not on PATH" "$l" "ccquota is not on PATH"
   contains "NOCCQ: install" "$l" "fleet-node-join.sh"
 fi
+}
+
+lane_2() {
 
 # CONF: the switch from the install's fleet.conf (export spelling) …
 printf 'export CCQUOTA_FLEET=1\n' > "$WORK/fleet.conf"
@@ -135,6 +143,9 @@ contains "CONF fleet: read from fleets/<sess>/conf" "$l" "WARN  承载"
 printf 'FLEET_REPO="acme/widgets"\nCCQUOTA_FLEET=0\n' > "$WORK/conf/fleets/sessA/conf"
 l=$(node_lines)
 contains "CONF fleet: CCQUOTA_FLEET=0 is off" "$l" "不接入口"
+}
+
+lane_3() {
 
 # TRUST (issue #1968): the `可信` row reads this machine's word off the hub
 # (GET /v1/node/self through fleet-node-trust.sh, the transport stubbed) — only
@@ -170,6 +181,11 @@ contains "TRUST: hub down → INFO" "$l" "INFO  可信"
 not_contains "TRUST: the token's value is never printed" "$l" "fn_abc"
 l=$(trust_lines TRUST_WORD=trusted)
 [ -z "$l" ] && ok || fail "TRUST: a row with the hub off" "$l"
+}
+
+lane_4() {
+# the compute row comes off fleet-node-trust.sh's read, as in lane 3
+cp "$BIN/fleet-node-trust.sh" "$WORK/bin/"; chmod +x "$WORK/bin/fleet-node-trust.sh"
 
 # COMPUTE (issue #2480): node.env's CCQUOTA_FLEET_COMPUTE beside the hub's own
 # verdict (compute_off / compute_why off GET /v1/node/self, fleet-node-trust.sh
@@ -209,5 +225,20 @@ l=$(compute_lines CCQUOTA_FLEET=1 TRUST_RC=7)
 contains "COMPUTE: hub down, node.env 0 → still says it" "$l" "CCQUOTA_FLEET_COMPUTE=0：只协调"
 l=$(compute_lines COMPUTE_OFF=1)
 [ -z "$l" ] && ok || fail "COMPUTE: a row with the hub off" "$l"
+}
+
+for n in 1 2 3 4; do
+  cp -Rp "$WORK" "$WORK.lane$n"
+  ( WORK="$WORK.lane$n"; NE="$WORK/conf/node.env"; "lane_$n"; echo "$CHECKS" > "$WORK/checks" ) \
+    > "$WORK.lane$n.log" 2>&1 &
+  eval "pid$n=\$!"
+done
+rc=0
+for n in 1 2 3 4; do
+  eval "wait \$pid$n" || rc=1
+  cat "$WORK.lane$n.log"
+  [ -s "$WORK.lane$n/checks" ] && CHECKS=$((CHECKS + $(cat "$WORK.lane$n/checks")))
+done
+[ "$rc" = 0 ] || exit 1
 
 printf 'fleet-doctor-node-selftest OK (%s checks)\n' "$CHECKS"

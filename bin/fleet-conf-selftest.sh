@@ -104,9 +104,14 @@ view() {
     [ "${FLEET_SHELL:-}" = 1 ] || fleet_load_conf fleet
     for k in $KEYS; do eval "printf \"%s=%s\\n\" $k \"\${$k-<unset>}\""; done' "$INS/bin"
 }
-cap_line() { run bash "$INS/bin/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+能力([[:space:]]|$)'; }
+# doctor → the box's whole doctor output; cap_of / what_of read rows off one run,
+# so two rows of the same state cost one doctor (cap_line / what_rows: a fresh run)
+doctor() { run bash "$INS/bin/fleet-doctor.sh" 2>/dev/null; }
+cap_of() { printf '%s\n' "$1" | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+能力([[:space:]]|$)'; }
 # the doctor's rows that describe what this computer is — ONE (issue #1806)
-what_rows() { run bash "$INS/bin/fleet-doctor.sh" 2>/dev/null | grep -cE '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+(client|role|node|能力)([[:space:]]|$)'; }
+what_of() { printf '%s\n' "$1" | grep -cE '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+(client|role|node|能力)([[:space:]]|$)'; }
+cap_line() { cap_of "$(doctor)"; }
+what_rows() { what_of "$(doctor)"; }
 
 node_fixture() {
   cat > "$INS/fleet.conf" <<'EOF'
@@ -144,7 +149,26 @@ oldkey() {   # $1 FLEET_ROLE value — a file one version old, in the [common] i
   printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_ROLE="%s"\nexport FLEET_HUB_URL="https://hub.example"\nFLEET_UI_LANG=zh\n' "$1" > "$CD/fleet.conf"
 }
 
-if selftest_section 1; then
+# The sections of a part run as lanes at once — each a few doctor runs of wall
+# clock, each in boxes of its own: a lane is a subshell whose $WORK (so its boxes
+# and its TMPDIR) is its own; its lines print in order after the wait, its
+# counts come back in $WORK/count.<lane>. D and E share a box: one lane.
+lanes() {
+  local s c f
+  for s in "$@"; do
+    ( WORK="$WORK/lane-$s"; mkdir -p "$WORK"; CHECKS=0 FAILS=0
+      "sec_$s"; echo "$CHECKS $FAILS" > "$WORK/../count.$s" ) > "$WORK/log.$s" 2>&1 &
+    eval "lane_pid_$s=\$!"
+  done
+  for s in "$@"; do
+    eval "wait \$lane_pid_$s"
+    cat "$WORK/log.$s"
+    if read -r c f < "$WORK/count.$s" 2>/dev/null; then CHECKS=$((CHECKS + c)); FAILS=$((FAILS + f))
+    else bad "section $s did not finish"; fi
+  done
+}
+
+sec_A() {
 # ---------------------------------------------------------------------------- A
 mkbox a
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
@@ -152,8 +176,9 @@ is "A: migrate on an empty login exits 0" "$rc" 0
 [ -e "$CD/fleet.conf" ] && bad "A: no file may be written for a login that is neither" || ok
 is "A: role none" "$(run bash "$INS/bin/fleet-conf.sh" role)" none
 is "A: host 0" "$(run bash "$INS/bin/fleet-conf.sh" host)" 0
-is "A: doctor 能力: the base only" "$(cap_line | sed -E 's/^[[:space:]]+//')" "PASS  能力     基础 · 承载 未开（fleet host on）"
-is "A: one row says what this computer is" "$(what_rows)" 1
+d=$(doctor)
+is "A: doctor 能力: the base only" "$(cap_of "$d" | sed -E 's/^[[:space:]]+//')" "PASS  能力     基础 · 承载 未开（fleet host on）"
+is "A: one row says what this computer is" "$(what_of "$d")" 1
 # the machine conf is never a legacy flat fleet named `fleet`
 printf 'FLEET_ROLE="node"\n' > "$CD/fleet.conf"
 lst=$(run bash -c '. "$0/fleet-lib.sh"; fleet_each_conf; printf "conf=%s\n" "$(fleet_conf_file fleet)"' "$INS/bin")
@@ -161,6 +186,9 @@ hasnt "A: fleet_each_conf skips \$FLEET_CONF_DIR/fleet.conf" "$lst" "$CD/fleet.c
 hasnt "A: fleet_conf_file fleet never answers the machine conf" "$lst" "conf=$CD/fleet.conf"
 rm -f "$CD/fleet.conf"
 
+}
+
+sec_B() {
 # ---------------------------------------------------------------------------- B
 mkbox b; node_fixture
 before=$(KEYS=$FLEET_KEYS view)
@@ -196,11 +224,14 @@ has "B: a second migrate is a no-op" "$out" "already one file"
 is "B: …and changes nothing" "$(cat "$CD/fleet.conf")" "$snap"
 is "B: host" "$(run bash "$INS/bin/fleet-conf.sh" host --why)" "$(printf '1\tFLEET_HOST')"
 is "B: the old word still answers (one version)" "$(run bash "$INS/bin/fleet-conf.sh" role)" client,node
-l=$(cap_line)
+d=$(doctor); l=$(cap_of "$d")
 has "B: doctor 能力 PASS" "$l" "PASS  能力     基础 · 承载 — FLEET_HOST"
 has "B: …and the one file" "$l" "配置只有一份"
-is "B: one row says what this computer is" "$(what_rows)" 1
+is "B: one row says what this computer is" "$(what_of "$d")" 1
 
+}
+
+sec_C() {
 # ---------------------------------------------------------------------------- C
 mkbox c; rm -rf "$INS/conf"; client_fixture
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
@@ -227,9 +258,11 @@ has "C: the shell sees [client]" "$sv" "FLEET_SHELL_WIDTH=34"
 is "C: host" "$(run bash "$INS/bin/fleet-conf.sh" host)" 0
 has "C: doctor 能力: 承载 未开" "$(cap_line)" "基础 · 承载 未开（fleet host on）"
 
-fi
+}
 
-if selftest_section 2; then
+if selftest_section 1; then lanes A B C; fi
+
+sec_D() {
 # ---------------------------------------------------------------------------- D
 mkbox d; node_fixture; client_fixture
 printf 'FLEET_INSTALL_SYNC=0\n' > "$CD/fleet.settings"
@@ -274,6 +307,9 @@ run bash "$INS/bin/fleet-conf.sh" set-host 0
 is "E: set-host 0" "$(grep '^FLEET_HOST=' "$CD/fleet.conf")" 'FLEET_HOST=0'
 sh -n "$CD/fleet.conf" && ok || bad "E: still parses after set-host"
 
+}
+
+sec_F() {
 # ---------------------------------------------------------------------------- F
 mkbox f; node_fixture
 l=$(cap_line)
@@ -282,6 +318,9 @@ has "F: inferred" "$l" "基础 · 承载 — inferred — a fleet conf"
 has "F: names the command" "$l" "fleet-conf.sh migrate"
 hasnt "F: no credential printed" "$l" "vt-secret"
 
+}
+
+sec_G() {
 # ---------------------------------------------------------------------------- G
 # mac-b: client,node with a fleet here
 mkbox g1; node_fixture; rm -f "$INS/fleet.conf"; oldkey client,node
@@ -302,8 +341,9 @@ printf 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=t\nCCQUOTA_FLEET_COMP
 run bash "$INS/bin/fleet-conf.sh" migrate --quiet >/dev/null 2>&1
 has "G laptop: a coordinate-only node is not 承载" "$(cat "$CD/fleet.conf")" "FLEET_HOST=0"
 hasnt "G laptop: no FLEET_ROLE left" "$(cat "$CD/fleet.conf")" "FLEET_ROLE"
-has "G laptop: doctor 能力 未开" "$(cap_line)" "基础 · 承载 未开（fleet host on）"
-is "G laptop: one row says what this computer is" "$(what_rows)" 1
+d=$(doctor)
+has "G laptop: doctor 能力 未开" "$(cap_of "$d")" "基础 · 承载 未开（fleet host on）"
+is "G laptop: one row says what this computer is" "$(what_of "$d")" 1
 # a client
 mkbox g3; oldkey client
 run bash "$INS/bin/fleet-conf.sh" migrate --quiet >/dev/null 2>&1
@@ -311,9 +351,11 @@ has "G client: FLEET_HOST=0" "$(cat "$CD/fleet.conf")" "FLEET_HOST=0"
 is "G client: role still answers (one version)" "$(run bash "$INS/bin/fleet-conf.sh" role)" client
 sh -n "$CD/fleet.conf" && ok || bad "G: the rewritten file parses"
 
-fi
+}
 
-if selftest_section 3; then
+if selftest_section 2; then lanes D F G; fi
+
+sec_H() {
 # ---- H. keys kept, FLEET_HOST corrected once (issue #1887) ------------------------
 hrun() { run TMUX_TMPDIR="$WORK/htt" FLEET_LAUNCHD_AGENTS_DIR="$H/LA" FLEET_INSTALL_DAEMON_DIR="$H/LD" "$@"; }
 mkbox h1; mkdir -p "$CD/fleets/fleet" "$WORK/htt"
@@ -407,6 +449,9 @@ fi  # ---- [node] end ----
 EOF
 )"
 
+}
+
+sec_I() {
 # ---- I. every repo in repos/ (issue #1937) ----------------------------------------
 # An old-layout fleet: the conf names acme/app (+ a deploy key and a fleet-wide
 # key), repos/ holds aaa/first (sorts BEFORE it) and zzz/last, and acme/app has an
@@ -479,9 +524,10 @@ printf 'FLEET_REPO="bbb/new"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$H/p
 lib_i 'fleet_repo_order_put fleet bbb/new'
 is "I: a repo recorded later lists after the others" "$(lib_i 'fleet_repos fleet' | tr '\n' ' ')" "aaa/first zzz/last bbb/new "
 
-fi
+}
 
-if selftest_section 4; then
+if selftest_section 3; then lanes H I; fi
+
 # ---------------------------------------------------------------------------- J
 # under a UTF-8 locale: a `$var，` there reads the full-width comma as part of the
 # name (unbound under set -u) — LANG=C hides it
@@ -489,11 +535,17 @@ hub_row() { run LC_ALL=C.UTF-8 bash "$INS/bin/fleet-doctor.sh" 2>/dev/null | gre
 j_conf() {
   printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_HOST=1\n%s\n# ---- [node] ----\nif [ "${FLEET_SHELL:-0}" != 1 ]; then\n:\nFLEET_SPAWN_NODE=local\nfi  # ---- [node] end ----\n' "${1:-}" > "$CD/fleet.conf"
 }
-mkbox j
-j_conf
-printf 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=node-tok\nCCQUOTA_FLEET=1\n' > "$CD/node.env"; chmod 600 "$CD/node.env"
-has "J: doctor WARNs while fleet.conf says off" "$(hub_row)" "WARN  hub"
-has "J: …naming both keys" "$(hub_row)" "CCQUOTA_FLEET=1、FLEET_HUB_URL"
+# j_box <name> — a node whose node.env says the hub is on, fleet.conf says nothing
+j_box() {
+  mkbox "$1"
+  j_conf
+  printf 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=node-tok\nCCQUOTA_FLEET=1\n' > "$CD/node.env"; chmod 600 "$CD/node.env"
+}
+sec_J() {
+j_box j
+l=$(hub_row)
+has "J: doctor WARNs while fleet.conf says off" "$l" "WARN  hub"
+has "J: …naming both keys" "$l" "CCQUOTA_FLEET=1、FLEET_HUB_URL"
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate --dry-run 2>&1)
 has "J: --dry-run says what it would add" "$out" "would add to $CD/fleet.conf [common] from node.env: CCQUOTA_FLEET=1 FLEET_HUB_URL"
 hasnt "J: --dry-run writes nothing" "$(cat "$CD/fleet.conf")" "CCQUOTA_FLEET"
@@ -514,7 +566,12 @@ snap=$(cat "$CD/fleet.conf")
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate --quiet 2>&1)
 hasnt "J: a second migrate adds nothing" "$out" "from node.env"
 is "J: …and changes nothing" "$(cat "$CD/fleet.conf")" "$snap"
+}
+
+# J's other boxes, lanes of their own
+sec_J2() {
 # the operator's explicit off is theirs: never overwritten, the doctor says it
+j_box j1
 j_conf 'CCQUOTA_FLEET=0'
 run bash "$INS/bin/fleet-conf.sh" migrate --quiet >/dev/null 2>&1
 has "J: an explicit CCQUOTA_FLEET=0 stays" "$(cat "$CD/fleet.conf")" "CCQUOTA_FLEET=0"
@@ -526,6 +583,9 @@ printf 'CCQUOTA_HUB_URL=https://u:pw@hub.example\nCCQUOTA_FLEET=1\n' > "$CD/node
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate --quiet 2>&1)
 hasnt "J: a credentialed URL is not written" "$(cat "$CD/fleet.conf")" "pw@"
 has "J: …and says so" "$out" "carries credentials"
+}
+
+sec_J3() {
 # a client (no node.env): byte for byte, and no hub row
 mkbox j2
 printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_HOST=0\n' > "$CD/fleet.conf"
@@ -535,6 +595,9 @@ is "J: a client without node.env is byte for byte" "$(cat "$CD/fleet.conf")" "$s
 is "J: …migrate says nothing" "$out" ""
 is "J: …and the doctor has no hub row" "$(hub_row)" ""
 
+}
+
+sec_K() {
 # ---------------------------------------------------------------------------- K
 # The autofill keys are retired (issue #3120): migrate comments a line still setting
 # one out — fleet.conf, a fleet conf, a repo overlay — every other line kept, and a
@@ -580,7 +643,10 @@ is "K: (T495) the four pool lines are comments" "$(cat "$CD/fleet.conf" "$CD/fle
 has "K: (T495) …the appended off switch too" "$(cat "$CD/fleet.conf")" "# retired #T495: export FLEET_SCRATCH_POOL=0"
 has "K: (T495) the fetch bound stays" "$(cat "$CD/fleet.conf")" $'\nFLEET_POOL_FETCH_SECS=5'
 
-fi
+}
+
+if selftest_section 4; then lanes J J2 J3 K; fi
+
 
 printf 'fleet-conf-selftest: %d checks, %d failed\n' "$CHECKS" "$FAILS"
 [ "$FAILS" = 0 ]

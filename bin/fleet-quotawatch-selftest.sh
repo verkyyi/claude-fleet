@@ -552,7 +552,17 @@ ok
 # judge it, and #671 gates the collector's fallback off for exactly that window. A
 # tick that was slow but PROGRESSING had nothing bounding it at all: 5m45s measured
 # live on 2026-09-15 against that 120s, on a host that already had #688.
-hang_survivors() { sleep 2; pgrep -f "$HANGMARK" 2>/dev/null | wc -l | tr -d ' '; }
+# Given up to 2s to die (read every 0.1s): a tree already gone answers at once, a
+# leak still answers its count at 2s.
+hang_survivors() {
+  local n i=0
+  while :; do
+    n=$(pgrep -f "$HANGMARK" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$n" = 0 ] || [ "$i" -ge 20 ]; then break; fi
+    sleep 0.1; i=$((i + 1))
+  done
+  printf '%s\n' "$n"
+}
 echo 10 > "$WORK/pct"; echo 20 > "$WORK/pct-b"; echo '' > "$WORK/b-shape"
 
 # 11a. INVARIANT ONE, in code: the budget must leave room to wind down before the

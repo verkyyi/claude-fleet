@@ -54,6 +54,11 @@ pass=0
 ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
+# setup <dir> — the whole fixture (fakes, conf, ledger) under <dir> as $WORK. The
+# scenarios run as four lanes at once (each fleet-cleanup.sh run is a second of
+# bash start-up); every lane builds its own fixture — the fakes' paths are baked in.
+setup() {
+WORK=$1
 mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/leases" "$WORK/dash" "$WORK/metadata"
 . "$BIN/selftest-repo-fixture.sh"
 fx_repo "$WORK/conf" testsess acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
@@ -267,6 +272,9 @@ run_clean() {
   LAND_LEASE_DIR="$WORK/leases" LAND_POLL=0 LAND_QUEUE_TIMEOUT=2 \
     "$CLEAN" --pr 42 "$@" 2>"$WORK/err"
 }
+}
+
+lane_1() {
 
 # --- 1. MERGED → cleaned + ledger-before-teardown + ordered teardown + base pull
 # A transfer lease must protect even a clean MERGED worker, not just the
@@ -377,6 +385,9 @@ for scenario in young ps-failure missing-pid state-failure missing-window duplic
 done
 ok 'young agent, failed probes and missing window/pid all fail closed'
 
+}
+
+lane_2() {
 # Issue #1329: a short worker that merged its OWN PR (mergedAt after the agent
 # started) is reaped after the grace, not after FLEET_REAP_MIN_AGE; one spawned
 # onto an already-merged branch (agent started after the merge) keeps #565.
@@ -562,6 +573,9 @@ printf '%s' "$err" | grep -q "base $WORK/main is on ops/side, not master — not
   || fail "1b the wrong-branch base must be reported" "$err"
 ok "1b MERGED + base on a side branch → reaped, no base pull, reported"
 
+}
+
+lane_3() {
 # ======= CLOSED-unmerged: the liveness gate, issue #544 ========================
 # The default fixture is an ABANDONED session: the transcript went quiet an hour
 # ago, the PR closed 30 minutes ago (so the last word predates the close), and the
@@ -693,6 +707,9 @@ tok="$(run_clean merged --dry-run)"; err="$(cat "$WORK/err")"
 [ -s "$LEDGER" ]    && fail "6 --dry-run must not record a ledger row" "$err"
 ok "6 --dry-run classifies without mutating"
 
+}
+
+lane_4() {
 # ======= non-issue (scratch) heads, issue #589 ==================================
 # A `scratch-<N>` worktree + a window sitting in it; the PR merged at cafe1234.
 scratch() { # $1 = gh scenario; remaining args pass through to run_clean
@@ -782,6 +799,20 @@ tok="$(scratch protected)"; err="$(cat "$WORK/err")"
 [ "$tok" = "skip:protected" ] || fail "13 a protected head must refuse with skip:protected, got '$tok'" "$err"
 [ -s "$ORDER_LOG" ] && fail "13 a protected branch must not be torn down" "$err"
 ok "13 non-issue head on a protected branch → skip:protected (no teardown)"
+
+}
+
+for n in 1 2 3 4; do
+  ( setup "$WORK/lane$n"; "lane_$n"; echo "$pass" > "$WORK/../pass.$n" ) > "$WORK/log.$n" 2>&1 &
+  eval "pid$n=\$!"
+done
+rc=0
+for n in 1 2 3 4; do
+  eval "wait \$pid$n" || rc=1
+  cat "$WORK/log.$n"
+  [ -s "$WORK/pass.$n" ] && pass=$((pass + $(cat "$WORK/pass.$n")))
+done
+[ "$rc" = 0 ] || exit 1
 
 printf '\nselftest OK: %s assertions passed (no-merge janitor bin/fleet-cleanup.sh)\n' "$pass"
 exit 0

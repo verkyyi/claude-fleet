@@ -60,15 +60,21 @@ LBL="fawstall-selftest-$$"
 trap 'tmux -L "$LBL" kill-server 2>/dev/null; rm -rf "$WORK"' EXIT
 TM() { tmux -L "$LBL" "$@"; }
 TM new-session -d -s "$LBL" -n dash -c "$WORK" "sleep 600" 2>/dev/null || fail "could not start the selftest tmux server"
-mkdir -p "$WORK/repo-scratch-7"
-P=$(TM new-window -d -P -F '#{window_id}' -n parent -c "$WORK" "sleep 600")
-TM set-window-option -t "$P" @raw 1; TM set-window-option -t "$P" @worktree "$WORK/repo-scratch-7"
-LEDGER="$FLEET_CONF_DIR/fleets/$LBL/children/scratch-7.ndjson"
+# mkparent <key> — the parent window the children below report to: PK its key,
+# P its window, LEDGER its child ledger. The ladder's lane has a parent of its own
+# (its summary and --json read every child of it); the other lanes share scratch-7.
+mkparent() {
+  PK=$1; mkdir -p "$WORK/repo-$PK"
+  P=$(TM new-window -d -P -F '#{window_id}' -n "parent-$PK" -c "$WORK" "sleep 600")
+  TM set-window-option -t "$P" @raw 1; TM set-window-option -t "$P" @worktree "$WORK/repo-$PK"
+  LEDGER="$FLEET_CONF_DIR/fleets/$LBL/children/$PK.ndjson"
+}
+mkparent scratch-7
 
-# child <N> <state|-> [cmd] — a live worker window parented on scratch-7.
+# child <N> <state|-> [cmd] — a live worker window parented on $PK.
 child() {
   local w; w=$(TM new-window -d -P -F '#{window_id}' -n "issue-$1" "${3:-sleep 600}")
-  TM set-window-option -t "$w" @issue "$1"; TM set-window-option -t "$w" @origin scratch-7
+  TM set-window-option -t "$w" @issue "$1"; TM set-window-option -t "$w" @origin "$PK"
   [ "$2" = - ] || TM set-window-option -t "$w" @claude_state "$2"
   printf '%s' "$w"
 }
@@ -87,12 +93,13 @@ until_wakes() {
   local i=0
   while [ "$(wakes "$1" | wc -w | tr -d ' ')" -lt "$2" ] && [ "$i" -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
 }
-await() { bash "$AW" "$@" -L "$LBL" --parent scratch-7 --interval 1 --no-spawn > "$WORK/out" 2> "$WORK/err" & AWAIT_PID=$!; }
-collect() { wait "$AWAIT_PID"; RC=$?; OUT=$(cat "$WORK/out"); }
+await() { bash "$AW" "$@" -L "$LBL" --parent "$PK" --interval 1 --no-spawn > "$WORK/out$L" 2> "$WORK/err$L" & AWAIT_PID=$!; }
+collect() { wait "$AWAIT_PID"; RC=$?; OUT=$(cat "$WORK/out$L"); }
 report() { bash "$SB/fleet-report-parent.sh" -L "$LBL" "$@" >/dev/null 2>&1; }
 STALLF="$WORK/.claude-dash/global/alerts.stall/$LBL-issue-301"
 
-test_ladder_reset() {
+test_ladder() {
+mkparent scratch-8
 # --- LADDER: five rungs, in order, one row each --------------------------------------
 W=$(child 301 'done')
 await 301 --timeout 40
@@ -103,11 +110,11 @@ eq "rungs 1-3 go to the child, rung 4 to the parent" \
    "issue:301 issue:301 issue:301 $P" "$(cut -f1 "$PEER_LOG" | tr '\n' ' ' | sed 's/ $//')"
 has "rung 3 re-sends the task (the brief)" 'brief' "$(sed -n 3p "$PEER_LOG")"
 has "rung 4 names the stuck child" '#301' "$(sed -n 4p "$PEER_LOG")"
-[ -f "$STALLF" ] || fail "rung 5 raised no stall alert" "$(cat "$WORK/err")"
+[ -f "$STALLF" ] || fail "rung 5 raised no stall alert" "$(cat "$WORK/err$L")"
 CHECKS=$((CHECKS + 1))
 alerts=$(bash "$SB/fleet-alerts.sh" write >/dev/null 2>&1; cat "$WORK/.claude-dash/global/alerts.ndjson")
 has "…and it is a needs row: #301 · stalled" '"severity":"needs","subject":"#301","condition":"stalled"' "$alerts"
-has "every rung is on stderr" 'wake 5/5 (alert)' "$(cat "$WORK/err")"
+has "every rung is on stderr" 'wake 5/5 (alert)' "$(cat "$WORK/err$L")"
 sleep 3
 eq "nothing climbs past rung 5" 5 "$(wakes 301 | wc -w | tr -d ' ')"
 report --win "$W" --state merged --pr 601
@@ -117,15 +124,17 @@ eq "the child lands: MERGED" "0 MERGED" "$RC $(head -1 <<< "$OUT")"
 CHECKS=$((CHECKS + 1))
 
 # READERS: wake rows are not reports.
-J=$(bash "$SB/fleet-children.sh" scratch-7 --json -L "$LBL")
+J=$(bash "$SB/fleet-children.sh" "$PK" --json -L "$LBL")
 eq "the summary still reads the report, not a wake row" "1/1 ✓" \
    "$(python3 -c 'import json,sys; print(json.load(sys.stdin)["summary"]["text"])' <<< "$J")"
 eq "…and --json lists the wakes" "1 2 3 4 5" \
    "$(python3 -c 'import json,sys; print(" ".join(str(w["level"]) for w in json.load(sys.stdin)["wakes"]))' <<< "$J")"
 [ -n "${FLEET_STALL_EVIDENCE:-}" ] && python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["wakes"], ensure_ascii=False, indent=1))' <<< "$J" > "$FLEET_STALL_EVIDENCE"
 
+}
+
+test_reset() {
 # --- RESET: progress mid-ladder ------------------------------------------------------
-: > "$PEER_LOG"
 W=$(child 302 'done')
 await 302 --timeout 40
 until_wakes 302 2
@@ -133,29 +142,37 @@ report --win "$W" --state waiting --pr 602
 until_wakes 302 4
 eq "a report mid-ladder resets it; the next stall starts at rung 1" \
    "1:nudge 2:nudge 0:reset 1:nudge" "$(wakes 302 | cut -d' ' -f1-4)"
-has "…said on stderr" 'stall ladder reset' "$(cat "$WORK/err")"
+has "…said on stderr" 'stall ladder reset' "$(cat "$WORK/err$L")"
 report --win "$W" --state merged --pr 602; collect
 
 }
 
-test_states_resume() {
+test_unknown() {
 # --- UNKNOWN and BUSY never climb ----------------------------------------------------
 W=$(child 303 -)
 await 303 --timeout 7; collect
 eq "no @claude_state: no wake rows" "" "$(wakes 303)"
 eq "…the wait just times out" 3 "$RC"
+}
+
+test_busy() {
 W=$(child 304 working "perl -e 'alarm 20; 1 while 1'")
-FLEET_AWAIT_STALL_SECS=3 bash "$AW" 304 -L "$LBL" --parent scratch-7 --interval 2 --no-spawn --timeout 9 \
-  > "$WORK/out" 2> "$WORK/err"
+FLEET_AWAIT_STALL_SECS=3 bash "$AW" 304 -L "$LBL" --parent "$PK" --interval 2 --no-spawn --timeout 9 \
+  > "$WORK/out$L" 2> "$WORK/err$L"
 eq "a busy pane stays live for the whole wait (TIMEOUT)" 3 "$?"
 eq "working with a busy pane: no wake rows" "" "$(wakes 304)"
 TM kill-window -t "$W"
+}
+
+test_idle_working() {
 W=$(child 305 working)
 await 305 --timeout 30
 until_wakes 305 1
 eq "working with an IDLE pane is a stall" "1:nudge" "$(wakes 305 | cut -d' ' -f1)"
 report --win "$W" --state merged --pr 605; collect
+}
 
+test_resume() {
 # --- RESUME: a restarted wait climbs on ----------------------------------------------
 W=$(child 306 'done')
 await 306 --timeout 40
@@ -165,7 +182,7 @@ eq "killed at rung 2" "1:nudge 2:nudge" "$(wakes 306)"
 await 306 --timeout 40
 until_wakes 306 3
 eq "the restarted wait goes on at rung 3, not 1" "1:nudge 2:nudge 3:brief" "$(wakes 306 | cut -d' ' -f1-3)"
-has "…and says so" 'resumes at wake 2/5' "$(cat "$WORK/err")"
+has "…and says so" 'resumes at wake 2/5' "$(cat "$WORK/err$L")"
 report --win "$W" --state merged --pr 606; collect
 
 }
@@ -177,8 +194,25 @@ if [ "$part" != all ]; then
   # shellcheck disable=SC2086
   groups=$(python3 "$BIN/fleet-break-it-part.py" "$part" /dev/null $groups) || exit 2
 fi
+# A part's groups run at once — each is seconds of a wait climbing (or, for UNKNOWN
+# and BUSY, of a wait NOT climbing) — each as a subshell with files of its own
+# ($L: its await's out/err, its stub's peer log); they share the tmux server and
+# the ledger, where every row names its child. Printed in order after the wait.
+# (The dispatch stands alone — selftest-partitions-selftest.sh runs it with stub
+# groups and no $WORK — so its files go to a dir of its own when there is none.)
+LANES=${WORK:-}
+[ -n "$LANES" ] || { LANES=$(mktemp -d "${TMPDIR:-/tmp}/await-stall-lanes.XXXXXX") || exit 2; trap 'rm -rf "$LANES"' EXIT; }
 for group in $groups; do
-  printf 'group %s: %s\n' "$part" "$group"
-  "$group"
+  ( L=".$group"; export PEER_LOG="$LANES/peer$L"; : > "$PEER_LOG"; CHECKS=0
+    "$group"; echo "$CHECKS" > "$LANES/checks$L" ) > "$LANES/log.$group" 2>&1 &
+  eval "pid_$group=\$!"
 done
+rc=0
+for group in $groups; do
+  eval "wait \$pid_$group" || rc=1
+  printf 'group %s: %s\n' "$part" "$group"
+  cat "$LANES/log.$group"
+  [ -s "$LANES/checks.$group" ] && CHECKS=$((CHECKS + $(cat "$LANES/checks.$group")))
+done
+[ "$rc" = 0 ] || exit 1
 printf 'fleet-await-stall selftest: OK (%d checks; part %s)\n' "$CHECKS" "$part"

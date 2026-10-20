@@ -132,7 +132,8 @@ def main():
             client = tm(inner, "list-clients", "-F", "#{client_name}").splitlines()[0]
             print("ENV %s TERM=xterm-256color -> tmux-256color; repository palette; Cmg/Clmg disabled" %
                   tm(inner, "-V"), flush=True)
-            widths = [120] if "--idle" in sys.argv else [120, 100, 80, 40]
+            widths = [int(sys.argv[sys.argv.index("--width") + 1])] if "--width" in sys.argv \
+                else [120] if "--idle" in sys.argv else [120, 100, 80, 40]
             for width in widths:
                 tm(outer, "resize-window", "-t", "out:0", "-x", width, "-y", 32)
                 until(lambda: tm(inner, "display", "-p", "-c", client, "#{client_width}") == str(width))
@@ -208,6 +209,25 @@ def main():
     return bool(failures)
 
 
+def lanes(widths):
+    """Each width in a process of its own — its own temp dir, its own two tmux
+    servers — all at once: a width's checks are seconds of watching an idle
+    frame, and nothing is shared between widths. Outputs print whole, in order;
+    any width failing fails the run."""
+    kids = [(w, subprocess.Popen([sys.executable, str(ME), "--width", str(w)],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT))
+            for w in widths]
+    rc = 0
+    for w, kid in kids:
+        out = kid.communicate()[0].decode(errors="replace")
+        sys.stdout.write(out)
+        if kid.returncode:
+            print("FAIL width %d exited %d" % (w, kid.returncode), flush=True)
+            rc = 1
+    sys.stdout.flush()
+    return rc
+
+
 if __name__ == "__main__":
     if "--panel" in sys.argv:
         panel(sys.argv[-1])
@@ -215,5 +235,7 @@ if __name__ == "__main__":
         background()
     elif not shutil.which("tmux"):
         print("SKIP: tmux absent")
-    else:
+    elif "--idle" in sys.argv or "--width" in sys.argv:
         sys.exit(main())
+    else:
+        sys.exit(lanes([120, 100, 80, 40]))

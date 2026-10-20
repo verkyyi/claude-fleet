@@ -2000,4 +2000,7 @@ class MCPTests(HubFixture):
 
 if __name__ == "__main__":
     import selftest_part  # SELFTEST_PART=K/N runs one slice of the cases (issue #2694)
+    # each case builds its own Sandbox (temp dirs, its own tmux socket), so a
+    # part's slice runs as three processes at once (T536)
+    selftest_part.fan_out(3)
     selftest_part.main()

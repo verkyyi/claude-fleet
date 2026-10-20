@@ -37,17 +37,27 @@ ok()   { CHECKS=$((CHECKS + 1)); printf 'ok   %s\n' "$1"; }
 has()  { printf '%s\n' "$2" | grep -qE -- "$3" || fail "$1" "$2"; ok "$1"; }
 hasnt() { printf '%s\n' "$2" | grep -qE -- "$3" && fail "$1" "$2"; ok "$1"; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/run-selftests-timeout-selftest.XXXXXX")" || exit 2
+TOP="$(mktemp -d "${TMPDIR:-/tmp}/run-selftests-timeout-selftest.XXXXXX")" || exit 2
 # A unique sleep length marks every process this test starts, so the residue check
-# (and the cleanup) can find exactly ours and nothing else on the machine.
-MARK=$((99000 + $$ % 900))
-cleanup() { pkill -KILL -f "sleep $MARK" 2>/dev/null; rm -rf "$WORK"; }
+# (and the cleanup) can find exactly ours and nothing else on the machine. Each
+# lane below has its own (MARK0 + lane): all five digits, so no lane's pattern is
+# a prefix of another's.
+MARK0=$((90000 + ($$ % 1500) * 6))
+cleanup() { for l in 0 1 2 3 4 5; do pkill -KILL -f "sleep $((MARK0 + l))" 2>/dev/null; done; rm -rf "$TOP"; }
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT TERM HUP
 
-mkdir -p "$WORK/bin" "$WORK/logs"
-ln -s "$RUNNER" "$WORK/bin/run-selftests.sh"
-ln -s "$MK"     "$WORK/bin/selftest-shadow-root.sh"
+# lane <n> <leg> — the legs run at once (each costs a ceiling, a grace or the
+# backstop's alarm in wall clock), each in a sandbox install root of its own with
+# its own MARK; its lines come back in order after the wait, a FAIL as its exit.
+lane() {
+  ( WORK="$TOP/$1"; MARK=$((MARK0 + $1))
+    mkdir -p "$WORK/bin" "$WORK/logs"
+    ln -s "$RUNNER" "$WORK/bin/run-selftests.sh"
+    ln -s "$MK"     "$WORK/bin/selftest-shadow-root.sh"
+    "leg_$2"; echo "$CHECKS" > "$WORK/checks" ) > "$TOP/$1.log" 2>&1 &
+  eval "lane_pid_$1=\$!"
+}
 mk() { printf '#!/bin/bash\n%s\n' "$2" > "$WORK/bin/$1-selftest.sh"; chmod +x "$WORK/bin/$1-selftest.sh"; }
 
 # In place (no shadow) unless a leg says otherwise; the outer gate's knobs stripped.
@@ -59,6 +69,7 @@ run() {
 }
 residue() { pgrep -f "sleep $MARK" 2>/dev/null | tr '\n' ' '; }
 
+leg_timeout() {
 # ---- TIMEOUT: a hung test is killed, named, counted, and the run goes on -----------
 mk a-first  'echo first ran'
 mk b-hang   "echo hanging; ( sleep $MARK ) & sleep $MARK"
@@ -77,7 +88,9 @@ has   "the timed-out test heads the slowest table" "$out" '^ +[0-9]+\.[0-9]s  b-
 sleep 0.3; r=$(residue)
 [ -z "$r" ] || fail "processes from the timed-out test survived: $r"; ok "no process of the hung test survives"
 rm -f "$WORK/bin/"[abc]-*-selftest.sh
+}
 
+leg_stubborn() {
 # ---- STUBBORN: SIGTERM ignored → still killed ----------------------------------------
 mk stubborn "trap '' TERM; sleep $MARK"
 out=$(run env FLEET_SELFTEST_TEST_TIMEOUT=1 sh ./run-selftests.sh </dev/null)
@@ -85,7 +98,9 @@ has "a TERM-ignoring test is still a TIMEOUT" "$out" '^TIMEOUT stubborn-selftest
 sleep 0.3; r=$(residue)
 [ -z "$r" ] || fail "a TERM-ignoring test survived: $r"; ok "…and KILL after the grace takes it"
 rm -f "$WORK/bin/stubborn-selftest.sh"
+}
 
+leg_stdin() {
 # ---- STDIN: an open pipe on the runner's stdin never reaches a test ------------------
 mk reads 'x=$(cat); echo "stdin=[$x]"'
 for to in 5 0; do
@@ -94,7 +109,9 @@ for to in 5 0; do
   hasnt "…never the runner's stdin (timeout=$to)" "$out" 'leaked'
 done
 rm -f "$WORK/bin/reads-selftest.sh"
+}
 
+leg_off() {
 # ---- OFF: 0 = no ceiling --------------------------------------------------------------
 mk slow 'sleep 2'
 out=$(run env FLEET_SELFTEST_TEST_TIMEOUT=1 sh ./run-selftests.sh </dev/null)
@@ -102,7 +119,9 @@ has "control: a 2s test under a 1s ceiling is a TIMEOUT" "$out" '^TIMEOUT slow-s
 out=$(run env FLEET_SELFTEST_TEST_TIMEOUT=0 sh ./run-selftests.sh </dev/null)
 has "FLEET_SELFTEST_TEST_TIMEOUT=0 lets it finish" "$out" '^PASS  slow-selftest\.sh'
 rm -f "$WORK/bin/slow-selftest.sh"
+}
 
+leg_backstop() {
 # ---- BACKSTOP: a SIGKILLed supervisor still cannot leave the test running ----------
 mk orphan "echo \$\$ > '$WORK/orphan.pid'; sleep $MARK"
 run env FLEET_SELFTEST_TEST_TIMEOUT=1 sh ./run-selftests.sh </dev/null > "$WORK/orphan.out" &
@@ -118,7 +137,9 @@ ok "the test dies on its own alarm after its supervisor is SIGKILLed"
 wait
 pkill -KILL -f "sleep $MARK" 2>/dev/null   # its child sleep is an orphan by design here
 rm -f "$WORK/bin/orphan-selftest.sh"
+}
 
+leg_heavy() {
 # ---- HEAVY: the whole gate queues on fleet-heavy.sh ---------------------------------
 cat > "$WORK/bin/fleet-heavy.sh" <<EOF
 #!/bin/sh
@@ -142,5 +163,15 @@ rm -f "$WORK/heavy.log"
 out=$(PROBE_ARG=env-probe shadow_run env)
 [ ! -e "$WORK/heavy.log" ] || fail "a named test run must skip the queue" "$(cat "$WORK/heavy.log")"; ok "a named test run skips the queue"
 has "…and it still runs" "$out" '^PASS  env-probe-selftest\.sh'
+}
+
+lane 0 backstop; lane 1 timeout; lane 2 stubborn; lane 3 stdin; lane 4 off; lane 5 heavy
+rc=0
+for l in 1 2 3 4 0 5; do
+  eval "wait \$lane_pid_$l" || rc=1
+  cat "$TOP/$l.log"
+  [ -s "$TOP/$l/checks" ] && CHECKS=$((CHECKS + $(cat "$TOP/$l/checks")))
+done
+[ "$rc" = 0 ] || exit 1
 
 printf 'selftest: run-selftests timeout PASS (%s checks)\n' "$CHECKS"
