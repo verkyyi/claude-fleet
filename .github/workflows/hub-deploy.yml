@@ -356,7 +356,7 @@ jobs:
       # FLEET_DEPLOY_OVERLAY_REPO (owner/name) names a private repo whose k8s/ is
       # laid over deploy/k8s/, so every path below is unchanged; the prod
       # environment's secret FLEET_DEPLOY_OVERLAY_SSH_KEY is its read-only deploy
-      # key. Not set ⇒ the overlays this tree still carries (# compat-1v: 下一批删).
+      # key. Not set ⇒ refused: this tree carries no prod overlay.
       # A missing key must say so, not 404 (claude-fleet#3860): with no ssh-key,
       # checkout asks the REST API with GITHUB_TOKEN, which never sees a private
       # repo — "Not Found" named neither the repo nor the credential.
@@ -392,8 +392,8 @@ jobs:
             echo "from=$OVERLAY_REPO@${sha:0:7}" >> "$GITHUB_OUTPUT"
             echo "overlays: $OVERLAY_REPO@$sha"
           else
-            echo "from=this tree" >> "$GITHUB_OUTPUT"
-            echo "::notice::FLEET_DEPLOY_OVERLAY_REPO not set — deploying the overlays this tree carries"
+            echo "::error::repo variable FLEET_DEPLOY_OVERLAY_REPO is not set — the prod overlays live in the private deploy repo, this tree carries none"
+            exit 1
           fi
           .github/actions/hub-release/render-check.sh --need-prod deploy/k8s
         env:

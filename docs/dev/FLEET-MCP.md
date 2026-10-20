@@ -45,10 +45,8 @@ ships with the core (issue #4334): no plugin registers it. Claude shows its tool
   needs no reopen: its `fleet` server, once it takes over the new version (#1898's
   exec + `tools/list_changed`), lists the dispatch group itself, and answers it
   (`road=legacy`) as it always did.
-- **The role-taking tool is listed by neither server** (issue #4334) and its script
-  left with the role seats (issue #4340, EPIC #4333 C7): an old session that listed it
-  keeps a call that answers 「retired」 (exit 2, nothing marked) for one version
-  (`# compat-1v`). A role is a session template now: `spawn` with `agent:orchestrator`.
+- **There is no role-taking tool** (issues #4334, #4340, EPIC #4333 C7): a role is a
+  session template, `spawn` with `agent:orchestrator`.
 - **There is no `rule`** on `task` (issue #4340: the dispatch rule
   table is gone; nothing writes 「按规则 N 派发」 or a `fleet:rule` marker).
 - **Old sessions keep their tools (#2068, one version — `# compat-1v`).** `fleet`

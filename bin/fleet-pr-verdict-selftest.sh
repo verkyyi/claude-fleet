@@ -375,7 +375,7 @@ run_wait
 ok "macOS shards never hold the merge gate (#2286): queued/red ones are dropped, Linux decides"
 
 # `CI 结论` (issue #4815): present, it decides — a check still running elsewhere
-# no longer holds a green conclusion; any other red still fails (compat-1v);
+# no longer holds a green conclusion; any other red still fails (fail fast);
 # pending until it completes; absent ⇒ every check, as before.
 CI_PASS='{"name":"CI 结论","status":"COMPLETED","conclusion":"SUCCESS"}'
 CI_FAIL='{"name":"CI 结论","status":"COMPLETED","conclusion":"FAILURE"}'
@@ -389,7 +389,7 @@ run_wait
 [ "$OUT" = FAILING ] || fail "a red CI 结论 is FAILING whatever the rest says" "out=$OUT"
 seq_reset; fx 1 OPEN CLEAN "$CI_PASS,$C_FAIL"
 run_wait
-[ "$OUT" = FAILING ] || fail "another red check still fails beside a green CI 结论 (compat-1v)" "out=$OUT"
+[ "$OUT" = FAILING ] || fail "another red check still fails beside a green CI 结论 (fail fast)" "out=$OUT"
 seq_reset; fx 1 OPEN BLOCKED "$CI_RUN,$C_PASS"; fx 2 OPEN CLEAN "$CI_PASS,$C_PASS"
 run_wait --wait
 [ "$OUT" = READY ] && [ "$CALLS" = 2 ] || fail "--wait holds a queued CI 结论, then READY" "out=$OUT calls=$CALLS"

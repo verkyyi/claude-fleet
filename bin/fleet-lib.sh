@@ -1919,19 +1919,16 @@ fleet_repo_trust_warn() {
 #   failed:clone              1  the clone failed
 #   failed:write              1  the overlay could not be written
 # Nothing is written unless the token is added:*.
-# `--tickets` (issue #3739) is read one version and only said: the ticket layer
-# left with issue #4898 and a repo writes no FLEET_TICKETS line. # compat-1v: 下一批删
 # Who runs its tasks is not the repo's (issue #4901): it is this login's person's,
 # fleet.conf [node]'s FLEET_TASK_AUTHORITY (fleet_task_authority) — a new repo
 # writes no line and asks the hub nothing. `--authority` (#4885's per-repo default)
 # is read one version and only said. # compat-1v: 下一批删
 fleet_repo_register() {
   local sess="" repo="" dir="" base="" base_src="" base_default="" tab f bin rc seed=0
-  local as="" remote="" forge=github had tickets="" authority=""
+  local as="" remote="" forge=github had authority=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --base) base="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
-      --tickets) tickets="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
       --authority) authority="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
       --as) as="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
       --seed) seed=1; shift ;;
@@ -1947,10 +1944,6 @@ fleet_repo_register() {
     repo=$(fleet_repo_name_of "$remote")
   fi
   [ -n "$as" ] && repo="$as"
-  if [ -n "$tickets" ]; then
-    echo "fleet-repo: --tickets is ignored — the hub task record is the only ticket (issue #4898)" >&2
-    tickets=''
-  fi
   if [ -n "$authority" ]; then
     echo "fleet-repo: --authority is ignored — who runs tasks is this login's, not a repo's (issue #4901): \`fleet-repo.sh authority --dry-run\`" >&2
     authority=''

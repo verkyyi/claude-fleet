@@ -21,8 +21,7 @@
 # `add` is fleet_repo_register (fleet-lib.sh, issue #1104) — the one implementation
 # fleet-up.sh shares: reuse the checkout if it already is that repo, else clone it;
 # resolve the base branch (#603); write the overlay; then the follow-through —
-# trust warning, daemon wake, collector kick. `--tickets` (issue #3739) is read one
-# version and only said: the ticket layer left with issue #4898. Who runs its tasks is not
+# trust warning, daemon wake, collector kick. Who runs its tasks is not
 # the repo's (issue #4901): it is the login's (fleet.conf [node]
 # FLEET_TASK_AUTHORITY), so `add` writes no authority line; `--authority` is read
 # one version and only said (# compat-1v: 下一批删).
@@ -59,7 +58,7 @@ usage() { sed -n '4,10p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 cmd="${1:-}"; [ -n "$cmd" ] || usage; shift
 if [ "$cmd" = authority ]; then exec python3 "$BIN/fleet_repo_authority.py" "$@"; fi
-SESS=""; REPO=""; DIR=""; BASE=""; AS=""; TICKETS=""; AUTHORITY=""; FORCE=0; KEY=""; WIN=""; WT=""; TSV=0
+SESS=""; REPO=""; DIR=""; BASE=""; AS=""; AUTHORITY=""; FORCE=0; KEY=""; WIN=""; WT=""; TSV=0
 INTO=""; DRY=0; WAIT=0
 if [ "$cmd" = get ]; then KEY="${1:-}"; [ -n "$KEY" ] || usage; shift; fi
 while [ $# -gt 0 ]; do
@@ -67,7 +66,6 @@ while [ $# -gt 0 ]; do
     --session) [ $# -ge 2 ] || usage; SESS="$2"; shift 2 ;;
     --base)    [ $# -ge 2 ] || usage; BASE="$2"; shift 2 ;;
     --as)      [ $# -ge 2 ] || usage; AS="$2"; shift 2 ;;
-    --tickets) [ $# -ge 2 ] || usage; TICKETS="$2"; shift 2 ;;
     --authority) [ $# -ge 2 ] || usage; AUTHORITY="$2"; shift 2 ;;
     --window)  [ $# -ge 2 ] || usage; WIN="$2"; shift 2 ;;
     --worktree) [ $# -ge 2 ] || usage; WT="$2"; shift 2 ;;
@@ -467,7 +465,7 @@ EOF
     # One implementation (fleet_repo_register, issue #1104): stdout is its result
     # token, the human lines are on stderr.
     fleet_repo_register "$SESS" "$REPO" ${DIR:+"$DIR"} ${BASE:+--base "$BASE"} ${AS:+--as "$AS"} \
-      ${TICKETS:+--tickets "$TICKETS"} ${AUTHORITY:+--authority "$AUTHORITY"}
+      ${AUTHORITY:+--authority "$AUTHORITY"}
     exit $?
     ;;
 

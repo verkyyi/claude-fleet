@@ -1430,22 +1430,6 @@ TOOLS = {
             "required": ["target"], "additionalProperties": False}}),
 }
 
-# Tools a release took out (issue #4904): never listed, still ANSWERED for one
-# version — a session launched before it met them in its list, so its call gets
-# the reason instead of «unknown tool», and the release gate's replay (--probe)
-# counts them as handled. # compat-1v: 下一批删
-RETIRED = {
-    "whats_new": "removed (claude-fleet#4904): the release notes are in the repo's history",
-    "debug_bundle": "removed with the debug desk (claude-fleet#4904): `fleet doctor` reads this computer",
-    "debug_publish": "removed with the debug desk (claude-fleet#4904)",
-    "debug_propose": "removed with the debug desk (claude-fleet#4904)",
-    "comment": "removed (claude-fleet#4898): the fleet writes no GitHub comments — a question is `ask`, "
-               "an outcome is `report`, a peer is `send`",
-    "evidence": "removed (claude-fleet#4898): put what you verified in the PR body and the `report` summary",
-    "file_issue": "removed (claude-fleet#4898): new work is the `task` tool (a hub task record); a red base "
-                  "is said in your `report`",
-    "gh": "removed (claude-fleet#4898): read a PR with `gh pr view` yourself; the merge gate is `pr_verdict`",  # no-gh-ok: a message
-}
 
 # The pre-#1807 fleet-peer server, for a config that still mounts it (one version).
 LEGACY = {
@@ -1559,9 +1543,6 @@ def tool_call(table, name, args):
     ROAD["legacy"] = (table is TOOLS and not ROAD["call"] and name in ORCH_GROUP
                      and name not in listing(table, served=True))
     entry = table.get(name)
-    if entry is None and table is TOOLS and name in RETIRED:
-        log_call(str(name), None, "refused", "retired")
-        return tool_result(name, "%s.%s: %s. Nothing ran." % (SERVER, name, RETIRED[name]), error=True)
     if entry is None:
         log_call(str(name), None, "refused", "unknown tool")
         return tool_result(name, "%s.%s: unknown tool. Nothing ran." % (SERVER, name), error=True)
@@ -1864,7 +1845,7 @@ def main(argv):
         return cred_main(argv[1])
     if argv[:1] == ["--probe"]:
         # A new version proves it starts before a running server execs it (#1898).
-        print(json.dumps({"tools": sorted(set(TOOLS) | set(RETIRED))}))
+        print(json.dumps({"tools": sorted(TOOLS)}))
         return 0
     if argv[:1] == ["--legacy-peer"]:
         serve(LEGACY, "fleet-peer")
