@@ -432,6 +432,10 @@ type Server struct {
 	svcAlertAt   time.Time
 	svcAlertSeen map[string]bool
 
+	// placeHolds is each machine that just said it cannot take a new
+	// session (claude-fleet T672, fleet_place.go).
+	placeHolds placeHoldBook
+
 	// relayLocks serialises relay dispatch per target endpoint
 	// (claude-fleet#1421), so two heartbeat triggers never push one relay
 	// twice in the same instant.

@@ -112,10 +112,13 @@ func place(args []string, stdout, stderr io.Writer) (int, error) {
 	key := fs.String("key", "", "idempotency key (default: one per call)")
 	wait := fs.Int("wait", -1, "seconds the hub waits on a remote start's outcome (default: the hub's, 60; 0 = answer on acceptance)")
 	name := fs.String("name", "", "a scratch session's name (with `scratch` in place of the issue)")
+	notHere := fs.String("not-here", "", "this machine cannot open it itself — its admission's reason (claude-fleet T672): the hub places it elsewhere, or refuses naming each machine")
+	as := fs.String("as", "", "the agent file the session starts as (claude-fleet#3122)")
+	bodyFile := fs.String("body-file", "", "a scratch's seed, read from this file (the first turn's words)")
 	reap := fs.String("reap", "", "when the session may be closed on its own: merged[:<dur>], done[:<dur>], loop-end, at:<time> or keep (claude-fleet#1902; default: its kind's)")
 	fs.Usage = func() {
-		fmt.Fprint(stderr, `Usage: ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] <owner/repo> <issue> <worker_id>
-       ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] [--name <n>] <owner/repo> scratch <fleet UUID>
+		fmt.Fprint(stderr, `Usage: ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] [--not-here <why>] [--as <file>] <owner/repo> <issue> <worker_id>
+       ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] [--not-here <why>] [--as <file>] [--name <n>] [--body-file <f>] <owner/repo> scratch <fleet UUID>
 
 Ask the hub which machine should open a session on an issue (claude-fleet#1425),
 or a raw scratch session with no issue (claude-fleet#1541: no lease; the
@@ -182,6 +185,24 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 	}
 	if *reap != "" {
 		ask["reap"] = *reap
+	}
+	if *notHere != "" {
+		ask["not_here"] = *notHere
+	}
+	if *as != "" {
+		ask["as"] = *as
+	}
+	if *bodyFile != "" {
+		if rest[1] != "scratch" {
+			return 2, errors.New("--body-file is for a scratch start")
+		}
+		b, err := os.ReadFile(*bodyFile)
+		if err != nil {
+			return 2, err
+		}
+		if t := strings.TrimRight(string(b), "\n"); strings.TrimSpace(t) != "" {
+			ask["body"] = t
+		}
 	}
 	// Each machine tried is waited on in turn (claude-fleet#1610).
 	ask["tries"] = placeTries

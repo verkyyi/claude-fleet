@@ -28,6 +28,11 @@
 #   SELF    --node local / this host's alias → never asks the hub.
 #   CAP     this machine is full → still placed on mac-a (exit 0); a LOCAL answer
 #           then refuses with the cap reason (exit 2).
+#   NOTHERE (issue T672) this machine full ⇒ its reason rides the ONE place ask as
+#           `--not-here <why>` (one round trip, counted); the hub's ALL_DECLINED
+#           then refuses naming every machine (exit 2); the hub never reached
+#           (connection refused, rc 11) ⇒ opened here, `@placed fallback-local`;
+#           a LOCAL answer stamps `@placed hub`; every ask says `place_ms=`.
 #   DONE    (issue #1586) the hub waited and mac-a opened it → exit 0, the window id
 #           on stderr and in the parent's children/<key>.dispatch.
 #   DECLINED mac-a's spawn refused it → the same exit a refusal here gives (2 full ·
@@ -69,8 +74,9 @@
 #           hub off ⇒ byte-identical and --node mac-a refused; REMOTE / done /
 #           LOCAL / no machine / named-refused / DECLINED / UNKNOWN / hub down
 #           branch as an issue spawn's do, with NO lease at any point; local /
-#           this host's alias never ask; a seeded (--prompt) or no-repo scratch
-#           never travels; a start the hub sent (--origin hub --node local
+#           this host's alias never ask; a no-repo scratch never travels, a
+#           seeded one (--prompt) does, its words as --body-file (T672), and so
+#           does --as fleet-worker (a shipped file); a start the hub sent (--origin hub --node local
 #           --origin-wid) is never placed again, stamps the parent verbatim and
 #           prints its --print receipt; a full machine still places elsewhere;
 #           the dash's --bg hands --node to the background pass.
@@ -233,6 +239,8 @@ cat > "$WORK/fakebin/fake-place" <<PLACEFAKE
 #!/bin/bash
 printf '%s\n' "\$*" >> "$PLACE_LOG"
 printf '%s\n' "\${CCQUOTA_TOKEN:-<unset>}" > "$WORK/place.env"
+# the seed a scratch carries (T672): --body-file's contents, before the caller removes it
+prev=''; for a in "\$@"; do [ "\$prev" = --body-file ] && cat "\$a" > "$WORK/place.body"; prev=\$a; done
 [ -n "\${PLACE_ANSWER:-}" ] && printf '%s\n' "\$PLACE_ANSWER"
 [ -n "\${PLACE_STDERR:-}" ] && printf '%s\n' "\$PLACE_STDERR" >&2
 exit "\${PLACE_RC:-0}"
@@ -334,7 +342,7 @@ if selftest_section 1; then
 # ===== REMOTE: placed on mac-a ⇒ nothing here, lease kept ============================
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258
 [ "$(rc)" = 0 ]                                  || fail "REMOTE exits 0 (rc=$(rc))"
-place_has "--node auto --agent claude acme/widgets 258 $WID" || fail "REMOTE asks with node auto and this fleet's worker_id"
+place_has "--node auto --agent claude --as fleet-worker acme/widgets 258 $WID" || fail "REMOTE asks with node auto and this fleet's worker_id"
 err_has '#258 → mac-a (hub operation op_42, accepted)' || fail "REMOTE names the machine and the operation"
 err_has 'mac-b excluded: load 1.00/core > 0.8'      || fail "REMOTE carries the reason"
 tmux_has 'new-window'                            && fail "REMOTE must not open a window here"
@@ -425,7 +433,7 @@ if command -v zsh >/dev/null 2>&1; then          # the exact shape of the EPIC #
   tmux_has 'new-window'                          || fail "PIN zsh's unsplit \$extra opens it here"
 fi
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 "--node mac-a"
-place_has "--node mac-a --agent claude acme/widgets 258"           || fail "PIN a fused --node <other machine> is asked for by name"
+place_has "--node mac-a --agent claude --as fleet-worker acme/widgets 258"           || fail "PIN a fused --node <other machine> is asked for by name"
 ok "PIN --node local in any order and fused (\"--node local\", zsh's unsplit \$var) → no hub call; fused mac-a → by name"
 
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_spawn 258
@@ -437,6 +445,27 @@ lease_has release                                || fail "CAP the refused spawn 
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_spawn 258 --node local
 [ "$(rc)" = 2 ] && [ ! -s "$PLACE_LOG" ]         || fail "CAP --node local refuses at the cap without asking (rc=$(rc))"
 ok "CAP a full machine still places elsewhere; opening here keeps the cap"
+
+# ===== NOTHERE (T672): this machine's own refusal rides the one ask ==============
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_spawn 258
+[ "$(rc)" = 0 ] && place_has '--not-here fleet at capacity' || fail "NOTHERE a full machine tells the hub so on its place ask (rc=$(rc))"
+[ "$(grep -c . "$PLACE_LOG")" = 1 ]               || fail "NOTHERE one round trip: exactly one place ask (got $(grep -c . "$PLACE_LOG"))"
+err_has 'place_ms='                              || fail "NOTHERE the ask is timed"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258
+place_has '--not-here'                           && fail "NOTHERE a machine with room says nothing of the kind"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_RC=4 INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 \
+  PLACE_ANSWER=$'REFUSED ALL_DECLINED\tevery machine that could take it said no — mac-b: 本机准入不过：fleet at capacity; mac-a: load 1.00/core > 0.8' run_spawn 258
+[ "$(rc)" = 2 ] && err_has 'mac-b: 本机准入不过' && err_has 'mac-a: load 1.00/core' \
+                                                 || fail "NOTHERE all full → refused (exit 2) naming every machine (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+tmux_has 'new-window'                            && fail "NOTHERE all full must not open here"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_RC=1 \
+  PLACE_STDERR='ccquota: Post "https://hub.test/v1/node/place": dial tcp 10.0.0.9:443: connect: connection refused' run_spawn 258
+[ "$(rc)" = 0 ] && tmux_has 'new-window' && tmux_has "@placed 'fallback-local'" \
+                                                 || fail "NOTHERE the hub never reached → opened here, @placed fallback-local (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+err_has 'hub 不可达'                             || fail "NOTHERE the fallback is said"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' run_spawn 258
+tmux_has "@placed 'hub'"                         || fail "NOTHERE a LOCAL answer stamps @placed hub"
+ok "NOTHERE a full machine's reason rides the one ask; all full names each; never reached → here, @placed fallback-local"
 
 # ===== ALLFULL (issue #1587): every machine at its own cap ⇒ 都满了, naming each =====
 ALLFULL=$'REFUSED AT_CAPACITY\tall-full: every machine is at its session cap — mac-a: full (8/8 sessions, the login\'s own cap); mac-b: full (1/1 sessions, the login\'s own cap)'
@@ -604,7 +633,7 @@ ok "FALLBACK the hub's next machine: done/LOCAL after a decline recorded per mac
 rm -f "$DISPATCH"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'REMOTE mac-a op_46 accepted\tchose mac-a' run_spawn 258 --origin issue-77 --async
 [ "$(rc)" = 0 ]                                  || fail "ASYNC exits 0 (rc=$(rc))"
-place_has '--wait 0 acme/widgets 258'            || fail "ASYNC asks with --wait 0"
+place_has '--wait 0 --as fleet-worker acme/widgets 258'            || fail "ASYNC asks with --wait 0"
 grep -q '"op": "op_46".*"state": "accepted"' "$DISPATCH" || fail "ASYNC leaves the operation id" "$(cat "$DISPATCH" 2>/dev/null)"
 shown=$(python3 "$BIN/fleet-children.py" show --dir "$(dirname "$DISPATCH")" --parent issue-77 --json </dev/null)
 printf '%s' "$shown" | grep -q '"dispatches": \[{.*"op": "op_46"' || fail "ASYNC fleet-children lists the dispatch" "$shown"
@@ -662,23 +691,23 @@ ok "ACCOUNT no flag / any / garbage → nothing added (garbage named on stderr)"
 for c in local pool; do
   CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258 --account "$c"
   [ "$(rc)" = 0 ]                                || fail "ACCOUNT --account $c spawns (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-  place_has "--account $c acme/widgets 258 $WID" || fail "ACCOUNT --account $c is asked for on the place command"
+  place_has "--account $c --as fleet-worker acme/widgets 258 $WID" || fail "ACCOUNT --account $c is asked for on the place command"
   tmux_has '@account_class'                      && fail "ACCOUNT --account $c stamps no @account_class (T550)"
   tmux_has 'new-window'                          || fail "ACCOUNT --account $c: a LOCAL answer opens it here"
 done
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 --account pool
-place_has '--account pool acme/widgets'          || fail "ACCOUNT remote: the class travels with the placement"
+place_has '--account pool --as fleet-worker acme/widgets'          || fail "ACCOUNT remote: the class travels with the placement"
 tmux_has 'new-window'                            && fail "ACCOUNT remote: nothing opens here"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258 "--account local"
-place_has '--account local acme/widgets'         || fail "ACCOUNT a fused \"--account local\" (zsh's unsplit \$var) is read"
+place_has '--account local --as fleet-worker acme/widgets'         || fail "ACCOUNT a fused \"--account local\" (zsh's unsplit \$var) is read"
 ok "ACCOUNT --account local|pool → --account on the place command, no window stamp; fused form read"
 
 printf 'CCQUOTA_FLEET=1\nFLEET_ACCOUNT_CLASS=local\n' > "$WORK/conf/fleets/testsess/conf"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258
-place_has '--account local acme/widgets'         || fail "ACCOUNT the fleet conf's FLEET_ACCOUNT_CLASS is the default"
+place_has '--account local --as fleet-worker acme/widgets'         || fail "ACCOUNT the fleet conf's FLEET_ACCOUNT_CLASS is the default"
 tmux_has '@account_class'                        && fail "ACCOUNT the conf default stamps nothing either (T550)"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258 --account pool
-place_has '--account pool acme/widgets'          || fail "ACCOUNT --account beats the conf default"
+place_has '--account pool --as fleet-worker acme/widgets'          || fail "ACCOUNT --account beats the conf default"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258 --account any
 place_has '--account'                            && fail "ACCOUNT --account any turns the conf default off"
 tmux_has '@account_class'                        && fail "ACCOUNT --account any: no stamp either"
@@ -818,17 +847,22 @@ PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=mac-a run_raw
 place_has "--node mac-a --agent claude acme/widgets scratch $UUID" && err_has 'scratch → mac-a' || fail "SCRATCH-SPAWN_NODE=mac-a asks for that machine by name" "$(cat "$PLACE_LOG")"
 ok "SCRATCH SELF (local / this host's alias) and FLEET_SPAWN_NODE=local never ask; FLEET_SPAWN_NODE=mac-a asks by name"
 
+# A seeded scratch travels (T672): its words ride the start as --body-file.
+rm -f "$WORK/place.body"
 PLACE_ANSWER="$REMOTE_LINE" run_raw --node mac-a --prompt 'seed me'
-[ "$(rc)" = 1 ] && err_has 'a seeded scratch (--prompt) opens on this machine only' || fail "SCRATCH-SEEDED --prompt + --node mac-a is refused (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-[ -s "$PLACE_LOG" ]                              && fail "SCRATCH-SEEDED must not ask the hub"
-tmux_has 'new-window'                            && fail "SCRATCH-SEEDED must not open it here instead"
-PLACE_ANSWER="$REMOTE_LINE" run_raw --prompt 'seed me'
-[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "SCRATCH-SEEDED under auto a seeded scratch opens here (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-[ -s "$PLACE_LOG" ]                              && fail "SCRATCH-SEEDED under auto never asks the hub"
+[ "$(rc)" = 0 ] && place_has '--body-file' && [ "$(cat "$WORK/place.body" 2>/dev/null)" = 'seed me' ] \
+                                                 || fail "SCRATCH-SEEDED --prompt travels with its words (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+tmux_has 'new-window'                            && fail "SCRATCH-SEEDED placed elsewhere must not open here too"
+PLACE_ANSWER="$REMOTE_LINE" INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_raw --prompt 'seed me'
+[ "$(rc)" = 0 ] && place_has '--not-here fleet at capacity' && err_has 'scratch → mac-a' \
+                                                 || fail "SCRATCH-SEEDED a full machine sends a seeded scratch elsewhere (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+# the shipped fleet-worker travels; a file only here does not (T672, T604)
+PLACE_ANSWER="$REMOTE_LINE" run_raw --node mac-a --as fleet-worker
+[ "$(rc)" = 0 ] && place_has '--as fleet-worker' || fail "SCRATCH-AS --as fleet-worker opens on another machine (rc=$(rc))" "$(cat "$WORK/spawn.err")"
 PLACE_ANSWER="$REMOTE_LINE" run_raw --node mac-a --no-repo
 [ "$(rc)" = 1 ] && err_has 'a no-repo scratch opens on this machine only' || fail "SCRATCH-NOREPO --no-repo + --node mac-a is refused (rc=$(rc))" "$(cat "$WORK/spawn.err")"
 [ -s "$PLACE_LOG" ]                              && fail "SCRATCH-NOREPO must not ask the hub"
-ok "SCRATCH a seeded or no-repo scratch never travels: named elsewhere → refused; auto → opened here, hub not asked"
+ok "SCRATCH a seeded scratch and the shipped fleet-worker travel; a no-repo one is refused elsewhere"
 
 PLACE_ANSWER="$REMOTE_LINE" run_raw testsess --origin hub --origin-wid "$MACHINE/issue-77" --node local --print --name '试一下'
 [ "$(rc)" = 0 ]                                  || fail "SCRATCH-HUBSENT exits 0 (rc=$(rc))" "$(cat "$WORK/spawn.err")"

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
@@ -75,7 +76,67 @@ type placeRequest struct {
 	// tries × wait. Absent (an older ccquota) = 1 — the next machine is still
 	// tried while that one wait has room left.
 	Tries int `json:"tries"`
+	// NotHere is the asking machine's own admission refusal (claude-fleet
+	// T672): it cannot open the session itself — memory, load, its cap — so
+	// it is out of this placement (declined, its reason the candidate's) and
+	// held out of the hub's next ones for placeHoldTTL, until it asks again
+	// without one. Empty = as before.
+	NotHere string `json:"not_here"`
+	// Body is a scratch's seed (the first turn's words), carried to the
+	// machine that opens it — a seeded scratch travels like any other.
+	Body string `json:"body"`
+	// As is the agent file the session starts as (claude-fleet#3122); only a
+	// file every machine has (shipped with the release) is sent elsewhere.
+	As string `json:"as"`
 }
+
+// placeHoldTTL is how long an asker's own «not here» keeps it out of the
+// hub's placements (claude-fleet T672): its next heartbeat says the same or
+// better, and a request of its own without one lifts it at once.
+var placeHoldTTL = 60 * time.Second
+
+// placeHoldBook remembers the machines that just said they cannot take a
+// new session (claude-fleet T672) — fleet id → reason and until when.
+type placeHoldBook struct {
+	mu sync.Mutex
+	m  map[string]placeHold
+}
+
+type placeHold struct {
+	why   string
+	until time.Time
+}
+
+func (b *placeHoldBook) set(fleetID, why string, now time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if why == "" {
+		delete(b.m, fleetID)
+		return
+	}
+	if b.m == nil {
+		b.m = map[string]placeHold{}
+	}
+	b.m[fleetID] = placeHold{why: why, until: now.Add(placeHoldTTL)}
+}
+
+func (b *placeHoldBook) held(fleetID string, now time.Time) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	h, ok := b.m[fleetID]
+	if !ok {
+		return ""
+	}
+	if !now.Before(h.until) {
+		delete(b.m, fleetID)
+		return ""
+	}
+	return h.why
+}
+
+// excludedAskerFull is a candidate the asking machine itself said cannot
+// take a new session (claude-fleet T672).
+const excludedAskerFull = "本机准入不过："
 
 // placeWait is how long a REMOTE start is waited on by default (60 s, the
 // EPIC #1645 ruling — claude-fleet#1606), and placeWaitMax the most a node
@@ -206,6 +267,24 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "reap must be merged[:<dur>], done[:<dur>], loop-end, at:<time> or keep")
 		return
 	}
+	req.NotHere = oneLine(req.NotHere)
+	if len([]rune(req.NotHere)) > 300 {
+		req.NotHere = string([]rune(req.NotHere)[:300])
+	}
+	if req.As != "" && !agentFileRE.MatchString(req.As) {
+		httpError(w, http.StatusBadRequest, "as must be an agent file's name")
+		return
+	}
+	if req.Body != "" {
+		if !scratch {
+			httpError(w, http.StatusBadRequest, "body belongs to a scratch start (kind=scratch)")
+			return
+		}
+		if _, err := checkText(req.Body, "body"); err != nil {
+			httpError(w, http.StatusBadRequest, errorObject(err)["message"])
+			return
+		}
+	}
 	fl, err := s.Store.Fleet(fleetID)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && fl.EndpointID != ep.ID) {
 		httpError(w, http.StatusForbidden, "fleet "+fleetID+" is not registered to this node (has its heartbeat reached the hub?)")
@@ -271,6 +350,12 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		if req.Reap != "" {
 			input["reap"] = req.Reap
 		}
+		if req.Body != "" {
+			input["body"] = req.Body
+		}
+		if req.As != "" {
+			input["as"] = req.As
+		}
 		if accountClassBinds(req.AccountClass) {
 			input["account_class"] = req.AccountClass
 		}
@@ -291,7 +376,15 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		}
 		taskOwnsIssueLease = task.TicketRef != ""
 	}
-	pl, err := s.pickNode(p, req.Repo, req.Node, req.Agent, now)
+	// The asker's own «not here» (claude-fleet T672): out of this placement
+	// and, for placeHoldTTL, of everyone's; a request without one says it can
+	// take sessions again.
+	declined := map[string]string{}
+	if req.NotHere != "" {
+		declined[fleetID] = excludedAskerFull + req.NotHere
+	}
+	s.placeHolds.set(fleetID, req.NotHere, now)
+	pl, err := s.pickNodeAfter(p, req.Repo, req.Node, req.Agent, now, declined, "")
 	if err != nil {
 		s.placeAudit(p, fleetID, errorObject(err)["code"], now)
 		writeJSON(w, placeStatus(err), map[string]any{"error": errorObject(err), "placement": pl})
@@ -334,7 +427,6 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		tries = min(req.Tries, placeTriesMax)
 	}
 	deadline := now.Add(wait * time.Duration(tries))
-	declined := map[string]string{}
 	attempts := []placeAttempt{}
 	withAttempts := func(m map[string]any) map[string]any {
 		if req.Dispatch != nil {
@@ -356,7 +448,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		declined[pl.FleetID] = a.Why
 		npl, err := s.pickNodeAfter(p, req.Repo, "auto", req.Agent, time.Now(), declined, fleetID)
 		if err != nil {
-			if len(attempts) == 1 {
+			if len(attempts) == 1 && req.NotHere == "" {
 				// The only machine that could take it said no: its answer,
 				// as it always was.
 				attempts = attempts[:0]
@@ -440,6 +532,12 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Reap != "" {
 			args["reap"] = req.Reap
+		}
+		if req.Body != "" {
+			args["body"] = req.Body
+		}
+		if req.As != "" {
+			args["as"] = req.As
 		}
 		m := nodeLabel(pl.Machine)
 		op, err := s.submitWrite(r.Context(), p, "worker_start", args, &pl)

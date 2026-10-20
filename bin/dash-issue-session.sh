@@ -288,7 +288,9 @@ unset _r _rc
 # key fills what the spawn left open.
 AS_KV=''; TEMPLATE_AGENT=''
 if [ -n "$AS_ARG" ]; then
-  if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG"; then
+  # A file shipped with the release is on every machine (issue T672): it travels;
+  # a file only here opens here.
+  if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG" && ! fleet_agent_file_travels "$AS_ARG"; then
     refuse "#$num: --as $AS_ARG opens on this machine (the agent file is here), not on $NODE_ARG"; exit "$RC_INFRA"
   fi
   AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>&1) \
@@ -395,7 +397,20 @@ ACCOUNT="${ACCOUNT_ARG:-${FLEET_ACCOUNT_CLASS:-}}"
 case "$ACCOUNT" in local|pool) : ;; *) ACCOUNT='' ;; esac
 PLACING=0
 [ "$TAIL_ONLY" != 1 ] && [ -n "$NODE" ] && ! fleet_node_is_self "$NODE" && PLACING=1
+# An agent file only this machine has keeps the session here under auto (T672);
+# one shipped with the release goes wherever the hub picks.
+PLACE_AS=''
+if [ -n "$AS_ARG" ]; then
+  if fleet_agent_file_travels "$AS_ARG"; then PLACE_AS=$AS_ARG
+  elif [ "$NODE" = auto ]; then PLACING=0; fi
+fi
+# @placed (issue T672): `hub` when the hub chose this machine, `fallback-local`
+# when the hub could not be asked and it opened here anyway; the tail carries it.
+PLACED=''; [ "$TAIL_ONLY" = 1 ] && PLACED=${FLEET_PLACED:-}
 CAP_HELD=''
+# This machine's admission is asked first but only DECIDES once the hub chose
+# this machine (T672): a refusal rides the place request as «not here», so the
+# hub sends it elsewhere in the same round trip.
 if [ "$TAIL_ONLY" != 1 ] && ! cap_msg=$(fleet_session_cap_ok "$SESS"); then
   if [ "$PLACING" = 1 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then CAP_HELD=$cap_msg
   else refuse "$cap_msg"; exit "$RC_CAP"; fi
@@ -543,7 +558,8 @@ if [ "$PLACING" = 1 ]; then
     _wait=''; [ "$ASYNC_FLAG" = 1 ] && _wait=0
     python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
     _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
-    place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
+    place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" FLEET_PLACE_AS="$PLACE_AS" \
+      fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
     if [ -s "$_dispatch_result" ]; then
       DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$AGENT" --accepted "$(cat "$_dispatch_result")") || { rm -f "$_dispatch_result"; exit 2; }
       TASK_REF=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')
@@ -590,6 +606,7 @@ if [ "$PLACING" = 1 ]; then
         refuse "#$num 已派到 $_m (hub operation $_op)，但没等到结果 — 未知，不当成功: ${_why:-no final state}"
         exit "$RC_INFRA" ;;
       0:LOCAL\ *)
+        PLACED=hub
         printf 'dash-issue-session: #%s 开在本机 %s — %s\n' "$num" "${_pv#LOCAL }" "$_why" >&2 ;;
       3:*)
         refuse "#$num 已被 ${_pv#HELD } 认领 (${_why}) — not spawning"; exit "$RC_CLAIMED" ;;
@@ -600,7 +617,7 @@ if [ "$PLACING" = 1 ]; then
         for _a in $(printf '%s' "$_after" | tr ',' ' '); do   # all full ⇒ 2, else 1
           [ "${_a##*:}" = 2 ] || exit "$RC_INFRA"
         done
-        [ -n "$_after" ] || exit "$RC_INFRA"
+        [ -n "$_after" ] || [ -n "$CAP_HELD" ] || exit "$RC_INFRA"   # this one full too (T672)
         exit "$RC_CAP" ;;
       *)
         if [ "$NODE" != auto ]; then
@@ -613,8 +630,15 @@ if [ "$PLACING" = 1 ]; then
         if [ "$_pv" = 'REFUSED AT_CAPACITY' ] && [ -n "$CAP_HELD" ]; then
           refuse "#$num 都满了 — 没有机器有空位: ${_why#all-full: }"; exit "$RC_CAP"
         fi
-        python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --placement-code "$place_rc" >/dev/null || exit "$RC_INFRA"
-        [ "$place_rc" = 4 ] && printf 'dash-issue-session: 没有机器能接 #%s (%s) — 开在本机\n' "$num" "$_why" >&2 ;;
+        # Never reached (T672, rc 11): nothing was sent — this machine's fallback,
+        # said and stamped. A send that may have arrived (rc 1) is not opened here (#4392).
+        _pc=$place_rc; [ "$place_rc" = 11 ] && _pc=10
+        python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --placement-code "$_pc" >/dev/null || exit "$RC_INFRA"
+        [ "$place_rc" = 4 ] && printf 'dash-issue-session: 没有机器能接 #%s (%s) — 开在本机\n' "$num" "$_why" >&2
+        if [ "$place_rc" = 11 ]; then
+          PLACED=fallback-local
+          [ -n "$CAP_HELD" ] || printf 'dash-issue-session: hub 不可达 — #%s 本机兜底 (@placed fallback-local)\n' "$num" >&2
+        fi ;;
     esac
     unset _pw _u _pv _why _wait _after _a _am _aop _ax
   fi
@@ -697,6 +721,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # selects tail-only mode + names the fleet; FLEET_SPAWN_FOCUS is carried through
   # so "focus the new worker when ready" still works (default no-focus otherwise).
   _bg="FLEET_SPAWN_TAIL=$(shq "$SESS") FLEET_DISPATCH=$(shq "$DISPATCH")"
+  [ -n "$PLACED" ] && _bg="$_bg FLEET_PLACED=$PLACED"
   [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && _bg="$_bg FLEET_SPAWN_FOCUS=1"
   # >/dev/null 2>&1 on the detached tail (belt-and-suspenders for issue #401):
   # `tmux run-shell` DISPLAYS its command's stdout in an Esc-to-dismiss view, so
@@ -817,6 +842,7 @@ stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree 
 # @seed_words (issue #3331): the first turn is the person's words, so the
 # SessionStart hook carries the flow — on the window before its agent starts.
 [ -n "$SEED_WORDS" ] && stamp="$stamp$(fleet_win_stamp_cmd @seed_words "$SEED_WORDS")"
+[ -n "$PLACED" ] && stamp="$stamp$(fleet_win_stamp_cmd @placed "$PLACED")"
 # A task's record rides on the window before its agent starts (EPIC T497 C8: no
 # claim, no launch binding — the window's ID is the session).
 if [ -n "$TASK_REF" ]; then
