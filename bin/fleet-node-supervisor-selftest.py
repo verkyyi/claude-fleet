@@ -1226,6 +1226,55 @@ class D2_NoGapRestart(Sandbox):
         self.assertTrue(fns.pid_alive(pid2))
         self.assertEqual(self.child("h").get("restarts") or 0, 0, "the old copy's exit counted as a death")
 
+    def test_a_daemon_restarted_mid_drain_still_books_the_old_copy(self):
+        # T640: the draining list lived in memory only — a release restart while the
+        # old copy drained lost it, and its «drained and exited» line never came
+        a, b = "a" * 40, "b" * 40
+        self.runtime(a)
+        r = os.path.join(self.d, "lib")
+        os.makedirs(r)
+        pids = os.path.join(self.d, "pids")
+        gate = os.path.join(self.d, "go")
+        # an old copy drains until the test says it may go (the gate file)
+        sh = self.script("h.sh", 'echo "$$" >> %s\n'
+                                 'while sleep 0.1; do [ "$(tail -1 %s)" = "$$" ] '
+                                 '|| { while [ ! -e %s ]; do sleep 0.1; done; exit 0; }; done\n' % (pids, pids, gate))
+        self.table(children=[{"name": "h", "cmd": [sh], "reload": r, "handoff": True, "keep_on_restart": True}])
+        p = self.start()
+        pid1 = until(10, lambda: self.child("h").get("pid"))
+        self.assertTrue(pid1)
+        put(os.path.join(r, "fleet-cred-proxy.py"), "new bytes\n")
+        self.assertTrue(self.new_pid("h", pid1), "the reload started no new copy")
+        booked = until(10, lambda: [x["pid"] for x in self.state().get("retiring") or []])
+        self.assertEqual(booked, [pid1], "the draining copy was not booked in state.json")
+        self.runtime(b)
+        put(os.path.join(self.d, "db", "update-restart.json"), {"to": b})
+        p.wait(timeout=30)
+        self.assertTrue(fns.pid_alive(pid1), "the draining copy went down with the daemon's restart")
+        self.assertEqual([x["pid"] for x in self.state().get("retiring") or []], [pid1],
+                         "the restart dropped the draining copy's booking")
+        self.start()
+        log = os.path.join(self.d, "sup.err")
+        self.assertTrue(until(10, lambda: "pid %d still draining since an earlier daemon" % pid1 in open(log).read()),
+                        "the next daemon did not read the booking back")
+        put(gate, "")
+        self.assertTrue(until(10, lambda: "pid %d drained and exited" % pid1 in open(log).read()),
+                        "no «drained and exited» line once the old copy went")
+        self.assertTrue(until(10, lambda: not self.state().get("retiring")), "the booking was never cleared")
+
+    def test_a_booked_copy_gone_before_the_daemon_came_up_is_said_and_dropped(self):
+        st = self.state()
+        dead = subprocess.Popen(["/bin/sleep", "0"])
+        dead.wait()
+        st["retiring"] = [{"name": "h", "pid": dead.pid, "since": time.time() - 5, "cmd": "/bin/sleep 300"}]
+        put(os.path.join(self.d, "db", "state.json"), st)
+        self.table(children=[])
+        self.start()
+        log = os.path.join(self.d, "sup.err")
+        self.assertTrue(until(10, lambda: "pid %d drained and exited (before this daemon came up" % dead.pid
+                              in open(log).read()))
+        self.assertTrue(until(10, lambda: not self.state().get("retiring")))
+
 
 class E_Status(Sandbox):
     def test_check_codes_and_lines(self):

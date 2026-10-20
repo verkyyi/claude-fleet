@@ -23,6 +23,8 @@
 #                                                   sockets handed over, drain) + bin/fleet-credsep-launch.py
 #                                                   + bin/fleet-node-supervisor.py (keep_on_restart,
 #                                                   handoff) — T595
+#   cred-proxy-drain-untracked                      bin/fleet-node-supervisor.py (state.json's "retiring":
+#                                                   book_retiring / adopt_retiring) — T640
 #   cred-shared-down                                in bin/fleet-break-it-cred-shared-selftest.sh, which
 #                                                   sources this file's helpers (BREAK_CRED_LIB=1): this
 #                                                   run is at the macOS per-test cap already
@@ -258,6 +260,25 @@ drill_cred_proxy_restart_gap() {
     || { WHY="fleet-node-supervisor-selftest.py no longer carries D2_NoGapRestart: this drill held it"; return 1; }
   SECS=$(since "$t0")
   WHAT="发版时守护留下代理、新守护接管；代理代码变了时新代理接过监听套接字、旧的做完在途请求再走：持续压测下三次换手 0 个 ECONNREFUSED（fleet-cred-handoff-selftest.sh + 守护 D2_NoGapRestart 真跑，这里按名守住）"
+}
+
+# The supervisor restarted while the old proxy drained (T640): the draining list
+# lived in memory only, so the next daemon never said the old pid went. Held by
+# name: the supervisor's own test restarts it mid-drain for real.
+drill_cred_proxy_drain_untracked() {
+  CAP=60
+  local t0
+  t0=$(now)
+  grep -q 'def test_a_daemon_restarted_mid_drain_still_books_the_old_copy' "$BIN/fleet-node-supervisor-selftest.py" \
+    || { WHY="fleet-node-supervisor-selftest.py no longer carries the mid-drain restart test: this drill held it"; return 1; }
+  grep -q 'def adopt_retiring' "$BIN/fleet-node-supervisor.py" \
+    || { WHY="fleet-node-supervisor.py reads no draining list back (adopt_retiring)"; return 1; }
+  python3 "$BIN/fleet-node-supervisor-selftest.py" \
+    D2_NoGapRestart.test_a_daemon_restarted_mid_drain_still_books_the_old_copy \
+    D2_NoGapRestart.test_a_booked_copy_gone_before_the_daemon_came_up_is_said_and_dropped >"$WORK/drain.out" 2>&1 \
+    || { WHY="the mid-drain restart test is red: $(tail -3 "$WORK/drain.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="交接后守护重启：新守护从 state.json 读回待退出名单，旧代理退出时记 drained and exited、名单清空；接管前已退出的直接记一行删掉"
 }
 
 drill_cred_relay_down() {
