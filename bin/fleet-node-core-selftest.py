@@ -78,6 +78,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 BIN = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(BIN)
@@ -98,6 +99,13 @@ def until(secs, fn, step=0.05):
             return v
         time.sleep(step)
     return fn()
+
+
+def wx(path, body):
+    """An executable file."""
+    with open(path, "w") as f:
+        f.write(body)
+    os.chmod(path, 0o755)
 
 
 def make_release(root, sha, files, secret=SECRET, artifacts=None, extra=None):
@@ -203,8 +211,8 @@ class Sandbox(unittest.TestCase):
         with open(os.path.join(self.d, "table.json"), "w") as f:
             json.dump({"children": [], "tasks": [], "account": units}, f)
 
-    def serve(self, **extra):
-        e = dict(self.env, **extra)
+    def serve(self, drop=(), **extra):
+        e = {k: v for k, v in dict(self.env, **extra).items() if k not in drop}
         p = subprocess.Popen([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "serve"], env=e,
                              stdout=subprocess.DEVNULL, stderr=open(os.path.join(self.d, "core.err"), "a"))
         self.procs.append(p)
@@ -234,6 +242,31 @@ class Sandbox(unittest.TestCase):
     def call(self, *args, **kw):
         return subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "call"] + list(args),
                               env=dict(self.env, **kw.get("env", {})), capture_output=True, text=True, timeout=60)
+
+    def cur(self):
+        return os.path.basename(os.readlink(os.path.join(self.root, "current")))
+
+    def verify(self, path):
+        """`fleet-node-core.py verify <path>` (the core's own check of a release)."""
+        return subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "verify", path],
+                              env=self.env, capture_output=True, text=True)
+
+    def seat_passwd(self):
+        """The seat's account (_fleetnode, alias fleetnode) in the sandbox passwd."""
+        pw = json.load(open(self.env["FLEET_NODE_PASSWD"]))
+        pw["_fleetnode"] = pw["fleetnode"] = {"uid": os.getuid(), "gid": os.getgid(), "home": "/var/empty"}
+        with open(self.env["FLEET_NODE_PASSWD"], "w") as f:
+            json.dump(pw, f)
+
+    def sup_py(self, code):
+        """<code> run with the daemon loaded as m and p = m.Paths(); its stdout."""
+        r = subprocess.run([sys.executable, "-c", "import importlib.util, json, os, sys; "
+                            "sp = importlib.util.spec_from_file_location('s', sys.argv[1]); "
+                            "m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m); p = m.Paths(); " + code,
+                            os.path.join(self.bin, "fleet-node-supervisor.py")],
+                           env=self.env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
 
     def log(self):
         try:
@@ -362,9 +395,7 @@ class D_ExecAs(Sandbox):
     def test_exec_as_bin_only(self):
         self.serve()
         tool = os.path.join(self.bin, "fleet-probe.sh")
-        with open(tool, "w") as f:
-            f.write('#!/bin/bash\necho "as $USER $HOME $1"; exit 5\n')
-        os.chmod(tool, 0o755)
+        wx(tool, '#!/bin/bash\necho "as $USER $HOME $1"; exit 5\n')
         r = self.req("exec-as", {"login": "alice", "argv": [tool, "hi"]})
         self.assertEqual((r.get("ok"), r.get("rc")), (True, 5), r)
         self.assertIn("as alice %s hi" % self.home, r["out"])
@@ -395,10 +426,8 @@ class E_Kill(Sandbox):
 class F_Fixed(Sandbox):
     def test_memguard_power(self):
         for n in ("fleet-memguard.sh", "fleet-spotlight.sh", "fleet-wallpaper.sh"):
-            with open(os.path.join(self.bin, n), "w") as f:
-                f.write('#!/bin/bash\necho "%s $* ${FLEET_MEM_SPIKE_ACTION:-kill}" >> %s/fixed.log\n'
-                        % (n, self.d))
-            os.chmod(os.path.join(self.bin, n), 0o755)
+            wx(os.path.join(self.bin, n), '#!/bin/bash\necho "%s $* ${FLEET_MEM_SPIKE_ACTION:-kill}" >> %s/fixed.log\n'
+                                          % (n, self.d))
         self.serve()
         self.assertEqual(self.req("memguard", {"level": "once"}).get("rc"), 0)
         self.assertEqual(self.req("memguard", {"level": "report"}).get("rc"), 0)
@@ -413,16 +442,8 @@ class F_Fixed(Sandbox):
     def test_no_home(self):
         # launchd starts the core with no HOME: a `set -u` script must still get one (#3556)
         n = "fleet-memguard.sh"
-        with open(os.path.join(self.bin, n), "w") as f:
-            f.write('#!/bin/bash\nset -u\necho "home=$HOME" >> %s/home.log\n' % self.d)
-        os.chmod(os.path.join(self.bin, n), 0o755)
-        e = dict(self.env)
-        e.pop("HOME", None)
-        e.pop("TMPDIR", None)
-        p = subprocess.Popen([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "serve"], env=e,
-                             stdout=subprocess.DEVNULL, stderr=open(os.path.join(self.d, "core.err"), "a"))
-        self.procs.append(p)
-        self.assertTrue(until(10, lambda: os.path.exists(self.env["FLEET_NODE_CORE_SOCK"])), "the core never listened")
+        wx(os.path.join(self.bin, n), '#!/bin/bash\nset -u\necho "home=$HOME" >> %s/home.log\n' % self.d)
+        self.serve(drop=("HOME", "TMPDIR"))
         r = self.req("memguard", {"level": "once"})
         self.assertEqual(r.get("rc"), 0, r)
         got = open(os.path.join(self.d, "home.log")).read().strip()
@@ -439,17 +460,23 @@ class G_Switch(Sandbox):
         make_release(self.root, self.A, {"bin/x": b"old\n"})
         os.symlink(os.path.join(self.root, self.A), os.path.join(self.root, "current"))
 
-    def cur(self):
-        return os.path.basename(os.readlink(os.path.join(self.root, "current")))
+    def stage(self, files=None, **kw):
+        """Release B in the seat's staging (bin/x "new" unless <files>)."""
+        return make_release(os.path.join(self.state, "staging"), self.B, files or {"bin/x": b"new\n"}, **kw)
 
     def test_signed_switch_and_rollback(self):
-        self.serve()
-        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"})
+        p = self.serve()
+        # B carries an admin gate; with no seat (<state>/admin) nothing is placed
+        self.stage({"bin/x": b"new\n", "bin/fleet-admin-gate.sh": b"#!/bin/bash\n"})
         r = self.req("switch", {"sha": self.B})
         self.assertEqual(r, {"ok": True, "from": self.A, "to": self.B})
         self.assertEqual(self.cur(), self.B)
         self.assertEqual(os.path.basename(os.readlink(os.path.join(self.root, ".prev"))), self.A)
         self.assertFalse(os.path.exists(os.path.join(self.state, "staging", self.B)), "staging moved in")
+        self.assertFalse(os.path.exists(os.path.join(self.state, "admin")))
+        # no code the core runs changed: the core stays up
+        time.sleep(2)
+        self.assertIsNone(p.poll(), "the core restarted though no code it runs changed")
         self.assertEqual(self.req("rollback", {}), {"ok": True, "from": self.B, "to": self.A})
         self.assertEqual(self.cur(), self.A)
 
@@ -458,19 +485,12 @@ class G_Switch(Sandbox):
         # (the sweep the core runs as `sup`); a core that hashed only its own file
         # stayed up on the old sweep, which then booted the core out of launchd
         p = self.serve()
-        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"})
+        self.stage()
         with open(os.path.join(self.bin, "fleet-node-supervisor.py"), "a") as f:
             f.write("\n# the release that fixed the sweep\n")
         self.assertEqual(self.req("switch", {"sha": self.B}), {"ok": True, "from": self.A, "to": self.B})
         self.assertTrue(until(10, lambda: p.poll() is not None), "the core kept the old sibling code running")
         self.assertEqual(p.returncode, 0)
-
-    def test_switch_with_the_same_code_keeps_the_core(self):
-        p = self.serve()
-        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"})
-        self.assertEqual(self.req("switch", {"sha": self.B}), {"ok": True, "from": self.A, "to": self.B})
-        time.sleep(2)
-        self.assertIsNone(p.poll(), "the core restarted though no code it runs changed")
 
     def test_switch_and_rollback_place_the_admin_gate(self):
         # the admin seat (#3696): each release's bin/fleet-admin-gate.sh becomes
@@ -478,8 +498,7 @@ class G_Switch(Sandbox):
         self.serve()
         adir = os.path.join(self.state, "admin")
         os.mkdir(adir)
-        make_release(os.path.join(self.state, "staging"), self.B,
-                     {"bin/x": b"new\n", "bin/fleet-admin-gate.sh": b"#!/bin/bash\n# gate B\n"})
+        self.stage({"bin/x": b"new\n", "bin/fleet-admin-gate.sh": b"#!/bin/bash\n# gate B\n"})
         self.assertTrue(self.req("switch", {"sha": self.B}).get("ok"))
         for n in ("fleet-login-new.sh", "fleet-login-remove.sh"):
             p = os.path.join(adir, n)
@@ -492,13 +511,6 @@ class G_Switch(Sandbox):
         self.assertTrue(self.req("rollback", {}).get("ok"))
         self.assertEqual(open(os.path.join(adir, "fleet-login-new.sh"), "rb").read(), b"#!/bin/bash\n# gate B\n")
 
-    def test_switch_without_a_seat_places_nothing(self):
-        self.serve()
-        make_release(os.path.join(self.state, "staging"), self.B,
-                     {"bin/x": b"new\n", "bin/fleet-admin-gate.sh": b"#!/bin/bash\n"})
-        self.assertTrue(self.req("switch", {"sha": self.B}).get("ok"))
-        self.assertFalse(os.path.exists(os.path.join(self.state, "admin")))
-
     def refused_switch(self, why):
         r = self.req("switch", {"sha": self.B})
         self.assertIn("refused", r, why)
@@ -506,41 +518,42 @@ class G_Switch(Sandbox):
         self.assertTrue(os.path.isdir(os.path.join(self.state, "staging", self.B)), "evidence gone: " + why)
         return r
 
-    def test_tampered(self):
+    def test_tampered_other_key_unlisted(self):
         self.serve()
-        d = make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"})
-        with open(os.path.join(d, "bin", "x"), "wb") as f:
-            f.write(b"evil\n")
-        self.assertIn("digest", self.refused_switch("a tampered file")["why"])
 
-    def test_other_key(self):
-        self.serve()
-        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"}, secret=OTHER)
-        self.assertIn("signature", self.refused_switch("another key")["why"])
+        def tamper(d):
+            with open(os.path.join(d, "bin", "x"), "wb") as f:
+                f.write(b"evil\n")
+
+        def plant(d):
+            with open(os.path.join(d, "bin", "planted.sh"), "w") as f:
+                f.write("#!/bin/sh\n")
+        for why, word, kw, after in (("a tampered file", "digest", {}, tamper),
+                                     ("another key", "signature", {"secret": OTHER}, None),
+                                     ("an unlisted file", "not in the signed manifest", {}, plant)):
+            shutil.rmtree(os.path.join(self.state, "staging", self.B), ignore_errors=True)
+            d = self.stage(**kw)
+            if after:
+                after(d)
+            self.assertIn(word, self.refused_switch(why)["why"])
 
     def test_root_chain_and_revoked(self):
         # issue #3559: the pin is the root; the train's key, vouched for in the
         # manifest's key_chain, switches — until the root revokes it
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("rv", os.path.join(BIN, "fleet-release-verify.py"))
-        rv = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(rv)
+        rv = _rv()
         rk = rv.pub_of(SECRET)
         k1 = rv.pub_of(OTHER)
         chain = [rv.make_doc(SECRET, {"schema": 1, "kind": "release-key", "key": rv.key_line(k1), "role": "sign", "by": rv.key_id(rk)})]
         self.serve()
-        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"}, secret=OTHER,
-                     extra={"key": rv.key_id(k1), "key_chain": chain})
+        self.stage(secret=OTHER, extra={"key": rv.key_id(k1), "key_chain": chain})
         self.assertEqual(self.req("switch", {"sha": self.B}), {"ok": True, "from": self.A, "to": self.B})
         self.assertEqual(self.req("rollback", {}), {"ok": True, "from": self.B, "to": self.A})
         self.B = "c" * 40  # B stays on disk after the rollback; the revoked cases stage another
         rev = rv.make_doc(SECRET, {"schema": 1, "kind": "release-revoked", "version": 1, "keys": [rv.key_id(k1)], "by": rv.key_id(rk)})
-        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"}, secret=OTHER,
-                     extra={"key": rv.key_id(k1), "key_chain": chain, "revoked": rev})
+        self.stage(secret=OTHER, extra={"key": rv.key_id(k1), "key_chain": chain, "revoked": rev})
         self.assertIn("revoked", self.refused_switch("a revoked key (the manifest's list)")["why"])
         shutil.rmtree(os.path.join(self.state, "staging", self.B), ignore_errors=True)
-        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"}, secret=OTHER,
-                     extra={"key": rv.key_id(k1), "key_chain": chain})
+        self.stage(secret=OTHER, extra={"key": rv.key_id(k1), "key_chain": chain})
         with open(os.path.join(self.state, "release.pub.revoked"), "w") as f:
             json.dump({"version": 1, "keys": [rv.key_id(k1)]}, f)
         self.assertIn("revoked", self.refused_switch("a revoked key (the machine's memory)")["why"])
@@ -552,16 +565,14 @@ class G_Switch(Sandbox):
         pin = os.path.join(self.state, "release.pub")
         old = open(pin).read()
         self.serve()
-        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"}, secret=OTHER,
-                     extra=repin_extra())
+        self.stage(secret=OTHER, extra=repin_extra())
         self.assertEqual(self.req("switch", {"sha": self.B}), {"ok": True, "from": self.A, "to": self.B})
         self.assertEqual(open(pin).read(), rv.key_line(rv.pub_of(OTHER)) + "\n")
         self.assertEqual(open(pin + ".prev").read(), old)
         self.assertEqual(json.load(open(pin + ".revoked")), {"version": 2, "keys": ["0123456789abcdef"]})
         self.assertIn("trust: re-pinned to the root", self.log())
         # the re-pinned machine still re-checks B with the new pin
-        r = subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "verify",
-                            os.path.join(self.root, self.B)], env=self.env, capture_output=True, text=True)
+        r = self.verify(os.path.join(self.root, self.B))
         self.assertEqual(r.stdout.strip(), "ok", r.stdout + r.stderr)
 
     def test_the_seat_cannot_move_the_anchor(self):
@@ -574,8 +585,7 @@ class G_Switch(Sandbox):
         nk = rv.pub_of(OTHER)
         self_made = [rv.make_doc(OTHER, {"schema": 1, "kind": "release-key", "key": rv.key_line(nk), "role": "root",
                                          "by": rv.key_id(nk)})]
-        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"}, secret=OTHER,
-                     extra={"key": rv.key_id(nk), "key_chain": self_made})
+        self.stage(secret=OTHER, extra={"key": rv.key_id(nk), "key_chain": self_made})
         self.refused_switch("a self-made root")
         for line in ('{"op": "repin", "args": {"key": "%s"}}' % rv.key_line(nk),
                      '{"op": "switch", "args": {"sha": "%s", "pubkey": "/tmp/mine.pub"}}' % self.B,
@@ -584,16 +594,9 @@ class G_Switch(Sandbox):
         self.assertEqual(open(pin).read(), old)
         self.assertFalse(os.path.exists(pin + ".prev") or os.path.exists(pin + ".revoked"))
 
-    def test_unlisted_file(self):
-        self.serve()
-        d = make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"})
-        with open(os.path.join(d, "bin", "planted.sh"), "w") as f:
-            f.write("#!/bin/sh\n")
-        self.assertIn("not in the signed manifest", self.refused_switch("an unlisted file")["why"])
-
     def test_wrong_sha_and_missing(self):
         self.serve()
-        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"})
+        self.stage()
         os.rename(os.path.join(self.state, "staging", self.B), os.path.join(self.state, "staging", "c" * 40))
         self.assertIn("refused", self.req("switch", {"sha": "c" * 40}))
         self.assertIn("refused", self.req("switch", {"sha": "../../etc"}))
@@ -615,10 +618,7 @@ class I_Clients(Sandbox):
     def test_available_and_as_login(self):
         self.serve()
         spec = importlib.util.spec_from_file_location("fnu_core", os.path.join(self.bin, "fleet-node-update.py"))
-        saved = dict(os.environ)
-        try:
-            os.environ.clear()
-            os.environ.update(self.env)
+        with mock.patch.dict(os.environ, self.env, clear=True):
             fnu = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(fnu)
             self.assertTrue(fnu.fns.core.available())
@@ -631,9 +631,6 @@ class I_Clients(Sandbox):
             rc, out, err = fnu.as_login("alice", ["no-such-command"])
             self.assertNotEqual(rc, 0)
             self.assertIn("exec-as", self.log(), "as_login did not go through the core")
-        finally:
-            os.environ.clear()
-            os.environ.update(saved)
 
 
 class J_Staged(Sandbox):
@@ -659,13 +656,11 @@ class J_Staged(Sandbox):
         with open(os.path.join(d, ".release", "staged.json"), "w") as f:
             f.write("{}")
         write_pub(os.path.join(self.state, "release.pub"))
-        r = subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "verify", d],
-                           env=self.env, capture_output=True, text=True)
+        r = self.verify(d)
         self.assertEqual((r.returncode, r.stdout.strip()), (0, "ok"), r.stderr)
         with open(os.path.join(td, "claude-helper"), "wb") as f:
             f.write(b"swapped")
-        r = subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "verify", d],
-                           env=self.env, capture_output=True, text=True)
+        r = self.verify(d)
         self.assertEqual(r.returncode, 1)
         self.assertIn("tools/bin/claude-helper", r.stdout)
 
@@ -682,21 +677,17 @@ class J_Staged(Sandbox):
         pyc = [n for n in os.listdir(os.path.join(d, "bin", "__pycache__")) if n.startswith("mod.")]
         self.assertTrue(pyc)
         self.assertEqual(fleet_node_core.pyc_source("bin/__pycache__/" + pyc[0]), "bin/mod.py")
-
-        def verify():
-            return subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "verify", d],
-                                  env=self.env, capture_output=True, text=True)
-        r = verify()
+        r = self.verify(d)
         self.assertEqual((r.returncode, r.stdout.strip()), (0, "ok"), r.stdout + r.stderr)
         full = os.path.join(d, "bin", "__pycache__", pyc[0])
         os.chmod(full, 0o666)
-        r = verify()
+        r = self.verify(d)
         self.assertEqual(r.returncode, 1)
         self.assertIn("bytecode not the release owner's own", r.stdout)
         os.chmod(full, 0o644)
         with open(os.path.join(d, "bin", "__pycache__", "other.cpython-39.pyc"), "wb") as f:
             f.write(b"x")
-        r = verify()
+        r = self.verify(d)
         self.assertEqual(r.returncode, 1)
         self.assertIn("not in the signed manifest", r.stdout)
 
@@ -705,9 +696,7 @@ class K_Machine(Sandbox):
     def machine_table(self):
         for n, body in (("fleet-loop.sh", "trap 'exit 0' TERM; echo up; while :; do sleep 0.2; done\n"),
                         ("fleet-once.sh", "echo once $(id -u) HOME=$HOME; exit 4\n")):
-            with open(os.path.join(self.bin, n), "w") as f:
-                f.write("#!/bin/bash\n" + body)
-            os.chmod(os.path.join(self.bin, n), 0o755)
+            wx(os.path.join(self.bin, n), "#!/bin/bash\n" + body)
         self.loop = ["/bin/bash", os.path.join(self.bin, "fleet-loop.sh")]
         with open(os.path.join(self.d, "table.json"), "w") as f:
             json.dump({"children": [{"name": "looper", "cmd": self.loop}],
@@ -817,11 +806,7 @@ class L_PeerPerConnection(Sandbox):
         self.env = env
         self.serve()
         self.assertIsNone(self.req("report", {"kind": "lanes"}), "no seat: anyone but root was answered")
-        pw = json.load(open(env["FLEET_NODE_PASSWD"]))
-        pw["_fleetnode"] = {"uid": os.getuid(), "gid": os.getgid(), "home": "/var/empty"}
-        pw["fleetnode"] = pw["_fleetnode"]
-        with open(env["FLEET_NODE_PASSWD"], "w") as f:
-            json.dump(pw, f)
+        self.seat_passwd()
         self.assertEqual(self.req("report", {"kind": "lanes"}).get("ok"), True, self.log())
         self.assertEqual(len(self.procs), 1)
         self.assertIsNone(self.procs[0].poll(), "the core restarted")
@@ -842,11 +827,9 @@ class M_Seated(Sandbox):
 
     def test_seated_daemon_and_handover(self):
         K_Machine.machine_table(self)
-        with open(os.path.join(self.d, "table.json")) as f:
-            t = json.load(f)
-        t["tasks"] = []
+        t = json.load(open(os.path.join(self.d, "table.json")))
         with open(os.path.join(self.d, "table.json"), "w") as f:
-            json.dump(t, f)
+            json.dump(dict(t, tasks=[]), f)
         # a root daemon (no seat) runs the child itself
         root = self.sup(["run"])
         self.procs.append(root)
@@ -861,11 +844,7 @@ class M_Seated(Sandbox):
                          "the handover stopped the child")
         os.remove(os.path.join(self.state, "seat-handover.json"))
         # the layout, then the seat comes up and adopts it — no restart
-        pw = json.load(open(self.env["FLEET_NODE_PASSWD"]))
-        pw["_fleetnode"] = {"uid": os.getuid(), "gid": os.getgid(), "home": "/var/empty"}
-        pw["fleetnode"] = pw["_fleetnode"]
-        with open(self.env["FLEET_NODE_PASSWD"], "w") as f:
-            json.dump(pw, f)
+        self.seat_passwd()
         sd = os.path.join(self.state, "logins", "alice", "services")
         os.makedirs(os.path.join(self.state, "logins", "alice", "creds"))
         os.makedirs(sd)
@@ -883,11 +862,7 @@ class M_Seated(Sandbox):
         with open(os.path.join(self.state, "update.json"), "w") as f:
             f.write('{"phase": "idle"}\n')
         self.serve()
-        lay = subprocess.run([sys.executable, "-c", "import importlib.util, sys; sp = importlib.util.spec_from_file_location"
-                              "('s', sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m); "
-                              "m.seat_layout(m.Paths(), m.seat_ident())", os.path.join(self.bin, "fleet-node-supervisor.py")],
-                             env=self.env, capture_output=True, text=True)
-        self.assertEqual(lay.returncode, 0, lay.stderr)
+        self.sup_py("m.seat_layout(p, m.seat_ident())")
         mode = lambda *p: stat.S_IMODE(os.stat(os.path.join(self.state, *p)).st_mode)
         self.assertTrue(os.path.islink(os.path.join(self.state, "state.json")))
         # the updater's files go with it (#3670): links into node/, its staging, the hub's address
@@ -968,15 +943,9 @@ class N_SeatedUpdate(Sandbox):
         write_pub(os.path.join(self.state, "release.pub"))
         self.rel = os.path.join(self.d, "rel")
         spec = importlib.util.spec_from_file_location("fnu_n", os.path.join(self.bin, "fleet-node-update.py"))
-        saved = dict(os.environ)
-        try:
-            os.environ.clear()
-            os.environ.update(self.env)
+        with mock.patch.dict(os.environ, self.env, clear=True):
             self.fnu = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(self.fnu)
-        finally:
-            os.environ.clear()
-            os.environ.update(saved)
         with open(os.path.join(REPO, "release.json"), "rb") as f:
             self.spec_bytes = f.read()
         self.names = self.fnu.pinned_artifacts(json.loads(self.spec_bytes.decode()), ["darwin-arm64"])
@@ -984,18 +953,14 @@ class N_SeatedUpdate(Sandbox):
         os.symlink(os.path.join(self.root, self.A), os.path.join(self.root, "current"))
         self.signed_release(self.rel, self.B)
         fake = os.path.join(self.d, "ccquota")
-        with open(fake, "w") as f:
-            f.write(FAKE_FETCH)
-        os.chmod(fake, 0o755)
+        wx(fake, FAKE_FETCH)
         # the seat reads the hub's address root copied out of machine.env
         with open(os.path.join(self.state, "hub-url"), "w") as f:
             f.write("https://hub.invalid\n")
         tools = os.path.join(self.d, "cs")
         os.makedirs(tools)
         for n, body in (("codesign", FAKE_CODESIGN), ("security", "#!/bin/sh\nexit 0\n"), ("openssl", "#!/bin/sh\nexit 0\n")):
-            with open(os.path.join(tools, n), "w") as f:
-                f.write(body)
-            os.chmod(os.path.join(tools, n), 0o755)
+            wx(os.path.join(tools, n), body)
         idd = os.path.join(self.state, "codesign")
         os.makedirs(idd)
         for n, b in (("identity.json", json.dumps({"sha1": "f" * 40, "cn": "fleet test"})),
@@ -1035,9 +1000,6 @@ class N_SeatedUpdate(Sandbox):
         except IOError:
             return r, {}
 
-    def cur(self):
-        return os.path.basename(os.readlink(os.path.join(self.root, "current")))
-
     def test_seated_tick_switches_through_the_core(self):
         self.serve()
         r, st = self.tick()
@@ -1062,8 +1024,7 @@ class N_SeatedUpdate(Sandbox):
         link = os.path.join(self.home, ".local", "bin", "claude")
         self.assertEqual(os.readlink(link), os.path.join(self.root, "current", "tools", "bin", "claude"))
         # a re-check of the signed release (the rollback's) takes the identity's signature
-        r2 = subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "verify", rel],
-                            env=self.env, capture_output=True, text=True)
+        r2 = self.verify(rel)
         self.assertEqual(r2.stdout.strip(), "ok", r2.stdout + r2.stderr)
         # the verify: committed, and prune ran as root through the core
         with open(os.path.join(self.state, "state.json"), "w") as f:
@@ -1151,11 +1112,8 @@ class N_SeatedUpdate(Sandbox):
         self.assertEqual(json.loads(r.stdout), {"exists": False, "linked": None, "pointed": False, "at": None})
 class O_SeatAgent(Sandbox):
     def tool(self, name, body):
-        path = os.path.join(self.bin, name)
-        with open(path, "w") as f:
-            f.write("#!/bin/bash\n" + body)
-        os.chmod(path, 0o755)
-        return path
+        wx(os.path.join(self.bin, name), "#!/bin/bash\n" + body)
+        return os.path.join(self.bin, name)
 
     def stream(self, op, args, fds):
         s = socket.socket(socket.AF_UNIX)
@@ -1234,12 +1192,6 @@ class O_SeatAgent(Sandbox):
             json.dump({"children": [{"name": "node-agent", "cmd": self.agent_cmd, "seat_agent": True}],
                        "tasks": [], "account": []}, f)
 
-    def seat_passwd(self):
-        pw = json.load(open(self.env["FLEET_NODE_PASSWD"]))
-        pw["_fleetnode"] = pw["fleetnode"] = {"uid": os.getuid(), "gid": os.getgid(), "home": "/var/empty"}
-        with open(self.env["FLEET_NODE_PASSWD"], "w") as f:
-            json.dump(pw, f)
-
     def test_seat_job_is_never_the_cores(self):
         self.seat_table()
         self.seat_passwd()
@@ -1254,15 +1206,6 @@ class O_SeatAgent(Sandbox):
         self.assertIn("refused", r)
         self.assertIn("runs as the seat", r["why"])
         self.assertEqual(self.req("machine", {"job": "node-agent", "action": "stop"}).get("ok"), True)
-
-    def sup_py(self, code):
-        r = subprocess.run([sys.executable, "-c", "import importlib.util, json, os, sys; "
-                            "sp = importlib.util.spec_from_file_location('s', sys.argv[1]); "
-                            "m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m); p = m.Paths(); " + code,
-                            os.path.join(self.bin, "fleet-node-supervisor.py")],
-                           env=self.env, capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        return r.stdout.strip()
 
     def test_switch_hands_the_token_files_over(self):
         self.seat_passwd()

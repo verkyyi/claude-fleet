@@ -35,39 +35,8 @@ export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
 mkdir -p "$HOME" "$FLEET_CONF_DIR"
 unset CCQUOTA_FLEET CCQUOTA_TOKEN CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_URL FLEET_HUB_CURL FLEET_HUB_TIMEOUT
 
-# The stub curl: appends argv to STUB_LOG, the stdin header to STUB_HDR, the
-# body to STUB_BODY; answers by the URL's path from $FAKE_DIR/<name>.{body,code}
-# (name: settings | nodes | self), or fails with FAKE_RC.
-STUB="$WORK/curl"
-cat > "$STUB" <<'EOF'
-#!/bin/bash
-printf '%s\n' "$*" >> "$STUB_LOG"
-body='' url='' method=GET hdr=''
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --data-binary) body="$2"; shift 2 ;;
-    -X) method="$2"; shift 2 ;;
-    -H) [ "$2" = @- ] && hdr=$(cat); shift 2 ;;
-    http*) url="$1"; shift ;;
-    *) shift ;;
-  esac
-done
-printf '%s\n' "$hdr" >> "$STUB_HDR"
-printf '%s %s %s\n' "$method" "$url" "$body" >> "$STUB_BODY"
-[ "${FAKE_RC:-0}" -eq 0 ] || exit "$FAKE_RC"
-case "$url" in
-  */v1/fleet/settings) n=settings ;;
-  */v1/nodes) n=nodes ;;
-  */v1/node/self) n=self ;;
-  *) n=none ;;
-esac
-printf '%s\n%s' "$(cat "$FAKE_DIR/$n.body" 2>/dev/null || printf '{}')" "$(cat "$FAKE_DIR/$n.code" 2>/dev/null || printf 200)"
-EOF
-chmod +x "$STUB"
-export STUB_LOG="$WORK/curl.log" STUB_HDR="$WORK/curl.hdr" STUB_BODY="$WORK/curl.body" FLEET_HUB_CURL="$STUB" FAKE_DIR="$WORK/fake"
-mkdir -p "$FAKE_DIR"
-reset() { rm -f "$STUB_LOG" "$STUB_HDR" "$STUB_BODY" "$FAKE_DIR"/*; unset FAKE_RC; }
-fake() { printf '%s' "$2" > "$FAKE_DIR/$1.body"; printf '%s' "${3:-200}" > "$FAKE_DIR/$1.code"; }
+. "$BIN/selftest-hub-curl.sh"   # the stub curl: reset · fake <name> <body> [code]
+hc_stub by-path
 
 VIEWER='viewer-SECRET-1968'
 NODETOK='node-SECRET-1968'

@@ -69,10 +69,6 @@ class Orphans(ct.Sandbox):
             json.dump({"children": [self.ent], "tasks": [], "account": []}, f)
 
     def tearDown(self):
-        for p in self.procs:
-            if p.poll() is None:
-                p.kill()
-                p.wait()
         for pid in self.pids:
             try:
                 os.killpg(pid, signal.SIGKILL)
@@ -105,6 +101,22 @@ class Orphans(ct.Sandbox):
         self.procs.append(p)
         return p
 
+    def old_proxy(self):
+        """An earlier daemon's shared proxy, orphaned, holding the lock."""
+        old = self.orphan(self.ent["cmd"])
+        self.assertTrue(ct.until(5, lambda: self.holder() == old))
+        return old
+
+    def restart3(self, daemon, check):
+        """The daemon killed and started again three times, <check>() after each."""
+        for i in range(3):
+            daemon.kill()
+            daemon.wait()
+            daemon = self.start_sup()
+            self.assertTrue(ct.until(10, lambda: self.starts() == i + 2))
+            check(daemon)
+        return daemon
+
     def child(self):
         return (sup.read_json(os.path.join(self.state, "state.json"), {}).get("children") or {}).get(
             "cred-proxy-shared", {})
@@ -113,28 +125,20 @@ class Orphans(ct.Sandbox):
         return sup.read_json(os.path.join(self.state, "state.json"), {}).get("supervisor", {}).get("starts")
 
     def test_supervisor_adopts_exec_and_missing_book(self):
-        old = self.orphan(self.ent["cmd"])
-        self.assertTrue(ct.until(5, lambda: self.holder() == old))
+        old = self.old_proxy()
         # No book: recover run/pid, then reload once (unknown old code/config).
         daemon = self.start_sup()
         self.assertTrue(ct.until(12, lambda: self.child().get("pid") == self.holder()
                                  and self.holder() not in (None, old)), self.child())
         pid = self.holder()
-        for i in range(3):
-            daemon.kill()
-            daemon.wait()
-            daemon = self.start_sup()
-            self.assertTrue(ct.until(10, lambda: self.starts() == i + 2))
-            self.assertEqual(self.holder(), pid)
-            self.assertEqual(self.child().get("pid"), pid)
+        daemon = self.restart3(daemon, lambda _d: self.assertEqual((self.holder(), self.child().get("pid")), (pid, pid)))
         self.assertIn("adopted child cred-proxy-shared", open(os.path.join(self.d, "sup.err")).read())
         daemon.terminate()
         daemon.wait(timeout=15)
         self.assertTrue(ct.until(5, lambda: not sup.pid_alive(pid)), "adopted proxy outlived stop")
 
     def test_core_recovers_shared_lock_three_times(self):
-        old = self.orphan(self.ent["cmd"])
-        self.assertTrue(ct.until(5, lambda: self.holder() == old))
+        old = self.old_proxy()
         for _ in range(3):
             daemon = self.serve()
             r = self.req("machine", {"job": "cred-proxy-shared", "action": "start"})
@@ -174,8 +178,7 @@ class Orphans(ct.Sandbox):
         self.assertIsNone(active.poll(), "an active owner's proxy was stopped")
         active.terminate()
         active.wait(timeout=5)
-        old = self.orphan(self.ent["cmd"])
-        self.assertTrue(ct.until(5, lambda: self.holder() == old))
+        old = self.old_proxy()
         with mock.patch.dict(os.environ, self.env):
             sup.seat_layout(sup.Paths(), (os.getuid(), os.getgid()))
         self.env["FLEET_NODE_SEATED"] = "1"
@@ -183,13 +186,11 @@ class Orphans(ct.Sandbox):
         self.assertTrue(ct.until(12, lambda: self.holder() not in (None, old) and self.child().get("pid")),
                         open(os.path.join(self.d, "sup.err")).read() + self.log())
         holder = self.holder()
-        for i in range(3):
-            daemon.kill()
-            daemon.wait()
-            daemon = self.start_sup()
-            self.assertTrue(ct.until(10, lambda: self.starts() == i + 2))
+
+        def same(d):
             self.assertEqual(self.holder(), holder, "seat restart replaced the core's live proxy")
-            self.assertIsNone(daemon.poll())
+            self.assertIsNone(d.poll())
+        daemon = self.restart3(daemon, same)
         daemon.terminate()
         daemon.wait(timeout=20)
         self.assertTrue(ct.until(5, lambda: not sup.pid_alive(holder)),
@@ -249,20 +250,16 @@ class Orphans(ct.Sandbox):
         pid = ct.until(10, child)
         self.assertTrue(pid)
         self.assertTrue(ct.until(5, lambda: all(not sup.pid_alive(x) for x in old)))
-        for i in range(3):
-            daemon.kill()
-            daemon.wait()
-            daemon = self.start_sup()
-            self.assertTrue(ct.until(10, lambda: self.starts() == i + 2))
+        def kept(_d):
             self.assertEqual(child(), pid, "restart doubled the account unit")
             self.assertTrue(sup.pid_alive(untouched) and sup.pid_alive(decoy))
+        daemon = self.restart3(daemon, kept)
         daemon.terminate()
         daemon.wait(timeout=15)
         self.assertTrue(ct.until(5, lambda: not sup.pid_alive(pid)))
 
     def test_shared_identity_rejects_other_uid_path_and_stale_pid(self):
-        old = self.orphan(self.ent["cmd"])
-        self.assertTrue(ct.until(5, lambda: self.holder() == old))
+        old = self.old_proxy()
         with mock.patch.dict(os.environ, self.env):
             self.assertEqual(sup.shared_proxy_pid(self.ent), old)
             with mock.patch.object(sup, "pid_uid", return_value=os.getuid() + 1):

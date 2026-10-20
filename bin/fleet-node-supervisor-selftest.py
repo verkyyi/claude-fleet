@@ -122,6 +122,32 @@ _LOADER = ("import os, sys, importlib.util as u\n"
 CLI = [sys.executable, "-c", _LOADER, _PYC, SUP]
 
 
+# an ssh-ed25519 public key's base64 (the entry's key lines, #3070)
+ED25519_BLOB = __import__("base64").b64encode(b"\x00\x00\x00\x0bssh-ed25519" + b"\x00\x00\x00\x20" + b"k" * 32).decode()
+
+
+def put(path, data, mode=None, append=False):
+    """Write <data> (a str, else as JSON) to <path>, its directory made; <mode> chmods it."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "a" if append else "w") as f:
+        if isinstance(data, str):
+            f.write(data)
+        else:
+            json.dump(data, f)
+    if mode is not None:
+        os.chmod(path, mode)
+    return path
+
+
+def slurp(path):
+    """<path>'s text, or "" when it cannot be read."""
+    try:
+        with open(path) as f:
+            return f.read()
+    except (IOError, OSError):
+        return ""
+
+
 def until(secs, fn, step=0.05):
     end = time.time() + secs
     while time.time() < end:
@@ -457,10 +483,8 @@ class Sandbox(unittest.TestCase):
     def setUp(self):
         self.d = (self.own_directory(prefix="fns.") if hasattr(self, "budget")
                   else tempfile.mkdtemp(prefix="fns."))
-        self.env = dict(os.environ)
-        for k in list(self.env):
-            if k.startswith("FLEET_NODE_"):
-                del self.env[k]
+        # nothing of the machine's own: no FLEET_NODE_* (and no entry switch, #3070)
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith(("FLEET_NODE_", "FLEET_ENTRY"))}
         self.env.update({
             "FLEET_NODE_STATE": os.path.join(self.d, "db"),
             "FLEET_NODE_LOG": os.path.join(self.d, "log"),
@@ -474,6 +498,67 @@ class Sandbox(unittest.TestCase):
         })
         os.makedirs(self.env["FLEET_NODE_DAEMON_DIR"])
         self.procs = []
+
+    def front(self, script, login, *args, **env):
+        """bin/<script> (fleet-service.sh / fleet-task.sh) as <login>, through the sandbox's supervisor."""
+        fe = dict(dict(self.env, FLEET_NODE_SUPERVISOR=SUP, FLEET_SERVICE_SUDO="", FLEET_SERVICE_LOGIN=login), **env)
+        return subprocess.run(["bash", os.path.join(BIN, script)] + list(args), env=fe, capture_output=True, text=True)
+
+    def age_attic(self, days):
+        """Every attic entry moved <days> days ago; -> the index."""
+        idx_p = os.path.join(self.d, "db", "attic", "index.json")
+        idx = json.load(open(idx_p))
+        for e in idx:
+            e["moved"] -= days * 86400
+        return put(idx_p, idx) and idx
+
+    def svc(self, *args, **kw):
+        return self.run_sup("service", *args, **kw)
+
+    def services(self):
+        return {x["name"]: x for x in json.loads(self.run_sup("status", "--json").stdout)["services"]}
+
+    def logins_dir(self, *envs):
+        """db/logins (made), with <login>.env (a token line) for each of <envs>."""
+        lg = os.path.join(self.d, "db", "logins")
+        os.makedirs(lg, exist_ok=True)
+        for who in envs:
+            put(os.path.join(lg, who + ".env"), "CCQUOTA_TOKEN=x\n")
+        return lg
+
+    def node_agent(self, lg, cmd=None, requires=None, reload=None, hold=False, **kw):
+        """The table: one node-agent child (na.sh sleeping unless <cmd>) that needs
+        and reloads on logins/*.env; <hold>: account-ops books hold its reload."""
+        c = dict(name="node-agent", cmd=cmd or [self.script("na.sh", "exec sleep 300\n")],
+                 requires=requires or [os.path.join(lg, "*.env")], reload=reload or os.path.join(lg, "*.env"), **kw)
+        if hold:
+            c["hold"] = os.path.join(self.d, "db", "agent", "*", "account-ops.json")
+        self.table(children=[c])
+
+    def new_pid(self, name, old):
+        """<name>'s pid once it is no longer <old>."""
+        return until(10, lambda: (self.child(name).get("pid") or old) != old and self.child(name)["pid"])
+
+    def held_book(self, who="grace"):
+        """db/agent/<who>/account-ops.json naming a create run by a live pid -> (book, holder)."""
+        holder = subprocess.Popen(["/bin/sleep", "300"])
+        self.addCleanup(holder.kill)
+        book = put(os.path.join(self.d, "db", "agent", who, "account-ops.json"),
+                   {"inflight": {"op-1": {"op": "create", "login": "alice", "pid": holder.pid}}})
+        return book, holder
+
+    def passwd(self, homes, *subdirs, admin=()):
+        """The sandbox passwd.json, named in the env: each login {login: home} with
+        this uid, its home (+ <subdirs>) made; the logins in <admin> can sudo."""
+        pw = {}
+        for who, home in homes.items():
+            for sub in subdirs or ("",):
+                os.makedirs(os.path.join(home, sub), exist_ok=True)
+            pw[who] = {"uid": os.getuid(), "gid": os.getgid(), "home": home}
+            if who in admin:
+                pw[who].update(groups=["staff", "admin"], sudo="(ALL) NOPASSWD: ALL")
+        self.env["FLEET_NODE_PASSWD"] = put(os.path.join(self.d, "passwd.json"), pw)
+        return pw
 
     def tearDown(self):
         if hasattr(self, "budget"):
@@ -496,14 +581,11 @@ class Sandbox(unittest.TestCase):
         shutil.rmtree(self.d, ignore_errors=True)
 
     def table(self, children=(), tasks=()):
-        with open(self.env["FLEET_NODE_TABLE"], "w") as f:
-            json.dump({"children": list(children), "tasks": list(tasks)}, f)
+        put(self.env["FLEET_NODE_TABLE"], {"children": list(children), "tasks": list(tasks)})
 
     def script(self, name, body):
         p = os.path.join(self.d, name)
-        with open(p, "w") as f:
-            f.write("#!/bin/bash\n" + body)
-        os.chmod(p, 0o755)
+        put(p, "#!/bin/bash\n" + body, 0o755)
         return p
 
     def run_sup(self, *args, **kw):
@@ -712,10 +794,7 @@ class C_Sweep(Sandbox):
     def test_purge_after_days(self):
         self.touch(self.dd, "com.claude-fleet.x.plist.bak")
         self.run_sup("sweep")
-        idx_p = os.path.join(self.d, "db", "attic", "index.json")
-        idx = json.load(open(idx_p))
-        idx[0]["moved"] -= 8 * 86400
-        json.dump(idx, open(idx_p, "w"))
+        idx = self.age_attic(8)
         self.assertIn("purged 1", self.run_sup("attic", "purge").stdout)
         self.assertEqual(self.run_sup("attic", "list").stdout, "")
         self.assertFalse(os.path.exists(os.path.dirname(idx[0]["dst"])))
@@ -752,8 +831,7 @@ class C_Sweep(Sandbox):
                     "# source ~/.claude/fleet/shell/fleet-login.zsh\n")
         # heidi: an admin, never taken over — a shell, a hook, a hand-written agent
         os.makedirs(os.path.join(users, "heidi", ".cache", "claude-fleet", "shell"))
-        with open(os.path.join(users, "heidi", ".zshrc"), "w") as f:
-            f.write("source ~/.claude/fleet/shell/cw.zsh\n")
+        put(os.path.join(users, "heidi", ".zshrc"), "source ~/.claude/fleet/shell/cw.zsh\n")
         for login in ("heidi", "alice"):
             with open(os.path.join(users, login, "Library", "LaunchAgents", "com.%s.ddns.plist" % login), "wb") as f:
                 plistlib.dump({"Label": "com.%s.ddns" % login,
@@ -782,8 +860,7 @@ class C_Sweep(Sandbox):
         # status reads the homes NOW (issue #2991): retired by hand since the sweep,
         # the record still names them, status does not
         shutil.rmtree(os.path.join(users, "alice", ".cache", "claude-fleet", "shell"))
-        with open(os.path.join(users, "bob", ".zshrc"), "w") as f:
-            f.write('export PATH="$HOME/.local/bin:$PATH"\n')
+        put(os.path.join(users, "bob", ".zshrc"), 'export PATH="$HOME/.local/bin:$PATH"\n')
         self.assertEqual(len(self.state()["sweep"]["clientshell"]), 2)
         st = self.run_sup("status").stdout
         self.assertNotIn("clientshell", st)
@@ -819,15 +896,8 @@ class O_SweepRemoves(Sandbox):
         Sandbox.setUp(self)
         self.dd = self.env["FLEET_NODE_DAEMON_DIR"]
         users = os.path.join(self.d, "Users")
-        pw = {}
-        for who in ("alice", "bob", "carol"):
-            home = os.path.join(users, who)
-            os.makedirs(os.path.join(home, "Library", "LaunchAgents"))
-            pw[who] = {"uid": os.getuid(), "gid": os.getgid(), "home": home}
-        pw["bob"].update(groups=["staff", "admin"], sudo="(ALL) NOPASSWD: ALL")     # the machine's admin
-        with open(os.path.join(self.d, "passwd.json"), "w") as f:
-            json.dump(pw, f)
-        self.env["FLEET_NODE_PASSWD"] = os.path.join(self.d, "passwd.json")
+        self.passwd({w: os.path.join(users, w) for w in ("alice", "bob", "carol")},
+                    os.path.join("Library", "LaunchAgents"), admin=("bob",))      # bob: the machine's admin
         os.makedirs(os.path.join(self.d, "db", "logins"))
         open(os.path.join(self.d, "db", "logins", "alice.env"), "w").close()        # alice: taken over
         json.dump({"role": "managed", "version": 0}, open(os.path.join(self.d, "db", "expected.json"), "w"))
@@ -886,8 +956,7 @@ class O_SweepRemoves(Sandbox):
         }
 
     def test_removes_outside_the_expected_set(self):
-        with open(os.path.join(self.d, "db", "keep-labels"), "w") as f:
-            f.write("# mine\ncom.claude-fleet.mine\n")
+        put(os.path.join(self.d, "db", "keep-labels"), "# mine\ncom.claude-fleet.mine\n")
         p = self.lay()
         gone = ("gone-proxy", "machine", "legacy-ok", "alice-agent")
         stay = ("node", "core", "own-proxy", "kept", "legacy-waits", "carol-daemon", "bob-own", "carol-agent",
@@ -940,7 +1009,7 @@ class O_SweepRemoves(Sandbox):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(os.path.exists(p), r.stdout)
         self.assertNotIn("node-core", r.stdout)
-        self.assertFalse(os.path.exists(self.lclog) and "node-core" in open(self.lclog).read(),
+        self.assertFalse("node-core" in slurp(self.lclog),
                          "the sweep called launchctl on the core")
         # and the one place that boots a unit out refuses it, whoever asks
         self.assertIsInstance(fns._retire_unit(None, self.dd, p, "com.claude-fleet.node-core", [], "x", False), str)
@@ -958,7 +1027,7 @@ class O_SweepRemoves(Sandbox):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(os.path.exists(p), r.stdout)
         self.assertNotIn("admin-agent", r.stdout)
-        self.assertFalse(os.path.exists(self.lclog) and "admin-agent" in open(self.lclog).read(),
+        self.assertFalse("admin-agent" in slurp(self.lclog),
                          "the sweep called launchctl on the seat's agent")
         os.unlink(p)
         p = self.plist(self.dd, "com.claude-fleet.admin-agent")       # no UserName: root, not the seat
@@ -979,7 +1048,7 @@ class O_SweepRemoves(Sandbox):
         self.start()
         want = "bootstrap system %s" % os.path.join(self.dd, "com.claude-fleet.node-core.plist")
         self.trace_stage('O bootstrap within 10s')
-        self.assertTrue(self.wait_for(10, lambda: os.path.exists(self.lclog) and want in open(self.lclog).read()),
+        self.assertTrue(self.wait_for(10, lambda: want in slurp(self.lclog)),
                         "the daemon did not put the core back")
         self.trace_stage('O down_since within 5s')
         self.assertTrue(self.wait_for(5, lambda: (self.state().get("core") or {}).get("down_since")))
@@ -991,8 +1060,7 @@ class O_SweepRemoves(Sandbox):
 
     def test_one_that_will_not_unload_stays(self):
         p = self.plist(self.dd, "com.claude-fleet.memguard")
-        with open(self.stuck, "w") as f:
-            f.write("com.claude-fleet.memguard\n")
+        put(self.stuck, "com.claude-fleet.memguard\n")
         r = self.run_sup("sweep")
         self.assertTrue(os.path.exists(p))
         self.assertIn("system/com.claude-fleet.memguard did not unload", r.stdout)
@@ -1060,8 +1128,7 @@ class O_SweepRemoves(Sandbox):
         shutil.copy(SUP, rt)          # the retire script's one rule (shell-hooks, issue #2991)
         home = os.path.join(self.d, "Users", "alice")
         os.makedirs(os.path.join(home, ".cache", "claude-fleet", "shell", "bin"))
-        with open(os.path.join(home, ".zshrc"), "w") as f:
-            f.write("alias y=yazi\nsource ~/.claude/fleet/shell/cw.zsh\n")
+        put(os.path.join(home, ".zshrc"), "alias y=yazi\nsource ~/.claude/fleet/shell/cw.zsh\n")
         # carol is not taken over: hers is not the fleet's to touch
         os.makedirs(os.path.join(self.d, "Users", "carol", ".cache", "claude-fleet", "shell"))
         dry = self.run_sup("sweep", "--dry-run")
@@ -1127,8 +1194,7 @@ class E_Status(Sandbox):
         # issue #3100: launchd restarted it, the new one never wrote a heartbeat —
         # alive and silent is WEDGED, not DOWN (another root's daemon is not ours)
         ps = os.path.join(self.d, "ps.txt")
-        with open(ps, "w") as f:
-            f.write("4242 1 /usr/bin/python3 -I /elsewhere/current/bin/fleet-node-supervisor.py run\n")
+        put(ps, "4242 1 /usr/bin/python3 -I /elsewhere/current/bin/fleet-node-supervisor.py run\n")
         seam = {"FLEET_NODE_PS_CMD": ps, "FLEET_NODE_HEARTBEAT_STALE": "0"}
         self.assertEqual(self.run_sup("status", "--check", env=seam).returncode, 1)
         with open(ps, "a") as f:
@@ -1152,7 +1218,6 @@ class F_Trust(Sandbox):
         shutil.copy(SUP, os.path.join(self.d, "rt", "bin", "fleet-node-supervisor.py"))
         r = self.run_sup("install")
         self.assertEqual(r.returncode, 0, r.stderr)
-        import plistlib
         pl = plistlib.load(open(os.path.join(self.env["FLEET_NODE_DAEMON_DIR"], "com.claude-fleet.node.plist"), "rb"))
         self.assertEqual(pl["Label"], "com.claude-fleet.node")
         self.assertTrue(pl["KeepAlive"])
@@ -1171,8 +1236,7 @@ class G_DefaultTable(Sandbox):
         db = os.path.join(self.d, "db")
         os.makedirs(os.path.join(db, "logins"))
         menv = os.path.join(db, "machine.env")
-        old, mac = dict(os.environ), fns.MAC
-        try:
+        with mock.patch.dict(os.environ), mock.patch.object(fns, "MAC", fns.MAC):
             os.environ["FLEET_NODE_STATE"] = db
             os.environ.pop("FLEET_NODE_TABLE", None)
 
@@ -1181,31 +1245,19 @@ class G_DefaultTable(Sandbox):
             fns.MAC = True
             self.assertTrue(all(isinstance(r, str) for r in agent()["requires"]), "a Mac's requirements unchanged")
             fns.MAC = False
-            with open(menv, "w") as f:
-                f.write("CCQUOTA_TOKEN=t\n")
+            put(menv, "CCQUOTA_TOKEN=t\n")
             self.assertTrue(fns.requires_missing(agent()), "account ops off: waits for a login")
-            with open(menv, "w") as f:
-                f.write("CCQUOTA_TOKEN=t\nFLEET_NODE_ACCOUNT_OPS=1\n")
+            put(menv, "CCQUOTA_TOKEN=t\nFLEET_NODE_ACCOUNT_OPS=1\n")
             self.assertEqual(fns.requires_missing(agent()), [], "account ops on: runs with none")
-            with open(menv, "w") as f:
-                f.write("CCQUOTA_TOKEN=t\nFLEET_NODE_ACCOUNT_OPS=0\n")
+            put(menv, "CCQUOTA_TOKEN=t\nFLEET_NODE_ACCOUNT_OPS=0\n")
             open(os.path.join(db, "logins", "alice.env"), "w").close()
             self.assertEqual(fns.requires_missing(agent()), [], "a login: runs, as ever")
-        finally:
-            fns.MAC = mac
-            os.environ.clear()
-            os.environ.update(old)
 
     def test_default_table(self):
         e = dict(self.env)
         del e["FLEET_NODE_TABLE"]
-        os.environ.update({k: v for k, v in e.items() if k.startswith("FLEET_NODE_")})
-        try:
+        with mock.patch.dict(os.environ, {k: v for k, v in e.items() if k.startswith("FLEET_NODE_")}):
             t = fns.default_table(fns.Paths())
-        finally:
-            for k in list(os.environ):
-                if k.startswith("FLEET_NODE_"):
-                    del os.environ[k]
         names = [x["name"] for x in t["tasks"]]
         self.assertEqual(names, ["diskguard", "memguard", "orphans", "shared-dirs", "machine-reading"]
                          + (["spotlight", "wallpaper"] if fns.MAC else []) + ["update", "credsep-enforce"])
@@ -1275,19 +1327,10 @@ class H_Accounts(Sandbox):
         for x in ("loaded", "stuck", "slow", "busy"):
             os.makedirs(os.path.join(self.lc, x))
         lcs = os.path.join(self.d, "launchctl")
-        with open(lcs, "w") as f:
-            f.write(FAKE_LC)
-        os.chmod(lcs, 0o755)
-        pw = {}
-        for who in ("alice", "bob"):
-            home = os.path.join(self.d, "Users", who)
-            os.makedirs(os.path.join(home, ".claude", "fleet", "bin"))
-            os.makedirs(os.path.join(home, "Library", "LaunchAgents"))
-            pw[who] = {"uid": os.getuid(), "gid": os.getgid(), "home": home}
-        with open(os.path.join(self.d, "passwd.json"), "w") as f:
-            json.dump(pw, f)
-        self.env.update({"FLEET_NODE_PASSWD": os.path.join(self.d, "passwd.json"),
-                         "FLEET_NODE_LAUNCHCTL": lcs, "FAKE_LC": self.lc,
+        put(lcs, FAKE_LC, 0o755)
+        self.passwd({w: os.path.join(self.d, "Users", w) for w in ("alice", "bob")},
+                    os.path.join(".claude", "fleet", "bin"), os.path.join("Library", "LaunchAgents"))
+        self.env.update({"FLEET_NODE_LAUNCHCTL": lcs, "FAKE_LC": self.lc,
                          "FLEET_NODE_BOOTOUT_WAIT": "2"})
 
     def home(self, who):
@@ -1295,36 +1338,24 @@ class H_Accounts(Sandbox):
 
     def acct_script(self, who, name, body):
         p = os.path.join(self.home(who), ".claude", "fleet", "bin", name)
-        with open(p, "w") as f:
-            f.write("#!/bin/bash\n" + body)
-        os.chmod(p, 0o755)
+        put(p, "#!/bin/bash\n" + body, 0o755)
 
     def plist(self, path, label):
-        import plistlib
         with open(path, "wb") as f:
             plistlib.dump({"Label": label, "ProgramArguments": ["/bin/true"]}, f)
         open(os.path.join(self.lc, "loaded", label), "w").close()
 
     def acct_table(self, *units):
-        with open(self.env["FLEET_NODE_TABLE"], "w") as f:
-            json.dump({"children": [], "tasks": [], "account": list(units)}, f)
+        put(self.env["FLEET_NODE_TABLE"], {"children": [], "tasks": [], "account": list(units)})
 
     def lclog(self):
-        try:
-            return open(os.path.join(self.lc, "log")).read()
-        except IOError:
-            return ""
+        return slurp(os.path.join(self.lc, "log"))
 
     def test_table_is_the_templates(self):
         os.makedirs(os.path.join(self.d, "rt"))
         os.symlink(os.path.join(os.path.dirname(BIN), "launchd"), os.path.join(self.d, "rt", "launchd"))
-        os.environ.update({k: v for k, v in self.env.items() if k.startswith("FLEET_NODE_")})
-        try:
+        with mock.patch.dict(os.environ, {k: v for k, v in self.env.items() if k.startswith("FLEET_NODE_")}):
             units = {u["name"]: u for u in fns.account_units(fns.Paths())}
-        finally:
-            for k in list(os.environ):
-                if k.startswith("FLEET_NODE_"):
-                    del os.environ[k]
         import glob as g
         tmpl = set(os.path.basename(x)[len("com.claude-fleet."):-len(".plist.tmpl")]
                    for x in g.glob(os.path.join(os.path.dirname(BIN), "launchd", "*.plist.tmpl")))
@@ -1378,8 +1409,7 @@ class H_Accounts(Sandbox):
             conf = os.path.join(self.home(who), ".config", "claude-fleet")
             os.makedirs(conf, exist_ok=True)
             if rec:
-                with open(os.path.join(conf, "credsep.json"), "w") as f:
-                    json.dump(rec, f)
+                put(os.path.join(conf, "credsep.json"), rec)
         for who in ("alice", "bob"):
             self.assertIsNone(fns.account_unit_for(old, self.home(who)), "no per-login proxy, for anyone")
         a = fns.account_entry(fns.account_unit_for(unit, self.home("alice")), "alice",
@@ -1395,8 +1425,7 @@ class H_Accounts(Sandbox):
         fake = type("S", (), {"state": {"tasks": {}}})()
         due = lambda: fns.Supervisor.task_due(fake, a, time.time())
         self.assertFalse(due(), "no request, not due — however long it has been")
-        with open(want, "w") as f:
-            f.write("used 1\n")
+        put(want, "used 1\n")
         self.assertTrue(due(), "a request is due at once")
         fake.state["tasks"][a["name"]] = {"want_seen": fns.want_stamp(want), "last_start": 0}
         self.assertFalse(due(), "a request already run is not run again")
@@ -1405,8 +1434,7 @@ class H_Accounts(Sandbox):
         self.assertNotIn("want", unit, "the table's unit is not changed in place")
         self.assertIsNone(fns.account_unit_for(unit, self.home("bob")), "not on the shared proxy: no cred-relay")
         # an unreadable record is not shared: still none
-        with open(os.path.join(self.home("bob"), ".config", "claude-fleet", "credsep.json"), "w") as f:
-            f.write("{not json")
+        put(os.path.join(self.home("bob"), ".config", "claude-fleet", "credsep.json"), "{not json")
         self.assertIsNone(fns.account_unit_for(unit, self.home("bob")))
 
     def test_runs_as_account_and_isolated(self):
@@ -1522,11 +1550,7 @@ class H_Accounts(Sandbox):
         lst = self.run_sup("attic", "list").stdout
         self.assertEqual(lst.count("(account alice, kept)"), 3, lst)
         # kept past the attic's days: a purge never takes an adopted account's way back
-        idx_p = os.path.join(self.d, "db", "attic", "index.json")
-        idx = json.load(open(idx_p))
-        for e in idx:
-            e["moved"] -= 30 * 86400
-        json.dump(idx, open(idx_p, "w"))
+        self.age_attic(30)
         self.assertIn("purged 0", self.run_sup("attic", "purge").stdout)
         # one command back
         r = self.run_sup("account", "release", "alice")
@@ -1564,11 +1588,7 @@ class H_Accounts(Sandbox):
         self.assertNotIn("bootstrap", self.lclog())
         lst = self.run_sup("attic", "list").stdout
         self.assertNotIn("kept", lst)
-        idx_p = os.path.join(self.d, "db", "attic", "index.json")
-        idx = json.load(open(idx_p))
-        for e in idx:
-            e["moved"] -= 30 * 86400
-        json.dump(idx, open(idx_p, "w"))
+        self.age_attic(30)
         self.assertIn("purged 1", self.run_sup("attic", "purge").stdout)
         r = self.run_sup("account", "forget", "alice")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -1596,9 +1616,7 @@ class H_Accounts(Sandbox):
         dd = self.env["FLEET_NODE_DAEMON_DIR"]
         for u in ("collect", "webhook"):
             self.plist(os.path.join(dd, "com.claude-fleet.alice.%s.plist" % u), "com.claude-fleet.alice.%s" % u)
-            open(os.path.join(self.lc, "loaded", "com.claude-fleet.alice.%s" % u), "w").close()
-        with open(os.path.join(self.lc, "slow", "com.claude-fleet.alice.webhook"), "w") as f:
-            f.write("3\n")
+        put(os.path.join(self.lc, "slow", "com.claude-fleet.alice.webhook"), "3\n")
         self.acct_table()
         r = self.run_sup("account", "adopt", "alice")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -1610,9 +1628,7 @@ class H_Accounts(Sandbox):
         dd = self.env["FLEET_NODE_DAEMON_DIR"]
         for u in ("a-webhook", "b-collect"):
             self.plist(os.path.join(dd, "com.claude-fleet.alice.%s.plist" % u), "com.claude-fleet.alice.%s" % u)
-            open(os.path.join(self.lc, "loaded", "com.claude-fleet.alice.%s" % u), "w").close()
-        with open(os.path.join(self.lc, "busy", "com.claude-fleet.alice.a-webhook"), "w") as f:
-            f.write("2\n")
+        put(os.path.join(self.lc, "busy", "com.claude-fleet.alice.a-webhook"), "2\n")
         open(os.path.join(self.lc, "stuck", "com.claude-fleet.alice.b-collect"), "w").close()
         self.acct_table()
         r = self.run_sup("account", "adopt", "alice")
@@ -1640,8 +1656,7 @@ class H_Accounts(Sandbox):
         self.acct_table({"name": "p", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/p.sh"], "every": 60})
         for who in ("alice", "bob"):
             self.run_sup("account", "adopt", who)
-        with open(os.path.join(self.d, "db", "expected.json"), "w") as f:
-            json.dump({"accounts": ["alice", {"name": "dave"}]}, f)
+        put(os.path.join(self.d, "db", "expected.json"), {"accounts": ["alice", {"name": "dave"}]})
         self.assertEqual(self.run_sup("tick").returncode, 0)
         self.assertEqual(self.task("alice/p")["result"], "ok")
         self.assertFalse(self.task("bob/p"), "an account the expected state drops still ran")
@@ -1649,7 +1664,6 @@ class H_Accounts(Sandbox):
 
     # -- the login's own node agent (#2387) -------------------------------------
     def agent_plist(self, who, env, gui=False):
-        import plistlib
         if gui:
             path, label = os.path.join(self.home(who), "Library", "LaunchAgents", "com.ccquota.agent.plist"), \
                 "com.ccquota.agent"
@@ -1662,10 +1676,7 @@ class H_Accounts(Sandbox):
         return path
 
     def node_env(self, path, body):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            f.write(body)
-        os.chmod(path, 0o600)
+        put(path, body, 0o600)
 
     def login_env(self, who):
         p = os.path.join(self.d, "db", "logins", who + ".env")
@@ -1741,17 +1752,20 @@ class H_Accounts(Sandbox):
         self.assertEqual(self.lclog(), "", "something was booted out")
         self.assertEqual(self.run_sup("account", "manages", "alice").returncode, 1)
 
-    def test_credsep_login_reads_the_store(self):
+    def cred_store(self, who, body, mode="shared"):
+        """<who>'s credsep store (meta.json + a 0600 node.env holding <body>) -> the env naming it."""
         cred = os.path.join(self.d, "cred")
+        put(os.path.join(cred, who, "meta.json"), {"login": who, "mode": mode})
+        self.node_env(os.path.join(cred, who, "node.env"), body)
+        return {"FLEET_CREDSEP_ROOT_BASE": cred, "FLEET_CREDSEP_RUN_BASE": "/run/fc"}
+
+    def test_credsep_login_reads_the_store(self):
         for who, mode in (("alice", "shared"), ("bob", "own")):
-            os.makedirs(os.path.join(cred, who))
-            json.dump({"login": who, "mode": mode}, open(os.path.join(cred, who, "meta.json"), "w"))
-            self.node_env(os.path.join(cred, who, "node.env"), "CCQUOTA_TOKEN=tok-%s\nCCQUOTA_HUB_URL=https://h\n" % who)
+            e = self.cred_store(who, "CCQUOTA_TOKEN=tok-%s\nCCQUOTA_HUB_URL=https://h\n" % who, mode)
             self.agent_plist(who, {"CCQUOTA_FLEET": "1"}, gui=(who == "bob"))
         # the login's own conf dir is not where a separated login's token is
         self.node_env(os.path.join(self.home("alice"), ".config", "claude-fleet", "node.env"), "CCQUOTA_TOKEN=wrong\n")
         self.acct_table()
-        e = {"FLEET_CREDSEP_ROOT_BASE": cred, "FLEET_CREDSEP_RUN_BASE": "/run/fc"}
         for who in ("alice", "bob"):
             r = self.run_sup("account", "adopt", who, env=e)
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -1769,12 +1783,9 @@ class H_Accounts(Sandbox):
         # set up again (no join), the token is only in the credsep store — and
         # adopt serves it from there with nothing to boot out; no store token ⇒
         # nothing to adopt, as before
-        cred = os.path.join(self.d, "cred")
-        os.makedirs(os.path.join(cred, "alice"))
-        json.dump({"login": "alice", "mode": "shared"}, open(os.path.join(cred, "alice", "meta.json"), "w"))
-        self.node_env(os.path.join(cred, "alice", "node.env"), "CCQUOTA_TOKEN=tok-kept\nCCQUOTA_HUB_URL=https://h\n")
+        e = self.cred_store("alice", "CCQUOTA_TOKEN=tok-kept\nCCQUOTA_HUB_URL=https://h\n")
+        cred = e["FLEET_CREDSEP_ROOT_BASE"]
         self.acct_table()
-        e = {"FLEET_CREDSEP_ROOT_BASE": cred, "FLEET_CREDSEP_RUN_BASE": "/run/fc"}
         r = self.run_sup("account", "adopt", "alice", env=e)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("tok-kept", r.stdout + r.stderr, "adopt printed the token")
@@ -1796,16 +1807,12 @@ class H_Accounts(Sandbox):
         # login's settings must; a value the store already holds is kept, a
         # login with no store gets nothing; an older logins/<login>.env is
         # backfilled once, the other lines as they were
-        cred = os.path.join(self.d, "cred")
         stores = {"alice": "CCQUOTA_TOKEN=tok-alice\nCCQUOTA_FLEET_COMPUTE=0\n",
                   "bob": "CCQUOTA_TOKEN=tok-bob\nCCQUOTA_FLEET_CREDS=store-only\n"}
         for who, body in stores.items():
-            os.makedirs(os.path.join(cred, who))
-            json.dump({"login": who, "mode": "shared"}, open(os.path.join(cred, who, "meta.json"), "w"))
-            self.node_env(os.path.join(cred, who, "node.env"), body)
+            e = self.cred_store(who, body)
             self.agent_plist(who, {"CCQUOTA_FLEET": "1"})
         self.acct_table()
-        e = {"FLEET_CREDSEP_ROOT_BASE": cred, "FLEET_CREDSEP_RUN_BASE": "/run/fc"}
         for who in ("alice", "bob"):
             r = self.run_sup("account", "adopt", who, env=e)
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -1821,15 +1828,11 @@ class H_Accounts(Sandbox):
         past = time.time() - 600
         for who in ("alice", "bob", "carol"):
             os.utime(os.path.join(logins, who + ".env"), (past, past))
-        saved = dict(os.environ)
-        os.environ.update({k: v for k, v in self.env.items() if k.startswith("FLEET_")})
-        os.environ.update(e)
-        try:
+        with mock.patch.dict(os.environ):
+            os.environ.update({k: v for k, v in self.env.items() if k.startswith("FLEET_")})
+            os.environ.update(e)
             fixed = fns.logins_creds_backfill(fns.Paths())
             again = fns.logins_creds_backfill(fns.Paths(), settle=0)
-        finally:
-            os.environ.clear()
-            os.environ.update(saved)
         self.assertEqual(fixed, ["alice"])
         self.assertEqual(again, [], "a second pass rewrote again")
         kv = self.login_env("alice")[0]
@@ -1843,14 +1846,10 @@ class H_Accounts(Sandbox):
         # mac-a (issue #2336): the store's node.env is _fleetcred's, not root's —
         # the owner check (forced on here) must take the role account
         import getpass
-        cred = os.path.join(self.d, "cred")
-        os.makedirs(os.path.join(cred, "alice"))
-        json.dump({"login": "alice", "mode": "shared"}, open(os.path.join(cred, "alice", "meta.json"), "w"))
-        self.node_env(os.path.join(cred, "alice", "node.env"), "CCQUOTA_TOKEN=tok-alice\n")
+        e = dict(self.cred_store("alice", "CCQUOTA_TOKEN=tok-alice\n"), FLEET_NODE_OWNER_CHECK="1",
+                 FLEET_CREDSEP_ROLE="no-such-role-account")
         self.agent_plist("alice", {"CCQUOTA_FLEET": "1"})
         self.acct_table()
-        e = {"FLEET_CREDSEP_ROOT_BASE": cred, "FLEET_CREDSEP_RUN_BASE": "/run/fc", "FLEET_NODE_OWNER_CHECK": "1",
-             "FLEET_CREDSEP_ROLE": "no-such-role-account"}
         r = self.run_sup("account", "adopt", "alice", env=e)
         self.assertEqual(r.returncode, 1, "a store file of an unknown owner was read")
         self.assertIn("no CCQUOTA_TOKEN", r.stderr)
@@ -1936,18 +1935,15 @@ class H_Accounts(Sandbox):
         self.assertTrue(os.path.exists(ap) and os.path.exists(os.path.join(la, "com.claude-fleet.dispatch.plist")))
 
     def test_node_agent_restarts_when_logins_change(self):
-        lg = os.path.join(self.d, "db", "logins")
-        os.makedirs(lg)
-        self.table(children=[{"name": "node-agent", "cmd": [self.script("na.sh", "exec sleep 300\n")],
-                              "requires": [lg], "reload": lg}])
+        lg = self.logins_dir()
+        self.node_agent(lg, requires=[lg], reload=lg)
         self.start()
         pid = until(10, lambda: self.child("node-agent").get("pid"))
         self.assertTrue(pid)
         time.sleep(0.3)
         self.assertEqual(self.child("node-agent")["pid"], pid, "restarted with nothing changed")
-        with open(os.path.join(lg, "alice.env"), "w") as f:
-            f.write("CCQUOTA_TOKEN=x\n")
-        pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
+        put(os.path.join(lg, "alice.env"), "CCQUOTA_TOKEN=x\n")
+        pid2 = self.new_pid("node-agent", pid)
         self.assertTrue(pid2, "logins/ changed and the node agent kept its old tenants")
         self.assertTrue(until(3, lambda: not fns.pid_alive(pid)), "the old node agent is still running")
 
@@ -1955,13 +1951,9 @@ class H_Accounts(Sandbox):
         # #3136: the supervisor restarted (an update) and adopted the live node
         # agent; a live adopted child skipped the reload check, so the login
         # opened that same second never got its node — until the agent exited.
-        lg = os.path.join(self.d, "db", "logins")
-        os.makedirs(lg)
-        with open(os.path.join(lg, "grace.env"), "w") as f:
-            f.write("CCQUOTA_TOKEN=x\n")
+        lg = self.logins_dir("grace")
         # a plain argv: adopt matches the live process's command line to the one recorded
-        self.table(children=[{"name": "node-agent", "cmd": ["/bin/sleep", "300"],
-                              "requires": [os.path.join(lg, "*.env")], "reload": os.path.join(lg, "*.env")}])
+        self.node_agent(lg, cmd=["/bin/sleep", "300"])
         p = self.start()
         pid = until(10, lambda: self.child("node-agent").get("pid"))
         self.assertTrue(pid)
@@ -1972,9 +1964,8 @@ class H_Accounts(Sandbox):
         self.assertTrue(until(10, lambda: (self.state().get("supervisor") or {}).get("starts") == 2))
         time.sleep(0.5)
         self.assertEqual(self.child("node-agent")["pid"], pid, "the live node agent was not adopted")
-        with open(os.path.join(lg, "drill.env"), "w") as f:
-            f.write("CCQUOTA_TOKEN=y\n")
-        pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
+        put(os.path.join(lg, "drill.env"), "CCQUOTA_TOKEN=y\n")
+        pid2 = self.new_pid("node-agent", pid)
         self.assertTrue(pid2, "an adopted node agent kept its old tenants after a new login")
         self.assertTrue(until(3, lambda: not fns.pid_alive(pid)), "the adopted node agent is still running")
 
@@ -1983,33 +1974,20 @@ class H_Accounts(Sandbox):
         # the create the node agent runs — the restart cut that very create off.
         # While a tenant's book names an op running (by a live pid) the reload
         # waits; once it is done the agent starts again on the new logins/.
-        lg = os.path.join(self.d, "db", "logins")
-        ag = os.path.join(self.d, "db", "agent", "grace")
-        os.makedirs(lg)
-        os.makedirs(ag)
-        with open(os.path.join(lg, "grace.env"), "w") as f:
-            f.write("CCQUOTA_TOKEN=x\n")
-        book = os.path.join(ag, "account-ops.json")
-        holder = subprocess.Popen(["/bin/sleep", "300"])
-        self.addCleanup(holder.kill)
-        with open(book, "w") as f:
-            json.dump({"inflight": {"op-1": {"op": "create", "login": "alice", "pid": holder.pid}}}, f)
-        self.table(children=[{"name": "node-agent", "cmd": [self.script("na.sh", "exec sleep 300\n")],
-                              "requires": [os.path.join(lg, "*.env")], "reload": os.path.join(lg, "*.env"),
-                              "hold": os.path.join(self.d, "db", "agent", "*", "account-ops.json")}])
+        lg = self.logins_dir("grace")
+        book, _ = self.held_book()
+        self.node_agent(lg, hold=True)
         self.start()
         pid = until(10, lambda: self.child("node-agent").get("pid"))
         self.assertTrue(pid)
-        with open(os.path.join(lg, "alice.env"), "w") as f:
-            f.write("CCQUOTA_TOKEN=y\n")
+        put(os.path.join(lg, "alice.env"), "CCQUOTA_TOKEN=y\n")
         self.assertTrue(until(10, lambda: self.child("node-agent").get("reload_held_since")),
                         "the reload was not held by the op running")
         time.sleep(0.6)
         self.assertEqual(self.child("node-agent")["pid"], pid, "restarted mid account op")
         self.assertTrue(fns.pid_alive(pid))
-        with open(book, "w") as f:
-            json.dump({"outbox": {"op-1": {"type": "account_result", "op_id": "op-1"}}}, f)
-        pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
+        put(book, {"outbox": {"op-1": {"type": "account_result", "op_id": "op-1"}}})
+        pid2 = self.new_pid("node-agent", pid)
         self.assertTrue(pid2, "the op ended and the node agent kept its old tenants")
         self.assertFalse(self.child("node-agent").get("reload_held_since"))
 
@@ -2018,67 +1996,46 @@ class H_Accounts(Sandbox):
         # stable 003e89bb), so it wrote none and nothing held — the restart cut
         # the create off and the hub's re-ask ran it again into exit 3. The
         # account script running under the node agent holds the reload too.
-        lg = os.path.join(self.d, "db", "logins")
-        os.makedirs(lg)
-        with open(os.path.join(lg, "grace.env"), "w") as f:
-            f.write("CCQUOTA_TOKEN=x\n")
+        lg = self.logins_dir("grace")
         flag = os.path.join(self.d, "op-done")
         login_new = self.script("fleet-login-new.sh", "while [ ! -e %s ]; do sleep 0.1; done\n" % flag)
-        self.table(children=[{"name": "node-agent",
-                              "cmd": [self.script("na.sh", "/bin/sh %s & wait; exec sleep 300\n" % login_new)],
-                              "requires": [os.path.join(lg, "*.env")], "reload": os.path.join(lg, "*.env"),
-                              "hold": os.path.join(self.d, "db", "agent", "*", "account-ops.json"),
-                              "hold_argv": ["fleet-login-new.sh"]}])
+        self.node_agent(lg, cmd=[self.script("na.sh", "/bin/sh %s & wait; exec sleep 300\n" % login_new)],
+                        hold=True, hold_argv=["fleet-login-new.sh"])
         self.start()
         pid = until(10, lambda: self.child("node-agent").get("pid"))
         self.assertTrue(pid)
-        with open(os.path.join(lg, "alice.env"), "w") as f:
-            f.write("CCQUOTA_TOKEN=y\n")
+        put(os.path.join(lg, "alice.env"), "CCQUOTA_TOKEN=y\n")
         self.assertTrue(until(10, lambda: self.child("node-agent").get("reload_held_since")),
                         "a create running under the node agent did not hold the reload (no book)")
         time.sleep(0.6)
         self.assertEqual(self.child("node-agent")["pid"], pid, "restarted mid account op")
         open(flag, "w").close()
-        pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
+        pid2 = self.new_pid("node-agent", pid)
         self.assertTrue(pid2, "the script ended and the node agent kept its old tenants")
 
     def test_node_agent_reload_hold_has_a_cap(self):
         # a book from a dead process holds nothing; a live one at most
         # FLEET_NODE_RELOAD_HOLD seconds
-        lg = os.path.join(self.d, "db", "logins")
-        ag = os.path.join(self.d, "db", "agent", "grace")
-        os.makedirs(lg)
-        os.makedirs(ag)
-        with open(os.path.join(lg, "grace.env"), "w") as f:
-            f.write("CCQUOTA_TOKEN=x\n")
-        holder = subprocess.Popen(["/bin/sleep", "300"])
-        self.addCleanup(holder.kill)
-        with open(os.path.join(ag, "account-ops.json"), "w") as f:
-            json.dump({"inflight": {"op-1": {"op": "create", "login": "alice", "pid": holder.pid}}}, f)
-        self.table(children=[{"name": "node-agent", "cmd": [self.script("na.sh", "exec sleep 300\n")],
-                              "requires": [os.path.join(lg, "*.env")], "reload": os.path.join(lg, "*.env"),
-                              "hold": os.path.join(self.d, "db", "agent", "*", "account-ops.json")}])
+        lg = self.logins_dir("grace")
+        _, holder = self.held_book()
+        self.node_agent(lg, hold=True)
         self.start(FLEET_NODE_RELOAD_HOLD="1")
         pid = until(10, lambda: self.child("node-agent").get("pid"))
-        with open(os.path.join(lg, "alice.env"), "w") as f:
-            f.write("CCQUOTA_TOKEN=y\n")
-        pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
+        put(os.path.join(lg, "alice.env"), "CCQUOTA_TOKEN=y\n")
+        pid2 = self.new_pid("node-agent", pid)
         self.assertTrue(pid2, "a hold past its cap kept the old tenants")
         holder.kill()
         holder.wait()
-        with open(os.path.join(lg, "bob.env"), "w") as f:
-            f.write("CCQUOTA_TOKEN=z\n")
-        pid3 = until(10, lambda: (self.child("node-agent").get("pid") or pid2) != pid2 and self.child("node-agent")["pid"])
+        put(os.path.join(lg, "bob.env"), "CCQUOTA_TOKEN=z\n")
+        pid3 = self.new_pid("node-agent", pid2)
         self.assertTrue(pid3, "a dead process's book held the reload")
 
     def test_node_agent_waits_for_a_login(self):
         # #2421: an empty logins/ made ccquota exit 1 once a minute (restarts 47);
         # the daemon waits until one <login>.env is in it, and stops it again
         # when the last one goes.
-        lg = os.path.join(self.d, "db", "logins")
-        os.makedirs(lg)
-        self.table(children=[{"name": "node-agent", "cmd": [self.script("na.sh", "exec sleep 300\n")],
-                              "requires": [os.path.join(lg, "*.env")], "reload": lg}])
+        lg = self.logins_dir()
+        self.node_agent(lg, reload=lg)
         self.start()
         self.assertTrue(until(10, lambda: self.child("node-agent").get("status") == "waiting"))
         time.sleep(0.5)
@@ -2087,8 +2044,7 @@ class H_Accounts(Sandbox):
         r = self.run_sup("status")
         self.assertIn("waiting — %s missing" % os.path.join(lg, "*.env"), r.stdout)
         env = os.path.join(lg, "alice.env")
-        with open(env, "w") as f:
-            f.write("CCQUOTA_TOKEN=x\n")
+        put(env, "CCQUOTA_TOKEN=x\n")
         pid = until(10, lambda: self.child("node-agent").get("pid"))
         self.assertTrue(pid, "a login arrived and the node agent did not start")
         os.unlink(env)
@@ -2104,27 +2060,15 @@ class I_Services(Sandbox):
     def setUp(self):
         Sandbox.setUp(self)
         self.home = os.path.join(self.d, "Users", "alice")
-        os.makedirs(self.home)
-        with open(os.path.join(self.d, "passwd.json"), "w") as f:
-            json.dump({"alice": {"uid": os.getuid(), "gid": os.getgid(), "home": self.home}}, f)
-        self.env["FLEET_NODE_PASSWD"] = os.path.join(self.d, "passwd.json")
+        self.passwd({"alice": self.home})
         self.table()
         self.svc_sh = self.script("svc.sh", 'echo "up uid=$(id -u) home=$HOME user=$USER svc=$FLEET_SERVICE '
                                   'tok=${TOKEN:-none} mode=$MODE"\necho oops >&2\nexec sleep 300\n')
         self.key = "svc:alice/watch"
 
-    def svc(self, *args, **kw):
-        return self.run_sup("service", *args, **kw)
-
-    def services(self):
-        r = self.run_sup("status", "--json")
-        return {x["name"]: x for x in json.loads(r.stdout)["services"]}
 
     def log(self):
-        try:
-            return open(os.path.join(self.d, "log", "logins", "alice", "watch.log")).read()
-        except IOError:
-            return ""
+        return slurp(os.path.join(self.d, "log", "logins", "alice", "watch.log"))
 
     def test_register_run_restart_stop_rm(self):
         r = subprocess.run(CLI + ["service", "cred", "set", "--login", "alice", "--name", "TOKEN"],
@@ -2200,8 +2144,7 @@ class I_Services(Sandbox):
         # a hand-written entry that lies about its login is named, never run
         d = os.path.join(self.d, "db", "logins", "alice", "services")
         os.makedirs(d)
-        with open(os.path.join(d, "evil.json"), "w") as f:
-            json.dump({"name": "evil", "login": "root", "kind": "service", "exec": ["/bin/sleep", "300"]}, f)
+        put(os.path.join(d, "evil.json"), {"name": "evil", "login": "root", "kind": "service", "exec": ["/bin/sleep", "300"]})
         self.assertEqual(self.run_sup("tick").returncode, 0)
         self.start()
         time.sleep(1)
@@ -2213,33 +2156,24 @@ class I_Services(Sandbox):
         self.assertIn("INVALID", self.run_sup("status").stdout)
 
     def test_front_registers_through_the_supervisor(self):
-        fe = dict(self.env, FLEET_NODE_SUPERVISOR=SUP, FLEET_SERVICE_SUDO="", FLEET_SERVICE_LOGIN="alice",
-                  MYMODE="dev")
-        front = os.path.join(BIN, "fleet-service.sh")
-        r = subprocess.run(["bash", front, "add", "watch", "--env-key", "MYMODE", "--", "sleep", "300"],
-                           env=fe, capture_output=True, text=True)
+        def front(*args, **env):
+            return self.front("fleet-service.sh", "alice", *args, MYMODE="dev", **env)
+        r = front("add", "watch", "--env-key", "MYMODE", "--", "sleep", "300")
         self.assertEqual(r.returncode, 0, r.stderr)
         ent = json.load(open(os.path.join(self.d, "db", "logins", "alice", "services", "watch.json")))
         self.assertTrue(os.path.isabs(ent["exec"][0]) and ent["exec"][1:] == ["300"], ent["exec"])
         self.assertEqual(ent["env"], {"MYMODE": "dev"})
-        self.assertIn("alice/watch", subprocess.run(["bash", front, "ls"], env=fe, capture_output=True,
-                                                    text=True).stdout)
-        r = subprocess.run(["bash", front, "rm", "watch"], env=fe, capture_output=True, text=True)
+        self.assertIn("alice/watch", front("ls").stdout)
+        r = front("rm", "watch")
         self.assertEqual(r.returncode, 0, r.stderr)
         # no passwordless sudo: the line an admin runs
         fake = self.script("nosudo", "exit 1\n")
-        r = subprocess.run(["bash", front, "stop", "watch"], env=dict(fe, FLEET_SERVICE_SUDO=fake),
-                           capture_output=True, text=True)
+        r = front("stop", "watch", FLEET_SERVICE_SUDO=fake)
         self.assertEqual(r.returncode, 3, r.stderr)
         self.assertIn("service stop --login alice --name watch", r.stderr)
 
     def test_services_do_not_restart_the_node_agent(self):
-        lg = os.path.join(self.d, "db", "logins")
-        os.makedirs(lg)
-        with open(os.path.join(lg, "alice.env"), "w") as f:
-            f.write("CCQUOTA_TOKEN=x\n")
-        self.table(children=[{"name": "node-agent", "cmd": [self.script("na.sh", "exec sleep 300\n")],
-                              "requires": [os.path.join(lg, "*.env")], "reload": os.path.join(lg, "*.env")}])
+        self.node_agent(self.logins_dir("alice"))
         self.start()
         pid = until(10, lambda: self.child("node-agent").get("pid"))
         self.assertTrue(pid)
@@ -2254,20 +2188,14 @@ class J_ServiceMove(Sandbox):
         Sandbox.setUp(self)
         self.ha = os.path.join(self.d, "Users", "heidi")
         self.hb = os.path.join(self.d, "Users", "grace")
-        for h in (self.ha, self.hb):
-            os.makedirs(h)
-        with open(os.path.join(self.d, "passwd.json"), "w") as f:
-            json.dump({"heidi": {"uid": os.getuid(), "gid": os.getgid(), "home": self.ha},
-                       "grace": {"uid": os.getuid(), "gid": os.getgid(), "home": self.hb}}, f)
-        self.env["FLEET_NODE_PASSWD"] = os.path.join(self.d, "passwd.json")
+        self.passwd({"heidi": self.ha, "grace": self.hb})
         self.table()
         # the daily-report case: a working dir with its script + logs, a skill dir
         self.work = os.path.join(self.ha, "daily-report")
         self.skill = os.path.join(self.ha, ".claude", "skills", "daily-report")
         os.makedirs(os.path.join(self.work, "logs"))
         os.makedirs(self.skill)
-        with open(os.path.join(self.skill, "SKILL.md"), "w") as f:
-            f.write("daily report\n")
+        put(os.path.join(self.skill, "SKILL.md"), "daily report\n")
         self.run_sh = os.path.join(self.work, "run.sh")
         with open(self.run_sh, "w") as f:
             f.write('#!/bin/bash\necho "up home=$HOME user=$USER tok=${BARK_KEY:-none} out=$OUT"\n'
@@ -2287,11 +2215,7 @@ class J_ServiceMove(Sandbox):
     def svclog(self, login):
         return os.path.join(self.d, "log", "logins", login, "daily-report.log")
 
-    def read(self, f):
-        try:
-            return open(f).read()
-        except IOError:
-            return ""
+    read = staticmethod(slurp)
 
     def test_move_carries_everything_and_runs_as_the_new_login(self):
         self.start()
@@ -2356,8 +2280,7 @@ class J_ServiceMove(Sandbox):
         self.assertEqual(json.load(open(self.reg("grace")))["state"], "stopped")
 
     def test_release_refuses_while_entries_are_left(self):
-        with open(os.path.join(self.d, "db", "accounts.json"), "w") as f:
-            json.dump({"heidi": {"managed": True, "since": 1}}, f)
+        put(os.path.join(self.d, "db", "accounts.json"), {"heidi": {"managed": True, "since": 1}})
         r = self.run_sup("account", "release", "heidi")
         self.assertEqual(r.returncode, 6, r.stdout + r.stderr)
         self.assertIn("service move --login heidi --name daily-report --to", r.stderr)
@@ -2368,12 +2291,8 @@ class J_ServiceMove(Sandbox):
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_front_moves_your_own(self):
-        fe = dict(self.env, FLEET_NODE_SUPERVISOR=SUP, FLEET_SERVICE_SUDO="", FLEET_SERVICE_LOGIN="heidi")
-        front = os.path.join(BIN, "fleet-service.sh")
-        r = subprocess.run(["bash", front, "move", "daily-report"], env=fe, capture_output=True, text=True)
-        self.assertEqual(r.returncode, 2)
-        r = subprocess.run(["bash", front, "move", "daily-report", "--to", "grace"], env=fe,
-                           capture_output=True, text=True)
+        self.assertEqual(self.front("fleet-service.sh", "heidi", "move", "daily-report").returncode, 2)
+        r = self.front("fleet-service.sh", "heidi", "move", "daily-report", "--to", "grace")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(os.path.exists(self.reg("grace")))
 class K_AgentTasks(Sandbox):
@@ -2382,11 +2301,9 @@ class K_AgentTasks(Sandbox):
     def setUp(self):
         Sandbox.setUp(self)
         self.home = os.path.join(self.d, "Users", "alice")
-        os.makedirs(self.home)
-        with open(os.path.join(self.d, "passwd.json"), "w") as f:
-            json.dump({"alice": {"uid": os.getuid(), "gid": os.getgid(), "home": self.home}}, f)
+        self.passwd({"alice": self.home})
         self.clock = os.path.join(self.d, "clock")
-        self.env.update(FLEET_NODE_PASSWD=os.path.join(self.d, "passwd.json"), FLEET_NODE_CLOCK=self.clock)
+        self.env.update(FLEET_NODE_CLOCK=self.clock)
         self.table()
         self.calls = os.path.join(self.d, "calls")
         # the login's spawner: one line per call (its argv), the receipt on stdout
@@ -2398,8 +2315,7 @@ class K_AgentTasks(Sandbox):
         import calendar
         y, m, d = (int(x) for x in (day or self.DAY).split("-"))
         h, mi, se = (int(x) for x in hms.split(":"))
-        with open(self.clock, "w") as f:
-            f.write("%d\n" % calendar.timegm((y, m, d, h, mi, se)))
+        put(self.clock, "%d\n" % calendar.timegm((y, m, d, h, mi, se)))
 
     def spawner_rc(self, rc):
         with open(self.spawner, "w") as f:
@@ -2417,14 +2333,10 @@ class K_AgentTasks(Sandbox):
                             *(e + list(extra)))
 
     def ncalls(self):
-        try:
-            return [l for l in open(self.calls).read().splitlines() if l]
-        except IOError:
-            return []
+        return [l for l in slurp(self.calls).splitlines() if l]
 
     def row(self):
-        return [r for r in json.loads(self.run_sup("status", "--json").stdout)["services"]
-                if r["name"] == "daily"][0]
+        return self.services()["daily"]
 
     def agent(self):
         return (self.state().get("agent_tasks") or {}).get("alice/daily") or {}
@@ -2490,33 +2402,32 @@ class K_AgentTasks(Sandbox):
     def test_run_now_through_the_front(self):
         self.spawner_rc(0)
         self.set_clock("12:00:00")
-        fe = dict(self.env, FLEET_NODE_SUPERVISOR=SUP, FLEET_SERVICE_SUDO="", FLEET_SERVICE_LOGIN="alice")
-        front = os.path.join(BIN, "fleet-task.sh")
-        r = subprocess.run(["bash", front, "add", "daily", "--at", "07:00", "--tz", "UTC", "--fleet", "fns-sandbox",
-                            "--prompt", "hi", "--env", "FLEET_TASK_SPAWN=%s" % self.spawner,
-                            "--env", "CALLS=%s" % self.calls], env=fe, capture_output=True, text=True)
+        def front(*args):
+            return self.front("fleet-task.sh", "alice", *args)
+        r = front("add", "daily", "--at", "07:00", "--tz", "UTC", "--fleet", "fns-sandbox", "--prompt", "hi",
+                  "--env", "FLEET_TASK_SPAWN=%s" % self.spawner, "--env", "CALLS=%s" % self.calls)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.start()
         time.sleep(1.5)
         self.assertEqual(self.ncalls(), [], "a slot earlier than the entry ran")
-        r = subprocess.run(["bash", front, "run", "daily"], env=fe, capture_output=True, text=True)
+        r = front("run", "daily")
         self.assertEqual(r.returncode, 2, "run without --now")
-        r = subprocess.run(["bash", front, "run", "daily", "--now"], env=fe, capture_output=True, text=True)
+        r = front("run", "daily", "--now")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(until(10, lambda: len(self.ncalls()) == 1), self.ncalls())
         self.assertIn("--name|daily-2026-10-10-now1200|", self.ncalls()[0], "a manual run took the slot's window")
         self.assertTrue(until(10, lambda: self.agent().get("state") == "ok"))
         time.sleep(1)
         self.assertEqual(len(self.ncalls()), 1)
-        ls = subprocess.run(["bash", front, "ls"], env=fe, capture_output=True, text=True).stdout
+        ls = front("ls").stdout
         self.assertIn("alice/daily", ls)
         self.assertIn("下次 %s 07:00" % "2026-10-11", ls)
         # a service has no run; a stopped task does not run
-        r = subprocess.run(["bash", front, "stop", "daily"], env=fe, capture_output=True, text=True)
+        r = front("stop", "daily")
         self.assertEqual(r.returncode, 0, r.stderr)
-        r = subprocess.run(["bash", front, "run", "daily", "--now"], env=fe, capture_output=True, text=True)
+        r = front("run", "daily", "--now")
         self.assertEqual(r.returncode, 1)
-        r = subprocess.run(["bash", front, "rm", "daily"], env=fe, capture_output=True, text=True)
+        r = front("rm", "daily")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(until(10, lambda: "alice/daily" not in (self.state().get("agent_tasks") or {})))
 
@@ -2527,10 +2438,7 @@ class K_AgentTasks(Sandbox):
         self.set_clock("05:00:00")
         self.assertEqual(self.add().returncode, 0)
         self.set_clock("08:00:00")
-        fe = dict(self.env, FLEET_NODE_SUPERVISOR=SUP, FLEET_SERVICE_SUDO="", FLEET_SERVICE_LOGIN="alice")
-        front = os.path.join(BIN, "fleet-task.sh")
-        r = subprocess.run(["bash", front, "schedule", "daily", "--at", "07:30"], env=fe,
-                           capture_output=True, text=True)
+        r = self.front("fleet-task.sh", "alice", "schedule", "daily", "--at", "07:30")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("daily 07:30 UTC, next run 2026-10-11 07:30", r.stdout, "the tz was not kept")
         self.start()
@@ -2562,11 +2470,7 @@ class K_AgentTasks(Sandbox):
         self.assertIn("without its output", self.agent()["last_error"])
 
     def test_task_moves_with_its_login(self):
-        with open(os.path.join(self.d, "passwd.json"), "w") as f:
-            json.dump({"alice": {"uid": os.getuid(), "gid": os.getgid(), "home": self.home},
-                       "bob": {"uid": os.getuid(), "gid": os.getgid(),
-                               "home": os.path.join(self.d, "Users", "bob")}}, f)
-        os.makedirs(os.path.join(self.d, "Users", "bob"))
+        self.passwd({"alice": self.home, "bob": os.path.join(self.d, "Users", "bob")})
         self.assertEqual(self.add("--done-file", os.path.join(self.home, "out-{date}.md")).returncode, 0)
         r = self.run_sup("service", "move", "--login", "alice", "--name", "daily", "--to", "bob")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -2602,16 +2506,9 @@ class K_AgentTasks(Sandbox):
 class L_Tenants(Sandbox):
     def setUp(self):
         Sandbox.setUp(self)
-        pw = {}
-        for who in ("alice", "bob"):
-            home = os.path.join(self.d, "Users", who)
-            os.makedirs(os.path.join(home, "Library", "LaunchAgents"))
-            pw[who] = {"uid": os.getuid(), "gid": os.getgid(), "home": home}
-        pw["bob"].update(groups=["staff", "admin"], sudo="(ALL) NOPASSWD: ALL")
-        self.pw = os.path.join(self.d, "passwd.json")
-        with open(self.pw, "w") as f:
-            json.dump(pw, f)
-        self.env["FLEET_NODE_PASSWD"] = self.pw
+        self.passwd({w: os.path.join(self.d, "Users", w) for w in ("alice", "bob")},
+                    os.path.join("Library", "LaunchAgents"), admin=("bob",))
+        self.pw = self.env["FLEET_NODE_PASSWD"]
         self.logins = os.path.join(self.d, "db", "logins")
         os.makedirs(self.logins)
 
@@ -2673,14 +2570,11 @@ class M_UpdateVerifySoon(Sandbox):
         p = type("P", (), {"state": db})()
         uj = os.path.join(db, "update.json")
         self.assertFalse(fns.update_verify_due(p, 1000, 100), "no update.json is never due")
-        with open(uj, "w") as f:
-            json.dump({"phase": "idle", "switched_at": 900}, f)
+        put(uj, {"phase": "idle", "switched_at": 900})
         self.assertFalse(fns.update_verify_due(p, 1000, 100), "an idle updater waits for its slot")
-        with open(uj, "w") as f:
-            json.dump({"phase": "switched", "switched_at": 990}, f)
+        put(uj, {"phase": "switched", "switched_at": 990})
         self.assertFalse(fns.update_verify_due(p, 1000, 100), "inside the settle: not yet")
-        with open(uj, "w") as f:
-            json.dump({"phase": "switched", "switched_at": 960}, f)
+        put(uj, {"phase": "switched", "switched_at": 960})
         self.assertTrue(fns.update_verify_due(p, 1000, 100), "settle passed: verify now")
         self.assertFalse(fns.update_verify_due(p, 1000, 10), "the task ran 10 s ago: no busy loop")
 
@@ -2693,8 +2587,7 @@ class N_FullDiskAccess(Sandbox):
         if os.path.exists(db):
             os.remove(db)
         if mode is not None:
-            with open(db, "w") as f:
-                f.write("x")
+            put(db, "x")
             os.chmod(db, mode)
         os.environ["FLEET_NODE_TCC_DB"] = db
         try:
@@ -2836,8 +2729,7 @@ class Q_RootReads(Sandbox):
 
     def test_open_ro(self):
         f = os.path.join(self.d, "f")
-        with open(f, "w") as fh:
-            fh.write("A=1\n")
+        put(f, "A=1\n")
         os.mkfifo(os.path.join(self.d, "fifo"))
         os.symlink(f, os.path.join(self.d, "ln"))
         with os.fdopen(fns.open_ro(f)) as fh:
@@ -2877,12 +2769,6 @@ class R_Entry(Sandbox):
     """The entry port (#3070): off is byte for byte as before; the switch comes
     from the environment or machine.env; only a plain public key becomes a line."""
 
-    def setUp(self):
-        super(R_Entry, self).setUp()
-        for k in list(self.env):
-            if k.startswith("FLEET_ENTRY"):
-                del self.env[k]
-
     def test_off_adds_nothing(self):
         self.table(children=[{"name": "c", "cmd": ["/bin/sleep", "300"]}])
         self.start()
@@ -2899,10 +2785,8 @@ class R_Entry(Sandbox):
 
     def test_switch_from_machine_env(self):
         os.makedirs(os.path.join(self.d, "db"))
-        with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
-            f.write("CCQUOTA_TOKEN=t\nFLEET_ENTRY=1\nFLEET_ENTRY_PORT=22123\n")
-        old = dict(os.environ)
-        try:
+        put(os.path.join(self.d, "db", "machine.env"), "CCQUOTA_TOKEN=t\nFLEET_ENTRY=1\nFLEET_ENTRY_PORT=22123\n")
+        with mock.patch.dict(os.environ):
             os.environ.update(FLEET_NODE_STATE=os.path.join(self.d, "db"), FLEET_NODE_TEST="1")
             os.environ.pop("FLEET_ENTRY", None)
             os.environ.pop("FLEET_ENTRY_PORT", None)
@@ -2915,13 +2799,9 @@ class R_Entry(Sandbox):
             agent = [x for x in fns.default_table(fns.Paths())["children"] if x["name"] == "node-agent"][0]
             self.assertIn(os.path.join(self.d, "db", "machine.env"), agent["reload"],
                           "the node program restarts when machine.env (its token, FLEET_ENTRY) changes")
-        finally:
-            os.environ.clear()
-            os.environ.update(old)
 
     def test_key_lines(self):
-        import base64
-        blob = base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519" + b"\x00\x00\x00\x20" + b"k" * 32).decode()
+        blob = ED25519_BLOB
         ok = fns.entry_key_line({"type": "ssh-ed25519", "b64": blob, "fp": "SHA256:abc"})
         self.assertEqual(ok, "ssh-ed25519 %s fleet:SHA256:abc\n" % blob)
         for bad in ({"type": "ssh-dss", "b64": blob, "fp": "x"},                    # not a kind the entry takes
@@ -2941,9 +2821,8 @@ class R_Entry(Sandbox):
         db = os.path.join(self.d, "db")
         os.makedirs(os.path.join(db, "logins"))
         open(os.path.join(db, "logins", me + ".env"), "w").close()
-        with open(os.path.join(self.d, "passwd"), "w") as f:
-            json.dump({me: {"uid": os.getuid(), "gid": os.getgid(), "home": self.d}}, f)
-        blob = __import__("base64").b64encode(b"\x00\x00\x00\x0bssh-ed25519" + b"\x00\x00\x00\x20" + b"k" * 32).decode()
+        put(os.path.join(self.d, "passwd"), {me: {"uid": os.getuid(), "gid": os.getgid(), "home": self.d}})
+        blob = ED25519_BLOB
         lst = os.path.join(self.d, "list.json")
         with open(lst, "w") as f:
             json.dump({"version": 1, "logins": {me: {"person": "gh:1", "keys": [
@@ -2973,8 +2852,7 @@ class R_Entry(Sandbox):
     def test_dispatch_once_the_runtime_carries_it(self):
         # issue #3071 (C5): the ForceCommand is the runtime's fleet-entry.sh, only
         # once the runtime has it — before that the config is #3070's, byte for byte
-        old = dict(os.environ)
-        try:
+        with mock.patch.dict(os.environ):
             rt = os.path.join(self.d, "rt")
             os.makedirs(os.path.join(rt, "bin"))
             os.environ.update(FLEET_NODE_RUNTIME=rt, FLEET_NODE_STATE=os.path.join(self.d, "db"))
@@ -2996,9 +2874,6 @@ class R_Entry(Sandbox):
             if any(os.access(x, os.X_OK) for x in fns.ENTRY_SFTP_SERVERS):
                 self.assertTrue(sftp.endswith("/sftp-server"), sftp)
             self.assertNotIn("DisableForwarding", cfg)
-        finally:
-            os.environ.clear()
-            os.environ.update(old)
 
     def test_audit_lines(self):
         # issue #3071 (共同约定 11): what the listener logged, one line each, no key text
@@ -3022,14 +2897,19 @@ class R_Entry(Sandbox):
 class S_EntryReach(Sandbox):
     """Can the outside reach the entry port (#3072, EPIC #3067 C6)."""
 
+    def check_reach(self, rc, *words):
+        """`entry reach --check` exits <rc> and says each of <words>."""
+        c = self.run_sup("entry", "reach", "--check")
+        self.assertEqual(c.returncode, rc, c.stdout)
+        for w in words:
+            self.assertIn(w, c.stdout)
+        return c
+
     def setUp(self):
         super(S_EntryReach, self).setUp()
         import http.server
         import socketserver
         import threading
-        for k in list(self.env):
-            if k.startswith("FLEET_ENTRY"):
-                del self.env[k]
         db = os.path.join(self.d, "db")
         os.makedirs(os.path.join(db, "entry"))
         self.posts, self.answer = [], {"code": 200, "body": {}}
@@ -3053,8 +2933,7 @@ class S_EntryReach(Sandbox):
         threading.Thread(target=self.hub.serve_forever, daemon=True).start()
         self.hub_port = self.hub.server_address[1]
         self.write_env()
-        with open(os.path.join(db, "entry", "ssh_host_ed25519_key.pub"), "w") as f:
-            f.write("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk root@mac-d\n")
+        put(os.path.join(db, "entry", "ssh_host_ed25519_key.pub"), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk root@mac-d\n")
         fns.write_json(os.path.join(db, "entry", "state.json"), {"on": True, "allow": ["grace"], "version": 3})
         self.sshd = subprocess.Popen(["/bin/sleep", "300"])     # stands in for the entry sshd
         self.procs.append(self.sshd)
@@ -3122,11 +3001,8 @@ class S_EntryReach(Sandbox):
         self.assertEqual(os.stat(f).st_mode & 0o777, 0o644)
         with open(f) as fh:
             self.assertNotIn("tok-m", fh.read())
-        c = self.run_sup("entry", "reach", "--check")
-        self.assertEqual(c.returncode, 1, c.stdout)
-        for w in ("外面连不上", "[2408:8207:1:2::9]:22022 超时", "这台没有公网地址", "100.77.0.3",
-                  "在路由器上把公网 TCP 22022 转发到 192.168.1.249:22022"):
-            self.assertIn(w, c.stdout)
+        c = self.check_reach(1, "外面连不上", "[2408:8207:1:2::9]:22022 超时", "这台没有公网地址", "100.77.0.3",
+                             "在路由器上把公网 TCP 22022 转发到 192.168.1.249:22022")
         self.assertNotIn("·  ·", c.stdout)
 
     def test_entry_route_port(self):
@@ -3143,14 +3019,10 @@ class S_EntryReach(Sandbox):
         b = self.posts[0]["body"]
         self.assertEqual((b["entry_host"], b["entry_port"], b["port"]), ("ssh.minihaowan.com", 22123, 22022))
         self.assertNotIn("public_port", b)
-        c = self.run_sup("entry", "reach", "--check")
-        self.assertEqual(c.returncode, 1, c.stdout)
-        for w in ("198.51.100.213:22123 被拒", "在路由器上把公网 TCP 22123 转发到 192.168.1.249:22022"):
-            self.assertIn(w, c.stdout)
+        self.check_reach(1, "198.51.100.213:22123 被拒", "在路由器上把公网 TCP 22123 转发到 192.168.1.249:22022")
 
     def test_public_route_alone_is_not_the_entry(self):
-        with open(os.path.join(self.d, "db", "machine.env"), "a") as f:
-            f.write("CCQUOTA_FLEET_NODE_ROUTES=public=ssh.minihaowan.com:22023\n")
+        put(os.path.join(self.d, "db", "machine.env"), "CCQUOTA_FLEET_NODE_ROUTES=public=ssh.minihaowan.com:22023\n", append=True)
         self.answer["body"] = {"checked_at": "x", "addrs": []}
         self.assertEqual(self.run_sup("entry", "reach").returncode, 0)
         self.assertNotIn("entry_port", self.posts[0]["body"], "public= (the system sshd) was taken for the entry")
@@ -3163,11 +3035,8 @@ class S_EntryReach(Sandbox):
                                           "via": "ipv6", "reachable": False, "reason": "hostkey"}]}
         self.router_ext = "203.0.114.7"
         self.assertEqual(self.run_sup("entry", "reach").returncode, 0)
-        c = self.run_sup("entry", "reach", "--check")
-        self.assertEqual(c.returncode, 0, c.stdout)
-        for w in ("外面连得上：203.0.114.7:22022（IPv4）", "连不上：[2408:8207:1:2::9]:22022 钥匙不符",
-                  "路由器已开端口（NATPMP → 22022）"):
-            self.assertIn(w, c.stdout)
+        self.check_reach(0, "外面连得上：203.0.114.7:22022（IPv4）", "连不上：[2408:8207:1:2::9]:22022 钥匙不符",
+                         "路由器已开端口（NATPMP → 22022）")
 
     def test_router_silent_or_refusing_never_stops_the_report(self):
         self.router.close()             # nothing answers NAT-PMP any more
@@ -3217,8 +3086,7 @@ class S_EntryReach(Sandbox):
         self.assertFalse(b["listening"])
         self.assertNotIn("portmap", b, "nothing listens, yet the router was asked to forward")
         self.assertEqual(self.run_sup("entry", "reach", "--check").returncode, 2)
-        with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
-            f.write("CCQUOTA_TOKEN=t\n")
+        put(os.path.join(self.d, "db", "machine.env"), "CCQUOTA_TOKEN=t\n")
         self.assertEqual(self.run_sup("entry", "reach").returncode, 3)
         self.assertEqual(self.run_sup("entry", "reach", "--check").returncode, 2)
 
@@ -3246,10 +3114,7 @@ class T_RootCore(H_Accounts):
         self.assertTrue(until(10, lambda: os.path.exists(self.env["FLEET_NODE_CORE_SOCK"])), "no core")
 
     def corelog(self):
-        try:
-            return open(os.path.join(self.d, "core.log")).read()
-        except IOError:
-            return ""
+        return slurp(os.path.join(self.d, "core.log"))
 
     def test_account_half_through_the_core(self):
         H_Accounts.test_runs_as_account_and_isolated(self)
@@ -3265,9 +3130,7 @@ class T_RootCore(H_Accounts):
 
     def test_machine_task_through_the_core(self):
         rt_bin = os.path.join(self.d, "rt", "bin")
-        with open(os.path.join(rt_bin, "fleet-memguard.sh"), "w") as f:
-            f.write("#!/bin/bash\necho \"mg $*\" >> %s/mg.log\n" % self.d)
-        os.chmod(os.path.join(rt_bin, "fleet-memguard.sh"), 0o755)
+        put(os.path.join(rt_bin, "fleet-memguard.sh"), "#!/bin/bash\necho \"mg $*\" >> %s/mg.log\n" % self.d, 0o755)
         fail = self.script("fail.sh", "exit 1\n")
         self.table(tasks=[{"name": "memguard", "every": 0.2, "cmd": ["/bin/bash", fail],
                            "core": {"op": "memguard", "args": {"level": "once"}}}])
@@ -3299,10 +3162,7 @@ class U_OnDemand(Sandbox):
         self.short = (self.own_directory(prefix="fw.", dir="/tmp") if hasattr(self, "budget")
                       else tempfile.mkdtemp(prefix="fw.", dir="/tmp"))
         self.home = os.path.join(self.short, "alice")
-        os.makedirs(self.home)
-        with open(os.path.join(self.d, "passwd.json"), "w") as f:
-            json.dump({"alice": {"uid": os.getuid(), "gid": os.getgid(), "home": self.home}}, f)
-        self.env["FLEET_NODE_PASSWD"] = os.path.join(self.d, "passwd.json")
+        self.passwd({"alice": self.home})
         self.table()
 
     def tearDown(self):
@@ -3310,11 +3170,6 @@ class U_OnDemand(Sandbox):
         if not hasattr(self, "budget"):
             shutil.rmtree(self.short, ignore_errors=True)
 
-    def svc(self, *args, **kw):
-        return self.run_sup("service", *args, **kw)
-
-    def services(self):
-        return {x["name"]: x for x in json.loads(self.run_sup("status", "--json").stdout)["services"]}
 
     def test_idle_exit_stays_off_until_its_entry_changes(self):
         sh = self.script("idle.sh", "echo up; sleep 0.3; exit %d\n" % fns.SVC_IDLE_RC)
@@ -3433,13 +3288,8 @@ os.unlink(idle); os.unlink(s); sys.exit(75)
     def test_start_races_a_service_call(self):
         # #3648: `service ensure` made db/ between the daemon's look and its make —
         # the daemon died on FileExistsError and nothing ever started webchat
-        os.environ.update({k: v for k, v in self.env.items() if k.startswith("FLEET_NODE_")})
-        try:
+        with mock.patch.dict(os.environ, {k: v for k, v in self.env.items() if k.startswith("FLEET_NODE_")}):
             paths = fns.Paths()
-        finally:
-            for k in list(os.environ):
-                if k.startswith("FLEET_NODE_"):
-                    del os.environ[k]
         os.makedirs(paths.state, exist_ok=True)
         sup = fns.Supervisor.__new__(fns.Supervisor)
         sup.seated, sup.p = False, paths
@@ -3454,9 +3304,7 @@ os.unlink(idle); os.unlink(s); sys.exit(75)
     def test_ensure_not_ready(self):
         b = os.path.join(self.home, ".claude", "fleet", "bin")
         os.makedirs(b)
-        with open(os.path.join(b, "fleet-webchat.sh"), "w") as f:
-            f.write("#!/bin/bash\nexec sleep 300\n")
-        os.chmod(os.path.join(b, "fleet-webchat.sh"), 0o755)
+        put(os.path.join(b, "fleet-webchat.sh"), "#!/bin/bash\nexec sleep 300\n", 0o755)
         self.start()
         r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "2",
                      env={"FLEET_NODE_ENSURE_SECS": "1"})
@@ -3480,8 +3328,7 @@ class V_SessionUnits(H_Accounts):
                          "FLEET_NODE_STRAY_SECS": "0.5", "FLEET_NODE_SESSION_READ_SECS": "0.2"})
 
     def count(self, who, n, age=0):
-        with open(os.path.join(self.sd, who), "w") as f:
-            f.write("%d %d\n" % (n, int(time.time()) - age))
+        put(os.path.join(self.sd, who), "%d %d\n" % (n, int(time.time()) - age))
 
     def copies(self, who, script):
         out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,command="]).decode()
@@ -3491,8 +3338,7 @@ class V_SessionUnits(H_Accounts):
     def test_session_unit_runs_only_with_a_session(self):
         # the table's class reaches the account entry (#3671)
         os.makedirs(os.path.join(self.d, "rt", "conf"))
-        with open(os.path.join(self.d, "rt", "conf", "node-tasks.tsv"), "w") as f:
-            f.write("spin\tunit\tsession\tx\n")
+        put(os.path.join(self.d, "rt", "conf", "node-tasks.tsv"), "spin\tunit\tsession\tx\n")
         self.assertEqual(fns.table_session_units(os.path.join(self.d, "rt")), {"spin"})
         loop = "while :; do sleep 1; done\n"
         os.makedirs(os.path.join(self.home("carol"), ".claude", "fleet", "bin"))
@@ -3507,8 +3353,7 @@ class V_SessionUnits(H_Accounts):
         with open(os.path.join(self.d, "passwd.json")) as f:
             pw = json.load(f)
         pw["carol"] = dict(pw["alice"], home=self.home("carol"))
-        with open(os.path.join(self.d, "passwd.json"), "w") as f:
-            json.dump(pw, f)
+        put(os.path.join(self.d, "passwd.json"), pw)
         for who in ("alice", "bob", "carol"):
             self.assertEqual(self.run_sup("account", "adopt", who).returncode, 0)
         self.count("alice", 0)
@@ -3545,14 +3390,10 @@ class V_SessionUnits(H_Accounts):
         root = os.path.dirname(BIN)
         for x in ("launchd", "conf"):
             os.symlink(os.path.join(root, x), os.path.join(rt, x))
-        old = dict(os.environ)
-        os.environ.update({k: v for k, v in self.env.items() if k.startswith("FLEET_NODE_")})
-        os.environ["FLEET_NODE_RUNTIME"] = rt
-        try:
+        with mock.patch.dict(os.environ):
+            os.environ.update({k: v for k, v in self.env.items() if k.startswith("FLEET_NODE_")})
+            os.environ["FLEET_NODE_RUNTIME"] = rt
             units = {u["name"]: u for u in fns.account_units(fns.Paths())}
-        finally:
-            os.environ.clear()
-            os.environ.update(old)
         # the shipped GitHub loops left with issue #4899: no class-worker unit is left
         self.assertEqual(fns.table_worker_units(rt), set())
         for other in ("collect", "diskguard", "cleanup", "install-sync"):
@@ -3565,8 +3406,7 @@ class V_SessionUnits(H_Accounts):
         with open(os.path.join(self.d, "passwd.json")) as f:
             pw = json.load(f)
         pw["carol"] = dict(pw["alice"], home=self.home("carol"))
-        with open(os.path.join(self.d, "passwd.json"), "w") as f:
-            json.dump(pw, f)
+        put(os.path.join(self.d, "passwd.json"), pw)
         for who in ("alice", "bob", "carol"):
             self.acct_script(who, "gh-loop.sh", 'echo x >> "$HOME/gh-runs"\n')
             self.acct_script(who, "collect.sh", 'echo x >> "$HOME/collect-runs"\n')
@@ -3577,8 +3417,7 @@ class V_SessionUnits(H_Accounts):
         for who in ("alice", "bob", "carol"):
             self.assertEqual(self.run_sup("account", "adopt", who).returncode, 0)
         self.count("alice", 0)
-        with open(os.path.join(self.sd, "bob"), "w") as f:
-            f.write("0 %d 1\n" % int(time.time()))
+        put(os.path.join(self.sd, "bob"), "0 %d 1\n" % int(time.time()))
         self.count("carol", 1)
         self.start()
         runs = lambda who, what: os.path.exists(os.path.join(self.home(who), what))
@@ -3693,28 +3532,19 @@ _forget_task_running "$1" 3>&1
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
             self.assertEqual(r.returncode, want, r.stderr)
         try:
+            self.assertEqual(fns._zombies([p.pid]), set())
             check(0)                           # a live task still fails the drill
             check(0, "ps() { return 1; }")    # an unreadable ps never proves exit
             p.kill()
-            self.assertTrue(until(5, lambda: fns._zombies([p.pid]) == {p.pid}))
-            check(1)                           # exited, awaiting the parent's reap
-            p.wait(timeout=5)
-            check(1)                           # already gone before the first read
-        finally:
-            p.kill()
-            p.wait()
-
-    def test_zombie_is_not_running(self):
-        p = subprocess.Popen(["sleep", "30"])
-        try:
-            self.assertEqual(fns._zombies([p.pid]), set())
-            os.kill(p.pid, signal.SIGKILL)
             self.assertTrue(until(5, lambda: fns._zombies([p.pid]) == {p.pid}), "a killed, unreaped child reads as a zombie")
-            st = {"tasks": {"bob/job": {"pid": p.pid}}}
-            with mock.patch.object(fns, "read_json", return_value=st):
+            # a zombie is not running (the daemon's own reads)
+            with mock.patch.object(fns, "read_json", return_value={"tasks": {"bob/job": {"pid": p.pid}}}):
                 paths = mock.Mock(state_file="/nonexistent")
                 self.assertFalse(fns._account_running(paths, "bob"))
                 self.assertEqual(fns._account_pids(paths, "bob"), [])
+            check(1)                           # exited, awaiting the parent's reap
+            p.wait(timeout=5)
+            check(1)                           # already gone before the first read
         finally:
             p.kill()
             p.wait()
@@ -3849,8 +3679,7 @@ class Y_IdleBeat(unittest.TestCase):
         self.assertEqual(self.every({"name": "b", "every": 15}, t0 + 5200), 60)
         # a CI job is busy
         st = os.environ["FLEET_NODE_STATE"]
-        with open(os.path.join(st, "ci.env"), "w") as f:
-            f.write("FLEET_CI_TOKEN=x\n")
+        put(os.path.join(st, "ci.env"), "FLEET_CI_TOKEN=x\n")
         fns.write_json(os.path.join(st, "ci-runner.json"), {"state": "busy", "at": time.time()}, 0o644)
         self.assertEqual(self.every({"name": "b", "every": 15}, t0 + 5206), 15)
         self.assertEqual(self.sup.state["idle"]["why"], "ci: a job running")
@@ -3917,8 +3746,7 @@ class W_DoorAccountLocked(unittest.TestCase):
             self.addCleanup(p.stop)
 
     def write(self, rows):
-        with open(self.shadow, "w") as f:
-            f.write("".join("%s:%s:19000:0:99999:7:::\n" % kv for kv in rows.items()))
+        put(self.shadow, "".join("%s:%s:19000:0:99999:7:::\n" % kv for kv in rows.items()))
 
     def field(self, login):
         return fns.door_shadow(login)

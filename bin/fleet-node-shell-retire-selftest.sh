@@ -1,12 +1,6 @@
 #!/bin/bash
 # fleet-node-shell-retire-selftest.sh — a managed machine is no one's client
-# (issue #2702):
-#   A. bin/fleet on a managed machine (FLEET_NODE_STATE/machine.env): `fleet` and
-#      `fleet <machine>` say where the client runs and take the client's road
-#      (issue #2720 — stopping here at the terminal check, rc 2); `fleet claude` /
-#      `fleet codex` answer one line, exit 3; `--help` is untouched; the test identity and
-#      FLEET_NODE_CLIENT=1 take the device client's road with no line; an
-#      unmanaged machine is byte for byte what it was (rc 2, the terminal line).
+# (issue #2702). bin/fleet on a managed machine is fleet-node-hosted-selftest.sh's A.
 #   B. fleet-node-shell-retire.sh --login <me> in a sandbox home: --dry-run
 #      changes nothing; the run stops every process running from the cache (a
 #      TERM-ignoring one too), removes the cache, takes the first-login block and
@@ -18,7 +12,6 @@
 set -uo pipefail
 unset FLEET_CLIENT
 here="$(cd "$(dirname "$0")" && pwd)"
-FLEET="$here/fleet"
 RETIRE="$here/fleet-node-shell-retire.sh"
 T=$(mktemp -d "${TMPDIR:-/tmp}/fnsr.XXXXXX")
 PIDS=()
@@ -31,43 +24,6 @@ fail=0
 ok()  { echo "  ok: $*"; }
 bad() { echo "  FAIL: $*"; fail=1; }
 ME=$(id -un)
-
-# ---- A. bin/fleet ------------------------------------------------------------
-# (the client a `fleet` typed there opens, issue #2720: fleet-node-hosted-selftest.sh)
-echo "A. bin/fleet on a managed machine"
-mkdir -p "$T/managed" "$T/unmanaged" "$T/home"
-: > "$T/managed/machine.env"
-# fl <state dir> <args…> → $out (stderr+stdout), $rc
-fl() {
-  local st=$1; shift
-  out=$(env -u FLEET_CLIENT_IDENTITY -u FLEET_NODE_CLIENT HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" \
-        FLEET_NODE_STATE="$st" FLEET_NODE_RUNTIME="$T/no-runtime" FLEET_CLIENT_UPDATED=1 \
-        FLEET_HUB_URL=https://hub.example \
-        ${FL_ENV:-} sh "$FLEET" "$@" </dev/null 2>&1); rc=$?
-}
-for args in "" "mac-a"; do
-  # shellcheck disable=SC2086  # the words are the command line
-  fl "$T/managed" $args
-  [ "$rc" = 2 ] && ok "fleet $args → the client's road (rc 2: no terminal here)" || bad "fleet $args → rc $rc: $out"
-  case "$out" in "fleet · 客户端在 "*" 上运行；平时请在自己设备上用 fleet"*) ok "  … says where it runs, first" ;; *) bad "  … said: $out" ;; esac
-done
-for args in "claude" "codex hello"; do
-  # shellcheck disable=SC2086
-  fl "$T/managed" $args
-  [ "$rc" = 3 ] && ok "fleet $args → exit 3" || bad "fleet $args → rc $rc: $out"
-done
-[ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] && ok "one line" || bad "lines: $out"
-fl "$T/managed" --help
-[ "$rc" = 0 ] && ok "fleet --help untouched" || bad "--help rc $rc"
-FL_ENV="FLEET_CLIENT_IDENTITY=test" fl "$T/managed"
-[ "$rc" = 2 ] && case "$out" in *"客户端在 "*) false ;; *) true ;; esac \
-  && ok "the test identity: the device client's road, no line" || bad "test identity rc $rc: $out"
-FL_ENV="FLEET_NODE_CLIENT=1" fl "$T/managed"
-[ "$rc" = 2 ] && case "$out" in *"客户端在 "*) false ;; *) true ;; esac \
-  && ok "FLEET_NODE_CLIENT=1: the device client's road, no line" || bad "hatch rc $rc: $out"
-fl "$T/unmanaged"
-[ "$rc" = 2 ] && case "$out" in *"fleet --thin needs a terminal"*) true ;; *) false ;; esac \
-  && ok "unmanaged machine: as before (rc 2, the terminal line)" || bad "unmanaged rc $rc: $out"
 
 # ---- B. the retire script ----------------------------------------------------
 echo "B. fleet-node-shell-retire.sh"

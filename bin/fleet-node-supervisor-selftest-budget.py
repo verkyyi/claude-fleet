@@ -512,36 +512,19 @@ def host(start, dispatched_at, clock_source, args):
 
 # Set only by the independent entry launcher. A direct/all unittest invocation
 # gets a separate clock per bounded case; it is not advertised as a <60s entry.
+# ENVELOPE_RECORD stays None: the opt-in acceptance envelope is gone (T535), the
+# test module still reads it.
 ACTIVE = None
 ENVELOPE_RECORD = None
 
 
-def envelope_module():
-    # Not imported by ordinary discovery/direct tests without the opt-in context.
-    import importlib.util
-    name = "supervisor_test_envelope"
-    if name not in sys.modules:
-        spec = importlib.util.spec_from_file_location(name,
-            os.path.join(os.path.dirname(__file__), "fleet-node-supervisor-selftest-envelope.py"))
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
-    return sys.modules[name]
-
-
 def main():
     global ACTIVE
-    if len(sys.argv) > 1 and sys.argv[1] == "--outer":
-        return envelope_module().outer(sys.modules[__name__], sys.argv[2:])
-    if len(sys.argv) == 3 and sys.argv[1] == "--outer-gate":
-        return envelope_module().gate(sys.modules[__name__], sys.argv[2])
     if len(sys.argv) > 1 and sys.argv[1] == "--host":
         return host(float(sys.argv[2]), float(sys.argv[3]), sys.argv[4], sys.argv[5:])
     if len(sys.argv) != 2:
         raise SystemExit("usage: fleet-node-supervisor-selftest-budget.py <case>")
     case = sys.argv[1]
-    if "SUPERVISOR_TEST_ENVELOPE" in os.environ:
-        return envelope_module().entry(sys.modules[__name__], case)
     print("supervisor-budget-origin " + json.dumps({"pid": os.getpid(), "case": case,
         "clock": clock_identity(), "start": ENTERED, "recorded_at": shared_now(),
         "scope": "helper imports through own cleanup; excludes runner preparation/exit cleanup",

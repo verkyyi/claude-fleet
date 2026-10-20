@@ -1601,7 +1601,7 @@ drill_node_core_old_code() {
   t0=$(now)
   out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-core-selftest.py" \
           G_Switch.test_switch_with_a_changed_sibling_restarts_the_core \
-          G_Switch.test_switch_with_the_same_code_keeps_the_core 2>&1) \
+          G_Switch.test_signed_switch_and_rollback 2>&1) \
     || { WHY="a switch that changed only a sibling left the core on old code: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="切换只改了核心加载的同目录文件（守护的 sweep）：核心回完话就退出、launchd 用新代码拉起；代码没变的切换不重启核心"
