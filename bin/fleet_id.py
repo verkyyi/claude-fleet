@@ -434,6 +434,67 @@ def children_of(fid, live, idx=None):
     return sorted(rows, key=lambda r: r.get("opened_at") or 0)
 
 
+class NoHub(Exception):
+    pass
+
+
+def _task_parent(task):
+    """The parent ID the hub's task record names: the tail of its parent_session
+    (`<fleet UUID>/<ID>`), "" when it names none. FLEET_ID_TASK_GET is the
+    selftest's seam (a command; the T<n> is appended)."""
+    cmd = os.environ.get("FLEET_ID_TASK_GET", "")
+    argv = (cmd.split() if cmd else
+            ["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-task-record.sh"), "get"]) + [task]
+    try:
+        r = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode == 3:
+        raise NoHub()
+    if r.returncode != 0:
+        return None
+    try:
+        d = json.loads(r.stdout)
+    except ValueError:
+        return None
+    d = d.get("task", d) if isinstance(d, dict) else {}
+    tail = str(d.get("parent_session") or "").rsplit("/", 1)[-1]
+    return tail if is_fid(tail) else ""
+
+
+def parents_cmd(apply, only=()):
+    """Backfill (EPIC T497 C9): an ID opened for a task T<n> whose `opened` names no
+    parent — a `task` dispatch before C9 — takes the parent its record names. Dry
+    unless apply; an applied one is a fill-only `opened` (the hub folds it the same
+    way) and is pushed. rc 3 no hub here."""
+    n = done = 0
+    for fid in (only or ledger_ids()):
+        o = fold(read(fid))["opened"]
+        task = o.get("task", "")
+        if o.get("parent") or not re.match(r"^T[1-9][0-9]{0,9}$", task):
+            continue
+        n += 1
+        try:
+            par = _task_parent(task)
+        except NoHub:
+            print("fleet-id: no hub here — the records cannot be read", file=sys.stderr)
+            return 3
+        code = o.get("short") or encode(fid)[:SHORT_MIN]
+        if par is None:
+            print("%s  %s  ?  (the record did not answer)" % (code, task))
+            continue
+        if not par or par == fid:
+            print("%s  %s  -  (the record names no parent session)" % (code, task))
+            continue
+        if apply:
+            open_id(fid, {"parent": par})
+            push_later(fid)
+            done += 1
+        print("%s  %s  → %s%s" % (code, task, par, "" if apply else "  (dry)"))
+    print("%d without a parent · %d %s" % (n, done, "filled" if apply else "to fill (--apply)"))
+    return 0
+
+
 def _hub_record(fid):
     """The hub mirror's record of an ID this machine has no ledger of — folded into the
     ledger's shape — or None."""
@@ -1055,7 +1116,7 @@ def render(fid):
 
 def main(argv):
     if not argv:
-        print("usage: fleet_id.py short|open|native|result|close|get|resolve|push|hook|status|route|children|await|history|continue|reopen|family …", file=sys.stderr)
+        print("usage: fleet_id.py short|open|native|result|close|get|resolve|push|hook|status|route|children|await|history|continue|reopen|family|parents …", file=sys.stderr)
         return 2
     cmd, args = argv[0], argv[1:]
     # Live windows' IDs ride in as FLEET_ID_LIVE (newline-separated): fleet-id.sh fills it.
@@ -1081,6 +1142,8 @@ def main(argv):
             print("fleet-id: --only takes task numbers T<n>,…", file=sys.stderr)
             return 2
         return migrate_cmd("--apply" in args, only, "--json" in args)
+    if cmd == "parents":
+        return parents_cmd("--apply" in args, [a for a in args if is_fid(a)])
     if cmd == "encode" and args:
         print(encode(args[0]))
         return 0

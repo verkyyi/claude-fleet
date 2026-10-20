@@ -6859,6 +6859,25 @@ fleet_stamp_origin_wid() {
   return 0
 }
 
+# fleet_spawn_parent_id <sess> <origin> <origin_wid> [<sock>] → the spawning
+# session's ID, the `parent` its child's ID ledger opens with (EPIC T497 C9): the
+# tail of a handed-over worker_id (a parent on another machine); else the origin
+# itself when it IS an ID — a keyless parent: an orchestrator, an EPIC driver, a
+# no-repo session, which is how every `task` dispatch from them arrives; else the
+# ID of the one live window answering to the origin key. rc 1 (nothing) for the
+# hub, a worker_id whose tail is only a key, or a key no single window answers to.
+fleet_spawn_parent_id() {
+  local s="${1:-}" o="${2:-}" ow="${3:-}" k="${4:-}" f
+  if [ -n "$ow" ]; then
+    f=${ow#*/}; fleet_is_fid "$f" || return 1
+    printf '%s' "$f"; return 0
+  fi
+  [ -n "$o" ] && [ "$o" != hub ] || return 1
+  if fleet_is_fid "$o"; then printf '%s' "$o"; return 0; fi
+  f=$(_fleet_key_fid "$s" "$o" "$k") && fleet_is_fid "$f" || return 1
+  printf '%s' "$f"
+}
+
 # _fleet_key_fid <sess> <key> [<sock>] → the @fleet_id of the ONE live window that
 # answers to <key> right now (minted if it has none), rc 1 when none or several do.
 _fleet_key_fid() {

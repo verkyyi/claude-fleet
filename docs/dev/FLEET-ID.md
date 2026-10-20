@@ -69,8 +69,12 @@ fleet-id.sh status|route|children|await|history|continue|reopen …   结果、�
   再没有 ⇒ 你的提醒（`global/orphan-reports.ndjson`）。本机账本不认识的 ID 走旧路（hub、键）。
   `fleet-report-parent.sh`、`fleet_task_control.py receive`、`fleet-peer-send.sh T-<code>` 都按它走；
   已接任务的回报**不再核父任务代次与原生进程**——/clear、交接、换 Agent、重开都不换 ID（BREAK-IT `report-parent-cleared`）。
-- **父子**：两个派单入口开账本时记 `--parent`（派它的会话的 ID）；`fleet-id.sh children <ID>` /
-  `fleet-children.sh --ids` 列出 parent 是它的 ID。
+- **父子**：两个派单入口开账本时记 `--parent`（派它的会话的 ID，`fleet_spawn_parent_id`：交来的 worker_id 的后半；
+  否则 `--origin` 本身就是 ID 时就是它——编排、驱动、no-repo 会话这类没有键的父会话，`task` 派单都走这条；
+  否则那个键对上的唯一窗口的 ID。hub 派的没有父）；`fleet-id.sh children <ID>` /
+  `fleet-children.sh --ids` 列出 parent 是它的 ID。C9 之前 `task` 派出的子 ID 没记上父：
+  `fleet-id.sh parents [--apply]` 按它 `opened` 的 `task` 读 hub 记录的 parent_session（后半）补一条只填空的
+  `opened {parent}` 并推给 hub 镜像（默认只列不写；没有 hub ⇒ 3）。
 - **等待**：`fleet-await.sh T-<code> | fid:<ID> | <ID>` → `fleet-id.sh await`：有不是回合边界（waiting / idle）的
   结果就答（MERGED / SUCCEEDED 0，其余 1），关了没结果 EXITED 4，超时 3；本机没有账本时读 hub 镜像那一条。
 - **历史**（`fleet-history.sh ids|show|continue|reopen`）：按 ID 一行（短码 · 状态 · 结果 · 关闭时间 · 标题），
@@ -80,7 +84,7 @@ fleet-id.sh status|route|children|await|history|continue|reopen …   结果、�
   `claude --resume`）自动把被续那一段的 ID 记成 prev。
 - **worktree 记 ID**：`fleet_worktree_id_mark` 在 worktree 的 git 目录写 `fleet-id`（旁边的 `fleet-task` 照旧）。
 
-`bin/fleet-id-results-selftest.sh` 钉住 S2、S7、S8、S9、接班 / parent / 提醒、父 /clear 后回报照常送达。
+`bin/fleet-id-results-selftest.sh` 钉住 S2、S7、S8、S9、接班 / parent / 提醒、父 /clear 后回报照常送达、task 派发的子 ID 带 parent 与回填（TASKPAR）。
 
 ## EPIC 批次（C5）
 

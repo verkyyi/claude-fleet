@@ -901,7 +901,10 @@ case "$TASK_REF" in T[1-9]*) [ -n "$ORIGIN" ] && [ "$ORIGIN" != hub ] \
 # the SessionStart hook fills a missing `opened` itself, so a slow one costs nothing.
 _idf=$(TM show-options -wqv -t "$win" @fleet_id 2>/dev/null)
 # C4: its parent's ID, the ID whose segment a --resume picks up (its prev), its worktree.
-_idpar=${ORIGIN_WID#*/}; fleet_is_fid "$_idpar" || _idpar=''
+# The parent is the spawning session's ID however it came (C9): a handed-over
+# worker_id, a keyless parent's own ID as --origin (every `task` dispatch from an
+# orchestrator / a driver), or the ID of the window its key names.
+_idpar=$(fleet_spawn_parent_id "$SESS" "$ORIGIN" "$ORIGIN_WID" "$SOCK") || _idpar=''
 fleet_is_fid "$_idf" && ( bash "$BIN/fleet-id.sh" open "$_idf" --window "$win" --socket "$SOCK" \
   --agent "${AGENT:-claude}" --key "issue-$num" ${REPO:+--repo "$REPO"} ${title:+--title "$title"} \
   ${TASK_REF:+--task "$TASK_REF"} ${_idpar:+--parent "$_idpar"} ${RESUME_SID:+--from-native "$RESUME_SID"} \
