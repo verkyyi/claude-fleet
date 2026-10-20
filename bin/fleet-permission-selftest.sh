@@ -50,7 +50,6 @@ INJECT="$WORK/inject.log"
 STEP="$WORK/step"
 PANE='%9'
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '  got: %s\n' "$2" >&2; exit 1; }
 
 # --- fake tmux ---------------------------------------------------------------
 cat > "$WORK/fakepath/tmux" <<FAKE
@@ -179,68 +178,68 @@ TD="$WORK/t-done.jsonl"; mk_transcript "$TD" Bash            "$IN_BASH"; result_
 TE="$WORK/t-empty.jsonl"; : > "$TE"
 
 # ============================ USAGE =========================================
-run >/dev/null 2>&1;        [ $? = 2 ] || fail "no args must exit 2"
-run --show >/dev/null 2>&1; [ $? = 2 ] || fail "--show without a target must exit 2"
-run --deny >/dev/null 2>&1; [ $? = 2 ] || fail "--deny without a target must exit 2"
+run >/dev/null 2>&1;        [ $? = 2 ] || st_fail "no args must exit 2"
+run --show >/dev/null 2>&1; [ $? = 2 ] || st_fail "--show without a target must exit 2"
+run --deny >/dev/null 2>&1; [ $? = 2 ] || st_fail "--deny without a target must exit 2"
 printf 'selftest: USAGE legs PASS (no verb / no target → exit 2)\n' >&2
 
 # ============================ PENDING GATE ==================================
 clear_screens; printf '%s\n' "$SCR_IDLE" | screen 0
 ARM=1 run --show "$PANE" --transcript "$TD" >/dev/null 2>&1
-[ $? = 1 ] || fail "--show on a settled tool_use must exit 1"
+[ $? = 1 ] || st_fail "--show on a settled tool_use must exit 1"
 ARM=1 run --deny "$PANE" --transcript "$TD" --no-tell >/dev/null 2>&1
-[ $? = 1 ] || fail "--deny on a settled tool_use must exit 1"
-nothing_sent || fail "a settled tool_use must send nothing" "$(injected)"
+[ $? = 1 ] || st_fail "--deny on a settled tool_use must exit 1"
+nothing_sent || st_fail "a settled tool_use must send nothing" "$(injected)"
 ARM=1 run --deny "$PANE" --transcript "$TE" --no-tell >/dev/null 2>&1
-[ $? = 1 ] || fail "--deny with an empty transcript must exit 1"
-nothing_sent || fail "an empty transcript must send nothing" "$(injected)"
+[ $? = 1 ] || st_fail "--deny with an empty transcript must exit 1"
+nothing_sent || st_fail "an empty transcript must send nothing" "$(injected)"
 FAKE_PANE_DEAD=1 ARM=1 run --deny "$PANE" --transcript "$T" --no-tell >/dev/null 2>&1
-[ $? = 1 ] || fail "a gone pane must exit 1"
-nothing_sent || fail "a gone pane must send nothing" "$(injected)"
+[ $? = 1 ] || st_fail "a gone pane must exit 1"
+nothing_sent || st_fail "a gone pane must send nothing" "$(injected)"
 printf 'selftest: PENDING-GATE legs PASS (settled / empty / dead pane → exit 1, ZERO keystrokes)\n' >&2
 
 # ============================ NOT-OURS ======================================
 clear_screens; printf '%s\n' "$SCR_PERM" | screen 0
 out=$(ARM=1 run --deny "$PANE" --transcript "$TQ" --no-tell 2>&1)
-[ $? = 1 ] || fail "a pending AskUserQuestion must exit 1 here" "$out"
-nothing_sent || fail "an AskUserQuestion must send NOTHING from this tool" "$(injected)"
-case "$out" in *fleet-answer*) : ;; *) fail "it must point at fleet-answer.sh" "$out" ;; esac
+[ $? = 1 ] || st_fail "a pending AskUserQuestion must exit 1 here" "$out"
+nothing_sent || st_fail "an AskUserQuestion must send NOTHING from this tool" "$(injected)"
+case "$out" in *fleet-answer*) : ;; *) st_fail "it must point at fleet-answer.sh" "$out" ;; esac
 printf 'selftest: NOT-OURS leg PASS (AskUserQuestion is fleet-answer.sh'"'"'s — refused, nothing sent)\n' >&2
 
 # ============================ SHOW ==========================================
 clear_screens; printf '%s\n' "$SCR_PERM" | screen 0
-out=$(run --show "$PANE" --transcript "$T" 2>&1) || fail "--show must exit 0" "$out"
-case "$out" in *'rm "$G"/*.tick'*) : ;; *) fail "--show must print the BLOCKED COMMAND" "$out" ;; esac
-case "$out" in *Bash*) : ;; *) fail "--show must name the tool" "$out" ;; esac
-case "$out" in *'Dangerous rm operation'*) : ;; *) fail "--show must print the on-screen reason" "$out" ;; esac
-case "$out" in *'Do you want to proceed?'*) : ;; *) fail "--show must print the dialog" "$out" ;; esac
-case "$out" in *FLEET_ALLOW_AUTO_DENY*) : ;; *) fail "--show unarmed must name the knob" "$out" ;; esac
-nothing_sent || fail "--show must never send a keystroke" "$(injected)"
-js=$(run --show "$PANE" --transcript "$T" --json 2>&1) || fail "--show --json must exit 0" "$js"
+out=$(run --show "$PANE" --transcript "$T" 2>&1) || st_fail "--show must exit 0" "$out"
+case "$out" in *'rm "$G"/*.tick'*) : ;; *) st_fail "--show must print the BLOCKED COMMAND" "$out" ;; esac
+case "$out" in *Bash*) : ;; *) st_fail "--show must name the tool" "$out" ;; esac
+case "$out" in *'Dangerous rm operation'*) : ;; *) st_fail "--show must print the on-screen reason" "$out" ;; esac
+case "$out" in *'Do you want to proceed?'*) : ;; *) st_fail "--show must print the dialog" "$out" ;; esac
+case "$out" in *FLEET_ALLOW_AUTO_DENY*) : ;; *) st_fail "--show unarmed must name the knob" "$out" ;; esac
+nothing_sent || st_fail "--show must never send a keystroke" "$(injected)"
+js=$(run --show "$PANE" --transcript "$T" --json 2>&1) || st_fail "--show --json must exit 0" "$js"
 printf '%s' "$js" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
 assert d["tool"]=="Bash", d
 assert d["input"]["command"]=="rm \"$G\"/*.tick", d
 ' || fail "--show --json must carry the tool + command" "$js"
-nothing_sent || fail "--show --json must never send a keystroke" "$(injected)"
+nothing_sent || st_fail "--show --json must never send a keystroke" "$(injected)"
 printf 'selftest: SHOW legs PASS (command + tool + reason readable WITHOUT attaching · json · zero keystrokes)\n' >&2
 
 # ============================ KNOB GATE =====================================
 clear_screens; printf '%s\n' "$SCR_PERM" | screen 0
 out=$(ARM='' run --deny "$PANE" --transcript "$T" --no-tell 2>&1)
-[ $? = 5 ] || fail "--deny unarmed must exit 5" "$out"
-nothing_sent || fail "--deny unarmed must send NOTHING" "$(injected)"
-case "$out" in *'would press 3'*) : ;; *) fail "unarmed --deny must still say which key it would press" "$out" ;; esac
-out=$(ARM=1 run --deny "$PANE" --transcript "$T" --dry-run --no-tell 2>&1) || fail "--dry-run must exit 0" "$out"
-nothing_sent || fail "--dry-run must send NOTHING" "$(injected)"
+[ $? = 5 ] || st_fail "--deny unarmed must exit 5" "$out"
+nothing_sent || st_fail "--deny unarmed must send NOTHING" "$(injected)"
+case "$out" in *'would press 3'*) : ;; *) st_fail "unarmed --deny must still say which key it would press" "$out" ;; esac
+out=$(ARM=1 run --deny "$PANE" --transcript "$T" --dry-run --no-tell 2>&1) || st_fail "--dry-run must exit 0" "$out"
+nothing_sent || st_fail "--dry-run must send NOTHING" "$(injected)"
 printf 'selftest: KNOB-GATE legs PASS (default OFF → exit 5, nothing sent · --dry-run plan-only)\n' >&2
 
 # ============================ SCREEN GATE ===================================
 clear_screens; printf '%s\n' "$SCR_IDLE" | screen 0
 ARM=1 run --deny "$PANE" --transcript "$T" --no-tell >/dev/null 2>&1
-[ $? = 3 ] || fail "no dialog on screen must exit 3"
-nothing_sent || fail "no dialog on screen must send nothing" "$(injected)"
+[ $? = 3 ] || st_fail "no dialog on screen must exit 3"
+nothing_sent || st_fail "no dialog on screen must send nothing" "$(injected)"
 printf 'selftest: SCREEN-GATE leg PASS (no dialog visible → exit 3, nothing sent)\n' >&2
 
 # ============================ YES-NEVER =====================================
@@ -249,8 +248,8 @@ printf 'selftest: SCREEN-GATE leg PASS (no dialog visible → exit 3, nothing se
 adversarial() {  # adversarial <why> < screen
   clear_screens; cat > "$WORK/screens/0.txt"
   ARM=1 run --deny "$PANE" --transcript "$T" --no-tell >/dev/null 2>&1
-  [ $? = 3 ] || fail "a dialog with $1 must exit 3"
-  nothing_sent || fail "a dialog with $1 must send NOTHING" "$(injected)"
+  [ $? = 3 ] || st_fail "a dialog with $1 must exit 3"
+  nothing_sent || st_fail "a dialog with $1 must send NOTHING" "$(injected)"
 }
 printf '%s\n' "$SCR_YES_ONLY" | adversarial "only Yes rows"
 printf '%s\n' "$SCR_TWO_NOS"  | adversarial "two No rows"
@@ -262,10 +261,10 @@ RLINE="$(result_line)"
 clear_screens; printf '%s\n' "$SCR_PERM" | screen 0
 out=$(FAKE_TRANSCRIPT="$TLIVE" FAKE_RESULT_LINE="$RLINE" FAKE_RESULT_AT_STEP=1 \
       ARM=1 run --deny "$PANE" --transcript "$TLIVE" --no-tell 2>&1) \
-  || fail "an armed --deny on a real dialog must exit 0" "$out"
-[ "$(inject_count)" = "1" ] || fail "--deny must send EXACTLY one keystroke" "$(injected)"
-case "$(injected)" in *3) : ;; *) fail "--deny must send the SCREEN's No digit (3)" "$(injected)" ;; esac
-no_yes_digit || fail "--deny sent a Yes digit" "$(injected)"
+  || st_fail "an armed --deny on a real dialog must exit 0" "$out"
+[ "$(inject_count)" = "1" ] || st_fail "--deny must send EXACTLY one keystroke" "$(injected)"
+case "$(injected)" in *3) : ;; *) st_fail "--deny must send the SCREEN's No digit (3)" "$(injected)" ;; esac
+no_yes_digit || st_fail "--deny sent a Yes digit" "$(injected)"
 printf 'selftest: NO-ONLY leg PASS (exactly one key, and it is the No row'"'"'s digit)\n' >&2
 
 # ============================ RENUMBERED ====================================
@@ -275,17 +274,17 @@ TLIVE="$WORK/t-live2.jsonl"; mk_transcript "$TLIVE" Bash "$IN_BASH"
 clear_screens; printf '%s\n' "$SCR_PERM_REORDERED" | screen 0
 out=$(FAKE_TRANSCRIPT="$TLIVE" FAKE_RESULT_LINE="$RLINE" FAKE_RESULT_AT_STEP=1 \
       ARM=1 run --deny "$PANE" --transcript "$TLIVE" --no-tell 2>&1) \
-  || fail "a reordered dialog must still be refusable" "$out"
-[ "$(inject_count)" = "1" ] || fail "reordered: exactly one keystroke" "$(injected)"
-case "$(injected)" in *1) : ;; *) fail "reordered: must send 1 (the No row), not a remembered 3" "$(injected)" ;; esac
+  || st_fail "a reordered dialog must still be refusable" "$out"
+[ "$(inject_count)" = "1" ] || st_fail "reordered: exactly one keystroke" "$(injected)"
+case "$(injected)" in *1) : ;; *) st_fail "reordered: must send 1 (the No row), not a remembered 3" "$(injected)" ;; esac
 printf 'selftest: RENUMBERED leg PASS (the digit follows the screen, never arithmetic)\n' >&2
 
 # ============================ VERIFY ========================================
 # The result never lands → the tool must NOT claim a refusal it did not get.
 clear_screens; printf '%s\n' "$SCR_PERM" | screen 0
 TMO=1 ARM=1 run --deny "$PANE" --transcript "$T" --no-tell >/dev/null 2>&1
-[ $? = 4 ] || fail "an unconfirmed refusal must exit 4"
-[ "$(inject_count)" = "1" ] || fail "VERIFY: the digit is still sent exactly once" "$(injected)"
+[ $? = 4 ] || st_fail "an unconfirmed refusal must exit 4"
+[ "$(inject_count)" = "1" ] || st_fail "VERIFY: the digit is still sent exactly once" "$(injected)"
 printf 'selftest: VERIFY leg PASS (no tool_result → exit 4, never a false "refused")\n' >&2
 
 printf 'selftest PASS: fleet-permission — pending/screen/knob gates + No-only label gate + transcript verify (#640)\n'

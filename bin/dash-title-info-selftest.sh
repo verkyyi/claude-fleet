@@ -26,8 +26,7 @@ st_sandbox "${TMPDIR:-/tmp}/titleinfo-selftest.XXXXXX"
 export TMPDIR="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh
 mkdir -p "$WORK/.claude-dash/global" "$WORK/conf" "$WORK/bin"
 
-CHECKS=0
-eq() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
+st_tally count
 
 US=$'\x1f'
 cat > "$WORK/bin/tmux" <<'SHIM'
@@ -74,26 +73,26 @@ w 10 stale  working   @10  10    ''        ''        ''                         
 
 hub
 L=$(cat "$SETLOG")
-eq "sub-tasks: k/N, then why the ↻ waits"   "子任务 1/3 · 等子任务"     "$(put @1)" "$L"
-eq "a child names its parent"               "父 #1"                     "$(put @3)" "$L"
-eq "a Loop: its next round in local HH:MM"  "Loop 下次 $HM"             "$(put @4)" "$L"
-eq "needs: which kind of !"                 "要你处理：在问你"          "$(put @5)" "$L"
-eq "needs with no kind: just 要你处理"      "要你处理"                  "$(put @6)" "$L"
-eq "a background wait + a scratch parent"   "后台命令在跑 · 父 scratch-9" "$(put @7)" "$L"
-eq "all empty: nothing written"             ""                          "$(put @8)" "$L"
-eq "unchanged: nothing written"             ""                          "$(put @9)" "$L"
-eq "stale value with nothing to say: unset" "-u"                        "$(put @10)" "$L"
+st_eq "sub-tasks: k/N, then why the ↻ waits"   "子任务 1/3 · 等子任务"     "$(put @1)" "$L"
+st_eq "a child names its parent"               "父 #1"                     "$(put @3)" "$L"
+st_eq "a Loop: its next round in local HH:MM"  "Loop 下次 $HM"             "$(put @4)" "$L"
+st_eq "needs: which kind of !"                 "要你处理：在问你"          "$(put @5)" "$L"
+st_eq "needs with no kind: just 要你处理"      "要你处理"                  "$(put @6)" "$L"
+st_eq "a background wait + a scratch parent"   "后台命令在跑 · 父 scratch-9" "$(put @7)" "$L"
+st_eq "all empty: nothing written"             ""                          "$(put @8)" "$L"
+st_eq "unchanged: nothing written"             ""                          "$(put @9)" "$L"
+st_eq "stale value with nothing to say: unset" "-u"                        "$(put @10)" "$L"
 
 side
 L=$(cat "$SETLOG")
-eq "--rows writes the same line"         "子任务 1/3 · 等子任务"     "$(put @1)" "$L"
-eq "--rows: a lone worker stays unset"   ""                          "$(put @8)" "$L"
+st_eq "--rows writes the same line"         "子任务 1/3 · 等子任务"     "$(put @1)" "$L"
+st_eq "--rows: a lone worker stays unset"   ""                          "$(put @8)" "$L"
 
 # a folded parent's child is hidden from the list, never from its own header
 : > "$WLIST_FILE"
 w 1  par    working   @1   1     ''
 w 2  kid    working   @2   2     issue-1
 hub
-eq "a folded-away child still gets its header" "父 #1" "$(put @2)" "$(cat "$SETLOG")"
+st_eq "a folded-away child still gets its header" "父 #1" "$(put @2)" "$(cat "$SETLOG")"
 
 printf 'dash-title-info-selftest: OK (%d checks)\n' "$CHECKS"

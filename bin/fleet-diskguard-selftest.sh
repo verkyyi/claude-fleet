@@ -17,6 +17,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 LIB="$BIN/fleet-lib.sh"
 DG="$BIN/fleet-diskguard.sh"
 [ -f "$LIB" ] || { echo "selftest: $LIB not found" >&2; exit 2; }
@@ -33,9 +34,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
+st_tally count
 alive() { kill -0 "$1" 2>/dev/null; }
 
 # shellcheck source=/dev/null
@@ -48,12 +47,12 @@ WT="$WORK/claude-fleet-issue-999"   # a plausible worktree path
 mkdir -p "$WT"
 
 # A1. broad-root refusal — never sweep / or $HOME even if asked.
-case "$(fleet_reap_worktree_procs / )"     in refused*) ;; *) fail "A1 '/' not refused";; esac
-case "$(fleet_reap_worktree_procs "$HOME")" in refused*) ;; *) fail "A1 \$HOME not refused";; esac
+case "$(fleet_reap_worktree_procs / )"     in refused*) ;; *) st_fail "A1 '/' not refused";; esac
+case "$(fleet_reap_worktree_procs "$HOME")" in refused*) ;; *) st_fail "A1 \$HOME not refused";; esac
 CHECKS=$((CHECKS + 2))
 
 # A2. nothing anchored → clean no-op report.
-eq "reap: empty worktree → no orphans" "no orphan procs" "$(fleet_reap_worktree_procs "$WT")"
+st_eq "reap: empty worktree → no orphans" "no orphan procs" "$(fleet_reap_worktree_procs "$WT")"
 
 # The probes below are DOUBLE-FORKED into real orphans (reparented to init). A plain
 # background child inherits this script's ancestry, and when the suite runs from a
@@ -67,7 +66,7 @@ orphan() {   # "<cmd…>" → sets ORPHAN_PID to a pid reparented to init
     printf '%s' "$!" > "$pf" ) &
   wait $! 2>/dev/null
   ORPHAN_PID="$(cat "$pf" 2>/dev/null)"
-  [ -n "$ORPHAN_PID" ] || fail "could not spawn an orphan probe for: $1"
+  [ -n "$ORPHAN_PID" ] || st_fail "could not spawn an orphan probe for: $1"
   SPAWNED="$SPAWNED $ORPHAN_PID"
 }
 
@@ -76,8 +75,8 @@ touch "$WT/marker"
 orphan "exec tail -f '$WT/marker'"; tpid="$ORPHAN_PID"
 sleep 1                                   # let it settle so pgrep/lsof see it
 dry="$(fleet_reap_worktree_procs "$WT" dry)"
-case "$dry" in would\ reap:*) ;; *) fail "A3 dry did not report a would-reap (got [$dry])";; esac
-alive "$tpid" || fail "A3 dry mode KILLED the process (must only report)"
+case "$dry" in would\ reap:*) ;; *) st_fail "A3 dry did not report a would-reap (got [$dry])";; esac
+alive "$tpid" || st_fail "A3 dry mode KILLED the process (must only report)"
 CHECKS=$((CHECKS + 2))
 
 # A4. kill mode reaps BOTH discovery paths at once:
@@ -87,12 +86,12 @@ CHECKS=$((CHECKS + 2))
 orphan "cd '$WT' && exec sleep 300"; spid="$ORPHAN_PID"
 sleep 1
 rep="$(fleet_reap_worktree_procs "$WT" kill 1)"
-case "$rep" in reaped:*) ;; *) fail "A4 unexpected reap report: [$rep]";; esac
+case "$rep" in reaped:*) ;; *) st_fail "A4 unexpected reap report: [$rep]";; esac
 sleep 1
-alive "$tpid" && fail "A4 argv-anchored process survived reap (pid $tpid)"
-alive "$spid" && fail "A4 cwd-anchored process survived reap (pid $spid)"
+alive "$tpid" && st_fail "A4 argv-anchored process survived reap (pid $tpid)"
+alive "$spid" && st_fail "A4 cwd-anchored process survived reap (pid $spid)"
 CHECKS=$((CHECKS + 2))
-eq "reap: worktree empty again after reap" "no orphan procs" "$(fleet_reap_worktree_procs "$WT")"
+st_eq "reap: worktree empty again after reap" "no orphan procs" "$(fleet_reap_worktree_procs "$WT")"
 
 # ============================================================================
 # B. runaway-CPU watchdog (source the diskguard functions only)
@@ -109,17 +108,17 @@ STATE="$WORK/cpu-seen"
 #     runaway. Inject nowt=100000, secs=300, prior state seeds pid 4242 @ t=1.
 printf '4242\t1\t99\told-runaway\n' > "$STATE"
 out="$(printf '4242|99|old-runaway\n5555|97|fresh-hot\n' | cpu_sustain 300 100000 "$STATE")"
-eq "cpu_sustain: sustained pid flagged"      "4242"  "$(printf '%s\n' "$out" | awk -F'\t' '$1==4242{print $1}')"
-eq "cpu_sustain: fresh pid NOT flagged"      ""      "$(printf '%s\n' "$out" | awk -F'\t' '$1==5555{print $1}')"
+st_eq "cpu_sustain: sustained pid flagged"      "4242"  "$(printf '%s\n' "$out" | awk -F'\t' '$1==4242{print $1}')"
+st_eq "cpu_sustain: fresh pid NOT flagged"      ""      "$(printf '%s\n' "$out" | awk -F'\t' '$1==5555{print $1}')"
 # state is rewritten to exactly the currently-hot set, carrying 4242's old clock
 # and starting 5555's now.
-eq "cpu_sustain: state carries old firstseen" "1"     "$(awk -F'\t' '$1==4242{print $2}' "$STATE")"
-eq "cpu_sustain: state starts fresh clock"    "100000" "$(awk -F'\t' '$1==5555{print $2}' "$STATE")"
+st_eq "cpu_sustain: state carries old firstseen" "1"     "$(awk -F'\t' '$1==4242{print $2}' "$STATE")"
+st_eq "cpu_sustain: state starts fresh clock"    "100000" "$(awk -F'\t' '$1==5555{print $2}' "$STATE")"
 
 # B2. A pid that COOLED (absent from this tick's candidates) drops out of state —
 #     its clock resets so a later re-spike must re-accumulate from scratch.
 printf 'x\n' | cpu_sustain 300 100001 "$STATE" >/dev/null   # empty candidate set
-eq "cpu_sustain: cooled pid dropped from state" "" "$(awk -F'\t' '$1==4242{print $1}' "$STATE")"
+st_eq "cpu_sustain: cooled pid dropped from state" "" "$(awk -F'\t' '$1==4242{print $1}' "$STATE")"
 
 # B3. cpu_candidates filtering, against a fake `ps` + `id`. Columns emitted by the
 #     real call are: pid user pcpu tty comm. Assert: keep our-user + hot + no-tty;
@@ -142,16 +141,16 @@ ROWS
 EOF
 chmod +x "$FAKEBIN/id" "$FAKEBIN/ps"
 cands="$(PATH="$FAKEBIN:$PATH" cpu_candidates 90)"
-eq "cpu_candidates: hot+notty+ouruser kept"   "111|99|spinner" "$(printf '%s\n' "$cands" | grep '^111|')"
-eq "cpu_candidates: has-tty dropped"          ""               "$(printf '%s\n' "$cands" | grep '^222|')"
-eq "cpu_candidates: below-threshold dropped"  ""               "$(printf '%s\n' "$cands" | grep '^333|')"
-eq "cpu_candidates: other-user dropped"       ""               "$(printf '%s\n' "$cands" | grep '^444|')"
-eq "cpu_candidates: tmux (infra) dropped"     ""               "$(printf '%s\n' "$cands" | grep '^555|')"
+st_eq "cpu_candidates: hot+notty+ouruser kept"   "111|99|spinner" "$(printf '%s\n' "$cands" | grep '^111|')"
+st_eq "cpu_candidates: has-tty dropped"          ""               "$(printf '%s\n' "$cands" | grep '^222|')"
+st_eq "cpu_candidates: below-threshold dropped"  ""               "$(printf '%s\n' "$cands" | grep '^333|')"
+st_eq "cpu_candidates: other-user dropped"       ""               "$(printf '%s\n' "$cands" | grep '^444|')"
+st_eq "cpu_candidates: tmux (infra) dropped"     ""               "$(printf '%s\n' "$cands" | grep '^555|')"
 
 # B4. cpu_watch is OFF by default (CPU_PCT=0 → immediate no-op, no state written).
 rm -f "$FLEET_CONF_DIR/diskguard/cpu-seen"
 CPU_PCT=0 cpu_watch
-eq "cpu_watch: disabled writes no state" "absent" \
+st_eq "cpu_watch: disabled writes no state" "absent" \
   "$([ -e "$FLEET_CONF_DIR/diskguard/cpu-seen" ] && echo present || echo absent)"
 
 # ============================================================================
@@ -188,34 +187,34 @@ ROWS
 EOF
 chmod +x "$ORPH/id" "$ORPH/ps"
 ocands="$(PATH="$ORPH:$PATH" orphan_candidates 50)"
-eq "orphan: PPID=1 + snapshot fingerprint + hot → flagged" "111" \
+st_eq "orphan: PPID=1 + snapshot fingerprint + hot → flagged" "111" \
    "$(printf '%s\n' "$ocands" | awk -F'|' '$1==111{print $1}')"
-eq "orphan: LIVE parent (a worker's own busy shell) NOT flagged" "" \
+st_eq "orphan: LIVE parent (a worker's own busy shell) NOT flagged" "" \
    "$(printf '%s\n' "$ocands" | awk -F'|' '$1==222{print $1}')"
-eq "orphan: below the %CPU floor NOT flagged" "" \
+st_eq "orphan: below the %CPU floor NOT flagged" "" \
    "$(printf '%s\n' "$ocands" | awk -F'|' '$1==333{print $1}')"
-eq "orphan: another user's process NOT flagged" "" \
+st_eq "orphan: another user's process NOT flagged" "" \
    "$(printf '%s\n' "$ocands" | awk -F'|' '$1==444{print $1}')"
 # 555/888 are the reason the fingerprint exists at all: plenty of legitimate
 # PPID=1 processes burn CPU (Spotlight's importer was measured at 63% during the
 # #697 incident) and none of them are the fleet's business.
-eq "orphan: a hot system daemon (no fingerprint) NOT flagged" "" \
+st_eq "orphan: a hot system daemon (no fingerprint) NOT flagged" "" \
    "$(printf '%s\n' "$ocands" | awk -F'|' '$1==555{print $1}')"
-eq "orphan: an unrelated hot process NOT flagged" "" \
+st_eq "orphan: an unrelated hot process NOT flagged" "" \
    "$(printf '%s\n' "$ocands" | awk -F'|' '$1==888{print $1}')"
 # The tmux server matches `claude-fleet` in the fingerprint AND is legitimately
 # PPID=1. Killing it takes every window of that fleet down at once, so the infra
 # exclusion is load-bearing, not decorative.
-eq "orphan: the fleet's own tmux server NOT flagged" "" \
+st_eq "orphan: the fleet's own tmux server NOT flagged" "" \
    "$(printf '%s\n' "$ocands" | awk -F'|' '$1==666{print $1}')"
-eq "orphan: a leaked fleet-loadgen burner IS flagged" "777" \
+st_eq "orphan: a leaked fleet-loadgen burner IS flagged" "777" \
    "$(printf '%s\n' "$ocands" | awk -F'|' '$1==777{print $1}')"
 
 # C2. FLEET_ORPHAN_EXTRA_RE widens the fingerprint without replacing it.
 ORPHAN_RE="$ORPHAN_RE_DEFAULT|some-unrelated-hog"
 ocands="$(PATH="$ORPH:$PATH" orphan_candidates 50)"
-eq "orphan: EXTRA_RE adds a shape"      "888" "$(printf '%s\n' "$ocands" | awk -F'|' '$1==888{print $1}')"
-eq "orphan: EXTRA_RE keeps the defaults" "111" "$(printf '%s\n' "$ocands" | awk -F'|' '$1==111{print $1}')"
+st_eq "orphan: EXTRA_RE adds a shape"      "888" "$(printf '%s\n' "$ocands" | awk -F'|' '$1==888{print $1}')"
+st_eq "orphan: EXTRA_RE keeps the defaults" "111" "$(printf '%s\n' "$ocands" | awk -F'|' '$1==111{print $1}')"
 # shellcheck disable=SC2034  # read by orphan_candidates(), sourced from the guard
 ORPHAN_RE="$ORPHAN_RE_DEFAULT"
 
@@ -234,17 +233,17 @@ rm -f "$WORK/notified" "$ODIR/orphan-current" "$ODIR"/incident-orphan-*.log
 # a test must never take the kill branch.
 ORPHAN_ACTION=notify FLEET_NOTIFY_CMD="$WORK/notify.sh" \
   PATH="$ORPH:$PATH" orphan_watch
-eq "orphan_watch: default knobs flag (watchdog is ON out of the box)" "111" \
+st_eq "orphan_watch: default knobs flag (watchdog is ON out of the box)" "111" \
    "$(awk -F'\t' 'NR==1{print $1}' "$ODIR/orphan-current" 2>/dev/null)"
 oinc=0; for f in "$ODIR"/incident-orphan-*.log; do [ -f "$f" ] && oinc=$((oinc + 1)); done
-eq "orphan_watch: an incident was captured" "1" "$oinc"
-eq "orphan_watch: the operator was notified" "1" \
+st_eq "orphan_watch: an incident was captured" "1" "$oinc"
+st_eq "orphan_watch: the operator was notified" "1" \
    "$([ -s "$WORK/notified" ] && echo 1 || echo 0)"
 case "$(cat "$WORK/notified" 2>/dev/null)" in
   *PPID=1*) CHECKS=$((CHECKS + 1)) ;;
-  *) fail "orphan_watch: the notification must say WHY it fired (PPID=1)" ;;
+  *) st_fail "orphan_watch: the notification must say WHY it fired (PPID=1)" ;;
 esac
-eq "orphan_watch: default action is report-only" "notify" "$ORPHAN_ACTION"
+st_eq "orphan_watch: default action is report-only" "notify" "$ORPHAN_ACTION"
 
 # C4. The marker the doctor reads is refreshed every tick, so a cleared runaway
 #     clears the warning too — a stale "runaway!" outlives the runaway and trains
@@ -255,13 +254,13 @@ echo "222 4242 tester 99 /bin/zsh -c source /home/t/.claude/shell-snapshots/snap
 EOF
 chmod +x "$ORPH/ps"
 ORPHAN_ACTION=notify PATH="$ORPH:$PATH" orphan_watch
-eq "orphan_watch: marker cleared once the orphan is gone" "absent" \
+st_eq "orphan_watch: marker cleared once the orphan is gone" "absent" \
    "$([ -e "$ODIR/orphan-current" ] && echo present || echo absent)"
 
 # C5. Explicitly OFF stays off — the knob has to be able to silence it.
 rm -f "$ODIR/orphan-seen"
 ORPHAN_PCT=0 orphan_watch
-eq "orphan_watch: PCT=0 disables it entirely" "absent" \
+st_eq "orphan_watch: PCT=0 disables it entirely" "absent" \
   "$([ -e "$ODIR/orphan-seen" ] && echo present || echo absent)"
 
 printf 'selftest OK: fleet-diskguard (%s assertions — worktree proc-reap + CPU watchdog + orphan watchdog)\n' "$CHECKS"

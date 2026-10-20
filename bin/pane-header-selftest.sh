@@ -27,10 +27,10 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 CONF="$BIN/../conf/tmux-attention.conf"
 [ -f "$CONF" ] || { printf 'selftest: %s not found\n' "$CONF" >&2; exit 2; }
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/ph-selftest.XXXXXX")" || exit 2
 SOCK="$WORK/tmux.sock"
@@ -40,7 +40,6 @@ cleanup() { tmux kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 # render the border format for a pane, then strip #[...] style tokens → visible text
 render() { tmux display-message -p -t "$1" "$FMT" | sed -E 's/#\[[^]]*\]//g'; }
 # the same, styles kept — for the colour assertions
@@ -48,25 +47,25 @@ raw()    { tmux display-message -p -t "$1" "$FMT"; }
 
 # --- pull the REAL conf lines (the thing we actually ship) --------------------
 grep -qE '^[[:space:]]*set(-option)?[[:space:]]+-g[[:space:]]+pane-border-status[[:space:]]+off' "$CONF" \
-  || fail "conf does not turn 'pane-border-status' off globally (issue #3192)"
+  || st_fail "conf does not turn 'pane-border-status' off globally (issue #3192)"
 grep -qE '^[[:space:]]*set(-option)?[[:space:]]+-g[[:space:]]+pane-border-status[[:space:]]+top' "$CONF" \
-  && fail "conf still turns the top header on globally (issue #3192)"
+  && st_fail "conf still turns the top header on globally (issue #3192)"
 
 # extract the pane-border-format value (the string between the outer quotes)
 FMT="$(sed -n 's/^[[:space:]]*set\(-option\)\{0,1\}[[:space:]]\{1,\}-g[[:space:]]\{1,\}pane-border-format[[:space:]]\{1,\}"\(.*\)"[[:space:]]*$/\2/p' "$CONF")"
-[ -n "$FMT" ] || fail "could not extract pane-border-format from conf"
+[ -n "$FMT" ] || st_fail "could not extract pane-border-format from conf"
 # …and the line verbatim, to source
 grep -E '^[[:space:]]*set(-option)?[[:space:]]+-g[[:space:]]+pane-border-format[[:space:]]' "$CONF" > "$WORK/header.conf"
-[ "$(wc -l < "$WORK/header.conf" | tr -d ' ')" = 1 ] || fail "expected exactly one pane-border-format line in the conf"
+[ "$(wc -l < "$WORK/header.conf" | tr -d ' ')" = 1 ] || st_fail "expected exactly one pane-border-format line in the conf"
 
 # --- build a fleet-shaped session on the private socket ----------------------
 # -f /dev/null: a clean server (no ~/.tmux.conf bleed → base-index etc. stay
 # default). We target windows/panes by captured id, never a numeric index, so the
 # test is base-index-agnostic.
-tmux -f /dev/null new-session -d -s s -x 120 -y 40 || fail "could not start isolated tmux server"
-tmux source-file "$WORK/header.conf" || fail "the conf's header lines do not source cleanly"
+tmux -f /dev/null new-session -d -s s -x 120 -y 40 || st_fail "could not start isolated tmux server"
+tmux source-file "$WORK/header.conf" || st_fail "the conf's header lines do not source cleanly"
 [ "$(tmux show-options -gv pane-border-format)" = "$FMT" ] \
-  || fail "the sourced pane-border-format differs from the conf's text — the conf parser mangled it ('\$' / '%' / quotes?)"
+  || st_fail "the sourced pane-border-format differs from the conf's text — the conf parser mangled it ('\$' / '%' / quotes?)"
 
 # an issue-bound worker window
 ww="$(tmux display-message -p '#{window_id}')"
@@ -88,45 +87,45 @@ tmux set-window-option -t "$rw" @raw 1
 worker="$(render "$ww")"
 case "$worker" in
   *"issue-267"*"#267"*) : ;;                       # name + bound issue
-  *) fail "worker header missing name/issue — got [$worker]" ;;
+  *) st_fail "worker header missing name/issue — got [$worker]" ;;
 esac
 # issue #1023: just the name + #issue — no WORKER label, no index: prefix.
 case "$worker" in
-  *WORKER*|*[0-9]:issue-267*) fail "worker header still carries WORKER / index: — got [$worker]" ;;
+  *WORKER*|*[0-9]:issue-267*) st_fail "worker header still carries WORKER / index: — got [$worker]" ;;
 esac
-[ "$worker" = " issue-267 #267 " ] || fail "worker header is not exactly ' name #issue ' — got [$worker]"
+[ "$worker" = " issue-267 #267 " ] || st_fail "worker header is not exactly ' name #issue ' — got [$worker]"
 # focus is colour only (#999): an inactive worker pane reads the same words
 wp2="$(tmux split-window -d -P -F '#{pane_id}' -t "$ww")"
-[ "$(render "$wp2")" = "$worker" ] || fail "inactive worker header words differ — got [$(render "$wp2")] vs [$worker]"
+[ "$(render "$wp2")" = "$worker" ] || st_fail "inactive worker header words differ — got [$(render "$wp2")] vs [$worker]"
 tmux kill-pane -t "$wp2"
 
 hubpane="$(render "$sp")"
 case "$hubpane" in
   *"FLEET HUB"*) : ;;                              # hub keeps its own cue
-  *) fail "hub pane lost its hub cue — got [$hubpane]" ;;
+  *) st_fail "hub pane lost its hub cue — got [$hubpane]" ;;
 esac
 case "$hubpane" in
-  *"plan"*) fail "hub pane leaked the window name — got [$hubpane]" ;;
+  *"plan"*) st_fail "hub pane leaked the window name — got [$hubpane]" ;;
 esac
 
 dash="$(render "$dp")"
 [ -z "$(printf '%s' "$dash" | tr -d '[:space:]')" ] \
-  || fail "hub dash pane should be empty (the 'except the hub' rule) — got [$dash]"
+  || st_fail "hub dash pane should be empty (the 'except the hub' rule) — got [$dash]"
 
 raw_hdr="$(render "$rw")"
 case "$raw_hdr" in
   *"scratch"*) : ;;                                # names the scratch window
-  *) fail "raw header missing window name — got [$raw_hdr]" ;;
+  *) st_fail "raw header missing window name — got [$raw_hdr]" ;;
 esac
 case "$raw_hdr" in
-  *"#"*[0-9]*) fail "raw (no @issue) should show no issue number — got [$raw_hdr]" ;;
+  *"#"*[0-9]*) st_fail "raw (no @issue) should show no issue number — got [$raw_hdr]" ;;
 esac
 
 # --- #2717: no right segment — 剩余 % · model · effort is the client's top line's
 # (bin/fleet-topbar.py) to draw; a window with every stamp reads the plain header
 tmux set-window-option -t "$ww" @ctx_pct 38 \; set-window-option -t "$ww" @ctx_left 62 \; set-window-option -t "$ww" @ctx_band handoff \; \
      set-window-option -t "$ww" @model 'Opus 5.5' \; set-window-option -t "$ww" @effort high \; set-window-option -t "$ww" @ctx_ts "$(date +%s)"
-[ "$(render "$ww")" = " issue-267 #267 " ] || fail "the node header must not draw the ctx segment (#2717) — got [$(render "$ww")]"
+[ "$(render "$ww")" = " issue-267 #267 " ] || st_fail "the node header must not draw the ctx segment (#2717) — got [$(render "$ww")]"
 # (conf/tmux-attention.conf carries no ctx segment, #2717: conf/gone.list)
 tmux set-window-option -u -t "$ww" @ctx_pct \; set-window-option -u -t "$ww" @ctx_left \; set-window-option -u -t "$ww" @ctx_band \; \
      set-window-option -u -t "$ww" @model \; set-window-option -u -t "$ww" @effort \; set-window-option -u -t "$ww" @ctx_ts
@@ -134,43 +133,43 @@ tmux set-window-option -u -t "$ww" @ctx_pct \; set-window-option -u -t "$ww" @ct
 # --- #1954: the PR segment after the name — PR #N + its checks ----------------
 # the options its writer stamped (bin/tmux-pr-refresh.sh, gone with #4899): @pr_num / @pr_ci / @pr_fail
 tmux set-window-option -t "$ww" @pr_num '#1951' \; set-window-option -t "$ww" @pr_ci '✓' \; set-window-option -t "$ww" @pr_fail ''
-[ "$(render "$ww")" = " issue-267 #267  PR #1951 ✓ 检查通过  " ] || fail "green PR segment — got [$(render "$ww")]"
-case "$(raw "$ww")" in *'#[bg=#9ece6a]#[bold] PR #1951 ✓ 检查通过 '*) : ;; *) fail "✓ must draw on green — got [$(raw "$ww")]" ;; esac
+[ "$(render "$ww")" = " issue-267 #267  PR #1951 ✓ 检查通过  " ] || st_fail "green PR segment — got [$(render "$ww")]"
+case "$(raw "$ww")" in *'#[bg=#9ece6a]#[bold] PR #1951 ✓ 检查通过 '*) : ;; *) st_fail "✓ must draw on green — got [$(raw "$ww")]" ;; esac
 tmux set-window-option -t "$ww" @pr_ci '…'
-[ "$(render "$ww")" = " issue-267 #267  PR #1951 … 检查中  " ] || fail "pending PR segment — got [$(render "$ww")]"
-case "$(raw "$ww")" in *'#[bg=#e0af68]#[bold] PR #1951 … 检查中 '*) : ;; *) fail "… must draw on amber — got [$(raw "$ww")]" ;; esac
+[ "$(render "$ww")" = " issue-267 #267  PR #1951 … 检查中  " ] || st_fail "pending PR segment — got [$(render "$ww")]"
+case "$(raw "$ww")" in *'#[bg=#e0af68]#[bold] PR #1951 … 检查中 '*) : ;; *) st_fail "… must draw on amber — got [$(raw "$ww")]" ;; esac
 tmux set-window-option -t "$ww" @pr_ci '✗' \; set-window-option -t "$ww" @pr_fail 'shellcheck'
-[ "$(render "$ww")" = " issue-267 #267  PR #1951 ✗ shellcheck  " ] || fail "red PR segment names the red check — got [$(render "$ww")]"
-case "$(raw "$ww")" in *'#[bg=#f7768e]#[bold] PR #1951 ✗ shellcheck '*) : ;; *) fail "✗ must draw on red — got [$(raw "$ww")]" ;; esac
+[ "$(render "$ww")" = " issue-267 #267  PR #1951 ✗ shellcheck  " ] || st_fail "red PR segment names the red check — got [$(render "$ww")]"
+case "$(raw "$ww")" in *'#[bg=#f7768e]#[bold] PR #1951 ✗ shellcheck '*) : ;; *) st_fail "✗ must draw on red — got [$(raw "$ww")]" ;; esac
 # several red checks: the comma-joined names survive the #{?…} nesting; a long list is cut
 tmux set-window-option -t "$ww" @pr_fail 'lint,selftests (1/8),selftests (2/8),selftests (3/8)'
 case "$(render "$ww")" in
   *' PR #1951 ✗ lint,selftests (1/8),sel…  ') : ;;
-  *) fail "a long red list must be cut to 24 columns, … included — got [$(render "$ww")]" ;;
+  *) st_fail "a long red list must be cut to 24 columns, … included — got [$(render "$ww")]" ;;
 esac
 tmux set-window-option -t "$ww" @pr_fail ''
-[ "$(render "$ww")" = " issue-267 #267  PR #1951 ✗ 检查没过  " ] || fail "red with no name → 检查没过 — got [$(render "$ww")]"
+[ "$(render "$ww")" = " issue-267 #267  PR #1951 ✗ 检查没过  " ] || st_fail "red with no name → 检查没过 — got [$(render "$ww")]"
 # a PR with no checks at all: just the number, muted
 tmux set-window-option -t "$ww" @pr_ci ''
-[ "$(render "$ww")" = " issue-267 #267  PR #1951  " ] || fail "no-checks PR segment — got [$(render "$ww")]"
+[ "$(render "$ww")" = " issue-267 #267  PR #1951  " ] || st_fail "no-checks PR segment — got [$(render "$ww")]"
 # @pr_num empty (the refresher's 'no open PR') or unset → byte for byte the old header
 tmux set-window-option -t "$ww" @pr_num ''
-[ "$(render "$ww")" = " issue-267 #267 " ] || fail "an empty @pr_num must leave the header untouched — got [$(render "$ww")]"
+[ "$(render "$ww")" = " issue-267 #267 " ] || st_fail "an empty @pr_num must leave the header untouched — got [$(render "$ww")]"
 tmux set-window-option -u -t "$ww" @pr_num \; set-window-option -u -t "$ww" @pr_ci \; set-window-option -u -t "$ww" @pr_fail
-[ "$(render "$ww")" = " issue-267 #267 " ] || fail "no @pr_num must leave the header untouched — got [$(render "$ww")]"
+[ "$(render "$ww")" = " issue-267 #267 " ] || st_fail "no @pr_num must leave the header untouched — got [$(render "$ww")]"
 
 # panels never show it: the hub + dash panes (their window stamped),
 # and a window NAMED dash / plan / backlog
 tmux set-window-option -t "$hw" @ctx_pct 62 \; set-window-option -t "$hw" @model 'Opus 5.5' \; set-window-option -t "$hw" @effort high \; set-window-option -t "$hw" @pr_num '#1' \; set-window-option -t "$hw" @pr_ci '✓'
-case "$(render "$sp")" in *%*|*Opus*|*"PR #"*) fail "the hub pane must not show the segment — got [$(render "$sp")]" ;; esac
-[ -z "$(render "$dp" | tr -d '[:space:]')" ] || fail "the dash pane must stay empty with stamps — got [$(render "$dp")]"
+case "$(render "$sp")" in *%*|*Opus*|*"PR #"*) st_fail "the hub pane must not show the segment — got [$(render "$sp")]" ;; esac
+[ -z "$(render "$dp" | tr -d '[:space:]')" ] || st_fail "the dash pane must stay empty with stamps — got [$(render "$dp")]"
 for nm in dash plan backlog; do
   pw="$(tmux new-window -P -F '#{window_id}' -t s: -n "$nm")"
   tmux set-window-option -t "$pw" @ctx_pct 62 \; set-window-option -t "$pw" @model 'Opus 5.5' \; set-window-option -t "$pw" @effort high \; set-window-option -t "$pw" @pr_num '#1' \; set-window-option -t "$pw" @pr_ci '✓'
   case "$(render "$pw")" in
-    *%*|*Opus*|*"PR #"*) fail "a window named $nm is a panel and must not show the segment — got [$(render "$pw")]" ;;
+    *%*|*Opus*|*"PR #"*) st_fail "a window named $nm is a panel and must not show the segment — got [$(render "$pw")]" ;;
     *"$nm"*) : ;;
-    *) fail "a window named $nm lost its name — got [$(render "$pw")]" ;;
+    *) st_fail "a window named $nm lost its name — got [$(render "$pw")]" ;;
   esac
 done
 
@@ -180,13 +179,13 @@ tmux set-window-option -t "$cw" pane-border-status top
 ow="$(tmux new-window -P -F '#{window_id}' -t s: -n viewed)"
 tmux set-window-option -t "$ow" pane-border-status off
 grep -E '^[[:space:]]*(set(-option)?[[:space:]]+-g[[:space:]]+pane-border-status|run-shell -b .*pane-border-status)' "$CONF" > "$WORK/off.conf"
-[ "$(wc -l < "$WORK/off.conf" | tr -d ' ')" = 2 ] || fail "expected the global off + one converging run-shell in the conf"
-tmux source-file "$WORK/off.conf" || fail "the conf's header-off lines do not source cleanly"
-[ "$(tmux show-options -gv pane-border-status)" = off ] || fail "global pane-border-status is not off after sourcing the conf"
+[ "$(wc -l < "$WORK/off.conf" | tr -d ' ')" = 2 ] || st_fail "expected the global off + one converging run-shell in the conf"
+tmux source-file "$WORK/off.conf" || st_fail "the conf's header-off lines do not source cleanly"
+[ "$(tmux show-options -gv pane-border-status)" = off ] || st_fail "global pane-border-status is not off after sourcing the conf"
 i=0; while [ -n "$(tmux show-options -wqv -t "$cw" pane-border-status)" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i+1)); done
 [ -z "$(tmux show-options -wqv -t "$cw" pane-border-status)" ] \
-  || fail "a window-level 'top' survived the conf's source — got [$(tmux show-options -wqv -t "$cw" pane-border-status)]"
-[ "$(tmux show-options -wqv -t "$ow" pane-border-status)" = off ] || fail "a window already off was touched"
-[ "$(tmux display-message -p -t "$cw" '#{pane-border-status}')" = off ] || fail "the converged window does not resolve to off"
+  || st_fail "a window-level 'top' survived the conf's source — got [$(tmux show-options -wqv -t "$cw" pane-border-status)]"
+[ "$(tmux show-options -wqv -t "$ow" pane-border-status)" = off ] || st_fail "a window already off was touched"
+[ "$(tmux display-message -p -t "$cw" '#{pane-border-status}')" = off ] || st_fail "the converged window does not resolve to off"
 
 printf 'selftest OK: top-of-window header routes worker/hub/dash/raw correctly (#267), leaves 剩余 %% · model · effort to the client (#2717) and carries PR #N + its checks after the name (#1954); drawn nowhere — off globally, a live window top converges (#3192)\n'

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/reap-norepo.XXXXXX")
 SOCKET="scratch-reap-norepo-$$"
 cleanup() {
@@ -31,17 +32,14 @@ pool_pane=$(tmux -L "$SOCKET" new-session -d -P -F '#{pane_id}' -s "$SOCKET-pool
 socket_path=$(tmux -L "$SOCKET" display-message -p '#{socket_path}')
 export TMUX="$socket_path,0,0" TMUX_PANE="$pool_pane"
 result=$(bash "$WORK/bin/dash-reap.sh" "$target" --yes)
-[ "$result" = reaped:full ] || { printf 'FAIL: %s\n' "$result"; exit 1; }
-[ "$(cat "$REAP_CALLS")" = "$SOCKET fid:$REAP_EXPECT_ID" ]
+st_eq 'the pool pane reaps the target' reaped:full "$result"
+st_eq 'one stop, by fid' "$SOCKET fid:$REAP_EXPECT_ID" "$(cat "$REAP_CALLS")"
 unset TMUX_PANE
-[ "$(tmux display-message -p '#{?#{session_group},#{session_group},#{session_name}}')" = "$SOCKET-pool" ]
+st_eq 'the caller resolves to the pool session' "$SOCKET-pool" "$(tmux display-message -p '#{?#{session_group},#{session_group},#{session_name}}')"
 result=$(bash "$WORK/bin/dash-reap.sh" "$target" --yes)
-[ "$result" = reaped:full ] || { printf 'FAIL without caller pane: %s\n' "$result"; exit 1; }
+st_eq 'without caller pane' reaped:full "$result"
 tmux -L "$SOCKET" set-window-option -t "$target" @claude_state working
-if result=$(bash "$WORK/bin/dash-reap.sh" "$target" --yes); then
-  echo 'FAIL: busy no-repo session was accepted'
-  exit 1
-fi
-[ "$result" = skip:live ]
-[ "$(wc -l < "$REAP_CALLS" | tr -d ' ')" = 2 ]
+if result=$(bash "$WORK/bin/dash-reap.sh" "$target" --yes); then st_fail 'busy no-repo session was accepted'; fi
+st_eq 'a busy session is skipped' skip:live "$result"
+st_eq 'no third stop' 2 "$(wc -l < "$REAP_CALLS" | tr -d ' ')"
 echo 'PASS target fleet wins over pool caller and grouped view; busy session remains protected'

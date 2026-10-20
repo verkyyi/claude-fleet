@@ -38,7 +38,6 @@ BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$BIN/fleet-relay-cred.sh"
 CADDYFILE="$BIN/../extras/cred-relay/Caddyfile"
 CHECKS=0
-fail() { printf 'fleet-relay-cred selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 # Short: the proxy's ctl.sock lives under it, and a unix socket path is capped
 # at 104 bytes on macOS.
@@ -219,7 +218,7 @@ start_fake() {
   PIDS="$PIDS $!"
   local i=0
   while [ ! -s "$WORK/$1.port" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done   # a CI mac can take seconds
-  [ -s "$WORK/$1.port" ] || fail "fake $1 did not start: $(cat "$WORK/$1.err")"
+  [ -s "$WORK/$1.port" ] || st_fail "fake $1 did not start: $(cat "$WORK/$1.err")"
 }
 start_fake hub; HUB_PORT=$(cat "$WORK/hub.port")
 start_fake up; UP_PORT=$(cat "$WORK/up.port")
@@ -235,7 +234,7 @@ FLEET_HUB_URL="$HUB" FLEET_RELAY_CHECK_LISTEN="127.0.0.1:$CHECK_PORT" RELAY_CHEC
 PIDS="$PIDS $!"
 i=0
 until curl -fsS "http://127.0.0.1:$CHECK_PORT/healthz" >/dev/null 2>&1 || [ $i -ge 300 ]; do sleep 0.1; i=$((i + 1)); done
-[ $i -lt 300 ] || fail "the relay checker did not start: $(cat "$WORK/check.err")"
+[ $i -lt 300 ] || st_fail "the relay checker did not start: $(cat "$WORK/check.err")"
 export HUB_PORT UP_PORT CHECK_PORT
 export RELAY_LOG="$WORK/relay.log"
 
@@ -252,42 +251,42 @@ chmod +x "$WORK/curl"
 for args in '' 'bogus' 'fetch --now' 'check extra' 'revoke' 'revoke bad!name' 'status a b'; do
   # shellcheck disable=SC2086
   "$SUT" $args >/dev/null 2>&1; rc=$?
-  [ "$rc" -eq 2 ] || fail "A: '$args' exit $rc, want 2"; st_count
+  [ "$rc" -eq 2 ] || st_fail "A: '$args' exit $rc, want 2"; st_count
 done
-[ "$("$SUT" path)" = "$FLEET_CONF_DIR/cred-proxy/relay.token" ] || fail "A: path"; st_count
+[ "$("$SUT" path)" = "$FLEET_CONF_DIR/cred-proxy/relay.token" ] || st_fail "A: path"; st_count
 
 # ---- B. fetch -------------------------------------------------------------
 export FLEET_HUB_CURL="$WORK/curl"
 "$SUT" fetch >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 10 ] || fail "B: module off exit $rc, want 10"; st_count
-[ ! -s "$WORK/hub.log" ] || fail "B: module off still asked the hub"; st_count
+[ "$rc" -eq 10 ] || st_fail "B: module off exit $rc, want 10"; st_count
+[ ! -s "$WORK/hub.log" ] || st_fail "B: module off still asked the hub"; st_count
 export CCQUOTA_FLEET=1 CCQUOTA_HUB_URL="$HUB"
 "$SUT" fetch >/dev/null 2>"$WORK/err"; rc=$?
-[ "$rc" -eq 1 ] && grep -q 'no node token' "$WORK/err" || fail "B: no node token exit $rc: $(cat "$WORK/err")"; st_count
+[ "$rc" -eq 1 ] && grep -q 'no node token' "$WORK/err" || st_fail "B: no node token exit $rc: $(cat "$WORK/err")"; st_count
 printf 'CCQUOTA_TOKEN=%s\nCCQUOTA_HUB_URL=%s\n' "$NODE_TOK" "$HUB" > "$FLEET_CONF_DIR/node.env"
 chmod 600 "$FLEET_CONF_DIR/node.env"
 out=$("$SUT" fetch 2>"$WORK/err"); rc=$?
-[ "$rc" -eq 0 ] || fail "B: fetch exit $rc: $(cat "$WORK/err")"; st_count
-case "$out" in "relay: ISSUED mac-a/alice → $FLEET_CONF_DIR/cred-proxy/relay.token") st_count ;; *) fail "B: fetch said '$out'" ;; esac
+[ "$rc" -eq 0 ] || st_fail "B: fetch exit $rc: $(cat "$WORK/err")"; st_count
+case "$out" in "relay: ISSUED mac-a/alice → $FLEET_CONF_DIR/cred-proxy/relay.token") st_count ;; *) st_fail "B: fetch said '$out'" ;; esac
 TOKFILE="$FLEET_CONF_DIR/cred-proxy/relay.token"
 PASS1=$(cat "$TOKFILE")
-case "$PASS1" in frl1.?*) st_count ;; *) fail "B: kept pass is not frl1." ;; esac
+case "$PASS1" in frl1.?*) st_count ;; *) st_fail "B: kept pass is not frl1." ;; esac
 perm() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
-[ "$(perm "$TOKFILE")" = 600 ] || fail "B: pass mode $(perm "$TOKFILE")"; st_count
-[ "$(perm "$FLEET_CONF_DIR/cred-proxy")" = 700 ] || fail "B: dir mode $(perm "$FLEET_CONF_DIR/cred-proxy")"; st_count
+[ "$(perm "$TOKFILE")" = 600 ] || st_fail "B: pass mode $(perm "$TOKFILE")"; st_count
+[ "$(perm "$FLEET_CONF_DIR/cred-proxy")" = 700 ] || st_fail "B: dir mode $(perm "$FLEET_CONF_DIR/cred-proxy")"; st_count
 
 # ---- C. keep / check / force ----------------------------------------------
-out=$("$SUT" check) || fail "C: check exit $?"
-case "$out" in 'relay: OK '*) st_count ;; *) fail "C: check said '$out'" ;; esac
+out=$("$SUT" check) || st_fail "C: check exit $?"
+case "$out" in 'relay: OK '*) st_count ;; *) st_fail "C: check said '$out'" ;; esac
 mints() { grep -c '"route": "mint"' "$WORK/hub.log"; }
 before=$(mints)
-out=$("$SUT" fetch) || fail "C: second fetch exit $?"
-case "$out" in 'relay: KEPT '*) st_count ;; *) fail "C: second fetch said '$out'" ;; esac
-[ "$(mints)" = "$before" ] || fail "C: a kept pass was re-minted"; st_count
-out=$("$SUT" fetch --force) || fail "C: --force exit $?"
-case "$out" in 'relay: ISSUED '*) st_count ;; *) fail "C: --force said '$out'" ;; esac
+out=$("$SUT" fetch) || st_fail "C: second fetch exit $?"
+case "$out" in 'relay: KEPT '*) st_count ;; *) st_fail "C: second fetch said '$out'" ;; esac
+[ "$(mints)" = "$before" ] || st_fail "C: a kept pass was re-minted"; st_count
+out=$("$SUT" fetch --force) || st_fail "C: --force exit $?"
+case "$out" in 'relay: ISSUED '*) st_count ;; *) st_fail "C: --force said '$out'" ;; esac
 PASS=$(cat "$TOKFILE")
-[ "$PASS" != "$PASS1" ] || fail "C: --force kept the same pass"; st_count
+[ "$PASS" != "$PASS1" ] || st_fail "C: --force kept the same pass"; st_count
 
 # ---- the relay: real Caddy, or the fake forwarder ----------------------------
 CADDY=${FLEET_RELAY_CADDY:-$(command -v caddy 2>/dev/null)}
@@ -302,7 +301,7 @@ if [ -n "$CADDY" ] && [ -x "$CADDY" ]; then
   KIND=caddy
   i=0
   until curl -fsS "http://127.0.0.1:$RELAY_PORT/healthz" >/dev/null 2>&1 || [ $i -ge 300 ]; do sleep 0.1; i=$((i + 1)); done
-  [ $i -lt 300 ] || fail "caddy did not come up: $(tail -5 "$WORK/caddy.out")"
+  [ $i -lt 300 ] || st_fail "caddy did not come up: $(tail -5 "$WORK/caddy.out")"
 else
   start_fake relay; RELAY_PORT=$(cat "$WORK/relay.port")
   KIND=fake
@@ -321,9 +320,9 @@ through() {
 
 # ---- D. the relay road ------------------------------------------------------
 code=$(through /anthropic/v1/messages "$PASS")
-[ "$code" = 200 ] && [ "$(cat "$WORK/through.body")" = PONG ] || fail "D[$KIND]: claude through the relay: $code $(cat "$WORK/through.body")"; st_count
+[ "$code" = 200 ] && [ "$(cat "$WORK/through.body")" = PONG ] || st_fail "D[$KIND]: claude through the relay: $code $(cat "$WORK/through.body")"; st_count
 row=$(tail -n 1 "$WORK/upstream.log")
-python3 - "$row" "$SUB" <<'PY' || fail "D[$KIND]: upstream saw the wrong request: $row"
+python3 - "$row" "$SUB" <<'PY' || st_fail "D[$KIND]: upstream saw the wrong request: $row"
 import json, sys
 r = json.loads(sys.argv[1])
 assert r["path"] == "/v1/messages", r
@@ -334,65 +333,65 @@ assert r["len"] > 0, r
 PY
 st_count
 code=$(through /chatgpt/codex/responses "$PASS")
-[ "$code" = 200 ] || fail "D[$KIND]: codex through the relay: $code"; st_count
-grep -q '"path": "/backend-api/codex/responses"' "$WORK/upstream.log" || fail "D[$KIND]: codex path not /backend-api/codex/…"; st_count
+[ "$code" = 200 ] || st_fail "D[$KIND]: codex through the relay: $code"; st_count
+grep -q '"path": "/backend-api/codex/responses"' "$WORK/upstream.log" || st_fail "D[$KIND]: codex path not /backend-api/codex/…"; st_count
 code=$(through /openai-auth/oauth/token "$PASS")
-[ "$code" = 200 ] && grep -q '"path": "/oauth/token"' "$WORK/upstream.log" || fail "D[$KIND]: openai-auth route: $code"; st_count
+[ "$code" = 200 ] && grep -q '"path": "/oauth/token"' "$WORK/upstream.log" || st_fail "D[$KIND]: openai-auth route: $code"; st_count
 # The hub's GitHub sign-in (#3392): github.com's token exchange, prefix stripped.
 code=$(through /github-oauth/login/oauth/access_token "$PASS")
 [ "$code" = 200 ] && tail -n 1 "$WORK/upstream.log" | grep -q '"path": "/login/oauth/access_token", "authorization": "Bearer '"$SUB"'", "relay": null, "fwd": \[\]' \
-  || fail "D[$KIND]: github-oauth route: $code $(tail -n 1 "$WORK/upstream.log")"; st_count
-grep '"route": "check"' "$WORK/hub.log" | grep -q '"authorization": true' && fail "D[$KIND]: the hub's check saw an Authorization header"; st_count
-grep '"route": "check"' "$WORK/hub.log" | grep -q '"uri": "/anthropic/v1/messages"' || fail "D[$KIND]: the check was not told the original path"; st_count
+  || st_fail "D[$KIND]: github-oauth route: $code $(tail -n 1 "$WORK/upstream.log")"; st_count
+grep '"route": "check"' "$WORK/hub.log" | grep -q '"authorization": true' && st_fail "D[$KIND]: the hub's check saw an Authorization header"; st_count
+grep '"route": "check"' "$WORK/hub.log" | grep -q '"uri": "/anthropic/v1/messages"' || st_fail "D[$KIND]: the check was not told the original path"; st_count
 
 # ---- E. refused -------------------------------------------------------------
 n=$(ups)
 code=$(through /anthropic/v1/messages '')
-[ "$code" = 403 ] || fail "E[$KIND]: no pass → $code"; st_count
+[ "$code" = 403 ] || st_fail "E[$KIND]: no pass → $code"; st_count
 code=$(through /anthropic/v1/messages "frl1.$(printf 'A%.0s' $(seq 1 43))")
-[ "$code" = 403 ] || fail "E[$KIND]: forged pass → $code"; st_count
+[ "$code" = 403 ] || st_fail "E[$KIND]: forged pass → $code"; st_count
 code=$(through /anthropic/v1/messages "$PASS1")
-[ "$code" = 403 ] || fail "E[$KIND]: replaced pass → $code"; st_count
-[ "$(ups)" = "$n" ] || fail "E[$KIND]: a refused request reached the upstream"; st_count
+[ "$code" = 403 ] || st_fail "E[$KIND]: replaced pass → $code"; st_count
+[ "$(ups)" = "$n" ] || st_fail "E[$KIND]: a refused request reached the upstream"; st_count
 
 # ---- F. not an open proxy -----------------------------------------------------
 code=$(through /v1/messages "$PASS")
-[ "$code" = 404 ] || fail "F[$KIND]: unrouted path → $code"; st_count
+[ "$code" = 404 ] || st_fail "F[$KIND]: unrouted path → $code"; st_count
 code=$(through /anthropicx/v1/messages "$PASS")
-[ "$code" = 404 ] || fail "F[$KIND]: lookalike prefix → $code"; st_count
+[ "$code" = 404 ] || st_fail "F[$KIND]: lookalike prefix → $code"; st_count
 # /github-oauth/ forwards the token exchange and nothing else of github.com.
 for pth in /github-oauth/login/oauth/authorize /github-oauth/user /github-oauth/; do
   code=$(through "$pth" "$PASS")
-  [ "$code" = 404 ] || fail "F[$KIND]: $pth → $code, want 404"; st_count
+  [ "$code" = 404 ] || st_fail "F[$KIND]: $pth → $code, want 404"; st_count
 done
-[ "$(ups)" = "$n" ] || fail "F[$KIND]: an unrouted request reached the upstream"; st_count
+[ "$(ups)" = "$n" ] || st_fail "F[$KIND]: an unrouted request reached the upstream"; st_count
 
 # ---- H. operator: status, revoke --------------------------------------------
 unset CCQUOTA_VIEWER_TOKEN
 "$SUT" revoke mac-a >/dev/null 2>"$WORK/err"; rc=$?
-[ "$rc" -eq 1 ] && grep -q CCQUOTA_VIEWER_TOKEN "$WORK/err" || fail "H: revoke with no viewer token exit $rc"; st_count
+[ "$rc" -eq 1 ] && grep -q CCQUOTA_VIEWER_TOKEN "$WORK/err" || st_fail "H: revoke with no viewer token exit $rc"; st_count
 export CCQUOTA_VIEWER_TOKEN="$VIEWER"
-out=$("$SUT" status) || fail "H: status exit $?"
-[ "$out" = 'relay: mac-a alice' ] || fail "H: status said '$out'"; st_count
-out=$("$SUT" revoke MAC-A.local) || fail "H: revoke exit $?"
-[ "$out" = 'relay: REVOKED mac-a' ] || fail "H: revoke said '$out'"; st_count
-grep -q '"key": "fleet.node_relay.mac-a"' "$WORK/hub.log" || fail "H: revoke did not PUT fleet.node_relay.mac-a"; st_count
+out=$("$SUT" status) || st_fail "H: status exit $?"
+[ "$out" = 'relay: mac-a alice' ] || st_fail "H: status said '$out'"; st_count
+out=$("$SUT" revoke MAC-A.local) || st_fail "H: revoke exit $?"
+[ "$out" = 'relay: REVOKED mac-a' ] || st_fail "H: revoke said '$out'"; st_count
+grep -q '"key": "fleet.node_relay.mac-a"' "$WORK/hub.log" || st_fail "H: revoke did not PUT fleet.node_relay.mac-a"; st_count
 code=$(through /anthropic/v1/messages "$PASS")
-[ "$code" = 403 ] || fail "E[$KIND]: revoked pass → $code"; st_count
+[ "$code" = 403 ] || st_fail "E[$KIND]: revoked pass → $code"; st_count
 "$SUT" check >"$WORK/out" 2>&1; rc=$?
-[ "$rc" -eq 3 ] && grep -q 'relay: REFUSED' "$WORK/out" || fail "E: check of a revoked pass exit $rc: $(cat "$WORK/out")"; st_count
+[ "$rc" -eq 3 ] && grep -q 'relay: REFUSED' "$WORK/out" || st_fail "E: check of a revoked pass exit $rc: $(cat "$WORK/out")"; st_count
 touch "$WORK/hub-untrusted"
 "$SUT" fetch >/dev/null 2>"$WORK/err"; rc=$?
-[ "$rc" -eq 4 ] && grep -q 'not a trusted machine' "$WORK/err" || fail "E: fetch on an untrusted machine exit $rc: $(cat "$WORK/err")"; st_count
-[ "$(ups)" = "$n" ] || fail "E[$KIND]: a revoked request reached the upstream"; st_count
+[ "$rc" -eq 4 ] && grep -q 'not a trusted machine' "$WORK/err" || st_fail "E: fetch on an untrusted machine exit $rc: $(cat "$WORK/err")"; st_count
+[ "$(ups)" = "$n" ] || st_fail "E[$KIND]: a revoked request reached the upstream"; st_count
 
 # ---- G. the relay's log ---------------------------------------------------------
-[ -s "$RELAY_LOG" ] || fail "G[$KIND]: no relay log"; st_count
-grep -q 'FAKESUB' "$RELAY_LOG" && fail "G[$KIND]: the subscription is in the relay log"; st_count
-grep -q 'frl1\.' "$RELAY_LOG" && fail "G[$KIND]: a pass is in the relay log"; st_count
-grep -q 'v1/messages\|codex/responses\|oauth/token' "$RELAY_LOG" && fail "G[$KIND]: the relay log has a path past the prefix: $(grep 'v1/messages\|codex/responses\|oauth/token' "$RELAY_LOG" | head -1)"; st_count
-grep -q '127.0.0.1' "$RELAY_LOG" && fail "G[$KIND]: the relay log has an address"; st_count
-python3 - "$RELAY_LOG" <<'PY' || fail "G[$KIND]: log rows lack prefix / status / size"
+[ -s "$RELAY_LOG" ] || st_fail "G[$KIND]: no relay log"; st_count
+grep -q 'FAKESUB' "$RELAY_LOG" && st_fail "G[$KIND]: the subscription is in the relay log"; st_count
+grep -q 'frl1\.' "$RELAY_LOG" && st_fail "G[$KIND]: a pass is in the relay log"; st_count
+grep -q 'v1/messages\|codex/responses\|oauth/token' "$RELAY_LOG" && st_fail "G[$KIND]: the relay log has a path past the prefix: $(grep 'v1/messages\|codex/responses\|oauth/token' "$RELAY_LOG" | head -1)"; st_count
+grep -q '127.0.0.1' "$RELAY_LOG" && st_fail "G[$KIND]: the relay log has an address"; st_count
+python3 - "$RELAY_LOG" <<'PY' || st_fail "G[$KIND]: log rows lack prefix / status / size"
 import json, sys
 rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 uris = {r["request"]["uri"] for r in rows}
@@ -402,10 +401,10 @@ PY
 st_count
 
 # ---- B (cont.): no token in any argv, the viewer token in no file ---------------
-grep -q "$NODE_TOK" "$WORK/curl-argv.log" && fail "B: the node token rode in a curl argv"; st_count
-grep -q 'frl1\.' "$WORK/curl-argv.log" && fail "B: a pass rode in a curl argv"; st_count
-grep -q "$VIEWER" "$WORK/curl-argv.log" && fail "H: the viewer token rode in a curl argv"; st_count
-grep -rq "$VIEWER" "$HOME" "$FLEET_CONF_DIR" 2>/dev/null && fail "H: the viewer token was written to a file"; st_count
+grep -q "$NODE_TOK" "$WORK/curl-argv.log" && st_fail "B: the node token rode in a curl argv"; st_count
+grep -q 'frl1\.' "$WORK/curl-argv.log" && st_fail "B: a pass rode in a curl argv"; st_count
+grep -q "$VIEWER" "$WORK/curl-argv.log" && st_fail "H: the viewer token rode in a curl argv"; st_count
+grep -rq "$VIEWER" "$HOME" "$FLEET_CONF_DIR" 2>/dev/null && st_fail "H: the viewer token was written to a file"; st_count
 
 # ---- I. the machine's own proxy on the relay road --------------------------------
 rm -f "$WORK/hub-untrusted" "$TOKFILE"
@@ -424,26 +423,26 @@ FLEET_CRED_CODEX_HOMES=$WORK/codex-homes
 FLEET_CRED_PROXY_LOG=$WORK/proxy.log
 CONF
 unset FLEET_CRED_RELAY_TOKEN FLEET_HUB_CURL
-PPORT=$(bash "$BIN/fleet-cred-proxy.sh" ensure --max-seconds 120 2>"$WORK/ensure.err") || fail "I: proxy ensure: $(cat "$WORK/ensure.err")"
-[ -s "$TOKFILE" ] || fail "I: ensure minted no relay pass"; st_count
+PPORT=$(bash "$BIN/fleet-cred-proxy.sh" ensure --max-seconds 120 2>"$WORK/ensure.err") || st_fail "I: proxy ensure: $(cat "$WORK/ensure.err")"
+[ -s "$TOKFILE" ] || st_fail "I: ensure minted no relay pass"; st_count
 r=$(bash "$BIN/fleet-cred-proxy.sh" route)
-case "$r" in relay*) st_count ;; *) fail "I: the proxy routes '$r', want relay" ;; esac
+case "$r" in relay*) st_count ;; *) st_fail "I: the proxy routes '$r', want relay" ;; esac
 ST=$(bash "$BIN/fleet-cred-proxy.sh" mint --account a1 --sid s1)
-case "$ST" in fcp1.*) st_count ;; *) fail "I: session mint '$ST'" ;; esac
+case "$ST" in fcp1.*) st_count ;; *) st_fail "I: session mint '$ST'" ;; esac
 viaproxy() { # viaproxy <path> → status; the session's token on stdin
   printf 'Authorization: Bearer %s\n' "$ST" | curl -sS -N --max-time 20 -o "$WORK/proxy.body" -w '%{http_code}' -H @- \
     -H 'Content-Type: application/json' --data-binary '{"model":"m","messages":[{"role":"user","content":"Reply: PONG"}]}' \
     "http://127.0.0.1:$PPORT$1"
 }
 code=$(viaproxy /v1/messages)
-[ "$code" = 200 ] && [ "$(cat "$WORK/proxy.body")" = PONG ] || fail "I[$KIND]: claude via proxy → relay: $code $(cat "$WORK/proxy.body")"; st_count
+[ "$code" = 200 ] && [ "$(cat "$WORK/proxy.body")" = PONG ] || st_fail "I[$KIND]: claude via proxy → relay: $code $(cat "$WORK/proxy.body")"; st_count
 tail -n 1 "$WORK/upstream.log" | grep -q '"path": "/v1/messages", "authorization": "Bearer sk-ant-oat-REAL-a1", "relay": null, "fwd": \[\]' \
-  || fail "I[$KIND]: upstream saw $(tail -n 1 "$WORK/upstream.log")"; st_count
+  || st_fail "I[$KIND]: upstream saw $(tail -n 1 "$WORK/upstream.log")"; st_count
 code=$(viaproxy /codex/responses)
-[ "$code" = 200 ] || fail "I[$KIND]: codex via proxy → relay: $code $(cat "$WORK/proxy.body")"; st_count
+[ "$code" = 200 ] || st_fail "I[$KIND]: codex via proxy → relay: $code $(cat "$WORK/proxy.body")"; st_count
 tail -n 1 "$WORK/upstream.log" | grep -q '"path": "/backend-api/codex/responses", "authorization": "Bearer cx-REAL-a1", "relay": null' \
-  || fail "I[$KIND]: upstream saw $(tail -n 1 "$WORK/upstream.log")"; st_count
-grep -q 'frl1\.' "$WORK/proxy.log" && fail "I: the relay pass is in the proxy log"; st_count
-grep -q 'REAL-a1' "$RELAY_LOG" && fail "I[$KIND]: a subscription is in the relay log"; st_count
+  || st_fail "I[$KIND]: upstream saw $(tail -n 1 "$WORK/upstream.log")"; st_count
+grep -q 'frl1\.' "$WORK/proxy.log" && st_fail "I: the relay pass is in the proxy log"; st_count
+grep -q 'REAL-a1' "$RELAY_LOG" && st_fail "I[$KIND]: a subscription is in the relay log"; st_count
 
 printf 'fleet-relay-cred selftest: PASS (%d checks, relay=%s)\n' "$CHECKS" "$KIND"

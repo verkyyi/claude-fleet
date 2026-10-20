@@ -43,23 +43,19 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 HIST="$BIN/fleet-history.sh"
 [ -f "$ROWS" ] || { printf 'selftest: %s not found\n' "$ROWS" >&2; exit 2; }
 [ -f "$HIST" ] || { printf 'selftest: %s not found\n' "$HIST" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/dashid-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/dashid-selftest.XXXXXX"
 export TMPDIR="$WORK"                    # fleet_cache's $C lands in the sandbox
 export FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_CONF_DIR="$WORK/conf"       # …and so does the #566 @wid allocation lock
 mkdir -p "$WORK/.claude-dash/global" "$WORK/conf"
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-has()  { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1" "$2";; esac; }
-hasnt(){ CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1" "$2";; *) : ;; esac; }
-eq()   { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
+st_tally count
 
 US=$'\x1f'
 GN='38;2;158;206;106m'      # green  — an issue-bound worker
@@ -103,30 +99,30 @@ w 5 修复仪表盘             /w/repo-scratch-7       idle   @5  ''  ''  /w/re
 w 6 修复仪表盘粘贴问题的名字很长 /w/repo-scratch-8     idle   @6  ''  ''  /w/repo-scratch-8
 
 out=$(FLEET_SESSION="$SESS" FZF_COLUMNS=120 bash "$ROWS" 2>&1) \
-  || fail "live rows producer exited non-zero" "$out"
+  || st_fail "live rows producer exited non-zero" "$out"
 row_of() { printf '%s\n' "$out" | grep -F "$SESS:$1$US"; }
 r1=$(row_of 1); r2=$(row_of 2); r3=$(row_of 3); r4=$(row_of 4)
 [ -n "$r1" ] && [ -n "$r2" ] && [ -n "$r3" ] && [ -n "$r4" ] \
-  || fail "live rows: expected a row per fixture window" "$out"
+  || st_fail "live rows: expected a row per fixture window" "$out"
 
 # 1. an issue worker keeps the green `#<N>` it always had.
-has "live: worker id cell is GREEN #123" "$r1" "$GN#123"
+st_has "live: worker id cell is GREEN #123" "$r1" "$GN#123"
 
 # 2. a scratch leaves the issue column BLANK (#566). Never `#9` either
 #    (which would read as an issue that does not exist).
-hasnt "live: scratch draws no ~N sigil in the issue column" "$r2" "~9"
-hasnt "live: scratch must not render as #9"                 "$r2" "#9"
+st_hasnt "live: scratch draws no ~N sigil in the issue column" "$r2" "~9"
+st_hasnt "live: scratch must not render as #9"                 "$r2" "#9"
 
 # 3. THE #529 CASE — renamed window + cwd wandered into a subdir. The KEY is still
 #    read from @worktree (the #529 fix): it drives the provenance grouping and the
 #    ledger, it just no longer paints a sigil in the issue column.
-hasnt "live: renamed+wandered scratch draws no ~5 sigil" "$r3" "~5"
-hasnt "live: renamed scratch's window column no longer carries the id" "$r3" "scratch-5"
+st_hasnt "live: renamed+wandered scratch draws no ~5 sigil" "$r3" "~5"
+st_hasnt "live: renamed scratch's window column no longer carries the id" "$r3" "scratch-5"
 
 # 4. a window that is neither → blank cell (5 spaces), not a stray `~`/`#`.
-hasnt "live: a non-scratch, non-worker window prints no id" "$r4" "~"
+st_hasnt "live: a non-scratch, non-worker window prints no id" "$r4" "~"
 # 5a. descriptions reclaim the old handle column.
-hasnt "live: the header has no worker id column" \
+st_hasnt "live: the header has no worker id column" \
     "$(printf '%s\n' "$out" | grep -F "hdr${US}hdr")" "id  issue"
 
 # 5. alignment: the id cell stays 5 wide in every shape, so every column after it
@@ -137,7 +133,7 @@ hasnt "live: the header has no worker id column" \
 #    and pins the colour and the padding in the same check.
 cellis() {   # <label> <row> <5-char cell> <colour>
   CHECKS=$((CHECKS+1))
-  case "$2" in *"$4$3"$'\033[0m'*) : ;; *) fail "$1" "$2";; esac
+  case "$2" in *"$4$3"$'\033[0m'*) : ;; *) st_fail "$1" "$2";; esac
 }
 cellis "live: worker issue cell is GREEN and 5 wide"         "$r1" "#123 " "$GN"
 cellis "live: scratch issue cell is 5 blanks"               "$r2" "     " "$GN"
@@ -150,11 +146,11 @@ cellis "live: unkeyed window issue cell is 5 blanks"        "$r4" "     " "$GN"
 #    (28 cols) was not clipped at all. Anchored on the reset escape that closes the
 #    cell, like the id cell above (locale-proof).
 r5=$(row_of 5); r6=$(row_of 6)
-[ -n "$r5" ] && [ -n "$r6" ] || fail "live rows: expected the CJK-named fixtures" "$out"
-has   "live: a 10-col CJK name pads to 26 cols (16 spaces)" "$r5" "修复仪表盘                "$'\033[0m'
-hasnt "live: a 10-col CJK name must not get a 21-space (code-point) pad" "$r5" "修复仪表盘                     "
-has   "live: a 28-col CJK name clips at 26 cols = 13 glyphs" "$r6" "修复仪表盘粘贴问题的名字很"$'\033[0m'
-hasnt "live: a 28-col CJK name must not leak past 26 cols" "$r6" "名字很长"
+[ -n "$r5" ] && [ -n "$r6" ] || st_fail "live rows: expected the CJK-named fixtures" "$out"
+st_has   "live: a 10-col CJK name pads to 26 cols (16 spaces)" "$r5" "修复仪表盘                "$'\033[0m'
+st_hasnt "live: a 10-col CJK name must not get a 21-space (code-point) pad" "$r5" "修复仪表盘                     "
+st_has   "live: a 28-col CJK name clips at 26 cols = 13 glyphs" "$r6" "修复仪表盘粘贴问题的名字很"$'\033[0m'
+st_hasnt "live: a 28-col CJK name must not leak past 26 cols" "$r6" "名字很长"
 
 # Countdown uses appended metadata; stable targeting remains row field 2.
 now=$(date +%s)
@@ -163,22 +159,22 @@ notice_row() {
   out=$(FLEET_SESSION="$SESS" FZF_COLUMNS=120 bash "$ROWS")
 }
 notice_row "done" "$now" "$now"
-has 'fresh notice shows countdown' "$out" 'r5m'
-has 'countdown retains stable row id' "$out" "$SESS:1${US}@91${US}"
+st_has 'fresh notice shows countdown' "$out" 'r5m'
+st_has 'countdown retains stable row id' "$out" "$SESS:1${US}@91${US}"
 notice_row working "$now" "$now"
-hasnt 'working state hides old countdown' "$out" 'r5m'
+st_hasnt 'working state hides old countdown' "$out" 'r5m'
 notice_row "done" "$((now - 181))" "$now"
-hasnt 'stale daemon notice disappears' "$out" 'r5m'
+st_hasnt 'stale daemon notice disappears' "$out" 'r5m'
 notice_row "done" "$now" "$((now - 1))"
-hasnt 'new done turn cannot inherit prior countdown' "$out" 'r5m'
+st_hasnt 'new done turn cannot inherit prior countdown' "$out" 'r5m'
 # A HELD reap (issue #1156: PR merged, bound issue still open) shows no countdown.
 notice_row "done" "$now" "$now" hold
-has   'held reap shows iss open' "$out" 'iss open'
-hasnt 'held reap shows no countdown' "$out" 'r0m'
+st_has   'held reap shows iss open' "$out" 'iss open'
+st_hasnt 'held reap shows no countdown' "$out" 'r0m'
 notice_row "done" "$((now - 181))" "$now" hold
-hasnt 'stale held notice disappears' "$out" 'iss open'
+st_hasnt 'stale held notice disappears' "$out" 'iss open'
 notice_row working "$now" "$now" hold
-hasnt 'working state hides the held notice' "$out" 'iss open'
+st_hasnt 'working state hides the held notice' "$out" 'iss open'
 
 # --- the landed view (⌃t) keeps the #529 two-colour grammar -------------------
 # A landed row has no live window and therefore no #566 handle, so `~<N>` is the
@@ -190,13 +186,13 @@ printf '2026-01-01T00:00:00Z\t123\tfix the thing\t61\tsha1\t/w/repo-issue-123\t/
 printf '2026-01-02T00:00:00Z\tscratch-7\tan experiment\t-\t-\t/w/repo-scratch-7\t/nope\tsid-b\t-\tclosed-unlanded\n' \
   >> "$FLEET_HISTORY_LEDGER"
 lout=$(FLEET_REPO=fake/repo FZF_COLUMNS=120 bash "$HIST" rows 2>&1) \
-  || fail "landed rows producer exited non-zero" "$lout"
+  || st_fail "landed rows producer exited non-zero" "$lout"
 lw=$(printf '%s\n' "$lout" | grep -F 'landed:61')
 ls_=$(printf '%s\n' "$lout" | grep -F 'landed:scratch:scratch-7')
-[ -n "$lw" ] && [ -n "$ls_" ] || fail "landed rows: expected a worker row and a scratch row" "$lout"
-has   "landed: worker id cell is GREEN #123"  "$lw"  "$GN#123"
-has   "landed: scratch id cell is INDIGO ~7"  "$ls_" "$IN~7"
-hasnt "landed: scratch id must not be green"  "$ls_" "$GN~7"
-hasnt "landed: scratch must not render as #7" "$ls_" "#7"
+[ -n "$lw" ] && [ -n "$ls_" ] || st_fail "landed rows: expected a worker row and a scratch row" "$lout"
+st_has   "landed: worker id cell is GREEN #123"  "$lw"  "$GN#123"
+st_has   "landed: scratch id cell is INDIGO ~7"  "$ls_" "$IN~7"
+st_hasnt "landed: scratch id must not be green"  "$ls_" "$GN~7"
+st_hasnt "landed: scratch must not render as #7" "$ls_" "#7"
 
 printf 'dash-rows-scratch-id-selftest: OK (%d checks)\n' "$CHECKS"

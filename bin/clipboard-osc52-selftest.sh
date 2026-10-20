@@ -37,14 +37,14 @@
 # tmux / python3 absent → SKIP (exit 0). CLIP_KEEP=1 keeps the work dir.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 REPO="$(cd "$BIN/.." && pwd)"
 TMUX_BIN=$(command -v tmux) || { printf 'clipboard-osc52 selftest: tmux absent — SKIP\n'; exit 0; }
-command -v python3 >/dev/null 2>&1 || { printf 'clipboard-osc52 selftest: python3 absent — SKIP\n'; exit 0; }
+st_need python3
 unset TMUX TMUX_PANE
 
 FAIL=0; CHECKS=0
 ok()  { CHECKS=$((CHECKS + 1)); printf 'ok:   %s\n' "$1"; }
-bad() { CHECKS=$((CHECKS + 1)); FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; }
 
 # --- A. the confs ------------------------------------------------------------
 clipval() {  # <conf> → the value its `set -g set-clipboard` line sets (last wins)
@@ -52,11 +52,11 @@ clipval() {  # <conf> → the value its `set -g set-clipboard` line sets (last w
 }
 NODE_V=$(clipval "$REPO/conf/tmux-attention.conf")
 NODE_PT=$(awk '$1=="set" && $2=="-g" && $3=="allow-passthrough" {v=$4} END {print v}' "$REPO/conf/tmux-attention.conf")
-[ "$NODE_V" = on ] && ok "A conf/tmux-attention.conf: set-clipboard on" || bad "A conf/tmux-attention.conf: set-clipboard '${NODE_V}', want on"
+[ "$NODE_V" = on ] && ok "A conf/tmux-attention.conf: set-clipboard on" || st_miss "A conf/tmux-attention.conf: set-clipboard '${NODE_V}', want on"
 # the hub serves these very files (one copy, packed at build time — #1803)
 if [ -d "$REPO/tokenledger/hub/api/fleetclient" ]; then
   if out=$(bash "$BIN/fleet-client-mirror.sh" --check 2>&1); then ok "A fleet-client-mirror.sh --check"
-  else bad "A fleet-client-mirror.sh --check: $out"; fi
+  else st_miss "A fleet-client-mirror.sh --check: $out"; fi
 fi
 
 # --- D. the client doctor's `clipboard` row (fleet-agent-bundle.py) ------------
@@ -65,10 +65,10 @@ drow() { FLEET_ITERM_CLIPBOARD="$1" python3 -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("b", sys.argv[1]); m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m); print(m.iterm_clipboard())' "$BIN/fleet-agent-bundle.py" 2>&1; }
-case "$(drow 1)" in *PASS*clipboard*) ok "D doctor: iTerm2 AllowClipboardAccess=1 → PASS clipboard" ;; *) bad "D doctor on: $(drow 1)" ;; esac
-case "$(drow 0)" in *WARN*clipboard*"may access clipboard"*) ok "D doctor: AllowClipboardAccess=0 → WARN with where to turn it on" ;; *) bad "D doctor off: $(drow 0)" ;; esac
-case "$(drow '')" in *WARN*clipboard*) ok "D doctor: AllowClipboardAccess unset (iTerm2 default off) → WARN" ;; *) bad "D doctor unset: $(drow '')" ;; esac
-[ "$(drow none)" = None ] && ok "D doctor: no iTerm2 → no row" || bad "D doctor no iTerm2: $(drow none)"
+case "$(drow 1)" in *PASS*clipboard*) ok "D doctor: iTerm2 AllowClipboardAccess=1 → PASS clipboard" ;; *) st_miss "D doctor on: $(drow 1)" ;; esac
+case "$(drow 0)" in *WARN*clipboard*"may access clipboard"*) ok "D doctor: AllowClipboardAccess=0 → WARN with where to turn it on" ;; *) st_miss "D doctor off: $(drow 0)" ;; esac
+case "$(drow '')" in *WARN*clipboard*) ok "D doctor: AllowClipboardAccess unset (iTerm2 default off) → WARN" ;; *) st_miss "D doctor unset: $(drow '')" ;; esac
+[ "$(drow none)" = None ] && ok "D doctor: no iTerm2 → no row" || st_miss "D doctor no iTerm2: $(drow none)"
 
 # --- E (lint half). the Ms row in the node conf -------------------------------
 msrow() {  # <conf> → the value its terminal-overrides[92] line sets
@@ -76,11 +76,11 @@ msrow() {  # <conf> → the value its terminal-overrides[92] line sets
 }
 # A thin client's terminal is the node's own client (issue #3005): the node says Ms too.
 MS_NODE=$(msrow "$REPO/conf/tmux-attention.conf")
-case "$MS_NODE" in '*:Ms=\E]52;%p1%s;%p2%s\007') ok "E conf/tmux-attention.conf: every terminal has Ms (a thin client's terminal is its client)" ;; *) bad "E conf/tmux-attention.conf Ms row: '$MS_NODE'" ;; esac
+case "$MS_NODE" in '*:Ms=\E]52;%p1%s;%p2%s\007') ok "E conf/tmux-attention.conf: every terminal has Ms (a thin client's terminal is its client)" ;; *) st_miss "E conf/tmux-attention.conf Ms row: '$MS_NODE'" ;; esac
 
 # --- G. no copy-mode bind on the node ------------------------------------------
 grep -Eq '^[[:space:]]*bind(-key)?[[:space:]]+-T[[:space:]]+copy-mode' "$REPO/conf/tmux-attention.conf" \
-  && bad "G the node conf binds a copy-mode key (it may only open capabilities)" || ok "G the node conf binds no copy-mode key"
+  && st_miss "G the node conf binds a copy-mode key (it may only open capabilities)" || ok "G the node conf binds no copy-mode key"
 
 # --- H. the iTerm2 permission ---------------------------------------------------
 HW="$(mktemp -d /tmp/cliph.XXXXXX)" || exit 2
@@ -96,15 +96,15 @@ iread() { python3 -c 'import plistlib,sys; v=plistlib.load(open(sys.argv[1],"rb"
 irun() { env FLEET_ITERM_DIR="$HW/dp" FLEET_ITERM_PREFS="$HW/p.plist" FLEET_ITERM_CLIP_MARK="$HW/mark" ITERM_PROFILE='' "$@" \
   python3 "$BIN/fleet-iterm-profile.py" write >/dev/null 2>&1; }
 rm -f "$HW/mark"; iprof unset; irun
-[ "$(iread)" = 1 ] && [ -f "$HW/mark" ] && ok "H unset → fleet turns it on, and marks that it did" || bad "H unset: AllowClipboardAccess=$(iread) mark=$([ -f "$HW/mark" ] && echo y || echo n)"
+[ "$(iread)" = 1 ] && [ -f "$HW/mark" ] && ok "H unset → fleet turns it on, and marks that it did" || st_miss "H unset: AllowClipboardAccess=$(iread) mark=$([ -f "$HW/mark" ] && echo y || echo n)"
 rm -f "$HW/mark"; iprof 0; irun
-[ "$(iread)" = 1 ] && ok "H off, never turned on by fleet → on" || bad "H off before fleet: $(iread)"
+[ "$(iread)" = 1 ] && ok "H off, never turned on by fleet → on" || st_miss "H off before fleet: $(iread)"
 iprof 0; irun
-[ "$(iread)" = 0 ] && ok "H turned off by the person after fleet turned it on → stays off" || bad "H re-enabled after the person turned it off: $(iread)"
+[ "$(iread)" = 0 ] && ok "H turned off by the person after fleet turned it on → stays off" || st_miss "H re-enabled after the person turned it off: $(iread)"
 rm -f "$HW/mark"; iprof 1; irun
-[ "$(iread)" = 1 ] && [ -f "$HW/mark" ] && ok "H already on → left on, marked" || bad "H already on: $(iread)"
+[ "$(iread)" = 1 ] && [ -f "$HW/mark" ] && ok "H already on → left on, marked" || st_miss "H already on: $(iread)"
 rm -f "$HW/mark"; iprof unset; irun FLEET_ITERM_KEYS=0
-[ "$(iread)" = unset ] && [ ! -f "$HW/mark" ] && ok "H FLEET_ITERM_KEYS=0 → nothing written" || bad "H FLEET_ITERM_KEYS=0 wrote: $(iread)"
+[ "$(iread)" = unset ] && [ ! -f "$HW/mark" ] && ok "H FLEET_ITERM_KEYS=0 → nothing written" || st_miss "H FLEET_ITERM_KEYS=0 wrote: $(iread)"
 rm -rf "$HW"
 
 # --- K. the chain ------------------------------------------------------------
@@ -223,8 +223,8 @@ for m in "xterm-256color copy" "screen-256color copy" "xterm-256color drag" "xte
   printf 'K thin: other machine → home → terminal (%s) → terminal received: %s\n' "$m" "$J"
   got=$(field "$J" 'd["osc52"][-1]["text"] if d["osc52"] else ""')
   [ "$got" = "$PAYLOAD" ] && ok "K thin ($m): the copy crosses two fleet servers to the terminal: '$got'" \
-    || bad "K thin ($m): OSC 52 decoded '$got', want '$PAYLOAD'"
+    || st_miss "K thin ($m): OSC 52 decoded '$got', want '$PAYLOAD'"
 done
 
 printf 'clipboard-osc52 selftest: %d check(s), %d failure(s)\n' "$CHECKS" "$FAIL"
-[ "$FAIL" -eq 0 ]
+st_done

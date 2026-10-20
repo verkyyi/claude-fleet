@@ -24,7 +24,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 st_real_tmux
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
+st_need git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-local-bin-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -60,11 +60,9 @@ WITHOUT="$WORK/shim:$_p"
 WITH="$WITHOUT:$HOME/.local/bin"
 export PATH="$WITHOUT"
 
-FAILS=0
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-eq()   { [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
-has()  { case "$2" in *"$3"*) ;; *) fail "$1: [$3] not in: $2" ;; esac; }
-leg()  { if [ "$FAILS" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi; _legf=$FAILS; }
+st_tally miss
+eq()   { [ "$2" = "$3" ] || st_miss "$1: expected [$3], got [$2]"; }
+leg()  { if [ "$FAIL" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi; _legf=$FAIL; }
 
 # ---- sandbox install root: the real scripts, hub/collector/gates stubbed ----
 SB="$WORK/root/bin"
@@ -138,7 +136,7 @@ leg "3 a PATH that has it is left byte for byte alone"
 tmux -L fleet new-session -d -s fleet -n plan 'sleep 3600'    # an older server, this fleet's conf from leg 3
 eq "4 before: no ~/.local/bin" "$(srvpath)" "$WITHOUT"
 out=$(up o/a "$WORK/src/a" --no-attach); eq "4 rc" "$?" 0
-has "4 already up, as before" "$out" "fleet-up: fleet 'fleet' is already up"
+st_has "4 already up, as before" "$out" "fleet-up: fleet 'fleet' is already up"
 eq "4 server PATH stamped" "$(srvpath)" "$HOME/.local/bin:$WITHOUT"
 eq "4 a window spawned server-side sees it" "$(winpath)" "$HOME/.local/bin:$WITHOUT"
 out=$(up o/a "$WORK/src/a" --no-attach); eq "4 again rc" "$?" 0
@@ -146,5 +144,5 @@ eq "4 again: unchanged" "$(srvpath)" "$HOME/.local/bin:$WITHOUT"
 down
 leg "4 a live server started without it is stamped once"
 
-[ "$FAILS" = 0 ] || { printf 'selftest FAIL: %d assertion(s)\n' "$FAILS" >&2; exit 1; }
+[ "$FAIL" = 0 ] || { printf 'selftest FAIL: %d assertion(s)\n' "$FAIL" >&2; exit 1; }
 printf 'selftest PASS: ~/.local/bin rides every fleet server PATH (issue #1191) — bash %s\n' "$(bash -c 'echo $BASH_VERSION')"

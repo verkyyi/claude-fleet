@@ -12,11 +12,10 @@
 # Drives: bin/fleet-doctor.sh.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 W="$(mktemp -d)" || exit 2
 trap 'rm -rf "$W"' EXIT
-CHECKS=0; FAILS=0
-has() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) FAILS=$((FAILS + 1)); printf 'FAIL %s\n  got: %s\n  missing: %s\n' "$1" "$2" "$3" ;; esac; }
-hasnt() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) FAILS=$((FAILS + 1)); printf 'FAIL %s\n  got: %s\n  unwanted: %s\n' "$1" "$2" "$3" ;; esac; }
+st_tally count miss
 
 mkdir -p "$W/home" "$W/conf" "$W/v1" "$W/dir"
 ln -s "$W/v1" "$W/fleet"
@@ -28,15 +27,15 @@ row() { # <install root> <resident rows> → the doctor's fleet rows
 }
 
 out=$(row "$W/fleet" "cred-proxy $((SW - 600))\nmemguard $((SW + 5))\n")
-has   "A a resident from before the switch: WARN" "$out" "WARN  fleet    常驻服务还在跑切换前的版本：cred-proxy（"
-hasnt "A …naming only it" "$out" "memguard"
-has   "A …and how to restart it" "$out" "重启一次"
+st_has   "A a resident from before the switch: WARN" "$out" "WARN  fleet    常驻服务还在跑切换前的版本：cred-proxy（"
+st_hasnt "A …naming only it" "$out" "memguard"
+st_has   "A …and how to restart it" "$out" "重启一次"
 
 out=$(row "$W/fleet" "cred-proxy $((SW + 1))\nmemguard $((SW + 5))\n")
-hasnt "B all after the switch: no WARN" "$out" "常驻服务"
+st_hasnt "B all after the switch: no WARN" "$out" "常驻服务"
 
 out=$(row "$W/dir" "cred-proxy $((SW - 600))\n")
-hasnt "C a checkout install: no WARN" "$out" "常驻服务"
+st_hasnt "C a checkout install: no WARN" "$out" "常驻服务"
 
-printf 'doctor-resident selftest: %s checks, %s failed\n' "$CHECKS" "$FAILS"
-[ "$FAILS" = 0 ]
+printf 'doctor-resident selftest: %s checks, %s failed\n' "$CHECKS" "$FAIL"
+st_done

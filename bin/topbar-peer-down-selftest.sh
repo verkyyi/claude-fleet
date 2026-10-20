@@ -14,7 +14,8 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-command -v python3 >/dev/null 2>&1 || { echo 'topbar-peer-down selftest: python3 absent — SKIP'; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need python3
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/tbpd-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
@@ -49,5 +50,5 @@ bad += got is not False
 sys.exit(1 if bad else 0)
 PY
 rc=$?
-[ "$rc" -eq 0 ] && echo 'topbar-peer-down selftest: PASS' || echo 'topbar-peer-down selftest: FAIL'
-exit "$rc"
+[ "$rc" -eq 0 ] || st_fail "a leg above printed FAIL (exit $rc)"
+echo 'topbar-peer-down selftest: PASS'

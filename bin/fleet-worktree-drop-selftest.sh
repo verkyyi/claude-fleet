@@ -41,7 +41,7 @@ LIB="$BIN/fleet-lib.sh"
 SHIM="$BIN/fleet-worktree-drop.sh"
 [ -f "$LIB" ]  || { printf 'selftest: %s missing\n' "$LIB" >&2; exit 2; }
 [ -x "$SHIM" ] || { printf 'selftest: %s missing/not executable\n' "$SHIM" >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not on PATH — SKIP\n' >&2; exit 0; }
+st_need git
 
 st_sandbox "${TMPDIR:-/tmp}/fleet-wt-drop.XXXXXX" physical
 trap 'exit 130' INT TERM HUP

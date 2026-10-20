@@ -50,15 +50,15 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 MK="$BIN/selftest-shadow-root.sh"
 RUNNER="$BIN/run-selftests.sh"
 [ -x "$MK" ]     || { printf 'selftest: %s not found/executable\n' "$MK" >&2; exit 2; }
 [ -f "$RUNNER" ] || { printf 'selftest: %s not found\n' "$RUNNER" >&2; exit 2; }
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '  %s\n' "$2" >&2; exit 1; }
 ok()   { CHECKS=$((CHECKS + 1)); printf 'ok   %s\n' "$1"; }
-eq()   { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; printf 'ok   %s\n' "$1"; }
+eq()   { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; printf 'ok   %s\n' "$1"; }
 
 CLEAN=''
 cleanup() { for d in $CLEAN; do sh "$MK" --rm "$d"; rm -rf "$d"; done; }
@@ -77,7 +77,7 @@ clean_env() { env -u FLEET_SELFTEST_ROOT -u FLEET_SELFTEST_NO_SHADOW \
 # fixture can never drift from what the builder mirrors; from here on it is an
 # install root like any other, and nothing below writes into the real tree.
 # ============================================================================
-FAKE="$("$MK")" || fail "shadow-root builder failed while making the fixture"
+FAKE="$("$MK")" || st_fail "shadow-root builder failed while making the fixture"
 CLEAN="$CLEAN $FAKE"
 chmod u+w "$FAKE" "$FAKE/bin"   # a shadow is read-only (#4668); this fixture is an install we write into
 
@@ -116,7 +116,7 @@ eq "the fixture install root leaks its conf (control: without this, A is vacuous
    "probe=sourced-from-file" "$(clean_env sh "$FAKE/bin/zz-conf-probe.sh")"
 
 SHADOW="$(clean_env "$FAKE/bin/selftest-shadow-root.sh")" \
-  || fail "shadow-root builder failed against the fixture root"
+  || st_fail "shadow-root builder failed against the fixture root"
 CLEAN="$CLEAN $SHADOW"
 
 eq "through the shadow the same probe sees no conf at all" \
@@ -126,26 +126,26 @@ eq "through the shadow the same probe sees no conf at all" \
 # B. `..` HONESTY — the assertion a symlinked bin/ would fail
 # ============================================================================
 CHECKS=$((CHECKS + 1))
-[ -f "$FAKE/fleet.conf" ] || fail "fixture lost its conf — B cannot prove anything"
+[ -f "$FAKE/fleet.conf" ] || st_fail "fixture lost its conf — B cannot prove anything"
 CHECKS=$((CHECKS + 1))
 [ -f "$SHADOW/bin/../fleet.conf" ] \
-  && fail "\$BIN/../fleet.conf resolved back to the real root — the shadow's bin/ must be a REAL dir of symlinks, not a symlink to bin/"
+  && st_fail "\$BIN/../fleet.conf resolved back to the real root — the shadow's bin/ must be a REAL dir of symlinks, not a symlink to bin/"
 ok "\$BIN/../fleet.conf from the shadow's bin/ does not reach the real conf"
 
 CHECKS=$((CHECKS + 1))
-[ -L "$SHADOW/bin" ] && fail "the shadow's bin/ is a symlink — '..' escapes it"
+[ -L "$SHADOW/bin" ] && st_fail "the shadow's bin/ is a symlink — '..' escapes it"
 CHECKS=$((CHECKS + 1))
-[ -d "$SHADOW/bin" ] || fail "the shadow has no bin/ directory"
+[ -d "$SHADOW/bin" ] || st_fail "the shadow has no bin/ directory"
 ok "the shadow's bin/ is a real directory"
 
 # ============================================================================
 # C. STRUCTURE — what is mirrored, what is emptied, what is left out
 # ============================================================================
 CHECKS=$((CHECKS + 1))
-[ -e "$SHADOW/fleet.conf" ] && fail "the shadow carries a fleet.conf"
+[ -e "$SHADOW/fleet.conf" ] && st_fail "the shadow carries a fleet.conf"
 for b in fleet.conf.bak fleet.conf.bak.1700000000; do
   CHECKS=$((CHECKS + 1))
-  [ -e "$SHADOW/$b" ] && fail "the shadow carries $b — a backup must not be able to resurrect a conf"
+  [ -e "$SHADOW/$b" ] && st_fail "the shadow carries $b — a backup must not be able to resurrect a conf"
 done
 ok "no fleet.conf and no fleet.conf.bak* in the shadow"
 
@@ -153,15 +153,15 @@ ok "no fleet.conf and no fleet.conf.bak* in the shadow"
 # it report "Local source './' is or traverses a symlink" and read no manifest at all,
 # so fleet-plugin-selftest.sh fails having validated nothing.
 CHECKS=$((CHECKS + 1))
-[ -L "$SHADOW/.claude-plugin" ] && fail ".claude-plugin is a symlink in the shadow — claude plugin validate will not follow it"
+[ -L "$SHADOW/.claude-plugin" ] && st_fail ".claude-plugin is a symlink in the shadow — claude plugin validate will not follow it"
 CHECKS=$((CHECKS + 1))
-[ -f "$SHADOW/.claude-plugin/plugin.json" ] || fail "the shadow has no real .claude-plugin/plugin.json"
+[ -f "$SHADOW/.claude-plugin/plugin.json" ] || st_fail "the shadow has no real .claude-plugin/plugin.json"
 ok ".claude-plugin is copied, not symlinked (the plugin validator will not follow one)"
 
 # conf/fleet.conf.reference IS tracked and IS read (fcfg_default / fcfg_validate) — the
 # exclusion must be the conf, not everything conf-shaped.
 CHECKS=$((CHECKS + 1))
-[ -e "$SHADOW/conf/fleet.conf.reference" ] || fail "the shadow dropped conf/fleet.conf.reference — the config modal reads it"
+[ -e "$SHADOW/conf/fleet.conf.reference" ] || st_fail "the shadow dropped conf/fleet.conf.reference — the config modal reads it"
 ok "conf/fleet.conf.reference survives the mirror"
 
 missing=''
@@ -186,43 +186,43 @@ eq "every bin/ entry is mirrored, dotfiles included" "" "$missing"
 
 CHECKS=$((CHECKS + 1))
 [ -d "$SHADOW/conf-dir" ] && [ ! -L "$SHADOW/conf-dir" ] \
-  || fail "conf-dir/ must be a real directory in the shadow, not a symlink to the login's live state"
+  || st_fail "conf-dir/ must be a real directory in the shadow, not a symlink to the login's live state"
 CHECKS=$((CHECKS + 1))
 [ -z "$(ls -A "$SHADOW/conf-dir" 2>/dev/null)" ] \
-  || fail "conf-dir/ must start EMPTY — a suite run must never read or clobber the running fleet's state"
+  || st_fail "conf-dir/ must start EMPTY — a suite run must never read or clobber the running fleet's state"
 ok "conf-dir/ is real and empty (live state, not config)"
 
 # The install is read-only (issue #4668): no logs/ in it (an older install's live
 # records are never linked in), and neither the root nor bin/ takes a new file —
 # a script still writing beside its bin/ fails in the suite, not on a managed login.
 CHECKS=$((CHECKS + 1))
-[ ! -e "$SHADOW/logs" ] && [ ! -L "$SHADOW/logs" ] || fail "the shadow carries a logs/ — records are \$FLEET_CONF_DIR/logs"
+[ ! -e "$SHADOW/logs" ] && [ ! -L "$SHADOW/logs" ] || st_fail "the shadow carries a logs/ — records are \$FLEET_CONF_DIR/logs"
 CHECKS=$((CHECKS + 1))
 if [ "$(id -u)" != 0 ]; then
-  ( : > "$SHADOW/probe" ) 2>/dev/null && fail "the shadow root is writable — a script could still write into its install"
-  ( : > "$SHADOW/bin/probe" ) 2>/dev/null && fail "the shadow bin/ is writable"
+  ( : > "$SHADOW/probe" ) 2>/dev/null && st_fail "the shadow root is writable — a script could still write into its install"
+  ( : > "$SHADOW/bin/probe" ) 2>/dev/null && st_fail "the shadow bin/ is writable"
 fi
 CHECKS=$((CHECKS + 1))
-( : > "$SHADOW/conf-dir/probe" ) 2>/dev/null && rm -f "$SHADOW/conf-dir/probe" || fail "the shadow conf-dir/ must stay writable"
+( : > "$SHADOW/conf-dir/probe" ) 2>/dev/null && rm -f "$SHADOW/conf-dir/probe" || st_fail "the shadow conf-dir/ must stay writable"
 ok "the shadow install is read-only, its conf-dir/ the one writable place"
 
 # fleet-selftest-reap.sh sweeps aged `*selftest*` mktemp dirs; a run killed outright
 # leaves the shadow behind, and only this naming gets it collected.
 CHECKS=$((CHECKS + 1))
-case "${SHADOW##*/}" in *selftest*) ;; *) fail "shadow temp dir '${SHADOW##*/}' has no 'selftest' in its name — fleet-selftest-reap.sh cannot collect an orphan" ;; esac
+case "${SHADOW##*/}" in *selftest*) ;; *) st_fail "shadow temp dir '${SHADOW##*/}' has no 'selftest' in its name — fleet-selftest-reap.sh cannot collect an orphan" ;; esac
 ok "the shadow temp dir is named for the reaper"
 
 # macOS's $TMPDIR ends in `/` (issue #1305). The printed path must be spelled the
 # way a script inside it computes `$BIN` (logical pwd, `//` collapsed): the
 # self-re-rooting selftests break their recursion on that string equality, and a
 # `…/T//fleet-selftest-root.X` never matched — nested shadows until ELOOP.
-SLASHTMP="$(mktemp -d "${TMPDIR:-/tmp}/isolation-slash-selftest.XXXXXX")" || fail "mktemp"
+SLASHTMP="$(mktemp -d "${TMPDIR:-/tmp}/isolation-slash-selftest.XXXXXX")" || st_fail "mktemp"
 S2="$(TMPDIR="$SLASHTMP/" clean_env "$FAKE/bin/selftest-shadow-root.sh")" \
-  || { rm -rf "$SLASHTMP"; fail "shadow-root builder failed under a trailing-slash TMPDIR"; }
+  || { rm -rf "$SLASHTMP"; st_fail "shadow-root builder failed under a trailing-slash TMPDIR"; }
 S2_LOGICAL="$(cd "$S2/bin" && pwd)"
 sh "$FAKE/bin/selftest-shadow-root.sh" --rm "$S2"; rm -rf "$SLASHTMP"
 [ "$S2/bin" = "$S2_LOGICAL" ] \
-  || fail "trailing-slash TMPDIR: shadow printed as '$S2', but its bin/ resolves to '$S2_LOGICAL'"
+  || st_fail "trailing-slash TMPDIR: shadow printed as '$S2', but its bin/ resolves to '$S2_LOGICAL'"
 ok "a trailing-slash TMPDIR yields a shadow path spelled as its own \$BIN sees it"
 
 # ============================================================================
@@ -235,7 +235,7 @@ SUBSET='fleet-quotaguard fleet-context fleet-brief'
 out=''
 # shellcheck disable=SC2086  # intentional: $SUBSET is a list of arguments
 if ! out="$(clean_env sh "$FAKE/bin/run-selftests.sh" $SUBSET </dev/null 2>&1)"; then
-  fail "run-selftests.sh went red from an install root with a fleet.conf — the conf is leaking again (#660)" \
+  st_fail "run-selftests.sh went red from an install root with a fleet.conf — the conf is leaking again (#660)" \
        "$(printf '%s\n' "$out" | tail -20)"
 fi
 CHECKS=$((CHECKS + 1))
@@ -288,12 +288,12 @@ probe_line() { printf '%s\n' "$1" | grep -m1 '^zzprobe:'; }
 # this E2 is vacuous: a probe that never sees anything passes for the wrong reason.
 ctl="$(poison_env env FLEET_SELFTEST_NO_SHADOW=1 sh "$FAKE/bin/run-selftests.sh" zz-env-probe </dev/null 2>&1)"
 ctl_line="$(probe_line "$ctl")"
-[ -n "$ctl_line" ] || fail "E1 the probe never ran in place" "$(printf '%s\n' "$ctl" | tail -20)"
+[ -n "$ctl_line" ] || st_fail "E1 the probe never ran in place" "$(printf '%s\n' "$ctl" | tail -20)"
 for v in $POISON; do
   CHECKS=$((CHECKS + 1))
   case " $ctl_line " in
     *" $v "*) ;;
-    *) fail "E1 control: $v did not reach the suite even with the scrub disabled — the probe is blind, so E2 would prove nothing" "$ctl_line" ;;
+    *) st_fail "E1 control: $v did not reach the suite even with the scrub disabled — the probe is blind, so E2 would prove nothing" "$ctl_line" ;;
   esac
 done
 ok "without the shadow, a poisoned environment reaches the suite (control: E2 is not vacuous)"
@@ -303,7 +303,7 @@ ok "without the shadow, a poisoned environment reaches the suite (control: E2 is
 # Linux with the same source: the platform divergence the whole issue is about.
 env_out="$(poison_env sh "$FAKE/bin/run-selftests.sh" zz-env-probe </dev/null 2>&1)"
 env_line="$(probe_line "$env_out")"
-[ -n "$env_line" ] || fail "E2 the probe never ran through the shadow" "$(printf '%s\n' "$env_out" | tail -20)"
+[ -n "$env_line" ] || st_fail "E2 the probe never ran through the shadow" "$(printf '%s\n' "$env_out" | tail -20)"
 leaked=''
 for v in $POISON; do
   case " $env_line " in *" $v "*) leaked="$leaked $v" ;; esac
@@ -318,7 +318,7 @@ knob_line="$(probe_line "$knob_out")"
 CHECKS=$((CHECKS + 1))
 case " $knob_line " in
   *" FLEET_SELFTEST_SLOWEST "*) ;;
-  *) fail "E3 FLEET_SELFTEST_SLOWEST was scrubbed — the runner's own knobs must survive into the inner run" "$knob_line" ;;
+  *) st_fail "E3 FLEET_SELFTEST_SLOWEST was scrubbed — the runner's own knobs must survive into the inner run" "$knob_line" ;;
 esac
 ok "FLEET_SELFTEST_* knobs survive the scrub (they steer the runner, they are not fleet config)"
 

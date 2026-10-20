@@ -27,9 +27,8 @@ export FLEET_CONF_DIR="$WORK/conf" FLEET_HANDOFF_DIR="$WORK/handoff"
 unset TMUX TMUX_PANE
 mkdir -p "$FLEET_HANDOFF_DIR"
 
-fails=0
-bad()  { printf 'FAIL %s\n' "$1" >&2; fails=$((fails+1)); }
-eq()   { [ "$2" = "$3" ] && st_ok "$1" || bad "$1: want [$3] got [$2]"; }
+st_tally
+eq()   { [ "$2" = "$3" ] && st_ok "$1" || st_miss "$1: want [$3] got [$2]"; }
 # doc <name> <YYYYmmddHHMM> [body] — a handoff file with a fixed mtime.
 doc()  { printf '# Handoff\n%s\n' "${3:-}" > "$FLEET_HANDOFF_DIR/$1"; touch -t "$2" "$FLEET_HANDOFF_DIR/$1"; }
 run()  { "$SRC" "$@" 2>/dev/null; }
@@ -118,17 +117,16 @@ BODY
 ck() { "$SRC" check "$@" 2>/dev/null; }
 out=$(ck "$C/long.md" --issue-body "$C/body.md"); rc=$?
 eq CHECK-LONG-rc "$rc" 3
-case "$out" in *'HANDOFF-CHECK:'*'201 lines'*'FLEET_HANDOFF_MAX_LINES=200'*) st_ok CHECK-LONG-hint ;; *) bad "CHECK-LONG-hint: [$out]" ;; esac
+case "$out" in *'HANDOFF-CHECK:'*'201 lines'*'FLEET_HANDOFF_MAX_LINES=200'*) st_ok CHECK-LONG-hint ;; *) st_miss "CHECK-LONG-hint: [$out]" ;; esac
 eq CHECK-EDGE "$(ck "$C/edge.md"; echo "rc=$?")" "rc=0"
 eq CHECK-KNOB "$(FLEET_HANDOFF_MAX_LINES=300 ck "$C/long.md"; echo "rc=$?")" "rc=0"
 out=$(ck "$C/copy.md" --issue-body "$C/body.md" --issue 7); rc=$?
 eq CHECK-COPY-rc "$rc" 3
-case "$out" in *'HANDOFF-CHECK:'*'copies 5 lines of issue #7'*) st_ok CHECK-COPY-hint ;; *) bad "CHECK-COPY-hint: [$out]" ;; esac
+case "$out" in *'HANDOFF-CHECK:'*'copies 5 lines of issue #7'*) st_ok CHECK-COPY-hint ;; *) st_miss "CHECK-COPY-hint: [$out]" ;; esac
 eq CHECK-COPY-stdin "$(ck - --issue-body "$C/body.md" < "$C/copy.md" | cut -c1-34)" "HANDOFF-CHECK: the handoff copies "
 eq CHECK-QUOTE "$(ck "$C/quote.md" --issue-body "$C/body.md"; echo "rc=$?")" "rc=0"
 eq CHECK-OK "$(ck "$C/ok.md" --issue-body "$C/body.md"; echo "rc=$?")" "rc=0"
 eq CHECK-NO-ISSUE "$(ck "$C/copy.md"; echo "rc=$?")" "rc=0"
 eq CHECK-USAGE "$(ck; echo "rc=$?")" "rc=2"
 
-[ "$fails" = 0 ] && { echo "fleet-handoff-file-selftest: PASS"; exit 0; }
-echo "fleet-handoff-file-selftest: $fails failure(s)" >&2; exit 1
+st_done

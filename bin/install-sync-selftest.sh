@@ -105,21 +105,20 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 IS="$BIN/fleet-install-sync.sh"
 [ -f "$IS" ] || { printf 'selftest: %s not found\n' "$IS" >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { echo 'install-sync-selftest SKIP (no git)'; exit 0; }
+st_need git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/install-sync-selftest.XXXXXX")" || exit 2
 WORK=$(cd "$WORK" && pwd -P)
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM HUP
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
-contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — output does not contain [$3]:
+st_tally count
+contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]:
 $2";; esac; }
-not_contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 — output unexpectedly contains [$3]:
+not_contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 — output unexpectedly contains [$3]:
 $2";; esac; }
 
 export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
@@ -214,67 +213,67 @@ cur() { r=$(readlink "$CO"); r=${r%/}; printf '%s' "${r##*/}"; }
 printf 'FLEET_X=1\n' > "$CO/fleet.conf"; mkdir -p "$CO/logs"; echo old > "$CO/logs/keep.log"
 stable "$C2"
 run
-eq "A: tick exits 0" 0 "$RC"
-eq "A: result switched" switched "$(st result)"
-[ -L "$CO" ] || fail "A: the install is not a link after the first switch"; CHECKS=$((CHECKS + 1))
-eq "A: the link points at the new version" "$V/$C2" "$(readlink "$CO")"
-[ -d "$V/$C1/.git" ] || fail "A: the old checkout (the repository) is not at $V/$C1"; CHECKS=$((CHECKS + 1))
-eq "A: .prev names the old version" "$C1" "$(cat "$V/.prev")"
-eq "A: the new version is a worktree on its own branch" "fleet-live/$C2" "$(git -C "$CO" symbolic-ref --short HEAD)"
-eq "A: …tracking the trunk" "origin/master" "$(git -C "$CO" rev-parse --abbrev-ref '@{upstream}')"
-eq "A: logs/ is shared" "../.shared/logs" "$(readlink "$CO/logs")"
-eq "A: …in the old version too" "../.shared/logs" "$(readlink "$V/$C1/logs")"
-eq "A: an old log survives the migration" old "$(cat "$CO/logs/keep.log")"
-eq "A: an untracked fleet.conf is shared" "FLEET_X=1" "$(cat "$CO/fleet.conf")"
-eq "A: …once" "../.shared/fleet.conf" "$(readlink "$CO/fleet.conf")"
+st_eq "A: tick exits 0" 0 "$RC"
+st_eq "A: result switched" switched "$(st result)"
+[ -L "$CO" ] || st_fail "A: the install is not a link after the first switch"; CHECKS=$((CHECKS + 1))
+st_eq "A: the link points at the new version" "$V/$C2" "$(readlink "$CO")"
+[ -d "$V/$C1/.git" ] || st_fail "A: the old checkout (the repository) is not at $V/$C1"; CHECKS=$((CHECKS + 1))
+st_eq "A: .prev names the old version" "$C1" "$(cat "$V/.prev")"
+st_eq "A: the new version is a worktree on its own branch" "fleet-live/$C2" "$(git -C "$CO" symbolic-ref --short HEAD)"
+st_eq "A: …tracking the trunk" "origin/master" "$(git -C "$CO" rev-parse --abbrev-ref '@{upstream}')"
+st_eq "A: logs/ is shared" "../.shared/logs" "$(readlink "$CO/logs")"
+st_eq "A: …in the old version too" "../.shared/logs" "$(readlink "$V/$C1/logs")"
+st_eq "A: an old log survives the migration" old "$(cat "$CO/logs/keep.log")"
+st_eq "A: an untracked fleet.conf is shared" "FLEET_X=1" "$(cat "$CO/fleet.conf")"
+st_eq "A: …once" "../.shared/fleet.conf" "$(readlink "$CO/fleet.conf")"
 contains "A: the reason says it migrated" "$(st reason)" "is now a link into $V/"
 contains "A: the reason names .prev" "$(st reason)" ".prev $(short "$C1")"
-eq "A: HEAD at stable" "$C2" "$(hd)"
-eq "A: from" "$C1" "$(st from)"; eq "A: to" "$C2" "$(st to)"
-eq "A: apply called once, --from old --to stable" "apply --from $C1 --to $C2 --root $CO" "$(grep '^apply ' "$LOG" | tail -1)"
-eq "A: doctor ran before and after" 2 "$(doctors)"
-eq "A: apply line recorded" 'ok — stub' "$(st apply)"
+st_eq "A: HEAD at stable" "$C2" "$(hd)"
+st_eq "A: from" "$C1" "$(st from)"; st_eq "A: to" "$C2" "$(st to)"
+st_eq "A: apply called once, --from old --to stable" "apply --from $C1 --to $C2 --root $CO" "$(grep '^apply ' "$LOG" | tail -1)"
+st_eq "A: doctor ran before and after" 2 "$(doctors)"
+st_eq "A: apply line recorded" 'ok — stub' "$(st apply)"
 contains "A: log line" "$(lastlog)" "switched $(short "$C1")..$(short "$C2")"
-eq "A: skip empty" - "$(st skip)"; eq "A: deferred_since empty" - "$(st deferred_since)"
-eq "A: stable recorded" "$C2" "$(st stable)"
+st_eq "A: skip empty" - "$(st skip)"; st_eq "A: deferred_since empty" - "$(st deferred_since)"
+st_eq "A: stable recorded" "$C2" "$(st stable)"
 
 # --- B. current -------------------------------------------------------------------------
 n=$(applies); run
-eq "B: result current" current "$(st result)"
-eq "B: no apply" "$n" "$(applies)"
+st_eq "B: result current" current "$(st result)"
+st_eq "B: no apply" "$n" "$(applies)"
 contains "B: log line" "$(lastlog)" "current $(short "$C2")..$(short "$C2")"
 
 # --- C. backward --------------------------------------------------------------------------
 stable "$C1"; n=$(applies); run
-eq "C: result refused" refused "$(st result)"
-eq "C: HEAD untouched" "$C2" "$(hd)"
+st_eq "C: result refused" refused "$(st result)"
+st_eq "C: HEAD untouched" "$C2" "$(hd)"
 contains "C: says not a descendant" "$(st reason)" "is not a descendant of HEAD"
 contains "C: says behind" "$(st reason)" "behind this install (1 commit(s))"
-eq "C: no apply" "$n" "$(applies)"
+st_eq "C: no apply" "$n" "$(applies)"
 
 # --- D. dirty -------------------------------------------------------------------------------
 stable "$C3"; echo edited >> "$CO/f"; run
-eq "D: result refused" refused "$(st result)"
-eq "D: HEAD untouched" "$C2" "$(hd)"
+st_eq "D: result refused" refused "$(st result)"
+st_eq "D: HEAD untouched" "$C2" "$(hd)"
 contains "D: names the file" "$(st reason)" "tracked local changes in $CO (f)"
 git -C "$CO" checkout -q -- f
-eq "D: no apply" "$n" "$(applies)"
+st_eq "D: no apply" "$n" "$(applies)"
 
 # --- E. busy windows no longer defer (issue #1894) -----------------------------------------------
 printf 'working\nlooping\nwaking\nlooping|loop|kind=cron id=j1@1 at=j1@1\n' > "$WORK/tmux-states/f1"; run
-eq "E: switched under working / looping / waking windows" switched "$(st result)"
-eq "E: HEAD at stable" "$C3" "$(hd)"
-eq "E: deferred_since empty" - "$(st deferred_since)"
+st_eq "E: switched under working / looping / waking windows" switched "$(st result)"
+st_eq "E: HEAD at stable" "$C3" "$(hd)"
+st_eq "E: deferred_since empty" - "$(st deferred_since)"
 not_contains "E: busy is no reason any more" "$(st reason)" "busy window"
 printf 'done\n' > "$WORK/tmux-states/f1"
 
 # --- M. disk gate ---------------------------------------------------------------------------------
 stable "$C4"; touch "$WORK/gate-closed"; n=$(applies); run
-eq "M: result deferred" deferred "$(st result)"
-eq "M: the link untouched" "$V/$C3" "$(readlink "$CO")"
-[ -e "$V/$C4" ] && fail "M: a version was checked out under a closed disk gate"; CHECKS=$((CHECKS + 1))
+st_eq "M: result deferred" deferred "$(st result)"
+st_eq "M: the link untouched" "$V/$C3" "$(readlink "$CO")"
+[ -e "$V/$C4" ] && st_fail "M: a version was checked out under a closed disk gate"; CHECKS=$((CHECKS + 1))
 contains "M: says disk gate" "$(st reason)" "disk gate closed"
-eq "M: HEAD untouched" "$C3" "$(hd)"; eq "M: no apply" "$n" "$(applies)"
+st_eq "M: HEAD untouched" "$C3" "$(hd)"; st_eq "M: no apply" "$n" "$(applies)"
 
 # --- O. a running EPIC batch (issue #953; one mark per batch, #2062) -----------------------------
 # stable C4 is still ahead and M's disk gate is still closed, so WHICH reason wins
@@ -284,82 +283,82 @@ HB="$BIN/fleet-epic-heartbeat.sh"; EPD="$CONF/global/epic-running.d"
 export FLEET_EPIC_HOLD_CAP_SECS=7200   # the hold is opt-in since issue #2934 (O3: the default)
 T1=$(st deferred_since)
 OUT=$(bash "$HB" 1117 --tick 3 --repo o/r --session f1 2>&1); RC=$?
-eq "O: stamp exits 0" 0 "$RC"; contains "O: stamp says what it wrote" "$OUT" "stamped epic=1117 session=f1 tick=3 ttl=2700s"
-[ -f "$EPD/o-r-1117" ] || fail "O: no per-batch mark written (epic-running.d/o-r-1117)"; CHECKS=$((CHECKS + 1))
-[ -e "$CONF/global/epic-running" ] && fail "O: the legacy single file was written"; CHECKS=$((CHECKS + 1))
-eq "O: mark carries the epic" 1117 "$(sed -n 's/^epic: //p' "$EPD/o-r-1117")"
+st_eq "O: stamp exits 0" 0 "$RC"; contains "O: stamp says what it wrote" "$OUT" "stamped epic=1117 session=f1 tick=3 ttl=2700s"
+[ -f "$EPD/o-r-1117" ] || st_fail "O: no per-batch mark written (epic-running.d/o-r-1117)"; CHECKS=$((CHECKS + 1))
+[ -e "$CONF/global/epic-running" ] && st_fail "O: the legacy single file was written"; CHECKS=$((CHECKS + 1))
+st_eq "O: mark carries the epic" 1117 "$(sed -n 's/^epic: //p' "$EPD/o-r-1117")"
 n=$(applies); run
-eq "O: result deferred" deferred "$(st result)"
+st_eq "O: result deferred" deferred "$(st result)"
 contains "O: the EPIC is the reason, before the disk gate" "$(st reason)" "EPIC batch running on this login (epic=1117 session=f1 tick=3"
 not_contains "O: …not the disk gate" "$(st reason)" "disk gate"
-eq "O: HEAD untouched" "$C3" "$(hd)"; eq "O: no apply" "$n" "$(applies)"
-eq "O: deferred_since kept from the disk-gate deferral" "$T1" "$(st deferred_since)"
+st_eq "O: HEAD untouched" "$C3" "$(hd)"; st_eq "O: no apply" "$n" "$(applies)"
+st_eq "O: deferred_since kept from the disk-gate deferral" "$T1" "$(st deferred_since)"
 contains "O: log line" "$(lastlog)" "deferred $(short "$C3")..$(short "$C4") EPIC batch running"
 # a second batch on the same login: its own file, the first one's untouched (#2062)
 # …carrying a `title:` line (issue #2833): the lease reading never looks at it
 OUT=$(bash "$HB" 1982 --tick 10 --repo o/r --session f1 --title 'EPIC: 面板 批次' 2>&1)
-[ -f "$EPD/o-r-1982" ] || fail "O: the second batch has no mark of its own"; CHECKS=$((CHECKS + 1))
-eq "O: the mark carries its title, EPIC: dropped" "面板 批次" "$(sed -n 's/^title: //p' "$EPD/o-r-1982")"
+[ -f "$EPD/o-r-1982" ] || st_fail "O: the second batch has no mark of its own"; CHECKS=$((CHECKS + 1))
+st_eq "O: the mark carries its title, EPIC: dropped" "面板 批次" "$(sed -n 's/^title: //p' "$EPD/o-r-1982")"
 not_contains "O: the first batch's mark has no title" "$(cat "$EPD/o-r-1117")" "title:"
-eq "O: the first batch's mark is untouched" 3 "$(sed -n 's/^tick: //p' "$EPD/o-r-1117")"
+st_eq "O: the first batch's mark is untouched" 3 "$(sed -n 's/^tick: //p' "$EPD/o-r-1117")"
 run
-eq "O: still deferred" deferred "$(st result)"
+st_eq "O: still deferred" deferred "$(st result)"
 contains "O: the reason names the first batch" "$(st reason)" "epic=1117"
 contains "O: …and the second" "$(st reason)" "epic=1982"
 OUT=$(bash "$HB" --status 2>&1); RC=$?
-eq "O: --status fresh exits 0" 0 "$RC"; contains "O: --status lists the first" "$OUT" "fresh epic=1117 session=f1 tick=3"
+st_eq "O: --status fresh exits 0" 0 "$RC"; contains "O: --status lists the first" "$OUT" "fresh epic=1117 session=f1 tick=3"
 contains "O: --status lists the second" "$OUT" "fresh epic=1982 session=f1 tick=10"
 # a LEASE: the first, rewritten with a 1 s ttl, expires; the second still holds
 bash "$HB" 1117 --ttl 1 --tick 4 --repo o/r --session f1 >/dev/null 2>&1; sleep 2
 run
-eq "O: one stale + one fresh = deferred" deferred "$(st result)"
+st_eq "O: one stale + one fresh = deferred" deferred "$(st result)"
 contains "O: …on the fresh one" "$(st reason)" "epic=1982"
 not_contains "O: …not the stale one" "$(st reason)" "epic=1117"
 OUT=$(bash "$HB" --status 2>&1); RC=$?
-eq "O: --status with one fresh exits 0" 0 "$RC"; contains "O: --status says stale for the first" "$OUT" "stale epic=1117"
+st_eq "O: --status with one fresh exits 0" 0 "$RC"; contains "O: --status says stale for the first" "$OUT" "stale epic=1117"
 # --clear <N> takes ONE batch's mark, never the other's (#2062)
 OUT=$(bash "$HB" --clear 1982 2>&1); RC=$?
-eq "O: --clear <N> exits 0" 0 "$RC"; contains "O: --clear says so" "$OUT" "cleared $EPD/o-r-1982"
-[ -e "$EPD/o-r-1982" ] && fail "O: --clear 1982 left its mark"; CHECKS=$((CHECKS + 1))
-[ -f "$EPD/o-r-1117" ] || fail "O: --clear 1982 took the other batch's mark"; CHECKS=$((CHECKS + 1))
+st_eq "O: --clear <N> exits 0" 0 "$RC"; contains "O: --clear says so" "$OUT" "cleared $EPD/o-r-1982"
+[ -e "$EPD/o-r-1982" ] && st_fail "O: --clear 1982 left its mark"; CHECKS=$((CHECKS + 1))
+[ -f "$EPD/o-r-1117" ] || st_fail "O: --clear 1982 took the other batch's mark"; CHECKS=$((CHECKS + 1))
 OUT=$(bash "$HB" --status 2>&1); RC=$?
-eq "O: --status all stale exits 1" 1 "$RC"; contains "O: --status says stale" "$OUT" "stale epic=1117"
+st_eq "O: --status all stale exits 1" 1 "$RC"; contains "O: --status says stale" "$OUT" "stale epic=1117"
 # every mark stale → the tick falls through to the disk gate
 run
-eq "O: all stale = the disk gate decides" deferred "$(st result)"
+st_eq "O: all stale = the disk gate decides" deferred "$(st result)"
 contains "O: the disk gate is the reason" "$(st reason)" "disk gate closed"
 not_contains "O: no EPIC in the reason" "$(st reason)" "EPIC"
 # a bare --clear (the pre-#2062 form) refuses with two batches marked, clears with one
 bash "$HB" 1982 --repo o/r --session f1 >/dev/null 2>&1
 OUT=$(bash "$HB" --clear 2>&1); RC=$?
-eq "O: a bare --clear with two batches marked refuses" 2 "$RC"; contains "O: …and says how" "$OUT" "--clear <epic> clears ONE"
-{ [ -f "$EPD/o-r-1117" ] && [ -f "$EPD/o-r-1982" ]; } || fail "O: the refused --clear removed a mark"; CHECKS=$((CHECKS + 1))
+st_eq "O: a bare --clear with two batches marked refuses" 2 "$RC"; contains "O: …and says how" "$OUT" "--clear <epic> clears ONE"
+{ [ -f "$EPD/o-r-1117" ] && [ -f "$EPD/o-r-1982" ]; } || st_fail "O: the refused --clear removed a mark"; CHECKS=$((CHECKS + 1))
 bash "$HB" --clear 1117 >/dev/null 2>&1
 OUT=$(bash "$HB" --clear 2>&1); RC=$?
-eq "O: a bare --clear with one mark clears it" 0 "$RC"
-[ -e "$EPD/o-r-1982" ] && fail "O: the bare --clear left the one mark"; CHECKS=$((CHECKS + 1))
-OUT=$(bash "$HB" --status 2>&1); RC=$?; eq "O: --status with no mark exits 2" 2 "$RC"
-OUT=$(bash "$HB" --clear 1117 2>&1); RC=$?; eq "O: --clear of nothing exits 0" 0 "$RC"; contains "O: …says nothing to clear" "$OUT" "nothing to clear for epic=1117"
+st_eq "O: a bare --clear with one mark clears it" 0 "$RC"
+[ -e "$EPD/o-r-1982" ] && st_fail "O: the bare --clear left the one mark"; CHECKS=$((CHECKS + 1))
+OUT=$(bash "$HB" --status 2>&1); RC=$?; st_eq "O: --status with no mark exits 2" 2 "$RC"
+OUT=$(bash "$HB" --clear 1117 2>&1); RC=$?; st_eq "O: --clear of nothing exits 0" 0 "$RC"; contains "O: …says nothing to clear" "$OUT" "nothing to clear for epic=1117"
 # the pre-#2062 single file is not a mark any more (issue #4790)
 printf 'epoch: %s\nttl: 2700\nepic: 883\nsession: f1\ntick: 1\n' "$(date +%s)" > "$CONF/global/epic-running"
 OUT=$(bash "$HB" --status 2>&1); RC=$?
-eq "O: the old single file reads as no mark" 2 "$RC"
+st_eq "O: the old single file reads as no mark" 2 "$RC"
 rm -f "$CONF/global/epic-running"
 # usage
-OUT=$(bash "$HB" 2>&1); RC=$?; eq "O: no epic is a usage error" 2 "$RC"
-OUT=$(bash "$HB" 1117 --ttl 0 2>&1); RC=$?; eq "O: --ttl 0 is a usage error" 2 "$RC"
-OUT=$(bash "$HB" --clear x 2>&1); RC=$?; eq "O: --clear x is a usage error" 2 "$RC"
-[ -n "$(ls "$EPD" 2>/dev/null)" ] && fail "O: a usage error must not stamp"; CHECKS=$((CHECKS + 1))
+OUT=$(bash "$HB" 2>&1); RC=$?; st_eq "O: no epic is a usage error" 2 "$RC"
+OUT=$(bash "$HB" 1117 --ttl 0 2>&1); RC=$?; st_eq "O: --ttl 0 is a usage error" 2 "$RC"
+OUT=$(bash "$HB" --clear x 2>&1); RC=$?; st_eq "O: --clear x is a usage error" 2 "$RC"
+[ -n "$(ls "$EPD" 2>/dev/null)" ] && st_fail "O: a usage error must not stamp"; CHECKS=$((CHECKS + 1))
 # the whole point (#2062): the disk gate open, stable moving, a fresh mark → the
 # tick is deferred and the version does not move — on every tick, never switched
 rm "$WORK/gate-closed"; bash "$HB" 1117 --tick 5 --repo o/r --session f1 >/dev/null 2>&1; stable "$C3a"
 : > "$CONF/logs/install-sync.log"; run; run
-eq "O: a fresh mark holds the switch" deferred "$(st result)"
-eq "O: HEAD still at C3" "$C3" "$(hd)"
-eq "O: the link untouched" "$V/$C3" "$(readlink "$CO")"
-[ -e "$V/$C3a" ] && fail "O: a version was checked out under a fresh mark"; CHECKS=$((CHECKS + 1))
-eq "O: no switched line while the mark is fresh" 0 "$(grep -c ' switched ' "$CONF/logs/install-sync.log")"
-eq "O: two ticks, two deferred lines" 2 "$(grep -c ' deferred ' "$CONF/logs/install-sync.log")"
+st_eq "O: a fresh mark holds the switch" deferred "$(st result)"
+st_eq "O: HEAD still at C3" "$C3" "$(hd)"
+st_eq "O: the link untouched" "$V/$C3" "$(readlink "$CO")"
+[ -e "$V/$C3a" ] && st_fail "O: a version was checked out under a fresh mark"; CHECKS=$((CHECKS + 1))
+st_eq "O: no switched line while the mark is fresh" 0 "$(grep -c ' switched ' "$CONF/logs/install-sync.log")"
+st_eq "O: two ticks, two deferred lines" 2 "$(grep -c ' deferred ' "$CONF/logs/install-sync.log")"
 run --dry-run
 contains "O: dry-run defers too" "$OUT" "deferred: EPIC batch running"
 # the batch ends: its loop clears its own mark; the next tick would switch
@@ -369,20 +368,20 @@ contains "O: would switch after the clear" "$OUT" "would switch"
 # a mark that says something is alive or in flight holds as before …
 OUT=$(bash "$HB" 1117 --tick 6 --repo o/r --session f1 --live 1 --inflight 0 2>&1)
 contains "O2: the stamp shows the reading" "$OUT" "live=1 inflight=0"
-eq "O2: the mark carries live" 1 "$(sed -n 's/^live: //p' "$EPD/o-r-1117")"
-eq "O2: …and inflight" 0 "$(sed -n 's/^inflight: //p' "$EPD/o-r-1117")"
+st_eq "O2: the mark carries live" 1 "$(sed -n 's/^live: //p' "$EPD/o-r-1117")"
+st_eq "O2: …and inflight" 0 "$(sed -n 's/^inflight: //p' "$EPD/o-r-1117")"
 run
-eq "O2: a live member holds" deferred "$(st result)"
+st_eq "O2: a live member holds" deferred "$(st result)"
 contains "O2: the reason names it" "$(st reason)" "epic=1117 session=f1 tick=6"
 contains "O2: …with its reading" "$(st reason)" "live=1 inflight=0"
 contains "O2: --status says which kind of hold" "$(st epic)" "holding (有活·封顶前 0m/120m)"
-[ -f "$CONF/global/epic-hold.d/o-r-1117" ] || fail "O2: no hold clock written"; CHECKS=$((CHECKS + 1))
+[ -f "$CONF/global/epic-hold.d/o-r-1117" ] || st_fail "O2: no hold clock written"; CHECKS=$((CHECKS + 1))
 bash "$HB" 1117 --tick 7 --repo o/r --session f1 --live 0 --inflight 1 >/dev/null 2>&1; run
-eq "O2: a PR in flight holds" deferred "$(st result)"
+st_eq "O2: a PR in flight holds" deferred "$(st result)"
 # --live without --inflight is no reading: holds (conservative)
 bash "$HB" 1117 --tick 8 --repo o/r --session f1 --live 0 >/dev/null 2>&1
-[ -z "$(sed -n 's/^live: //p' "$EPD/o-r-1117")" ] || fail "O2: --live alone was written"; CHECKS=$((CHECKS + 1))
-run; eq "O2: half a reading still holds" deferred "$(st result)"
+[ -z "$(sed -n 's/^live: //p' "$EPD/o-r-1117")" ] || st_fail "O2: --live alone was written"; CHECKS=$((CHECKS + 1))
+run; st_eq "O2: half a reading still holds" deferred "$(st result)"
 # … an IDLE batch (live 0, nothing in flight) does not: the tick goes on
 bash "$HB" 1117 --tick 9 --repo o/r --session f1 --live 0 --inflight 0 >/dev/null 2>&1
 run --dry-run
@@ -392,11 +391,11 @@ OUT=$(bash "$HB" --status 2>&1); contains "O2: --status still lists the idle bat
 contains "O2: …with its reading" "$OUT" "live=0 inflight=0"
 # idle next to an active one: the active one holds, the idle one is noted
 bash "$HB" 1982 --tick 2 --repo o/r --session f1 --live 2 --inflight 1 >/dev/null 2>&1; run
-eq "O2: idle + active = deferred" deferred "$(st result)"
+st_eq "O2: idle + active = deferred" deferred "$(st result)"
 contains "O2: …on the active one" "$(st reason)" "epic=1982"
 not_contains "O2: …not the idle one" "$(st reason)" "epic=1117"
 contains "O2: the state names the idle one" "$(st epic)" "idle (空转，不挡) epic=1117"
-[ -e "$CONF/global/epic-hold.d/o-r-1117" ] && fail "O2: an idle mark kept its hold clock"; CHECKS=$((CHECKS + 1))
+[ -e "$CONF/global/epic-hold.d/o-r-1117" ] && st_fail "O2: an idle mark kept its hold clock"; CHECKS=$((CHECKS + 1))
 bash "$HB" --clear 1982 >/dev/null 2>&1
 # the cap: an active mark that has held THIS stable past FLEET_EPIC_HOLD_CAP_SECS
 # is released — once — with one note on its EPIC; the tick switches
@@ -408,27 +407,27 @@ printf 'note %s\n' "\$*" >> "$WORK/notes.log"
 while [ "\$#" -gt 0 ]; do [ "\$1" = --body-file ] && cat "\$2" >> "$WORK/notes.log"; shift; done
 NOTE
 : > "$WORK/notes.log"
-run; eq "O2: under the cap = deferred" deferred "$(st result)"
+run; st_eq "O2: under the cap = deferred" deferred "$(st result)"
 contains "O2: …says before the cap" "$(st epic)" "holding (有活·封顶前 0m/10m)"
-eq "O2: no note before the cap" 0 "$(grep -c '^note ' "$WORK/notes.log")"
+st_eq "O2: no note before the cap" 0 "$(grep -c '^note ' "$WORK/notes.log")"
 # the clock is the LOGIN's (issue #2843): only .since counts — the mark's own
 # `since:` (or a new stable in it) neither starts nor restarts it
-[ -f "$CONF/global/epic-hold.d/.since" ] || fail "O2: no login hold clock written"; CHECKS=$((CHECKS + 1))
+[ -f "$CONF/global/epic-hold.d/.since" ] || st_fail "O2: no login hold clock written"; CHECKS=$((CHECKS + 1))
 printf 'since: %s\nstable: %s\nreleased: -\n' "$(date +%s)" "$C3" > "$CONF/global/epic-hold.d/o-r-1117"
 printf 'since: %s\n' "$(( $(date +%s) - 700 ))" > "$CONF/global/epic-hold.d/.since"
 : > "$CONF/logs/install-sync.log"; run
-eq "O2: past the cap = switched" switched "$(st result)"
-eq "O2: …to stable" "$C3a" "$(hd)"
-eq "O2: ONE note on the EPIC" 1 "$(grep -c '^note ' "$WORK/notes.log")"
+st_eq "O2: past the cap = switched" switched "$(st result)"
+st_eq "O2: …to stable" "$C3a" "$(hd)"
+st_eq "O2: ONE note on the EPIC" 1 "$(grep -c '^note ' "$WORK/notes.log")"
 contains "O2: …on the EPIC, record-only" "$(cat "$WORK/notes.log")" "note 1117 --repo o/r --note --from fleet --body-file"
 contains "O2: …says from which version to which" "$(cat "$WORK/notes.log")" "\`$(short "$C3")\` → \`$(short "$C3a")\`"
 contains "O2: …and who" "$(cat "$WORK/notes.log")" "$(id -un)@"
 contains "O2: a released log line" "$(cat "$CONF/logs/install-sync.log")" "epic-released $(short "$C3")..$(short "$C3a") epic=1117"
 contains "O2: the state says released" "$(st epic)" "released (已放行：挡满 10m 封顶) epic=1117"
-eq "O2: the clock records the release" "$C3a" "$(sed -n 's/^released: //p' "$CONF/global/epic-hold.d/o-r-1117")"
-[ -e "$CONF/global/epic-hold.d/.since" ] && fail "O2: at stable the login's hold clock was kept"; CHECKS=$((CHECKS + 1))
-run; eq "O2: then current" current "$(st result)"
-eq "O2: still one note" 1 "$(grep -c '^note ' "$WORK/notes.log")"
+st_eq "O2: the clock records the release" "$C3a" "$(sed -n 's/^released: //p' "$CONF/global/epic-hold.d/o-r-1117")"
+[ -e "$CONF/global/epic-hold.d/.since" ] && st_fail "O2: at stable the login's hold clock was kept"; CHECKS=$((CHECKS + 1))
+run; st_eq "O2: then current" current "$(st result)"
+st_eq "O2: still one note" 1 "$(grep -c '^note ' "$WORK/notes.log")"
 unset FLEET_EPIC_HOLD_CAP_SECS FLEET_EPIC_HOLD_NOTE_CMD
 stable "$C4"
 # --- O3. no hold by default (issue #2934) -----------------------------------------------
@@ -439,43 +438,43 @@ bash "$HB" 1117 --tick 11 --repo o/r --session f1 --live 2 --inflight 1 >/dev/nu
 run --dry-run
 contains "O3: a batch with work does not hold by default" "$OUT" "would switch"
 not_contains "O3: …no deferral" "$OUT" "deferred"
-[ -e "$CONF/global/epic-hold.d/.since" ] && fail "O3: a hold clock was started with the hold off"; CHECKS=$((CHECKS + 1))
-eq "O3: no note" 0 "$(grep -c '^note ' "$WORK/notes.log")"
+[ -e "$CONF/global/epic-hold.d/.since" ] && st_fail "O3: a hold clock was started with the hold off"; CHECKS=$((CHECKS + 1))
+st_eq "O3: no note" 0 "$(grep -c '^note ' "$WORK/notes.log")"
 bash "$HB" --clear 1117 >/dev/null 2>&1
 
 # --- F. rollback ----------------------------------------------------------------------------------
 : > "$LOG"; run
-eq "F: result rolled-back" rolled-back "$(st result)"
-eq "F: HEAD back at the previous version" "$C3a" "$(hd)"
-eq "F: the link is back" "$V/$C3a" "$(readlink "$CO")"
-eq "F: .prev names the rejected version" "$C4" "$(cat "$V/.prev")"
-eq "F: forward apply then rollback apply" "apply --from $C3a --to $C4 --root $CO
+st_eq "F: result rolled-back" rolled-back "$(st result)"
+st_eq "F: HEAD back at the previous version" "$C3a" "$(hd)"
+st_eq "F: the link is back" "$V/$C3a" "$(readlink "$CO")"
+st_eq "F: .prev names the rejected version" "$C4" "$(cat "$V/.prev")"
+st_eq "F: forward apply then rollback apply" "apply --from $C3a --to $C4 --root $CO
 apply --from $C4 --to $C3a --root $CO" "$(grep '^apply ' "$LOG")"
-eq "F: doctor before, after, none for the rollback" 2 "$(doctors)"
+st_eq "F: doctor before, after, none for the rollback" 2 "$(doctors)"
 contains "F: names the new FAIL tag" "$(st reason)" "doctor FAIL after the switch: gh"
-eq "F: skip = the rejected version" "$C4" "$(st skip)"
-eq "F: from/to describe the rollback" "$C4 $C3a" "$(st from) $(st to)"
+st_eq "F: skip = the rejected version" "$C4" "$(st skip)"
+st_eq "F: from/to describe the rollback" "$C4 $C3a" "$(st from) $(st to)"
 contains "F: log line" "$(lastlog)" "rolled-back $(short "$C4")..$(short "$C3a")"
 : > "$LOG"; run
-eq "F: next tick skipped" skipped "$(st result)"
-eq "F: nothing ran" 0 "$(applies)"
-eq "F: skip kept" "$C4" "$(st skip)"
+st_eq "F: next tick skipped" skipped "$(st result)"
+st_eq "F: nothing ran" 0 "$(applies)"
+st_eq "F: skip kept" "$C4" "$(st skip)"
 contains "F: says why" "$(st reason)" "not retried until stable moves"
 stable "$C5"; : > "$LOG"; run
-eq "F: the next stable is followed" switched "$(st result)"
-eq "F: HEAD at the fix" "$C5" "$(hd)"
-eq "F: skip cleared" - "$(st skip)"
-eq "F: apply --from old --to new" "apply --from $C3a --to $C5 --root $CO" "$(grep '^apply ' "$LOG")"
+st_eq "F: the next stable is followed" switched "$(st result)"
+st_eq "F: HEAD at the fix" "$C5" "$(hd)"
+st_eq "F: skip cleared" - "$(st skip)"
+st_eq "F: apply --from old --to new" "apply --from $C3a --to $C5 --root $CO" "$(grep '^apply ' "$LOG")"
 
 # --- G. a pre-existing FAIL is not the new version's -----------------------------------------------
 touch "$WORK/doctor-fail-always"; stable "$C6"; run
-eq "G: switched, not rolled back" switched "$(st result)"
-eq "G: HEAD at stable" "$C6" "$(hd)"
+st_eq "G: switched, not rolled back" switched "$(st result)"
+st_eq "G: HEAD at stable" "$C6" "$(hd)"
 contains "G: says the FAIL predates it" "$(st reason)" "doctor FAIL already present before: quota"
 rm "$WORK/doctor-fail-always"
 # apply PARTIAL alone is not a rollback either — the doctor decides
 touch "$WORK/apply-partial"; stable "$C7"; run
-eq "G: PARTIAL apply, doctor clean → switched" switched "$(st result)"
+st_eq "G: PARTIAL apply, doctor clean → switched" switched "$(st result)"
 contains "G: PARTIAL recorded" "$(st apply)" "PARTIAL"
 rm "$WORK/apply-partial"
 git -C "$CO" reset -q --hard "$C6"    # back one for the tests below
@@ -483,31 +482,31 @@ git -C "$CO" reset -q --hard "$C6"    # back one for the tests below
 # --- H. off ---------------------------------------------------------------------------------------------
 git -C "$CO" update-ref refs/tags/stable "$C6"   # a stale local tag: off must not refresh it
 : > "$LOG"; OUT=$(FLEET_INSTALL_SYNC=0 bash "$IS" --root "$CO" 2>&1); RC=$?
-eq "H: exits 0" 0 "$RC"
-eq "H: result off" off "$(st result)"
+st_eq "H: exits 0" 0 "$RC"
+st_eq "H: result off" off "$(st result)"
 contains "H: says how to switch on" "$(st reason)" "FLEET_INSTALL_SYNC=0"
-eq "H: no fetch (local tag untouched)" "$C6" "$(git -C "$CO" rev-parse refs/tags/stable)"
-eq "H: HEAD untouched" "$C6" "$(hd)"; eq "H: nothing ran" 0 "$(applies)"
+st_eq "H: no fetch (local tag untouched)" "$C6" "$(git -C "$CO" rev-parse refs/tags/stable)"
+st_eq "H: HEAD untouched" "$C6" "$(hd)"; st_eq "H: nothing ran" 0 "$(applies)"
 contains "H: log line" "$(lastlog)" " off "
 # H2 (issue #2334): a login the machine daemon manages is the machine updater's —
 # no fetch, no move; a machine that manages someone else changes nothing here.
 mkdir -p "$WORK/node" "$WORK/noderoot"; printf '{"%s": {"managed": true}}\n' "$(id -un)" > "$WORK/node/accounts.json"
 export FLEET_NODE_ROOT="$WORK/noderoot"   # never this machine's real runtime
 : > "$LOG"; OUT=$(FLEET_NODE_STATE="$WORK/node" bash "$IS" --root "$CO" 2>&1); RC=$?
-eq "H2: exits 0" 0 "$RC"; eq "H2: result off" off "$(st result)"
+st_eq "H2: exits 0" 0 "$RC"; st_eq "H2: result off" off "$(st result)"
 contains "H2: says the machine updater has it" "$(st reason)" "managed — the machine updater"
-eq "H2: no fetch (local tag untouched)" "$C6" "$(git -C "$CO" rev-parse refs/tags/stable)"
-eq "H2: HEAD untouched" "$C6" "$(hd)"; eq "H2: nothing ran" 0 "$(applies)"
+st_eq "H2: no fetch (local tag untouched)" "$C6" "$(git -C "$CO" rev-parse refs/tags/stable)"
+st_eq "H2: HEAD untouched" "$C6" "$(hd)"; st_eq "H2: nothing ran" 0 "$(applies)"
 # H3 (issues #2688, #2774): once the machine has a release, the managed login is
 # STILL off here — the machine updater links its install to the runtime and moves
 # it with the machine (fleet-node-update.py link-tree); the tick names what it
 # follows and whether the install is linked to it yet. No fetch, no move.
 ln -s "$WORK/noderoot/$C7" "$WORK/noderoot/current"; stable "$C5"
 : > "$LOG"; OUT=$(FLEET_NODE_STATE="$WORK/node" bash "$IS" --root "$CO" 2>&1); RC=$?
-eq "H3: exits 0" 0 "$RC"; eq "H3: result off" off "$(st result)"
+st_eq "H3: exits 0" 0 "$RC"; st_eq "H3: result off" off "$(st result)"
 contains "H3: says it follows the runtime" "$(st reason)" "managed · 跟随 $WORK/noderoot/current ($(short "$C7"))"
 contains "H3: …and that it is not linked yet" "$(st reason)" "not linked yet"
-eq "H3: HEAD untouched" "$C6" "$(hd)"; eq "H3: nothing ran" 0 "$(applies)"
+st_eq "H3: HEAD untouched" "$C6" "$(hd)"; st_eq "H3: nothing ran" 0 "$(applies)"
 rm "$WORK/noderoot/current"; unset FLEET_NODE_ROOT
 git -C "$CO" reset -q --hard "$C6"; stable "$C7"; git -C "$CO" update-ref refs/tags/stable "$C6"
 printf '{"someone-else": {"managed": true}}\n' > "$WORK/node/accounts.json"
@@ -517,27 +516,27 @@ contains "H2: another login managed is not this one" "$(st reason)" "FLEET_INSTA
 # --- I. not seen ---------------------------------------------------------------------------------------
 url=$(git -C "$CO" remote get-url origin)
 git -C "$CO" remote set-url origin "$WORK/nowhere.git"; run
-eq "I: fetch failure is fetch-failed" fetch-failed "$(st result)"
+st_eq "I: fetch failure is fetch-failed" fetch-failed "$(st result)"
 contains "I: says not refused" "$(st reason)" "not seen, not refused"
-eq "I: HEAD untouched" "$C6" "$(hd)"
+st_eq "I: HEAD untouched" "$C6" "$(hd)"
 git -C "$CO" remote set-url origin "$url"
 unstable; run
-eq "I: no tag is none" none "$(st result)"
-eq "I: stable none" none "$(st stable)"
+st_eq "I: no tag is none" none "$(st result)"
+st_eq "I: stable none" none "$(st stable)"
 contains "I: says what to do" "$(st reason)" "fleet-stable.sh move"
 stable "$C7"
 
 # --- J. dry-run ------------------------------------------------------------------------------------------
 before=$(st last_check); sleep 1; : > "$LOG"; run --dry-run
-eq "J: exits 0" 0 "$RC"
+st_eq "J: exits 0" 0 "$RC"
 contains "J: prints the move" "$OUT" "would switch $CO $(short "$C6")..$(short "$C7")"
-eq "J: HEAD untouched" "$C6" "$(hd)"
-eq "J: nothing ran" 0 "$(applies)"
-eq "J: no state written" "$before" "$(st last_check)"
+st_eq "J: HEAD untouched" "$C6" "$(hd)"
+st_eq "J: nothing ran" 0 "$(applies)"
+st_eq "J: no state written" "$before" "$(st last_check)"
 # dry-run reports a refusal too, without recording it
 echo edited >> "$CO/f"; run --dry-run
 contains "J: dry-run refusal printed" "$OUT" "refused: tracked local changes"
-eq "J: still no state written" "$before" "$(st last_check)"
+st_eq "J: still no state written" "$before" "$(st last_check)"
 git -C "$CO" checkout -q -- f
 
 # --- N. lock ---------------------------------------------------------------------------------------------
@@ -548,27 +547,27 @@ contains "N: no pid says so" "$OUT" "pid=?"
 printf '%s' "$$" > "$LK/pid"; run                          # a live holder (this shell)
 contains "N: a live lock skips the tick" "$OUT" "another tick holds"
 contains "N: the skip names the live pid" "$OUT" "pid=$$ alive"
-eq "N: HEAD untouched" "$C6" "$(hd)"
+st_eq "N: HEAD untouched" "$C6" "$(hd)"
 printf '1\n' > "$LK/ts"; touch "$WORK/gate-closed"; run   # live pid, past the TTL (the gate keeps HEAD put)
 contains "N: an old lock is taken over (TTL backstop)" "$OUT" "older than 3600s (pid=$$"
-eq "N: the tick ran past the lock" deferred "$(st result)"
-eq "N: HEAD still put" "$C6" "$(hd)"
-[ -d "$LK" ] && fail "N: lock left behind (TTL)"; CHECKS=$((CHECKS + 1))
+st_eq "N: the tick ran past the lock" deferred "$(st result)"
+st_eq "N: HEAD still put" "$C6" "$(hd)"
+[ -d "$LK" ] && st_fail "N: lock left behind (TTL)"; CHECKS=$((CHECKS + 1))
 rm -f "$WORK/gate-closed"; mkdir -p "$LK"; date +%s > "$LK/ts"
 # a holder SIGKILLed mid-tick (kickstart -k) left a fresh lock: taken over at once (#1691)
 bash -c 'echo $$' > "$WORK/deadpid"; dead=$(cat "$WORK/deadpid")
 printf '%s' "$dead" > "$LK/pid"; run
 contains "N: the takeover names the dead pid" "$OUT" "took over $LK: holder pid=$dead is dead"
 not_contains "N: a dead holder is not skipped" "$OUT" "another tick holds"
-eq "N: a dead holder's lock is taken over" switched "$(st result)"
-eq "N: moved" "$C7" "$(hd)"
-[ -d "$LK" ] && fail "N: lock left behind"; CHECKS=$((CHECKS + 1))
+st_eq "N: a dead holder's lock is taken over" switched "$(st result)"
+st_eq "N: moved" "$C7" "$(hd)"
+[ -d "$LK" ] && st_fail "N: lock left behind"; CHECKS=$((CHECKS + 1))
 
 # --- L. --status -------------------------------------------------------------------------------------------
 run --status
-eq "L: exits 0" 0 "$RC"; contains "L: prints the state" "$OUT" "result: switched"
+st_eq "L: exits 0" 0 "$RC"; contains "L: prints the state" "$OUT" "result: switched"
 OUT=$(FLEET_CONF_DIR="$WORK/empty" bash "$IS" --root "$CO" --status 2>&1); RC=$?
-eq "L: no state exits 1" 1 "$RC"; contains "L: says none" "$OUT" "no state yet"
+st_eq "L: no state exits 1" 1 "$RC"; contains "L: says none" "$OUT" "no state yet"
 
 # --- P. notify once per stuck episode (issue #1125) ---------------------------------------------------------
 NOTE="$WORK/notify.sh" NLOG="$WORK/notify.log"
@@ -589,86 +588,86 @@ C13=$(commit thirteen)
 git -C "$SEED" push -q origin master
 # the same refusal three ticks → ONE message
 stable "$C8"; echo edited >> "$CO/f"; nrun; nrun; nrun
-eq "P: refused" refused "$(st result)"
-eq "P: three ticks, one send" 1 "$(sends)"
+st_eq "P: refused" refused "$(st result)"
+st_eq "P: three ticks, one send" 1 "$(sends)"
 contains "P: names the login" "$(cat "$NLOG")" "**$me**'s fleet install ($CO)"
 contains "P: says the result + reason" "$(cat "$NLOG")" "**refused**: tracked local changes in $CO (f)"
 contains "P: says how to silence it" "$(cat "$NLOG")" "FLEET_INSTALL_SYNC=0"
-eq "P: key = login why stable" "$me refused/dirty $C8" "$(st notified)"
-t=$(st notified_at); case "$t" in ''|-|*[!0-9]*) fail "P: notified_at not an epoch: [$t]" ;; esac; CHECKS=$((CHECKS + 1))
+st_eq "P: key = login why stable" "$me refused/dirty $C8" "$(st notified)"
+t=$(st notified_at); case "$t" in ''|-|*[!0-9]*) st_fail "P: notified_at not an epoch: [$t]" ;; esac; CHECKS=$((CHECKS + 1))
 contains "P: the send log line" "$(grep ' notified ' "$CONF/logs/install-sync.log" | tail -1)" " notified $(short "$C7")..$(short "$C8") $me refused/dirty $C8 via notify.sh"
-eq "P: one send log line" 1 "$(nlog)"
+st_eq "P: one send log line" 1 "$(nlog)"
 # fetch-failed in between neither sends nor forgets
 git -C "$CO" remote set-url origin "$WORK/nowhere.git"; nrun
-eq "P: fetch-failed" fetch-failed "$(st result)"
-eq "P: fetch-failed keeps the key" "$me refused/dirty $C8" "$(st notified)"
+st_eq "P: fetch-failed" fetch-failed "$(st result)"
+st_eq "P: fetch-failed keeps the key" "$me refused/dirty $C8" "$(st notified)"
 git -C "$CO" remote set-url origin "$url"; nrun
-eq "P: still one send after fetch-failed" 1 "$(sends)"
+st_eq "P: still one send after fetch-failed" 1 "$(sends)"
 # following again clears it; the same reason on the NEXT stable is announced again
 git -C "$CO" checkout -q -- f; nrun
-eq "P: followed" switched "$(st result)"; eq "P: HEAD at C8" "$C8" "$(hd)"
-eq "P: key cleared" - "$(st notified)"; eq "P: notified_at cleared" - "$(st notified_at)"
-eq "P: recovery sends nothing" 1 "$(sends)"
+st_eq "P: followed" switched "$(st result)"; st_eq "P: HEAD at C8" "$C8" "$(hd)"
+st_eq "P: key cleared" - "$(st notified)"; st_eq "P: notified_at cleared" - "$(st notified_at)"
+st_eq "P: recovery sends nothing" 1 "$(sends)"
 stable "$C9"; echo edited >> "$CO/f"; nrun; nrun
-eq "P: stuck again → announced again" 2 "$(sends)"
-eq "P: the new episode's key" "$me refused/dirty $C9" "$(st notified)"
+st_eq "P: stuck again → announced again" 2 "$(sends)"
+st_eq "P: the new episode's key" "$me refused/dirty $C9" "$(st notified)"
 # another reason on the SAME stable is its own episode
 git -C "$CO" checkout -q -- f; git -C "$CO" fetch -q origin master; git -C "$CO" reset -q --hard "$C10"; nrun; nrun
-eq "P: refused (behind)" refused "$(st result)"
+st_eq "P: refused (behind)" refused "$(st result)"
 contains "P: says not a descendant" "$(st reason)" "is not a descendant of HEAD"
-eq "P: a different why sends once more" 3 "$(sends)"
-eq "P: key names the why" "$me refused/behind $C9" "$(st notified)"
+st_eq "P: a different why sends once more" 3 "$(sends)"
+st_eq "P: key names the why" "$me refused/behind $C9" "$(st notified)"
 # a short deferral is normal (clears); past the threshold it is stuck (once)
 git -C "$CO" reset -q --hard "$C8"; touch "$WORK/gate-closed"; nrun
-eq "P: deferred" deferred "$(st result)"
-eq "P: a short deferral sends nothing" 3 "$(sends)"; eq "P: a short deferral clears the key" - "$(st notified)"
+st_eq "P: deferred" deferred "$(st result)"
+st_eq "P: a short deferral sends nothing" 3 "$(sends)"; st_eq "P: a short deferral clears the key" - "$(st notified)"
 sleep 2
 OUT=$(FLEET_NOTIFY_CMD="$NOTE" FLEET_INSTALL_FOLLOW_STUCK_SECS=1 bash "$IS" --root "$CO" 2>&1)
 OUT=$(FLEET_NOTIFY_CMD="$NOTE" FLEET_INSTALL_FOLLOW_STUCK_SECS=1 bash "$IS" --root "$CO" 2>&1)
-eq "P: still deferred" deferred "$(st result)"
-eq "P: a long deferral sends once" 4 "$(sends)"
-eq "P: deferred key carries no why" "$me deferred $C9" "$(st notified)"
+st_eq "P: still deferred" deferred "$(st result)"
+st_eq "P: a long deferral sends once" 4 "$(sends)"
+st_eq "P: deferred key carries no why" "$me deferred $C9" "$(st notified)"
 contains "P: says how long" "$(tail -6 "$NLOG")" "Waited 0h so far (since "
 contains "P: says deferred + why" "$(tail -6 "$NLOG")" "**deferred**: disk gate closed"
 rm -f "$WORK/gate-closed"; nrun
-eq "P: gate open → followed" switched "$(st result)"; eq "P: HEAD at C9" "$C9" "$(hd)"; eq "P: key cleared after the deferral" - "$(st notified)"
+st_eq "P: gate open → followed" switched "$(st result)"; st_eq "P: HEAD at C9" "$C9" "$(hd)"; st_eq "P: key cleared after the deferral" - "$(st notified)"
 # rolled-back once; the skipped ticks after it are the same episode
 stable "$C11"; nrun
-eq "P: rolled-back" rolled-back "$(st result)"; eq "P: rollback sends once" 5 "$(sends)"
-eq "P: rollback key" "$me rolled-back $C11" "$(st notified)"
+st_eq "P: rolled-back" rolled-back "$(st result)"; st_eq "P: rollback sends once" 5 "$(sends)"
+st_eq "P: rollback key" "$me rolled-back $C11" "$(st notified)"
 contains "P: says rolled-back + why" "$(tail -6 "$NLOG")" "**rolled-back**: doctor FAIL after the switch: gh"
 nrun; nrun
-eq "P: skipped" skipped "$(st result)"; eq "P: skipped ticks are silent" 5 "$(sends)"
-eq "P: skipped keeps the rollback key" "$me rolled-back $C11" "$(st notified)"
+st_eq "P: skipped" skipped "$(st result)"; st_eq "P: skipped ticks are silent" 5 "$(sends)"
+st_eq "P: skipped keeps the rollback key" "$me rolled-back $C11" "$(st notified)"
 stable "$C12"; nrun
-eq "P: the fix is followed" switched "$(st result)"; eq "P: key cleared after the fix" - "$(st notified)"
+st_eq "P: the fix is followed" switched "$(st result)"; st_eq "P: key cleared after the fix" - "$(st notified)"
 # a send that fails is not recorded → the next tick retries
 stable "$C13"; echo edited >> "$CO/f"; touch "$WORK/notify-fail"; nrun
-eq "P: refused (send failed)" refused "$(st result)"
-eq "P: failed send not counted" 5 "$(sends)"; eq "P: failed send not recorded" - "$(st notified)"
+st_eq "P: refused (send failed)" refused "$(st result)"
+st_eq "P: failed send not counted" 5 "$(sends)"; st_eq "P: failed send not recorded" - "$(st notified)"
 contains "P: says the send failed" "$OUT" "failed: $NOTE exit 1 — retried next tick"
-eq "P: no send log line for a failure" 5 "$(nlog)"
+st_eq "P: no send log line for a failure" 5 "$(nlog)"
 rm "$WORK/notify-fail"; nrun
-eq "P: retried and sent" 6 "$(sends)"; eq "P: recorded on the retry" "$me refused/dirty $C13" "$(st notified)"
+st_eq "P: retried and sent" 6 "$(sends)"; st_eq "P: recorded on the retry" "$me refused/dirty $C13" "$(st notified)"
 # no channel → nothing to send: an announced episode stays announced (the channel
 # coming back must not repeat it), a new one is not recorded
 run
-eq "P: no FLEET_NOTIFY_CMD → nothing sent" 6 "$(sends)"
-eq "P: an announced episode is kept without a channel" "$me refused/dirty $C13" "$(st notified)"
+st_eq "P: no FLEET_NOTIFY_CMD → nothing sent" 6 "$(sends)"
+st_eq "P: an announced episode is kept without a channel" "$me refused/dirty $C13" "$(st notified)"
 OUT=$(FLEET_INSTALL_SYNC=0 bash "$IS" --root "$CO" 2>&1)
-eq "P: off clears the key" - "$(st notified)"
+st_eq "P: off clears the key" - "$(st notified)"
 run
-eq "P: no channel records nothing" - "$(st notified)"; eq "P: still nothing sent" 6 "$(sends)"
+st_eq "P: no channel records nothing" - "$(st notified)"; st_eq "P: still nothing sent" 6 "$(sends)"
 contains "P: says nobody to tell" "$OUT" "no FLEET_NOTIFY_CMD"
 # dry-run prints what a real tick would send, sends nothing, writes nothing
 before=$(st last_check); nrun --dry-run
 contains "P: dry-run says what it would send" "$OUT" "notify: would send ($me refused/dirty $C13)"
-eq "P: dry-run sends nothing" 6 "$(sends)"; eq "P: dry-run writes no state" "$before" "$(st last_check)"
+st_eq "P: dry-run sends nothing" 6 "$(sends)"; st_eq "P: dry-run writes no state" "$before" "$(st last_check)"
 # off clears an announced episode (the documented way to silence it)
-nrun; eq "P: armed again" "$me refused/dirty $C13" "$(st notified)"; eq "P: sent" 7 "$(sends)"
+nrun; st_eq "P: armed again" "$me refused/dirty $C13" "$(st notified)"; st_eq "P: sent" 7 "$(sends)"
 OUT=$(FLEET_NOTIFY_CMD="$NOTE" FLEET_INSTALL_SYNC=0 bash "$IS" --root "$CO" 2>&1)
-eq "P: off" off "$(st result)"; eq "P: off clears an announced key" - "$(st notified)"; eq "P: off sends nothing" 7 "$(sends)"
-eq "P: seven send log lines" 7 "$(nlog)"
+st_eq "P: off" off "$(st result)"; st_eq "P: off clears an announced key" - "$(st notified)"; st_eq "P: off sends nothing" 7 "$(sends)"
+st_eq "P: seven send log lines" 7 "$(nlog)"
 git -C "$CO" checkout -q -- f
 
 # --- Q. node agent follows (issue #1723) ---------------------------------------------------------
@@ -702,57 +701,57 @@ qrun() { OUT=$(FLEET_INSTALL_NODE_UPGRADE="$NU" FLEET_INSTALL_NODE_SUDO_CHECK=fa
 C20=$(commit twenty); C21=$(commit twentyone); C22=$(commit twentytwo); C23=$(commit twentythree)
 git -C "$SEED" push -q origin master
 stable "$C20"; n0=$(sends); qrun
-eq "Q: switched" switched "$(st result)"
-eq "Q: node upgraded" upgraded "$(st node)"
-eq "Q: one upgrade, own login, hub first, rollback armed" "nodeup $C20 --dist --rollback --logins $me" "$(grep '^nodeup .*--rollback' "$LOG" | tail -1)"
-eq "Q: reason = the done line" "done: 1/1 login(s) on prod-$(short "$C20")" "$(st node_reason)"
+st_eq "Q: switched" switched "$(st result)"
+st_eq "Q: node upgraded" upgraded "$(st node)"
+st_eq "Q: one upgrade, own login, hub first, rollback armed" "nodeup $C20 --dist --rollback --logins $me" "$(grep '^nodeup .*--rollback' "$LOG" | tail -1)"
+st_eq "Q: reason = the done line" "done: 1/1 login(s) on prod-$(short "$C20")" "$(st node_reason)"
 contains "Q: node log line after the tick's" "$(lastlog)" "node-upgraded "
 contains "Q: tick line still there" "$(tail -2 "$CONF/logs/install-sync.log" | head -1)" " switched "
 n=$(nodeups); qrun
-eq "Q: current" current "$(st result)"; eq "Q: node current" current "$(st node)"
-eq "Q: current agent → no upgrade call" "$n" "$(nodeups)"
+st_eq "Q: current" current "$(st result)"; st_eq "Q: node current" current "$(st node)"
+st_eq "Q: current agent → no upgrade call" "$n" "$(nodeups)"
 contains "Q: no node log line when nothing to do" "$(lastlog)" " current "
 # failure: alarm once, back off, never loop
 touch "$WORK/node-fail"; stable "$C21"; qrun
-eq "Q: fail result" node_upgrade_failed "$(st node)"
+st_eq "Q: fail result" node_upgrade_failed "$(st node)"
 contains "Q: fail reason" "$(st node_reason)" "no control channel on prod-$(short "$C21")"
-eq "Q: fail stable" "$C21" "$(st node_fail_stable)"
-eq "Q: one alert" $((n0 + 1)) "$(sends)"
+st_eq "Q: fail stable" "$C21" "$(st node_fail_stable)"
+st_eq "Q: one alert" $((n0 + 1)) "$(sends)"
 contains "Q: alert names it" "$(tail -4 "$NLOG")" "node agent upgrade failed — $me@"
-eq "Q: notified key" "$me node_upgrade_failed $C21" "$(st node_notified)"
-eq "Q: the install itself still followed" switched "$(st result)"
+st_eq "Q: notified key" "$me node_upgrade_failed $C21" "$(st node_notified)"
+st_eq "Q: the install itself still followed" switched "$(st result)"
 n=$(nodeups); qrun
-eq "Q: backoff" backoff "$(st node)"; eq "Q: backoff → no call" "$n" "$(nodeups)"
-eq "Q: backoff → no 2nd alert" $((n0 + 1)) "$(sends)"
+st_eq "Q: backoff" backoff "$(st node)"; st_eq "Q: backoff → no call" "$n" "$(nodeups)"
+st_eq "Q: backoff → no 2nd alert" $((n0 + 1)) "$(sends)"
 OUT=$(FLEET_NODE_FOLLOW_RETRY_SECS=0 FLEET_INSTALL_NODE_UPGRADE="$NU" FLEET_INSTALL_NODE_SUDO_CHECK=false FLEET_NOTIFY_CMD="$NOTE" bash "$IS" --root "$CO" 2>&1)
-eq "Q: retry after the window" $((n + 1)) "$(nodeups)"; eq "Q: still failing" node_upgrade_failed "$(st node)"
-eq "Q: same episode → no 2nd alert" $((n0 + 1)) "$(sends)"
+st_eq "Q: retry after the window" $((n + 1)) "$(nodeups)"; st_eq "Q: still failing" node_upgrade_failed "$(st node)"
+st_eq "Q: same episode → no 2nd alert" $((n0 + 1)) "$(sends)"
 rm -f "$WORK/node-fail"; stable "$C22"; qrun
-eq "Q: a stable move retries at once" upgraded "$(st node)"
-eq "Q: failure cleared" - "$(st node_fail_stable)"; eq "Q: key cleared" - "$(st node_notified)"
+st_eq "Q: a stable move retries at once" upgraded "$(st node)"
+st_eq "Q: failure cleared" - "$(st node_fail_stable)"; st_eq "Q: key cleared" - "$(st node_notified)"
 # a current tick waits for idle
 echo prod-0000000 > "$WORK/node-ver"; printf 'working\n' > "$WORK/tmux-states/f1"; n=$(nodeups); qrun
-eq "Q: busy → deferred" deferred "$(st node)"; eq "Q: busy → no call" "$n" "$(nodeups)"
+st_eq "Q: busy → deferred" deferred "$(st node)"; st_eq "Q: busy → no call" "$n" "$(nodeups)"
 contains "Q: deferred says why" "$(st node_reason)" "busy window(s) on f1:1"
 printf 'done\n' > "$WORK/tmux-states/f1"
 # LaunchDaemon logins: sudo decides
 printf '%s system\nzz system\n' "$me" > "$WORK/node-logins"; qrun
-eq "Q: no sudo → delegated" delegated "$(st node)"; eq "Q: delegated → no call" "$n" "$(nodeups)"
+st_eq "Q: no sudo → delegated" delegated "$(st node)"; st_eq "Q: delegated → no call" "$n" "$(nodeups)"
 OUT=$(FLEET_INSTALL_NODE_SUDO_CHECK=true FLEET_INSTALL_NODE_UPGRADE="$NU" bash "$IS" --root "$CO" 2>&1)
-eq "Q: sudo → own first, then the others" "nodeup $C22 --dist --rollback --logins $me zz" "$(grep '^nodeup .*--rollback' "$LOG" | tail -1)"
+st_eq "Q: sudo → own first, then the others" "nodeup $C22 --dist --rollback --logins $me zz" "$(grep '^nodeup .*--rollback' "$LOG" | tail -1)"
 printf '%s gui\n' "$me" > "$WORK/node-logins"
 # off / none / dry-run / degenerate
 echo prod-0000000 > "$WORK/node-ver"; n=$(nodeups)
 OUT=$(FLEET_NODE_FOLLOW=0 FLEET_INSTALL_NODE_UPGRADE="$NU" bash "$IS" --root "$CO" 2>&1)
-eq "Q: FLEET_NODE_FOLLOW=0 → off" off "$(st node)"; eq "Q: off → no call" "$n" "$(nodeups)"
+st_eq "Q: FLEET_NODE_FOLLOW=0 → off" off "$(st node)"; st_eq "Q: off → no call" "$n" "$(nodeups)"
 OUT=$(FLEET_INSTALL_SYNC_HOST=0 FLEET_INSTALL_NODE_UPGRADE="$NU" bash "$IS" --root "$CO" 2>&1)
-eq "Q: 承载 off (a client) → off" off "$(st node)"; eq "Q: client → no call" "$n" "$(nodeups)"
+st_eq "Q: 承载 off (a client) → off" off "$(st node)"; st_eq "Q: client → no call" "$n" "$(nodeups)"
 contains "Q: client says why" "$(st node_reason)" "承载 off"
 touch "$WORK/node-none"; qrun; rm -f "$WORK/node-none"
-eq "Q: no agent → none" none "$(st node)"
+st_eq "Q: no agent → none" none "$(st node)"
 before=$(st last_check); qrun --dry-run
 contains "Q: dry-run says it would" "$OUT" "node: would upgrade $me to prod-$(short "$C22")"
-eq "Q: dry-run → no upgrade" "$n" "$(nodeups)"; eq "Q: dry-run writes no state" "$before" "$(st last_check)"
+st_eq "Q: dry-run → no upgrade" "$n" "$(nodeups)"; st_eq "Q: dry-run writes no state" "$before" "$(st last_check)"
 stable "$C23"; ln=$(grep -c '' "$LOG"); run
 not_contains "Q: degenerate: no node call" "$(tail -n +$((ln + 1)) "$LOG")" "nodeup"
 contains "Q: degenerate: tick line last" "$(lastlog)" " switched "
@@ -774,43 +773,43 @@ git -C "$SEED" rm -q bin/broken.sh; R4=$(commit r-fixed)
 W1=$(commit w-one)
 git -C "$SEED" push -q origin master
 stable "$R1"; run
-eq "R: at the old version" switched "$(st result)"
+st_eq "R: at the old version" switched "$(st result)"
 GO="$WORK/go"; rm -f "$GO"
 bash "$CO/bin/slow.sh" "$GO" > "$WORK/slow.out" 2>&1 & SP=$!
 sleep 0.5
 stable "$R2"; run
-eq "R: switched while the script runs" switched "$(st result)"
+st_eq "R: switched while the script runs" switched "$(st result)"
 touch "$GO"; wait "$SP"; RC=$?
-eq "R: the running script exits clean" 0 "$RC"
-eq "R: …having read the OLD version to the end" old "$(cat "$WORK/slow.out")"
-eq "R: a fresh call reads the new version" new "$(bash "$CO/bin/slow.sh" "$GO" 2>&1)"
-[ -d "$V/$R1" ] || fail "R: the old version is gone right after the switch"; CHECKS=$((CHECKS + 1))
+st_eq "R: the running script exits clean" 0 "$RC"
+st_eq "R: …having read the OLD version to the end" old "$(cat "$WORK/slow.out")"
+st_eq "R: a fresh call reads the new version" new "$(bash "$CO/bin/slow.sh" "$GO" 2>&1)"
+[ -d "$V/$R1" ] || st_fail "R: the old version is gone right after the switch"; CHECKS=$((CHECKS + 1))
 
 # --- V. pre-switch check (issue #1894) ---------------------------------------------------------------
 stable "$R3"; : > "$LOG"; run
-eq "V: rejected before the switch" rolled-back "$(st result)"
+st_eq "V: rejected before the switch" rolled-back "$(st result)"
 contains "V: names the broken file" "$(st reason)" "bin/broken.sh does not parse"
 contains "V: says nothing switched" "$(st reason)" "nothing switched"
-eq "V: the link untouched" "$V/$R2" "$(readlink "$CO")"
-eq "V: HEAD untouched" "$R2" "$(hd)"
-eq "V: no apply" 0 "$(applies)"
-eq "V: skip = the rejected version" "$R3" "$(st skip)"
-run; eq "V: next tick skipped" skipped "$(st result)"
+st_eq "V: the link untouched" "$V/$R2" "$(readlink "$CO")"
+st_eq "V: HEAD untouched" "$R2" "$(hd)"
+st_eq "V: no apply" 0 "$(applies)"
+st_eq "V: skip = the rejected version" "$R3" "$(st skip)"
+run; st_eq "V: next tick skipped" skipped "$(st result)"
 stable "$R4"; run
-eq "V: the fix is followed" switched "$(st result)"; eq "V: HEAD at the fix" "$R4" "$(hd)"
+st_eq "V: the fix is followed" switched "$(st result)"; st_eq "V: HEAD at the fix" "$R4" "$(hd)"
 
 # --- W. prune (issue #1894) -----------------------------------------------------------------------------
 ndirs() { find "$V" -mindepth 1 -maxdepth 1 -type d ! -name '.*' | wc -l | tr -d ' '; }
-[ "$(ndirs)" -gt 3 ] || fail "W: the default keep (7 days) pruned versions already ($(ndirs) left)"; CHECKS=$((CHECKS + 1))
+[ "$(ndirs)" -gt 3 ] || st_fail "W: the default keep (7 days) pruned versions already ($(ndirs) left)"; CHECKS=$((CHECKS + 1))
 stable "$W1"; OUT=$(FLEET_INSTALL_VERSIONS_KEEP_SECS=0 bash "$IS" --root "$CO" 2>&1)
-eq "W: switched" switched "$(st result)"
-eq "W: left: the current, .prev and the repository" 3 "$(ndirs)"
-[ -d "$V/$W1" ] && [ -d "$V/$R4" ] && [ -d "$V/$C1/.git" ] || fail "W: wrong versions kept: $(ls "$V")"; CHECKS=$((CHECKS + 1))
-eq "W: .prev" "$R4" "$(cat "$V/.prev")"
-eq "W: the pruned branches are gone" 2 "$(git -C "$CO" branch --list 'fleet-live/*' | wc -l | tr -d ' ')"
-eq "W: no stale worktree records" 3 "$(git -C "$CO" worktree list | wc -l | tr -d ' ')"
+st_eq "W: switched" switched "$(st result)"
+st_eq "W: left: the current, .prev and the repository" 3 "$(ndirs)"
+[ -d "$V/$W1" ] && [ -d "$V/$R4" ] && [ -d "$V/$C1/.git" ] || st_fail "W: wrong versions kept: $(ls "$V")"; CHECKS=$((CHECKS + 1))
+st_eq "W: .prev" "$R4" "$(cat "$V/.prev")"
+st_eq "W: the pruned branches are gone" 2 "$(git -C "$CO" branch --list 'fleet-live/*' | wc -l | tr -d ' ')"
+st_eq "W: no stale worktree records" 3 "$(git -C "$CO" worktree list | wc -l | tr -d ' ')"
 contains "W: says what it pruned" "$OUT" "pruned version"
-eq "W: the shared logs survive" old "$(cat "$CO/logs/keep.log")"
+st_eq "W: the shared logs survive" old "$(cat "$CO/logs/keep.log")"
 
 # --- S. one ruler, and the switch's own window (issue #2655) ---------------------------------------
 # 2026-10-09: the new doctor's two new FAILs read what the OLD daemons wrote in
@@ -823,37 +822,37 @@ doctor_stub ''; S3=$(commit s-fixed); S4=$(commit s-four)
 git -C "$SEED" push -q origin master
 touch "$WORK/old-evidence"; : > "$LOG"; : > "$WORK/doctor-env.log"
 stable "$S1"; run
-eq "S: a new check failing on the old evidence is not a rollback" switched "$(st result)"
-eq "S: HEAD at stable" "$S1" "$(hd)"
+st_eq "S: a new check failing on the old evidence is not a rollback" switched "$(st result)"
+st_eq "S: HEAD at stable" "$S1" "$(hd)"
 contains "S: says the FAIL predates the switch" "$(st reason)" "doctor FAIL already present before: state"
-eq "S: the new doctor ran once as the baseline" 1 "$(grep -c '^doctor baseline$' "$LOG")"
-eq "S: the install's doctor before and after" 2 "$(doctors)"
-eq "S: the old doctor: no baseline flag, no window" "0 -" "$(sed -n 1p "$WORK/doctor-env.log")"
-eq "S: the baseline: flagged, no window" "1 -" "$(sed -n 2p "$WORK/doctor-env.log")"
+st_eq "S: the new doctor ran once as the baseline" 1 "$(grep -c '^doctor baseline$' "$LOG")"
+st_eq "S: the install's doctor before and after" 2 "$(doctors)"
+st_eq "S: the old doctor: no baseline flag, no window" "0 -" "$(sed -n 1p "$WORK/doctor-env.log")"
+st_eq "S: the baseline: flagged, no window" "1 -" "$(sed -n 2p "$WORK/doctor-env.log")"
 since=$(sed -n 3p "$WORK/doctor-env.log")
-case "$since" in "0 "[0-9]*) ;; *) fail "S: the doctor after the switch got no FLEET_DOCTOR_SINCE epoch: [$since]" ;; esac; CHECKS=$((CHECKS + 1))
+case "$since" in "0 "[0-9]*) ;; *) st_fail "S: the doctor after the switch got no FLEET_DOCTOR_SINCE epoch: [$since]" ;; esac; CHECKS=$((CHECKS + 1))
 # a real new FAIL (the version breaks once live) still rolls back — and only it is named
 : > "$LOG"; stable "$S2"; run
-eq "S: a FAIL only the live new version has → rolled back" rolled-back "$(st result)"
+st_eq "S: a FAIL only the live new version has → rolled back" rolled-back "$(st result)"
 contains "S: names only that FAIL" "$(st reason)" "doctor FAIL after the switch: gh —"
-eq "S: the link is back" "$S1" "$(hd)"
+st_eq "S: the link is back" "$S1" "$(hd)"
 contains "S: the reason names --retry" "$(st reason)" "fleet-install-sync.sh --retry"
-run; eq "S: then skipped" skipped "$(st result)"
+run; st_eq "S: then skipped" skipped "$(st result)"
 contains "S: skipped names --retry" "$(st reason)" "fleet-install-sync.sh --retry"
 : > "$LOG"; run --retry
 contains "S: --retry forgets the skip" "$OUT" "--retry: forgetting skip: $(short "$S2")"
-eq "S: --retry tries it again" rolled-back "$(st result)"
-eq "S: …the doctor ran again" 2 "$(doctors)"
+st_eq "S: --retry tries it again" rolled-back "$(st result)"
+st_eq "S: …the doctor ran again" 2 "$(doctors)"
 rm -f "$WORK/old-evidence"
 # settle: no sleep tick is awaited any more (T548) — a stale sleep.log is no wait
 mkdir -p "$CONF/logs"; touch -t 200001010000 "$CONF/logs/sleep.log"   # the login's records (#4668)
 stable "$S3"; t0=$(date +%s); OUT=$(bash "$IS" --root "$CO" 2>&1); t1=$(date +%s)
-eq "S: settle: switched" switched "$(st result)"
+st_eq "S: settle: switched" switched "$(st result)"
 not_contains "S: settle: no sleep tick is awaited" "$OUT" "no sleep tick within"
-[ $((t1 - t0)) -lt 60 ] || fail "S: settle waited for a sleep tick ($((t1 - t0))s)"; CHECKS=$((CHECKS + 1))
+[ $((t1 - t0)) -lt 60 ] || st_fail "S: settle waited for a sleep tick ($((t1 - t0))s)"; CHECKS=$((CHECKS + 1))
 rm -f "$CONF/logs/sleep.log"
 stable "$S4"; run
-eq "S: settle: switched again" switched "$(st result)"
+st_eq "S: settle: switched again" switched "$(st result)"
 # …and the real doctor's windowed row, cut out of bin/fleet-doctor.sh and run on a
 # sandbox: a cache older than the switch FAILs without FLEET_DOCTOR_SINCE, and
 # does not with it.
@@ -890,7 +889,7 @@ hubstable() { printf '%s\n' "$1" > "$UW/rel/stable"; }
 python3 "$BIN/fleet-release-hub-fixture.py" "$UW" 2>"$UW/srv.err" &
 UPID=$!
 for _ in $(seq 1 100); do [ -s "$UW/port" ] && break; sleep 0.05; done
-[ -s "$UW/port" ] || fail "U: the sandbox hub did not start: $(cat "$UW/srv.err")"
+[ -s "$UW/port" ] || st_fail "U: the sandbox hub did not start: $(cat "$UW/srv.err")"
 HUBU="http://127.0.0.1:$(cat "$UW/port")"
 trap 'kill "$UPID" 2>/dev/null; cleanup' EXIT
 trap 'kill "$UPID" 2>/dev/null; cleanup; exit 130' INT TERM HUP
@@ -903,70 +902,70 @@ up2() { git -C "$CO2" log -1 --format=%s; }
 : > "$LOG"
 rel "$C6" 5 "$C5"; hubstable "$C6"
 run2
-eq "U: tick exits 0" 0 "$RC"
-eq "U: switched from the hub" switched "$(st2 result)"
+st_eq "U: tick exits 0" 0 "$RC"
+st_eq "U: switched from the hub" switched "$(st2 result)"
 contains "U: the reason says from hub + its seq" "$(st2 reason)" "from hub (seq 5"
 contains "U: the log line says from hub" "$(tail -1 "$CONF2/logs/install-sync.log")" "switched $(short "$C5")..$(short "$C6") $(short "$C5") -> $(short "$C6") from hub"
-eq "U: the version dir is the upstream sha" "$V2/$C6" "$(readlink "$CO2")"
-eq "U: HEAD is the imported release" "fleet-release: $C6 seq=5" "$(up2)"
-eq "U: …kept by refs/fleet/rel/<sha>" "$(git -C "$CO2" rev-parse HEAD)" "$(git -C "$CO2" rev-parse "refs/fleet/rel/$C6")"
-eq "U: …on the commit the install was at" "$C5" "$(git -C "$CO2" rev-parse HEAD^)"
-eq "U: …the same tree as upstream" "$(git -C "$CO2" rev-parse "$C6^{tree}")" "$(git -C "$CO2" rev-parse 'HEAD^{tree}')"
-eq "U: state stable: is the upstream sha" "$C6" "$(st2 stable)"
-eq "U: no remote left" "" "$(git -C "$CO2" remote)"
+st_eq "U: the version dir is the upstream sha" "$V2/$C6" "$(readlink "$CO2")"
+st_eq "U: HEAD is the imported release" "fleet-release: $C6 seq=5" "$(up2)"
+st_eq "U: …kept by refs/fleet/rel/<sha>" "$(git -C "$CO2" rev-parse HEAD)" "$(git -C "$CO2" rev-parse "refs/fleet/rel/$C6")"
+st_eq "U: …on the commit the install was at" "$C5" "$(git -C "$CO2" rev-parse HEAD^)"
+st_eq "U: …the same tree as upstream" "$(git -C "$CO2" rev-parse "$C6^{tree}")" "$(git -C "$CO2" rev-parse 'HEAD^{tree}')"
+st_eq "U: state stable: is the upstream sha" "$C6" "$(st2 stable)"
+st_eq "U: no remote left" "" "$(git -C "$CO2" remote)"
 contains "U: the origin is kept for one version" "$(cat "$CONF2/global/install-origin.bak")" "origin $BARE"
 I1=$(git -C "$CO2" rev-parse HEAD)
-eq "U: apply only the two versions' difference" "apply --from $C5 --to $I1 --root $CO2" "$(grep '^apply ' "$LOG" | tail -1)"
-eq "U: …which is the upstream diff" "f" "$(git -C "$CO2" diff --name-only "$C5" "$I1")"
-eq "U: the key was pinned from the hub" "$(cat "$UW/key")" "$(cat "$CONF2/release.pub")"
+st_eq "U: apply only the two versions' difference" "apply --from $C5 --to $I1 --root $CO2" "$(grep '^apply ' "$LOG" | tail -1)"
+st_eq "U: …which is the upstream diff" "f" "$(git -C "$CO2" diff --name-only "$C5" "$I1")"
+st_eq "U: the key was pinned from the hub" "$(cat "$UW/key")" "$(cat "$CONF2/release.pub")"
 contains "U: checked with ssh-keygen against the pinned key, no ccquota" "$OUT" "verified (sshsig)"
 contains "U: …the release's tree was fetched" "$(cat "$UW/hub.log")" "/v1/fleet/release/$C6/tree.tar.gz"
 not_contains "U: no git fetch: no remote was asked" "$OUT" "could not read refs/tags"
 # current — no download
 n=$(grep -c 'tree.tar.gz' "$UW/hub.log"); run2
-eq "U: current" current "$(st2 result)"
+st_eq "U: current" current "$(st2 result)"
 contains "U: …from hub" "$(st2 reason)" "from hub"
-eq "U: …nothing downloaded" "$n" "$(grep -c 'tree.tar.gz' "$UW/hub.log")"
+st_eq "U: …nothing downloaded" "$n" "$(grep -c 'tree.tar.gz' "$UW/hub.log")"
 # a release that does not verify: fetch-failed, nothing switched, the pin kept
 PIN0=$(cat "$CONF2/release.pub")
 printf 'ed25519 AAAAsomeoneelse000000\n' > "$UW/key"
 rel "$C7" 6 "$C6"; hubstable "$C7"; touch "$UW/badsig"; run2
-eq "U: a bad signature is fetch-failed" fetch-failed "$(st2 result)"
+st_eq "U: a bad signature is fetch-failed" fetch-failed "$(st2 result)"
 contains "U: …says it did not verify" "$(st2 reason)" "did not arrive or did not verify"
-eq "U: …nothing switched" "$I1" "$(git -C "$CO2" rev-parse HEAD)"
-eq "U: …no half version left" "" "$(for p in "$V2"/.incoming*; do [ -e "$p" ] && printf '%s' "$p"; done)"
-eq "U: a new hub key is never taken by itself" "$PIN0" "$(cat "$CONF2/release.pub")"
+st_eq "U: …nothing switched" "$I1" "$(git -C "$CO2" rev-parse HEAD)"
+st_eq "U: …no half version left" "" "$(for p in "$V2"/.incoming*; do [ -e "$p" ] && printf '%s' "$p"; done)"
+st_eq "U: a new hub key is never taken by itself" "$PIN0" "$(cat "$CONF2/release.pub")"
 rm -f "$UW/badsig"; : > "$LOG"; run2
-eq "U: the next stable verified → switched" switched "$(st2 result)"
+st_eq "U: the next stable verified → switched" switched "$(st2 result)"
 I2=$(git -C "$CO2" rev-parse HEAD)
-eq "U: the second import sits on the first" "$I1" "$(git -C "$CO2" rev-parse HEAD^)"
-eq "U: apply from one import to the next" "apply --from $I1 --to $I2 --root $CO2" "$(grep '^apply ' "$LOG" | tail -1)"
-eq "U: …only their difference" "f" "$(git -C "$CO2" diff --name-only "$I1" "$I2")"
+st_eq "U: the second import sits on the first" "$I1" "$(git -C "$CO2" rev-parse HEAD^)"
+st_eq "U: apply from one import to the next" "apply --from $I1 --to $I2 --root $CO2" "$(grep '^apply ' "$LOG" | tail -1)"
+st_eq "U: …only their difference" "f" "$(git -C "$CO2" diff --name-only "$I1" "$I2")"
 # seq going back: refused, never moved
 rel "$C6" 4 "$C5"; hubstable "$C6"; run2
-eq "U: a seq not past this install's is refused" refused "$(st2 result)"
+st_eq "U: a seq not past this install's is refused" refused "$(st2 result)"
 contains "U: …says why" "$(st2 reason)" "seq 4, not past this install's seq 6"
-eq "U: …HEAD untouched" "$I2" "$(git -C "$CO2" rev-parse HEAD)"
+st_eq "U: …HEAD untouched" "$I2" "$(git -C "$CO2" rev-parse HEAD)"
 # a hand commit on top of a release: refused
 rel "$C3" 8 "$C7"; hubstable "$C3"
 git -C "$CO2" commit -q --allow-empty -m 'hand edit'; run2
-eq "U: a hand commit on a release is refused" refused "$(st2 result)"
+st_eq "U: a hand commit on a release is refused" refused "$(st2 result)"
 contains "U: …says local commits" "$(st2 reason)" "carries local commits"
 git -C "$CO2" reset -q --hard "$I2"
 # the hub out of reach: fetch-failed, 入口不可达
 run2 FLEET_HUB_URL=http://127.0.0.1:9
-eq "U: a hub that does not answer is fetch-failed" fetch-failed "$(st2 result)"
+st_eq "U: a hub that does not answer is fetch-failed" fetch-failed "$(st2 result)"
 contains "U: …入口不可达" "$(st2 reason)" "入口不可达"
 # a hub with no release store: today's git road, the origin put back
 stable "$C7"; touch "$UW/nostore"; run2
-eq "U: no store → the tag over git" "$C7" "$(st2 stable)"
-eq "U: …the origin is back" "$BARE" "$(git -C "$CO2" remote get-url origin)"
-eq "U: …and the git road reads the release's upstream sha" current "$(st2 result)"
+st_eq "U: no store → the tag over git" "$C7" "$(st2 stable)"
+st_eq "U: …the origin is back" "$BARE" "$(git -C "$CO2" remote get-url origin)"
+st_eq "U: …and the git road reads the release's upstream sha" current "$(st2 result)"
 rm -f "$UW/nostore"
 # FLEET_DIST_SOURCE=github: the git road too
 n=$(wc -l < "$UW/hub.log" | tr -d " "); run2 FLEET_DIST_SOURCE=github
-eq "U: FLEET_DIST_SOURCE=github never asks the hub" "$n" "$(wc -l < "$UW/hub.log" | tr -d ' ')"
-eq "U: …follows the tag, current on it" current "$(st2 result)"
+st_eq "U: FLEET_DIST_SOURCE=github never asks the hub" "$n" "$(wc -l < "$UW/hub.log" | tr -d ' ')"
+st_eq "U: …follows the tag, current on it" current "$(st2 result)"
 # --- X. one release line (issue #4671) ----------------------------------------------------------
 # stable = C7 and an old refs/tags/stable-macos = C6 still on the remote: a
 # darwin install follows stable to C7 like a linux one, its state carries no
@@ -986,29 +985,29 @@ xst() { sed -n "s/^$2: //p" "$WORK/conf-$1/global/install-sync.state" | head -1;
 xup() { git -C "$WORK/$1" rev-parse HEAD; }
 stable "$C7"; git --git-dir="$BARE" update-ref refs/tags/stable-macos "$C6"
 xinst xmac; xrun xmac darwin FLEET_DIST_SOURCE=github
-eq "X: a Mac switched" switched "$(xst xmac result)"
-eq "X: …to stable, not the old Mac lane" "$C7" "$(xup xmac)"
-grep -q '^channel:' "$WORK/conf-xmac/global/install-sync.state" && fail "X: a Mac state wrote a channel line"; CHECKS=$((CHECKS + 1))
+st_eq "X: a Mac switched" switched "$(xst xmac result)"
+st_eq "X: …to stable, not the old Mac lane" "$C7" "$(xup xmac)"
+grep -q '^channel:' "$WORK/conf-xmac/global/install-sync.state" && st_fail "X: a Mac state wrote a channel line"; CHECKS=$((CHECKS + 1))
 git --git-dir="$BARE" update-ref -d refs/tags/stable-macos
 # the hub road: a Mac asks what everyone asks
 printf '%s\n' "$PIN0" > "$UW/key"
 rel "$C6" 5 "$C5"; rel "$C7" 6 "$C6"; hubstable "$C7"
 xinst xhmac; xrun xhmac darwin FLEET_HUB_URL="$HUBU"
-eq "X: hub: a Mac switched" switched "$(xst xhmac result)"
+st_eq "X: hub: a Mac switched" switched "$(xst xhmac result)"
 contains "X: hub: …to stable's release" "$(git -C "$WORK/xhmac" log -1 --format=%s)" "fleet-release: $C7 seq=6"
-eq "X: hub: no ?platform= asked" 0 "$(grep -c 'stable?platform' "$UW/hub.log")"
-eq "X: hub: …no channel line" "" "$(xst xhmac channel)"
+st_eq "X: hub: no ?platform= asked" 0 "$(grep -c 'stable?platform' "$UW/hub.log")"
+st_eq "X: hub: …no channel line" "" "$(xst xhmac channel)"
 kill "$UPID" 2>/dev/null
 
 # --- K. registry lockstep ------------------------------------------------------------------------------------
 ROOT="$(cd "$BIN/.." && pwd)"
 iv=$(sed -n 's|.*<key>StartInterval</key><integer>\([0-9]*\)</integer>.*|\1|p' "$ROOT/launchd/com.claude-fleet.install-sync.plist.tmpl")
-eq "K: plist StartInterval 1800" 1800 "$iv"
-eq "K: systemd timer 1800" 1800 "$(sed -n 's/^OnUnitActiveSec=//p' "$ROOT/systemd/claude-fleet-install-sync.timer")"
-eq "K: daemon table 1800" 1800 "$( . "$BIN/fleet-daemon-lib.sh"; fleet_daemon_interval install-sync )"
+st_eq "K: plist StartInterval 1800" 1800 "$iv"
+st_eq "K: systemd timer 1800" 1800 "$(sed -n 's/^OnUnitActiveSec=//p' "$ROOT/systemd/claude-fleet-install-sync.timer")"
+st_eq "K: daemon table 1800" 1800 "$( . "$BIN/fleet-daemon-lib.sh"; fleet_daemon_interval install-sync )"
 grep -q '<key>ProcessType</key><string>Standard</string>' "$ROOT/launchd/com.claude-fleet.install-sync.plist.tmpl" \
-  || fail "K: install-sync must be ProcessType=Standard (it rewrites bin/, issue #588)"; CHECKS=$((CHECKS + 1))
-grep -q '^#FLEET_INSTALL_SYNC=1$' "$ROOT/conf/fleet.conf.reference" || fail "K: conf/fleet.conf.reference lacks #FLEET_INSTALL_SYNC=1"; CHECKS=$((CHECKS + 1))
-grep -q 'FLEET_INSTALL_SYNC' "$BIN/fleet-lib.sh" || fail "K: FLEET_INSTALL_SYNC not in _FLEET_GLOBAL_ONLY"; CHECKS=$((CHECKS + 1))
+  || st_fail "K: install-sync must be ProcessType=Standard (it rewrites bin/, issue #588)"; CHECKS=$((CHECKS + 1))
+grep -q '^#FLEET_INSTALL_SYNC=1$' "$ROOT/conf/fleet.conf.reference" || st_fail "K: conf/fleet.conf.reference lacks #FLEET_INSTALL_SYNC=1"; CHECKS=$((CHECKS + 1))
+grep -q 'FLEET_INSTALL_SYNC' "$BIN/fleet-lib.sh" || st_fail "K: FLEET_INSTALL_SYNC not in _FLEET_GLOBAL_ONLY"; CHECKS=$((CHECKS + 1))
 
 printf 'install-sync-selftest OK (%d checks)\n' "$CHECKS"

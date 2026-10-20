@@ -12,6 +12,7 @@
 # check-novalidate`; no hub URL is a usage error (exit 2).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-connect-selftest.XXXXXX") || exit 2
 HUB_PID=""
 cleanup() {
@@ -25,9 +26,7 @@ unset FLEET_HUB_URL FLEET_HUB_TOKEN FLEET_CERT
 # The fake hub never closes first; do not wait the default 10s for it.
 export FLEET_CONNECT_DRAIN_SECS=1
 
-fail=0
-ok()  { echo "ok   $*"; }
-bad() { echo "FAIL $*"; fail=1; }
+st_tally
 
 cat > "$WORK/hub.py" <<'EOF'
 import base64, hashlib, json, os, socket, struct, subprocess, sys, tempfile, threading, urllib.parse
@@ -122,21 +121,21 @@ HUB="http://127.0.0.1:$PORT"
 head -c 1048576 /dev/urandom > "$WORK/blob"
 FLEET_HUB_TOKEN=tok-1 "$BIN/fleet" connect --hub "$HUB" --proxy echo < "$WORK/blob" > "$WORK/echo" 2>"$WORK/err1"
 rc=$?
-if [ "$rc" = 0 ] && cmp -s "$WORK/blob" "$WORK/echo"; then ok "token: 1MB echoed byte for byte"
-else bad "token leg: rc=$rc, $(wc -c < "$WORK/echo") of 1048576 bytes back; $(cat "$WORK/err1")"; fi
+if [ "$rc" = 0 ] && cmp -s "$WORK/blob" "$WORK/echo"; then st_ok_all "token: 1MB echoed byte for byte"
+else st_miss "token leg: rc=$rc, $(wc -c < "$WORK/echo") of 1048576 bytes back; $(cat "$WORK/err1")"; fi
 
 # 2 — a hub refusal is printed with its code and exits 1.
 out=$(FLEET_HUB_TOKEN=tok-1 "$BIN/fleet" connect --hub "$HUB" --proxy refuse < /dev/null 2>&1); rc=$?
 case "$rc:$out" in
-  1:*NOT_FOUND*) ok "refusal: exit 1 with the hub's code" ;;
-  *) bad "refusal: rc=$rc out=$out" ;;
+  1:*NOT_FOUND*) st_ok_all "refusal: exit 1 with the hub's code" ;;
+  *) st_miss "refusal: rc=$rc out=$out" ;;
 esac
 
 # 3 — HTTP 401 before the upgrade.
 out=$(FLEET_HUB_TOKEN=tok-1 "$BIN/fleet" connect --hub "$HUB" --proxy deny401 < /dev/null 2>&1); rc=$?
 case "$rc:$out" in
-  1:*401*certificate*) ok "401: exit 1 with the hub's reason" ;;
-  *) bad "401: rc=$rc out=$out" ;;
+  1:*401*certificate*) st_ok_all "401: exit 1 with the hub's reason" ;;
+  *) st_miss "401: rc=$rc out=$out" ;;
 esac
 
 # 4 — certificate challenge answered with ssh-keygen -Y sign; the hub hands
@@ -148,8 +147,8 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   mkdir -p "$XDG_CONFIG_HOME/claude-fleet"
   printf '{"url": "%s"}\n' "$HUB" > "$XDG_CONFIG_HOME/claude-fleet/hub.json"
   printf 'abc' | "$BIN/fleet" connect --proxy echo > "$WORK/echo4" 2>"$WORK/err4"; rc=$?
-  if [ "$rc" = 0 ] && [ "$(cat "$WORK/echo4")" = abc ] && [ -s "$WORK/certok" ]; then ok "certificate: challenge signed and checked, stream up"
-  else bad "certificate leg: rc=$rc echo=$(cat "$WORK/echo4") $(cat "$WORK/err4")"; fi
+  if [ "$rc" = 0 ] && [ "$(cat "$WORK/echo4")" = abc ] && [ -s "$WORK/certok" ]; then st_ok_all "certificate: challenge signed and checked, stream up"
+  else st_miss "certificate leg: rc=$rc echo=$(cat "$WORK/echo4") $(cat "$WORK/err4")"; fi
   rm -f "$XDG_CONFIG_HOME/claude-fleet/hub.json"
 else
   echo "skip certificate leg: no ssh-keygen"
@@ -158,8 +157,8 @@ fi
 # 5 — no hub URL anywhere: usage error.
 out=$("$BIN/fleet" connect --proxy mac-a < /dev/null 2>&1); rc=$?
 case "$rc:$out" in
-  2:*"no hub URL"*) ok "no hub URL: exit 2" ;;
-  *) bad "no hub URL: rc=$rc out=$out" ;;
+  2:*"no hub URL"*) st_ok_all "no hub URL: exit 2" ;;
+  *) st_miss "no hub URL: rc=$rc out=$out" ;;
 esac
 
 # 6 — the dispatcher: `fleet connect <machine>` is connect's (no hub → the usage
@@ -167,15 +166,15 @@ esac
 # (#1628 — never connect's), so `fleet mac-a --print` is refused, naming connect.
 out=$("$BIN/fleet" connect nosuch 2>&1); rc=$?
 case "$rc:$out" in
-  2:*"no hub URL"*) ok "dispatcher: fleet connect <machine>; no hub → exit 2" ;;
-  *) bad "dispatcher: rc=$rc out=$out" ;;
+  2:*"no hub URL"*) st_ok_all "dispatcher: fleet connect <machine>; no hub → exit 2" ;;
+  *) st_miss "dispatcher: rc=$rc out=$out" ;;
 esac
 out=$("$BIN/fleet" nosuch extra 2>&1); rc=$?
 case "$rc:$out" in
-  2:*"fleet connect"*) ok "dispatcher: fleet <machine> <more> is not connect's (#1628) → exit 2, naming fleet connect" ;;
-  *) bad "dispatcher bare: rc=$rc out=$out" ;;
+  2:*"fleet connect"*) st_ok_all "dispatcher: fleet <machine> <more> is not connect's (#1628) → exit 2, naming fleet connect" ;;
+  *) st_miss "dispatcher bare: rc=$rc out=$out" ;;
 esac
-"$BIN/fleet" --help 2>&1 | grep -q 'fleet login renew' && ok "dispatcher: --help lists the commands" || bad "dispatcher --help"
+"$BIN/fleet" --help 2>&1 | grep -q 'fleet login renew' && st_ok_all "dispatcher: --help lists the commands" || st_miss "dispatcher --help"
 
 # 7 — no hub URL, the client's own question (#1712): --pick answers THIS
 # computer (reason local, named through FLEET_NODE_ALIASES), `--print` says the
@@ -183,15 +182,14 @@ esac
 me=$(python3 -c 'import socket; print(socket.gethostname().split(".", 1)[0])')
 out=$(FLEET_NODE_ALIASES="$me=here" "$BIN/fleet-connect.py" --pick 2>&1); rc=$?
 case "$rc:$out" in
-  0:*'"machine": "here"'*'"reason": "local"'*) ok "no hub: --pick → this computer, reason local" ;;
-  *) bad "no hub --pick: rc=$rc out=$out" ;;
+  0:*'"machine": "here"'*'"reason": "local"'*) st_ok_all "no hub: --pick → this computer, reason local" ;;
+  *) st_miss "no hub --pick: rc=$rc out=$out" ;;
 esac
 out=$(FLEET_NODE_ALIASES="$me=here" "$BIN/fleet-connect.py" --pick here 2>&1); rc=$?
-[ "$rc" = 0 ] && ok "no hub: --pick <this computer's alias> → 0" || bad "no hub --pick here: rc=$rc out=$out"
+[ "$rc" = 0 ] && st_ok_all "no hub: --pick <this computer's alias> → 0" || st_miss "no hub --pick here: rc=$rc out=$out"
 out=$("$BIN/fleet-connect.py" --pick mac-a 2>&1); rc=$?
-case "$rc:$out" in 1:*mac-a*) ok "no hub: --pick <another machine> → 1" ;; *) bad "no hub --pick mac-a: rc=$rc out=$out" ;; esac
+case "$rc:$out" in 1:*mac-a*) st_ok_all "no hub: --pick <another machine> → 1" ;; *) st_miss "no hub --pick mac-a: rc=$rc out=$out" ;; esac
 out=$(FLEET_NODE_ALIASES="$me=here" "$BIN/fleet" connect --print 2>&1); rc=$?
-[ "$rc:$out" = "0:local here" ] && ok "no hub: fleet connect --print → local here" || bad "no hub --print: rc=$rc out=$out"
+[ "$rc:$out" = "0:local here" ] && st_ok_all "no hub: fleet connect --print → local here" || st_miss "no hub --print: rc=$rc out=$out"
 
-[ "$fail" = 0 ] && echo "PASS fleet-connect-selftest" || echo "FAIL fleet-connect-selftest"
-exit "$fail"
+st_done

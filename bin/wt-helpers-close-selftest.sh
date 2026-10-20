@@ -14,7 +14,8 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-command -v tmux >/dev/null 2>&1 || { printf 'selftest: no tmux — SKIP\n' >&2; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need tmux
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/wthelp.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -25,7 +26,7 @@ unset TMUX TMUX_PANE
 T() { tmux -L "$SESS" "$@"; }
 cleanup() { tmux -L "$SESS" kill-server >/dev/null 2>&1; rm -rf "$WORK"; }
 trap cleanup EXIT
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; T list-windows -F '#{window_id} #{window_name}' >&2; exit 1; }
+fail() { T list-windows -F '#{window_id} #{window_name}' >&2; st_fail "$1"; }
 
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"

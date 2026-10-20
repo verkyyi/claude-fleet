@@ -50,6 +50,7 @@ export FLEET_LOGIN_BROWSER=0
 # never this computer's own managed-machine state (#2904): G2 makes its own
 export FLEET_NODE_STATE="${TMPDIR:-/tmp}/fleet-install-join-st.no-node-state.$$"
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-install-join-st.XXXXXX") || exit 2
 HUB_PID=""
 cleanup() {
@@ -58,9 +59,7 @@ cleanup() {
   rm -rf "${WORK:?}"
 }
 trap cleanup EXIT INT TERM HUP
-fail=0
-ok()  { echo "ok   $*"; }
-bad() { echo "FAIL $*"; fail=1; }
+st_tally
 for c in python3 curl ssh ssh-keygen; do command -v "$c" >/dev/null || { echo "skip: no $c"; exit 0; }; done
 
 # $BIN may be a shadow of symlinks (run-selftests.sh, #660): the manifest sits
@@ -227,26 +226,26 @@ install_in h1
 CONF="$H1/.config/claude-fleet"
 ROOT="$H1/.claude/fleet"   # the one fleet directory (#1804)
 ENVF="$CONF/node.env"
-[ "$(cat "$WORK/rc")" = 0 ] && ok "A install exit 0" || bad "A install rc=$(cat "$WORK/rc"): $(cat "$WORK/out")"
+[ "$(cat "$WORK/rc")" = 0 ] && st_ok_all "A install exit 0" || st_miss "A install rc=$(cat "$WORK/rc"): $(cat "$WORK/out")"
 # a fresh computer is the newcomer's path (issue #2347): 登录即登记 is not said
 if [ "$(hubstate starts)" = 0 ] && [ ! -e "$ENVF" ] && ! grep -Eq '^(入口|登记):' "$WORK/out"; then
-  ok "A the install scans nothing — the login will register it, unsaid on the newcomer's screen"
-else bad "A install: starts=$(hubstate starts): $(cat "$WORK/out")"; fi
+  st_ok_all "A the install scans nothing — the login will register it, unsaid on the newcomer's screen"
+else st_miss "A install: starts=$(hubstate starts): $(cat "$WORK/out")"; fi
 fleet_in h1 login
-[ "$(cat "$WORK/rc")" = 0 ] && ok "A fleet login exit 0" || bad "A fleet login rc=$(cat "$WORK/rc"): $(cat "$WORK/out")"
+[ "$(cat "$WORK/rc")" = 0 ] && st_ok_all "A fleet login exit 0" || st_miss "A fleet login rc=$(cat "$WORK/rc"): $(cat "$WORK/out")"
 [ "$(hubstate starts)" = 1 ] && python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(0 if not s["codes"]["dc1"].get("purpose") else 1)' "$WORK/state.json" \
-  && ok "A one scan, a plain login" || bad "A scans: $(cat "$WORK/state.json")"
+  && st_ok_all "A one scan, a plain login" || st_miss "A scans: $(cat "$WORK/state.json")"
 python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(0 if len(s["lnode"]) == 1 and s["lnode"][0]["hostname"] and s["lnode"][0]["os_user"] else 1)' "$WORK/state.json" \
-  && ok "A the node pass by the device key (signed, one ask)" || bad "A login-node asks: $(cat "$WORK/state.json")"
+  && st_ok_all "A the node pass by the device key (signed, one ask)" || st_miss "A login-node asks: $(cat "$WORK/state.json")"
 mode=$(python3 -c 'import os,sys;print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$ENVF" 2>/dev/null)
 if [ "$mode" = 600 ] && grep -qx 'CCQUOTA_TOKEN=ccq_nodepass0123456789abcdefXYZ' "$ENVF" && grep -qx "CCQUOTA_HUB_URL=$HUB" "$ENVF" \
    && grep -qx 'CCQUOTA_FLEET_COMPUTE=0' "$ENVF" && grep -qx 'CCQUOTA_FLEET_PERSONAL=1' "$ENVF" && ! grep -q 'CCQUOTA_FLEET_ADMIN' "$ENVF"; then
-  ok "A node.env (0600): the pass, COMPUTE=0, PERSONAL=1, no admin"
-else bad "A node.env mode=$mode: $(sed 's/TOKEN=.*/TOKEN=…/' "$ENVF" 2>/dev/null)"; fi
-[ "$(hubstate online)" = True ] && ok "A the agent checked in" || bad "A the agent never checked in: $(cat "$CONF/node-join.log" 2>/dev/null)"
+  st_ok_all "A node.env (0600): the pass, COMPUTE=0, PERSONAL=1, no admin"
+else st_miss "A node.env mode=$mode: $(sed 's/TOKEN=.*/TOKEN=…/' "$ENVF" 2>/dev/null)"; fi
+[ "$(hubstate online)" = True ] && st_ok_all "A the agent checked in" || st_miss "A the agent never checked in: $(cat "$CONF/node-join.log" 2>/dev/null)"
 # the newcomer's view (solo, issue #2347): registered, but no 只协调 on the screen
-grep -q '只协调' "$WORK/out" && bad "A 只协调 on the newcomer's screen: $(cat "$WORK/out")" || ok "A the output says no 只协调 to the newcomer"
-grep -q 'ccq_nodepass' "$WORK/out" "$CONF/node-join.log" && bad "A the token was printed" || ok "A the token is never printed"
+grep -q '只协调' "$WORK/out" && st_miss "A 只协调 on the newcomer's screen: $(cat "$WORK/out")" || st_ok_all "A the output says no 只协调 to the newcomer"
+grep -q 'ccq_nodepass' "$WORK/out" "$CONF/node-join.log" && st_miss "A the token was printed" || st_ok_all "A the token is never printed"
 
 # ── B. ssh ──────────────────────────────────────────────────────────────────
 # A computer with only the client reaches the machines on its own 12-hour
@@ -256,53 +255,53 @@ grep -q 'ccq_nodepass' "$WORK/out" "$CONF/node-join.log" && bad "A the token was
 SNIP="$H1/.ssh/fleet-ssh-config"
 if [ ! -e "$ROOT/bin/fleet-peer-cert.sh" ] && ! grep -q 'fleet-peer-cert' "$SNIP" \
    && grep -q '^Host mac-a fleet-mac-a' "$SNIP" && grep -q 'renew --quiet --on-use ssh' "$SNIP"; then
-  ok "B the snippet: the hub's Host blocks + renew on use, no peer Match (no fleet-peer-cert.sh on a client, #4826)"
-else bad "B snippet: $(cat "$SNIP" 2>/dev/null)"; fi
-[ "$(cat "$CONF/peer/machines" 2>/dev/null)" = "$(printf 'mac-d mac-a\nspare9 s9\n%s self7' "$ME")" ] && ok "B peer/machines lists the hub's machines" \
-  || bad "B peer/machines: $(cat "$CONF/peer/machines" 2>/dev/null)"
-[ "$(grep -c '^Include ~/.ssh/fleet-ssh-config$' "$H1/.ssh/config")" = 1 ] && ok "B ~/.ssh/config Includes the snippet once" \
-  || bad "B config: $(cat "$H1/.ssh/config")"
+  st_ok_all "B the snippet: the hub's Host blocks + renew on use, no peer Match (no fleet-peer-cert.sh on a client, #4826)"
+else st_miss "B snippet: $(cat "$SNIP" 2>/dev/null)"; fi
+[ "$(cat "$CONF/peer/machines" 2>/dev/null)" = "$(printf 'mac-d mac-a\nspare9 s9\n%s self7' "$ME")" ] && st_ok_all "B peer/machines lists the hub's machines" \
+  || st_miss "B peer/machines: $(cat "$CONF/peer/machines" 2>/dev/null)"
+[ "$(grep -c '^Include ~/.ssh/fleet-ssh-config$' "$H1/.ssh/config")" = 1 ] && st_ok_all "B ~/.ssh/config Includes the snippet once" \
+  || st_miss "B config: $(cat "$H1/.ssh/config")"
 [ "$(sed '/^# >>> fleet login/,/^# <<< fleet login/d' "$H1/.ssh/config" | grep -v '^$')" = "$(grep -v '^$' "$WORK/config.orig")" ] \
   && [ -z "$(ls "$H1/.ssh/"config.fleet-bak-* 2>/dev/null)" ] && ! grep -q '接管' "$WORK/out" \
-  && ok "B the rest of ~/.ssh/config untouched — the hand-written block left as it is, nothing said" \
-  || bad "B config: $(cat "$H1/.ssh/config") out=$(cat "$WORK/out")"
+  && st_ok_all "B the rest of ~/.ssh/config untouched — the hand-written block left as it is, nothing said" \
+  || st_miss "B config: $(cat "$H1/.ssh/config") out=$(cat "$WORK/out")"
 
 # ── C. one cert ─────────────────────────────────────────────────────────────
 # fleet-peer-cert.sh as a hosting computer runs it (this repo's), on this login
 PC="$BIN/fleet-peer-cert.sh"
 certs=""
 for n in mac-a mac-a-lan mac-d; do
-  o=$(HOME="$H1" FLEET_CONF_DIR="$CONF" bash "$PC" "$n" view 2>"$WORK/err") || { bad "C $n: exit $?: $(cat "$WORK/err")"; continue; }
+  o=$(HOME="$H1" FLEET_CONF_DIR="$CONF" bash "$PC" "$n" view 2>"$WORK/err") || { st_miss "C $n: exit $?: $(cat "$WORK/err")"; continue; }
   certs="$certs $(printf '%s\n' "$o" | sed -n 's/^CertificateFile=//p')"
 done
 peer=$(hubstate peer)
 set -- $certs
 if [ "$#" = 3 ] && [ "$1" = "$CONF/peer/mac-d.view-cert.pub" ] && [ "$1" = "$2" ] && [ "$2" = "$3" ] && [ "$peer" = "['mac-d']" ]; then
-  ok "C mac-a / mac-a-lan / mac-d: one ask, for mac-d — the same certificate"
-else bad "C certs=$certs hub asked for $peer"; fi
+  st_ok_all "C mac-a / mac-a-lan / mac-d: one ask, for mac-d — the same certificate"
+else st_miss "C certs=$certs hub asked for $peer"; fi
 
 # ── D. again ────────────────────────────────────────────────────────────────
 kill "$(cat "$H1/.ccquota/agent.pid")" 2>/dev/null
 cp "$ENVF" "$WORK/env.before"
 install_in h1
 if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate starts)" = 1 ] && grep -q "入口: 这台已登记在 $HUB" "$WORK/out" && cmp -s "$ENVF" "$WORK/env.before"; then
-  ok "D a second install leaves the node alone (no scan, node.env unchanged)"
-else bad "D rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
+  st_ok_all "D a second install leaves the node alone (no scan, node.env unchanged)"
+else st_miss "D rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
 
 # ── F. no terminal ──────────────────────────────────────────────────────────
 # output to a file and no FORCE: nobody could scan, so no join — one line instead
 FORCE='' install_in h3
 if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate starts)" = 1 ] && [ ! -e "$WORK/h3/.config/claude-fleet/node.env" ] \
    && ! grep -Eq '^(入口|登记):' "$WORK/out"; then
-  ok "F no terminal: no scan, no wait, nothing said on the newcomer's path"
-else bad "F rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
+  st_ok_all "F no terminal: no scan, no wait, nothing said on the newcomer's path"
+else st_miss "F rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
 
 # ── E. no node ──────────────────────────────────────────────────────────────
 install_in h2 --no-node
 if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate starts)" = 1 ] && [ ! -e "$WORK/h2/.config/claude-fleet/node.env" ] \
    && ! grep -q '入口:' "$WORK/out"; then
-  ok "E --no-node: no scan, no node.env"
-else bad "E rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
+  st_ok_all "E --no-node: no scan, no node.env"
+else st_miss "E rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
 
 # ── G. an old login with no node.env ────────────────────────────────────────
 kill "$(cat "$H1/.ccquota/agent.pid")" 2>/dev/null
@@ -311,23 +310,23 @@ fleet_in h1 node ensure
 if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate starts)" = 1 ] && grep -qx 'CCQUOTA_TOKEN=ccq_nodepass0123456789abcdefXYZ' "$ENVF" \
    && python3 -c 'import json,sys; sys.exit(0 if len(json.load(open(sys.argv[1]))["lnode"]) == 2 else 1)' "$WORK/state.json" \
    && [ ! -s "$WORK/out" ]; then
-  ok "G logged in, no node.env: fleet node ensure takes the pass again — no scan, no output"
-else bad "G rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
+  st_ok_all "G logged in, no node.env: fleet node ensure takes the pass again — no scan, no output"
+else st_miss "G rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
 # a token already there is never replaced from here
 fleet_in h1 node ensure
 python3 -c 'import json,sys; sys.exit(0 if len(json.load(open(sys.argv[1]))["lnode"]) == 2 else 1)' "$WORK/state.json" \
-  && ok "G a node.env with a token: ensure asks nothing" || bad "G ensure asked again: $(cat "$WORK/state.json")"
+  && st_ok_all "G a node.env with a token: ensure asks nothing" || st_miss "G ensure asked again: $(cat "$WORK/state.json")"
 # a node from before 登录即登记 (no node-login.ok): ensure shows the hub its token
 # once — the hub ties that node to the device and records whose login it is
 rm -f "$CONF/node-login.ok"; cp "$ENVF" "$WORK/env.g"
 fleet_in h1 node ensure
 if python3 -c 'import json,sys; l=json.load(open(sys.argv[1]))["lnode"]; sys.exit(0 if len(l) == 3 and l[2]["bearer"] else 1)' "$WORK/state.json" \
    && cmp -s "$ENVF" "$WORK/env.g" && [ "$(cat "$CONF/node-login.ok")" = "$HUB" ]; then
-  ok "G an existing node: one ask with its token (link + 认人), node.env unchanged, marked"
-else bad "G link: $(cat "$WORK/state.json")"; fi
+  st_ok_all "G an existing node: one ask with its token (link + 认人), node.env unchanged, marked"
+else st_miss "G link: $(cat "$WORK/state.json")"; fi
 fleet_in h1 node ensure
 python3 -c 'import json,sys; sys.exit(0 if len(json.load(open(sys.argv[1]))["lnode"]) == 3 else 1)' "$WORK/state.json" \
-  && ok "G linked once: no second ask" || bad "G asked again after the link"
+  && st_ok_all "G linked once: no second ask" || st_miss "G asked again after the link"
 # a pass that does not bind the login (#2249): no node-login.ok, the reason in
 # node-join.log + node-login.why — and the next ensure asks again; a refused
 # pass the same; a good one marks and clears the reason
@@ -337,36 +336,35 @@ fleet_in h1 node ensure
 if [ "$(cat "$WORK/rc")" = 0 ] && [ ! -e "$CONF/node-login.ok" ] && grep -q 'someone else' "$CONF/node-login.why" \
    && grep -q 'node pass: 登录未认人：login alice on box already belongs to someone else' "$CONF/node-join.log" \
    && [ "$(lnodes)" = 4 ] && [ ! -s "$WORK/out" ]; then
-  ok "G an unbound login: no mark, the reason in node-join.log + node-login.why, silent"
-else bad "G unbound: rc=$(cat "$WORK/rc") lnode=$(lnodes) why=$(cat "$CONF/node-login.why" 2>&1): $(cat "$WORK/out")"; fi
+  st_ok_all "G an unbound login: no mark, the reason in node-join.log + node-login.why, silent"
+else st_miss "G unbound: rc=$(cat "$WORK/rc") lnode=$(lnodes) why=$(cat "$CONF/node-login.why" 2>&1): $(cat "$WORK/out")"; fi
 echo 500 > "$WORK/lnode.mode"
 fleet_in h1 node ensure
 if [ ! -e "$CONF/node-login.ok" ] && [ "$(lnodes)" = 5 ] && grep -q 'store is down' "$CONF/node-login.why" \
    && grep -q 'node pass: .*store is down' "$CONF/node-join.log"; then
-  ok "G a refused pass: asked again, no mark, the hub's reason kept"
-else bad "G refused: lnode=$(lnodes) why=$(cat "$CONF/node-login.why" 2>&1)"; fi
+  st_ok_all "G a refused pass: asked again, no mark, the hub's reason kept"
+else st_miss "G refused: lnode=$(lnodes) why=$(cat "$CONF/node-login.why" 2>&1)"; fi
 rm -f "$WORK/lnode.mode"
 fleet_in h1 node ensure
 [ "$(cat "$CONF/node-login.ok" 2>/dev/null)" = "$HUB" ] && [ ! -e "$CONF/node-login.why" ] && [ "$(lnodes)" = 6 ] \
-  && ok "G bound at last: marked, the reason cleared" || bad "G bound: lnode=$(lnodes) ok=$(cat "$CONF/node-login.ok" 2>&1)"
+  && st_ok_all "G bound at last: marked, the reason cleared" || st_miss "G bound: lnode=$(lnodes) ok=$(cat "$CONF/node-login.ok" 2>&1)"
 
 # ── G2. a managed machine ───────────────────────────────────────────────────
 mkdir -p "$WORK/node-state" && : > "$WORK/node-state/machine.env"
 rm -f "$CONF/node-login.ok"; echo 'stale 409' > "$CONF/node-login.why"
 FLEET_NODE_STATE="$WORK/node-state" fleet_in h1 node ensure
 [ "$(cat "$WORK/rc")" = 0 ] && [ "$(lnodes)" = 6 ] && [ ! -e "$CONF/node-login.why" ] && [ ! -s "$WORK/out" ] \
-  && ok "G2 a managed machine: ensure asks the hub nothing, exit 0, the stale reason gone" \
-  || bad "G2 managed: rc=$(cat "$WORK/rc") lnode=$(lnodes) why=$(cat "$CONF/node-login.why" 2>&1): $(cat "$WORK/out")"
+  && st_ok_all "G2 a managed machine: ensure asks the hub nothing, exit 0, the stale reason gone" \
+  || st_miss "G2 managed: rc=$(cat "$WORK/rc") lnode=$(lnodes) why=$(cat "$CONF/node-login.why" 2>&1): $(cat "$WORK/out")"
 
 # ── H. logout ───────────────────────────────────────────────────────────────
 fleet_in h1 logout
 if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate left)" = 1 ] && [ ! -e "$ENVF" ] && [ ! -e "$H1/.ssh/fleet-cert-cert.pub" ] \
    && [ ! -e "$H1/.ssh/fleet-cert" ]; then
-  ok "H fleet logout: the node left, node.env + certificate + device key gone"
-else bad "H rc=$(cat "$WORK/rc") left=$(hubstate left): $(cat "$WORK/out")"; fi
+  st_ok_all "H fleet logout: the node left, node.env + certificate + device key gone"
+else st_miss "H rc=$(cat "$WORK/rc") left=$(hubstate left): $(cat "$WORK/out")"; fi
 # without a login, ensure does nothing (exit 3) and asks nothing
 fleet_in h1 node ensure
-[ "$(cat "$WORK/rc")" = 3 ] && [ ! -e "$ENVF" ] && ok "H signed out: ensure does nothing (3)" || bad "H ensure rc=$(cat "$WORK/rc")"
+[ "$(cat "$WORK/rc")" = 3 ] && [ ! -e "$ENVF" ] && st_ok_all "H signed out: ensure does nothing (3)" || st_miss "H ensure rc=$(cat "$WORK/rc")"
 
-[ "$fail" = 0 ] && echo "PASS fleet-install-join-selftest" || echo "FAIL fleet-install-join-selftest"
-exit "$fail"
+st_done

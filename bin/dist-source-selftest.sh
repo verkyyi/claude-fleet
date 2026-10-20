@@ -27,6 +27,7 @@ set -uo pipefail
 DIST_RE='api\.github\.com|raw\.githubusercontent\.com|codeload\.github\.com|objects\.githubusercontent\.com|https://github\.com\}|github\.com[:/][^ "'"'"')]*\.git([^A-Za-z0-9_]|$)|go install github\.com'
 
 SELF="$(cd "$(dirname "$0")" && pwd)"
+. "$SELF/selftest-lib.sh"
 DIR="${1:-$SELF}"
 
 # reaches <file> — `<line>:<text>` for every reach not marked dist-ok (on the
@@ -38,8 +39,8 @@ reaches() {
     { prev = $0 }' "$1" 2>/dev/null
 }
 
-FAILS=0 N=0
-finding() { FAILS=$((FAILS + 1)); printf 'FAIL  %s\n' "$1"; }
+FAIL=0 N=0
+finding() { st_miss "$1"; }
 for f in "$DIR"/*; do
   [ -f "$f" ] || continue
   b=${f##*/}
@@ -62,8 +63,8 @@ if [ -z "${1:-}" ]; then
   bash "$0" "$SB/ok" >/dev/null 2>&1 || finding "the lint flagged a dist-ok line or an issue link: $(bash "$0" "$SB/ok" 2>&1 | head -2)"
   rm -rf "$SB"
 fi
-if [ "$FAILS" -gt 0 ]; then
-  printf 'dist-source-selftest: %d finding(s) in %d file(s)\n' "$FAILS" "$N" >&2
+if [ "$FAIL" -gt 0 ]; then
+  printf 'dist-source-selftest: %d finding(s) in %d file(s)\n' "$FAIL" "$N" >&2
   exit 1
 fi
 printf 'dist-source-selftest: OK (%d files)\n' "$N"

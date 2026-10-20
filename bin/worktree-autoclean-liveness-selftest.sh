@@ -28,7 +28,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 SRC="$BIN/worktree-autoclean.sh"
 LIB="$BIN/fleet-lib.sh"
 for f in "$SRC" "$LIB"; do [ -f "$f" ] || { echo "selftest: $f missing" >&2; exit 2; }; done
-command -v git >/dev/null 2>&1 || { echo "selftest: git absent — SKIP" >&2; exit 0; }
+st_need git
 
 st_sandbox "${TMPDIR:-/tmp}/wac-liveness.XXXXXX"
 # Normalize to the physical path (macOS /var → /private/var, and collapse any `//`
@@ -36,7 +36,6 @@ st_sandbox "${TMPDIR:-/tmp}/wac-liveness.XXXXXX"
 WORK="$(cd "$WORK" && pwd -P)"
 
 pass=0
-fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/logs"
 ln -s "$SRC" "$WORK/bin/worktree-autoclean.sh"
@@ -145,41 +144,41 @@ run_wac() {   # run worktree-autoclean.sh with the fakes; args forwarded (--dry-
 out="$(run_wac --dry-run)"
 # core repro: a live worker whose cwd is a subdir is KEPT via @issue identity
 printf '%s\n' "$out" | grep -Eq 'KEEP +issue-100 .*live worker window @issue=100' \
-  || fail "issue-100: a live worker (@issue=100, cwd in subdir) must KEEP via identity" "$out"
+  || st_fail "issue-100: a live worker (@issue=100, cwd in subdir) must KEEP via identity" "$out"
 printf '%s\n' "$out" | grep -Eq 'PRUNE +issue-100 ' \
-  && fail "issue-100: a live worker must NEVER be reaped (the #353 false-reap)" "$out"
+  && st_fail "issue-100: a live worker must NEVER be reaped (the #353 false-reap)" "$out"
 # a truly-gone worker (no live @issue) is still reaped
 printf '%s\n' "$out" | grep -Eq 'PRUNE +issue-200 ' \
-  || fail "issue-200: no live @issue=200 anywhere → must still PRUNE" "$out"
+  || st_fail "issue-200: no live @issue=200 anywhere → must still PRUNE" "$out"
 # prefix cwd fallback: a pane cd'd into a SUBDIR of a non-issue worktree KEEPs it
 printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-9 .*live tmux session' \
-  || fail "scratch-9: a live pane in a subdir must KEEP via the prefix cwd fallback" "$out"
+  || st_fail "scratch-9: a live pane in a subdir must KEEP via the prefix cwd fallback" "$out"
 printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-9 ' \
-  && fail "scratch-9: a live-in-subdir worktree must not be reaped" "$out"
+  && st_fail "scratch-9: a live-in-subdir worktree must not be reaped" "$out"
 # no pane anywhere in scratch-8 → reaped
 printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-8 ' \
-  || fail "scratch-8: no live pane inside it → must PRUNE" "$out"
+  || st_fail "scratch-8: no live pane inside it → must PRUNE" "$out"
 # scratch-7 has NO pane, but a fleet tmux server is cwd'd in a subdir → KEEP (#509)
 printf '%s\n' "$out" | grep -Eq "KEEP +scratch-7 .*tmux server is cwd" \
-  || fail "scratch-7: a tmux server cwd'd inside must KEEP (issue #509)" "$out"
+  || st_fail "scratch-7: a tmux server cwd'd inside must KEEP (issue #509)" "$out"
 printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-7 ' \
-  && fail "scratch-7: a worktree a server sits in must never be reaped (#509)" "$out"
+  && st_fail "scratch-7: a worktree a server sits in must never be reaped (#509)" "$out"
 # dry run mutates nothing
-[ -d "$WORK/base-issue-100" ] || fail "dry run must not remove issue-100"
+[ -d "$WORK/base-issue-100" ] || st_fail "dry run must not remove issue-100"
 st_pass "DRY: live worker kept by @issue identity (cwd-independent); prefix cwd fallback; server-cwd kept (#509); gone workers reaped"
 
 # ============================ REAL RUN: reap only the dead ================
 run_wac >/dev/null
-[ -d "$WORK/base-retained-lock" ] || fail "Git-locked worktree must remain untouched"
-[ -d "$WORK/base-retained-native" ] || fail "native-owned unlocked worktree must remain untouched"
-[ -d "$WORK/base-issue-100" ] || fail "real run must KEEP live worker issue-100 (false-reap regression)"
-[ -d "$WORK/base-scratch-9" ] || fail "real run must KEEP live-in-subdir scratch-9"
-[ -d "$WORK/base-scratch-7" ] || fail "real run must KEEP scratch-7 (a server is cwd'd inside, #509)"
-[ -d "$WORK/base-issue-200" ] && fail "real run should reap gone worker issue-200"
-[ -d "$WORK/base-scratch-8" ] && fail "real run should reap gone scratch-8"
-git -C "$BASE" show-ref --verify -q refs/heads/issue-100 || fail "issue-100 branch must survive"
-git -C "$BASE" show-ref --verify -q refs/heads/scratch-7 || fail "scratch-7 branch must survive (#509)"
-git -C "$BASE" show-ref --verify -q refs/heads/issue-200 && fail "issue-200 branch should be deleted"
+[ -d "$WORK/base-retained-lock" ] || st_fail "Git-locked worktree must remain untouched"
+[ -d "$WORK/base-retained-native" ] || st_fail "native-owned unlocked worktree must remain untouched"
+[ -d "$WORK/base-issue-100" ] || st_fail "real run must KEEP live worker issue-100 (false-reap regression)"
+[ -d "$WORK/base-scratch-9" ] || st_fail "real run must KEEP live-in-subdir scratch-9"
+[ -d "$WORK/base-scratch-7" ] || st_fail "real run must KEEP scratch-7 (a server is cwd'd inside, #509)"
+[ -d "$WORK/base-issue-200" ] && st_fail "real run should reap gone worker issue-200"
+[ -d "$WORK/base-scratch-8" ] && st_fail "real run should reap gone scratch-8"
+git -C "$BASE" show-ref --verify -q refs/heads/issue-100 || st_fail "issue-100 branch must survive"
+git -C "$BASE" show-ref --verify -q refs/heads/scratch-7 || st_fail "scratch-7 branch must survive (#509)"
+git -C "$BASE" show-ref --verify -q refs/heads/issue-200 && st_fail "issue-200 branch should be deleted"
 st_pass "REAL: workers with no live @issue / no live pane / no server-cwd are reaped; busy + server-anchored survive"
 
 printf '\nselftest OK: %s assertions passed (janitor liveness guard, #353)\n' "$pass"

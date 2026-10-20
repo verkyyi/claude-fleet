@@ -27,14 +27,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SPAWN="$BIN/dash-issue-session.sh"
 [ -x "$SPAWN" ] || { echo "selftest: $SPAWN missing/not executable" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/async-spawn-selftest.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/async-spawn-selftest.XXXXXX"
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2
          [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2
          printf -- '--- gh log ---\n%s\n--- tmux log ---\n%s\n--- git log ---\n%s\n--- run-shell log ---\n%s\n--- display ---\n%s\n' \
@@ -150,7 +149,7 @@ display_has ',bold]'                    || fail "CAP refusal toast must be STICK
 grep -qi 'at capacity' "$WORK/spawn.err" || fail "CAP the refusal reason must reach STDERR — a headless caller never sees the toast (issue #683)" "$(cat "$WORK/spawn.err")"
 [ "$(rc)" = 2 ]                         || fail "CAP a cap refusal exits 2 — the 'retry later' class, distinct from claimed (3) / infra (1) (issue #683)" "rc=$(rc)"
 rm -f "$WORK/conf/testsess.conf"
-ok "CAP --async + cap reached → immediate refuse, no run-shell / worktree / window, sticky red toast"
+st_pass "CAP --async + cap reached → immediate refuse, no run-shell / worktree / window, sticky red toast"
 
 # ===== DISPATCH: --async ⇒ fast return, nothing written to GitHub, tail backgrounded ==
 CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 run_spawn 303 --async
@@ -165,7 +164,7 @@ runshell_has '--title'                  || fail "DISPATCH must pass --title so t
 runshell_has '>/dev/null 2>&1'          || fail "DISPATCH's tail must redirect its output — run-shell DISPLAYS tail stdout as an Esc-to-dismiss view (issue #401)"
 git_has 'worktree add'                  && fail "DISPATCH must NOT run the worktree add in the FOREGROUND (that is the frozen tail)"
 tmux_has 'new-window'                   && fail "DISPATCH must NOT run new-window in the FOREGROUND"
-ok "DISPATCH --async → fast rc0, no claim, run-shell -b re-invokes the tail (FLEET_SPAWN_TAIL + --title), no foreground checkout"
+st_pass "DISPATCH --async → fast rc0, no claim, run-shell -b re-invokes the tail (FLEET_SPAWN_TAIL + --title), no foreground checkout"
 
 # A failed run-shell submission must not acknowledge a spawn that never started.
 TMUX_DISPATCH_FAIL=1 TMUX_TOAST_FAIL=1 run_spawn 303 --async
@@ -174,7 +173,7 @@ err_has 'dash-issue-session: spawn failed for #303: dispatch' || fail "DISPATCHF
 git_has 'worktree add'                  && fail "DISPATCHFAIL must not create a worktree"
 tmux_has 'new-window'                   && fail "DISPATCHFAIL must not spawn a window"
 [ -s "$WORK/spawn.out" ]               && fail "DISPATCHFAIL must leave stdout empty"
-ok "DISPATCHFAIL reports rc1 + stderr even with no working tmux toast (#683)"
+st_pass "DISPATCHFAIL reports rc1 + stderr even with no working tmux toast (#683)"
 
 # ===== TAIL: the tail-only re-entry materializes the worktree + named window ========
 # FLEET_SPAWN_TAIL both selects tail-only mode and names the fleet; --title flows to
@@ -188,7 +187,7 @@ tmux_has '@issue 303'                   || fail "TAIL must bind the window to th
 gh_has '--add-assignee'                 && fail "TAIL must write no GitHub claim"
 runshell_has 'run-shell'                && fail "TAIL must NOT re-dispatch (no nested run-shell)"
 [ -s "$DISPLAY_LOG" ]                   && fail "TAIL a spawn that works draws NO line — its window is the answer (issue #1618)" "$(cat "$DISPLAY_LOG")"
-ok "TAIL re-entry → worktree add + new-window named from --title + @issue bound, no claim / re-dispatch / gate ack"
+st_pass "TAIL re-entry → worktree add + new-window named from --title + @issue bound, no claim / re-dispatch / gate ack"
 
 # ===== TAILFAIL: a backgrounded worktree-add failure reports the failure ============
 FLEET_SPAWN_TAIL=testsess GIT_WT_FAIL=1 run_spawn 303 --title 'Boom'
@@ -197,7 +196,7 @@ err_has 'dash-issue-session: spawn failed for #303: worktree add' || fail "TAILF
 display_has 'spawn failed for #303: worktree add' || fail "TAILFAIL must report 'spawn failed for #303: worktree add'"
 display_has ',bold]'                    || fail "TAILFAIL failure toast must be STICKY (palette red + bold) (issue #331)"
 tmux_has 'new-window'                   && fail "TAILFAIL must NOT spawn a window after the worktree add failed"
-ok "TAILFAIL backgrounded worktree-add failure → 'spawn failed for #303: worktree add', no window"
+st_pass "TAILFAIL backgrounded worktree-add failure → 'spawn failed for #303: worktree add', no window"
 
 # The synchronous headless path exposes the same failures without a tmux client.
 GIT_WT_FAIL=1 run_spawn 303 testsess
@@ -210,7 +209,7 @@ TMUX_WINDOW_FAIL=1 TMUX_TOAST_FAIL=1 run_spawn 303 testsess
 err_has 'dash-issue-session: spawn failed for #303: new-window' || fail "WINDOWFAIL must reach stderr without a toast" "$(cat "$WORK/spawn.err")"
 tmux_has 'set-window-option'            && fail "WINDOWFAIL must not bind a nonexistent window"
 [ -s "$WORK/spawn.out" ]               && fail "WINDOWFAIL must leave stdout empty"
-ok "headless worktree/window failures report rc1 + stderr and stop spawning (#683)"
+st_pass "headless worktree/window failures report rc1 + stderr and stop spawning (#683)"
 
 # ===== SYNC: NO --async ⇒ today's synchronous behavior is unchanged =================
 CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 run_spawn 303
@@ -219,7 +218,7 @@ git_has 'worktree add'                  || fail "SYNC must run the worktree add 
 tmux_has 'new-window'                   || fail "SYNC must spawn the window inline"
 tmux_has '@issue 303'                   || fail "SYNC must bind @issue inline"
 runshell_has 'run-shell'                && fail "SYNC must NOT dispatch run-shell (no --async)"
-ok "SYNC no --async → worktree add + new-window inline (unchanged), no run-shell"
+st_pass "SYNC no --async → worktree add + new-window inline (unchanged), no run-shell"
 
 # ===== ORIGIN: spawn provenance (issue #503) lands canonicalized on the sync path ===
 # A worker/scratch Claude that read this script's header and passed its worktree
@@ -241,7 +240,7 @@ fx_repo "$WORK/conf" othersess acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_B
 CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 TMUX=fake TMUX_PANE=%5 ORIGIN_PROBE="|$WORK/main-scratch-5|$WORK/main-scratch-5" run_spawn 303 othersess
 tmux_has '@origin testsess'             || fail "ORIGIN a cross-fleet issue spawn must stamp the SOURCE fleet (testsess), not scratch-5" "$(cat "$TMUX_LOG")"
 grep -qE '@origin (acme-widgets:)?scratch-5( ;|$)' "$TMUX_LOG" && fail "ORIGIN a cross-fleet issue spawn must NOT stamp the source fleet's scratch key"
-ok "ORIGIN --origin canonicalized to its key; unstamped scratch caller detected by cwd; cross-fleet issue spawn → source fleet"
+st_pass "ORIGIN --origin canonicalized to its key; unstamped scratch caller detected by cwd; cross-fleet issue spawn → source fleet"
 
 printf '\nselftest OK: %s assertions passed (non-blocking backlog spawn, issue #303)\n' "$pass"
 exit 0

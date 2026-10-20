@@ -40,6 +40,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 [ -f "$BIN/fleet-login-smoke.sh" ] || { printf 'selftest: %s/fleet-login-smoke.sh not found\n' "$BIN" >&2; exit 2; }
 BASH_BIN=/bin/bash; [ -x "$BASH_BIN" ] || BASH_BIN=bash
 
@@ -229,7 +230,7 @@ chmod +x "$WORK/shim/"* "$WORK/bin/"*.sh
 
 # --- harness -----------------------------------------------------------------------
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -z "${OUT:-}" ] || printf '%s\n' "--- output ---" "$OUT" >&2; exit 1; }
+fail() { [ -z "${OUT:-}" ] || printf '%s\n' "--- output ---" "$OUT" >&2; st_fail "$1"; }
 eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
 has() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — missing [$3]" ;; esac; }
 not_has() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 — unexpectedly has [$3]" ;; esac; }

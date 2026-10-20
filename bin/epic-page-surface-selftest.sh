@@ -24,7 +24,7 @@ CHECKS=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/eps.XXXXXX") || st_fail "mktemp"
 trap 'rm -rf "$TMP"' EXIT
 
-command -v python3 >/dev/null 2>&1 || { echo "epic-page-surface-selftest SKIP (no python3)"; exit 0; }
+st_need python3
 
 page() {  # <file> <为谁> <metric-row> <card-summary> <signoff-row> <extra-surface-line>
   cat >"$1" <<EOF

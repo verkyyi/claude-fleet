@@ -51,10 +51,9 @@
 #      steps on to another machine's session
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
-fail() { echo "FAIL: $*" >&2; exit 1; }
-pass() { echo "ok   $*"; }
-command -v tmux >/dev/null 2>&1 || { echo "SKIP: no tmux"; exit 0; }
+st_need tmux
 W=$(mktemp -d "${TMPDIR:-/tmp}/fview.XXXXXX") || exit 1
 IN="$W/in.sock"; OUT="$W/out.sock"; STOCK="$W/stock.sock"
 cleanup() {
@@ -76,7 +75,7 @@ ti() { tmux -S "$IN" "$@"; }
 to() { tmux -S "$OUT" "$@"; }
 
 # --- A: the tables ---------------------------------------------------------------
-tmux -S "$STOCK" -f /dev/null new-session -d -s k -x 100 -y 30 'sleep 600' || fail "A: stock tmux"
+tmux -S "$STOCK" -f /dev/null new-session -d -s k -x 100 -y 30 'sleep 600' || st_fail "A: stock tmux"
 tmux -S "$STOCK" list-keys > "$W/stock.keys"
 norm() { awk '{ $1 = $1; print }'; }
 # The rows the 看台 lists (tmux-dashboard-rows.sh --rows's shape, 19 fields),
@@ -90,43 +89,43 @@ export FLEET_VIEW_ROWS_CMD="sh '$W/rows.sh'" FLEET_VIEW_ROWS_FILE="$W/rows.txt"
 # the 已回收 list's read (issue #3286): an empty ledger unless a leg says otherwise
 : > "$W/gone.txt"
 export FLEET_VIEW_LANDED_CMD="cat '$W/gone.txt'"
-ti -f /dev/null new-session -d -s fl -x 120 -y 30 -n orch "sh -c 'echo ORCH; exec cat > \"$W/pane0.in\"'" || fail "A: inner tmux"
-ti source-file "$ROOT/conf/tmux-view.conf" 2>"$W/src.err" || fail "A: tmux-view.conf did not source: $(cat "$W/src.err")"
+ti -f /dev/null new-session -d -s fl -x 120 -y 30 -n orch "sh -c 'echo ORCH; exec cat > \"$W/pane0.in\"'" || st_fail "A: inner tmux"
+ti source-file "$ROOT/conf/tmux-view.conf" 2>"$W/src.err" || st_fail "A: tmux-view.conf did not source: $(cat "$W/src.err")"
 for c in 920 921 922 923 924 925 926 927 928 929 930 931 932; do
-  ti show-options -s user-keys | grep -Fq "user-keys[$c] \\033[$c~" || fail "A: user-keys[$c] not set"
+  ti show-options -s user-keys | grep -Fq "user-keys[$c] \\033[$c~" || st_fail "A: user-keys[$c] not set"
 done
 ti list-keys -T root | norm > "$W/root.now"; grep -- ' -T root ' "$W/stock.keys" | norm > "$W/root.stock"
-diff -q "$W/root.now" "$W/root.stock" >/dev/null || fail "A: root differs from tmux's: $(diff "$W/root.stock" "$W/root.now" | head -5)"
+diff -q "$W/root.now" "$W/root.stock" >/dev/null || st_fail "A: root differs from tmux's: $(diff "$W/root.stock" "$W/root.now" | head -5)"
 ti list-keys -T prefix | norm > "$W/pfx.now"; grep -- ' -T prefix ' "$W/stock.keys" | norm > "$W/pfx.stock"
-diff -q "$W/pfx.now" "$W/pfx.stock" >/dev/null || fail "A: prefix differs from tmux's"
+diff -q "$W/pfx.now" "$W/pfx.stock" >/dev/null || st_fail "A: prefix differs from tmux's"
 ti list-keys -T fleet-view | norm > "$W/fv.1"
 copy=$(grep -v -E ' User9[0-9][0-9] | C-\] | C-\\\\ | C-Space | F12 ' "$W/fv.1" | sed 's/ -T fleet-view / -T root /')
-[ "$copy" = "$(grep -v -E ' C-Space | F12 ' "$W/root.now")" ] || fail "A: fleet-view's copy is not root: $(diff <(printf '%s\n' "$copy") "$W/root.now" | head -5)"
+[ "$copy" = "$(grep -v -E ' C-Space | F12 ' "$W/root.now")" ] || st_fail "A: fleet-view's copy is not root: $(diff <(printf '%s\n' "$copy") "$W/root.now" | head -5)"
 table=$(bash "$BIN/dash-keymap.sh" --panel switch list)
 vtable=$(bash "$BIN/dash-keymap.sh" --panel switch view)
-[ "$(awk '{ print $2 }' <<< "$vtable" | sort | uniq -d)" = '' ] || fail "A: two 看台 actions share a ⌃] letter: $vtable"
+[ "$(awk '{ print $2 }' <<< "$vtable" | sort | uniq -d)" = '' ] || st_fail "A: two 看台 actions share a ⌃] letter: $vtable"
 for a in $(awk '{ print $1 }' <<< "$vtable"); do
-  awk -v a="$a" '$1 == a { f = 1 } END { exit !f }' <<< "$table" || fail "A: ⌃] letter for $a, which the switch table lacks"
+  awk -v a="$a" '$1 == a { f = 1 } END { exit !f }' <<< "$table" || st_fail "A: ⌃] letter for $a, which the switch table lacks"
 done
 for p in 'quickopen p' 'next n' 'prev b' 'new c' 'dispatch t' 'quit q'; do
-  grep -qx "$p" <<< "$vtable" || fail "A: the phone's ⌃] $p is not in the 看台's letters: $vtable"
+  grep -qx "$p" <<< "$vtable" || st_fail "A: the phone's ⌃] $p is not in the 看台's letters: $vtable"
 done
 for a in next prev back fwd quickopen new quit dispatch; do
   code=$(awk -v a="$a" '$1 == a { print $4 }' <<< "$table"); letter=$(awk -v a="$a" '$1 == a { print $2 }' <<< "$vtable")
-  grep -q " -T fleet-view User$code " "$W/fv.1" || fail "A: $a (User$code) is not bound in fleet-view"
-  ti list-keys -T fleet-view-pfx | norm | grep -q -- "-T fleet-view-pfx \\\\\?$letter " || fail "A: ⌃] $letter ($a) is not bound in fleet-view-pfx"
+  grep -q " -T fleet-view User$code " "$W/fv.1" || st_fail "A: $a (User$code) is not bound in fleet-view"
+  ti list-keys -T fleet-view-pfx | norm | grep -q -- "-T fleet-view-pfx \\\\\?$letter " || st_fail "A: ⌃] $letter ($a) is not bound in fleet-view-pfx"
 done
 for a in zoom fold; do
   code=$(awk -v a="$a" '$1 == a { print $4 }' <<< "$table")
-  grep -q " -T fleet-view User$code " "$W/fv.1" && fail "A: $a (User$code) is bound — a 看台 has none"
+  grep -q " -T fleet-view User$code " "$W/fv.1" && st_fail "A: $a (User$code) is bound — a 看台 has none"
 done
-grep -q ' -T fleet-view C-\] switch-client -T fleet-view-pfx' "$W/fv.1" || fail "A: ⌃] does not enter fleet-view-pfx"
+grep -q ' -T fleet-view C-\] switch-client -T fleet-view-pfx' "$W/fv.1" || st_fail "A: ⌃] does not enter fleet-view-pfx"
 grep -E ' User9[0-9][0-9] | C-\] | C-\\\\ ' "$W/fv.1" | grep -Eq 'kill-|respawn-|rename-session' \
-  && fail "A: a 看台 key deletes, respawns or renames something"
-ti source-file "$ROOT/conf/tmux-view.conf" || fail "A: second source"
+  && st_fail "A: a 看台 key deletes, respawns or renames something"
+ti source-file "$ROOT/conf/tmux-view.conf" || st_fail "A: second source"
 ti list-keys -T fleet-view | norm > "$W/fv.2"
-diff -q "$W/fv.1" "$W/fv.2" >/dev/null || fail "A: sourcing twice changed fleet-view"
-pass "A  tables: root/prefix as tmux ships them, fleet-view = root + the 看台's keys, ⌃] prefix, idempotent"
+diff -q "$W/fv.1" "$W/fv.2" >/dev/null || st_fail "A: sourcing twice changed fleet-view"
+st_ok_all "A  tables: root/prefix as tmux ships them, fleet-view = root + the 看台's keys, ⌃] prefix, idempotent"
 
 # --- the fleet, the 看台, the client ---------------------------------------------------
 W1=$(ti new-window -d -P -F '#{window_id}' -t fl -n alpha "sh -c 'echo ALPHA; exec cat > \"$W/pane1.in\"'")
@@ -147,92 +146,92 @@ row() { local IFS="$US"; printf '%s\n' "$*"; }
 } > "$W/rows.txt"
 pl=$(printf '{"i":[{"r":"o/r#21","k":"epsilon","w":"answer:o/r#21","a":%d}]}' "$(( $(date +%s) - 7200 ))" | base64 | tr '+/' '-_' | tr -d '=\n')
 printf '%s\n' "x${US}nodeA${US}online${US}looping${US}${US}${US}0${US}park=1${US}parkl=$pl" > "$W/g/orch_fl"
-ti new-session -d -t fl -s 'fl@view-v1' || fail "B: no 看台 session"
+ti new-session -d -t fl -s 'fl@view-v1' || st_fail "B: no 看台 session"
 ti set-option -t 'fl@view-v1' key-table fleet-view
 ti select-window -t "=fl@view-v1:$W1"
 printf '%s\tfl\tthin\t%s\t%s\tcur=%s/f1\troute=lan\tdevice=\ttoken=t\tfuid=%s\tnode=nodeA\n' \
   /dev/null "$(date +%s)" "$$" "$UU" "$UU" > "$W/conf/remote-views/v1"
-to -f /dev/null new-session -d -s o -x 120 -y 32 -n view "TMUX= tmux -S '$IN' attach -t 'fl@view-v1'" || fail "B: outer tmux"
+to -f /dev/null new-session -d -s o -x 120 -y 32 -n view "TMUX= tmux -S '$IN' attach -t 'fl@view-v1'" || st_fail "B: outer tmux"
 to new-window -d -t o -n direct "TMUX= tmux -S '$IN' attach -t fl"
 sleep 1
-[ "$(ti list-clients | wc -l | tr -d ' ')" = 2 ] || fail "B: the two clients did not attach: $(ti list-clients)"
+[ "$(ti list-clients | wc -l | tr -d ' ')" = 2 ] || st_fail "B: the two clients did not attach: $(ti list-clients)"
 
 # --- B: ⌘P ---------------------------------------------------------------------------
 to send-keys -t o:direct -H 1b 5b 39 32 37 7e
 sleep 1
 to capture-pane -p -t o:direct > "$W/direct.txt"
-grep -q '在干活' "$W/direct.txt" && fail "B: ⌘P opened a list in a session attached directly"
-[ -s "$W/pane0.in" ] && fail "B: ⌘P's bytes reached the pane in a session attached directly: $(od -c "$W/pane0.in" | head -2)"
+grep -q '在干活' "$W/direct.txt" && st_fail "B: ⌘P opened a list in a session attached directly"
+[ -s "$W/pane0.in" ] && st_fail "B: ⌘P's bytes reached the pane in a session attached directly: $(od -c "$W/pane0.in" | head -2)"
 to send-keys -t o:view -H 1b 5b 39 32 37 7e
 ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.5; to capture-pane -p -t o:view > "$W/popup.txt"; grep -q '等你 1' "$W/popup.txt" && { ok=1; break; }
 done
-[ -n "$ok" ] || fail "B: ⌘P in the 看台 opened no list: $(cat "$W/popup.txt")"
+[ -n "$ok" ] || st_fail "B: ⌘P in the 看台 opened no list: $(cat "$W/popup.txt")"
 for want in '─ 等你 1' '─ 在干活 3' '要不要继续合并？' 'Alpha 的完整标题很长很长' '已结束 · 还开着 1 个'; do
-  grep -qF "$want" "$W/popup.txt" || fail "B: the list lacks 「${want}」: $(cat "$W/popup.txt")"
+  grep -qF "$want" "$W/popup.txt" || st_fail "B: the list lacks 「${want}」: $(cat "$W/popup.txt")"
 done
 # no session is special (issue #3119): no orchestrator 「新任务」 row, no 停放 / 待你动手
 # section — the panel's own ⚡ row (issue #3327) sits once, under the sessions
 # issue #3179: no (machine, login) grouping, a state is a glyph (the word only on the lit row)
-grep -A1 '│› ' "$W/popup.txt" | tail -1 | grep -q '─ 等你 1' || fail "B: the first line is not 等你: $(head -4 "$W/popup.txt")"
-[ "$(grep -c '⚡ 新' "$W/popup.txt")" = 1 ] && grep -q '⚡ 新会话（空白）' "$W/popup.txt" || fail "B: the ⚡ row not once: $(grep -n '⚡' "$W/popup.txt")"
-grep -q '新任务[：…]' "$W/popup.txt" && fail "B: 「新任务」 on an empty panel: $(grep -n '新任务' "$W/popup.txt")"
+grep -A1 '│› ' "$W/popup.txt" | tail -1 | grep -q '─ 等你 1' || st_fail "B: the first line is not 等你: $(head -4 "$W/popup.txt")"
+[ "$(grep -c '⚡ 新' "$W/popup.txt")" = 1 ] && grep -q '⚡ 新会话（空白）' "$W/popup.txt" || st_fail "B: the ⚡ row not once: $(grep -n '⚡' "$W/popup.txt")"
+grep -q '新任务[：…]' "$W/popup.txt" && st_fail "B: 「新任务」 on an empty panel: $(grep -n '新任务' "$W/popup.txt")"
 for bad in 'merged' 'done:2h' '⇢' '编排' '停放' '待你动手' '（这台）' '─ mac-a' '─ nodeA' '在问你'; do
-  grep -qF -- "$bad" "$W/popup.txt" && fail "B: the list still says 「${bad}」: $(grep -F -- "$bad" "$W/popup.txt")"
+  grep -qF -- "$bad" "$W/popup.txt" && st_fail "B: the list still says 「${bad}」: $(grep -F -- "$bad" "$W/popup.txt")"
 done
 ask=$(grep -n '─ 等你' "$W/popup.txt" | head -1 | cut -d: -f1); work=$(grep -n '─ 在干活' "$W/popup.txt" | head -1 | cut -d: -f1)
-[ "$ask" -lt "$work" ] || fail "B: 等你 is not the first group"
+[ "$ask" -lt "$work" ] || st_fail "B: 等你 is not the first group"
 # plan B (T493): glyph · ID · Agent · short name · repo
-grep -qE '! +Claude +Beta 要你拍板' "$W/popup.txt" || fail "B: the asking row does not lead with its ! glyph: $(grep -F Beta "$W/popup.txt")"
+grep -qE '! +Claude +Beta 要你拍板' "$W/popup.txt" || st_fail "B: the asking row does not lead with its ! glyph: $(grep -F Beta "$W/popup.txt")"
 # Highlight changes background only; text and glyph columns stay fixed (#4416).
-grep -q '▶' "$W/popup.txt" && fail "B: selection inserted a marker"
+grep -q '▶' "$W/popup.txt" && st_fail "B: selection inserted a marker"
 [ -n "${FLEET_VIEW_EVIDENCE:-}" ] && cp "$W/popup.txt" "$FLEET_VIEW_EVIDENCE"
 # `?` on an empty query: the legend line; with text it is a letter of the query
 to send-keys -t o:view -l '?'; sleep 0.5; to capture-pane -p -t o:view > "$W/legend.txt"
-grep -q '! 等你' "$W/legend.txt" || fail "B: ? on an empty query showed no legend: $(cat "$W/legend.txt")"
-grep -q '› ?' "$W/legend.txt" && fail "B: ? on an empty query went into the query"
+grep -q '! 等你' "$W/legend.txt" || st_fail "B: ? on an empty query showed no legend: $(cat "$W/legend.txt")"
+grep -q '› ?' "$W/legend.txt" && st_fail "B: ? on an empty query went into the query"
 to send-keys -t o:view -l '?'; to send-keys -t o:view -l 'z?'; sleep 0.5; to capture-pane -p -t o:view > "$W/legend.txt"
-grep -q '› z?' "$W/legend.txt" || fail "B: ? after text is not part of the query: $(head -2 "$W/legend.txt")"
+grep -q '› z?' "$W/legend.txt" || st_fail "B: ? after text is not part of the query: $(head -2 "$W/legend.txt")"
 to send-keys -t o:view BSpace BSpace; sleep 0.3
 # issue #3666: on the 已结束 heading → opens it, ← shuts it, ↵ still toggles. Walk
 # down pressing → until its row shows (→ on a session row does nothing).
 shot() { sleep 0.4; to capture-pane -p -t o:view > "$W/fold.txt"; }
-grep -q 'Old 做完的' "$W/popup.txt" && fail "B: 已结束 open before any key"
+grep -q 'Old 做完的' "$W/popup.txt" && st_fail "B: 已结束 open before any key"
 ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
   to send-keys -t o:view Down; to send-keys -t o:view Right; shot
   grep -q 'Old 做完的' "$W/fold.txt" && { ok=1; break; }
 done
-[ -n "$ok" ] || fail "B: → on the 已结束 heading did not open it: $(cat "$W/fold.txt")"
-grep -q '▾ 已结束' "$W/fold.txt" || fail "B: → opened 已结束 but its caret is not ▾: $(grep -F 已结束 "$W/fold.txt")"
+[ -n "$ok" ] || st_fail "B: → on the 已结束 heading did not open it: $(cat "$W/fold.txt")"
+grep -q '▾ 已结束' "$W/fold.txt" || st_fail "B: → opened 已结束 but its caret is not ▾: $(grep -F 已结束 "$W/fold.txt")"
 to send-keys -t o:view Right; shot
-grep -q 'Old 做完的' "$W/fold.txt" || fail "B: a second → shut 已结束"
+grep -q 'Old 做完的' "$W/fold.txt" || st_fail "B: a second → shut 已结束"
 to send-keys -t o:view Left; shot
-grep -q 'Old 做完的' "$W/fold.txt" && fail "B: ← on the open 已结束 heading did not shut it"
-grep -q '▸ 已结束' "$W/fold.txt" || fail "B: ← shut 已结束 but its caret is not ▸"
+grep -q 'Old 做完的' "$W/fold.txt" && st_fail "B: ← on the open 已结束 heading did not shut it"
+grep -q '▸ 已结束' "$W/fold.txt" || st_fail "B: ← shut 已结束 but its caret is not ▸"
 to send-keys -t o:view Left; shot
-grep -q 'Old 做完的' "$W/fold.txt" && fail "B: a second ← opened 已结束"
+grep -q 'Old 做完的' "$W/fold.txt" && st_fail "B: a second ← opened 已结束"
 to send-keys -t o:view Enter; shot
-grep -q 'Old 做完的' "$W/fold.txt" || fail "B: ↵ on the 已结束 heading no longer opens it"
+grep -q 'Old 做完的' "$W/fold.txt" || st_fail "B: ↵ on the 已结束 heading no longer opens it"
 to send-keys -t o:view Enter; shot
-grep -q 'Old 做完的' "$W/fold.txt" && fail "B: ↵ on the open 已结束 heading no longer shuts it"
-pass "B  ⌘P: → opens 已结束, ← shuts it, ↵ toggles it (#3666)"
-pass "B  ⌘P: the list in the 看台 (等你 first, glyphs, the question under its row, 已结束), nothing in a direct attach"
+grep -q 'Old 做完的' "$W/fold.txt" && st_fail "B: ↵ on the open 已结束 heading no longer shuts it"
+st_ok_all "B  ⌘P: → opens 已结束, ← shuts it, ↵ toggles it (#3666)"
+st_ok_all "B  ⌘P: the list in the 看台 (等你 first, glyphs, the question under its row, 已结束), nothing in a direct attach"
 
 # --- C: ↵ on beta, here ------------------------------------------------------------------
 to pipe-pane -o -t o:view "cat > '$W/client.bytes'"
 sleep 0.3
 to send-keys -t o:view -l beta; sleep 0.4; to send-keys -t o:view Enter
 for _ in 1 2 3 4 5 6 7 8; do sleep 0.3; [ "$(ti display-message -p -t 'fl@view-v1:' '#{window_id}')" = "$W2" ] && break; done
-[ "$(ti display-message -p -t 'fl@view-v1:' '#{window_id}')" = "$W2" ] || fail "C: ↵ on beta did not switch the 看台 (now $(ti display-message -p -t 'fl@view-v1:' '#{window_id}'))"
-[ "$(ti display-message -p -t 'fl:' '#{window_id}')" = "$W0" ] || fail "C: the fleet session's own window moved"
+[ "$(ti display-message -p -t 'fl@view-v1:' '#{window_id}')" = "$W2" ] || st_fail "C: ↵ on beta did not switch the 看台 (now $(ti display-message -p -t 'fl@view-v1:' '#{window_id}'))"
+[ "$(ti display-message -p -t 'fl:' '#{window_id}')" = "$W0" ] || st_fail "C: the fleet session's own window moved"
 sleep 0.5; to pipe-pane -t o:view
-python3 - "$W/client.bytes" <<'PY' || fail "C: the client got a whole-screen clear on the switch"
+python3 - "$W/client.bytes" <<'PY' || st_fail "C: the client got a whole-screen clear on the switch"
 import sys
 b = open(sys.argv[1], "rb").read()
 sys.exit(1 if (b"\x1b[2J" in b or b"\x1b[H\x1b[J" in b or b"\x1bc" in b) else 0)
 PY
 log="$W/conf/logs/view-switch.ndjson"
-python3 - "$log" "$W2" <<'PY' || fail "C: view-switch.ndjson: $(cat "$log" 2>/dev/null)"
+python3 - "$log" "$W2" <<'PY' || st_fail "C: view-switch.ndjson: $(cat "$log" 2>/dev/null)"
 import json, sys
 recs = [json.loads(l) for l in open(sys.argv[1])]
 r = recs[-1]
@@ -240,61 +239,61 @@ assert r["method"] == "select-window" and r["view"] == "v1" and r["how"] == "pop
 assert isinstance(r["ms"], (int, float)) and r["ms"] >= 0, r
 assert r["to"] == sys.argv[2], r
 PY
-pass "C  ↵ here: select-window on the 看台, no whole-screen clear, logged ($(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[-1])["ms"])' "$log") ms)"
+st_ok_all "C  ↵ here: select-window on the 看台, no whole-screen clear, logged ($(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[-1])["ms"])' "$log") ms)"
 
 # --- D: another machine (C4) ---------------------------------------------------------------
 before=$(ti display-message -p -t 'fl@view-v1:' '#{window_id}')
 TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" go 'fl@view-v1' "$MU/far1"; rc=$?
-[ "$rc" = 3 ] || fail "D: go to mac-a's session with no link answered $rc, not 3"
+[ "$rc" = 3 ] || st_fail "D: go to mac-a's session with no link answered $rc, not 3"
 PW=$(ti display-message -p -t 'fl@view-v1:' '#{window_id}')
-[ "$PW" != "$before" ] || fail "D: a far go did not show the machine's window"
+[ "$PW" != "$before" ] || st_fail "D: a far go did not show the machine's window"
 [ "$(ti display-message -p -t "$PW" '#{@peer}|#{@peer_view}|#{@fleet_role}|#{@peer_want}')" = "mac-a@$ME|v1|panel|wid:$MU/far1" ] \
-  || fail "D: the peer window: $(ti display-message -p -t "$PW" '#{@peer}|#{@peer_view}|#{@fleet_role}|#{@peer_want}')"
-tail -1 "$log" | grep -q '"method":"peer-wait"' || fail "D: not logged peer-wait: $(tail -1 "$log")"
-tail -1 "$log" | grep -q '"machine":"mac-a"' || fail "D: the far machine is not logged: $(tail -1 "$log")"
-TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$MU/far1"; [ $? = 3 ] || fail "D: a second far go is not rc 3"
-[ "$(ti list-windows -t fl -F '#{@peer}' | grep -c "^mac-a@$ME\$")" = 1 ] || fail "D: a second go made a second mac-a window"
-TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$OU/oth1"; [ $? = 3 ] || fail "D: another login's session here is not a peer go (rc 3)"
-ti list-windows -t fl -F '#{@peer}' | grep -qx 'nodeA@other' || fail "D: another login here got no window of its own: $(ti list-windows -t fl -F '#{@peer}')"
-TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "@99999"; [ $? = 4 ] || fail "D: a gone window is not rc 4"
-TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" nosuch "$UU/f1"; [ $? = 2 ] || fail "D: no such 看台 is not rc 2"
-pass "D  another machine / login: its peer window, shown waiting (rc 3, peer-wait), one per (machine, login); gone 4; no 看台 2"
+  || st_fail "D: the peer window: $(ti display-message -p -t "$PW" '#{@peer}|#{@peer_view}|#{@fleet_role}|#{@peer_want}')"
+tail -1 "$log" | grep -q '"method":"peer-wait"' || st_fail "D: not logged peer-wait: $(tail -1 "$log")"
+tail -1 "$log" | grep -q '"machine":"mac-a"' || st_fail "D: the far machine is not logged: $(tail -1 "$log")"
+TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$MU/far1"; [ $? = 3 ] || st_fail "D: a second far go is not rc 3"
+[ "$(ti list-windows -t fl -F '#{@peer}' | grep -c "^mac-a@$ME\$")" = 1 ] || st_fail "D: a second go made a second mac-a window"
+TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$OU/oth1"; [ $? = 3 ] || st_fail "D: another login's session here is not a peer go (rc 3)"
+ti list-windows -t fl -F '#{@peer}' | grep -qx 'nodeA@other' || st_fail "D: another login here got no window of its own: $(ti list-windows -t fl -F '#{@peer}')"
+TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "@99999"; [ $? = 4 ] || st_fail "D: a gone window is not rc 4"
+TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" nosuch "$UU/f1"; [ $? = 2 ] || st_fail "D: no such 看台 is not rc 2"
+st_ok_all "D  another machine / login: its peer window, shown waiting (rc 3, peer-wait), one per (machine, login); gone 4; no 看台 2"
 
 # --- E: ⌘↓ ⌘↑ ⌘[ ⌘] ------------------------------------------------------------------------
 cur() { ti display-message -p -t 'fl@view-v1:' '#{window_id}'; }
-TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f1" || fail "E: go by worker id"
-[ "$(cur)" = "$W1" ] || fail "E: go by worker id landed on $(cur)"
+TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f1" || st_fail "E: go by worker id"
+[ "$(cur)" = "$W1" ] || st_fail "E: go by worker id landed on $(cur)"
 to send-keys -t o:view -H 1b 5b 39 32 31 7e   # ⌘↑: alpha → beta (等你 sits above)
 for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W2" ] && break; done
-[ "$(cur)" = "$W2" ] || fail "E: ⌘↑ from alpha did not land on beta ($(cur))"
+[ "$(cur)" = "$W2" ] || st_fail "E: ⌘↑ from alpha did not land on beta ($(cur))"
 to send-keys -t o:view -H 1b 5b 39 32 30 7e   # ⌘↓: beta → alpha
 for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W1" ] && break; done
-[ "$(cur)" = "$W1" ] || fail "E: ⌘↓ from beta did not land on alpha ($(cur))"
+[ "$(cur)" = "$W1" ] || st_fail "E: ⌘↓ from beta did not land on alpha ($(cur))"
 to send-keys -t o:view -H 1b 5b 39 32 32 7e   # ⌘[: back to beta
 for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W2" ] && break; done
-[ "$(cur)" = "$W2" ] || fail "E: ⌘[ did not go back to beta ($(cur))"
+[ "$(cur)" = "$W2" ] || st_fail "E: ⌘[ did not go back to beta ($(cur))"
 to send-keys -t o:view -H 1b 5b 39 32 33 7e   # ⌘]: forward to alpha
 for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W1" ] && break; done
-[ "$(cur)" = "$W1" ] || fail "E: ⌘] did not go forward to alpha ($(cur))"
+[ "$(cur)" = "$W1" ] || st_fail "E: ⌘] did not go forward to alpha ($(cur))"
 to send-keys -t o:view C-] b                 # the phone's ⌃] b = ⌘↑
 for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W2" ] && break; done
-[ "$(cur)" = "$W2" ] || fail "E: ⌃] b did not step to beta ($(cur))"
-[ -f "$W/conf/remote-views/v1.d/history.json" ] || fail "E: no history beside the registry row"
-[ "$(ti show-options -v -t fl key-table 2>/dev/null || echo root)" != fleet-view ] || fail "E: the fleet session's key-table changed"
-[ -s "$W/pane1.in" ] && fail "E: a ⌘ key's bytes reached a pane: $(od -c "$W/pane1.in" | head -2)"
-pass "E  ⌘↓ ⌘↑ walk the list, ⌘[ ⌘] the history, ⌃] b on a phone; the fleet session keeps its keys"
+[ "$(cur)" = "$W2" ] || st_fail "E: ⌃] b did not step to beta ($(cur))"
+[ -f "$W/conf/remote-views/v1.d/history.json" ] || st_fail "E: no history beside the registry row"
+[ "$(ti show-options -v -t fl key-table 2>/dev/null || echo root)" != fleet-view ] || st_fail "E: the fleet session's key-table changed"
+[ -s "$W/pane1.in" ] && st_fail "E: a ⌘ key's bytes reached a pane: $(od -c "$W/pane1.in" | head -2)"
+st_ok_all "E  ⌘↓ ⌘↑ walk the list, ⌘[ ⌘] the history, ⌃] b on a phone; the fleet session keeps its keys"
 
 # --- G: a phone (issue #3006, C9): 40 columns, ⌃] p the whole screen, ⌃] n on to mac-a ----------
 to resize-window -t o:view -x 40 -y 20
 sleep 0.5
 [ "$(ti display-message -p -t 'fl@view-v1:' '#{client_width}')" = 40 ] \
-  || fail "G: the client is not 40 columns: $(ti list-clients -F '#{client_width}')"
+  || st_fail "G: the client is not 40 columns: $(ti list-clients -F '#{client_width}')"
 to send-keys -t o:view C-] p
 ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.5; to capture-pane -p -t o:view > "$W/phone.txt"; grep -q '等你' "$W/phone.txt" && { ok=1; break; }
 done
-[ -n "$ok" ] || fail "G: ⌃] p opened no list at 40 columns: $(cat "$W/phone.txt")"
-python3 - "$W/phone.txt" <<'PY' || fail "G: the list is not the whole screen at 40 columns: $(cat "$W/phone.txt")"
+[ -n "$ok" ] || st_fail "G: ⌃] p opened no list at 40 columns: $(cat "$W/phone.txt")"
+python3 - "$W/phone.txt" <<'PY' || st_fail "G: the list is not the whole screen at 40 columns: $(cat "$W/phone.txt")"
 import sys
 lines = open(sys.argv[1], encoding="utf-8").read().split("\n")
 # the popup's border at column 0 on the first row and the 40th column on a body row
@@ -311,19 +310,19 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
      [ "$(ti display-message -p -t "$W2" '#{pane_in_mode}')" = 0 ]; then closed=1; break; fi
   sleep 0.2
 done
-[ -n "$closed" ] || fail "G: phone popup did not close and thaw"
-TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f1" || fail "G: go to alpha"
+[ -n "$closed" ] || st_fail "G: phone popup did not close and thaw"
+TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f1" || st_fail "G: go to alpha"
 to send-keys -t o:view C-] n                 # alpha → the next in the list: mac-a's session
 for _ in $(seq 1 40); do sleep 0.25;  # a poll, not a budget: the first go opens the peer window (#4443)
    case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in mac-a@*) break ;; esac; done
 case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in
-  "mac-a@$ME") ;; *) fail "G: ⌃] n from alpha did not step on to mac-a's window ($(cur) @peer=$(ti display-message -p -t 'fl@view-v1:' '#{@peer}'))" ;;
+  "mac-a@$ME") ;; *) st_fail "G: ⌃] n from alpha did not step on to mac-a's window ($(cur) @peer=$(ti display-message -p -t 'fl@view-v1:' '#{@peer}'))" ;;
 esac
 to resize-window -t o:view -x 120 -y 32
-pass "G  a phone: 40 columns, ⌃] p the list on the whole screen, ⌃] n on to another machine's session"
+st_ok_all "G  a phone: 40 columns, ⌃] p the list on the whole screen, ⌃] n on to another machine's session"
 
 # --- H: no session is special (issue #3119): the orchestrator gets no line of its own ----------
-python3 - "$BIN" <<'EOF' || fail "H: the orchestrator still gets a line of its own"
+python3 - "$BIN" <<'EOF' || st_fail "H: the orchestrator still gets a line of its own"
 import importlib.util, sys, tempfile
 from pathlib import Path
 spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
@@ -340,7 +339,7 @@ fv.produce = lambda fleet, **kw: ""
 assert fv.entries("v1") == [], fv.entries("v1")
 # (the orchestrator readers go_orch / orch_target are gone, #3119: conf/gone.list)
 EOF
-pass "H  no session is special: orch_<fleet> and a holder window add no line (issue #3119)"
+st_ok_all "H  no session is special: orch_<fleet> and a holder window add no line (issue #3119)"
 
 # --- I: grouped by what you should do (issue #3179, EPIC #3178 C1) -----------------------------
 # 2 machines × 6 kinds of row (asking with its words, failed, broken configuration,
@@ -446,8 +445,8 @@ os.environ["NO_COLOR"] = "1"
 lines = fv.paint(shown, at, 100, qo.cells, qo.clip)
 assert not any(st.startswith("c") for segs in lines for _, sty in segs for st in sty), "NO_COLOR left a colour"
 PYI
-( unset NO_COLOR FLEET_COLOR FLEET_GLYPHS; python3 "$W/leg-i.py" "$BIN" ) || fail "I: the grouped list"
-pass "I  ⌘P grouped: 置顶 · 等你 · 在干活 · 刚落地 · 其他 · 已结束; six one-cell glyphs (ascii, NO_COLOR); the question under its row; tags; 「修 3164」"
+( unset NO_COLOR FLEET_COLOR FLEET_GLYPHS; python3 "$W/leg-i.py" "$BIN" ) || st_fail "I: the grouped list"
+st_ok_all "I  ⌘P grouped: 置顶 · 等你 · 在干活 · 刚落地 · 其他 · 已结束; six one-cell glyphs (ascii, NO_COLOR); the question under its row; tags; 「修 3164」"
 
 # --- J: the reaped sessions (issue #3286) -------------------------------------------------------
 mkdir -p "$W/jstub"
@@ -540,11 +539,11 @@ for _ in range(50):
 assert rc == 0 and log.read_text().splitlines()[-1].endswith("--select landed:scratch:scratch-23@o/claude-fleet --session fl"), \
     log.read_text()
 PYJ
-( JLOG="$W/j.log" FLEET_VIEW_ACT_BIN="$W/jstub" python3 "$W/leg-j.py" "$BIN" "$W" ) || fail "J: the reaped sessions in 已结束"
+( JLOG="$W/j.log" FLEET_VIEW_ACT_BIN="$W/jstub" python3 "$W/leg-j.py" "$BIN" "$W" ) || st_fail "J: the reaped sessions in 已结束"
 # the read: cached, single-flight, in the background; view-gone waits for it
 printf 'landed:1@o/r\037k\037x\n' > "$W/gone.txt"
 G="$W/g/view-gone.fl"; rm -f "$G"
-python3 - "$BIN" <<'PYK' || fail "J: the 已回收 read"
+python3 - "$BIN" <<'PYK' || st_fail "J: the 已回收 read"
 import importlib.util, os, sys, time
 spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
 fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
@@ -571,10 +570,10 @@ assert p.stat().st_mtime > mt, "a stale copy was not read again"
 PYK
 rm -f "$G"
 printf 'landed:2@o/r\037k\037y\n' > "$W/gone.txt"
-python3 "$BIN/fleet-quickopen.py" view-gone --view v1 || fail "J: view-gone"
-grep -q '^landed:2@o/r' "$G" || fail "J: view-gone did not read: $(cat "$G" 2>&1)"
+python3 "$BIN/fleet-quickopen.py" view-gone --view v1 || st_fail "J: view-gone"
+grep -q '^landed:2@o/r' "$G" || st_fail "J: view-gone did not read: $(cat "$G" 2>&1)"
 : > "$W/gone.txt"
-pass "J  已关闭 lists the reaped sessions (fleet-history.sh rows) below 已结束 · 还开着; Tab/↵ → 恢复 = fleet-restore-pick.sh --select; read cached in the background"
+st_ok_all "J  已关闭 lists the reaped sessions (fleet-history.sh rows) below 已结束 · 还开着; Tab/↵ → 恢复 = fleet-restore-pick.sh --select; read cached in the background"
 
 # --- K: 已结束 · 还开着 and 已关闭 (issue #3731) ----------------------------------------
 mkdir -p "$W/kstub"
@@ -680,7 +679,7 @@ assert "reapall" in fv.ROWLESS and "history" in fv.ROWLESS
 PYK
 mkdir -p "$W/kconf"
 ( KLOG="$W/k.log" FLEET_VIEW_ACT_BIN="$W/kstub" FLEET_UI_LANG=zh python3 "$W/leg-k.py" "$BIN" "$W/kconf" ) \
-  || fail "K: 已结束 · 还开着 / 已关闭"
+  || st_fail "K: 已结束 · 还开着 / 已关闭"
 # the helper itself: each target through dash-reap.sh --yes, one line for the person
 mkdir -p "$W/kreap"
 cp "$BIN/fleet-view-reap-all.sh" "$BIN/fleet-ui-lang.sh" "$W/kreap/"
@@ -697,15 +696,15 @@ printf 'remote|%s\n' "$*" >> "$KLOG2"
 echo '✓ reaped'
 EOF
 out=$(KLOG2="$W/k2.log" FLEET_UI_LANG=zh bash "$W/kreap/fleet-view-reap-all.sh" fl @8 @9 @7 wid:u/f1); rc=$?
-[ "$rc" = 0 ] || fail "K: reap-all rc $rc: $out"
+[ "$rc" = 0 ] || st_fail "K: reap-all rc $rc: $out"
 [ "$out" = "回收了 2 个 · 1 个有未提交改动：窗口已关，worktree 保留 · 1 个没收（还在忙或要确认） — agent still working" ] \
-  || fail "K: reap-all said: $out"
+  || st_fail "K: reap-all said: $out"
 [ "$(cat "$W/k2.log")" = "$(printf 'dash-reap|@8 --yes\ndash-reap|@9 --yes\ndash-reap|@7 --yes\nremote|reap fl wid:u/f1')" ] \
-  || fail "K: reap-all calls: $(cat "$W/k2.log")"
+  || st_fail "K: reap-all calls: $(cat "$W/k2.log")"
 # the history rows carry the close time only when asked (every other reader byte for byte)
 grep -qF '[ "${FLEET_HISTORY_EPOCH:-0}" = 1 ] && lbuf+="${US}${ep:-}"' "$BIN/fleet-history.sh" \
-  || fail "K: fleet-history.sh rows no longer appends the close time under FLEET_HISTORY_EPOCH"
-grep -qF 'FLEET_HISTORY_EPOCH="1"' "$BIN/fleet_view.py" || fail "K: the 已回收 read does not ask for the close time"
-pass "K  已结束 · 还开着 (回收这 N 个 → fleet-view-reap-all.sh) above 已关闭 (last 48 h, 更早的 N 个 → /fleet-history), folded (#3731)"
+  || st_fail "K: fleet-history.sh rows no longer appends the close time under FLEET_HISTORY_EPOCH"
+grep -qF 'FLEET_HISTORY_EPOCH="1"' "$BIN/fleet_view.py" || st_fail "K: the 已回收 read does not ask for the close time"
+st_ok_all "K  已结束 · 还开着 (回收这 N 个 → fleet-view-reap-all.sh) above 已关闭 (last 48 h, 更早的 N 个 → /fleet-history), folded (#3731)"
 
 echo "fleet-view-selftest: all passed"

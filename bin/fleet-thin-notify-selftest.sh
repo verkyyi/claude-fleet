@@ -33,14 +33,15 @@
 # tmux / python3 absent → SKIP.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 REAL_TMUX=$(command -v tmux) || { echo 'fleet-thin-notify selftest: tmux absent — SKIP'; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo 'fleet-thin-notify selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 case "$REAL_TMUX" in */tmux-shim/*) REAL_TMUX=$(PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v tmux-shim | paste -sd: -) command -v tmux) ;; esac
 unset TMUX TMUX_PANE
 
-FAIL=0; N=0
-ok()  { N=$((N + 1)); printf 'ok:   %s\n' "$1"; }
-bad() { N=$((N + 1)); FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; }
+FAIL=0; CHECKS=0
+ok()  { st_count; st_ok "$1"; }
+bad() { st_count; st_miss "$1"; }
 
 W=$(mktemp -d /tmp/thn.XXXXXX) || exit 2
 S="$W/s"; mkdir -p "$S" "$W/bin" "$W/conf/remote-views" "$W/g"
@@ -278,5 +279,5 @@ mkdir -p "$W/conf2"
 FLEET_CONF_DIR="$W/conf2" python3 "$BIN/fleet_thin_lease.py" beat
 [ -z "$(ls -A "$W/conf2")" ] && ok "I no thin 看台 here → no book, nothing written" || bad "I wrote: $(ls -A "$W/conf2")"
 
-printf 'fleet-thin-notify selftest: %d check(s), %d failure(s)\n' "$N" "$FAIL"
-[ "$FAIL" -eq 0 ]
+printf 'fleet-thin-notify selftest: %d check(s), %d failure(s)\n' "$CHECKS" "$FAIL"
+st_done

@@ -26,6 +26,7 @@
 # prints the times and does not fail.
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 TB_BIN=${TOPBAR_SWITCH_BIN:-$BIN}
 MEASURE=${TOPBAR_SWITCH_MEASURE:-}
 TMUX_BIN=$(command -v tmux) || { echo "SKIP: no tmux"; exit 0; }
@@ -36,7 +37,6 @@ trap cleanup EXIT INT TERM
 unset TMUX TMUX_PANE
 FAILS=0
 fail() { echo "FAIL: $1${2:+ — $2}"; FAILS=$((FAILS + 1)); }
-ok() { echo "ok: $1"; }
 
 mkdir -p "$WORK/reg" "$WORK/g"
 T() { "$TMUX_BIN" -S "$SOCK" "$@"; }
@@ -118,7 +118,7 @@ PY
 ms_of() { printf '%s\n' "$1" | awk -v t="$2" '$1 == t && $2 == "hit" { print $3; f = 1 } END { if (!f) print 99999 }'; }
 check() {  # <label> <ms> <limit ms>
   if [ -n "$MEASURE" ]; then echo "measure: $1 ${2}ms"; return; fi
-  if [ "$2" -le "$3" ]; then ok "$1 (${2}ms ≤ ${3}ms)"; else fail "$1" "${2}ms > ${3}ms"; fi
+  if [ "$2" -le "$3" ]; then st_ok "$1 (${2}ms ≤ ${3}ms)"; else fail "$1" "${2}ms > ${3}ms"; fi
 }
 
 # ---- A + B: the real line ----------------------------------------------------------
@@ -144,7 +144,7 @@ C=$(printf '%s\n' "$OUT" | sed -n '3,4p')
 check "C: a 1 s job — the next window's name still on the line" "$(ms_of "$C" cur)" 300
 CF=$(ms_of "$C" ⌘P)
 if [ -z "$MEASURE" ]; then
-  if [ "$CF" -ge 900 ] && [ "$CF" -lt 99999 ]; then ok "C: …the full line only once the job ran (${CF}ms)"
+  if [ "$CF" -ge 900 ] && [ "$CF" -lt 99999 ]; then st_ok "C: …the full line only once the job ran (${CF}ms)"
   else fail "C: the full line came from the job" "${CF}ms"; fi
 fi
 
@@ -155,19 +155,19 @@ if [ -z "$MEASURE" ]; then
     "sock=$SOCK" cw=160 "w=$WB" pd=0)
   INB=$(T display-message -p -t fleet:beta-next "$L" | sed 's/#\[[^]]*\]//g')
   IND=$(T display-message -p -t fleet:delta-fourth "$L" | sed 's/#\[[^]]*\]//g')
-  case "$INB" in *"#22"*beta-next*"⌘P"*) ok "D: in its own window the full line" ;; *) fail "D: in its own window the full line" "$INB" ;; esac
-  case "$IND" in *delta-fourth*) ok "D: elsewhere the stand-in, naming that window" ;; *) fail "D: elsewhere the stand-in" "$IND" ;; esac
-  case "$IND" in *beta-next*|*"#22"*|*"⌘P"*) fail "D: …nothing of the window it was made for" "$IND" ;; *) ok "D: …nothing of the window it was made for" ;; esac
+  case "$INB" in *"#22"*beta-next*"⌘P"*) st_ok "D: in its own window the full line" ;; *) fail "D: in its own window the full line" "$INB" ;; esac
+  case "$IND" in *delta-fourth*) st_ok "D: elsewhere the stand-in, naming that window" ;; *) fail "D: elsewhere the stand-in" "$IND" ;; esac
+  case "$IND" in *beta-next*|*"#22"*|*"⌘P"*) fail "D: …nothing of the window it was made for" "$IND" ;; *) st_ok "D: …nothing of the window it was made for" ;; esac
   # a title with the format's own characters survives the branch: , } # {
   T rename-window -t "$WB" 'a,b}c#d{e'
   L=$(python3 "$TB_BIN/fleet-topbar.py" render --node view=t1 s=fleet "reg=$WORK/reg" "g=$WORK/g" \
     "sock=$SOCK" cw=160 "w=$WB" pd=0)
   INB=$(T display-message -p -t "$WB" "$L" | sed 's/#\[[^]]*\]//g')
-  case "$INB" in *'a,b}c#d{e'*"⌘P"*) ok "D: a title with , } # { comes through whole" ;; *) fail "D: a title with , } # {" "$INB" ;; esac
+  case "$INB" in *'a,b}c#d{e'*"⌘P"*) st_ok "D: a title with , } # { comes through whole" ;; *) fail "D: a title with , } # {" "$INB" ;; esac
 
   # ---- E: idle adds nothing ---------------------------------------------------------------
-  if [ "$(T show-hooks -g 2>/dev/null)" = "$H0" ]; then ok "E: no hook added"; else fail "E: no hook added"; fi
-  if [ "$(T show-options -qv -t fleet status-interval)" = 2 ]; then ok "E: the status-interval as dressed"; else fail "E: status-interval"; fi
+  if [ "$(T show-hooks -g 2>/dev/null)" = "$H0" ]; then st_ok "E: no hook added"; else fail "E: no hook added"; fi
+  if [ "$(T show-options -qv -t fleet status-interval)" = 2 ]; then st_ok "E: the status-interval as dressed"; else fail "E: status-interval"; fi
 fi
 
 [ "$FAILS" -eq 0 ] && { echo "topbar-switch-selftest: PASS"; exit 0; }

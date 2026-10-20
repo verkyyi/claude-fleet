@@ -39,9 +39,10 @@
 # tmux / python3 absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX=$(command -v tmux) || { echo 'hub-relay selftest: tmux absent — SKIP'; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo 'hub-relay selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hub-relay.XXXXXX")" || exit 2
 L="hrel$$"
@@ -54,8 +55,7 @@ export FLEET_CC_SESSIONS_DIR="$WORK/sessions"; mkdir -p "$FLEET_CC_SESSIONS_DIR"
 fx_repo "$FLEET_CONF_DIR" "$L" acme/app FLEET_MAIN="$WORK/main"
 unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_HUB_STATUS_CMD FLEET_HUB_CACHE_SECS FLEET_HUB_RETAIN_SECS FLEET_CHILD_REPORT
 
-FAIL=0; CHECKS=0
-fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
+st_tally
 ok() { CHECKS=$((CHECKS + 1)); }
 tf() { "$REAL_TMUX" -L "$L" "$@"; }
 cleanup() { "$REAL_TMUX" -L "$L" kill-server 2>/dev/null; rm -rf "$WORK"; }
@@ -82,15 +82,15 @@ nlines() { [ -f "$1" ] && grep -c . "$1" || echo 0; }
 run bash "$BIN/fleet-children.sh" -L "$L" issue-7; base="$rc|$out"
 printf '%s/issue-42\tmac-a\t%s/issue-7\n' "$F" "$U" > "$CACHE"
 run bash "$BIN/fleet-children.sh" -L "$L" issue-7
-ok; [ "$rc|$out" = "$base" ] || fail "A: CCQUOTA_FLEET off ⇒ fleet-children.sh unchanged by a map on disk" "[$out] vs [$base]"
+ok; [ "$rc|$out" = "$base" ] || st_miss "A: CCQUOTA_FLEET off ⇒ fleet-children.sh unchanged by a map on disk" "[$out] vs [$base]"
 ok; ! lib fleet_hub_put child_report "$U/issue-1" "$F/issue-7" 1 '{}' >/dev/null && [ ! -d "$OUTBOX" ] \
-  || fail "A: CCQUOTA_FLEET off ⇒ fleet_hub_put refuses and makes no outbox"
-ok; [ -z "$(lib fleet_remote_children "$L" issue-7)" ] || fail "A: CCQUOTA_FLEET off ⇒ no remote children"
-ok; ! lib fleet_window_waiting_children "$L" "$wp" >/dev/null || fail "A: CCQUOTA_FLEET off ⇒ a remote child holds nothing"
+  || st_miss "A: CCQUOTA_FLEET off ⇒ fleet_hub_put refuses and makes no outbox"
+ok; [ -z "$(lib fleet_remote_children "$L" issue-7)" ] || st_miss "A: CCQUOTA_FLEET off ⇒ no remote children"
+ok; ! lib fleet_window_waiting_children "$L" "$wp" >/dev/null || st_miss "A: CCQUOTA_FLEET off ⇒ a remote child holds nothing"
 
 # --- B: paths ---------------------------------------------------------------------------
 run bash "$BIN/fleet-hub-node.sh" paths
-ok; [ "$out" = "outbox	$OUTBOX"$'\n'"workers	$CACHE"$'\n'"movein	$FLEET_CONF_DIR/control/move-in"$'\n'"attach	$FLEET_CONF_DIR/attachments"$'\n'"test	1"$'\n'"task	1"$'\n'"launch_v1	1"$'\n'"repo_authority_v1	1"$'\n'"repo_authority_sync	1" ] || fail "B: paths" "$out"
+ok; [ "$out" = "outbox	$OUTBOX"$'\n'"workers	$CACHE"$'\n'"movein	$FLEET_CONF_DIR/control/move-in"$'\n'"attach	$FLEET_CONF_DIR/attachments"$'\n'"test	1"$'\n'"task	1"$'\n'"launch_v1	1"$'\n'"repo_authority_v1	1"$'\n'"repo_authority_sync	1" ] || st_miss "B: paths" "$out"
 
 # --- C: deliver -------------------------------------------------------------------------
 relay() { # <id-suffix> <kind> <from> <to> <payload> [<from_node>]
@@ -99,47 +99,47 @@ relay() { # <id-suffix> <kind> <from> <to> <payload> [<from_node>]
 deliver() { out=$(printf '%s' "$1" | env -u TMUX bash "$BIN/fleet-hub-node.sh" deliver 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err"); }
 R1=$(relay 1700000000.1 child_report "$F/issue-42" "$U/issue-7" '{"child":"issue-42","state":"BLOCKED","pr":"","summary":"stuck","title":"kid","tier":"loud","msg":"[child-report] issue #42\nstate: BLOCKED"}')
 deliver "$R1"
-ok; [ "$rc" = 0 ] && [ "$(nlines "$LEDGER")" = 1 ] || fail "C: a remote report lands in the parent's ledger" "rc=$rc lines=$(nlines "$LEDGER") $err"
+ok; [ "$rc" = 0 ] && [ "$(nlines "$LEDGER")" = 1 ] || st_miss "C: a remote report lands in the parent's ledger" "rc=$rc lines=$(nlines "$LEDGER") $err"
 ok; python3 -c 'import json,sys; e=json.loads(open(sys.argv[1]).readline()); sys.exit(0 if e["child"]=="acme-app:issue-42" and e["node"]=="mac-a" and e["rid"]==sys.argv[2]+"#1700000000.1" and e["state"]=="BLOCKED" else 1)' "$LEDGER" "$F/issue-42" \
-  || fail "C: the row carries node + rid" "$(cat "$LEDGER")"
+  || st_miss "C: the row carries node + rid" "$(cat "$LEDGER")"
 deliver "$R1"
-ok; [ "$rc" = 0 ] && [ "$(nlines "$LEDGER")" = 1 ] || fail "C: the same relay pushed again is ONE row" "rc=$rc lines=$(nlines "$LEDGER")"
+ok; [ "$rc" = 0 ] && [ "$(nlines "$LEDGER")" = 1 ] || st_miss "C: the same relay pushed again is ONE row" "rc=$rc lines=$(nlines "$LEDGER")"
 deliver "$(relay 1700000000.2 child_report "$F/issue-42" "$U/issue-7" '{"child":"issue-42","state":"WAITING","tier":"silent","msg":"x"}')"
-ok; [ "$rc" = 0 ] && [ "$(nlines "$LEDGER")" = 2 ] || fail "C: a silent report is ledgered" "rc=$rc lines=$(nlines "$LEDGER") $err"
+ok; [ "$rc" = 0 ] && [ "$(nlines "$LEDGER")" = 2 ] || st_miss "C: a silent report is ledgered" "rc=$rc lines=$(nlines "$LEDGER") $err"
 deliver "$(relay 3 child_report "$F/issue-42" "$F/issue-7" '{"child":"issue-42","state":"MERGED"}')"
-ok; [ "$rc" = 1 ] || fail "C: a parent fleet not on this machine is refused" "rc=$rc $err"
+ok; [ "$rc" = 1 ] || st_miss "C: a parent fleet not on this machine is refused" "rc=$rc $err"
 deliver "$(relay 4 shell "$F/issue-42" "$U/issue-7" '{}')"
-ok; [ "$rc" = 1 ] || fail "C: an unknown kind is refused" "rc=$rc"
+ok; [ "$rc" = 1 ] || st_miss "C: an unknown kind is refused" "rc=$rc"
 deliver '{"id":"x#1","kind":"child_report","from":"'"$F"'/issue-42","to":"'"$U"'/issue-7","payload":{}}'
-ok; [ "$rc" = 1 ] || fail "C: an id not scoped to its sender is refused" "rc=$rc"
+ok; [ "$rc" = 1 ] || st_miss "C: an id not scoped to its sender is refused" "rc=$rc"
 deliver 'not json'
-ok; [ "$rc" = 1 ] || fail "C: non-JSON is refused" "rc=$rc"
+ok; [ "$rc" = 1 ] || st_miss "C: non-JSON is refused" "rc=$rc"
 deliver "$(relay 5 message "$F/issue-42" "$U/issue-8" '{"text":"hello"}')"
-ok; [ "$rc" = 75 ] || fail "C: a message to a worker not live here is «not now» (75)" "rc=$rc $err"
+ok; [ "$rc" = 75 ] || st_miss "C: a message to a worker not live here is «not now» (75)" "rc=$rc $err"
 
 # --- I: fleet-children.sh lists the remote child with its machine -----------------------
 export CCQUOTA_FLEET=1
 printf '%s/issue-42\tmac-a\t%s/issue-7\n' "$F" "$U" > "$CACHE"
 run bash "$BIN/fleet-children.sh" -L "$L" issue-7
-ok; case "$out" in *"issue-42"*"mac-a remote"*) true ;; *) false ;; esac || fail "I: a live remote child shows its machine" "$out"
+ok; case "$out" in *"issue-42"*"mac-a remote"*) true ;; *) false ;; esac || st_miss "I: a live remote child shows its machine" "$out"
 : > "$CACHE"
 run bash "$BIN/fleet-children.sh" -L "$L" issue-7
-ok; case "$out" in *"issue-42"*"gone · mac-a"*) true ;; *) false ;; esac || fail "I: a gone remote child keeps its machine from the ledger" "$out"
+ok; case "$out" in *"issue-42"*"gone · mac-a"*) true ;; *) false ;; esac || st_miss "I: a gone remote child keeps its machine from the ledger" "$out"
 run bash "$BIN/fleet-children.sh" -L "$L" issue-7 --json
 ok; printf '%s' "$out" | python3 -c 'import json,sys; c=json.load(sys.stdin)["children"]; sys.exit(0 if c and c[0].get("node")=="mac-a" else 1)' \
-  || fail "I: --json carries node" "$out"
+  || st_miss "I: --json carries node" "$out"
 
 # --- F: a parent waiting on a child elsewhere --------------------------------------------
 printf '%s/issue-42\tmac-a\t%s/issue-7\n' "$F" "$U" > "$CACHE"
 out=$(lib fleet_window_waiting_children "$L" "$wp"); rc=$?
-ok; [ "$rc" = 0 ] && [ "$out" = 0/1 ] || fail "F: a live remote child holds its parent (0/1)" "rc=$rc $out"
+ok; [ "$rc" = 0 ] && [ "$out" = 0/1 ] || st_miss "F: a live remote child holds its parent (0/1)" "rc=$rc $out"
 printf '%s/issue-42\tmac-a:lost\t%s/issue-7\n' "$F" "$U" > "$CACHE"
-ok; ! lib fleet_window_waiting_children "$L" "$wp" >/dev/null || fail "F: a child on a lost node holds nothing"
+ok; ! lib fleet_window_waiting_children "$L" "$wp" >/dev/null || st_miss "F: a child on a lost node holds nothing"
 printf '%s/issue-42\tmac-a\t%s/issue-7\n' "$F" "$U" > "$CACHE"; touch -t 202001010000 "$CACHE"
-ok; ! lib fleet_window_waiting_children "$L" "$wp" >/dev/null || fail "F: a stale map holds nothing"
+ok; ! lib fleet_window_waiting_children "$L" "$wp" >/dev/null || st_miss "F: a stale map holds nothing"
 printf '%s/issue-42\tmac-a\t%s/issue-7\n' "$F" "$U" > "$CACHE"
 deliver "$(relay 1700000000.6 child_report "$F/issue-42" "$U/issue-7" '{"child":"issue-42","state":"MERGED","pr":"9","tier":"quiet","msg":"m"}')"
-ok; ! lib fleet_window_waiting_children "$L" "$wp" >/dev/null || fail "F: a MERGED report releases the parent"
+ok; ! lib fleet_window_waiting_children "$L" "$wp" >/dev/null || st_miss "F: a MERGED report releases the parent"
 
 # --- D: report-parent to a parent elsewhere ---------------------------------------------
 wc=$(tf new-window -d -P -F '#{window_id}' -n issue-20 'while :; do sleep 300; done')
@@ -151,8 +151,8 @@ run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state blocked --sum
 f=$(ls "$OUTBOX"/*.json 2>/dev/null | head -1)
 ok; [ "$rc" = 3 ] && [ -n "$f" ] && [ "$(ls "$OUTBOX"/*.json | wc -l | tr -d ' ')" = 1 ] \
   && case "$out" in *"queued → issue-7 on mac-a"*) true ;; *) false ;; esac \
-  || fail "D: one relay in the outbox; no agent took it ⇒ queued, exit 3" "rc=$rc out=$out err=$err"
-ok; python3 - "$f" "$U/acme-app:issue-20" "$F/issue-7" <<'PY' || fail "D: the relay's id/from/to/payload" "$(cat "$f" 2>/dev/null)"
+  || st_miss "D: one relay in the outbox; no agent took it ⇒ queued, exit 3" "rc=$rc out=$out err=$err"
+ok; python3 - "$f" "$U/acme-app:issue-20" "$F/issue-7" <<'PY' || st_miss "D: the relay's id/from/to/payload" "$(cat "$f" 2>/dev/null)"
 import json, sys
 r = json.load(open(sys.argv[1]))
 p = r["payload"]
@@ -161,14 +161,14 @@ ok = (r["kind"] == "child_report" and r["from"] == sys.argv[2] and r["to"] == sy
       and p["tier"] == "loud" and "[child-report] acme/app issue #20" in p["msg"] and "need a key" in p["msg"])
 sys.exit(0 if ok else 1)
 PY
-ok; [ "$(nlines "$LEDGER")" = "$before" ] || fail "D: nothing written to this machine's same-key ledger"
-ok; [ "$(tf show-options -wqv -t "$wc" @reported)" = 1 ] || fail "D: @reported stamped"
+ok; [ "$(nlines "$LEDGER")" = "$before" ] || st_miss "D: nothing written to this machine's same-key ledger"
+ok; [ "$(tf show-options -wqv -t "$wc" @reported)" = 1 ] || st_miss "D: @reported stamped"
 rm -f "$OUTBOX"/*.json
 unset CCQUOTA_FLEET
 run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state failed --summary 'x'
 ok; [ "$rc" = 1 ] && [ -z "$(ls "$OUTBOX"/*.json 2>/dev/null)" ] && case "$err" in *"not sent"*) true ;; *) false ;; esac \
   && case "$out" in "undelivered → issue-7"*) true ;; *) false ;; esac \
-  || fail "D: hub off ⇒ not sent, no relay — said as undelivered, exit 1 (issue #3439)" "rc=$rc out=$out err=$err"
+  || st_miss "D: hub off ⇒ not sent, no relay — said as undelivered, exit 1 (issue #3439)" "rc=$rc out=$out err=$err"
 export CCQUOTA_FLEET=1
 
 # --- D2: a parent named by its IDENTITY on another machine (issue #3439) -----------------
@@ -176,7 +176,7 @@ export CCQUOTA_FLEET=1
 # whole as @origin (fleet_origin_canon) and the identity as @origin_fid. Its report
 # goes to the hub like a keyed one — before, rail 1 quit with exit 0 and nothing said.
 PF=0dbf19b9-aaaa-4bbb-8ccc-0123456789ab
-ok; [ "$(lib fleet_origin_canon "$PF" '' '' '')" = "$PF" ] || fail "D2: canon keeps a parent identity whole" "$(lib fleet_origin_canon "$PF" '' '' '')"
+ok; [ "$(lib fleet_origin_canon "$PF" '' '' '')" = "$PF" ] || st_miss "D2: canon keeps a parent identity whole" "$(lib fleet_origin_canon "$PF" '' '' '')"
 wi=$(tf new-window -d -P -F '#{window_id}' -n issue-21 'while :; do sleep 300; done')
 tf set-window-option -t "$wi" @issue 21 \; set-window-option -t "$wi" @origin "$PF" \; \
    set-window-option -t "$wi" @origin_wid "$F/$PF" \; set-window-option -t "$wi" @origin_fid "$PF"
@@ -186,7 +186,7 @@ run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wi" --state blocked --sum
 f=$(ls "$OUTBOX"/*.json 2>/dev/null | head -1)
 ok; [ "$rc" = 3 ] && [ -n "$f" ] && case "$out" in "queued → $PF on mac-a"*) true ;; *) false ;; esac \
   && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["to"]==sys.argv[2] and r["kind"]=="child_report" and r["payload"]["state"]=="BLOCKED" else 1)' "$f" "$F/$PF" \
-  || fail "D2: an identity parent elsewhere ⇒ one relay to its worker_id, queued, exit 3" "rc=$rc out=$out err=$err $(cat "$f" 2>/dev/null)"
+  || st_miss "D2: an identity parent elsewhere ⇒ one relay to its worker_id, queued, exit 3" "rc=$rc out=$out err=$err $(cat "$f" 2>/dev/null)"
 # the window a spawn before #3439 left: @origin cut to 32 characters, @origin_wid whole
 wl=$(tf new-window -d -P -F '#{window_id}' -n issue-22 'while :; do sleep 300; done')
 tf set-window-option -t "$wl" @issue 22 \; set-window-option -t "$wl" @origin "$(printf '%s' "$PF" | cut -c1-32)" \; \
@@ -195,7 +195,7 @@ rm -f "$OUTBOX"/*.json
 run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wl" --state merged --summary 'done'
 f=$(ls "$OUTBOX"/*.json 2>/dev/null | head -1)
 ok; [ "$rc" = 3 ] && [ -n "$f" ] && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["to"]==sys.argv[2] else 1)' "$f" "$F/$PF" \
-  || fail "D2: a cut @origin with a whole @origin_wid still reaches the hub" "rc=$rc out=$out err=$err"
+  || st_miss "D2: a cut @origin with a whole @origin_wid still reaches the hub" "rc=$rc out=$out err=$err"
 # …and one with no @origin_wid left (a restore before #3439): undelivered, the person's
 wn=$(tf new-window -d -P -F '#{window_id}' -n issue-23 'while :; do sleep 300; done')
 tf set-window-option -t "$wn" @issue 23 \; set-window-option -t "$wn" @origin "$(printf '%s' "$PF" | cut -c1-32)"
@@ -203,7 +203,7 @@ rm -f "$OUTBOX"/*.json
 run env FLEET_ORPHAN_ALERT_CMD=true bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wn" --state blocked --summary 'stuck'
 ok; [ "$rc" = 1 ] && case "$out" in "undelivered → "*) true ;; *) false ;; esac \
   && grep -q 'issue-23' "$FLEET_CONF_DIR/global/orphan-reports.ndjson" 2>/dev/null \
-  || fail "D2: an unaddressable parent ⇒ undelivered, exit 1, the person's reminder" "rc=$rc out=$out err=$err"
+  || st_miss "D2: an unaddressable parent ⇒ undelivered, exit 1, the person's reminder" "rc=$rc out=$out err=$err"
 rm -f "$OUTBOX"/*.json
 printf '%s/issue-7\tmac-a\t\n' "$F" > "$CACHE"   # E reads D's map
 
@@ -214,12 +214,12 @@ out=$(TMUX="$sockpath,1,0" TMUX_PANE="$pane" bash "$BIN/fleet-peer-send.sh" "wid
 f=$(ls "$OUTBOX"/*.json 2>/dev/null | head -1)
 ok; [ "$rc" = 3 ] && [ -n "$f" ] && case "$out" in *"queued → issue-7 on mac-a"*) true ;; *) false ;; esac \
   && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["kind"]=="message" and r["from"]==sys.argv[2] and r["to"]==sys.argv[3] and r["payload"]["text"]=="ping from mac-b" else 1)' "$f" "$U/acme-app:issue-20" "$F/issue-7" \
-  || fail "E: a message relay from the pane's worker_id" "rc=$rc out=$out err=$err $(cat "$f" 2>/dev/null)"
+  || st_miss "E: a message relay from the pane's worker_id" "rc=$rc out=$out err=$err $(cat "$f" 2>/dev/null)"
 rm -f "$OUTBOX"/*.json
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:$F/issue-7" hi
 f=$(ls "$OUTBOX"/*.json 2>/dev/null | head -1)
 ok; [ "$rc" = 3 ] && [ -n "$f" ] && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["from"]==sys.argv[2] else 1)' "$f" "$U/operator@$(id -un)" \
-  || fail "E: no pane ⇒ sent as the operator (issue #1649), queued" "rc=$rc $err"
+  || st_miss "E: no pane ⇒ sent as the operator (issue #1649), queued" "rc=$rc $err"
 rm -f "$OUTBOX"/*.json
 
 # --- J: a stale map still hands it to the hub (issue #1647) -----------------------------
@@ -229,17 +229,17 @@ run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state blocked --sum
 f=$(ls "$OUTBOX"/*.json 2>/dev/null | head -1)
 ok; [ "$rc" = 3 ] && [ -n "$f" ] && case "$out" in "queued → issue-7（"*) true ;; *) false ;; esac \
   && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["to"]==sys.argv[2] and r["kind"]=="child_report" else 1)' "$f" "$F/issue-7" \
-  || fail "J: a stale map ⇒ the relay goes to the hub all the same, queued" "rc=$rc out=$out err=$err"
+  || st_miss "J: a stale map ⇒ the relay goes to the hub all the same, queued" "rc=$rc out=$out err=$err"
 ok; grep -q '"state": "QUEUED"' "$BOOK" 2>/dev/null && grep -q '"via": "hub"' "$BOOK" \
-  || fail "J: a QUEUED row in the delivery book" "$(cat "$BOOK" 2>/dev/null)"
+  || st_miss "J: a QUEUED row in the delivery book" "$(cat "$BOOK" 2>/dev/null)"
 rm -f "$OUTBOX"/*.json
 out=$(TMUX="$sockpath,1,0" TMUX_PANE="$pane" bash "$BIN/fleet-peer-send.sh" "wid:$F/issue-7" 'ping, stale' 2>"$WORK/err"); rc=$?
 ok; [ "$rc" = 3 ] && [ -n "$(ls "$OUTBOX"/*.json 2>/dev/null)" ] && case "$out" in "queued → issue-7"*) true ;; *) false ;; esac \
-  || fail "J: peer-send through a stale map ⇒ queued at the hub" "rc=$rc out=$out $(cat "$WORK/err")"
+  || st_miss "J: peer-send through a stale map ⇒ queued at the hub" "rc=$rc out=$out $(cat "$WORK/err")"
 rm -f "$OUTBOX"/*.json
 unset CCQUOTA_FLEET
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:$F/issue-7" hi
-ok; [ "$rc" = 1 ] && [ -z "$(ls "$OUTBOX"/*.json 2>/dev/null)" ] || fail "J: hub off ⇒ a stale map is no route (refused, nothing queued)" "rc=$rc $err"
+ok; [ "$rc" = 1 ] && [ -z "$(ls "$OUTBOX"/*.json 2>/dev/null)" ] || st_miss "J: hub off ⇒ a stale map is no route (refused, nothing queued)" "rc=$rc $err"
 export CCQUOTA_FLEET=1
 printf '%s/issue-7\tmac-a\t\n' "$F" > "$CACHE"
 
@@ -251,36 +251,36 @@ print(json.dumps(dict(id=rid, kind="receipt", **{"from": f}, to=t, from_node="",
 }
 deliver "$(rcpt 1800000000.1 delivered 'reported')"
 ok; [ "$rc" = 0 ] && grep -q "\"rid\": \"$U/issue-20#1800000000.1\", \"kind\": \"child_report\", \"to\": \"$F/issue-7\", \"state\": \"DELIVERED\"" "$BOOK" \
-  || fail "K: a delivered receipt ⇒ DELIVERED in the sender's book" "rc=$rc $err $(tail -2 "$BOOK")"
+  || st_miss "K: a delivered receipt ⇒ DELIVERED in the sender's book" "rc=$rc $err $(tail -2 "$BOOK")"
 bash "$BIN/fleet-peer-queue.sh" wait -L "$L" --rid "$U/issue-20#1800000000.1" --secs 0 >/dev/null; rc=$?
-ok; [ "$rc" = 0 ] || fail "K: wait reads DELIVERED (0)" "rc=$rc"
+ok; [ "$rc" = 0 ] || st_miss "K: wait reads DELIVERED (0)" "rc=$rc"
 deliver "$(rcpt 1800000000.2 expired 'no node took it within the relay TTL')"
 bash "$BIN/fleet-peer-queue.sh" wait -L "$L" --rid "$U/issue-20#1800000000.2" --secs 0 >/dev/null; rc=$?
-ok; [ "$rc" = 1 ] && grep -q '"state": "EXPIRED"' "$BOOK" || fail "K: an expired receipt ⇒ EXPIRED, wait 1" "rc=$rc"
+ok; [ "$rc" = 1 ] && grep -q '"state": "EXPIRED"' "$BOOK" || st_miss "K: an expired receipt ⇒ EXPIRED, wait 1" "rc=$rc"
 deliver "$(rcpt 1800000000.3 delivered 'queued at mac-a: parent issue-7 cannot take it now')"
 out=$(bash "$BIN/fleet-peer-queue.sh" wait -L "$L" --rid "$U/issue-20#1800000000.3" --secs 0); rc=$?
-ok; [ "$rc" = 3 ] && [ "$out" = QUEUED ] || fail "K: held by the target's machine ⇒ QUEUED, never DELIVERED" "rc=$rc $out"
+ok; [ "$rc" = 3 ] && [ "$out" = QUEUED ] || st_miss "K: held by the target's machine ⇒ QUEUED, never DELIVERED" "rc=$rc $out"
 deliver "$(python3 -c 'import json,sys; t=sys.argv[2]+"/issue-20"; rid=t+"#1"; print(json.dumps(dict(id=rid, kind="receipt", **{"from": sys.argv[1]+"/issue-7"}, to=t, payload=dict(rid=rid, status="delivered"))))' "$F" "$F")"
-ok; [ "$rc" = 1 ] || fail "K: a receipt for a fleet not on this machine is refused" "rc=$rc $err"
+ok; [ "$rc" = 1 ] || st_miss "K: a receipt for a fleet not on this machine is refused" "rc=$rc $err"
 
 # --- L: a parent not live here is «not now», delivered once it is back --------------------
 L8="$(dirname "$LEDGER")/acme-app:issue-8.ndjson"
 R8=$(relay 1700000001.1 child_report "$F/issue-43" "$U/issue-8" '{"child":"issue-43","state":"MERGED","pr":"5","tier":"quiet","msg":"[child-report] issue #43\nstate: MERGED"}')
 deliver "$R8"
-ok; [ "$rc" = 75 ] && [ "$(nlines "$L8")" = 1 ] || fail "L: parent not live ⇒ 75, ledgered" "rc=$rc lines=$(nlines "$L8") $err"
+ok; [ "$rc" = 75 ] && [ "$(nlines "$L8")" = 1 ] || st_miss "L: parent not live ⇒ 75, ledgered" "rc=$rc lines=$(nlines "$L8") $err"
 q8() { grep -l "$F/issue-43#1700000001.1" "$FLEET_CONF_DIR/fleets/$L/peer-queue/"*.json 2>/dev/null | wc -l | tr -d ' '; }
 w8=$(tf new-window -d -P -F '#{window_id}' -n issue-8 'while :; do sleep 300; done')
 tf set-window-option -t "$w8" @issue 8
 deliver "$R8"
 ok; [ "$rc" = 0 ] && [ "$(nlines "$L8")" = 1 ] && case "$err" in *queued*) true ;; *) false ;; esac \
   && [ "$(q8)" = 1 ] \
-  || fail "L: pushed again once the parent is back ⇒ handed over (its inbox is down: queued here), still one ledger row" "rc=$rc lines=$(nlines "$L8") $err"
+  || st_miss "L: pushed again once the parent is back ⇒ handed over (its inbox is down: queued here), still one ledger row" "rc=$rc lines=$(nlines "$L8") $err"
 deliver "$R8"
-ok; [ "$rc" = 0 ] && [ "$(q8)" = 1 ] || fail "L: a third push is a no-op" "rc=$rc $err"
+ok; [ "$rc" = 0 ] && [ "$(q8)" = 1 ] || st_miss "L: a third push is a no-op" "rc=$rc $err"
 deliver "$(relay 1700000001.2 child_report "$F/issue-43" "$U/0e0e0e0e-1111-4222-8333-444444444444" '{"child":"issue-43","state":"MERGED","tier":"quiet","msg":"m"}')"
-ok; [ "$rc" = 75 ] || fail "L: an identity-form parent not live here ⇒ 75" "rc=$rc $err"
+ok; [ "$rc" = 75 ] || st_miss "L: an identity-form parent not live here ⇒ 75" "rc=$rc $err"
 deliver "$(relay 1700000001.3 message "$F/issue-43" "$U/0e0e0e0e-1111-4222-8333-444444444444" '{"text":"hi"}')"
-ok; [ "$rc" = 75 ] || fail "L: a message to an identity not live here ⇒ 75" "rc=$rc $err"
+ok; [ "$rc" = 75 ] || st_miss "L: a message to an identity not live here ⇒ 75" "rc=$rc $err"
 
 # --- G: await a child elsewhere -----------------------------------------------------------
 printf '%s/issue-55\tmac-a\t%s/acme-app:issue-7\n%s/issue-56\tmac-a\t%s/acme-app:issue-9\n' "$F" "$U" "$F" "$U" > "$CACHE"
@@ -290,22 +290,21 @@ printf '%s/issue-55\tmac-a\t%s/acme-app:issue-7\n%s/issue-56\tmac-a\t%s/acme-app
 run bash "$BIN/fleet-await.sh" "wid:$F/issue-55" -L "$L" --parent issue-7 --timeout 20 --interval 1
 wait
 ok; [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | head -1)" = MERGED ] && case "$out" in *"pr: #11"*) true ;; *) false ;; esac \
-  || fail "G: await a remote child → MERGED off the pushed report" "rc=$rc out=$out err=$err"
+  || st_miss "G: await a remote child → MERGED off the pushed report" "rc=$rc out=$out err=$err"
 run bash "$BIN/fleet-await.sh" "wid:$F/issue-56" -L "$L" --parent issue-7 --timeout 5 --interval 1
 ok; [ "$rc" = 5 ] && case "$out" in *"reports to $U/acme-app:issue-9"*) true ;; *) false ;; esac \
-  || fail "G: another parent's child → NO-WORKER" "rc=$rc out=$out"
+  || st_miss "G: another parent's child → NO-WORKER" "rc=$rc out=$out"
 printf '%s/issue-57\tmac-a\t%s/acme-app:issue-7\n' "$F" "$U" > "$CACHE"
 ( sleep 2; printf '%s/issue-1\tmac-a\t\n' "$F" > "$CACHE" ) &
 run bash "$BIN/fleet-await.sh" "wid:$F/issue-57" -L "$L" --parent issue-7 --timeout 20 --interval 1
 wait
-ok; [ "$rc" = 4 ] && [ "$(printf '%s\n' "$out" | head -1)" = GONE ] || fail "G: a child gone from the map → GONE" "rc=$rc out=$out err=$err"
+ok; [ "$rc" = 4 ] && [ "$(printf '%s\n' "$out" | head -1)" = GONE ] || st_miss "G: a child gone from the map → GONE" "rc=$rc out=$out err=$err"
 
 # --- H: the inventory carries @origin_wid -------------------------------------------------
 inv=$(cd "$BIN" && python3 -c 'import json, sys, fleet_control as c
 ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
 print(json.dumps({w["key"]: w.get("origin_wid") for w in ctl.workers(f)["workers"]}))' "$FLEET_CONF_DIR" "$L" 2>&1)
 ok; printf '%s' "$inv" | python3 -c 'import json,sys; m=json.load(sys.stdin); sys.exit(0 if m.get("acme-app:issue-20")==sys.argv[1] and m.get("acme-app:issue-7") is None else 1)' "$F/issue-7" \
-  || fail "H: origin_wid on the child, absent on a window without one" "$inv"
+  || st_miss "H: origin_wid on the child, absent on a window without one" "$inv"
 
-if [ "$FAIL" -eq 0 ]; then printf 'hub-relay selftest: PASS (%d checks)\n' "$CHECKS"; exit 0; fi
-printf 'hub-relay selftest: %d FAILED of %d\n' "$FAIL" "$CHECKS" >&2; exit 1
+st_done

@@ -26,13 +26,12 @@
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 CLI="$BIN/fleet-emit.sh"
 [ -x "$CLI" ] || { printf 'selftest: %s missing/not executable\n' "$CLI" >&2; exit 2; }
 
 CHECKS=0
-fail() { printf 'fleet-emit selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
-eq()   { ok; [ "$2" = "$3" ] || fail "$1" "expected: [$2]"$'\n'"got:      [$3]"; }
+eq()   { st_count; [ "$2" = "$3" ] || st_fail "$1" "expected: [$2]"$'\n'"got:      [$3]"; }
 has()  { case "$2" in *"$1"*) return 0 ;; esac; return 1; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-emit.XXXXXX")" || exit 2
@@ -54,7 +53,7 @@ spooled() { cat "$SPOOL"/*.json 2>/dev/null; }
 out=$(bash "$CLI" session.start --repo a/b --issue 7 2>&1); rc=$?
 eq "no endpoint configured exits 0" 0 "$rc"
 eq "no endpoint configured prints nothing" "" "$out"
-ok; [ ! -e "$SPOOL" ] || fail "OFF must not even create the spool dir" "$(ls -a "$SPOOL")"
+st_count; [ ! -e "$SPOOL" ] || st_fail "OFF must not even create the spool dir" "$(ls -a "$SPOOL")"
 
 # A usage error is the ONE non-zero exit (a caller bug, not a runtime condition).
 out=$(bash "$CLI" 2>&1); rc=$?
@@ -63,7 +62,7 @@ out=$(bash "$CLI" session.start --bogus x 2>&1); rc=$?
 eq "an unknown flag exits 2" 2 "$rc"
 out=$(bash "$CLI" -h 2>&1); rc=$?
 eq "--help exits 0" 0 "$rc"
-ok; has 'fleet-emit.sh' "$out" || fail "--help must print the usage header" "$out"
+st_count; has 'fleet-emit.sh' "$out" || st_fail "--help must print the usage header" "$out"
 
 # ============================================================================
 # 2. A DEAD ENDPOINT IS A SILENT NO-OP — spooled, exit 0, nothing in the way
@@ -80,17 +79,17 @@ eq "the event is spooled, not lost" 1 "$(depth)"
 # 3. THE ALLOWLIST — exactly the declared fields, and nothing can be smuggled in
 # ============================================================================
 line=$(spooled)
-ok; python3 -c 'import json,sys; json.loads(sys.argv[1])' "$line" 2>/dev/null \
-  || fail "the spooled event must be valid JSON" "$line"
+st_count; python3 -c 'import json,sys; json.loads(sys.argv[1])' "$line" 2>/dev/null \
+  || st_fail "the spooled event must be valid JSON" "$line"
 for f in event ts session repo issue source branch; do
-  ok; has "\"$f\"" "$line" || fail "the payload must carry $f" "$line"
+  st_count; has "\"$f\"" "$line" || st_fail "the payload must carry $f" "$line"
 done
-ok; has '"issue":41' "$line" || fail "issue must be a NUMBER, not a string" "$line"
-ok; has '"branch":"issue-41"' "$line" || fail "a bound issue names its branch by construction" "$line"
+st_count; has '"issue":41' "$line" || st_fail "issue must be a NUMBER, not a string" "$line"
+st_count; has '"branch":"issue-41"' "$line" || st_fail "a bound issue names its branch by construction" "$line"
 
 # An empty field is OMITTED rather than sent as null — a consumer reads "absent"
 # the same way and the line stays small.
-ok; has '"pr"' "$line" && fail "an unset field must be omitted, not sent empty" "$line"
+st_count; has '"pr"' "$line" && st_fail "an unset field must be omitted, not sent empty" "$line"
 
 # The injection rail, both halves: structure and payload. Every one of these values
 # would end the JSON string and open a new key if it survived verbatim.
@@ -100,13 +99,13 @@ bash "$CLI" session.end --via hook \
   --session-id $'id"\n{"evil":1}' \
   --reason 'prompt_input_exit' >/dev/null 2>&1
 line=$(spooled)
-ok; python3 -c 'import json,sys; json.loads(sys.argv[1])' "$line" 2>/dev/null \
-  || fail "a hostile field value must still yield valid JSON" "$line"
+st_count; python3 -c 'import json,sys; json.loads(sys.argv[1])' "$line" 2>/dev/null \
+  || st_fail "a hostile field value must still yield valid JSON" "$line"
 # The quote is STRIPPED, not escaped, so the hostile text survives only as inert
 # characters inside the field it was passed to — never as a key of its own.
-ok; has '"leaked"' "$line" && fail "a quote in a value must not open a second key" "$line"
-ok; has '"repo":"o/rleakedsecret"' "$line" || fail "the repo filter must strip the quote in place" "$line"
-ok; python3 - "$line" <<'PY' || fail "the object must contain ONLY allowlisted keys" "$line"
+st_count; has '"leaked"' "$line" && st_fail "a quote in a value must not open a second key" "$line"
+st_count; has '"repo":"o/rleakedsecret"' "$line" || st_fail "the repo filter must strip the quote in place" "$line"
+st_count; python3 - "$line" <<'PY' || st_fail "the object must contain ONLY allowlisted keys" "$line"
 import json, sys
 allowed = {"event","ts","session","session_id","repo","issue","pr","branch",
            "from_branch","via","source","reason","state","action","outcome","verdict"}
@@ -128,17 +127,17 @@ rm -f "$SPOOL"/*.json
 printf '%s' '{"session_id":"abc-123","transcript_path":"/x/y.jsonl","cwd":"/w","hook_event_name":"SessionStart","source":"clear"}' \
   | bash "$CLI" session.start --stdin-json --session fleet-x --repo o/r >/dev/null 2>&1
 line=$(spooled)
-ok; has '"session_id":"abc-123"' "$line" || fail "--stdin-json must lift the ledger's join key" "$line"
-ok; has '"source":"clear"' "$line" || fail "--stdin-json must lift the SessionStart source" "$line"
-ok; has 'transcript' "$line" && fail "the transcript path must NEVER leave the machine" "$line"
-ok; has '/w' "$line" && fail "the cwd must NEVER leave the machine" "$line"
+st_count; has '"session_id":"abc-123"' "$line" || st_fail "--stdin-json must lift the ledger's join key" "$line"
+st_count; has '"source":"clear"' "$line" || st_fail "--stdin-json must lift the SessionStart source" "$line"
+st_count; has 'transcript' "$line" && st_fail "the transcript path must NEVER leave the machine" "$line"
+st_count; has '/w' "$line" && st_fail "the cwd must NEVER leave the machine" "$line"
 
 rm -f "$SPOOL"/*.json
 printf '%s' '{"session_id":"abc-123","hook_event_name":"SessionEnd","reason":"prompt_input_exit"}' \
   | bash "$CLI" session.end --via hook --stdin-json --repo o/r >/dev/null 2>&1
 line=$(spooled)
-ok; has '"reason":"prompt_input_exit"' "$line" || fail "--stdin-json must lift the SessionEnd reason" "$line"
-ok; has '"via":"hook"' "$line" || fail "the hook end must be distinguishable from the reap end" "$line"
+st_count; has '"reason":"prompt_input_exit"' "$line" || st_fail "--stdin-json must lift the SessionEnd reason" "$line"
+st_count; has '"via":"hook"' "$line" || st_fail "the hook end must be distinguishable from the reap end" "$line"
 
 # ============================================================================
 # 6. THE QUEUE IS BOUNDED, AND DROPS THE OLDEST
@@ -166,8 +165,8 @@ spooled_prs()   { local p; for p in "$SPOOL"/*.json; do [ -f "$p" ] && sed -n 's
 rm -f "$SPOOL"/*.json
 bash "$CLI" session.pr --repo o/r --pr 1 >/dev/null 2>&1
 name=$(spooled_names)
-ok; printf '%s\n' "$name" | grep -Eq '^[0-9]{10}-[0-9]{6}-[0-9]{7}-[0-9]{5}\.json$' \
-  || fail "a spool name must be fixed-width digits (sec-usec-pid-random), so lexical order is arrival order" "$name"
+st_count; printf '%s\n' "$name" | grep -Eq '^[0-9]{10}-[0-9]{6}-[0-9]{7}-[0-9]{5}\.json$' \
+  || st_fail "a spool name must be fixed-width digits (sec-usec-pid-random), so lexical order is arrival order" "$name"
 
 # (b) a burst inside one second: emission order == sorted order, stamps strictly
 #     increasing. Each emit is its own process, so consecutive stamps are at
@@ -180,7 +179,7 @@ for i in 1 2 3 4 5 6 7 8; do
   for n in $(spooled_names); do
     case "$emitted" in *"$n"*) ;; *) new=$n ;; esac
   done
-  [ -n "$new" ] || fail "emit $i left no new spool file" "$(spooled_names)"
+  [ -n "$new" ] || st_fail "emit $i left no new spool file" "$(spooled_names)"
   emitted="$emitted$new"$'\n'
 done
 eq "a same-second burst must sort in emission order" "$emitted" "$(printf '%s' "$emitted" | sort)"$'\n'
@@ -188,7 +187,7 @@ prev=0
 for n in $emitted; do
   sec=${n%%-*}; rest=${n#*-}; usec=${rest%%-*}
   st=$(( 10#${sec}${usec} ))
-  ok; [ "$st" -gt "$prev" ] || fail "the microsecond stamp must strictly increase across a burst" "$emitted"
+  st_count; [ "$st" -gt "$prev" ] || st_fail "the microsecond stamp must strictly increase across a burst" "$emitted"
   prev=$st
 done
 
@@ -199,8 +198,8 @@ export FLEET_EMIT_QUEUE_MAX=3
 for i in 1 2 3 4 5 6; do bash "$CLI" session.pr --repo o/r --pr "$i" >/dev/null 2>&1; done
 eq "the spool is capped at FLEET_EMIT_QUEUE_MAX" 3 "$(depth)"
 kept=$(spooled)
-ok; has '"pr":6' "$kept" || fail "overflow must keep the NEWEST events" "$kept"
-ok; has '"pr":1' "$kept" && fail "overflow must drop the OLDEST events" "$kept"
+st_count; has '"pr":6' "$kept" || st_fail "overflow must keep the NEWEST events" "$kept"
+st_count; has '"pr":1' "$kept" && st_fail "overflow must drop the OLDEST events" "$kept"
 eq "overflow must keep EXACTLY the newest cap events, oldest-first" "4 5 6 " "$(spooled_prs)"
 unset FLEET_EMIT_QUEUE_MAX
 
@@ -211,7 +210,7 @@ PORT=0
 for p in 18931 18932 18933 18934 18935; do
   (exec 3<>/dev/tcp/127.0.0.1/$p) 2>/dev/null || { PORT=$p; break; }
 done
-[ "$PORT" != 0 ] || fail "could not find a free loopback port for the sink"
+[ "$PORT" != 0 ] || st_fail "could not find a free loopback port for the sink"
 
 cat > "$WORK/sink.py" <<'PY'
 import http.server, sys
@@ -237,7 +236,7 @@ start_sink() {  # $1=mode
     (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null && { exec 3>&-; return 0; }
     sleep 0.1
   done
-  fail "the test sink never came up on port $PORT"
+  st_fail "the test sink never came up on port $PORT"
 }
 drained() {  # wait for the detached drain, bounded
   local i
@@ -251,11 +250,11 @@ export FLEET_EMIT_TOKEN="tok-123"
 start_sink accept
 bash "$CLI" session.pr --session fleet-x --repo o/r --issue 41 --pr 99 \
   --state MERGED --action merged >/dev/null 2>&1
-ok; drained || fail "the detached drain must empty the spool" "$(spooled)"
+st_count; drained || st_fail "the detached drain must empty the spool" "$(spooled)"
 got=$(cat "$WORK/sink.log" 2>/dev/null)
-ok; has 'Bearer tok-123' "$got" || fail "the bearer token must be sent" "$got"
-ok; has '"event":"session.pr"' "$got" || fail "the sink must receive the event" "$got"
-ok; has '"pr":99' "$got" || fail "the PR number must be delivered" "$got"
+st_count; has 'Bearer tok-123' "$got" || st_fail "the bearer token must be sent" "$got"
+st_count; has '"event":"session.pr"' "$got" || st_fail "the sink must receive the event" "$got"
+st_count; has '"pr":99' "$got" || st_fail "the PR number must be delivered" "$got"
 kill "$SINK_PID" 2>/dev/null; SINK_PID=
 
 # The drain delivers OLDEST-FIRST — the same fixed-width glob the cap trusts
@@ -273,7 +272,7 @@ flushed() {
   for i in $(seq 1 50); do bash "$CLI" --flush >/dev/null 2>&1; [ "$(depth)" = 0 ] && return 0; sleep 0.1; done
   return 1
 }
-ok; flushed || fail "--flush must drain a waiting spool" "$(spooled)"
+st_count; flushed || st_fail "--flush must drain a waiting spool" "$(spooled)"
 eq "the drain must deliver oldest-first" "1 2 3 4 " \
   "$(sed -n 's/.*"pr":\([0-9]*\).*/\1/p' "$WORK/sink.log" 2>/dev/null | tr '\n' ' ')"
 kill "$SINK_PID" 2>/dev/null; SINK_PID=
@@ -283,18 +282,18 @@ kill "$SINK_PID" 2>/dev/null; SINK_PID=
 rm -f "$SPOOL"/*.json
 start_sink reject
 bash "$CLI" session.end --via reap --repo o/r --issue 41 --outcome landed >/dev/null 2>&1
-ok; drained || fail "a 4xx must DROP the event, not wedge the queue" "$(spooled)"
+st_count; drained || st_fail "a 4xx must DROP the event, not wedge the queue" "$(spooled)"
 kill "$SINK_PID" 2>/dev/null; SINK_PID=
 
 # ============================================================================
 # 9. THE WIRING — the four facts are actually hung off the existing paths
 # ============================================================================
-ok; grep -q 'fleet-emit.sh session.start --stdin-json' "$BIN/../hooks/settings-hooks.json" \
-  || fail "session.start must hang off the SessionStart hook"
-ok; grep -q 'fleet-emit.sh session.end --via hook --stdin-json' "$BIN/../hooks/settings-hooks.json" \
-  || fail "session.end (via=hook) must hang off the SessionEnd hook"
-ok; grep -q 'session\.end --via reap' "$BIN/fleet-lib.sh" \
-  || fail "session.end (via=reap) must ride fleet_reap_record, the one reap choke point"
+st_count; grep -q 'fleet-emit.sh session.start --stdin-json' "$BIN/../hooks/settings-hooks.json" \
+  || st_fail "session.start must hang off the SessionStart hook"
+st_count; grep -q 'fleet-emit.sh session.end --via hook --stdin-json' "$BIN/../hooks/settings-hooks.json" \
+  || st_fail "session.end (via=hook) must hang off the SessionEnd hook"
+st_count; grep -q 'session\.end --via reap' "$BIN/fleet-lib.sh" \
+  || st_fail "session.end (via=reap) must ride fleet_reap_record, the one reap choke point"
 
 printf 'fleet-emit selftest: OK (%d checks)\n' "$CHECKS"
 exit 0

@@ -30,9 +30,8 @@ st_sandbox "${TMPDIR:-/tmp}/fleet-daemon-loaded-selftest.XXXXXX"
 SHIM="$WORK/shim"; AG="$WORK/LaunchAgents"; LD="$WORK/LaunchDaemons"
 mkdir -p "$SHIM" "$AG" "$LD"
 
-CHECKS=0
+st_tally count
 rc_is() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected rc $2, got rc $3"; }
-eq()    { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected '$2', got '$3'"; }
 # the probe, in a sandbox: this login is `guest`, its plist dirs are ours
 probe() { PATH="$SHIM:$PATH" FLEET_NODE_STATE="$WORK/node" FLEET_INSTALL_LOGIN=guest FLEET_LAUNCHD_AGENTS_DIR="$AG" FLEET_INSTALL_DAEMON_DIR="$LD" \
           sh "$P" "$@"; printf '%s' $?; }
@@ -42,21 +41,21 @@ mkshim() { printf '#!/bin/sh\n%s\n' "$2" > "$SHIM/$1"; chmod +x "$SHIM/$1"; }
 # ---- the lib's shape rule (issue #1495) — what the probe and the installer share ----
 lib() { ( export FLEET_NODE_STATE="$WORK/node" FLEET_INSTALL_LOGIN=guest FLEET_LAUNCHD_AGENTS_DIR="$AG" FLEET_INSTALL_DAEMON_DIR="$LD"
           . "$L" && "$@" ); }
-eq "lib: neither dir has a plist → gui"   gui    "$(lib fleet_daemon_shape)"
+st_eq "lib: neither dir has a plist → gui"   gui    "$(lib fleet_daemon_shape)"
 : > "$LD/com.claude-fleet.guest.cleanup.plist"
-eq "lib: only a system plist for this login → system" system "$(lib fleet_daemon_shape)"
-eq "lib: another login's system plist is not ours"    gui    "$(lib fleet_daemon_shape other)"
+st_eq "lib: only a system plist for this login → system" system "$(lib fleet_daemon_shape)"
+st_eq "lib: another login's system plist is not ours"    gui    "$(lib fleet_daemon_shape other)"
 : > "$AG/com.claude-fleet.collect.plist"
-eq "lib: a gui agent outranks a system plist → gui"  gui    "$(lib fleet_daemon_shape)"
+st_eq "lib: a gui agent outranks a system plist → gui"  gui    "$(lib fleet_daemon_shape)"
 rm -f "$AG/com.claude-fleet.collect.plist"
-eq "lib: label, gui"        com.claude-fleet.cleanup        "$(lib fleet_daemon_label cleanup gui)"
-eq "lib: label, system"     com.claude-fleet.guest.cleanup  "$(lib fleet_daemon_label cleanup system)"
-eq "lib: label, this shape (system)" com.claude-fleet.guest.cleanup "$(lib fleet_daemon_label cleanup)"
-eq "lib: label, explicit login"      com.claude-fleet.other.cleanup "$(lib fleet_daemon_label cleanup system other)"
-eq "lib: plist, gui"        "$AG/com.claude-fleet.cleanup.plist"        "$(lib fleet_daemon_plist cleanup gui)"
-eq "lib: plist, system"     "$LD/com.claude-fleet.guest.cleanup.plist"  "$(lib fleet_daemon_plist cleanup system)"
-eq "lib: domain, system"    system          "$(lib fleet_daemon_domain system)"
-eq "lib: domain, gui"       "gui/$(id -u)"  "$(lib fleet_daemon_domain gui)"
+st_eq "lib: label, gui"        com.claude-fleet.cleanup        "$(lib fleet_daemon_label cleanup gui)"
+st_eq "lib: label, system"     com.claude-fleet.guest.cleanup  "$(lib fleet_daemon_label cleanup system)"
+st_eq "lib: label, this shape (system)" com.claude-fleet.guest.cleanup "$(lib fleet_daemon_label cleanup)"
+st_eq "lib: label, explicit login"      com.claude-fleet.other.cleanup "$(lib fleet_daemon_label cleanup system other)"
+st_eq "lib: plist, gui"        "$AG/com.claude-fleet.cleanup.plist"        "$(lib fleet_daemon_plist cleanup gui)"
+st_eq "lib: plist, system"     "$LD/com.claude-fleet.guest.cleanup.plist"  "$(lib fleet_daemon_plist cleanup system)"
+st_eq "lib: domain, system"    system          "$(lib fleet_daemon_domain system)"
+st_eq "lib: domain, gui"       "gui/$(id -u)"  "$(lib fleet_daemon_domain gui)"
 rm -f "$LD"/*.plist
 
 # ---- launchd branch (macOS), gui shape ---------------------------------------
@@ -146,11 +145,11 @@ mkshim uname 'echo Darwin'
 mkshim launchctl 'exit 1'
 mkshim sudo 'exit 1'
 rc_is "not managed, nothing loaded → 1"            1 "$(probe com.claude-fleet.cleanup)"
-eq    "lib: no accounts.json → not managed"        1 "$(lib fleet_node_manages; printf '%s' $?)"
+st_eq    "lib: no accounts.json → not managed"        1 "$(lib fleet_node_manages; printf '%s' $?)"
 mkdir -p "$WORK/node"
 printf '{"guest": {"managed": true}, "other": {"managed": false}}\n' > "$WORK/node/accounts.json"
-eq    "lib: guest managed"                         0 "$(lib fleet_node_manages; printf '%s' $?)"
-eq    "lib: a released login is not"               1 "$(lib fleet_node_manages other; printf '%s' $?)"
+st_eq    "lib: guest managed"                         0 "$(lib fleet_node_manages; printf '%s' $?)"
+st_eq    "lib: a released login is not"               1 "$(lib fleet_node_manages other; printf '%s' $?)"
 printf '{"supervisor": {"pid": %s, "heartbeat": %s}}\n' "$$" "$(date +%s)" > "$WORK/node/state.json"
 rc_is "managed, the daemon up → 0"                 0 "$(probe com.claude-fleet.cleanup)"
 rc_is "managed: memguard is not an account unit"   1 "$(probe com.claude-fleet.memguard)"

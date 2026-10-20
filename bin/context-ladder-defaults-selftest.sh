@@ -26,21 +26,20 @@ ROOT="$(cd "$BIN/.." && pwd)"
 EX="$ROOT/conf/fleet.conf.reference"
 CTX="$BIN/fleet-context.sh"
 
-pass=0 failn=0
-bad() { failn=$((failn + 1)); printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; }
+st_tally
 
 # ---- A: conf/fleet.conf.reference --------------------------------------------------------
 exval() { sed -n "s/^#$1=\([0-9][0-9]*\)[[:space:]].*/\1/p" "$EX" | head -1; }
 H=$(exval FLEET_AUTO_HANDOFF_PCT); C=$(exval FLEET_COMPACT_PREP_PCT); M=$(exval FLEET_COMPACT_MAX)
-[ "$H/$C/$M" = "0/0/3" ] && st_pass "A conf/fleet.conf.reference: handoff OFF · compact-prep OFF · max 3" \
-  || bad "A conf/fleet.conf.reference must document 0/0/3, got '$H/$C/$M'"
+[ "$H/$C/$M" = "0/0/3" ] && st_ok "A conf/fleet.conf.reference: handoff OFF · compact-prep OFF · max 3" \
+  || st_miss "A conf/fleet.conf.reference must document 0/0/3, got '$H/$C/$M'"
 [ -n "$H" ] && [ -n "$C" ] && [ -n "$M" ] || { printf 'context-ladder-defaults-selftest: FAIL (no defaults parsed)\n' >&2; exit 1; }
 
 # ---- B: every code site carries the same numbers ----------------------------------
 # site <file> <fixed string> <what>
 site() {
-  if grep -qF -- "$2" "$ROOT/$1"; then st_pass "B $1: $3"
-  else bad "B $1 must carry the conf/fleet.conf.reference default ($3): no '$2'"; fi
+  if grep -qF -- "$2" "$ROOT/$1"; then st_ok "B $1: $3"
+  else st_miss "B $1 must carry the conf/fleet.conf.reference default ($3): no '$2'"; fi
 }
 site bin/set-claude-state.sh    "''|*[!0-9]*) _hp=$H ;;"                "handoff $H"
 site bin/set-claude-state.sh    "''|*[!0-9]*) _cp=$C ;;"                "compact-prep $C"
@@ -59,7 +58,7 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/home" "$WORK/projects"
 T="$WORK/t.jsonl"
 printf '{"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":1,"cache_creation_input_tokens":1000,"cache_read_input_tokens":20000,"output_tokens":500}}}\n' > "$T"
-[ -f "$ROOT/fleet.conf" ] && bad "C precondition: this root must have no fleet.conf (run through run-selftests.sh)" "$ROOT/fleet.conf"
+[ -f "$ROOT/fleet.conf" ] && st_miss "C precondition: this root must have no fleet.conf (run through run-selftests.sh)" "$ROOT/fleet.conf"
 # nocfg [KEY=val …] [--flag …] — fleet-context.sh from a clean env: no conf layer,
 # no tmux; KEY=val words go to the environment, the rest to the script.
 nocfg() {
@@ -70,30 +69,27 @@ nocfg() {
     bash "$CTX" --transcript "$T" ${args[@]+"${args[@]}"} 2>&1
 }
 out=$(nocfg)
-case "$out" in *'auto-handoff OFF'*) st_pass "C text: auto-handoff OFF" ;;
-  *) bad "C with no conf fleet-context.sh must print auto-handoff OFF" "$out" ;; esac
-case "$out" in *'in-place compaction OFF'*) st_pass "C text: compact-prep OFF" ;;
-  *) bad "C with no conf fleet-context.sh must print in-place compaction OFF" "$out" ;; esac
+case "$out" in *'auto-handoff OFF'*) st_ok "C text: auto-handoff OFF" ;;
+  *) st_miss "C with no conf fleet-context.sh must print auto-handoff OFF" "$out" ;; esac
+case "$out" in *'in-place compaction OFF'*) st_ok "C text: compact-prep OFF" ;;
+  *) st_miss "C with no conf fleet-context.sh must print in-place compaction OFF" "$out" ;; esac
 out=$(nocfg --json)
-case "$out" in *"\"handoff_pct\":80,\"auto_handoff_pct\":$H,\"compact_prep_pct\":$C,\"compact_max\":$M,"*) st_pass "C json: advisory 80, automatic $H / $C / $M" ;;
-  *) bad "C --json must carry auto_handoff_pct $H, compact_prep_pct $C, compact_max $M" "$out" ;; esac
+case "$out" in *"\"handoff_pct\":80,\"auto_handoff_pct\":$H,\"compact_prep_pct\":$C,\"compact_max\":$M,"*) st_ok "C json: advisory 80, automatic $H / $C / $M" ;;
+  *) st_miss "C --json must carry auto_handoff_pct $H, compact_prep_pct $C, compact_max $M" "$out" ;; esac
 
 # ---- D: 0 is still off -----------------------------------------------------------
 out=$(nocfg FLEET_AUTO_HANDOFF_PCT=0 FLEET_COMPACT_PREP_PCT=0)
-case "$out" in *'auto-handoff OFF (FLEET_AUTO_HANDOFF_PCT=0)'*'in-place compaction OFF (FLEET_COMPACT_PREP_PCT=0)'*) st_pass "D 0 = off for both lines" ;;
-  *) bad "D an explicit 0 must still turn each line off" "$out" ;; esac
+case "$out" in *'auto-handoff OFF (FLEET_AUTO_HANDOFF_PCT=0)'*'in-place compaction OFF (FLEET_COMPACT_PREP_PCT=0)'*) st_ok "D 0 = off for both lines" ;;
+  *) st_miss "D an explicit 0 must still turn each line off" "$out" ;; esac
 out=$(nocfg FLEET_COMPACT_PREP_PCT=55 FLEET_COMPACT_MAX=0)
-case "$out" in *"in place from 55% · no cap"*) st_pass "D explicit compaction retains FLEET_COMPACT_MAX=0 = no cap" ;;
-  *) bad "D FLEET_COMPACT_MAX=0 must read 'no cap'" "$out" ;; esac
+case "$out" in *"in place from 55% · no cap"*) st_ok "D explicit compaction retains FLEET_COMPACT_MAX=0 = no cap" ;;
+  *) st_miss "D FLEET_COMPACT_MAX=0 must read 'no cap'" "$out" ;; esac
 
 out=$(nocfg FLEET_AUTO_HANDOFF_PCT=80 FLEET_COMPACT_PREP_PCT=55)
-case "$out" in *'auto-handoff at 80%'*'in place from 55% · at most 3 per session'*) st_pass "D explicit legacy 80/55/3 preserved" ;;
-  *) bad "D explicit thresholds must retain their behavior" "$out" ;; esac
+case "$out" in *'auto-handoff at 80%'*'in place from 55% · at most 3 per session'*) st_ok "D explicit legacy 80/55/3 preserved" ;;
+  *) st_miss "D explicit thresholds must retain their behavior" "$out" ;; esac
 out=$(nocfg FLEET_CONTEXT_LIMIT=22000)
-case "$out" in *'context usage advisory only'*'native Agent manages compaction'*) st_pass "D high default context does not instruct a handoff" ;;
-  *) bad "D advisory context must leave compaction to the Agent" "$out" ;; esac
+case "$out" in *'context usage advisory only'*'native Agent manages compaction'*) st_ok "D high default context does not instruct a handoff" ;;
+  *) st_miss "D advisory context must leave compaction to the Agent" "$out" ;; esac
 
-if [ "$failn" -gt 0 ]; then
-  printf 'context-ladder-defaults-selftest: FAIL (%s failed, %s ok)\n' "$failn" "$pass" >&2; exit 1
-fi
-printf 'context-ladder-defaults-selftest: PASS (%s checks)\n' "$pass"
+st_done

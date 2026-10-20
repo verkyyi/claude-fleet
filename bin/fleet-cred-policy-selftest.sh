@@ -20,7 +20,6 @@ BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$BIN/selftest-lib.sh"
 SUT="$BIN/fleet-cred-policy.sh"
 CHECKS=0
-fail() { printf 'fleet-cred-policy selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 st_sandbox "${TMPDIR:-/tmp}/fleet-cred-policy-selftest.XXXXXX"
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
@@ -37,15 +36,15 @@ CX=codex:account:0123456789abcdef0123456789abcdef
 for args in '' 'frob' 'set node mac-a' 'deny user gh:1 x' 'clear login alice' 'effective' 'show extra'; do
   reset
   eval "CCQUOTA_VIEWER_TOKEN=$VIEWER CCQUOTA_HUB_URL=http://hub.test \"\$SUT\" $args" >/dev/null 2>"$WORK/err"; rc=$?
-  [ "$rc" -eq 2 ] || fail "A: '$args' exit $rc, want 2: $(cat "$WORK/err")"
-  [ ! -e "$STUB_LOG" ] || fail "A: '$args' called curl"
+  [ "$rc" -eq 2 ] || st_fail "A: '$args' exit $rc, want 2: $(cat "$WORK/err")"
+  [ ! -e "$STUB_LOG" ] || st_fail "A: '$args' called curl"
   st_count
 done
 
 # B. no token
 reset
 CCQUOTA_HUB_URL=http://hub.test "$SUT" show >/dev/null 2>"$WORK/err"; rc=$?
-[ "$rc" -eq 1 ] && grep -q CCQUOTA_VIEWER_TOKEN "$WORK/err" && [ ! -e "$STUB_LOG" ] || fail "B: rc=$rc $(cat "$WORK/err")"
+[ "$rc" -eq 1 ] && grep -q CCQUOTA_VIEWER_TOKEN "$WORK/err" && [ ! -e "$STUB_LOG" ] || st_fail "B: rc=$rc $(cat "$WORK/err")"
 st_count
 
 export CCQUOTA_VIEWER_TOKEN=$VIEWER CCQUOTA_HUB_URL=http://hub.test/
@@ -53,43 +52,43 @@ export CCQUOTA_VIEWER_TOKEN=$VIEWER CCQUOTA_HUB_URL=http://hub.test/
 # C. writes
 reset; fake '{"ok":true,"allow":["'$U1'","'$CX'"]}'
 out=$("$SUT" set node MAC-A.local "$U1" "$CX"); rc=$?
-[ "$rc" -eq 0 ] && [ "$out" = "cred-policy: SET node MAC-A.local: $U1 $CX" ] || fail "C set: rc=$rc $out"
+[ "$rc" -eq 0 ] && [ "$out" = "cred-policy: SET node MAC-A.local: $U1 $CX" ] || st_fail "C set: rc=$rc $out"
 grep -qF 'PUT http://hub.test/v1/fleet/cred-policy {"scope": "node", "id": "MAC-A.local", "allow": ["'$U1'", "'$CX'"]}' "$STUB_BODY" \
-  || fail "C set body: $(cat "$STUB_BODY")"
+  || st_fail "C set body: $(cat "$STUB_BODY")"
 st_count
 reset; fake '{"ok":true,"allow":[]}'
 out=$("$SUT" deny user gh:2718137); rc=$?
 [ "$rc" -eq 0 ] && [ "$out" = "cred-policy: SET user gh:2718137: deny all" ] \
-  && grep -qF '"allow": []' "$STUB_BODY" || fail "C deny: rc=$rc $out / $(cat "$STUB_BODY")"
+  && grep -qF '"allow": []' "$STUB_BODY" || st_fail "C deny: rc=$rc $out / $(cat "$STUB_BODY")"
 st_count
 reset; fake '{"ok":true,"allow":null}'
 out=$("$SUT" clear user gh:2718137); rc=$?
 [ "$rc" -eq 0 ] && [ "$out" = "cred-policy: SET user gh:2718137: unconfigured (denied in strict mode; legacy default before migration)" ] \
-  && grep -qF '"allow": null' "$STUB_BODY" || fail "C clear: rc=$rc $out / $(cat "$STUB_BODY")"
+  && grep -qF '"allow": null' "$STUB_BODY" || st_fail "C clear: rc=$rc $out / $(cat "$STUB_BODY")"
 st_count
 
 # Explicit all does not masquerade as an absent rule.
 reset; fake '{"all":true,"allow":null}'
 out=$("$SUT" all node mac-a); rc=$?
-[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qF 'all subscriptions (including future additions)' && grep -qF '"all": true' "$STUB_BODY" || fail "C all: $out"
+[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qF 'all subscriptions (including future additions)' && grep -qF '"all": true' "$STUB_BODY" || st_fail "C all: $out"
 st_count
 reset; fake '{"mode":"strict","nodes":[],"users":[]}'
 out=$("$SUT" show)
-case "$out" in *"denied by default"*) st_count ;; *) fail "D strict default: $out" ;; esac
+case "$out" in *"denied by default"*) st_count ;; *) st_fail "D strict default: $out" ;; esac
 reset; fake '{"mode":"strict","nodes":[{"id":"mac-a","all":true,"allow":[]}],"users":[]}'
 out=$("$SUT" show)
-case "$out" in *"mac-a (all subscriptions)"*) st_count ;; *) fail "D all: $out" ;; esac
+case "$out" in *"mac-a (all subscriptions)"*) st_count ;; *) st_fail "D all: $out" ;; esac
 
 # D. reads
 reset; fake '{"nodes":[{"id":"mac-a","allow":["'$U1'"]}],"users":[{"id":"gh:1","allow":[],"error":"not a JSON list"},{"id":"gh:2","allow":[]}]}'
 out=$("$SUT" show)
 printf '%s\n' "$out" | grep -qx "cred-policy: node mac-a $U1" \
   && printf '%s\n' "$out" | grep -q '^cred-policy: user gh:1 MALFORMED (denies all): not a JSON list$' \
-  && printf '%s\n' "$out" | grep -qx 'cred-policy: user gh:2 (deny all)' || fail "D show: $out"
+  && printf '%s\n' "$out" | grep -qx 'cred-policy: user gh:2 (deny all)' || st_fail "D show: $out"
 st_count
 reset; fake '{"nodes":[],"users":[]}'
 out=$("$SUT" show)
-case "$out" in *"legacy default"*) st_count ;; *) fail "D show none: $out" ;; esac
+case "$out" in *"legacy default"*) st_count ;; *) st_fail "D show none: $out" ;; esac
 reset; fake '{"effective":{"machine":"mac-a","principal":"gh:1","restricted":true,"accounts":[
   {"provider":"claude","owner":"pool","account":"gmail","account_uuid":"'$U1'","allowed":true},
   {"provider":"claude","owner":"pool","account":"legacy","allowed":false,"reason":"no account UUID recorded"}]}}'
@@ -97,40 +96,40 @@ out=$("$SUT" effective --machine mac-a --principal gh:1)
 printf '%s\n' "$out" | grep -q '^cred-policy: effective machine=mac-a principal=gh:1 restricted$' \
   && printf '%s\n' "$out" | grep -qF "  ALLOW pool/gmail · claude · $U1" \
   && printf '%s\n' "$out" | grep -qF "  DENY  pool/legacy · claude · (no account UUID) — no account UUID recorded" \
-  && grep -qF 'GET http://hub.test/v1/fleet/cred-policy?machine=mac-a&principal=gh%3A1' "$STUB_BODY" || fail "D effective: $out / $(cat "$STUB_BODY")"
+  && grep -qF 'GET http://hub.test/v1/fleet/cred-policy?machine=mac-a&principal=gh%3A1' "$STUB_BODY" || st_fail "D effective: $out / $(cat "$STUB_BODY")"
 st_count
 
 # E. refused / down
 reset; fake '{"error":"bad"}' 400
-"$SUT" set node mac-a "$U1" >/dev/null 2>&1; [ $? -eq 4 ] || fail "E 400"
+"$SUT" set node mac-a "$U1" >/dev/null 2>&1; [ $? -eq 4 ] || st_fail "E 400"
 st_count
 reset; fake '' 404
 "$SUT" show >/dev/null 2>"$WORK/err"; rc=$?
-[ "$rc" -eq 4 ] && grep -q predates "$WORK/err" || fail "E 404: rc=$rc"
+[ "$rc" -eq 4 ] && grep -q predates "$WORK/err" || st_fail "E 404: rc=$rc"
 st_count
 reset; export FAKE_RC=7
 out=$("$SUT" show 2>"$WORK/err"); rc=$?
-[ "$rc" -eq 1 ] && [ -z "$out" ] && grep -q unreachable "$WORK/err" || fail "E down: rc=$rc"
+[ "$rc" -eq 1 ] && [ -z "$out" ] && grep -q unreachable "$WORK/err" || st_fail "E down: rc=$rc"
 unset FAKE_RC
 st_count
 
 # F. no leak
 reset; fake '{"nodes":[],"users":[]}'
 "$SUT" show >/dev/null
-! grep -q "$VIEWER" "$STUB_LOG" && grep -q "Bearer $VIEWER" "$STUB_HDR" || fail "F: the token in an argv"
+! grep -q "$VIEWER" "$STUB_LOG" && grep -q "Bearer $VIEWER" "$STUB_HDR" || st_fail "F: the token in an argv"
 st_count
 
 # G. a list that would empty a provider (issue #3713)
 reset; fake '{"error":"machine box7 would keep no claude subscription (it allows icloud now) — send force"}' 409
 "$SUT" set node box7 "$CX" >/dev/null 2>"$WORK/err"; rc=$?
 [ "$rc" -eq 5 ] && grep -q 'would keep no claude subscription (it allows icloud now)' "$WORK/err" \
-  && grep -q 'nothing changed' "$WORK/err" || fail "G 409: rc=$rc $(cat "$WORK/err")"
-! grep -qF '"force"' "$STUB_BODY" || fail "G: force sent unasked"
+  && grep -q 'nothing changed' "$WORK/err" || st_fail "G 409: rc=$rc $(cat "$WORK/err")"
+! grep -qF '"force"' "$STUB_BODY" || st_fail "G: force sent unasked"
 st_count
 reset; fake '{"ok":true,"allow":["'$CX'"]}'
 out=$("$SUT" set --force node box7 "$CX"); rc=$?
 [ "$rc" -eq 0 ] && grep -qF '"force": true' "$STUB_BODY" && [ "$out" = "cred-policy: SET node box7: $CX" ] \
-  || fail "G --force: rc=$rc $out / $(cat "$STUB_BODY")"
+  || st_fail "G --force: rc=$rc $out / $(cat "$STUB_BODY")"
 st_count
 
 printf 'fleet-cred-policy selftest: %d checks passed\n' "$CHECKS"

@@ -20,6 +20,7 @@
 #   H  degenerate: no proxy → push stamps nothing, exit 0
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SB=$(mktemp -d "${TMPDIR:-/tmp}/proxy-quota-st.XXXXXX")
 L="pq-st-$$"
 cleanup() {
@@ -33,9 +34,7 @@ export HOME="$SB/home" FLEET_CONF_DIR="$SB/conf" XDG_CONFIG_HOME="$SB/xdg" TMUX_
 mkdir -p "$HOME" "$FLEET_CONF_DIR" "$XDG_CONFIG_HOME"
 unset FLEET_HUB_URL CCQUOTA_HUB_URL CCQUOTA_TOKEN FLEET_PROBE_FORCE_UNREACHABLE TMUX TMUX_PANE FLEET_RL_PROXY_FRESH
 
-FAIL=0
-pass() { printf 'PASS %s\n' "$*"; }
-fail() { printf 'FAIL %s\n' "$*"; FAIL=1; }
+st_tally
 
 # ── A: the parse ─────────────────────────────────────────────────────────────
 a=$(python3 -I - "$BIN/fleet-cred-proxy.py" <<'PY'
@@ -56,8 +55,8 @@ print(json.dumps(out, sort_keys=True))
 PY
 )
 want='[{"rl5h": "29", "rl7d": "57.5", "rl_reset5": "1791341400", "rl_reset7": "1791698400"}, {"rl5h": "11", "rl7d": "40.7", "rl_reset5": "1791341400", "rl_reset7": "1100"}, {"rl5h": "5", "rl7d": "60", "rl_reset5": "-", "rl_reset7": "-"}, null, null]'
-[ "$a" = "$want" ] && pass "A parse: Claude fraction ×100 (0.29→29, no float noise), Codex used-percent, unrounded; windows ordered by minutes; half a reading = none" \
-  || fail "A parse: $a"
+[ "$a" = "$want" ] && st_ok_all "A parse: Claude fraction ×100 (0.29→29, no float noise), Codex used-percent, unrounded; windows ordered by minutes; half a reading = none" \
+  || st_miss "A parse: $a"
 
 # ── the fake provider ────────────────────────────────────────────────────────
 cat > "$SB/fake.py" <<'PY'
@@ -100,7 +99,7 @@ PY
 echo trusted > "$SB/trust"; echo "0.29 0.87" > "$SB/util"
 python3 -I "$SB/fake.py" "$SB" & disown
 i=0; while [ ! -s "$SB/fake.port" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
-[ -s "$SB/fake.port" ] || { fail "start: the fake provider never came up"; exit 1; }
+[ -s "$SB/fake.port" ] || { st_miss "start: the fake provider never came up"; exit 1; }
 U="http://127.0.0.1:$(cat "$SB/fake.port")"
 
 mkdir -p "$FLEET_CONF_DIR/accounts/a1.hub" "$SB/codex-homes/a1"
@@ -120,7 +119,7 @@ EOF
 printf '#!/bin/sh\necho "$*" >> "%s/pushed"\n' "$SB" > "$SB/pushstub"; chmod +x "$SB/pushstub"
 FLEET_CRED_QUOTA_PUSH="$SB/pushstub" FLEET_CRED_QUOTA_PUSH_SECS=0.3 \
   bash "$BIN/fleet-cred-proxy.sh" ensure --max-seconds 300 >"$SB/port" 2>"$SB/ensure.err" \
-  || { cat "$SB/ensure.err"; fail "start: ensure"; exit 1; }
+  || { cat "$SB/ensure.err"; st_miss "start: ensure"; exit 1; }
 PORT=$(cat "$SB/port")
 CP() { bash "$BIN/fleet-cred-proxy.sh" "$@"; }
 R() { # R <path> <token> → the status code
@@ -139,12 +138,12 @@ b1=$(qget wc1 provider rl5h rl7d rl_reset5 rl_reset7 acct route)
 b2=$(qget wx1 provider rl5h rl7d rl_reset5 rl_reset7)
 if [ "$sc $sx" = "200 200" ] && [ "$b1" = "claude 29 87 1791341400 1791698400 a1 direct" ] \
    && [ "$b2" = "codex 11 40.7 1791341400 1791698400" ]; then
-  pass "B quota: a Claude and a Codex session's readings, each under its sid"
-else fail "B quota: status=$sc/$sx claude=[$b1] codex=[$b2]"; fi
-CP quota | grep -Eq 'REAL|fcp1\.|nodetok' && fail "B a credential reached the quota answer"
+  st_ok_all "B quota: a Claude and a Codex session's readings, each under its sid"
+else st_miss "B quota: status=$sc/$sx claude=[$b1] codex=[$b2]"; fi
+CP quota | grep -Eq 'REAL|fcp1\.|nodetok' && st_miss "B a credential reached the quota answer"
 
 # ── C: push onto the windows ─────────────────────────────────────────────────
-tmux -L "$L" -f /dev/null new-session -d -s pq -n c1 'sleep 600' || { fail "C tmux"; exit 1; }
+tmux -L "$L" -f /dev/null new-session -d -s pq -n c1 'sleep 600' || { st_miss "C tmux"; exit 1; }
 tmux -L "$L" new-window -d -t pq -n x1 'sleep 600'
 tmux -L "$L" new-window -d -t pq -n none 'sleep 600'
 WC=$(tmux -L "$L" display-message -p -t pq:c1 '#{window_id}'); WX=$(tmux -L "$L" display-message -p -t pq:x1 '#{window_id}')
@@ -156,11 +155,11 @@ out=$(bash "$BIN/fleet-proxy-quota.sh" push --socket "$L")
 oc=$(opts "$WC"); ox=$(opts "$WX"); on=$(opts "$WN")
 if [ "$oc" = "29 87 1791341400 1791698400 proxy $ts_c" ] && [ "$ox" = "11 40 1791341400 1791698400 proxy $(qget wx1 ts)" ] \
    && [ "$on" = "    " ] && [ "$(printf '%s\n' "$out" | grep -c '^stamped')" = 2 ]; then
-  pass "C push: Claude + Codex windows get @rl* (40.7 floored to 40 by statusline.sh) + @rl_src proxy, @rl_ts = the reading's time; a window with no session untouched"
-else fail "C push: claude=[$oc] codex=[$ox] none=[$on] out=[$out]"; fi
+  st_ok_all "C push: Claude + Codex windows get @rl* (40.7 floored to 40 by statusline.sh) + @rl_src proxy, @rl_ts = the reading's time; a window with no session untouched"
+else st_miss "C push: claude=[$oc] codex=[$ox] none=[$on] out=[$out]"; fi
 out=$(bash "$BIN/fleet-proxy-quota.sh" push --socket "$L")
-[ -z "$out" ] && pass "C a second push with nothing new stamps nothing" || fail "C re-push: $out"
-tmux -L "$L" show-options -w -t "$WC" | grep -q '@ctx_src' && fail "C the proxy feed touched @ctx_src"
+[ -z "$out" ] && st_ok_all "C a second push with nothing new stamps nothing" || st_miss "C re-push: $out"
+tmux -L "$L" show-options -w -t "$WC" | grep -q '@ctx_src' && st_miss "C the proxy feed touched @ctx_src"
 
 # ── D: the proxy wins while fresh ────────────────────────────────────────────
 SLJ='{"context_window":{"used_percentage":12,"context_window_size":200000},"model":{"display_name":"Opus"},"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":1},"seven_day":{"used_percentage":6,"resets_at":2}}}'
@@ -173,11 +172,11 @@ tmux -L "$L" set-option -w -t "$WC" @rl_ts $(( $(date +%s) - 400 ))
 SLR <<< "$SLJ"
 d2=$(opts "$WC")
 if [ "$d1" = "29 87 1791341400 1791698400 proxy $ts_c" ] && [ "$d1ctx" = "12 Opus" ] && case "$d2" in "5 6 1 2  "*) true ;; *) false ;; esac; then
-  pass "D a fresh proxy reading holds against the status line and the mod (context still stamped); stale, the status line stamps again"
-else fail "D proxy-wins: fresh=[$d1] ctx=[$d1ctx] stale=[$d2]"; fi
+  st_ok_all "D a fresh proxy reading holds against the status line and the mod (context still stamped); stale, the status line stamps again"
+else st_miss "D proxy-wins: fresh=[$d1] ctx=[$d1ctx] stale=[$d2]"; fi
 echo "0.30 0.88" > "$SB/util"; R /v1/messages "$TC" >/dev/null
 bash "$BIN/fleet-proxy-quota.sh" push --socket "$L" >/dev/null
-case "$(opts "$WC")" in "30 88 "*" proxy "*) pass "D the next proxy reading takes the window back" ;; *) fail "D retake: $(opts "$WC")" ;; esac
+case "$(opts "$WC")" in "30 88 "*" proxy "*) st_ok_all "D the next proxy reading takes the window back" ;; *) st_miss "D retake: $(opts "$WC")" ;; esac
 
 # ── E: a central-route session ───────────────────────────────────────────────
 echo untrusted > "$SB/trust"
@@ -189,22 +188,22 @@ printf 'route=central\nqsid=%s\n' "$qs" > "$FLEET_CONF_DIR/cred-proxy/sessions/w
 tmux -L "$L" set-option -w -t "$WN" @cred_sid we1
 sc=$(R /v1/messages "$HP")
 bash "$BIN/fleet-proxy-quota.sh" push --socket "$L" >/dev/null
-case "$sc $(opts "$WN")" in "200 30 88 "*" proxy "*) pass "E central: the pass's reading (h-<hash>) finds its window through qsid" ;;
-  *) fail "E central: status=$sc opts=[$(opts "$WN")] quota=$(CP quota)" ;; esac
+case "$sc $(opts "$WN")" in "200 30 88 "*" proxy "*) st_ok_all "E central: the pass's reading (h-<hash>) finds its window through qsid" ;;
+  *) st_miss "E central: status=$sc opts=[$(opts "$WN")] quota=$(CP quota)" ;; esac
 grep -q 'qs=\$(printf' "$BIN/fleet-session-cred.sh" && grep -q 'rec_set "$sid" qsid' "$BIN/fleet-session-cred.sh" \
-  || fail "E fleet-session-cred.sh no longer records qsid"
+  || st_miss "E fleet-session-cred.sh no longer records qsid"
 echo trusted > "$SB/trust"; CP route --refresh >/dev/null
 
 # ── F: the proxy kicks the push itself ───────────────────────────────────────
 i=0; while [ ! -s "$SB/pushed" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 n=$(grep -c '^push$' "$SB/pushed" 2>/dev/null)
-[ "${n:-0}" -ge 1 ] && [ "$n" -le 4 ] && pass "F a fresh reading kicks FLEET_CRED_QUOTA_PUSH push (debounced: $n kicks for 4 readings)" \
-  || fail "F kick: $(cat "$SB/pushed" 2>/dev/null)"
+[ "${n:-0}" -ge 1 ] && [ "$n" -le 4 ] && st_ok_all "F a fresh reading kicks FLEET_CRED_QUOTA_PUSH push (debounced: $n kicks for 4 readings)" \
+  || st_miss "F kick: $(cat "$SB/pushed" 2>/dev/null)"
 
 # ── G: revoke ────────────────────────────────────────────────────────────────
 CP revoke --sid wx1 >/dev/null
-[ -z "$(qget wx1 rl5h)" ] && pass "G revoke drops the session's reading" || fail "G revoke: $(CP quota)"
-grep -Eq 'REAL-a|nodetok|fcp1\.|fcp-h1\.' "$SB/proxy.log" && fail "G a credential reached the log"
+[ -z "$(qget wx1 rl5h)" ] && st_ok_all "G revoke drops the session's reading" || st_miss "G revoke: $(CP quota)"
+grep -Eq 'REAL-a|nodetok|fcp1\.|fcp-h1\.' "$SB/proxy.log" && st_miss "G a credential reached the log"
 
 # ── H: degenerate ────────────────────────────────────────────────────────────
 kill "$(cat "$FLEET_CONF_DIR/cred-proxy/pid")" 2>/dev/null
@@ -212,8 +211,7 @@ i=0; while [ -S "$FLEET_CONF_DIR/cred-proxy/ctl.sock" ] && [ "$i" -lt 50 ]; do s
 tmux -L "$L" set-option -w -u -t "$WC" @rl_ts
 before=$(opts "$WC")
 out=$(bash "$BIN/fleet-proxy-quota.sh" push --socket "$L"); rc=$?
-[ "$rc" = 0 ] && [ -z "$out" ] && [ "$(opts "$WC")" = "$before" ] && pass "H no proxy: push exits 0 and stamps nothing" \
-  || fail "H no proxy: rc=$rc out=[$out]"
+[ "$rc" = 0 ] && [ -z "$out" ] && [ "$(opts "$WC")" = "$before" ] && st_ok_all "H no proxy: push exits 0 and stamps nothing" \
+  || st_miss "H no proxy: rc=$rc out=[$out]"
 
-[ "$FAIL" = 0 ] && echo "fleet-proxy-quota-selftest: OK" || echo "fleet-proxy-quota-selftest: FAILED"
-exit "$FAIL"
+st_done

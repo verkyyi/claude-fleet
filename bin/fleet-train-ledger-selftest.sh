@@ -14,15 +14,15 @@
 #   E  the off-path stages are the hub's (fleet_release_runs.go stageOffPath)
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd)
+. "$BIN/selftest-lib.sh"
 L="$BIN/fleet-train-ledger.py"
 ROOT="$BIN/.."
 T=$(mktemp -d "${TMPDIR:-/tmp}/train-ledger.XXXXXX")
 trap 'kill "${HUB_PID:-}" 2>/dev/null; rm -rf "$T"' EXIT
 fail=0
-ok() { printf 'ok    %s\n' "$1"; }
 no() { printf 'FAIL  %s\n' "$1"; fail=1; }
-check() { if eval "$2"; then ok "$1"; else no "$1"; fi; }
-eq() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1 — got [$2], want [$3]"; fi; }
+check() { if eval "$2"; then st_ok "$1"; else no "$1"; fi; }
+eq() { if [ "$2" = "$3" ]; then st_ok "$1"; else no "$1 — got [$2], want [$3]"; fi; }
 jq_() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- A: build ----

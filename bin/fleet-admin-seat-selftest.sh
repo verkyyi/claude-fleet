@@ -12,14 +12,13 @@
 # shellcheck disable=SC2034  # out / rc are read inside check's eval strings
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fas.XXXXXX")"
 PIDS=()
 cleanup() { for p in ${PIDS[@]+"${PIDS[@]}"}; do kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; done; rm -rf "$WORK"; }
 trap cleanup EXIT
-FAILS=0
-ok() { printf 'ok   %s\n' "$1"; }
-bad() { printf 'FAIL %s\n' "$1"; FAILS=$((FAILS + 1)); }
-check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+FAIL=0
+check() { if eval "$2"; then st_ok "$1"; else st_miss "$1"; fi; }
 
 # hub <dir> <key line|''> — sets URL; '' = 404 (the seat off)
 hub() {
@@ -149,5 +148,4 @@ out=$("${AS[@]}" remove 2>&1); rc=$?
 check "F remove" '[ "$rc" = 0 ] && [ ! -e "$FLEET_ADMIN_SUDOERS" ] && [ ! -e "$ST/admin" ]'
 check "F remove: the agent's unit unloaded and gone" '[ ! -e "$UNIT" ] && grep -Eq "^(launchctl bootout system/com.claude-fleet.admin-agent|systemctl disable --now fleet-admin-agent)" "$WORK/svc.log"'
 
-if [ "$FAILS" = 0 ]; then echo "fleet-admin-seat selftest: OK"; exit 0; fi
-echo "fleet-admin-seat selftest: $FAILS FAILED"; exit 1
+st_done

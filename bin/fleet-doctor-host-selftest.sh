@@ -21,6 +21,7 @@
 # HOME/TMPDIR/conf. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 for f in fleet-doctor.sh fleet-daemon-lib.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
@@ -29,9 +30,8 @@ TOP="$(mktemp -d "${TMPDIR:-/tmp}/doctor-host-selftest.XXXXXX")" || exit 2
 TOP="$(cd "$TOP" && pwd -P)"
 trap 'rm -rf "$TOP"' EXIT
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- line ---\n%s\n' "${2:-(none)}" >&2; exit 1; }
-has()  { CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) ;; *) fail "$3" "$2";; esac; }
-none() { CHECKS=$((CHECKS + 1)); [ -z "$1" ] || fail "$2" "$1"; }
+has()  { CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) ;; *) st_fail "$3" "$2";; esac; }
+none() { CHECKS=$((CHECKS + 1)); [ -z "$1" ] || st_fail "$2" "$1"; }
 
 # setup <dir> — one lane's world: the doctor's copy, the fake tools (each with
 # its fixture dir baked in), the baseline fixtures; WORK points there.
@@ -139,7 +139,7 @@ run_doctor() {
 }
 row() { printf '%s\n' "$2" | grep -aE "^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+$1([[:space:]]|\$)" | head -1; }
 survived() { printf '%s\n' "$1" | grep -qaE '^[[:space:]]+(PASS|WARN)[[:space:]]+perl'; }
-quiet() { CHECKS=$((CHECKS + 1)); [ -s "$WORK/stderr" ] && fail "$1" "$(cat "$WORK/stderr")"; return 0; }
+quiet() { CHECKS=$((CHECKS + 1)); [ -s "$WORK/stderr" ] && st_fail "$1" "$(cat "$WORK/stderr")"; return 0; }
 
 # The sections run as five lanes at once, each in its own setup: a lane starts from
 # the fixtures the sections before it leave behind (every section puts back what it
@@ -160,15 +160,15 @@ has "sudo mdutil -a -i on" "$l" "1: the WARN must say how to undo it"
 has "docs/dev/HOST.md#spotlight" "$l" "1: the WARN must point at the host doc"
 has "FLEET_DOCTOR_SPOTLIGHT=0" "$l" "1: the WARN must say how to silence it (EPIC rule 9)"
 has "-s " "$(cat "$WORK/mdutil.argv" 2>/dev/null)" "1: the doctor must only READ state (mdutil -s), never set it"
-case "$(cat "$WORK/mdutil.argv")" in *-i*) fail "1: the doctor ran a state-changing mdutil" "$(cat "$WORK/mdutil.argv")";; esac
-survived "$out" || fail "1: the doctor did not reach its last check" "$l"
+case "$(cat "$WORK/mdutil.argv")" in *-i*) st_fail "1: the doctor ran a state-changing mdutil" "$(cat "$WORK/mdutil.argv")";; esac
+survived "$out" || st_fail "1: the doctor did not reach its last check" "$l"
 quiet "1: the spotlight WARN must print nothing on stderr"
 
 # 2. Indexing off → PASS.
 printf '/System/Volumes/Data:\n\tIndexing disabled.\n' > "$WORK/mdutil.out"
 out="$(run_doctor)"; l="$(row spotlight "$out")"
 has "PASS" "$l" "2: indexing disabled must PASS"
-survived "$out" || fail "2: the doctor did not reach its last check" "$l"
+survived "$out" || st_fail "2: the doctor did not reach its last check" "$l"
 quiet "2: the spotlight PASS must print nothing on stderr"
 # 2b. The other spelling macOS uses.
 printf '/System/Volumes/Data:\n\tIndexing and searching disabled.\n' > "$WORK/mdutil.out"
@@ -235,8 +235,8 @@ has "sudo pmset -a sleep 10" "$l" "10: the WARN must say how to undo it (the val
 has "docs/dev/HOST.md#headless" "$l" "10: the WARN must point at the host doc"
 has "FLEET_DOCTOR_SLEEP=0" "$l" "10: the WARN must say how to silence it (EPIC rule 9)"
 has "-g" "$(cat "$WORK/pmset.argv" 2>/dev/null)" "10: the doctor must READ the profile (pmset -g)"
-case "$(cat "$WORK/pmset.argv")" in *-a*|*-b*|*-c*) fail "10: the doctor ran a state-changing pmset" "$(cat "$WORK/pmset.argv")";; esac
-survived "$out" || fail "10: the doctor did not reach its last check" "$l"
+case "$(cat "$WORK/pmset.argv")" in *-a*|*-b*|*-c*) st_fail "10: the doctor ran a state-changing pmset" "$(cat "$WORK/pmset.argv")";; esac
+survived "$out" || st_fail "10: the doctor did not reach its last check" "$l"
 quiet "10: the sleep WARN must print nothing on stderr"
 
 # 10b. sleep 0 → PASS, with the companions read off the same output; the
@@ -287,8 +287,8 @@ has "Siri off" "$l" "11: the INFO must say where to turn Siri off"
 has "docs/dev/HOST.md#headless" "$l" "11: the INFO must point at the host doc"
 has "FLEET_DOCTOR_SIRI=0" "$l" "11: the INFO must say how to silence it (EPIC rule 9)"
 has "read com.apple.assistant.support Assistant Enabled" "$(cat "$WORK/defaults.argv" 2>/dev/null)" "11: the doctor must READ the Siri key"
-case "$(cat "$WORK/defaults.argv")" in *write*|*delete*) fail "11: the doctor ran a state-changing defaults" "$(cat "$WORK/defaults.argv")";; esac
-survived "$out" || fail "11: the doctor did not reach its last check" "$l"
+case "$(cat "$WORK/defaults.argv")" in *write*|*delete*) st_fail "11: the doctor ran a state-changing defaults" "$(cat "$WORK/defaults.argv")";; esac
+survived "$out" || st_fail "11: the doctor did not reach its last check" "$l"
 quiet "11: the siri INFO must print nothing on stderr"
 
 # 11b. Siri off → PASS.
@@ -324,14 +324,14 @@ out="$(run_doctor)"; l="$(row icloud "$out")"
 has "INFO" "$l" "12: a live iCloud daemon must be INFO"
 has " bird" "$l" "12: the INFO must name bird"
 has " fileproviderd" "$l" "12: the INFO must name fileproviderd"
-case "$l" in *cloudd*) fail "12: the INFO must not name a daemon that is not running (cloudd)" "$l";; esac
+case "$l" in *cloudd*) st_fail "12: the INFO must not name a daemon that is not running (cloudd)" "$l";; esac
 has "iCloud" "$l" "12: the INFO must say where to sign out"
 has "docs/dev/HOST.md#headless" "$l" "12: the INFO must point at the host doc"
 has "FLEET_DOCTOR_ICLOUD=0" "$l" "12: the INFO must say how to silence it (EPIC rule 9)"
 for d in bird cloudd fileproviderd; do
   has "$d" "$(cat "$WORK/pgrep.argv" 2>/dev/null)" "12: the doctor must probe $d"
 done
-survived "$out" || fail "12: the doctor did not reach its last check" "$l"
+survived "$out" || st_fail "12: the doctor did not reach its last check" "$l"
 quiet "12: the icloud INFO must print nothing on stderr"
 
 # 12b. None alive → PASS.
@@ -366,10 +366,10 @@ has "networksetup -setairportpower en1 off" "$l" "13: the WARN must name the Wi-
 has "networksetup -setairportpower en1 on" "$l" "13: the WARN must say how to undo it"
 has "docs/dev/HOST.md#network" "$l" "13: the WARN must point at the host doc"
 has "FLEET_DOCTOR_NETWORK=0" "$l" "13: the WARN must say how to silence it (EPIC rule 9)"
-case "$l" in *bridge100*|*link#*) fail "13: an interface-only (link#) default must not be counted" "$l";; esac
+case "$l" in *bridge100*|*link#*) st_fail "13: an interface-only (link#) default must not be counted" "$l";; esac
 has "-rn -f inet" "$(cat "$WORK/netstat.argv" 2>/dev/null)" "13: the doctor must READ the routing table"
-case "$(cat "$WORK/networksetup.argv")" in *-set*) fail "13: the doctor ran a state-changing networksetup" "$(cat "$WORK/networksetup.argv")";; esac
-survived "$out" || fail "13: the doctor did not reach its last check" "$l"
+case "$(cat "$WORK/networksetup.argv")" in *-set*) st_fail "13: the doctor ran a state-changing networksetup" "$(cat "$WORK/networksetup.argv")";; esac
+survived "$out" || st_fail "13: the doctor did not reach its last check" "$l"
 quiet "13: the network WARN must print nothing on stderr"
 
 # 13b. One default route (plus a link# bridge) → PASS naming it.
@@ -377,7 +377,7 @@ nsone
 out="$(run_doctor)"; l="$(row network "$out")"
 has "PASS" "$l" "13b: one default route must PASS"
 has "192.168.1.254 via en0" "$l" "13b: the PASS must name the route"
-case "$l" in *bridge100*) fail "13b: the link# bridge must not be listed" "$l";; esac
+case "$l" in *bridge100*) st_fail "13b: the link# bridge must not be listed" "$l";; esac
 quiet "13b: the network PASS must print nothing on stderr"
 
 # 13c. Two defaults to DIFFERENT gateways (two networks, deliberate failover) → PASS:
@@ -392,7 +392,7 @@ printf 'Internet:\nDestination        Gateway            Flags               Net
 l="$(row network "$(run_doctor)")"
 has "WARN" "$l" "13d: two wired links to one gateway must WARN"
 has "keep only one of them" "$l" "13d: with no Wi-Fi among them the WARN must give the generic fix"
-case "$l" in *setairportpower*) fail "13d: must not name a Wi-Fi switch-off for wired links" "$l";; esac
+case "$l" in *setairportpower*) st_fail "13d: must not name a Wi-Fi switch-off for wired links" "$l";; esac
 
 # 13e. No gateway route at all (offline, or only link#) → no row, never a guess.
 printf 'Internet:\nDestination        Gateway            Flags               Netif Expire\ndefault            link#26            UCSIg           bridge100      !\n' > "$WORK/netstat.out"
@@ -426,7 +426,7 @@ none "$(cat "$WORK/mdutil.argv")" "6: Linux must not even call mdutil"
 none "$(cat "$WORK/pmset.argv")" "6: Linux must not even call pmset"
 none "$(cat "$WORK/defaults.argv")" "6: Linux must not even call defaults"
 none "$(cat "$WORK/pgrep.argv")" "6: Linux must not probe the iCloud daemons"
-survived "$out" || fail "6: the doctor did not reach its last check on Linux" ""
+survived "$out" || st_fail "6: the doctor did not reach its last check on Linux" ""
 quiet "6: the Linux run must print nothing on stderr"
 
 # 14. network on Linux (issue #1081): the one host row that renders there, off

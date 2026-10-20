@@ -19,7 +19,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'topbar-ctx selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 REAL_TMUX=$(command -v tmux || true)
 [ -n "$REAL_TMUX" ] || { echo 'topbar-ctx selftest: tmux absent — SKIP'; exit 0; }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/topbarctx-selftest.XXXXXX")" || exit 2
@@ -36,8 +36,7 @@ printf 'FLEET_REPO=acme/app\n' > "$WORK/conf/fleets/$S/conf"
 printf '%s\tacme-app\tacme/app\n' "$S" > "$G/sessmap"
 US=$'\x1f'
 
-CHECKS=0
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
+st_tally count
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
 # fld <rows> <label> <k>: field k of the row labelled <label>, `-` when it has fewer
 fld() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" -v k="$3" '$4 == n { print (NF >= k ? $k : "-") }'; }
@@ -55,9 +54,9 @@ T set-window-option -t "=$S:measured" @ctx_pct 38 \; set-window-option -t "=$S:m
   set-window-option -t "=$S:measured" @ctx_band ok \; set-window-option -t "=$S:measured" @ctx_ts "$TS" \; \
   set-window-option -t "=$S:measured" @model 'Opus 5.5' \; set-window-option -t "=$S:measured" @effort high
 SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
-eq "A: a measured window's field 19" "62|ok|$TS|Opus 5.5|high" "$(fld "$SIDE" measured 19)" "$SIDE"
-eq "A: …fields 13-18 empty before it" "|||||" "$(printf '%s\n' "$SIDE" | LC_ALL=C awk -F"$US" '$4 == "measured" { print $13 "|" $14 "|" $15 "|" $16 "|" $17 "|" $18 }')"
-eq "A: no @ctx_pct ⇒ no field 19 (byte for byte as before)" "-" "$(fld "$SIDE" bare 19)"
+st_eq "A: a measured window's field 19" "62|ok|$TS|Opus 5.5|high" "$(fld "$SIDE" measured 19)" "$SIDE"
+st_eq "A: …fields 13-18 empty before it" "|||||" "$(printf '%s\n' "$SIDE" | LC_ALL=C awk -F"$US" '$4 == "measured" { print $13 "|" $14 "|" $15 "|" $16 "|" $17 "|" $18 }')"
+st_eq "A: no @ctx_pct ⇒ no field 19 (byte for byte as before)" "-" "$(fld "$SIDE" bare 19)"
 
 # ============================================================================
 # B. a remote row: the hub cache's 21-25 → field 19, the same five `fleet ls` reads
@@ -81,12 +80,12 @@ PY
 export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="tbctx-peer=mac-a"
 bash "$HUBS" --refresh 2>"$WORK/err" || st_fail "B: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
-eq "B: the cache's fields 21-25" "23|watch|$TS|Fable 5.1|high" \
+st_eq "B: the cache's fields 21-25" "23|watch|$TS|Fable 5.1|high" \
    "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-41" '$1 == w { print $21 "|" $22 "|" $23 "|" $24 "|" $25 }')"
 printf '%s\n' "$(date +%s)" > "$G/hub_ok"
 SIDE2=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
-eq "B: the remote row's field 19 is the cache's five" "23|watch|$TS|Fable 5.1|high" "$(fld "$SIDE2" RM 19)" "$SIDE2"
-eq "B: a remote row the node measured nothing for has none" "-" "$(fld "$SIDE2" RN 19)"
+st_eq "B: the remote row's field 19 is the cache's five" "23|watch|$TS|Fable 5.1|high" "$(fld "$SIDE2" RM 19)" "$SIDE2"
+st_eq "B: a remote row the node measured nothing for has none" "-" "$(fld "$SIDE2" RN 19)"
 LS=$(FLEET_SESSION=$S python3 - "$BIN" "wid:$F/issue-41" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("cli", sys.argv[1] + "/fleet-session-cli.py")
@@ -95,7 +94,7 @@ b = m.bus_cache().get(sys.argv[2], {})
 print("|".join(b.get(k, "") for k in ("left", "band", "ts", "model", "effort")))
 PY
 )
-eq "B: fleet ls reads the same five" "23|watch|$TS|Fable 5.1|high" "$LS"
+st_eq "B: fleet ls reads the same five" "23|watch|$TS|Fable 5.1|high" "$LS"
 
 # ============================================================================
 # E. the 看台's line says THIS session only (issue #3194, overriding #3184's
@@ -125,7 +124,7 @@ for w in ("@9", "@7"):
 print("\n".join(bad) or "ok")
 PY2
 )
-eq "E: the 看台's line says this session only" "ok" "$out"
+st_eq "E: the 看台's line says this session only" "ok" "$out"
 CHECKS=$((CHECKS + 6))
 
 printf 'selftest PASS: topbar-ctx — 剩余 · 模型 · effort on the client top line (%s checks, #2717)\n' "$CHECKS"

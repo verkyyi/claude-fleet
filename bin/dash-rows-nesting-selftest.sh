@@ -40,20 +40,10 @@ st_sandbox "${TMPDIR:-/tmp}/dashnest-selftest.XXXXXX"
 export TMPDIR="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh
 mkdir -p "$WORK/.claude-dash/global" "$WORK/conf" "$WORK/bin"
 
-CHECKS=0
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
-has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) st_fail "$1 — no [$3]" "$2";; esac; }
-hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) st_fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
+st_tally count
 
 US=$'\x1f'
-cat > "$WORK/bin/tmux" <<'SHIM'
-#!/bin/sh
-US=$(printf '\037'); lw=0; fmt=0
-for a in "$@"; do [ "$a" = list-windows ] && lw=1; case "$a" in *"$US"*) fmt=1 ;; esac; done
-[ "$lw" = 1 ] && [ "$fmt" = 1 ] && cat "$WLIST_FILE"
-exit 0
-SHIM
-chmod +x "$WORK/bin/tmux"
+st_fake_tmux_wlist "$WORK/bin"
 PATH="$WORK/bin:$PATH"; export PATH
 WLIST_FILE="$WORK/wlist"; export WLIST_FILE
 # Field order MUST match WFMT: session idx name path state state_ts wid @issue
@@ -96,49 +86,49 @@ s=$(side)
 [ -n "$s" ] || st_fail "the sidebar producer printed nothing"
 # siblings keep the (rank, idx) order roots always had: a needs row first, then
 # working, then looping — so A2 (!) leads A's block and B (idx 2) leads A (idx 3).
-eq "A: every subtree is contiguous, each row directly under its OWN parent" \
+st_eq "A: every subtree is contiguous, each row directly under its OWN parent" \
    "root B B1 A A2 A1 A1x A1y A1z lonely orph orphkid " "$(sorder "$s")"
-eq "A: a root with a subtree: its caret, depth 0"     "root|▾|2/8|0"       "$(srow "$s" root)"
-eq "A: a middle row: └ + its own caret, depth 1"      "A|└▾|2/5|1"         "$(srow "$s" A)"
-eq "A: depth 2 indents two cells"                     "A1|  └▾|2/3|2"      "$(srow "$s" A1)"
-eq "A: depth 3 indents four"                          "A1x|    └▾|1/2|3"   "$(srow "$s" A1x)"
-eq "A: depth 4 indents six"                           "A1y|      └▾|1/1|4" "$(srow "$s" A1y)"
-eq "A: deeper than 4 shows AT 4 (sort keeps the path)" "A1z|      └||4"    "$(srow "$s" A1z)"
-eq "A: a childless root: blank tree, no badge"        "lonely| ||0"         "$(srow "$s" lonely)"
-eq "A: a broken chain sinks, nested under what is live" "orphkid|└||1"     "$(srow "$s" orphkid)"
+st_eq "A: a root with a subtree: its caret, depth 0"     "root|▾|2/8|0"       "$(srow "$s" root)"
+st_eq "A: a middle row: └ + its own caret, depth 1"      "A|└▾|2/5|1"         "$(srow "$s" A)"
+st_eq "A: depth 2 indents two cells"                     "A1|  └▾|2/3|2"      "$(srow "$s" A1)"
+st_eq "A: depth 3 indents four"                          "A1x|    └▾|1/2|3"   "$(srow "$s" A1x)"
+st_eq "A: depth 4 indents six"                           "A1y|      └▾|1/1|4" "$(srow "$s" A1y)"
+st_eq "A: deeper than 4 shows AT 4 (sort keeps the path)" "A1z|      └||4"    "$(srow "$s" A1z)"
+st_eq "A: a childless root: blank tree, no badge"        "lonely| ||0"         "$(srow "$s" lonely)"
+st_eq "A: a broken chain sinks, nested under what is live" "orphkid|└||1"     "$(srow "$s" orphkid)"
 h=$(hub)
-eq "A: hub tree column — a root holder"        "▾ " "$(htree "$h" root)"
-eq "A: hub tree column — level 1: └ on the left" "└▾" "$(htree "$h" A)"
-eq "A: hub tree column — level 1 leaf"          "└ " "$(htree "$h" orphkid)"
-eq "A: hub tree column — level 2: └ on the right" " ▾" "$(htree "$h" A1)"
-eq "A: hub tree column — level 2 leaf"          " └" "$(htree "$h" A2)"
-eq "A: hub tree column — level 3+: ┊└"          "┊▾" "$(htree "$h" A1x)"
-eq "A: hub tree column — deeper still ┊└"       "┊└" "$(htree "$h" A1z)"
-eq "A: hub tree column — a lonely root: blank"  "  " "$(htree "$h" lonely)"
-for v in A A1x A2 B1 orphkid; do hasnt "A: no ↳ parent tag on $v" "$(hrow "$h" "$v")" "↳"; done
+st_eq "A: hub tree column — a root holder"        "▾ " "$(htree "$h" root)"
+st_eq "A: hub tree column — level 1: └ on the left" "└▾" "$(htree "$h" A)"
+st_eq "A: hub tree column — level 1 leaf"          "└ " "$(htree "$h" orphkid)"
+st_eq "A: hub tree column — level 2: └ on the right" " ▾" "$(htree "$h" A1)"
+st_eq "A: hub tree column — level 2 leaf"          " └" "$(htree "$h" A2)"
+st_eq "A: hub tree column — level 3+: ┊└"          "┊▾" "$(htree "$h" A1x)"
+st_eq "A: hub tree column — deeper still ┊└"       "┊└" "$(htree "$h" A1z)"
+st_eq "A: hub tree column — a lonely root: blank"  "  " "$(htree "$h" lonely)"
+for v in A A1x A2 B1 orphkid; do st_hasnt "A: no ↳ parent tag on $v" "$(hrow "$h" "$v")" "↳"; done
 # every hub row keeps its width: the 2-cell tree column is a CONSTANT, so the
 # right-pinned act/PR/ctx block never moves (the `!` row's act word is CJK:
 # measured in cells, the tree glyphs as the 1 cell the producer budgets them).
 widths=$(printf '%s\n' "$h" | python3 -c 'import sys, unicodedata
 w = lambda t: sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in t)
 print("\n".join(sorted({str(w(l.split("\x1f")[2])) for l in sys.stdin.read().split("\n")[1:] if "\x1f" in l})))')
-eq "A: every hub row is the same width" "136" "$widths"
+st_eq "A: every hub row is the same width" "136" "$widths"
 
 # ============================================================================
 # B. fold — level by level
 # ============================================================================
 sed -i.bak -e "s/^\(S${US}5${US}A1${US}.*\)${US}1\$/\1${US}/" "$WLIST_FILE"   # fold A1 only
 s=$(side)
-eq "B: folding a MIDDLE row hides only its subtree" \
+st_eq "B: folding a MIDDLE row hides only its subtree" \
    "root B B1 A A2 A1 lonely orph orphkid " "$(sorder "$s")"
-eq "B: …which wears ▸ and still counts all of it" "A1|  └▸|2/3|2" "$(srow "$s" A1)"
-eq "B: …the sidebar's current window is never folded away" \
+st_eq "B: …which wears ▸ and still counts all of it" "A1|  └▸|2/3|2" "$(srow "$s" A1)"
+st_eq "B: …the sidebar's current window is never folded away" \
    "root B B1 A A2 A1 A1y lonely orph orphkid " "$(sorder "$(side @8)")"
 sed -i.bak -e "s/^\(S${US}1${US}root${US}.*\)${US}1\$/\1${US}/" "$WLIST_FILE"  # fold the root
 s=$(side)
-eq "B: folding the root hides the tree — but a ! row never folds away, under its real parent" \
+st_eq "B: folding the root hides the tree — but a ! row never folds away, under its real parent" \
    "root A2 lonely orph orphkid " "$(sorder "$s")"
-eq "B: the exempt row keeps its depth" "A2|  └||2" "$(srow "$s" A2)"
+st_eq "B: the exempt row keeps its depth" "A2|  └||2" "$(srow "$s" A2)"
 # restore: re-expand both
 sed -i.bak -e "s/^\(S${US}1${US}root${US}.*\)${US}\$/\1${US}1/" \
            -e "s/^\(S${US}5${US}A1${US}.*\)${US}\$/\1${US}1/" "$WLIST_FILE"
@@ -148,12 +138,12 @@ sed -i.bak -e "s/^\(S${US}1${US}root${US}.*\)${US}\$/\1${US}1/" \
 # ============================================================================
 h=$(hub)
 for v in root A A1 A1x A1y B; do
-  hasnt "C: $v's badge has no trailing ✓" "$(hrow "$h" "$v")" " ✓"
-  hasnt "C: $v's badge carries no child state" "$(hrow "$h" "$v")" "!"
+  st_hasnt "C: $v's badge has no trailing ✓" "$(hrow "$h" "$v")" " ✓"
+  st_hasnt "C: $v's badge carries no child state" "$(hrow "$h" "$v")" "!"
 done
-has "C: root sums the whole tree (8 below it, 2 done)" "$(hrow "$h" root)" "2/8"
-has "C: a middle row counts ITS subtree"              "$(hrow "$h" A)"    "2/5"
-has "C: …and so does the next one down"               "$(hrow "$h" A1)"   "2/3"
+st_has "C: root sums the whole tree (8 below it, 2 done)" "$(hrow "$h" root)" "2/8"
+st_has "C: a middle row counts ITS subtree"              "$(hrow "$h" A)"    "2/5"
+st_has "C: …and so does the next one down"               "$(hrow "$h" A1)"   "2/3"
 
 # ============================================================================
 # D. glyphs — five, not ten
@@ -169,13 +159,13 @@ s=$(side); h=$(hub)
 . "$BIN/fleet-ui-lang.sh"
 gd() { printf '%s\n' "$s" | awk -F"$US" -v n="$1" '$4 == n { print $3 "|" $8; exit }'; }
 for kind in ask perm blocked restore other; do
-  eq "D: needs/$kind → ! + its kind in words" "!|$(fleet_ui_t "needs_$kind")" "$(gd "n-$kind")"
-  has "D: needs/$kind → the hub's act cell names it" "$(hrow "$h" "n-$kind")" "$(fleet_ui_t "needs_$kind")"
+  st_eq "D: needs/$kind → ! + its kind in words" "!|$(fleet_ui_t "needs_$kind")" "$(gd "n-$kind")"
+  st_has "D: needs/$kind → the hub's act cell names it" "$(hrow "$h" "n-$kind")" "$(fleet_ui_t "needs_$kind")"
 done
-eq "D: failed → ! + its kind" "!|$(fleet_ui_t needs_failed)" "$(gd n-failed)"
-eq "D: an old window's sleeping word is a plain · (T548)" "·|" "$(gd n-sleep)"
+st_eq "D: failed → ! + its kind" "!|$(fleet_ui_t needs_failed)" "$(gd n-failed)"
+st_eq "D: an old window's sleeping word is a plain · (T548)" "·|" "$(gd n-sleep)"
 for g in '?' '⊘' '⊠' '↺'; do
-  hasnt "D: the retired $g glyph appears nowhere in the sidebar" "$(printf '%s\n' "$s" | awk -F"$US" '{print $3}')" "$g"
+  st_hasnt "D: the retired $g glyph appears nowhere in the sidebar" "$(printf '%s\n' "$s" | awk -F"$US" '{print $3}')" "$g"
 done
 
 # ============================================================================
@@ -192,13 +182,13 @@ w 5 lpw   /w/r-issue-5  looping @5 5 ''      /w/r-issue-5 '' loop
 w 6 both  /w/r-issue-6  looping @6 6 ''      /w/r-issue-6 '' loop,bg
 s=$(side)
 det() { printf '%s\n' "$1" | awk -F"$US" -v n="$2" '$4 == n { print $8; exit }'; }
-eq "H: waiting on children → 等子任务 + its own k/N" "等子任务 1/2" "$(det "$s" par)"
-eq "H: a background command → 后台命令在跑" "后台命令在跑" "$(det "$s" bgw)"
-eq "H: a Loop alone needs no words (the ↻ says it)" "" "$(det "$s" lpw)"
-eq "H: loop,bg → the bg words" "后台命令在跑" "$(det "$s" both)"
-eq "H: a child's own row carries nothing" "" "$(det "$s" kid2)"
+st_eq "H: waiting on children → 等子任务 + its own k/N" "等子任务 1/2" "$(det "$s" par)"
+st_eq "H: a background command → 后台命令在跑" "后台命令在跑" "$(det "$s" bgw)"
+st_eq "H: a Loop alone needs no words (the ↻ says it)" "" "$(det "$s" lpw)"
+st_eq "H: loop,bg → the bg words" "后台命令在跑" "$(det "$s" both)"
+st_eq "H: a child's own row carries nothing" "" "$(det "$s" kid2)"
 h=$(hub)
-hasnt "H: the hub's red act cell never shows a ↻ reason" "$h" "等子任务"
+st_hasnt "H: the hub's red act cell never shows a ↻ reason" "$h" "等子任务"
 
 # ============================================================================
 # I. a reaped middle layer (issue #1352): gp ─ [issue-12, reaped] ─ gk, and a
@@ -214,26 +204,26 @@ w 5 lonely /w/r-issue-20 working @5 20 ''       /w/r-issue-20
 # the working spinner is clock-driven: fold its frame out before comparing frames
 nospin() { perl -CSD -pe 's/[\x{2800}-\x{28FF}]/*/g'; }
 s0=$(side); h0=$(hub | nospin)
-eq "I: no ledger — the grandchildren sink as orphans (today's rule)" \
+st_eq "I: no ledger — the grandchildren sink as orphans (today's rule)" \
    "gp sib lonely gk gk2 " "$(sorder "$s0")"
-eq "I: no ledger — gp counts only its live child" "gp|▾|1/1|0" "$(srow "$s0" gp)"
+st_eq "I: no ledger — gp counts only its live child" "gp|▾|1/1|0" "$(srow "$s0" gp)"
 LD="$FLEET_CONF_DIR/fleets/S/children"; mkdir -p "$LD"
 printf '{"seq": 1, "child": "issue-12", "state": "MERGED", "pr": "99"}\n' > "$LD/issue-10.ndjson"
 printf '{"seq": 1, "child": "issue-14", "state": "MERGED"}\n'           > "$LD/issue-12.ndjson"
 # a relayed row is not a parent link: it must not re-parent gk2 onto lonely
 printf '{"seq": 1, "child": "issue-15", "state": "BLOCKED", "relayed_from": "issue-14"}\n' > "$LD/issue-20.ndjson"
 s=$(side)
-eq "I: the grandchildren nest under the nearest live ancestor" \
+st_eq "I: the grandchildren nest under the nearest live ancestor" \
    "gp sib gk gk2 lonely " "$(sorder "$s")"
-eq "I: …at depth 1, no label"                 "gk|└||1"     "$(srow "$s" gk)"
-eq "I: …through a two-deep gap too"           "gk2|└||1"    "$(srow "$s" gk2)"
-eq "I: …and they count in gp's k/N"           "gp|▾|2/3|0"  "$(srow "$s" gp)"
-eq "I: a relayed_from row parents nothing"    "lonely| ||0" "$(srow "$s" lonely)"
-hasnt "I: no ↳ tag names the reaped parent"   "$(hub)" "↳"
+st_eq "I: …at depth 1, no label"                 "gk|└||1"     "$(srow "$s" gk)"
+st_eq "I: …through a two-deep gap too"           "gk2|└||1"    "$(srow "$s" gk2)"
+st_eq "I: …and they count in gp's k/N"           "gp|▾|2/3|0"  "$(srow "$s" gp)"
+st_eq "I: a relayed_from row parents nothing"    "lonely| ||0" "$(srow "$s" lonely)"
+st_hasnt "I: no ↳ tag names the reaped parent"   "$(hub)" "↳"
 # a ledger that does not know the reaped key ⇒ exactly today's frame
 printf '{"seq": 1, "child": "issue-77", "state": "MERGED"}\n' > "$LD/issue-10.ndjson"
 rm -f "$LD/issue-12.ndjson" "$LD/issue-20.ndjson"
-eq "I: an unknown key in the ledger — sidebar unchanged" "$(printf '%s' "$s0" | nospin)" "$(side | nospin)"
-eq "I: an unknown key in the ledger — hub unchanged"     "$h0" "$(hub | nospin)"
+st_eq "I: an unknown key in the ledger — sidebar unchanged" "$(printf '%s' "$s0" | nospin)" "$(side | nospin)"
+st_eq "I: an unknown key in the ledger — hub unchanged"     "$h0" "$(hub | nospin)"
 
 printf 'dash-rows-nesting-selftest: OK (%d checks)\n' "$CHECKS"

@@ -40,7 +40,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'selftest: python3 missing — SKIP'; exit 0; }
+st_need python3
 st_sandbox "${TMPDIR:-/tmp}/fshow-selftest.XXXXXX"
 export TMPDIR="$WORK"
 mkdir -p "$WORK/bin"
@@ -69,8 +69,7 @@ printf '#!/bin/sh\ncat "%s/where.json" 2>/dev/null || echo "{}"\n' "$WORK" > "$W
 OUT="$WORK/out"; export FLEET_SHOW_OUT="$OUT"
 SHOW="$BIN/fleet-show.sh"
 
-fail=0
-bad() { printf 'FAIL %s\n' "$1"; fail=1; }
+st_tally
 TAB=$(printf '\t')
 clients() { printf '%s\n' "$@" | tr '|' "$TAB" > "$STATE/clients"; }
 
@@ -119,23 +118,23 @@ clients '100|/dev/ttyOLD|iTerm2 3.6.10' '300|/dev/ttyNEW|iTerm2 3.6.10' '200|/de
 rm -f "$OUT" "$STATE/lockcmd"
 res=$("$SHOW" "$F" 2>"$WORK/err"); rc=$?
 [ "$rc" = 0 ] && [ "$res" = unconfirmed ] && grep -q '^fleet-show: pic one.png → iTerm2（/dev/ttyNEW iTerm2' "$WORK/err" \
-  && grep -q '没有 fleet-open 密钥' "$WORK/err" && st_ok "no secret: unconfirmed at once, rc 0, stderr names the road" || bad "result ($rc): $res / $(cat "$WORK/err")"
-[ "$(cat "$STATE/locked")" = /dev/ttyNEW ] && st_ok "PICK newest client (iTerm2)" || bad "PICK locked $(cat "$STATE/locked")"
+  && grep -q '没有 fleet-open 密钥' "$WORK/err" && st_ok "no secret: unconfirmed at once, rc 0, stderr names the road" || st_miss "result ($rc): $res / $(cat "$WORK/err")"
+[ "$(cat "$STATE/locked")" = /dev/ttyNEW ] && st_ok "PICK newest client (iTerm2)" || st_miss "PICK locked $(cat "$STATE/locked")"
 meta=$(decode "$OUT")
-[ "$meta" = "pic one.png 0 200001 MultipartFile" ] && st_ok "header: $meta" || bad "header: $meta"
-cmp -s "$OUT.bin" "$F" && st_ok "ROUNDTRIP bytes identical" || bad "ROUNDTRIP bytes differ"
+[ "$meta" = "pic one.png 0 200001 MultipartFile" ] && st_ok "header: $meta" || st_miss "header: $meta"
+cmp -s "$OUT.bin" "$F" && st_ok "ROUNDTRIP bytes identical" || st_miss "ROUNDTRIP bytes differ"
 raw=$(python3 -c 'import base64,re,sys; print(repr(base64.b64decode(re.search(rb"name=([^;]*);", open(sys.argv[1],"rb").read()).group(1))))' "$OUT")
-[ "$raw" = "b'pic one.png'" ] && st_ok "NAME has no trailing newline" || bad "NAME decoded to $raw"
-[ ! -f "$STATE/lockcmd" ] && st_ok "RESTORE unset lock-command stays unset" || bad "RESTORE left $(cat "$STATE/lockcmd")"
-ls -d "$WORK"/fleet-show.* >/dev/null 2>&1 && bad "job/lock dir leaked" || st_ok "no job/lock dir left"
+[ "$raw" = "b'pic one.png'" ] && st_ok "NAME has no trailing newline" || st_miss "NAME decoded to $raw"
+[ ! -f "$STATE/lockcmd" ] && st_ok "RESTORE unset lock-command stays unset" || st_miss "RESTORE left $(cat "$STATE/lockcmd")"
+ls -d "$WORK"/fleet-show.* >/dev/null 2>&1 && st_miss "job/lock dir leaked" || st_ok "no job/lock dir left"
 
 # ---- RESTORE(session value) + INLINE + SINGLE ------------------------------------
 printf '%s' 'lock -np' > "$STATE/lockcmd"; rm -f "$OUT"
 FLEET_SHOW_HOLD_SECS=1 "$SHOW" --inline "$WORK/wide.png" >/dev/null 2>&1
-[ "$(cat "$STATE/lockcmd")" = 'lock -np' ] && st_ok "RESTORE session value kept" || bad "RESTORE got $(cat "$STATE/lockcmd")"
-[ "$(inl "$OUT" | cut -d' ' -f2)" = 1 ] && st_ok "INLINE inline=1" || bad "INLINE: $(inl "$OUT")"
+[ "$(cat "$STATE/lockcmd")" = 'lock -np' ] && st_ok "RESTORE session value kept" || st_miss "RESTORE got $(cat "$STATE/lockcmd")"
+[ "$(inl "$OUT" | cut -d' ' -f2)" = 1 ] && st_ok "INLINE inline=1" || st_miss "INLINE: $(inl "$OUT")"
 rm -f "$OUT"; "$SHOW" --single "$F" >/dev/null 2>&1
-meta=$(decode "$OUT"); case "$meta" in *' File') cmp -s "$OUT.bin" "$F" && st_ok "SINGLE File= roundtrip" || bad "SINGLE bytes" ;; *) bad "SINGLE: $meta" ;; esac
+meta=$(decode "$OUT"); case "$meta" in *' File') cmp -s "$OUT.bin" "$F" && st_ok "SINGLE File= roundtrip" || st_miss "SINGLE bytes" ;; *) st_miss "SINGLE: $meta" ;; esac
 
 # ---- DEGRADE --------------------------------------------------------------------
 deg() {  # <label> <expect-rc> <cmd…>
@@ -143,7 +142,7 @@ deg() {  # <label> <expect-rc> <cmd…>
   rm -f "$OUT"; local out; out=$("$@" 2>/dev/null); local rc=$?
   if [ "$rc" = "$want" ] && { [ "$want" = 1 ] || { printf '%s' "$out" | grep -q "^PATH /" && printf '%s' "$out" | grep -q '^failed:.'; }; } && [ ! -s "$OUT" ]; then
     st_ok "DEGRADE $label → rc $rc"
-  else bad "DEGRADE $label → rc $rc out=$out"; fi
+  else st_miss "DEGRADE $label → rc $rc out=$out"; fi
 }
 deg 'FLEET_SHOW=0' 2 env FLEET_SHOW=0 "$SHOW" "$F"
 deg 'over the cap' 2 env FLEET_SHOW_MAX_BYTES=10 "$SHOW" "$F"
@@ -156,47 +155,47 @@ clients '100|/dev/ttyOLD|iTerm2 3.6.10' '300|/dev/ttyPHONE|xterm-256color'
 deg 'active client not iTerm2 (stale iTerm2 attached)' 2 "$SHOW" "$F"
 why=$("$SHOW" "$F" 2>&1 >/dev/null)
 printf '%s' "$why" | grep -q '当前活跃 client /dev/ttyPHONE 是 xterm-256color，不是 iTerm2' \
-  && st_ok "DEGRADE names the active client + its termtype" || bad "DEGRADE why: $why"
+  && st_ok "DEGRADE names the active client + its termtype" || st_miss "DEGRADE why: $why"
 clients '100|/dev/ttyOLD|iTerm2 3.6.10' '300|/dev/ttyBLANK|'
 deg 'active client with empty termtype' 2 "$SHOW" "$F"
 clients '300|/dev/ttyNEW|xterm-256color'
 rm -f "$OUT"; "$SHOW" --client /dev/ttyNEW "$F" >/dev/null 2>&1 && cmp -s "$F" "$(decode "$OUT" >/dev/null; echo "$OUT.bin")" \
-  && st_ok "--client names a non-iTerm2 client outright" || bad "--client outright"
+  && st_ok "--client names a non-iTerm2 client outright" || st_miss "--client outright"
 
 # ---- CENTER / NON-IMAGE / D-KEY (--inline, #1371) --------------------------------
 clients '300|/dev/ttyNEW|iTerm2 3.6.10|141,29,24,64'
 rm -f "$OUT"; FLEET_SHOW_KEYS=x "$SHOW" --inline "$WORK/wide.png" >/dev/null 2>&1
 got=$(inl "$OUT")
-[ "$got" = "7;29 1 ;width=84;height=16;preserveAspectRatio=1" ] && st_ok "CENTER landscape 2000x1000 → $got" || bad "CENTER landscape: $got"
-grep -q 'wide.png · 5.7 KB · 2000×1000' "$OUT" && st_ok "CENTER title row: name · size · pixels" || bad "CENTER title row missing"
+[ "$got" = "7;29 1 ;width=84;height=16;preserveAspectRatio=1" ] && st_ok "CENTER landscape 2000x1000 → $got" || st_miss "CENTER landscape: $got"
+grep -q 'wide.png · 5.7 KB · 2000×1000' "$OUT" && st_ok "CENTER title row: name · size · pixels" || st_miss "CENTER title row missing"
 grep -q '任意键返回 tmux · d 同时下载到 ~/Downloads · [0-9]*s 后自动返回 tmux' "$OUT" \
-  && st_ok "CENTER footer hint + countdown" || bad "CENTER footer missing"
+  && st_ok "CENTER footer hint + countdown" || st_miss "CENTER footer missing"
 rm -f "$OUT"; FLEET_SHOW_KEYS=x "$SHOW" --inline "$WORK/tall.jpg" >/dev/null 2>&1
 got=$(inl "$OUT")
-[ "$got" = "3;60 1 ;width=23;height=25;preserveAspectRatio=1" ] && st_ok "CENTER portrait JPEG 1000x3000 → $got" || bad "CENTER portrait: $got"
+[ "$got" = "3;60 1 ;width=23;height=25;preserveAspectRatio=1" ] && st_ok "CENTER portrait JPEG 1000x3000 → $got" || st_miss "CENTER portrait: $got"
 clients '300|/dev/ttyNEW|iTerm2 3.6.10|141,29,0,0'
 rm -f "$OUT"; FLEET_SHOW_KEYS=x "$SHOW" --inline "$WORK/wide.png" >/dev/null 2>&1
 got=$(inl "$OUT")
-[ "$got" = "3;1 1 -" ] && st_ok "CENTER no cell size → top-left, own size" || bad "CENTER fallback: $got"
+[ "$got" = "3;1 1 -" ] && st_ok "CENTER no cell size → top-left, own size" || st_miss "CENTER fallback: $got"
 clients '300|/dev/ttyNEW|iTerm2 3.6.10'
 rm -f "$OUT"; FLEET_SHOW_KEYS=x "$SHOW" --inline "$WORK/wide.png" >/dev/null 2>&1
 got=$(inl "$OUT")
-[ "$got" = "3;1 1 -" ] && st_ok "CENTER no geometry field (old tmux) → top-left" || bad "CENTER no-geom: $got"
+[ "$got" = "3;1 1 -" ] && st_ok "CENTER no geometry field (old tmux) → top-left" || st_miss "CENTER no-geom: $got"
 
 clients '300|/dev/ttyNEW|iTerm2 3.6.10|141,29,24,64'
 rm -f "$OUT"; res=$(FLEET_SHOW_KEYS=x "$SHOW" --inline "$WORK/doc.pdf" 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$(inl "$OUT")" = "- 0 -" ] && printf '%s' "$res" | grep -q '^fleet-show: doc.pdf .*不是 iTerm2 能画的图' \
-  && st_ok "NON-IMAGE pdf --inline → download + said so" || bad "NON-IMAGE ($rc): $(inl "$OUT") / $res"
+  && st_ok "NON-IMAGE pdf --inline → download + said so" || st_miss "NON-IMAGE ($rc): $(inl "$OUT") / $res"
 
 rm -f "$OUT"; FLEET_SHOW_KEYS=d "$SHOW" --inline "$WORK/wide.png" >/dev/null 2>&1
 got=$(inl "$OUT" | cut -d' ' -f2 | tr '\n' ' ')
-[ "$got" = "1 0 " ] && grep -q '已发出下载' "$OUT" && st_ok "D-KEY d → inline=1 then inline=0 download" || bad "D-KEY: $got"
+[ "$got" = "1 0 " ] && grep -q '已发出下载' "$OUT" && st_ok "D-KEY d → inline=1 then inline=0 download" || st_miss "D-KEY: $got"
 
 rm -f "$OUT"; res=$(FLEET_SHOW_KEYS=dx "$SHOW" --inline "$WORK/wide.png" "$WORK/tall.jpg" 2>&1)
 got=$(inl "$OUT" | cut -d' ' -f2 | tr '\n' ' ')
 [ "$got" = "1 0 1 " ] && printf '%s' "$res" | grep -q '^fleet-show: wide.png → 你按了 d' \
   && [ "$(printf '%s\n' "$res" | grep -c '^unconfirmed$')" = 2 ] \
-  && grep -q '\[1/2\] wide.png' "$OUT" && st_ok "D-KEY on screen 1 of 2 reported, then screen 2" || bad "D-KEY multi: $got / $res"
+  && grep -q '\[1/2\] wide.png' "$OUT" && st_ok "D-KEY on screen 1 of 2 reported, then screen 2" || st_miss "D-KEY multi: $got / $res"
 
 # ---- RECEIPT · ITERM (issue #3541) ------------------------------------------------
 # The laptop's fleet_open.py, played: wait for the Custom= request in the stream, check
@@ -230,15 +229,15 @@ iterm() {  # <state ok|fail|none> <why> → "rc|stdout"; the peer's verdict in $
 }
 got=$(iterm ok "/Users/p/Downloads/pic one.png")
 [ "$got" = "0|saved:/Users/p/Downloads/pic one.png" ] && grep -qx seen "$WORK/peer" \
-  && st_ok "ITERM saved:<path> from fleet_open.py's answer (request before the file, keyed)" || bad "ITERM saved: $got / $(cat "$WORK/peer" "$WORK/err")"
+  && st_ok "ITERM saved:<path> from fleet_open.py's answer (request before the file, keyed)" || st_miss "ITERM saved: $got / $(cat "$WORK/peer" "$WORK/err")"
 got=$(iterm fail "it never landed in the laptop's downloads folder")
-[ "$got" = "4|failed:it never landed in the laptop's downloads folder" ] && st_ok "ITERM failed:<why> rc 4" || bad "ITERM failed: $got"
+[ "$got" = "4|failed:it never landed in the laptop's downloads folder" ] && st_ok "ITERM failed:<why> rc 4" || st_miss "ITERM failed: $got"
 got=$(iterm fail "the laptop refused it: unknown kind='file'")
-[ "$got" = "0|unconfirmed" ] && grep -q '旧版' "$WORK/err" && st_ok "ITERM a v2 script's refusal → unconfirmed, says so" || bad "ITERM v2: $got / $(cat "$WORK/err")"
+[ "$got" = "0|unconfirmed" ] && grep -q '旧版' "$WORK/err" && st_ok "ITERM a v2 script's refusal → unconfirmed, says so" || st_miss "ITERM v2: $got / $(cat "$WORK/err")"
 t0=$(date +%s); got=$(iterm none ""); t1=$(date +%s)
 [ "$got" = "0|unconfirmed" ] && [ $(( t1 - t0 )) -ge 3 ] && grep -q '没等到那边的回执' "$WORK/err" \
-  && st_ok "ITERM no answer → unconfirmed after the wait" || bad "ITERM none: $got ($(( t1 - t0 ))s) / $(cat "$WORK/err")"
-[ -n "$(find "$FLEET_CONF_DIR/open-acks" -type f 2>/dev/null)" ] && bad "ITERM receipts left behind" || st_ok "ITERM no receipt left behind"
+  && st_ok "ITERM no answer → unconfirmed after the wait" || st_miss "ITERM none: $got ($(( t1 - t0 ))s) / $(cat "$WORK/err")"
+[ -n "$(find "$FLEET_CONF_DIR/open-acks" -type f 2>/dev/null)" ] && st_miss "ITERM receipts left behind" || st_ok "ITERM no receipt left behind"
 
 # ---- RECEIPT · THIN (issue #3541) -------------------------------------------------
 # The REAL loop's show_req, fed the 7502 off the 看台's tty through its own parser;
@@ -282,21 +281,21 @@ thin() {  # <file…> → "rc|stdout" (FETCH= the loop's fetch command)
 row "	caps=show"
 got=$(thin "$F")
 [ "$got" = "0|saved:$DL/pic one.png" ] && cmp -s "$DL/pic one.png" "$F" && [ ! -s "$OUT" ] \
-  && st_ok "THIN saved:<path> in the loop's downloads, bytes identical, no terminal escape" || bad "THIN saved: $got / $(cat "$WORK/peer" "$WORK/err")"
-grep -q 'fleet · .* 发来 pic one.png，存在 ' "$WORK/peer" && st_ok "THIN the loop says where it saved it" || bad "THIN say: $(cat "$WORK/peer")"
-grep -q 'Pat Mac' "$WORK/err" && st_ok "THIN stderr names the device" || bad "THIN device: $(cat "$WORK/err")"
+  && st_ok "THIN saved:<path> in the loop's downloads, bytes identical, no terminal escape" || st_miss "THIN saved: $got / $(cat "$WORK/peer" "$WORK/err")"
+grep -q 'fleet · .* 发来 pic one.png，存在 ' "$WORK/peer" && st_ok "THIN the loop says where it saved it" || st_miss "THIN say: $(cat "$WORK/peer")"
+grep -q 'Pat Mac' "$WORK/err" && st_ok "THIN stderr names the device" || st_miss "THIN device: $(cat "$WORK/err")"
 got=$(thin "$F")
-[ "$got" = "0|saved:$DL/pic one (1).png" ] && st_ok "THIN a taken name → «pic one (1).png»" || bad "THIN taken: $got"
-[ -n "$(find "$FLEET_CONF_DIR/show-files" -type f 2>/dev/null)" ] && bad "THIN a fetched id left registered" || st_ok "THIN --fetch serves an id once"
-bash "$SHOW" --fetch 00ff >/dev/null 2>&1; [ $? = 3 ] && st_ok "THIN --fetch of an unknown id → rc 3" || bad "THIN --fetch unknown"
-bash "$SHOW" --fetch '../x' >/dev/null 2>&1; [ $? = 1 ] && st_ok "THIN --fetch refuses a non-hex id" || bad "THIN --fetch non-hex"
+[ "$got" = "0|saved:$DL/pic one (1).png" ] && st_ok "THIN a taken name → «pic one (1).png»" || st_miss "THIN taken: $got"
+[ -n "$(find "$FLEET_CONF_DIR/show-files" -type f 2>/dev/null)" ] && st_miss "THIN a fetched id left registered" || st_ok "THIN --fetch serves an id once"
+bash "$SHOW" --fetch 00ff >/dev/null 2>&1; [ $? = 3 ] && st_ok "THIN --fetch of an unknown id → rc 3" || st_miss "THIN --fetch unknown"
+bash "$SHOW" --fetch '../x' >/dev/null 2>&1; [ $? = 1 ] && st_ok "THIN --fetch refuses a non-hex id" || st_miss "THIN --fetch non-hex"
 got=$(FETCH=false thin "$F")
-case "$got" in "4|failed:fetch failed (rc 1)"*) st_ok "THIN a fetch that fails → failed:<why> rc 4" ;; *) bad "THIN fetch fail: $got" ;; esac
+case "$got" in "4|failed:fetch failed (rc 1)"*) st_ok "THIN a fetch that fails → failed:<why> rc 4" ;; *) st_miss "THIN fetch fail: $got" ;; esac
 rm -f "$OUT" "$TOUT"; got=$(FLEET_THIN_SHOW_OUT="$TOUT" FLEET_SHOW_ACK_WAIT=1 "$SHOW" "$F" 2>"$WORK/err"); rc=$?
-[ "$rc|$got" = "0|unconfirmed" ] && grep -q 'show;token=tok-1;' "$TOUT" && st_ok "THIN no answer → unconfirmed" || bad "THIN none: $rc|$got"
+[ "$rc|$got" = "0|unconfirmed" ] && grep -q 'show;token=tok-1;' "$TOUT" && st_ok "THIN no answer → unconfirmed" || st_miss "THIN none: $rc|$got"
 row ""
 rm -f "$OUT" "$TOUT"; got=$(FLEET_THIN_SHOW_OUT="$TOUT" "$SHOW" "$F" 2>/dev/null)
-[ "$got" = unconfirmed ] && [ ! -s "$TOUT" ] && [ -s "$OUT" ] && st_ok "THIN a row with no caps (older loop) → the terminal road" || bad "THIN no caps: $got"
+[ "$got" = unconfirmed ] && [ ! -s "$TOUT" ] && [ -s "$OUT" ] && st_ok "THIN a row with no caps (older loop) → the terminal road" || st_miss "THIN no caps: $got"
 rm -f "$VIEWS/v1"
 
 # ---- RECEIPT · CLIENT lease + local opener (issue #3541) ---------------------------
@@ -305,11 +304,10 @@ cat > "$WORK/bin/actions" <<'SH'
 print('{"state":"done","result":"saved:/Users/p/Downloads/x.png","client":{"device":"Pat Mac"}}')
 SH
 got=$(FLEET_SHOW_ACTIONS_BIN="$WORK/bin/actions" "$SHOW" "$F" 2>/dev/null); rc=$?
-[ "$rc|$got" = "0|saved:/Users/p/Downloads/x.png" ] && st_ok "CLIENT the lease's result → saved:<path>" || bad "CLIENT: $rc|$got"
+[ "$rc|$got" = "0|saved:/Users/p/Downloads/x.png" ] && st_ok "CLIENT the lease's result → saved:<path>" || st_miss "CLIENT: $rc|$got"
 printf '{"source":"local","state":"active","via":"local"}\n' > "$WORK/where.json"
 got=$(FLEET_SHOW_LOCAL_CMD=true "$SHOW" "$F" 2>/dev/null); rc=$?
-[ "$rc|$got" = "0|saved:$(cd "$WORK" && pwd -P)/pic one.png" ] && st_ok "CLIENT the local opener → saved:<the file here>" || bad "LOCAL: $rc|$got"
+[ "$rc|$got" = "0|saved:$(cd "$WORK" && pwd -P)/pic one.png" ] && st_ok "CLIENT the local opener → saved:<the file here>" || st_miss "LOCAL: $rc|$got"
 rm -f "$WORK/where.json"
 
-[ "$fail" = 0 ] && echo "fleet-show-selftest: PASS" || echo "fleet-show-selftest: FAIL"
-exit "$fail"
+st_done

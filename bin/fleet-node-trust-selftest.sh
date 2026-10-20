@@ -27,7 +27,6 @@ BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$BIN/selftest-lib.sh"
 SUT="$BIN/fleet-node-trust.sh"
 CHECKS=0
-fail() { printf 'fleet-node-trust selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 st_sandbox "${TMPDIR:-/tmp}/fleet-node-trust-selftest.XXXXXX"
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
@@ -44,19 +43,19 @@ NODETOK='node-SECRET-1968'
 for args in '' 'frob' 'set mac-n maybe' 'set mac-n' 'set "bad name!" trusted' 'status mac-a mac-b' 'self extra'; do
   reset
   eval "\"\$SUT\" $args" >/dev/null 2>"$WORK/err"; rc=$?
-  [ "$rc" -eq 2 ] || fail "A: '$args' exit $rc, want 2: $(cat "$WORK/err")"
-  [ ! -e "$STUB_LOG" ] || fail "A: '$args' called curl"
+  [ "$rc" -eq 2 ] || st_fail "A: '$args' exit $rc, want 2: $(cat "$WORK/err")"
+  [ ! -e "$STUB_LOG" ] || st_fail "A: '$args' called curl"
 done
 st_count
 
 # B. no token / no URL
 reset
 "$SUT" set mac-n trusted >/dev/null 2>"$WORK/err"; rc=$?
-[ "$rc" -eq 1 ] && grep -q 'CCQUOTA_VIEWER_TOKEN' "$WORK/err" || fail "B: no token: exit $rc $(cat "$WORK/err")"
-[ ! -e "$STUB_LOG" ] || fail "B: curl called without a token"
+[ "$rc" -eq 1 ] && grep -q 'CCQUOTA_VIEWER_TOKEN' "$WORK/err" || st_fail "B: no token: exit $rc $(cat "$WORK/err")"
+[ ! -e "$STUB_LOG" ] || st_fail "B: curl called without a token"
 CCQUOTA_VIEWER_TOKEN=$VIEWER "$SUT" status >/dev/null 2>"$WORK/err"; rc=$?
-[ "$rc" -eq 1 ] && grep -q 'no hub URL' "$WORK/err" || fail "B: no URL: exit $rc $(cat "$WORK/err")"
-[ ! -e "$STUB_LOG" ] || fail "B: curl called without a URL"
+[ "$rc" -eq 1 ] && grep -q 'no hub URL' "$WORK/err" || st_fail "B: no URL: exit $rc $(cat "$WORK/err")"
+[ ! -e "$STUB_LOG" ] || st_fail "B: curl called without a URL"
 st_count
 
 export CCQUOTA_VIEWER_TOKEN=$VIEWER CCQUOTA_HUB_URL=http://hub.test/
@@ -65,17 +64,17 @@ export CCQUOTA_VIEWER_TOKEN=$VIEWER CCQUOTA_HUB_URL=http://hub.test/
 reset
 fake settings '{"settings":{"fleet.node_trust.mac-n":"trusted"},"effective":{"fleet.node_trust.mac-n":"trusted"}}'
 out=$("$SUT" set MAC-N.local trusted 2>"$WORK/err"); rc=$?
-[ "$rc" -eq 0 ] || fail "C: exit $rc: $(cat "$WORK/err")"
-[ "$out" = 'trust: SET mac-n trusted' ] || fail "C: stdout: $out"
-grep -qx 'PUT http://hub.test/v1/fleet/settings {"key":"fleet.node_trust.mac-n","value":"trusted"}' "$STUB_BODY" || fail "C: request: $(cat "$STUB_BODY")"
-grep -qx "Authorization: Bearer $VIEWER" "$STUB_HDR" || fail "C: header: $(cat "$STUB_HDR")"
+[ "$rc" -eq 0 ] || st_fail "C: exit $rc: $(cat "$WORK/err")"
+[ "$out" = 'trust: SET mac-n trusted' ] || st_fail "C: stdout: $out"
+grep -qx 'PUT http://hub.test/v1/fleet/settings {"key":"fleet.node_trust.mac-n","value":"trusted"}' "$STUB_BODY" || st_fail "C: request: $(cat "$STUB_BODY")"
+grep -qx "Authorization: Bearer $VIEWER" "$STUB_HDR" || st_fail "C: header: $(cat "$STUB_HDR")"
 st_count
 
 # D. old hub: 200 without the key
 reset
 fake settings '{"settings":{},"effective":{}}'
 "$SUT" set mac-n untrusted >/dev/null 2>"$WORK/err"; rc=$?
-[ "$rc" -eq 4 ] && grep -q 'predates' "$WORK/err" || fail "D: exit $rc $(cat "$WORK/err")"
+[ "$rc" -eq 4 ] && grep -q 'predates' "$WORK/err" || st_fail "D: exit $rc $(cat "$WORK/err")"
 st_count
 
 # E. status
@@ -83,49 +82,49 @@ reset
 fake nodes '{"nodes":[{"hostname":"mac-a.local","trust":"trusted"},{"hostname":"mac-a.local","trust":"trusted"},{"hostname":"mac-b","trust":"untrusted"}]}'
 fake settings '{"settings":{"fleet.node_trust.mac-n":"trusted","fleet.node_cap.mac-a":"8"}}'
 out=$("$SUT" status 2>"$WORK/err"); rc=$?
-[ "$rc" -eq 0 ] || fail "E: exit $rc: $(cat "$WORK/err")"
-[ "$out" = "$(printf 'trust: mac-a trusted\ntrust: mac-b untrusted\ntrust: mac-n trusted')" ] || fail "E: stdout: $out"
-[ "$("$SUT" status mac-b.local 2>/dev/null)" = 'trust: mac-b untrusted' ] || fail "E: filter mac-b"
-[ "$("$SUT" status mac-l 2>/dev/null)" = 'trust: mac-l untrusted' ] || fail "E: unknown machine"
+[ "$rc" -eq 0 ] || st_fail "E: exit $rc: $(cat "$WORK/err")"
+[ "$out" = "$(printf 'trust: mac-a trusted\ntrust: mac-b untrusted\ntrust: mac-n trusted')" ] || st_fail "E: stdout: $out"
+[ "$("$SUT" status mac-b.local 2>/dev/null)" = 'trust: mac-b untrusted' ] || st_fail "E: filter mac-b"
+[ "$("$SUT" status mac-l 2>/dev/null)" = 'trust: mac-l untrusted' ] || st_fail "E: unknown machine"
 fake nodes '{"nodes":[{"hostname":"mac-a"}]}'
 "$SUT" status >/dev/null 2>"$WORK/err"; rc=$?
-[ "$rc" -eq 4 ] && grep -q 'predates' "$WORK/err" || fail "E: old roster: exit $rc $(cat "$WORK/err")"
+[ "$rc" -eq 4 ] && grep -q 'predates' "$WORK/err" || st_fail "E: old roster: exit $rc $(cat "$WORK/err")"
 st_count
 
 # F. refused
 for c in 401 403; do
   reset; fake settings '{"error":"only the operator"}' "$c"
   "$SUT" set mac-n trusted >/dev/null 2>"$WORK/err"; rc=$?
-  [ "$rc" -eq 4 ] && grep -q 'not the operator' "$WORK/err" || fail "F: $c exit $rc $(cat "$WORK/err")"
+  [ "$rc" -eq 4 ] && grep -q 'not the operator' "$WORK/err" || st_fail "F: $c exit $rc $(cat "$WORK/err")"
 done
 reset; fake settings '{"error":"bad"}' 400
 "$SUT" set mac-n trusted >/dev/null 2>"$WORK/err"; rc=$?
-[ "$rc" -eq 4 ] || fail "F: 400 exit $rc"
+[ "$rc" -eq 4 ] || st_fail "F: 400 exit $rc"
 st_count
 
 # G. down
 reset; export FAKE_RC=7
 out=$("$SUT" status 2>"$WORK/err"); rc=$?
-[ "$rc" -eq 1 ] && grep -q 'hub unreachable' "$WORK/err" && [ -z "$out" ] || fail "G: exit $rc out=$out $(cat "$WORK/err")"
+[ "$rc" -eq 1 ] && grep -q 'hub unreachable' "$WORK/err" && [ -z "$out" ] || st_fail "G: exit $rc out=$out $(cat "$WORK/err")"
 unset FAKE_RC
 st_count
 
 # H. self
 reset
 "$SUT" self >/dev/null 2>"$WORK/err"; rc=$?
-[ "$rc" -eq 10 ] && [ ! -e "$STUB_LOG" ] || fail "H: module off: exit $rc"
+[ "$rc" -eq 10 ] && [ ! -e "$STUB_LOG" ] || st_fail "H: module off: exit $rc"
 export CCQUOTA_FLEET=1
 unset CCQUOTA_HUB_URL
 printf 'CCQUOTA_TOKEN=%s\nCCQUOTA_HUB_URL=http://hub.test\n' "$NODETOK" > "$FLEET_CONF_DIR/node.env"
 chmod 600 "$FLEET_CONF_DIR/node.env"
 fake self '{"hostname":"mac-a.local","status":"online","trust":"trusted"}'
 out=$("$SUT" self 2>"$WORK/err"); rc=$?
-[ "$rc" -eq 0 ] && [ "$out" = 'trust: mac-a trusted' ] || fail "H: exit $rc out=$out $(cat "$WORK/err")"
-grep -qx 'GET http://hub.test/v1/node/self ' "$STUB_BODY" || fail "H: request: $(cat "$STUB_BODY")"
-grep -qx "Authorization: Bearer $NODETOK" "$STUB_HDR" || fail "H: header: $(cat "$STUB_HDR")"
+[ "$rc" -eq 0 ] && [ "$out" = 'trust: mac-a trusted' ] || st_fail "H: exit $rc out=$out $(cat "$WORK/err")"
+grep -qx 'GET http://hub.test/v1/node/self ' "$STUB_BODY" || st_fail "H: request: $(cat "$STUB_BODY")"
+grep -qx "Authorization: Bearer $NODETOK" "$STUB_HDR" || st_fail "H: header: $(cat "$STUB_HDR")"
 fake self '{"hostname":"mac-a.local","status":"online"}'
 "$SUT" self >/dev/null 2>"$WORK/err"; rc=$?
-[ "$rc" -eq 4 ] && grep -q 'predates' "$WORK/err" || fail "H: old hub: exit $rc $(cat "$WORK/err")"
+[ "$rc" -eq 4 ] && grep -q 'predates' "$WORK/err" || st_fail "H: old hub: exit $rc $(cat "$WORK/err")"
 st_count
 
 # I. no leak
@@ -134,8 +133,8 @@ export CCQUOTA_HUB_URL=http://hub.test
 fake settings '{"effective":{"fleet.node_trust.mac-n":"trusted"}}'
 "$SUT" set mac-n trusted >/dev/null 2>&1
 "$SUT" self >/dev/null 2>&1
-if grep -q 'SECRET' "$STUB_LOG"; then fail "I: a token reached curl's argv: $(cat "$STUB_LOG")"; fi
-if grep -rq "$VIEWER" "$HOME" "$FLEET_CONF_DIR" 2>/dev/null; then fail "I: the viewer token was written to a file"; fi
+if grep -q 'SECRET' "$STUB_LOG"; then st_fail "I: a token reached curl's argv: $(cat "$STUB_LOG")"; fi
+if grep -rq "$VIEWER" "$HOME" "$FLEET_CONF_DIR" 2>/dev/null; then st_fail "I: the viewer token was written to a file"; fi
 st_count
 
 printf 'fleet-node-trust selftest: PASS (%d checks)\n' "$CHECKS"

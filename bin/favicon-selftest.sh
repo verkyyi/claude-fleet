@@ -10,14 +10,14 @@
 # only the theme package, site/assets or extras/web-chat change.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-fail=0
-bad() { echo "FAIL: $*"; fail=1; }
+. "$ROOT/bin/selftest-lib.sh"
+FAIL=0
 
 for pair in "extras/fleet-theme/logo.svg tokenledger/hub/web/dist/favicon.svg" \
             "site/assets/favicon.ico tokenledger/hub/web/dist/favicon.ico" \
             "site/assets/apple-touch-icon.png tokenledger/hub/web/dist/apple-touch-icon.png"; do
   src="${pair%% *}" dst="${pair#* }"
-  cmp -s "$ROOT/$src" "$ROOT/$dst" || bad "$dst is not $src (cp $src $dst)"
+  cmp -s "$ROOT/$src" "$ROOT/$dst" || st_miss "$dst is not $src (cp $src $dst)"
 done
 
 # no inlined icon, no old green / blue one
@@ -25,11 +25,10 @@ pages="$(cd "$ROOT" && { git ls-files 'extras/web-chat/ui/index.html' 'extras/we
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   if grep -Eq "rel=\"(icon|apple-touch-icon)\"[^>]*href=\"data:|%230e6e5e|%232a78d6" "$ROOT/$f"; then
-    bad "$f inlines an icon of its own"
+    st_miss "$f inlines an icon of its own"
   fi
 done <<<"$pages"
-grep -q 'href="/favicon.svg"' "$ROOT/bin/docs-build.sh" || bad "bin/docs-build.sh's pages do not name /favicon.svg"
-grep -q 'rel="icon"[^>]*href="../../fleet-theme/logo.svg"' "$ROOT/extras/web-chat/ui/index.html" || bad "extras/web-chat/ui/index.html does not name the theme package's logo"
+grep -q 'href="/favicon.svg"' "$ROOT/bin/docs-build.sh" || st_miss "bin/docs-build.sh's pages do not name /favicon.svg"
+grep -q 'rel="icon"[^>]*href="../../fleet-theme/logo.svg"' "$ROOT/extras/web-chat/ui/index.html" || st_miss "extras/web-chat/ui/index.html does not name the theme package's logo"
 
-[ "$fail" = 0 ] && echo "PASS favicon-selftest"
-exit "$fail"
+st_done

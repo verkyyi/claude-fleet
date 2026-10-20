@@ -40,14 +40,13 @@ IV="$BIN/fleet-install-version.sh"
 DOC="$BIN/fleet-doctor.sh"
 [ -f "$IV" ]  || { printf 'selftest: %s not found\n' "$IV" >&2; exit 2; }
 [ -f "$DOC" ] || { printf 'selftest: %s not found\n' "$DOC" >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { echo "install-version-selftest SKIP (no git)"; exit 0; }
+st_need git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/install-version-selftest.XXXXXX")" || exit 2
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM HUP
 
-CHECKS=0
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+st_tally count
 contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]:\n$2";; esac; }
 not_contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 — output unexpectedly contains [$3]:\n$2";; esac; }
 
@@ -159,9 +158,9 @@ doc_machines() {  # → the doctor's `machines (hub)` install line(s), label fir
   FLEET_LIVE_DIR="$C1" FLEET_STATUS_G="$HN" sh "$DOC" 2>&1 | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+install[[:space:]]' | grep 'machines (hub)' || true
 }
 out=$(doc_machines)
-eq "machines: no hub_nodes cache → no line (the degenerate case)" "" "$out"
+st_eq "machines: no hub_nodes cache → no line (the degenerate case)" "" "$out"
 : > "$HN/hub_nodes"
-eq "machines: an empty cache → no line" "" "$(doc_machines)"
+st_eq "machines: an empty cache → no line" "" "$(doc_machines)"
 { printf '#ts%s%s\n' "$US" "$(( $(date +%s) - 12 ))"
   hn_row mac-b online 5.02 15 67 19 bc4e8e1753 2 44125 65536 ok
   hn_row mac-a online 3.18 10 53 6 a1b2c3d 5 8798 16384 old:3
@@ -179,7 +178,7 @@ contains "machines: ahead of stable" "$out" "m7 at c0ffee1 — 2 ahead of stable
 contains "machines: off stable's line" "$out" "m6 at 0ff1ine — not on stable's line"
 contains "machines: the cache's age" "$out" "hub cache 1"
 contains "machines: the WARN names where to look on that machine" "$out" "fleet-install-follow.sh"
-eq "machines: one line" 1 "$(printf '%s\n' "$out" | grep -c .)"
+st_eq "machines: one line" 1 "$(printf '%s\n' "$out" | grep -c .)"
 { printf '#ts%s%s\n' "$US" "$(date +%s)"
   hn_row mac-b online 5.02 15 67 19 bc4e8e1753 2 44125 65536 ok
   hn_row mac-a online 3.18 10 53 6 bc4e8e1 5 8798 16384 ok; } > "$HN/hub_nodes"
@@ -206,7 +205,7 @@ done
 L="$WORK/live"; clone "$L"
 
 run --dir "$L"
-eq "current: exit 0" 0 "$RC"
+st_eq "current: exit 0" 0 "$RC"
 contains "current: verdict" "$OUT" "verdict:  CURRENT"
 contains "current: behind 0" "$OUT" "behind:   0"
 not_contains "current: no fix line" "$OUT" "fix:"
@@ -215,7 +214,7 @@ not_contains "current: no fix line" "$OUT" "fix:"
 for i in 2 3 4; do echo "$i" >> "$UP/f"; g "$UP" add f; g "$UP" commit -qm "c$i"; done
 
 run --dir "$L"
-eq "behind: exit 1" 1 "$RC"
+st_eq "behind: exit 1" 1 "$RC"
 contains "behind: verdict" "$OUT" "verdict:  BEHIND"
 contains "behind: count" "$OUT" "behind:   3"
 contains "behind: names the fix" "$OUT" "pull --ff-only"
@@ -225,14 +224,14 @@ contains "behind: names /fleet-sync-install" "$OUT" "/fleet-sync-install"
 g "$L" pull -q --ff-only
 echo local >> "$L/f"; g "$L" add f; g "$L" commit -qm local
 run --dir "$L"
-eq "ahead: exit 1" 1 "$RC"
+st_eq "ahead: exit 1" 1 "$RC"
 contains "ahead: verdict" "$OUT" "verdict:  AHEAD"
 contains "ahead: count" "$OUT" "ahead:    1"
 
 # trunk moves again while the clone still carries its own commit → DIVERGED
 echo five >> "$UP/f"; g "$UP" add f; g "$UP" commit -qm c5
 run --dir "$L"
-eq "diverged: exit 1" 1 "$RC"
+st_eq "diverged: exit 1" 1 "$RC"
 contains "diverged: verdict" "$OUT" "verdict:  DIVERGED"
 
 # ============================================================================
@@ -245,14 +244,14 @@ echo six >> "$UP/f"; g "$UP" add f; g "$UP" commit -qm c6
 mv "$UP" "$WORK/upstream.gone"
 
 run --dir "$B"
-eq "offline: exit 2" 2 "$RC"
+st_eq "offline: exit 2" 2 "$RC"
 contains "offline: verdict UNKNOWN" "$OUT" "verdict:  UNKNOWN"
 contains "offline: behind unknown" "$OUT" "behind:   unknown"
 not_contains "offline: never claims up to date" "$OUT" "verdict:  CURRENT"
 contains "offline: says why" "$OUT" "NOT assumed 0"
 
 run --json --dir "$B"
-eq "offline json: exit 2" 2 "$RC"
+st_eq "offline json: exit 2" 2 "$RC"
 contains "offline json: behind is null" "$OUT" '"behind":null'
 contains "offline json: verdict" "$OUT" '"verdict":"UNKNOWN"'
 not_contains "offline json: never behind 0" "$OUT" '"behind":0'
@@ -261,14 +260,14 @@ mv "$WORK/upstream.gone" "$UP"
 # json shape on the happy path (the cross-machine producer, issue #635 part 2)
 J="$WORK/json"; clone "$J"
 run --json --dir "$J"
-eq "json: exit 0" 0 "$RC"
+st_eq "json: exit 0" 0 "$RC"
 contains "json: behind" "$OUT" '"behind":0'
 contains "json: verdict" "$OUT" '"verdict":"CURRENT"'
 contains "json: fetched" "$OUT" '"fetched":true'
 contains "json: carries a host" "$OUT" '"host":"'
 contains "json: carries a head sha" "$OUT" '"head":"'
 # one line, so a reporter can append it to a stream without reassembling
-eq "json: single line" 1 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')"
+st_eq "json: single line" 1 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')"
 
 # ============================================================================
 # H. the consumer contract (issue #644) — the key SET and the value SHAPES a
@@ -279,9 +278,9 @@ eq "json: single line" 1 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')"
 #    value, so a `"word":` inside prose cannot pose as a key.
 # ============================================================================
 run --json --no-fetch --no-logins --dir "$J"
-eq "contract: exit 0" 0 "$RC"
+st_eq "contract: exit 0" 0 "$RC"
 KEYS=$(printf '%s' "$OUT" | grep -o '"[a-z_]*":' | tr -d '":' | tr '\n' ' ')
-eq "contract: key set + order" "dir host head branch upstream behind ahead dirty fetched verdict error logins follow follow_verdict " "$KEYS"
+st_eq "contract: key set + order" "dir host head branch upstream behind ahead dirty fetched verdict error logins follow follow_verdict " "$KEYS"
 contains "contract: behind is a bare integer" "$OUT" '"behind":0,'
 contains "contract: ahead is a bare integer" "$OUT" '"ahead":0,'
 contains "contract: dirty is a bare boolean" "$OUT" '"dirty":false,'
@@ -302,18 +301,18 @@ esac
 # ============================================================================
 mkdir -p "$WORK/plain"; echo x > "$WORK/plain/file"
 run --dir "$WORK/plain"
-eq "not-a-checkout: exit 2" 2 "$RC"
+st_eq "not-a-checkout: exit 2" 2 "$RC"
 contains "not-a-checkout: verdict" "$OUT" "verdict:  UNKNOWN"
 contains "not-a-checkout: says so" "$OUT" "not a git checkout"
 
 run --dir "$WORK/nope"
-eq "missing dir: exit 2" 2 "$RC"
+st_eq "missing dir: exit 2" 2 "$RC"
 contains "missing dir: says so" "$OUT" "no live install at"
 
 D="$WORK/detached"; clone "$D"
 g "$D" checkout -q --detach HEAD
 run --dir "$D"
-eq "detached: exit 2" 2 "$RC"
+st_eq "detached: exit 2" 2 "$RC"
 contains "detached: verdict" "$OUT" "verdict:  UNKNOWN"
 contains "detached: says so" "$OUT" "detached HEAD"
 
@@ -324,7 +323,7 @@ N="$WORK/nofetch"; clone "$N"
 echo seven >> "$UP/f"; g "$UP" add f; g "$UP" commit -qm c7
 
 run --no-fetch --dir "$N"
-eq "no-fetch: exit 0 (tracking ref still says current)" 0 "$RC"
+st_eq "no-fetch: exit 0 (tracking ref still says current)" 0 "$RC"
 contains "no-fetch: admits it did not fetch" "$OUT" "(fetched: no)"
 run --json --no-fetch --dir "$N"
 contains "no-fetch json: fetched false" "$OUT" '"fetched":false'
@@ -355,7 +354,7 @@ not_contains "logins: one login prints no line" "$OUT" "logins:"
 mkdir -p "$WORK/homes/other/.claude"; git clone -q "$UP" "$WORK/homes/other/.claude/fleet"
 g "$WORK/homes/other/.claude/fleet" reset -q --hard HEAD~1
 run --dir "$G" --no-fetch
-eq "logins: verdict/exit unchanged" 0 "$RC"
+st_eq "logins: verdict/exit unchanged" 0 "$RC"
 contains "logins: drift reported" "$OUT" "logins:   1 other · 0 current · 1 drifted"
 contains "logins: names the fix" "$OUT" "fleet-sync-logins.sh"
 run --dir "$G" --no-fetch --json

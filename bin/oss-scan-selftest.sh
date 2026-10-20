@@ -19,12 +19,11 @@
 #   L  the real conf/oss-scan.baseline names every rule of conf/oss-scan.rules
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd)
+. "$BIN/selftest-lib.sh"
 SCAN="$BIN/oss-scan.sh"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/oss-scan-st.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
-fails=0
-ok()  { echo "PASS $1"; }
-bad() { echo "FAIL $1"; fails=$((fails + 1)); }
+st_tally
 
 T=$(printf '\t')
 # a rule table of our own: the machine word is built so this file never holds it
@@ -52,8 +51,8 @@ mkdir -p "$WORK/repo/lib"
 printf 'x = 1\nHOST = "10.1.2.3"\n' > "$WORK/repo/lib/net.py"
 commit
 out=$(scan); rc=$?
-if [ "$rc" = 1 ] && [ "$out" = "lib/net.py:2:private-ipv4:config" ]; then ok A
-else bad "A rc=$rc out=$out"; fi
+if [ "$rc" = 1 ] && [ "$out" = "lib/net.py:2:private-ipv4:config" ]; then st_ok A
+else st_miss "A rc=$rc out=$out"; fi
 
 # ---- B ----
 mkrepo
@@ -62,7 +61,7 @@ printf 'ssh mac-a.example.ts.net, then box.example.ts.net.\n' > "$WORK/repo/host
 printf 'not ours: box.notexample.%s\n' ts.net > "$WORK/repo/other.md"
 commit
 out=$(scan); rc=$?
-if [ "$rc" = 1 ] && [ "$out" = "other.md:1:ts-net:placeholder" ]; then ok B; else bad "B rc=$rc out=$out"; fi
+if [ "$rc" = 1 ] && [ "$out" = "other.md:1:ts-net:placeholder" ]; then st_ok B; else st_miss "B rc=$rc out=$out"; fi
 rm "$WORK/repo/other.md"; commit
 
 # ---- C ----
@@ -72,8 +71,8 @@ commit
 printf 'notes.md%sprivate-ipv4%sa reason\n' "$T" "$T" > "$WORK/allow"
 out=$(scan); rc=$?
 all=$(scan --all)
-if [ "$rc" = 0 ] && [ -z "$out" ] && [ "$all" = "notes.md:1:private-ipv4:allow" ]; then ok C
-else bad "C rc=$rc out=$out all=$all"; fi
+if [ "$rc" = 0 ] && [ -z "$out" ] && [ "$all" = "notes.md:1:private-ipv4:allow" ]; then st_ok C
+else st_miss "C rc=$rc out=$out all=$all"; fi
 : > "$WORK/allow"
 
 # ---- D ----
@@ -90,14 +89,14 @@ want=$(printf '%s\n' \
     "bin/run.sh:3:machine:config" \
     "docs/x.md:1:machine:placeholder" \
     "docs/x.md:1:ts-net:placeholder" | sort)
-if [ "$out" = "$want" ]; then ok D; else bad "D got:
+if [ "$out" = "$want" ]; then st_ok D; else st_miss "D got:
 $out"; fi
 
 # ---- E ----
 n=$(scan --summary | sed -n 's/^tree: \([0-9]*\) .*/\1/p')
 f=$(scan --files | wc -l | tr -d ' ')
 rows=$(scan --inventory | grep -c '^| `')
-if [ "$n" = 3 ] && [ "$f" = 3 ] && [ "$rows" = 3 ]; then ok E; else bad "E summary=$n files=$f rows=$rows"; fi
+if [ "$n" = 3 ] && [ "$f" = 3 ] && [ "$rows" = 3 ]; then st_ok E; else st_miss "E summary=$n files=$f rows=$rows"; fi
 
 # ---- F ----
 bad_rules=""
@@ -108,7 +107,7 @@ while IFS="$T" read -r id ere _; do
     case "$ere" in *'\b'*|*'\d'*|*'\s'*|*'\w'*|*'{'*) bad_rules="$bad_rules $id(syntax)" ;; esac
 done < "$BIN/../conf/oss-scan.rules"
 nrules=$(grep -c "^[a-z0-9-]*$T" "$BIN/../conf/oss-scan.rules")
-if [ -z "$bad_rules" ] && [ "$nrules" -ge 9 ]; then ok F; else bad "F rules=$nrules bad:$bad_rules"; fi
+if [ -z "$bad_rules" ] && [ "$nrules" -ge 9 ]; then st_ok F; else st_miss "F rules=$nrules bad:$bad_rules"; fi
 
 # ---- G ----
 mkdir -p "$WORK/stub"
@@ -123,11 +122,11 @@ chmod +x "$WORK/stub/gitleaks"
 s0=$(PATH="$WORK/stub:$PATH" "$SCAN" --root "$WORK/repo" --history --summary); r0=$?
 s1=$(STUB_FINDING=1 PATH="$WORK/stub:$PATH" "$SCAN" --root "$WORK/repo" --history); r1=$?
 if [ "$r0" = 0 ] && printf '%s' "$s0" | grep -q '^history: 0 处未确认' \
-   && [ "$r1" = 1 ] && [ "$s1" = "01234567:a.sh:3:aws-access-token" ]; then ok G
-else bad "G r0=$r0 s0=$s0 r1=$r1 s1=$s1"; fi
+   && [ "$r1" = 1 ] && [ "$s1" = "01234567:a.sh:3:aws-access-token" ]; then st_ok G
+else st_miss "G r0=$r0 s0=$s0 r1=$r1 s1=$s1"; fi
 
 # ---- H ----
-python3 - "$BIN/../.gitleaks.toml" <<'PY' && ok H || bad H
+python3 - "$BIN/../.gitleaks.toml" <<'PY' && st_ok H || st_miss H
 import re, sys
 t = open(sys.argv[1]).read()
 blocks = t.split("\n[[allowlists]]\n")[1:]
@@ -162,8 +161,8 @@ printf 'x = 1\nHOST = "10.9.8.7"  # oss-ok: 试验网段，文档示例\n' > "$W
 commit
 out2=$(gate); rc2=$?
 if [ "$red_ok" = 1 ] && [ "$rc2" = 0 ] && printf '%s\n' "$out2" | grep -q '绿.*豁免 1 处' \
-   && "$SCAN" --root "$WORK/repo" --rules "$WORK/rules" --allow "$WORK/allow" --summary | grep -q '豁免: *1 处'; then ok I
-else bad "I rc=$rc out=$out | rc2=$rc2 out2=$out2"; fi
+   && "$SCAN" --root "$WORK/repo" --rules "$WORK/rules" --allow "$WORK/allow" --summary | grep -q '豁免: *1 处'; then st_ok I
+else st_miss "I rc=$rc out=$out | rc2=$rc2 out2=$out2"; fi
 
 # ---- J ----
 # the baseline says 0 for private-ipv4 while master already holds one: red, though
@@ -182,8 +181,8 @@ mkdir -p "$WORK/repo/legacy"; git -C "$WORK/repo" mv lib/old.py legacy/old.py; c
 o3=$(gate); r3=$?
 if [ "$r1" = 1 ] && printf '%s' "$o1" | grep -q '基线只许降.*private-ipv4 0 → 1' \
    && [ "$r2" = 0 ] && printf '%s' "$o2" | grep -q '降了：private-ipv4 1 → 0' \
-   && [ "$r3" = 0 ]; then ok J
-else bad "J r1=$r1 o1=$o1 | r2=$r2 o2=$o2 | r3=$r3 o3=$o3"; fi
+   && [ "$r3" = 0 ]; then st_ok J
+else st_miss "J r1=$r1 o1=$o1 | r2=$r2 o2=$o2 | r3=$r3 o3=$o3"; fi
 
 # ---- K ----
 cat > "$WORK/stub/gitleaks" <<'EOF'
@@ -194,8 +193,8 @@ printf '[{"RuleID":"github-pat","Commit":"fedcba9876543210","File":"b.sh","Start
 EOF
 chmod +x "$WORK/stub/gitleaks"
 s1=$(STUB_ARGS="$WORK/args" PATH="$WORK/stub:$PATH" "$SCAN" --root "$WORK/repo" --commits master..pr3); r1=$?
-if [ "$r1" = 1 ] && [ "$s1" = "fedcba98:b.sh:1:github-pat" ] && grep -q -- '--log-opts master..pr3' "$WORK/args"; then ok K
-else bad "K r1=$r1 s1=$s1 args=$(cat "$WORK/args" 2>/dev/null)"; fi
+if [ "$r1" = 1 ] && [ "$s1" = "fedcba98:b.sh:1:github-pat" ] && grep -q -- '--log-opts master..pr3' "$WORK/args"; then st_ok K
+else st_miss "K r1=$r1 s1=$s1 args=$(cat "$WORK/args" 2>/dev/null)"; fi
 
 # ---- L ----
 miss=""
@@ -203,6 +202,6 @@ while IFS="$T" read -r id ere _; do
     case "$id" in ''|'#'*) continue ;; esac
     grep -q "^${id}${T}[0-9][0-9]*\$" "$BIN/../conf/oss-scan.baseline" || miss="$miss $id"
 done < "$BIN/../conf/oss-scan.rules"
-if [ -z "$miss" ]; then ok L; else bad "L conf/oss-scan.baseline lacks:$miss"; fi
+if [ -z "$miss" ]; then st_ok L; else st_miss "L conf/oss-scan.baseline lacks:$miss"; fi
 
-[ "$fails" = 0 ] && echo "oss-scan-selftest: all passed" || { echo "oss-scan-selftest: $fails failed"; exit 1; }
+st_done

@@ -13,10 +13,10 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/  /' >&2; exit 1; }
-eq() { [ "$2" = "$3" ] || fail "$1" "want: [$2]
+eq() { [ "$2" = "$3" ] || st_fail "$1" "want: [$2]
  got: [$3]"; CHECKS=$((CHECKS+1)); }
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forkless-selftest.XXXXXX") || exit 2
@@ -77,21 +77,21 @@ done
 # fleet_now: unpinned = date; pinned = one shared clock that still advances; a
 # child process never inherits the pin, even when it is exported.
 d0=$(date +%s); n0=$(fleet_now)
-[ "$n0" -ge "$d0" ] && [ "$n0" -le $((d0 + 1)) ] || fail "unpinned fleet_now must be date +%s" "$d0 vs $n0"; CHECKS=$((CHECKS+1))
+[ "$n0" -ge "$d0" ] && [ "$n0" -le $((d0 + 1)) ] || st_fail "unpinned fleet_now must be date +%s" "$d0 vs $n0"; CHECKS=$((CHECKS+1))
 fleet_now_pin
 eq "a pinned fleet_now answers the pin" "$_FLEET_NOW" "$(fleet_now)"
 leak=$(_FLEET_NOW=5 _FLEET_NOW_PID=$$ _FLEET_NOW_S0=0 bash -c ". '$BIN/fleet-daemon-lib.sh'; fleet_now")
-[ "$leak" -gt 1000000000 ] || fail "an exported pin leaked into a child process" "$leak"; CHECKS=$((CHECKS+1))
+[ "$leak" -gt 1000000000 ] || st_fail "an exported pin leaked into a child process" "$leak"; CHECKS=$((CHECKS+1))
 _FLEET_NOW=$(( _FLEET_NOW - 100 ))   # the pin plus $SECONDS since pinning
 adv=$(fleet_now); [ "$adv" -le $(( $(date +%s) - 99 )) ] && [ "$adv" -ge $(( $(date +%s) - 101 )) ] \
-  || fail "a pinned clock must advance with \$SECONDS from its pin" "$adv"
+  || st_fail "a pinned clock must advance with \$SECONDS from its pin" "$adv"
 CHECKS=$((CHECKS+1)); unset _FLEET_NOW _FLEET_NOW_PID _FLEET_NOW_S0
 
 # The 负载 figure (issue #1534; an alert of fleet-alerts.sh's since #1616): the
 # load per core, one decimal, by integer math on hundredths — the table below is
 # what awk's arithmetic would say.
 eval "$(sed -n '/^_fa_loadpc()/,/^}/p' "$BIN/fleet-alerts.sh")"
-command -v _fa_loadpc >/dev/null || fail "fleet-alerts.sh no longer defines _fa_loadpc"
+command -v _fa_loadpc >/dev/null || st_fail "fleet-alerts.sh no longer defines _fa_loadpc"
 for c in '1.57 10 0.2' '9.00 10 0.9' '0.04 4 0.0' '12.5 4 3.1' '0.995 1 1.0' '3 2 1.5' '1.5 0 –' 'x 4 –' ' 4 –'; do
   set -- $c
   [ $# -eq 2 ] && set -- '' "$1" "$2"

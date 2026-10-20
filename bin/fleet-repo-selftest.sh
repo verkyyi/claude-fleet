@@ -22,10 +22,10 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
-REAL_TMUX="$(command -v tmux 2>/dev/null)"
-[ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
+st_real_tmux
+st_need git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-repo-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -49,9 +49,8 @@ mkdir -p "$FLEET_CONF_DIR" "$TMPDIR"
 unset TMUX TMUX_PANE FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_MODEL FLEET_DEPLOY_REF FLEET_GLOBAL_MAX_SESSIONS
 . "$BIN/fleet-lib.sh"
 
-FAILS=0
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-eq()   { [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
+st_tally
+eq()   { [ "$2" = "$3" ] || st_miss "$1: expected [$3], got [$2]"; }
 
 mkrepo() {   # $1=dir $2=owner/name
   git init -q "$1" && git -C "$1" remote add origin "https://github.com/$2.git"
@@ -96,10 +95,10 @@ eq "A: ...and is not stamped" "$(tmux display-message -p -t "$S:wUNK" '#{@repo}'
 # No gate since #795: is gone, an unset one no longer refuses.
 # stdout is ONE result token (issue #1104) — the contract the add-repo popup reads.
 out=$(bash "$BIN/fleet-repo.sh" add --session "$S" o/b "$WORK/mainB" --base main 2>"$WORK/add.err") \
-  || fail "B: add failed: $out $(cat "$WORK/add.err")"
+  || st_miss "B: add failed: $out $(cat "$WORK/add.err")"
 eq "B: add prints the added token, alone" "$out" "added:o-b"
 f="$FLEET_CONF_DIR/fleets/$S/repos/o-b.conf"
-[ -f "$f" ] || fail "B: overlay not written at $f"
+[ -f "$f" ] || st_miss "B: overlay not written at $f"
 printf 'FLEET_MODEL="sonnet"\n' >> "$f"
 tok() { bash "$BIN/fleet-repo.sh" add --session "$S" "$@" 2>/dev/null; echo "rc=$?"; }
 eq "B: duplicate add refused" "$(tok o/b "$WORK/mainB")" "refused:hosted
@@ -113,19 +112,19 @@ eq "B: a non owner/name refused" "$(tok 'bad repo')" "refused:invalid-repo
 rc=1"
 eq "B: a failed clone" "$(tok o/e "$WORK/clone-here")" "failed:clone
 rc=1"
-for r in o-c o-d o-e; do [ -e "$FLEET_CONF_DIR/fleets/$S/repos/$r.conf" ] && fail "B: a refused add wrote $r.conf"; done
+for r in o-c o-d o-e; do [ -e "$FLEET_CONF_DIR/fleets/$S/repos/$r.conf" ] && st_miss "B: a refused add wrote $r.conf"; done
 list=$(bash "$BIN/fleet-repo.sh" list --session "$S")
-case "$list" in *"o/a"*"main=$WORK/mainA"*"o/b"*"main=$WORK/mainB"*"base=main"*) ;; *) fail "B: list: $list" ;; esac
+case "$list" in *"o/a"*"main=$WORK/mainA"*"o/b"*"main=$WORK/mainB"*"base=main"*) ;; *) st_miss "B: list: $list" ;; esac
 
 # --- C. helpers --------------------------------------------------------------------
 eq "C: fleet_repos" "$(fleet_repos "$S" | tr '\n' ' ')" "o/a o/b "
-fleet_repo_hosted "$S" https://github.com/o/b.git || fail "C: o/b (URL form) not hosted"
-fleet_repo_hosted "$S" o/zzz && fail "C: o/zzz reported hosted"
+fleet_repo_hosted "$S" https://github.com/o/b.git || st_miss "C: o/b (URL form) not hosted"
+fleet_repo_hosted "$S" o/zzz && st_miss "C: o/zzz reported hosted"
 got=$( fleet_load_repo_conf "$S" o/b; printf '%s|%s|%s|%s|%s' "$FLEET_REPO" "$FLEET_MAIN" "$FLEET_BASE_BRANCH" "$FLEET_MODEL" "${FLEET_DEPLOY_REF:-}" )
 eq "C: fleet_load_repo_conf B" "$got" "o/b|$WORK/mainB|main|sonnet|"
 got=$( fleet_load_repo_conf "$S" o/a; printf '%s|%s|%s' "$FLEET_MAIN" "$FLEET_MODEL" "$FLEET_DEPLOY_REF" )
 eq "C: fleet_load_repo_conf A" "$got" "$WORK/mainA|opus|~/deployed-a"
-( fleet_load_repo_conf "$S" o/zzz ) && fail "C: fleet_load_repo_conf accepted an unhosted repo"
+( fleet_load_repo_conf "$S" o/zzz ) && st_miss "C: fleet_load_repo_conf accepted an unhosted repo"
 eq "C: fleet_repo_mains" "$(fleet_repo_mains "$S" | tr '\n' ' ')" "$WORK/mainA $WORK/mainB "
 
 # --- D. window-aware fleet_load_conf ------------------------------------------------
@@ -159,15 +158,14 @@ if command -v python3 >/dev/null 2>&1; then
 fi
 
 # --- F. remove ----------------------------------------------------------------------
-bash "$BIN/fleet-repo.sh" remove --session "$S" o/b >/dev/null 2>&1 && fail "F: remove with live @repo windows accepted"
-[ -f "$f" ] || fail "F: refused remove deleted the overlay"
-bash "$BIN/fleet-repo.sh" remove --session "$S" o/b --force >/dev/null 2>&1 || fail "F: --force remove failed"
+bash "$BIN/fleet-repo.sh" remove --session "$S" o/b >/dev/null 2>&1 && st_miss "F: remove with live @repo windows accepted"
+[ -f "$f" ] || st_miss "F: refused remove deleted the overlay"
+bash "$BIN/fleet-repo.sh" remove --session "$S" o/b --force >/dev/null 2>&1 || st_miss "F: --force remove failed"
 eq "F: after remove" "$(fleet_repos "$S")" "o/a"
 # The first repo goes the same road (issue #1937) — no refusal, no promotion —
 # leaving no repo.
-bash "$BIN/fleet-repo.sh" remove --session "$S" o/a --force >/dev/null 2>&1 || fail "F: the first repo did not remove"
+bash "$BIN/fleet-repo.sh" remove --session "$S" o/a --force >/dev/null 2>&1 || st_miss "F: the first repo did not remove"
 eq "F: after removing the first repo" "$(fleet_repos "$S")" ""
-grep -q '^FLEET_REPO=' "$(fleet_conf_file "$S")" && fail "F: the fleet conf still names a repo"
+grep -q '^FLEET_REPO=' "$(fleet_conf_file "$S")" && st_miss "F: the fleet conf still names a repo"
 
-[ "$FAILS" -eq 0 ] && { echo "fleet-repo-selftest: PASS"; exit 0; }
-echo "fleet-repo-selftest: $FAILS failure(s)" >&2; exit 1
+st_done

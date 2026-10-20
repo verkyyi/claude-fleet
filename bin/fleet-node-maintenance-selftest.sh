@@ -31,7 +31,6 @@ BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$BIN/selftest-lib.sh"
 SUT="$BIN/fleet-node-maintenance.sh"
 CHECKS=0
-fail() { printf 'fleet-node-maintenance selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 st_sandbox "${TMPDIR:-/tmp}/fleet-node-maintenance-selftest.XXXXXX"
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
@@ -61,10 +60,10 @@ FLAGGED='{"machine":"mac-b","status":"maintenance","maintenance":{"machine":"mac
 # A. off
 reset
 out=$("$SUT" enter 2>"$WORK/err"); rc=$?
-[ "$rc" -eq 10 ] || fail "A: exit $rc, want 10 with the module off"
-[ ! -e "$STUB_LOG" ] || fail "A: curl was called with the module off: $(cat "$STUB_LOG")"
-grep -q 'module is off' "$WORK/err" || fail "A: stderr: $(cat "$WORK/err")"
-[ -z "$out" ] || fail "A: stdout should be empty, got: $out"
+[ "$rc" -eq 10 ] || st_fail "A: exit $rc, want 10 with the module off"
+[ ! -e "$STUB_LOG" ] || st_fail "A: curl was called with the module off: $(cat "$STUB_LOG")"
+grep -q 'module is off' "$WORK/err" || st_fail "A: stderr: $(cat "$WORK/err")"
+[ -z "$out" ] || st_fail "A: stdout should be empty, got: $out"
 st_count
 
 export CCQUOTA_FLEET=1
@@ -72,10 +71,10 @@ export CCQUOTA_FLEET=1
 # B. no token
 reset
 out=$("$SUT" status 2>"$WORK/err"); rc=$?
-[ "$rc" -eq 1 ] || fail "B: exit $rc, want 1 without node.env"
-{ grep -q 'no node token' "$WORK/err" && grep -q 'node.env missing' "$WORK/err"; } || fail "B: stderr: $(cat "$WORK/err")"
-grep -q 'fleet-hub-node.sh env --write' "$WORK/err" || fail "B: no fix named: $(cat "$WORK/err")"
-[ ! -e "$STUB_LOG" ] || fail "B: curl was called without a token"
+[ "$rc" -eq 1 ] || st_fail "B: exit $rc, want 1 without node.env"
+{ grep -q 'no node token' "$WORK/err" && grep -q 'node.env missing' "$WORK/err"; } || st_fail "B: stderr: $(cat "$WORK/err")"
+grep -q 'fleet-hub-node.sh env --write' "$WORK/err" || st_fail "B: no fix named: $(cat "$WORK/err")"
+[ ! -e "$STUB_LOG" ] || st_fail "B: curl was called without a token"
 st_count
 
 # node.env from here on: the token lives in the file, NOT in our environment
@@ -85,54 +84,54 @@ chmod 600 "$FLEET_CONF_DIR/node.env"
 # C. enter
 reset
 out=$(FAKE_BODY="$FLAGGED" "$SUT" enter --reason '升级 macOS "Tahoe"' 2>"$WORK/err"); rc=$?
-[ "$rc" -eq 0 ] || fail "C: exit $rc: $out / $(cat "$WORK/err")"
-[ "$out" = 'maintenance: ENTERED mac-b · 升级 macOS "Tahoe" · since 2026-10-05T12:00:00Z · by node:dave@mac-b' ] || fail "C: line: $out"
-grep -q -- '-X POST' "$STUB_LOG" || fail "C: not a POST: $(cat "$STUB_LOG")"
-grep -q 'https://hub.example/v1/node/maintenance' "$STUB_LOG" || fail "C: url (trailing slash folded): $(cat "$STUB_LOG")"
-grep -q 'Authorization: Bearer tok-mac-b-secret' "$STUB_LOG" || fail "C: bearer from node.env missing: $(cat "$STUB_LOG")"
-grep -q 'Content-Type: application/json' "$STUB_LOG" || fail "C: content type: $(cat "$STUB_LOG")"
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d=={"action":"enter","reason":"升级 macOS \"Tahoe\""}, d' "$STUB_BODY" || fail "C: body: $(cat "$STUB_BODY")"
-[ -z "${CCQUOTA_TOKEN:-}" ] || fail "C: the token leaked into THIS shell"
+[ "$rc" -eq 0 ] || st_fail "C: exit $rc: $out / $(cat "$WORK/err")"
+[ "$out" = 'maintenance: ENTERED mac-b · 升级 macOS "Tahoe" · since 2026-10-05T12:00:00Z · by node:dave@mac-b' ] || st_fail "C: line: $out"
+grep -q -- '-X POST' "$STUB_LOG" || st_fail "C: not a POST: $(cat "$STUB_LOG")"
+grep -q 'https://hub.example/v1/node/maintenance' "$STUB_LOG" || st_fail "C: url (trailing slash folded): $(cat "$STUB_LOG")"
+grep -q 'Authorization: Bearer tok-mac-b-secret' "$STUB_LOG" || st_fail "C: bearer from node.env missing: $(cat "$STUB_LOG")"
+grep -q 'Content-Type: application/json' "$STUB_LOG" || st_fail "C: content type: $(cat "$STUB_LOG")"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d=={"action":"enter","reason":"升级 macOS \"Tahoe\""}, d' "$STUB_BODY" || st_fail "C: body: $(cat "$STUB_BODY")"
+[ -z "${CCQUOTA_TOKEN:-}" ] || st_fail "C: the token leaked into THIS shell"
 st_count
 
 # D. status
 reset
 out=$(FAKE_BODY="$ONLINE" "$SUT" status 2>"$WORK/err"); rc=$?
-{ [ "$rc" -eq 0 ] && [ "$out" = 'maintenance: mac-b online' ]; } || fail "D: online: rc=$rc [$out]"
-grep -q -- '-X POST' "$STUB_LOG" && fail "D: status must be a GET: $(cat "$STUB_LOG")"
-[ ! -s "$STUB_BODY" ] || fail "D: status sent a body: $(cat "$STUB_BODY")"
+{ [ "$rc" -eq 0 ] && [ "$out" = 'maintenance: mac-b online' ]; } || st_fail "D: online: rc=$rc [$out]"
+grep -q -- '-X POST' "$STUB_LOG" && st_fail "D: status must be a GET: $(cat "$STUB_LOG")"
+[ ! -s "$STUB_BODY" ] || st_fail "D: status sent a body: $(cat "$STUB_BODY")"
 out=$(FAKE_BODY="$FLAGGED" "$SUT" status 2>"$WORK/err")
-[ "$out" = 'maintenance: mac-b maintenance · 升级 macOS "Tahoe" · since 2026-10-05T12:00:00Z · by node:dave@mac-b' ] || fail "D: flagged: [$out]"
+[ "$out" = 'maintenance: mac-b maintenance · 升级 macOS "Tahoe" · since 2026-10-05T12:00:00Z · by node:dave@mac-b' ] || st_fail "D: flagged: [$out]"
 st_count
 
 # E. leave
 reset
 out=$(FAKE_BODY="$ONLINE" "$SUT" leave 2>"$WORK/err"); rc=$?
-{ [ "$rc" -eq 0 ] && [ "$out" = 'maintenance: LEFT mac-b' ]; } || fail "E: rc=$rc [$out]"
-[ "$(cat "$STUB_BODY")" = '{"action":"leave"}' ] || fail "E: body: $(cat "$STUB_BODY")"
+{ [ "$rc" -eq 0 ] && [ "$out" = 'maintenance: LEFT mac-b' ]; } || st_fail "E: rc=$rc [$out]"
+[ "$(cat "$STUB_BODY")" = '{"action":"leave"}' ] || st_fail "E: body: $(cat "$STUB_BODY")"
 st_count
 
 # F. an older hub, an unknown node, a bad token
 reset
 out=$(FAKE_CODE=404 FAKE_BODY='not found' "$SUT" enter 2>"$WORK/err"); rc=$?
-{ [ "$rc" -eq 4 ] && [ -z "$out" ]; } || fail "F: 404 rc=$rc [$out]"
-{ grep -q 'predates issue #1427' "$WORK/err" && grep -q 'redeploy' "$WORK/err"; } || fail "F: 404 stderr: $(cat "$WORK/err")"
+{ [ "$rc" -eq 4 ] && [ -z "$out" ]; } || st_fail "F: 404 rc=$rc [$out]"
+{ grep -q 'predates issue #1427' "$WORK/err" && grep -q 'redeploy' "$WORK/err"; } || st_fail "F: 404 stderr: $(cat "$WORK/err")"
 out=$(FAKE_CODE=409 FAKE_BODY='{"error":"not reported"}' "$SUT" enter 2>"$WORK/err"); rc=$?
-{ [ "$rc" -eq 4 ] && grep -q 'never heard this node' "$WORK/err"; } || fail "F: 409 rc=$rc $(cat "$WORK/err")"
+{ [ "$rc" -eq 4 ] && grep -q 'never heard this node' "$WORK/err"; } || st_fail "F: 409 rc=$rc $(cat "$WORK/err")"
 out=$(FAKE_CODE=401 FAKE_BODY='{"error":"bad token"}' "$SUT" status 2>"$WORK/err"); rc=$?
-{ [ "$rc" -eq 4 ] && grep -q 'node token' "$WORK/err"; } || fail "F: 401 rc=$rc $(cat "$WORK/err")"
+{ [ "$rc" -eq 4 ] && grep -q 'node token' "$WORK/err"; } || st_fail "F: 401 rc=$rc $(cat "$WORK/err")"
 # an older hub has no such path: it falls through to the viewer gate and says so
 out=$(FAKE_CODE=401 FAKE_BODY='{"error":"a viewer token is required"}' "$SUT" status 2>"$WORK/err"); rc=$?
-{ [ "$rc" -eq 4 ] && grep -q 'predates issue #1427' "$WORK/err"; } || fail "F: 401 viewer-gate rc=$rc $(cat "$WORK/err")"
+{ [ "$rc" -eq 4 ] && grep -q 'predates issue #1427' "$WORK/err"; } || st_fail "F: 401 viewer-gate rc=$rc $(cat "$WORK/err")"
 out=$(FAKE_CODE=500 FAKE_BODY='boom' "$SUT" status 2>"$WORK/err"); rc=$?
-{ [ "$rc" -eq 4 ] && grep -q 'HTTP 500: boom' "$WORK/err"; } || fail "F: 500 rc=$rc $(cat "$WORK/err")"
+{ [ "$rc" -eq 4 ] && grep -q 'HTTP 500: boom' "$WORK/err"; } || st_fail "F: 500 rc=$rc $(cat "$WORK/err")"
 st_count
 
 # G. hub down
 reset
 out=$(FAKE_RC=7 "$SUT" enter 2>"$WORK/err"); rc=$?
-{ [ "$rc" -eq 1 ] && [ -z "$out" ]; } || fail "G: rc=$rc [$out]"
-{ grep -q 'hub unreachable (https://hub.example/)' "$WORK/err" && grep -q 'nothing changed' "$WORK/err"; } || fail "G: stderr: $(cat "$WORK/err")"
+{ [ "$rc" -eq 1 ] && [ -z "$out" ]; } || st_fail "G: rc=$rc [$out]"
+{ grep -q 'hub unreachable (https://hub.example/)' "$WORK/err" && grep -q 'nothing changed' "$WORK/err"; } || st_fail "G: stderr: $(cat "$WORK/err")"
 st_count
 
 # H. usage
@@ -140,19 +139,19 @@ for args in '' 'enter leave' 'leave --reason x' 'drain'; do
   reset
   # shellcheck disable=SC2086
   out=$("$SUT" $args 2>"$WORK/err"); rc=$?
-  [ "$rc" -eq 2 ] || fail "H: [$args] exit $rc, want 2: $(cat "$WORK/err")"
-  [ ! -e "$STUB_LOG" ] || fail "H: [$args] reached curl"
+  [ "$rc" -eq 2 ] || st_fail "H: [$args] exit $rc, want 2: $(cat "$WORK/err")"
+  [ ! -e "$STUB_LOG" ] || st_fail "H: [$args] reached curl"
 done
 long=$(printf '%*s' 201 '' | tr ' ' 'x')
 out=$("$SUT" enter --reason "$long" 2>"$WORK/err"); rc=$?
-{ [ "$rc" -eq 2 ] && grep -q '200 characters' "$WORK/err"; } || fail "H: long reason rc=$rc $(cat "$WORK/err")"
+{ [ "$rc" -eq 2 ] && grep -q '200 characters' "$WORK/err"; } || st_fail "H: long reason rc=$rc $(cat "$WORK/err")"
 st_count
 
 # I. no leak: the token reached curl (it must) but nothing else
 reset
 FAKE_BODY="$ONLINE" "$SUT" status >/dev/null 2>&1
-grep -q '^CCQUOTA_TOKEN=tok-mac-b-secret$' "$STUB_ENV" || fail "I: curl ran without the token in its environment"
-[ -z "${CCQUOTA_TOKEN:-}" ] || fail "I: token in the caller's environment"
+grep -q '^CCQUOTA_TOKEN=tok-mac-b-secret$' "$STUB_ENV" || st_fail "I: curl ran without the token in its environment"
+[ -z "${CCQUOTA_TOKEN:-}" ] || st_fail "I: token in the caller's environment"
 st_count
 
 printf 'selftest OK: %s checks passed (fleet-node-maintenance)\n' "$CHECKS"

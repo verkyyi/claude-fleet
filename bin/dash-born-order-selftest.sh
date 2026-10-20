@@ -32,7 +32,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'dash-born-order selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dashborn-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
 S="born$$"
@@ -43,20 +43,10 @@ mkdir -p "$G" "$WORK/conf/fleets/$S" "$WORK/bin"
 : > "$WORK/conf/fleets/$S/conf"
 fx_repo "$WORK/conf" "$S" acme/app
 
-CHECKS=0
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
-has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) st_fail "$1 — no [$3]" "$2";; esac; }
-hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) st_fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
+st_tally count
 
 US=$'\x1f'
-cat > "$WORK/bin/tmux" <<'SHIM'
-#!/bin/sh
-US=$(printf '\037'); lw=0; fmt=0
-for a in "$@"; do [ "$a" = list-windows ] && lw=1; case "$a" in *"$US"*) fmt=1 ;; esac; done
-[ "$lw" = 1 ] && [ "$fmt" = 1 ] && cat "$WLIST_FILE"
-exit 0
-SHIM
-chmod +x "$WORK/bin/tmux"
+st_fake_tmux_wlist "$WORK/bin"
 export WLIST_FILE="$WORK/wlist"
 SHIMPATH="$WORK/bin:$PATH"
 
@@ -94,13 +84,13 @@ shdrs() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" '$1 == "hdr" { printf "%s|%s
 export FLEET_DASH_ORDER=status
 fixture working done working needs done
 s=$(side)
-eq "A: status — by rank then index (done before working); children under P by rank" \
+st_eq "A: status — by rank then index (done before working); children under P by rank" \
    "P;C2;C1;Z;A;" "$(sorder "$s")"
-eq "A: status — no summary line" "" "$(shdrs "$s")"
+st_eq "A: status — no summary line" "" "$(shdrs "$s")"
 withb_s=$s; withb_h=$(hub)
 sed -i.bak "s/${US}[0-9]*\$/${US}/" "$WLIST_FILE"            # every born field emptied
-eq "A: status — the born field changes not one byte (sidebar)" "$withb_s" "$(side)"
-eq "A: status — the born field changes not one byte (hub)"     "$withb_h" "$(hub)"
+st_eq "A: status — the born field changes not one byte (sidebar)" "$withb_s" "$(side)"
+st_eq "A: status — the born field changes not one byte (hub)"     "$withb_h" "$(hub)"
 unset FLEET_DASH_ORDER
 
 # ============================================================================
@@ -112,15 +102,15 @@ for states in 'working working working working working' 'done done done done don
               'done needs done working needs' 'looping sleeping done needs working'; do
   # shellcheck disable=SC2086  # five words on purpose
   fixture $states
-  eq "B: born order through [$states]" "$want" "$(sorder "$(side)")"
+  st_eq "B: born order through [$states]" "$want" "$(sorder "$(side)")"
 done
-eq "B: an unknown order word is the born order" "$want" "$(sorder "$(FLEET_DASH_ORDER=x side)")"
+st_eq "B: an unknown order word is the born order" "$want" "$(sorder "$(FLEET_DASH_ORDER=x side)")"
 fixture working needs done working done C2          # C2 closed: the rest renumber
-eq "B: a window closing in the middle moves no other row" "A;P;C1;Z;" "$(sorder "$(side)")"
+st_eq "B: a window closing in the middle moves no other row" "A;P;C1;Z;" "$(sorder "$(side)")"
 fixture working done working done working A
-eq "B: the first window closing moves no other row" "P;C2;C1;Z;" "$(sorder "$(side)")"
+st_eq "B: the first window closing moves no other row" "P;C2;C1;Z;" "$(sorder "$(side)")"
 fixture done done done done done
-eq "B: the hub list keeps the same order" "#101 #102 #104 #103 #105" \
+st_eq "B: the hub list keeps the same order" "#101 #102 #104 #103 #105" \
    "$(hub | LC_ALL=C grep -o '#10[1-5]' | tr '\n' ' ' | sed 's/ $//')"
 
 # ============================================================================
@@ -140,13 +130,13 @@ cache() {   # rows in the order given: <key> <name> <born>
 printf '%s\n' "$NOW" > "$G/hub_ok"
 fixture working done working done working
 cache issue-7 R1 $((B + 15)) issue-8 R2 $((B + 45)) issue-9 R0 ''
-eq "C: remote rows interleave by birth; no birth sorts after the born" \
+st_eq "C: remote rows interleave by birth; no birth sorts after the born" \
    "A;R1;P;C2;C1;R2;Z;R0;" "$(sorder "$(side)")"
 cache issue-9 R0 '' issue-8 R2 $((B + 45)) issue-7 R1 $((B + 15))
-eq "C: the hub's row order changes nothing" "A;R1;P;C2;C1;R2;Z;R0;" "$(sorder "$(side)")"
+st_eq "C: the hub's row order changes nothing" "A;R1;P;C2;C1;R2;Z;R0;" "$(sorder "$(side)")"
 fixture needs working needs working working
 cache issue-7 R1 $((B + 15))
-eq "C: a needs row on either machine stays in place" "A;R1;P;C2;C1;Z;" "$(sorder "$(side)")"
+st_eq "C: a needs row on either machine stays in place" "A;R1;P;C2;C1;Z;" "$(sorder "$(side)")"
 rm -f "$G/remote_$S" "$G/hub_ok"; unset CCQUOTA_FLEET
 
 # ============================================================================
@@ -154,22 +144,22 @@ rm -f "$G/remote_$S" "$G/hub_ok"; unset CCQUOTA_FLEET
 # ============================================================================
 fixture working done working done working
 s=$(side)
-eq "D: nobody asking — no summary line" "" "$(shdrs "$s")"
+st_eq "D: nobody asking — no summary line" "" "$(shdrs "$s")"
 fixture needs done failed done working
 s=$(side)
-eq "D: two asking — the summary line first, glyph ! for the view" \
+st_eq "D: two asking — the summary line first, glyph ! for the view" \
    "!|! 2 个在问你 · 点这里跳过去 ⌃K;" "$(shdrs "$s")"
-eq "D: …it is the first line of the list" "hdr" "$(printf '%s\n' "$s" | head -1 | cut -d"$US" -f1)"
-eq "D: …and the asking rows stay where they were born" "$want" "$(sorder "$s")"
+st_eq "D: …it is the first line of the list" "hdr" "$(printf '%s\n' "$s" | head -1 | cut -d"$US" -f1)"
+st_eq "D: …and the asking rows stay where they were born" "$want" "$(sorder "$s")"
 h=$(hub)
-has "D: the hub list's summary, no key hint" "$h" "! 2 个在问你"
-hasnt "D: …the hub's ⌃k answers, so it names no key" "$(printf '%s\n' "$h" | grep '个在问你')" "⌃k"
-eq "D: status order — no summary line" "" "$(shdrs "$(FLEET_DASH_ORDER=status side)")"
+st_has "D: the hub list's summary, no key hint" "$h" "! 2 个在问你"
+st_hasnt "D: …the hub's ⌃k answers, so it names no key" "$(printf '%s\n' "$h" | grep '个在问你')" "⌃k"
+st_eq "D: status order — no summary line" "" "$(shdrs "$(FLEET_DASH_ORDER=status side)")"
 # a folded parent still shows its asking child (FOLD_KEEP), and it is counted
 PEXP='' fixture done done needs done done                 # P collapsed
 s=$(side)
-eq "D: a folded parent: its asking child stays on the list" "A;P;C1;Z;" "$(sorder "$s")"
-eq "D: …and counts" "!|! 1 个在问你 · 点这里跳过去 ⌃K;" "$(shdrs "$s")"
+st_eq "D: a folded parent: its asking child stays on the list" "A;P;C1;Z;" "$(sorder "$s")"
+st_eq "D: …and counts" "!|! 1 个在问你 · 点这里跳过去 ⌃K;" "$(shdrs "$s")"
 
 # ============================================================================
 # E. inventory — the adapter's born= column
@@ -188,6 +178,6 @@ assert x["born"] is None, x
 print("ok")
 PY
 )
-eq "E: born= parses; an adapter without it still parses" "ok" "$out"
+st_eq "E: born= parses; an adapter without it still parses" "ok" "$out"
 
 echo "dash-born-order selftest: $CHECKS checks passed"

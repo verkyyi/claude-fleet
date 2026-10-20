@@ -19,7 +19,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 [ -f "$BIN/fleet-doctor.sh" ] || { printf 'selftest: fleet-doctor.sh not found\n' >&2; exit 2; }
-command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 missing — skip"; exit 0; }
+st_need python3
 
 st_sandbox "${TMPDIR:-/tmp}/doctor-mcp-selftest.XXXXXX" physical
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/conf/fleets"

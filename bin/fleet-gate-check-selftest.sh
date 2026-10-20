@@ -10,9 +10,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 G="$BIN/fleet-gate-check.sh"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
-fails=0
-bad() { printf 'FAIL %s\n' "$1"; fails=$((fails+1)); }
-check() { if eval "$2"; then st_ok "$1"; else bad "$1"; fi; }
+FAIL=0
+check() { if eval "$2"; then st_ok "$1"; else st_miss "$1"; fi; }
 
 HUB_OK='{"items":[{"id":"release-key","pass":true,"why":"k"},{"id":"cloud-perms","pass":true,"why":"c"},{"id":"revocations","pass":true,"why":"r"},{"id":"cred-ttl","pass":true,"why":"t"}]}'
 run() { FLEET_GATE_PS="$T/ps" FLEET_GATE_ADMINS="${ADMINS-}" FLEET_GATE_HUB_JSON="${HUB-$HUB_OK}" bash "$G" "$@"; }
@@ -96,5 +95,4 @@ check "F3 unknown argument ⇒ exit 2" '[ "$rc" = 2 ]'
 check "G1 doctor runs the gate" 'grep -q "fleet-gate-check.sh" "$BIN/fleet-doctor.sh"'
 check "G2 gate rows are info only" '! grep -E "^[[:space:]]*(fail|warn) gate" "$BIN/fleet-doctor.sh" | grep -q .'
 
-[ "$fails" = 0 ] && { echo "fleet-gate-check-selftest: all passed"; exit 0; }
-echo "fleet-gate-check-selftest: $fails failed"; exit 1
+st_done

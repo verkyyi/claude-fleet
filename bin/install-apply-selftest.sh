@@ -68,23 +68,22 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 AP="$BIN/fleet-install-apply.sh"
 [ -f "$AP" ] || { printf 'selftest: %s not found\n' "$AP" >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { echo 'install-apply-selftest SKIP (no git)'; exit 0; }
+st_need git
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/install-apply-selftest.XXXXXX")" || exit 2
 WORK=$(cd "$WORK" && pwd -P)
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM HUP
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
-ok() { CHECKS=$((CHECKS + 1)); eval "$2" || fail "$1 — [$2] is false — output:
+st_tally count
+ok() { CHECKS=$((CHECKS + 1)); eval "$2" || st_fail "$1 — [$2] is false — output:
 $OUT"; }
-contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — output does not contain [$3]:
+contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — output does not contain [$3]:
 $2";; esac; }
-not_contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 — output unexpectedly contains [$3]:
+not_contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 — output unexpectedly contains [$3]:
 $2";; esac; }
 
 export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
@@ -220,7 +219,7 @@ mkdir -p "$H/.config/claude-fleet/pycache/x" && echo b > "$H/.config/claude-flee
 run_ap --from "$C0" --to "$C1"
 ok 'A the old bytecode cache leaves the conf dir (#4692)' "[ ! -e '$H/.config/claude-fleet/pycache' ]"
 contains 'A says it removed it' "$OUT" 'conf: removed the old bytecode cache'
-eq 'A exit' 0 "$RC"
+st_eq 'A exit' 0 "$RC"
 contains 'A says no reload' "$OUT" 'daemons: ok — no daemon change, no reload needed'
 ok 'A no launchctl' "! grep -q '^launchctl' '$LOG'"
 ok 'A layout migrated' "grep -q '^fleet-migrate-layout.sh' '$LOG'"
@@ -235,15 +234,15 @@ sed -i.bak 's/<integer>0</<integer>5</' "$R/launchd/com.claude-fleet.webhook.pli
 C2=$(commit 'plist changed')
 snap=$(cat "$H/Library/LaunchAgents/com.claude-fleet.collect.plist")
 run_ap --from "$C1" --to "$C2" --dry-run
-eq 'H exit' 0 "$RC"
+st_eq 'H exit' 0 "$RC"
 contains 'H plans reload' "$OUT" 'daemons: would reload collect'
-eq 'H plist untouched' "$snap" "$(cat "$H/Library/LaunchAgents/com.claude-fleet.collect.plist")"
+st_eq 'H plist untouched' "$snap" "$(cat "$H/Library/LaunchAgents/com.claude-fleet.collect.plist")"
 ok 'H no launchctl' "! grep -q '^launchctl' '$LOG'"
 ok 'H migrate dry' "grep -q '^fleet-migrate-layout.sh --dry-run' '$LOG'"
 
 # --- B. plist changed -------------------------------------------------------------
 run_ap --from "$C1" --to "$C2"
-eq 'B exit' 0 "$RC"
+st_eq 'B exit' 0 "$RC"
 contains 'B reloaded' "$OUT" 'daemons: reloaded collect'
 ok 'B bootout' "grep -qx 'launchctl bootout gui/$(id -u)/com.claude-fleet.collect' '$LOG'"
 ok 'B bootstrap' "grep -qx 'launchctl bootstrap gui/$(id -u) $H/Library/LaunchAgents/com.claude-fleet.collect.plist' '$LOG'"
@@ -258,7 +257,7 @@ ok 'B re-run no launchctl' "! grep -q '^launchctl' '$LOG'"
 tmpl fresh 120; git -C "$R" rm -q "$R/launchd/com.claude-fleet.oldie.plist.tmpl"
 C3=$(commit 'add fresh, retire oldie')
 run_ap --from "$C2" --to "$C3"
-eq 'C exit' 0 "$RC"
+st_eq 'C exit' 0 "$RC"
 contains 'C added' "$OUT" 'daemons: added fresh'
 ok 'C fresh bootstrapped' "grep -qx 'launchctl bootstrap gui/$(id -u) $H/Library/LaunchAgents/com.claude-fleet.fresh.plist' '$LOG' && [ -f '$H/Library/LaunchAgents/com.claude-fleet.fresh.plist' ]"
 ok 'C fresh not booted out first' "! grep -q 'bootout gui/$(id -u)/com.claude-fleet.fresh' '$LOG'"
@@ -287,7 +286,7 @@ printf '# /fleet-new\n\n<!-- fleet skill · owner: either -->\n' > "$R/commands/
 git -C "$R" rm -q "$R/commands/fleet-old.md"
 C5=$(commit 'commands')
 run_ap --from "$C4" --to "$C5"
-eq 'E exit' 0 "$RC"
+st_eq 'E exit' 0 "$RC"
 ok 'E claim updated' "grep -qx v2 '$H/.claude/commands/fleet-history.md'"
 ok 'E new installed' "[ -f '$H/.claude/commands/fleet-new.md' ]"
 ok 'E README not installed' "[ ! -f '$H/.claude/commands/README.md' ]"
@@ -298,13 +297,13 @@ contains 'E summary' "$OUT" 'commands: installed 2 · removed 1'
 ok 'E codex command skill installed in default home' "grep -q '^name: fleet-history$' '$H/.codex/skills/fleet-history/SKILL.md' && grep -qx v2 '$H/.codex/skills/fleet-history/SKILL.md'"
 ok 'E codex command skill installed in registered home with spaces' "grep -q '<!-- fleet codex command skill -->' '$H/codex account/skills/fleet-new/SKILL.md'"
 contains 'E codex summary' "$OUT" 'codex-skills: installed 4'
-bash "$AP" --is-command "$R/commands/fleet-new.md"; eq 'E gate accepts a command' 0 $?
-bash "$AP" --is-command "$R/commands/README.md"; eq 'E gate rejects README' 1 $?
-bash "$AP" --is-command "$R/commands/_template.md"; eq 'E gate rejects the placeholder' 1 $?
+bash "$AP" --is-command "$R/commands/fleet-new.md"; st_eq 'E gate accepts a command' 0 $?
+bash "$AP" --is-command "$R/commands/README.md"; st_eq 'E gate rejects README' 1 $?
+bash "$AP" --is-command "$R/commands/_template.md"; st_eq 'E gate rejects the placeholder' 1 $?
 # the real repo's docs, when this runs from a checkout that has them
 if [ -f "$BIN/../commands/README.md" ]; then
-  bash "$AP" --is-command "$BIN/../commands/README.md"; eq 'E repo README rejected' 1 $?
-  bash "$AP" --is-command "$BIN/../commands/fleet-history.md"; eq 'E repo fleet-history accepted' 0 $?
+  bash "$AP" --is-command "$BIN/../commands/README.md"; st_eq 'E repo README rejected' 1 $?
+  bash "$AP" --is-command "$BIN/../commands/fleet-history.md"; st_eq 'E repo fleet-history accepted' 0 $?
 fi
 
 # --- F. skills --------------------------------------------------------------------
@@ -322,16 +321,16 @@ C7=$(commit 'retire sk')
 run_ap --from "$C6" --to "$C7"
 ok 'F retired removed' "[ ! -d '$H/.claude/skills/sk' ]"
 ok 'F retired codex skill removed' "[ ! -d '$H/.codex/skills/sk' ] && [ ! -d '$H/codex account/skills/sk' ]"
-bash "$AP" --is-skill "$R/skills/mine"; eq 'F gate accepts the plain marker' 0 $?
+bash "$AP" --is-skill "$R/skills/mine"; st_eq 'F gate accepts the plain marker' 0 $?
 mkdir -p "$WORK/owned"; printf '# o\n\n<!-- fleet skill · owner: hub -->\n' > "$WORK/owned/SKILL.md"
-bash "$AP" --is-skill "$WORK/owned"; eq 'F gate rejects the commands owner form' 1 $?
+bash "$AP" --is-skill "$WORK/owned"; st_eq 'F gate rejects the commands owner form' 1 $?
 # every skill the real repo ships passes the gate the skills pass installs by
 # (issue #2110: fleet-orchestrate wore the commands' owner marker and was
 # silently skipped, so the orchestrator's seed was an Unknown command)
 if [ -d "$BIN/../skills" ]; then
   for d in "$BIN/../skills"/*/; do
     [ -f "$d/SKILL.md" ] || continue
-    bash "$AP" --is-skill "${d%/}"; eq "F repo skill $(basename "$d") installs" 0 $?
+    bash "$AP" --is-skill "${d%/}"; st_eq "F repo skill $(basename "$d") installs" 0 $?
   done
 fi
 
@@ -340,14 +339,14 @@ echo '{"hooks":{"x":1}}' > "$R/hooks/settings-hooks.json"
 printf 'bind a run x\n' > "$R/conf/tmux-attention.conf"
 C8=$(commit 'hooks + conf')
 run_ap --from "$C7" --to "$C8"
-eq 'G exit' 0 "$RC"
+st_eq 'G exit' 0 "$RC"
 ok 'G hooks merged' "grep -q '^fleet-hooks-merge.py merge --source $R/hooks/settings-hooks.json --settings $H/.claude/settings.json' '$LOG'"
 contains 'G hooks relayed' "$OUT" 'hooks: re-merged — 1 change(s)'
 ok 'G ui conf reload' "grep -q '^fleet-ui-refresh.sh --all --conf' '$LOG'"
-eq 'G before-conf is --from' "$(printf 'bind a run x\nbind b run y')" "$(cat "$WORK/seen-before.conf")"
+st_eq 'G before-conf is --from' "$(printf 'bind a run x\nbind b run y')" "$(cat "$WORK/seen-before.conf")"
 STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8"
 hasnt_repark=$(printf '%s\n' "$OUT" | grep -c '^repark' || :)
-eq 'G no repark pass (T548)' 0 "$hasnt_repark"
+st_eq 'G no repark pass (T548)' 0 "$hasnt_repark"
 # loopmark (issue #1370): one sweep per fleet socket, the counts summed into one line
 contains 'G loopmark absent → skip' "$OUT" 'loopmark: skip — no @loop mark in this version'
 cat > "$R/bin/fleet_loop_mark.py" <<EOF
@@ -363,7 +362,7 @@ contains 'G loopmark dry-run' "$OUT" 'loopmark: would mark pending Loops on 2 li
 printf 'import sys\nsys.exit(1)\n' > "$R/bin/fleet_loop_mark.py"
 STUB_SOCKS='f1' run_ap --from "$C7" --to "$C8"
 contains 'G loopmark unreadable → WARN' "$OUT" 'loopmark: WARN 1 of 1 fleet(s) unreadable; 0 of 0 window(s) marked'
-eq 'G loopmark WARN never fails the apply' 0 "$RC"
+st_eq 'G loopmark WARN never fails the apply' 0 "$RC"
 rm -f "$R/bin/fleet_loop_mark.py"
 # reeval (issue #1376): one fleet-wait-reeval.sh pass per fleet socket, summed
 contains 'G reeval absent → skip' "$OUT" 'reeval: skip — no fleet-wait-reeval.sh in this version'
@@ -396,7 +395,7 @@ contains 'G oldcfg names the broken window' "$OUT" '    会坏  f1:issue-12  acm
 contains 'G oldcfg names the looping one' "$OUT" '    循环  f1:scratch-3  acme/app  -  looping  — stale, in a loop'
 ok 'G oldcfg never names the idle stale one' "! printf '%s' \"\$OUT\" | grep -q issue-9"
 ok 'G oldcfg swept the live fleets against the new tree' "grep -q '^fleet-oldcfg-check.sh --sweep --list --new-dir ' '$LOG'"
-eq 'G oldcfg: a broken session never fails the apply' 0 "$RC"
+st_eq 'G oldcfg: a broken session never fails the apply' 0 "$RC"
 printf 'exit 0\n' > "$R/bin/fleet-oldcfg-check.sh"
 STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8"
 contains 'G oldcfg nothing → ok' "$OUT" 'oldcfg: ok — no open session breaks on this version; none looping on an old configuration'
@@ -405,14 +404,14 @@ contains 'G oldcfg dry-run' "$OUT" 'oldcfg: would name the open sessions this ve
 printf 'echo "fleet-oldcfg-check: cannot run — no python3" >&2; exit 3\n' > "$R/bin/fleet-oldcfg-check.sh"
 STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8"
 contains 'G oldcfg cannot run → WARN' "$OUT" 'oldcfg: WARN — fleet-oldcfg-check: cannot run — no python3'
-eq 'G oldcfg WARN never fails the apply' 0 "$RC"
+st_eq 'G oldcfg WARN never fails the apply' 0 "$RC"
 rm -f "$R/bin/fleet-oldcfg-check.sh"
 
 # --- I. failure -----------------------------------------------------------------------
 sed -i.bak 's/<integer>90</<integer>45</' "$R/launchd/com.claude-fleet.collect.plist.tmpl" && rm -f "$R/launchd/"*.bak
 C9=$(commit 'plist again')
 FAIL_ON=bootstrap run_ap --from "$C8" --to "$C9"
-eq 'I exit 1' 1 "$RC"
+st_eq 'I exit 1' 1 "$RC"
 contains 'I FAIL line' "$OUT" 'daemons: FAIL bootstrap'
 contains 'I PARTIAL' "$OUT" 'apply: PARTIAL'
 
@@ -427,7 +426,7 @@ printf '[Timer]\nOnUnitActiveSec=5\n' > "$R/systemd/claude-fleet-newu.timer"
 git -C "$R" rm -q "$R/systemd/claude-fleet-oldie.service" "$R/systemd/claude-fleet-oldie.timer"
 S1=$(commit 'systemd')
 FLEET_INSTALL_PLATFORM=systemd run_ap --from "$S0" --to "$S1"
-eq 'J exit' 0 "$RC"
+st_eq 'J exit' 0 "$RC"
 ok 'J daemon-reload' "grep -qx 'systemctl --user daemon-reload' '$LOG'"
 ok 'J restart collect' "grep -qx 'systemctl --user restart claude-fleet-collect.timer' '$LOG'"
 ok 'J enable newu' "grep -qx 'systemctl --user enable --now claude-fleet-newu.timer' '$LOG' && grep -q '$H/n' '$H/.config/systemd/user/claude-fleet-newu.service'"
@@ -443,18 +442,18 @@ if command -v plutil >/dev/null 2>&1; then
   D="$WORK/LaunchDaemons/com.claude-fleet.tester.collect.plist"
   snap=$(cat "$D")
   FLEET_INSTALL_SUDO=false FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" run_ap --from "$M0" --to "$M1"
-  eq 'M no sudo -> exit 1' 1 "$RC"
+  st_eq 'M no sudo -> exit 1' 1 "$RC"
   contains 'M prints runnable admin commands' "$OUT" "run as an admin: sudo install -m 644 $H/.config/claude-fleet/logs/install-apply-pending/com.claude-fleet.tester.collect.plist $D"
   ok 'M pending plist kept' "[ -f '$H/.config/claude-fleet/logs/install-apply-pending/com.claude-fleet.tester.collect.plist' ]"
-  eq 'M no sudo -> unchanged' "$snap" "$(cat "$D")"
+  st_eq 'M no sudo -> unchanged' "$snap" "$(cat "$D")"
   ok 'M no sudo -> no launchctl' "! grep -q '^launchctl' '$LOG'"
   FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" run_ap --from "$M0" --to "$M1"
-  eq 'M exit' 0 "$RC"
-  eq 'M label' com.claude-fleet.tester.collect "$(plutil -extract Label raw -o - "$D")"
-  eq 'M UserName' tester "$(plutil -extract UserName raw -o - "$D")"
-  eq 'M argv wrapped' /bin/sh "$(plutil -extract ProgramArguments.0 raw -o - "$D")"
+  st_eq 'M exit' 0 "$RC"
+  st_eq 'M label' com.claude-fleet.tester.collect "$(plutil -extract Label raw -o - "$D")"
+  st_eq 'M UserName' tester "$(plutil -extract UserName raw -o - "$D")"
+  st_eq 'M argv wrapped' /bin/sh "$(plutil -extract ProgramArguments.0 raw -o - "$D")"
   contains 'M argv keeps the script' "$(plutil -extract ProgramArguments.2 raw -o - "$D")" "exec '/bin/bash' '$H/.claude/fleet/bin/collect.sh'"
-  eq 'M interval' 75 "$(plutil -extract StartInterval raw -o - "$D")"
+  st_eq 'M interval' 75 "$(plutil -extract StartInterval raw -o - "$D")"
   ok 'M system reload' "grep -qx 'launchctl bootout system/com.claude-fleet.tester.collect' '$LOG' && grep -qx 'launchctl bootstrap system $D' '$LOG'"
   FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" run_ap --from "$M0" --to "$M1"
   contains 'M re-run is a no-op' "$OUT" 'daemons: ok collect — installed plist already current'
@@ -468,22 +467,22 @@ if command -v plutil >/dev/null 2>&1; then
   # --render-system: the admin renders FOR another login, from its clone, no HEAD involved
   : > "$LOG"
   OUT=$(FLEET_INSTALL_LOGIN=newbie FLEET_INSTALL_HOME=/Users/newbie bash "$AP" --render-system spinner --root "$R" 2>&1); RC=$?
-  eq 'O render exit' 0 "$RC"
+  st_eq 'O render exit' 0 "$RC"
   printf '%s\n' "$OUT" > "$OD/com.claude-fleet.newbie.spinner.plist"
-  eq 'O render Label' com.claude-fleet.newbie.spinner "$(plutil -extract Label raw -o - "$OD/com.claude-fleet.newbie.spinner.plist")"
-  eq 'O render UserName' newbie "$(plutil -extract UserName raw -o - "$OD/com.claude-fleet.newbie.spinner.plist")"
+  st_eq 'O render Label' com.claude-fleet.newbie.spinner "$(plutil -extract Label raw -o - "$OD/com.claude-fleet.newbie.spinner.plist")"
+  st_eq 'O render UserName' newbie "$(plutil -extract UserName raw -o - "$OD/com.claude-fleet.newbie.spinner.plist")"
   contains 'O render __HOME__ = the login asked for' "$(plutil -extract ProgramArguments.2 raw -o - "$OD/com.claude-fleet.newbie.spinner.plist")" "exec '/bin/bash' '/Users/newbie/.claude/fleet/bin/spinner.sh'"
   ok 'O render calls nothing' "[ ! -s '$LOG' ]"
   OUT=$(bash "$AP" --render-system nosuch --root "$R" 2>&1); RC=$?
-  eq 'O render unknown unit -> 2' 2 "$RC"
+  st_eq 'O render unknown unit -> 2' 2 "$RC"
   # the admin pre-installed every unit for THIS login (tester), rendered the same way
   for t in "$R"/launchd/com.claude-fleet.*.plist.tmpl; do
     u=${t##*/com.claude-fleet.}; u=${u%.plist.tmpl}
-    FLEET_INSTALL_HOME="$H" bash "$AP" --render-system "$u" --root "$R" > "$OD/com.claude-fleet.tester.$u.plist" || fail "O render $u"
+    FLEET_INSTALL_HOME="$H" bash "$AP" --render-system "$u" --root "$R" > "$OD/com.claude-fleet.tester.$u.plist" || st_fail "O render $u"
   done
   # the login's own first apply: system shape (its daemons exist, no agents), no sudo, from the empty tree
   FLEET_INSTALL_SUDO=false FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" FLEET_INSTALL_DAEMON_DIR="$OD" run_ap --from "$EMPTY" --to "$O1"
-  eq 'O first install, no sudo -> exit 0' 0 "$RC"
+  st_eq 'O first install, no sudo -> exit 0' 0 "$RC"
   contains 'O every unit current' "$OUT" 'daemons: ok spinner — installed plist already current'
   contains 'O spinner kick is not a failure' "$OUT" "daemons: ok spinner — script new since ${EMPTY:0:7}, the installed unit runs it (no kick)"
   not_contains 'O no need-root FAIL' "$OUT" 'no passwordless sudo'
@@ -492,19 +491,19 @@ if command -v plutil >/dev/null 2>&1; then
   ok 'O no launchctl' "! grep -q '^launchctl' '$LOG'"
   # unchanged: WITH sudo the same first install still kicks the spinner
   FLEET_INSTALL_SUDO='' FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" FLEET_INSTALL_DAEMON_DIR="$OD" run_ap --from "$EMPTY" --to "$O1"
-  eq 'O with sudo -> exit 0' 0 "$RC"
+  st_eq 'O with sudo -> exit 0' 0 "$RC"
   contains 'O with sudo still kicks' "$OUT" 'daemons: kicked spinner'
   ok 'O with sudo kickstart' "grep -qx 'launchctl kickstart -k system/com.claude-fleet.tester.spinner' '$LOG'"
   # unchanged: a spinner script that CHANGED (existed at --from) still needs the root kick
   echo 'echo spin v3' > "$R/bin/tmux-spinner.sh"
   O2=$(commit 'spinner v3')
   FLEET_INSTALL_SUDO=false FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" FLEET_INSTALL_DAEMON_DIR="$OD" run_ap --from "$O1" --to "$O2"
-  eq 'O changed script, no sudo -> exit 1' 1 "$RC"
+  st_eq 'O changed script, no sudo -> exit 1' 1 "$RC"
   contains 'O changed script still needs root' "$OUT" 'run as an admin: sudo launchctl kickstart -k system/com.claude-fleet.tester.spinner'
   # unchanged: gui shape from the empty tree, spinner already installed -> kicks as before (no root needed)
   render "$R/launchd/com.claude-fleet.spinner.plist.tmpl" > "$H/Library/LaunchAgents/com.claude-fleet.spinner.plist"
   run_ap --from "$EMPTY" --to "$O2"
-  eq 'O gui first install -> exit 0' 0 "$RC"
+  st_eq 'O gui first install -> exit 0' 0 "$RC"
   contains 'O gui still kicks' "$OUT" 'daemons: kicked spinner'
 fi
 
@@ -515,12 +514,12 @@ tmpl pnew 20
 P2=$(commit 'a unit nothing can load yet')
 snapA=$(ls "$H/Library/LaunchAgents" | sort | tr '\n' ' ')
 run_ap --from "$PEMPTY" --to "$P2" --no-daemons
-eq 'P first install, no daemons -> exit 0' 0 "$RC"
+st_eq 'P first install, no daemons -> exit 0' 0 "$RC"
 contains 'P daemons skipped, says why' "$OUT" 'daemons: skip — --no-daemons (nothing rendered, loaded or removed; the caller reports them)'
 not_contains 'P no daemons FAIL' "$OUT" 'daemons: FAIL'
 not_contains 'P no daemon action' "$OUT" 'daemons: added'
 ok 'P no launchctl' "! grep -q '^launchctl' '$LOG'"
-eq 'P no plist written' "$snapA" "$(ls "$H/Library/LaunchAgents" | sort | tr '\n' ' ')"
+st_eq 'P no plist written' "$snapA" "$(ls "$H/Library/LaunchAgents" | sort | tr '\n' ' ')"
 contains 'P the commands step still runs' "$OUT" 'commands:'
 ok 'P the command landed' "[ -f '$H/.claude/commands/fleet-history.md' ]"
 ok 'P the hooks still merge' "grep -q '^fleet-hooks-merge.py merge' '$LOG'"
@@ -531,7 +530,7 @@ contains 'P dry-run keeps the skip line' "$OUT" 'daemons: skip — --no-daemons'
 ok 'P dry-run no launchctl' "! grep -q '^launchctl' '$LOG'"
 # unchanged: the same range WITHOUT the flag installs + bootstraps the new unit
 run_ap --from "$P1" --to "$P2"
-eq 'P without the flag -> exit 0' 0 "$RC"
+st_eq 'P without the flag -> exit 0' 0 "$RC"
 contains 'P without the flag adds the unit' "$OUT" 'daemons: added pnew'
 ok 'P without the flag bootstraps it' "grep -qx 'launchctl bootstrap gui/$(id -u) $H/Library/LaunchAgents/com.claude-fleet.pnew.plist' '$LOG'"
 
@@ -542,7 +541,7 @@ rm -f "$H/Library/LaunchAgents/com.claude-fleet.pnew.plist"
 mkdir -p "$WORK/fleet-node"
 printf '{"tester": {"managed": true, "since": 1}}\n' > "$WORK/fleet-node/accounts.json"
 run_ap --from "$P1" --to "$P2"
-eq 'P2 managed -> exit 0' 0 "$RC"
+st_eq 'P2 managed -> exit 0' 0 "$RC"
 contains 'P2 managed: daemons skipped, says why' "$OUT" "daemons: skip — tester's tasks are run by com.claude-fleet.node"
 ok 'P2 managed: no launchctl' "! grep -q '^launchctl' '$LOG'"
 ok 'P2 managed: no plist written' "[ ! -f '$H/Library/LaunchAgents/com.claude-fleet.pnew.plist' ]"
@@ -569,7 +568,7 @@ render "$R/launchd/com.claude-fleet.resid.plist.tmpl" > "$H/Library/LaunchAgents
 echo 'echo resid v2' > "$R/bin/resid.sh"
 R1=$(commit 'script only, a resident runs it')
 run_ap --from "$R0" --to "$R1"
-eq 'P3 exit' 0 "$RC"
+st_eq 'P3 exit' 0 "$RC"
 ok 'P3 resident kicked' "grep -qx 'launchctl kickstart -k gui/$(id -u)/com.claude-fleet.resid' '$LOG'"
 contains 'P3 says so' "$OUT" "daemons: restarted resident resid (version ${R0:0:7} -> ${R1:0:7})"
 run_ap --from "$R1" --to "$R1"
@@ -592,7 +591,7 @@ Q0=$(git -C "$R" rev-parse HEAD)
 printf '{"settings": {"permissions": {"defaultMode": "bypassPermissions"}}, "globalConfig": {"leftArrowOpensAgents": false}}\n' > "$R/conf/claude-settings.default.json"
 Q1=$(commit 'default claude settings')
 run_ap --from "$Q0" --to "$Q1"
-eq 'Q exit' 0 "$RC"
+st_eq 'Q exit' 0 "$RC"
 ok 'Q defaults merged into settings.json + the global config' "grep -qx 'fleet-hooks-merge.py defaults --defaults $R/conf/claude-settings.default.json --settings $H/.claude/settings.json --config $H/.claude/.claude.json' '$LOG'"
 contains 'Q settings relayed' "$OUT" 'settings: filled — 2 default key(s) this login lacked'
 contains 'Q settings line shown' "$OUT" 'set            settings.json permissions.defaultMode = "bypassPermissions"'
@@ -621,7 +620,7 @@ mkdir -p "$R/conf/agent-defaults/claude"
 printf '{"mcpServers": {}}\n' > "$R/conf/agent-defaults/claude/mcp.default.json"
 S1=$(commit 'agent defaults')
 run_ap --from "$S0" --to "$S1"
-eq 'S exit' 0 "$RC"
+st_eq 'S exit' 0 "$RC"
 ok 'S apply called on the global config, CLAUDE.md, the skills dir and the override file (Codex homes are the script'\''s to find)' \
    "grep -qx 'fleet-agent-defaults.py apply --root $R --claude-config $H/.claude/.claude.json --claude-md $H/.claude/CLAUDE.md --claude-skills $H/.claude/skills --override $H/.config/claude-fleet/agent-overrides.json' '$LOG'"
 contains 'S summary relayed' "$OUT" 'agents: filled — claude 1 · codex 2 default item(s) this login lacked'
@@ -641,11 +640,11 @@ contains 'S no dir -> skip' "$OUT" 'agents: skip — no conf/agent-defaults in t
 ok 'S no dir -> no call' "! grep -q 'fleet-agent-defaults.py' '$LOG'"
 
 # --- K. usage -------------------------------------------------------------------------
-run_ap --from "$C0" --to "$C1"; eq 'K --to not HEAD' 2 "$RC"
-run_ap --to HEAD; eq 'K --from required' 2 "$RC"
-run_ap --from nosuchrev --to HEAD; eq 'K unknown rev' 2 "$RC"
+run_ap --from "$C0" --to "$C1"; st_eq 'K --to not HEAD' 2 "$RC"
+run_ap --to HEAD; st_eq 'K --from required' 2 "$RC"
+run_ap --from nosuchrev --to HEAD; st_eq 'K unknown rev' 2 "$RC"
 run_ap --from HEAD --to HEAD
-eq 'K from==to exit' 0 "$RC"
+st_eq 'K from==to exit' 0 "$RC"
 contains 'K from==to no-op' "$OUT" 'nothing to apply'
 ok 'K from==to touched nothing' "[ ! -s '$LOG' ]"
 
@@ -671,12 +670,12 @@ N0=$(git -C "$R" rev-parse HEAD)
 echo 'echo collect3' > "$R/bin/tmux-dash-collect.sh"
 N1=$(commit 'sync-logins stub + a script change')
 run_ap --from "$N0" --to "$N1"
-eq 'N not requested: exit 0' 0 "$RC"
+st_eq 'N not requested: exit 0' 0 "$RC"
 not_contains 'N not requested: silent' "$OUT" 'logins:'
 ok 'N not requested: not called' "! grep -q '^fleet-sync-logins.sh' '$LOG'"
 SLO=$'source:  x @ abc1234\nlogin  shape head  drift  state\njudy   git  abc1234  0  off — auto-update off\nliam: synced to abc1234 · backup /b · daemons kicked 1\nother logins on this machine: 1 synced / 0 skipped · 0 already current · 1 off'
 STUB_SL_OUT="$SLO" run_ap --from "$N0" --to "$N1" --sync-logins
-eq 'N requested: exit 0' 0 "$RC"
+st_eq 'N requested: exit 0' 0 "$RC"
 ok 'N requested: --source <install>, nothing else' "grep -qx 'fleet-sync-logins.sh --source $R' '$LOG'"
 contains 'N requested: rows land under logins:' "$OUT" 'logins:   liam: synced to abc1234'
 contains 'N requested: verdict carries the tail' "$OUT" 'logins: ok — 1 synced / 0 skipped · 0 already current · 1 off'
@@ -684,28 +683,28 @@ contains 'N requested: apply ok' "$OUT" 'apply: ok —'
 STUB_SL_OUT="$SLO" run_ap --from "$N0" --to "$N1" --sync-logins=judy,liam --dry-run
 ok 'N named + dry-run: both passed through' "grep -qx 'fleet-sync-logins.sh --source $R --logins judy,liam --dry-run' '$LOG'"
 STUB_SL_OUT='other logins on this machine: 2 · 1 current · 1 to sync · 0 blocked (dry run — nothing changed)' STUB_SL_RC=1 run_ap --from "$N0" --to "$N1" --sync-logins --dry-run
-eq 'N dry-run drift (exit 1): ok' 0 "$RC"
+st_eq 'N dry-run drift (exit 1): ok' 0 "$RC"
 contains 'N dry-run drift: the tail' "$OUT" 'logins: ok — 2 · 1 current · 1 to sync · 0 blocked (dry run — nothing changed)'
 STUB_SL_OUT='other logins on this machine: 0 synced / 1 skipped · 0 already current' STUB_SL_RC=4 run_ap --from "$N0" --to "$N1" --sync-logins
-eq 'N blocked (4): exit 0' 0 "$RC"
+st_eq 'N blocked (4): exit 0' 0 "$RC"
 contains 'N blocked: WARN, untouched' "$OUT" 'logins: WARN — 0 synced / 1 skipped · 0 already current; a blocked login is untouched'
 STUB_SL_RC=5 run_ap --from "$N0" --to "$N1" --sync-logins
-eq 'N needs sudo (5): exit 0' 0 "$RC"
+st_eq 'N needs sudo (5): exit 0' 0 "$RC"
 contains 'N needs sudo: WARN names the fix' "$OUT" 'run the printed sudo command as an admin'
 STUB_SL_OUT='judy: FAILED — HEAD is not abc1234; the backup is at /b' STUB_SL_RC=6 run_ap --from "$N0" --to "$N1" --sync-logins
-eq 'N failed (6): exit 1' 1 "$RC"
+st_eq 'N failed (6): exit 1' 1 "$RC"
 contains 'N failed: FAIL line' "$OUT" 'logins: FAIL judy: FAILED — HEAD is not abc1234; the backup is at /b (exit 6'
 contains 'N failed: PARTIAL' "$OUT" 'apply: PARTIAL — 1 step(s) failed'
 STUB_SL_RC=0 run_ap --from "$N0" --to "$N1" --sync-logins
 contains 'N no tail line at all: still a verdict' "$OUT" 'logins: ok — nothing to sync'
 # from==to: nothing to apply for this login; the others still come along
 STUB_SL_OUT="$SLO" run_ap --from "$N1" --to "$N1" --sync-logins
-eq 'N no-op + logins: exit 0' 0 "$RC"
+st_eq 'N no-op + logins: exit 0' 0 "$RC"
 ok 'N no-op + logins: called' "grep -qx 'fleet-sync-logins.sh --source $R' '$LOG'"
 contains 'N no-op + logins: verdict' "$OUT" 'logins: ok — 1 synced'
 contains 'N no-op + logins: apply line kept' "$OUT" 'apply: ok — install already at'
 STUB_SL_RC=6 run_ap --from "$N1" --to "$N1" --sync-logins
-eq 'N no-op + logins failed: exit 1' 1 "$RC"
+st_eq 'N no-op + logins failed: exit 1' 1 "$RC"
 contains 'N no-op + logins failed: PARTIAL' "$OUT" 'apply: PARTIAL'
 run_ap --from "$N1" --to "$N1"
 ok 'N no-op, not requested: touched nothing' "[ ! -s '$LOG' ]"
@@ -713,7 +712,7 @@ ok 'N no-op, not requested: touched nothing' "[ ! -s '$LOG' ]"
 tmpl zeta 60
 N2=$(commit 'a unit that will fail to bootstrap')
 FAIL_ON=bootstrap run_ap --from "$N1" --to "$N2" --sync-logins
-eq 'N after a FAIL: exit 1' 1 "$RC"
+st_eq 'N after a FAIL: exit 1' 1 "$RC"
 contains 'N after a FAIL: the daemons step failed' "$OUT" 'daemons: FAIL'
 contains 'N after a FAIL: skipped, says why' "$OUT" "logins: skip — 1 step(s) failed above; fix them, then: bash $R/bin/fleet-sync-logins.sh"
 ok 'N after a FAIL: not called' "! grep -q '^fleet-sync-logins.sh' '$LOG'"
@@ -744,7 +743,7 @@ mkdir -p "$RT/tools/bin" "$RT/.release"; echo x > "$RT/tools/bin/claude"; echo '
 ln -s ../.shared/epic-pages "$TT/epic-pages"; ln -s "$TT" "$TL"
 TPLAIN=$(git -C "$R" diff --no-renames --name-only "$T0" "$T1" | wc -l | tr -d ' ')
 run_ap --tree-from "$TF" --tree-to "$TT" --root "$TL"
-eq 'T exit' 0 "$RC"
+st_eq 'T exit' 0 "$RC"
 contains 'T range names the versions' "$OUT" "range: ${T0:0:7}..${T1:0:7}"
 contains 'T the same paths as git diff (not epic-pages/, tools/, .release)' "$OUT" "range: $TPLAIN path(s) changed"
 ok 'T command updated through the links' "grep -qx v3 '$H/.claude/commands/fleet-history.md'"
@@ -764,7 +763,7 @@ ln -s "$WORK/swept/x/SKILL.md" "$H/.claude/skills/mylinks/SKILL.md"; echo mine >
 printf '# /fleet-tree\n\n<!-- fleet skill · owner: either -->\nt2\n' > "$R/commands/fleet-tree.md"
 T2=$(commit 'no skill moved')
 run_ap --from "$T1" --to "$T2"
-eq 'T heal exit' 0 "$RC"
+st_eq 'T heal exit' 0 "$RC"
 ok 'T dangling skill link healed with no skills/ change' "[ -f '$H/.claude/skills/tsk/run.sh' ] && [ ! -L '$H/.claude/skills/tsk/run.sh' ] && grep -qx 'echo t1' '$H/.claude/skills/tsk/run.sh'"
 contains 'T heal counted' "$OUT" 'skills: installed 1'
 ok 'T a retired skill left as dangling links is removed' "[ ! -e '$H/.claude/skills/gone' ]"
@@ -773,10 +772,10 @@ contains 'T removal said' "$OUT" 'skills: removed 1 retired skill(s) left as dan
 run_ap --tree-from "$TT" --tree-to "$TT" --root "$TL"
 contains 'T same tree: nothing to apply' "$OUT" 'apply: ok — install already at'
 run_ap --tree-from "$TF" --tree-to "$TF" --root "$TL"
-eq 'T --tree-to must be the install' 2 "$RC"
+st_eq 'T --tree-to must be the install' 2 "$RC"
 contains 'T says move it first' "$OUT" 'move the install first'
 run_ap --tree-from "$TF" --tree-to "$TT" --root "$TL" --sync-logins
-eq 'T --sync-logins refused' 2 "$RC"
+st_eq 'T --sync-logins refused' 2 "$RC"
 
 # --- U. a pure client keeps only install-sync (issue #3534) --------------------------
 # 承载 off (FLEET_INSTALL_HOST=0, fleet-conf.sh's word in life): a new session
@@ -789,29 +788,29 @@ U1=$(commit 'client: install-sync + two session daemons')
 UA="$H/Library/LaunchAgents" UATT="$H/.config/claude-fleet/daemons-attic"
 U_before=$(cd "$UA" && ls | sort | tr '\n' ' ')
 FLEET_INSTALL_HOST=0 run_ap --from "$U0" --to "$U1" --dry-run
-eq 'U dry exit' 0 "$RC"
+st_eq 'U dry exit' 0 "$RC"
 contains 'U dry plans the set-aside' "$OUT" 'daemons: would set aside client-only —'
-eq 'U dry moves nothing' "$U_before" "$(cd "$UA" && ls | sort | tr '\n' ' ')"
+st_eq 'U dry moves nothing' "$U_before" "$(cd "$UA" && ls | sort | tr '\n' ' ')"
 FLEET_INSTALL_HOST=0 run_ap --from "$U0" --to "$U1"
-eq 'U exit' 0 "$RC"
+st_eq 'U exit' 0 "$RC"
 contains 'U install-sync added' "$OUT" 'daemons: added install-sync'
 contains 'U memguard not added' "$OUT" 'daemons: skip memguard — serves sessions, and this computer hosts none'
 contains 'U peerlink not added' "$OUT" 'daemons: skip peerlink — serves sessions'
 contains 'U the rest set aside' "$OUT" 'daemons: set aside client-only —'
-eq 'U the LaunchAgents a pure client has' 'com.claude-fleet.install-sync.plist ' "$(cd "$UA" && ls | sort | tr '\n' ' ')"
+st_eq 'U the LaunchAgents a pure client has' 'com.claude-fleet.install-sync.plist ' "$(cd "$UA" && ls | sort | tr '\n' ' ')"
 ok 'U kept in the attic' "[ -n \"\$(ls '$UATT')\" ] && [ ! -f '$UATT/com.claude-fleet.install-sync.plist' ]"
 ok 'U memguard never loaded' "! grep -q 'memguard' '$LOG'"
 ok 'U set-aside units booted out' "grep -q 'launchctl bootout gui/$(id -u)/com.claude-fleet.collect' '$LOG'"
 U_attic=$(cd "$UATT" && ls | sort | tr '\n' ' ')
 echo 'echo collect v9' > "$R/bin/tmux-dash-collect.sh"; U2=$(commit 'next sync')
 FLEET_INSTALL_HOST=0 run_ap --from "$U1" --to "$U2"
-eq 'U next sync exit' 0 "$RC"
-eq 'U next sync: still only install-sync' 'com.claude-fleet.install-sync.plist ' "$(cd "$UA" && ls | sort | tr '\n' ' ')"
+st_eq 'U next sync exit' 0 "$RC"
+st_eq 'U next sync: still only install-sync' 'com.claude-fleet.install-sync.plist ' "$(cd "$UA" && ls | sort | tr '\n' ' ')"
 not_contains 'U next sync sets nothing aside' "$OUT" 'set aside'
 STUB_SOCKS=fleet FLEET_INSTALL_HOST=0 run_ap --from "$U1" --to "$U2"
 contains 'U a live fleet server wins: back from the attic' "$OUT" 'daemons: restored'
 ok 'U attic emptied' "[ -z \"\$(ls '$UATT'/*.plist 2>/dev/null)\" ]"
-eq 'U restored = what was set aside, plus install-sync' "$(printf '%s\n' $U_attic com.claude-fleet.install-sync.plist | sort | tr '\n' ' ')" "$(cd "$UA" && ls | sort | tr '\n' ' ')"
+st_eq 'U restored = what was set aside, plus install-sync' "$(printf '%s\n' $U_attic com.claude-fleet.install-sync.plist | sort | tr '\n' ' ')" "$(cd "$UA" && ls | sort | tr '\n' ' ')"
 ok 'U restored ones loaded' "grep -q 'launchctl bootstrap gui/$(id -u) $UA/com.claude-fleet.collect.plist' '$LOG'"
 FLEET_INSTALL_HOST=1 run_ap --from "$U1" --to "$U2"
 not_contains 'U a hosting computer is untouched' "$OUT" 'set aside'

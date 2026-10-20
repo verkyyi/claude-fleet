@@ -31,6 +31,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 LIB="$BIN/fleet-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 for f in "$LIB" "$ROWS"; do
@@ -43,12 +44,8 @@ export FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_CONF_DIR="$WORK/conf"    # …and so does the allocation lock dir
 mkdir -p "$WORK/conf" "$WORK/bin"
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()   { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
-ok()   { CHECKS=$((CHECKS+1)); [ "$1" = 0 ] || fail "$2"; }
-has()  { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1" "$2";; esac; }
-hasnt(){ CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1" "$2";; *) : ;; esac; }
+st_tally count
+ok()   { CHECKS=$((CHECKS+1)); [ "$1" = 0 ] || st_fail "$2"; }
 
 # ============================================================================
 # A. allocation policy — pure, no tmux, no server
@@ -57,32 +54,32 @@ hasnt(){ CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1" "$2";; *) : ;; esa
 . "$LIB"
 for fn in fleet_wid_next fleet_wid_valid fleet_wid_taken fleet_wid_stamp \
           fleet_wid_resolve fleet_wid_target fleet_wid_used; do
-  command -v "$fn" >/dev/null 2>&1 || fail "$fn not defined by fleet-lib.sh (issue #566)"
+  command -v "$fn" >/dev/null 2>&1 || st_fail "$fn not defined by fleet-lib.sh (issue #566)"
   CHECKS=$((CHECKS+1))
 done
 
-eq "next: nothing taken → a1"                a1 "$(fleet_wid_next '')"
-eq "next: a1 taken → a2"                     a2 "$(fleet_wid_next 'a1')"
-eq "next: LOWEST free, not next-after-max"   a2 "$(fleet_wid_next 'a1 a3 b7')"
-eq "next: a1..a9 taken → rolls to b1"        b1 "$(fleet_wid_next 'a1 a2 a3 a4 a5 a6 a7 a8 a9')"
-eq "next: newline-separated list parses"     a3 "$(printf 'a1\na2\n' | { read -r x; read -r y; fleet_wid_next "$x
+st_eq "next: nothing taken → a1"                a1 "$(fleet_wid_next '')"
+st_eq "next: a1 taken → a2"                     a2 "$(fleet_wid_next 'a1')"
+st_eq "next: LOWEST free, not next-after-max"   a2 "$(fleet_wid_next 'a1 a3 b7')"
+st_eq "next: a1..a9 taken → rolls to b1"        b1 "$(fleet_wid_next 'a1 a2 a3 a4 a5 a6 a7 a8 a9')"
+st_eq "next: newline-separated list parses"     a3 "$(printf 'a1\na2\n' | { read -r x; read -r y; fleet_wid_next "$x
 $y"; })"
-eq "next: blank lines (unstamped windows) are ignored" a1 "$(fleet_wid_next '
+st_eq "next: blank lines (unstamped windows) are ignored" a1 "$(fleet_wid_next '
 
 ')"
 # exhaustion: every one of the 234 handles taken → exit 1, print nothing
 ALL=''; for L in {a..z}; do for D in {1..9}; do ALL="$ALL $L$D"; done; done
 out=$(fleet_wid_next "$ALL"); rc=$?
-CHECKS=$((CHECKS+1)); [ "$rc" != 0 ] || fail "next: all 234 taken must exit non-zero"
-eq "next: all 234 taken prints nothing" "" "$out"
+CHECKS=$((CHECKS+1)); [ "$rc" != 0 ] || st_fail "next: all 234 taken must exit non-zero"
+st_eq "next: all 234 taken prints nothing" "" "$out"
 # …and the alphabet really is 234 wide (a1…z9), the count the design fixed on.
-eq "alphabet: 26 letters x 9 digits = 234" 234 "$(printf '%s' "$ALL" | wc -w | tr -d ' ')"
+st_eq "alphabet: 26 letters x 9 digits = 234" 234 "$(printf '%s' "$ALL" | wc -w | tr -d ' ')"
 
 fleet_wid_valid a1 && rc=0 || rc=1; ok "$rc" "valid: a1 is a handle"
 fleet_wid_valid z9 && rc=0 || rc=1; ok "$rc" "valid: z9 is a handle"
 for bad in a0 A1 aa 1a a10 '' '@5' 'a 1'; do
   CHECKS=$((CHECKS+1))
-  fleet_wid_valid "$bad" && fail "valid: '$bad' must NOT be accepted as a handle"
+  fleet_wid_valid "$bad" && st_fail "valid: '$bad' must NOT be accepted as a handle"
 done
 fleet_wid_taken b3 'a1 b3 c2' && rc=0 || rc=1; ok "$rc" "taken: b3 is in the list"
 fleet_wid_taken b3 'a1 c2'    && rc=1 || rc=0; ok "$rc" "taken: b3 is not in the list"
@@ -100,11 +97,7 @@ fi
 
 # Isolated server via a PATH shim — never the live one (the repo rail).
 SOCK="$WORK/tmux.sock"
-cat > "$WORK/bin/tmux" <<SHIM
-#!/bin/sh
-exec "$REAL_TMUX" -S "$SOCK" "\$@"
-SHIM
-chmod +x "$WORK/bin/tmux"
+st_tmux_socket "$WORK/bin" "$SOCK"
 export PATH="$WORK/bin:$PATH"
 cleanup() { tmux kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -112,7 +105,7 @@ trap 'exit 130' INT TERM HUP
 
 SESS=fleetW
 tmux new-session -d -s "$SESS" -x 200 -y 50 -c "$WORK" 'sleep 300' 2>/dev/null \
-  || fail "could not start the isolated tmux server"
+  || st_fail "could not start the isolated tmux server"
 
 # The producer's US-separated -F output is unparseable on tmux builds that
 # octal-escape 0x1f (the #208 trap) — part E only.
@@ -132,45 +125,45 @@ wid_of() { tmux display-message -p -t "$1" '#{@wid}' 2>/dev/null; }
 # The initial window of the session is unstamped too — stamp it first so the
 # handles below are predictable.
 w0=$(tmux list-windows -t "$SESS" -F '#{window_id}' | head -n1)
-eq "stamp: the first window gets a1" a1 "$(fleet_wid_stamp "$w0" "")"
+st_eq "stamp: the first window gets a1" a1 "$(fleet_wid_stamp "$w0" "")"
 w1=$(mk one); w2=$(mk two); w3=$(mk three)
-eq "stamp: lowest free → a2" a2 "$(fleet_wid_stamp "$w1" "")"
-eq "stamp: lowest free → a3" a3 "$(fleet_wid_stamp "$w2" "")"
-eq "stamp: lowest free → a4" a4 "$(fleet_wid_stamp "$w3" "")"
-eq "stamp: the option really landed on the window" a3 "$(wid_of "$w2")"
+st_eq "stamp: lowest free → a2" a2 "$(fleet_wid_stamp "$w1" "")"
+st_eq "stamp: lowest free → a3" a3 "$(fleet_wid_stamp "$w2" "")"
+st_eq "stamp: lowest free → a4" a4 "$(fleet_wid_stamp "$w3" "")"
+st_eq "stamp: the option really landed on the window" a3 "$(wid_of "$w2")"
 # idempotent: a window that already carries one keeps it, and allocates nothing.
-eq "stamp: idempotent (same handle, no re-allocation)" a3 "$(fleet_wid_stamp "$w2" "")"
-eq "stamp: … and the neighbour is untouched"          a4 "$(wid_of "$w3")"
+st_eq "stamp: idempotent (same handle, no re-allocation)" a3 "$(fleet_wid_stamp "$w2" "")"
+st_eq "stamp: … and the neighbour is untouched"          a4 "$(wid_of "$w3")"
 # uniqueness across every live window
 handles=$(tmux list-windows -a -F '#{@wid}' | grep -c .)
 uniq_h=$(tmux list-windows -a -F '#{@wid}' | grep . | sort -u | wc -l | tr -d ' ')
-eq "unique: no two live windows share a handle" "$handles" "$uniq_h" \
+st_eq "unique: no two live windows share a handle" "$handles" "$uniq_h" \
    "$(tmux list-windows -a -F '#{window_id} #{@wid}')"
 # REUSE: reaping a2 frees it for the next spawn — this is what keeps a handle 2 chars.
 tmux kill-window -t "$w1" 2>/dev/null
 w4=$(mk four)
-eq "reuse: the reaped a2 is handed to the next spawn" a2 "$(fleet_wid_stamp "$w4" "")"
+st_eq "reuse: the reaped a2 is handed to the next spawn" a2 "$(fleet_wid_stamp "$w4" "")"
 
 printf 'dash-wid-selftest: part B ok (%d checks)\n' "$CHECKS"
 
 # ============================================================================
 # C. the handle is a window target
 # ============================================================================
-eq "resolve: a handle finds its window"    "$w2" "$(fleet_wid_resolve a3 '')"
-eq "resolve: another one, another window"  "$w3" "$(fleet_wid_resolve a4 '')"
+st_eq "resolve: a handle finds its window"    "$w2" "$(fleet_wid_resolve a3 '')"
+st_eq "resolve: another one, another window"  "$w3" "$(fleet_wid_resolve a4 '')"
 out=$(fleet_wid_resolve z9 ''); rc=$?
-CHECKS=$((CHECKS+1)); [ "$rc" != 0 ] || fail "resolve: an UNKNOWN handle must exit non-zero"
-eq "resolve: an unknown handle prints nothing" "" "$out"
+CHECKS=$((CHECKS+1)); [ "$rc" != 0 ] || st_fail "resolve: an UNKNOWN handle must exit non-zero"
+st_eq "resolve: an unknown handle prints nothing" "" "$out"
 out=$(fleet_wid_resolve 'not-a-handle' ''); rc=$?
-CHECKS=$((CHECKS+1)); [ "$rc" != 0 ] || fail "resolve: garbage must exit non-zero"
+CHECKS=$((CHECKS+1)); [ "$rc" != 0 ] || st_fail "resolve: garbage must exit non-zero"
 # target(): handle → window_id; anything else passes straight through
-eq "target: a handle resolves"                  "$w2"      "$(fleet_wid_target a3 '')"
-eq "target: a tmux window-id passes through"    "$w3"      "$(fleet_wid_target "$w3" '')"
-eq "target: an index passes through"            "2"        "$(fleet_wid_target 2 '')"
-eq "target: sess:idx passes through"            "$SESS:2"  "$(fleet_wid_target "$SESS:2" '')"
-eq "target: a window NAME passes through"       "three"    "$(fleet_wid_target three '')"
+st_eq "target: a handle resolves"                  "$w2"      "$(fleet_wid_target a3 '')"
+st_eq "target: a tmux window-id passes through"    "$w3"      "$(fleet_wid_target "$w3" '')"
+st_eq "target: an index passes through"            "2"        "$(fleet_wid_target 2 '')"
+st_eq "target: sess:idx passes through"            "$SESS:2"  "$(fleet_wid_target "$SESS:2" '')"
+st_eq "target: a window NAME passes through"       "three"    "$(fleet_wid_target three '')"
 out=$(fleet_wid_target z9 '' 2>/dev/null); rc=$?
-CHECKS=$((CHECKS+1)); [ "$rc" = 1 ] && [ -z "$out" ] || fail "target: an UNSTAMPED handle is refused (want '' rc 1, got '$out' rc $rc)"
+CHECKS=$((CHECKS+1)); [ "$rc" = 1 ] && [ -z "$out" ] || st_fail "target: an UNSTAMPED handle is refused (want '' rc 1, got '$out' rc $rc)"
 
 printf 'dash-wid-selftest: part C ok (%d checks)\n' "$CHECKS"
 
@@ -181,7 +174,7 @@ printf 'dash-wid-selftest: part C ok (%d checks)\n' "$CHECKS"
 #     handle must simply still be there afterwards.
 before=$(wid_of "$w3")
 tmux respawn-pane -k -t "$w3" 'sleep 300' 2>/dev/null
-eq "handoff: a same-pane respawn keeps the handle" "$before" "$(wid_of "$w3")"
+st_eq "handoff: a same-pane respawn keeps the handle" "$before" "$(wid_of "$w3")"
 
 # D2. a migrate: read the handle, close the window, open a new one, re-stamp —
 #     exactly fleet-migrate.sh's re-stamp block, which is the whole reason @wid
@@ -189,14 +182,14 @@ eq "handoff: a same-pane respawn keeps the handle" "$before" "$(wid_of "$w3")"
 old_h=$(wid_of "$w3")
 tmux kill-window -t "$w3" 2>/dev/null
 nw=$(mk three)
-eq "migrate: the replacement window keeps the SAME handle" "$old_h" \
+st_eq "migrate: the replacement window keeps the SAME handle" "$old_h" \
    "$(fleet_wid_stamp "$nw" "" "$old_h")"
-eq "migrate: … and it really landed"                       "$old_h" "$(wid_of "$nw")"
+st_eq "migrate: … and it really landed"                       "$old_h" "$(wid_of "$nw")"
 # static guard: the re-stamp block is actually IN fleet-migrate.sh (a future
 # refactor that drops it would otherwise pass every dynamic check above).
 CHECKS=$((CHECKS+1))
 grep -q 'fleet_wid_stamp "$nw" "$SOCK" "$hnd"' "$BIN/fleet-migrate.sh" \
-  || fail "fleet-migrate.sh no longer re-stamps @wid onto the re-created window"
+  || st_fail "fleet-migrate.sh no longer re-stamps @wid onto the re-created window"
 
 # D3. the handle was CLAIMED in the gap → the replacement must NOT collide.
 taken=$(wid_of "$w2")                 # a live window's handle
@@ -204,9 +197,9 @@ tmux kill-window -t "$nw" 2>/dev/null
 nw2=$(mk three-again)
 got=$(fleet_wid_stamp "$nw2" "" "$taken")
 CHECKS=$((CHECKS+1))
-[ "$got" != "$taken" ] || fail "migrate: a WANTED handle that is already live must not be re-issued (got '$got')"
-eq "migrate: … it falls back to a free handle instead" "$got" "$(wid_of "$nw2")"
-eq "migrate: … and the incumbent keeps its own"        "$taken" "$(wid_of "$w2")"
+[ "$got" != "$taken" ] || st_fail "migrate: a WANTED handle that is already live must not be re-issued (got '$got')"
+st_eq "migrate: … it falls back to a free handle instead" "$got" "$(wid_of "$nw2")"
+st_eq "migrate: … and the incumbent keeps its own"        "$taken" "$(wid_of "$w2")"
 
 printf 'dash-wid-selftest: part D ok (%d checks)\n' "$CHECKS"
 
@@ -229,42 +222,42 @@ tmux set-window-option -t "$rs_w" @worktree "$WORK/wt/repo-scratch-4"
 # #566; the producer must backfill them on the render.
 CHECKS=$((CHECKS+1))
 [ -z "$(wid_of "$rw_w")" ] && [ -z "$(wid_of "$rs_w")" ] \
-  || fail "fixture: the two new rows must start with NO handle (to prove the backfill)"
+  || st_fail "fixture: the two new rows must start with NO handle (to prove the backfill)"
 
 GN=$'\033[38;2;158;206;106m'; IN=$'\033[38;2;187;154;247m'; R=$'\033[0m'
 rows=$(FLEET_SESSION="$SESS" FZF_COLUMNS=140 bash "$ROWS" 2>&1) \
-  || fail "rows producer exited non-zero" "$rows"
+  || st_fail "rows producer exited non-zero" "$rows"
 
 h_w=$(wid_of "$rw_w"); h_s=$(wid_of "$rs_w")
 CHECKS=$((CHECKS+1))
-{ [ -n "$h_w" ] && [ -n "$h_s" ]; } || fail "backfill: an unstamped window must get a handle on the render" "$rows"
+{ [ -n "$h_w" ] && [ -n "$h_s" ]; } || st_fail "backfill: an unstamped window must get a handle on the render" "$rows"
 CHECKS=$((CHECKS+1))
-[ "$h_w" != "$h_s" ] || fail "backfill: two windows were backfilled to the SAME handle ($h_w)"
+[ "$h_w" != "$h_s" ] || st_fail "backfill: two windows were backfilled to the SAME handle ($h_w)"
 
 # backfill is EXACTLY once: a second render must not re-allocate.
-rows2=$(FLEET_SESSION="$SESS" FZF_COLUMNS=140 bash "$ROWS" 2>&1) || fail "second render exited non-zero" "$rows2"
-eq "backfill: the handle is stable across renders (worker)"  "$h_w" "$(wid_of "$rw_w")"
-eq "backfill: the handle is stable across renders (scratch)" "$h_s" "$(wid_of "$rs_w")"
+rows2=$(FLEET_SESSION="$SESS" FZF_COLUMNS=140 bash "$ROWS" 2>&1) || st_fail "second render exited non-zero" "$rows2"
+st_eq "backfill: the handle is stable across renders (worker)"  "$h_w" "$(wid_of "$rw_w")"
+st_eq "backfill: the handle is stable across renders (scratch)" "$h_s" "$(wid_of "$rs_w")"
 
 row_w=$(printf '%s\n' "$rows2" | grep -F "$US$rw_w$US")
 row_s=$(printf '%s\n' "$rows2" | grep -F "$US$rs_w$US")
-{ [ -n "$row_w" ] && [ -n "$row_s" ]; } || fail "rows: expected a row per fixture window" "$rows2"
+{ [ -n "$row_w" ] && [ -n "$row_s" ]; } || st_fail "rows: expected a row per fixture window" "$rows2"
 
 # Handles remain addressable but no longer take space from task descriptions.
-hasnt "row: worker handle stays internal"  "$row_w" "$h_w"
-hasnt "row: scratch handle stays internal" "$row_s" "$h_s"
-has "row: the worker description remains visible" "$row_w" "worker-row"
-has "row: the scratch description remains visible" "$row_s" "scratch-row"
+st_hasnt "row: worker handle stays internal"  "$row_w" "$h_w"
+st_hasnt "row: scratch handle stays internal" "$row_s" "$h_s"
+st_has "row: the worker description remains visible" "$row_w" "worker-row"
+st_has "row: the scratch description remains visible" "$row_s" "scratch-row"
 hdr=$(printf '%s\n' "$rows2" | grep -F "hdr${US}hdr")
-hasnt "header: no worker id column" "$hdr" "id  issue"
+st_hasnt "header: no worker id column" "$hdr" "id  issue"
 # the three blanks between them are the empty 2-cell tree-column header (#836, #1328).
-has "header: issue and window columns remain" "$hdr" "issue    window"
+st_has "header: issue and window columns remain" "$hdr" "issue    window"
 
 # the issue column is ISSUE-ONLY now (#566): `#77` for the worker, BLANK for the
 # scratch — the `~4` sigil moved out, its slot number still names the worktree.
-has   "row: the worker's issue cell is GREEN #77"       "$row_w" "${GN}#77  ${R}"
-has   "row: the scratch's issue cell is 5 blanks"       "$row_s" "${GN}     ${R}"
-hasnt "row: the scratch no longer renders a ~N sigil"   "$row_s" "~4"
-hasnt "row: … and never in indigo either"               "$row_s" "${IN}~4"
+st_has   "row: the worker's issue cell is GREEN #77"       "$row_w" "${GN}#77  ${R}"
+st_has   "row: the scratch's issue cell is 5 blanks"       "$row_s" "${GN}     ${R}"
+st_hasnt "row: the scratch no longer renders a ~N sigil"   "$row_s" "~4"
+st_hasnt "row: … and never in indigo either"               "$row_s" "${IN}~4"
 
 printf 'dash-wid-selftest: OK (%d checks)\n' "$CHECKS"

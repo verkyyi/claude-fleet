@@ -76,6 +76,7 @@
 #                  each keep their own person's
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 real="$BIN/fleet-agent-team.py"
 while [ -L "$real" ]; do
   link="$(readlink "$real")"
@@ -85,9 +86,7 @@ REPO="$(cd "$(dirname "$real")/.." && pwd)"
 T="$REPO/bin/fleet-agent-team.py"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-agent-team-selftest.XXXXXX") || exit 2
 trap 'rm -rf "${WORK:?}"' EXIT INT TERM HUP
-fail=0
-ok()  { echo "ok   $*"; }
-bad() { echo "FAIL $*"; fail=1; }
+st_tally
 PY="$(command -v python3)"
 # The personal layer's MCP commands exist on this "machine": a server whose command
 # is not here is left out of the layer (issue #1862, fleet-break-it personal-mcp-*).
@@ -137,12 +136,12 @@ src() { j "$CONF/agent-effective.json" "d['items'].get('$1', {}).get('source')";
 before=$(snap)
 SEAM='' out=$(team sync); rc=$?
 [ "$rc" = 3 ] && [ ! -e "$CONF/agent-effective.json" ] && [ "$(snap)" = "$before" ] \
-  && ok "A no hub → exit 3, no file written ($out)" || bad "A rc=$rc out=$out"
+  && st_ok_all "A no hub → exit 3, no file written ($out)" || st_miss "A rc=$rc out=$out"
 out=$(SEAM='' team apply); [ ! -e "$CONF/agent-effective.json" ] && [ "$(snap)" = "$before" ] \
-  && ok "A apply with no layer writes nothing" || bad "A apply wrote: $out"
+  && st_ok_all "A apply with no layer writes nothing" || st_miss "A apply wrote: $out"
 out=$(status --team); rc=$?
 [ "$rc" = 3 ] && [ -z "$out" ] && [ ! -e "$CONF/team-push.json" ] \
-  && ok "A no team layer → status --team prints nothing, exit 3 (no doctor row)" || bad "A status --team rc=$rc: $out"
+  && st_ok_all "A no team layer → status --team prints nothing, exit 3 (no doctor row)" || st_miss "A status --team rc=$rc: $out"
 
 SEAM="cat $WORK/resp.json"
 # ── B — the team adds ─────────────────────────────────────────────────────────
@@ -153,29 +152,29 @@ resp '{"version":1,"prev":0,"bundle":{
   "claude_settings":{"includeCoAuthoredBy":false},
   "codex_config":{"sandbox_mode":"workspace-write"}}}'
 out=$(team sync); rc=$?
-[ "$rc" = 0 ] || bad "B sync rc=$rc: $out"
+[ "$rc" = 0 ] || st_miss "B sync rc=$rc: $out"
 [ "$(j "$H/.claude.json" "d['mcpServers']['docs-ro']['args'][-1]")" = '"--read-only"' ] \
   && grep -q '^\[mcp_servers.docs-ro\]' "$H/.codex/config.toml" \
-  && ok "B the team's MCP server reached Claude and Codex" || bad "B docs-ro missing: $out"
+  && st_ok_all "B the team's MCP server reached Claude and Codex" || st_miss "B docs-ro missing: $out"
 [ "$(j "$H/.claude/settings.json" "d['hooks']['Stop'][0]['hooks'][0]['command']")" = '"echo team-stop"' ] \
   && [ "$(j "$H/.claude/settings.json" "d['includeCoAuthoredBy']")" = false ] \
   && [ "$(j "$H/.claude/settings.json" "d['theme']")" = '"dark"' ] \
-  && ok "B hook + setting landed in settings.json, the login's keys kept" || bad "B settings: $(cat "$H/.claude/settings.json")"
+  && st_ok_all "B hook + setting landed in settings.json, the login's keys kept" || st_miss "B settings: $(cat "$H/.claude/settings.json")"
 [ -f "$H/.claude/skills/team-notes/SKILL.md" ] && [ -f "$H/.codex/skills/team-notes/SKILL.md" ] \
-  && ok "B the team's skill reached both agents" || bad "B skill missing"
+  && st_ok_all "B the team's skill reached both agents" || st_miss "B skill missing"
 grep -q '^sandbox_mode = "workspace-write"' "$H/.codex/config.toml" && head -1 "$H/.codex/config.toml" | grep -q '^# this login' \
-  && ok "B a Codex key the login lacked is set; its own lines stay" || bad "B codex: $(cat "$H/.codex/config.toml")"
+  && st_ok_all "B a Codex key the login lacked is set; its own lines stay" || st_miss "B codex: $(cat "$H/.codex/config.toml")"
 [ "$(src claude.mcp.docs-ro)" = '"team"' ] && [ "$(src claude.mcp.context7)" = '"default"' ] \
   && [ "$(src claude.mcp.mine)" = '"local"' ] && [ "$(src codex.mcp.docs-ro)" = '"team"' ] \
   && [ "$(j "$CONF/agent-effective.json" "d['team']['version']")" = 1 ] \
-  && ok "B agent-effective.json: docs-ro team · context7 default · mine local, v1" || bad "B effective: $(cat "$CONF/agent-effective.json")"
-case "$(status --short)" in "team v1") ok "B status: team v1" ;; *) bad "B status: $(status --short)" ;; esac
+  && st_ok_all "B agent-effective.json: docs-ro team · context7 default · mine local, v1" || st_miss "B effective: $(cat "$CONF/agent-effective.json")"
+case "$(status --short)" in "team v1") st_ok_all "B status: team v1" ;; *) st_miss "B status: $(status --short)" ;; esac
 
 # ── C — local wins ────────────────────────────────────────────────────────────
 [ "$(j "$H/.claude.json" "d['mcpServers']['mine']['command']")" = '"my-mcp"' ] \
   && grep -A1 '^\[mcp_servers.mine\]' "$H/.codex/config.toml" | grep -q 'my-mcp' \
   && grep -q '^model_reasoning_effort = "xhigh"' "$H/.codex/config.toml" \
-  && ok "C a name this login already had keeps its value (Claude + Codex)" || bad "C mine overwritten"
+  && st_ok_all "C a name this login already had keeps its value (Claude + Codex)" || st_miss "C mine overwritten"
 "$PY" - "$H/.claude.json" <<'PY'
 import json, sys
 p = sys.argv[1]; d = json.load(open(p)); d["mcpServers"]["docs-ro"]["args"] = ["my", "own"]; json.dump(d, open(p, "w"))
@@ -190,43 +189,43 @@ out=$(team sync)
 [ "$(j "$H/.claude.json" "d['mcpServers']['docs-ro']['args']")" = '["my", "own"]' ] && [ "$(src claude.mcp.docs-ro)" = '"local"' ] \
   && grep -A2 '^\[mcp_servers.docs-ro\]' "$H/.codex/config.toml" | grep -q 'docs-mcp@2' \
   && grep -q 'notes v2' "$H/.claude/skills/team-notes/SKILL.md" \
-  && ok "C an item edited here stays this login's on v2; untouched team items follow v2" || bad "C v2: $out"
+  && st_ok_all "C an item edited here stays this login's on v2; untouched team items follow v2" || st_miss "C v2: $out"
 
 # ── D — team over an untouched default, then the rollback ─────────────────────
 resp '{"version":3,"prev":2,"bundle":{"mcp":{"context7":{"command":"npx","args":["-y","@team/context7"]}},
   "codex_config":{"model_reasoning_effort":"low"}}}'
 out=$(team sync)
 [ "$(j "$H/.claude.json" "d['mcpServers']['context7']['args'][-1]")" = '"@team/context7"' ] && [ "$(src claude.mcp.context7)" = '"team"' ] \
-  && ok "D the team's context7 replaced the untouched fleet default" || bad "D context7: $out"
+  && st_ok_all "D the team's context7 replaced the untouched fleet default" || st_miss "D context7: $out"
 grep -q '^model_reasoning_effort = "xhigh"' "$H/.codex/config.toml" && [ "$(src codex.model_reasoning_effort)" = '"local"' ] \
-  && ok "D a Codex key this login set itself stays (xhigh), source local" || bad "D codex key: $(cat "$H/.codex/config.toml")"
+  && st_ok_all "D a Codex key this login set itself stays (xhigh), source local" || st_miss "D codex key: $(cat "$H/.codex/config.toml")"
 # ── E — what the team dropped (v3 has no docs-ro / hook / skill / setting) ────
 [ ! -e "$H/.claude/skills/team-notes" ] && [ ! -e "$H/.codex/skills/team-notes" ] \
   && [ "$(j "$H/.claude/settings.json" "'hooks' in d or 'includeCoAuthoredBy' in d")" = false ] \
   && ! grep -q '^sandbox_mode = "workspace-write"' "$H/.codex/config.toml" \
   && ! grep -q '^\[mcp_servers.docs-ro\]' "$H/.codex/config.toml" \
   && [ "$(j "$H/.claude.json" "d['mcpServers']['docs-ro']['args']")" = '["my", "own"]' ] \
-  && ok "E dropped items taken back (skill, hook, setting, Codex key + server); the one edited here stays" \
-  || bad "E: $out // $(cat "$H/.codex/config.toml")"
+  && st_ok_all "E dropped items taken back (skill, hook, setting, Codex key + server); the one edited here stays" \
+  || st_miss "E: $out // $(cat "$H/.codex/config.toml")"
 # the rollback = v1's body again, as v4
 resp '{"version":4,"prev":3,"bundle":{"mcp":{"docs-ro":{"command":"npx","args":["-y","docs-mcp","--read-only"]}}}}'
 out=$(team sync)
 [ "$(j "$H/.claude.json" "d['mcpServers']['context7']")" = "$("$PY" -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1]), sort_keys=True))' "$CTX7")" ] \
   && [ "$(src claude.mcp.context7)" = '"default"' ] \
-  && ok "D rollback: context7 is the fleet default again" || bad "D rollback: $out"
-grep -q '^\[mcp_servers.docs-ro\]' "$H/.codex/config.toml" && ok "E a re-added team server returns where it was not this login's" || bad "E codex docs-ro back"
+  && st_ok_all "D rollback: context7 is the fleet default again" || st_miss "D rollback: $out"
+grep -q '^\[mcp_servers.docs-ro\]' "$H/.codex/config.toml" && st_ok_all "E a re-added team server returns where it was not this login's" || st_miss "E codex docs-ro back"
 
 # ── H — again: nothing moves ──────────────────────────────────────────────────
 before=$(snap); out=$(team sync); out2=$(team apply)
 [ "$(snap | grep -v agent-effective.json)" = "$(printf '%s\n' "$before" | grep -v agent-effective.json)" ] \
-  && printf '%s\n' "$out2" | grep -q 'changed 0 item' && ok "H a second sync / apply changes no file" || bad "H: $out2"
+  && printf '%s\n' "$out2" | grep -q 'changed 0 item' && st_ok_all "H a second sync / apply changes no file" || st_miss "H: $out2"
 
 # ── I — an override shields one item ──────────────────────────────────────────
 echo '["claude.mcp.extra"]' > "$CONF/agent-overrides.json"
 resp '{"version":5,"prev":4,"bundle":{"mcp":{"docs-ro":{"command":"npx","args":["-y","docs-mcp","--read-only"]},"extra":{"command":"x"}}}}'
 out=$(team sync)
 [ "$(j "$H/.claude.json" "'extra' in d['mcpServers']")" = false ] && grep -q '^\[mcp_servers.extra\]' "$H/.codex/config.toml" \
-  && ok "I claude.mcp.extra listed in agent-overrides.json is not written (Codex still gets it)" || bad "I: $out"
+  && st_ok_all "I claude.mcp.extra listed in agent-overrides.json is not written (Codex still gets it)" || st_miss "I: $out"
 
 # ── F — team: off ──────────────────────────────────────────────────────────────
 echo '{"team": "off"}' > "$CONF/agent-overrides.json"
@@ -234,14 +233,14 @@ out=$(team sync)
 ! grep -q '^\[mcp_servers.docs-ro\]' "$H/.codex/config.toml" && ! grep -q '^\[mcp_servers.extra\]' "$H/.codex/config.toml" \
   && [ "$(j "$H/.claude.json" "d['mcpServers']['docs-ro']['args']")" = '["my", "own"]' ] \
   && [ "$(j "$H/.claude.json" "d['mcpServers']['mine']['command']")" = '"my-mcp"' ] \
-  && ok "F team: off takes back what the team wrote; this login's own stay" || bad "F: $out"
-case "$(status --short)" in "team off") ok "F status: team off" ;; *) bad "F status: $(status --short)" ;; esac
+  && st_ok_all "F team: off takes back what the team wrote; this login's own stay" || st_miss "F: $out"
+case "$(status --short)" in "team off") st_ok_all "F status: team off" ;; *) st_miss "F status: $(status --short)" ;; esac
 resp '{"version":6,"prev":5,"bundle":{"mcp":{"brand-new":{"command":"x"}}}}'
 out=$(team sync)
-[ "$(j "$H/.claude.json" "'brand-new' in d['mcpServers']")" = false ] && ok "F team: off adds nothing new" || bad "F added: $out"
+[ "$(j "$H/.claude.json" "'brand-new' in d['mcpServers']")" = false ] && st_ok_all "F team: off adds nothing new" || st_miss "F added: $out"
 rm -f "$CONF/agent-overrides.json"
 out=$(team sync)
-[ "$(j "$H/.claude.json" "'brand-new' in d['mcpServers']")" = true ] && ok "F back on: v6 applies" || bad "F back on: $out"
+[ "$(j "$H/.claude.json" "'brand-new' in d['mcpServers']")" = true ] && st_ok_all "F back on: v6 applies" || st_miss "F back on: $out"
 
 # ── G — a credential (or fleet-infra, #3586) is refused ───────────────────────────────────────────────
 for b in '{"mcp":{"gh":{"command":"x","env":{"GITHUB_TOKEN":"abc123"}}}}' \
@@ -252,14 +251,14 @@ for b in '{"mcp":{"gh":{"command":"x","env":{"GITHUB_TOKEN":"abc123"}}}}' \
   resp "{\"version\":7,\"prev\":6,\"bundle\":$b}"
   out=$(team sync); rc=$?
   [ "$rc" = 2 ] && [ "$(j "$CONF/team-bundle.json" "d['version']")" = 6 ] && [ "$(snap)" = "$before" ] \
-    && ok "G refused, v6 kept, nothing written: $(printf '%s' "$out" | head -1 | cut -c1-90)" || bad "G rc=$rc $out"
+    && st_ok_all "G refused, v6 kept, nothing written: $(printf '%s' "$out" | head -1 | cut -c1-90)" || st_miss "G rc=$rc $out"
 done
 resp '{"version":7,"prev":6,"bundle":{"mcp":{"gh":{"command":"x","env":{"GITHUB_TOKEN":"${GITHUB_TOKEN}"}}}}}'
-out=$(team sync); [ "$?" = 0 ] && [ "$(src claude.mcp.gh)" = '"team"' ] && ok "G a \${VAR} reference is not a credential" || bad "G ref: $out"
+out=$(team sync); [ "$?" = 0 ] && [ "$(src claude.mcp.gh)" = '"team"' ] && st_ok_all "G a \${VAR} reference is not a credential" || st_miss "G ref: $out"
 
 # ── J — the install's team step ──────────────────────────────────────────────
-grep -q 'fleet-agent-team.py' "$REPO/bin/fleet-install-apply.sh" && ok "J fleet-install-apply.sh runs the team step" || bad "J no team step in install-apply"
-grep -q 'fleet-agent-team.py' "$REPO/conf/agent-bundle.manifest" && ok "J the client package carries fleet-agent-team.py" || bad "J not in agent-bundle.manifest"
+grep -q 'fleet-agent-team.py' "$REPO/bin/fleet-install-apply.sh" && st_ok_all "J fleet-install-apply.sh runs the team step" || st_miss "J no team step in install-apply"
+grep -q 'fleet-agent-team.py' "$REPO/conf/agent-bundle.manifest" && st_ok_all "J the client package carries fleet-agent-team.py" || st_miss "J not in agent-bundle.manifest"
 
 # ── K — the HTTP fetch ─────────────────────────────────────────────────────────
 cat > "$WORK/stub.py" <<'PY2'
@@ -292,23 +291,23 @@ STUB=$!
 # a slow runner (macOS CI) takes seconds to start python: wait up to 30s
 i=0; while [ ! -s "$WORK/port" ] && [ "$i" -lt 150 ]; do sleep 0.2; i=$((i + 1)); done
 PORT=$(cat "$WORK/port" 2>/dev/null)
-[ -n "$PORT" ] || bad "K the loopback stub never started"
+[ -n "$PORT" ] || st_miss "K the loopback stub never started"
 printf 'CCQUOTA_TOKEN=node-tok\nCCQUOTA_HUB_URL=http://127.0.0.1:%s\n' "$PORT" > "$CONF/node.env"
 out=$(SEAM='' team sync); rc=$?
 [ "$rc" = 0 ] && [ "$(j "$CONF/team-bundle.json" "d['version']")" = 9 ] && grep -q 'Bearer node-tok' "$WORK/req.log" \
   && [ "$(j "$CONF/agent-effective.json" "d['team']['version']")" = 9 ] \
-  && ok "K fetched v9 with the node token and composed it" || bad "K fetch rc=$rc: $out"
+  && st_ok_all "K fetched v9 with the node token and composed it" || st_miss "K fetch rc=$rc: $out"
 grep -q '^/v1/fleet/person-bundle Bearer node-tok' "$WORK/req.log" && [ ! -e "$CONF/person-bundle.json" ] \
   && ! printf '%s' "$out" | grep -q '^personal' \
   && [ "$(j "$CONF/agent-effective.json" "'personal' in d or 'personal_version' in d or 'hinted' in d or 'local_seen' in d")" = false ] \
-  && ok "K the personal read answered 404 (no person) → no cache, no line, no record" || bad "K person 404: $out"
+  && st_ok_all "K the personal read answered 404 (no person) → no cache, no line, no record" || st_miss "K person 404: $out"
 out=$(SEAM='' team fetch); rc=$?
 [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'unchanged' && grep '^/v1/fleet/team-bundle' "$WORK/req.log" | tail -1 | grep -q '"team-v9"' \
-  && ok "K If-None-Match the cached version → 304, unchanged" || bad "K 304: rc=$rc $out"
+  && st_ok_all "K If-None-Match the cached version → 304, unchanged" || st_miss "K 304: rc=$rc $out"
 printf 'CCQUOTA_TOKEN=wrong\nCCQUOTA_HUB_URL=http://127.0.0.1:%s\n' "$PORT" > "$CONF/node.env"
 out=$(SEAM='' team sync); rc=$?
 [ "$rc" = 1 ] && [ "$(j "$CONF/team-bundle.json" "d['version']")" = 9 ] \
-  && ok "K a refused token (no certificate) is exit 1; v9 stays cached" || bad "K 401: rc=$rc $out"
+  && st_ok_all "K a refused token (no certificate) is exit 1; v9 stays cached" || st_miss "K 401: rc=$rc $out"
 kill "$STUB" 2>/dev/null; wait "$STUB" 2>/dev/null
 rm -f "$CONF/node.env"
 
@@ -328,8 +327,8 @@ base=$(PSEAM='' picture)
 for ps in 'printf ""' "printf '%s' '{\"version\":0,\"bundle\":{}}'"; do
   got=$(PSEAM="$ps" picture)
   [ "$got" = "$base" ] && [ ! -e "$CONF/person-bundle.json" ] \
-    && ok "L no personal layer ($ps) → every output byte for byte as without one" \
-    || bad "L degenerate differs ($ps): $(diff <(printf '%s\n' "$base") <(printf '%s\n' "$got") | head -8)"
+    && st_ok_all "L no personal layer ($ps) → every output byte for byte as without one" \
+    || st_miss "L degenerate differs ($ps): $(diff <(printf '%s\n' "$base") <(printf '%s\n' "$got") | head -8)"
 done
 
 # ── M — personal over team, local over personal ───────────────────────────────
@@ -341,24 +340,24 @@ presp '{"version":1,"prev":0,"bundle":{
   "claude_settings":{"includeCoAuthoredBy":true},
   "codex_config":{"sandbox_mode":"read-only"}}}'
 out=$(team sync); rc=$?
-[ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^personal: v1 (new)' || bad "M sync rc=$rc: $out"
+[ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^personal: v1 (new)' || st_miss "M sync rc=$rc: $out"
 [ "$(j "$H/.claude.json" "d['mcpServers']['shared']['command']")" = '"me-shared"' ] && [ "$(src claude.mcp.shared)" = '"personal"' ] \
   && [ "$(src claude.mcp.pmine)" = '"personal"' ] \
   && grep -A1 '^\[mcp_servers.shared\]' "$H/.codex/config.toml" | grep -q me-shared && [ "$(src codex.mcp.shared)" = '"personal"' ] \
-  && ok "M a personal MCP server wins over the team's of the same name (Claude + Codex)" || bad "M mcp: $out"
+  && st_ok_all "M a personal MCP server wins over the team's of the same name (Claude + Codex)" || st_miss "M mcp: $out"
 [ "$(j "$H/.claude/settings.json" "d['includeCoAuthoredBy']")" = true ] && [ "$(src claude.settings.includeCoAuthoredBy)" = '"personal"' ] \
   && grep -q '^sandbox_mode = "read-only"' "$H/.codex/config.toml" && [ "$(src codex.sandbox_mode)" = '"personal"' ] \
-  && ok "M a personal setting / Codex key wins over the team's" || bad "M keys: $(cat "$H/.codex/config.toml")"
+  && st_ok_all "M a personal setting / Codex key wins over the team's" || st_miss "M keys: $(cat "$H/.codex/config.toml")"
 [ "$(j "$H/.claude/settings.json" "[h['command'] for g in d['hooks']['Stop'] for h in g['hooks']]")" = \
     "[\"sh \\\"\$HOME/.claude/fleet/bin/fleet-hook-personal.sh\\\" Stop -- 'echo me-stop'\"]" ] \
   && [ "$(j "$CONF/agent-effective.json" "[k for k in d['items'] if k.startswith('claude.hooks.')]")" = \
     "[\"claude.hooks.personal.Stop.$("$PY" -c 'import hashlib;print(hashlib.sha256(b"echo me-stop").hexdigest()[:10])')\"]" ] \
   && [ -f "$H/.claude/skills/me-notes/SKILL.md" ] && [ "$(src claude.skills.me-notes)" = '"personal"' ] \
-  && ok "M a personal hook + skill land, source personal" || bad "M hook/skill: $(cat "$H/.claude/settings.json")"
+  && st_ok_all "M a personal hook + skill land, source personal" || st_miss "M hook/skill: $(cat "$H/.claude/settings.json")"
 [ "$(j "$CONF/agent-effective.json" "[d['personal']['version'], d['personal']['state'], d['personal_version']]")" = '[1, "on", 1]' ] \
-  && ok "M agent-effective.json records personal v1" || bad "M record: $(cat "$CONF/agent-effective.json")"
+  && st_ok_all "M agent-effective.json records personal v1" || st_miss "M record: $(cat "$CONF/agent-effective.json")"
 case "$(status --short)" in "团队 v10 · 个人 v1 · 本机独有 "[0-9]*" 项（fleet config promote 可带走）")
-  ok "M status --short: the person-facing line (团队 v10 · 个人 v1 · 本机独有 N 项)" ;; *) bad "M status: $(status --short)" ;; esac
+  st_ok_all "M status --short: the person-facing line (团队 v10 · 个人 v1 · 本机独有 N 项)" ;; *) st_miss "M status: $(status --short)" ;; esac
 "$PY" - "$H/.claude.json" <<'PY'
 import json, sys
 p = sys.argv[1]; d = json.load(open(p)); d["mcpServers"]["pmine"]["command"] = "by-hand"; json.dump(d, open(p, "w"))
@@ -373,14 +372,14 @@ out=$(team sync)
 [ "$(j "$H/.claude.json" "d['mcpServers']['pmine']['command']")" = '"by-hand"' ] && [ "$(src claude.mcp.pmine)" = '"local"' ] \
   && printf '%s' "$out" | grep -q "own .*claude.mcp.pmine — this login's value wins over the personal layer's" \
   && grep -A1 '^\[mcp_servers.pmine\]' "$H/.codex/config.toml" | grep -q 'p-mcp@2' \
-  && ok "M this login's hand edit wins over the personal layer's v2; untouched items follow v2" || bad "M local: $out"
+  && st_ok_all "M this login's hand edit wins over the personal layer's v2; untouched items follow v2" || st_miss "M local: $out"
 
 # ── P — the session (taken here, before the rollback) ─────────────────────────
 s1=$(team session claude)
 printf '%s\n' "$s1" | grep -q $'^src\tdefault:[0-9a-f]* team:v10 personal:v2 local:' \
-  && ok "P session src names personal:v2" || bad "P src: $s1"
+  && st_ok_all "P session src names personal:v2" || st_miss "P src: $s1"
 printf '%s\n' "$s1" | grep -qxF "$(printf 'say\t%s' "$(status --short)")" \
-  && ok "P session's say line is status --short's, verbatim (EPIC #1855 C6)" || bad "P say: $s1 // $(status --short)"
+  && st_ok_all "P session's say line is status --short's, verbatim (EPIC #1855 C6)" || st_miss "P say: $s1 // $(status --short)"
 presp '{"version":3,"prev":2,"bundle":{
   "mcp":{"shared":{"command":"me-shared@3"},"pmine":{"command":"p-mcp@2"}},
   "hooks":{"Stop":[{"command":"echo me-stop"}]},
@@ -391,15 +390,15 @@ team sync >/dev/null
 s2=$(team session claude)
 [ "$(printf '%s\n' "$s1" | grep '^fp')" != "$(printf '%s\n' "$s2" | grep '^fp')" ] \
   && printf '%s\n' "$s2" | grep -q 'personal:v3' \
-  && ok "P a new personal version moves the session fingerprint" || bad "P fp: $s1 // $s2"
+  && st_ok_all "P a new personal version moves the session fingerprint" || st_miss "P fp: $s1 // $s2"
 fp3=$(team session claude | sed -n 's/^fp	//p')
 grep -q "^claude $fp3 .*personal:v3" "$CONF/global/agent-cfg.expected" \
-  && ok "P the cached expected fingerprint carries the personal layer" || bad "P expected: $(cat "$CONF/global/agent-cfg.expected")"
+  && st_ok_all "P the cached expected fingerprint carries the personal layer" || st_miss "P expected: $(cat "$CONF/global/agent-cfg.expected")"
 
 # ── R — a new 本机 item is said once (issue #1863) ─────────────────────────────
 hints() { team session claude | grep $'^hint\t'; }
 [ -z "$(hints)" ] && [ "$(j "$CONF/agent-effective.json" "'claude.mcp.mine' in d['local_seen']")" = true ] \
-  && ok "R what was always here is recorded, never hinted" || bad "R baseline: $(hints) // $(cat "$CONF/agent-effective.json")"
+  && st_ok_all "R what was always here is recorded, never hinted" || st_miss "R baseline: $(hints) // $(cat "$CONF/agent-effective.json")"
 addmcp() {
   "$PY" - "$H/.claude.json" "$1" <<'PY2'
 import json, sys
@@ -408,17 +407,17 @@ PY2
 }
 addmcp fresh
 [ "$(hints)" = "$(printf 'hint\tpromote claude.mcp.fresh')" ] \
-  && ok "R a new local MCP → one hint line (hint promote claude.mcp.fresh)" || bad "R new: $(team session claude)"
-[ -z "$(hints)" ] && ok "R the next launch says nothing" || bad "R again: $(hints)"
+  && st_ok_all "R a new local MCP → one hint line (hint promote claude.mcp.fresh)" || st_miss "R new: $(team session claude)"
+[ -z "$(hints)" ] && st_ok_all "R the next launch says nothing" || st_miss "R again: $(hints)"
 team sync --force >/dev/null
 [ -z "$(hints)" ] && [ "$(j "$CONF/agent-effective.json" "d['hinted']")" = '["claude.mcp.fresh"]' ] \
-  && ok "R a sync keeps what was said (hinted survives apply)" || bad "R after sync: $(hints)"
+  && st_ok_all "R a sync keeps what was said (hinted survives apply)" || st_miss "R after sync: $(hints)"
 addmcp quiet
-[ -z "$(PHINT=0 hints)" ] && ok "R FLEET_PROMOTE_HINT=0 → no hint" || bad "R off: $(PHINT=0 hints)"
+[ -z "$(PHINT=0 hints)" ] && st_ok_all "R FLEET_PROMOTE_HINT=0 → no hint" || st_miss "R off: $(PHINT=0 hints)"
 # both launchers hand the composer's lines to the one shared step (T620)
-grep -q '^ *hint) .*本机新加了' "$REPO/bin/fleet-launch-lib.sh" && ok "R fleet-launch-lib.sh prints the hint on its start line" || bad "R fleet-launch-lib.sh has no hint) arm"
+grep -q '^ *hint) .*本机新加了' "$REPO/bin/fleet-launch-lib.sh" && st_ok_all "R fleet-launch-lib.sh prints the hint on its start line" || st_miss "R fleet-launch-lib.sh has no hint) arm"
 for f in fleet-claude.sh fleet-codex.sh; do
-  grep -q '^fleet_launch_cfg ' "$REPO/bin/$f" && ok "R $f runs it" || bad "R $f has no hint) arm"
+  grep -q '^fleet_launch_cfg ' "$REPO/bin/$f" && st_ok_all "R $f runs it" || st_miss "R $f has no hint) arm"
 done
 "$PY" - "$H/.claude.json" <<'PY2'
 import json, sys
@@ -431,27 +430,27 @@ out=$(team sync)
 [ "$(j "$H/.claude.json" "d['mcpServers']['shared']['command']")" = '"team-shared"' ] && [ "$(src claude.mcp.shared)" = '"team"' ] \
   && [ "$(j "$H/.claude/settings.json" "d['includeCoAuthoredBy']")" = false ] && [ "$(src claude.settings.includeCoAuthoredBy)" = '"team"' ] \
   && grep -q '^sandbox_mode = "workspace-write"' "$H/.codex/config.toml" \
-  && ok "N items the team also hands go back to the team's value" || bad "N team back: $out"
+  && st_ok_all "N items the team also hands go back to the team's value" || st_miss "N team back: $out"
 [ ! -e "$H/.claude/skills/me-notes" ] && [ "$(j "$H/.claude/settings.json" "'hooks' in d")" = false ] \
   && printf '%s' "$out" | grep -q 'drop .*claude.skills.me-notes (the personal layer no longer hands it out)' \
   && [ "$(j "$H/.claude.json" "d['mcpServers']['pmine']['command']")" = '"by-hand"' ] \
-  && ok "N personal-only items are dropped; the hand-edited one stays" || bad "N dropped: $out"
+  && st_ok_all "N personal-only items are dropped; the hand-edited one stays" || st_miss "N dropped: $out"
 
 # ── O — personal: off ──────────────────────────────────────────────────────────
 presp '{"version":5,"prev":4,"bundle":{"mcp":{"pnew":{"command":"p-new"},"shared":{"command":"me-shared"}}}}'
 team sync >/dev/null
-[ "$(src claude.mcp.pnew)" = '"personal"' ] || bad "O pnew not applied"
+[ "$(src claude.mcp.pnew)" = '"personal"' ] || st_miss "O pnew not applied"
 echo '{"personal": "off"}' > "$CONF/agent-overrides.json"
 out=$(team sync)
 [ "$(j "$H/.claude.json" "'pnew' in d['mcpServers']")" = false ] \
   && [ "$(j "$H/.claude.json" "d['mcpServers']['shared']['command']")" = '"team-shared"' ] \
   && [ "$(j "$H/.claude.json" "d['mcpServers']['pmine']['command']")" = '"by-hand"' ] \
-  && ok "O personal: off takes back what the personal layer wrote; the team's and this login's stay" || bad "O: $out"
-case "$(status --short)" in "团队 v10 · 个人 已关 · 本机独有 "*) ok "O status: 个人 已关" ;; *) bad "O status: $(status --short)" ;; esac
-team session claude | grep -q 'personal:off' && ok "O session src: personal:off" || bad "O src"
+  && st_ok_all "O personal: off takes back what the personal layer wrote; the team's and this login's stay" || st_miss "O: $out"
+case "$(status --short)" in "团队 v10 · 个人 已关 · 本机独有 "*) st_ok_all "O status: 个人 已关" ;; *) st_miss "O status: $(status --short)" ;; esac
+team session claude | grep -q 'personal:off' && st_ok_all "O session src: personal:off" || st_miss "O src"
 rm -f "$CONF/agent-overrides.json"
 out=$(team sync)
-[ "$(src claude.mcp.pnew)" = '"personal"' ] && ok "O back on: v5 applies" || bad "O back on: $out"
+[ "$(src claude.mcp.pnew)" = '"personal"' ] && st_ok_all "O back on: v5 applies" || st_miss "O back on: $out"
 
 # ── Q — refused ────────────────────────────────────────────────────────────────
 before=$(snap)
@@ -459,12 +458,12 @@ presp '{"version":6,"prev":5,"bundle":{"mcp":{"gh":{"command":"x","env":{"GITHUB
 out=$(team sync)
 printf '%s' "$out" | grep -q '^personal: refused v6: .*GITHUB_TOKEN looks like a credential — the personal layer' \
   && [ "$(j "$CONF/person-bundle.json" "d['version']")" = 5 ] && [ "$(snap | grep -v -e agent- -e person-sync)" = "$(printf '%s\n' "$before" | grep -v -e agent- -e person-sync)" ] \
-  && ok "Q a credential in the personal layer is refused; v5 kept, nothing written" || bad "Q: $out"
+  && st_ok_all "Q a credential in the personal layer is refused; v5 kept, nothing written" || st_miss "Q: $out"
 presp '{"version":6,"prev":5,"bundle":{"hook_scripts":{"x.sh":"echo hi"},"mcp":{"pnew":{"command":"p-new"}}}}'
 out=$(team sync)
-printf '%s' "$out" | grep -q '^personal: v6 (new)' && ok "Q hook_scripts is accepted in the personal layer" || bad "Q hook_scripts: $out"
+printf '%s' "$out" | grep -q '^personal: v6 (new)' && st_ok_all "Q hook_scripts is accepted in the personal layer" || st_miss "Q hook_scripts: $out"
 resp '{"version":11,"prev":10,"bundle":{"hook_scripts":{"x.sh":"echo hi"}}}'
-out=$(team sync); [ "$?" = 2 ] && ok "Q hook_scripts is refused in the team layer" || bad "Q team hook_scripts: $out"
+out=$(team sync); [ "$?" = 2 ] && st_ok_all "Q hook_scripts is refused in the team layer" || st_miss "Q team hook_scripts: $out"
 
 # ── S — the same personal hooks in a Codex session (issue #1864) ──────────────
 presp '{"version":7,"prev":6,"bundle":{
@@ -480,22 +479,22 @@ fstop=$(printf '%s\n' "$emit" | sed -n 's/^Stop	\[\(.*\)\]$/\1/p')
 wrap() { printf 'sh \\"$HOME/.claude/fleet/bin/fleet-hook-personal.sh\\" %s -- '"'"'%s'"'" "$1" "$2"; }
 pre=$(printf '%s\n' "$sc" | sed -n 's/^c	hooks\.PreToolUse=//p')
 [ -n "$fpre" ] && [ "$pre" = "[$fpre,{matcher=\"Bash\",hooks=[{type=\"command\",command=\"$(wrap PreToolUse 'echo me-pre')\"}]},{matcher=\"apply_patch\",hooks=[{type=\"command\",command=\"$(wrap PreToolUse 'echo me-edit')\"}]}]" ] \
-  && ok "S session codex: c hooks.PreToolUse = the fleet's own groups + the personal hooks (Edit|Write → apply_patch)" \
-  || bad "S PreToolUse: $pre"
+  && st_ok_all "S session codex: c hooks.PreToolUse = the fleet's own groups + the personal hooks (Edit|Write → apply_patch)" \
+  || st_miss "S PreToolUse: $pre"
 stop=$(printf '%s\n' "$sc" | sed -n 's/^c	hooks\.Stop=//p')
 [ -n "$fstop" ] && [ "$stop" = "[$fstop,{hooks=[{type=\"command\",command=\"$(wrap Stop 'echo me-stop')\"}]}]" ] \
-  && ok "S session codex: c hooks.Stop carries the fleet's Stop + the personal one" || bad "S Stop: $stop"
+  && st_ok_all "S session codex: c hooks.Stop carries the fleet's Stop + the personal one" || st_miss "S Stop: $stop"
 [ "$(j "$H/.claude/settings.json" "[h['command'] for g in d['hooks']['Stop'] for h in g['hooks']]")" = \
     "[\"sh \\\"\$HOME/.claude/fleet/bin/fleet-hook-personal.sh\\\" Stop -- 'echo me-stop'\"]" ] \
-  && ok "S the same wrapped command as Claude's settings.json" || bad "S claude: $(cat "$H/.claude/settings.json")"
+  && st_ok_all "S the same wrapped command as Claude's settings.json" || st_miss "S claude: $(cat "$H/.claude/settings.json")"
 printf '%s\n' "$sc" | grep -q '^note	个人自动规则 Notification「echo me-note」：Codex 没有这个事件' \
   && printf '%s\n' "$sc" | grep -q '^note	个人自动规则 PreToolUse「echo me-art」：Codex 没有工具 Artifact' \
   && [ "$(printf '%s\n' "$sc" | grep -c '^c	hooks\.')" = 2 ] \
-  && ok "S an event / tool Codex has not got: a note, no hook" || bad "S notes: $sc"
+  && st_ok_all "S an event / tool Codex has not got: a note, no hook" || st_miss "S notes: $sc"
 team session codex --lock enforce | grep -q '^lock	codex.hooks.personal' \
-  && bad "S a personal hook inherited the codex.hooks lock" || ok "S codex.hooks.personal is outside the codex.hooks lock"
+  && st_miss "S a personal hook inherited the codex.hooks lock" || st_ok_all "S codex.hooks.personal is outside the codex.hooks lock"
 sp=$(FLEET_PERSONAL=0 team session codex)
-! printf '%s\n' "$sp" | grep -q '^c	hooks\.' && ok "S FLEET_PERSONAL=0: no personal hook in the Codex session" || bad "S off: $sp"
+! printf '%s\n' "$sp" | grep -q '^c	hooks\.' && st_ok_all "S FLEET_PERSONAL=0: no personal hook in the Codex session" || st_miss "S off: $sp"
 
 # ── L again — the personal layer goes away (404): everything it wrote goes ────
 resp '{"version":10,"prev":9,"bundle":{"mcp":{"shared":{"command":"team-shared"}},
@@ -504,7 +503,7 @@ out=$(PSEAM='printf ""' team sync)
 [ ! -e "$CONF/person-bundle.json" ] && [ "$(j "$H/.claude.json" "'pnew' in d['mcpServers']")" = false ] \
   && [ "$(j "$CONF/agent-effective.json" "'personal' in d or 'personal_version' in d or 'hinted' in d or 'local_seen' in d")" = false ] \
   && [ "$(status --short)" = "team v10" ] && ! team session claude | grep -q personal \
-  && ok "L the person's layer gone (404) → taken back, no personal anywhere" || bad "L gone: $out"
+  && st_ok_all "L the person's layer gone (404) → taken back, no personal anywhere" || st_miss "L gone: $out"
 
 # ── T — the hub's push (#1899): one run applies it, records it, moves expected ──
 team expected --write >/dev/null
@@ -514,27 +513,27 @@ resp '{"version":11,"prev":10,"bundle":{"mcp":{"shared":{"command":"team-shared"
 out=$(PSEAM='printf ""' team sync --hub-version 11); rc=$?
 [ "$rc" = 0 ] && [ "$(j "$CONF/agent-effective.json" "d['team']['version']")" = 11 ] \
   && [ "$(j "$CONF/team-push.json" "[d['hub_version'], d['rc'], d['synced'] == d['heard']]")" = '[11, 0, true]' ] \
-  && ok "T push v11 → applied in the one run, team-push.json recorded" || bad "T push rc=$rc: $out $(cat "$CONF/team-push.json" 2>&1)"
+  && st_ok_all "T push v11 → applied in the one run, team-push.json recorded" || st_miss "T push rc=$rc: $out $(cat "$CONF/team-push.json" 2>&1)"
 exp1=$(cat "$CONF/global/agent-cfg.expected" 2>/dev/null)
 [ -n "$exp0" ] && [ "$exp1" != "$exp0" ] && printf '%s\n' "$exp1" | grep -q '^codex [0-9a-f]\{12\} .*team:v11' \
-  && ok "T the expected fingerprint moved with the push" || bad "T expected: before=$exp0 after=$exp1"
+  && st_ok_all "T the expected fingerprint moved with the push" || st_miss "T expected: before=$exp0 after=$exp1"
 out=$(status --team); rc=$?
 printf '%s\n' "$out" | grep -Eq '^入口 v11 · 本机 v11 · 拉到 20[0-9-]+T[0-9:]+Z$' && [ "$rc" = 0 ] \
-  && ok "T doctor row: $out" || bad "T status --team rc=$rc: $out"
+  && st_ok_all "T doctor row: $out" || st_miss "T status --team rc=$rc: $out"
 out=$(PSEAM='printf ""' SEAM='exit 7' team sync --hub-version 12); rc=$?
 [ "$rc" = 1 ] && [ "$(j "$CONF/team-push.json" "[d['hub_version'], d['rc']]")" = '[12, 1]' ] \
-  && ok "T a failed sync is recorded (rc 1, hub v12)" || bad "T failed rc=$rc: $out"
+  && st_ok_all "T a failed sync is recorded (rc 1, hub v12)" || st_miss "T failed rc=$rc: $out"
 out=$(status --team); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '入口 v12 · 本机 v11 .*尚未生效' \
-  && ok "T just pushed, behind: named, not yet a WARN" || bad "T behind rc=$rc: $out"
+  && st_ok_all "T just pushed, behind: named, not yet a WARN" || st_miss "T behind rc=$rc: $out"
 out=$(env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" FLEET_TEAM_PUSH_WARN_SECS=-1 "$PY" "$T" status --team 2>&1); rc=$?
-[ "$rc" = 1 ] && ok "T behind past FLEET_TEAM_PUSH_WARN_SECS → exit 1 (WARN)" || bad "T warn rc=$rc: $out"
+[ "$rc" = 1 ] && st_ok_all "T behind past FLEET_TEAM_PUSH_WARN_SECS → exit 1 (WARN)" || st_miss "T warn rc=$rc: $out"
 resp '{"version":12,"prev":11,"bundle":{"mcp":{"shared":{"command":"team-shared"}},
   "claude_settings":{"includeCoAuthoredBy":true},"codex_config":{"sandbox_mode":"read-only"}}}'
 out=$(PSEAM='printf ""' team sync --hub-version 12); rc=$?
 out2=$(env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" FLEET_TEAM_PUSH_WARN_SECS=-1 "$PY" "$T" status --team 2>&1); rc2=$?
 [ "$rc" = 0 ] && [ "$rc2" = 0 ] && printf '%s\n' "$out2" | grep -q '^入口 v12 · 本机 v12 · 拉到 ' \
-  && ok "T the retry applies v12 and clears the WARN" || bad "T retry rc=$rc/$rc2: $out / $out2"
+  && st_ok_all "T the retry applies v12 and clears the WARN" || st_miss "T retry rc=$rc/$rc2: $out / $out2"
 
 # ── U — a person's roles and rules (#2784) ────────────────────────────────────
 for who in alice bob; do mkdir -p "$WORK/u-$who/h" "$WORK/u-$who/c"; done
@@ -547,7 +546,7 @@ ut() {   # ut <login> <args…> — one login's script; its person's answer is $
 out=$(USEAM='printf ""' ut alice person); rc=$?
 out2=$(ut alice status --roles); rc2=$?
 [ "$rc" = 0 ] && [ -z "$out" ] && [ "$rc2" = 3 ] && [ -z "$out2" ] && [ -z "$(ls -A "$WORK/u-alice/c")" ] \
-  && ok "U no personal layer → person writes nothing, status --roles no row (exit 3)" || bad "U degenerate rc=$rc/$rc2: $out $out2 $(ls -A "$WORK/u-alice/c")"
+  && st_ok_all "U no personal layer → person writes nothing, status --roles no row (exit 3)" || st_miss "U degenerate rc=$rc/$rc2: $out $out2 $(ls -A "$WORK/u-alice/c")"
 printf '%s\n' '{"version":4,"prev":3,"bundle":{"roles":{"steward":"---\nmodel: sonnet\n---\n","worker":{"effort":"high"}},"rules":"| 编号 | 角色 | 条件 | 动作 | 档位 | 关键词 |\n|---|---|---|---|---|---|\n| 101 | steward | 问的是金额 | 必须问你（never:money） | ask | 报价, 金额 |\n"}}' > "$WORK/u-alice.json"
 printf '%s\n' '{"version":2,"prev":1,"bundle":{"roles":{"orchestrator":"---\neffort: max\n---\n"}}}' > "$WORK/u-bob.json"
 for who in alice bob; do USEAM="cat $WORK/u-$who.json" ut "$who" person >/dev/null; done
@@ -555,34 +554,33 @@ for who in alice bob; do USEAM="cat $WORK/u-$who.json" ut "$who" person >/dev/nu
   && [ "$(j "$WORK/u-bob/c/person-bundle.json" "[d['version'], sorted(d['bundle']['roles'])]")" = '[2, ["orchestrator"]]' ] \
   && [ "$(j "$WORK/u-alice/c/person-sync.json" "[d['rc'], d['checked'] == d['tried']]")" = '[0, true]' ] \
   && [ ! -e "$WORK/u-alice/c/agent-effective.json" ] \
-  && ok "U person: roles + rules taken, each login its own person's (alice v4, bob v2), no apply" \
-  || bad "U person: $(cat "$WORK/u-alice/c/person-bundle.json" "$WORK/u-bob/c/person-bundle.json" 2>&1 | head -5)"
+  && st_ok_all "U person: roles + rules taken, each login its own person's (alice v4, bob v2), no apply" \
+  || st_miss "U person: $(cat "$WORK/u-alice/c/person-bundle.json" "$WORK/u-bob/c/person-bundle.json" 2>&1 | head -5)"
 out=$(ut alice status --roles); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -Eq '^入口未推送（随同步拉） · 本机 v4 · 角色 steward worker · 拉到 20[0-9-]+T[0-9:]+Z（[0-9]+ 秒前）$' \
-  && ok "U doctor row: $out" || bad "U status --roles rc=$rc: $out"
+  && st_ok_all "U doctor row: $out" || st_miss "U status --roles rc=$rc: $out"
 for bad_b in '{"roles":{"worker":3}}' '{"rules":{"r1":"x"}}' '{"rules":["x"]}' \
     '{"roles":{"worker":"---\nmcpServers:\n  gh: {env: {X: ghp_abcdefghijklmnopqrstuvwxyz0123}}\n---\n"}}' \
     "{\"roles\":{\"worker\":\"$(head -c 17000 /dev/zero | tr '\0' a)\"}}"; do
   printf '{"version":5,"prev":4,"bundle":%s}\n' "$bad_b" > "$WORK/u-bad.json"
   out=$(USEAM="cat $WORK/u-bad.json" ut alice person); rc=$?
   [ "$rc" = 2 ] && [ "$(j "$WORK/u-alice/c/person-bundle.json" "d['version']")" = 4 ] \
-    && ok "U refused, v4 kept: $(printf '%s' "$out" | cut -c1-80)" || bad "U not refused rc=$rc: $out"
+    && st_ok_all "U refused, v4 kept: $(printf '%s' "$out" | cut -c1-80)" || st_miss "U not refused rc=$rc: $out"
 done
 printf '%s\n' '{"version":5,"prev":4,"bundle":{"roles":{"steward":"---\nmodel: haiku\n---\n"}}}' > "$WORK/u-alice.json"
 out=$(USEAM='exit 7' ut alice sync --person-version 5); rc=$?
 out2=$(UWARN=999999 ut alice status --roles); rc2=$?
 [ "$(j "$WORK/u-alice/c/person-sync.json" "[d['hub_version'], d['rc']]")" = '[5, 1]' ] && [ "$rc2" = 0 ] \
   && printf '%s\n' "$out2" | grep -q '^入口 v5 · 本机 v4 .*入口已推 v5，本机还没拿到' \
-  && ok "U a push whose read failed: recorded, named, not yet a WARN" || bad "U push failed rc=$rc/$rc2: $out / $out2"
+  && st_ok_all "U a push whose read failed: recorded, named, not yet a WARN" || st_miss "U push failed rc=$rc/$rc2: $out / $out2"
 out=$(USEAM="cat $WORK/u-alice.json" ut alice sync --person-version 5); rc=$?
 out2=$(ut alice status --roles); rc2=$?
 [ "$rc" = 0 ] && [ "$rc2" = 0 ] && printf '%s\n' "$out2" | grep -q '^入口 v5 · 本机 v5 · 角色 steward · 拉到 ' \
   && [ "$(j "$WORK/u-alice/c/person-bundle.json" "d['bundle']['roles']['steward']")" = '"---\nmodel: haiku\n---\n"' ] \
-  && ok "U sync --person-version 5 → 入口 v5 = 本机 v5" || bad "U push rc=$rc/$rc2: $out / $out2"
+  && st_ok_all "U sync --person-version 5 → 入口 v5 = 本机 v5" || st_miss "U push rc=$rc/$rc2: $out / $out2"
 out=$(UWARN=-1 ut alice status --roles); rc=$?
-[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q '缓存超过' && ok "U a read older than FLEET_ROLES_WARN_SECS → WARN" || bad "U stale rc=$rc: $out"
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q '缓存超过' && st_ok_all "U a read older than FLEET_ROLES_WARN_SECS → WARN" || st_miss "U stale rc=$rc: $out"
 [ "$(j "$WORK/u-bob/c/person-bundle.json" "d['version']")" = 2 ] && [ "$(j "$WORK/u-bob/c/person-sync.json" "d.get('hub_version')")" = null ] \
-  && ok "U bob's login untouched by alice's push" || bad "U bob crossed: $(cat "$WORK/u-bob/c/"*.json)"
+  && st_ok_all "U bob's login untouched by alice's push" || st_miss "U bob crossed: $(cat "$WORK/u-bob/c/"*.json)"
 
-[ "$fail" = 0 ] && echo "fleet-agent-team-selftest: PASS" || echo "fleet-agent-team-selftest: FAIL"
-exit "$fail"
+st_done

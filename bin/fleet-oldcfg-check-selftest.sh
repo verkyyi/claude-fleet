@@ -47,8 +47,7 @@ SUT="$BIN/fleet-oldcfg-check.sh"
 for f in fleet-oldcfg-check.sh fleet-oldcfg-replay.py fleet-agent-team.py fleet-lib.sh fleet-client-core.sh tmux-dashboard-rows.sh fleet-cfg-restart.sh fleet-ui-lang.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s missing\n' "$BIN/$f" >&2; exit 2; }
 done
-command -v python3 >/dev/null 2>&1 || { echo 'fleet-oldcfg-check selftest: python3 absent — SKIP'; exit 0; }
-command -v tmux >/dev/null 2>&1 || { echo 'fleet-oldcfg-check selftest: tmux absent — SKIP'; exit 0; }
+st_need python3 tmux
 REAL_TMUX=$(command -v tmux)
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/oldcfgchk.XXXXXX")" || exit 2
@@ -64,10 +63,7 @@ echo '{}' > "$WORK/home/.claude/settings.json"; echo '{}' > "$WORK/home/.claude.
 EXP="$WORK/conf/global/agent-cfg.expected"
 BROKEN="$WORK/conf/global/agent-cfg.broken"
 
-CHECKS=0
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
-has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) st_fail "$1 — no [$3]" "$2";; esac; }
-hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) st_fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
+st_tally count
 
 # ============================================================================
 # A. the manifest a launch writes (the composer, against this repo's own tree)
@@ -82,25 +78,25 @@ M1=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "manifest" { print $2 }')
 FP1=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "fp" { print $2 }')
 [ -n "$M1" ] && [ -f "$M1" ] || st_fail "A: a Claude launch prints no manifest line / file" "$out"
 case "$M1" in "$WORK/conf/agentcfg/"*.json) ;; *) st_fail "A: the manifest is not under \$FLEET_CONF_DIR/agentcfg/" "$M1" ;; esac
-eq "A: the manifest records the fingerprint it was launched with" "$FP1" \
+st_eq "A: the manifest records the fingerprint it was launched with" "$FP1" \
    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fp"])' "$M1")"
-eq "A: …the mod's three tools" "mcp__fleet__fleet_await mcp__fleet__fleet_spawn mcp__fleet__fleet_status" \
+st_eq "A: …the mod's three tools" "mcp__fleet__fleet_await mcp__fleet__fleet_spawn mcp__fleet__fleet_status" \
    "$(python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1]))["tools"])))' "$M1")"
-has "A: …the fleet tool service among its MCP servers" \
+st_has "A: …the fleet tool service among its MCP servers" \
     "$(python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1]))["mcp"])))' "$M1")" "fleet"
-eq "A: …the fleet hook table (every event of hooks/settings-hooks.json)" \
+st_eq "A: …the fleet hook table (every event of hooks/settings-hooks.json)" \
    "$(python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1]))["hooks"])))' "$ROOT/hooks/settings-hooks.json")" \
    "$(python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1]))["hooks"])))' "$M1")"
 M2=$(compose claude | awk -F'\t' '$1 == "manifest" { print $2 }')
-eq "A: two launches of one start share one manifest (content-addressed)" "$M1" "$M2"
+st_eq "A: two launches of one start share one manifest (content-addressed)" "$M1" "$M2"
 r=$(bash "$SUT" "$M1" --new-dir "$ROOT" 2>&1); rc=$?
-eq "A: checked against its own tree the launch is ok" "ok" "$(printf '%s\n' "$r" | head -1)" "$r"
-eq "A: …exit 0" 0 "$rc"
+st_eq "A: checked against its own tree the launch is ok" "ok" "$(printf '%s\n' "$r" | head -1)" "$r"
+st_eq "A: …exit 0" 0 "$rc"
 MC=$(compose codex | awk -F'\t' '$1 == "manifest" { print $2 }')
 [ -n "$MC" ] && [ -f "$MC" ] || st_fail "A: a Codex launch prints no manifest"
-eq "A: a Codex session has no mod — tools null, never «new tools» for it" "None" \
+st_eq "A: a Codex session has no mod — tools null, never «new tools» for it" "None" \
    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tools"])' "$MC")"
-eq "A: …and it is ok against its own tree too" "ok" "$(bash "$SUT" "$MC" --new-dir "$ROOT" 2>&1 | head -1)"
+st_eq "A: …and it is ok against its own tree too" "ok" "$(bash "$SUT" "$MC" --new-dir "$ROOT" 2>&1 | head -1)"
 
 # ============================================================================
 # B. the check — a rig «new install» and hand-written starts
@@ -125,26 +121,26 @@ man mcp     "$STOP_H,$NEW_H" '["mcp__fleet__fleet_status","mcp__fleet__fleet_spa
 man nomod   "$STOP_H,$NEW_H" 'null' "$FLEETSRV"
 printf 'not json' > "$WORK/junk.json"
 chk() { OUT=$(bash "$SUT" "$WORK/$1.json" --new-dir "$NEW" 2>&1); RC=$?; V=$(printf '%s\n' "$OUT" | head -1); }
-chk ok;    eq "B: identical ⇒ ok" ok "$V" "$OUT"; eq "B: …exit 0" 0 "$RC"
-chk nomod; eq "B: no mod in the session (tools null) + the install's mod ⇒ still ok" ok "$V" "$OUT"
-chk stale; eq "B: only a new hook ⇒ stale" stale "$V" "$OUT"; eq "B: …exit 1" 1 "$RC"
-has "B: …naming the hook it lacks" "$OUT" "hook  changed  UserPromptSubmit"
-has "B: …and the command" "$OUT" "bin/new.sh"
-chk tool;  eq "B: a dropped mod tool ⇒ broken" broken "$V" "$OUT"; eq "B: …exit 2" 2 "$RC"
-has "B: …naming the tool" "$OUT" "tool  MISSING  mcp__fleet__fleet_await"
-has "B: …and what happens" "$OUT" "no tool.call hook answered"
-chk hook;  eq "B: a deleted hook script ⇒ broken" broken "$V" "$OUT"
-has "B: …naming the script" "$OUT" "bin/gone.sh not in the new tree"
-chk mcp;   eq "B: a gone MCP script ⇒ broken" broken "$V" "$OUT"
-has "B: …naming the server and the script" "$OUT" "mcp   MISSING  fleet"
-has "B: …" "$OUT" "fleet-gone.py not in the new tree"
-chk nope;  eq "B: a missing manifest ⇒ stale, never broken" stale "$V" "$OUT"; eq "B: …exit 1" 1 "$RC"
-has "B: …with a note" "$OUT" "no manifest at"
-chk junk;  eq "B: an unreadable manifest ⇒ stale" stale "$V" "$OUT"
-has "B: …with a note" "$OUT" "is not JSON"
+chk ok;    st_eq "B: identical ⇒ ok" ok "$V" "$OUT"; st_eq "B: …exit 0" 0 "$RC"
+chk nomod; st_eq "B: no mod in the session (tools null) + the install's mod ⇒ still ok" ok "$V" "$OUT"
+chk stale; st_eq "B: only a new hook ⇒ stale" stale "$V" "$OUT"; st_eq "B: …exit 1" 1 "$RC"
+st_has "B: …naming the hook it lacks" "$OUT" "hook  changed  UserPromptSubmit"
+st_has "B: …and the command" "$OUT" "bin/new.sh"
+chk tool;  st_eq "B: a dropped mod tool ⇒ broken" broken "$V" "$OUT"; st_eq "B: …exit 2" 2 "$RC"
+st_has "B: …naming the tool" "$OUT" "tool  MISSING  mcp__fleet__fleet_await"
+st_has "B: …and what happens" "$OUT" "no tool.call hook answered"
+chk hook;  st_eq "B: a deleted hook script ⇒ broken" broken "$V" "$OUT"
+st_has "B: …naming the script" "$OUT" "bin/gone.sh not in the new tree"
+chk mcp;   st_eq "B: a gone MCP script ⇒ broken" broken "$V" "$OUT"
+st_has "B: …naming the server and the script" "$OUT" "mcp   MISSING  fleet"
+st_has "B: …" "$OUT" "fleet-gone.py not in the new tree"
+chk nope;  st_eq "B: a missing manifest ⇒ stale, never broken" stale "$V" "$OUT"; st_eq "B: …exit 1" 1 "$RC"
+st_has "B: …with a note" "$OUT" "no manifest at"
+chk junk;  st_eq "B: an unreadable manifest ⇒ stale" stale "$V" "$OUT"
+st_has "B: …with a note" "$OUT" "is not JSON"
 j=$(bash "$SUT" "$WORK/tool.json" --new-dir "$NEW" --json 2>&1)
-eq "B: --json: one object with the verdict" broken "$(printf '%s\n' "$j" | python3 -c 'import json,sys; print(json.loads(sys.stdin.readline())["verdict"])')"
-r=$(bash "$SUT" 2>&1); eq "B: no manifest argument ⇒ usage, exit 3" 3 "$?"; has "B: …" "$r" "usage:"
+st_eq "B: --json: one object with the verdict" broken "$(printf '%s\n' "$j" | python3 -c 'import json,sys; print(json.loads(sys.stdin.readline())["verdict"])')"
+r=$(bash "$SUT" 2>&1); st_eq "B: no manifest argument ⇒ usage, exit 3" 3 "$?"; st_has "B: …" "$r" "usage:"
 
 # ============================================================================
 # C. the sweep — an isolated tmux server, real windows
@@ -169,45 +165,38 @@ WP=$(mk w-panel done OLD "$WORK/tool.json" 15); T set-option -w -t "$WP" @fleet_
 WS=$(mk w-stale done OLD "$WORK/stale.json" 17)
 sweep() { OUT=$(bash "$SUT" --sweep "$@" --new-dir "$NEW" -- "$S" 2>&1); RC=$?; }
 sweep --list
-eq "C: exit 2 — something is broken" 2 "$RC" "$OUT"
-has "C: --list names the broken window with window · repo · issue · state · what" "$OUT" "broken	$S	w-broken	acme/app	#11	done	tool mcp__fleet__fleet_await"
-has "C: …the looping stale one as looping" "$OUT" "looping	$S	w-loop	acme/app	#12	looping	stale, in a loop"
-has "C: …the idle stale one as stale" "$OUT" "stale	$S	w-stale	acme/app	#17	done	"
-has "C: …a window with no manifest as stale (the degenerate)" "$OUT" "stale	$S	w-noman	acme/app	#13	done	"
-hasnt "C: …never the current one" "$OUT" "w-ok"
-hasnt "C: …never a panel" "$OUT" "w-panel"
-hasnt "C: …and nothing but w-broken is broken" "$(printf '%s\n' "$OUT" | grep '^broken' | grep -v 'w-broken')" "broken"
-eq "C: agent-cfg.broken holds exactly the broken window" "$S	$WB	tool	tool mcp__fleet__fleet_await" "$(cat "$BROKEN")"
+st_eq "C: exit 2 — something is broken" 2 "$RC" "$OUT"
+st_has "C: --list names the broken window with window · repo · issue · state · what" "$OUT" "broken	$S	w-broken	acme/app	#11	done	tool mcp__fleet__fleet_await"
+st_has "C: …the looping stale one as looping" "$OUT" "looping	$S	w-loop	acme/app	#12	looping	stale, in a loop"
+st_has "C: …the idle stale one as stale" "$OUT" "stale	$S	w-stale	acme/app	#17	done	"
+st_has "C: …a window with no manifest as stale (the degenerate)" "$OUT" "stale	$S	w-noman	acme/app	#13	done	"
+st_hasnt "C: …never the current one" "$OUT" "w-ok"
+st_hasnt "C: …never a panel" "$OUT" "w-panel"
+st_hasnt "C: …and nothing but w-broken is broken" "$(printf '%s\n' "$OUT" | grep '^broken' | grep -v 'w-broken')" "broken"
+st_eq "C: agent-cfg.broken holds exactly the broken window" "$S	$WB	tool	tool mcp__fleet__fleet_await" "$(cat "$BROKEN")"
 for w in $WB $WL $WN $WO $WP $WS; do
-  eq "C: the sweep closed nothing ($w)" "$w" "$(T display-message -p -t "$w" '#{window_id}' 2>/dev/null)"
+  st_eq "C: the sweep closed nothing ($w)" "$w" "$(T display-message -p -t "$w" '#{window_id}' 2>/dev/null)"
 done
 st() { bash -c '. "$1/fleet-lib.sh"; fleet_cfg_expected_load; fleet_cfg_broken_load; fleet_cfg_state claude "$2" v2 "$3" "$4"; printf "%s" "$FCFG_STATE"' _ "$BIN" "$1" "$S" "$2"; }
-eq "C: fleet_cfg_state reads broken for the listed window" broken "$(st OLD "$WB")"
-eq "C: …stale for the looping one" stale "$(st OLD "$WL")"
-eq "C: …stale for the one with no manifest" stale "$(st OLD "$WN")"
-eq "C: …ok for the current one" ok "$(st NEW "$WO")"
-eq "C: …never broken without the session + window id (the old 3-arg call)" stale \
+st_eq "C: fleet_cfg_state reads broken for the listed window" broken "$(st OLD "$WB")"
+st_eq "C: …stale for the looping one" stale "$(st OLD "$WL")"
+st_eq "C: …stale for the one with no manifest" stale "$(st OLD "$WN")"
+st_eq "C: …ok for the current one" ok "$(st NEW "$WO")"
+st_eq "C: …never broken without the session + window id (the old 3-arg call)" stale \
    "$(bash -c '. "$1/fleet-lib.sh"; fleet_cfg_expected_load; fleet_cfg_broken_load; fleet_cfg_state claude OLD v2; printf "%s" "$FCFG_STATE"' _ "$BIN")"
 # the broken window reopened onto the new tree: the next sweep clears it
 T set-option -w -t "$WB" @agent_cfg NEW
 sweep
-eq "C: nothing broken ⇒ exit 0" 0 "$RC" "$OUT"
-eq "C: …and the file is emptied, not left stale" "" "$(cat "$BROKEN")"
+st_eq "C: nothing broken ⇒ exit 0" 0 "$RC" "$OUT"
+st_eq "C: …and the file is emptied, not left stale" "" "$(cat "$BROKEN")"
 T set-option -w -t "$WB" @agent_cfg OLD
-sweep; eq "C: …and back" 2 "$RC"
+sweep; st_eq "C: …and back" 2 "$RC"
 
 # ============================================================================
 # D. the rows producer — field 13 broken, the hub list's red word
 # ============================================================================
 US=$'\x1f'
-cat > "$WORK/bin/tmux" <<'SHIM'
-#!/bin/sh
-US=$(printf '\037'); lw=0; fmt=0
-for a in "$@"; do [ "$a" = list-windows ] && lw=1; case "$a" in *"$US"*) fmt=1 ;; esac; done
-[ "$lw" = 1 ] && [ "$fmt" = 1 ] && cat "$WLIST_FILE"
-exit 0
-SHIM
-chmod +x "$WORK/bin/tmux"
+st_fake_tmux_wlist "$WORK/bin"
 export WLIST_FILE="$WORK/wlist"
 # (each row on issue <idx>: a done row with no issue folds into 已结束, #2565)
 # The 27 WFMT fields (cfg-stale-selftest's fixture): w <idx> <name> <wid> <agent> <fp/ver>
@@ -221,30 +210,30 @@ w 1 BRK "$WB" '' OLD/v2
 w 2 OLD @8 '' OLD/v2
 w 3 NEW @9 '' NEW/v2
 s=$(side); h=$(hub)
-eq "D: the listed window's field 13 is broken" broken "$(f13 "$s" BRK)"
-eq "D: a stale one not on the list stays stale" stale "$(f13 "$s" OLD)"
-eq "D: a current one is ok" ok "$(f13 "$s" NEW)"
-has "D: the hub list draws 会坏·需重开 on the broken row" "$(printf '%s\n' "$h" | grep BRK)" "会坏·需重开"
-has "D: …配置旧 on the stale one" "$(printf '%s\n' "$h" | grep OLD)" "配置旧"
-hasnt "D: …never 会坏 on the stale one" "$(printf '%s\n' "$h" | grep OLD)" "会坏"
+st_eq "D: the listed window's field 13 is broken" broken "$(f13 "$s" BRK)"
+st_eq "D: a stale one not on the list stays stale" stale "$(f13 "$s" OLD)"
+st_eq "D: a current one is ok" ok "$(f13 "$s" NEW)"
+st_has "D: the hub list draws 会坏·需重开 on the broken row" "$(printf '%s\n' "$h" | grep BRK)" "会坏·需重开"
+st_has "D: …配置旧 on the stale one" "$(printf '%s\n' "$h" | grep OLD)" "配置旧"
+st_hasnt "D: …never 会坏 on the stale one" "$(printf '%s\n' "$h" | grep OLD)" "会坏"
 # the red: the broken row's word carries PAL_RED's escape, the stale one's PAL_YELLOW's
 rawh=$(PATH="$WORK/bin:$PATH" FLEET_SESSION=$S FZF_COLUMNS=160 bash "$BIN/tmux-dashboard-rows.sh" 2>/dev/null)
 red=$(bash -c '. "$1/fleet-palette.sh"; fleet_palette_load; fleet_palette_rgb "${PAL_RED:-}"; printf "%s" "$_fpr"' _ "$BIN")
 yel=$(bash -c '. "$1/fleet-palette.sh"; fleet_palette_load; fleet_palette_rgb "${PAL_YELLOW:-}"; printf "%s" "$_fpr"' _ "$BIN")
 if [ -n "$red" ] && [ -n "$yel" ]; then
-  has "D: the broken word is painted red" "$(printf '%s\n' "$rawh" | grep BRK)" "38;2;${red}m会坏·需重开"
-  has "D: the stale word is painted yellow" "$(printf '%s\n' "$rawh" | grep OLD)" "38;2;${yel}m配置旧"
+  st_has "D: the broken word is painted red" "$(printf '%s\n' "$rawh" | grep BRK)" "38;2;${red}m会坏·需重开"
+  st_has "D: the stale word is painted yellow" "$(printf '%s\n' "$rawh" | grep OLD)" "38;2;${yel}m配置旧"
 fi
 rm -f "$BROKEN"
 s2=$(side)
-eq "D: no broken file ⇒ the row is stale, byte for byte as before" stale "$(f13 "$s2" BRK)"
-eq "D: …the whole sidebar frame equal to the one with an empty list" "$(: > "$BROKEN"; side)" "$s2"
+st_eq "D: no broken file ⇒ the row is stale, byte for byte as before" stale "$(f13 "$s2" BRK)"
+st_eq "D: …the whole sidebar frame equal to the one with an empty list" "$(: > "$BROKEN"; side)" "$s2"
 rm -f "$BROKEN"
 
 # ============================================================================
 # E. the inventory and the word (the old client's sidebar view went with it, #3008)
 # ============================================================================
-eq "E: the English word" "breaks·reopen" "$(FLEET_UI_LANG=en bash -c '. "$1/fleet-ui-lang.sh"; fleet_ui_t sidebar_cfg_broken' _ "$BIN")"
+st_eq "E: the English word" "breaks·reopen" "$(FLEET_UI_LANG=en bash -c '. "$1/fleet-ui-lang.sh"; fleet_ui_t sidebar_cfg_broken' _ "$BIN")"
 out=$(python3 - "$BIN" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -257,7 +246,7 @@ assert x["cfg"] == "stale", x
 print("ok")
 PY
 )
-eq "E: another machine's cfg=broken is kept by the inventory reader" "ok" "$out"
+st_eq "E: another machine's cfg=broken is kept by the inventory reader" "ok" "$out"
 
 # ============================================================================
 # F. the idle reopen (fleet-cfg-restart.sh) counts and honours broken
@@ -268,12 +257,12 @@ tick() { FLEET_CFG_RESTART_MIGRATE="$FAKE" bash "$BIN/fleet-cfg-restart.sh" "$@"
 why() { bash -c '. "$1/fleet-lib.sh"; fleet_cfg_restart_why "$2" "$3"; echo "rc=$?"' _ "$BIN" "$S" "$1" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'; }
 # stale by fingerprint: w-loop, w-noman, w-stale, w-panel (cfg-restart skips
 # panels by NAME) = 4; broken: w-broken, counted apart
-eq "F: --counts <stale> <renew> <broken> — the broken one counted once, apart" "4 0 1" "$(tick --counts)"
-eq "F: a broken, done, idle session is reopened like a stale one" "rc=0" "$(why "$WB")"
-eq "F: the looping stale one never" "state:looping rc=1" "$(why "$WL")"
+st_eq "F: --counts <stale> <renew> <broken> — the broken one counted once, apart" "4 0 1" "$(tick --counts)"
+st_eq "F: a broken, done, idle session is reopened like a stale one" "rc=0" "$(why "$WB")"
+st_eq "F: the looping stale one never" "state:looping rc=1" "$(why "$WL")"
 l=$(tick --list)
-has "F: --list names the broken one to reopen" "$l" "$WB	w-broken	reopen"
+st_has "F: --list names the broken one to reopen" "$l" "$WB	w-broken	reopen"
 rm -f "$BROKEN"
-eq "F: no broken file ⇒ the two-kind counts as before, nothing broken" "5 0 0" "$(tick --counts)"
+st_eq "F: no broken file ⇒ the two-kind counts as before, nothing broken" "5 0 0" "$(tick --counts)"
 
 printf 'selftest PASS: fleet-oldcfg-check (%d checks) — 会坏·需重开 told from 配置旧 (#2076)\n' "$CHECKS"

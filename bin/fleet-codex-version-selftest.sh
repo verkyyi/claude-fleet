@@ -24,7 +24,7 @@ ROOT="$(cd "$BIN/.." && pwd)"
 for f in fleet-doctor.sh fleet-codex.sh fleet-codex-runtime.py fleet-lib.sh fleet-client-core.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
-command -v python3 >/dev/null 2>&1 || { echo 'selftest: python3 missing — skip'; exit 0; }
+st_need python3
 
 st_sandbox "${TMPDIR:-/tmp}/codex-version-selftest.XXXXXX" physical
 mkdir -p "$WORK/fake" "$WORK/conf" "$WORK/install/bin" "$WORK/install/conf" "$WORK/wt"

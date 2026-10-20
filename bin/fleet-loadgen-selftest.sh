@@ -26,8 +26,7 @@ LG="$BIN/fleet-loadgen.sh"
 [ -f "$LG" ] || { echo "selftest: $LG not found" >&2; exit 2; }
 
 TAG="st$$"
-CHECKS=0
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || st_fail "$1 — expected [$2], got [$3]"; }
+st_tally count
 cleanup() { bash "$LG" --stop "${TAG}a" >/dev/null 2>&1
             bash "$LG" --stop "${TAG}b" >/dev/null 2>&1
             bash "$LG" --stop "${TAG}c" >/dev/null 2>&1
@@ -60,14 +59,14 @@ export PATH="$SHIM:$PATH"
 # ============================================================================
 # 1. Caps + usage. A typo must not be able to ask for hours of load.
 # ============================================================================
-bash "$LG" 0 5 >/dev/null 2>&1;      eq "cap: zero burners refused"    2 "$?"
-bash "$LG" abc 5 >/dev/null 2>&1;    eq "cap: non-numeric n refused"   2 "$?"
-bash "$LG" 99999 5 >/dev/null 2>&1;  eq "cap: over MAX_PROCS refused"  2 "$?"
-bash "$LG" 1 99999 >/dev/null 2>&1;  eq "cap: over MAX_SECS refused"   2 "$?"
-bash "$LG" 1 5 --tag 'a b' >/dev/null 2>&1; eq "cap: bad tag refused"  2 "$?"
+bash "$LG" 0 5 >/dev/null 2>&1;      st_eq "cap: zero burners refused"    2 "$?"
+bash "$LG" abc 5 >/dev/null 2>&1;    st_eq "cap: non-numeric n refused"   2 "$?"
+bash "$LG" 99999 5 >/dev/null 2>&1;  st_eq "cap: over MAX_PROCS refused"  2 "$?"
+bash "$LG" 1 99999 >/dev/null 2>&1;  st_eq "cap: over MAX_SECS refused"   2 "$?"
+bash "$LG" 1 5 --tag 'a b' >/dev/null 2>&1; st_eq "cap: bad tag refused"  2 "$?"
 # The caps are knobs, so a raised one must actually raise.
 FLEET_LOADGEN_MAX_PROCS=2 bash "$LG" 3 2 >/dev/null 2>&1
-eq "cap: FLEET_LOADGEN_MAX_PROCS is honored" 2 "$?"
+st_eq "cap: FLEET_LOADGEN_MAX_PROCS is honored" 2 "$?"
 
 # ============================================================================
 # 2. THE invariant: SIGKILL the parent, burners still expire on their own.
@@ -80,8 +79,8 @@ wait "$par" 2>/dev/null
 
 # They must be orphaned and ALIVE first — otherwise the expiry proved below could
 # just be "the parent's death took them with it", which is not the claim.
-eq "orphan: burner survived the parent's SIGKILL" 1 "$(live "${TAG}a")"
-eq "orphan: burner reparented to init (PPID=1)" 1 \
+st_eq "orphan: burner survived the parent's SIGKILL" 1 "$(live "${TAG}a")"
+st_eq "orphan: burner reparented to init (PPID=1)" 1 \
    "$(bash "$LG" --status "${TAG}a" 2>/dev/null | grep -c 'ORPHANED (PPID=1)')"
 
 # …and then die by themselves, with NOTHING running that could clean them up.
@@ -97,25 +96,25 @@ st_count   # burner expired unattended
 # 3. --status / --stop round trip, on a deadline far too long to wait out.
 # ============================================================================
 bash "$LG" 2 600 --detach --tag "${TAG}b" >/dev/null 2>&1
-eq "status: --detach started 2 burners" 2 "$(live "${TAG}b")"
+st_eq "status: --detach started 2 burners" 2 "$(live "${TAG}b")"
 # --status must never list ITSELF: a naive `ps | grep <marker>` matches the grep,
 # and a --stop built on that would report phantom kills forever.
-eq "status: does not list its own scan" 2 \
+st_eq "status: does not list its own scan" 2 \
    "$(bash "$LG" --status "${TAG}b" 2>/dev/null | grep -c "${TAG}b")"
 bash "$LG" --stop "${TAG}b" >/dev/null 2>&1
-eq "stop: --stop reaped them"           0 "$(live "${TAG}b")"
+st_eq "stop: --stop reaped them"           0 "$(live "${TAG}b")"
 
 # ============================================================================
 # 4. Tag selection is exact. `t1` must not select `t10`, or one experiment's
 #    --stop silently ends another's.
 # ============================================================================
 bash "$LG" 1 600 --detach --tag "${TAG}10" >/dev/null 2>&1
-eq "tag: t10 is running"                1 "$(live "${TAG}10")"
-eq "tag: prefix t1 does NOT select t10" 0 "$(live "${TAG}1")"
+st_eq "tag: t10 is running"                1 "$(live "${TAG}10")"
+st_eq "tag: prefix t1 does NOT select t10" 0 "$(live "${TAG}1")"
 bash "$LG" --stop "${TAG}1" >/dev/null 2>&1
-eq "tag: --stop on the prefix spared t10" 1 "$(live "${TAG}10")"
+st_eq "tag: --stop on the prefix spared t10" 1 "$(live "${TAG}10")"
 bash "$LG" --stop "${TAG}10" >/dev/null 2>&1
-eq "tag: --stop on the exact tag reaped it" 0 "$(live "${TAG}10")"
+st_eq "tag: --stop on the exact tag reaped it" 0 "$(live "${TAG}10")"
 
 # ============================================================================
 # 5. `-- cmd` mode: the experiment's own exit status is the tool's, and the load
@@ -123,10 +122,10 @@ eq "tag: --stop on the exact tag reaped it" 0 "$(live "${TAG}10")"
 # ============================================================================
 t0=$(date +%s)
 bash "$LG" 1 600 --tag "${TAG}c" -- sh -c 'exit 7' >/dev/null 2>&1
-eq "cmd: exit status is the command's" 7 "$?"
+st_eq "cmd: exit status is the command's" 7 "$?"
 [ $(( $(date +%s) - t0 )) -lt 30 ] || st_fail "cmd: waited for the 600s deadline instead of the command"
 st_count
-eq "cmd: burners stopped with the command" 0 "$(live "${TAG}c")"
+st_eq "cmd: burners stopped with the command" 0 "$(live "${TAG}c")"
 
 # ============================================================================
 # 6. Host gates (issue #922). An `8 900` planned without a view of the box took
@@ -136,32 +135,32 @@ eq "cmd: burners stopped with the command" 0 "$(live "${TAG}c")"
 # ============================================================================
 count='sleep 1; bash "$0" --status "$1" 2>/dev/null | grep -c "^[0-9]"'
 out="$(SHIM_NCPU=8 SHIM_LOAD=16 bash "$LG" 1 5 --tag "${TAG}d" -- true 2>&1)"
-eq "gate: 2.0/core over the default 1/core refused, exit 3" 3 "$?"
+st_eq "gate: 2.0/core over the default 1/core refused, exit 3" 3 "$?"
 case "$out" in *"host busy"*FLEET_LOADGEN_LOAD_PER_CORE*--force*) st_count ;;
   *) st_fail "gate: refusal must name the load, the knob and --force — got [$out]" ;; esac
-eq "gate: a refusal started no burner" 0 "$(live "${TAG}d")"
+st_eq "gate: a refusal started no burner" 0 "$(live "${TAG}d")"
 SHIM_NCPU=8 SHIM_LOAD=7.9 bash "$LG" 1 2 -- true >/dev/null 2>&1
-eq "gate: under 1/core passes" 0 "$?"
+st_eq "gate: under 1/core passes" 0 "$?"
 SHIM_NCPU=8 SHIM_LOAD=16 FLEET_LOADGEN_LOAD_PER_CORE=0 bash "$LG" 1 2 -- true >/dev/null 2>&1
-eq "gate: FLEET_LOADGEN_LOAD_PER_CORE=0 turns it off" 0 "$?"
+st_eq "gate: FLEET_LOADGEN_LOAD_PER_CORE=0 turns it off" 0 "$?"
 SHIM_NCPU=8 SHIM_LOAD=16 FLEET_LOADGEN_LOAD_PER_CORE=3 bash "$LG" 1 2 -- true >/dev/null 2>&1
-eq "gate: a raised threshold is honored" 0 "$?"
+st_eq "gate: a raised threshold is honored" 0 "$?"
 SHIM_NCPU=8 SHIM_LOAD=16 bash "$LG" 1 2 --force -- true >/dev/null 2>&1
-eq "gate: --force passes a busy host" 0 "$?"
+st_eq "gate: --force passes a busy host" 0 "$?"
 FLEET_LOADGEN_MAX_PROCS=2 SHIM_LOAD=99 bash "$LG" 3 2 --force >/dev/null 2>&1
-eq "gate: --force never lifts the typo cap" 2 "$?"
+st_eq "gate: --force never lifts the typo cap" 2 "$?"
 
 err="$SHIM/clamp.err"
 got="$(SHIM_NCPU=2 bash "$LG" 3 30 --tag "${TAG}d" -- bash -c "$count" "$LG" "${TAG}d" 2>"$err")"
-eq "clamp: 3 burners on 2 cores run as ncpu/2 = 1" 1 "$got"
+st_eq "clamp: 3 burners on 2 cores run as ncpu/2 = 1" 1 "$got"
 grep -q 'clamped 3 burner(s) to 1' "$err" || st_fail "clamp: no stderr note — got [$(cat "$err")]"
 st_count
 got="$(SHIM_NCPU=2 FLEET_LOADGEN_CORE_PCT=100 bash "$LG" 3 30 --tag "${TAG}d" -- bash -c "$count" "$LG" "${TAG}d" 2>/dev/null)"
-eq "clamp: FLEET_LOADGEN_CORE_PCT=100 raises it to ncpu" 2 "$got"
+st_eq "clamp: FLEET_LOADGEN_CORE_PCT=100 raises it to ncpu" 2 "$got"
 got="$(SHIM_NCPU=2 bash "$LG" 3 30 --tag "${TAG}d" --force -- bash -c "$count" "$LG" "${TAG}d" 2>/dev/null)"
-eq "clamp: --force takes the full 3" 3 "$got"
+st_eq "clamp: --force takes the full 3" 3 "$got"
 got="$(SHIM_NCPU=1 bash "$LG" 1 30 --tag "${TAG}d" -- bash -c "$count" "$LG" "${TAG}d" 2>/dev/null)"
-eq "clamp: a 1-core host still gets 1 burner" 1 "$got"
-eq "clamp: every batch stopped with its command" 0 "$(live "${TAG}d")"
+st_eq "clamp: a 1-core host still gets 1 burner" 1 "$got"
+st_eq "clamp: every batch stopped with its command" 0 "$(live "${TAG}d")"
 
 printf 'selftest OK: fleet-loadgen (%s assertions — caps, SIGKILL-proof expiry, status/stop, tag exactness, -- cmd, host gates)\n' "$CHECKS"

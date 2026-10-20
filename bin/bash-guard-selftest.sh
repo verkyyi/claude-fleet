@@ -27,6 +27,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 GUARD="$BIN/../hooks/bash-guard.py"
 BASEGUARD="$BIN/../hooks/base-readonly-guard.py"
 [ -f "$GUARD" ]     || { printf 'selftest: %s not found\n' "$GUARD" >&2; exit 2; }
@@ -38,15 +39,14 @@ PY="$(command -v python3 2>/dev/null)"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/bash-guard-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
-fails=0
+FAIL=0
 # assert_exit <expected-code> <label> <hook> <json>   [env passed via caller]
 assert_exit() {
   local want="$1" label="$2" hook="$3" json="$4" got
   printf '%s' "$json" | "$PY" "$hook" >/dev/null 2>&1
   got=$?
   if [ "$got" != "$want" ]; then
-    printf 'FAIL: %s — expected exit %s, got %s\n' "$label" "$want" "$got" >&2
-    fails=$((fails + 1))
+    st_miss "$label — expected exit $want, got $got"
   fi
 }
 
@@ -59,8 +59,7 @@ assert_rewrite() {
   local label="$1" hook="$2" json="$3" want="$4" out got
   out=$(printf '%s' "$json" | "$PY" "$hook" 2>/dev/null); got=$?
   if [ "$got" != 0 ]; then
-    printf 'FAIL: %s — expected exit 0 with a rewrite, got %s\n' "$label" "$got" >&2
-    fails=$((fails + 1)); return
+    st_miss "$label — expected exit 0 with a rewrite, got $got"; return
   fi
   printf '%s' "$out" | "$PY" -c '
 import json,sys
@@ -70,8 +69,7 @@ assert d["permissionDecision"]=="allow", "rewrite must decide allow"
 cmd=d["updatedInput"]["command"]
 assert sys.argv[1] in cmd, "rewrite missing %r" % sys.argv[1]
 ' "$want" 2>/dev/null || {
-    printf 'FAIL: %s — malformed/incomplete rewrite payload\n' "$label" >&2
-    fails=$((fails + 1)); }
+    st_miss "$label — malformed/incomplete rewrite payload"; }
 }
 
 # assert_no_rewrite <label> <hook> <json> — allowed AND left verbatim (no payload).
@@ -79,8 +77,7 @@ assert_no_rewrite() {
   local label="$1" hook="$2" json="$3" out
   out=$(printf '%s' "$json" | "$PY" "$hook" 2>/dev/null)
   if [ -n "$out" ]; then
-    printf 'FAIL: %s — expected a verbatim allow, got a rewrite\n' "$label" >&2
-    fails=$((fails + 1))
+    st_miss "$label — expected a verbatim allow, got a rewrite"
   fi
 }
 
@@ -120,7 +117,7 @@ hint=$(printf '%s' "$(bash_json "$(jstr 'rm -f $P/*')")" | "$PY" "$GUARD" 2>&1 >
 case "$hint" in
   *'"${P:?}"/*'*) ;;
   *) printf 'FAIL: rm $P/* deny must carry the "${P:?}"/* rewrite hint — got: %s\n' "$hint" >&2
-     fails=$((fails + 1)) ;;
+     FAIL=$((FAIL + 1)) ;;
 esac
 # ALLOW: a guarded expansion, a non-empty default, a literal, a later position,
 # git rm, a single-quoted literal, and an rm inside a quoted message
@@ -181,7 +178,7 @@ assert_exit 2 "rm -rf in a subst"       "$GUARD" "$(bash_json "$(jstr 'echo "$(c
 # hermetic — `fleet-x` owns a conf here, `scratch` deliberately does not.
 export FLEET_CONF_DIR="$TMP/conf"
 mkdir -p "$FLEET_CONF_DIR/fleets/fleet-x" && : > "$FLEET_CONF_DIR/fleets/fleet-x/conf"
-( fails=0; export FLEET_MAIN="$TMP/repo"; unset TMUX
+( FAIL=0; export FLEET_MAIN="$TMP/repo"; unset TMUX
   assert_exit 2 "send-keys ambient fleet"   "$GUARD" "$(bash_json "$(jstr 'tmux send-keys -t win Enter')")"
   assert_exit 2 "send-keys -L a fleet"      "$GUARD" "$(bash_json "$(jstr 'tmux -L fleet-x send-keys -t win C-c')")"
   # ALLOW: the isolated-socket test idiom CLAUDE.md prescribes ("test tmux
@@ -201,10 +198,10 @@ mkdir -p "$FLEET_CONF_DIR/fleets/fleet-x" && : > "$FLEET_CONF_DIR/fleets/fleet-x
 tmux send-keys -t x Enter
 EOF
 chmod +x /tmp/s.sh')")"
-  exit $fails ); rc=$?; fails=$((fails + rc))
-( fails=0; export FLEET_MAIN="$TMP/repo" FLEET_ALLOW_SENDKEYS=1; unset TMUX
+  exit $FAIL ); rc=$?; FAIL=$((FAIL + rc))
+( FAIL=0; export FLEET_MAIN="$TMP/repo" FLEET_ALLOW_SENDKEYS=1; unset TMUX
   assert_exit 0 "send-keys + env hatch"     "$GUARD" "$(bash_json "$(jstr 'tmux send-keys -t win Enter')")"
-  exit $fails ); rc=$?; fails=$((fails + rc))
+  exit $FAIL ); rc=$?; FAIL=$((FAIL + rc))
 # ALLOW: a script wrapping send-keys — the hook never sees the subprocess
 assert_exit 0 "bash cycle script"   "$GUARD" "$(bash_json "$(jstr 'bash ~/.claude/fleet/bin/fleet-handoff-cycle.sh')")"
 # ALLOW: unrelated tmux (a read/list is not send-keys)
@@ -214,10 +211,10 @@ assert_exit 0 "send-keys quoted lit" "$GUARD" "$(bash_json "$(jstr 'tmux set-buf
 
 # A raw gh issue-comment passes untouched (issue #4898): the rewrite onto
 # comment wrapper left (#4898).
-( fails=0; export FLEET_MAIN="$TMP/repo"; unset TMUX
+( FAIL=0; export FLEET_MAIN="$TMP/repo"; unset TMUX
   assert_no_rewrite "gh comment verbatim"   "$GUARD" "$(bash_json "$(jstr 'gh issue comment 483 --body x')")"
   assert_exit 0 "gh comment allowed"        "$GUARD" "$(bash_json "$(jstr 'gh issue comment 483 --body "done"')")"
-  exit $fails ); rc=$?; fails=$((fails + rc))
+  exit $FAIL ); rc=$?; FAIL=$((FAIL + rc))
 
 # fail OPEN on malformed input, and no-op on a non-Bash tool
 assert_exit 0 "malformed json"      "$GUARD" 'not json at all'
@@ -225,9 +222,9 @@ assert_exit 0 "non-Bash tool"       "$GUARD" '{"tool_name":"Read","tool_input":{
 
 # FLEET_BASE_BRANCH extends the protected set (subshell keeps the export local;
 # reset fails=0 so `exit $fails` reports only THIS subshell's count).
-( fails=0; export FLEET_BASE_BRANCH=develop
+( FAIL=0; export FLEET_BASE_BRANCH=develop
   assert_exit 2 "push -f develop"   "$GUARD" "$(bash_json "$(jstr 'git push -f origin develop')")"
-  exit $fails ); rc=$?; fails=$((fails + rc))
+  exit $FAIL ); rc=$?; FAIL=$((FAIL + rc))
 
 # …and the CONF is where a real fleet's base lives (issue #561): nothing exports
 # FLEET_BASE_BRANCH into a pane, so with an EMPTY env the rail must resolve it via
@@ -238,15 +235,15 @@ cat > "$TMP/stub-base/fleet-lib.sh" <<'STUB'
 fleet_current_session() { printf 'fleet-x'; }
 fleet_load_conf()       { FLEET_BASE_BRANCH=develop; }
 STUB
-( fails=0; unset FLEET_BASE_BRANCH; export TMUX='fake,1,0' FLEET_LIB="$TMP/stub-base/fleet-lib.sh"
+( FAIL=0; unset FLEET_BASE_BRANCH; export TMUX='fake,1,0' FLEET_LIB="$TMP/stub-base/fleet-lib.sh"
   assert_exit 2 "push -f develop (base from the CONF, env empty)" "$GUARD" "$(bash_json "$(jstr 'git push -f origin develop')")"
   assert_exit 2 "push -f master still blocked alongside"         "$GUARD" "$(bash_json "$(jstr 'git push -f origin master')")"
   assert_exit 0 "push -f a feature branch stays allowed"          "$GUARD" "$(bash_json "$(jstr 'git push -f origin feature-x')")"
-  exit $fails ); rc=$?; fails=$((fails + rc))
+  exit $FAIL ); rc=$?; FAIL=$((FAIL + rc))
 # Outside tmux (no fleet) the conf is never consulted: develop is just a branch.
-( fails=0; unset FLEET_BASE_BRANCH; unset TMUX; export FLEET_LIB="$TMP/stub-base/fleet-lib.sh"
+( FAIL=0; unset FLEET_BASE_BRANCH; unset TMUX; export FLEET_LIB="$TMP/stub-base/fleet-lib.sh"
   assert_exit 0 "push -f develop outside tmux (no fleet → no conf)" "$GUARD" "$(bash_json "$(jstr 'git push -f origin develop')")"
-  exit $fails ); rc=$?; fails=$((fails + rc))
+  exit $FAIL ); rc=$?; FAIL=$((FAIL + rc))
 
 # Local overlay: a present overlay's block() denies; a broken overlay fails OPEN.
 mkdir -p "$TMP/home/.claude/hooks"
@@ -255,16 +252,16 @@ def check_segment(seg, ctx):
     if ctx.cmd_is(seg, "frobnicate"):
         ctx.block("operator rule: frobnicate is forbidden")
 PYEOF
-( fails=0; export HOME="$TMP/home"
+( FAIL=0; export HOME="$TMP/home"
   assert_exit 2 "overlay blocks"    "$GUARD" "$(bash_json "$(jstr 'frobnicate --now')")"
   assert_exit 0 "overlay passes"    "$GUARD" "$(bash_json "$(jstr 'ls -la')")"
-  exit $fails ); rc=$?; fails=$((fails + rc))
+  exit $FAIL ); rc=$?; FAIL=$((FAIL + rc))
 
 printf 'def check_segment(seg, ctx):\n    raise RuntimeError("boom")\n' \
   > "$TMP/home/.claude/hooks/bash-guard-local.py"
-( fails=0; export HOME="$TMP/home"
+( FAIL=0; export HOME="$TMP/home"
   assert_exit 0 "broken overlay → open" "$GUARD" "$(bash_json "$(jstr 'ls -la')")"
-  exit $fails ); rc=$?; fails=$((fails + rc))
+  exit $FAIL ); rc=$?; FAIL=$((FAIL + rc))
 
 # ---------------------------------------------------------------------------
 # base-readonly-guard.py — deny writes into the fleet base checkout
@@ -272,7 +269,7 @@ printf 'def check_segment(seg, ctx):\n    raise RuntimeError("boom")\n' \
 BASE="$TMP/repo"; mkdir -p "$BASE" "$TMP/repo-issue-5" "$TMP/elsewhere"
 edit_json() { printf '{"tool_name":"%s","tool_input":{"%s":%s}}' "$1" "$2" "$(jstr "$3")"; }
 
-( fails=0; export FLEET_MAIN="$BASE"; unset TMUX
+( FAIL=0; export FLEET_MAIN="$BASE"; unset TMUX
   # BLOCK: any write into the base checkout
   assert_exit 2 "edit base file"    "$BASEGUARD" "$(edit_json Edit   file_path "$BASE/bin/x.sh")"
   assert_exit 2 "write base file"   "$BASEGUARD" "$(edit_json Write  file_path "$BASE/README.md")"
@@ -319,12 +316,12 @@ edit_json() { printf '{"tool_name":"%s","tool_input":{"%s":%s}}' "$1" "$2" "$(js
 *** End Patch")"
   assert_exit 0 "patch: no targets"               "$BASEGUARD" "$(patch_json "$BASE" "*** Begin Patch
 *** End Patch")"
-  exit $fails ); rc=$?; fails=$((fails + rc))
+  exit $FAIL ); rc=$?; FAIL=$((FAIL + rc))
 
 # Not in a fleet (no FLEET_MAIN, no $TMUX) → nothing to protect → allow
-( fails=0; unset FLEET_MAIN; unset TMUX
+( FAIL=0; unset FLEET_MAIN; unset TMUX
   assert_exit 0 "no fleet → allow"  "$BASEGUARD" "$(edit_json Edit file_path "$BASE/bin/x.sh")"
-  exit $fails ); rc=$?; fails=$((fails + rc))
+  exit $FAIL ); rc=$?; FAIL=$((FAIL + rc))
 
 # ---------------------------------------------------------------------------
 # artifact-guard.py — a fleet session never PUBLISHES an Artifact (issue #526)
@@ -336,16 +333,16 @@ edit_json() { printf '{"tool_name":"%s","tool_input":{"%s":%s}}' "$1" "$2" "$(js
 # the guard turns every publish into a pointer at it, and leaves reading /
 # listing / commenting on artifacts others shared alone.
 ARTGUARD="$BIN/../hooks/artifact-guard.py"
-if [ ! -f "$ARTGUARD" ]; then printf 'FAIL: %s not found\n' "$ARTGUARD" >&2; fails=$((fails + 1)); fi
+if [ ! -f "$ARTGUARD" ]; then st_miss "$ARTGUARD not found"; fi
 art_json() { printf '{"tool_name":"Artifact","tool_input":%s}' "$1"; }
-( fails=0; unset FLEET_ALLOW_ARTIFACT
+( FAIL=0; unset FLEET_ALLOW_ARTIFACT
   # BLOCK: a publish — the default action, spelled out, or a redeploy to an existing url
   assert_exit 2 "artifact publish (default action)"   "$ARTGUARD" "$(art_json '{"file_path":"/tmp/report.html","favicon":"📊"}')"
   assert_exit 2 "artifact publish (explicit)"         "$ARTGUARD" "$(art_json '{"action":"publish","file_path":"/tmp/report.html"}')"
   assert_exit 2 "artifact publish (redeploy to url)"  "$ARTGUARD" "$(art_json '{"file_path":"/tmp/r.html","url":"https://claude.ai/artifacts/x"}')"
   # the refusal must TELL the model what to do instead — the show / open tools
   msg=$(printf '%s' "$(art_json '{"action":"publish","file_path":"/tmp/r.html"}')" | "$PY" "$ARTGUARD" 2>&1 >/dev/null)
-  case "$msg" in *fleet-show.sh*) ;; *) printf 'FAIL: refusal must point at fleet-show.sh (got: %s)\n' "$msg" >&2; fails=$((fails + 1)) ;; esac
+  case "$msg" in *fleet-show.sh*) ;; *) st_miss "refusal must point at fleet-show.sh (got: $msg)" ;; esac
   # ALLOW: reading / listing / commenting on artifacts others shared
   for a in read list comments reply resolve status watch unwatch read_db list_assets read_asset; do
     assert_exit 0 "artifact $a allowed" "$ARTGUARD" "$(art_json "{\"action\":\"$a\",\"url\":\"https://claude.ai/artifacts/x\"}")"
@@ -353,11 +350,11 @@ art_json() { printf '{"tool_name":"Artifact","tool_input":%s}' "$1"; }
   # ALLOW: other tools, malformed input (fail open)
   assert_exit 0 "non-artifact tool"  "$ARTGUARD" '{"tool_name":"Write","tool_input":{"file_path":"/tmp/x.html"}}'
   assert_exit 0 "artguard bad json"  "$ARTGUARD" 'nope'
-  exit $fails ); rc=$?; fails=$((fails + rc))
+  exit $FAIL ); rc=$?; FAIL=$((FAIL + rc))
 # the operator's escape hatch
-( fails=0; export FLEET_ALLOW_ARTIFACT=1
+( FAIL=0; export FLEET_ALLOW_ARTIFACT=1
   assert_exit 0 "FLEET_ALLOW_ARTIFACT=1 → publish allowed" "$ARTGUARD" "$(art_json '{"action":"publish","file_path":"/tmp/r.html"}')"
-  exit $fails ); rc=$?; fails=$((fails + rc))
+  exit $FAIL ); rc=$?; FAIL=$((FAIL + rc))
 
 # BLOCK: a pkill/killall loose enough to take down OTHER sessions' processes. The
 # 2026-10-03 incident: `pkill -f "cat" -P $$` — BSD pkill reads `-P $$` after the
@@ -408,11 +405,11 @@ direct() {   # direct <want-exit> <label> <json> [<mode>] — a worker seat unle
     [ -n "${4:-}" ] && export FLEET_DIRECT_SCRIPTS="$4"
     # shellcheck disable=SC2163  # DIRECT_ENV holds NAME=value — export the assignment it carries
     [ -n "${DIRECT_ENV:-}" ] && export "$DIRECT_ENV"
-    fails=0; assert_exit "$1" "direct: $2" "$GUARD" "$3"; exit "$fails" ) || fails=$((fails + 1))
+    FAIL=0; assert_exit "$1" "direct: $2" "$GUARD" "$3"; exit "$FAIL" ) || FAIL=$((FAIL + 1))
 }
 logged() {   # logged <label> <want-lines> <grep-pattern>
   local n; n=$(grep -c -- "$3" "$DLOG" 2>/dev/null); n=${n:-0}
-  [ "$n" = "$2" ] || { printf 'FAIL: direct: %s — %s log line(s) matching %s, want %s\n' "$1" "$n" "$3" "$2" >&2; fails=$((fails + 1)); }
+  [ "$n" = "$2" ] || { st_miss "direct: $1 — $n log line(s) matching $3, want $2"; }
 }
 CMT="$LIVE/fleet-report-parent.sh --state merged --summary secret-body-text"
 # Log mode (the default): allowed, one line per call naming script + tool, never the command.
@@ -434,7 +431,7 @@ logged "every refusal is logged" 7 $'\tblocked\t'
 out=$( printf '%s' "$(bash_json "$(jstr "$LIVE/fleet-pr-verdict.sh 9")")" | HOME="$TMP/direct-home" FLEET_LIB="$TMP/direct-stub/fleet-lib.sh" \
        FLEET_MCP_BYPASS_LOG="$DLOG" FLEET_DIRECT_SCRIPTS=block STUB_SEAT=worker "$PY" "$GUARD" 2>&1 >/dev/null )
 case "$out" in *mcp__fleet__pr_verdict*FLEET_ALLOW_DIRECT_SCRIPTS=1*) : ;;
-  *) printf 'FAIL: direct: the refusal must name the tool + the hatch, got: %s\n' "$out" >&2; fails=$((fails + 1)) ;; esac
+  *) st_miss "direct: the refusal must name the tool + the hatch, got: $out" ;; esac
 # Block mode from the machine's fleet.conf (no env).
 printf 'FLEET_DIRECT_SCRIPTS=block   # C10 switched\n' > "$TMP/direct-conf/fleet.conf"
 direct 2 "block mode read from fleet.conf" "$(bash_json "$(jstr "$CMT")")"
@@ -477,7 +474,7 @@ STUB_SEAT='' direct 0 "mcp fallback: operator seat passes, unlogged" "$(mcp_json
 direct 0 "mcp fallback: mode off, unlogged" "$(mcp_json mcp__fleet__fleet_spawn)" off
 logged "mcp fallback: operator seat / off add no line" 3 $'\tfallback\t'
 # Wiring: the Claude hook table routes the retired names here; Codex drops the group.
-"$PY" - "$BIN/../hooks/settings-hooks.json" "$BIN/../hooks/codex-map.json" <<'PY' || fails=$((fails + 1))
+"$PY" - "$BIN/../hooks/settings-hooks.json" "$BIN/../hooks/codex-map.json" <<'PY' || FAIL=$((FAIL + 1))
 import json, sys
 d = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
 m = "mcp__fleet__fleet_status|mcp__fleet__fleet_spawn|mcp__fleet__fleet_await"
@@ -486,9 +483,4 @@ ok = ok and json.load(open(sys.argv[2]))["matchers"].get(m, "absent") is None
 sys.exit(0 if ok else print("FAIL: direct: the retired-tool matcher is not wired to bash-guard.py (or not dropped for Codex)", file=sys.stderr) or 1)
 PY
 
-if [ "$fails" -ne 0 ]; then
-  printf '\nbash-guard-selftest: %s case(s) FAILED\n' "$fails" >&2
-  exit 1
-fi
-printf 'bash-guard-selftest: all cases passed\n'
-exit 0
+st_done

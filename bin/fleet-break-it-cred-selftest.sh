@@ -32,10 +32,10 @@
 # narrows to those ids.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 DOC="$ROOT/docs/dev/BREAK-IT.md"
-command -v python3 >/dev/null 2>&1 || { printf 'fleet-break-it-cred: python3 absent — SKIP\n'; exit 0; }
-command -v curl >/dev/null 2>&1 || { printf 'fleet-break-it-cred: curl absent — SKIP\n'; exit 0; }
+st_need python3 curl
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/brkc.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"

@@ -48,19 +48,17 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SL="$BIN/../conf/statusline.sh"
 [ -f "$SL" ] || { printf 'selftest: %s missing\n' "$SL" >&2; exit 2; }
 if ! command -v jq >/dev/null 2>&1; then
   printf 'selftest: SKIP — jq not on PATH (the status line is jq-gated)\n'; exit 0
 fi
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/statusline.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/statusline.XXXXXX"
 trap 'exit 130' INT TERM HUP
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/inst/conf" "$WORK/stub" "$WORK/home" "$WORK/cfg/fleets/fleet-x" "$WORK/cfg/fleets/fleet-y"
 cp "$SL" "$WORK/inst/conf/statusline.sh"
@@ -99,39 +97,39 @@ TS='[0-9]{10}'
 
 # --- A: a full render ---------------------------------------------------------
 out=$(printf '%s' "$FULL" | render)
-[ -z "$out" ] || fail "A: the status line must print nothing" "$(printf '%q' "$out")"
-[ ! -s "$ERR" ] || fail "A: stderr must be empty" "$(cat "$ERR")"
-[ ! -s "$GITLOG" ] || fail "A: git must never run" "$(cat "$GITLOG")"
-[ "$(calls)" = 1 ] || fail "A: expected ONE tmux write chain, got $(calls)" "$(log)"
+[ -z "$out" ] || st_fail "A: the status line must print nothing" "$(printf '%q' "$out")"
+[ ! -s "$ERR" ] || st_fail "A: stderr must be empty" "$(cat "$ERR")"
+[ ! -s "$GITLOG" ] || st_fail "A: git must never run" "$(cat "$GITLOG")"
+[ "$(calls)" = 1 ] || st_fail "A: expected ONE tmux write chain, got $(calls)" "$(log)"
 grep -Eq "^set-window-option -t %1 @ctx_pct 42 ; set-window-option -t %1 @ctx_limit 200000 ; set-window-option -t %1 @ctx_band ok ; set-window-option -t %1 @ctx_left 58 ; set-window-option -t %1 @ctx_ts $TS ; set-window-option -t %1 @model Opus 5\\.5 ; set-window-option -t %1 @effort high ; set-window-option -t %1 @rl5h 12 ; set-window-option -t %1 @rl7d 2 ; set-window-option -t %1 @rl_reset 1791031200 1791554400 ; set-window-option -t %1 @rl_ts $TS ; set-window-option -u -t %1 @rl_src\$" "$TMUXLOG" \
-  || fail "A: the chain must stamp ctx (+ left + ts) → model/effort → rl, in order" "$(log)"
-ok "A full render: silent, no git, one chain with every stamp"
+  || st_fail "A: the chain must stamp ctx (+ left + ts) → model/effort → rl, in order" "$(log)"
+st_pass "A full render: silent, no git, one chain with every stamp"
 
 # --- B: nothing changed -------------------------------------------------------
 out=$(printf '%s' "$FULL" | FAKE_CUR="$CUR_FULL" render)
-[ -z "$out" ] && [ "$(calls)" = 1 ] || fail "B: unchanged values + rate limits → exactly the rl chain" "$(log)"
-grep -Eq '^set-window-option -t %1 @rl5h 12 ; ' "$TMUXLOG" || fail "B: the chain must START with the rl set (nothing else changed)" "$(log)"
-grep -q '@ctx\|@model\|@effort' "$TMUXLOG" && fail "B: unchanged ctx/model/effort must not be re-written" "$(log)"
+[ -z "$out" ] && [ "$(calls)" = 1 ] || st_fail "B: unchanged values + rate limits → exactly the rl chain" "$(log)"
+grep -Eq '^set-window-option -t %1 @rl5h 12 ; ' "$TMUXLOG" || st_fail "B: the chain must START with the rl set (nothing else changed)" "$(log)"
+grep -q '@ctx\|@model\|@effort' "$TMUXLOG" && st_fail "B: unchanged ctx/model/effort must not be re-written" "$(log)"
 out=$(printf '%s' "$NORL" | FAKE_CUR="$CUR_FULL" render)
-[ -z "$out" ] && [ "$(calls)" = 0 ] || fail "B: unchanged values, no rate limits → no tmux write at all" "$(log)"
-ok "B unchanged: only the rl set; without rate limits, no write"
+[ -z "$out" ] && [ "$(calls)" = 0 ] || st_fail "B: unchanged values, no rate limits → no tmux write at all" "$(log)"
+st_pass "B unchanged: only the rl set; without rate limits, no write"
 
 # --- C: only what changed -----------------------------------------------------
 printf '%s' '{"model":{"display_name":"Opus 5.5"},"effort":{"level":"high"},"context_window":{"used_percentage":70,"context_window_size":200000}}' \
   | FAKE_CUR="$CUR_FULL" render
 grep -Eq "^set-window-option -t %1 @ctx_pct 70 ; set-window-option -t %1 @ctx_band watch ; set-window-option -t %1 @ctx_left 30 ; set-window-option -t %1 @ctx_ts $TS\$" "$TMUXLOG" \
-  || fail "C: a new % must write @ctx_pct + @ctx_band + @ctx_left + @ctx_ts only" "$(log)"
+  || st_fail "C: a new % must write @ctx_pct + @ctx_band + @ctx_left + @ctx_ts only" "$(log)"
 printf '%s' '{"model":{"display_name":"Haiku 4.5"},"context_window":{"used_percentage":42,"context_window_size":200000}}' \
   | FAKE_CUR="$CUR_FULL" render
 [ "$(log)" = 'set-window-option -t %1 @model Haiku 4.5 ; set-window-option -u -t %1 @effort' ] \
-  || fail "C: a model without an effort level must write @model and UNSET @effort" "$(log)"
+  || st_fail "C: a model without an effort level must write @model and UNSET @effort" "$(log)"
 printf '%s' '{"context_window":{"used_percentage":42,"context_window_size":200000}}' | FAKE_CUR="$CUR_FULL" render
-[ "$(calls)" = 0 ] || fail "C: no model in the payload must touch neither @model nor @effort" "$(log)"
+[ "$(calls)" = 0 ] || st_fail "C: no model in the payload must touch neither @model nor @effort" "$(log)"
 printf '%s' '{"model":{"display_name":"Opus 5.5"},"effort":{"level":"max"}}' | FAKE_CUR="$CUR_FULL" render
-[ "$(log)" = 'set-window-option -t %1 @effort max' ] || fail "C: no context_window must touch no @ctx_*, and write just the changed @effort" "$(log)"
+[ "$(log)" = 'set-window-option -t %1 @effort max' ] || st_fail "C: no context_window must touch no @ctx_*, and write just the changed @effort" "$(log)"
 printf '%s' '{"model":{"display_name":"Opus 5.5"},"effort":{"level":"high"},"context_window":{"used_percentage":42}}' | FAKE_CUR="$CUR_FULL" render
-[ "$(calls)" = 0 ] || fail "C: a % without a size must not unset @ctx_limit" "$(log)"
-ok "C only the changed stamps are written; effort unset for a model without one"
+[ "$(calls)" = 0 ] || st_fail "C: a % without a size must not unset @ctx_limit" "$(log)"
+st_pass "C only the changed stamps are written; effort unset for a model without one"
 
 # --- D: the band and the handoff lines ------------------------------------------
 # band_of <pct> [size] [VAR=val …] → the @ctx_band the render stamps
@@ -143,31 +141,31 @@ band_of() {
 }
 expect() { # <want> <pct> [size] [VAR=val …]
   local want="$1"; shift; local got; got=$(band_of "$@")
-  [ "$got" = "$want" ] || fail "D: band for % $1 ($*) should be $want, got '$got'" "$(log)"
+  [ "$got" = "$want" ] || st_fail "D: band for % $1 ($*) should be $want, got '$got'" "$(log)"
 }
 expect ok 49;  expect watch 50;  expect watch 79;  expect handoff 80
-ok "D nothing set: advisory 50 / 80 bands, no automatic handoff policy"
+st_pass "D nothing set: advisory 50 / 80 bands, no automatic handoff policy"
 expect ok 49 200000 FLEET_AUTO_HANDOFF_PCT=0; expect watch 50 200000 FLEET_AUTO_HANDOFF_PCT=0; expect handoff 80 200000 FLEET_AUTO_HANDOFF_PCT=0
-ok "D auto-handoff 0: the 50 / 80 fallback bands"
+st_pass "D auto-handoff 0: the 50 / 80 fallback bands"
 expect handoff 30 200000 FLEET_AUTO_HANDOFF_PCT=30; expect watch 15 200000 FLEET_AUTO_HANDOFF_PCT=30; expect ok 14 200000 FLEET_AUTO_HANDOFF_PCT=30
-ok "D the environment is the floor: PCT=30 → 15 / 30"
+st_pass "D the environment is the floor: PCT=30 → 15 / 30"
 printf 'FLEET_AUTO_HANDOFF_PCT=60\n' > "$WORK/inst/fleet.conf"
 expect ok 44; expect watch 45; expect handoff 60
 expect ok 30 200000 FLEET_AUTO_HANDOFF_PCT=30
-ok "D the install's fleet.conf (60) wins over the environment"
+st_pass "D the install's fleet.conf (60) wins over the environment"
 printf '# x\nexport FLEET_AUTO_HANDOFF_PCT="70"   # quoted, exported, commented\n' > "$WORK/cfg/fleet.settings"
 expect ok 54; expect watch 55; expect watch 69; expect handoff 70
-ok "D fleet.settings (70) wins over fleet.conf; quotes + comment stripped"
+st_pass "D fleet.settings (70) wins over fleet.conf; quotes + comment stripped"
 printf "FLEET_AUTO_HANDOFF_PCT='90'\n" > "$WORK/cfg/fleets/fleet-y/conf"
 expect handoff 70
-ok "D another fleet's overlay (fleet-y) is ignored"
+st_pass "D another fleet's overlay (fleet-y) is ignored"
 printf "FLEET_AUTO_HANDOFF_PCT='50'\n" > "$WORK/cfg/fleets/fleet-x/conf"
 expect ok 34; expect watch 35; expect handoff 50
-ok "D this fleet's fleets/fleet-x/conf (50) wins over fleet.settings"
+st_pass "D this fleet's fleets/fleet-x/conf (50) wins over fleet.settings"
 rm "$WORK/cfg/fleets/fleet-x/conf"; printf 'FLEET_AUTO_HANDOFF_PCT=40\n' > "$WORK/cfg/fleet-x.conf"
 expect ok 24; expect watch 25; expect handoff 40
 rm "$WORK/cfg/fleet-x.conf"
-ok "D a legacy <sess>.conf overlay counts too"
+st_pass "D a legacy <sess>.conf overlay counts too"
 printf 'FLEET_AUTO_HANDOFF_PCT=50\nFLEET_AUTO_HANDOFF_TOKENS=120000\n' > "$WORK/cfg/fleets/fleet-x/conf"
 expect ok 44; expect watch 45; expect watch 59; expect handoff 60
 expect handoff 50 -                                   # no size in the payload → the % key
@@ -177,28 +175,28 @@ expect watch 50; expect handoff 51                    # rounded UP, as set-claud
 printf 'FLEET_AUTO_HANDOFF_TOKENS=900000\n' > "$WORK/cfg/fleets/fleet-x/conf"
 expect watch 99; expect handoff 100                   # clamped to 100
 rm -f "$WORK/cfg/fleets/fleet-x/conf" "$WORK/cfg/fleet.settings" "$WORK/inst/fleet.conf"
-ok "D FLEET_AUTO_HANDOFF_TOKENS wins over the % key, converted against the window size"
+st_pass "D FLEET_AUTO_HANDOFF_TOKENS wins over the % key, converted against the window size"
 
 # --- E: no bus ------------------------------------------------------------------
 : > "$TMUXLOG"
 out=$(printf '%s' "$FULL" | env -u TMUX -u TMUX_PANE HOME="$WORK/home" FLEET_CONF_DIR="$WORK/cfg" PATH="$WORK/stub:$PATH" bash "$WORK/inst/conf/statusline.sh" 2>"$ERR"; echo "rc=$?")
-[ "$out" = "rc=0" ] && [ ! -s "$ERR" ] && [ "$(calls)" = 0 ] || fail "E: outside tmux must print nothing, call no tmux, exit 0" "$out $(cat "$ERR") $(log)"
+[ "$out" = "rc=0" ] && [ ! -s "$ERR" ] && [ "$(calls)" = 0 ] || st_fail "E: outside tmux must print nothing, call no tmux, exit 0" "$out $(cat "$ERR") $(log)"
 : > "$TMUXLOG"
 out=$(printf '%s' "$FULL" | env -i HOME="$WORK/home" PATH="$WORK/stub" $PANE /bin/bash "$WORK/inst/conf/statusline.sh" 2>"$ERR"; echo "rc=$?")
-[ "$out" = "rc=0" ] && [ ! -s "$ERR" ] && [ "$(calls)" = 0 ] || fail "E: no jq on PATH must exit 0 silently" "$out $(cat "$ERR") $(log)"
-ok "E outside tmux / without jq: silent, exit 0"
+[ "$out" = "rc=0" ] && [ ! -s "$ERR" ] && [ "$(calls)" = 0 ] || st_fail "E: no jq on PATH must exit 0 silently" "$out $(cat "$ERR") $(log)"
+st_pass "E outside tmux / without jq: silent, exit 0"
 
 # --- F: odd payloads --------------------------------------------------------------
 for J in '{}' '{"rate_limits":"weird"}' '{"rate_limits":null}' '{"effort":"x","model":"str","context_window":"no"}' \
          '{"model":{"display_name":"x"}}' '{"rate_limits":{"five_hour":{"used_percentage":40,"resets_at":1}}}' 'not json' ''; do
   out=$(printf '%s' "$J" | render; echo "rc=$?")
-  [ "$out" = "rc=0" ] || fail "F: payload [$J] must exit 0 with no stdout" "$out"
-  [ ! -s "$ERR" ] || fail "F: payload [$J] must not write stderr" "$(cat "$ERR")"
-  grep -q '@rl' "$TMUXLOG" && fail "F: payload [$J] must stamp no @rl* (both windows or nothing)" "$(log)"
+  [ "$out" = "rc=0" ] || st_fail "F: payload [$J] must exit 0 with no stdout" "$out"
+  [ ! -s "$ERR" ] || st_fail "F: payload [$J] must not write stderr" "$(cat "$ERR")"
+  grep -q '@rl' "$TMUXLOG" && st_fail "F: payload [$J] must stamp no @rl* (both windows or nothing)" "$(log)"
 done
 printf '%s' '{"model":{"display_name":"x"}}' | render
-[ "$(log)" = 'set-window-option -t %1 @model x' ] || fail "F: a lone model still stamps @model (nothing on the bus to unset)" "$(log)"
-ok "F odd payloads: exit 0, silent, no half rl stamp"
+[ "$(log)" = 'set-window-option -t %1 @model x' ] || st_fail "F: a lone model still stamps @model (nothing on the bus to unset)" "$(log)"
+st_pass "F odd payloads: exit 0, silent, no half rl stamp"
 
 # --- G: the mod's feed (--from mod key=value …) -----------------------------------
 # feed [VAR=val …] -- key=value … — the sandboxed script in the fleet-x pane, no stdin.
@@ -212,76 +210,76 @@ feed() {
       bash "$WORK/inst/conf/statusline.sh" --from mod "$@" 2>"$ERR" </dev/null
 }
 out=$(feed -- ctx_pct=42.4 ctx_limit=200000 model='Opus 5.5' effort=high rl5h=12 rl7d=2 rl_reset5=1791031200 rl_reset7=1791554400; echo "rc=$?")
-[ "$out" = "rc=0" ] || fail "G: the mod feed must print nothing, exit 0" "$out"
-[ ! -s "$ERR" ] || fail "G: stderr must be empty" "$(cat "$ERR")"
-[ "$(calls)" = 1 ] || fail "G: expected ONE tmux write chain, got $(calls)" "$(log)"
+[ "$out" = "rc=0" ] || st_fail "G: the mod feed must print nothing, exit 0" "$out"
+[ ! -s "$ERR" ] || st_fail "G: stderr must be empty" "$(cat "$ERR")"
+[ "$(calls)" = 1 ] || st_fail "G: expected ONE tmux write chain, got $(calls)" "$(log)"
 grep -Eq "^set-window-option -t %1 @ctx_pct 42 ; set-window-option -t %1 @ctx_limit 200000 ; set-window-option -t %1 @ctx_band ok ; set-window-option -t %1 @ctx_left 58 ; set-window-option -t %1 @ctx_src mod ; set-window-option -t %1 @ctx_ts $TS ; set-window-option -t %1 @model Opus 5\\.5 ; set-window-option -t %1 @effort high ; set-window-option -t %1 @rl5h 12 ; set-window-option -t %1 @rl7d 2 ; set-window-option -t %1 @rl_reset 1791031200 1791554400 ; set-window-option -t %1 @rl_ts $TS ; set-window-option -t %1 @rl_src mod\$" "$TMUXLOG" \
-  || fail "G: the mod chain must stamp ctx (+ @ctx_src mod) → model/effort → rl (+ @rl_src mod), in order" "$(log)"
-ok "G mod feed: the same stamps as the Claude path, plus @ctx_src mod and @rl_src mod"
+  || st_fail "G: the mod chain must stamp ctx (+ @ctx_src mod) → model/effort → rl (+ @rl_src mod), in order" "$(log)"
+st_pass "G mod feed: the same stamps as the Claude path, plus @ctx_src mod and @rl_src mod"
 
 # the same reading twice: @ctx_src is on the bus → not re-written; only the rl set goes
 feed -- ctx_pct=42.4 ctx_limit=200000 model='Opus 5.5' effort=high rl5h=12 rl7d=2 rl_reset5=1791031200 rl_reset7=1791554400 <<<"" ; :
 : > "$TMUXLOG"
 FAKE_CUR="$CUR_MOD" feed -- ctx_pct=42.4 ctx_limit=200000 model='Opus 5.5' effort=high rl5h=12 rl7d=2 rl_reset5=1791031200 rl_reset7=1791554400
-grep -Eq '^set-window-option -t %1 @rl5h 12 ; ' "$TMUXLOG" || fail "G: unchanged values → the chain starts with the rl set" "$(log)"
-grep -q '@ctx\|@model\|@effort' "$TMUXLOG" && fail "G: unchanged ctx/model/effort/@ctx_src must not be re-written" "$(log)"
+grep -Eq '^set-window-option -t %1 @rl5h 12 ; ' "$TMUXLOG" || st_fail "G: unchanged values → the chain starts with the rl set" "$(log)"
+grep -q '@ctx\|@model\|@effort' "$TMUXLOG" && st_fail "G: unchanged ctx/model/effort/@ctx_src must not be re-written" "$(log)"
 # a key absent = left alone: a measurement (no model keys) touches neither @model nor @effort
 FAKE_CUR="$CUR_FULL" feed -- ctx_pct=70 ctx_limit=200000
 grep -Eq "^set-window-option -t %1 @ctx_pct 70 ; set-window-option -t %1 @ctx_band watch ; set-window-option -t %1 @ctx_left 30 ; set-window-option -t %1 @ctx_src mod ; set-window-option -t %1 @ctx_ts $TS\$" "$TMUXLOG" \
-  || fail "G: a measurement writes the changed @ctx_pct + @ctx_band + @ctx_left, marks @ctx_src, re-times — nothing else" "$(log)"
+  || st_fail "G: a measurement writes the changed @ctx_pct + @ctx_band + @ctx_left, marks @ctx_src, re-times — nothing else" "$(log)"
 # a model without an effort key UNSETS @effort (the poll's feed after a /model)
 FAKE_CUR="$CUR_MOD" feed -- model='Fable 5.1'
 [ "$(log)" = 'set-window-option -t %1 @model Fable 5.1 ; set-window-option -u -t %1 @effort' ] \
-  || fail "G: a model alone must write @model and UNSET @effort" "$(log)"
+  || st_fail "G: a model alone must write @model and UNSET @effort" "$(log)"
 # the same rounding as the Claude path: printf %.0f of the raw percent
 # (the @ctx_ts stamp is cut before the compare: the two runs may straddle a second)
 printf '%s' '{"context_window":{"used_percentage":42.50,"context_window_size":200000}}' | FAKE_CUR="$CUR_MOD" render
 [ "$(log | sed -E 's/ ; set-window-option -t %1 @ctx_ts [0-9]+//')" = "$( : > "$TMUXLOG"; FAKE_CUR="$CUR_MOD" feed -- ctx_pct=42.50 ctx_limit=200000; log | sed -E 's/ ; set-window-option -t %1 @ctx_ts [0-9]+//')" ] \
-  || fail "G: 42.50 must round the same on both paths" "$(log)"
+  || st_fail "G: 42.50 must round the same on both paths" "$(log)"
 # a decimal rate-limit % floors like jq's; a half rl reading stamps nothing
 FAKE_CUR="$CUR_MOD" feed -- rl5h=37.5 rl7d=12.9 rl_reset5=1 rl_reset7=2
-grep -q '@rl5h 37 ; set-window-option -t %1 @rl7d 12 ; ' "$TMUXLOG" || fail "G: decimal rl % must floor" "$(log)"
+grep -q '@rl5h 37 ; set-window-option -t %1 @rl7d 12 ; ' "$TMUXLOG" || st_fail "G: decimal rl % must floor" "$(log)"
 FAKE_CUR="$CUR_MOD" feed -- rl5h=37
-[ "$(calls)" = 0 ] || fail "G: one rate-limit window alone must stamp nothing" "$(log)"
+[ "$(calls)" = 0 ] || st_fail "G: one rate-limit window alone must stamp nothing" "$(log)"
 # band lines are the same file's: this fleet's overlay moves the mod's band too
 printf "FLEET_AUTO_HANDOFF_PCT='50'\n" > "$WORK/cfg/fleets/fleet-x/conf"
 FAKE_CUR="$CUR_MOD" feed -- ctx_pct=36 ctx_limit=200000
-grep -q '@ctx_band watch' "$TMUXLOG" || fail "G: the overlay's 50 line must put 36 in watch on the mod path" "$(log)"
+grep -q '@ctx_band watch' "$TMUXLOG" || st_fail "G: the overlay's 50 line must put 36 in watch on the mod path" "$(log)"
 rm -f "$WORK/cfg/fleets/fleet-x/conf"
-ok "G mod feed: only what changed, absent keys left alone, model alone unsets effort, same rounding + band lines"
+st_pass "G mod feed: only what changed, absent keys left alone, model alone unsets effort, same rounding + band lines"
 
 # no jq on PATH: the mod path still stamps (the jq gate is the Claude path's); outside tmux: silent
 : > "$TMUXLOG"
 out=$(env -i HOME="$WORK/home" PATH="$WORK/stub" $PANE /bin/bash "$WORK/inst/conf/statusline.sh" --from mod ctx_pct=42.4 ctx_limit=200000 2>"$ERR" </dev/null; echo "rc=$?")
-[ "$out" = "rc=0" ] && [ ! -s "$ERR" ] || fail "G: no jq on PATH must still exit 0 silently on the mod path" "$out $(cat "$ERR")"
-grep -q '@ctx_pct 42 ; ' "$TMUXLOG" || fail "G: the mod path must stamp without jq" "$(log)"
+[ "$out" = "rc=0" ] && [ ! -s "$ERR" ] || st_fail "G: no jq on PATH must still exit 0 silently on the mod path" "$out $(cat "$ERR")"
+grep -q '@ctx_pct 42 ; ' "$TMUXLOG" || st_fail "G: the mod path must stamp without jq" "$(log)"
 : > "$TMUXLOG"
 out=$(env -u TMUX -u TMUX_PANE HOME="$WORK/home" FLEET_CONF_DIR="$WORK/cfg" PATH="$WORK/stub:$PATH" bash "$WORK/inst/conf/statusline.sh" --from mod ctx_pct=42.4 2>"$ERR" </dev/null; echo "rc=$?")
-[ "$out" = "rc=0" ] && [ ! -s "$ERR" ] && [ "$(calls)" = 0 ] || fail "G: outside tmux the mod path must call no tmux, exit 0" "$out $(cat "$ERR") $(log)"
+[ "$out" = "rc=0" ] && [ ! -s "$ERR" ] && [ "$(calls)" = 0 ] || st_fail "G: outside tmux the mod path must call no tmux, exit 0" "$out $(cat "$ERR") $(log)"
 # the Claude path never writes @ctx_src, even with the mark absent (A's chain has no @ctx_src)
 printf '%s' "$FULL" | render
-grep -q '@ctx_src' "$TMUXLOG" && fail "G: the Claude path must never write @ctx_src" "$(log)"
-ok "G mod feed: jq-free, silent outside tmux; the Claude path never marks @ctx_src"
+grep -q '@ctx_src' "$TMUXLOG" && st_fail "G: the Claude path must never write @ctx_src" "$(log)"
+st_pass "G mod feed: jq-free, silent outside tmux; the Claude path never marks @ctx_src"
 
 # --- H: @ctx_left + @ctx_ts, and the Codex hook's feed (issue #2431) ---------------
 # an unchanged render inside the grain: nothing written (CUR_FULL's ts is now)
 printf '%s' "$NORL" | FAKE_CUR="$CUR_FULL" render
-[ "$(calls)" = 0 ] || fail "H: an unchanged reading inside the grain must write nothing" "$(log)"
+[ "$(calls)" = 0 ] || st_fail "H: an unchanged reading inside the grain must write nothing" "$(log)"
 # …the same reading with a stamp 61 s old: only @ctx_ts
 OLD_FULL="- - 42${US}200000${US}ok${US}Opus 5.5${US}high${US}${US}58${US}$((NOWTS - 61))"
 printf '%s' "$NORL" | FAKE_CUR="$OLD_FULL" render
-grep -Eq "^set-window-option -t %1 @ctx_ts $TS\$" "$TMUXLOG" || fail "H: a stamp older than the grain must be re-timed, alone" "$(log)"
+grep -Eq "^set-window-option -t %1 @ctx_ts $TS\$" "$TMUXLOG" || st_fail "H: a stamp older than the grain must be re-timed, alone" "$(log)"
 # the grain is a knob
 printf '%s' "$NORL" | FAKE_CUR="$OLD_FULL" render FLEET_CTX_TS_GRAIN=120
-[ "$(calls)" = 0 ] || fail "H: FLEET_CTX_TS_GRAIN=120 must keep a 61 s stamp" "$(log)"
+[ "$(calls)" = 0 ] || st_fail "H: FLEET_CTX_TS_GRAIN=120 must keep a 61 s stamp" "$(log)"
 # no @ctx_ts on the bus (a window stamped before #2431): timed now, and @ctx_left filled in
 printf '%s' "$NORL" | FAKE_CUR="- - 42${US}200000${US}ok${US}Opus 5.5${US}high" render
 grep -Eq "^set-window-option -t %1 @ctx_left 58 ; set-window-option -t %1 @ctx_ts $TS\$" "$TMUXLOG" \
-  || fail "H: a pre-#2431 bus (no left, no ts) gets both, nothing else" "$(log)"
+  || st_fail "H: a pre-#2431 bus (no left, no ts) gets both, nothing else" "$(log)"
 # a % past 100 never goes negative
 printf '%s' '{"context_window":{"used_percentage":104,"context_window_size":200000}}' | render
-grep -q '@ctx_left 0 ; ' "$TMUXLOG" || fail "H: @ctx_left floors at 0" "$(log)"
-ok "H @ctx_left beside @ctx_pct; @ctx_ts on change, else once per grain"
+grep -q '@ctx_left 0 ; ' "$TMUXLOG" || st_fail "H: @ctx_left floors at 0" "$(log)"
+st_pass "H @ctx_left beside @ctx_pct; @ctx_ts on change, else once per grain"
 
 # the Codex hook's feed: pct= limit= model= effort= (the ctx_ spellings too)
 codex() {
@@ -291,28 +289,28 @@ codex() {
       bash "$WORK/inst/conf/statusline.sh" --from codex "$@" 2>"$ERR" </dev/null
 }
 out=$(codex pct=40 limit=300000 model=gpt-6-astra effort=high; echo "rc=$?")
-[ "$out" = "rc=0" ] && [ ! -s "$ERR" ] || fail "H: the codex feed must print nothing, exit 0" "$out $(cat "$ERR")"
-[ "$(calls)" = 1 ] || fail "H: expected ONE tmux write chain, got $(calls)" "$(log)"
+[ "$out" = "rc=0" ] && [ ! -s "$ERR" ] || st_fail "H: the codex feed must print nothing, exit 0" "$out $(cat "$ERR")"
+[ "$(calls)" = 1 ] || st_fail "H: expected ONE tmux write chain, got $(calls)" "$(log)"
 grep -Eq "^set-window-option -t %1 @ctx_pct 40 ; set-window-option -t %1 @ctx_limit 300000 ; set-window-option -t %1 @ctx_band ok ; set-window-option -t %1 @ctx_left 60 ; set-window-option -t %1 @ctx_src codex ; set-window-option -t %1 @ctx_ts $TS ; set-window-option -t %1 @model gpt-6-astra ; set-window-option -t %1 @effort high\$" "$TMUXLOG" \
-  || fail "H: the codex chain must stamp ctx (+ left, @ctx_src codex, ts) → model/effort, no @rl*" "$(log)"
+  || st_fail "H: the codex chain must stamp ctx (+ left, @ctx_src codex, ts) → model/effort, no @rl*" "$(log)"
 codex ctx_pct=40 ctx_limit=300000 model=gpt-6-astra effort=high
-grep -Eq '^set-window-option -t %1 @ctx_pct 40 ; set-window-option -t %1 @ctx_limit 300000 ; ' "$TMUXLOG" || fail "H: the ctx_ spellings feed the codex path too" "$(log)"
+grep -Eq '^set-window-option -t %1 @ctx_pct 40 ; set-window-option -t %1 @ctx_limit 300000 ; ' "$TMUXLOG" || st_fail "H: the ctx_ spellings feed the codex path too" "$(log)"
 # unchanged: nothing; the band follows this fleet's handoff line like every feeder's
 CUR_CODEX="- - 40${US}300000${US}ok${US}gpt-6-astra${US}high${US}codex${US}60${US}$NOWTS"
 FAKE_CUR="$CUR_CODEX" codex pct=40 limit=300000 model=gpt-6-astra effort=high
-[ "$(calls)" = 0 ] || fail "H: an unchanged codex reading must write nothing" "$(log)"
+[ "$(calls)" = 0 ] || st_fail "H: an unchanged codex reading must write nothing" "$(log)"
 printf "FLEET_AUTO_HANDOFF_PCT='50'\n" > "$WORK/cfg/fleets/fleet-x/conf"
 FAKE_CUR="$CUR_CODEX" codex pct=52 limit=300000
 grep -Eq "^set-window-option -t %1 @ctx_pct 52 ; set-window-option -t %1 @ctx_band handoff ; set-window-option -t %1 @ctx_left 48 ; set-window-option -t %1 @ctx_ts $TS\$" "$TMUXLOG" \
-  || fail "H: a codex measurement alone: pct + band (this fleet's 50 line) + left + ts, model/effort untouched" "$(log)"
+  || st_fail "H: a codex measurement alone: pct + band (this fleet's 50 line) + left + ts, model/effort untouched" "$(log)"
 rm -f "$WORK/cfg/fleets/fleet-x/conf"
 # a model with no effort (the hook could not read one) unsets @effort, as the other feeders do
 FAKE_CUR="$CUR_CODEX" codex model=gpt-6-sol
 [ "$(log)" = 'set-window-option -t %1 @model gpt-6-sol ; set-window-option -u -t %1 @effort' ] \
-  || fail "H: a codex model alone must write @model and UNSET @effort" "$(log)"
+  || st_fail "H: a codex model alone must write @model and UNSET @effort" "$(log)"
 # no reading at all (an unknown rollout): nothing on the bus is touched
 FAKE_CUR="$CUR_CODEX" codex
-[ "$(calls)" = 0 ] || fail "H: a codex feed with no fields must write nothing" "$(log)"
-ok "H the Codex hook's feed: the same stamps, @ctx_src codex, no @rl*"
+[ "$(calls)" = 0 ] || st_fail "H: a codex feed with no fields must write nothing" "$(log)"
+st_pass "H the Codex hook's feed: the same stamps, @ctx_src codex, no @rl*"
 
 printf 'selftest: statusline PASS (%d groups)\n' "$pass"

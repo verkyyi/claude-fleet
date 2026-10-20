@@ -32,9 +32,9 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'cfg-stale selftest: python3 absent — SKIP'; exit 0; }
-command -v tmux >/dev/null 2>&1 || { echo 'cfg-stale selftest: tmux absent — SKIP'; exit 0; }
+st_need python3 tmux
 REAL_TMUX=$(command -v tmux)
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/cfgstale-selftest.XXXXXX")" || exit 2
 S="cfgst$$"
@@ -47,24 +47,13 @@ printf 'FLEET_REPO=acme/app\n' > "$WORK/conf/fleets/$S/conf"
 EXP="$WORK/conf/global/agent-cfg.expected"
 expected() { printf 'claude aaaaaaaaaaaa fleet=1\ncodex cccccccccccc fleet=1\n' > "$EXP"; }
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
-has()   { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1 — no [$3]" "$2";; esac; }
-hasnt() { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1 — unexpected [$3]" "$2";; *) : ;; esac; }
+st_tally count
 
 # ============================================================================
 # A. rows — a PATH-shimmed tmux replays a fixture window list
 # ============================================================================
 US=$'\x1f'
-cat > "$WORK/bin/tmux" <<'SHIM'
-#!/bin/sh
-US=$(printf '\037'); lw=0; fmt=0
-for a in "$@"; do [ "$a" = list-windows ] && lw=1; case "$a" in *"$US"*) fmt=1 ;; esac; done
-[ "$lw" = 1 ] && [ "$fmt" = 1 ] && cat "$WLIST_FILE"
-exit 0
-SHIM
-chmod +x "$WORK/bin/tmux"
+st_fake_tmux_wlist "$WORK/bin"
 export WLIST_FILE="$WORK/wlist"
 SHIMPATH="$WORK/bin:$PATH"
 # The 27 WFMT fields — the 26 of dash-born-order-selftest, then @agent_cfg.
@@ -84,19 +73,19 @@ w 4 CDX @4 'codex:9_x' bbbbbbbbbbbb
 w 5 CDXOK @5 'codex:9_y' cccccccccccc
 rm -f "$EXP"
 s0=$(side); h0=$(hub)
-eq "A: no expected file — no field 13 on a stale-looking row" "-" "$(f13 "$s0" OLD)"
-hasnt "A: …and no 配置旧 on the hub list" "$h0" "配置旧"
+st_eq "A: no expected file — no field 13 on a stale-looking row" "-" "$(f13 "$s0" OLD)"
+st_hasnt "A: …and no 配置旧 on the hub list" "$h0" "配置旧"
 expected
 s=$(side); h=$(hub)
-eq "A: a fingerprint ≠ expected → field 13 stale" "stale" "$(f13 "$s" OLD)"
-eq "A: a fingerprint = expected → field 13 ok" "ok" "$(f13 "$s" NEW)"
-eq "A: no fingerprint → no field 13 (unknown)" "-" "$(f13 "$s" BARE)"
-eq "A: a Codex row compares against the codex line (stale)" "stale" "$(f13 "$s" CDX)"
-eq "A: …and is current on it" "ok" "$(f13 "$s" CDXOK)"
-eq "A: the unknown row is byte for byte the no-expected-file row" \
+st_eq "A: a fingerprint ≠ expected → field 13 stale" "stale" "$(f13 "$s" OLD)"
+st_eq "A: a fingerprint = expected → field 13 ok" "ok" "$(f13 "$s" NEW)"
+st_eq "A: no fingerprint → no field 13 (unknown)" "-" "$(f13 "$s" BARE)"
+st_eq "A: a Codex row compares against the codex line (stale)" "stale" "$(f13 "$s" CDX)"
+st_eq "A: …and is current on it" "ok" "$(f13 "$s" CDXOK)"
+st_eq "A: the unknown row is byte for byte the no-expected-file row" \
    "$(printf '%s\n' "$s0" | grep "${US}BARE$US")" "$(printf '%s\n' "$s" | grep "${US}BARE$US")"
-has "A: the hub list marks the stale row 配置旧" "$(printf '%s\n' "$h" | grep OLD)" "配置旧"
-hasnt "A: …never the current one" "$(printf '%s\n' "$h" | grep 'NEW')" "配置旧"
+st_has "A: the hub list marks the stale row 配置旧" "$(printf '%s\n' "$h" | grep OLD)" "配置旧"
+st_hasnt "A: …never the current one" "$(printf '%s\n' "$h" | grep 'NEW')" "配置旧"
 # another machine's row: the cache's 16th field is that machine's verdict
 export CCQUOTA_FLEET=1
 NOW=$(date +%s); F=11111111-2222-3333-4444-555555555555
@@ -107,16 +96,16 @@ printf '%s\n' "$NOW" > "$G/hub_ok"
   printf 'wid:%s/issue-9\037mac-a\037online\0379\037acme/app\037done\037claude\037RN\037\037\0370\037\037hub\037\037%s\n' "$F" "$B"
 } > "$G/remote_$S"
 s=$(side)
-eq "A: a remote row takes its machine's verdict — stale" "stale" "$(f13 "$s" RS)"
-eq "A: …ok" "ok" "$(f13 "$s" RO)"
-eq "A: …an older cache (no field 16): unknown" "-" "$(f13 "$s" RN)"
+st_eq "A: a remote row takes its machine's verdict — stale" "stale" "$(f13 "$s" RS)"
+st_eq "A: …ok" "ok" "$(f13 "$s" RO)"
+st_eq "A: …an older cache (no field 16): unknown" "-" "$(f13 "$s" RN)"
 rm -f "$G/remote_$S" "$G/hub_ok"; unset CCQUOTA_FLEET
 
 # ============================================================================
 # C. judge — fleet_cfg_restart_why on an isolated socket
 # ============================================================================
 T() { "$REAL_TMUX" -L "$S" "$@"; }
-T new-session -d -s "$S" -n home -x 200 -y 50 2>/dev/null || fail "could not start an isolated tmux server"
+T new-session -d -s "$S" -n home -x 200 -y 50 2>/dev/null || st_fail "could not start an isolated tmux server"
 OLDTS=$(( $(date +%s) - 3600 ))
 mk() {   # <name> <state> <fp> [agent] [ts] → window id
   local id; id=$(T new-window -d -t "$S:" -n "$1" -P -F '#{window_id}' 'sleep 600')
@@ -134,15 +123,15 @@ WCDX=$(mk cdx done bbbbbbbbbbbb codex)
 WOK=$(mk current done aaaaaaaaaaaa)
 WNONE=$(mk nofp done '')
 why() { bash -c '. "$1/fleet-lib.sh"; fleet_cfg_restart_why "$2" "$3"; echo "rc=$?"' _ "$BIN" "$S" "$1" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'; }
-eq "C: stale + done + idle → reopen"          "rc=0"                 "$(why "$WIDLE")"
-eq "C: working → never"                        "state:working rc=1"   "$(why "$WWORK")"
-eq "C: needs (a pending question) → never"     "state:needs rc=1"     "$(why "$WNEED")"
-eq "C: looping → never"                        "state:looping rc=1"   "$(why "$WLOOP")"
-eq "C: idle < FLEET_CFG_RESTART_IDLE → not yet" "recent rc=1"         "$(why "$WRECENT")"
-eq "C: a Codex session → reopened alike (#1896)" "rc=0"                "$(why "$WCDX")"
-eq "C: current configuration → nothing"        "ok rc=1"              "$(why "$WOK")"
-eq "C: no fingerprint → nothing"               "unknown rc=1"         "$(why "$WNONE")"
-eq "C: a panel → nothing"                      "panel rc=1"           "$(why "$(T display-message -p -t "$S:home" '#{window_id}')")"
+st_eq "C: stale + done + idle → reopen"          "rc=0"                 "$(why "$WIDLE")"
+st_eq "C: working → never"                        "state:working rc=1"   "$(why "$WWORK")"
+st_eq "C: needs (a pending question) → never"     "state:needs rc=1"     "$(why "$WNEED")"
+st_eq "C: looping → never"                        "state:looping rc=1"   "$(why "$WLOOP")"
+st_eq "C: idle < FLEET_CFG_RESTART_IDLE → not yet" "recent rc=1"         "$(why "$WRECENT")"
+st_eq "C: a Codex session → reopened alike (#1896)" "rc=0"                "$(why "$WCDX")"
+st_eq "C: current configuration → nothing"        "ok rc=1"              "$(why "$WOK")"
+st_eq "C: no fingerprint → nothing"               "unknown rc=1"         "$(why "$WNONE")"
+st_eq "C: a panel → nothing"                      "panel rc=1"           "$(why "$(T display-message -p -t "$S:home" '#{window_id}')")"
 # A finished session its @reap_policy hands to the idle reaper (issue #4764): a
 # reopen restarts the idle clock that closes it, so `done:10m` never came due.
 WRD=$(mk reapdone done bbbbbbbbbbbb);  T set-option -w -t "$WRD" @reap_policy done:10m
@@ -151,12 +140,12 @@ WRA=$(mk reapat done bbbbbbbbbbbb);    T set-option -w -t "$WRA" @reap_policy at
 WRF=$(mk reapfut done bbbbbbbbbbbb);   T set-option -w -t "$WRF" @reap_policy at:2099-01-01T00:00:00Z
 WRM=$(mk reapmrg done bbbbbbbbbbbb);   T set-option -w -t "$WRM" @reap_policy merged
 WRK=$(mk reapkeep done bbbbbbbbbbbb);  T set-option -w -t "$WRK" @reap_policy keep
-eq "C: done:<dur> + done → left to the reaper (#4764)" "reap rc=1" "$(why "$WRD")"
-eq "C: loop-end + done → left to the reaper"           "reap rc=1" "$(why "$WRL")"
-eq "C: an at: already reached → left to the reaper"    "reap rc=1" "$(why "$WRA")"
-eq "C: an at: still ahead → reopen"                    "rc=0"      "$(why "$WRF")"
-eq "C: merged → reopen (the merged janitor's, not idle)" "rc=0"    "$(why "$WRM")"
-eq "C: keep → reopen"                                  "rc=0"      "$(why "$WRK")"
+st_eq "C: done:<dur> + done → left to the reaper (#4764)" "reap rc=1" "$(why "$WRD")"
+st_eq "C: loop-end + done → left to the reaper"           "reap rc=1" "$(why "$WRL")"
+st_eq "C: an at: already reached → left to the reaper"    "reap rc=1" "$(why "$WRA")"
+st_eq "C: an at: still ahead → reopen"                    "rc=0"      "$(why "$WRF")"
+st_eq "C: merged → reopen (the merged janitor's, not idle)" "rc=0"    "$(why "$WRM")"
+st_eq "C: keep → reopen"                                  "rc=0"      "$(why "$WRK")"
 for w in "$WRD" "$WRL" "$WRA" "$WRF" "$WRM" "$WRK"; do T kill-window -t "$w"; done
 # A finished session on a CLOSED ticket is the reaper's too (issue #4822): the
 # reopen's resume nudge is a new turn, so every release restarted done-no-pr's
@@ -171,9 +160,9 @@ whygh() { PATH="$WORK/fakegh:$PATH" why "$1"; }
 WCL=$(mk closedtkt done bbbbbbbbbbbb); T set-option -w -t "$WCL" @issue 41; T set-option -w -t "$WCL" @repo acme/app
 WOP=$(mk opentkt done bbbbbbbbbbbb);   T set-option -w -t "$WOP" @issue 42; T set-option -w -t "$WOP" @repo acme/app
 WUN=$(mk unkntkt done bbbbbbbbbbbb);   T set-option -w -t "$WUN" @issue 43; T set-option -w -t "$WUN" @repo acme/app
-eq "C: done on a CLOSED ticket → left to the reaper (#4822)" "reap rc=1" "$(whygh "$WCL")"
-eq "C: done on an open ticket → reopen"                      "rc=0"      "$(whygh "$WOP")"
-eq "C: ticket unreadable → reopen"                           "rc=0"      "$(whygh "$WUN")"
+st_eq "C: done on a CLOSED ticket → left to the reaper (#4822)" "reap rc=1" "$(whygh "$WCL")"
+st_eq "C: done on an open ticket → reopen"                      "rc=0"      "$(whygh "$WOP")"
+st_eq "C: ticket unreadable → reopen"                           "rc=0"      "$(whygh "$WUN")"
 for w in "$WCL" "$WOP" "$WUN"; do T kill-window -t "$w"; done
 # A session whose WORK is over is the reaper's too (claude-fleet T569): its ID's
 # result says done / failed, or its hub task record is closed — T477 / T372 were
@@ -201,14 +190,14 @@ WIF=$(mk idfailed done bbbbbbbbbbbb); T set-option -w -t "$WIF" @fleet_id "$IDF"
 WIW=$(mk idwait   done bbbbbbbbbbbb); T set-option -w -t "$WIW" @fleet_id "$IDW"; T set-option -w -t "$WIW" @task T2
 WIN=$(mk idnone   done bbbbbbbbbbbb); T set-option -w -t "$WIN" @fleet_id "$IDN"
 WIX=$(mk idnoledg done bbbbbbbbbbbb); T set-option -w -t "$WIX" @fleet_id 11111111-0000-0000-0000-00000000000e
-eq "C: its task record closed (merged) → left to the reaper (T569)" "reap rc=1" "$(whyt "$WTC")"
-eq "C: its task record open → reopen"                              "rc=0"      "$(whyt "$WTO")"
-eq "C: its task record unknown (no hub) → reopen"                  "rc=0"      "$(whyt "$WTU")"
-eq "C: its ID's result merged (record still open) → the reaper's"  "reap rc=1" "$(whyt "$WIM")"
-eq "C: its ID's result failed → the reaper's"                      "reap rc=1" "$(whyt "$WIF")"
-eq "C: its ID's result waiting → reopen"                           "rc=0"      "$(whyt "$WIW")"
-eq "C: an ID with no result → reopen"                              "rc=0"      "$(whyt "$WIN")"
-eq "C: an ID with no ledger here → reopen"                         "rc=0"      "$(whyt "$WIX")"
+st_eq "C: its task record closed (merged) → left to the reaper (T569)" "reap rc=1" "$(whyt "$WTC")"
+st_eq "C: its task record open → reopen"                              "rc=0"      "$(whyt "$WTO")"
+st_eq "C: its task record unknown (no hub) → reopen"                  "rc=0"      "$(whyt "$WTU")"
+st_eq "C: its ID's result merged (record still open) → the reaper's"  "reap rc=1" "$(whyt "$WIM")"
+st_eq "C: its ID's result failed → the reaper's"                      "reap rc=1" "$(whyt "$WIF")"
+st_eq "C: its ID's result waiting → reopen"                           "rc=0"      "$(whyt "$WIW")"
+st_eq "C: an ID with no result → reopen"                              "rc=0"      "$(whyt "$WIN")"
+st_eq "C: an ID with no ledger here → reopen"                         "rc=0"      "$(whyt "$WIX")"
 for w in "$WTC" "$WTO" "$WTU" "$WIM" "$WIF" "$WIW" "$WIN" "$WIX"; do T kill-window -t "$w"; done
 unset FLEET_ID_DIR FLEET_ID_PUSH
 # A Loop the PostToolUse hook never marked (issue #2189): no @loop, but the
@@ -229,10 +218,10 @@ SIDP=aaaaaaaa-1111-2222-3333-444444444444; SIDL=bbbbbbbb-1111-2222-3333-44444444
 looptr "$SIDP" 1200 60; looptr "$SIDL" 60 7200
 WUNMARK=$(mk unmarked done bbbbbbbbbbbb); T set-option -w -t "$WUNMARK" @cc_session_id "$SIDP"
 WLAPSED=$(mk lapsed done bbbbbbbbbbbb);   T set-option -w -t "$WLAPSED" @cc_session_id "$SIDL"
-eq "C: no @loop, a pending wakeup in the transcript → never (#2189)" "looping rc=1" "$(why "$WUNMARK")"
-has "C: …and the missing @loop is written" "$(T display-message -p -t "$WUNMARK" '#{@loop}')" "kind=wakeup"
-eq "C: a lapsed wakeup in the transcript → reopen" "rc=0" "$(why "$WLAPSED")"
-eq "C: …and no @loop written" "" "$(T display-message -p -t "$WLAPSED" '#{@loop}')"
+st_eq "C: no @loop, a pending wakeup in the transcript → never (#2189)" "looping rc=1" "$(why "$WUNMARK")"
+st_has "C: …and the missing @loop is written" "$(T display-message -p -t "$WUNMARK" '#{@loop}')" "kind=wakeup"
+st_eq "C: a lapsed wakeup in the transcript → reopen" "rc=0" "$(why "$WLAPSED")"
+st_eq "C: …and no @loop written" "" "$(T display-message -p -t "$WLAPSED" '#{@loop}')"
 T kill-window -t "$WUNMARK"; T kill-window -t "$WLAPSED"
 
 # ============================================================================
@@ -242,39 +231,39 @@ FAKE="$WORK/fake-migrate.sh"; MLOG="$WORK/migrate.log"
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n' "$MLOG" > "$FAKE"; chmod +x "$FAKE"
 tick() { FLEET_CFG_RESTART_MIGRATE="$FAKE" bash "$BIN/fleet-cfg-restart.sh" "$@" -- "$S" 2>&1; }
 waitlog() { local _n; for _n in 1 2 3 4 5 6 7 8 9 10; do [ -s "$MLOG" ] && return 0; sleep 0.3; done; return 1; }
-eq "D: --count — every stale session (not the current, not the bare, not a panel)" "6" "$(tick --count)"
+st_eq "D: --count — every stale session (not the current, not the bare, not a panel)" "6" "$(tick --count)"
 l=$(tick --list)
-has "D: --list names the reopenable one" "$l" "$WIDLE	idle	reopen"
-has "D: …and why the working one is not" "$l" "$WWORK	busy	state:working"
+st_has "D: --list names the reopenable one" "$l" "$WIDLE	idle	reopen"
+st_has "D: …and why the working one is not" "$l" "$WWORK	busy	state:working"
 o=$(FLEET_CFG_RESTART=off tick)
 sleep 0.5
-eq "D: off — nothing reopened" "" "$(cat "$MLOG" 2>/dev/null)"
+st_eq "D: off — nothing reopened" "" "$(cat "$MLOG" 2>/dev/null)"
 o=$(FLEET_CFG_RESTART=ask tick)
-has "D: ask — says so" "$o" "ask: $S:idle"
+st_has "D: ask — says so" "$o" "ask: $S:idle"
 sleep 0.5
-eq "D: ask — nothing reopened" "" "$(cat "$MLOG" 2>/dev/null)"
-eq "D: ask — the window is marked for this fingerprint" "bbbbbbbbbbbb" "$(T display-message -p -t "$WIDLE" '#{@cfg_asked}')"
+st_eq "D: ask — nothing reopened" "" "$(cat "$MLOG" 2>/dev/null)"
+st_eq "D: ask — the window is marked for this fingerprint" "bbbbbbbbbbbb" "$(T display-message -p -t "$WIDLE" '#{@cfg_asked}')"
 o=$(FLEET_CFG_RESTART=ask tick)
-hasnt "D: ask — once per fingerprint" "$o" "ask:"
+st_hasnt "D: ask — once per fingerprint" "$o" "ask:"
 o=$(tick)
-has "D: auto — reopens the idle one" "$o" "reopen: $S:idle ($WIDLE)"
-waitlog || fail "D: the fake migrate never ran" "$o"
-eq "D: …through fleet-migrate.sh --cfg-stale, that window only" "--cfg-stale --session $S --alert $WIDLE" "$(cat "$MLOG")"
-has "D: …stamped @cfg_restart_ts" "$(T display-message -p -t "$WIDLE" '#{@cfg_restart_ts}')" "1"
+st_has "D: auto — reopens the idle one" "$o" "reopen: $S:idle ($WIDLE)"
+waitlog || st_fail "D: the fake migrate never ran" "$o"
+st_eq "D: …through fleet-migrate.sh --cfg-stale, that window only" "--cfg-stale --session $S --alert $WIDLE" "$(cat "$MLOG")"
+st_has "D: …stamped @cfg_restart_ts" "$(T display-message -p -t "$WIDLE" '#{@cfg_restart_ts}')" "1"
 : > "$MLOG"
 o=$(tick)
-has "D: the next tick takes the idle Codex session (#1896)" "$o" "reopen: $S:cdx ($WCDX)"
-waitlog || fail "D: the fake migrate never ran for the Codex window" "$o"
-eq "D: …the same --cfg-stale road" "--cfg-stale --session $S --alert $WCDX" "$(cat "$MLOG")"
+st_has "D: the next tick takes the idle Codex session (#1896)" "$o" "reopen: $S:cdx ($WCDX)"
+waitlog || st_fail "D: the fake migrate never ran for the Codex window" "$o"
+st_eq "D: …the same --cfg-stale road" "--cfg-stale --session $S --alert $WCDX" "$(cat "$MLOG")"
 : > "$MLOG"
 o=$(tick)
-hasnt "D: not again within the idle span" "$o" "reopen:"
+st_hasnt "D: not again within the idle span" "$o" "reopen:"
 WIDLE2=$(mk idle2 done bbbbbbbbbbbb); WIDLE3=$(mk idle3 done bbbbbbbbbbbb)
 o=$(tick)
-eq "D: FLEET_CFG_RESTART_MAX=1 — one reopen per fleet per tick" "1" "$(printf '%s\n' "$o" | grep -c '^reopen:')"
-has "D: …the other waits" "$o" "later: $S:"
+st_eq "D: FLEET_CFG_RESTART_MAX=1 — one reopen per fleet per tick" "1" "$(printf '%s\n' "$o" | grep -c '^reopen:')"
+st_has "D: …the other waits" "$o" "later: $S:"
 o=$(FLEET_CFG_RESTART_MAX=2 tick)
-eq "D: …the next tick takes the rest" "1" "$(printf '%s\n' "$o" | grep -c '^reopen:')"
+st_eq "D: …the next tick takes the rest" "1" "$(printf '%s\n' "$o" | grep -c '^reopen:')"
 : "$WIDLE2$WIDLE3"
 
 # ============================================================================
@@ -285,18 +274,18 @@ row() { printf '%s\t%s\tT\t-\t-\t/w/x\t/t\t%s\tsum\t%s\t-\n' "$1" "$2" "$3" "$4"
 hist() { FLEET_HISTORY_LEDGER="$L" bash "$BIN/fleet-history.sh" "$@" 2>/dev/null; }
 row 2026-10-06T00:00:00Z 41 sid-a closed-unlanded > "$L"
 hist resumed --session-id sid-a --reason cfg-stale >/dev/null
-eq "E: after a closed-unlanded row — one reason row" "resumed reason=cfg-stale" "$(tail -1 "$L" | awk -F'\t' '{print $10, $9}')"
+st_eq "E: after a closed-unlanded row — one reason row" "resumed reason=cfg-stale" "$(tail -1 "$L" | awk -F'\t' '{print $10, $9}')"
 row 2026-10-06T00:00:00Z 42 sid-b closed-unlanded > "$L"; row 2026-10-06T00:00:01Z 42 sid-b resumed >> "$L"
 hist resumed --session-id sid-b >/dev/null
-eq "E: without --reason, a resumed row stays the last word" "2" "$(wc -l < "$L" | tr -d ' ')"
+st_eq "E: without --reason, a resumed row stays the last word" "2" "$(wc -l < "$L" | tr -d ' ')"
 hist resumed --session-id sid-b --reason cfg-stale >/dev/null
-eq "E: with --reason, the reopen gets its row after the hook's" "3 reason=cfg-stale" "$(wc -l < "$L" | tr -d ' ') $(tail -1 "$L" | cut -f9)"
+st_eq "E: with --reason, the reopen gets its row after the hook's" "3 reason=cfg-stale" "$(wc -l < "$L" | tr -d ' ') $(tail -1 "$L" | cut -f9)"
 : > "$L"
 hist resumed --session-id sid-c --reason cfg-stale --key x:issue-43 --worktree /w/y --title 'W 43' >/dev/null
-eq "E: no row yet — built from --key/--worktree/--title" "43 W 43 /w/y sid-c reason=cfg-stale resumed" \
+st_eq "E: no row yet — built from --key/--worktree/--title" "43 W 43 /w/y sid-c reason=cfg-stale resumed" \
    "$(awk -F'\t' '{print $2, $3, $6, $8, $9, $10}' "$L")"
 row 2026-10-06T00:00:00Z 44 sid-d closed-unlanded >> "$L"
-hasnt "E: the reopen row is hidden from the list" "$(hist list)" "W 43"
+st_hasnt "E: the reopen row is hidden from the list" "$(hist list)" "W 43"
 
 # ============================================================================
 # F. inventory — the adapter's cfg= column
@@ -315,14 +304,14 @@ assert "cfg" not in x and x["born"] == 1759000010, x
 print("ok")
 PY
 )
-eq "F: inventory_row parses cfg=" "ok" "$out"
+st_eq "F: inventory_row parses cfg=" "ok" "$out"
 
 # ============================================================================
 # G. degenerate — no expected file
 # ============================================================================
 rm -f "$EXP"; : > "$MLOG"
-eq "G: no expected file — nothing stale" "0" "$(tick --count)"
+st_eq "G: no expected file — nothing stale" "0" "$(tick --count)"
 o=$(tick); sleep 0.5
-eq "G: …nothing reopened" "" "$(cat "$MLOG")"
+st_eq "G: …nothing reopened" "" "$(cat "$MLOG")"
 
 printf 'cfg-stale selftest: PASS (%s checks)\n' "$CHECKS"

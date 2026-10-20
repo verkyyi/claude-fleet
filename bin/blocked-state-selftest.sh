@@ -7,16 +7,17 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 TEST_REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$TEST_REAL_TMUX" ] || { printf 'blocked-state: tmux absent — SKIP\n'; exit 0; }
-command -v python3 >/dev/null 2>&1 || { printf 'blocked-state: python3 absent — SKIP\n'; exit 0; }
+st_need python3
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/b704.XXXXXX")" || exit 2
 TEST_SOCK="$WORK/s"
 tf() { "$TEST_REAL_TMUX" -S "$TEST_SOCK" "$@"; }
 cleanup() { tf kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
-fail() { printf 'FAIL: %s\n' "$1" >&2; tf show-window-options -t "$TEST_PANE" >&2; exit 1; }
+fail() { tf show-window-options -t "$TEST_PANE" >&2; st_fail "$1"; }
 CHECKS=0
 same() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1: expected '$3', got '$2'"; }
 

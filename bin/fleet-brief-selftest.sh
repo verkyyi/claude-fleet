@@ -22,7 +22,6 @@ CLI="$BIN/fleet-brief.sh"
 st_sandbox "${TMPDIR:-/tmp}/fleetbrief-selftest.XXXXXX"
 
 pass=0
-fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 has()  { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 
 SESS=testfleet
@@ -75,48 +74,48 @@ run() {
 
 # ===== RAILS ===================================================================
 FAKE_SESSION=nosuchfleet FAKE_AT_TASK=T42 run "$WORK/plain"
-[ "$RC" = 2 ] || [ "$RC" = 0 ] || fail "RAIL an unknown fleet must exit 2 or find its one repo (got $RC)" "$OUT$ERR"
+[ "$RC" = 2 ] || [ "$RC" = 0 ] || st_fail "RAIL an unknown fleet must exit 2 or find its one repo (got $RC)" "$OUT$ERR"
 run "$WORK/plain"
-[ "$RC" = 4 ] || fail "RAIL nothing bound must exit 4 (got $RC)" "$OUT$ERR"
-case "$ERR" in *FAIL*) : ;; *) fail "RAIL nothing bound must say FAIL" "$ERR" ;; esac
-[ -z "$OUT" ] || fail "RAIL nothing bound prints no brief" "$OUT"
+[ "$RC" = 4 ] || st_fail "RAIL nothing bound must exit 4 (got $RC)" "$OUT$ERR"
+case "$ERR" in *FAIL*) : ;; *) st_fail "RAIL nothing bound must say FAIL" "$ERR" ;; esac
+[ -z "$OUT" ] || st_fail "RAIL nothing bound prints no brief" "$OUT"
 st_pass "RAIL nothing bound → FAIL, exit 4, empty stdout"
 
 # ===== TASK ====================================================================
 : > "$WORK/gh.calls"
 FAKE_AT_TASK=T42 FAKE_AT_REPO=$REPO run "$WORK/widgets-scratch-3"
-[ "$RC" = 0 ] || fail "TASK must exit 0 (got $RC)" "$OUT$ERR"
-has 'task=T42'                 || fail "TASK the fleet block names the record" "$OUT"
-has 'RECORD-TITLE 修风扇'       || fail "TASK the record's title" "$OUT"
-has 'RECORD-WORDS 为什么一直转'  || fail "TASK the record's words" "$OUT"
-has 'dispatched by: T7'        || fail "TASK the dispatcher" "$OUT"
-has 'report (state: merged'    || fail "TASK the flow ends with report merged" "$OUT"
-has 'merge=rebase'             || fail "TASK the merge method" "$OUT"
-has 'DIRECTIVE-MARKER for T42' || fail "TASK the directive" "$OUT"
-has 'origin: none'             || fail "TASK the origin line, none included" "$OUT"
-has 'claim'                    && fail "TASK no claim anywhere" "$OUT"
+[ "$RC" = 0 ] || st_fail "TASK must exit 0 (got $RC)" "$OUT$ERR"
+has 'task=T42'                 || st_fail "TASK the fleet block names the record" "$OUT"
+has 'RECORD-TITLE 修风扇'       || st_fail "TASK the record's title" "$OUT"
+has 'RECORD-WORDS 为什么一直转'  || st_fail "TASK the record's words" "$OUT"
+has 'dispatched by: T7'        || st_fail "TASK the dispatcher" "$OUT"
+has 'report (state: merged'    || st_fail "TASK the flow ends with report merged" "$OUT"
+has 'merge=rebase'             || st_fail "TASK the merge method" "$OUT"
+has 'DIRECTIVE-MARKER for T42' || st_fail "TASK the directive" "$OUT"
+has 'origin: none'             || st_fail "TASK the origin line, none included" "$OUT"
+has 'claim'                    && st_fail "TASK no claim anywhere" "$OUT"
 FAKE_AT_TASK=T42 FAKE_AT_REPO=$REPO TR_RC=1 run "$WORK/widgets-scratch-3"
-[ "$RC" = 5 ] || fail "TASK an unreadable record exits 5 (got $RC)" "$OUT$ERR"
-has 'DIRECTIVE-MARKER' || fail "TASK an unreadable record still prints the rest" "$OUT"
+[ "$RC" = 5 ] || st_fail "TASK an unreadable record exits 5 (got $RC)" "$OUT$ERR"
+has 'DIRECTIVE-MARKER' || st_fail "TASK an unreadable record still prints the rest" "$OUT"
 st_pass "TASK the record, the flow, the directive; unreadable → 5"
 
 # ===== ISSUE ===================================================================
 FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=scratch-4 run "$WORK/widgets-issue-12"
-[ "$RC" = 0 ] || fail "ISSUE must exit 0 (got $RC)" "$OUT$ERR"
-has 'issue=77'          || fail "ISSUE @issue wins over the worktree's number" "$OUT"
-has 'Closes #77'        || fail "ISSUE the flow carries Closes #N" "$OUT"
-has 'origin: scratch-4' || fail "ISSUE the origin" "$OUT"
+[ "$RC" = 0 ] || st_fail "ISSUE must exit 0 (got $RC)" "$OUT$ERR"
+has 'issue=77'          || st_fail "ISSUE @issue wins over the worktree's number" "$OUT"
+has 'Closes #77'        || st_fail "ISSUE the flow carries Closes #N" "$OUT"
+has 'origin: scratch-4' || st_fail "ISSUE the origin" "$OUT"
 FAKE_AT_ISSUE='' run "$WORK/widgets-issue-12"
-has 'issue=12' || fail "ISSUE the issue-<N> worktree is the fallback" "$OUT"
+has 'issue=12' || st_fail "ISSUE the issue-<N> worktree is the fallback" "$OUT"
 st_pass "ISSUE words-only: Closes #N, @issue first, worktree fallback"
 
-[ -s "$WORK/gh.calls" ] && fail "NO GH the brief never runs gh" "$(cat "$WORK/gh.calls")"
+[ -s "$WORK/gh.calls" ] && st_fail "NO GH the brief never runs gh" "$(cat "$WORK/gh.calls")"
 st_pass "NO GH no shape runs gh"
 
 FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12" --bogus
-[ "$RC" = 2 ] || fail "an unknown argument exits 2 (got $RC)" "$ERR"
+[ "$RC" = 2 ] || st_fail "an unknown argument exits 2 (got $RC)" "$ERR"
 run "$WORK/plain" -h
-[ "$RC" = 0 ] || fail "--help exits 0 (got $RC)" "$ERR"
+[ "$RC" = 0 ] || st_fail "--help exits 0 (got $RC)" "$ERR"
 st_pass "args"
 
 printf '\nfleet-brief-selftest: %d checks passed\n' "$pass"

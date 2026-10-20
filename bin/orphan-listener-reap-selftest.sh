@@ -38,10 +38,10 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 LIB="$BIN/fleet-lib.sh"
 [ -f "$LIB" ] || { printf 'selftest: %s missing\n' "$LIB" >&2; exit 2; }
-command -v lsof >/dev/null 2>&1 || { printf 'selftest: no lsof — SKIP\n' >&2; exit 0; }
-command -v python3 >/dev/null 2>&1 || { printf 'selftest: no python3 — SKIP\n' >&2; exit 0; }
+st_need lsof python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/orphan-listen.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -58,8 +58,6 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 # shellcheck source=/dev/null
 . "$LIB"
@@ -79,17 +77,17 @@ open(sys.argv[2], "w").write(str(s.getsockname()[1])); time.sleep(90)'
 PROBE_PID=""; PROBE_PORT=""
 probe() {
   local dir="$1" addr="$2"; shift 2
-  mkdir -p "$dir" || fail "cannot create $dir"
+  mkdir -p "$dir" || st_fail "cannot create $dir"
   local pf="$WORK/.probe.pid" portf="$WORK/.probe.port"; rm -f "$pf" "$portf"
   ( ( cd "$dir" && exec python3 -c "$LISTEN_PY" "$addr" "$portf" "$@" ) >/dev/null 2>&1 &
     printf '%s' "$!" > "$pf" ) &
   wait $! 2>/dev/null
   PROBE_PID="$(cat "$pf" 2>/dev/null)"
-  [ -n "$PROBE_PID" ] || fail "probe pid was not captured for $dir"
+  [ -n "$PROBE_PID" ] || st_fail "probe pid was not captured for $dir"
   PROBES="$PROBES $PROBE_PID"
   local i=0; while [ "$i" -lt 50 ] && [ ! -s "$portf" ]; do i=$((i+1)); sleep 0.1; done
   PROBE_PORT="$(cat "$portf" 2>/dev/null)"
-  [ -n "$PROBE_PORT" ] || fail "probe in $dir never listened"
+  [ -n "$PROBE_PORT" ] || st_fail "probe in $dir never listened"
 }
 listening() { lsof -nP -w -a -p "$1" -iTCP -sTCP:LISTEN -Fn 2>/dev/null | grep -q "^n.*:$2\$"; }
 has_pid()   { printf '%s\n' "$2" | awk -v p="$1" '{ for (i=1;i<=NF;i++) if ($i==p) f=1 } END{ exit !f }'; }
@@ -97,8 +95,8 @@ has_pid()   { printf '%s\n' "$2" | awk -v p="$1" '{ for (i=1;i<=NF;i++) if ($i==
 # --- MANGLE ------------------------------------------------------------------
 got="$(fleet_mangle_path '/Users/u/projects/.fleet-worktrees.noindex/app_x-issue-7')"
 [ "$got" = "-Users-u-projects--fleet-worktrees-noindex-app-x-issue-7" ] \
-  && ok "fleet_mangle_path turns every non-alphanumeric into '-' (dots too)" \
-  || fail "fleet_mangle_path mangled wrong" "$got"
+  && st_pass "fleet_mangle_path turns every non-alphanumeric into '-' (dots too)" \
+  || st_fail "fleet_mangle_path mangled wrong" "$got"
 
 # --- the fixtures --------------------------------------------------------------
 probe "$FLEET_CLAUDE_TMP_ROOT" 0.0.0.0;           p_root="$PROBE_PID"; port_root="$PROBE_PORT"
@@ -109,25 +107,25 @@ probe "$FLEET_CLAUDE_TMP_ROOT/x" 127.0.0.1 /opt/bin/cloudflared; p_exempt="$PROB
 
 # --- ROOT / DELETED / SCOPE ----------------------------------------------------
 cand="$(fleet_reap_orphan_listeners dry 0)"
-has_pid "$p_root" "$cand" && ok "a listener whose cwd IS the scratchpad root is a candidate" \
-  || fail "scratchpad-root listener $p_root not a candidate" "$cand"
-has_pid "$p_del" "$cand" && ok "a listener in a REMOVED worktree is still a candidate" \
-  || fail "deleted-worktree listener $p_del not a candidate" "$cand"
-has_pid "$p_plain" "$cand" && fail "an unanchored listener $p_plain was made a candidate" "$cand"
-has_pid "$p_exempt" "$cand" && fail "the exempt tunnel ($p_exempt) was made a candidate" "$cand"
-ok "unanchored and exempt listeners are never candidates"
-case "$cand" in *"$p_root lan "*) ok "a 0.0.0.0 bind is classified lan" ;;
-  *) fail "the 0.0.0.0 probe was not classified lan" "$cand" ;; esac
+has_pid "$p_root" "$cand" && st_pass "a listener whose cwd IS the scratchpad root is a candidate" \
+  || st_fail "scratchpad-root listener $p_root not a candidate" "$cand"
+has_pid "$p_del" "$cand" && st_pass "a listener in a REMOVED worktree is still a candidate" \
+  || st_fail "deleted-worktree listener $p_del not a candidate" "$cand"
+has_pid "$p_plain" "$cand" && st_fail "an unanchored listener $p_plain was made a candidate" "$cand"
+has_pid "$p_exempt" "$cand" && st_fail "the exempt tunnel ($p_exempt) was made a candidate" "$cand"
+st_pass "unanchored and exempt listeners are never candidates"
+case "$cand" in *"$p_root lan "*) st_pass "a 0.0.0.0 bind is classified lan" ;;
+  *) st_fail "the 0.0.0.0 probe was not classified lan" "$cand" ;; esac
 
 lst="$(bash "$BIN/fleet-diskguard.sh" --listeners 2>&1)"
-has_pid "$p_root" "$lst" && ok "diskguard --listeners names the LAN-bound orphan" \
-  || fail "--listeners missed the LAN-bound orphan $p_root" "$lst"
-has_pid "$p_del" "$lst" && fail "--listeners named a LOOPBACK listener ($p_del)" "$lst"
+has_pid "$p_root" "$lst" && st_pass "diskguard --listeners names the LAN-bound orphan" \
+  || st_fail "--listeners missed the LAN-bound orphan $p_root" "$lst"
+has_pid "$p_del" "$lst" && st_fail "--listeners named a LOOPBACK listener ($p_del)" "$lst"
 
 # --- AGE GATE ------------------------------------------------------------------
 cand="$(fleet_reap_orphan_listeners dry 3600)"
-[ -z "$cand" ] && ok "nothing younger than minage is a candidate" \
-  || fail "the age gate let a seconds-old listener through" "$cand"
+[ -z "$cand" ] && st_pass "nothing younger than minage is a candidate" \
+  || st_fail "the age gate let a seconds-old listener through" "$cand"
 
 # --- DOCTOR (before) -------------------------------------------------------------
 listen_line() { printf '%s\n' "$1" | grep -aE '^[[:space:]]+(PASS|WARN|FAIL)[[:space:]]+listen[[:space:]]' | head -1; }
@@ -136,30 +134,30 @@ run_doctor() {
     sh "$BIN/fleet-doctor.sh" 2>/dev/null
 }
 dout="$(run_doctor)"; dl="$(listen_line "$dout")"
-case "$dl" in *WARN*) ok "doctor WARNs listen while a fleet orphan is on the LAN" ;;
-  *) fail "doctor did not WARN listen" "$dl" ;; esac
+case "$dl" in *WARN*) st_pass "doctor WARNs listen while a fleet orphan is on the LAN" ;;
+  *) st_fail "doctor did not WARN listen" "$dl" ;; esac
 printf '%s\n' "$dout" | grep -q "pid $p_root .*cwd=$FLEET_CLAUDE_TMP_ROOT" \
-  && ok "the WARN names the pid and its cwd" \
-  || fail "the WARN does not name pid $p_root + cwd" "$(printf '%s\n' "$dout" | grep -A5 ' listen ')"
+  && st_pass "the WARN names the pid and its cwd" \
+  || st_fail "the WARN does not name pid $p_root + cwd" "$(printf '%s\n' "$dout" | grep -A5 ' listen ')"
 
 # --- REAP --------------------------------------------------------------------------
 out="$(fleet_reap_orphan_listeners kill 0)"
-listening "$p_root" "$port_root" && fail "scratchpad-root listener still holds :$port_root" "$out"
-listening "$p_del" "$port_del" && fail "deleted-worktree listener still holds :$port_del" "$out"
-kill -0 "$p_root" 2>/dev/null && fail "scratchpad-root listener $p_root survived the reap" "$out"
-ok "the sweep reaps both candidates and their ports are released"
+listening "$p_root" "$port_root" && st_fail "scratchpad-root listener still holds :$port_root" "$out"
+listening "$p_del" "$port_del" && st_fail "deleted-worktree listener still holds :$port_del" "$out"
+kill -0 "$p_root" 2>/dev/null && st_fail "scratchpad-root listener $p_root survived the reap" "$out"
+st_pass "the sweep reaps both candidates and their ports are released"
 kill -0 "$p_plain" 2>/dev/null && kill -0 "$p_exempt" 2>/dev/null \
-  && ok "the unanchored and exempt listeners survive the sweep" \
-  || fail "the sweep killed something outside its scope" "$out"
+  && st_pass "the unanchored and exempt listeners survive the sweep" \
+  || st_fail "the sweep killed something outside its scope" "$out"
 
 # --- DOCTOR (after) --------------------------------------------------------------
 dout="$(run_doctor)"; dl="$(listen_line "$dout")"
-printf '%s\n' "$dout" | grep -q "pid $p_root " && fail "doctor still names the reaped orphan" "$dl"
+printf '%s\n' "$dout" | grep -q "pid $p_root " && st_fail "doctor still names the reaped orphan" "$dl"
 if [ -z "$(bash "$BIN/fleet-diskguard.sh" --listeners 2>/dev/null)" ]; then
-  case "$dl" in *PASS*) ok "doctor's listen line returns to PASS once it is reaped" ;;
-    *) fail "doctor did not return to PASS" "$dl" ;; esac
+  case "$dl" in *PASS*) st_pass "doctor's listen line returns to PASS once it is reaped" ;;
+    *) st_fail "doctor did not return to PASS" "$dl" ;; esac
 else
-  ok "doctor no longer names the reaped orphan (another fleet listener is live on this box)"
+  st_pass "doctor no longer names the reaped orphan (another fleet listener is live on this box)"
 fi
 
 # --- TEARDOWN ------------------------------------------------------------------------
@@ -170,11 +168,11 @@ pf="$WORK/.sleep.pid"
 ( ( cd "$PAD" && exec sleep 60 ) >/dev/null 2>&1 & printf '%s' "$!" > "$pf" ) &
 wait $! 2>/dev/null; p_sleep="$(cat "$pf")"; PROBES="$PROBES $p_sleep"
 out="$(fleet_reap_worktree_listeners "$WT" 0)"
-listening "$p_pad" "$port_pad" && fail "teardown left the scratchpad listener on :$port_pad" "$out"
-has_pid "$p_pad" "$out" && ok "teardown reaps a listener in the worktree's session scratchpad" \
-  || fail "teardown did not report the reaped listener" "$out"
-kill -0 "$p_sleep" 2>/dev/null && ok "teardown leaves a non-listening orphan to the kept-worktree sweep" \
-  || fail "teardown killed a non-listener ($p_sleep)" "$out"
+listening "$p_pad" "$port_pad" && st_fail "teardown left the scratchpad listener on :$port_pad" "$out"
+has_pid "$p_pad" "$out" && st_pass "teardown reaps a listener in the worktree's session scratchpad" \
+  || st_fail "teardown did not report the reaped listener" "$out"
+kill -0 "$p_sleep" 2>/dev/null && st_pass "teardown leaves a non-listening orphan to the kept-worktree sweep" \
+  || st_fail "teardown killed a non-listener ($p_sleep)" "$out"
 
 # --- PANE ----------------------------------------------------------------------------
 if command -v tmux >/dev/null 2>&1; then
@@ -186,10 +184,10 @@ if command -v tmux >/dev/null 2>&1; then
   p_pane="$(tmux -S "$PANE_SOCK" display-message -p -t t '#{pane_pid}' 2>/dev/null)"
   if [ -n "$p_pane" ] && [ -s "$WORK/.pane.port" ]; then
     cand="$(fleet_reap_orphan_listeners dry 0)"
-    has_pid "$p_pane" "$cand" && fail "a listener under a live tmux pane ($p_pane) was a candidate" "$cand"
+    has_pid "$p_pane" "$cand" && st_fail "a listener under a live tmux pane ($p_pane) was a candidate" "$cand"
     out="$(fleet_reap_worktree_listeners "$WORK/pane-issue-8" 0)"
-    kill -0 "$p_pane" 2>/dev/null && ok "a listener under a live pane is never reaped (sweep or teardown)" \
-      || fail "teardown killed a live pane's listener" "$out"
+    kill -0 "$p_pane" 2>/dev/null && st_pass "a listener under a live pane is never reaped (sweep or teardown)" \
+      || st_fail "teardown killed a live pane's listener" "$out"
   else
     printf 'skip PANE: private tmux did not come up\n'
   fi

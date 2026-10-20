@@ -39,6 +39,7 @@ set -uo pipefail
 export FLEET_UI_LANG=zh
 
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/selftest-lib.sh"
 INTRO="$here/../shell/fleet-intro.sh"
 [ -f "$INTRO" ] || { echo "FAIL: $INTRO missing"; exit 1; }
 
@@ -51,9 +52,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-fail=0
-ok()  { echo "  ok: $1"; }
-bad() { echo "  FAIL: $1"; fail=1; }
+st_tally
 
 # the shim: strip `-L <label>`, count the call, run it on the isolated socket
 mkdir -p "$T/shim"
@@ -72,8 +71,8 @@ run() {
         | sed "s/$(printf '\033')\[[0-9;]*m//g")
   rc=$?
 }
-has()    { case "$out" in *"$1"*) ok "$2" ;; *) bad "$2 — missing [$1]"; printf '%s\n' "$out" ;; esac; }
-hasnot() { case "$out" in *"$1"*) bad "$2 — unexpected [$1]"; printf '%s\n' "$out" ;; *) ok "$2" ;; esac; }
+has()    { case "$out" in *"$1"*) st_ok "$2" ;; *) st_miss "$2 — missing [$1]"; printf '%s\n' "$out" ;; esac; }
+hasnot() { case "$out" in *"$1"*) st_miss "$2 — unexpected [$1]"; printf '%s\n' "$out" ;; *) st_ok "$2" ;; esac; }
 mkfleet() { # <conf-dir> <sess> <repo> <branch>
   mkdir -p "$1/fleets/$2"
   printf 'FLEET_REPO="%s"\nFLEET_BASE_BRANCH="%s"\n' "$3" "$4" > "$1/fleets/$2/conf"
@@ -94,12 +93,12 @@ narrow() {
   w=$(printf '%s\n' "$out" | python3 -c '
 import sys, unicodedata
 print(max([sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in l.rstrip("\n")) for l in sys.stdin] or [0]))' 2>/dev/null) \
-    || { ok "$1: width SKIP (no python3)"; return; }
-  [ "$w" -le 40 ] && ok "$1: widest line $w ≤ 40 cols" || { bad "$1: widest line $w > 40 cols"; printf '%s\n' "$out"; }
+    || { st_ok "$1: width SKIP (no python3)"; return; }
+  [ "$w" -le 40 ] && st_ok "$1: widest line $w ≤ 40 cols" || { st_miss "$1: widest line $w > 40 cols"; printf '%s\n' "$out"; }
 }
 notmux() {
   local c; c=$(wc -l < "$T/calls" | tr -d ' ')
-  [ "$c" -eq 0 ] && ok "$1: zero tmux calls" || bad "$1: $c tmux calls"
+  [ "$c" -eq 0 ] && st_ok "$1: zero tmux calls" || st_miss "$1: $c tmux calls"
 }
 # both <label> <conf-dir> <zh-needle> <en-needle> — run zh + en, width + tmux each
 both() {
@@ -130,9 +129,9 @@ hide: touch ~/.hushfleet"
 want="claude fleet · 1 个仓库
 fleet   打开客户端
 隐藏：touch ~/.hushfleet"
-[ "$out" = "$want" ] && ok "zh banner is exactly 3 lines" || { bad "zh banner"; printf 'got:\n%s\nwant:\n%s\n' "$out" "$want"; }
+[ "$out" = "$want" ] && st_ok "zh banner is exactly 3 lines" || { st_miss "zh banner"; printf 'got:\n%s\nwant:\n%s\n' "$out" "$want"; }
 for x in me/app main 运行 未启动 会话 ───; do hasnot "$x" "no [$x]"; done
-[ "$rc" -eq 0 ] && ok "exit 0" || bad "exit $rc"
+[ "$rc" -eq 0 ] && st_ok "exit 0" || st_miss "exit $rc"
 
 echo "D. one fleet, three repos (+ a repeat), live session changes nothing"
 mkfleet "$T/d" live z/first master
@@ -146,7 +145,7 @@ if [ -n "$REAL_TMUX" ]; then
   "$REAL_TMUX" -S "$SOCK" set-option -w -t live:issue-1 @issue 1
 fi
 both D "$T/d" "claude fleet · 3 个仓库" "claude fleet · 3 repos"
-[ "$out" = "$cold" ] && ok "running and stopped print the same banner" || bad "banner differs when running"
+[ "$out" = "$cold" ] && st_ok "running and stopped print the same banner" || st_miss "banner differs when running"
 hasnot "z/first" "no repo names"
 
 echo "F. intro.d hooks"
@@ -168,8 +167,8 @@ sys2  两行
 sys2b
 user1
 隐藏：touch ~/.hushfleet"
-[ "$out" = "$want" ] && ok "hooks: system dir then conf dir, file order, between fleet and hide; failing/empty/non-exec silent" \
-  || { bad "hooks"; printf 'got:\n%s\nwant:\n%s\n' "$out" "$want"; }
+[ "$out" = "$want" ] && st_ok "hooks: system dir then conf dir, file order, between fleet and hide; failing/empty/non-exec silent" \
+  || { st_miss "hooks"; printf 'got:\n%s\nwant:\n%s\n' "$out" "$want"; }
 narrow F; notmux F
 rm -f "$FLEET_INTRO_SYS_D"/*
 
@@ -185,7 +184,7 @@ done
 # a real login has NO FLEET_UI_LANG in its env (this file exports zh above) — an
 # exported one would make the script's own assignment exported and hide the bug
 unset FLEET_UI_LANG
-hasline() { printf '%s\n' "$out" | grep -qx "$1" && ok "$2" || { bad "$2 — no line [$1]"; printf '%s\n' "$out"; }; }
+hasline() { printf '%s\n' "$out" | grep -qx "$1" && st_ok "$2" || { st_miss "$2 — no line [$1]"; printf '%s\n' "$out"; }; }
 LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 run "$T/g-zh"
 hasline "lang=zh" "zh conf (zh_CN) under en_US login → hook sees exactly zh"; has "打开客户端" "  … under a zh banner"
 LANG=zh_CN.UTF-8 LC_ALL=zh_CN.UTF-8 run "$T/g-en"
@@ -220,30 +219,30 @@ else
     fn=$(grep -c '^FLEET' "$T/calls"); an=$(grep -c '^ATTACH' "$T/calls")
   }
   login -i SSH_TTY=/dev/ttys999
-  [ "$fn" = 1 ] && ok "SSH interactive → bin/fleet once" || bad "SSH interactive → bin/fleet ${fn}×"
-  [ "$(cat "$T/calls")" = "FLEET " ] && ok "  … with no arguments" || bad "client args: $(cat "$T/calls")"
-  [ "$an" = 0 ] && ok "SSH interactive → never fleet-attach.sh" || bad "SSH interactive attached ${an}×"
-  case "$out" in INTRO*AFTER) ok "banner first, shell continues after the client" ;; *) bad "order: $out" ;; esac
+  [ "$fn" = 1 ] && st_ok "SSH interactive → bin/fleet once" || st_miss "SSH interactive → bin/fleet ${fn}×"
+  [ "$(cat "$T/calls")" = "FLEET " ] && st_ok "  … with no arguments" || st_miss "client args: $(cat "$T/calls")"
+  [ "$an" = 0 ] && st_ok "SSH interactive → never fleet-attach.sh" || st_miss "SSH interactive attached ${an}×"
+  case "$out" in INTRO*AFTER) st_ok "banner first, shell continues after the client" ;; *) st_miss "order: $out" ;; esac
   login -i SSH_TTY=/dev/ttys999 CLIENT_RC=1
   [ "$fn" = 1 ] && case "$out" in *AFTER) true ;; *) false ;; esac \
-    && ok "a failing client still leaves the shell" || bad "failing client: $out"
+    && st_ok "a failing client still leaves the shell" || st_miss "failing client: $out"
   login -i
-  [ "$fn" = 0 ] && ok "no SSH_TTY → no client" || bad "no SSH_TTY → client ${fn}×"
+  [ "$fn" = 0 ] && st_ok "no SSH_TTY → no client" || st_miss "no SSH_TTY → client ${fn}×"
   [ "$out" = "INTRO
 AFTER" ] && ok "no SSH_TTY → banner only" || bad "no SSH_TTY out: $out"
   login -i SSH_TTY=/dev/ttys999 TMUX=/tmp/x,1,0
-  [ "$fn" = 0 ] && [ "$out" = AFTER ] && ok "inside tmux → nothing" || bad "in tmux: client ${fn}× out=$out"
+  [ "$fn" = 0 ] && [ "$out" = AFTER ] && st_ok "inside tmux → nothing" || st_miss "in tmux: client ${fn}× out=$out"
   # a managed machine (issue #2702): no banner, no client — a plain shell
   mkdir -p "$T/node-managed"; : > "$T/node-managed/machine.env"
   login -i SSH_TTY=/dev/ttys999 FLEET_NODE_STATE="$T/node-managed"
-  [ "$fn" = 0 ] && [ "$out" = AFTER ] && ok "managed machine → no banner, no client" \
-    || bad "managed machine: client ${fn}× out=$out"
+  [ "$fn" = 0 ] && [ "$out" = AFTER ] && st_ok "managed machine → no banner, no client" \
+    || st_miss "managed machine: client ${fn}× out=$out"
   login "" SSH_TTY=/dev/ttys999
-  [ "$fn" = 0 ] && [ "$out" = AFTER ] && ok "non-interactive (scp/rsync/ssh cmd) → nothing" \
-    || bad "non-interactive: client ${fn}× out=$out"
+  [ "$fn" = 0 ] && [ "$out" = AFTER ] && st_ok "non-interactive (scp/rsync/ssh cmd) → nothing" \
+    || st_miss "non-interactive: client ${fn}× out=$out"
   : > "$T/calls"; touch "$T/home/.hushfleet"
   out=$(env -u TMUX HOME="$T/home" FLEET_NODE_STATE="$T/node-none" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/r/shell/fleet-login.zsh'; echo AFTER" 2>&1)
-  [ ! -s "$T/calls" ] && [ "$out" = AFTER ] && ok "hush file .hushfleet → nothing" || bad "hushfleet: $out"
+  [ ! -s "$T/calls" ] && [ "$out" = AFTER ] && st_ok "hush file .hushfleet → nothing" || st_miss "hushfleet: $out"
   rm -f "$T/home/.hushfleet"; : > "$T/calls"; touch "$T/home/.hushfleet-attach"
   out=$(env -u TMUX HOME="$T/home" FLEET_NODE_STATE="$T/node-none" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/r/shell/fleet-login.zsh'; echo AFTER" 2>&1)
   [ ! -s "$T/calls" ] && [ "$out" = "INTRO
@@ -253,17 +252,16 @@ AFTER" ] && ok "hush file .hushfleet-attach → banner, nothing run" || bad "hus
   : > "$T/calls"
   out=$(env -u TMUX HOME="$T/home" FLEET_NODE_STATE="$T/node-none" SSH_TTY=/dev/ttys999 zsh -f -i -c \
         "cf() { echo MINE; }; . '$T/r/shell/fleet-login.zsh'" 2>&1)
-  [ "$(cat "$T/calls")" = "FLEET " ] && [ "$out" = INTRO ] && ok "a defined cf is not called" || bad "defined cf: $out"
+  [ "$(cat "$T/calls")" = "FLEET " ] && [ "$out" = INTRO ] && st_ok "a defined cf is not called" || st_miss "defined cf: $out"
   # nothing leaks into the login shell — no helper variable, no cf
   out=$(env -u TMUX HOME="$T/home" FLEET_NODE_STATE="$T/node-none" zsh -f -i -c ". '$T/r/shell/fleet-login.zsh' >/dev/null; echo \"\${here-unset} \${+functions[cf]}\"" 2>&1)
-  [ "$out" = "unset 0" ] && ok "no helper variable or cf leaks" || bad "leaked: $out"
+  [ "$out" = "unset 0" ] && st_ok "no helper variable or cf leaks" || st_miss "leaked: $out"
   # the real pair: a non-SSH login's banner is fleet-intro.sh's, byte for byte
   mkdir -p "$T/e/fleets"
   want=$(env -u TMUX FLEET_CONF_DIR="$T/e" sh "$INTRO" 2>&1)
   got=$(env -u TMUX -u SSH_TTY HOME="$T/home" FLEET_NODE_STATE="$T/node-none" FLEET_CONF_DIR="$T/e" zsh -f -i -c ". '$LOGIN'" 2>&1)
-  [ "$got" = "$want" ] && ok "real fleet-login.zsh: non-SSH banner byte-identical to fleet-intro.sh" \
-    || { bad "real banner differs"; printf 'got:\n%s\nwant:\n%s\n' "$got" "$want"; }
+  [ "$got" = "$want" ] && st_ok "real fleet-login.zsh: non-SSH banner byte-identical to fleet-intro.sh" \
+    || { st_miss "real banner differs"; printf 'got:\n%s\nwant:\n%s\n' "$got" "$want"; }
 fi
 
-[ "$fail" -eq 0 ] && echo "PASS: fleet-intro-selftest" || echo "FAIL: fleet-intro-selftest"
-exit "$fail"
+st_done

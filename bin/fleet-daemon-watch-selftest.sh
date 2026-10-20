@@ -66,6 +66,7 @@
 # Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 FILES='fleet-daemon-watch.sh fleet-daemon-lib.sh usage-lib.sh fleet-alerts.sh fleet-palette.sh'
 for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
@@ -137,8 +138,6 @@ export FLEET_CONF_DIR="$WORK/conf"   # the kick log is the login's record (#4668
 KICKLOG="$FLEET_CONF_DIR/logs/daemon-kick.log"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
 now()  { date +%s; }
 kicks() { wc -l < "$FAKE_KICK_LOG" 2>/dev/null | tr -d " " || echo 0; }
 
@@ -170,69 +169,69 @@ if [ -d "$TMPL" ]; then
       # fleet_daemon_keepalive_units (memguard, #1292: watched for a WEDGE).
       if lib 'fleet_daemon_keepalive_units' | grep -qx "$unit"; then
         lib "fleet_daemon_known $unit" \
-          || fail "1: KeepAlive unit $unit is in fleet_daemon_keepalive_units but not in the registry"
+          || st_fail "1: KeepAlive unit $unit is in fleet_daemon_keepalive_units but not in the registry"
         grep -q '<key>KeepAlive</key><true/>' "$f" \
-          || fail "1: $unit is listed as a KeepAlive registry unit but its plist is not KeepAlive"
+          || st_fail "1: $unit is listed as a KeepAlive registry unit but its plist is not KeepAlive"
       else
         lib "fleet_daemon_known $unit" \
-          && fail "1: KeepAlive unit $unit is in the interval registry"
+          && st_fail "1: KeepAlive unit $unit is in the interval registry"
       fi
-      ok; continue
+      st_count; continue
     fi
     lib "fleet_daemon_known $unit" \
-      || fail "1: com.claude-fleet.$unit has StartInterval=$iv but is missing from fleet_daemon_units"
+      || st_fail "1: com.claude-fleet.$unit has StartInterval=$iv but is missing from fleet_daemon_units"
     got="$(lib "fleet_daemon_interval $unit")"
     [ "$got" = "$iv" ] \
-      || fail "1: $unit interval drifted — plist says ${iv}s, the registry says ${got}s"
-    ok
+      || st_fail "1: $unit interval drifted — plist says ${iv}s, the registry says ${got}s"
+    st_count
   done
   for u in $(lib 'fleet_daemon_unit_names'); do
     [ -f "$TMPL/com.claude-fleet.$u.plist.tmpl" ] \
-      || fail "1: registry lists $u but launchd/com.claude-fleet.$u.plist.tmpl does not exist"
-    ok
+      || st_fail "1: registry lists $u but launchd/com.claude-fleet.$u.plist.tmpl does not exist"
+    st_count
   done
 else
   printf 'selftest: launchd/ templates not shipped here — skipping the registry lockstep check\n' >&2
 fi
 
 # ------------------------------------------------------------- 2. relative ----
-[ "$(lib 'fleet_daemon_stale_secs collect')" = 300 ]            || fail "2: 60s unit not 5×60"; ok
-[ "$(lib 'fleet_daemon_stale_secs memguard')" = 180 ]           || fail "2: 2s unit not floored at 180"; ok
-[ "$(lib 'fleet_daemon_stale_secs worktree-autoclean')" = 18000 ] || fail "2: 3600s unit not 5×3600"; ok
+[ "$(lib 'fleet_daemon_stale_secs collect')" = 300 ]            || st_fail "2: 60s unit not 5×60"; st_count
+[ "$(lib 'fleet_daemon_stale_secs memguard')" = 180 ]           || st_fail "2: 2s unit not floored at 180"; st_count
+[ "$(lib 'fleet_daemon_stale_secs worktree-autoclean')" = 18000 ] || st_fail "2: 3600s unit not 5×3600"; st_count
 [ "$(FLEET_DAEMON_STALE_MULT=2 lib 'fleet_daemon_stale_secs collect')" = 180 ] \
-  || fail "2: MULT=2 on a 60s unit should floor to 180"; ok
+  || st_fail "2: MULT=2 on a 60s unit should floor to 180"; st_count
 [ "$(FLEET_DAEMON_STALE_MULT=20 lib 'fleet_daemon_stale_secs collect')" = 1200 ] \
-  || fail "2: MULT does not scale"; ok
+  || st_fail "2: MULT does not scale"; st_count
 [ "$(FLEET_DAEMON_STALE_FLOOR=0 FLEET_DAEMON_STALE_MULT=2 lib 'fleet_daemon_stale_secs collect')" = 120 ] \
-  || fail "2: FLOOR=0 does not release the floor"; ok
+  || st_fail "2: FLOOR=0 does not release the floor"; st_count
 [ "$(FLEET_DAEMON_STALE_BASE_SYNC=90 lib 'fleet_daemon_stale_secs base-sync')" = 90 ] \
-  || fail "2: per-unit absolute override (dash → underscore) not honored"; ok
+  || st_fail "2: per-unit absolute override (dash → underscore) not honored"; st_count
 # The degradation #639 measured: 401s behind a 60s interval. Relative ⇒ overdue;
 # under #638's absolute 600s ⇒ fresh. If the second half ever stops holding, the
 # fixture no longer reproduces the bug.
 tick cleanup 401
 [ -n "$(lib 'fleet_daemon_overdue cleanup '"$WORK")" ] \
-  || fail "2: 401s behind a 60s interval still reads fresh (the #639 blind spot)"; ok
+  || st_fail "2: 401s behind a 60s interval still reads fresh (the #639 blind spot)"; st_count
 [ -z "$(FLEET_DAEMON_STALE_CLEANUP=600 lib 'fleet_daemon_overdue cleanup '"$WORK")" ] \
-  || fail "2: 401s should be fresh at an absolute 600s — fixture no longer reproduces #639"; ok
+  || st_fail "2: 401s should be fresh at an absolute 600s — fixture no longer reproduces #639"; st_count
 
 # ---------------------------------------------------------------- 3. never ----
 wipe
-[ -z "$(lib 'fleet_daemon_overdue cleanup '"$WORK")" ] || fail "3: alarmed with no stamp at all"; ok
-[ "$(watch --unit cleanup --status | cut -f1)" = never ] || fail "3: --status not never"; ok
-watch --unit cleanup; [ "$(kicks)" -eq 0 ] || fail "3: kicked a unit that never ticked"; ok
-case "$(bar)" in *"daemon · stale"*) fail "3: bar alarmed with no stamps at all" ;; esac; ok
+[ -z "$(lib 'fleet_daemon_overdue cleanup '"$WORK")" ] || st_fail "3: alarmed with no stamp at all"; st_count
+[ "$(watch --unit cleanup --status | cut -f1)" = never ] || st_fail "3: --status not never"; st_count
+watch --unit cleanup; [ "$(kicks)" -eq 0 ] || st_fail "3: kicked a unit that never ticked"; st_count
+case "$(bar)" in *"daemon · stale"*) st_fail "3: bar alarmed with no stamps at all" ;; esac; st_count
 
 # --------------------------------------------------------------- 4. pended ----
 tick cleanup 900
-[ "$(watch --unit cleanup --status | cut -f1)" = stale ] || fail "4: --status not stale"; ok
+[ "$(watch --unit cleanup --status | cut -f1)" = stale ] || st_fail "4: --status not stale"; st_count
 watch --unit cleanup
-[ "$(kicks)" -eq 1 ] || fail "4: expected exactly 1 kickstart, got $(kicks)"; ok
+[ "$(kicks)" -eq 1 ] || st_fail "4: expected exactly 1 kickstart, got $(kicks)"; st_count
 grep -q 'kickstart -k gui/.*/com.claude-fleet.cleanup$' "$FAKE_KICK_LOG" \
-  || fail "4: kicked the wrong target: $(cat "$FAKE_KICK_LOG")"; ok
-[ -f "$G/cleanup.kick.ts" ] || fail "4: no per-unit kick stamp"; ok
+  || st_fail "4: kicked the wrong target: $(cat "$FAKE_KICK_LOG")"; st_count
+[ -f "$G/cleanup.kick.ts" ] || st_fail "4: no per-unit kick stamp"; st_count
 grep -q 'kick .*unit=cleanup .*mgr=launchd.*rc=0' "$KICKLOG" \
-  || fail "4: log line missing unit/mgr/rc: $(cat "$KICKLOG" 2>/dev/null)"; ok
+  || st_fail "4: log line missing unit/mgr/rc: $(cat "$KICKLOG" 2>/dev/null)"; st_count
 
 # -------------------------------------------------------------- 5. running ----
 # The guard that makes the tighter threshold safe: a tick that is merely BEHIND is
@@ -244,12 +243,12 @@ grep -q 'kick .*unit=cleanup .*mgr=launchd.*rc=0' "$KICKLOG" \
 : > "$FAKE_KICK_LOG"; rm -f "$G/ledger-watch.kick.ts"
 tick ledger-watch 400
 FAKE_RUNNING=ledger-watch watch --unit ledger-watch
-[ "$(kicks)" -eq 0 ] || fail "5: killed a RUNNING tick with kickstart -k"; ok
-grep -q 'slow .*unit=ledger-watch' "$KICKLOG" || fail "5: a slow unit was not logged: $(cat "$KICKLOG")"; ok
-[ -n "$(lib 'fleet_daemon_overdue ledger-watch '"$WORK")" ] || fail "5: alarm dropped for a slow unit"; ok
+[ "$(kicks)" -eq 0 ] || st_fail "5: killed a RUNNING tick with kickstart -k"; st_count
+grep -q 'slow .*unit=ledger-watch' "$KICKLOG" || st_fail "5: a slow unit was not logged: $(cat "$KICKLOG")"; st_count
+[ -n "$(lib 'fleet_daemon_overdue ledger-watch '"$WORK")" ] || st_fail "5: alarm dropped for a slow unit"; st_count
 # …and the deliberate override still gets through.
 FAKE_RUNNING=ledger-watch watch --unit ledger-watch --force --now
-[ "$(kicks)" -eq 1 ] || fail "5: --force --now did not override the running guard"; ok
+[ "$(kicks)" -eq 1 ] || st_fail "5: --force --now did not override the running guard"; st_count
 
 # ------------------------------------------------------------- 6. per-unit ----
 # cleanup is inside its cooldown from §4; base-sync has never been kicked. One
@@ -257,29 +256,29 @@ FAKE_RUNNING=ledger-watch watch --unit ledger-watch --force --now
 : > "$FAKE_KICK_LOG"
 tick base-sync 900
 watch --unit cleanup --unit base-sync
-[ "$(kicks)" -eq 1 ] || fail "6: expected base-sync only (cleanup is cooling), got $(kicks)"; ok
+[ "$(kicks)" -eq 1 ] || st_fail "6: expected base-sync only (cleanup is cooling), got $(kicks)"; st_count
 grep -q 'com.claude-fleet.base-sync$' "$FAKE_KICK_LOG" \
-  || fail "6: the uncooled unit was not the one kicked: $(cat "$FAKE_KICK_LOG")"; ok
+  || st_fail "6: the uncooled unit was not the one kicked: $(cat "$FAKE_KICK_LOG")"; st_count
 # Past its own cooldown, cleanup is retried — stuck daemons are retried, not spun on.
 printf '%s\n' "$(( $(now) - 700 ))" > "$G/cleanup.kick.ts"
 : > "$FAKE_KICK_LOG"; watch --unit cleanup
-[ "$(kicks)" -eq 1 ] || fail "6: no retry past the per-unit cooldown"; ok
+[ "$(kicks)" -eq 1 ] || st_fail "6: no retry past the per-unit cooldown"; st_count
 
 # -------------------------------------------------------------- 7. scoping ----
 # $WORK/other is NOT the live root, so its watch must write its own stamps and
 # leave the shared global/ cache — the one the live status bar reads — untouched.
 sd_live="$(lib "fleet_daemon_state_dir $WORK")"
 sd_dev="$(lib "fleet_daemon_state_dir $WORK/other")"
-[ "$sd_live" = "$G" ] || fail "7: the live root does not resolve to global/ (got $sd_live)"; ok
-[ "$sd_dev" != "$sd_live" ] || fail "7: a non-live checkout shares the live state dir"; ok
-case "$sd_dev" in *"/.claude-dash/dev-"*) ok ;; *) fail "7: dev state dir is not a dev- sibling: $sd_dev" ;; esac
+[ "$sd_live" = "$G" ] || st_fail "7: the live root does not resolve to global/ (got $sd_live)"; st_count
+[ "$sd_dev" != "$sd_live" ] || st_fail "7: a non-live checkout shares the live state dir"; st_count
+case "$sd_dev" in *"/.claude-dash/dev-"*) st_count ;; *) st_fail "7: dev state dir is not a dev- sibling: $sd_dev" ;; esac
 : > "$FAKE_KICK_LOG"; rm -f "$G/ledger-watch.kick.ts"
 tick ledger-watch 900
 bash "$WORK/other/bin/fleet-daemon-watch.sh" --unit ledger-watch >/dev/null 2>&1
 [ ! -f "$G/ledger-watch.kick.ts" ] \
-  || fail "7: a worktree's watch wrote a kick stamp into the LIVE status bar (the #639 tail)"; ok
+  || st_fail "7: a worktree's watch wrote a kick stamp into the LIVE status bar (the #639 tail)"; st_count
 [ "$(kicks)" -eq 0 ] \
-  || fail "7: a worktree's watch read the live stamps and kicked the operator's daemon"; ok
+  || st_fail "7: a worktree's watch read the live stamps and kicked the operator's daemon"; st_count
 # A sweep may reuse its resolved directory; the next sweep must still see new
 # stamps, and switching roots must still select each root's own stamp (#4444).
 mkdir -p "$sd_dev"
@@ -287,10 +286,10 @@ printf '11\n' > "$G/ledger-watch.tick"
 printf '22\n' > "$sd_dev/ledger-watch.tick"
 # shellcheck disable=SC2016  # evaluated by lib in the child shell
 scope_pair="$(lib 'for root in '"$WORK $WORK/other"'; do d=$(fleet_daemon_state_dir "$root"); fleet_daemon_tick_ts ledger-watch "$root" "$d"; printf " "; done')"
-[ "$scope_pair" = '11 22 ' ] || fail "7: reused state directory crossed roots: $scope_pair"; ok
+[ "$scope_pair" = '11 22 ' ] || st_fail "7: reused state directory crossed roots: $scope_pair"; st_count
 printf '33\n' > "$sd_dev/ledger-watch.tick"
 [ "$(lib 'fleet_daemon_tick_ts ledger-watch '"$WORK/other $sd_dev")" = 33 ] \
-  || fail "7: reused state directory cached the stamp contents"; ok
+  || st_fail "7: reused state directory cached the stamp contents"; st_count
 rm -f "$sd_dev/ledger-watch.tick"
 tick ledger-watch 900
 
@@ -299,36 +298,36 @@ tick ledger-watch 900
 # whose first column is the unit name.
 one="$(watch --unit cleanup --status)"
 [ "$(printf '%s' "$one" | awk -F'\t' '{print NF}')" = 3 ] \
-  || fail "8: single-unit --status is not the legacy 3-field line: $one"; ok
+  || st_fail "8: single-unit --status is not the legacy 3-field line: $one"; st_count
 tbl="$(watch --status)"
 [ "$(printf '%s\n' "$tbl" | wc -l | tr -d ' ')" = "$(lib 'fleet_daemon_unit_names' | wc -l | tr -d ' ')" ] \
-  || fail "8: --status did not report every registry unit"; ok
+  || st_fail "8: --status did not report every registry unit"; st_count
 [ "$(printf '%s\n' "$tbl" | awk -F'\t' 'NR==1{print NF}')" = 6 ] \
-  || fail "8: the --status table is not 6 columns (unit/verdict/age/threshold/kick-age/fails): $tbl"; ok
+  || st_fail "8: the --status table is not 6 columns (unit/verdict/age/threshold/kick-age/fails): $tbl"; st_count
 printf '%s\n' "$tbl" | grep -q '^ledger-watch	' \
-  || fail "8: --status table is not keyed by unit name: $tbl"; ok
+  || st_fail "8: --status table is not keyed by unit name: $tbl"; st_count
 
 # ------------------------------------------------------------------ 9. bar ----
 wipe
 tick cleanup 900; tick ledger-watch 900; tick base-sync 900
 out="$(FLEET_DAEMON_KICK=0 bar)"
-case "$out" in *"✖ 1#"*"daemon · stale · 3 units"*'"detail":"cleanup,base-sync,ledger-watch"'*) ok ;;
-  *) fail "9: bar did not count the stalled units, or the row lost their names: $out" ;; esac
+case "$out" in *"✖ 1#"*"daemon · stale · 3 units"*'"detail":"cleanup,base-sync,ledger-watch"'*) st_count ;;
+  *) st_fail "9: bar did not count the stalled units, or the row lost their names: $out" ;; esac
 # collect belongs to the `dash · stale` row and must not be listed twice.
 wipe
 printf 'pid=1\nstart=%s\nphase=done\nphase_ts=%s\nend=%s\ndur=1\n' \
   "$(( $(now) - 900 ))" "$(( $(now) - 900 ))" "$(( $(now) - 900 ))" > "$G/collect.heartbeat"
 out="$(FLEET_DAEMON_KICK=0 bar)"
-case "$out" in *"dash · stale"*) ok ;; *) fail "9: the collector row is gone: $out" ;; esac
-case "$out" in *"daemon · stale"*) fail "9: collect is named in BOTH rows: $out" ;; esac; ok
+case "$out" in *"dash · stale"*) st_count ;; *) st_fail "9: the collector row is gone: $out" ;; esac
+case "$out" in *"daemon · stale"*) st_fail "9: collect is named in BOTH rows: $out" ;; esac; st_count
 # Recovered, but recently kicked ⇒ the trace outlives the outage.
 rm -f "$G/collect.heartbeat"
 printf '%s\n' "$(now)" > "$G/cleanup.kick.ts"
 out="$(FLEET_DAEMON_KICK=0 bar)"
-case "$out" in *"↻  daemon · stale · kicked"*) ok ;; *) fail "9: recovery was silent — no aggregate trace: $out" ;; esac
+case "$out" in *"↻  daemon · stale · kicked"*) st_count ;; *) st_fail "9: recovery was silent — no aggregate trace: $out" ;; esac
 printf '%s\n' "$(( $(now) - 99999 ))" > "$G/cleanup.kick.ts"
 out="$(FLEET_DAEMON_KICK=0 bar)"
-case "$out" in *"daemon · stale"*) fail "9: the trace outlived its window: $out" ;; esac; ok
+case "$out" in *"daemon · stale"*) st_fail "9: the trace outlived its window: $out" ;; esac; st_count
 
 # --------------------------------------------------------------- 10. stamps ----
 # The alarm is only as armed as the stamps feeding it, and a daemon losing its
@@ -341,35 +340,35 @@ for pair in 'tmux-dash-collect.sh collect' \
             'fleet-install-sync.sh install-sync' 'fleet-reconcile-tick.sh reconcile'; do
   set -- $pair
   [ "$(stamps_for "$1" "$2")" -ge 1 ] \
-    || fail "10: $1 no longer stamps its scheduling heartbeat (unit $2) — its alarm is unarmed"; ok
+    || st_fail "10: $1 no longer stamps its scheduling heartbeat (unit $2) — its alarm is unarmed"; st_count
 done
 # One with a non-unit invocation mode must stamp ONLY in the unit's mode,
 # or another daemon's tick keeps their stamp fresh while they are pended.
 grep -q "case \" \$\* \" in \*' --watch '\*)" "$BIN/fleet-diskguard.sh" \
-  || fail "10: diskguard stamps outside --watch — cleanup/base-sync call it --gate every tick"; ok
+  || st_fail "10: diskguard stamps outside --watch — cleanup/base-sync call it --gate every tick"; st_count
 # The lib source is GUARDED everywhere: instrumentation must not be able to kill
 # the daemon it instruments if an install is ever half-synced.
 for f in tmux-dash-collect.sh fleet-cleanup-daemon.sh \
          fleet-base-sync.sh fleet-diskguard.sh fleet-ledger-watch.sh \
          worktree-autoclean.sh fleet-install-sync.sh; do
-  grep -q 'fleet_daemon_stamp_tick' "$BIN/$f" || fail "10: $f lost its stamp"
+  grep -q 'fleet_daemon_stamp_tick' "$BIN/$f" || st_fail "10: $f lost its stamp"
   grep -qF '[ -f "$BIN/fleet-daemon-lib.sh" ]' "$BIN/$f" \
-    || fail "10: $f sources fleet-daemon-lib.sh UNGUARDED — a half-synced install would kill the daemon instead of just losing its alarm"; ok
+    || st_fail "10: $f sources fleet-daemon-lib.sh UNGUARDED — a half-synced install would kill the daemon instead of just losing its alarm"; st_count
 done
 
 # ------------------------------------------------------------------ 11. off ----
 wipe; : > "$FAKE_KICK_LOG"
 tick cleanup 900
 FLEET_DAEMON_KICK=0 watch --unit cleanup
-[ "$(kicks)" -eq 0 ] || fail "11: kicked with FLEET_DAEMON_KICK=0"; ok
-case "$(FLEET_DAEMON_KICK=0 bar)" in *"✖  daemon · stale"*) ok ;;
-  *) fail "11: FLEET_DAEMON_KICK=0 also silenced the alarm" ;; esac
+[ "$(kicks)" -eq 0 ] || st_fail "11: kicked with FLEET_DAEMON_KICK=0"; st_count
+case "$(FLEET_DAEMON_KICK=0 bar)" in *"✖  daemon · stale"*) st_count ;;
+  *) st_fail "11: FLEET_DAEMON_KICK=0 also silenced the alarm" ;; esac
 # …and the collector's own #638 switch still only covers the collector.
 tick collect 900
 FLEET_COLLECT_KICK=0 watch --unit collect --unit cleanup
-[ "$(kicks)" -eq 1 ] || fail "11: FLEET_COLLECT_KICK=0 leaked to other units (kicks=$(kicks))"; ok
+[ "$(kicks)" -eq 1 ] || st_fail "11: FLEET_COLLECT_KICK=0 leaked to other units (kicks=$(kicks))"; st_count
 grep -q 'com.claude-fleet.cleanup$' "$FAKE_KICK_LOG" \
-  || fail "11: FLEET_COLLECT_KICK=0 silenced the wrong unit: $(cat "$FAKE_KICK_LOG")"; ok
+  || st_fail "11: FLEET_COLLECT_KICK=0 silenced the wrong unit: $(cat "$FAKE_KICK_LOG")"; st_count
 
 # ------------------------------------------------------------- 12. escalate ----
 wipe; : > "$FAKE_KICK_LOG"
@@ -382,29 +381,29 @@ for i in 1 2 3; do
   tick cleanup 900
   watch --unit cleanup
   [ "$(lib "fleet_daemon_kick_fails cleanup $WORK")" = "$i" ] \
-    || fail "12: fail counter did not reach $i (got $(lib "fleet_daemon_kick_fails cleanup $WORK"))"; ok
+    || st_fail "12: fail counter did not reach $i (got $(lib "fleet_daemon_kick_fails cleanup $WORK"))"; st_count
   printf '%s\n' "$(( $(now) - 700 ))" > "$G/cleanup.kick.ts"   # step past the kick cooldown
 done
 [ "$(grep -c 'kickstart -k' "$FAKE_KICK_LOG")" -eq 3 ] \
-  || fail "12: expected 3 plain kicks before escalating, got $(cat "$FAKE_KICK_LOG")"; ok
+  || st_fail "12: expected 3 plain kicks before escalating, got $(cat "$FAKE_KICK_LOG")"; st_count
 # The fourth pass escalates instead of kicking again.
 : > "$FAKE_KICK_LOG"
 tick cleanup 900; watch --unit cleanup
-grep -q '^bootout ' "$FAKE_KICK_LOG" || fail "12: no bootout on the 4th pass: $(cat "$FAKE_KICK_LOG")"; ok
+grep -q '^bootout ' "$FAKE_KICK_LOG" || st_fail "12: no bootout on the 4th pass: $(cat "$FAKE_KICK_LOG")"; st_count
 grep -q "^bootstrap gui/.* $FLEET_LAUNCHD_AGENTS_DIR/com.claude-fleet.cleanup.plist$" "$FAKE_KICK_LOG" \
-  || fail "12: bootstrap did not name the unit's own plist: $(cat "$FAKE_KICK_LOG")"; ok
+  || st_fail "12: bootstrap did not name the unit's own plist: $(cat "$FAKE_KICK_LOG")"; st_count
 [ "$(grep -c 'kickstart -k' "$FAKE_KICK_LOG")" -eq 0 ] \
-  || fail "12: escalated AND kicked -k (that would kill the unit it just reloaded)"; ok
+  || st_fail "12: escalated AND kicked -k (that would kill the unit it just reloaded)"; st_count
 grep -q 'reload .*unit=cleanup .*after=3 kicks' "$KICKLOG" \
-  || fail "12: the reload was not logged with its kick count: $(cat "$KICKLOG")"; ok
-[ -f "$G/cleanup.reload.ts" ] || fail "12: no reload cooldown stamp"; ok
+  || st_fail "12: the reload was not logged with its kick count: $(cat "$KICKLOG")"; st_count
+[ -f "$G/cleanup.reload.ts" ] || st_fail "12: no reload cooldown stamp"; st_count
 # Its own long cooldown holds the next one back.
 : > "$FAKE_KICK_LOG"
 printf '%s\n' "$(( $(now) - 700 ))" > "$G/cleanup.kick.ts"
 tick cleanup 900; watch --unit cleanup
-grep -q '^bootout ' "$FAKE_KICK_LOG" && fail "12: reloaded again inside the reload cooldown"; ok
+grep -q '^bootout ' "$FAKE_KICK_LOG" && st_fail "12: reloaded again inside the reload cooldown"; st_count
 [ "$(grep -c 'kickstart -k' "$FAKE_KICK_LOG")" -eq 1 ] \
-  || fail "12: inside the reload cooldown it should fall back to a plain kick: $(cat "$FAKE_KICK_LOG")"; ok
+  || st_fail "12: inside the reload cooldown it should fall back to a plain kick: $(cat "$FAKE_KICK_LOG")"; st_count
 # A reload that leaves the unit UNLOADED is the worst outcome — it must be logged
 # as such and NOT stamp the cooldown, so the next pass retries immediately.
 wipe; : > "$FAKE_KICK_LOG"
@@ -413,11 +412,11 @@ printf '4\n' > "$G/base-sync.kick.fails"
 tick base-sync 900
 FAKE_BOOTSTRAP_RC=1 watch --unit base-sync
 [ -f "$FAKE_LC_STATE/base-sync.out" ] \
-  || fail "12: the fixture did not actually leave the unit booted out"; ok
+  || st_fail "12: the fixture did not actually leave the unit booted out"; st_count
 grep -q 'reload-FAILED unit=base-sync' "$KICKLOG" \
-  || fail "12: a reload that left the unit unloaded was not flagged: $(cat "$KICKLOG")"; ok
+  || st_fail "12: a reload that left the unit unloaded was not flagged: $(cat "$KICKLOG")"; st_count
 [ ! -f "$G/base-sync.reload.ts" ] \
-  || fail "12: a FAILED reload stamped its cooldown — the unit would stay unloaded for 30m"; ok
+  || st_fail "12: a FAILED reload stamped its cooldown — the unit would stay unloaded for 30m"; st_count
 # The next pass retries at once — no reload cooldown to wait out, because a unit
 # that is merely NOT LOADED has a lighter remedy than a reload: bootstrap it back
 # from the plist that is sitting right there. Without that branch a failed reload
@@ -425,22 +424,22 @@ grep -q 'reload-FAILED unit=base-sync' "$KICKLOG" \
 : > "$FAKE_KICK_LOG"
 printf '%s\n' "$(( $(now) - 700 ))" > "$G/base-sync.kick.ts"
 tick base-sync 900; watch --unit base-sync
-[ ! -f "$FAKE_LC_STATE/base-sync.out" ] || fail "12: the retry did not bring the unit back"; ok
+[ ! -f "$FAKE_LC_STATE/base-sync.out" ] || st_fail "12: the retry did not bring the unit back"; st_count
 grep -q 'bootstrap unit=base-sync' "$KICKLOG" \
-  || fail "12: the recovery was not logged as a bootstrap: $(cat "$KICKLOG")"; ok
+  || st_fail "12: the recovery was not logged as a bootstrap: $(cat "$KICKLOG")"; st_count
 grep -q 'kickstart -k' "$FAKE_KICK_LOG" \
-  && fail "12: kickstart -k on a unit that was not loaded (nothing to kill)"; ok
+  && st_fail "12: kickstart -k on a unit that was not loaded (nothing to kill)"; st_count
 # And the ladder resets the moment the unit ticks again.
 tick base-sync 5; watch --unit base-sync
 [ "$(lib "fleet_daemon_kick_fails base-sync $WORK")" = 0 ] \
-  || fail "12: the fail counter survived a recovery — one bad afternoon would arm a reload forever"; ok
+  || st_fail "12: the fail counter survived a recovery — one bad afternoon would arm a reload forever"; st_count
 # FLEET_DAEMON_RELOAD_AFTER=0 disables the escalation entirely.
 wipe; : > "$FAKE_KICK_LOG"
 printf '9\n' > "$G/cleanup.kick.fails"
 tick cleanup 900
 FLEET_DAEMON_RELOAD_AFTER=0 watch --unit cleanup
-grep -q '^bootout ' "$FAKE_KICK_LOG" && fail "12: RELOAD_AFTER=0 still escalated"; ok
-[ "$(grep -c 'kickstart -k' "$FAKE_KICK_LOG")" -eq 1 ] || fail "12: RELOAD_AFTER=0 stopped kicking too"; ok
+grep -q '^bootout ' "$FAKE_KICK_LOG" && st_fail "12: RELOAD_AFTER=0 still escalated"; st_count
+[ "$(grep -c 'kickstart -k' "$FAKE_KICK_LOG")" -eq 1 ] || st_fail "12: RELOAD_AFTER=0 stopped kicking too"; st_count
 
 # ------------------------------------------------------------- 13. inflight ----
 # A relative threshold is only safe if a long-but-working tick is not mistaken for
@@ -452,33 +451,33 @@ wipe
 printf 'start=%s\nphase=git\nphase_ts=%s\n' \
   "$(( $(now) - 900 ))" "$(( $(now) - 900 ))" > "$G/collect.heartbeat"
 [ -n "$(lib "fleet_daemon_overdue collect $WORK")" ] \
-  || fail "13: a 900s-silent heartbeat with no tick in flight should be overdue"; ok
+  || st_fail "13: a 900s-silent heartbeat with no tick in flight should be overdue"; st_count
 printf '%s\t%s\n' "$$" "$(( $(now) - 400 ))" > "$G/collect.pid"
 [ -z "$(lib "fleet_daemon_overdue collect $WORK")" ] \
-  || fail "13: a LIVE tick 400s in (deadline 600s) was still called stale"; ok
+  || st_fail "13: a LIVE tick 400s in (deadline 600s) was still called stale"; st_count
 printf '%s\t%s\n' "$$" "$(( $(now) - 900 ))" > "$G/collect.pid"
 [ -n "$(lib "fleet_daemon_overdue collect $WORK")" ] \
-  || fail "13: a tick past the supersede deadline still counted as alive"; ok
+  || st_fail "13: a tick past the supersede deadline still counted as alive"; st_count
 printf '999999\t%s\n' "$(( $(now) - 100 ))" > "$G/collect.pid"
 [ -n "$(lib "fleet_daemon_overdue collect $WORK")" ] \
-  || fail "13: a pid file naming a DEAD process counted as alive"; ok
+  || st_fail "13: a pid file naming a DEAD process counted as alive"; st_count
 rm -f "$G/collect.pid" "$G/collect.heartbeat"
 # Only `collect` has a pid guard; the plain-tick units must not grow one silently.
 [ "$(lib 'fleet_daemon_field collect 3')" = 'hb:collect.heartbeat,pid:collect.pid' ] \
-  || fail "13: collect's evidence sources changed: $(lib 'fleet_daemon_field collect 3')"; ok
+  || st_fail "13: collect's evidence sources changed: $(lib 'fleet_daemon_field collect 3')"; st_count
 [ "$(lib 'fleet_daemon_field cleanup 3')" = tick ] \
-  || fail "13: cleanup grew an evidence source it has no writer for"; ok
+  || st_fail "13: cleanup grew an evidence source it has no writer for"; st_count
 
 # -------------------------------------------------------------- 14. dry-run ----
 dry_is_inert() {  # $1 = unit, $2 = expected word in the report
   : > "$FAKE_KICK_LOG"
   out="$(watch_err --unit "$1" --dry-run)"
-  case "$out" in *"$2"*) ok ;; *) fail "14: $1 dry-run did not report '$2': $out" ;; esac
-  [ ! -s "$FAKE_KICK_LOG" ] || fail "14: $1 dry-run called launchctl: $(cat "$FAKE_KICK_LOG")"; ok
-  [ ! -f "$G/$1.kick.ts" ]    || fail "14: $1 dry-run wrote a kick stamp"; ok
-  [ ! -f "$G/$1.kick.fails" ] || fail "14: $1 dry-run wrote a fail counter"; ok
-  [ ! -f "$G/$1.reload.ts" ]  || fail "14: $1 dry-run wrote a reload stamp"; ok
-  [ ! -d "$G/$1.kick.lock" ]  || fail "14: $1 dry-run left its lock behind"; ok
+  case "$out" in *"$2"*) st_count ;; *) st_fail "14: $1 dry-run did not report '$2': $out" ;; esac
+  [ ! -s "$FAKE_KICK_LOG" ] || st_fail "14: $1 dry-run called launchctl: $(cat "$FAKE_KICK_LOG")"; st_count
+  [ ! -f "$G/$1.kick.ts" ]    || st_fail "14: $1 dry-run wrote a kick stamp"; st_count
+  [ ! -f "$G/$1.kick.fails" ] || st_fail "14: $1 dry-run wrote a fail counter"; st_count
+  [ ! -f "$G/$1.reload.ts" ]  || st_fail "14: $1 dry-run wrote a reload stamp"; st_count
+  [ ! -d "$G/$1.kick.lock" ]  || st_fail "14: $1 dry-run left its lock behind"; st_count
 }
 # plain pend → would kick
 wipe; tick cleanup 900
@@ -487,35 +486,35 @@ dry_is_inert cleanup 'would kick'
 wipe; tick cleanup 900; printf '5\n' > "$G/cleanup.kick.fails"
 : > "$FAKE_KICK_LOG"
 out="$(watch_err --unit cleanup --dry-run)"
-case "$out" in *'would RELOAD'*) ok ;; *) fail "14: dry-run did not report the escalation: $out" ;; esac
-[ ! -s "$FAKE_KICK_LOG" ] || fail "14: the escalation dry-run called launchctl: $(cat "$FAKE_KICK_LOG")"; ok
-[ "$(cat "$G/cleanup.kick.fails")" = 5 ] || fail "14: dry-run advanced the fail counter"; ok
+case "$out" in *'would RELOAD'*) st_count ;; *) st_fail "14: dry-run did not report the escalation: $out" ;; esac
+[ ! -s "$FAKE_KICK_LOG" ] || st_fail "14: the escalation dry-run called launchctl: $(cat "$FAKE_KICK_LOG")"; st_count
+[ "$(cat "$G/cleanup.kick.fails")" = 5 ] || st_fail "14: dry-run advanced the fail counter"; st_count
 # not loaded but the plist is there → would bootstrap, and MUST NOT actually do it
 wipe; tick base-sync 900
 : > "$FLEET_LAUNCHD_AGENTS_DIR/com.claude-fleet.base-sync.plist"
 : > "$FAKE_LC_STATE/base-sync.out"          # pretend it was booted out
 dry_is_inert base-sync 'would BOOTSTRAP'
-[ -f "$FAKE_LC_STATE/base-sync.out" ] || fail "14: dry-run actually bootstrapped the unit"; ok
+[ -f "$FAKE_LC_STATE/base-sync.out" ] || st_fail "14: dry-run actually bootstrapped the unit"; st_count
 # a running tick → would not touch it (400s: stale, but inside the 900s wedge
 # bound #682 added — §16 covers the dry-run report for a WEDGED unit)
 wipe; tick ledger-watch 400
 : > "$FAKE_KICK_LOG"
 out="$(FAKE_RUNNING=ledger-watch watch_err --unit ledger-watch --dry-run)"
-case "$out" in *'would NOT touch it'*) ok ;; *) fail "14: dry-run on a running unit: $out" ;; esac
-[ ! -s "$FAKE_KICK_LOG" ] || fail "14: dry-run touched a running unit"; ok
+case "$out" in *'would NOT touch it'*) st_count ;; *) st_fail "14: dry-run on a running unit: $out" ;; esac
+[ ! -s "$FAKE_KICK_LOG" ] || st_fail "14: dry-run touched a running unit"; st_count
 
 # ----------------------------------------------------------------- 15. lock ----
 wipe; : > "$FAKE_KICK_LOG"
 tick cleanup 900
 mkdir -p "$G/cleanup.kick.lock"; now > "$G/cleanup.kick.lock/ts"      # a live peer
 watch --unit cleanup
-[ "$(kicks)" -eq 0 ] || fail "15: kicked while a peer held the lock"; ok
+[ "$(kicks)" -eq 0 ] || st_fail "15: kicked while a peer held the lock"; st_count
 [ -d "$G/cleanup.kick.lock" ] \
-  || fail "15: the LOSING kicker deleted the winner's lock on its way out (EXIT trap aimed at a lock it never owned)"; ok
+  || st_fail "15: the LOSING kicker deleted the winner's lock on its way out (EXIT trap aimed at a lock it never owned)"; st_count
 printf '%s\n' "$(( $(now) - 200 ))" > "$G/cleanup.kick.lock/ts"      # debris, not a peer
 watch --unit cleanup
-[ "$(kicks)" -eq 1 ] || fail "15: stale lock debris was not taken over"; ok
-[ ! -d "$G/cleanup.kick.lock" ] || fail "15: the winning kicker left its own lock behind"; ok
+[ "$(kicks)" -eq 1 ] || st_fail "15: stale lock debris was not taken over"; st_count
+[ ! -d "$G/cleanup.kick.lock" ] || st_fail "15: the winning kicker left its own lock behind"; st_count
 
 # --------------------------------------------------------------- 16. wedged ----
 # #639 made "a RUNNING unit is never kicked" absolute, and #682 is the bill: on
@@ -531,47 +530,47 @@ watch --unit cleanup
 wipe; : > "$FAKE_KICK_LOG"; : > "$KICKLOG"
 
 # the threshold itself, and both knobs
-[ "$(lib 'fleet_daemon_wedged_secs collect')" = 900 ]   || fail "16: collect's wedge bound is not 3x its 300s stale threshold"; ok
-[ "$(FLEET_DAEMON_WEDGED_MULT=2 lib 'fleet_daemon_wedged_secs collect')" = 600 ]   || fail "16: FLEET_DAEMON_WEDGED_MULT does not retune the bound"; ok
-[ "$(FLEET_DAEMON_WEDGED_MULT=0 lib 'fleet_daemon_wedged_secs collect')" = 0 ]   || fail "16: MULT=0 must disable the wedge verdict"; ok
-[ "$(FLEET_DAEMON_WEDGED_LEDGER_WATCH=360 lib 'fleet_daemon_wedged_secs ledger-watch')" = 360 ]   || fail "16: a per-unit override must win outright"; ok
+[ "$(lib 'fleet_daemon_wedged_secs collect')" = 900 ]   || st_fail "16: collect's wedge bound is not 3x its 300s stale threshold"; st_count
+[ "$(FLEET_DAEMON_WEDGED_MULT=2 lib 'fleet_daemon_wedged_secs collect')" = 600 ]   || st_fail "16: FLEET_DAEMON_WEDGED_MULT does not retune the bound"; st_count
+[ "$(FLEET_DAEMON_WEDGED_MULT=0 lib 'fleet_daemon_wedged_secs collect')" = 0 ]   || st_fail "16: MULT=0 must disable the wedge verdict"; st_count
+[ "$(FLEET_DAEMON_WEDGED_LEDGER_WATCH=360 lib 'fleet_daemon_wedged_secs ledger-watch')" = 360 ]   || st_fail "16: a per-unit override must win outright"; st_count
 
 # RUNNING + stale past the bound ⇒ healed, and said so in the log
 tick ledger-watch 1200
 FAKE_RUNNING=ledger-watch watch --unit ledger-watch
-[ "$(kicks)" -eq 1 ]   || fail "16: a RUNNING unit frozen for 1200s was not healed — this is the #682 stand-down"; ok
-grep -q 'wedged .*unit=ledger-watch' "$KICKLOG"   || fail "16: the wedge verdict was not logged: $(cat "$KICKLOG")"; ok
+[ "$(kicks)" -eq 1 ]   || st_fail "16: a RUNNING unit frozen for 1200s was not healed — this is the #682 stand-down"; st_count
+grep -q 'wedged .*unit=ledger-watch' "$KICKLOG"   || st_fail "16: the wedge verdict was not logged: $(cat "$KICKLOG")"; st_count
 
 # …and the knob restores the pre-#682 hands-off guard exactly.
 wipe; : > "$FAKE_KICK_LOG"; : > "$KICKLOG"
 tick ledger-watch 1200
 FLEET_DAEMON_WEDGED_MULT=0 FAKE_RUNNING=ledger-watch watch --unit ledger-watch
-[ "$(kicks)" -eq 0 ]   || fail "16: FLEET_DAEMON_WEDGED_MULT=0 must never touch a running unit"; ok
-grep -q 'slow .*unit=ledger-watch' "$KICKLOG"   || fail "16: with the knob off a frozen unit must still log as slow"; ok
+[ "$(kicks)" -eq 0 ]   || st_fail "16: FLEET_DAEMON_WEDGED_MULT=0 must never touch a running unit"; st_count
+grep -q 'slow .*unit=ledger-watch' "$KICKLOG"   || st_fail "16: with the knob off a frozen unit must still log as slow"; st_count
 
 # The dry-run verdict and the real one must not be able to disagree (they are
 # decided in one place, beside do_reload).
 wipe; : > "$FAKE_KICK_LOG"; : > "$KICKLOG"
 tick ledger-watch 1200
 case "$(FAKE_RUNNING=ledger-watch watch_err --unit ledger-watch --dry-run)" in
-  *"RUNNING but WEDGED"*) ok ;;
-  *) fail "16: --dry-run does not report the wedge verdict the real run acts on" ;;
+  *"RUNNING but WEDGED"*) st_count ;;
+  *) st_fail "16: --dry-run does not report the wedge verdict the real run acts on" ;;
 esac
-[ "$(kicks)" -eq 0 ] || fail "16: --dry-run kicked"; ok
+[ "$(kicks)" -eq 0 ] || st_fail "16: --dry-run kicked"; st_count
 
 # --- fleet_daemon_fair_budget (issue #850) ------------------------------------
 # Pure arithmetic: an even, adaptive, floored, capped split of a tick's remaining
 # budget across the fleets still to visit.
 fb() { lib "fleet_daemon_fair_budget $1 $2 ${3:-5}"; }
-[ "$(fb 60 3)" = 20 ] || fail "fair_budget: 60s across 3 fleets is 20 each"; ok
-[ "$(fb 40 2)" = 20 ] || fail "fair_budget: leftover after the first fleet is re-divided (40/2=20)"; ok
-[ "$(fb 20 1)" = 20 ] || fail "fair_budget: the last fleet gets all that remains"; ok
-[ "$(fb 12 5)" = 5  ] || fail "fair_budget: a thin slice is floored to 5s"; ok
-[ "$(fb 3 1)"  = 3  ] || fail "fair_budget: the floor never exceeds what remains"; ok
-[ "$(fb 30 0)" = 30 ] || fail "fair_budget: a zero divisor is treated as one"; ok
-[ "$(fb x 3)"  = 0  ] || fail "fair_budget: garbage remaining is 0, and 0 caps the floor to 0"; ok
-[ "$(fb 60 3 15)" = 20 ] || fail "fair_budget: an explicit floor below the share is inert"; ok
-[ "$(fb 10 3 15)" = 10 ] || fail "fair_budget: an explicit floor is still capped at what remains"; ok
+[ "$(fb 60 3)" = 20 ] || st_fail "fair_budget: 60s across 3 fleets is 20 each"; st_count
+[ "$(fb 40 2)" = 20 ] || st_fail "fair_budget: leftover after the first fleet is re-divided (40/2=20)"; st_count
+[ "$(fb 20 1)" = 20 ] || st_fail "fair_budget: the last fleet gets all that remains"; st_count
+[ "$(fb 12 5)" = 5  ] || st_fail "fair_budget: a thin slice is floored to 5s"; st_count
+[ "$(fb 3 1)"  = 3  ] || st_fail "fair_budget: the floor never exceeds what remains"; st_count
+[ "$(fb 30 0)" = 30 ] || st_fail "fair_budget: a zero divisor is treated as one"; st_count
+[ "$(fb x 3)"  = 0  ] || st_fail "fair_budget: garbage remaining is 0, and 0 caps the floor to 0"; st_count
+[ "$(fb 60 3 15)" = 20 ] || st_fail "fair_budget: an explicit floor below the share is inert"; st_count
+[ "$(fb 10 3 15)" = 10 ] || st_fail "fair_budget: an explicit floor is still capped at what remains"; st_count
 
 printf 'selftest PASS: %s assertions (registry · relative · never · pended · running · per-unit · scoping · status · bar · stamps · off · escalate · inflight · dry-run · lock · wedged · fair-budget)\n' "$CHECKS"
 exit 0

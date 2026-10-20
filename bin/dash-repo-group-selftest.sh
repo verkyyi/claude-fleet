@@ -46,11 +46,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 st_real_tmux
 
-CHECKS=0 FAILS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; FAILS=$((FAILS+1)); }
-has()  { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1" "$2";; esac; }
-hasnt(){ CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1" "$2";; *) : ;; esac; }
-eq()   { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
+st_tally count miss
+eq()   { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_miss "$1: expected [$3], got [$2]"; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dash-repo-group.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -107,13 +104,13 @@ eq    "A: every heading is keyed hdr" "$(printf '%s\n' "$r" | grep -Ec '^hdr\|.*
 eq    "A: …and nothing else is"       "$(printf '%s\n' "$r" | grep -c '^hdr|')" "4"
 # the row's flex span (right of the name) carries no repo tag any more
 tagcell() { printf '%s\n' "$r" | grep -- "$1" | awk -F'|' '{ print $2 }' | sed "s/.*$1//"; }
-hasnt "A: no per-row tag (cf)"          "$(tagcell 'issue-3')" " cf "
-hasnt "A: …in any group (tl)"           "$(tagcell 'issue-2')" " to "
-hasnt "A: …nor the unknown one's slug"  "$(tagcell 'issue-4')" "o-elsewhere"
-hasnt "A: …nor a no-repo row's"         "$(tagcell 'norepo')" "no repo"
+st_hasnt "A: no per-row tag (cf)"          "$(tagcell 'issue-3')" " cf "
+st_hasnt "A: …in any group (tl)"           "$(tagcell 'issue-2')" " to "
+st_hasnt "A: …nor the unknown one's slug"  "$(tagcell 'issue-4')" "o-elsewhere"
+st_hasnt "A: …nor a no-repo row's"         "$(tagcell 'norepo')" "no repo"
 # every heading fits the sidebar's 30 columns now (the #995 metric)
 eq    "A: no heading over 30 columns" "$(side | awk -F'|' '$1 == "hdr" && length($4) > 30' | wc -l | tr -d ' ')" "0"
-has   "A: the column header still leads" "$(FLEET_SESSION=alpha bash "$ROWS" | head -n1 | strip)" "window"
+st_has   "A: the column header still leads" "$(FLEET_SESSION=alpha bash "$ROWS" | head -n1 | strip)" "window"
 # an expanded parent shows its child INSIDE its repo group, count unchanged
 tmux set -w -t 'alpha:issue-2' @expand 1
 eq    "A: expanded child sits under its repo's heading" "$(rows | names | sed -n '4,6p' | tr '\n' ' ')" \
@@ -121,7 +118,7 @@ eq    "A: expanded child sits under its repo's heading" "$(rows | names | sed -n
 tmux set -wu -t 'alpha:issue-2' @expand
 # a repo with no session on screen draws no heading
 tmux kill-window -t 'alpha:issue-4'
-hasnt "A: an empty group has no heading" "$(rows)" "unknown repo"
+st_hasnt "A: an empty group has no heading" "$(rows)" "unknown repo"
 
 # --- G. the Pinned group in a 2+ repo fleet (issue #1170) ---------------------------
 # Its OWN windows, so nothing the legs above left behind shapes it: pinme
@@ -138,8 +135,8 @@ eq    "G: Pinned heads the list with its subtree, then one rule" \
       "Pinned (2) pinme pkid RULE "
 eq    "G: exactly one rule" "$(printf '%s\n' "$r" | names | grep -c '^──*$')" "1"
 eq    "G: its repo heading no longer counts it" "$(tlhead "$r")" "$tl_before"
-has   "G: …the pinned row wears its repo tag" "$(printf '%s\n' "$r" | grep 'pinme')" "⇢tok"
-hasnt "G: …and no pin mark" "$r" "📌"
+st_has   "G: …the pinned row wears its repo tag" "$(printf '%s\n' "$r" | grep 'pinme')" "⇢tok"
+st_hasnt "G: …and no pin mark" "$r" "📌"
 s=$(side)
 eq    "G: sidebar — heading keyed hdr:pin, then the unmarked row" \
       "$(printf '%s\n' "$s" | sed -n '1,2p' | awk -F'|' '{ print $1 ":" $2 ":" $4 }' | tr '\n' '/')" \
@@ -174,9 +171,9 @@ inert() {   # $1 = label, rest = the command → $out; asserts no tmux mutation,
   : > "$WORK/tmux.log"
   out=$(FLEET_SESSION=alpha TMUX=/fake,1,0 "${@:2}" 2>&1 </dev/null)
   CHECKS=$((CHECKS+1))
-  if grep -Eq "$mut" "$WORK/tmux.log"; then fail "C: $1 touched tmux on a heading" "$(cat "$WORK/tmux.log")"; fi
+  if grep -Eq "$mut" "$WORK/tmux.log"; then st_miss "C: $1 touched tmux on a heading" "$(cat "$WORK/tmux.log")"; fi
 }
-inert reap    bash "$BIN/dash-reap.sh" hdr;                has "C: ⌃x reap refuses quietly" "$out" "refused:no-target"
+inert reap    bash "$BIN/dash-reap.sh" hdr;                st_has "C: ⌃x reap refuses quietly" "$out" "refused:no-target"
 inert restore bash "$BIN/dash-restore-session.sh" hdr;     eq  "C: ⌃o restore restores nothing" "$out" ""
 inert pin     bash "$BIN/dash-pin-toggle.sh" hdr;          eq  "C: pin" "$out" ""
 inert rename  bash "$BIN/dash-rename.sh" hdr;              eq  "C: rename arms nothing" "$out" ""
@@ -191,10 +188,10 @@ mkdir -p "$WORK/conf"; ln -sf "$BIN/../conf/fleet-palette.conf" "$WORK/conf/flee
 rm "$WORK/nogrp/tmux-dashboard-rows.sh"
 sed 's/^RGRP=\$RMANY$/RGRP=0/' "$ROWS" > "$WORK/nogrp/tmux-dashboard-rows.sh"
 CHECKS=$((CHECKS+1))
-cmp -s "$ROWS" "$WORK/nogrp/tmux-dashboard-rows.sh" && fail "D: could not switch the grouping off (RGRP=\$RMANY line moved?)"
+cmp -s "$ROWS" "$WORK/nogrp/tmux-dashboard-rows.sh" && st_miss "D: could not switch the grouping off (RGRP=\$RMANY line moved?)"
 OFF="$WORK/nogrp/tmux-dashboard-rows.sh"
 CHECKS=$((CHECKS+1))
-[ "$(rows)" != "$(rows "$OFF")" ] || fail "D: the switch is real — \`all\` differs with grouping off"
+[ "$(rows)" != "$(rows "$OFF")" ] || st_miss "D: the switch is real — \`all\` differs with grouping off"
 # a stale current-repo file (the retired picker's, #1034) filters nothing
 all_rows=$(rows); all_side=$(side)
 printf 'o/tokenledger\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"
@@ -204,7 +201,7 @@ rm -f "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 mv "$FLEET_CONF_DIR/fleets/alpha/repos" "$WORK/repos.off"
 eq  "D: one-repo fleet — hub list identical" "$(rows)" "$(rows "$OFF")"
 eq  "D: one-repo fleet — sidebar identical"  "$(side)" "$(side "$OFF")"
-hasnt "D: one-repo fleet — no heading"       "$(rows)" "──"
+st_hasnt "D: one-repo fleet — no heading"       "$(rows)" "──"
 eq  "D: one-repo fleet — raw bytes identical" "$(FLEET_SESSION=alpha bash "$ROWS" | od -c)" "$(FLEET_SESSION=alpha bash "$OFF" | od -c)"
 mv "$WORK/repos.off" "$FLEET_CONF_DIR/fleets/alpha/repos"
 
@@ -213,7 +210,7 @@ for w in $(tmux list-windows -t alpha -F '#{window_name}' | grep -v '^plan$'); d
 win 'issue-1' @repo o/claude-fleet @issue 1
 eq    "E: an idle hosted repo keeps its (0) heading" "$(rows | names | tr '\n' ' ')" \
       "claude-fleet (1) issue-1 tokenledger (0) "
-hasnt "E: no hint while a session is on screen" "$(rows)" "No sessions"
+st_hasnt "E: no hint while a session is on screen" "$(rows)" "No sessions"
 eq    "E: sidebar headings carry their repo" \
       "$(side | awk -F'|' '$1 == "hdr" { print $2 "=" $4 }' | tr '\n' ' ')" \
       "o/claude-fleet=claude-fleet (1) o/tokenledger=tokenledger (0) "
@@ -221,7 +218,7 @@ tmux kill-window -t 'alpha:issue-1'
 r=$(rows)
 eq    "E: all, no sessions — the hint, then every hosted heading at 0" "$(printf '%s\n' "$r" | tr '\n' '/')" \
       "hdr|  No sessions — start one from ⌘P/hdr|claude-fleet (0)/hdr|tokenledger (0)/"
-has   "E: …under the column header" "$(FLEET_SESSION=alpha bash "$ROWS" | head -n1 | strip)" "window"
+st_has   "E: …under the column header" "$(FLEET_SESSION=alpha bash "$ROWS" | head -n1 | strip)" "window"
 s=$(side)
 eq    "E: sidebar, no sessions" "$(printf '%s\n' "$s" | awk -F'|' '{ print $1 ":" $4 }' | tr '\n' '/')" \
       "hdr:No sessions — ⌘N new session/hdr:claude-fleet (0)/hdr:tokenledger (0)/"
@@ -233,8 +230,8 @@ eq    "E: one-repo fleet, no sessions — the bare hint" "$(rows)" \
       "hdr|  No sessions — start one from ⌘P"
 eq    "E: …and in the sidebar" "$(side)" "hdr|||No sessions — ⌘N new session| "
 win 'issue-1' @repo o/claude-fleet @issue 1
-hasnt "E: one-repo fleet with a session — no hint" "$(rows)" "No sessions"
-hasnt "E: …no heading"                             "$(rows)" "──"
+st_hasnt "E: one-repo fleet with a session — no hint" "$(rows)" "No sessions"
+st_hasnt "E: …no heading"                             "$(rows)" "──"
 mv "$WORK/repos.off" "$FLEET_CONF_DIR/fleets/alpha/repos"
 
 # --- F. a cross-repo child follows its parent (#1031) --------------------------
@@ -246,16 +243,16 @@ win 'skid'    @repo o/tokenledger  @issue 8 @origin o-tokenledger:issue-2
 r=$(rows)
 eq    "F: collapsed — the child is hidden, counted under its PARENT's heading" \
       "$(printf '%s\n' "$r" | names | tr '\n' ' ')" "claude-fleet (2) issue-1 tokenledger (2) issue-2 "
-has   "F: …and the caret that unfolds it sits on the parent" "$(printf '%s\n' "$r" | grep 'issue-1')" "▸  issue-1"
+st_has   "F: …and the caret that unfolds it sits on the parent" "$(printf '%s\n' "$r" | grep 'issue-1')" "▸  issue-1"
 tmux set -w -t 'alpha:issue-1' @expand 1
 tmux set -w -t 'alpha:issue-2' @expand 1
 r=$(rows)
 eq    "F: expanded — the child renders directly under its parent, in its group" \
       "$(printf '%s\n' "$r" | names | tr '\n' ' ')" "claude-fleet (2) issue-1 xkid tokenledger (2) issue-2 skid "
-has   "F: …drawn as a child"                "$(printf '%s\n' "$r" | grep 'xkid')" "└  xkid"
-has   "F: …with its repo tag"               "$(printf '%s\n' "$r" | grep 'xkid')" " ⇢tok"
-hasnt "F: a same-repo child wears no tag"   "$(printf '%s\n' "$r" | grep 'skid')" "⇢"
-hasnt "F: …nor does any root"               "$(printf '%s\n' "$r" | grep -E 'issue-[12]')" "⇢"
+st_has   "F: …drawn as a child"                "$(printf '%s\n' "$r" | grep 'xkid')" "└  xkid"
+st_has   "F: …with its repo tag"               "$(printf '%s\n' "$r" | grep 'xkid')" " ⇢tok"
+st_hasnt "F: a same-repo child wears no tag"   "$(printf '%s\n' "$r" | grep 'skid')" "⇢"
+st_hasnt "F: …nor does any root"               "$(printf '%s\n' "$r" | grep -E 'issue-[12]')" "⇢"
 s=$(side)
 eq    "F: sidebar — the same placement" "$(printf '%s\n' "$s" | awk -F'|' '{ print $4 }' | tr '\n' '/')" \
       "claude-fleet (2)/issue-1/xkid ⇢tok/tokenledger (2)/issue-2/skid/"
@@ -264,9 +261,9 @@ tmux kill-window -t 'alpha:issue-1'
 r=$(rows)
 eq    "F: orphaned — back in its own group" "$(printf '%s\n' "$r" | names | tr '\n' ' ')" \
       "claude-fleet (0) tokenledger (3) issue-2 skid xkid "
-hasnt "F: …no └"                            "$(printf '%s\n' "$r" | grep 'xkid')" "└"
-hasnt "F: …no repo tag"                     "$(printf '%s\n' "$r" | grep 'xkid')" "⇢"
-hasnt "F: …and no ↳ parent tag (issue #1328)"   "$(printf '%s\n' "$r" | grep 'xkid')" "↳"
+st_hasnt "F: …no └"                            "$(printf '%s\n' "$r" | grep 'xkid')" "└"
+st_hasnt "F: …no repo tag"                     "$(printf '%s\n' "$r" | grep 'xkid')" "⇢"
+st_hasnt "F: …and no ↳ parent tag (issue #1328)"   "$(printf '%s\n' "$r" | grep 'xkid')" "↳"
 win 'issue-1' @repo o/claude-fleet @issue 1 @expand 1
 all_rows=$(rows)
 printf 'o/tokenledger\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"   # the retired picker's (#1034)
@@ -277,5 +274,4 @@ eq    "F: one-repo fleet — raw bytes identical" "$(FLEET_SESSION=alpha bash "$
 eq    "F: one-repo fleet — sidebar identical"   "$(side)" "$(side "$OFF")"
 mv "$WORK/repos.off" "$FLEET_CONF_DIR/fleets/alpha/repos"
 
-if [ "$FAILS" -gt 0 ]; then printf 'dash-repo-group-selftest: %d of %d checks FAILED\n' "$FAILS" "$CHECKS" >&2; exit 1; fi
-printf 'dash-repo-group-selftest: %d checks passed\n' "$CHECKS"
+st_done

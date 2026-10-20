@@ -56,9 +56,10 @@
 # bin/fleet-services.py.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-CHECKS=0 FAIL=0
-eq() { CHECKS=$((CHECKS + 1)); if [ "$2" = "$3" ]; then printf 'ok   %s\n' "$1"; else FAIL=$((FAIL + 1)); printf 'FAIL %s\n  got  [%s]\n  want [%s]\n' "$1" "$3" "$2" >&2; fi; }
-has() { CHECKS=$((CHECKS + 1)); case "$3" in *"$2"*) printf 'ok   %s\n' "$1" ;; *) FAIL=$((FAIL + 1)); printf 'FAIL %s\n  [%s] not in\n  [%s]\n' "$1" "$2" "$3" >&2 ;; esac; }
+. "$BIN/selftest-lib.sh"
+st_tally
+eq() { CHECKS=$((CHECKS + 1)); if [ "$2" = "$3" ]; then printf 'ok   %s\n' "$1"; else st_miss "$1" "got [$3] want [$2]"; fi; }
+has() { CHECKS=$((CHECKS + 1)); case "$3" in *"$2"*) printf 'ok   %s\n' "$1" ;; *) st_miss "$1" "[$2] not in [$3]" ;; esac; }
 
 W=$(mktemp -d "${TMPDIR:-/tmp}/fsess-cli.XXXXXX") || exit 1
 L="fsess-cli-$$"
@@ -478,8 +479,4 @@ out=$(nls 2>/dev/null)
 eq "N a stale cache (an hour old) is refreshed" "1" "$(wc -l < "$W/nrefreshed" | tr -d ' ')"
 TMUX_TMPDIR="$MX" "$REAL" -L fx kill-server >/dev/null 2>&1
 
-if [ "$FAIL" -gt 0 ]; then
-  printf 'fleet-session-cli selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2
-  exit 1
-fi
-printf 'fleet-session-cli selftest: PASS (%d checks)\n' "$CHECKS"
+st_done

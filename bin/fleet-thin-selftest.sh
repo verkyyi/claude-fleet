@@ -39,10 +39,9 @@
 #      same session, no new session asked; past the bound, the old road
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 T="$(mktemp -d "${TMPDIR:-/tmp}/fthin.XXXXXX")"; T="$(cd "$T" && pwd -P)"
-FAILS=0
-ok()   { printf 'ok   %s\n' "$*"; }
-fail() { printf 'FAIL %s\n' "$*"; FAILS=$((FAILS + 1)); }
+st_tally
 cleanup() {
   pkill -f "$T/" 2>/dev/null
   rm -rf "$T"
@@ -67,8 +66,8 @@ EOF
 printf 'm1 lan\nm2 lan\n' > "$H/.config/claude-fleet/routes"
 argv() { env -i HOME="$H" PATH="$PATH" XDG_CONFIG_HOME="$H/.config" XDG_CACHE_HOME="$H/.cache" \
            FLEET_CLIENT_LOG=0 python3 "$BIN/fleet-connect.py" --argv "$@"; }
-j=$(argv m1 -o ControlMaster=no) || fail "A: --argv m1 exit $?"
-python3 - "$j" <<'EOF' && ok "A: --argv m1 → the ssh as JSON, host index, -o before the host" || fail "A: --argv m1: $j"
+j=$(argv m1 -o ControlMaster=no) || st_miss "A: --argv m1 exit $?"
+python3 - "$j" <<'EOF' && st_ok_all "A: --argv m1 → the ssh as JSON, host index, -o before the host" || st_miss "A: --argv m1: $j"
 import json, sys
 j = json.loads(sys.argv[1])
 a, h = j["argv"], j["host"]
@@ -76,17 +75,17 @@ assert a[0] == "ssh" and a[h] == "127.0.0.1" and h == len(a) - 1, j
 assert a.index("ControlMaster=no") < h and "-l" in a and a[a.index("-l") + 1] == "u1", j
 assert j["machine"] == "m1" and j["login"] == "u1" and j["route"] == {"kind": "direct", "name": "lan"}, j
 EOF
-j=$(argv --avoid m1) || fail "A: --argv --avoid m1 exit $?"
-case $j in *'"machine": "m2"'*) ok "A: --avoid m1 → m2" ;; *) fail "A: --avoid m1: $j" ;; esac
+j=$(argv --avoid m1) || st_miss "A: --argv --avoid m1 exit $?"
+case $j in *'"machine": "m2"'*) st_ok_all "A: --avoid m1 → m2" ;; *) st_miss "A: --avoid m1: $j" ;; esac
 UP="$BIN/fleet-client-upload.py"
 p=$(printf 'abc' | HOME="$T/recv" FLEET_PASTE_LOG="$T/paste.log" python3 "$UP" recv "$ME" "$(id -un)" "x/fid1" --name n.txt)
 if [ "$?" = 0 ] && [ "$(cat "$p" 2>/dev/null)" = abc ] && case $p in "$T/recv/.cache/claude-fleet/inbox/fid1/"*-n.txt) true ;; *) false ;; esac; then
-  ok "A: recv for this machine → the inbox here, its path printed"
-else fail "A: recv here: '$p'"; fi
+  st_ok_all "A: recv for this machine → the inbox here, its path printed"
+else st_miss "A: recv here: '$p'"; fi
 e=$(printf 'abc' | HOME="$T/recv" FLEET_CONF_DIR="$T/recv/conf" FLEET_PASTE_LOG="$T/paste.log" FLEET_UI_LANG=en \
       python3 "$UP" recv elsewhere u9 "x/fid1" --name n.txt 2>&1 >/dev/null); rc=$?
 [ "$rc" = 1 ] && case $e in *'no connection to elsewhere'*) true ;; *) false ;; esac \
-  && ok "A: recv for another machine with no standing connection → rc 1, said" || fail "A: recv elsewhere rc=$rc '$e'"
+  && st_ok_all "A: recv for another machine with no standing connection → rc 1, said" || st_miss "A: recv elsewhere rc=$rc '$e'"
 
 # ---------------------------------------------------------------------------
 # the stand-ins
@@ -247,31 +246,31 @@ THIN_ARGS='["s1"]' drive main '[
  ["sleep", 0.2]
 ]' # (the session goes on in the next step through quit; this one ends on SIGHUP below)
 out=$(cat "$T/out.main" 2>/dev/null); res=$(cat "$T/res.main")
-case $res in *TIMEOUT*) fail "B-E: the harness timed out: $res" ;; esac
+case $res in *TIMEOUT*) st_miss "B-E: the harness timed out: $res" ;; esac
 l1=$(sed -n 1p "$T/rv.log"); l2=$(sed -n 2p "$T/rv.log")
 view=$(printf '%s\n' "$l1" | sed -n 's/.*--view \([^ ]*\).*/\1/p')
-case $l1 in "m1 attach --thin --view $view --want s1 --device "*" --route lan --token "*) ok "B: first attach — --view, --want s1, --device, --route, --token" ;;
-  *) fail "B: first attach: $l1" ;; esac
+case $l1 in "m1 attach --thin --view $view --want s1 --device "*" --route lan --token "*) st_ok_all "B: first attach — --view, --want s1, --device, --route, --token" ;;
+  *) st_miss "B: first attach: $l1" ;; esac
 s1=$(sed -n 1p "$T/ssh.log")
 case $s1 in *"-o X=1 -tt -o ControlMaster=no -o ControlPath=none -o ServerAliveInterval=5 -o ServerAliveCountMax=3 m1 FLEET_CLIENT_CAPS=show bash .claude/fleet/bin/fleet-remote-view.sh attach --thin"*)
-  ok "B: -tt, ControlMaster=no, ControlPath=none, ServerAlive before the host; the view's command after (caps=show rides it, #3541)" ;;
-  *) fail "B: ssh argv: $s1" ;; esac
-case $out in *7502*) fail "B: an OSC 7502 reached the terminal" ;; *) ok "B: no OSC 7502 reaches the terminal (ours and the bad-token one)" ;; esac
-case $out in $'\e]1337;SetProfile=fleet\a'*) ok "B: the iTerm2 profile goes to fleet first" ;; *) fail "B: no SetProfile=fleet first" ;; esac
-case $res in *"CHILDREN 1 "*"fleet-remote-view.sh attach --thin "*) ok "B: the loop's only child is the ssh" ;; *) fail "B: children: $(grep CHILDREN "$T/res.main")" ;; esac
+  st_ok_all "B: -tt, ControlMaster=no, ControlPath=none, ServerAlive before the host; the view's command after (caps=show rides it, #3541)" ;;
+  *) st_miss "B: ssh argv: $s1" ;; esac
+case $out in *7502*) st_miss "B: an OSC 7502 reached the terminal" ;; *) st_ok_all "B: no OSC 7502 reaches the terminal (ours and the bad-token one)" ;; esac
+case $out in $'\e]1337;SetProfile=fleet\a'*) st_ok_all "B: the iTerm2 profile goes to fleet first" ;; *) st_miss "B: no SetProfile=fleet first" ;; esac
+case $res in *"CHILDREN 1 "*"fleet-remote-view.sh attach --thin "*) st_ok_all "B: the loop's only child is the ssh" ;; *) st_miss "B: children: $(grep CHILDREN "$T/res.main")" ;; esac
 socks=$(find "$T/client" -type s 2>/dev/null | wc -l | tr -d ' ')
-[ "$socks" = 0 ] && ok "B: no socket file under the client's HOME / cache" || fail "B: $socks socket file(s)"
-case $out in *'和 m1 的连接断了，0.2 秒后重连（第 1 次）'*) ok "C: a drop → one line 「和 m1 的连接断了…（第 1 次）」" ;; *) fail "C: no reconnect line" ;; esac
-case $l2 in "m1 attach --thin --view $view --resume --device "*) ok "C: the reconnect is --resume on the same view, back on s1" ;; *) fail "C: reconnect: $l2" ;; esac
-[ "$(grep -c 'VIEW s1 ON m1' "$T/out.main")" -ge 2 ] || fail "C: not back on s1"
-case $out in *'FAKE SENT'*'GOT['*) ok "D: a quit with another token does nothing" ;; *) fail "D: the loop ended on a bad token" ;; esac
+[ "$socks" = 0 ] && st_ok_all "B: no socket file under the client's HOME / cache" || st_miss "B: $socks socket file(s)"
+case $out in *'和 m1 的连接断了，0.2 秒后重连（第 1 次）'*) st_ok_all "C: a drop → one line 「和 m1 的连接断了…（第 1 次）」" ;; *) st_miss "C: no reconnect line" ;; esac
+case $l2 in "m1 attach --thin --view $view --resume --device "*) st_ok_all "C: the reconnect is --resume on the same view, back on s1" ;; *) st_miss "C: reconnect: $l2" ;; esac
+[ "$(grep -c 'VIEW s1 ON m1' "$T/out.main")" -ge 2 ] || st_miss "C: not back on s1"
+case $out in *'FAKE SENT'*'GOT['*) st_ok_all "D: a quit with another token does nothing" ;; *) st_miss "D: the loop ended on a bad token" ;; esac
 got=$(grep -ao 'GOT\[[^]]*\]' "$T/out.main" | head -1)
-case $got in *"^[[200~$T/home/m1/.cache/claude-fleet/inbox/s1/"*"-drop_me.txt^[[201~]") ok "E: a drop → the path on the home, bracket-pasted" ;;
-  *) fail "E: drop: $got" ;; esac
+case $got in *"^[[200~$T/home/m1/.cache/claude-fleet/inbox/s1/"*"-drop_me.txt^[[201~]") st_ok_all "E: a drop → the path on the home, bracket-pasted" ;;
+  *) st_miss "E: drop: $got" ;; esac
 [ "$(cat "$T"/home/m1/.cache/claude-fleet/inbox/*/*drop_me.txt 2>/dev/null)" = dropped ] \
-  && ok "E: the dropped file's bytes are in the home's inbox" || fail "E: the file is not in the home's inbox"
-grep -q 'evil' "$T/paste.log" 2>/dev/null && fail "D: an upload went by the bad-token cur" || ok "D: the bad-token cur never steered an upload"
-case $out in *'GOT[^Vx]'*) ok "E: ⌃V with no picture is the ⌃V itself" ;; *) fail "E: ⌃V with no picture" ;; esac
+  && st_ok_all "E: the dropped file's bytes are in the home's inbox" || st_miss "E: the file is not in the home's inbox"
+grep -q 'evil' "$T/paste.log" 2>/dev/null && st_miss "D: an upload went by the bad-token cur" || st_ok_all "D: the bad-token cur never steered an upload"
+case $out in *'GOT[^Vx]'*) st_ok_all "E: ⌃V with no picture is the ⌃V itself" ;; *) st_miss "E: ⌃V with no picture" ;; esac
 
 # ⌃V with a picture, then quit
 touch "$T/clip.on"; : > "$T/rv.log"
@@ -285,10 +284,10 @@ THIN_ARGS='[]' drive pic '[
  ["wait", 10]
 ]'
 out=$(cat "$T/out.pic"); res=$(cat "$T/res.pic")
-case $(grep -ao 'GOT\[[^]]*\]' "$T/out.pic") in *"^[[200~$T/home/m1/.cache/claude-fleet/inbox/orch/"*"-clip.png^[[201~]") ok "E: ⌃V with a picture → its path on the home, bracket-pasted" ;;
-  *) fail "E: ⌃V picture: $(grep -ao 'GOT\[[^]]*\]' "$T/out.pic")" ;; esac
-case $res in *'RC 0'*) ok "H: ⌘Q (quit, our token) → exit 0" ;; *) fail "H: quit: $res" ;; esac
-case $out in *$'\e]1337;SetProfile=Default\a') ok "H: the iTerm2 profile back last" ;; *) fail "H: profile not restored at the end" ;; esac
+case $(grep -ao 'GOT\[[^]]*\]' "$T/out.pic") in *"^[[200~$T/home/m1/.cache/claude-fleet/inbox/orch/"*"-clip.png^[[201~]") st_ok_all "E: ⌃V with a picture → its path on the home, bracket-pasted" ;;
+  *) st_miss "E: ⌃V picture: $(grep -ao 'GOT\[[^]]*\]' "$T/out.pic")" ;; esac
+case $res in *'RC 0'*) st_ok_all "H: ⌘Q (quit, our token) → exit 0" ;; *) st_miss "H: quit: $res" ;; esac
+case $out in *$'\e]1337;SetProfile=Default\a') st_ok_all "H: the iTerm2 profile back last" ;; *) st_miss "H: profile not restored at the end" ;; esac
 rm -f "$T/clip.on" "$T/echo-input"
 
 # K — the keys (issue #3185, EPIC #3178 C7): each start writes iTerm2's `fleet`
@@ -297,17 +296,17 @@ rm -f "$T/clip.on" "$T/echo-input"
 # panel); a FLEET_KEYS_EXTRA's ⌘ chords are there and it rides the remote command's
 # environment to the home, which binds them
 kmap() { python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"])))' "$T/iterm/fleet.json" 2>/dev/null; }
-[ "$(kmap)" = "0x5b-0x100000 0x5d-0x100000 0x6b-0x100000 0x6e-0x100000 0x70-0x100000 0x71-0x100000 0x74-0x100000 0xd-0x20000 0xf700-0x300000 0xf701-0x300000" ] && ok "K: the start wrote the profile — ⌘P + ⇧↵ + #3328's forwards, nothing else" || fail "K: profile keys: $(kmap)"
-grep -q 'FLEET_KEYS_EXTRA' "$T/ssh.log" && fail "K: no extras, yet the remote command names FLEET_KEYS_EXTRA" || ok "K: no extras → the remote command as before"
+[ "$(kmap)" = "0x5b-0x100000 0x5d-0x100000 0x6b-0x100000 0x6e-0x100000 0x70-0x100000 0x71-0x100000 0x74-0x100000 0xd-0x20000 0xf700-0x300000 0xf701-0x300000" ] && st_ok_all "K: the start wrote the profile — ⌘P + ⇧↵ + #3328's forwards, nothing else" || st_miss "K: profile keys: $(kmap)"
+grep -q 'FLEET_KEYS_EXTRA' "$T/ssh.log" && st_miss "K: no extras, yet the remote command names FLEET_KEYS_EXTRA" || st_ok_all "K: no extras → the remote command as before"
 : > "$T/ssh.log"
 FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+\\' THIN_ARGS='[]' drive keys '[
  ["expect", "VIEW orch ON m1"],
  ["send", "quit\n"],
  ["wait", 10]
 ]'
-[ "$(kmap)" = "0x5b-0x100000 0x5d-0x100000 0x6b-0x100000 0x6e-0x100000 0x70-0x100000 0x71-0x100000 0x74-0x100000 0xd-0x20000 0xf700-0x300000 0xf701-0x300000" ] && ok "K: FLEET_KEYS_EXTRA=next=cmd+down → ⌘↓ in the profile (⌃\\ is the terminal's own)" || fail "K: profile keys with extras: $(kmap)"
+[ "$(kmap)" = "0x5b-0x100000 0x5d-0x100000 0x6b-0x100000 0x6e-0x100000 0x70-0x100000 0x71-0x100000 0x74-0x100000 0xd-0x20000 0xf700-0x300000 0xf701-0x300000" ] && st_ok_all "K: FLEET_KEYS_EXTRA=next=cmd+down → ⌘↓ in the profile (⌃\\ is the terminal's own)" || st_miss "K: profile keys with extras: $(kmap)"
 case $(sed -n 1p "$T/ssh.log") in *" m1 FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+"*"' FLEET_CLIENT_CAPS=show bash .claude/fleet/bin/fleet-remote-view.sh attach --thin "*)
-  ok "K: the extras ride the remote command's environment" ;; *) fail "K: remote command: $(sed -n 1p "$T/ssh.log")" ;; esac
+  st_ok_all "K: the extras ride the remote command's environment" ;; *) st_miss "K: remote command: $(sed -n 1p "$T/ssh.log")" ;; esac
 
 # ---------------------------------------------------------------------------
 # F — three failures → another home
@@ -325,12 +324,12 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   [ -s "$T/rv.log" ] && break; sleep 0.2
 done
 touch "$T/down.m1"; wait
-grep -q -- '--avoid m1' "$T/argv.log" && ok "F: three failed connections → --avoid m1" || fail "F: argv: $(cat "$T/argv.log")"
+grep -q -- '--avoid m1' "$T/argv.log" && st_ok_all "F: three failed connections → --avoid m1" || st_miss "F: argv: $(cat "$T/argv.log")"
 [ "$(grep -c '^m1 ' "$T/rv.log")" = 1 ] && [ "$(grep -c '^m1' "$T/ssh.log")" -ge 1 ] || :
 l=$(grep '^m2 ' "$T/rv.log" | head -1)
-case $l in "m2 attach --thin --view "*" --device "*) case $l in *--resume*) fail "F: --resume on a new home" ;; *) ok "F: on m2 with a fresh view (no --resume)" ;; esac ;;
-  *) fail "F: never reached m2: $(cat "$T/rv.log")" ;; esac
-grep -q 'rehome' "$T/thin.log" && ok "F: thin.log says rehome" || fail "F: no rehome line"
+case $l in "m2 attach --thin --view "*" --device "*) case $l in *--resume*) st_miss "F: --resume on a new home" ;; *) st_ok_all "F: on m2 with a fresh view (no --resume)" ;; esac ;;
+  *) st_miss "F: never reached m2: $(cat "$T/rv.log")" ;; esac
+grep -q 'rehome' "$T/thin.log" && st_ok_all "F: thin.log says rehome" || st_miss "F: no rehome line"
 rm -f "$T/down.m1"
 
 # ---------------------------------------------------------------------------
@@ -347,8 +346,8 @@ THIN_ARGS='[]' drive upd '[
  ["wait", 10]
 ]'
 v1=$(sed -n '1s/.*--view \([^ ]*\).*/\1/p' "$T/rv.log"); l2=$(sed -n 2p "$T/rv.log")
-grep -q "	exec	" "$T/thin.log" && ok "G: a new client between connections → exec (thin.log)" || fail "G: no exec line"
-case $l2 in "m1 attach --thin --view $v1 --resume "*) ok "G: the new version resumes the same view" ;; *) fail "G: after exec: $l2" ;; esac
+grep -q "	exec	" "$T/thin.log" && st_ok_all "G: a new client between connections → exec (thin.log)" || st_miss "G: no exec line"
+case $l2 in "m1 attach --thin --view $v1 --resume "*) st_ok_all "G: the new version resumes the same view" ;; *) st_miss "G: after exec: $l2" ;; esac
 printf '#!/bin/sh\nexit 0\n' > "$T/update.sh"
 
 # ---------------------------------------------------------------------------
@@ -361,17 +360,17 @@ THIN_ARGS='[]' drive hup '[
 ]'
 sleep 0.3
 left=$(pgrep -f "$T/" | while read -r p; do ps -o command= -p "$p"; done | grep -v 'drive.py' | grep -c .)
-[ "$left" = 0 ] && ok "H: SIGHUP → the loop and its ssh gone, nothing left" || fail "H: left after SIGHUP: $(pgrep -fl "$T/")"
-case $(cat "$T/res.hup") in *'RC 129'*) ok "H: SIGHUP → exit 129" ;; *) fail "H: hup: $(cat "$T/res.hup")" ;; esac
+[ "$left" = 0 ] && st_ok_all "H: SIGHUP → the loop and its ssh gone, nothing left" || st_miss "H: left after SIGHUP: $(pgrep -fl "$T/")"
+case $(cat "$T/res.hup") in *'RC 129'*) st_ok_all "H: SIGHUP → exit 129" ;; *) st_miss "H: hup: $(cat "$T/res.hup")" ;; esac
 awk -F '\t' '$2 == "connect" && NF >= 9 && $3 == "m1" && $4 == "lan" && $5 ~ /^[0-9]+$/ && $6 ~ /^[0-9]+$/ && $7 ~ /^[0-9]+$/ { n++ } END { exit !(n > 0) }' "$T/thin.log" \
-  && ok "H: thin.log connect lines carry home · route · pick_ms · ssh_ms · first_ms" || fail "H: thin.log: $(head -3 "$T/thin.log")"
+  && st_ok_all "H: thin.log connect lines carry home · route · pick_ms · ssh_ms · first_ms" || st_miss "H: thin.log: $(head -3 "$T/thin.log")"
 # the view drawn is written WHILE it is up (#3155), before that connection's own
 # `connect` line — the onboarding drill reads it to call the client step landed
 awk -F '\t' '$2 == "drawn" && $3 == "m1" && $4 == "lan" && $7 ~ /^[0-9]+$/ && !c { d = 1 } $2 == "connect" && $3 == "m1" { c = 1 }
   END { exit !d }' "$T/thin.log" \
-  && ok "H: thin.log has a drawn line (home · route · first_ms) before its connect line" || fail "H: no drawn line: $(head -4 "$T/thin.log")"
+  && st_ok_all "H: thin.log has a drawn line (home · route · first_ms) before its connect line" || st_miss "H: no drawn line: $(head -4 "$T/thin.log")"
 e=$(python3 "$BIN/fleet-thin.py" </dev/null 2>&1); rc=$?
-[ "$rc" = 2 ] && ok "H: no terminal → exit 2, one line" || fail "H: no tty rc=$rc $e"
+[ "$rc" = 2 ] && st_ok_all "H: no terminal → exit 2, one line" || st_miss "H: no tty rc=$rc $e"
 
 # ---------------------------------------------------------------------------
 # I — this machine is home (issue #3006, C9): no ssh back to itself
@@ -383,11 +382,11 @@ Host $ME fleet-$ME fleet-$ME-lan
   User $LG
 EOF
 printf '%s lan\n' "$ME" >> "$H/.config/claude-fleet/routes"
-j=$(argv "$ME") || fail "I: --argv $ME exit $?"
-case $j in *'"local": true'*'"argv": []'*) ok "I: --argv for this machine and login → local, no ssh" ;; *) fail "I: --argv self: $j" ;; esac
+j=$(argv "$ME") || st_miss "I: --argv $ME exit $?"
+case $j in *'"local": true'*'"argv": []'*) st_ok_all "I: --argv for this machine and login → local, no ssh" ;; *) st_miss "I: --argv self: $j" ;; esac
 j=$(env FLEET_CONNECT_SELF=ssh HOME="$H" PATH="$PATH" XDG_CONFIG_HOME="$H/.config" XDG_CACHE_HOME="$H/.cache" \
       FLEET_CLIENT_LOG=0 python3 "$BIN/fleet-connect.py" --argv "$ME")
-case $j in *'"local"'*) fail "I: FLEET_CONNECT_SELF=ssh still local: $j" ;; *'"argv": ["ssh"'*) ok "I: FLEET_CONNECT_SELF=ssh → the ssh to itself" ;; *) fail "I: self=ssh: $j" ;; esac
+case $j in *'"local"'*) st_miss "I: FLEET_CONNECT_SELF=ssh still local: $j" ;; *'"argv": ["ssh"'*) st_ok_all "I: FLEET_CONNECT_SELF=ssh → the ssh to itself" ;; *) st_miss "I: self=ssh: $j" ;; esac
 mkdir -p "$T/client/.claude/fleet/bin"
 cp "$T/home/m1/.claude/fleet/bin/fleet-remote-view.sh" "$T/client/.claude/fleet/bin/"
 : > "$T/rv.log"; : > "$T/ssh.log"; : > "$T/argv.log"
@@ -398,11 +397,11 @@ THIN_ARGS='["--local"]' drive local '[
  ["wait", 10]
 ]'
 res=$(cat "$T/res.local")
-case $res in *'RC 0'*) ok "I: --local: up and ⌘Q → exit 0" ;; *) fail "I: --local: $res" ;; esac
-case $res in *"CHILDREN 1 "*"fleet-remote-view.sh attach --thin "*) case $res in *ssh*) fail "I: an ssh in the tree: $res" ;;
-  *) ok "I: --local: the view's command is the loop's only child — no ssh in the tree" ;; esac ;; *) fail "I: children: $(grep CHILDREN "$T/res.local")" ;; esac
-[ -s "$T/argv.log" ] && fail "I: --local asked fleet-connect: $(cat "$T/argv.log")" || ok "I: --local asks no hub"
-[ -s "$T/ssh.log" ] && fail "I: --local ran ssh: $(cat "$T/ssh.log")" || :
+case $res in *'RC 0'*) st_ok_all "I: --local: up and ⌘Q → exit 0" ;; *) st_miss "I: --local: $res" ;; esac
+case $res in *"CHILDREN 1 "*"fleet-remote-view.sh attach --thin "*) case $res in *ssh*) st_miss "I: an ssh in the tree: $res" ;;
+  *) st_ok_all "I: --local: the view's command is the loop's only child — no ssh in the tree" ;; esac ;; *) st_miss "I: children: $(grep CHILDREN "$T/res.local")" ;; esac
+[ -s "$T/argv.log" ] && st_miss "I: --local asked fleet-connect: $(cat "$T/argv.log")" || st_ok_all "I: --local asks no hub"
+[ -s "$T/ssh.log" ] && st_miss "I: --local ran ssh: $(cat "$T/ssh.log")" || :
 
 # ---------------------------------------------------------------------------
 # J — a newcomer with no fleet anywhere (issue #3054)
@@ -463,19 +462,19 @@ THIN_ARGS='[]' jenv drive first '[
  ["wait", 10]
 ]'
 out=$(cat "$T/out.first"); res=$(cat "$T/res.first")
-case $res in *TIMEOUT*) fail "J1: timed out: $(tr -d '\r' < "$T/out.first" | tail -5)" ;; esac
-grep -q '^m3 attach --thin' "$T/rv.log" && ok "J1: the hub's pick m3 answers no fleet (rc 3)" || fail "J1: rv: $(cat "$T/rv.log")"
-case $out in *'m3 这台机器的登录 u1 下没有 fleet'*) ok "J1: says which login on which machine had no fleet (#3049)" ;; *) fail "J1: no no-fleet line" ;; esac
-case $out in *'正在为你开机器（m2），约 40 秒'*) ok "J1: the hub's opening progress on the screen" ;; *) fail "J1: no opening line" ;; esac
-case $out in *'第一个会话开在 m2'*) ok "J1: 「第一个会话开在 m2」" ;; *) fail "J1: no placed line" ;; esac
+case $res in *TIMEOUT*) st_miss "J1: timed out: $(tr -d '\r' < "$T/out.first" | tail -5)" ;; esac
+grep -q '^m3 attach --thin' "$T/rv.log" && st_ok_all "J1: the hub's pick m3 answers no fleet (rc 3)" || st_miss "J1: rv: $(cat "$T/rv.log")"
+case $out in *'m3 这台机器的登录 u1 下没有 fleet'*) st_ok_all "J1: says which login on which machine had no fleet (#3049)" ;; *) st_miss "J1: no no-fleet line" ;; esac
+case $out in *'正在为你开机器（m2），约 40 秒'*) st_ok_all "J1: the hub's opening progress on the screen" ;; *) st_miss "J1: no opening line" ;; esac
+case $out in *'第一个会话开在 m2'*) st_ok_all "J1: 「第一个会话开在 m2」" ;; *) st_miss "J1: no placed line" ;; esac
 [ "$(grep -c -- '- home --agent claude --node auto lease=L1' "$T/place.log")" = 3 ] \
-  && ok "J1: the old client's ask (- home --agent claude), signed by the lease, asked until placed" || fail "J1: place: $(cat "$T/place.log")"
+  && st_ok_all "J1: the old client's ask (- home --agent claude), signed by the lease, asked until placed" || st_miss "J1: place: $(cat "$T/place.log")"
 l=$(grep '^m2 ' "$T/rv.log" | head -1)
-case $l in "m2 attach --thin --view "*" --want fu/fid9 "*) ok "J1: the first connection to m2 lands on the placed session (--want)" ;;
-  *) fail "J1: m2 attach: $l / $(cat "$T/rv.log")" ;; esac
-grep -q '^release --lease L1' "$T/lease.log" && ok "J1: the lease is given back" || fail "J1: lease: $(cat "$T/lease.log")"
-case $res in *'RC 0'*) ok "J1: ⌘Q → exit 0" ;; *) fail "J1: $res" ;; esac
-[ "$(grep -c '^m3 ' "$T/rv.log")" = 1 ] && ok "J1: no reconnect to the machine with no session" || fail "J1: m3 asked $(grep -c '^m3 ' "$T/rv.log") times"
+case $l in "m2 attach --thin --view "*" --want fu/fid9 "*) st_ok_all "J1: the first connection to m2 lands on the placed session (--want)" ;;
+  *) st_miss "J1: m2 attach: $l / $(cat "$T/rv.log")" ;; esac
+grep -q '^release --lease L1' "$T/lease.log" && st_ok_all "J1: the lease is given back" || st_miss "J1: lease: $(cat "$T/lease.log")"
+case $res in *'RC 0'*) st_ok_all "J1: ⌘Q → exit 0" ;; *) st_miss "J1: $res" ;; esac
+[ "$(grep -c '^m3 ' "$T/rv.log")" = 1 ] && st_ok_all "J1: no reconnect to the machine with no session" || st_miss "J1: m3 asked $(grep -c '^m3 ' "$T/rv.log") times"
 # J2: the hub says opening at the pick itself → the same road
 : > "$T/rv.log"; : > "$T/place.log"; touch "$T/j.argv-opening"; echo 1 > "$T/j.opening"
 THIN_ARGS='[]' jenv drive first2 '[
@@ -483,9 +482,9 @@ THIN_ARGS='[]' jenv drive first2 '[
  ["send", "quit\n"],
  ["wait", 10]
 ]'
-grep -q '^m3 ' "$T/rv.log" && fail "J2: went to m3 while the hub said opening" || :
+grep -q '^m3 ' "$T/rv.log" && st_miss "J2: went to m3 while the hub said opening" || :
 case $(cat "$T/res.first2") in *'RC 0'*) grep -q '^m2 attach --thin .*--want fu/fid9' "$T/rv.log" \
-  && ok "J2: the pick's opening answer → placed, lands on m2" || fail "J2: rv: $(cat "$T/rv.log")" ;; *) fail "J2: $(cat "$T/res.first2")" ;; esac
+  && st_ok_all "J2: the pick's opening answer → placed, lands on m2" || st_miss "J2: rv: $(cat "$T/rv.log")" ;; *) st_miss "J2: $(cat "$T/res.first2")" ;; esac
 # J3: the opening failed → three lines, who to ask, exit 1 — no backoff
 : > "$T/rv.log"; : > "$T/lease.log"; touch "$T/j.fail"
 THIN_ARGS='[]' jenv drive first3 '[
@@ -493,11 +492,11 @@ THIN_ARGS='[]' jenv drive first3 '[
  ["wait", 10]
 ]'
 out=$(cat "$T/out.first3")
-case $(cat "$T/res.first3") in *'RC 1'*) ok "J3: the opening failed → exit 1" ;; *) fail "J3: $(cat "$T/res.first3")" ;; esac
-case $out in *'你的第一个会话没开出来'*'原因：useradd failed'*'下一步：找入口管理员 boss@example'*) ok "J3: 没开出来 · 原因 · 下一步 naming who to ask" ;;
-  *) fail "J3: lines: $(printf '%s' "$out" | tr -d '\r' | tail -5)" ;; esac
-case $out in *'重连'*) fail "J3: a reconnect line against the machine with no session" ;; *) ok "J3: no reconnect against m3" ;; esac
-grep -q '^release --lease L1' "$T/lease.log" && ok "J3: the lease is given back" || fail "J3: lease: $(cat "$T/lease.log")"
+case $(cat "$T/res.first3") in *'RC 1'*) st_ok_all "J3: the opening failed → exit 1" ;; *) st_miss "J3: $(cat "$T/res.first3")" ;; esac
+case $out in *'你的第一个会话没开出来'*'原因：useradd failed'*'下一步：找入口管理员 boss@example'*) st_ok_all "J3: 没开出来 · 原因 · 下一步 naming who to ask" ;;
+  *) st_miss "J3: lines: $(printf '%s' "$out" | tr -d '\r' | tail -5)" ;; esac
+case $out in *'重连'*) st_miss "J3: a reconnect line against the machine with no session" ;; *) st_ok_all "J3: no reconnect against m3" ;; esac
+grep -q '^release --lease L1' "$T/lease.log" && st_ok_all "J3: the lease is given back" || st_miss "J3: lease: $(cat "$T/lease.log")"
 rm -f "$T/j.fail" "$T/j.opening"
 # J4 (issue #3062): the hub says opening, then — the login made, its fleet not yet
 # reported — nothing ({}), while the place still answers 「没有你的登录」 three times
@@ -523,13 +522,13 @@ THIN_ARGS='[]' jenv drive first4 '[
  ["wait", 10]
 ]'
 out=$(cat "$T/out.first4")
-case $(cat "$T/res.first4") in *'RC 0'*) ok "J4: opening → {} with the place still refusing → waited, placed, exit 0" ;;
-  *) fail "J4: $(cat "$T/res.first4") / $(printf '%s' "$out" | tr -d '\r' | tail -5)" ;; esac
-[ "$(grep -c -- '- home --agent claude' "$T/place.log")" = 5 ] && ok "J4: asked until placed (5 asks), not given up after two" \
-  || fail "J4: place asked $(grep -c -- '- home' "$T/place.log") times"
-case $out in *'等它的 fleet 报上来'*) ok "J4: 「登录开好了，等它的 fleet 报上来」 on the screen" ;; *) fail "J4: no settle line" ;; esac
-case $out in *'没开出来'*) fail "J4: judged a failure while the fleet was settling" ;; *) ok "J4: no failure" ;; esac
-grep -q '^m2 attach --thin .*--want fu/fid9' "$T/rv.log" && ok "J4: lands on the placed session" || fail "J4: rv: $(cat "$T/rv.log")"
+case $(cat "$T/res.first4") in *'RC 0'*) st_ok_all "J4: opening → {} with the place still refusing → waited, placed, exit 0" ;;
+  *) st_miss "J4: $(cat "$T/res.first4") / $(printf '%s' "$out" | tr -d '\r' | tail -5)" ;; esac
+[ "$(grep -c -- '- home --agent claude' "$T/place.log")" = 5 ] && st_ok_all "J4: asked until placed (5 asks), not given up after two" \
+  || st_miss "J4: place asked $(grep -c -- '- home' "$T/place.log") times"
+case $out in *'等它的 fleet 报上来'*) st_ok_all "J4: 「登录开好了，等它的 fleet 报上来」 on the screen" ;; *) st_miss "J4: no settle line" ;; esac
+case $out in *'没开出来'*) st_miss "J4: judged a failure while the fleet was settling" ;; *) st_ok_all "J4: no failure" ;; esac
+grep -q '^m2 attach --thin .*--want fu/fid9' "$T/rv.log" && st_ok_all "J4: lands on the placed session" || st_miss "J4: rv: $(cat "$T/rv.log")"
 # J5: the fleet never reports → past the settle a failure naming why, never
 # forever; and a terminal the installer just put on PATH (rc file only) is told
 # how to type fleet (issue #3062)
@@ -539,12 +538,12 @@ THIN_ARGS='[]' FLEET_THIN_FIRST_SETTLE=1 FLEET_INSTALL_PATH_NEW="$T/client/.loca
  ["wait", 10]
 ]'
 out=$(cat "$T/out.first5")
-case $(cat "$T/res.first5") in *'RC 1'*) ok "J5: the fleet never reported → exit 1" ;; *) fail "J5: $(cat "$T/res.first5")" ;; esac
-case $out in *'原因：m2 上的登录开好后等了'*'没有你的登录'*) ok "J5: 原因 names the wait and the place's answer" ;;
-  *) fail "J5: lines: $(printf '%s' "$out" | tr -d '\r' | tail -5)" ;; esac
-case $out in *'下一步：稍后再敲 ~/.local/bin/fleet'*) ok "J5: 下一步 spells fleet's full path" ;; *) fail "J5: no full path in 下一步" ;; esac
-case $out in *'这个终端还找不到 fleet 命令：先敲 exec '*) ok "J5: the exit says how to get fleet on this terminal's PATH" ;; *) fail "J5: no PATH hint" ;; esac
-grep -q '^m2 ' "$T/rv.log" && fail "J5: connected to m2 with no session placed" || ok "J5: no connection"
+case $(cat "$T/res.first5") in *'RC 1'*) st_ok_all "J5: the fleet never reported → exit 1" ;; *) st_miss "J5: $(cat "$T/res.first5")" ;; esac
+case $out in *'原因：m2 上的登录开好后等了'*'没有你的登录'*) st_ok_all "J5: 原因 names the wait and the place's answer" ;;
+  *) st_miss "J5: lines: $(printf '%s' "$out" | tr -d '\r' | tail -5)" ;; esac
+case $out in *'下一步：稍后再敲 ~/.local/bin/fleet'*) st_ok_all "J5: 下一步 spells fleet's full path" ;; *) st_miss "J5: no full path in 下一步" ;; esac
+case $out in *'这个终端还找不到 fleet 命令：先敲 exec '*) st_ok_all "J5: the exit says how to get fleet on this terminal's PATH" ;; *) st_miss "J5: no PATH hint" ;; esac
+grep -q '^m2 ' "$T/rv.log" && st_miss "J5: connected to m2 with no session placed" || st_ok_all "J5: no connection"
 rm -f "$T/j.settle" "$T/j.acct"
 
 # ---------------------------------------------------------------------------
@@ -564,13 +563,13 @@ THIN_ARGS='["s1"]' FLEET_THIN_HOME_RESTART_POLL=0.2 renv drive restart '[
  ["wait", 10]
 ]'
 out=$(cat "$T/out.restart")
-case $(cat "$T/res.restart") in *'RC 0'*) ok "R1: home restarting → back on s1, ⌘Q → exit 0" ;;
-  *) fail "R1: $(cat "$T/res.restart") / $(printf '%s' "$out" | tr -d '\r' | tail -5)" ;; esac
-case $out in *'家机器 m1 在重启，稍等'*) ok "R1: 「家机器 m1 在重启，稍等」 on the screen" ;; *) fail "R1: no restarting line" ;; esac
-[ "$(grep -c '^m1 attach --thin .*--resume' "$T/rv.log")" -ge 3 ] && ok "R1: every attach after the drop is --resume on the same view" \
-  || fail "R1: rv: $(cat "$T/rv.log")"
-[ -s "$T/place.log" ] && fail "R1: the first-session road asked for a new session: $(cat "$T/place.log")" || ok "R1: no new session asked"
-case $out in *'下没有 fleet'*|*'没开出来'*) fail "R1: told the person there is no fleet" ;; *) ok "R1: no 「没有 fleet」 / 「没开出来」" ;; esac
+case $(cat "$T/res.restart") in *'RC 0'*) st_ok_all "R1: home restarting → back on s1, ⌘Q → exit 0" ;;
+  *) st_miss "R1: $(cat "$T/res.restart") / $(printf '%s' "$out" | tr -d '\r' | tail -5)" ;; esac
+case $out in *'家机器 m1 在重启，稍等'*) st_ok_all "R1: 「家机器 m1 在重启，稍等」 on the screen" ;; *) st_miss "R1: no restarting line" ;; esac
+[ "$(grep -c '^m1 attach --thin .*--resume' "$T/rv.log")" -ge 3 ] && st_ok_all "R1: every attach after the drop is --resume on the same view" \
+  || st_miss "R1: rv: $(cat "$T/rv.log")"
+[ -s "$T/place.log" ] && st_miss "R1: the first-session road asked for a new session: $(cat "$T/place.log")" || st_ok_all "R1: no new session asked"
+case $out in *'下没有 fleet'*|*'没开出来'*) st_miss "R1: told the person there is no fleet" ;; *) st_ok_all "R1: no 「没有 fleet」 / 「没开出来」" ;; esac
 # R2: the home never comes back → past FLEET_THIN_HOME_RESTART_SECS the old road
 echo 1000 > "$T/nofleet.m1"; : > "$T/rv.log"; : > "$T/place.log"
 THIN_ARGS='["s1"]' FLEET_THIN_HOME_RESTART_POLL=0.2 FLEET_THIN_HOME_RESTART_SECS=1 renv drive restart2 '[
@@ -580,10 +579,9 @@ THIN_ARGS='["s1"]' FLEET_THIN_HOME_RESTART_POLL=0.2 FLEET_THIN_HOME_RESTART_SECS
  ["send", "quit\n"],
  ["wait", 10]
 ]'
-grep -q -- '- home --agent claude' "$T/place.log" && ok "R2: a home that never comes back → the first-session road, bounded" \
-  || fail "R2: place: $(cat "$T/place.log") / $(tr -d '\r' < "$T/out.restart2" | tail -5)"
+grep -q -- '- home --agent claude' "$T/place.log" && st_ok_all "R2: a home that never comes back → the first-session road, bounded" \
+  || st_miss "R2: place: $(cat "$T/place.log") / $(tr -d '\r' < "$T/out.restart2" | tail -5)"
 rm -f "$T/nofleet.m1"
 
 echo
-[ "$FAILS" = 0 ] && { echo "fleet-thin-selftest: PASS"; exit 0; }
-echo "fleet-thin-selftest: $FAILS FAIL"; exit 1
+st_done

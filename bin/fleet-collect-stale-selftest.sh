@@ -9,6 +9,7 @@
 # Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 FILES='fleet-collect-kick.sh fleet-daemon-watch.sh fleet-daemon-lib.sh usage-lib.sh fleet-alerts.sh fleet-palette.sh'
 for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
@@ -56,8 +57,6 @@ export FLEET_COLLECT_KICK_TRACE=1800
 : > "$FAKE_KICK_LOG"
 
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
 now()  { date +%s; }
 kicks() { wc -l < "$FAKE_KICK_LOG" 2>/dev/null | tr -d " " || echo 0; }
 
@@ -92,119 +91,119 @@ wait_kicks() {  # $1 = expected count; the bar's kick is a detached fork
 
 # ---------------------------------------------------------------- 1. fresh ----
 hb 30
-[ -z "$(lib 'fleet_collect_stale_age')" ] || fail "1: a 30s-old heartbeat reported stale"; ok
-[ "$(kick --status | cut -f1)" = fresh ] || fail "1: --status not fresh"; ok
-kick; [ "$(kicks)" -eq 0 ] || fail "1: kicked a healthy collector"; ok
-case "$(bar)" in *"✖  dash · stale"*) fail "1: status bar alarmed on a fresh heartbeat" ;; esac; ok
+[ -z "$(lib 'fleet_collect_stale_age')" ] || st_fail "1: a 30s-old heartbeat reported stale"; st_count
+[ "$(kick --status | cut -f1)" = fresh ] || st_fail "1: --status not fresh"; st_count
+kick; [ "$(kicks)" -eq 0 ] || st_fail "1: kicked a healthy collector"; st_count
+case "$(bar)" in *"✖  dash · stale"*) st_fail "1: status bar alarmed on a fresh heartbeat" ;; esac; st_count
 
 # ------------------------------------------------------------- 2. inflight ----
 # Started 9 min ago but its phases advance: slow, not dead — never alarm.
 hb_running 540 20
-[ -z "$(lib 'fleet_collect_stale_age')" ] || fail "2: an advancing in-flight tick reported stale"; ok
-kick; [ "$(kicks)" -eq 0 ] || fail "2: kicked a tick that is making progress"; ok
+[ -z "$(lib 'fleet_collect_stale_age')" ] || st_fail "2: an advancing in-flight tick reported stale"; st_count
+kick; [ "$(kicks)" -eq 0 ] || st_fail "2: kicked a tick that is making progress"; st_count
 hb_running 900 600
-[ -n "$(lib 'fleet_collect_stale_age')" ] || fail "2: a tick wedged 600s in one phase not reported stale"; ok
+[ -n "$(lib 'fleet_collect_stale_age')" ] || st_fail "2: a tick wedged 600s in one phase not reported stale"; st_count
 
 # ---------------------------------------------------------------- 3. never ----
 rm -f "$HB"
-[ -z "$(lib 'fleet_collect_stale_age')" ] || fail "3: alarmed with no heartbeat at all"; ok
-[ "$(kick --status | cut -f1)" = never ] || fail "3: --status not never"; ok
-kick; [ "$(kicks)" -eq 0 ] || fail "3: kicked with no heartbeat (fresh install)"; ok
-case "$(bar)" in *"✖  dash · stale"*) fail "3: status bar alarmed on a fresh install" ;; esac; ok
+[ -z "$(lib 'fleet_collect_stale_age')" ] || st_fail "3: alarmed with no heartbeat at all"; st_count
+[ "$(kick --status | cut -f1)" = never ] || st_fail "3: --status not never"; st_count
+kick; [ "$(kicks)" -eq 0 ] || st_fail "3: kicked with no heartbeat (fresh install)"; st_count
+case "$(bar)" in *"✖  dash · stale"*) st_fail "3: status bar alarmed on a fresh install" ;; esac; st_count
 
 # ---------------------------------------------------------------- 4. stale ----
 hb 900
 age=$(lib 'fleet_collect_stale_age')
-[ -n "$age" ] && [ "$age" -ge 900 ] || fail "4: stale age not reported (got '$age')"; ok
-[ "$(kick --status | cut -f1)" = stale ] || fail "4: --status not stale"; ok
-case "$(bar)" in *"✖ 1#"*"dash · stale · 15m"*) ok ;; *) fail "4: status bar missing '✖ 1' + 'dash · stale · 15m': $(bar)" ;; esac
-lib 'fleet_collect_kick_due' || fail "4: kick not due on a stale collector with no prior kick"; ok
+[ -n "$age" ] && [ "$age" -ge 900 ] || st_fail "4: stale age not reported (got '$age')"; st_count
+[ "$(kick --status | cut -f1)" = stale ] || st_fail "4: --status not stale"; st_count
+case "$(bar)" in *"✖ 1#"*"dash · stale · 15m"*) st_count ;; *) st_fail "4: status bar missing '✖ 1' + 'dash · stale · 15m': $(bar)" ;; esac
+lib 'fleet_collect_kick_due' || st_fail "4: kick not due on a stale collector with no prior kick"; st_count
 kick
-[ "$(kicks)" -eq 1 ] || fail "4: expected exactly 1 kickstart, got $(kicks)"; ok
+[ "$(kicks)" -eq 1 ] || st_fail "4: expected exactly 1 kickstart, got $(kicks)"; st_count
 grep -q 'kickstart -k gui/.*/com.claude-fleet.collect' "$FAKE_KICK_LOG" \
-  || fail "4: kicked the wrong target: $(cat "$FAKE_KICK_LOG")"; ok
-[ -f "$KTS" ] || fail "4: no kick stamp written"; ok
+  || st_fail "4: kicked the wrong target: $(cat "$FAKE_KICK_LOG")"; st_count
+[ -f "$KTS" ] || st_fail "4: no kick stamp written"; st_count
 
 # ------------------------------------------------------------- 5. cooldown ----
 kick; kick
-[ "$(kicks)" -eq 1 ] || fail "5: kicked again inside the cooldown ($(kicks) total)"; ok
-lib 'fleet_collect_kick_due' && fail "5: kick still reported due inside the cooldown"; ok
-[ -n "$(lib 'fleet_collect_stale_age')" ] || fail "5: alarm dropped while still stale"; ok
+[ "$(kicks)" -eq 1 ] || st_fail "5: kicked again inside the cooldown ($(kicks) total)"; st_count
+lib 'fleet_collect_kick_due' && st_fail "5: kick still reported due inside the cooldown"; st_count
+[ -n "$(lib 'fleet_collect_stale_age')" ] || st_fail "5: alarm dropped while still stale"; st_count
 printf '%s\n' "$(( $(now) - 700 ))" > "$KTS"
-lib 'fleet_collect_kick_due' || fail "5: kick not due again past the cooldown"; ok
+lib 'fleet_collect_kick_due' || st_fail "5: kick not due again past the cooldown"; st_count
 kick
-[ "$(kicks)" -eq 2 ] || fail "5: no second kick past the cooldown ($(kicks) total)"; ok
+[ "$(kicks)" -eq 2 ] || st_fail "5: no second kick past the cooldown ($(kicks) total)"; st_count
 
 # ---------------------------------------------------------------- 6. trace ----
-case "$(bar)" in *"✖  dash · stale"*"↻"*) ok ;; *) fail "6: no ↻ trace while stale after a kick: $(bar)" ;; esac
+case "$(bar)" in *"✖  dash · stale"*"↻"*) st_count ;; *) st_fail "6: no ↻ trace while stale after a kick: $(bar)" ;; esac
 hb 30                                    # the collector recovers…
-[ -z "$(lib 'fleet_collect_stale_age')" ] || fail "6: still stale after recovery"; ok
-case "$(bar)" in *"↻  dash · stale · kicked"*) ok ;; *) fail "6: recovery was silent — no kick trace: $(bar)" ;; esac
+[ -z "$(lib 'fleet_collect_stale_age')" ] || st_fail "6: still stale after recovery"; st_count
+case "$(bar)" in *"↻  dash · stale · kicked"*) st_count ;; *) st_fail "6: recovery was silent — no kick trace: $(bar)" ;; esac
 printf '%s\n' "$(( $(now) - 2000 ))" > "$KTS"    # …and the trace window expires
-case "$(bar)" in *"dash · stale"*) fail "6: trace outlived its window: $(bar)" ;; esac; ok
+case "$(bar)" in *"dash · stale"*) st_fail "6: trace outlived its window: $(bar)" ;; esac; st_count
 
 # ------------------------------------------------------------------ 7. log ----
-[ -f "$KICKLOG" ] || fail "7: no logs/daemon-kick.log"; ok
-[ "$(grep -c '^.* kick ' "$KICKLOG")" -eq 2 ] || fail "7: expected 2 logged kicks, got: $(cat "$KICKLOG")"; ok
-grep -q 'stale=.*mgr=launchd.*rc=0' "$KICKLOG" || fail "7: log line missing staleness/mgr/rc: $(cat "$KICKLOG")"; ok
+[ -f "$KICKLOG" ] || st_fail "7: no logs/daemon-kick.log"; st_count
+[ "$(grep -c '^.* kick ' "$KICKLOG")" -eq 2 ] || st_fail "7: expected 2 logged kicks, got: $(cat "$KICKLOG")"; st_count
+grep -q 'stale=.*mgr=launchd.*rc=0' "$KICKLOG" || st_fail "7: log line missing staleness/mgr/rc: $(cat "$KICKLOG")"; st_count
 
 # ------------------------------------------------------------------ 8. off ----
 hb 900; rm -f "$KTS"; : > "$FAKE_KICK_LOG"
 FLEET_COLLECT_KICK=0 kick
-[ "$(kicks)" -eq 0 ] || fail "8: kicked with FLEET_COLLECT_KICK=0"; ok
-case "$(bar)" in *"✖  dash · stale"*) ok ;; *) fail "8: FLEET_COLLECT_KICK=0 also silenced the alarm" ;; esac
+[ "$(kicks)" -eq 0 ] || st_fail "8: kicked with FLEET_COLLECT_KICK=0"; st_count
+case "$(bar)" in *"✖  dash · stale"*) st_count ;; *) st_fail "8: FLEET_COLLECT_KICK=0 also silenced the alarm" ;; esac
 
 # -------------------------------------------------------------- 9. no-unit ----
 FAKE_UNIT_LOADED=0 kick
-[ "$(kicks)" -eq 0 ] || fail "9: kicked a unit that is not loaded"; ok
-grep -q '^.* no-unit ' "$KICKLOG" || fail "9: no-unit not logged: $(cat "$KICKLOG")"; ok
-case "$(bar)" in *"✖  dash · stale"*) ok ;; *) fail "9: alarm dropped when no unit is loaded" ;; esac
+[ "$(kicks)" -eq 0 ] || st_fail "9: kicked a unit that is not loaded"; st_count
+grep -q '^.* no-unit ' "$KICKLOG" || st_fail "9: no-unit not logged: $(cat "$KICKLOG")"; st_count
+case "$(bar)" in *"✖  dash · stale"*) st_count ;; *) st_fail "9: alarm dropped when no unit is loaded" ;; esac
 
 # ------------------------------------------------------- 10. bar self-heals ----
 # Nobody watches a doctor run (#636): the bar itself kicks.
 hb 900; rm -f "$KTS"; : > "$FAKE_KICK_LOG"
-case "$(bar_live)" in *"✖  dash · stale"*) ok ;; *) fail "10: bar did not alarm" ;; esac
-wait_kicks 1 || fail "10: the status bar did not self-heal a stale collector (kicks=$(kicks))"; ok
-case "$(bar)" in *"✖  dash · stale"*"↻"*) ok ;; *) fail "10: no trace after the bar's own kick: $(bar)" ;; esac
+case "$(bar_live)" in *"✖  dash · stale"*) st_count ;; *) st_fail "10: bar did not alarm" ;; esac
+wait_kicks 1 || st_fail "10: the status bar did not self-heal a stale collector (kicks=$(kicks))"; st_count
+case "$(bar)" in *"✖  dash · stale"*"↻"*) st_count ;; *) st_fail "10: no trace after the bar's own kick: $(bar)" ;; esac
 
 # ------------------------------------------------- 11. the headless callers ----
 # The headless callers, pinned from the source: the KeepAlive spinner (the one
 # daemon that survived the 2026-09-14 launchd stall) and the reconcile tick.
 grep -q 'fleet-daemon-watch.sh' "$BIN/tmux-spinner.py" \
-  || fail "11: the KeepAlive spinner no longer runs the daemon self-heal — the headless path is gone"; ok
+  || st_fail "11: the KeepAlive spinner no longer runs the daemon self-heal — the headless path is gone"; st_count
 grep -q 'daemon_watch=30' "$BIN/tmux-spinner.py" \
-  || fail "11: the spinner's self-heal lost its frame throttle"; ok
+  || st_fail "11: the spinner's self-heal lost its frame throttle"; st_count
 grep -q 'fleet-collect-kick.sh' "$BIN/fleet-reconcile-tick.sh" \
-  || fail "11: the reconcile tick no longer runs the collector self-heal backstop (it took it from the quota watch, T549)"; ok
+  || st_fail "11: the reconcile tick no longer runs the collector self-heal backstop (it took it from the quota watch, T549)"; st_count
 grep -q 'fleet_collect_kick_due' "$BIN/fleet-alerts.sh" \
-  || fail "11: the alerts producer no longer self-heals"; ok
+  || st_fail "11: the alerts producer no longer self-heals"; st_count
 
 # ------------------------------------------------------------- 12. relative ----
 # Unset FLEET_COLLECT_STALE ⇒ FLEET_DAEMON_STALE_MULT × the unit's 60s interval,
 # not the old absolute 600s a 7–14-minute collector never reached (#639).
 unset FLEET_COLLECT_STALE
 [ "$(lib 'fleet_collect_stale_secs')" = 300 ] \
-  || fail "12: default threshold is not 5× the 60s interval (got $(lib 'fleet_collect_stale_secs'))"; ok
+  || st_fail "12: default threshold is not 5× the 60s interval (got $(lib 'fleet_collect_stale_secs'))"; st_count
 [ "$(FLEET_DAEMON_STALE_MULT=10 lib 'fleet_collect_stale_secs')" = 600 ] \
-  || fail "12: FLEET_DAEMON_STALE_MULT does not scale the threshold"; ok
+  || st_fail "12: FLEET_DAEMON_STALE_MULT does not scale the threshold"; st_count
 [ "$(FLEET_COLLECT_STALE=900 lib 'fleet_collect_stale_secs')" = 900 ] \
-  || fail "12: the absolute FLEET_COLLECT_STALE override stopped winning"; ok
+  || st_fail "12: the absolute FLEET_COLLECT_STALE override stopped winning"; st_count
 hb 401
 [ -n "$(lib 'fleet_collect_stale_age')" ] \
-  || fail "12: a collector 401s behind a 60s interval still reads fresh (the #639 blind spot)"; ok
+  || st_fail "12: a collector 401s behind a 60s interval still reads fresh (the #639 blind spot)"; st_count
 [ -z "$(FLEET_COLLECT_STALE=600 lib 'fleet_collect_stale_age')" ] \
-  || fail "12: 401s should be fresh under the OLD absolute 600s threshold — the fixture no longer reproduces #639"; ok
-case "$(bar)" in *"✖  dash · stale"*) ok ;; *) fail "12: the bar did not alarm at 401s: $(bar)" ;; esac
+  || st_fail "12: 401s should be fresh under the OLD absolute 600s threshold — the fixture no longer reproduces #639"; st_count
+case "$(bar)" in *"✖  dash · stale"*) st_count ;; *) st_fail "12: the bar did not alarm at 401s: $(bar)" ;; esac
 
 # 12b. an IN-FLIGHT tick silences it again, read straight from the bar.
 printf 'pid=1234\nstart=%s\nphase=git\nphase_ts=%s\n' \
   "$(( $(now) - 900 ))" "$(( $(now) - 900 ))" > "$HB"
-case "$(bar)" in *"✖  dash · stale"*) ok ;; *) fail "12b: no alarm with a 900s-silent heartbeat and no tick: $(bar)" ;; esac
+case "$(bar)" in *"✖  dash · stale"*) st_count ;; *) st_fail "12b: no alarm with a 900s-silent heartbeat and no tick: $(bar)" ;; esac
 printf '%s\t%s\n' "$$" "$(( $(now) - 400 ))" > "$G/collect.pid"
-[ -z "$(lib 'fleet_collect_stale_age')" ] || fail "12b: a live tick 400s in was still called stale"; ok
-case "$(bar)" in *"✖  dash · stale"*) fail "12b: the bar alarmed while a tick was in flight: $(bar)" ;; esac; ok
+[ -z "$(lib 'fleet_collect_stale_age')" ] || st_fail "12b: a live tick 400s in was still called stale"; st_count
+case "$(bar)" in *"✖  dash · stale"*) st_fail "12b: the bar alarmed while a tick was in flight: $(bar)" ;; esac; st_count
 printf '%s\t%s\n' "$$" "$(( $(now) - 900 ))" > "$G/collect.pid"   # past the deadline ⇒ wedged
-[ -n "$(lib 'fleet_collect_stale_age')" ] || fail "12b: a tick past the supersede deadline still counted as alive"; ok
+[ -n "$(lib 'fleet_collect_stale_age')" ] || st_fail "12b: a tick past the supersede deadline still counted as alive"; st_count
 rm -f "$G/collect.pid"
 
 printf 'selftest PASS: %s assertions (fresh · inflight · never · stale · cooldown · trace · log · off · no-unit · bar-self-heal · callers · relative · in-flight)\n' "$CHECKS"

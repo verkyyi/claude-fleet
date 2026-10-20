@@ -20,6 +20,7 @@
 #                  personal read is refused (one line), nothing landed
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 real="$BIN/fleet-agent-team.py"
 while [ -L "$real" ]; do
   link="$(readlink "$real")"
@@ -30,9 +31,7 @@ T="$REPO/bin/fleet-agent-team.py"
 W="$REPO/bin/fleet-hook-personal.sh"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-hook-scripts-selftest.XXXXXX") || exit 2
 [ -n "${KEEP:-}" ] || trap 'rm -rf "${WORK:?}"' EXIT INT TERM HUP
-fail=0
-ok()  { echo "ok   $*"; }
-bad() { echo "FAIL $*"; fail=1; }
+FAIL=0
 PY="$(command -v python3)"
 j() { "$PY" -c "import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps(eval(sys.argv[2]), sort_keys=True))" "$@" 2>/dev/null; }
 mode() { "$PY" -c 'import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode)))' "$1" 2>/dev/null; }
@@ -72,26 +71,26 @@ out=$(team "$H" sync); rc=$?
 [ "$rc" = 0 ] && [ -f "$D/log-tool.sh" ] && [ "$(mode "$D")" = 0o700 ] && [ "$(mode "$D/log-tool.sh")" = 0o700 ] \
   && [ "$(sed -n 2p "$D/log-tool.sh")" = '# fleet personal hook' ] && [ "$(sed -n 1p "$D/log-tool.sh")" = '#!/bin/sh' ] \
   && [ "$(j "$H/conf/agent-effective.json" "d['items']['hook_scripts.log-tool.sh']['source']")" = '"personal"' ] \
-  && ok "A the program lands 0700 in a 0700 directory, marked after #!, row source personal" \
-  || bad "A rc=$rc: $out // $(ls -la "$D" 2>&1)"
+  && st_ok_all "A the program lands 0700 in a 0700 directory, marked after #!, row source personal" \
+  || st_miss "A rc=$rc: $out // $(ls -la "$D" 2>&1)"
 
 # ── B — the wired hook runs it ─────────────────────────────────────────────────
 cmd=$(j "$H/.claude/settings.json" "[h['command'] for g in d['hooks']['PostToolUse'] for h in g['hooks']][0]" | "$PY" -c 'import json,sys;print(json.load(sys.stdin))')
 echo '{"tool_name":"Bash"}' | env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$H/conf" sh -c "$cmd" >"$WORK/b.out" 2>&1; rc=$?
 [ "$rc" = 0 ] && [ "$(cat "$H/hook.log" 2>/dev/null)" = "ran v1" ] && case "$cmd" in *fleet-hook-personal.sh*) true ;; *) false ;; esac \
-  && ok "B the wrapped hook finds \$FLEET_PERSONAL_HOOKS/log-tool.sh and runs it" || bad "B rc=$rc cmd=$cmd: $(cat "$WORK/b.out")"
+  && st_ok_all "B the wrapped hook finds \$FLEET_PERSONAL_HOOKS/log-tool.sh and runs it" || st_miss "B rc=$rc cmd=$cmd: $(cat "$WORK/b.out")"
 : > "$H/hook.log"
 echo '{}' | env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$H/conf" sh "$W" PostToolUse -- 'printf %s "$FLEET_PERSONAL_HOOKS"' >"$WORK/b2" 2>&1
-[ "$(cat "$WORK/b2")" = "$H/conf/personal-hooks" ] && ok "B the wrapper sets FLEET_PERSONAL_HOOKS from FLEET_CONF_DIR" || bad "B env: $(cat "$WORK/b2")"
+[ "$(cat "$WORK/b2")" = "$H/conf/personal-hooks" ] && st_ok_all "B the wrapper sets FLEET_PERSONAL_HOOKS from FLEET_CONF_DIR" || st_miss "B env: $(cat "$WORK/b2")"
 
 # ── C — content-addressed ──────────────────────────────────────────────────────
 i0=$(ino "$D/log-tool.sh")
 out=$(team "$H" sync --force)
-[ "$(ino "$D/log-tool.sh")" = "$i0" ] && ok "C the same text again: the file is not rewritten" || bad "C resync: $out"
+[ "$(ino "$D/log-tool.sh")" = "$i0" ] && st_ok_all "C the same text again: the file is not rewritten" || st_miss "C resync: $out"
 presp "$(bundle 2 "${PROG1/v1/v2}")"
 out=$(team "$H" sync)
 grep -q 'ran v2' "$D/log-tool.sh" && [ "$(mode "$D/log-tool.sh")" = 0o700 ] \
-  && ok "C a new text replaces it (still 0700)" || bad "C new: $out"
+  && st_ok_all "C a new text replaces it (still 0700)" || st_miss "C new: $out"
 
 # ── D — the rollback takes back only its own ────────────────────────────────────
 printf '#!/bin/sh\necho mine\n' > "$D/mine.sh"; chmod 755 "$D/mine.sh"
@@ -103,37 +102,37 @@ echo 'echo edited here' >> "$D/edited.sh"
 presp '{"version":5,"prev":4,"bundle":{"mcp":{"x":{"command":"x"}}}}'
 out=$(team "$H" sync); rc=$?
 [ "$rc" = 0 ] && [ ! -e "$D/log-tool.sh" ] && [ ! -e "$D/keep.sh" ] \
-  && ok "D a version without the programs removes them" || bad "D drop rc=$rc: $out // $(ls "$D")"
+  && st_ok_all "D a version without the programs removes them" || st_miss "D drop rc=$rc: $out // $(ls "$D")"
 [ "$(cat "$D/mine.sh" 2>/dev/null)" = "$(printf '#!/bin/sh\necho mine')" ] && [ "$(mode "$D/mine.sh")" = 0o755 ] \
   && grep -q 'edited here' "$D/edited.sh" \
-  && ok "D the person's own file (no mark) and a program edited here are left alone" || bad "D kept: $(ls -la "$D")"
+  && st_ok_all "D the person's own file (no mark) and a program edited here are left alone" || st_miss "D kept: $(ls -la "$D")"
 
 # ── E — a fresh computer: session lands it before any apply ────────────────────
 H2="$WORK/b"; mkhome "$H2"; D2="$H2/conf/personal-hooks"
 presp "$(bundle 1 "$PROG1")"
 team "$H2" fetch >/dev/null
-[ ! -e "$D2" ] || bad "E fetch alone wrote programs"
+[ ! -e "$D2" ] || st_miss "E fetch alone wrote programs"
 s=$(cd "$WORK" && team "$H2" session claude)
 f=$(printf '%s\n' "$s" | sed -n 's/^settings	//p')
 [ -f "$D2/log-tool.sh" ] && [ "$(mode "$D2/log-tool.sh")" = 0o700 ] && [ -n "$f" ] && grep -q 'FLEET_PERSONAL_HOOKS/log-tool.sh' "$f" \
-  && ok "E session claude hands the hook and lands its program on a computer that never applied" || bad "E session: $s // $(ls -la "$D2" 2>&1)"
+  && st_ok_all "E session claude hands the hook and lands its program on a computer that never applied" || st_miss "E session: $s // $(ls -la "$D2" 2>&1)"
 cmd=$(j "$f" "[h['command'] for g in d['hooks']['PostToolUse'] for h in g['hooks'] if 'log-tool' in h['command']][0]" | "$PY" -c 'import json,sys;print(json.load(sys.stdin))')
 echo '{}' | env -i PATH="$PATH" HOME="$H2" FLEET_CONF_DIR="$H2/conf" sh -c "$cmd" >/dev/null 2>&1
-[ "$(cat "$H2/hook.log" 2>/dev/null)" = "ran v1" ] && ok "E the handed hook runs there" || bad "E run: $cmd"
+[ "$(cat "$H2/hook.log" 2>/dev/null)" = "ran v1" ] && st_ok_all "E the handed hook runs there" || st_miss "E run: $cmd"
 out=$(team "$H2" sync --force)
 [ "$(j "$H2/conf/agent-effective.json" "d['items']['hook_scripts.log-tool.sh']['source']")" = '"personal"' ] \
   && ! printf '%s' "$out" | grep -q '^own .*hook_scripts' \
-  && ok "E the next sync takes the landed program as the layer's" || bad "E adopt: $out"
+  && st_ok_all "E the next sync takes the landed program as the layer's" || st_miss "E adopt: $out"
 presp '{"version":2,"prev":1,"bundle":{}}'
 out=$(team "$H2" sync)
-[ ! -e "$D2/log-tool.sh" ] && ok "E … so a rollback there removes it too" || bad "E drop: $out"
+[ ! -e "$D2/log-tool.sh" ] && st_ok_all "E … so a rollback there removes it too" || st_miss "E drop: $out"
 
 # ── F — no hook_scripts: no directory, no row ──────────────────────────────────
 H3="$WORK/c"; mkhome "$H3"
 presp '{"version":1,"prev":0,"bundle":{"mcp":{"x":{"command":"x"}}}}'
 team "$H3" sync >/dev/null; (cd "$WORK" && team "$H3" session claude >/dev/null)
 [ ! -e "$H3/conf/personal-hooks" ] && [ "$(j "$H3/conf/agent-effective.json" "[k for k in d['items'] if k.startswith('hook_scripts')]")" = '[]' ] \
-  && ok "F no hook_scripts → no personal-hooks directory, no row" || bad "F: $(ls "$H3/conf")"
+  && st_ok_all "F no hook_scripts → no personal-hooks directory, no row" || st_miss "F: $(ls "$H3/conf")"
 
 # ── G — refused ─────────────────────────────────────────────────────────────────
 H4="$WORK/d"; mkhome "$H4"
@@ -142,9 +141,8 @@ for b in "{\"x.sh\":\"$(head -c 33000 /dev/zero | tr '\0' a)\"}" '{"../x":"echo"
   presp "{\"version\":1,\"prev\":0,\"bundle\":{\"hook_scripts\":$b}}"
   out=$(team "$H4" sync); rc=$?
   printf '%s' "$out" | grep -q '^personal: refused v1: bundle.hook_scripts' && [ ! -e "$H4/conf/personal-hooks" ] \
-    && [ ! -e "$H4/conf/person-bundle.json" ] || bad "G rc=$rc: ${out:0:200}"
+    && [ ! -e "$H4/conf/person-bundle.json" ] || st_miss "G rc=$rc: ${out:0:200}"
 done
-[ "$fail" = 0 ] && ok "G over 32 KiB / a bad name / a key in the text → refused, nothing cached, nothing landed"
+[ "$FAIL" = 0 ] && st_ok_all "G over 32 KiB / a bad name / a key in the text → refused, nothing cached, nothing landed"
 
-[ "$fail" = 0 ] && echo "fleet-hook-scripts-selftest: PASS" || echo "fleet-hook-scripts-selftest: FAIL"
-exit "$fail"
+st_done

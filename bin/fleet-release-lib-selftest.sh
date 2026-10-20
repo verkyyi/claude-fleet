@@ -48,7 +48,7 @@ mkdir -p "$HOME"
 sha() { { shasum -a 256 2>/dev/null || sha256sum; } < "$1" | awk '{print $1}'; }
 
 # --- the sandbox hub: <w>/rel/<sha>/ = a release's tree, signed as served ------
-command -v ssh-keygen >/dev/null 2>&1 || { echo 'fleet-release-lib-selftest SKIP (ssh-keygen)'; exit 0; }
+st_need ssh-keygen
 H="$WORK/hub"; mkdir -p "$H/rel"
 SEED="$WORK/seed"; mkdir -p "$SEED/bin"
 git init -q -b master "$SEED"

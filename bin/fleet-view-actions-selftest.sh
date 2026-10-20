@@ -33,9 +33,8 @@
 #      FLEET_VIEW_NAME_HOLD_SECS passes
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-fail() { echo "FAIL: $*" >&2; exit 1; }
-pass() { echo "ok   $*"; }
-command -v tmux >/dev/null 2>&1 || { echo "SKIP: no tmux"; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need tmux
 W=$(mktemp -d "${TMPDIR:-/tmp}/fvact.XXXXXX") || exit 1
 IN="$W/in.sock"; OUT="$W/out.sock"
 cleanup() {
@@ -75,7 +74,7 @@ calls() { grep -v -e '^fleet-task-record.sh|get|' "$LOG"; }
 reset() { : > "$LOG"; }
 
 # --- the fleet, its 看台 and the rows --------------------------------------------------
-ti -f /dev/null new-session -d -s fl -x 120 -y 30 -n home "sleep 600" || fail "inner tmux"
+ti -f /dev/null new-session -d -s fl -x 120 -y 30 -n home "sleep 600" || st_fail "inner tmux"
 W1=$(ti new-window -d -P -F '#{window_id}' -t fl -n alpha "sh -c 'exec cat > \"$W/p1.in\"'")
 W2=$(ti new-window -d -P -F '#{window_id}' -t fl -n beta "sh -c 'exec cat > \"$W/p2.in\"'")
 W3=$(ti new-window -d -P -F '#{window_id}' -t fl -n gamma "sh -c 'exec cat > \"$W/p3.in\"'")
@@ -110,7 +109,7 @@ export FLEET_VIEW_LANDED_CMD="cat '$W/gone.txt'"
   row hdr ended '' '▸ Ended (1)' ' '
   row "$W3" exited x 'gamma' ' ' '' 0 '' '' '' — · ok 'Gamma 退出了' merged '' '' '' ''
 } > "$W/rows.txt"
-ti new-session -d -t fl -s 'fl@view-v1' || fail "no 看台 session"
+ti new-session -d -t fl -s 'fl@view-v1' || st_fail "no 看台 session"
 ti select-window -t "=fl@view-v1:$W1"
 printf '%s\tfl\tthin\t%s\t%s\tcur=%s/f1\troute=lan\tdevice=\ttoken=t\tfuid=%s\tnode=nodeA\n' \
   /dev/null "$(date +%s)" "$$" "$UU" "$UU" > "$W/conf/remote-views/v1"
@@ -119,7 +118,7 @@ qo() { python3 "$BIN/fleet-quickopen.py" "$@"; }
 
 # --- A: the table against the sidebar menu ---------------------------------------------
 letters=$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" t menu_keys | awk -F '\t' '{ print $1 }')
-[ -n "$letters" ] || fail "A: no menu_keys"
+[ -n "$letters" ] || st_fail "A: no menu_keys"
 PYCHK=$(python3 - "$BIN" "$letters" <<'EOF'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("fleet_view", sys.argv[1] + "/fleet_view.py")
@@ -139,48 +138,48 @@ for a in fv.ACTIONS:
 print("\n".join(bad))
 EOF
 )
-[ -z "$PYCHK" ] || fail "A: the sidebar menu and ACTIONS differ: $PYCHK"
-pass "A  every sidebar menu item is an action here (or row-less, C2 / C7); each action id · label · when · local · far · ask"
+[ -z "$PYCHK" ] || st_fail "A: the sidebar menu and ACTIONS differ: $PYCHK"
+st_ok_all "A  every sidebar menu item is an action here (or row-less, C2 / C7); each action id · label · when · local · far · ask"
 
 # --- B: which actions a row gets -----------------------------------------------------
 ids() { qo view-menu --view fl@view-v1 "$1" | awk -F '\t' '{ print $1 }' | tr '\n' ' '; }
 m1=$(ids "$W1")
 for a in enter shell pr message rename pin reappol stop agent reap; do
-  case " $m1 " in *" $a "*) ;; *) fail "B: done row lacks $a: $m1" ;; esac
+  case " $m1 " in *" $a "*) ;; *) st_fail "B: done row lacks $a: $m1" ;; esac
 done
-for a in answer wake awake resume sub; do case " $m1 " in *" $a "*) fail "B: done row has $a: $m1" ;; esac; done
-qo view-menu --view fl@view-v1 "$W1" | grep -q $'^pr\t打开 PR #41' || fail "B: PR label: $(qo view-menu --view fl@view-v1 "$W1")"
-qo view-menu --view fl@view-v1 "$W4" | grep -q $'^pr\tPR ?（入口没响应）' || fail "B: a hub that does not answer reads PR ?: $(qo view-menu --view fl@view-v1 "$W4")"
-case " $(ids "$W2") " in *" pr "*) fail "B: a row with no task record offers a PR" ;; esac
-case " $(ids "$W2") " in *" answer "*) ;; *) fail "B: asking row lacks answer" ;; esac
-case " $(ids "$W5") " in *" wake "*|*" awake "*) fail "B: an old sleeping window offers wake / awake (T548): $(ids "$W5")" ;; esac
-case " $(ids "$W5") " in *" stop "*) ;; *) fail "B: an old sleeping window lacks stop: $(ids "$W5")" ;; esac
+for a in answer wake awake resume sub; do case " $m1 " in *" $a "*) st_fail "B: done row has $a: $m1" ;; esac; done
+qo view-menu --view fl@view-v1 "$W1" | grep -q $'^pr\t打开 PR #41' || st_fail "B: PR label: $(qo view-menu --view fl@view-v1 "$W1")"
+qo view-menu --view fl@view-v1 "$W4" | grep -q $'^pr\tPR ?（入口没响应）' || st_fail "B: a hub that does not answer reads PR ?: $(qo view-menu --view fl@view-v1 "$W4")"
+case " $(ids "$W2") " in *" pr "*) st_fail "B: a row with no task record offers a PR" ;; esac
+case " $(ids "$W2") " in *" answer "*) ;; *) st_fail "B: asking row lacks answer" ;; esac
+case " $(ids "$W5") " in *" wake "*|*" awake "*) st_fail "B: an old sleeping window offers wake / awake (T548): $(ids "$W5")" ;; esac
+case " $(ids "$W5") " in *" stop "*) ;; *) st_fail "B: an old sleeping window lacks stop: $(ids "$W5")" ;; esac
 m3=$(qo view-menu --view fl@view-v1 "$W3")
-grep -q $'^resume\t恢复' <<< "$m3" || fail "B: ended exited row lacks 恢复: $m3"
+grep -q $'^resume\t恢复' <<< "$m3" || st_fail "B: ended exited row lacks 恢复: $m3"
 # 换 Codex on another machine's row (issue #4184): its hub writes; pr stays this
 # machine's (no PR on a far row). No 换账号 / 换到可用订阅 on any row since T550:
 # the pool picks.
-[ "$(ids "$MU/far1")" = "enter shell message rename pin reappol stop agent reap " ] || fail "B: another machine's row: $(ids "$MU/far1")"
+[ "$(ids "$MU/far1")" = "enter shell message rename pin reappol stop agent reap " ] || st_fail "B: another machine's row: $(ids "$MU/far1")"
 mf=$(qo view-menu --view fl@view-v1 "$MU/far1")
-grep -q $'^agent\t换成 Codex\t$' <<< "$mf" || fail "B: a far row's agent item: $mf"
-grep -q '换到可用订阅\|换账号' <<< "$mf$(qo view-menu --view fl@view-v1 "$W1")" && fail "B: a row still offers 换账号 / 换到可用订阅 (T550): $mf"
-case " $(ids "$MU/far4") " in *" agent "*) fail "B: a far exited row offers agent: $(ids "$MU/far4")" ;; esac
-case " $(ids "$MU/far2") " in *" answer "*) ;; *) fail "B: a far asking row lacks answer: $(ids "$MU/far2")" ;; esac
-case " $(ids "$MU/far4") " in *" resume "*) ;; *) fail "B: a far exited row lacks resume: $(ids "$MU/far4")" ;; esac
-pass "B  a row's menu: done · asking · an old sleeping window · ended (恢复) · another machine's (its hub writes)"
+grep -q $'^agent\t换成 Codex\t$' <<< "$mf" || st_fail "B: a far row's agent item: $mf"
+grep -q '换到可用订阅\|换账号' <<< "$mf$(qo view-menu --view fl@view-v1 "$W1")" && st_fail "B: a row still offers 换账号 / 换到可用订阅 (T550): $mf"
+case " $(ids "$MU/far4") " in *" agent "*) st_fail "B: a far exited row offers agent: $(ids "$MU/far4")" ;; esac
+case " $(ids "$MU/far2") " in *" answer "*) ;; *) st_fail "B: a far asking row lacks answer: $(ids "$MU/far2")" ;; esac
+case " $(ids "$MU/far4") " in *" resume "*) ;; *) st_fail "B: a far exited row lacks resume: $(ids "$MU/far4")" ;; esac
+st_ok_all "B  a row's menu: done · asking · an old sleeping window · ended (恢复) · another machine's (its hub writes)"
 
 # --- C: each action, its script, once ---------------------------------------------------
 one() {   # <id> <expected line> [view-act args…]
   local id=$1 want=$2; shift 2
   reset
-  qo view-act --view fl@view-v1 "$@" >/dev/null 2>"$W/err" || fail "C: $id failed: $(cat "$W/err")"
+  qo view-act --view fl@view-v1 "$@" >/dev/null 2>"$W/err" || st_fail "C: $id failed: $(cat "$W/err")"
   got=$(calls)
-  [ "$got" = "$want" ] || fail "C: $id ran «${got}», want «${want}»"
+  [ "$got" = "$want" ] || st_fail "C: $id ran «${got}», want «${want}»"
 }
 one pr "open-url.sh|https://github.com/acme/app/pull/41" "$W1" pr
 reset; out=$(qo view-act --view fl@view-v1 "$W4" pr 2>&1)
-case "$out" in *'PR ?'*) ;; *) fail "C: pr on a PR ? row should say it, not open: $out" ;; esac
-[ -z "$(calls)" ] || fail "C: pr on a PR ? row ran «$(calls)»"
+case "$out" in *'PR ?'*) ;; *) st_fail "C: pr on a PR ? row should say it, not open: $out" ;; esac
+[ -z "$(calls)" ] || st_fail "C: pr on a PR ? row ran «$(calls)»"
 one answer "fleet-permission.sh|--allow|$W2|--session|fl|--by|$ME" "$W2" answer --text y
 one answer-n "fleet-permission.sh|--deny|$W2|--session|fl|--by|$ME" "$W2" answer --text n
 one answer-pick "fleet-answer.sh|--answer|$W4|--session|fl|2" "$W4" answer --text 2
@@ -190,90 +189,90 @@ one reappol "fleet-reap-policy.sh|set|done:2h|--win|$W1|--session|fl" "$W1" reap
 one stop "fleet-worker-stop.sh|fl|fid:f1" "$W1" stop
 one agent "fleet-transfer.sh|--from-panel|--session|fl|--window|$W1|--to|codex" "$W1" agent
 one rename "dash-rename.sh|--wid|$W1|新名字" "$W1" rename --text '新名字'
-[ "$(ti display-message -p -t "$W1" '#{window_name}')" = '新名字' ] || fail "C: rename did not rename the window"
+[ "$(ti display-message -p -t "$W1" '#{window_name}')" = '新名字' ] || st_fail "C: rename did not rename the window"
 reset
 qo view-act --view fl@view-v1 "$W1" reap >/dev/null 2>&1; rc=$?
-[ "$rc" = 3 ] && [ -z "$(calls)" ] || fail "C: reap without a yes: rc=$rc ran «$(calls)»"
+[ "$rc" = 3 ] && [ -z "$(calls)" ] || st_fail "C: reap without a yes: rc=$rc ran «$(calls)»"
 one reap "dash-reap.sh|$W1|--yes" "$W1" reap --yes
 reset
-qo view-act --view fl@view-v1 "$W5" wake >/dev/null 2>&1 && fail "C: the retired wake ran (T548)"
-[ -z "$(calls)" ] || fail "C: a refused action ran «$(calls)»"
+qo view-act --view fl@view-v1 "$W5" wake >/dev/null 2>&1 && st_fail "C: the retired wake ran (T548)"
+[ -z "$(calls)" ] || st_fail "C: a refused action ran «$(calls)»"
 one resume "" "$W3" resume
 sleep 0.3
-[ "$(wc -c < "$W/p3.in" | tr -d ' ')" = 1 ] || fail "C: 恢复 did not press ↵ on the page ($(od -c "$W/p3.in" | head -2))"
-[ "$(ti display-message -p -t '=fl@view-v1:' '#{window_id}')" = "$W3" ] || fail "C: 恢复 did not go there"
+[ "$(wc -c < "$W/p3.in" | tr -d ' ')" = 1 ] || st_fail "C: 恢复 did not press ↵ on the page ($(od -c "$W/p3.in" | head -2))"
+[ "$(ti display-message -p -t '=fl@view-v1:' '#{window_id}')" = "$W3" ] || st_fail "C: 恢复 did not go there"
 one enter "" "$W2" enter
-[ "$(ti display-message -p -t '=fl@view-v1:' '#{window_id}')" = "$W2" ] || fail "C: 进入 did not go there"
+[ "$(ti display-message -p -t '=fl@view-v1:' '#{window_id}')" = "$W2" ] || st_fail "C: 进入 did not go there"
 one shell "" "$W1" shell
 ti list-windows -t fl -F '#{@view_shell}|#{@peer_view}' | grep -q "@$ME:$W1|v1" \
-  || fail "C: 在它的目录开 shell made no shell window: $(ti list-windows -t fl -F '#{window_id} #{@view_shell}')"
-pass "C  every action runs its script exactly once with the sidebar's arguments; rename renames; reap needs y; 恢复 / 进入 / shell go"
+  || st_fail "C: 在它的目录开 shell made no shell window: $(ti list-windows -t fl -F '#{window_id} #{@view_shell}')"
+st_ok_all "C  every action runs its script exactly once with the sidebar's arguments; rename renames; reap needs y; 恢复 / 进入 / shell go"
 
 # --- D: the popup on a client -------------------------------------------------------------
 ti select-window -t "=fl@view-v1:$W1"
 reset
 to -f /dev/null new-session -d -s o -x 120 -y 30 \
   "env TMUX='$IN,0,0' ESCDELAY=25 python3 '$BIN/fleet-quickopen.py' --view fl@view-v1; echo POPUP-CLOSED; sleep 600" \
-  || fail "D: outer tmux"
+  || st_fail "D: outer tmux"
 screen() { to capture-pane -p -t o; }
 waitfor() { local _i; for _i in $(seq 1 40); do screen | grep -qF -- "$1" && return 0; sleep 0.1; done; return 1; }
-waitfor 'Tab 操作' || fail "D: the list did not open: $(screen)"
+waitfor 'Tab 操作' || st_fail "D: the list did not open: $(screen)"
 to send-keys -t o Tab
-waitfor '回收…' || fail "D: Tab opened no menu: $(screen)"
+waitfor '回收…' || st_fail "D: Tab opened no menu: $(screen)"
 screen > "$W/menu.txt"
 # plan B (T493): a whole page — the row on top, a rule, numbered items
-sed -n 2p "$W/menu.txt" | grep -q 'Alpha 做完了' || fail "D: the page's top line is not the row: $(cat "$W/menu.txt")"
-grep -q '1  进入' "$W/menu.txt" || fail "D: the page has no numbered 进入: $(cat "$W/menu.txt")"
+sed -n 2p "$W/menu.txt" | grep -q 'Alpha 做完了' || st_fail "D: the page's top line is not the row: $(cat "$W/menu.txt")"
+grep -q '1  进入' "$W/menu.txt" || st_fail "D: the page has no numbered 进入: $(cat "$W/menu.txt")"
 to send-keys -t o Escape
-waitfor 'Tab 操作' || fail "D: Esc did not step back to the list: $(screen)"
+waitfor 'Tab 操作' || st_fail "D: Esc did not step back to the list: $(screen)"
 to send-keys -t o Escape
-waitfor 'POPUP-CLOSED' || fail "D: Esc did not close the list"
-[ -z "$(calls)" ] || fail "D: Esc ran «$(calls)»"
+waitfor 'POPUP-CLOSED' || st_fail "D: Esc did not close the list"
+[ -z "$(calls)" ] || st_fail "D: Esc ran «$(calls)»"
 to respawn-pane -k -t o "env TMUX='$IN,0,0' ESCDELAY=25 python3 '$BIN/fleet-quickopen.py' --view fl@view-v1; echo POPUP-CLOSED; sleep 600"
-waitfor 'Tab 操作' || fail "D: the list did not reopen"
+waitfor 'Tab 操作' || st_fail "D: the list did not reopen"
 screen > "$W/before.txt"
-to send-keys -t o Tab; waitfor '回收…' || fail "D: no menu"
+to send-keys -t o Tab; waitfor '回收…' || st_fail "D: no menu"
 for _ in $(seq 1 20); do to send-keys -t o Down; done
-waitfor '回收…' || fail "D: ↓ did not reach 回收: $(screen)"
+waitfor '回收…' || st_fail "D: ↓ did not reach 回收: $(screen)"
 to send-keys -t o Enter
-waitfor '回收「Alpha 做完了」？(y/n)' || fail "D: 回收 did not ask y/n: $(screen)"
+waitfor '回收「Alpha 做完了」？(y/n)' || st_fail "D: 回收 did not ask y/n: $(screen)"
 to send-keys -t o n
-waitfor '1  进入' || fail "D: n did not return to the actions page: $(screen)"
+waitfor '1  进入' || st_fail "D: n did not return to the actions page: $(screen)"
 to send-keys -t o Escape
-waitfor 'Tab 操作' || fail "D: Esc did not return to the list"
-[ -z "$(calls)" ] || fail "D: 回收 → n ran «$(calls)»"
-to send-keys -t o Tab; waitfor '回收…' || fail "D: no menu (2)"
+waitfor 'Tab 操作' || st_fail "D: Esc did not return to the list"
+[ -z "$(calls)" ] || st_fail "D: 回收 → n ran «$(calls)»"
+to send-keys -t o Tab; waitfor '回收…' || st_fail "D: no menu (2)"
 for _ in $(seq 1 20); do to send-keys -t o Down; done
-to send-keys -t o Enter; waitfor '(y/n)' || fail "D: no y/n (2)"
+to send-keys -t o Enter; waitfor '(y/n)' || st_fail "D: no y/n (2)"
 to send-keys -t o y
 for _ in $(seq 1 40); do [ -n "$(calls)" ] && break; sleep 0.1; done
-[ "$(calls)" = "dash-reap.sh|$W1|--yes" ] || fail "D: 回收 → y ran «$(calls)»"
-waitfor '回收：已在后台做' || fail "D: the list does not say the reap is under way: $(screen)"
+[ "$(calls)" = "dash-reap.sh|$W1|--yes" ] || st_fail "D: 回收 → y ran «$(calls)»"
+waitfor '回收：已在后台做' || st_fail "D: the list does not say the reap is under way: $(screen)"
 screen > "$W/after.txt"
 reset
-to send-keys -t o Tab; waitfor '改名…' || fail "D: no menu (3)"
+to send-keys -t o Tab; waitfor '改名…' || st_fail "D: no menu (3)"
 n=$(screen | grep -o '[0-9]  改名…' | cut -c1)
-[ -n "$n" ] || fail "D: 改名 has no number: $(screen)"
+[ -n "$n" ] || st_fail "D: 改名 has no number: $(screen)"
 to send-keys -t o "$n"
-waitfor '新名字›' || fail "D: 改名 did not ask on its page: $(screen)"
+waitfor '新名字›' || st_fail "D: 改名 did not ask on its page: $(screen)"
 to send-keys -t o Escape
-waitfor '1  进入' || fail "D: Esc did not step back to the actions page: $(screen)"
+waitfor '1  进入' || st_fail "D: Esc did not step back to the actions page: $(screen)"
 to send-keys -t o Escape
-waitfor 'Tab 操作' || fail "D: Esc did not cancel the rename"
-[ -z "$(calls)" ] || fail "D: a cancelled rename ran «$(calls)»"
+waitfor 'Tab 操作' || st_fail "D: Esc did not cancel the rename"
+[ -z "$(calls)" ] || st_fail "D: a cancelled rename ran «$(calls)»"
 # ⌘P's 置顶 (issue #3517): the session in view has its own line, and ⌃T on the lit
 # row runs the row's own 置顶 — dash-pin-toggle.sh once, the list stays open
-screen | grep -q '置顶当前会话' || fail "D: no 「置顶当前会话」 line: $(screen)"
+screen | grep -q '置顶当前会话' || st_fail "D: no 「置顶当前会话」 line: $(screen)"
 reset
 to send-keys -t o C-t
 for _ in $(seq 1 40); do [ -n "$(calls)" ] && break; sleep 0.1; done
-[ "$(calls)" = "dash-pin-toggle.sh|$W1" ] || fail "D: ⌃T ran «$(calls)»"
-waitfor 'Tab 操作' || fail "D: ⌃T closed the list: $(screen)"
+[ "$(calls)" = "dash-pin-toggle.sh|$W1" ] || st_fail "D: ⌃T ran «$(calls)»"
+waitfor 'Tab 操作' || st_fail "D: ⌃T closed the list: $(screen)"
 if [ -n "${FLEET_VIEW_ACT_EVIDENCE:-}" ]; then
   { echo '--- 改动后：⌘P 选中「Alpha 做完了」· 回收前'; cat "$W/before.txt"; echo '--- Tab → 回收… → y 之后';
     cat "$W/after.txt"; echo '--- Tab 的菜单'; cat "$W/menu.txt"; } > "$FLEET_VIEW_ACT_EVIDENCE"
 fi
-pass "D  popup: Tab opens the row's actions page, Esc steps back and closes with nothing run; 回收 asks y/n (n back to the page, y one dash-reap.sh); 改名 asks on its page; 置顶当前会话 and ⌃T (#3517)"
+st_ok_all "D  popup: Tab opens the row's actions page, Esc steps back and closes with nothing run; 回收 asks y/n (n back to the page, y one dash-reap.sh); 改名 asks on its page; 置顶当前会话 and ⌃T (#3517)"
 # --- E: another machine's row --------------------------------------------------------------
 # the sidebar's own cache (fleet-row-remote.sh reads $FLEET_C/global, FLEET_C
 # under $TMPDIR): the same dir the list reads (FLEET_STATUS_G)
@@ -301,30 +300,30 @@ export FLEET_VIEW_HUBSESS="$W/hubsess.sh"
 far() {   # <id> <action> <tool> <json fragment> [view-act args…]
   local id=$1 act=$2 tool=$3 frag=$4; shift 4
   reset; : > "$WRITES"; : > "$HS"
-  out=$(qo view-act --view fl@view-v1 "$MU/$id" "$act" "$@" 2>"$W/err") || fail "E: $act failed: $out $(cat "$W/err")"
-  [ "$(calls)" = "fleet-row-remote.sh|$act|fl|wid:$MU/$id" ] || fail "E: $act ran «$(calls)»"
-  [ "$(grep -c . "$WRITES")" = 1 ] && [ "$(cut -f1 "$WRITES")" = "$tool" ] || fail "E: $act wrote «$(cat "$WRITES")»"
+  out=$(qo view-act --view fl@view-v1 "$MU/$id" "$act" "$@" 2>"$W/err") || st_fail "E: $act failed: $out $(cat "$W/err")"
+  [ "$(calls)" = "fleet-row-remote.sh|$act|fl|wid:$MU/$id" ] || st_fail "E: $act ran «$(calls)»"
+  [ "$(grep -c . "$WRITES")" = 1 ] && [ "$(cut -f1 "$WRITES")" = "$tool" ] || st_fail "E: $act wrote «$(cat "$WRITES")»"
   body=$(cut -f2 "$WRITES")
-  case "$body" in *"\"worker_id\":\"$MU/$id\""*) ;; *) fail "E: $act's write names no worker_id: $body" ;; esac
-  case "$body" in *"$frag"*) ;; *) fail "E: $act's write lacks $frag: $body" ;; esac
-  case "$out" in *mac-a*) ;; *) fail "E: $act's outcome does not name the machine: $out" ;; esac
-  grep -qx -- --refresh "$HS" || fail "E: $act was not followed by a hub --refresh: $(cat "$HS")"
+  case "$body" in *"\"worker_id\":\"$MU/$id\""*) ;; *) st_fail "E: $act's write names no worker_id: $body" ;; esac
+  case "$body" in *"$frag"*) ;; *) st_fail "E: $act's write lacks $frag: $body" ;; esac
+  case "$out" in *mac-a*) ;; *) st_fail "E: $act's outcome does not name the machine: $out" ;; esac
+  grep -qx -- --refresh "$HS" || st_fail "E: $act was not followed by a hub --refresh: $(cat "$HS")"
 }
 far far1 message worker_message '"text":"你好 hi"' --text '你好 hi'
 far far1 rename worker_rename '"name":"新名"' --text '新名'
 # the new name shows at once (issue #3317), before far1's machine has sent its
 # next inventory round the hub — and the hold goes once the hub's row says it
 vtext() { qo view-rows --view fl@view-v1 | awk -F '\t' -v t="$1" '$1 == "sess" && $2 == t { print $4 }'; }
-[ "$(vtext "$MU/far1")" = '新名' ] || fail "E: a far rename does not show at once: $(vtext "$MU/far1")"
-[ -s "$G/view-names.fl" ] || fail "E: no hold written for the far rename"
+[ "$(vtext "$MU/far1")" = '新名' ] || st_fail "E: a far rename does not show at once: $(vtext "$MU/far1")"
+[ -s "$G/view-names.fl" ] || st_fail "E: no hold written for the far rename"
 FLEET_VIEW_NAME_HOLD_SECS=0 qo view-rows --view fl@view-v1 >/dev/null
-[ ! -s "$G/view-names.fl" ] || fail "E: a hold past FLEET_VIEW_NAME_HOLD_SECS was kept: $(cat "$G/view-names.fl")"
-[ "$(vtext "$MU/far1")" = 'Far 在 mac-a' ] || fail "E: an expired hold still names the row: $(vtext "$MU/far1")"
-qo view-act --view fl@view-v1 "$MU/far1" rename --text '新名' >/dev/null 2>&1 || fail "E: the second far rename failed"
+[ ! -s "$G/view-names.fl" ] || st_fail "E: a hold past FLEET_VIEW_NAME_HOLD_SECS was kept: $(cat "$G/view-names.fl")"
+[ "$(vtext "$MU/far1")" = 'Far 在 mac-a' ] || st_fail "E: an expired hold still names the row: $(vtext "$MU/far1")"
+qo view-act --view fl@view-v1 "$MU/far1" rename --text '新名' >/dev/null 2>&1 || st_fail "E: the second far rename failed"
 cp "$W/rows.txt" "$W/rows.bak"
 sed "s/Far 在 mac-a/新名/" "$W/rows.bak" > "$W/rows.txt"
-[ "$(vtext "$MU/far1")" = '新名' ] || fail "E: the hub's own new name is not shown"
-[ ! -s "$G/view-names.fl" ] || fail "E: the hold outlived the hub saying the name: $(cat "$G/view-names.fl")"
+[ "$(vtext "$MU/far1")" = '新名' ] || st_fail "E: the hub's own new name is not shown"
+[ ! -s "$G/view-names.fl" ] || st_fail "E: the hold outlived the hub saying the name: $(cat "$G/view-names.fl")"
 mv "$W/rows.bak" "$W/rows.txt"
 far far1 reappol worker_reap_policy '"policy":"done:2h"' --text done:2h
 # 置顶 (issue #3517): a set on the wire — the opposite of what the cache's field 30 says
@@ -334,18 +333,18 @@ awk -F '\037' -v OFS='\037' -v w="wid:$MU/far1" '$1 == w { $30 = 1 } { print }' 
 far far1 pin worker_pin '"pin":"off"'
 # 换 Codex / 换 Claude (issue #4184): the other of what the cache's field 7 says
 far far1 agent worker_transfer '"to":"codex"'
-case "$out" in *"换成 codex"*) ;; *) fail "E: the far agent outcome does not name the agent: $out" ;; esac
+case "$out" in *"换成 codex"*) ;; *) st_fail "E: the far agent outcome does not name the agent: $out" ;; esac
 awk -F '\037' -v OFS='\037' -v w="wid:$MU/far1" '$1 == w { $7 = "codex" } { print }' "$G/remote_fl" > "$G/remote_fl.new" \
   && mv "$G/remote_fl.new" "$G/remote_fl"
-qo view-menu --view fl@view-v1 "$MU/far1" | grep -q $'^agent\t换成 Claude' || fail "E: a far codex row does not offer Claude"
+qo view-menu --view fl@view-v1 "$MU/far1" | grep -q $'^agent\t换成 Claude' || st_fail "E: a far codex row does not offer Claude"
 far far1 agent worker_transfer '"to":"claude"'
 awk -F '\037' -v OFS='\037' -v w="wid:$MU/far1" '$1 == w { $7 = "" } { print }' "$G/remote_fl" > "$G/remote_fl.new" \
   && mv "$G/remote_fl.new" "$G/remote_fl"
 # the node refuses (a mid-turn session): its words, verbatim, and a non-zero exit
 printf '{"operation_id":"op2","status":"failed","result":{"error":{"code":"INVALID_STATE","message":"Transfer refused on the fleet: transfer: the session is mid-turn; switch it once its turn is over"}}}\n' > "$FLEET_CONF_DIR/hub.answer"
 reset
-out=$(qo view-act --view fl@view-v1 "$MU/far1" agent 2>&1) && fail "E: a refused transfer exited 0: $out"
-case "$out" in *"INVALID_STATE"*"mid-turn"*) ;; *) fail "E: the transfer refusal is not shown verbatim: $out" ;; esac
+out=$(qo view-act --view fl@view-v1 "$MU/far1" agent 2>&1) && st_fail "E: a refused transfer exited 0: $out"
+case "$out" in *"INVALID_STATE"*"mid-turn"*) ;; *) st_fail "E: the transfer refusal is not shown verbatim: $out" ;; esac
 rm -f "$FLEET_CONF_DIR/hub.answer"
 far far1 stop worker_stop ''
 far far4 resume worker_resume ''
@@ -354,29 +353,29 @@ far far1 reap worker_reap '' --yes
 # the hub says no: its words, verbatim, and a non-zero exit
 printf '{"error":{"code":"FORBIDDEN","message":"no grant for this login"}}\n' > "$FLEET_CONF_DIR/hub.answer"
 reset
-out=$(qo view-act --view fl@view-v1 "$MU/far1" stop 2>&1) && fail "E: a refused stop exited 0: $out"
-case "$out" in *"FORBIDDEN"*"no grant for this login"*) ;; *) fail "E: the refusal is not shown verbatim: $out" ;; esac
+out=$(qo view-act --view fl@view-v1 "$MU/far1" stop 2>&1) && st_fail "E: a refused stop exited 0: $out"
+case "$out" in *"FORBIDDEN"*"no grant for this login"*) ;; *) st_fail "E: the refusal is not shown verbatim: $out" ;; esac
 rm -f "$FLEET_CONF_DIR/hub.answer"
 # a lost row: nothing goes out, and it says so
 reset; : > "$WRITES"
-out=$(qo view-act --view fl@view-v1 "$MU/far3" reap --yes 2>&1) && fail "E: a lost row's reap exited 0"
-[ -z "$(calls)" ] && [ ! -s "$WRITES" ] || fail "E: a lost row sent «$(calls) $(cat "$WRITES")»"
-case "$out" in *"mac-a 失联，做不了"*) ;; *) fail "E: a lost row does not say why: $out" ;; esac
+out=$(qo view-act --view fl@view-v1 "$MU/far3" reap --yes 2>&1) && st_fail "E: a lost row's reap exited 0"
+[ -z "$(calls)" ] && [ ! -s "$WRITES" ] || st_fail "E: a lost row sent «$(calls) $(cat "$WRITES")»"
+case "$out" in *"mac-a 失联，做不了"*) ;; *) st_fail "E: a lost row does not say why: $out" ;; esac
 # the popup: Tab → 停 on the far row, off the screen's thread, the outcome on the bottom line
 reset; : > "$WRITES"
 # the pane is the outer server's: hand it E's environment (the hub seams, the cache)
 penv=$(printf ' %q' "TMPDIR=$TMPDIR" "FLEET_STATUS_G=$G" "CCQUOTA_FLEET=1" "WRITES=$WRITES" \
        "FLEET_HUB_WRITE_CMD=$FLEET_HUB_WRITE_CMD" "FLEET_VIEW_HUBSESS=$FLEET_VIEW_HUBSESS")
 to respawn-pane -k -t o "env TMUX='$IN,0,0' ESCDELAY=25$penv python3 '$BIN/fleet-quickopen.py' --view fl@view-v1; echo POPUP-CLOSED; sleep 600"
-waitfor 'Tab 操作' || fail "E: the list did not reopen: $(screen)"
+waitfor 'Tab 操作' || st_fail "E: the list did not reopen: $(screen)"
 to send-keys -t o -l 'Far 在'
-waitfor '› Far 在' || fail "E: typing did not filter: $(screen)"
-to send-keys -t o Tab; waitfor '换成' || fail "E: Tab on the far row: $(screen)"
-sed -n 2p <<<"$(screen)" | grep -q 'Far 在' || fail "E: the page's top line is not the far row: $(screen)"
+waitfor '› Far 在' || st_fail "E: typing did not filter: $(screen)"
+to send-keys -t o Tab; waitfor '换成' || st_fail "E: Tab on the far row: $(screen)"
+sed -n 2p <<<"$(screen)" | grep -q 'Far 在' || st_fail "E: the page's top line is not the far row: $(screen)"
 n=$(screen | grep -o '[0-9]  换成' | cut -c1)
-[ -n "$n" ] || fail "E: 换成 has no number on the far row's page: $(screen)"
+[ -n "$n" ] || st_fail "E: 换成 has no number on the far row's page: $(screen)"
 to send-keys -t o "$n"
-waitfor '（在 mac-a）：已完成' || fail "E: the popup does not say the switch landed: $(screen)"
-[ "$(calls)" = "fleet-row-remote.sh|agent|fl|wid:$MU/far1" ] || fail "E: the popup's switch ran «$(calls)»"
-pass "E  another machine's row: each far action one row-remote call + one hub write (worker_id, answer, pin on/off, transfer to the other agent / its refusal), the machine named, a refusal verbatim, a lost row nothing, a --refresh after; the popup's 换成 lands off-thread"
+waitfor '（在 mac-a）：已完成' || st_fail "E: the popup does not say the switch landed: $(screen)"
+[ "$(calls)" = "fleet-row-remote.sh|agent|fl|wid:$MU/far1" ] || st_fail "E: the popup's switch ran «$(calls)»"
+st_ok_all "E  another machine's row: each far action one row-remote call + one hub write (worker_id, answer, pin on/off, transfer to the other agent / its refusal), the machine named, a refusal verbatim, a lost row nothing, a --refresh after; the popup's 换成 lands off-thread"
 echo "PASS fleet-view-actions-selftest"

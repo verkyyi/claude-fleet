@@ -51,7 +51,6 @@ CLEAN="$BIN/fleet-cleanup.sh"
 st_sandbox "${TMPDIR:-/tmp}/fleet-cleanup-selftest.XXXXXX"
 
 pass=0
-fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 # setup <dir> — the whole fixture (fakes, conf, ledger) under <dir> as $WORK. The
 # scenarios run as four lanes at once (each fleet-cleanup.sh run is a second of
@@ -283,8 +282,8 @@ TRANSFER_WT=$(cd "$WORK/wt-issue-42" && pwd -P)
 TRANSFER_LEASE="$WORK/conf/rotating/$(printf '%s' "$TRANSFER_WT" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
 printf '%s %s 900 transfer-test\n' "$$" "$(date +%s)" > "$TRANSFER_LEASE"
 tok="$(run_clean merged)"; err="$(cat "$WORK/err")"
-[ "$tok" = 'skip:live' ] || fail "transfer lease must protect a merged worker, got '$tok'" "$err"
-[ ! -s "$ORDER_LOG" ] && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail 'transfer lease allowed teardown' "$err"
+[ "$tok" = 'skip:live' ] || st_fail "transfer lease must protect a merged worker, got '$tok'" "$err"
+[ ! -s "$ORDER_LOG" ] && [ -f "$WORK/wt-issue-42/keep.txt" ] || st_fail 'transfer lease allowed teardown' "$err"
 st_pass 'MERGED worker with transfer lease → skip:live, no teardown'
 rm "$TRANSFER_LEASE"
 
@@ -293,9 +292,9 @@ for marker in locked CLAUDE_BASE; do
   for mode in '' --auto; do
     : > "$LEDGER"
     tok="$(run_clean merged ${mode:+"$mode"})"
-    [ "$tok" = skip:protected ] || fail "$marker must prevent $mode cleanup" "$tok"
+    [ "$tok" = skip:protected ] || st_fail "$marker must prevent $mode cleanup" "$tok"
     [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
-      && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail "$marker cleanup mutated window, worktree, base or ledger"
+      && [ -f "$WORK/wt-issue-42/keep.txt" ] || st_fail "$marker cleanup mutated window, worktree, base or ledger"
   done
   rm "$WORK/metadata/$marker"
   st_pass "$marker retains window, worktree and ledger in manual and automatic cleanup"
@@ -306,24 +305,24 @@ done
 for merged_time in "$(iso_ago 60)" "$(iso_ago -3600)" '' '-' 'garbled' 'yesterday' '2026-02-30T00:00:00Z'; do
   : > "$LEDGER"
   tok="$(FAKE_MERGED_AT="$merged_time" run_clean merged --auto)"
-  [ "$tok" = skip:grace ] || fail "automatic grace should retain mergedAt='$merged_time', got '$tok'" "$(cat "$WORK/err")"
+  [ "$tok" = skip:grace ] || st_fail "automatic grace should retain mergedAt='$merged_time', got '$tok'" "$(cat "$WORK/err")"
   [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
-    && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail 'grace mutated the worktree/base/ledger'
+    && [ -f "$WORK/wt-issue-42/keep.txt" ] || st_fail 'grace mutated the worktree/base/ledger'
 done
 st_pass 'automatic recent/future/missing/invalid mergedAt defers before mutations'
 tok="$(FAKE_MERGED_AT="$(iso_ago 60)" run_clean merged --auto --dry-run)"
-[ "$tok" = skip:grace ] || fail 'automatic dry-run must report the grace'
+[ "$tok" = skip:grace ] || st_fail 'automatic dry-run must report the grace'
 st_pass 'automatic dry-run observes merged grace'
 tok="$(run_clean merged --auto)"
-case "$tok" in cleaned:*) ;; *) fail "expired automatic grace should clean, got '$tok'" "$(cat "$WORK/err")" ;; esac
+case "$tok" in cleaned:*) ;; *) st_fail "expired automatic grace should clean, got '$tok'" "$(cat "$WORK/err")" ;; esac
 st_pass 'expired automatic grace proceeds through normal cleanup'
 tok="$(FAKE_NOW=1767226199 FAKE_MERGED_AT=2026-01-01T00:00:00Z run_clean merged --auto --dry-run)"
-[ "$tok" = skip:grace ] || fail '599 seconds must still defer'
+[ "$tok" = skip:grace ] || st_fail '599 seconds must still defer'
 tok="$(FAKE_NOW=1767226200 FAKE_MERGED_AT=2026-01-01T00:00:00Z run_clean merged --auto --dry-run)"
-[ "$tok" = dry:would-clean-merged ] || fail "exactly 600 seconds must pass the grace, got $tok" "$(cat "$WORK/err")"
+[ "$tok" = dry:would-clean-merged ] || st_fail "exactly 600 seconds must pass the grace, got $tok" "$(cat "$WORK/err")"
 st_pass 'automatic grace boundary is exact (599/600 seconds)'
 tok="$(WT_GONE=1 WIN_GONE=1 FAKE_MERGED_AT='' run_clean merged --auto)"
-[ "$tok" = skip:nothing ] || fail 'already-reaped automatic cleanup must remain idempotent'
+[ "$tok" = skip:nothing ] || st_fail 'already-reaped automatic cleanup must remain idempotent'
 st_pass 'no debris needs no merge clock'
 
 # A non-exported fleet overlay wins over defaults/environment. Invalid knobs
@@ -331,40 +330,40 @@ st_pass 'no debris needs no merge clock'
 for grace in 3600 invalid -1 999999999999999999999999 31536001 00003600; do
   printf 'FLEET_CLEANUP_MERGED_GRACE=%s\n' "$grace" > "$WORK/conf/testsess.conf"
   tok="$(FAKE_MERGED_AT="$(iso_ago 60)" run_clean merged --auto)"
-  [ "$tok" = skip:grace ] || fail "grace config '$grace' should retain recent merge, got '$tok'"
+  [ "$tok" = skip:grace ] || st_fail "grace config '$grace' should retain recent merge, got '$tok'"
 done
 printf 'FLEET_CLEANUP_MERGED_GRACE=3600\n' > "$WORK/conf/testsess.conf"
 tok="$(run_clean merged --auto)"
-[ "$tok" = skip:grace ] || fail 'per-fleet non-exported grace was ignored'
+[ "$tok" = skip:grace ] || st_fail 'per-fleet non-exported grace was ignored'
 printf 'FLEET_CLEANUP_MERGED_GRACE=0\n' > "$WORK/conf/testsess.conf"
 tok="$(FAKE_MERGED_AT='' run_clean merged --auto)"
-case "$tok" in cleaned:*) ;; *) fail "explicit zero must disable the delay, got '$tok'" ;; esac
+case "$tok" in cleaned:*) ;; *) st_fail "explicit zero must disable the delay, got '$tok'" ;; esac
 tok="$(FAKE_MERGED_AT="$(iso_ago -3600)" run_clean merged --auto --dry-run)"
-[ "$tok" = dry:would-clean-merged ] || fail 'zero grace ignores even a future merge clock after the notice'
+[ "$tok" = dry:would-clean-merged ] || st_fail 'zero grace ignores even a future merge clock after the notice'
 rm "$WORK/conf/testsess.conf"
 st_pass 'per-fleet grace, invalid fallback, decimal input and explicit zero'
 tok="$(FAKE_MERGED_AT='' run_clean merged)"
-case "$tok" in cleaned:*) ;; *) fail 'manual cleanup must not acquire the automatic delay' ;; esac
+case "$tok" in cleaned:*) ;; *) st_fail 'manual cleanup must not acquire the automatic delay' ;; esac
 st_pass 'manual cleanup stays immediate without a merge clock'
 tok="$(run_clean closed --auto)"
-[ "$tok" = skip:unmerged ] || fail 'automatic CLOSED tip==base must be retained'
+[ "$tok" = skip:unmerged ] || st_fail 'automatic CLOSED tip==base must be retained'
 tok="$(FAKE_BASE_TIP=baseahead run_clean closed --auto)"
-[ "$tok" = cleaned:closed ] || fail 'automatic CLOSED strict ancestor can be reaped'
+[ "$tok" = cleaned:closed ] || st_fail 'automatic CLOSED strict ancestor can be reaped'
 for active_state in working looping busy; do
   tok="$(FAKE_BASE_TIP=baseahead WIN_STATE_FAKE="$active_state" run_clean closed --auto)"
-  [ "$tok" = skip:live ] || fail "automatic CLOSED $active_state must be retained"
+  [ "$tok" = skip:live ] || st_fail "automatic CLOSED $active_state must be retained"
 done
 tok="$(FAKE_BASE_TIP=baseahead FAKE_AGENT_AGE=00:10 run_clean closed --auto)"
-[ "$tok" = skip:live ] || fail 'automatic CLOSED young agent must be retained'
+[ "$tok" = skip:live ] || st_fail 'automatic CLOSED young agent must be retained'
 st_pass 'automatic CLOSED requires strict ancestry and shared liveness'
 
 # A merged PR plus expired grace must still leave a live or unverified worker.
 for active_state in working looping busy waiting ''; do
   : > "$LEDGER"
   tok="$(WIN_STATE_FAKE="$active_state" run_clean merged --auto)"
-  [ "$tok" = skip:live ] || fail "automatic state '$active_state' should defer, got '$tok'"
+  [ "$tok" = skip:live ] || st_fail "automatic state '$active_state' should defer, got '$tok'"
   [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
-    && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail 'active worker was mutated'
+    && [ -f "$WORK/wt-issue-42/keep.txt" ] || st_fail 'active worker was mutated'
 done
 st_pass 'automatic MERGED working/looping/busy/waiting/unset state is retained'
 for scenario in young ps-failure missing-pid state-failure missing-window duplicate-window self-call; do
@@ -378,9 +377,9 @@ for scenario in young ps-failure missing-pid state-failure missing-window duplic
     duplicate-window) tok="$(FAKE_DUPLICATE=1 run_clean merged --auto)" ;;
     self-call) tok="$(FAKE_TMUX=fake FAKE_PANE=%7 FAKE_SELF_WIN=@7 run_clean merged --auto)" ;;
   esac
-  [ "$tok" = skip:live ] || fail "automatic $scenario should defer, got '$tok'" "$(cat "$WORK/err")"
+  [ "$tok" = skip:live ] || st_fail "automatic $scenario should defer, got '$tok'" "$(cat "$WORK/err")"
   [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
-    && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail "automatic $scenario mutated the worker"
+    && [ -f "$WORK/wt-issue-42/keep.txt" ] || st_fail "automatic $scenario mutated the worker"
 done
 st_pass 'young agent, failed probes and missing window/pid all fail closed'
 
@@ -395,20 +394,20 @@ lane_2() {
 printf 'FLEET_REAP_MIN_AGE=1800\n' > "$WORK/conf/testsess.conf"
 : > "$LEDGER"
 tok="$(FAKE_AGENT_AGE=20:00 FAKE_MERGED_AT="$(iso_ago 900)" run_clean merged --auto)"
-case "$tok" in cleaned:*) ;; *) fail "merged-during-life young agent should clean, got '$tok'" "$(cat "$WORK/err")" ;; esac
+case "$tok" in cleaned:*) ;; *) st_fail "merged-during-life young agent should clean, got '$tok'" "$(cat "$WORK/err")" ;; esac
 [ "$(grep -c "young-agent waived: merged during this agent's life" "$WORK/err")" = 1 ] \
-  || fail 'the waiver must be logged exactly once per reap' "$(cat "$WORK/err")"
+  || st_fail 'the waiver must be logged exactly once per reap' "$(cat "$WORK/err")"
 : > "$LEDGER"
 tok="$(FAKE_AGENT_AGE=10:00 FAKE_MERGED_AT="$(iso_ago 900)" run_clean merged --auto)"
 [ "$tok" = skip:live ] && grep -q 'deferred: young-agent:codex' "$WORK/err" \
-  || fail "agent started after the merge must stay protected, got '$tok'" "$(cat "$WORK/err")"
-[ ! -s "$ORDER_LOG" ] && [ ! -s "$LEDGER" ] || fail 'a protected young agent was mutated'
+  || st_fail "agent started after the merge must stay protected, got '$tok'" "$(cat "$WORK/err")"
+[ ! -s "$ORDER_LOG" ] && [ ! -s "$LEDGER" ] || st_fail 'a protected young agent was mutated'
 tok="$(FAKE_AGENT_AGE=20:00 FAKE_MERGED_AT="$(iso_ago 900)" WIN_STATE_FAKE='' run_clean merged --auto)"
-[ "$tok" = skip:live ] || fail "unset state must never be waived, got '$tok'"
+[ "$tok" = skip:live ] || st_fail "unset state must never be waived, got '$tok'"
 tok="$(FAKE_AGENT_AGE=20:00 FAKE_MERGED_AT="$(iso_ago 900)" FAKE_HOLD=1 run_clean merged --auto)"
-[ "$tok" = skip:live ] || fail "a held worker must never be waived, got '$tok'"
+[ "$tok" = skip:live ] || st_fail "a held worker must never be waived, got '$tok'"
 tok="$(FAKE_AGENT_AGE=20:00 FAKE_MERGED_AT="$(iso_ago 900)" run_clean merged)"
-case "$tok" in cleaned:*) ;; *) fail "manual cleanup unaffected, got '$tok'" ;; esac
+case "$tok" in cleaned:*) ;; *) st_fail "manual cleanup unaffected, got '$tok'" ;; esac
 rm "$WORK/conf/testsess.conf"
 st_pass 'merged during the agent life waives young-agent; merged before, unset state or hold do not'
 
@@ -416,11 +415,11 @@ st_pass 'merged during the agent life waives young-agent; merged before, unset s
 # 6 minutes ago (after the merge, so no waiver) is reaped, one 4 minutes ago is not.
 : > "$LEDGER"
 tok="$(FAKE_AGENT_AGE=06:00 run_clean merged --auto)"
-case "$tok" in cleaned:*) ;; *) fail "default gate: a 6-minute agent should clean, got '$tok'" "$(cat "$WORK/err")" ;; esac
+case "$tok" in cleaned:*) ;; *) st_fail "default gate: a 6-minute agent should clean, got '$tok'" "$(cat "$WORK/err")" ;; esac
 : > "$LEDGER"
 tok="$(FAKE_AGENT_AGE=04:00 run_clean merged --auto)"
 [ "$tok" = skip:live ] && grep -q 'young-agent:codex:240s<300s' "$WORK/err" \
-  || fail "default gate: a 4-minute agent must stay protected, got '$tok'" "$(cat "$WORK/err")"
+  || st_fail "default gate: a 4-minute agent must stay protected, got '$tok'" "$(cat "$WORK/err")"
 st_pass 'default FLEET_REAP_MIN_AGE is 300s: 6-minute agent reaped, 4-minute agent kept'
 
 # Issue #1244 / T548: a merged worker an old version left stamped `sleeping` is
@@ -436,48 +435,48 @@ PYFAKE
 chmod +x "$WORK/fakebin/python3"
 : > "$LEDGER"
 tok="$(FAKE_LIFE=sleeping FAKE_NO_AGENT=1 run_clean merged --auto)"
-case "$tok" in cleaned:*) ;; *) fail "an old sleeping stamp must not stop a clean, got '$tok'" "$(cat "$WORK/err")" ;; esac
+case "$tok" in cleaned:*) ;; *) st_fail "an old sleeping stamp must not stop a clean, got '$tok'" "$(cat "$WORK/err")" ;; esac
 case "$(tr '\n' ' ' < "$ORDER_LOG")" in "kill-window @7 "*) ;;
-  *) fail "teardown must kill without a sleep-record call: [$(tr '\n' ' ' < "$ORDER_LOG")]" ;; esac
-[ -s "$LEDGER" ] || fail 'the cleanup must still write its history row'
+  *) st_fail "teardown must kill without a sleep-record call: [$(tr '\n' ' ' < "$ORDER_LOG")]" ;; esac
+[ -s "$LEDGER" ] || st_fail 'the cleanup must still write its history row'
 : > "$LEDGER"
 tok="$(FAKE_LIFE=sleeping FAKE_NO_AGENT=1 FAKE_HOLD=1 run_clean merged --auto)"
-[ "$tok" = skip:live ] && [ ! -s "$ORDER_LOG" ] || fail "a held worker must be retained, got '$tok'"
+[ "$tok" = skip:live ] && [ ! -s "$ORDER_LOG" ] || st_fail "a held worker must be retained, got '$tok'"
 rm -f "$WORK/fakebin/python3"
 st_pass 'an old sleeping stamp is cleaned like any; a hold retains it'
 tok="$(WIN_STATE_FAKE=working run_clean merged --auto --dry-run)"
-[ "$tok" = skip:live ] || fail 'dry-run must apply automatic liveness'
+[ "$tok" = skip:live ] || st_fail 'dry-run must apply automatic liveness'
 printf 'FLEET_REAP_MIN_AGE=7200\n' > "$WORK/conf/testsess.conf"
 # Merged BEFORE the 1h agent started, so the #1329 waiver cannot apply.
 tok="$(FAKE_MERGED_AT="$(iso_ago 4000)" run_clean merged --auto)"
-[ "$tok" = skip:live ] || fail 'automatic process age must read non-exported fleet config'
+[ "$tok" = skip:live ] || st_fail 'automatic process age must read non-exported fleet config'
 printf 'FLEET_REAP_MIN_AGE=0\n' > "$WORK/conf/testsess.conf"
 tok="$(FAKE_AGENT_AGE=00:10 run_clean merged --auto --dry-run)"
-[ "$tok" = dry:would-clean-merged ] || fail 'age zero must disable just the age check'
+[ "$tok" = dry:would-clean-merged ] || st_fail 'age zero must disable just the age check'
 tok="$(WIN_STATE_FAKE=working run_clean merged --auto)"
-[ "$tok" = skip:live ] || fail "age zero must never override active state, got '$tok'" "$(cat "$WORK/err")"
+[ "$tok" = skip:live ] || st_fail "age zero must never override active state, got '$tok'" "$(cat "$WORK/err")"
 rm "$WORK/conf/testsess.conf"
 st_pass 'automatic dry-run, fleet process-age override and zero-age state protection'
 tok="$(FAKE_RESUME_ON_PULL=1 run_clean merged --auto)"
-[ "$tok" = skip:live ] || fail "worker resumed during pull should defer, got '$tok'"
+[ "$tok" = skip:live ] || st_fail "worker resumed during pull should defer, got '$tok'"
 [ -s "$PULL_LOG" ] && [ ! -s "$ORDER_LOG" ] && [ -f "$WORK/wt-issue-42/keep.txt" ] \
-  || fail 'post-pull liveness recheck did not prevent teardown'
+  || st_fail 'post-pull liveness recheck did not prevent teardown'
 st_pass 'automatic post-pull recheck protects a resumed worker (earlier ledger may remain)'
 tok="$(FAKE_SELF_WIN=@7 run_clean merged --auto)"
-case "$tok" in cleaned:*) ;; *) fail 'daemon active-window lookup must not masquerade as self' ;; esac
-grep -qx 'kill-window @7' "$ORDER_LOG" || fail 'automatic cleanup must stay synchronous'
-grep -qx run-shell "$ORDER_LOG" && fail 'automatic cleanup must never queue unguarded teardown'
+case "$tok" in cleaned:*) ;; *) st_fail 'daemon active-window lookup must not masquerade as self' ;; esac
+grep -qx 'kill-window @7' "$ORDER_LOG" || st_fail 'automatic cleanup must stay synchronous'
+grep -qx run-shell "$ORDER_LOG" && st_fail 'automatic cleanup must never queue unguarded teardown'
 st_pass 'automatic daemon remains synchronous even when target is the active window'
 tok="$(FAKE_TMUX=fake FAKE_PANE=%1 FAKE_SELF_WIN=@1 run_clean merged --auto)"
-case "$tok" in cleaned:*) ;; *) fail 'automatic caller in another pane should use inherited socket' ;; esac
-grep -qx 'kill-window @7' "$ORDER_LOG" || fail 'inherited-socket cleanup did not complete'
+case "$tok" in cleaned:*) ;; *) st_fail 'automatic caller in another pane should use inherited socket' ;; esac
+grep -qx 'kill-window @7' "$ORDER_LOG" || st_fail 'inherited-socket cleanup did not complete'
 st_pass 'automatic caller outside target inherits socket (empty socket-argument array)'
 tok="$(FAKE_DIRTY=1 run_clean merged --auto)"
-[ "$tok" = skip:dirty ] || fail 'automatic merged issue must preserve post-merge uncommitted work'
-[ ! -s "$ORDER_LOG" ] || fail 'dirty merged issue was disposed'
+[ "$tok" = skip:dirty ] || st_fail 'automatic merged issue must preserve post-merge uncommitted work'
+[ ! -s "$ORDER_LOG" ] || st_fail 'dirty merged issue was disposed'
 tok="$(FAKE_TIP=new-work run_clean merged --auto)"
-[ "$tok" = skip:unmerged ] || fail 'automatic merged issue must preserve post-merge commits'
-[ ! -s "$ORDER_LOG" ] || fail 'new commits after merge were disposed'
+[ "$tok" = skip:unmerged ] || st_fail 'automatic merged issue must preserve post-merge commits'
+[ ! -s "$ORDER_LOG" ] || st_fail 'new commits after merge were disposed'
 st_pass 'automatic merged issue requires clean worktree and exact merged head'
 
 # --- the bound-issue gate (issue #1156) ---------------------------------------
@@ -487,82 +486,82 @@ st_pass 'automatic merged issue requires clean worktree and exact merged head'
 # (1) the PR closes #42 → reaps as ever, and the issue is never even read.
 : > "$WORK/gh-issue.log"
 tok="$(FAKE_ISSUE_STATE=OPEN FAKE_CLOSES='Acme/Widgets#42' run_clean merged --auto)"
-case "$tok" in cleaned:*) ;; *) fail "(1156-1) PR closing #42 must reap, got '$tok'" "$(cat "$WORK/err")" ;; esac
-[ ! -s "$WORK/gh-issue.log" ] || fail '(1156-1) proof A must cost no issue read' "$(cat "$WORK/gh-issue.log")"
+case "$tok" in cleaned:*) ;; *) st_fail "(1156-1) PR closing #42 must reap, got '$tok'" "$(cat "$WORK/err")" ;; esac
+[ ! -s "$WORK/gh-issue.log" ] || st_fail '(1156-1) proof A must cost no issue read' "$(cat "$WORK/gh-issue.log")"
 st_pass 'bound-issue gate: PR closes (repo, #42) → reaped, zero issue reads'
 # (2) closes a different issue (and a same-number issue in ANOTHER repo), #42 open.
 for closes in 'acme/widgets#43' 'other/repo#42' '-' 'acme/widgets#420,acme/widgets#4'; do
   : > "$WORK/gh-issue.log"; : > "$WORK/tmux-set.log"; : > "$LEDGER"
   tok="$(FAKE_ISSUE_STATE=OPEN FAKE_CLOSES="$closes" run_clean merged --auto)"
-  [ "$tok" = skip:issue-open ] || fail "(1156-2) closes='$closes' + #42 OPEN must defer, got '$tok'" "$(cat "$WORK/err")"
+  [ "$tok" = skip:issue-open ] || st_fail "(1156-2) closes='$closes' + #42 OPEN must defer, got '$tok'" "$(cat "$WORK/err")"
   [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
-    && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail "(1156-2) closes='$closes' mutated the worker"
-  grep -q -- '-R acme/widgets issue view 42 ' "$WORK/gh-issue.log" || fail '(1156-2) issue read not on (repo, issue)' "$(cat "$WORK/gh-issue.log")"
-  grep -q 'issue close' "$WORK/gh-issue.log" && fail '(1156-2) cleanup must never close an issue'
+    && [ -f "$WORK/wt-issue-42/keep.txt" ] || st_fail "(1156-2) closes='$closes' mutated the worker"
+  grep -q -- '-R acme/widgets issue view 42 ' "$WORK/gh-issue.log" || st_fail '(1156-2) issue read not on (repo, issue)' "$(cat "$WORK/gh-issue.log")"
+  grep -q 'issue close' "$WORK/gh-issue.log" && st_fail '(1156-2) cleanup must never close an issue'
 done
 grep -q '@reap_due hold' "$WORK/tmux-set.log" && grep -q '@reap_hold PR #42 merged · #42 still open' "$WORK/tmux-set.log" \
-  || fail '(1156-2) the dash hold notice was not written' "$(cat "$WORK/tmux-set.log")"
-grep -q '@reap_due [0-9]' "$WORK/tmux-set.log" && fail '(1156-2) a held window must not get a countdown'
+  || st_fail '(1156-2) the dash hold notice was not written' "$(cat "$WORK/tmux-set.log")"
+grep -q '@reap_due [0-9]' "$WORK/tmux-set.log" && st_fail '(1156-2) a held window must not get a countdown'
 st_pass 'bound-issue gate: PR closes another issue, #42 OPEN → skip:issue-open, held dash notice, nothing touched'
 # the hold wins over the grace: a fresh merge never shows a countdown it cannot keep
 tok="$(FAKE_ISSUE_STATE=OPEN FAKE_CLOSES='acme/widgets#43' FAKE_MERGED_AT="$(iso_ago 60)" run_clean merged --auto)"
-[ "$tok" = skip:issue-open ] || fail "(1156-2b) within grace must still report the hold, got '$tok'"
+[ "$tok" = skip:issue-open ] || st_fail "(1156-2b) within grace must still report the hold, got '$tok'"
 : > "$WORK/tmux-set.log"
 tok="$(FAKE_ISSUE_STATE=OPEN FAKE_CLOSES='acme/widgets#43' run_clean merged --auto --dry-run)"
-[ "$tok" = skip:issue-open ] || fail "(1156-2c) dry-run must classify the hold, got '$tok'"
-[ ! -s "$WORK/tmux-set.log" ] || fail '(1156-2c) dry-run wrote the notice' "$(cat "$WORK/tmux-set.log")"
+[ "$tok" = skip:issue-open ] || st_fail "(1156-2c) dry-run must classify the hold, got '$tok'"
+[ ! -s "$WORK/tmux-set.log" ] || st_fail '(1156-2c) dry-run wrote the notice' "$(cat "$WORK/tmux-set.log")"
 st_pass 'bound-issue gate: precedes the grace countdown; dry-run classifies without writing'
 # (3) same PR, #42 now CLOSED → the next tick reaps.
 tok="$(FAKE_ISSUE_STATE=CLOSED FAKE_CLOSES='acme/widgets#43' run_clean merged --auto)"
-case "$tok" in cleaned:*) ;; *) fail "(1156-3) #42 CLOSED must reap, got '$tok'" "$(cat "$WORK/err")" ;; esac
-grep -qx 'kill-window @7' "$ORDER_LOG" || fail '(1156-3) the window was not reaped'
+case "$tok" in cleaned:*) ;; *) st_fail "(1156-3) #42 CLOSED must reap, got '$tok'" "$(cat "$WORK/err")" ;; esac
+grep -qx 'kill-window @7' "$ORDER_LOG" || st_fail '(1156-3) the window was not reaped'
 st_pass 'bound-issue gate: #42 closed → reaped on the next tick'
 # (4) gh issue view fails → unknown reads as OPEN.
 tok="$(FAKE_ISSUE_FAIL=1 FAKE_CLOSES='acme/widgets#43' run_clean merged --auto)"
-[ "$tok" = skip:issue-open ] || fail "(1156-4) unknown issue state must defer, got '$tok'"
-[ ! -s "$ORDER_LOG" ] || fail '(1156-4) unknown state reaped'
+[ "$tok" = skip:issue-open ] || st_fail "(1156-4) unknown issue state must defer, got '$tok'"
+[ ! -s "$ORDER_LOG" ] || st_fail '(1156-4) unknown state reaped'
 st_pass 'bound-issue gate: gh issue view failure → skip:issue-open (fail safe)'
 # CLOSED-unmerged (B): a closed PR proves nothing about the task.
 tok="$(FAKE_ISSUE_STATE=OPEN FAKE_BASE_TIP=baseahead run_clean closed --auto)"
-[ "$tok" = skip:issue-open ] || fail "(1156-5) CLOSED PR + #42 OPEN must defer, got '$tok'"
-[ ! -s "$ORDER_LOG" ] || fail '(1156-5) closed-unmerged reaped an open issue'
+[ "$tok" = skip:issue-open ] || st_fail "(1156-5) CLOSED PR + #42 OPEN must defer, got '$tok'"
+[ ! -s "$ORDER_LOG" ] || st_fail '(1156-5) closed-unmerged reaped an open issue'
 st_pass 'bound-issue gate: CLOSED-unmerged + #42 OPEN → skip:issue-open'
 # Manual cleanup stays as is: the operator asked for it.
 tok="$(FAKE_ISSUE_STATE=OPEN FAKE_CLOSES='acme/widgets#43' run_clean merged)"
-case "$tok" in cleaned:*) ;; *) fail "(1156-6) manual cleanup must ignore the gate, got '$tok'" ;; esac
+case "$tok" in cleaned:*) ;; *) st_fail "(1156-6) manual cleanup must ignore the gate, got '$tok'" ;; esac
 st_pass 'bound-issue gate: manual cleanup unaffected'
 
 : > "$LEDGER"
 tok="$(run_clean merged)"; err="$(cat "$WORK/err")"
-case "$tok" in cleaned:*) ;; *) fail "1 expected cleaned:*, got '$tok'" "$err" ;; esac
+case "$tok" in cleaned:*) ;; *) st_fail "1 expected cleaned:*, got '$tok'" "$err" ;; esac
 # teardown ordering: kill-window BEFORE worktree-remove BEFORE branch-D
 order="$(tr '\n' ' ' < "$ORDER_LOG")"
 case "$order" in
   "kill-window @7 "*"worktree-prune "*"branch-D"*) ;;
-  *) fail "1 teardown order wrong (want kill-window → worktree drop/prune → branch-D): [$order]" "$err" ;;
+  *) st_fail "1 teardown order wrong (want kill-window → worktree drop/prune → branch-D): [$order]" "$err" ;;
 esac
 # The worktree is MOVED aside, never deleted inline (issue #586): a synchronous
 # delete of a 308k-file tree once held this teardown — and the whole daemon — for
 # 67 minutes. Assert the bytes are intact in the trash, i.e. it really was a rename.
-[ -e "$WORK/wt-issue-42" ] && fail "1 the worktree dir is still in place — no drop happened" "$err"
+[ -e "$WORK/wt-issue-42" ] && st_fail "1 the worktree dir is still in place — no drop happened" "$err"
 trashed="$(find "$WORK/.fleet-trash" -mindepth 1 -maxdepth 1 -name 'wt-issue-42.*' 2>/dev/null | head -1)"
-[ -n "$trashed" ] || fail "1 the worktree was not renamed into .fleet-trash" "$err"
+[ -n "$trashed" ] || st_fail "1 the worktree was not renamed into .fleet-trash" "$err"
 [ "$(cat "$trashed/keep.txt" 2>/dev/null)" = payload ] \
-  || fail "1 trashed content missing — teardown deleted instead of renaming" "$err"
+  || st_fail "1 trashed content missing — teardown deleted instead of renaming" "$err"
 # ledger row recorded BEFORE removal (it captured the still-live worktree path)
-[ -s "$LEDGER" ] || fail "1 no history ledger row was written" "$err"
-grep -q 'wt-issue-42' "$LEDGER" || fail "1 ledger row missing the worktree path (recorded after removal?)" "$err"
+[ -s "$LEDGER" ] || st_fail "1 no history ledger row was written" "$err"
+grep -q 'wt-issue-42' "$LEDGER" || st_fail "1 ledger row missing the worktree path (recorded after removal?)" "$err"
 # base fast-forward happened
-[ -s "$PULL_LOG" ] || fail "1 merged cleanup must fast-forward the base (git pull --ff-only)" "$err"
+[ -s "$PULL_LOG" ] || st_fail "1 merged cleanup must fast-forward the base (git pull --ff-only)" "$err"
 st_pass "1 MERGED → cleaned + ledger-before-teardown + ordered teardown + base pull"
 
 # --- 1b. MERGED, base checkout on a side branch → reaped, base NOT pulled (#1044)
 : > "$LEDGER"
 tok="$(FAKE_BASE_ON=ops/side run_clean merged)"; err="$(cat "$WORK/err")"
-[ "$tok" = "cleaned:deadbeef" ] || fail "1b expected cleaned:deadbeef, got '$tok'" "$err"
-[ -s "$PULL_LOG" ] && fail "1b a base on a side branch must NOT be pulled (it would pull the side branch)" "$err"
+[ "$tok" = "cleaned:deadbeef" ] || st_fail "1b expected cleaned:deadbeef, got '$tok'" "$err"
+[ -s "$PULL_LOG" ] && st_fail "1b a base on a side branch must NOT be pulled (it would pull the side branch)" "$err"
 printf '%s' "$err" | grep -q "base $WORK/main is on ops/side, not master — not syncing" \
-  || fail "1b the wrong-branch base must be reported" "$err"
+  || st_fail "1b the wrong-branch base must be reported" "$err"
 st_pass "1b MERGED + base on a side branch → reaped, no base pull, reported"
 
 }
@@ -576,15 +575,15 @@ lane_3() {
 # --- 2. CLOSED-unmerged, session demonstrably gone → reaped + recorded ---------
 : > "$LEDGER"
 tok="$(run_clean closed)"; err="$(cat "$WORK/err")"
-[ "$tok" = "cleaned:closed" ] || fail "2 expected cleaned:closed, got '$tok'" "$err"
-[ -e "$WORK/wt-issue-42" ] && fail "2 closed-unmerged must reap the orphan worktree" "$err"
+[ "$tok" = "cleaned:closed" ] || st_fail "2 expected cleaned:closed, got '$tok'" "$err"
+[ -e "$WORK/wt-issue-42" ] && st_fail "2 closed-unmerged must reap the orphan worktree" "$err"
 [ -n "$(find "$WORK/.fleet-trash" -mindepth 1 -maxdepth 1 -name 'wt-issue-42.*' 2>/dev/null)" ] \
-  || fail "2 the orphan worktree was not dropped into .fleet-trash" "$err"
-[ -s "$PULL_LOG" ] && fail "2 closed-unmerged must NOT fast-forward the base (nothing merged)" "$err"
+  || st_fail "2 the orphan worktree was not dropped into .fleet-trash" "$err"
+[ -s "$PULL_LOG" ] && st_fail "2 closed-unmerged must NOT fast-forward the base (nothing merged)" "$err"
 # It IS recorded now (issue #544): a reaped closed-unmerged worker used to vanish
 # from /fleet-history entirely — no transcript pointer, no sha, no way back.
-[ -s "$LEDGER" ] || fail "2 closed-unmerged must record a closed-unlanded ledger row" "$err"
-grep -q 'wt-issue-42' "$LEDGER" || fail "2 the closed row must carry the worktree path (recorded before teardown?)" "$err"
+[ -s "$LEDGER" ] || st_fail "2 closed-unmerged must record a closed-unlanded ledger row" "$err"
+grep -q 'wt-issue-42' "$LEDGER" || st_fail "2 the closed row must carry the worktree path (recorded before teardown?)" "$err"
 st_pass "2 CLOSED-unmerged + session gone → cleaned:closed, reaped, closed row recorded, no base pull"
 
 # --- 2b. the #534 case: the session spoke AFTER the PR closed → never reaped ---
@@ -593,31 +592,31 @@ st_pass "2 CLOSED-unmerged + session gone → cleaned:closed, reaped, closed row
 # after closedAt", which has no timeout, so ⌃o restore works again too.
 : > "$LEDGER"
 tok="$(FAKE_TX_AGE=5 FAKE_CLOSED_AT="$(iso_ago 600)" run_clean closed)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:live" ] || fail "2b a session that spoke after closedAt must defer with skip:live, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "2b a live closed-unmerged session must not be torn down" "$err"
-[ -d "$WORK/wt-issue-42" ] || fail "2b the live worktree must survive the deferral" "$err"
-[ -s "$LEDGER" ] && fail "2b a deferred reap must not record the session as closed" "$err"
+[ "$tok" = "skip:live" ] || st_fail "2b a session that spoke after closedAt must defer with skip:live, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "2b a live closed-unmerged session must not be torn down" "$err"
+[ -d "$WORK/wt-issue-42" ] || st_fail "2b the live worktree must survive the deferral" "$err"
+[ -s "$LEDGER" ] && st_fail "2b a deferred reap must not record the session as closed" "$err"
 st_pass "2b CLOSED-unmerged, transcript moved after closedAt → skip:live (the #534 regression)"
 
 # --- 2c. quiet, but not for long enough → grace -------------------------------
 : > "$LEDGER"
 tok="$(FAKE_TX_AGE=120 FAKE_CLOSED_AT="$(iso_ago 60)" run_clean closed)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:live" ] || fail "2c a window idle under the grace must defer with skip:live, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "2c a window inside the grace must not be torn down" "$err"
+[ "$tok" = "skip:live" ] || st_fail "2c a window idle under the grace must defer with skip:live, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "2c a window inside the grace must not be torn down" "$err"
 st_pass "2c CLOSED-unmerged, idle < FLEET_CLEANUP_CLOSED_GRACE → skip:live"
 
 # --- 2d. the window says it is mid-turn → hands off, whatever the clock says ---
 : > "$LEDGER"
 tok="$(WIN_STATE_FAKE=working run_clean closed)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:live" ] || fail "2d a 'working' window must defer with skip:live, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "2d a working window must not be torn down" "$err"
+[ "$tok" = "skip:live" ] || st_fail "2d a 'working' window must defer with skip:live, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "2d a working window must not be torn down" "$err"
 st_pass "2d CLOSED-unmerged, window @claude_state=working → skip:live"
 
 # --- 2e. a live window we cannot read → fail CLOSED, do not guess -------------
 : > "$LEDGER"
 tok="$(FAKE_TX_AGE=none run_clean closed)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:live" ] || fail "2e an unreadable live window must fail closed with skip:live, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "2e an unprovable window must not be torn down" "$err"
+[ "$tok" = "skip:live" ] || st_fail "2e an unreadable live window must fail closed with skip:live, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "2e an unprovable window must not be torn down" "$err"
 st_pass "2e CLOSED-unmerged, live window with no transcript → skip:live (fails closed)"
 
 # --- 2f. dirty worktree → the SAME answer worktree-autoclean.sh gives ---------
@@ -625,17 +624,17 @@ st_pass "2e CLOSED-unmerged, live window with no transcript → skip:live (fails
 # uncommitted conflict resolution. Both the verdict and the tree are asserted.
 : > "$LEDGER"
 tok="$(FAKE_DIRTY=1 run_clean closed)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:dirty" ] || fail "2f a dirty closed-unmerged worktree must refuse with skip:dirty, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "2f a dirty worktree must not be torn down" "$err"
+[ "$tok" = "skip:dirty" ] || st_fail "2f a dirty closed-unmerged worktree must refuse with skip:dirty, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "2f a dirty worktree must not be torn down" "$err"
 [ "$(cat "$WORK/wt-issue-42/keep.txt" 2>/dev/null)" = payload ] \
-  || fail "2f the dirty worktree's content must survive untouched" "$err"
+  || st_fail "2f the dirty worktree's content must survive untouched" "$err"
 st_pass "2f CLOSED-unmerged, dirty worktree → skip:dirty (never force-dropped)"
 
 # --- 2g. no live window at all → nothing to protect, reap the orphan ----------
 : > "$LEDGER"
 tok="$(WIN_GONE=1 FAKE_TX_AGE=none run_clean closed)"; err="$(cat "$WORK/err")"
-[ "$tok" = "cleaned:closed" ] || fail "2g a windowless closed orphan must be reaped, got '$tok'" "$err"
-[ -e "$WORK/wt-issue-42" ] && fail "2g the windowless orphan worktree must be dropped" "$err"
+[ "$tok" = "cleaned:closed" ] || st_fail "2g a windowless closed orphan must be reaped, got '$tok'" "$err"
+[ -e "$WORK/wt-issue-42" ] && st_fail "2g the windowless orphan worktree must be dropped" "$err"
 st_pass "2g CLOSED-unmerged, no live window → cleaned:closed (nothing to protect)"
 
 # --- 2g2. a live window whose worktree is already gone → reapable on `working` --
@@ -645,11 +644,11 @@ st_pass "2g CLOSED-unmerged, no live window → cleaned:closed (nothing to prote
 # tick, forever.
 : > "$LEDGER"
 tok="$(WT_GONE=1 FAKE_TX_AGE=none run_clean closed)"; err="$(cat "$WORK/err")"
-[ "$tok" = "cleaned:closed" ] || fail "2g2 a worktree-less closed window must be reapable, got '$tok'" "$err"
-grep -q 'kill-window @7' "$ORDER_LOG" || fail "2g2 the orphan window must be killed" "$err"
+[ "$tok" = "cleaned:closed" ] || st_fail "2g2 a worktree-less closed window must be reapable, got '$tok'" "$err"
+grep -q 'kill-window @7' "$ORDER_LOG" || st_fail "2g2 the orphan window must be killed" "$err"
 tok="$(WT_GONE=1 FAKE_TX_AGE=none WIN_STATE_FAKE=working run_clean closed)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:live" ] || fail "2g2 a worktree-less window that is 'working' must defer, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "2g2 a working worktree-less window must not be torn down" "$err"
+[ "$tok" = "skip:live" ] || st_fail "2g2 a worktree-less window that is 'working' must defer, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "2g2 a working worktree-less window must not be torn down" "$err"
 st_pass "2g2 CLOSED-unmerged, worktree gone + live window → reaped unless 'working'"
 
 # --- 2h. --dry-run over a LIVE one classifies honestly, not "would reap" ------
@@ -657,46 +656,46 @@ st_pass "2g2 CLOSED-unmerged, worktree gone + live window → reaped unless 'wor
 # `dry:would-reap-closed` over a live session would be reporting a lie.
 : > "$LEDGER"
 tok="$(FAKE_TX_AGE=5 FAKE_CLOSED_AT="$(iso_ago 600)" run_clean closed --dry-run)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:live" ] || fail "2h --dry-run over a live closed PR must report skip:live, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "2h --dry-run must not tear anything down" "$err"
+[ "$tok" = "skip:live" ] || st_fail "2h --dry-run over a live closed PR must report skip:live, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "2h --dry-run must not tear anything down" "$err"
 tok="$(run_clean closed --dry-run)"; err="$(cat "$WORK/err")"
-[ "$tok" = "dry:would-reap-closed" ] || fail "2h --dry-run over a gone session must report dry:would-reap-closed, got '$tok'" "$err"
+[ "$tok" = "dry:would-reap-closed" ] || st_fail "2h --dry-run over a gone session must report dry:would-reap-closed, got '$tok'" "$err"
 st_pass "2h --dry-run runs the gate: skip:live when live, dry:would-reap-closed when gone"
 
 # --- 3. OPEN → skip:not-final, nothing torn down, nothing recorded ------------
 : > "$LEDGER"
 tok="$(run_clean open)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:not-final" ] || fail "3 expected skip:not-final, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "3 an OPEN (not-final) PR must not be torn down" "$err"
-[ -s "$LEDGER" ]    && fail "3 an OPEN PR must not record a ledger row" "$err"
+[ "$tok" = "skip:not-final" ] || st_fail "3 expected skip:not-final, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "3 an OPEN (not-final) PR must not be torn down" "$err"
+[ -s "$LEDGER" ]    && st_fail "3 an OPEN PR must not record a ledger row" "$err"
 st_pass "3 OPEN → skip:not-final, no teardown, no ledger"
 
 # --- 4. already-torn-down (MERGED, no worktree/window) → skip:nothing, idempotent
 : > "$LEDGER"
 tok="$(WT_GONE=1 WIN_GONE=1 run_clean merged)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:nothing" ] || fail "4 expected skip:nothing on an already-cleaned PR, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "4 already-cleaned PR must not tear anything down" "$err"
-[ -s "$LEDGER" ]    && fail "4 already-cleaned PR must not append a duplicate ledger row" "$err"
+[ "$tok" = "skip:nothing" ] || st_fail "4 expected skip:nothing on an already-cleaned PR, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "4 already-cleaned PR must not tear anything down" "$err"
+[ -s "$LEDGER" ]    && st_fail "4 already-cleaned PR must not append a duplicate ledger row" "$err"
 st_pass "4 already-torn-down → skip:nothing (idempotent, no dup ledger, no teardown)"
 
 # --- 5. self-cwd cleanup → teardown DETACHES into the tmux server (worker-safe) -
 : > "$LEDGER"
 tok="$(FAKE_PANE=%7 FAKE_SELF_WIN=@7 run_clean merged)"; err="$(cat "$WORK/err")"
-[ "$tok" = deferred:cleanup ] || fail "5 expected deferred cleanup on the self-cwd path, got '$tok'" "$err"
-grep -qx run-shell "$ORDER_LOG" || fail "5 self-cwd teardown must detach via tmux run-shell" "$err"
-[ -d "$WORK/wt-issue-42" ] || fail "5 self-cwd teardown must NOT drop the worktree inline (it detaches)" "$err"
+[ "$tok" = deferred:cleanup ] || st_fail "5 expected deferred cleanup on the self-cwd path, got '$tok'" "$err"
+grep -qx run-shell "$ORDER_LOG" || st_fail "5 self-cwd teardown must detach via tmux run-shell" "$err"
+[ -d "$WORK/wt-issue-42" ] || st_fail "5 self-cwd teardown must NOT drop the worktree inline (it detaches)" "$err"
 case "$err" in
   *fleet-cleanup.sh*--expected-binding*) ;;
-  *) fail "5 detached cleanup must re-enter the guarded path with the original binding" "$err" ;;
+  *) st_fail "5 detached cleanup must re-enter the guarded path with the original binding" "$err" ;;
 esac
 st_pass "5 self-cwd cleanup → teardown detaches into the tmux server"
 
 # --- 6. --dry-run → dry:*, no teardown, no mutation ---------------------------
 : > "$LEDGER"
 tok="$(run_clean merged --dry-run)"; err="$(cat "$WORK/err")"
-[ "$tok" = "dry:would-clean-merged" ] || fail "6 expected dry:would-clean-merged, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "6 --dry-run must not tear anything down" "$err"
-[ -s "$LEDGER" ]    && fail "6 --dry-run must not record a ledger row" "$err"
+[ "$tok" = "dry:would-clean-merged" ] || st_fail "6 expected dry:would-clean-merged, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "6 --dry-run must not tear anything down" "$err"
+[ -s "$LEDGER" ]    && st_fail "6 --dry-run must not record a ledger row" "$err"
 st_pass "6 --dry-run classifies without mutating"
 
 }
@@ -718,78 +717,78 @@ scratch() { # $1 = gh scenario; remaining args pass through to run_clean
 # --- 7. knob OFF (the default) → the historic behavior, byte for byte ----------
 : > "$LEDGER"
 tok="$(FLEET_CLEANUP_SCRATCH_HEADS=0 scratch scratch)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:nothing" ] || fail "7 knob off must leave a non-issue head alone, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "7 knob off must tear NOTHING down for a non-issue head" "$err"
-[ -s "$LEDGER" ]    && fail "7 knob off must not record a ledger row" "$err"
+[ "$tok" = "skip:nothing" ] || st_fail "7 knob off must leave a non-issue head alone, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "7 knob off must tear NOTHING down for a non-issue head" "$err"
+[ -s "$LEDGER" ]    && st_fail "7 knob off must not record a ledger row" "$err"
 st_pass "7 non-issue head, knob OFF → skip:nothing (default behavior unchanged)"
 
 # --- 8. knob ON + clean + tip==merged head + window done → reaped --------------
 : > "$LEDGER"
 tok="$(FAKE_MERGED_AT="$(iso_ago 60)" scratch scratch --auto)"
-[ "$tok" = skip:grace ] || fail 'automatic scratch cleanup needs merged grace too'
+[ "$tok" = skip:grace ] || st_fail 'automatic scratch cleanup needs merged grace too'
 [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
-  && [ -f "$WORK/wt-scratch-99/keep.txt" ] || fail 'scratch grace allowed mutation'
+  && [ -f "$WORK/wt-scratch-99/keep.txt" ] || st_fail 'scratch grace allowed mutation'
 st_pass 'automatic opted-in scratch head also waits for grace'
 : > "$LEDGER"
 tok="$(FAKE_AGENT_AGE=00:10 scratch scratch --auto)"
-[ "$tok" = skip:live ] || fail 'automatic scratch head must pass process-age gate'
-[ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] || fail 'young scratch agent was mutated'
+[ "$tok" = skip:live ] || st_fail 'automatic scratch head must pass process-age gate'
+[ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] || st_fail 'young scratch agent was mutated'
 st_pass 'automatic scratch head also passes shared process liveness'
 : > "$LEDGER"
 tok="$(scratch scratch)"; err="$(cat "$WORK/err")"
-case "$tok" in cleaned:*) ;; *) fail "8 expected cleaned:* for an armed scratch head, got '$tok'" "$err" ;; esac
+case "$tok" in cleaned:*) ;; *) st_fail "8 expected cleaned:* for an armed scratch head, got '$tok'" "$err" ;; esac
 order="$(tr '\n' ' ' < "$ORDER_LOG")"
 case "$order" in
   "kill-window @9 "*"worktree-prune "*"branch-D scratch-99"*) ;;
-  *) fail "8 teardown must kill @9 then drop the worktree then branch -D scratch-99: [$order]" "$err" ;;
+  *) st_fail "8 teardown must kill @9 then drop the worktree then branch -D scratch-99: [$order]" "$err" ;;
 esac
 # Dropped, not deleted (issue #586) — the same rename-into-.fleet-trash the
 # issue-<N> path takes, so a huge scratch worktree cannot hold the daemon either.
-[ -e "$WORK/wt-scratch-99" ] && fail "8 the scratch worktree dir is still in place — no drop happened" "$err"
+[ -e "$WORK/wt-scratch-99" ] && st_fail "8 the scratch worktree dir is still in place — no drop happened" "$err"
 trashed="$(find "$WORK/.fleet-trash" -mindepth 1 -maxdepth 1 -name 'wt-scratch-99.*' 2>/dev/null | head -1)"
-[ -n "$trashed" ] || fail "8 the scratch worktree was not renamed into .fleet-trash" "$err"
+[ -n "$trashed" ] || st_fail "8 the scratch worktree was not renamed into .fleet-trash" "$err"
 [ "$(cat "$trashed/keep.txt" 2>/dev/null)" = payload ] \
-  || fail "8 trashed content missing — teardown deleted instead of renaming" "$err"
-grep -q 'wt-scratch-99' "$LEDGER" || fail "8 the reaped scratch session must land in the ledger" "$err"
-[ -s "$PULL_LOG" ] || fail "8 a merged scratch-head cleanup must fast-forward the base" "$err"
+  || st_fail "8 trashed content missing — teardown deleted instead of renaming" "$err"
+grep -q 'wt-scratch-99' "$LEDGER" || st_fail "8 the reaped scratch session must land in the ledger" "$err"
+[ -s "$PULL_LOG" ] || st_fail "8 a merged scratch-head cleanup must fast-forward the base" "$err"
 st_pass "8 non-issue head, knob ON + gate green → cleaned + teardown + ledger + base pull"
 
 # --- 9. window is working → the operator's own workbench, hands off ------------
 : > "$LEDGER"
 tok="$(SCRATCH_STATE=working scratch scratch)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:busy" ] || fail "9 a working window must refuse with skip:busy, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "9 a working window must not be torn down" "$err"
+[ "$tok" = "skip:busy" ] || st_fail "9 a working window must refuse with skip:busy, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "9 a working window must not be torn down" "$err"
 st_pass "9 non-issue head, window working → skip:busy (no teardown)"
 
 # --- 10. dirty worktree → never silently delete work --------------------------
 tok="$(FAKE_DIRTY=1 scratch scratch)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:dirty" ] || fail "10 a dirty worktree must refuse with skip:dirty, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "10 a dirty worktree must not be torn down" "$err"
+[ "$tok" = "skip:dirty" ] || st_fail "10 a dirty worktree must refuse with skip:dirty, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "10 a dirty worktree must not be torn down" "$err"
 st_pass "10 non-issue head, dirty worktree → skip:dirty (no teardown)"
 
 # --- 11. local commits past the merged head → never merged, keep them ---------
 tok="$(FAKE_TIP=beef9999 scratch scratch)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:unmerged" ] || fail "11 a tip past the merge must refuse with skip:unmerged, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "11 unmerged commits must not be torn down" "$err"
+[ "$tok" = "skip:unmerged" ] || st_fail "11 a tip past the merge must refuse with skip:unmerged, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "11 unmerged commits must not be torn down" "$err"
 st_pass "11 non-issue head, commits past the merge → skip:unmerged (no teardown)"
 
 # --- 12. CLOSED-unmerged non-issue head → never in scope, even armed ----------
 tok="$(scratch scratchclosed)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:nothing" ] || fail "12 a CLOSED non-issue head must stay out of scope, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "12 a CLOSED non-issue head must not be torn down" "$err"
+[ "$tok" = "skip:nothing" ] || st_fail "12 a CLOSED non-issue head must stay out of scope, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "12 a CLOSED non-issue head must not be torn down" "$err"
 st_pass "12 non-issue head, CLOSED-unmerged → skip:nothing (opt-in is MERGED-only)"
 
 # --- 12b. no live window in the worktree → fail CLOSED, not "nobody home" -----
 tok="$(SCRATCH_WIN=0 scratch scratch)"
 err="$(cat "$WORK/err")"
-[ "$tok" = "skip:nothing" ] || fail "12b a worktree with no live window must fail closed, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "12b a worktree with no live window must not be torn down" "$err"
+[ "$tok" = "skip:nothing" ] || st_fail "12b a worktree with no live window must fail closed, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "12b a worktree with no live window must not be torn down" "$err"
 st_pass "12b non-issue head, no window in the worktree → skip:nothing (fails closed)"
 
 # --- 13. a protected head branch is never reapable ---------------------------
 tok="$(scratch protected)"; err="$(cat "$WORK/err")"
-[ "$tok" = "skip:protected" ] || fail "13 a protected head must refuse with skip:protected, got '$tok'" "$err"
-[ -s "$ORDER_LOG" ] && fail "13 a protected branch must not be torn down" "$err"
+[ "$tok" = "skip:protected" ] || st_fail "13 a protected head must refuse with skip:protected, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && st_fail "13 a protected branch must not be torn down" "$err"
 st_pass "13 non-issue head on a protected branch → skip:protected (no teardown)"
 
 }

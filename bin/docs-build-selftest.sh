@@ -25,15 +25,15 @@
 #      and makes the old source stale, --write mends it; an unknown block refuses
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT/bin/selftest-lib.sh"
 BUILD="$ROOT/bin/docs-build.sh"
 T="$(mktemp -d "${TMPDIR:-/tmp}/docs-build-st.XXXXXX")"
 trap 'rm -rf "$T"' EXIT
 fail=0
-ok()  { echo "ok   $*"; }
 bad() { echo "FAIL $*"; fail=1; }
 
 # A
-if out="$("$BUILD" --out "$T/out" 2>&1)"; then ok "A build: $out"; else bad "A build failed: $out"; echo "FAIL"; exit 1; fi
+if out="$("$BUILD" --out "$T/out" 2>&1)"; then st_ok_all "A build: $out"; else bad "A build failed: $out"; echo "FAIL"; exit 1; fi
 
 python3 - "$T/out" "$ROOT/docs/public" <<'PY' || fail=1
 import os, re, sys
@@ -111,9 +111,9 @@ done
 mk g1/en/extra.md "# only in English"
 mk g2/zh/faq.md "no title here"
 if "$BUILD" --src "$T/g1" --out "$T/g1out" >/dev/null 2>"$T/g1.err"; then bad "G an en-only page was built"
-elif grep -q 'has no Chinese page' "$T/g1.err"; then ok "G en-only page refused"; else bad "G g1: $(cat "$T/g1.err")"; fi
+elif grep -q 'has no Chinese page' "$T/g1.err"; then st_ok_all "G en-only page refused"; else bad "G g1: $(cat "$T/g1.err")"; fi
 if "$BUILD" --src "$T/g2" --out "$T/g2out" >/dev/null 2>"$T/g2.err"; then bad "G a page with no title was built"
-elif grep -q 'has no "# " title' "$T/g2.err"; then ok "G untitled page refused"; else bad "G g2: $(cat "$T/g2.err")"; fi
+elif grep -q 'has no "# " title' "$T/g2.err"; then st_ok_all "G untitled page refused"; else bad "G g2: $(cat "$T/g2.err")"; fi
 for d in g3 g4 g5; do
   mk "$d/zh/index.md" "# home"; mk "$d/en/index.md" "# home"
   for r in self-host hosted member; do mk "$d/zh/$r/quickstart.md" "# $r"; done
@@ -147,10 +147,10 @@ mk g5/en/self-host/install.md '# Install
 ### 1.2 Deploying in mainland China
 ## 2. Machines'
 if "$BUILD" --src "$T/g3" --out "$T/g3out" >/dev/null 2>"$T/g3.err"; then bad "G an en page missing a section was built"
-elif grep -q 'self-host/install.md: zh has 4 headings, en 3' "$T/g3.err" && grep -q '### 1.2 国内部署' "$T/g3.err"; then ok "G en page missing a zh section refused"; else bad "G g3: $(cat "$T/g3.err")"; fi
+elif grep -q 'self-host/install.md: zh has 4 headings, en 3' "$T/g3.err" && grep -q '### 1.2 国内部署' "$T/g3.err"; then st_ok_all "G en page missing a zh section refused"; else bad "G g3: $(cat "$T/g3.err")"; fi
 if "$BUILD" --src "$T/g4" --out "$T/g4out" >/dev/null 2>"$T/g4.err"; then bad "G an en section at another level was built"
-elif grep -q 'outline must match' "$T/g4.err"; then ok "G en section at another level refused"; else bad "G g4: $(cat "$T/g4.err")"; fi
-if "$BUILD" --src "$T/g5" --out "$T/g5out" >/dev/null 2>"$T/g5.err"; then ok "G matching outlines build (code-block # ignored)"; else bad "G g5: $(cat "$T/g5.err")"; fi
+elif grep -q 'outline must match' "$T/g4.err"; then st_ok_all "G en section at another level refused"; else bad "G g4: $(cat "$T/g4.err")"; fi
+if "$BUILD" --src "$T/g5" --out "$T/g5out" >/dev/null 2>"$T/g5.err"; then st_ok_all "G matching outlines build (code-block # ignored)"; else bad "G g5: $(cat "$T/g5.err")"; fi
 
 # D — a zh page with no en source still gets an en page, never a 404
 mk d1/zh/index.md "# home"
@@ -161,10 +161,10 @@ if ! "$BUILD" --src "$T/d1" --out "$T/d1out" >/dev/null 2>"$T/d1.err"; then bad 
 elif ! awk -F'\t' '$1 == "en" && $2 == "faq" && $4 == "pending" {f = 1} END {exit !f}' "$T/d1out/pages.tsv"; then bad "D sandbox: en/faq is not pending: $(cat "$T/d1out/pages.tsv")"
 elif ! grep -q 'English version in preparation' "$T/d1out/en/faq.html"; then bad "D sandbox: pending en/faq says nothing"
 elif ! grep -q 'href="/docs/faq"' "$T/d1out/en/faq.html"; then bad "D sandbox: pending en/faq does not link its Chinese page"
-else ok "D a missing en page is built pending, linking its Chinese page"; fi
+else st_ok_all "D a missing en page is built pending, linking its Chinese page"; fi
 
 # H — generated blocks follow the key tables
-if "$BUILD" --check >"$T/h0.out" 2>&1; then ok "H docs/public is not stale"; else bad "H stale: $(cat "$T/h0.out")"; fi
+if "$BUILD" --check >"$T/h0.out" 2>&1; then st_ok_all "H docs/public is not stale"; else bad "H stale: $(cat "$T/h0.out")"; fi
 HR="$T/hrepo"; mkdir -p "$HR/bin"
 for f in docs-build.sh fleet_keys.py dash-keymap.sh fleet-ui-lang.sh; do cp "$ROOT/bin/$f" "$HR/bin/$f"; done
 for d in h1 h2; do
@@ -237,6 +237,6 @@ mk h2/zh/member/usage.md "# usage
 <!-- docs-gen:nope -->
 <!-- /docs-gen:nope -->"
 if "$BUILD" --src "$T/h2" --out "$T/h2bad" >/dev/null 2>"$T/h2.err"; then bad "H an unknown generated block was built"
-elif grep -q 'unknown generated block' "$T/h2.err"; then ok "H unknown block refused"; else bad "H h2: $(cat "$T/h2.err")"; fi
+elif grep -q 'unknown generated block' "$T/h2.err"; then st_ok_all "H unknown block refused"; else bad "H h2: $(cat "$T/h2.err")"; fi
 
 [ "$fail" = 0 ] && echo "PASS docs-build-selftest" || { echo "FAIL docs-build-selftest"; exit 1; }

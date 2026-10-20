@@ -31,16 +31,15 @@ SPAWN="$BIN/dash-issue-session.sh"
 st_sandbox "${TMPDIR:-/tmp}/agent-route-selftest.XXXXXX"
 
 pass=0
-fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
 # ===== A: labels ============================================================
-[ "$(fleet_labels_agent "$(printf 'bug\nagent:codex\n')")" = codex ] || fail "A agent:codex → codex"
-[ "$(fleet_labels_agent "$(printf 'agent:claude\npriority:p1\n')")" = claude ] || fail "A agent:claude → claude"
-[ -z "$(fleet_labels_agent "$(printf 'bug\nenhancement\n')")" ] || fail "A no agent label → nothing"
-fleet_labels_agent "$(printf 'agent:codex\nagent:claude\n')" >/dev/null; [ "$?" = 2 ] || fail "A both labels → rc 2"
+[ "$(fleet_labels_agent "$(printf 'bug\nagent:codex\n')")" = codex ] || st_fail "A agent:codex → codex"
+[ "$(fleet_labels_agent "$(printf 'agent:claude\npriority:p1\n')")" = claude ] || st_fail "A agent:claude → claude"
+[ -z "$(fleet_labels_agent "$(printf 'bug\nenhancement\n')")" ] || st_fail "A no agent label → nothing"
+fleet_labels_agent "$(printf 'agent:codex\nagent:claude\n')" >/dev/null; [ "$?" = 2 ] || st_fail "A both labels → rc 2"
 st_pass "A agent:codex / agent:claude route; both at once is refused"
 
 # ===== B: the charter =======================================================
@@ -54,45 +53,45 @@ CH=$(cat <<'EOF'
 - [ ] **C4** o/b#14 — fourth
 EOF
 )
-[ "$(fleet_epic_charter_agent o/a "$CH" o/a 12)" = claude ] || fail "B the member row's (claude) beats the charter's agent=codex"
-[ "$(fleet_epic_charter_agent o/a "$CH" o/a 13)" = codex ]  || fail "B no row tail → the charter's agent="
-[ "$(fleet_epic_charter_agent o/a "$CH" o/b 12)" = codex ]  || fail "B o/b#12 matched by (repo, N), its own (codex)"
-[ "$(fleet_epic_charter_agent o/a "$CH" o/b 14)" = codex ]  || fail "B another repo's member with no tail → the charter's"
+[ "$(fleet_epic_charter_agent o/a "$CH" o/a 12)" = claude ] || st_fail "B the member row's (claude) beats the charter's agent=codex"
+[ "$(fleet_epic_charter_agent o/a "$CH" o/a 13)" = codex ]  || st_fail "B no row tail → the charter's agent="
+[ "$(fleet_epic_charter_agent o/a "$CH" o/b 12)" = codex ]  || st_fail "B o/b#12 matched by (repo, N), its own (codex)"
+[ "$(fleet_epic_charter_agent o/a "$CH" o/b 14)" = codex ]  || st_fail "B another repo's member with no tail → the charter's"
 NOAG=$(printf '<!-- fleet:epic repo=o/a short=测试 -->\n- [ ] **C1** #12 — first\n- [ ] **C2** #13 — x (codex)\n')
-[ -z "$(fleet_epic_charter_agent o/a "$NOAG" o/a 12)" ] || fail "B no agent= and no tail → nothing (the fleet default)"
-[ "$(fleet_epic_charter_agent o/a "$NOAG" o/a 13)" = codex ] || fail "B a row tail with no charter agent="
+[ -z "$(fleet_epic_charter_agent o/a "$NOAG" o/a 12)" ] || st_fail "B no agent= and no tail → nothing (the fleet default)"
+[ "$(fleet_epic_charter_agent o/a "$NOAG" o/a 13)" = codex ] || st_fail "B a row tail with no charter agent="
 st_pass "B member row > charter agent= > nothing; members matched by (repo, N)"
 
 # ===== C: Codex readiness ===================================================
 mkdir -p "$WORK/c-conf"; export FLEET_CONF_DIR="$WORK/c-conf"   # never this login's own credsep.json
 FLEET_CODEX_READY_CMD="printf 'PROFILE DEFAULT EMAIL PLAN LOGIN DIRECTORY\npersonal * u@e pro valid /h\n'" fleet_codex_ready \
-  || fail "C a valid LOGIN row is ready"
+  || st_fail "C a valid LOGIN row is ready"
 FLEET_CODEX_READY_CMD="printf 'PROFILE DEFAULT EMAIL PLAN LOGIN DIRECTORY\ndefault * - - no_credentials /h\n'" fleet_codex_ready \
-  && fail "C no_credentials is not ready"
-FLEET_CODEX_READY_CMD="false" fleet_codex_ready && fail "C a failed read is not ready"
+  && st_fail "C no_credentials is not ready"
+FLEET_CODEX_READY_CMD="false" fleet_codex_ready && st_fail "C a failed read is not ready"
 mkdir -p "$WORK/sep" "$WORK/notsep"
 printf '{\n "separated": true,\n "root": "/var/db/fleet-cred/x"\n}\n' > "$WORK/sep/credsep.json"
 printf '{\n "separated": false\n}\n' > "$WORK/notsep/credsep.json"
 FLEET_CONF_DIR="$WORK/sep" FLEET_CODEX_READY_CMD="printf 'H\ndefault * - - no_credentials /h\n'" fleet_codex_ready \
-  || fail "C a separated login is ready though ccquota says no_credentials (issue #3097)"
+  || st_fail "C a separated login is ready though ccquota says no_credentials (issue #3097)"
 FLEET_CONF_DIR="$WORK/notsep" FLEET_CODEX_READY_CMD="printf 'H\ndefault * - - no_credentials /h\n'" fleet_codex_ready \
-  && fail "C a credsep.json that says separated: false changes nothing"
+  && st_fail "C a credsep.json that says separated: false changes nothing"
 st_pass "C fleet_codex_ready reads the LOGIN column; a separated login is ready"
 
 mkdir -p "$WORK/central"
 printf 'CCQUOTA_FLEET_CREDS=0\n' > "$WORK/central/node.env"
 FLEET_CONF_DIR="$WORK/central" FLEET_CRED_PROXY=1 FLEET_CRED_CENTRAL_URL=https://proxy.example \
-  FLEET_CODEX_READY_CMD=false fleet_codex_ready || fail "C a central-only login needs no local Codex credential"
+  FLEET_CODEX_READY_CMD=false fleet_codex_ready || st_fail "C a central-only login needs no local Codex credential"
 FLEET_CONF_DIR="$WORK/central" FLEET_CRED_PROXY=0 FLEET_CRED_CENTRAL_URL=https://proxy.example \
-  FLEET_CODEX_READY_CMD=false fleet_codex_ready && fail "C a disabled proxy cannot supply central credentials"
+  FLEET_CODEX_READY_CMD=false fleet_codex_ready && st_fail "C a disabled proxy cannot supply central credentials"
 FLEET_CONF_DIR="$WORK/central" FLEET_CRED_PROXY=1 FLEET_CRED_CENTRAL_URL='' \
-  FLEET_CODEX_READY_CMD=false fleet_codex_ready && fail "C central credentials need a configured endpoint"
+  FLEET_CODEX_READY_CMD=false fleet_codex_ready && st_fail "C central credentials need a configured endpoint"
 printf 'CCQUOTA_FLEET_CREDS=1\n' > "$WORK/central/node.env"
 FLEET_CONF_DIR="$WORK/central" FLEET_CRED_PROXY=1 FLEET_CRED_CENTRAL_URL=https://proxy.example \
-  FLEET_CODEX_READY_CMD=false fleet_codex_ready && fail "C a locally leased login still needs its local credential"
+  FLEET_CODEX_READY_CMD=false fleet_codex_ready && st_fail "C a locally leased login still needs its local credential"
 rm "$WORK/central/node.env"
 FLEET_CONF_DIR="$WORK/central" FLEET_CRED_PROXY=1 FLEET_CRED_CENTRAL_URL=https://proxy.example \
-  FLEET_CODEX_READY_CMD=false fleet_codex_ready && fail "C no node configuration is not central-only"
+  FLEET_CODEX_READY_CMD=false fleet_codex_ready && st_fail "C no node configuration is not central-only"
 st_pass "C central-only readiness keeps the local credential checks on other logins"
 
 # ===== D: the spawn routes by label =========================================
@@ -156,29 +155,29 @@ run_shell_spawn() {
 }
 
 GH_LABELS='[{"name":"bug"},{"name":"agent:codex"}]' run_spawn; rc=$?
-[ "$rc" = 0 ] || fail "D the agent:codex spawn exited $rc" "$(cat "$WORK/spawn.err")"
+[ "$rc" = 0 ] || st_fail "D the agent:codex spawn exited $rc" "$(cat "$WORK/spawn.err")"
 grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" \
-  || fail "D agent:codex must open a Codex session" "$(cat "$WORK/newwin")"
+  || st_fail "D agent:codex must open a Codex session" "$(cat "$WORK/newwin")"
 
 GH_LABELS='[{"name":"bug"}]' run_spawn
-[ -s "$WORK/newwin" ] || fail "D the unlabelled spawn opened nothing" "$(cat "$WORK/spawn.err")"
-grep -q -- '--agent claude' "$WORK/newwin" || fail "D no agent label freezes default" "$(cat "$WORK/newwin")"
+[ -s "$WORK/newwin" ] || st_fail "D the unlabelled spawn opened nothing" "$(cat "$WORK/spawn.err")"
+grep -q -- '--agent claude' "$WORK/newwin" || st_fail "D no agent label freezes default" "$(cat "$WORK/newwin")"
 
 GH_LABELS='[{"name":"agent:codex"}]' run_spawn --agent claude
 grep -qF -- "fleet-session-wrap.sh' --agent claude" "$WORK/newwin" \
-  || fail "D an explicit --agent beats the label" "$(cat "$WORK/newwin")"
+  || st_fail "D an explicit --agent beats the label" "$(cat "$WORK/newwin")"
 
 GH_LABELS='[{"name":"agent:codex"},{"name":"agent:claude"}]' run_spawn; rc=$?
-[ "$rc" = 1 ] && [ ! -s "$WORK/newwin" ] || fail "D both labels must be refused, nothing opened (rc=$rc)" "$(cat "$WORK/newwin")"
-grep -q 'agent:codex and agent:claude' "$WORK/spawn.err" || fail "D the refusal names both labels" "$(cat "$WORK/spawn.err")"
+[ "$rc" = 1 ] && [ ! -s "$WORK/newwin" ] || st_fail "D both labels must be refused, nothing opened (rc=$rc)" "$(cat "$WORK/newwin")"
+grep -q 'agent:codex and agent:claude' "$WORK/spawn.err" || st_fail "D the refusal names both labels" "$(cat "$WORK/spawn.err")"
 
 GH_LABELS='[{"name":"agent:codex"}]' CODEX_CMD="$NOLOGIN" run_spawn; rc=$?
-[ "$rc" = 1 ] && [ ! -s "$WORK/newwin" ] || fail "D Codex with no login must be refused, nothing opened (rc=$rc)" "$(cat "$WORK/newwin")"
-grep -q 'ccquota codex login' "$WORK/spawn.err" || fail "D the refusal says ccquota codex login" "$(cat "$WORK/spawn.err")"
+[ "$rc" = 1 ] && [ ! -s "$WORK/newwin" ] || st_fail "D Codex with no login must be refused, nothing opened (rc=$rc)" "$(cat "$WORK/newwin")"
+grep -q 'ccquota codex login' "$WORK/spawn.err" || st_fail "D the refusal says ccquota codex login" "$(cat "$WORK/spawn.err")"
 
 GH_LABELS='[]' CODEX_CMD="$NOLOGIN" run_spawn
-grep -q -- '--agent codex' "$WORK/newwin" && fail "D a Claude spawn never asks for Codex" "$(cat "$WORK/newwin")"
-[ -s "$WORK/newwin" ] || fail "D a Claude spawn opens without a Codex login" "$(cat "$WORK/spawn.err")"
+grep -q -- '--agent codex' "$WORK/newwin" && st_fail "D a Claude spawn never asks for Codex" "$(cat "$WORK/newwin")"
+[ -s "$WORK/newwin" ] || st_fail "D a Claude spawn opens without a Codex login" "$(cat "$WORK/spawn.err")"
 # --title promised no round-trip (#216): the label comes off the collector's copy.
 run_title() {
   rm -rf "$WORK/dash/.claude-dash/fleets"; : > "$WORK/newwin"; : > "$WORK/gh.log"
@@ -191,27 +190,27 @@ run_title() {
 }
 run_title
 grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" \
-  || fail "D --title: the cached agent:codex label routes to Codex" "$(cat "$WORK/newwin") $(cat "$WORK/spawn.err")"
-grep -q 'issue view' "$WORK/gh.log" && fail "D --title must make no gh issue view (#216)" "$(cat "$WORK/gh.log")"
+  || st_fail "D --title: the cached agent:codex label routes to Codex" "$(cat "$WORK/newwin") $(cat "$WORK/spawn.err")"
+grep -q 'issue view' "$WORK/gh.log" && st_fail "D --title must make no gh issue view (#216)" "$(cat "$WORK/gh.log")"
 # Controlled stale cache: no explicit provider follows the old hint; an explicit
 # provider wins in both the title fast path and detached re-entry (#4392).
 CACHED_AGENT=claude run_title --agent codex
- grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" || fail "D stale Claude label overrides explicit Codex"
+ grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" || st_fail "D stale Claude label overrides explicit Codex"
 CACHED_AGENT=claude RUNSHELL_RUN=1 run_title --agent codex --async
- grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" || fail "D async lost explicit Codex" "$(cat "$WORK/spawn.err")"
+ grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" || st_fail "D async lost explicit Codex" "$(cat "$WORK/spawn.err")"
 run_spawn --agent codex --agent claude; rc=$?
-[ "$rc" = 2 ] && [ ! -s "$WORK/newwin" ] || fail "D conflicting explicit providers opened work"
+[ "$rc" = 2 ] && [ ! -s "$WORK/newwin" ] || st_fail "D conflicting explicit providers opened work"
 run_spawn --agent unknown; rc=$?
-[ "$rc" = 2 ] && [ ! -s "$WORK/newwin" ] || fail "D unknown provider opened work"
+[ "$rc" = 2 ] && [ ! -s "$WORK/newwin" ] || st_fail "D unknown provider opened work"
 printf 'fixture: stale Claude cache + explicit Codex: title/async Codex; invalid/conflict: no launch\n'
 run_shell_spawn --agent codex; rc=$?
-[ "$rc" = 0 ] || fail "D #3097: a Codex spawn from run-shell on a separated login exited $rc" "$(cat "$WORK/spawn.err")"
+[ "$rc" = 0 ] || st_fail "D #3097: a Codex spawn from run-shell on a separated login exited $rc" "$(cat "$WORK/spawn.err")"
 grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" \
-  || fail "D #3097: …it must open Codex" "$(cat "$WORK/newwin") $(cat "$WORK/spawn.err")"
+  || st_fail "D #3097: …it must open Codex" "$(cat "$WORK/newwin") $(cat "$WORK/spawn.err")"
 run_shell_spawn --agent claude; rc=$?
-[ "$rc" = 0 ] || fail "D #3097: a Claude spawn from run-shell exited $rc" "$(cat "$WORK/spawn.err")"
+[ "$rc" = 0 ] || st_fail "D #3097: a Claude spawn from run-shell exited $rc" "$(cat "$WORK/spawn.err")"
 grep -qF -- "fleet-session-wrap.sh' --agent claude" "$WORK/newwin" \
-  || fail "D #3097: …it must open Claude" "$(cat "$WORK/newwin") $(cat "$WORK/spawn.err")"
+  || st_fail "D #3097: …it must open Claude" "$(cat "$WORK/newwin") $(cat "$WORK/spawn.err")"
 st_pass "D agent:codex opens Codex; no label = fleet default; --agent wins; both / no login refused; --title reads the cache only; run-shell + separated opens both agents"
 
 # ===== E: a new task opens on its record =====================================
@@ -240,11 +239,11 @@ run_new() {
 }
 run_new https://proxy.example; rc=$?
 [ "$rc" = 0 ] && grep -q -- '--agent codex' "$WORK/spawn-args" && grep -q -- '--task T9' "$WORK/spawn-args" \
-  || fail "E central-only new task reaches the Codex spawner on its record" "$(cat "$WORK/new.err" "$WORK/spawn-args")"
-grep -q 'issue create' "$WORK/gh.log" && fail "E a new task files no issue" "$(cat "$WORK/gh.log")"
+  || st_fail "E central-only new task reaches the Codex spawner on its record" "$(cat "$WORK/new.err" "$WORK/spawn-args")"
+grep -q 'issue create' "$WORK/gh.log" && st_fail "E a new task files no issue" "$(cat "$WORK/gh.log")"
 run_new ''; rc=$?
 [ "$rc" = 4 ] && [ ! -s "$WORK/spawn-args" ] && [ ! -s "$WORK/gh.log" ] \
-  || fail "E missing central endpoint refuses before opening anything" "$(cat "$WORK/new.err")"
+  || st_fail "E missing central endpoint refuses before opening anything" "$(cat "$WORK/new.err")"
 st_pass "E a new task opens Codex on its record with central-only credentials; no endpoint refuses before opening"
 
 printf 'fleet-agent-route-selftest: %d passed\n' "$pass"

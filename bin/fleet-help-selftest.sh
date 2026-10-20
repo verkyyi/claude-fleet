@@ -26,7 +26,7 @@ BIN=$(cd "$(dirname "$0")" && pwd)
 . "$BIN/selftest-lib.sh"
 ROOT=$(cd "$BIN/.." && pwd)
 SKILL="$ROOT/skills/fleet-help/SKILL.md"
-command -v python3 >/dev/null 2>&1 || { echo 'fleet-help selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 
 st_sandbox "${TMPDIR:-/tmp}/fleet-help.XXXXXX"
 trap 'exit 130' INT TERM HUP

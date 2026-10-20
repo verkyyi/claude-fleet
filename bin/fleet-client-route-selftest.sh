@@ -21,7 +21,8 @@
 # python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-command -v python3 >/dev/null 2>&1 || { printf 'fleet-client-route selftest: python3 absent — SKIP\n'; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need python3
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-client-route.XXXXXX")
 export HOME="$WORK/home"; mkdir -p "$HOME/.ssh" "$HOME/.config/claude-fleet"
@@ -30,11 +31,7 @@ export FLEET_CONF_DIR="$HOME/.config/claude-fleet"
 unset TMUX TMUX_PANE FLEET_SHELL FLEET_HUB_URL FLEET_HUB_TOKEN SSH_CONNECTION FLEET_NODE_ALIASES \
       FLEET_CONNECT_RETEST FLEET_CONNECT_ROUTE_FILE FLEET_REMOTE_SSH_CMD
 
-FAIL=0; CHECKS=0
-fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 (want '$2')" "$3"; }
-has() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 (want '$3')" "$2" ;; esac; }
-hasnt() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 (must not hold '$3')" "$2" ;; esac; }
+st_tally count miss
 waitfor() {  # <secs> <cmd…> — until the command succeeds
   local n=$(( $1 * 10 )); shift
   while [ "$n" -gt 0 ]; do "$@" && return 0; sleep 0.1; n=$((n - 1)); done
@@ -76,22 +73,22 @@ EOF
 # ================================================================================
 run() { : > "$WORK/thin.log"; : > "$WORK/connect.log"; env -u FLEET_CLIENT "$@" "$SB/fleet" ${ARGS[@]+"${ARGS[@]}"} 2>"$WORK/a.err" >/dev/null; }
 ARGS=(); run env
-eq 'A: fleet → the client, no arguments' 'thin []' "$(cat "$WORK/thin.log")"
+st_eq 'A: fleet → the client, no arguments' 'thin []' "$(cat "$WORK/thin.log")"
 ARGS=(mac-b); run env
-eq 'A: fleet mac-b → the client with mac-b as home' 'thin [--home mac-b]' "$(cat "$WORK/thin.log")"
+st_eq 'A: fleet mac-b → the client with mac-b as home' 'thin [--home mac-b]' "$(cat "$WORK/thin.log")"
 ARGS=(--thin issue-7); run env
-eq 'A: fleet --thin <session> → the client on that session' 'thin [issue-7]' "$(cat "$WORK/thin.log")"
+st_eq 'A: fleet --thin <session> → the client on that session' 'thin [issue-7]' "$(cat "$WORK/thin.log")"
 ARGS=(shell mac-b); run env
-eq 'A: fleet shell mac-b (the old word) → the client, home mac-b' 'thin [--home mac-b]' "$(cat "$WORK/thin.log")"
+st_eq 'A: fleet shell mac-b (the old word) → the client, home mac-b' 'thin [--home mac-b]' "$(cat "$WORK/thin.log")"
 ARGS=(--old); run env
-eq 'A: fleet --old → the client' 'thin []' "$(cat "$WORK/thin.log")"
-has 'A: … saying the old client is gone' "$(cat "$WORK/a.err")" '旧客户端已删除（#3008）'
+st_eq 'A: fleet --old → the client' 'thin []' "$(cat "$WORK/thin.log")"
+st_has 'A: … saying the old client is gone' "$(cat "$WORK/a.err")" '旧客户端已删除（#3008）'
 ARGS=(); run env FLEET_CLIENT=shell
-eq 'A: FLEET_CLIENT=shell → the client all the same' 'thin []' "$(cat "$WORK/thin.log")"
-has 'A: … and says so' "$(cat "$WORK/a.err")" 'FLEET_CLIENT=shell'
-eq 'A: the dispatcher never ran connect itself' '' "$(cat "$WORK/connect.log")"
+st_eq 'A: FLEET_CLIENT=shell → the client all the same' 'thin []' "$(cat "$WORK/thin.log")"
+st_has 'A: … and says so' "$(cat "$WORK/a.err")" 'FLEET_CLIENT=shell'
+st_eq 'A: the dispatcher never ran connect itself' '' "$(cat "$WORK/connect.log")"
 ARGS=(mac-b extra); run env
-eq 'A: a machine word with more words → not the client' '' "$(cat "$WORK/thin.log")"
+st_eq 'A: a machine word with more words → not the client' '' "$(cat "$WORK/thin.log")"
 
 # ================================================================================
 # C. connect — the real fleet-connect.py
@@ -109,7 +106,7 @@ while True:
         c.close()
 EOF
 SRV_PID=$!
-waitfor 5 test -s "$WORK/port" || fail 'C: the banner server did not start'
+waitfor 5 test -s "$WORK/port" || st_miss 'C: the banner server did not start'
 PORT=$(cat "$WORK/port")
 mkdir -p "$XDG_CACHE_HOME/claude-fleet"
 python3 - "$XDG_CACHE_HOME/claude-fleet/connect.json" "$PORT" <<'EOF'
@@ -122,19 +119,19 @@ FAKESSH="$WORK/fakessh"; mkdir -p "$FAKESSH"
 printf '#!/bin/sh\necho "SSH-RAN ARGS=$*"\n' > "$FAKESSH/ssh"; chmod +x "$FAKESSH/ssh"
 out=$(PATH="$FAKESSH:$PATH" FLEET_CONNECT_ROUTE_FILE="$WORK/route.json" \
       python3 "$BIN/fleet-connect.py" mac-b 2>&1); rc=$?
-eq 'C: connect → ssh ran, exit 0' 0 "$rc"
-has 'C: … over the remembered line' "$out" 'SSH-RAN'
-hasnt 'C: no fallback words, ever' "$out" '直连'
-has 'C: the route file' "$(cat "$WORK/route.json" 2>/dev/null)" '"kind": "direct"'
+st_eq 'C: connect → ssh ran, exit 0' 0 "$rc"
+st_has 'C: … over the remembered line' "$out" 'SSH-RAN'
+st_hasnt 'C: no fallback words, ever' "$out" '直连'
+st_has 'C: the route file' "$(cat "$WORK/route.json" 2>/dev/null)" '"kind": "direct"'
 python3 "$BIN/fleet-connect.py" --probe-direct mac-b >/dev/null 2>&1; rc=$?
-eq 'C: --probe-direct with the line up → 0' 0 "$rc"
+st_eq 'C: --probe-direct with the line up → 0' 0 "$rc"
 python3 "$BIN/fleet-connect.py" --probe-direct m9 >/dev/null 2>&1; rc=$?
-eq 'C: --probe-direct for an unknown machine → 1' 1 "$rc"
+st_eq 'C: --probe-direct for an unknown machine → 1' 1 "$rc"
 out=$(PATH="$FAKESSH:$PATH" FLEET_CONNECT_RETEST=1 python3 "$BIN/fleet-connect.py" mac-b 2>&1); rc=$?
-hasnt 'C: FLEET_CONNECT_RETEST=1 skips the remembered line' "$out" 'SSH-RAN'
+st_hasnt 'C: FLEET_CONNECT_RETEST=1 skips the remembered line' "$out" 'SSH-RAN'
 kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=''
 FLEET_CONNECT_PROBE_TIMEOUT=1 python3 "$BIN/fleet-connect.py" --probe-direct mac-b >/dev/null 2>&1; rc=$?
-eq 'C: --probe-direct with the line down → 1' 1 "$rc"
+st_eq 'C: --probe-direct with the line down → 1' 1 "$rc"
 
 printf 'fleet-client-route selftest: %d checks, %d failed\n' "$CHECKS" "$FAIL"
-[ "$FAIL" -eq 0 ]
+st_done

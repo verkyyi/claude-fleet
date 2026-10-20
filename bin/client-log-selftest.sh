@@ -22,6 +22,7 @@
 #   J  FLEET_CLIENT_LOG=0 writes nothing
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/client-log-selftest.XXXXXX") || exit 2
 HUB_PID=""
@@ -38,7 +39,6 @@ LOGS="$XDG_CACHE_HOME/claude-fleet/shell/logs"
 SHAPES="$ROOT/conf/secret-shapes.list"
 
 fail=0
-ok()  { echo "ok   $*"; }
 bad() { echo "FAIL $*"; fail=1; }
 # shellcheck source=fleet-client-lib.sh
 . "$BIN/fleet-client-lib.sh"
@@ -69,17 +69,17 @@ env_secret_quoted	FLEET_HUB_TOKEN="abc def" quoted
 url_secret	GET https://hub.example/x?api_key=SEKRIT&a=1
 EOF
 rules=$(grep -v '^#' "$SHAPES" | grep -n . | awk -F '\t' '$2 ~ /\\/ || $2 ~ /[{]/ || $2 ~ /\(\?/ || $2 ~ /\[\[:/ { print $1 }')
-[ -z "$rules" ] && ok "A shapes: no backslash, interval, (?…) or [[:class:]]" || bad "A shapes break the shared rules: $rules"
+[ -z "$rules" ] && st_ok_all "A shapes: no backslash, interval, (?…) or [[:class:]]" || bad "A shapes break the shared rules: $rules"
 names=$(grep -v '^#' "$SHAPES" | grep . | cut -f1 | sort)
 have=$(cut -f1 "$WORK/samples" | sort)
-[ "$names" = "$have" ] && ok "A every shape has a sample (and no sample lacks a shape)" \
+[ "$names" = "$have" ] && st_ok_all "A every shape has a sample (and no sample lacks a shape)" \
   || bad "A shapes vs samples differ: $(diff <(printf '%s\n' "$names") <(printf '%s\n' "$have") | tr '\n' ' ')"
 miss=''
 while IFS=$'\t' read -r n line; do
   py=$(printf '%s\n' "$line" | python3 "$BIN/fleet_clientlog.py" redact)
   case "$py" in *"<redacted:$n>"*) ;; *) miss="$miss $n(py:$py)" ;; esac
 done < "$WORK/samples"
-[ -z "$miss" ] && ok "A each sample is redacted by its own shape" || bad "A not redacted by its shape:$miss"
+[ -z "$miss" ] && st_ok_all "A each sample is redacted by its own shape" || bad "A not redacted by its shape:$miss"
 
 # ── B — python and sh agree, byte for byte ────────────────────────────────────
 {
@@ -93,7 +93,7 @@ done < "$WORK/samples"
 python3 "$BIN/fleet_clientlog.py" redact < "$WORK/corpus" > "$WORK/py.out"
 : > "$WORK/sh.out"
 while IFS= read -r l; do printf '%s' "$l" | fleet_clientlog_redact >> "$WORK/sh.out"; done < "$WORK/corpus"
-if cmp -s "$WORK/py.out" "$WORK/sh.out"; then ok "B redaction: python = sh on $(wc -l < "$WORK/corpus" | tr -d ' ') lines"
+if cmp -s "$WORK/py.out" "$WORK/sh.out"; then st_ok_all "B redaction: python = sh on $(wc -l < "$WORK/corpus" | tr -d ' ') lines"
 else bad "B redaction differs:"; diff "$WORK/py.out" "$WORK/sh.out" | head -6; fi
 R=$'relay closed\tby hub\nnext line ghp_SECRETSECRET 中文'
 python3 "$BIN/fleet_clientlog.py" write connect relay-end mac-b relay 1023 hub "$R"
@@ -101,15 +101,15 @@ fleet_clientlog connect relay-end mac-b relay 1023 hub "$R"
 n=$(cut -f2- "$LOGS/connect.log" | sort -u | wc -l | tr -d ' ')
 cols=$(awk -F '\t' '{ print NF }' "$LOGS/connect.log" | sort -u | tr '\n' ' ')
 ts=$(cut -f1 "$LOGS/connect.log" | grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$')
-[ "$n" = 1 ] && [ "$cols" = "7 " ] && [ "$ts" = 2 ] && ok "B a whole line: python = sh (7 fields, UTC time)" \
+[ "$n" = 1 ] && [ "$cols" = "7 " ] && [ "$ts" = 2 ] && st_ok_all "B a whole line: python = sh (7 fields, UTC time)" \
   || bad "B lines differ: n=$n cols=$cols ts=$ts: $(cat "$LOGS/connect.log")"
 
 # ── C — a fake token never reaches the disk ───────────────────────────────────
 grep -q 'ghp_SECRET' "$LOGS/connect.log" && bad "C the token reached connect.log" \
-  || { grep -q '<redacted:github>' "$LOGS/connect.log" && ok "C a token in a reason is <redacted:github> on disk (both writers)" \
+  || { grep -q '<redacted:github>' "$LOGS/connect.log" && st_ok_all "C a token in a reason is <redacted:github> on disk (both writers)" \
        || bad "C no redaction mark in connect.log"; }
 [ "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$LOGS/connect.log")" = 600 ] \
-  && ok "C the log is 0600" || bad "C connect.log is not 0600"
+  && st_ok_all "C the log is 0600" || bad "C connect.log is not 0600"
 
 # ── D — rotation ──────────────────────────────────────────────────────────────
 # The cap scaled down 8× (every sh line is ~13 forks and an awk over the shapes):
@@ -128,7 +128,7 @@ EOF
 files=$(cd "$LOGS" && ls keeper.log* | tr '\n' ' ')
 big=$(wc -c < "$LOGS/keeper.log" | tr -d ' '); old=$(wc -c < "$LOGS/keeper.log.1" 2>/dev/null | tr -d ' ')
 if [ "$files" = "keeper.log keeper.log.1 " ] && [ "$big" -le "$cap" ] && [ "${old:-0}" -le "$cap" ] && [ "${old:-0}" -ge "$max" ]; then
-  ok "D 86 KB written past a 64 KB cap → keeper.log ($big B) + keeper.log.1 ($old B), nothing else"
+  st_ok_all "D 86 KB written past a 64 KB cap → keeper.log ($big B) + keeper.log.1 ($old B), nothing else"
 else bad "D rotation: files=$files current=$big old=${old:-none}"; fi
 
 }
@@ -231,15 +231,15 @@ ms1=$(printf '%s' "$e1" | cut -f5); ms2=$(printf '%s' "$e2" | cut -f5)
 case "$e1" in *$'\t'relay$'\t'*$'\t'hub$'\t''ws close 1011: node link lost') r1=1 ;; *) r1='' ;; esac
 case "$e2" in *$'\t'relay$'\t'*$'\t'client$'\t''ssh closed the stream (stdin EOF)') r2=1 ;; *) r2='' ;; esac
 if [ -n "$r1" ] && [ "${ms1:-0}" -ge 900 ] && [ "${ms1:-0}" -lt 3000 ]; then
-  ok "E hub closes at 1 s → relay-end · hub · ws close 1011 · ${ms1} ms"
+  st_ok_all "E hub closes at 1 s → relay-end · hub · ws close 1011 · ${ms1} ms"
 else bad "E hub-closed relay line wrong: $e1"; fi
 if [ -n "$r2" ] && [ "${ms2:-0}" -ge 10500 ] && [ "${ms2:-0}" -lt 14000 ]; then
-  ok "E client closes at 11 s → relay-end · client · ${ms2} ms"
+  st_ok_all "E client closes at 11 s → relay-end · client · ${ms2} ms"
 else bad "E client-closed relay line wrong: $e2"; fi
-[ "$o" = 2 ] && ok "E each relay's handshake → relay-open ok" || bad "E relay-open lines: $o"
+[ "$o" = 2 ] && st_ok_all "E each relay's handshake → relay-open ok" || bad "E relay-open lines: $o"
 FLEET_HUB_TOKEN=tok-1 python3 "$BIN/fleet-connect.py" --hub "http://127.0.0.1:1" --proxy m9 </dev/null >/dev/null 2>&1
 awk -F '\t' '$2 == "relay-open" && $3 == "m9" && $6 == "fail" && $7 != ""' "$LOGS/connect.log" | grep -q . \
-  && ok "E a relay that cannot open → relay-open fail + why" || bad "E no relay-open fail line: $(tail -n 1 "$LOGS/connect.log")"
+  && st_ok_all "E a relay that cannot open → relay-open fail + why" || bad "E no relay-open fail line: $(tail -n 1 "$LOGS/connect.log")"
 
 # ── F — ssh as a child, its end written down ──────────────────────────────────
 cat > "$WORK/runssh.py" <<'EOF'
@@ -256,7 +256,7 @@ python3 "$WORK/runssh.py" "$BIN" run sh -c 'exit 255'; rc=$?
 st=$(awk -F '\t' '$2 == "ssh-start" && $3 == "mac-b" && $4 == "direct"' "$LOGS/connect.log" | tail -n 1)
 en=$(awk -F '\t' '$2 == "ssh-end" && $3 == "mac-b"' "$LOGS/connect.log" | tail -n 1)
 if [ "$rc" = 255 ] && [ -n "$st" ] && [ "$(printf '%s' "$en" | cut -f6)" = "exit 255" ]; then
-  ok "F ssh exit 255 → ssh-start + ssh-end · exit 255, and fleet-connect exits 255"
+  st_ok_all "F ssh exit 255 → ssh-start + ssh-end · exit 255, and fleet-connect exits 255"
 else bad "F ssh lines/rc: rc=$rc start=[$st] end=[$en]"; fi
 python3 "$WORK/runssh.py" "$BIN" run sh -c 'trap "exit 7" TERM; sleep 30 & wait' &
 p=$!
@@ -266,11 +266,11 @@ for _ in $(seq 1 50); do c=$(pgrep -P "$p" | head -n 1); [ -n "$c" ] && pgrep -P
 sleep 0.2; kill -TERM "$p"; wait "$p"; rc=$?
 en=$(awk -F '\t' '$2 == "ssh-end"' "$LOGS/connect.log" | tail -n 1)
 case "$en" in *$'\t''exit 7'$'\t'*'this side got signal 15') r=1 ;; *) r='' ;; esac
-[ "$rc" = 7 ] && [ -n "$r" ] && ok "F a SIGTERM to fleet-connect reaches ssh; the line says both" \
+[ "$rc" = 7 ] && [ -n "$r" ] && st_ok_all "F a SIGTERM to fleet-connect reaches ssh; the line says both" \
   || bad "F SIGTERM forwarding: rc=$rc end=[$en]"
 c0=$(python3 "$WORK/runssh.py" "$BIN" cmd); c1=$(FLEET_CONNECT_SSH_VERBOSE=1 python3 "$WORK/runssh.py" "$BIN" cmd)
 case "$c0" in *' -v '*) bad "F -v without FLEET_CONNECT_SSH_VERBOSE" ;; *)
-  case "$c1" in *" -v -E $LOGS/ssh-v.log "*) ok "F FLEET_CONNECT_SSH_VERBOSE=1 → ssh -v -E <logs>/ssh-v.log (off by default)" ;;
+  case "$c1" in *" -v -E $LOGS/ssh-v.log "*) st_ok_all "F FLEET_CONNECT_SSH_VERBOSE=1 → ssh -v -E <logs>/ssh-v.log (off by default)" ;;
                *) bad "F verbose ssh command: $c1" ;; esac ;; esac
 
 # ── G — place ─────────────────────────────────────────────────────────────────
@@ -279,12 +279,12 @@ FLEET_HUB_URL="$HUB" FLEET_HUB_TOKEN=tok-1 FLEET_CLIENT_DIR="$CD" FLEET_CLIENT_P
   bash "$BIN/fleet-client-place.sh" o/r 42 >/dev/null 2>&1; rc=$?
 pl=$(tail -n 1 "$LOGS/place.log" 2>/dev/null)
 case "$pl" in *$'\t'issue-42$'\t'auto$'\t'-$'\t'*$'\t''REFUSED 4'$'\t''repo=o/r | No machine can take it: mac-a: CPU busy 93% over 80%; mac-b: offline'*) r=1 ;; *) r='' ;; esac
-[ "$rc" = 4 ] && [ -n "$r" ] && ok "G the hub's REFUSED, every machine's reason → place.log" \
+[ "$rc" = 4 ] && [ -n "$r" ] && st_ok_all "G the hub's REFUSED, every machine's reason → place.log" \
   || bad "G place.log: rc=$rc line=[$pl]"
 FLEET_CONF_DIR="$WORK/noconf" FLEET_CLIENT_DIR="$WORK/none" bash "$BIN/fleet-client-place.sh" o/r scratch >/dev/null 2>&1; rc=$?
 pl=$(tail -n 1 "$LOGS/place.log" 2>/dev/null)
 case "$pl" in *$'\t'scratch$'\t'auto$'\t'-$'\t'*$'\t''NOHUB 1'$'\t''repo=o/r | 这台电脑没有 fleet，也连不上入口') r=1 ;; *) r='' ;; esac
-[ "$rc" = 1 ] && [ -n "$r" ] && ok "G no hub, no fleet → place.log NOHUB (the sh writer)" || bad "G no-hub place line: rc=$rc [$pl]"
+[ "$rc" = 1 ] && [ -n "$r" ] && st_ok_all "G no hub, no fleet → place.log NOHUB (the sh writer)" || bad "G no-hub place line: rc=$rc [$pl]"
 
 # ── H — login ─────────────────────────────────────────────────────────────────
 python3 - "$BIN" <<'EOF'
@@ -297,14 +297,14 @@ EOF
 rc=$?
 ll=$(tail -n 1 "$LOGS/login.log" 2>/dev/null)
 case "$ll" in *$'\t'renew$'\t''https://hub.invalid'$'\t'-$'\t'*$'\t'scan$'\t''no device key yet'*'tls: '*) r=1 ;; *) r='' ;; esac
-[ "$rc" = 0 ] && [ -n "$r" ] && ok "H a renew with no device key → login.log renew · scan · its words · tls sources" \
+[ "$rc" = 0 ] && [ -n "$r" ] && st_ok_all "H a renew with no device key → login.log renew · scan · its words · tls sources" \
   || bad "H login.log: rc=$rc [$ll]"
 
 # ── J — off ───────────────────────────────────────────────────────────────────
 rm -rf "$LOGS"
 FLEET_CLIENT_LOG=0 python3 "$BIN/fleet_clientlog.py" write connect x
 FLEET_CLIENT_LOG=0 fleet_clientlog place x
-[ ! -e "$LOGS" ] && ok "J FLEET_CLIENT_LOG=0 writes nothing (both writers)" || bad "J something was written: $(ls "$LOGS")"
+[ ! -e "$LOGS" ] && st_ok_all "J FLEET_CLIENT_LOG=0 writes nothing (both writers)" || bad "J something was written: $(ls "$LOGS")"
 
 [ "$fail" = 0 ] && echo "PASS client-log-selftest" || echo "FAIL client-log-selftest"
 exit "$fail"

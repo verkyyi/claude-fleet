@@ -21,7 +21,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
-command -v python3 >/dev/null 2>&1 || { echo 'session-tokens selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 REAL_TMUX=$(command -v tmux || true)
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/sesstok-selftest.XXXXXX")" || exit 2
 S="sesstok$$"
@@ -37,8 +37,7 @@ printf 'FLEET_REPO=acme/app\n' > "$WORK/conf/fleets/$S/conf"
 printf '%s\tacme-app\tacme/app\n' "$S" > "$G/sessmap"
 US=$'\x1f'
 
-CHECKS=0
-eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || st_fail "$1 (want '$2', got '$3')" "${4:-}"; }
+st_tally count
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
 # fld <rows> <label> <k>: field k of the row labelled <label>, `-` when it has fewer
 fld() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" -v k="$3" '$4 == n { print (NF >= k ? $k : "-") }'; }
@@ -73,12 +72,12 @@ export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_
 bash "$HUBS" --refresh 2>"$WORK/err" || st_fail "A: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
 crow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { print NF "|" $21 "|" $27 "|" $29 }'; }
-eq "A: tokens alone — field 29, the empty ones before it kept" "29|||1234567" "$(crow issue-41)"
-eq "A: beside a measured bus, the bus is kept" "29|40||555" "$(crow issue-42)"
-eq "A: beside an ask pair, the pair is kept" "29||question|98765" "$(crow issue-43)"
-eq "A: none recorded — no field (byte for byte as before)" "16|||" "$(crow issue-44)"
-eq "A: a 0 is none" "16|||" "$(crow issue-45)"
-eq "A: not a number is none" "16|||" "$(crow issue-46)"
+st_eq "A: tokens alone — field 29, the empty ones before it kept" "29|||1234567" "$(crow issue-41)"
+st_eq "A: beside a measured bus, the bus is kept" "29|40||555" "$(crow issue-42)"
+st_eq "A: beside an ask pair, the pair is kept" "29||question|98765" "$(crow issue-43)"
+st_eq "A: none recorded — no field (byte for byte as before)" "16|||" "$(crow issue-44)"
+st_eq "A: a 0 is none" "16|||" "$(crow issue-45)"
+st_eq "A: not a number is none" "16|||" "$(crow issue-46)"
 
 # ============================================================================
 # B. the sidebar — field 19's sixth part
@@ -89,9 +88,9 @@ if [ -n "$REAL_TMUX" ]; then
   SOCK=$(T display-message -p '#{socket_path}')
   date +%s > "$G/hub_ok"
   SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
-  eq "B: tokens alone ride field 19 as its sixth part" "|||||1234567" "$(fld "$SIDE" RT 19)" "$SIDE"
-  eq "B: …after a measured bus" "40|ok|1800000000|Opus 5.5|high|555" "$(fld "$SIDE" RB 19)"
-  eq "B: none recorded — no field 19" "-" "$(fld "$SIDE" RN 19)"
+  st_eq "B: tokens alone ride field 19 as its sixth part" "|||||1234567" "$(fld "$SIDE" RT 19)" "$SIDE"
+  st_eq "B: …after a measured bus" "40|ok|1800000000|Opus 5.5|high|555" "$(fld "$SIDE" RB 19)"
+  st_eq "B: none recorded — no field 19" "-" "$(fld "$SIDE" RN 19)"
 else
   echo 'session-tokens selftest: tmux absent — leg B skipped'
 fi
@@ -122,9 +121,9 @@ for lang, cases in want.items():
 print("ok")
 PY
 )
-eq "C: tokens_short prints as the hub page's fmtCompact" "ok" "$out"
-eq "C: the ⌘P row's phrase (zh)" "今天 1.23 万 token" "$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" t view_today_fmt '1.23 万')"
-eq "C: the ⌘P row's phrase (en)" "1.2M tokens today" "$(FLEET_UI_LANG=en sh "$BIN/fleet-ui-lang.sh" t view_today_fmt 1.2M)"
+st_eq "C: tokens_short prints as the hub page's fmtCompact" "ok" "$out"
+st_eq "C: the ⌘P row's phrase (zh)" "今天 1.23 万 token" "$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" t view_today_fmt '1.23 万')"
+st_eq "C: the ⌘P row's phrase (en)" "1.2M tokens today" "$(FLEET_UI_LANG=en sh "$BIN/fleet-ui-lang.sh" t view_today_fmt 1.2M)"
 
 printf 'selftest PASS: session-tokens — 每个会话今天用了多少 on the hub cache, the rows, the top line and ⌘P (%s checks, #3377)\n' "$CHECKS"
 exit 0

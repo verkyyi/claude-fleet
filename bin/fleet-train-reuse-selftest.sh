@@ -26,18 +26,17 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/train-reuse-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "${WORK:?}"' EXIT
 LEG=${TR_LEG:-}
 leg() { [ -z "$LEG" ] || [ "$LEG" = "$1" ]; }
 
-CHECKS=0
-fail() { printf 'FAIL %s\n' "$1" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
-contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — does not contain [$3]:
+st_tally count
+contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) st_fail "$1 — does not contain [$3]:
 $2" ;; esac; }
-lacks() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 — contains [$3]:
+lacks() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) st_fail "$1 — contains [$3]:
 $2" ;; esac; }
 
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -73,14 +72,14 @@ among() { (cd "$R/bin" && bash run-selftests.sh --changed "$1" --list-only --amo
 if leg A; then
   git -C "$R" checkout -qb a "$S"
   printf 'no\n' > "$R/conf/named.txt"; commit named >/dev/null
-  eq "A named basename" "client-e2e.sh" "$(among "$S")"
+  st_eq "A named basename" "client-e2e.sh" "$(among "$S")"
   git -C "$R" checkout -q -B a "$S"; echo '# x' >> "$R/bin/client-e2e.sh"; commit self >/dev/null
-  eq "A changed entry itself" "client-e2e.sh" "$(among "$S")"
+  st_eq "A changed entry itself" "client-e2e.sh" "$(among "$S")"
   git -C "$R" checkout -q -B a "$S"; printf 'no\n' > "$R/conf/other.txt"; commit other >/dev/null
-  eq "A unrelated change" "" "$(among "$S")"
+  st_eq "A unrelated change" "" "$(among "$S")"
   git -C "$R" checkout -q -B a "$S"; echo '# x' >> "$R/bin/run-selftests.sh"; commit harness >/dev/null
-  eq "A harness ⇒ every entry" "client-e2e.sh steady-selftest.sh" "$(among "$S" | tr '\n' ' ' | sed 's/ $//')"
-  (cd "$R/bin" && bash run-selftests.sh --changed "$S" --among x >/dev/null 2>&1); eq "A --among needs --list-only" 2 "$?"
+  st_eq "A harness ⇒ every entry" "client-e2e.sh steady-selftest.sh" "$(among "$S" | tr '\n' ' ' | sed 's/ $//')"
+  (cd "$R/bin" && bash run-selftests.sh --changed "$S" --among x >/dev/null 2>&1); st_eq "A --among needs --list-only" 2 "$?"
   git -C "$R" checkout -q master
 fi
 
@@ -91,29 +90,29 @@ if leg B; then
   git -C "$R" checkout -q -B b "$S"
   printf 'no\n' > "$R/conf/steady.txt"; printf 'ok\n' > "$R/conf/named.txt"; commit steady >/dev/null
   out=$(cd "$R/bin" && bash run-selftests.sh --changed "$T" --exact --list-only 2>&1)
-  eq "B --exact from a tree off history" "steady-selftest.sh" "$out"
+  st_eq "B --exact from a tree off history" "steady-selftest.sh" "$out"
   printf 'steady-selftest.sh\tgreen on #7\n' > "$WORK/proven"
   out=$(cd "$R/bin" && bash run-selftests.sh --changed "$S" --proven "$WORK/proven" 2>&1)
   contains "B REUSED line" "$out" "REUSED steady-selftest.sh ← green on #7"
   contains "B nothing left to run" "$out" "nothing to run"
   out=$(cd "$R/bin" && bash run-selftests.sh --changed "$S" --proven "$WORK/proven" --plan --shard 1/3 2>&1)
   contains "B plan prices it out" "$out" "plan tests=0 total=0 shards=3"
-  (cd "$R/bin" && bash run-selftests.sh --proven "$WORK/proven" >/dev/null 2>&1); eq "B --proven needs --changed" 2 "$?"
+  (cd "$R/bin" && bash run-selftests.sh --proven "$WORK/proven" >/dev/null 2>&1); st_eq "B --proven needs --changed" 2 "$?"
   git -C "$R" checkout -q master
 fi
 
 if leg C; then
   git -C "$R" checkout -qb c "$S"
   printf 'no\n' > "$R/conf/other.txt"; commit other >/dev/null
-  eq "C unrelated ⇒ skipped" "run=false" "$(bash "$R/bin/ci-plan.sh" client-e2e "$S" | head -1)"
+  st_eq "C unrelated ⇒ skipped" "run=false" "$(bash "$R/bin/ci-plan.sh" client-e2e "$S" | head -1)"
   printf 'no\n' > "$R/conf/named.txt"; commit named >/dev/null
-  eq "C named ⇒ runs" "run=true" "$(bash "$R/bin/ci-plan.sh" client-e2e "$S" | head -1)"
+  st_eq "C named ⇒ runs" "run=true" "$(bash "$R/bin/ci-plan.sh" client-e2e "$S" | head -1)"
   git -C "$R" checkout -q -B c "$S"; echo y >> "$R/tokenledger/hub/go.mod"; commit tl >/dev/null
   out=$(bash "$R/bin/ci-plan.sh" client-e2e "$S")
-  eq "C glob ⇒ runs" "run=true" "$(printf '%s\n' "$out" | head -1)"
+  st_eq "C glob ⇒ runs" "run=true" "$(printf '%s\n' "$out" | head -1)"
   contains "C glob named, not expanded" "$out" "(tokenledger/*)"
-  eq "C unknown base ⇒ runs" "run=true" "$(bash "$R/bin/ci-plan.sh" client-e2e nope 2>/dev/null | head -1)"
-  bash "$R/bin/ci-plan.sh" nosuch "$S" >/dev/null 2>&1; eq "C unknown workflow" 2 "$?"
+  st_eq "C unknown base ⇒ runs" "run=true" "$(bash "$R/bin/ci-plan.sh" client-e2e nope 2>/dev/null | head -1)"
+  bash "$R/bin/ci-plan.sh" nosuch "$S" >/dev/null 2>&1; st_eq "C unknown workflow" 2 "$?"
   git -C "$R" checkout -q master
 fi
 
@@ -142,13 +141,13 @@ esac
 SH
   chmod +x "$WORK/gh"
   out=$(cd "$R" && REC="$rec/good" FLEET_TRAIN_REUSE_GH="$WORK/gh" bash bin/fleet-train-reuse.sh --repo o/r --stable "$S" 2>"$WORK/err"); rc=$?
-  eq "D exit 0" 0 "$rc"
+  st_eq "D exit 0" 0 "$rc"
   contains "D named reused" "$out" "named-selftest.sh	green on #11 (run 4242, tree ${TREE:0:7})"
   lacks "D steady touched since ⇒ runs" "$out" "steady-selftest.sh"
   contains "D says why for no number" "$(cat "$WORK/err")" "names no PR"
   out=$(cd "$R" && REC="$rec/badtree" FLEET_TRAIN_REUSE_GH="$WORK/gh" bash bin/fleet-train-reuse.sh --repo o/r --stable "$S" 2>"$WORK/err"); rc=$?
-  eq "D bad tree exit 0" 0 "$rc"
-  eq "D bad tree reuses nothing" "" "$out"
+  st_eq "D bad tree exit 0" 0 "$rc"
+  st_eq "D bad tree reuses nothing" "" "$out"
   contains "D bad tree said" "$(cat "$WORK/err")" "do not make the tree"
 fi
 
@@ -161,7 +160,7 @@ if leg E; then
   y=$(cat "$W/release-train.yml")
   contains "E train runs reuse" "$y" "bin/fleet-train-reuse.sh --repo"
   contains "E train prices it out" "$y" "--proven proven.txt"
-  eq "E linux + rescue get proven" 2 "$(grep -c 'proven: \${{ needs.plan.outputs.proven }}' "$W/release-train.yml")"
+  st_eq "E linux + rescue get proven" 2 "$(grep -c 'proven: \${{ needs.plan.outputs.proven }}' "$W/release-train.yml")"
   contains "E shards pass --proven" "$(cat "$W/selftests-shards.yml")" '--proven "$RUNNER_TEMP/proven"'
   # one plan decides every PR check (issue #4815): ci.yml calls each workflow
   # only when bin/ci-plan.sh all said so; none carries a pull_request trigger

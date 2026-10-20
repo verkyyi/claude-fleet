@@ -19,11 +19,10 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$BIN/selftest-lib.sh"
 T=$(mktemp -d "${TMPDIR:-/tmp}/node-role-st.XXXXXX")
 trap 'rm -rf "${T:?}"' EXIT
-pass=0 fail=0
-ok()  { pass=$((pass + 1)); printf 'PASS %s\n' "$1"; }
-bad() { fail=$((fail + 1)); printf 'FAIL %s\n' "$1"; }
+pass=0 FAIL=0
 
 # a fake curl: answers /v1/node/self with $FAKE_SELF, counts its calls; exit
 # $FAKE_RC (7 = could not connect)
@@ -49,57 +48,57 @@ c="$T/a"; mkdir -p "$c"
 printf 'CCQUOTA_TOKEN=tok\nCCQUOTA_HUB_URL=http://hub.invalid\n' > "$c/node.env"
 : > "$T/calls"
 out=$(FAKE_SELF='{"endpoint_id":"e1","role":"client"}' run "$c" 'fleet_node_role'); rc=$?
-[ "$rc" = 0 ] && [ "$out" = client ] && [ "$(calls)" = 1 ] && ok "A1 the hub's word: client" || bad "A1 rc=$rc out=$out calls=$(calls)"
+[ "$rc" = 0 ] && [ "$out" = client ] && [ "$(calls)" = 1 ] && st_pass "A1 the hub's word: client" || st_miss "A1 rc=$rc out=$out calls=$(calls)"
 out=$(FAKE_SELF='{"role":"managed"}' run "$c" 'fleet_node_role')
-[ "$out" = client ] && [ "$(calls)" = 1 ] && ok "A2 kept for the TTL (no second ask)" || bad "A2 out=$out calls=$(calls)"
+[ "$out" = client ] && [ "$(calls)" = 1 ] && st_pass "A2 kept for the TTL (no second ask)" || st_miss "A2 out=$out calls=$(calls)"
 out=$(FAKE_SELF='{"role":"managed"}' run "$c" 'fleet_node_role --fresh')
-[ "$out" = managed ] && [ "$(calls)" = 2 ] && ok "A3 --fresh asks again" || bad "A3 out=$out calls=$(calls)"
+[ "$out" = managed ] && [ "$(calls)" = 2 ] && st_pass "A3 --fresh asks again" || st_miss "A3 out=$out calls=$(calls)"
 out=$(FAKE_RC=7 run "$c" 'fleet_node_role --fresh'); rc=$?
-[ "$rc" = 0 ] && [ "$out" = managed ] && ok "A4 hub down: the kept word" || bad "A4 rc=$rc out=$out"
+[ "$rc" = 0 ] && [ "$out" = managed ] && st_pass "A4 hub down: the kept word" || st_miss "A4 rc=$rc out=$out"
 printf 'client %s\n' "$(( $(date +%s) - 7200 ))" > "$c/node-role"
 out=$(FAKE_SELF='{"role":"managed"}' run "$c" 'fleet_node_role')
-[ "$out" = managed ] && ok "A5 past the TTL: asked again" || bad "A5 out=$out"
+[ "$out" = managed ] && st_pass "A5 past the TTL: asked again" || st_miss "A5 out=$out"
 out=$(FAKE_SELF='{"endpoint_id":"e1"}' run "$c" 'fleet_node_role --fresh'); rc=$?
-[ "$rc" = 1 ] && [ -z "$out" ] && grep -q '^- ' "$c/node-role" && ok "A6 an untyped row: unknown (kept as -)" || bad "A6 rc=$rc out=$out $(cat "$c/node-role")"
+[ "$rc" = 1 ] && [ -z "$out" ] && grep -q '^- ' "$c/node-role" && st_pass "A6 an untyped row: unknown (kept as -)" || st_miss "A6 rc=$rc out=$out $(cat "$c/node-role")"
 c2="$T/a2"; mkdir -p "$c2"; : > "$T/calls"
 out=$(FAKE_SELF='{"role":"client"}' run "$c2" 'fleet_node_role'); rc=$?
-[ "$rc" = 1 ] && [ -z "$out" ] && [ "$(calls)" = 0 ] && ok "A7 no node token: unknown, nothing asked" || bad "A7 rc=$rc out=$out calls=$(calls)"
+[ "$rc" = 1 ] && [ -z "$out" ] && [ "$(calls)" = 0 ] && st_pass "A7 no node token: unknown, nothing asked" || st_miss "A7 rc=$rc out=$out calls=$(calls)"
 c3="$T/a3"; mkdir -p "$c3"; cp "$c/node.env" "$c3/"; : > "$T/calls"
 out=$(FAKE_RC=7 run "$c3" 'fleet_node_role; fleet_node_role'); rc=$?
-[ -z "$out" ] && [ "$(calls)" = 1 ] && ok "A8 hub unreachable, nothing kept: unknown, one ask per TTL" || bad "A8 out=$out calls=$(calls)"
+[ -z "$out" ] && [ "$(calls)" = 1 ] && st_pass "A8 hub unreachable, nothing kept: unknown, one ask per TTL" || st_miss "A8 out=$out calls=$(calls)"
 c4="$T/a4"; mkdir -p "$c4"; cp "$c/node.env" "$c4/"; : > "$T/calls"
 out=$(FAKE_SELF='{"role":"client"}' run "$c4" 'fleet_node_role --kept'); rc=$?
-[ "$rc" = 1 ] && [ "$(calls)" = 0 ] && ok "A10 --kept with nothing kept: unknown, the hub never asked" || bad "A10 rc=$rc calls=$(calls)"
+[ "$rc" = 1 ] && [ "$(calls)" = 0 ] && st_pass "A10 --kept with nothing kept: unknown, the hub never asked" || st_miss "A10 rc=$rc calls=$(calls)"
 printf 'client %s\n' "$(( $(date +%s) - 99999 ))" > "$c4/node-role"
 out=$(FAKE_SELF='{"role":"managed"}' run "$c4" 'fleet_node_role --kept')
-[ "$out" = client ] && [ "$(calls)" = 0 ] && ok "A11 --kept: the kept word, whatever its age, never asking" || bad "A11 out=$out calls=$(calls)"
-grep -q '^    node_role_watch ' "$BIN/fleet-diskguard.sh" && ok "A12 the diskguard tick keeps the word fresh" || bad "A12 no node_role_watch on the tick"
+[ "$out" = client ] && [ "$(calls)" = 0 ] && st_pass "A11 --kept: the kept word, whatever its age, never asking" || st_miss "A11 out=$out calls=$(calls)"
+grep -q '^    node_role_watch ' "$BIN/fleet-diskguard.sh" && st_pass "A12 the diskguard tick keeps the word fresh" || st_miss "A12 no node_role_watch on the tick"
 out=$(env -i PATH=/usr/bin:/bin FLEET_CONF_DIR="$c2" FLEET_NODE_ROLE=client bash -c ". '$BIN/fleet-client-core.sh'; fleet_node_role")
-[ "$out" = client ] && ok "A9 FLEET_NODE_ROLE answers for a test" || bad "A9 out=$out"
+[ "$out" = client ] && st_pass "A9 FLEET_NODE_ROLE answers for a test" || st_miss "A9 out=$out"
 
 # ---- B ----
 printf 'client %s\n' "$(date +%s)" > "$c/node-role"
 err=$(run "$c" 'fleet_client_refuse "托管仓库 o/r"' 2>&1 >/dev/null); rc=$?
-[ "$rc" = 0 ] && printf '%s' "$err" | grep -q '这台是客户端，任务在托管节点上跑' && ok "B1 client: refused, with the reason" || bad "B1 rc=$rc err=$err"
+[ "$rc" = 0 ] && printf '%s' "$err" | grep -q '这台是客户端，任务在托管节点上跑' && st_pass "B1 client: refused, with the reason" || st_miss "B1 rc=$rc err=$err"
 err=$(FLEET_ALLOW_CLIENT_TASKS=1 run "$c" 'fleet_client_refuse x' 2>&1); rc=$?
-[ "$rc" = 1 ] && [ -z "$err" ] && ok "B2 the hatch" || bad "B2 rc=$rc err=$err"
+[ "$rc" = 1 ] && [ -z "$err" ] && st_pass "B2 the hatch" || st_miss "B2 rc=$rc err=$err"
 printf 'managed %s\n' "$(date +%s)" > "$c/node-role"
 err=$(run "$c" 'fleet_client_refuse x' 2>&1); rc=$?
-[ "$rc" = 1 ] && [ -z "$err" ] && ok "B3 managed: nothing" || bad "B3 rc=$rc err=$err"
+[ "$rc" = 1 ] && [ -z "$err" ] && st_pass "B3 managed: nothing" || st_miss "B3 rc=$rc err=$err"
 err=$(run "$c2" 'fleet_client_refuse x' 2>&1); rc=$?
-[ "$rc" = 1 ] && [ -z "$err" ] && ok "B4 unknown: nothing" || bad "B4 rc=$rc err=$err"
+[ "$rc" = 1 ] && [ -z "$err" ] && st_pass "B4 unknown: nothing" || st_miss "B4 rc=$rc err=$err"
 
 # ---- C: fleet-repo.sh add on a client, no fleet here ----
 err=$(env -u TMUX FLEET_CONF_DIR="$T/c" FLEET_NODE_ROLE=client bash "$BIN/fleet-repo.sh" add o/r 2>&1); rc=$?
-[ "$rc" = 1 ] && printf '%s' "$err" | grep -q '这台是客户端' && ok "C1 add refused on a client, with the reason" || bad "C1 rc=$rc err=$err"
+[ "$rc" = 1 ] && printf '%s' "$err" | grep -q '这台是客户端' && st_pass "C1 add refused on a client, with the reason" || st_miss "C1 rc=$rc err=$err"
 err=$(env -u TMUX FLEET_CONF_DIR="$T/c" FLEET_NODE_ROLE=unknown bash "$BIN/fleet-repo.sh" add o/r 2>&1); rc=$?
-printf '%s' "$err" | grep -q '这台是客户端' && bad "C2 unknown refused as a client: $err" || ok "C2 unknown: the old answer ($(printf '%s' "$err" | head -n 1))"
+printf '%s' "$err" | grep -q '这台是客户端' && st_miss "C2 unknown refused as a client: $err" || st_pass "C2 unknown: the old answer ($(printf '%s' "$err" | head -n 1))"
 
 # ---- D: the roads carry it ----
-grep -q 'fleet_client_refuse "开 #$num" --kept' "$BIN/dash-issue-session.sh" && ok "D1 dash-issue-session.sh refuses opening here" || bad "D1"
-grep -q "fleet_client_refuse '开会话' --kept" "$BIN/dash-raw-session.sh" && ok "D2 dash-raw-session.sh refuses opening here" || bad "D2"
+grep -q 'fleet_client_refuse "开 #$num" --kept' "$BIN/dash-issue-session.sh" && st_pass "D1 dash-issue-session.sh refuses opening here" || st_miss "D1"
+grep -q "fleet_client_refuse '开会话' --kept" "$BIN/dash-raw-session.sh" && st_pass "D2 dash-raw-session.sh refuses opening here" || st_miss "D2"
 err=$(env -i HOME="$T" PATH=/usr/bin:/bin FLEET_CONF_DIR="$T/d" FLEET_NODE_ROLE=client bash "$BIN/fleet-host.sh" on --yes 2>&1); rc=$?
-[ "$rc" = 1 ] && printf '%s' "$err" | grep -q '这台是客户端' && ok "D3 fleet-host.sh on refused on a client" || bad "D3 rc=$rc err=$err"
+[ "$rc" = 1 ] && printf '%s' "$err" | grep -q '这台是客户端' && st_pass "D3 fleet-host.sh on refused on a client" || st_miss "D3 rc=$rc err=$err"
 
 # ---- E: fleet-node-role.sh ----
 cat > "$T/hubcurl" <<'EOF'
@@ -118,12 +117,12 @@ EOF
 chmod +x "$T/hubcurl"
 nr() { env -i PATH=/usr/bin:/bin HUB_LOG="$T/posts" FLEET_HUB_CURL="$T/hubcurl" CCQUOTA_HUB_URL=http://hub.invalid CCQUOTA_VIEWER_TOKEN=vt bash "$BIN/fleet-node-role.sh" "$@" </dev/null; }
 out=$(nr plan); rc=$?
-[ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'laptop.*client' && printf '%s' "$out" | grep -q 'mini .*managed' && ok "E1 plan prints the proposal" || bad "E1 rc=$rc $out"
+[ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'laptop.*client' && printf '%s' "$out" | grep -q 'mini .*managed' && st_pass "E1 plan prints the proposal" || st_miss "E1 rc=$rc $out"
 : > "$T/posts"; nr apply >/dev/null 2>&1; rc=$?
-[ "$rc" = 2 ] && [ ! -s "$T/posts" ] && ok "E2 apply unconfirmed: nothing written" || bad "E2 rc=$rc $(cat "$T/posts")"
+[ "$rc" = 2 ] && [ ! -s "$T/posts" ] && st_pass "E2 apply unconfirmed: nothing written" || st_miss "E2 rc=$rc $(cat "$T/posts")"
 nr apply --yes >/dev/null; rc=$?
 [ "$rc" = 0 ] && grep -q '"e1".*"managed"' "$T/posts" && grep -q '"e2".*"client"' "$T/posts" && ! grep -q '"e3"' "$T/posts" \
-  && ok "E3 apply --yes writes only the untyped rows" || bad "E3 rc=$rc $(cat "$T/posts")"
+  && st_pass "E3 apply --yes writes only the untyped rows" || st_miss "E3 rc=$rc $(cat "$T/posts")"
 
-printf '\nfleet-node-role-selftest: %d passed, %d failed\n' "$pass" "$fail"
-[ "$fail" = 0 ]
+printf '\nfleet-node-role-selftest: %d passed, %d failed\n' "$pass" "$FAIL"
+st_done

@@ -16,11 +16,10 @@
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-command -v python3 >/dev/null 2>&1 || { printf 'fleet-peer-send selftest: python3 absent — skipped\n'; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need python3
 
 CHECKS=0
-fail() { printf 'fleet-peer-send selftest FAIL: %s\n' "$1" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-peer-send.XXXXXX")" || exit 2
 export FLEET_CC_SESSIONS_DIR="$WORK/sessions"; mkdir -p "$FLEET_CC_SESSIONS_DIR"
@@ -51,14 +50,14 @@ LISTENER=$!
 cleanup() { kill "$PID" "$LISTENER" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
 for _ in $(seq 1 50); do [ -S "$SOCK" ] && break; sleep 0.1; done
-[ -S "$SOCK" ] || fail "rig: listener socket never appeared"
+[ -S "$SOCK" ] || st_fail "rig: listener socket never appeared"
 
 # --- 1. the wire + the envelope (via the CLI, session-uuid target)
-out=$(FLEET_PEER_MODE=bypass bash "$BIN/fleet-peer-send.sh" "$SID" "hello worker"$'\n'"line two") || fail "fleet-peer-send.sh exit non-zero: $out"
-ok; printf '%s' "$out" | grep -q "sent → pid $PID" || fail "CLI must report the resolved pid: $out"
+out=$(FLEET_PEER_MODE=bypass bash "$BIN/fleet-peer-send.sh" "$SID" "hello worker"$'\n'"line two") || st_fail "fleet-peer-send.sh exit non-zero: $out"
+st_count; printf '%s' "$out" | grep -q "sent → pid $PID" || st_fail "CLI must report the resolved pid: $out"
 wait "$LISTENER" 2>/dev/null
-[ -s "$WORK/got" ] || fail "nothing reached the inbox socket"
-python3 - "$WORK/got" <<'PY' || fail "frame check failed (see above)"
+[ -s "$WORK/got" ] || st_fail "nothing reached the inbox socket"
+python3 - "$WORK/got" <<'PY' || st_fail "frame check failed (see above)"
 import json, sys
 raw = open(sys.argv[1], "rb").read().decode()
 lines = raw.split("\n")
@@ -73,7 +72,7 @@ exp = '<cross-session-message from-name="fleet" from-mode="bypass">\nhello worke
 assert c == exp, "envelope not canonical:\n got: %r\nwant: %r" % (c, exp)
 print("frames ok")
 PY
-ok
+st_count
 
 # --- 2. from-name + prompting mode, pid target, via the lib directly
 rm -f "$WORK/got"
@@ -92,9 +91,9 @@ except Exception: pass
 open(out, "wb").write(buf); c.close(); s.close()
 PY
 LISTENER=$!; sleep 0.5
-ok; FLEET_PEER_MODE=prompting fleet_peer_send "$PID" 'say "hi" <now>' 'quota"watch<x>' || fail "fleet_peer_send (pid target) must succeed"
+st_count; FLEET_PEER_MODE=prompting fleet_peer_send "$PID" 'say "hi" <now>' 'quota"watch<x>' || st_fail "fleet_peer_send (pid target) must succeed"
 wait "$LISTENER" 2>/dev/null
-ok; python3 - "$WORK/got" <<'PY' || fail "from-name must be scrubbed of quotes/angles, from-mode honoured, body verbatim (see above)"
+st_count; python3 - "$WORK/got" <<'PY' || st_fail "from-name must be scrubbed of quotes/angles, from-mode honoured, body verbatim (see above)"
 import json, sys
 f = [json.loads(l) for l in open(sys.argv[1]).read().split("\n") if l.strip()]
 c = f[1]["message"]["content"]
@@ -105,14 +104,14 @@ PY
 # --- 3. refusals: no key, no socket, dead pid, unknown target — nothing sent, exit 1
 sleep 60 & P2=$!
 printf '{"pid":%s,"sessionId":"aaaa-bbbb","messagingSocketPath":"%s"}\n' "$P2" "$WORK/none.sock" > "$FLEET_CC_SESSIONS_DIR/$P2.json"
-ok; fleet_peer_send "$P2" "x" && fail "no key file → must refuse"
+st_count; fleet_peer_send "$P2" "x" && st_fail "no key file → must refuse"
 printf '{"peerToken":"t"}' > "$FLEET_CC_SESSIONS_DIR/$P2.k.key"
-ok; fleet_peer_send "$P2" "x" && fail "no socket → must refuse"
+st_count; fleet_peer_send "$P2" "x" && st_fail "no socket → must refuse"
 kill "$P2" 2>/dev/null; wait "$P2" 2>/dev/null
-ok; bash "$BIN/fleet-peer-send.sh" "$P2" "x" >/dev/null 2>&1 && fail "dead pid → CLI must exit 1"
-ok; bash "$BIN/fleet-peer-send.sh" "no-such-session-uuid-0000" "x" >/dev/null 2>&1 && fail "unknown target → CLI must exit 1"
-ok; [ "$(fleet_cc_pid_for_session "$SID")" = "$PID" ] || fail "fleet_cc_pid_for_session must resolve the registry pid"
-ok; [ "$(fleet_cc_peer_token "$PID")" = "tok-abc-123" ] || fail "fleet_cc_peer_token must read peerToken off the key file"
+st_count; bash "$BIN/fleet-peer-send.sh" "$P2" "x" >/dev/null 2>&1 && st_fail "dead pid → CLI must exit 1"
+st_count; bash "$BIN/fleet-peer-send.sh" "no-such-session-uuid-0000" "x" >/dev/null 2>&1 && st_fail "unknown target → CLI must exit 1"
+st_count; [ "$(fleet_cc_pid_for_session "$SID")" = "$PID" ] || st_fail "fleet_cc_pid_for_session must resolve the registry pid"
+st_count; [ "$(fleet_cc_peer_token "$PID")" = "tok-abc-123" ] || st_fail "fleet_cc_peer_token must read peerToken off the key file"
 
 printf 'fleet-peer-send selftest: OK (%d checks)\n' "$CHECKS"
 exit 0

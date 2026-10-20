@@ -32,9 +32,10 @@
 # tmux / python3 absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX=$(command -v tmux) || { echo 'fleet-id selftest: tmux absent — SKIP'; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo 'fleet-id selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-id.XXXXXX")" || exit 2
 L="fid497$$"
@@ -46,9 +47,7 @@ fx_repo "$FLEET_CONF_DIR" "$L" acme/app FLEET_MAIN="$WORK/main"
 mkdir -p "$WORK/main"
 unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_CODEX_LAUNCHER_PID CLAUDE_CODE_ENTRYPOINT FLEET_ID_HOOK
 
-FAIL=0; CHECKS=0
-fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
-ok() { CHECKS=$((CHECKS + 1)); }
+st_tally
 tf() { "$REAL_TMUX" -L "$L" "$@"; }
 opt() { tf show-options -wqv -t "$1" "$2"; }
 cleanup() { FLEET_ALLOW_TMUX_DESTROY=1 "$REAL_TMUX" -L "$L" kill-server 2>/dev/null; rm -rf "$WORK"; }
@@ -86,49 +85,49 @@ read -r W1 P1 <<EOF
 $(newwin "$F1")
 EOF
 short=$(bash "$BIN/fleet-id.sh" open "$F1" --window "$W1" --socket "$L" --agent claude --repo acme/app --title 'S1 work')
-ok; case "$short" in [A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z]) ;; *) fail "S1: open prints a 4-character code, letter first" "$short" ;; esac
-ok; [ "$(opt "$W1" @task_short)" = "$short" ] || fail "S1: open stamps @task_short on --window" "$(opt "$W1" @task_short)"
+st_count; case "$short" in [A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z]) ;; *) fail "S1: open prints a 4-character code, letter first" "$short" ;; esac
+st_count; [ "$(opt "$W1" @task_short)" = "$short" ] || st_miss "S1: open stamps @task_short on --window" "$(opt "$W1" @task_short)"
 hook "$P1" startup aaaa0001
 python3 "$BIN/fleet_id.py" result "$F1" --state succeeded --summary 'first' --pr 7
 hook "$P1" clear aaaa0002
 hook "$P1" clear aaaa0003
-ok; [ "$(segs "$F1")" = "claude:aaaa0001:startup:0 claude:aaaa0002:clear:0 claude:aaaa0003:clear:0" ] \
-  || fail "S1: startup + two clears = three segments" "$(segs "$F1")"
-ok; [ "$(opt "$W1" @fleet_id)" = "$F1" ] && [ "$(opt "$W1" @task_short)" = "$short" ] \
-  || fail "S1: the ID and its short code do not change across /clear" "$(opt "$W1" @fleet_id) $(opt "$W1" @task_short)"
-ok; [ "$(results "$F1")" = 1 ] || fail "S1: the result reported before the clears is still there" "$(results "$F1")"
+st_count; [ "$(segs "$F1")" = "claude:aaaa0001:startup:0 claude:aaaa0002:clear:0 claude:aaaa0003:clear:0" ] \
+  || st_miss "S1: startup + two clears = three segments" "$(segs "$F1")"
+st_count; [ "$(opt "$W1" @fleet_id)" = "$F1" ] && [ "$(opt "$W1" @task_short)" = "$short" ] \
+  || st_miss "S1: the ID and its short code do not change across /clear" "$(opt "$W1" @fleet_id) $(opt "$W1" @task_short)"
+st_count; [ "$(results "$F1")" = 1 ] || st_miss "S1: the result reported before the clears is still there" "$(results "$F1")"
 hook "$P1" clear aaaa0003
-ok; [ "$(segs "$F1" | wc -w | tr -d ' ')" = 3 ] || fail "S1: a repeated hook for the same native id adds nothing" "$(segs "$F1")"
+st_count; [ "$(segs "$F1" | wc -w | tr -d ' ')" = 3 ] || st_miss "S1: a repeated hook for the same native id adds nothing" "$(segs "$F1")"
 
 # ---- S3 · the handoff cycle's /clear --------------------------------------------
 tf set-window-option -t "$W1" @id_next_trigger "handoff:$(date +%s)"
 hook "$P1" clear aaaa0004
-ok; [ "$(segs "$F1" | awk '{print $NF}')" = "claude:aaaa0004:handoff:0" ] || fail "S3: the marked /clear is a handoff segment" "$(segs "$F1")"
-ok; [ -z "$(opt "$W1" @id_next_trigger)" ] || fail "S3: the hook takes the mark off the window"
+st_count; [ "$(segs "$F1" | awk '{print $NF}')" = "claude:aaaa0004:handoff:0" ] || st_miss "S3: the marked /clear is a handoff segment" "$(segs "$F1")"
+st_count; [ -z "$(opt "$W1" @id_next_trigger)" ] || st_miss "S3: the hook takes the mark off the window"
 tf set-window-option -t "$W1" @id_next_trigger "handoff:1000"
 hook "$P1" clear aaaa0005
-ok; [ "$(segs "$F1" | awk '{print $NF}')" = "claude:aaaa0005:clear:0" ] || fail "S3: a stale mark is no handoff" "$(segs "$F1")"
+st_count; [ "$(segs "$F1" | awk '{print $NF}')" = "claude:aaaa0005:clear:0" ] || st_miss "S3: a stale mark is no handoff" "$(segs "$F1")"
 tf set-window-option -t "$W1" @handoff_cycle "$(date +%s):123"
 hook "$P1" clear aaaa0006
 tf set-window-option -u -t "$W1" @handoff_cycle
-ok; [ "$(segs "$F1" | awk '{print $NF}')" = "claude:aaaa0006:handoff:0" ] || fail "S3: a /clear while the cycle owns the window is a handoff" "$(segs "$F1")"
+st_count; [ "$(segs "$F1" | awk '{print $NF}')" = "claude:aaaa0006:handoff:0" ] || st_miss "S3: a /clear while the cycle owns the window is a handoff" "$(segs "$F1")"
 
 # ---- S5 · /compact three times --------------------------------------------------
 for _ in 1 2 3; do hook "$P1" compact aaaa0006; done
-ok; [ "$(segs "$F1" | awk '{print $NF}')" = "claude:aaaa0006:handoff:3" ] || fail "S5: three compacts count on the current segment" "$(segs "$F1")"
-ok; [ "$(segs "$F1" | wc -w | tr -d ' ')" = 6 ] || fail "S5: a compact opens no segment" "$(segs "$F1")"
+st_count; [ "$(segs "$F1" | awk '{print $NF}')" = "claude:aaaa0006:handoff:3" ] || st_miss "S5: three compacts count on the current segment" "$(segs "$F1")"
+st_count; [ "$(segs "$F1" | wc -w | tr -d ' ')" = 6 ] || st_miss "S5: a compact opens no segment" "$(segs "$F1")"
 
 # ---- S4 · Claude → Codex --------------------------------------------------------
 tf set-window-option -t "$W1" @cc_agent codex
 tf set-window-option -t "$W1" @cc_launcher_pid 4242
 hook "$P1" startup bbbb0001 FLEET_CODEX_LAUNCHER_PID=9999
-ok; [ "$(segs "$F1" | wc -w | tr -d ' ')" = 6 ] || fail "S4: a stale launcher's hook adds nothing" "$(segs "$F1")"
+st_count; [ "$(segs "$F1" | wc -w | tr -d ' ')" = 6 ] || st_miss "S4: a stale launcher's hook adds nothing" "$(segs "$F1")"
 hook "$P1" startup bbbb0001 FLEET_CODEX_LAUNCHER_PID=4242
-ok; [ "$(segs "$F1" | awk '{print $NF}')" = "codex:bbbb0001:transfer:0" ] || fail "S4: the Codex first turn is a transfer segment" "$(segs "$F1")"
-ok; [ "$(opt "$W1" @fleet_id)" = "$F1" ] || fail "S4: the transfer keeps the ID"
-ok; python3 "$BIN/fleet_id.py" get "$F1" | grep -q 'codex  bbbb0001' || fail "S4: get lists the codex segment" "$(python3 "$BIN/fleet_id.py" get "$F1")"
+st_count; [ "$(segs "$F1" | awk '{print $NF}')" = "codex:bbbb0001:transfer:0" ] || st_miss "S4: the Codex first turn is a transfer segment" "$(segs "$F1")"
+st_count; [ "$(opt "$W1" @fleet_id)" = "$F1" ] || st_miss "S4: the transfer keeps the ID"
+st_count; python3 "$BIN/fleet_id.py" get "$F1" | grep -q 'codex  bbbb0001' || st_miss "S4: get lists the codex segment" "$(python3 "$BIN/fleet_id.py" get "$F1")"
 hook "$P1" startup bbbb0002 FLEET_CODEX_LAUNCHER_PID=4242
-ok; [ "$(segs "$F1" | awk '{print $NF}')" = "codex:bbbb0002:new:0" ] || fail "S4: a new Codex thread in the window is a new segment" "$(segs "$F1")"
+st_count; [ "$(segs "$F1" | awk '{print $NF}')" = "codex:bbbb0002:new:0" ] || st_miss "S4: a new Codex thread in the window is a new segment" "$(segs "$F1")"
 
 # ---- S6 · a non-proxy move: a new window, the same ID, --resume --------------------
 F6=$(mkfid)
@@ -141,12 +140,12 @@ FLEET_ALLOW_TMUX_DESTROY=1 tf kill-window -t "$W6"
 read -r W6b P6b <<EOF
 $(newwin "$F6")
 EOF
-ok; [ "$W6b" != "$W6" ] || fail "S6: the new tmux window has another @window_id"
+st_count; [ "$W6b" != "$W6" ] || st_miss "S6: the new tmux window has another @window_id"
 hook "$P6b" resume cccc0001
-ok; [ "$(segs "$F6")" = "claude:cccc0001:startup:0" ] || fail "S6: the same native id after the move opens no segment" "$(segs "$F6")"
+st_count; [ "$(segs "$F6")" = "claude:cccc0001:startup:0" ] || st_miss "S6: the same native id after the move opens no segment" "$(segs "$F6")"
 hook "$P6b" resume cccc0002
-ok; [ "$(segs "$F6")" = "claude:cccc0001:startup:0 claude:cccc0002:resume:0" ] || fail "S6: another native id is one resume segment" "$(segs "$F6")"
-ok; [ "$(opt "$W6b" @task_short)" = "$(python3 "$BIN/fleet_id.py" short "$F6")" ] || fail "S6: the hook stamps the moved window's short code"
+st_count; [ "$(segs "$F6")" = "claude:cccc0001:startup:0 claude:cccc0002:resume:0" ] || st_miss "S6: another native id is one resume segment" "$(segs "$F6")"
+st_count; [ "$(opt "$W6b" @task_short)" = "$(python3 "$BIN/fleet_id.py" short "$F6")" ] || st_miss "S6: the hook stamps the moved window's short code"
 
 # ---- S11 · Codex restored before its first turn ----------------------------------
 F11=$(mkfid)
@@ -159,20 +158,20 @@ read -r W11 P11 <<EOF
 $(newwin "$F11")
 EOF
 tf set-window-option -t "$W11" @cc_agent codex; tf set-window-option -t "$W11" @cc_launcher_pid 77
-ok; [ -z "$(segs "$F11")" ] || fail "S11: no segment before the first turn" "$(segs "$F11")"
-ok; [ "$(lib fleet_win_for_addr "$s11" "$L")" = "$W11" ] || fail "S11: the ID answers with no segment" "$(lib fleet_win_for_addr "$s11" "$L" 2>&1)"
+st_count; [ -z "$(segs "$F11")" ] || st_miss "S11: no segment before the first turn" "$(segs "$F11")"
+st_count; [ "$(lib fleet_win_for_addr "$s11" "$L")" = "$W11" ] || st_miss "S11: the ID answers with no segment" "$(lib fleet_win_for_addr "$s11" "$L" 2>&1)"
 hook "$P11" startup dddd0001 FLEET_CODEX_LAUNCHER_PID=77
-ok; [ "$(segs "$F11")" = "codex:dddd0001:startup:0" ] || fail "S11: the first turn adds segment 1" "$(segs "$F11")"
+st_count; [ "$(segs "$F11")" = "codex:dddd0001:startup:0" ] || st_miss "S11: the first turn adds segment 1" "$(segs "$F11")"
 
 # ---- CODE · short codes and addressing ------------------------------------------
 enc=$(python3 "$BIN/fleet_id.py" encode "$U1")
-ok; [ "${#enc}" = 26 ] && [ "$(printf '%s' "$enc" | tr -d '0-9ABCDEFGHJKMNPQRSTVWXYZ')" = '' ] \
+st_count; [ "${#enc}" = 26 ] && [ "$(printf '%s' "$enc" | tr -d '0-9ABCDEFGHJKMNPQRSTVWXYZ')" = '' ] \
   && case "$enc" in [A-Z]*) true ;; *) false ;; esac \
-  || fail "CODE: the full code is 26 uppercase Crockford characters, a letter first" "$enc"
+  || st_miss "CODE: the full code is 26 uppercase Crockford characters, a letter first" "$enc"
 # every ID's code starts with a letter — the lowest and highest IDs included
 for u in 00000000-0000-4000-8000-000000000000 ffffffff-ffff-4fff-bfff-ffffffffffff; do
   e=$(python3 "$BIN/fleet_id.py" encode "$u")
-  ok; case "$e" in [A-HJKMNP-TV-Z]*) ;; *) fail "CODE: a code's first character is a letter" "$u → $e" ;; esac
+  st_count; case "$e" in [A-HJKMNP-TV-Z]*) ;; *) fail "CODE: a code's first character is a letter" "$u → $e" ;; esac
 done
 # two IDs whose codes share 5 characters: the second one's code is 6 long
 CA=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_id, uuid
@@ -181,59 +180,59 @@ CB=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_id, u
 b = uuid.UUID(int=(0x12345 << 108) | (1 << 100) | (4 << 76) | (2 << 62) | 2); print(b)' "$BIN")
 sa=$(bash "$BIN/fleet-id.sh" open "$CA" --agent claude)
 sb=$(bash "$BIN/fleet-id.sh" open "$CB" --agent claude)
-ok; [ "${#sa}" = 4 ] && [ "${#sb}" -gt 4 ] && [ "${sb:0:4}" = "$sa" ] \
-  || fail "CODE: the first takes 4 characters, the one sharing them more" "$sa $sb"
+st_count; [ "${#sa}" = 4 ] && [ "${#sb}" -gt 4 ] && [ "${sb:0:4}" = "$sa" ] \
+  || st_miss "CODE: the first takes 4 characters, the one sharing them more" "$sa $sb"
 out=$(bash "$BIN/fleet-id.sh" resolve "$sa" 2>&1); rc=$?
-ok; [ "$rc" = 2 ] && printf '%s' "$out" | grep -q "$CA" && printf '%s' "$out" | grep -q "$CB" \
-  || fail "CODE: the shared 4-character prefix is refused, both IDs named (rc 2)" "rc=$rc $out"
-ok; [ "$(bash "$BIN/fleet-id.sh" resolve "$sb")" = "$CB" ] || fail "CODE: the 6-character code names one ID"
+st_count; [ "$rc" = 2 ] && printf '%s' "$out" | grep -q "$CA" && printf '%s' "$out" | grep -q "$CB" \
+  || st_miss "CODE: the shared 4-character prefix is refused, both IDs named (rc 2)" "rc=$rc $out"
+st_count; [ "$(bash "$BIN/fleet-id.sh" resolve "$sb")" = "$CB" ] || st_miss "CODE: the 6-character code names one ID"
 lower="#$(printf '%s' "$short" | tr 'A-Z' 'a-z')"
-ok; [ "$(bash "$BIN/fleet-id.sh" resolve "$lower")" = "$F1" ] || fail "CODE: a code resolves case-folded, # or not" "$lower"
+st_count; [ "$(bash "$BIN/fleet-id.sh" resolve "$lower")" = "$F1" ] || st_miss "CODE: a code resolves case-folded, # or not" "$lower"
 bash "$BIN/fleet-id.sh" resolve 4539 >/dev/null 2>&1; rc=$?
-ok; [ "$rc" = 1 ] || fail "CODE: a number is never a code" "$rc"
+st_count; [ "$rc" = 1 ] || st_miss "CODE: a number is never a code" "$rc"
 # the old code (`T-` + 5 lowercase) still resolves for one version (compat-1v)
 old5=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_id; print("T-" + fleet_id.legacy_encode(sys.argv[2])[:5])' "$BIN" "$F1")
-ok; [ "$(bash "$BIN/fleet-id.sh" resolve "$old5")" = "$F1" ] || fail "CODE: the old T- code still resolves" "$old5"
+st_count; [ "$(bash "$BIN/fleet-id.sh" resolve "$old5")" = "$F1" ] || st_miss "CODE: the old T- code still resolves" "$old5"
 bash "$BIN/fleet-id.sh" resolve "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_id; print("T-" + fleet_id.legacy_encode(sys.argv[2])[:5])' "$BIN" "$CA")" >/dev/null 2>&1; rc=$?
-ok; [ "$rc" = 2 ] || fail "CODE: an old T- code two IDs share is refused (rc 2)" "$rc"
+st_count; [ "$rc" = 2 ] || st_miss "CODE: an old T- code two IDs share is refused (rc 2)" "$rc"
 # a ledger written before C11 (its `short` is `T-…`) reads as today's code
 FO=$(mkfid)
 printf '{"ev":"opened","agent":"claude","short":"T-abcde","id":"%s","seq":1,"ts":1}\n' "$FO" > "$FLEET_CONF_DIR/ids/$FO.ndjson"
 so=$(bash "$BIN/fleet-id.sh" short "$FO")
-ok; [ "$so" = "$(python3 "$BIN/fleet_id.py" encode "$FO" | cut -c1-4)" ] || fail "CODE: an old T- short in a ledger is recomputed" "$so"
-ok; [ "$(bash "$BIN/fleet-id.sh" resolve "$F1")" = "$F1" ] || fail "CODE: a full ID resolves to itself"
+st_count; [ "$so" = "$(python3 "$BIN/fleet_id.py" encode "$FO" | cut -c1-4)" ] || st_miss "CODE: an old T- short in a ledger is recomputed" "$so"
+st_count; [ "$(bash "$BIN/fleet-id.sh" resolve "$F1")" = "$F1" ] || st_miss "CODE: a full ID resolves to itself"
 bash "$BIN/fleet-id.sh" resolve ZZZZZZ >/dev/null 2>&1; rc=$?
-ok; [ "$rc" = 1 ] || fail "CODE: a code nobody has is rc 1" "$rc"
+st_count; [ "$rc" = 1 ] || st_miss "CODE: a code nobody has is rc 1" "$rc"
 # a live window with no ledger is still an ID a code names
 FL=$(mkfid); read -r WL PL <<EOF
 $(newwin "$FL")
 EOF
 cl=$(python3 "$BIN/fleet_id.py" short "$FL")
-ok; [ "$(lib fleet_win_for_addr "$cl" "$L")" = "$WL" ] || fail "CODE: a live window with no ledger answers to its code" "$(lib fleet_win_for_addr "$cl" "$L" 2>&1)"
-ok; [ "$(lib fleet_win_for_addr "$short" "$L")" = "$W1" ] || fail "CODE: fleet_win_for_addr takes a code"
-ok; [ "$(lib fleet_win_for_addr "#$short" "$L")" = "$W1" ] || fail "CODE: fleet_win_for_addr takes a #code"
-ok; [ "$(lib fleet_win_for_addr "$old5" "$L")" = "$W1" ] || fail "CODE: fleet_win_for_addr takes the old T- code"
+st_count; [ "$(lib fleet_win_for_addr "$cl" "$L")" = "$WL" ] || st_miss "CODE: a live window with no ledger answers to its code" "$(lib fleet_win_for_addr "$cl" "$L" 2>&1)"
+st_count; [ "$(lib fleet_win_for_addr "$short" "$L")" = "$W1" ] || st_miss "CODE: fleet_win_for_addr takes a code"
+st_count; [ "$(lib fleet_win_for_addr "#$short" "$L")" = "$W1" ] || st_miss "CODE: fleet_win_for_addr takes a #code"
+st_count; [ "$(lib fleet_win_for_addr "$old5" "$L")" = "$W1" ] || st_miss "CODE: fleet_win_for_addr takes the old T- code"
 lib fleet_win_for_addr "$sa" "$L" >/dev/null 2>&1; rc=$?
-ok; [ "$rc" = 2 ] || fail "CODE: fleet_win_for_addr refuses an ambiguous code (rc 2)" "$rc"
+st_count; [ "$rc" = 2 ] || st_miss "CODE: fleet_win_for_addr refuses an ambiguous code (rc 2)" "$rc"
 # fleet-peer-send.sh: an ambiguous code refused with the candidates; a unique one
 # lands on its window (no Claude there: it is queued for that window's identity)
 out=$(bash "$BIN/fleet-peer-send.sh" "$sa" hello 2>&1); rc=$?
-ok; [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'ambiguous' && printf '%s' "$out" | grep -q "$CB" \
-  || fail "CODE: peer-send refuses an ambiguous code target, naming the candidates" "rc=$rc $out"
+st_count; [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'ambiguous' && printf '%s' "$out" | grep -q "$CB" \
+  || st_miss "CODE: peer-send refuses an ambiguous code target, naming the candidates" "rc=$rc $out"
 s6=$(python3 "$BIN/fleet_id.py" short "$F6")
 out=$(bash "$BIN/fleet-peer-send.sh" "$s6" hello 2>&1); rc=$?
-ok; { [ "$rc" = 3 ] || [ "$rc" = 0 ]; } && printf '%s' "$out" | grep -q "#$s6" \
-  || fail "CODE: peer-send takes a code target to its window, the receipt naming #CODE" "rc=$rc $out"
-ok; grep -qF '|#[A-Za-z][0-9A-Za-z]{3,25}|[A-Z][0-9A-Z]{3,25}' "$BIN/fleet-mcp.py" || fail "CODE: the MCP send tool lets a code through"
+st_count; { [ "$rc" = 3 ] || [ "$rc" = 0 ]; } && printf '%s' "$out" | grep -q "#$s6" \
+  || st_miss "CODE: peer-send takes a code target to its window, the receipt naming #CODE" "rc=$rc $out"
+st_count; grep -qF '|#[A-Za-z][0-9A-Za-z]{3,25}|[A-Z][0-9A-Z]{3,25}' "$BIN/fleet-mcp.py" || st_miss "CODE: the MCP send tool lets a code through"
 
 # ---- HOOK · never blocks, never speaks ------------------------------------------
 n0=$(ls "$FLEET_CONF_DIR/ids" | wc -l | tr -d ' ')
 out=$(printf '{"source":"startup","session_id":"x"}' | env -u TMUX bash "$BIN/fleet-id.sh" hook 2>&1); rc=$?
-ok; [ "$rc" = 0 ] && [ -z "$out" ] || fail "HOOK: outside tmux it exits 0 silently" "rc=$rc $out"
+st_count; [ "$rc" = 0 ] && [ -z "$out" ] || st_miss "HOOK: outside tmux it exits 0 silently" "rc=$rc $out"
 out=$(printf 'not json' | env TMUX="$SOCKP,$SPID,0" TMUX_PANE="$PL" bash "$BIN/fleet-id.sh" hook 2>&1); rc=$?
-ok; [ "$rc" = 0 ] && [ -z "$out" ] || fail "HOOK: garbage stdin exits 0 silently" "rc=$rc $out"
+st_count; [ "$rc" = 0 ] && [ -z "$out" ] || st_miss "HOOK: garbage stdin exits 0 silently" "rc=$rc $out"
 hook "$PL" startup eeee0001 CLAUDE_CODE_ENTRYPOINT=sdk-cli
-ok; [ "$(ls "$FLEET_CONF_DIR/ids" | wc -l | tr -d ' ')" = "$n0" ] || fail "HOOK: a headless child (claude -p) writes nothing"
+st_count; [ "$(ls "$FLEET_CONF_DIR/ids" | wc -l | tr -d ' ')" = "$n0" ] || st_miss "HOOK: a headless child (claude -p) writes nothing"
 # an unwritable ledger dir: kept on the window, flushed by the next hook
 FR=$(mkfid); read -r WR PR <<EOF
 $(newwin "$FR")
@@ -242,23 +241,22 @@ mkdir -p "$WORK/ro"; chmod 500 "$WORK/ro"
 out=$(printf '{"source":"startup","session_id":"ffff0001"}' | env TMUX="$SOCKP,$SPID,0" TMUX_PANE="$PR" \
   FLEET_ID_DIR="$WORK/ro/ids" bash "$BIN/fleet-id.sh" hook 2>&1); rc=$?
 chmod 700 "$WORK/ro"
-ok; [ "$rc" = 0 ] && [ -z "$out" ] && opt "$WR" @id_retry | grep -q ffff0001 \
-  || fail "HOOK: a write that fails is kept on the window (@id_retry)" "rc=$rc out=$out retry=$(opt "$WR" @id_retry)"
+st_count; [ "$rc" = 0 ] && [ -z "$out" ] && opt "$WR" @id_retry | grep -q ffff0001 \
+  || st_miss "HOOK: a write that fails is kept on the window (@id_retry)" "rc=$rc out=$out retry=$(opt "$WR" @id_retry)"
 hook "$PR" compact ffff0001
-ok; [ "$(segs "$FR")" = "claude:ffff0001:startup:1" ] && [ -z "$(opt "$WR" @id_retry)" ] \
-  || fail "HOOK: the next hook flushes the kept segment first" "$(segs "$FR") retry=$(opt "$WR" @id_retry)"
-ok; python3 "$BIN/fleet_id.py" get "$FR" --json | grep -q '"lazy": true' || fail "HOOK: a window no spawn recorded gets a lazy opened"
+st_count; [ "$(segs "$FR")" = "claude:ffff0001:startup:1" ] && [ -z "$(opt "$WR" @id_retry)" ] \
+  || st_miss "HOOK: the next hook flushes the kept segment first" "$(segs "$FR") retry=$(opt "$WR" @id_retry)"
+st_count; python3 "$BIN/fleet_id.py" get "$FR" --json | grep -q '"lazy": true' || st_miss "HOOK: a window no spawn recorded gets a lazy opened"
 
 # ---- WIRE --------------------------------------------------------------------------
-ok; python3 - "$BIN/../hooks/settings-hooks.json" <<'PY' || fail "WIRE: the SessionStart table runs fleet-id.sh hook (no matcher: every source)"
+st_count; python3 - "$BIN/../hooks/settings-hooks.json" <<'PY' || st_miss "WIRE: the SessionStart table runs fleet-id.sh hook (no matcher: every source)"
 import json, sys
 d = json.load(open(sys.argv[1]))
 h = d.get("hooks", d)["SessionStart"]
 assert any("matcher" not in g and any(x["command"].endswith("bin/fleet-id.sh hook") for x in g["hooks"]) for g in h)
 PY
-ok; grep -q 'fleet-id.sh" open' "$BIN/dash-issue-session.sh" && grep -q 'fleet-id.sh" open' "$BIN/dash-raw-session.sh" \
-  || fail "WIRE: both spawners open the ledger"
-ok; grep -q '@id_next_trigger "handoff:' "$BIN/fleet-handoff-cycle.sh" || fail "WIRE: the handoff cycle marks its /clear"
+st_count; grep -q 'fleet-id.sh" open' "$BIN/dash-issue-session.sh" && grep -q 'fleet-id.sh" open' "$BIN/dash-raw-session.sh" \
+  || st_miss "WIRE: both spawners open the ledger"
+st_count; grep -q '@id_next_trigger "handoff:' "$BIN/fleet-handoff-cycle.sh" || st_miss "WIRE: the handoff cycle marks its /clear"
 
-[ "$FAIL" -eq 0 ] || { printf 'fleet-id selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2; exit 1; }
-printf 'fleet-id selftest: all %d checks pass\n' "$CHECKS"
+st_done

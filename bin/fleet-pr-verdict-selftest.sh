@@ -30,7 +30,6 @@ CLI="$BIN/fleet-pr-verdict.sh"
 st_sandbox "${TMPDIR:-/tmp}/prverdict-selftest.XXXXXX"
 
 pass=0
-fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 # ===== FOLD: land_verdict ======================================================
 # shellcheck source=/dev/null
@@ -40,7 +39,7 @@ v() { land_verdict "$1" "$2" "$3" "$4" "$5"; }
 expect() {  # expect <want> <state> <mergeable> <mss> <draft> <checks>
   local want="$1"; shift
   local got; got=$(v "$@")
-  [ "$got" = "$want" ] || fail "land_verdict($*) = $got, want $want"
+  [ "$got" = "$want" ] || st_fail "land_verdict($*) = $got, want $want"
 }
 
 # green + mergeable + up to date, with checks actually passing → the merge case.
@@ -74,7 +73,7 @@ st_pass "behind / conflict / blocked / draft fold through the shared taxonomy"
 expect MERGED MERGED '' '' '' pass
 expect CLOSED CLOSED '' '' '' pass
 [ "$(land_classify MERGED '' '' '' pass)" = GONE ] \
-  || fail "land_classify should still fold non-OPEN to GONE (unchanged)"
+  || st_fail "land_classify should still fold non-OPEN to GONE (unchanged)"
 st_pass "MERGED/CLOSED report as themselves; land_classify keeps its GONE fold"
 
 # ===== CLI: bin/fleet-pr-verdict.sh ============================================
@@ -104,39 +103,39 @@ run_cli() {  # run_cli <args…> → sets OUT/ERR/RC
 row() { printf '%s\n%s\n%s\n%s\n%s' "$1" "$2" "$3" "$4" "$5"; }
 
 GH_ROW=$(row OPEN MERGEABLE CLEAN '' pass); run_cli 77 --repo acme/widgets
-[ "$OUT" = READY ] || fail "CLI should print READY for a green PR" "$OUT / $ERR"
-[ "$RC" = 0 ]      || fail "CLI should exit 0 on READY (got $RC)" "$ERR"
+[ "$OUT" = READY ] || st_fail "CLI should print READY for a green PR" "$OUT / $ERR"
+[ "$RC" = 0 ]      || st_fail "CLI should exit 0 on READY (got $RC)" "$ERR"
 st_pass "CLI prints READY and exits 0 for a green, mergeable PR"
 
 GH_ROW=$(row OPEN MERGEABLE CLEAN '' fail); run_cli 77 --repo acme/widgets
-[ "$OUT" = FAILING ] || fail "CLI should print FAILING for a red check" "$OUT / $ERR"
-[ "$RC" = 1 ]        || fail "CLI should exit 1 on a non-READY verdict (got $RC)" "$ERR"
+[ "$OUT" = FAILING ] || st_fail "CLI should print FAILING for a red check" "$OUT / $ERR"
+[ "$RC" = 1 ]        || st_fail "CLI should exit 1 on a non-READY verdict (got $RC)" "$ERR"
 GH_ROW=$(row OPEN MERGEABLE BEHIND '' pass); run_cli 77 --repo acme/widgets
 [ "$OUT" = BEHIND ] && [ "$RC" = 1 ] \
-  || fail "CLI should print BEHIND / exit 1 for an out-of-date PR" "$OUT rc=$RC"
+  || st_fail "CLI should print BEHIND / exit 1 for an out-of-date PR" "$OUT rc=$RC"
 GH_ROW=$(row MERGED '' '' '' pass); run_cli 77 --repo acme/widgets
 [ "$OUT" = MERGED ] && [ "$RC" = 1 ] \
-  || fail "CLI should print MERGED / exit 1 once the PR has landed" "$OUT rc=$RC"
+  || st_fail "CLI should print MERGED / exit 1 once the PR has landed" "$OUT rc=$RC"
 st_pass "CLI exit code is the gate: 0 only for READY, 1 for every other verdict"
 
 # stdout stays ONE bare token even with -q; diagnostics are stderr-only.
 GH_ROW=$(row OPEN MERGEABLE CLEAN '' pending); run_cli 77 --repo acme/widgets -q
-[ "$OUT" = PENDING ] || fail "-q must still print the verdict token" "$OUT"
-[ -z "$ERR" ]        || fail "-q must suppress the stderr note" "$ERR"
+[ "$OUT" = PENDING ] || st_fail "-q must still print the verdict token" "$OUT"
+[ -z "$ERR" ]        || st_fail "-q must suppress the stderr note" "$ERR"
 GH_ROW=$(row OPEN MERGEABLE CLEAN '' pending); run_cli 77 --repo acme/widgets
-[ -n "$ERR" ] || fail "without -q the CLI should explain the verdict on stderr"
+[ -n "$ERR" ] || st_fail "without -q the CLI should explain the verdict on stderr"
 st_pass "stdout is the bare token; the human note is stderr-only (-q silences it)"
 
 # Error contract: exit 2, and NOTHING on stdout that could read as a verdict.
 GH_RC=1 GH_ROW='' run_cli 77 --repo acme/widgets
-[ "$RC" = 2 ] || fail "a failed gh read must exit 2 (got $RC)" "$ERR"
-[ -z "$OUT" ] || fail "a failed gh read must print no verdict" "$OUT"
+[ "$RC" = 2 ] || st_fail "a failed gh read must exit 2 (got $RC)" "$ERR"
+[ -z "$OUT" ] || st_fail "a failed gh read must print no verdict" "$OUT"
 GH_RC=0 GH_ROW='' run_cli 77 --repo acme/widgets
-[ "$RC" = 2 ] || fail "an empty gh read (no such PR) must exit 2 (got $RC)" "$ERR"
+[ "$RC" = 2 ] || st_fail "an empty gh read (no such PR) must exit 2 (got $RC)" "$ERR"
 GH_ROW=$(row OPEN MERGEABLE CLEAN '' pass); run_cli --repo acme/widgets
-[ "$RC" = 2 ] || fail "a missing PR number must exit 2 (got $RC)" "$ERR"
+[ "$RC" = 2 ] || st_fail "a missing PR number must exit 2 (got $RC)" "$ERR"
 GH_ROW=$(row OPEN MERGEABLE CLEAN '' pass); run_cli 77 --repo acme/widgets --bogus
-[ "$RC" = 2 ] || fail "an unknown flag must exit 2 (got $RC)" "$ERR"
+[ "$RC" = 2 ] || st_fail "an unknown flag must exit 2 (got $RC)" "$ERR"
 st_pass "errors (bad args, unreadable PR) exit 2 with an empty stdout"
 
 # gh absent → exit 2, never a verdict guess. A PATH with no `gh` on it at all: the
@@ -147,8 +146,8 @@ mkdir -p "$WORK/nogh"
 ln -sf "$(command -v dirname)" "$WORK/nogh/dirname"
 OUT=$(env PATH="$WORK/nogh" TMPDIR="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
           "$(command -v bash)" "$CLI" 77 --repo acme/widgets 2>"$WORK/err"); RC=$?
-[ "$RC" = 2 ] || fail "no gh on PATH must exit 2 (got $RC)" "$(cat "$WORK/err")"
-[ -z "$OUT" ] || fail "no gh on PATH must print no verdict" "$OUT"
+[ "$RC" = 2 ] || st_fail "no gh on PATH must exit 2 (got $RC)" "$(cat "$WORK/err")"
+[ -z "$OUT" ] || st_fail "no gh on PATH must print no verdict" "$OUT"
 st_pass "gh missing → exit 2, no verdict invented"
 
 # ===== REPO: a fleet hosting 2+ repos (issue #1822) ============================
@@ -192,22 +191,22 @@ run_repo() {  # run_repo <cli> <sess> <@repo> [args…] → OUT/ERR/RC + $RW/arg
 }
 run_repo "$CLI" mr o/b 1821
 [ "$OUT" = READY ] && grep -q -- '--repo o/b' "$RW/argv" && ! grep -q -- 'o/a' "$RW/argv" \
-  || fail "verdict in a 2-repo fleet must read the pane's @repo (o/b)" "out=$OUT rc=$RC argv=$(cat "$RW/argv") $ERR"
+  || st_fail "verdict in a 2-repo fleet must read the pane's @repo (o/b)" "out=$OUT rc=$RC argv=$(cat "$RW/argv") $ERR"
 run_repo "$CLI" mr o/b 1821 --repo ''
-grep -q -- '--repo o/b' "$RW/argv" || fail "an EMPTY --repo (\$FLEET_REPO unset) resolves like a bare call" "$(cat "$RW/argv") $ERR"
+grep -q -- '--repo o/b' "$RW/argv" || st_fail "an EMPTY --repo (\$FLEET_REPO unset) resolves like a bare call" "$(cat "$RW/argv") $ERR"
 run_repo "$CLI" mr '' 1821
 [ "$RC" = 2 ] && [ -z "$OUT" ] && [ ! -s "$RW/argv" ] && printf '%s' "$ERR" | grep -q 'pass --repo (o/a o/b)' \
-  || fail "verdict from a pane with no @repo must refuse, list the repos, call no gh" "out=$OUT rc=$RC argv=$(cat "$RW/argv") $ERR"
+  || st_fail "verdict from a pane with no @repo must refuse, list the repos, call no gh" "out=$OUT rc=$RC argv=$(cat "$RW/argv") $ERR"
 run_repo "$CLI" mr o/b 1821 --repo o/a
-grep -q -- '--repo o/a' "$RW/argv" || fail "an explicit --repo still wins" "$(cat "$RW/argv")"
+grep -q -- '--repo o/a' "$RW/argv" || st_fail "an explicit --repo still wins" "$(cat "$RW/argv")"
 st_pass "verdict: 2-repo fleet reads the window's @repo, refuses with none, --repo still wins"
 
 run_repo "$MERGE_CLI" mr o/b 1821
 grep -q -- '--repo o/b' "$RW/argv" && ! grep -q -- 'o/a' "$RW/argv" \
-  || fail "merge in a 2-repo fleet must act on the pane's @repo (o/b)" "rc=$RC argv=$(cat "$RW/argv") $ERR"
+  || st_fail "merge in a 2-repo fleet must act on the pane's @repo (o/b)" "rc=$RC argv=$(cat "$RW/argv") $ERR"
 run_repo "$MERGE_CLI" mr '' 1821
 [ "$RC" = 2 ] && [ ! -s "$RW/argv" ] && printf '%s' "$ERR" | grep -q 'pass --repo (o/a o/b)' \
-  || fail "merge from a pane with no @repo must refuse before any gh call" "rc=$RC argv=$(cat "$RW/argv") $ERR"
+  || st_fail "merge from a pane with no @repo must refuse before any gh call" "rc=$RC argv=$(cat "$RW/argv") $ERR"
 st_pass "merge: 2-repo fleet acts on the window's @repo, refuses (no gh call) with none"
 
 # One rule, one repo or two (issue #1938): the same pane gets the same repo.
@@ -218,15 +217,15 @@ st_pass "merge: 2-repo fleet acts on the window's @repo, refuses (no gh call) wi
 for f in one mr; do
   for cli in "$CLI" "$MERGE_CLI"; do
     run_repo "$cli" "$f" o/a 1821
-    grep -q -- '--repo o/a' "$RW/argv" || fail "$f: ${cli##*/} on an o/a pane acts on o/a" "$(cat "$RW/argv") $ERR"
+    grep -q -- '--repo o/a' "$RW/argv" || st_fail "$f: ${cli##*/} on an o/a pane acts on o/a" "$(cat "$RW/argv") $ERR"
     run_repo "$cli" "$f" '' 1821 --repo o/a
-    grep -q -- '--repo o/a' "$RW/argv" || fail "$f: ${cli##*/} --repo o/a acts on o/a" "$(cat "$RW/argv") $ERR"
+    grep -q -- '--repo o/a' "$RW/argv" || st_fail "$f: ${cli##*/} --repo o/a acts on o/a" "$(cat "$RW/argv") $ERR"
   done
 done
 for cli in "$CLI" "$MERGE_CLI"; do
   run_repo "$cli" one o/zzz 1821
   grep -q -- '--repo o/a' "$RW/argv" && ! grep -q -- 'o/zzz' "$RW/argv" \
-    || fail "one-repo fleet: ${cli##*/} from a pane with no hosted repo takes the only repo (o/a)" "$(cat "$RW/argv") $ERR"
+    || st_fail "one-repo fleet: ${cli##*/} from a pane with no hosted repo takes the only repo (o/a)" "$(cat "$RW/argv") $ERR"
 done
 st_pass "one rule: a one-repo and a two-repo fleet resolve the same pane the same way"
 
@@ -276,21 +275,21 @@ run_wait() {  # run_wait <args…> → OUT/ERR/RC, CALLS (gh reads), SLEPT (sum 
 seq_reset; fx 1 OPEN BLOCKED "$C_PASS,$C_RUN"; fx 2 OPEN BLOCKED "$C_PASS,$C_RUN"; fx 3 OPEN CLEAN "$C_PASS,$C_PASS"
 run_wait --wait
 [ "$OUT" = READY ] && [ "$RC" = 0 ] && [ "$CALLS" = 3 ] \
-  || fail "--wait: pending→pass should end READY/0 on the 3rd read" "out=$OUT rc=$RC calls=$CALLS $ERR"
+  || st_fail "--wait: pending→pass should end READY/0 on the 3rd read" "out=$OUT rc=$RC calls=$CALLS $ERR"
 st_pass "--wait blocks through PENDING and returns READY when CI goes green"
 
 # pending → ONE red lane while another still runs → FAILING at once (fail fast).
 seq_reset; fx 1 OPEN BLOCKED "$C_RUN,$C_RUN"; fx 2 OPEN BLOCKED "$C_FAIL,$C_RUN"; fx 3 OPEN BLOCKED "$C_FAIL,$C_PASS"
 run_wait --wait
 [ "$OUT" = FAILING ] && [ "$RC" = 1 ] && [ "$CALLS" = 2 ] \
-  || fail "--wait: a red lane beside a running one must be FAILING on that read" "out=$OUT rc=$RC calls=$CALLS $ERR"
+  || st_fail "--wait: a red lane beside a running one must be FAILING on that read" "out=$OUT rc=$RC calls=$CALLS $ERR"
 st_pass "--wait fails fast: one red check ends the wait while other lanes still run"
 
 # Already red when the wait starts → FAILING with no sleep at all (defect 1).
 seq_reset; fx 1 OPEN UNSTABLE "$C_FAIL,$C_RUN"
 run_wait --wait
 [ "$OUT" = FAILING ] && [ "$CALLS" = 1 ] && [ "$SLEPT" = 0 ] \
-  || fail "--wait on an already-red PR must return FAILING without a probe delay" "out=$OUT calls=$CALLS slept=$SLEPT $ERR"
+  || st_fail "--wait on an already-red PR must return FAILING without a probe delay" "out=$OUT calls=$CALLS slept=$SLEPT $ERR"
 st_pass "--wait on an already-red PR answers FAILING immediately (no probe loop)"
 
 # Empty rollup — even with mss=CLEAN, which the one-shot reads as READY — keeps
@@ -298,57 +297,57 @@ st_pass "--wait on an already-red PR answers FAILING immediately (no probe loop)
 seq_reset; fx 1 OPEN CLEAN ""
 run_wait --wait --no-checks-timeout 60
 [ "$OUT" = TIMEOUT ] && [ "$RC" = 3 ] \
-  || fail "--wait with no checks should end TIMEOUT/3" "out=$OUT rc=$RC $ERR"
-[ "$SLEPT" -ge 60 ] && [ "$CALLS" -gt 1 ] || fail "--wait gave up on no-checks before its bound" "slept=$SLEPT calls=$CALLS"
-case "$ERR" in *UNDETERMINED*mss=CLEAN*) : ;; *) fail "no-checks timeout must say UNDETERMINED + the mss" "$ERR" ;; esac
+  || st_fail "--wait with no checks should end TIMEOUT/3" "out=$OUT rc=$RC $ERR"
+[ "$SLEPT" -ge 60 ] && [ "$CALLS" -gt 1 ] || st_fail "--wait gave up on no-checks before its bound" "slept=$SLEPT calls=$CALLS"
+case "$ERR" in *UNDETERMINED*mss=CLEAN*) : ;; *) st_fail "no-checks timeout must say UNDETERMINED + the mss" "$ERR" ;; esac
 seq_reset; fx 1 OPEN CLEAN ""; fx 2 OPEN BLOCKED "$C_RUN"; fx 3 OPEN CLEAN "$C_PASS"
 run_wait --wait
-[ "$OUT" = READY ] && [ "$CALLS" = 3 ] || fail "late-registering CI should be waited for, then READY" "out=$OUT calls=$CALLS $ERR"
+[ "$OUT" = READY ] && [ "$CALLS" = 3 ] || st_fail "late-registering CI should be waited for, then READY" "out=$OUT calls=$CALLS $ERR"
 st_pass "no checks yet = keep waiting (not READY, not red); its bound is TIMEOUT/3 + mss"
 
 # A rebase/re-run resets the check set mid-wait → keep waiting, don't flip.
 seq_reset; fx 1 OPEN BLOCKED "$C_RUN"; fx 2 OPEN CLEAN ""; fx 3 OPEN BLOCKED "$C_RUN,$C_RUN"; fx 4 OPEN CLEAN "$C_PASS,$C_PASS"
 run_wait --wait
-[ "$OUT" = READY ] && [ "$CALLS" = 4 ] || fail "a mid-wait check reset must keep waiting" "out=$OUT calls=$CALLS $ERR"
+[ "$OUT" = READY ] && [ "$CALLS" = 4 ] || st_fail "a mid-wait check reset must keep waiting" "out=$OUT calls=$CALLS $ERR"
 st_pass "a check set reset mid-wait (pending→empty→pending) keeps waiting"
 
 # The whole-wait bound: PENDING forever → TIMEOUT/3.
 seq_reset; fx 1 OPEN BLOCKED "$C_RUN"
 run_wait --wait --timeout 100
 [ "$OUT" = TIMEOUT ] && [ "$RC" = 3 ] && [ "$SLEPT" -ge 100 ] \
-  || fail "--timeout should end a stuck PENDING as TIMEOUT/3" "out=$OUT rc=$RC slept=$SLEPT $ERR"
+  || st_fail "--timeout should end a stuck PENDING as TIMEOUT/3" "out=$OUT rc=$RC slept=$SLEPT $ERR"
 st_pass "--timeout bounds the whole wait → TIMEOUT, exit 3"
 
 # API budget: never below 10s; 20s while CI is young; --interval after.
 seq_reset; fx 1 OPEN BLOCKED "$C_RUN"
 run_wait --wait --timeout 300 --interval 1
-[ "$(awk '$1<10' "$WORK/seq/sleeps" | wc -l | tr -d ' ')" = 0 ] || fail "a poll went below the 10s floor" "$(cat "$WORK/seq/sleeps")"
-[ "$(head -1 "$WORK/seq/sleeps")" = 20 ] || fail "young CI should poll every 20s" "$(cat "$WORK/seq/sleeps")"
-[ "$(tail -1 "$WORK/seq/sleeps")" = 10 ] || fail "--interval should apply after the first 2 minutes" "$(cat "$WORK/seq/sleeps")"
+[ "$(awk '$1<10' "$WORK/seq/sleeps" | wc -l | tr -d ' ')" = 0 ] || st_fail "a poll went below the 10s floor" "$(cat "$WORK/seq/sleeps")"
+[ "$(head -1 "$WORK/seq/sleeps")" = 20 ] || st_fail "young CI should poll every 20s" "$(cat "$WORK/seq/sleeps")"
+[ "$(tail -1 "$WORK/seq/sleeps")" = 10 ] || st_fail "--interval should apply after the first 2 minutes" "$(cat "$WORK/seq/sleeps")"
 st_pass "polling respects the shared API budget: ≥10s always, 20s while CI is young"
 
 # BEHIND mid-wait leaves the wait (update-branch is the worker's move).
 seq_reset; fx 1 OPEN BLOCKED "$C_RUN"; fx 2 OPEN BEHIND "$C_PASS"
 run_wait --wait
-[ "$OUT" = BEHIND ] && [ "$RC" = 1 ] || fail "--wait should return BEHIND" "out=$OUT rc=$RC"
+[ "$OUT" = BEHIND ] && [ "$RC" = 1 ] || st_fail "--wait should return BEHIND" "out=$OUT rc=$RC"
 # A transient read failure mid-wait is retried, not fatal.
 seq_reset; fx 1 OPEN BLOCKED "$C_RUN"; echo RC=1 > "$WORK/seq/2.json"; fx 3 OPEN CLEAN "$C_PASS"
 run_wait --wait
-[ "$OUT" = READY ] && [ "$RC" = 0 ] || fail "one failed read mid-wait must be retried" "out=$OUT rc=$RC $ERR"
+[ "$OUT" = READY ] && [ "$RC" = 0 ] || st_fail "one failed read mid-wait must be retried" "out=$OUT rc=$RC $ERR"
 seq_reset; fx 1 OPEN BLOCKED "$C_RUN"; echo RC=1 > "$WORK/seq/2.json"
 run_wait --wait
-[ "$RC" = 2 ] && [ -z "$OUT" ] || fail "5 failed reads in a row must exit 2 with no verdict" "out=$OUT rc=$RC"
+[ "$RC" = 2 ] && [ -z "$OUT" ] || st_fail "5 failed reads in a row must exit 2 with no verdict" "out=$OUT rc=$RC"
 st_pass "--wait returns any non-PENDING verdict; flaky reads retry, a dead read exits 2"
 
 # --until-merged: READY with auto-merge ARMED keeps waiting → MERGED, exit 0.
 seq_reset; fx 1 OPEN BLOCKED "$C_RUN"; fx 2 OPEN CLEAN "$C_PASS" auto; fx 3 OPEN CLEAN "$C_PASS" auto; fx 4 MERGED "" "$C_PASS"
 run_wait --until-merged
 [ "$OUT" = MERGED ] && [ "$RC" = 0 ] && [ "$CALLS" = 4 ] \
-  || fail "--until-merged should wait an armed READY out to MERGED/0" "out=$OUT rc=$RC calls=$CALLS $ERR"
+  || st_fail "--until-merged should wait an armed READY out to MERGED/0" "out=$OUT rc=$RC calls=$CALLS $ERR"
 seq_reset; fx 1 OPEN CLEAN "$C_PASS"
 run_wait --until-merged
 [ "$OUT" = READY ] && [ "$RC" = 0 ] && [ "$CALLS" = 1 ] \
-  || fail "--until-merged with nothing armed should hand READY back" "out=$OUT rc=$RC calls=$CALLS"
+  || st_fail "--until-merged with nothing armed should hand READY back" "out=$OUT rc=$RC calls=$CALLS"
 st_pass "--until-merged: an armed READY waits to MERGED; unarmed READY returns (you merge)"
 
 # macOS shards are not the merge gate (issue #2286): they run on master after the
@@ -360,17 +359,17 @@ C_MF='{"name":"macOS shard 2","status":"COMPLETED","conclusion":"FAILURE"}'
 C_LIN='{"name":"shard 1","status":"COMPLETED","conclusion":"SUCCESS"}'
 seq_reset; fx 1 OPEN CLEAN "$C_LIN,$C_MQ,$C_MF"
 run_wait
-[ "$OUT" = READY ] && [ "$RC" = 0 ] || fail "a queued/red macOS shard beside green Linux must read READY" "out=$OUT rc=$RC $ERR"
+[ "$OUT" = READY ] && [ "$RC" = 0 ] || st_fail "a queued/red macOS shard beside green Linux must read READY" "out=$OUT rc=$RC $ERR"
 seq_reset; fx 1 OPEN CLEAN "$C_LIN,$C_MQ"
 run_wait --wait
 [ "$OUT" = READY ] && [ "$CALLS" = 1 ] && [ "$SLEPT" = 0 ] \
-  || fail "--wait must not block on a queued macOS shard" "out=$OUT calls=$CALLS slept=$SLEPT $ERR"
+  || st_fail "--wait must not block on a queued macOS shard" "out=$OUT calls=$CALLS slept=$SLEPT $ERR"
 seq_reset; fx 1 OPEN CLEAN "$C_MQ"
 run_wait --wait --no-checks-timeout 60
-[ "$OUT" = TIMEOUT ] || fail "a rollup holding ONLY macOS shards is 'no checks yet' to a waiter" "out=$OUT $ERR"
+[ "$OUT" = TIMEOUT ] || st_fail "a rollup holding ONLY macOS shards is 'no checks yet' to a waiter" "out=$OUT $ERR"
 seq_reset; fx 1 OPEN CLEAN '{"name":"ubuntu shard 1","status":"COMPLETED","conclusion":"FAILURE"}'
 run_wait
-[ "$OUT" = FAILING ] || fail "only a check NAMED macOS shard * is dropped" "out=$OUT"
+[ "$OUT" = FAILING ] || st_fail "only a check NAMED macOS shard * is dropped" "out=$OUT"
 st_pass "macOS shards never hold the merge gate (#2286): queued/red ones are dropped, Linux decides"
 
 # `CI 结论` (issue #4815): present, it decides — a check still running elsewhere
@@ -382,28 +381,28 @@ CI_RUN='{"name":"CI 结论","status":"QUEUED","conclusion":null}'
 C_SKIP='{"name":"tokenledger / test (rest)","status":"COMPLETED","conclusion":"SKIPPED"}'
 seq_reset; fx 1 OPEN CLEAN "$CI_PASS,$C_SKIP,$C_RUN"
 run_wait
-[ "$OUT" = READY ] || fail "a green CI 结论 decides over a check still running" "out=$OUT $ERR"
+[ "$OUT" = READY ] || st_fail "a green CI 结论 decides over a check still running" "out=$OUT $ERR"
 seq_reset; fx 1 OPEN CLEAN "$CI_FAIL,$C_PASS,$C_SKIP"
 run_wait
-[ "$OUT" = FAILING ] || fail "a red CI 结论 is FAILING whatever the rest says" "out=$OUT"
+[ "$OUT" = FAILING ] || st_fail "a red CI 结论 is FAILING whatever the rest says" "out=$OUT"
 seq_reset; fx 1 OPEN CLEAN "$CI_PASS,$C_FAIL"
 run_wait
-[ "$OUT" = FAILING ] || fail "another red check still fails beside a green CI 结论 (fail fast)" "out=$OUT"
+[ "$OUT" = FAILING ] || st_fail "another red check still fails beside a green CI 结论 (fail fast)" "out=$OUT"
 seq_reset; fx 1 OPEN BLOCKED "$CI_RUN,$C_PASS"; fx 2 OPEN CLEAN "$CI_PASS,$C_PASS"
 run_wait --wait
-[ "$OUT" = READY ] && [ "$CALLS" = 2 ] || fail "--wait holds a queued CI 结论, then READY" "out=$OUT calls=$CALLS"
+[ "$OUT" = READY ] && [ "$CALLS" = 2 ] || st_fail "--wait holds a queued CI 结论, then READY" "out=$OUT calls=$CALLS"
 seq_reset; fx 1 OPEN CLEAN "$C_SKIP,$C_PASS"
 run_wait
-[ "$OUT" = READY ] || fail "no CI 结论: skipped and green checks read READY as before" "out=$OUT"
+[ "$OUT" = READY ] || st_fail "no CI 结论: skipped and green checks read READY as before" "out=$OUT"
 seq_reset; fx 1 OPEN BLOCKED "$C_PASS"
 run_wait
-case "$OUT/$ERR" in BLOCKED/*"no 'CI 结论'"*update-branch*) : ;; *) fail "BLOCKED with no CI 结论 hints update-branch" "out=$OUT $ERR" ;; esac
+case "$OUT/$ERR" in BLOCKED/*"no 'CI 结论'"*update-branch*) : ;; *) st_fail "BLOCKED with no CI 结论 hints update-branch" "out=$OUT $ERR" ;; esac
 st_pass "CI 结论 decides when present (green over a running check, red over green, queued waits); absent ⇒ every check"
 
 # Duration flags are validated like everything else: exit 2.
 seq_reset; fx 1 OPEN CLEAN "$C_PASS"
 run_wait --wait --timeout soon
-[ "$RC" = 2 ] || fail "a non-numeric --timeout must exit 2 (got $RC)"
+[ "$RC" = 2 ] || st_fail "a non-numeric --timeout must exit 2 (got $RC)"
 st_pass "a malformed duration is an error (exit 2)"
 
 printf '\nfleet-pr-verdict-selftest: %d checks passed\n' "$pass"

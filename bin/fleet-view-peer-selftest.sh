@@ -30,14 +30,13 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 REAL_TMUX=$(command -v tmux) || { echo "fleet-view-peer selftest: tmux absent — SKIP"; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo "fleet-view-peer selftest: python3 absent — SKIP"; exit 0; }
+st_need python3
 # a short root: a control socket's path must fit AF_UNIX's 104 bytes (macOS $TMPDIR does not)
 PR_WORK="$(mktemp -d /tmp/fvp.XXXXXX)" || exit 2
 unset TMUX TMUX_PANE FLEET_C FLEET_STATUS_G
 # shellcheck source=fleet-view-peer-rig.sh
 . "$BIN/fleet-view-peer-rig.sh"
-FAIL=0; CHECKS=0
-fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$*" >&2; }
+st_tally
 cleanup() { pr_down; [ -n "${FLEET_VIEW_PEER_KEEP:-}" ] && { echo "kept: $PR_WORK" >&2; return; }; rm -rf "$PR_WORK"; }
 trap cleanup EXIT INT TERM
 LOG="$PR_WORK/m/home/conf/logs/view-switch.ndjson"
@@ -48,48 +47,48 @@ pr_up || { echo "fleet-view-peer selftest: the rig did not come up — SKIP" >&2
 pr_attach
 
 # --- A. warm --------------------------------------------------------------------------
-pr_wait 10 eval '[ -n "$(pr_peer far1)" ] && [ -n "$(pr_peer far2)" ]' && st_count || fail "A: no peer windows after the attach: $(pr_t home list-windows -a -F '#{session_name} #{window_name} #{@peer}')"
+pr_wait 10 eval '[ -n "$(pr_peer far1)" ] && [ -n "$(pr_peer far2)" ]' && st_count || st_miss "A: no peer windows after the attach: $(pr_t home list-windows -a -F '#{session_name} #{window_name} #{@peer}')"
 P1=$(pr_peer far1); P2=$(pr_peer far2)
-[ "$(pr_t home display-message -p -t "$P1" '#{@fleet_role}')" = panel ] && st_count || fail "A: a peer window is not a panel"
+[ "$(pr_t home display-message -p -t "$P1" '#{@fleet_role}')" = panel ] && st_count || st_miss "A: a peer window is not a panel"
 # nowhere named: the far 看台 shows that session's own current window (no session
 # is anyone's home, issue #4341)
 pr_wait 15 sh -c "'$REAL_TMUX' -L '$PR_HS' capture-pane -p -t '$P1' | grep -q SCREEN-far1-home" && st_count \
-  || fail "A: far1's window never drew far1: $(pr_t home capture-pane -p -t "$P1" | tr -s '\n' | head -3)"
+  || st_miss "A: far1's window never drew far1: $(pr_t home capture-pane -p -t "$P1" | tr -s '\n' | head -3)"
 pr_wait 10 sh -c "'$REAL_TMUX' -L '$PR_HS' capture-pane -p -t '$P2' | grep -q SCREEN-far2-home" && st_count \
-  || fail "A: far2's window never drew far2: $(pr_t home capture-pane -p -t "$P2" | tr -s '\n' | head -3)"
+  || st_miss "A: far2's window never drew far2: $(pr_t home capture-pane -p -t "$P2" | tr -s '\n' | head -3)"
 FV="$PR_FS1@view-v1-via-home"
-pr_t far1 has-session -t "=$FV" 2>/dev/null && st_count || fail "A: no far 看台 $FV on far1: $(pr_t far1 list-sessions)"
-[ "$(pr_t far1 show-options -v -t "=$FV:" status 2>/dev/null)" = off ] && st_count || fail "A: the far 看台 draws a status line"
-[ "$(pr_t far1 show-options -v -t "=$FV:" key-table 2>/dev/null)" != fleet-view ] && st_count || fail "A: the far 看台 holds the key table"
-pr_t far1 list-windows -a -F '#{@peer}' | grep -q . && fail "A: the far machine made peer windows of its own" || st_count
+pr_t far1 has-session -t "=$FV" 2>/dev/null && st_count || st_miss "A: no far 看台 $FV on far1: $(pr_t far1 list-sessions)"
+[ "$(pr_t far1 show-options -v -t "=$FV:" status 2>/dev/null)" = off ] && st_count || st_miss "A: the far 看台 draws a status line"
+[ "$(pr_t far1 show-options -v -t "=$FV:" key-table 2>/dev/null)" != fleet-view ] && st_count || st_miss "A: the far 看台 holds the key table"
+pr_t far1 list-windows -a -F '#{@peer}' | grep -q . && st_miss "A: the far machine made peer windows of its own" || st_count
 n=$(pr_in far1 python3 -c 'import importlib.util, sys
 s = importlib.util.spec_from_file_location("p", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
 print(len(m.live_thin_views()))' "$BIN/fleet-peerlink.py")
-[ "$n" = 0 ] && st_count || fail "A: far1's keeper would count the far 看台 as a client of its own ($n)"
-[ "$(pr_cur)" != "$P1" ] && st_count || fail "A: the attach landed on a peer window"
+[ "$n" = 0 ] && st_count || st_miss "A: far1's keeper would count the far 看台 as a client of its own ($n)"
+[ "$(pr_cur)" != "$P1" ] && st_count || st_miss "A: the attach landed on a peer window"
 
 # --- B. go ------------------------------------------------------------------------------
-pr_wait 10 pr_up_link far1 || fail "B: far1's link never came up"
+pr_wait 10 pr_up_link far1 || st_miss "B: far1's link never came up"
 pr_go "$PR_U_far1/fid-a"; rc=$?
-[ "$rc" = 0 ] && st_count || fail "B: go to far1/a answered $rc: $(last)"
-[ "$(pr_cur)" = "$P1" ] && st_count || fail "B: the 看台 is not on far1's window ($(pr_cur))"
-last | grep -q '"method":"peer-select"' && last | grep -q '"peer_ms"' && st_count || fail "B: not logged peer-select: $(last)"
-pr_wait 5 shows SCREEN-far1-a && st_count || fail "B: the screen does not show far1/a: $(pr_screen | tr -s '\n' | head -3)"
+[ "$rc" = 0 ] && st_count || st_miss "B: go to far1/a answered $rc: $(last)"
+[ "$(pr_cur)" = "$P1" ] && st_count || st_miss "B: the 看台 is not on far1's window ($(pr_cur))"
+last | grep -q '"method":"peer-select"' && last | grep -q '"peer_ms"' && st_count || st_miss "B: not logged peer-select: $(last)"
+pr_wait 5 shows SCREEN-far1-a && st_count || st_miss "B: the screen does not show far1/a: $(pr_screen | tr -s '\n' | head -3)"
 printf 'B: the person'"'"'s screen after the switch to far1/a:\n%s\n' "$(pr_screen | sed '/^ *$/d' | head -3 | sed 's/^/   | /')"
-[ "$(pr_t home display-message -p -t "$P1" '#{@peer_cur}')" = "wid:$PR_U_far1/fid-a" ] && st_count || fail "B: @peer_cur did not follow"
+[ "$(pr_t home display-message -p -t "$P1" '#{@peer_cur}')" = "wid:$PR_U_far1/fid-a" ] && st_count || st_miss "B: @peer_cur did not follow"
 pr_wait 5 grep -q "cur=$PR_U_far1/fid-a" "$PR_WORK/m/far1/conf/remote-views/v1-via-home" && st_count \
-  || fail "B: the far row's cur=: $(cat "$PR_WORK/m/far1/conf/remote-views/v1-via-home")"
+  || st_miss "B: the far row's cur=: $(cat "$PR_WORK/m/far1/conf/remote-views/v1-via-home")"
 pr_go "$PR_W_home_l1"; pr_go "$PR_U_far1/fid-a"; rc=$?
-[ "$rc" = 0 ] && last | grep -q '"method":"peer-window"' && st_count || fail "B: back to the session far1 already shows is not select-window alone: $(last)"
-pr_go "$PR_U_far1/fid-b" && pr_wait 5 shows SCREEN-far1-b && st_count || fail "B: far1/b: $(last) / $(pr_screen | tr -s '\n' | head -2)"
+[ "$rc" = 0 ] && last | grep -q '"method":"peer-window"' && st_count || st_miss "B: back to the session far1 already shows is not select-window alone: $(last)"
+pr_go "$PR_U_far1/fid-b" && pr_wait 5 shows SCREEN-far1-b && st_count || st_miss "B: far1/b: $(last) / $(pr_screen | tr -s '\n' | head -2)"
 # a far row the hub names by its KEY (`<fleet UUID>/<key>`, the readable alias
 # fleet_worker_id_key — what remote_<sess> carries), not its @fleet_id: the far
 # end resolves it as rv_select does (issue #3007: the fast path answered 3, gone)
 pr_go "$PR_U_far1/scratch-7" && pr_wait 5 shows SCREEN-far1-orch && st_count \
-  || fail "B: far1 by key (scratch-7): $(last) / $(pr_screen | tr -s '\n' | head -2)"
+  || st_miss "B: far1 by key (scratch-7): $(last) / $(pr_screen | tr -s '\n' | head -2)"
 pr_wait 10 pr_up_link far2
-pr_go "$PR_U_far2/fid-c" && [ "$(pr_cur)" = "$P2" ] && pr_wait 5 shows SCREEN-far2-c && st_count || fail "B: far2/c: $(last)"
-pr_go "$PR_W_home_l2" && pr_wait 5 shows SCREEN-home-l2 && st_count || fail "B: back home: $(last)"
+pr_go "$PR_U_far2/fid-c" && [ "$(pr_cur)" = "$P2" ] && pr_wait 5 shows SCREEN-far2-c && st_count || st_miss "B: far2/c: $(last)"
+pr_go "$PR_W_home_l2" && pr_wait 5 shows SCREEN-home-l2 && st_count || st_miss "B: back home: $(last)"
 
 # --- C. as near as here ---------------------------------------------------------------------
 : > "$LOG"
@@ -111,18 +110,17 @@ PY
 )
 printf 'C: median switch here %s ms · across %s ms (the channel %s ms) · difference %s ms\n' \
   "$MED_HERE" "$MED_FAR" "$MED_PEER" "$(python3 -c 'import sys; print(round(float(sys.argv[2]) - float(sys.argv[1]), 1))' "$MED_HERE" "$MED_FAR")"
-[ "$MED_HERE" != -1 ] && [ "$MED_FAR" != -1 ] && st_count || fail "C: not 10 + 10 switches: $(cat "$LOG")"
+[ "$MED_HERE" != -1 ] && [ "$MED_FAR" != -1 ] && st_count || st_miss "C: not 10 + 10 switches: $(cat "$LOG")"
 python3 -c 'import sys; sys.exit(0 if float(sys.argv[2]) - float(sys.argv[1]) <= float(sys.argv[3]) else 1)' \
   "$MED_HERE" "$MED_FAR" "${FLEET_VIEW_PEER_SLACK_MS:-150}" && st_count \
-  || fail "C: across is ${MED_FAR} ms against ${MED_HERE} ms here — more than ${FLEET_VIEW_PEER_SLACK_MS:-150} ms apart"
+  || st_miss "C: across is ${MED_FAR} ms against ${MED_HERE} ms here — more than ${FLEET_VIEW_PEER_SLACK_MS:-150} ms apart"
 "$REAL_TMUX" -L "$PR_TL" pipe-pane -t "=$PR_TL:view" "cat > '$PR_WORK/client.bytes'"
 sleep 0.3; pr_go "$PR_U_far1/fid-a"; pr_wait 5 shows SCREEN-far1-a; sleep 0.5
 "$REAL_TMUX" -L "$PR_TL" pipe-pane -t "=$PR_TL:view"
-python3 - "$PR_WORK/client.bytes" <<'PY' && st_count || fail "C: a switch across cleared the client's whole screen"
+python3 - "$PR_WORK/client.bytes" <<'PY' && st_count || st_miss "C: a switch across cleared the client's whole screen"
 import sys
 b = open(sys.argv[1], "rb").read()
 sys.exit(1 if (b"\x1b[2J" in b or b"\x1b[H\x1b[J" in b or b"\x1bc" in b) else 0)
 PY
 
-[ "$FAIL" = 0 ] || { printf 'fleet-view-peer selftest: %d failure(s) of %d checks\n' "$FAIL" "$((FAIL + CHECKS))" >&2; exit 1; }
-printf 'selftest OK: fleet-view-peer (%d checks — warm · go · near)\n' "$CHECKS"
+st_done

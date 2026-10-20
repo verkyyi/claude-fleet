@@ -29,16 +29,16 @@
 # Hermetic: a sandbox homes root, FLEET_INSTALLS_SUDO empty. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 IS="$BIN/fleet-installs.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/installs-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
-N=0 BAD=0
-ok() { N=$((N + 1)); }
-bad() { N=$((N + 1)); BAD=$((BAD + 1)); printf 'FAIL: %s\n' "$1" >&2; }
-has() { case "$2" in *"$3"*) ok ;; *) bad "$1 — wanted «$3» in:
+st_tally
+bad() { st_count; st_miss "$1"; }
+has() { case "$2" in *"$3"*) st_count ;; *) bad "$1 — wanted «$3» in:
 $2" ;; esac; }
-eq() { [ "$2" = "$3" ] && ok || bad "$1 — wanted «$2», got «$3»"; }
+eq() { [ "$2" = "$3" ] && st_count || bad "$1 — wanted «$2», got «$3»"; }
 
 S1=1111111111111111111111111111111111111111
 S2=2222222222222222222222222222222222222222
@@ -74,7 +74,7 @@ has "A: plain checkout named" "$OUT" "plain checkout"
 has "A: alice's shell follows" "$OUT" "(follows its login install)"
 has "A: bob's shell pinned" "$OUT" "2222222  ≠ stable  来源 ?  (pinned to one version dir until the next install switch"
 has "A: client install read" "$OUT" "(client install)"
-case "$OUT" in *carol*) bad "A: a home with no install is not listed" ;; *) ok ;; esac
+case "$OUT" in *carol*) bad "A: a home with no install is not listed" ;; *) st_count ;; esac
 eq "B: one behind → exit 1" 1 "$RC"
 has "B: verdict line" "$OUT" "verdict: 3 of 6 install(s) at stable"
 
@@ -105,10 +105,10 @@ FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 2400)) run
 has "L: the runtime says how long" "$OUT" "machine runtime  1111111  ≠ stable · 落后 40m WARN  来源 hub"
 has "L: a login install too" "$OUT" "alice          1111111  ≠ stable · 落后 40m WARN"
 has "L: a closing WARN line" "$OUT" "WARN: 4 install(s) behind stable for over 10m — stable 2222222 first seen here"
-case "$OUT" in *"2222222  = stable · 落后"*) bad "L: an install at stable says 落后" ;; *) ok ;; esac
+case "$OUT" in *"2222222  = stable · 落后"*) bad "L: an install at stable says 落后" ;; *) st_count ;; esac
 FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 300)) run
 has "L: under 10m no WARN" "$OUT" "alice          1111111  ≠ stable · 落后 5m  来源"
-case "$OUT" in *WARN*) bad "L: a WARN under the threshold" ;; *) ok ;; esac
+case "$OUT" in *WARN*) bad "L: a WARN under the threshold" ;; *) st_count ;; esac
 FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 2400)) run --json
 J=$(printf '%s' "$OUT" | python3 -c 'import json,sys
 d=json.load(sys.stdin); L={l["login"]: l for l in d["logins"]}
@@ -117,7 +117,7 @@ eq "L: json lag" "$T0 4 2400 True" "$J"
 printf 'stable: %s\nstable_since: %s\n' "$S1" "$T0" > "$H/alice/.config/claude-fleet/global/install-sync.state"
 rm -f "$WORK/state/update.json"
 FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 2400)) run
-case "$OUT" in *落后*) bad "L: another stable's record counted" ;; *) ok ;; esac
+case "$OUT" in *落后*) bad "L: another stable's record counted" ;; *) st_count ;; esac
 rm -rf "$H/alice/.config"
 
 # --- G. 来源 -----------------------------------------------------------------------
@@ -225,12 +225,12 @@ has "H: a client on GitHub → WARN with the install line" "$OUT" "修：curl -f
 printf 'version=%s\nhub=https://hub.example\n' "$S1" > "$DH/client/.client-version"
 ds FLEET_HUB_URL=https://hub.example
 has "H: a client with the hub → PASS" "$OUT" "PASS	"
-grep -q 'fleet-dist-source.sh' "$BIN/fleet-doctor.sh" && grep -q 'pass dist\|warn dist' "$BIN/fleet-doctor.sh" && ok || bad "H: the doctor does not print fleet-dist-source.sh as its dist row"
+grep -q 'fleet-dist-source.sh' "$BIN/fleet-doctor.sh" && grep -q 'pass dist\|warn dist' "$BIN/fleet-doctor.sh" && st_count || bad "H: the doctor does not print fleet-dist-source.sh as its dist row"
 
 # --- M. one release line (issue #4671) ---------------------------------------------
 # --channel is gone with the Mac lane
 FLEET_INSTALLS_STABLE=$S1 run --channel
-[ "$RC" = 2 ] && ok || bad "M: --channel still accepted (rc $RC)"
+[ "$RC" = 2 ] && st_count || bad "M: --channel still accepted (rc $RC)"
 # an older hub naming stable S2 and a Mac lane S1 — and an older install-sync's
 # channel: line — are not read: everything is judged against stable
 mkdir -p "$WORK/hubd"
@@ -252,7 +252,7 @@ printf '{"stable":"%s","client_version_macos":"%s","stable_macos_behind":1,"stab
 mkdir -p "$WORK/conf/global"; printf 'channel: stable-macos\n' > "$WORK/conf/global/install-sync.state"
 FLEET_INSTALLS_STABLE=$S1 FLEET_INSTALLS_NOW=$NOWM run
 has "M: the header names stable" "$OUT" "(stable 1111111)"
-case "$OUT" in *channel:*|*stable-macos*) bad "M: a Mac lane still printed";; *) ok ;; esac
+case "$OUT" in *channel:*|*stable-macos*) bad "M: a Mac lane still printed";; *) st_count ;; esac
 # a managed machine with no local tag: judged against the hub's stable, a Mac too
 rm -f "$WORK/conf/global/install-sync.state"; ln -sfn "$WORK/root/$S1" "$WORK/root/current"
 FLEET_LIVE_DIR="$WORK/nolive" FLEET_PLATFORM=darwin FLEET_INSTALLS_STABLE='' run --json
@@ -275,11 +275,11 @@ printf '{"machines":[{"hostname":"%s","installs":{"runtime":{"version":"%s"}},"s
 FLEET_INSTALLS_SUMMARY_CMD="cat $WORK/summary.json" FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 900)) run
 has "N: the hub hands out stable" "$OUT" "2222222  = stable  来源 release  (image 3333333)"
 has "N: a connected 看台 behind, with how long" "$OUT" "online client    alice          1111111  ≠ stable · 落后 15m WARN  来源 hub  (看台 mbp-aaaaaa)"
-case "$OUT" in *mbp-closed*|*mbp-gone*) bad "N: a closed / gone 看台 listed: $OUT" ;; *) ok ;; esac
+case "$OUT" in *mbp-closed*|*mbp-gone*) bad "N: a closed / gone 看台 listed: $OUT" ;; *) st_count ;; esac
 has "N: a managed machine at stable" "$OUT" "fleet machines   mac-a          2222222  = stable  来源 hub  (managed · online)"
 has "N: a pod behind" "$OUT" "u-p1q2         1111111  ≠ stable · 落后 15m WARN  来源 hub  (pod · online)"
 has "N: an offline machine listed, not judged" "$OUT" "mac-z          1111111  not judged (lost)"
-case "$OUT" in *"fleet machines"*"$(python3 -c 'import socket; print(socket.gethostname().split(".")[0])')  "*) bad "N: this machine listed twice" ;; *) ok ;; esac
+case "$OUT" in *"fleet machines"*"$(python3 -c 'import socket; print(socket.gethostname().split(".")[0])')  "*) bad "N: this machine listed twice" ;; *) st_count ;; esac
 FLEET_INSTALLS_SUMMARY_CMD="cat $WORK/summary.json" FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 900)) run --json
 J=$(printf '%s' "$OUT" | python3 -c 'import json,sys
 d=json.load(sys.stdin); L={l["login"]: l for l in d["logins"]}
@@ -293,5 +293,4 @@ eq "N: one login: no hub row, no machines" "None []" "$J"
 kill "$VPID" 2>/dev/null; wait "$VPID" 2>/dev/null; rm -rf "$H/alice/.config/claude-fleet/remote-views"
 kill "$HPID" 2>/dev/null; XHUB=''; rm -f "$WORK/root/current"
 
-if [ "$BAD" -gt 0 ]; then printf 'selftest FAIL: %d of %d\n' "$BAD" "$N" >&2; exit 1; fi
-printf 'selftest OK: fleet-installs (%d assertions — runtime, link/plain installs, follow/pinned shells, client, verdicts, json, doctor --installs, 来源, one release line)\n' "$N"
+st_done

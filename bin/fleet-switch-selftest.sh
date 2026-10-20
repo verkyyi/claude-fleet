@@ -13,9 +13,10 @@
 # Drives: bin/fleet-quickopen.py, bin/fleet-iterm-profile.py.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 
 # --- A ---------------------------------------------------------------------------
-python3 - "$BIN" <<'PY' || exit 1
+python3 - "$BIN" <<'PY' || st_fail "leg A (its FAIL line above)"
 import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location("q", os.path.join(sys.argv[1], "fleet-quickopen.py"))
 q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
@@ -59,7 +60,7 @@ print("A: the history, the rows: %d checks" % n[0])
 PY
 
 # --- C ---------------------------------------------------------------------------
-python3 - "$BIN" <<'PY' || exit 1
+python3 - "$BIN" <<'PY' || st_fail "leg C (its FAIL line above)"
 import os, subprocess, sys, tempfile
 from pathlib import Path
 bin_dir = Path(sys.argv[1])

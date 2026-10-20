@@ -60,8 +60,7 @@ LIB="$BIN/fleet-lib.sh"
 DL="$BIN/fleet-deps-link.sh"
 GUARD="$BIN/../hooks/bash-guard.py"
 [ -f "$LIB" ] && [ -x "$DL" ] && [ -f "$GUARD" ] || { printf 'selftest: missing pieces\n' >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not on PATH — SKIP\n' >&2; exit 0; }
-command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not on PATH — SKIP\n' >&2; exit 0; }
+st_need git python3
 
 st_sandbox "${TMPDIR:-/tmp}/fleet-deps-link.XXXXXX" physical
 trap 'exit 130' INT TERM HUP

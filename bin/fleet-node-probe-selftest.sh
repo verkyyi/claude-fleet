@@ -49,11 +49,10 @@
 #                  its selftest seam prints ready / sleep / wake
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 SB="$(mktemp -d "${TMPDIR:-/tmp}/fleet-probe-st.XXXXXX")"
 trap 'rm -rf "$SB"' EXIT
-fail=0
-ok()  { echo "ok   $*"; }
-bad() { echo "FAIL $*"; fail=1; }
+st_tally
 
 cat >"$SB/curl" <<'EOF'
 #!/bin/sh
@@ -131,14 +130,14 @@ node_env a 'CCQUOTA_FLEET_COMPUTE=0'
 probe_in a
 if [ "$(rc)" = 0 ] && J a | grep -q '"loc":"US","anthropic":"reachable","openai":"reachable","laptop":false,' \
    && J a | grep -q '"verdict":"ok"' && J a | grep -Eq '"ts":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z"'; then
-  ok "A US + both APIs answer → verdict ok, exit 0, every field"
-else bad "A rc=$(rc) json=$(J a) out=$(out)"; fi
+  st_ok_all "A US + both APIs answer → verdict ok, exit 0, every field"
+else st_miss "A rc=$(rc) json=$(J a) out=$(out)"; fi
 [ "$(grep -c . "$SB/out")" = 2 ] && grep -q '^本机判断：合适 — 出口 US' "$SB/out" && grep -qx '可以打开：fleet host on' "$SB/out" \
-  && ok "A a coordinate-only node gets exactly the one hint" || bad "A hint: $(out)"
+  && st_ok_all "A a coordinate-only node gets exactly the one hint" || st_miss "A hint: $(out)"
 node_env a2 'CCQUOTA_FLEET_COMPUTE=1'; probe_in a2
-grep -q '可以打开' "$SB/out" && bad "A a node already on was told to open: $(out)" || ok "A no hint for a node already on"
+grep -q '可以打开' "$SB/out" && st_miss "A a node already on was told to open: $(out)" || st_ok_all "A no hint for a node already on"
 probe_in a3
-[ "$(rc)" = 0 ] && ! grep -q '可以打开' "$SB/out" && ok "A no hint on a machine that is no node" || bad "A no-node: $(out)"
+[ "$(rc)" = 0 ] && ! grep -q '可以打开' "$SB/out" && st_ok_all "A no hint on a machine that is no node" || st_miss "A no-node: $(out)"
 
 # ── B. 境内 ──────────────────────────────────────────────────────────────
 node_env b 'CCQUOTA_FLEET_COMPUTE=0'
@@ -146,36 +145,36 @@ export FAKE_LOC1=CN FAKE_LOC2=CN FAKE_ANTH=403 FAKE_OAI=000
 probe_in b
 [ "$(rc)" = 1 ] && J b | grep -q '"loc":"CN"' && J b | grep -q '"verdict":"unsupported_region"' \
   && grep -q '^本机判断：不合适 — 出口 CN' "$SB/out" && ! grep -q '可以打开' "$SB/out" \
-  && ok "B egress CN → unsupported_region, exit 1, no hint" || bad "B rc=$(rc) json=$(J b) out=$(out)"
+  && st_ok_all "B egress CN → unsupported_region, exit 1, no hint" || st_miss "B rc=$(rc) json=$(J b) out=$(out)"
 fleet_in b node compute on
 if [ "$(rc)" = 1 ] && grep -q '^✗ 不打开' "$SB/out" && grep -q '出口 CN' "$SB/out" \
    && grep -qx 'CCQUOTA_FLEET_COMPUTE=0' "$SB/b/.config/claude-fleet/node.env"; then
-  ok "B fleet node compute on is refused with the reason; node.env still 0"
-else bad "B compute on rc=$(rc): $(out) / $(cat "$SB/b/.config/claude-fleet/node.env")"; fi
+  st_ok_all "B fleet node compute on is refused with the reason; node.env still 0"
+else st_miss "B compute on rc=$(rc): $(out) / $(cat "$SB/b/.config/claude-fleet/node.env")"; fi
 fleet_in b node compute on --force
 E="$SB/b/.config/claude-fleet/node.env"
 [ "$(rc)" = 0 ] && grep -qx 'CCQUOTA_FLEET_COMPUTE=1' "$E" && grep -qx 'CCQUOTA_FLEET_COMPUTE_FORCE=1' "$E" && grep -q '入口已记审计' "$SB/out" \
-  && ok "B --force opens it, CCQUOTA_FLEET_COMPUTE_FORCE=1 (the hub audits it)" || bad "B --force rc=$(rc): $(out) / $(cat "$E")"
+  && st_ok_all "B --force opens it, CCQUOTA_FLEET_COMPUTE_FORCE=1 (the hub audits it)" || st_miss "B --force rc=$(rc): $(out) / $(cat "$E")"
 unset FAKE_LOC1 FAKE_LOC2 FAKE_ANTH FAKE_OAI
 
 # ── C. one source ────────────────────────────────────────────────────────
 FAKE_LOC2=HK probe_in c
 [ "$(rc)" = 1 ] && J c | grep -q '"loc":"HK"' && J c | grep -q '"verdict":"unsupported_region"' \
-  && ok "C Cloudflare US, ipinfo HK → unsupported_region" || bad "C $(J c)"
+  && st_ok_all "C Cloudflare US, ipinfo HK → unsupported_region" || st_miss "C $(J c)"
 
 # ── D. 403 ───────────────────────────────────────────────────────────────
 FAKE_OAI=403 probe_in d
 [ "$(rc)" = 1 ] && J d | grep -q '"openai":"unsupported_region"' && J d | grep -q '"verdict":"unsupported_region"' \
-  && ok "D a provider's 403 from a US egress → unsupported_region" || bad "D $(J d)"
+  && st_ok_all "D a provider's 403 from a US egress → unsupported_region" || st_miss "D $(J d)"
 
 # ── E. unreachable ───────────────────────────────────────────────────────
 node_env e 'CCQUOTA_FLEET_COMPUTE=0'
 FAKE_OAI=000 probe_in e
 [ "$(rc)" = 1 ] && J e | grep -q '"openai":"unreachable"' && J e | grep -q '"verdict":"unreachable"' && grep -q '^本机判断：暂不合适' "$SB/out" \
-  && ok "E OpenAI silent → unreachable" || bad "E $(J e) $(out)"
+  && st_ok_all "E OpenAI silent → unreachable" || st_miss "E $(J e) $(out)"
 FAKE_OAI=000 fleet_in e node compute on
 [ "$(rc)" = 1 ] && grep -qx 'CCQUOTA_FLEET_COMPUTE=0' "$SB/e/.config/claude-fleet/node.env" \
-  && ok "E compute on refused while unreachable" || bad "E compute on rc=$(rc): $(out)"
+  && st_ok_all "E compute on refused while unreachable" || st_miss "E compute on rc=$(rc): $(out)"
 
 # ── F. compute ───────────────────────────────────────────────────────────
 node_env f 'CCQUOTA_FLEET_COMPUTE=0'
@@ -186,74 +185,74 @@ mode=$(python3 -c 'import os,sys;print(oct(os.stat(sys.argv[1]).st_mode & 0o777)
 if [ "$(rc)" = 0 ] && grep -qx 'CCQUOTA_FLEET_COMPUTE=1' "$E" && ! grep -q FORCE "$E" && grep -qx 'CCQUOTA_TOKEN=ccq_testpass' "$E" \
    && grep -qx 'CCQUOTA_HUB_URL=http://hub.test' "$E" && [ "$mode" = 600 ] && [ -e "$SB/f/.config/claude-fleet/global/hub-nudge" ] \
    && grep -q '^✓ 已打开' "$SB/out" && ! grep -q '可以打开' "$SB/out"; then
-  ok "F compute on (ok): COMPUTE=1, no FORCE, other lines kept, 0600, agent nudged"
-else bad "F on rc=$(rc) mode=$mode: $(out) / $(cat "$E")"; fi
+  st_ok_all "F compute on (ok): COMPUTE=1, no FORCE, other lines kept, 0600, agent nudged"
+else st_miss "F on rc=$(rc) mode=$mode: $(out) / $(cat "$E")"; fi
 fleet_in f node compute status
-[ "$(rc)" = 0 ] && grep -q '^已打开' "$SB/out" && ok "F status: on" || bad "F status: $(out)"
+[ "$(rc)" = 0 ] && grep -q '^已打开' "$SB/out" && st_ok_all "F status: on" || st_miss "F status: $(out)"
 fleet_in f node compute off
 [ "$(rc)" = 0 ] && grep -qx 'CCQUOTA_FLEET_COMPUTE=0' "$E" && [ "$(grep -c '^CCQUOTA_FLEET_COMPUTE=' "$E")" = 1 ] && grep -q '^✓ 已关闭：只协调' "$SB/out" \
-  && ok "F compute off: COMPUTE=0 (one line)" || bad "F off rc=$(rc): $(out) / $(cat "$E")"
+  && st_ok_all "F compute off: COMPUTE=0 (one line)" || st_miss "F off rc=$(rc): $(out) / $(cat "$E")"
 fleet_in f node compute status
-grep -q '^只协调' "$SB/out" && ok "F status: 只协调" || bad "F status off: $(out)"
+grep -q '^只协调' "$SB/out" && st_ok_all "F status: 只协调" || st_miss "F status off: $(out)"
 fleet_in f0 node compute on
 [ "$(rc)" = 1 ] && grep -q '还没登记到入口' "$SB/out" && [ ! -e "$SB/f0/.config/claude-fleet/node.env" ] \
-  && ok "F not a node: refused, nothing written" || bad "F no node rc=$(rc): $(out)"
+  && st_ok_all "F not a node: refused, nothing written" || st_miss "F no node rc=$(rc): $(out)"
 fleet_in f node compute sideways
-[ "$(rc)" = 2 ] && ok "F an unknown verb is usage (exit 2)" || bad "F usage rc=$(rc)"
+[ "$(rc)" = 2 ] && st_ok_all "F an unknown verb is usage (exit 2)" || st_miss "F usage rc=$(rc)"
 
 # ── G. laptop ────────────────────────────────────────────────────────────
 FAKE_BATTERY=1 FAKE_SLEEP=10 probe_in g
 [ "$(rc)" = 0 ] && J g | grep -q '"laptop":true,"sleep_min":10,' && grep -q '笔记本：合盖或睡眠时会话会停下（睡眠设置 10 分钟）' "$SB/out" \
-  && ok "G a Mac on battery: noted, still ok" || bad "G $(J g) $(out)"
+  && st_ok_all "G a Mac on battery: noted, still ok" || st_miss "G $(J g) $(out)"
 mkdir -p "$SB/linbat/BAT0"
 OS_=Linux BATDIR_="$SB/linbat" probe_in g2
-[ "$(rc)" = 0 ] && J g2 | grep -q '"laptop":true' && ok "G Linux BAT0: laptop" || bad "G linux $(J g2)"
+[ "$(rc)" = 0 ] && J g2 | grep -q '"laptop":true' && st_ok_all "G Linux BAT0: laptop" || st_miss "G linux $(J g2)"
 OS_=Linux probe_in g3
-J g3 | grep -q '"laptop":false' && ok "G Linux, no battery: not a laptop" || bad "G linux nobat $(J g3)"
+J g3 | grep -q '"laptop":false' && st_ok_all "G Linux, no battery: not a laptop" || st_miss "G linux nobat $(J g3)"
 
 # ── H. --max-age ─────────────────────────────────────────────────────────
 : >"$SB/curl.log"
 probe_in a --max-age 3600
 [ "$(rc)" = 0 ] && [ ! -s "$SB/curl.log" ] && grep -q '^本机判断：合适' "$SB/out" \
-  && ok "H a fresh probe is reused: no request" || bad "H requests: $(cat "$SB/curl.log") out=$(out)"
+  && st_ok_all "H a fresh probe is reused: no request" || st_miss "H requests: $(cat "$SB/curl.log") out=$(out)"
 probe_in a --max-age 0
-[ -s "$SB/curl.log" ] && ok "H --max-age 0 measures again" || bad "H --max-age 0 made no request"
+[ -s "$SB/curl.log" ] && st_ok_all "H --max-age 0 measures again" || st_miss "H --max-age 0 made no request"
 # issue #4207: the file says which script wrote it ("src", the script's sha256),
 # and a fresh verdict an older rule wrote is measured again, never reused
 want=$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$BIN/fleet-node-probe.sh")
 [ "$(J a | sed -n 's/.*"src":"\([0-9a-f]*\)".*/\1/p')" = "$want" ] \
-  && ok "H the JSON carries the script's sha256 as src" || bad "H src: $(J a)"
+  && st_ok_all "H the JSON carries the script's sha256 as src" || st_miss "H src: $(J a)"
 J a | sed 's/,"src":"[0-9a-f]*"//' > "$SB/a/.config/claude-fleet/node-probe.json"
 : >"$SB/curl.log"
 probe_in a --max-age 3600
 [ -s "$SB/curl.log" ] && J a | grep -q "\"src\":\"$want\"" \
-  && ok "H a fresh probe an older script wrote (no src) is measured again" || bad "H old-script probe reused: $(J a)"
+  && st_ok_all "H a fresh probe an older script wrote (no src) is measured again" || st_miss "H old-script probe reused: $(J a)"
 probe_in a --json
 [ "$(rc)" = 0 ] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d["verdict"]=="ok" else 1)' "$SB/out" \
-  && ok "H --json prints the JSON" || bad "H --json: $(out)"
+  && st_ok_all "H --json prints the JSON" || st_miss "H --json: $(out)"
 probe_in a --bogus
-[ "$(rc)" = 2 ] && ok "H an unknown option is usage (exit 2)" || bad "H usage rc=$(rc)"
+[ "$(rc)" = 2 ] && st_ok_all "H an unknown option is usage (exit 2)" || st_miss "H usage rc=$(rc)"
 
 # ── I. personal ──────────────────────────────────────────────────────────
 node_env i 'CCQUOTA_FLEET_COMPUTE=0'
 E="$SB/i/.config/claude-fleet/node.env"
 FAKE_BATTERY=1 fleet_in i node compute on
 [ "$(rc)" = 0 ] && grep -qx 'CCQUOTA_FLEET_PERSONAL=1' "$E" && grep -q '^个人电脑：' "$SB/out" \
-  && ok "I a laptop's compute on is personal" || bad "I laptop rc=$(rc): $(out) / $(cat "$E")"
+  && st_ok_all "I a laptop's compute on is personal" || st_miss "I laptop rc=$(rc): $(out) / $(cat "$E")"
 fleet_in i node compute status
-grep -q '^个人电脑：' "$SB/out" && ok "I status says 个人电脑" || bad "I status: $(out)"
+grep -q '^个人电脑：' "$SB/out" && st_ok_all "I status says 个人电脑" || st_miss "I status: $(out)"
 FAKE_BATTERY=1 fleet_in i node compute on --shared
 [ "$(rc)" = 0 ] && grep -qx 'CCQUOTA_FLEET_PERSONAL=0' "$E" && [ "$(grep -c '^CCQUOTA_FLEET_PERSONAL=' "$E")" = 1 ] && ! grep -q '个人电脑' "$SB/out" \
-  && ok "I --shared: PERSONAL=0 (one line)" || bad "I shared rc=$(rc): $(out) / $(cat "$E")"
+  && st_ok_all "I --shared: PERSONAL=0 (one line)" || st_miss "I shared rc=$(rc): $(out) / $(cat "$E")"
 FAKE_BATTERY=1 fleet_in i node compute on
-grep -qx 'CCQUOTA_FLEET_PERSONAL=0' "$E" && ok "I a later plain on keeps the laptop shared" || bad "I keep: $(cat "$E")"
+grep -qx 'CCQUOTA_FLEET_PERSONAL=0' "$E" && st_ok_all "I a later plain on keeps the laptop shared" || st_miss "I keep: $(cat "$E")"
 node_env i2 'CCQUOTA_FLEET_COMPUTE=0'
 fleet_in i2 node compute on
 [ "$(rc)" = 0 ] && ! grep -q PERSONAL "$SB/i2/.config/claude-fleet/node.env" && ! grep -q '个人电脑' "$SB/out" \
-  && ok "I a desktop with no flag: no personal line" || bad "I desktop: $(out) / $(cat "$SB/i2/.config/claude-fleet/node.env")"
+  && st_ok_all "I a desktop with no flag: no personal line" || st_miss "I desktop: $(out) / $(cat "$SB/i2/.config/claude-fleet/node.env")"
 fleet_in i2 node compute on --personal
 grep -qx 'CCQUOTA_FLEET_PERSONAL=1' "$SB/i2/.config/claude-fleet/node.env" && grep -q '^个人电脑：' "$SB/out" \
-  && ok "I --personal on a desktop" || bad "I --personal: $(out)"
+  && st_ok_all "I --personal on a desktop" || st_miss "I --personal: $(out)"
 
 # ── K. relay ─────────────────────────────────────────────────────────────
 RP='{"relay": true, "anthropic": "reachable", "anthropic_code": "401", "openai": "reachable", "openai_code": "401", "peer": "203.0.113.9"}'
@@ -263,26 +262,26 @@ if [ "$(rc)" = 0 ] && J k | grep -q '"loc":"SG","anthropic":"unsupported_region"
    && J k | grep -q '"verdict":"ok"' && J k | grep -q 'route relay — local: egress CN' \
    && grep -q '^本机判断：合适 — 本机出口 CN，会话经新加坡转发（转发出口 SG）' "$SB/out" \
    && grep -q 'ipinfo.io/203.0.113.9/country' "$SB/curl.log"; then
-  ok "K relay login, egress CN → judged by the relay (SG): ok, route relay, loc_local CN"
-else bad "K relay ok: rc=$(rc) json=$(J k) out=$(out)"; fi
+  st_ok_all "K relay login, egress CN → judged by the relay (SG): ok, route relay, loc_local CN"
+else st_miss "K relay ok: rc=$(rc) json=$(J k) out=$(out)"; fi
 FAKE_RLOC=HK FAKE_LOC1=CN FAKE_LOC2=CN FAKE_ANTH=403 FAKE_OAI=403 FLEET_PROBE_RELAY_CMD="printf '%s' '$RP'" probe_in k2
 [ "$(rc)" = 1 ] && J k2 | grep -q '"loc":"HK",' && J k2 | grep -q '"route":"relay"' && J k2 | grep -q '"verdict":"unsupported_region"' \
   && grep -q '转发出口 HK 不在 Claude / OpenAI 支持范围' "$SB/out" \
-  && ok "K the relay's own egress unsupported (HK) → closed all the same" || bad "K relay HK: rc=$(rc) json=$(J k2) out=$(out)"
+  && st_ok_all "K the relay's own egress unsupported (HK) → closed all the same" || st_miss "K relay HK: rc=$(rc) json=$(J k2) out=$(out)"
 RPU='{"relay": true, "anthropic": "unreachable", "anthropic_code": "403", "openai": "reachable", "openai_code": "401", "peer": "203.0.113.9"}'
 FAKE_LOC1=CN FAKE_LOC2=CN FAKE_ANTH=403 FAKE_OAI=403 FLEET_PROBE_RELAY_CMD="printf '%s' '$RPU'" probe_in k3
 [ "$(rc)" = 1 ] && J k3 | grep -q '"route":"relay"' && J k3 | grep -q '"verdict":"unreachable"' \
-  && ok "K the relay refuses the pass → unreachable (weather), never closed" || bad "K relay refused: rc=$(rc) json=$(J k3)"
+  && st_ok_all "K the relay refuses the pass → unreachable (weather), never closed" || st_miss "K relay refused: rc=$(rc) json=$(J k3)"
 for rp in '{"relay": false, "why": "no relay configured"}' ''; do
   FAKE_LOC1=CN FAKE_LOC2=CN FLEET_PROBE_RELAY_CMD="printf '%s' '$rp'; exit 3" probe_in k4
   [ "$(rc)" = 1 ] && J k4 | grep -q '"loc":"CN",' && J k4 | grep -q '"route":"direct","ts"' && ! J k4 | grep -q loc_local \
     && J k4 | grep -q '"verdict":"unsupported_region"' && grep -q '^本机判断：不合适 — 出口 CN' "$SB/out" \
-    && ok "K no relay (${rp:-no proxy}) → route direct, closed as before" || bad "K no relay: rc=$(rc) json=$(J k4) out=$(out)"
+    && st_ok_all "K no relay (${rp:-no proxy}) → route direct, closed as before" || st_miss "K no relay: rc=$(rc) json=$(J k4) out=$(out)"
 done
 : >"$SB/curl.log"
 FLEET_PROBE_RELAY_CMD="echo called >>'$SB/relay.called'" probe_in k5
 [ "$(rc)" = 0 ] && [ ! -e "$SB/relay.called" ] && J k5 | grep -q '"route":"direct"' \
-  && ok "K an ok egress never asks the relay" || bad "K ok egress asked the relay: $(J k5)"
+  && st_ok_all "K an ok egress never asks the relay" || st_miss "K ok egress asked the relay: $(J k5)"
 
 # ── L. central ───────────────────────────────────────────────────────────
 NORELAY="printf '%s' '{\"relay\": false}'"
@@ -296,35 +295,34 @@ if [ "$(rc)" = 0 ] && J l | grep -q '"loc":"","anthropic":"reachable",' \
    && grep -q '^本机判断：合适 — 本机出口 CN，会话经集群凭证代理' "$SB/out" \
    && grep -q '^https://central.test/v1/proxy/anthropic/v1/messages$' "$SB/curl.log" \
    && grep -q '^https://central.test/v1/proxy/codex/models$' "$SB/curl.log"; then
-  ok "L pod, egress CN, sessions go central → judged by the central proxy: ok, route central"
-else bad "L central ok: rc=$(rc) json=$(J l) out=$(out)"; fi
+  st_ok_all "L pod, egress CN, sessions go central → judged by the central proxy: ok, route central"
+else st_miss "L central ok: rc=$(rc) json=$(J l) out=$(out)"; fi
 mkdir -p "$SB/l2/.config/claude-fleet"
 echo 'FLEET_CRED_CENTRAL_URL="https://central.test"' >"$SB/l2/.config/claude-fleet/fleet.conf"
 FAKE_LOC1=CN FAKE_LOC2=CN FLEET_PROBE_RELAY_CMD="$NORELAY" probe_in l2
 [ "$(rc)" = 0 ] && J l2 | grep -q '"route":"central"' && J l2 | grep -q '"verdict":"ok"' \
-  && ok "L the central URL read off fleet.conf" || bad "L central from fleet.conf: rc=$(rc) json=$(J l2)"
+  && st_ok_all "L the central URL read off fleet.conf" || st_miss "L central from fleet.conf: rc=$(rc) json=$(J l2)"
 for c in 000 503; do
   FAKE_CENT_O=$c FAKE_LOC1=CN FAKE_LOC2=CN FLEET_CRED_CENTRAL_URL=https://central.test FLEET_PROBE_RELAY_CMD="$NORELAY" probe_in l3
   [ "$(rc)" = 1 ] && J l3 | grep -q '"route":"central"' && J l3 | grep -q '"central_openai":"unreachable"' \
     && J l3 | grep -q '"verdict":"unreachable"' && grep -q '^本机判断：暂不合适 — 本机出口 CN，会话经集群凭证代理' "$SB/out" \
-    && ok "L central proxy answers $c → unreachable (weather), never closed" || bad "L central $c: rc=$(rc) json=$(J l3) out=$(out)"
+    && st_ok_all "L central proxy answers $c → unreachable (weather), never closed" || st_miss "L central $c: rc=$(rc) json=$(J l3) out=$(out)"
 done
 : >"$SB/curl.log"
 FLEET_CRED_CENTRAL_URL=https://central.test probe_in l4
 [ "$(rc)" = 0 ] && J l4 | grep -q '"route":"direct"' && ! grep -q central.test "$SB/curl.log" \
-  && ok "L an ok egress never asks the central proxy" || bad "L ok egress asked central: $(J l4)"
+  && st_ok_all "L an ok egress never asks the central proxy" || st_miss "L ok egress asked central: $(J l4)"
 FAKE_LOC1=CN FAKE_LOC2=CN FLEET_CRED_CENTRAL_URL=https://central.test FLEET_PROBE_RELAY_CMD="$NORELAY" probe_in l5
 [ "$(rc)" = 1 ] && J l5 | grep -q '"route":"direct"' && J l5 | grep -q '"verdict":"unsupported_region"' \
-  && ok "L a login that leases (no CREDS=0) keeps route direct, closed as before" || bad "L leasing login went central: $(J l5)"
+  && st_ok_all "L a login that leases (no CREDS=0) keeps route direct, closed as before" || st_miss "L leasing login went central: $(J l5)"
 
 # ── J. sleepwatch ────────────────────────────────────────────────────────
 if [ "$(uname -s)" != Darwin ]; then
   "$BIN/fleet-node-sleepwatch.sh" >/dev/null 2>&1 </dev/null
-  [ $? = 3 ] && ok "J sleepwatch off macOS: exit 3" || bad "J sleepwatch off macOS did not exit 3"
+  [ $? = 3 ] && st_ok_all "J sleepwatch off macOS: exit 3" || st_miss "J sleepwatch off macOS did not exit 3"
 else
   w=$(FLEET_SLEEPWATCH_SELFTEST=1 "$BIN/fleet-node-sleepwatch.sh" 2>&1 </dev/null | tr '\n' ' ')
-  [ "$w" = 'ready sleep wake ' ] && ok "J sleepwatch on macOS: ready / sleep / wake" || bad "J sleepwatch said: $w"
+  [ "$w" = 'ready sleep wake ' ] && st_ok_all "J sleepwatch on macOS: ready / sleep / wake" || st_miss "J sleepwatch said: $w"
 fi
 
-[ "$fail" = 0 ] && echo "PASS fleet-node-probe-selftest" || echo "FAIL fleet-node-probe-selftest"
-exit "$fail"
+st_done

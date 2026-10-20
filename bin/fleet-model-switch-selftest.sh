@@ -38,15 +38,14 @@
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-sections.sh"
 selftest_sections 4
 SCRIPT="$BIN/fleet-model-switch.sh"
 [ -f "$SCRIPT" ] || { printf 'selftest: %s not found\n' "$SCRIPT" >&2; exit 2; }
 
 CHECKS=0
-fail() { printf 'fleet-model-switch selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '  got: %s\n' "$2" >&2; exit 1; }
-ok()   { CHECKS=$((CHECKS + 1)); }
-eq()   { ok; [ "$2" = "$3" ] || fail "$1 — expected [$2]" "[$3]"; }
+eq()   { st_count; [ "$2" = "$3" ] || st_fail "$1 — expected [$2]" "[$3]"; }
 has()  { case "$2" in *"$1"*) return 0 ;; esac; return 1; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-model-switch-selftest.XXXXXX")" || exit 2
@@ -66,7 +65,7 @@ printf 'tokA-secret\n' > "$FLEET_ACCOUNTS_DIR/acctA"; chmod 600 "$FLEET_ACCOUNTS
 # ============================================================================
 # shellcheck source=/dev/null
 . "$SCRIPT"
-command -v switch_selected >/dev/null 2>&1 || fail "switch_selected not defined after sourcing"
+command -v switch_selected >/dev/null 2>&1 || st_fail "switch_selected not defined after sourcing"
 
 eq "pane_model_of: the meter form"   "Opus 5"    "$(pane_model_of '  ◆ Opus 5  [████░░░░░░] 38% 381k/1.0M  wt-9  ↯xhigh  $23.62')"
 eq "pane_model_of: a dotted version" "Fable 5.1" "$(pane_model_of '  ◆ Fable 5.1  [███░░░░░░░] 29% 293k/1.0M  ai-voice-agent')"
@@ -88,7 +87,7 @@ next  line  here')"
 # window_model — @model (the statusline's stamp, #1452) wins; the native `◆` line
 # is read only when nothing stamped the window (issue #1454). The result lands in
 # $WMODEL, not on stdout, so the hot loop pays no subshell on the common path.
-command -v window_model >/dev/null 2>&1 || fail "window_model not defined after sourcing"
+command -v window_model >/dev/null 2>&1 || st_fail "window_model not defined after sourcing"
 window_model 'Opus 5.5' '  ◆ Fable 5.1  [█░] 9% x';  eq "window_model: @model wins over a ◆ line"    "Opus 5.5"  "$WMODEL"
 window_model 'Fable 5.1' 'just some output';          eq "window_model: @model alone"                 "Fable 5.1" "$WMODEL"
 window_model '' '  ◆ Fable 5.1  [█░] 9% x';          eq "window_model: no @model → the ◆ line"       "Fable 5.1" "$WMODEL"
@@ -96,7 +95,7 @@ window_model '' 'just some output';                   eq "window_model: neither 
 window_model 'Opus 5.5' '';                           eq "window_model: @model with an empty capture" "Opus 5.5"  "$WMODEL"
 
 # _lc — the fork-free lowercase that replaced `printf | tr` on the same hot path.
-command -v _lc >/dev/null 2>&1 || fail "_lc not defined after sourcing"
+command -v _lc >/dev/null 2>&1 || st_fail "_lc not defined after sourcing"
 _lc "Fable";   eq "_lc: a model name"        "fable"     "$_LC"
 _lc "Opus 5";  eq "_lc: digits and spaces"   "opus 5"    "$_LC"
 _lc "";        eq "_lc: empty in, empty out" ""          "$_LC"
@@ -130,32 +129,32 @@ eq "ledger: empty model resets the output" 0 "$LEDGER_UNTIL"
 rm -f "$CAPLEDGER"
 _LEDGER_MEMO="|"
 
-ok; model_matches opus  "Opus 5"    || fail "model_matches: opus ↔ Opus 5"
-ok; model_matches fable "Fable 5.1" || fail "model_matches: fable ↔ Fable 5.1"
-ok; model_matches FABLE "fable 5.1" || fail "model_matches: case-insensitive both ways"
-ok; model_matches fable "Opus 5"    && fail "model_matches: fable must NOT match Opus 5"
-ok; model_matches opus  ""          && fail "model_matches: empty pane model never matches"
-ok; model_matches ""    "Opus 5"    && fail "model_matches: empty alias never matches"
+st_count; model_matches opus  "Opus 5"    || st_fail "model_matches: opus ↔ Opus 5"
+st_count; model_matches fable "Fable 5.1" || st_fail "model_matches: fable ↔ Fable 5.1"
+st_count; model_matches FABLE "fable 5.1" || st_fail "model_matches: case-insensitive both ways"
+st_count; model_matches fable "Opus 5"    && st_fail "model_matches: fable must NOT match Opus 5"
+st_count; model_matches opus  ""          && st_fail "model_matches: empty pane model never matches"
+st_count; model_matches ""    "Opus 5"    && st_fail "model_matches: empty alias never matches"
 
-command -v cap_settled >/dev/null 2>&1 || fail "cap_settled not defined after sourcing"
+command -v cap_settled >/dev/null 2>&1 || st_fail "cap_settled not defined after sourcing"
 
 # cap_settled — the gate that tells a LIVE turn apart from a turn the cap already
 # ended. Regression cover for the #569 blocker: a per-model cap aborts the turn
 # without a Stop hook, so @claude_state stays `working` and the mid-turn guard
 # deferred the sweep's own candidates on every tick, forever.
 #                                              vis  state_ts  now   stale
-ok; cap_settled 1 1000 2000 120 || fail "cap_settled: cap on screen + 1000s stale is settled"
-ok; cap_settled 1 1900 2000 120 && fail "cap_settled: a 100s-old stamp is still inside the guard"
-ok; cap_settled 1 2000 2000 120 && fail "cap_settled: a stamp from right now is never settled"
-ok; cap_settled 0 1000 2000 120 && fail "cap_settled: no cap on the VISIBLE screen → never settled"
-ok; cap_settled 1 ''   2000 120 && fail "cap_settled: a missing stamp is refused, not assumed stale"
-ok; cap_settled 1 abc  2000 120 && fail "cap_settled: a garbage stamp is refused"
-ok; cap_settled 1 1000 2000 0   && fail "cap_settled: stale-secs 0 disables the lift (the #101 idiom)"
-ok; cap_settled 1 1000 2000 ''  || fail "cap_settled: empty stale-secs falls back to the 120s default"
-ok; cap_settled 1 1000 1000 120 && fail "cap_settled: a stamp in the future is never settled"
+st_count; cap_settled 1 1000 2000 120 || st_fail "cap_settled: cap on screen + 1000s stale is settled"
+st_count; cap_settled 1 1900 2000 120 && st_fail "cap_settled: a 100s-old stamp is still inside the guard"
+st_count; cap_settled 1 2000 2000 120 && st_fail "cap_settled: a stamp from right now is never settled"
+st_count; cap_settled 0 1000 2000 120 && st_fail "cap_settled: no cap on the VISIBLE screen → never settled"
+st_count; cap_settled 1 ''   2000 120 && st_fail "cap_settled: a missing stamp is refused, not assumed stale"
+st_count; cap_settled 1 abc  2000 120 && st_fail "cap_settled: a garbage stamp is refused"
+st_count; cap_settled 1 1000 2000 0   && st_fail "cap_settled: stale-secs 0 disables the lift (the #101 idiom)"
+st_count; cap_settled 1 1000 2000 ''  || st_fail "cap_settled: empty stale-secs falls back to the 120s default"
+st_count; cap_settled 1 1000 1000 120 && st_fail "cap_settled: a stamp in the future is never settled"
 
-sel() { ok; switch_selected "$2" "$3" "$4" "$5" "${6:-0}" || fail "$1 — expected a candidate"; }
-nsel(){ ok; switch_selected "$2" "$3" "$4" "$5" "${6:-0}" && fail "$1 — expected NOT a candidate"; }
+sel() { st_count; switch_selected "$2" "$3" "$4" "$5" "${6:-0}" || st_fail "$1 — expected a candidate"; }
+nsel(){ st_count; switch_selected "$2" "$3" "$4" "$5" "${6:-0}" && st_fail "$1 — expected NOT a candidate"; }
 #     desc                              state     pane-model    capped  target   settled
 sel  "walled + idle"                    -         "Fable 5.1"   fable   opus
 sel  "walled + done"                    "done"    "Fable 5.1"   fable   opus
@@ -268,7 +267,7 @@ INBOX_PID=$!
 # EXIT trap reaps it
 disown "$INBOX_PID" 2>/dev/null || :
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -S "$INBOX_SOCK" ] && break; sleep 0.3; done
-[ -S "$INBOX_SOCK" ] || fail "the fake peer inbox socket never appeared"
+[ -S "$INBOX_SOCK" ] || st_fail "the fake peer inbox socket never appeared"
 
 # --- a window running the fake claude, registered like the real CLI ------------
 # spawn_worker <window-name> <wall-model|''> <start-model> [<statusline.sh>] —
@@ -283,7 +282,7 @@ spawn_worker() {
   tmux -L "$LBL" new-window -d -n "$name" -c "$WORK" \
     "FAKE_LOG='$WORK/typed.$name' FAKE_WALL='$wall' FAKE_MODEL='$start' FAKE_STATUSLINE='$sl' PATH='$BINSH:$PATH' exec claude '$WORK/fake-claude.pl'" 2>/dev/null
   WID=$(tmux -L "$LBL" list-windows -F '#{window_id} #{window_name}' | awk -v n="$name" '$2==n{print $1; exit}')
-  [ -n "$WID" ] || fail "could not create window $name"
+  [ -n "$WID" ] || st_fail "could not create window $name"
   tmux -L "$LBL" set-window-option -t "$WID" @cc_account acctA 2>/dev/null
   tmux -L "$LBL" set-window-option -t "$WID" @cc_model fable 2>/dev/null
   # the Claude Code registry + peer key the script's helpers read. The fake is
@@ -293,7 +292,7 @@ spawn_worker() {
     pid=$(fleet_pane_claude_pid "$WID" "$LBL" 2>/dev/null) && [ -n "$pid" ] && break
     sleep 0.3
   done
-  [ -n "$pid" ] || fail "no fake claude under $name"
+  [ -n "$pid" ] || st_fail "no fake claude under $name"
   printf '{"sessionId":"sid-%s","messagingSocketPath":"%s"}\n' "$name" "$INBOX_SOCK" > "$FLEET_CC_SESSIONS_DIR/$pid.json"
   printf '{"peerToken":"tok-%s"}\n' "$name" > "$FLEET_CC_SESSIONS_DIR/$pid.deadbeef.key"
 }
@@ -308,7 +307,7 @@ painted() {
     done
   done
 }
-tmux -L "$LBL" new-session -d -s "$LBL" -n dash -c "$WORK" "sleep 600" 2>/dev/null || fail "could not start the selftest tmux server"
+tmux -L "$LBL" new-session -d -s "$LBL" -n dash -c "$WORK" "sleep 600" 2>/dev/null || st_fail "could not start the selftest tmux server"
 initial_model="Opus 5"
 selftest_section 1 && initial_model="Fable 5.1"
 spawn_worker walled    Fable "$initial_model"; W_OK="$WID"
@@ -337,7 +336,7 @@ RUN() { FLEET_MODEL_SWITCH_VERIFY=12 "$SCRIPT" --session "$LBL" --no-fallback "$
 if selftest_section 1; then
 # --- --dry-run touches nothing ------------------------------------------------
 out=$(RUN --capped --model opus --dry-run)
-ok; has 'would:' "$out" || fail "--dry-run should print a plan" "$out"
+st_count; has 'would:' "$out" || st_fail "--dry-run should print a plan" "$out"
 # The batched window read must not SHIFT its columns (issue #706). Five
 # `display-message` per window became one `list-windows -F` with tab-separated
 # fields, and tab is IFS whitespace — so a `read -r a b c …` split would COLLAPSE
@@ -346,23 +345,23 @@ ok; has 'would:' "$out" || fail "--dry-run should print a plan" "$out"
 # are all unset on an idle worker — three empties in a row ahead of @cc_account.
 # The account is the visible end of that chain, so a collapsed split shows up here
 # as a missing `[acctA]` on the plan line.
-ok; has '[acctA]' "$out" || fail "the batched window read must survive three empty option columns ahead of @cc_account" "$out"
+st_count; has '[acctA]' "$out" || st_fail "the batched window read must survive three empty option columns ahead of @cc_account" "$out"
 # …and the @model column (#1454) sits between @cc_account and the NAME: empty on
 # a pane that paints its own ◆ line, so a shifted split would hand the name slot
 # the account.
-ok; has "($(tmux -L "$LBL" display-message -p -t "$W_OK" '#{window_name}'))" "$out" || fail "the window NAME must survive an empty @model column ahead of it" "$out"
+st_count; has "($(tmux -L "$LBL" display-message -p -t "$W_OK" '#{window_name}'))" "$out" || st_fail "the window NAME must survive an empty @model column ahead of it" "$out"
 eq "--dry-run types nothing" "" "$(cat "$WORK/typed.walled")"
 eq "--dry-run writes no ledger row" "" "$(cat "$CAPLEDGER" 2>/dev/null)"
 
 # --- the real pass ------------------------------------------------------------
 out=$(RUN --capped --model opus)
-ok; has '2 switched' "$out" || fail "expected the walled AND the stop-hook-pinned window to switch" "$out"
-ok; has "$W_OK" "$out" || fail "the walled window should be named in the report" "$out"
-ok; has "$W_STUCK" "$out" || fail "the stop-hook-pinned window should be named in the report" "$out"
+st_count; has '2 switched' "$out" || st_fail "expected the walled AND the stop-hook-pinned window to switch" "$out"
+st_count; has "$W_OK" "$out" || st_fail "the walled window should be named in the report" "$out"
+st_count; has "$W_STUCK" "$out" || st_fail "the stop-hook-pinned window should be named in the report" "$out"
 
 typed=$(cat "$WORK/typed.walled")
-ok; has '/model opus' "$typed" || fail "the walled pane should have been handed /model opus" "$typed"
-ok; has '/model opus' "$(cat "$WORK/typed.stuck")" || fail "a window pinned at working by the missed Stop hook must still be flipped" "$(cat "$WORK/typed.stuck")"
+st_count; has '/model opus' "$typed" || st_fail "the walled pane should have been handed /model opus" "$typed"
+st_count; has '/model opus' "$(cat "$WORK/typed.stuck")" || st_fail "a window pinned at working by the missed Stop hook must still be flipped" "$(cat "$WORK/typed.stuck")"
 # A5: the settled walled turn is recorded `done` (its turn ended on the cap, no
 # Stop) rather than left a false `working` for the demoters to clear later.
 eq "the settled walled window is recorded done, not left working" "done" "$(tmux -L "$LBL" display-message -p -t "$W_STUCK" '#{@claude_state}')"
@@ -372,24 +371,24 @@ eq "the genuinely-busy pane was never typed into" "" "$(cat "$WORK/typed.busy")"
 eq "the genuinely-live turn is left working, not stamped done" "working" "$(tmux -L "$LBL" display-message -p -t "$W_BUSY" '#{@claude_state}')"
 eq "the recovered pane was never typed into" "" "$(cat "$WORK/typed.recovered")"
 
-ok; has 'mid-turn' "$out" || fail "the genuinely-working window should be reported as mid-turn" "$out"
-ok; has 'already off fable' "$out" || fail "the flipped window should be reported as already off the cap" "$out"
+st_count; has 'mid-turn' "$out" || st_fail "the genuinely-working window should be reported as mid-turn" "$out"
+st_count; has 'already off fable' "$out" || st_fail "the flipped window should be reported as already off the cap" "$out"
 
 eq "@cc_model restamped to the new model" "opus" "$(tmux -L "$LBL" display-message -p -t "$W_OK" '#{@cc_model}')"
-ok; has 'Opus 5' "$(tmux -L "$LBL" capture-pane -p -t "$W_OK")" || fail "the pane's status line should now read Opus 5"
+st_count; has 'Opus 5' "$(tmux -L "$LBL" capture-pane -p -t "$W_OK")" || st_fail "the pane's status line should now read Opus 5"
 
 led=$(cat "$CAPLEDGER" 2>/dev/null)
-ok; has $'acctA\tfable' "$led" || fail "the (account, model) cap should be recorded for the spawn path" "$led"
+st_count; has $'acctA\tfable' "$led" || st_fail "the (account, model) cap should be recorded for the spawn path" "$led"
 
 # --- the nudge went over the peer inbox, not the keyboard ---------------------
 inbox=$(cat "$INBOX_LOG")
-ok; has 'cross-session-message' "$inbox" || fail "the nudge must ride the canonical peer envelope" "$inbox"
-ok; has 'fleet-model-switch' "$inbox" || fail "the nudge must name its sender" "$inbox"
-ok; has 'IN PLACE' "$inbox" || fail "the default nudge should say the switch was in place" "$inbox"
-ok; has 'opus' "$inbox" || fail "__MODEL__ should be substituted in the nudge" "$inbox"
-ok; has 'tok-walled' "$inbox" || fail "the auth frame should carry the session's peer token" "$inbox"
-ok; has '/model' "$(cat "$WORK/typed.walled")" || fail "sanity: keystrokes are recorded"
-ok; grep -q 'cross-session-message' "$WORK/typed.walled" && fail "the NUDGE must never be typed into the pane"
+st_count; has 'cross-session-message' "$inbox" || st_fail "the nudge must ride the canonical peer envelope" "$inbox"
+st_count; has 'fleet-model-switch' "$inbox" || st_fail "the nudge must name its sender" "$inbox"
+st_count; has 'IN PLACE' "$inbox" || st_fail "the default nudge should say the switch was in place" "$inbox"
+st_count; has 'opus' "$inbox" || st_fail "__MODEL__ should be substituted in the nudge" "$inbox"
+st_count; has 'tok-walled' "$inbox" || st_fail "the auth frame should carry the session's peer token" "$inbox"
+st_count; has '/model' "$(cat "$WORK/typed.walled")" || st_fail "sanity: keystrokes are recorded"
+st_count; grep -q 'cross-session-message' "$WORK/typed.walled" && st_fail "the NUDGE must never be typed into the pane"
 
 fi
 
@@ -408,12 +407,12 @@ spawn_worker ledgeronly '' "Fable 5.1"; W_LED="$WID"
 # long the selftest has been running
 tmux -L "$LBL" set-window-option -t "$W_BUSY" @claude_state_ts "$(date +%s)" 2>/dev/null
 painted "$W_LED"
-ok; has $'acctA\tfable' "$(cat "$CAPLEDGER" 2>/dev/null)" || fail "precondition: the fable cap row should already be on the ledger"
+st_count; has $'acctA\tfable' "$(cat "$CAPLEDGER" 2>/dev/null)" || st_fail "precondition: the fable cap row should already be on the ledger"
 eq "the ledger-only pane shows no banner" "" "$(tmux -L "$LBL" capture-pane -p -t "$W_LED" | grep -c 'reached your' | tr -d ' ' | sed 's/^0$//')"
 
 out=$(RUN --capped --model opus --dry-run)
-ok; has 'via ledger' "$out" || fail "a ledger detection should say so in the plan" "$out"
-ok; has "$W_LED" "$out" || fail "the banner-less window on a ledger-capped model should be planned" "$out"
+st_count; has 'via ledger' "$out" || st_fail "a ledger detection should say so in the plan" "$out"
+st_count; has "$W_LED" "$out" || st_fail "the banner-less window on a ledger-capped model should be planned" "$out"
 
 # Repeat a real candidate in dry-run mode: each pair is read ONCE even with many
 # windows, and the call sites must not quietly reintroduce the subshell that lost
@@ -430,25 +429,25 @@ eq "ledger: calls never run in command substitutions" 0 "$(grep -c '^++*+ ledger
 eq "ledger: probe never starts the account CLI for reads" 0 "$(grep -c 'fleet-account.sh model-limited-until' "$WORK/ledger.xtrace")"
 
 out=$(RUN --capped --model opus)
-ok; has '1 switched' "$out" || fail "expected exactly the ledger-only window to switch" "$out"
-ok; has '/model opus' "$(cat "$WORK/typed.ledgeronly")" || fail "the ledger-only pane should have been handed /model opus" "$(cat "$WORK/typed.ledgeronly")"
+st_count; has '1 switched' "$out" || st_fail "expected exactly the ledger-only window to switch" "$out"
+st_count; has '/model opus' "$(cat "$WORK/typed.ledgeronly")" || st_fail "the ledger-only pane should have been handed /model opus" "$(cat "$WORK/typed.ledgeronly")"
 eq "the genuinely-busy pane is still never typed into" "" "$(cat "$WORK/typed.busy")"
 # A ledger detection means the session was sitting at its prompt, not interrupted
 # mid-turn — waking it to "continue the task" would spend tokens on a worker that
 # may well be finished. The model flips silently instead.
-ok; grep -q 'tok-ledgeronly' "$INBOX_LOG" && fail "a ledger-only flip must NOT nudge the session" "$(cat "$INBOX_LOG")"
+st_count; grep -q 'tok-ledgeronly' "$INBOX_LOG" && st_fail "a ledger-only flip must NOT nudge the session" "$(cat "$INBOX_LOG")"
 
 # --- a fallback that is itself capped on the account is refused ---------------
 spawn_worker walled2 Fable "Fable 5.1"
 tmux -L "$LBL" set-window-option -t "$W_BUSY" @claude_state_ts "$(date +%s)" 2>/dev/null
 "$BIN/fleet-account.sh" model-limited acctA opus "reached your Opus limit" >/dev/null 2>&1
 out=$(RUN --capped --model opus)
-ok; has 'ALSO capped' "$out" || fail "a capped fallback must be refused, not flipped onto" "$out"
+st_count; has 'ALSO capped' "$out" || st_fail "a capped fallback must be refused, not flipped onto" "$out"
 eq "nothing typed when the fallback is capped too" "" "$(cat "$WORK/typed.walled2")"
 "$BIN/fleet-account.sh" model-clear acctA opus >/dev/null 2>&1
 out=$(RUN --capped --model opus)
-ok; has '1 switched' "$out" || fail "once the fallback clears, the window switches" "$out"
-ok; has '/model opus' "$(cat "$WORK/typed.walled2")" || fail "walled2 should have been switched"
+st_count; has '1 switched' "$out" || st_fail "once the fallback clears, the window switches" "$out"
+st_count; has '/model opus' "$(cat "$WORK/typed.walled2")" || st_fail "walled2 should have been switched"
 
 # --- the batched pane→Claude walk (issue #706) ------------------------------
 # fleet_pane_claude_pid now wraps fleet_pane_claude_pids, so there is ONE walk to
@@ -462,17 +461,17 @@ for w in "$W_OK" "$W_BUSY" "$W_STUCK" "$W_DONE"; do
 done
 # shellcheck disable=SC2086  # deliberate word-split: one pane pid per word
 batch=$(fleet_pane_claude_pids $bp 2>/dev/null)
-ok; [ "$(printf '%s\n' "$batch" | grep -c .)" = 4 ] || fail "the batch walk must resolve every one of the 4 fake-claude panes" "$batch"
+st_count; [ "$(printf '%s\n' "$batch" | grep -c .)" = 4 ] || st_fail "the batch walk must resolve every one of the 4 fake-claude panes" "$batch"
 for w in "$W_OK" "$W_BUSY" "$W_STUCK" "$W_DONE"; do
   pp=$(tmux -L "$LBL" display-message -p -t "$w" '#{pane_pid}' 2>/dev/null)
   one=$(fleet_pane_claude_pid "$w" "$LBL" 2>/dev/null)
   many=$(printf '%s\n' "$batch" | awk -v p="$pp" '$1==p{print $2}')
-  ok; [ -n "$one" ] && [ "$one" = "$many" ] || fail "batch and single walk disagree for $w (single=$one batch=$many)"
+  st_count; [ -n "$one" ] && [ "$one" = "$many" ] || st_fail "batch and single walk disagree for $w (single=$one batch=$many)"
 done
 # the dash panel runs `sleep 600`, not a Claude — it must resolve to nothing
 dpp=$(tmux -L "$LBL" display-message -p -t dash '#{pane_pid}' 2>/dev/null)
-ok; [ -z "$(fleet_pane_claude_pids "$dpp" 2>/dev/null)" ] || fail "a pane with no Claude must resolve to nothing, not to a neighbour"
-ok; [ -z "$(fleet_pane_claude_pids 2>/dev/null)" ] || fail "no pids in, nothing out"
+st_count; [ -z "$(fleet_pane_claude_pids "$dpp" 2>/dev/null)" ] || st_fail "a pane with no Claude must resolve to nothing, not to a neighbour"
+st_count; [ -z "$(fleet_pane_claude_pids 2>/dev/null)" ] || st_fail "no pids in, nothing out"
 # A ZOMBIE is not a Claude (issue #1734): on Linux a just-/exit'ed claude keeps
 # comm=claude until its parent reaps it, and fleet-transfer read that as "another
 # Claude appeared". ps is shimmed so the leg is the same on macOS and Linux.
@@ -483,16 +482,16 @@ printf '900 1 Ss Fri Oct 16 02:00:00 2026 zsh\n901 900 Z Fri Oct 16 02:00:00 202
 SH
 chmod +x "$WORK/ps-shim/ps"
 zout=$(FLEET_CLAUDE_COMM='' PATH="$WORK/ps-shim:$PATH" fleet_pane_claude_pids 900 910 2>/dev/null)
-ok; [ "$zout" = "910 911" ] || fail "a zombie claude must not count; a live one must" "$zout"
+st_count; [ "$zout" = "910 911" ] || st_fail "a zombie claude must not count; a live one must" "$zout"
 # Invalid bytes from an unrelated process must remain silent (#3129).
 cat > "$WORK/ps-shim/ps" <<'SH'
 #!/bin/sh
 printf '900 1 Ss Fri Oct 16 02:00:00 2026 zsh\n901 900 S+ Fri Oct 16 02:00:00 2026 claude\n950 1 S Fri Oct 16 02:00:00 2026 python3 \346\211\n'
 SH
 cerr=$( { FLEET_CLAUDE_COMM='' PATH="$WORK/ps-shim:$PATH" LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 fleet_pane_claude_pids 900 >/dev/null; } 2>&1 )
-ok; [ -z "$cerr" ] || fail "a non-UTF-8 argv must not make the walk write to stderr" "$cerr"
+st_count; [ -z "$cerr" ] || st_fail "a non-UTF-8 argv must not make the walk write to stderr" "$cerr"
 cout=$(FLEET_CLAUDE_COMM='' PATH="$WORK/ps-shim:$PATH" LC_ALL=en_US.UTF-8 fleet_pane_claude_pids 900 2>/dev/null)
-ok; [ "$cout" = "900 901" ] || fail "a non-UTF-8 argv elsewhere must not change the walk" "$cout"
+st_count; [ "$cout" = "900 901" ] || st_fail "a non-UTF-8 argv elsewhere must not change the walk" "$cout"
 
 # --- the breadcrumb a tree-kill leaves behind (issue #706) -------------------
 # the reconcile tick runs this probe under fleet_timebox and kills the tree at the
@@ -501,20 +500,20 @@ ok; [ "$cout" = "900 901" ] || fail "a non-UTF-8 argv elsewhere must not change 
 # the answer was simply unavailable.
 TRACEF="$WORK/probe.trace"
 FLEET_MODEL_SWITCH_TRACE="$TRACEF" RUN --capped --model opus --dry-run >/dev/null
-[ -s "$TRACEF" ] || fail "FLEET_MODEL_SWITCH_TRACE must be written"
-ok; has 'step=' "$(cat "$TRACEF")"  || fail "the breadcrumb must name the current step" "$(cat "$TRACEF")"
-ok; has 'win='  "$(cat "$TRACEF")"  || fail "the breadcrumb must say how far into the sweep it got" "$(cat "$TRACEF")"
-ok; has 'steps=' "$(cat "$TRACEF")" || fail "the breadcrumb must carry the per-step timings" "$(cat "$TRACEF")"
+[ -s "$TRACEF" ] || st_fail "FLEET_MODEL_SWITCH_TRACE must be written"
+st_count; has 'step=' "$(cat "$TRACEF")"  || st_fail "the breadcrumb must name the current step" "$(cat "$TRACEF")"
+st_count; has 'win='  "$(cat "$TRACEF")"  || st_fail "the breadcrumb must say how far into the sweep it got" "$(cat "$TRACEF")"
+st_count; has 'steps=' "$(cat "$TRACEF")" || st_fail "the breadcrumb must carry the per-step timings" "$(cat "$TRACEF")"
 eq "a completed probe ends its breadcrumb at done" "step=done" "$(sed -n '1p' "$TRACEF")"
 # …and the sweep must have actually visited every window, not stopped at the first.
-ok; case "$(sed -n 's/^win=//p' "$TRACEF" | head -1)" in */*) ;; *) fail "win= must read i/N" "$(cat "$TRACEF")";; esac
+st_count; case "$(sed -n 's/^win=//p' "$TRACEF" | head -1)" in */*) ;; *) st_fail "win= must read i/N" "$(cat "$TRACEF")";; esac
 
 # Without the variable there is no file and no cost — the trace is opt-in, because
 # every step boundary would otherwise be a write on a path that exists to avoid I/O.
 rm -f "$TRACEF"
 RUN --capped --model opus --dry-run >/dev/null
-[ ! -f "$TRACEF" ] || fail "the breadcrumb must be opt-in (no FLEET_MODEL_SWITCH_TRACE, no file)"
-ok
+[ ! -f "$TRACEF" ] || st_fail "the breadcrumb must be opt-in (no FLEET_MODEL_SWITCH_TRACE, no file)"
+st_count
 
 fi
 
@@ -530,13 +529,13 @@ spawn_worker aftercap '' "Fable 5.1"; W_AFTER="$WID"
 tmux -L "$LBL" set-window-option -t "$W_BUSY" @claude_state_ts "$(date +%s)" 2>/dev/null
 painted "$W_BEFORE" "$W_NEW" "$W_AFTER"
 out=$(RUN --capped --model opus)
-ok; has '2 switched' "$out" || fail "a newly recorded cap must reach the later ledger-only candidate" "$out"
-ok; has "$W_NEW" "$out" && has "$W_AFTER" "$out" || fail "both new-cap and later ledger-only windows must switch" "$out"
+st_count; has '2 switched' "$out" || st_fail "a newly recorded cap must reach the later ledger-only candidate" "$out"
+st_count; has "$W_NEW" "$out" && has "$W_AFTER" "$out" || st_fail "both new-cap and later ledger-only windows must switch" "$out"
 eq "a window visited before the new cap waits until next sweep" "" "$(cat "$WORK/typed.beforecap")"
-ok; has '/model opus' "$(cat "$WORK/typed.aftercap")" || fail "cached miss hid a cap written by this sweep"
-ok; grep -q 'tok-aftercap' "$INBOX_LOG" && fail "the newly detected ledger-only window must not be nudged"
+st_count; has '/model opus' "$(cat "$WORK/typed.aftercap")" || st_fail "cached miss hid a cap written by this sweep"
+st_count; grep -q 'tok-aftercap' "$INBOX_LOG" && st_fail "the newly detected ledger-only window must not be nudged"
 out=$(RUN --capped --model opus --dry-run)
-ok; has "$W_BEFORE" "$out" || fail "the next sweep must pick up the earlier window" "$out"
+st_count; has "$W_BEFORE" "$out" || st_fail "the next sweep must pick up the earlier window" "$out"
 
 # --- a login running the fleet's statusLine: no `◆` line, @model instead (#1454)
 # conf/statusline.sh REPLACES Claude Code's native status line (#1452), so on
@@ -549,24 +548,24 @@ ok; has "$W_BEFORE" "$out" || fail "the next sweep must pick up the earlier wind
 # per-model cap on a statusLine login fell through to fleet-migrate.sh.
 if command -v jq >/dev/null 2>&1; then
   SLSH="$BIN/../conf/statusline.sh"
-  [ -f "$SLSH" ] || fail "conf/statusline.sh not found beside bin/ ($SLSH)"
+  [ -f "$SLSH" ] || st_fail "conf/statusline.sh not found beside bin/ ($SLSH)"
   spawn_worker slworker Fable "Fable 5.1" "$SLSH"; W_SL="$WID"
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     [ "$(tmux -L "$LBL" display-message -p -t "$W_SL" '#{@model}')" = "Fable 5.1" ] && break
     sleep 0.3
   done
   eq "statusline.sh stamped the start model onto the window as @model" "Fable 5.1" "$(tmux -L "$LBL" display-message -p -t "$W_SL" '#{@model}')"
-  ok; has '◆' "$(tmux -L "$LBL" capture-pane -p -t "$W_SL")" && fail "fixture: a statusLine login must show NO native ◆ line" "$(tmux -L "$LBL" capture-pane -p -t "$W_SL")"
+  st_count; has '◆' "$(tmux -L "$LBL" capture-pane -p -t "$W_SL")" && st_fail "fixture: a statusLine login must show NO native ◆ line" "$(tmux -L "$LBL" capture-pane -p -t "$W_SL")"
   tmux -L "$LBL" set-window-option -t "$W_BUSY" @claude_state_ts "$(date +%s)" 2>/dev/null
   out=$(RUN --capped --model opus --dry-run)
-  ok; has "would: $W_SL (slworker) Fable 5.1 → opus" "$out" || fail "with no ◆ line on the pane the model must be read off @model" "$out"
+  st_count; has "would: $W_SL (slworker) Fable 5.1 → opus" "$out" || st_fail "with no ◆ line on the pane the model must be read off @model" "$out"
   out=$(RUN --model opus "$W_SL")
-  ok; has '1 switched' "$out" || fail "a statusLine-login window must switch in place, not fall through" "$out"
-  ok; has '/model opus' "$(cat "$WORK/typed.slworker")" || fail "the statusLine-login pane should have been handed /model opus" "$(cat "$WORK/typed.slworker")"
+  st_count; has '1 switched' "$out" || st_fail "a statusLine-login window must switch in place, not fall through" "$out"
+  st_count; has '/model opus' "$(cat "$WORK/typed.slworker")" || st_fail "the statusLine-login pane should have been handed /model opus" "$(cat "$WORK/typed.slworker")"
   eq "the next render re-stamped @model, and that is what the verify read" "Opus 5" "$(tmux -L "$LBL" display-message -p -t "$W_SL" '#{@model}')"
-  ok; has 'fable → Opus 5 in place' "$out" || fail "the report should name the model the verify read off @model" "$out"
+  st_count; has 'fable → Opus 5 in place' "$out" || st_fail "the report should name the model the verify read off @model" "$out"
   eq "@cc_model restamped off an @model verify" "opus" "$(tmux -L "$LBL" display-message -p -t "$W_SL" '#{@cc_model}')"
-  ok; has '◆' "$(tmux -L "$LBL" capture-pane -p -t "$W_SL")" && fail "still no native line after the flip — the verify cannot have read the pane text"
+  st_count; has '◆' "$(tmux -L "$LBL" capture-pane -p -t "$W_SL")" && st_fail "still no native line after the flip — the verify cannot have read the pane text"
 else
   printf 'fleet-model-switch selftest: jq absent — the statusLine (@model) leg skipped\n'
 fi
@@ -598,15 +597,15 @@ painted "$W_MOD"
 out=$(FLEET_MODEL_SWITCH_VERIFY=2 "$SCRIPT" --session "$LBL" --no-fallback --model opus "$W_MOD" 2>&1)
 kill "$MODPID" 2>/dev/null; wait "$MODPID" 2>/dev/null
 eq "with the mod alive, the pane is never typed into" "" "$(cat "$WORK/typed.modded")"
-ok; has '"cmd": "/model"' "$(cat "$WORK/mod-took" 2>/dev/null)" && has '"args": "opus"' "$(cat "$WORK/mod-took")" \
-  || fail "the mod should have taken /model opus from its inbox" "$(cat "$WORK/mod-took" 2>/dev/null) / $out"
-ok; has '"from": "model-switch"' "$(cat "$WORK/mod-took")" || fail "the post should name its sender" "$(cat "$WORK/mod-took")"
+st_count; has '"cmd": "/model"' "$(cat "$WORK/mod-took" 2>/dev/null)" && has '"args": "opus"' "$(cat "$WORK/mod-took")" \
+  || st_fail "the mod should have taken /model opus from its inbox" "$(cat "$WORK/mod-took" 2>/dev/null) / $out"
+st_count; has '"from": "model-switch"' "$(cat "$WORK/mod-took")" || st_fail "the post should name its sender" "$(cat "$WORK/mod-took")"
 # Stale beat → the mod is not here → today's keystrokes, unchanged.
 spawn_worker stalemod Fable "Fable 5.1"; W_STALE="$WID"
 tmux -L "$LBL" set-window-option -t "$W_STALE" @mod_alive "$(( $(date +%s) - 600 ))" 2>/dev/null
 painted "$W_STALE"
 RUN --model opus "$W_STALE" >/dev/null
-ok; has '/model opus' "$(cat "$WORK/typed.stalemod")" || fail "a stale mod beat must fall back to typing /model" "$(cat "$WORK/typed.stalemod")"
+st_count; has '/model opus' "$(cat "$WORK/typed.stalemod")" || st_fail "a stale mod beat must fall back to typing /model" "$(cat "$WORK/typed.stalemod")"
 
 fi
 

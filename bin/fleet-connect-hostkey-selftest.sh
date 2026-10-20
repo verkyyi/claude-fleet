@@ -15,6 +15,7 @@
 # there is no /usr/sbin/sshd or it will not run unprivileged.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-connect-hostkey-selftest.XXXXXX") || exit 2
 trap 'rm -rf "${WORK:?}"' EXIT INT TERM HUP
 export HOME="$WORK/home"
@@ -22,9 +23,7 @@ mkdir -p "$HOME/.ssh"
 export FLEET_KNOWN_HOSTS="$WORK/fleet-known-hosts"
 unset FLEET_CERT
 
-fail=0
-ok()  { echo "ok   $*"; }
-bad() { echo "FAIL $*"; fail=1; }
+st_tally
 
 for k in host other user; do ssh-keygen -q -t ed25519 -N '' -C "c-$k" -f "$WORK/$k" || exit 2; done
 HOSTPUB=$(cut -d' ' -f1-2 "$WORK/host.pub")
@@ -46,16 +45,16 @@ print(" ".join(fc.ssh_command(m, route, "alice", "")))
 EOF
 )
 [ "$(sed -n 1p <<<"$out")" = "True fleet-m9 $OTHERPUB|fleet-mac-a $HOSTPUB|" ] \
-  && ok "write_known_hosts: this machine's lines replaced, another's kept, a bad key dropped" \
-  || bad "write_known_hosts: $(sed -n 1p <<<"$out")"
-[ "$(sed -n 2p <<<"$out")" = "False False" ] && ok "write_known_hosts: no listed key → nothing written" \
-  || bad "no keys: $(sed -n 2p <<<"$out")"
+  && st_ok_all "write_known_hosts: this machine's lines replaced, another's kept, a bad key dropped" \
+  || st_miss "write_known_hosts: $(sed -n 1p <<<"$out")"
+[ "$(sed -n 2p <<<"$out")" = "False False" ] && st_ok_all "write_known_hosts: no listed key → nothing written" \
+  || st_miss "no keys: $(sed -n 2p <<<"$out")"
 [[ "$(sed -n 3p <<<"$out")" == *"HostKeyAlias=fleet-mac-a "*"UserKnownHostsFile=$FLEET_KNOWN_HOSTS ~/.ssh/known_hosts"* ]] \
-  && ok "ssh_command: the fleet's known_hosts first, then the person's own" || bad "ssh_command: $(sed -n 3p <<<"$out")"
-[[ "$(sed -n 4p <<<"$out")" != *UserKnownHostsFile* ]] && ok "ssh_command: no keys → ssh's own known_hosts, as before" \
-  || bad "ssh_command without keys: $(sed -n 4p <<<"$out")"
+  && st_ok_all "ssh_command: the fleet's known_hosts first, then the person's own" || st_miss "ssh_command: $(sed -n 3p <<<"$out")"
+[[ "$(sed -n 4p <<<"$out")" != *UserKnownHostsFile* ]] && st_ok_all "ssh_command: no keys → ssh's own known_hosts, as before" \
+  || st_miss "ssh_command without keys: $(sed -n 4p <<<"$out")"
 
-python3 - "$BIN/fleet-connect.py" "$HOSTPUB" "$OTHERPUB" <<'EOF' && ok "pod rebuild: refresh cached pins and automatic routes from hub, retain strict trust offline" || bad "pod rebuild cache refresh"
+python3 - "$BIN/fleet-connect.py" "$HOSTPUB" "$OTHERPUB" <<'EOF' && st_ok_all "pod rebuild: refresh cached pins and automatic routes from hub, retain strict trust offline" || st_miss "pod rebuild cache refresh"
 import copy, importlib.util, sys, time
 from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("fc", sys.argv[1])
@@ -144,13 +143,12 @@ print("matched" if "is known and matches" in e else "-",
 EOF
     }
     r=$(try)
-    [ "$r" = "- refused - -" ] && ok "sshd: no listed key → ssh's host-key refusal (the newcomer's question)" || bad "no key: $r"
+    [ "$r" = "- refused - -" ] && st_ok_all "sshd: no listed key → ssh's host-key refusal (the newcomer's question)" || st_miss "no key: $r"
     r=$(try "$HOSTPUB")
-    [ "$r" = "matched - - -" ] && ok "sshd: the hub's key → matched on the first connection, no question" || bad "listed key: $r"
+    [ "$r" = "matched - - -" ] && st_ok_all "sshd: the hub's key → matched on the first connection, no question" || st_miss "listed key: $r"
     r=$(try "$OTHERPUB")
-    [ "$r" = "- refused - changed" ] && ok "sshd: a key the hub did not list → still refused" || bad "changed key: $r"
+    [ "$r" = "- refused - changed" ] && st_ok_all "sshd: a key the hub did not list → still refused" || st_miss "changed key: $r"
   fi
 fi
 
-[ "$fail" = 0 ] && echo "PASS fleet-connect-hostkey-selftest" || echo "FAIL fleet-connect-hostkey-selftest"
-exit "$fail"
+st_done

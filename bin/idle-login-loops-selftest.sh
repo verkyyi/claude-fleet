@@ -27,6 +27,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/idleloops.XXXXXX")" || exit 2
 LOOPPID=''
 WATCHSOCK=''
@@ -34,9 +35,8 @@ REAL_TMUX="$(command -v tmux)"
 cleanup() { [ -z "$WATCHSOCK" ] || "$REAL_TMUX" -S "$WATCHSOCK" kill-server 2>/dev/null; [ -n "$LOOPPID" ] && kill "$LOOPPID" 2>/dev/null; pkill -f "$WORK/" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
 
-FAILS=0 CHECKS=0
+st_tally
 ok()   { CHECKS=$((CHECKS + 1)); printf '  ok   %s\n' "$1"; }
-fail() { CHECKS=$((CHECKS + 1)); FAILS=$((FAILS + 1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
 
 # --- A: fleet_login_unused -----------------------------------------------------
 lib_ask() {   # lib_ask <row|-> [env...] -- [sockets...] → "unused" | "used"
@@ -55,7 +55,7 @@ mkdir -p "$WORK/sess" "$WORK/home/u1" "$WORK/tt/tmux-$(id -u)"
 SD="$WORK/tt/tmux-$(id -u)"
 : > "$SD/fa"; chmod 600 "$SD/fa"; : > "$SD/fb"; chmod 600 "$SD/fb"
 now=$(date +%s)
-expect() { if [ "$2" = "$3" ]; then ok "A: $1 → $3"; else fail "A: $1 → $3, want $2"; fi; }
+expect() { if [ "$2" = "$3" ]; then ok "A: $1 → $3"; else st_miss "A: $1 → $3, want $2"; fi; }
 expect "0 sessions, 0 asleep, no client"        unused "$(lib_ask "0 $now 0" -- fa fb)"
 expect "0 sessions (an older row, no asleep)"   unused "$(lib_ask "0 $now" -- fa)"
 expect "a live session"                          used   "$(lib_ask "1 $now 0" -- fa)"
@@ -71,12 +71,12 @@ expect "…a client on a socket not ours"          unused "$(lib_ask "0 $now 0" 
 # --- B: the collector asks it ----------------------------------------------------
 if awk '/^ph_hubsess\(\) \{/{f=1} f&&/fleet_login_unused/{found=1} f&&/^\}/{exit} END{exit !found}' "$BIN/tmux-dash-collect.sh"; then
   ok "B: tmux-dash-collect.sh ph_hubsess asks fleet_login_unused before --ensure"
-else fail "B: ph_hubsess keeps the hub-sessions loop alive on a login nobody uses"; fi
+else st_miss "B: ph_hubsess keeps the hub-sessions loop alive on a login nobody uses"; fi
 
 # --- C: the node's table -----------------------------------------------------------
 cls() { awk -F'\t' -v u="$1" '$1 == u && $2 == "unit" { print $3 }' "$BIN/../conf/node-tasks.tsv"; }
 if [ "$(cls spinner)" = session ]; then ok "C: spinner runs only while its login has a session"
-else fail "C: spinner is a '$(cls spinner)' unit — it runs on a login with no session"; fi
+else st_miss "C: spinner is a '$(cls spinner)' unit — it runs on a login with no session"; fi
 
 # --- D: the hub-sessions loop's idle pace --------------------------------------------
 S="idl$$"
@@ -106,10 +106,10 @@ rounds_in() {   # rounds_in <secs> [env...] → the loop's rounds over <secs>
 }
 n=$(rounds_in 7 FLEET_HUB_SESSIONS_IDLE_EVERY=4)
 if [ "$n" -ge 1 ] && [ "$n" -le 2 ]; then ok "D: unwatched node, IDLE_EVERY=4 → $n rounds in 7s"
-else fail "D: unwatched node, IDLE_EVERY=4 → $n rounds in 7s, want 1-2"; fi
+else st_miss "D: unwatched node, IDLE_EVERY=4 → $n rounds in 7s, want 1-2"; fi
 n=$(rounds_in 6 FLEET_HUB_SESSIONS_EVERY=1)
 if [ "$n" -ge 4 ]; then ok "D: an explicit FLEET_HUB_SESSIONS_EVERY=1 is the idle pace too → $n rounds in 6s"
-else fail "D: an explicit FLEET_HUB_SESSIONS_EVERY=1 → $n rounds in 6s, want ≥ 4 (its own pace)"; fi
+else st_miss "D: an explicit FLEET_HUB_SESSIONS_EVERY=1 → $n rounds in 6s, want ≥ 4 (its own pace)"; fi
 # A real list request with a client wakes the shared event wait (#4357).
 # An attached socket alone is no longer a list request; keep the original time
 # and count bounds, exercise the production broadcast on a PRIVATE server.
@@ -135,7 +135,7 @@ n=$(rounds_in 6 FLEET_HUB_SESSIONS_IDLE_EVERY=30)
 wait "$VIEWPID"
 "$REAL_TMUX" -S "$WATCHSOCK" kill-server 2>/dev/null; WATCHSOCK=''
 if [ "$n" -ge 2 ]; then ok "D: a client opens the list mid-wait → $n rounds in 6s"
-else fail "D: a real list request slept on → $n rounds in 6s, want ≥ 2"; fi
+else st_miss "D: a real list request slept on → $n rounds in 6s, want ≥ 2"; fi
 
 # --- E: fleet_is_fid forks nothing -----------------------------------------------------
 out=$(bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1
@@ -144,13 +144,13 @@ out=$(bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1
     fleet_is_fid "$x" && printf 1 || printf 0
   done' _ "$BIN")
 if [ "$out" = 100000 ]; then ok "E: fleet_is_fid — the canonical shape only ($out)"
-else fail "E: fleet_is_fid answered $out, want 100000"; fi
+else st_miss "E: fleet_is_fid answered $out, want 100000"; fi
 cnt=$(bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1
   PATH=/nonexistent   # a fork of grep / printf-pipe would have nothing to run
   i=0; n=0; while [ "$i" -lt 2000 ]; do fleet_is_fid 39a7bf15-6049-4271-9528-b4760415b544 && n=$((n + 1)); i=$((i + 1)); done
   echo "$n"' _ "$BIN" 2>&1)
 if [ "$cnt" = 2000 ]; then ok "E: 2,000 asks with no PATH at all — answered in the shell, no fork"
-else fail "E: fleet_is_fid needs a program on PATH (got '$cnt')"; fi
+else st_miss "E: fleet_is_fid needs a program on PATH (got '$cnt')"; fi
 
 # --- F: one tmux call a window ------------------------------------------------------------
 fout=$(python3 - "$BIN" <<'PY'
@@ -172,7 +172,7 @@ print(len(calls), snap["@issue"], snap["window_name"], snap["@claude_state"], sn
 PY
 )
 case "$fout" in "1 12 w a done True "*) ok "F: snapshot reads ${fout##* } options in 1 tmux call" ;;
-  *) fail "F: snapshot made more than one tmux call, or read wrong values" "$fout" ;; esac
+  *) st_miss "F: snapshot made more than one tmux call, or read wrong values" "$fout" ;; esac
 
-printf '%d/%d checks passed\n' $((CHECKS - FAILS)) "$CHECKS"
-[ "$FAILS" = 0 ]
+printf '%d/%d checks passed\n' $((CHECKS - FAIL)) "$CHECKS"
+st_done

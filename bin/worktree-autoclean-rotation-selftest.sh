@@ -34,12 +34,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 . "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/worktree-autoclean.sh"
 LIB="$BIN/fleet-lib.sh"
 for f in "$SRC" "$LIB"; do [ -f "$f" ] || { echo "selftest: $f missing" >&2; exit 2; }; done
 command -v git  >/dev/null 2>&1 || { echo "selftest: git absent — SKIP" >&2; exit 0; }
-command -v tmux >/dev/null 2>&1 || { echo "selftest: tmux absent — SKIP" >&2; exit 0; }
+st_need tmux
 if ! command -v lsof >/dev/null 2>&1 && [ ! -d /proc ]; then
   echo "selftest: neither lsof nor /proc — SKIP" >&2; exit 0
 fi
@@ -57,8 +58,6 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
 pass=0
-ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/logs"
 ln -s "$SRC" "$WORK/bin/worktree-autoclean.sh"
@@ -137,53 +136,53 @@ done
 # --- the lease on WT100, taken the way fleet-migrate.sh takes it --------------
 # shellcheck source=/dev/null
 ( export FLEET_CONF_DIR="$WORK/conf"; . "$LIB"; fleet_rotate_lease_take "$WT100" "selftest migrate" ) \
-  || fail "could not take a rotation lease on $WT100"
+  || st_fail "could not take a rotation lease on $WT100"
 
 # ============================ DRY RUN: the decisions =========================
 out="$(run_wac --dry-run)"
 printf '%s\n' "$out" | grep -Eq 'KEEP +issue-100 .*rotation in flight' \
-  || fail "issue-100: a LEASED worktree must be KEPT through the rotation gap" "$out"
+  || st_fail "issue-100: a LEASED worktree must be KEPT through the rotation gap" "$out"
 printf '%s\n' "$out" | grep -Eq 'PRUNE +issue-100 ' \
-  && fail "issue-100: a leased worktree must never be pruned (the #550 gap)" "$out"
-ok "DRY: a worktree with a rotation lease is KEPT although no pane binds it"
+  && st_fail "issue-100: a leased worktree must never be pruned (the #550 gap)" "$out"
+st_pass "DRY: a worktree with a rotation lease is KEPT although no pane binds it"
 
 printf '%s\n' "$out" | grep -Eq 'KEEP +issue-200 .*live pane procs' \
-  || fail "issue-200: a live pane's processes must KEEP the worktree" "$out"
+  || st_fail "issue-200: a live pane's processes must KEEP the worktree" "$out"
 printf '%s\n' "$out" | grep -Eq 'PRUNE +issue-200 ' \
-  && fail "issue-200: a worktree with a live pane in it must never be pruned" "$out"
-ok "DRY: a worktree running a live pane's processes is KEPT (the 15-pid repro)"
+  && st_fail "issue-200: a worktree with a live pane in it must never be pruned" "$out"
+st_pass "DRY: a worktree running a live pane's processes is KEPT (the 15-pid repro)"
 
 printf '%s\n' "$out" | grep -Eq 'PRUNE +issue-300 ' \
-  || fail "issue-300: no lease, nothing running → must still PRUNE (no leak)" "$out"
-ok "DRY: a worktree with neither signal is still pruned — the guard is not a leak"
+  || st_fail "issue-300: no lease, nothing running → must still PRUNE (no leak)" "$out"
+st_pass "DRY: a worktree with neither signal is still pruned — the guard is not a leak"
 
 # ============================ EXPIRY: a stale lease is ignored ===============
 # Backdate the stamp past the TTL: a mover that died mid-move must not be able to
 # park a worktree forever, so the gate has to fall through to the normal rules.
 lease_f="$( export FLEET_CONF_DIR="$WORK/conf"; . "$LIB"; fleet_rotate_lease_file "$WT100" )"
-[ -f "$lease_f" ] || fail "the lease file was not written ($lease_f)"
+[ -f "$lease_f" ] || st_fail "the lease file was not written ($lease_f)"
 printf '%s %s %s %s\n' 999 "$(( $(date +%s) - 4000 ))" 900 'stale' > "$lease_f"
 out="$(run_wac --dry-run)"
 printf '%s\n' "$out" | grep -Eq 'PRUNE +issue-100 ' \
-  || fail "issue-100: a lease older than the TTL must be ignored" "$out"
-ok "EXPIRY: a lease past FLEET_ROTATE_LEASE_TTL stops protecting the worktree"
+  || st_fail "issue-100: a lease older than the TTL must be ignored" "$out"
+st_pass "EXPIRY: a lease past FLEET_ROTATE_LEASE_TTL stops protecting the worktree"
 ( export FLEET_CONF_DIR="$WORK/conf"; . "$LIB"; fleet_rotate_lease_take "$WT100" "selftest migrate" ) \
-  || fail "could not re-take the lease"
+  || st_fail "could not re-take the lease"
 
 # ============================ REAL RUN: nobody's processes die ===============
 # The whole point: on the KEEP paths the janitor sweeps orphans (#469), and this is
 # where it used to kill the live worker. The pane's processes must survive it.
 pane_sleep="$(pgrep -P "$pane_pid" 2>/dev/null | head -1)"
 run_wac >/dev/null
-[ -d "$WT100" ] || fail "REAL: the leased worktree issue-100 was removed"
-[ -d "$WT200" ] || fail "REAL: the worktree with a live pane (issue-200) was removed"
-[ -d "$WT300" ] && fail "REAL: issue-300 (no lease, nothing running) should have been pruned"
-kill -0 "$pane_pid" 2>/dev/null || fail "REAL: the live pane's shell $pane_pid was killed (the #550 false-reap)"
-[ -n "$pane_sleep" ] && { kill -0 "$pane_sleep" 2>/dev/null || fail "REAL: the live pane's child $pane_sleep was killed"; }
-ok "REAL: leased + pane-occupied worktrees survive, with every live process intact"
-git -C "$BASE" show-ref --verify -q refs/heads/issue-100 || fail "issue-100 branch must survive"
-git -C "$BASE" show-ref --verify -q refs/heads/issue-200 || fail "issue-200 branch must survive"
-ok "REAL: their branches survive too"
+[ -d "$WT100" ] || st_fail "REAL: the leased worktree issue-100 was removed"
+[ -d "$WT200" ] || st_fail "REAL: the worktree with a live pane (issue-200) was removed"
+[ -d "$WT300" ] && st_fail "REAL: issue-300 (no lease, nothing running) should have been pruned"
+kill -0 "$pane_pid" 2>/dev/null || st_fail "REAL: the live pane's shell $pane_pid was killed (the #550 false-reap)"
+[ -n "$pane_sleep" ] && { kill -0 "$pane_sleep" 2>/dev/null || st_fail "REAL: the live pane's child $pane_sleep was killed"; }
+st_pass "REAL: leased + pane-occupied worktrees survive, with every live process intact"
+git -C "$BASE" show-ref --verify -q refs/heads/issue-100 || st_fail "issue-100 branch must survive"
+git -C "$BASE" show-ref --verify -q refs/heads/issue-200 || st_fail "issue-200 branch must survive"
+st_pass "REAL: their branches survive too"
 
 printf '\nselftest OK: %s assertions passed (rotation-gap guard, issue #550)\n' "$pass"
 exit 0

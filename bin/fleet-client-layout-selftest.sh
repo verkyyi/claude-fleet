@@ -15,9 +15,10 @@
 # Drives: bin/fleet-topbar.py.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 
 # --- A ---------------------------------------------------------------------------
-python3 - "$BIN" <<'PY' || exit 1
+python3 - "$BIN" <<'PY' || st_fail "the layout legs (their FAIL lines above)"
 import importlib.util, json, os, sys, tempfile
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, os.path.join(sys.argv[1], path))

@@ -24,11 +24,10 @@
 # fake tmux; scratch pool / conf / HOME. No network, no tmux server.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
+. "$BIN/selftest-lib.sh"
+st_need python3
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/model-quota-selftest.XXXXXX")" || exit 2
-WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+st_sandbox "${TMPDIR:-/tmp}/model-quota-selftest.XXXXXX" physical
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/accounts" "$WORK/conf" "$WORK/.claude-dash/global"
 for f in fleet-account.sh fleet_iso.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-claude.sh fleet-launch-lib.sh fleet-agent-adapter.sh .fleet-account.py; do
   [ -f "$BIN/$f" ] && cp "$BIN/$f" "$WORK/bin/"
@@ -60,9 +59,7 @@ exit 0
 FAKE
 chmod +x "$WORK/fakepath/"*
 
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf -- '--- got ---\n%s\n' "$2" >&2; exit 1; }
-eq() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
+st_tally count
 
 run() {
   env -u FLEET_MODEL -u FLEET_MODEL_FALLBACK -u FLEET_ACCOUNT_LABEL -u TMUX -u TMUX_PANE \
@@ -104,80 +101,80 @@ reset_state() { rm -f "$G"/account.* "$WORK/tmux.log"; }
 # --- degenerate: no `models` anywhere → nothing changes ----------------------
 reset_state; payload - -
 fetch
-eq "no models: model-quota prints nothing" "" "$(acct model-quota)"
-eq "no models: the ledger is never opened" no "$([ -e "$LEDGER" ] && echo yes || echo no)"
+st_eq "no models: model-quota prints nothing" "" "$(acct model-quota)"
+st_eq "no models: the ledger is never opened" no "$([ -e "$LEDGER" ] && echo yes || echo no)"
 rows_plain=$(cat "$G/account.quota")
-eq "no models: the spawn picks no account, runs FLEET_MODEL (T550)" " fable" "$(spawn)"
+st_eq "no models: the spawn picks no account, runs FLEET_MODEL (T550)" " fable" "$(spawn)"
 
 # --- parse ----------------------------------------------------------------------
 reset_state; payload "$(fm rejected 100 $RA)" "$(fm allowed 9 $RB)"
 fetch
-eq "models: quota rows are byte-identical to the no-models payload" "$rows_plain" "$(cat "$G/account.quota")"
+st_eq "models: quota rows are byte-identical to the no-models payload" "$rows_plain" "$(cat "$G/account.quota")"
 got=$(acct model-quota)
-eq "parse: A capped, with its reset + observation" "a	claude-fable-5-1	capped	$RA	$OBS	100	rejected" "$(printf '%s\n' "$got" | grep '^a	')"
-eq "parse: B ok" "b	claude-fable-5-1	ok	$RB	$OBS	9	allowed" "$(printf '%s\n' "$got" | grep '^b	')"
+st_eq "parse: A capped, with its reset + observation" "a	claude-fable-5-1	capped	$RA	$OBS	100	rejected" "$(printf '%s\n' "$got" | grep '^a	')"
+st_eq "parse: B ok" "b	claude-fable-5-1	ok	$RB	$OBS	9	allowed" "$(printf '%s\n' "$got" | grep '^b	')"
 payload "$(fm allowed_warning 97 $RA)" "$(printf '{"claude-fable-5-1":{"utilization":20},"claude-opus-5-5":{"status":"weird"}}')"
 fetch; got=$(FLEET_MODEL_CAP_PCT=95 acct model-quota)
-eq "parse: utilization ≥ FLEET_MODEL_CAP_PCT is capped even while allowed" capped "$(printf '%s\n' "$got" | awk -F'\t' '$1=="a"{print $3}')"
-eq "parse: neither status nor flag → unknown" "unknown unknown" "$(printf '%s\n' "$got" | awk -F'\t' '$1=="b"{printf "%s%s",s,$3; s=" "}')"
+st_eq "parse: utilization ≥ FLEET_MODEL_CAP_PCT is capped even while allowed" capped "$(printf '%s\n' "$got" | awk -F'\t' '$1=="a"{print $3}')"
+st_eq "parse: neither status nor flag → unknown" "unknown unknown" "$(printf '%s\n' "$got" | awk -F'\t' '$1=="b"{printf "%s%s",s,$3; s=" "}')"
 payload "$(printf '{"claude-fable-5-1":{"utilization":10}}' )" -
 sed -i.bak 's/"models"/"model_available":{"claude-fable-5-1":false},"models"/' "$PAYLOAD"
 fetch; got=$(acct model-quota)
-eq "parse: model_available false → capped" capped "$(printf '%s\n' "$got" | awk -F'\t' '{print $3}')"
-eq "parse: an account without models is absent, not ok" "a" "$(printf '%s\n' "$got" | cut -f1 | tr '\n' ' ' | sed 's/ $//')"
+st_eq "parse: model_available false → capped" capped "$(printf '%s\n' "$got" | awk -F'\t' '{print $3}')"
+st_eq "parse: an account without models is absent, not ok" "a" "$(printf '%s\n' "$got" | cut -f1 | tr '\n' ' ' | sed 's/ $//')"
 
 # --- the acceptance: A capped, B allowed → B with FLEET_MODEL, no banner ------
 reset_state; payload "$(fm rejected 100 $RA)" "$(fm allowed 9 $RB)"
 fetch
-eq "sync: A's cap is in the ledger until ccquota's reset + buffer" "$(( RA + 60 ))" "$(acct model-limited-until a fable)"
-eq "sync: B has no cap" 0 "$(acct model-limited-until b fable)"
-eq "sync: the row names ccquota, not a banner" "ccquota: claude-fable-5-1 rejected 100%" "$(awk -F'\t' '$1=="a"{print $4}' "$LEDGER")"
-eq "spawn: A capped — still no pick, FLEET_MODEL (the pool picks; T550)" " fable" "$(spawn)"
-eq "spawn: no pane was ever read for a banner" 0 "$(cat "$WORK/tmux.log" 2>/dev/null | grep -c capture-pane)"
-eq "inventory: model_primary is 0 on A, 1 on B (the selector's field 11)" "a 0 b 1" \
+st_eq "sync: A's cap is in the ledger until ccquota's reset + buffer" "$(( RA + 60 ))" "$(acct model-limited-until a fable)"
+st_eq "sync: B has no cap" 0 "$(acct model-limited-until b fable)"
+st_eq "sync: the row names ccquota, not a banner" "ccquota: claude-fable-5-1 rejected 100%" "$(awk -F'\t' '$1=="a"{print $4}' "$LEDGER")"
+st_eq "spawn: A capped — still no pick, FLEET_MODEL (the pool picks; T550)" " fable" "$(spawn)"
+st_eq "spawn: no pane was ever read for a banner" 0 "$(cat "$WORK/tmux.log" 2>/dev/null | grep -c capture-pane)"
+st_eq "inventory: model_primary is 0 on A, 1 on B (the selector's field 11)" "a 0 b 1" \
    "$(run env FLEET_MODEL=fable bash "$WORK/bin/fleet-account.sh" _claude-inventory 2>/dev/null | awk -F'\t' '{printf "%s%s %s",s,$1,$11; s=" "}')"
 m1=$(cksum < "$LEDGER"); fetch
-eq "sync: the same reading again does not rewrite the ledger" "$m1" "$(cksum < "$LEDGER")"
+st_eq "sync: the same reading again does not rewrite the ledger" "$m1" "$(cksum < "$LEDGER")"
 
 # --- every account capped → still FLEET_MODEL at launch (T550: no cap swap) -------
 payload "$(fm rejected 100 $RA)" "$(fm rejected 100 $RB)"
 fetch
-eq "both capped: B's cap is recorded too" "$(( RB + 60 ))" "$(acct model-limited-until b fable)"
-eq "both capped: the launcher swaps nothing (relaunch is fleet-model-switch.sh's)" " fable" "$(spawn)"
+st_eq "both capped: B's cap is recorded too" "$(( RB + 60 ))" "$(acct model-limited-until b fable)"
+st_eq "both capped: the launcher swaps nothing (relaunch is fleet-model-switch.sh's)" " fable" "$(spawn)"
 
 # --- the window opens again → ccquota's own row is dropped -------------------------
 payload "$(fm allowed 0 $((RA + 7 * 86400)))" "$(fm rejected 100 $RB)"
 fetch
-eq "reopened: A's ccquota row dropped" 0 "$(acct model-limited-until a fable)"
-eq "reopened: B still capped" "$(( RB + 60 ))" "$(acct model-limited-until b fable)"
-eq "reopened: the spawn is unchanged — no pick, FLEET_MODEL" " fable" "$(spawn)"
+st_eq "reopened: A's ccquota row dropped" 0 "$(acct model-limited-until a fable)"
+st_eq "reopened: B still capped" "$(( RB + 60 ))" "$(acct model-limited-until b fable)"
+st_eq "reopened: the spawn is unchanged — no pick, FLEET_MODEL" " fable" "$(spawn)"
 
 # --- a banner is a refresh hint: only a NEWER reading clears it ----------------
 reset_state
 printf 'a\tfable\t%s\treached your Fable limit\t%s\n' $(( NOW + 604800 )) $(( NOW - 10 )) > "$LEDGER"
 payload "$(fm allowed 50 $RA $(( NOW - 60 )))" -
 fetch
-eq "banner row newer than the reading survives it" $(( NOW + 604800 )) "$(acct model-limited-until a fable)"
+st_eq "banner row newer than the reading survives it" $(( NOW + 604800 )) "$(acct model-limited-until a fable)"
 payload "$(fm allowed 50 $RA $NOW)" -
 fetch
-eq "…and a reading observed after it clears it" 0 "$(acct model-limited-until a fable)"
+st_eq "…and a reading observed after it clears it" 0 "$(acct model-limited-until a fable)"
 printf 'a\tfable\t%s\treached your Fable limit\t%s\n' $(( NOW + 604800 )) $(( NOW - 10 )) > "$LEDGER"
 payload "$(fm rejected 100 $RA)" -
 fetch
-eq "a capped reading replaces the banner's TTL guess with the real reset" "$(( RA + 60 ))" "$(acct model-limited-until a fable)"
-eq "…as ONE row" 1 "$(grep -c . "$LEDGER")"
+st_eq "a capped reading replaces the banner's TTL guess with the real reset" "$(( RA + 60 ))" "$(acct model-limited-until a fable)"
+st_eq "…as ONE row" 1 "$(grep -c . "$LEDGER")"
 payload "$(fm rejected 100 $(( NOW - 5 )))" -
 fetch
-eq "a capped reading whose reset has passed is stale — not written" "$(( RA + 60 ))" "$(acct model-limited-until a fable)"
+st_eq "a capped reading whose reset has passed is stale — not written" "$(( RA + 60 ))" "$(acct model-limited-until a fable)"
 printf 'b\topus\t%s\treached your Opus limit\t%s\n' $(( NOW + 600 )) $(( NOW - 999 )) >> "$LEDGER"
 payload - "$(fm allowed 0 $RB $NOW)"
 fetch
-eq "a fable reading never touches another model's row" $(( NOW + 600 )) "$(acct model-limited-until b opus)"
+st_eq "a fable reading never touches another model's row" $(( NOW + 600 )) "$(acct model-limited-until b opus)"
 
 # --- the banner writer keeps its row one field wide and stamps set-at -----------
 reset_state
 acct model-limited a fable $'hit your Fable limit\twith a tab' >/dev/null
-eq "model-limited: 5 fields, set-at last" 5 "$(awk -F'\t' '{print NF}' "$LEDGER")"
+st_eq "model-limited: 5 fields, set-at last" 5 "$(awk -F'\t' '{print NF}' "$LEDGER")"
 
 # --- the provider-aware selector: FLEET_MODEL first, then score -------------------
 got=$(python3 - "$WORK/bin/.fleet-account.py" <<'PY'
@@ -193,6 +190,6 @@ print(m['choose'](d, 'claude', allowed=('claude',))['target']['label'],
       m['choose']({'accounts': [row('a', 200, False), row('b', 195, False)]}, 'claude', current='claude/b', allowed=('claude',))['target']['label'])
 PY
 )
-eq "selector: model_primary beats score; hysteresis never keeps a fallback-only current; ties keep hysteresis" "b b b" "$got"
+st_eq "selector: model_primary beats score; hysteresis never keeps a fallback-only current; ties keep hysteresis" "b b b" "$got"
 
 printf 'fleet-model-quota-selftest: %d checks passed\n' "$CHECKS"

@@ -36,16 +36,13 @@ mkdir -p "$FLEET_CONF_DIR" "$TMPDIR"
 unset TMUX TMUX_PANE FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_SESSION FLEET_HISTORY_LEDGER
 . "$BIN/fleet-lib.sh"
 
-FAILS=0
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-has()  { case "$2" in *"$3"*) ;; *) fail "$1: [$3] not in: $2" ;; esac; }
-hasnt(){ case "$2" in *"$3"*) fail "$1: [$3] unexpectedly in: $2" ;; esac; }
-leg()  { if [ "$FAILS" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi; _legf=$FAILS; }
+st_tally miss
+leg()  { if [ "$FAIL" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else printf 'FAIL %s\n' "$1"; fi; _legf=$FAIL; }
 # before <a> <b> <text> — <a> appears on an earlier line of <text> than <b>
 before() { local la lb
   la=$(printf '%s\n' "$3" | grep -nF -- "$1" | head -n1 | cut -d: -f1)
   lb=$(printf '%s\n' "$3" | grep -nF -- "$2" | head -n1 | cut -d: -f1)
-  [ -n "$la" ] && [ -n "$lb" ] && [ "$la" -lt "$lb" ] || fail "order: [$1] should precede [$2] in: $3"; }
+  [ -n "$la" ] && [ -n "$lb" ] && [ "$la" -lt "$lb" ] || st_miss "order: [$1] should precede [$2] in: $3"; }
 
 for r in A B C; do mkdir -p "$WORK/main$r/.git"; done
 M=M D=D
@@ -72,49 +69,49 @@ strip() { sed 's/\x1b\[[0-9;]*m//g'; }
 
 # --- list ------------------------------------------------------------------------
 out=$(FLEET_SESSION=$M bash "$H" list 2>&1)
-has "list: legend names both repos" "$out" "repos: a=o/a · b=o/b"
-for t in alpha-twelve alpha-parent beta-twelve beta-child; do has "list: merged row $t" "$out" "$t"; done
+st_has "list: legend names both repos" "$out" "repos: a=o/a · b=o/b"
+for t in alpha-twelve alpha-parent beta-twelve beta-child; do st_has "list: merged row $t" "$out" "$t"; done
 before beta-child alpha-parent "$out"; before alpha-parent beta-twelve "$out"; before beta-twelve alpha-twelve "$out"
-has "list: repo column on an o/b row" "$(printf '%s\n' "$out" | grep beta-twelve)" "#12    b "
-has "list: repo column on an o/a row" "$(printf '%s\n' "$out" | grep alpha-twelve)" "#12    a "
+st_has "list: repo column on an o/b row" "$(printf '%s\n' "$out" | grep beta-twelve)" "#12    b "
+st_has "list: repo column on an o/a row" "$(printf '%s\n' "$out" | grep alpha-twelve)" "#12    a "
 out=$(FLEET_SESSION=$M bash "$H" list --repo o/a 2>&1)
-has "list --repo: its own rows" "$out" "alpha-twelve"
-hasnt "list --repo: not the other repo's" "$out" "beta"
-hasnt "list --repo: no legend" "$out" "repos:"
+st_has "list --repo: its own rows" "$out" "alpha-twelve"
+st_hasnt "list --repo: not the other repo's" "$out" "beta"
+st_hasnt "list --repo: no legend" "$out" "repos:"
 out=$(FLEET_SESSION=$M bash "$H" list o/b 2>&1)
-has "list <filter>: the repo matches" "$out" "beta-twelve"
-hasnt "list <filter>: the other repo is filtered out" "$out" "alpha"
+st_has "list <filter>: the repo matches" "$out" "beta-twelve"
+st_hasnt "list <filter>: the other repo is filtered out" "$out" "alpha"
 leg list
 
 # --- rows (the dash's landed view) ------------------------------------------------
 rows() { FLEET_SESSION="$1" FZF_COLUMNS=160 bash "$H" rows 2>/dev/null; }
 out=$(rows "$M")
-has "rows: o/a's #12 targets o/a" "$out" "landed:101@o/a"
-has "rows: o/b's #12 targets o/b" "$out" "landed:101@o/b"
-has "rows: o/a's #30 targets o/a" "$out" "landed:issue:30@o/a"
+st_has "rows: o/a's #12 targets o/a" "$out" "landed:101@o/a"
+st_has "rows: o/b's #12 targets o/b" "$out" "landed:101@o/b"
+st_has "rows: o/a's #30 targets o/a" "$out" "landed:issue:30@o/a"
 vis=$(printf '%s\n' "$out" | strip)
-has "rows: badge on an o/a row" "$vis" "a alpha-twelve"
-has "rows: badge on an o/b row" "$vis" "b beta-twelve"
-has "rows: the cross-repo parent owns its child's block" "$vis" "a 0/1 ✓ alpha-parent"
-hasnt "rows: the child is folded under it" "$vis" "beta-child"
+st_has "rows: badge on an o/a row" "$vis" "a alpha-twelve"
+st_has "rows: badge on an o/b row" "$vis" "b beta-twelve"
+st_has "rows: the cross-repo parent owns its child's block" "$vis" "a 0/1 ✓ alpha-parent"
+st_hasnt "rows: the child is folded under it" "$vis" "beta-child"
 before beta-twelve alpha-twelve "$vis"
 leg rows
 
 # --- fold ---------------------------------------------------------------------------
 FLEET_SESSION=$M bash "$H" fold expand 'landed:issue:30@o/a' >/dev/null 2>&1
-[ -f "$FLEET_C/global/dash_fold_landed_$M.o-a" ] || fail "fold: o/a's own fold file"
-has "fold: holds the bare key" "$(cat "$FLEET_C/global/dash_fold_landed_$M.o-a" 2>/dev/null)" "issue-30"
+[ -f "$FLEET_C/global/dash_fold_landed_$M.o-a" ] || st_miss "fold: o/a's own fold file"
+st_has "fold: holds the bare key" "$(cat "$FLEET_C/global/dash_fold_landed_$M.o-a" 2>/dev/null)" "issue-30"
 vis=$(rows "$M" | strip)
-has "fold: the o/b child nests under its o/a parent" "$vis" "└  beta-child"
+st_has "fold: the o/b child nests under its o/a parent" "$vis" "└  beta-child"
 before alpha-parent beta-child "$vis"
 act=$(FLEET_SESSION=$M bash "$H" fold collapse 'landed:scratch:nope@o/a' 2>/dev/null)
-[ -z "$act" ] || fail "fold: an unknown row is a dead keystroke, got [$act]"
+[ -z "$act" ] || st_miss "fold: an unknown row is a dead keystroke, got [$act]"
 leg fold
 
 # --- a stale current-repo file ------------------------------------------------------
 all_rows=$(rows "$M")
 printf 'o/b\n' > "$FLEET_CONF_DIR/fleets/$M/current-repo"
-[ "$(rows "$M")" = "$all_rows" ] || fail "stale: a stale current-repo file changed the rows (#1034)"
+[ "$(rows "$M")" = "$all_rows" ] || st_miss "stale: a stale current-repo file changed the rows (#1034)"
 rm -f "$FLEET_CONF_DIR/fleets/$M/current-repo"
 leg stale
 
@@ -127,21 +124,20 @@ repo='' main=''; while [ "$#" -gt 1 ]; do case "$1" in --repo) repo=$2; shift ;;
 printf 'REVIEW-ONLY\trepo=%s main=%s key=%s\n' "$repo" "$main" "$1"
 EOF
 err=$(FLEET_GLOBAL_MAX_SESSIONS=0 FLEET_MAX_SESSIONS=0 bash "$HB/dash-restore-session.sh" 'landed:101@o/b' "$M" 2>&1 >/dev/null)
-has "restore: an o/b row resumes in o/b" "$err" "repo=o/b main=$WORK/mainB key=#101"
+st_has "restore: an o/b row resumes in o/b" "$err" "repo=o/b main=$WORK/mainB key=#101"
 err=$(FLEET_GLOBAL_MAX_SESSIONS=0 FLEET_MAX_SESSIONS=0 bash "$HB/dash-restore-session.sh" 'landed:issue:30@o/a' "$M" 2>&1 >/dev/null)
-has "restore: an o/a row resumes in o/a" "$err" "repo=o/a main=$WORK/mainA key=30"
-has "restore: --plan strips the repo" "$(bash "$HB/dash-restore-session.sh" --plan 'landed:scratch:scratch-4@o/b')" "scratch-4"
+st_has "restore: an o/a row resumes in o/a" "$err" "repo=o/a main=$WORK/mainA key=30"
+st_has "restore: --plan strips the repo" "$(bash "$HB/dash-restore-session.sh" --plan 'landed:scratch:scratch-4@o/b')" "scratch-4"
 leg restore
 
 # --- the one-repo fleet ------------------------------------------------------------------
 out=$(FLEET_SESSION=$D bash "$H" list --repo o/c 2>&1)
-has "one-repo: list" "$out" "gamma-twelve"
-hasnt "one-repo: no legend" "$out" "repos:"
+st_has "one-repo: list" "$out" "gamma-twelve"
+st_hasnt "one-repo: no legend" "$out" "repos:"
 out=$(rows "$D"); vis=$(printf '%s\n' "$out" | strip)
-has "one-repo: the target names its repo" "$out" "landed:101@o/c"$'\x1f'
-hasnt "one-repo: no other repo on a target" "$out" "@o/a"
-has "one-repo: no badge" "$vis" "  gamma-twelve"
+st_has "one-repo: the target names its repo" "$out" "landed:101@o/c"$'\x1f'
+st_hasnt "one-repo: no other repo on a target" "$out" "@o/a"
+st_has "one-repo: no badge" "$vis" "  gamma-twelve"
 leg one-repo
 
-if [ "$FAILS" -gt 0 ]; then printf 'history-multirepo-selftest: %d FAIL\n' "$FAILS" >&2; exit 1; fi
-printf 'history-multirepo-selftest: all legs PASS\n'
+st_done

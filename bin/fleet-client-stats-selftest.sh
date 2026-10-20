@@ -15,18 +15,18 @@
 #   E  usage: no dir → 2, an unreadable dir only → 2
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd)
+. "$BIN/selftest-lib.sh"
 S="$BIN/fleet-client-stats.py"
 T=$(mktemp -d "${TMPDIR:-/tmp}/client-stats.XXXXXX")
 trap 'rm -rf "${T:?}"' EXIT
 fail=0
-ok() { echo "PASS  $1"; }
 no() { echo "FAIL  $1"; fail=1; }
 tab=$(printf '\t')
 # line <time> <event> [home] [route] [pick] [ssh] [first] [rc] [reason]
 line() { local IFS="$tab"; printf '%s\n' "$*"; }
 # get <json file> <python expr on j>
 get() { python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$1" "$2"; }
-eq() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1 — want [$2] got [$3]"; fi; }
+eq() { if [ "$2" = "$3" ]; then st_ok "$1"; else no "$1 — want [$2] got [$3]"; fi; }
 
 # --- computer one: a client cache --------------------------------------------
 mkdir -p "$T/a/shell/logs"
@@ -136,7 +136,7 @@ python3 "$S" --json --days 30 --now 2026-10-03T00:00:00Z "$T/b" > "$T/wide.json"
 eq "D a wider window reads the September drop" 2 "$(get "$T/wide.json" 'j["drops"]')"
 python3 "$S" --days 7 --now 2026-10-03T00:00:00Z "$T/a" "$T/b" > "$T/text"
 if grep -q '断线 / 台 / 天' "$T/text" && grep -q '接回 中位 / p90' "$T/text" && grep -q '打开失败' "$T/text"; then
-  ok "D text: the three readings"; else no "D text: $(cat "$T/text")"; fi
+  st_ok "D text: the three readings"; else no "D text: $(cat "$T/text")"; fi
 
 # E — usage
 python3 "$S" >/dev/null 2>&1; eq "E no dir → 2" 2 $?

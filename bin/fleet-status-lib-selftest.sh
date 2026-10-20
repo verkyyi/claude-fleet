@@ -22,13 +22,13 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/  /' >&2; exit 1; }
-eq() { [ "$2" = "$3" ] || fail "$1" "want: [$2]
+eq() { [ "$2" = "$3" ] || st_fail "$1" "want: [$2]
  got: [$3]"; CHECKS=$((CHECKS+1)); }
-has() { case "$3" in *"$2"*) CHECKS=$((CHECKS+1)) ;; *) fail "$1" "want a substring: [$2]
+has() { case "$3" in *"$2"*) CHECKS=$((CHECKS+1)) ;; *) st_fail "$1" "want a substring: [$2]
  got: [$3]" ;; esac; }
-hasnt() { case "$3" in *"$2"*) fail "$1" "must not contain: [$2]
+hasnt() { case "$3" in *"$2"*) st_fail "$1" "must not contain: [$2]
  got: [$3]" ;; *) CHECKS=$((CHECKS+1)) ;; esac; }
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/tmux-status-selftest.XXXXXX") || exit 2
@@ -69,8 +69,8 @@ HB=$(python3 -c 'import sys, time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", tim
 export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 : > "$WORK/gitconfig"
-LIVE="$WORK/live"; git init -q "$LIVE" || fail "G: git init"
-for c in c1 c2 c3; do git -C "$LIVE" commit -q --allow-empty -m "$c" || fail "G: commit $c"; done
+LIVE="$WORK/live"; git init -q "$LIVE" || st_fail "G: git init"
+for c in c1 c2 c3; do git -C "$LIVE" commit -q --allow-empty -m "$c" || st_fail "G: commit $c"; done
 C1=$(git -C "$LIVE" rev-parse --short HEAD~2); C2=$(git -C "$LIVE" rev-parse --short HEAD~1); C3=$(git -C "$LIVE" rev-parse --short HEAD)
 git -C "$LIVE" tag stable "$C2"
 C4=$(git -C "$LIVE" commit-tree -p "$C1" -m c4 "$(git -C "$LIVE" rev-parse "$C1^{tree}")"); C4=$(git -C "$LIVE" rev-parse --short "$C4")
@@ -109,21 +109,21 @@ hubs() { TMPDIR="$T/" FLEET_CONF_DIR="$CONF" FLEET_ACCOUNTS_DIR="$ACC" PATH="$WO
          FLEET_HUB_LIMITS_CMD="${LCMD-cat '$WORK/limits.json'}" FLEET_NODE_ALIASES="mac-c=mac-b mac-d=mac-a" \
          FLEET_HUB_SUMMARY_EVERY="${SEVERY-0}" FLEET_LIVE_DIR="${LIVEDIR-$LIVE}" bash "$HUBS" --refresh 2>"$WORK/err"; }
 rm -f "$G/hub_nodes" "$G/hub_limits" "$G/hub_ok"
-CF='' hubs; [ -e "$G/hub_nodes" ] || [ -e "$G/hub_limits" ] || [ -e "$G/hub_ok" ] && fail "G: off (CCQUOTA_FLEET unset) wrote a summary or hub_ok"; CHECKS=$((CHECKS+1))
-hubs || fail "G: --refresh failed" "$(cat "$WORK/err")"
+CF='' hubs; [ -e "$G/hub_nodes" ] || [ -e "$G/hub_limits" ] || [ -e "$G/hub_ok" ] && st_fail "G: off (CCQUOTA_FLEET unset) wrote a summary or hub_ok"; CHECKS=$((CHECKS+1))
+hubs || st_fail "G: --refresh failed" "$(cat "$WORK/err")"
 OK=$(cat "$G/hub_ok" 2>/dev/null)
 case "$OK" in
-  [0-9]*) [ "$OK" -ge "$NOW" ] || fail "G: hub_ok is not a fresh epoch (#1483)" "$OK" ;;
-  *) fail "G: a sessions round that stood must write global/hub_ok (#1483)" "$OK" ;;
+  [0-9]*) [ "$OK" -ge "$NOW" ] || st_fail "G: hub_ok is not a fresh epoch (#1483)" "$OK" ;;
+  *) st_fail "G: a sessions round that stood must write global/hub_ok (#1483)" "$OK" ;;
 esac; CHECKS=$((CHECKS+1))
 SCMD=false hubs
 eq "G: a failed sessions round leaves hub_ok as it was (#1483)" "$OK" "$(cat "$G/hub_ok")"
 has "G: …and says how long the hub has been silent" "hub unreachable for" "$(cat "$WORK/err")"
 rows=$(tr '\037' '|' < "$G/hub_nodes")
-case "$rows" in "#ts|"[0-9]*) CHECKS=$((CHECKS+1)) ;; *) fail "G: hub_nodes starts with #ts" "$rows" ;; esac
+case "$rows" in "#ts|"[0-9]*) CHECKS=$((CHECKS+1)) ;; *) st_fail "G: hub_nodes starts with #ts" "$rows" ;; esac
 row=$(printf '%s\n' "$rows" | grep '^mac-b|'); row=${row%|*|*|*|*|*}   # drop mem_used/mem_total/ver_state/place/hostname (exact below)
 case "$row" in "mac-b|online|5.65|15|56|14|$C2|"[0-9]|"mac-b|online|5.65|15|56|14|$C2|"[0-9][0-9]) CHECKS=$((CHECKS+1)) ;;
-  *) fail "G: mac-b's row: alias, mem %, the newest login's version, a small age" "$row" ;; esac
+  *) st_fail "G: mac-b's row: alias, mem %, the newest login's version, a small age" "$row" ;; esac
 has "G: mac-b's memory in MB" "|37034|65536|" "$(printf '%s\n' "$rows" | grep '^mac-b|')"
 eq "G: a lost machine with no reading: empty mem %, no version, no age, no version word" "mac-a|lost|0.00|10||0|||0|0|||mac-d" "$(printf '%s\n' "$rows" | grep '^mac-a|')"
 # 「开在哪」's two columns (issue #1778): what may be placed there, and the hostname
@@ -148,7 +148,7 @@ eq "G: a checkout with no refs/tags/stable → every word empty" 0 "$(printf '%s
 hubs; rows=$(tr '\037' '|' < "$G/hub_nodes")
 eq "G: … and back with the tag" "$C1|old:1" "$(vw box3)"
 # hub_repos (issue #1927): the repos the machines' fleets host, for an empty list
-[ -e "$G/hub_repos" ] && fail "G: a hub older than \`repos\` (no key) wrote hub_repos"; CHECKS=$((CHECKS+1))
+[ -e "$G/hub_repos" ] && st_fail "G: a hub older than \`repos\` (no key) wrote hub_repos"; CHECKS=$((CHECKS+1))
 NCMD="printf '%s' '{\"machines\":[{\"hostname\":\"a\",\"status\":\"online\",\"repos\":[\"acme/web\",\"acme/api\"]},{\"hostname\":\"b\",\"status\":\"online\",\"repos\":[\"acme/web\",\"bad repo\"]}]}'" hubs
 eq "G: hub_repos — #ts, then each repo once, sorted, a malformed one dropped" "#ts|acme/api|acme/web" "$(tr '\037' '|' < "$G/hub_repos" | sed '1s/|[0-9]*$//' | tr '\n' '|' | sed 's/|$//')"
 NCMD="printf '%s' '{\"machines\":[{\"hostname\":\"a\",\"status\":\"online\",\"repos\":[]}]}'" hubs
@@ -158,7 +158,7 @@ NCMD="printf '%s' '{\"machines\":[],\"account\":{\"state\":\"opening\",\"eta_s\"
 eq "G: #2069 an opening login → #ts, then #account state|eta|machine|ask" "#ts|#account|opening|42|mac-a|dave" "$(tr '\037' '|' < "$G/hub_repos" | sed 's/|[0-9]*$//' | tr '\n' '|' | sed 's/|$//')"
 NCMD="printf '%s' '{\"machines\":[{\"hostname\":\"a\",\"status\":\"online\",\"repos\":[\"acme/web\"]}]}'" hubs
 eq "G: #2069 no account key → no #account line" "0" "$(grep -c '^#account' "$G/hub_repos")"
-hubs; [ -e "$G/hub_repos" ] && fail "G: back to an older hub → hub_repos removed"; CHECKS=$((CHECKS+1))
+hubs; [ -e "$G/hub_repos" ] && st_fail "G: back to an older hub → hub_repos removed"; CHECKS=$((CHECKS+1))
 hubs; rows=$(tr '\037' '|' < "$G/hub_nodes")
 lrows=$(tr '\037' '|' < "$G/hub_limits")
 has "G: a uuid this login has an accounts/<label>.conf for → that label; 65.4 → 65" "icloud|63|65|7a7e6173-f07c-490f-844e-00c27c3f0844|ylianghui@icloud.com" "$lrows"
@@ -170,8 +170,8 @@ has "G: a tab in a label is a space, the field count holds" "tab here|1||e58c|ta
 eq "G: four rows + #ts" "5" "$(printf '%s\n' "$lrows" | grep -c .)"
 cp "$G/hub_nodes" "$WORK/nodes.keep"; cp "$G/hub_limits" "$WORK/limits.keep"
 NCMD='exit 1' LCMD="printf '{\"x\":1}'" hubs
-cmp -s "$G/hub_nodes" "$WORK/nodes.keep" || fail "G: a failed /v1/nodes fetch must keep the last hub_nodes"
-cmp -s "$G/hub_limits" "$WORK/limits.keep" || fail "G: a /v1/limits answer with no list must keep the last hub_limits"
+cmp -s "$G/hub_nodes" "$WORK/nodes.keep" || st_fail "G: a failed /v1/nodes fetch must keep the last hub_nodes"
+cmp -s "$G/hub_limits" "$WORK/limits.keep" || st_fail "G: a /v1/limits answer with no list must keep the last hub_limits"
 CHECKS=$((CHECKS+2))
 has "G: … and says so on stderr" "keeping the last hub_limits" "$(cat "$WORK/err")"
 # their own cadence: the loop asks fleet_sessions every 2s while watched (#1481),
@@ -221,7 +221,7 @@ chubs() { TMPDIR="$T/" FLEET_CONF_DIR="$CONF" FLEET_ACCOUNTS_DIR="$ACC" PATH="$C
           CCQUOTA_HUB_URL=http://hub.test FLEET_CERT="$WORK/cert" CCQUOTA_VIEWER_TOKEN=tok FLEET_HUB_SUMMARY_EVERY=0 \
           FLEET_NODE_ALIASES="mac-c=mac-b mac-d=mac-a" bash "$HUBS" --refresh 2>"$WORK/err"; }
 rm -f "$G/hub_nodes" "$G/hub_limits" "$G/hubsum.ts"; : > "$WORK/curl.log"; echo 200 > "$WORK/sumcode"
-chubs || fail "G: a certificate round failed" "$(cat "$WORK/err")"
+chubs || st_fail "G: a certificate round failed" "$(cat "$WORK/err")"
 eq "G: a certificate asks the summary door once, the token never (#1502)" "/v1/fleet/summary cert" "$(grep -v fleet_sessions "$WORK/curl.log")"
 rows=$(tr '\037' '|' < "$G/hub_nodes" 2>/dev/null)
 has "G: … hub_nodes from its machines: mac-b" "mac-b|online|5.65|" "$rows"
@@ -239,7 +239,7 @@ has "G: … and writes the summaries" "mac-b|online" "$(tr '\037' '|' < "$G/hub_
 rm -f "$G/hub_nodes" "$G/hub_limits"; : > "$WORK/curl.log"; echo 000 > "$WORK/sumcode"
 chubs
 eq "G: a hub that does not answer is no answer — the token is not spent" "/v1/fleet/summary cert" "$(grep -v fleet_sessions "$WORK/curl.log")"
-[ -e "$G/hub_nodes" ] && fail "G: no answer wrote hub_nodes"; CHECKS=$((CHECKS+1))
+[ -e "$G/hub_nodes" ] && st_fail "G: no answer wrote hub_nodes"; CHECKS=$((CHECKS+1))
 for f in hub_nodes hub_limits hubsum.ts; do rm -f "$G/$f"; cp -p "$WORK/$f.pre" "$G/$f" 2>/dev/null; done
 
 # G2 (issue #2692): /v1/fleet/summary has no `nodes` — a machine carries its own
@@ -250,7 +250,7 @@ cat > "$WORK/summary-nodes.json" <<EOF
  {"hostname":"mac-c","status":"online","sessions":14,"load1":5.65234375,"ncpu":15,"mem_free_bytes":29886201856,"mem_total_bytes":68719476736,"last_heartbeat":"$HB","fleet_version":"$C2"},
  {"hostname":"mac-d","status":"online","sessions":0,"load1":1,"ncpu":10,"mem_free_bytes":1,"mem_total_bytes":2,"last_heartbeat":"$HB"}]}
 EOF
-NCMD="cat '$WORK/summary-nodes.json'" hubs || fail "G2: --refresh failed" "$(cat "$WORK/err")"
+NCMD="cat '$WORK/summary-nodes.json'" hubs || st_fail "G2: --refresh failed" "$(cat "$WORK/err")"
 g2=$(tr '\037' '|' < "$G/hub_nodes")
 eq "G2: the machine's own fleet_version → column 7, judged ok" "$C2|ok" "$(printf '%s\n' "$g2" | awk -F'|' '$1 == "mac-b" { print $7 "|" $11 }')"
 eq "G2: a machine with none → empty, never guessed" "|" "$(printf '%s\n' "$g2" | awk -F'|' '$1 == "mac-a" { print $7 "|" $11 }')"

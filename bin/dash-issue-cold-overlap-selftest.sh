@@ -36,8 +36,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 SPAWN="$BIN/dash-issue-session.sh"
-command -v tmux >/dev/null 2>&1 || { echo "SKIP no tmux"; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo "SKIP no python3"; exit 0; }
+st_need tmux python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/cold-ovl.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"

@@ -26,15 +26,15 @@
 # tmux / python3 absent → SKIP (exit 0). REPLAY_KEEP=1 keeps the work dir.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 REPO="$(cd "$BIN/.." && pwd)"
 TMUX_BIN=$(command -v tmux) || { printf 'status-replay selftest: tmux absent — SKIP\n'; exit 0; }
-command -v python3 >/dev/null 2>&1 || { printf 'status-replay selftest: python3 absent — SKIP\n'; exit 0; }
+st_need python3
 unset TMUX TMUX_PANE
 PY="$BIN/fleet-status-7501.py"
 
 FAIL=0; CHECKS=0
 ok()  { CHECKS=$((CHECKS + 1)); printf 'ok:   %s\n' "$1"; }
-bad() { CHECKS=$((CHECKS + 1)); FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; }
 
 # ── A. unit ─────────────────────────────────────────────────────────────────
 out=$(python3 - "$PY" <<'PYEOF'
@@ -93,17 +93,17 @@ print("ok")
 PYEOF
 ) || true
 [ "$out" = ok ] && ok "A wrap/unwrap at depths 1..3, splices on every split, depth 0 byte for byte, replay_payload" \
-  || bad "A unit: $out"
+  || st_miss "A unit: $out"
 
 # ── E. lint ─────────────────────────────────────────────────────────────────
 passval() { awk '$1=="set" && $2=="-g" && $3=="allow-passthrough" {v=$4} END {print v}' "$1"; }
 NODE_V=$(passval "$REPO/conf/tmux-attention.conf")
 [ "$NODE_V" = on ] && ok "E conf/tmux-attention.conf: allow-passthrough on" \
-  || bad "E conf/tmux-attention.conf: allow-passthrough '$NODE_V', want on"
+  || st_miss "E conf/tmux-attention.conf: allow-passthrough '$NODE_V', want on"
 HOOKS=$(grep -E '^set-hook -g (session-window-changed|client-session-changed|client-attached)\[75\] .*fleet-status-7501\.py replay' "$REPO/conf/tmux-attention.conf")
-[ "$(printf '%s\n' "$HOOKS" | grep -c .)" = 2 ] && ok "E node conf: the two [75] replay hooks (window and session changed)" || bad "E node conf [75] hooks: $HOOKS"
+[ "$(printf '%s\n' "$HOOKS" | grep -c .)" = 2 ] && ok "E node conf: the two [75] replay hooks (window and session changed)" || st_miss "E node conf [75] hooks: $HOOKS"
 grep -q 'relay --replay "${FLEET_STATUS_REPLAY_DEPTH:-3}" --' "$BIN/fleet-claude.sh" \
-  && ok "E fleet-claude.sh: relay --replay FLEET_STATUS_REPLAY_DEPTH (default 3)" || bad "E fleet-claude.sh does not pass --replay"
+  && ok "E fleet-claude.sh: relay --replay FLEET_STATUS_REPLAY_DEPTH (default 3)" || st_miss "E fleet-claude.sh does not pass --replay"
 
 # ── the terminal ────────────────────────────────────────────────────────────
 # Sockets under a SHORT dir: a long $TMPDIR overflows AF_UNIX's 104 bytes.
@@ -199,7 +199,7 @@ for d in 1 2; do
   printf 'F thin, %s tmux deep → terminal received: %s\n' "$d" "$J"
   got=$(field "$J" '"|".join(d["ask"])')
   [ "$got" = "$WANT" ] && ok "F thin $d deep (a session $( [ "$d" = 1 ] && echo on the home machine || echo on another machine)): exactly one bare OSC 7501, words intact" \
-    || bad "F thin $d deep: terminal got '$got', want '$WANT'"
+    || st_miss "F thin $d deep: terminal got '$got', want '$WANT'"
 done
 
 # ── D. replay on switch / attach ────────────────────────────────────────────
@@ -216,16 +216,16 @@ steps='{"chain":["one"],"steps":[["set",[["one","set","-g","@agent_replay","3"],
 # first without @agent_replay: attach + switches write nothing
 J0=$(python3 "$WORK/term.py" "$TMUX_BIN" "$WORK" one one '{"chain":["one"],"steps":[["to-b",[["one","select-window","-t","one:b"]]],["to-a",[["one","select-window","-t","one:a"]]]]}')
 [ "$J0" = '{"attach": [], "to-b": [], "to-a": []}' ] && ok "D no @agent_replay (no relay with --replay ran): no write at all" \
-  || bad "D without @agent_replay: $J0"
+  || st_miss "D without @agent_replay: $J0"
 J=$(python3 "$WORK/term.py" "$TMUX_BIN" "$WORK" one one "$steps")
 printf 'D replay → terminal received: %s\n' "$J"
 [ "$(field "$J" 'd["to-b"]')" = "['state=clear']" ] && ok "D a switch to a window with no agent: state=clear" \
-  || bad "D to-b: $(field "$J" 'd["to-b"]')"
+  || st_miss "D to-b: $(field "$J" 'd["to-b"]')"
 [ "$(field "$J" '"|".join(d["to-a"])')" = "$Q" ] && ok "D a switch back: the window's report, words intact" \
-  || bad "D to-a: $(field "$J" 'd["to-a"]'), want $Q"
+  || st_miss "D to-a: $(field "$J" 'd["to-a"]'), want $Q"
 J=$(python3 "$WORK/term.py" "$TMUX_BIN" "$WORK" one one '{"chain":["one"],"steps":[]}')
 [ "$(field "$J" '"|".join(d["attach"])')" = "$Q" ] && ok "D a client arriving on the window hears its report, once" \
-  || bad "D attach: $(field "$J" 'd["attach"]')"
+  || st_miss "D attach: $(field "$J" 'd["attach"]')"
 
 printf 'status-replay selftest: %d check(s), %d failure(s)\n' "$CHECKS" "$FAIL"
-[ "$FAIL" -eq 0 ]
+st_done

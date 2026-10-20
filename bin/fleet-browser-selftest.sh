@@ -33,8 +33,9 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
-command -v python3 >/dev/null 2>&1 || { echo 'selftest: python3 missing — SKIP'; exit 0; }
+st_need python3
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fbrowser-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 trap 'pkill -f "$WORK/bin/relay.py" 2>/dev/null; rm -rf "$WORK"' EXIT
@@ -42,7 +43,6 @@ export TMPDIR="$WORK" HOME="$WORK/home"
 mkdir -p "$WORK/bin" "$HOME/.claude"
 unset FLEET_BROWSER CLAUDE_CONFIG_DIR FLEET_CONF_DIR
 fail=0
-ok()  { printf 'ok   %s\n' "$1"; }
 bad() { printf 'FAIL %s\n' "$1"; fail=1; }
 TAB=$(printf '\t')
 AUTH='https://auth.example.com/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A33418%2Fcallback&state=s3cr3t'
@@ -50,25 +50,25 @@ cp_of() { python3 -c 'import json,sys; print(json.loads(sys.stdin.read().split("
 
 # ---- A: ADDR -------------------------------------------------------------------
 [ "$(FLEET_OPEN_CALLBACK=1 python3 "$BIN/fleet-open-addr.py" "$AUTH" | cp_of)" = 33418 ] \
-  && ok 'A cport from a loopback redirect_uri' || bad 'A no cport from a loopback redirect_uri'
+  && st_ok 'A cport from a loopback redirect_uri' || bad 'A no cport from a loopback redirect_uri'
 [ "$(python3 "$BIN/fleet-open-addr.py" "$AUTH" | cp_of)" = - ] \
-  && ok 'A no FLEET_OPEN_CALLBACK → no cport' || bad 'A cport without FLEET_OPEN_CALLBACK'
+  && st_ok 'A no FLEET_OPEN_CALLBACK → no cport' || bad 'A cport without FLEET_OPEN_CALLBACK'
 [ "$(FLEET_OPEN_CALLBACK=1 python3 "$BIN/fleet-open-addr.py" 'https://a.example/x?redirect_uri=https%3A%2F%2Fapp.example%2Fcb' | cp_of)" = - ] \
-  && ok 'A a non-loopback redirect → no cport' || bad 'A cport for a non-loopback redirect'
+  && st_ok 'A a non-loopback redirect → no cport' || bad 'A cport for a non-loopback redirect'
 [ "$(FLEET_OPEN_CALLBACK=1 python3 "$BIN/fleet-open-addr.py" 'https://a.example/x?redirect_uri=http%3A%2F%2F127.0.0.1%2Fcb' | cp_of)" = - ] \
-  && ok 'A a loopback redirect with no port → no cport' || bad 'A cport for a portless redirect'
+  && st_ok 'A a loopback redirect with no port → no cport' || bad 'A cport for a portless redirect'
 [ "$(FLEET_OPEN_CALLBACK=1 python3 "$BIN/fleet-open-addr.py" 'https://a.example/x?redirect_url=http://127.0.0.1:1455/auth/callback' | cp_of)" = 1455 ] \
-  && ok 'A redirect_url (127.0.0.1) too' || bad 'A redirect_url not read'
+  && st_ok 'A redirect_url (127.0.0.1) too' || bad 'A redirect_url not read'
 
 # ---- B: SWITCH -----------------------------------------------------------------
 FB="$BIN/fleet-browser.sh"
 SET="$HOME/.claude/settings.json"
-bash "$FB" enabled && bad 'B no settings.json reads on' || ok 'B no settings.json → off'
+bash "$FB" enabled && bad 'B no settings.json reads on' || st_ok 'B no settings.json → off'
 echo '{"enabledPlugins":{"fleet-browser@claude-fleet":false}}' > "$SET"
-bash "$FB" enabled && bad 'B disabled reads on' || ok 'B enabledPlugins false → off'
+bash "$FB" enabled && bad 'B disabled reads on' || st_ok 'B enabledPlugins false → off'
 echo '{"enabledPlugins":{"fleet-browser@claude-fleet":true}}' > "$SET"
-bash "$FB" enabled && ok 'B enabledPlugins true → on' || bad 'B enabled plugin reads off'
-FLEET_BROWSER=0 bash "$FB" enabled && bad 'B FLEET_BROWSER=0 ignored' || ok 'B FLEET_BROWSER=0 → off'
+bash "$FB" enabled && st_ok 'B enabledPlugins true → on' || bad 'B enabled plugin reads off'
+FLEET_BROWSER=0 bash "$FB" enabled && bad 'B FLEET_BROWSER=0 ignored' || st_ok 'B FLEET_BROWSER=0 → off'
 rm -f "$SET"
 
 cat > "$WORK/bin/fakeclaude" <<EOF
@@ -83,16 +83,16 @@ EOF
 chmod +x "$WORK/bin/fakeclaude"
 out=$(FLEET_BROWSER_CLAUDE="$WORK/bin/fakeclaude" bash "$FB" on 2>&1); rc=$?
 [ "$rc" = 0 ] && grep -q 'plugin install fleet-browser@claude-fleet' "$WORK/claude.calls" && bash "$FB" enabled \
-  && ok 'B on → claude plugin install/enable, enabled' || bad "B on (rc=$rc): $out"
-case "$out" in *'在你的电脑上打开'*'用完即关'*) ok 'B on says what it does' ;; *) bad "B on says nothing: $out" ;; esac
+  && st_ok 'B on → claude plugin install/enable, enabled' || bad "B on (rc=$rc): $out"
+case "$out" in *'在你的电脑上打开'*'用完即关'*) st_ok 'B on says what it does' ;; *) bad "B on says nothing: $out" ;; esac
 out=$(FLEET_BROWSER_CLAUDE="$WORK/bin/fakeclaude" bash "$FB" off 2>&1); rc=$?
 [ "$rc" = 0 ] && grep -q 'plugin disable fleet-browser@claude-fleet' "$WORK/claude.calls" && ! bash "$FB" enabled \
-  && ok 'B off → claude plugin disable, off' || bad "B off (rc=$rc): $out"
+  && st_ok 'B off → claude plugin disable, off' || bad "B off (rc=$rc): $out"
 : > "$WORK/env.file"
 CLAUDE_ENV_FILE="$WORK/env.file" bash "$FB" hook
-grep -q "^export BROWSER=.*fleet-browser.sh" "$WORK/env.file" && ok 'B hook → BROWSER in CLAUDE_ENV_FILE' \
+grep -q "^export BROWSER=.*fleet-browser.sh" "$WORK/env.file" && st_ok 'B hook → BROWSER in CLAUDE_ENV_FILE' \
   || bad "B hook wrote: $(cat "$WORK/env.file")"
-(unset CLAUDE_ENV_FILE; bash "$FB" hook) && ok 'B hook without CLAUDE_ENV_FILE exits 0' || bad 'B hook failed with no env file'
+(unset CLAUDE_ENV_FILE; bash "$FB" hook) && st_ok 'B hook without CLAUDE_ENV_FILE exits 0' || bad 'B hook failed with no env file'
 
 cat > "$WORK/bin/fakeopen" <<EOF
 #!/bin/bash
@@ -102,10 +102,10 @@ EOF
 chmod +x "$WORK/bin/fakeopen"
 FLEET_BROWSER_OPEN="$WORK/bin/fakeopen" bash "$FB" "$AUTH"; rc=$?
 [ "$rc" = 0 ] && [ "$(sed -n 1p "$WORK/open.argv")" = --browser ] && [ "$(sed -n 3p "$WORK/open.argv")" = "$AUTH" ] \
-  && ok 'B <url> → fleet-open.sh --browser -- <url>' || bad "B <url> rc=$rc argv: $(tr '\n' ' ' < "$WORK/open.argv")"
+  && st_ok 'B <url> → fleet-open.sh --browser -- <url>' || bad "B <url> rc=$rc argv: $(tr '\n' ' ' < "$WORK/open.argv")"
 BL="$HOME/.config/claude-fleet/logs/browser.log"
 if grep -q "sent:client${TAB}auth.example.com${TAB}33418" "$BL" 2>/dev/null && ! grep -q 's3cr3t' "$BL"; then
-  ok 'B browser.log: result · host · cport, never the URL'
+  st_ok 'B browser.log: result · host · cport, never the URL'
 else bad "B browser.log: $(cat "$BL" 2>/dev/null)"; fi
 
 # ---- C: FWD --------------------------------------------------------------------
@@ -167,7 +167,7 @@ if ev != ["open", "close", "open", "close"]: bad.append("log events %r" % ev)
 print("\n".join(bad) if bad else "ok")
 PY
 )
-[ "$out" = ok ] && ok 'C free · up · gone · notice · close on gone · close at deadline · log' || bad "C $out"
+[ "$out" = ok ] && st_ok 'C free · up · gone · notice · close on gone · close at deadline · log' || bad "C $out"
 
 # ---- D: THIN -------------------------------------------------------------------
 cat > "$WORK/bin/relay.py" <<'PY'
@@ -298,7 +298,7 @@ th.fwd.close_all()
 print("\n".join(bad) if bad else "ok")
 PY
 )
-[ "$out" = ok ] && ok 'D thin open: cport forwarded as itself, said, logged, closed when the server stops · busy said · page · url · receipt ok/fail' \
+[ "$out" = ok ] && st_ok 'D thin open: cport forwarded as itself, said, logged, closed when the server stops · busy said · page · url · receipt ok/fail' \
   || bad "D $out"
 pkill -f "$WORK/bin/relay.py" 2>/dev/null
 
@@ -343,12 +343,12 @@ d = json.loads(base64.b64decode(m.group(2)))
 print("ok" if m.group(1) == "tok123" and d.get("cport") == 33418 and d.get("who") == "fleet-x" and d.get("ttl") == 600 else "payload %r" % d)
 PY
 )
-[ "$res" = unconfirmed ] && [ "$v" = ok ] && ok 'E --browser on a thin 看台 → 7502 open with its token, unconfirmed without a receipt' \
+[ "$res" = unconfirmed ] && [ "$v" = ok ] && st_ok 'E --browser on a thin 看台 → 7502 open with its token, unconfirmed without a receipt' \
   || bad "E browser road: $res / $v / $(cat "$WORK/road.err")"
-grep -q 'MacBook' "$WORK/road.err" && ok 'E the device is named' || bad "E device: $(cat "$WORK/road.err")"
+grep -q 'MacBook' "$WORK/road.err" && st_ok 'E the device is named' || bad "E device: $(cat "$WORK/road.err")"
 rm -f "$WORK/thin.out"
 res=$(FLEET_BROWSER=0 road "$AUTH")
-python3 - "$WORK/thin.out" <<'PY' && ok 'E off → the 看台 is told too (#3538), no cport' || bad "E off ($res)"
+python3 - "$WORK/thin.out" <<'PY' && st_ok 'E off → the 看台 is told too (#3538), no cport' || bad "E off ($res)"
 import base64, json, re, sys
 m = re.fullmatch(r"\x1b\]7502;open;token=tok123;j=([A-Za-z0-9+/=]+)\x07", open(sys.argv[1], "rb").read().decode())
 sys.exit(0 if m and "cport" not in json.loads(base64.b64decode(m.group(1))) else 1)
@@ -356,16 +356,16 @@ PY
 printf '100\t/dev/ttys902\n' > "$STATE/clients"
 rm -f "$WORK/thin.out"
 res=$(FLEET_BROWSER=0 road --browser "$AUTH")
-[ ! -e "$WORK/thin.out" ] && ok 'E a -via- 看台 is not told directly' || bad "E -via- got the 7502 ($res)"
+[ ! -e "$WORK/thin.out" ] && st_ok 'E a -via- 看台 is not told directly' || bad "E -via- got the 7502 ($res)"
 
 # ---- F: WIRING -----------------------------------------------------------------
 grep -q 'fleet-browser.sh\\" hook' "$ROOT/plugins/fleet-browser/hooks/hooks.json" \
-  && ok 'F the plugin SessionStart hook runs fleet-browser.sh hook' || bad 'F plugin hook'
+  && st_ok 'F the plugin SessionStart hook runs fleet-browser.sh hook' || bad 'F plugin hook'
 # the one shared step (bin/fleet-launch-lib.sh, T620) that both launchers run
 grep -q 'if bash "$BIN/fleet-browser.sh" enabled 2>/dev/null; then export BROWSER="$BIN/fleet-browser.sh"; fi' "$BIN/fleet-launch-lib.sh" \
-  && ok "F fleet-launch-lib.sh exports BROWSER only when enabled" || bad "F fleet-launch-lib.sh BROWSER wiring"
+  && st_ok "F fleet-launch-lib.sh exports BROWSER only when enabled" || bad "F fleet-launch-lib.sh BROWSER wiring"
 for l in fleet-claude.sh fleet-codex.sh; do
-  grep -q '^fleet_launch_browser' "$BIN/$l" && ok "F $l runs it" || bad "F $l BROWSER wiring"
+  grep -q '^fleet_launch_browser' "$BIN/$l" && st_ok "F $l runs it" || bad "F $l BROWSER wiring"
 done
 
 [ "$fail" = 0 ] && echo 'fleet-browser-selftest: all green' || echo 'fleet-browser-selftest: FAILED'

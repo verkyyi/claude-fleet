@@ -33,7 +33,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-repo-fixture.sh"
 ADD="$BIN/dash-repo-add.sh"
 [ -f "$ADD" ] || { printf 'selftest: %s missing\n' "$ADD" >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
+st_need git
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dash-repo-add-selftest.XXXXXX")" || exit 2
@@ -60,10 +60,8 @@ export FLEET_UI_LANG=en
 unset TMUX TMUX_PANE FLEET_SESSION FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH
 . "$BIN/fleet-lib.sh"
 
-FAILS=0
-fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
-eq()   { [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
-has()  { case "$2" in *"$3"*) : ;; *) fail "$1: [$3] not in [$2]" ;; esac; }
+st_tally miss
+eq()   { [ "$2" = "$3" ] || st_miss "$1: expected [$3], got [$2]"; }
 
 mkrepo() {   # $1=dir $2=owner/name — a checkout whose origin IS that repo
   git init -q "$1" && git -C "$1" remote add origin "https://github.com/$2.git"
@@ -83,14 +81,14 @@ run --session "$S" 'bad repo'
 eq "A: a non owner/name → refused:invalid-repo" "$OUT" "refused:invalid-repo"; eq "A: … rc 1" "$RC" 1
 run --session "$S" o/a
 eq "A: a hosted repo → refused:hosted" "$OUT" "refused:hosted"; eq "A: … rc 1" "$RC" 1
-has "A: … the human line names it" "$ERR" "already hosts o/a"
-[ "$(ls "$FLEET_CONF_DIR/fleets/$S/repos")" = o-a.conf ] || fail "A: a refusal wrote into repos/"
+st_has "A: … the human line names it" "$ERR" "already hosts o/a"
+[ "$(ls "$FLEET_CONF_DIR/fleets/$S/repos")" = o-a.conf ] || st_miss "A: a refusal wrote into repos/"
 mkrepo "$HOME/projects/b" o/b
 run --session "$S" o/b
 eq "A: a prepared ~/projects/<name> → added" "$OUT" "added:o-b"; eq "A: … rc 0" "$RC" 0
-[ -f "$FLEET_CONF_DIR/fleets/$S/repos/o-b.conf" ] || fail "A: added, but no overlay at repos/o-b.conf"
-has "A: … the overlay points at the default dir" "$(cat "$FLEET_CONF_DIR/fleets/$S/repos/o-b.conf")" "FLEET_MAIN=\"$HOME/projects/b\""
-has "A: … the human lines say reused" "$ERR" "reusing existing checkout"
+[ -f "$FLEET_CONF_DIR/fleets/$S/repos/o-b.conf" ] || st_miss "A: added, but no overlay at repos/o-b.conf"
+st_has "A: … the overlay points at the default dir" "$(cat "$FLEET_CONF_DIR/fleets/$S/repos/o-b.conf")" "FLEET_MAIN=\"$HOME/projects/b\""
+st_has "A: … the human lines say reused" "$ERR" "reusing existing checkout"
 eq "A: … fleet_repos lists both" "$(fleet_repos "$S" | tr '\n' ' ')" "o/a o/b "
 run --session "$S" o/b
 eq "A: adding it again → refused:hosted" "$OUT" "refused:hosted"
@@ -100,7 +98,7 @@ eq "A: a GitHub URL normalises to owner/name" "$OUT" "added:o-c"; eq "A: … rc 
 mkrepo "$HOME/projects/d" o/x
 run --session "$S" o/d
 eq "A: the default dir is another repo → refused:origin-mismatch" "$OUT" "refused:origin-mismatch"; eq "A: … rc 1" "$RC" 1
-[ -e "$FLEET_CONF_DIR/fleets/$S/repos/o-d.conf" ] && fail "A: a refused add wrote o-d.conf"
+[ -e "$FLEET_CONF_DIR/fleets/$S/repos/o-d.conf" ] && st_miss "A: a refused add wrote o-d.conf"
 mkdir -p "$HOME/projects/e"
 run --session "$S" o/e
 eq "A: the default dir is not a checkout → refused:not-a-checkout" "$OUT" "refused:not-a-checkout"
@@ -112,7 +110,7 @@ run --session nosuch o/f
 eq "A: a session that is no fleet, one fleet on the login → that fleet" "$OUT" "failed:clone"
 OUT=$(FLEET_CONF_DIR="$WORK/noconf" bash "$ADD" o/f 2>"$WORK/err"); RC=$?
 eq "A: no fleet on the login at all → refused:no-fleet" "$OUT" "refused:no-fleet"; eq "A: … rc 1" "$RC" 1
-has "A: … said in words" "$(cat "$WORK/err")" "no fleet on this computer"
+st_has "A: … said in words" "$(cat "$WORK/err")" "no fleet on this computer"
 mkrepo "$HOME/projects/g" o/g
 OUT=$(FLEET_SESSION="$S" bash "$ADD" o/g 2>/dev/null); eq "A: \$FLEET_SESSION names the fleet (the popup openers export it)" "$OUT" "added:o-g"
 run --session "$S"; eq "A: no repo and no terminal → usage (2), no token" "$RC:$OUT" "2:"
@@ -132,11 +130,11 @@ eq "B: … and it is a two-repo fleet now" "$(fleet_repos "$S1" | tr '\n' ' ')" 
 
 # --- C. the dash's ⌃z wiring went with the dash (issue #4902); the README still
 # names the popup.
-grep -qE 'dash-repo-add\.sh' "$BIN/../README.md" || fail "C: README does not mention the popup"
+grep -qE 'dash-repo-add\.sh' "$BIN/../README.md" || st_miss "C: README does not mention the popup"
 # --- D. the interactive form on a PTY: esc cancels; typed + ↵ adds; the verdict holds ---
 if command -v fzf >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
   mkrepo "$HOME/projects/pty" o/pty
-  python3 - "$ADD" "$S" "$WORK" <<'PY' || FAILS=$((FAILS+1))
+  python3 - "$ADD" "$S" "$WORK" <<'PY' || FAIL=$((FAIL+1))
 import os, pty, select, struct, subprocess, sys, termios, fcntl, time
 add, sess, work = sys.argv[1:4]
 env = dict(os.environ, TERM='xterm-256color', FLEET_SESSION=sess, FLEET_UI_LANG='zh')
@@ -218,7 +216,7 @@ for pair in 'o/r=o/r' 'https://github.com/o/r=o/r' 'https://github.com/o/r.git=o
   eq "E: --shape [$inp]" "$(bash "$ADD" --shape "$inp")" "$want"
 done
 for bad in 'bad repo' 'https://github.com/o' 'o/r/x' 'o/' '/r' ''; do
-  bash "$ADD" --shape "$bad" >/dev/null 2>&1 && fail "E: --shape [$bad] must be refused (rc 1)"
+  bash "$ADD" --shape "$bad" >/dev/null 2>&1 && st_miss "E: --shape [$bad] must be refused (rc 1)"
 done
 mkerr() { printf '%s\n' "$2" > "$WORK/clone.$1"; }
 mkerr net 'error connecting to api.github.com'
@@ -229,33 +227,32 @@ mkerr auth 'To get started with GitHub CLI, please run:  gh auth login'
 mkerr other 'fatal: something else entirely'
 ex() { FLEET_UI_LANG="$1" bash "$ADD" --explain "$2" o/r ${3:+"$WORK/clone.$3"}; }
 eq "E: zh failed:clone + network → 网络不通" "$(ex zh failed:clone net)" "$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" t repo_add_net)"
-has "E: zh … 「拉不到 GitHub，网络不通」" "$(ex zh failed:clone dns)" "拉不到 GitHub，网络不通"
-has "E: en … network" "$(ex en failed:clone dns)" "Cannot reach GitHub"
-has "E: not found (gh's wording is not DNS)" "$(ex zh failed:clone nf)" "GitHub 上找不到 o/r"
-has "E: not found (git's wording)" "$(ex en failed:clone nf2)" "GitHub has no o/r"
-has "E: not signed in" "$(ex zh failed:clone auth)" "gh auth login"
-has "E: any other clone failure points at git's lines" "$(ex zh failed:clone other)" "git 的输出"
-has "E: hosted is friendly and says where" "$(ex zh refused:hosted)" "已在本 fleet 里，代码在 $HOME/projects/r"
-has "E: added says where and that it is hosted" "$(ex en added:o-r)" "the code is in $HOME/projects/r"
+st_has "E: zh … 「拉不到 GitHub，网络不通」" "$(ex zh failed:clone dns)" "拉不到 GitHub，网络不通"
+st_has "E: en … network" "$(ex en failed:clone dns)" "Cannot reach GitHub"
+st_has "E: not found (gh's wording is not DNS)" "$(ex zh failed:clone nf)" "GitHub 上找不到 o/r"
+st_has "E: not found (git's wording)" "$(ex en failed:clone nf2)" "GitHub has no o/r"
+st_has "E: not signed in" "$(ex zh failed:clone auth)" "gh auth login"
+st_has "E: any other clone failure points at git's lines" "$(ex zh failed:clone other)" "git 的输出"
+st_has "E: hosted is friendly and says where" "$(ex zh refused:hosted)" "已在本 fleet 里，代码在 $HOME/projects/r"
+st_has "E: added says where and that it is hosted" "$(ex en added:o-r)" "the code is in $HOME/projects/r"
 for tok in added:o-r refused:hosted refused:origin-mismatch refused:not-a-checkout refused:invalid-repo \
            refused:no-fleet failed:clone failed:write failed:no-result refused:whatever failed:whatever; do
   for lang in zh en; do
     v=$(ex "$lang" "$tok" other)
-    [ -n "$v" ] || fail "E: $lang $tok has no sentence"
-    case "$v" in *refused:*|*failed:*|*added:*|*repo_add_*) fail "E: $lang $tok shows a token / key bare: [$v]" ;; esac
+    [ -n "$v" ] || st_miss "E: $lang $tok has no sentence"
+    case "$v" in *refused:*|*failed:*|*added:*|*repo_add_*) st_miss "E: $lang $tok shows a token / key bare: [$v]" ;; esac
   done
 done
 # end to end: a gh that cannot reach GitHub → the popup's last word is the network one
 printf '#!/bin/sh\necho "error connecting to api.github.com" >&2\nexit 1\n' > "$WORK/bin/gh"
 OUT=$(FLEET_UI_LANG=zh bash "$ADD" --session "$S" o/net 2>"$WORK/err"); RC=$?
 eq "E: offline clone → failed:clone" "$OUT:$RC" "failed:clone:1"
-has "E: … and the person reads 网络不通" "$(tail -n 1 "$WORK/err")" "拉不到 GitHub，网络不通"
+st_has "E: … and the person reads 网络不通" "$(tail -n 1 "$WORK/err")" "拉不到 GitHub，网络不通"
 st_fake_gh "$WORK/bin"
 # the Claude road (skills/fleet-add-repo) names this same script, never a bare clone
 SK="$BIN/../skills/fleet-add-repo/SKILL.md"
-grep -q 'dash-repo-add.sh' "$SK" 2>/dev/null || fail "E: skills/fleet-add-repo does not send Claude through dash-repo-add.sh"
+grep -q 'dash-repo-add.sh' "$SK" 2>/dev/null || st_miss "E: skills/fleet-add-repo does not send Claude through dash-repo-add.sh"
 grep -q 'fleet-repo.sh add' "$BIN/../conf/agent-defaults/AGENT.default.md" \
-  || fail "E: conf/agent-defaults/AGENT.default.md does not say a repo comes in through fleet-repo.sh add"
+  || st_miss "E: conf/agent-defaults/AGENT.default.md does not say a repo comes in through fleet-repo.sh add"
 
-if [ "$FAILS" -gt 0 ]; then printf 'selftest FAIL: %s failure(s)\n' "$FAILS" >&2; exit 1; fi
-printf 'selftest OK: dash-repo-add.sh — tokens, degenerate-first, ⌃z / menu g wiring, PTY prompt, words + ⌘P\n'
+st_done

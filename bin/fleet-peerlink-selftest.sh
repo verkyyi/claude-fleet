@@ -43,9 +43,10 @@
 # fleet-peer-cert.sh.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-lib.sh"
 ROOT="$(cd "$BIN/.." && pwd)"
 PL="$BIN/fleet-peerlink.py"
-command -v python3 >/dev/null 2>&1 || { echo 'fleet-peerlink-selftest: python3 absent — SKIP'; exit 0; }
+st_need python3
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/plst.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 PIDS=''
@@ -57,9 +58,7 @@ cleanup() {
   rm -rf "$WORK"
 }
 trap cleanup EXIT
-FAILS=0 CHECKS=0
-ok() { CHECKS=$((CHECKS + 1)); }
-fail() { FAILS=$((FAILS + 1)); printf 'FAIL  %s\n' "$*"; }
+FAIL=0 CHECKS=0
 until_ok() { local secs="$1" _; shift; for _ in $(seq 1 $((secs * 10))); do "$@" && return 0; sleep 0.1; done; "$@"; }
 
 US=$'\x1f'
@@ -134,17 +133,17 @@ leg_A() {
 box a 1 mac-a:bob mac-a:carol "home:$ME" home:dave mac-n:bob:lost "mac-b:-"
 start
 until_ok 8 sh -c '[ "$(python3 -c "import json,sys; print(sum(l[\"phase\"] == \"up\" for l in json.load(open(sys.argv[1]))[\"links\"]))" "$1" 2>/dev/null)" = 4 ]' _ "$B/conf/peerlink/state.json" \
-  || fail "A: four links never came up: $(links) · $(tail -3 "$B/run.err")"
-[ "$(links)" = "home@dave:up mac-a@bob:up mac-a@carol:up mac-b@$ME:up" ] && ok \
-  || fail "A: want set: got [$(links)] — want mac-a@bob mac-a@carol (two logins on one machine), home@dave (this machine, another login), mac-b as $ME (no login known); not home@$ME, not the lost mac-n"
-grep -q "^channel mac-a bob id -un" "$B/fs/log" && grep -q "^master mac-a bob " "$B/fs/log" && ok || fail "A: mac-a@bob was not opened as bob"
-grep -q "^master mac-n " "$B/fs/log" && fail "A: a lost machine was dialled" || ok
+  || st_miss "A: four links never came up: $(links) · $(tail -3 "$B/run.err")"
+[ "$(links)" = "home@dave:up mac-a@bob:up mac-a@carol:up mac-b@$ME:up" ] && st_count \
+  || st_miss "A: want set: got [$(links)] — want mac-a@bob mac-a@carol (two logins on one machine), home@dave (this machine, another login), mac-b as $ME (no login known); not home@$ME, not the lost mac-n"
+grep -q "^channel mac-a bob id -un" "$B/fs/log" && grep -q "^master mac-a bob " "$B/fs/log" && st_count || st_miss "A: mac-a@bob was not opened as bob"
+grep -q "^master mac-n " "$B/fs/log" && st_miss "A: a lost machine was dialled" || st_count
 stop
 box a2 0 mac-a:bob
 export FLEET_PEERLINK_MODE=demand
 start; sleep 2.5
-[ -s "$B/fs/log" ] && fail "A: no thin view attached, yet ssh ran: $(cat "$B/fs/log")" || ok
-[ -z "$(links)" ] && ok || fail "A: links with no view: $(links)"
+[ -s "$B/fs/log" ] && st_miss "A: no thin view attached, yet ssh ran: $(cat "$B/fs/log")" || st_count
+[ -z "$(links)" ] && st_count || st_miss "A: links with no view: $(links)"
 stop; unset FLEET_PEERLINK_MODE
 }
 
@@ -153,13 +152,13 @@ leg_B() {
 box b 1 mac-a:bob mac-b:bob
 export FLEET_PEERLINK_LINGER=2 FLEET_PEERLINK_MODE=demand
 start
-until_ok 8 links_is "mac-a@bob:up mac-b@bob:up" || fail "B: links never up: $(links)"
-[ "$(masters_alive)" = 2 ] && ok || fail "B: $(masters_alive) masters alive, want 2"
+until_ok 8 links_is "mac-a@bob:up mac-b@bob:up" || st_miss "B: links never up: $(links)"
+[ "$(masters_alive)" = 2 ] && st_count || st_miss "B: $(masters_alive) masters alive, want 2"
 kill "$VP" 2>/dev/null
 until_ok 10 all_closed \
-  && ok || fail "B: the view gone ${FLEET_PEERLINK_LINGER}s, still links [$(links)] / $(masters_alive) masters"
-ls "$B/conf/peerlink/"*.sock >/dev/null 2>&1 && fail "B: control files left: $(ls "$B/conf/peerlink/")" || ok
-grep -q '关闭：没人要了' "$B/run.err" && ok || fail "B: no close record"
+  && st_count || st_miss "B: the view gone ${FLEET_PEERLINK_LINGER}s, still links [$(links)] / $(masters_alive) masters"
+ls "$B/conf/peerlink/"*.sock >/dev/null 2>&1 && st_miss "B: control files left: $(ls "$B/conf/peerlink/")" || st_count
+grep -q '关闭：没人要了' "$B/run.err" && st_count || st_miss "B: no close record"
 stop; unset FLEET_PEERLINK_LINGER FLEET_PEERLINK_MODE
 }
 
@@ -167,23 +166,23 @@ stop; unset FLEET_PEERLINK_LINGER FLEET_PEERLINK_MODE
 leg_C() {
 box c 1 mac-a:bob
 out=$(python3 "$PL" status --check); rc=$?
-[ "$rc" = 2 ] && [ -z "$out" ] && ok || fail "C: never ran: rc $rc [$out], want rc 2 and nothing"
+[ "$rc" = 2 ] && [ -z "$out" ] && st_count || st_miss "C: never ran: rc $rc [$out], want rc 2 and nothing"
 out=$(FLEET_CONF_DIR="$B/conf" bash "$BIN/fleet-doctor.sh" 2>/dev/null | grep peerlink)
-[ -z "$out" ] && ok || fail "C: the doctor printed a peerlink row for a login it never ran on: $out"
+[ -z "$out" ] && st_count || st_miss "C: the doctor printed a peerlink row for a login it never ran on: $out"
 start
-until_ok 8 links_is "mac-a@bob:up" || fail "C: never up"
+until_ok 8 links_is "mac-a@bob:up" || st_miss "C: never up"
 until_ok 2 sh -c 'python3 "$1" status --check | grep -q 往返' _ "$PL"
 out=$(python3 "$PL" status --check); rc=$?
-case "$out" in "1 条常开连接（全连）：mac-a@bob 已连上 · 路线 mac-a · "*" · 往返 "*" · 失败 0") [ "$rc" = 0 ] && ok || fail "C: healthy rc $rc" ;; *) fail "C: healthy line: [$out] rc $rc" ;; esac
+case "$out" in "1 条常开连接（全连）：mac-a@bob 已连上 · 路线 mac-a · "*" · 往返 "*" · 失败 0") [ "$rc" = 0 ] && st_count || st_miss "C: healthy rc $rc" ;; *) st_miss "C: healthy line: [$out] rc $rc" ;; esac
 out=$(bash "$BIN/fleet-doctor.sh" 2>/dev/null | grep peerlink)
-case "$out" in *PASS*peerlink*mac-a@bob*) ok ;; *) fail "C: doctor row (healthy): [$out]" ;; esac
+case "$out" in *PASS*peerlink*mac-a@bob*) st_count ;; *) st_miss "C: doctor row (healthy): [$out]" ;; esac
 printf '%s\n' "doctor healthy: $out" >> "$WORK/doctor-rows.txt"
 stop
 until_ok 3 sh -c 'FLEET_PEERLINK_STALE=1 python3 "$1" status --check | grep -q 管理者没在跑' _ "$PL"
 out=$(FLEET_PEERLINK_STALE=1 python3 "$PL" status --check); rc=$?
-case "$out" in *管理者没在跑*) [ "$rc" = 1 ] && ok || fail "C: stopped keeper rc $rc" ;; *) fail "C: a stopped keeper reads [$out]" ;; esac
+case "$out" in *管理者没在跑*) [ "$rc" = 1 ] && st_count || st_miss "C: stopped keeper rc $rc" ;; *) st_miss "C: a stopped keeper reads [$out]" ;; esac
 out=$(FLEET_PEERLINK_STALE=1 bash "$BIN/fleet-doctor.sh" 2>/dev/null | grep peerlink)
-case "$out" in *WARN*peerlink*管理者没在跑*) ok ;; *) fail "C: doctor row (bad): [$out]" ;; esac
+case "$out" in *WARN*peerlink*管理者没在跑*) st_count ;; *) st_miss "C: doctor row (bad): [$out]" ;; esac
 printf '%s\n' "doctor bad: $out" >> "$WORK/doctor-rows.txt"
 [ -n "${PEERLINK_SHOW:-}" ] && cat "$WORK/doctor-rows.txt"
 }
@@ -191,37 +190,37 @@ printf '%s\n' "doctor bad: $out" >> "$WORK/doctor-rows.txt"
 # --- D. sock -------------------------------------------------------------------
 leg_D() {
 box d 1 mac-a:bob
-python3 "$PL" sock mac-a bob >/dev/null && fail "D: sock answered with no keeper" || ok
+python3 "$PL" sock mac-a bob >/dev/null && st_miss "D: sock answered with no keeper" || st_count
 start
-until_ok 8 links_is "mac-a@bob:up" || fail "D: never up"
-[ "$(python3 "$PL" sock mac-a bob)" = "$B/conf/peerlink/mac-a@bob.sock" ] && ok || fail "D: sock of a healthy link"
-python3 "$PL" sock mac-a carol >/dev/null && fail "D: sock for a link nobody holds" || ok
-python3 "$PL" sock 'mac-a;x' bob >/dev/null 2>&1; [ $? = 2 ] && ok || fail "D: an unsafe name not refused"
+until_ok 8 links_is "mac-a@bob:up" || st_miss "D: never up"
+[ "$(python3 "$PL" sock mac-a bob)" = "$B/conf/peerlink/mac-a@bob.sock" ] && st_count || st_miss "D: sock of a healthy link"
+python3 "$PL" sock mac-a carol >/dev/null && st_miss "D: sock for a link nobody holds" || st_count
+python3 "$PL" sock 'mac-a;x' bob >/dev/null 2>&1; [ $? = 2 ] && st_count || st_miss "D: an unsafe name not refused"
 }
 
 # --- E. pane -------------------------------------------------------------------
 leg_E() {
 out=$(python3 "$PL" pane mac-a bob v1 </dev/null 2>&1)
-case "$out" in *"ran bash .claude/fleet/bin/fleet-remote-view.sh attach --thin --view v1-via-home --resume"*) ok ;; *) fail "E: pane on a healthy link: [$out]" ;; esac
+case "$out" in *"ran bash .claude/fleet/bin/fleet-remote-view.sh attach --thin --view v1-via-home --resume"*) st_count ;; *) st_miss "E: pane on a healthy link: [$out]" ;; esac
 stop
 box e 1
 start
 ( python3 "$PL" pane mac-l bob v1 </dev/null > "$B/pane.out" 2>&1 ) & pp=$!; PIDS="$PIDS $pp"
-until_ok 2 grep -q '正在连 mac-l（bob）' "$B/pane.out" && ok || fail "E: a pane before its link does not say it is connecting: $(cat "$B/pane.out")"
+until_ok 2 grep -q '正在连 mac-l（bob）' "$B/pane.out" && st_count || st_miss "E: a pane before its link does not say it is connecting: $(cat "$B/pane.out")"
 row mac-l:bob
-until_ok 10 sh -c '! kill -0 "$1" 2>/dev/null' _ "$pp" && ok || fail "E: the pane did not ride the link once it came up"
-grep -q 'attach --thin --view v1-via-home --resume' "$B/pane.out" && ok || fail "E: pane output: $(cat "$B/pane.out")"
+until_ok 10 sh -c '! kill -0 "$1" 2>/dev/null' _ "$pp" && st_count || st_miss "E: the pane did not ride the link once it came up"
+grep -q 'attach --thin --view v1-via-home --resume' "$B/pane.out" && st_count || st_miss "E: pane output: $(cat "$B/pane.out")"
 stop
 }
 
 # --- F. units ------------------------------------------------------------------
 leg_F() {
 T="$ROOT/launchd/com.claude-fleet.peerlink.plist.tmpl"
-grep -q '<key>KeepAlive</key><true/>' "$T" && grep -q 'bin/fleet-peerlink.sh</string><string>run</string>' "$T" && ok \
-  || fail "F: the launchd template is not a KeepAlive run of fleet-peerlink.sh"
+grep -q '<key>KeepAlive</key><true/>' "$T" && grep -q 'bin/fleet-peerlink.sh</string><string>run</string>' "$T" && st_count \
+  || st_miss "F: the launchd template is not a KeepAlive run of fleet-peerlink.sh"
 grep -q '^ExecStart=/bin/bash __HOME__/.claude/fleet/bin/fleet-peerlink.sh run$' "$ROOT/systemd/claude-fleet-peerlink.service" \
-  && grep -q '^Restart=always' "$ROOT/systemd/claude-fleet-peerlink.service" && ok || fail "F: the systemd twin"
-grep -q '"$_npl" status --check' "$BIN/fleet-doctor.sh" && ok || fail "F: fleet-doctor.sh has no peerlink row"
+  && grep -q '^Restart=always' "$ROOT/systemd/claude-fleet-peerlink.service" && st_count || st_miss "F: the systemd twin"
+grep -q '"$_npl" status --check' "$BIN/fleet-doctor.sh" && st_count || st_miss "F: fleet-doctor.sh has no peerlink row"
 }
 
 # --- G. routes (issue #3482) -----------------------------------------------------
@@ -237,13 +236,13 @@ PY
 }
 R='[{"name":"public","host":"203.0.113.9","port":22},{"name":"entry","host":"203.0.113.212","port":22022},{"name":"lan","host":"10.9.9.9","prefix":24},{"name":"tailnet","host":"lx0.example.ts.net"},{"name":"relay","host":"hub","kind":"relay"}]'
 got=$(FLEET_CONNECT_LOCAL_ADDRS=192.168.1.5/24 cand lx0 "$R")
-[ "$got" = "203.0.113.212:22022 203.0.113.9:22" ] && ok || fail "G: off the tailnet and the LAN: [$got], want the entry port, then the public line"
+[ "$got" = "203.0.113.212:22022 203.0.113.9:22" ] && st_count || st_miss "G: off the tailnet and the LAN: [$got], want the entry port, then the public line"
 got=$(FLEET_CONNECT_LOCAL_ADDRS=192.168.1.5/24,100.101.2.3/32,10.9.9.4/24 cand lx0 "$R")
-[ "$got" = "lx0.example.ts.net:0 10.9.9.9:0 203.0.113.212:22022 203.0.113.9:22" ] && ok || fail "G: on the tailnet and the LAN: [$got]"
+[ "$got" = "lx0.example.ts.net:0 10.9.9.9:0 203.0.113.212:22022 203.0.113.9:22" ] && st_count || st_miss "G: on the tailnet and the LAN: [$got]"
 got=$(FLEET_REMOTE_SSH='lx0=jump-linux' cand lx0 "$R")
-[ "$got" = "jump-linux:0" ] && ok || fail "G: FLEET_REMOTE_SSH does not win: [$got]"
+[ "$got" = "jump-linux:0" ] && st_count || st_miss "G: FLEET_REMOTE_SSH does not win: [$got]"
 got=$(cand mac-a '[]')
-[ "$got" = "mac-a:0" ] && ok || fail "G: no routes known is not the bare name: [$got]"
+[ "$got" = "mac-a:0" ] && st_count || st_miss "G: no routes known is not the bare name: [$got]"
 # for real: the bare name does not resolve here; the link rides the entry port
 box g 0
 export FLEET_CONNECT_LOCAL_ADDRS=192.168.1.5/24 FLEET_NODE_ALIASES='mac-a.local=mac-a'
@@ -252,15 +251,15 @@ mkdir -p "$B/fs/nodns" "$B/fs/down"; : > "$B/fs/nodns/lx0"; : > "$B/fs/nodns/mac
 peers lx0:bob:tailnet=lx0.example.ts.net,entry=203.0.113.212/22022 \
   mac-a.local:bob:entry=198.51.100.1/22022,public=198.51.100.2/22
 start
-until_ok 10 links_is "lx0@bob:up mac-a@bob:up" || fail "G: links never up: $(links) · $(tail -3 "$B/run.err")"
-grep -q '^master 203.0.113.212 bob [0-9]* 22022$' "$B/fs/log" && ok || fail "G: lx0 not dialled at its entry port: $(cat "$B/fs/log")"
-grep -q '^master lx0 ' "$B/fs/log" && fail "G: the bare name was dialled" || ok
-grep -q '^master 198.51.100.2 bob [0-9]* 22$' "$B/fs/log" && ok || fail "G: mac-a did not fall to its second route: $(cat "$B/fs/log")"
+until_ok 10 links_is "lx0@bob:up mac-a@bob:up" || st_miss "G: links never up: $(links) · $(tail -3 "$B/run.err")"
+grep -q '^master 203.0.113.212 bob [0-9]* 22022$' "$B/fs/log" && st_count || st_miss "G: lx0 not dialled at its entry port: $(cat "$B/fs/log")"
+grep -q '^master lx0 ' "$B/fs/log" && st_miss "G: the bare name was dialled" || st_count
+grep -q '^master 198.51.100.2 bob [0-9]* 22$' "$B/fs/log" && st_count || st_miss "G: mac-a did not fall to its second route: $(cat "$B/fs/log")"
 out=$(python3 "$PL" status --check)
-case "$out" in *"lx0@bob 已连上 · 路线 entry 203.0.113.212:22022"*) ok ;; *) fail "G: the doctor does not name the route: [$out]" ;; esac
+case "$out" in *"lx0@bob 已连上 · 路线 entry 203.0.113.212:22022"*) st_count ;; *) st_miss "G: the doctor does not name the route: [$out]" ;; esac
 python3 "$PL" pane lx0 bob v1 </dev/null >"$B/gp.out" 2>&1 & pp=$!
 until_ok 3 sh -c '! kill -0 "$1" 2>/dev/null' _ "$pp"; kill $pp 2>/dev/null; wait $pp 2>/dev/null; out=$(cat "$B/gp.out")
-case "$out" in *"ran bash .claude/fleet/bin/fleet-remote-view.sh attach --thin"*) ok ;; *) fail "G: a pane over the entry-port link: [$out]" ;; esac
+case "$out" in *"ran bash .claude/fleet/bin/fleet-remote-view.sh attach --thin"*) st_count ;; *) st_miss "G: a pane over the entry-port link: [$out]" ;; esac
 stop; unset FLEET_CONNECT_LOCAL_ADDRS FLEET_NODE_ALIASES
 }
 
@@ -274,42 +273,42 @@ export FLEET_PEERLINK_LINGER=1 FLEET_PEERLINK_PEERS_SECS=1 FLEET_PEERLINK_BAD_WA
 mkdir -p "$B/fs/down"; : > "$B/fs/down/203.0.113.7"
 peers mac-a:bob:entry=203.0.113.4/22022 mac-l:bob:entry=203.0.113.7/22022 "home:$ME"
 start
-until_ok 8 sh -c '[ "$(python3 "$1" status --json | python3 -c "import json,sys; print(json.load(sys.stdin)[\"state\"][\"mode\"])")" = all ]' _ "$PL" || fail "H: mode is not all by default"
-until_ok 8 sh -c 'python3 "$1" sock mac-a bob >/dev/null' _ "$PL" && ok || fail "H: no view attached, mac-a@bob never up: $(links)"
+until_ok 8 sh -c '[ "$(python3 "$1" status --json | python3 -c "import json,sys; print(json.load(sys.stdin)[\"state\"][\"mode\"])")" = all ]' _ "$PL" || st_miss "H: mode is not all by default"
+until_ok 8 sh -c 'python3 "$1" sock mac-a bob >/dev/null' _ "$PL" && st_count || st_miss "H: no view attached, mac-a@bob never up: $(links)"
 p1=$(python3 -c 'import json,sys; print([l["pid"] for l in json.load(open(sys.argv[1]))["links"] if l["machine"] == "mac-a"][0])' "$B/conf/peerlink/state.json")
-grep -q "^master home " "$B/fs/log" && fail "H: this very login was dialled" || ok
+grep -q "^master home " "$B/fs/log" && st_miss "H: this very login was dialled" || st_count
 sleep 6
 p2=$(python3 -c 'import json,sys; print([l["pid"] for l in json.load(open(sys.argv[1]))["links"] if l["machine"] == "mac-a"][0])' "$B/conf/peerlink/state.json")
-links_is "mac-a@bob:up mac-l@bob:down" && [ "$p1" = "$p2" ] && ok || fail "H: past the linger, links [$(links)] pid $p1 → $p2 — want mac-a held on the same master"
-grep -q '没人要了' "$B/run.err" && fail "H: a link closed for want of use" || ok
+links_is "mac-a@bob:up mac-l@bob:down" && [ "$p1" = "$p2" ] && st_count || st_miss "H: past the linger, links [$(links)] pid $p1 → $p2 — want mac-a held on the same master"
+grep -q '没人要了' "$B/run.err" && st_miss "H: a link closed for want of use" || st_count
 tries=$(python3 -c 'import json,sys; print([l["fails"] for l in json.load(open(sys.argv[1]))["links"] if l["machine"] == "mac-l"][0])' "$B/conf/peerlink/state.json")
-[ "$tries" -ge 2 ] && [ "$tries" -le 6 ] && ok || fail "H: a dead route tried $tries times in ~7s — want a few (backoff 1 → 2 → 4 s), not every beat"
+[ "$tries" -ge 2 ] && [ "$tries" -le 6 ] && st_count || st_miss "H: a dead route tried $tries times in ~7s — want a few (backoff 1 → 2 → 4 s), not every beat"
 out=$(python3 "$PL" status --check); rc=$?
-case "$out" in *"mac-l@bob 连不上已"*"Connection refused"*) [ "$rc" = 1 ] && ok || fail "H: 连不上 not a WARN (rc $rc)" ;; *) fail "H: the doctor on a dead peer: [$out]" ;; esac
+case "$out" in *"mac-l@bob 连不上已"*"Connection refused"*) [ "$rc" = 1 ] && st_count || st_miss "H: 连不上 not a WARN (rc $rc)" ;; *) st_miss "H: the doctor on a dead peer: [$out]" ;; esac
 printf '%s\n' "doctor all/dead: $out" >> "$WORK/doctor-rows.txt"
 rm -f "$B/fs/down/203.0.113.7"
-until_ok 12 links_is "mac-a@bob:up mac-l@bob:up" && ok || fail "H: mac-l did not come back once its route did: $(links)"
+until_ok 12 links_is "mac-a@bob:up mac-l@bob:up" && st_count || st_miss "H: mac-l did not come back once its route did: $(links)"
 out=$(python3 "$PL" status --check); rc=$?
-case "$out" in "2 条常开连接（全连）："*"mac-a@bob 已连上"*"mac-l@bob 已连上"*) [ "$rc" = 0 ] && ok || fail "H: rc $rc once both up" ;; *) fail "H: the doctor once both up: [$out]" ;; esac
+case "$out" in "2 条常开连接（全连）："*"mac-a@bob 已连上"*"mac-l@bob 已连上"*) [ "$rc" = 0 ] && st_count || st_miss "H: rc $rc once both up" ;; *) st_miss "H: the doctor once both up: [$out]" ;; esac
 printf '%s\n' "doctor all/up: $out" >> "$WORK/doctor-rows.txt"
 # a hub that is down closes nothing
 : > "$B/peers.down"; sleep 3
-links_is "mac-a@bob:up mac-l@bob:up" && ok || fail "H: the hub down closed links: $(links)"
+links_is "mac-a@bob:up mac-l@bob:up" && st_count || st_miss "H: the hub down closed links: $(links)"
 rm -f "$B/peers.down"
 # the keeper restarts (an install switch): the masters stay, the next one adopts them
 p1=$(python3 -c 'import json,sys; print([l["pid"] for l in json.load(open(sys.argv[1]))["links"] if l["machine"] == "mac-a"][0])' "$B/conf/peerlink/state.json")
 stop
-kill -0 "$p1" 2>/dev/null && ok || fail "H: the keeper's exit took mac-a's master ($p1) with it"
-grep -q 'mac-a@bob 交给下一个管理者' "$B/run.err" && ok || fail "H: no handover record"
+kill -0 "$p1" 2>/dev/null && st_count || st_miss "H: the keeper's exit took mac-a's master ($p1) with it"
+grep -q 'mac-a@bob 交给下一个管理者' "$B/run.err" && st_count || st_miss "H: no handover record"
 start
-until_ok 8 grep -q 'mac-a@bob adopted' "$B/run.err" || fail "H: the next keeper did not adopt mac-a: $(grep mac-a@bob "$B/run.err" | tail -3 | tr '\n' ' ')"
-until_ok 8 links_is "mac-a@bob:up mac-l@bob:up" || fail "H: not back up after the restart: $(links)"
+until_ok 8 grep -q 'mac-a@bob adopted' "$B/run.err" || st_miss "H: the next keeper did not adopt mac-a: $(grep mac-a@bob "$B/run.err" | tail -3 | tr '\n' ' ')"
+until_ok 8 links_is "mac-a@bob:up mac-l@bob:up" || st_miss "H: not back up after the restart: $(links)"
 p2=$(python3 -c 'import json,sys; print([l["pid"] for l in json.load(open(sys.argv[1]))["links"] if l["machine"] == "mac-a"][0])' "$B/conf/peerlink/state.json")
-[ "$p1" = "$p2" ] && grep -q 'mac-a@bob adopted' "$B/run.err" && ok || fail "H: mac-a rebuilt across the restart (pid $p1 → $p2), want adopted: $(grep mac-a@bob "$B/run.err" | tail -4 | tr "\n" " ")"
+[ "$p1" = "$p2" ] && grep -q 'mac-a@bob adopted' "$B/run.err" && st_count || st_miss "H: mac-a rebuilt across the restart (pid $p1 → $p2), want adopted: $(grep mac-a@bob "$B/run.err" | tail -4 | tr "\n" " ")"
 # the hub no longer lists mac-l@bob as yours (and no session of yours is there)
 peers mac-a:bob:entry=203.0.113.4/22022
-until_ok 8 links_is "mac-a@bob:up" && ok || fail "H: a login the hub dropped is still held: $(links)"
-grep -q 'mac-l@bob 关闭：已不是你的登录' "$B/run.err" && ok || fail "H: no close record for the dropped login"
+until_ok 8 links_is "mac-a@bob:up" && st_count || st_miss "H: a login the hub dropped is still held: $(links)"
+grep -q 'mac-l@bob 关闭：已不是你的登录' "$B/run.err" && st_count || st_miss "H: no close record for the dropped login"
 stop; unset FLEET_PEERLINK_LINGER FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN FLEET_CONNECT_LOCAL_ADDRS FLEET_PEERLINK_BACKOFF_MAX
 }
 
@@ -319,8 +318,8 @@ box i 0
 printf '[ -n "${FLEET_SHELL:-}" ] || {\nFLEET_PEERLINK_MODE=demand\n}\n' > "$B/conf/fleet.conf"
 peers mac-a:bob:entry=203.0.113.4/22022
 start; sleep 2.5
-[ -s "$B/fs/log" ] && fail "I: demand with no view, yet ssh ran: $(cat "$B/fs/log")" || ok
-python3 "$PL" status --check | grep -q '没有常开连接（无看台）' && ok || fail "I: the doctor under demand: $(python3 "$PL" status --check)"
+[ -s "$B/fs/log" ] && st_miss "I: demand with no view, yet ssh ran: $(cat "$B/fs/log")" || st_count
+python3 "$PL" status --check | grep -q '没有常开连接（无看台）' && st_count || st_miss "I: the doctor under demand: $(python3 "$PL" status --check)"
 stop
 }
 
@@ -336,17 +335,17 @@ EOS
 chmod +x "$J/curl"
 pl_list() { env -u CCQUOTA_TOKEN -u CCQUOTA_HUB_URL FLEET_CONF_DIR="$J/conf" FLEET_HUB_CURL="$J/curl" JDIR="$J" "$@" bash "$BIN/fleet-peer-list.sh"; }
 out=$(pl_list JCODE=200 JBODY='{}' 2>&1); rc=$?
-[ "$rc" = 3 ] && [ ! -s "$J/curl.log" ] && ok || fail "J: no node token: rc $rc [$out] — want 3 and no request"
+[ "$rc" = 3 ] && [ ! -s "$J/curl.log" ] && st_count || st_miss "J: no node token: rc $rc [$out] — want 3 and no request"
 printf 'CCQUOTA_TOKEN=tok-1\nCCQUOTA_HUB_URL=https://hub.example\n' > "$J/conf/node.env"
 out=$(pl_list JCODE=200 JBODY='{"peers":[{"hostname":"lx0","login":"bob","routes":[]}]}' 2>/dev/null); rc=$?
-[ "$rc" = 0 ] && [ "$out" = '{"peers":[{"hostname":"lx0","login":"bob","routes":[]}]}' ] && ok || fail "J: answered: rc $rc [$out]"
-grep -q 'Authorization: Bearer tok-1.*https://hub.example/v1/node/peers' "$J/curl.log" && ok || fail "J: the request: $(cat "$J/curl.log")"
+[ "$rc" = 0 ] && [ "$out" = '{"peers":[{"hostname":"lx0","login":"bob","routes":[]}]}' ] && st_count || st_miss "J: answered: rc $rc [$out]"
+grep -q 'Authorization: Bearer tok-1.*https://hub.example/v1/node/peers' "$J/curl.log" && st_count || st_miss "J: the request: $(cat "$J/curl.log")"
 pl_list JCODE=404 JBODY='{}' >/dev/null 2>&1; rc=$?
-[ "$rc" = 3 ] && ok || fail "J: an older hub (404): rc $rc, want 3"
+[ "$rc" = 3 ] && st_count || st_miss "J: an older hub (404): rc $rc, want 3"
 out=$(pl_list JCODE=down JBODY= 2>&1 >/dev/null); rc=$?
-[ "$rc" = 1 ] && case "$out" in *"could not be reached"*) true ;; *) false ;; esac && ok || fail "J: the hub down: rc $rc [$out]"
+[ "$rc" = 1 ] && case "$out" in *"could not be reached"*) true ;; *) false ;; esac && st_count || st_miss "J: the hub down: rc $rc [$out]"
 pl_list JCODE=403 JBODY='{"error":"no"}' >/dev/null 2>&1; rc=$?
-[ "$rc" = 1 ] && ok || fail "J: refused (403): rc $rc, want 1"
+[ "$rc" = 1 ] && st_count || st_miss "J: refused (403): rc $rc, want 1"
 }
 
 # ---- K. exec · fwd (issue #3538): fleet-open's road to a thin client's HOME ---------------
@@ -366,20 +365,20 @@ EOS
 chmod +x "$K/ssh"
 kpl() { FLEET_CONF_DIR="$K/conf" FLEET_PEERLINK_SSH="$K/ssh" python3 "$BIN/fleet-peerlink.py" "$@"; }
 out=$(kpl exec mac-d -- bash .claude/fleet/bin/fleet-open.sh --from-peer m:u -- 'http://127.0.0.1:1/a b'); rc=$?
-[ "$rc" = 0 ] && [ "$out" = "ran: bash .claude/fleet/bin/fleet-open.sh --from-peer m:u -- 'http://127.0.0.1:1/a b'" ] && ok \
-  || fail "K: exec: rc $rc [$out]"
-grep -q -- "-S $K/m2.sock -o ControlMaster=no -T -l $(id -un) mac-d.lan" "$K/ssh.log" && ok || fail "K: exec rides the link's master: $(cat "$K/ssh.log")"
-kpl exec mac-n -- true >/dev/null 2>&1; [ $? = 3 ] && ok || fail "K: exec to a link that is down must be rc 3"
-kpl exec nowhere -- true >/dev/null 2>&1; [ $? = 3 ] && ok || fail "K: exec to no link must be rc 3"
+[ "$rc" = 0 ] && [ "$out" = "ran: bash .claude/fleet/bin/fleet-open.sh --from-peer m:u -- 'http://127.0.0.1:1/a b'" ] && st_count \
+  || st_miss "K: exec: rc $rc [$out]"
+grep -q -- "-S $K/m2.sock -o ControlMaster=no -T -l $(id -un) mac-d.lan" "$K/ssh.log" && st_count || st_miss "K: exec rides the link's master: $(cat "$K/ssh.log")"
+kpl exec mac-n -- true >/dev/null 2>&1; [ $? = 3 ] && st_count || st_miss "K: exec to a link that is down must be rc 3"
+kpl exec nowhere -- true >/dev/null 2>&1; [ $? = 3 ] && st_count || st_miss "K: exec to no link must be rc 3"
 : > "$K/ssh.log"
 port=$(FLEET_OPEN_PAGE_SECS=1 kpl fwd mac-d "$(id -un)" 8765); rc=$?
-[ "$rc" = 0 ] && case "$port" in ''|*[!0-9]*) false ;; *) true ;; esac && ok || fail "K: fwd: rc $rc [$port]"
-grep -q -- "-S $K/m2.sock -O forward -L 127.0.0.1:$port:127.0.0.1:8765 -l $(id -un) mac-d.lan" "$K/ssh.log" && ok \
-  || fail "K: fwd adds -L <port>:127.0.0.1:8765 to the master: $(cat "$K/ssh.log")"
-until_ok 6 grep -q -- "-O cancel -L 127.0.0.1:$port:127.0.0.1:8765" "$K/ssh.log" && ok || fail "K: the forward was never cancelled at its deadline"
-K_FWD_RC=255 kpl fwd mac-d "$(id -un)" 8765 >/dev/null 2>&1; [ $? = 1 ] && ok || fail "K: a refused forward must be rc 1"
-kpl fwd mac-n x 8765 >/dev/null 2>&1; [ $? = 3 ] && ok || fail "K: fwd over a link that is down must be rc 3"
-kpl fwd mac-d "$(id -un)" 99999 >/dev/null 2>&1; [ $? = 2 ] && ok || fail "K: fwd to a bad port must be rc 2"
+[ "$rc" = 0 ] && case "$port" in ''|*[!0-9]*) false ;; *) true ;; esac && st_count || st_miss "K: fwd: rc $rc [$port]"
+grep -q -- "-S $K/m2.sock -O forward -L 127.0.0.1:$port:127.0.0.1:8765 -l $(id -un) mac-d.lan" "$K/ssh.log" && st_count \
+  || st_miss "K: fwd adds -L <port>:127.0.0.1:8765 to the master: $(cat "$K/ssh.log")"
+until_ok 6 grep -q -- "-O cancel -L 127.0.0.1:$port:127.0.0.1:8765" "$K/ssh.log" && st_count || st_miss "K: the forward was never cancelled at its deadline"
+K_FWD_RC=255 kpl fwd mac-d "$(id -un)" 8765 >/dev/null 2>&1; [ $? = 1 ] && st_count || st_miss "K: a refused forward must be rc 1"
+kpl fwd mac-n x 8765 >/dev/null 2>&1; [ $? = 3 ] && st_count || st_miss "K: fwd over a link that is down must be rc 3"
+kpl fwd mac-d "$(id -un)" 99999 >/dev/null 2>&1; [ $? = 2 ] && st_count || st_miss "K: fwd to a bad port must be rc 2"
 }
 
 # ---- L. quiet (issue #4359): the keeper looks every IDLE_TICK, a request wakes it ----------
@@ -405,24 +404,24 @@ link_rebuilt() {   # link_rebuilt <old pid>: up again on another master
     "$B/conf/peerlink/state.json" "$1" 2>/dev/null
 }
 start
-until_ok 10 links_is "mac-a@bob:up" || fail "L: the link never came up: $(links)"
-until_ok 6 beat_is 30.0 && ok || fail "L: nothing going on, the beat is $(beat), want 30.0"
+until_ok 10 links_is "mac-a@bob:up" || st_miss "L: the link never came up: $(links)"
+until_ok 6 beat_is 30.0 && st_count || st_miss "L: nothing going on, the beat is $(beat), want 30.0"
 c0=$(checks); h0=$(wc -c < "$B/peers.calls" | tr -d ' ')
 sleep 4
 c1=$(checks); h1=$(wc -c < "$B/peers.calls" | tr -d ' ')
-[ "$c1" = "$c0" ] && [ "$h1" = "$h0" ] && ok || fail "L: quiet, yet $((c1 - c0)) -O check and $((h1 - h0)) hub asks in 4 s"
-links_is "mac-a@bob:up" && ok || fail "L: a quiet keeper let the link go: $(links)"
-python3 "$PL" status --check >/dev/null && ok || fail "L: the doctor on a quiet keeper: $(python3 "$PL" status --check)"
+[ "$c1" = "$c0" ] && [ "$h1" = "$h0" ] && st_count || st_miss "L: quiet, yet $((c1 - c0)) -O check and $((h1 - h0)) hub asks in 4 s"
+links_is "mac-a@bob:up" && st_count || st_miss "L: a quiet keeper let the link go: $(links)"
+python3 "$PL" status --check >/dev/null && st_count || st_miss "L: the doctor on a quiet keeper: $(python3 "$PL" status --check)"
 # a request: the keeper looks now
-python3 "$PL" sock mac-a bob >/dev/null || fail "L: sock on an up link"
+python3 "$PL" sock mac-a bob >/dev/null || st_miss "L: sock on an up link"
 c2=$(checks)
-until_ok 2 beat_is 2.0 && ok || fail "L: a request did not wake the keeper (beat $(beat))"
-until_ok 2 checks_over "$c2" && ok || fail "L: woken, the keeper checked nothing"
+until_ok 2 beat_is 2.0 && st_count || st_miss "L: a request did not wake the keeper (beat $(beat))"
+until_ok 2 checks_over "$c2" && st_count || st_miss "L: woken, the keeper checked nothing"
 # quiet again; a master that dies is rebuilt within seconds, not at the quiet beat
-until_ok 6 beat_is 30.0 || fail "L: not quiet again: $(beat)"
+until_ok 6 beat_is 30.0 || st_miss "L: not quiet again: $(beat)"
 p1=$(python3 -c 'import json,sys; print([l["pid"] for l in json.load(open(sys.argv[1]))["links"]][0])' "$B/conf/peerlink/state.json")
 kill "$p1" 2>/dev/null
-until_ok 6 link_rebuilt "$p1" && ok || fail "L: a master killed while quiet was not rebuilt: $(links)"
+until_ok 6 link_rebuilt "$p1" && st_count || st_miss "L: a master killed while quiet was not rebuilt: $(links)"
 stop; unset FLEET_PEERLINK_ACTIVE_SECS FLEET_PEERLINK_PEERS_SECS; export FLEET_PEERLINK_IDLE_TICK=2
 }
 
@@ -430,9 +429,9 @@ group() {   # group <name> <leg>… — in the background, its result in $WORK/r
   local g="$1"; shift
   (
     trap 'for p in $PIDS; do kill "$p" 2>/dev/null; done' EXIT
-    FAILS=0 CHECKS=0
+    FAIL=0 CHECKS=0
     for l in "$@"; do "leg_$l"; done
-    echo "$FAILS $CHECKS" > "$WORK/res.$g"
+    echo "$FAIL $CHECKS" > "$WORK/res.$g"
   ) > "$WORK/out.$g" 2>&1 &
   GROUPS_PIDS="${GROUPS_PIDS:-} $!"
 }
@@ -446,11 +445,10 @@ for p in $GROUPS_PIDS; do wait "$p"; done
 for g in 1 2 3 4 5; do
   cat "$WORK/out.$g"
   if [ -s "$WORK/res.$g" ]; then
-    read -r f c < "$WORK/res.$g"; FAILS=$((FAILS + f)); CHECKS=$((CHECKS + c))
-  else fail "group $g ended without its result"; fi
+    read -r f c < "$WORK/res.$g"; FAIL=$((FAIL + f)); CHECKS=$((CHECKS + c))
+  else st_miss "group $g ended without its result"; fi
 done
 
 [ -n "${PEERLINK_SHOW:-}" ] && cat "$WORK/doctor-rows.txt"
 
-if [ "$FAILS" -gt 0 ]; then printf 'fleet-peerlink selftest: %d FAILED, %d passed\n' "$FAILS" "$CHECKS" >&2; exit 1; fi
-printf 'selftest OK: fleet-peerlink (%d checks — want · linger · doctor · sock · pane · units · routes · all · switch · list · exec/fwd · quiet)\n' "$CHECKS"
+st_done
