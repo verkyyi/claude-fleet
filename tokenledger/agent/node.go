@@ -435,9 +435,6 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 
 	if relayOK {
 		go a.relayOutbox(ctx, conn, rp)
-		if rp.taskRecovery {
-			go a.replayTaskReceipts(ctx, rp.script)
-		}
 	}
 	// fleet-ops: every user pod's reading, up this link (claude-fleet#3734).
 	go a.clusterReadingsLoop(ctx, conn)

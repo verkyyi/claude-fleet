@@ -139,7 +139,7 @@ func (s *Store) OwnerAuthority(owner string) (OwnerAuthority, error) {
 // transcripts. Work success and code landing remain separate manifest fields.
 // repo "" lists every task of owner's (the per-person manifest).
 func (s *Store) RepoTaskInventory(repo, owner string) ([]map[string]any, error) {
-	rows, err := s.read.Query(`SELECT id,authority_version,generation,execution_owner,ticket_ref,outcome,pr,evidence FROM fleet_tasks WHERE (repo = ? OR ? = '') AND owner = ? ORDER BY id`, NormRepo(repo), NormRepo(repo), owner)
+	rows, err := s.read.Query(`SELECT id,authority_version,generation,ticket_ref,outcome,pr,evidence FROM fleet_tasks WHERE (repo = ? OR ? = '') AND owner = ? ORDER BY id`, NormRepo(repo), NormRepo(repo), owner)
 	if err != nil {
 		return nil, err
 	}
@@ -148,8 +148,8 @@ func (s *Store) RepoTaskInventory(repo, owner string) ([]map[string]any, error) 
 	for rows.Next() {
 		var id, generation int64
 		var version int
-		var worker, ref, outcome, pr, evidence string
-		if err = rows.Scan(&id, &version, &generation, &worker, &ref, &outcome, &pr, &evidence); err != nil {
+		var ref, outcome, pr, evidence string
+		if err = rows.Scan(&id, &version, &generation, &ref, &outcome, &pr, &evidence); err != nil {
 			return nil, err
 		}
 		var proof map[string]any
@@ -161,15 +161,16 @@ func (s *Store) RepoTaskInventory(repo, owner string) ([]map[string]any, error) 
 		if p, ok := proof["pr"].(string); ok && p != "" {
 			pr = p
 		}
-		out = append(out, map[string]any{"task": TaskRef(id), "authority_version": version, "generation": generation, "worker_id": worker, "ticket_ref": ref, "work_outcome": outcome, "pr": pr, "pr_state": landing})
+		out = append(out, map[string]any{"task": TaskRef(id), "authority_version": version, "generation": generation, "ticket_ref": ref, "work_outcome": outcome, "pr": pr, "pr_state": landing})
 	}
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 	rows.Close()
-	// A later confirmed code landing is already recorded as an owner-fenced
-	// task_report. Project it independently of the immutable terminal outcome;
-	// neither a waiting report nor an earlier generation can overwrite it.
+	// A pre-C8 confirmed code landing was recorded as a task_report (EPIC T497
+	// C8 retired the fenced report; the journal is read as the archive it is).
+	// Project it independently of the immutable terminal outcome; neither a
+	// waiting report nor an earlier generation can overwrite it.
 	byRef := map[string]map[string]any{}
 	for _, item := range out {
 		byRef[item["task"].(string)] = item
@@ -181,7 +182,7 @@ func (s *Store) RepoTaskInventory(repo, owner string) ([]map[string]any, error) 
 	defer reports.Close()
 	for reports.Next() {
 		var raw string
-		var receipt TaskReportReceipt
+		var receipt archivedTaskReport
 		if err = reports.Scan(&raw); err != nil {
 			return nil, err
 		}
@@ -190,7 +191,7 @@ func (s *Store) RepoTaskInventory(repo, owner string) ([]map[string]any, error) 
 		}
 		r := receipt.Report
 		item := byRef[r.Task]
-		if item == nil || r.Generation != item["generation"] || r.WorkerID != item["worker_id"] || r.TicketRef != item["ticket_ref"] || r.Status != "merged" {
+		if item == nil || r.Generation != item["generation"] || r.TicketRef != item["ticket_ref"] || r.Status != "merged" {
 			continue
 		}
 		var proof map[string]any
@@ -204,6 +205,17 @@ func (s *Store) RepoTaskInventory(repo, owner string) ([]map[string]any, error) 
 		item["pr"], item["pr_state"] = pr, "merged"
 	}
 	return out, reports.Err()
+}
+
+// archivedTaskReport is a pre-C8 task_report journal row's report half.
+type archivedTaskReport struct {
+	Report struct {
+		Task       string `json:"task"`
+		TicketRef  string `json:"ticket_ref"`
+		Generation int64  `json:"generation"`
+		Status     string `json:"status"`
+		Evidence   string `json:"evidence"`
+	} `json:"report"`
 }
 
 // Serialize authority changes with acceptance, launch journals and lease claims

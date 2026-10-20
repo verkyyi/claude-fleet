@@ -32,7 +32,6 @@
 - [ID-SWITCH.md](dev/ID-SWITCH.md) — 切到「一个窗口一个 ID」：MacBook 会话照做的切换说明书（迁移 + 开关 + 回退）
 - [WORKER.md](dev/WORKER.md) — 执行会话的规则背景与排障（流程由 SessionStart hook 给出）
 - [TASK-ACCEPTANCE.md](dev/TASK-ACCEPTANCE.md) — 无 GitHub 任务控制：夹具验收与独立的 live 演练单
-- [TASK-BLOCKERS.md](dev/TASK-BLOCKERS.md) — 显式 blocker 的身份、依赖事件、授权与只读消费契约
 - [CODEX-AUTH-RECOVERY.md](dev/CODEX-AUTH-RECOVERY.md) — Codex 认证拒绝的恢复与验收
 - [SESSION-TRANSFER.md](dev/SESSION-TRANSFER.md) · [CODEX-RUNTIME.md](dev/CODEX-RUNTIME.md) — Claude / Codex 之间换手
 - [CODEX-AUTH-RECOVERY.md](dev/CODEX-AUTH-RECOVERY.md) — Codex 认证恢复与后续设计

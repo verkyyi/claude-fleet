@@ -414,20 +414,13 @@ func idCarrying(q querier, owner, ref string) (carried, open bool, err error) {
 	return carried, open, rows.Err()
 }
 
-// idSwitchCancel is the one task mutation the switch still takes (EPIC T497
-// C13): a person's cancel of a record nobody ever claimed — the unclaimed
-// transition to cancelled fleet_task_control.py's cancel sends. It is not an
-// execution-authority write: there is no owner to fence and nothing to stop.
-func idSwitchCancel(m TaskMutation) bool {
-	return m.Kind == "transition" && m.State == TaskCancelled && m.ExpectedWorker == ""
-}
-
-// idSwitchCancelAllowed checks, inside the mutation's transaction, that the
-// record is one with no window left to read its end off: accepted, never
-// claimed, no outcome, and no open ID carrying its number. A record whose ID is
-// still open is that window's (ErrIDSwitch: cancel it there); one whose closed
-// ID left a result has ended on it (ErrTaskConflict).
-func (s *Store) idSwitchCancelAllowed(tx querier, t FleetTask) error {
+// unopenedCancelAllowed checks, inside CancelUnopenedTask's transaction, that the
+// record is one with no window left to read its end off (EPIC T497 C13): accepted,
+// never claimed (a pre-C8 record's archived executor counts), no outcome, and no
+// open ID carrying its number. A record whose ID is still open is that window's
+// (ErrIDSwitch: cancel it there); one whose closed ID left a result has ended on
+// it (ErrTaskConflict).
+func (s *Store) unopenedCancelAllowed(tx querier, t FleetTask) error {
 	if t.State != TaskAccepted || t.ExecutionOwner != "" || t.Outcome != "" {
 		return ErrIDSwitch
 	}

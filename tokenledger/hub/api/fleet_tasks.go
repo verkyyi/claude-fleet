@@ -122,12 +122,16 @@ func (s *Server) taskViews(tasks []store.FleetTask) ([]taskView, error) {
 	rows := map[string][]map[string]any{}
 	landings := map[[2]string]map[string]map[string]any{}
 	out := make([]taskView, 0, len(tasks))
-	idSwitch := s.Store.IDSwitchOn()
 	for _, t := range tasks {
-		if idSwitch && t.AuthorityVersion == store.TaskAuthorityVersion && t.Outcome == "" {
-			// EPIC T497 C6: with the switch on a record's end is its ID's result.
-			if out, _, err := s.Store.IDTaskOutcome(t.Owner, t.Ref); err == nil && out != "" {
-				t.Outcome, t.State = out, out
+		// A record's end is its window's ID's result (EPIC T497 C6 / C8), and its
+		// progress word that ID's (C12).
+		id := ""
+		if t.AuthorityVersion == store.TaskAuthorityVersion {
+			if o, i, err := s.Store.IDTaskOutcome(t.Owner, t.Ref); err == nil {
+				id = i
+				if t.Outcome == "" && o != "" {
+					t.Outcome, t.State = o, o
+				}
 			}
 		}
 		live := s.taskLive(&t, rows)
@@ -146,15 +150,16 @@ func (s *Server) taskViews(tasks []store.FleetTask) ([]taskView, error) {
 				}
 				landings[key] = byTask
 			}
-			if p := byTask[t.Ref]; p != nil && p["generation"] == t.Generation && p["worker_id"] == t.ExecutionOwner && p["ticket_ref"] == t.TicketRef {
+			if p := byTask[t.Ref]; p != nil && p["generation"] == t.Generation && p["ticket_ref"] == t.TicketRef {
 				v.PRState, _ = p["pr_state"].(string)
 				v.PR, _ = p["pr"].(string)
 			}
-			progress, err := s.Store.FleetTaskProgress(t)
-			if err != nil {
-				return nil, err
+			if id != "" {
+				if rec, err := s.Store.FleetIDOf(t.Owner, id); err == nil && rec.Progress != nil {
+					v.Progress = &store.TaskProgress{Status: rec.Progress.State, Summary: rec.Progress.Summary,
+						At: time.Unix(rec.Progress.At, 0).UTC()}
+				}
 			}
-			v.Progress = progress
 		}
 		out = append(out, v)
 	}

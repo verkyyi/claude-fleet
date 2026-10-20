@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -9,10 +10,10 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store/storetest"
 )
 
-// With the switch on (EPIC T497 C13) a record nobody ever claimed and no open
-// ID carries is still closed by a person's cancel — the dead record of a
-// dispatch whose window never opened, or whose window is gone without a
-// result; everything with an owner, or a live window, stays refused. And the
+// A record nobody ever claimed and no open ID carries is closed by a person's
+// cancel (EPIC T497 C13, the one change C8 keeps) — the dead record of a dispatch
+// whose window never opened, or whose window is gone without a result; one a
+// pre-C8 launch proof claimed, or with a live window, stays refused. And the
 // migration lists only the old records: one written after the switch, or never
 // claimed but carried by an ID, is the ID world's.
 func TestIDSwitchCancelsDeadRecords(t *testing.T) {
@@ -46,19 +47,19 @@ func TestIDSwitchCancelsDeadRecords(t *testing.T) {
 	push(fid355, `{"ev":"opened","agent":"claude","task":"`+ended.Ref+`","id":"`+fid355+`","seq":1,"ts":1}`,
 		`{"ev":"result","state":"merged","pr":"5030","id":"`+fid355+`","seq":2,"ts":2}`,
 		`{"ev":"closed","reason":"merged","id":"`+fid355+`","seq":3,"ts":3}`)
-	claim := store.TaskMutation{Key: "claim", Kind: "claim", Generation: owned.Generation, WorkerID: migFleet + "/" + fid364, FleetID: migFleet, EndpointID: "ep1"}
-	owned, err := st.MutateFleetTask(owned.ID, "alice", claim, before)
-	if err != nil {
-		t.Fatalf("claim before the switch: %v", err)
+	// a pre-C8 claim: the archived executor a launch proof wrote
+	if _, err := st.DB().Exec(fmt.Sprintf(`UPDATE fleet_tasks SET state = 'starting', execution_owner = '%s', worker_id = '%s' WHERE id = %d`,
+		migFleet+"/"+fid364, migFleet+"/"+fid364, owned.ID)); err != nil {
+		t.Fatal(err)
 	}
+	owned, _ = st.FleetTask(owned.ID)
 	if err := st.SetIDSwitch(true, now); err != nil {
 		t.Fatal(err)
 	}
 	after := mk("after-switch", now.Add(time.Minute))
 
-	cancel := func(rec store.FleetTask, key string) (store.FleetTask, error) {
-		return st.MutateFleetTask(rec.ID, "alice", store.TaskMutation{Key: key, Kind: "transition", State: store.TaskCancelled,
-			Generation: rec.Generation, EndpointID: "ep1", Evidence: "explicit cancel request; unclaimed, no execution owner"}, now)
+	cancel := func(rec store.FleetTask, _ string) (store.FleetTask, error) {
+		return st.CancelUnopenedTask(rec.ID, "alice", "explicit cancel request; no window ever opened it", now)
 	}
 	for _, rec := range []store.FleetTask{noID, gone} {
 		got, err := cancel(rec, "cancel")
@@ -75,16 +76,8 @@ func TestIDSwitchCancelsDeadRecords(t *testing.T) {
 	if _, err := cancel(ended, "cancel"); !errors.Is(err, store.ErrTaskConflict) {
 		t.Fatalf("a record that ended on its ID: cancel = %v; want ErrTaskConflict", err)
 	}
-	if _, err := st.MutateFleetTask(owned.ID, "alice", store.TaskMutation{Key: "c1", Kind: "transition", State: store.TaskCancelled,
-		Generation: owned.Generation, ExpectedWorker: owned.ExecutionOwner, EndpointID: "ep1", Evidence: "x"}, now); !errors.Is(err, store.ErrIDSwitch) {
-		t.Fatalf("an owned record: cancel = %v; want ErrIDSwitch", err)
-	}
-	if _, err := st.MutateFleetTask(owned.ID, "alice", store.TaskMutation{Key: "c2", Kind: "cancel_request",
-		Generation: owned.Generation, ExpectedWorker: owned.ExecutionOwner, EndpointID: "ep1", Evidence: "x"}, now); !errors.Is(err, store.ErrIDSwitch) {
-		t.Fatalf("an owned record: cancel_request = %v; want ErrIDSwitch", err)
-	}
 	if _, err := cancel(owned, "c3"); !errors.Is(err, store.ErrIDSwitch) {
-		t.Fatalf("an owned record: an unclaimed-shaped cancel = %v; want ErrIDSwitch", err)
+		t.Fatalf("a pre-C8 claimed record: cancel = %v; want ErrIDSwitch", err)
 	}
 	if got, _ := st.FleetTask(owned.ID); got.Outcome != "" || got.ExecutionOwner == "" {
 		t.Fatalf("the owned record moved: %+v", got)

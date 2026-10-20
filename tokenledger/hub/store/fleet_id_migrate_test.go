@@ -174,27 +174,17 @@ func TestIDMigrateApplyAndSwitch(t *testing.T) {
 		t.Fatalf("left after apply = %v; want only the waiting one", left)
 	}
 
-	// The switch, twice round: off by default, on refuses the execution
-	// authority, off gives it back — and a record's end follows its ID.
+	// The switch, twice round: off by default, on and off again — it is shown
+	// only; nothing takes a claim or a fenced report either way (EPIC T497 C8).
 	if st.IDSwitchOn() {
 		t.Fatal("the switch is on before anyone turned it on")
 	}
-	m := store.TaskMutation{Key: "k1", Kind: "claim", Generation: 1, WorkerID: migFleet + "/" + fid355}
 	for round := 0; round < 2; round++ {
 		if err := st.SetIDSwitch(true, now); err != nil || !st.IDSwitchOn() {
 			t.Fatalf("switch on: %v", err)
 		}
-		if _, err := st.MutateFleetTask(1, "operator", m, now); !errors.Is(err, store.ErrIDSwitch) {
-			t.Fatalf("round %d: a claim with the switch on = %v; want ErrIDSwitch", round, err)
-		}
-		if _, err := st.RecordFleetTaskReport("operator", "ep1", store.TaskReport{Task: "T1"}, now); !errors.Is(err, store.ErrIDSwitch) {
-			t.Fatalf("round %d: a fenced report with the switch on = %v", round, err)
-		}
 		if err := st.SetIDSwitch(false, now); err != nil || st.IDSwitchOn() {
 			t.Fatalf("switch off: %v", err)
-		}
-		if _, err := st.MutateFleetTask(1, "operator", m, now); errors.Is(err, store.ErrIDSwitch) {
-			t.Fatalf("round %d: the switch off still refuses", round)
 		}
 	}
 	if out, id, err := st.IDTaskOutcome("operator", alive.Ref); err != nil || id != fid488 || out != "" {

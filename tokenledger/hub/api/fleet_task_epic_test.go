@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -9,9 +8,10 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 )
 
-// An EPIC is a parent task and its children (claude-fleet#4957): the driver's
-// tick is a progress report on the parent, projected on the parent's read and
-// the person's list; the children read carries one count per outcome.
+// An EPIC is a parent task and its children (claude-fleet#4957). Since EPIC T497
+// C8 the driver's tick is a progress word on its window's ID (C12) and each
+// member's end its ID's result: the parent's read and the person's list carry
+// the tick, the children read one count per outcome.
 func TestTaskEpicParentProgressAndChildrenSummary(t *testing.T) {
 	h, _, nodes := peerHarness(t)
 	h.srv.FleetAdmins = []string{"frank"}
@@ -21,74 +21,65 @@ func TestTaskEpicParentProgressAndChildrenSummary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	start := func(name, fid, sid, token, parentTask, parentSession string) store.FleetTask {
+	push := func(name, id string, events ...map[string]any) {
+		t.Helper()
+		ep, err := h.srv.Store.LiveEndpoint(nodes[name].id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.srv.Store.ApplyFleetIDEvents(store.FleetIDPush{Owner: "operator", EndpointID: ep.ID, Machine: name, Login: "frank", ID: id, Events: events}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	accept := func(name, token, parentTask, parentSession string) string {
+		t.Helper()
 		code, rec := nodeTaskCall(t, h, nodes[name].token, http.MethodPost, NodeTasksPath, map[string]any{
 			"authority_version": 1, "token": token, "title": "EPIC · " + token, "requested_agent": "claude", "resolved_agent": "claude",
 			"parent_task": parentTask, "parent_session": parentSession})
 		if code != 200 {
 			t.Fatalf("accept %s: %d %v", token, code, rec)
 		}
-		ref := rec["id"].(string)
-		for _, m := range []map[string]any{
-			{"kind": "claim", "idempotency_key": "claim", "generation": 1, "worker_id": fid + "/" + sid},
-			{"kind": "transition", "idempotency_key": "start", "generation": 1, "expected_worker": fid + "/" + sid, "state": "running", "actual_agent": "claude", "evidence": "fixture native receipt"},
-		} {
-			if code, rec = nodeTaskCall(t, h, nodes[name].token, http.MethodPost, NodeTasksPath+"/"+ref, map[string]any{"authority_version": 1, "mutation": m}); code != 200 {
-				t.Fatalf("mutate %s: %d %v", token, code, rec)
-			}
-		}
-		data, _ := json.Marshal(rec)
-		var task store.FleetTask
-		if err := json.Unmarshal(data, &task); err != nil {
-			t.Fatal(err)
-		}
-		return task
+		return rec["id"].(string)
 	}
-	report := func(name string, task store.FleetTask, event, outcome, status, summary string) {
-		r := store.TaskReport{EventID: event, Task: task.Ref, Owner: task.Owner, Generation: 1, WorkerID: task.ExecutionOwner,
-			ParentTask: task.ParentTask, ParentSession: task.ParentSession, ParentGeneration: task.ParentGeneration,
-			Outcome: outcome, Status: status, Summary: summary, Evidence: "fixture " + event}
-		if code, out := nodeTaskCall(t, h, nodes[name].token, http.MethodPost, NodeTasksPath+"/"+task.Ref+"/reports", r); code != 200 {
-			t.Fatalf("report %s: %d %v", event, code, out)
-		}
-	}
-	parent := start("verk5", wrFleetM5, wrFid, "epic", "", "")
-	ok := start("verk4", wrFleetM4, wrFid, "c1-lands", parent.Ref, parent.ExecutionOwner)
-	bad := start("verk4", wrFleetM4, "33333333-3333-4333-8333-333333333333", "c2-fails", parent.Ref, parent.ExecutionOwner)
-	if ok.ParentTask != parent.Ref || bad.ParentTask != parent.Ref {
-		t.Fatalf("children not bound to the parent: %q %q", ok.ParentTask, bad.ParentTask)
-	}
+	const fidP, fidA, fidB = "aaaaaaaa-1111-4111-8111-111111111111", "bbbbbbbb-2222-4222-8222-222222222222", "cccccccc-3333-4333-8333-333333333333"
+	parent := accept("verk5", "epic", "", "")
+	push("verk5", fidP, map[string]any{"ev": "opened", "task": parent, "id": fidP, "seq": 1.0, "ts": 1.0})
+	ok := accept("verk4", "c1-lands", parent, wrFleetM5+"/"+fidP)
+	bad := accept("verk4", "c2-fails", parent, wrFleetM5+"/"+fidP)
+	push("verk4", fidA, map[string]any{"ev": "opened", "task": ok, "id": fidA, "seq": 1.0, "ts": 1.0})
+	push("verk4", fidB, map[string]any{"ev": "opened", "task": bad, "id": fidB, "seq": 1.0, "ts": 1.0})
 
 	// No tick yet: no progress on the parent's read.
-	if code, out := nodeTaskCall(t, h, nodes["verk5"].token, http.MethodGet, NodeTasksPath+"/"+parent.Ref, nil); code != 200 || out["progress"] != nil {
+	if code, out := nodeTaskCall(t, h, nodes["verk5"].token, http.MethodGet, NodeTasksPath+"/"+parent, nil); code != 200 || out["progress"] != nil {
 		t.Fatalf("progress before any tick: %d %v", code, out["progress"])
 	}
-	report("verk5", parent, "tick-1", "", "waiting", "tick 1 · slots 2/4 · spawned C1 C2")
-	report("verk5", parent, "tick-2", "", "waiting", "tick 2 · landed C1")
-	code, out := nodeTaskCall(t, h, nodes["verk5"].token, http.MethodGet, NodeTasksPath+"/"+parent.Ref, nil)
+	push("verk5", fidP, map[string]any{"ev": "progress", "state": "waiting", "summary": "tick 1 · slots 2/4", "id": fidP, "seq": 2.0, "ts": 2.0},
+		map[string]any{"ev": "progress", "state": "waiting", "summary": "tick 2 · landed C1", "id": fidP, "seq": 3.0, "ts": 3.0})
+	code, out := nodeTaskCall(t, h, nodes["verk5"].token, http.MethodGet, NodeTasksPath+"/"+parent, nil)
 	p, _ := out["progress"].(map[string]any)
 	if code != 200 || p == nil || p["summary"] != "tick 2 · landed C1" || p["status"] != "waiting" {
 		t.Fatalf("parent progress: %d %v", code, out["progress"])
 	}
-	// The person's list carries the same word.
-	views, err := h.srv.taskViews([]store.FleetTask{parent})
-	if err != nil || views[0].Progress == nil || views[0].Progress.Summary != "tick 2 · landed C1" {
+	rec, err := h.srv.Store.FleetTask(store.ParseTaskRef(parent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if views, err := h.srv.taskViews([]store.FleetTask{rec}); err != nil || views[0].Progress == nil || views[0].Progress.Summary != "tick 2 · landed C1" {
 		t.Fatalf("list progress: %v %+v", err, views)
 	}
 
-	report("verk4", ok, "done", "succeeded", "merged", "C1 merged")
-	report("verk4", bad, "fail", "failed", "failed", "C2 red twice")
-	code, out = nodeTaskCall(t, h, nodes["verk5"].token, http.MethodGet, NodeTasksPath+"/"+parent.Ref+"/children", nil)
+	push("verk4", fidA, map[string]any{"ev": "result", "state": "merged", "pr": "1", "id": fidA, "seq": 2.0, "ts": 4.0})
+	push("verk4", fidB, map[string]any{"ev": "result", "state": "failed", "id": fidB, "seq": 2.0, "ts": 4.0})
+	code, out = nodeTaskCall(t, h, nodes["verk5"].token, http.MethodGet, NodeTasksPath+"/"+parent+"/children", nil)
 	sum, _ := out["summary"].(map[string]any)
 	if code != 200 || len(out["children"].([]any)) != 2 || sum["succeeded"] != float64(1) || sum["failed"] != float64(1) || sum["open"] != float64(0) {
 		t.Fatalf("children summary: %d %v", code, out)
 	}
-	// A child's terminal report is never the parent's progress.
-	if _, out = nodeTaskCall(t, h, nodes["verk5"].token, http.MethodGet, NodeTasksPath+"/"+parent.Ref, nil); out["progress"].(map[string]any)["summary"] != "tick 2 · landed C1" {
+	// A child's result is never the parent's progress, and has no progress word.
+	if _, out = nodeTaskCall(t, h, nodes["verk5"].token, http.MethodGet, NodeTasksPath+"/"+parent, nil); out["progress"].(map[string]any)["summary"] != "tick 2 · landed C1" {
 		t.Fatalf("parent progress moved: %v", out["progress"])
 	}
-	// A child with only an outcome has no progress word.
-	if _, out = nodeTaskCall(t, h, nodes["verk4"].token, http.MethodGet, NodeTasksPath+"/"+ok.Ref, nil); out["progress"] != nil {
-		t.Fatalf("terminal report projected as progress: %v", out["progress"])
+	if _, out = nodeTaskCall(t, h, nodes["verk4"].token, http.MethodGet, NodeTasksPath+"/"+ok, nil); out["progress"] != nil {
+		t.Fatalf("a result projected as progress: %v", out["progress"])
 	}
 }

@@ -93,7 +93,6 @@ type nodeConn struct {
 	// canTask is the hello's CapTask: this node takes the hub's task record
 	// on a start (claude-fleet#3325).
 	canTask          bool
-	canLaunch        bool
 	canRepoAuthority bool
 	// workersAt is when the worker map was last pushed (UnixNano).
 	workersAt atomic.Int64
@@ -637,7 +636,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay), canPodRelay: hp.HasCap(control.CapPodRelay),
 		canChat: hp.HasCap(control.CapChat), canTerm: hp.HasCap(control.CapTerm), tokHash: tokHash, canSvcRun: hp.HasCap(control.CapSvcRun),
 		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canRelease: hp.HasCap(control.CapRelease), canAttach: hp.HasCap(control.CapAttach),
-		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canLaunch: hp.HasCap(control.CapLaunch), canRepoAuthority: hp.HasCap(control.CapRepoAuthority), canCreds: hp.HasCap(control.CapCreds),
+		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canRepoAuthority: hp.HasCap(control.CapRepoAuthority), canCreds: hp.HasCap(control.CapCreds),
 		canCredsep:     hp.HasCap(control.CapCredsep),
 		canLoginJoin:   hp.HasCap(control.CapLoginJoin),
 		canRecycle:     hp.HasCap(control.CapRecycle),
@@ -793,7 +792,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 					}
 				}
 				s.recordFleets(*ep, hb, nc.canRead, first, now)
-				if first && nc.canRepoAuthority && nc.canLaunch {
+				if first && nc.canRepoAuthority {
 					// The repos whose authority moved while this link was
 					// away (claude-fleet#4730), after its fleets are registered.
 					go s.pushRepoAuthorities(ep.ID)

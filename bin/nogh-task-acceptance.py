@@ -283,10 +283,12 @@ class Harness:
         self.go("dispatch", "api", "TestAcceptedCodingAgentDispatch", "TestCodingAgentRejectsBeforeWork", "TestNodeCodingAgentAcceptedBeforeLocalOrRemote")
         self.run("provider", ["bash", ROOT/"bin/fleet-dispatch-selftest.sh"])
         self.python("children", "fleet_task_control_test.py")
-        self.go("collaboration", "store", "TestTaskChildReportsFenced", "TestTaskCancelNeedsAcknowledgement", "TestTaskParentGenerationAndRetainedSession", "TestTaskCompletionRetainsExecutionFence")
-        self.go("authority", "store", "TestTaskAuthorityLifecycle", "TestTaskAuthorityTransferAndPinnedLease", "TestTaskAuthorityRaces", "TestTaskAuthorityTicketScopeAndMigration")
-        self.go("outbox", "agent", "TestTaskReceiptOutboxAckAndExpiry", "TestTaskReceiptReconnectCapabilityAndOnePass")
-        self.go("migration", "store", "TestOwnerAuthorityDryRunAndPerOwnerCutover", "TestRepoAuthorityPausedAfterFinalGate", "TestRepoAuthorityStopBoundToCurrentNative", "TestRepoAuthorityRollbackRetainsCompletedExecution", "TestRepoAuthorityFreezeSerializesClaim")
+        # C8 (EPIC T497): a record is a ticket, its window an ID — no claim,
+        # generation fence or receipt journal left to exercise.
+        self.go("collaboration", "store", "TestTaskChildrenNameTheirParent", "TestUnclaimedParentDispatches", "TestIDSwitchCancelsDeadRecords")
+        self.go("authority", "store", "TestTaskRecordIsATicket", "TestTaskAuthorityAdditiveColumns")
+        self.go("outbox", "agent", "TestRelayDeliverExitCodes", "TestRelayWorkersWritesTheCache")
+        self.go("migration", "store", "TestOwnerAuthorityDryRunAndPerOwnerCutover", "TestRepoAuthorityPausedAfterFinalGate", "TestRepoAuthorityStopBoundToCurrentNative", "TestRepoAuthorityFreezeSerializesClaim")
         self.go("cutover", "api", "TestRepoAuthorityAPICleanCutoverNoGitHub", "TestRepoAuthorityAPIManifestCutoverAndCapabilities")
         self.python("repo-cli", "fleet_repo_authority_test.py")
         self.go("landing", "api", "TestTaskPageConfirmedOutcomeAndLanding")

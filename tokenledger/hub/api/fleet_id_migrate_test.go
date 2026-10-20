@@ -97,10 +97,10 @@ func TestNodeIDMigrateRoad(t *testing.T) {
 	}
 }
 
-// The switch on the old roads (EPIC T497 C6): on, a claim / transition and a
-// fenced report are 409 ID_SWITCH (the node takes the ID road), a queued child
-// report still reaches its parent, and the record's end is its ID's result;
-// off again, the record is what it was — twice round, nothing lost.
+// The old roads after EPIC T497 C8, whatever the switch says: a claim, a fenced
+// transition or report is 409 ID_SWITCH (an older node takes the ID road), the
+// record's end is its ID's result, and a record no window ever opened is still
+// cancelled by a person (C13).
 func TestIDSwitchOldRoads(t *testing.T) {
 	h, _, nodes := peerHarness(t)
 	h.srv.FleetAdmins = []string{"frank"}
@@ -110,19 +110,16 @@ func TestIDSwitchOldRoads(t *testing.T) {
 	}
 	tok := nodes["verk4"].token
 	worker := wrFleetM4 + "/" + wrFid
-	code, rec := nodeTaskCall(t, h, tok, http.MethodPost, NodeTasksPath, map[string]any{"authority_version": 1, "token": "sw",
-		"title": "sw", "requested_agent": "claude", "resolved_agent": "claude"})
-	if code != 200 {
-		t.Fatalf("accept: %d %v", code, rec)
+	accept := func(token string) string {
+		t.Helper()
+		code, rec := nodeTaskCall(t, h, tok, http.MethodPost, NodeTasksPath, map[string]any{"authority_version": 1, "token": token,
+			"title": token, "requested_agent": "claude", "resolved_agent": "claude"})
+		if code != 200 {
+			t.Fatalf("accept: %d %v", code, rec)
+		}
+		return rec["id"].(string)
 	}
-	ref := rec["id"].(string)
-	claim := map[string]any{"authority_version": 1, "mutation": map[string]any{"kind": "claim", "idempotency_key": "claim", "generation": 1, "worker_id": worker}}
-	if code, rec = nodeTaskCall(t, h, tok, http.MethodPost, NodeTasksPath+"/"+ref, claim); code != 200 {
-		t.Fatalf("claim with the switch off: %d %v", code, rec)
-	}
-	r := store.TaskReport{EventID: "r1", Task: ref, Owner: "operator", Generation: 1, WorkerID: worker, Outcome: "succeeded", Evidence: "fixture"}
-	payload, _ := json.Marshal(map[string]any{"task_report": r})
-	relay := store.FleetRelay{ID: worker + "#r1", Kind: control.RelayChildReport, FromWID: worker, ToWID: wrFleetM5 + "/" + wrFid, Payload: string(payload)}
+	ref := accept("sw")
 	ep, err := h.srv.Store.LiveEndpoint(nodes["verk4"].id)
 	if err != nil {
 		t.Fatal(err)
@@ -132,41 +129,40 @@ func TestIDSwitchOldRoads(t *testing.T) {
 		Events: []map[string]any{{"ev": "opened", "task": ref, "id": wrFid, "seq": 1.0, "ts": 1.0}}}); err != nil {
 		t.Fatal(err)
 	}
-	for round := 0; round < 2; round++ {
-		if err := h.srv.Store.SetIDSwitch(true, time.Now()); err != nil {
+	for round, on := range []bool{true, false, true} {
+		if err := h.srv.Store.SetIDSwitch(on, time.Now()); err != nil {
 			t.Fatal(err)
 		}
-		transition := map[string]any{"authority_version": 1, "mutation": map[string]any{"kind": "transition", "idempotency_key": "run", "generation": 1,
-			"expected_worker": worker, "state": "running", "actual_agent": "claude", "evidence": "x"}}
-		if code, rec = nodeTaskCall(t, h, tok, http.MethodPost, NodeTasksPath+"/"+ref, transition); code != 409 || rec["code"] != "ID_SWITCH" {
-			t.Fatalf("round %d: transition with the switch on = %d %v", round, code, rec)
+		for _, m := range []map[string]any{
+			{"kind": "claim", "idempotency_key": "claim", "generation": 1, "worker_id": worker},
+			{"kind": "transition", "idempotency_key": "run", "generation": 1, "expected_worker": worker, "state": "running", "actual_agent": "claude", "evidence": "x"},
+		} {
+			code, rec := nodeTaskCall(t, h, tok, http.MethodPost, NodeTasksPath+"/"+ref, map[string]any{"authority_version": 1, "mutation": m})
+			if code != 409 || rec["code"] != "ID_SWITCH" {
+				t.Fatalf("round %d (switch %v): %s = %d %v", round, on, m["kind"], code, rec)
+			}
 		}
-		if code, rec = nodeTaskCall(t, h, tok, http.MethodPost, NodeTasksPath+"/"+ref+"/reports", r); code != 409 || rec["code"] != "ID_SWITCH" {
-			t.Fatalf("round %d: fenced report with the switch on = %d %v", round, code, rec)
-		}
-		if skip, err := h.srv.prepareTaskReportRelay(*ep, &relay); err != nil || skip {
-			t.Fatalf("round %d: a queued child report with the switch on: skip=%v %v", round, skip, err)
-		}
-		if code, rec = nodeTaskCall(t, h, tok, http.MethodGet, NodeTasksPath+"/"+ref, nil); code != 200 || rec["task"].(map[string]any)["outcome"] != nil {
+		if code, rec := nodeTaskCall(t, h, tok, http.MethodGet, NodeTasksPath+"/"+ref, nil); code != 200 || rec["task"].(map[string]any)["outcome"] != nil {
 			t.Fatalf("round %d: no ID result yet = %d %v", round, code, rec)
-		}
-		if err := h.srv.Store.SetIDSwitch(false, time.Now()); err != nil {
-			t.Fatal(err)
-		}
-		if code, rec = nodeTaskCall(t, h, tok, http.MethodGet, NodeTasksPath+"/"+ref, nil); code != 200 || rec["task"].(map[string]any)["execution_owner"] != worker {
-			t.Fatalf("round %d: the record after switching back = %d %v", round, code, rec)
 		}
 	}
 	if _, err := h.srv.Store.ApplyFleetIDEvents(store.FleetIDPush{Owner: "operator", EndpointID: ep.ID, Machine: "verk4", Login: "frank", ID: wrFid,
 		Events: []map[string]any{{"ev": "result", "state": "merged", "id": wrFid, "seq": 2.0, "ts": 2.0}}}); err != nil {
 		t.Fatal(err)
 	}
-	_ = h.srv.Store.SetIDSwitch(true, time.Now())
-	if code, rec = nodeTaskCall(t, h, tok, http.MethodGet, NodeTasksPath+"/"+ref, nil); code != 200 || rec["task"].(map[string]any)["outcome"] != "succeeded" {
-		t.Fatalf("the ID merged, switch on → %d %v; want outcome succeeded", code, rec)
+	for _, on := range []bool{true, false} {
+		_ = h.srv.Store.SetIDSwitch(on, time.Now())
+		if code, rec := nodeTaskCall(t, h, tok, http.MethodGet, NodeTasksPath+"/"+ref, nil); code != 200 || rec["task"].(map[string]any)["outcome"] != "succeeded" {
+			t.Fatalf("the ID merged, switch %v → %d %v; want outcome succeeded", on, code, rec)
+		}
 	}
-	_ = h.srv.Store.SetIDSwitch(false, time.Now())
-	if code, rec = nodeTaskCall(t, h, tok, http.MethodGet, NodeTasksPath+"/"+ref, nil); code != 200 || rec["task"].(map[string]any)["outcome"] != nil {
-		t.Fatalf("switch off → %d %v; want the record's own (no outcome)", code, rec)
+	dead := accept("never-opened")
+	cancel := map[string]any{"authority_version": 1, "mutation": map[string]any{"kind": "transition", "idempotency_key": "cancel", "generation": 1,
+		"expected_worker": "", "state": "cancelled", "evidence": "explicit cancel request; no window ever opened it"}}
+	if code, rec := nodeTaskCall(t, h, tok, http.MethodPost, NodeTasksPath+"/"+dead, cancel); code != 200 || rec["outcome"] != "cancelled" {
+		t.Fatalf("cancel a record no window opened: %d %v", code, rec)
+	}
+	if code, rec := nodeTaskCall(t, h, tok, http.MethodPost, NodeTasksPath+"/"+ref, cancel); code != 409 {
+		t.Fatalf("cancel a record its ID ended: %d %v", code, rec)
 	}
 }
