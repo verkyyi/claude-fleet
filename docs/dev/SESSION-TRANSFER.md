@@ -553,6 +553,7 @@ handoffs carry that waiting loop and any still-unsent saved draft. A verified
 quota reset releases only the exact owner and schedules its next interval after
 the recovery continuation. The existing crash restore map retains active and
 quota-waiting loop provenance;
-quotawatch can reattach a dead controller only to the same restored native UUID
+its recovery (`fleet-loop.py recover`) can reattach a dead controller only to the
+same restored native UUID
 and worktree. Explicitly stopped/paused loops and replacement threads stay off.
 A restored loop runs at the existing tick cadence; missed intervals coalesce.

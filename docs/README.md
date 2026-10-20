@@ -57,7 +57,7 @@
 - [HOST.md](dev/HOST.md) — 只跑会话的 Mac 怎么设
 - [SHARED-MACHINE.md](dev/SHARED-MACHINE.md) — 一台机器一人一个登录
 - [MULTI-MACHINE-OPS.md](dev/MULTI-MACHINE-OPS.md) — 多机运维手册
-- [MULTI-ACCOUNT.md](dev/MULTI-ACCOUNT.md) — 多个订阅账号与自动切换
+- [MULTI-ACCOUNT.md](dev/MULTI-ACCOUNT.md) — 订阅由池子挑（凭据代理）
 - [CRED-SEPARATE.md](dev/CRED-SEPARATE.md) · [CRED-RELAY.md](dev/CRED-RELAY.md) — 凭据隔离、凭据转发
 
 **记录与计划**

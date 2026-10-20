@@ -62,11 +62,11 @@ For people who use fleet rather than build it, the guides are in
   worktree's branch, per-session context tokens and a local 5h/7d token-usage
   proxy. The task list only ever reads caches — zero inline git/gh/LLM calls.
 
-- **Subscription-aware scheduling.** Pool Claude subscription accounts, choose
-  where new sessions start, and move existing sessions with their transcripts
-  when an account needs a break. With [TokenLedger](https://github.com/verkyyi/claude-fleet/tree/master/tokenledger)
-  (`ccquota`), use account-wide 5h/7d readings to warn before a limit, rotate
-  early, stagger window starts, and optionally pause remote starts. See
+- **One pool of subscriptions.** The hub's subscriptions sit behind a
+  credential proxy that picks one per request, so a full subscription never
+  stops a session; each session's own 剩余 % is on its window. With
+  [TokenLedger](https://github.com/verkyyi/claude-fleet/tree/master/tokenledger)
+  (`ccquota`) you can optionally pause remote starts near a limit. See
   [subscription and quota management](#subscription-accounts-and-quota-management).
 
 - **Worktree lifecycle**: a cleanup daemon reaps a session's window, worktree
@@ -306,7 +306,7 @@ healthy. All hosted repos are equal — there is no main repo. Once a fleet host
 fleet's repo and its per-repo settings become an overlay of `<fleet>` (a setting
 that only a fleet conf can hold is warned about, not carried). Every idle or
 finished session exits cleanly and resumes in `<fleet>` with the same conversation
-and folder, and a hibernating one is woken first. Busy sessions are left where they
+and folder. Busy sessions are left where they
 are, or moved as each one finishes with `--wait`. Once the old fleet is empty, its
 server goes down and its conf is archived under
 `~/.config/claude-fleet/archive/`. It is never deleted.
@@ -356,108 +356,27 @@ continue if the Hub disconnects. A launchd installer runs a persistent Hub on
 macOS, with private HTTPS grant tokens or an OAuth HTTP deployment.
 See [Fleet Hub setup and authorization](docs/dev/FLEET-HUB.md).
 
-<a id="multiple-subscription-accounts-auto-failover"></a>
-
 ## Subscription accounts and quota management
 
-The fleet manages **which Claude subscription each session uses**, as well as
-its task. The account pool is machine-wide, shared across fleets; it is optional
-and off when no token files are registered. Without a pool, your existing login
-continues to work. These capabilities apply to **Claude Code**; the Codex adapter
-has no equivalent quota or account-migration integration yet.
-
-There are two layers: a token pool handles limit banners and session recovery;
-adding [TokenLedger](https://github.com/verkyyi/claude-fleet/tree/master/tokenledger) supplies account-wide
-quota readings for decisions **before** a subscription is exhausted. TokenLedger
-is the product name; its executable and settings are still `ccquota` and
-`CCQUOTA_*`. Its CLI and hub are separate dependencies, covered in
-[the install playbook](docs/dev/INSTALL.md).
-
-| Capability | What happens | Requires |
-|---|---|---|
-| Account pool | New sessions choose an eligible account. A running session that fills is not moved: the credential pool changes its subscription. | Account token pool |
-| Live-session migration | Reopen the same worktree and Claude transcript on another account, preserving task bindings — by hand (`fleet-migrate.sh <window>` / `--account <label>`). | Account token pool |
-| Per-model fallback | Distinguish one model's cap from the account's overall limit. Switch affected sessions to `FLEET_MODEL_FALLBACK` in place when possible; otherwise restart + resume. | Account token pool; available fallback model |
-| Quota-aware account selection | Rank eligible accounts using `5h headroom × 2 + 7d headroom`, with hysteresis to avoid needless switching. Both windows must be below the account ceiling. | Pool + ccquota hub readings |
-| Early warning and rotation | At 70% utilization, warn sessions; at 85%, bench the account and migrate its sessions to a readable account below the ceiling. Thresholds use the higher of 5h and 7d usage and are configurable. | Pool + ccquota hub readings |
-| 5-hour window staggering | Plan when idle accounts first open their next window, so windows need not all reset together. Automatic replanning is opt-in. | Pool + ccquota hub readings |
-| Remote-start quota gate | Optionally stop sessions the hub starts or resumes near the selected subscription's ceiling (90% by default). Hand spawns and running sessions are unaffected by this gate. | ccquota hub; `FLEET_QUOTA_GATE=1` |
-| Quota-watch health | Surface stale readings and repeated empty fetches in the status bar and doctor, so missing data is visible. | Configured pool + ccquota hub |
-
-### Register accounts and see which one a session uses
-
-Run `claude setup-token` under each subscription's login. Create the accounts
-directory if needed, then save **only the returned OAuth token** in
-`~/.config/claude-fleet/accounts/<label>`, one file per account
-(for example `work` and `personal`), and restrict each file to mode `600`:
+A session does not choose its subscription. With the credential proxy on, every
+session opens with a session credential from this login's proxy, and the
+**pool** — the hub's subscriptions — picks which one each request runs on; a
+full subscription is the pool's to change, so the session keeps running where it
+is. With no pool, a session runs on the login's own login, exactly as before.
+This applies to Claude Code and Codex alike.
 
 ```sh
-chmod 600 ~/.config/claude-fleet/accounts/work
-~/.claude/fleet/bin/fleet-account.sh list
+fleet account add --provider claude --label work    # sign a subscription in, hand it to the hub
+~/.claude/fleet/bin/fleet-account.sh whoami         # which subscription THIS session is on
+sh ~/.claude/fleet/bin/fleet-doctor.sh              # credproxy / credsep / modelcap rows
 ```
 
-Full setup, optional account subsets and per-account fallback reset durations
-are in [docs/dev/MULTI-ACCOUNT.md](docs/dev/MULTI-ACCOUNT.md#setup). Tokens stay outside
-the repository. Account choice is per launch through `CLAUDE_CODE_OAUTH_TOKEN`;
-settings, hooks and transcripts continue to use the shared Claude configuration.
+Each session's own 剩余 % is on its window (the client's top line). A cap on one
+model is not the subscription's wall: the state-reconcile tick switches a walled
+session to `FLEET_MODEL_FALLBACK` (default `opus`) in place with `/model`,
+falling back to restart + resume when the flip cannot be verified.
 
-The **usage + account modal** (`bin/usage-modal.sh`; its `prefix u` door left the
-node with #1714 — #1739 decides the client's) is read-only: a Claude session's
-subscription is the pool's pick behind the credential proxy, else the login's
-own (T550) — nothing here, and no sidebar item, picks one. From inside a fleet
-pane, check that session's actual account:
-
-```sh
-~/.claude/fleet/bin/fleet-account.sh whoami
-```
-
-**Account changes require a restart.** A live Claude process cannot hot-swap its
-token; the fleet closes it and resumes the same transcript in the same worktree
-under the new account. That preserves conversation history, not the original
-process or its background agents. When no suitable migration destination exists,
-the fleet leaves the sessions in place instead of repeatedly restarting them
-onto another exhausted account.
-
-### Add account-wide quota readings
-
-Configure the `ccquota` CLI, its hub and viewer credential as described in the
-[install playbook](docs/dev/INSTALL.md), then set the hub URL in `fleet.conf` so the
-background services inherit it. The remaining values below are the defaults:
-
-```sh
-export CCQUOTA_HUB_URL="https://your-ccquota-hub.example"
-FLEET_ACCOUNT_CEILING=85
-FLEET_ACCOUNT_PICK=pace
-```
-
-The viewer credential can live in `~/.ccquota/viewer-token`. Match each ccquota
-account name to its fleet label, or set `CCQUOTA_ACCOUNT=<uuid>` in the label's
-companion `<label>.conf` file. Unreadable or unmapped accounts have **no quota
-reading**, rather than a misleading 0%; they are not destinations for a
-quota-triggered migration.
-
-New spawns rank the accounts by the **weekly pace** — how far ahead of or behind
-an even burn of its 7-day budget each account is — so the pool's weeks drain
-together instead of worst-first
-([details](docs/dev/MULTI-ACCOUNT.md#pacing-the-weekly-budget-across-the-pool-issue-1231)).
-Nothing watches the pool every minute to warn or move a running session: a full
-subscription is the credential pool's to change, and each session's own 剩余 %
-is on its window. Work is not blocked just because the optional hub is
-unavailable.
-
-For optional window staggering, inspect a plan before applying it:
-
-```sh
-~/.claude/fleet/bin/fleet-account.sh phase --plan
-~/.claude/fleet/bin/fleet-account.sh phase --plan --apply
-```
-
-This schedules the first use of idle accounts; it does not change the provider's
-reset clock or hold an account already mid-window. A phase hold is relaxed when
-needed to keep an account available for a spawn. Set `FLEET_ACCOUNT_PHASE=0` to
-ignore a written plan.
-
-The **remote-start quota gate is separate from account rotation** and off by default:
+The **remote-start quota gate** is separate and off by default:
 
 ```sh
 # In fleet.conf; choose the subscription the gate should judge.
@@ -466,29 +385,9 @@ FLEET_QUOTA_CEILING=90
 # FLEET_QUOTA_ACCOUNT="<subscription-uuid>"  # or "all"; unset uses ccquota's default
 ```
 
-It gates only the starts and resumes the hub sends (the autofill dispatcher it
-was first written for is gone, #3120). Missing ccquota, an unreachable
-hub or an unreadable limit leaves the gate open; it is not a hard spending cap.
-
-### Model caps and operational checks
-
-A cap on one model need not exhaust the account's other models. The fleet tracks
-caps per `(account, model)` and, where a usable fallback exists, keeps the account
-in service. It tries an in-place `/model` switch, preserving the process and
-context; an unverifiable switch falls back to restart + resume. New sessions use
-`FLEET_MODEL_FALLBACK` (default `opus`) while the cap holds and return to
-`FLEET_MODEL` after reset. Existing sessions stay on their fallback model.
-
-Use these commands to inspect the policy and data:
-
-```sh
-~/.claude/fleet/bin/fleet-account.sh list
-~/.claude/fleet/bin/fleet-quotaguard.sh --status
-sh ~/.claude/fleet/bin/fleet-doctor.sh
-```
-
-Full policies and recovery commands:
-[docs/dev/MULTI-ACCOUNT.md](docs/dev/MULTI-ACCOUNT.md).
+It gates only the starts and resumes the hub sends. Missing ccquota, an
+unreachable hub or an unreadable limit leaves the gate open; it is not a hard
+spending cap. Details: [docs/dev/MULTI-ACCOUNT.md](docs/dev/MULTI-ACCOUNT.md).
 
 ## Fleet commands (`/skill`s)
 

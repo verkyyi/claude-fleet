@@ -895,8 +895,9 @@ the placement as `ccquota place --account <c>` → `account_class` on the
 journalled `worker_start` → `fleet-control-read.sh start … --account <c>` on
 the machine that opens it, so a session asked to stay on «my own subscription»
 does so wherever it lands. `any` / absent adds nothing to the request; the hub
-and the node both refuse any other word (`INVALID_ARGUMENT`). See
-[MULTI-ACCOUNT.md](MULTI-ACCOUNT.md) for what each class means.
+and the node both refuse any other word (`INVALID_ARGUMENT`). Since T550
+the machine ignores the class (`fleet-claude.sh` unsets it): the pool picks the
+subscription — [MULTI-ACCOUNT.md](MULTI-ACCOUNT.md).
 
 **A scratch session is placed the same way** (issue #1541, EPIC #1529 R3).
 `dash-raw-session.sh --node <m>` means what it means for an issue session: with

@@ -1284,7 +1284,7 @@ curl -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json
 **A login at its own cap is never a candidate** (claude-fleet#1587). Every
 heartbeat carries `max_sessions` — the login's `FLEET_GLOBAL_MAX_SESSIONS`, the
 cap its spawn gate refuses at (default 8, `0` = unlimited) — and `cap_sessions`,
-the count that gate reads (awake session windows; a sleeper holds no slot), both
+the count that gate reads (its session windows), both
 from `fleet-control.py discover`'s `capacity` (`fleet-control-read.sh
 capacity`). `cap_sessions >= max_sessions` excludes the candidate as `full
 (N/M sessions, the login's own cap)`, auto or named — its own gate would refuse

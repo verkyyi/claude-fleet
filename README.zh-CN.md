@@ -10,7 +10,7 @@ claude-fleet 只做两件事：**订阅共享**——一个小团队的 Claude�
 
 **任务是 hub 上的一条记录 `T<n>`，归人，不归仓库。** 你说要做什么（⌘P 面板的 ⚡ 行、网页控制台，或在别的会话里用 `task` 工具），入口先记下这条记录，再开出做这件事的会话。指定了仓库的任务在该仓库的 worktree 里改代码、提交 PR——**GitHub 只托管代码和 PR**；不认领、不评论、不关闭 GitHub issue。不绑仓库的任务（做页面、写文档、对话）完全不需要 GitHub。
 
-核心工作流使用 CLI 的**订阅登录，无需另配模型 API Key**。多个 Claude 订阅账号可以组成账号池，结合 5 小时／7 天额度安排新会话、提前轮换和恢复任务；Codex 的账号目录按原生额度余量选择。详见[能力表](README.md#agents-claude-code-and-codex)。
+核心工作流使用 CLI 的**订阅登录，无需另配模型 API Key**。多个订阅放进 hub 的池子，由凭据代理按请求替会话挑（Claude 与 Codex 一样）。详见[能力表](README.md#agents-claude-code-and-codex)。
 
 项目来自一台常开 Mac mini 上的持续开发实践。本机 Transcript 核算记录到：**历史峰值 25 个 Claude 主 Session，在 25 份独立任务目录中并行处理任务**（2026 年 9 月 1 日）；另一次记录中，至少 **15 个任务连续并行约 14.46 分钟**。统计的是 CLI 处理轮次重叠，详见[实证数据与统计口径](docs/dev/USAGE-EVIDENCE.md#中文说明)。
 
@@ -23,7 +23,7 @@ claude-fleet 只做两件事：**订阅共享**——一个小团队的 Claude�
 - **并行推进多个任务。** 每件任务一个会话；指定了仓库的，再给它一份独立的 Git worktree（同一仓库的一份独立工作目录），不同任务的未提交修改互不混在一起。
 - **一眼看出谁需要你。** 青色转动符号表示正在工作，绿色 `✓` 表示一轮对话结束，红色 `!` 和铃声表示等待你处理，靛蓝色表示 `/loop` 正在等待下一轮。任务列表把需要你的会话排在前面。
 - **在哪都能接着看。** `fleet` 打开看台：右边是当前会话，旁边是任务列表，⌘P 面板里切换会话、派任务、回答问题、开 shell。别的机器上的会话也在同一个列表里；手机和网页控制台看到的是同一套。
-- **把订阅额度纳入调度。** 注册多个 Claude 账号后，可在账号限额时迁移会话；接入 TokenLedger（`ccquota`）后，还能按账号余量分配新任务、提前预警和轮换、安排窗口错峰，并按需暂停入口远程开会话。详见[订阅与额度管理](#订阅账号池与额度管理)。
+- **一个订阅池。** hub 的订阅放在凭据代理后面，按请求挑，订阅满了不会让会话停下；每个会话自己的剩余 % 就在它的窗口上。接入 TokenLedger（`ccquota`）后还可以在额度见顶时暂停入口远程开会话。详见[订阅与额度管理](#订阅账号池与额度管理)。
 - **管理收尾和长期运行。** 会话通过 PR 交付，门禁全绿后自己合并、在任务记录上回报；后台清理合并后的窗口和 worktree。Claude Code 会话可通过 `/fleet-handoff` 保存交接信息，跨上下文窗口继续工作。
 
 ## 快速上手
@@ -175,90 +175,26 @@ FLEET_AGENT="claude"                 # 新会话默认使用的 agent
 
 ## 订阅账号池与额度管理
 
-多个任务并行时，除了代码进度，还需要知道：**哪个账号有余量、何时重置、正在运行的任务如何接着做。** Fleet 的账号池在本机所有 fleet 之间共用；没有注册账号时保持单账号用法。这些能力目前面向 **Claude Code**，Codex 的账号轮换和配额尚未接入。
-
-账号池本身可以处理限额提示和会话迁移；接入 [TokenLedger](https://github.com/verkyyi/claude-fleet/tree/master/tokenledger) 后，还能根据账号级额度提前采取行动。产品名是 TokenLedger，命令仍叫 `ccquota`，相关配置仍使用 `CCQUOTA_*`；CLI 和 hub 需要另外配置，见[安装手册](docs/dev/INSTALL.md)。
-
-| 能力 | 实际行为 | 启用条件 |
-|---|---|---|
-| 多订阅账号池 | 每个会话在启动时选择账号；识别订阅限额后暂时停用该账号，优先按提示中的真实重置时间恢复资格 | 注册账号 token |
-| 运行中会话迁移 | 关闭原进程，在同一 worktree 中恢复原会话记录，保留任务绑定 | 注册账号 token |
-| 按余量安排新会话 | 在未到阈值的账号中，按「5 小时剩余额度 × 2 + 7 天剩余额度」评分；余量相近时减少来回切换 | 账号池 + ccquota 读数 |
-| 提前预警与轮换 | 默认用量达到 70% 时提醒会话，达到 85% 时暂时停用该账号并迁移任务；取 5 小时和 7 天用量中较高者 | 账号池 + ccquota 读数 |
-| 5 小时窗口错峰 | 安排空闲账号何时开始使用下一轮窗口，减少多个账号同时耗尽、同时重置的情况 | 账号池 + ccquota；手动应用计划，自动重规划默认关闭 |
-| 模型限额降级 | 区分「某个模型限额」与「账号总额度耗尽」，优先原地切到可用的备用模型 | 账号池 + 可用备用模型 |
-| 远程开会话的额度闸门 | 达到阈值时暂停入口远程新开或恢复会话；默认阈值为 90%，闸门默认关闭 | ccquota + `FLEET_QUOTA_GATE=1` |
-| 额度数据失效告警 | 区分「读数过期」与「一直刷新却没有数据」，在状态栏和诊断中明确提示 | 已配置账号池与 ccquota hub |
-
-### 先注册账号，再查看会话归属
-
-在每个订阅账号的登录环境中运行 `claude setup-token`，将**返回的 OAuth token 本身**保存为 `~/.config/claude-fleet/accounts/<账号标签>`。每个账号一个文件，例如 `work`、`personal`；目录不存在时先创建。然后将每个文件设为仅本人可读写：
+会话不自己挑订阅。开着凭据代理时，每个会话启动时从这个登录的代理拿一张会话凭据，由**池子**（hub 上的订阅）按请求挑用哪个；订阅满了由池子换，会话原地接着跑。没有池子时，会话用这个登录自己登着的账号，和以前一样。Claude Code 和 Codex 都是这样。
 
 ```sh
-chmod 600 ~/.config/claude-fleet/accounts/work
-~/.claude/fleet/bin/fleet-account.sh list
+fleet account add --provider claude --label work    # 登录一个订阅，交给 hub
+~/.claude/fleet/bin/fleet-account.sh whoami         # 当前会话实际用的订阅
+sh ~/.claude/fleet/bin/fleet-doctor.sh              # 看 credproxy / credsep / modelcap 几行
 ```
 
-token 保存在仓库外。详细步骤、指定账号子集和重置时间的兜底配置见[账号池设置](docs/dev/MULTI-ACCOUNT.md#setup)。账号在启动时通过环境变量选择，Claude 的设置、hooks 和会话记录仍共用一份配置。
+每个会话自己的剩余 % 就在它的窗口上（客户端顶行）。单个模型到了上限不等于订阅到顶：状态对账任务会在会话自己的输入框里用 `/model` 原地换到 `FLEET_MODEL_FALLBACK`（默认 `opus`），换不成功才重启 + 恢复。
 
-开 Claude 会话不再在本机账号里挑（T550）：有池子就由池子挑（凭据代理按请求挑），没有就用这个登录自己登着的账号。「用量 + 账号」面板（`bin/usage-modal.sh`）只读，不再选账号；侧栏也没有「换账号…」。
-
-在 fleet 的会话内运行以下命令，查看它实际使用的账号：
+**远程开会话的额度闸门**是另一回事，默认关闭：
 
 ```sh
-~/.claude/fleet/bin/fleet-account.sh whoami
-```
-
-**切换账号通过「重启 + 恢复」完成。** Claude 进程不能直接热换 token；迁移保留会话记录、工作目录和任务绑定，但不会保留原进程及其中的后台 agent。自动轮换找不到合适的接收账号时，会让会话留在原处，避免反复重启到另一个同样耗尽的账号。
-
-### 接入额度读数，提前预警与轮换
-
-按[安装手册](docs/dev/INSTALL.md)配置 `ccquota`、hub 和查看凭据，在 `fleet.conf` 中导出 hub 地址，让后台服务也能读取。下面其余几项为默认策略，可按需调整：
-
-```sh
-export CCQUOTA_HUB_URL="https://your-ccquota-hub.example"
-FLEET_ACCOUNT_CEILING=85
-FLEET_ACCOUNT_PICK=pace
-```
-
-查看凭据可保存在 `~/.ccquota/viewer-token`。ccquota 中的账号名称应与 Fleet 的账号标签一致；也可在对应的 `<标签>.conf` 中设置 `CCQUOTA_ACCOUNT=<uuid>` 显式关联。没有读数的账号会显示为缺失，不会被当成「使用了 0%」，也不会作为额度触发迁移的接收目标。
-
-新会话按各账号的**周额度进度**（相对于均匀消耗领先或落后多少点）排名，让几个账号的周额度一起消耗而不是先耗尽最紧的那个（详见 [docs/dev/MULTI-ACCOUNT.md](docs/dev/MULTI-ACCOUNT.md#pacing-the-weekly-budget-across-the-pool-issue-1231)）。没有每分钟的巡查去预警或挪动运行中的会话：订阅满了由凭据池换，每个会话自己的剩余 % 就在它的窗口上。hub 暂时不可用不会直接阻止开发。
-
-### 可选：窗口错峰和远程开会话闸门
-
-先预览各账号的窗口错峰计划，再决定应用：
-
-```sh
-~/.claude/fleet/bin/fleet-account.sh phase --plan
-~/.claude/fleet/bin/fleet-account.sh phase --plan --apply
-```
-
-计划控制空闲账号的首次使用时机，不修改服务端的重置时间，也不会暂停已经进入窗口的账号。需要时会放宽等待安排，让新会话仍有账号可用。设置 `FLEET_ACCOUNT_PHASE=0` 则忽略已写入的计划。
-
-**远程开会话闸门与账号轮换是两项独立功能。** 想在额度接近阈值时暂停入口远程开会话，可在 `fleet.conf` 中设置：
-
-```sh
+# 写在 fleet.conf；选择闸门判断哪个订阅。
 FLEET_QUOTA_GATE=1
 FLEET_QUOTA_CEILING=90
 # FLEET_QUOTA_ACCOUNT="<订阅uuid>"  # 也可填 "all"；未设置时采用 ccquota 的默认账号
 ```
 
-它只限制入口远程新开或恢复的会话（当初为它写的自动填充已经拿掉，#3120），不影响你手动启动的任务，也不停止运行中的会话。未安装 ccquota、hub 不可达或额度不可读时，这道闸门会放行，因此不能作为严格的消费上限。
-
-### 模型降级与运行检查
-
-单个模型达到上限时，其他模型可能仍有额度。Fleet 按「账号 + 模型」记录限制，优先通过 `/model` 原地切换到 `FLEET_MODEL_FALLBACK`（默认 `opus`），保留进程和上下文；无法验证切换结果时，才退回到重启并恢复。在限制有效期间，新会话也使用备用模型；重置后新会话回到 `FLEET_MODEL`，已经运行的会话不会自动切回。该路径需要可用的备用模型。
-
-常用检查命令：
-
-```sh
-~/.claude/fleet/bin/fleet-account.sh list
-~/.claude/fleet/bin/fleet-quotaguard.sh --status
-sh ~/.claude/fleet/bin/fleet-doctor.sh
-```
-
-本地会话记录统计的 token 用量是**跨账号汇总的估算值**；ccquota 提供的账号级额度读数是另一类数据。二者都应与账单区分。完整机制、手动迁移和排错见[多账号文档](docs/dev/MULTI-ACCOUNT.md)。
+它只管 hub 发来的开会话和恢复。没有 ccquota、hub 不通或读不到额度时闸门放行，不是硬性的花费上限。详见[订阅文档](docs/dev/MULTI-ACCOUNT.md)。
 
 ## 进阶功能
 
@@ -312,7 +248,7 @@ claude plugin install fleet@claude-fleet --scope user --yes
 | [架构说明](docs/dev/ARCHITECTURE.md) | 组件关系、多 fleet 与缓存隔离 |
 | [Fleet Hub](docs/dev/FLEET-HUB.md) | 跨机器 MCP 入口、机器注册、授权与操作记录 |
 | [状态机制](docs/dev/STATE.md) | 会话状态如何产生、展示和纠正 |
-| [多账号与额度](docs/dev/MULTI-ACCOUNT.md) | 账号池、轮换、会话迁移、窗口错峰与排错 |
+| [订阅与额度](docs/dev/MULTI-ACCOUNT.md) | 池子替会话挑订阅、模型上限、额度闸门与排错 |
 | [任务清理](docs/dev/CLEANUP.md) | PR 结束后的窗口和 worktree 生命周期 |
 | [事件输出](docs/dev/EMIT.md) | 可选的会话生命周期事件输出及数据范围 |
 | [贡献指南](CONTRIBUTING.md) | Shell 脚本约定与检查要求 |

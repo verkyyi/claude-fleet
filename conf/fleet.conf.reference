@@ -1540,13 +1540,10 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Handoff wait-idle ceiling @group=handoff @tier=internal @scope=fleet @edit=int @unit=sec
 #FLEET_HANDOFF_IDLE_TIMEOUT=240   # must stay well above FLEET_STUCK_WORKING_SECS + 20
 
-# Multiple subscription accounts, with auto-failover when one hits its usage
-# limit (the rolling 5-hour "session" window or the weekly cap). Register each
-# account as a token FILE — name = label, contents = its OAuth token from
-# `claude setup-token` (chmod 600) — in this directory. When the collector sees
-# a session print "You've hit your … limit", it marks that account and rotates,
-# so NEW sessions launch on a fresh subscription. Empty/absent dir → OFF (the
-# fleet uses your single logged-in account exactly as before). See
+# The accounts directory: one file per subscription label (a token, or the
+# `hub:<label>` marker), read by the credential proxy and fleet-credsep. Nothing
+# rotates over it: the pool picks a session's subscription per request behind
+# the proxy, else the session runs on the login's own login (EPIC T542). See
 # docs/dev/MULTI-ACCOUNT.md.
 # @label=Account tokens dir @group=identity @tier=internal @scope=identity @edit=no
 #FLEET_ACCOUNTS_DIR="$HOME/.config/claude-fleet/accounts"

@@ -598,13 +598,11 @@ runs with the other interval daemons in step 6.
    working exactly as before, banner only — nothing rewrites it. To opt that
    login into opening the client, replace the block with the `source` line above.
 
-   **Optional — multiple subscription accounts w/ auto-failover.** If the user
-   holds more than one Claude subscription and wants the fleet to switch when one
-   hits its usage limit, set it up per **[docs/MULTI-ACCOUNT.md](MULTI-ACCOUNT.md)**:
-   one `claude setup-token` OAuth token per file in
-   `~/.config/claude-fleet/accounts/` (name = label, `chmod 600`). Off by default
-   (no files → the spawn launcher `bin/fleet-claude.sh` is just `exec claude`).
-   `bin/fleet-doctor.sh` validates the token files.
+   **Optional — more than one subscription.** Subscriptions go into the hub's
+   pool (`fleet account add --provider claude|codex --label <name>`), and the
+   credential proxy picks one per request — see
+   **[docs/MULTI-ACCOUNT.md](MULTI-ACCOUNT.md)**. With no pool a session runs on
+   the login's own login (`bin/fleet-claude.sh` is just `exec claude`).
 
    **Optional — Codex workers.** To run a fleet's workers on OpenAI Codex CLI
    instead, set `FLEET_AGENT="codex"` in that fleet's conf
