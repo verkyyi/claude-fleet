@@ -109,23 +109,26 @@ printf '{"verdict":"go","accounts":[{"account_uuid":"u-a","label":"a","headroom_
 FAKE
 chmod +x "$WORK/fakepath/"*
 
+# L — the dir a tick's own files live in (TMPDIR so the dash caches, stdout/stderr,
+# the git log, the pane list, the conf): $WORK, or a lane's own dir (section 5).
+L="$WORK"
 GIT_LOG="$WORK/git.log"
 export FAKE_GIT_HANG='' FAKE_GIT_SLOW='' FAKE_GIT_SLOW_SECS=2
 unset BUDGET SLOW   # run_collector's knobs: never the caller's (issue #3371)
 run_collector() {
   : > "$GIT_LOG"
-  PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 GH_TTL=999999 \
-  FLEET_REPO="" FLEET_REPOS="" FLEET_NOTIFY_CMD="" FLEET_CONF_DIR="$WORK/conf" \
+  PATH="$WORK/fakepath:$PATH" TMPDIR="$L" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 GH_TTL=999999 \
+  FLEET_REPO="" FLEET_REPOS="" FLEET_NOTIFY_CMD="" FLEET_CONF_DIR="$L/conf" \
   FLEET_ACCOUNTS_DIR="$WORK/accounts" CCQUOTA_HUB_URL="http://hub.test:8787" FLEET_ACCOUNT_QUOTA_TTL=999999 \
-  FAKE_PANEPATHS="$WORK/panepaths" FAKE_GIT_LOG="$GIT_LOG" \
-  FAKE_OTHER_PATHS="$WORK/otherpaths" FAKE_TMUX_FAIL_SESS="${FAKE_TMUX_FAIL_SESS:-}" \
+  FAKE_PANEPATHS="$L/panepaths" FAKE_GIT_LOG="$GIT_LOG" \
+  FAKE_OTHER_PATHS="$L/otherpaths" FAKE_TMUX_FAIL_SESS="${FAKE_TMUX_FAIL_SESS:-}" \
   FAKE_TMUX_EMPTY_SESS="${FAKE_TMUX_EMPTY_SESS:-}" \
   FAKE_GIT_HANG="${FAKE_GIT_HANG:-}" FAKE_GIT_SLOW="${FAKE_GIT_SLOW:-}" FAKE_GIT_SLOW_SECS="$FAKE_GIT_SLOW_SECS" \
   FLEET_COLLECT_GIT_BUDGET="${BUDGET:-30}" FLEET_COLLECT_GIT_SLOW="${SLOW:-10}" \
-    bash "$WORK/bin/tmux-dash-collect.sh" >"$WORK/stdout" 2>"$WORK/stderr"
+    bash "$WORK/bin/tmux-dash-collect.sh" >"$L/stdout" 2>"$L/stderr"
 }
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2
-         printf -- '--- stderr ---\n' >&2; cat "$WORK/stderr" >&2 2>/dev/null
+         printf -- '--- stderr ---\n' >&2; cat "$L/stderr" >&2 2>/dev/null
          printf -- '--- git.log ---\n' >&2; cat "$GIT_LOG" >&2 2>/dev/null
          printf -- '--- cursor ---\n%s\n' "$(cat "$G/collect.git.cursor" 2>/dev/null)" >&2
          exit 1; }
@@ -138,7 +141,58 @@ cursor(){ cat "$G/collect.git.cursor" 2>/dev/null; }
 # the worktree paths the fake git was called with, in order, deduped consecutively
 git_order() { cut -f1 "$GIT_LOG" | awk 'NF && $0!=prev{print; prev=$0}'; }
 
-# 1. NO-STATUS + DECORATION + cache shape ----------------------------------------
+# Sections 3-4 (two wedged ticks) and 5 (nine seconds of a slow worktree) seed
+# their own state and read nothing the others write: each runs as a lane from
+# here, in its own dir (caches, conf, pane list, logs), beside sections 1-2 and
+# 6-8; their verdicts are waited for at the end.
+lane_dir() {
+  L="$WORK/$1"; G="$L/.claude-dash/global"; GIT_LOG="$L/git.log"
+  mkdir -p "$G"; cp -R "$WORK/conf" "$L/conf"; cp "$WORK/panepaths" "$L/panepaths"
+}
+lane_5() {
+  lane_dir lane5
+# 5. SLOW-LOG — a slow worktree is named on stderr -------------------------------
+# The window is deliberately WIDE (issue #693). What this section tests is whether
+# slow and fast are told apart and whether the slow one is named — not how fast a
+# shared CI runner forks a shell. Two things make a narrow window flaky:
+#
+#   a. the collector times each worktree with bash `SECONDS` (integer, no `date`
+#      fork), so every measurement carries a ±1s quantization artifact: a 20ms
+#      worktree reads as 1s whenever its work straddles a second boundary. With the
+#      old SLOW=1 the fast assertion therefore meant "must measure EXACTLY 0" — zero
+#      margin by construction, and it went red on CI (run 34969471087, shard 1)
+#      while the same commit passed in a sibling run.
+#   b. a no-sleep path on a noisy shared VM is fast but not BOUNDED.
+#
+# So: slow = 3 × 3s = 9s (see the fake git's ×3 note above), threshold 5s. The fast
+# worktrees get ~4s of real headroom over the artifact, the slow one clears the
+# threshold by 4s, and neither side is pressed against runner jitter.
+FAKE_GIT_SLOW=/wt2 FAKE_GIT_SLOW_SECS=3 SLOW=5 BUDGET=30 run_collector || fail "5: the tick must exit 0"
+grep -q "git took .*s on $WT2" "$L/stderr" || fail "5: a worktree slower than FLEET_COLLECT_GIT_SLOW must be named on stderr"
+grep -q "git took .*s on $WT3" "$L/stderr" && fail "5: a FAST worktree must not be logged as slow"
+ok "a worktree over FLEET_COLLECT_GIT_SLOW is named on stderr; fast ones are not"
+}
+lane_34() {
+  lane_dir lane34
+# 3. BUDGET — a wedged worktree cannot hang the tick -----------------------------
+rm -f "$G"/git_*; printf '%s' "$WT3" > "$G/collect.git.cursor"   # ⇒ this tick starts at wt1
+FAKE_GIT_HANG=/wt1 BUDGET=2 run_collector || fail "3: the tick must still exit 0 with a wedged worktree"
+grep -q 'hit the 2s budget' "$L/stderr" || fail "3: stderr must name the blown FLEET_COLLECT_GIT_BUDGET"
+[ "$(hbget phase)" = "done" ] || fail "3: a blown git budget must NOT abort the tick (phase=$(hbget phase))"
+[ "$(cursor)" = "$WT1" ]    || fail "3: the cursor must name the WEDGED worktree it claimed, got [$(cursor)]"
+[ -z "$(cache "$WT2")" ]    || fail "3: worktrees behind the wedge must not have been reached this tick"
+ok "a wedged worktree is killed at the budget; the tick runs on to phase=done"
+
+# 4. ROUND-ROBIN under a permanent wedge — the rest still refresh ----------------
+FAKE_GIT_HANG=/wt1 BUDGET=2 run_collector || fail "4: the follow-up tick must exit 0"
+[ "$(cache "$WT2")" = "$(printf 'b-wt2+2-1\t')" ] || fail "4: wt2 must refresh on the tick AFTER the wedge (round-robin), got [$(cache "$WT2")]"
+[ "$(cache "$WT3")" = "$(printf 'b-wt3+2-1\t')" ] || fail "4: wt3 must refresh on the tick AFTER the wedge, got [$(cache "$WT3")]"
+[ -z "$(cache "$WT1")" ]                          || fail "4: the wedged worktree itself must stay uncached"
+ok "a permanently wedged worktree is retried once per rotation — it never starves the others"
+}
+( lane_5 ) > "$WORK/lane5.log" 2>&1 & LANE5=$!
+( lane_34 ) > "$WORK/lane34.log" 2>&1 & LANE34=$!
+
 run_collector || fail "1: a full tick must exit 0"
 grep -q 'status' "$GIT_LOG" && fail "1: the git phase must NEVER run \`git status\` (that was the 4m42s call)"
 ok "no \`git status\` anywhere in the tick"
@@ -159,43 +213,6 @@ first=$(git_order | head -1)
 [ "$first" = "$WT2" ] || fail "2: with the cursor on wt1 the scan must RESUME at wt2, started at [$first]"
 [ "$(git_order | tr '\n' ' ')" = "$WT2 $WT3 $WT1 " ] || fail "2: rotation order wrong: [$(git_order | tr '\n' ' ')]"
 ok "the scan resumes after the cursor and wraps (wt2 → wt3 → wt1)"
-
-# 3. BUDGET — a wedged worktree cannot hang the tick -----------------------------
-rm -f "$G"/git_*; printf '%s' "$WT3" > "$G/collect.git.cursor"   # ⇒ this tick starts at wt1
-FAKE_GIT_HANG=/wt1 BUDGET=2 run_collector || fail "3: the tick must still exit 0 with a wedged worktree"
-grep -q 'hit the 2s budget' "$WORK/stderr" || fail "3: stderr must name the blown FLEET_COLLECT_GIT_BUDGET"
-[ "$(hbget phase)" = "done" ] || fail "3: a blown git budget must NOT abort the tick (phase=$(hbget phase))"
-[ "$(cursor)" = "$WT1" ]    || fail "3: the cursor must name the WEDGED worktree it claimed, got [$(cursor)]"
-[ -z "$(cache "$WT2")" ]    || fail "3: worktrees behind the wedge must not have been reached this tick"
-ok "a wedged worktree is killed at the budget; the tick runs on to phase=done"
-
-# 4. ROUND-ROBIN under a permanent wedge — the rest still refresh ----------------
-FAKE_GIT_HANG=/wt1 BUDGET=2 run_collector || fail "4: the follow-up tick must exit 0"
-[ "$(cache "$WT2")" = "$(printf 'b-wt2+2-1\t')" ] || fail "4: wt2 must refresh on the tick AFTER the wedge (round-robin), got [$(cache "$WT2")]"
-[ "$(cache "$WT3")" = "$(printf 'b-wt3+2-1\t')" ] || fail "4: wt3 must refresh on the tick AFTER the wedge, got [$(cache "$WT3")]"
-[ -z "$(cache "$WT1")" ]                          || fail "4: the wedged worktree itself must stay uncached"
-ok "a permanently wedged worktree is retried once per rotation — it never starves the others"
-
-# 5. SLOW-LOG — a slow worktree is named on stderr -------------------------------
-# The window is deliberately WIDE (issue #693). What this section tests is whether
-# slow and fast are told apart and whether the slow one is named — not how fast a
-# shared CI runner forks a shell. Two things make a narrow window flaky:
-#
-#   a. the collector times each worktree with bash `SECONDS` (integer, no `date`
-#      fork), so every measurement carries a ±1s quantization artifact: a 20ms
-#      worktree reads as 1s whenever its work straddles a second boundary. With the
-#      old SLOW=1 the fast assertion therefore meant "must measure EXACTLY 0" — zero
-#      margin by construction, and it went red on CI (run 34969471087, shard 1)
-#      while the same commit passed in a sibling run.
-#   b. a no-sleep path on a noisy shared VM is fast but not BOUNDED.
-#
-# So: slow = 3 × 3s = 9s (see the fake git's ×3 note above), threshold 5s. The fast
-# worktrees get ~4s of real headroom over the artifact, the slow one clears the
-# threshold by 4s, and neither side is pressed against runner jitter.
-FAKE_GIT_SLOW=/wt2 FAKE_GIT_SLOW_SECS=3 SLOW=5 BUDGET=30 run_collector || fail "5: the tick must exit 0"
-grep -q "git took .*s on $WT2" "$WORK/stderr" || fail "5: a worktree slower than FLEET_COLLECT_GIT_SLOW must be named on stderr"
-grep -q "git took .*s on $WT3" "$WORK/stderr" && fail "5: a FAST worktree must not be logged as slow"
-ok "a worktree over FLEET_COLLECT_GIT_SLOW is named on stderr; fast ones are not"
 
 # 6. CACHE SWEEP — complete cross-fleet inventory, distinct escaped path keys ---
 WT4="$WORK/other space_under_score"
@@ -261,5 +278,10 @@ for wt in "$WT1" "$WT2" "$WT3" "$WT4"; do
   [ "$(cat "$G/ctx_$(gk "$wt")")" = live-ctx ] || fail '8: evicted an unvisited live context cache'
 done
 ok 'a budget-truncated scan retains every live worktree, including those never visited'
+
+wait "$LANE34"; rc34=$?; cat "$WORK/lane34.log"
+wait "$LANE5"; rc5=$?; cat "$WORK/lane5.log"
+[ "$rc34" = 0 ] || { printf 'selftest FAIL: sections 3-4 (their lines above)\n' >&2; exit 1; }
+[ "$rc5" = 0 ] || { printf 'selftest FAIL: section 5 (its lines above)\n' >&2; exit 1; }
 
 printf 'selftest PASS: collect git phase — budget · round-robin · cache sweep (#552/#647)\n'

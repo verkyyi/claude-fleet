@@ -37,17 +37,22 @@ case "$mode" in
 esac
 FAKE
 chmod +x "$WORK/fakepath/"*
-G="$WORK/.claude-dash/global"; C="$WORK/.claude-dash/fleets"
-mkdir -p "$G"
-for name in a b c; do
-  mkdir -p "$C/acme-$name"
-  printf 'old %s\n' "$name" > "$C/acme-$name/issues"
-  printf 'old parents\n' > "$C/acme-$name/parents"
-done
-LOG="$WORK/gh.log"
+# lane_dir <dir> — the dash state (G, C), the gh log and the TMPDIR of one lane:
+# the two lanes below run at once (each sits out two timed-out phases), each with
+# its own caches, cursor and hang marker.
+lane_dir() {
+  L="$1"; G="$L/.claude-dash/global"; C="$L/.claude-dash/fleets"
+  mkdir -p "$G"
+  for name in a b c; do
+    mkdir -p "$C/acme-$name"
+    printf 'old %s\n' "$name" > "$C/acme-$name/issues"
+    printf 'old parents\n' > "$C/acme-$name/parents"
+  done
+  LOG="$L/gh.log"
+}
 run() {
   : > "$LOG"
-  env PATH="$WORK/fakepath:$PATH" HOME="$WORK/home" TMPDIR="$WORK" \
+  env PATH="$WORK/fakepath:$PATH" HOME="$WORK/home" TMPDIR="$L" \
     FLEET_CONF_DIR="$WORK/conf" FLEET_REPO='' FLEET_REPOS="${REPOS-acme/a acme/b acme/c}" \
     FLEET_NOTIFY_CMD='' FLEET_COLLECT_QUOTAWATCH=never \
     FLEET_COLLECT_QUOTAWATCH_BUDGET=0 FLEET_COLLECT_SOCKETS_BUDGET=0 \
@@ -57,19 +62,20 @@ run() {
     FLEET_COLLECT_ESCALATE_BUDGET=0 FLEET_COLLECT_SNAPSHOT_BUDGET=0 \
     FLEET_COLLECT_ISSUES_BUDGET="${BUDGET:-5}" GH_TTL="${TTL:-0}" \
     TEST_GH_LOG="$LOG" TEST_HANG="${HANG:-}" TEST_HANGMARK="$HANGMARK" \
-    bash "$WORK/bin/tmux-dash-collect.sh" "$@" > "$WORK/out" 2> "$WORK/err"
+    bash "$WORK/bin/tmux-dash-collect.sh" "$@" > "$L/out" 2> "$L/err"
 }
-fail() { echo "collect-issues FAIL: $1" >&2; cat "$LOG" "$WORK/err" >&2; exit 1; }
+fail() { echo "collect-issues FAIL: $1" >&2; cat "$LOG" "$L/err" >&2; exit 1; }
 eq() { [ "$2" = "$3" ] || fail "$1: expected [$2], got [$3]"; }
 cursor() { cat "$G/collect.issues.cursor" 2>/dev/null || :; }
 order() { sed -n 's/^issue //p' "$LOG" | tr '\n' ' '; }
 
+lane_1() {
 HANG=a:issue run || fail 'a timed-out phase must let the collector finish'
 eq 'first attempt' 'a ' "$(order)"
 eq 'timeout preserves last good cache' 'old a' "$(cat "$C/acme-a/issues")"
 eq 'the timed-out repo is durably claimed before fetch' acme/a "$(cursor)"
-grep -q 'phase issues hit' "$WORK/err" || fail 'missing budget diagnostic'
-grep -q 'next tick resumes after acme/a' "$WORK/err" || fail 'missing repo diagnostic'
+grep -q 'phase issues hit' "$L/err" || fail 'missing budget diagnostic'
+grep -q 'next tick resumes after acme/a' "$L/err" || fail 'missing repo diagnostic'
 pgrep -f "$HANGMARK" >/dev/null && fail 'timed-out gh survived the phase'
 
 HANG=a:issue run || fail 'second tick failed'
@@ -88,9 +94,9 @@ printf 'acme/a' > "$G/collect.issues.cursor"
 TTL=999999 run --issues acme/b || fail 'targeted refresh failed'
 eq 'targeted refresh still bypasses TTL' 'b ' "$(order)"
 eq 'targeted refresh cannot move sweep cursor' acme/a "$(cursor)"
+}
 
-rm -f "$G/collect.issues.cursor"
-printf 'old parents\n' > "$C/acme-a/parents"
+lane_2() {
 HANG=a:api run || fail 'GraphQL timeout tick failed'
 eq 'GraphQL timeout also saves repo cursor' acme/a "$(cursor)"
 eq 'GraphQL timeout retains old parents' 'old parents' "$(cat "$C/acme-a/parents")"
@@ -121,4 +127,13 @@ if command -v jq >/dev/null 2>&1; then
 else
   echo 'collect-issues: jq absent — cross-repo parent check SKIPPED'
 fi
+}
+
+for n in 1 2; do
+  ( HANGMARK="$HANGMARK.$n"; lane_dir "$WORK/lane$n"; "lane_$n" ) > "$WORK/lane$n.log" 2>&1 &
+  eval "pid$n=\$!"
+done
+rc=0
+for n in 1 2; do eval "wait \$pid$n" || rc=1; cat "$WORK/lane$n.log"; done
+[ "$rc" = 0 ] || exit 1
 echo 'collect-issues: OK (timeout fairness, caches, TTL, targeted refresh, queue changes, cross-repo parents)'

@@ -74,6 +74,35 @@ loop_pids() {
 }
 loop_alive() { local p; { read -r p < "$G/hubsess.pid"; } 2>/dev/null && kill -0 "$p" 2>/dev/null; }
 
+# Leg I (three whole-doctor runs on a cache it writes itself) runs as a lane from
+# here, beside the loop legs: its own TMPDIR (so its own .claude-dash: no loop, no
+# lock), conf dir, HOME and PATH (only the failing tmux — G's nohup and H's curl
+# never reach it). Its verdict is waited for before the end.
+leg_I() {
+# --- I: the doctor's rows ----------------------------------------------------------
+docrow() { env HOME="$L" CCQUOTA_FLEET=1 bash "$BIN/fleet-doctor.sh" 2>/dev/null | grep -E "^ *(PASS|WARN|FAIL) +$1 "; }
+echo $(( $(date +%s) - 700 )) > "$G/hub_ok"
+out=$(docrow hub-sessions)
+case "$out" in *FAIL*hub-sessions*"loop none"*) : ;; *) fail "I: a 700s cache with no loop must be a hub-sessions FAIL" "$out" ;; esac
+CHECKS=$((CHECKS+1))
+printf 'quota\t%s\t%s\tHTTP 401: a viewer token is required\n' "$(( $(date +%s) - 2000 ))" "$(date +%s)" > "$G/hub_auth_fail"
+out=$(docrow hubauth)
+# 2000 s plus the doctor's own run time, which can pass a minute on a busy box
+case "$out" in *FAIL*hubauth*"quota refused 3"[345]"m"*) : ;; *) fail "I: a reader refused 2000s must be a hubauth FAIL" "$out" ;; esac
+CHECKS=$((CHECKS+1))
+printf 'quota\t%s\t%s\tHTTP 401\n' "$(( $(date +%s) - 100 ))" "$(date +%s)" > "$G/hub_auth_fail"
+out=$(docrow hubauth)
+case "$out" in *WARN*hubauth*) : ;; *) fail "I: a reader refused 100s must be a hubauth WARN" "$out" ;; esac
+CHECKS=$((CHECKS+1))
+rm -f "$G/hub_auth_fail"
+CHECKS=$((CHECKS+1)); [ -z "$(docrow hubauth)" ] || fail "I: nothing refused must print no hubauth row"
+}
+( L="$WORK/lane-I"; mkdir -p "$L/.claude-dash/global" "$L/bin"; cp -R "$WORK/conf" "$L/conf"
+  cp "$WORK/bin/tmux" "$L/bin/tmux"
+  export TMPDIR="$L" FLEET_CONF_DIR="$L/conf" PATH="$L/bin:${PATH#"$WORK/bin:"}"
+  G="$L/.claude-dash/global"; CHECKS=0
+  leg_I; echo "$CHECKS" > "$L/checks" ) > "$WORK/lane-I.log" 2>&1 & LANE_I=$!
+
 # --- D (off) ------------------------------------------------------------------
 out=$(bash "$HUBS" --status 2>&1); rc=$?
 CHECKS=$((CHECKS+1)); [ "$out" = off ] && [ "$rc" = 0 ] || fail "D: hub off — --status must say off, rc 0 (rc=$rc)" "$out"
@@ -233,22 +262,10 @@ CHECKS=$((CHECKS+1)); [ ! -s "$G/hub_auth_fail" ] || fail "H: the round that sto
 kill "$HUBPID" 2>/dev/null; HUBPID=''
 rm -f "$WORK/bin/curl" "$WORK/conf/node.env"
 
-# --- I: the doctor's rows ----------------------------------------------------------
-docrow() { env HOME="$WORK" CCQUOTA_FLEET=1 bash "$BIN/fleet-doctor.sh" 2>/dev/null | grep -E "^ *(PASS|WARN|FAIL) +$1 "; }
-echo $(( $(date +%s) - 700 )) > "$G/hub_ok"
-out=$(docrow hub-sessions)
-case "$out" in *FAIL*hub-sessions*"loop none"*) : ;; *) fail "I: a 700s cache with no loop must be a hub-sessions FAIL" "$out" ;; esac
-CHECKS=$((CHECKS+1))
-printf 'quota\t%s\t%s\tHTTP 401: a viewer token is required\n' "$(( $(date +%s) - 2000 ))" "$(date +%s)" > "$G/hub_auth_fail"
-out=$(docrow hubauth)
-# 2000 s plus the doctor's own run time, which can pass a minute on a busy box
-case "$out" in *FAIL*hubauth*"quota refused 3"[345]"m"*) : ;; *) fail "I: a reader refused 2000s must be a hubauth FAIL" "$out" ;; esac
-CHECKS=$((CHECKS+1))
-printf 'quota\t%s\t%s\tHTTP 401\n' "$(( $(date +%s) - 100 ))" "$(date +%s)" > "$G/hub_auth_fail"
-out=$(docrow hubauth)
-case "$out" in *WARN*hubauth*) : ;; *) fail "I: a reader refused 100s must be a hubauth WARN" "$out" ;; esac
-CHECKS=$((CHECKS+1))
-rm -f "$G/hub_auth_fail"
-CHECKS=$((CHECKS+1)); [ -z "$(docrow hubauth)" ] || fail "I: nothing refused must print no hubauth row"
+# its verdict is its checks file (written only when every check held): leg F's
+# bare `wait` may already have reaped the lane, so its exit status is not read
+wait "$LANE_I" 2>/dev/null; cat "$WORK/lane-I.log"
+[ -s "$WORK/lane-I/checks" ] || fail "I: the doctor lane failed (its lines above)"
+CHECKS=$((CHECKS + $(cat "$WORK/lane-I/checks")))
 
 printf 'hub-sessions-loop selftest: PASS (%s checks)\n' "$CHECKS"

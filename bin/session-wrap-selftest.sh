@@ -278,38 +278,37 @@ waitfor "xa: at 0 session-end-hook --recycle was asked" eq_recycles $((r0 + 1))
 waitfor "xa: the wrapper returned 0" screen_has xa 'WRAP_RC=0'
 eq "xa: auto-closed windows read done" "done" "$(o xa @claude_state)"
 eq "xa: the countdown never relaunched" 1 "$(grep -c . "$WORK/xa/argv")"
-# a key cancels it: the window waits, and ↵ still resumes
+# a key cancels it (xk); 0 in fleet.conf counts nothing down (xz); a crash never
+# does (xc — an old role word on a window changes nothing, issue #4341: every
+# session alike, so no leg for it). Each ends in seconds of NOTHING happening, so
+# the three windows run at once and one quiet spell (≥ each one's own: 3s after
+# xk's cancel, 2s after xz's line and xc's crash line) covers all three.
 r0=$(recycles)
 WRAP_ENV=FLEET_EXIT_CLOSE_SECS=2 win xk 0
+mkdir -p "$WORK/xzconf"; printf 'FLEET_EXIT_CLOSE_SECS=0\n' > "$WORK/xzconf/fleet.conf"
+WRAP_ENV="FLEET_CONF_DIR=$WORK/xzconf" win xz 0
+WRAP_ENV=FLEET_EXIT_CLOSE_SECS=1 win xc 0
 waitfor "xk: first launch" launches xk 1
+waitfor "xz: first launch" launches xz 1
+waitfor "xc: first launch" launches xc 1
 printf rc0 > "$WORK/xk/mode"; : > "$WORK/xk/go"
+printf rc0 > "$WORK/xz/mode"; : > "$WORK/xz/go"
+printf kill > "$WORK/xc/mode"; : > "$WORK/xc/go"
 waitfor "xk: the line counts down" screen_has xk '秒后关闭'
 tf send-keys -t sw:xk x
 waitfor "xk: a key took the countdown off the line" eval '! screen_has xk 秒后关闭'
+waitfor "xz: the line is drawn" screen_has xz '会话已结束 · ↵ 重开'
+waitfor "xc: the crash line" screen_has xc '会话意外退出'
 sleep 3
 eq "xk: cancelled — nothing recycled" "$r0" "$(recycles)"
 eq "xk: the window still waits" exited "$(o xk @claude_state)"
+CHECKS=$((CHECKS + 1)); screen_has xz '秒后关闭' && fail "xz: FLEET_EXIT_CLOSE_SECS=0 still counted down"
+eq "xz: nothing recycled" "$r0" "$(recycles)"
+CHECKS=$((CHECKS + 1)); screen_has xc '秒后关闭' && fail "xc: a crash counted down"
+eq "xc: nothing recycled" "$r0" "$(recycles)"
 tf send-keys -t sw:xk Enter
 waitfor "xk: ↵ after the cancel resumes" launches xk 2
 eq "xk: the same conversation" "--agent claude --resume SID-1" "$(sed -n 2p "$WORK/xk/argv")"
-# 0 in fleet.conf: no countdown (the environment says nothing)
-mkdir -p "$WORK/xzconf"; printf 'FLEET_EXIT_CLOSE_SECS=0\n' > "$WORK/xzconf/fleet.conf"
-WRAP_ENV="FLEET_CONF_DIR=$WORK/xzconf" win xz 0
-waitfor "xz: first launch" launches xz 1
-printf rc0 > "$WORK/xz/mode"; : > "$WORK/xz/go"
-waitfor "xz: the line is drawn" screen_has xz '会话已结束 · ↵ 重开'
-sleep 2
-CHECKS=$((CHECKS + 1)); screen_has xz '秒后关闭' && fail "xz: FLEET_EXIT_CLOSE_SECS=0 still counted down"
-eq "xz: nothing recycled" "$r0" "$(recycles)"
-# a crash: never (an old role word on a window changes nothing, issue #4341 —
-# every session alike, so no leg for it)
-WRAP_ENV=FLEET_EXIT_CLOSE_SECS=1 win xc 0
-waitfor "xc: first launch" launches xc 1
-printf kill > "$WORK/xc/mode"; : > "$WORK/xc/go"
-waitfor "xc: the crash line" screen_has xc '会话意外退出'
-sleep 2
-CHECKS=$((CHECKS + 1)); screen_has xc '秒后关闭' && fail "xc: a crash counted down"
-eq "xc: nothing recycled" "$r0" "$(recycles)"
 
 # U (issue #1842 ①): commits on no remote are counted on the page.
 git init -q --bare "$WORK/u-origin.git"
