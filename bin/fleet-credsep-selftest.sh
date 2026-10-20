@@ -503,7 +503,8 @@ case "$rc:$out" in "2:"*"uninstall is gone (issue #4675)"*) pass "G uninstall: g
 out=$(bash "$BIN/fleet-credsep.sh" machine uninstall 2>&1); rc=$?
 case "$rc:$out" in "2:"*"machine uninstall is gone (issue #4675)"*) pass "G machine uninstall: gone (exit 2)" ;; *) fail "G machine uninstall rc=$rc: $out" ;; esac
 out=$(FLEET_CREDSEP_TEST=1 python3 -I "$BIN/fleet-credsep.py" uninstall --login "$ME" --conf-dir "$C" 2>&1); rc=$?
-[ "$rc" = 2 ] && pass "G fleet-credsep.py uninstall: refused (exit 2)" || fail "G py uninstall rc=$rc: $out"
+[ "$rc" = 2 ] && printf '%s' "$out" | grep -q "invalid choice: 'uninstall'" \
+  && pass "G fleet-credsep.py has no uninstall (exit 2, T600)" || fail "G py uninstall rc=$rc: $out"
 STORE_AFTER=$(cd "$SB" && find db -type f 2>/dev/null | LC_ALL=C sort)
 if [ "$STORE_AFTER" = "$STORE_BEFORE" ] && [ -f "$R/node.env" ] && [ -L "$C/node.env" ] && [ -e "$C/credsep.json" ] \
    && [ ! -e "$C/accounts/main.hub/.credentials.json" ] && [ ! -e "$HOME/.codex-accounts/work/auth.json" ]; then

@@ -258,8 +258,8 @@ sessions reach it. Two logins share a file exactly when the hub handed both the
 same token (the pool accounts); a token only one login leased is never served to
 another, and two people's accounts that happen to share a label stay two files.
 A tenant that joined before the pool moves its copies in when the proxy starts;
-an own copy left after that (`accounts/<label>.hub` beside the pool's — a join's
-`pool_hold` the running proxy re-reads from `meta.json`, issue #2849) moves in at
+an own copy left after that (`accounts/<label>.hub` beside the pool's — what a
+join's `pool_hold` left before T600 took the hold out, issue #2849) moves in at
 the tenant's next lease or the first read of that label, so a label resolves to
 the pool's copy only; `fleet-credsep.py machine pooldup` (root; the machine
 doctor's `credpool` row) WARNs on a token held twice, by `<login>:<label>` and
@@ -271,11 +271,12 @@ filed under the login whose session registered it (`fleet-cred-proxy.sh pass`,
 done by `fleet-session-cred.sh`). The control socket answers a login's uid with
 its own tenant and nothing else; root names one (`FLEET_CRED_AS`).
 
-**Running sessions do not break.** The signing key moves with the login, and
-the login's old port is served by the shared proxy for that login: the login's
-own launcher sees `credsep.json` appear, lets go of the port within 2 s, the
-shared proxy binds it, and a session minted before the switch goes on with its
-next request. Nothing reverses it (`disable --machine` is gone, issue #4675).
+**The old port is gone.** The signing key moves with the login; the login's own
+proxy and its port went with #4674, and since T600 the shared proxy no longer
+answers that port either — every session's base URL is the shared port (checked
+on every machine before the removal), and a credential minted on a login's own
+proxy (no `lg`) is refused there. Nothing reverses it (`disable --machine` is
+gone, issue #4675).
 
 A login on the shared proxy ignores its own `FLEET_CRED_SEPARATE` (a mark, no
 switch): `fleet-credsep.sh apply` says `shared`. The shared proxy dying is BREAK-IT `cred-shared-down`.

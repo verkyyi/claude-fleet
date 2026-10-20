@@ -59,8 +59,6 @@ func Run(name string, args []string) (handled bool, code int) {
 		err = runPlace(args)
 	case "move":
 		err = runMove(args)
-	case "credproxy":
-		err = runCredProxy(args)
 	case "release":
 		err = runRelease(args)
 	case "version", "--version", "-v":

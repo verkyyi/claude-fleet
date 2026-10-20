@@ -7,14 +7,12 @@ front; install runs as ROOT (it calls it through `sudo -n`).
                                                     (the login a TENANT of the machine's shared
                                                      proxy — the machine's first brings it up;
                                                      no login gets a proxy of its own, #4674)
-    uninstall                                       (gone, issue #4675: refused, exit 2 — there is
-                                                     no way back to credentials in a home)
     purge     --login L [--dry-run]                 (root: a login being deleted — everything of it
                                                      GONE, nothing moved back; fleet-login-remove.sh, #2418)
     status    --conf-dir C [--json]                 (as the login)
     check     --conf-dir C                          (as the login: the doctor row)
     plan      --bin B                               (anyone: every login's state + commands)
-    machine install|refresh [--logins a,b|all] [--dry-run]    (root; `machine uninstall` gone, #4675)
+    machine install|refresh [--logins a,b|all] [--dry-run]    (root; no `uninstall`: no way back, #4675)
     machine status [--json]                         (anyone)
     machine enforce [--logins a,b|all] [--dry-run]  (root: every human login separated — the machine
                                                      daemon's credsep-enforce task, issue #4607)
@@ -27,8 +25,8 @@ fixed 127.0.0.1 port (FLEET_CRED_SHARED_PORT, 18923) with one control socket
 (/var/run/fleet-cred/.shared/ctl.sock, 0666: the peer uid names the login).
 `machine install` makes each login a TENANT of it: the same store as above
 (meta.json `mode: shared`), its own proxy's signing key / passes / binds moved
-into <store>/cred-proxy (its sessions' credentials stay good, and its old port
-is answered by the shared proxy for that login only), its per-login proxy
+into <store>/cred-proxy (its sessions' credentials stay good; its old port is
+not served — no session uses one since #4674, T600), its per-login proxy
 service removed, FLEET_CRED_PROXY=1 in its fleet.conf (the line it had is
 remembered). Nothing undoes it (issue #4675: no login's credentials go back
 into its home). /var/db/fleet-cred/.shared.json is the record anyone reads
@@ -735,10 +733,9 @@ def install(a):
         old = json.load(open(os.path.join(R, "meta.json")))
     except (OSError, ValueError):
         pass
-    legacy = old.get("legacy_port") or 0
     if shared and old.get("mode") != "shared":
         CUR.update(mode="shared")
-        legacy = join_state(login, conf, R) or legacy
+        join_state(login, conf, R)
 
     # 5 + 6. services
     svc = agent_service(login, home)
@@ -746,7 +743,7 @@ def install(a):
             "install_dir": os.path.abspath(a.install_dir or ""), "role": ROLE,
             "codex_homes": ch, "installed": int(time.time()), "agent": svc}
     if shared:
-        meta.update(mode="shared", legacy_port=legacy,
+        meta.update(mode="shared",
                     conf_prior=old.get("conf_prior") if "conf_prior" in old else conf_switch_on(login, conf, pw))
     if old.get("agent"):
         meta["agent"], meta["agent_argv"], meta["path"] = old["agent"], old.get("agent_argv"), old.get("path", "")
@@ -2159,7 +2156,7 @@ def shared_ctl(login, req, root=False):
 
 
 def shared_ask(login):
-    """-> the shared proxy's view of <login> ({live, legacy_port}) — or None when
+    """-> the shared proxy's view of <login> ({live}) — or None when
     it does not serve it (not up, not a tenant)."""
     res = shared_ctl(login, {"op": "machine"}) or {}
     return (res.get("logins") or {}).get(login) if res.get("ok") else None
@@ -2777,9 +2774,11 @@ def agent_reload(login, R):
 
 
 # ---- reconcile: a plain node.env back in a separated home (issue #2649) -------------
-# A writer from before #2316 (`fleet host on` on 2026-10-08, mac-d) replaced the
-# link with a plain file: the token readable in the home again, and the store's
-# copy left behind. Root folds the home copy into the store — the NEWER file's
+# Something writing node.env from the login's side (first seen: a writer from
+# before #2316, `fleet host on` on 2026-10-08, mac-d; every fleet writer goes
+# through setenv now — a hand `mv` still can) replaces the link with a plain
+# file: the token readable in the home again, and the store's copy left behind.
+# machine enforce runs this on every tick that finds one. Root folds the home copy into the store — the NEWER file's
 # value wins a key both have (--prefer home|store overrides), a key only one has
 # is kept — sets the plain file aside in the store's backup/, puts the link back,
 # rewrites node.pub.env, restarts the agent; on a managed machine the node daemon's
@@ -3036,7 +3035,7 @@ def check(a):
         return 1
     ne = os.path.join(conf, "node.env")
     if ne in left:
-        # a writer from before #2316 swapped the link for a plain file (issue #2649).
+        # something on the login's side swapped the link for a plain file (issue #2649).
         # The store is not this login's to stat; node.pub.env is rewritten with it.
         try:
             newer = os.stat(ne).st_mtime > os.stat(os.path.join(conf, "node.pub.env")).st_mtime
@@ -3106,17 +3105,15 @@ def main():
     global DRY
     ap = argparse.ArgumentParser(prog="fleet-credsep.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for n in ("install", "uninstall"):
-        p = sub.add_parser(n)
-        p.add_argument("--login", required=True)
-        p.add_argument("--conf-dir", required=True)
-        p.add_argument("--install-dir", default="")
-        p.add_argument("--dry-run", action="store_true")
-        p.add_argument("--force", action="store_true")
-        p.add_argument("--adopt", action="store_true")
-        if n == "install":
-            p.add_argument("--fresh", action="store_true")   # a login just opened (#2294)
-            p.add_argument("--pool-src", default="")         # with --fresh: the team pool, into the store
+    p = sub.add_parser("install")   # no `uninstall`: no way back (issue #4675)
+    p.add_argument("--login", required=True)
+    p.add_argument("--conf-dir", required=True)
+    p.add_argument("--install-dir", default="")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--adopt", action="store_true")
+    p.add_argument("--fresh", action="store_true")   # a login just opened (#2294)
+    p.add_argument("--pool-src", default="")         # with --fresh: the team pool, into the store
     s = sub.add_parser("status"); s.add_argument("--conf-dir", required=True); s.add_argument("--json", action="store_true")
     c = sub.add_parser("check"); c.add_argument("--conf-dir", required=True)
     rl = sub.add_parser("relog")
@@ -3141,7 +3138,7 @@ def main():
     sub.add_parser("role")      # the role account alone (fleet-node-install.sh, #2330)
     pl = sub.add_parser("plan"); pl.add_argument("--bin", default=HERE)
     mc = sub.add_parser("machine")
-    mc.add_argument("verb", choices=("install", "uninstall", "refresh", "status", "pooldup", "pool-sync",
+    mc.add_argument("verb", choices=("install", "refresh", "status", "pooldup", "pool-sync",
                                      "enforce", "enforced",
                                           "managed", "proxies"))
     mc.add_argument("--logins", default="all")
@@ -3192,20 +3189,13 @@ def main():
             return machine_proxies(a)
         if a.verb == "enforced":
             return machine_enforced(a)
-        if a.verb == "uninstall":
-            die("machine uninstall: gone (issue #4675) — no login's credentials go back into its home", 2)
         DRY = a.dry_run
         if os.geteuid() != 0 and not TEST and not DRY:
             die("machine %s needs root (bin/fleet-credsep.sh machine runs it through sudo)" % a.verb, 2)
         return {"install": machine_install, "refresh": machine_refresh,
                 "pooldup": machine_pooldup,
                 "pool-sync": machine_pool_sync, "enforce": machine_enforce}[a.verb](a)
-    if a.cmd in ("install", "uninstall"):
-        if a.cmd == "uninstall":
-            # no way back (issue #4675): a subscription credential never goes into
-            # a home again. A login going away is fleet-login-remove.sh (purge).
-            die("uninstall: gone (issue #4675) — a credential never goes back into a home; "
-                "a login that goes away: fleet-login-remove.sh", 2)
+    if a.cmd == "install":
         DRY = a.dry_run
         if not re.match(r"^[a-z0-9_][a-z0-9_.-]{0,31}$", a.login):
             die("bad login %r" % a.login, 2)

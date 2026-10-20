@@ -2,7 +2,7 @@
 # fleet-cred-handoff-selftest.sh — the shared credential proxy restarts without a
 # moment of nobody listening (T595). bin/fleet-cred-proxy.py `serve --shared`
 # in a sandbox (one tenant: this login), a fake upstream on loopback, and a
-# client pounding its port and a login's old port the whole time:
+# client pounding its port the whole time:
 #
 #   A  three starts with FLEET_CRED_HANDOFF=1 (the machine daemon's, passed on by
 #      bin/fleet-credsep-launch.py) while requests run: every one answered — not
@@ -47,20 +47,15 @@ s.serve_forever()
 PY
 i=0; while [ ! -s "$SB/up.port" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
 
-PORTS=$(python3 -c 'import socket
-ps = []
-for _ in range(2):
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); ps.append(s.getsockname()[1]); s.close()
-print(" ".join(map(str, ps)))')
-set -- $PORTS
-PORT=$1 LEGACY=$2
-python3 - "$SB" "$PORT" "$LEGACY" <<'PY'
+PORT=$(python3 -c 'import socket
+s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+python3 - "$SB" "$PORT" <<'PY'
 import json, os, sys
-sb, port, legacy = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+sb, port = sys.argv[1], int(sys.argv[2])
 json.dump({"state": sb + "/st", "run": sb + "/run", "user": "", "version": "v1", "port": port,
            "tenants": [{"login": os.environ.get("USER") or "me", "uid": os.getuid(), "state": sb + "/tst",
                         "accounts": sb + "/acc", "codex_auth": sb + "/ca.json", "codex_homes": sb + "/ch",
-                        "node_env": sb + "/node.env", "log": sb + "/t.log", "legacy_port": legacy,
+                        "node_env": sb + "/node.env", "log": sb + "/t.log",
                         "settings": {}}]}, open(sb + "/tenants.json", "w"))
 PY
 
@@ -87,9 +82,9 @@ P0=$(up) || { fail "the first proxy never came up: $(cat "$SB/a.err")"; exit 1; 
 CTL_INO=$(ls -i "$SB/run/ctl.sock" | awk '{print $1}')
 
 # ── A: handoffs under load ───────────────────────────────────────────────────
-python3 - "$PORT" "$LEGACY" 14 > "$SB/load.json" <<'PY' &
+python3 - "$PORT" 14 > "$SB/load.json" <<'PY' &
 import collections, http.client, json, sys, threading, time
-ports, secs = [int(sys.argv[1]), int(sys.argv[2])], float(sys.argv[3])
+ports, secs = [int(sys.argv[1])], float(sys.argv[2])
 errs, ok, lk, end = collections.Counter(), collections.Counter(), threading.Lock(), time.time() + secs
 def go(kind, port):
     c = None

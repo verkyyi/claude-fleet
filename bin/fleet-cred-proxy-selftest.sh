@@ -350,8 +350,11 @@ probe reachable
 r=$(CP route --provider codex); case "$r" in central*) fail "D2 a leasing login went central: $r" ;; esac
 
 # ── E: a region refusal switches the same session's route ───────────────────
-echo absent > "$SB/trust"      # a hub with no trust record = trusted (the degenerate)
-r=$(CP route --refresh); case "$r" in direct*) ;; *) fail "E route (no trust record): $r" ;; esac
+echo absent > "$SB/trust"      # a hub that names no trust: fail closed (T600 took the pre-#1968 «trusted»)
+CP route --refresh >/dev/null
+CP status --json | grep -q '"trust": "untrusted"' || fail "E0 no trust in /v1/node/self is not untrusted: $(CP status --json)"
+echo trusted > "$SB/trust"
+r=$(CP route --refresh); case "$r" in direct*) ;; *) fail "E route (trusted): $r" ;; esac
 touch "$SB/region-direct"
 TE=$(CP mint --account a2 --sid se)
 jc=$(R /v1/messages "$TE"); jx=$(R /codex/responses "$TE")

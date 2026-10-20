@@ -10,7 +10,6 @@ budget
 chat-pipe
 codex
 core-exec
-credproxy
 lease
 move
 place
