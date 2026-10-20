@@ -31,7 +31,7 @@
 #                 nothing; kick-collect is `--unit collect --force` (#1242)
 #  11. events   — issue #1617: `fleet-alerts.sh event` records a background
 #                 event → one ▲ row (counts +1, ↵ reads the text) and NO toast;
-#                 a FLEET_ALERT_FLASH_KINDS kind (quota-nowhere) flashes once on
+#                 a FLEET_ALERT_FLASH_KINDS kind (disk-red) flashes once on
 #                 its socket AND is recorded; same text twice in 60s is one event;
 #                 past FLEET_ALERTS_EVENT_LIVE it leaves the count without a ↻
 #                 trace and stays in the popup's history; 30 days drops it
@@ -300,9 +300,9 @@ out=$(fa list --plain)
 case "$out" in *"▲  fleet: a at 90% → benched; moving its sessions to b"*"↵ read"*) ok ;; *) fail "11: the popup row is the event's own text" "$out" ;; esac
 fev -L sB quota-benched 'fleet: a at 90% → benched; moving its sessions to b'   # the same news off another socket
 eq "11: the same kind + text within 60s is ONE event" 1 "$(grep -c 'quota-benched' "$EV")"
-fev -L sA quota-nowhere 'fleet: b at 95% — nowhere to move'
+fev -L sA disk-red 'fleet: b at 95% — nowhere to move'
 eq "11: a whitelisted kind flashes once on its socket" 1 "$(grep -c '^-L sA display-message fleet: b at 95% — nowhere to move$' "$WORK/calls11")"
-grep -q 'quota-nowhere	fleet: b at 95%' "$EV" || fail "11: …and is recorded too" "$(cat "$EV")"; ok
+grep -q 'disk-red	fleet: b at 95%' "$EV" || fail "11: …and is recorded too" "$(cat "$EV")"; ok
 fa write
 eq "11: two events → ▲ 2" "0 2 0" "$(fa counts)"
 id=$(awk -F '\t' '$3 == "quota-benched" { print $2 }' "$EV")
@@ -321,7 +321,7 @@ case "$(fa list --plain --history --level alarm)" in *benched*) fail "11: histor
 # 30 days: the next event prunes it
 awk -F '\t' -v OFS='\t' -v o=$(( $(now) - 31 * 86400 )) 'NR == 1 { $1 = o } { print }' "$EV" > "$EV.t" && mv "$EV.t" "$EV"
 fev handoff 'fleet-handoff %9: could not confirm a fresh session'
-eq "11: a 31-day-old event is pruned, the rest kept" "quota-nowhere handoff" "$(awk -F '\t' '{ printf "%s%s", (NR > 1 ? " " : ""), $3 }' "$EV")"
+eq "11: a 31-day-old event is pruned, the rest kept" "disk-red handoff" "$(awk -F '\t' '{ printf "%s%s", (NR > 1 ? " " : ""), $3 }' "$EV")"
 rm -f "$G"/alerts.* "$WORK/calls11"
 
 # ------------------------------------------------------------------- 12. lint ----
@@ -338,7 +338,7 @@ for f in $bg; do
 done
 eq "12: no bare display-message on a background path (mark a keypress-only one # toast-ok:)" "" "$lint"
 [ "$(grep -l "^FLEET_ALERT_FLASH_KINDS=" "$BIN"/*.sh | sed "s|.*/||" | grep -cv -- "-selftest\.sh$")" = 1 ] || fail "12: the flash whitelist must be written in ONE place" "$(grep -n FLEET_ALERT_FLASH_KINDS= "$BIN"/*.sh)"; ok
-eq "12: the whitelist is the four that need you now" "quota-nowhere hub-lost disk-red account-reauth" "$(bash -c '. "$1"; printf %s "$FLEET_ALERT_FLASH_KINDS"' _ "$FA")"
+eq "12: the whitelist is the three that need you now (quota-nowhere left with the quota watch, T549)" "hub-lost disk-red account-reauth" "$(bash -c '. "$1"; printf %s "$FLEET_ALERT_FLASH_KINDS"' _ "$FA")"
 
 # --------------------------------------------------------------- 13. machine ----
 # 负载 / 内存 left the bar (issue #1616): red is a warning row now. Shims for both
