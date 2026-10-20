@@ -118,8 +118,11 @@ set -uo pipefail
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <fleet-session>.
-set_agent() {
-  case "$1" in claude|codex) ;; *) printf 'dash-raw-session: unknown --agent %s (claude|codex)\n' "$1" >&2; exit 2 ;; esac
+set_agent() {   # a row of the adapter table (bin/fleet_agent_adapter.py beside this script or its link's target, T620)
+  local s=$0 d
+  d=$(cd "$(dirname "$s")" && pwd); [ -f "$d/fleet_agent_adapter.py" ] || { [ -L "$s" ] && d=$(cd "$(dirname "$s")" && cd "$(dirname "$(readlink "$s")")" && pwd); }
+  python3 "$d/fleet_agent_adapter.py" known "$1" 2>/dev/null \
+    || { printf 'dash-raw-session: unknown --agent %s (claude|codex)\n' "$1" >&2; exit 2; }
   [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-raw-session: contradictory --agent values\n' >&2; exit 2; }
   AGENT=$1
 }
@@ -375,7 +378,9 @@ fi
 # replaces what fleet_load_conf resolved (possibly the CALLER window's repo).
 # A named agent file's `fleet: repo` is the repo when the spawn names none (#3122).
 # A start already known to be Codex never asks the Claude CLI for plugins (#4726).
-AS_FOR=claude; [ "${AGENT:-${FLEET_AGENT:-claude}}" = codex ] && AS_FOR=codex
+# what this session's agent can do is asked of its adapter-table row (T620) — never its name
+agent_col() { fleet_agent_get "$(fleet_agent_or_default "${AGENT:-${FLEET_AGENT:-}}")" "$1"; }
+AS_FOR=$(fleet_agent_or_default "${AGENT:-${FLEET_AGENT:-}}")
 if [ "$NOREPO" != 1 ] && [ -z "$REPO_ARG" ] && [ -z "$SEL" ] && [ -n "$AS_ARG" ]; then
   REPO_ARG=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>/dev/null \
     | awk -F'\t' '$1 == "repo" { print $2; exit }')
@@ -442,7 +447,7 @@ if [ "$NOREPO" != 1 ]; then
 fi
 BASE="${FLEET_BASE_BRANCH:-master}"
 if [ "$NATIVE_WT" = 1 ]; then
-  [ "$NOREPO" = 0 ] && [ -n "$REPO_ARG" ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" = claude ] \
+  [ "$NOREPO" = 0 ] && [ -n "$REPO_ARG" ] && [ "$(agent_col native_worktree)" = 1 ] \
     && [ "$NODE_ARG" = local ] \
     && [ -z "$WT_ARG$RESUME_SID" ] \
     || { refuse "raw: native worktree requires a fresh local Claude repository session"; exit 2; }
@@ -775,19 +780,20 @@ while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n 
   # (issue #789 — see fleet_win_stamp_cmd).
   stamp=''; nsid=''
   # A parked session's return (issue #3387): the same conversation when its
-  # transcript is still where it ran and the agent is Claude; else a fresh one.
+  # transcript is still where it ran and the agent comes back into its own
+  # conversation (the table's park_resume); else a fresh one.
   rsid=''
-  if [ -n "$RESUME_SID" ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" = claude ] \
+  if [ -n "$RESUME_SID" ] && [ "$(agent_col park_resume)" = 1 ] \
      && [ -f "$(fleet_transcript_dir "$wt")/$RESUME_SID.jsonl" ]; then
     rsid=$RESUME_SID
   fi
   if [ "$NOREPO" = 1 ]; then
     if [ -n "$rsid" ]; then
       nsid=$rsid; launch="$launch --resume $nsid"
-    elif [ "${AGENT:-${FLEET_AGENT:-claude}}" = claude ]; then
+    elif [ -n "$(agent_col preset_sid_flag)" ]; then   # a new conversation under an id we chose
       nsid=$(uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null)
       nsid=$(printf '%s' "$nsid" | tr 'A-F' 'a-f' | LC_ALL=C tr -cd '0-9a-f-')
-      [ -n "$nsid" ] && launch="$launch --session-id $nsid"
+      [ -n "$nsid" ] && launch="$launch $(agent_col preset_sid_flag) $nsid"
     fi
     stamp=$(fleet_win_stamp_cmd @norepo 1 ${nsid:+@norepo_sid "$nsid"})
   elif [ -n "$REPO_ARG" ]; then

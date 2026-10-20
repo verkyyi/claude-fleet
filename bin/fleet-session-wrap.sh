@@ -112,6 +112,13 @@ done
 
 intmux=0; [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && intmux=1
 opt()  { tmux display-message -p -t "$TMUX_PANE" "#{$1}" 2>/dev/null; }
+# The agent adapter table (T620, EPIC T580 C4) — which option holds a window's
+# conversation id, how a resume is spelled — beside this script, else beside its
+# link's target (the generated shell copy: no lib, no python, between pane and agent).
+_ad="$BIN/fleet-agent-adapter.sh"
+[ -f "$_ad" ] || { [ -L "$0" ] && _ad="$(cd "$(dirname "$0")" && cd "$(dirname "$(readlink "$0")")" && pwd)/fleet-agent-adapter.sh"; }
+# shellcheck source=fleet-agent-adapter.sh
+. "$_ad"; unset _ad
 wset() { tmux set-option -w -t "$TMUX_PANE" "$@" 2>/dev/null; }
 
 # Ctrl+C belongs to the agent: a trapped (not ignored) INT resets to default in
@@ -346,19 +353,21 @@ while :; do
   fi
   retry=$first; first=0
 
-  agent=$(opt @cc_agent); [ "$agent" = codex ] || agent=claude
-  if [ "$agent" = codex ]; then sid=$(opt @codex_session_id); else sid=$(opt @cc_session_id); fi
+  agent=$(fleet_agent_or_default "$(opt @cc_agent)")
+  _o=$(fleet_agent_get "$agent" sid_window); sid=''; [ -n "$_o" ] && sid=$(opt "$_o")
   # The launcher may have cleared the id before it died (fleet-codex.sh does at
   # launch): keep the last one this window had.
   if [ -n "$sid" ]; then last_sid=$sid; last_agent=$agent
   elif [ "$agent" = "$last_agent" ]; then sid=$last_sid; fi
   # A resume that never reached its first hook (a review page, a fast death) still
-  # names the thread it was opened for (@codex_pending, issue #4728): ↵ resumes
-  # THAT, never a new conversation in its place.
-  [ "$agent" = codex ] && [ -z "$sid" ] \
-    && sid=$(opt @codex_pending | sed -n 's/.*"session_id":"\([0-9A-Fa-f-]*\)".*/\1/p')
-  # Codex with no id: the window's own thread, never the home's latest (#1842 ④).
-  [ "$agent" = codex ] && [ -z "$sid" ] && sid=$(opt @codex_thread_id)
+  # names the thread it was opened for (the table's sid_pending — @codex_pending,
+  # issue #4728): ↵ resumes THAT, never a new conversation in its place.
+  _o=$(fleet_agent_get "$agent" sid_pending)
+  [ -n "$_o" ] && [ -z "$sid" ] \
+    && sid=$(opt "$_o" | sed -n 's/.*"session_id":"\([0-9A-Fa-f-]*\)".*/\1/p')
+  # no id: the window's own thread (sid_thread), never the home's latest (#1842 ④)
+  _o=$(fleet_agent_get "$agent" sid_thread)
+  [ -n "$_o" ] && [ -z "$sid" ] && sid=$(opt "$_o")
   # Commits on no remote, so the page can say they are still here (#1842 ①).
   unp=0; br=''
   wtd=$(opt @worktree); [ -n "$wtd" ] && [ -d "$wtd" ] || wtd=$PWD
@@ -452,11 +461,11 @@ while :; do
     10)  # ↵ — the same conversation; a Codex window with none starts a new one
       last=resume
       cmd=(--agent "$agent" ${policy[@]+"${policy[@]}"})
-      if [ "$agent" = codex ]; then
-        if [ -n "$sid" ]; then cmd+=(resume "$sid"); else last=new; fi
-      else
-        if [ -n "$sid" ]; then cmd+=(--resume "$sid"); else cmd+=(--continue); fi
-      fi ;;
+      # the table's spelling: a resume by id; no id ⇒ its continue, or (none) a new one
+      _o=$(fleet_agent_get "$agent" continue_flag)
+      if [ -n "$sid" ]; then cmd+=("$(fleet_agent_get "$agent" resume_flag)" "$sid")
+      elif [ -n "$_o" ]; then cmd+=("$_o")
+      else last=new; fi ;;
     11)  last=new; cmd=(--agent "$agent" ${policy[@]+"${policy[@]}"}) ;;   # r — a new conversation
     12)  # q — recycle: the SessionEnd hook's reap + close, asked for on purpose
       wset @claude_state "done"

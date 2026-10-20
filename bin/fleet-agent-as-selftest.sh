@@ -151,7 +151,7 @@ t0=$(date +%s); got=$(FCBIN="$WORK/claude-hang" fc bash "$BIN/fleet-claude.sh" -
 
 # --- E Codex ----------------------------------------------------------------------
 mkdir -p "$WORK/cbin"
-cp "$BIN/fleet-claude.sh" "$BIN/fleet-agent-def.py" "$WORK/cbin/"
+cp "$BIN/fleet-claude.sh" "$BIN/fleet-launch-lib.sh" "$BIN/fleet-agent-adapter.sh" "$BIN/fleet-agent-def.py" "$WORK/cbin/"
 printf '#!/bin/sh\nfor a in "$@"; do printf "%%s\\n" "$a"; done\n' > "$WORK/cbin/fleet-codex.sh"; chmod +x "$WORK/cbin/fleet-codex.sh"
 got=$(env -u TMUX -u TMUX_PANE FLEET_FAILOVER=0 bash "$WORK/cbin/fleet-claude.sh" --agent codex --as keyed x 2>/dev/null | paste -sd' ' -)
 case "$got" in "-m gpt-5.5 -c model_reasoning_effort=\"high\" -c model_instructions_file=\"$FLEET_CONF_DIR/agents/keyed-"*".md\" x")

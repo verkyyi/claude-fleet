@@ -22,7 +22,14 @@ exit 0 + `config` — config.toml says never + danger-full-access, nothing above
   can change that: launch WITHOUT the flag.
 exit 1 + `flag <why>` — anything else, unreadable included: keep the flag (the old
   launch, byte for byte).
+
+    fleet-codex-posture.py plugins-on <agent-overrides.json>
+
+exit 0 when the person handed Codex's own plugin marketplace back (issue #4848:
+`"codex_plugins": "on"`, or "codex_plugins:on" in the array form); else 1 and the
+launcher adds `-c features.plugins=false`.
 """
+import json
 import os
 from pathlib import Path
 import runpy
@@ -112,7 +119,21 @@ def check(home, cwd, argv):
     return project_reason(cwd)
 
 
+def plugins_on(path):
+    try:
+        with open(path) as f:
+            d = json.load(f)
+    except Exception:
+        return False
+    if isinstance(d, list):
+        return any(str(x).replace(" ", "").lower() == "codex_plugins:on" for x in d)
+    v = d.get("codex_plugins") if isinstance(d, dict) else None
+    return v is True or str(v).strip().lower() in ("on", "true", "1", "yes")
+
+
 def main(args):
+    if len(args) == 2 and args[0] == 'plugins-on':
+        return 0 if plugins_on(args[1]) else 1
     if not args or args[0] != 'check':
         print('usage: fleet-codex-posture.py check --home H --cwd D [-- argv]', file=sys.stderr)
         return 2

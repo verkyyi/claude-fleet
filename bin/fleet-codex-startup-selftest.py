@@ -19,7 +19,7 @@ class PolicyTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory(prefix='codex-policy-'); self.addCleanup(temp.cleanup)
         self.root = Path(temp.name); install = self.root / 'install'; self.bin = install / 'bin'; self.bin.mkdir(parents=True)
-        for name in ('fleet-claude.sh', 'fleet-codex.sh', 'fleet-lib.sh', 'fleet-client-core.sh', 'fleet-codex-policy.py', 'fleet-codex-runtime.py', 'fleet-hooks-emit.sh'):
+        for name in ('fleet-claude.sh', 'fleet-codex.sh', 'fleet-launch-lib.sh', 'fleet-agent-adapter.sh', 'fleet_agent_adapter.py', 'fleet-lib.sh', 'fleet-client-core.sh', 'fleet-codex-policy.py', 'fleet-codex-runtime.py', 'fleet-hooks-emit.sh'):
             shutil.copy2(BIN / name, self.bin / name)
         shutil.copytree(BIN.parent / 'hooks', install / 'hooks')
         fake = self.root / 'fake'; fake.mkdir(); self.home = self.root / "account home's directory"; self.home.mkdir()

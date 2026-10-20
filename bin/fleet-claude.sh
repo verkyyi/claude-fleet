@@ -12,35 +12,15 @@
 # `--agent codex`) execs bin/fleet-codex.sh instead — see the dispatch block below.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-# A refusal to start the agent at all (issue #2404) says so on the pane before the
-# exit: fleet-session-wrap.sh then stops on the recovery page with the reason
-# (cred | account) instead of handing the window to the caller's bare shell.
-_fc_refused() { [ -n "${TMUX_PANE:-}" ] && tmux set-option -p -t "$TMUX_PANE" @launch_refused "$1" 2>/dev/null; return 0; }
+# The steps both agents share — the configuration (the global conf, the login's,
+# the per-fleet overlay #472), trust, the tool service, the composed configuration,
+# the session credential — are bin/fleet-launch-lib.sh's (T620, EPIC T580 C4); what
+# the agents really differ in is the adapter table it reads (fleet_agent_adapter.py).
+LAUNCH_AGENT=claude
+_fl_lib="$BIN/fleet-launch-lib.sh"   # beside this script, else beside its link's target
+[ -f "$_fl_lib" ] || _fl_lib="$(cd "$BIN" && cd "$(dirname "$(readlink "$0")")" && pwd)/fleet-launch-lib.sh"
 # shellcheck source=/dev/null
-[ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"     # also sources the sibling global fleet.conf
-# shellcheck source=/dev/null
-[ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"   # kept for a lib-less install
-# claude and tmux even from a PATH-less ssh / daemon shell (issue #1774): the dirs
-# they install to are appended to PATH when missing — an existing PATH order wins.
-command -v fleet_path_fill >/dev/null 2>&1 && { PATH=$(fleet_path_fill); export PATH; }
-_fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; [ -f "$_fs/fleet.settings" ] && . "$_fs/fleet.settings"; [ -f "$_fs/fleet.conf" ] && . "$_fs/fleet.conf"   # the login's settings win (#979); the machine's one file (#1623)
-
-# Per-fleet overlay (issue #472). Until now this script read the GLOBAL fleet.conf
-# only — and nothing else carried the per-fleet conf into a spawned window either
-# (`tmux new-window`'s command string does not inherit the spawner's shell env, and
-# the fleet never set-environments the conf onto its server). So every @scope=fleet
-# key that ONLY this script reads was silently inert: two fleets configured
-# FLEET_MODEL="fable" and every session they spawned ran `--model opus`, this
-# script's default for an unset value — a miss that fails quietly UPWARD, toward the
-# most expensive model. fleet_load_conf strips $_FLEET_GLOBAL_ONLY (#237), so global
-# still wins where it must; fleet_current_session reads $TMUX_PANE, which is set in
-# the spawned pane. No tmux / no conf / no lib → clean no-op, as before.
-if command -v fleet_load_conf >/dev/null 2>&1; then
-  _fc_sess="$(fleet_current_session 2>/dev/null)"
-  [ -n "$_fc_sess" ] && fleet_load_conf "$_fc_sess"
-  _fc_fleet="$_fc_sess"   # kept for the trusted node's pre-trust (issue #2282)
-  unset _fc_sess
-fi
+. "$_fl_lib"
 
 # The account CLASS (issue #1540) chose among this login's accounts — gone with the
 # pick (T550): the class only ever narrowed `fleet-account.sh active`. An older
@@ -125,12 +105,13 @@ fleet_as_stamp() {
     set-option -w -t "$TMUX_PANE" @agent_def_sha "$_fc_as_sha" \; \
     set-option -w -t "$TMUX_PANE" @agent_spawn "$_fc_as_spawn" 2>/dev/null || true
 }
-case "$_fc_agent" in
-  codex)     fleet_as_resolve codex; fleet_as_stamp
-             exec "$BIN/fleet-codex.sh" ${as_flag[@]+"${as_flag[@]}"} "$@" ;;
-  ''|claude) : ;;
-  *) printf 'fleet-claude: unknown agent %s (FLEET_AGENT / --agent must be claude|codex) — launching claude\n' "$_fc_agent" >&2 ;;
-esac
+# The one door: any agent the table has but Claude runs its own launcher.
+if [ -n "$_fc_agent" ] && ! fleet_agent_known "$_fc_agent"; then
+  printf 'fleet-claude: unknown agent %s (FLEET_AGENT / --agent must be %s) — launching claude\n' "$_fc_agent" "$(printf '%s' "$FLEET_AGENTS" | tr ' ' '|')" >&2
+elif [ -n "$_fc_agent" ] && [ "$_fc_agent" != "$LAUNCH_AGENT" ]; then
+  fleet_as_resolve "$_fc_agent"; fleet_as_stamp
+  exec "$BIN/$(fleet_agent_get "$_fc_agent" launcher)" ${as_flag[@]+"${as_flag[@]}"} "$@"
+fi
 unset _fc_agent _fc_explicit _fc_args _fc_want _fc_a
 
 # The agent file's model is this launch's FLEET_MODEL default (issue #3122) — the
@@ -143,89 +124,10 @@ if [ -z "${FLEET_MODEL+x}" ]; then
 fi
 fleet_as_stamp
 
-# --- project trust: pre-answer "trust this folder?" for THIS fleet's checkout ---
-# (issue #563). Claude Code keys trust on the resolved project root — a linked
-# worktree resolves to its MAIN checkout — with an exact lookup in ~/.claude.json
-# (`projects[<root>].hasTrustDialogAccepted`). When that entry is missing or
-# false for $FLEET_MAIN, EVERY spawned worker stops at "Quick safety check: Is this
-# a project you created or one you trust?" and, with nobody in the pane, sits
-# there for good — on 2026-09-12 two autofill-dispatched workers on the mac-c did
-# exactly that for 7+ minutes while the dispatcher counted their slots as filled.
-# So the single door every spawn walks through writes the trust itself, scoped:
-# bin/fleet-trust.sh grants ONLY the base checkout and worktrees OF it (this cwd,
-# when it is one), atomically (temp + rename, compare-and-swap against a claude
-# process saving its own state at the same instant). Not a --dangerously-* flag:
-# the dialog stays per-directory; we answer it for our own directories only.
-# Best-effort: no python3 / no FLEET_MAIN / a cwd that is not ours → skip quietly;
-# claude is still the authority. FLEET_PRETRUST=0 opts a fleet out.
-#
-# A TRUSTED NODE goes wider (issue #2282): when `fleet-trust.sh node` reads this
-# machine as trusted (the credential proxy's cached word from the hub), the grant
-# names EVERY repo this fleet hosts (fleet_repos → each one's FLEET_MAIN), so a
-# worktree of the second repo is covered whatever the window's overlay said, and
-# — for a window the fleet opened with no repo (@norepo 1)
-# whose cwd is the login's $HOME — `--home`, that one directory. Still the same
-# door: the ↵ on the recovery page, fleet-migrate, fleet-restore and a sleeper's
-# wake all relaunch through here. Not trusted / cannot tell ⇒ the narrow call
-# below, byte for byte; nothing already running is touched.
-_fc_tr_args='' _fc_tr_home=0
-if [ "${FLEET_PRETRUST:-1}" != 0 ] && [ -f "$BIN/fleet-trust.sh" ]; then
-  _fc_norepo=''
-  if [ -n "${TMUX_PANE:-}" ]; then
-    _fc_norepo=$(tmux display-message -p -t "$TMUX_PANE" '#{@norepo}|' 2>/dev/null)
-  fi
-  case "$_fc_norepo" in
-    1\|*)
-      [ "$(cd "$PWD" 2>/dev/null && pwd -P)" = "$(cd "${HOME:-/nonexistent}" 2>/dev/null && pwd -P)" ] \
-        && _fc_tr_home=1 ;;
-  esac
-  unset _fc_norepo
-  # nothing the wide form could add (no checkout, not a no-repo window in $HOME) ⇒
-  # no question asked, exactly as before
-  if { [ -n "${FLEET_MAIN:-}" ] || [ "$_fc_tr_home" = 1 ]; } \
-     && sh "$BIN/fleet-trust.sh" node >/dev/null 2>&1; then
-    _fc_tr_args=wide
-  fi
-fi
-if [ "$_fc_tr_args" = wide ]; then
-  _fc_tr=()
-  [ -n "${FLEET_MAIN:-}" ] && _fc_tr+=(--main "$FLEET_MAIN")
-  if [ -n "${_fc_fleet:-}" ] && command -v fleet_repos >/dev/null 2>&1; then
-    while IFS= read -r _fc_r; do
-      [ -n "$_fc_r" ] || continue
-      _fc_m=$(fleet_repo_conf_get "$_fc_fleet" "$_fc_r" FLEET_MAIN 2>/dev/null)
-      [ -n "$_fc_m" ] && [ "$_fc_m" != "${FLEET_MAIN:-}" ] && _fc_tr+=(--main "$_fc_m")
-    done <<EOF_FC_REPOS
-$(fleet_repos "$_fc_fleet" 2>/dev/null)
-EOF_FC_REPOS
-    unset _fc_r _fc_m
-  fi
-  [ "${_fc_tr_home:-0}" = 1 ] && _fc_tr+=(--home)
-  if [ "${#_fc_tr[@]}" -gt 0 ]; then
-    _fc_granted=$(sh "$BIN/fleet-trust.sh" grant ${_fc_tr[@]+"${_fc_tr[@]}"} "$PWD" 2>"${TMPDIR:-/tmp}/.fleet-trust.$$")
-    _fc_rc=$?
-    if [ -n "$_fc_granted" ]; then
-      printf 'fleet-claude: pre-trusted %s in %s (trusted node, issue #2282)\n' "$(printf '%s' "$_fc_granted" | tr '\n' ' ')" "$(sh "$BIN/fleet-trust.sh" file)" >&2
-    fi
-    case "$_fc_rc" in 0|2|3) : ;; *) cat "${TMPDIR:-/tmp}/.fleet-trust.$$" >&2 ;; esac
-    rm -f "${TMPDIR:-/tmp}/.fleet-trust.$$"
-    unset _fc_granted _fc_rc
-  fi
-  unset _fc_tr _fc_tr_home
-elif [ "${FLEET_PRETRUST:-1}" != 0 ] && [ -n "${FLEET_MAIN:-}" ] && [ -f "$BIN/fleet-trust.sh" ]; then
-  _fc_granted=$(sh "$BIN/fleet-trust.sh" grant --main "$FLEET_MAIN" "$PWD" 2>"${TMPDIR:-/tmp}/.fleet-trust.$$")
-  _fc_rc=$?
-  if [ -n "$_fc_granted" ]; then
-    printf 'fleet-claude: pre-trusted %s in %s (issue #563)\n' "$(printf '%s' "$_fc_granted" | tr '\n' ' ')" "$(sh "$BIN/fleet-trust.sh" file)" >&2
-  fi
-  # 3 = a refused path (a cwd outside this fleet's checkout — expected for a plain
-  # launch from elsewhere), 2 = no python3: both silent. Anything else is a real
-  # write failure the pane should show before claude clears the screen.
-  case "$_fc_rc" in 0|2|3) : ;; *) cat "${TMPDIR:-/tmp}/.fleet-trust.$$" >&2 ;; esac
-  rm -f "${TMPDIR:-/tmp}/.fleet-trust.$$"
-  unset _fc_granted _fc_rc
-fi
-unset _fc_tr_args _fc_fleet
+# Project trust (issue #563; a trusted node's wide form, #2282): every spawn, restore,
+# migrate and wake walks through this door, so it answers "trust this folder?" for the
+# fleet's own directories — fleet_launch_trust (the lib).
+fleet_launch_trust
 
 # Default spawned sessions to opus (never let a new window fall back to sonnet).
 # Overridable per install/fleet via FLEET_MODEL in fleet.conf; set it empty to
@@ -266,90 +168,12 @@ fi
 if [ -z "${FLEET_SUBAGENT_MODEL+x}" ]; then FLEET_SUBAGENT_MODEL="${launch_model:-$FLEET_MODEL}"; fi
 [ -n "$FLEET_SUBAGENT_MODEL" ] && export CLAUDE_CODE_SUBAGENT_MODEL="$FLEET_SUBAGENT_MODEL"
 
-# MCP allowlist (issue #473). A fleet session boots the operator's ENTIRE MCP set —
-# on the machine this was measured on, 13 servers: 5 local stdio (3 resolved through
-# npx, one pinned @latest so it hits the registry) plus 8 remote connectors over the
-# network. That is ~2s of the ~5s before a new session accepts input, plus 4-5
-# resident node children per session. A 30-day census of every mcp__* call across
-# 4690 transcripts found ALL of it concentrated in three servers, in one fleet; the
-# other fleet made zero MCP calls at all. This lets each fleet pay for what it uses:
-#
-#   unset/empty  every configured MCP server loads (unchanged — the default)
-#   none         no MCP at all
-#   <path|json>  ONLY these servers (the CLI takes a file path or inline JSON)
-#
-# Recommended: the shipped minimal worker set, ~/.claude/fleet/conf/mcp-worker.json
-# (issue #1078; docs/dev/INSTALL.md "MCP servers on demand").
-#
-# --strict-mcp-config is what drops the REMOTE connectors too, not just local stdio.
-# An explicit --mcp-config/--strict-mcp-config from the caller wins, same as --model.
+# MCP: an allowlist (FLEET_MCP_CONFIG, issue #473 — every server costs start time and
+# resident children) and the fleet's own tool service + dispatch group (#1807, #3113),
+# as --mcp-config files: fleet_launch_mcp (the lib). A caller's own MCP flags win.
 mcp_flag=()
-if [ -n "${FLEET_MCP_CONFIG:-}" ]; then
-  case " $* " in
-    *" --mcp-config "*|*" --mcp-config="*|*" --strict-mcp-config "*) : ;;   # caller already chose
-    *)
-      _fc_mcp="$FLEET_MCP_CONFIG"
-      [ "$_fc_mcp" = none ] && _fc_mcp='{"mcpServers":{}}'
-      # --mcp-config=<v>, NOT --mcp-config <v>: the option is VARIADIC
-      # (`--mcp-config <configs...>`), so in the separated form it swallows
-      # whatever positional follows it. Every issue-bound spawn passes the seed
-      # prompt positionally (dash-issue-session.sh: `fleet-claude.sh "$(cat …)"`),
-      # so the separated form read the PROMPT as a second config path and every
-      # worker died at launch with `MCP config file not found: <the seed>`. The
-      # =form binds the value to the flag and cannot reach past it, whatever
-      # follows. Do not "tidy" it back into two words.
-      mcp_flag=(--strict-mcp-config "--mcp-config=$_fc_mcp")
-      unset _fc_mcp
-      ;;
-  esac
-fi
-
-# The fleet's own tool service (issue #1807, EPIC #1813 C5): every session mounts
-# bin/fleet-mcp.py as the MCP server `fleet` — the same tools bin/fleet-codex.sh
-# hands Codex — defined ONCE in conf/mcp-worker.json. Additive: it rides next to
-# whatever FLEET_MCP_CONFIG chose (an allowlist, `none`, or unset = every server),
-# and is not added twice when the allowlist IS that file. FLEET_MCP_BIN points the
-# server at THIS install's bin/; FLEET_MCP_SERVER=1 tells the mod not to register
-# its own three fallback tools under the same `fleet` name. FLEET_MCP=0, a
-# caller's own MCP flags, or no file beside bin/ adds nothing (byte for byte).
-unset FLEET_MCP_SERVER FLEET_MCP_ORCH                      # never inherit a parent's mount
-_fc_mw="$BIN/../conf/mcp-worker.json"
-if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$_fc_mw" ] && [ -f "$BIN/fleet-mcp.py" ]; then
-  case " $* " in
-    *" --mcp-config "*|*" --mcp-config="*|*" --strict-mcp-config "*) : ;;   # caller already chose
-    *)
-      export FLEET_MCP_BIN="$BIN" FLEET_MCP_SERVER=1
-      # An allowlist that already names a `fleet` server (this file, or a copy a
-      # repo extended — docs/dev/INSTALL.md) mounts it; a second one would collide.
-      case "${FLEET_MCP_CONFIG:-}" in
-        ''|none) _fc_mwin='' ;;
-        '{'*)    _fc_mwin="$FLEET_MCP_CONFIG" ;;
-        *)       _fc_mwin=$(cat "${FLEET_MCP_CONFIG/#\~/$HOME}" 2>/dev/null) ;;
-      esac
-      case "$_fc_mwin" in
-        *'"fleet":'*|*'"fleet" :'*) : ;;
-        *) mcp_flag+=("--mcp-config=$_fc_mw") ;;               # the =form (#476, above)
-      esac
-      unset _fc_mwin
-      # The dispatch group (issue #3113) is the server `fleet-orch`, mounted here for
-      # EVERY session (issue #4703, after #4591: any session may spawn — caps and the
-      # claim dedup are the bounds). @agent_spawn is stamped still, but gates nothing.
-      # FLEET_MCP_ORCH=1 tells the core server the group is beside it.
-      if [ -f "$BIN/../conf/mcp-orch.json" ]; then
-        mcp_flag+=("--mcp-config=$BIN/../conf/mcp-orch.json"); export FLEET_MCP_ORCH=1
-      fi
-      ;;
-  esac
-fi
-unset _fc_mw
-
-# The agent's browser (issue #3236): with the fleet-browser plugin installed and
-# enabled for this login (the person's switch; off by default), the agent runs
-# `$BROWSER <url>` for an MCP authorization, /login or a page — fleet-browser.sh
-# hands it to the person's own computer and forwards an OAuth callback port back.
-# A plugin cannot set its agent's own environment, so the launcher does; off =
-# no BROWSER touched, byte for byte as before.
-if bash "$BIN/fleet-browser.sh" enabled 2>/dev/null; then export BROWSER="$BIN/fleet-browser.sh"; fi
+fleet_launch_mcp -- "$@"
+fleet_launch_browser
 
 # Through this login's credential proxy (issue #1972, EPIC #1967 C5): the wrapper
 # handed this launch a FLEET_CRED_SID because FLEET_CRED_PROXY=1. The proxy mints a
@@ -361,30 +185,23 @@ if bash "$BIN/fleet-browser.sh" enabled 2>/dev/null; then export BROWSER="$BIN/f
 # environment. A migrate is then the proxy's rebind of the sid. Exit 4 = nothing to
 # bind (no account here: the ambient login) → the launch below, as before. Any other
 # failure refuses: a session never quietly falls back to holding the credential.
+# The wiring (共同约定 2): ANTHROPIC_BASE_URL + CLAUDE_CODE_OAUTH_TOKEN=<the session
+# credential> + CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1, never
+# CLAUDE_SECURESTORAGE_CONFIG_DIR; a migrate is then the proxy's rebind of the sid.
 _fc_route=''
-if [ -n "${FLEET_CRED_SID:-}" ]; then
-  _fc_px=$(bash "$BIN/fleet-session-cred.sh" mint --provider claude --sid "$FLEET_CRED_SID" ${label:+--account "$label"})
-  _fc_rc=$?
-  case "$_fc_rc" in
-    0)
-      IFS=$'\t' read -r _fc_route _fc_port _fc_cred <<< "$_fc_px"
-      unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_SECURESTORAGE_CONFIG_DIR
-      unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
-      export ANTHROPIC_BASE_URL="http://127.0.0.1:$_fc_port" CLAUDE_CODE_OAUTH_TOKEN="$_fc_cred"
-      export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-      unset _fc_cred _fc_port
-      if [ -n "${TMUX_PANE:-}" ]; then
-        tmux set-option -w -t "$TMUX_PANE" @cred_route "$_fc_route" 2>/dev/null || true
-        if [ -n "$label" ] && [ "$_fc_route" != central ]; then tmux set-option -w -t "$TMUX_PANE" @cc_account "$label" 2>/dev/null || true
-        else tmux set-option -wu -t "$TMUX_PANE" @cc_account 2>/dev/null || true; fi
-      fi ;;
-    4) : ;;
-    5) echo 'fleet-claude: the hub does not know this session (404: not registered for this node) — refusing to launch; ↵ on the page re-registers it and retries' >&2
-       _fc_refused cred_unknown; exit 1 ;;
-    *) echo 'fleet-claude: FLEET_CRED_PROXY=1 but no session credential could be had from the proxy — refusing to launch (fleet-cred-proxy.sh status; logs/cred-proxy.log)' >&2
-       _fc_refused cred; exit 1 ;;
-  esac
-  unset _fc_px _fc_rc
+if [ -n "${FLEET_CRED_SID:-}" ] && fleet_launch_mint ${label:+--account "$label"}; then
+  # shellcheck disable=SC2154  # the lib's mint sets it
+  _fc_route=$_fl_route
+  unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_SECURESTORAGE_CONFIG_DIR
+  unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
+  export ANTHROPIC_BASE_URL="http://127.0.0.1:$_fl_port" CLAUDE_CODE_OAUTH_TOKEN="$_fl_cred"
+  export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+  _fl_cred=''; _fl_port=''
+  if [ -n "${TMUX_PANE:-}" ]; then
+    tmux set-option -w -t "$TMUX_PANE" @cred_route "$_fc_route" 2>/dev/null || true
+    if [ -n "$label" ] && [ "$_fc_route" != central ]; then tmux set-option -w -t "$TMUX_PANE" @cc_account "$label" 2>/dev/null || true
+    else tmux set-option -wu -t "$TMUX_PANE" @cc_account 2>/dev/null || true; fi
+  fi
 fi
 
 if [ -n "$label" ] && [ -z "$_fc_route" ]; then          # a caller-named account (above)
@@ -417,7 +234,7 @@ PY
     fi
   else
     echo 'fleet-claude: pinned subscription is unavailable; refusing an ambient login fallback' >&2
-    _fc_refused account; exit 1
+    fleet_launch_refused account; exit 1
   fi
 fi
 
@@ -436,68 +253,25 @@ if command -v fleet_mod_on >/dev/null 2>&1 && fleet_mod_on; then
   unset _fc_mod
 fi
 
-# The session's configuration, fixed at launch (issue #1782, EPIC #1776 C6).
-# bin/fleet-agent-team.py composes fleet default < team < local NOW — not whatever
-# the last sync happened to leave in the files — and hands exactly what the login's
-# files lack: a --settings file (missing fleet hooks by identity, missing
-# fleet-managed keys; --settings outranks user AND project settings, so a key a
-# project sets is never filled) and a --mcp-config file (missing fleet servers;
-# never under a FLEET_MCP_CONFIG allowlist or a caller's own MCP flags — the
-# allowlist governs). Locked items (conf/agent-locked.list: mod, fleet hooks, fleet
-# MCP) follow FLEET_AGENT_LOCK: warn (default) uses the login's own value and says
-# so on one stderr line; enforce hands the fleet's. The composed result's
-# fingerprint lands on the window as @agent_cfg (+ @agent_cfg_src: each layer's
-# version) — what C7 (#1783) compares against global/agent-cfg.expected. Both
-# files are content-addressed, so concurrent launches share them. FLEET_AGENT_CFG=0
-# or no composer beside bin/ (a lib-less install, a selftest sandbox) adds nothing:
-# the argv is byte for byte what it was.
+# The session's configuration, fixed at launch (issue #1782): fleet_launch_cfg (the
+# lib) hands a --settings and a --mcp-config file for what the login's files lack
+# (never an MCP file under an allowlist or a caller's own MCP flags), and the
+# fingerprint lands on the window as @agent_cfg.
 cfg_flag=()
-if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && command -v python3 >/dev/null 2>&1; then
-  _fc_ca=(--lock "${FLEET_AGENT_LOCK:-warn}")
-  [ -n "${FLEET_MCP_CONFIG:-}" ] && _fc_ca+=(--no-mcp)
-  case " $* " in *" --mcp-config "*|*" --mcp-config="*|*" --strict-mcp-config "*) _fc_ca+=(--no-mcp) ;; esac
-  case " $* " in *" --settings "*|*" --settings="*) _fc_ca+=(--no-settings) ;; esac
-  if command -v fleet_mod_on >/dev/null 2>&1 && ! fleet_mod_on; then _fc_ca+=(--mod-off); fi
-  _fc_fp=''; _fc_src=''; _fc_ver=''; _fc_man=''; _fc_modw=''; _fc_locks=''; _fc_say=''
-  while IFS=$'\t' read -r _fc_k _fc_v; do
-    case "$_fc_k" in
-      fp)       _fc_fp="$_fc_v" ;;
-      src)      _fc_src="$_fc_v" ;;
-      ver)      _fc_ver="$_fc_v" ;;
-      manifest) _fc_man="$_fc_v" ;;
-      say)      _fc_say="$_fc_v" ;;
-      mod)      _fc_modw="$_fc_v" ;;
-      mcp)      cfg_flag+=("--mcp-config=$_fc_v") ;;      # the =form: --mcp-config is variadic (see above)
-      settings) cfg_flag+=("--settings=$_fc_v") ;;
-      lock)     _fc_locks="${_fc_locks:+$_fc_locks; }$_fc_v" ;;
-      note)     printf 'fleet-claude: %s (issue #1862)\n' "$_fc_v" >&2 ;;   # the personal layer written badly
-      hint)     printf 'fleet-claude: 本机新加了 %s — 要带到别的机器：fleet config %s\n' "${_fc_v#promote }" "$_fc_v" >&2 ;;   # said once (issue #1863)
-    esac
-  done < <(FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}" \
-             python3 "$BIN/fleet-agent-team.py" session claude ${_fc_ca[@]+"${_fc_ca[@]}"} 2>/dev/null)
-  # enforce on a locked mod: FLEET_MOD=0 is ignored, the mod loads anyway
-  if [ "$_fc_modw" = on ] && [ "${#mod_flag[@]}" -eq 0 ] && command -v fleet_mod_dir >/dev/null 2>&1; then
-    _fc_mod=$(fleet_mod_dir 2>/dev/null) && mod_flag=("--plugin-dir=$_fc_mod")
-    unset _fc_mod
-  fi
-  # where this session's configuration comes from, in the person's words (EPIC
-  # #1855 C6): the composer's `status --short` line, reprinted — only with a
-  # personal layer, so a login without one launches byte for byte as before
-  [ -n "$_fc_say" ] && printf 'fleet-claude: 配置 %s\n' "$_fc_say" >&2
-  [ -n "$_fc_locks" ] && printf 'fleet-claude: locked agent config overridden on this login: %s (issue #1782)\n' "$_fc_locks" >&2
-  if [ -n "$_fc_fp" ] && [ -n "${TMUX_PANE:-}" ]; then
-    tmux set-option -w -t "$TMUX_PANE" @agent_cfg "$_fc_fp" 2>/dev/null || true
-    tmux set-option -w -t "$TMUX_PANE" @agent_cfg_src "$_fc_src" 2>/dev/null || true
-    # the fleet version it runs (issue #1895): differs from the expected ver ⇒ 待换新
-    if [ -n "$_fc_ver" ]; then tmux set-option -w -t "$TMUX_PANE" @agent_ver "$_fc_ver" 2>/dev/null || true
-    else tmux set-option -wu -t "$TMUX_PANE" @agent_ver 2>/dev/null || true; fi
-    # what it started with (issue #2076): fleet-oldcfg-check.sh reads it to tell a
-    # session a release BREAKS (会坏·需重开) from one that only lacks a new feature
-    if [ -n "$_fc_man" ]; then tmux set-option -w -t "$TMUX_PANE" @agent_cfg_manifest "$_fc_man" 2>/dev/null || true
-    else tmux set-option -wu -t "$TMUX_PANE" @agent_cfg_manifest 2>/dev/null || true; fi
-  fi
-  unset _fc_ca _fc_fp _fc_src _fc_ver _fc_man _fc_modw _fc_locks _fc_say _fc_k _fc_v
+_fc_ca=(--lock "${FLEET_AGENT_LOCK:-warn}")
+[ -n "${FLEET_MCP_CONFIG:-}" ] && _fc_ca+=(--no-mcp)
+case " $* " in *" --mcp-config "*|*" --mcp-config="*|*" --strict-mcp-config "*) _fc_ca+=(--no-mcp) ;; esac
+case " $* " in *" --settings "*|*" --settings="*) _fc_ca+=(--no-settings) ;; esac
+if command -v fleet_mod_on >/dev/null 2>&1 && ! fleet_mod_on; then _fc_ca+=(--mod-off); fi
+fleet_launch_cfg ${_fc_ca[@]+"${_fc_ca[@]}"}
+# enforce on a locked mod: FLEET_MOD=0 is ignored, the mod loads anyway
+# shellcheck disable=SC2154  # fleet_launch_cfg sets it
+if [ "$_fl_cfg_mod" = on ] && [ "${#mod_flag[@]}" -eq 0 ] && command -v fleet_mod_dir >/dev/null 2>&1; then
+  _fc_mod=$(fleet_mod_dir 2>/dev/null) && mod_flag=("--plugin-dir=$_fc_mod")
+  unset _fc_mod
 fi
+fleet_launch_cfg_stamp
+unset _fc_ca
 
 # The binary (issue #1774): $FLEET_CLAUDE_BIN, else `claude` when PATH has it (the
 # argv byte for byte as before), else ~/.local/bin → /opt/homebrew/bin →

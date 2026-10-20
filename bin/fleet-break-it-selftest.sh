@@ -1252,7 +1252,9 @@ drill_personal_mcp_missing() {
   s=$(pt session claude)
   printf '%s\n' "$s" | grep -q $'^note\t.*mytool.*/nonexistent/bin/mytool' || { WHY="the session's start line does not name it: [$s]"; return 1; }
   printf '%s\n' "$s" | sed -n 's/^mcp\t//p' | xargs cat 2>/dev/null | grep -q mytool && { WHY="the session was handed mytool"; return 1; }
-  grep -q 'note)' "$BIN/fleet-claude.sh" && grep -q 'note)' "$BIN/fleet-codex.sh" \
+  # both launchers hand the composer to the one shared step (T620), which prints them
+  grep -q 'note)' "$BIN/fleet-launch-lib.sh" && grep -q 'fleet_launch_cfg' "$BIN/fleet-claude.sh" \
+    && grep -q 'fleet_launch_cfg' "$BIN/fleet-codex.sh" \
     || { WHY="fleet-claude.sh / fleet-codex.sh do not print the composer's note lines"; return 1; }
   SECS=$(since "$t0"); WHAT="个人 MCP 命令不存在：不写进本机文件、不交给会话，启动行点名"
 }
@@ -6462,6 +6464,39 @@ drill_stream_cut_stays() {
   out=$(bash "$BIN/fleet-stream-resume-selftest.sh" 2>&1) || { WHY="$(printf '%s' "$out" | grep FAIL | head -3)"; return 1; }
   SECS=$(since "$t0")
   WHAT='StopFailure(unknown) 20 s 后经会话收件箱发「继续」；人已发话或又失败一次就不发；每窗口 3 次/30 分钟，超了留给人；配额/认证/请求错误不管'
+}
+
+# T580's three Codex-only breaks of opening a session (T620, EPIC T580 C4) — each
+# now one road for both agents (bin/fleet-launch-lib.sh + the adapter table), and
+# each recovery is a leg of bin/fleet-launch-lib-selftest.sh that runs once per
+# agent (claude, codex) against fake CLIs: held here by name, not run twice.
+# ⑥ `fleet codex` opened Claude (#2405)
+drill_open_wrong_agent() {
+  CAP=10; local t0
+  t0=$(now)
+  grep -qF 'exec "$BIN/$(fleet_agent_get "$_fc_agent" launcher)"' "$BIN/fleet-claude.sh" \
+    || { WHY="fleet-claude.sh no longer opens the asked agent's launcher off the adapter table"; return 1; }
+  suite_holds fleet-launch-lib-selftest.sh 'D⑥ the door opens the agent asked for, both ways' 'for a in $AGENTS; do' || return 1
+  WHAT='门（fleet-claude.sh）按适配表开问到的那个 Agent：--agent codex 就是 Codex（像续接的也是），平常开就是 Claude，从不开成另一个；两种 Agent 各跑一遍（fleet-launch-lib-selftest.sh D⑥，这里按名守住）'
+  SECS=$(since "$t0")
+}
+# ⑦ a new fleet Codex had partial permissions, its /resume refused (#4727)
+drill_open_partial_access() {
+  CAP=10; local t0
+  t0=$(now)
+  suite_holds fleet-launch-lib-selftest.sh "D⑦ a fresh session has full access from the fleet's defaults, both ways" \
+    'bypassPermissions' 'danger-full-access' || return 1
+  WHAT='新开的会话从 fleet 默认拿满权限（Claude 的 --settings 带 bypassPermissions，Codex 带满权限）；登录自己的配置已给满权限时 Codex 开局不带命令行覆盖（会话里 /resume 能用）；两种 Agent 各跑一遍（D⑦）'
+  SECS=$(since "$t0")
+}
+# ⑧ starting Codex ran `claude plugin list` (#4731)
+drill_open_other_cli() {
+  CAP=10; local t0
+  t0=$(now)
+  suite_holds fleet-launch-lib-selftest.sh "D⑧ starting one agent (as an agent file too) never runs the other's CLI" \
+    '--as fleet-worker' || return 1
+  WHAT='起一种 Agent（按 agent 文件起也一样）从不去跑另一种的命令行：起 Codex 不跑任何 claude（不跑 claude plugin list），起 Claude 不跑 codex；两种 Agent 各跑一遍（D⑧）'
+  SECS=$(since "$t0")
 }
 
 # ================================================================ run ====}

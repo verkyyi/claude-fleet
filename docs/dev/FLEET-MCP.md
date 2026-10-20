@@ -36,8 +36,8 @@ ships with the core (issue #4334): no plugin registers it. Claude shows its tool
 
 - **Every session has it** (issue #4703, after #4591 — any session may spawn; the
   session caps, in the scripts, are the only bounds). The launcher
-  (`bin/fleet-claude.sh`; `bin/fleet-codex.sh` asks `fleet-mcp.py --bridge-seat`, 0 in
-  any fleet pane) mounts `fleet-orch` for every launch and says `FLEET_MCP_ORCH=1`.
+  (`fleet_launch_mcp` in `bin/fleet-launch-lib.sh`, both agents' one step; for Codex it
+  asks `fleet-mcp.py --bridge-seat`, 0 in any fleet pane) mounts `fleet-orch` for every launch and says `FLEET_MCP_ORCH=1`.
   `@agent_spawn` is still stamped (the agent file's grant) but gates nothing; EPIC
   #4333 C1's `@agent_spawn 1` switch (issue #4334) is gone. No plugin, seat or role
   name is asked (issue #3118).
@@ -189,7 +189,7 @@ The definition lives once, in **`conf/mcp-worker.json`**:
   --resume`) so it mounts the service, or run the script by hand meanwhile. A served
   session sees nothing of this — no spec read, nothing registered, no second
   `fleet` tool.
-- **Codex** — `bin/fleet-codex.sh` adds `-c "$(fleet-mcp.py --mount codex)"`:
+- **Codex** — the launch library's `fleet_launch_mcp` (the adapter table's `mcp` = `config`) adds `-c "$(fleet-mcp.py --mount codex)"`:
   `mcp_servers.fleet={command, args, env_vars, tool_timeout_sec}` derived from the
   same file, after any allowlist policy and before the caller's `-c`. Codex hands a
   server only a short env allowlist, so `env_vars` forwards `TMUX`, `TMUX_PANE`,

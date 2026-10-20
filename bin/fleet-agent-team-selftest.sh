@@ -415,8 +415,10 @@ team sync --force >/dev/null
   && ok "R a sync keeps what was said (hinted survives apply)" || bad "R after sync: $(hints)"
 addmcp quiet
 [ -z "$(PHINT=0 hints)" ] && ok "R FLEET_PROMOTE_HINT=0 → no hint" || bad "R off: $(PHINT=0 hints)"
+# both launchers hand the composer's lines to the one shared step (T620)
+grep -q '^ *hint) .*本机新加了' "$REPO/bin/fleet-launch-lib.sh" && ok "R fleet-launch-lib.sh prints the hint on its start line" || bad "R fleet-launch-lib.sh has no hint) arm"
 for f in fleet-claude.sh fleet-codex.sh; do
-  grep -q '^ *hint) .*本机新加了' "$REPO/bin/$f" && ok "R $f prints the hint on its start line" || bad "R $f has no hint) arm"
+  grep -q '^fleet_launch_cfg ' "$REPO/bin/$f" && ok "R $f runs it" || bad "R $f has no hint) arm"
 done
 "$PY" - "$H/.claude.json" <<'PY2'
 import json, sys
