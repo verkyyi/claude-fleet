@@ -3492,6 +3492,7 @@ fi
 # did the hub send sessions in the last 24 hours — fleet-repo-follow.py's record,
 # never a hub call from here. No record ⇒ no rows.
 rf_tab=$(printf '\t')
+# doctor-rows: 跟仓库 分到
 while IFS="$rf_tab" read -r rf_lv rf_name rf_txt; do
   case "$rf_lv" in
     pass) pass "$rf_name" "$rf_txt" ;;
