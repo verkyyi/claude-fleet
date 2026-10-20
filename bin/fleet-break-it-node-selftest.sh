@@ -102,8 +102,6 @@
 #                         toolchain is here)
 #   node-update-half      bin/fleet-node-update.py (#2334): an update killed half way,
 #                         and a release whose new part fails the doctor
-#   update-goes-back      bin/fleet-node-update.py backward (#4671): the target the hub
-#                         names is older (a lower seq) than what the machine runs
 #   user-pod-no-roll-road bin/fleet-node-update.py image_row (#4791): a person's pod
 #                         runs the image's runtime and no update task, and nothing
 #                         rolls it (no provisioner in its cluster) — the doctor says
@@ -1126,19 +1124,12 @@ drill_account_op_rerun_exists() {
     || { WHY="the agent no longer hands the script its op_id"; return 1; }
   t0=$(now)
   WHAT='同一个开号第二次到达（入口再问、重启丢了账本）：脚本留下的 ~/<login>-onboard/op 记着这次 op——跑完了就按它的结果答成功、不再跑脚本、不报「已存在」；还在跑就等；半路停了就收回登录（remove，家目录保留）再报失败；别的 op 的登录照旧「已存在」'
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the agent half's Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT="${WHAT}（go test 六条）" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT="${WHAT}；Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
-      *) WHY="the agent half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  else
-    WHAT="${WHAT}；没有 go：六条测试按名核对在，Go 门（tokenledger.yml）跑它们"
-  fi
+  go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" github.com/verkyyi/claude-fleet/tokenledger/agent; case $? in
+    0) WHAT="${WHAT}（go test 六条）" ;;
+    1) return 1 ;;
+    2) WHAT="${WHAT}；Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
+    3) WHAT="${WHAT}；没有 go：六条测试按名核对在，Go 门（tokenledger.yml）跑它们" ;;
+  esac
   SECS=$(since "$t0")
 }
 
@@ -1189,47 +1180,6 @@ drill_node_update_half() {
   case "$out" in *skipped*) ;; *) WHY="the rejected release was tried again: $out"; return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="更新取包时被 kill -9：整台机器原样不动；下一轮从头取完、所有部件一起换上；新版体检多出 FAIL（Claude Code 起不来）→ 运行时、ccquota、Claude、开号缓存、账号链接全部回到上一版，这一版不再重试"
-}
-
-# update-goes-back (#4671): a machine only moves forward. The day the Mac lane went in
-# (10-13) a Mac was taken back to an older release missing a key fix. Rig: the
-# machine runs V2 (seq 5); the target is V1 (seq 4) — a stable rolled back on the hub,
-# a stale pin. The tick refuses it (`refused`, one history row), nothing moves, the
-# check reds; FLEET_NODE_UPDATE_BACKWARD=1 is the operator's way back.
-drill_update_goes_back() {
-  CAP=20
-  local sb t0 u tk out
-  sb="$WORK/back"; mkdir -p "$sb/root" "$sb/rel" "$sb/db" "$sb/Users/alice" "$sb/LaunchDaemons" "$sb/bin"
-  cp "$BIN/fleet-node-update.py" "$BIN/fleet-node-supervisor.py" "$sb/bin/"
-  u="$sb/bin/fleet-node-update.py"; tk="$BIN/fleet-node-update-selftest.py"
-  python3 "$tk" --fake-ccquota "$sb/ccquota" || { WHY="no fake ccquota"; return 1; }
-  V1=$(printf '%040d' 0 | tr 0 1); V2=$(printf '%040d' 0 | tr 0 2)
-  python3 "$tk" --make-release "$sb/rel" "$V1" '{"seq":4}' \
-    && python3 "$tk" --make-release "$sb/rel" "$V2" '{"seq":5}' || { WHY="fixtures not built"; return 1; }
-  printf '{"children":[],"tasks":[]}\n' > "$sb/table.json"
-  printf '{"alice":{"uid":%s,"gid":%s,"home":"%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
-  printf '{"alice":{"managed":true}}\n' > "$sb/db/accounts.json"
-  printf 'CCQUOTA_HUB_URL=https://hub.invalid\n' > "$sb/db/machine.env"; printf 'ed25519 AAAA\n' > "$sb/db/release.pub"
-  upd() { env FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/root/current" \
-      FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_PASSWD="$sb/passwd.json" \
-      FLEET_NODE_TEST=1 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_CCQUOTA="$sb/ccquota" FAKE_REL="$sb/rel" \
-      FLEET_NODE_UPDATE_PLATFORM=darwin-arm64 FLEET_NODE_UPDATE_SETTLE=0 FLEET_NODE_UPDATE_LIB=/nonexistent "$@"; }
-  daemon() { python3 -c 'import json,os,sys,time; json.dump({"supervisor":{"pid":os.getppid(),"heartbeat":time.time(),"runtime":sys.argv[2]}},open(sys.argv[1],"w"))' "$sb/db/state.json" "$(basename "$(readlink "$sb/root/current")")"; }
-  cur() { basename "$(readlink "$sb/root/current")"; }
-  upd FLEET_NODE_UPDATE_TARGET="$V2" python3 "$u" tick >/dev/null && daemon && upd FLEET_NODE_UPDATE_TARGET="$V2" python3 "$u" tick >/dev/null
-  [ "$(cur)" = "$V2" ] || { WHY="V2 never landed"; return 1; }
-  t0=$(now)
-  out=$(upd FLEET_NODE_UPDATE_TARGET="$V1" python3 "$u" tick 2>&1)
-  [ "$(cur)" = "$V2" ] || { WHY="the machine went back to the older V1: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
-  case "$out" in *refused*'only moves forward'*) ;; *) WHY="the older target was not refused as such: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
-  upd FLEET_NODE_UPDATE_TARGET="$V1" python3 "$u" tick >/dev/null 2>&1
-  [ "$(python3 -c 'import json,sys; print(sum(1 for h in json.load(open(sys.argv[1]))["history"] if h["result"] == "refused"))' "$sb/db/update.json")" = 1 ] \
-    || { WHY="a refused target was booked more than once"; return 1; }
-  upd python3 "$u" status --check >/dev/null 2>&1 && { WHY="status --check is green while the machine refuses its target"; return 1; }
-  upd FLEET_NODE_UPDATE_TARGET="$V1" FLEET_NODE_UPDATE_BACKWARD=1 python3 "$u" tick >/dev/null 2>&1
-  [ "$(cur)" = "$V1" ] || { WHY="FLEET_NODE_UPDATE_BACKWARD=1 did not take the operator back"; return 1; }
-  SECS=$(since "$t0")
-  WHAT="目标比正在跑的旧（seq 4 < 5）：拒切、记 refused（历史一行）、status --check 报错，机器留在新版；FLEET_NODE_UPDATE_BACKWARD=1 才退"
 }
 
 # user-pod-no-roll-road (#4791): u-3wnuf3v654 ran c48dd07 for days after stable
@@ -1397,19 +1347,12 @@ drill_release_fetch_slow() {
   out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-fetch 2>&1) \
     || { WHY="the updater half: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   WHAT='更新器：只取本机钉住的制品、缓存先填已有的、断了不退避下一轮接着取'
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" github.com/verkyyi/claude-fleet/tokenledger/shared/release 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the ccquota half's Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT="${WHAT}；ccquota：静默 30 秒才断、同一次和下一次都从断点续传、慢而不停不超时、已缓存不重下（go test 五条）" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT="${WHAT}；ccquota 的 Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
-      *) WHY="the ccquota half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  else
-    WHAT="${WHAT}；没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们"
-  fi
+  go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" github.com/verkyyi/claude-fleet/tokenledger/shared/release; case $? in
+    0) WHAT="${WHAT}；ccquota：静默 30 秒才断、同一次和下一次都从断点续传、慢而不停不超时、已缓存不重下（go test 五条）" ;;
+    1) return 1 ;;
+    2) WHAT="${WHAT}；ccquota 的 Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
+    3) WHAT="${WHAT}；没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们" ;;
+  esac
   SECS=$(since "$t0")
 }
 

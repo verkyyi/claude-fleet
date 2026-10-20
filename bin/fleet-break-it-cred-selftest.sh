@@ -52,6 +52,21 @@ until_ok() {
   for _ in $(seq 1 $((secs * 10))); do "$@" && return 0; sleep 0.1; done
   "$@"
 }
+# go_half <run regex> <package>… — a drill's Go half (the hub's or the agent's):
+# its tests run for real in tokenledger/ where a toolchain is, offline. 0 green ·
+# 1 red, or none ran (WHY set) · 2 no module cache / toolchain here · 3 no go, or
+# BREAK_GO=0. On 2 and 3 the Go gate (tokenledger.yml) runs them.
+go_half() {
+  local run=$1 out rc; shift
+  { [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; } || return 3
+  out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local go test -count=1 -run "$run" "$@" 2>&1); rc=$?
+  case "$rc:$out" in
+    0:*'no tests to run'*) WHY="the Go tests $run are not there (go test ran none)"; return 1 ;;
+    0:*) return 0 ;;
+    *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) return 2 ;;
+    *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
+  esac
+}
 
 # ============================================ credential proxy (EPIC #1967) =====
 # The cred half (issue #1975, C8): bin/fleet-cred-proxy.{sh,py} on loopback only,
@@ -433,16 +448,7 @@ drill_probe_stale_after_release() {
   gohalf="agent half: no go toolchain here — the Go gate (tokenledger.yml) runs TestProbeOnce"
   grep -q 'a probe another script wrote is due at once' "$ROOT/tokenledger/agent/node_compute_test.go" 2>/dev/null \
     || { WHY="the agent half's TestProbeOnce no longer pins a changed script"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestProbeOnce$' github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the agent half's Go test did not run"; return 1 ;;
-      0:*) gohalf="agent half: go test TestProbeOnce ok" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the agent half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  fi
+  go_half '^TestProbeOnce$' github.com/verkyyi/claude-fleet/tokenledger/agent; case $? in 0) gohalf="agent half: go test TestProbeOnce ok" ;; 1) return 1 ;; esac
   WHAT="上一版规则写下的新鲜判定（route direct 关）不再沿用：src 不是现在的脚本 → 重测，按 relay 判 ok；$gohalf"
 }
 

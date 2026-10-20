@@ -393,17 +393,7 @@ PY
   gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestSparePodClaimDestroyRefill"
   grep -q '^func TestSparePodClaimDestroyRefill(' "$ROOT/tokenledger/hub/api/fleet_spare_pods_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestSparePodClaimDestroyRefill is gone"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestSparePodClaimDestroyRefill$' ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
-      0:*) gohalf="入口一半：go test 甲领 · 删 · 乙领 通过" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
-         return 1 ;;
-    esac
-  fi
+  go_half '^TestSparePodClaimDestroyRefill$' ./hub/api; case $? in 0) gohalf="入口一半：go test 甲领 · 删 · 乙领 通过" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="甲的 pod 建（join Secret · PVC · Service · Deployment）、打标签、删：四样全删、API 上一样不剩；重放甲的建被拒；乙拿到新名字、新的空盘、自己的 join 码；把甲已删的 pod 绑给乙被拒；${gohalf}"
 }
@@ -652,17 +642,7 @@ PY
   gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestJobRunsForTheCallersOwnPod"
   grep -q '^func TestJobRunsForTheCallersOwnPod(' "$ROOT/tokenledger/hub/api/fleet_jobs_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestJobRunsForTheCallersOwnPod is gone"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestJob' ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
-      0:*) gohalf="入口一半：go test 只为调用者自己的 pod 建 Job、只按它读回" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
-         return 1 ;;
-    esac
-  fi
+  go_half '^TestJob' ./hub/api; case $? in 0) gohalf="入口一半：go test 只为调用者自己的 pod 建 Job、只按它读回" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="入口签的单为五种 kind 各建一个 Job：都以 fleet-job 跑、不挂令牌、只有 emptyDir、非 root 只读根、不从 Secret 取环境、没有像凭据的变量；untrusted 不带出口标签也没有 HTTPS_PROXY（job-out 没有任何公网地址）；kind / 命令不合语法、给不是用户 pod 的建 Job 一律拒、一个请求都没发；runner 照 untrusted 的环境跑，什么钥匙都找不到；${gohalf}"
 }
@@ -714,17 +694,7 @@ PY
   gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestClusterReadingReachesItsPod"
   grep -q '^func TestClusterReadingReachesItsPod(' "$ROOT/tokenledger/hub/api/fleet_cluster_reading_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestClusterReadingReachesItsPod is gone"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestClusterReading' ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
-      0:*) gohalf="入口一半：go test 读数只到自己集群的自己的 pod、坏值和冒充的链路一律丢" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
-         return 1 ;;
-    esac
-  fi
+  go_half '^TestClusterReading' ./hub/api; case $? in 0) gohalf="入口一半：go test 读数只到自己集群的自己的 pod、坏值和冒充的链路一律丢" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="集群只有一个 fleet-ops：只读账号（Role 只有 get/list/watch，能读 pod 指标）、fleet/role control、非 root、令牌走管道、出站只有 control-out；${gohalf}"
 }
@@ -754,17 +724,7 @@ drill_cluster_pod_gone_held() {
       || { WHY="the hub half's test $t is gone"; return 1; }
   done
   gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestClusterPodGone*"
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestClusterPodGone' ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the hub half's Go tests did not run"; return 1 ;;
-      0:*) gohalf="入口一半：go test 缩到 0 过 30 分钟 → 退役（system、通知操作者）；宽限内恢复、别的集群的、还有心跳的、不是 pod 的机器 → 不动" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
-         return 1 ;;
-    esac
-  fi
+  go_half '^TestClusterPodGone' ./hub/api; case $? in 0) gohalf="入口一半：go test 缩到 0 过 30 分钟 → 退役（system、通知操作者）；宽限内恢复、别的集群的、还有心跳的、不是 pod 的机器 → 不动" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="fleet-ops 每拍报本集群现存的全部用户 pod（任何阶段），入口按它判 pod 消失；${gohalf}"
 }
@@ -1155,17 +1115,7 @@ PY
   gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestSvcRunKeyOpensOnlyItsRun"
   grep -q '^func TestSvcRunKeyOpensOnlyItsRun(' "$ROOT/tokenledger/hub/api/svc_runner_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestSvcRunKeyOpensOnlyItsRun is gone"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestSvcRun' ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
-      0:*) gohalf="入口一半：go test 一把钥匙只开自己那次运行、各一次" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
-         return 1 ;;
-    esac
-  fi
+  go_half '^TestSvcRun' ./hub/api; case $? in 0) gohalf="入口一半：go test 一把钥匙只开自己那次运行、各一次" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="入口签的 create-svc-run 单：语法外（attempt / deadline / 名字 / 钥匙 / 多带字段）与重放一律拒、什么都没写；建出的 Job 以 fleet-job 跑、不挂令牌、只有 emptyDir 和它自己的钥匙 Secret（属这个 Job、随它删，钥匙不在 Job 里）、除守卫外非 root 只读根不加能力、环境里没有像凭据的变量；守卫封闭：元数据地址、pod / service 网段、全部私网段都 REJECT，只放两条集群内的路；一次不重试、到期即杀、结束 300 秒删；删单只删运行自己的 Job；网络规则只给 DNS · 运行出口 · 凭据代理 · hub 自己的 Service（#4175）；runner 照这个 Job 的环境跑：会话看不到钥匙与 hub 地址、只有通行证，工具就四个，用户要求不能合上自己的数据块，spec 只读一次、结果只交一次，产出不合约定得 20；${gohalf}"
 }
@@ -1258,17 +1208,7 @@ PY2
   gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestUserPodRollBatchesSkipsBusyOncePerRelease"
   grep -q '^func TestUserPodRollBatchesSkipsBusyOncePerRelease(' "$ROOT/tokenledger/hub/api/fleet_user_pod_roll_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestUserPodRollBatchesSkipsBusyOncePerRelease is gone"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestUserPodRoll' ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
-      0:*) gohalf="入口一半：go test 换版后分批滚、忙的等、一个版本只问一次、失败不连坐 通过" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
-         return 1 ;;
-    esac
-  fi
+  go_half '^TestUserPodRoll' ./hub/api; case $? in 0) gohalf="入口一半：go test 换版后分批滚、忙的等、一个版本只问一次、失败不连坐 通过" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="旧镜像上建的个人 pod 在模板换新镜像后原地不动（修复到不了）；roll-user-pod 一个 PATCH 把四个容器换到新镜像、别的一样不改（与新镜像现渲染的一字不差）；再滚一次什么都不发；滚别人的 Deployment / 不存在的 pod / 按标签的镜像都拒、一个请求都没发；一个 pod 两种镜像，执行器和准入策略都拦；${gohalf}"
 }
@@ -1299,17 +1239,10 @@ drill_user_pod_opener_group_write() {
   gohalf="程序一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestScriptBesideGroupWrite"
   grep -q '^func TestScriptBesideGroupWrite(' "$ROOT/tokenledger/agent/cli/agent_machine_script_test.go" 2>/dev/null \
     || { WHY="the program half's test TestScriptBesideGroupWrite is gone"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestScriptBesideGroupWrite$' github.com/verkyyi/claude-fleet/tokenledger/agent/cli 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the program half's Go test did not run"; return 1 ;;
-      0:*) gohalf="程序一半：go test 自己组可写照收、root / 别人的组 / 人人可写都拒、拒必说原因 通过" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the program half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
-         return 1 ;;
-    esac
-  fi
+  go_half '^TestScriptBesideGroupWrite$' github.com/verkyyi/claude-fleet/tokenledger/agent/cli; case $? in
+    0) gohalf="程序一半：go test 自己组可写照收、root / 别人的组 / 人人可写都拒、拒必说原因 通过" ;;
+    1) return 1 ;;
+  esac
   SECS=$(since "$t0")
   WHAT="个人 pod 仍是 fsGroup=<uid> + OnRootMismatch（kubelet 会给整盘加 g+w）；开号脚本组可写而组是程序自己的照收，root、别人的组、人人可写都拒，拒时说原因；${gohalf}"
 }

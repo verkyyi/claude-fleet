@@ -34,7 +34,7 @@ name: hub-deploy
 # A merge no longer deploys by itself: the push trigger (and its quiet-master
 # hold, issue #2052) retired with C4 — a second deployer on another clock is how
 # the hub and stable came from two commits (BREAK-IT train-hub-stable-split), and
-# how one red release held up the ones after it (BREAK-IT train-derived-red).
+# how one red release held up the ones after it (BREAK-IT train-superseded-red).
 #
 # Nobody approves a run any more (issue #2013, 方案 B), so the job is its own
 # safety net: it reads the live image before it changes anything and, when the

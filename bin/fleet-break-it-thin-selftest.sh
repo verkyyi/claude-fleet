@@ -19,12 +19,11 @@
 #   view-popup-wide-bleed  a session streaming wrapped CJK behind the ⌘P list
 #                          (issue #3058): the 看台's popup binds say --freeze, and
 #                          through the real dash-popup.sh not one of the pane's wide
-#                          glyphs reaches the terminal while the popup is up
-#   view-popup-far-bleed   the same over another machine's session (issue #3085): a
-#                          peer window whose pane is a nested tmux streaming CJK, on
-#                          a home server whose fleet-view an older release built
-#                          (bare display-popup): attach's view-keys --if-stale
-#                          rebuilds it, and the nested pane holds still under it
+#                          glyphs reaches the terminal while the popup is up; the
+#                          same over another machine's session (issue #3085): a peer
+#                          window whose pane is a nested tmux, on a home server whose
+#                          fleet-view an older release built (bare display-popup):
+#                          attach's view-keys --if-stale rebuilds it
 #   view-far-reaped        bin/fleet_view.py hub_fresh + bin/fleet-hub-sessions.sh
 #                          (issue #3079): a worker reaped on another machine while
 #                          this one's copy of the hub's list had stopped
@@ -216,12 +215,19 @@ drill_view_popup_idle_redraw() {
   WHAT="真实 tmux 弹窗开着、背后持续中英输出：静止 2.25 秒整框重画 0 次、框线单元格不变；关闭后后台显示恢复"
 }
 
-# view-popup-wide-bleed (issue #3058): tmux 3.7c draws a wide character a pane writes
-# under a popup through the wrong cells, so wrapped CJK behind the ⌘P list lands on
-# its frame and rows. The pane behind must write NOTHING while the popup is up.
-drill_view_popup_wide_bleed() {
-  CAP=6   # popup open → its frame on the terminal, the pane held still
-  local t0 pane binds n0 n1 b
+# view-popup-wide-bleed — tmux 3.7c draws a wide character a pane writes under a
+# popup through the wrong cells (issue #3058), so wrapped CJK behind the ⌘P list
+# lands on its frame and rows: the pane behind must write NOTHING while the popup is
+# up. Two legs, one real terminal each (popup_bleed_leg near|far):
+# · near: this machine's session streams CJK; every 看台 popup bind names --freeze;
+# · far (issue #3085): ⌘P over another machine's session — the 看台's window onto it
+#   is a pane running that machine's tmux (fleet-peerlink.py pane → ssh → its bare
+#   `-via-` 看台), and the home's fleet-view was built by an older release (⌘P a
+#   bare display-popup) that nothing rebuilt: the conf re-source watched
+#   fleet-quickopen.py, #3058 changed fleet_view.py. attach --thin's
+#   `view-keys --if-stale` must rebuild a table another version built.
+popup_bleed_leg() {
+  local t0 pane binds n0 n1 b k who=${1}
   B=$(mktemp -d /tmp/thb.XXXXXX); printf '%s\n' "$B" >> "$WORK/thin-boxes"
   mkdir -p "$B/s" "$B/bin"
   printf '#!/bin/bash\nexec "%s" -S "%s/s/fl" "$@"\n' "$RT" "$B" > "$B/bin/tmux"; chmod +x "$B/bin/tmux"
@@ -233,8 +239,16 @@ while :; do printf '\033[H'; for r in $(seq 0 27); do printf '%*s%s' $(( (r + n)
 EOS
   chmod +x "$B/cjk.sh"
   TT() { "$RT" -S "$B/s/fl" "$@"; }
-  TT -f /dev/null new-session -d -s fl -x 120 -y 30 "$B/cjk.sh"
-  TT set -g status off
+  if [ "$who" = far ]; then
+    # the far machine: its own server, bare; home: the 看台's peer window onto it
+    "$RT" -S "$B/s/far" -f /dev/null new-session -d -s far -x 120 -y 30 "$B/cjk.sh"
+    "$RT" -S "$B/s/far" set -g status off
+    TT -f /dev/null new-session -d -s fl -x 120 -y 30 "env -u TMUX '$RT' -u -S '$B/s/far' attach -t far"
+    TT set -g status off \; set -w @fleet_role panel \; set -w @peer far@me \; set -w @peer_node far
+  else
+    TT -f /dev/null new-session -d -s fl -x 120 -y 30 "$B/cjk.sh"
+    TT set -g status off
+  fi
   cat > "$B/term.py" <<'PY'
 import os, pty, select, sys, time, fcntl, termios, struct
 tmux, sock, out = sys.argv[1:4]
@@ -256,109 +270,49 @@ while time.time() < end:
 os.kill(pid, 9)
 PY
   python3 "$B/term.py" "$RT" "$B/s/fl" "$B/out" & printf '%s\n' "$!" >> "$WORK/cred-pids"
-  until_ok 5 sh -c '[ -n "$("$1" -S "$2" list-clients -F x)" ]' _ "$RT" "$B/s/fl" || { WHY="the terminal did not attach"; th_done; return 1; }
-  until_ok 5 grep -aq '龘' "$B/out" || { WHY="the session's CJK never reached the terminal"; th_done; return 1; }
-  # the 看台's own key tables, built here: every popup bind names --freeze
+  until_ok 5 sh -c '[ -n "$("$1" -S "$2" list-clients -F x)" ]' _ "$RT" "$B/s/fl" || { WHY="$who: the terminal did not attach"; return 1; }
+  until_ok 5 grep -aq '龘' "$B/out" || { WHY="$who: the session's CJK never reached the terminal"; return 1; }
+  # the 看台's own key tables, built here
   env TMUX="$B/s/fl,0,0" PATH="$B/bin:$PATH" python3 "$BIN/fleet-quickopen.py" view-keys >/dev/null 2>&1
   binds=$(TT list-keys -T fleet-view 2>/dev/null | grep 'dash-popup.sh')
-  [ -n "$binds" ] || { WHY="view-keys built no popup bind in fleet-view"; th_done; return 1; }
-  b=$(printf '%s\n' "$binds" | grep -v -e '--freeze' | head -n 1)
-  [ -z "$b" ] || { WHY="a 看台 popup bind without --freeze: $b"; th_done; return 1; }
-  pane=$(TT list-panes -t fl -F '#{pane_id}')
-  t0=$(now)
-  ( env TMUX="$B/s/fl,0,0" PATH="$B/bin:$PATH" bash "$BIN/dash-popup.sh" --client "$(TT list-clients -F '#{client_name}' | head -n 1)" \
-      --no-inline --freeze -w 90% -h 80% -- sleep 3 >/dev/null 2>&1 & )
-  until_ok "$CAP" grep -aq '╭' "$B/out" || { WHY="the popup never drew its frame"; th_done; return 1; }
-  SECS=$(since "$t0")
-  [ "$(TT display -p -t "$pane" '#{pane_in_mode}')" = 1 ] || { WHY="the pane behind is not held while the popup is up"; th_done; return 1; }
-  sleep 0.4; n0=$(grep -ao '龘' "$B/out" | wc -l); sleep 1.5; n1=$(grep -ao '龘' "$B/out" | wc -l)
-  [ "$n1" = "$n0" ] || { WHY="$((n1 - n0)) of the pane's wide glyphs reached the terminal while the popup was up (tmux 3.7c draws them over it)"; th_done; return 1; }
-  until_ok 4 sh -c '[ "$("$1" -S "$2" display -p -t "$3" "#{pane_in_mode}")" = 0 ]' _ "$RT" "$B/s/fl" "$pane" \
-    || { WHY="the pane was left in copy-mode after the popup closed"; th_done; return 1; }
-  sleep 0.5; [ "$(grep -ao '龘' "$B/out" | wc -l)" -gt "$n1" ] || { WHY="the session never drew again after the popup closed"; th_done; return 1; }
-  th_done
-  WHAT="会话背后一直在刷折行的中文：看台的弹窗键都带 --freeze，弹窗 ${SECS}s 内画出来，开着的 1.9s 里背后的面板一个宽字也没送到终端；关掉后面板退出 copy-mode、接着刷"
-}
-
-# view-popup-far-bleed (issue #3085): ⌘P over another machine's session. The 看台's
-# window onto it is a pane running that machine's tmux (fleet-peerlink.py pane → ssh →
-# its bare `-via-` 看台), so the glyphs come from a nested tmux. The home server here
-# had its fleet-view built by an older release — ⌘P a bare display-popup, no --freeze —
-# and nothing rebuilt it: the conf re-source watched fleet-quickopen.py, #3058 changed
-# fleet_view.py. attach --thin's `view-keys --if-stale` must rebuild a table another
-# version built, and the far pane must write nothing while the popup is up.
-drill_view_popup_far_bleed() {
-  CAP=6   # popup open → its frame on the terminal, the far pane held still
-  local t0 pane binds n0 n1 b k
-  B=$(mktemp -d /tmp/thb.XXXXXX); printf '%s\n' "$B" >> "$WORK/thin-boxes"
-  mkdir -p "$B/s" "$B/bin"
-  printf '#!/bin/bash\nexec "%s" -S "%s/s/fl" "$@"\n' "$RT" "$B" > "$B/bin/tmux"; chmod +x "$B/bin/tmux"
-  cat > "$B/cjk.sh" <<'EOS'
-#!/bin/bash
-s=$(printf '龘%.0s' $(seq 66)); n=0
-while :; do printf '\033[H'; for r in $(seq 0 27); do printf '%*s%s' $(( (r + n) % 4 )) '' "$s"; [ $r -lt 27 ] && printf '\r\n'; done; n=$((n+1)); sleep 0.1; done
-EOS
-  chmod +x "$B/cjk.sh"
-  TT() { "$RT" -S "$B/s/fl" "$@"; }
-  # the far machine: its own server, the session streaming CJK, bare (status off)
-  "$RT" -S "$B/s/far" -f /dev/null new-session -d -s far -x 120 -y 30 "$B/cjk.sh"
-  "$RT" -S "$B/s/far" set -g status off
-  # home: the 看台's peer window, its pane that machine's tmux attached
-  TT -f /dev/null new-session -d -s fl -x 120 -y 30 "env -u TMUX '$RT' -u -S '$B/s/far' attach -t far"
-  TT set -g status off \; set -w @fleet_role panel \; set -w @peer far@me \; set -w @peer_node far
-  cat > "$B/term.py" <<'PY'
-import os, pty, select, sys, time, fcntl, termios, struct
-tmux, sock, out = sys.argv[1:4]
-pid, fd = pty.fork()
-if pid == 0:
-    os.environ["TERM"] = "xterm-256color"; os.environ["LANG"] = "en_US.UTF-8"
-    os.execvp(tmux, [tmux, "-u", "-S", sock, "attach", "-t", "fl"])
-fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
-o, end = open(out, "ab", buffering=0), time.time() + 40
-while time.time() < end:
-    if select.select([fd], [], [], 0.05)[0]:
-        try:
-            d = os.read(fd, 65536)
-        except OSError:
-            break
-        if not d:
-            break
-        o.write(d)
-os.kill(pid, 9)
-PY
-  python3 "$B/term.py" "$RT" "$B/s/fl" "$B/out" & printf '%s\n' "$!" >> "$WORK/cred-pids"
-  until_ok 5 sh -c '[ -n "$("$1" -S "$2" list-clients -F x)" ]' _ "$RT" "$B/s/fl" || { WHY="the terminal did not attach"; far_done; return 1; }
-  until_ok 5 grep -aq '龘' "$B/out" || { WHY="the far session's CJK never reached the terminal"; far_done; return 1; }
-  # the table an older release left: built, then every popup bind the pre-#3044 bare one
-  env TMUX="$B/s/fl,0,0" PATH="$B/bin:$PATH" python3 "$BIN/fleet-quickopen.py" view-keys >/dev/null 2>&1
-  binds=$(TT list-keys -T fleet-view 2>/dev/null | grep 'dash-popup.sh')
-  [ -n "$binds" ] || { WHY="view-keys built no popup bind in fleet-view"; far_done; return 1; }
-  for k in $(printf '%s\n' "$binds" | awk '{ print $4 }'); do
-    TT bind-key -T fleet-view "$k" run-shell -b "tmux display-popup -c '#{client_name}' -E 'sleep 1'"
-  done
-  TT set -gu @fleet_view_keys_sig
-  # what attach --thin runs on every attach (fleet-remote-view.sh rv_thin_dress)
-  env TMUX="$B/s/fl,0,0" PATH="$B/bin:$PATH" python3 "$BIN/fleet-quickopen.py" view-keys --if-stale >/dev/null 2>&1
-  b=$(TT list-keys -T fleet-view 2>/dev/null | grep 'display-popup' | grep -v 'dash-popup.sh' | head -n 1)
-  [ -z "$b" ] || { WHY="attach's view-keys --if-stale left another release's popup bind (no --freeze): $b"; far_done; return 1; }
+  [ -n "$binds" ] || { WHY="$who: view-keys built no popup bind in fleet-view"; return 1; }
+  if [ "$who" = far ]; then
+    # the table an older release left: every popup bind the pre-#3044 bare one, then
+    # what attach --thin runs on every attach (fleet-remote-view.sh rv_thin_dress)
+    for k in $(printf '%s\n' "$binds" | awk '{ print $4 }'); do
+      TT bind-key -T fleet-view "$k" run-shell -b "tmux display-popup -c '#{client_name}' -E 'sleep 1'"
+    done
+    TT set -gu @fleet_view_keys_sig
+    env TMUX="$B/s/fl,0,0" PATH="$B/bin:$PATH" python3 "$BIN/fleet-quickopen.py" view-keys --if-stale >/dev/null 2>&1
+    b=$(TT list-keys -T fleet-view 2>/dev/null | grep 'display-popup' | grep -v 'dash-popup.sh' | head -n 1)
+    [ -z "$b" ] || { WHY="far: attach's view-keys --if-stale left another release's popup bind (no --freeze): $b"; return 1; }
+  fi
   b=$(TT list-keys -T fleet-view 2>/dev/null | grep 'dash-popup.sh' | grep -v -e '--freeze' | head -n 1)
-  [ -z "$b" ] || { WHY="a 看台 popup bind without --freeze: $b"; far_done; return 1; }
+  [ -z "$b" ] || { WHY="$who: a 看台 popup bind without --freeze: $b"; return 1; }
   pane=$(TT list-panes -t fl -F '#{pane_id}')
   t0=$(now)
   ( env TMUX="$B/s/fl,0,0" PATH="$B/bin:$PATH" bash "$BIN/dash-popup.sh" --client "$(TT list-clients -F '#{client_name}' | head -n 1)" \
       --no-inline --freeze -w 90% -h 80% -- sleep 3 >/dev/null 2>&1 & )
-  until_ok "$CAP" grep -aq '╭' "$B/out" || { WHY="the popup never drew its frame"; far_done; return 1; }
-  SECS=$(since "$t0")
-  [ "$(TT display -p -t "$pane" '#{pane_in_mode}')" = 1 ] || { WHY="the peer pane behind is not held while the popup is up"; far_done; return 1; }
+  until_ok "$CAP" grep -aq '╭' "$B/out" || { WHY="$who: the popup never drew its frame"; return 1; }
+  SECS=$(python3 -c 'import sys; print(max(float(sys.argv[1]), float(sys.argv[2])))' "${SECS:-0}" "$(since "$t0")")
+  [ "$(TT display -p -t "$pane" '#{pane_in_mode}')" = 1 ] || { WHY="$who: the pane behind is not held while the popup is up"; return 1; }
   sleep 0.4; n0=$(grep -ao '龘' "$B/out" | wc -l); sleep 1.5; n1=$(grep -ao '龘' "$B/out" | wc -l)
-  [ "$n1" = "$n0" ] || { WHY="$((n1 - n0)) of the far session's wide glyphs reached the terminal while the popup was up"; far_done; return 1; }
+  [ "$n1" = "$n0" ] || { WHY="$who: $((n1 - n0)) of the pane's wide glyphs reached the terminal while the popup was up (tmux 3.7c draws them over it)"; return 1; }
   until_ok 4 sh -c '[ "$("$1" -S "$2" display -p -t "$3" "#{pane_in_mode}")" = 0 ]' _ "$RT" "$B/s/fl" "$pane" \
-    || { WHY="the peer pane was left in copy-mode after the popup closed"; far_done; return 1; }
-  sleep 0.5; [ "$(grep -ao '龘' "$B/out" | wc -l)" -gt "$n1" ] || { WHY="the far session never drew again after the popup closed"; far_done; return 1; }
-  far_done
-  WHAT="别的机器的会话（看台里的窗口是那边的 tmux）一直在刷折行的中文，家机器的看台键是旧版本建的（裸 display-popup）：attach 的 view-keys --if-stale 认出别的版本建的表、重建成带 --freeze 的；弹窗 ${SECS}s 内画出来，开着的 1.9s 里那边一个宽字也没送到终端，关掉后接着刷"
+    || { WHY="$who: the pane was left in copy-mode after the popup closed"; return 1; }
+  sleep 0.5; [ "$(grep -ao '龘' "$B/out" | wc -l)" -gt "$n1" ] || { WHY="$who: the session never drew again after the popup closed"; return 1; }
 }
-far_done() { "$RT" -S "$B/s/far" kill-server 2>/dev/null; th_done; }
+drill_view_popup_wide_bleed() {
+  CAP=6   # popup open → its frame on the terminal, the pane held still (each leg)
+  local w
+  SECS=0
+  for w in near far; do
+    popup_bleed_leg "$w"; local rc=$?
+    "$RT" -S "$B/s/far" kill-server 2>/dev/null; th_done
+    [ "$rc" = 0 ] || return 1
+  done
+  WHAT="会话背后一直在刷折行的中文（本机的、和看台里别的机器的 tmux）：看台的弹窗键都带 --freeze，别的版本建的旧表由 attach 的 view-keys --if-stale 重建；弹窗 ≤${SECS}s 画出来，开着的 1.9s 里背后一个宽字也没送到终端；关掉后退出 copy-mode、接着刷"
+}
 
 drill_view_far_reaped() {
   CAP=10   # the issue's bound: the next ⌘P after the far reap

@@ -437,17 +437,10 @@ drill_key_rotation_breaks_sessions() {
   grep -q '^func TestKeyRotationSessionPassH1(' "$ROOT/tokenledger/hub/api/fleet_key_rotation_test.go" 2>/dev/null \
     && grep -q '^func TestPass2KeyRotation(' "$ROOT/tokenledger/shared/credproxy/pass2_test.go" 2>/dev/null \
     || { WHY="the hub half's tests TestKeyRotation* / TestPass2KeyRotation are gone"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run 'KeyRotation|LoadKeysPrev' ./hub/api github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the hub half's Go tests did not run"; return 1 ;;
-      0:*) gohalf="入口一半：go test 旧钥签的 fcp-h1 / fcp-h2 / frl2 / frh1 在 PREV 下验得过、续签成新钥签的同一张，没 PREV 403；中心代理跟上入口换的钥" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
-         return 1 ;;
-    esac
-  fi
+  go_half 'KeyRotation|LoadKeysPrev' ./hub/api github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy; case $? in
+    0) gohalf="入口一半：go test 旧钥签的 fcp-h1 / fcp-h2 / frl2 / frh1 在 PREV 下验得过、续签成新钥签的同一张，没 PREV 403；中心代理跟上入口换的钥" ;;
+    1) return 1 ;;
+  esac
   WHAT="入口换钥只认新钥时旧钥签的通行证在中转被拒；名单带上 relay_pub_prev 后 ${SECS}s 内旧钥签的 frl2 / fcp-h2 复通、第三把钥匙照拒；滚动发布中老副本只报旧钥时新钥签的照放；${gohalf}"
 }
 

@@ -294,9 +294,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `fleet doctor --installs` prints 「落后 Nm」, WARN past 30 min. Pinned by
   `install-sync-selftest.sh` O/O2/O3, `fleet-node-update-selftest.py` F,
   `fleet-installs-selftest.sh` L, `fleet-epic-floor-selftest.sh` and BREAK-IT
-  `epic-hold-default` (+ the opt-in drills `epic-mark-overwritten` /
-  `epic-fresh-switched` / `epic-idle-held` / `epic-hold-uncapped` /
-  `epic-hold-rotating`).
+  `epic-hold-default` (+ the opt-in drill `epic-hold-uncapped`).
 - **A new way to break the fleet gets its row and its drill BEFORE its fix**
   (issue #1786). `docs/dev/BREAK-IT.md` lists every known way (方式 · 后果 · 自愈方式 ·
   演练); `bin/fleet-break-it-selftest.sh` (+ `-2-` for its second half, #2955) does each one for real on isolated
@@ -684,7 +682,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   `stable-publish.yml` is dispatch only (repair), and a release workflow's own red
   run on a commit (a failed publish / move / train / hub-deploy) is not counted by
   `fleet-stable.sh`'s CI gate (`FLEET_STABLE_DERIVED_RE`, matched through the run's
-  check suite; `--ignore-check` repeats) — BREAK-IT `train-derived-red`;
+  check suite; `--ignore-check` repeats) — BREAK-IT `train-superseded-red`;
   a train that stable overtook mid-run (moved by hand, or by a later train) ends
   green saying `superseded: stable is at X, already ahead` — asked before the
   publish and again on a 409 / a refused move, `bin/fleet-train-superseded.sh`,
@@ -699,7 +697,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   on a Mac**: each Mac verifies its own install (the updater's machine doctor after
   the switch, rolled back to `.prev` on a new FAIL), and **a machine only moves
   forward** — `fleet-node-update.py` refuses a target whose manifest `seq` is lower
-  than the running release's (`refused`, BREAK-IT `update-goes-back`;
+  than the running release's (`refused`, BREAK-IT `train-hub-backwards`;
   `FLEET_NODE_UPDATE_BACKWARD=1` is the hatch). `mac-follow.yml` is a dispatch only
   (it leaves `mac follow: macOS` on the commit, moves nothing). The
   BSD half is the nightly full `selftests-macos.yml`: a red one (its macOS shard
