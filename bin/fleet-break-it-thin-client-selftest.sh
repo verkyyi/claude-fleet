@@ -24,6 +24,9 @@
 #   thin-home-alone-down    (issue #4829) the home down and no other machine: the
 #                           换家 finds none, the loop goes back to the home and is
 #                           on it again once it is up — never asking forever
+#   thin-view-keeps-failing  (EPIC T651 C4) the home answers but its 看台 never
+#                           comes up / dies at once, three times: the home's login
+#                           shell on the same route, said; exit → the 看台 again
 #   thin-first-heals        (issue #4829) no fleet there yet, the hub refuses the
 #                           first session «m1: not ready: creds» three times (the
 #                           machine coming up): waited out, said, then placed
@@ -130,6 +133,12 @@ while [ \$# -gt 0 ]; do
     --token) token=\$2; shift ;; --device|--route) shift ;;
   esac; shift
 done
+# a 看台 that breaks (thin-view-keeps-failing): \`never\` dies before it draws, \`after\`
+# draws, then dies — both with 7
+case \$(cat "$R/crash.\$HOST_NAME" 2>/dev/null) in
+  never) echo "fleet-remote-view: boom" >&2; exit 7 ;;
+  after) printf '\033]7502;cur;token=%s;m=%s;l=%s;w=u/s1;g=fixture\007' "\$token" "$ME" "\$(id -un)"; sleep 0.2; exit 7 ;;
+esac
 # no fleet of yours yet (thin-first-heals): rc 3 until the first session is placed
 [ -e "$R/empty.\$HOST_NAME" ] && { echo "fleet-remote-view: no fleet session is live on \$HOST_NAME" >&2; exit 3; }
 # the home's tmux restarting (thin-home-restart-new-session): no fleet for N resumes
@@ -212,6 +221,9 @@ for step in json.load(open(script)):
         while time.time() < end and not os.path.exists(arg):
             pump(0.05)
         print("AWAITED %s %s" % (arg, os.path.exists(arg)), flush=True)
+    elif kind == "sh":
+        import subprocess
+        subprocess.call(arg, shell=True)
     elif kind == "linger":
         end = time.time() + arg
         while time.time() < end:
@@ -509,6 +521,58 @@ drill_thin_home_alone_down() {
   grep -aq '除了 m1 没有别的在线机器' "$R/term.out" || { WHY="the screen never said there is no other machine"; tc_done; return 1; }
   tc_done; wait 2>/dev/null
   WHAT="家机器 m1 停了、也没有别的机器：换家找不到就回到 m1（屏幕说「除了 m1 没有别的在线机器，回到它接着重连」），m1 起来后 ${SECS}s 回到 s1"
+}
+
+drill_thin_view_keeps_failing() {
+  CAP=8   # three broken 看台 in a row → the home's command line, said on the screen
+  local t0 n
+  tc_rig
+  # the login shell on the home: says how it was started, runs what it is typed
+  cat > "$R/bin/stubsh" <<'EOF'
+#!/bin/sh
+printf 'HOME-SHELL pwd=%s noview=%s args=%s\r\n' "$PWD" "${FLEET_NO_VIEW-}" "$*"
+while IFS= read -r l; do [ "$l" = exit ] && exit 0; eval "$l"; done
+EOF
+  chmod +x "$R/bin/stubsh"
+  echo never > "$R/crash.m1"; t0=$(now)
+  THIN_ENV='{"SHELL": "'"$R"'/bin/stubsh"}' THIN_ARGS='["--home", "m1", "s1"]' tc_drive vf '[
+   ["expect", "HOME-SHELL", '"$CAP"'],
+   ["sh", "rm -f '"$R"'/crash.m1"],
+   ["send", "exit\n"],
+   ["expect", "VIEW s1 ON m1", 10],
+   ["sh", "echo after > '"$R"'/crash.m1"],
+   ["send", "drop\n"],
+   ["expect", "HOME-SHELL[^V]*VIEW s1 ON m1[^H]*HOME-SHELL", 15],
+   ["sh", "rm -f '"$R"'/crash.m1"],
+   ["send", "exit\n"],
+   ["expect", "VIEW s1 ON m1.*VIEW s1 ON m1", 10],
+   ["send", "quit\n"],
+   ["wait", 10]
+  ]'
+  SECS=$(python3 - "$R/thin.log" "$t0" <<'PY2'
+import sys, time, calendar
+for l in open(sys.argv[1]):
+    f = l.rstrip("\n").split("\t")
+    if len(f) > 1 and f[1] == "shell":
+        t = calendar.timegm(time.strptime(f[0][:19], "%Y-%m-%dT%H:%M:%S"))
+        print("%.1f" % max(0.0, t - float(sys.argv[2]))); break
+PY2
+)
+  grep -q 'SAW .HOME-SHELL. True' "$R/res.vf" \
+    || { WHY="no shell after a 看台 that never came up: $(tail -n 4 "$R/thin.log" | tr '\t' ' ') — $(tail -c 300 "$R/term.out" 2>/dev/null)"; tc_done; return 1; }
+  grep -aq '看台连续 3 次没起来 — 已把你放在 m1 的命令行' "$R/term.out" && grep -aq '输入 exit 回看台' "$R/term.out" \
+    || { WHY="the screen never said why and how back: $(tail -c 400 "$R/term.out")"; tc_done; return 1; }
+  grep -aq "HOME-SHELL pwd=$R/home/m1 noview=1 args=-l" "$R/term.out" \
+    || { WHY="the shell was not the home's login shell with FLEET_NO_VIEW=1: $(grep -a HOME-SHELL "$R/term.out")"; tc_done; return 1; }
+  grep -aq '看台连续 3 次起来就退出（代码 7）' "$R/term.out" \
+    || { WHY="a 看台 that came up and died 3 times: $(cat "$R/res.vf") $(tail -n 6 "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
+  grep -q 'RC 0' "$R/res.vf" || { WHY="the session did not run back to the 看台 and ⌘Q: $(cat "$R/res.vf")"; tc_done; return 1; }
+  n=$(grep -c '^m1 ' "$R/rv.log")
+  [ "$n" = 8 ] || { WHY="$n 看台 tries on m1, not 3 + 1 + 3 + 1 = 8: $(cat "$R/rv.log")"; tc_done; return 1; }
+  grep -aq 'asking for a home other than' "$R/thin.log" && { WHY="it went 换家 instead"; tc_done; return 1; }
+  [ "$(grep -c '	shell	' "$R/thin.log")" = 4 ] || { WHY="thin.log's shell lines: $(grep '	shell	' "$R/thin.log")"; tc_done; return 1; }
+  tc_done; wait 2>/dev/null
+  WHAT="家机器 m1 连得上、看台却连续 3 次没起来（退出码 7）：${SECS:-?}s 内不再重连，先印「看台连续 3 次没起来 — 已把你放在 m1 的命令行」+「输入 exit 回看台」，同一路线开 m1 的登录 shell（\$HOME，FLEET_NO_VIEW=1）；exit 后回到 s1；看台起来就崩 3 次同样落地；从不换家"
 }
 
 drill_thin_first_heals() {

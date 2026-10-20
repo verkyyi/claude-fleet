@@ -23,8 +23,14 @@
 # the person runs `fleet` on their own device, and an SSH login there is a plain
 # shell. `fleet-node-shell-retire.sh` takes this line out of ~/.zshrc for good.
 #
+# FLEET_NO_VIEW=1 (EPIC T651 C4): this login is the way OUT of a 看台 that broke —
+# the entry port's fallback, the thin client's home shell, `fleet shell` — so the
+# banner and the client are both skipped; it is unset at once, so a `fleet` typed
+# here (the way back) and whatever it starts never inherit it.
+#
 # An anonymous function, so nothing is left behind in the login shell.
 () {
+  if [[ -n "${FLEET_NO_VIEW-}" ]]; then unset FLEET_NO_VIEW; return 0; fi
   [[ -o interactive ]] && [[ -z "$TMUX" ]] && [[ ! -f ~/.hushfleet ]] || return 0
   [[ -e ${FLEET_NODE_STATE:-/var/db/fleet-node}/machine.env ]] && return 0
   local here=${1:h}

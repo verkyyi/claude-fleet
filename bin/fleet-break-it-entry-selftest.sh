@@ -28,6 +28,10 @@
 #                         its argv), a command / sftp / scp / rsync runs as on port 22,
 #                         no command and no terminal is the login shell; each arrival
 #                         is a line in entry.ndjson (the login's and the door's)
+#   entry-view-crash-drops  bin/fleet-entry.sh (EPIC T651 C4): a 看台 that ends with
+#                         any code but a leave (0 · 129) — a stand-in exiting 7 —
+#                         lands the person in the login shell with one line (why ·
+#                         `fleet` goes back) and FLEET_NO_VIEW=1, never a closed connection
 #   entry-no-lang         bin/fleet-entry.sh + entry_config's AcceptEnv (issue #3196):
 #                         a phone that sends no LANG still reaches the 看台 in UTF-8 —
 #                         a real tmux client draws Chinese to its terminal — and a
@@ -460,6 +464,54 @@ SH
   sys_same || { edown; return 1; }
   edown
   WHAT="入口不带命令有终端 ⇒ 看台（--resume，第二次带回上次的会话；设备名是钥匙在入口上的名字）；带命令 / sftp / scp / rsync 与 22 端口一样；无命令无终端 ⇒ 登录 shell；每次进门登录处一行、入口 sshd 日志里的那把钥匙一行（logs/entry.ndjson，不含钥匙正文）"
+}
+
+drill_entry_view_crash_drops() {
+  CAP=20   # the listener + four arrivals, each 看台 stand-in ending with its own code
+  local t0 cf out rc n; local -a eopts
+  erig crash
+  mkdir -p "$E/rt/bin" "$E/conf" "$E/bin"; ln -s "$BIN/fleet-entry.sh" "$E/rt/bin/fleet-entry.sh"
+  ln -s "$BIN/fleet-ui-lang.sh" "$E/rt/bin/fleet-ui-lang.sh"
+  cf="$E/conf"
+  # the 看台 stand-in: comes up, then ends with the code in view.rc (EPIC T651 C4's 假看台退出码 7)
+  cat > "$E/view.sh" <<'SH'
+#!/bin/bash
+echo VIEW-UP
+exit "$(cat "$(dirname "$0")/view.rc")"
+SH
+  # the login's shell stand-in: says how it was started, then ends (a real one would wait for you)
+  cat > "$E/bin/zsh" <<'SH'
+#!/bin/sh
+printf 'LOGIN-SHELL noview=%s pwd=%s\n' "${FLEET_NO_VIEW-}" "$PWD"
+SH
+  chmod +x "$E/view.sh" "$E/bin/zsh"
+  export FLEET_ENTRY_TEST_SETENV="FLEET_ENTRY_VIEW=$E/view.sh FLEET_CONF_DIR=$cf SHELL=$E/bin/zsh FLEET_UI_LANG=zh"
+  eapply "$(elist 1 "$ME=k1")" || { WHY="entry apply failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  t0=$(now); eup
+  until_ok 10 listening || { WHY="the entry sshd never listened"; edown; return 1; }
+  eopts=(-F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=no
+         -o UserKnownHostsFile="$E/known_hosts" -o ConnectTimeout=5 -o LogLevel=ERROR -i "$E/k1")
+  arrive() { echo "$1" > "$E/view.rc"; out=$(ssh "${eopts[@]}" -tt -p "$EPORT" "$ME@127.0.0.1" </dev/null 2>&1); rc=$?; }
+  # 1. 看台 crashes with 7 ⇒ the login shell, one line why + how back, FLEET_NO_VIEW=1, the connection kept
+  arrive 7
+  case "$out" in *VIEW-UP*'看台意外退出（代码 7）'*'输入 fleet 回看台'*'LOGIN-SHELL noview=1 pwd='"$HOME"*) ;;
+    *) WHY="a 看台 ending 7: rc=$rc [$(printf %s "$out" | tr "\r\n" "  ")] $(tail -3 "$E/sup.err" 2>/dev/null | tr "\n" " ")"; edown; return 1 ;; esac
+  [ "$rc" = 0 ] || { WHY="the connection ended $rc, not the shell's 0"; edown; return 1; }
+  SECS=$(since "$t0")
+  # 2. one that never came up (2) ⇒ the same, its own words
+  arrive 2
+  case "$out" in *'看台没起来（2）'*'LOGIN-SHELL noview=1'*) ;; *) WHY="a 看台 ending 2: [$out]"; edown; return 1 ;; esac
+  # 3. a leave (0, 129) ⇒ the connection ends, no shell
+  for n in 0 129; do
+    arrive "$n"
+    case "$out" in *LOGIN-SHELL*|*回看台*) WHY="a leave ($n) landed in the shell: [$out]"; edown; return 1 ;; esac
+    [ "$rc" = 0 ] || { WHY="a leave ($n) ended the connection $rc"; edown; return 1; }
+  done
+  grep -q '"how":"shell-viewcrash"' "$cf/logs/entry.ndjson" && grep -q '"how":"shell-noview"' "$cf/logs/entry.ndjson" \
+    || { WHY="entry.ndjson lacks the shell lines: $(cat "$cf/logs/entry.ndjson")"; edown; return 1; }
+  sys_same || { edown; return 1; }
+  edown
+  WHAT="入口上看台以代码 7 退出（起来后崩）：${SECS}s 内落到登录 shell（\$HOME，FLEET_NO_VIEW=1），先印「看台意外退出（代码 7）… 输入 fleet 回看台」，连接不断；没起来（2）同样落地；0 / 129 是正常离开，照旧断开、不落 shell"
 }
 
 drill_entry_no_lang() {

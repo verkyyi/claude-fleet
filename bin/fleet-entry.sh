@@ -12,7 +12,9 @@
 #     --view <key>-<fp6> --resume [--want <last>] --device <b64> --route entry` —
 #     the first screen is #3060's: the session you looked at last, else a
 #     new one; ⌃\ in the 看台 is the shell as always. A 看台 that cannot come
-#     up (no fleet live here) says so and leaves you at the login shell.
+#     up (no fleet live here), or ends with any code but a leave (0 · 129 — a
+#     crash, EPIC T651 C4), says so in one line and leaves you at the login
+#     shell (FLEET_NO_VIEW=1: no 看台 started again there; `fleet` goes back).
 #   no command, no terminal (`ssh -T`)
 #                                  ⇒ the login shell
 #
@@ -179,8 +181,17 @@ bash "$VIEWER" attach --thin --view "$VIEW" --resume ${WANT:+--want "$WANT"} \
   --device "$DEV" --route entry --token "${TOKEN:-0}"
 rc=$?
 remember
+# 0 / 129 are a leave (detach, ⌘Q, the line's own hangup): the connection ends. Any
+# other code (EPIC T651 C4) is a 看台 that broke — the person lands in the login
+# shell with one line saying why and how back, never a closed connection; the
+# shell gets FLEET_NO_VIEW=1 so fleet-login.zsh does not start the 看台 again.
 case "$rc" in
   0|129) exit 0 ;;
-  1|2|3) echo "fleet-entry: 看台没起来（${rc}）— 留在命令行" >&2; login_shell shell-noview ;;
-  *) exit "$rc" ;;
 esac
+case "$rc" in 1|2|3) KEY=entry_view_none_fmt; HOW=shell-noview ;; *) KEY=entry_view_crash_fmt; HOW=shell-viewcrash ;; esac
+SAY=''
+[ -f "$UILANG" ] && SAY=$(FLEET_CONF_DIR="$C" FLEET_VIEW_LANG="$FLEET_CLIENT_LANG" sh "$UILANG" t "$KEY" "$rc" "$(hostname -s 2>/dev/null)" 2>/dev/null)
+[ -n "$SAY" ] || SAY="看台退出（${rc}）— 留在命令行。输入 fleet 回看台"
+printf '\033[?1049l\033[?1000l\033[?1002l\033[?1003l\033[?1006l\r\nfleet-entry: %s\r\n' "$SAY" >&2
+export FLEET_NO_VIEW=1
+login_shell "$HOW"
