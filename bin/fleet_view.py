@@ -3941,8 +3941,7 @@ def panel_key(screen, timeout_ms, completed=None, inputs=None):
 # --- the keys issue #3328 folded into ⌘P (EPIC #3178 ⑤) ------------------------------------
 # ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘Q ⌘K ⌃\ open the panel instead (fleet_keys.FORWARD,
 # key_lines): ⌘N ⌘T lit on ⚡, and each says 「⌘T 已并进 ⌘P」 the first time — one
-# mark per key per login. Every press is a line of view-switch.ndjson, how=old:<action>,
-# which the doctor's `oldkeys` row counts.
+# mark per key per login. Every press is a line of view-switch.ndjson, how=old:<action>.
 FORWARD_BOLT = ("new", "dispatch")
 
 

@@ -536,13 +536,6 @@ From `fleet doctor`.
 - **What it is**: whether this machine's entry port can be reached from outside.
 - **On WARN / FAIL**: check the router's port forwarding, the public address, and whether the host keys match; test again with `sudo fleet-node-supervisor.py entry reach`.
 
-#### `ingress`
-
-From `fleet doctor`.
-
-- **What it is**: whether this machine's own system ssh can be reached from outside.
-- **On WARN / FAIL**: check the router's forwarding and System Settings → General → Sharing → Remote Login.
-
 #### `onboard`
 
 From `fleet doctor`.
@@ -799,13 +792,6 @@ From `fleet doctor`.
 - **What it is**: over the last 10 times, how long (median) from pressing ⌘P to the panel appearing, and from opening a new session to being able to type. The panel should take under 0.5 seconds, a new session under 8 seconds.
 - **On WARN / FAIL**: `fleet_timing.py table` shows which part is slow; send it to your admin.
 
-#### `oldkeys`
-
-From `fleet doctor`.
-
-- **What it is**: whether retired shortcut keys have been pressed recently. It only reports.
-- **On WARN / FAIL**: nothing to do; use ⌘P from now on.
-
 #### `alerts`
 
 From `fleet doctor`.
@@ -912,13 +898,6 @@ From `fleet doctor`.
 
 - **What it is**: whether the main checkout's dependencies (such as `node_modules`) are installed; new working copies link to them instead of installing from scratch.
 - **On WARN / FAIL**: network problems retry by themselves; for a problem in the repository itself, fix it and reinstall with the command in the explanation.
-
-#### `labels`
-
-From `fleet doctor`.
-
-- **What it is**: whether the repository has the issue labels fleet uses.
-- **On WARN / FAIL**: add each missing one with `gh label create <name> --repo <repo>`.
 
 #### `overrides`
 

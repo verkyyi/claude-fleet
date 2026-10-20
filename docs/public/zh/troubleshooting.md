@@ -536,13 +536,6 @@ fleet doctor --json
 - **是什么**：从外面能不能连到这台的入口端口。
 - **WARN / FAIL 怎么办**：查路由器的端口转发、公网地址，以及主机钥匙是否对得上；`sudo fleet-node-supervisor.py entry reach` 再测一次。
 
-#### `ingress`
-
-来自 `fleet doctor`。
-
-- **是什么**：从外面能不能连到这台系统自带的 ssh。
-- **WARN / FAIL 怎么办**：查路由器转发和 系统设置 → 通用 → 共享 → 远程登录。
-
 #### `onboard`
 
 来自 `fleet doctor`。
@@ -799,13 +792,6 @@ fleet doctor --json
 - **是什么**：最近 10 次按 ⌘P 到面板弹出、开新会话到能打字，各要多久（中位数）。面板该在 0.5 秒内，新会话该在 8 秒内。
 - **WARN / FAIL 怎么办**：`fleet_timing.py table` 看慢在哪一段，发给管理员。
 
-#### `oldkeys`
-
-来自 `fleet doctor`。
-
-- **是什么**：最近有没有按已经退役的快捷键。只报状态。
-- **WARN / FAIL 怎么办**：不用管；以后都用 ⌘P。
-
 #### `alerts`
 
 来自 `fleet doctor`。
@@ -912,13 +898,6 @@ fleet doctor --json
 
 - **是什么**：主目录的依赖（如 `node_modules`）装好没有；新工作副本从这里链过去，不用从零装。
 - **WARN / FAIL 怎么办**：网络问题会自己重试；仓库自己的问题修好后照说明的命令重装。
-
-#### `labels`
-
-来自 `fleet doctor`。
-
-- **是什么**：仓库里有没有 fleet 用的 issue 标签。
-- **WARN / FAIL 怎么办**：每个缺的跑 `gh label create <名字> --repo <仓库>` 补上。
 
 #### `overrides`
 

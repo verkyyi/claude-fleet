@@ -80,7 +80,7 @@ modelcap_health() {   # <fleet> ok|timeout [step]
 if [ -n "$sockets" ] && [ -x "$BIN/fleet-model-switch.sh" ] \
    && [ -d "${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/accounts}" ]; then
   m0=$SECONDS
-  mprobe="${FLEET_MODELCAP_PROBE_BUDGET:-${FLEET_QUOTAWATCH_PROBE_BUDGET:-20}}"   # compat-1v: 下一批删 (the old name)
+  mprobe="${FLEET_MODELCAP_PROBE_BUDGET:-20}"
   case "$mprobe" in ''|*[!0-9]*) mprobe=20 ;; esac
   mfirst=$(cat "$G/reconcile.modelcap.start" 2>/dev/null)
   msweep="$sockets"

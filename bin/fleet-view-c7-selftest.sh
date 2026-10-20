@@ -19,8 +19,7 @@
 #   T  ⌘T and ⌘K, keys issue #3328 folded into ⌘P: the panel (its first
 #      frame one run in timing/panel.ndjson, #3551) — ⌘T lit on
 #      its ⚡ row, no 派一件事 popup — saying 「⌘T 已并进 ⌘P」 the first time only;
-#      each press logged how=old:<action>, counted by fleet_keys.old_presses (the
-#      doctor's oldkeys row); `send --agent codex` still carries; a direct attach: nothing
+#      each press logged how=old:<action>; `send --agent codex` still carries; a direct attach: nothing
 #   S  ⌃\: the session's shell — here: a window of the 看台 (@view_shell, panel,
 #      @peer_view) whose shell's directory is the session's @worktree; ⌃\ again is
 #      back on the session, ⌃\ there selects the same one (one a session); the
@@ -213,8 +212,7 @@ pass "N  ⌘N: a new no-repo session every press, the 看台 on it — never the
 # ⌘T's 派一件事 popup has no entry any more: ⌘T (even as the person's own extra,
 # dispatch=cmd+t) opens the panel lit on its ⚡ row; a key that went (⌘K here — no
 # extra names it, so it is the default forward) opens the panel too. Each says
-# 「<key> 已并进 ⌘P」 the first time only, and every press is a line how=old:<action>
-# that fleet_keys.old_presses — the doctor's `oldkeys` row — counts.
+# 「<key> 已并进 ⌘P」 the first time only, and every press is a line how=old:<action>.
 to send-keys -t o:direct -H 1b 5b 39 33 32 7e
 sleep 1.5
 to capture-pane -p -t o:direct | grep -q '⚡' && fail "T: ⌘T opened the panel in a direct attach"
@@ -242,9 +240,6 @@ waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -qF '⌘K 已�
 to send-keys -t o:view Escape; waitfor 4 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⚡'"
 [ "$(grep -c '"how":"old:dispatch"' "$log")" = 2 ] || fail "T: two ⌘T are not two how=old:dispatch lines: $(grep old: "$log")"
 grep -q '"how":"old:switcher","key":"⌘K"' "$log" || fail "T: ⌘K is not logged how=old:switcher: $(grep old: "$log")"
-[ "$(PYTHONPATH="$BIN" python3 -c 'import fleet_keys,sys; print(fleet_keys.old_presses(sys.argv[1]))' "$log")" = "3 ⌘T 2 · ⌘K 1" ] \
-  || fail "T: old_presses does not count them: $(PYTHONPATH="$BIN" python3 -c 'import fleet_keys,sys; print(fleet_keys.old_presses(sys.argv[1]))' "$log")"
-grep -q 'fleet_keys.old_presses' "$BIN/fleet-doctor.sh" || fail "T: the doctor's oldkeys row does not read fleet_keys.old_presses"
 # the one message after the update (fleet-remote-view.sh attach --thin runs view-notice):
 # on the 看台's client once, then never again on this login
 TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-notice --view fl@view-v1 || fail "T: view-notice exited non-zero"

@@ -96,23 +96,12 @@ FLEET_BASE_BRANCH="main"
 # #1212) puts in its `ssh -p <port> <login>@<host>` line and ssh-config snippet.
 # Machine-wide, so global: every login opened on this box is reached the same way.
 # Unset host ⇒ the letter carries a visible `<HOST>` placeholder and the run WARNs;
-# unset port ⇒ 22 (ssh's own default). Also what `fleet-doctor`'s `ingress` line
-# probes from outside (issue #1196, next key).
+# unset port ⇒ 22 (ssh's own default).
 # @label=Public SSH host @group=identity @tier=common @scope=global @edit=str
 #FLEET_SSH_PUBLIC_HOST=ssh.example.com
 # @label=Public SSH port @group=identity @tier=common @scope=global @edit=int
 #FLEET_SSH_PUBLIC_PORT=22
 
-# Probe host for the public entry (issue #1196). An ssh destination on the FAR
-# side of the internet — an alias in ~/.ssh/config with key auth and its host key
-# already known, e.g. a VPS — from which `fleet-doctor`'s `ingress` line runs
-# `ssh-keyscan -p <port> <host>` against the two keys above and compares the
-# ed25519 host key with sshd's on 127.0.0.1 here: the entry is open AND lands on
-# THIS machine. From this machine or the same LAN that cannot be told (NAT
-# hairpin) — which is how a newcomer's port was found only from a box abroad.
-# Unset ⇒ no `ingress` line at all. Machine-wide.
-# @label=Public-entry probe host @group=identity @tier=common @scope=global @edit=str
-#FLEET_SSH_PROBE_HOST=my-vps
 
 # A session's end line counts down after the person's own exit (/exit, Ctrl+D —
 # issue #3170): 「10 秒后关闭 · 按任意键取消」, then the window closes the way the
@@ -2208,24 +2197,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # Report-only. Set to 0 on a host that is multi-homed on purpose.
 # @label=Doctor network check @group=disk @tier=advanced @scope=global @edit=bool
 #FLEET_DOCTOR_NETWORK=1
-
-# `fleet-doctor`'s `ingress` line (issue #1196 — macOS AND Linux): with
-# FLEET_SSH_PUBLIC_HOST + FLEET_SSH_PROBE_HOST set, asks the probe host to
-# `ssh-keyscan` the public entry and WARNs when it is closed, answers with
-# another machine's host key, or the probe itself cannot be reached
-# (docs/dev/HOST.md#ingress). Report-only; nothing configured ⇒ no line — which is
-# the everyday switch, so this one is internal: 0 keeps the keys (the welcome
-# letter reads them) but drops the probe.
-# @label=Doctor public-entry check @group=disk @tier=internal @scope=global @edit=bool
-#FLEET_DOCTOR_INGRESS=1
-# How long the `ingress` verdict is cached in global/ingress.probe: a PASS for this
-# long, a WARN for at most 5 min. 0 = probe on every run.
-# @label=Ingress verdict cache @group=disk @tier=internal @scope=global @edit=int @unit=sec
-#FLEET_INGRESS_TTL=3600
-# The `ingress` probe's per-step bound — ssh ConnectTimeout to the probe host and
-# ssh-keyscan's -T at the entry; the whole probe is capped at twice this + 10s.
-# @label=Ingress probe timeout @group=disk @tier=internal @scope=global @edit=int @unit=sec
-#FLEET_INGRESS_TIMEOUT=20
 
 # `fleet-doctor`'s `mcp` lines (issue #891): per fleet, its MCP allowlist
 # (FLEET_MCP_CONFIG) and what its live claude sessions carry in MCP processes +

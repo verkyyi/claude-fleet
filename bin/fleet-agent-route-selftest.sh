@@ -41,9 +41,7 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail -
 [ "$(fleet_labels_agent "$(printf 'agent:claude\npriority:p1\n')")" = claude ] || fail "A agent:claude → claude"
 [ -z "$(fleet_labels_agent "$(printf 'bug\nenhancement\n')")" ] || fail "A no agent label → nothing"
 fleet_labels_agent "$(printf 'agent:codex\nagent:claude\n')" >/dev/null; [ "$?" = 2 ] || fail "A both labels → rc 2"
-fleet_labels_allowed | grep -qx 'agent:codex' && fleet_labels_allowed | grep -qx 'agent:claude' \
-  || fail "A both agent labels are in the fixed taxonomy (seeded, accepted by the filer)"
-st_pass "A agent:codex / agent:claude route; both at once is refused; both are canonical labels"
+st_pass "A agent:codex / agent:claude route; both at once is refused"
 
 # ===== B: the charter =======================================================
 CH=$(cat <<'EOF'

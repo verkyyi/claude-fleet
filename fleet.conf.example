@@ -18,8 +18,6 @@ FLEET_BASE_BRANCH="main"
 #FLEET_SSH_PUBLIC_HOST=ssh.example.com
 # Public SSH port
 #FLEET_SSH_PUBLIC_PORT=22
-# Public-entry probe host
-#FLEET_SSH_PROBE_HOST=my-vps
 
 # ── janitor ──
 # Follow stable automatically

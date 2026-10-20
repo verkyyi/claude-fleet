@@ -1,6 +1,6 @@
 ---
 name: runbook-door-down
-description: 入口端口（每人家机器上的第二个 sshd，默认 22022——fleet 唯一有意开在公网的门）掉线的故障手册——手机 / 电脑连不进、Termius 超时或被拒；分清是门没开（sshd 没起、配置被拒、名单为空）、外面到不了（路由器没转发、没有公网地址、钥匙不符）、名字指错（DNS 没跟上家）、还是 Linux 节点被摘（就绪探针）；各自怎么修、怎么验收。用于「连不上家机器」「22022 不通」「体检 entry / public / ingress 行 WARN」「换了路由器 / 搬家后进不去」。只给管理机器的人用。
+description: 入口端口（每人家机器上的第二个 sshd，默认 22022——fleet 唯一有意开在公网的门）掉线的故障手册——手机 / 电脑连不进、Termius 超时或被拒；分清是门没开（sshd 没起、配置被拒、名单为空）、外面到不了（路由器没转发、没有公网地址、钥匙不符）、名字指错（DNS 没跟上家）、还是 Linux 节点被摘（就绪探针）；各自怎么修、怎么验收。用于「连不上家机器」「22022 不通」「体检 entry / public 行 WARN」「换了路由器 / 搬家后进不去」。只给管理机器的人用。
 ---
 
 # runbook-door-down — 入口端口掉线
@@ -15,8 +15,7 @@ description: 入口端口（每人家机器上的第二个 sshd，默认 22022�
 ## 什么时候用
 
 - 某人的手机或电脑连不进家机器（`ssh -p <PORT> <login>@<NAME>…` 超时 / 被拒 / 主机钥匙变了）。
-- `fleet doctor` 的 `entry` 行 WARN（名单落后、配置被拒、名单有人却没在听），`public` 行 WARN（外面连不上 / 没有公网地址 / 结果过期），
-  `ingress` 行 WARN（系统 sshd 的公网转发探不通）。
+- `fleet doctor` 的 `entry` 行 WARN（名单落后、配置被拒、名单有人却没在听），`public` 行 WARN（外面连不上 / 没有公网地址 / 结果过期）。
 - 换了路由器、宽带、搬家；或 Linux 托管节点上 22022 对所有人都死了。
 
 ## 先查什么
@@ -26,7 +25,7 @@ description: 入口端口（每人家机器上的第二个 sshd，默认 22022�
 ```sh
 sudo python3 "<RT>/current/bin/fleet-node-supervisor.py" entry status          # 入口 vN · 本机 vM · 在不在听 · AllowUsers
 sudo python3 "<RT>/current/bin/fleet-node-supervisor.py" entry reach           # 现在就从外面敲一次门（结果写 <STATE>/entry/reach.json）
-fleet doctor | grep -E '^ *(PASS|WARN|FAIL|INFO) +(entry|public|ingress|node) '
+fleet doctor | grep -E '^ *(PASS|WARN|FAIL|INFO) +(entry|public|node) '
 sudo tail -50 /var/log/fleet-node/entry.log                                    # 入口 sshd 的日志：进门、钥匙被拒、没这个登录
 lsof -nP -iTCP:22022 -sTCP:LISTEN                                              # 真有进程在听吗
 ```
