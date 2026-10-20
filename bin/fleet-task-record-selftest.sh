@@ -99,7 +99,11 @@ PY
 echo 409 > "$CODE"; : > "$CURL_LOG"
 bash "$R" new --title t --token k >/dev/null 2>"$WORK/err"; rc=$?
 [ "$rc" = 1 ] && grep -q 'refused (HTTP 409)' "$WORK/err" && ok "B a refusal exits 1 and says so" || bad "B refusal rc=$rc $(cat "$WORK/err")"
-rm -f "$CODE"
+printf '{"error":"task owner or generation does not match"}' > "$ANS"
+bash "$R" new --title t --token k >/dev/null 2>"$WORK/err"; rc=$?
+[ "$rc" = 1 ] && grep -q 'refused (HTTP 409): task owner or generation does not match' "$WORK/err" \
+  && ok "B a refusal carries the hub's reason word for word (EPIC T497 C16)" || bad "B reason: rc=$rc $(cat "$WORK/err")"
+rm -f "$CODE" "$ANS"
 bash "$R" new --title t >/dev/null 2>&1; [ "$?" = 2 ] && ok "B no token: usage (2)" || bad "B no --token accepted"
 bash "$R" new --title t --token k --rule 9999 >/dev/null 2>&1; [ "$?" = 2 ] && ok "B --rule is gone: usage (issue #4790)" || bad "B --rule 9999 accepted"
 

@@ -37,6 +37,15 @@ func (s *Store) bindTaskParentTx(tx *sql.Tx, child *FleetTask) error {
 	if parent.AuthorityVersion == 0 {
 		return nil
 	}
+	if s.IDSwitchOn() {
+		// EPIC T497 C16: with the switch on no record is claimed, so the parent is
+		// the dispatching session — its ID (parent_session, checked to be this
+		// account's by the caller) — and parent_task only names its record. The
+		// record's executor is never asked for: it is empty for every session
+		// opened after the switch, Claude or Codex alike.
+		child.ParentTask, child.ParentGeneration = parent.Ref, parent.Generation
+		return nil
+	}
 	if parent.ExecutionOwner == "" || taskTerminal(parent.State) || (child.ParentSession != "" && child.ParentSession != parent.ExecutionOwner) {
 		return ErrTaskFence
 	}
