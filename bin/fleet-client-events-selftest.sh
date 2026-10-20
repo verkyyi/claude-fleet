@@ -11,7 +11,8 @@
 #      (Bearer, POST /v1/fleet/client-events, the device); the same ids again
 #      after a lost answer are the hub's to drop; a 400 lets the batch go
 #   C  the spool is capped (FLEET_CLIENT_EVENTS_MAX): the oldest go
-#   D  record never waits for the hub: a sender that hangs costs it nothing
+#   D  record never waits for the hub: a sender that hangs costs it nothing, and
+#      it starts no thread and leaves no child (the thin client forks a pty)
 #   E  report: the doctor's table per device and home, and its one row —
 #      PASS / WARN (a start that never came up) / INFO (no events)
 #   F  fleet-client-events.sh: the operator's token goes to curl on stdin, never
@@ -77,7 +78,8 @@ s.serve_forever()
 PY
 python3 "$T/hub.py" "$T" & HUBPID=$!
 for _ in $(seq 50); do [ -s "$T/hub.port" ] && break; sleep 0.1; done
-export FLEET_HUB_URL="http://127.0.0.1:$(cat "$T/hub.port")" FLEET_HUB_TOKEN=tok-test
+FLEET_HUB_URL="http://127.0.0.1:$(cat "$T/hub.port")"
+export FLEET_HUB_URL FLEET_HUB_TOKEN=tok-test
 echo down > "$T/hub.mode"
 python3 "$CE" flush >/dev/null
 [ "$(wc -l < "$SP" | tr -d ' ')" = 2 ] && st_ok_all "B: the hub answers 503 → the spool kept" || st_miss "B: 503 dropped the spool"
@@ -116,8 +118,13 @@ spec = importlib.util.spec_from_file_location("ce", sys.argv[1]); m = importlib.
 t0 = time.time()
 for _ in range(5):
     m.record("up", home="m3")
-print("%.2f" % (time.time() - t0))' "$CE")
-python3 -c "import sys; sys.exit(0 if float('$t') < 1.5 else 1)" && st_ok_all "D: five records with a hanging hub take ${t}s — never waits" || st_miss "D: record waited ${t}s"
+import os, subprocess, threading
+kids = subprocess.run(["pgrep", "-P", str(os.getpid())], capture_output=True, text=True).stdout.split()
+print("%.2f %d %d" % (time.time() - t0, threading.active_count(), len(kids)))' "$CE")
+set -- $t
+python3 -c "import sys; sys.exit(0 if float('$1') < 1.5 else 1)" && [ "$2" = 1 ] && [ "$3" = 0 ] \
+  && st_ok_all "D: five records with a hanging hub take ${1}s — never waits, no thread, no child left" || st_miss "D: record: $t (secs threads children)"
+pkill -f "$T/slow.sh" 2>/dev/null
 
 # --- E ------------------------------------------------------------------------
 cat > "$T/rep.json" <<'EOF'

@@ -23,9 +23,9 @@ that is not (hub/api/fleet_client_events.go).
 
 The spool: ${XDG_CACHE_HOME:-~/.cache}/claude-fleet/client-events.ndjson
 (FLEET_CLIENT_EVENTS_SPOOL), one JSON line per event, at most
-FLEET_CLIENT_EVENTS_MAX (2000) — the oldest go first. `kick()` sends it on a
-daemon thread (one sender at a time: a flock), FLEET_CLIENT_EVENTS_BATCH (200)
-a POST; an event leaves the spool only when the hub has answered for it, so a
+FLEET_CLIENT_EVENTS_MAX (2000) — the oldest go first. `kick()` sends it from a
+detached process (one sender at a time: a flock; FLEET_CLIENT_EVENTS_SECS, 60,
+its deadline), FLEET_CLIENT_EVENTS_BATCH (200) a POST; an event leaves the spool only when the hub has answered for it, so a
 line that is down keeps them and the next kick — the next event, the next
 start — sends them late. Nothing here ever blocks or writes to the terminal.
 FLEET_CLIENT_EVENTS=0 records and sends nothing.
@@ -49,7 +49,6 @@ import shlex
 import socket
 import subprocess
 import sys
-import threading
 import time
 
 BIN = os.path.dirname(os.path.abspath(__file__))
@@ -60,8 +59,6 @@ REASON_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,47}$")
 VER_RE = re.compile(r"^[0-9A-Za-z._-]{1,64}$")
 NAMESPACE = "fleet-client-events@claude-fleet"
 PATH = "/v1/fleet/client-events"
-_lock = threading.Lock()
-_sender = None
 
 
 def enabled():
@@ -254,9 +251,10 @@ def flush(timeout=10):
     except OSError:
         return 0, -1
     sent = 0
+    deadline = time.time() + _num("FLEET_CLIENT_EVENTS_SECS", 60)
     try:
         batch_n = max(1, _num("FLEET_CLIENT_EVENTS_BATCH", 200))
-        while True:
+        while time.time() < deadline:
             evs = _read(path)
             if not evs:
                 return sent, 0
@@ -270,6 +268,7 @@ def flush(timeout=10):
             finally:
                 os.close(fd)
             sent += len(batch)
+        return sent, len(_read(path))
     except Exception:
         return sent, -1
     finally:
@@ -277,15 +276,20 @@ def flush(timeout=10):
 
 
 def kick():
-    """Send the spool on a daemon thread, unless one is already sending."""
-    global _sender
+    """Send the spool from a detached process (`flush`), never this one: the thin
+    client forks a pty for every connection, and a thread alive across a fork is
+    how a child deadlocks. The sender is orphaned at once (sh backgrounds it and
+    exits), so it is never the loop's child; its flock keeps it the only one, and
+    its own deadline (FLEET_CLIENT_EVENTS_SECS, 60) ends it."""
     if not enabled():
         return
-    with _lock:
-        if _sender is not None and _sender.is_alive():
-            return
-        _sender = threading.Thread(target=flush, name="client-events", daemon=True)
-        _sender.start()
+    try:
+        subprocess.Popen(["/bin/sh", "-c", '"$0" "$1" flush </dev/null >/dev/null 2>&1 &',
+                          sys.executable or "python3", os.path.abspath(__file__)],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True, close_fds=True).wait(timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def status():
