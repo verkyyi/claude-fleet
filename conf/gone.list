@@ -209,3 +209,13 @@ path bin/fleet-codex-account.sh                 T560
 path bin/fleet-codex-account-selftest.py        T560
 func allowed_codex                              T560  bin/
 func capped_turn                                T560  bin/
+# --- the proxy window: only the 看台 attaches (T606, EPIC T605 C1) ---------------
+path bin/fleet-remote-view-selftest.sh          T606
+path bin/remote-view-run-selftest.sh            T606
+path bin/sidebar-machine-tag-selftest.sh        T606
+func rv_chan_select                             T606  bin/
+func rv_takeover                                T606  bin/
+func rv_machine_word                            T606  bin/
+func rv_ssh_why                                 T606  bin/
+func rv_switch_log                              T606  bin/
+func hub_relay_ok                               T606  bin/

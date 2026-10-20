@@ -31,7 +31,7 @@
 #                   field 26) is no row on the sidebar, a remote one or a local
 #                   window alike; FLEET_ROWS_TEST=1 (`fleet ls`) lists it
 #   O. orchestrator — issue #1957: a worker the hub marks `role: orchestrator` keeps
-#                   its line in the cache (fleet-remote-view.sh open finds it there);
+#                   its line in the cache;
 #                   since issue #3119 the sidebar draws it as an ordinary row — byte
 #                   for byte the row of the same worker unmarked — and since #3118 no
 #                   orch_<sess> / orch_multi_ / orch_all_ file is written

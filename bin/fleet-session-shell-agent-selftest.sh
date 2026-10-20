@@ -8,7 +8,7 @@
 #   D  passes through to the real command, untouched: another agent · --version ·
 #      FLEET_RAW_AGENT=1 · no session behind the shell · that window gone
 #   E  fleet_view.py's here-shell (⌃\ on this machine) gets the same PATH + window,
-#      as fleet-remote-view.sh shell-here does (pinned in fleet-remote-view-selftest S)
+#      as fleet-remote-view.sh shell-here does
 #
 # On a real isolated tmux server (-S socket, killed at exit); tmux absent → SKIP.
 set -uo pipefail

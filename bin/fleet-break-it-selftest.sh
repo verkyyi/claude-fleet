@@ -2040,50 +2040,51 @@ PY
 }
 
 # A reconnect onto the SAME view id while the last connection's attach is still
-# half alive (issue #1907, mac-a 2026-10-06): `run` keeps its view id across
-# reconnects, the far end's old attach still held `<fleet>@view-<id>`, the new
-# one's `new-session` failed and it fell back to a plain client of the fleet
-# session — the node's own status line under the stage's header, its prefix
-# live — and the old one's exit then removed the NEW registration. The drill:
-# a node fleet on an isolated socket, a first `attach - V` that never
-# leaves, a second with the same id; the second must sit in a view session of
-# its own (status off, prefix None), nobody on the fleet session, the row its.
+# half alive (issue #1907, mac-a 2026-10-06): the far end's old attach still held
+# `<fleet>@view-<id>`, the new one's `new-session` failed and it fell back to a
+# plain client of the fleet session — the node's own status line under the
+# header, its prefix live — and the old one's exit then removed the NEW
+# registration. Since T606 only the 看台 attaches (`attach --thin`); the drill: a
+# node fleet on an isolated socket, a first `attach --thin --view V1` that never
+# leaves, a second with the same id; the old attach goes, the second sits in the
+# SAME 看台 session (its top line on), nobody on the fleet session, the row its.
 vr_env() {
-  printf 'env -u TMUX -u TMUX_PANE TMUX_TMPDIR=%s FLEET_CONF_DIR=%s HOME=%s PATH=%s' \
+  # FLEET_VIEW_FIRST_CMD: a 看台 with nowhere to land records ⌘N's road, opens nothing
+  printf 'env -u TMUX -u TMUX_PANE TMUX_TMPDIR=%s FLEET_CONF_DIR=%s HOME=%s PATH=%s FLEET_VIEW_FIRST_CMD=true' \
     "$WORK/vt" "$WORK/vr/conf" "$WORK/vr" "${REAL_TMUX%/*}:/usr/bin:/bin"
 }
 vr() { TMUX_TMPDIR="$WORK/vt" "$REAL_TMUX" -L "$1" "${@:2}"; }
 vr_clients() { vr vrn list-clients -F '#{client_session}' 2>/dev/null | sort | tr '\n' ' '; }
 vr_pid() { cut -f5 "$WORK/vr/conf/remote-views/$1" 2>/dev/null; }
 vr_view_reconnect() {
-  CAP=5; local t0 one s opts
+  CAP=5; local t0 one s gid
   mkdir -p "$WORK/vt" "$WORK/vr/conf/fleets/vrn"
   : > "$WORK/vr/conf/fleets/vrn/conf"
   fx_repo "$WORK/vr/conf" "vrn" acme/app FLEET_MAIN="$WORK/vr"
   vr vrn -f /dev/null new-session -d -s vrn -n home -x 100 -y 20 'exec sleep 600' || { WHY="no node server"; return 1; }
   vr vrc -f /dev/null new-session -d -s vrc -n t1 -x 100 -y 20 \
-    "$(vr_env) bash $BIN/fleet-remote-view.sh attach - V1; exec sleep 600"
+    "$(vr_env) bash $BIN/fleet-remote-view.sh attach --thin --view V1 --device e30= --route lan --token t1; exec sleep 600"
   until_ok 5 sh -c "[ \"\$(TMUX_TMPDIR='$WORK/vt' '$REAL_TMUX' -L vrn list-clients -F '#{client_session}')\" = 'vrn@view-V1' ]" \
-    || { WHY="the first attach never sat in its view session: [$(vr_clients)]"; return 1; }
-  one=$(vr_pid V1)
+    || { WHY="the first attach never sat in its 看台: [$(vr_clients)]"; return 1; }
+  one=$(vr_pid V1); gid=$(vr vrn display-message -p -t '=vrn@view-V1:' '#{session_id}')
   t0=$(now)
   # the reconnect: the same view id, while the first attach still holds it
-  vr vrc new-window -d -t vrc: -n t2 "$(vr_env) bash $BIN/fleet-remote-view.sh attach - V1; exec sleep 600"
+  vr vrc new-window -d -t vrc: -n t2 "$(vr_env) bash $BIN/fleet-remote-view.sh attach --thin --view V1 --resume --device e30= --route lan --token t2; exec sleep 600"
   until_ok "$CAP" sh -c "two=\$(cut -f5 '$WORK/vr/conf/remote-views/V1' 2>/dev/null); [ -n \"\$two\" ] && [ \"\$two\" != '$one' ] \
       && [ \"\$(TMUX_TMPDIR='$WORK/vt' '$REAL_TMUX' -L vrn list-clients -F '#{client_session}')\" = 'vrn@view-V1' ]" \
     || { WHY="after the reconnect the node's clients are [$(vr_clients)] (want one, on vrn@view-V1), row pid $(vr_pid V1) (first was $one)"; return 1; }
   SECS=$(since "$t0")
-  s=$(vr vrn list-clients -F '#{client_session}' | head -n 1)
-  opts="$(vr vrn show-options -qv -t "=$s:" status) $(vr vrn show-options -qv -t "=$s:" prefix)"
-  [ "$opts" = "off None" ] || { WHY="the view session $s has status/prefix [$opts], want [off None]"; return 1; }
+  s=$(vr vrn display-message -p -t '=vrn@view-V1:' '#{session_id} #{status}')
+  [ "$s" = "$gid on" ] || { WHY="the resumed 看台 is [$s], want the same session [$gid] with its top line on"; return 1; }
   kill -0 "$one" 2>/dev/null && { WHY="the first attach ($one) is still alive beside the second"; return 1; }
-  # the second leaves: its own row and session go, nothing else is left behind
+  # the second leaves: its row says since when, the 看台 stays to be resumed
   vr vrc kill-window -t vrc:t2
-  until_ok 5 sh -c "[ ! -e '$WORK/vr/conf/remote-views/V1' ] && ! TMUX_TMPDIR='$WORK/vt' '$REAL_TMUX' -L vrn has-session -t '=vrn@view-V1' 2>/dev/null" \
-    || { WHY="the second's exit left its row ($(vr_pid V1)) or its session behind"; return 1; }
+  until_ok 5 sh -c "grep -q 'left=' '$WORK/vr/conf/remote-views/V1' 2>/dev/null" \
+    || { WHY="the second's exit wrote no left= on its row ($(cat "$WORK/vr/conf/remote-views/V1" 2>/dev/null))"; return 1; }
   # An orphan: a registered attach whose tmux client the server no longer has
-  # (its line died, the client hangs in a tty write). `health` counts it, the
-  # next attach reaps it and its row.
+  # (its line died, the client hangs in a tty write — here an old plain attach
+  # still running from before T606). `health` counts it, the next attach reaps
+  # it and its row.
   mkdir -p "$WORK/vr/fake"; printf 'sleep 600\n' > "$WORK/vr/fake/fleet-remote-view.sh"
   bash "$WORK/vr/fake/fleet-remote-view.sh" attach - V9 >/dev/null 2>&1 </dev/null & one=$!
   printf '/dev/ttys999\tvrn\tshell\t%s\t%s\n' "$(date +%s)" "$one" > "$WORK/vr/conf/remote-views/V9"
@@ -2091,13 +2092,13 @@ vr_view_reconnect() {
   until_ok 5 sh -c "ps -o args= -p $one 2>/dev/null | grep -q 'fleet-remote-view.sh attach'" || :
   s=$(eval "$(vr_env) FLEET_REMOTE_ORPHAN_SECS=0 bash $BIN/fleet-remote-view.sh health" 2>&1)
   [ "$s" = "shared=0 orphans=1" ] || { pkill -P "$one"; kill "$one" 2>/dev/null; WHY="health with one orphan says [$s]"; return 1; }
-  vr vrc new-window -d -t vrc: -n t3 "$(vr_env) FLEET_REMOTE_ORPHAN_SECS=0 bash $BIN/fleet-remote-view.sh attach - V3; exec sleep 600"
+  vr vrc new-window -d -t vrc: -n t3 "$(vr_env) FLEET_REMOTE_ORPHAN_SECS=0 bash $BIN/fleet-remote-view.sh attach --thin --view V3 --device e30= --route lan --token t3; exec sleep 600"
   until_ok 5 sh -c "! kill -0 $one 2>/dev/null && [ ! -e '$WORK/vr/conf/remote-views/V9' ]" \
     || { pkill -P "$one"; kill "$one" 2>/dev/null; WHY="the next attach left the orphan ($one) or its row"; return 1; }
   wait "$one" 2>/dev/null
   s=$(eval "$(vr_env) bash $BIN/fleet-remote-view.sh health" 2>&1)
   [ "$s" = "shared=0 orphans=0" ] || { WHY="health after the reap says [$s]"; return 1; }
-  WHAT="同一 view id 重连：旧 attach 收掉，新的在自己的视图会话（status off、prefix None），无人挂在 fleet 会话上；孤儿 attach 下一次 attach 收掉"
+  WHAT="同一 view id 重连：旧 attach 收掉，新的接回同一个看台会话（顶栏开着），无人挂在 fleet 会话上；孤儿 attach 下一次 attach 收掉"
 }
 drill_view_reconnect_shared() {
   local rc; vr_view_reconnect; rc=$?

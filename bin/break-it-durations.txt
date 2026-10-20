@@ -503,7 +503,6 @@
 1.1 view-far-reaped
 1.1 view-first-frame-hub-slow
 0.5 view-mouse-stale
-5.5 view-node-restart
 4.4 view-popup-idle-redraw
 8.3 view-popup-wide-bleed
 1.0 view-reconnect-shared

@@ -1,44 +1,12 @@
 #!/bin/bash
-# fleet-remote-view.sh — step into a session on ANOTHER machine from this one's
-# sidebar (issue #1424, EPIC #1419 C5).
+# fleet-remote-view.sh — the 看台's far end: what the thin client (fleet-thin.py)
+# and its home machine run on a machine that holds sessions (issue #1424, EPIC
+# #1419 C5; the 看台 since issue #2763, EPIC #2999). The old proxy window — a
+# window here whose pane was an ssh client attached to another machine's session
+# (`open` / `run` / a plain `attach` / `serve` / `watch` / `back` / `reconcile`) —
+# was deleted with T606 (EPIC T605 C1): a 看台 reaches another machine through
+# its peer window (fleet-peerlink.py), and those modes now say so and exit 2.
 #
-# The sidebar already SHOWS your sessions on the other machines (#1423: rows keyed
-# `wid:<worker_id>`, each ending in its machine's `@mac-a` mark, #1780). Enter on
-# one opens a PROXY WINDOW here — titled `<name> · @mac-a` (issue #1780: the mark
-# the row ends in, never a machine prefix on the name), so the window list and the
-# pane header both say the keys go elsewhere — a window marked `@remote=<node>:<worker_id>` whose
-# pane is an ssh client attached to that session's tmux window on <node>. Typing
-# and scrolling are the remote window's own; closing the proxy window only drops
-# the connection — the remote session never notices. A dropped connection
-# reconnects by itself.
-#
-# It is a TASK WINDOW of this machine (issue #1475): the local sidebar treats a
-# window with `@remote` like an issue worker's, so the list stays on the left and
-# the other machine's pane is on the right — never the whole window gone remote,
-# never two lists. `back` is kept for a direct attach; the node binds no key to
-# it since issue #1714.
-#
-#   open <worker_id>        (dash Enter, in a fleet pane) — open the proxy window
-#                           for the row's machine, or retarget + select the one
-#                           already open: ONE proxy window per machine, because
-#                           it is a client of that machine's one fleet session
-#                           (one fleet per login). `--node <m> [--name <n>]`
-#                           (issue #2236): the machine + name of a session just
-#                           opened, which the sidebar's cache does not carry yet.
-#   run <node> <worker_id>  the proxy pane's program: connect, reconnect, report.
-#                           A <worker_id> of `-` is the machine itself: its fleet
-#                           session as it stands, no window selected (issue
-#                           #1484). The pane's window carries
-#                           `@remote_ctl` — the ssh ControlPath of its connection —
-#                           so `open` can retarget it without reconnecting.
-#   attach <worker_id> [<view>]   (runs ON <node>, over ssh — or on the
-#                           node itself, nested in the shell's own tmux) — select
-#                           the worker's window and attach to its fleet session
-#                           (`-`: attach the login's fleet session, select nothing).
-#                           A <view> id registers it as a proxy VIEW with a
-#                           fleet-open spool.
-#                           A registered client attaches to a VIEW SESSION of its
-#                           own (issue #1489, below), a plain one to the fleet's.
 #   attach --thin --view <id> [--want <worker_id>|--resume] --device <b64>
 #          --route <name> --token <nonce> [--lang <locale>]   (ON <node>, the thin client's home —
 #                           issue #2763, EPIC #2999 C1) — the client's 看台: a view
@@ -51,91 +19,46 @@
 #   attach --thin --view <id>-via-<home> …   (ON another machine, from a home
 #                           machine's peer window — EPIC #2999 C4) — the same 看台,
 #                           bare: no top line, no key table (the home draws both).
-#   select <worker_id> [<view>]  (runs ON <node>, over the proxy's own ssh
-#                           connection, issue #1484) — select the worker's window
-#                           in the proxy's view session (its <view> id; the fleet
-#                           session when none is named or live), which that proxy
-#                           then shows: how `open` moves an open proxy window to
-#                           another row of the SAME machine, with no reconnect.
-#                           Exit 3 when the worker is not live here; 5 when
-#                           <view> is a home's far 看台 (`*-via-*`, C4) not here yet.
-#   watch <view>            (runs ON <node>, over the same ssh connection) — the
-#                           fleet-open back channel, below.
+#   select <worker_id> [<view>]  (ON <node>) — select the worker's window in the
+#                           看台 <view> (the fleet session when none is named or
+#                           live); a home's peer window rides it on its standing
+#                           link (the fast path below). Exit 3 when the worker is
+#                           not live here; 5 when <view> is a home's far 看台
+#                           (`*-via-*`, C4) not here yet.
+#   cur / notify-jump       (the server's [78] / [79] hooks, in a @view_thin
+#                           session) — see each below.
+#   shell-here <worker id>  (ON <node>) — the session's own shell (⌃\), below.
 #   live                    (ON <node>, issue #2219) — exit 0 when this login has a
-#                           live fleet session here (what `attach -` lands on), 1 not.
+#                           live fleet session here (what a 看台 lands on), 1 not.
 #   health / prune          (ON <node>, issue #1907) — `shared=<n> orphans=<m>`:
 #                           remote clients on the fleet session instead of a view
 #                           session of their own, attaches whose tmux client is
 #                           gone (fleet-doctor's `rview`); `prune` reaps what every
 #                           attach reaps first.
-#   reconcile <sess>        (ON <node>) — retired with the rule (issue #1713):
-#   restore <sess>          both undo what an OLDER version left on <sess> — its
-#                           hidden status line / prefix, the solo marker, the
-#                           server's [77] hooks — and nothing else.
-#   back [<session>]        (the local `prefix h`) — from a proxy window, select
-#                           the last LOCAL window; anywhere else, nothing.
 #
-# ONE VIEW SESSION PER REGISTERED CLIENT (issue #1489, EPIC #1479 R4): a tmux
-# session has one current window, so two shells on the fleet session kept
-# switching each other away. `attach` with a <view> id makes the
-# client a GROUPED session of its own — `new-session -t <fleet>`, named
-# `<fleet>@view-<id>` — the fleet's windows, its own current window, status line
-# and prefix off for good (the person's own tmux has both), destroyed with its
-# client (`destroy-unattached`, armed in the attach command itself, plus the
-# attach's own kill-session). A plain `attach` — a person on the node — stays a
-# client of the fleet session, as before. #1424 settled for a plain client
-# because a second session holding the same windows lists each twice in
-# `list-windows -a` and fleet-peer-send called the worker AMBIGUOUS; the fleet's
-# scans now go through fleet_lw (fleet-lib.sh), which drops the view sessions'
+# ONE VIEW SESSION PER CLIENT (issue #1489, EPIC #1479 R4): a tmux session has one
+# current window, so two people on the fleet session kept switching each other
+# away. A 看台 is a GROUPED session of its own — `new-session -t <fleet>`, named
+# `<fleet>@view-<id>` — the fleet's windows, its own current window. A second
+# session holding the same windows lists each twice in `list-windows -a`, so the
+# fleet's scans go through fleet_lw (fleet-lib.sh), which drops the view sessions'
 # rows, and every window→session read uses FLEET_SESSION_FMT, which names the
-# fleet from a view session too. `select` targets the proxy's own view session,
-# so one proxy's retarget moves nobody else's screen.
+# fleet from a view session too. `select` targets the 看台's own session, so one
+# 看台's switch moves nobody else's screen.
 #
-# Nesting — NO rule (issue #1713, EPIC #1710 C3; #1485's rule retired): the
-# node never makes way for a viewer, because it has nothing of its own to hide.
-# The list is drawn by the client (fleet_view.py in a thin client's 看台); a node
-# fleet session draws none, so a viewer arriving or leaving changes no
-# pane on the node. A shell/view client attaches to its own VIEW SESSION (below)
-# with that session's status line and prefix off for good. The one thing a
-# window carries for everyone is its top header (pane-border-status, a WINDOW
-# option): a window a shell/view looks at loses it ONE WAY (issue #1549 — the
-# viewer's `<name> · @mac-a` header is the one title line) and never gets it back, so no
-# client change ever resizes a pane. Never `resize-pane -Z`.
+# Nesting — NO rule (issue #1713, EPIC #1710 C3; #1485's rule retired): the node
+# never makes way for a viewer, because it has nothing of its own to hide. The one
+# thing a window carries for everyone is its top header (pane-border-status, a
+# WINDOW option): a window a 看台 looks at loses it ONE WAY (issue #1549 — the
+# 看台's top line is the one title line) and never gets it back, so no client
+# change ever resizes a pane. Never `resize-pane -Z`.
 #
 # The registry $FLEET_CONF_DIR/remote-views/<id>: one line per client,
-# `<tty> <session> <kind=shell|view> <since epoch> <pid>` (tab-separated — the
-# first two columns are what fleet-open.sh reads). A row whose attach shell is
-# gone (SIGKILLed before its cleanup) does not count and is pruned at the next
-# attach, so a tty the next login reuses is never mistaken for a shell.
-#
-# fleet-open in the remote session (the operator's iTerm2 only trusts THIS
-# machine's secret, and the escape would have to cross two tmux servers): the
-# remote `attach` registers its client tty under a view id in
-# $FLEET_CONF_DIR/remote-views/; fleet-open there sees its newest client is a
-# view and drops the request in that view's spool instead of writing an escape.
-# `watch` — a second session on the SAME ssh connection (ControlMaster) — prints
-# each request as one JSON line, and this side re-issues it through the local
-# fleet-open: a url as is; a page on <node>'s loopback through an `ssh -O forward`
-# on the proxy's own connection (gone when the proxy closes), then `:<lport>/path`.
-#
-# Rails: off unless CCQUOTA_FLEET=1 (EPIC #1419 rule 1); proxy windows are skipped
-# by every reaper, the sleeper and the migrator (rule 5) — see `fleet_is_remote_window`.
-#
-# Knobs (env, fleet.conf or the fleet's conf):
-#   FLEET_REMOTE_SSH         `mac-a=m4-lan mac-b=mac-c` — ssh host per machine label
-#                            (default: the label itself, as ~/.ssh/config names it)
-#   FLEET_REMOTE_BIN         the fleet's bin/ on the other machine, relative to its
-#                            $HOME or absolute (default .claude/fleet/bin)
-#   FLEET_REMOTE_VIA_HUB     1 (default) = after a failed direct attempt, try the
-#                            hub relay (`fleet connect --proxy`, #1413) when one is
-#                            configured; 0 = direct only
-#   FLEET_REMOTE_SSH_CMD     (selftests) the ssh program
-#   FLEET_REMOTE_OPENER      (selftests) what re-issues a request (fleet-open.sh)
-#
-# Machine to machine (issue #1626): with plain ssh on a hub node, every connect
-# first asks the hub for a five-minute certificate to that machine
-# (fleet-peer-cert.sh) — no standing key in the far end's authorized_keys is
-# needed or used; a hub that says no or is down pauses the view and says why.
+# `<tty> <session> <kind> <since epoch> <pid>` (tab-separated — the first two
+# columns are what fleet-open.sh reads) and, for a 看台 (kind `thin`), key=value
+# columns after. A row whose attach shell is gone (SIGKILLed before its cleanup)
+# does not count and is pruned at the next attach, so a tty the next login reuses
+# is never mistaken for a client.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 
@@ -292,7 +215,6 @@ fi
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
-. "$BIN/fleet-ui-lang.sh"   # the proxy title's 本机 (issue #1780)
 
 # A non-interactive ssh session has a bare PATH: find tmux where Homebrew puts it.
 command -v tmux >/dev/null 2>&1 || PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -302,83 +224,7 @@ mode="${1:-}"; [ $# -gt 0 ] && shift
 
 note() { printf 'fleet-remote-view: %s\n' "$*" >&2; }
 
-# ssh host for a machine label: FLEET_REMOTE_SSH, else the label itself.
-ssh_host() {
-  local n="$1" h
-  h=$(printf '%s\n' ${FLEET_REMOTE_SSH:-} | awk -F= -v n="$n" '$1 == n { print $2; exit }')
-  printf '%s' "${h:-$n}"
-}
-# rv_route_login <route file> — the login a master was opened as (fleet-connect.py
-# writes it into FLEET_CONNECT_ROUTE_FILE, issue #2430); nothing when it did not say.
-rv_route_login() {
-  [ -s "${1:-}" ] || return 0
-  python3 -c 'import json,sys
-try: print(json.load(open(sys.argv[1])).get("login") or "")
-except Exception: pass' "$1" 2>/dev/null
-}
-# The hub's name for a machine label: FLEET_NODE_ALIASES backwards (`mac-c=mac-b`).
-hub_node() {
-  printf '%s\n' ${FLEET_NODE_ALIASES:-} | awk -F= -v n="$1" '$2 == n { print $1; f = 1; exit } END { if (!f) print n }'
-}
-hub_relay_ok() {
-  [ "${FLEET_REMOTE_VIA_HUB:-1}" = 1 ] && [ -x "$BIN/fleet" ] || return 1
-  [ -n "${FLEET_HUB_URL:-}" ] || [ -s "${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet/hub.json" ]
-}
-sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 T() { tmux -L "$sock" "$@"; }   # the REMOTE fleet's server; each mode sets $sock first
-
-# A static forward in the person's ~/.ssh/config (`RemoteForward 2226 …`, the
-# open-url.sh opener) is asked for again by EVERY session on a shared master, and
-# the second ask of one remote port is refused — fatally for a mux client
-# (`muxclient: master forward request failed`): no attach, a reconnect, a storm
-# (issue #1775). So a session on a master never carries the config's forwards
-# (MUXO; the master that holds them already has them), and a master that cannot
-# get one goes on without it (MASTERO) — a lost opener, never a lost attach.
-MUXO=(-o ClearAllForwardings=yes -o ControlMaster=no)
-MASTERO=(-o ExitOnForwardFailure=no)
-# ↑ ControlMaster=no on every session over a master (issue #2987): a mux client
-#   whose ControlMaster is anything else (a person's `Host * / ControlMaster auto`)
-#   takes a refused connect — macOS refuses a LIVE socket whose accept queue is
-#   full for a moment — for a stale socket and UNLINKS it (OpenSSH mux.c
-#   "Stale control socket, unlinking"): the master runs on, nobody can reach it,
-#   and every switch after it fell to a full reconnect.
-
-# rv_switch_log <event> <node> <how> <ms> [<why>] — one line per switch in the
-# client's connect log (issue #2987): how it went (chan · select · respawn ·
-# new) and how long `open` took, so a slow switch is visible — the old client's
-# (FLEET_SHELL=1); a node's dash writes none.
-rv_switch_log() {
-  [ "${FLEET_SHELL:-0}" = 1 ] && [ -f "$BIN/fleet_clientlog.py" ] || return 0
-  python3 "$BIN/fleet_clientlog.py" write connect "$1" "$2" "$3" "$4" ok "${5:-}" >/dev/null 2>&1 || :
-}
-rv_ms() { python3 -c 'import time; print(int(time.time() * 1000))' 2>/dev/null || printf '%s000' "$(date +%s)"; }
-
-# rv_ssh_why <stderr file> — ssh's last word on a dropped line, in words a person
-# reads (issue #1775 §3): a raw `mux_client_forward: …` reads as "the network is
-# broken". An unknown line is shown as it is.
-rv_ssh_why() {
-  local f="$1" l
-  [ -s "$f" ] || return 0
-  l=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | grep -v '^Warning: remote port forwarding failed' | tail -n 1)
-  [ -n "$l" ] || return 0
-  case "$l" in
-    *'forward request failed'*|*'port forwarding failed'*)
-      printf '端口转发被拒（另一条连接已占用同一个端口）' ;;
-    *'Connection refused'*)                  printf '对方的 ssh 拒绝连接' ;;
-    *'kex_exchange_identification'*|*'Connection reset'*|*'Connection closed by'*)
-      printf '对方的 ssh 在握手时断开（可能同时连接太多）' ;;
-    *'timed out'*|*'Timeout, server'*)       printf '连接超时（网络不通或对方不在线）' ;;
-    *'Permission denied'*)                   printf '认证被拒（证书可能过期，试试 fleet login）' ;;
-    *'Could not resolve hostname'*)          printf '找不到这台机器的地址' ;;
-    *'Host key verification failed'*|*'REMOTE HOST IDENTIFICATION'*)
-      printf '对方的主机指纹不符' ;;
-    *'Broken pipe'*|*'Network is unreachable'*|*'No route to host'*)
-      printf '网络断了' ;;
-    *'Control socket'*|*'mux_client'*|*'muxclient'*)
-      printf '共享的连接已关闭' ;;
-    *) printf '%s' "$l" ;;
-  esac
-}
 
 # --- the registry (issue #1485) ---------------------------------------------------
 # Live rows of the registry: `<tty> <session> <kind> <since> <pid>`. A row whose
@@ -531,47 +377,6 @@ $(rv_scan)
 EOF
   return 0
 }
-# rv_unregister <view> — drop the row (and spool) only while it is this attach's.
-rv_unregister() {
-  [ "$(cut -f5 "$VIEWS/$1" 2>/dev/null)" = "$$" ] || return 0
-  rm -rf "${VIEWS:?}/$1" "${VIEWS:?}/$1.d" 2>/dev/null
-}
-# rv_takeover <view> <view session> — a reconnect reuses its view id (`run` keeps
-# one per pane); an attach of the last connection may still hold the id's row and
-# session (issue #1907). Same id = same proxy pane, so the old one is over: kill
-# its attach (only a live `fleet-remote-view.sh attach` naming this id), then its
-# session. Never touches another id.
-rv_takeover() {
-  local v="$1" g="$2" p
-  p=$(cut -f5 "$VIEWS/$v" 2>/dev/null)
-  case "$p" in ''|*[!0-9]*) p='' ;; esac
-  if [ -n "$p" ] && [ "$p" != "$$" ] && kill -0 "$p" 2>/dev/null \
-     && ps -o command= -p "$p" 2>/dev/null | grep -q "fleet-remote-view\.sh attach .*$v"; then
-    rv_kill_attach "$p"
-  fi
-  if T has-session -t "=$g" 2>/dev/null; then
-    T detach-client -s "=$g" 2>/dev/null
-    T kill-session -t "=$g" 2>/dev/null
-  fi
-  return 0
-}
-# rv_machine_word <label> — the proxy title's machine (issue #1780): `本机` when
-# the label names this computer (its short hostname, or that name's
-# FLEET_NODE_ALIASES alias, any case — the sidebar's `@本机` rule), else the label.
-# FLEET_SIDEBAR_HOST stands in for the hostname (tests), as in the sidebar.
-rv_machine_word() {
-  local n h lh a la
-  n=$1; h=${FLEET_SIDEBAR_HOST:-$(hostname -s 2>/dev/null)}; h=${h%%.*}
-  lh=$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')
-  for a in $lh ${FLEET_NODE_ALIASES:-}; do
-    case "$a" in
-      *=*) la=$(printf '%s' "${a%%=*}" | tr '[:upper:]' '[:lower:]'); [ "$la" = "$lh" ] || continue; a=${a#*=} ;;
-    esac
-    [ "$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$n" | tr '[:upper:]' '[:lower:]')" ] \
-      && { fleet_ui_t sidebar_here; return 0; }
-  done
-  printf '%s' "$n"
-}
 # A window a shell/view looks at loses its own top header, ONE WAY (issues #1549,
 # #1713): the viewer's `<name> · @mac-a` header is the one title line, and since it never
 # comes back no client arriving or leaving resizes a pane on this machine.
@@ -615,28 +420,12 @@ rv_legacy_undo() {
 }
 # rv_select <worker_id> [<view>] — the worker's window becomes the current one of
 # the view session (the fleet session when none is named or live). 3 = not live
-# here. A window found once is remembered for the life of this process (`serve`
-# answers every row of one connection) as `<wid> <window> <sess> <@fleet_id>`
-# and re-checked by its identity — a window that no longer carries that
-# @fleet_id (closed, recycled) is located afresh, the 61 ms fleet_worker_locate
-# paid once per row, not per click (issue #1682).
-RV_SEEN=''
+# here.
 rv_select() {
-  local wid="${1#wid:}" view="${2:-}" hit loc fid tgt g c w='' s=''
-  hit=$(printf '%s\n' "$RV_SEEN" | awk -v k="$wid" '$1 == k { print $2, $3, $4; exit }')
-  if [ -n "$hit" ]; then
-    set -- $hit; sock=$(fleet_socket "$2")
-    [ "$(T display-message -p -t "=$2:$1" '#{@fleet_id}' 2>/dev/null)" = "$3" ] && { w=$1; s=$2; }
-  fi
-  if [ -z "$w" ]; then
-    loc=$(fleet_worker_locate "wid:$wid" 2>/dev/null)
-    case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; return 3 ;; esac
-    set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
-    fid=$(T display-message -p -t "=$s:$w" '#{@fleet_id}' 2>/dev/null)
-    RV_SEEN=$(printf '%s\n' "$RV_SEEN" | awk -v k="$wid" '$1 != k && NF')
-    [ -n "$fid" ] && RV_SEEN="$RV_SEEN
-$wid $w $s $fid"
-  fi
+  local wid="${1#wid:}" view="${2:-}" loc tgt g c w s
+  loc=$(fleet_worker_locate "wid:$wid" 2>/dev/null)
+  case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; return 3 ;; esac
+  set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
   tgt="$s"
   # the view's session — or the uniquely-suffixed one an attach made when the
   # name was still taken (#1907)
@@ -660,35 +449,6 @@ $wid $w $s $fid"
     || T select-window -t "=$tgt:$w" 2>/dev/null || { note "cannot select $w"; return 3; }
   rv_hide_border "$w"   # a window spawned since the attach (#1549, #1682)
   return 0
-}
-# rv_chan_select <chan> <worker_id> — `select` over a proxy's `serve` channel
-# (issue #1682). 0 = selected there; 2 = no answer in 2 s (a dead line, issue
-# #1876: the caller reconnects rather than try the same line again); anything
-# else (no channel, not live there) = the caller's one-shot path.
-rv_chan_select() {
-  local c="$1" nonce n r rc=none
-  [ -p "$c.cmd" ] && [ -p "$c.ack" ] || return 1
-  nonce="o$$-$RANDOM"
-  exec 7<>"$c.ack" 8<>"$c.cmd" || return 1
-  printf '%s select %s\n' "$nonce" "$2" >&8
-  # Answers to an earlier, abandoned request may come first: skip to ours.
-  for _ in 1 2 3 4 5 6 7 8; do
-    read -r -t 2 -u 7 n r || break
-    [ "$n" = "$nonce" ] && { rc=$r; break; }
-  done
-  exec 7<&- 8>&-
-  case "$rc" in 0) return 0 ;; none) return 2 ;; *) return 1 ;; esac
-}
-# rv_within <secs> <cmd…> — the command's status, or 124 once it has run <secs>
-# (killed then): an ssh on a half-dead master never returns (issue #1876).
-rv_within() {
-  local n=$(( $1 * 10 )) p; shift
-  "$@" & p=$!
-  while kill -0 "$p" 2>/dev/null; do
-    [ "$n" -le 0 ] && { pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; return 124; }
-    sleep 0.1; n=$((n - 1))
-  done
-  wait "$p"
 }
 
 # --- the thin client's 看台 (issue #2763, EPIC #2999 C1, 共同约定 6) ---------------
@@ -1038,567 +798,31 @@ rv_attach_thin() {
 
 case "$mode" in
 # ---------------------------------------------------------------------------------
-open)
-  wid="${1#wid:}"
-  sess="${FLEET_SESSION:-$(fleet_current_session)}"
-  [ -n "$sess" ] || { note 'not inside a fleet'; exit 2; }
-  fleet_load_conf "$sess" 2>/dev/null
-  [ "${CCQUOTA_FLEET:-0}" = 1 ] || exit 0
-  _fleet_wid_split "$wid" >/dev/null || { note "not a worker_id: $wid"; exit 2; }
-  # The row's machine + name, from the sidebar's own cache (never the network).
-  row=$(LC_ALL=C awk -F $'\037' -v w="wid:$wid" '$1 == w { print $2 "\037" $8; exit }' \
-        "$FLEET_C/global/remote_$sess" 2>/dev/null)
-  node="${row%%$'\037'*}"; name="${row#*$'\037'}"
-  # --node <m> [--name <n>] (issue #2236): a session the hub just opened there,
-  # stepped into as the place answers — before the cache carries its row.
-  shift
-  while [ $# -ge 2 ]; do
-    case "$1" in
-      --node) [ -n "$node" ] || node=$2 ;;
-      --name) [ -n "$row" ] || name=$2 ;;
-    esac
-    shift 2
-  done
-  [ -n "$node" ] || { tmux display-message "fleet: $wid 不在侧边栏的远程清单里" 2>/dev/null; exit 1; }
-  case "$node" in *[!A-Za-z0-9._-]*) note "bad machine label: $node"; exit 2 ;; esac
-  # `<name> · @mac-a` (issue #1780): the window name is also the pane header
-  # (conf/tmux-attention.conf's pane-border-format; the stage's title line,
-  # conf/tmux-view.conf), so the top of the pane says at a glance where
-  # the keys go — in the sidebar row's own words: `@mac-a`, `@本机` when that machine
-  # is this computer. No machine PREFIX on the name (#1475's `mac-a <name>`), no ⇄
-  # (#1621): a proxy window is known by `@remote`, never by its name.
-  title="${name:-${wid#*/}} · @$(rv_machine_word "$node")"
-  cmd="exec bash $(sq "$BIN/fleet-remote-view.sh") run $(sq "$node") $(sq "$wid")"
-  # every window op on this server (the old client's STAGE server, issue #1759,
-  # went with that client — #3008)
-  OT() { tmux "$@"; }; osess=$sess
-  # one proxy window per (machine, LOGIN) — issue #2430: a row of the person's
-  # other login on that machine is another connection, never a retarget over
-  # this one (whose far end cannot see that login's fleet). `run` stamps the
-  # window's login every round; an unstamped one (not up yet) is taken as is.
-  olog=$(fleet_fleet_login "$wid" 2>/dev/null) || olog=''
-  w=$(OT list-windows -t "=$osess" -F '#{window_id} #{@remote} #{@remote_login}' 2>/dev/null \
-      | awk -v n="$node:" -v l="$olog" 'index($2, n) == 1 && ($3 == l || $3 == "") { print $1; exit }')
-  if [ -n "$w" ]; then
-    cur=$(OT show-options -wqv -t "$w" @remote 2>/dev/null)
-    if [ "$cur" != "$node:$wid" ]; then
-      # Another row of the SAME machine (issue #1484): over the proxy's own ssh
-      # connection (`@remote_ctl`, the ControlMaster `run` holds), select that
-      # worker's window there — the proxy, a client of that session, follows at
-      # once. No master up, or the worker not live there: reconnect, as before.
-      # Fastest first (issue #1682): the `serve` channel `run` keeps open on that
-      # connection (`@remote_chan`) — one round trip, nothing started at either end.
-      ctl=$(OT show-options -wqv -t "$w" @remote_ctl 2>/dev/null)
-      rview=$(OT show-options -wqv -t "$w" @remote_view 2>/dev/null)   # its view session (#1489)
-      chn=$(OT show-options -wqv -t "$w" @remote_chan 2>/dev/null)
-      # A pane between two connections (issue #1876) — its line dropped, the
-      # loop waiting out the back-off or reconnecting — has nothing to select
-      # in: a one-shot `select` there "succeeds" against a far end with no view
-      # session and the pane comes back on the worker it had. It is respawned on
-      # the new row at once. A channel that does not answer in time is a dead
-      # line too; a one-shot select gets the same bound.
-      down=$(OT show-options -wqv -t "$w" @remote_down 2>/dev/null)
-      SSH="${FLEET_REMOTE_SSH_CMD:-ssh}"; host=$(ssh_host "$node"); rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
-      # rv_sel <sock> — the one-shot `select` over that master, both steps bounded
-      rv_sel() {
-        rv_within "${FLEET_REMOTE_SELECT_SECS:-2}" $SSH -S "$1" -O check "$host" >/dev/null 2>&1 \
-          && rv_within "${FLEET_REMOTE_SELECT_SECS:-2}" $SSH "${MUXO[@]}" -S "$1" "$host" "bash $rbin/fleet-remote-view.sh select $(sq "$wid")${rview:+ $(sq "$rview")}" >/dev/null 2>&1
-      }
-      t0=$(rv_ms); how=''; why=''
-      crc=1; [ -z "$down" ] && [ -n "$chn" ] && { rv_chan_select "$chn" "$wid"; crc=$?; }
-      if [ "$crc" = 0 ]; then
-        how=chan
-      elif [ -z "$down" ] && [ "$crc" != 2 ] && [ -n "$ctl" ] && [ -S "$ctl" ] && rv_sel "$ctl"; then
-        how=select
-      else
-        how=respawn
-        if [ -n "$down" ]; then why=down
-        elif [ "$crc" = 2 ]; then why='chan no answer'
-        elif [ -z "$ctl" ]; then why='no ctl'
-        elif [ ! -S "$ctl" ]; then why="ctl gone: $ctl"
-        else why='select failed'; fi
-      fi
-      OT set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
-      OT rename-window -t "$w" -- "$title" 2>/dev/null
-      [ "$how" = respawn ] && OT respawn-pane -k -t "$w" -c "$HOME" "$cmd" 2>/dev/null
-      rv_switch_log switch "$node" "$how" "$(( $(rv_ms) - t0 ))" "$why"
-    fi
-  else
-    t0=$(rv_ms)
-    w=$(OT new-window -d -P -F '#{window_id}' -t "=$osess:" -n "$title" -c "$HOME" "$cmd" 2>/dev/null) || exit 1
-    rv_switch_log switch "$node" new "$(( $(rv_ms) - t0 ))"
-    OT set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
-    [ -n "$olog" ] && OT set-window-option -t "$w" @remote_login "$olog" 2>/dev/null
-    OT set-window-option -t "$w" automatic-rename off 2>/dev/null
-  fi
-  OT select-window -t "$w" 2>/dev/null
-  printf '%s\n' "$w"
-  ;;
-
-# ---------------------------------------------------------------------------------
-run)
-  node="${1:-}"; wid="${2:-}"
-  [ -n "$node" ] && [ -n "$wid" ] || { note 'usage: run <node> <worker_id>'; exit 2; }
-  _s=$(fleet_current_session); [ -n "$_s" ] && fleet_load_conf "$_s" 2>/dev/null
-  host=$(ssh_host "$node")
-  rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
-  SSH="${FLEET_REMOTE_SSH_CMD:-ssh}"
-  view="$(hostname -s 2>/dev/null | tr -c 'A-Za-z0-9-' '-')$$-$RANDOM"
-  ctl="${TMPDIR:-/tmp}/frv.$$.$RANDOM"
-  # The window knows its connection (issue #1484) and its view id (issue #1489):
-  # `open` retargets through the one, in the far end's view session named by the other.
-  # ONE loop per window (issue #2987): `@remote_run` names the loop that owns this
-  # pane. A loop that finds another's pid there is a stray — a respawn keeps the
-  # pane id, so `pane_gone` never fires for it — and it ends at its next round
-  # without touching the window (before this, a stray rewrote `@remote_ctl` to a
-  # master it then closed, unset the live loop's `@remote_chan` and stamped
-  # `@remote_down`: every switch after it was a full reconnect). A new loop ends
-  # the one the window named, if it still runs.
-  stray=''
-  if [ -n "${TMUX:-}" ]; then
-    # a pane that is not ours (see `mine` below): touch nothing, end
-    pp=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_pid}' 2>/dev/null)
-    case "$pp" in ''|*[!0-9]*|"$$"|"$PPID") ;; *) exit 0 ;; esac
-    oldrun=$(tmux show-options -wqv -t "${TMUX_PANE:-}" @remote_run 2>/dev/null)
-    case "$oldrun" in ''|*[!0-9]*|"$$") ;; *)
-      case "$(ps -o command= -p "$oldrun" 2>/dev/null)" in
-        *fleet-remote-view.sh*\ run\ *) kill "$oldrun" 2>/dev/null
-          rv_switch_log stray-end "$node" run 0 "pid $oldrun" ;;
-      esac ;;
-    esac
-    tmux set-window-option -t "${TMUX_PANE:-}" @remote_run "$$" \; \
-         set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$ctl" \; \
-         set-window-option -t "${TMUX_PANE:-}" @remote_view "$view" 2>/dev/null
-  fi
-  # mine — this loop still owns its pane: the pane's process is this loop (`open`
-  # execs `run` as the pane's command), and its window's `@remote_run` is not
-  # another loop's. No tmux, or a server that does not answer = yes. Seen on the
-  # operator's MacBook (issue #2987): a loop whose stage server was replaced kept
-  # running as an orphan — the new server has the same socket path and REUSES the
-  # pane ids, so `pane_gone` saw `%1` alive — and wrote its mac-b line's
-  # `@remote_ctl` / `@remote_down` onto the mac-a window that now had `%1`.
-  mine() {
-    [ -n "$stray" ] && return 1
-    [ -n "${TMUX:-}" ] || return 0
-    local pp r
-    pp=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_pid}' 2>/dev/null) || return 0
-    # (or its parent: a pane whose command is `run …; more` runs it as a child)
-    case "$pp" in ''|*[!0-9]*) ;; *) [ "$pp" = "$$" ] || [ "$pp" = "$PPID" ] || { stray=1; return 1; } ;; esac
-    r=$(tmux show-options -wqv -t "${TMUX_PANE:-}" @remote_run 2>/dev/null) || return 0
-    [ -z "$r" ] || [ "$r" = "$$" ] && return 0
-    stray=1; return 1
-  }
-  side='' upg='' chn='' att=''
-  stop_bg() {   # the sidecar, the upgrader, the channel, and whatever they are waiting in
-    local p
-    for p in $side $upg $chn; do pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; done
-    side='' upg='' chn=''
-    [ -n "${TMUX:-}" ] && [ -z "$stray" ] && tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_chan 2>/dev/null
-    rm -f "$ctl.cmd" "$ctl.ack"
-  }
-  cleanup() {
-    stop_bg
-    # the attach itself (issue #1704): it runs in the background now, so a TERM
-    # reaches this trap at once — and must not leave it holding the far end's
-    # view session (a session on the warm master outlives our own `-O exit`)
-    [ -n "$att" ] && { pkill -P "$att" 2>/dev/null; kill "$att" 2>/dev/null; att=''; }
-    $SSH -S "$ctl" -O exit "$host" >/dev/null 2>&1   # our own master only — never the warm one (#1631)
-    rm -f "$ctl" "$ctl.route" "$ctl.ssherr"
-  }
-  # pane_gone — before a reconnect: this loop's pane (or its whole tmux server)
-  # is no more (issue #1704). A closed pane or a kill-server HUPs the loop, and
-  # with the attach in the background that HUP reaches the trap at once; this
-  # is the belt for a loop that slept through it. Only tmux's own "no such pane"
-  # (or its socket gone) counts — a busy server that does not answer is not gone.
-  pane_gone() {
-    local err
-    [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 1
-    [ -S "${TMUX%%,*}" ] || return 0
-    err=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_id}' 2>&1 >/dev/null)
-    case "$err" in *"can't find pane"*|*"no server running"*) return 0 ;; esac
-    return 1
-  }
-  use="$ctl"   # the master this round rides: ours, or the shell's warm one (#1631)
-  trap 'cleanup; exit 0' INT TERM HUP
-  trap cleanup EXIT
-  # The back channel: once the master connection is up, a second session on it
-  # streams fleet-open requests made in the remote session; each is re-issued here.
-  sidecar() {
-    local _ up=''
-    for _ in $(seq 1 50); do
-      $SSH -S "$use" -O check "$host" >/dev/null 2>&1 && { up=1; break; }
-      sleep 0.2
-    done
-    # No master: never let `-S` fall through to a second, independent login.
-    [ -n "$up" ] || return 0
-    $SSH "${MUXO[@]}" -S "$use" "$host" "bash $rbin/fleet-remote-view.sh watch $(sq "$view")" 2>/dev/null \
-      | python3 -c '
-import json, socket, subprocess, sys
-ssh, ctl, host, opener = sys.argv[1:5]
-for line in sys.stdin:
-    try:
-        req = json.loads(line)
-    except ValueError:
-        continue
-    if req.get("kind") == "url" and str(req.get("url", "")).startswith(("http://", "https://")):
-        subprocess.call(["bash", opener, req["url"]], stdout=subprocess.DEVNULL)
-    elif req.get("kind") == "forward" and str(req.get("rport", "")).isdigit():
-        s = socket.socket(); s.bind(("127.0.0.1", 0)); lport = s.getsockname()[1]; s.close()
-        if subprocess.call([ssh, "-S", ctl, "-O", "forward", "-L",
-                            "127.0.0.1:%d:127.0.0.1:%s" % (lport, req["rport"]), host],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0:
-            path = str(req.get("path") or "/")
-            if not path.startswith("/"):
-                path = "/" + path
-            subprocess.call(["bash", opener, ":%d%s" % (lport, path)], stdout=subprocess.DEVNULL)
-' "$SSH" "$use" "$host" "${FLEET_REMOTE_OPENER:-$BIN/fleet-open.sh}"
-  }
-  # The forward channel (issue #1682): a third session on the same master runs the
-  # far end's `serve` for as long as the connection lives, its stdin/stdout two
-  # FIFOs beside the control socket (`$ctl.cmd` / `$ctl.ack`, both opened
-  # read-write so neither side ever blocks on an open or sees an EOF). Once a
-  # `ping` comes back the window carries `@remote_chan` = "$ctl" and `open`
-  # retargets through it: one ssh round trip, no new session, no remote bash.
-  # An older far end with no `serve` never answers the ping — no `@remote_chan`,
-  # and `open` keeps the one-shot `select`.
-  chan() {
-    local _ up='' n r sp
-    [ -n "${TMUX:-}" ] || return 0
-    for _ in $(seq 1 50); do
-      $SSH -S "$use" -O check "$host" >/dev/null 2>&1 && { up=1; break; }
-      sleep 0.2
-    done
-    [ -n "$up" ] || return 0
-    rm -f "$ctl.cmd" "$ctl.ack"
-    mkfifo "$ctl.cmd" "$ctl.ack" 2>/dev/null || return 0
-    $SSH "${MUXO[@]}" -S "$use" "$host" "bash $rbin/fleet-remote-view.sh serve $(sq "$view")" \
-      0<>"$ctl.cmd" 1<>"$ctl.ack" 2>/dev/null &
-    sp=$!
-    exec 7<>"$ctl.ack" 8<>"$ctl.cmd"
-    printf 'hello ping -\n' >&8
-    if read -r -t 10 -u 7 n r && [ "$n" = hello ] && [ "$r" = 0 ]; then
-      tmux set-window-option -t "${TMUX_PANE:-}" @remote_chan "$ctl" 2>/dev/null
-    fi
-    exec 7<&- 8>&-
-    wait "$sp"
-    tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_chan 2>/dev/null
-  }
-  # The line this connection took (issue #1628): `fleet connect`'s own word in the
-  # shell (FLEET_CONNECT_ROUTE_FILE — it chose), else this loop's (`hub` = relay).
-  route_kind() {
-    local k=''
-    [ -s "$use.route" ] && k=$(sed -n 's/.*"kind": *"\([a-z]*\)".*/\1/p' "$use.route" | head -n 1)
-    [ -n "$k" ] || { [ "$route" = hub ] && k=relay || k=direct; }
-    printf '%s' "$k"
-  }
-  # route_via — `<auto|manual> <the route in words>` off `fleet connect`'s route
-  # file (claude-fleet#2886; its route_label: 中转 · Tailscale · 直连 …); nothing
-  # when it did not say (this loop's own line)
-  route_via() {
-    [ -s "$use.route" ] && [ -f "$BIN/fleet-connect.py" ] || return 0
-    python3 -c 'import importlib.util,json,sys
-try:
-    spec = importlib.util.spec_from_file_location("fc", sys.argv[2]); fc = importlib.util.module_from_spec(spec); spec.loader.exec_module(fc)
-    d = json.load(open(sys.argv[1]))
-    print("%s %s" % ("manual" if d.get("source") == "manual" else "auto", fc.route_label(d.get("kind"), d.get("name"))))
-except Exception: pass' "$use.route" "$BIN/fleet-connect.py" 2>/dev/null
-  }
-  # @remote_route on the window: `relay` → the bar's machine chip says 「· 中转」;
-  # @remote_via (claude-fleet#2886) the line and who chose it, for the top bar
-  mark_route() {
-    [ -n "${TMUX:-}" ] && [ -z "$stray" ] || return 0
-    if [ "${1:-}" = relay ]; then tmux set-window-option -t "${TMUX_PANE:-}" @remote_route relay 2>/dev/null
-    else tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_route 2>/dev/null; fi
-    if [ -n "${2:-}" ]; then tmux set-window-option -t "${TMUX_PANE:-}" @remote_via "$2" 2>/dev/null
-    else tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_via 2>/dev/null; fi
-    return 0
-  }
-  # The upgrader (issue #1628): once the master is up, mark its line. (On the
-  # old client's hub relay it also tried a direct line every
-  # FLEET_CONNECT_UPGRADE_SECS — that client went with #3008.)
-  upgrader() {
-    local _ up='' kind via
-    for _ in $(seq 1 50); do
-      $SSH -S "$use" -O check "$host" >/dev/null 2>&1 && { up=1; break; }
-      sleep 0.2
-    done
-    [ -n "$up" ] || return 0
-    kind=$(route_kind); via=$(route_via); mark_route "$kind" "$via"
-    return 0
-  }
-  # A fleet's own proxy alternates direct / hub below (the old client's
-  # `fleet connect` route picking and pinned routes went with it, #3008).
-  route=direct; delay=1; retest=''; gone_since=''; tries=0; fails=0
-  while :; do
-    mine || { rv_switch_log stray-end "$node" run 0 "pid $$"; exit 0; }
-    # Machine to machine (issue #1626): a plain-ssh view from a hub node asks the
-    # hub for a five-minute certificate to THIS machine first. rc 3 = no hub here
-    # (or it predates #1626): plain ssh, as before; rc 1 = the hub said no or is
-    # down — pause and say so, never fall back to a standing key. A view driven by
-    # the shell (FLEET_REMOTE_SSH_CMD) rides the person's own certificate instead.
-    peer=(); peerwhy=''
-    if [ -z "${FLEET_REMOTE_SSH_CMD:-}" ] && [ -f "$BIN/fleet-peer-cert.sh" ]; then
-      peerout=$(bash "$BIN/fleet-peer-cert.sh" "$(hub_node "$node")" view 2>"${ctl}.err"); prc=$?
-      peerwhy=$(tail -n 1 "${ctl}.err" 2>/dev/null); rm -f "${ctl}.err"
-      case "$prc" in
-        0) while IFS= read -r o; do [ -n "$o" ] && peer+=("$o"); done <<EOF_PEER
-$peerout
-EOF_PEER
-           ;;
-        3) peerwhy='' ;;
-        *) printf '\033[2J\033[H→ %s 暂停：%s\n' "$node" "${peerwhy#fleet-peer-cert: }"
-           [ "$delay" -lt 30 ] && delay=$(( delay * 2 ))
-           printf '%ss 后再向入口申请 · Ctrl-C 关闭窗口\n' "$delay"
-           sleep "$delay"; continue ;;
-      esac
-    fi
-    use="$ctl"
-    pane_gone && exit 0   # the cleanup trap runs on the way out (issue #1704)
-    # The row picked last (issue #1876): `open` writes it on this window, so a
-    # reconnect lands where the person is now, not where this loop began.
-    if [ -n "${TMUX:-}" ]; then
-      cur=$(tmux show-options -wqv -t "${TMUX_PANE:-}" @remote 2>/dev/null)
-      case "$cur" in "$node":?*) wid=${cur#"$node":} ;; esac
-    fi
-    # The login that holds this worker's fleet (issue #2430): one person may have
-    # two logins on the machine, and the far end finds a worker only in its own
-    # login's fleets. Named → every connection this round is made as it (`-l`,
-    # and FLEET_CONNECT_LOGIN for `fleet connect`). Unnamed → the default login,
-    # as before.
-    login=$(fleet_fleet_login "$wid" 2>/dev/null) || login=''
-    lopt=(); [ -n "$login" ] && lopt=(-l "$login")
-    export FLEET_CONNECT_LOGIN="$login"
-    [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_login "$login" 2>/dev/null
-    [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$use" 2>/dev/null
-    if [ "$use" != "$ctl" ]; then
-      printf '\033[2J\033[H→ 正在连接 %s (%s · 已连) …\n' "$node" "$host"
-      opts=(-tt "${MUXO[@]}" -S "$use" ${lopt[@]+"${lopt[@]}"})
-    else
-      printf '\033[2J\033[H→ 正在连接 %s (%s%s%s) …\n' "$node" "$host" "$( [ "$route" = hub ] && printf ' · 经入口中转')" \
-        "$( [ ${#peer[@]} -gt 0 ] && printf ' · 入口证书 5 分钟')"
-      # keepalive 2 s × 3: a dead line is seen in ≤ 6 s (issue #1631, was 5 × 3);
-      # no compression (a LAN / tailnet only pays its latency), low-delay QoS
-      opts=(-tt -o ServerAliveInterval=2 -o ServerAliveCountMax=3 -o ConnectTimeout=8
-            -o "IPQoS=lowdelay throughput" -o Compression=no
-            -o ControlMaster=yes -o "ControlPath=$ctl" "${MASTERO[@]}" -o ControlPersist=no ${peer[@]+"${peer[@]}"} ${lopt[@]+"${lopt[@]}"})
-      [ "$route" = hub ] && opts+=(-o "ProxyCommand=$(sq "$BIN/fleet") connect --proxy $(sq "$(hub_node "$node")")")
-      rm -f "$ctl" "$ctl.route"
-    fi
-    sidecar & side=$!
-    upgrader & upg=$!
-    chan & chn=$!
-    started=$(date +%s)
-    # In the BACKGROUND, then `wait` (issue #1704): bash runs a trap only once the
-    # foreground command returns, and an attach never returns — a TERM waited
-    # forever. `wait` returns on a trapped signal; `0<&0` keeps the pane's tty as
-    # its stdin (a background job's default is /dev/null). ssh's own words go to
-    # a file, read back below in a person's words (issue #1775 §3).
-    : > "$ctl.ssherr"
-    # Between two connections nothing the person types is echoed (issue #1876):
-    # ssh -tt takes the tty raw for the session and gives back this state.
-    [ -t 0 ] && stty -echo 2>/dev/null
-    [ -n "${TMUX:-}" ] && tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_down 2>/dev/null
-    FLEET_CONNECT_ROUTE_FILE="$ctl.route" FLEET_CONNECT_RETEST="$retest" \
-      $SSH ${opts[@]+"${opts[@]}"} "$host" "bash $rbin/fleet-remote-view.sh attach $(sq "$wid") $(sq "$view")" \
-      0<&0 2>"$ctl.ssherr" &
-    att=$!
-    wait "$att"; rc=$?
-    att=''
-    # The line is gone (issue #1876): `open` now reconnects instead of selecting
-    # over it, and the far end's tmux never got to turn its mouse reporting (and
-    # bracketed paste) off in this pane — the outer tmux would keep handing it
-    # SGR reports nobody reads. Off here, as the far end's exit would have.
-    # when it dropped (issue #1904): the top line says `⟳ <secs>` off it
-    mine && [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_down "$(date +%s)" 2>/dev/null
-    printf '\033[?1000l\033[?1002l\033[?1003l\033[?1005l\033[?1006l\033[?1015l\033[?2004l'
-    [ -t 0 ] && stty -echo 2>/dev/null
-    stop_bg
-    why=$(rv_ssh_why "$ctl.ssherr" | cut -c1-120)
-    # the reason on a line of its own, above the drop line (issue #1775 §3): a
-    # long one wrapping into it would split the line a person reads
-    mark_route ''
-    retest=last
-    case "$rc" in
-      0) exit 0 ;;                                   # the remote client ended on purpose
-      3) # Not live there right now (issue #2484): a machine whose tmux restarted or
-         # whose node program is updating brings its sessions back — same @fleet_id,
-         # so the same address — within a tick or two. Ask again every
-         # FLEET_REMOTE_GONE_STEP (5s) for FLEET_REMOTE_GONE_SECS (120s) before
-         # saying it is gone.
-         now=$(date +%s); [ -n "$gone_since" ] || gone_since=$now
-         gstep=${FLEET_REMOTE_GONE_STEP:-5}; gmax=${FLEET_REMOTE_GONE_SECS:-120}
-         if [ $(( now - gone_since )) -lt "$gmax" ]; then
-           printf '\n%s 机器在重启，稍等 · 每 %ss 再连一次，最多 %ss\n' "$node" "$gstep" "$gmax"
-           sleep "$gstep"; continue
-         fi
-         if [ "$wid" = - ]; then printf '\n%s 上没有活着的 fleet 会话。按任意键关闭。\n' "$node"
-         else printf '\n%s 已不在 %s 上（结束或搬走了）。按任意键关闭。\n' "${wid#*/}" "$node"; fi
-         read -r -n 1 -s _; exit 0 ;;
-    esac
-    gone_since=''
-    # A drop after a good session reconnects at once; a failing route backs off and,
-    # when the hub relay is configured, alternates with it.
-    tries=$(( tries + 1 ))
-    if [ $(( $(date +%s) - started )) -gt 30 ]; then delay=1; tries=1; fails=0
-    else
-      fails=$(( fails + 1 ))
-      hub_relay_ok && { [ "$route" = direct ] && route=hub || route=direct; }
-      [ "$delay" -lt 10 ] && delay=$(( delay * 2 ))
-    fi
-    [ -n "$why" ] && printf '\n原因：%s' "$why"
-    printf '\n与 %s 的连接断了（exit %s），%ss 后重连 · Ctrl-C 关闭窗口\n' "$node" "$rc" "$delay"
-    sleep "$delay"
-  done
-  ;;
-
-# ---------------------------------------------------------------------------------
 attach)
-  # `--thin` (issue #2763): the thin client's 看台, its own options — rv_attach_thin
+  # only the 看台 (issue #2763): a plain / view attach was the proxy window's far
+  # end, deleted with it (T606)
   [ "${1:-}" = --thin ] && { shift; rv_attach_thin "$@"; exit $?; }
-  while [ $# -gt 0 ]; do
-    # a bare `-` is the machine itself (the shell's first window), not an option (#1712)
-    case "$1" in --) shift; break ;; -) break ;; -*) note "attach: unknown option $1"; exit 2 ;; *) break ;; esac
-  done
-  wid="${1:-}"; view="${2:-}"; w=''
-  if [ -z "$wid" ] || [ "$wid" = - ]; then
-    # The machine itself (issue #1484): this login's one fleet session (one fleet
-    # per login, #980), as it stands — the shell's first window lands here.
-    s=$(fleet_sockets | head -n 1)
-    [ -n "$s" ] || { note "no fleet session is live on $(hostname -s)"; exit 3; }
-    sock=$(fleet_socket "$s")
-  else
-    loc=$(fleet_worker_locate "wid:${wid#wid:}" 2>/dev/null)
-    case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; exit 3 ;; esac
-    set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
-    T display-message -p -t "=$s:$w" '' >/dev/null 2>&1 || { note "cannot select $w"; exit 3; }
-  fi
-  # A row a SIGKILLed proxy left behind; what an older version's rule left (#1713).
-  rv_prune
-  rv_legacy_undo "$s"
-  fleet_guide_arrive "$s" attach >/dev/null 2>&1   # a person is here: a pending guide opens (#4852)
-  # Register this client (issue #1485): a <view> id = a proxy view, with the
-  # spool its `watch` drains.
-  reg=''; g=''; gid=''
-  if [ -n "$view" ] && tty=$(tty 2>/dev/null); then
-    kind=view
-    spool="$view"
-    [ -n "$view" ] || view="$kind-$(hostname -s 2>/dev/null | tr -c 'A-Za-z0-9-' '-')$$-$RANDOM"
-    case "$view" in *[!A-Za-z0-9-]*) note "attach: bad view id $view — not registered" ;; *)
-      # The last connection of this very view id may still hold it (#1907).
-      rv_takeover "$view" "$s@view-$view"
-      if mkdir -p "$VIEWS" 2>/dev/null \
-         && printf '%s\t%s\t%s\t%s\t%s\n' "$tty" "$s" "$kind" "$(date +%s)" "$$" > "$VIEWS/$view"; then
-        reg="$view"
-        [ -n "$spool" ] && mkdir -p "$VIEWS/$spool.d" 2>/dev/null
-        # This client's own VIEW SESSION (issue #1489): grouped onto the fleet's —
-        # the same windows, a current window of its own — with the status line and
-        # prefix off for good (the person's own tmux has both). It starts on the
-        # worker's window, or for `-` on the fleet session's current one. Never
-        # the fleet session itself (#1907): a name still taken gets a unique
-        # suffix (`select` finds it by prefix), and no session at all = exit 1,
-        # which `run` reconnects.
-        g="$s@view-$view"
-        gid=$(T new-session -d -P -F '#{session_id}' -t "=$s" -s "$g" 2>/dev/null) \
-          || { g="$s@view-$view-x$$"; gid=$(T new-session -d -P -F '#{session_id}' -t "=$s" -s "$g" 2>/dev/null); } \
-          || gid=''
-        if [ -n "$gid" ]; then
-          T set-option -t "$gid:" status off \; set-option -t "$gid:" prefix None \; \
-            set-option -t "$gid:" prefix2 None 2>/dev/null
-          [ -n "$w" ] || w=$(T display-message -p -t "=$s:" '#{window_id}' 2>/dev/null)
-          [ -z "$w" ] || T select-window -t "$gid:$w" 2>/dev/null
-        else
-          note "attach: no view session for $view — not attaching to the fleet session"
-          rv_unregister "$view"
-          exit 1
-        fi
-        # Before the first frame: the windows' own headers go, one way (#1549).
-        rv_hide_borders "$s"
-      fi ;;
-    esac
-  fi
-  # A plain client sees the worker in the FLEET session — by name: a bare `-t @w`
-  # lands in whichever session holding the window was active last (#1489). A
-  # registered one already selected it in its own view session, so the fleet's
-  # current window — what a person on the node sees — is never moved by a shell.
-  [ -n "$w" ] && [ -z "$g" ] && T select-window -t "=$s:$w" 2>/dev/null
-  # A dropped connection HUPs this shell too: outlive the client, then clean up.
-  trap 'rc=129' HUP
-  if [ -n "$g" ]; then
-    # destroy-unattached is armed IN the attach command: armed on the detached
-    # session a moment earlier, any other client's leaving in between would have
-    # destroyed it before this client arrived. By session ID: a session id is
-    # never reused, so a later connection's session of the same name (#1907) is
-    # never this one's to kill.
-    T attach-session -t "$gid" \; set-option -t "$gid:" destroy-unattached on; rc=$?
-    T kill-session -t "$gid" 2>/dev/null
-  else
-    T attach-session -t "=$s"; rc=$?
-  fi
-  # Leaving changes nothing on this machine but the registry (issue #1713) — and
-  # only this attach's own row: a reconnect may have written its own since.
-  [ -n "$reg" ] && rv_unregister "$reg"
-  exit "$rc"
+  note '已删除：看台走 fleet / attach --thin'
+  exit 2
+  ;;
+open|run|serve|watch|back|reconcile|restore)
+  # the proxy window and what served it (issues #1424, #1484, #1682, #1713) —
+  # deleted with T606 (EPIC T605 C1): a 看台 reaches another machine through its
+  # peer window
+  note '已删除：看台走 fleet / attach --thin'
+  exit 2
   ;;
 
 # ---------------------------------------------------------------------------------
 select)
-  # On <node>, over the proxy's own connection (issue #1484): the worker's window
-  # becomes the current one of the proxy's VIEW SESSION (issue #1489) — named by
-  # the <view> id `run` gave `attach`; the fleet session itself when none is
-  # named (an older `open`) or live. Not live here → 3, and `open` reconnects.
-  # The one-shot form: `open` uses it when the proxy's `serve` channel (below) is
-  # not up. A window spawned since the attach loses its header too (#1549).
+  # On <node> (issue #1484): the worker's window becomes the current one of the
+  # 看台 <view> (issue #1489); the fleet session itself when none is named or
+  # live. Not live here → 3. The slow road of the fast path at the top — a key
+  # the hub named by, another fleet's UUID. A window spawned since the attach
+  # loses its header too (#1549).
   # a home's far 看台 (C4) not attached here yet: 5 — its window lands there when it is
   case "${2:-}" in *-via-*) [ "$(cut -f3 "$VIEWS/$2" 2>/dev/null)" = thin ] || exit 5 ;; esac
   rv_select "${1:-}" "${2:-}"; exit $?
-  ;;
-
-# ---------------------------------------------------------------------------------
-serve)
-  # ON <node>, over the proxy's own connection, for as long as it lives (issue
-  # #1682): `select` without a fresh ssh session, bash and fleet-lib per click.
-  # `run` holds its stdin/stdout; one request per line, `<nonce> select <wid>`
-  # (or `<nonce> ping -`), one answer per line, `<nonce> <rc>`. The view id is
-  # this connection's, fixed at start. EOF (the proxy went) ends it.
-  view="${1:-}"
-  while IFS=' ' read -r nonce op arg; do
-    case "$nonce" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
-    case "$op" in
-      ping) rc=0 ;;
-      select) rv_select "$arg" "$view" 2>/dev/null; rc=$? ;;
-      *) rc=2 ;;
-    esac
-    printf '%s %s\n' "$nonce" "$rc" || exit 0
-  done
-  exit 0
-  ;;
-
-# ---------------------------------------------------------------------------------
-reconcile|restore)
-  # Both retired with the rule (issue #1713). Kept for ONE version: the [77]
-  # hooks an older attach set still call `reconcile`, and `restore` was the
-  # escape hatch — each now undoes that older version's leftovers and no more.
-  s="${1:-}"; [ -n "$s" ] || exit 2
-  sock=$(fleet_socket "$s")
-  rv_legacy_undo "$s"
-  exit 0
-  ;;
-
-# ---------------------------------------------------------------------------------
-back)
-  # From a proxy window, back to the last LOCAL window (issue #1475): the one the
-  # row was clicked from, as a rule — never another proxy; failing that, the
-  # first local window. Anywhere else: nothing (the key is a no-op there).
-  t="${1:-}"; [ -n "$t" ] || t=$(tmux display-message -p '#{session_id}' 2>/dev/null)
-  [ -n "$t" ] || exit 0
-  cur=$(tmux display-message -p -t "$t:" '#{window_id}' 2>/dev/null)
-  [ -n "$cur" ] && [ -n "$(tmux show-options -wqv -t "$cur" @remote 2>/dev/null)" ] || exit 0
-  w=$(tmux list-windows -t "$t" -F '#{window_last_flag} #{window_id} #{@remote}' 2>/dev/null \
-      | awk '$1 == 1 && $3 == "" { print $2; exit }')
-  [ -n "$w" ] || w=$(tmux list-windows -t "$t" -F '#{window_id} #{@remote}' 2>/dev/null \
-                     | awk '$2 == "" { print $1; exit }')
-  [ -n "$w" ] && tmux select-window -t "$w" 2>/dev/null
-  exit 0
   ;;
 
 # ---------------------------------------------------------------------------------
@@ -1620,24 +844,6 @@ prune)
   s=$(fleet_sockets | head -n 1)
   if [ -n "$s" ]; then sock=$(fleet_socket "$s"); rv_prune; else rv_reap_orphans; fi
   exit 0
-  ;;
-
-# ---------------------------------------------------------------------------------
-watch)
-  view="${1:-}"
-  case "$view" in ''|*[!A-Za-z0-9-]*) exit 2 ;; esac
-  d="$VIEWS/$view.d"
-  # Wait for attach to register, then stream: one JSON line per request, oldest
-  # first, deleted once printed. A broken pipe (the proxy went away) ends it.
-  for _ in $(seq 1 50); do [ -d "$d" ] && break; sleep 0.2; done
-  while [ -d "$d" ]; do
-    for f in "$d"/*.json; do
-      [ -f "$f" ] || continue
-      tr -d '\n' < "$f" && printf '\n' || exit 0
-      rm -f "$f"
-    done
-    sleep 0.5
-  done
   ;;
 
 # ---------------------------------------------------------------------------------
@@ -1695,9 +901,7 @@ shell-here)
   exec "$sh_" -l
   ;;
 
-# ---------------------------------------------------------------------------------
-
 *)
-  sed -n '2,57p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2 ;;
 esac

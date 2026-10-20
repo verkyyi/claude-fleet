@@ -61,8 +61,6 @@ Tabs and newlines inside a field become spaces. The reason is passed through
 | `home` | the hub's machine pick (`fleet`) did not give one | the hub's code (`no_machine_online`, `opening`, `device_revoked`, …) or `unreachable` | the hub's words (+ the TLS hint, #2878) |
 | `pick` | the routes were measured | `ok` · `fail` | every route: `<name> <answered>/<probes>` and its last error or skip |
 | `pick` (route column `direct`) | a reconnect's remembered line had a better class of line beside it and that one answered — a same-network LAN line (#3074), or the tailnet under `FLEET_CONNECT_PREFER_TAILNET=1` (#2987) | `ok` | `<name> over remembered <name>` · `tailnet <name> over remembered <name>` |
-| `switch` | `fleet-remote-view.sh open` — a click on a session row (#2987); ms = the whole `open` | `ok` | route column = how: `chan` (the serve channel, one round trip) · `select` (a one-shot over the window's master) · `readopt` (its control socket was gone; the warm master did it and the window took it) · `respawn` (a full reconnect — the reason says why: `down` · `chan no answer` · `ctl gone: <path>` · `select failed`) · `new` (a new proxy window) |
-| `stray-end` | a proxy `run` loop that found its pane not its own ended (#2987) | `ok` | `pid N` |
 | `ssh-start` | ssh is started | — | `<route name> <host>:<port> login=<login>` |
 | `ssh-end` | ssh ended | `exit N` · `signal N` | `ssh ended normally` · `ssh: connection failed or was cut (255)` · `the remote command's exit` (+ `this side got signal N` when the client was signalled) |
 | `relay-open` | a relay's handshake (ssh's ProxyCommand) | `ok` (ms = handshake) · `fail` | the hub URL · the refusal |

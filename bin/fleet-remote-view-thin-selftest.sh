@@ -6,9 +6,10 @@
 # Two ISOLATED tmux servers: NODE (`-L <its session>`, the home machine's fleet —
 # fleet_socket is the session name) and TERM (`-L tvT<pid>`), whose pane is the
 # person's terminal: it runs the attach the way ssh -tt would, with $TMUX unset.
-#   Z. degenerate — a plain attach (no --thin), a view attach and a person's
-#                   direct attach leave the server's global options, window
-#                   options, hooks and key tables byte for byte as they were
+#   Z. degenerate — a plain / view attach (no --thin) and the proxy window's
+#                   other modes are deleted (T606): one line, exit 2, nothing
+#                   made; with a person's direct attach, the server's global
+#                   options, window options, hooks and key tables byte for byte
 #   A. attach     — `attach --thin` makes `<fleet>@view-<id>`: status on, at the
 #                   top, every 2 s, its line `fleet-topbar.py render --node`, no
 #                   destroy-unattached; with no cur= to go back to it hands the
@@ -23,6 +24,9 @@
 #                   剩余 · model · effort
 #   C. cur=       — switching windows in the 看台 moves `cur=` (the [78] hook, gated
 #                   on @view_thin: a switch in the fleet session writes nothing)
+#   S. select     — `select <wid> <看台>` (a home's peer window, the fast path)
+#                   moves that 看台 alone; with no 看台 the fleet session; a
+#                   worker not here 3; a far 看台 not here yet 5
 #   D. keep       — the client gone: the 看台 and its row stay (left=), `health`
 #                   counts no orphan; `--resume` comes back to the same session on
 #                   the same window
@@ -54,7 +58,7 @@
 #                   node's `bell-action any`, a BEL in another window reaches neither
 #                   a 看台's terminal nor a far 看台's (`<id>-via-<home>`, the client
 #                   a home's peer window is); a BEL in the shown window reaches both;
-#                   an old client's view session still rings for any window
+#                   a direct client of the fleet session still rings for any window
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -150,16 +154,18 @@ tt set-environment -g FLEET_VIEW_FIRST_CMD "echo >> $WORK/first.log"
 # Z. degenerate: no --thin ⇒ the server's globals byte for byte
 # ============================================================================
 Z0=$(globals); F0=$(fleetopts)
-term plain "-"
-waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' list-clients 2>/dev/null | wc -l | tr -d ' ')\" -ge 1 ]" || fail "Z: the plain attach never arrived"
-term shellv "- v0"
-waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '=$RS@view-v0' 2>/dev/null" || fail "Z: the view attach made no view session"
+for m in "attach -" "attach - v0" "open $U/fid-7" "run m9 $U/fid-7" "serve v0" "watch v0" "back" "reconcile $RS"; do
+  out=$(env -u TMUX bash "$BIN/fleet-remote-view.sh" $m 2>&1 </dev/null); rc=$?
+  eq "Z: \`$m\` is deleted: exit 2" "2" "$rc"
+  has "Z: …and says where the 看台 went" "$out" "已删除：看台走 fleet / attach --thin"
+done
+eq "Z: …it made no view session" "$RS" "$(tn list-sessions -F '#{session_name}')"
+eq "Z: …and no registry row" "" "$(ls "$FLEET_CONF_DIR/remote-views" 2>/dev/null)"
 tt new-window -d -t "=$TL:" -n direct "env -u TMUX '$REAL_TMUX' -L '$RS' attach -t '=$RS'; sleep 300"
 sleep 1
-eq "Z: a plain / view / direct attach leaves the globals (options, window + server options, hooks, keys) byte for byte" "$Z0" "$(globals)"
+eq "Z: the deleted modes and a direct attach leave the globals (options, window + server options, hooks, keys) byte for byte" "$Z0" "$(globals)"
 hasnt "Z: no [78] hook without --thin" "$(tn show-hooks -g)" "session-window-changed[78]"
-for w in plain shellv direct; do tt kill-window -t "=$TL:$w" 2>/dev/null; done
-waitfor 5 sh -c "! '$REAL_TMUX' -L '$RS' has-session -t '=$RS@view-v0' 2>/dev/null" || fail "Z: the view session outlived its client"
+tt kill-window -t "=$TL:direct" 2>/dev/null
 tn select-window -t "=$RS:home"
 F0=$(fleetopts)
 tn bind-key -T root F11 display-message x   # a stand-in for the globals the thin attach must not touch
@@ -256,6 +262,21 @@ waitfor 5 sh -c "[ \"\$(tr '\t' '\n' < '$FLEET_CONF_DIR/remote-views/dev1' | sed
 tn select-window -t "=$RS:$W7"; sleep 1
 eq "C: a switch in the fleet session writes nothing" "$U/fid-8" "$(rowget dev1 cur)"
 eq "C: …and only one row" "dev1" "$(ls "$FLEET_CONF_DIR/remote-views")"
+
+# ============================================================================
+# S. select — a home's peer window switching this 看台 (the fast path), and the
+# slow road for a fleet session / a worker not here
+# ============================================================================
+tn select-window -t "=$RS:home"
+env -u TMUX bash "$BIN/fleet-remote-view.sh" select "wid:$U/fid-7" dev1 2>/dev/null; eq "S: select <wid> <看台> answers 0" "0" "$?"
+eq "S: …that 看台 shows worker 7, the fleet session stays where it was" "$W7 home" "$(vcur dev1) $(tn display-message -p -t "=$RS:" '#{window_name}')"
+env -u TMUX bash "$BIN/fleet-remote-view.sh" select "$U/issue-8" 2>/dev/null; eq "S: select <wid> (by its key) with no 看台 answers 0" "0" "$?"
+eq "S: …it moves the fleet session and nobody's 看台" "$W8 $W7" "$(tn display-message -p -t "=$RS:" '#{window_id}') $(vcur dev1)"
+env -u TMUX bash "$BIN/fleet-remote-view.sh" select "$U/fid-gone" dev1 >/dev/null 2>&1; eq "S: a worker not live here: 3" "3" "$?"
+env -u TMUX bash "$BIN/fleet-remote-view.sh" select "$U/fid-8" dev1-via-home >/dev/null 2>&1; eq "S: a far 看台 not here yet: 5" "5" "$?"
+env -u TMUX bash "$BIN/fleet-remote-view.sh" select "$U/fid-8" dev1 2>/dev/null
+waitfor 5 sh -c "[ \"\$(tr '\t' '\n' < '$FLEET_CONF_DIR/remote-views/dev1' | sed -n 's/^cur=//p')\" = '$U/fid-8' ]" \
+  || fail "S: back on worker 8, cur= follows" "$(rowget dev1 cur)"
 
 # ============================================================================
 # D. the client goes; the 看台 stays; --resume comes back
@@ -439,11 +460,12 @@ bell() { tt display-message -p -t "=$TL:$1" '#{window_bell_flag}' 2>/dev/null; }
 ring() { printf '\a' > "$(tn display-message -p -t "$1" '#{pane_tty}')"; }
 term bellh "--thin --view devb --want $U/fid-7 --device $DEV --route lan --token tbk"
 term bellf "--thin --view devf-via-home --want $U/fid-7 --device $DEV --route lan --token tfk"
-term bello "- devo"
-for v in devb devf-via-home devo; do
+tt new-window -d -t "=$TL:" -n bello "env -u TMUX '$REAL_TMUX' -L '$RS' attach -t '=$RS'; sleep 300"
+waitfor 5 sh -c "[ -n \"\$('$REAL_TMUX' -L '$RS' list-clients -t '=$RS' 2>/dev/null)\" ]" || fail "R: no direct client on the fleet session"
+for v in devb devf-via-home; do
   waitfor 5 sh -c "[ -n \"\$('$REAL_TMUX' -L '$RS' list-clients -t '=$(vs $v)' 2>/dev/null)\" ]" || fail "R: no client on $(vs $v)"
 done
-tn select-window -t "=$(vs devo):$W7"
+tn select-window -t "=$RS:$W7"
 waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '=$(vs devb):' '#{window_id}' 2>/dev/null)\" = '$W7' ]"
 eq "R: a 看台 says bell-action current" "current" "$(tn show-options -qv -t "=$(vs devb):" bell-action)"
 eq "R: … a far 看台 too" "current" "$(tn show-options -qv -t "=$(vs devf-via-home):" bell-action)"
@@ -453,7 +475,7 @@ eq "R: no bell before any BEL" "0 0 0" "$(bell bellh) $(bell bellf) $(bell bello
 ring "$W8"; sleep 1
 eq "R: a BEL in another window does not reach the 看台's terminal" "0" "$(bell bellh)"
 eq "R: … nor a far 看台's (a peer window's client)" "0" "$(bell bellf)"
-eq "R: an old client's view still rings for any window" "1" "$(bell bello)"
+eq "R: a direct client of the fleet session still rings for any window" "1" "$(bell bello)"
 ring "$W7"; sleep 1
 eq "R: a BEL in the shown window reaches the 看台's terminal" "1" "$(bell bellh)"
 eq "R: … and a far 看台's" "1" "$(bell bellf)"
