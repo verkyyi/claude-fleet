@@ -771,25 +771,99 @@ def supervise(argv):
         return supervise_guarded(argv, pane, c, guard)
 
 
-def supervise_guarded(argv, pane, c, guard):
-    old_raw = option(pane, "@launch_receipt")
-    old = check_receipt(c, json.loads(old_raw)) if old_raw else None
-    if option(pane, "@launch_started") and old is None:
-        raise ValueError("interrupted: an earlier start lost native identity; no fresh rerun")
+def id_segment(fid):
+    """The ID ledger's newest native segment {native, agent, …}, or None."""
+    try:
+        import fleet_id
+        segs = fleet_id.fold(fleet_id.read(fid))["segments"]
+    except (ImportError, OSError, ValueError, KeyError, TypeError):
+        return None
+    return segs[-1] if segs else None
+
+
+def argv_resume(argv):
+    for i, arg in enumerate(argv[:-1]):
+        if arg in ("resume", "--resume"):
+            return argv[i + 1]
+    return ""
+
+
+def by_id_refuse(pane, c, item, why):
+    """An ID-road reopen that cannot go on: say WHICH item (C15), on the window
+    and in the log — never a bare «Session exited unexpectedly»."""
+    line = "ID road · %s: %s (window ID %s, pre-switch launch of %s)" % (
+        item, why, c["worker_id"].split("/")[1], c["task"])
+    launch_log("%s %s: %s" % (c["task"], c["operation_id"], line))
+    try:
+        tmux("set-option", "-w", "-t", pane, "@launch_error", line[:400])
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ValueError(line)
+
+
+def by_id_admit(argv, pane, c, old):
+    """A window opened before the ID switch, reopened after it (EPIC T497 C15,
+    design §5 «迁移后同一个 ID»). Its @launch names a task record the hub no
+    longer answers for sessions, so nothing asks it: the window's own @fleet_id
+    is the session, the ID ledger's newest segment the conversation to resume.
+    The local proofs stay — same ID, the old process gone, the provider, the
+    worktree — and each refusal names its item. Returns (argv, provider, resume).
+    """
+    fid = option(pane, "@fleet_id")
+    if fid != c["worker_id"].split("/")[1]:
+        raise by_id_refuse(pane, c, "identity", "window @fleet_id %s is not the launch's executor" % (fid or "(none)"))
     if old and same_process(old):
-        raise ValueError("the original native process is still alive; reconnect to it")
-    # The spawner records the seed file BEFORE opening the window. Remove it
-    # from the launcher's argv; neither native provider sees it before proof.
-    seedfile = option(pane, "@launch_seed")
-    seed = Path(seedfile).read_text().rstrip("\n") if seedfile and not old else ""
-    argv, asked, resume = held_argv(argv, seed, bool(seedfile), old)
-    if asked != c["provider"]:
-        raise ValueError("resume provider differs from accepted launch")
-    if old:
-        seed = ""  # a launch seed is never redelivered on recovery
-    current_task(c)  # stale transfers/recovery cannot even start a native process
-    worktree = prepare_worktree(pane, old)
-    native_worktree = prepare_native_worktree(pane, asked, worktree, old)
+        raise by_id_refuse(pane, c, "process", "the original native process is still alive; reconnect to it")
+    seg = id_segment(fid)
+    native = seg["native"] if seg else (old or {}).get("native_session", "")
+    agent = seg["agent"] if seg else c["provider"]
+    if not valid_uuid(native):
+        raise by_id_refuse(pane, c, "segment", "neither the ID ledger nor the launch receipt names a conversation"
+                           " to resume; a fresh start is a new ID")
+    try:
+        out = held_argv(argv, "", False, {"native_session": native})
+    except ValueError as e:
+        raise by_id_refuse(pane, c, "resume", "%s — asked %s, the ID's newest segment is %s" % (
+            e, argv_resume(argv) or "no resume", native)) from e
+    if out[1] != agent:
+        raise by_id_refuse(pane, c, "provider", "asked %s, the ID's newest segment is %s" % (out[1], agent))
+    return out
+
+
+def supervise_guarded(argv, pane, c, guard):
+    by_id = id_switch_on()
+    old_raw = option(pane, "@launch_receipt")
+    try:
+        old = check_receipt(c, json.loads(old_raw)) if old_raw else None
+    except ValueError as e:
+        if by_id:
+            raise by_id_refuse(pane, c, "receipt", str(e)) from e
+        raise
+    seed = ""
+    if by_id:
+        argv, asked, resume = by_id_admit(argv, pane, c, old)
+    else:
+        if option(pane, "@launch_started") and old is None:
+            raise ValueError("interrupted: an earlier start lost native identity; no fresh rerun")
+        if old and same_process(old):
+            raise ValueError("the original native process is still alive; reconnect to it")
+        # The spawner records the seed file BEFORE opening the window. Remove it
+        # from the launcher's argv; neither native provider sees it before proof.
+        seedfile = option(pane, "@launch_seed")
+        seed = Path(seedfile).read_text().rstrip("\n") if seedfile and not old else ""
+        argv, asked, resume = held_argv(argv, seed, bool(seedfile), old)
+        if asked != c["provider"]:
+            raise ValueError("resume provider differs from accepted launch")
+        if old:
+            seed = ""  # a launch seed is never redelivered on recovery
+        current_task(c)  # stale transfers/recovery cannot even start a native process
+    try:
+        worktree = prepare_worktree(pane, old)
+        native_worktree = prepare_native_worktree(pane, asked, worktree, old)
+    except (OSError, ValueError) as e:
+        if by_id:
+            raise by_id_refuse(pane, c, "worktree", str(e) or type(e).__name__) from e
+        raise
     env = dict(os.environ, FLEET_LAUNCH_CONTEXT=json.dumps(c), FLEET_LAUNCH_SUPERVISOR=str(os.getpid()),
                FLEET_LAUNCH_NATIVE=resume)
     env.pop("FLEET_LAUNCH_WORKTREE", None)
@@ -854,7 +928,8 @@ def supervise_guarded(argv, pane, c, guard):
             except (OSError, subprocess.SubprocessError):
                 pass
             raise ValueError(line)
-        publish(c, receipt)
+        if not by_id:   # the ID road asks the hub nothing (C15)
+            publish(c, receipt)
         if seed:
             # A final process/identity comparison immediately precedes native
             # inbox delivery. No keystrokes, alternate provider or queued retry.
@@ -877,12 +952,14 @@ def supervise_guarded(argv, pane, c, guard):
             result = subprocess.run(send, input=seed, text=True, capture_output=True, timeout=20, env=env)
             if result.returncode != 0:
                 raise ValueError("unknown: native input delivery did not confirm; no retry")
-        receipt["phase"] = "delivered" if seed else "resumed" if old else "ready"
+        receipt["phase"] = "delivered" if seed else "resumed" if old or by_id else "ready"
         stamp(pane, "@launch_receipt", receipt)
         tmux("set-option", "-wu", "-t", pane, "@launch_seed")
         verified = True
         guard.close()  # future stop reconciliation may inspect this incarnation
         status = child.wait()
+        if by_id:
+            return status   # no execution to retire: the ID's ledger is the record
         # Retire execution ownership or acknowledge a pending cancellation.
         # Explicit success/failure already committed while the session lived;
         # native exit alone never creates either work outcome.
@@ -906,7 +983,8 @@ def transfer_check(pane, socket):
         return
     c = validate_context(json.loads(raw))
     inspect(c, pane, socket)
-    current_task(c)
+    if not id_switch_on():   # with the switch on the window's ID is the binding (C15)
+        current_task(c)
 
 
 def transfer_commit(pane, socket, target, bundle):

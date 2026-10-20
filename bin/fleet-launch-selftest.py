@@ -13,6 +13,10 @@ import tempfile
 import unittest
 from unittest import mock
 
+# The window's own ID switch (EPIC T497 C6) stays off unless a test turns it on:
+# never this login's ids/.switch.
+os.environ["FLEET_ID_SWITCH"] = "off"
+import fleet_id
 import fleet_launch as launch
 from fleet_control import Control
 from fleet_dispatch import resolve
@@ -748,6 +752,138 @@ class HardLinkedBinary(Receipts):
 
     def test_failure_with_no_receipt_says_so(self):
         self.assertIn("no receipt: the native SessionStart hook recorded none", self.failed_launch({}))
+
+
+class IdRoad(Receipts):
+    """C15 (EPIC T497 design §5): a window opened before the ID switch carries
+    @launch; reopened with the switch on (↵ on the exit page, a ver-stale
+    migrate, a restore) it is the SAME ID resuming its ledger's newest segment —
+    never a task-record call, and a refusal names its item."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.fid = self.context["worker_id"].split("/")[1]
+        self.sid = self.receipt["native_session"]
+
+    def segment(self, native, agent="codex"):
+        with mock.patch.dict(os.environ, {"FLEET_ID_DIR": self.tmp.name}):
+            fleet_id.record_native(self.fid, agent, native, "startup")
+
+    def reopen(self, argv, extra=None, observed=None, fid=None):
+        opts = {"@launch": json.dumps(self.context), "@launch_receipt": json.dumps(self.receipt),
+                "@launch_started": "1", "@fleet_id": self.fid if fid is None else fid,
+                "window_id": "@7", "pane_pid": "11"}
+        opts.update(extra or {})
+        child = mock.Mock(pid=12)
+        child.poll.return_value = None
+        child.wait.return_value = 0
+        observed = observed or dict(self.receipt, pid=43, birth="resumed-process")
+        def tmux(*args, **kw):
+            if args[0] == "set-option":
+                if args[1] == "-wu":
+                    opts.pop(args[4], None)
+                else:
+                    opts[args[4]] = args[5]
+            return ""
+        def popen(argv, **kw):
+            opts["@launch_receipt"] = json.dumps(observed)   # the native hook's receipt
+            return child
+        refused = launch.IDSwitched("the hub reads sessions by ID now (EPIC T497 C6)")
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%1", "FLEET_ID_SWITCH": "on",
+                                         "FLEET_ID_DIR": self.tmp.name,
+                                         "FLEET_CONF_DIR": self.tmp.name}), \
+             mock.patch.object(launch, "option", side_effect=lambda p,k,*a: opts.get(k,"")), \
+             mock.patch.object(launch, "tmux", side_effect=tmux), \
+             mock.patch.object(launch, "same_process", return_value=False), \
+             mock.patch.object(launch, "task_call", side_effect=refused) as asked, \
+             mock.patch.object(launch, "process", return_value=dict(observed, pid=12)), \
+             mock.patch.object(launch, "inspect", return_value=observed), \
+             mock.patch.object(launch, "descendant", return_value=True), \
+             mock.patch.object(launch, "stop_created"), \
+             mock.patch.object(launch.subprocess, "Popen", side_effect=popen) as started, \
+             mock.patch.object(launch.subprocess, "run") as ran, \
+             mock.patch.object(launch.time, "sleep"):
+            try:
+                rc = launch.supervise(argv)
+            finally:
+                asked.assert_not_called()   # no task record is ever asked
+            ran.assert_not_called()          # no finalize, no input
+            return rc, started, opts
+
+    def test_enter_reopen_resumes_the_same_conversation(self):
+        self.segment(self.sid)
+        argv = ["launcher", "--agent", "codex", "--resume", self.sid]
+        rc, started, opts = self.reopen(argv)
+        self.assertEqual(rc, 0)
+        self.assertEqual(started.call_args.args[0], argv)
+        env = started.call_args.kwargs["env"]
+        self.assertEqual(env["FLEET_LAUNCH_NATIVE"], self.sid)
+        self.assertEqual(json.loads(env["FLEET_LAUNCH_CONTEXT"]), self.context)
+        self.assertEqual(json.loads(opts["@launch_receipt"])["phase"], "resumed")
+        self.assertEqual(opts["@fleet_id"], self.fid)
+
+    def test_ver_stale_reopen_drops_the_nudge_and_follows_the_ledger(self):
+        # The conversation moved on after the launch (a /clear): the ledger's
+        # newest segment is the one to resume, not the receipt's.
+        later = "55555555-5555-4555-8555-555555555555"
+        self.segment(self.sid)
+        self.segment(later)
+        argv = ["launcher", "--agent", "codex", "--resume", later, "fleet updated from a to b"]
+        rc, started, _ = self.reopen(argv, observed=dict(self.receipt, native_session=later, pid=43, birth="b"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(started.call_args.args[0], argv[:-1])
+        self.assertEqual(started.call_args.kwargs["env"]["FLEET_LAUNCH_NATIVE"], later)
+
+    def test_no_ledger_resumes_the_receipts_conversation(self):
+        rc, started, _ = self.reopen(["launcher", "--agent", "codex", "--resume", self.sid])
+        self.assertEqual(rc, 0)
+
+    def test_each_refusal_names_its_item(self):
+        self.segment(self.sid)
+        other = "55555555-5555-4555-8555-555555555555"
+        for item, kw in (("identity", dict(fid="66666666-6666-4666-8666-666666666666")),
+                         ("resume", dict(argv=["launcher", "--agent", "codex", "--resume", other])),
+                         ("resume", dict(argv=["launcher", "--agent", "codex"])),
+                         ("provider", dict(argv=["launcher", "--resume", self.sid])),
+                         ("receipt", dict(extra={"@launch_receipt": json.dumps(dict(self.receipt, task="T9"))}))):
+            argv = kw.pop("argv", ["launcher", "--agent", "codex", "--resume", self.sid])
+            with self.subTest(item=item, argv=argv):
+                with mock.patch.object(launch.subprocess, "Popen") as never:
+                    with self.assertRaisesRegex(ValueError, "^ID road · %s: " % item) as got:
+                        self.reopen(argv, **kw)
+                    never.assert_not_called()
+                self.assertIn(self.fid, str(got.exception))
+
+    def test_nothing_to_resume_is_said(self):
+        opts = {"@launch_receipt": ""}
+        with self.assertRaisesRegex(ValueError, "^ID road · segment: "):
+            self.reopen(["launcher", "--agent", "codex"], extra=opts)
+
+    def test_migrate_check_asks_no_task_record(self):
+        with mock.patch.dict(os.environ, {"FLEET_ID_SWITCH": "on"}), \
+             mock.patch.object(launch, "option", return_value=json.dumps(self.context)), \
+             mock.patch.object(launch, "inspect") as inspected, \
+             mock.patch.object(launch, "current_task") as asked:
+            launch.transfer_check("%1", "/sock")
+            inspected.assert_called_once()
+            asked.assert_not_called()
+        with mock.patch.object(launch, "option", return_value=json.dumps(self.context)), \
+             mock.patch.object(launch, "inspect"), \
+             mock.patch.object(launch, "current_task") as asked:
+            launch.transfer_check("%1", "/sock")   # switch off: the record still decides
+            asked.assert_called_once()
+
+    def test_switch_off_keeps_the_task_record_road(self):
+        opts = {"@launch": json.dumps(self.context)}
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%1"}), \
+             mock.patch.object(launch, "option", side_effect=lambda p,k: opts.get(k,"")), \
+             mock.patch.object(launch, "task_call", side_effect=launch.IDSwitched("hub says ID")), \
+             mock.patch.object(launch.subprocess, "Popen") as start:
+            with self.assertRaisesRegex(ValueError, "hub reads|hub says"):
+                launch.supervise(["launcher", "--agent", "codex"])
+            start.assert_not_called()
 
 
 if __name__ == "__main__":

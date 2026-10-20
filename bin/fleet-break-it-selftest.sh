@@ -143,6 +143,8 @@
 #                                                   batons_of, fleet-id.sh family)
 #   launch-binary-renamed                           bin/fleet_launch.py (same_executable / native_tool:
 #                                                   a hard-linked binary is one file, T524)
+#   launch-preswitch-reopen                         bin/fleet_launch.py (by_id_admit: a pre-switch @launch
+#                                                   window reopens as its ID, C15)
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
 #   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
@@ -6000,6 +6002,21 @@ PY
   [ "$out" = "True claude" ] \
     || { WHY="a running Claude seen under its release artifact link read [$out], want «True claude»"; return 1; }
   WHAT="版本切换让在跑的 Claude 换了个硬链接名：启动凭证照样认得同一个进程、同一个 Claude"
+}
+
+# A window opened before the hub's ID switch carries @launch (EPIC T497 C15). Reopened
+# with the switch on — ↵ on its exit page, a ver-stale migrate, a restore — the
+# launcher asked the task record, the hub answered ID_SWITCH, and the session stopped
+# on «Session exited unexpectedly» with its transcript intact (T505, 2026-10-20). It
+# is the same ID now: the ledger's newest segment resumed, no record asked, and a
+# refusal names its item. The supervisor's real logic; native processes are fakes.
+drill_launch_preswitch_reopen() {
+  CAP=20; local t0 out
+  t0=$(now)
+  out=$(cd "$BIN" && env -u FLEET_CONF_DIR PYTHONDONTWRITEBYTECODE=1 python3 fleet-launch-selftest.py IdRoad 2>&1) \
+    || { WHY="the ID road refused a pre-switch window: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="切换前开的窗口在开关 on 后 ↵ / 版本重开：同一个 ID、按账本最新段接回原会话，不问任务记录；对不上时说是哪一项"
 }
 
 # ================================================================ run ====}
