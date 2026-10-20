@@ -136,9 +136,19 @@ call() {
   pair=$(fleet_node_pair) || die 3 "no node token here"
   url=${pair%%	*}; tok=${pair#*	}
   # signed once this login has a key (issue #3710), else the token
-  resp=$(printf 'header = "Authorization: %s"\n' "$(fleet_node_auth "$m" "$url$p" "$tok")" | \
+  # The agent's warm road first (issue T672): one round trip on its kept
+  # connection; nobody there (curl 7) or its own refusal ⇒ the direct one.
+  local sock; sock=$(fleet_hub_sock)
+  if [ -n "$sock" ]; then
+    resp=$(printf 'header = "Authorization: %s"\n' "$(fleet_node_auth "$m" "$url$p" "$tok")" | \
+      "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -K - -o - -w '\n%{http_code}' --unix-socket "$sock" \
+        -H "X-Fleet-Hub: $url" -H "Host: ${url#*://}" -X "$m" -H 'Content-Type: application/json' ${body:+--data-binary "$body"} \
+        "http://${url#*://}$p" 2>/dev/null); rc=$?   # plain on the socket: the agent holds the TLS
+    case "$rc:$resp" in 7:*|0:hubfwd:\ this\ forwarder*|0:hubfwd:\ not\ a\ path*) sock='' ;; esac
+  fi
+  [ -n "$sock" ] || { resp=$(printf 'header = "Authorization: %s"\n' "$(fleet_node_auth "$m" "$url$p" "$tok")" | \
     "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -K - -o - -w '\n%{http_code}' \
-      -X "$m" -H 'Content-Type: application/json' ${body:+--data-binary "$body"} "$url$p" 2>/dev/null); rc=$?
+      -X "$m" -H 'Content-Type: application/json' ${body:+--data-binary "$body"} "$url$p" 2>/dev/null); rc=$?; }
   [ "$rc" -eq 0 ] && [ -n "$resp" ] || { printf 'fleet-task-record: hub unreachable (curl exit %s)\n' "$rc" >&2; return 1; }
   code=$(printf '%s\n' "$resp" | tail -n 1)
   printf '%s\n' "$resp" | sed '$d'
@@ -361,6 +371,9 @@ JSON
   # the record, opens its PR, merges it on a green gate and closes the record with
   # its report; it is reaped once the record is closed (`merged`). Not --spawn: the
   # record waits (await T<n> names it).
+  # The record is there; where it opens is the hub's word next (T672): said at
+  # once on stderr, the placement's own line follows.
+  [ "$spawn" = 1 ] && printf 'fleet-task-record: %s 分配中…\n' "$t" >&2
   if [ -n "$repo" ]; then
     [ "$spawn" = 1 ] || exit 0
     pfa=--placeholder

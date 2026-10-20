@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -81,5 +84,22 @@ func TestNodePlaceNotHereAllFullNamesEach(t *testing.T) {
 	}
 	if macC.count() != 0 {
 		t.Fatal("the asker that said «not here» was sent a start")
+	}
+}
+
+// The answer says how long the hub spent after its pick (claude-fleet T672):
+// the asker's place_ms is its wait less this.
+func TestNodePlaceSaysAfterPick(t *testing.T) {
+	h, _, _, f5, _ := twoNodes(t)
+	b, _ := json.Marshal(map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID, "wait": 0})
+	req, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/node/place", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+h.tokens["mac-d"])
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if v := resp.Header.Get(AfterPickHeader); resp.StatusCode != 200 || v == "" {
+		t.Fatalf("= %d, %s %q; want the after-pick time", resp.StatusCode, AfterPickHeader, v)
 	}
 }

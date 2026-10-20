@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/user"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 	"github.com/coder/websocket/wsjson"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/hubfwd"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/nodesig"
 )
 
@@ -597,6 +599,11 @@ func RunMachine(ctx context.Context, mc MachineConfig) error {
 				log.Printf("machine agent: %s: %v", a.cfg.RunAs.Login, err)
 			}
 		}(a)
+	}
+	// One warm road to the hub for every login's scripts (claude-fleet
+	// T672), beside the daemon's state (/var/db/fleet-node/hub.sock).
+	if mc.ServicesFile != "" {
+		go serveHubFwd(ctx, mc.HubURL, mc.HubDial, filepath.Join(filepath.Dir(mc.ServicesFile), hubfwd.SockName))
 	}
 	log.Printf("ccquota agent --machine %s -> %s (%d logins)", mc.Version, mc.hub(), len(agents))
 	wg.Wait()

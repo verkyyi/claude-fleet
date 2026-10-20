@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/hubfwd"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/identity"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/limits"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
@@ -556,6 +557,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	// and must stay responsive even while a first scan is grinding through a
 	// machine's whole history.
 	go a.runLive(ctx)
+	if a.cfg.Fleet && a.machine == nil && a.cfg.StateDir != "" {
+		// The warm road to the hub for this login's scripts (claude-fleet
+		// T672): ccquota place / lease, the task-record curl, the python
+		// reads — one round trip each instead of a new TLS connection.
+		go serveHubFwd(ctx, a.cfg.HubURL, a.cfg.HubDial, filepath.Join(a.cfg.StateDir, hubfwd.SockName))
+	}
 	if a.cfg.Fleet {
 		// Waited for on the way out, so a stopping agent closes its control
 		// channel cleanly (the hub sees a going-away, not a dead link).

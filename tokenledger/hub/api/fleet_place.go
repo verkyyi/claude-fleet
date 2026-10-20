@@ -90,6 +90,31 @@ type placeRequest struct {
 	As string `json:"as"`
 }
 
+// AfterPickHeader carries, on a placement's answer, the milliseconds the hub
+// spent after it decided where (claude-fleet T672).
+const AfterPickHeader = "X-Fleet-After-Pick-Ms"
+
+// pickTimer stamps AfterPickHeader on the answer once a pick was made.
+type pickTimer struct {
+	http.ResponseWriter
+	picked time.Time
+}
+
+func (t *pickTimer) WriteHeader(code int) {
+	if !t.picked.IsZero() {
+		t.Header().Set(AfterPickHeader, strconv.FormatInt(time.Since(t.picked).Milliseconds(), 10))
+	}
+	t.ResponseWriter.WriteHeader(code)
+}
+
+func (t *pickTimer) Write(b []byte) (int, error) {
+	// an implicit 200 still carries the stamp
+	if t.Header().Get(AfterPickHeader) == "" && !t.picked.IsZero() {
+		t.Header().Set(AfterPickHeader, strconv.FormatInt(time.Since(t.picked).Milliseconds(), 10))
+	}
+	return t.ResponseWriter.Write(b)
+}
+
 // placeHoldTTL is how long an asker's own «not here» keeps it out of the
 // hub's placements (claude-fleet T672): its next heartbeat says the same or
 // better, and a request of its own without one lifts it at once.
@@ -186,6 +211,11 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	}
 	// Its signature, else its token (claude-fleet#3710); the token hash keys
 	// a session's assertion either way.
+	// How long the answer took after the placement was decided (claude-fleet
+	// T672): the asker's place_ms is its whole wait less this — the time to
+	// the hub's word, without a remote start's own opening.
+	pt := &pickTimer{ResponseWriter: w}
+	w = pt
 	ep, tokHash, ok := s.nodeEndpointOr(w, r, "missing bearer token", "unrecognised enrollment token")
 	if !ok {
 		return
@@ -385,6 +415,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	}
 	s.placeHolds.set(fleetID, req.NotHere, now)
 	pl, err := s.pickNodeAfter(p, req.Repo, req.Node, req.Agent, now, declined, "")
+	pt.picked = time.Now()
 	if err != nil {
 		s.placeAudit(p, fleetID, errorObject(err)["code"], now)
 		writeJSON(w, placeStatus(err), map[string]any{"error": errorObject(err), "placement": pl})
