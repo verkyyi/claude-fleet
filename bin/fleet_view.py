@@ -644,7 +644,7 @@ def name_hold(fleet, target, name):
 # in UbuntuMono). FLEET_GLYPHS=ascii swaps in plain ASCII.
 # Plan B (T486 v14, T493): seven states and lost, each a one-cell character with
 # no emoji form — ↻ running · ! waiting on you · ✓ done · ✗ failed · ◌ exited (the
-# agent gone, its window up: only under 已结束 · 还开着) · ∙ idle · ? lost (☾ asleep
+# agent gone, its window up: under 等你) · ∙ idle · ? lost (☾ asleep
 # went with hibernation, T548).
 GLYPHS = {"needs": "!", "fail": "✗", "work": "↻", "done": "✓", "exited": "◌", "idle": "∙", "lost": "?"}
 GLYPHS_ASCII = {"needs": "!", "fail": "x", "work": ">", "done": "+", "exited": "o", "idle": ".", "lost": "?"}
@@ -654,7 +654,9 @@ GLYPHS_ASCII = {"needs": "!", "fail": "x", "work": ">", "done": "+", "exited": "
 GLYPH_COLORS = {"needs": 1, "fail": 1, "work": 2, "done": 4, "exited": 8, "idle": 8, "lost": 3}
 ROW_RED = ("needs", "fail")
 LEGEND = ("work", "needs", "done", "fail", "exited", "idle", "lost")
-GROUPS = ("pin", "ask", "work", "done", "other")
+# The panel's groups (回收 D, T681): 置顶 · 等你 · 在干活 · 排队中, then 已收起 — the
+# closed sessions, a folded section (sec "gone") under them.
+GROUPS = ("pin", "ask", "work", "queue")
 MERGED_PR = ("merged", "live", "deploy…", "deploy✗")
 
 
@@ -685,23 +687,24 @@ def sym_of(state, lost=False):
 
 
 def group_of(state, pinned, landed, ended, asked=False, stage=""):
-    """What the person should do about a row (issues #3179, #4225; plan B, T493):
-    置顶 · 等你 (needs / failed, or an unanswered ⛔ ask on its issue whatever the
-    state) · 在干活 · 做完待收 (done: it handed in its result — its PR on its way,
-    just landed or not; `landed` / `stage` no longer split it) · 已结束 (the
-    producer's mark, and every exited agent whose window is still up — ◌ lives
-    there only) · 其他 (idle, unknown: no result to collect)."""
+    """Whether the row needs you (回收 D, T681; issues #3179, #4225): 置顶 · 等你
+    (needs / failed, an unanswered ⛔ ask on its issue whatever the state, an idle
+    session — its next move is yours, e.g. a plan page waiting on your word — and
+    an exited agent whose window is still up: ↵ resume · r new · q close) · 在干活 ·
+    排队中 (waiting on something that is not you: done with its PR on its way to
+    merge / ship, or done and about to be folded away — the producer's 已结束
+    mark included; unknown). `landed` / `stage` no longer split a group."""
     if pinned:
         return "pin"
-    if state in ("needs", "failed") or asked:
+    if state in ("needs", "failed", "error") or asked:
         return "ask"
     if state in ("working", "looping"):
         return "work"
-    if ended or state == "exited":
-        return "ended"
-    if state in ("done", "landed"):
-        return "done"
-    return "other"
+    if ended:
+        return "queue"
+    if state in ("idle", "sleeping", "exited"):    # sleeping: an older producer's idle (T548)
+        return "ask"
+    return "queue"
 
 
 # A PR's step on its way out (issue #4225), off the producer's PR cell (field 11:
@@ -887,12 +890,13 @@ def gone_age(when, act, now):
 
 
 def closed_secs():
-    """FLEET_VIEW_CLOSED_HOURS (the environment, else fleet.conf's line; default 48):
-    how far back the 已关闭 group lists (issue #3731) — older ones only counted."""
+    """FLEET_VIEW_CLOSED_HOURS (the environment, else fleet.conf's line; default 168,
+    7 days — 回收 D): how far back the 已收起 group lists (issue #3731) — older ones
+    only counted."""
     try:
-        return max(0.0, float(conf_word("FLEET_VIEW_CLOSED_HOURS") or 48)) * 3600
+        return max(0.0, float(conf_word("FLEET_VIEW_CLOSED_HOURS") or 168)) * 3600
     except ValueError:
-        return 48 * 3600.0
+        return 168 * 3600.0
 
 
 # A session's short name (plan B, T486 v14 §1): what it is about, never its
@@ -1132,7 +1136,7 @@ def hub_task(task):
 
 
 # A task record's end (fleet_task_control.TERMINAL): a row whose record says one is
-# 做完待收 whatever its window still runs (EPIC T644 C4, the operator's 2026-10-20 word —
+# done (排队中) whatever its window still runs (EPIC T644 C4, the operator's 2026-10-20 word —
 # a Codex loop left running after the merge kept a closed task 在干活).
 TASK_ENDS = ("succeeded", "failed", "cancelled", "refused")
 
@@ -1330,18 +1334,25 @@ def id_apply(e, fid, known, live=True):
         e["word"] = say("view_legend_exited") if not res else e.get("word", "")
 
 
+def finished(e):
+    """A row in 排队中 that has handed in its result (done, or the producer's 已结束
+    mark): waiting to be folded away, no longer unfinished (EPIC T644 C4)."""
+    return e.get("group") == "queue" and (bool(e.get("ended")) or e.get("state") in ("done", "landed"))
+
+
 def id_display(groups):
     """The ID column shows the code that tells the UNFINISHED apart (EPIC T644 C4):
-    every row above 已结束 but 做完待收 is unfinished; each of those groups' rows shows
+    every open row but a finished one in 排队中 (done, or the producer's 已结束 —
+    回收 D) is unfinished; each of those rows shows
     fleet_id.display_short over them (2 places, one more while another unfinished one
     shares them) and keeps the written code (≥ 4) as `code` for its page. The set is
-    saved (ids/.open) for the top bar and the notifications; 已结束 and 已关闭 rows keep
+    saved (ids/.open) for the top bar and the notifications; finished and 已收起 rows keep
     the written code. Nothing to show ⇒ nothing changes."""
     fi = fleet_id_mod()
     if fi is None:
         return
     rows = [e for g in GROUPS for e in groups.get(g, ()) if fi.is_fid(e.get("fid") or "")]
-    live = {e["fid"] for e in rows if e.get("group") != "done"}
+    live = {e["fid"] for e in rows if not finished(e)}
     for e in rows:
         e["code"] = e.get("id") or ""
         e["open_id"] = e["fid"] in live
@@ -1747,7 +1758,7 @@ def entries(vid, now=None, hub=True):
             tags.append("-" if gl is GLYPHS_ASCII else "∅")
         if f[5].strip():
             tags.append(f[5].strip())
-        if grp == "done" and stage:
+        if grp == "queue" and stage:
             tags.append(say("view_stage_" + stage))
         e = {"kind": "sess", "target": target, "far": not local, "machine": machine, "login": login,
              "open": target in wins if local else True,
@@ -1775,20 +1786,22 @@ def entries(vid, now=None, hub=True):
         if not e["repo"]:
             norepo.append(e)
         if e["state"] in ("working", "looping", "idle") and task_ended(e):
-            # its record has ended: 做完待收, even with a loop still running in its window
+            # its record has ended: done (排队中), even with a loop still running in its window
             e["state"], e["sym"] = "done", sym_of("done", e["lost"])
             e["word"] = state_words("done")
         if e["state"] != state:
             grp = e["group"] = group_of(e["state"], section == "pin", landed, section == "ended", bool(pend), stage)
-        if grp == "ended":
+        if section == "ended" and grp == "queue":
+            # the producer's 已结束 (回收 D): no group of its own — 排队中, to be
+            # folded away; its words say why, Tab reaps it now
             why =say("view_ended_merged") if f[10].strip() in MERGED_PR else \
                 say("view_ended_exited") if state == "exited" else say("view_ended_done")
             e["word"] = why
+            e["ended"] = True
             e["right"] = say("view_ago_fmt", dur(now - act)) if act and local else ""
-            e["sec"] = "ended"
             e["depth"] = 0
             e["foot"] = " · ".join(x for x in (e["foot"], say("view_ended_reap_hint")) if x)
-            ended.append(e)
+            groups["queue"].append(e)
             continue
         # indented under its parent only while the parent sits in the same group
         par = anc.get(depth - 1) if depth > 0 else None
@@ -1822,7 +1835,7 @@ def entries(vid, now=None, hub=True):
         word = say("view_ended_gone_merged") if glyph == "✓" else say("view_ended_gone")
         gone.append({"kind": "sess", "target": target, "far": False, "gone": True, "machine": here, "login": me,
                      "state": "landed", "text": title or name, "name": name, "reap": "", "issue": label,
-                     "depth": 0, "detail": "", "group": "ended", "sec": "gone",
+                     "depth": 0, "detail": "", "group": "folded", "sec": "gone",
                      "sym": "done" if glyph == "✓" else "fail", "lost": False, "lost_secs": None, "ask": "",
                      "tags": [], "repo": grepo.rpartition("/")[2], "word": word, "right": act,
                      "foot": " · ".join(x for x in (title or name, label, say("view_pr_fmt", pr) if pr.startswith("#") else "",
@@ -1840,7 +1853,7 @@ def entries(vid, now=None, hub=True):
         title = o.get("title") or ""
         gone.append({"kind": "sess", "target": "id:" + fid, "far": False, "gone": True, "ledger": True,
                      "machine": here, "login": me, "state": "landed", "text": title, "name": title, "reap": "",
-                     "issue": "", "depth": 0, "detail": "", "group": "ended", "sec": "gone", "sym": "done",
+                     "issue": "", "depth": 0, "detail": "", "group": "folded", "sec": "gone", "sym": "done",
                      "lost": False, "lost_secs": None, "ask": "", "tags": [], "repo": "",
                      "word": say("view_ended_gone"), "right": say("view_ago_fmt", dur(now - rec["closed"]["ts"])),
                      "task": o.get("task") or "",
@@ -1855,6 +1868,7 @@ def entries(vid, now=None, hub=True):
     # an EPIC's members under its driver (T507) — the hub read off the first frame
     if fleet:
         epic_tree(groups, ended, fleet, refresh=hub)
+    ended = [e for e in groups["queue"] if e.get("ended")]
     # S9: two live windows on one conversation — both to 等你
     id_conflicts([e for g in GROUPS for e in groups[g]])
     for g in GROUPS:
@@ -1879,21 +1893,16 @@ def entries(vid, now=None, hub=True):
             out.append(e)
             if e["ask"]:
                 out.append({"kind": "ask", "of": e["target"], "text": e["ask"], "depth": e["depth"]})
-    # 已结束 · 还开着 (windows still up, each one costs memory) above 已关闭 (a
-    # record only), both folded until opened (issue #3731)
-    if ended:
-        out.append({"kind": "sec", "sec": "ended", "text": say("view_sec_ended_fmt", len(ended)), "n": len(ended)})
-        for e in ended:
-            if multi and e["repo"]:
-                e["tags"].append(e["repo"])
-            out.append(e)
-        many = [e for e in ended if not e.get("lost")]
+        many = [e for e in ended if not e.get("lost")] if g == "queue" else []
         if many:
-            # ↵ reaps them all through dash-reap.sh --yes, its own gate each: a
+            # the producer's 已结束 rows still hold a window (each costs memory): ↵
+            # folds them all now through dash-reap.sh --yes, its own gate each — a
             # dirty worktree is kept (only the window goes), a live one is skipped
-            out.append({"kind": "cmd", "cmd": "reapall", "act": "reapall", "sec": "ended", "n": len(many),
+            out.append({"kind": "cmd", "cmd": "reapall", "act": "reapall", "n": len(many),
                         "row": {"targets": [("wid:" if e["far"] else "") + e["target"] for e in many]},
                         "text": say("view_cmd_reapall_fmt", len(many))})
+    # 已收起 (a record only; ↵ on a row resumes its conversation), folded until
+    # opened (issue #3731)
     if gone or older:
         out.append({"kind": "sec", "sec": "gone", "text": say("view_sec_gone_fmt", len(gone)), "n": len(gone),
                     "older": older})
@@ -3394,7 +3403,7 @@ def live(r):
 
 
 def ended(r):
-    return r.get("sec") in ("ended", "gone")
+    return bool(r.get("ended")) or r.get("sec") == "gone"
 
 
 def other_agent(r):
@@ -3505,7 +3514,7 @@ ACTIONS = [
     {"id": "lang", "label": lambda r: say("view_lang_row"), "when": lambda r: True, "rowless": True,
      "local": lambda r, a, f: "lang", "far": None, "ask": None,
      "choices": lambda r, f: [("zh", "中文"), ("en", "English"), ("auto", say("view_lang_auto"))]},
-    # the 已结束 · 还开着 group's last row (issue #3731): every session in it, each
+    # the 排队中 group's last row (issue #3731, 回收 D): every session in it, each
     # through its own row's reap (dash-reap.sh --yes: a dirty worktree kept, a live
     # one skipped) — off the screen's thread, the line it prints said after
     {"id": "reapall", "label": lambda r: say("view_act_reapall"), "when": lambda r: True, "rowless": True,
@@ -3824,7 +3833,7 @@ def pin_row(items, query, cur):
     the list's 置顶 group has it; when there are no words, or they name it. None
     with no session in view (or one already over)."""
     e = next((x for x in items if x["kind"] == "sess" and cur and x.get("target") == cur), None)
-    if e is None or e.get("gone") or e.get("sec") == "ended":
+    if e is None or e.get("gone") or e.get("ended"):
         return None
     text = say("view_unpin_current" if e.get("group") == "pin" else "view_pin_current")
     q = query.strip().lower()
@@ -3879,9 +3888,9 @@ def label_of(e):
 
 
 def landed_first(items):
-    """The 做完待收 group (刚落地's heir, plan B) moved above the others (`landed`
-    in FLEET_PANEL_COMMANDS)."""
-    i = next((n for n, e in enumerate(items) if e["kind"] == "hdr" and e.get("group") == "done"), -1)
+    """The 排队中 group (刚落地's heir: plan B's 做完待收, 回收 D) moved above the
+    others (`landed` in FLEET_PANEL_COMMANDS)."""
+    i = next((n for n, e in enumerate(items) if e["kind"] == "hdr" and e.get("group") == "queue"), -1)
     if i < 0:
         return items
     j = next((n for n in range(i + 1, len(items)) if items[n]["kind"] in ("hdr", "sec")), len(items))
