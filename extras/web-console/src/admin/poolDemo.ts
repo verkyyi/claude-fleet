@@ -89,7 +89,7 @@ const switches = [
   { from_account: U.c, to_account: U.b, observed_at: ago(60 * 5), endpoint_id: "mac-a" },
   { from_account: U.a, to_account: U.x, observed_at: ago(60 * 26), endpoint_id: "linux-a" },
 ];
-const settings: Record<string, string> = { "pool.skip_pct": "85", "pool.move_when_full": "on" };
+const settings: Record<string, string> = { "pool.skip_pct": "85" };
 let activated = false;
 const audit: { action: string; provider: string; account: string; at: string; hostname?: string }[] = [];
 

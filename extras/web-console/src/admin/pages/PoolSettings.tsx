@@ -1,8 +1,9 @@
 // PoolSettings — 订阅池设置, /admin/pool/settings (EPIC #3923 C12; the old
 // /app/subscriptions/settings moves here): the subscription access rules
 // (strict, or legacy with its one-time migration review — cred-policy,
-// claude-fleet#3713) and how the pool picks a subscription (pool.skip_pct,
-// pool.move_when_full). Every write goes through today's audited routes:
+// claude-fleet#3713) and how the pool picks a subscription (pool.skip_pct;
+// pool.move_when_full is retired, T543). Every write goes through today's
+// audited routes:
 // PUT /v1/fleet/cred-policy {action: activate} and PUT /v1/fleet/settings.
 import * as React from "react";
 import { AlertCircle, ArrowLeft } from "lucide-react";
@@ -26,7 +27,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, type PolicyView } from "../api";
 import { t } from "../i18n";
@@ -204,7 +204,6 @@ function PolicyCard() {
 function PoolCard() {
   const [skip, setSkip] = React.useState<string | null>(null);
   const [saved, setSaved] = React.useState("");
-  const [move, setMove] = React.useState(false);
   const [err, setErr] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const fid = React.useId();
@@ -216,7 +215,6 @@ function PoolCard() {
         const v = settingOf(s, "pool.skip_pct") || "85";
         setSkip(v);
         setSaved(v);
-        setMove(settingOf(s, "pool.move_when_full") === "on");
       },
       (e: Error) => setErr(e.message),
     );
@@ -268,13 +266,6 @@ function PoolCard() {
                 </Button>
               </div>
             </form>
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="grid gap-0.5">
-                <span className="text-sm font-medium">{t("set.pool.move")}</span>
-                <p className="text-xs text-muted-foreground">{t("set.pool.moveHint")}</p>
-              </div>
-              <Switch checked={move} disabled={busy} aria-label={t("set.pool.move")} onCheckedChange={(on) => void put("pool.move_when_full", on ? "on" : "off")} />
-            </div>
           </>
         )}
       </CardContent>

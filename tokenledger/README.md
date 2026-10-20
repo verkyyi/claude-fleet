@@ -1015,7 +1015,6 @@ is one `hub_audit` row: who, when, old → new.
 |---|---|---|
 | `hub.public_meter` | on | — |
 | `pool.skip_pct` | 85 | a node's `FLEET_ACCOUNT_CEILING` (served at `/v1/fleet/client-settings` → `pool`) |
-| `pool.move_when_full` | off | a node's `FLEET_FAILOVER` (same) |
 | `fleet.auto_assign` | — | `CCQUOTA_FLEET_AUTO_ASSIGN`, no longer read (`none` = no machines; `least-busy` = the hub picks, claude-fleet#2069) |
 | `fleet.routes_extra` | — | more machines / routes on top of `CCQUOTA_FLEET_ROUTES`, the same JSON |
 | `fleet.machine_names` | — | the short name every client shows a machine by, `mac-c=mac-b,mac-d=mac-a` (claude-fleet#1706); wins over a `CCQUOTA_FLEET_ROUTES` alias, rides `/v1/fleet/routes` → each client's `FLEET_NODE_ALIASES`, and `/v1/nodes` → `machines[].alias` |

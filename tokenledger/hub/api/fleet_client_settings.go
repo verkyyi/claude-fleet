@@ -109,22 +109,18 @@ func (s *Server) handleClientSettings(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// poolSettings is the subscription pool's two hub settings (claude-fleet#1986)
+// poolSettings is the subscription pool's hub settings (claude-fleet#1986)
 // in the names a node's fleet.conf gives them — pool.skip_pct as
-// FLEET_ACCOUNT_CEILING, pool.move_when_full as FLEET_FAILOVER — so a node
-// can take the admin's value from here. What applies, defaults included.
+// FLEET_ACCOUNT_CEILING — so a node can take the admin's value from here.
+// What applies, defaults included. FLEET_FAILOVER is no longer sent
+// (claude-fleet T543): pool.move_when_full is retired.
 func (s *Server) poolSettings() map[string]string {
-	failover := "0"
-	if s.settingOn(PoolMoveFullKey) {
-		failover = "1"
-	}
 	paused := []string{}
 	if settings, err := s.Store.FleetSettings(); err == nil {
 		paused = pausedAccounts(settings)
 	}
 	return map[string]string{
 		"FLEET_ACCOUNT_CEILING": s.setting(PoolSkipPctKey),
-		"FLEET_FAILOVER":        failover,
 		// The pool accounts an admin paused (claude-fleet#1990), space-separated.
 		"FLEET_ACCOUNT_PAUSED": strings.Join(paused, " "),
 	}
