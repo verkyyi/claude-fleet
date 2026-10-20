@@ -6931,6 +6931,33 @@ fleet_spawn_parent_id() {
   printf '%s' "$f"
 }
 
+# fleet_reap_origin <sock> <agent-def> <origin> <origin-wid> <test-id> <parent-id>
+#   [<prev-id>] → where a session came from (T694, 回收 B): the word
+# fleet_reap_policy.py origin reads off the spawn's own facts — person ·
+# dispatched · member · driver · orchestrator · probe — and the spawners stamp as
+# @reap_origin beside the policy ORIGINS gives it. A spawn with a parent ID is
+# dispatched (a reopen / a continued ID: its ledger's parent, <prev-id>), and one
+# whose parent window runs the EPIC driver is a batch member. <sock> empty = bare
+# tmux (a pane's own server).
+fleet_reap_origin() {
+  local sk="${1:-}" ad="${2:-}" o="${3:-}" ow="${4:-}" ti="${5:-}" par="${6:-}" prev="${7:-}" w pad
+  [ "$ti" = 1 ] || ti=''
+  if ! fleet_is_fid "$par" && fleet_is_fid "$prev"; then
+    par=$(python3 "$_FLEET_LIB_DIR/fleet_id.py" get "$prev" --json 2>/dev/null \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin).get("opened", {}).get("parent", ""))' 2>/dev/null)
+  fi
+  w=$(python3 "$_FLEET_LIB_DIR/fleet_reap_policy.py" origin --agent-def "$ad" --origin "$o" \
+        --origin-wid "$ow" --test-identity "$ti" 2>/dev/null) || w=person
+  if [ "$w" = person ] && fleet_is_fid "$par"; then w=dispatched; fi
+  if [ "$w" = dispatched ] && fleet_is_fid "$par"; then
+    if [ -n "$sk" ]; then pad=$(fleet_lw '#{@fleet_id} #{@agent_def}' tmux -L "$sk")
+    else pad=$(fleet_lw '#{@fleet_id} #{@agent_def}'); fi
+    pad=$(printf '%s\n' "$pad" | awk -v f="$par" '$1 == f { print $2; exit }')
+    case "${pad##*:}" in epic-driver) w=member ;; esac
+  fi
+  printf '%s\n' "${w:-person}"
+}
+
 # _fleet_key_fid <sess> <key> [<sock>] → the @fleet_id of the ONE live window that
 # answers to <key> right now (minted if it has none), rc 1 when none or several do.
 _fleet_key_fid() {

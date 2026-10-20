@@ -77,6 +77,19 @@ def done_no_pr_secs():
     return int(value) if re.fullmatch(r"\d{1,7}", value) else DONE_NO_PR_DEFAULT
 
 
+UNREPORTED_DEFAULT = 30 * 60     # 回收 B 拍板: 没报结果闲 30 分钟提醒，再 30 分钟收起
+
+
+def unreported_secs():
+    """How long a dispatched session sits finished with no result before it is
+    nudged (once, and its parent told) — and again before it is closed (T694)."""
+    value = os.environ.get("FLEET_REAP_UNREPORTED_SECS", "")
+    return int(value) if re.fullmatch(r"\d{1,7}", value) else UNREPORTED_DEFAULT
+
+
+FID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
 def norm_repo(value):
     """owner/name from a remote URL or owner/name (fleet_norm_repo's rules)."""
     value = re.sub(r"^git@[^:]*:", "", value or "")
@@ -108,7 +121,9 @@ class Cleaner:
                  "@reap_policy", "@loop", "@wrap_gone", "pane_dead",
                  "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
                  "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted", "@agent_status",
-                 "@task", "@task_flow", "@migrating", "@claude_needs", "@pin", "@agent_def", "pane_pid")
+                 "@task", "@task_flow", "@migrating", "@claude_needs", "@pin", "@agent_def", "pane_pid",
+                 # T694 (回收 B): where it came from, and what keeps it
+                 "@reap_keep_by", "@reap_origin", "@origin_wid", "@reap_unreported")
         # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
         # window, every window, every tick — ~600 a minute on a busy login. A
         # value carrying the separator (never seen) falls back to a call per name.
@@ -146,9 +161,29 @@ class Cleaner:
         return ""
 
     def policy(self, snap):
-        """(kind, value) of the window's own @reap_policy (issue #1902), or None
-        for a window with none — the historic rule, byte for byte."""
-        return fleet_reap_policy.parse(snap["@reap_policy"]) if snap["@reap_policy"] else None
+        """(kind, value) of the policy in force (issue #1902), or None for a
+        window with none — the historic rule, byte for byte. In force (T694, 回收
+        B — fleet_reap_policy.effective): a pinned window or an orchestrator is
+        `keep` whatever is stamped; a `keep` the session set for itself lapses to
+        `merged` once its work is over."""
+        raw = snap["@reap_policy"]
+        selfkeep = raw.strip() == "keep" and snap.get("@reap_keep_by") == "session"
+        eff = fleet_reap_policy.effective(raw, snap.get("@pin", ""), snap.get("@agent_def", ""),
+                                          snap.get("@reap_keep_by", ""), selfkeep and self.work_over(snap))
+        return fleet_reap_policy.parse(eff) if eff else None
+
+    def origin(self, snap):
+        """Where the session came from (T694): its @reap_origin, else read off it."""
+        return fleet_reap_policy.origin_of(snap.get("@agent_def", ""), snap["@origin"] or snap["@origin_fid"],
+                                           snap.get("@origin_wid", ""), snap["@test_identity"],
+                                           snap.get("@reap_origin", ""))
+
+    def work_over(self, snap):
+        """«做完» (T680's one rule): its ID's newest result is final, or its task
+        record is closed."""
+        if self.id_over(snap["@fleet_id"]):
+            return True
+        return bool(re.fullmatch(r"T[1-9][0-9]{0,9}", snap["@task"])) and self.task_closed(snap["@task"]) == 0
 
     def route(self, snap):
         """Which rule may close this window: 'idle' — the historic raw rule, or
@@ -161,7 +196,7 @@ class Cleaner:
         closed."""
         pol = self.policy(snap)
         if pol is not None:
-            if pol[0] in ("done", "loop-end", "at"):
+            if pol[0] in ("done", "idle", "loop-end", "at"):
                 return "idle"
             return "no-pr" if pol[0] == "merged" and snap["@issue"] else None
         if snap["@raw"] == "1" and not snap["@issue"]:
@@ -199,7 +234,7 @@ class Cleaner:
         """When this window's own policy lets it go (issue #1902)."""
         kind, val = pol
         stamp = int(snap["@claude_state_ts"])
-        if kind == "done":
+        if kind in ("done", "idle"):
             return stamp + val
         if kind == "loop-end":
             return stamp + fleet_reap_policy.LOOP_END_GRACE
@@ -273,12 +308,12 @@ class Cleaner:
             # loop-end / at, an issue session as well as a scratch. keep and merged
             # are never this pass's (merged is fleet-cleanup.sh's). Every gate
             # below still applies.
-            if pol[0] not in ("done", "loop-end", "at"):
+            if pol[0] not in ("done", "idle", "loop-end", "at"):
                 return False
         elif snap["@raw"] != "1" or snap["@issue"]:
             return False
-        # A pin is only the list's order (issue #3119): it keeps no window —
-        # `@reap_policy keep` does.
+        # A pin keeps its window (T694, 回收 B; #3119 had made it only the list's
+        # order): policy() reads a pinned window as `keep`.
         # An exited session on its recovery page (issue #1784) is as idle as a
         # finished turn: the same grace, the same resumable record — and so is a
         # window with no agent at all (the wrapper gone, the pane dead:
@@ -342,13 +377,13 @@ class Cleaner:
         worktree, so nothing to record: stopped the graceful way, by identity
         (fleet-worker-stop.sh fid:, as dash-reap.sh's no-repo row)."""
         pol = self.policy(snap)
-        if pol is None or pol[0] not in ("done", "at"):
+        if pol is None or pol[0] not in ("done", "idle", "at"):
             return False
         if (snap["@claude_state"] not in ("", "done", "exited", "idle")
                 and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1"):
             return False
         stamp = snap["@claude_state_ts"] if snap["@claude_state_ts"].isdigit() else snap["@born"]
-        if pol[0] == "done" and (not stamp.isdigit() or int(stamp) + pol[1] > self.now):
+        if pol[0] in ("done", "idle") and (not stamp.isdigit() or int(stamp) + pol[1] > self.now):
             return False
         if pol[0] == "at" and pol[1] > self.now:
             return False
@@ -381,8 +416,10 @@ class Cleaner:
         done / loop-end / at policy closes it like any other, a finished turn too."""
         pol = self.policy(snap)
         spawned = bool(snap["@origin"] or snap["@origin_fid"])
-        kinds = ("done", "loop-end", "at") if spawned else ("done",)
-        ended = (("done", "exited") if spawned else ("exited",))
+        kinds = ("done", "idle", "loop-end", "at") if spawned else ("done", "idle")
+        # `idle:<dur>` (T694): a finished turn idle that long — a person's own
+        # home session (idle:2h) too, resumed by its @norepo_sid.
+        ended = (("done", "exited") if spawned or (pol and pol[0] == "idle") else ("exited",))
         if (pol is None or pol[0] not in kinds
                 or snap["@fleet_role"] not in ("", "worker")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")
@@ -432,14 +469,16 @@ class Cleaner:
         looks at it, with a draft in its input box or a job running. Nothing in it to
         keep, so no history row — stopped by identity, test_session's road."""
         pol = self.policy(snap)
-        if (pol is None or pol[0] != "done"
+        if (pol is None or pol[0] not in ("done", "idle")
                 or snap["@fleet_role"] not in ("", "worker")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")
                 or (snap["@claude_state"] not in ("", "done", "idle", "exited")
                     and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1")):
             return False
         stamps = [int(v) for v in (snap["@born"], snap["@claude_state_ts"]) if v.isdigit()]
-        if not stamps or max(stamps) + pol[1] > self.now:
+        # an `idle:2h` never typed into goes on the old 15 minutes (T694)
+        grace = min(pol[1], fleet_reap_policy.DONE_DEFAULT) if pol[0] == "idle" else pol[1]
+        if not stamps or max(stamps) + grace > self.now:
             return False
         fid = snap["@fleet_id"]
         if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", fid or ""):
@@ -477,8 +516,150 @@ class Cleaner:
         print("reaped-empty:" + window + " policy=" + snap["@reap_policy"] + " " + (out or "no answer"))
         return out.startswith("stopped:")
 
+    def nudge(self, window, snap):
+        """The one reminder an unreported session gets (T694): itself asked to
+        report, and the session that dispatched it told — fleet-peer-send.sh, or
+        the FLEET_REAP_NUDGE_CMD seam (<target> <text>). Never fatal."""
+        short = snap["@fleet_id"][:8]
+        mins = unreported_secs() // 60
+        words = {
+            "self": "fleet: 你已闲了 %d 分钟，还没报结果。做完了就用 report 工具报 outcome（succeeded / failed）；"
+                    "还要等就说一声。再闲 %d 分钟这个窗口会被收起（对话和工作树留着，面板里回车恢复）。" % (mins, mins),
+            "parent": "fleet: 你派出的会话 %s（%s）已闲了 %d 分钟没报结果；再 %d 分钟会被收起并标红。"
+                      % (snap["window_name"], short, mins, mins),
+        }
+        targets = [("self", window)]
+        par = snap.get("@origin_wid", "")
+        if par:
+            targets.append(("parent", "wid:" + par))
+        elif FID_RE.fullmatch(snap["@origin_fid"] or ""):
+            targets.append(("parent", "wid:" + snap["@origin_fid"]))
+        elif re.fullmatch(r"(?:issue|scratch)-\d+", snap["@origin"] or ""):
+            targets.append(("parent", snap["@origin"]))
+        seam = os.environ.get("FLEET_REAP_NUDGE_CMD")
+        for who, target in targets:
+            argv = ([seam, target, words[who]] if seam else
+                    ["bash", str(BIN / "fleet-peer-send.sh")]
+                    + (["-L", self.args.socket_name] if self.args.socket_name else []) + [target, words[who]])
+            try:
+                subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=30)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+    def dispatched_session(self, window, snap):
+        """A session another session dispatched — an orchestrator's task, a batch
+        member, a batch driver (T694, 回收 B; fleet_reap_policy.REPORTING) — whose
+        policy in force is `merged` (a driver's `loop-end` too): its «done» is a
+        reported result (T680's one rule, work_over). Over ⇒ closed after the
+        grace (--grace, else `merged:<dur>`, else FLEET_CLEANUP_MERGED_GRACE, 60 s;
+        a driver at once, its pending /loop no hold: the batch is closed). Not over
+        and finished with no result for FLEET_REAP_UNREPORTED_SECS (30 min) ⇒
+        nudged once (itself and its parent) and stamped @reap_unreported — the
+        panel's red mark; as long again ⇒ closed. Every close records history
+        first and keeps the worktree. None = not this road (an issue session, a
+        person's own, any other policy): the ordinary roads decide."""
+        if snap["@issue"] or not FID_RE.fullmatch(snap["@fleet_id"] or ""):
+            return None
+        origin = self.origin(snap)
+        if origin not in fleet_reap_policy.REPORTING:
+            return None
+        pol = self.policy(snap)
+        if pol is None and snap["@raw"] == "1":
+            pol = ("merged", 0)
+        driver = origin == "driver"
+        if pol is None or not (pol[0] == "merged" or (driver and pol[0] == "loop-end")):
+            return None
+        norepo = snap["@norepo"] == "1"
+        if not norepo and (snap["@raw"] != "1" or self.theirs(snap)):
+            return None
+        if (snap["@fleet_role"] in ("home", "panel")
+                or snap["window_name"] in ("dash", "plan", "backlog", "home")):
+            return None
+        finished = (self.finished(snap) in ("done", "exited")
+                    or snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1")
+        over = finished and self.work_over(snap)
+        if driver and pol[0] == "loop-end" and not over:
+            return None                       # between two ticks: its loop's own road
+        if not finished:
+            if not self.args.dry_run and option(self.tm, window, "@reap_key").startswith(("over:", "unrep:")):
+                clear(self.tm, window)
+            return False
+        stamp = snap["@claude_state_ts"]
+        if not stamp.isdigit() or not 0 < int(stamp) <= self.now:
+            return False
+        transfer = snap["@agent_transfer_until"]
+        if transfer and (not transfer.isdigit() or int(transfer) > self.now):
+            return False
+        if os.environ.get("TMUX_PANE") and os.environ.get("TMUX"):
+            if self.tm("display-message", "-p", "-t", os.environ["TMUX_PANE"], "#{window_id}") == window:
+                return False
+        held = (lambda: False) if (driver and over) else (lambda: self.busy(window, snap))
+        if held():
+            return False
+        if over:
+            if self.args.grace is not None:
+                grace = self.args.grace
+            elif driver:
+                grace = 0
+            else:
+                grace = pol[1] if pol[0] == "merged" and pol[1] else merged_grace_default()
+            deadline, why = int(stamp) + grace, "over"
+            summary = "Automatically closed: its work is over (%s)" % (snap["@task"] or origin)
+        else:
+            first = unreported_secs()
+            nudged = snap.get("@reap_unreported", "")
+            if not nudged.isdigit():
+                if int(stamp) + first > self.now:
+                    return False
+                if self.args.dry_run:
+                    print("would-nudge-unreported:" + window)
+                    return False
+                self.nudge(window, snap)
+                self.tm("set-option", "-w", "-t", window, "@reap_unreported", str(self.now))
+                print("nudged-unreported:%s origin=%s" % (window, origin))
+                return False
+            deadline, why = max(int(stamp), int(nudged)) + first, "unrep"
+            summary = "Automatically closed: idle with no result reported (%s, unreported)" % origin
+        due = notice(self.tm, window, why + ":" + snap["@fleet_id"][:8], deadline, self.now,
+                     self.args.dry_run, tick=max(1, min(deadline - int(stamp), 60)))
+        if due > self.now:
+            return False
+        print("reap-due:%s policy=%s origin=%s %s" % (window, snap["@reap_policy"] or "merged", origin, why),
+              file=__import__("sys").stderr)
+        if self.args.dry_run:
+            print("would-reap-%s:%s origin=%s" % (why, window, origin))
+            return False
+        if norepo:
+            if self.snapshot(window) != snap:
+                return False
+            self.retire(window)
+            out = subprocess.run(["bash", str(BIN / "fleet-worker-stop.sh"), self.args.session,
+                                  "fid:" + snap["@fleet_id"]],
+                                 env=dict(os.environ, FLEET_SESSION=self.args.session), stdin=subprocess.DEVNULL,
+                                 capture_output=True, text=True, timeout=120).stdout.strip()
+            print("reaped-%s:%s origin=%s norepo %s" % (why, window, origin, out or "no answer"))
+            return out.startswith("stopped:")
+        wt = snap["@worktree"]
+        key = re.search(r"(?:^|-)(scratch)-(\d+)$", Path(wt).name) if wt else None
+        if not key or not self.eligible(window, snap, task=True):
+            return False
+        key = key[1] + "-" + key[2]
+        run("bash", str(BIN / "fleet-history.sh"), "record-closed", "--repo", self.args.repo,
+            "--session", self.args.session, "--key", key, "--worktree", wt, "--win", window,
+            "--title", snap["window_name"], "--summary", summary)
+        if not self.reopens(window, key, wt):
+            return False
+        if not self.close(window, snap, lambda: not held()):
+            return False
+        print("reaped-%s:%s origin=%s %s" % (why, window, origin, key))
+        return True
+
     def candidate(self, window):
         snap = self.snapshot(window)
+        road = self.dispatched_session(window, snap)
+        if road is not None:
+            return road
         if snap["@test_identity"] == "1" and snap["@norepo"] == "1":
             return self.test_session(window, snap)
         if snap["@norepo"] == "1" and snap["@prompt_track"] == "1" and snap["@prompted"] != "1":
@@ -560,8 +741,7 @@ class Cleaner:
             return False
         return True
 
-    @staticmethod
-    def task_ref(snap):
+    def task_ref(self, snap):
         """A development task's session (issue #4897, EPIC #4895 批 0): a repo
         scratch bound to the hub's record (@task T<n> + @task_flow 1, no issue)
         whose policy is `merged` (or none — a task's default). Its end is the
@@ -570,8 +750,8 @@ class Cleaner:
         if (snap["@task_flow"] != "1" or snap["@issue"] or snap["@raw"] != "1"
                 or not re.fullmatch(r"T[1-9][0-9]{0,9}", snap["@task"])):
             return ""
-        pol = fleet_reap_policy.parse(snap["@reap_policy"]) if snap["@reap_policy"] else ("merged", 0)
-        return snap["@task"] if pol and pol[0] == "merged" else ""
+        pol = self.policy(snap) or ("merged", 0)
+        return snap["@task"] if pol[0] == "merged" else ""
 
     @staticmethod
     def id_over(fid):

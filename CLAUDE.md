@@ -399,8 +399,16 @@ one-off drill / audit records do not go in the repo (issue #3576).
   at spawn (`--reap` on both spawners, the `spawn` tool, the client's new-session
   question 「什么时候回收？」 → hub `reap` → the node's `worker_start`), changed by
   `bin/fleet-reap-policy.sh` (the `set_reap` tool, the sidebar's 改回收方式…):
-  `merged[:<dur>]` · `done[:<dur>]` · `loop-end` · `at:<time>` · `keep`.
-  `bin/fleet_reap_policy.py` is the ONE grammar. `fleet-cleanup.sh` honours
+  `merged[:<dur>]` · `done[:<dur>]` · `idle[:<dur>]` · `loop-end` · `at:<time>` · `keep`.
+  `bin/fleet_reap_policy.py` is the ONE grammar — and the ONE origin table
+  (T694, 回收 B: `ORIGINS`): a spawner reads where the session came from
+  (`fleet_reap_origin`: person · dispatched · member · driver · orchestrator ·
+  decide · probe), stamps it `@reap_origin` and opens with the table's policy;
+  a pinned window and an orchestrator are never closed on their own, and a
+  `keep` a session set for itself (`@reap_keep_by session`, the `set_reap` tool)
+  lapses once its work is over (`effective`). A dispatched session's «done» is
+  its reported result — closed ≈1 min after, nudged once at 30 min idle
+  unreported and closed at 60 (`fleet-cleanup-idle.py dispatched_session`). `fleet-cleanup.sh` honours
   keep / merged:<dur> and leaves the rest to `fleet-cleanup-idle.py`, which closes
   them through the same gates (history first, worktree kept, never while working,
   looping or holding a background job). The map

@@ -382,8 +382,14 @@ issue_open_gate || exit 0
 # never closed here; done / loop-end / at belong to the idle pass
 # (fleet-cleanup-idle.py), never to this merged rule; `merged:<dur>` is its own
 # grace. No @reap_policy, or a plain `merged`: the historic rule, byte for byte.
+# The policy IN FORCE (T694, 回收 B — fleet_reap_policy.py effective): a pinned
+# window or an orchestrator is `keep`; a keep the session set for itself
+# (@reap_keep_by session) lapses once its PR merged.
 if [ "$AUTO" = 1 ] && [[ "$WIN" =~ ^@[0-9]+$ ]]; then
-  _rp=$(ftmux show-options -wqv -t "$WIN" @reap_policy 2>/dev/null)
+  _rp=$(ftmux display-message -p -t "$WIN" '#{@reap_policy}|#{@pin}|#{@agent_def}|#{@reap_keep_by}' 2>/dev/null)
+  _ov=0; [ "$st" = MERGED ] && _ov=1
+  _rp=$(IFS='|' read -r _p _pi _ad _kb <<<"$_rp"
+        python3 "$BIN/fleet_reap_policy.py" effective "$_p" --pin "$_pi" --agent-def "$_ad" --keep-by "$_kb" --over "$_ov" 2>/dev/null)
   if [ -n "$_rp" ]; then
     _rg=$(python3 "$BIN/fleet_reap_policy.py" merged-grace "$_rp" 2>/dev/null)
     case "$_rg" in

@@ -12,10 +12,25 @@ One window option says when the fleet may close a session on its own:
                      closed, the historic rule
     done[:<dur>]     its turn is over and it has sat idle <dur> (default 15m), no
                      /loop pending, no background job — a scratch's default
+    idle:<dur>       its turn is over and it has sat idle <dur> — whether or not
+                     its work is (T694, 回收 B): a person's own session (2h), one
+                     waiting for a person's decision (15m). For a no-repo session
+                     a finished turn counts (`done` there waits for the agent to exit)
     loop-end         the /loop it was opened with has stopped (then idle 10 min)
     at:<when>        at a moment (ISO-8601 UTC `2026-10-06T18:00:00Z`, or an
                      epoch), once its turn is over
     keep             never closed automatically
+
+Where it came from decides the default (T694, 回收 B) — ONE table, ORIGINS
+below, read by every spawner (`origin` + `origin-default`) and by the reapers
+(`effective`): person (⌘N / ⌘P, a person's shell) · dispatched (an orchestrator's
+or any session's task) · member (a batch member) · driver (an EPIC driver) ·
+orchestrator · decide (a session waiting on a person's call) · probe (a test
+identity, a scheduled job, a drill). The spawner stamps `@reap_origin` beside
+`@reap_policy`; a window with none has its origin read off its stamps
+(origin_of). A pinned window and an orchestrator are never closed
+automatically; a `keep` the session set for itself (`@reap_keep_by session`)
+lapses once its work is over — only a person's `keep` holds.
 
 No option at all = the session's kind decides, exactly as before #1902 (an old
 window behaves byte for byte as it did). Every automatic close still goes
@@ -29,6 +44,11 @@ CLI (the shell side's one parser — never a second copy):
     fleet_reap_policy.py merged-grace <policy>   seconds, or `keep` / `other` / ``
     fleet_reap_policy.py idle-owned <policy> [--now N]   exit 0 when a finished
                                            session is the idle reaper's to close
+    fleet_reap_policy.py origin [--agent-def N] [--origin K] [--origin-wid W]
+                                [--test-identity 1] [--stamp O]   the origin word
+    fleet_reap_policy.py origin-default <origin> [--kind issue|task|scratch|loop]
+    fleet_reap_policy.py effective <policy> [--pin 1] [--agent-def N]
+                                [--keep-by session] [--over 1]   the policy in force
 """
 import re
 import sys
@@ -40,6 +60,67 @@ LOOP_END_GRACE = 600             # idle after the loop stopped
 DUR_RE = re.compile(r"([1-9][0-9]{0,6})([smhd]?)")
 UNIT = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
 MAX_SECS = 366 * 86400
+
+
+IDLE_DEFAULT = 2 * 3600          # 回收 B 拍板: 你自己开的会话闲置 2 小时收起
+
+# Where a session came from → when it may be closed (T694, 回收 B 拍板). The ONE
+# table: a spawner stamps it, the reapers read it. `merged` here is «its work is
+# over» — the record closed, or its ID carries a final result (T680) — then the
+# fleet's grace (≈1 minute); a driver goes at once.
+ORIGINS = {
+    "person": "idle:2h",          # 不因做完收起，闲置 2 小时收起
+    "dispatched": "merged",       # 做完 1 分钟收起；没报结果闲 30 分钟提醒，再 30 分钟收起
+    "member": "merged",           # 同执行会话；失败的也收起
+    "driver": "merged",           # 批次收口立即收起；两拍之间不收起
+    "orchestrator": "keep",       # 永不自动收起（开窗即置顶）
+    "decide": "idle:15m",         # 等你拍板：闲置 15 分钟收起，回话即恢复
+    "probe": "done:1m",           # 定时任务、探针、演练：做完立即收起
+}
+# The origins whose «done» is a reported result — the dispatched road
+# (fleet-cleanup-idle.py dispatched_session): over ⇒ closed, unreported ⇒ nudged.
+REPORTING = ("dispatched", "member", "driver")
+
+
+def origin_of(agent_def="", origin="", origin_wid="", test_identity="", stamp=""):
+    """The origin word: the stamped `@reap_origin` when it is one, else read off
+    the window — its agent file (orchestrator · epic-driver), a test identity, a
+    parent session (@origin other than the hub, @origin_fid, @origin_wid), else a
+    person's own."""
+    if stamp in ORIGINS:
+        return stamp
+    name = (agent_def or "").rsplit(":", 1)[-1]
+    if name == "orchestrator":
+        return "orchestrator"
+    if name == "epic-driver":
+        return "driver"
+    if test_identity == "1":
+        return "probe"
+    if (origin and origin != "hub") or origin_wid:
+        return "dispatched"
+    return "person"
+
+
+def origin_default(origin, kind=""):
+    """The policy a session of <origin> opens with. An issue session dispatched
+    keeps its historic `merged`; a /loop seed its `loop-end` unless a driver."""
+    if kind == "loop" and origin not in ("driver", "orchestrator", "probe"):
+        return "loop-end"
+    if kind == "issue" and origin in ("person", "dispatched", "member"):
+        return "merged"            # an issue session's historic rule: its PR merged
+    return ORIGINS.get(origin, "")
+
+
+def effective(policy, pin="", agent_def="", keep_by="", over=False):
+    """The policy in force: a pin or an orchestrator is `keep`, whatever is
+    stamped; a `keep` the session set for itself lapses to `merged` once its work
+    is over (only a person's keep holds)."""
+    if pin == "1" or (agent_def or "").rsplit(":", 1)[-1] == "orchestrator":
+        return "keep"
+    p = (policy or "").strip()
+    if p == "keep" and keep_by == "session" and over:
+        return "merged"
+    return p
 
 
 def dur_secs(text):
@@ -79,7 +160,7 @@ def at_epoch(text, now=None):
 
 
 def parse(policy):
-    """(kind, seconds-or-epoch) or None. kind: merged · done · loop-end · at · keep."""
+    """(kind, seconds-or-epoch) or None. kind: merged · done · idle · loop-end · at · keep."""
     p = (policy or "").strip()
     head, _, arg = p.partition(":")
     if head in ("keep", "loop-end") and not arg and ":" not in p:
@@ -94,6 +175,11 @@ def parse(policy):
             return "done", DONE_DEFAULT
         s = dur_secs(arg)
         return ("done", s) if s is not None else None
+    if head == "idle":
+        if ":" not in p:
+            return "idle", IDLE_DEFAULT
+        s = dur_secs(arg)
+        return ("idle", s) if s is not None else None
     if head == "at":
         e = at_epoch(arg)
         return ("at", e) if e is not None else None
@@ -111,6 +197,8 @@ def norm(policy):
         return "at:" + iso(val)
     if kind == "done" and ":" not in p:
         return "done:15m"
+    if kind == "idle" and ":" not in p:
+        return "idle:2h"
     return p
 
 
@@ -140,6 +228,8 @@ def label(policy, lang="zh", now=None):
         if val == DONE_DEFAULT:
             return "做完就回收" if zh else "when done"
         return ("做完闲 " + _dur_words(val, True)) if zh else ("done+" + _dur_words(val, False))
+    if kind == "idle":
+        return ("闲 " + _dur_words(val, True) + "收起") if zh else ("idle " + _dur_words(val, False))
     if kind == "loop-end":
         return "循环停了回收" if zh else "after loop"
     if kind == "keep":
@@ -177,7 +267,7 @@ def idle_owned(policy, now=None):
     if got is None:
         return False
     kind, val = got
-    if kind in ("done", "loop-end"):
+    if kind in ("done", "idle", "loop-end"):
         return True
     if kind == "at":
         return val <= (int(time.time()) if now is None else now)
@@ -192,7 +282,7 @@ def main(argv):
     if cmd == "norm":
         out = norm(args[0] if args else "")
         if out is None:
-            sys.stderr.write("reap policy must be merged[:<dur>] | done[:<dur>] | loop-end | "
+            sys.stderr.write("reap policy must be merged[:<dur>] | done[:<dur>] | idle[:<dur>] | loop-end | "
                              "at:<ISO time> | keep (dur: 90, 30m, 2h, 3d)\n")
             return 2
         print(out)
@@ -216,6 +306,28 @@ def main(argv):
     if cmd == "idle-owned":
         now = int(args[args.index("--now") + 1]) if "--now" in args else None
         return 0 if idle_owned(args[0] if args else "", now) else 1
+    if cmd in ("origin", "origin-default", "effective"):
+        kv, pos, i = {}, [], 0
+        while i < len(args):
+            if args[i].startswith("--") and i + 1 < len(args):
+                kv[args[i][2:]] = args[i + 1]
+                i += 2
+            else:
+                pos.append(args[i])
+                i += 1
+        if cmd == "origin":
+            print(origin_of(kv.get("agent-def", ""), kv.get("origin", ""), kv.get("origin-wid", ""),
+                            kv.get("test-identity", ""), kv.get("stamp", "")))
+            return 0
+        if cmd == "origin-default":
+            out = origin_default(pos[0] if pos else "", kv.get("kind", ""))
+            if not out:
+                return 2
+            print(out)
+            return 0
+        print(effective(pos[0] if pos else "", kv.get("pin", ""), kv.get("agent-def", ""),
+                        kv.get("keep-by", ""), kv.get("over", "") == "1"))
+        return 0
     if cmd == "merged-grace":
         print(merged_grace(args[0] if args else ""))
         return 0

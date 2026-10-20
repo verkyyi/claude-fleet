@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # selftest-parts: 4
-# selftest-part: 4 DoneNoPr.test_driver_scratch_closes_once_its_epic_is_closed DoneNoPr.test_recent_is_kept_and_said_once EmptyReap.test_closes_only_a_session_never_typed_into HomeReap.test_spawned_norepo_closes_on_its_policy_after_a_finished_turn
-# selftest-part: 5 PinIsOrder.test_a_pin_set_later_keeps_nothing PolicyGrammar.test_norm_default_label ReapPolicy.test_keep_and_merged_are_never_this_pass StuckReaps.test_the_agents_finished_word_outranks_a_looping_stamp
+# selftest-part: 4 DispatchedSession.test_over_closes_after_its_grace_keeping_the_worktree DoneNoPr.test_codex_worker_closes_like_a_claude_one DoneNoPr.test_native_owned_worktree_keeps_window_and_data DoneNoPr.test_unpushed_commit_keeps_the_worktree
+# selftest-part: 5 HomeReap.test_exited_two_hours_closes_an_idle_turn_never HomeReap.test_spawned_norepo_without_policy_is_never_closed PinIsOrder.test_dry_run_migrates_nothing PolicyGrammar.test_origin_table_and_the_policy_in_force ReapPolicy.test_keep_and_merged_are_never_this_pass StuckReaps.test_the_agents_finished_word_outranks_a_looping_stamp
 # selftest-part: 6 TaskSession.test_now_watcher_closes_about_its_grace_after_the_turn
 # selftest-part: 7 RoundTrip.test_codex_unknown_or_active_native_turn_is_kept
 # selftest-part: 8 RoundTrip.test_real_close_and_restore
@@ -1056,6 +1056,34 @@ class PolicyGrammar(unittest.TestCase):
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 2)
 
+    def test_origin_table_and_the_policy_in_force(self):
+        """T694 (回收 B): ONE origin → default table, the origin read off a window,
+        and the policy in force (pin / orchestrator keep; a session's own keep
+        lapses once its work is over)."""
+        import fleet_reap_policy as rp
+        self.assertEqual(rp.norm("idle"), "idle:2h")
+        self.assertEqual(rp.parse("idle:15m"), ("idle", 900))
+        self.assertIsNone(rp.norm("idle:0"))
+        self.assertEqual(rp.label("idle:15m"), "闲 15 分钟收起")
+        self.assertTrue(rp.idle_owned("idle:2h"))
+        self.assertEqual({o: rp.origin_default(o) for o in rp.ORIGINS},
+                         {"person": "idle:2h", "dispatched": "merged", "member": "merged", "driver": "merged",
+                          "orchestrator": "keep", "decide": "idle:15m", "probe": "done:1m"})
+        self.assertEqual(rp.origin_default("person", "issue"), "merged")
+        self.assertEqual(rp.origin_default("dispatched", "loop"), "loop-end")
+        self.assertEqual(rp.origin_default("driver", "loop"), "merged")
+        self.assertEqual([rp.origin_of(*a) for a in (
+            ("orchestrator",), ("fleet-epic:epic-driver",), ("", "", "", "1"), ("", "scratch-3"),
+            ("", "hub"), ("", "", "u/f"), ("", ""), ("", "scratch-3", "", "", "decide"))],
+            ["orchestrator", "driver", "probe", "dispatched", "person", "dispatched", "person", "decide"])
+        self.assertEqual([rp.effective(*a) for a in (
+            ("done:5m", "1"), ("", "", "orchestrator"), ("keep", "", "", "session", True),
+            ("keep", "", "", "session", False), ("keep", "", "", "", True), ("merged",))],
+            ["keep", "keep", "merged", "keep", "keep", "merged"])
+        r = subprocess.run(["python3", str(BIN / "fleet_reap_policy.py"), "origin-default", "person"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), "idle:2h")
+
     def test_idle_owned_holds_off_the_reopen(self):
         """A finished session the idle reaper will close is not the idle reopen's
         (issue #4764): done / loop-end / an `at:` reached — never merged / keep."""
@@ -1243,6 +1271,113 @@ class TaskSession(Rig):
         out = self.due()
         self.assertNotIn("skip:task", out)               # done: the idle road decides
         self.assertIn("reaped-idle:" + self.win, out)
+
+
+class DispatchedSession(TaskSession):
+    """T694 (回收 B): a session another session dispatched (@origin_fid → origin
+    `dispatched`; @agent_def epic-driver → `driver`) whose `merged` is a REPORTED
+    result: over ⇒ closed after its grace; finished with no result ⇒ nudged once
+    (itself and its parent), then closed — history first, the worktree kept."""
+    PARENT = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+
+    def setUp(self):
+        super().setUp()
+        self.set("@origin_fid", self.PARENT)
+        self.set("@fleet_id", self.FID)
+        self.nudges = self.root / "nudges"
+        seam = self.root / "nudge"
+        seam.write_text("#!/bin/sh\nprintf '%s\\t%s\\n' \"$1\" \"$2\" >> " + shlex.quote(str(self.nudges)) + "\n")
+        seam.chmod(0o755)
+        self.env["FLEET_REAP_NUDGE_CMD"] = str(seam)
+        self.env["FLEET_REAP_UNREPORTED_SECS"] = "600"
+
+    test_open_or_unknown_record_keeps_the_session = None
+    test_closed_record_reaps_after_grace_keeping_the_worktree = None
+    test_a_reopen_in_flight_holds_the_close_and_its_new_window_is_reaped = None
+    test_a_final_id_result_is_done_while_the_record_still_reads_open = None
+    test_now_watcher_closes_about_its_grace_after_the_turn = None
+    test_other_policy_or_no_flow_takes_the_ordinary_roads = None
+
+    def test_over_closes_after_its_grace_keeping_the_worktree(self):
+        self.answer.write_text("1\n")
+        self.set("@claude_state_ts", str(int(time.time()) - 30))
+        self.result("merged")
+        self.assertNotIn("reaped", self.clean())          # 30 s < its 60 s grace
+        self.assertTrue(self.exists())
+        self.set("@claude_state_ts", str(int(time.time()) - 90))
+        out = self.due()
+        self.assertIn("reaped-over:" + self.win + " origin=dispatched scratch-7", out)
+        self.assertFalse(self.exists())
+        self.assertTrue(self.wt.is_dir())
+        self.assertIn("its work is over", (self.root / "ledger.tsv").read_text())
+
+    def test_unreported_is_nudged_once_then_closed(self):
+        self.answer.write_text("1\n")
+        self.set("@claude_state_ts", str(int(time.time()) - 300))
+        self.assertNotIn("nudged", self.clean())          # idle 5 min < 10
+        self.set("@claude_state_ts", str(int(time.time()) - 700))
+        out = self.clean()
+        self.assertIn("nudged-unreported:" + self.win, out)
+        said = self.nudges.read_text().splitlines()
+        self.assertEqual([l.split("\t")[0] for l in said], [self.win, "wid:" + self.PARENT])
+        self.assertTrue(self.tm("display-message", "-p", "-t", self.win, "#{@reap_unreported}").strip().isdigit())
+        out = self.due()                                  # nudged just now: its second half waits
+        self.assertNotIn("nudged", out)                   # once
+        self.assertNotIn("reaped", out)
+        self.assertTrue(self.exists())
+        self.set("@reap_unreported", str(int(time.time()) - 700))
+        out = self.due()
+        self.assertIn("reaped-unrep:" + self.win + " origin=dispatched", out)
+        self.assertFalse(self.exists())
+        self.assertIn("unreported", (self.root / "ledger.tsv").read_text())
+        self.assertEqual(len(self.nudges.read_text().splitlines()), 2)
+
+    def test_working_or_a_person_s_own_is_not_this_road(self):
+        self.answer.write_text("1\n")
+        self.result("merged")
+        self.set("@claude_state", "working")
+        self.assertNotIn("reaped", self.due())
+        self.assertTrue(self.exists())
+        self.set("@claude_state", "done")
+        self.tm("set-option", "-wu", "-t", self.win, "@origin_fid")
+        self.set("@reap_origin", "person")                # a person's ⌘P task: its record's road
+        out = self.due()
+        self.assertNotIn("reaped-over", out)
+        self.assertIn("reaped-task:" + self.win + " T42", out)
+
+    def test_a_keep_the_session_set_lapses_once_over_a_person_s_holds(self):
+        self.answer.write_text("1\n")
+        self.result("merged")
+        self.set("@reap_policy", "keep")
+        self.assertNotIn("reaped", self.due())            # a person's keep holds
+        self.assertTrue(self.exists())
+        self.set("@reap_keep_by", "session")
+        out = self.due()
+        self.assertIn("reaped-over:" + self.win, out)
+        self.assertFalse(self.exists())
+
+    def test_a_pin_or_an_orchestrator_is_never_closed(self):
+        self.answer.write_text("0\n")
+        self.result("merged")
+        for key, value in (("@pin", "1"), ("@agent_def", "orchestrator")):
+            with self.subTest(key=key):
+                self.set(key, value)
+                self.assertNotIn("reaped", self.due())
+                self.assertTrue(self.exists())
+                self.tm("set-option", "-wu", "-t", self.win, key)
+
+    def test_a_driver_goes_at_once_its_loop_end_only_when_over(self):
+        self.answer.write_text("1\n")
+        self.set("@agent_def", "epic-driver")
+        self.set("@reap_policy", "loop-end")
+        self.set("@claude_state_ts", str(int(time.time()) - 5))
+        out = self.clean()
+        self.assertNotIn("nudged", out)                   # between two ticks: never nudged
+        self.assertNotIn("reaped-over", out)
+        self.result("succeeded")
+        out = self.due()                                  # no grace: its one visible tick
+        self.assertIn("reaped-over:" + self.win + " origin=driver", out)
+        self.assertFalse(self.exists())
 
 
 class ReapPolicy(Rig):
@@ -1436,7 +1571,7 @@ class HomeReap(ReapPolicy):
         self.assertIn("reaped-idle:" + self.win + " policy=done:2h norepo", out)
         self.assertFalse(self.exists())
 
-    def test_no_policy_or_keep_is_never_closed_a_pin_keeps_nothing(self):
+    def test_no_policy_or_keep_or_a_pin_is_never_closed(self):
         self.set("@claude_state", "exited")
         self.set("@claude_state_ts", str(int(time.time()) - 900000))
         self.due()
@@ -1446,8 +1581,24 @@ class HomeReap(ReapPolicy):
         self.due()
         self.assertTrue(self.exists())               # keep: never
         self.policy("done:2h")
-        out = self.due()                             # pinned, done:2h, exited long ago (issue #3119)
+        self.due()                                   # pinned (T694, 回收 B): never either
+        self.assertTrue(self.exists())
+        self.tm("set-option", "-wu", "-t", self.win, "@pin")
+        out = self.due()                             # unpinned, done:2h, exited long ago
         self.assertIn("reaped-idle:" + self.win + " policy=done:2h norepo", out)
+        self.assertFalse(self.exists())
+
+    def test_idle_closes_a_finished_turn_not_only_an_exit(self):
+        # T694: a person's own home session (idle:2h) goes after two idle hours,
+        # its agent still up — `done` there waits for the exit.
+        self.policy("idle:2h")
+        self.set("@claude_state", "done")
+        self.set("@claude_state_ts", str(int(time.time()) - 4000))
+        self.due()
+        self.assertTrue(self.exists())               # idle 4000 s < 2 h
+        self.set("@claude_state_ts", str(int(time.time()) - 9000))
+        out = self.due()
+        self.assertIn("reaped-idle:" + self.win + " policy=idle:2h norepo", out)
         self.assertFalse(self.exists())
 
     def test_spawned_norepo_closes_on_its_policy_after_a_finished_turn(self):
@@ -1509,14 +1660,24 @@ class PinIsOrder(ReapPolicy):
         self.assertTrue(self.exists())               # keep: never closed
         self.assertTrue(self.mark().exists())
 
-    def test_a_pin_set_later_keeps_nothing(self):
+    def test_a_pin_set_later_keeps_its_window(self):
+        # T694 (回收 B): a pin keeps its window again — policy() reads it `keep`
+        # (fleet_reap_policy.effective); the migration still writes nothing.
         self.clean()                                 # the first pass: nothing pinned, the mark written
         self.assertTrue(self.mark().exists())
         self.set("@pin", "1")
         self.set("@claude_state_ts", str(int(time.time()) - 900000))
-        out = self.due()                             # no policy: the historic idle rule, pinned or not
+        out = self.due()
         self.assertNotIn("pin-keep:", out)
         self.assertEqual(self.tm("display-message", "-p", "-t", self.win, "#{@reap_policy}").strip(), "")
+        self.assertNotIn("reaped-idle:" + self.win, out)
+        self.assertTrue(self.exists())
+        self.set("@reap_policy", "done:5m")          # pinned beats its own policy too
+        out = self.due()
+        self.assertNotIn("reaped-idle:" + self.win, out)
+        self.assertTrue(self.exists())
+        self.tm("set-option", "-wu", "-t", self.win, "@pin")
+        out = self.due()                             # unpinned: its policy closes it
         self.assertIn("reaped-idle:" + self.win, out)
         self.assertFalse(self.exists())
 

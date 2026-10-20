@@ -2244,8 +2244,8 @@ func (s *Server) writeFleetSettings(w http.ResponseWriter) {
 
 // reapPolicyRE is the shape of a session's reap policy (claude-fleet#1902,
 // bin/fleet_reap_policy.py is the grammar): merged[:<dur>] · done[:<dur>] ·
-// loop-end · at:<ISO time | HH:MM | epoch> · keep. "" = the kind's default.
-var reapPolicyRE = regexp.MustCompile(`^(?:(?:merged|done)(?::[1-9][0-9]{0,6}[smhd]?)?|loop-end|keep|at:[0-9][0-9TZ:+-]{0,31})$`)
+// idle[:<dur>] (T694) · loop-end · at:<ISO time | HH:MM | epoch> · keep. "" = the kind's default.
+var reapPolicyRE = regexp.MustCompile(`^(?:(?:merged|done|idle)(?::[1-9][0-9]{0,6}[smhd]?)?|loop-end|keep|at:[0-9][0-9TZ:+-]{0,31})$`)
 
 func reapPolicyOK(p string) bool { return p == "" || reapPolicyRE.MatchString(p) }
 
@@ -2267,7 +2267,7 @@ func validReapPolicy(p string) bool {
 	switch head {
 	case "keep", "loop-end":
 		return !hasArg
-	case "merged", "done":
+	case "merged", "done", "idle":
 		if !hasArg {
 			return true
 		}

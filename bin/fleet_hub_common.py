@@ -89,7 +89,7 @@ TOOL_DIRS = ("$HOME/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bi
 
 
 # A session's reap policy (issue #1902) — tokenledger's reapPolicyRE, letter for letter.
-REAP_RE = re.compile(r"(?:(?:merged|done)(?::[1-9][0-9]{0,6}[smhd]?)?|loop-end|keep|at:[0-9][0-9TZ:+-]{0,31})")
+REAP_RE = re.compile(r"(?:(?:merged|done|idle)(?::[1-9][0-9]{0,6}[smhd]?)?|loop-end|keep|at:[0-9][0-9TZ:+-]{0,31})")
 
 def tool_path(inherited, home=None):
     """`inherited` PATH with every TOOL_DIRS entry present. The missing ones are

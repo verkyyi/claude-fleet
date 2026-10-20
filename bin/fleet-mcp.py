@@ -889,7 +889,9 @@ def tool_spawn(args):
 
 def tool_set_reap(args):
     """When the fleet may close THIS session on its own (issue #1902)."""
-    return script([str(BIN / "fleet-reap-policy.sh"), "set", args["policy"]], STATUS_TIMEOUT_S)
+    # --by session (T694, 回收 B): a `keep` the session sets for itself lapses
+    # once its work is over — only a person's keep holds.
+    return script([str(BIN / "fleet-reap-policy.sh"), "set", args["policy"], "--by", "session"], STATUS_TIMEOUT_S)
 
 
 def tool_await(args):
@@ -1268,7 +1270,7 @@ def tool_open(args):
 # A session's reap policy (issue #1902) — bin/fleet_reap_policy.py is the grammar;
 # the script canonicalizes or refuses (exit 2), this is only its shape.
 REAP_POLICY = {"type": "string", "maxLength": 48,
-               "pattern": r"^(?:(?:merged|done)(?::[1-9][0-9]{0,6}[smhd]?)?|loop-end|keep|at:[0-9][0-9TZ:+-]{0,31})$"}
+               "pattern": r"^(?:(?:merged|done|idle)(?::[1-9][0-9]{0,6}[smhd]?)?|loop-end|keep|at:[0-9][0-9TZ:+-]{0,31})$"}
 ISSUE = {"type": "integer", "minimum": 1, "description": 'The GitHub issue number (a positive integer, no "#").'}
 PR_NUM = {"type": "integer", "minimum": 1,
           "description": "The PR number. In a repo the fleet lands itself (FLEET_LAND=fleet, issue #3602): the "
@@ -1324,7 +1326,9 @@ TOOLS = {
         "description": "When the fleet may close THIS session on its own (bin/fleet-reap-policy.sh set; issue "
                        "#1902): merged (after its PR merged + the fleet's grace) · merged:48h (keep it 48 hours "
                        "after the merge, e.g. to wait for a read-back) · done:15m (its turn over and idle 15 minutes) "
-                       "· loop-end (once its /loop stops) · at:18:00 or at:<ISO time> · keep (never). "
+                       "· idle:15m (idle 15 minutes, done or not — e.g. waiting on a person's call) "
+                       "· loop-end (once its /loop stops) · at:18:00 or at:<ISO time> · keep (not while its "
+                       "work is open — a keep you set yourself lapses once your work is over; only a person's holds). "
                        "Every automatic close records history first and keeps unpushed work. Exit 0 set, "
                        "2 not a policy, 1 no window.",
         "inputSchema": {"type": "object", "properties": {"policy": REAP_POLICY},

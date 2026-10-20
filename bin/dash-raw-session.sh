@@ -129,7 +129,7 @@ set_agent() {   # a row of the adapter table (bin/fleet_agent_adapter.py beside 
   [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-raw-session: contradictory --agent values\n' >&2; exit 2; }
   AGENT=$1
 }
-NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; PREV_ID=""; REOPEN_FID=""; ID_TASK=""; ID_PARENT=""; PLACEHOLDER=0
+NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; PREV_ID=""; REOPEN_FID=""; ID_TASK=""; ID_PARENT=""; PLACEHOLDER=0; REAP_ORIGIN=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -196,6 +196,13 @@ while [ "$#" -gt 0 ]; do
     # the kind's default, stamped below: done:15m, or loop-end for a /loop seed.
     --reap)        REAP="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --reap=*)      REAP="${1#--reap=}"; shift ;;
+    # --reap-origin <word> (T694, 回收 B): where it came from, when the spawn
+    # knows better than its own facts — decide (waits on a person's call) ·
+    # probe (a scheduled job, a drill) · person · dispatched · member · driver ·
+    # orchestrator. None = read off the spawn (fleet_reap_origin). It picks the
+    # default policy (fleet_reap_policy.py ORIGINS) and is stamped @reap_origin.
+    --reap-origin)   REAP_ORIGIN="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --reap-origin=*) REAP_ORIGIN="${1#--reap-origin=}"; shift ;;
     # --test-identity (issue #2505): a session the TEST identity's client placed
     # (`fleet --test-identity`, #1931) — stamped @test_identity 1, named test-…,
     # closed once done 10 minutes unless a --reap says otherwise; the person's
@@ -297,6 +304,9 @@ if [ -n "$DISPATCH" ]; then
 fi
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+case "$REAP_ORIGIN" in ''|person|dispatched|member|driver|orchestrator|decide|probe) ;;
+  *) printf 'dash-raw-session: --reap-origin takes person|dispatched|member|driver|orchestrator|decide|probe\n' >&2; exit 2 ;;
+esac
 # The reap policy, canonical or refused before anything opens (issue #1902).
 if [ -n "$REAP" ]; then
   REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$REAP") || exit 2
@@ -518,6 +528,7 @@ if [ "$BG" = 1 ]; then
   owarg=''; [ -n "$ORIGIN_WID" ] && owarg=" --origin-wid=$ORIGIN_WID"
   # canonical (checked above): no quote or space can be in it
   [ -n "$REAP" ] && owarg="$owarg --reap=$REAP"
+  [ -n "$REAP_ORIGIN" ] && owarg="$owarg --reap-origin=$REAP_ORIGIN"   # a word, checked above
   [ "$TEST_ID" = 1 ] && owarg="$owarg --test-identity"
   [ "$PLACEHOLDER" = 1 ] && owarg="$owarg --placeholder"
   [ -n "$TASK_REF" ] && owarg="$owarg --task=$TASK_REF"   # T<n>, checked above
@@ -912,19 +923,31 @@ stamp_option() {
 # Every repo scratch carries its repo (issue #789).
 [ -n "$REPO_ARG" ] && stamp_option @repo "$REPO_ARG" 2>/dev/null
 [ "$PIN" = 1 ] && stamp_option @pin 1 2>/dev/null
-# When the fleet may close it on its own (issue #1902): the one asked for, else the
-# kind's default — a /loop seed until its loop stops, any other scratch once done
-# and idle 15 minutes (issue #3352; 2 hours before). A no-repo (home) session takes `done:15m` too (issue #2565) —
-# fleet-cleanup-idle.py reads it for such a session as "15 minutes after its agent
-# EXITED": a turn that merely ended is the session waiting for you, not over.
-[ "$TEST_ID" = 1 ] && { stamp_option @test_identity 1 2>/dev/null; [ -n "$REAP" ] || REAP=done:10m; }
+# When the fleet may close it on its own (issue #1902): the one asked for, else
+# where it came from decides (T694, 回收 B — fleet_reap_policy.py ORIGINS, the one
+# table): a person's own (⌘N / ⌘P) idle 2 hours, a dispatched one / a batch
+# member / a driver once its work is over, an orchestrator never (and pinned), a
+# probe (the TEST identity's, issue #2505) once done; a /loop seed until its loop
+# stops. A no-repo session's `idle` counts a finished turn; its `done` waits for
+# the agent to EXIT (issue #2565).
+[ "$TEST_ID" = 1 ] && stamp_option @test_identity 1 2>/dev/null
 stamp_option @dispatch "$DISPATCH" 2>/dev/null
 [ -n "$TASK_REF" ] && stamp_option @task "$TASK_REF" 2>/dev/null   # the hub's record (#3325)
 [ -n "$ID_TASK" ] && stamp_option @task "$ID_TASK" 2>/dev/null    # a continued ID's record (C18)
+[ -n "$REAP_ORIGIN" ] || REAP_ORIGIN=$(fleet_reap_origin "$SOCK" "$AS_ARG" "$ORIGIN" "$ORIGIN_WID" \
+  "$TEST_ID" "$_idpar" "${REOPEN_FID:-$PREV_ID}")
 if [ -z "$REAP" ]; then
-  case "$PROMPT" in /loop|/loop[[:space:]]*) REAP=loop-end ;; *) REAP=done:15m ;; esac
+  _rk=scratch; case "$PROMPT" in /loop|/loop[[:space:]]*) _rk=loop ;; esac
+  REAP=$(python3 "$BIN/fleet_reap_policy.py" origin-default "${REAP_ORIGIN:-person}" --kind "$_rk") || REAP=done:15m
+  unset _rk
 fi
 [ -n "$REAP" ] && stamp_option @reap_policy "$REAP" 2>/dev/null
+[ -n "$REAP_ORIGIN" ] && stamp_option @reap_origin "$REAP_ORIGIN" 2>/dev/null
+# A `keep` a SESSION asked for when it dispatched this one lapses once the work is
+# over (T694): only a person's keep holds (fleet_reap_policy.effective).
+[ "$REAP" = keep ] && case "$REAP_ORIGIN" in dispatched|member) stamp_option @reap_keep_by session 2>/dev/null ;; esac
+# An orchestrator is pinned from its first moment (回收 B): never closed on its own.
+[ "$REAP_ORIGIN" = orchestrator ] && [ "$PIN" != 1 ] && stamp_option @pin 1 2>/dev/null
 # A no-repo session opened with no words (⌘N, a plain `fleet` whose last session is
 # gone — issue #4000): its first turn is tracked (`@prompted`, set-claude-state.sh's
 # `working`), so one nobody ever typed into is closed after its grace
