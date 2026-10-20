@@ -19,10 +19,11 @@
 #   C  the launcher starts ONE proxy for both: alpha's and beta's sessions each
 #      reach their OWN credential; the audit (each login's log) is each login's
 #   D  isolation: alpha cannot mint as beta (--as), a token re-labelled to
-#      beta fails the signature, beta's token on alpha's old port is refused,
-#      an unknown uid is refused, a hub pass is only the login's that filed it
-#   E  alpha's per-login proxy hands over: a session minted BEFORE the switch
-#      keeps working on its old port, through the shared proxy, alpha's account
+#      beta fails the signature, an unknown uid is refused, a hub pass is only
+#      the login's that filed it
+#   E  alpha's old port is not served (T600: no session uses one since #4674):
+#      a credential minted on its own proxy before the switch (no `lg`) is
+#      refused on the shared port and nobody answers the old one
 #   F  `status --machine` / the doctor's `cred` row: shared · user · k/N · a/b
 #   G  no way back (issue #4675): `machine uninstall` / `uninstall` exit 2 and
 #      every credential stays in the store — none back in a home (between legs
@@ -182,8 +183,8 @@ for L in alpha beta; do
 done
 [ ! -e "$CA/cred-proxy/key" ] && [ "$(cksum < "$SB/db/alpha/cred-proxy/key")" = "$KEY0" ] \
   && pass "B alpha's signing key MOVED into the store (no copy left to forge with)" || fail "B alpha key"
-python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); sys.exit(0 if m["legacy_port"]==int(sys.argv[2]) else 1)' \
-  "$SB/db/alpha/meta.json" "$OLDPORT" && pass "B alpha's old port :$OLDPORT recorded" || fail "B legacy port"
+python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); sys.exit(0 if "legacy_port" not in m else 1)' \
+  "$SB/db/alpha/meta.json" && pass "B alpha's old port is not recorded (T600)" || fail "B legacy port recorded"
 n=0; per=0
 for f in "$SB/daemons"/*; do case "${f##*/}" in *cred-proxy-shared*) n=$((n + 1)) ;; *credsep.*) per=$((per + 1)) ;; esac; done
 [ "$n" = 1 ] && [ "$per" = 0 ] && pass "B ONE service for the machine, none per login" || fail "B services: $(ls "$SB/daemons")"
@@ -468,9 +469,6 @@ PY
 )
 case "$(call "$PORT" "$FORGED")" in *"bad signature"*) pass "D alpha's token re-labelled to beta: bad signature" ;;
   *) fail "D forged: $(call "$PORT" "$FORGED")" ;; esac
-for _ in $(seq 1 100); do grep -q legacy_port "$SB/log/alpha.log" 2>/dev/null && break; sleep 0.1; done
-case "$(call "$OLDPORT" "$TB")" in *sk-ant*) fail "D beta's token on alpha's old port was served" ;;
-  *) pass "D beta's token on alpha's old port: refused" ;; esac
 HP=$(python3 -c 'import base64,json,time; e=lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode(); print("fcp-h1."+e(json.dumps({"id":"pass-b","exp":int(time.time())+3600}).encode())+".sig")')
 case "$(call "$PORT" "$HP")" in *"not registered"*) pass "D an unregistered hub pass: 401" ;; *) fail "D hub pass: $(call "$PORT" "$HP")" ;; esac
 printf '%s\n' "$HP" | FLEET_CRED_TEST_PEER_UID=$BUID FLEET_CONF_DIR="$CB" bash "$BIN/fleet-cred-proxy.sh" pass >/dev/null 2>&1
@@ -478,10 +476,12 @@ call "$PORT" "$HP" >/dev/null
 grep -q '"sid": "h-' "$SB/log/beta.log" && ! grep -q '"sid": "h-' "$SB/log/alpha.log" \
   && pass "D a hub pass beta filed is beta's (its log, its renewal)" || fail "D hub pass not beta's"
 
-# ── E: alpha's session from BEFORE the switch, on its old port ────────────────────
-ro=$(call "$OLDPORT" "$T0")
-case "$ro" in *sk-ant-oat01-alpha*) pass "E a session minted on alpha's own proxy keeps working on :$OLDPORT (shared, alpha's account)" ;;
+# ── E: alpha's session from BEFORE the switch: its old port is gone (T600) ─────────
+ro=$(call "$PORT" "$T0")
+case "$ro" in *"names no login served here"*) pass "E a credential minted on alpha's own proxy: refused on the shared :$PORT" ;;
   *) fail "E old session: $ro" ;; esac
+case "$(call "$OLDPORT" "$T0")" in *sk-ant*) fail "E alpha's old port :$OLDPORT is still served" ;;
+  *) pass "E alpha's old port :$OLDPORT: nobody answers (T600)" ;; esac
 
 # ── F: the person's line and the doctor row ──────────────────────────────────────
 printf 'claude\tx\nclaude\tx\ncodex\tx\nzsh\tx\n' > "$SB/procs"
@@ -501,7 +501,8 @@ STORE0=$(cd "$SB/db" && find . -type f | LC_ALL=C sort)
 out=$(bash "$BIN/fleet-credsep.sh" machine uninstall 2>&1); rc=$?
 case "$rc:$out" in "2:"*"machine uninstall is gone (issue #4675)"*) pass "G machine uninstall: gone (exit 2)" ;; *) fail "G rc=$rc: $out" ;; esac
 out=$(HOME="$SB/homes/beta" python3 -I "$BIN/fleet-credsep.py" uninstall --login beta --conf-dir "$CB" 2>&1); rc=$?
-[ "$rc" = 2 ] && pass "G uninstall --login beta: refused (exit 2)" || fail "G uninstall rc=$rc: $out"
+[ "$rc" = 2 ] && printf '%s' "$out" | grep -q "invalid choice: 'uninstall'" \
+  && pass "G fleet-credsep.py has no uninstall (exit 2, T600)" || fail "G uninstall rc=$rc: $out"
 [ "$(cd "$SB/db" && find . -type f | LC_ALL=C sort)" = "$STORE0" ] && [ -e "$SB/db/.shared.json" ] \
   && [ ! -e "$CA/accounts/pool1.hub" ] && [ ! -e "$CB/accounts/solo.hub" ] && [ ! -e "$SB/homes/beta/.codex/auth.json" ] \
   && pass "G every lease still in the store, none back in a home" \

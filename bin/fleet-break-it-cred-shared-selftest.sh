@@ -239,17 +239,14 @@ drill_cred_sep_codex_full() {
   WHAT="隔离登录两个 Codex 号、default 周限用完：default home 的会话由代理挑号，撞 usage limit 的 429 当场换 JoyGao 重发 200；之后新开的、旧式绑 default 的会话都不再碰 default；全用完时 standing 说「${out}」"
 }
 
-# cred-pool-dup (issue #2849): `machine join` starts the shared proxy with the
-# joining login's pool_hold (its own proxy still reads the store's files) and
-# drops the hold in meta.json at the end — but the running proxy kept the hold
-# it read at start, so every renewal went on writing accounts/<label>.hub while
-# the pool held the same token for the other login: two copies of one token
-# (2026-10-10 mac-c · mac-d, four pool accounts). Now the proxy re-reads a
-# held tenant's meta.json, folds a leftover own copy into the pool on the next
-# store or read, and `machine pooldup` (the machine doctor's credpool row) names
-# a token held twice.
+# cred-pool-dup (issue #2849): a login's own accounts/<label>.hub beside the
+# pool's copy of the same token — two copies, each renewed on its own
+# (2026-10-10 mac-c · mac-d, four pool accounts, left by `machine join`'s
+# pool_hold, which T600 removed with the per-login proxies). The proxy folds a
+# leftover own copy into the pool on the next store or read, and `machine
+# pooldup` (the machine doctor's credpool row) names a token held twice.
 drill_cred_pool_dup() {
-  CAP=10   # the hold dropped → one renewal and one request later, one copy
+  CAP=10   # the own copy found → one renewal and one request later, one copy
   local sb me uid gid port ta tb pid1 pid2 t0 sup out rc R
   me=$(id -un); uid=$(id -u); gid=$(id -g); sb="$WORK/pooldup"
   mkdir -p "$sb/daemons"
@@ -280,17 +277,13 @@ drill_cred_pool_dup() {
   sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
   until_ok 30 test -S "$sb/run/.shared/ctl.sock" || { WHY="the shared proxy did not start: $(tail -2 "$sb/launch.err" | tr '\n' ' ')"; dup_down; return 1; }
   until_ok 5 test -s "$sb/run/.shared/pid"; CP="$port"
-  # the join in progress: alpha held (its own proxy still reads the store) — the proxy restarts with the hold
-  python3 -c 'import json, sys; p = sys.argv[1]; m = json.load(open(p)); m["pool_hold"] = True; json.dump(m, open(p, "w"))' "$R/meta.json"
-  pid1=$(cat "$sb/run/.shared/pid"); kill "$pid1"
-  until_ok 30 sh -c '[ -s "$1/pid" ] && [ "$(cat "$1/pid")" != "$2" ] && [ -S "$1/ctl.sock" ]' _ "$sb/run/.shared" "$pid1" \
-    || { WHY="the shared proxy did not come back with alpha held"; dup_down; return 1; }
   until_ok 10 sh -c '[ -n "$(FLEET_CONF_DIR="$1" bash "$2/fleet-cred-proxy.sh" port 2>/dev/null)" ]' _ "$sb/homes/alpha/.config/claude-fleet" "$BIN"
-  dup_store alpha - >/dev/null 2>&1; dup_store beta 1999994 >/dev/null 2>&1
+  dup_store beta 1999994 >/dev/null 2>&1
+  # alpha's own copy of the same token, left beside the pool's (what an old join wrote)
+  mkdir -p "$R/accounts/a1.hub"
+  printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat-SAME","refreshToken":null,"expiresAt":4102444800000}}' > "$R/accounts/a1.hub/.credentials.json"
   [ -f "$R/accounts/a1.hub/.credentials.json" ] && [ -n "$(find "$sb/db/.shared/pool/claude" -name .credentials.json 2>/dev/null)" ] \
     || { WHY="setup: no own copy beside the pool's ($(find "$sb/db" -name .credentials.json | tr '\n' ' '))"; dup_down; return 1; }
-  # join's last step: the hold dropped in meta.json — no restart
-  python3 -c 'import json, sys; p = sys.argv[1]; m = json.load(open(p)); m.pop("pool_hold", None); json.dump(m, open(p, "w"))' "$R/meta.json"
   t0=$(now)
   out=$(python3 -I "$BIN/fleet-credsep.py" machine pooldup 2>&1); rc=$?
   [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^pooldup: WARN — .*alpha:a1' && ! printf '%s' "$out" | grep -q 'sk-ant' \
@@ -300,17 +293,17 @@ drill_cred_pool_dup() {
   ta=$(FLEET_CONF_DIR="$sb/homes/alpha/.config/claude-fleet" bash "$BIN/fleet-cred-proxy.sh" mint --account a1 --sid pa 2>&1)
   tb=$(FLEET_CRED_TEST_PEER_UID=1999994 FLEET_CONF_DIR="$sb/homes/beta/.config/claude-fleet" bash "$BIN/fleet-cred-proxy.sh" mint --account a1 --sid pb 2>&1)
   [ "$(cred_req "$ta" "$sb/ra")" = 200 ] && [ "$(cred_req "$tb" "$sb/rb")" = 200 ] && grep -q oat-SA "$sb/ra" && grep -q oat-SA "$sb/rb" \
-    || { WHY="after the hold: alpha $(head -c 200 "$sb/ra") · beta $(head -c 200 "$sb/rb")"; dup_down; return 1; }
+    || { WHY="after the fold: alpha $(head -c 200 "$sb/ra") · beta $(head -c 200 "$sb/rb")"; dup_down; return 1; }
   SECS=$(since "$t0")
   [ ! -e "$R/accounts/a1.hub" ] && [ "$(find "$sb/db" -name .credentials.json | wc -l | tr -d ' ')" = 1 ] \
-    || { WHY="still two copies after the hold was dropped: $(find "$sb/db" -name .credentials.json | sed "s|$sb/||" | tr '\n' ' ')"; dup_down; return 1; }
+    || { WHY="still two copies after a renewal and a request: $(find "$sb/db" -name .credentials.json | sed "s|$sb/||" | tr '\n' ' ')"; dup_down; return 1; }
   grep -q '"claude:a1"' "$R/cred-proxy/pool.json" \
     || { WHY="alpha's pool index does not name claude:a1: $(cat "$R/cred-proxy/pool.json" 2>&1)"; dup_down; return 1; }
   out=$(python3 -I "$BIN/fleet-credsep.py" machine pooldup 2>&1); rc=$?
   [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^pooldup: OK' \
     || { WHY="pooldup after the fold (rc $rc): $(printf '%s' "$out" | tail -1)"; dup_down; return 1; }
   dup_down
-  WHAT="同一令牌两份（共享池一份 + alpha 按登录的 accounts/a1.hub 一份，machine join 的 pool_hold 没落到在跑的代理）：machine pooldup WARN 点名 alpha:a1；hold 一撤，下一次续租 + 请求就并回池里一份，两个登录都 200，pooldup OK"
+  WHAT="同一令牌两份（共享池一份 + alpha 按登录的 accounts/a1.hub 一份）：machine pooldup WARN 点名 alpha:a1；下一次续租 + 请求就并回池里一份，两个登录都 200，pooldup OK"
 }
 
 # cred-pool-follows-hub (issue #2850): the hub's pool changes — a new one-year

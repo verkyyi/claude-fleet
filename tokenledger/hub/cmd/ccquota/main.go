@@ -5,7 +5,7 @@
 //	ccquota enroll    mint an endpoint token (run on the hub)
 //	ccquota endpoint  list/retire/delete an endpoint (run on the hub)
 //	ccquota credproxy the cluster credential proxy (the hub's image, its own
-//	                  Deployment — shared/credproxy, the node's build runs it too)
+//	                  Deployment — shared/credproxy; the hub's only, T600)
 //
 // No node code is compiled in: a node command (agent/cmd/ccquota/commands.txt)
 // answers one line naming the node's build and exits 2.
@@ -79,7 +79,7 @@ func main() {
 }
 
 // nodeCommands are the node's build's subcommands this build does not run
-// (agent/cmd/ccquota/commands.txt less credproxy and version, which both run;
+// (agent/cmd/ccquota/commands.txt less version, which both run;
 // bin/tokenledger-modules-selftest.sh holds the two lists together).
 var nodeCommands = map[string]bool{
 	"agent": true, "budget": true, "chat-pipe": true, "codex": true, "core-exec": true,

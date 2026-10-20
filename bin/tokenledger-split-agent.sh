@@ -25,7 +25,7 @@ MOD=github.com/verkyyi/claude-fleet/tokenledger
 FILES="agent_machine.go agent_machine_other.go agent_machine_unix.go agent_machine_test.go
 agent_machine_hubdial_test.go agent_machine_script_test.go chat_pipe.go term_pty.go
 report.go report_test.go stamp.go budget.go budget_test.go budget_json_test.go
-budget_codex_test.go codex.go codex_test.go credproxy.go lease.go lease_test.go place.go place_test.go
+budget_codex_test.go codex.go codex_test.go lease.go lease_test.go place.go place_test.go
 move.go move_test.go release.go install.go secretflag_test.go"
 
 if [ "${1:-}" = --check ]; then

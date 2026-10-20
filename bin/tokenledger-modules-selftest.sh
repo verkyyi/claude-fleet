@@ -18,7 +18,8 @@
 #   7. agent/ imports outside agent/+shared/ none, hub/ (tests too) outside hub/+shared/ none
 #   8. nothing left in internal/, the old cmd/ccquota or web/ (split-agent / split-hub --check)
 #   9. agent/cmd/ccquota/commands.txt is agent/cli.Run's names; the hub's build runs
-#      only credproxy and version of them and names the rest in nodeCommands; every
+#      only version of them and names the rest in nodeCommands (credproxy is the
+#      hub's alone since T600: the node's build never started it); every
 #      `ccquota <cmd>` bin/, hooks/, conf/ name is a node command or a listed hub one
 #  10. tokenledger.yml tests every module
 # The isolation rails (skipped with --modules: the BREAK-IT drills' sandbox repo):
@@ -177,9 +178,9 @@ ran=$(cases "$TL/agent/cli/run.go")
   || { fail "commands.txt and agent/cli/run.go differ:"; diff <(printf '%s\n' "$listed") <(printf '%s\n' "$ran") | sed 's/^/     /'; }
 HUBMAIN="$TL/hub/cmd/ccquota/main.go"
 hubcmds=$(cases "$HUBMAIN" | grep -vx help)
-# credproxy and version: the hub's image runs them too (the credproxy Deployment,
-# `ccquota version`'s src line) — shared/credproxy.Main, one implementation
-BOTH_BUILDS="credproxy version"
+# version: both builds print it (`ccquota version`'s src line). credproxy is the
+# hub's alone (its Deployment, deploy/k8s/credproxy) — T600 took the node's copy
+BOTH_BUILDS="version"
 both=$(comm -12 <(printf '%s\n' "$listed") <(printf '%s\n' "$hubcmds") | grep -vxE "$(printf '%s' "$BOTH_BUILDS" | tr ' ' '|')")
 [ -z "$both" ] && ok "the hub's build runs no node command but $BOTH_BUILDS" \
   || fail "the hub's build runs a node command itself (it belongs to agent/cli): $both"

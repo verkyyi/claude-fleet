@@ -7,8 +7,8 @@
 #   A  off (the degenerate): status reads `off · - · sessions 0/4` and changes
 #      no byte; no proxy runs
 #   B  on, with the machine's proxy this login is a tenant of: status counts the
-#      sessions that talk to it — on its port, or on the login's OLD port it took
-#      over (issue #2324) — and no other
+#      sessions that talk to it on its port and no other (a login's old port is
+#      not served since T600)
 #   C  a login's own enable / disable left with the per-login proxy (#4674), and
 #      disable --machine with the way back to a home (#4675):
 #      exit 2 naming the machine's switch (--machine), not a byte written; the
@@ -108,24 +108,20 @@ out=$(bash "$BIN/fleet-cred-proxy.sh" run 2>&1); rc=$?
 
 # ── B: on, through the proxy this login's sessions use ─────────────────────
 printf 'export FLEET_CRED_PROXY=1\n' >> "$FLEET_CONF_DIR/fleet.conf"
-# the machine's proxy with this login its one tenant, answering its old port too
-OLD=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
-python3 -c 'import json,os,sys; c,old=sys.argv[1],int(sys.argv[2]); st=os.path.join(c,"cred-proxy")
+# the machine's proxy with this login its one tenant
+python3 -c 'import json,os,sys; c=sys.argv[1]; st=os.path.join(c,"cred-proxy")
 json.dump({"state":st,"run":st,"user":"me","version":"-","port":0,"tenants":[{"login":"me","uid":os.getuid(),
 "state":st,"accounts":os.path.join(c,"accounts"),"codex_auth":os.path.join(c,"auth.json"),"codex_homes":os.path.join(c,"ch"),
-"node_env":os.path.join(c,"node.env"),"probe":os.path.join(c,"node-probe.json"),"legacy_port":old,"settings":{}}]},
-open(os.path.join(c,"machine.json"),"w"))' "$FLEET_CONF_DIR" "$OLD"
+"node_env":os.path.join(c,"node.env"),"probe":os.path.join(c,"node-probe.json"),"settings":{}}]},
+open(os.path.join(c,"machine.json"),"w"))' "$FLEET_CONF_DIR"
 mkdir -p "$FLEET_CONF_DIR/cred-proxy"
 python3 -I "$BIN/fleet-cred-proxy.py" serve --shared "$FLEET_CONF_DIR/machine.json" --max-seconds 300 2>"$SB/proxy.err" & PXPID=$!
 waitfor up || fail "B the proxy did not start: $(cat "$SB/proxy.err")"
 PORT=$(cat "$FLEET_CONF_DIR/cred-proxy/port" 2>/dev/null); procs "$PORT"
-printf '%s\t%s\n' claude "claude ANTHROPIC_BASE_URL=http://127.0.0.1:$OLD HOME=/x" >> "$SB/procs"
-waitfor sh -c "bash '$BIN/fleet-cred-proxy.sh' status --json 2>/dev/null | grep -q '\"legacy_port\": $OLD'" \
-  || fail "B the proxy never bound the old port $OLD: $(bash "$BIN/fleet-cred-proxy.sh" status --json 2>&1)"
 out=$(R status)
 case "$out" in
   'on · down ·'*|'on · - ·'*) fail "B status: route missing — $out" ;;
-  'on · '*' · sessions 3/5') pass "B status: '$out' (its port and its old port count, no other)" ;;
+  'on · '*' · sessions 2/4') pass "B status: '$out' (its port counts, no other)" ;;
   *) fail "B status: $out" ;;
 esac
 case "$out" in *"$SECRET"*|*fcp1.*) fail "G status printed an environment value" ;; *) pass "G status prints counts only" ;; esac

@@ -165,11 +165,6 @@ status_line() {
   sw=$(switch_now)
   if proxy_up; then
     port=$(proxy_port)
-    # and the old port the shared proxy answers for this login (issue #2324)
-    port="$port $(env -u FLEET_CRED_PROXY bash "$BIN/fleet-cred-proxy.sh" status --json 2>/dev/null \
-      | python3 -I -c 'import json,sys
-try: print(json.load(sys.stdin).get("legacy_port") or "")
-except ValueError: pass' 2>/dev/null)"
     route=$(env -u FLEET_CRED_PROXY bash "$BIN/fleet-cred-proxy.sh" route --json 2>/dev/null \
       | python3 -I -c 'import json,sys
 try: print(json.load(sys.stdin).get("route") or "?")

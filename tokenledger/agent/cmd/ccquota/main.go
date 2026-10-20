@@ -56,8 +56,6 @@ Usage:
                             (LOCAL | REMOTE — the hub sent it there; exit 3 held)
   ccquota move   <cmd>      Move a session to another machine through the hub
                             (plan | send; fleet-move.sh --via hub)
-  ccquota credproxy [flags] The cluster credential proxy: a session pass in, the
-                            real credential out, through the relay
   ccquota release <cmd>     A node release from the hub, signature-checked
                             (fetch | verify | keygen | pubkey; never GitHub)
   ccquota version           Print the version

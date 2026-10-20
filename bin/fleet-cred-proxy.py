@@ -82,7 +82,7 @@ count): the session keeps it while it is under FLEET_CRED_PICK_CEILING
 (default FLEET_ACCOUNT_CEILING, 85) and not limited; at the ceiling the next
 request runs on the account with the most room, and a quota 429 moves the SAME
 request there (limited until its reset) — no exit, no resume. A credential
-minted before #2412 that names an account runs on it, as before. ctl `picks`
+minted by root (a pin) that names an account runs on it. ctl `picks`
 says which account each session is on (read-only). Not separated: no pick.
 A Codex session of a separated login is picked the same way (issue #4606) —
 unless it names an account home of its own (FLEET_CODEX_HOME=<homes>/<L>, a
@@ -996,10 +996,10 @@ class Router:
                 with urllib.request.urlopen(req, timeout=10) as r:
                     body = json.loads(r.read() or b"{}")
                 raw = body.get("trust")
-                if raw is None and isinstance(body.get("trusted"), bool):
-                    raw = "trusted" if body["trusted"] else "untrusted"
                 if raw is None:
-                    t, why = "trusted", "hub keeps no trust record (before #1968): every activated machine is trusted"
+                    # every hub since #1968 answers one (T600 took the no-record
+                    # fallback): a silent answer is not a trust (fail closed)
+                    t, why = "untrusted", "hub: no trust in /v1/node/self"
                 else:
                     t = "trusted" if str(raw).lower() in ("trusted", "true", "1") else "untrusted"
                     why = "hub: %s" % raw
@@ -1461,8 +1461,8 @@ class Proxy(BaseHTTPRequestHandler):
             if first:
                 self.passes.stats["local"] += 1
                 self.log(ev="renew", kind="local", sid=sid)
-        # root's pin (bind.json) first, then the account a credential minted
-        # before #2412 names; a credential that names none: the proxy picks
+        # root's pin (bind.json) first, then the account the credential names
+        # (not separated, a root mint, a named Codex home); none: the proxy picks
         pin = read_json(os.path.join(self.cfg.state, "bind.json"), {}).get(sid)
         acct = pin or claims.get("acct") or ""
         if not pin and provider == "codex" and self.cfg.store and acct == "default":
@@ -1882,31 +1882,13 @@ def own_path(cfg, kind, label):
     return codex_auth_path(cfg, label)
 
 
-def pool_held(cfg):
-    """Its own proxy still reads the store's files (`machine join`, issue #2432)?
-    The hold is read at start, but join drops it in the tenant's meta.json only
-    after — with this proxy already running. So a held tenant re-reads it every
-    time: a hold the meta no longer carries is released here, or every renewal
-    would go on writing a second copy beside the pool's (issue #2849)."""
-    if not getattr(cfg, "pool_hold", False):
-        return False
-    try:
-        with open(os.path.join(os.path.dirname(cfg.state), "meta.json")) as f:
-            m = json.load(f)
-        if isinstance(m, dict) and not m.get("pool_hold"):
-            cfg.pool_hold = False
-    except (OSError, ValueError):
-        pass
-    return cfg.pool_hold
-
-
 def pool_resolve(cfg, kind, label):
     """-> the pool file for <kind>:<label>, folding a tenant's own copy in first
     (issue #2849): on the shared proxy a label resolves to the pool's copy only,
     and an own accounts/<label>.hub left from before (a join's hold, an install)
     moves in on the first read. "" when there is none (the own path is read)."""
     pp = pool_entry(cfg, kind, label)
-    if pp or not getattr(cfg, "pool", "") or pool_held(cfg):
+    if pp or not getattr(cfg, "pool", ""):
         return pp
     own = own_path(cfg, kind, label)
     if not os.path.isfile(own):
@@ -2058,8 +2040,6 @@ def pool_adopt(cfgs):
     """A tenant that joined before the pool: its own copies move in, one each."""
     n = 0
     for c in cfgs:
-        if pool_held(c):
-            continue        # its own proxy still reads these files (issue #2432): next start
         found = []
         acc = c.accounts
         for d in sorted(os.listdir(acc)) if os.path.isdir(acc) else []:
@@ -2291,7 +2271,7 @@ def ctl_handle(req, t):
         acct = req.get("account") or ""
         # separated, a Claude session names no account (issue #2412): the proxy
         # picks it per request — a login's --account is ignored (logged), only
-        # root names one. No provider (a launcher older than #2412): as before.
+        # root names one. No provider: a mint for a named account (--account).
         if cfg.store and req.get("provider") == "claude" and not req.get("_root"):
             if acct:
                 t.log(ev="mint_account_ignored", sid=req.get("sid") or "-", acct=acct)
@@ -2375,15 +2355,6 @@ def ctl_handle(req, t):
             return {"ok": False, "err": "store: empty or oversized"}
         if kind not in POOL_FILE:
             return {"ok": False, "err": "store: kind claude|codex"}
-        if getattr(cfg, "pool", "") and pool_held(cfg):
-            # joining from its own proxy (issue #2432): that one still reads the
-            # store's files until `machine join` boots it out — no pool yet
-            write_private(own_path(cfg, kind, label), data)
-            idx = pool_index(cfg)
-            if idx.pop("%s:%s" % (kind, label), None):
-                write_json(os.path.join(cfg.state, "pool.json"), idx)
-            t.log(ev="store", kind=kind, acct=label, bytes=len(data), hold=True)
-            return {"ok": True}
         if getattr(cfg, "pool", ""):
             # the shared proxy: one copy for the machine (issue #2311)
             try:
@@ -2574,7 +2545,7 @@ def ctl_handle(req, t):
             live = read_json(os.path.join(tt.cfg.state, "live.json"), {})
             n = sum(1 for p in live.values() if pid_alive(p))
             n += sum(1 for v in list(tt.passes.held.values()) if (hub_claims(v) or {}).get("exp", 0) > now)
-            logins[name] = {"live": n, "legacy_port": tt.cfg.legacy_bound or None}
+            logins[name] = {"live": n}
         return {"ok": True, "port": cfg.bound_port, "user": cfg.run_user, "version": cfg.version,
                 "logins": logins}
     if op == "status":
@@ -2585,7 +2556,7 @@ def ctl_handle(req, t):
                "renew": dict(t.passes.stats), "hub_passes": len(t.passes.held)}
         if Proxy.tenants:
             out.update(shared=True, login=t.name, logins=sorted(Proxy.tenants), user=cfg.run_user,
-                       version=cfg.version, legacy_port=cfg.legacy_bound or None)
+                       version=cfg.version)
         return out
     return {"ok": False, "err": "unknown op %r" % op}
 
@@ -2795,33 +2766,8 @@ def tenant_cfg(base, spec):
     c.central_set = bool(st.get("FLEET_CRED_CENTRAL_URL"))
     c.central_url = (st.get("FLEET_CRED_CENTRAL_URL") or ne.get("CCQUOTA_HUB_URL")
                      or st.get("FLEET_HUB_URL") or "").rstrip("/")
-    c.legacy_port = int(spec.get("legacy_port") or 0)
-    c.legacy_bound = 0
-    c.pool_hold = bool(spec.get("pool_hold"))
     c.quota_push, c.store, c.broker, c.ctl_uid = "", True, True, c.uid
     return c
-
-
-def legacy_serve(t, cfg, fd=None):
-    """A login's old port (issue #2217): the port its running sessions carry in
-    ANTHROPIC_BASE_URL. Bound as soon as the per-login proxy lets go of it, so a
-    session moves over on its next request; that port answers only that login.
-    fd: the same port handed over by the proxy before (T595)."""
-    h = type("ProxyOld_" + t.name, (Proxy,), {"fixed": t})
-    while True:
-        if DRAIN["on"]:
-            return              # handed over before it was bound: the successor binds it
-        try:
-            srv = Server(("127.0.0.1", t.cfg.legacy_port), h, fd=fd)
-            break
-        except OSError:
-            fd = None
-            time.sleep(0.2)     # the own proxy lets go during `machine join` (#2432): take it at once
-    srv.daemon_threads = True
-    t.cfg.legacy_bound = t.cfg.legacy_port
-    HANDOFF["tcp:%d" % t.cfg.legacy_port] = srv
-    t.log(ev="legacy_port", port=t.cfg.legacy_port, handed=fd is not None)
-    srv.serve_forever()
 
 
 def shared_logins(run):
@@ -3118,7 +3064,6 @@ def serve(a):
     if shared:
         cfg.run_user = shared.get("user") or ""
         cfg.version = shared.get("version") or ""
-        cfg.legacy_bound = 0
         cfg.uid = None
         Proxy.sink = LogSink(cfg)
         seen = {}
@@ -3278,10 +3223,6 @@ def serve(a):
             f.write("".join("%s\n" % n for n in sorted(Proxy.tenants)))
         os.replace(lf + ".tmp", lf)
         files.append(lf)
-        for t in tenants:
-            if t.cfg.legacy_port and t.cfg.legacy_port != cfg.bound_port:
-                threading.Thread(target=legacy_serve, args=(t, cfg, inherited.pop("tcp:%d" % t.cfg.legacy_port, None)),
-                                 daemon=True).start()
     for f in inherited.values():    # a handed-over port nobody here serves any more
         os.close(f)
     handoff_listen(st, lockf)
