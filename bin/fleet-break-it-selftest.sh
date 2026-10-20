@@ -5843,6 +5843,32 @@ drill_mcp_release_path_pinned() {
   WHAT="按某个版本树自己的路径起的 fleet MCP 服务：第一次调用就换到 current 指的版本，之后每次换版都跟上；不是版本树的路径原样不动（fleet-mcp-selftest.sh M2 真跑，这里按名守住）"
 }
 
+# T580's two Codex-only breaks of a session's start and its /clear (T629, EPIC T580
+# C5) — one witness for both agents (fleet_id.hook, the adapter's sid_source /
+# clear_said); each recovery is a leg of bin/fleet-agent-witness-selftest.py run once
+# per agent (Claude's SessionStart payload, Codex's runtime against the one fake
+# app-server): held here by name, not run twice.
+# ① a dispatched Codex task never read as started (#4972)
+drill_start_unwitnessed() {
+  CAP=10; local t0
+  t0=$(now)
+  grep -qF '_ledger_hook(pane, socket, sid, "resume" if sid == opened_for else "startup")' "$BIN/fleet-codex-session.py" \
+    || { WHY="fleet-codex-session.py no longer witnesses a Codex start through the ledger's hook"; return 1; }
+  suite_holds fleet-agent-witness-selftest.py 'start before the first turn' 'def test_claude' 'def test_codex' || return 1
+  WHAT='Codex 会话人还没开口时，runtime 从私有 app-server 见到 TUI 线程就记下对话、写 ID 第一段（startup），第一轮的钩子不再加段；Claude 由 SessionStart 写同一段；两种 Agent 各跑一遍（fleet-agent-witness-selftest.py，这里按名守住）'
+  SECS=$(since "$t0")
+}
+# ③ a reopen after a version update read as a new conversation (#4737)
+drill_reopen_new_segment() {
+  CAP=10; local t0
+  t0=$(now)
+  grep -qF 'not _says_clear(agent)' "$BIN/fleet_id.py" \
+    || { WHY="fleet_id.next_native no longer asks the adapter table whether an agent says /clear"; return 1; }
+  suite_holds fleet-agent-witness-selftest.py "'reopen'" 'test_next_native_asks_the_table' || return 1
+  WHAT='换版重开回到同一对话不加段（Codex 续接的线程是本次启动为它开的记 resume），/clear 记新一段；next_native 问表的 clear_said、不问名字；两种 Agent 各跑一遍（fleet-agent-witness-selftest.py）'
+  SECS=$(since "$t0")
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call

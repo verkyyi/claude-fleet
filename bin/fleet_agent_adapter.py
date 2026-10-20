@@ -50,6 +50,23 @@ Columns
                   held while the window has not followed a /clear. Everything around
                   it — the journaled route, the held code, the peer queue, the receipt —
                   is one road: fleet_agent_deliver (fleet-lib.sh).
+  sid_source      where the fleet first hears a conversation's id (T629, C5): hook =
+                  the agent's SessionStart hook payload, at launch and on every
+                  /clear; thread = the window's private app-server's thread/started,
+                  witnessed by the launcher's runtime (Codex runs SessionStart only at
+                  a thread's first turn). Either way it lands through the ONE
+                  witness, fleet_id.hook — 「起来了」 is the ID's first segment.
+  clear_said      1 = a session start says it came from /clear (Claude's source=clear);
+                  0 = it does not, so a new id in the same window is read as a clear
+                  (fleet_id.next_native)
+  transcript      where a conversation's transcript lives: project = the login's
+                  ~/.claude/projects/<cwd>/<id>.jsonl (archivable); home = the
+                  agent's own home, recorded on the history row (cols 12–14)
+  from_pr_flag    reopen the conversation that made a PR; empty = none
+
+One reader for a window's CURRENT conversation id: session_id(agent, read) /
+fleet_agent_session_id <agent> <reader> [window|fallback] — sid_window, else
+sid_pending's "session_id", else sid_thread; written once, here.
 """
 import os
 import re
@@ -62,7 +79,7 @@ HERE = Path(__file__).resolve().parent
 COLUMNS = ("launcher", "model_env", "model_flag", "resume_flag", "fork_flag", "fork_replaces",
            "continue_flag", "preset_sid_flag", "sid_window", "sid_pending", "sid_thread",
            "seed", "seed_words", "park_resume", "ready_check", "trust", "mcp",
-           "deliver")
+           "deliver", "sid_source", "clear_said", "transcript", "from_pr_flag")
 
 ADAPTERS = {
     "claude": {
@@ -74,6 +91,7 @@ ADAPTERS = {
         "seed": "slash", "seed_words": "1", "park_resume": "1",
         "ready_check": "", "trust": "claude-json", "mcp": "flags",
         "deliver": "inbox",
+        "sid_source": "hook", "clear_said": "1", "transcript": "project", "from_pr_flag": "--from-pr",
     },
     "codex": {
         "launcher": "fleet-codex.sh", "model_env": "FLEET_CODEX_MODEL", "model_flag": "-m",
@@ -83,6 +101,7 @@ ADAPTERS = {
         "seed": "skill", "seed_words": "0", "park_resume": "0",
         "ready_check": "fleet_codex_ready", "trust": "codex-toml", "mcp": "config",
         "deliver": "queue",
+        "sid_source": "thread", "clear_said": "0", "transcript": "home", "from_pr_flag": "",
     },
 }
 DEFAULT = "claude"
@@ -93,6 +112,27 @@ def get(agent, column):
     if column not in COLUMNS:
         raise KeyError(column)
     return ADAPTERS[agent][column]
+
+
+# --- the conversation id ------------------------------------------------------------
+_PENDING_SID = re.compile(r'"session_id":"([0-9A-Fa-f-]+)"')
+
+
+def session_id(agent, read, part="all"):
+    """The window's current conversation id as `agent` keeps it; read(option) → value.
+    part: window (sid_window only) · fallback (sid_pending, then sid_thread) · all."""
+    row = ADAPTERS.get(agent) or ADAPTERS[DEFAULT]
+    if part in ("all", "window") and row["sid_window"]:
+        sid = read(row["sid_window"]) or ""
+        if sid or part == "window":
+            return sid
+    if part == "window":
+        return ""
+    if row["sid_pending"]:
+        m = _PENDING_SID.search(read(row["sid_pending"]) or "")
+        if m:
+            return m.group(1)
+    return (read(row["sid_thread"]) or "") if row["sid_thread"] else ""
 
 
 # --- the deliver column ---------------------------------------------------------------
@@ -199,6 +239,25 @@ def emit_sh():
         "  case \"${2:-}\" in ''|*[!a-z0-9_]*) return 1 ;; esac",
         "  case \" %s \" in *\" $2 \"*) : ;; *) return 1 ;; esac" % " ".join(COLUMNS),
         "  eval \"printf '%s' \\\"\\${_fa_${1}_${2}}\\\"\"",
+        "}",
+        "fleet_agent_session_id() {   # <agent> <reader> [window|fallback] — the window's current conversation id;",
+        "  # <reader> <option> prints one window option (the table's sid_window, else sid_pending's",
+        "  # \"session_id\", else sid_thread). An unknown agent reads as %s." % DEFAULT,
+        "  local _a _o _v _p=${3:-all}",
+        "  _a=$(fleet_agent_or_default \"${1:-}\")",
+        "  if [ \"$_p\" != fallback ]; then",
+        "    _o=$(fleet_agent_get \"$_a\" sid_window); _v=''",
+        "    [ -n \"$_o\" ] && _v=$(\"$2\" \"$_o\")",
+        "    if [ -n \"$_v\" ] || [ \"$_p\" = window ]; then printf '%s' \"$_v\"; return 0; fi",
+        "  fi",
+        "  _o=$(fleet_agent_get \"$_a\" sid_pending)",
+        "  if [ -n \"$_o\" ]; then",
+        "    _v=$(\"$2\" \"$_o\" | sed -n 's/.*\"session_id\":\"\\([0-9A-Fa-f-]*\\)\".*/\\1/p')",
+        "    if [ -n \"$_v\" ]; then printf '%s' \"$_v\"; return 0; fi",
+        "  fi",
+        "  _o=$(fleet_agent_get \"$_a\" sid_thread)",
+        "  [ -n \"$_o\" ] && \"$2\" \"$_o\"",
+        "  return 0",
         "}",
     ]
     return "\n".join(out) + "\n"

@@ -112,6 +112,19 @@ type taskView struct {
 	// Progress is the current execution's newest workflow word — an EPIC
 	// driver's tick on its parent task (claude-fleet#4957); absent when none.
 	Progress *store.TaskProgress `json:"progress,omitempty"`
+	// Started is 「起来了」 (claude-fleet T629, EPIC T580 C5): the record's window's
+	// ID has a native segment — its agent named a conversation (Claude's
+	// SessionStart, Codex's thread witnessed by its runtime before the first turn).
+	// Absent while none.
+	Started *taskStarted `json:"started,omitempty"`
+}
+
+// taskStarted is the record's ID and its native segments so far.
+type taskStarted struct {
+	ID       string    `json:"id"`
+	Agent    string    `json:"agent,omitempty"`
+	Segments int       `json:"segments"`
+	At       time.Time `json:"at"`
 }
 
 // Use the same owner/generation-fenced landing projection as repo migration.
@@ -155,9 +168,15 @@ func (s *Server) taskViews(tasks []store.FleetTask) ([]taskView, error) {
 				v.PR, _ = p["pr"].(string)
 			}
 			if id != "" {
-				if rec, err := s.Store.FleetIDOf(t.Owner, id); err == nil && rec.Progress != nil {
-					v.Progress = &store.TaskProgress{Status: rec.Progress.State, Summary: rec.Progress.Summary,
-						At: time.Unix(rec.Progress.At, 0).UTC()}
+				if rec, err := s.Store.FleetIDOf(t.Owner, id); err == nil {
+					if rec.Progress != nil {
+						v.Progress = &store.TaskProgress{Status: rec.Progress.State, Summary: rec.Progress.Summary,
+							At: time.Unix(rec.Progress.At, 0).UTC()}
+					}
+					if n := len(rec.Natives); n > 0 {
+						v.Started = &taskStarted{ID: rec.Short, Agent: rec.Natives[n-1].Agent, Segments: n,
+							At: time.Unix(rec.Natives[0].Start, 0).UTC()}
+					}
 				}
 			}
 		}

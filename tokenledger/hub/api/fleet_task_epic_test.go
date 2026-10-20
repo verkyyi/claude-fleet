@@ -83,3 +83,44 @@ func TestTaskEpicParentProgressAndChildrenSummary(t *testing.T) {
 		t.Fatalf("a result projected as progress: %v", out["progress"])
 	}
 }
+
+// 「起来了」 is the record's window's ID having a native segment (claude-fleet T629,
+// EPIC T580 C5) — the same read for both agents: a Codex window's runtime writes
+// its first thread's segment before the first turn, as Claude's SessionStart does.
+func TestTaskStartedIsTheIDsFirstSegment(t *testing.T) {
+	h, _, nodes := peerHarness(t)
+	if _, err := h.srv.Store.RecordFleetSnapshot(nodes["verk4"].id, "verk4", "frank", "verk4",
+		[]store.FleetReport{{FleetID: wrFleetM4, Name: "fleet", Repo: "org/repo", WorkersJSON: "[]"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ep, err := h.srv.Store.LiveEndpoint(nodes["verk4"].id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	push := func(id string, events ...map[string]any) {
+		t.Helper()
+		if _, err := h.srv.Store.ApplyFleetIDEvents(store.FleetIDPush{Owner: "operator", EndpointID: ep.ID, Machine: "verk4", Login: "frank", ID: id, Events: events}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, agent := range []string{"claude", "codex"} {
+		fid := []string{"dddddddd-4444-4444-8444-444444444444", "eeeeeeee-5555-4555-8555-555555555555"}[i]
+		code, rec := nodeTaskCall(t, h, nodes["verk4"].token, http.MethodPost, NodeTasksPath, map[string]any{
+			"authority_version": 1, "token": "start-" + agent, "title": "start · " + agent, "requested_agent": agent, "resolved_agent": agent})
+		if code != 200 {
+			t.Fatalf("accept %s: %d %v", agent, code, rec)
+		}
+		ref := rec["id"].(string)
+		push(fid, map[string]any{"ev": "opened", "task": ref, "agent": agent, "id": fid, "seq": 1.0, "ts": 10.0})
+		if code, out := nodeTaskCall(t, h, nodes["verk4"].token, http.MethodGet, NodeTasksPath+"/"+ref, nil); code != 200 || out["started"] != nil {
+			t.Fatalf("%s: started before any segment: %d %v", agent, code, out["started"])
+		}
+		push(fid, map[string]any{"ev": "native", "agent": agent, "native": "n1-" + agent, "trigger": "startup", "id": fid, "seq": 2.0, "ts": 11.0},
+			map[string]any{"ev": "native", "agent": agent, "native": "n2-" + agent, "trigger": "clear", "id": fid, "seq": 3.0, "ts": 12.0})
+		code, out := nodeTaskCall(t, h, nodes["verk4"].token, http.MethodGet, NodeTasksPath+"/"+ref, nil)
+		st, _ := out["started"].(map[string]any)
+		if code != 200 || st == nil || st["agent"] != agent || st["segments"] != float64(2) || st["at"] != "1970-01-01T00:00:11Z" {
+			t.Fatalf("%s: started: %d %v", agent, code, out["started"])
+		}
+	}
+}

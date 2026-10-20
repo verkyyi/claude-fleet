@@ -24,6 +24,10 @@ _fa_claude_ready_check=''
 _fa_claude_trust='claude-json'
 _fa_claude_mcp='flags'
 _fa_claude_deliver='inbox'
+_fa_claude_sid_source='hook'
+_fa_claude_clear_said='1'
+_fa_claude_transcript='project'
+_fa_claude_from_pr_flag='--from-pr'
 _fa_codex_launcher='fleet-codex.sh'
 _fa_codex_model_env='FLEET_CODEX_MODEL'
 _fa_codex_model_flag='-m'
@@ -42,11 +46,34 @@ _fa_codex_ready_check='fleet_codex_ready'
 _fa_codex_trust='codex-toml'
 _fa_codex_mcp='config'
 _fa_codex_deliver='queue'
+_fa_codex_sid_source='thread'
+_fa_codex_clear_said='0'
+_fa_codex_transcript='home'
+_fa_codex_from_pr_flag=''
 fleet_agent_known() { case "${1:-}" in ''|*[!a-z0-9_]*) return 1 ;; esac; case " $FLEET_AGENTS " in *" $1 "*) return 0 ;; esac; return 1; }
 fleet_agent_or_default() { if fleet_agent_known "${1:-}"; then printf '%s' "$1"; else printf claude; fi; }
 fleet_agent_get() {   # <agent> <column> — prints the value; exit 1 unknown
   fleet_agent_known "${1:-}" || return 1
   case "${2:-}" in ''|*[!a-z0-9_]*) return 1 ;; esac
-  case " launcher model_env model_flag resume_flag fork_flag fork_replaces continue_flag preset_sid_flag sid_window sid_pending sid_thread seed seed_words park_resume ready_check trust mcp deliver " in *" $2 "*) : ;; *) return 1 ;; esac
+  case " launcher model_env model_flag resume_flag fork_flag fork_replaces continue_flag preset_sid_flag sid_window sid_pending sid_thread seed seed_words park_resume ready_check trust mcp deliver sid_source clear_said transcript from_pr_flag " in *" $2 "*) : ;; *) return 1 ;; esac
   eval "printf '%s' \"\${_fa_${1}_${2}}\""
+}
+fleet_agent_session_id() {   # <agent> <reader> [window|fallback] — the window's current conversation id;
+  # <reader> <option> prints one window option (the table's sid_window, else sid_pending's
+  # "session_id", else sid_thread). An unknown agent reads as claude.
+  local _a _o _v _p=${3:-all}
+  _a=$(fleet_agent_or_default "${1:-}")
+  if [ "$_p" != fallback ]; then
+    _o=$(fleet_agent_get "$_a" sid_window); _v=''
+    [ -n "$_o" ] && _v=$("$2" "$_o")
+    if [ -n "$_v" ] || [ "$_p" = window ]; then printf '%s' "$_v"; return 0; fi
+  fi
+  _o=$(fleet_agent_get "$_a" sid_pending)
+  if [ -n "$_o" ]; then
+    _v=$("$2" "$_o" | sed -n 's/.*"session_id":"\([0-9A-Fa-f-]*\)".*/\1/p')
+    if [ -n "$_v" ]; then printf '%s' "$_v"; return 0; fi
+  fi
+  _o=$(fleet_agent_get "$_a" sid_thread)
+  [ -n "$_o" ] && "$2" "$_o"
+  return 0
 }

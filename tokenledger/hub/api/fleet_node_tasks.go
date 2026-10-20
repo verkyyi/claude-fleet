@@ -322,6 +322,9 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 		if v.Progress != nil {
 			out["progress"] = v.Progress // claude-fleet#4957: a parent task's tick
 		}
+		if v.Started != nil {
+			out["started"] = v.Started // claude-fleet T629: its window's agent is up
+		}
 		writeJSON(w, http.StatusOK, out)
 	case http.MethodPost:
 		if t.AuthorityVersion != 0 || in.AuthorityVersion != 0 {

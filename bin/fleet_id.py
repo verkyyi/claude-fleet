@@ -24,7 +24,9 @@ same one) appends segments by the rules of §4.2:
   claude resume    another id ⇒ a new segment (resume), with the ID/segment it came from
   claude clear     a new segment: handoff when the cycle marked it, else clear
   claude compact   the current segment counts one more compaction
-  codex  (first turn of each thread) another id ⇒ a new segment; startup ⇒ new, resume ⇒ resume
+  codex  (its runtime witnesses each thread/started — the table's sid_source — and its
+         first-turn hook finds the same id) another id ⇒ a new segment; an agent whose
+         start never says /clear (clear_said 0) ⇒ new, resume ⇒ resume
   any    the agent differs from the last segment's ⇒ transfer
 The hook never blocks the agent and never prints: a write that fails is kept on
 the window (@id_retry) and flushed by the next hook.
@@ -251,6 +253,17 @@ def owner_of(native, skip=""):
     return best
 
 
+def _says_clear(agent):
+    """Does this agent's session start say it came from /clear? (the adapter table's
+    clear_said, T629 C5) — an unknown agent reads as it always did: yes."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import fleet_agent_adapter
+        return fleet_agent_adapter.get(agent, "clear_said") != "0"
+    except (ImportError, KeyError):
+        return True
+
+
 def next_native(events, agent, native, source, hint):
     """§4.2's rule: the native event this SessionStart adds, or None."""
     rec = fold(events)
@@ -270,8 +283,8 @@ def next_native(events, agent, native, source, hint):
         trigger = "resume" if source == "resume" else "startup"
     elif source == "resume":
         trigger = "resume"
-    elif agent == "codex":
-        trigger = "new"     # a new thread in the same Codex window (/new)
+    elif not _says_clear(agent):
+        trigger = "new"     # a new conversation in the same window that never says /clear (Codex's /new)
     else:
         trigger = "resume"  # a restart that came back on another id
     ev = {"ev": "native", "agent": agent, "native": native, "trigger": trigger, "source": source or "",
