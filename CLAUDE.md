@@ -714,8 +714,10 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   merged at once in a clone of its own, the train ships it; `--hub-tag` puts the
   hub back on that image now). **The selection's backstop is a nightly full run**
   (issue #3871): `selftests-nightly.yml` runs the whole Linux suite on stable at
-  06:17 Beijing (the train's pick and `fleet-train-plan.sh --full`, no rerun, no
-  quarantine); a red there is its run's red (the miss tracer left with #4900 —
+  06:17 Beijing (GitHub's ubuntu-latest — never the train's pool, whose job gate
+  refuses it, T517 — `fleet-train-plan.sh --full`, no rerun, no quarantine; a shard
+  that never ran is said 拒收 by `bin/fleet-nightly-report.py`, and the night's
+  numbers are the artifact `selftests-baseline`); a red there is its run's red (the miss tracer left with #4900 —
   `run-selftests.sh --changed <M^> --list-only` still says whether a merge selected
   a test; the fix is to name the file in the test). So **don't run the
   suite locally**: push, open the PR, read the gate. Locally run only the one
