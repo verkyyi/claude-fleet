@@ -64,8 +64,8 @@ json.dump({"state": sb + "/st", "run": sb + "/run", "user": "", "version": "v1",
                         "settings": {}}]}, open(sb + "/tenants.json", "w"))
 PY
 
-export FLEET_CRED_SHARED_TEST=1 FLEET_CREDSEP_TEST=1 FLEET_CRED_BUDGET=0 \
-  FLEET_CRED_ANTHROPIC_URL="http://127.0.0.1:$(cat "$SB/up.port")" \
+FLEET_CRED_ANTHROPIC_URL="http://127.0.0.1:$(cat "$SB/up.port")"
+export FLEET_CRED_SHARED_TEST=1 FLEET_CREDSEP_TEST=1 FLEET_CRED_BUDGET=0 FLEET_CRED_ANTHROPIC_URL \
   FLEET_CRED_PROXY_LOG="$SB/shared.log" FLEET_CRED_DRAIN_IDLE_SECS=3
 unset FLEET_CRED_HANDOFF
 serve() { python3 -I "$BIN/fleet-cred-proxy.py" serve --shared "$SB/tenants.json"; }
