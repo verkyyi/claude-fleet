@@ -1561,7 +1561,7 @@ def shared_record(logins):
     old = shared_rec() or {}
     put(SHARED_REC, json.dumps({
         "shared": True, "user": ROLE, "port": SHARED_PORT, "service": SHARED_LABEL, "run": SHARED_RUN,
-        "lib": LIB, "version": code_version(os.path.join(LIB, "fleet-cred-proxy.py")),
+        "stats": os.path.join(ROOT_BASE, ".stats"), "lib": LIB, "version": code_version(os.path.join(LIB, "fleet-cred-proxy.py")),
         "logins": sorted(logins),
         "since": old.get("since") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}, indent=1) + "\n",
         0o644, owner)

@@ -22,7 +22,8 @@ bin/fleet-credsep.sh installs; never from a login's own checkout.
         /var/db/fleet-cred/.shared/tenants.json (0600, the role account's), then
         fleet-cred-proxy.py serve --shared on FLEET_CRED_SHARED_PORT (18923),
         its control socket in /var/run/fleet-cred/.shared/ (0666; the peer uid
-        names the login).
+        names the login), its upstream stats in /var/db/fleet-cred/.stats/
+        (0755, every login reads them — T657).
 
 <root> = /var/db/fleet-cred/<login> (FLEET_CREDSEP_ROOT_BASE overrides the
 /var/db/fleet-cred part — the selftest's sandbox; so do FLEET_CREDSEP_RUN_BASE
@@ -253,6 +254,7 @@ def shared():
     rbase = base("FLEET_CREDSEP_ROOT_BASE", "/var/db/fleet-cred")
     run = os.path.join(base("FLEET_CREDSEP_RUN_BASE", "/var/run/fleet-cred"), ".shared")
     sdir = os.path.join(rbase, ".shared")
+    stats = os.path.join(rbase, ".stats")      # upstream stats every login reads (T657); kept across reboots
     logdir = base("FLEET_CREDSEP_LOG_BASE", "/var/log/fleet-cred")
     test = os.environ.get("FLEET_CREDSEP_TEST") == "1"
     try:
@@ -261,7 +263,7 @@ def shared():
         die("%s/.shared.json: %s (not installed? fleet-credsep.sh machine install)" % (rbase, e))
     role = rec.get("user") or ROLE
     pw_role = pwd.getpwnam(role)
-    for d, mode in ((run, 0o755), (logdir, 0o755), (sdir, 0o700)):
+    for d, mode in ((run, 0o755), (logdir, 0o755), (sdir, 0o700), (stats, 0o755)):
         os.makedirs(d, mode=mode, exist_ok=True)
         os.chmod(d, mode)
         if os.geteuid() == 0:
@@ -300,7 +302,7 @@ def shared():
     tmp = tf + ".%d" % os.getpid()
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        json.dump({"state": sdir, "run": run, "user": role, "version": version,
+        json.dump({"state": sdir, "run": run, "stats": stats, "user": role, "version": version,
                    "port": int(rec.get("port") or base("FLEET_CRED_SHARED_PORT", "18923")),
                    "tenants": tenants}, f)
     if os.geteuid() == 0:

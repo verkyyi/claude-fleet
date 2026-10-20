@@ -168,6 +168,18 @@ bytes as they came, the meter reads its own decoded copy (issue #3407). A 2xx
 answer it still reads nothing from is logged `meter_miss`, and a flush with no
 hub / node token / an error is `budget_err` (once per change) — both in
 `status` (budget.err · misses) and the doctor's cred-proxy row, never silent.
+
+UPSTREAM STATS (T657): every attempt at a provider (direct / relay / central —
+never the hub broker) is sorted into ONE class — ok · refused · reset · timeout
+· tls · dns · neterr (a connection that failed otherwise) · 4xx · 429 · 5xx ·
+529 — and counted per minute into <stats>/upstream-stats.ndjson (0644, kept 7
+days; <stats> = the shared tenants file's "stats", the launcher's
+/var/db/fleet-cred/.stats, else the control dir), with the open minute in
+upstream-now.json beside it: counts per class and per account, and each failure's
+time · class · account · login · session (cred sid) · route · ms. Never a
+token, a header or a body. bin/fleet_upstream_stats.py is the one reader (the
+doctor's 上游 row, `fleet-cred-proxy.sh upstream`, the 看台's top line).
+FLEET_CRED_UPSTREAM_STATS=0 writes nothing. Forwarding itself is untouched.
 """
 import argparse, base64, fcntl, hashlib, hmac, http.client, json, os, re, secrets, zlib
 import resource, shutil, signal, socket, ssl, sys, threading, time, urllib.error, urllib.request
@@ -1314,6 +1326,132 @@ def tok_login(tok):
     return lg if isinstance(lg, str) else None
 
 
+# ---- upstream stats (T657) ---------------------------------------------------
+UP_FILE, UP_NOW = "upstream-stats.ndjson", "upstream-now.json"
+UP_KEEP = 7 * 86400
+UP_FAILS = 40       # failure events kept per minute (the counts are always whole)
+
+
+def up_err_class(e):
+    """A connection's OSError → refused · reset · timeout · tls · dns · neterr."""
+    if isinstance(e, socket.gaierror):
+        return "dns"
+    if isinstance(e, ConnectionRefusedError):
+        return "refused"
+    if isinstance(e, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+        return "reset"
+    if isinstance(e, (socket.timeout, TimeoutError)):
+        return "timeout"
+    if isinstance(e, ssl.SSLError) or isinstance(e, getattr(ssl, "CertificateError", ())):
+        return "tls"
+    return "neterr"
+
+
+def up_status_class(code):
+    return ("429" if code == 429 else "529" if code == 529 else "5xx" if code >= 500
+            else "4xx" if code >= 400 else "ok")
+
+
+class UpstreamStats:
+    """Per-minute counts of every upstream attempt, readable by every login."""
+
+    def __init__(self, d):
+        self.d = d
+        self.lock = threading.Lock()
+        self.cur = None         # the open minute's row
+        self.dirty = False
+        self.pruned = 0.0
+
+    def record(self, cls, acct, login, sid, route, ms, what):
+        now = time.time()
+        m = int(now // 60) * 60
+        with self.lock:
+            if self.cur and self.cur["m"] != m:
+                self._close()
+            if not self.cur:
+                self.cur = {"m": m, "n": 0, "c": {}, "a": {}, "ms_max": 0, "ms_sum": 0, "f": []}
+            r = self.cur
+            r["n"] += 1
+            r["c"][cls] = r["c"].get(cls, 0) + 1
+            a = r["a"].setdefault(acct or "-", {})
+            a[cls] = a.get(cls, 0) + 1
+            r["ms_max"] = max(r["ms_max"], ms)
+            r["ms_sum"] += ms
+            if cls != "ok" and len(r["f"]) < UP_FAILS:
+                r["f"].append({"t": round(now, 1), "c": cls, "acct": acct or "-", "login": login or "-",
+                               "sid": sid or "-", "route": route, "ms": ms, "st": what})
+            self.dirty = True
+
+    def _write(self, name, text, append=False):
+        p = os.path.join(self.d, name)
+        flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
+        tmp = p if append else "%s.%d.tmp" % (p, os.getpid())
+        fd = os.open(tmp, flags, 0o644)
+        try:
+            os.fchmod(fd, 0o644)    # every login reads it (the proxy's umask is 077)
+            os.write(fd, text.encode())
+        finally:
+            os.close(fd)
+        if not append:
+            os.replace(tmp, p)
+
+    def _close(self):
+        try:
+            self._write(UP_FILE, json.dumps(self.cur, separators=(",", ":")) + "\n", append=True)
+        except OSError:
+            pass
+        self.cur = None
+
+    def flush(self, final=False):
+        """The tick's: close a finished minute, keep upstream-now.json current,
+        prune past UP_KEEP once an hour."""
+        now = time.time()
+        with self.lock:
+            if self.cur and (final or self.cur["m"] != int(now // 60) * 60):
+                self._close()
+                self.dirty = True
+            if self.dirty:
+                self.dirty = False
+                try:
+                    self._write(UP_NOW, json.dumps(self.cur or {"m": int(now // 60) * 60, "n": 0},
+                                                   separators=(",", ":")) + "\n")
+                except OSError:
+                    pass
+            if now - self.pruned >= 3600:
+                self.pruned = now
+                self._prune(now)
+
+    def _prune(self, now):
+        p = os.path.join(self.d, UP_FILE)
+        try:
+            with open(p) as f:
+                lines = f.readlines()
+        except OSError:
+            return
+        keep = []
+        for ln in lines:
+            try:
+                if json.loads(ln)["m"] >= now - UP_KEEP:
+                    keep.append(ln)
+            except (ValueError, KeyError, TypeError):
+                pass
+        if len(keep) != len(lines):
+            try:
+                self._write(UP_FILE, "".join(keep))
+            except OSError:
+                pass
+
+
+def up_stats_open(d):
+    if env("FLEET_CRED_UPSTREAM_STATS", "1") == "0" or not d:
+        return None
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        return None
+    return UpstreamStats(d)
+
+
 # ---- the proxy ---------------------------------------------------------------
 class Proxy(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -1323,6 +1461,7 @@ class Proxy(BaseHTTPRequestHandler):
     reads = {}      # (provider, account) -> its newest reading, separated tenants (issue #2412)
     limited = {}    # (provider, account) -> until: a quota 429 keeps it out of the pick
     sink = None     # where a request is logged before it has a tenant
+    ustats = None   # UpstreamStats: every attempt's class, per minute (T657)
     fixed = None    # a login's old port on the shared proxy: that login's tenant
     t = None
 
@@ -1647,6 +1786,17 @@ class Proxy(BaseHTTPRequestHandler):
         return self.upstream(base, upath, out, body, route, sid, acct, cred, seen, t0, provider,
                              can_switch=nxt is not None, tried=tried)
 
+    def ustat(self, route, acct, sid, cls, t1, what):
+        """One attempt into the upstream stats (T657) — never the hub broker's."""
+        st = Proxy.ustats
+        if st is None or route == "hub":
+            return
+        try:
+            st.record(cls, acct, getattr(self.cfg, "name", "") or "", sid, route,
+                      int((time.time() - t1) * 1000), what)
+        except Exception:
+            pass
+
     def upstream(self, base, upath, out, body, route, sid, acct, cred, seen, t0, provider, can_switch, tried=()):
         """Send one request. None = answered (the response went to the client);
         a reason string = switch routes (only when can_switch). On the LAST
@@ -1655,6 +1805,7 @@ class Proxy(BaseHTTPRequestHandler):
         upstream's bare "Request not allowed"."""
         u = urlsplit(base)
         out["Host"] = u.netloc
+        t1 = time.time()
         if u.scheme == "http":
             conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=self.cfg.timeout)
         else:
@@ -1664,6 +1815,7 @@ class Proxy(BaseHTTPRequestHandler):
             conn.connect()
         except OSError as e:
             self.log(ev="upstream_err", sid=sid, route=route, phase="connect", err=type(e).__name__)
+            self.ustat(route, acct, sid, up_err_class(e), t1, type(e).__name__)
             if can_switch:
                 return "connect failed (%s)" % type(e).__name__
             self.fail(502, "upstream %s unreachable: %s%s" % (route, type(e).__name__,
@@ -1674,9 +1826,11 @@ class Proxy(BaseHTTPRequestHandler):
             r = conn.getresponse()
         except OSError as e:
             self.log(ev="upstream_err", sid=sid, route=route, phase="request", err=type(e).__name__)
+            self.ustat(route, acct, sid, up_err_class(e), t1, type(e).__name__)
             self.fail(502, "upstream %s: %s" % (route, type(e).__name__), "api_error")
             return None
         ttfb = time.time() - t0
+        self.ustat(route, acct, sid, up_status_class(r.status), t1, r.status)
         if provider in ("claude", "codex"):
             self.t.note_quota(sid, provider, acct, route, r.getheaders())
         first = b""
@@ -2982,6 +3136,11 @@ def drain_out(tenants):
             t.budget.flush(t.log)
         except Exception:
             pass
+    if Proxy.ustats:
+        try:
+            Proxy.ustats.flush(final=True)
+        except Exception:
+            pass
     Proxy.log_any(ev="drained", secs=round(time.time() - DRAIN["since"], 1), left=DRAIN["conns"])
     os._exit(0)
 
@@ -3156,6 +3315,7 @@ def serve(a):
     for c in everyone:
         c.bound_port = cfg.bound_port
 
+    Proxy.ustats = up_stats_open((shared or {}).get("stats") or ctld)
     HANDOFF["tcp:%d" % cfg.bound_port] = srv
     sockp, pidf = os.path.join(ctld, "ctl.sock"), os.path.join(ctld, "pid")
     cfd = inherited.pop("ctl", None)
@@ -3180,6 +3340,11 @@ def serve(a):
     HANDOFF["ctl"] = ctl
 
     def bye(*_):
+        if Proxy.ustats:
+            try:
+                Proxy.ustats.flush(final=True)
+            except Exception:
+                pass
         if DRAIN["on"]:
             os._exit(0)     # handed over: the pid, port and socket are the successor's
         for p in (sockp, pidf):
@@ -3240,6 +3405,11 @@ def serve(a):
             time.sleep(1)
             if a.parent_watch and os.getppid() != parent:
                 bye()       # the launcher died: never outlive it as an orphan
+            if Proxy.ustats:
+                try:
+                    Proxy.ustats.flush()
+                except Exception:
+                    pass
             if time.time() - blast >= bevery:
                 blast = time.time()
                 for t in tenants:

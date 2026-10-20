@@ -1247,6 +1247,27 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:topbar_relay_fmt)        printf '%s via relay' "${1:-}" ;;
     zh:topbar_direct_quiet)     printf '直连（入口没声音）' ;;
     en:topbar_direct_quiet)     printf 'direct (the entry is silent)' ;;
+    # the machine's credential proxy failing upstream (T657, fleet_upstream_stats.py banner)
+    zh:topbar_upstream_fmt)     printf '上游连不上：%s（%s 次）' "${1:-}" "${2:-}" ;;
+    en:topbar_upstream_fmt)     printf 'upstream unreachable: %s (%s)' "${1:-}" "${2:-}" ;;
+    zh:topbar_up_refused)       printf '连接被拒' ;;
+    en:topbar_up_refused)       printf 'connection refused' ;;
+    zh:topbar_up_reset)         printf '连接被重置' ;;
+    en:topbar_up_reset)         printf 'connection reset' ;;
+    zh:topbar_up_timeout)       printf '连接超时' ;;
+    en:topbar_up_timeout)       printf 'timed out' ;;
+    zh:topbar_up_tls)           printf 'TLS 失败' ;;
+    en:topbar_up_tls)           printf 'TLS failed' ;;
+    zh:topbar_up_dns)           printf 'DNS 失败' ;;
+    en:topbar_up_dns)           printf 'DNS failed' ;;
+    zh:topbar_up_neterr)        printf '网络错误' ;;
+    en:topbar_up_neterr)        printf 'network error' ;;
+    zh:topbar_up_429)           printf '429 限流' ;;
+    en:topbar_up_429)           printf '429 rate limited' ;;
+    zh:topbar_up_5xx)           printf '5xx 出错' ;;
+    en:topbar_up_5xx)           printf '5xx error' ;;
+    zh:topbar_up_529)           printf '529 过载' ;;
+    en:topbar_up_529)           printf '529 overloaded' ;;
     zh:notify_ask)              printf '%s 在问你' "${1:-}" ;;
     en:notify_ask)              printf '%s is asking you' "${1:-}" ;;
     zh:notify_perm)             printf '%s 要你批准' "${1:-}" ;;

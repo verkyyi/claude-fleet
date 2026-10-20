@@ -39,6 +39,12 @@
 #                                 (a login's own enable / disable left with #4674).
 #                                 `status --json` / `status --ctl` is the control
 #                                 socket's status.
+#   fleet-cred-proxy.sh upstream [--since 24h] [--json]
+#                                 what the machine's proxy met upstream (T657): each
+#                                 class's count (ok · 连接被拒 · 重置 · 超时 · TLS ·
+#                                 DNS · 4xx · 429 · 5xx · 529), per account, and every
+#                                 failure with its time, account, login and session —
+#                                 bin/fleet_upstream_stats.py show
 #   fleet-cred-proxy.sh doctor    fleet-doctor's `cred` row (issue #1975): ONE line
 #                                 `<PASS|WARN|FAIL>` TAB `<text>` — trust, the road
 #                                 each agent takes and why, the proxy, credsep, renewal.
@@ -85,6 +91,12 @@ load_conf() { # the machine's one file (#1623) + the install's; the env wins ove
 }
 
 on() { [ "${FLEET_CRED_PROXY:-0}" = 1 ]; }
+
+# what the machine's proxy met upstream (T657): read-only, any login, any mode
+if [ "${1:-}" = upstream ]; then
+  shift
+  exec python3 -I "$BIN/fleet_upstream_stats.py" show "$@"
+fi
 
 SEP_RUN=''   # separated: the role account's run dir (ctl.sock, port, pid)
 if [ -f "$CONF/credsep.json" ]; then
