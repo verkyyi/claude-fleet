@@ -1,0 +1,376 @@
+{
+ "_about": "Recorded from the real `codex app-server` (codex-cli 0.162.1, the version release.json pins) over stdio on 2026-10-20, with no account; ids, paths, times and the host scrubbed. fleet-codex-fake-selftest.py holds fleet_codex_fake_appserver.py to these shapes (keys, recursively) and messages. Re-record when release.json moves Codex.",
+ "version": "0.162.1",
+ "initialize": {
+  "userAgent": "claude_fleet/0.162.1 (Mac OS; arm64) tmux-256color (claude_fleet; 1)",
+  "codexHome": "/fixture/.codex",
+  "platformFamily": "unix",
+  "platformOs": "macos"
+ },
+ "thread/start": {
+  "thread": {
+   "id": "00000000-0000-7000-8000-eac2477f4c76",
+   "environments": [
+    {
+     "environmentId": "local",
+     "cwd": "/fixture",
+     "runtimeWorkspaceRoots": [
+      "/fixture"
+     ]
+    }
+   ],
+   "extra": null,
+   "sessionId": "00000000-0000-7000-8000-eac2477f4c76",
+   "forkedFromId": null,
+   "parentThreadId": null,
+   "preview": "",
+   "ephemeral": false,
+   "section": null,
+   "sectionEnteredAt": null,
+   "projectId": null,
+   "historyMode": "paginated",
+   "modelProvider": "openai",
+   "model": "gpt-6.1-sol",
+   "reasoningEffort": null,
+   "createdAt": 1792000000,
+   "updatedAt": 1792000000,
+   "recencyAt": 1792000000,
+   "status": {
+    "type": "idle"
+   },
+   "path": "/fixture/.codex/sessions/2026/10/20/rollout-2026-10-20T02-28-21-00000000-0000-7000-8000-eac2477f4c76.jsonl",
+   "cwd": "/fixture",
+   "cliVersion": "0.162.1",
+   "originator": "claude_fleet",
+   "source": "vscode",
+   "canAcceptDirectInput": true,
+   "threadSource": null,
+   "agentNickname": null,
+   "agentRole": null,
+   "gitInfo": null,
+   "name": null,
+   "daybreakEnabled": null,
+   "turns": []
+  },
+  "model": "gpt-6.1-sol",
+  "modelProvider": "openai",
+  "serviceTier": null,
+  "disabledPluginIds": [],
+  "cwd": "/fixture",
+  "runtimeWorkspaceRoots": [
+   "/fixture"
+  ],
+  "instructionSources": [],
+  "approvalPolicy": "on-request",
+  "approvalsReviewer": "user",
+  "sandbox": {
+   "type": "readOnly",
+   "networkAccess": false
+  },
+  "activePermissionProfile": {
+   "id": ":read-only",
+   "extends": null
+  },
+  "reasoningEffort": null,
+  "multiAgentMode": "explicitRequestOnly"
+ },
+ "thread/started": {
+  "method": "thread/started",
+  "params": {
+   "thread": {
+    "id": "00000000-0000-7000-8000-eac2477f4c76",
+    "environments": [
+     {
+      "environmentId": "local",
+      "cwd": "/fixture",
+      "runtimeWorkspaceRoots": [
+       "/fixture"
+      ]
+     }
+    ],
+    "extra": null,
+    "sessionId": "00000000-0000-7000-8000-eac2477f4c76",
+    "forkedFromId": null,
+    "parentThreadId": null,
+    "preview": "",
+    "ephemeral": false,
+    "section": null,
+    "sectionEnteredAt": null,
+    "projectId": null,
+    "historyMode": "paginated",
+    "modelProvider": "openai",
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": null,
+    "createdAt": 1792000000,
+    "updatedAt": 1792000000,
+    "recencyAt": 1792000000,
+    "status": {
+     "type": "idle"
+    },
+    "path": "/fixture/.codex/sessions/2026/10/20/rollout-2026-10-20T02-28-21-00000000-0000-7000-8000-eac2477f4c76.jsonl",
+    "cwd": "/fixture",
+    "cliVersion": "0.162.1",
+    "originator": "claude_fleet",
+    "source": "vscode",
+    "canAcceptDirectInput": true,
+    "threadSource": null,
+    "agentNickname": null,
+    "agentRole": null,
+    "gitInfo": null,
+    "name": null,
+    "daybreakEnabled": null,
+    "turns": []
+   }
+  },
+  "emittedAtMs": 1792000000
+ },
+ "thread/loaded/list": {
+  "data": [
+   "00000000-0000-7000-8000-eac2477f4c76"
+  ],
+  "nextCursor": null
+ },
+ "thread/read": {
+  "thread": {
+   "id": "00000000-0000-7000-8000-b7c5d26db2ab",
+   "environments": [
+    {
+     "environmentId": "local",
+     "cwd": "/fixture",
+     "runtimeWorkspaceRoots": [
+      "/fixture"
+     ]
+    }
+   ],
+   "extra": null,
+   "sessionId": "00000000-0000-7000-8000-b7c5d26db2ab",
+   "forkedFromId": null,
+   "parentThreadId": null,
+   "preview": "",
+   "ephemeral": false,
+   "section": null,
+   "sectionEnteredAt": null,
+   "projectId": null,
+   "historyMode": "paginated",
+   "modelProvider": "openai",
+   "model": "gpt-6.1-sol",
+   "reasoningEffort": null,
+   "createdAt": 1792000000,
+   "updatedAt": 1792000000,
+   "recencyAt": 1792000000,
+   "status": {
+    "type": "idle"
+   },
+   "path": "/fixture/.codex/sessions/2026/10/20/rollout-2026-10-20T02-28-58-00000000-0000-7000-8000-b7c5d26db2ab.jsonl",
+   "cwd": "/fixture",
+   "cliVersion": "0.162.1",
+   "originator": "claude_fleet",
+   "source": "vscode",
+   "canAcceptDirectInput": true,
+   "threadSource": null,
+   "agentNickname": null,
+   "agentRole": null,
+   "gitInfo": null,
+   "name": null,
+   "daybreakEnabled": null,
+   "turns": []
+  }
+ },
+ "thread/read includeTurns, no turn yet": {
+  "code": -32601,
+  "message": "list_turns is not supported yet"
+ },
+ "thread/turns/list, no turn yet": {
+  "code": -32600,
+  "message": "thread 00000000-0000-7000-8000-b7c5d26db2ab is not materialized yet; thread/turns/list is unavailable before first user message"
+ },
+ "thread/queue/list": {
+  "data": [],
+  "nextCursor": null
+ },
+ "thread/queue/add": {
+  "queuedSubmission": {
+   "id": "00000000-0000-7000-8000-4b0c20e375dc",
+   "input": [
+    {
+     "type": "text",
+     "text": "hi",
+     "text_elements": []
+    }
+   ],
+   "clientUserMessageId": "x1"
+  }
+ },
+ "turn/started": {
+  "method": "turn/started",
+  "params": {
+   "threadId": "00000000-0000-7000-8000-b7c5d26db2ab",
+   "turn": {
+    "id": "00000000-0000-7000-8000-4b22d53e7138",
+    "rootTurnId": "00000000-0000-7000-8000-4b22d53e7138",
+    "items": [],
+    "itemsView": "notLoaded",
+    "status": "inProgress",
+    "error": null,
+    "startedAt": 1792000000,
+    "completedAt": null,
+    "durationMs": null
+   }
+  },
+  "emittedAtMs": 1792000000
+ },
+ "thread/fork": {
+  "thread": {
+   "id": "00000000-0000-7000-8000-5f3dc2ec7a21",
+   "environments": [
+    {
+     "environmentId": "local",
+     "cwd": "/fixture",
+     "runtimeWorkspaceRoots": [
+      "/fixture"
+     ]
+    }
+   ],
+   "extra": null,
+   "sessionId": "00000000-0000-7000-8000-5f3dc2ec7a21",
+   "forkedFromId": "00000000-0000-7000-8000-eac2477f4c76",
+   "parentThreadId": null,
+   "preview": "",
+   "ephemeral": false,
+   "section": null,
+   "sectionEnteredAt": null,
+   "projectId": null,
+   "historyMode": "paginated",
+   "modelProvider": "openai",
+   "model": "gpt-6.1-sol",
+   "reasoningEffort": null,
+   "createdAt": 1792000000,
+   "updatedAt": 1792000000,
+   "recencyAt": 1792000000,
+   "status": {
+    "type": "idle"
+   },
+   "path": "/fixture/.codex/sessions/2026/10/20/rollout-2026-10-20T02-28-38-00000000-0000-7000-8000-5f3dc2ec7a21.jsonl",
+   "cwd": "/fixture",
+   "cliVersion": "0.162.1",
+   "originator": "claude_fleet",
+   "source": "vscode",
+   "canAcceptDirectInput": true,
+   "threadSource": null,
+   "agentNickname": null,
+   "agentRole": null,
+   "gitInfo": null,
+   "name": null,
+   "daybreakEnabled": null,
+   "turns": []
+  },
+  "model": "gpt-6.1-sol",
+  "modelProvider": "openai",
+  "serviceTier": null,
+  "disabledPluginIds": [],
+  "cwd": "/fixture",
+  "runtimeWorkspaceRoots": [
+   "/fixture"
+  ],
+  "instructionSources": [],
+  "approvalPolicy": "on-request",
+  "approvalsReviewer": "user",
+  "sandbox": {
+   "type": "readOnly",
+   "networkAccess": false
+  },
+  "activePermissionProfile": {
+   "id": ":read-only",
+   "extends": null
+  },
+  "reasoningEffort": null,
+  "multiAgentMode": "explicitRequestOnly"
+ },
+ "thread/resume": {
+  "thread": {
+   "id": "00000000-0000-7000-8000-eac2477f4c76",
+   "environments": [
+    {
+     "environmentId": "local",
+     "cwd": "/fixture",
+     "runtimeWorkspaceRoots": [
+      "/fixture"
+     ]
+    }
+   ],
+   "extra": null,
+   "sessionId": "00000000-0000-7000-8000-eac2477f4c76",
+   "forkedFromId": null,
+   "parentThreadId": null,
+   "preview": "",
+   "ephemeral": false,
+   "section": null,
+   "sectionEnteredAt": null,
+   "projectId": null,
+   "historyMode": "paginated",
+   "modelProvider": "openai",
+   "model": "gpt-6.1-sol",
+   "reasoningEffort": null,
+   "createdAt": 1792000000,
+   "updatedAt": 1792000000,
+   "recencyAt": 1792000000,
+   "status": {
+    "type": "idle"
+   },
+   "path": "/fixture/.codex/sessions/2026/10/20/rollout-2026-10-20T02-28-21-00000000-0000-7000-8000-eac2477f4c76.jsonl",
+   "cwd": "/fixture",
+   "cliVersion": "0.162.1",
+   "originator": "claude_fleet",
+   "source": "vscode",
+   "canAcceptDirectInput": true,
+   "threadSource": null,
+   "agentNickname": null,
+   "agentRole": null,
+   "gitInfo": null,
+   "name": null,
+   "daybreakEnabled": null,
+   "turns": []
+  },
+  "model": "gpt-6.1-sol",
+  "modelProvider": "openai",
+  "serviceTier": null,
+  "disabledPluginIds": [],
+  "cwd": "/fixture",
+  "runtimeWorkspaceRoots": [
+   "/fixture"
+  ],
+  "instructionSources": [],
+  "approvalPolicy": "on-request",
+  "approvalsReviewer": "user",
+  "sandbox": {
+   "type": "readOnly",
+   "networkAccess": false
+  },
+  "activePermissionProfile": {
+   "id": ":read-only",
+   "extends": null
+  },
+  "reasoningEffort": null,
+  "collaborationMode": {
+   "mode": "default",
+   "settings": {
+    "model": "gpt-6.1-sol",
+    "reasoning_effort": null,
+    "developer_instructions": null
+   }
+  },
+  "multiAgentMode": "explicitRequestOnly",
+  "initialTurnsPage": null,
+  "turnsBackwardsCursor": null,
+  "itemsBackwardsCursor": null
+ },
+ "account/read, no account": {
+  "account": null,
+  "requiresOpenaiAuth": true,
+  "workspaceRouting": null
+ },
+ "account/rateLimits/read, no account": {
+  "code": -32600,
+  "message": "codex account authentication required to read rate limits"
+ }
+}

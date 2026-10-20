@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 import fleet_runtime as runtime
+import fleet_codex_fake_appserver as fake  # the one fake Codex (T585)
 
 
 C = dict(version=1, operation_id="11111111-1111-4111-8111-111111111111", task="T1",
@@ -320,98 +321,6 @@ class ClaudePostAccept(unittest.TestCase):
             runtime.claude_post_accept(self.d, self.req, 3)
 
 
-class FakeCodex:
-    """The queue semantics the real Codex 0.162.1 app-server showed (#4617):
-    add on an idle thread starts at once; start on a busy thread is refused;
-    delete and every start share one dispatch lock; an idle edge drains the head.
-    """
-
-    def __init__(self):
-        self.turns = [dict(id="turn-1", clientId=None)]
-        self.queue = []
-        self.active = None
-        self.seq = 1
-        self.delivered = []
-        self.calls = []
-        self.version = "0.162.1"
-        self.young = False       # store without paginated history yet
-        self.fail = {}           # method -> exception, once
-        self.before = {}         # method -> callable, once, before handling
-
-    def next_id(self, kind):
-        self.seq += 1
-        return "%s-%d" % (kind, self.seq)
-
-    def start_turn(self, client_id, text=""):
-        t = dict(id=self.next_id("turn"), clientId=client_id)
-        self.turns.append(t)
-        self.active = t["id"]
-        if client_id:
-            self.delivered.append(client_id)
-        return t
-
-    def user_turn(self):
-        return self.start_turn(None)
-
-    def finish(self):
-        self.active = None
-        if self.queue:  # the native idle edge drains the head
-            q = self.queue.pop(0)
-            self.start_turn(q["clientUserMessageId"])
-            self.active = None
-
-    def call(self, method, params):
-        self.calls.append(method)
-        if method in self.before:
-            self.before.pop(method)()
-        if method in self.fail:
-            raise self.fail.pop(method)
-        if method == "thread/queue/add":
-            q = dict(id=self.next_id("q"), clientUserMessageId=params["clientUserMessageId"],
-                     input=params["input"])
-            self.queue.append(q)
-            if self.active is None:
-                self.queue.remove(q)
-                self.start_turn(q["clientUserMessageId"])
-                self.active = None
-            return dict(queuedSubmission=q)
-        if method == "thread/queue/start":
-            q = [x for x in self.queue if x["id"] == params["queuedSubmissionId"]]
-            if not q:
-                raise ValueError("queued submission not found: " + params["queuedSubmissionId"])
-            if self.active is not None:
-                raise ValueError("thread already has an active or pending turn")
-            self.queue.remove(q[0])
-            t = self.start_turn(q[0]["clientUserMessageId"])
-            self.active = None
-            return dict(turn=dict(id=t["id"], status="inProgress", items=[]))
-        if method == "thread/queue/delete":
-            q = [x for x in self.queue if x["id"] == params["queuedSubmissionId"]]
-            for x in q:
-                self.queue.remove(x)
-            return dict(deleted=bool(q))
-        if method == "thread/queue/list":
-            return dict(data=list(self.queue), nextCursor=None)
-        if method == "thread/read":
-            assert params["includeTurns"] is True
-            return dict(thread=dict(id=params["threadId"], turns=[
-                dict(id=t["id"], items=[dict(type="userMessage", clientId=t["clientId"])]) for t in self.turns]))
-        if method == "thread/turns/list":
-            if self.young:
-                raise ValueError("list_turns is not supported yet")
-            self.assertDesc(params)
-            off = int(params.get("cursor") or 0)
-            rows = list(reversed(self.turns))[off:off + params["limit"]]
-            nxt = str(off + len(rows)) if off + len(rows) < len(self.turns) else None
-            return dict(data=[dict(id=t["id"], items=[dict(type="userMessage", clientId=t["clientId"])])
-                              for t in rows], nextCursor=nxt)
-        raise AssertionError("unexpected native call " + method)
-
-    @staticmethod
-    def assertDesc(params):
-        assert params["sortDirection"] == "desc" and params["itemsView"] == "summary", params
-
-
 class CodexIdleAccept(unittest.TestCase):
     """accept_if_idle through the fake app-server; the real binary is
     fleet-idle-accept-native-selftest.sh."""
@@ -419,12 +328,20 @@ class CodexIdleAccept(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.native = FakeCodex()
+        # The queue semantics the real Codex 0.162.1 app-server showed (#4617).
+        self.native = fake.Codex(threads=[dict(id=R["native_session"])], turns=[dict(id="turn-1", clientId=None)])
+
+        def call(method, params):
+            if method == "thread/read":
+                assert params["includeTurns"] is True
+            if method == "thread/turns/list":
+                assert params["sortDirection"] == "desc" and params["itemsView"] == "summary", params
+            return self.native.call(method, params)
         self.snapshot = Snapshot().observation()
         self.state = "idle"
         self.delivery = "66666666-6666-4666-8666-666666666666"
         client = mock.Mock()
-        client.call.side_effect = self.native.call
+        client.call.side_effect = call
         client.initialized = property(lambda _: None)
         type(client).initialized = mock.PropertyMock(
             side_effect=lambda: dict(userAgent="claude_fleet/%s (Mac OS; arm64)" % self.native.version))

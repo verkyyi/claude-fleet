@@ -15,6 +15,7 @@ from unittest.mock import patch
 loader = importlib.util.spec_from_file_location('fleet_loop', Path(__file__).with_name('fleet-loop.py'))
 loop = importlib.util.module_from_spec(loader)
 loader.loader.exec_module(loop)
+import fleet_codex_fake_appserver as fake  # the one fake Codex (T585)
 SID = '12345678-1234-1234-1234-123456789abc'
 
 
@@ -159,7 +160,33 @@ class NativeCronTests(unittest.TestCase):
                 with self.assertRaises(ValueError): native.validate(raw,path,42,SID,'fid',mark,now)
 
 
-class LoopTests(unittest.TestCase):
+class NativeDouble(object):
+    """What a test reads off the fake Codex: the turns it was handed, its thread's state."""
+    @property
+    def messages(self):
+        return [p for m, p in self.codex.requests if m == 'turn/start']
+
+    @property
+    def runtime_state(self):
+        return self.codex.threads[SID]['status']['type']
+
+    @runtime_state.setter
+    def runtime_state(self, value):
+        self.codex.threads[SID]['status'] = {'type': value}
+
+    @property
+    def fail_send(self):
+        return 'turn/start' in self.codex.fail
+
+    @fail_send.setter
+    def fail_send(self, value):
+        if value:
+            self.codex.fail['turn/start'] = TimeoutError('unknown whether accepted')
+        else:
+            self.codex.fail.pop('turn/start', None)
+
+
+class LoopTests(NativeDouble, unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='fleet-loop-test-')
         self.root = Path(self.temp.name)
@@ -171,32 +198,14 @@ class LoopTests(unittest.TestCase):
                   'deliveries': 0,
                   'schedule': {'prompt': '继续原任务', 'interval_seconds': 3600, 'next_run_at': 0}}
         loop.save(self.path, self.r)
-        self.messages = []
-        self.runtime_state = 'idle'
-        self.fail_send = False
+        # The one fake Codex (T585): the TUI's thread, idle; turn/start is the delivery.
+        self.codex = fake.Codex(threads=[dict(id=SID, cwd=str(self.root))], turn_ids=['accepted-turn-1'])
         self.state = 'done'
         self.clients = ''
         self.transfer = ''
         self.handoff = ''
         self.real_current = loop.current
-        owner = self
-
-        class FakeRpc:
-            def __init__(self, _): pass
-            def __enter__(self): return self
-            def __exit__(self, *_): pass
-            def call(self, method, params):
-                if method == 'thread/read':
-                    return {'thread': {'id': SID, 'cwd': str(owner.root),
-                                       'status': {'type': owner.runtime_state}}}
-                if method == 'turn/start':
-                    owner.messages.append(params)
-                    if owner.fail_send:
-                        raise TimeoutError('unknown whether accepted')
-                    return {'turn': {'id': 'accepted-turn-1'}}
-                raise AssertionError(method)
-
-        self.patches = [patch.object(loop, 'Rpc', FakeRpc),
+        self.patches = [patch.object(loop, 'Rpc', lambda _: self.codex.client()),
                         patch.object(loop, 'current'),
                         patch.object(loop, 'pane', side_effect=lambda _, fmt: self.state if fmt == '#{@claude_state}' else self.transfer if fmt == '#{@agent_transfer_request}' else self.handoff),
                         patch.object(loop, 'tm', side_effect=lambda *_: self.clients),
@@ -397,7 +406,7 @@ class LoopTests(unittest.TestCase):
 
 
 
-class IdleDispatchTests(unittest.TestCase):
+class IdleDispatchTests(NativeDouble, unittest.TestCase):
     """#4431: a due wakeup follows fresh native idle, never the panel's done/looping word.
 
     Two tiers. A pane with a C3 launch goes through fleet_runtime: a fresh v1 read,
@@ -627,7 +636,11 @@ class BridgeTest(unittest.TestCase):
             manifest.write_text(json.dumps(data))
             schedule.write_text(json.dumps({'prompt': '检查 CI', 'interval_seconds': 3600, 'next_run_at': 0}))
             codex = fake / 'codex'
-            __import__('shutil').copyfile(Path(__file__).with_name('fleet-loop-fake-codex.py'), codex)
+            __import__('shutil').copyfile(Path(__file__).with_name('fleet_codex_fake_appserver.py'), codex)
+            scenario = root / 'codex-scenario.json'
+            scenario.write_text(json.dumps({
+                'threads': [{'id': SID, 'cwd': str(root)}], 'turn_ids': ['native-turn'], 'record': str(root),
+                'client': {'run': [['python3', '{env:LOOP_TEST_SCRIPT}', 'bind']], 'wait': str(root / 'delivered.json')}}))
             tmux = fake / 'tmux'
             tmux.write_text('''#!/usr/bin/env python3
 import json,os,sys
@@ -647,7 +660,7 @@ elif 'capture-pane' in a:print('› ')
             script = str(Path(__file__).with_name('fleet-loop.py'))
             env = dict(os.environ, PATH=str(fake)+':'+os.environ['PATH'],
                        FLEET_HANDOFF_MANIFEST=str(manifest), FLEET_LOOP_SPEC=str(schedule),
-                       LOOP_TEST_ROOT=str(root), LOOP_TEST_SCRIPT=script)
+                       LOOP_TEST_ROOT=str(root), LOOP_TEST_SCRIPT=script, FLEET_FAKE_CODEX_SCRIPT=str(scenario))
             cp = subprocess.run(['python3', script, 'bridge', '--', '-c', 'hooks.Stop=[]', 'pickup'],
                                 env=env, capture_output=True, text=True, timeout=20)
             self.assertEqual(cp.returncode, 0, cp.stdout+cp.stderr)
@@ -656,8 +669,9 @@ elif 'capture-pane' in a:print('› ')
             self.assertEqual(r['deliveries'], 1)
             self.assertEqual(r['last_turn_id'], 'native-turn')
             self.assertEqual(json.loads((root/'delivered.json').read_text())['threadId'], SID)
-            self.assertIn('hooks.Stop=[]', json.loads((root/'server-argv.json').read_text()))
-            with self.assertRaises(ProcessLookupError): os.kill(int((root/'server-pid').read_text()), 0)
+            server = json.loads((root/'server.json').read_text())
+            self.assertIn('hooks.Stop=[]', server['argv'])
+            with self.assertRaises(ProcessLookupError): os.kill(server['pid'], 0)
             self.assertFalse(Path(r['socket']).exists())
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Hermetic homes, quota fixtures and fake native app-server. No model/network calls.
+# Hermetic homes, quota fixtures and the one fake Codex (stdio). No model/network calls.
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 import importlib.util
 import json
@@ -31,20 +31,15 @@ class Accounts(unittest.TestCase):
         a.register('one', self.homes[0]); a.register('two', self.homes[1])
         self.fake = self.root / 'bin'; self.fake.mkdir()
         codex = self.fake/'codex'
-        codex.write_text('''#!/usr/bin/env python3
-import json,os,pathlib,sys,time
-home=pathlib.Path(os.environ['CODEX_HOME'])
-if 'app-server' not in sys.argv:
- (home/'launch.json').write_text(json.dumps(sys.argv[1:]));sys.exit(0)
-(home/'server.pid').write_text(str(os.getpid()))
-for line in sys.stdin:
- r=json.loads(line)
- if r.get('method')=='initialize': print(json.dumps({'id':r['id'],'result':{}}),flush=True)
- if r.get('method')=='account/rateLimits/read':
-  if (home/'stall').exists():time.sleep(60)
-  print(json.dumps({'id':r['id'],'result':json.loads((home/'response.json').read_text())}),flush=True)
-'''); codex.chmod(0o755)
-        self.pathenv = patch.dict(os.environ, PATH=str(self.fake)+':'+os.environ['PATH'])
+        # The one fake Codex (T585), on stdio: the rate limits each home's response.json
+        # holds, stalled while the home has a `stall`; server.json / client.json there.
+        shutil.copyfile(BIN/'fleet_codex_fake_appserver.py', codex); codex.chmod(0o755)
+        (self.root/'scenario.json').write_text(json.dumps(dict(
+            record='{env:CODEX_HOME}',
+            answers={'account/rateLimits/read': {'file': '{env:CODEX_HOME}/response.json'}},
+            delay={'account/rateLimits/read': {'secs': 60, 'if_exists': '{env:CODEX_HOME}/stall'}})))
+        self.pathenv = patch.dict(os.environ, PATH=str(self.fake)+':'+os.environ['PATH'],
+                                  FLEET_FAKE_CODEX_SCRIPT=str(self.root/'scenario.json'))
         self.pathenv.start(); self.addCleanup(self.pathenv.stop)
 
     def response(self, used=20, duration=10080, reset=None):
@@ -131,7 +126,7 @@ for line in sys.stdin:
         cache=a.cache_path(self.homes[0]).read_text()
         self.assertNotIn('must-not-cache',cache);self.assertNotIn('private@example',cache)
         for home in self.homes:
-            pid=int((Path(home)/'server.pid').read_text())
+            pid=json.loads((Path(home)/'server.json').read_text())['pid']
             with self.assertRaises(ProcessLookupError):os.kill(pid,0)
 
     def test_rpc_timeout_terminates_server_and_keeps_fresh_reading(self):
@@ -140,7 +135,7 @@ for line in sys.stdin:
         before=time.monotonic();a.refresh(self.homes[0],force=True,timeout=.1)
         self.assertLess(time.monotonic()-before,4)
         self.assertEqual(a.status(self.homes[0])['remaining'],80)
-        pid=int((Path(self.homes[0])/'server.pid').read_text())
+        pid=json.loads((Path(self.homes[0])/'server.json').read_text())['pid']
         with self.assertRaises(ProcessLookupError):os.kill(pid,0)
 
     def test_launcher_selection_and_explicit_recovery_home(self):
@@ -153,12 +148,12 @@ for line in sys.stdin:
         def launch(*args):
             p=subprocess.run(['bash',str(dest/'fleet-codex.sh'),*args],env=env,capture_output=True,text=True)
             self.assertEqual(p.returncode,0,p.stderr)
-        launch('seed');self.assertTrue((Path(self.homes[1])/'launch.json').exists())
+        launch('seed');self.assertTrue((Path(self.homes[1])/'client.json').exists())
         launch('--codex-home',self.homes[0],'--resume','saved-session')
-        self.assertIn('resume',json.loads((Path(self.homes[0])/'launch.json').read_text()))
+        self.assertIn('resume',json.loads((Path(self.homes[0])/'client.json').read_text())['argv'])
         env['CODEX_HOME']=self.homes[0]
         launch('resume','native-saved-session')
-        self.assertIn('native-saved-session',json.loads((Path(self.homes[0])/'launch.json').read_text()))
+        self.assertIn('native-saved-session',json.loads((Path(self.homes[0])/'client.json').read_text())['argv'])
 
     def test_watch_never_moves_busy_unknown_or_unconfigured_sessions(self):
         # The native RPC is mandatory and controller rechecks idle before /exit.

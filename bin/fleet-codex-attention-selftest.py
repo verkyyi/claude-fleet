@@ -16,6 +16,7 @@ from unittest.mock import Mock, patch
 BIN=Path(__file__).absolute().parent
 spec=importlib.util.spec_from_file_location('attention',BIN/'fleet-codex-attention.py')
 a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
+sys.path.insert(0,str(BIN));import fleet_codex_fake_appserver as fake
 SID='11111111-1111-4111-8111-111111111111'
 DATA=dict(session_id=SID,owner='123',home='/fixture',remote='unix:///fixture.sock')
 REQUEST={'id':'server-1','method':a.QUESTION,'params':{'threadId':SID,'turnId':'turn1','itemId':'call1','isBlocking':True,
@@ -23,27 +24,16 @@ REQUEST={'id':'server-1','method':a.QUESTION,'params':{'threadId':SID,'turnId':'
               {'id':'q2','header':'Text','question':'Path?','options':None}]}}
 
 
-class Fake:
-    def __init__(self,request=None,state='active',before=False):
-        self.request=copy.deepcopy(request or REQUEST);self.events=[];self.sent=[];self.calls=[];self.closed=False
-        self.state=state;self.before=before;self.replayed=False;self.already=False
-        self.socket=None
-    def call(self,method,params):
-        self.calls.append((method,params))
-        if method in ('thread/read','thread/resume'):
-            if method=='thread/resume':
-                self.replayed=True
-                if self.before:self.events.append(self.request)
-            if self.already:self.events.append(self.resolution())
-            return {'thread':{'id':SID,'status':{'type':self.state,'activeFlags':['waitingOnUserInput']}}}
-        raise AssertionError(method)
-    def resolution(self):return {'method':'serverRequest/resolved','params':{'threadId':SID,'requestId':self.request['id']}}
-    def receive(self,nonblocking=False):
-        if nonblocking:return None
-        if self.replayed:self.replayed=False;return self.request
-        raise TimeoutError('no matching pending request')
-    def send(self,value):self.sent.append(value);self.events.append(self.resolution())
-    def close(self):self.closed=True
+def Fake(request=None,state='active',before=False):
+    """A connection to the one fake Codex (T585) whose thread holds `request`, replayed
+    before or after the resume's answer, as the real server does."""
+    codex=fake.Codex(threads=[dict(id=SID)]);set_state(codex,state)
+    codex.server_request(copy.deepcopy(request or REQUEST),replay='before' if before else 'after')
+    return codex.client()
+
+
+def set_state(codex,state):
+    codex.threads[SID]['status']={'type':state,'activeFlags':['waitingOnUserInput']}
 
 
 class Attention(unittest.TestCase):
@@ -79,7 +69,7 @@ class Attention(unittest.TestCase):
     def test_resolved_request_cannot_be_answered_again(self):
         f=Fake()
         with patch.object(a,'Client',return_value=f):
-            pending=a.Pending(DATA);f.already=True
+            pending=a.Pending(DATA);f.codex.resolve(REQUEST['id'])
             with self.assertRaisesRegex(ValueError,'already resolved'):pending.respond({'answers':{}},'%1','isolated')
         self.assertFalse(f.sent)
 
@@ -128,13 +118,13 @@ class Attention(unittest.TestCase):
                 mon.tick();self.assertEqual(call('display-message','-p','#{@claude_state}/#{@claude_needs}'),'needs/ask')
                 # the question's own words, as Claude's needs carry them (#1951)
                 self.assertEqual(call('display-message','-p','#{@claude_needs_detail}'),'继续？')
-                f.state='idle';mon.next_at=0;mon.reconcile_at=0;mon.tick()
+                set_state(f.codex,'idle');mon.next_at=0;mon.reconcile_at=0;mon.tick()
                 self.assertEqual(call('display-message','-p','#{@claude_state}/#{@claude_needs}'),'done/')
                 self.assertEqual(call('display-message','-p','#{@claude_needs_detail}'),'')
                 opt('@codex_attention','ask');opt('@claude_state','needs');opt('@claude_needs','blocked')
                 mon.next_at=0;mon.reconcile_at=0;mon.tick()
                 self.assertEqual(call('display-message','-p','#{@claude_state}/#{@claude_needs}'),'needs/blocked')
-                opt('@cc_launcher_pid','456');f.state='active';mon.next_at=0;mon.tick()
+                opt('@cc_launcher_pid','456');set_state(f.codex,'active');mon.next_at=0;mon.tick()
                 self.assertEqual(call('display-message','-p','#{@claude_state}/#{@claude_needs}'),'needs/blocked')
                 self.assertTrue(f.closed)
                 mon.close()
@@ -379,7 +369,7 @@ class MonitorEvents(unittest.TestCase):
             result=original(method,params)
             if method=='thread/read':
                 self.native.events.append(self.status('active',['waitingOnUserInput']))
-                self.native.state='active'
+                set_state(self.native.codex,'active')
             return result
         with patch.object(self.native,'call',side_effect=racing_read):
             self.tick()
@@ -390,13 +380,13 @@ class MonitorEvents(unittest.TestCase):
         self.assertEqual(len(self.native.calls),2)
 
     def test_resolved_attention_during_snapshot_is_not_reintroduced(self):
-        self.native.state='active'
+        set_state(self.native.codex,'active')
         original=self.native.call
         def racing_read(method,params):
             result=original(method,params)
             if method=='thread/read':
                 self.native.events.append(self.status('idle'))
-                self.native.state='idle'
+                set_state(self.native.codex,'idle')
             return result
         with patch.object(self.native,'call',side_effect=racing_read):
             self.tick()

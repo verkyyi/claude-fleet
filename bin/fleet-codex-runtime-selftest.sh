@@ -14,32 +14,21 @@ runtime = importlib.util.module_from_spec(spec); spec.loader.exec_module(runtime
 spec = importlib.util.spec_from_file_location('rpc', BIN / 'fleet-codex-rpc.py')
 rpc = importlib.util.module_from_spec(spec); spec.loader.exec_module(rpc)
 
-FAKE = r'''
-import json,os,pathlib,socket,sys,time
-args=sys.argv[1:]; root=pathlib.Path(os.environ['RUNTIME_TEST'])
-server='app-server' in args
-remote=args[args.index('--listen' if server else '--remote')+1]
-path=remote.removeprefix('unix://') if hasattr(str,'removeprefix') else remote[7:]
-with (root/('server.json' if server else 'client.json')).open('w') as f:
- json.dump(dict(argv=args,remote=os.environ.get('FLEET_CODEX_REMOTE'),pid=os.getpid(),path=path),f)
-if server:
- if os.environ.get('FAIL_START'): sys.exit(9)
- s=socket.socket(socket.AF_UNIX); s.bind(path); s.listen(1)
- end=time.monotonic()+30
- while time.monotonic()<end: time.sleep(.05)
-else:
- if '--hold' in args:
-  end=time.monotonic()+20
-  while pathlib.Path(path).parent.exists() and time.monotonic()<end: time.sleep(.05)
- sys.exit(int(os.environ.get('CLIENT_RC','0')))
-'''
+# The one fake Codex (fleet_codex_fake_appserver.py, T585) as `codex`: it records
+# server.json / client.json in RUNTIME_TEST, holds the client on --hold while its
+# socket's directory stands, exits CLIENT_RC; FAIL_SCENARIO's server exits 9 unbound.
+SCENARIO = dict(record='{env:RUNTIME_TEST}', server=dict(lifetime=30),
+                client=dict(hold=dict(flag='--hold', secs=20), exit='{env:CLIENT_RC:0}'))
 
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(prefix='codex-runtime-test-')
         self.root=pathlib.Path(self.tmp.name)
-        fake=self.root/'codex'; fake.write_text('#!'+sys.executable+'\n'+FAKE);fake.chmod(0o755)
-        self.env=dict(os.environ,PATH=str(self.root)+':'+os.environ['PATH'],RUNTIME_TEST=str(self.root))
+        fake=self.root/'codex'; fake.write_text('#!'+sys.executable+'\n'+(BIN/'fleet_codex_fake_appserver.py').read_text());fake.chmod(0o755)
+        (self.root/'scenario.json').write_text(json.dumps(SCENARIO))
+        (self.root/'fail.json').write_text(json.dumps(dict(SCENARIO,server=dict(exit=9))))
+        self.env=dict(os.environ,PATH=str(self.root)+':'+os.environ['PATH'],RUNTIME_TEST=str(self.root),
+                      FLEET_FAKE_CODEX_SCRIPT=str(self.root/'scenario.json'))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -130,7 +119,7 @@ class RuntimeTests(unittest.TestCase):
         launch.assert_not_called()
 
     def test_startup_failure_does_not_launch_client(self):
-        result=self.run_cli('hello',FAIL_START='1')
+        result=self.run_cli('hello',FLEET_FAKE_CODEX_SCRIPT=str(self.root/'fail.json'))
         self.assertEqual(result.returncode,1)
         self.assertFalse((self.root/'client.json').exists())
         self.assertFalse(pathlib.Path(self.metadata('server')['path']).parent.exists())

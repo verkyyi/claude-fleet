@@ -154,11 +154,22 @@ if [ -f "$TRANSFER_TEST_ROOT/auth-dies" ]; then printf 'reauth_required\n' > "$T
 if [ "${3:-}" = --codex-home ]; then export CODEX_HOME="$4"; fi
 if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ -f "$TRANSFER_TEST_ROOT/native-plan.json" ]; then
   export LOOP_TEST_ROOT="$HOME" LOOP_TEST_SCRIPT="$TRANSFER_TEST_ROOT/install/bin/fleet-loop.py"
+  export FLEET_FAKE_CODEX_SCRIPT="$TRANSFER_TEST_ROOT/codex-scenario.json"
   exec python3 "$LOOP_TEST_SCRIPT" bridge -- pickup
 fi
 exec "$TRANSFER_TEST_ROOT/fakebin/codex" "$TRANSFER_TEST_ROOT/codex.pl" "$@"
 SH
 printf '#!/bin/sh\nexit 0\n' > "$IBIN/fleet-codex.sh"
+# The one fake Codex (bin/fleet_codex_fake_appserver.py, T585) as the private
+# RPC server + TUI: it binds its thread, says it is ready and waits on its input.
+cat > "$WORK/codex-scenario.json" <<'JSON'
+{"threads": [{"id": "12345678-1234-1234-1234-123456789abc", "cwd": "{env:LOOP_TEST_ROOT}"}],
+ "turn_ids": ["native-turn"], "record": "{env:LOOP_TEST_ROOT}", "inside": "{env:TRANSFER_TEST_ROOT}",
+ "client": {"tmux": {"@cc_launcher_pid": "{pid}", "@claude_state": "done",
+                     "@codex_identity": {"owner": "{pid}", "session_id": "{thread}", "home": "{env:HOME}/.codex",
+                                         "cwd": "{env:LOOP_TEST_ROOT}", "remote": "{remote}"}},
+            "run": [["python3", "{env:LOOP_TEST_SCRIPT}", "bind"]], "ready": "Codex ready\n› ", "stdin": true}}
+JSON
 printf '#!/bin/sh\nprintf "PreToolUse\\tbash-guard.py base-readonly-guard.py\\n"\n' > "$IBIN/fleet-hooks-emit.sh"
 cat > "$FB/gh" <<'SH'
 #!/bin/sh
@@ -246,7 +257,7 @@ if [ "${1:-}" = --norepo ] || [ "${1:-}" = --norepo-cron ] || [ "${1:-}" = --nor
 cat >> "$TRANSFER_TEST_ROOT/preparation-messages"
 printf '\nREQUEST\n' >> "$TRANSFER_TEST_ROOT/preparation-messages"
 PYPREP
-    rm "$FB/codex"; cp "$BIN/fleet-loop-fake-codex.py" "$FB/codex"; chmod +x "$FB/codex"
+    rm "$FB/codex"; cp "$BIN/fleet_codex_fake_appserver.py" "$FB/codex"; chmod +x "$FB/codex"
     durable_source() { # n — a no-repo Claude source holding the native lock, with one durable task
       spawn "$1" norepo norepo
       for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done
@@ -670,7 +681,7 @@ PYBACK
   # Full mixed native Cron handover through a real private RPC server/TUI,
   # then failed-target rollback through the real Claude scheduler supervisor.
   rm "$FB/codex"
-  cp "$BIN/fleet-loop-fake-codex.py" "$FB/codex"; chmod +x "$FB/codex"
+  cp "$BIN/fleet_codex_fake_appserver.py" "$FB/codex"; chmod +x "$FB/codex"
   for n in 94 95; do
     spawn "$n" norepo norepo
     for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done
