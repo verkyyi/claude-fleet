@@ -139,13 +139,8 @@ for d in dirs:
             if f.endswith((".sh", ".py")):
                 bad.append("B %s: %s — scripts stay in bin/, never copied into a plugin"
                            % (d, os.path.relpath(os.path.join(dp, f), root)))
-# The dispatch group ships with the core (issue #4334): the launchers mount
-# conf/mcp-orch.json — no plugin registers it, either agent.
-for d in dirs:
-    base = os.path.join(root, "plugins", d)
-    for mf in (os.path.join(base, ".mcp.json"), os.path.join(base, ".codex-plugin", "plugin.json")):
-        if os.path.exists(mf) and "fleet-orch" in (json.load(open(mf)).get("mcpServers") or {}):
-            bad.append("B %s registers the dispatch group — it is the core's (conf/mcp-orch.json)" % d)
+# (No plugin registers the dispatch group — it ships with the core, #4334:
+# conf/gone.list.)
 # C: the default package
 for d in dirs:
     for s in skills_of[d]:
@@ -341,13 +336,10 @@ for f in commands/fleet-epic-plan.md commands/fleet-epic-run.md commands/fleet-e
          skills/epic-page/SKILL.md skills/epic-page/template.html agents/epic-driver.md; do
   [ -f "$EP/$f" ] && ok || fail "I fleet-epic carries no $f"
 done
-[ ! -e "$ROOT/conf/agent-defaults/claude/agents/epic-driver.md" ] && [ ! -e "$ROOT/agents/epic-driver.md" ] && ok \
-  || fail "I the core still ships an epic-driver agent file — it is fleet-epic's"
 grep -qF -- '`agent` `epic-driver`' "$EP/commands/fleet-epic-plan.md" && ok \
   || fail "I the plan's parent task does not start the epic-driver (issue #4957)"
-grep -rq -- '--role epic-driver' "$ROOT/plugins" && fail "I a plugin still starts a driver with --role epic-driver" "$(grep -rn -- '--role epic-driver' "$ROOT/plugins")"; ok
-grep -rnE 'steward|管家|fleet-orchestrate' "$EP" >/dev/null \
-  && fail "I fleet-epic still hands work to the steward / the orchestrate plugin (#4338)" "$(grep -rnE 'steward|管家|fleet-orchestrate' "$EP")"; ok
+# (the core ships no epic-driver, no plugin says --role epic-driver, fleet-epic hands
+# nothing to the steward / the orchestrate plugin — #3116, #4338: conf/gone.list)
 sed -n '/^---$/,/^---$/p' "$EP/agents/epic-driver.md" | grep -qx '  - fleet-orch' && ok \
   || fail "I epic-driver does not mount the dispatch group fleet-orch itself (#4338)"
 AE=$(mktemp -d "$WORK/ae.XXXXXX")
@@ -386,7 +378,7 @@ grep -qE '^plugin uninstall' "$ST/calls" && fail "J --dry-run uninstalled" "$(ca
 has "uninstalled $FB — retired" "$out" "J the retired plugin is uninstalled"
 grep -q "^plugin uninstall $FB" "$ST/calls" && ok || fail "J no uninstall ran" "$(cat "$ST/calls")"
 [ "$(fbstate)" = absent ] && ok || fail "J still installed after the apply" "$(fbstate)"
-grep -q 'fleet-feedback' "$ROOT/.claude-plugin/marketplace.json" && fail "J the marketplace still lists fleet-feedback"; ok
+# (the marketplace lists no fleet-feedback, #4904: conf/gone.list)
 
 # ---- K: fleet-infra, the admins' runbooks (issue #3586, EPIC #3569 C16) ------------
 FI="$ROOT/plugins/fleet-infra"

@@ -1,0 +1,164 @@
+# conf/gone.list — what the fleet deleted on purpose, and must not come back (T537, EPIC T516 R3).
+# The ONE list; bin/gone-selftest.sh reads it and reds on any of these back in the tree.
+#
+#   <kind> <thing> <ticket> [<scope>]
+#
+#   path  <p>     no file or directory at <p> (relative to the repo root)
+#   func  <name>  no definition of <name> in code (sh · python · go · ts/js)
+#   word  <tok>   <tok> on no code line (whole word; comments, prose, docs/ and
+#                 selftests are not scanned; `gone-ok: <why>` keeps one line)
+#   key   <NAME>  a word, and not a key of conf/fleet.conf.reference
+#   <ticket>      #<issue> or T<n> — what deleted it
+#   <scope>       optional path prefix narrowing a func / word / key (default: all)
+#
+# A PR that deletes a feature adds its lines here. Bringing one back on purpose
+# deletes its line, and the PR says why. A note goes on a comment line above.
+
+# --- the old two-pane client (#4423): the thin client is the only one ---------
+path bin/fleet-shell.sh                #4423
+path bin/fleet-sidebar.sh              #4423
+path bin/fleet-sidebar.py              #4423
+path bin/fleet-sidebar-menu.sh         #4423
+path bin/fleet-sidebar-reap.sh         #4423
+path bin/fleet-sidebar-remote.sh       #4423
+path bin/fleet-client-badge.sh         #4423
+path bin/fleet-client-menu.sh          #4423
+path bin/tmux-status.sh                #4423
+path conf/tmux-shell.conf              #4423
+path conf/tmux-shell-stage.conf        #4423
+# --- node-side sidebar remnants, the ⌂/F9 chain (#3732) -----------------------
+path bin/dash-zoom.sh                  #3732
+path bin/hub-zoom.sh                   #3732
+path bin/fleet-task-pick.sh            #3732
+path bin/fleet-trace-lib.sh            #3732
+# --- the orchestrator seat and its rule table (#4340), the steward (#4339) -----
+path bin/fleet-role.py                 #4340
+path bin/fleet-role-take.sh            #4340
+path bin/fleet-role-windows.sh         #4340
+path bin/fleet_rules.py                #4340
+path conf/role-rules.default.md        #4340
+path plugins/fleet-orchestrate         #4800
+path plugins/fleet-steward             #4800
+path bin/fleet-steward-tick.sh         #4339
+path bin/fleet-steward-conflicts.sh    #4339
+path bin/fleet_steward.py              #4339
+path bin/fleet-park.sh                 #4339
+path bin/fleet-orchestrator-state.py   #4800
+path bin/fleet-dispatch.sh             #3576
+path bin/fleet-orchestrator.sh         #3576
+path bin/fleet-steward.sh              #3576
+# --- the screen classifier (#2543) ---------------------------------------------
+path bin/classify-sessions.sh          #2543
+path bin/classify-shadow-report.py     #2543
+path bin/classify-hook.sh              #4798
+# --- hub-visit metering (#1739) ------------------------------------------------
+path bin/fleet-hub-visits.sh           #1739
+# --- the panel's 「到 …」 button (#4330) ----------------------------------------
+path bin/fleet-panel-jump.sh           #4330
+# --- compat-1v deletions (#4800 #4998) ------------------------------------------
+path bin/fleet_compat.py               #4800
+path conf/compat-ours.conf             #4800
+path bin/fleet-whats-new.sh            T512
+# --- SPOT execution nodes (#4797) ----------------------------------------------
+path extras/spot-node                  #4797
+path .github/workflows/spot-node.yml   #4797
+# --- the hub's personal role layer (#3130) -------------------------------------
+path tests/role-merge                  #3130
+path bin/fleet-panel-jump-selftest.sh  #4330
+
+# --- one fleet per login (#980) and the footer repo picker (#1034, #1038) ------
+path bin/fleet-xfleet-jump.sh          #980
+path bin/fleet-pick.sh                 #1034
+re   range=user\|xfleet                #980   conf/tmux-attention.conf,conf/tmux-bar.conf
+word attn_other_windows                #980   conf/tmux-attention.conf,conf/tmux-bar.conf
+word fleet-pick                        #980   bin/fleet-attach.sh
+re   fleet-pick\.sh                    #1034  bin/,conf/,hooks/,commands/
+word fleet_repo_label                  #1034  bin/,conf/,hooks/,commands/
+word fleet_current_repo_set            #1034  bin/,conf/,hooks/,commands/
+word DASH_KEY_PICK                     #1034  bin/,conf/,hooks/,commands/
+re   range=user\|fleet[^a-z]           #1034  bin/,conf/,hooks/,commands/
+text mouse_status_range},fleet}        #1034  bin/,conf/,hooks/,commands/
+func fleet_current_repo_set            #1034  bin/
+func fleet_repo_label                  #1034  bin/
+func fleet_repo_label_sync             #1034  bin/
+func fleet_current_repo                #1038  bin/
+# the picker's state file: fleet-up.sh deletes it (gone-ok there), nothing reads it
+text current-repo                      #1038  bin/
+# --- the node draws no bar, popup or click of its own (#1714) -----------------
+text range=                            #1714  conf/tmux-bar.conf
+re   fleet-alerts\.sh\s+popup          #1714  conf/tmux-attention.conf
+word mouse_status_range                #1714  conf/tmux-attention.conf
+text dash-popup.sh                     #1714  conf/tmux-attention.conf
+re   ^set\s+-g\s+(status-(left|right|style)|message-style)\s  #1534  conf/tmux-attention.conf
+re   pane-border-format.*TASKS         #1764
+re   fleet_ctx_hdr|@pct_sign           #2717  conf/tmux-attention.conf
+re   display-message[^|]*'Tasks:       #3008  conf/
+# --- popups: the keys sheet (#4902), the task picker (#3732), the one-field ones (#1620)
+path bin/fleet-keys.sh                 #4902
+re   ^bin/fleet-keys\.sh               #4902  tokenledger/hub/api/fleetclient/manifest
+re   --title["',\s]*popup_             #4902  bin/,conf/
+re   dash-popup\.sh|fleet_popup\s      #1620  bin/fleet-restore-pick.sh,bin/dash-reap.sh,bin/dash-migrate.sh,bin/open-url.sh,bin/dash-repo-add.sh,bin/fleet-row-remote.sh
+# --- a working spawn / reap says nothing (#1618) -------------------------------
+re   display-message(?![^|]*\s-p\s)[^|]*(✓|spawned|reaped|closed\sscratch|filed|checking\s#|spawning\s#)  #1618  bin/dash-issue-session.sh,bin/dash-raw-session.sh,bin/dash-reap.sh
+# --- the old alert wording (#1714) ----------------------------------------------
+re   pace\sspread|quota\sblind|via\sbanner|no\slocally\sreachable  #1714  bin/
+# --- the context ladder's pre-#1571 defaults ------------------------------------
+re   then\s_(cp|cm)=(70|2);|csees=70|\(unset\s⇒\s2;  #1571  bin/set-claude-state.sh,bin/fleet-doctor.sh
+# --- in-place restarts typed into panes (#511, #512) -----------------------------
+text --restart-after-rotate            #512   bin/
+text --restart-idle                    #512   bin/
+func _ap_restart_window                #512   bin/
+func restart_idle_claude_windows       #512   bin/
+func _ap_restart_eligible              #512   bin/
+func _ap_pane_claude_pid               #512   bin/
+text send-keys                         #511   bin/usage-modal.sh
+# --- every session may spawn (#4591, #4790); the bar's notify road (#4790) -------
+func fleet_spawn_refused               #4790  bin/
+func fleet_alerts_notify               #4790  bin/
+# --- the orchestrator seat, its readers, its mod parts (#3118, #3119, #4340) -----
+func go_orch                           #3119  bin/fleet_view.py
+func orch_target                       #3119  bin/fleet_view.py
+path mod/fleet/hooks/orchestrator.ts   #3118
+path mod/fleet/hooks/exit-guard.ts     #3118
+path mod/fleet/hooks/queue.ts          #3118
+path mod/fleet/hooks/qd.ts             #3118
+re   orchestrator-role|@orch_queue|registerExitGuard|registerQueue  #3118  mod/fleet/hooks/
+re   QuickDispatch|qdCommand           #4340  mod/fleet/hooks/register.ts,mod/fleet/hooks/lifecycle.ts
+re   register(Panels|Sheet|Patrol|Batches)  #4339  mod/fleet/hooks/register.ts,mod/fleet/hooks/lifecycle.ts
+word registerProgress                  #4902  mod/fleet/
+# the dispatch group ships with the core: no plugin registers it (#4334)
+re   "fleet-orch"\s*:                  #4334  plugins/
+# --- the onboarding skill: no seat grab, no spawn, no ticket, no sidebar (#3320) --
+text fleet-role-take                   #3320  commands/fleet-onboard.md
+text --spawn                           #3320  commands/fleet-onboard.md
+text sidebar                           #3320  commands/fleet-onboard.md
+text fleet-keys.sh                     #3320  commands/fleet-onboard.md
+# --- agent files: --as replaced --role (#3122); the driver is fleet-epic's (#3116) --
+re   --role\s+worker                   #3122  bin/dash-issue-session.sh
+re   --role\s+epic-driver              #3116  plugins/
+path conf/agent-defaults/claude/agents/epic-driver.md  #3116
+path agents/epic-driver.md             #3116
+re   steward|管家|fleet-orchestrate     #4338  plugins/fleet-epic/
+word fleet-feedback                    #4904  .claude-plugin/marketplace.json
+# --- EPIC batches: the report is a beat of the run (#852), one repo (#803 → #1942),
+#     hub tasks not GitHub issues (#4957); the report page's tail (#929)
+re   hand\soff\sto\s`/fleet-epic-report  #852   plugins/fleet-epic/commands/fleet-epic-run.md
+re   and\san\sEPIC\slives\sin          #1942  plugins/fleet-epic/commands/
+re   gh\s+(issue|api)                  #4957  plugins/fleet-epic/commands/
+re   sub_issues|fleet-epic-preflight|fleet-epic-backstop|fleet-epic-loopers|epic-member  #4957  plugins/fleet-epic/commands/
+re   <section\sid="(next|obstacles)">  #929   plugins/fleet-epic/skills/epic-page/template.html
+re   不算欠|建议，不是决定               #929   plugins/fleet-epic/skills/epic-page/template.html
+re   <div\sclass="k">(核心层|储备层|新建子单|预检警告)</div>  #929  plugins/fleet-epic/skills/epic-page/template.html
+# --- the release: no hourly cron (#4913); no Mac lane (#4671); no dispatch daemon (#3576)
+re   ^\s\sschedule:                    #4913  .github/workflows/release-train.yml
+re   fleet-installs\.sh"\s+--channel   #4671  bin/fleet-doctor.sh
+text dash-issue-session                #3576  bin/fleet-macos-watch.sh
+path launchd/com.claude-fleet.dispatch.plist.tmpl  #3576
+# --- the client package carries none of 承载's (#4826), the core not fleet-lib (#4825)
+re   ^bin/fleet-lib\.sh\s              #4825  conf/client-runtime.list
+re   ^(bin/fleet-lib\.sh|hooks/bash-guard\.py|conf/agent-bundle\.manifest|bin/fleet-config\.py)\b  #4826  tokenledger/hub/api/fleetclient/manifest
+# --- small ones inside wiring legs ------------------------------------------------
+re   fleet-codex-plugins\.py"\s+dirs   #3123  bin/fleet-codex.sh
+re   parent_matches\(r,\s*parent\)     #4398  bin/fleet_task_control.py
+re   title="\$node\s                   #3008  bin/fleet-remote-view.sh
+path tokenledger/go.mod                #4811

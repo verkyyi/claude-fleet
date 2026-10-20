@@ -93,7 +93,7 @@ grep -q 'labels=release-hold' "$wf" && grep -q "steps.hold.outputs.held == '' &&
   && ok "release-hold holds the move" || bad "release-train.yml's move is not held by release-hold"
 grep -q "inputs.resend != ''" "$wf" && ok "a re-send names itself 补发" || bad "run-name does not carry the re-send"
 grep -q -- "--ignore-check next" "$wf" && ok "the move ignores the next job" || bad "the move would wait on next"
-! grep -q "^  schedule:" "$wf" && ok "no hourly cron re-runs a real red" || bad "release-train.yml still has a schedule"
+# (no hourly cron re-runs a real red, #4913: conf/gone.list)
 grep -q "cron: '3-59/10" "$bk" && grep -q 'fleet-train-next.py decide' "$bk" && grep -q 'workflows: \[release train\]' "$bk" \
   && ok "the 10-minute backstop decides by the same rule" || bad "release-train-next.yml is not wired"
 grep -q '"release-train-next.yml"' "$ROOT/tokenledger/hub/api/fleet_release_notice.go" && ok "the hub takes the backstop's notice" || bad "the hub refuses the backstop"

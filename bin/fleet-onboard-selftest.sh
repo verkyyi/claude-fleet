@@ -195,10 +195,6 @@ got=$(look)
 [ "$got" = "$(printf 'new\tworking\tT7\t\t-\t帮我写一封请假邮件')" ] || fail "look did not print exactly the new worker" "$got"
 ok "look: refuses unmarked, prints only the window that is new"
 
-# --- 10. no seat grab, no ticket, no sidebar (issue #3320) -------------------
-for bad in fleet-role-take '--spawn' sidebar 'fleet-keys.sh'; do
-  grep -q -- "$bad" "$SKILL" && fail "the skill still says '$bad' (#3320: no role, no spawn, no ticket, no sidebar)"
-done
-ok "the skill takes no role, spawns nothing, files nothing, has no sidebar"
+# (10. no seat grab, no spawn, no sidebar, #3320: conf/gone.list)
 
 printf 'fleet-onboard selftest: %d passed\n' "$pass"

@@ -89,7 +89,7 @@ got=$(bash -c '. "$1/fleet-client-core.sh"; fleet_host_lib && type fleet_load_co
 # --- C: the package and the list -----------------------------------------------------
 grep -qx 'bin/fleet-client-core.sh' "$MANIFEST" && ok "C the client package carries the core" || no "C bin/fleet-client-core.sh not in $MANIFEST"
 grep -q $'^bin/fleet-client-core.sh\t' "$LIST" && ok "C the runtime list names the core" || no "C core not on $LIST"
-grep -q $'^bin/fleet-lib.sh\t' "$LIST" && no "C fleet-lib.sh is still on the client's runtime list" || ok "C fleet-lib.sh is not on the client's runtime list"
+# (fleet-lib.sh is not on the client's runtime list, #4825: conf/gone.list)
 
 # --- D: smoke, with and without fleet-lib.sh ------------------------------------------
 lay() {   # lay <root> [<extra>] — the client package (its installed files, not

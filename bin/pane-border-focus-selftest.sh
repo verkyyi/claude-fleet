@@ -37,8 +37,7 @@ for rel in $CONFS; do
   [ -n "$ps" ] || fail "$rel: no pane-border-style"
   [ "$pa" = "$ps" ] || fail "$rel: pane-active-border-style [$pa] differs from pane-border-style [$ps]"
   [ "$(optval "$f" pane-border-indicators)" = off ] || fail "$rel: pane-border-indicators is not off"
-  fmt="$(optval "$f" pane-border-format)"
-  case "$fmt" in *TASKS*) fail "$rel: pane-border-format still names TASKS" ;; esac
+  # (no pane-border-format names TASKS, #1764: conf/gone.list)
 
   REAL_TMUX="$(command -v tmux 2>/dev/null)"
   [ -n "$REAL_TMUX" ] || continue

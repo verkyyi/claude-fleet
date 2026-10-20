@@ -25,9 +25,7 @@ ROOT="$(cd "$BIN/.." && pwd)"
 branchy=$(grep -nE '(case "\$\(fleet_ui_lang\)"|"\$\(fleet_ui_lang\)" = (zh|en))' "$BIN"/*.sh | grep -v '/fleet-ui-lang\.sh:' | grep -v -- '-selftest\.sh:')
 [ -z "$branchy" ] || fail 'a script branches on the language instead of using fleet_ui_t' "$branchy"
 ok 'no script branches on the language itself'
-grep -n "display-message[^|]*'Tasks:" "$ROOT"/conf/*.conf | grep -Ev ':[0-9]+:[[:space:]]*#' | grep -q . \
-  && fail 'a hardcoded English toast is back (conf)'
-ok 'the toasts are translated'
+# (no hardcoded English toast in conf/, #3008: conf/gone.list)
 
 # every key exists in BOTH languages
 table="$BIN/fleet-ui-lang.sh"

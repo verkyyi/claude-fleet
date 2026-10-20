@@ -153,9 +153,8 @@ done
 for must in bin/fleet-node-join.sh bin/fleet-node-install.sh bin/fleet-release-lib.sh bin/fleet-release-fetch.py bin/fleet-release-verify.py; do
   printf '%s\n' "$SERVED" | grep -qxF "$must" && ok "A $must is served" || bad "A $must is not served"
 done
-for never in bin/fleet-lib.sh hooks/bash-guard.py conf/agent-bundle.manifest; do
-  grep -q "^$never\b" "$MANIFEST" && bad "A the client package still carries $never" || ok "A the client package carries no $never"
-done
+# (the client package carries no fleet-lib.sh, bash-guard.py or agent-bundle.manifest,
+# #4826: conf/gone.list)
 
 fi
 

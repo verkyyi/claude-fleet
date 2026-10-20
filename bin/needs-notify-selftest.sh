@@ -77,10 +77,6 @@ eq "B: the mod's ask with the payload on stdin → the same" "needs/ask|mod 的�
 printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | st busy
 eq "B: an ordinary tool → working, no question" "working|" "$(opt '#{@claude_state}|#{@claude_needs_detail}')"
 
-# ============================================================================
-# C. notify — the bar's old road is gone (issue #4790)
-# ============================================================================
-eq "C: fleet_alerts_notify (the bar's road) is gone" "1" \
-   "$(TMUX="$SOCK,0,0" bash -c '. "$1/usage-lib.sh"; . "$1/fleet-alerts.sh"; type fleet_alerts_notify >/dev/null 2>&1 && echo 0 || echo 1' _ "$BIN")"
+# (C. the bar's old road, fleet_alerts_notify, is gone — #4790: conf/gone.list)
 
 printf 'needs-notify selftest: PASS (%s checks)\n' "$CHECKS"

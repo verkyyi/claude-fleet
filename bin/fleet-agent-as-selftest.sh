@@ -216,7 +216,7 @@ unset CLAUDE_CONFIG_DIR; export FLEET_CONF_DIR="$WORK/conf"
 # --- G wiring -------------------------------------------------------------------------
 grep -q -- "\${AS_ARG:+ --as \$AS_ARG}" "$BIN/dash-issue-session.sh" && grep -q -- "\${AS_ARG:+ --as \$AS_ARG}" "$BIN/dash-raw-session.sh" \
   && ok "G: both spawners hand --as to the wrapper" || bad "G: a spawner does not pass --as"
-grep -q -- "--role worker" "$BIN/dash-issue-session.sh" && bad "G: dash-issue-session.sh still passes --role worker" || ok "G: no spawner passes --role"
+# (no spawner passes --role, #3122: conf/gone.list)
 pol=$(sed -n '/^policy=(); want=/,/^done/p' "$BIN/fleet-session-wrap.sh")
 case "$pol" in *'|--as)'*'--as=*'*) ok "G: the wrapper's resume keeps --as" ;; *) bad "G: the wrapper's resume drops --as" ;; esac
 grep -q '"--as", args\["agent"\]' "$BIN/fleet-mcp.py" && ok "G: the spawn tool's agent ⇒ --as" || bad "G: the spawn tool does not pass --as"
@@ -225,8 +225,7 @@ for f in conf/agent-defaults/claude/agents/fleet-worker.md plugins/fleet-epic/ag
         "$BIN" "$ROOT/$f")
   eq "G: the shipped $f has an empty body (Claude Code keeps its own system prompt)" "$b" "''"
 done
-[ ! -e "$ROOT/conf/agent-defaults/claude/agents/epic-driver.md" ] && ok "G: the core ships no epic-driver (fleet-epic carries it)" \
-  || bad "G: conf/agent-defaults/claude/agents/epic-driver.md is back in the core"
+# (the core ships no epic-driver — fleet-epic carries it, #3116: conf/gone.list)
 python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("agents") == [] else 1)' "$ROOT/.claude-plugin/plugin.json" \
   && ok "G: plugin.json still says \"agents\": []" || bad "G: .claude-plugin/plugin.json must say \"agents\": []"
 

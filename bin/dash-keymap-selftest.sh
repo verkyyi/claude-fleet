@@ -189,9 +189,7 @@ FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_KEYS=0 python3 "$BIN/fleet-iterm-profile.
 [ -f "$SW_PROF/fleet.json" ] && fail "10: FLEET_ITERM_KEYS=0 left the profile in place"
 rm -rf "$SW_PROF"
 
-# --- the sheet is gone (issue #4902): no install ships it ---------------------
-[ -e "$BIN/fleet-keys.sh" ] && fail "fleet-keys.sh is back"
-grep -qx 'bin/fleet-keys.sh' "$ROOT/tokenledger/hub/api/fleetclient/manifest" && fail "the client ships fleet-keys.sh"
+# (the sheet is gone, issue #4902 — fleet-keys.sh and its manifest line: conf/gone.list)
 
 # 9 — the recovery page's keys (issue #1862)
 page_out=$(python3 - "$BIN" <<'PY'

@@ -79,8 +79,7 @@ grep -qE "^replace $MOD/shared => \.\./shared$" "$TL/hub/go.mod" 2>/dev/null \
 grep -qE "$MOD/(agent|e2e)[[:space:]]" "$TL/hub/go.mod" 2>/dev/null \
   && fail "hub/go.mod names the node or e2e (the hub never builds them, not even a test)" \
   || ok "hub/go.mod names neither agent nor e2e"
-[ -e "$TL/go.mod" ] && fail "tokenledger/go.mod is back (the four blocks are each their own module)" \
-  || ok "no module at tokenledger/ itself"
+# (no module at tokenledger/ itself — the four blocks are each their own: conf/gone.list #4811)
 miss=''
 for m in hub agent shared e2e; do
   grep -qE "^[[:space:]]*(use[[:space:]]+)?\./${m}[[:space:]]*\)?$" "$TL/go.work" 2>/dev/null || miss="$miss ./$m"

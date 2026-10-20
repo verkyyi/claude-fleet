@@ -7,3 +7,7 @@
 ## 面向用户的改动（CONTRIBUTING «面向用户的改动»，issue #3216）
 
 - [ ] 人会注意到的改动（一个键、一个页面、一步操作）同一个 PR 里更新了它的文档小节，或 `skills/fleet-help/SKILL.md` 的索引；`bin/fleet-help-selftest.sh` 绿
+
+## 删掉的东西（`conf/gone.list`，T537）
+
+- [ ] 删了一个文件、函数、设置键或说法：`conf/gone.list` 加了一行（`<kind> <thing> <单号> [<范围>]`），`bin/gone-selftest.sh` 守着它不回来；有意带回来的，删掉那一行并在这里说为什么

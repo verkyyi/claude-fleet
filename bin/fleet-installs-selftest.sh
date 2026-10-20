@@ -292,7 +292,6 @@ J=$(printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); pr
 eq "N: one login: no hub row, no machines" "None []" "$J"
 kill "$VPID" 2>/dev/null; wait "$VPID" 2>/dev/null; rm -rf "$H/alice/.config/claude-fleet/remote-views"
 kill "$HPID" 2>/dev/null; XHUB=''; rm -f "$WORK/root/current"
-grep -q 'fleet-installs.sh" --channel' "$BIN/fleet-doctor.sh" && bad "M: the doctor still runs fleet-installs.sh --channel" || ok
 
 if [ "$BAD" -gt 0 ]; then printf 'selftest FAIL: %d of %d\n' "$BAD" "$N" >&2; exit 1; fi
 printf 'selftest OK: fleet-installs (%d assertions — runtime, link/plain installs, follow/pinned shells, client, verdicts, json, doctor --installs, 来源, one release line)\n' "$N"
