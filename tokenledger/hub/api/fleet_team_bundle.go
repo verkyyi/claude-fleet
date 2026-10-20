@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/hub/rolemerge"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
@@ -104,15 +103,11 @@ const personHookScriptMax = 32 << 10
 
 var personScriptRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
-// A person's rule table (claude-fleet#2784, EPIC #2781 C3): `rules` is the
-// rows that override the built-in table by number — a Markdown table or a
-// list of rows — at most 32 KiB; the hub refuses (422) a row no machine could
-// read (internal/rolemerge). The person's layer alone.
-//
-// `roles` (the role overlays) left with the person's role layer
-// (claude-fleet#3130): a PUT that still carries it is refused like any other
-// key a personal configuration does not hold (claude-fleet#4790).
-const personRulesMax = 32 << 10
+// A person's rule table (`rules`, claude-fleet#2784) and role overlays
+// (`roles`, claude-fleet#3130) are retired: no machine ever read the table,
+// and the overlays left with the person's role layer. A PUT that still
+// carries either is refused (422) as retired (T654), and nothing is stored.
+var personRetiredKeys = map[string]bool{"rules": true, "roles": true}
 
 // validateBundle is validateTeamBundle for either layer: a person's layer
 // (claude-fleet#1856) takes the same allow-list plus hook_scripts — the
@@ -125,12 +120,15 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 		return "", errors.New("bundle must be a JSON object")
 	}
 	for k := range b {
-		if personal && (k == "hook_scripts" || k == "rules" || k == "ui_lang") {
+		if personal && personRetiredKeys[k] {
+			return "", fmt.Errorf("bundle: %q is retired — a personal configuration no longer holds it (nothing ever read it); leave it out", k)
+		}
+		if personal && (k == "hook_scripts" || k == "ui_lang") {
 			continue
 		}
 		if !teamBundleKeys[k] {
 			if personal {
-				return "", fmt.Errorf("bundle: %q is not part of a personal configuration (only mcp, hooks, skills, claude_settings, codex_config, hook_scripts, rules, ui_lang)", k)
+				return "", fmt.Errorf("bundle: %q is not part of a personal configuration (only mcp, hooks, skills, claude_settings, codex_config, hook_scripts, ui_lang)", k)
 			}
 			return "", fmt.Errorf("bundle: %q is not something a team hands out (only mcp, hooks, skills, claude_settings, codex_config)", k)
 		}
@@ -241,32 +239,6 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 		}
 		if len(txt) > personHookScriptMax {
 			return "", fmt.Errorf("bundle.hook_scripts.%s is over 32 KiB", n)
-		}
-	}
-	if rules, ok := all["rules"]; ok {
-		switch t := rules.(type) {
-		case string:
-		case []any:
-			for i, row := range t {
-				switch row.(type) {
-				case map[string]any, []any:
-				default:
-					return "", fmt.Errorf("bundle.rules[%d] must be a row (an object or its six cells)", i)
-				}
-			}
-		default:
-			return "", errors.New("bundle.rules must be a Markdown table or a list of rows")
-		}
-		raw, _ := json.Marshal(rules)
-		if len(raw) > personRulesMax {
-			return "", errors.New("bundle.rules is over 32 KiB")
-		}
-		if secretIn("bundle.rules", rules) == "" {
-			if rv, err := rolemerge.Decode(raw); err == nil {
-				if _, err := rolemerge.PersonRules(rv); err != nil {
-					return "", fmt.Errorf("bundle.rules: %v", err)
-				}
-			}
 		}
 	}
 	// The person's interface language (claude-fleet#3329, EPIC #3178 D7): set

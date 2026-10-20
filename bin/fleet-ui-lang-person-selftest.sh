@@ -75,7 +75,7 @@ rm -f "$FLEET_CONF_DIR/person-bundle.json"
 C() { python3 "$BIN/fleet-config.py" lang "$@"; }
 C zh >/dev/null 2>"$WORK/err" || st_miss "D: lang zh failed" "$(cat "$WORK/err")"
 st_eq "D: lang zh ⇒ the hub keeps ui_lang" zh "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bundle"].get("ui_lang"))' "$WORK/hub.json")"
-st_eq "D: … the rest of the layer untouched" '{}' "$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["bundle"]["roles"]))' "$WORK/hub.json")"
+st_eq "D: … a pre-T654 layer's retired roles dropped on the way" '{"ui_lang": "zh"}' "$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["bundle"]))' "$WORK/hub.json")"
 st_eq "D: … this computer's copy re-read at once" zh "$(C)"
 st_eq "D: … and drawn in it: en_US comes ⇒ 中文" zh "$(FLEET_VIEW_LANG=en_US.UTF-8 L)"
 C auto >/dev/null 2>"$WORK/err" || st_miss "D: lang auto failed" "$(cat "$WORK/err")"

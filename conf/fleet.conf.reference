@@ -341,10 +341,8 @@ FLEET_CTX_WINDOW=200000
 # @label=Subagent model @group=spawn @tier=advanced @scope=fleet @edit=enum
 #FLEET_SUBAGENT_MODEL="opus"
 
-# There is no resident orchestrating or steward session (issue #3118): nothing
-# opens, reopens or keeps one. Spawn agent:orchestrator (a session template, EPIC
-# #4333; the steward template left with #4900) to open one. FLEET_ORCHESTRATOR, FLEET_STEWARD and the FLEET_ORCH_* /
-# FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL|REVIVE_SECS knobs are gone with it.
+# An orchestrator is a session template (EPIC #4333): spawn agent:orchestrator to
+# open one; nothing opens, reopens or keeps one, and no setting here names it.
 
 # Keys (issue #3185, EPIC #3178 C7): a new install takes ONE key — the panel.
 # The CLIENT's two ([client] section): FLEET_KEY_PANEL is the panel's chord (cmd+p;

@@ -1033,7 +1033,7 @@
 0.00	hub/api.TestPersonLoginsEveryPairWithHomeAndKind
 3.77	hub/api.TestPersonPushOnPutBeatAndReconnect
 0.68	hub/api.TestPersonRolesOffAddsNothing
-0.25	hub/api.TestPersonRulesValidation
+0.25	hub/api.TestPersonRetiredKeys
 0.26	hub/api.TestPersonUILangValidation
 2.61	hub/api.TestPersonUsage_UserReadsOwn
 0.44	hub/api.TestPersonalNodeNotPlacedFromElsewhere
@@ -1541,7 +1541,6 @@
 1.35	hub/mcp.TestUsageToolsGroupOnTheSameAxisAsHTTP
 1.36	hub/mcp.TestUsageToolsReturnCostPerSource
 0.00	hub/rolemerge.TestParse
-0.00	hub/rolemerge.TestPersonRules
 1.24	hub/store.TestAccessRequestsOnePending
 0.67	hub/store.TestAccountSwitches_ScopesToOneAccount
 0.00	hub/store.TestAccount_LabelPrecedence

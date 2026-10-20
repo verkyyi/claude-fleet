@@ -570,13 +570,6 @@ From `fleet doctor`.
 - **What it is**: whether the team settings the hub hands out (shared MCP servers, skills, settings) have reached this computer.
 - **On WARN / FAIL**: `fleet-agent-team.py sync`; the node program also retries on every beat.
 
-#### `roles`
-
-From `fleet doctor`.
-
-- **What it is**: whether the role definitions can be fetched from the hub.
-- **On WARN / FAIL**: `fleet-agent-team.py sync`; when they cannot be fetched, sessions use this computer's copy, and opening sessions is not affected.
-
 ### Subscriptions and quota
 
 #### `modelcap`

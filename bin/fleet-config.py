@@ -442,7 +442,7 @@ def put_personal(a, change, note, after=None):
         code, cur = person_call(a, "GET")
         if code != 200:
             hub_err(code, cur)
-        bundle = json.loads(json.dumps(cur.get("bundle") or {}))
+        bundle = T.without_retired(json.loads(json.dumps(cur.get("bundle") or {})))   # a pre-T654 version's roles / rules go
         base = int(cur.get("version") or 0)
         change(bundle)
         why = validate(bundle)
@@ -870,7 +870,7 @@ def import_(a):
     cur = layer_get(a) if not a.team else team_get(a, operator=True)
     base = int(cur.get("version") or 0)
     old = cur.get("bundle") or {}
-    new = merged(old, inc) if a.merge else inc
+    new = merged(T.without_retired(old) if layer == "personal" else old, inc) if a.merge else inc
     why = T.validate(new, layer)
     if why:
         die("拒收，没发出去：%s" % credential_hint(why))
