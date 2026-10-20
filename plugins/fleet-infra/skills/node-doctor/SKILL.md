@@ -85,6 +85,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `ci-runner` | node | [runbook-train-stuck] | 自家测试机：`fleet-node-supervisor.py status` 的 ci-runner 行与 ci-runner.log |
 | `claude` | node · machine | [mac-node-prep] [release-rules] | 装 Claude Code；托管机器上由 release.json 钉、更新器装 |
 | `cleanup` | node | [mac-node-enroll] | 收尾守护没装上：重跑 `sudo fleet node install`；或它缺 gh：装 gh 并 `gh auth login` |
+| `clients` | node | [node-doctor] | 客户端最近 24h 的连接：断线、重连 p50/p90、起不来及原因；`fleet doctor --clients` 看详表 |
 | `codesign` | machine | [runbook-tcc-stuck] | 没有固定签名身份 / 没签上：下一轮补签；之后给它授权一次 |
 | `codex` | node · machine | [mac-node-prep] [release-rules] | Codex CLI 版本 / 安装：照行内修；托管机器由更新器装 |
 | `collect` | node | [node-doctor] | 采集守护卡住或超时：看 collect 日志里最慢的阶段 |
