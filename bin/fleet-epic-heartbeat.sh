@@ -3,7 +3,7 @@
 # LOCAL mark the install-sync daemon can see (issue #953, EPIC #1117 R1) — one
 # mark PER BATCH (issue #2062, EPIC #2074 C1).
 #
-#   fleet-epic-heartbeat.sh <epic> [--tick <n>] [--repo <owner/name>]   # <epic> = T-<code> | T<n> (#4957) | N
+#   fleet-epic-heartbeat.sh <epic> [--tick <n>] [--repo <owner/name>]   # <epic> = K3F9 (an ID code) | T<n> (#4957) | N
 #                           [--task T<n>] [--session <sess>] [--ttl <seconds>]
 #                           [--landed <k> --members <n>] [--title <parent title>]
 #                           [--live <n> --inflight <n>]
@@ -91,8 +91,9 @@
 # for «hold the install still for the next 45 min».
 #
 # THE MARK IS THE PARENT'S ID (EPIC T497 C5). A batch's parent is a window ID now
-# (the driver's `@fleet_id`, short code `T-xxxxx` — fleet-epic-tick.py's `mark`), so
-# <epic> may be that code: the file is `<slug>-T-xxxxx`. `--task T<n>` names the
+# (the driver's `@fleet_id`, short code `K3F9` — fleet-epic-tick.py's `mark`), so
+# <epic> may be that code: the file is `<slug>-K3F9` (a batch marked before C11
+# reads `<slug>-T-xxxxx` until its next tick). `--task T<n>` names the
 # parent's record beside it — written as a `task:` line, and the batch's older
 # `<slug>-T<n>` mark (a tick before this) is removed when the new one is written;
 # `--clear <X>` clears the marks whose `epic:` OR `task:` is X, so a driver that
@@ -144,14 +145,19 @@ done
 # mark_epic <file> — the `epic:` line of one mark ('' when it has none).
 mark_epic() { sed -n 's/^epic: //p' "$1" 2>/dev/null | head -1; }
 mark_task() { sed -n 's/^task: //p' "$1" 2>/dev/null | head -1; }
-# epic_ok <epic> — a T-<code> (an ID's short code: Crockford base32, 4–26), a T<n>, or N.
+# epic_ok <epic> — an ID's short code (`K3F9`: uppercase Crockford base32, letter
+# first, 4–26 — EPIC T497 C11; the old `T-hfkc7` for one version), a T<n>, or N.
 epic_ok() {
   case "$1" in
-    T-*) case "${1#T-}" in ''|*[!0-9a-hjkmnp-tv-z]*) return 1 ;; esac
+    T-*) case "${1#T-}" in ''|*[!0-9a-hjkmnp-tv-z]*) return 1 ;; esac   # compat-1v: 下一批删
          [ "${#1}" -ge 6 ] && [ "${#1}" -le 28 ] ;;
-    T[1-9]*) case "${1#T}" in *[!0-9]*) return 1 ;; esac ;;
-    ''|*[!0-9]*) return 1 ;;
+    T[1-9]*) case "${1#T}" in *[!0-9]*) epic_code "$1" ;; *) return 0 ;; esac ;;
+    ''|*[!0-9]*) epic_code "$1" ;;
   esac
+}
+epic_code() {
+  case "$1" in *[!0-9A-HJKMNP-TV-Z]*) return 1 ;; esac
+  _fleet_bare_code "$1"
 }
 
 # The driver's own window (issue #1958): only from inside a pane — bare tmux is
@@ -208,7 +214,7 @@ MARKS
           printf '%s\n' "$marks" | sed '/^$/d' | while IFS= read -r f; do printf '  epic=%s (%s)\n' "$(mark_epic "$f")" "$f" >&2; done
           exit 2
         fi ;;
-      *) epic_ok "$EPIC" || { printf 'fleet-epic-heartbeat: --clear takes an EPIC (T-<code>, T<n> or an issue number), got [%s]\n' "$EPIC" >&2; exit 2; } ;;
+      *) epic_ok "$EPIC" || { printf 'fleet-epic-heartbeat: --clear takes an EPIC (its ID code K3F9, T<n> or an issue number), got [%s]\n' "$EPIC" >&2; exit 2; } ;;
     esac
     cleared=''
     while IFS= read -r f; do
@@ -225,11 +231,11 @@ MARKS
     exit 0 ;;
 esac
 
-# An EPIC is its parent's ID code `T-<code>` (EPIC T497 C5), its parent hub task
+# An EPIC is its parent's ID code `K3F9` (EPIC T497 C5, C11), its parent hub task
 # `T<n>` (issue #4957), or an older batch's issue number.
 epic_ok "$EPIC" || EPIC=''
 [ -n "$EPIC" ] || {
-  printf 'fleet-epic-heartbeat: an EPIC (its parent ID T-<code>, its task T<n>, or an issue number) is required (or --clear <epic> / --status)\n' >&2; exit 2; }
+  printf 'fleet-epic-heartbeat: an EPIC (its parent ID code K3F9, its task T<n>, or an issue number) is required (or --clear <epic> / --status)\n' >&2; exit 2; }
 case "$PTASK" in T[1-9]*) case "${PTASK#T}" in *[!0-9]*) PTASK='' ;; esac ;; *) PTASK='' ;; esac
 [ "$PTASK" = "$EPIC" ] && PTASK=
 case "$TTL" in ''|*[!0-9]*|0)
@@ -270,6 +276,10 @@ fi
 if [ -n "$PTASK" ]; then
   old=$(fleet_epic_mark_file "$REPO" "$PTASK")
   [ "$old" != "$F" ] && [ -f "$old" ] && [ "$(mark_epic "$old")" = "$PTASK" ] && rm -f "$old"
+  # …and its mark by the OLD code (`<slug>-T-xxxxx`, before C11 — compat-1v: 下一批删)
+  for old in "${F%/*}"/*-T-*; do
+    [ -f "$old" ] && [ "$old" != "$F" ] && [ "$(mark_task "$old")" = "$PTASK" ] && rm -f "$old"
+  done
 fi
 case "$REPO" in ''|-) win_epic set "#$EPIC" ;; *) win_epic set "$REPO#$EPIC" ;; esac
 [ -z "$SHORT" ] || win_name "$(fleet_epic_short "$SHORT")"

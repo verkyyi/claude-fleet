@@ -162,6 +162,24 @@ def orphan(r, why):
     print("orphaned → task %s event %s: %s" % (r["task"], r["event_id"], why))
 
 
+def child_label(r):
+    """A child named by its ID first (EPIC T497 C11): `#K3F9 (别名 T486)` — the worker_id's
+    second half is its ID; the record's T<n> only an alias note (one version). No ID ⇒ T<n>."""
+    fid = str(r.get("worker_id") or "").rpartition("/")[2]
+    try:
+        sys.path.insert(0, str(BIN))
+        import fleet_id
+        if fleet_id.is_fid(fid):
+            short = fleet_id.fold(fleet_id.read(fid))["opened"].get("short") \
+                or fleet_id.short_for(fid, fleet_id.known_ids([fid]))
+            return "#%s (别名 %s)" % (short, r["task"]) if r.get("task") else "#" + short
+    except Exception:
+        pass
+    finally:
+        sys.path.pop(0)
+    return r["task"]
+
+
 def receive(file):
     """A child report a relay carried here (a session that reported before EPIC
     T497 C8 still has one queued on the hub). The parent by its ID (design §4.3):
@@ -218,7 +236,7 @@ printf "%s\n%s\n%s\n%s\n" "$sock" "$win" "$dir" "$how"
         if sentfile.exists() and sent_key in sentfile.read_text().splitlines():
             print("already delivered"); return 0
         msg = "[child-report] %s\nstate: %s%s\nsummary: %s\nno reply needed" % (
-            r["task"], (r["outcome"].upper() or "WAITING"),
+            child_label(r), (r["outcome"].upper() or "WAITING"),
             "" if how == "self" else " · 原 parent 已关闭，代收 (%s)" % how, r["summary"])
         argv = ["bash", "-c", '. "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh"; children_send "" "$2" "$3" "$(cat)"',
                 "task", str(BIN), socket, pane]

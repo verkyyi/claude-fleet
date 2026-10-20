@@ -34,7 +34,7 @@
 #                  an `events` list of those events (a digest's cursor, C5)
 #   -L <socket>    the fleet's socket, for a caller with no $TMUX
 #   --ids          by ID (EPIC T497 C4): the IDs whose `parent` is this pane's own
-#                  ID — or the one named, `T-<code>` / a full ID — each with its
+#                  ID — or the one named, its code `K3F9` / a full ID — each with its
 #                  status and newest result (fleet-id.sh children)
 #   -h             this header
 #
@@ -70,10 +70,10 @@ case "$SINCE" in ''|*[!0-9]*) printf 'fleet-children: --since wants a seq number
 TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
 
 # By ID (EPIC T497 C4): a named ID, or --ids for this pane's own.
-case "$KEY" in [Tt]-?*|????????-????-????-????-????????????) IDS=1 ;; esac
+case "$KEY" in [Tt]-?*|????????-????-????-????-????????????) IDS=1 ;; *-*|*:*) ;; *) ! fleet_is_idcode "$KEY" || IDS=1 ;; esac
 if [ "$IDS" = 1 ]; then
   [ -n "$KEY" ] || KEY=$(fleet_pane_fmt '#{@fleet_id}')
-  [ -n "$KEY" ] || { printf 'fleet-children: no ID — name one (T-<code>) or run it in a session\n' >&2; exit 2; }
+  [ -n "$KEY" ] || { printf 'fleet-children: no ID — name one (its code K3F9) or run it in a session\n' >&2; exit 2; }
   ia=(children "$KEY"); [ "$JSON" = 1 ] && ia+=(--json)
   exec bash "$BIN/fleet-id.sh" "${ia[@]}"
 fi

@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-clear-send.sh <ID | T-code | code> [--socket L] [--timeout S] [--by WHO]
+# fleet-clear-send.sh <ID | code> [--socket L] [--timeout S] [--by WHO]
 #   — run `/clear` in ANOTHER session, by its ID (T592; `fleet-id.sh clear` is the
 #   same thing, the `clear` tool of `fleet-orch` its MCP road).
 #
@@ -8,8 +8,8 @@
 # hooks/bash-guard.py refuses. Same shape as fleet-compact-send.sh (/compact) and
 # fleet-model-switch.sh (/model): find the window, gate, deliver, verify.
 #
-#   find     the address goes through fleet_win_for_addr — a full ID, `T-<code>`, or
-#            a bare code (any case: `K3F9` = `T-k3f9`) — on --socket, else this
+#   find     the address goes through fleet_win_for_addr — a full ID or its short
+#            code (`K3F9`, any case; the old `T-<code>` for one version) — on --socket, else this
 #            pane's server, else every fleet socket of this login. Only THIS
 #            machine: an ID no window here carries is refused (rc 1), never sent
 #            over another road; two windows (or two IDs) answering ⇒ rc 2, the
@@ -31,7 +31,7 @@
 #            counts) — within --timeout (FLEET_CLEAR_VERIFY_SECS, 30). No segment ⇒
 #            rc 4: sent, unconfirmed (never typed twice).
 #
-# One line on stdout: `cleared <T-code> <ID> seg <n> (<trigger>) via <mod|send-keys>`,
+# One line on stdout: `cleared <code> <ID> seg <n> (<trigger>) via <mod|send-keys>`,
 # or the refusal on stderr. Every attempt — refused, sent, confirmed — appends one
 # audit line to $FLEET_CONF_DIR/logs/clear-send.log: when · by whom (--by, else
 # the calling window's code / ID, else $USER) · which ID · window · agent · outcome.
@@ -57,12 +57,12 @@ while [ "$#" -gt 0 ]; do
        addr=$1; shift ;;
   esac
 done
-[ -n "$addr" ] || { printf 'usage: fleet-clear-send.sh <ID | T-code> [--socket L] [--timeout S] [--by WHO]\n' >&2; exit 2; }
+[ -n "$addr" ] || { printf 'usage: fleet-clear-send.sh <ID | code> [--socket L] [--timeout S] [--by WHO]\n' >&2; exit 2; }
 case "$timeout" in ''|*[!0-9]*) timeout=30 ;; esac
 DEFER="${FLEET_HANDOFF_DEFER_SECS:-30}"
 case "$DEFER" in ''|*[!0-9]*) DEFER=30 ;; esac
-# A bare code is a short code (C11's upper-case 4-character form included).
-fleet_is_fid "$addr" || case "$addr" in [Tt]-*) : ;; *) addr="T-$addr" ;; esac
+# A bare word is a short code (`K3F9`, any case — C11; the old `T-…` as written).
+fleet_is_fid "$addr" || fleet_is_idcode "$addr" || { printf 'fleet-clear-send: %s is no ID or short code\n' "$addr" >&2; exit 1; }
 
 if [ -z "$by" ]; then
   if [ -n "${TMUX_PANE:-}" ]; then
@@ -106,6 +106,8 @@ tm() { tmux -L "$sock" "$@"; }
 IFS='|' read -r FID PANE AGENT st short <<EOF
 $(tm display-message -p -t "$WIN" '#{@fleet_id}|#{pane_id}|#{@cc_agent}|#{@claude_state}|#{@task_short}' 2>/dev/null)
 EOF
+# the code as today's ledger reads it (an old window's @task_short may still say `T-…`)
+fleet_is_fid "${FID:-}" && short=$(bash "$BIN/fleet-id.sh" short "$FID" 2>/dev/null) || :
 [ -n "${AGENT:-}" ] || AGENT=claude   # a Claude window stamps no @cc_agent on older launches
 case "$AGENT" in claude|codex) : ;; *) die 3 "$WIN is no agent session (@cc_agent=$AGENT)" ;; esac
 [ -n "${PANE:-}" ] || die 1 "window $WIN has no pane"

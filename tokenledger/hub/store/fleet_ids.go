@@ -23,10 +23,15 @@ import (
 // outage is a no-op for what landed and the record can always be rebuilt by
 // replaying the nodes' ledgers.
 //
-// The short code (`T-` + the ID's leading lowercase Crockford base32) is unique
+// The short code (EPIC T497 C11: the leading characters of the ID's display code —
+// uppercase Crockford base32, the first always a letter, 4 by default) is unique
 // within an owner: on registration the hub lengthens the LATER ID's code until
 // no other ID of that owner shares it (bin/fleet_id.py short_for, the node's
 // guess) and answers the node, which moves @task_short. Codes only ever grow.
+// `code` / `short` hold today's form (bare, no `T-`); a row an older hub wrote
+// (lowercase, the ID's plain base32) is recomputed once at start
+// (backfillFleetIDCodes). The old `T-…` code still resolves for one version
+// (FleetIDLegacyCode, computed — never stored; compat-1v: 下一批删).
 // A full ID already registered by another node of any owner is refused
 // (ErrIDDuplicate: a cloned machine) unless the push starts with `moved` — a
 // fleet-move carrying the ledger to a new machine.
@@ -97,7 +102,7 @@ CREATE TABLE IF NOT EXISTS fleet_id_results (
 );`
 
 // IDShortMin is a short code's least length (bin/fleet_id.py SHORT_MIN).
-const IDShortMin = 5
+const IDShortMin = 4
 
 // IDPushMax bounds the events of one push.
 const IDPushMax = 200
@@ -111,19 +116,56 @@ var (
 	idKeyRE   = regexp.MustCompile(`^(?:[A-Za-z0-9_.-]{1,100}:)?issue-([1-9][0-9]{0,9})$`)
 )
 
-const idAlphabet = "0123456789abcdefghjkmnpqrstvwxyz" // Crockford base32, lowercase
+const (
+	idAlphabet = "0123456789abcdefghjkmnpqrstvwxyz" // the OLD code: Crockford base32, lowercase (compat-1v)
+	idDigits   = "0123456789ABCDEFGHJKMNPQRSTVWXYZ" // the display code: Crockford base32, uppercase
+	idLetters  = "ABCDEFGHJKMNPQRSTVWXYZ"           // its first character: a letter, never a digit
+)
+
+// idCodeSpan is 22 × 32^25: the display code's 26 places (one letter, 25 base32),
+// more than 2^128, so no two IDs share a full code.
+var idCodeSpan = new(big.Int).Mul(big.NewInt(22), new(big.Int).Exp(big.NewInt(32), big.NewInt(25), nil))
 
 // IsFleetID reports whether s is an ID (a lowercase UUID, as fleet_fid_mint writes).
 func IsFleetID(s string) bool { return idUUIDRE.MatchString(s) }
 
-// FleetIDCode is the ID's full code: 128 bits → 26 base32 characters, most
-// significant first (bin/fleet_id.py encode, byte for byte).
-func FleetIDCode(id string) string {
+func idBits(id string) *big.Int {
 	b, err := hex.DecodeString(strings.ReplaceAll(id, "-", ""))
 	if err != nil || len(b) != 16 {
+		return nil
+	}
+	return new(big.Int).SetBytes(b)
+}
+
+// FleetIDCode is the ID's full display code (EPIC T497 C11): the 128 bits scaled
+// onto one letter place (22) and 25 base32 places, most significant first — so the
+// first character is always a letter and a prefix is the ID's own (bin/fleet_id.py
+// encode, byte for byte).
+func FleetIDCode(id string) string {
+	n := idBits(id)
+	if n == nil {
 		return ""
 	}
-	n := new(big.Int).Lsh(new(big.Int).SetBytes(b), 2) // 130 bits = 26 × 5
+	v := new(big.Int).Rsh(n.Mul(n, idCodeSpan), 128)
+	out := make([]byte, 26)
+	d := new(big.Int)
+	for i := 25; i > 0; i-- {
+		v.DivMod(v, big.NewInt(32), d)
+		out[i] = idDigits[d.Int64()]
+	}
+	out[0] = idLetters[v.Int64()]
+	return string(out)
+}
+
+// FleetIDLegacyCode is the OLD full code — 128 bits → 26 lowercase base32, most
+// significant first (bin/fleet_id.py legacy_encode): what a `T-…` address names
+// for one version (compat-1v: 下一批删).
+func FleetIDLegacyCode(id string) string {
+	n := idBits(id)
+	if n == nil {
+		return ""
+	}
+	n.Lsh(n, 2) // 130 bits = 26 × 5
 	out := make([]byte, 26)
 	m := big.NewInt(31)
 	for i := 0; i < 26; i++ {
@@ -133,14 +175,34 @@ func FleetIDCode(id string) string {
 	return string(out)
 }
 
-// NormIDCode is a typed code (`T-…`, `t-…` or bare) in its canonical lowercase
-// form, or "" (bin/fleet_id.py norm_code).
+// NormIDCode is a typed code (`K3F9`, `#k3f9`, any case; I/L read 1, O read 0; the
+// first character a letter) in its canonical uppercase form, or "" — an old `T-…`
+// code is "" here (LegacyIDCode). bin/fleet_id.py norm_code.
 func NormIDCode(s string) string {
-	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(strings.TrimSpace(s), "#")
 	if strings.HasPrefix(s, "T-") || strings.HasPrefix(s, "t-") {
-		s = s[2:]
+		return ""
 	}
-	s = strings.NewReplacer("i", "1", "l", "1", "o", "0").Replace(strings.ToLower(s))
+	s = strings.NewReplacer("I", "1", "L", "1", "O", "0").Replace(strings.ToUpper(s))
+	if len(s) < 4 || len(s) > 26 || !strings.ContainsRune(idLetters, rune(s[0])) {
+		return ""
+	}
+	for _, c := range s {
+		if !strings.ContainsRune(idDigits, c) {
+			return ""
+		}
+	}
+	return s
+}
+
+// LegacyIDCode is an old `T-…` address in its canonical lowercase form, or ""
+// (compat-1v: 下一批删).
+func LegacyIDCode(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "T-") && !strings.HasPrefix(s, "t-") {
+		return ""
+	}
+	s = strings.NewReplacer("i", "1", "l", "1", "o", "0").Replace(strings.ToLower(s[2:]))
 	if len(s) < 4 || len(s) > 26 {
 		return ""
 	}
@@ -241,6 +303,55 @@ func (s *Store) ensureFleetIDs() error {
 		{"progress_state", "TEXT NOT NULL DEFAULT ''"}, {"progress_at", "INTEGER NOT NULL DEFAULT 0"},
 		{"progress_seq", "INTEGER NOT NULL DEFAULT 0"}} {
 		if err := s.addColumn("fleet_ids", c.col, c.spec); err != nil {
+			return err
+		}
+	}
+	return s.backfillFleetIDCodes()
+}
+
+// backfillFleetIDCodes moves every row an older hub wrote (its `code` the ID's
+// lowercase base32 — the first character not an uppercase letter) onto today's
+// display code (EPIC T497 C11): code recomputed from the ID, short the shortest
+// prefix no already-moved ID of that owner shares, oldest first. Idempotent: a
+// moved row is never read again. The ID itself is never touched.
+func (s *Store) backfillFleetIDCodes() error {
+	rows, err := s.write.Query(`SELECT id, owner FROM fleet_ids WHERE substr(code, 1, 1) NOT IN ('` + strings.Join(strings.Split(idLetters, ""), "','") + `')
+		ORDER BY owner, opened_at, id`)
+	if err != nil {
+		return err
+	}
+	type pend struct{ id, owner string }
+	var todo []pend
+	for rows.Next() {
+		var p pend
+		if err := rows.Scan(&p.id, &p.owner); err != nil {
+			rows.Close()
+			return err
+		}
+		todo = append(todo, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, p := range todo {
+		code := FleetIDCode(p.id)
+		if code == "" {
+			continue // not an ID (a hand-written row): nothing to compute, left as it is
+		}
+		tx, err := s.write.Begin()
+		if err != nil {
+			return err
+		}
+		short, err := shortFor(tx, p.owner, p.id, code, IDShortMin)
+		if err == nil {
+			_, err = tx.Exec(`UPDATE fleet_ids SET code = ?, short = ? WHERE id = ?`, code, short, p.id)
+		}
+		if err != nil {
+			tx.Rollback()
+			return fmt.Errorf("fleet_ids code backfill %s: %w", p.id, err)
+		}
+		if err := tx.Commit(); err != nil {
 			return err
 		}
 	}
@@ -363,7 +474,7 @@ func (s *Store) ApplyFleetIDEvents(p FleetIDPush) (FleetIDPushed, error) {
 				}
 			}
 			if !moved {
-				return FleetIDPushed{Seq: r.Seq, Short: "T-" + r.Short, Machine: r.Machine}, ErrIDDuplicate
+				return FleetIDPushed{Seq: r.Seq, Short: r.Short, Machine: r.Machine}, ErrIDDuplicate
 			}
 		}
 		_ = json.Unmarshal([]byte(r.issues), &r.Issues)
@@ -427,11 +538,7 @@ func (s *Store) ApplyFleetIDEvents(p FleetIDPush) (FleetIDPushed, error) {
 	if err := tx.Commit(); err != nil {
 		return FleetIDPushed{}, err
 	}
-	out := FleetIDPushed{Seq: r.Seq, Machine: r.Machine}
-	if r.Short != "" {
-		out.Short = "T-" + r.Short
-	}
-	return out, nil
+	return FleetIDPushed{Seq: r.Seq, Short: r.Short, Machine: r.Machine}, nil
 }
 
 func nonNil(l []string) []string {
@@ -553,7 +660,7 @@ func (s *Store) FleetIDOf(owner, id string) (FleetIDRecord, error) {
 	if pg.Seq > 0 {
 		rec.Progress = &pg
 	}
-	rec.Short = "T-" + r.Short
+	rec.Short = r.Short
 	_ = json.Unmarshal([]byte(r.issues), &rec.Issues)
 	_ = json.Unmarshal([]byte(r.aliases), &rec.Aliases)
 	rec.Issues, rec.Aliases = nonNil(rec.Issues), nonNil(rec.Aliases)
@@ -595,8 +702,22 @@ type FleetIDShort struct {
 }
 
 // FleetIDsOf lists an owner's IDs; with prefix (a normalized code) only those
-// whose code starts with it — the resolver's candidates.
+// whose code starts with it — the resolver's candidates. An old `T-…` prefix
+// (LegacyIDCode) is matched against each ID's old code, computed (compat-1v).
 func (s *Store) FleetIDsOf(owner, prefix string) ([]FleetIDShort, error) {
+	if lp := LegacyIDCode(prefix); lp != "" {
+		all, err := s.FleetIDsOf(owner, "")
+		if err != nil {
+			return nil, err
+		}
+		out := []FleetIDShort{}
+		for _, x := range all {
+			if strings.HasPrefix(FleetIDLegacyCode(x.ID), lp) {
+				out = append(out, x)
+			}
+		}
+		return out, nil
+	}
 	q, args := `SELECT id, short FROM fleet_ids WHERE owner = ?`, []any{owner}
 	if prefix != "" {
 		q, args = q+` AND substr(code, 1, ?) = ?`, append(args, len(prefix), prefix)
@@ -612,7 +733,6 @@ func (s *Store) FleetIDsOf(owner, prefix string) ([]FleetIDShort, error) {
 		if err := rows.Scan(&x.ID, &x.Short); err != nil {
 			return nil, err
 		}
-		x.Short = "T-" + x.Short
 		out = append(out, x)
 	}
 	return out, rows.Err()

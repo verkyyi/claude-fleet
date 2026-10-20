@@ -616,6 +616,22 @@ def child_keys():
     return keys
 
 
+def id_code(fid):
+    """A window's ID as a person reads it (EPIC T497 C11): its short code `K3F9`, or
+    "" (no ID). bin/fleet_id.py is the one encoder."""
+    if not FID_RE.match(fid or ""):
+        return ""
+    try:
+        sys.path.insert(0, str(BIN))
+        import fleet_id
+        return fleet_id.fold(fleet_id.read(fid))["opened"].get("short") \
+            or fleet_id.short_for(fid, fleet_id.known_ids([fid]))
+    except Exception:
+        return ""
+    finally:
+        sys.path.pop(0)
+
+
 def list_agents():
     session = current_session()
     me = origin_key()
@@ -643,6 +659,7 @@ def list_agents():
         agents.append({
             "window_id": row["window_id"],
             "window_name": row["window_name"],
+            "id": id_code(row["fleet_id"]) or None,
             "issue": int(row["issue"]) if row["issue"].isdigit() else None,
             "agent": agent,
             "state": state,
@@ -756,8 +773,9 @@ def send_message(to, text, repo=None):
         target = "wid:" + fid
     if target != "parent" and not re.match(
             r"^(issue:[0-9]+|#[0-9]+|issue-[0-9]+|scratch-[0-9]+|agent:[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}|[Tt]-[0-9A-Za-z]{4,26}"
+            r"|#[A-Za-z][0-9A-Za-z]{3,25}|[A-Z][0-9A-Z]{3,25}"
             r"|wid:[A-Za-z0-9][A-Za-z0-9_.:/-]{0,200}|[@%][A-Za-z0-9_.:-]+)$", target):
-        raise Refused("to must be issue:<N>, <slug>:issue-<N>, scratch-<N>, T-<code>, agent:<name>, fid:<uuid> or parent")
+        raise Refused("to must be issue:<N>, <slug>:issue-<N>, scratch-<N>, an ID code (K3F9 / #K3F9), agent:<name>, fid:<uuid> or parent")
     is_issue = re.match(r"^(issue:|#|issue-)[0-9]+$", target) is not None
     if repo is not None:
         if not is_issue and not target.startswith("scratch-"):
@@ -856,12 +874,19 @@ def tool_set_reap(args):
 
 
 def tool_await(args):
-    if ("issue" in args) == ("task" in args):
-        raise Refused("await takes issue or task (T<n>, issue #3330) — exactly one")
-    if "task" in args and "repo" in args:
-        raise Refused("a task record names its own repo — drop repo")
-    repo = check_repo(args) if "task" in args else repo_or_caller(args)
+    if sum(k in args for k in ("issue", "task", "id")) != 1:
+        raise Refused("await takes issue, id (a session's code K3F9) or task (T<n>, issue #3330) — exactly one")
+    if ("task" in args or "id" in args) and "repo" in args:
+        raise Refused("a task record or an ID names its own repo — drop repo")
     t = args.get("timeout", AWAIT_DEFAULT_S)
+    if "id" in args:
+        # A session by its ID (EPIC T497 C11): fleet-await.sh hands it to fleet-id.sh await.
+        code = str(args["id"]).lstrip("#")
+        if not (FID_RE.match(code) or re.match(r"^(?:[Tt]-)?[A-Za-z0-9]{4,26}$", code)):
+            raise Refused("id is a session's short code (K3F9) or its full ID")
+        return script([str(BIN / "fleet-await.sh"), code, "--timeout", str(t)], t + AWAIT_SLACK_S,
+                      env=hub_env(ASSERT_TTL_S))
+    repo = check_repo(args) if "task" in args else repo_or_caller(args)
     target = args["task"] if "task" in args else str(args["issue"])
     return script([str(BIN / "fleet-await.sh"), target, "--timeout", str(t)] + repo,
                   t + AWAIT_SLACK_S, env=hub_env(ASSERT_TTL_S))
@@ -884,7 +909,29 @@ def tool_task(args):
         argv += ["--agent", args["coding_agent"]]
     r = run(argv, input_text=args.get("body", ""), check=False, timeout=FILE_TIMEOUT_S + SPAWN_TIMEOUT_S,
             env=hub_env(ASSERT_TTL_S))
-    return {"command": "fleet-task-record.sh", "exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
+    out = {"command": "fleet-task-record.sh", "exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
+    # The session it opened is named by its ID (EPIC T497 C11): `id` = its short code,
+    # the record's T<n> only the `alias` (one version) — await / send take the code.
+    task = (r.stdout.splitlines() or [""])[0].strip()
+    if r.returncode == 0 and args.get("spawn") and re.match(r"^T[1-9][0-9]{0,9}$", task):
+        fid = task_window_fid(task)
+        code = id_code(fid)
+        if code:
+            out.update(id=code, session_id=fid, alias=task)
+    return out
+
+
+def task_window_fid(task):
+    """The @fleet_id of the live window bound to hub task `task` (its @task), or ""."""
+    try:
+        rows = tmux("list-windows", "-a", "-F", "#{@task}\t#{@fleet_id}")
+    except Exception:
+        return ""
+    for line in rows.splitlines():
+        t, _, fid = line.partition("\t")
+        if t == task and FID_RE.match(fid):
+            return fid
+    return ""
 
 
 def tool_agents(_args):
@@ -1233,6 +1280,10 @@ TOOLS = {
                        "running — call again to keep waiting (nothing spawns twice).",
         "inputSchema": {"type": "object", "properties": {
             "issue": ISSUE, "repo": REPO,
+            "id": {"type": "string", "pattern": "^#?[A-Za-z0-9-]{4,40}$",
+                   "description": "Wait on a session by its ID instead (EPIC T497 C11): its short code "
+                                  "K3F9 (the task tool's `id`) or full ID — until it has a result or closes "
+                                  "(MERGED / SUCCEEDED / FAILED / EXITED)."},
             "task": dict(TASK_REF, description="Wait on a hub task record instead (issue #3330): until it is "
                                                "closed — SUCCEEDED / FAILED / CANCELLED (a dispatched task, issue "
                                                "#4897); an old record with no issue answers NO-WORKER naming its session."),
@@ -1247,7 +1298,8 @@ TOOLS = {
                        "session opens in a worktree of that repo bound to T<n>, reads the record, opens its "
                        "PR, merges it on a green gate and closes the record with its report; without repo + "
                        "spawn a no-repo session is opened with the words. No hub here: exit 3, nothing made "
-                       "(issue #4898). await takes the T<n>.",
+                       "(issue #4898). + spawn, the answer names its session by ID: `id` (short code "
+                       "K3F9 — await / send take it), the record's T<n> only its `alias`.",
         "inputSchema": {"type": "object", "properties": {
             "title": {"type": "string", "description": "The task in one line (the person's words)."},
             "body": {"type": "string", "description": "The rest of the words (the issue body / the session's "
@@ -1265,7 +1317,8 @@ TOOLS = {
                        "to is issue:<N> (in a fleet of several repos: narrowed by repo, else your own "
                        "window's repo), <slug>:issue-<N>, scratch-<N>, agent:<name> (the session started "
                        "from that agent file; none running ⇒ your parent, else the person's reminder), "
-                       "T-<code> (a window by its ID's short code), "
+                       "K3F9 / #k3f9 (a window by its ID's short code — bare in capitals, any case after #; the old T-<code> "
+                       "for one version), "
                        "fid:<uuid> (a session by its identity — one with no issue) or parent.",
         "inputSchema": {"type": "object", "properties": {"to": {"type": "string"}, "text": {"type": "string"},
                                                          "repo": REPO},
@@ -1321,8 +1374,8 @@ TOOLS = {
                        "· 1 no such ID / not on this machine · 2 ambiguous · 3 refused, not idle (nothing typed) "
                        "· 4 sent, unconfirmed (never typed twice) · 5 a person is typing there.",
         "inputSchema": {"type": "object", "properties": {
-            "id": {"type": "string", "pattern": "^[A-Za-z0-9-]{4,40}$",
-                   "description": "The session's ID: the full ID, T-<code>, or the bare code (any case)."},
+            "id": {"type": "string", "pattern": "^#?[A-Za-z0-9-]{4,40}$",
+                   "description": "The session's ID: the full ID or its short code K3F9 (any case; the old T-<code> for one version)."},
             "timeout": {"type": "integer", "minimum": 1, "maximum": 120,
                         "description": "Seconds to wait for the new segment (default 30)."}},
             "required": ["id"], "additionalProperties": False}}),

@@ -77,7 +77,8 @@
 # all (hub-spawned) is adopted — its @origin is set to yours, so its report lands
 # in your ledger.
 #
-# `T-<code>` / `fid:<ID>` / a full ID (EPIC T497 C4) is a window's ID:
+# `K3F9` / `#K3F9` (its short code — EPIC T497 C11; the old `T-<code>` for one
+# version) / `fid:<ID>` / a full ID (EPIC T497 C4) is a window's ID:
 # `fleet-id.sh await` — MERGED / SUCCEEDED 0 · FAILED / BLOCKED 1 · TIMEOUT 3 ·
 # EXITED 4 (closed with no result); never a spawn.
 #
@@ -119,12 +120,25 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-case "$NUM" in wid:?*|T[1-9]*|[Tt]-?*|fid:?*|????????-????-????-????-????????????) ;; ''|*[!0-9]*) die "usage: fleet-await.sh <issue-number> [--timeout s] [--no-spawn]" ;; esac
+# An ID's short code (EPIC T497 C11): `K3F9` / `#K3F9` (the `#` is gone already),
+# any case — letter first, Crockford base32, 4–26; `T<digits>` stays a task record.
+IDCODE=''
+case "$NUM" in
+  T[1-9]*) case "${NUM#T}" in *[!0-9]*) IDCODE=1 ;; esac ;;
+  [A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z]*) IDCODE=1 ;;
+esac
+case "$NUM" in wid:*|fid:*|[Tt]-*|*-*) IDCODE='' ;; esac
+[ -z "$IDCODE" ] || case "$NUM" in *[!0-9A-Za-z]*|*[Uu]*) IDCODE='' ;; esac
+[ -z "$IDCODE" ] || [ "${#NUM}" -le 26 ] || IDCODE=''
+case "$NUM" in wid:?*|T[1-9]*|[Tt]-?*|fid:?*|????????-????-????-????-????????????) ;; *)
+  [ -n "$IDCODE" ] || case "$NUM" in ''|*[!0-9]*) die "usage: fleet-await.sh <issue-number> [--timeout s] [--no-spawn]" ;; esac ;; esac
 case "$TIMEOUT" in ''|*[!0-9]*|0) die "--timeout wants a positive number of seconds" ;; esac
 case "$INTERVAL" in ''|*[!0-9]*|0) die "--interval wants a positive number of seconds" ;; esac
-# An ID (EPIC T497 C4, design §4.3): `T-<code>`, `fid:<ID>` or the full ID — wait
-# until it has a result or closes, off its ledger (the hub mirror's record for one on
-# another machine). Never spawns: an ID is a window that already exists.
+# An ID (EPIC T497 C4, design §4.3): its code `K3F9` (the old `T-<code>` for one
+# version), `fid:<ID>` or the full ID — wait until it has a result or closes, off its
+# ledger (the hub mirror's record for one on another machine). Never spawns: an ID is
+# a window that already exists.
+[ -z "$IDCODE" ] || exec bash "$BIN/fleet-id.sh" await "$NUM" --timeout "$TIMEOUT" --interval "$INTERVAL"
 case "$NUM" in
   [Tt]-?*|fid:?*|????????-????-????-????-????????????)
     exec bash "$BIN/fleet-id.sh" await "${NUM#fid:}" --timeout "$TIMEOUT" --interval "$INTERVAL" ;;

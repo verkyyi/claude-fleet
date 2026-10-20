@@ -84,7 +84,7 @@ the list's session order as last drawn — ⌘↓ ⌘↑ read it (a press never 
 WORDS (#2752): no row says `merged` or `done:15m` — the reap policy is
 「合并后关」 / 「空闲 2 小时关」, available in the row's actions;
 ROWS — plan B (T486 v14, T493): every session line is the same columns, glyph(1)
-· ID(8, bold: the window's own short code T-xxxxx — EPIC T497 C3, id_apply; no
+· ID(8, bold: the window's own short code K3F9 — EPIC T497 C3/C11, id_apply; no
 ID ⇒ blank, a hub task's T<n> only an alias) · Agent(7: Claude / Codex — the
 ID's newest native segment, else opened, else a grey 未知) · short name (short_name: no envelope, issue prefix,
 brackets or paths; cut at punctuation) · repo(13, its own, blank when none). A
@@ -942,7 +942,7 @@ def row_cols(e, tid, agent, title, name):
 
 
 # --- a window's ID (EPIC T497 C3, design page §8) --------------------------------
-# The ID column is the window's own short code `T-xxxxx` (bin/fleet_id.py: its
+# The ID column is the window's own short code `K3F9` (bin/fleet_id.py: its
 # @fleet_id, the ledger's `short`, else the shortest prefix this login knows no
 # other ID to share) — never a hub task's T<n>, never a `T?`, never the issue or
 # a predecessor. A row's ledger ($FLEET_CONF_DIR/ids/<ID>.ndjson) also gives its
@@ -1020,7 +1020,7 @@ def id_short_fast(fid, known):
         while n < min(len(o), 26) and o[n] == me[n]:
             n += 1
         lcp = max(lcp, n)
-    return "T-" + me[:min(26, max(fi.SHORT_MIN, lcp + 1))]
+    return me[:min(26, max(fi.SHORT_MIN, lcp + 1))]
 
 
 def id_short(fid, rec, known):
@@ -1276,6 +1276,8 @@ def id_apply(e, fid, known, live=True):
     o = rec.get("opened") or {}
     if o.get("task") and o["task"] not in e["aliases"]:
         e["aliases"].append(o["task"])
+    # the old code (`T-` + 5 lowercase) still addresses it for one version (C11, compat-1v: 下一批删)
+    e["aliases"].append("T-" + fi.legacy_encode(fid)[:5])
     segs = rec.get("segments") or []
     # C17: a ledger with no segment (a window opened before C1) falls back to the
     # window's @cc_agent (row_cols put it on the row), then the hub record's
@@ -1974,6 +1976,19 @@ def issue_hit(token, e):
     return n if n in row_issues(e) else ""
 
 
+def id_code_hit(token, e):
+    """A word written as the row's ID code (C11): `k3f9`, `#K3F9`, I/L/O read as 1/1/0,
+    a prefix of the row's code; the old `t-hfkc7` for one version. A number never is."""
+    fi = fleet_id_mod()
+    fid = e.get("fid") or ""
+    if fi is None or not fi.is_fid(fid):
+        return False
+    p = fi.parse_code(token)
+    if p is None:
+        return False
+    return (fi.legacy_encode(fid) if p[1] else fi.encode(fid)).startswith(p[0])
+
+
 def score_token(token, e):
     """The row's title (substring, a word start better) > its window name or ID >
     its linked issue (a whole number, exactly) > the title's letters in order. Only
@@ -1983,6 +1998,8 @@ def score_token(token, e):
     i = name.lower().find(token)
     if i >= 0:
         return 3000 - i + (200 if word_start(name, i) else 0)
+    if id_code_hit(token, e):
+        return 2100
     hay = " ".join(str(x) for x in [e.get("name"), e.get("id"), e.get("fid")] + list(e.get("aliases") or ()) if x).lower()
     i = hay.find(token)
     if i >= 0:

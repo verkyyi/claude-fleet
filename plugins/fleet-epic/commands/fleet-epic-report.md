@@ -67,7 +67,7 @@ bash ~/.claude/fleet/bin/fleet-task-record.sh get "$P"                       # t
   core / reserve plus any child added within scope — with its `state` (succeeded ·
   blocked · retry · running · waiting · unstarted), its child tasks (a retried
   member has two), its PR (the child's recorded result), and its **IDs** (EPIC T497
-  C5): `ids` lists every baton's short code `T-xxxxx` oldest first — a redo is a new
+  C5): `ids` lists every baton's short code `K3F9` oldest first — a redo is a new
   ID whose `prev` names the one it replaced — and `short` is the newest. For a member's why, read its
   child's record (`fleet-task-record.sh get <T<m>>`: outcome, evidence). Its
   charter section carries a **上线证据** line (issue #809): the evidence the
@@ -179,8 +179,8 @@ What earns its place, in page order:
      指标」. Do **not** back-fill a baseline — see step 1.
 3. **成员** (`#members`) — **the same card as the design page**: one line until
    tapped (name · one sentence · status pill), then 目标 · 为谁 · 解决什么 ·
-   怎么算成功 with the `.proof` grid; 编号 (the member's ID chain, `T-aaaaa →
-   T-bbbbb（重做）` off `ids`, then its records `T<m>`) / 来源, PR link, 占用时长, mirror id,
+   怎么算成功 with the `.proof` grid; 编号 (the member's ID chain, `AAAA →
+   BBBB（重做）` off `ids`, then its records `T<m>`) / 来源, PR link, 占用时长, mirror id,
    方案/接口/依赖/完成判据/上线证据 inside the card's `<details class="fold">`.
    For anything unfinished, *why* — quoted from its child's report or the tick that
    blocked it, not paraphrased — is the summary line's sentence, not buried in the

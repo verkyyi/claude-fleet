@@ -7,7 +7,7 @@ import (
 
 // The ID mirror's node road (EPIC T497 C2): a node pushes its ledger with its
 // own token; two machines of one owner whose codes share 5 characters (S12) —
-// the later grows and the 5-character code is ambiguous; a cloned full ID from
+// the later grows and the 4-character code is ambiguous; a cloned full ID from
 // another machine is 409 DUPLICATE_ID (S13); another owner reads nothing.
 func TestNodeIDMirrorRoad(t *testing.T) {
 	h, _, n := peerHarness(t)
@@ -20,18 +20,29 @@ func TestNodeIDMirrorRoad(t *testing.T) {
 
 	st, got := nodeTaskCall(t, h, v5, http.MethodPost, NodeIDsPath, map[string]any{"id": a,
 		"events": []any{ev(a, 1, "opened"), map[string]any{"ev": "native", "id": a, "seq": 2, "ts": 1, "agent": "claude", "native": "s1", "trigger": "startup"}}})
-	if st != 200 || got["short"] != "T-7ym5y" || got["seq"] != float64(2) {
+	if st != 200 || got["short"] != "FF1W" || got["seq"] != float64(2) {
 		t.Fatalf("A = %d %v", st, got)
 	}
 	st, got = nodeTaskCall(t, h, v4, http.MethodPost, NodeIDsPath, map[string]any{"id": b, "events": []any{ev(b, 1, "opened")}})
-	if st != 200 || got["short"] != "T-7ym5yx" {
-		t.Fatalf("B = %d %v; want T-7ym5yx (S12)", st, got)
+	if st != 200 || got["short"] != "FF1W37" {
+		t.Fatalf("B = %d %v; want FF1W37 (S12)", st, got)
 	}
+	if st, got = nodeTaskCall(t, h, v4, http.MethodGet, NodeIDsPath+"/ff1w", nil); st != 409 || got["code"] != "AMBIGUOUS" {
+		t.Fatalf("4 characters = %d %v; want AMBIGUOUS", st, got)
+	}
+	if st, got = nodeTaskCall(t, h, v4, http.MethodGet, NodeIDsPath+"/FF1W37", nil); st != 200 || got["id"] != b {
+		t.Fatalf("6 characters = %d %v", st, got)
+	}
+	// the old code still resolves for one version (EPIC T497 C11, compat-1v)
 	if st, got = nodeTaskCall(t, h, v4, http.MethodGet, NodeIDsPath+"/T-7ym5y", nil); st != 409 || got["code"] != "AMBIGUOUS" {
-		t.Fatalf("5 characters = %d %v; want AMBIGUOUS", st, got)
+		t.Fatalf("old 5 characters = %d %v; want AMBIGUOUS", st, got)
 	}
 	if st, got = nodeTaskCall(t, h, v4, http.MethodGet, NodeIDsPath+"/T-7ym5yx", nil); st != 200 || got["id"] != b {
-		t.Fatalf("6 characters = %d %v", st, got)
+		t.Fatalf("old 6 characters = %d %v", st, got)
+	}
+	// a number is never a code
+	if st, _ = nodeTaskCall(t, h, v4, http.MethodGet, NodeIDsPath+"/4539", nil); st != 400 {
+		t.Fatalf("a number = %d; want 400", st)
 	}
 	if st, got = nodeTaskCall(t, h, v4, http.MethodGet, NodeIDsPath+"/"+a, nil); st != 200 || got["machine"] == "" || len(got["natives"].([]any)) != 1 {
 		t.Fatalf("A read from the other machine = %d %v", st, got)

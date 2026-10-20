@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
@@ -17,8 +16,8 @@ import (
 // a 5-character code names both), S13 (a cloned machine's full ID is refused).
 
 const (
-	idA = "3fa85f64-5717-4562-b3fc-2c963f66afa6" // code 7ym5ys2q…
-	idB = "3fa85f74-5717-4562-b3fc-2c963f66afa6" // code 7ym5yx2q… — the same first 5
+	idA = "3fa85f64-5717-4562-b3fc-2c963f66afa6" // code FF1W357V… (old 7ym5ys2q…)
+	idB = "3fa85f74-5717-4562-b3fc-2c963f66afa6" // code FF1W37ZV… (old 7ym5yx2q…) — the same first 5
 )
 
 // ledger is a node's ledger lines as bin/fleet_id.py writes them.
@@ -37,7 +36,7 @@ func ledger(t *testing.T, lines ...string) []map[string]any {
 
 func sampleLedger(t *testing.T, id string) []map[string]any {
 	return ledger(t,
-		`{"ev":"opened","agent":"claude","window":"@7","repo":"acme/app","title":"S10 work","key":"issue-12","task":"T500","short":"T-`+store.FleetIDCode(id)[:5]+`","id":"`+id+`","seq":1,"ts":1000}`,
+		`{"ev":"opened","agent":"claude","window":"@7","repo":"acme/app","title":"S10 work","key":"issue-12","task":"T500","short":"`+store.FleetIDCode(id)[:4]+`","id":"`+id+`","seq":1,"ts":1000}`,
 		`{"ev":"native","agent":"claude","native":"4f1c","trigger":"startup","source":"startup","seg":1,"id":"`+id+`","seq":2,"ts":1001}`,
 		`{"ev":"native","compact":true,"agent":"claude","native":"4f1c","seg":1,"id":"`+id+`","seq":3,"ts":1002}`,
 		`{"ev":"native","agent":"claude","native":"9a77","trigger":"clear","source":"clear","seg":2,"id":"`+id+`","seq":4,"ts":1003}`,
@@ -53,18 +52,27 @@ func push(t *testing.T, st *store.Store, ep, id string, evs []map[string]any) (s
 }
 
 func TestFleetIDCodeMatchesNode(t *testing.T) {
-	// bin/fleet_id.py encode, byte for byte.
-	for id, want := range map[string]string{
-		idA:                                    "7ym5ys2q2x2p5czw5jb3ysnfmr",
-		"00000000-0000-4000-8000-000000000000": "00000000010010000000000000",
-		"ffffffff-ffff-4fff-bfff-ffffffffffff": "zzzzzzzzzx7zzfzzzzzzzzzzzw",
+	// bin/fleet_id.py encode / legacy_encode, byte for byte (EPIC T497 C11).
+	for id, want := range map[string][2]string{
+		idA:                                    {"FF1W357VVZZV7PXXBTKMQ5MRR8", "7ym5ys2q2x2p5czw5jb3ysnfmr"},
+		"00000000-0000-4000-8000-000000000000": {"A000000000P00P000000000000", "00000000010010000000000000"},
+		"ffffffff-ffff-4fff-bfff-ffffffffffff": {"ZZZZZZZZZY3FZMZZZZZZZZZZZX", "zzzzzzzzzx7zzfzzzzzzzzzzzw"},
 	} {
-		if got := store.FleetIDCode(id); got != want {
-			t.Fatalf("code(%s) = %s; want %s", id, got, want)
+		if got := store.FleetIDCode(id); got != want[0] {
+			t.Fatalf("code(%s) = %s; want %s", id, got, want[0])
+		}
+		if got := store.FleetIDLegacyCode(id); got != want[1] {
+			t.Fatalf("legacy code(%s) = %s; want %s", id, got, want[1])
 		}
 	}
-	if store.NormIDCode("T-7YM5Y") != "7ym5y" || store.NormIDCode("t-7ym") != "" || store.NormIDCode("T-7ym5u") != "" {
+	// a code is never a number: its first character is a letter
+	if store.NormIDCode("#ff1w") != "FF1W" || store.NormIDCode("kilo") != "K110" || store.NormIDCode("4539") != "" ||
+		store.NormIDCode("FF1") != "" || store.NormIDCode("FFUW") != "" || store.NormIDCode("T-7ym5y") != "" {
 		t.Fatal("NormIDCode")
+	}
+	if store.LegacyIDCode("T-7YM5Y") != "7ym5y" || store.LegacyIDCode("t-7ym") != "" || store.LegacyIDCode("T-7ym5u") != "" ||
+		store.LegacyIDCode("7ym5y") != "" {
+		t.Fatal("LegacyIDCode")
 	}
 }
 
@@ -120,32 +128,68 @@ func TestFleetIDOutageBackfillIsReplay(t *testing.T) {
 
 // S12: two machines, offline, each opened a window whose code starts the same
 // 5 characters. Both full IDs are kept; the one registered later grows to 6,
-// and a 5-character code names both.
+// and the 4-character code names both; the old `T-` code still resolves (compat-1v).
 func TestFleetIDShortCollisionGrowsTheLater(t *testing.T) {
 	st := storetest.OpenFleet(t)
 	a, err := push(t, st, "e1", idA, sampleLedger(t, idA)[:2])
-	if err != nil || a.Short != "T-7ym5y" {
+	if err != nil || a.Short != "FF1W" {
 		t.Fatalf("A = %+v %v", a, err)
 	}
 	b, err := push(t, st, "e2", idB, sampleLedger(t, idB)[:2])
-	if err != nil || b.Short != "T-7ym5yx" {
-		t.Fatalf("B = %+v %v; want T-7ym5yx", b, err)
+	if err != nil || b.Short != "FF1W37" {
+		t.Fatalf("B = %+v %v; want FF1W37", b, err)
 	}
 	// the node writes the hub's code down: a `short` event is applied, never shortens
-	if got, err := push(t, st, "e2", idB, ledger(t, `{"ev":"short","short":"T-7ym5y","id":"`+idB+`","seq":3,"ts":1}`)); err != nil || got.Short != "T-7ym5yx" || got.Seq != 3 {
+	if got, err := push(t, st, "e2", idB, ledger(t, `{"ev":"short","short":"FF1W3","id":"`+idB+`","seq":3,"ts":1}`)); err != nil || got.Short != "FF1W37" || got.Seq != 3 {
 		t.Fatalf("short event = %+v %v", got, err)
 	}
-	if hits, _ := st.FleetIDsOf("operator", "7ym5y"); len(hits) != 2 {
-		t.Fatalf("5 characters name %v; want both", hits)
+	if hits, _ := st.FleetIDsOf("operator", "FF1W"); len(hits) != 2 {
+		t.Fatalf("4 characters name %v; want both", hits)
 	}
-	if hits, _ := st.FleetIDsOf("operator", "7ym5yx"); len(hits) != 1 || hits[0].ID != idB {
+	if hits, _ := st.FleetIDsOf("operator", "FF1W37"); len(hits) != 1 || hits[0].ID != idB {
 		t.Fatalf("6 characters name %v; want B", hits)
+	}
+	if hits, _ := st.FleetIDsOf("operator", "T-7ym5y"); len(hits) != 2 {
+		t.Fatalf("the old 5 name %v; want both", hits)
+	}
+	if hits, _ := st.FleetIDsOf("operator", "T-7ym5yx"); len(hits) != 1 || hits[0].ID != idB {
+		t.Fatalf("the old 6 name %v; want B", hits)
 	}
 	// another owner's codes do not collide with this one's
 	got, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "person:p", EndpointID: "e9", ID: "3fa85f64-5717-4562-b3fc-2c963f66afa7",
 		Events: ledger(t, `{"ev":"opened","id":"3fa85f64-5717-4562-b3fc-2c963f66afa7","seq":1,"ts":1}`)})
-	if err != nil || got.Short != "T-7ym5y" {
+	if err != nil || got.Short != "FF1W" {
 		t.Fatalf("another owner = %+v %v", got, err)
+	}
+}
+
+// C11 (EPIC T497): rows an older hub wrote (the ID's lowercase base32 in `code`,
+// `7ym5y` in `short`) move onto today's display code at start — recomputed from the
+// ID, oldest first, a collision lengthening the later — and the move is idempotent.
+func TestFleetIDCodeBackfill(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	for _, id := range []string{idA, idB} {
+		if _, err := push(t, st, "e1", id, sampleLedger(t, id)[:2]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for id, short := range map[string]string{idA: "7ym5y", idB: "7ym5yx"} {
+		if _, err := st.DB().Exec(`UPDATE fleet_ids SET code = ?, short = ? WHERE id = ?`, store.FleetIDLegacyCode(id), short, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if err := st.EnsureNodes(); err != nil {
+			t.Fatal(err)
+		}
+		a, _ := st.FleetIDOf("operator", idA)
+		b, _ := st.FleetIDOf("operator", idB)
+		if a.Short != "FF1W" || b.Short != "FF1W37" {
+			t.Fatalf("pass %d: shorts %q %q; want FF1W FF1W37", i, a.Short, b.Short)
+		}
+	}
+	if hits, _ := st.FleetIDsOf("operator", "FF1W37"); len(hits) != 1 || hits[0].ID != idB {
+		t.Fatalf("after the backfill FF1W37 names %v", hits)
 	}
 }
 
@@ -177,7 +221,7 @@ func TestFleetIDCloneRefused(t *testing.T) {
 	if err != nil || got.Seq != 5 {
 		t.Fatalf("moved = %+v %v", got, err)
 	}
-	if rec, _ := st.FleetIDOf("operator", idA); rec.Machine != "m-e2" || !strings.HasPrefix(rec.Short, "T-") {
+	if rec, _ := st.FleetIDOf("operator", idA); rec.Machine != "m-e2" || store.NormIDCode(rec.Short) != rec.Short {
 		t.Fatalf("after the move = %+v", rec)
 	}
 	if _, err := push(t, st, "e1", idA, evs); !errors.Is(err, store.ErrIDDuplicate) {

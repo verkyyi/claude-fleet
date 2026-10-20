@@ -15,7 +15,8 @@
 #             <pid>                                     → that Claude process
 #             <session-uuid>                            → the process running it
 #             wid:<worker_id> / wid:<key>               → that worker, wherever it lives
-#             T-<code>                                  → the window whose ID's short code it is
+#             K3F9 / #K3F9                              → the window whose ID's short code it is
+#                                                         (any case; the old T-<code> for one version)
 #             agent:<name>                              → the session started from that agent file
 #                                                         (none here ⇒ your parent, else your person's reminder)
 #   <text>    the message; `-` or omitted → read stdin (multi-line ok)
@@ -240,14 +241,22 @@ ended_or_die() {
   die 1 "$2"
 }
 
-# --- a short code → its ID (EPIC T497 C1) -----------------------------------------
-# `T-k3f9q` names the one ID — this login's ledger or a live window — whose code
-# starts with it; from there it is that identity's worker_id, wherever it lives. Two
-# IDs sharing the prefix refuse with both named (fleet-id.sh resolve), never a pick.
-case "$tgt" in
-  [Tt]-?*)
-    fid=$(bash "$BIN/fleet-id.sh" resolve "$tgt" 2>&1); rc=$?
+# --- a short code → its ID (EPIC T497 C1, C11) ------------------------------------
+# `K3F9` / `#K3F9` (the old `T-k3f9q` for one version) names the one ID — this
+# login's ledger or a live window — whose code starts with it; from there it is that
+# identity's worker_id, wherever it lives. Two IDs sharing the prefix refuse with
+# both named (fleet-id.sh resolve), never a pick. `#4539` is an issue: a code's
+# first character is a letter.
+# A bare word no ID answers to is not a code (`plan` is a window NAME — refused below).
+idcode=''; fleet_is_idcode "$tgt" && idcode=1
+if [ -n "$idcode" ]; then
+  fid=$(bash "$BIN/fleet-id.sh" resolve "$tgt" 2>&1); rc=$?
+  case "$tgt" in '#'*|[Tt]-*) ;; *) [ "$rc" -eq 1 ] && idcode='' ;; esac
+fi
+case "$idcode" in
+  1)
     [ "$rc" -eq 0 ] && fleet_is_fid "$fid" || die 1 "${fid#fleet-id: }"
+    idtag="#$(bash "$BIN/fleet-id.sh" short "$fid" 2>/dev/null)" || idtag=$tgt
     if [ -n "$SOCK" ]; then socks="$SOCK"
     elif [ -n "${TMUX:-}" ]; then socks="-"          # bare tmux: this pane's own server
     else socks=$(fleet_sockets); fi
@@ -269,12 +278,12 @@ EOF_IDS
       case "$trc" in
         0) IFS=$'\t' read -r _tid _thow _tsock w <<< "$take"
            [ "$_tid" = "$fid" ] || {
-             printf 'fleet-peer-send: %s has closed — sent to %s (%s) instead\n' "$tgt" \
+             printf 'fleet-peer-send: %s has closed — sent to #%s (%s) instead\n' "$idtag" \
                "$(bash "$BIN/fleet-id.sh" short "$_tid" 2>/dev/null || printf '%s' "$_tid")" "$_thow" >&2
-             text="[发给 ${tgt} 的消息——它已关闭，转给你（${_thow}）]
+             text="[发给 ${idtag} 的消息——它已关闭，转给你（${_thow}）]
 $text"; }
            SOCK=$_tsock ;;
-        1) idclosed="$tgt" ;;
+        1) idclosed="$idtag" ;;
       esac
     fi
     if [ -n "$w" ]; then tgt=$w
@@ -430,13 +439,16 @@ EOF
 fi
 
 tm=(tmux); [ -n "$SOCK" ] && tm+=(-L "$SOCK")
-label=""
+label=""; who=""
 case "$tgt" in
   @*|%*)
-    info=$("${tm[@]}" display-message -p -t "$tgt" '#{window_name}|#{@issue}|#{pane_current_path}|#{@worktree}' 2>/dev/null)
+    info=$("${tm[@]}" display-message -p -t "$tgt" '#{@fleet_id}|#{window_name}|#{@issue}|#{pane_current_path}|#{@worktree}' 2>/dev/null)
     [ -n "$info" ] || die 1 "no live window for '$tgt'"
+    wfid=${info%%|*}; info=${info#*|}
     wname=${info%%|*}; info=${info#*|}; wiss=${info%%|*}; info=${info#*|}; pcwd=${info%%|*}; wwt=${info#*|}
-    label="$wname · ${wwt:-$pcwd}"
+    # The receipt names the window by its ID's short code first (EPIC T497 C11).
+    wtag=''; fleet_is_fid "$wfid" && wtag=$(bash "$BIN/fleet-id.sh" short "$wfid" 2>/dev/null) && wtag="#$wtag "
+    label="${wtag:+$tgt · }$wname · ${wwt:-$pcwd}"; [ -z "$wtag" ] || who="${wtag% }"
     if [ -n "$EXPECT" ] && [ "$wiss" != "$EXPECT" ]; then
       die 1 "refused: '$tgt' is $wname (@issue=${wiss:-none}), not #$EXPECT — the window moved; address it as issue:$EXPECT"
     fi ;;
@@ -454,7 +466,7 @@ queue_here() {
   fid=$(fleet_window_fid "$s" "$tgt" "$SOCK" 2>/dev/null) || die 1 "$1"
   printf '%s' "$text" | bash "$BIN/fleet-peer-queue.sh" put -L "$s" --kind message \
     --rid "local:peer#$(date +%s).$$" --to-fid "$fid" --to "${label:-$tgt}" >/dev/null || die 1 "$1"
-  echo "queued → $tgt${label:+ ($label)} — $1; delivered when it can take it"
+  echo "queued → ${who:-$tgt}${label:+ ($label)} — $1; delivered when it can take it"
   exit 3
 }
 # A window: the one road into a live session of any agent (T626, EPIC T580 C6) —
@@ -465,7 +477,7 @@ case "$tgt" in
   @*|%*)
     fleet_agent_deliver "$tgt" "$SOCK" "$text"; rc=$?
     case "$rc" in
-      0) echo "sent → $FLEET_DELIVER_NOTE ($label)"; exit 0 ;;
+      0) echo "sent → ${who:+$who · }$FLEET_DELIVER_NOTE ($label)"; exit 0 ;;
       "${FLEET_DELIVER_HELD:-3}") queue_here "$FLEET_DELIVER_NOTE" ;;
     esac
     die 1 "$FLEET_DELIVER_NOTE" ;;

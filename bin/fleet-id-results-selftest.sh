@@ -21,7 +21,7 @@
 #   CLEAR a child's report after its parent's /clear (a new native segment) still
 #         names the parent's window — by its ID — and a parent closed with a
 #         successor hands it there (fleet-report-parent.sh --dry-run)
-#   AWAIT fleet-await.sh T-<code>: a result answers (rc 0 merged / 1 failed), a
+#   AWAIT fleet-await.sh <code> (K3F9, #k3f9): a result answers (rc 0 merged / 1 failed), a
 #         close with none is EXITED (4), nothing is TIMEOUT (3)
 #   KIDS  fleet-children.sh --ids lists the IDs whose parent it is
 #   TASKPAR a task dispatch's child ID names its parent however the parent came
@@ -34,6 +34,8 @@
 #   WIRE  the spawners open with --parent / --from-native / --worktree; the reap,
 #         cleanup, stop and exit closers pass a why; a report writes the ID's
 #         result and a queued one routes by ID (C8: no generation / native gate)
+#   NAMES (C11) a child report's header is `#CODE · …` (its ID's short code), a
+#         task window's T<n> only `(别名 T<n>)` after it
 # tmux / python3 / git absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -210,6 +212,35 @@ tf set-window-option -t "$WCH" @origin_fid "$PA"
 hook "$PPA" clear ffff0002       # the parent clears its conversation
 out=$(env "$INT" TMUX_PANE="$PCH" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary 'kid done' 2>&1)
 ok; printf '%s' "$out" | grep -q "($WPA" || fail "CLEAR: after the parent's /clear the report still names its window" "$out"
+# NAMES (C11): the envelope names the child by its ID's code first; a task's T<n> rides
+# only as the alias note — never the header's subject
+chc=$(fid short "$CH")
+ok; printf '%s' "$out" | grep -q "^\[child-report\] #$chc · " || fail "NAMES: the child-report header leads with #CODE" "$out"
+tf set-window-option -t "$WCH" @task T777
+out=$(env "$INT" TMUX_PANE="$PCH" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary 'kid done' 2>&1)
+ok; printf '%s' "$out" | grep "^\[child-report\] #$chc · " | grep -q "(别名 T777)$" \
+  || fail "NAMES: a task window's T<n> is only the alias note" "$out"
+ok; ! printf '%s' "$out" | grep -q "^\[child-report\] T777" || fail "NAMES: T<n> never heads the report" "$out"
+tf set-window-option -u -t "$WCH" @task
+# a report queued before C8 (fleet_task_control.py receive) and the `task` tool's
+# answer name the session the same way: its code, the record only the alias
+r=$(python3 - "$BIN" "$CH" "$chc" <<'PY' 2>&1
+import importlib.util, sys
+sys.path.insert(0, sys.argv[1])
+import fleet_task_control as tc
+assert tc.child_label({"task": "T777", "worker_id": "u/" + sys.argv[2]}) == "#%s (别名 T777)" % sys.argv[3], tc.child_label({"task": "T777", "worker_id": "u/" + sys.argv[2]})
+assert tc.child_label({"task": "T777", "worker_id": "u/issue-4"}) == "T777"
+spec = importlib.util.spec_from_file_location("fleet_mcp", sys.argv[1] + "/fleet-mcp.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.run = lambda argv, **kw: type("R", (), {"returncode": 0, "stdout": "T777\nwindow @5\n", "stderr": ""})()
+m.hub_env = lambda *a, **k: None
+m.tmux = lambda *a: "T776\tx\nT777\t" + sys.argv[2]
+out = m.tool_task({"title": "t", "repo": "o/r", "spawn": True})
+assert out["id"] == sys.argv[3] and out["alias"] == "T777" and out["session_id"] == sys.argv[2], out
+print("ok")
+PY
+)
+ok; [ "$r" = ok ] || fail "NAMES: receive's header and the task tool's answer lead with the code" "$r"
 # the parent closes; a successor continues it — the report goes there
 lib fleet_win_retire "$WPA" "$L" exited; tf kill-window -t "$WPA"
 SU=$(mkfid)
@@ -234,6 +265,8 @@ c1=$(python3 "$BIN/fleet_id.py" short "$A1")
 out=$(env "$INT" bash "$BIN/fleet-await.sh" "$c1" --timeout 5 --interval 1); rc=$?
 ok; [ "$rc" = 0 ] && printf '%s' "$out" | head -1 | grep -qx MERGED && printf '%s' "$out" | grep -q 'pr: #9' \
   || fail "AWAIT: a merged result answers MERGED (0)" "$rc · $out"
+out=$(env "$INT" bash "$BIN/fleet-await.sh" "#$(printf '%s' "$c1" | tr 'A-Z' 'a-z')" --timeout 5 --interval 1); rc=$?
+ok; [ "$rc" = 0 ] && printf '%s' "$out" | head -1 | grep -qx MERGED || fail "AWAIT: #code in any case is the same ID (C11)" "$rc · $out"
 out=$(env "$INT" bash "$BIN/fleet-await.sh" "fid:$A2" --timeout 5 --interval 1); rc=$?
 ok; [ "$rc" = 4 ] && printf '%s' "$out" | head -1 | grep -qx EXITED || fail "AWAIT: closed with no result is EXITED (4)" "$rc · $out"
 out=$(env "$INT" bash "$BIN/fleet-await.sh" "$A3" --timeout 2 --interval 1); rc=$?

@@ -166,7 +166,7 @@ func ClassifyIDMigration(t FleetTask, pres *IDPresence) IDMigrateItem {
 			if !IsFleetID(sess) {
 				it.ID = "" // an old key-named worker: alive, its window has no ID yet
 			} else {
-				it.Short = "T-" + FleetIDCode(sess)[:IDShortMin]
+				it.Short = FleetIDCode(sess)[:IDShortMin]
 			}
 			if end != "" && end != IDMigClosed && end != IDMigNotStarted {
 				it.Result = end

@@ -60,7 +60,7 @@ ssh $OPS "$F/fleet-id.sh get <A 的短码>"
 | A 里 `/clear` 两次（S1） | ID、短码不变；多两段 `trigger clear`；⌘P 那一行编号不变 |
 | A 里 `/compact`（S5） | 不多段；当前段压缩次数 +1 |
 | A 里 `/fleet-handoff --to codex`（S4） | ID 不变；Codex 第一轮后多一段 `agent codex · trigger transfer`；⌘P 的 Agent 列变 Codex |
-| ⌘P 截一屏 | 每行编号是 `T-xxxxx`；搜 `#4539` 出对应会话（C3） |
+| ⌘P 截一屏 | 每行编号是 4 位大写、首位字母的短码 `K3F9`（C11 之前是 `T-xxxxx`）；搜 `#4539` 出对应会话（C3） |
 | A 派一个子会话（让它 `report` 一个 waiting 结果），A 再 `/clear`；然后子会话报 | 子会话的回报出现在 A 里，`get <A>` 的子 ID 列着它（C4） |
 
 把四张 `get` 输出和截屏记进切换记录。任何一项不对 ⇒ 停：那是 C1–C4 的缺陷，不是切换的事。
@@ -120,8 +120,9 @@ fleet hub set fleet.id_switch on              # MacBook，运营方的令牌（C
 ssh $OPS "$F/fleet-id.sh switch status"   # 期望：on
 ```
 
-（等价的另一条路：`ssh $OPS "$F/fleet-id.sh switch on"`。）每个节点在下一次清理 tick（60 秒）
-问到开关、写进自己的 `ids/.switch`：
+开关只能由操作者的机器打开（运营方的令牌）：在 `$OPS` 这类托管登录上 `fleet-id.sh switch on` 用的是那台机器的
+节点令牌，hub 会拒（403 `the ID switch is the operator's`，2026-10-20 在一台托管机器上实测）——所以没有「等价的另一条路」，
+`switch` 在节点上只用来看（`status`）。每个节点在下一次清理 tick（60 秒）问到开关、写进自己的 `ids/.switch`：
 
 ```bash
 for h in $OTHERS; do ssh $h "$F/fleet-id.sh switch status"; done   # 都是 on
@@ -169,6 +170,17 @@ ssh $OPS "$F/fleet-id.sh switch status"    # 期望：off
 关回来就是旧行为：旧表没删、写侧双写还在，带 `@launch` 的窗口照走旧路；窗口、ID、账本都不动
 （BREAK-IT `id-switch-flip-report`）。已 `--apply` 的记录保持迁好的终态——没有「反迁移」，迁前整条记录在
 `fleet_operations`（`action=id_migrate`）里。把出错那步的原样输出记进切换记录，交给 T497 的驱动会话。
+
+## 短码与旧 T 号的退场（C11）
+
+切换之后会话在一切文字里以 ID 的短码出现：4 位大写 Crockford base32、首位是字母（`K3F9`，面板与编号列不带前缀，
+纯文字消息写 `#K3F9`），子回报的标题、send 的回执、`task` 工具的回答都以它为主；任务记录的 `T<n>` 只作别名附注
+（`[child-report] #K3F9 · … (别名 T486)`、`task` 回答的 `alias`、⌘P Tab 页的「别名」）。规则见
+[FLEET-ID.md](FLEET-ID.md)「ID 与短码」。
+
+**退场时间**：旧写法保留**一个版本**（compat-1v）——`T-hfkc7`（5 位小写带前缀）照样寻址、⌘P 搜得到、Tab 页列在别名里；
+子回报与 `task` 回答里的 `T<n>` 别名附注也只留这一版。下一批删掉：`fleet_id.py` 的 `legacy_encode`、
+hub 的 `FleetIDLegacyCode` / `LegacyIDCode`、各处 `T-` 分支与别名附注（都带 `compat-1v` 字样）。
 
 ## 做完
 
