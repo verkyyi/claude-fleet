@@ -46,11 +46,14 @@ def run(*args, cwd=None):
         raise
 
 
+MERGED_GRACE_DEFAULT = 60       # T680: 做完约 1 分钟收起 (was 600)
+
+
 def merged_grace_default():
     """FLEET_CLEANUP_MERGED_GRACE — fleet-cleanup.sh's grace after a merge, the
-    same seconds for a task session's closed record (issue #4897)."""
-    v = os.environ.get("FLEET_CLEANUP_MERGED_GRACE", "600")
-    return int(v) if v.isdigit() and len(v) <= 8 else 600
+    same seconds for a task session whose work is over (issue #4897, T680)."""
+    v = os.environ.get("FLEET_CLEANUP_MERGED_GRACE", str(MERGED_GRACE_DEFAULT))
+    return int(v) if v.isdigit() and len(v) <= 8 else MERGED_GRACE_DEFAULT
 
 
 def minutes():
@@ -570,6 +573,23 @@ class Cleaner:
         pol = fleet_reap_policy.parse(snap["@reap_policy"]) if snap["@reap_policy"] else ("merged", 0)
         return snap["@task"] if pol and pol[0] == "merged" else ""
 
+    @staticmethod
+    def id_over(fid):
+        """The window's ID says its work is over (T680, fleet_cfg_work_over's
+        first half): the newest result on its ledger here is merged / succeeded /
+        failed (fleet_id.py status → done | failed). A report often lands on the ID
+        while the record still reads 已接受 — that is «做完» too."""
+        if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", fid or ""):
+            return False
+        env = dict(os.environ)
+        env.pop("FLEET_ID_LIVE", None)
+        try:
+            out = subprocess.run(["python3", str(BIN / "fleet_id.py"), "status", fid], env=env,
+                                 capture_output=True, text=True, timeout=15).stdout
+            return json.loads(out or "{}").get("state") in ("done", "failed")
+        except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+            return False
+
     def task_closed(self, task):
         """0 closed (收口) · 1 open · 3 unknown — fleet_task_control.py closed,
         or the FLEET_TASK_CLOSED_CMD seam (same contract)."""
@@ -582,9 +602,10 @@ class Cleaner:
         return rc if rc in (0, 1) else 3
 
     def task_session(self, window, snap):
-        """Close a task session once its record is closed (issue #4897): its turn
-        over, nothing pending, the grace (`merged:<dur>`, else
-        FLEET_CLEANUP_MERGED_GRACE) past its last turn — history first and
+        """Close a task session once its work is over (issue #4897; T680: its ID
+        has a final result, or its record is closed): its turn over, nothing
+        pending, the grace (--grace, else `merged:<dur>`, else
+        FLEET_CLEANUP_MERGED_GRACE, 60 s) past its last turn — history first and
         resumable, the worktree left for worktree-autoclean.sh (which asks the
         record too). An open or unreadable record keeps it."""
         task = self.task_ref(snap)
@@ -595,7 +616,7 @@ class Cleaner:
         key = key[1] + "-" + key[2]
         if self.finished(snap) not in ("done", "exited") and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1":
             return False
-        rc = self.task_closed(task)
+        rc = 0 if self.id_over(snap["@fleet_id"]) else self.task_closed(task)
         if rc != 0:
             if not self.args.dry_run and option(self.tm, window, "@reap_key").startswith("task:"):
                 clear(self.tm, window)
@@ -604,9 +625,12 @@ class Cleaner:
         if not self.eligible(window, snap, task=True) or self.busy(window, snap):
             return False
         pol = self.policy(snap)
-        grace = pol[1] if pol and pol[1] else merged_grace_default()
+        if self.args.grace is not None:
+            grace = self.args.grace
+        else:
+            grace = pol[1] if pol and pol[1] else merged_grace_default()
         due = notice(self.tm, window, "task:" + task, int(snap["@claude_state_ts"]) + grace,
-                     self.now, self.args.dry_run)
+                     self.now, self.args.dry_run, tick=min(grace, 60))
         if due > self.now:
             return False
         print("reap-due:%s policy=%s task=%s" % (window, snap["@reap_policy"] or "merged", task),
@@ -835,6 +859,8 @@ class Cleaner:
             return 0
         count = 0
         windows = self.tm("list-windows", "-t", self.args.session, "-F", "#{window_id}").split()
+        if self.args.only:
+            windows = [w for w in windows if w == self.args.only]
         for window in windows:
             if count >= self.args.limit:
                 break
@@ -858,6 +884,9 @@ def main():
                    help="none = the repo is not on GitHub: no gh, git says what landed (issue #3601)")
     p.add_argument("--window-repo", action="store_true",
                    help="only windows whose @repo is --repo (multi-repo fleet)")
+    p.add_argument("--only", default="", help="this one window (@id) — the --now watcher's pass (T680)")
+    p.add_argument("--grace", type=int, default=None,
+                   help="a task session's grace in seconds, over its policy's (T680: --now --after)")
     p.add_argument("--dry-run", action="store_true")
     return Cleaner(p.parse_args()).main()
 

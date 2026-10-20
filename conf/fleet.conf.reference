@@ -759,13 +759,23 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # (the worktree-autoclean janitor still backstops merged worktrees). See docs/dev/CLEANUP.md.
 # @label=Cleanup daemon (reap after merges) @group=bridge @tier=common @scope=fleet @edit=bool
 #FLEET_CLEANUP=1
-# Wait after GitHub mergedAt before automatic cleanup (issue #565). Default 600s;
+# Wait after GitHub mergedAt before automatic cleanup (issue #565). Default 60s (T680);
 # 0 disables only this delay, not the existing cleanup gates. Missing/invalid or
 # future merge timestamps defer when enabled. Manual fleet-cleanup.sh stays
 # immediate; --auto --dry-run evaluates this gate without changing anything.
-# Values outside 0..31536000 fall back to 600. This is not an idle-time policy.
+# Values outside 0..31536000 fall back to 60. The same seconds close a task
+# session whose ID has a final result or whose record closed (T680). This is not an idle-time policy.
 # @label=Cleanup merged grace @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
-#FLEET_CLEANUP_MERGED_GRACE=600
+#FLEET_CLEANUP_MERGED_GRACE=60
+# The moment a session's ID gets a final result (merged / succeeded / failed —
+# fleet-report-parent.sh, fleet-id.sh result) its window is watched and closed
+# FLEET_REAP_NOW_AFTER seconds after its turn ends, through the reaper's own gates
+# (history first, worktree kept, never while working) — not left for the next
+# tick (T680). 0 turns the watcher off; the tick still closes it.
+# @label=Close finished sessions at once @group=bridge @tier=advanced @scope=fleet @edit=bool
+#FLEET_REAP_NOW=1
+# @label=Close finished sessions after @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
+#FLEET_REAP_NOW_AFTER=60
 
 # fleet_landed (issue #3601) fetches the repo's origin/<base> before it answers, at
 # most once per FLEET_LANDED_FETCH_SECS a repo; FLEET_LANDED_FETCH=0 reads the local

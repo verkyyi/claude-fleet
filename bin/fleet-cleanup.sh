@@ -83,7 +83,7 @@
 #   FLEET_CLEANUP_CLOSED_GRACE   seconds a closed-unmerged window must have been
 #                        SILENT before it may be reaped (issue #544, default 900)
 #   FLEET_CLEANUP_MERGED_GRACE   seconds after mergedAt before --auto cleanup
-#                        (default 600; 0 disables the delay, max 31536000)
+#                        (default 60, T680; 0 disables the delay, max 31536000)
 #   LAND_LEASE_TTL       lease lifetime, seconds           (default 3600)
 #   LAND_QUEUE_TIMEOUT   max seconds to WAIT for the lease (default 300)
 #   LAND_POLL            seconds between lease-queue polls  (default 15)
@@ -148,11 +148,11 @@ if [ -n "$REPO_ARG" ] && ! fleet_load_repo_conf "$FLEET_SESSION" "$REPO_ARG"; th
   done_token "error:no-repo"; exit 2
 fi
 # Read AFTER the fleet overlay; these values are commonly not exported.
-MERGED_GRACE="${FLEET_CLEANUP_MERGED_GRACE:-600}"
-case "$MERGED_GRACE" in ''|*[!0-9]*) MERGED_GRACE=600 ;; esac
-if [ "${#MERGED_GRACE}" -gt 8 ]; then MERGED_GRACE=600; fi
+MERGED_GRACE="${FLEET_CLEANUP_MERGED_GRACE:-60}"
+case "$MERGED_GRACE" in ''|*[!0-9]*) MERGED_GRACE=60 ;; esac
+if [ "${#MERGED_GRACE}" -gt 8 ]; then MERGED_GRACE=60; fi
 MERGED_GRACE=$((10#$MERGED_GRACE))
-[ "$MERGED_GRACE" -le 31536000 ] || MERGED_GRACE=600
+[ "$MERGED_GRACE" -le 3153600 ] || MERGED_GRACE=60
 if [ -n "$REPO_ARG" ]; then REPO=$(fleet_norm_repo "$REPO_ARG")
 else REPO=$(fleet_resolved_repo "$FLEET_SESSION"); fi
 MAIN="${FLEET_MAIN:-}"
@@ -329,6 +329,9 @@ issue_open_gate() {
   # Open or unknown defers, like an open issue.
   [ -n "$WT" ] && [ -d "$WT" ] && wtask=$(fleet_worktree_task "$WT" 2>/dev/null)
   if [ -n "$wtask" ]; then
+    # «做完» is one rule (T680, fleet_cfg_work_over): the window's ID has a final
+    # result here, or the record is closed.
+    fleet_cfg_work_over "" "$(fleet_worktree_id "$WT" 2>/dev/null)" && return 0
     tv=$(fleet_task_closed "$wtask") && return 0
     verb=merged; [ "$st" = CLOSED ] && verb=closed
     note "  #$PR $verb but task $wtask is ${tv:-unknown} (not closed) — automatic cleanup deferred until the record closes."

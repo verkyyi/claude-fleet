@@ -47,7 +47,7 @@ def clear(tm, window):
         tm("set-option", "-wu", "-t", window, name)
 
 
-def notice(tm, window, key, deadline, now=None, dry=False, hold=None):
+def notice(tm, window, key, deadline, now=None, dry=False, hold=None, tick=60):
     now = int(time.time()) if now is None else now
     state = reap_state(option(tm, window, "@claude_state"), option(tm, window, "@agent_status"),
                        option(tm, window, "@claude_needs"))
@@ -75,7 +75,7 @@ def notice(tm, window, key, deadline, now=None, dry=False, hold=None):
     old_stamp = option(tm, window, "@reap_state_ts")
     if (old_key != key or old_stamp != stamp or not due.isdigit()
             or not seen.isdigit() or not 0 <= now - int(seen) <= 180):
-        due = now + 60  # At least one visible tick, even for old merged PRs.
+        due = now + tick  # At least one visible tick, even for old merged PRs.
     due = max(int(due), deadline)
     if not dry:
         if was_held:

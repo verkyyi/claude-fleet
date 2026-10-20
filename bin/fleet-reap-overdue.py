@@ -13,7 +13,7 @@ cleanup daemon's last word about it).
 
 Due, per policy (the same rules the reapers apply):
   merged[:<dur>] / an issue window with none — its PR MERGED (the prmap cache)
-                   + the fleet's grace (FLEET_CLEANUP_MERGED_GRACE, 600 s) or
+                   + the fleet's grace (FLEET_CLEANUP_MERGED_GRACE, 60 s) or
                    <dur>, counted from the landing the history ledger recorded
   done[:<dur>]     its turn over (done / exited) + <dur> (default 15 min)
   at:<when>        that moment, its turn over
@@ -137,8 +137,8 @@ def daemon_word(key):
 
 
 def grace():
-    v = os.environ.get("FLEET_CLEANUP_MERGED_GRACE", "600")
-    return int(v) if re.fullmatch(r"\d{1,8}", v) else 600
+    v = os.environ.get("FLEET_CLEANUP_MERGED_GRACE", "60")
+    return int(v) if re.fullmatch(r"\d{1,8}", v) else 60
 
 
 def due_of(w, repo, prs, landed, now):

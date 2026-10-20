@@ -204,7 +204,8 @@ id_result() {
   local rc=$?
   if [ -z "$WIN" ] && [ "$DRY" != 1 ] && fleet_is_fid "$selffid"; then
     python3 "$BIN/fleet_id.py" result "$selffid" --state "$STATE" --summary "$SUMMARY" --agent "$wagent" \
-      ${PR:+--pr "${PR//[^0-9]/}"} >/dev/null 2>&1 || :
+      ${PR:+--pr "${PR//[^0-9]/}"} >/dev/null 2>&1 \
+      && fleet_reap_soon "$selffid" "$STATE"   # 做完约 1 分钟收起 (T680)
   fi
   return "$rc"
 }
