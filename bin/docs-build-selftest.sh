@@ -199,12 +199,16 @@ want = [chord(fleet_keys.DEFAULT_PANEL)] + [chord(c) for c in fleet_keys.DEFAULT
 view = subprocess.run(['bash', os.path.join(ROOT, 'bin/dash-keymap.sh'), '--panel', 'switch', 'view'],
                       capture_output=True, text=True).stdout
 letters = dict(l.split()[:2] for l in view.splitlines() if l.strip())
-for action, c, g, _ in fleet_keys.FORWARD:
+for action, c, g, _ in fleet_keys.RETIRED:
     if action in letters:
         want += ['`%s`' % action, g, '⌃] ' + letters[action]]
 words = subprocess.run(['bash', os.path.join(ROOT, 'bin/fleet-ui-lang.sh'), 't', 'view_keys'],
                        capture_output=True, text=True, env=dict(os.environ, FLEET_UI_LANG='zh')).stdout
 want += [w.split(' ', 1)[-1] for w in words.split('  ') if w.strip()]
+# T685: the panel's own rows stand where the other keys stood
+for k in ('view_cmd_blank', 'view_cmd_home', 'view_cmd_quit'):
+    want.append(subprocess.run(['bash', os.path.join(ROOT, 'bin/fleet-ui-lang.sh'), 't', k],
+                               capture_output=True, text=True, env=dict(os.environ, FLEET_UI_LANG='zh')).stdout.strip())
 for w in want:
     if w not in md:
         bad.append('H the generated .md lacks %r' % w)

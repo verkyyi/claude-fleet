@@ -9,42 +9,49 @@ This page is the contract for moving between sessions from the keyboard
 (issue #1903, EPIC #1906 C10) — from anywhere, without first putting the
 keyboard on the list.
 
-## One key + the panel (issue #3185, EPIC #3178 C7; issue #3328)
+## One key + the panel (issue #3185, EPIC #3178 C7; issue #3328; T685)
 
-There is **one key**: **⌘P** on a Mac (iTerm2), and on a phone or any terminal
-with no ⌘ **⌃空格** (two taps on Termius: Ctrl, space), **F12** (one, once you put
-it on Termius' key row) or **⌃] p**. It opens the panel: every session, and every
-action. On the ⚡ row, ↵ or Tab opens the 「新会话」 box (T652, EPIC T651 C1):
-仓库 ‹›, Agent ‹›, 开 — already chosen, so ↵ opens it; nothing is typed there, the
-first message is said in the session (and renames its row and record). A
-session's Tab menu opens its shell;
-「退出 fleet」 ends the connection. Open the panel again to return from the
-shell or switch sessions. The current panel's steps and row actions are in
-[日常使用](../public/zh/member/usage.md#一个键总面板).
+fleet takes **one key** (操作者 2026-10-20, T685): **⌘P** on a Mac (iTerm2), and
+on a phone or any terminal with no ⌘ the same panel as **⌃] p** (⌃], then p). It
+opens the panel: every session, and every action — the panel's own rows, picked
+with ↑↓ ↵ or reached by typing a few of their words:
 
-**The keys that went (issue #3328, EPIC #3178 ⑤ — kept for good, #4790):** ⌘↓ ⌘↑ ⌘[
-⌘] ⌘K ⌘Q ⌃\ and the old popup's key still reach fleet: each opens the panel (a
-new task / blank session lit on ⚡) and says 「… 已并进 ⌘P」 the first time; ⌘N
-opens the 「新会话」 box itself, both values chosen (T670, EPIC T651 C2 — the
-session in view's repo, else the last; that repo's last agent), esc closes it;
-each press is a line of `logs/view-switch.ndjson` (`how=old:<action>`). They stay fleet's: given back to
-iTerm2, ⌘Q would quit it.
+| Row | Does | Type |
+|---|---|---|
+| ⚡ 新会话 | the 「新会话」 box (T652, EPIC T651 C1): 仓库 ‹›, Agent ‹›, 开 — already chosen, so ↵ opens it; nothing is typed there, the first message is said in the session (and renames its row and record) | words that hit no session |
+| ⌂ 回家命令行 | this machine's login shell in `$HOME`, no session and no hub (EPIC T651 C3); the panel again comes back | `回家` · `home` · `shell` |
+| ◐ 语言 / Language | the interface language | `语言` · `lang` |
+| ⏻ 退出 fleet | ends the connection, the sessions run on — after a y / n | `退出` · `quit` |
+
+A session's Tab menu opens its shell. 「最近消息」 joins these rows with T675 (its
+⌘J becomes a row too — no new key). There is no zoom / fold row: a 看台 window
+has one pane and the panel has no list to fold. The current panel's steps and row
+actions are in [日常使用](../public/zh/member/usage.md#一个键总面板).
+
+**The keys that went back to iTerm2 (T685; after issue #3328):** ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N
+⌘T ⌘K ⌘Q ⌘\ are no row of the `fleet` profile any more, so iTerm2 has its own
+again — ⌘K clears, ⌘T opens a tab, ⌘N a window, ⌘Q quits iTerm2. ⌃\ goes to the
+session (`send-keys`) and ⌃空格 / F12 to the terminal. Their private codes stay
+retired, never reused: a profile written before the update still sends one until
+the next start rewrites it, and the 看台 catches it as a user key bound to
+nothing — it does nothing (`fleet_keys.RETIRED`). After the update each login is
+told once: 「fleet 只用 ⌘P，其余都在面板里」 (`keys-notice-T685`).
 
 Want an old key back, or a different one? One line in `fleet.conf`
 (`~/.config/claude-fleet/fleet.conf`; `bin/fleet_keys.py` reads it) — a key you
-name there is yours, never a forward:
+name there is yours:
 
 ```
 [client]                         # this computer's keys
 FLEET_KEY_PANEL=cmd+p            # the panel's chord: cmd+' … · off = none
-FLEET_KEYS_EXTRA="next=cmd+down prev=cmd+up back=cmd+[ fwd=cmd+] new=cmd+n quit=cmd+q shell=ctrl+\\"
+FLEET_KEYS_EXTRA="next=cmd+down prev=cmd+up back=cmd+[ fwd=cmd+] new=cmd+n quit=cmd+q home=cmd+\\"
 [common]                         # the machine's keys for a phone
-FLEET_KEY_PHONE="ctrl+space f12 ctrl+]p"
+FLEET_KEY_PHONE="ctrl+]p"           # + ctrl+space f12 to have them back
 FLEET_KEYS_PHONE_EXTRA="ctrl+]n=next ctrl+]b=prev ctrl+]c=new ctrl+]q=quit"
 ```
 
 An extra is `action=chord` (`chord=action` works too); actions are the switch
-table's (next prev back fwd new quit) and `shell`, the session's shell.
+table's (next prev back fwd new dispatch quit home) and `shell`, the session's shell.
 A chord is `+`-joined `cmd` · `ctrl` · `alt` · `shift` and one key (a character,
 `down` `up` `left` `right`, `space`, `tab`, `return`, `esc`, `f1`…`f20`);
 `ctrl+]x` is ⌃] then x. A ⌘ chord becomes a row of iTerm2's `fleet` profile
@@ -54,10 +61,8 @@ as it is. The client hands its `FLEET_KEYS_EXTRA` to the machine at each attach
 machine keeps the union (`@fleet_view_keys_extra`), so a phone attaching with no
 extras takes nothing from the Mac's. ⌃] ⌃] always sends one ⌃] on.
 
-- ⌃空格 in a session's shell is readline's set-mark — if you use it, drop
-  `ctrl+space` from `FLEET_KEY_PHONE`.
 - Not iTerm2 (Ghostty, Terminal.app): a ⌘ chord never reaches the fleet — use
-  ⌃] p (or ⌃空格 / F12).
+  ⌃] p.
 
 ## 侧栏下线清单 — every sidebar job's new home (issue #3186, EPIC #3178 C8)
 
@@ -116,12 +121,15 @@ A terminal sends nothing for ⌘ — macOS keeps it. So the client installs an
     ESC [ <code> ~        code 920 next · 921 prev · 922 back · 923 fwd ·
                                925 zoom · 927 quickopen · 928 new · 929 fold ·
                                931 quit · 932 dispatch
-                      ⌘\ (home, EPIC T651 C3) sends ⌃\'s own byte 0x1c instead:
-                      tmux drops a private code while a popup is up
+                      ⌘\ (home, EPIC T651 C3 — only when named, T685) sends
+                      ⌃\'s own byte 0x1c instead: tmux drops a private code
+                      while a popup is up
 
 924 (⌘J), 926 (⌘/) and 930 (⌘K, issue #3185) are retired (issue #2362) and never reused: a profile
 written before the update still sends them, and the conf catches both and does
-nothing with them until the next start rewrites the profile without them.
+nothing with them until the next start rewrites the profile without them. Since
+T685 the profile writes only ⌘P (+ what FLEET_KEYS_EXTRA names): every other code
+above is caught the same way and does nothing when an older profile sends it.
 
 No terminal sends `ESC [ 92x ~` for a real key. `conf/tmux-view.conf` catches
 each as `user-keys[<code>]` → `User<code>`, bound to the same body as the prefix
@@ -225,8 +233,9 @@ your Mac). The few that do something else on purpose say so below.
 | 拖文件 | 得到文件路径 | 一样 | 客户端先把文件送过去（#2757） | |
 | 选中 / ⌘C | 复制到本机 | 一样 | 见上一节「复制」（#2758，`clipboard-osc52-selftest.sh`） | |
 | ⌃D | 空输入时退出 | 有意不同 | 原样给会话；离开客户端用面板的「退出 fleet」 | `04` |
-| ⌃\ | （本地没有用途） | 有意不同 | 面板中打开会话 shell；可在 FLEET_KEYS_EXTRA 配置快捷键 | `1c` |
+| ⌃\ | （本地没有用途） | 一样 | T685 起原样给会话；会话 shell 在 Tab 页、本机 shell 是面板的「回家命令行」，要键在 FLEET_KEYS_EXTRA 配 | `1c` |
 | ⌘K | iTerm2 清屏 | 一样 | #3185 起还给 iTerm2（默认只绑 ⌘P） | |
+| ⌘T ⌘N ⌘Q | iTerm2 新标签 / 新窗口 / 退出 | 一样 | T685 起还给 iTerm2；新会话、退出 fleet 在面板里 | |
 
 ## Where the state lives
 
@@ -304,8 +313,8 @@ home on the page changes the port when the new home sits behind the same router
 `docs/MULTI-MACHINE-OPS.md` «从外面连进来».
 
 **The keys: one, to open the panel** (issue #3185). A phone has no ⌘; the 看台
-opens the panel on **⌃空格** (Ctrl, space — two taps), **F12** (one tap, once it
-is on Termius' key row) and **⌃] p** — `FLEET_KEY_PHONE`, above. ⌃] ⌃] sends a
+opens the panel on **⌃] p** — `FLEET_KEY_PHONE`, above (T685 dropped ⌃空格 and
+F12 from the default; write them there to have them back). ⌃] ⌃] sends a
 literal ⌃] to the session. Want a key per action? `FLEET_KEYS_PHONE_EXTRA` binds
 the letters below (`bin/dash-keymap.sh --panel switch view` spells them):
 

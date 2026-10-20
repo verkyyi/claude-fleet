@@ -166,7 +166,7 @@ en=$(FLEET_UI_LANG=en bash "$OB" brief --session "$NOREPO" | sed -n 's/^say\.key
 zh=$(FLEET_UI_LANG=zh bash "$OB" brief --session "$NOREPO" | sed -n 's/^say\.key: //p')
 [ "$en" != "$zh" ] || st_fail "say.key reads the same in zh and en"
 printf '%s\n%s\n' "$en" "$zh" | grep -q '⌘P' || st_fail "say.key does not teach ⌘P"
-printf '%s\n' "$zh" | grep -q '⌃空格' || st_fail "zh say.key does not teach ⌃空格 (the phone)"
+printf '%s\n' "$zh" | grep -qF '⌃] p' || st_fail "zh say.key does not teach ⌃] p (the phone)"
 bash "$OB" set step=try lang=en
 [ "$(bash "$OB" brief --session "$NOREPO" | sed -n 's/^.*lang=\([a-z]*\).*$/\1/p' | head -n 1)" = en ] || st_fail "a saved lang= does not win over the table's language"
 o=$(PATH="$WORK/shim:$PATH" bash "$OB" brief --session "$SESS" --dev 2>&1)

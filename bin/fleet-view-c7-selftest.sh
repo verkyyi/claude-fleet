@@ -241,11 +241,11 @@ for o in "@fleet_role panel" "@peer mac-a@$ME" "@peer_view v1" "@peer_node mac-a
 done
 st_ok_all "N  ⌘N: the box chosen (the session in view's repo, else the last), ↵ a new session every time, the 看台 on it — never the orchestrator's holder, no orchestrator script; a direct attach: nothing"
 
-# --- T: ⌘T and the other keys issue #3328 took away ------------------------------------------
-# ⌘T's 派一件事 popup has no entry any more: ⌘T (even as the person's own extra,
-# dispatch=cmd+t) opens the panel lit on its ⚡ row; a key that went (⌘K here — no
-# extra names it, so it is the default forward) opens the panel too. Each says
-# 「<key> 已并进 ⌘P」 the first time only, and every press is a line how=old:<action>.
+# --- T: ⌘T and the other keys issue #3328 / T685 took away ------------------------------------
+# ⌘T's 派一件事 popup has no entry any more: ⌘T, as the person's own extra
+# (dispatch=cmd+t), opens the panel lit on its ⚡ row. A key T685 gave back to
+# iTerm2 (⌘K here — code 930, no extra names it) does nothing when an older
+# profile still sends it: no panel, no line in view-switch.ndjson.
 to send-keys -t o:direct -H 1b 5b 39 33 32 7e
 sleep 1.5
 to capture-pane -p -t o:direct | grep -q '⚡' && st_fail "T: ⌘T opened the panel in a direct attach"
@@ -254,31 +254,37 @@ log="$W/conf/logs/view-switch.ndjson"
 pn=$(python3 "$BIN/fleet_timing.py" check | sed -n 's/^panel n=\([0-9]*\) .*/\1/p'); pn=${pn:-0}
 to send-keys -t o:view -H 1b 5b 39 33 32 7e
 ok=''; for _ in $(seq 1 80); do
-  sleep 0.1; to capture-pane -p -t o:view > "$W/dispatch.txt"; grep -q '已并进 ⌘P' "$W/dispatch.txt" && { ok=1; break; }
+  sleep 0.1; to capture-pane -p -t o:view > "$W/dispatch.txt"; grep -q '  ⚡ 新会话' "$W/dispatch.txt" && { ok=1; break; }
 done
-[ -n "$ok" ] || st_fail "T: ⌘T in the 看台 did not open the panel saying 「⌘T 已并进 ⌘P」: $(cat "$W/dispatch.txt")"
-grep -q '  ⚡ 新会话' "$W/dispatch.txt" || st_fail "T: ⌘T's panel is not lit on ⚡: $(grep -v '^$' "$W/dispatch.txt")"
-grep -qF '⌘T 已并进 ⌘P' "$W/dispatch.txt" || st_fail "T: the hint does not name ⌘T: $(grep '已并进' "$W/dispatch.txt")"
+[ -n "$ok" ] || st_fail "T: ⌘T in the 看台 did not open the panel lit on ⚡: $(grep -v '^$' "$W/dispatch.txt")"
+grep -q '已并进' "$W/dispatch.txt" && st_fail "T: ⌘T still says 「已并进 ⌘P」 (the hint went with T685)"
 grep -q '用哪个 Coding Agent' "$W/dispatch.txt" && st_fail "T: ⌘T still opened the 派一件事 popup"
+# the panel's own rows (T685): 回家命令行 and 退出 fleet stand in it
+grep -q '⌂ 回家命令行' "$W/dispatch.txt" || st_fail "T: the panel has no 回家命令行 row: $(grep -v '^$' "$W/dispatch.txt")"
+grep -q '⏻ 退出 fleet' "$W/dispatch.txt" || st_fail "T: the panel has no 退出 fleet row"
 # the panel clock (issue #3551): the frame drawn ⇒ one run boot · read · frame · total
 waitfor 10 sh -c "python3 '$BIN/fleet_timing.py' check | grep -q '^panel n=$((pn + 1)) '" \
   || st_fail "T: the panel's first frame left no run in timing/panel.ndjson: $(python3 "$BIN/fleet_timing.py" check)"
 python3 "$BIN/fleet_timing.py" table panel | grep -q '^| frame | ' || st_fail "T: the panel run has no frame segment: $(python3 "$BIN/fleet_timing.py" table panel)"
 [ -n "${FLEET_VIEW_EVIDENCE:-}" ] && cp "$W/dispatch.txt" "$FLEET_VIEW_EVIDENCE"
-to send-keys -t o:view Escape; waitfor 4 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⚡'"
-to send-keys -t o:view -H 1b 5b 39 33 32 7e
-waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⚡'" || st_fail "T: a second ⌘T opened no panel"
-sleep 0.4; to capture-pane -p -t o:view | grep -q '已并进' && st_fail "T: the second ⌘T said 「已并进 ⌘P」 again"
-to send-keys -t o:view Escape; waitfor 4 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⚡'"
+# typed words land on a row of the panel's own: 退出 → ⏻, and ↵ asks before it quits
+to send-keys -t o:view -l '退出'
+waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⏻ 退出 fleet'" || st_fail "T: typing 退出 did not light ⏻: $(to capture-pane -p -t o:view | grep -v '^$' | tail -6)"
+to send-keys -t o:view Enter
+waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '(y/n)'" || st_fail "T: ↵ on ⏻ did not ask first: $(to capture-pane -p -t o:view | grep -v '^$' | tail -4)"
+to send-keys -t o:view n
+sleep 0.5; [ -n "$(to list-panes -t o:view -F '#{pane_dead}' | grep -x 0)" ] || st_fail "T: n on 退出's question ended the connection"
+to send-keys -t o:view Escape; to send-keys -t o:view Escape; waitfor 4 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⚡'"
+lines=$(grep -c . "$log" 2>/dev/null || echo 0)
 to send-keys -t o:view -H 1b 5b 39 33 30 7e
-waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -qF '⌘K 已并进 ⌘P'" || st_fail "T: ⌘K (code 930) did not open the panel saying 「⌘K 已并进 ⌘P」: $(to capture-pane -p -t o:view)"
-to send-keys -t o:view Escape; waitfor 4 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⚡'"
-[ "$(grep -c '"how":"old:dispatch"' "$log")" = 2 ] || st_fail "T: two ⌘T are not two how=old:dispatch lines: $(grep old: "$log")"
-grep -q '"how":"old:switcher","key":"⌘K"' "$log" || st_fail "T: ⌘K is not logged how=old:switcher: $(grep old: "$log")"
+sleep 1.5
+to capture-pane -p -t o:view | grep -q '  ⚡' && st_fail "T: ⌘K (retired code 930) opened the panel (T685: it does nothing)"
+[ "$(grep -c . "$log" 2>/dev/null || echo 0)" = "$lines" ] || st_fail "T: ⌘K (930) left a line in view-switch.ndjson: $(tail -1 "$log")"
+grep -q '"how":"old:' "$log" 2>/dev/null && st_fail "T: a press is still logged how=old:<action> (the forwards went with T685)"
 # the one message after the update (fleet-remote-view.sh attach --thin runs view-notice):
 # on the 看台's client once, then never again on this login
 TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-notice --view fl@view-v1 || st_fail "T: view-notice exited non-zero"
-[ -s "$W/conf/keys-notice-3328" ] || st_fail "T: view-notice left no mark — it would say it at every attach"
+[ -s "$W/conf/keys-notice-T685" ] || st_fail "T: view-notice left no mark — it would say it at every attach"
 grep -q 'view-notice --view' "$BIN/fleet-remote-view.sh" || st_fail "T: attach --thin does not run view-notice"
 # ⌘T's send itself is ⌘P's ⚡ (leg P); `send` keeps its --agent
 python3 "$BIN/fleet-quick-dispatch.py" send --title '看日志' --repo acme/web --agent codex --view fl@view-v1 >/dev/null \
@@ -286,7 +292,7 @@ python3 "$BIN/fleet-quick-dispatch.py" send --title '看日志' --repo acme/web 
 [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("agent"))' "$W/sent.json")" = codex ] \
   || st_fail "T: --agent codex did not ride the payload: $(cat "$W/sent.json")"
 rm -f "$W/sent.json"
-st_ok_all "T  ⌘T / ⌘K (#3328): the panel — ⌘T lit on ⚡ — 「已并进 ⌘P」 once, each press how=old:<action> for the doctor; no 派一件事 popup; nothing in a direct attach"
+st_ok_all "T  ⌘T (an extra): the panel lit on ⚡, no hint; ⌂ 回家命令行 and ⏻ 退出 fleet rows, 退出 typed lands on ⏻ and asks y/n; ⌘K (retired 930) does nothing (T685); nothing in a direct attach"
 
 # --- S: ⌃\ -----------------------------------------------------------------------------------
 ti select-window -t "=fl@view-v1:$W1"; now_on "$W1"
@@ -384,10 +390,15 @@ st_ok_all "S  ⌃\\: the session's shell in its worktree (here; mac-a over the l
 # ⌘\ — the iTerm2 profile sends ⌃\'s byte, 0x1c (a private code would never reach
 # a popup) — from a session: ONE window of the 看台 marked `@view_shell home`, a
 # login shell in $HOME; ⌘\ there is back where you were, ⌘\ again the same window;
-# in ⌘P — the list and the 新会话 box — the same key. A direct attach: nothing. The
-# default keys: leg S's FLEET_KEYS_EXTRA (⌃\ = the session's shell) dropped first.
+# in ⌘P — the list and the 新会话 box — the same key. A direct attach: nothing.
+# Since T685 a key only when the person names it (home=cmd+\): leg S's
+# FLEET_KEYS_EXTRA (⌃\ = the session's shell) dropped first; with no extra ⌃\
+# is the session's own (sent on) and opens nothing.
 ti set-option -gu @fleet_view_keys_extra
 FLEET_KEYS_EXTRA='' TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-keys || st_fail "H: view-keys (defaults) exited non-zero"
+ti list-keys -T fleet-view | awk '$4 == "C-\\\\"' | grep -q 'do home' && st_fail "H: ⌃\\ is the home shell with no extra naming it (T685)"
+ti set-option -gu @fleet_view_keys_extra
+FLEET_KEYS_EXTRA='home=cmd+\' TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-keys || st_fail "H: view-keys (home=cmd+\\) exited non-zero"
 cmdbs() { to send-keys -t o:view -H 1c; }
 homew() { ti list-windows -t fl -F '#{window_id} #{@view_shell} #{@peer_view}' | awk '$2 == "home" && $3 == "v1" { print $1 }'; }
 ti select-window -t "=fl@view-v1:$W2"; now_on "$W2"
@@ -423,6 +434,15 @@ for how in list box; do
     || st_fail "H: ⌘\\ in ⌘P ($how) did not go to the home shell ($(cur)): $(to capture-pane -p -t o:view | grep -v '^$' | tail -4)"
 done
 [ "$(homew | grep -c .)" = 1 ] || st_fail "H: ⌘P made a second home shell window"
+# the panel's 回家命令行 row (T685: the road with no key): ⌘P, type 回家, ↵
+cmdbs; now_on "$W2"
+to send-keys -t o:view -H 1b 5b 39 32 37 7e
+waitfor 20 listed || st_fail "H: ⌘P listed nothing (row)"
+to send-keys -t o:view -l '回家'
+waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⌂ 回家命令行'" || st_fail "H: typing 回家 did not light ⌂ 回家命令行: $(to capture-pane -p -t o:view | grep -v '^$' | tail -6)"
+to send-keys -t o:view Enter
+waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$HW' ]" \
+  || st_fail "H: ↵ on ⌂ 回家命令行 did not go to the home shell ($(cur))"
 # `do home` from outside a key; exit: the window alone goes
 cmdbs; now_on "$W2"
 TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" 'do' home --view fl@view-v1 || st_fail "H: do home exited non-zero"
@@ -431,20 +451,22 @@ prompt_ready; to send-keys -t o:view -l 'exit'; to send-keys -t o:view Enter
 waitfor 20 sh -c "! tmux -S '$IN' list-windows -t fl -F '#{window_id}' | grep -qx '$HW'" || st_fail "H: exit left the home shell window"
 # the legs below press the extras again (⌘Q = quit)
 TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-keys || st_fail "H: view-keys (extras back) exited non-zero"
-st_ok_all "H  ⌘\\ · ⌃\\: the home shell — one window (@view_shell home) in \$HOME, back and forth, from ⌘P's list and 新会话 box, nothing in a direct attach, exit closes it (EPIC T651 C3)"
+st_ok_all "H  ⌘\\ · ⌃\\ (named, T685) · the panel's ⌂ 回家命令行 row: the home shell — one window (@view_shell home) in \$HOME, back and forth, from ⌘P's list and 新会话 box, nothing in a direct attach, exit closes it (EPIC T651 C3)"
 
 # --- P: anchored composer; existing placement routes (#4416) -------------------
 vp() { TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-panel --view fl@view-v1 "$@"; }
 ti select-window -t "=fl@view-v1:$W3"; now_on "$W3"
 vp > "$W/panel.txt" || st_fail "P: view-panel"
 grep -qx "cmd${T}pin${T}置顶当前会话" "$W/panel.txt" || st_fail "P: plain pin row missing"
-[ "$(tail -3 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:new cmd:lang cmd:quit " ] || st_fail "P: command order"
+[ "$(tail -4 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:new cmd:home cmd:lang cmd:quit " ] || st_fail "P: command order (⚡ · ⌂ 回家命令行 · 语言 · ⏻, T685)"
 grep -q '^grid' "$W/panel.txt" && st_fail "P: composer controls still inserted in list"
 for word in 置顶 pin; do vp "$word" | grep -q "^cmd${T}pin" || st_fail "P: pin search"; done
 for word in 语言 lang english 中文; do vp "$word" | grep -q "^cmd${T}lang" || st_fail "P: language search"; done
 vp Gamma | grep -q "^cmd${T}lang" && st_fail "P: unrelated language row in search"
 FLEET_PANEL_COMMANDS=none vp | grep -q '^cmd' && st_fail "P: none still has commands"
-[ "$(FLEET_PANEL_COMMANDS='new shell newsess' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "pin new lang quit " ] || st_fail "P: retired commands"
+[ "$(FLEET_PANEL_COMMANDS='new shell newsess' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "pin new home lang quit " ] || st_fail "P: retired commands"
+for word in 回家 home shell; do vp "$word" | grep -q "^cmd${T}home" || st_fail "P: 回家命令行 search ($word)"; done
+vp Gamma | grep -q "^cmd${T}home" && st_fail "P: unrelated 回家命令行 row in search"
 # The box's defaults are fleet-quick-dispatch.py's (T670; its selftest holds the
 # rules). Only this test's private conf is touched.
 popen() {
@@ -499,10 +521,12 @@ to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new4" || st_fail "P: ↵ opened no session"
 [ "$(sed -n 4p "$W/new.argv")" = "--origin hub --repo acme/web --agent claude --print fl" ] || st_fail "P: default argv: $(sed -n 4p "$W/new.argv")"
 pclosed
-# Quit still goes through OSC 7502 + detach.
+# Quit still goes through OSC 7502 + detach — after its y / n (T685).
 to pipe-pane -o -t o:view "cat > '$W/client-p.bytes'"; sleep 0.3
 popen
 to send-keys -t o:view -l 'zzz'; sleep 0.3; to send-keys -t o:view Down Enter
+waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '(y/n)'" || st_fail "P: quit did not ask first"
+to send-keys -t o:view y
 waitfor 20 sh -c "! tmux -S '$IN' list-clients -F '#{session_name}' | grep -q 'view-v1'" || st_fail "P: quit did not detach"
 sleep 0.3
 python3 -c 'import sys; sys.exit(0 if b"\x1b]7502;quit;token=tok7\x07" in open(sys.argv[1],"rb").read() else 1)' "$W/client-p.bytes" || st_fail "P: quit OSC missing"

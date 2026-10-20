@@ -1,13 +1,13 @@
 # fleet_keys.py — imported, not run (a comment first: fleet-install.sh checks every bin/ file starts with one)
 """fleet_keys.py — which keys a person's fleet binds (issue #3185, EPIC #3178 C7).
 
-A new install takes ONE key on a Mac, ⌘P (the panel), and three on a phone or a
-terminal with no ⌘ (⌃空格 · F12 · ⌃] p); everything else is the person's to add
-(issue #3328 took the rest away — FORWARD keeps them one version as the panel):
+A new install takes ONE key (T685, 操作者 2026-10-20): ⌘P on a Mac, and the same
+panel as ⌃] p on a phone or a terminal with no ⌘; every other action is a row of
+that panel, and any other key is the person's to add:
 
     [client]  FLEET_KEY_PANEL=cmd+p           the panel; another chord, or `off`
-              FLEET_KEYS_EXTRA="next=cmd+down new=cmd+n shell=ctrl+\\"
-    [common]  FLEET_KEY_PHONE="ctrl+space f12 ctrl+]p"
+              FLEET_KEYS_EXTRA="next=cmd+down new=cmd+n home=ctrl+\\"
+    [common]  FLEET_KEY_PHONE="ctrl+]p"
               FLEET_KEYS_PHONE_EXTRA="ctrl+]n=next ctrl+]q=quit"
 
 A chord is `+`-joined modifiers (cmd · ctrl · alt/opt · shift) and one key (a
@@ -31,26 +31,24 @@ import re
 import subprocess
 
 DEFAULT_PANEL = "cmd+p"
-DEFAULT_PHONE = "ctrl+space f12 ctrl+]p"
+DEFAULT_PHONE = "ctrl+]p"
 # the actions with no switch-table code: bound only as a chord the terminal sends.
 # `shell` (a session's own, in its directory) is reached from the row's Tab page.
 CODELESS = ("shell",)
-# `home` (EPIC T651 C3) is ⌃\ — and ⌘\, which the iTerm2 profile sends as ⌃\'s
-# byte (dash-keymap.sh: code `x1c`): this machine's command line in $HOME
+# `home` (EPIC T651 C3): ⌃\ — and ⌘\, which the iTerm2 profile sends as ⌃\'s
+# byte (dash-keymap.sh: code `x1c`) — only when the person names it (T685); the
+# panel's 「回家命令行」 row is its default road. The web PTY keeps its own ⌃\.
 HOME_CHORD = "ctrl+\\"
-# The keys issue #3328 (EPIC #3178 ⑤, D3 · D4) folded into one key, ⌘P. Each still
-# reaches the 看台 and opens the panel (⌘T lit on its ⚡ row) with a one-time
-# 「⌘T 已并进 ⌘P」 (fleet_view.forward_note) — ⌘N opens the 「新会话」 box itself,
-# both values chosen, no hint (T670) — kept for good (issue #4790: they are
-# still pressed, and given back to iTerm2 ⌘Q would quit it): (action, chord, glyph,
-# code) — the code the iTerm2 row sends; ⌘K's is the retired 930 (an old profile
-# sent it for the same panel). ⌃\ is no forward any more: it is the home shell's
-# fallback (HOME_CHORD, EPIC T651 C3). A chord the person names in FLEET_KEYS_EXTRA /
-# FLEET_KEY_PANEL is theirs, never a forward.
-FORWARD = (("next", "cmd+down", "⌘↓", "920"), ("prev", "cmd+up", "⌘↑", "921"),
+# The ⌘ keys issue #3328 folded into ⌘P and T685 gave back to iTerm2 (⌘K clears,
+# ⌘T a tab, ⌘N a window, ⌘Q quits): (action, chord, glyph, code). The profile maps
+# none of them any more; a code an older profile still sends is swallowed by the
+# 看台 (caught as a user key, bound to nothing — conf/tmux-view.conf), and never
+# reused. `forwards()` stays for one version (compat-1v: 下一批删) and is empty.
+RETIRED = (("next", "cmd+down", "⌘↓", "920"), ("prev", "cmd+up", "⌘↑", "921"),
            ("back", "cmd+[", "⌘[", "922"), ("fwd", "cmd+]", "⌘]", "923"),
            ("new", "cmd+n", "⌘N", "928"), ("dispatch", "cmd+t", "⌘T", "932"),
            ("quit", "cmd+q", "⌘Q", "931"), ("switcher", "cmd+k", "⌘K", "930"))
+FORWARD = RETIRED       # compat-1v: 下一批删 — the old name an older reader imports
 
 MODS = {"cmd": 0x100000, "command": 0x100000, "ctrl": 0x40000, "control": 0x40000,
         "alt": 0x80000, "opt": 0x80000, "option": 0x80000, "shift": 0x20000}
@@ -198,19 +196,9 @@ def carried():
 
 
 def forwards(extra=None):
-    """FORWARD less every chord the person bound themselves (the panel, an extra):
-    [(action, chord, glyph, code)]. `extra`: the FLEET_KEYS_EXTRA text to read
-    (the machine passes what the client carried), else this computer's."""
-    if not panel():
-        return []       # FLEET_KEY_PANEL=off: no panel to forward to
-
-    def ident(c):
-        return iterm_key(c) or tmux_key(c)
-    words = re.findall(r"[a-z]+", " ".join(f[0] for f in FORWARD) + " quickopen zoom fold")
-    taken = {ident(c) for _, c in pairs(client_extra() if extra is None else extra, set(words))}
-    if panel():
-        taken.add(ident(panel()))
-    return [f for f in FORWARD if ident(f[1]) not in taken]
+    """None since T685: the keys #3328 forwarded to the panel are iTerm2's again
+    (RETIRED). compat-1v: 下一批删 — kept so an older caller still gets a list."""
+    return []
 
 
 def phone():

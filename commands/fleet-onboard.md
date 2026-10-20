@@ -8,7 +8,7 @@ for them, and this walk only has to show them the one key and get one thing of
 theirs done, right in front of them:
 
 1. say hello in one line;
-2. teach one key — ⌘P on a computer, ⌃Space on a phone;
+2. teach one key — ⌘P on a computer, ⌃] p on a phone;
 3. they press it, write one thing on the panel's **⚡** row and press ↵ — the
    panel opens a new session whose first line is their own words (#3327, #3331),
    with no ticket filed (a hub task record, #3325) — and they watch it work and

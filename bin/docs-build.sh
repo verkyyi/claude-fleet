@@ -318,11 +318,13 @@ GEN_WORDS = {
     'zh': {'where': '在哪', 'press': '按', 'mac': 'Mac 上的 iTerm2', 'phone': '手机（Termius）或别的终端',
            'or': ' 或 ', 'then': '再按', 'key': '键', 'does': '做什么', 'nokey': '—',
            'action': '名字', 'mac_x': 'Mac 上（⌘）', 'phone_x': '手机上（⌃] 再按）', 'space': '空格',
-           'home': '任何画面：家里这台机器的命令行（在 $HOME 下），不需要会话、不需要 hub；再按一次回来'},
+           'home': '任何画面：家里这台机器的命令行（在 $HOME 下），不需要会话、不需要 hub；再按一次回来',
+           'rows': '面板里的入口（选中 ↵，或直接打字）：'},
     'en': {'where': 'Where', 'press': 'Press', 'mac': 'iTerm2 on a Mac', 'phone': 'A phone (Termius) or another terminal',
            'or': ' or ', 'then': 'then', 'key': 'Key', 'does': 'What it does', 'nokey': '—',
            'action': 'Name', 'mac_x': 'On a Mac (⌘)', 'phone_x': 'On a phone (⌃] then)', 'space': 'Space',
-           'home': 'From any screen: the home machine\'s command line ($HOME), no session or hub needed; again to come back'},
+           'home': 'From any screen: the home machine\'s command line ($HOME), no session or hub needed; again to come back',
+           'rows': 'Rows of the panel (pick one, ↵ — or type its name): '},
 }
 _GEN_CACHE = {}
 
@@ -343,7 +345,8 @@ def _keymap_rows():
 def _ui(lang):
     if lang not in _GEN_CACHE:
         env = dict(os.environ, FLEET_UI_LANG=lang)
-        raw = subprocess.run(['bash', os.path.join(REPO, 'bin', 'fleet-ui-lang.sh'), 'dump', 'view_keys', 'keys_switch_'],
+        raw = subprocess.run(['bash', os.path.join(REPO, 'bin', 'fleet-ui-lang.sh'), 'dump', 'view_keys', 'keys_switch_',
+                              'view_cmd_'],
                              capture_output=True, env=env).stdout.decode('utf-8').split('\0')
         _GEN_CACHE[lang] = dict(zip(raw[0::2], raw[1::2]))
     return _GEN_CACHE[lang]
@@ -386,18 +389,23 @@ def gen_block(name, lang):
                 rows.append('| %s | %s |' % (code(head), rest))
             else:
                 rows.append('| %s | %s |' % (w['nokey'], item))
-        # ⌘\ · ⌃\ (EPIC T651 C3): the home shell — dash-keymap.sh's `home` row, fleet_keys.HOME_CHORD
-        mac = next((l.split()[1] for l in _keymap_rows() if l.split()[:1] == ['home']), '')
-        rows.append('| %s | %s |' % (w['or'].join(code(k) for k in (mac, glyph(fk.HOME_CHORD, lang)) if k), w['home']))
+        # T685: every other action is a row of the panel — 新会话 · 回家命令行 · 退出 fleet
+        panel_rows = [ui.get(k, '') for k in ('view_cmd_blank', 'view_cmd_home', 'view_cmd_quit')]
+        rows.append('| %s | %s |' % (w['nokey'], w['rows'] + ' · '.join(r for r in panel_rows if r)))
         return '\n'.join(rows) + '\n'
     if name == 'keys-extra':
         rows = ['| %s | %s | %s | %s |' % (w['action'], w['does'], w['mac_x'], w['phone_x']), '|---|---|---|---|']
-        for action, chord, _g, _c in fk.FORWARD:
+        for action, chord, _g, _c in fk.RETIRED:
             desc = ui.get('keys_switch_' + action)
             if not desc or action not in letters:
                 continue  # no words, or not a key a phone can take: not offered here
             rows.append('| %s | %s | %s | %s |' % (code(action), desc, code(glyph(chord, lang)),
                                                     code(glyph('ctrl+]' + letters[action], lang))))
+        # ⌘\ · ⌃\ (EPIC T651 C3): the home shell — dash-keymap.sh's `home` row, fleet_keys.HOME_CHORD
+        mac = next((l.split()[1] for l in _keymap_rows() if l.split()[:1] == ['home']), '')
+        rows.append('| %s | %s | %s | %s |' % (code('home'), w['home'],
+                                                w['or'].join(code(k) for k in (mac, glyph(fk.HOME_CHORD, lang)) if k),
+                                                w['nokey']))
         return '\n'.join(rows) + '\n'
     return None
 

@@ -290,13 +290,12 @@ case $res in *'RC 0'*) st_ok_all "H: ⌘Q (quit, our token) → exit 0" ;; *) st
 case $out in *$'\e]1337;SetProfile=Default\a') st_ok_all "H: the iTerm2 profile back last" ;; *) st_miss "H: profile not restored at the end" ;; esac
 rm -f "$T/clip.on" "$T/echo-input"
 
-# K — the keys (issue #3185, EPIC #3178 C7): each start writes iTerm2's `fleet`
-# profile with ONE ⌘ chord (⌘P) + ⇧↵ — and the ⌘ keys issue #3328 folded into
-# ⌘P, at their old codes (the home turns them into the
-# panel); a FLEET_KEYS_EXTRA's ⌘ chords are there and it rides the remote command's
+# K — the keys (issue #3185, EPIC #3178 C7; T685): each start writes iTerm2's
+# `fleet` profile with ONE ⌘ chord (⌘P) + ⇧↵ — every other ⌘ key is iTerm2's; a
+# FLEET_KEYS_EXTRA's ⌘ chords are there and it rides the remote command's
 # environment to the home, which binds them
 kmap() { python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"])))' "$T/iterm/fleet.json" 2>/dev/null; }
-[ "$(kmap)" = "0x5b-0x100000 0x5c-0x100000 0x5d-0x100000 0x6b-0x100000 0x6e-0x100000 0x70-0x100000 0x71-0x100000 0x74-0x100000 0xd-0x20000 0xf700-0x300000 0xf701-0x300000" ] && st_ok_all "K: the start wrote the profile — ⌘P + ⇧↵ + ⌘\\ + #3328's forwards, nothing else" || st_miss "K: profile keys: $(kmap)"
+[ "$(kmap)" = "0x70-0x100000 0xd-0x20000" ] && st_ok_all "K: the start wrote the profile — ⌘P + ⇧↵, nothing else (T685)" || st_miss "K: profile keys: $(kmap)"
 grep -q 'FLEET_KEYS_EXTRA' "$T/ssh.log" && st_miss "K: no extras, yet the remote command names FLEET_KEYS_EXTRA" || st_ok_all "K: no extras → the remote command as before"
 : > "$T/ssh.log"
 FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+\\' THIN_ARGS='[]' drive keys '[
@@ -304,7 +303,7 @@ FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+\\' THIN_ARGS='[]' drive keys '[
  ["send", "quit\n"],
  ["wait", 10]
 ]'
-[ "$(kmap)" = "0x5b-0x100000 0x5c-0x100000 0x5d-0x100000 0x6b-0x100000 0x6e-0x100000 0x70-0x100000 0x71-0x100000 0x74-0x100000 0xd-0x20000 0xf700-0x300000 0xf701-0x300000" ] && st_ok_all "K: FLEET_KEYS_EXTRA=next=cmd+down → ⌘↓ in the profile (⌃\\ is the terminal's own)" || st_miss "K: profile keys with extras: $(kmap)"
+[ "$(kmap)" = "0x70-0x100000 0xd-0x20000 0xf701-0x300000" ] && st_ok_all "K: FLEET_KEYS_EXTRA=next=cmd+down → ⌘↓ in the profile (⌃\\ is the terminal's own)" || st_miss "K: profile keys with extras: $(kmap)"
 case $(sed -n 1p "$T/ssh.log") in *" m1 FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+"*"' FLEET_CLIENT_CAPS=show bash .claude/fleet/bin/fleet-remote-view.sh attach --thin "*)
   st_ok_all "K: the extras ride the remote command's environment" ;; *) st_miss "K: remote command: $(sed -n 1p "$T/ssh.log")" ;; esac
 

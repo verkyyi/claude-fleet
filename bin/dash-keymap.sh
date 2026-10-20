@@ -46,9 +46,9 @@ fi
 # `dispatch` (issue #2753): ⌘T, 派一件事 — a title, a repo, ↵ files it and opens
 # its worker (bin/fleet-quick-dispatch.py, the writing area's own payload and road);
 # prefix t elsewhere (tmux's clock, no use here). Issue #3328 folded it into ⌘P's
-# ⚡ row: the row stays (its code is never reused) and a 看台 binds it to the panel
-# lit on ⚡; with next prev back fwd new quit it is a forward to the panel
-# (bin/fleet_keys.py FORWARD).
+# ⚡ row: the row stays (its code is never reused). #3328 kept ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘Q ⌘K
+# as forwards to the panel; T685 gave them back to iTerm2 — an older profile's code
+# for one is swallowed (bin/fleet_keys.py RETIRED).
 # `needs` (⌘J / prefix k, code 924) and `help` (⌘/ / prefix ?, code 926) went
 # with issue #2362: the bar's 「! N 等你」 is still a tap to the one waiting, the
 # keys live in docs/dev/CLIENT.md. Their codes stay retired — never reuse 924 / 926:
@@ -59,11 +59,13 @@ fi
 # not a private code — tmux (3.7c) drops a user key while a popup is up, so a code
 # would never reach ⌘P's list or its 新会话 box; the byte does, and in a window it
 # is the 看台's ⌃\ binding (fleet_keys.HOME_CHORD), the same key for a terminal
-# with no ⌘. Neither macOS nor iTerm2 gives ⌘\ a default; the profile takes it.
-# The LAST column (issue #3185, EPIC #3178 C7): `1` = bound by default — quickopen
-# (⌘P, the panel) and home (⌘\, EPIC T651 C3); every other row is bound only when
-# the person names it (fleet.conf [client] FLEET_KEYS_EXTRA, bin/fleet_keys.py). `list` prints the
-# first five columns as it always did; `full` all six; `default` the default actions.
+# with no ⌘. Since T685 it is the panel's 「回家命令行」 row; ⌘\ / ⌃\ only when named.
+# The LAST column (issue #3185, EPIC #3178 C7; T685): `1` = bound by default — ONLY
+# quickopen (⌘P, the panel). The 看台 takes one key (操作者 2026-10-20, T685): every
+# other action is a row of ⌘P's panel (新会话 · 回家命令行 · 退出 fleet …), and every
+# other row here is bound only when the person names it (fleet.conf [client]
+# FLEET_KEYS_EXTRA, bin/fleet_keys.py) — ⌘\ home too. `list` prints the first five
+# columns as it always did; `full` all six; `default` the default actions.
 TABLE='next ⌘↓ 0xf701-0x300000 920 n -
 prev ⌘↑ 0xf700-0x300000 921 p -
 back ⌘[ 0x5b-0x100000 922 h -
@@ -74,15 +76,15 @@ new ⌘N 0x6e-0x100000 928 c -
 fold ⌘. 0x2e-0x100000 929 . -
 quit ⌘Q 0x71-0x100000 931 Q -
 dispatch ⌘T 0x74-0x100000 932 t -
-home ⌘\ 0x5c-0x100000 x1c \ 1'
+home ⌘\ 0x5c-0x100000 x1c \ -'
 # The 看台's ⌃] letters (issue #3006, EPIC #2999 C9): a terminal with no ⌘ — a
 # phone's Termius, an iPad's Blink — reaches a 看台's actions with ⌃] then ONE
 # letter (fleet_view.py's `fleet-view-pfx` table). Not the prefix column above:
 # that is the old client's tmux prefix row, where p is ⌘↑ and Q is shifted; a
 # thumb wants p the list, n / b next and back up the list, q quit. Only the
 # actions a 看台 binds get a letter; every one is a row of the table above.
-# Since issue #3185 only `p` is bound by default (fleet.conf FLEET_KEY_PHONE's
-# `ctrl+]p`); the rest are the letters FLEET_KEYS_PHONE_EXTRA's example spells
+# Only `p` is bound by default (fleet.conf FLEET_KEY_PHONE's `ctrl+]p` — the
+# phone's ⌘P; T685 dropped ⌃空格 and F12); the rest are the letters FLEET_KEYS_PHONE_EXTRA's example spells
 # (`ctrl+]n=next …`), bound only when the person writes them.
 VIEW='quickopen p
 next n

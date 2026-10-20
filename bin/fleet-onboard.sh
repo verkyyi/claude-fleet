@@ -27,7 +27,7 @@
 # The walk is for someone who never wrote code (issue #3332, EPIC #3178 C20): one
 # key, one session opened with their words, two or three minutes — no repo, no
 # issue, no PR. The developer walk (repo → issue → PR) left with #4904.
-#   key     say hello, teach the one key (⌘P · phone ⌃Space) → `look --mark`
+#   key     say hello, teach the one key (⌘P · phone ⌃] p) → `look --mark`
 #   try     they write one thing on ⌘P's ⚡ row and press ↵   → records task= once seen
 #   see     they watch that session work and finish
 #   done    finished — calling the wizard back offers one more

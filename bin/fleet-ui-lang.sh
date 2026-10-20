@@ -432,11 +432,9 @@ fleet_ui_t() {
     en:view_reap_keep) printf 'never closed by itself' ;;
     zh:view_far_fmt) printf '%s 这台还没接上' "${1:-}" ;;
     en:view_far_fmt) printf '%s is not connected yet' "${1:-}" ;;
-    # the keys issue #3328 folded into ⌘P: what a forwarded one says, once
-    zh:view_forward_fmt) printf '%s 已并进 ⌘P' "${1:-}" ;;
-    en:view_forward_fmt) printf '%s is part of ⌘P now' "${1:-}" ;;
-    zh:view_keys_moved) printf '快捷键只剩 ⌘P：翻会话、新任务、shell、退出都在里面（⌘↑↓ ⌘[ ⌘] ⌘T ⌘N 下一版删）' ;;
-    en:view_keys_moved) printf 'One key now, ⌘P: switching sessions, a new task, a shell, quit are all in it (⌘↑↓ ⌘[ ⌘] ⌘T ⌘N go next version)' ;;
+    # T685: the one key left — said once per login (keys_notice)
+    zh:view_keys_moved) printf 'fleet 只用 ⌘P，其余都在面板里' ;;
+    en:view_keys_moved) printf 'fleet uses one key, ⌘P — everything else is in its panel' ;;
     zh:view_gone) printf '这个会话已经不在了' ;;
     en:view_gone) printf 'that session is gone' ;;
     zh:view_new_failed) printf '新会话没开起来' ;;
@@ -522,18 +520,18 @@ fleet_ui_t() {
     zh:view_lang_failed_fmt) printf '语言没换：%s' "${1:-}" ;;
     en:view_lang_failed_fmt) printf 'Language not changed: %s' "${1:-}" ;;
     # the door's one welcome line (issue #3329, L4) — printed only as you come in
-    zh:door_welcome) printf '欢迎回来。⌃空格 打开面板。' ;;
-    en:door_welcome) printf 'Welcome back. ⌃Space opens the panel.' ;;
-    zh:view_door_welcome) printf '欢迎回来。⌃空格 打开面板。' ;;
-    en:view_door_welcome) printf 'Welcome back. ⌃Space opens the panel.' ;;
+    zh:door_welcome) printf '欢迎回来。⌃] p 打开面板。' ;;
+    en:door_welcome) printf 'Welcome back. ⌃] p opens the panel.' ;;
+    zh:view_door_welcome) printf '欢迎回来。⌃] p 打开面板。' ;;
+    en:view_door_welcome) printf 'Welcome back. ⌃] p opens the panel.' ;;
     # the onboarding guide's fixed lines (issue #3332, EPIC #3178 C20): a newcomer
     # who never wrote code — one key, one thing done; only `dev` names code / a PR
     zh:onboard_hello) printf '你好！我是这台电脑上的向导。两三分钟：教你一个键，再帮你把一件事当场做完。' ;;
     en:onboard_hello) printf "Hi! I'm the guide on this computer. Two or three minutes: one key to learn, then one thing done for you, right now." ;;
-    zh:onboard_key) printf '只要记住一个键：电脑上 ⌘P，手机上 ⌃空格。它打开一个面板，你所有的会话都在里面；最底下带 ⚡ 的那一行，用来交代一件新的事。' ;;
-    en:onboard_key) printf 'There is one key to remember: ⌘P on a computer, ⌃Space on a phone. It opens a panel with all your sessions; the ⚡ row at the bottom is where you hand over something new.' ;;
-    zh:onboard_try) printf '现在试一下：按 ⌘P（手机 ⌃空格），直接写一件你想做的事——比如「帮我写一封请假邮件」——然后回车。' ;;
-    en:onboard_try) printf 'Try it now: press ⌘P (phone: ⌃Space), write one thing you would like done — say, "draft an email asking for Friday off" — and press Enter.' ;;
+    zh:onboard_key) printf '只要记住一个键：电脑上 ⌘P，手机上 ⌃] p（先按 ⌃]，再按 p）。它打开一个面板，你所有的会话都在里面；最底下带 ⚡ 的那一行，用来交代一件新的事。' ;;
+    en:onboard_key) printf 'There is one key to remember: ⌘P on a computer, ⌃] p on a phone (⌃], then p). It opens a panel with all your sessions; the ⚡ row at the bottom is where you hand over something new.' ;;
+    zh:onboard_try) printf '现在试一下：按 ⌘P（手机 ⌃] p），直接写一件你想做的事——比如「帮我写一封请假邮件」——然后回车。' ;;
+    en:onboard_try) printf 'Try it now: press ⌘P (phone: ⌃] p), write one thing you would like done — say, "draft an email asking for Friday off" — and press Enter.' ;;
     zh:onboard_sent) printf '收到，它已经在一个新会话里开工了。面板里它那一行是 » 就是在干活，变成 ✓ 就是做完了；按 ⌘P，选它，回车，就能过去看。' ;;
     en:onboard_sent) printf 'Got it — a new session has started on it. In the panel, » on its row means working and ✓ means done; press ⌘P, pick it, Enter, to watch.' ;;
     zh:onboard_done) printf '做完了！以后就这样：⌘P，写一句，回车。' ;;
@@ -542,6 +540,10 @@ fleet_ui_t() {
     en:onboard_more) printf 'Anything else, any time: ⌘P. To come back to me, pick the guide row in ⌘P.' ;;
     zh:view_cmd_quit) printf '⏻ 退出 fleet（会话在后台继续）' ;;
     en:view_cmd_quit) printf '⏻ Quit fleet (sessions keep running)' ;;
+    zh:view_ask_quit) printf '退出 fleet？会话在后台继续 (y/n) ' ;;
+    en:view_ask_quit) printf 'Quit fleet? Sessions keep running (y/n) ' ;;
+    zh:view_cmd_home) printf '⌂ 回家命令行（本机 shell）' ;;
+    en:view_cmd_home) printf '⌂ Home command line (this machine'"'"'s shell)' ;;
     # issue #3327 (EPIC #3178 ④): the ⚡ row's keys line, its no-hit note, its progress
     zh:view_keys_match_fmt) printf '↵ 切到 %s  ↓ 到 ⚡ 预填「%s」  esc 关' "${1:-}" "${2:-}" ;;
     en:view_keys_match_fmt) printf '↵ go to %s  ↓ to ⚡ draft "%s"  esc close' "${1:-}" "${2:-}" ;;
