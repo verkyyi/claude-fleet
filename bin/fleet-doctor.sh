@@ -3560,6 +3560,19 @@ if _tm=$(python3 "$(dirname "$0")/fleet_timing.py" check 2>/dev/null; true) && [
   fi
 fi
 
+# --- 新建耗时: every new session's stages, the 九成分位 of the last 24 h (T684) ----
+# fleet_timing.py p90: each stage since the 看台's ↵ — hub 结论 (placed) · 开窗
+# (window) · 能打字 (typeable) · agent 就绪 (ready); a report, never a verdict (the
+# `timing` row above judges the median). No new-form run in 24 h ⇒ no row.
+if _sp=$(python3 "$(dirname "$0")/fleet_timing.py" p90 session --hours 24 2>/dev/null) && [ -n "$_sp" ]; then
+  info spawn-time "$(printf '%s\n' "$_sp" | awk '{
+    for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
+    s = "新建耗时 近 24 小时 " v["n"] " 次 · 九成"
+    split("placed window typeable ready", k, " "); split("hub 结论|开窗|能打字|agent 就绪", w, "|")
+    for (j = 1; j <= 4; j++) if (k[j] in v) s = s " · " w[j] " " sprintf("%.1fs", v[k[j]] / 1000)
+    print s }') — fleet_timing.py table session shows each run's stages"
+fi
+
 # --- perl Time::HiRes (soft: dash spinner sub-second frames) ---
 if command -v perl >/dev/null 2>&1 && perl -MTime::HiRes -e1 >/dev/null 2>&1; then
   pass perl "Time::HiRes present (sub-second spinner)"

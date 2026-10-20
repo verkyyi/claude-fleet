@@ -444,6 +444,8 @@ fleet_ui_t() {
     # …and why (issue #3458): the spawner's own line, never dropped
     zh:view_new_failed_fmt) printf '新会话没开起来：%s' "${1:-}" ;;
     en:view_new_failed_fmt) printf 'the new session did not open: %s' "${1:-}" ;;
+    zh:view_new_timing_fmt) printf '新会话 %s 秒就能打字' "${1:-}" ;;
+    en:view_new_timing_fmt) printf 'new session: typeable in %ss' "${1:-}" ;;
     zh:view_new_timeout_fmt) printf '%s 秒内没开出来' "${1:-}" ;;
     en:view_new_timeout_fmt) printf 'not open within %ss' "${1:-}" ;;
     zh:view_new_exit_fmt) printf '退出码 %s，没说原因' "${1:-}" ;;

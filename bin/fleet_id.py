@@ -1528,6 +1528,22 @@ def hook_retry_flush(pane, fid):
     wset(pane, "@id_retry", json.dumps(left) if left else None)
 
 
+def hook_timing_ready(pane):
+    """A 看台's new session (T684): the window's @timing_t0 is its ↵; the agent's
+    native session is up now — `ready` under that run (fleet_timing.py), once."""
+    t0 = wopt(pane, "@timing_t0")
+    if not t0:
+        return
+    wset(pane, "@timing_t0")
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import fleet_timing
+        if 0 < time.time() - float(t0) < 3600:
+            fleet_timing.Run("session", float(t0)).at("ready")
+    except (ImportError, ValueError):
+        pass
+
+
 def hook(stdin):
     if os.environ.get("FLEET_ID_HOOK", "1") == "0":
         return
@@ -1561,6 +1577,7 @@ def hook(stdin):
         pg = fold(read(fid))["progress"]
         if pg and pg.get("state") in START_WORDS:
             record_progress(fid, "起来了", "started")
+        hook_timing_ready(pane)
         if ev and ev.get("from") and ev.get("seg") == 1:
             # a new window that resumed another ID's segment is a new ID whose prev is
             # that one (S9; a spawn with --resume already wrote it — first value wins)

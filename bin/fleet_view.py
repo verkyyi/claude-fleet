@@ -2695,7 +2695,7 @@ def do(qo, verb, vid, client="", target=None, new=None):
 
 # --- ⌘N ⌘Q ⌃\ (issue #3004, EPIC #2999 C7) ----------------------------------------------
 
-def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
+def go_new(qo, vid, client="", repo="", agent="", prompt="", draft="", t0=""):
     """⌘N (issue #3119): a NEW session — a no-repo one on this machine, in $HOME
     (dash-raw-session.sh --no-repo, the hub's own origin), then go() onto it: the
     pane is the agent's input. No session is special, so nothing here names a
@@ -2704,18 +2704,24 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
     `repo` (--repo, else --no-repo) and `agent` (--agent, the box's selection);
     nothing is typed. `draft` (an older panel's words, left unsubmitted) is read
     one more version (compat-1v: 下一批删). Explicit `prompt` callers retain
-    seeded starts."""
+    seeded starts.
+    Every start is clocked (T684, fleet_timing.py's `session`): `t0` is the box's
+    ↵ (`--t0`; none ⇒ now), carried down the road as FLEET_TIMING_T0 so each
+    stage — placed · window · typeable · ready — is its time since that ↵."""
     fleet = view_fleet(vid)
     if not fleet:
         return 2
+    run = fleet_timing.Run("session", fleet_timing_t0(t0))
+    os.environ["FLEET_TIMING_T0"] = "%.3f" % run.t0
     if repo and not prompt and new_authority(fleet, vid, repo) == "hub":
         # under hub authority a repo's start is a task record first (issue #4965):
         # a blank one (T652, EPIC T651 C1) is a record titled 「新会话」 with no first
         # turn, renamed by its first prompt. `draft` words: an older panel's send
         # (compat-1v: 下一批删)
-        if draft:
-            return bolt_task(vid, client, repo, agent, draft)
-        return bolt_blank(vid, client, repo, agent)
+        rc = bolt_task(vid, client, repo, agent, draft) if draft else bolt_blank(vid, client, repo, agent)
+        if rc == 0:
+            new_typeable(run, client)
+        return rc
     seam = os.environ.get("FLEET_VIEW_NEW_CMD")
     argv = shlex.split(seam) if seam else ["bash", str(Path(__file__).absolute().parent / "dash-raw-session.sh")]
     chosen = bool(agent)    # the box names both (T670): its choice is the next box's default
@@ -2727,9 +2733,6 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
     named += (["--agent", agent] if agent else []) + (["--prompt", prompt] if prompt else [])
     named += ["--draft", draft] if draft else []
     secs = fenv("FLEET_VIEW_NEW_SECS", 60)
-    # the session's clock (issue #3551): the session started (`start`), then the
-    # view onto it (`go`)
-    clock = fleet_timing.Clock("session")
     try:
         p = subprocess.run(argv + ["--origin", "hub"] + named + ["--print", fleet],
                            stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
@@ -2740,14 +2743,13 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
         rc, w, why = 1, "", say("view_new_timeout_fmt", "%g" % secs)
     except OSError as error:
         rc, w, why = 1, "", str(error)
-    clock.mark("start")
     if rc == 0 and re.fullmatch(r"@[0-9]+", w):
+        run.at("window")
         if chosen and not prompt:
             new_remember(repo, agent)
         went = go(qo, vid, w, "new", client)
-        clock.mark("go")
         if went == 0:
-            clock.done()
+            new_typeable(run, client)
         return went
     # the reason travels (issue #3458): the toast, and stderr — the ⚡ row's popup
     # shows `do new`'s last line, which was nothing, so the panel said no why
@@ -2755,6 +2757,23 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
     toast(client, said)
     print(said, file=sys.stderr, flush=True)
     return 3
+
+
+def fleet_timing_t0(t0):
+    """`do new --t0`'s ↵ (epoch seconds) when it is a recent number, else None (now)."""
+    try:
+        t = float(t0)
+    except (TypeError, ValueError):
+        return None
+    return t if 0 <= time.time() - t < 600 else None
+
+
+def new_typeable(run, client):
+    """The 看台 is on the new session: `typeable` (and `total`, the doctor's
+    `timing` row) under the run, and the time it took, briefly, on the client."""
+    ms = run.at("typeable")
+    fleet_timing.add("session", [("total", ms)], ts=run.t0)
+    toast(client, say("view_new_timing_fmt", "%.1f" % (ms / 1000.0)))
 
 
 def new_remember(repo, agent):
@@ -4050,7 +4069,7 @@ def bolt_argv(qo, vid, client, st, query=""):
     repo, agent = bolt_repo(st), bolt_agent(st)
     cl = ["--client", client] if client else []
     argv = [sys.executable, qo.__file__, "do", "new", "--view", vid] + cl + (["--repo", repo] if repo else []) \
-        + ["--agent", agent]
+        + ["--agent", agent, "--t0", "%.3f" % time.time()]
     return argv, "", " · ".join((repo or say("view_grid_norepo"), agent.capitalize()))
 
 
@@ -4956,7 +4975,7 @@ def main(argv, qo):
     client = opt(argv, "--client")
     if argv[:1] == ["do"] and len(argv) >= 2:
         return do(qo, argv[1], vid, client, opt(argv, "--target"),
-                  {k: opt(argv, "--" + k) for k in ("repo", "agent", "prompt", "draft")})
+                  {k: opt(argv, "--" + k) for k in ("repo", "agent", "prompt", "draft", "t0")})
     if argv[:1] == ["view-peers"]:
         if opt(argv, "--socket"):
             _SOCK[0] = opt(argv, "--socket")
