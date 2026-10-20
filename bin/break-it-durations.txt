@@ -401,6 +401,7 @@
 0.2 tmpdir-shared-root
 1.2 tool-wait-idle
 0.2 train-ack-down
+0.5 nightly-refused-by-runner
 2.2 train-ack-reclaimed
 0.2 train-call-permissions
 0.3 train-derived-red

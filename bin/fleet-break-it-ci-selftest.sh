@@ -21,6 +21,9 @@
 #   train-ack-down      FLEET_TRAIN_RUNNER=fleet-ack but no fleet-ack runner online,
 #                       no token or no answer: the Linux half runs on ubuntu-latest,
 #                       saying 深圳不可用; the variable empty asks nothing (#3864)
+#   nightly-refused-by-runner  the nightly's shards sent to the train's pool, whose
+#                       job gate refused every one: it runs on ubuntu-latest, and a
+#                       shard that never ran is said 拒收, not a red test (T517)
 #   train-ack-reclaimed a spot node reclaimed mid-shard: the lost shard is not red,
 #                       fail-fast waits for its rescue; a test's red still cancels (#3864)
 #   train-shard-timeout  stable far behind, a near-full selection: the train sizes
@@ -1361,6 +1364,57 @@ drill_pr_ack_down() {
   grep -q '^pr_runs_on=' "$d/out" || { WHY="the pick wrote nothing to GITHUB_OUTPUT"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="PR 的重检查：集群最近一句是「在」且不超过 30 分钟、本仓库分支 ⇒ fleet-ack；过期 / 没有 / 不在 / fork ⇒ ubuntu-latest；变量空什么都不读"
+}
+
+# The nightly full run sent to a runner that refuses it (T517, EPIC T516 C1): its
+# shards went to the train's fleet-ack pool, whose job gate takes only the merged
+# train — 2026-10-14..19 every shard was refused before a step and the run read as
+# six red nights of tests. Now it runs on ubuntu-latest, and a shard that never ran
+# is said (拒收 / 没跑) by bin/fleet-nightly-report.py, never read as a red test.
+drill_nightly_refused_by_runner() {
+  CAP=30
+  local t0 d out rc wf
+  wf="$BIN/../.github/workflows/selftests-nightly.yml"
+  grep -Eq 'fleet-train-runner\.sh (pick|lost)|vars\.FLEET_TRAIN_RUNNER' "$wf" \
+    && { WHY="selftests-nightly.yml still sends its shards to the train's pool"; return 1; }
+  awk '/^  linux:/{o=1; next} o && /^  [a-z]/{o=0} o' "$wf" | grep -q '^      runs_on: ubuntu-latest$' \
+    || { WHY="selftests-nightly.yml's Linux shards do not run on ubuntu-latest"; return 1; }
+  grep -q 'fleet-nightly-report.py summary' "$wf" && grep -q 'name: selftests-baseline' "$wf" \
+    || { WHY="selftests-nightly.yml does not read its shards through fleet-nightly-report.py / keep selftests-baseline"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/nightly-refused.XXXXXX"); t0=$(now)
+  # the pool's gate still refuses the nightly — the reason it must not go there
+  out=$(env -i PATH="$PATH" CI_GATE_REPO=o/r CI_GATE_WORKFLOWS='release-train.yml selftests-shards.yml' \
+        GITHUB_REPOSITORY=o/r GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/master \
+        GITHUB_WORKFLOW_REF=o/r/.github/workflows/selftests-nightly.yml@refs/heads/master \
+        bash "$BIN/fleet-ci-job-gate.sh" 2>&1); rc=$?
+  [ "$rc" = 1 ] && case "$out" in *'refused:'*) true ;; *) false ;; esac \
+    || { WHY="the job gate took the nightly (exit $rc): $out"; rm -rf "$d"; return 1; }
+  # every shard refused: no artifact; the job log carries the gate's line
+  mkdir -p "$d/shim" "$d/none" "$d/ran/train-result-Linux-1" "$d/ran/train-result-Linux-2"
+  printf '#!/bin/sh\necho "2026-10-19T00:13:01Z %s"\n' "$out" > "$d/shim/gh"; chmod +x "$d/shim/gh"
+  printf 'board\tsuccess\t\t\t1\nLinux / shard 1\tfailure\t2026-10-19T00:13:00Z\t2026-10-19T00:13:05Z\t11\nLinux / shard 2\tfailure\t2026-10-19T00:13:00Z\t2026-10-19T00:13:06Z\t12\n' > "$d/jobs.tsv"
+  rep() { FLEET_NR_GH="$d/shim/gh" python3 "$BIN/fleet-nightly-report.py" summary --jobs "$d/jobs.tsv" \
+            --planned '[1, 2]' --started 2026-10-19T00:12:48Z --repo o/r --results "$@" 2>&1; }
+  out=$(rep "$d/none"); rc=$?
+  [ "$rc" = 1 ] || { WHY="every shard refused, the report exit $rc: $out"; rm -rf "$d"; return 1; }
+  case "$out" in *'2 片一步没跑（不是测试红）'*'拒收'*'refused:'*) ;;
+    *) WHY="the summary does not say the shards were refused: $out"; rm -rf "$d"; return 1 ;; esac
+  case "$out" in *'红测试 0 个'*) ;; *) WHY="a refusal was counted as red tests: $out"; rm -rf "$d"; return 1 ;; esac
+  # both shards ran, one with a red test: that red is the test's, nothing refused
+  printf 'FAIL  foo-selftest.sh      3.0s (exit 1)\n' > "$d/ran/train-result-Linux-1/train-result.txt"
+  : > "$d/ran/train-result-Linux-2/train-result.txt"
+  printf 'FAIL  foo-selftest.sh      3.0s (exit 1)\nPASS  bar-selftest.sh     12.5s\n' > "$d/ran/train-result-Linux-1/train-times.txt"
+  printf 'PASS  fleet-break-it-x-selftest.sh    40.0s\n' > "$d/ran/train-result-Linux-2/train-times.txt"
+  out=$(rep "$d/ran"); rc=$?
+  [ "$rc" = 0 ] && case "$out" in *'红测试 1 个：foo-selftest.sh'*) true ;; *) false ;; esac \
+    && case "$out" in *'拒收'*|*'没跑'*) false ;; *) true ;; esac \
+    || { WHY="shards that ran with a red test: exit $rc: $out"; rm -rf "$d"; return 1; }
+  # the night's numbers: tests and seconds off the shards' times
+  out=$(python3 "$BIN/fleet-nightly-report.py" baseline --results "$d/ran" --bin "$BIN" --run 7 --sha abc \
+        | python3 -c 'import json,sys; b=json.load(sys.stdin); print(b["tests"], b["seconds_total"], b["seconds_breakit"], b["files"] > 0, b["lines"] > 0)')
+  [ "$out" = '3 55.5 40.0 True True' ] || { WHY="the baseline: $out (want 3 55.5 40.0 True True)"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="夜跑不再排去只收列车的 fleet-ack；分片被拒收时夜跑红、摘要写「拒收，不是测试红」；跑了的红照名字列出；当晚的数存成 selftests-baseline"
 }
 
 cred_run_drills "$0"

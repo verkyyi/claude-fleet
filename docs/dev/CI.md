@@ -9,7 +9,7 @@
 | 开 PR（`.github/workflows/ci.yml`） | 这次改动碰得到的检查：相关的 shell 自测、改到的那几块 Go（块内只测受影响的包）、相关的端到端 | `bin/ci-plan.sh all`，结果在 run 的 `ci-plan` 产物里 | 通过——由「CI 结论」统一判 |
 | 合并后的列车（`release-train.yml`） | PR 上没证明过的自测（`bin/fleet-train-reuse.sh` 复用 PR 的绿），再发布 | `run-selftests.sh --changed <stable> --proven` | 复用的算过，没复用的照跑 |
 | 发布后 15 分钟（`release-watch.yml`，列车 `next` 挪了 stable 就派，自己一条道） | `bin/fleet-release-watch.py`：读入口 `/v1/fleet/release/health`（金丝雀 `fleet.release_canary` 拦住、机器回滚这一版、入口 5xx）并探 `/healthz`；出问题 ⇒ `fleet-release-rollback.sh <stable> --since <上一版>` 整版回退 + 通知（#4915，BREAK-IT `release-bad-spreads`） | 不挑 | — |
-| 每晚（北京 06:17） | 全部：Linux 全量自测（`selftests-nightly.yml`，stable）、Mac 全量（`selftests-macos.yml`）；`ci-nightly.yml`（master）把 `ci.yml` 能调的每一项都整项跑一遍——Go 四块 `-race -count=1`（不读测试缓存）+ Postgres 全部分片、task-acceptance / client-e2e（Linux + macOS）/ fleet-hub-mcp / browser-attachment / hub-rolling / shellcheck 全树 …（不含 oss-scan：它只看 PR 的 diff） | 不挑，全跑 | 没有跳过；红了就是那次运行红（GitHub 的失败通知 + 运行摘要），不开单（#4900） |
+| 每晚（北京 06:17） | 全部：Linux 全量自测（`selftests-nightly.yml`，stable，GitHub 自带的 ubuntu-latest；当晚的数存成 artifact `selftests-baseline`）、Mac 全量（`selftests-macos.yml`）；`ci-nightly.yml`（master）把 `ci.yml` 能调的每一项都整项跑一遍——Go 四块 `-race -count=1`（不读测试缓存）+ Postgres 全部分片、task-acceptance / client-e2e（Linux + macOS）/ fleet-hub-mcp / browser-attachment / hub-rolling / shellcheck 全树 …（不含 oss-scan：它只看 PR 的 diff） | 不挑，全跑 | 没有跳过；红了就是那次运行红（GitHub 的失败通知 + 运行摘要），不开单（#4900） |
 
 拿不准就跑：base 解析不了、git 或 `go list` 出错、`tokenledger/` 下认不出的路径、改了 `bin/ci-plan.sh` 或 `ci.yml` 本身——一律全跑（EPIC #4810 共同约定 7）。
 
