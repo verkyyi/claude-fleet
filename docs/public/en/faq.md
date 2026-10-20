@@ -44,7 +44,7 @@ There is no fixed limit by default: before a new session starts, fleet checks ho
 Yes. Sessions run on the machine, not in your terminal; type `fleet` again and everything is where you left it — you land on the session you looked at last (from any computer or phone), or on a new one if that session has been closed. `fleet quit` closes only the client.
 
 ### Can I use it without GitHub?
-Yes. Sessions that only chat or make pages and documents do not need GitHub; to let a session change code in a repository and open pull requests, install `gh` and run `gh auth login`.
+Yes. Sessions that only chat or make pages and documents do not need GitHub; to let a session change code in a repository and open pull requests, install `gh` and run `gh auth login`. GitHub only hosts the code and the pull requests — tasks and sessions live on the hub; what carries on and what waits when GitHub is unreachable is in [Troubleshooting](troubleshooting.md#when-github-is-unreachable).
 
 ### A session stopped on a question. What now?
 It is most likely waiting for your answer (pick an option, approve an action). The ⌘P panel lists those sessions under "Waiting on you"; select one to see its question.
@@ -64,4 +64,4 @@ No. A self-hosted hub opens straight into the console; the website runs only on 
 Machines and clients follow the stable release: `fleet update` catches up at once, and they catch up by themselves anyway. A switch replaces the programs and background services, never a running session.
 
 ### How do I find out what is broken?
-Run `fleet doctor` first; what each line means and what to do when it is red is in [Troubleshooting](troubleshooting.md). To have someone else look, `fleet debug report` sends the diagnosis to the hub and gives you a short link.
+Run `fleet doctor` first; what each line means and what to do when it is red is in [Troubleshooting](troubleshooting.md). To have someone else look, send the output of `fleet doctor --json` to your admin.

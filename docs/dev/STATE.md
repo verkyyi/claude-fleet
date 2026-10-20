@@ -20,7 +20,7 @@ what a hook could not know retired with issue #2543.)
 
 State lives in one tmux **window option**, `@claude_state`, whose value is one of:
 
-| `@claude_state` | Meaning | Dash glyph | Color |
+| `@claude_state` | Meaning | List glyph | Color |
 |---|---|---|---|
 | `working` | mid-turn — a tool is running or a prompt was just submitted | braille spinner (`⠋…`, animated) | cyan |
 | `done` | turn finished cleanly, nothing pending | `✓` | green |
@@ -33,23 +33,22 @@ quiet colored text — a fleet of seven spinning workers should not shout. See t
 "loud/quiet hierarchy" rule in the README.
 
 A companion option, **`@claude_state_ts`**, is stamped with the epoch second on
-every state write; it drives the dashboard's *"Nm ago"* last-activity column.
+every state write; it drives the task list's *"Nm ago"* last-activity reading.
 
 ### `@claude_needs` — *why* a window is red (issue #640)
 
 The subtype tells the operator how to respond to a red window:
 
-The dash and the sidebar draw ONE red `!` for every kind (issue #1328 — ten state
-glyphs were more than anyone could keep apart); the kind is said in words: the
-hub's act column (`在问你` / `等授权` / `被卡住` / `恢复失败` / `运行失败`) and the
-sidebar's line under the list for the selected row. The window *tab* keeps the
+The task list draws ONE red `!` for every kind (issue #1328 — ten state
+glyphs were more than anyone could keep apart); the kind is said in words
+(`在问你` / `等授权` / `被卡住` / `恢复失败` / `运行失败`) on the row and in ⌘P's panel. The window *tab* keeps the
 glyphs below.
 
 | `@claude_needs` | What is open | Tab glyph | What to do |
 |---|---|---|---|
-| `ask` | an `AskUserQuestion` | `?` | answer it from the dash — `⌃k`, no attach |
-| `perm` | a **permission prompt** | `⊘` | only a human may approve one; `⌃k` shows you *what* is blocked |
-| `blocked` | a worker-declared blocker (#704) | `⊠` | read the issue's `⛔ blocked` comment and send a new prompt when resolved |
+| `ask` | an `AskUserQuestion` | `?` | answer it from the 看台 — ⌘P's question page or `fleet answer`, no attach |
+| `perm` | a **permission prompt** | `⊘` | only a human may approve one; `fleet-permission.sh --show` shows you *what* is blocked |
+| `blocked` | a worker-declared blocker (#704) | `⊠` | read the blocker on its task record (「问过你」) and send a new prompt when resolved |
 | *(empty)* | anything else (an unrecognized `Notification`; an older window's screen-read verdict) | `!` | go look |
 
 `ask` arrives at `set-claude-state.sh` free, off the `PreToolUse` `tool_name`. The
@@ -63,12 +62,12 @@ fires the *identical* `Notification` a blocked `Bash` call does:
 ```
 
 So the `*permission*` match overwrote the `ask` `PreToolUse` had just stamped, and
-the dash showed `⊘` — *"only a human can press this"* — on a question `⌃k` could
-have answered. The first real remote-answer attempt hit exactly that and gave up.
+the row showed `⊘` — *"only a human can press this"* — on a question the
+answerer could have answered. The first real remote-answer attempt hit exactly that and gave up.
 The subtype is now settled against the **transcript**, via
 [`bin/fleet-pending-tool.sh`](../../bin/fleet-pending-tool.sh): the newest `tool_use`
 with no `tool_result`. That is the same rule `fleet-answer.sh` and
-`fleet-permission.sh` already gate on, so **the dash glyph and the two tools that
+`fleet-permission.sh` already gate on, so **the list glyph and the two tools that
 act on it can no longer disagree** — which was the actual defect, not the glyph.
 A pending `AskUserQuestion` ⇒ `ask`; anything else ⇒ the wording's `perm`; and any
 failure (no `python3`, no `transcript_path`, unreadable file) also falls back to
@@ -136,8 +135,8 @@ discriminations so the fast signal does not cry wolf:
   indistinguishable from a real permission prompt; this doc used to say none fired
   at all. #656 measured it, and the `Notification` leg now defends the `ask` this
   path stamped rather than overwriting it.)
-  **Answer it from the dash** (`⌃k` → `bin/dash-answer.sh` → `bin/fleet-answer.sh`,
-  issue #605). A `SendMessage` structurally cannot: a peer message is delivered
+  **Answer it from the 看台** (⌘P's question page or `fleet answer` →
+  `bin/fleet-answer.sh`, issue #605). A `SendMessage` structurally cannot: a peer message is delivered
   *between* turns, and a pending question **is** the turn — measured, the frame
   reaches the pane and only queues (`enqueue` … then `remove … "absorbed_mid_turn"`
   once answered). So the message waits for the answer that waits for the message;
@@ -173,7 +172,7 @@ discriminations so the fast signal does not cry wolf:
   only that *some* dialog is open, so what puts `⊘` on the row is the transcript's
   pending `tool_use` being something other than an `AskUserQuestion` (#656). This is the half #605 left open, and on 2026-09-14 it
   cost a worker its session: the prompt is mid-turn for its whole life, so
-  `SendMessage` queued underneath it, the issue bridge was dead, `fleet-answer.sh`
+  `SendMessage` queued underneath it, `fleet-answer.sh`
   correctly refused (not a question), and `tmux send-keys` is hook-blocked (#437) —
   and a relayed message could not have pressed the key anyway.
   [`bin/fleet-permission.sh`](../../bin/fleet-permission.sh) closes it, without ever
@@ -181,7 +180,7 @@ discriminations so the fast signal does not cry wolf:
   - `--show` makes the **blocked command and the prompt's own reason readable
     without attaching** (the transcript gives the pending `tool_use`; the reason is
     Claude Code's own text and exists only on the screen, so it is scraped with
-    `capture-pane`). This is what `⌃k` falls through to on a `⊘` row.
+    `capture-pane`).
   - `--deny` presses **`No`, and only `No`** — behind `FLEET_ALLOW_AUTO_DENY=1`,
     **off by default**. Refusing a blocked operation destroys nothing; it hands
     control back to the worker, which can then rewrite the command safely (in the
@@ -208,7 +207,7 @@ The hook always exits `0`, so it never blocks or slows a turn.
 `@claude_state` is a plain tmux option — a shared **state bus** on the window.
 Several read-only surfaces render off it; none of them owns it.
 
-### 1. The fzf dashboard — the primary visible surface
+### 1. The task list — the primary visible surface
 
 [`bin/tmux-dashboard-rows.sh`](../../bin/tmux-dashboard-rows.sh) is a **self-contained
 renderer**: it reads `@claude_state` (and `@claude_state_ts`) directly off every
@@ -254,7 +253,7 @@ by `next + max(600, ttl/2)` has stopped; a recurring cron lapses after 7 days. A
 `fleet-loop.py` ledger that will still deliver counts too. `fleet_window_loop`
 (shell) / `fleet_loop_mark.status` (Python) is the one answer. The Stop hook stamps
 `looping` instead of `done` while it is active; `fleet-reap-live.py` answers `retained:loop` before any age or state
-gate; the dash's `k/N` and `fleet-children.sh` count only `done` with no Loop
+gate; the list's `k/N` and `fleet-children.sh` count only `done` with no Loop
 (sleeping / preparing / waking are quiet, not finished). A Codex worker has no
 such tools — its `@loop` stays empty and nothing changes for it.
 
@@ -272,7 +271,7 @@ quiet window is unfinished. At every Stop (and at the mod's own `done` report)
   Claude window at sync time (`fleet_loop_mark.py sweep`). Only adds, never clears.
 - `children` — a sub-task it spawned is not finished: `fleet_window_waiting_children`
   walks the live windows whose `@origin` chain climbs to this window's key (every
-  level, as the dash's `k/N` does) and counts `done` with no live Loop as finished;
+  level, as the list's `k/N` does) and counts `done` with no live Loop as finished;
   a child whose PR merged leaves the count when cleanup reaps it.
 - `bg` — its agent still owns a Bash-tool job (`fleet_window_bg_busy`: the
   `fleet-sleep.py busy` walk behind `fleet_child_busy`'s `bg`, gated on a direct
@@ -526,7 +525,7 @@ Claude Code hooks (PreToolUse / PostToolUse / UserPromptSubmit / Stop / Notifica
       ▼
 set-claude-state.sh  ─►  @claude_state + @claude_state_ts + @claude_needs  (window options)
       ▲                        │  state bus (one source of truth per window)
-      │                        ├──────────────► fzf dashboard  (tmux-dashboard-rows.sh)
+      │                        ├──────────────► task list  (tmux-dashboard-rows.sh)
       │                        │                 self-contained glyph renderer
       │                        ├──────────────► spinner daemon (tmux-spinner.sh, 0.12s)
       │                        │                 needs tally  →  ● N badge  (@attn_needs)
@@ -666,22 +665,6 @@ a `ui.render` hook is pure: a state write made while it is drawing is denied. A
 render hook also has to `read()` its atom on **every** draw, before any early
 return, because that read is what subscribes it to redraws.
 
-**Task-progress band** (#1339, trimmed in #1527; `hooks/progress.tsx` +
-`progress-model.ts`). Above the prompt it shows one segment, this issue's PR:
-`PR #<n> ✓|✗!|…` (plus `冲突!` / `落后` / `待审` / `草稿`, or `已合并` /
-`已关闭`). The task number, EPIC k/N, children k/N and context % used to sit
-beside it; the top-right corner and the sidebar already show those, so the
-band no longer repeats them. A window with no PR — the hub, a scratch, an
-issue not yet pushed — draws nothing, and the row takes no height. Every 10s
-it refreshes with one `tmux display-message ; list-windows` call and `$.fs`
-reads of the dash's `prmap` and the children ledger. It makes no network
-calls and writes nothing outside the mod. Children are the windows whose
-`@origin` names this one, plus any ledger rows, bucketed as
-`fleet-children.py` buckets them — they no longer draw, but every window
-(hub and scratch included) still toasts once when a child goes to `!`, as
-does an issue window when its PR's checks go red. A toast fires again only
-after that condition has cleared and come back.
-
 ## Related
 
 - **Auto-handoff nudge (#330).** `set-claude-state.sh`'s `done` branch also emits
@@ -746,11 +729,11 @@ after that condition has cleared and come back.
 - **The hub is warned, never cleared (#1319).** A pane with no `@issue`, no
   `@raw` and not a panel has no `/fleet-handoff` cycle to fire and is where the
   operator types, so at the handoff line (`FLEET_AUTO_HANDOFF_PCT` / `_TOKENS`)
-  its Stop is never blocked: it gets `@ctx_warn=1` (dash row `⚠ ctx`), ONE
+  its Stop is never blocked: it gets `@ctx_warn=1` (list row `⚠ ctx`), ONE
   `FLEET_NOTIFY_CMD` message naming `/fleet-handoff` (the hub's doc goes to FILE
   storage) and one `hub-warn` ladder row. `@ctx_warn` is the once-per-climb latch:
   the first Stop under the line, or `SessionStart(clear|startup)`, unsets it.
   `FLEET_HUB_CTX_ACTION=off` turns it off (default `notify`).
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the shared-vs-per-fleet split and the
   many-fleets-on-one-machine model.
-- [TERMS.md](TERMS.md) — definitions of collector / hub / dash.
+- [TERMS.md](TERMS.md) — definitions of collector / hub / task record.

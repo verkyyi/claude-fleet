@@ -123,7 +123,7 @@ fleet conf 也被剥掉。现在两者都由 fleet 自己那一行决定，**fle
 | 领域 | 本机（local） | 联机（hub） | 读哪里 |
 |---|---|---|---|
 | **派单**（开 issue 会话） | GitHub 认领就是锁；开在这台机器 | 先拿入口租约（一个 issue 只在一台机器上开），再按 `--node` ▸ `FLEET_SPAWN_NODE` ▸ `auto` 问入口开在哪；入口不通 → 开在这里 | `dash-issue-session.sh` → `fleet_hub_lease` / `fleet_hub_place`（`fleet_hub_on <sess>`） |
-| **临时会话** | 开在这台机器 | 同派单：按 `--node` ▸ `FLEET_SPAWN_NODE` ▸ `auto` 问入口开在哪（#1541）——**不拿租约**（临时会话没有 issue），入口按 `<repo> scratch <fleet UUID>` 挑机器，`scratch-N` 的号由开出来的那台机器分配；入口不通 → 开在这里。带 `--prompt` 的和无仓库的临时会话只开在本机（点名别的机器会被拒绝）。侧边栏「新建到 mac-a…」弹窗里按 ⌃s 就是在 mac-a 开一个临时会话 | `dash-raw-session.sh` → `fleet_hub_place … scratch`；对端 `fleet-control-read.sh start … scratch` |
+| **临时会话** | 开在这台机器 | 同派单：按 `--node` ▸ `FLEET_SPAWN_NODE` ▸ `auto` 问入口开在哪（#1541）——**不拿租约**（临时会话没有 issue），入口按 `<repo> scratch <fleet UUID>` 挑机器，`scratch-N` 的号由开出来的那台机器分配；入口不通 → 开在这里。带 `--prompt` 的和无仓库的临时会话只开在本机（点名别的机器会被拒绝） | `dash-raw-session.sh` → `fleet_hub_place … scratch`；对端 `fleet-control-read.sh start … scratch` |
 | **订阅** | 这个登录 `accounts/` 里的账号（`local` 类） | 同左，另加入口池里的 `hub:<label>` 账号（`pool` 类，入口发短期凭据）。按会话选「只用本地 / 只用池 / 都行」：`dash-issue-session.sh --account local\|pool\|any`（#1540）——盖在窗口 `@account_class` 上，`fleet-claude.sh` 据此只在那一类里挑；派到别的机器时 `ccquota place --account` 带过去，那台机器照样只在那一类里挑；`pool` 但本登录没有池账号 → 拒绝启动，不会悄悄落到本地订阅 | `fleet-account.sh`（`FLEET_ACCOUNT_CLASS` 过滤 `acct_labels`） |
 | **列表来源** | 本机窗口 | 家机器上的当前看台读取本机窗口和入口的会话缓存 | `tmux-dashboard-rows.sh`、`fleet_view.py` |
 | **取数** | 无 | 采集器在**至少一个** fleet 联机时跑 `hubsess` 阶段；`fleet-hub-sessions.sh` 只给联机的 fleet 写 `remote_<sess>` | `tmux-dash-collect.sh`（`fleet_hub_any`） |
@@ -140,7 +140,7 @@ fleet conf 也被剥掉。现在两者都由 fleet 自己那一行决定，**fle
 - 一个 fleet 联机、其余本机：登录不设，fleet conf 写 `CCQUOTA_FLEET=1`。
 - 整个登录联机、某个 fleet 留在本机：登录 `export CCQUOTA_FLEET=1`，那个 fleet 的
   conf 写 `CCQUOTA_FLEET=0`。
-- prefix+c 的配置面板里两键都是 fleet 级（`@scope=fleet`），写进当前 fleet 的 conf。
+- 两键都是 fleet 级（`@scope=fleet`），写进当前 fleet 的 conf。
 
 ## 守护
 
@@ -158,5 +158,5 @@ fleet conf 也被剥掉。现在两者都由 fleet 自己那一行决定，**fle
   与派单同一套分支，全程不调租约；入口派来的 start 不再二次问入口。入口侧
   `TestNodePlaceScratch*`（`fleet_place_test.go`）、节点侧
   `test_start_scratch_opens_a_raw_session`（`fleet-hub-selftest.py`）。
-- `bin/tmux-config-selftest.sh` 核对 global-only 名单与 `fleet.conf.example` 的
+- `bin/conf-surface-selftest.sh` 核对 global-only 名单与 `conf/fleet.conf.reference` 的
   `@scope=global` 标签同步。

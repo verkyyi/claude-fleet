@@ -4,43 +4,44 @@
 
 **设计蓝图：**[Fleet 产品方向与设计原则](docs/dev/PRODUCT-DIRECTION.md)是后续产品设计的依据。下文介绍当前实现。
 
-**用 AI 订阅，让小团队多任务并行、快速迭代。**
+**共享团队的 AI 订阅，让会话在云端跑。**
 
-claude-fleet 把 **Claude Code / Codex CLI、tmux、Git worktree 和 GitHub Issues** 串成一套开发工作流：一个任务对应一个会话、一份独立工作目录；功能、修复、测试和文档各自推进，你在统一看板里分派任务、查看进度，通过 PR 汇合成果。
+claude-fleet 只做两件事：**订阅共享**——一个小团队的 Claude、ChatGPT/Codex 订阅合成一个池子，按余量计量和分配；**云端 Runtime**——Claude Code 和 Codex CLI 的会话跑在托管机器上，一件任务一个会话、一份独立的 Git worktree，合上笔记本也照常干活。你从终端（`fleet`）、手机或网页控制台接进来。
 
-核心工作流使用 CLI 的**订阅登录，无需另配模型 API Key**。多个 Claude 订阅账号可以组成账号池，结合 5 小时／7 天额度安排新会话、提前轮换和恢复任务。Codex 共用任务隔离、Issue 与 PR 流程；**Codex 的账号轮换和额度管理尚未接入**，详见[能力表](README.md#agents-claude-code-and-codex)。
+**任务是 hub 上的一条记录 `T<n>`，归人，不归仓库。** 你说要做什么（⌘P 面板的 ⚡ 行、网页控制台，或在别的会话里用 `task` 工具），入口先记下这条记录，再开出做这件事的会话。指定了仓库的任务在该仓库的 worktree 里改代码、提交 PR——**GitHub 只托管代码和 PR**；不认领、不评论、不关闭 GitHub issue。不绑仓库的任务（做页面、写文档、对话）完全不需要 GitHub。
 
-例如，让一个会话修复登录问题，另一个补充导出功能的测试，再让一个完善文档。它们各自在自己的分支和工作目录里推进，通过 PR 交付；团队继续用 GitHub Issues 和 PR 留下需求、讨论和变更记录。
+核心工作流使用 CLI 的**订阅登录，无需另配模型 API Key**。多个 Claude 订阅账号可以组成账号池，结合 5 小时／7 天额度安排新会话、提前轮换和恢复任务；Codex 的账号目录按原生额度余量选择。详见[能力表](README.md#agents-claude-code-and-codex)。
 
 项目来自一台常开 Mac mini 上的持续开发实践。本机 Transcript 核算记录到：**历史峰值 25 个 Claude 主 Session，在 25 份独立任务目录中并行处理任务**（2026 年 9 月 1 日）；另一次记录中，至少 **15 个任务连续并行约 14.46 分钟**。统计的是 CLI 处理轮次重叠，详见[实证数据与统计口径](docs/dev/USAGE-EVIDENCE.md#中文说明)。
+
+**只想用、不想部署？** 使用说明在 [`docs/public/zh/`](docs/public/zh/index.md)：成员、管理员、自托管各有入口。
 
 [快速上手](#快速上手) · [小团队并行工作流](#小团队并行工作流) · [实证数据](docs/dev/USAGE-EVIDENCE.md#中文说明) · [常用快捷键](#常用快捷键) · [配置与多仓库](#配置与多仓库) · [订阅与额度](#订阅账号池与额度管理) · [更多文档](#更多文档)
 
 ## 它能帮你做什么
 
-- **并行推进多个任务。** 每个 worker（执行任务的 AI 会话）使用独立的 Git worktree，也就是同一仓库的一份独立工作目录；不同任务的未提交修改互不混在一起。
-- **一眼看出谁需要你。** 青色转动符号表示正在工作，绿色 `✓` 表示一轮对话结束，红色 `!` 和铃声表示等待你处理，靛蓝色表示 `/loop` 正在等待下一轮。窗口按紧急程度排序。
-- **集中查看进度。** dashboard（任务看板）展示会话状态、关联 Issue、模型、PR/CI 状态和可用的上下文用量信息。后台采集器维护缓存，看板读取缓存展示。
-- **随时开一个探索会话。** 不确定需求时，先用 scratch（临时会话）讨论、实验；明确后可将同一会话绑定到 Issue，保留已有上下文继续实现。
+- **并行推进多个任务。** 每件任务一个会话；指定了仓库的，再给它一份独立的 Git worktree（同一仓库的一份独立工作目录），不同任务的未提交修改互不混在一起。
+- **一眼看出谁需要你。** 青色转动符号表示正在工作，绿色 `✓` 表示一轮对话结束，红色 `!` 和铃声表示等待你处理，靛蓝色表示 `/loop` 正在等待下一轮。任务列表把需要你的会话排在前面。
+- **在哪都能接着看。** `fleet` 打开看台：右边是当前会话，旁边是任务列表，⌘P 面板里切换会话、派任务、回答问题、开 shell。别的机器上的会话也在同一个列表里；手机和网页控制台看到的是同一套。
 - **把订阅额度纳入调度。** 注册多个 Claude 账号后，可在账号限额时迁移会话；接入 TokenLedger（`ccquota`）后，还能按账号余量分配新任务、提前预警和轮换、安排窗口错峰，并按需暂停入口远程开会话。详见[订阅与额度管理](#订阅账号池与额度管理)。
-- **管理收尾和长期运行。** worker 通过 PR 交付；后台清理符合条件的已结束任务。Claude Code 会话可通过 `/fleet-handoff` 保存交接信息，跨上下文窗口继续工作。
+- **管理收尾和长期运行。** 会话通过 PR 交付，门禁全绿后自己合并、在任务记录上回报；后台清理合并后的窗口和 worktree。Claude Code 会话可通过 `/fleet-handoff` 保存交接信息，跨上下文窗口继续工作。
 
 ## 快速上手
 
 ### 1. 准备环境
 
-支持 macOS 和 Linux，分别使用 launchd 和 systemd 用户服务运行后台组件。先确认本机的 `claude` 能正常对话，并能访问团队使用的 GitHub 仓库。
+支持 macOS 和 Linux，分别使用 launchd 和 systemd 用户服务运行后台组件。先确认本机的 `claude` 能正常对话。
 
 | 依赖 | 用途 |
 |---|---|
 | Git | 分支、worktree 和代码交付 |
 | tmux ≥ 3.2 | 承载多个会话、窗口和状态栏 |
-| [fzf](https://github.com/junegunn/fzf) ≥ 0.45 | 交互式看板和弹窗 |
-| [GitHub CLI（gh）](https://cli.github.com/)，已登录 | 只有放在 GitHub 上的仓库才要：读取和管理 Issues、PR、CI 状态 |
+| [fzf](https://github.com/junegunn/fzf) ≥ 0.59 | 弹窗里的选择器 |
+| [GitHub CLI（gh）](https://cli.github.com/)，已登录 | 只有放在 GitHub 上的仓库才要：推代码、开 PR、看 CI、合并 |
 | Python 3 | 部分脚本和 hooks |
 | [Claude Code](https://claude.com/claude-code)（`claude` 命令） | 执行开发任务，也用于辅助安装 |
 
-仓库在 GitHub 上时，可用 `gh auth status` 检查 GitHub 登录状态，未登录时先运行 `gh auth login`；仓库在别处（其他代码托管、ssh 上的裸仓库、本机文件夹）就不需要 `gh`——单子放在入口，fleet 自己并主干。核心功能不要求单独安装 `jq`；可选的 Claude Code 状态行需要它。Perl 的 `Time::HiRes` 也是可选依赖，用于更平滑的转动动画。
+仓库在 GitHub 上时，可用 `gh auth status` 检查 GitHub 登录状态，未登录时先运行 `gh auth login`；仓库在别处（其他代码托管、ssh 上的裸仓库、本机文件夹）就不需要 `gh`——fleet 自己并主干。核心功能不要求单独安装 `jq`；可选的 Claude Code 状态行需要它。Perl 的 `Time::HiRes` 也是可选依赖，用于更平滑的转动动画。
 
 ### 2. 让 Claude 按安装手册完成安装
 
@@ -50,7 +51,7 @@ cd claude-fleet
 claude "请按照 docs/dev/INSTALL.md 在这台机器上安装 claude-fleet，并用中文说明配置和验证结果。"
 ```
 
-安装流程以 [docs/dev/INSTALL.md](docs/dev/INSTALL.md) 为准。Claude 会检查依赖，配置 `~/.claude/fleet/`、tmux、Claude Code hooks 和后台服务，并在修改前说明涉及的文件。准备好你的业务仓库名（如 `your-org/your-repo`）、本地路径和主分支信息。
+安装流程以 [docs/dev/INSTALL.md](docs/dev/INSTALL.md) 为准。Claude 会检查依赖，配置 `~/.claude/fleet/`、tmux、Claude Code hooks 和后台服务，并在修改前说明涉及的文件。准备好你的业务仓库名（如 `your-org/your-repo`）、本地路径和主分支信息。只想在一台电脑上试用，也可以照 [自托管 · 快速开始](docs/public/zh/self-host/quickstart.md) 用一行命令装。
 
 安装后运行诊断，检查依赖、服务和安装版本：
 
@@ -62,17 +63,15 @@ sh ~/.claude/fleet/bin/fleet-doctor.sh
 
 ### 3. 为你的业务仓库启动 fleet
 
-将下面的 `your-org/your-repo` 替换为团队实际使用的 GitHub 仓库：
+将下面的 `your-org/your-repo` 替换为团队实际使用的仓库：
 
 ```sh
 ~/.claude/fleet/bin/fleet-up.sh your-org/your-repo
 ```
 
-它会在 `~/projects/your-repo` 克隆或复用匹配的仓库，创建并进入名为 `fleet-your-repo` 的 fleet。也可以在命令末尾加上已有仓库的路径。主分支优先从 GitHub 的默认分支读取。
+它会在 `~/projects/your-repo` 克隆或复用匹配的仓库，把它登记进这个登录唯一的 fleet。也可以在命令末尾加上已有仓库的路径。主分支优先从 GitHub 的默认分支读取。
 
-一个 **fleet 对应一个 GitHub 仓库、一个 tmux session，以及一个独立的 tmux socket**。进入后看到的 `plan` 是承载看板的 hub（控制中心）；从这里打开任务会话。
-
-日常用 `fleet` 回到已有的 fleet（旧的 `cf` 快捷函数 `shell/cw.zsh` 已去掉，#4902）。
+**一个登录一个 fleet**：一个 tmux session、一个独立的 tmux socket，这个登录用到的所有仓库都在里面（`fleet-repo.sh add` 再加）。之后每天用 `fleet` 进来。
 
 <a id="中文团队工作流"></a>
 
@@ -80,14 +79,14 @@ sh ~/.claude/fleet/bin/fleet-doctor.sh
 
 ### 拆成可以独立交付的任务
 
-例如同时推进登录修复、订单导出测试和部署文档：为每个任务写一条 Issue，各自启动 worker，在统一看板查看进度。需要改同一接口时，先明确依赖和合并顺序；并行数量由任务可拆分程度、机器资源、订阅余量和团队评审能力共同决定。
+例如同时推进登录修复、订单导出测试和部署文档：各派一件任务，各自一个会话，在任务列表里看进度。需要改同一接口时，先明确依赖和合并顺序；并行数量由任务可拆分程度、机器资源、订阅余量和团队评审能力共同决定。
 
 ### 写清楚任务和验收条件
 
-在团队仓库创建 GitHub Issue，把背景、范围和验收条件写清楚。可以直接使用这样的中文描述：
+派任务时把背景、范围和验收条件写进任务的原话里——这段话就是任务记录的正文，会话第一轮读到的就是它。可以直接这样写：
 
 ```markdown
-标题：修复订单列表切换筛选条件后页码未重置的问题
+修复订单列表切换筛选条件后页码未重置的问题
 
 背景：
 用户在第 3 页切换订单状态后，仍停留在第 3 页，可能看到空列表。
@@ -102,114 +101,77 @@ sh ~/.claude/fleet/bin/fleet-doctor.sh
 - 切换状态后，请求使用第 1 页。
 - 普通翻页不受影响。
 - 补充相关回归测试，并运行项目规定的检查。
-
-沟通：
-请使用简体中文说明进度、问题和 PR 内容，代码标识符遵循项目现有风格。
 ```
 
 建议先用 2–3 个边界清楚、依赖较少的任务试跑。涉及同一接口或核心模块的修改，先约定依赖和合并顺序；worktree 隔离工作目录，最终合并仍可能有冲突。
 
-### 从待办面板启动 worker
+### 派任务
 
-按 `prefix b` 打开 backlog，选中 Issue 后按 `Enter`。fleet 会创建独立 worktree、绑定并认领 Issue，再启动 worker 阅读需求并实现。
+按 ⌘P（手机或别的终端：`⌃空格`、`F12` 或 `⌃] p`）打开面板，选「⚡ 新会话」，写下任务、选仓库和 Agent。入口先写下任务记录 `T<n>`，再在合适的机器上开出会话。会话之间也能互相派：在会话里用 `task` 工具，结果回报给派它的那个会话。
 
-这里的 `prefix` 是你的 tmux 前缀键；没有改过时通常是 `Ctrl-b`。例如 `prefix b` 表示先按 `Ctrl-b`，松开后再按 `b`。
+### 在面板里处理需要你判断的事
 
-在 backlog 中，`Space` 展开 Issue 预览，`/` 开始筛选，`Ctrl-N` 快速创建一行 Issue。复杂任务适合先补全 Issue 正文，再交给 worker。
-
-### 在看板里处理需要你判断的事
-
-按 `prefix g` 回到看板，选中会话后按 `Enter` 进入。`prefix a` 跳到最需要你关注的窗口。
+面板按「你该做什么」分组：等你的在最上面，选中那一行就看到它在问什么，`Tab` →「回答…」不用切过去就能答。
 
 | 状态 | 含义 | 你可以做什么 |
 |---|---|---|
 | 青色转动符号 | 正在工作 | 继续查看其他任务 |
-| 红色 `!` / 红色 `● N` | 有会话等待你处理 | 进入会话回答问题或处理阻塞 |
-| 绿色 `✓` | 一轮对话结束 | 查看结果；是否完成交付以 PR/CI 为准 |
+| 红色 `!` | 有会话等待你处理 | 回答问题或处理阻塞 |
+| 绿色 `✓` | 一轮对话结束 | 查看结果；是否完成交付以 PR/CI 和任务记录为准 |
 | 靛蓝色 | `/loop` 等待下一轮 | 按需查看循环任务 |
-| 橙色 `● N` | 其他 fleet 有会话需要你 | 点击跳转；多个 fleet 等待时会显示选择器 |
 
 ### 通过 PR 交付
 
-worker 的默认流程是：认领 Issue → 实现 → 验证 → 提交 PR → 检查通过后自行合并。主 checkout 受只读保护，代码修改发生在任务的 worktree 中；合并后的清理由后台组件处理。
+会话的默认流程是：读任务记录 → 实现 → 验证 → 提交 PR → 门禁全绿后自行合并 → 在任务记录上回报。主 checkout 受只读保护，代码修改发生在任务的 worktree 中；合并后的清理由后台组件处理。
 
-**团队需要人工评审时，请在 GitHub 仓库设置必需评审和分支保护，并把交付要求写进项目约定。** 默认 worker 流程包含合并步骤，应与团队已有的 PR 规则配合使用。
+**团队需要人工评审时，请在 GitHub 仓库设置必需评审和分支保护，并把交付要求写进项目约定。** 默认流程包含合并步骤，应与团队已有的 PR 规则配合使用。
 
-### 需求还不明确时，先开 scratch
+### GitHub 不通的时候
 
-在看板底部输入一个名字，例如 `讨论订单导出`，然后按 `Enter`，会创建同名的 scratch 会话，并将完整文字预填到新会话的首行输入框。你可以继续编辑，再按 `Enter` 发送。窗口名称支持中文和空格，最多显示 24 列，约 12 个常见汉字；预填文字不会按这个长度截断。
-
-**预填内容是待发送草稿，不会自动发送。** `Ctrl-S` 可创建使用自动编号、输入框为空的 scratch。它同样拥有独立、可写的 worktree。
-
-需求明确后，让 agent 用 `task` 工具把它派成一个任务：会话开在 hub 的任务记录 `T<n>` 上（#4898 起 fleet 不再建、认领 GitHub Issue）。
+任务、会话、订阅和看台都走入口，不受影响；只有推代码、开 PR、看 CI 和合并在等，通了以后会自己接上。详见 [故障排查 · GitHub 连不上的时候](docs/public/zh/troubleshooting.md#github-连不上的时候)。
 
 ### 让中文沟通贯穿整个任务
 
-无需额外开启中文开关：worker 的启动规则会要求它**使用 Issue 的语言回复**。会话恢复、自动交接和配额通知等自动化消息也带有保持原会话语言的指令，交接文档会记录语言。实现见 [bin/fleet-lang.sh](bin/fleet-lang.sh)。
+无需额外开启中文开关：会话的启动规则会要求它**使用任务原话的语言回复**。会话恢复、自动交接和配额通知等自动化消息也带有保持原会话语言的指令，交接文档会记录语言。实现见 [bin/fleet-lang.sh](bin/fleet-lang.sh)。
 
-中文团队可以用中文撰写 Issue、验收条件和评审意见，并在项目的 `CLAUDE.md` 中约定反馈和 PR 描述的语言；使用 Codex 时，对应的项目说明文件是 `AGENTS.md`。命令、配置键、代码标识符和标签名保留原文，方便直接操作和检索。例如优先级标签仍使用 `priority:p0`、`priority:p1`、`priority:p2`。
-
-这里的中文支持包括文档、中文任务和会话语言保持；**看板、配置菜单及部分系统提示尚未全部汉化**。
+中文团队可以用中文写任务、验收条件和评审意见，并在项目的 `CLAUDE.md` 中约定反馈和 PR 描述的语言；使用 Codex 时，对应的项目说明文件是 `AGENTS.md`。命令、配置键和代码标识符保留原文，方便直接操作和检索。
 
 ### 多人、多机器如何协作
 
-团队可以由一位操作者在常开的开发机上管理 fleet，也可以各自在自己的机器上运行 fleet，通过同一个 GitHub 仓库的 Issues 和 PR 共享进度。
-
-启动 worker 时，fleet 默认会检查 Issue 的认领状态、认领评论和已有 PR，尽量避免另一台机器重复开工。这是尽力去重机制，并非分布式锁；同一任务仍应明确交给一个负责人或 worker。每台机器分别维护自己的安装和配置。
+任务归人：每个人的任务记录在入口上，会话开在入口分给他的机器上；别的机器上的会话出现在同一个列表里。同一个仓库的代码和 PR 在 GitHub 上汇合。
 
 ## 常用快捷键
 
-| 位置 | 按键 | 用途 |
+| 在哪 | 按键 | 用途 |
 |---|---|---|
-| tmux | `prefix a` | 跳到最需要你处理的窗口 |
-| tmux | `prefix g` | 聚焦看板，再按一次切换全屏 |
-| tmux | `prefix b` | 打开 GitHub 待办面板 |
-| tmux | `prefix c` | 打开配置面板 |
-| tmux | `prefix ?` | 查看完整快捷键说明 |
-| 任意窗口 | `F9` | 返回 hub 的看板，并切换缩放 |
-| 看板 | `Enter` | 输入框为空时进入选中会话；有文字时以它为名新建 scratch，并预填为待发送草稿 |
-| 看板 | `Ctrl-N` | 创建 Issue 并启动关联 worker |
-| 看板 | `Ctrl-S` | 新建自动命名的 scratch |
-| 看板 | `Ctrl-V` | 切换此 fleet 新会话默认使用的 agent |
-| 待办面板 | `Enter` / `Space` | 启动 Issue 任务 / 切换预览 |
-| 待办面板 | `Ctrl-Y` | 循环调整优先级：无 → p2 → p1 → p0 |
-| 看板或待办面板 | `?` | 查看快捷键说明 |
+| Mac 上的 iTerm2 | `⌘P` | 打开面板：切换会话、派任务、回答、开 shell、退出 |
+| 手机或别的终端 | `⌃空格` / `F12` / `⌃] p` | 同上 |
+| 面板 | `↵` | 切到选中的会话 |
+| 面板 | `Tab` | 选中行的操作（回答、改名、回收、开 shell…） |
+| 面板 | `?` | 图例 |
 
-看板中的 `Ctrl-` 快捷键如果与个人 tmux 前缀冲突，会切换到对应的 `Alt-` 组合，以 `?` 显示的实际按键为准。
-
-默认开启鼠标支持：点击底部 `⌂` 返回控制中心，点击 fleet 名切换仓库，点击用量数字查看用量和账号。窗口编号可能变化，按名字识别任务更可靠。
+完整的键和自定义见 [日常使用](docs/public/zh/member/usage.md) 和 [客户端说明](docs/dev/CLIENT.md)。
 
 ## 配置与多仓库
 
 全局配置位于 `~/.claude/fleet/fleet.conf`，常用项见 [fleet.conf.example](fleet.conf.example)，全部选项与默认值见 [conf/fleet.conf.reference](conf/fleet.conf.reference)。常用配置示例：
 
 ```sh
-FLEET_REPO="your-org/your-repo"       # Issues 和 PR 所在仓库
+FLEET_REPO="your-org/your-repo"       # 第一个仓库：代码和 PR 所在
 FLEET_MAIN="$HOME/projects/your-repo" # 主 checkout，worktree 创建在它旁边
 FLEET_BASE_BRANCH="main"             # 按仓库实际主分支填写
 FLEET_GLOBAL_MAX_SESSIONS=8           # 本机并发会话总上限；试跑时可调小
 FLEET_AGENT="claude"                 # 新会话默认使用的 agent
 ```
 
-每个 fleet 的独立配置位于 `~/.config/claude-fleet/fleets/<session>/conf`，覆盖全局同名设置。日常可以通过 `prefix c` 修改，并注意当前编辑的是全局层还是当前 fleet。
-
-一台机器可以同时运行多个仓库，各有自己的 fleet 和 tmux socket，后台采集服务共用。比如为第二个仓库启动 fleet：
+每个仓库的配置在 `~/.config/claude-fleet/fleets/<session>/repos/<slug>.conf`，覆盖全局同名设置。再加一个仓库：
 
 ```sh
-~/.claude/fleet/bin/fleet-up.sh your-org/infra "$HOME/projects/infra"
+~/.claude/fleet/bin/fleet-repo.sh add your-org/infra "$HOME/projects/infra"
+~/.claude/fleet/bin/fleet-repo.sh list
 ```
 
-查看所有 fleet：
-
-```sh
-~/.claude/fleet/bin/fleet-list.sh
-```
-
-需要从普通终端直接连接某一个 fleet 时，socket 和 session 都要使用列表中的实际名称，例如：
-
-```sh
-tmux -L fleet-infra attach -t fleet-infra
-```
+所有仓库在同一个 fleet、同一个任务列表里，按仓库分组。一台机器上要再跑一个互相隔离的 fleet，就用另一个登录。
 
 ## 订阅账号池与额度管理
 
@@ -220,7 +182,7 @@ tmux -L fleet-infra attach -t fleet-infra
 | 能力 | 实际行为 | 启用条件 |
 |---|---|---|
 | 多订阅账号池 | 每个会话在启动时选择账号；识别订阅限额后暂时停用该账号，优先按提示中的真实重置时间恢复资格 | 注册账号 token |
-| 运行中会话迁移 | 关闭原进程，在同一 worktree 中恢复原会话记录，保留 Issue 等任务绑定 | 注册账号 token |
+| 运行中会话迁移 | 关闭原进程，在同一 worktree 中恢复原会话记录，保留任务绑定 | 注册账号 token |
 | 按余量安排新会话 | 在未到阈值的账号中，按「5 小时剩余额度 × 2 + 7 天剩余额度」评分；余量相近时减少来回切换 | 账号池 + ccquota 读数 |
 | 提前预警与轮换 | 默认用量达到 70% 时提醒会话，达到 85% 时暂时停用该账号并迁移任务；取 5 小时和 7 天用量中较高者 | 账号池 + ccquota 读数 |
 | 5 小时窗口错峰 | 安排空闲账号何时开始使用下一轮窗口，减少多个账号同时耗尽、同时重置的情况 | 账号池 + ccquota；手动应用计划，自动重规划默认关闭 |
@@ -239,7 +201,7 @@ chmod 600 ~/.config/claude-fleet/accounts/work
 
 token 保存在仓库外。详细步骤、指定账号子集和重置时间的兜底配置见[账号池设置](docs/dev/MULTI-ACCOUNT.md#setup)。账号在启动时通过环境变量选择，Claude 的设置、hooks 和会话记录仍共用一份配置。
 
-点击底部用量数字，打开「用量 + 账号」面板。手动选账号会调整启动时的初始选择，并迁移当前 fleet 的空闲 Claude 会话；正在执行任务或等待 `/loop` 下一轮的会话不受这条手动路径影响。后续启动仍可能按额度策略重新选账号，并非永久锁定。
+「用量 + 账号」面板（`bin/usage-modal.sh`）里手动选账号会调整启动时的初始选择，并迁移当前 fleet 的空闲 Claude 会话；正在执行任务或等待 `/loop` 下一轮的会话不受这条手动路径影响。后续启动仍可能按额度策略重新选账号，并非永久锁定。
 
 在 fleet 的会话内运行以下命令，查看它实际使用的账号：
 
@@ -327,23 +289,23 @@ claude plugin install fleet@claude-fleet --scope user --yes
 |---|---|
 | `/fleet-context` | 查看当前上下文占用及是否需要交接 |
 | `/fleet-handoff` | 保存交接信息，清理上下文后继续任务 |
-| `/fleet-history` | 在 hub 侧查看、恢复历史会话 |
+| `/fleet-history` | 查看、恢复历史会话 |
 | `/fleet-sync-install` | 将已合并的 claude-fleet 更新应用到本机安装 |
 
 每个命令都有适用角色（worker、hub 或两者），详见 [commands/README.md](commands/README.md)。
 
 ### 可选能力
 
-- **统一 MCP 管理多台机器。** 可选的 [Fleet Hub](docs/dev/FLEET-HUB.md) 集中注册 MINI 等 SSH 主机，让授权 Agent 查询 Fleet、按 Issue 启动 worker、按跨 handoff / 账号迁移仍稳定的 worker 身份给它发消息、优雅停止与恢复、修改指定配置，并跟踪操作结果。支持本机 stdio、OAuth HTTP，以及通过私有 HTTPS 使用授权令牌的常驻服务。
+- **统一 MCP 管理多台机器。** 可选的 [Fleet Hub](docs/dev/FLEET-HUB.md) 集中注册 MINI 等 SSH 主机，让授权 Agent 查询 Fleet、启动 worker、按跨 handoff / 账号迁移仍稳定的 worker 身份给它发消息、优雅停止与恢复、修改指定配置，并跟踪操作结果。支持本机 stdio、OAuth HTTP，以及通过私有 HTTPS 使用授权令牌的常驻服务。
 - **SSH 远程使用。** 可以从笔记本连接常开的开发机。项目的 URL 打开工具支持通过 SSH 隧道在本地浏览器打开链接，也有弹窗和剪贴板回退方式，见 [SSH 链接设置](README.md#opening-links-over-ssh)。
-- **Codex worker。** 可通过看板 `Ctrl-V` 或 `FLEET_AGENT=codex` 选择 Codex。工作目录隔离、Issue 绑定和 PR/CI 管理共用，但 Claude Code 的上下文交接、会话恢复和配额管理尚未适配到 Codex。完整能力表由代码生成并检查，见 [Claude Code 与 Codex 对照](README.md#agents-claude-code-and-codex)。
+- **Codex worker。** 派任务时选 Codex，或用 `FLEET_AGENT=codex` 设为默认。工作目录隔离、任务绑定和 PR/CI 管理共用；完整能力表见 [Claude Code 与 Codex 对照](README.md#agents-claude-code-and-codex)。
 
 ## 使用边界
 
-- 一个 fleet 对应一个 GitHub 仓库；多仓库请分别启动 fleet。当前待办和 PR 集成使用 GitHub。
-- 独立 worktree 和 tmux socket 提供工作目录与服务层面的隔离，worker 仍会在本机执行命令。团队的项目权限、评审和部署约定需要照常配置。
-- 部分状态信号可能有延迟，例如 Claude Code 的问题通知可能等待约一分钟。可选的 LLM 状态分类器会消耗 tokens，关闭它不影响其余核心功能。
-- `plan`、`dash`、`backlog` 是面板窗口的保留名称；hub 当前只承载看板，没有常驻的指挥 agent。
+- 一个登录一个 fleet，装着这个登录的所有仓库；任务记录在入口上，代码和 PR 在 GitHub（或别的 git 地址）上。
+- 独立 worktree 和 tmux socket 提供工作目录与服务层面的隔离，会话仍会在所在机器上执行命令。团队的项目权限、评审和部署约定需要照常配置。
+- 部分状态信号可能有延迟，例如 Claude Code 的问题通知可能等待约一分钟。
+- `home`、`dash`、`plan`、`backlog` 是面板窗口的保留名称；没有常驻的指挥 agent，编排会话由人按需开（`spawn agent:orchestrator`）。
 
 ## 更多文档
 
@@ -352,7 +314,7 @@ claude plugin install fleet@claude-fleet --scope user --yes
 | 文档 | 内容 |
 |---|---|
 | [安装与卸载](docs/dev/INSTALL.md) | 完整安装流程、组件、后台服务和卸载 |
-| [术语表](docs/dev/TERMS.md) | fleet、hub、worker、collector 等概念 |
+| [术语表](docs/dev/TERMS.md) | fleet、hub、任务记录、worker、collector 等概念 |
 | [架构说明](docs/dev/ARCHITECTURE.md) | 组件关系、多 fleet 与缓存隔离 |
 | [Fleet Hub](docs/dev/FLEET-HUB.md) | 跨机器 MCP 入口、机器注册、授权与操作记录 |
 | [状态机制](docs/dev/STATE.md) | 会话状态如何产生、展示和纠正 |

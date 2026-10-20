@@ -109,7 +109,7 @@ Sessions run on fleet's machines: close the terminal, shut the laptop, switch to
 
 Everything you hand over on the ⚡ line is first written down by fleet, numbered with a **T** (for example `T42`): your own words, which machine and which session it went to, and where it stands now.
 
-- A task in a repository also gets a ticket (a number like `#128`), and the panel shows the ticket number; one tied to no repository shows its T number.
+- A task has this one number: it is yours, not a repository's. A task given a repository changes code and opens pull requests there — GitHub holds only the code and the pull requests, with no second ticket.
 - The hub's **Tasks** page lists all your task records; a record stays after its session ends.
 - **Completed** means the hub has a confirmed work result. A missing session never implies completion; old records without confirmed task status show **Unknown**. Open **Task details** to see the requested, resolved and verified agent separately from the session observation. A required PR still waiting for merge shows **Waiting for GitHub** beside the work result. If a refresh fails, the open page keeps its last confirmed view and read time, marked stale; **Retry read** only reads again and never starts work.
 - Tell a colleague "the T42 thing" and they can find it on the Tasks page.
@@ -161,7 +161,7 @@ Without iTerm2 (for example Ghostty, or the system's own Terminal) ⌘ keys neve
 
 ## Saying something is wrong
 
-- **Cannot connect, will not open**: first see [Troubleshooting](../troubleshooting.md). When you need someone to look, type `fleet debug report` in the terminal: it hands a diagnostic bundle (keys removed) to the hub and gives you a short link — send the link to your admin.
+- **Cannot connect, will not open**: first see [Troubleshooting](../troubleshooting.md). When you need someone to look, type `fleet doctor --json` in the terminal and send the output to your admin.
 - **Common questions**: [FAQ](../faq.md).
 
 A managed conversation without a repository can also switch to Codex from the list menu. Finish its current turn first. For native scheduled tasks, the panel asks the source to verify its current tasks and prepare handoff notes before switching. The source keeps running during preparation; missing sign-in, folder trust or task details are explained. Session-only patrols and one-shot reminders keep their own timing and expiry, and deleted tasks stay deleted. A durable Claude reminder in the project moves too: the source deletes it with its own scheduler only after Fleet has saved an inactive copy, and the copy goes live once the source has exited — so the reminder arrives once, on time, in the switched conversation. If the source cannot do that itself (for example it is out of quota), the switch takes the reminder only while no other Claude could be rewriting that project's task list; otherwise it explains which process is in the way and the original conversation and reminders keep running. You do not need to find or export JSON. A trusted node fills a missing HOME trust entry while respecting explicit distrust and pre-trust opt-out. Unsent input remains a draft.

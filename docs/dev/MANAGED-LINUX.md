@@ -102,7 +102,7 @@ fleet hub accounts remove gh:2987262 --host linux-a
 (issue #3526) The image used to open its own login, `fleet` (UID 10002), at
 every start (`FLEET_NODE_LOGIN=fleet`). Nothing dispatched to it — the hub
 reserves the name and never assigns it (#3417) — yet it ran a full fleet of its
-own (~54 processes and a warm pool on linux-a) beside the people's logins.
+own (~54 processes on linux-a) beside the people's logins.
 
 Now `FLEET_NODE_LOGIN` empty or `none` means the machine has none, and both the
 image (`Dockerfile`) and the manifest (`render.py`) say `none`. A container start
@@ -566,7 +566,7 @@ Git: fetches from the CI's mirror (`--git-mirror git://git-mirror.arc-runners…
 ## User pods
 
 (issue #3550, EPIC #3500 C5) Each person gets a pod of their own: their home
-disk, tmux, sessions and warm sessions, their keys, a thin node program — and a
+disk, tmux, sessions, their keys, a thin node program — and a
 ceiling set per person. `render.py --user-pod u-<nonce> --login <name> --uid <n>
 --cred-central <url>` renders it instead of the shared node (all four are
 required — see «Run as the person» below):

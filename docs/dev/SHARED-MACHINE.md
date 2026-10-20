@@ -86,8 +86,7 @@ key, what the guide and `cf` do, and what is still hers (the Codex device code,
 the private half in the letter, so alice can connect before she ever sent you a
 key and swaps it for her own on first login (the letter says how). The host and
 port are `FLEET_SSH_PUBLIC_HOST` / `FLEET_SSH_PUBLIC_PORT`, machine-wide
-(`prefix+c` → 身份/identity, or two lines in
-`~/.config/claude-fleet/fleet.settings`) — unset, the letter carries a visible
+(two lines in `~/.config/claude-fleet/fleet.settings`) — unset, the letter carries a visible
 `<HOST>` placeholder and the run warns. `--lang en` for an English letter
 (default Chinese); `--no-welcome` skips it (then `--pubkey` is required). You
 send the letter; the script mails nothing and never prints the key.

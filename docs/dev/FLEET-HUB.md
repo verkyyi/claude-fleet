@@ -181,7 +181,7 @@ ccquota agent's control channel is this machine's only door to the hub.
   (accepted / starting / running / pr / merged / reaped / failed / blocked /
   refused); a placement with no report yet is that row, not a `↗` line of its own;
   and a later STOPPED / IDLE / WAITING never un-lands a MERGED (nor a PR the
-  dash's cache calls merged). Hub off, no node token, `FLEET_HUB_PROGRESS=0` or a
+  prmap calls merged). Hub off, no node token, `FLEET_HUB_PROGRESS=0` or a
   hub without the endpoint ⇒ exit 3, nothing asked, nothing written.
 - **Waiting and holding.** `fleet-await.sh wid:<child elsewhere>` (a child whose
   parent is you) waits on your ledger, which the hub feeds, and calls it GONE when
@@ -492,10 +492,6 @@ certificate's person: their own workers only (`FleetScope`; another person's is
 takes `operation_get`, so the shell reads its outcome with no token anywhere. A
 local row's items are untouched, and with the hub off none of this exists: the
 menu offers these only on `wid:` rows, which only the hub's cache produces.
-Both menus also list **「新建到 mac-a…」** — one item per other machine the cache's
-`#node` lines say is online — which files the issue and spawns its worker THERE
-(`dash-issue-new.sh --node=<m>` → `dash-issue-session.sh --node`, #1475); no
-cache, no item.
 
 **The client on your own computer** (#3008). `bin/fleet` opens
 `fleet-thin.py`: one foreground loop and one connection to the home machine.
@@ -1327,7 +1323,7 @@ with a code, never `unknown`:
   (`ALREADY_RUNNING`), reads the `/fleet-history` verdict (`REVIEW-ONLY` ⇒
   `NOT_RESUMABLE`), pays the same disk/quota gates a start pays
   (`RESOURCE_GATE`) and the session cap (`AT_CAPACITY`), then runs the headless
-  `dash-restore-session.sh` — the same path as the dash's ⌃o — which reuses the
+  `dash-restore-session.sh` — the same path a local resume takes — which reuses the
   worktree if it is still on disk, otherwise rebuilds it off the recorded SHA,
   and reopens the surviving transcript with `--resume`. The new window carries
   the same `@issue`, so the same `worker_id` is live again; its window id and
@@ -1373,8 +1369,7 @@ with a code, never `unknown`:
   `@fleet_role` / `@fleet_id`, never by name. It needs `worker:message`: a
   rename is the smallest change a person who can talk to the session can make.
   EPIC rows are not renamed through it (their short name is #2355's).
-- `worker_pin` (issue #3517) is ⌘P's 「置顶当前会话」 / ⌃T and the row menu's
-  置顶 on a row on another machine. `fleet-control-read.sh pin` checks the window
+- `worker_pin` (issue #3517) is ⌘P's 「置顶当前会话」 on a row on another machine. `fleet-control-read.sh pin` checks the window
   still carries the worker's `@fleet_id`, then sets `@pin 1` or unsets it (the
   way `dash-pin-toggle.sh` writes it); the node's inventory says `pin=1` and the
   hub cache's field 30 puts the row in every list's 置顶 group.
@@ -1389,8 +1384,7 @@ with a code, never `unknown`:
   accounts are not this machine's list). 打开 PR · 唤醒 · 保持唤醒 stay local: a far
   row carries no PR number and no sleep state, and a wake past that machine's
   session cap is that machine's call.
-- `worker_reap_policy` (issue #2368) is the sidebar's 「改回收方式…」 (and the
-  quick-open panel's ⌃E) on a row on another machine, and `fleet reap` on a
+- `worker_reap_policy` (issue #2368) is ⌘P's 「改回收方式…」 on a row on another machine, and `fleet reap` on a
   client: every row the Fleet Shell draws is remote, so without it a client
   could not change `@reap_policy` at all. The node resolves the worker (key or
   identity) to its window, `fleet-control-read.sh reappol` checks that window
@@ -1399,11 +1393,11 @@ with a code, never `unknown`:
   again (`INVALID_ARGUMENT` when it is not one) and clears the countdown shown
   under the old one. It needs `worker:reap`: a policy decides when the session
   is closed, and `done:1m` is a reap a minute from now.
-- `worker_reap` is the dash's confirmed ⌃x, unasked: `dash-reap.sh <key>
+- `worker_reap` is the confirmed close, unasked: `dash-reap.sh <key>
   --yes` on the fleet's own server (the adapter points bare `tmux` at it through
   `TMUX`, as `fleet-remote-view.sh` does with no pane). Its result token on
   stdout is the verdict (issue #869), never the exit code: `reaped:full` /
-  `reaped:keep` (a dirty worktree is KEPT — the same one-key rule as ⌃x) are
+  `reaped:keep` (a dirty worktree is KEPT — the same rule as a local close) are
   confirmed by re-reading the fleet (the identity must be gone), `skip:live` /
   `skip:needs-confirm` / `refused:*` touched nothing and are a clean `failed`
   carrying the token and dash-reap's own reason, `failed:*` (the gate passed,
@@ -1422,7 +1416,7 @@ with a code, never `unknown`:
   reap is the confirmed one, so without `--yes` it is `skip:needs-confirm`
   and nothing is sent; the node's adapter sets `FLEET_REAP_LOCAL=1` so its
   own run never bounces back. So `/fleet-epic-run`'s per-tick
-  `dash-reap.sh <key> --yes` and the sidebar's 回收 on a remote row
+  `dash-reap.sh <key> --yes` and ⌘P's 回收 on a remote row
   (`fleet-row-remote.sh reap`, the same toast as a local row's) reap
   another machine's merged window the way they reap one here. An older node
   that writes no fields back is read off its error message. Hub off: the
@@ -2014,7 +2008,7 @@ done                                   # logins/ changed ⇒ the machine's node 
 Run the hermetic regression suite through the normal shadow-root gate:
 
 ```sh
-bin/run-selftests.sh fleet-hub fleet-worker-stop tmux-config dash-agent-toggle
+bin/run-selftests.sh fleet-hub fleet-worker-stop
 ```
 
 `fleet-worker-stop-selftest.sh` drives the real stop script against fake

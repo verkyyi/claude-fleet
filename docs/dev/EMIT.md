@@ -160,14 +160,14 @@ report up to 100 PRs as if they had just happened.
 - **`via=reap`** — the *fleet* session ended: the worktree was reaped, so the
   outcome is known. This rides `fleet_reap_record` in `bin/fleet-lib.sh`, the one
   choke point every reaper funnels through (the SessionEnd hook's detached
-  `--exec`, the dash ⌃x reap, the cleanup daemon, ledger-watch) — which is what
+  `--exec`, the confirmed close (`dash-reap.sh`), the cleanup daemon, ledger-watch) — which is what
   keeps "how the work ended" a single source of truth instead of a fifth copy of
   the reap rules. `outcome` is `landed` or `closed-unlanded`; `verdict` is the
   raw gate word (`merged-pr` / `ancestor` / `unmerged` / `dirty`).
 
 The two are different facts about the same session, not duplicates. A worker that
 merges and is reaped by the cleanup daemon emits only `via=reap`; a worker the
-operator ⌃d's out of emits both.
+operator exits by hand emits both.
 
 ## How it stays out of the way
 

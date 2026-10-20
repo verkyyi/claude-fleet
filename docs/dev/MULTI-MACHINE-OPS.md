@@ -116,7 +116,7 @@
 
 1. `fleet`（或 `fleet mac-a`）进 mac-a。你在 mac-a 上原有的会话都在。
 2. 你在 mac-b 上的会话：现在动不了。看侧边栏的失联组知道它们是谁、最后状态是什么（那是最后一次报到时的，不是实时）。
-3. 要紧的事：在 mac-a 上重新开——`/fleet-history` 能看到它们的最后一条记录；issue 的认领 **30 分钟后自动释放**，之后 mac-a 上 `dash-issue-session.sh <N>`（或侧边栏回车）就能接着领；等不及 30 分钟可以 `ccquota lease acquire --force`（会记审计，写明挤掉了谁）。工作树和分支在 mac-b 的磁盘上，PR 已推的部分在 GitHub 上——从分支继续，别从头做。
+3. 要紧的事：在 mac-a 上重新开——`/fleet-history` 能看到它们的最后一条记录；issue 的认领 **30 分钟后自动释放**，之后 mac-a 上 `dash-issue-session.sh <N>` 就能接着领；等不及 30 分钟可以 `ccquota lease acquire --force`（会记审计，写明挤掉了谁）。工作树和分支在 mac-b 的磁盘上，PR 已推的部分在 GitHub 上——从分支继续，别从头做。
 4. **没有任何东西会替你重派**：这是 EPIC #1419 的约定（只释放、等你决定），防的是 mac-b 一回来两台机器各跑一份。
 
 **运营者**：

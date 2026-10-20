@@ -112,15 +112,15 @@ is 256 on macOS. A long-lived network daemon holds a socket per connected sessio
 plus its pipes and state files. When it reaches the limit it does not crash. It
 just stops receiving events, and no log says why.
 
-**What the fleet already does.** Its three always-on daemons raise their own
-limit to 65536 (issue #1080). The hub, the webhook supervisor and the spinner
+**What the fleet already does.** Its always-on daemons raise their own
+limit to 65536 (issue #1080). The hub and the spinner
 carry `NumberOfFiles` in their launchd plists and `LimitNOFILE` in their systemd
 units. Each prints one `nofile=<n>` line to its log at every start, so you can
 check that the limit took:
 
 ```sh
 grep -h 'nofile=' ~/.config/claude-fleet/hub/logs/hub.stderr.log \
-  ~/.config/claude-fleet/logs/webhook.launchd.log ~/.config/claude-fleet/logs/spinner.launchd.log | tail -3
+  ~/.config/claude-fleet/logs/spinner.launchd.log | tail -3
 ```
 
 A plist change only applies after the daemon is reloaded. Re-run the install
@@ -368,8 +368,8 @@ different machine now, looks fine from inside.
 **Command.** Give the fleet a probe host on the far side of the internet — a
 VPS, a machine in another network — as an ssh alias with key auth and its host
 key already in `known_hosts` (the probe runs in `BatchMode`, so it can never
-ask), then set the three keys once per machine (`prefix+c` → 身份/identity, or
-three lines in `~/.config/claude-fleet/fleet.settings`):
+ask), then set the three keys once per machine (three lines in
+`~/.config/claude-fleet/fleet.settings`):
 
 ```sh
 FLEET_SSH_PUBLIC_HOST=ssh.example.com   # what the welcome letter says (#1195)

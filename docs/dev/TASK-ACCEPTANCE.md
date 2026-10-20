@@ -106,8 +106,8 @@ two test nodes/logins belonging to two different test persons (A cuts over, B
 stays legacy), one forge-none repo and one GitHub-hosted repo, source and
 deployed versions, provider account, bounded test window and rollback owner.
 Keep existing production and peer workers outside the targets. Recheck external
-owners #3401/#3955 for credential/restore prerequisites, #4434/PR4480 for native
-snapshot evidence and #4488/PR4489 for warm-pool fleet identity. A merged fix does
+owners #3401/#3955 for credential/restore prerequisites and #4434/PR4480 for native
+snapshot evidence. A merged fix does
 not establish that a participating node runs it. Leave dependent live rows NOT
 RUN when the target or prerequisite is absent. #4354 and #4352 retain their work.
 
@@ -215,8 +215,7 @@ headers, never recorded in argv, artifacts, public comments or config.
    hub's push (`--sync`), and B's login byte for byte unchanged and still
    starting legacy sessions in the same repo. After accepted hub work exists,
    rollback must retain its hub authority until terminal and confirmed stopped;
-   never mirror T state into GitHub or roll the database back. Warm-pool owners
-   keep their owning fleet UUID (verify the deployed #4488 fix).
+   never mirror T state into GitHub or roll the database back.
 7. **A12 — operator view.** On the actual current portal, use desktop and mobile
    viewports, keyboard tabs/details and the native terminal link. Capture honest
    unknown/failed/cancelled/succeeded rows, retained native execution after work

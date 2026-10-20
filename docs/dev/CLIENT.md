@@ -80,7 +80,7 @@ of the time, retired with #4898; never committed) — `panel` · `menus` · `row
 | 7 | 点一行出菜单：回答 · 发消息 · 改名 · 停 · 继续 · 唤醒 · 改回收方式 · 回收 · 换账号 · 换 Claude/Codex · 打开它的改动 | 选中按 Tab，同一份菜单（`ACTIONS`；`SIDEBAR_ACTIONS` 一一对照）；别的机器的行有 回答 · 发消息 · 改名 · 改回收方式 · 停 · 回收 · 恢复 | `menus` · `fleet-view-actions-selftest.sh` · 真机（发起人 2026-10-11 真机演练：MacBook + iPhone 全过） | ✅ |
 | 8 | 改名、发消息、回答时在那一行下面问一句 | 面板底部问一句（↵ 交 · Esc 退），答完回到列表 | `fleet-view-actions-selftest.sh` · 真机（发起人 2026-10-11 真机演练：MacBook + iPhone 全过） | ✅ |
 | 9 | 配置坏了「会坏·需重开」 | 那一行的 `✗ 会坏·需重开` 标签 | `fleet-view-selftest.sh`（cfg broken） | ✅ |
-| 10 | 已落地的列表、点一下恢复 | 「已结束」组：还开着的之后列出窗口已回收的会话（同 ⌃t 那份账，标「window reaped · ↵ restore」），↵ 或 Tab →「恢复」（#3286） | `rows-after` · `menu-reaped`（Restore） | ✅ |
+| 10 | 已落地的列表、点一下恢复 | 「已结束」组：还开着的之后列出窗口已回收的会话（同 `/fleet-history` 那份账，标「window reaped · ↵ restore」），↵ 或 Tab →「恢复」（#3286） | `rows-after` · `menu-reaped`（Restore） | ✅ |
 | 11 | 新会话时问「开在哪台」「什么时候回收」 | 默认不问（家里那台、合并后回收）；事后 Tab →「改回收方式」；每次都问 = R4 有空再做 | 点头 · `menus`（Reap policy） | ✅ |
 | 12 | 批次视图、「#N 没人在跑」重开 | EPIC 那一行行尾 k/N；重开 = R3 有空再做；没人在跑照样来通知 | 点头 · `rows`（21/22 · 9/12 …） | ✅ |
 | 13 | 铃声、系统通知 | 照旧（`fleet_notify.py`，不靠侧栏） | 不随侧栏删 | ✅ |
@@ -383,13 +383,13 @@ answer is a person's steps, the reasons live in the sections it points to.
   3. Termius 说**主机钥匙变了**：刚换过家就接受一次；没换过家先别接受，问运维。
   4. 家里宽带刚换了公网地址：地址最多 15 分钟跟上，等一会儿再连。
 - Mac：`fleet` 说证书过期就 `fleet login`；`fleet doctor` 的 `fleet` 行写着版本、入口和证书。
-- 还不行：`fleet debug report`，把它打印的短链接交给运维。
+- 还不行：把 `fleet doctor` 的输出交给运维。
 
 **中文乱码**（中文画成 `_` 或方块）——连入口端口时手机没带 `LANG`。家机器的入口自 #3196
 起自己补 UTF-8（BREAK-IT `entry-no-lang`），断开、重连一次即可。还乱：打开面板，选中会话，
 Tab →「在它的目录开 shell」，打
 `locale`，`LC_CTYPE` 不是 `…UTF-8` 就是家机器还没更新到那一版——`fleet doctor` 的
-`install` 行看版本，或 `fleet debug report`。
+`install` 行看版本。
 
 **列表停住**（⌘P 里别的机器的行不动、点进去进不去）——⌘P 第二行写「远端列表 N 没更新 ·
 标「失联」的行可能已不在」时，是家机器取列表的身份断了（#3164）。在家机器上 `fleet doctor`
