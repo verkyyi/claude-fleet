@@ -2923,7 +2923,7 @@ def new_typeable(run, client):
     `timing` row) under the run, and the time it took, briefly, on the client."""
     ms = run.at("typeable")
     fleet_timing.add("session", [("total", ms)], ts=run.t0)
-    toast(client, say("view_new_timing_fmt", "%.1f" % (ms / 1000.0)))
+    toast(client, say("view_new_timing_fmt", "%.1f" % (ms / 1000.0)), "info")
 
 
 def new_remember(repo, agent):
