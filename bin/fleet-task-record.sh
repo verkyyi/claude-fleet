@@ -249,7 +249,9 @@ JSON
     [ "$spawn" = 1 ] || exit 0
     pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
     if [ -n "$body" ]; then printf '%s\n\n%s\n' "$title" "$body" > "$pf"; else printf '%s\n' "$title" > "$pf"; fi
-    exec bash "$BIN/dash-raw-session.sh" --repo "$repo" --task "$t" --name "$title" --reap "${reap:-merged}" \
+    # The seed IS the record's words (T604): FLEET_TASK_SEED=record lets the hub
+    # place it on another machine, which reads the same words back off T<n>.
+    FLEET_TASK_SEED=record exec bash "$BIN/dash-raw-session.sh" --repo "$repo" --task "$t" --name "$title" --reap "${reap:-merged}" \
       ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${origin:+--origin "$origin"} $pwin "--prompt-file=$pf" ${tsess:+"$tsess"}
   fi
   [ "$spawn" = 1 ] || exit 0

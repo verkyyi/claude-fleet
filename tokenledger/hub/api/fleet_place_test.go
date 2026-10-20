@@ -697,3 +697,45 @@ func TestOutcomeOfTiming(t *testing.T) {
 		}
 	}
 }
+
+// The asker's own admission said no (claude-fleet T604: memory, its caps):
+// not_here takes it out of the running — never LOCAL; another machine that
+// can take it does, and none is ALL_DECLINED naming the asker's reason.
+func TestNodePlaceNotHereNeverAnswersLocal(t *testing.T) {
+	h, macD, macC, f5, f4 := twoNodes(t)
+	macD.beatLoad("mac-d", "frank", machineA, 0.5, 3, f5)
+	macC.beatLoad("mac-c", "frank", machineB, 100, 1, f4) // 10/core: no candidate
+	waitLoad(t, h, "mac-c", 100)
+	waitFor(t, 3*time.Second, "mac-d cooled down", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_mac-d", time.Now())
+		return hb.Load1 == 0.5
+	})
+	ask := map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID}
+	if st, out := placeCall(t, h, h.tokens["mac-d"], ask); st != 200 || out["local"] != true {
+		t.Fatalf("without not_here = %d %v; want LOCAL mac-d", st, out)
+	}
+	ask["not_here"] = "at capacity: 6/6 sessions"
+	st, out := placeCall(t, h, h.tokens["mac-d"], ask)
+	e, _ := out["error"].(map[string]any)
+	msg, _ := e["message"].(string)
+	if st != 409 || e["code"] != "ALL_DECLINED" || !strings.Contains(msg, "at capacity: 6/6 sessions") {
+		t.Fatalf("not_here, nowhere else = %d %v; want 409 ALL_DECLINED with the asker's reason", st, out)
+	}
+	if macD.count()+macC.count() != 0 {
+		t.Fatal("a not_here placement with no other machine sent a start")
+	}
+}
+
+func TestNodePlaceNotHereGoesElsewhere(t *testing.T) {
+	h, macD, macC, f5, _ := twoNodes(t)
+	macC.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@43",
+		"workers": []any{map[string]any{"window_id": "@43", "scratch": true}}}))
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID,
+		"not_here": "memory: 1.2 GiB free < 2 GiB", "idempotency_key": "place-not-here-1"})
+	if st != 200 || out["local"] != false || out["placement"].(map[string]any)["machine"] != "mac-c" {
+		t.Fatalf("not_here = %d %v; want a remote placement on mac-c", st, out)
+	}
+	if macD.count() != 0 || macC.count() != 1 {
+		t.Fatalf("writes: mac-d=%d mac-c=%d; want 0 and 1", macD.count(), macC.count())
+	}
+}

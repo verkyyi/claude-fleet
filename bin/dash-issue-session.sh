@@ -163,8 +163,7 @@ RESUME_SID=$(printf '%s' "$RESUME_SID" | LC_ALL=C tr -cd '0-9a-f-')
 case "$AS_ARG" in
   '') ;;
   *[!A-Za-z0-9_.:-]*|[!A-Za-z0-9]*) printf 'dash-issue-session: not an agent name: %s\n' "$AS_ARG" >&2; exit 1 ;;
-  *) [ -z "$NODE_ARG" ] && NODE_ARG=local ;;   # the agent file is on this machine
-esac
+esac   # where it may open is decided once the file is found (travels, below)
 [ "$_want" != agent ] || { printf 'dash-issue-session: --agent needs a value\n' >&2; exit 2; }
 EXPLICIT_AGENT=$AGENT
 case "$ACCOUNT_ARG" in
@@ -283,11 +282,18 @@ unset _r _rc
 # key fills what the spawn left open.
 AS_KV=''; TEMPLATE_AGENT=''
 if [ -n "$AS_ARG" ]; then
-  if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG"; then
-    refuse "#$num: --as $AS_ARG opens on this machine (the agent file is here), not on $NODE_ARG"; exit "$RC_INFRA"
-  fi
   AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>&1) \
     || { refuse "#$num: ${AS_KV##*fleet-agent-def: }"; exit "$RC_INFRA"; }
+  # Only a file this machine alone has pins it here (T604). An issue start the
+  # hub sends elsewhere names no file — that machine starts its own fleet-worker —
+  # so only fleet-worker, as the release carries it (`travels 1`), may be placed.
+  if [ "$AS_ARG" != fleet-worker ] \
+     || [ "$(printf '%s\n' "$AS_KV" | awk -F'\t' '$1 == "travels" { print $2; exit }')" != 1 ]; then
+    if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG"; then
+      refuse "#$num: --as $AS_ARG opens on this machine (the agent file is here), not on $NODE_ARG"; exit "$RC_INFRA"
+    fi
+    [ -z "$NODE_ARG" ] && NODE_ARG=local
+  fi
 elif AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch fleet-worker --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>/dev/null); then
   AS_ARG=fleet-worker
 else
@@ -537,7 +543,9 @@ if [ "$PLACING" = 1 ]; then
     _wait=''; [ "$ASYNC_FLAG" = 1 ] && _wait=0
     python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
     _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
-    place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
+    # This machine's admission said no (T604): any other machine, never this one.
+    _nothere=''; [ -n "$CAP_HELD" ] && [ "$NODE" = auto ] && _nothere=$(printf '%s' "$CAP_HELD" | head -n 1)
+    place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP" "$_nothere"); place_rc=$?
     if [ -s "$_dispatch_result" ]; then
       DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$AGENT" --accepted "$(cat "$_dispatch_result")") || { rm -f "$_dispatch_result"; exit 2; }
       TASK_REF=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')

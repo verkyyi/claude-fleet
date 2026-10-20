@@ -578,11 +578,48 @@ case "$mode" in
         cat > "$seedf"
         [ -s "$seedf" ] || { rm -f "$seedf"; seedf=''; }
       fi
+      # A dispatched task placed here (T604): the asking machine sent no words —
+      # its seed is the record's own (fleet-task-record.sh dispatch's title +
+      # body) and so is the agent file it was dispatched as (`template`), read
+      # back off T<n>. A file this release carries is here too; one that is not
+      # found here opens a plain session given the task (one stderr line).
+      asarg=''
+      if [ -n "$taskarg" ] && [ -z "$seedf" ] && [ "$norepo" != 1 ]; then
+        _rec=$(bash "$BIN/fleet-task-record.sh" get "$taskarg" 2>/dev/null) || _rec=''
+        _tw=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") || exit 1
+        _tmpl=$(printf '%s' "$_rec" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+t = d.get("task", d) if isinstance(d, dict) else {}
+p = t.get("request_payload") or {}
+if isinstance(p, str):
+    try:
+        p = json.loads(p)
+    except ValueError:
+        p = {}
+title, body = str(p.get("title") or t.get("title") or ""), str(p.get("body") or "")
+if not title.strip():
+    sys.exit(1)
+with open(sys.argv[1], "w") as f:
+    f.write("%s\n\n%s\n" % (title, body) if body else title + "\n")
+print(str(p.get("template") or ""))' "$_tw") && seedf=$_tw || { rm -f "$_tw"; _tmpl=''; }
+        case "$_tmpl" in ''|*[!A-Za-z0-9_.:-]*|[!A-Za-z0-9]*) ;;
+          *) if python3 "$BIN/fleet-agent-def.py" find "$_tmpl" --dir "${FLEET_MAIN:-$HOME}" --for "$agent" >/dev/null 2>&1; then
+               asarg=$_tmpl
+             else
+               printf 'start: %s: agent file %s is not on this machine — a plain session given the task\n' "$taskarg" "$_tmpl" >&2
+             fi ;;
+        esac
+        unset _rec _tw _tmpl
+      fi
       nrarg=''; [ "$norepo" = 1 ] && nrarg=--no-repo
       # $10 = `test` (issue #2505): the TEST identity's client placed it — the
       # window is marked, named test-… and closed soon (dash-raw-session.sh).
       tiarg=''; [ "${10:-}" = test ] && tiarg=--test-identity
-      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${taskarg:+--task "$taskarg"} ${seedf:+"$seedflag=$seedf"}
+      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${taskarg:+--task "$taskarg"} ${asarg:+--as "$asarg"} ${seedf:+"$seedflag=$seedf"}
     fi
     num="${3:-}"
     if [ "$num" = new ]; then

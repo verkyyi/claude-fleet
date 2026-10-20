@@ -914,6 +914,28 @@ outcome reports. A seeded (`--prompt`) or no-repo scratch never travels; the
 hub's `worker_start(kind=scratch, repo, node?, name?)` opens one from the MCP side
 too. `ccquota place … <repo> scratch <fleet UUID>` is the CLI form.
 
+**A dispatched task travels too** (T604). `fleet-task-record.sh dispatch` (the
+`task` tool, an EPIC driver's members) opens its session with `--as <agent file>`
+and the record's words as the seed, and neither pins it to the asking machine
+any more: the seed is the record's own (`FLEET_TASK_SEED=record`), and an agent
+file the release itself carries — `fleet-agent-def.py launch`'s `travels 1`: its
+bytes are a core agent (`conf/agent-defaults/claude/agents/`, fleet-worker) or a
+fleet plugin's (`plugins/*/agents/`, epic-driver) — is on every machine of that
+release. The machine the hub picks reads both back off `T<n>`
+(`fleet-control-read.sh start`: `request_payload`'s title + body → `--prompt-file`,
+its `template` → `--as` when that file is found there, else a plain session given
+the task and one stderr line). A file only the asker has (a project's own, an
+edited copy, another plugin's) still opens there; named onto another machine it
+is refused. On the issue road only `fleet-worker` travels (the issue start names
+no file; the opening machine starts its own fleet-worker). **A full machine asks
+for another one**: when the asker's own admission says no (memory, its session
+caps) and `--node` is auto, the place call carries `--not-here <reason>`
+(`not_here`): the asker is a declined candidate from the start, so it is never
+answered LOCAL; no other machine is `ALL_DECLINED` naming that reason, and the
+spawn refuses with it (exit 2, retry later), as before. Resume, `--seed-file` and
+an existing `--worktree` still open on the asker (the transcript and the
+worktree are there).
+
 ## Tools
 
 | MCP tool | Behavior | Required grant |

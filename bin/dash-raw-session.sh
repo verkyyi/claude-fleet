@@ -154,8 +154,10 @@ while [ "$#" -gt 0 ]; do
     # session starts as — `claude --agent <name>`, found the way Claude Code finds
     # it (the checkout's .claude/agents > ~/.claude/agents > a plugin); named but
     # not found ⇒ refused, naming where it looked. Its `fleet:` key fills --reap /
-    # --repo / --agent when the spawn names none. Opens on THIS machine (the file
-    # is here). None = a plain scratch, as before.
+    # --repo / --agent when the spawn names none. A file the release carries
+    # (fleet-agent-def.py's `travels`: fleet-worker, a fleet plugin's epic-driver)
+    # is on every machine, so the hub may place it (T604); any other file opens on
+    # THIS machine (it is here). None = a plain scratch, as before.
     --as)          AS_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --as=*)        AS_ARG="${1#--as=}"; shift ;;
     --bg)          BG=1; shift ;;
@@ -258,8 +260,7 @@ fi
 case "$AS_ARG" in
   '') ;;
   *[!A-Za-z0-9_.:-]*|[!A-Za-z0-9]*) printf 'dash-raw-session: not an agent name: %s\n' "$AS_ARG" >&2; exit 1 ;;
-  *) [ -z "$NODE_ARG" ] && NODE_ARG=local ;;   # the agent file is on this machine
-esac
+esac   # where it may open is decided once the file is found (travels, below)
 BIN="$(cd "$(dirname "$0")" && pwd)"
 EXPLICIT_AGENT=$AGENT
 DISPATCH="${FLEET_DISPATCH:-}"
@@ -340,7 +341,8 @@ unset _why
 # Which machine (issue #1541; the issue path's rule, #1425/#1475): --node, else —
 # with the hub module on — FLEET_SPAWN_NODE, else auto. PLACING = the hub may
 # send this scratch to another machine; decided for good below, after the repo
-# is known (a no-repo or seeded scratch never travels).
+# and the agent file are known (a no-repo scratch, a seed that is not a task
+# record's words and an agent file only this machine has never travel).
 NODE="$NODE_ARG"
 if [ -z "$NODE" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
   NODE="${FLEET_SPAWN_NODE:-$(fleet_spawn_node_default)}"   # personal machine → local (#1721)
@@ -408,15 +410,20 @@ MAIN="${FLEET_MAIN:-}"
 AS_KV=''; TEMPLATE_AGENT=''
 if [ -n "$AS_ARG" ]; then
   _asdir=$HOME; [ "$NOREPO" != 1 ] && [ -n "$MAIN" ] && _asdir=$MAIN
-  if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG"; then
-    refuse "raw: --as $AS_ARG opens on this machine (the agent file is here), not on $NODE_ARG"; exit 1
-  fi
   if ! AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "$_asdir" --for "$AS_FOR" 2>&1); then
     refuse "raw: ${AS_KV##*fleet-agent-def: }"; exit 1
   fi
   unset _asdir
 fi
 as_kv() { printf '%s\n' "$AS_KV" | awk -F'\t' -v k="$1" '$1 == k { print substr($0, length(k) + 2); exit }'; }
+# Only a file this machine alone has pins the session here (T604): one the release
+# carries (`travels 1`) is found by the same name wherever the hub places it.
+if [ -n "$AS_KV" ] && [ "$(as_kv travels)" != 1 ]; then
+  if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG"; then
+    refuse "raw: --as $AS_ARG opens on this machine (the agent file $(as_kv file) is here alone), not on $NODE_ARG"; exit 1
+  fi
+  PLACING=0
+fi
 if [ -n "$AS_KV" ]; then
   if [ -z "$REAP" ] && [ -n "$(as_kv reap)" ]; then
     REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$(as_kv reap)") \
@@ -531,9 +538,25 @@ fi
 # here for `auto` — and refuses for a machine named explicitly. Never placed: a
 # no-repo scratch (no repo to place by) and a seeded one (--prompt rides the
 # launch argument, here only) — named elsewhere they are refused, under `auto`
-# they open here. Hub module off: nothing runs unless --node names another machine.
+# they open here. A dispatched task's seed travels (T604): it is the record's own
+# words (FLEET_TASK_SEED=record, set by fleet-task-record.sh dispatch), which the
+# machine that opens it reads back off T<n> (fleet-control-read.sh start).
+# Hub module off: nothing runs unless --node names another machine.
+#
+# This machine's admission said no (CAP_HELD — memory, the session caps): the
+# hub is asked for another machine, never this one (`not_here`, T604); no other
+# machine ⇒ refused with this machine's reason (exit 2: retry later), as before.
+TASK_SEED=0
+[ -n "$TASK_REF" ] && [ "${FLEET_TASK_SEED:-}" = record ] && [ -z "$DRAFT" ] && TASK_SEED=1
+# What only T604 lets travel (a task's words, an agent file) opened here before,
+# hub or not: where the hub cannot even be asked from here (no ccquota, no node
+# token), it still does — nothing was sent, so nothing can open twice.
+if [ "$PLACING" = 1 ] && [ "$NODE" = auto ] && { [ -n "$AS_ARG" ] || { [ "$TASK_SEED" = 1 ] && [ -n "$PROMPT" ]; }; } \
+   && ! fleet_hub_place_askable "$SESS"; then
+  PLACING=0
+fi
 if [ "$PLACING" = 1 ]; then
-  if [ "$NOREPO" = 1 ] || [ -n "$PROMPT$DRAFT" ]; then
+  if [ "$NOREPO" = 1 ] || { [ -n "$PROMPT$DRAFT" ] && [ "$TASK_SEED" != 1 ]; }; then
     _why='a no-repo scratch'
     [ -n "$PROMPT" ] && _why='a seeded scratch (--prompt)'
     [ -n "$DRAFT" ] && _why='a draft scratch (--draft)'
@@ -553,7 +576,8 @@ if [ "$PLACING" = 1 ]; then
   _prepo="${REPO_ARG:-$(fleet_norm_repo "${FLEET_REPO:-}")}"
   python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
   _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
-  place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP"); place_rc=$?
+  _nothere=''; [ -n "$CAP_HELD" ] && [ "$NODE" = auto ] && _nothere=$(printf '%s' "${CAP_HELD#raw: }" | head -n 1)
+  place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP" "$_nothere"); place_rc=$?
   if [ -s "$_dispatch_result" ]; then
     DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$AGENT" --accepted "$(cat "$_dispatch_result")") || { rm -f "$_dispatch_result"; exit 2; }
     TASK_REF=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')
@@ -566,6 +590,13 @@ if [ "$PLACING" = 1 ]; then
     printf 'dash-raw-session: scratch 先被 %s 拒绝，入口已换下一台\n' "$(printf '%s' "${_why##*$'\t'after }" | sed 's/:[^,]*//g; s/,/、/g')" >&2
     _why=${_why%$'\t'after *} ;;
   esac
+  if [ -n "$CAP_HELD" ]; then
+    case "$place_rc:$_pv" in
+      0:REMOTE\ *|5:DECLINED\ *|6:UNKNOWN\ *) ;;
+      *) # nowhere else either: this machine's reason, as before, and the hub's
+         refuse "$CAP_HELD — 也没有别的机器能接: ${_why:-${_pv:-hub unreachable}}"; exit 2 ;;
+    esac
+  fi
   case "$place_rc:$_pv" in
     4:REFUSED\ ALL_DECLINED)
       refuse "raw: scratch 每台机器都拒绝了: ${_why:-no reason given}"; exit 1 ;;
@@ -596,7 +627,7 @@ if [ "$PLACING" = 1 ]; then
       python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --placement-code "$place_rc" >/dev/null || exit 1
       [ "$place_rc" = 4 ] && printf 'dash-raw-session: 没有机器能接这个 scratch (%s) — 开在本机\n' "$_why" >&2 ;;
   esac
-  unset _pw _u _pv _why _prepo
+  unset _pw _u _pv _why _prepo _nothere
 fi
 # Opening here after all: this machine's cap verdict, held above, now applies.
 if [ -n "$CAP_HELD" ]; then refuse "$CAP_HELD"; exit 2; fi

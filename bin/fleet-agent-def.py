@@ -27,6 +27,7 @@ is `fleet.codex_model`; the tool list does not carry over (Codex has none).
                                   what the launcher starts it with, `key<TAB>value`
                                   lines: file · sha · name · model · spawn (0|1) ·
                                   reap · repo · agent · codex_model · codex_effort ·
+                                  travels (0|1 — see «travels») ·
                                   body (Codex / --no-agent-flag: the body's copy) and
                                   `arg` lines, one argv word each
   ship [--dir D] [--check]        install the agent files the fleet core ships
@@ -61,6 +62,13 @@ $FLEET_CONF_DIR/agents-shipped.json (name → sha). A file the core no longer
 ships (`epic-driver` moved into the fleet-epic plugin — issue #3116) is retired:
 removed while it is still the fleet's bytes, so the plugin's copy answers (and
 no plugin, no such agent); an edited one stays, the person's own.
+
+«travels» (T604): a file whose bytes are one the release itself carries — a core
+agent (conf/agent-defaults/claude/agents/) or a fleet plugin's (plugins/*/agents/)
+— is on every machine that runs this release, so a spawn started as it may be
+placed on another machine, which finds the same name there. Anything else (a
+project's own file, an edited copy, another plugin's) is this machine's alone:
+the spawn opens here.
 """
 import hashlib
 import json
@@ -302,6 +310,34 @@ def body_copy(d):
     return dst
 
 
+def released_shas():
+    """sha256 of every agent file the release carries (see «travels»)."""
+    dirs = [os.path.join(ROOT, 'conf', 'agent-defaults', 'claude', 'agents')]
+    pdir = os.path.join(ROOT, 'plugins')
+    if os.path.isdir(pdir):
+        dirs += [os.path.join(pdir, p, 'agents') for p in sorted(os.listdir(pdir))]
+    shas = set()
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        for fn in os.listdir(d):
+            if fn.endswith('.md'):
+                try:
+                    with open(os.path.join(d, fn), 'rb') as f:
+                        shas.add(hashlib.sha256(f.read()).hexdigest())
+                except OSError:
+                    pass
+    return shas
+
+
+def travels(path):
+    try:
+        with open(path, 'rb') as f:
+            return hashlib.sha256(f.read()).hexdigest() in released_shas()
+    except OSError:
+        return False
+
+
 def launch(name, start=None, agent='claude', agent_flag=True, for_agent=None):
     d = load(find(name, start, for_agent or agent))
     fr, fl = d['front'], d['fleet']
@@ -310,6 +346,7 @@ def launch(name, start=None, agent='claude', agent_flag=True, for_agent=None):
            ('model', '' if model == 'inherit' else model),
            ('spawn', '1' if grants_spawn(fr) else '0')]
     out += [(k, str(fl.get(k) or '')) for k in FLEET_KEYS]
+    out.append(('travels', '1' if travels(d['path']) else '0'))
     args = []
     if agent == 'codex':
         if fl.get('codex_model'):
