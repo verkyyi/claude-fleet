@@ -14,6 +14,14 @@
 #   D  the index docs/README.md lists every docs/dev/*.md
 #   E  nothing names the old flat layout `docs/<NAME>.md` (a selftest's or a Go
 #      test's fixture tree, and the prose inside docs/dev/ itself, excepted)
+#   G  the four places that describe the scripts — docs/dev/COMPONENTS.md,
+#      conf/fleet-env-internal.list, docs/dev/BREAK-IT.md, CLAUDE.md — name no
+#      script that is gone (EPIC T605 R1): every `bin/<name>` exists (a glob
+#      `bin/*lib.sh` matches one; `bin/ccquota` is the release's built binary),
+#      every bare `fleet-*.sh|py` / `fleet_*.py` is some tracked file's name. A
+#      line that must keep a gone name marks itself `# gone-ok: <why>`. The rule
+#      runs on its own red samples first (GONE_RED / GONE_GREEN), so a regex
+#      that stops matching reds instead of passing on nothing.
 #
 # A link inside a fenced code block or inline `code` is not a link. URLs,
 # mailto: and in-page `#anchor` links are not checked. A line that must keep a
@@ -111,6 +119,61 @@ for f in files:
             checked += 1
             if m.group(1) != 'README.md' and not os.path.exists(os.path.join(os.path.dirname(f), m.group(0))):
                 bad.append('E %s:%d: names docs/%s — the docs live in docs/dev/ now' % (f, n, m.group(1)))
+
+# G — a script the descriptions name is still there
+GONE_FILES = ('docs/dev/COMPONENTS.md', 'conf/fleet-env-internal.list', 'docs/dev/BREAK-IT.md', 'CLAUDE.md')
+GONE_BIN = re.compile(r'(?<![A-Za-z0-9_./~$<>-])bin/([A-Za-z0-9_.*-]+(?:/[A-Za-z0-9_.*-]+)*)')
+GONE_BARE = re.compile(r'(?<![A-Za-z0-9_./-])(fleet[-_][A-Za-z0-9_-]*\.(?:sh|py))(?![A-Za-z0-9_])')
+GONE_BUILT = {'bin/ccquota'}        # built into a release, never tracked
+import glob as _glob
+tracked_names = {os.path.basename(t) for t in files}
+
+def gone_names(line, have_path, have_name):
+    """The gone scripts one line names (empty when it marks itself gone-ok)."""
+    if 'gone-ok:' in line:
+        return []
+    out = []
+    for m in GONE_BIN.finditer(line):
+        p = 'bin/' + m.group(1).rstrip('.')
+        if p in GONE_BUILT or p == 'bin/':
+            continue
+        if not have_path(p):
+            out.append(p)
+    for m in GONE_BARE.finditer(line):
+        if not have_name(m.group(1)):
+            out.append(m.group(1))
+    return out
+
+def _have_path(p):
+    return bool(_glob.glob(p)) if '*' in p else os.path.exists(p)
+
+GONE_RED = [                         # each must name exactly one gone script
+    'runs `bin/fleet-gone-sample.sh` first',
+    'FLEET_X   knob: read by fleet-gone-sample.sh (#1)',
+    '| row | `fleet_gone_sample.py` keeps it |',
+    'every `bin/*gone-sample-lib.sh` file',
+]
+GONE_GREEN = [                       # each must name none
+    'runs `bin/fleet-lib.sh` first, then fleet-mcp.py',
+    'the `bin/*lib.sh` functions and `bin/tmux-shim/tmux`',
+    '`<current>/bin/ccquota` and `$BIN/../conf`',
+    'a historical `bin/fleet-gone-sample.sh` # gone-ok: deleted in #1, kept as the record',
+]
+for smp in GONE_RED:
+    if len(gone_names(smp, _have_path, tracked_names.__contains__)) != 1:
+        bad.append('G rule: red sample not caught: %s' % smp)
+for smp in GONE_GREEN:
+    hit = gone_names(smp, _have_path, tracked_names.__contains__)
+    if hit:
+        bad.append('G rule: green sample flagged %s: %s' % (' '.join(hit), smp))
+for f in GONE_FILES:
+    if not os.path.isfile(f):
+        bad.append('G %s is missing' % f)
+        continue
+    for n, line in enumerate(open(f, encoding='utf-8').read().split('\n'), 1):
+        for g in gone_names(line, _have_path, tracked_names.__contains__):
+            bad.append('G %s:%d: names %s, which is gone — drop it, or mark the line # gone-ok: <why>' % (f, n, g))
+        checked += len(GONE_BIN.findall(line)) + len(GONE_BARE.findall(line))
 
 # C — what docs/ holds
 extra = sorted(e for e in os.listdir('docs') if e not in ('README.md', 'dev', 'public'))
