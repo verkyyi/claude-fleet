@@ -34,6 +34,13 @@
 #              菜单 / 页面 / 界面 / 样式 …, anywhere in the card) with no
 #              「▶ 打开可交互原型」 link in its upper layer (issue #1754) — an
 #              ASCII sketch or a still is not a visual design
+# A TASK page (/fleet-task-plan, T661: its eyebrow reads 任务设计 / 任务 <id>) is
+# checked for its own frame too:
+#   task-section   a section the task layout carries is missing (#problem #cause
+#                  #metrics #charter #members #risks #signoff #evidence)
+#   task-evidence  a 原因 with no folded 证据 (code lines, logs, the scene) — a cause
+#                  nobody can check is a guess
+#   task-signoff   需要你定的事 without 「点头即全部按建议」 under it
 # It is a checklist aid, not a judge: a clean lint does not make a page good —
 # rules like "the surface answers the theme's question" are yours to read.
 #
@@ -89,6 +96,8 @@ class Surface(HTMLParser):
         self.cards = []        # per open card: base hidden level, all its text, has-prototype, name
         self.visual = []       # names of visual member cards with no prototype link
         self.a_card = None     # the card whose upper-layer <a> is open
+        self.sections = set()  # every <section id>, for the frame check of a task page
+        self.folds = {}        # section id → folds in it
     def flush(self, kind="p"):
         t = re.sub(r"\s+", " ", "".join(self.buf)).strip()
         self.buf = []
@@ -102,7 +111,9 @@ class Surface(HTMLParser):
             if tag == "img" and not self.hidden: self.buf.append("[图:" + (a.get("alt") or "") + "]")
             return
         hid = self.hidden
-        if tag == "section": self.section = a.get("id", "")
+        if tag == "section":
+            self.section = a.get("id", ""); self.sections.add(self.section)
+        if tag == "details" and "fold" in cls: self.folds[self.section] = self.folds.get(self.section, 0) + 1
         if tag in ("head","style","script","template"): self.hidden += 1
         elif tag == "details" and "fold" in cls: self.hidden += 1
         elif tag == "details" and "card" in cls:
@@ -222,6 +233,15 @@ for w in p.whom:
         warn("for-whom", "为谁要写具体的人或角色，并给出数量  ← " + w)
 for name in p.visual:
     warn("prototype", "视觉成员没有「▶ 打开可交互原型」链接  ← " + name)
+
+# a task page (/fleet-task-plan, T661) — its eyebrow says so
+if any(k == "eyebrow" and t.startswith("任务") for k, t, _ in p.lines):
+    for sid in ("problem","cause","metrics","charter","members","risks","signoff","evidence"):
+        if sid not in p.sections: warn("task-section", "任务页缺少 #" + sid)
+    if any(k == "h2" and s == "cause" and t == "原因" for k, t, s in p.lines) and not p.folds.get("cause"):
+        warn("task-evidence", "原因没有折叠的证据（代码行、日志、现场）")
+    if "signoff" in p.sections and not any(s == "signoff" and "点头即全部按建议" in t for _, t, s in p.lines):
+        warn("task-signoff", "需要你定的事下面没有「点头即全部按建议」")
 
 seen = set()
 for rule, text in warns:

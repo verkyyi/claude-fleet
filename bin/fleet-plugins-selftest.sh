@@ -32,7 +32,8 @@
 #      lists none again; install fleet-epic carries its three commands, epic-page
 #      and agents/epic-driver.md (and pulls in no other plugin, #4334)
 #   I  the epic plugin (issue #3116, EPIC #3111 C5): fleet-epic carries
-#      /fleet-epic-plan · run · report, epic-page and the epic-driver agent file
+#      /fleet-epic-plan · run · report · /fleet-task-plan (T661), epic-page (its
+#      task-page example among it) and the epic-driver agent file
 #      (`fleet: reap: loop-end`, every tool — spawn among them); the core ships
 #      no epic-driver; installed, `--as epic-driver` (the orchestrator's driver
 #      line) resolves to the plugin's file and the launch says `--agent
@@ -332,6 +333,7 @@ fi
 # ---- I: the epic plugin (issue #3116) ---------------------------------------------
 EP="$ROOT/plugins/fleet-epic"
 for f in commands/fleet-epic-plan.md commands/fleet-epic-run.md commands/fleet-epic-report.md \
+         commands/fleet-task-plan.md skills/epic-page/task-page.example.json \
          skills/epic-page/SKILL.md skills/epic-page/template.html agents/epic-driver.md; do
   [ -f "$EP/$f" ] && st_count || fail "I fleet-epic carries no $f"
 done
@@ -438,7 +440,7 @@ if command -v claude >/dev/null 2>&1 && claude plugin validate --help >/dev/null
   [ -z "$(ids)" ] && st_count || fail "H uninstall → none" "$(ids)"
   out=$(hc install fleet-epic@claude-fleet) || fail "H install fleet-epic" "$out"
   case " $(ids) " in *" fleet-epic@claude-fleet "*) st_count ;; *) fail "H install fleet-epic → listed" "$(ids)" ;; esac
-  for f in agents/epic-driver.md commands/fleet-epic-run.md skills/epic-page/SKILL.md; do
+  for f in agents/epic-driver.md commands/fleet-epic-run.md commands/fleet-task-plan.md skills/epic-page/SKILL.md; do
     ls "$H"/.claude/plugins/cache/claude-fleet/fleet-epic/*/"$f" >/dev/null 2>&1 && st_count \
       || fail "H the installed fleet-epic carries $f"
   done
