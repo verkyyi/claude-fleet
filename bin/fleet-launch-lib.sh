@@ -25,6 +25,10 @@
 #   fleet_launch_cfg [args…]              the session's composed configuration (#1782)
 #   fleet_launch_cfg_stamp                its fingerprint on the window
 #   fleet_launch_mint [args…]             a session credential from the proxy (#1972)
+#   fleet_launch_early [--no-mint|args…]  start the mint and the trust NOW, beside the
+#                                         launcher's other steps (T683); the mint,
+#                                         fleet_launch_trust_wait and fleet_launch_settle
+#                                         (before the exec) collect them
 #   fleet_launch_end <rc>                 the agent exited: the one close, when the
 #                                         table's `end` says its exit code is the word (T631)
 
@@ -273,10 +277,18 @@ fleet_launch_cfg_stamp() {
 # environment. Sets _fl_route _fl_port _fl_cred and returns 0; 4 = nothing to bind
 # (the ambient login) → the launch goes on as before; 404 from the hub, or any other
 # failure, REFUSES — a session never quietly falls back to holding the credential.
-_fl_route=''; _fl_port=''; _fl_cred=''
+_fl_route=''; _fl_port=''; _fl_cred=''; _fl_mint_early=0; _fl_trust_pid=''
 fleet_launch_mint() {   # [mint args…]
-  local px rc
-  px=$(bash "$BIN/fleet-session-cred.sh" mint --provider "$LAUNCH_AGENT" --sid "$FLEET_CRED_SID" "$@"); rc=$?
+  local px='' rc=1
+  if [ "$_fl_mint_early" = 1 ]; then   # started by fleet_launch_early: read its pipe
+    _fl_mint_early=0
+    IFS= read -r rc <&7 || rc=1
+    IFS= read -r px <&7 || :
+    exec 7<&-
+    case "$rc" in ''|*[!0-9]*) rc=1 ;; esac
+  else
+    px=$(bash "$BIN/fleet-session-cred.sh" mint --provider "$LAUNCH_AGENT" --sid "$FLEET_CRED_SID" "$@"); rc=$?
+  fi
   case "$rc" in
     0) IFS=$'\t' read -r _fl_route _fl_port _fl_cred <<< "$px"; return 0 ;;
     4) return 4 ;;
@@ -285,6 +297,50 @@ fleet_launch_mint() {   # [mint args…]
     *) fleet_launch_say 'FLEET_CRED_PROXY=1 but no session credential could be had from the proxy — refusing to launch (fleet-cred-proxy.sh status; logs/cred-proxy.log)'
        fleet_launch_refused cred; exit 1 ;;
   esac
+}
+
+# --- the slow steps started early (T683: a cold start ≤ 5 s) -----------------------------
+# The mint (the proxy's ensure · route · mint, ~0.6–1.2 s) and the trust (~0.3 s) wait
+# on nothing the launcher computes after its agent is known, yet they used to run one
+# after the other and after the hooks / MCP / composed configuration. fleet_launch_early
+# starts both now: the mint on a PIPE (fd 7 — the credential never touches a file; its
+# exit code is the first line, its answer the second), the trust as a background job.
+# fleet_launch_mint then reads the pipe instead of minting, and fleet_launch_trust_wait
+# waits for the trust before anything that reads what it writes (a Codex mirror of
+# config.toml, the agent itself). --wrap is the LAUNCHER's pid ($$ — the pid the agent
+# is exec'd into), never the background subshell's. FLEET_LAUNCH_EARLY=0: both run in
+# place, one after the other, as before.
+fleet_launch_early() {   # [--no-mint | mint args…] — --no-mint: this launch will not mint
+  local mint=1
+  [ "${1:-}" = --no-mint ] && { mint=0; shift; }
+  [ "${FLEET_LAUNCH_EARLY:-1}" != 0 ] || return 0
+  if [ "$mint" = 1 ] && [ -n "${FLEET_CRED_SID:-}" ] && [ "$_fl_mint_early" = 0 ]; then
+    exec 7< <(px=$(FLEET_SESSION_WRAP="${FLEET_SESSION_WRAP:-$$}" bash "$BIN/fleet-session-cred.sh" mint \
+                     --provider "$LAUNCH_AGENT" --sid "$FLEET_CRED_SID" "$@"); rc=$?
+              printf '%s\n%s\n' "$rc" "$px")
+    _fl_mint_early=1
+  fi
+  if [ -z "$_fl_trust_pid" ]; then
+    fleet_launch_trust </dev/null &
+    _fl_trust_pid=$!
+  fi
+}
+# Before the agent is exec'd: the trust done, and a pipe nobody read (this launch
+# took another road to its credential) closed — the agent inherits neither.
+fleet_launch_settle() {
+  fleet_launch_trust_wait
+  [ "$_fl_mint_early" = 1 ] && { exec 7<&-; _fl_mint_early=0; }
+  return 0
+}
+# The trust: in place, or the early job's end (its exit is always 0).
+fleet_launch_trust_wait() {
+  if [ -n "$_fl_trust_pid" ]; then
+    [ "$_fl_trust_pid" = settled ] || wait "$_fl_trust_pid" 2>/dev/null
+    _fl_trust_pid=settled
+  else
+    fleet_launch_trust; _fl_trust_pid=settled
+  fi
+  return 0
 }
 
 # fleet_launch_end <rc> — the agent this launcher waited on has exited with <rc>

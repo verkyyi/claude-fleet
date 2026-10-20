@@ -114,6 +114,13 @@ elif [ -n "$_fc_agent" ] && [ "$_fc_agent" != "$LAUNCH_AGENT" ]; then
 fi
 unset _fc_agent _fc_explicit _fc_args _fc_want _fc_a
 
+# The slow steps start now, beside everything below (T683, a cold start ≤ 5 s): the
+# session credential's mint and the folder trust — fleet_launch_early (the lib); the
+# mint further down reads its pipe, fleet_launch_settle waits for both before the exec.
+_fc_label="${FLEET_ACCOUNT_LABEL:-}"; [ "$_fc_sep" = 1 ] && _fc_label=''
+fleet_launch_early ${_fc_label:+--account "$_fc_label"}
+unset _fc_label
+
 # The agent file's model is this launch's FLEET_MODEL default (issue #3122) — the
 # per-model cap, the subagent tier and @cc_model below go on as they always did,
 # and a fleet's FLEET_MODEL still wins; Claude Code reads the rest (tools, body)
@@ -126,8 +133,9 @@ fleet_as_stamp
 
 # Project trust (issue #563; a trusted node's wide form, #2282): every spawn, restore,
 # migrate and wake walks through this door, so it answers "trust this folder?" for the
-# fleet's own directories — fleet_launch_trust (the lib).
-fleet_launch_trust
+# fleet's own directories — fleet_launch_trust (the lib), started early (above) and
+# waited for by fleet_launch_settle before the exec (which runs it in place when
+# FLEET_LAUNCH_EARLY=0).
 
 # Default spawned sessions to opus (never let a new window fall back to sonnet).
 # Overridable per install/fleet via FLEET_MODEL in fleet.conf; set it empty to
@@ -175,6 +183,43 @@ mcp_flag=()
 fleet_launch_mcp -- "$@"
 fleet_launch_browser
 
+# The fleet mod (issue #1335, EPIC #1334): every Claude session this door opens
+# loads mod/fleet/ — the plugin that reports from INSIDE the session (version
+# gate + heartbeat on the window's @mod_* options; later EPIC members add state,
+# context and commands). FLEET_MOD=0, or no plugin folder beside bin/ (a lib-less
+# or pre-#1335 install, a selftest sandbox), adds nothing: the argv is byte for
+# byte what it was. The =form, like --mcp-config's above, so the value can never
+# be read off a following positional (the #476 lesson), and `--plugin-dir` loads
+# without the hot-reload question (measured on 2.1.288). A caller's own
+# --plugin-dir is additive, so it is never skipped for one.
+mod_flag=()
+if command -v fleet_mod_on >/dev/null 2>&1 && fleet_mod_on; then
+  _fc_mod=$(fleet_mod_dir 2>/dev/null) && mod_flag=("--plugin-dir=$_fc_mod")
+  unset _fc_mod
+fi
+
+# The session's configuration, fixed at launch (issue #1782): fleet_launch_cfg (the
+# lib) hands a --settings and a --mcp-config file for what the login's files lack
+# (never an MCP file under an allowlist or a caller's own MCP flags), and the
+# fingerprint lands on the window as @agent_cfg.
+cfg_flag=()
+_fc_ca=(--lock "${FLEET_AGENT_LOCK:-warn}")
+[ -n "${FLEET_MCP_CONFIG:-}" ] && _fc_ca+=(--no-mcp)
+case " $* " in *" --mcp-config "*|*" --mcp-config="*|*" --strict-mcp-config "*) _fc_ca+=(--no-mcp) ;; esac
+case " $* " in *" --settings "*|*" --settings="*) _fc_ca+=(--no-settings) ;; esac
+if command -v fleet_mod_on >/dev/null 2>&1 && ! fleet_mod_on; then _fc_ca+=(--mod-off); fi
+fleet_launch_cfg ${_fc_ca[@]+"${_fc_ca[@]}"}
+# enforce on a locked mod: FLEET_MOD=0 is ignored, the mod loads anyway
+# shellcheck disable=SC2154  # fleet_launch_cfg sets it
+if [ "$_fl_cfg_mod" = on ] && [ "${#mod_flag[@]}" -eq 0 ] && command -v fleet_mod_dir >/dev/null 2>&1; then
+  _fc_mod=$(fleet_mod_dir 2>/dev/null) && mod_flag=("--plugin-dir=$_fc_mod")
+  unset _fc_mod
+fi
+fleet_launch_cfg_stamp
+unset _fc_ca
+
+# (After the composed configuration above, so the early mint — fleet_launch_early —
+# has that long to finish beside it: T683.)
 # Through this login's credential proxy (issue #1972, EPIC #1967 C5): the wrapper
 # handed this launch a FLEET_CRED_SID because FLEET_CRED_PROXY=1. The proxy mints a
 # SESSION credential for it (fcp1. bound to $label; on an untrusted machine an
@@ -238,41 +283,6 @@ PY
   fi
 fi
 
-# The fleet mod (issue #1335, EPIC #1334): every Claude session this door opens
-# loads mod/fleet/ — the plugin that reports from INSIDE the session (version
-# gate + heartbeat on the window's @mod_* options; later EPIC members add state,
-# context and commands). FLEET_MOD=0, or no plugin folder beside bin/ (a lib-less
-# or pre-#1335 install, a selftest sandbox), adds nothing: the argv is byte for
-# byte what it was. The =form, like --mcp-config's above, so the value can never
-# be read off a following positional (the #476 lesson), and `--plugin-dir` loads
-# without the hot-reload question (measured on 2.1.288). A caller's own
-# --plugin-dir is additive, so it is never skipped for one.
-mod_flag=()
-if command -v fleet_mod_on >/dev/null 2>&1 && fleet_mod_on; then
-  _fc_mod=$(fleet_mod_dir 2>/dev/null) && mod_flag=("--plugin-dir=$_fc_mod")
-  unset _fc_mod
-fi
-
-# The session's configuration, fixed at launch (issue #1782): fleet_launch_cfg (the
-# lib) hands a --settings and a --mcp-config file for what the login's files lack
-# (never an MCP file under an allowlist or a caller's own MCP flags), and the
-# fingerprint lands on the window as @agent_cfg.
-cfg_flag=()
-_fc_ca=(--lock "${FLEET_AGENT_LOCK:-warn}")
-[ -n "${FLEET_MCP_CONFIG:-}" ] && _fc_ca+=(--no-mcp)
-case " $* " in *" --mcp-config "*|*" --mcp-config="*|*" --strict-mcp-config "*) _fc_ca+=(--no-mcp) ;; esac
-case " $* " in *" --settings "*|*" --settings="*) _fc_ca+=(--no-settings) ;; esac
-if command -v fleet_mod_on >/dev/null 2>&1 && ! fleet_mod_on; then _fc_ca+=(--mod-off); fi
-fleet_launch_cfg ${_fc_ca[@]+"${_fc_ca[@]}"}
-# enforce on a locked mod: FLEET_MOD=0 is ignored, the mod loads anyway
-# shellcheck disable=SC2154  # fleet_launch_cfg sets it
-if [ "$_fl_cfg_mod" = on ] && [ "${#mod_flag[@]}" -eq 0 ] && command -v fleet_mod_dir >/dev/null 2>&1; then
-  _fc_mod=$(fleet_mod_dir 2>/dev/null) && mod_flag=("--plugin-dir=$_fc_mod")
-  unset _fc_mod
-fi
-fleet_launch_cfg_stamp
-unset _fc_ca
-
 # The binary (issue #1774): $FLEET_CLAUDE_BIN, else `claude` when PATH has it (the
 # argv byte for byte as before), else ~/.local/bin → /opt/homebrew/bin →
 # /usr/local/bin. Nowhere → one line naming every place tried, and exit 127.
@@ -287,6 +297,7 @@ if [ ${#as_flag[@]} -gt 0 ] && [ "${as_flag[0]}" = --agent ] \
    && command -v fleet_claude_has_agent_flag >/dev/null 2>&1 && ! fleet_claude_has_agent_flag "$_fc_claude"; then
   fleet_as_resolve claude --no-agent-flag
 fi
+fleet_launch_settle
 if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ "${FLEET_LOOP_AGENT:-}" = claude ]; then
   exec python3 "$BIN/fleet-loop.py" bridge -- "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${as_flag[@]+"${as_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
 fi

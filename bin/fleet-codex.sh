@@ -76,6 +76,13 @@ if [ -n "${FLEET_CODEX_PROFILE:-}" ] && [ "${FLEET_CODEX_MANAGED:-0}" != 1 ]; th
   exec "${FLEET_QUOTA_BIN:-ccquota}" codex --codex-bin "$BIN/fleet-codex.sh" run "$FLEET_CODEX_PROFILE" -- "$@"
 fi
 
+# The slow steps start now, beside everything below (T683, a cold start ≤ 5 s): the
+# session credential's mint (not for a ccquota profile — the mint below says the same)
+# and the folder trust — fleet_launch_early (the lib); the trust is waited for before
+# the credential-free mirror copies config.toml, the mint reads its pipe.
+if [ -z "${FLEET_CODEX_PROFILE:-}" ]; then fleet_launch_early --codex-home "${CODEX_HOME:-$HOME/.codex}"
+else fleet_launch_early --no-mint; fi
+
 # --- argv: the LAST argument is the seed prompt unless it looks like a flag; flags
 # before it pass through to codex untouched (`--agent codex` means codex flags)
 pass=(); prompt=''; have_prompt=0
@@ -111,7 +118,6 @@ fi
 [ -n "${FLEET_MAIN:-}" ] && export FLEET_MAIN    # the base-checkout guard reads it off the env first
 
 fleet_launch_browser
-fleet_launch_trust
 
 # check_for_update_on_startup=false (issue #2401): a fresh home's «Update available!»
 # picker has nobody to answer it; Codex's version is the release's to move. Hooks need
@@ -169,6 +175,7 @@ fi
 # env_key; plugins / apps / analytics off) and a credential-free mirror of the account
 # home as CODEX_HOME (@codex_home keeps the REAL one). Not for a ccquota profile.
 _fx_real_home=''; _fx_route=''
+fleet_launch_trust_wait                      # started early (above); in place when FLEET_LAUNCH_EARLY=0
 if [ -n "${FLEET_CRED_SID:-}" ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] \
    && fleet_launch_mint --codex-home "${CODEX_HOME:-$HOME/.codex}"; then
   # shellcheck disable=SC2154  # the lib's mint sets them
@@ -230,6 +237,7 @@ fi
 # The runner: the pane's private app-server (a loop's own bridge), else codex. Only a
 # successful CLI exit closes the window (#730: SessionEnd always says reason=other) —
 # the table's `end` column, run by fleet_launch_end.
+fleet_launch_settle                          # nothing early left behind for the agent to inherit
 runner=(codex)
 if [ -n "${FLEET_LOOP_SPEC:-}" ]; then
   runner=(python3 "$BIN/fleet-loop.py" bridge --)

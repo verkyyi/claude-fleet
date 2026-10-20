@@ -594,6 +594,13 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Pre-trust checkout at spawn @group=spawn @tier=advanced @scope=fleet @edit=bool
 #FLEET_PRETRUST=1
 
+# The launcher's slow steps start early (T683, a cold start ≤ 5 s): the session
+# credential's mint (through the credential proxy) and the folder trust run beside
+# the launcher's other steps — the mint on a pipe, never a file — and are collected
+# before the agent starts. 0 runs them in place, one after the other, as before.
+# @label=Start mint + trust early @group=spawn @tier=advanced @scope=fleet @edit=bool
+#FLEET_LAUNCH_EARLY=1
+
 # The fleet mod (issue #1335, EPIC #1334): every Claude session the launcher
 # (bin/fleet-claude.sh) opens loads mod/fleet/ with `--plugin-dir` — a Claude Code
 # plugin that reports from inside the session. It checks the Claude Code version

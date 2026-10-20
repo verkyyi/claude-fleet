@@ -347,7 +347,7 @@ def cred_mint():
     deadline = time.time() + float(os.environ.get("FLEET_CRED_FID_WAIT", CRED_FID_WAIT_S))
     fid = pane_opt("#{@fleet_id}")
     while not fid and time.time() < deadline:
-        time.sleep(0.2)
+        time.sleep(0.05)   # the spawner's stamp lands within ms of new-window (T683)
         fid = pane_opt("#{@fleet_id}")
     session = current_session()
     if not fid:   # a road that does not stamp: mint it now (fleet_window_fid)
@@ -357,11 +357,16 @@ def cred_mint():
         raise ToolFault("this window has no @fleet_id and none could be minted")
     row = pane_opt("#{@repo}\t#{@issue}\t#{@origin}").split("\t")
     row += [""] * (3 - len(row))
+    # the fleet's UUID and this pane's key in ONE sourcing of fleet-lib.sh (T683: each
+    # is a bash start on the launch's critical path)
+    both = lib("printf '%s\\n' \"$(fleet_uuid " + shquote(session) + " 2>/dev/null)\" "
+               "\"$(fleet_origin_key 2>/dev/null)\"").stdout.split("\n")
+    both += [""] * (2 - len(both))
     now = int(time.time())
     claims = {
         "v": 1, "fleet": fleet_label(), "fid": fid,
-        "fleet_uuid": lib("fleet_uuid " + shquote(session) + " 2>/dev/null || true").stdout.strip(),
-        "key": origin_key(), "repo": row[0], "issue": row[1], "origin": row[2],
+        "fleet_uuid": both[0].strip(),
+        "key": both[1].strip(), "repo": row[0], "issue": row[1], "origin": row[2],
         "iat": now, "exp": now + CRED_TTL_S, "nonce": secrets.token_hex(12),
     }
     return cred_sign(claims, cred_key(create=True))
