@@ -4,7 +4,7 @@
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 python3 - "$BIN" <<'PY'
-import importlib.util, json, os, pathlib, shutil, subprocess, sys, tempfile, time, unittest
+import importlib.util, json, os, runpy, pathlib, shutil, subprocess, sys, tempfile, time, unittest
 from unittest import mock
 
 BIN = pathlib.Path(sys.argv[1])
@@ -462,6 +462,29 @@ class SessionTests(unittest.TestCase):
                               FLEET_ID_DIR=str(ids), FLEET_ID_PUSH='0', FLEET_CONF_DIR=str(conf))
             follower = cx.Follow(dict(TMUX_PANE=pane, FLEET_CODEX_LAUNCHER_PID='1234', FLEET_CODEX_REMOTE=server.remote))
             self.assertEqual(follower.tick(), '')   # connected, nothing started yet
+            # T572: fleet's own RPC starting a thread on this server is never followed —
+            # its thread/started carries the same originator a /clear's does
+            rpc = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))
+            own = rpc['Client'](server.remote, timeout=5)
+            fleet_t = own.call('thread/start', {'cwd': '/fixture'})['thread']['id']
+            own.close()
+            self.assertEqual(server.threads[fleet_t]['originator'], 'claude_fleet')
+            self.assertIn(fleet_t, rpc['own_threads'](server.remote)[0])
+            for _ in range(5):
+                self.assertEqual(follower.tick(), '', 'a thread fleet started is not the TUI moving on')
+                time.sleep(0.1)
+            self.assertEqual(call('show-options', '-wv', '-t', pane, '@codex_session_id'), old_t)
+            p = peer('beside a fleet thread'); self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertEqual(queued()[-1][4], old_t, "fleet's own thread does not hold delivery")
+            qlog.write_text(qlog.read_text().splitlines(True)[0])   # the leg below counts from one
+            if book.exists(): book.unlink()
+            # a thread/started the server cannot confirm (not loaded there) moves nothing
+            ghost = fake_server.uuid7(now + 500)
+            server.broadcast({'method': 'thread/started', 'params': {'thread': fake_server.tui_thread(ghost)}})
+            for _ in range(5):
+                self.assertEqual(follower.tick(), '', 'unconfirmed: no follow')
+                time.sleep(0.1)
+            self.assertEqual(call('show-options', '-wv', '-t', pane, '@codex_session_id'), old_t)
             # /clear: the TUI's new thread is loaded beside the old one, not yet followed
             server.add(fake_server.tui_thread(new_t))
             p = peer('child report while cleared')

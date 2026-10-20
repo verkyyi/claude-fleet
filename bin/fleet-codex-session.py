@@ -420,7 +420,6 @@ class Meter:
         except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
             return False
 
-TUI_ORIGINATOR = "codex-tui"
 # Nothing but thread/started is read off the follower's connection.
 FOLLOW_OPT_OUT = ('item/agentMessage/delta', 'item/reasoning/textDelta', 'item/reasoning/summaryTextDelta',
                   'item/commandExecution/outputDelta', 'item/fileChange/outputDelta', 'item/plan/delta',
@@ -446,14 +445,21 @@ def newer(a, b):
     return ta is not None and tb is not None and (ta, a) > (tb, b)
 
 
-def tui_root(thread):
-    """A thread the window's own TUI started: no parent (not a subagent), not
-    ephemeral, and — when the server says so — originated by codex-tui."""
+def rpc_module():
+    import runpy
+    return runpy.run_path(str(Path(__file__).with_name("fleet-codex-rpc.py")))
+
+
+def tui_root(thread, own=()):
+    """A root thread that may be the window's TUI's: no parent (not a subagent), not
+    ephemeral, and not one fleet's own RPC started (`own`). Never the originator
+    (T572): the server reports ONE per process — on a private server the first
+    initialize's clientInfo name, 'claude_fleet' — whoever opened the thread."""
     return (isinstance(thread, dict) and valid_id(thread.get("id")) and not thread.get("parentThreadId")
-            and not thread.get("ephemeral") and thread.get("originator", TUI_ORIGINATOR) == TUI_ORIGINATOR)
+            and not thread.get("ephemeral") and thread.get("id") not in own)
 
 
-def current_thread(client, sid):
+def current_thread(client, sid, own=()):
     """'' when sid is still the TUI's current thread on this private server, else why
     not. Codex 0.162 keeps the old thread LOADED after /clear or /new — a queue into
     it is accepted and never shown (T540) — so being loaded is not enough: no newer
@@ -462,25 +468,44 @@ def current_thread(client, sid):
     if sid not in loaded:
         return "thread %s is not loaded on the window's server" % sid
     for tid in loaded:
-        if tid == sid or not newer(tid, sid):
+        if tid == sid or tid in own or not newer(tid, sid):
             continue
         thread = (client.call("thread/read", {"threadId": tid}) or {}).get("thread") or {}
-        if thread.get("id") == tid and tui_root(thread):
+        if thread.get("id") == tid and tui_root(thread, own):
             return "the window moved on to thread %s (a /clear or /new not yet followed)" % tid
     return ""
 
 
+def verify_started(client, tid, own=()):
+    """The server's own word that tid is now the TUI's thread (T572), or None: loaded,
+    a root thread fleet did not start, and no newer such thread beside it. Asked
+    before the window follows; an answer that cannot be had follows nothing, and
+    delivery's own check keeps holding."""
+    loaded = (client.call("thread/loaded/list", {}) or {}).get("data") or []
+    if tid not in loaded:
+        return None
+    thread = (client.call("thread/read", {"threadId": tid}) or {}).get("thread") or {}
+    if thread.get("id") != tid or not tui_root(thread, own):
+        return None
+    for other in loaded:
+        if other != tid and other not in own and newer(other, tid):
+            seen = (client.call("thread/read", {"threadId": other}) or {}).get("thread") or {}
+            if seen.get("id") == other and tui_root(seen, own):
+                return None
+    return thread
+
+
 def check_current(remote, sid):
     """current_thread() asked of the window's own server; unreachable raises."""
-    import runpy
-    client = runpy.run_path(str(Path(__file__).with_name("fleet-codex-rpc.py")))["Client"](remote, timeout=5)
+    rpc = rpc_module()
+    client = rpc["Client"](remote, timeout=5)
     try:
-        return current_thread(client, sid)
+        return current_thread(client, sid, rpc["own_threads"](remote)[0])
     finally:
         client.close()
 
 
-def follow(pane, owner, thread, socket=""):
+def follow(pane, owner, thread, socket="", own=()):
     """Re-point the window at the thread its TUI just started (T540). Codex 0.162 runs
     SessionStart only at a thread's first turn, so after /clear (or /new) the
     window's @codex_identity kept naming the old thread until the person spoke, and
@@ -490,7 +515,7 @@ def follow(pane, owner, thread, socket=""):
     hook then finds the same thread and changes nothing. Returns the new id or ''."""
     sid = thread.get("id") if isinstance(thread, dict) else None
     data = identity(pane, socket)
-    if (not tui_root(thread) or not data or data.get("owner") != owner or not owner.isdigit()
+    if (not tui_root(thread, own) or not data or data.get("owner") != owner or not owner.isdigit()
             or data.get("session_id") == sid or not newer(sid, data.get("session_id"))):
         return ""
     if tmux(["display-message", "-p", "-t", pane, "#{@authority_receipt}"], socket):
@@ -521,14 +546,17 @@ class Follow:
     """The runtime's thread follower (T540): one connection to the window's private
     server, read once a second for thread/started. Never raises. Off under an
     authority context (its receipt binds the thread) or FLEET_CODEX_FOLLOW=0 —
-    then delivery's own check holds what the old thread would have swallowed."""
+    then delivery's own check holds what the old thread would have swallowed.
+    A started thread is followed only once the server confirms it (T572): fleet's
+    own starts are skipped, one whose start is still in flight waits a tick."""
 
     def __init__(self, env, rpc_client=None):
         self.pane, self.owner = env.get("TMUX_PANE", ""), env.get("FLEET_CODEX_LAUNCHER_PID", "")
         self.remote = env.get("FLEET_CODEX_REMOTE", "")
         self.off = bool(env.get("FLEET_AUTHORITY_CONTEXT")) or env.get("FLEET_CODEX_FOLLOW", "1") == "0"
-        self.rpc_client = rpc_client
+        self.rpc_client, self.own_threads = rpc_client, None
         self.client, self.retry_at = None, 0.0
+        self.waiting = {}  # thread id -> when it was first seen
 
     def close(self):
         if self.client is not None:
@@ -547,9 +575,10 @@ class Follow:
             if self.client is None:
                 if now < self.retry_at:
                     return ""
-                if self.rpc_client is None:
-                    import runpy
-                    self.rpc_client = runpy.run_path(str(Path(__file__).with_name("fleet-codex-rpc.py")))["Client"]
+                if self.rpc_client is None or self.own_threads is None:
+                    rpc = rpc_module()
+                    self.rpc_client = self.rpc_client or rpc["Client"]
+                    self.own_threads = rpc["own_threads"]
                 self.client = self.rpc_client(self.remote, timeout=1, opt_out_notifications=FOLLOW_OPT_OUT)
             self.client.deadline = time.monotonic() + .2
             for _ in range(256):
@@ -557,9 +586,22 @@ class Follow:
                 if event is None:
                     break
                 if isinstance(event, dict) and event.get("method") == "thread/started":
-                    moved = follow(self.pane, self.owner, (event.get("params") or {}).get("thread")) or moved
+                    thread = (event.get("params") or {}).get("thread")
+                    if tui_root(thread):
+                        self.waiting.setdefault(thread["id"], now)
+            if self.waiting:
+                own, pending = self.own_threads(self.remote)
+                for tid in sorted(self.waiting, key=lambda t: (created_ms(t) or 0, t)):
+                    if tid in own or now - self.waiting[tid] > 30:
+                        self.waiting.pop(tid)
+                    elif not pending:
+                        self.waiting.pop(tid)
+                        thread = verify_started(self.client, tid, own)
+                        if thread is not None:
+                            moved = follow(self.pane, self.owner, thread, own=own) or moved
         except Exception:
             self.close()
+            self.waiting.clear()
             self.retry_at = now + 5
         return moved
 
