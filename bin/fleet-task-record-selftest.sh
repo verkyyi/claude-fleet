@@ -95,6 +95,12 @@ assert b["token"] == "orch:k1" and b["title"] == "看看风扇" and b["via"] == 
 assert "rule" not in b, b
 assert "repo" not in b and "issue" not in b, b
 PY
+# a hub with task_ids (EPIC T644 C1): the task's code first, T<n> after it
+printf '{"id":"T5","task":"T5","fid":"3fa85f64-5717-4562-b3fc-2c963f66afa6","short":"FF1W"}' > "$ANS"
+out=$(bash "$R" new --title t --token k 2>"$WORK/err"); rc=$?
+[ "$rc" = 0 ] && [ "$out" = "$(printf 'FF1W\nT5')" ] && ok "B a task_ids hub: the code on the first line, then T<n>" \
+  || st_miss "B code first: rc=$rc out=[$out] $(cat "$WORK/err")"
+rm -f "$ANS"
 echo 409 > "$CODE"; : > "$CURL_LOG"
 bash "$R" new --title t --token k >/dev/null 2>"$WORK/err"; rc=$?
 [ "$rc" = 1 ] && grep -q 'refused (HTTP 409)' "$WORK/err" && ok "B a refusal exits 1 and says so" || st_miss "B refusal rc=$rc $(cat "$WORK/err")"
@@ -144,6 +150,14 @@ bash "$R" set 5 --asked q >/dev/null 2>&1; [ "$?" = 2 ] && ok "C a bare number i
 g=$(bash "$R" get T5); grep -q '^argv: .*-X GET .*/v1/node/tasks/T5$' "$CURL_LOG" && [ "$g" = '{"task":{"id":"T5","issue":"o/r#77"}}' ] \
   && ok "C get: GET the record, its JSON on stdout" || st_miss "C get: [$g] $(cat "$CURL_LOG")"
 rm -f "$ANS"
+: > "$CURL_LOG"
+for ref in FF1W '#ff1w' 3fa85f64-5717-4562-b3fc-2c963f66afa6; do
+  bash "$R" get "$ref" >/dev/null 2>&1 || st_miss "C get $ref refused"
+done
+[ "$(grep -c -- '-X GET ' "$CURL_LOG")" = 3 ] && grep -q '/v1/node/tasks/ff1w$' "$CURL_LOG" \
+  && grep -q '/v1/node/tasks/3fa85f64-5717-4562-b3fc-2c963f66afa6$' "$CURL_LOG" \
+  && ok "C get by the task's code or ID too (EPIC T644 C1: the hub resolves it)" || st_miss "C get by code: $(cat "$CURL_LOG")"
+bash "$R" get 'K5;x' >/dev/null 2>&1; [ "$?" = 2 ] && ok "C get: not a reference is usage" || st_miss "C get K5;x accepted"
 
 # --- D: dispatch -------------------------------------------------------------------
 : > "$CURL_LOG"; rm -f "$WORK/calls"

@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"regexp"
@@ -254,6 +255,12 @@ func (s *Server) handleFleetTasks(w http.ResponseWriter, r *http.Request) {
 		ref, what, _ := strings.Cut(rest, "/")
 		if what == "" && r.Method == http.MethodGet {
 			t, err := s.ownTask(p, ref)
+			var amb *store.TaskAmbiguity
+			if errors.As(err, &amb) {
+				writeJSON(w, http.StatusConflict, map[string]any{"code": "AMBIGUOUS", "candidates": amb.Candidates,
+					"error": ref + " names more than one task — name it longer"})
+				return
+			}
 			if err != nil {
 				httpError(w, http.StatusNotFound, "no such task of yours")
 				return
@@ -309,13 +316,14 @@ func faultStatus(code string) int {
 }
 
 // ownTask is the record ref names when it is the caller's — any for the
-// operator's door.
+// operator's door. A code naming several of the caller's tasks is a
+// *store.TaskAmbiguity.
 func (s *Server) ownTask(p fleetPrincipal, ref string) (store.FleetTask, error) {
-	id := store.ParseTaskRef(ref)
-	if id == 0 {
-		return store.FleetTask{}, sql.ErrNoRows
+	owner := ""
+	if p.Person != "" {
+		owner = p.Actor
 	}
-	t, err := s.Store.FleetTask(id)
+	t, err := s.Store.ResolveFleetTask(owner, ref) // a code, the task's ID or T<n> (EPIC T644 C1)
 	if err != nil {
 		return store.FleetTask{}, err
 	}

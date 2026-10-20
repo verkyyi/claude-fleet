@@ -239,3 +239,28 @@ Tab 操作页在动作下面列出：编号 + 完整 ID、别名、每一段（a
 
 `bin/fleet-id-migrate-selftest.sh` 钉节点这一半；hub 那一半是 `hub/store/fleet_id_migrate_test.go`（§5 样例表逐条、
 反例、apply 一次、开关两轮）与 `hub/api/fleet_id_migrate_test.go`（机器只问一次、失联不动、开关两轮下旧路拒收、记录读 ID 的结果）。
+
+## 任务的编号（EPIC T644 C1：任务一建好就有编号）
+
+- **hub 写下任务记录的那一刻就给它一个 ID**（`hub/store/fleet_task_ids.go`）：和窗口同一种 UUID，记在
+  `fleet_tasks.fid`；对人只叫它的码——「写下来的」那段（在这个人全部历史里不重复、至少 4 位，`fleet_ids.short`）。
+  `T<n>` 降为只读别名：记录 JSON 的 `id` 仍是 `T<n>`、新增 `task`（同一个 `T<n>`）、`fid`、`short`
+  （compat-1v：下一批删 `id` 的旧义）。`fleet-task-record.sh new` 第一行打码、第二行 `T<n>`；老 hub 只答 `T<n>`。
+- **铸出来的 ID 是 fleet_ids 里一行「预留」**：属这个人、没有机器（`endpoint_id` 空）、seq 0、`task` 空、
+  `task_id` 是它自己。预留让它的码和这个人别的 ID 分得开、节点的解析也找得到；`task` 留空，所以
+  `idCarrying` / `IDTaskOutcome` 不会把它当成「有窗口带着 T<n>」——从没开过窗口的记录照样能取消。
+  这个人的第一台机器推这个 ID 的事件时接手它（`ApplyFleetIDEvents`）——为任务开的窗口用任务的 ID，是 C2 的路。
+- **`fleet_ids.task_id`** 指任务的 ID：推上来的 `opened` 带 `task=T<n>` 时 hub 查出那条记录的 `fid` 填进去；
+  `task` 列再留一个版本。
+- **解析只有一个**：`store.ResolveFleetTask`——码（至少 2 位，大小写、`#`、I/L→1、O→0 都收）、完整 ID（任务的，
+  或属于它的窗口 ID）、`T<n>`（有这条记录时按别名，否则当码读）。码先在**未结束**（记录未收口：成功 / 失败 /
+  取消 / 拒绝 / closed 以外）里找，唯一即命中，多个 ⇒ 409 `{code: AMBIGUOUS, candidates}`；未结束里没有 ⇒
+  全部历史里同样规则。从不替人猜。`/v1/node/tasks/<ref>`（及其 `children` 等子路）与 `/v1/fleet/tasks/<ref>`
+  都走它；建 v1 记录时的 `parent_task` 也收码 / ID。
+- **C1 之前的记录**：`POST /v1/node/tasks/ids-backfill {apply?}`（`store.BackfillTaskIDs`，只动这台机器主人的记录），
+  默认 dry-run 出数（total · already · linked · minted · items），apply 才写：先对上已带它号码的最早 ID
+  （`task = T<n>` 或迁移的别名，按 opened_at），没有就补铸一行预留。重复跑是空操作；旧列一个不删。
+- **能力位**：`/version` 的 `capabilities` 含 `task_ids`；本机按它决定走不走新路，不按版本号猜。
+
+`hub/store/fleet_task_ids_test.go`（建即得 ID、三种引用同一条、两位码多义 / 未结束优先 / 全史多义、回填 dry / apply /
+幂等）与 `hub/api/fleet_task_ids_test.go`（节点路一整圈、409 候选、回填路由、能力位）钉住它。

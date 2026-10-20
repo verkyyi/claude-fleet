@@ -20,7 +20,7 @@ func (s *Server) nodeTaskCollaboration(w http.ResponseWriter, r *http.Request, e
 	}
 	t, err := s.nodeOwnTask(owner, task)
 	if err != nil {
-		httpError(w, 404, "no such task")
+		taskRefError(w, task, err)
 		return true
 	}
 	switch action {

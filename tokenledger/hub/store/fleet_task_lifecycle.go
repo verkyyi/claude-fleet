@@ -187,6 +187,10 @@ func (s *Store) acceptFleetTask(t FleetTask, token string, now time.Time) (Fleet
 		rec.ParentTask, rec.ParentSession, rec.ParentGeneration, rec.AttemptID, rec.ID); err != nil {
 		return FleetTask{}, err
 	}
+	// EPIC T644 C1: the task's ID, minted with the record — one transaction.
+	if err = s.taskIDTx(tx, &rec, "", now); err != nil {
+		return FleetTask{}, err
+	}
 	return rec, tx.Commit()
 }
 

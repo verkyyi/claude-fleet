@@ -61,8 +61,16 @@ const (
 
 // FleetTask is one task record.
 type FleetTask struct {
-	ID          int64  `json:"-"`
-	Ref         string `json:"id"` // T<id>
+	ID  int64  `json:"-"`
+	Ref string `json:"id"` // T<id> — compat-1v: 下一批删 (the task's ID is FID; Task is the same T<n>)
+	// FID is the task's ID (EPIC T644 C1): a fleet_ids UUID minted the moment the
+	// record is written — the one number a task goes by (fleet_task_ids.go).
+	// Short is that ID's written code (unique in the owner's whole history, ≥ 4);
+	// Task is the old T<n>, a read-only alias. A record from before C1 has no FID
+	// until BackfillTaskIDs gives it one.
+	FID         string `json:"fid,omitempty"`
+	Short       string `json:"short,omitempty"`
+	Task        string `json:"task"`
 	Owner       string `json:"owner"`
 	Title       string `json:"title"`
 	Via         string `json:"via"`
@@ -147,13 +155,21 @@ func (s *Store) ensureFleetTasks() error {
 			return err
 		}
 	}
+	// EPIC T644 C1: the task's ID (fleet_task_ids.go).
+	if err := s.addColumn("fleet_tasks", "fid", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := s.write.Exec(`CREATE INDEX IF NOT EXISTS fleet_tasks_fid ON fleet_tasks(fid)`); err != nil {
+		return fmt.Errorf("index fleet_tasks.fid: %w", err)
+	}
 	return nil
 }
 
 const fleetTaskCols = `id, token, owner, title, via, device, repo, agent, machine, login, worker_id,
 	session_key, operation_id, state, note, issue, pr, asked, parked, rule, created_at, updated_at,
 	authority_version, generation, attempt_id, execution_owner, execution_endpoint, requested_agent, resolved_agent, actual_agent,
-	parent_task, parent_session, ticket_ref, lease_ref, outcome, evidence, observation, request_payload, accepted_request, parent_generation, cancel_request`
+	parent_task, parent_session, ticket_ref, lease_ref, outcome, evidence, observation, request_payload, accepted_request, parent_generation, cancel_request,
+	fid, COALESCE((SELECT fi.short FROM fleet_ids fi WHERE fi.id = fid), '')`
 
 // CreateFleetTask writes a new record and returns it with its number. token is
 // the caller's one-time key (the place's idempotency key): writing the same
@@ -178,16 +194,21 @@ func (s *Store) CreateFleetTask(t FleetTask, token string, now time.Time) (Fleet
 	if state == "" {
 		state = TaskPlacing
 	}
-	if _, err := s.write.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO fleet_tasks (token, owner, title, via, device, repo, agent,
+	res, err := s.write.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO fleet_tasks (token, owner, title, via, device, repo, agent,
 		machine, login, worker_id, session_key, operation_id, state, note, issue, pr, asked, parked, rule, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		token, t.Owner, t.Title, t.Via, t.Device, t.Repo, t.Agent, t.Machine, t.Login, t.WorkerID, t.SessionKey,
-		t.OperationID, state, t.Note, t.Issue, t.PR, t.Asked, t.Parked, t.Rule, ts, ts); err != nil {
+		t.OperationID, state, t.Note, t.Issue, t.PR, t.Asked, t.Parked, t.Rule, ts, ts)
+	if err != nil {
 		return FleetTask{}, err
 	}
+	fresh, _ := res.RowsAffected()
 	rec, err := s.fleetTaskBy(`token = ?`, token)
 	if err == nil && rec.AuthorityVersion != 0 {
 		return FleetTask{}, ErrTaskFence
+	}
+	if err == nil && rec.FID == "" && fresh > 0 {
+		rec, err = s.giveTaskID(rec, now) // EPIC T644 C1: the record's ID, from its first moment
 	}
 	return rec, err
 }
@@ -298,10 +319,12 @@ func scanFleetTasks(rows *sql.Rows) ([]FleetTask, error) {
 			&t.Parked, &t.Rule, &created, &updated,
 			&t.AuthorityVersion, &t.Generation, &t.AttemptID, &t.ExecutionOwner, &t.ExecutionEndpoint, &t.RequestedAgent, &t.ResolvedAgent,
 			&t.ActualAgent, &t.ParentTask, &t.ParentSession, &t.TicketRef, &t.LeaseRef, &t.Outcome, &t.Evidence,
-			&t.Observation, &t.RequestPayload, &t.acceptedRequest, &t.ParentGeneration, &t.CancelRequest); err != nil {
+			&t.Observation, &t.RequestPayload, &t.acceptedRequest, &t.ParentGeneration, &t.CancelRequest,
+			&t.FID, &t.Short); err != nil {
 			return nil, err
 		}
 		t.Ref = TaskRef(t.ID)
+		t.Task = t.Ref
 		t.CreatedAt, _ = time.Parse(rfc, created)
 		t.UpdatedAt, _ = time.Parse(rfc, updated)
 		out = append(out, t)
