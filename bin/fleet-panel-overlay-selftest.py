@@ -239,8 +239,8 @@ class NativeTests(unittest.TestCase):
             self.assertEqual(len([x for x in box.splitlines() if x.strip().startswith(("仓库 ‹", "Agent ‹", "开 ↵"))]), 3)
             self.assertEqual(self.actions(), [])
             self.keys("Escape")
-            # Cancel restores source (New); down wraps via 回家命令行 (T685)/language/quit to first.
-            self.keys("Down", "Down", "Down", "Down")
+            # Cancel restores source (New); down wraps via 回家命令行 (T685)/language/最近消息 (T675)/quit to first.
+            self.keys("Down", "Down", "Down", "Down", "Down")
         self.keys("Up", "Enter")
         self.wait("开 ↵")
         self.literal("中e\u0301文")       # nothing to type into: the words go nowhere

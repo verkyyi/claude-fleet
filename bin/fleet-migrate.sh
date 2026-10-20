@@ -244,7 +244,7 @@ cfg_update_nudge() {
 # an alerts event for a daemon (--alert, issue #1617).
 migrate_report() {
   if [ "$TOAST" = 2 ]; then bash "$BIN/fleet-alerts.sh" event ${SOCK:+-L "$SOCK"} "$1" "$2" >/dev/null 2>&1 || :
-  else TM display-message "$2" 2>/dev/null || :; fi   # toast-ok: --toast = a keypress started this move
+  else fleet_notice info "$2" ${SOCK:+--sock "$SOCK"} --source migrate; fi   # toast-ok: --toast = a keypress started this move
 }
 
 # window_closed <wid> — 0 iff the window is gone OR has no live pane. tmux keeps a

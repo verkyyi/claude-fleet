@@ -431,3 +431,14 @@ fleet_client_refuse() {
   printf 'fleet: 这台是客户端，任务在托管节点上跑 — %s 不在这里做（hub 记它为 client；改类型找管理员）\n' "$1" >&2
   return 0
 }
+
+# fleet_notice <error|warn|info> <text> [--next <下一步>] [--client <name>]
+# [--sock <label>] [--all] [--source <name>] [--secs N] — THE one way a script
+# tells the person something on screen (T675): error red, on the 看台's top line
+# until the first key after 10 s; warn yellow 6 s; info grey 3 s; every one a row
+# of $FLEET_CONF_DIR/logs/notices.ndjson, read back from ⌘P (最近消息) / `fleet notices`.
+# Never a bare `display-message` beside it (portability-selftest row `notice`).
+# bin/fleet_notice.py is the one implementation; this never fails its caller.
+fleet_notice() {
+  python3 "$_FLEET_CORE_DIR/fleet_notice.py" notify "$@" </dev/null >/dev/null 2>&1 || :
+}

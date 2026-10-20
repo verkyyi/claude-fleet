@@ -27,6 +27,9 @@
 #   view-far-reaped        bin/fleet_view.py hub_fresh + bin/fleet-hub-sessions.sh
 #                          (issue #3079): a worker reaped on another machine while
 #                          this one's copy of the hub's list had stopped
+#   notice-flash-gone      bin/fleet_notice.py (T675): ⌘N's refusal on the 看台 that
+#                          pressed it — on its top line ≥10 s and until a key, never
+#                          on the other 看台, recorded for ⌘P's 最近消息
 #   view-first-frame-hub-slow  bin/fleet_view.py popup (issue #3311): hub_ok stale,
 #                          no loop, a hub that takes 6 s — ⌘P's first frame drawn
 #                          from the cache at once, the hub asked behind it
@@ -330,6 +333,48 @@ drill_view_first_frame_hub_slow() {
   out=$(bash "$BIN/fleet-view-hub-fresh-selftest.sh" F 2>&1) || { WHY=$(printf '%s\n' "$out" | grep -m1 FAIL); return 1; }
   SECS=$(since "$t0")
   WHAT="入口清单过期、没有刷新循环、入口要 6 秒才答：⌘P 照缓存 1.5 秒内画出第一帧，入口在后台被问到"
+}
+
+# notice_on <view> — the notice line 看台 <view>'s top line draws now ('-' = none):
+# the very ack the status format computes, through fleet-topbar.py's own renderer
+notice_on() {
+  local c ack nt
+  c=$(TT list-clients -F '#{client_session} #{client_name}' | awk -v s="fl@view-$1" '$1 == s { print $2 }')
+  ack=$(TT list-clients -F '#{client_name} #{e|>=:#{client_activity},#{@view_notice_hold}}' | awk -v c="$c" '$1 == c { print $2 }')
+  nt=$(TT show -qv -t "fl@view-$1:" @view_notice)
+  python3 "$BIN/fleet-topbar.py" notice 100 "$nt" "ack=$ack"
+}
+drill_notice_flash_gone() {
+  CAP=20   # the 10 s floor, the key after it, the 2 s status interval
+  local t0 ca i line
+  th_box || { WHY="the two 看台 terminals did not attach"; th_done; return 1; }
+  for v in a b; do TT set -t "fl@view-$v" status on \; set -t "fl@view-$v" status-interval 1 \; \
+    set -t "fl@view-$v" 'status-format[0]' "$(bash "$BIN/fleet-remote-view.sh" thin-bar "$v" fl)"; done
+  ca=$(TT list-clients -F '#{client_session} #{client_name}' | awk '$1 == "fl@view-a" { print $2 }')
+  : > "$B/out-a"; : > "$B/out-b"; t0=$(now)
+  # what ⌘N's refusal does: dash-raw-session.sh's refuse → fleet_ui_fail, on the
+  # client that pressed it (go_new hands FLEET_UI_CLIENT down)
+  ( PATH="$B/bin:$PATH"; . "$BIN/fleet-ui-lang.sh"
+    FLEET_UI_LANG=zh FLEET_UI_SOCK=fl FLEET_UI_CLIENT=$ca fleet_ui_fail '暂停开新：内存紧张' '关掉一个会话再试' )
+  for i in 1 2 3 4 5 6 7 8 9; do
+    line=$(notice_on a)
+    case "$line" in *暂停开新*) ;; *) WHY="${i}s after the refusal the top line no longer says it: '$line' ($(cat "$B/conf/logs/notices.ndjson" 2>&1))"; th_done; return 1 ;; esac
+    [ "$i" = 4 ] && printf 'x' > "$B/ctl-a"   # a key inside the 10 s floor does not clear it
+    sleep 1
+  done
+  until_ok 3 grep -aq '暂停开新' "$B/out-a" || { WHY="看台 a's terminal never drew the refusal"; th_done; return 1; }
+  [ "$(notice_on b)" = - ] || { WHY="看台 b (another person) got the refusal too: $(notice_on b)"; th_done; return 1; }
+  grep -aq '暂停开新' "$B/out-b" && { WHY="看台 b's terminal drew the refusal"; th_done; return 1; }
+  sleep 1.5; printf 'y' > "$B/ctl-a"
+  until_ok 3 sh -c '"$1" -S "$2" list-clients -F "#{client_name} #{e|>=:#{client_activity},#{@view_notice_hold}}" | grep -qx "$3 1"' \
+    _ "$RT" "$B/s/fl" "$ca" || { WHY="the key after the 10 s floor did not answer the error"; th_done; return 1; }
+  [ "$(notice_on a)" = - ] || { WHY="the key after the floor did not clear it: $(notice_on a)"; th_done; return 1; }
+  SECS=$(since "$t0")
+  python3 "$BIN/fleet_notice.py" list | grep -q '暂停开新：内存紧张 — 关掉一个会话再试' \
+    || { WHY="最近消息's record has no row for it: $(python3 "$BIN/fleet_notice.py" list)"; th_done; return 1; }
+  [ "$(python3 "$BIN/fleet_notice.py" unread)" = 1 ] || { WHY="the top line's unread count is not 1"; th_done; return 1; }
+  th_done
+  WHAT="⌘N 的拒绝（fleet_ui_fail）只画在按键那个看台的顶栏：10 秒内一直在（中途按键也不清），10 秒后第一下按键清掉；另一个看台什么也没收到；⌘P「最近消息」的记录里有原文、未读 1"
 }
 
 th_cleanup() {

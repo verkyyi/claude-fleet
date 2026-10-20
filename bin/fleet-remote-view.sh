@@ -537,6 +537,18 @@ rv_node_label() {
   done
   printf '%s' "$h"
 }
+# rv_thin_bar <view id> <fleet session> — the 看台's top line, as status-format[0].
+rv_thin_bar() {
+  local v="$1" s="$2" bar
+  bar="#(python3 '$BIN/fleet-topbar.py' render --node view=$v s=$s reg='$VIEWS' g='$FLEET_C/global'"
+  bar="$bar sock=#{q:socket_path} cw=#{client_width} w=#{window_id} pc=#{q:@peer_cur} pd=#{pane_dead}"
+  # this connection's language (issue #3329): what attach set; its notice (T675,
+  # bin/fleet_notice.py) — ack=1 once a key came after the notice's hold, tmux's
+  # own #{client_activity}: no process runs per key
+  bar="$bar vl=#{q:@view_lang_set}:#{q:@view_lang} nt=#{@view_notice}"
+  printf '%s' "$bar ack=#{?#{e|>=:#{client_activity},#{@view_notice_hold}},1,0} up=#{q:@view_upload})"
+}
+
 # rv_thin_dress <session id> <view id> <fleet session> — the 看台's own options.
 rv_thin_dress() {
   local gid="$1" v="$2" s="$3" bar
@@ -556,10 +568,7 @@ rv_thin_dress() {
       "if -F '#{@view_thin}' { run-shell -b \"bash '$BIN/fleet-remote-view.sh' cur '$VIEWS' '#{socket_path}' '#{hook_session_name}' >/dev/null 2>&1 || :\" }" 2>/dev/null
     return 0 ;;
   esac
-  bar="#(python3 '$BIN/fleet-topbar.py' render --node view=$v s=$s reg='$VIEWS' g='$FLEET_C/global'"
-  bar="$bar sock=#{q:socket_path} cw=#{client_width} w=#{window_id} pc=#{q:@peer_cur} pd=#{pane_dead}"
-  # this connection's language and its one-time line (issue #3329): what attach set
-  bar="$bar vl=#{q:@view_lang_set}:#{q:@view_lang} fl=#{q:@view_flash} flu=#{@view_flash_until} up=#{q:@view_upload})"
+  bar=$(rv_thin_bar "$v" "$s")
   T set-option -t "$gid" status on \; set-option -t "$gid" status-position top \; \
     set-option -t "$gid" status-interval 2 \; set-option -t "$gid" status-style "bg=#1a1b26,fg=#565f89" \; \
     set-option -t "$gid" status-format[0] "$bar" \; set-option -t "$gid" destroy-unattached off \; \
@@ -716,13 +725,13 @@ rv_attach_thin() {
   # session's environment (every run-shell and popup of the 看台 inherits it;
   # fleet-ui-lang.sh: the person's choice first, then this), `@view_lang_set` for
   # the top line's format — and the first time this device comes in on English
-  # detected for it, the top line says so for 8 s (`@view_flash`, D8 / L4).
+  # detected for it, the top line says so for 8 s (an info notice, T675; D8 / L4).
   if [ -n "$setlang" ]; then
     T set-option -t "$gid" @view_lang "$lang" \; set-option -t "$gid" @view_lang_set 1 \; \
       set-environment -t "$gid" FLEET_VIEW_LANG "$lang" 2>/dev/null
     hint=$(FLEET_VIEW_LANG="$lang" sh "$BIN/fleet-ui-lang.sh" first-hint "$view" 2>/dev/null)
-    [ -z "$hint" ] || T set-option -t "$gid" @view_flash "$hint" \; \
-      set-option -t "$gid" @view_flash_until "$(( $(date +%s) + 8 ))" 2>/dev/null
+    [ -z "$hint" ] || python3 "$BIN/fleet_notice.py" notify info "$hint" --secs 8 --view "$gid" \
+      --sock "$sock" --source attach </dev/null >/dev/null 2>&1
   fi
   # the client's own version (issue #3826): fleet-thin.py brings it as
   # FLEET_CLIENT_VER; when the hub hands out a newer one the top line says
@@ -731,8 +740,8 @@ rv_attach_thin() {
   case "${FLEET_CLIENT_VER:-}" in ''|*[!0-9A-Za-z._-]*) ;; *)
     ( ( behind=$( { [ -z "$setlang" ] || export FLEET_VIEW_LANG="$lang"; }
                   python3 "$BIN/fleet-client-behind.py" "$FLEET_CLIENT_VER" </dev/null 2>/dev/null )
-        [ -z "$behind" ] || [ -n "${FLEET_CLIENT_REHOMED:-}" ] || T set-option -t "$gid" @view_flash "$behind" \; \
-          set-option -t "$gid" @view_flash_until "$(( $(date +%s) + 20 ))" 2>/dev/null ) </dev/null >/dev/null 2>&1 & ) ;;
+        [ -z "$behind" ] || [ -n "${FLEET_CLIENT_REHOMED:-}" ] || python3 "$BIN/fleet_notice.py" notify warn "$behind" \
+          --secs 20 --view "$gid" --sock "$sock" --source client-behind ) </dev/null >/dev/null 2>&1 & ) ;;
   esac
   # 换家 (T690): the thin loop gave up on its home and landed here — it brings the
   # home it left as FLEET_CLIENT_REHOMED; the top line says so for 60 s (the
@@ -741,8 +750,8 @@ rv_attach_thin() {
   case "${FLEET_CLIENT_REHOMED:-}" in ''|*[!0-9A-Za-z._-]*) ;; *)
     rh=$( { [ -z "$setlang" ] || export FLEET_VIEW_LANG="$lang"; }
           sh "$BIN/fleet-ui-lang.sh" t view_rehomed_fmt "$FLEET_CLIENT_REHOMED" "$(rv_node_label)" 2>/dev/null )
-    [ -z "$rh" ] || T set-option -t "$gid" @view_flash "$rh" \; \
-      set-option -t "$gid" @view_flash_until "$(( $(date +%s) + 60 ))" 2>/dev/null ;;
+    [ -z "$rh" ] || python3 "$BIN/fleet_notice.py" notify info "$rh" --secs 60 --view "$gid" --sock "$sock" \
+      --source rehomed </dev/null >/dev/null 2>&1 ;;
   esac
   # C4: a window per other (machine, login) your sessions are on, made now — off
   # the attach's path — so the first visit to another machine is already warm
@@ -836,6 +845,11 @@ select)
   ;;
 
 # ---------------------------------------------------------------------------------
+thin-bar)
+  # the 看台's top line format for <view> <fleet> (rv_thin_bar) — a selftest and a
+  # BREAK-IT drill dress a test 看台 with the very format attach sets
+  rv_thin_bar "${1:-}" "${2:-}"; echo
+  ;;
 live)
   # ON <node> (issue #2219): exit 0 when this login has a live fleet session here
   # — what `attach -` would land on — else 1. The client asks it before it opens

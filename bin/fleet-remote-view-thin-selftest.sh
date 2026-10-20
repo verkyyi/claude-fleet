@@ -45,8 +45,9 @@
 #                   #3326); each 看台 its own; a resume re-records it (empty too);
 #                   no word given leaves it alone; a bad name is recorded as none.
 #                   Issue #3329: FLEET_VIEW_LANG in the 看台 session's environment,
-#                   and English detected for a device the first time ⇒ @view_flash
-#                   (the top line's 8 s line) — once per device
+#                   and English detected for a device the first time ⇒ an info
+#                   notice on the 看台 (@view_notice, the top line's 8 s line —
+#                   T675) — once per device
 #   R. restoring  — a `--resume` while a restore holds its lock and the 看台's
 #                   session is not back yet: rc 3, no 看台 (issue #3511)
 #   M. mtime      — a row with no left= is kept by its file's mtime, read portably
@@ -394,7 +395,8 @@ rm -f "$LAST"   # the legs below are first uses
 vlang() { tn show-options -qv -t "=$(vs "$1"):" @view_lang 2>/dev/null; }
 vlset() { tn show-options -t "=$(vs "$1"):" 2>/dev/null | grep -cE '^@view_lang( |$)'; }
 venv() { tn show-environment -t "=$(vs "$1"):" FLEET_VIEW_LANG 2>/dev/null; }
-vflash() { tn show-options -qv -t "=$(vs "$1"):" @view_flash 2>/dev/null; }
+vflash() { python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_notice as N; print(N.decode(sys.argv[2]).get("text", ""))' \
+  "$BIN" "$(tn show-options -qv -t "=$(vs "$1"):" @view_notice 2>/dev/null)"; }
 # termu: `term` with the language left to the rules (no FLEET_UI_LANG forced), as on a machine
 termu() {
   local n="$1"; shift
@@ -412,11 +414,11 @@ st_eq "G: … a session option of the 看台, never the fleet session's" "" "$(t
 st_hasnt "G: … never the server's environment" "$(tn show-environment -g 2>/dev/null)" "fr_FR"
 # issue #3329: the 看台 draws in it — its session's environment, and the first time
 # a device comes in on English detected for it, the top line's 8-second line
-waitfor 5 sh -c "[ -n \"\$('$REAL_TMUX' -L '$RS' show-options -qv -t '=$(vs devl1):' @view_flash 2>/dev/null)\" ]" || st_miss "G: no one-time line on devl1"
+waitfor 5 sh -c "[ -n \"\$('$REAL_TMUX' -L '$RS' show-options -qv -t '=$(vs devl1):' @view_notice 2>/dev/null)\" ]" || st_miss "G: no one-time line on devl1"
 st_eq "G: FLEET_VIEW_LANG in the 看台 session's environment" "FLEET_VIEW_LANG=en_US.UTF-8" "$(venv devl1)"
 st_has "G: … the first time, the one-time line (D8)" "$(vflash devl1)" "Using English from your system (LANG=en_US.UTF-8)"
 [ -e "$FLEET_CONF_DIR/entry/devl1.lang-hinted" ] || st_miss "G: the device was not stamped as hinted"
-st_has "G: … the top line's format reads it" "$(tn show-options -qv -t "=$(vs devl1):" 'status-format[0]')" "fl=#{q:@view_flash}"
+st_has "G: … the top line's format reads it" "$(tn show-options -qv -t "=$(vs devl1):" 'status-format[0]')" "nt=#{@view_notice}"
 tt kill-window -t "=$TL:lang1"
 tt new-window -d -t "=$TL:" -n lang1b "env -u TMUX FLEET_CLIENT_LANG= FLEET_CONF_DIR='$FLEET_CONF_DIR' TMPDIR='$TMPDIR' bash '$BIN/fleet-remote-view.sh' attach --thin --view devl1 --resume --device $DEV --route entry --token tl3; sleep 300"
 waitfor 5 sh -c "tr '\\t' '\\n' < '$FLEET_CONF_DIR/remote-views/devl1' 2>/dev/null | grep -qx token=tl3" || st_miss "G: the resume never registered"
@@ -424,7 +426,7 @@ st_eq "G: a resume that brought none records none (not the last one's)" "" "$(vl
 st_eq "G: … recorded as empty, still set" "1" "$(vlset devl1)"
 st_eq "G: … and its environment says none" "FLEET_VIEW_LANG=" "$(venv devl1)"
 tt kill-window -t "=$TL:lang1b"
-tn set-option -t "=$(vs devl1):" -u @view_flash
+tn set-option -t "=$(vs devl1):" -u @view_notice
 termu lang1c "--thin --view devl1 --resume --device $DEV --route entry --token tl6 --lang en_US.UTF-8"
 waitfor 5 sh -c "tr '\\t' '\\n' < '$FLEET_CONF_DIR/remote-views/devl1' 2>/dev/null | grep -qx token=tl6" || st_miss "G: the third attach never registered"
 waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' show-environment -t '=$(vs devl1):' FLEET_VIEW_LANG 2>/dev/null)\" = FLEET_VIEW_LANG=en_US.UTF-8 ]" || st_miss "G: the third attach set no language"
@@ -442,7 +444,7 @@ for w in lang2 lang3 lang4; do tt kill-window -t "=$TL:$w" 2>/dev/null; done
 # T690: a thin loop that gave up on its home brings FLEET_CLIENT_REHOMED — the new
 # home's top line says which home was given up and which this is; a bad name says nothing
 tt new-window -d -t "=$TL:" -n rh1 "env -u TMUX FLEET_UI_LANG=zh FLEET_CLIENT_REHOMED=m1 FLEET_SIDEBAR_HOST=m2 FLEET_CONF_DIR='$FLEET_CONF_DIR' TMPDIR='$TMPDIR' bash '$BIN/fleet-remote-view.sh' attach --thin --view devr1 --device $DEV --route lan --token tr1; sleep 300"
-waitfor 5 sh -c "[ -n \"\$('$REAL_TMUX' -L '$RS' show-options -qv -t '=$(vs devr1):' @view_flash 2>/dev/null)\" ]" || st_miss "G: no rehome line on devr1"
+waitfor 5 sh -c "[ -n \"\$('$REAL_TMUX' -L '$RS' show-options -qv -t '=$(vs devr1):' @view_notice 2>/dev/null)\" ]" || st_miss "G: no rehome line on devr1"
 st_eq "G: 换家 → the new home's top line says so (T690)" "家机器 m1 连不上，已自动换到 m2" "$(vflash devr1)"
 tt new-window -d -t "=$TL:" -n rh2 "env -u TMUX FLEET_UI_LANG=zh 'FLEET_CLIENT_REHOMED=m1;x' FLEET_CONF_DIR='$FLEET_CONF_DIR' TMPDIR='$TMPDIR' bash '$BIN/fleet-remote-view.sh' attach --thin --view devr2 --device $DEV --route lan --token tr2; sleep 300"
 waitfor 5 sh -c "[ -s '$FLEET_CONF_DIR/remote-views/devr2' ]" || st_miss "G: devr2 never registered"

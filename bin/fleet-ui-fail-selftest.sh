@@ -84,7 +84,7 @@ case "\$1" in -L) printf '%s\n' "\$2" >> "$WORK/labels"; shift 2 ;; -S) shift 2 
 exec "$REAL_TMUX" -S "$SOCK" "\$@"
 EOF
   chmod +x "$WORK/bin/tmux"
-  export PATH="$WORK/bin:$PATH" TMPDIR="$WORK" FLEET_UI_LANG=en
+  export PATH="$WORK/bin:$PATH" TMPDIR="$WORK" FLEET_UI_LANG=en FLEET_CONF_DIR="$WORK/conf"
   unset FLEET_C TMUX TMUX_PANE
   case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
     *UTF-8*|*utf8*|*UTF8*) ;;

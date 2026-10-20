@@ -26,6 +26,8 @@ Everything starts from one key. The tables below are generated from fleet's key 
 | — | Rows of the panel (pick one, ↵ — or type its name): ⚡ New session · ⌂ Home command line (this machine's shell) · ⏻ Quit fleet (sessions keep running) |
 <!-- /docs-gen:keys -->
 
+**The top line's messages, and Recent messages.** Whatever fleet has to tell you is written on the 看台's top line: an error (red, e.g. 「暂停开新：内存紧张」) stays — at least 10 seconds, until you press a key; a warning (yellow) 6 seconds; a note (grey) 3 seconds. When several come at once the newest is shown with 「N more · ⌘P for all」 beside it. Missed one? The **Recent messages** row at the bottom of ⌘P (or type 消息 / message in ⌘P), lists the newest 50; `fleet notices` on your computer's command line prints the same. Errors you have not read yet are counted on the right of the top line.
+
 The panel looks roughly like this (sample data):
 
 ```text

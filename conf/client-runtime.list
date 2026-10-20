@@ -55,6 +55,8 @@ bin/fleet-show-send.py	dispatch
 bin/fleet-client-core.sh	install,doctor,host-on,ls,show,answer,doctor-live
 bin/fleet-conf.sh	install,doctor,host-on,doctor-live
 bin/fleet-ui-lang.sh	status
+bin/fleet_notice.py	static
+bin/fleet-notice.sh	static
 conf/fleet-palette.conf	static
 bin/fleet-iterm-profile.py	view
 bin/fleet_keys.py	view

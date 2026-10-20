@@ -458,15 +458,17 @@ vp() { TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-panel --view fl@vie
 ti select-window -t "=fl@view-v1:$W3"; now_on "$W3"
 vp > "$W/panel.txt" || st_fail "P: view-panel"
 grep -qx "cmd${T}pin${T}置顶当前会话" "$W/panel.txt" || st_fail "P: plain pin row missing"
-[ "$(tail -4 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:new cmd:home cmd:lang cmd:quit " ] || st_fail "P: command order (⚡ · ⌂ 回家命令行 · 语言 · ⏻, T685)"
+[ "$(tail -5 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:new cmd:home cmd:lang cmd:notices cmd:quit " ] || st_fail "P: command order (⚡ · ⌂ 回家命令行 · 语言 · ✉ 最近消息 · ⏻ — T685, T675)"
 grep -q '^grid' "$W/panel.txt" && st_fail "P: composer controls still inserted in list"
 for word in 置顶 pin; do vp "$word" | grep -q "^cmd${T}pin" || st_fail "P: pin search"; done
 for word in 语言 lang english 中文; do vp "$word" | grep -q "^cmd${T}lang" || st_fail "P: language search"; done
 vp Gamma | grep -q "^cmd${T}lang" && st_fail "P: unrelated language row in search"
 FLEET_PANEL_COMMANDS=none vp | grep -q '^cmd' && st_fail "P: none still has commands"
-[ "$(FLEET_PANEL_COMMANDS='new shell newsess' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "pin new home lang quit " ] || st_fail "P: retired commands"
+[ "$(FLEET_PANEL_COMMANDS='new shell newsess' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "pin new home lang notices quit " ] || st_fail "P: retired commands"
 for word in 回家 home shell; do vp "$word" | grep -q "^cmd${T}home" || st_fail "P: 回家命令行 search ($word)"; done
 vp Gamma | grep -q "^cmd${T}home" && st_fail "P: unrelated 回家命令行 row in search"
+for word in 消息 message; do vp "$word" | grep -q "^cmd${T}notices" || st_fail "P: 最近消息 search ($word, T675)"; done
+vp Gamma | grep -q "^cmd${T}notices" && st_fail "P: unrelated 最近消息 row in search"
 # The box's defaults are fleet-quick-dispatch.py's (T670; its selftest holds the
 # rules). Only this test's private conf is touched.
 popen() {

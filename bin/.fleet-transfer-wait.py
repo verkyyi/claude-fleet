@@ -23,6 +23,17 @@ def tm(session, *args):
                                    timeout=10).decode().rstrip("\n")
 
 
+def notice(r, level, text):
+    """One notice on the pane's clients (T675, bin/fleet_notice.py): held and recorded."""
+    clients = tm(r["session"], "list-clients", "-F", "#{client_name}\t#{pane_id}").splitlines()
+    mine = [c.split("\t")[0] for c in clients if c.endswith("\t" + r["pane"])]
+    for c in mine or [""]:
+        subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet_notice.py"),
+                        "notify", level, text, "--sock", r["session"], "--source", "transfer"]
+                       + (["--client", c] if c else []), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=15)
+
+
 def option(r, key):
     return tm(r["session"], "display-message", "-p", "-t", r["pane"], "#{" + key + "}")
 
@@ -204,13 +215,13 @@ def wait(request):
         manifest = option(r, "@handoff_manifest")
         state(request, "started", manifest)
         succeeded = True
-        tm(r["session"], "display-message", "-t", r["pane"], "Codex handoff started: " + manifest)
+        notice(r, "info", "Codex handoff started: " + manifest)
         return 0
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         state(request, "failed", str(error))
         print("fleet-transfer: " + str(error), file=sys.stderr)
         try:
-            tm(r["session"], "display-message", "-t", r["pane"], "Agent transfer incomplete; inspect " + str(request))
+            notice(r, "error", "Agent transfer incomplete; inspect " + str(request))
         except (OSError, subprocess.SubprocessError):
             pass
         return 1

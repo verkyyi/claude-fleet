@@ -243,12 +243,13 @@ cat > "$FRAME/tmux" <<EOF
 #!/bin/bash
 case "\$1" in
   display-popup) exit 0 ;;
-  display-message) [ "\${2:-}" = -c ] && [ "\${4:-}" != -p ] && { printf 'toast %s\n' "\$4" >> "$FLOG.toast"; exit 0; } ;;
+  display-message) [ "\${2:-}" = -c ] && [ "\${4:-}" != -p ] && { shift 3; printf 'toast %s\n' "\$*" >> "$FLOG.toast"; exit 0; } ;;
 esac
 exec "$REAL_TMUX" -S "$SOCK" "\$@"
 EOF
 frame --client /dev/ttyF --no-inline --size S -- true; rc=$?
-[ "$rc" = 3 ] && grep -q '^toast fleet: 弹窗没打开' "$FLOG.toast" 2>/dev/null \
+# a notice (T675): held for its tier (-d), the reason in the line
+[ "$rc" = 3 ] && grep -q '^toast -d [0-9]* .*fleet: 弹窗没打开' "$FLOG.toast" 2>/dev/null \
   || st_fail "--no-inline: a refusal did not toast on its client (rc=$rc): $(cat "$FLOG.toast" 2>/dev/null)"
 echo "ok: one frame — rounded PAL_DIM, sizes + narrow 96%×90%, 「动作 · 对象 · 机器」 centred, palette fzf, --no-inline exit 3 + toast"
 

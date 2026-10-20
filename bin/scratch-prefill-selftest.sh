@@ -2,6 +2,9 @@
 # No live tmux or agent: drive readiness, input protection and exact paste bytes.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+# a not-prefilled note is recorded (T675, logs/notices.ndjson): never the login's own
+FLEET_CONF_DIR=$(mktemp -d "${TMPDIR:-/tmp}/prefill-selftest.XXXXXX") || exit 2
+export FLEET_CONF_DIR; trap 'rm -rf "$FLEET_CONF_DIR"' EXIT
 PYTHONDONTWRITEBYTECODE=1 python3 - "$BIN/scratch-prefill.py" <<'PY'
 import importlib.util
 import io

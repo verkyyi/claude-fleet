@@ -169,7 +169,16 @@ def prefill(socket, pane, draft, warm):
 
     def note(reason):
         record(reason)
-        tm("display-message", "scratch: name not prefilled — " + reason)
+        # held for the warn tier and recorded for ⌘P's 最近消息 (T675, bin/fleet_notice.py),
+        # never tmux's 0.75 s flash; the line on this fleet's server, as before
+        said = "scratch: name not prefilled — " + reason
+        tm("display-message", "-d", "6000", said)
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import fleet_notice
+            fleet_notice.record("warn", said, source="scratch-prefill")
+        except Exception:  # noqa: BLE001 — a record never breaks the prefill
+            pass
 
     # A name is one input line. Drop terminal control bytes (especially CR/LF,
     # Escape and DEL) before pasting, so even unusual CLI names cannot submit or

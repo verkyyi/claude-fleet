@@ -437,6 +437,10 @@ fleet_ui_t() {
     # T685: the one key left — said once per login (keys_notice)
     zh:view_keys_moved) printf 'fleet 只用 ⌘P，其余都在面板里' ;;
     en:view_keys_moved) printf 'fleet uses one key, ⌘P — everything else is in its panel' ;;
+    zh:view_web_far) printf '浏览器里请从「会话」打开这个会话' ;;
+    en:view_web_far) printf 'Open this session from Sessions in the browser' ;;
+    zh:view_open_elsewhere) printf '这个会话开在别处 — 到那个终端页面去接管' ;;
+    en:view_open_elsewhere) printf 'Open elsewhere — use that terminal page to take control' ;;
     zh:view_gone) printf '这个会话已经不在了' ;;
     en:view_gone) printf 'that session is gone' ;;
     zh:view_new_failed) printf '新会话没开起来' ;;
@@ -499,6 +503,14 @@ fleet_ui_t() {
     en:view_client_behind_fmt) printf 'your client is not the latest (%s, latest %s) — run fleet update on your own computer, then reopen fleet' "${1:-}" "${2:-}" ;;
     zh:view_started_fmt) printf '已开工 · T%s' "${1:-}" ;;
     en:view_started_fmt) printf 'started · T%s' "${1:-}" ;;
+    zh:view_notices_row) printf '最近消息' ;;
+    en:view_notices_row) printf 'Recent messages' ;;
+    zh:view_notices_row_fmt) printf '最近消息 · 未读错误 %s' "${1:-}" ;;
+    en:view_notices_row_fmt) printf 'Recent messages · %s unread' "${1:-}" ;;
+    zh:view_notices_words) printf '消息 提示 通知 错误 message messages notice notices error' ;;
+    en:view_notices_words) printf 'message messages notice notices error 消息 提示 通知 错误' ;;
+    zh:view_notices_foot) printf '↵ 看顶栏说过的最近 50 条（错误、提醒、知道一下）' ;;
+    en:view_notices_foot) printf '↵ the newest 50 things the top line said (errors, warnings, notes)' ;;
     zh:view_lang_row) printf '语言 / Language　中文 ✓ · English' ;;
     en:view_lang_row) printf 'Language / 语言　English ✓ · 中文' ;;
     zh:view_lang_saved) printf '界面语言：中文 · 已存到你的账号' ;;
@@ -1246,6 +1258,28 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     zh:topbar_direct_quiet)     printf '直连（入口没声音）' ;;
     en:topbar_direct_quiet)     printf 'direct (the entry is silent)' ;;
     # the machine's credential proxy failing upstream (T657, fleet_upstream_stats.py banner)
+    # the notices (T675, bin/fleet_notice.py): the top line's 「还有 N 条」 and unread
+    # count, and the 「最近消息」 page ⌘P's last row opens
+    zh:topbar_notice_more_fmt)  printf '还有 %s 条' "${1:-}" ;;
+    en:topbar_notice_more_fmt)  printf '%s more' "${1:-}" ;;
+    zh:topbar_unread_fmt)       printf '未读错误 %s · ⌘P' "${1:-}" ;;
+    en:topbar_unread_fmt)       printf '%s unread · ⌘P' "${1:-}" ;;
+    zh:topbar_notice_all)       printf '⌘P 看全部' ;;
+    en:topbar_notice_all)       printf '⌘P for all' ;;
+    zh:topbar_unread_short_fmt) printf '✗%s' "${1:-}" ;;
+    en:topbar_unread_short_fmt) printf '✗%s' "${1:-}" ;;
+    zh:notice_level_error)      printf '错误' ;;
+    en:notice_level_error)      printf 'error' ;;
+    zh:notice_level_warn)       printf '提醒' ;;
+    en:notice_level_warn)       printf 'warn ' ;;
+    zh:notice_level_info)       printf '知道' ;;
+    en:notice_level_info)       printf 'info ' ;;
+    zh:notice_none)             printf '还没有消息' ;;
+    en:notice_none)             printf 'no messages yet' ;;
+    zh:notice_page_title)       printf '最近消息' ;;
+    en:notice_page_title)       printf 'Recent messages' ;;
+    zh:notice_page_keys)        printf '↑↓ 翻看 · 其它键关闭' ;;
+    en:notice_page_keys)        printf '↑↓ scroll · any other key closes' ;;
     zh:topbar_upstream_fmt)     printf '上游连不上：%s（%s 次）' "${1:-}" "${2:-}" ;;
     en:topbar_upstream_fmt)     printf 'upstream unreachable: %s (%s)' "${1:-}" "${2:-}" ;;
     zh:topbar_up_refused)       printf '连接被拒' ;;
@@ -1396,26 +1430,29 @@ quit	z	quit fleet — in the client only: every process of the client on this co
 
 # fleet_ui_fail REASON [NEXT] — THE one way an operation the operator asked for
 # says it did NOT happen (issue #1618, EPIC #1615 C3): one red line, the reason
-# and the next step, held FLEET_REFUSE_MS (default 4000) so it is read, not
-# glimpsed. A SUCCESS says nothing — the window appearing, going, the sidebar row
-# changing is the feedback; never add a "done ✓" toast beside this. The caller
-# keeps its own stderr line (the record a headless caller reads).
+# and the next step. Since T675 it is an `error` notice (bin/fleet_notice.py): on
+# a 看台's top line until the first key after 10 s, recorded for ⌘P's 最近消息 — never a
+# 0.75 s message. A SUCCESS says nothing — the window appearing, going, the
+# sidebar row changing is the feedback; never add a "done ✓" toast beside this.
+# The caller keeps its own stderr line (the record a headless caller reads).
 #   FLEET_UI_SOCK   tmux -L label to draw on (a headless caller naming its fleet)
 #   FLEET_UI_CLIENT the one client to draw on (a bind's #{client_name})
 #   FLEET_UI_QUIET  1 = draw nothing (the caller says it in its own line)
+# The record names the calling script as where it came from.
 fleet_ui_fail() {
   # FLEET_UI_QUIET=1: a caller that re-says the failure in its own one line
   [ "${FLEET_UI_QUIET:-0}" = 1 ] && return 0
+  _fuf_b=${BIN:-${0%/*}}
+  if [ -f "$_fuf_b/fleet_notice.py" ]; then
+    python3 "$_fuf_b/fleet_notice.py" notify error "${1:-}" ${2:+--next "$2"} \
+      ${FLEET_UI_SOCK:+--sock "$FLEET_UI_SOCK"} ${FLEET_UI_CLIENT:+--client "$FLEET_UI_CLIENT"} \
+      --source "${0##*/}" </dev/null >/dev/null 2>&1 || :
+    return 0
+  fi
   if [ -n "${2:-}" ]; then _fuf_m=$(fleet_ui_t ui_fail_next_fmt "$1" "$2")
   else _fuf_m=$(fleet_ui_t ui_fail_fmt "${1:-}"); fi
-  _fuf_d=${FLEET_REFUSE_MS:-4000}; case $_fuf_d in ''|*[!0-9]*) _fuf_d=4000 ;; esac
-  # the colour is the palette's (conf/fleet-palette.conf), never one of our own
-  _fuf_c=${PAL_RED:-}
-  if [ -z "$_fuf_c" ] && [ -n "${BIN:-}" ] && [ -f "$BIN/../conf/fleet-palette.conf" ]; then
-    _fuf_c=$(sed -n "s/^%hidden PAL_RED='\(#[0-9A-Fa-f]*\)'.*/\1/p" "$BIN/../conf/fleet-palette.conf" 2>/dev/null)
-  fi
   tmux ${FLEET_UI_SOCK:+-L "$FLEET_UI_SOCK"} display-message ${FLEET_UI_CLIENT:+-c "$FLEET_UI_CLIENT"} \
-    -d "$_fuf_d" "#[${_fuf_c:+fg=$_fuf_c,}bold] $_fuf_m " 2>/dev/null || :
+    -d 10000 "#[bold] $_fuf_m " 2>/dev/null || :
 }
 
 # fleet_ui_hint_once KEY — rc 0 the first time KEY's how-to line is asked for
@@ -1443,10 +1480,12 @@ case "$0" in */fleet-ui-lang.sh|fleet-ui-lang.sh)
     t) shift; fleet_ui_t "$@" ;;
     # toast CLIENT KEY [args…] — a tmux bind's message, in the login's language
     toast) _c=${2:-}; shift 2 2>/dev/null || shift $#
-           tmux display-message ${_c:+-c "$_c"} "$(fleet_ui_t "$@")" 2>/dev/null || : ;;
+           python3 "${0%/*}/fleet_notice.py" notify info "$(fleet_ui_t "$@")" ${_c:+--client "$_c"} \
+             --source fleet-ui-lang </dev/null >/dev/null 2>&1 || : ;;
     # hint CLIENT KEY — KEY's toast, but only the first time today (issue #1618)
     hint) _c=${2:-}; shift 2 2>/dev/null || shift $#
-          fleet_ui_hint_once "${1:-}" && tmux display-message ${_c:+-c "$_c"} "$(fleet_ui_t "$@")" 2>/dev/null || : ;;
+          fleet_ui_hint_once "${1:-}" && python3 "${0%/*}/fleet_notice.py" notify info "$(fleet_ui_t "$@")" \
+            ${_c:+--client "$_c"} --source fleet-ui-lang </dev/null >/dev/null 2>&1 || : ;;
     # dump PREFIX… — every key starting with a PREFIX, KEY NUL TEXT NUL; a printf
     # argument stays a \001 slot the caller fills
     dump) fleet_ui_pin; _s=$(printf '\001')

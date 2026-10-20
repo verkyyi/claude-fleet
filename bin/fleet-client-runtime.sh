@@ -85,6 +85,8 @@ usage() { sed -n '/^#   fleet-client-runtime.sh --check/,/the list (or writes it
 #     fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_view.py
 #     tmux-dashboard-rows.sh fleet_thin_lease.py fleet-window-reap.sh
 #     fleet-peerlink.py fleet-node-supervisor.py
+#     fleet-topbar.py fleet-alerts.sh (named in fleet_notice.py's own words: the
+#     看台's top line draws a notice, the alerts' events are recorded too — T675)
 #   words fleet-ui-lang.sh only prints (a hint naming a machine's command):
 #     dash-reap.sh fleet-account.sh fleet-migrate.sh fleet-repo.sh
 #   承载's, each behind a presence test that says so or takes the client road:
@@ -96,7 +98,7 @@ usage() { sed -n '/^#   fleet-client-runtime.sh --check/,/the list (or writes it
 #     fleet-node-probe.sh (a managed node's, #4886 — fleet-node.sh tests for it)
 NOT_HERE="fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_view.py
   tmux-dashboard-rows.sh fleet_thin_lease.py fleet-window-reap.sh fleet-peerlink.py
-  fleet-node-supervisor.py
+  fleet-node-supervisor.py fleet-topbar.py fleet-alerts.sh
   dash-reap.sh fleet-account.sh fleet-migrate.sh fleet-repo.sh
   fleet-lib.sh fleet-doctor.sh fleet-up.sh fleet-install-sync.sh fleet-login-bootstrap.sh
   fleet-dev-mode.sh fleet-run.sh fleet-agent-bundle.py fleet-agent-team.py fleet-daemon-lib.sh

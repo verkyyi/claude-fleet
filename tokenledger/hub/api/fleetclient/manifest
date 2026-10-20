@@ -120,6 +120,9 @@ bin/fleet-show-send.py
 bin/fleet-client-core.sh
 bin/fleet-conf.sh
 bin/fleet-ui-lang.sh
+# the one on-screen notice (T675): fleet_notice / fleet_ui_fail call it
+bin/fleet_notice.py
+bin/fleet-notice.sh
 conf/fleet-palette.conf
 # the iTerm2 profile whose ⌘ chords send the 看台's switch codes (#3000, #3185),
 # off dash-keymap.sh's switch table

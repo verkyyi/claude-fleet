@@ -156,7 +156,7 @@ for _a in "$@"; do
     # fall through to the positional slots — treating "--forc" as the issue number
     # strips to "" and silently spawns the wrong thing. Warn loudly and ignore it.
     --*) printf 'dash-issue-session: ignoring unknown flag %s\n' "$_a" >&2
-         tmux display-message "issues: ignoring unknown flag $_a" 2>/dev/null ;;
+         python3 "$(dirname "$0")/fleet_notice.py" notify warn "issues: ignoring unknown flag $_a" --source dash-issue-session </dev/null >/dev/null 2>&1 ;;
     *) _pos=$((_pos + 1)); case "$_pos" in 1) num="$_a" ;; 2) TARGET_SESS="$_a" ;; esac ;;
   esac
 done
@@ -173,7 +173,8 @@ EXPLICIT_AGENT=$AGENT
 case "$ACCOUNT_ARG" in
   ''|local|pool|any) : ;;
   *) printf 'dash-issue-session: unknown --account %s (local|pool|any) — using the fleet default\n' "$ACCOUNT_ARG" >&2
-     tmux display-message "issues: unknown --account $ACCOUNT_ARG — using the fleet default" 2>/dev/null; ACCOUNT_ARG="" ;;
+     python3 "$(dirname "$0")/fleet_notice.py" notify warn "issues: unknown --account $ACCOUNT_ARG — using the fleet default" \
+       --source dash-issue-session </dev/null >/dev/null 2>&1; ACCOUNT_ARG="" ;;
 esac
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SELF="$BIN/$(basename "$0")"                   # absolute path for the --async re-invoke

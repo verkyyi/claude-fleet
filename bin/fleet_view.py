@@ -2525,8 +2525,32 @@ def log_switch(rec):
         pass
 
 
-def toast(client, text):
-    tm("display-message", *(["-c", client] if client else []), text)
+def toast(client, text, level="warn", nxt="", secs=None):
+    """A 看台 message on this client only: a notice (T675, bin/fleet_notice.py —
+    error until a key after 10 s, warn 6 s, info 3 s; recorded for ⌘P's 最近消息), never a
+    0.75 s display-message."""
+    try:
+        sys.path.insert(0, str(Path(__file__).absolute().parent))
+        import fleet_notice
+        fleet_notice.notify(level, text, nxt, client=client, sock="" if os.environ.get("TMUX") else _SOCK[0],
+                            source="看台", secs=secs)
+    except Exception:
+        tm("display-message", *(["-c", client] if client else []), "-d", "6000", text)
+
+
+def notice_tag():
+    """The tag a child's notices carry (FLEET_NOTICE_TAG): the one this run was
+    handed, else a new one — so a caller can ask whether the child already said
+    why (fleet_notice.seen) instead of saying it a second time."""
+    return os.environ.get("FLEET_NOTICE_TAG") or "t%d-%d" % (os.getpid(), int(time.time() * 1000))
+
+
+def notice_seen(tag):
+    try:
+        import fleet_notice
+        return fleet_notice.seen(tag)
+    except Exception:
+        return False
 
 
 # --- peer windows: the other machines, inside the 看台 (issue #2751, EPIC #2999 C4) -----
@@ -2681,7 +2705,7 @@ def go_far(vid, fleet, g, target, meta, client):
     # the link not up (or the far 看台 not there yet): the window waits and lands there
     tm("set-option", "-w", "-t", w, "@peer_want", "wid:" + target)
     tm("select-window", "-t", "=%s:%s" % (g, w))
-    toast(client, say("view_peer_wait_fmt", m))
+    toast(client, say("view_peer_wait_fmt", m), "info")
     return "peer-wait", 3, m, l, extra
 
 
@@ -2713,7 +2737,7 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
     extra = {}
     if far and vid.startswith("wt-"):
         method, rc = "unsupported", 3
-        toast(client, "Open this session from Sessions in the browser")
+        toast(client, say("view_web_far"))
     elif far:
         method, rc, fm, fl, extra = go_far(vid, fleet, g, target, meta, client)
         meta = dict(meta, machine=fm or meta.get("machine") or "", login=fl or meta.get("login") or "")
@@ -2725,7 +2749,7 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
         if code is None:
             code, _ = tm("select-window", "-t", "=%s:%s" % (g, w))
         if code:
-            toast(client, "Open elsewhere — use that terminal page to take control")
+            toast(client, say("view_open_elsewhere"))
         method, rc = ("select-window", 0) if code == 0 else ("gone", 4)
     ms = round((time.monotonic() - t0) * 1000, 1)
     rec = {"ts": round(time.time(), 3), "view": vid, "from": before, "to": target,
@@ -2850,15 +2874,19 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft="", t0=""):
     if not agent:
         agent, why = new_agent(fleet, vid)
         if why:
-            toast(client, say("view_new_agent_fmt", why, agent.capitalize()))
+            toast(client, say("view_new_agent_fmt", why, agent.capitalize()), "info")
     named = ["--repo", repo] if repo else ["--no-repo"]
     named += (["--agent", agent] if agent else []) + (["--prompt", prompt] if prompt else [])
     named += ["--draft", draft] if draft else []
     secs = fenv("FLEET_VIEW_NEW_SECS", 60)
+    # its refusal is drawn by dash-raw-session.sh itself (fleet_ui_fail) on THIS
+    # client, tagged — said once, never re-said here over it (T675)
+    tag = notice_tag()
+    env = dict(os.environ, FLEET_NOTICE_TAG=tag, **({"FLEET_UI_CLIENT": client} if client else {}))
     try:
         p = subprocess.run(argv + ["--origin", "hub"] + named + ["--print", fleet],
                            stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
-                           errors="replace", timeout=secs)
+                           errors="replace", timeout=secs, env=env)
         rc, w = p.returncode, ((p.stdout.strip().splitlines() or [""])[-1].split("\t") + [""])[0].strip()
         why = new_why(p.stderr, rc)
     except subprocess.TimeoutExpired:
@@ -2873,10 +2901,12 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft="", t0=""):
         if went == 0:
             new_typeable(run, client)
         return went
-    # the reason travels (issue #3458): the toast, and stderr — the ⚡ row's popup
-    # shows `do new`'s last line, which was nothing, so the panel said no why
+    # the reason travels (issue #3458): the notice, and stderr — the ⚡ row's popup
+    # shows `do new`'s last line, which was nothing, so the panel said no why. A
+    # refusal dash-raw-session.sh already drew (its tag recorded) is not drawn again
     said = say("view_new_failed_fmt", why or say("view_new_exit_fmt", rc))
-    toast(client, said)
+    if not notice_seen(tag):
+        toast(client, said, "error")
     print(said, file=sys.stderr, flush=True)
     return 3
 
@@ -2895,7 +2925,7 @@ def new_typeable(run, client):
     `timing` row) under the run, and the time it took, briefly, on the client."""
     ms = run.at("typeable")
     fleet_timing.add("session", [("total", ms)], ts=run.t0)
-    toast(client, say("view_new_timing_fmt", "%.1f" % (ms / 1000.0)))
+    toast(client, say("view_new_timing_fmt", "%.1f" % (ms / 1000.0)), "info")
 
 
 def new_remember(repo, agent):
@@ -2948,7 +2978,7 @@ def bolt_blank(vid, client, repo, agent):
         return 0
     last = ((p.stdout or "").strip().splitlines() or (p.stderr or "").strip().splitlines() or [""])[-1]
     said = last or say("view_new_failed_fmt", say("view_new_exit_fmt", p.returncode))
-    toast(client, said)
+    toast(client, said, "error")
     print(said, file=sys.stderr, flush=True)
     return 3
 
@@ -3143,7 +3173,7 @@ def shell_window(qo, vid, client, fleet, g, prog, m, l, wid, name):
     rc, sw = tm("new-window", "-P", "-F", "#{window_id}", "-t", "=%s:" % g, "-c", os.path.expanduser("~"),
                 "-n", title[:60], pane)
     if rc != 0 or not sw.startswith("@"):
-        toast(client, say("view_shell_failed_fmt", m))
+        toast(client, say("view_shell_failed_fmt", m), "error")
         return 1
     tm("set-option", "-w", "-t", sw, "@fleet_role", "panel", ";",
        "set-option", "-w", "-t", sw, "@view_shell", key, ";",
@@ -3664,6 +3694,9 @@ ACTIONS = [
     # 回家命令行 (T685; EPIC T651 C3's ⌘\ before): this machine's shell in $HOME
     {"id": "home", "label": lambda r: say("view_cmd_home"), "when": lambda r: True, "rowless": True,
      "local": lambda r, a, f: "home", "far": None, "ask": None},
+    # 最近消息 (T675): the notices the top line drew — the popup's Enter opens the page
+    {"id": "notices", "label": lambda r: say("view_notices_row"), "when": lambda r: True, "rowless": True,
+     "local": lambda r, a, f: "notices", "far": None, "ask": None},
     # the interface language (issue #3329): ↵ flips it, Tab offers 跟系统走 too
     {"id": "lang", "label": lambda r: say("view_lang_row"), "when": lambda r: True, "rowless": True,
      "local": lambda r, a, f: "lang", "far": None, "ask": None,
@@ -3687,7 +3720,7 @@ ACTION = {a["id"]: a for a in ACTIONS}
 SIDEBAR_ACTIONS = {"rename": "rename", "pin": "pin", "pr": "pr", "answer": "answer",
                    "reappol": "reappol", "agent": "agent", "reap": "reap", "open": "enter",
                    "message": "message", "stop": "stop", "resume": "resume", "restore": "resume"}
-ROWLESS = {"new": "C2", "newto": "C2", "repo": "C2", "clients": "C7", "quit": "C7", "home": "T685", "lang": "#3329",
+ROWLESS = {"new": "C2", "newto": "C2", "repo": "C2", "clients": "C7", "quit": "C7", "home": "T685", "notices": "T675", "lang": "#3329",
            "reapall": "#3731", "history": "#3731"}
 
 
@@ -3794,6 +3827,8 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     if argv == "home":
         rc = open_home_shell(qo, vid, client)
         return rc, "" if rc == 0 else say("view_shell_failed_fmt", here_label(view_row(vid))), rc == 0
+    if argv == "notices":
+        return 0, "", False     # the popup opens the page itself (notices_pick)
     if argv == "lang":
         rc, said = lang_set(fleet, ans)
         return rc, said, False
@@ -3983,6 +4018,36 @@ def lang_row(query):
         return None
     return {"kind": "cmd", "cmd": "lang", "act": "lang", "row": {}, "text": text,
             "foot": say("view_lang_nolang_fmt", here_label({})) if lang_said_none() else say("view_lang_foot")}
+
+
+def notices_row(query):
+    """「✉ 最近消息 N」 (T675): the notices the top line drew, N the errors not read
+    back yet — at the panel's bottom (above ⏻), and what the words 消息 / message find."""
+    try:
+        sys.path.insert(0, str(Path(__file__).absolute().parent))
+        import fleet_notice
+        n = fleet_notice.unread()
+    except Exception:
+        n = 0
+    text = "✉ " + (say("view_notices_row_fmt", n) if n else say("view_notices_row"))
+    q = query.strip()
+    if q and not panel_hit(q, text, say("view_notices_words")):
+        return None
+    return {"kind": "cmd", "cmd": "notices", "act": "notices", "row": {}, "text": text,
+            "foot": say("view_notices_foot"), "hit": bool(q)}
+
+
+def notices_pick(screen):
+    """「最近消息」 in the popup's own terminal (T675): curses steps aside,
+    bin/fleet_notice.py's page runs (any key comes back), curses resumes."""
+    curses.def_prog_mode()
+    curses.endwin()
+    try:
+        subprocess.run([sys.executable, str(Path(__file__).absolute().parent / "fleet_notice.py"), "page"])
+    except OSError:
+        pass
+    curses.reset_prog_mode()
+    screen.clear()
 
 
 def pin_row(items, query, cur):
@@ -4189,6 +4254,9 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
     lr = lang_row(query) if words else None
     if lr:
         out.append(lr)      # under ⚡, above ⏻ (issue #3329)
+    nr = notices_row(query) if words else None
+    if nr:
+        out.append(nr)      # at the bottom, above ⏻ (T675): fleet takes no key of its own for it
     if "quit" in words:
         out.append({"kind": "cmd", "cmd": "quit", "act": "quit", "row": {}, "text": say("view_cmd_quit"),
                     "hit": bool(q) and panel_hit(q, say("view_cmd_quit"), QUIT_WORDS)})
@@ -4222,18 +4290,30 @@ def bolt_run(argv, done):
     """Run it in its own session (esc closes the popup; the job goes on and says
     how it ended itself) and hand (rc, its last line) to `done`. Its output goes
     to an unlinked file, never a pipe a closed popup would break."""
+    tag = notice_tag()
+
     def run():
         import tempfile
         try:
             with tempfile.TemporaryFile() as out:
                 p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
-                                     start_new_session=True)
+                                     start_new_session=True, env=dict(os.environ, FLEET_NOTICE_TAG=tag))
                 rc = p.wait(timeout=fenv("FLEET_VIEW_NEW_SECS", 60) + 30)
                 out.seek(0)
                 lines = out.read().decode("utf-8", "replace").strip().splitlines()
             done.append((rc, lines[-1] if lines else ""))
         except (OSError, subprocess.TimeoutExpired) as error:
+            rc, lines = 1, [str(error)]
             done.append((1, str(error)))
+        # its output is not thrown away (T675): a failure nobody recorded is put in
+        # the record, its last lines — what the popup showed, if it was still up
+        if rc != 0 and not notice_seen(tag):
+            try:
+                import fleet_notice
+                fleet_notice.notify("error", " · ".join(lines[-3:]) or say("view_new_exit_fmt", rc),
+                                    source="⚡", draw_it=False, tag=tag)
+            except Exception:
+                pass
     threading.Thread(target=run, daemon=True).start()
 
 
@@ -4296,7 +4376,7 @@ def keys_notice(vid, client=""):
     if not clients:
         return 1
     for c in clients:
-        tm("display-message", "-d", "8000", "-c", c, say("view_keys_moved"))
+        toast(c, say("view_keys_moved"), "info", secs=8)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("%d\n" % time.time())
@@ -4991,6 +5071,12 @@ def _popup(screen, qo, vid, client, forward=""):
                 if e["act"] == "lang":
                     run(ACTION["lang"], {}, "")     # flips it; the list redraws in it
                     continue
+                if e["act"] == "notices":
+                    # 最近消息 (T675): the page, then the list again (its count read anew)
+                    notices_pick(screen)
+                    heal.resized(screen)
+                    shown = listing()
+                    continue
                 if e["act"] == "pin":
                     # the session in view (issue #3517): its own 置顶 item
                     anchor(e)
@@ -5062,9 +5148,9 @@ def _popup(screen, qo, vid, client, forward=""):
         lit = shown[at].get("target") if 0 <= at < len(shown) else None
         shown = listing()
         # typed words: the best session hit is lit; none hit — the language row
-        # when they name it (语言 · lang …, issue #3329), else ⚡
+        # when they name it (语言 · lang …, issue #3329; 消息 …, T675), else ⚡
         at = next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
-                  next((i for i, e in enumerate(shown) if query and (e.get("cmd") in ("lang", "pin") or e.get("hit"))),
+                  next((i for i, e in enumerate(shown) if query and (e.get("cmd") in ("lang", "pin", "notices") or e.get("hit"))),
                        next((i for i, e in enumerate(shown) if e.get("cmd") == "new"),
                             next((i for i, e in enumerate(shown) if pickable(e)), 0))))
         if not query:
