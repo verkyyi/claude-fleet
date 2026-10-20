@@ -106,15 +106,13 @@ _eff() {
 # status — each key: the value fleet-account.sh reads, and where it came from
 # (入口 the hub · 本机 this machine's conf · 默认 the built-in default)
 cmd_status() {
-  local k eff own src
-  for k in FLEET_ACCOUNT_CEILING; do
-    eff=$(_eff "$k"); own=$(_eff "$k" 1)
-    if [ -n "$own" ]; then src=本机
-    elif [ -n "$eff" ]; then src=入口
-    else src=默认; eff=85
-    fi
-    printf '%s\t%s\t%s\n' "$k" "$eff" "$src"
-  done
+  local k=FLEET_ACCOUNT_CEILING eff own src
+  eff=$(_eff "$k"); own=$(_eff "$k" 1)
+  if [ -n "$own" ]; then src=本机
+  elif [ -n "$eff" ]; then src=入口
+  else src=默认; eff=85
+  fi
+  printf '%s\t%s\t%s\n' "$k" "$eff" "$src"
 }
 
 case "${1:-}" in

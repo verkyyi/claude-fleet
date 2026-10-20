@@ -262,7 +262,8 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 		{PoolSkipPctKey, "90", http.StatusOK, "90"},
 		{PoolSkipPctKey, "0", http.StatusBadRequest, "90"},
 		{PoolSkipPctKey, "101", http.StatusBadRequest, "90"},
-		{"pool.move_when_full", "on", http.StatusBadRequest, ""}, // retired (claude-fleet T543)
+		// pool.move_when_full is retired (claude-fleet T543): refused, nothing stored.
+		{"pool.move_when_full", "on", http.StatusBadRequest, ""},
 		{AutoAssignKey, " Least-Busy ", http.StatusOK, "least-busy"}, // claude-fleet#2069
 		{AutoAssignKey, "mac-c, mac-e", http.StatusOK, "mac-c,mac-e"},
 		{AutoAssignKey, "bad host!", http.StatusBadRequest, "mac-c,mac-e"},
