@@ -54,7 +54,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 CHECKS=0
 eq() { [ "$2" = "$3" ] || st_fail "$1" "want: [$2]
- got: [$3]"; ok; }
+ got: [$3]"; st_count; }
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-alerts-selftest.XXXXXX") || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
