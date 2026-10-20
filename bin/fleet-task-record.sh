@@ -138,11 +138,13 @@ call() {
   # signed once this login has a key (issue #3710), else the token
   # The agent's warm road first (issue T672): one round trip on its kept
   # connection; nobody there (curl 7) or its own refusal ⇒ the direct one.
-  local sock; sock=$(fleet_hub_sock)
+  # Only a remote https hub: a login's own broker (http://127.0.0.1:…/hub) is
+  # already local, and the forwarder serves the hub, not it.
+  local sock=''; case "$url" in https://*) sock=$(fleet_hub_sock) ;; esac
   if [ -n "$sock" ]; then
     resp=$(printf 'header = "Authorization: %s"\n' "$(fleet_node_auth "$m" "$url$p" "$tok")" | \
       "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -K - -o - -w '\n%{http_code}' --unix-socket "$sock" \
-        -H "X-Fleet-Hub: $url" -H "Host: ${url#*://}" -X "$m" -H 'Content-Type: application/json' ${body:+--data-binary "$body"} \
+        -H "X-Fleet-Hub: $url" -H "Host: $(printf '%s' "${url#*://}" | cut -d/ -f1)" -X "$m" -H 'Content-Type: application/json' ${body:+--data-binary "$body"} \
         "http://${url#*://}$p" 2>/dev/null); rc=$?   # plain on the socket: the agent holds the TLS
     case "$rc:$resp" in 7:*|0:hubfwd:\ this\ forwarder*|0:hubfwd:\ not\ a\ path*) sock='' ;; esac
   fi
