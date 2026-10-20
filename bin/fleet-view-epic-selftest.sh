@@ -6,8 +6,9 @@
 #      rows into its own group, whatever their repo or state, ordered by task; an
 #      ordinary dispatch stays flat; a member's name is the child's title
 #   B  folded by default: only ! / ✗ members show (└ under the driver); the
-#      driver says 已完成/总数 counting closed members, the heading counts what
-#      shows; @expand=1 opens it (├ … └), epic_toggle writes @expand both ways
+#      driver says 已完成/总数 counting closed members; the heading counts every
+#      session in its group — a folded member too (T541), the same number folded
+#      or expanded; @expand=1 opens it (├ … └), epic_toggle writes @expand both ways
 #   C  paint: ▸ / ▾ before the driver's name, N/N grey, !k red; a member's tree in
 #      the name column only (glyph, ID, Agent, repo columns where they were)
 #   D  a search still finds a folded member; the first frame (hub=False) reads the
@@ -114,7 +115,7 @@ assert mem == [("@13", "├ "), ("@15", "└ ")], mem
 ask = [e for e in sh if e["kind"] == "ask" and e["of"] == "@13"]
 assert ask and ask[0]["tree"] == "│ ", ask
 hd = {e["group"]: e["text"] for e in it if e["kind"] == "hdr"}
-assert hd[d["group"]] == fv.say("view_grp_%s_fmt" % d["group"], 4), hd     # @10 @14 @13 @15
+assert hd[d["group"]] == fv.say("view_grp_%s_fmt" % d["group"], 6), hd     # @10 @14 + all 4 members, folded too (T541)
 fv.epic_toggle(it, "fl", "@10", True)
 assert any(c[:1] == ("set-option",) and "@expand" in c and "1" in c for c in calls), calls
 assert marks["@10"][1] == "1"
@@ -122,7 +123,9 @@ sh = fv.visible(it, "", set())
 mem = [(e["target"], e.get("tree")) for e in sh if e["kind"] == "sess" and e.get("fold")]
 assert mem == [("@12", "├ "), ("@11", "├ "), ("@13", "├ "), ("@15", "└ ")], mem
 hd = {e["group"]: e["text"] for e in it if e["kind"] == "hdr"}
-assert hd[d["group"]] == fv.say("view_grp_%s_fmt" % d["group"], 6), hd
+assert hd[d["group"]] == fv.say("view_grp_%s_fmt" % d["group"], 6), hd     # expanded: the same count (T541)
+# a member in another repo (@15, o/other) counts in its driver's group, not elsewhere
+assert sum(1 for e in it if e["kind"] == "sess" and e["group"] == d["group"]) == 6
 # ⑭: the window's mark is what the next read keeps
 it2 = fv.entries("v1")
 assert [e for e in it2 if e.get("epic")][0]["expanded"]

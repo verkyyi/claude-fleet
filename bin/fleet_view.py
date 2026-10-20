@@ -1170,6 +1170,8 @@ def id_page(e, w):
 # driver says 已完成/总数 (closed members counted) and is folded unless its window's
 # @expand is `1` (⑭: kept until the window closes, a new member never opens it);
 # folded, only a member that is ! or ✗ shows (⑬), counted red on the driver. A
+# group heading counts every member hung in it, folded or not (T541): a member
+# belongs to its driver's group — where it shows — whatever its own repo. A
 # closed member stays in 已关闭 (⑫). An ordinary dispatch never hangs. The hub's
 # answer is kept in remote-views/epic-<fleet>.json, read again every
 # FLEET_VIEW_EPIC_SECS (30 s) by the refresh thread — never on the first frame.
@@ -1291,19 +1293,6 @@ def epic_hidden(e, drivers):
     return bool(f) and f in drivers and not drivers[f].get("expanded") and not epic_kept(e)
 
 
-def epic_count(items):
-    """Each group heading's count again: the rows it shows (a folded driver's
-    hidden members not among them)."""
-    drivers = {e["target"]: e for e in items if e.get("epic")}
-    n = {}
-    for e in items:
-        if e["kind"] == "sess" and not e.get("sec") and not e.get("gone") and not epic_hidden(e, drivers):
-            n[e["group"]] = n.get(e["group"], 0) + 1
-    for e in items:
-        if e["kind"] == "hdr" and e.get("group") in n:
-            e["text"] = say("view_grp_" + e["group"] + "_fmt", n[e["group"]])
-
-
 def epic_toggle(items, fleet, target, on):
     """→ / ← on a driver: its window's @expand (⑭), and the list at once."""
     if on:
@@ -1313,7 +1302,6 @@ def epic_toggle(items, fleet, target, on):
     for e in items:
         if e.get("epic") and e.get("target") == target:
             e["expanded"] = bool(on)
-    epic_count(items)
 
 
 def entries(vid, now=None, hub=True):
@@ -1593,7 +1581,6 @@ def entries(vid, now=None, hub=True):
         if older:
             out.append({"kind": "cmd", "cmd": "history", "act": "history", "sec": "gone", "n": older, "row": {},
                         "text": say("view_cmd_older_fmt", older)})
-    epic_count(out)
     return out
 
 
