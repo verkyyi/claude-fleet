@@ -610,9 +610,11 @@ def row(*f): return US.join(f)
 open_rows = "\n".join([
     row("hdr", "o/r", "", "r (1)", " "),
     row("@1", "working", "⠹", "alpha", " ", "", "0", "", "", "#11", "—", "50%", "ok", "Alpha", "merged"),
-    row("hdr", "ended", "", "▸ 已结束 · 还开着 (2)", " "),
+    row("@11", "idle", "·", "eleven", " ", "", "0", "", "", "#21", "—", "·", "ok", "闲着的十一", "merged"),
+    row("hdr", "ended", "", "▸ 已结束 · 还开着 (3)", " "),
     row("@8", "done", "✓", "eight", " ", "", "0", "", "", "", "—", "·", "ok", "做完的八", "merged"),
-    row("@9", "exited", "x", "nine", " ", "", "0", "", "", "", "—", "·", "ok", "退出的九", "merged"),
+    row("@9", "done", "✓", "nine", " ", "", "0", "", "", "", "—", "·", "ok", "做完的九", "merged"),
+    row("@10", "exited", "x", "ten", " ", "", "0", "", "", "", "—", "·", "ok", "退出的十", "merged"),
 ]) + "\n"
 fv.view_row = lambda vid: {}
 fv.view_fleet = lambda vid, row=None: "fl"
@@ -625,16 +627,25 @@ os.environ.pop("FLEET_VIEW_CLOSED_HOURS", None)
 os.environ["FLEET_CONF_DIR"] = sys.argv[2]          # no fleet.conf there: the default, 168 (7 days)
 it = fv.entries("v1")
 sec = [e for e in it if e["kind"] == "sec"]
-assert [(e["sec"], e["n"]) for e in sec] == [("gone", 5)], sec
-assert sec[0]["text"] == "已收起 5 个" and sec[0]["older"] == 3, sec
+assert [(e["sec"], e["n"]) for e in sec] == [("gone", 6)], sec
+assert sec[0]["text"] == "已收起 6 个" and sec[0]["older"] == 3, sec
 # 回收 D: the producer's 已结束 rows sit in 排队中, its 收起 line last; 已收起 (heading
 # · newest first · 更早的 3 个) under it
 q = next(e for e in it if e["kind"] == "hdr" and e["group"] == "queue")
 tail = [(e["kind"], e.get("target") or e.get("cmd") or e.get("sec") or e.get("group")) for e in it[it.index(q):]]
-assert tail == [("hdr", "queue"), ("sess", "@8"), ("sess", "@9"), ("cmd", "reapall"),
-                ("sec", "gone"), ("sess", "landed:901@o/r"), ("sess", "landed:902@o/r"), ("sess", "landed:903@o/r"),
+# T688: an idle session waits in 排队中 (tagged 空闲), never 等你; an exited agent
+# whose window is up is folded straight into 已收起, a live row there (↵ its window)
+assert tail == [("hdr", "queue"), ("sess", "@11"), ("sess", "@8"), ("sess", "@9"), ("cmd", "reapall"),
+                ("sec", "gone"), ("sess", "@10"), ("sess", "landed:901@o/r"), ("sess", "landed:902@o/r"), ("sess", "landed:903@o/r"),
                 ("sess", "landed:904@o/r"), ("sess", "landed:905@o/r"), ("cmd", "history")], tail
-assert q["text"] == "排队中 2", q
+assert q["text"] == "排队中 3", q
+assert not any(e["kind"] == "hdr" and e["group"] == "ask" for e in it), it
+idle = next(e for e in it if e.get("target") == "@11")
+assert idle["group"] == "queue" and idle["tags"] == ["空闲"] and not idle.get("ended"), idle
+ten = next(e for e in it if e.get("target") == "@10")
+assert ten["sec"] == "gone" and ten["shut"] and not ten.get("gone") and ten["word"] == "已退出", ten
+assert ten["foot"].endswith("已退出 · ↵ 恢复") and fv.live(ten) is False, ten
+assert "enter" in [a["id"] for a in fv.ACTIONS if a["when"](ten)], ten
 more = it[-1]
 assert more["text"] == "更早的 3 个 → /fleet-history" and more["sec"] == "gone", more
 ra = next(e for e in it if e.get("cmd") == "reapall")
@@ -648,7 +659,7 @@ assert [e.get("target") for e in v if e.get("ended")] == ["@8", "@9"], v
 opened = fv.sec_fold(set(), "gone", True)
 v = fv.visible(it, "", opened)
 assert [e.get("target") or e.get("cmd") for e in v if e.get("sec") == "gone" and e["kind"] != "sec"] == \
-    ["landed:901@o/r", "landed:902@o/r", "landed:903@o/r", "landed:904@o/r", "landed:905@o/r", "history"], v
+    ["@10", "landed:901@o/r", "landed:902@o/r", "landed:903@o/r", "landed:904@o/r", "landed:905@o/r", "history"], v
 assert fv.visible(it, "", fv.sec_fold(opened, "gone", False)) == fv.visible(it, "", set())
 # the panel (view-panel's rows): the same lines, ⚡ and ⏻ after them
 p = fv.panel_rows(it, "", {"ended", "gone"}, cmds=["new", "quit"])
@@ -659,10 +670,10 @@ assert kinds[h - 1:h + 2] == ["landed:905@o/r", "history", "new"] and kinds[-1] 
 Path(sys.argv[2], "fleet.conf").write_text("FLEET_VIEW_CLOSED_HOURS=1.5\n")
 it2 = fv.entries("v1")
 s2 = [e for e in it2 if e["kind"] == "sec" and e["sec"] == "gone"][0]
-assert (s2["n"], s2["older"]) == (1, 7) and it2[-1]["text"] == "更早的 7 个 → /fleet-history", s2
+assert (s2["n"], s2["older"]) == (2, 7) and it2[-1]["text"] == "更早的 7 个 → /fleet-history", s2
 os.environ["FLEET_VIEW_CLOSED_HOURS"] = "100"
 s3 = [e for e in fv.entries("v1") if e["kind"] == "sec" and e["sec"] == "gone"][0]
-assert (s3["n"], s3["older"]) == (5, 3), s3
+assert (s3["n"], s3["older"]) == (6, 3), s3
 os.environ.pop("FLEET_VIEW_CLOSED_HOURS")
 Path(sys.argv[2], "fleet.conf").unlink()
 # nothing older ⇒ no 更早 line; nothing closed ⇒ no 已收起 heading
@@ -670,7 +681,10 @@ fv.gone_text = lambda fleet: "\n".join(gone.split("\n")[:3]) + "\n"
 it3 = fv.entries("v1")
 assert not any(e.get("cmd") == "history" for e in it3) and it3[-1]["target"] == "landed:903@o/r", it3[-1]
 fv.gone_text = lambda fleet: ""
+assert [(e["sec"], e["n"]) for e in fv.entries("v1") if e["kind"] == "sec"] == [("gone", 1)]     # @10 alone
+fv.produce = lambda fleet, **kw: "\n".join(l for l in open_rows.split("\n") if not l.startswith("@10" + US)) + "\n"
 assert [e["sec"] for e in fv.entries("v1") if e["kind"] == "sec"] == []
+fv.produce = lambda fleet, **kw: open_rows
 # a copy written before the epoch rode along: the words, read as the least they mean
 assert fv.gone_age(None, "47 mins", now) == 47 * 60 and fv.gone_age(None, "1 day", now) == 86400
 assert fv.gone_age(None, "2 days", now) == 172800 and fv.gone_age(None, "now", now) == 0

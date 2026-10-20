@@ -644,7 +644,7 @@ def name_hold(fleet, target, name):
 # in UbuntuMono). FLEET_GLYPHS=ascii swaps in plain ASCII.
 # Plan B (T486 v14, T493): seven states and lost, each a one-cell character with
 # no emoji form — ↻ running · ! waiting on you · ✓ done · ✗ failed · ◌ exited (the
-# agent gone, its window up: under 等你) · ∙ idle · ? lost (☾ asleep
+# agent gone, its window up: folded into 已收起, T688) · ∙ idle · ? lost (☾ asleep
 # went with hibernation, T548).
 GLYPHS = {"needs": "!", "fail": "✗", "work": "↻", "done": "✓", "exited": "◌", "idle": "∙", "lost": "?"}
 GLYPHS_ASCII = {"needs": "!", "fail": "x", "work": ">", "done": "+", "exited": "o", "idle": ".", "lost": "?"}
@@ -655,7 +655,8 @@ GLYPH_COLORS = {"needs": 1, "fail": 1, "work": 2, "done": 4, "exited": 8, "idle"
 ROW_RED = ("needs", "fail")
 LEGEND = ("work", "needs", "done", "fail", "exited", "idle", "lost")
 # The panel's groups (回收 D, T681): 置顶 · 等你 · 在干活 · 排队中, then 已收起 — the
-# closed sessions, a folded section (sec "gone") under them.
+# closed sessions, a folded section (sec "gone") under them; an exited agent whose
+# window is still up sits there too (group_of's "shut", T688).
 GROUPS = ("pin", "ask", "work", "queue")
 MERGED_PR = ("merged", "live", "deploy…", "deploy✗")
 
@@ -687,23 +688,24 @@ def sym_of(state, lost=False):
 
 
 def group_of(state, pinned, landed, ended, asked=False, stage=""):
-    """Whether the row needs you (回收 D, T681; issues #3179, #4225): 置顶 · 等你
-    (needs / failed, an unanswered ⛔ ask on its issue whatever the state, an idle
-    session — its next move is yours, e.g. a plan page waiting on your word — and
-    an exited agent whose window is still up: ↵ resume · r new · q close) · 在干活 ·
-    排队中 (waiting on something that is not you: done with its PR on its way to
-    merge / ship, or done and about to be folded away — the producer's 已结束
-    mark included; unknown). `landed` / `stage` no longer split a group."""
+    """Whether the row needs you (回收 D, T681; issues #3179, #4225; T688): 置顶 ·
+    等你 — only what waits on YOUR hand: asking (needs, the `ask` tool's sticky
+    blocked included — the window side of the record's 「问过你」, cleared by the
+    answer; a plan page waiting on your nod asks the same way), failed, an
+    unanswered ⛔ ask on its issue whatever the state — · 在干活 · 排队中 (waiting
+    on something that is not you: an idle session with nothing asked — tagged
+    空闲 —, done with its PR on its way to merge / ship, or done and about to be
+    folded away — the producer's 已结束 mark included; unknown) · "shut": an exited
+    agent whose window is still up, folded straight into 已收起 (↵ its recovery
+    page: resume · new · close). `landed` / `stage` no longer split a group."""
     if pinned:
         return "pin"
     if state in ("needs", "failed", "error") or asked:
         return "ask"
     if state in ("working", "looping"):
         return "work"
-    if ended:
-        return "queue"
-    if state in ("idle", "sleeping", "exited"):    # sleeping: an older producer's idle (T548)
-        return "ask"
+    if state == "exited":
+        return "shut"
     return "queue"
 
 
@@ -1356,7 +1358,7 @@ def id_display(groups):
     fi = fleet_id_mod()
     if fi is None:
         return
-    rows = [e for g in GROUPS for e in groups.get(g, ()) if fi.is_fid(e.get("fid") or "")]
+    rows = [e for g in groups.values() for e in g if fi.is_fid(e.get("fid") or "")]
     live = {e["fid"] for e in rows if not finished(e)}
     for e in rows:
         e["code"] = e.get("id") or ""
@@ -1664,7 +1666,7 @@ def entries(vid, now=None, hub=True):
     hage = hub_age(now)
     hstale = hage is not None and hage > fenv("FLEET_HUB_SESSIONS_STALE", 60)
     groups = {g: [] for g in GROUPS}
-    ended, repos, anc, norepo = [], [], {}, []
+    ended, repos, anc, norepo, shut = [], [], {}, [], []
     section, repo = "", ""
     seen = set()
     known = id_known(v[0] for v in wins.values())
@@ -1770,6 +1772,8 @@ def entries(vid, now=None, hub=True):
             tags.append(f[5].strip())
         if grp == "queue" and stage:
             tags.append(say("view_stage_" + stage))
+        if grp == "queue" and state in ("idle", "sleeping") and section != "ended":
+            tags.append(say("view_state_idle"))      # T688: idle waits in 排队中, said so
         e = {"kind": "sess", "target": target, "far": not local, "machine": machine, "login": login,
              "open": target in wins if local else True,
              "state": state, "text": title or name, "name": name, "reap": f[14].strip(), "issue": issue, "depth": depth,
@@ -1801,11 +1805,18 @@ def entries(vid, now=None, hub=True):
             e["word"] = state_words("done")
         if e["state"] != state:
             grp = e["group"] = group_of(e["state"], section == "pin", landed, section == "ended", bool(pend), stage)
+        if grp == "shut":
+            # T688: the agent exited, its window still up — folded into 已收起 at
+            # once, a live row there: ↵ goes to its window's recovery page
+            e.update(group="folded", sec="gone", shut=True, depth=0)
+            e["word"] = say("view_ended_exited")
+            e["foot"] = " · ".join(x for x in (e["foot"], e["word"], say("view_gone_hint")) if x)
+            shut.append(e)
+            continue
         if section == "ended" and grp == "queue":
             # the producer's 已结束 (回收 D): no group of its own — 排队中, to be
             # folded away; its words say why, Tab reaps it now
-            why =say("view_ended_merged") if f[10].strip() in MERGED_PR else \
-                say("view_ended_exited") if state == "exited" else say("view_ended_done")
+            why = say("view_ended_merged") if f[10].strip() in MERGED_PR else say("view_ended_done")
             e["word"] = why
             e["ended"] = True
             e["right"] = say("view_ago_fmt", dur(now - act)) if act and local else ""
@@ -1825,7 +1836,7 @@ def entries(vid, now=None, hub=True):
     # the sessions whose windows are gone (issue #3286): after the open ended rows,
     # one an open row already shows (its issue, restored since) left out
     open_issues = {e["issue"] for g in groups.values() for e in g if e.get("issue")} | \
-        {e["issue"] for e in ended if e.get("issue")}
+        {e["issue"] for e in ended + shut if e.get("issue")}
     # issue #3731: they are their own group, 已关闭 — only the last
     # FLEET_VIEW_CLOSED_HOURS of them listed, the older ones a count that opens
     # /fleet-history; a row whose age cannot be read counts as older
@@ -1880,7 +1891,13 @@ def entries(vid, now=None, hub=True):
         epic_tree(groups, ended, fleet, refresh=hub)
     ended = [e for e in groups["queue"] if e.get("ended")]
     # S9: two live windows on one conversation — both to 等你
-    id_conflicts([e for g in GROUPS for e in groups[g]])
+    id_conflicts([e for g in GROUPS for e in groups[g]] + shut)
+    for e in [e for e in shut if e.get("conflict")]:
+        shut.remove(e)
+        e.pop("sec", None)
+        e.pop("shut", None)
+        e["group"] = "ask"
+        groups["ask"].append(e)
     for g in GROUPS:
         if g != "ask":
             moved = [e for e in groups[g] if e.get("conflict")]
@@ -1890,7 +1907,7 @@ def entries(vid, now=None, hub=True):
             for e in moved:
                 e.pop("fold", None)
             groups["ask"] += moved
-    id_display(groups)
+    id_display(dict(groups, shut=shut))
     multi = len(set(repos)) >= 2
     out = []
     for g in GROUPS:
@@ -1913,6 +1930,7 @@ def entries(vid, now=None, hub=True):
                         "text": say("view_cmd_reapall_fmt", len(many))})
     # 已收起 (a record only; ↵ on a row resumes its conversation), folded until
     # opened (issue #3731)
+    gone = shut + gone
     if gone or older:
         out.append({"kind": "sec", "sec": "gone", "text": say("view_sec_gone_fmt", len(gone)), "n": len(gone),
                     "older": older})
