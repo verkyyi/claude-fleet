@@ -11,10 +11,11 @@ send the private codes the 看台 (conf/tmux-view.conf) catches.
 Which ⌘ chords (issue #3185, EPIC #3178 C7): ONE by default — FLEET_KEY_PANEL
 (⌘P, the panel; `off` none) — plus every ⌘ chord the person names in
 FLEET_KEYS_EXTRA (`next=cmd+down …`), both fleet.conf [client] (bin/fleet_keys.py
-reads them). Every other ⌘ key is the parent's — except the ⌘ keys issue #3328
-folded into ⌘P: ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘Q ⌘K still send their old code, which the 看台
-turns into the panel + a one-time 「已并进 ⌘P」 (fleet_keys.FORWARD; kept for good,
-issue #4790 — given back to iTerm2, ⌘Q would quit it). (The old
+reads them). Every other ⌘ key is the parent's, i.e. iTerm2's own (T685, 操作者
+2026-10-20: the 看台 takes ⌘P alone) — ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘K ⌘Q ⌘\\, which #3328 /
+T651 had kept, are no row of this profile: ⌘K clears, ⌘T opens a tab, ⌘N a window,
+⌘Q quits iTerm2 again (fleet_keys.RETIRED; an older profile's code is swallowed by
+the 看台). (The old
 client's `--all` — every row of the table at its own chord — went with that
 client, issue #3008.)
 
@@ -113,10 +114,9 @@ def table():
 
 def rows():
     """[(iTerm2 key, code)] — the ⌘ chords this profile turns into codes. A new
-    client (issue #3185, EPIC #3178 C7): the panel, FLEET_KEY_PANEL (⌘P unless the
-    person moved it, none for `off`), ⌘\\ home (EPIC T651 C3: the table's other
-    default row), plus each ⌘ chord of FLEET_KEYS_EXTRA — every other ⌘ key stays
-    the parent's, i.e. iTerm2's own."""
+    client (issue #3185, EPIC #3178 C7; T685): the panel, FLEET_KEY_PANEL (⌘P unless
+    the person moved it, none for `off`), plus each ⌘ chord of FLEET_KEYS_EXTRA —
+    every other ⌘ key stays the parent's, i.e. iTerm2's own."""
     t = table()
     sys.path.insert(0, str(BIN))
     import fleet_keys
@@ -125,8 +125,8 @@ def rows():
     panel = fleet_keys.iterm_key(fleet_keys.panel())
     if panel and "quickopen" in codes:
         out.append((panel, codes["quickopen"]))
-    # the other rows bound by default (dash-keymap.sh's last column): ⌘\ home (EPIC
-    # T651 C3) — at its own chord, unless the panel or an extra took that chord
+    # any other row bound by default (dash-keymap.sh's last column — none since
+    # T685) — at its own chord, unless the panel or an extra took that chord
     taken = {panel} | {fleet_keys.iterm_key(c) for _, c in fleet_keys.pairs(fleet_keys.client_extra(), set(codes))}
     for r in t:
         if r["default"] and r["action"] != "quickopen" and r["key"] not in taken:
@@ -135,12 +135,6 @@ def rows():
         key = fleet_keys.iterm_key(chord)
         if key and action in codes:
             out.append((key, codes[action]))
-    # the keys issue #3328 folded into ⌘P: their old code, which the 看台 binds to
-    # the panel + a one-time hint (fleet_keys.FORWARD)
-    for _, chord, _, code in fleet_keys.forwards():
-        key = fleet_keys.iterm_key(chord)
-        if key and code:
-            out.append((key, code))
     return out
 
 

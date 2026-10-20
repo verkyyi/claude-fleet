@@ -12,7 +12,7 @@ Everything starts from one key. The tables below are generated from fleet's key 
 | Where | Press |
 |---|---|
 | iTerm2 on a Mac | `⌘P` |
-| A phone (Termius) or another terminal | `⌃Space` or `F12` or `⌃] p` |
+| A phone (Termius) or another terminal | `⌃] p` |
 
 | Key | What it does |
 |---|---|
@@ -23,7 +23,7 @@ Everything starts from one key. The tables below are generated from fleet's key 
 | `?` | legend |
 | `esc` | close |
 | `↑` | to ⚡ |
-| `⌘\` or `⌃\` | From any screen: the home machine's command line ($HOME), no session or hub needed; again to come back |
+| — | Rows of the panel (pick one, ↵ — or type its name): ⚡ New session · ⌂ Home command line (this machine's shell) · ⏻ Quit fleet (sessions keep running) |
 <!-- /docs-gen:keys -->
 
 The panel looks roughly like this (sample data):
@@ -139,7 +139,7 @@ When the context is nearly full, a repository task's session hands itself off to
 
 ## Optional: your own keys for common actions
 
-By default there is one key — the one that opens the panel — and everything else is in the panel. If you are used to the old shortcuts, add them back in `~/.config/claude-fleet/fleet.conf` on your own computer:
+fleet uses one key, ⌘P (phone: `⌃] p`); everything else is in the panel: New session, Home command line and Quit fleet are rows of it — pick one and press ↵, or type a few letters ("home", "quit") to land on it; quitting asks first. ⌘K (clear), ⌘T (new tab), ⌘N (new window) and ⌘Q (quit) are iTerm2's again. If you are used to the old shortcuts, add them back in `~/.config/claude-fleet/fleet.conf` on your own computer:
 
 ```ini
 [client]
@@ -160,9 +160,10 @@ The actions you can set (this table is generated too):
 | `new` | new session: straight to the “New session” box — the repo of the session you are looking at (else the last one used), the agent that repo last used; Enter opens | `⌘N` | `⌃] c` |
 | `dispatch` | dispatch: a title + a repo (the last one used) + optionally Codex, ↵ files it and starts its worker; from any window, no model on the way | `⌘T` | `⌃] t` |
 | `quit` | quit this client connection; sessions keep running on their machines; fleet opens it again | `⌘Q` | `⌃] q` |
+| `home` | From any screen: the home machine's command line ($HOME), no session or hub needed; again to come back | `⌘\` or `⌃\` | — |
 <!-- /docs-gen:keys-extra -->
 
-Without iTerm2 (for example Ghostty, or the system's own Terminal) ⌘ keys never reach fleet; open the panel with `⌃] p` or `⌃Space`.
+Without iTerm2 (for example Ghostty, or the system's own Terminal) ⌘ keys never reach fleet; open the panel with `⌃] p` (⌃], then p).
 
 ## Saying something is wrong
 

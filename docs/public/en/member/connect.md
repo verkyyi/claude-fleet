@@ -20,7 +20,7 @@ fleet          # open it, back to where you left off
 fleet quit     # close only the window on this computer; sessions keep working
 ```
 
-On a Mac, iTerm2 is recommended: ⌘P opens the panel; in other terminals use `⌃Space` or `F12`.
+On a Mac, iTerm2 is recommended: ⌘P opens the panel; in other terminals use `⌃] p`. fleet takes that one key; everything else is in the panel.
 
 ## What happens when you close your computer
 
@@ -42,6 +42,6 @@ On a phone, use **Termius** (on both iOS and Android) to connect to your own add
 
 After that, on the phone:
 
-- Open the panel: `⌃Space` (in Termius tap Ctrl, then Space), `F12` or `⌃] p`. Put `F12` in the row above Termius's keyboard and one tap opens it.
+- Open the panel: `⌃] p` (Ctrl+], then p).
 - On a narrow screen the panel fills the screen; tap a row to switch to it.
 - New phone, or lost it: revoke that key on the hub's **My connection** page and it can no longer connect, at once.
