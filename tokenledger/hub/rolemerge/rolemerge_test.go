@@ -1,9 +1,6 @@
 package rolemerge
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 // Parse reads a subagent file's frontmatter (svc templates' name).
 func TestParse(t *testing.T) {
