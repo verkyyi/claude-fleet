@@ -5,7 +5,8 @@
 #
 #   A  an empty ledger → 还没有带账的发布, every number —, exit 0
 #   B  a ledger with trains → GET /v1/fleet/release/stats?days=7 with the
-#      operator's bearer; the three rows, the stages, the last trains
+#      operator's bearer; the two rows, the stages, the last trains (an older
+#      hub's macos_queue — the macOS stage left the train, #3869 — printed nowhere)
 #   C  --days 3 --json → ?days=3, the hub's answer as JSON
 #   D  no credential → exit 3, nothing sent; --days 0 → exit 2
 #   E  a hub that keeps every run (claude-fleet#3870) → merge → stable p50 / p95,
@@ -20,8 +21,7 @@ bad() { FAIL=$((FAIL+1)); echo "FAIL $*"; }
 cat > "$WORK/empty.json" <<'J'
 {"days":7,"since":"2026-10-04T08:00:00Z","trains":0,"trains_reached":0,
  "merge_to_all":{"n":0,"median_secs":null,"p90_secs":null},"merges_pending":0,
- "releases_per_hour":{"releases":0,"active_hours":0,"rate":null},
- "macos_queue":{"n":0,"median_secs":null,"p90_secs":null},"stages":[],"recent":[]}
+ "releases_per_hour":{"releases":0,"active_hours":0,"rate":null},"stages":[],"recent":[]}
 J
 cat > "$WORK/full.json" <<'J'
 {"days":7,"since":"2026-10-04T08:00:00Z","trains":3,"trains_reached":2,
@@ -82,7 +82,6 @@ out=$(run "$BIN/fleet" release stats --from "$WORK/empty.json" 2>&1); rc=$?
 if [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^发布账 · 近 7 天 · 还没有带账的发布' \
    && printf '%s\n' "$out" | grep -q '合并后到所有机器都用上 *中位 — · p90 — · 0 个合并$' \
    && printf '%s\n' "$out" | grep -q '每小时发出的版本 *—$' \
-   && printf '%s\n' "$out" | grep -q 'macOS 测试排队 *中位 — · p90 — · 0 次$' \
    && ! printf '%s\n' "$out" | grep -q '最近几趟'; then
   ok "A empty ledger → 还没有带账的发布, every number —"
 else bad "A rc=$rc out=$out"; fi
@@ -95,7 +94,7 @@ if [ "$rc" = 0 ] && [ "$(field "$r" path)" = /v1/fleet/release/stats ] && [ "$(f
    && printf '%s\n' "$out" | grep -q '^发布账 · 近 7 天 · 3 趟车（2 趟所有机器都已用上）$' \
    && printf '%s\n' "$out" | grep -q '合并后到所有机器都用上 *中位 50 分 · p90 80 分 · 2 个合并（另 1 个还在路上）$' \
    && printf '%s\n' "$out" | grep -q '每小时发出的版本 *0\.75（3 趟 / 4 个 master 在动的小时）$' \
-   && printf '%s\n' "$out" | grep -q 'macOS 测试排队 *中位 2 分 · p90 10 分 · 3 次$' \
+   && ! printf '%s\n' "$out" | grep -q 'macOS' \
    && printf '%s\n' "$out" | grep -q '^  linux tests *5 分 / 6 分 · 3 趟$' \
    && printf '%s\n' "$out" | grep -q '^  3333333  10-11 07:12  1 个合并  机器 2/3 · 差 m3$' \
    && printf '%s\n' "$out" | grep -q '^  2222222  10-11 05:27  2 个合并  机器 3/3 · 全部用上 10-11 05:47$'; then

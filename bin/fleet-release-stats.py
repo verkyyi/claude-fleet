@@ -7,14 +7,12 @@ bin/fleet hands it `release stats` here, so it works on a client too.
     fleet release stats [--days N] [--json]
 
 Every release train the CI publishes with its `train` part is written down on
-the hub: the merges it carried, each stage's time, the macOS queue it waited
-in, and when each managed machine first ran it. This prints, for the last N
+the hub: the merges it carried, each stage's time, and when each managed machine first ran it. This prints, for the last N
 days (default 7):
 
     合并后到所有机器都用上   median / p90 from a merge to the last machine
                              (online and not 维护中 at publish) running it
     每小时发出的版本         trains ÷ the hours master moved in
-    macOS 测试排队           median / p90 of the trains' macOS queue readings
 
 then each stage's median / p90 and the last few trains. A publish without a
 train (from before the train) is in none of it.
@@ -140,9 +138,6 @@ def render(st):
     rate = ph.get("rate")
     out.append("  " + pad("每小时发出的版本") + ("—" if rate is None else "%.2f（%d 趟 / %d 个 master 在动的小时）"
                                                 % (rate, ph.get("releases") or 0, ph.get("active_hours") or 0)))
-    q = st.get("macos_queue") or {}
-    out.append("  " + pad("macOS 测试排队") + "中位 %s · p90 %s · %d 次"
-               % (dur(q.get("median_secs")), dur(q.get("p90_secs")), q.get("n") or 0))
     out.extend(runs_lines(st))
     stages = st.get("stages") or []
     if stages:

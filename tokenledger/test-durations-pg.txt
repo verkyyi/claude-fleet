@@ -996,7 +996,6 @@
 0.30	hub/api.TestStableFilesFromTarball
 0.32	hub/api.TestStableFilesProxied
 0.20	hub/api.TestStableKnownColdCacheGitHubGoneServesImage
-0.00	hub/api.TestStableManifestOldPathStillCounts
 0.05	hub/api.TestStableOfflineAsksNothing
 0.00	hub/api.TestStablePathOK
 0.23	hub/api.TestStableRateLimitSaysWhy

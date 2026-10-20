@@ -7,7 +7,7 @@
 #         [--conclusion C] [--merges-env MERGES] [--exclude <job name>]...
 #       one JSON object on stdout: run_id · sha · prev_sha · conclusion ·
 #       started_at · ended_at · merges · stages (name, started_at, ended_at,
-#       result, queue_secs) · first_fail · macos_queue_secs. A superset of the
+#       result, queue_secs) · first_fail. A superset of the
 #       publish's `train` part (#3140), so the release step sends the same file.
 #       Jobs of one stage ("Linux / shard 3" → Linux) fold into one span; a
 #       skipped job is no stage. --results: the train-result-* artifacts — the
@@ -93,7 +93,7 @@ def first_fail(results):
 def fold(jobs, exclude):
     """Stages off a run's jobs: name → [start, end, result, queue]."""
     t_now = now()
-    stages, queue_mac = {}, []
+    stages = {}
     created = []
     for j in jobs:
         name = j.get("name") or ""
@@ -111,8 +111,6 @@ def fold(jobs, exclude):
         stage = name.split(" / ")[0]
         concl = j.get("conclusion") or ("success" if j.get("status") == "completed" else "")
         q = max(0.0, (a - c).total_seconds()) if c else 0.0
-        if stage == "macOS" and c:
-            queue_mac.append(round(q, 1))
         st = stages.get(stage)
         if st is None:
             st = stages[stage] = [a, b, "success", 0.0]
@@ -122,7 +120,7 @@ def fold(jobs, exclude):
         elif concl == "cancelled" and st[2] != "failure":
             st[2] = "cancelled"
         st[3] = max(st[3], q)
-    return stages, queue_mac, created
+    return stages, created
 
 
 def build(args):
@@ -146,7 +144,7 @@ def build(args):
     if "jobs" not in opts:
         die("build needs --jobs")
     jobs = read_jobs(opts["jobs"])
-    stages, queue_mac, created = fold(jobs, set(opts["exclude"]))
+    stages, created = fold(jobs, set(opts["exclude"]))
     run_id = opts.get("run_id") or os.environ.get("GITHUB_RUN_ID", "")
     concl = opts.get("conclusion", "success")
     if concl not in CONCLUSIONS:
@@ -182,7 +180,6 @@ def build(args):
                     "queue_secs": round(s[3], 1)}
                    for n, s in sorted(stages.items(), key=lambda kv: kv[1][0])],
         "first_fail": first_fail(opts.get("results")),
-        "macos_queue_secs": queue_mac,
     }
     print(json.dumps(out, ensure_ascii=False))
     return 0

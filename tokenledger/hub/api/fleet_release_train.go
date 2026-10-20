@@ -18,16 +18,17 @@ import (
 
 // The release ledger (claude-fleet#3140, EPIC #3139 C1): every release train
 // writes down what it carried, how long each stage took and when each machine
-// ran it — so 「合并后到所有机器都用上」, 「每小时发出的版本」 and 「macOS 测试排队」
-// are read off one route instead of pieced together from run logs.
+// ran it — so 「合并后到所有机器都用上」 and 「每小时发出的版本」 are read off one route instead of pieced together from run logs.
 //
 // The CI's publish (fleet_publish.go) may carry one more multipart part,
 // `train`, a JSON object:
 //
 //	{"run_id": "…", "prev_sha": "<40 hex>",
 //	 "merges": [{"sha": "<40 hex>", "merged_at": "<RFC 3339>"}],
-//	 "stages": [{"name": "…", "started_at": "…", "ended_at": "…"}],
-//	 "macos_queue_secs": [12.5, …]}
+//	 "stages": [{"name": "…", "started_at": "…", "ended_at": "…"}]}
+//
+// An older train's "macos_queue_secs" (the macOS stage left the train with
+// claude-fleet#3869) is an unknown key: ignored.
 //
 // Once the publish succeeds the hub writes it to fleet_release_trains with the
 // machines the train must reach: every managed machine (one with a machine
@@ -51,7 +52,6 @@ const (
 	trainMaxBytes     = 256 << 10
 	trainMaxMerges    = 2000
 	trainMaxStages    = 64
-	trainMaxQueue     = 256
 	trainStatsMaxDays = 90
 	trainRecent       = 10
 	// trainBookDays is how far back the reach hook remembers trains: a
@@ -61,11 +61,10 @@ const (
 
 // releaseTrain is the `train` part.
 type releaseTrain struct {
-	RunID          string       `json:"run_id"`
-	PrevSHA        string       `json:"prev_sha"`
-	Merges         []trainMerge `json:"merges"`
-	Stages         []trainStage `json:"stages"`
-	MacOSQueueSecs []float64    `json:"macos_queue_secs"`
+	RunID   string       `json:"run_id"`
+	PrevSHA string       `json:"prev_sha"`
+	Merges  []trainMerge `json:"merges"`
+	Stages  []trainStage `json:"stages"`
 }
 
 type trainMerge struct {
@@ -100,8 +99,6 @@ func parseTrain(b []byte) (*releaseTrain, error) {
 		return nil, fmt.Errorf("%d merges, at most %d", len(t.Merges), trainMaxMerges)
 	case len(t.Stages) > trainMaxStages:
 		return nil, fmt.Errorf("%d stages, at most %d", len(t.Stages), trainMaxStages)
-	case len(t.MacOSQueueSecs) > trainMaxQueue:
-		return nil, fmt.Errorf("%d macOS queue readings, at most %d", len(t.MacOSQueueSecs), trainMaxQueue)
 	}
 	for i, m := range t.Merges {
 		if !release.ValidSHA(m.SHA) {
@@ -119,11 +116,6 @@ func parseTrain(b []byte) (*releaseTrain, error) {
 		t.Stages[i].Name = name
 		if st.StartedAt.IsZero() || st.EndedAt.IsZero() || st.EndedAt.Before(st.StartedAt) {
 			return nil, fmt.Errorf("stages[%d] (%s): want started_at ≤ ended_at", i, name)
-		}
-	}
-	for i, q := range t.MacOSQueueSecs {
-		if math.IsNaN(q) || math.IsInf(q, 0) || q < 0 {
-			return nil, fmt.Errorf("macos_queue_secs[%d]: want a non-negative number", i)
 		}
 	}
 	return &t, nil
@@ -272,7 +264,6 @@ type trainStats struct {
 	MergeToAll    durStats     `json:"merge_to_all"`
 	MergesPending int          `json:"merges_pending"`
 	PerHour       perHour      `json:"releases_per_hour"`
-	MacOSQueue    durStats     `json:"macos_queue"`
 	Stages        []stageStats `json:"stages"`
 	Recent        []trainRow   `json:"recent"`
 	// every run, shipped or not (claude-fleet#3870)
@@ -361,7 +352,7 @@ func computeTrainStats(trains []store.ReleaseTrain, reach []store.ReleaseReach, 
 			eff[i][m] = t
 		}
 	}
-	var lat, queue []float64
+	var lat []float64
 	stageDur := map[string][]float64{}
 	stageOrder := []string{}
 	hours := map[int64]bool{}
@@ -405,11 +396,9 @@ func computeTrainStats(trains []store.ReleaseTrain, reach []store.ReleaseReach, 
 			}
 			stageDur[st.Name] = append(stageDur[st.Name], st.EndedAt.Sub(st.StartedAt).Seconds())
 		}
-		queue = append(queue, parsed[i].MacOSQueueSecs...)
 		out.Recent = append(out.Recent, row)
 	}
 	out.MergeToAll = durOf(lat)
-	out.MacOSQueue = durOf(queue)
 	for _, n := range stageOrder {
 		out.Stages = append(out.Stages, stageStats{Name: n, durStats: durOf(stageDur[n])})
 	}

@@ -65,7 +65,7 @@ func TestReleaseTrainLedger(t *testing.T) {
 			{"name": "linux tests", "started_at": now.Add(-25 * time.Minute), "ended_at": now.Add(-20 * time.Minute)},
 			{"name": "publish", "started_at": now.Add(-2 * time.Minute), "ended_at": now.Add(-1 * time.Minute)},
 		},
-		"macos_queue_secs": []float64{600, 60, 120},
+		"macos_queue_secs": []float64{600, 60, 120}, // an older train's key: ignored
 	})
 	code, body := p.publishParts(tok, b, a, nil, nil, map[string]string{"train": train})
 	if code != 200 || !strings.Contains(body, `"train":"recorded"`) || !strings.Contains(body, `"published"`) {
@@ -94,9 +94,6 @@ func TestReleaseTrainLedger(t *testing.T) {
 	if st.TrainsReached != 1 || st.MergesPending != 0 || st.MergeToAll.N != 2 ||
 		secs(st.MergeToAll.MedianSecs) != 3000 || secs(st.MergeToAll.P90Secs) != 4800 {
 		t.Fatalf("merge → all: %+v", st)
-	}
-	if st.MacOSQueue.N != 3 || secs(st.MacOSQueue.MedianSecs) != 120 || secs(st.MacOSQueue.P90Secs) != 600 {
-		t.Fatalf("macOS queue: %+v", st.MacOSQueue)
 	}
 	if len(st.Stages) != 2 || st.Stages[0].Name != "linux tests" || secs(st.Stages[0].MedianSecs) != 300 || secs(st.Stages[1].P90Secs) != 60 {
 		t.Fatalf("stages: %+v", st.Stages)
@@ -160,7 +157,7 @@ func TestReleaseTrainOffAddsNothing(t *testing.T) {
 	}
 	var st trainStats
 	p.h.getJSON(t, ReleaseStatsPath, &st)
-	if st.Trains != 0 || st.MergeToAll.N != 0 || st.MergeToAll.MedianSecs != nil || st.PerHour.Rate != nil || st.MacOSQueue.P90Secs != nil {
+	if st.Trains != 0 || st.MergeToAll.N != 0 || st.MergeToAll.MedianSecs != nil || st.PerHour.Rate != nil {
 		t.Fatalf("empty ledger: %+v", st)
 	}
 }
@@ -223,7 +220,6 @@ func TestParseTrainRefuses(t *testing.T) {
 		`{"merges":[{"sha":"` + strings.Repeat("a", 40) + `"}]}`,
 		`{"stages":[{"name":"x","started_at":"2026-10-11T06:00:00Z","ended_at":"2026-10-11T05:00:00Z"}]}`,
 		`{"stages":[{"name":"","started_at":"2026-10-11T05:00:00Z","ended_at":"2026-10-11T06:00:00Z"}]}`,
-		`{"macos_queue_secs":[-1]}`,
 	} {
 		if _, err := parseTrain([]byte(bad)); err == nil {
 			t.Errorf("%s: accepted", bad)
