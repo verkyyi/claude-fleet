@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """A fixture Codex app-server for selftests (T540): the WebSocket JSON-RPC that
 fleet-codex-rpc.py speaks, on a Unix socket, answering only what the fleet asks a
-private TUI server — initialize, thread/loaded/list, thread/read — and able to
-broadcast thread/started the way Codex 0.162 does on /clear or /new. No model, no
-network, no Codex. Threads are dicts; `loaded` is the server's loaded list in order.
+private TUI server — initialize, thread/loaded/list, thread/read, thread/start — and
+able to broadcast thread/started the way Codex 0.162 does on /clear or /new. No
+model, no network, no Codex. Threads are dicts; `loaded` is the server's loaded list
+in order. As the real server does (T572), every thread/started names ONE originator
+for the whole process — the first initialize's clientInfo name, `claude_fleet` when
+fleet's RPC came first — whoever opened the thread; and a thread/start's broadcast
+goes out BEFORE its answer.
 """
 import base64
 import hashlib
@@ -12,6 +16,7 @@ import os
 import socket
 import struct
 import threading
+import time
 import uuid
 
 
@@ -22,8 +27,11 @@ def uuid7(ms):
     return str(uuid.UUID(int=value))
 
 
+ORIGINATOR = "claude_fleet"  # fleet-codex-rpc.py's clientInfo name
+
+
 def tui_thread(tid, **extra):
-    return dict(dict(id=tid, parentThreadId=None, ephemeral=False, originator="codex-tui",
+    return dict(dict(id=tid, parentThreadId=None, ephemeral=False, originator=ORIGINATOR,
                      status={"type": "idle"}, path="", cwd="/fixture", model="gpt-fixture"), **extra)
 
 
@@ -128,8 +136,12 @@ class FakeAppServer:
                         result = {"data": list(self.loaded)}
                     elif method == "thread/read" and params.get("threadId") in self.threads:
                         result = {"thread": self.threads[params["threadId"]]}
+                    elif method == "thread/start":
+                        result = {"thread": tui_thread(uuid7(int(time.time() * 1000)), cwd=params.get("cwd") or "/fixture")}
                     else:
                         result = None
+                if method == "thread/start" and result is not None:
+                    self.add(result["thread"], broadcast=True)
                 if result is None:
                     self.send(conn, {"id": msg["id"], "error": {"message": "fixture: unsupported " + str(method)}})
                 else:

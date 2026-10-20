@@ -11,11 +11,47 @@ import struct
 import sys
 import time
 
+# T572: thread/started carries the server's originator — one per app-server
+# process (the first initialize's clientInfo name, so 'claude_fleet' on a private
+# server), never who asked. So every thread THIS client starts is booked beside the
+# server's socket, and the window's thread follower never follows one of them.
+STARTS = ('thread/start', 'thread/fork')
+
+
+def ledger(remote):
+    return remote[7:] + '.fleet-threads' if isinstance(remote, str) and remote.startswith('unix:///') else ''
+
+
+def own_threads(remote):
+    """The thread ids fleet's own RPC started on this server, and whether a start
+    is still in flight (its answer — the id — not booked yet)."""
+    path, ids, pending = ledger(remote), set(), False
+    if not path:
+        return ids, pending
+    try:
+        with open(path) as fh:
+            ids = {line.strip() for line in fh if line.strip()}
+    except OSError:
+        pass
+    directory, prefix = os.path.split(path + '.pending.')
+    try:
+        for name in os.listdir(directory):
+            if name.startswith(prefix):
+                try:
+                    if time.time() - os.stat(os.path.join(directory, name)).st_mtime < 30:
+                        pending = True
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return ids, pending
+
 
 class Client:
     def __init__(self, remote, timeout=10, peer_pid=None, opt_out_notifications=()):
         if not remote.startswith('unix:///'):
             raise ValueError('an explicit local unix:///path endpoint is required')
+        self.remote = remote
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.timeout = timeout
         self.deadline = time.monotonic() + timeout
@@ -128,6 +164,31 @@ class Client:
             fragmented = True
 
     def call(self, method, params):
+        if method not in STARTS or not ledger(self.remote):
+            return self.exchange(method, params)
+        pending = ledger(self.remote) + '.pending.%d.%d' % (os.getpid(), self.sequence + 1)
+        try:
+            open(pending, 'w').close()
+        except OSError:
+            pending = ''
+        try:
+            result = self.exchange(method, params)
+            tid = ((result or {}).get('thread') or {}).get('id') if isinstance(result, dict) else None
+            if isinstance(tid, str) and tid:
+                try:
+                    with open(ledger(self.remote), 'a') as fh:
+                        fh.write(tid + '\n')
+                except OSError:
+                    pass  # the follower then cannot tell it apart: its server check holds
+            return result
+        finally:
+            if pending:
+                try:
+                    os.unlink(pending)
+                except OSError:
+                    pass
+
+    def exchange(self, method, params):
         self.deadline = time.monotonic() + self.timeout
         self.socket.settimeout(self.timeout)
         self.sequence += 1
