@@ -1,63 +1,50 @@
 #!/usr/bin/env python3
-"""fleet-codex-plugins.py — a Codex session reads the same plugins (issue #3123,
-EPIC #3111 C12).
+"""fleet-codex-plugins.py — a Codex session reads the same plugins, through Codex's
+OWN plugin manager (issue #3123 made the bridge; T589 / EPIC T580 C3 retired it).
 
-This is the legacy cross-agent bridge, not Codex's native plugin manager.
-Verified Codex 0.162.1 and 0.163.0 can install Claude-format plugins natively;
-the bridge remains until single-owner migration and runtime parity are verified.
-What the Claude side has installed AND enabled of this repo's marketplace
-(fleet-epic · fleet-browser · …) — asked of
+Plugins are still installed in one place only: Claude Code's /plugin (CLAUDE.md
+«This repo is a plugin marketplace»). What the Claude side has installed AND
+enabled of this repo's marketplace (fleet-epic · fleet-browser · …) — asked of
 `claude plugin list --json` through fleet-plugins.py, the one reader; nothing is
-recorded a second time — is carried into each Codex home as far as Codex can take
-it, and what it cannot take is said:
+recorded a second time — is FOLLOWED in every Codex home by Codex's native
+installer, at install time (fleet-install-apply.sh), never at a session launch:
 
-  skills      <plugin>/skills/<s>/ is LINKED as $CODEX_HOME/skills/fleet-plugin-<s>
-              (Codex follows the link and names the skill by its SKILL.md `name`,
-              so `$fleet-orchestrate` works); a plugin command <plugin>/commands/<c>.md
-              becomes a generated adapter skill fleet-plugin-<c>/SKILL.md (marked).
-              Only `fleet-plugin-*` entries are ever removed — and a personal one
-              there (no link, no mark) is left alone.
-  MCP         every server of the plugin's .mcp.json → ONE marker block of
-              [mcp_servers.<name>] tables at the end of $CODEX_HOME/config.toml,
-              with the env Codex would otherwise withhold (fleet-mcp.py's
-              CODEX_ENV) and its await-sized timeout. Fill only: a server the login
-              defines outside the block is the login's and never written. The rest
-              of the file stays byte for byte; no plugin left ⇒ the block goes and
-              the file is what it was.
-  hooks       not written here: bin/fleet-codex.sh hands `sync --print-dirs` to
-              fleet-hooks-emit.sh --plugin-dir, which merges each plugin's
-              hooks/hooks.json into the `-c hooks.*` it emits, by
-              hooks/codex-map.json (an event the bridge does not map — PreCompact — is dropped
-              with one stderr line).
-  agent files read as they are by fleet-agent-def.py (C11): body → instructions,
-              `fleet.codex_model` → model.
+  marketplace  `codex plugin marketplace add <the same source Claude added>`; one
+               added from another source is removed and re-added.
+  install      `codex plugin add <plugin>@<marketplace>` for a plugin Claude has and
+               the home lacks, or holds at another version (the plugin.json
+               version — a plugin bumps it whenever its files change). Codex copies
+               it into $CODEX_HOME/plugins/cache/ and serves its skills
+               (`<plugin>:<skill>`), commands (`<plugin>:source-command-<c>`), hooks
+               and .mcp.json itself.
+  remove       `codex plugin remove` for one of OUR marketplace's plugins Claude no
+               longer has installed and enabled. Any other marketplace's plugin is
+               the login's and never touched.
+  retire       the old bridge's products are cleared from the home first: a
+               `fleet-plugin-*` skill link into Claude's plugin cache or this tree's
+               plugins/, a marked single-file adapter skill, the paired marker block
+               in config.toml. A personal entry there (no link of ours, no mark) is
+               left alone and said.
 
-Not carried by this bridge (the doctor's `plugins` row lists them): mod interface
-modules (a plugin's .tsx parts — Codex has none),
-PreCompact (not mapped here), an agent file's `tools` limits, and native plugin
-ownership. These are bridge limitations, not claims that Codex lacks plugins.
+`codex.plugins` (or `codex`) in agent-overrides.json ⇒ this login manages Codex's
+plugins itself: nothing is done. No codex binary ⇒ the home is only retired.
+Not carried (the doctor's `plugins` row lists them): mod interface modules,
+PreCompact (Codex has no such event), an agent file's `tools` limits. A plugin
+hook is untrusted to Codex until reviewed; the fleet's launcher runs Codex with
+--dangerously-bypass-hook-trust (as it did for the bridge's injected hooks).
 
-  sync   [--codex-home D]… [--root R] [--claude C] [--cache F] [--override F] [--dry-run]
-         One line per change (`link` · `skill` · `unlink` · `mcp` · `own` · `drop`),
-         ending `ok — N change(s)` or `unchanged`. A home that does not exist is
-         skipped (Codex not set up there). `codex.plugins` in agent-overrides.json
-         ⇒ nothing. bin/fleet-codex.sh runs it for its CODEX_HOME before every
-         launch; fleet-install-apply.sh's agents pass for every home.
-         --print-dirs emits only enabled hook directories on stdout, from the same
-         installed-plugin snapshot; diagnostics go to stderr. No second lookup.
-  dirs   [--root R] [--claude C] [--cache F] [--override F]
-         the enabled plugins' directories, one a line (for --plugin-dir).
-         A codex.plugins override also stops this legacy hook injection.
-  retire [--codex-home D]… [--root R] [--claude C] [--override F] [--apply]
-         One-time cleanup after native migration acceptance. Requires the
-         codex.plugins override; previews by default. Removes only proven bridge
-         links, single-file marked adapters and the paired MCP marker block.
-         Preflights every home before changing any; never installs or trusts plugins.
+  sync   [--codex-home D]… [--root R] [--claude C] [--codex X] [--cache F] [--override F] [--dry-run]
+         One line per change (`retire` · `market` · `add` · `remove`), ending
+         `ok — N change(s)` or `unchanged`. A home that does not exist is skipped.
+         --print-dirs (compat-1v: 下一批删 — the old launcher's form) prints nothing on stdout.
+  dirs   compat-1v: 下一批删 — prints nothing (plugin hooks are Codex's own now).
+  retire [--codex-home D]… [--root R] [--claude C] [--apply]
+         only the bridge cleanup, preview unless --apply.
   mention <name> [--codex-home D]
-         the name Codex lists $CODEX_HOME/skills/fleet-plugin-<name> under
-         (`fleet-orchestrate:fleet-orchestrate` for a linked plugin skill — Codex
-         namespaces it by the plugin.json beside it — else <name>). Exit 1 none.
-         bin/fleet-codex.sh turns a `/name` seed into `$<that>`.
+         the name Codex lists a plugin SKILL under (`fleet-epic:epic-page`). Exit 1 none.
+  command <name> [--codex-home D]
+         the path of a natively installed plugin COMMAND's .md (bin/fleet-codex.sh
+         expands a `/name` seed from it). Exit 1 none.
   doctor [--codex-home D]… [--root R] [--claude C] [--cache F]
          one clause for fleet-doctor's `plugins` row. Exit 0 printed · 3 nothing to
          say (no Codex home, or none of our plugins installed).
@@ -69,7 +56,9 @@ import contextlib
 import importlib.util
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -79,6 +68,7 @@ MARK = "<!-- fleet codex plugin skill -->"
 BEGIN = "# >>> fleet plugins — bin/fleet-codex-plugins.py sync writes this block; edit outside it >>>"
 END = "# <<< fleet plugins <<<"
 CONF_DIR = os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")
+TIMEOUT = 120
 
 
 def _load(name, fname):
@@ -90,19 +80,11 @@ def _load(name, fname):
 
 PL = _load("fleet_plugins", "fleet-plugins.py")
 AD = _load("fleet_agent_defaults", "fleet-agent-defaults.py")
-try:
-    _MCP = _load("fleet_mcp", "fleet-mcp.py")
-    CODEX_ENV, CODEX_TIMEOUT = list(_MCP.CODEX_ENV), int(_MCP.CODEX_TOOL_TIMEOUT_S)
-except Exception:  # noqa: BLE001 — a launch never fails over the constants
-    CODEX_ENV = ["TMUX", "TMUX_PANE", "FLEET_CONF_DIR", "FLEET_SESSION", "FLEET_WORKER_CRED",
-                 "FLEET_MCP_BIN", "FLEET_MCP_ORCH"]
-    CODEX_TIMEOUT = 600
 
 GAPS = [
     "mod 界面模块（插件的 .tsx 模块，Codex 没有）",
-    "PreCompact（此兼容桥未映射该事件，恢复时补回照做）",
+    "PreCompact（Codex 没有这个事件）",
     "agent 文件的 tools 限制",
-    "原生插件管理（此兼容桥仍跟随 Claude；支持版本可用 /plugins，原生迁移尚未验收）",
 ]
 
 
@@ -141,82 +123,6 @@ def plugins(a):
     return out
 
 
-def wanted_skills(plugs):
-    """{entry name: ('link', target) | ('skill', SKILL.md text)}."""
-    want = {}
-    pre = ""
-    try:
-        with open(os.path.join(HERE, "..", "conf", "codex-preamble.md")) as f:
-            pre = f.read()
-    except OSError:
-        pass
-    for _name, d in plugs:
-        sdir = os.path.join(d, "skills")
-        for s in sorted(os.listdir(sdir)) if os.path.isdir(sdir) else []:
-            if os.path.isfile(os.path.join(sdir, s, "SKILL.md")):
-                want[PREFIX + s] = ("link", os.path.join(sdir, s))
-        cdir = os.path.join(d, "commands")
-        for c in sorted(os.listdir(cdir)) if os.path.isdir(cdir) else []:
-            if not c.endswith(".md"):
-                continue
-            n = c[:-3]
-            try:
-                with open(os.path.join(cdir, c)) as f:
-                    body = f.read()
-            except OSError:
-                continue
-            want.setdefault(PREFIX + n, ("skill", adapter(n, body, pre)))
-    return want
-
-
-def adapter(name, body, pre):
-    """The Codex skill for a plugin command — fleet-install-apply.sh's
-    codex_command_skill, for a command that lives in a plugin."""
-    title = ""
-    for line in body.splitlines()[:1]:
-        if line.startswith("# "):
-            title = " ".join(line[2:].split()).replace(":", " -")
-    title = title or "/" + name
-    desc = ("Run the claude-fleet /%s command as a native Codex skill. Use when the user invokes "
-            "/%s, $%s, or asks for this fleet command. Source: a fleet plugin's commands/%s.md (%s)."
-            % (name, name, name, name, title))
-    arg = "the text after this skill name"
-    out = "---\nname: %s\ndescription: >-\n  %s\n---\n\n# claude-fleet Codex adapter for /%s\n\n%s\n\n" % (
-        name, desc, name, MARK)
-    if pre:
-        out += pre.replace("$ARGUMENTS", arg) + "\n---\n\n"
-    return out + body.replace("$ARGUMENTS", arg)
-
-
-def wanted_servers(plugs):
-    srv = {}
-    for name, d in plugs:
-        mj = os.path.join(d, ".mcp.json")
-        if not os.path.isfile(mj):
-            continue
-        try:
-            with open(mj) as f:
-                got = (json.load(f) or {}).get("mcpServers") or {}
-        except (OSError, ValueError, AttributeError):
-            print("own     %s .mcp.json unreadable — skipped" % name)
-            continue
-        for n, v in sorted(got.items()):
-            if isinstance(v, dict) and v.get("command"):
-                srv.setdefault(n, v)
-    return srv
-
-
-def server_lines(name, v):
-    lines = ["[mcp_servers.%s]" % AD.toml_key(name), "command = %s" % AD.toml_val(v["command"])]
-    if v.get("args"):
-        lines.append("args = %s" % AD.toml_val([str(x) for x in v["args"]]))
-    if isinstance(v.get("env"), dict) and v["env"]:
-        lines.append("env = %s" % AD.toml_val({k: str(x) for k, x in v["env"].items()}))
-    lines.append("env_vars = %s" % AD.toml_val(CODEX_ENV))
-    lines.append("tool_timeout_sec = %d" % CODEX_TIMEOUT)
-    return lines
-
-
 def split_block(text):
     """(text without our block, the block's lines or None, malformed?)."""
     lines = text.split("\n")
@@ -230,16 +136,6 @@ def split_block(text):
     if b > 0 and lines[b - 1] == "":
         del lines[b - 1]                       # the one blank line sync put before it
     return "\n".join(lines), block, False
-
-
-def with_block(text, block):
-    if not block:
-        return text
-    if not text:
-        return "\n".join(block) + "\n"
-    if not text.endswith("\n"):
-        text += "\n"
-    return text + "\n" + "\n".join(block) + "\n"
 
 
 def write(path, text):
@@ -258,112 +154,22 @@ def write(path, text):
             pass
 
 
-def entry(p):
-    """What a fleet-plugin-* entry IS: ('link', target) · ('skill', text) of a marked
-    adapter · None (a personal one — never touched)."""
-    if os.path.islink(p):
-        return ("link", os.readlink(p))
-    try:
-        with open(os.path.join(p, "SKILL.md"), encoding="utf-8") as f:
-            text = f.read()
-    except OSError:
-        return None
-    return ("skill", text) if MARK in text else None
+def market_name(root):
+    m = PL.market(root)
+    return None if m is None else (m.get("name") or "claude-fleet")
 
 
-def sync_home(home, want, srv, dry):
-    """Returns (changes, failed)."""
-    n, bad = 0, False
-    want = dict(want)
-    sk = os.path.join(home, "skills")
-    present = sorted(e for e in os.listdir(sk) if e.startswith(PREFIX)) if os.path.isdir(sk) else []
-    for e in present:
-        p = os.path.join(sk, e)
-        have = entry(p)
-        if have is None:
-            print("own     %s — not a link or a marked adapter; left alone" % p)
-            want.pop(e, None)
-            continue
-        if want.get(e) == have:
-            del want[e]                         # already right
-            continue
-        if e not in want:
-            print("unlink  %s" % p)
-            n += 1
-        if dry:
-            continue
+def versions(root):
+    """{plugin: version} of this tree's marketplace plugins (their plugin.json)."""
+    m = PL.market(root)
+    out = {}
+    for name, rel in PL.ours(m).items():
         try:
-            if have[0] == "link":
-                os.unlink(p)
-            else:
-                shutil.rmtree(p)
-        except OSError as exc:
-            print("FAIL    remove %s: %s" % (p, exc))
-            bad = True
-    for e, (kind, val) in sorted(want.items()):
-        p = os.path.join(sk, e)
-        if kind == "link":
-            print("link    %s → %s" % (p, val))
-        else:
-            print("skill   %s (adapter for a plugin command)" % p)
-        n += 1
-        if dry:
-            continue
-        try:
-            os.makedirs(sk, exist_ok=True)
-            if kind == "link":
-                os.symlink(val, p)
-            else:
-                os.makedirs(p, exist_ok=True)
-                write(os.path.join(p, "SKILL.md"), val)
-        except OSError as exc:
-            print("FAIL    %s: %s" % (p, exc))
-            bad = True
-    # config.toml
-    conf = os.path.join(home, "config.toml")
-    try:
-        with open(conf, encoding="utf-8") as f:
-            text = f.read()
-    except FileNotFoundError:
-        text = ""
-    except OSError as exc:
-        print("FAIL    read %s: %s" % (conf, exc))
-        return n, True
-    outside, old, malformed = split_block(text)
-    if malformed:
-        print("own     %s — a fleet plugins marker without its pair; left alone" % conf)
-        return n, bad
-    scan = AD.TomlScan(outside)
-    block = []
-    for name, v in sorted(srv.items()):
-        if scan.has_server(name):
-            print("own     %s mcp %s — this login's" % (conf, name))
-            continue
-        if scan.mcp_inline():
-            print("own     %s mcp %s — mcp_servers is an inline table, not extended" % (conf, name))
-            continue
-        block += server_lines(name, v)
-        block.append("")
-    if block:
-        block = [BEGIN] + block[:-1] + [END]
-    new = with_block(outside, block)
-    if new != text:
-        names = sorted(n_ for n_ in srv if ("[mcp_servers.%s]" % AD.toml_key(n_)) in block)
-        print("mcp     %s %s" % (conf, ("block: " + ", ".join(names)) if block else "block removed"))
-        n += 1
-        if AD._toml is not None:
-            try:
-                AD._toml.loads(new)
-            except Exception as exc:  # noqa: BLE001
-                print("FAIL    %s: the merged file would not parse (%s) — nothing written" % (conf, exc))
-                return n, True
-        if not dry and (os.path.exists(conf) or new):
-            try:
-                write(conf, new)
-            except OSError as exc:
-                print("FAIL    write %s: %s" % (conf, exc))
-                bad = True
-    return n, bad
+            with open(os.path.join(root, rel, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+                out[name] = str(json.load(f).get("version") or "")
+        except (OSError, ValueError, AttributeError):
+            out[name] = ""
+    return out
 
 
 def homes(a):
@@ -375,238 +181,331 @@ def homes(a):
     return out
 
 
-def hook_drops(plugs):
-    """[(plugin, event, reason)] — the hooks.json events Codex has not."""
+def find_cli(a):
+    for c in (a.codex, "codex", os.path.expanduser("~/.local/bin/codex")):
+        if c and (os.path.sep in c and os.access(c, os.X_OK) or shutil.which(c)):
+            return c if os.path.sep in c else shutil.which(c)
+    return None
+
+
+def native_cli(binary, home, *args):
+    """(rc, stdout, stderr) of `codex plugin …` against one home."""
+    env = dict(os.environ, CODEX_HOME=home)
     try:
-        with open(os.path.join(HERE, "..", "hooks", "codex-map.json")) as f:
-            events = json.load(f).get("events", {})
-    except (OSError, ValueError):
-        events = {}
-    out = []
-    for name, d in plugs:
+        r = subprocess.run([binary, "plugin"] + list(args), capture_output=True, text=True,
+                           timeout=TIMEOUT, env=env, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 1, "", str(exc)
+    return r.returncode, r.stdout, r.stderr
+
+
+def last(text):
+    lines = [x for x in (text or "").strip().splitlines() if x.strip()]
+    return lines[-1] if lines else ""
+
+
+# --- what a home holds natively ---------------------------------------------------
+
+def native(home, mname):
+    """{plugin: (enabled, version or "")} of mname's plugins this home's config.toml
+    lists, the version read off the plugin cache Codex keeps (the newest dir)."""
+    try:
+        with open(os.path.join(home, "config.toml"), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return {}
+    out, cur = {}, None
+    head = re.compile(r'^\[plugins\.["\']?([^"\'\]]+)@%s["\']?\]\s*$' % re.escape(mname))
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("["):
+            m = head.match(s)
+            cur = m.group(1) if m else None
+            if cur:
+                out[cur] = True
+            continue
+        if cur and re.match(r"^enabled\s*=\s*false\b", s):
+            out[cur] = False
+    res = {}
+    for name, enabled in out.items():
+        d = os.path.join(home, "plugins", "cache", mname, name)
+        vers = sorted((v for v in (os.listdir(d) if os.path.isdir(d) else [])
+                       if os.path.isdir(os.path.join(d, v))),
+                      key=lambda v: os.path.getmtime(os.path.join(d, v)))
+        res[name] = (enabled, vers[-1] if vers else "")
+    return res
+
+
+def native_dir(home, mname, name):
+    have = native(home, mname).get(name)
+    if not have or not have[0] or not have[1]:
+        return None
+    return os.path.join(home, "plugins", "cache", mname, name, have[1])
+
+
+def market_source_of(home, mname):
+    """The source this home added mname from, read off config.toml ("" none)."""
+    try:
+        with open(os.path.join(home, "config.toml"), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return ""
+    sect = False
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("["):
+            sect = s in ("[marketplaces.%s]" % mname, '[marketplaces."%s"]' % mname)
+            continue
+        m = re.match(r'^source\s*=\s*"(.*)"\s*$', s) if sect else None
+        if m:
+            return m.group(1)
+    return ""
+
+
+# --- the old bridge's products ----------------------------------------------------
+
+def bridge_plan(home, root):
+    """[(kind, path, before, after)] the old bridge left in this home, and
+    [(path, why)] entries under its prefix that are not provably ours."""
+    plan, own = [], []
+    cdir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    mname = market_name(root) or "claude-fleet"
+    roots = [os.path.join(cdir, "plugins", "cache", mname) + os.sep, os.path.join(root, "plugins") + os.sep]
+    roots += [os.path.realpath(r.rstrip(os.sep)) + os.sep for r in roots]
+    skills = os.path.join(home, "skills")
+    names = sorted(os.listdir(skills)) if os.path.isdir(skills) and not os.path.islink(skills) else []
+    for name in names:
+        if not name.startswith(PREFIX):
+            continue
+        path = os.path.join(skills, name)
+        if os.path.islink(path):
+            target = os.readlink(path)
+            if not os.path.isabs(target):
+                target = os.path.normpath(os.path.join(skills, target))
+            if any(target.startswith(r) for r in roots):
+                plan.append(("link", path, os.readlink(path), None))
+            else:
+                own.append((path, "a link not into a fleet plugin"))
+            continue
+        skill = os.path.join(path, "SKILL.md")
+        if os.path.islink(skill) or not os.path.isfile(skill):
+            own.append((path, "not a marked adapter"))
+            continue
+        with open(skill, encoding="utf-8", newline="") as f:
+            content = f.read()
+        if MARK not in content:
+            own.append((path, "not a marked adapter"))
+        elif os.listdir(path) != ["SKILL.md"]:
+            own.append((path, "a marked adapter with files of yours beside it"))
+        else:
+            plan.append(("skill", skill, content, None))
+    config = os.path.join(home, "config.toml")
+    if os.path.isfile(config) and not os.path.islink(config):
+        with open(config, encoding="utf-8", newline="") as f:
+            content = f.read()
+        if BEGIN in content or END in content:
+            lines = content.split("\n")
+            outside, _block, malformed = split_block(content)
+            if malformed or lines.count(BEGIN) != 1 or lines.count(END) != 1:
+                own.append((config, "a fleet plugins marker without its pair"))
+            else:
+                plan.append(("config", config, content, outside))
+    return plan, own
+
+
+def retire_home(home, root, apply):
+    """Returns (changes, failed)."""
+    plan, own = bridge_plan(home, root)
+    for path, why in own:
+        print("own     %s — %s; left alone" % (path, why))
+    bad = False
+    for kind, path, _before, after in plan:
+        print("retire  %s %s%s" % (kind, path, "" if apply else " (preview)"))
+        if not apply:
+            continue
         try:
-            with open(os.path.join(d, "hooks", "hooks.json")) as f:
-                tbl = json.load(f).get("hooks") or {}
-        except (OSError, ValueError, AttributeError):
-            continue
-        for ev in tbl:
-            if events.get(ev) is not True:
-                out.append((name, ev, events.get(ev) or "not a Codex event"))
-    return out
+            if kind == "config":
+                write(path, after)
+            else:
+                os.unlink(path)
+                if kind == "skill":
+                    os.rmdir(os.path.dirname(path))
+        except OSError as exc:
+            print("FAIL    retire %s: %s" % (path, exc))
+            bad = True
+    return len(plan), bad
 
 
-def sync_plugins(a, plugs):
-    srv = wanted_servers(plugs)
-    total, bad = 0, False
-    for home in homes(a):
-        if not os.path.isdir(home):
+# --- follow ----------------------------------------------------------------------
+
+def follow_home(home, a, binary, mname, want, dry):
+    """Native install of `want` ({plugin: version}) in one home; returns (changes, failed)."""
+    n, bad = 0, False
+    have = native(home, mname)
+    src = PL.market_source(a.root)
+    if want or have:
+        cur = market_source_of(home, mname)
+        if cur != src:
+            print("market  %s %s → %s" % (home, mname, src))
+            n += 1
+            if not dry:
+                if cur:
+                    native_cli(binary, home, "marketplace", "remove", mname)
+                rc, out, err = native_cli(binary, home, "marketplace", "add", src)
+                if rc != 0:
+                    print("FAIL    %s marketplace add %s: %s" % (home, src, last(err or out)))
+                    return n, True
+    for name in sorted(want):
+        got = have.get(name)
+        if got and got[0] and got[1] == want[name]:
             continue
-        n, b = sync_home(home, wanted_skills(plugs), srv, a.dry_run)
-        total += n
-        bad = bad or b
-    for name, ev, why in hook_drops(plugs):
-        print("drop    %s hooks %s — %s" % (name, ev, why))
-    if total:
-        print("ok — %d change(s)%s · plugins: %s" % (total, " (dry run)" if a.dry_run else "",
-                                                   ", ".join(n for n, _ in plugs) or "none"))
-    else:
-        print("unchanged · plugins: %s" % (", ".join(n for n, _ in plugs) or "none"))
-    return 1 if bad else 0
+        print("add     %s %s@%s %s" % (home, name, mname, want[name] or "?"))
+        n += 1
+        if dry:
+            continue
+        rc, out, err = native_cli(binary, home, "add", "%s@%s" % (name, mname))
+        if rc != 0:
+            print("FAIL    %s plugin add %s@%s: %s" % (home, name, mname, last(err or out)))
+            bad = True
+    for name in sorted(set(have) - set(want)):
+        print("remove  %s %s@%s" % (home, name, mname))
+        n += 1
+        if dry:
+            continue
+        rc, out, err = native_cli(binary, home, "remove", "%s@%s" % (name, mname))
+        if rc != 0:
+            print("FAIL    %s plugin remove %s@%s: %s" % (home, name, mname, last(err or out)))
+            bad = True
+    return n, bad
 
 
 def cmd_sync(a):
     with contextlib.redirect_stdout(sys.stderr if a.print_dirs else sys.stdout):
-        if AD.shielded("codex.plugins", AD.override_paths(a.override, [])):
-            print("unchanged — codex.plugins is this login's own (agent-overrides.json)")
-            return 0
-        plugs = plugins(a)
-        if plugs is None:
-            print("unchanged — cannot tell what the Claude side has installed (no claude / no marketplace)")
-            return 0
-        result = sync_plugins(a, plugs)
-    if a.print_dirs:
-        for _name, directory in plugs:
-            print(directory)
-    return result
+        return sync(a)
 
 
-def cmd_dirs(a):
+def sync(a):
     if AD.shielded("codex.plugins", AD.override_paths(a.override, [])):
+        print("unchanged — codex.plugins is this login's own (agent-overrides.json)")
         return 0
-    for _n, d in plugins(a) or []:
-        print(d)
-    return 0
+    mname = market_name(a.root)
+    plugs = plugins(a)
+    if plugs is None or mname is None:
+        print("unchanged — cannot tell what the Claude side has installed (no claude / no marketplace)")
+        return 0
+    vers = versions(a.root)
+    want = {name: vers.get(name, "") for name, _d in plugs}
+    binary = find_cli(a)
+    total, bad = 0, False
+    for home in homes(a):
+        if not os.path.isdir(home):
+            continue
+        n, b = retire_home(home, a.root, not a.dry_run)
+        total, bad = total + n, bad or b
+        if binary is None:
+            if want:
+                print("skip    %s — no codex binary here; %s not installed natively" % (home, ", ".join(sorted(want))))
+            continue
+        n, b = follow_home(home, a, binary, mname, want, a.dry_run)
+        total, bad = total + n, bad or b
+    names = ", ".join(sorted(want)) or "none"
+    if total:
+        print("ok — %d change(s)%s · plugins: %s (native)" % (total, " (dry run)" if a.dry_run else "", names))
+    else:
+        print("unchanged · plugins: %s (native)" % names)
+    return 1 if bad else 0
 
 
 def cmd_retire(a):
-    if not AD.shielded("codex.plugins", AD.override_paths(a.override, [])):
-        print("FAIL    retire requires codex.plugins override; stop the legacy bridge first", file=sys.stderr)
-        return 1
-    plan, known_links = [], None
-
-    def read(path):
-        with open(path, encoding="utf-8", newline="") as source:
-            return source.read()
-
-    def links():
-        market = PL.market(a.root)
-        if market is None:
-            raise ValueError("cannot prove old links without this marketplace")
-        installed, _why = PL.installed(a.claude, market.get("name") or "claude-fleet", "")
-        if installed is None:
-            raise ValueError("cannot prove old links without Claude's installed plugin record")
-        plugins = []
-        for name in PL.ours(market):
-            row = installed.get(name, {})
-            directory = row.get("installPath") or row.get("readFromFolder") or ""
-            if isinstance(directory, str) and os.path.isdir(directory):
-                plugins.append((name, directory))
-        return {name: os.path.realpath(value) for name, (kind, value) in wanted_skills(plugins).items()
-                if kind == "link"}
-
-    try:
-        for home in dict.fromkeys(os.path.realpath(home) for home in homes(a)):
-            if not os.path.isdir(home):
-                continue
-            skills = os.path.join(home, "skills")
-            if os.path.islink(skills):
-                raise ValueError("shared skills symlink needs manual review: " + skills)
-            names = sorted(os.listdir(skills)) if os.path.isdir(skills) else []
-            for name in names:
-                if not name.startswith(PREFIX):
-                    continue
-                path = os.path.join(skills, name)
-                if os.path.islink(path):
-                    if known_links is None:
-                        known_links = links()
-                    if known_links.get(name) != os.path.realpath(path):
-                        raise ValueError("unproven skill link needs manual review: " + path)
-                    plan.append(("link", path, os.readlink(path), None))
-                    continue
-                skill = os.path.join(path, "SKILL.md")
-                if os.path.islink(skill):
-                    raise ValueError("linked SKILL.md needs manual review: " + skill)
-                if not os.path.isfile(skill):
-                    continue
-                content = read(skill)
-                if MARK not in content:
-                    continue
-                if os.listdir(path) != ["SKILL.md"]:
-                    raise ValueError("marked adapter has user files or a linked SKILL.md: " + path)
-                plan.append(("skill", skill, content, None))
-            config = os.path.join(home, "config.toml")
-            if not os.path.lexists(config):
-                continue
-            content = read(config)
-            if BEGIN not in content and END not in content:
-                continue
-            if os.path.islink(config):
-                raise ValueError("shared config symlink needs manual review: " + config)
-            lines = content.split("\n")
-            if lines.count(BEGIN) != 1 or lines.count(END) != 1:
-                raise ValueError("ambiguous MCP markers: " + config)
-            outside, _block, malformed = split_block(content)
-            if malformed:
-                raise ValueError("malformed MCP marker order: " + config)
-            plan.append(("config", config, content, outside))
-        for kind, path, before, _after in plan:
-            if kind == "link":
-                unchanged = os.path.islink(path) and os.readlink(path) == before
-            else:
-                unchanged = not os.path.islink(path) and read(path) == before
-                if kind == "skill":
-                    unchanged = unchanged and os.listdir(os.path.dirname(path)) == ["SKILL.md"]
-            if not unchanged:
-                raise ValueError("changed during retirement preflight: " + path)
-        for kind, path, _before, after in plan:
-            print("retire  %s %s%s" % (kind, path, "" if a.apply else " (preview)"))
-        if a.apply:
-            for kind, path, _before, after in plan:
-                if kind == "config":
-                    write(path, after)
-                else:
-                    os.unlink(path)
-                    if kind == "skill":
-                        os.rmdir(os.path.dirname(path))
-    except (OSError, ValueError) as error:
-        print("FAIL    retire: " + str(error), file=sys.stderr)
-        return 1
+    total, bad = 0, False
+    for home in dict.fromkeys(os.path.realpath(h) for h in homes(a)):
+        if os.path.isdir(home):
+            n, b = retire_home(home, a.root, a.apply)
+            total, bad = total + n, bad or b
     print("ok — %d bridge artifact(s)%s; native plugins and user files left alone" % (
-        len(plan), " retired" if a.apply else " (preview only; use --apply after review)"))
-    return 0
+        total, " retired" if a.apply else " (preview only; use --apply after review)"))
+    return 1 if bad else 0
 
 
 def cmd_mention(a):
-    """How Codex lists fleet-plugin-<name>: a linked plugin skill is namespaced by
-    its plugin (Codex reads the manifest beside it, as Claude Code does) —
-    `fleet-orchestrate:fleet-orchestrate`; an adapter skill is its own name."""
+    mname = market_name(a.root) or "claude-fleet"
     for home in homes(a)[:1]:
-        p = os.path.join(home, "skills", PREFIX + a.name)
-        have = entry(p)
-        if have is None:
-            return 1
-        if have[0] == "skill":
-            print(a.name)
-            return 0
-        try:
-            with open(os.path.join(os.path.realpath(p), "..", "..", ".claude-plugin", "plugin.json")) as f:
-                plug = json.load(f).get("name") or ""
-        except (OSError, ValueError, AttributeError):
-            plug = ""
-        print("%s:%s" % (plug, a.name) if plug else a.name)
-        return 0
+        for name in sorted(native(home, mname)):
+            d = native_dir(home, mname, name)
+            if d and os.path.isfile(os.path.join(d, "skills", a.name, "SKILL.md")):
+                print("%s:%s" % (name, a.name))
+                return 0
+    return 1
+
+
+def cmd_command(a):
+    mname = market_name(a.root) or "claude-fleet"
+    for home in homes(a)[:1]:
+        for name in sorted(native(home, mname)):
+            d = native_dir(home, mname, name)
+            f = d and os.path.join(d, "commands", a.name + ".md")
+            if f and os.path.isfile(f):
+                print(f)
+                return 0
     return 1
 
 
 def cmd_doctor(a):
-    if not any(os.path.isdir(h) for h in homes(a)):
+    hs = [h for h in homes(a) if os.path.isdir(h)]
+    if not hs:
         return 3
     plugs = plugins(a)
-    if not plugs:
+    mname = market_name(a.root)
+    if not plugs or mname is None:
         return 3
-    skills = len(wanted_skills(plugs))
-    srv = sorted(wanted_servers(plugs))
-    gaps = list(GAPS)
-    for name, ev, _why in hook_drops(plugs):
-        if ev != "PreCompact":
-            gaps.append("%s 的 %s 钩子" % (name, ev))
-    print("Codex 带过去 技能 %d%s；带不过去：%s" % (
-        skills, (" · 工具服务 " + ", ".join(srv)) if srv else "", " · ".join(gaps)))
+    vers = versions(a.root)
+    lack, left = [], 0
+    for home in hs:
+        have = native(home, mname)
+        for name, _d in plugs:
+            got = have.get(name)
+            if not got or not got[0] or got[1] != vers.get(name, ""):
+                lack.append(name)
+        left += len(bridge_plan(home, a.root)[0])
+    said = "Codex 原生装着 %s" % ", ".join(sorted(n for n, _d in plugs))
+    if lack:
+        said = "Codex 原生缺 / 落后 %s（下次同步装上）" % ", ".join(sorted(set(lack)))
+    if left:
+        said += " · 旧桥残留 %d 项（下次同步清掉）" % left
+    print("%s；带不过去：%s" % (said, " · ".join(GAPS)))
     return 0
 
 
 def main(argv):
     ap = argparse.ArgumentParser(prog="fleet-codex-plugins.py", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd")
-    for c in ("sync", "dirs", "retire", "doctor", "mention"):
+    for c in ("sync", "dirs", "retire", "doctor", "mention", "command"):
         p = sub.add_parser(c)
         p.add_argument("--root", default=os.path.dirname(HERE))
         p.add_argument("--claude", default=os.environ.get("FLEET_INSTALL_CLAUDE", "claude"))
+        p.add_argument("--codex", default=os.environ.get("FLEET_INSTALL_CODEX", ""))
         p.add_argument("--cache", default=os.path.join(CONF_DIR, "codex", "plugins.json"),
                        help="'' = ask claude every time")
         p.add_argument("--codex-home", action="append", default=[])
-        if c == "mention":
+        if c in ("mention", "command"):
             p.add_argument("name")
-        if c in ("sync", "dirs", "retire"):
-            p.add_argument("--override", default=os.path.join(CONF_DIR, "agent-overrides.json"))
+        p.add_argument("--override", default=os.path.join(CONF_DIR, "agent-overrides.json"))
         if c == "sync":
             p.add_argument("--dry-run", action="store_true")
-            p.add_argument("--print-dirs", action="store_true", help="print only hook directories from the same snapshot; sync diagnostics go to stderr")
+            p.add_argument("--print-dirs", action="store_true", help="compat-1v: 下一批删 — prints nothing")
         if c == "retire":
             p.add_argument("--apply", action="store_true")
     a = ap.parse_args(argv)
-    if a.cmd == "sync":
-        return cmd_sync(a)
+    if a.cmd:
+        a.root = os.path.abspath(a.root)
     if a.cmd == "dirs":
-        return cmd_dirs(a)
-    if a.cmd == "retire":
-        return cmd_retire(a)
-    if a.cmd == "doctor":
-        return cmd_doctor(a)
-    if a.cmd == "mention":
-        return cmd_mention(a)
-    ap.print_usage(sys.stderr)
-    return 2
+        return 0                                # compat-1v: 下一批删
+    fn = {"sync": cmd_sync, "retire": cmd_retire, "doctor": cmd_doctor,
+          "mention": cmd_mention, "command": cmd_command}.get(a.cmd)
+    if fn is None:
+        ap.print_usage(sys.stderr)
+        return 2
+    return fn(a)
 
 
 if __name__ == "__main__":

@@ -640,9 +640,30 @@ continue through the separate home-migration policy.
 
 ## Native plugin migration
 
-Native plugin management is separate from the legacy Claude-to-Codex bridge.
-The verified 0.162.1 and 0.163.0 binaries can install Claude-format marketplaces
-and plugins directly, including native command-to-skill conversion. This does
-not yet authorize removing the bridge: hook trust, MCP environment/timeout
-parity, invocation names and duplicate ownership need migration acceptance.
+Codex's own plugin manager holds the optional plugins (T589, EPIC T580 C3). They
+are still installed in one place, Claude Code's `/plugin`; at install time
+`fleet-install-apply.sh` runs `bin/fleet-codex-plugins.py sync`, which follows
+that record in every Codex home with the native installer — `codex plugin
+marketplace add` (the same source Claude added), `codex plugin add` for a plugin
+Claude has installed and enabled that the home lacks or holds at another
+version, `codex plugin remove` for one of our marketplace's plugins Claude no
+longer has. A launch writes nothing and passes no `--plugin-dir`: skills
+(`<plugin>:<skill>`), converted commands (`<plugin>:source-command-<c>`), hooks
+and `.mcp.json` servers are Codex's own. A `/name` seed for a plugin skill
+becomes `$<plugin>:<name>`; one for a plugin command is expanded from Codex's
+cached copy of the command file.
+
+The first sync retires what the old bridge wrote — a `fleet-plugin-*` link into
+Claude's plugin cache or this tree's `plugins/`, a marked single-file adapter,
+the `config.toml` marker block — and says, never touches, a personal entry.
+`codex.plugins` in `agent-overrides.json` leaves the login's Codex plugins to the
+login. The four migration acceptances and where each is held:
+
+| Acceptance | Held by |
+|---|---|
+| hook trust — a plugin hook is untrusted until reviewed; the fleet launcher's `--dangerously-bypass-hook-trust` runs it, as it ran the bridge's injected hooks | `fleet-native-hook-cli-selftest.py --remote-tui --probe-bypass` |
+| MCP environment / timeout — a plugin server gets the session env only by `env_vars`, and its `tool_timeout_sec` holds | `fleet-native-plugin-cli-selftest.py` (bare · allowlist · expanded) |
+| invocation names — `<plugin>:<skill>`, `<plugin>:source-command-<c>` | same, and `fleet-codex-plugins-selftest.sh` E |
+| single owner — one sync clears the bridge and installs natively; nothing at launch | `fleet-native-plugin-cli-selftest.py --retire-bridge` (native-managed-hooks CI), `fleet-codex-plugins-selftest.sh` B/G |
+
 See [the native boundary migration](NATIVE-AGENT-BOUNDARY.md).

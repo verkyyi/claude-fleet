@@ -1,35 +1,35 @@
 #!/bin/bash
-# fleet-codex-plugins-selftest.sh — a Codex session reads the same plugins (issue
-# #3123, EPIC #3111 C12). bin/fleet-codex-plugins.py follows what the Claude side
-# has installed (a fake `claude plugin list --json`) into a sandbox CODEX_HOME:
+# fleet-codex-plugins-selftest.sh — a Codex session reads the same plugins through
+# Codex's OWN plugin manager (issue #3123; T589, EPIC T580 C3). bin/fleet-codex-plugins.py
+# follows what the Claude side has installed (a fake `claude plugin list --json`) into
+# a sandbox CODEX_HOME with a fake `codex plugin` (it keeps config.toml and the plugin
+# cache the way the real one does — bin/fleet-native-plugin-cli-selftest.py
+# --retire-bridge is the same road against the real binary, in native-managed-hooks.yml):
 #
-#   A  nothing installed ⇒ sync writes nothing (config.toml byte for byte, no
-#      fleet-plugin-* entry), `dirs` prints nothing
-#   B  fleet-infra installed ⇒ its skill linked as fleet-plugin-fleet-infra,
-#      one marker block with [mcp_servers.fleet-orch] (env_vars, timeout) at the end
-#      of config.toml, every other line byte for byte; a second sync changes nothing;
-#      a personal fleet-plugin-* entry is left alone
-#   C  a server the login defines itself is its own: no block for it
-#   D  uninstalled (and: disabled) ⇒ only the fleet-plugin-* links / adapters go,
-#      the block goes, config.toml is the original again
-#   E  fleet-hooks-emit.sh --plugin-dir: the plugin's SessionStart is in the codex
-#      output, its PreCompact is not (one stderr line says so); no --plugin-dir ⇒
-#      byte for byte as before
-#   F  fleet-epic's commands become marked adapter skills; doctor names what Codex
-#      cannot carry (mod modules · PreCompact · tools limits · /plugin); `mention`
-#      names a linked skill <plugin>:<name> (how Codex lists it); no Codex
-#      home ⇒ doctor says nothing (exit 3)
-#   G  codex.plugins in agent-overrides.json ⇒ nothing written
-#   H  wiring: fleet-codex.sh syncs + passes --plugin-dir, install-apply and the
-#      doctor run it
+#   A  nothing installed ⇒ sync writes nothing, asks neither claude nor codex
+#   B  the old bridge's products (a fleet-plugin-* link into Claude's cache, a marked
+#      adapter, the config.toml marker block) are retired and fleet-epic is installed
+#      natively (marketplace add + plugin add); a personal fleet-plugin-* entry and
+#      the login's own config lines stay byte for byte; --dry-run writes nothing; a
+#      second sync calls no `codex plugin add`
+#   C  a version bump ⇒ plugin add again; a marketplace from another source ⇒
+#      remove + add
+#   D  Claude disables / uninstalls ⇒ codex plugin remove; another marketplace's
+#      plugin is never touched
+#   E  mention / command name the native copy; doctor says installed / behind and
+#      what Codex cannot carry; no Codex home ⇒ exit 3
+#   F  codex.plugins in agent-overrides.json ⇒ nothing; no codex binary ⇒ the home
+#      is only retired
+#   G  wiring: fleet-codex.sh no longer syncs or passes --plugin-dir; install-apply
+#      and the doctor run it; dirs / --print-dirs (compat-1v) print nothing
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
 CP="$BIN/fleet-codex-plugins.py"
-EMIT="$BIN/fleet-hooks-emit.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-codex-plugins-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
+WORK="$(cd "$WORK" && pwd)"                         # one spelling (a TMPDIR ending in / doubles it)
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n%s\n' "$1" "${2:-}" >&2; exit 1; }
 ok() { CHECKS=$((CHECKS + 1)); }
@@ -37,279 +37,208 @@ has() { case "$2" in *"$1"*) ok ;; *) fail "$3" "$2" ;; esac; }
 hasnt() { case "$2" in *"$1"*) fail "$3" "$2" ;; *) ok ;; esac; }
 
 export FLEET_CONF_DIR="$WORK/conf" CLAUDE_CONFIG_DIR="$WORK/claude"
-mkdir -p "$FLEET_CONF_DIR" "$CLAUDE_CONFIG_DIR"
+mkdir -p "$FLEET_CONF_DIR" "$CLAUDE_CONFIG_DIR/plugins"
 HOME_C="$WORK/codex"; mkdir -p "$HOME_C/skills/own-skill"
 printf -- '---\nname: own-skill\ndescription: mine\n---\n' > "$HOME_C/skills/own-skill/SKILL.md"
 cat > "$HOME_C/config.toml" <<'T'
 # my codex config
 model = "gpt-5"
-approval_policy = "never"
 
 [mcp_servers.context7]
 command = "npx"
-args = ["-y", "@upstash/context7-mcp"]
 
-[projects."/x"]
-trust_level = "trusted"
+[plugins."other@elsewhere"]
+enabled = true
 T
 cp "$HOME_C/config.toml" "$WORK/orig.toml"
 
-# the plugins' installed copies (Claude Code's cache shape: <name>/<version>)
-CACHE="$WORK/cache"
-mkdir -p "$CACHE/fleet-epic/0.1.0" && cp -R "$ROOT/plugins/fleet-epic/." "$CACHE/fleet-epic/0.1.0/"
-# fleet-infra's installed copy below is a FIXTURE (a skill, an MCP server, hooks),
-# so the skill / MCP / hook sync has one plugin of the marketplace to exercise.
-mkdir -p "$CACHE/fleet-infra/0.1.0/.claude-plugin" "$CACHE/fleet-infra/0.1.0/skills/fleet-infra"
-printf '{"name":"fleet-infra","version":"0.1.0","agents":[]}\n' > "$CACHE/fleet-infra/0.1.0/.claude-plugin/plugin.json"
-printf -- '---\nname: fleet-infra\ndescription: a fixture skill\n---\n\nfixture\n' \
-  > "$CACHE/fleet-infra/0.1.0/skills/fleet-infra/SKILL.md"
-cp "$ROOT/conf/mcp-orch.json" "$CACHE/fleet-infra/0.1.0/.mcp.json"
-mkdir -p "$CACHE/fleet-infra/0.1.0/hooks"
-cat > "$CACHE/fleet-infra/0.1.0/hooks/hooks.json" <<'J'
-{"hooks": {
-  "SessionStart": [{"hooks": [{"type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/probe-session-start.py"}]}],
-  "PreCompact":   [{"hooks": [{"type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/probe-precompact.py"}]}]
-}}
-J
+# a marketplace of our own shape (the real one's plugins, versions we control)
+MK="$WORK/market"
+mkdir -p "$MK/.claude-plugin"
+cp -RL "$ROOT/plugins" "$MK/plugins"            # -L: the shadow root links it; never edit the real one
+python3 - "$ROOT/.claude-plugin/marketplace.json" "$MK/.claude-plugin/marketplace.json" <<'P'
+import json, sys
+m = json.load(open(sys.argv[1])); json.dump(m, open(sys.argv[2], "w"))
+P
+VER=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$MK/plugins/fleet-epic/.claude-plugin/plugin.json")
+# Claude Code's installed copy (its cache shape) and the old bridge's link into it
+CACHE="$CLAUDE_CONFIG_DIR/plugins/cache/claude-fleet"
+mkdir -p "$CACHE/fleet-epic/$VER" && cp -R "$MK/plugins/fleet-epic/." "$CACHE/fleet-epic/$VER/"
 
 LIST="$WORK/list.json"
 cat > "$WORK/claude-fake" <<SH
 #!/bin/sh
-[ "\$1 \$2 \$3" = "plugin list --json" ] && { printf 'list\n' >> "$WORK/list.calls"; exec cat "$LIST"; }
+[ "\$1 \$2 \$3" = "plugin list --json" ] && { printf 'list\n' >> "$WORK/claude.calls"; exec cat "$LIST"; }
 exit 1
 SH
-chmod +x "$WORK/claude-fake"
-# Claude Code's own record of an install (the launch's cheap pre-check reads it)
-mkdir -p "$CLAUDE_CONFIG_DIR/plugins"
-mark_installed() { printf '{"version":2,"plugins":{"fleet-infra@claude-fleet":[]}}\n' > "$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json"; }
+# codex plugin, as the real one keeps it: [marketplaces.<m>] source, [plugins."p@m"],
+# plugins/cache/<m>/<p>/<version>/ copied from the marketplace's source
+cat > "$WORK/codex-fake" <<'PY'
+#!/usr/bin/env python3
+import json, os, re, shutil, sys
+home = os.environ["CODEX_HOME"]; conf = os.path.join(home, "config.toml")
+with open(os.environ["FAKE_CODEX_LOG"], "a") as f:
+    f.write(" ".join(sys.argv[1:]) + "\n")
+text = open(conf).read() if os.path.exists(conf) else ""
+def save(t): open(conf, "w").write(t)
+def drop(t, head):
+    out, skip = [], False
+    for line in t.split("\n"):
+        if line.startswith("["):
+            skip = line.strip() == head
+        if not skip:
+            out.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out))
+a = sys.argv[1:]
+if a[:3] == ["plugin", "marketplace", "add"]:
+    src = a[3]; mk = json.load(open(os.path.join(src, ".claude-plugin/marketplace.json")))["name"]
+    m = re.search(r'\[marketplaces\.%s\]\nsource_type = "local"\nsource = "(.*)"' % mk, text)
+    if m and m.group(1) != src:
+        print("Error: marketplace '%s' is already added from a different source" % mk, file=sys.stderr); sys.exit(1)
+    if not m:
+        save(text.rstrip("\n") + '\n\n[marketplaces.%s]\nsource_type = "local"\nsource = "%s"\n' % (mk, src))
+elif a[:3] == ["plugin", "marketplace", "remove"]:
+    save(drop(text, "[marketplaces.%s]" % a[3]))
+elif a[:2] == ["plugin", "add"]:
+    p, mk = a[2].split("@")
+    src = re.search(r'\[marketplaces\.%s\]\nsource_type = "local"\nsource = "(.*)"' % mk, text).group(1)
+    pd = os.path.join(src, "plugins", p)
+    v = json.load(open(os.path.join(pd, ".claude-plugin/plugin.json")))["version"]
+    cd = os.path.join(home, "plugins", "cache", mk, p)
+    shutil.rmtree(cd, ignore_errors=True); shutil.copytree(pd, os.path.join(cd, v))
+    if '[plugins."%s"]' % a[2] not in text:
+        save(text.rstrip("\n") + '\n\n[plugins."%s"]\nenabled = true\n' % a[2])
+elif a[:2] == ["plugin", "remove"]:
+    p, mk = a[2].split("@")
+    shutil.rmtree(os.path.join(home, "plugins", "cache", mk, p), ignore_errors=True)
+    save(drop(text, '[plugins."%s"]' % a[2]))
+else:
+    sys.exit(2)
+PY
+chmod +x "$WORK/claude-fake" "$WORK/codex-fake"
+export FAKE_CODEX_LOG="$WORK/codex.calls"
+: > "$FAKE_CODEX_LOG"
+mark_installed() { printf '{"version":2,"plugins":{"fleet-epic@claude-fleet":[]}}\n' > "$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json"; }
 row() { # name enabled
-  printf '{"id":"%s@claude-fleet","version":"0.1.0","enabled":%s,"installPath":"%s/%s/0.1.0"}' "$1" "$2" "$CACHE" "$1"
+  printf '{"id":"%s@claude-fleet","version":"%s","enabled":%s,"installPath":"%s/%s/%s"}' "$1" "$VER" "$2" "$CACHE" "$1" "$VER"
 }
-cx() { python3 "$CP" "$@" --root "$ROOT" --claude "$WORK/claude-fake" --cache '' --codex-home "$HOME_C"; }
+cx() { python3 "$CP" "$@" --root "$MK" --claude "$WORK/claude-fake" --codex "$WORK/codex-fake" --cache '' \
+         --override "$WORK/no-override.json" --codex-home "$HOME_C"; }
+q() { python3 "$CP" "$@" --root "$MK" --codex-home "$HOME_C"; }
+echo '[]' > "$WORK/no-override.json"
 
 # ---- A: nothing installed -------------------------------------------------------
 echo '[]' > "$LIST"
 out=$(cx sync); rc=$?
 [ "$rc" = 0 ] || fail "A sync rc $rc" "$out"; ok
 has 'unchanged' "$out" "A sync should change nothing"
-cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "A config.toml changed" "$(diff "$WORK/orig.toml" "$HOME_C/config.toml")"; ok
-for e in "$HOME_C/skills"/fleet-plugin-*; do [ -e "$e" ] || [ -L "$e" ] && fail "A a fleet-plugin-* entry appeared" "$e"; done; ok
-[ -z "$(cx dirs)" ] || fail "A dirs printed something"; ok
-out=$(cx sync --print-dirs 2>"$WORK/sync.stderr"); rc=$?
-[ "$rc" = 0 ] && [ -z "$out" ] && [ ! -f "$WORK/list.calls" ] || fail "A combined sync queried Claude or emitted paths" "$out"; ok
-has 'unchanged' "$(cat "$WORK/sync.stderr")" "A combined sync diagnostics must go to stderr"
+cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "A config.toml changed"; ok
+[ ! -s "$FAKE_CODEX_LOG" ] && [ ! -f "$WORK/claude.calls" ] || fail "A asked claude or codex"; ok
 
-# ---- B: fleet-infra installed ---------------------------------------------
-mkdir -p "$HOME_C/skills/fleet-plugin-mine"
+# ---- B: the old bridge retired, fleet-epic native --------------------------------
+ln -s "$CACHE/fleet-epic/$VER/skills/epic-page" "$HOME_C/skills/fleet-plugin-epic-page"
+mkdir -p "$HOME_C/skills/fleet-plugin-fleet-epic-run" "$HOME_C/skills/fleet-plugin-mine"
+printf -- '---\nname: fleet-epic-run\n---\n\n<!-- fleet codex plugin skill -->\nbody\n' > "$HOME_C/skills/fleet-plugin-fleet-epic-run/SKILL.md"
 printf -- '---\nname: mine\ndescription: personal\n---\n' > "$HOME_C/skills/fleet-plugin-mine/SKILL.md"
-printf '[%s]\n' "$(row fleet-infra true)" > "$LIST"
-# no installed_plugins.json naming ours ⇒ claude is never asked, nothing written
-mv "$WORK/claude-fake" "$WORK/claude-fake.off"
-out=$(cx sync); has 'unchanged · plugins: none' "$out" "B0 with no install record, sync should not ask claude"
-mv "$WORK/claude-fake.off" "$WORK/claude-fake"
-[ -L "$HOME_C/skills/fleet-plugin-fleet-infra" ] && fail "B0 linked without an install record"; ok
-mark_installed
-dry=$(cx sync --dry-run)
-has 'link ' "$dry" "B dry run should plan the link"
-cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "B --dry-run wrote config.toml"; ok
-[ -e "$HOME_C/skills/fleet-plugin-fleet-infra" ] && fail "B --dry-run linked a skill"; ok
-out=$(cx sync); rc=$?
-[ "$rc" = 0 ] || fail "B sync rc $rc" "$out"; ok
-: > "$WORK/list.calls"
-combined=$(cx sync --print-dirs 2>"$WORK/sync.stderr"); rc=$?
-[ "$rc" = 0 ] && [ "$combined" = "$CACHE/fleet-infra/0.1.0" ] || fail "B combined sync stdout must contain only installed hook paths" "$combined"; ok
-[ "$(wc -l < "$WORK/list.calls" | tr -d ' ')" = 1 ] || fail "B combined sync must read installed plugins exactly once"; ok
-has 'unchanged' "$(cat "$WORK/sync.stderr")" "B combined sync must retain diagnostics on stderr"
-L="$HOME_C/skills/fleet-plugin-fleet-infra"
-[ -L "$L" ] && [ -f "$L/SKILL.md" ] || fail "B the skill is not linked" "$out"; ok
-[ "$(readlink "$L")" = "$CACHE/fleet-infra/0.1.0/skills/fleet-infra" ] || fail "B link target" "$(readlink "$L")"; ok
-grep -q '^name: fleet-infra' "$L/SKILL.md" || fail "B linked SKILL.md is not fleet-infra's"; ok
-conf=$(cat "$HOME_C/config.toml")
-has '# >>> fleet plugins' "$conf" "B no marker block"
-has '[mcp_servers.fleet-orch]' "$conf" "B no fleet-orch server"
-has 'env_vars = ["TMUX", "TMUX_PANE"' "$conf" "B the server does not forward the pane env"
-has 'tool_timeout_sec = ' "$conf" "B no tool timeout"
-has 'fleet-mcp.py\" --group orch' "$conf" "B the server is not the dispatch group"
-head -c "$(wc -c < "$WORK/orig.toml")" "$HOME_C/config.toml" | cmp -s - "$WORK/orig.toml" \
-  || fail "B the login's lines are not byte for byte" "$(diff "$WORK/orig.toml" "$HOME_C/config.toml")"; ok
-[ "$(tail -n 1 "$HOME_C/config.toml")" = '# <<< fleet plugins <<<' ] || fail "B the block is not at the end"; ok
-grep -q 'name: mine' "$HOME_C/skills/fleet-plugin-mine/SKILL.md" || fail "B the personal fleet-plugin-mine was touched"; ok
-has 'own     ' "$out" "B the personal entry should be reported as own"
-if python3 -c 'import tomllib' 2>/dev/null; then
-  python3 -c 'import sys, tomllib; tomllib.load(open(sys.argv[1], "rb"))' "$HOME_C/config.toml" \
-    || fail "B config.toml does not parse"; ok
-fi
-cp "$HOME_C/config.toml" "$WORK/after-b.toml"
-out=$(cx sync)
-has 'unchanged' "$out" "B a second sync should change nothing"
-cmp -s "$HOME_C/config.toml" "$WORK/after-b.toml" || fail "B second sync rewrote config.toml"; ok
-[ "$(cx dirs)" = "$CACHE/fleet-infra/0.1.0" ] || fail "B dirs" "$(cx dirs)"; ok
-
-# ---- C: the login's own server ----------------------------------------------------
-C2="$WORK/codex2"; mkdir -p "$C2"
-printf '[mcp_servers.fleet-orch]\ncommand = "mine"\n' > "$C2/config.toml"; cp "$C2/config.toml" "$WORK/c2.toml"
-out=$(python3 "$CP" sync --root "$ROOT" --claude "$WORK/claude-fake" --cache '' --codex-home "$C2")
-has "mcp fleet-orch — this login's" "$out" "C the login's server should be its own"
-cmp -s "$C2/config.toml" "$WORK/c2.toml" || fail "C the login's server was rewritten" "$(cat "$C2/config.toml")"; ok
-
-# ---- D: uninstalled, then disabled ---------------------------------------------------
-echo '[]' > "$LIST"
-out=$(cx sync)
-has 'unlink' "$out" "D uninstall should unlink"
-[ -e "$L" ] || [ -L "$L" ] && fail "D the link survived" "$out"; ok
-cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "D config.toml is not the original again" "$(diff "$WORK/orig.toml" "$HOME_C/config.toml")"; ok
-[ -f "$HOME_C/skills/fleet-plugin-mine/SKILL.md" ] && [ -f "$HOME_C/skills/own-skill/SKILL.md" ] || fail "D a personal skill was removed"; ok
-printf '[%s]\n' "$(row fleet-infra true)" > "$LIST"; cx sync >/dev/null
-printf '[%s]\n' "$(row fleet-infra false)" > "$LIST"
-cx sync >/dev/null
-[ -L "$L" ] && fail "D a disabled plugin's skill stayed"; ok
-cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "D disabled: config.toml not the original"; ok
-
-# ---- E: hooks ----------------------------------------------------------------------
-base=$("$EMIT" --target codex --root "$ROOT")
-withp=$("$EMIT" --target codex --root "$ROOT" --plugin-dir "$CACHE/fleet-infra/0.1.0" 2>"$WORK/emit.err")
-ss=$(printf '%s\n' "$withp" | grep '^SessionStart')
-has "$CACHE/fleet-infra/0.1.0/probe-session-start.py" "$ss" "E the plugin's SessionStart is missing"
-hasnt 'probe-precompact' "$withp" "E PreCompact must not reach Codex"
-has 'PreCompact not carried' "$(cat "$WORK/emit.err")" "E the dropped event should be said"
-[ "$(printf '%s\n' "$base" | grep -c '^SessionStart')" = 1 ] && [ "$(printf '%s\n' "$withp" | grep -c '^SessionStart')" = 1 ] \
-  || fail "E SessionStart should be one merged line"; ok
-nob=$("$EMIT" --target codex --root "$ROOT" --plugin-dir "$CACHE/fleet-epic/0.1.0")
-[ "$nob" = "$base" ] || fail "E a plugin with no hooks.json changed the table"; ok
-
-# ---- F: commands as adapters; doctor ---------------------------------------------------
-printf '[%s,%s]\n' "$(row fleet-infra true)" "$(row fleet-epic true)" > "$LIST"
-cx sync >/dev/null
-: > "$WORK/list.calls"
-combined=$(cx sync --print-dirs 2>"$WORK/sync.stderr"); rc=$?
-expected=$(printf '%s\n%s' "$CACHE/fleet-epic/0.1.0" "$CACHE/fleet-infra/0.1.0")
-[ "$rc" = 0 ] && [ "$combined" = "$expected" ] && [ "$(wc -l < "$WORK/list.calls" | tr -d ' ')" = 1 ] \
-  || fail "F combined sync must emit every enabled plugin once, in stable order" "$combined"; ok
-cp "$LIST" "$WORK/list.before"
-cp "$HOME_C/config.toml" "$WORK/config.before-query-failure"
-printf 'not JSON\n' > "$LIST"
-combined=$(cx sync --print-dirs 2>"$WORK/sync.stderr"); rc=$?
-[ "$rc" = 0 ] && [ -z "$combined" ] || fail "F failed plugin query must not turn diagnostics into hook paths" "$combined"; ok
-has 'cannot tell' "$(cat "$WORK/sync.stderr")" "F failed query must explain why sync was skipped"
-cmp -s "$HOME_C/config.toml" "$WORK/config.before-query-failure" && [ -L "$L" ] \
-  || fail "F failed query changed previous MCP or skill artifacts"; ok
-cp "$WORK/list.before" "$LIST"
-A="$HOME_C/skills/fleet-plugin-fleet-epic-run/SKILL.md"
-[ -f "$A" ] && grep -q '<!-- fleet codex plugin skill -->' "$A" && grep -q '^name: fleet-epic-run' "$A" \
-  || fail "F fleet-epic-run is not a marked adapter skill" "$(ls "$HOME_C/skills")"; ok
-[ -L "$HOME_C/skills/fleet-plugin-epic-page" ] || fail "F epic-page skill not linked"; ok
-[ "$(python3 "$CP" mention fleet-infra --codex-home "$HOME_C")" = fleet-infra:fleet-infra ] \
-  || fail "F mention of a linked plugin skill should be <plugin>:<name>"; ok
-[ "$(python3 "$CP" mention fleet-epic-run --codex-home "$HOME_C")" = fleet-epic-run ] || fail "F mention of an adapter"; ok
-python3 "$CP" mention mine --codex-home "$HOME_C" >/dev/null && fail "F a personal entry has no mention"; ok
-doc=$(cx doctor); rc=$?
-[ "$rc" = 0 ] || fail "F doctor rc $rc" "$doc"; ok
-for w in 'mod 界面模块' 'PreCompact' 'tools 限制' '/plugin' 'fleet-orch'; do has "$w" "$doc" "F doctor should name $w"; done
-python3 "$CP" doctor --root "$ROOT" --claude "$WORK/claude-fake" --cache '' --codex-home "$WORK/none" >/dev/null; rc=$?
-[ "$rc" = 3 ] || fail "F doctor with no Codex home should exit 3 (got $rc)"; ok
-echo '[]' > "$LIST"; cx sync >/dev/null
-[ -e "$A" ] && fail "F uninstall left the adapter"; ok
-cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "F config.toml not the original after uninstall"; ok
-
-# ---- G: override ------------------------------------------------------------------------
-echo '["codex.plugins"]' > "$FLEET_CONF_DIR/agent-overrides.json"
-printf '[%s]\n' "$(row fleet-infra true)" > "$LIST"
-cx sync --override "$FLEET_CONF_DIR/agent-overrides.json" >/dev/null
-[ -L "$L" ] && fail "G codex.plugins override still linked"; ok
-cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "G override still wrote config.toml"; ok
-out=$(cx dirs); rc=$?
-[ "$rc" = 0 ] && [ -z "$out" ] || fail "G override still injects Claude plugin hooks" "$out"; ok
-: > "$WORK/list.calls"
-out=$(cx sync --print-dirs 2>"$WORK/sync.stderr"); rc=$?
-[ "$rc" = 0 ] && [ -z "$out" ] && [ ! -s "$WORK/list.calls" ] || fail "G combined sync ignored native ownership override" "$out"; ok
-echo '["codex"]' > "$WORK/parent-override.json"
-out=$(cx dirs --override "$WORK/parent-override.json"); rc=$?
-[ "$rc" = 0 ] && [ -z "$out" ] || fail "G explicit parent override still injects hooks" "$out"; ok
-echo '[]' > "$WORK/no-override.json"
-out=$(cx dirs --override "$WORK/no-override.json"); rc=$?
-[ "$rc" = 0 ] && [ "$out" = "$CACHE/fleet-infra/0.1.0" ] \
-  || fail "G explicit non-override lost legacy hooks" "$out"; ok
-
-# ---- H: wiring ----------------------------------------------------------------------------
-grep -q 'fleet-codex-plugins.py" sync' "$BIN/fleet-codex.sh" && grep -q -- '--plugin-dir' "$BIN/fleet-codex.sh" \
-  || fail "H fleet-codex.sh does not sync / pass --plugin-dir"; ok
-if grep -q 'fleet-codex-plugins.py" sync --print-dirs' "$BIN/fleet-codex.sh"; then   # (no second `dirs` read: conf/gone.list)
-  ok
-else
-  fail "H launcher must use a single plugin snapshot"
-fi
-grep -q 'fleet-codex-plugins.py" sync' "$BIN/fleet-install-apply.sh" || fail "H install-apply does not sync"; ok
-grep -q 'fleet-codex-plugins.py' "$BIN/fleet-doctor.sh" || fail "H the doctor's plugins row does not ask"; ok
-
-printf '[%s,%s]\n' "$(row fleet-infra true)" "$(row fleet-epic true)" > "$LIST"
-cx sync --override "$WORK/no-override.json" >/dev/null || fail "retire setup sync"
-cp "$HOME_C/config.toml" "$WORK/retire-before.toml"
-cx retire --override "$WORK/no-override.json" --apply >"$WORK/retire.out" 2>&1 && fail "retire accepted an active bridge"; ok
-{ [ -L "$L" ] && cmp -s "$HOME_C/config.toml" "$WORK/retire-before.toml"; } || fail "retire refusal changed artifacts"; ok
-out=$(cx retire); rc=$?
-[ "$rc" = 0 ] || fail "retire preview failed" "$out"; ok
-has 'preview only' "$out" "retire should default to preview"
-{ [ -L "$L" ] && cmp -s "$HOME_C/config.toml" "$WORK/retire-before.toml"; } || fail "retire preview changed artifacts"; ok
-
-SECOND="$WORK/second-home"; mkdir -p "$SECOND/skills"
-printf '# untouched second account\n# >>> fleet plugins — bin/fleet-codex-plugins.py sync writes this block; edit outside it >>>\n' > "$SECOND/config.toml"
-python3 "$CP" retire --apply --root "$ROOT" --claude "$WORK/claude-fake" \
-  --codex-home "$HOME_C" --codex-home "$SECOND" >"$WORK/retire.out" 2>&1 && fail "retire accepted malformed second account"; ok
-{ [ -L "$L" ] && cmp -s "$HOME_C/config.toml" "$WORK/retire-before.toml"; } || fail "retire edited first home before validating second"; ok
-cat "$WORK/retire-before.toml" "$WORK/retire-before.toml" > "$SECOND/config.toml"
-cx retire --apply --codex-home "$SECOND" >"$WORK/retire.out" 2>&1 && fail "retire accepted duplicate MCP markers"; ok
-rm "$SECOND/config.toml"
-ln -s "$WORK/retire-before.toml" "$SECOND/config.toml"
-cx retire --apply --codex-home "$SECOND" >"$WORK/retire.out" 2>&1 && fail "retire accepted shared config symlink"; ok
-cmp -s "$HOME_C/config.toml" "$WORK/retire-before.toml" || fail "retire changed shared config target"; ok
-rm "$SECOND/config.toml"
-printf '# untouched second account\n' > "$SECOND/config.toml"
-
-ln -s "$HOME_C/skills/own-skill" "$HOME_C/skills/fleet-plugin-personal-link"
-cx retire --apply >"$WORK/retire.out" 2>&1 && fail "retire accepted an unproven symlink"; ok
-[ -L "$L" ] && [ -L "$HOME_C/skills/fleet-plugin-personal-link" ] || fail "retire removed a link before full preflight"; ok
-rm "$HOME_C/skills/fleet-plugin-personal-link"
-ADAPTER="$HOME_C/skills/fleet-plugin-fleet-epic-run"
-echo personal > "$ADAPTER/notes.txt"
-cx retire --apply >"$WORK/retire.out" 2>&1 && fail "retire accepted an adapter with user files"; ok
-[ -f "$ADAPTER/notes.txt" ] && [ -f "$ADAPTER/SKILL.md" ] && [ -L "$L" ] || fail "retire touched adapter user files"; ok
-rm "$ADAPTER/notes.txt"
-mv "$ADAPTER/SKILL.md" "$WORK/linked-skill.md"
-ln -s "$WORK/linked-skill.md" "$ADAPTER/SKILL.md"
-cx retire --apply >"$WORK/retire.out" 2>&1 && fail "retire accepted a linked SKILL.md"; ok
-[ -L "$ADAPTER/SKILL.md" ] && [ -f "$WORK/linked-skill.md" ] || fail "retire touched linked SKILL.md target"; ok
-rm "$ADAPTER/SKILL.md"
-mv "$WORK/linked-skill.md" "$ADAPTER/SKILL.md"
-
+ln -s "$HOME_C/skills/own-skill" "$HOME_C/skills/fleet-plugin-mylink"
 cat >> "$HOME_C/config.toml" <<'T'
 
-[plugins."other@elsewhere"]
-enabled = false
+# >>> fleet plugins — bin/fleet-codex-plugins.py sync writes this block; edit outside it >>>
+[mcp_servers.fleet-orch]
+command = "x"
+# <<< fleet plugins <<<
 T
-cat "$WORK/orig.toml" > "$WORK/retire-expected.toml"
-cat >> "$WORK/retire-expected.toml" <<'T'
+cp "$HOME_C/config.toml" "$WORK/bridged.toml"
+printf '[%s]\n' "$(row fleet-epic true)" > "$LIST"; mark_installed
+dry=$(cx sync --dry-run)
+has 'retire  link' "$dry" "B dry run should plan the link's retirement"
+has "add     $HOME_C fleet-epic@claude-fleet $VER" "$dry" "B dry run should plan the native add"
+cmp -s "$HOME_C/config.toml" "$WORK/bridged.toml" && [ -L "$HOME_C/skills/fleet-plugin-epic-page" ] \
+  && [ ! -s "$FAKE_CODEX_LOG" ] || fail "B --dry-run changed something"; ok
+out=$(cx sync); rc=$?
+[ "$rc" = 0 ] || fail "B sync rc $rc" "$out"; ok
+for w in 'retire  link' 'retire  skill' 'retire  config' "market  $HOME_C claude-fleet → $MK" 'add     '; do
+  has "$w" "$out" "B sync should say: $w"
+done
+[ ! -e "$HOME_C/skills/fleet-plugin-epic-page" ] && [ ! -L "$HOME_C/skills/fleet-plugin-epic-page" ] \
+  && [ ! -e "$HOME_C/skills/fleet-plugin-fleet-epic-run" ] || fail "B bridge skills survived" "$(ls -la "$HOME_C/skills")"; ok
+grep -q 'name: mine' "$HOME_C/skills/fleet-plugin-mine/SKILL.md" && [ -L "$HOME_C/skills/fleet-plugin-mylink" ] \
+  || fail "B a personal fleet-plugin-* entry was touched"; ok
+has 'own     ' "$out" "B the personal entries should be said"
+hasnt '# >>> fleet plugins' "$(cat "$HOME_C/config.toml")" "B the marker block survived"
+head -c "$(wc -c < "$WORK/orig.toml")" "$HOME_C/config.toml" | cmp -s - "$WORK/orig.toml" \
+  || fail "B the login's lines are not byte for byte" "$(cat "$HOME_C/config.toml")"; ok
+has '[plugins."fleet-epic@claude-fleet"]' "$(cat "$HOME_C/config.toml")" "B not installed natively"
+[ -f "$HOME_C/plugins/cache/claude-fleet/fleet-epic/$VER/skills/epic-page/SKILL.md" ] || fail "B no native cache copy"; ok
+: > "$FAKE_CODEX_LOG"
+out=$(cx sync)
+has 'unchanged' "$out" "B a second sync should change nothing"
+[ ! -s "$FAKE_CODEX_LOG" ] || fail "B a second sync ran codex" "$(cat "$FAKE_CODEX_LOG")"; ok
 
-[plugins."other@elsewhere"]
-enabled = false
-T
-mkdir -p "$HOME_C/plugins/cache/native-fixture"
-echo native > "$HOME_C/plugins/cache/native-fixture/keep"
-printf '[%s,%s]\n' "$(row fleet-infra false)" "$(row fleet-epic false)" > "$LIST"
-echo 'outside user file' > "$WORK/outside-user-file"
-ln -s "$WORK/outside-user-file" "$HOME_C/config.toml.fleet-codex-plugins.tmp"
-out=$(cx retire --apply --codex-home "$SECOND"); rc=$?
-[ "$rc" = 0 ] || fail "retire failed for known disabled plugins" "$out"; ok
-[ "$(cat "$WORK/outside-user-file")" = 'outside user file' ] || fail "retire followed a preexisting temporary-file symlink"; ok
-[ ! -L "$HOME_C/config.toml" ] || fail "retire published a temporary-file symlink as config"; ok
-[ ! -L "$L" ] && [ ! -e "$ADAPTER" ] || fail "retire left generated skill artifacts"; ok
-cmp -s "$HOME_C/config.toml" "$WORK/retire-expected.toml" || fail "retire changed non-bridge config"; ok
-[ -f "$HOME_C/skills/own-skill/SKILL.md" ] && [ -f "$HOME_C/plugins/cache/native-fixture/keep" ] || fail "retire touched user/native files"; ok
-[ "$(cat "$SECOND/config.toml")" = '# untouched second account' ] || fail "retire changed the second account"; ok
-out=$(cx retire --apply); rc=$?
-[ "$rc" = 0 ] || fail "retire second apply failed" "$out"; ok
-has '0 bridge artifact(s)' "$out" "retire must be idempotent"
-cx sync >/dev/null || fail "sync after retirement failed"
-{ [ ! -L "$L" ] && cmp -s "$HOME_C/config.toml" "$WORK/retire-expected.toml"; } || fail "sync revived retired bridge artifacts"; ok
-[ -z "$(cx dirs)" ] || fail "dirs revived retired hooks"; ok
+# ---- C: version bump; marketplace moved ------------------------------------------
+sed -i.bak "s/\"version\": \"$VER\"/\"version\": \"9.9.9\"/" "$MK/plugins/fleet-epic/.claude-plugin/plugin.json"
+out=$(cx sync)
+has "add     $HOME_C fleet-epic@claude-fleet 9.9.9" "$out" "C a bump should re-add"
+[ -d "$HOME_C/plugins/cache/claude-fleet/fleet-epic/9.9.9" ] || fail "C the new version is not in the cache"; ok
+cp -R "$MK" "$WORK/market2"
+: > "$FAKE_CODEX_LOG"
+out=$(python3 "$CP" sync --root "$WORK/market2" --claude "$WORK/claude-fake" --codex "$WORK/codex-fake" --cache '' \
+        --override "$WORK/no-override.json" --codex-home "$HOME_C")
+has "market  $HOME_C claude-fleet → $WORK/market2" "$out" "C a moved marketplace should be re-added"
+grep -q '^plugin marketplace remove claude-fleet$' "$FAKE_CODEX_LOG" && grep -q "^plugin marketplace add $WORK/market2\$" "$FAKE_CODEX_LOG" \
+  || fail "C not remove + add" "$(cat "$FAKE_CODEX_LOG")"; ok
+cx sync >/dev/null                                   # back onto $MK
+
+# ---- E: mention / command / doctor -------------------------------------------------
+[ "$(q mention epic-page)" = fleet-epic:epic-page ] || fail "E mention epic-page" "$(q mention epic-page)"; ok
+[ "$(q command fleet-epic-run)" = "$HOME_C/plugins/cache/claude-fleet/fleet-epic/9.9.9/commands/fleet-epic-run.md" ] \
+  || fail "E command fleet-epic-run" "$(q command fleet-epic-run)"; ok
+q mention mine >/dev/null && fail "E a personal entry has no mention"; ok
+q command nope >/dev/null && fail "E no such command"; ok
+doc=$(cx doctor); rc=$?
+[ "$rc" = 0 ] || fail "E doctor rc $rc" "$doc"; ok
+has 'Codex 原生装着 fleet-epic' "$doc" "E doctor should say installed"
+for w in 'mod 界面模块' 'PreCompact' 'tools 限制'; do has "$w" "$doc" "E doctor should name $w"; done
+mv "$MK/plugins/fleet-epic/.claude-plugin/plugin.json.bak" "$MK/plugins/fleet-epic/.claude-plugin/plugin.json"
+has '原生缺 / 落后 fleet-epic' "$(cx doctor)" "E doctor should say behind"
+cx sync >/dev/null
+python3 "$CP" doctor --root "$MK" --claude "$WORK/claude-fake" --cache '' --codex-home "$WORK/none" >/dev/null; rc=$?
+[ "$rc" = 3 ] || fail "E doctor with no Codex home should exit 3 (got $rc)"; ok
+
+# ---- D: disabled, then uninstalled ⇒ removed; other marketplaces untouched -------------
+printf '[%s]\n' "$(row fleet-epic false)" > "$LIST"
+out=$(cx sync)
+has "remove  $HOME_C fleet-epic@claude-fleet" "$out" "D a disabled plugin should be removed"
+hasnt 'fleet-epic@claude-fleet' "$(cat "$HOME_C/config.toml")" "D the plugin's table stayed"
+has '[plugins."other@elsewhere"]' "$(cat "$HOME_C/config.toml")" "D another marketplace's plugin was touched"
+printf '[%s]\n' "$(row fleet-epic true)" > "$LIST"; cx sync >/dev/null
+echo '[]' > "$LIST"
+has 'remove  ' "$(cx sync)" "D an uninstalled plugin should be removed"
+[ ! -d "$HOME_C/plugins/cache/claude-fleet/fleet-epic" ] || fail "D the cache copy stayed"; ok
+
+# ---- F: override; no codex binary --------------------------------------------------------
+printf '[%s]\n' "$(row fleet-epic true)" > "$LIST"
+echo '["codex.plugins"]' > "$WORK/override.json"
+: > "$FAKE_CODEX_LOG"
+out=$(python3 "$CP" sync --root "$MK" --claude "$WORK/claude-fake" --codex "$WORK/codex-fake" --cache '' \
+        --override "$WORK/override.json" --codex-home "$HOME_C")
+has "codex.plugins is this login's own" "$out" "F override should do nothing"
+[ ! -s "$FAKE_CODEX_LOG" ] || fail "F override still ran codex"; ok
+H2="$WORK/codex-nobin"; mkdir -p "$H2/skills"
+ln -s "$CACHE/fleet-epic/$VER/skills/epic-page" "$H2/skills/fleet-plugin-epic-page"
+out=$(PATH=/usr/bin:/bin HOME="$WORK/nohome" python3 "$CP" sync --root "$MK" --claude "$WORK/claude-fake" --codex "$WORK/no-such-codex" \
+        --cache '' --override "$WORK/no-override.json" --codex-home "$H2")
+has 'no codex binary here' "$out" "F no codex should be said"
+[ ! -L "$H2/skills/fleet-plugin-epic-page" ] || fail "F the home was not retired"; ok
+
+# ---- G: wiring ------------------------------------------------------------------------------
+hasnt 'fleet-codex-plugins.py" sync' "$(cat "$BIN/fleet-codex.sh")" "G the launcher still syncs plugins"
+hasnt '--plugin-dir' "$(grep -v '^#' "$BIN/fleet-codex.sh")" "G the launcher still merges plugin hooks"
+grep -q 'fleet-codex-plugins.py" mention' "$BIN/fleet-codex.sh" && grep -q 'fleet-codex-plugins.py" command' "$BIN/fleet-codex.sh" \
+  || fail "G the launcher does not ask mention / command"; ok
+grep -q 'fleet-codex-plugins.py" sync' "$BIN/fleet-install-apply.sh" || fail "G install-apply does not sync"; ok
+grep -q 'fleet-codex-plugins.py' "$BIN/fleet-doctor.sh" || fail "G the doctor's plugins row does not ask"; ok
+[ -z "$(cx dirs)" ] || fail "G dirs printed something"; ok
+out=$(cx sync --print-dirs 2>/dev/null); [ -z "$out" ] || fail "G --print-dirs printed on stdout" "$out"; ok
 
 echo "fleet-codex-plugins-selftest: PASS ($CHECKS checks)"

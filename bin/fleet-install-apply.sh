@@ -81,10 +81,11 @@
 #             written. The github token is read by bin/mcp-github.sh from
 #             `gh auth token` at start — no merged file carries one. Skills are
 #             the two passes above; this one only counts them.
-#   codex-plugins  every apply -> fleet-codex-plugins.py sync (issue #3123): the
-#             optional plugins Claude has installed, carried into every Codex
-#             home (skills linked as fleet-plugin-*, MCP servers as one marked
-#             config.toml block). None installed = nothing written.
+#   codex-plugins  every apply -> fleet-codex-plugins.py sync (issue #3123, T589):
+#             every Codex home follows the optional plugins Claude has installed
+#             with Codex's OWN installer (`codex plugin marketplace add` · `add` ·
+#             `remove`, our marketplace only), after clearing what the old bridge
+#             wrote (fleet-plugin-* skills, its config.toml block). None = nothing.
 #   credsep   a login marked separated (credsep.json, or FLEET_CRED_SEPARATE=1 as
 #             fleet-login-new.sh writes it — a mark, no switch: issue #4675) —
 #             bin/fleet-credsep.sh apply (install / refresh the root-owned copy;
@@ -1298,16 +1299,16 @@ if [ -d "$ROOT/conf/agent-defaults" ] && [ -f "$ROOT/bin/fleet-agent-defaults.py
 else
   say 'agents: skip — no conf/agent-defaults in this version'
 fi
-# The legacy Codex bridge for optional plugins (issue #3123, EPIC #3111 C12):
-# fleet-codex-plugins.py still follows what Claude has installed — the
-# skills linked into every Codex home as fleet-plugin-*, the MCP servers as one
-# marked block in config.toml (fill only, the rest byte for byte). None installed
-# ⇒ nothing written. The Codex launcher runs the same sync before every launch.
+# Codex follows the optional plugins Claude has installed (issue #3123; T589):
+# fleet-codex-plugins.py has Codex's own installer add / upgrade / remove them in
+# every Codex home (our marketplace only), and clears the old bridge's
+# fleet-plugin-* skills and config.toml block. None installed ⇒ nothing written.
+# This is the only place it runs — a Codex launch no longer syncs.
 if [ "$BUNDLE" = 0 ] && [ -f "$ROOT/bin/fleet-codex-plugins.py" ] && command -v "$CLAUDE" >/dev/null 2>&1; then
   if out=$(FLEET_INSTALL_CLAUDE="$CLAUDE" python3 "$ROOT/bin/fleet-codex-plugins.py" sync --root "$ROOT" \
              --override "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/agent-overrides.json" ${DRYFLAG:+"$DRYFLAG"} 2>&1); then
     say "codex-plugins: $(printf '%s\n' "$out" | tail -1)"
-    printf '%s\n' "$out" | grep -E '^(link|skill|unlink|mcp|drop) ' | sed 's/^/    /'
+    printf '%s\n' "$out" | grep -E '^(retire|market|add|remove|skip) ' | sed 's/^/    /'
   else
     fail codex-plugins "fleet-codex-plugins.py sync: $(printf '%s\n' "$out" | grep '^FAIL' | head -1)"
   fi
