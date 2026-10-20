@@ -17,7 +17,7 @@ A few words:
 - **Device**: the machine a session actually runs on. You don't pick it — fleet does.
 - **Quota**: how much of the subscription is left in the 5-hour / 7-day windows. The admin sets each person's share.
 
-Having trouble: [FAQ](faq.md) · [Troubleshooting](troubleshooting.md)
+Having trouble: [FAQ](faq.md) · [Troubleshooting](troubleshooting.md) · [When the view breaks](view-trouble.md)
 
 ## Self-host and develop
 

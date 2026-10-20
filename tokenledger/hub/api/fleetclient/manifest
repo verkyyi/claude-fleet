@@ -86,6 +86,9 @@ bin/fleet-upload-receive.py
 # the home machine; it reuses fleet-connect.py --argv and the upload filter above
 bin/fleet-thin.py
 bin/fleet-thin-upload.py
+# `fleet shell` (EPIC T651 C5): the home's command line with no 看台, on the
+# same fleet-connect.py --argv answer (the remembered route when the hub is down)
+bin/fleet-shell.py
 # a forwarded page / OAuth callback's bookkeeping, for the thin loop and the
 # action executor alike (#3236, fleet-browser)
 bin/fleet_open_fwd.py

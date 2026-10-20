@@ -21,6 +21,11 @@
 #                               — the login also registers this computer as an
 #                               untrusted, coordinate-only node (#2212)
 #   fleet logout [--keep-node]  sign out; the node leaves too unless kept
+#   fleet shell [machine] [--print]
+#                               straight to the home machine's command line
+#                               ($HOME), no 看台 — the emergency way in; the hub
+#                               down, the route remembered here; --print: one
+#                               ssh line for a phone's ssh app (EPIC T651 C5)
 #   fleet connect [machine]     route + ssh only — what the client runs inside;
 #                               for debugging (`fleet connect mac-a --print`)
 #   fleet connect --proxy <m>   ssh's ProxyCommand through the hub
@@ -105,7 +110,7 @@
 # The client is the ONLY way in (issue #1628): there is no fallback to ssh-ing
 # into a machine's own list. It needs a terminal; without one `fleet` says so
 # and exits non-zero. The old two-pane client (fleet-shell.sh, `fleet --old`,
-# FLEET_CLIENT=shell) is gone (issue #3008): every road here opens fleet-thin.py.
+# FLEET_CLIENT=shell) is gone (issue #3008): every client road here opens fleet-thin.py.
 # A MANAGED machine (/var/db/fleet-node/machine.env, issue #2702) is no one's
 # resident client — nothing opens at an ssh login — but a `fleet` typed there
 # opens the client ON THE MACHINE for this ssh alone (issues #2720, #3006): see
@@ -303,10 +308,12 @@ case $cmd in
       fi ;;
     esac
     exec "$here/fleet-home-session.sh" "$@" ;;
-  # the old client's own word (fleet-shell.sh, gone with #3008): the client
+  # the home's command line with no 看台 (EPIC T651 C5): the emergency way in,
+  # on the 看台's own certificate and route — the remembered one when the hub
+  # does not answer
   shell)
     shift
-    client ${1:+--home "$1"} ;;
+    exec python3 "$here/fleet-shell.py" "$@" ;;
   # what the old client left running in the background (issue #3008); the
   # client itself lives in its terminal — ⌘Q or closing it ends it
   quit)
