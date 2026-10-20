@@ -101,6 +101,11 @@ fleet-id.sh status|route|children|await|history|continue|reopen …   结果、�
   的话读出它当 `--prev`，新窗口的账本记 prev。
 - **依赖按 ID 解除**（拍板 6）：章程「依赖顺序」表（或成员段的 `**依赖**` 行）里的成员键；被依赖的成员最新一棒成了才放行，
   之前是 `waiting`；被依赖的卡住 ⇒ 它也卡住。表外的单（T493 这类）留给驱动判断。
+- **驱动 = 一条线**（C18）：父 ID 连同顺 `prev` 接上它的每个 ID（驱动被回收后 `fleet-id.sh continue` 出的接班窗口；
+  hub 的 family 回答里是 `lineage`）。接班窗口带着原窗口的 `@task` 与 parent（`continue --exec` 传
+  `--id-task` / `--id-parent`，不认领、不进准入）；线上任一 ID 派的子 ID 都是这批的成员——哪怕它的记录没挂
+  `parent_task`（只带 parent_session）；进度词取线上最新的一条。父记录没人认领（ID 开关）时，父 ID 是本机为它开的、
+  prev 链起点的那个 ID。外批依赖（`T542 C7`）没合并就在 `waits_on`；合了就放行，并在成员的 `outside` 里写明 `done`。
 - **批次标记**：`epic-running.d/<slug>-T-xxxxx`（tick 的 `mark`，父 ID 的短码）带一行 `task: T<n>`；
   盖新标记时删掉同一批旧的 `<slug>-T<n>`，`--clear T<n>` 也清得掉它。
 - tick 的 JSON 多了 `parent_id` · `parent_short` · `mark`，每个成员的 `id` · `short` · `ids`（每一棒，带 prev），

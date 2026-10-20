@@ -569,6 +569,31 @@ def _hub_status(fid, rec, short):
     return {"short": short, "state": st, "label": label, "alive": rec["closed"] is None, "result": r}
 
 
+def lineage_of(fid, idx):
+    """fid and every ID that continued it down `prev`, at any depth (a driver's
+    「从这一段继续」 — EPIC T497 C18), oldest first: one session's whole line."""
+    out, frontier = [fid], [fid]
+    while frontier:
+        nxt = []
+        for f in frontier:
+            for s in reversed(successors(f, idx)):
+                if s not in out:
+                    out.append(s)
+                    nxt.append(s)
+        frontier = nxt
+    return out
+
+
+def task_root(task, idx=None):
+    """The ID opened for the record `task` (its ledger's `task`) that no other one
+    opened for it continues — where that record's line of sessions starts; the
+    oldest when several do. '' when this machine opened none (C18)."""
+    idx = idx if idx is not None else _index()
+    mine = {f: o for f, o in idx.items() if task and o["opened"].get("task") == task}
+    roots = [f for f, o in mine.items() if o["opened"].get("prev") not in mine] or list(mine)
+    return min(roots, key=lambda f: (mine[f]["opened"].get("ts") or 0, f)) if roots else ""
+
+
 def family(fid, live, idx=None, seeds=()):
     """An EPIC driver's batch by ID (EPIC T497 C5): the IDs fid spawned (their
     `parent`), the `seeds` (IDs the caller knows are members — a child task's
@@ -576,29 +601,46 @@ def family(fid, live, idx=None, seeds=()):
     them down `prev` — a member's redo or a 「从这一段继续」 — oldest first. This
     machine's ledgers first; the hub mirror's `GET /v1/node/ids?parent=<fid>&id=<seed>…`
     adds the ones other machines opened. A hub that does not know the query lists
-    bare ids, which are dropped — the seeds it lacks are then read one by one."""
+    bare ids, which are dropped — the seeds it lacks are then read one by one.
+    The driver is its whole line (C18): fid and every ID that continued IT down
+    `prev` (`lineage`) — what any of them spawned is the batch's, and the newest
+    progress word among them is the batch's; they are never members themselves."""
     idx = idx if idx is not None else _index()
-    seeds = [x for x in dict.fromkeys(seeds) if is_fid(x) and x != fid]
-    rows, seen = {}, set()
+    line = lineage_of(fid, idx)
+    seeds = [x for x in dict.fromkeys(seeds) if is_fid(x) and x not in line]
+    rows, seen = {}, set(line)
     first = []
     for x in seeds:
         if x in idx:
             seen.add(x)
             first.append(x)
             rows[x] = _family_row(x, idx[x], status(x, live, idx), "local")
-    frontier, key = [fid], "parent"
+    frontier, key = list(line), "parent"
     while frontier:
         nxt, first = first, []
         for f in frontier:
             for other, o in idx.items():
-                if other not in seen and other != fid and o["opened"].get(key) == f:
+                if other not in seen and o["opened"].get(key) == f:
                     seen.add(other)
                     nxt.append(other)
                     rows[other] = _family_row(other, o, status(other, live, idx), "local")
         frontier, key = nxt, "prev"
-    code, ans = _poster()("GET", "/v1/node/ids?parent=" + fid + "".join("&id=" + x for x in seeds[:100]))
+    post = _poster()
+    code, ans = post("GET", "/v1/node/ids?parent=" + fid + "".join("&id=" + x for x in seeds[:100]))
     hub = "ok" if code == 200 else ("none" if code == -3 else "down")
     got = (ans.get("ids") or []) if code == 200 and isinstance(ans, dict) else []
+    if code == 200 and isinstance(ans, dict) and "parent" in ans:
+        # a hub that reads the line itself names it; an older one is asked once
+        # per ID of the line this machine knows
+        hl = [x for x in ans.get("lineage") or [] if is_fid(x)]
+        for x in hl:
+            if x not in line:
+                line.append(x)
+        if "lineage" not in ans:
+            for x in line[1:]:
+                c2, a2 = post("GET", "/v1/node/ids?parent=" + x)
+                if c2 == 200 and isinstance(a2, dict):
+                    got = got + [r for r in a2.get("ids") or [] if isinstance(r, dict)]
     if code == 200 and isinstance(ans, dict) and "parent" not in ans:
         hub, got = "old", []
         for x in seeds:
@@ -612,7 +654,7 @@ def family(fid, live, idx=None, seeds=()):
                             "closed_at": (one["closed"] or {}).get("ts"),
                             "close_reason": (one["closed"] or {}).get("reason", "")})
     for x in got:
-        if not isinstance(x, dict) or not is_fid(x.get("id", "")) or x["id"] in rows or x["id"] == fid:
+        if not isinstance(x, dict) or not is_fid(x.get("id", "")) or x["id"] in rows or x["id"] in line:
             continue
         if "parent" not in x and "prev" not in x and "results" not in x:
             continue   # an older hub: the owner's bare id list
@@ -624,14 +666,18 @@ def family(fid, live, idx=None, seeds=()):
         if x.get("closed_at"):
             rec["closed"] = {"ts": x["closed_at"], "reason": x.get("close_reason", "")}
         rows[x["id"]] = _family_row(x["id"], rec, _hub_status(x["id"], rec, x.get("short", "")), "hub")
-    out = sorted(rows.values(), key=lambda r: (r.get("opened_at") or 0, r["id"]))
-    if fid in idx:
-        pg = idx[fid]["progress"]
-        pg = dict(pg, src="local") if pg else None
-    else:
-        pg = progress_of(fid) if hub == "ok" or hub == "old" else None
+    out = sorted((r for r in rows.values() if r["id"] not in line), key=lambda r: (r.get("opened_at") or 0, r["id"]))
+    pg = None
+    for f in line:   # the newest word down the line (C18)
+        if f in idx:
+            p = idx[f]["progress"]
+            p = dict(p, src="local") if p else None
+        else:
+            p = progress_of(f) if hub == "ok" or hub == "old" else None
+        if p and (pg is None or (p.get("ts") or 0) >= (pg.get("ts") or 0)):
+            pg = dict(p, id=f)
     return {"parent": fid, "progress": pg, "short": (idx.get(fid) or fold(read(fid)))["opened"].get("short")
-            or short_for(fid, known_ids(idx.keys())), "hub": hub, "ids": out}
+            or short_for(fid, known_ids(idx.keys())), "hub": hub, "lineage": line, "ids": out}
 
 
 AWAIT_RC = {"done": 0, "failed": 1, "asking": 1, "exited": 4}
@@ -689,7 +735,9 @@ def history_rows(live, include_open=False, idx=None):
 
 def continue_plan(fid, seg=None):
     """What 「从这一段继续」 (a new window, a new ID, prev = fid — S8) or 「恢复这个窗口」
-    (the same ID, its newest segment) resumes: {native, agent, seg, worktree, repo, title}."""
+    (the same ID, its newest segment) resumes: {native, agent, seg, worktree, repo, title,
+    task, parent} — the record and the parent ride along (C18): a driver's successor
+    still owns its batch."""
     rec = fold(read(fid))
     segs = rec["segments"]
     if not segs:
@@ -700,7 +748,8 @@ def continue_plan(fid, seg=None):
     s = segs[n - 1]
     o = rec["opened"]
     return {"id": fid, "seg": n, "native": s["native"], "agent": s["agent"], "worktree": o.get("worktree", ""),
-            "repo": o.get("repo", ""), "title": o.get("title", ""), "closed": rec["closed"] is not None}
+            "repo": o.get("repo", ""), "title": o.get("title", ""), "closed": rec["closed"] is not None,
+            "task": o.get("task", ""), "parent": o.get("parent", "")}
 
 
 # ---- the hub mirror (EPIC T497 C2) ----------------------------------------------

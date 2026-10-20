@@ -134,6 +134,19 @@ SP
 FLEET_TEST_SPAWNED="$WORK/spawned" FLEET_ID_SPAWN="$WORK/spawn.sh" fid continue "$F8" --seg 2 --exec
 ok; tr '\n' ' ' < "$WORK/spawned" | grep -q -- "--resume dddd0002 .*--no-repo.*--prev $F8" \
   || fail "S8: --exec opens a window resuming segment 2 with --prev <ID>" "$(tr '\n' ' ' < "$WORK/spawned" 2>/dev/null)"
+ok; ! grep -q -- '--id-task' "$WORK/spawned" || fail "S8: an ID with no record carries none"
+# C18: an EPIC driver's ID (its record T<n>, its parent) continued — the new
+# window carries both: @task and the ledger's task / parent
+F8T=$(mkfid) F8P=$(mkfid)
+read -r W8T P8T <<EOF
+$(newwin "$F8T")
+EOF
+fid open "$F8T" --window "$W8T" --socket "$L" --agent claude --title 'EPIC: driver' --task T580 --parent "$F8P" >/dev/null
+hook "$P8T" startup dddd0101
+lib fleet_win_retire "$W8T" "$L" exited; tf kill-window -t "$W8T"
+FLEET_TEST_SPAWNED="$WORK/spawned-t" FLEET_ID_SPAWN="$WORK/spawn.sh" fid continue "$F8T" --exec
+ok; tr '\n' ' ' < "$WORK/spawned-t" | grep -q -- "--id-task T580 --id-parent $F8P .*--prev $F8T" \
+  || fail "S8: a driver's continue carries its record and parent (C18)" "$(tr '\n' ' ' < "$WORK/spawned-t" 2>/dev/null)"
 G8=$(mkfid)
 read -r WG8 PG8 <<EOF
 $(newwin "$G8")

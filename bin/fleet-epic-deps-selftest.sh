@@ -8,6 +8,8 @@
 #      no C4↔C5 cycle — C4 waits on `T542 C5` only, C5 on C4 and `T497 C8`, and
 #      neither is let through by the cycle rule.
 #   C. the outside members succeed: C4 is due; C4 merges: C5 is due.
+#   E. T580's wave table + section lines (C18): `C1 C4 + T542 C7 C8` holds C6 on
+#      both outside members until each merges, then `outside` says they did.
 #   D. the argv: `status --task T<n>`, `--task T<n> status`, and the ONE word
 #      `--task T<n>` zsh makes of `${P:+--task "$P"}` all read the batch.
 # Hermetic: a stub hub (FLEET_HUB_CURL), a sandbox FLEET_CONF_DIR, no network.
@@ -102,6 +104,37 @@ eq "C: C5 still waits on both" "['C4', 'T497 C8']" "$(mem C5 '["waits_on"]')"
 outside succeeded succeeded succeeded
 S=$(tick)
 eq "C: C4 merged, T497 C8 merged — C5 is due" "succeeded C5" "$(mem C4 '["state"]') $(printf '%s' "$S" | jq_ '" ".join(n["key"] for n in d["next"])')"
+
+# --- E. T580's own shape (C18): a 波次 table the parser cannot key, so each
+# section's **依赖** line — `C1 C4 + T542 C7 C8` — puts both outside members in
+# waits_on until T542's C7 and C8 merge; once merged they leave waits_on and the
+# member's `outside` says so (never silently gone)
+CHARTER='<!-- fleet:epic repo=o/r short=同路 cap=4 -->
+- [ ] **C4** 第四
+- [ ] **C6** 第六
+## 依赖顺序
+| 波次 | 成员 | 等谁 |
+|---|---|---|
+| 3 | C5 · C6（并行） | C6←C4 + **T542 C7 C8 合并** |
+## C4 · 第四
+**依赖** 依赖 无 · 被依赖 C6
+## C6 · 第六
+**依赖** 依赖 C4 + T542 C7 C8 合并 · 被依赖 C7
+'
+PARENT=$(python3 -c 'import json,sys; print(json.dumps(dict(id="T580", authority_version=1, title="EPIC", request_payload=json.dumps({"body": sys.argv[1]}))))' "$CHARTER")
+far() { state "({'T580': $PARENT,
+   'T545': dict(id='T545', parent_task='T542', title='C7 · 外批七', outcome='$1'),
+   'T548': dict(id='T548', parent_task='T542', title='C8 · 外批八', outcome='$2')})"; }
+far "" ""
+S=$(tick)
+eq "E: C6 waits on C4 and T542's C7 C8" "waiting ['C4', 'T542 C7', 'T542 C8']" "$(mem C6 '["state"]') $(mem C6 '["waits_on"]')"
+far succeeded ""
+S=$(tick)
+eq "E: C7 merged — only C8 of T542 still held" "['C4', 'T542 C8']" "$(mem C6 '["waits_on"]')"
+far succeeded succeeded
+S=$(tick)
+eq "E: both merged — waits_on is C4 alone" "['C4']" "$(mem C6 '["waits_on"]')"
+eq "E: and outside says they merged" "T542 C7:True T542 C8:True" "$(mem C6 '["outside"]' | python3 -c 'import ast,sys; print(" ".join("%s:%s" % (o["ref"], o["done"]) for o in ast.literal_eval(sys.stdin.read())))')"
 
 # --- D. the argv ------------------------------------------------------------------
 argv_ok() { python3 "$BIN/fleet-epic-tick.py" "$@" >/dev/null 2>&1; eq "D: argv [$*] reads the batch" 0 "$?"; }

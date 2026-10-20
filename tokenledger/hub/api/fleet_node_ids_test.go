@@ -107,6 +107,22 @@ func TestNodeIDFamily(t *testing.T) {
 	if ids, _ := got["ids"].([]any); st != 200 || len(ids) != 5 {
 		t.Fatalf("with seeds = %d %v; want 5 ids (c1 c2 redo orphan orphanRedo)", st, got)
 	}
+	// C18: the driver continued (a new ID, prev = drv) spawns c3 — the family of drv
+	// is the whole line's, the line is named and never a member
+	const drv2, c3 = "88888888-8888-4888-8888-888888888888", "99999999-9999-4999-8999-999999999999"
+	open(v5, drv2, 80, map[string]any{"prev": drv, "task": "T1"})
+	open(v5, c3, 90, map[string]any{"parent": drv2, "task": "T4"})
+	st, got = nodeTaskCall(t, h, v5, http.MethodGet, NodeIDsPath+"?parent="+drv, nil)
+	ids = nil
+	for _, x := range got["ids"].([]any) {
+		ids = append(ids, x.(map[string]any)["id"].(string))
+	}
+	if st != 200 || len(ids) != 4 || ids[3] != c3 {
+		t.Fatalf("a continued driver's family = %d %v; want c1 c2 redo c3", st, ids)
+	}
+	if line, _ := got["lineage"].([]any); len(line) != 2 || line[0] != drv || line[1] != drv2 {
+		t.Fatalf("lineage = %v; want drv drv2", got["lineage"])
+	}
 	if st, _ := nodeTaskCall(t, h, v5, http.MethodGet, NodeIDsPath+"?parent=nope", nil); st != 400 {
 		t.Fatalf("a bad parent: HTTP %d", st)
 	}

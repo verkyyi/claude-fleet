@@ -123,7 +123,7 @@ set_agent() {
   [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-raw-session: contradictory --agent values\n' >&2; exit 2; }
   AGENT=$1
 }
-NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; NATIVE_WT=0; PREV_ID=""; REOPEN_FID=""
+NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; NATIVE_WT=0; PREV_ID=""; REOPEN_FID=""; ID_TASK=""; ID_PARENT=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -215,6 +215,15 @@ while [ "$#" -gt 0 ]; do
     --prev)        PREV_ID="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --prev=*)      PREV_ID="${1#--prev=}"; shift ;;
     --fid)         REOPEN_FID="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    # --id-task T<n> / --id-parent <ID> (EPIC T497 C18): what a 「从这一段继续」
+    # carries over from the ID it continues — its record (stamped @task, written
+    # into the new ID's ledger; never a claim, an admission or @task_flow: the
+    # record is the old window's, not a new dispatch) and its parent's ID, so an
+    # EPIC driver's successor still owns its batch.
+    --id-task)     ID_TASK="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --id-task=*)   ID_TASK="${1#--id-task=}"; shift ;;
+    --id-parent)   ID_PARENT="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --id-parent=*) ID_PARENT="${1#--id-parent=}"; shift ;;
     --fid=*)       REOPEN_FID="${1#--fid=}"; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
@@ -228,6 +237,9 @@ case "$TASK_REF" in T[1-9]*) case "${TASK_REF#T}" in *[!0-9]*) TASK_REF='' ;; es
 case "$RESUME_SID" in *[!0-9a-fA-F-]*) RESUME_SID='' ;; esac
 case "$PREV_ID" in *[!0-9a-f-]*) PREV_ID='' ;; esac
 case "$REOPEN_FID" in *[!0-9a-f-]*) REOPEN_FID='' ;; esac
+case "$ID_TASK" in T[1-9]*) case "${ID_TASK#T}" in *[!0-9]*) ID_TASK='' ;; esac ;; *) ID_TASK='' ;; esac
+case "$ID_PARENT" in *[!0-9a-f-]*) ID_PARENT='' ;; esac
+[ -z "$TASK_REF" ] || ID_TASK=''   # a dispatch's own record wins
 # A parked session's return (issue #3387): its seed is the first turn.
 if [ -n "$RESUME_SID" ] || [ -n "$SEED_FILE" ] || [ -n "$WT_ARG" ]; then
   [ -z "$NODE_ARG" ] && NODE_ARG=local          # its transcript and worktree are here
@@ -831,10 +843,11 @@ fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
 # worker_id, a keyless parent's own ID as --origin (every `task` dispatch from an
 # orchestrator / a driver), or the ID of the window its key names.
 _idpar=$(fleet_spawn_parent_id "$SESS" "$ORIGIN" "$ORIGIN_WID" "$SOCK") || _idpar=''
+[ -n "$_idpar" ] || _idpar=$ID_PARENT   # a continued ID keeps its parent (C18)
 _idwt=''; [ -n "${wt:-}" ] && [ "$NOREPO" != 1 ] && _idwt=$wt
 fleet_is_fid "$fid" && ( bash "$BIN/fleet-id.sh" open "$fid" --window "$win" --socket "$SOCK" \
   --agent "${AGENT:-claude}" ${REPO_ARG:+--repo "$REPO_ARG"} ${NAME:+--title "$NAME"} \
-  ${TASK_REF:+--task "$TASK_REF"} ${_idpar:+--parent "$_idpar"} ${PREV_ID:+--prev "$PREV_ID"} \
+  ${TASK_REF:+--task "$TASK_REF"} ${ID_TASK:+--task "$ID_TASK"} ${_idpar:+--parent "$_idpar"} ${PREV_ID:+--prev "$PREV_ID"} \
   ${RESUME_SID:+--from-native "$RESUME_SID"} ${_idwt:+--worktree "$_idwt"} >/dev/null 2>&1 & )
 # The worktree remembers its ID beside its record (C4): `fleet-id` in its git dir.
 [ -n "$_idwt" ] && fleet_is_fid "$fid" && fleet_worktree_id_mark "$_idwt" "$fid"
@@ -865,6 +878,7 @@ stamp_option() {
 [ "$TEST_ID" = 1 ] && { stamp_option @test_identity 1 2>/dev/null; [ -n "$REAP" ] || REAP=done:10m; }
 stamp_option @dispatch "$DISPATCH" 2>/dev/null
 [ -n "$TASK_REF" ] && stamp_option @task "$TASK_REF" 2>/dev/null   # the hub's record (#3325)
+[ -n "$ID_TASK" ] && stamp_option @task "$ID_TASK" 2>/dev/null    # a continued ID's record (C18)
 if [ -z "$REAP" ]; then
   case "$PROMPT" in /loop|/loop[[:space:]]*) REAP=loop-end ;; *) REAP=done:15m ;; esac
 fi
