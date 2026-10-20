@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034  # out / n are read inside chk's eval strings
 # fleet-repo-follow-selftest.sh — T673 (节点选择 C): a managed machine adds the repos
 # its person's machines host, only ever adding, a failed add retried without
 # blocking the others; the doctor's rows read its record.
@@ -10,7 +11,6 @@
 # real road does. bin/fleet-base-sync.sh calls the tick; bin/fleet-doctor.sh
 # reads `status --doctor`.
 set -uo pipefail
-# shellcheck disable=SC2034  # out / n are read inside chk's eval strings
 BIN="$(cd "$(dirname "$0")" && pwd)"
 T=$(mktemp -d "${TMPDIR:-/tmp}/repo-follow-st.XXXXXX")
 trap 'rm -rf "$T"' EXIT
