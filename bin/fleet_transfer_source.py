@@ -43,6 +43,12 @@ def inspect(session, window):
                           '--window', window, '--to', 'codex', '--inspect'], timeout=30))
 
 
+# The providers a fleet Codex thread runs on: OpenAI's own, or the pool's credential
+# proxy (`model_provider="fleet"`, fleet-codex.sh / fleet-run.sh) — every pooled
+# session's. Anything else is a thread the fleet did not start (T630).
+FLEET_PROVIDERS = ('openai', 'fleet')
+
+
 def native_thread(source):
     data = source['codex_identity']
     rpc = RPC(data.get('remote', ''), timeout=5)
@@ -50,7 +56,7 @@ def native_thread(source):
         t = ATTENTION['thread_read'](rpc, dict(data, session_id=source['session_id']), include_turns=True)
     finally:
         rpc.close()
-    if (t['id'] != source['session_id'] or t.get('modelProvider') != 'openai'
+    if (t['id'] != source['session_id'] or t.get('modelProvider') not in FLEET_PROVIDERS
             or Path(t['cwd']).resolve() != Path(source['worktree']).resolve()):
         raise ValueError('native Codex thread/provider changed')
     return t

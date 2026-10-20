@@ -26,6 +26,19 @@ src = module('transfer_source', 'fleet_transfer_source.py')
 
 
 class Settled(unittest.TestCase):
+    def test_a_pooled_codex_thread_is_a_fleet_thread(self):
+        # T630: a Codex on the pool's credential proxy reads modelProvider "fleet";
+        # refusing it left every pooled looping Codex unswitchable.
+        source = dict(session_id='t1', worktree='/tmp', codex_identity={'remote': ''})
+        for provider, ok in (('openai', True), ('fleet', True), ('azure', False), (None, False)):
+            thread = dict(id='t1', modelProvider=provider, cwd='/tmp')
+            with patch.object(src, 'RPC'), patch.dict(src.ATTENTION, thread_read=lambda *a, **k: thread):
+                if ok:
+                    self.assertEqual(src.native_thread(source), thread)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'provider changed'):
+                        src.native_thread(source)
+
     def test_manual_transfer_accepts_only_a_settled_looping_codex_round(self):
         source = dict(session='test', window='@2', pane='%2', pid=42, session_id='source', agent='codex', state='looping')
         idle = lambda last, items=(dict(status='completed'),), kind='idle': dict(
