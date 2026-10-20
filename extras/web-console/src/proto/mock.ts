@@ -60,7 +60,6 @@ export async function install(): Promise<string> {
     const issue = [
       item({ kind: "issue", title: "销售周报看板", repo: "linxiao/sales-dash", issue: 42, epic: "linxiao/sales-dash#40", epic_title: "十月报表", sessions: ["issue-42 · 林晓的 MacBook-Air"], models: [["Opus 5.5", 802000], ["Sonnet 5.5", 100000]], node: "mac-mini", login: "linxiao" }, 902000),
       item({ kind: "issue", title: "活动报名页", repo: "linxiao/event-signup", issue: 7, sessions: ["scratch-14"], models: [["Opus 5.5", 610000], ["GPT-5.4 Codex", 334000]], node: "mac-mini", login: "linxiao" }, 944000),
-      item({ kind: "orch", title: "" }, 98000),
       item({ kind: "none", title: "", sessions: ["对话"], models: [["Sonnet 5.5", 340000]] }, 340000),
     ];
     const total = issue.reduce((a, r) => a + (r.tokens as number), 0);

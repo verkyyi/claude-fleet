@@ -64,6 +64,11 @@ path extras/spot-node                  #4797
 path .github/workflows/spot-node.yml   #4797
 # --- the hub's personal role layer (#3130) -------------------------------------
 path tests/role-merge                  #3130
+# --- the person's rule table and role overlays, the doctor's roles row (T654) --
+path tokenledger/hub/rolemerge/rules.go T654
+func PersonRules                       T654
+func status_roles                      T654
+word personRulesMax                    T654
 path bin/fleet-panel-jump-selftest.sh  #4330
 
 # --- one fleet per login (#980) and the footer repo picker (#1034, #1038) ------

@@ -2645,22 +2645,6 @@ if [ -f "$_at" ] && command -v python3 >/dev/null 2>&1; then
   esac
 fi
 
-# --- roles: the person's layer as the hub keeps it (issue #2784) ---
-# The role definitions' merge is gone (issue #3122 — a session starts as a
-# standard agent file); what the person bundle still carries (the rule table's
-# personal rows) is read here: 入口 v<N> · 本机 v<M> · 拉到 <when>, WARN when that
-# read is over a day old or the hub pushed a version this login does not hold.
-# No personal layer → no row.
-if [ -f "$(dirname "$0")/fleet-agent-team.py" ]; then
-  _rp=$(FLEET_CONF_DIR="$conf_dir" python3 "$(dirname "$0")/fleet-agent-team.py" status --roles 2>/dev/null); _rprc=$?
-  if [ "$_rprc" = 1 ]; then
-    warn roles "$_rp (fix: python3 $(dirname "$0")/fleet-agent-team.py sync — the hub may be away; launches use this copy meanwhile)"
-  elif [ "$_rprc" = 0 ] && [ -n "$_rp" ]; then
-    pass roles "$_rp"
-  fi
-  unset _rp _rprc
-fi
-
 # --- agentdef: a session started AS an agent file (issue #3122) ---
 # `--as <name>` starts `claude --agent <name>`; a Claude Code without that flag
 # gets the same file through --model / --tools / --append-system-prompt-file and

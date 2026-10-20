@@ -16,12 +16,12 @@ import (
 )
 
 // The task record's node road (claude-fleet#3330, EPIC #3178 ⑦): what the
-// fleet's coordinators — the orchestrator, the steward, an EPIC driver — write
+// fleet's coordinators — an orchestrator session, an EPIC driver — write
 // on a record from a machine, with that machine's node token
 // (bin/fleet-task.sh). ⌘P's place road (#3325) writes a person's record; this
 // one lets the orchestrator open one BEFORE it dispatches (a development task
-// then files its issue), the steward put a question or a park on it, and an
-// EPIC driver give each member a read-only record beside its issue.
+// is that record alone), a session put a question or a park on it, and an
+// EPIC driver open each member as a child record.
 //
 //	POST /v1/node/tasks          {token, title, via?, repo?, rule?, issue?,
 //	                              worker_id?, key?, state?} → the record; the
