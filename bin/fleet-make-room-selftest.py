@@ -117,26 +117,26 @@ class MakeRoom(Rig):
         self.assertIn("folded:" + self.win, self.room("1"))    # asked again: the idle one goes
 
     def test_a_memory_refusal_folds_first_then_admits(self):
-        script = ('. "$1/fleet-lib.sh"; L=$2; W=$3; fleet_machine_admit() { if tmux -L "$L" list-windows -t "$L" '
-                  '-F "#{window_id}" | grep -qx "$W"; then echo "machine memory tight — 暂停开新：内存紧张 (test)"; '
+        # the machine's reading is faked: tight until a fold is on the ledger
+        script = ('. "$1/fleet-lib.sh"; fleet_machine_admit() { if ! grep -q "Folded to make room" '
+                  '"$FLEET_HISTORY_LEDGER" 2>/dev/null; then echo "machine memory tight — 暂停开新：内存紧张 (test)"; '
                   'return 1; fi; return 0; }; fleet_admit_reserve() { :; }; '
                   'fleet_session_cap_ok "$2"; echo "|rc=$?"')
         env = dict(self.env, FLEET_ADMIT_MAKE_ROOM_SETTLE="0")
-        p = subprocess.run(["bash", "-c", script, "t", str(self.ibin), self.label, self.win], env=env,
+        p = subprocess.run(["bash", "-c", script, "t", str(self.ibin), self.label], env=env,
                            capture_output=True, text=True, timeout=120)
         self.assertIn("|rc=0", p.stdout, p.stdout + p.stderr)
-        self.assertIn("making room: folded:" + self.win, p.stderr)
+        self.assertIn("making room: folded:" + self.win, p.stderr, p.stdout + p.stderr)
         self.assertFalse(self.exists())
-        # nothing left to fold: refused, and said why
-        p = subprocess.run(["bash", "-c", script, "t", str(self.ibin), self.label, "@nonesuch"],
-                           env=dict(env, FLEET_ADMIT_MAKE_ROOM="0"), capture_output=True, text=True, timeout=60)
-        self.assertIn("|rc=0", p.stdout)                       # not tight (the window is gone): admitted
+        # nothing may be folded: refused, and said why
         self.second(n=9)
-        p = subprocess.run(["bash", "-c", script.replace('grep -qx "$W"', 'grep -q .'), "t", str(self.ibin),
-                            self.label, "-"], env=dict(env, FLEET_ADMIT_MAKE_ROOM="0"),
-                           capture_output=True, text=True, timeout=60)
+        always = script.replace('if ! grep -q "Folded to make room" "$FLEET_HISTORY_LEDGER" 2>/dev/null; then',
+                                'if :; then')
+        p = subprocess.run(["bash", "-c", always, "t", str(self.ibin), self.label],
+                           env=dict(env, FLEET_ADMIT_MAKE_ROOM="0"), capture_output=True, text=True, timeout=60)
         self.assertIn("memory tight", p.stdout)
         self.assertIn("|rc=1", p.stdout)
+        self.assertNotIn("making room", p.stderr)
 
     def test_a_reopen_leaves_a_window_a_reaper_counts_down(self):
         now = int(time.time())
