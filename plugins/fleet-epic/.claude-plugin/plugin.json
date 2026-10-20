@@ -1,6 +1,6 @@
 {
   "name": "fleet-epic",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "claude-fleet EPIC batches: /fleet-epic-plan turns a theme into a confirmed batch — a parent hub task — and /fleet-epic-run drives its child tasks to done, /fleet-epic-report writes what it did — on one shared page frame. Its driver dispatches with the core's tools (issue #4334). Not installed by default (EPIC #3111).",
   "author": { "name": "verkyyi", "url": "https://github.com/verkyyi" },
   "homepage": "https://github.com/verkyyi/claude-fleet",

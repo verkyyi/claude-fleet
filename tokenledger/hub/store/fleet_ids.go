@@ -626,8 +626,20 @@ const IDFamilyMax = 200
 // that continued one of them down the `prev` chain (a member's redo, a
 // 「从这一段继续」 — EPIC T497 C5), oldest first, at most IDFamilyMax: an EPIC
 // driver's whole batch in one read. Only the owner's IDs.
+//
+// The parent is its whole line (EPIC T497 C18): it and every ID that continued
+// IT down `prev` (FleetIDLineage) — a driver's 「从这一段继续」 still owns what its
+// predecessor spawned, and what the successor spawns is the same batch. The line
+// itself is never in the answer.
 func (s *Store) FleetIDFamily(owner, parent string, seeds []string) ([]FleetIDRecord, error) {
-	seen := map[string]bool{parent: true}
+	line, err := s.FleetIDLineage(owner, parent)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, id := range line {
+		seen[id] = true
+	}
 	var order []string
 	var first []string
 	for _, id := range seeds {
@@ -643,7 +655,7 @@ func (s *Store) FleetIDFamily(owner, parent string, seeds []string) ([]FleetIDRe
 			}
 		}
 	}
-	frontier, col := []string{parent}, "parent"
+	frontier, col := line, "parent"
 	for len(frontier) > 0 && len(order) < IDFamilyMax {
 		next := first
 		first = nil
@@ -678,4 +690,30 @@ func (s *Store) FleetIDFamily(owner, parent string, seeds []string) ([]FleetIDRe
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].OpenedAt < out[j].OpenedAt })
 	return out, nil
+}
+
+// FleetIDLineage is id and every ID of the owner's that continued it down `prev`,
+// at any depth, oldest first (EPIC T497 C18) — at most IDFamilyMax.
+func (s *Store) FleetIDLineage(owner, id string) ([]string, error) {
+	line := []string{id}
+	seen := map[string]bool{id: true}
+	for i := 0; i < len(line) && len(line) < IDFamilyMax; i++ {
+		rows, err := s.read.Query(`SELECT id FROM fleet_ids WHERE owner = ? AND prev = ? ORDER BY opened_at, id`, owner, line[i])
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var x string
+			if err := rows.Scan(&x); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if !seen[x] && len(line) < IDFamilyMax {
+				seen[x] = true
+				line = append(line, x)
+			}
+		}
+		rows.Close()
+	}
+	return line, nil
 }

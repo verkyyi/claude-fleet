@@ -39,8 +39,14 @@ is its record's when the record has one, else its ID's newest result (merged /
 succeeded ⇒ succeeded, failed ⇒ failed), else — the ID closed with no result —
 `exited`, counted as a failure. A record with no worker_id (the ID switch
 dispatches records nobody claims — C14) is the family's ID opened on it (`task`),
-the newest down `prev` when several were. No family (no hub, an old hub, no IDs) ⇒ the
-records alone, as before.
+the newest down `prev` when several were. The driver is its whole LINE (C18): the
+parent's ID — else, a parent record nobody claims, the ID this machine opened for
+it (`task`) where its prev chain starts — and every ID that continued it down
+`prev` (a 「从这一段继续」 successor; `lineage` in the answer). A child record the
+hub does not file under the parent (a successor's dispatch carries
+parent_session only) is still a member when its ID's `parent` is on the line, and
+`last_tick` is the newest word down the line. No family (no hub, an old hub, no
+IDs) ⇒ the records alone, as before.
 
 Per member, off its batons:
   succeeded  one baton succeeded
@@ -56,7 +62,8 @@ this batch's member. A key behind a `T<n>` — `T542 C5`, `T542 C7、C8` (the pr
 holds over the keys that follow it, until other words or a `+` / `;`) — is the
 member of ANOTHER batch: released once that parent's child task titled `C5 · …`
 succeeded, waited on otherwise (`waits_on` names it `T542 C5`), never a node of
-this batch's graph and never let through by the cycle rule; a key behind `#<n>`
+this batch's graph and never let through by the cycle rule (each member's
+`outside` lists them with `done`, so a released one is said, not dropped); a key behind `#<n>`
 (a GitHub ticket) is the driver's to judge and ignored here. A dependency is
 released by its member's newest baton — by ID, not by which record it was (拍板 6).
 `next` is what to dispatch now: retries first, then unstarted core members in
@@ -152,6 +159,39 @@ def claimed_by(task, fam):
     prevs = {r.get("prev") for r in mine}
     tips = [r for r in mine if r["id"] not in prevs] or mine
     return max(tips, key=lambda r: r.get("opened_at") or 0)["id"]
+
+
+def task_root(ref):
+    """The ID this machine opened for the record `ref` where its line starts (an
+    unclaimed parent record — the ID switch, C14/C18); '' when none."""
+    sys.path.insert(0, str(BIN))
+    try:
+        import fleet_id
+        return fleet_id.task_root(ref)
+    except (ImportError, OSError, ValueError):
+        return ""
+    finally:
+        sys.path.pop(0)
+
+
+def adopted(rows, line, have):
+    """Child records the driver's LINE spawned that the hub does not file under the
+    parent (C18): an ID whose `parent` is any ID of the line, opened for a record
+    T<n> (its `task`) not among `have` — a 「从这一段继续」 successor's dispatches
+    carry parent_session only. Each record read once; an unreadable one skipped."""
+    out, seen = [], set(have)
+    for r in rows:
+        t = str(r.get("task") or "")
+        if r.get("parent") not in line or not TREF.match(t) or t in seen:
+            continue
+        seen.add(t)
+        try:
+            c = (record("get", t).get("task") or {})
+        except (Fail, OSError, subprocess.SubprocessError):
+            continue
+        if c.get("id") == t:
+            out.append(c)
+    return out
 
 
 def code_of(fid):
@@ -437,7 +477,15 @@ def status(parent_ref, cap):
     if not members:
         raise Fail(2, "%s's record has no charter member list (- [ ] **C1** …)" % parent_ref)
     kids = record("children", parent_ref)
-    children = sorted(kids.get("children") or [], key=lambda c: int(str(c.get("id", "T0"))[1:] or 0))
+    children = list(kids.get("children") or [])
+    # the parent's ID: its record's worker_id, else — a record the ID switch never
+    # claims — the ID this machine opened for it, where its line starts (C18)
+    pid = id_of(parent) or task_root(parent_ref)
+    fam = family_of(pid, [i for i in (id_of(c) for c in children) if i])
+    rows = [r for r in fam.get("ids") or [] if isinstance(r, dict) and FID.match(str(r.get("id", "")))]
+    line = [x for x in fam.get("lineage") or [pid] if x]
+    children += adopted(rows, line, {c.get("id") for c in children})
+    children = sorted(children, key=lambda c: int(str(c.get("id", "T0"))[1:] or 0))
     by_key = {}
     for c in children:
         k, t = child_key(c)
@@ -450,13 +498,14 @@ def status(parent_ref, cap):
             known.add(k)
             members.append(dict(key=k, title=t, repo=str(c.get("repo") or "").lower(), agent="",
                                 layer="added", detail=""))
-    pid = id_of(parent)
-    fam = family_of(pid, [i for i in (id_of(c) for c in children) if i])
-    rows = [r for r in fam.get("ids") or [] if isinstance(r, dict) and FID.match(str(r.get("id", "")))]
     for m in members:
         judge(m, by_key.get(m["key"], []), rows)
     deps, ext = parse_deps(text, members, parent_ref)
-    hold_on_deps(members, deps, ext, outside_done(ext))
+    ext_done = outside_done(ext)
+    hold_on_deps(members, deps, ext, ext_done)
+    for m in members:   # another batch's members it depends on, and whether each merged
+        if ext.get(m["key"]):
+            m["outside"] = [dict(ref="%s %s" % r, done=bool(ext_done.get(tuple(r)))) for r in ext[m["key"]]]
     if cap is None:
         try:
             cap = int(meta.get("cap", "4"))
@@ -479,7 +528,7 @@ def status(parent_ref, cap):
     last = str(progress.get("summary") or "")
     rep = REPORT_RE.search(last)
     pshort = str(fam.get("short") or code_of(pid)) if pid else ""
-    return dict(parent=parent_ref, parent_id=pid, parent_short=pshort, mark=pshort or parent_ref,
+    return dict(parent=parent_ref, parent_id=pid, parent_short=pshort, mark=pshort or parent_ref, lineage=line,
                 ids=fam.get("hub", "none") if pid else "none",
                 title=parent.get("title", ""), short=meta.get("short", ""), repo=meta.get("repo", ""),
                 outcome=parent.get("outcome", ""), cap=cap, running=running, free=free, counts=counts, done=done,

@@ -179,9 +179,14 @@ if [ "$cmd" = continue ] || [ "$cmd" = reopen ]; then
   else plan=$(python3 "$BIN/fleet_id.py" "$cmd" ${pargs[@]+"${pargs[@]}"}) || exit 1; fi
   [ "$ex" = 1 ] || { printf '%s\n' "$plan"; exit 0; }
   fields=$(printf '%s' "$plan" | python3 -c 'import json,sys; d=json.load(sys.stdin)
-print("\t".join(str(d.get(k) or "-") for k in ("id","native","agent","worktree","repo","title")))')
-  IFS=$'\t' read -r p_id p_native p_agent p_wt p_repo p_title <<< "$fields"
+print("\t".join(str(d.get(k) or "-") for k in ("id","native","agent","worktree","repo","task","parent","title")))')
+  IFS=$'\t' read -r p_id p_native p_agent p_wt p_repo p_task p_parent p_title <<< "$fields"
   rargs=(--resume "$p_native" --origin hub)
+  # C18: the ID it continues keeps its record and its parent — @task on the new
+  # window, `task` / `parent` in its ledger — so an EPIC driver's successor still
+  # finds (and is found by) its batch
+  [ "$p_task" = - ] || rargs+=(--id-task "$p_task")
+  [ "$p_parent" = - ] || rargs+=(--id-parent "$p_parent")
   [ "$p_agent" = codex ] && rargs+=(--agent codex)
   [ "$p_title" = - ] || rargs+=(--name "$p_title")
   if [ "$p_repo" != - ] && [ "$p_wt" != - ] && [ -d "$p_wt" ]; then rargs+=(--repo "$p_repo" --worktree "$p_wt")

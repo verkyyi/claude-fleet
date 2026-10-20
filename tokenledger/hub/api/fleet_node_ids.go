@@ -97,7 +97,12 @@ func (s *Server) handleNodeIDs(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"parent": parent, "ids": fam})
+		line, err := s.Store.FleetIDLineage(owner, parent)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"parent": parent, "lineage": line, "ids": fam})
 	case ref == "" && r.Method == http.MethodGet:
 		ids, err := s.Store.FleetIDsOf(owner, "")
 		if err != nil {

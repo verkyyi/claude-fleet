@@ -205,6 +205,17 @@ delay chosen from what you are actually waiting for.
 | slots free, work queued | as soon as the dispatches settle |
 | every slot running | 10–20 min (a `[child-report]` wakes you sooner) |
 | every account at its ceiling, or the hub silent | 20–30 min |
+| nothing due — every member left waits on another batch (`T542 C5`), a fix outside the batch, or a person | 20–30 min — **still a wakeup** |
+
+**Waiting is a tick too: every tick that does not close the run ends by arming the
+next wakeup** (`ScheduleWakeup`, the same `/loop` prompt), even when nothing is due
+and nothing runs (EPIC T497 C18). This window is `reap: loop-end`: a turn that ends
+with no wakeup armed IS the loop's end, and the fleet closes the window — on
+10-20 T580's driver waited on T497 C16 that way and was reaped mid-batch. There is
+no «pause and wait to be told»: the only turn without a wakeup is §4.5's last call.
+If a successor window continues this one (`fleet-id.sh continue`), it is the same
+driver — it carries the parent `@task`, and the tick reads what any ID of the line
+dispatched as the batch's (`lineage` in the status).
 
 ## 4. Stop — the report is the last tick, not a handoff
 

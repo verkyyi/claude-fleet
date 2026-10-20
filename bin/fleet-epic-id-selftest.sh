@@ -29,6 +29,11 @@
 #      record with no worker_id is the family's ID opened on it (`task`) — merged
 #      there ⇒ the member succeeded with that ID, the newest of two down `prev`;
 #      a record no ID was opened on stays running.
+#   I. the driver continued (EPIC T497 C18): an unclaimed parent's ID is the one
+#      opened for it; a 「从这一段继续」 successor (prev = it) dispatches a child
+#      whose record names no parent_task — still the batch's member (its ID's
+#      parent is on the driver's line), never re-sent; the newest progress word
+#      is the successor's; the line's IDs are never members.
 # Hermetic: a sandbox FLEET_CONF_DIR, no tmux, no network, gh denied.
 set -uo pipefail
 
@@ -270,6 +275,40 @@ hub_id "{\"id\":\"$ID_G\",\"short\":\"T-c4bbb\",\"parent\":\"$DRV\",\"task\":\"$
 S=$(tick)
 eq "H: two IDs on one record: the newest down prev carries it" "succeeded 14 T-c4bbb" "$(mem C4 '["state"]') $(mem C4 '["pr"]') $(mem C4 '["short"]')"
 has "H: the line counts both" "$(tick --line)" "合 4"
+
+# --- I. the driver continued (C18): its successor's dispatches are the batch's ---
+# The parent record nobody claims (the ID switch); the driver's ID was opened for
+# it; it closes, a 「从这一段继续」 opens a new ID (prev = it, the same record), and
+# that one dispatches C1 with parent_session only — no parent_task on the record.
+cat > "$WORK/charter2" <<'EOF'
+<!-- fleet:epic repo=o/r short=接续 cap=2 -->
+- [ ] **C1** 接续后派的
+- [ ] **C2** 还没派的
+EOF
+P=$(STUB_UNCLAIMED=1 bash "$BIN/fleet-task-record.sh" dispatch --title "EPIC: 接续" --body-file "$WORK/charter2")
+DRV1=aaaaaaaa-1111-4000-8000-0000000000a1 DRV2=aaaaaaaa-2222-4000-8000-0000000000a2
+bash "$BIN/fleet-id.sh" open "$DRV1" --title "EPIC: 接续" --task "$P" >/dev/null
+bash "$BIN/fleet-id.sh" progress "$DRV1" --summary "tick 1 · report: -" >/dev/null
+bash "$BIN/fleet-id.sh" close "$DRV1" --reason reaped >/dev/null
+S=$(tick)
+eq "I: the unclaimed parent's ID is the one opened for it" "$DRV1 unstarted" "$(printf '%s' "$S" | jq_ 'd["parent_id"]') $(mem C1 '["state"]')"
+bash "$BIN/fleet-id.sh" open "$DRV2" --title "EPIC: 接续" --task "$P" --prev "$DRV1" >/dev/null
+printf 'x' > "$WORK/body"   # the task tool from the successor: no STUB_PARENT
+T_X=$(STUB_UNCLAIMED=1 bash "$BIN/fleet-task-record.sh" dispatch --title "C1 · 接续后派的" --repo o/r --body-file "$WORK/body")
+eq "I: the successor's child record names no parent" "" \
+  "$(python3 -c 'import json,os,sys; print(json.load(open(os.environ["STUB_STATE"]))["tasks"][sys.argv[1]]["parent_task"])' "$T_X")"
+ID_X=bbbbbbbb-0000-4000-8000-0000000000b1
+bash "$BIN/fleet-id.sh" open "$ID_X" --parent "$DRV2" --task "$T_X" --title "C1 · 接续后派的" >/dev/null
+bash "$BIN/fleet-id.sh" progress "$DRV2" --summary "tick 2 · 派 C1 · report: -" >/dev/null
+S=$(tick)
+eq "I: the driver is its whole line" "$DRV1 $DRV2" "$(printf '%s' "$S" | jq_ '" ".join(d["lineage"])')"
+eq "I: C1 is the successor's dispatch, running" "running $T_X $ID_X" "$(mem C1 '["state"]') $(mem C1 '["task"]') $(mem C1 '["id"]')"
+eq "I: so it is not sent again — C2 is" "C2" "$(printf '%s' "$S" | jq_ '" ".join(n["key"] for n in d["next"])')"
+eq "I: the newest progress word down the line" "tick 2 · 派 C1 · report: - id" "$(printf '%s' "$S" | jq_ 'd["last_tick"]+" "+d["last_tick_src"]')"
+eq "I: the line's IDs are never members" "1" "$(mem C1 '["ids"].__len__()')"
+bash "$BIN/fleet-id.sh" result "$ID_X" --state merged --pr 21 >/dev/null
+S=$(tick)
+eq "I: and it merges by its ID" "succeeded 21" "$(mem C1 '["state"]') $(mem C1 '["pr"]')"
 
 [ -e "$WORK/denied" ] && bad "gh ran: $(cat "$WORK/denied")" || ok
 [ "$BAD" = 0 ] && { printf 'fleet-epic-id-selftest: %d checks OK (a two-member batch by ID, one redone; unclaimed records)\n' "$N"; exit 0; }

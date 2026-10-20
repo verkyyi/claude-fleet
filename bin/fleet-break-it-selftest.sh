@@ -143,6 +143,8 @@
 #                                                   (the ID switch: ids/.switch, exit 5 → the ID road)
 #   epic-member-dead-record                         bin/fleet-epic-tick.py (a member by its ID chain:
 #                                                   batons_of, fleet-id.sh family)
+#   epic-driver-continued                           bin/fleet-epic-tick.py + bin/fleet_id.py (the driver's
+#                                                   line: lineage_of, task_root, adopted — C18)
 #   launch-binary-renamed                           bin/fleet_launch.py (same_executable / native_tool:
 #                                                   a hard-linked binary is one file, T524)
 #   launch-preswitch-reopen                         bin/fleet_launch.py (by_id_admit: a pre-switch @launch
@@ -6003,6 +6005,34 @@ PY
   [ "$out" = "retry succeeded T-bbbbb 9" ] \
     || { WHY="a dead member read [$out], want «retry succeeded T-bbbbb 9» (its closed ID a failure, its continuation the newest baton)"; return 1; }
   WHAT="成员窗口关了没结果、记录还开着：按 ID 读成失败可重试；手动续上的新 ID 被认作它的最新一棒"
+}
+
+# An EPIC driver reaped mid-batch and continued (C18): the successor is a new ID
+# (prev = the driver) whose dispatches carry parent_session only. The batch still
+# reads them as its members — the driver is its whole line.
+drill_epic_driver_continued() {
+  CAP=10; local t0 out
+  t0=$(now)
+  out=$(python3 - "$BIN" <<'PY'
+import importlib.util, sys
+sys.path.insert(0, sys.argv[1])
+import fleet_id
+spec = importlib.util.spec_from_file_location("tick", sys.argv[1] + "/fleet-epic-tick.py")
+tick = importlib.util.module_from_spec(spec); spec.loader.exec_module(tick)
+d1, d2, c = "aaaaaaaa-0000-4000-8000-0000000000a1", "aaaaaaaa-0000-4000-8000-0000000000a2", "cccccccc-0000-4000-8000-00000000000c"
+idx = {d1: {"opened": {"task": "T580", "prev": "", "ts": 1}}, d2: {"opened": {"task": "T580", "prev": d1, "ts": 2}},
+       c: {"opened": {"task": "T585", "parent": d2, "ts": 3}}}
+line = fleet_id.lineage_of(d1, idx)
+root = fleet_id.task_root("T580", idx)
+tick.record = lambda *a: {"task": {"id": a[1], "title": "C1 · x", "outcome": ""}}
+kids = tick.adopted([dict(id=c, parent=d2, task="T585")], line, set())
+print(len(line), root == d1, " ".join(k["id"] for k in kids))
+PY
+)
+  SECS=$(since "$t0")
+  [ "$out" = "2 True T585" ] \
+    || { WHY="a continued driver's batch read [$out], want «2 True T585» (the line of two, rooted at the record's first ID, the successor's dispatch adopted)"; return 1; }
+  WHAT="驱动被回收后 continue 出新 ID：父 = 整条 prev 线，接班窗口派的子记录（只带 parent_session）仍认作本批成员"
 }
 
 # A version switch renames every running Claude (T524): one release binary is
