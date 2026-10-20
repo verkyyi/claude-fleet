@@ -24,7 +24,7 @@ is what the sidebar and the entry (the hub's overview) read it through:
   redeliver --to <ID> [--since <epoch>] [--apply]
                      hand the unread rows filed since <epoch> (default: today's
                      local midnight) to the live session <ID> (fleet-peer-send.sh
-                     fid:<ID>), one envelope each, and mark each delivered one read
+                     wid:<ID>), one envelope each, and mark each delivered one read
                      and `redelivered` (global/orphan-reports.redelivered) so it is
                      never sent twice. Without --apply: list only (T660)
   clear --before <epoch> [--apply]
@@ -265,7 +265,7 @@ def main(argv):
             send = os.environ.get("FLEET_ORPHAN_SEND") or os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                                                        "fleet-peer-send.sh")
             try:
-                ok = subprocess.run(["bash", send, "fid:" + to, envelope(r)], stdin=subprocess.DEVNULL,
+                ok = subprocess.run(["bash", send, "wid:" + to, envelope(r)], stdin=subprocess.DEVNULL,
                                     capture_output=True, text=True, timeout=60).returncode == 0
             except (OSError, subprocess.TimeoutExpired):
                 ok = False

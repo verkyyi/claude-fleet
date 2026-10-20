@@ -89,7 +89,7 @@ case "$OUT" in *issue-42*) bad "G: an older row is not redelivered" ;; *) ok ;; 
 eq "G: …and sends nothing" no "$([ -e "$WORK/sent" ] && echo yes || echo no)"
 FLEET_ORPHAN_SEND="$WORK/send.sh" f redeliver --to "$TO" --since $((NOW - 10)) --apply
 has "G: --apply delivers" "$OUT" "redelivered"
-has "G: …to the ID" "$(cat "$WORK/sent")" "fid:$TO"
+has "G: …to the ID" "$(cat "$WORK/sent")" "wid:$TO"
 has "G: …as a child-report envelope" "$(cat "$WORK/sent")" "[child-report] scratch-9"
 FLEET_ORPHAN_SEND="$WORK/send.sh" f redeliver --to "$TO" --since $((NOW - 10)) --apply
 eq "G: never twice" 1 "$(grep -c 'child-report' "$WORK/sent")"
