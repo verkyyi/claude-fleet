@@ -207,6 +207,17 @@ watch_fleet() { (
   # still parses (6 columns) across the land→sync window.
   cur=$(fleet_state_dir "$sess")/.ledgerwatch.$$.snap
   cur_keys=$'\n'
+  # A pass that died mid-way (its lease went stale and was stolen — killed, or a
+  # hung read) left its half-built snapshot behind, one a pass: 260 of them on one
+  # login (T695). Each is swept once its writer is gone; ours goes with us.
+  for _old in "${cur%/*}"/.ledgerwatch.*.snap; do
+    [ -f "$_old" ] || continue
+    _pid=${_old##*/.ledgerwatch.}; _pid=${_pid%.snap}
+    case "$_pid" in ''|*[!0-9]*) continue ;; esac
+    [ "$_pid" = "$$" ] || kill -0 "$_pid" 2>/dev/null || rm -f "$_old"
+  done
+  if [ "$DRY" = 0 ]; then trap 'rm -f "$cur" "$cur.err"; lease_release "$lease" "$me"' EXIT
+  else trap 'rm -f "$cur" "$cur.err"' EXIT; fi
   # Repo-qualified keys, however many repos the fleet hosts (issues #790, #1941):
   # two repos can both have a #12 (and a scratch-3), so the snapshot key is
   # `<owner/name>#<key>` and a vanished row is recorded into ITS repo's ledger. A
@@ -280,15 +291,20 @@ EOF
       # worktree's HEAD sha, so the row survives a later reap) from the worktree,
       # dedups (idempotent); a window with no transcript (a Codex worker, #547) is
       # recorded transcript-less rather than skipped.
-      tok=$(bash "$BIN/fleet-history.sh" record-closed \
+      tok=$(bash "$BIN/fleet-history.sh" record-closed 2>"$cur.err" \
               --repo "$p_repo" --session "$sess" --key "$p_key" \
               --worktree "$p_wt" --win "$p_wid" \
               --title "$p_title" --summary "$p_smry" \
               --agent "${p_agent:-claude}" --launcher-pid "${p_owner:-}" --agent-identity "${p_identity:-}" \
-              --origin "${p_origin:-}" ${p_task:+--task "$p_task" --task-line "${p_tline:-}"} 2>/dev/null)
+              --origin "${p_origin:-}" ${p_task:+--task "$p_task" --task-line "${p_tline:-}"})
+      rcrc=$?
+      # nothing on stdout: say what it said on stderr and how it ended (T695 —
+      # «record-closed: no output» alone told nobody why scratch-34 was not recorded)
+      [ -n "$tok" ] || tok="record-closed: no output (rc $rcrc$(head -n 1 "$cur.err" 2>/dev/null | cut -c1-200 | sed 's/^/: /'))"
+      rm -f "$cur.err"
       case "$tok" in
         closed-unlanded*) log "$sess: $tok"; recorded=$((recorded + 1)) ;;
-        *)                log "$sess: $lbl — ${tok:-record-closed: no output}" ;;
+        *)                log "$sess: $lbl — $tok" ;;
       esac
     done < <(tr '\t' '\037' < "$snap")
   fi

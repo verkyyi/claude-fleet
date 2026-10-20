@@ -153,6 +153,9 @@
 #   done-window-lingers                             bin/fleet-cleanup-idle.py (id_over, --only/--grace),
 #                                                   fleet-cleanup-idle.sh --now, fleet_reap_soon (fleet-lib.sh)
 #   stop-no-exit-hangs                              bin/fleet-worker-stop.sh (stopped:forced, fleet_kill_tree)
+#   admit-tight-done-windows                        fleet_session_cap_ok / fleet_admit_make_room (fleet-lib.sh),
+#                                                   fleet-cleanup-idle.sh --make-room, fleet-cleanup-idle.py --plan-room/--fold
+#   reopen-folding-session                          fleet_cfg_restart_why (fleet-lib.sh: @reap_due / @reap_seen)
 #   report-parent-cleared                           bin/fleet-report-parent.sh + fleet_task_control.py receive
 #                                                   (the parent by its ID: fleet_id_take, fleet-id.sh route)
 #   id-switch-flip-report                           bin/fleet-report-parent.sh + fleet_task_control.py report
@@ -5817,6 +5820,36 @@ drill_stop_no_exit_hangs() {
   [ -n "$p" ] && kill -0 "$p" 2>/dev/null && { WHY="agent pid $p survived the forced stop"; return 1; }
   grep -q 'issue-12\|	12	' "$d/ledger.tsv" 2>/dev/null || { WHY="no history row for the forced stop"; return 1; }
   WHAT="/exit 不生效的会话：结束 agent 进程树（TERM → 宽限 → KILL），记历史、关窗，回 stopped:forced"
+}
+
+# Memory refused a new session while finished windows held it (T695: three
+# refusals in a day on one Mac, done windows of ~320 MB each still open). Now a
+# memory refusal folds first — the done ones, then the longest idle; history kept,
+# resumable, the worktree untouched — and asks again; a folded session comes back
+# with its own conversation, Claude or Codex.
+drill_admit_tight_done_windows() {
+  CAP=120; local t0 d="$WORK/atdw"
+  mkdir -p "$d"; t0=$(now)
+  python3 "$BIN/fleet-make-room-selftest.py" "$BIN" \
+    MakeRoom.test_a_memory_refusal_folds_first_then_admits \
+    MakeRoom.test_done_ones_go_before_the_longest_idle_and_it_stops_at_enough \
+    MakeRoom.test_an_idle_session_is_folded_and_comes_back_with_its_conversation >"$d/out" 2>&1 \
+    || { WHY="a memory refusal still keeps the finished windows: $(grep -E '^(FAIL|ERROR|AssertionError)' "$d/out" | head -2 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="内存紧要拒开新会话前先收起：做完的先、闲置最久的后（留历史、留工作树、回车原样恢复），再判一次"
+}
+
+# A session idle and about to be folded was reopened by every release instead
+# (T695: one design page waiting on a nod reopened 10 times in a day, a whole
+# turn each) — the reopen restarted the idle clock that folds it.
+drill_reopen_folding_session() {
+  CAP=60; local t0 d="$WORK/rfs"
+  mkdir -p "$d"; t0=$(now)
+  python3 "$BIN/fleet-make-room-selftest.py" "$BIN" \
+    MakeRoom.test_a_reopen_leaves_a_window_a_reaper_counts_down >"$d/out" 2>&1 \
+    || { WHY="a release still reopens a window a reaper counts down: $(grep -E '^(FAIL|ERROR|AssertionError)' "$d/out" | head -2 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="回收正在倒计时的闲置会话（@reap_due 新鲜）换版不重开；倒计时停了、被拦下（hold）照旧"
 }
 
 # A stop sent over ssh / the peerlink runs with a bare PATH (/usr/bin:/bin): no tmux
