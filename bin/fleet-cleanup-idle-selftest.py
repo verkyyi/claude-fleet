@@ -2,7 +2,7 @@
 # selftest-parts: 4
 # selftest-part: 4 DoneNoPr.test_driver_scratch_closes_once_its_epic_is_closed DoneNoPr.test_recent_is_kept_and_said_once EmptyReap.test_closes_only_a_session_never_typed_into HomeReap.test_spawned_norepo_closes_on_its_policy_after_a_finished_turn
 # selftest-part: 5 PinIsOrder.test_a_pin_set_later_keeps_nothing PolicyGrammar.test_norm_default_label ReapPolicy.test_keep_and_merged_are_never_this_pass StuckReaps.test_the_agents_finished_word_outranks_a_looping_stamp
-# selftest-part: 6 TestIdentity.test_closes_a_test_session_past_its_policy_and_nothing_else
+# selftest-part: 6 TaskSession.test_other_policy_or_no_flow_takes_the_ordinary_roads
 # selftest-part: 7 RoundTrip.test_codex_unknown_or_active_native_turn_is_kept
 # selftest-part: 8 RoundTrip.test_real_close_and_restore
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
@@ -1136,6 +1136,53 @@ class TaskSession(Rig):
         self.assertFalse(self.exists())
         self.assertTrue(self.wt.is_dir())
         self.assertIn("task T42 is closed", (self.root / "ledger.tsv").read_text())
+
+    def test_a_reopen_in_flight_holds_the_close_and_its_new_window_is_reaped(self):
+        """claude-fleet T569: a ver-stale reopen (fleet-migrate.sh --cfg-stale)
+        and this close raced on T477 — the reaper closed the old window 12 s into
+        the reopen, the reopen opened a new one anyway, and nothing closed THAT.
+        A reopen in flight (@migrating, or the worktree's transition lock) holds
+        the close; the window it opens is reaped on its own (by window, never «T42
+        was reaped once»)."""
+        self.answer.write_text("0\n")
+        self.set("@migrating", "ver-stale")
+        out = self.due()
+        self.assertIn("skip:migrating " + self.win, out)
+        self.assertNotIn("reaped", out)
+        self.assertTrue(self.exists())
+        self.tm("set-option", "-wu", "-t", self.win, "@migrating")
+        lock = Path(self.call("bash", "-c", '. "$1/fleet-lib.sh"; fleet_rotate_lease_file "$2"', "t",
+                              str(BIN), str(self.wt)).strip() + ".transfer-lock")
+        self.call("bash", "-c", '. "$1/fleet-lib.sh"; fleet_transition_lock_take "$2"', "t", str(BIN), str(self.wt))
+        self.assertTrue(lock.is_dir())
+        out = self.due()
+        self.assertIn("skip:transition " + self.win, out)
+        self.assertTrue(self.exists())
+        self.assertTrue(lock.is_dir())                   # another's lock: never dropped here
+        shutil.rmtree(lock)
+        # the reopen's outcome: the old window gone, a NEW one on the same session
+        opts = {k: self.tm("display-message", "-p", "-t", self.win, "#{" + k + "}").strip()
+                for k in ("@raw", "@worktree", "@cc_agent", "@task", "@task_flow", "@reap_policy")}
+        subprocess.run(["tmux", "-L", self.label, "kill-window", "-t", self.win], check=True, timeout=20,
+                       env=dict(self.env, FLEET_ALLOW_TMUX_DESTROY="1"))   # the reopen's /exit
+        self.win = self.tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", self.label,
+                           "-c", str(self.wt), "sleep 90").strip()
+        for k, v in dict(opts, **{"@claude_state": "done",
+                                  "@claude_state_ts": str(int(time.time()) - 4000)}).items():
+            self.set(k, v)
+        out = self.due()
+        self.assertIn("reaped-task:" + self.win + " T42", out)
+        self.assertFalse(self.exists())
+        self.assertFalse(lock.exists())                  # its own lock: dropped after the close
+        # …and a second reopened window after that close is reaped too
+        self.win = self.tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", self.label,
+                           "-c", str(self.wt), "sleep 90").strip()
+        for k, v in dict(opts, **{"@claude_state": "done",
+                                  "@claude_state_ts": str(int(time.time()) - 4000)}).items():
+            self.set(k, v)
+        out = self.due()
+        self.assertIn("reaped-task:" + self.win + " T42", out)
+        self.assertFalse(self.exists())
 
     def test_other_policy_or_no_flow_takes_the_ordinary_roads(self):
         self.answer.write_text("1\n")

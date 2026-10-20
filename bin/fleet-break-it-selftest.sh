@@ -134,6 +134,8 @@
 #                                                   fleet_hub_common.py orphan_rep_cell
 #   reap-other-repo-clears / reap-stale-stamp       bin/fleet-cleanup-idle.py, fleet_reap_notice.py, fleet-reap-live.py
 #   reap-reopen-restarts-clock                      fleet_cfg_restart_why (fleet-lib.sh), fleet-cfg-restart.sh
+#   reopen-reap-race                                fleet_cfg_restart_why / fleet_cfg_work_over (fleet-lib.sh),
+#                                                   bin/fleet-cleanup-idle.py (close: @migrating + the transition lock)
 #   stop-bare-path                                  bin/fleet-worker-stop.sh (fleet_path_fill)
 #   report-parent-cleared                           bin/fleet-report-parent.sh + fleet_task_control.py receive
 #                                                   (the parent by its ID: fleet_id_take, fleet-id.sh route)
@@ -5842,6 +5844,34 @@ drill_reap_reopen_restarts_clock() {
   "$REAL_TMUX" -S "$sock" kill-server 2>/dev/null
   [ "$why" = reap ] || { WHY="cfg-restart would reopen a finished session on a closed ticket: [$why], want reap"; return 1; }
   WHAT="单已关、做完了的会话不再被换版重开：两小时的「单已关才收」从它最后一轮算起，到点就收"
+}
+
+# A ver-stale reopen brought back a session whose work was over (T477 / T372, T569):
+# its task record succeeded, the reaper closed the old window 12 s into the reopen,
+# and the window the reopen then opened was nobody's to close.
+drill_reopen_reap_race() {
+  CAP=40; local t0 d sock w why
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  d="$WORK/rrr"; sock="$d/s"; mkdir -p "$d/conf/global" "$d/conf/fleets/rrr"
+  : > "$d/conf/fleets/rrr/conf"; fx_repo "$d/conf" rrr acme/app
+  printf 'claude fp-new x\n' > "$d/conf/global/agent-cfg.expected"
+  printf '#!/bin/sh\n[ "$1" = T477 ] && { echo SUCCEEDED; exit 0; }\nexit 3\n' > "$d/closed"; chmod +x "$d/closed"
+  "$REAL_TMUX" -S "$sock" -f /dev/null new-session -d -s rrr -n w 'sleep 120' \
+    || { WHY="cannot start the isolated tmux server"; return 1; }
+  w=$("$REAL_TMUX" -S "$sock" display-message -p -t rrr:w '#{window_id}')
+  "$REAL_TMUX" -S "$sock" set-option -w -t "$w" @agent_cfg fp-old \; set-option -w -t "$w" @cc_agent claude \; \
+    set-option -w -t "$w" @claude_state 'done' \; set-option -w -t "$w" @claude_state_ts 1 \; \
+    set-option -w -t "$w" @task T477 \; set-option -w -t "$w" @reap_policy merged
+  t0=$(now)
+  why=$(env TMUX="$sock,1,0" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_TASK_CLOSED_CMD="$d/closed" \
+          bash -c '. "$1/fleet-lib.sh"; fleet_cfg_restart_why rrr "$2"' _ "$BIN" "$w" 2>/dev/null)
+  "$REAL_TMUX" -S "$sock" kill-server 2>/dev/null
+  [ "$why" = reap ] || { WHY="cfg-restart would reopen a session whose task succeeded: [$why], want reap"; return 1; }
+  python3 "$BIN/fleet-cleanup-idle-selftest.py" "$BIN" \
+    TaskSession.test_a_reopen_in_flight_holds_the_close_and_its_new_window_is_reaped >"$d/race.out" 2>&1 \
+    || { WHY="the reaper still races a reopen: $(grep -E '^(FAIL|AssertionError)' "$d/race.out" | head -2 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="做完的会话（任务已收口 / ID 有结果）不再被换版重开；重开进行中回收不动它，重开出来的窗口按窗口照收"
 }
 
 # A stop sent over ssh / the peerlink runs with a bare PATH (/usr/bin:/bin): no tmux

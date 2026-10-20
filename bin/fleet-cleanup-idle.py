@@ -102,7 +102,7 @@ class Cleaner:
                  "@reap_policy", "@loop", "@wrap_gone", "pane_dead",
                  "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
                  "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted", "@agent_status",
-                 "@task", "@task_flow")
+                 "@task", "@task_flow", "@migrating")
         # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
         # window, every window, every tick — ~600 a minute on a busy login. A
         # value carrying the separator (never seen) falls back to a call per name.
@@ -198,6 +198,63 @@ class Cleaner:
         if kind == "loop-end":
             return stamp + fleet_reap_policy.LOOP_END_GRACE
         return val  # at
+
+    def transition(self, wt):
+        """Take the worktree's transition lock (fleet_transition_lock_take's
+        mkdir, claude-fleet T569): a reopen (fleet-migrate.sh holds it from its
+        pick to its new window) and this close never run at once — T477's old
+        window was closed here mid-reopen, and the window the reopen then opened
+        was nobody's. The lock dir on success (drop with untransition), None
+        when another transition owns it."""
+        if not wt:
+            return ""
+        try:
+            base = run("bash", "-c", '. "$1/fleet-lib.sh"; fleet_rotate_lease_file "$2"',
+                       "idle-lock", str(BIN), wt)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        if not base:
+            return ""
+        lock = Path(base + ".transfer-lock")
+        try:
+            lock.mkdir()
+        except FileExistsError:
+            return None
+        except OSError:
+            return ""
+        (lock / "pid").write_text("%d\n" % os.getpid())
+        return str(lock)
+
+    @staticmethod
+    def untransition(lock):
+        if not lock:
+            return
+        try:
+            if (Path(lock) / "pid").read_text().strip() == str(os.getpid()) and not (Path(lock) / "request").exists():
+                (Path(lock) / "pid").unlink()
+                Path(lock).rmdir()
+        except OSError:
+            pass
+
+    def close(self, window, snap, recheck):
+        """The one kill-window of a worktree session: under its transition lock,
+        never while a reopen marks it (@migrating), and only once <recheck>()
+        still holds — rc False when any of them says no (nothing closed)."""
+        if snap["@migrating"]:
+            self.say(window, "skip:migrating", snap["@migrating"])
+            return False
+        lock = self.transition(snap["@worktree"])
+        if lock is None:
+            self.say(window, "skip:transition")
+            return False
+        try:
+            if self.snapshot(window) != snap or not recheck():
+                return False
+            self.retire(window)
+            self.tm("kill-window", "-t", window)
+            return True
+        finally:
+            self.untransition(lock)
 
     def eligible(self, window, snap, task=False):
         pol = self.policy(snap)
@@ -482,14 +539,10 @@ class Cleaner:
             return False
         # A stopped turn that restarted, changed account/session or moved to a
         # different checkout must not inherit the old permission to close.
-        if self.snapshot(window) != snap or not self.eligible(window, snap):
+        if not self.close(window, snap, lambda: self.eligible(window, snap)
+                          and not (pol is not None and self.busy(window, snap))  # re-checked right before the close
+                          and run("git", "-C", wt, "rev-parse", "HEAD") == head):
             return False
-        if pol is not None and self.busy(window, snap):
-            return False  # re-checked right before the close
-        if run("git", "-C", wt, "rev-parse", "HEAD") != head:
-            return False
-        self.retire(window)
-        self.tm("kill-window", "-t", window)
         print("reaped-idle:" + window + ("" if pol is None else " policy=" + snap["@reap_policy"]))
         return True
 
@@ -559,10 +612,8 @@ class Cleaner:
         if len(resume) < 4 or resume[0] not in ("RESUME", "CODEX-RESUME") or resume[1] != wt:
             self.say(window, "skip:no-resume", key + " " + (resume[0] if resume else "?"))
             return False
-        if self.snapshot(window) != snap or self.busy(window, snap):
+        if not self.close(window, snap, lambda: not self.busy(window, snap)):
             return False  # re-checked right before the close
-        self.retire(window)
-        self.tm("kill-window", "-t", window)
         print("reaped-task:" + window + " " + task)
         return True
 
@@ -731,12 +782,9 @@ class Cleaner:
                 return False
         # Re-checked right before the close: a turn that restarted, moved or
         # committed since the first look has not earned this close.
-        if self.snapshot(window) != snap or self.busy(window, snap):
+        if not self.close(window, snap, lambda: not self.busy(window, snap)
+                          and not (present and run("git", "-C", wt, "rev-parse", "HEAD") != head)):
             return False
-        if present and run("git", "-C", wt, "rev-parse", "HEAD") != head:
-            return False
-        self.retire(window)
-        self.tm("kill-window", "-t", window)
         if not present:
             fate = "worktree=gone"
         elif dirty or run("git", "-C", wt, "status", "--porcelain"):
