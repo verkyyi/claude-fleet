@@ -26,6 +26,11 @@
 #      and the agent's pending-id option names the thread a resume was opened for
 #   F  the credential proxy refuses alike: 404 ⇒ @launch_refused cred_unknown, any
 #      other failure ⇒ cred — exit 1, the agent never runs
+#   G  the mint starts early (T683, a cold start ≤ 5 s): it runs beside the composed
+#      configuration (it sees the composer's manifest appear while it is still
+#      minting), its credential reaches the agent, its --wrap is the launcher (the
+#      pid the agent runs as / under), fd 7 is not left to the agent — and
+#      FLEET_LAUNCH_EARLY=0 mints in place with the same result; both agents
 #
 # Hermetic: a temp install root (every bin/ file a symlink, the real conf/ hooks/
 # commands/ mod/), a temp HOME and FLEET_CONF_DIR, fake claude / codex / tmux.
@@ -99,6 +104,9 @@ for a in claude codex; do
 case "\$1" in debug|--version|plugin|mcp) printf '%s\n' "\$*" >> "$WORK/calls.$a"; exit 0 ;; esac
 printf '%s\n' "\$*" >> "$WORK/calls.$a"
 for x in "\$@"; do printf '[%s]\n' "\$x"; done > "$WORK/argv.$a"
+{ env | grep -E '^(CLAUDE_CODE_OAUTH_TOKEN|FLEET_CODEX_SESSION_CRED)='
+  printf 'pid=%s ppid=%s\n' "\$\$" "\$PPID"
+  if (exec 0<&7) 2>/dev/null; then echo fd7=open; else echo fd7=closed; fi; } > "$WORK/env.$a"
 EOF
   chmod +x "$WORK/fake/$a"
 done
@@ -217,5 +225,37 @@ for rc in 5 1; do
   done
 done
 ok "F a refused session credential: exit 1, @launch_refused cred / cred_unknown, the agent never runs — both agents"
+
+# ---- G: the mint starts early ------------------------------------------------------------------
+cat > "$INST/bin/fleet-session-cred.sh" <<EOF
+#!/bin/sh
+case "\$1" in
+  mint) printf '%s\n' "\${FLEET_SESSION_WRAP:-}" > "$WORK/mint.wrap"
+        i=0; while [ \$i -lt 60 ]; do   # up to 6 s for the composer's manifest
+          ls "$WORK/cfg/agentcfg/"*.json >/dev/null 2>&1 && { echo saw > "$WORK/mint.beside"; break; }
+          sleep 0.1; i=\$((i + 1)); done
+        printf 'direct\t4321\tfcp1.selftest\n' ;;
+  codex-home) mkdir -p "$WORK/chome"; printf '%s\n' "$WORK/chome" ;;
+  standing) exit 0 ;;
+esac
+EOF
+chmod +x "$INST/bin/fleet-session-cred.sh"
+for early in 1 0; do
+  for a in $AGENTS; do
+    fresh; rm -f "${WORK:?}/mint.wrap" "${WORK:?}/mint.beside" "${WORK:?}/env.$a"
+    launch FLEET_CRED_SID=sid-test FLEET_LAUNCH_EARLY=$early -- --agent "$a" x
+    [ "$(cat "$WORK/rc")" = 0 ] && [ -s "$WORK/argv.$a" ] || fail "G $a early=$early: the launch failed" "$(cat "$WORK/err")"
+    grep -qE '^(CLAUDE_CODE_OAUTH_TOKEN|FLEET_CODEX_SESSION_CRED)=fcp1\.selftest$' "$WORK/env.$a" \
+      || fail "G $a early=$early: the minted credential did not reach the agent" "$(cat "$WORK/env.$a")"
+    grep -qx fd7=closed "$WORK/env.$a" || fail "G $a early=$early: the agent inherited fd 7" "$(cat "$WORK/env.$a")"
+    if [ "$early" = 1 ]; then   # (in place, the script's own $PPID default names it, as ever)
+      w=$(cat "$WORK/mint.wrap" 2>/dev/null)
+      [ -n "$w" ] && grep -qE "^pid=$w |ppid=$w\$" "$WORK/env.$a" \
+        || fail "G $a: the early mint's --wrap [$w] is not the launcher" "$(cat "$WORK/env.$a")"
+      [ -s "$WORK/mint.beside" ] || fail "G $a: the mint did not run beside the composed configuration"
+    fi
+  done
+done
+ok "G the mint runs beside the launch (credential to the agent, --wrap the launcher, no fd 7); FLEET_LAUNCH_EARLY=0 the same — both agents"
 
 printf 'fleet-launch-lib selftest OK: %s checks (T620, EPIC T580 C4)\n' "$pass"
