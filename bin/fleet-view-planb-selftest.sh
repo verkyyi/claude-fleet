@@ -9,7 +9,7 @@
 #      is Claude, another machine's 未知); the repo is the row's own field 24, not
 #      its heading's (a pinned or no-repo row: blank)
 #   C  the six glyphs + lost (one cell each, no emoji form), exited ⇒ ◌ under
-#      已结束 · 还开着 only, an old `sleeping` ⇒ ∙ (☾ went with T548); the legend lists all seven
+#      等你 (回收 D, T681: ↵ resume · r new · q close), an old `sleeping` ⇒ ∙ (☾ went with T548); the legend lists all seven
 #   D  paint: glyph(1) · ID(8, bold) · Agent(7) · name · repo(13); the repo column
 #      is kept blank; only ! and ✗ are coloured (red + bold); 未知 is dim; a long
 #      name is cut at its punctuation; no tag, issue or PR on the row
@@ -108,8 +108,8 @@ sym = {t: e["sym"] for t, e in by.items()}
 assert sym == {"@1": "work", "@2": "work", "@3": "done", "@4": "needs", "@5": "fail", "@6": "idle", "@7": "exited",
                "MU/far1": "idle", "MU/far2": "lost"}, sym
 grp = {t: e["group"] for t, e in by.items()}
-assert grp["@7"] == "ended" and by["@7"]["sec"] == "ended" and grp["@3"] == "done" and grp["@6"] == "other", grp
-assert not any(e["sym"] == "exited" and not e.get("sec") for e in by.values())
+assert grp["@7"] == "ask" and "sec" not in by["@7"] and grp["@3"] == "queue" and grp["@6"] == "ask", grp
+assert all(e["group"] == "ask" for e in by.values() if e["sym"] == "exited")
 leg = fv.legend()
 assert leg == "↻ 运行中  ! 等你  ✓ 已完成  ✗ 失败  ◌ 已退出  ∙ 空闲  ? 失联", leg
 
@@ -167,6 +167,6 @@ assert "失联" in note and not red, (note, red)
 PY
 st_ok_all "A  short names: 来自 X：…, T<n> prefix → ID, 修 #N：/ brackets / paths dropped"
 st_ok_all "B  columns: ID blank without a window ID (T<n> an alias), Agent (here: Claude; far: 未知), the row's own repo"
-st_ok_all "C  ↻ ! ✓ ✗ ◌ ∙ ? — one cell each; ◌ only under 已结束; the legend"
+st_ok_all "C  ↻ ! ✓ ✗ ◌ ∙ ? — one cell each; ◌ under 等你; the legend"
 st_ok_all "D  paint: glyph · ID · Agent · name · repo(13, kept blank); only ! ✗ red; cut at punctuation"
 st_ok_all "E  search: issue number exact (4539 ≠ 45390), match_why; ID searched; note_of red on 会坏"

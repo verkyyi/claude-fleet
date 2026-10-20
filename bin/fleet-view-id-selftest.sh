@@ -180,7 +180,7 @@ assert by["@9"]["agent"] == "codex", by["@9"]   # C17: nor a window word ⇒ the
 assert by["@3"]["state"] == "failed" and by["@3"]["sym"] == "fail" and by["@3"]["group"] == "ask", by["@3"]
 assert by["@6"]["sym"] == "work", by["@6"]         # working keeps ↻ over a done result
 it2, by2 = read(dict(STATES, **{"@6": "idle"}))
-assert by2["@6"]["sym"] == "done" and by2["@6"]["group"] == "done", by2["@6"]
+assert by2["@6"]["sym"] == "done" and by2["@6"]["group"] == "queue", by2["@6"]
 g = {e["issue"]: e for e in it if e.get("gone")}
 assert g["#4700"]["sym"] == "exited" and g["#4700"]["word"] == "已退出" and re.fullmatch(r"[A-Z]\w{3}", g["#4700"]["id"]) \
     and g["#4700"]["agent"] == "codex", g["#4700"]
@@ -193,7 +193,7 @@ for w, other in (("@1", "@5"), ("@5", "@1")):
 red = fv.row_segs(by["@1"], 100, qo.cells, qo.clip)[1]
 assert red[0] == "!" and any(s.startswith("c") for s in red[1]), red
 _, by3 = read({w: s for w, s in STATES.items() if w != "@5"})
-assert not by3["@1"].get("conflict") and by3["@1"]["group"] != "ask", by3["@1"]
+assert not by3["@1"].get("conflict") and by3["@1"]["sym"] == "idle", by3["@1"]      # idle: 等你 by itself (回收 D), not red
 
 # --- E: search
 sess = lambda q: [e["target"] for e in fv.visible(it, q, set()) if e["kind"] == "sess"]
@@ -391,7 +391,7 @@ assert all(len(by[f]["code"]) >= 4 and by[f]["code"].startswith(by[f]["id"]) for
 assert any(t.strip().startswith("编号 " + by[ids[1]]["code"]) for t, _ in fv.id_page(by[ids[1]], 100)), fv.id_page(by[ids[1]], 100)
 # a record that has ended is 做完待收 even while its window works — and not unfinished
 d = by[DONE_T]
-assert d["group"] == "done" and d["sym"] == "done" and not d["open_id"] and len(d["id"]) >= 2, d
+assert d["group"] == "queue" and d["sym"] == "done" and not d["open_id"] and len(d["id"]) >= 2, d
 assert fi.open_ids() == set(ids + [CLASH]), len(fi.open_ids())
 # typing 2: both unfinished ones, never a pick; 3 is the one
 sess = lambda q: [W.get(e["target"]) for e in fv.visible(it, q, set()) if e["kind"] == "sess"]

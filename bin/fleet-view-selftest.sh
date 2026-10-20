@@ -14,7 +14,8 @@
 #      table (dash-keymap.sh); fleet-view-pfx = ⌃] then the 看台's letter (view);
 #      sourcing twice leaves the same tables
 #   B  ⌘P (`ESC[927~`) in the 看台 opens the list — 等你 first (issue #3179), the
-#      question under its row, 已结束 under them, no 「新任务」 / 停放 / 待你动手
+#      question under its row, 排队中 under them (its 收起 line last), 已收起
+#      folded (→ ← ↵, #3666), no 「新任务」 / 停放 / 待你动手
 #      (issue #3119), no (machine, login) group, no `merged` / `done:2h` /
 #      `⇢cla` — `?` shows the legend — and in a session
 #      attached directly it does nothing
@@ -28,23 +29,24 @@
 #      peer-wait; a second go reuses it; another login here gets its own window
 #   E  ⌘↓ / ⌘↑ walk the list's order, ⌘[ / ⌘] the history; a session that is
 #      not a 看台 keeps root (its key-table untouched)
-#   I  issue #3179 (EPIC #3178 C1): the list grouped by what you should do — 置顶 ·
-#      等你 · 在干活 · 刚落地 · 其他 · 已结束; one one-cell glyph a row (! x » ✓ ∙ ?,
+#   I  issue #3179 (EPIC #3178 C1; 回收 D, T681): the list grouped by whether it
+#      needs you — 置顶 · 等你 · 在干活 · 排队中 (· 已收起, folded); one one-cell glyph a row (! x » ✓ ∙ ?,
 #      ASCII under FLEET_GLYPHS=ascii, no colour under NO_COLOR), the state word
 #      on the lit row only, the question under an asking row, tags, the repo only
 #      with 2+ repos, every query word must hit; `?` on an empty query (in B) is
 #      the legend, after text a letter
-#   J  issue #3286: 已结束 lists, after the open ended rows, the sessions whose
+#   J  issue #3286: 已收起 lists, after the open ended rows, the sessions whose
 #      windows were reaped — fleet-history.sh rows (the sidebar's ⌃t ledger),
 #      one row a key, one an open row shows left out; its menu is 恢复 alone,
 #      which runs fleet-restore-pick.sh --select (a #543 question: exit 4, then
 #      --answer); ⌘↓ never walks onto one; the read is cached, single-flight,
 #      in the background (view-gone waits for it)
-#   K  issue #3731: 已结束 · 还开着 (a window still up, ↵ on its last row reaps
-#      them all through fleet-view-reap-all.sh — dash-reap.sh --yes each, a dirty
-#      worktree kept and said) above 已关闭 (the last FLEET_VIEW_CLOSED_HOURS, 48,
+#   K  issue #3731, 回收 D: the producer's 已结束 rows in 排队中 (a window still up,
+#      ↵ on the group's last row folds them all through fleet-view-reap-all.sh —
+#      dash-reap.sh --yes each, a dirty worktree kept and said) above 已收起 (the
+#      last FLEET_VIEW_CLOSED_HOURS, 168,
 #      by the close time fleet-history.sh appends; the older ones one line,
-#      「更早的 N 个 → /fleet-history」), both folded until → / ↵
+#      「更早的 N 个 → /fleet-history」), folded until → / ↵
 #   G  a phone (issue #3006, C9): the ⌃] letters (dash-keymap.sh --panel switch
 #      view: p list · n / b · c · t · q, one letter each, every one a switch-table
 #      action); a 40-column client: ⌃] p opens the list on the whole screen, ⌃] n
@@ -146,6 +148,10 @@ row() { local IFS="$US"; printf '%s\n' "$*"; }
 } > "$W/rows.txt"
 pl=$(printf '{"i":[{"r":"o/r#21","k":"epsilon","w":"answer:o/r#21","a":%d}]}' "$(( $(date +%s) - 7200 ))" | base64 | tr '+/' '-_' | tr -d '=\n')
 printf '%s\n' "x${US}nodeA${US}online${US}looping${US}${US}${US}0${US}park=1${US}parkl=$pl" > "$W/g/orch_fl"
+# one folded-away session (回收 D): fleet-history.sh rows' shape, kept fresh so the
+# popup reads it on its first frame; emptied again after B
+gone1="landed:issue:21@o/r${US}key${US}✓ #21      $(printf '%-26s' 'Old 收起的') $(printf '   %-8s %-7s %-4s' '5 mins' '#121' '·')${US}$(date +%s)"
+printf '%s\n' "$gone1" | tee "$W/gone.txt" > "$W/g/view-gone.fl"
 ti new-session -d -t fl -s 'fl@view-v1' || st_fail "B: no 看台 session"
 ti set-option -t 'fl@view-v1' key-table fleet-view
 ti select-window -t "=fl@view-v1:$W1"
@@ -167,7 +173,7 @@ ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.5; to capture-pane -p -t o:view > "$W/popup.txt"; grep -q '等你 1' "$W/popup.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || st_fail "B: ⌘P in the 看台 opened no list: $(cat "$W/popup.txt")"
-for want in '─ 等你 1' '─ 在干活 3' '要不要继续合并？' 'Alpha 的完整标题很长很长' '已结束 · 还开着 1 个'; do
+for want in '─ 等你 1' '─ 在干活 3' '要不要继续合并？' 'Alpha 的完整标题很长很长' '─ 排队中 1' 'Old 做完的' '⌫ 现在收起已结束的 1 个' '▸ 已收起 1 个'; do
   grep -qF "$want" "$W/popup.txt" || st_fail "B: the list lacks 「${want}」: $(cat "$W/popup.txt")"
 done
 # no session is special (issue #3119): no orchestrator 「新任务」 row, no 停放 / 待你动手
@@ -193,29 +199,30 @@ grep -q '› ?' "$W/legend.txt" && st_fail "B: ? on an empty query went into the
 to send-keys -t o:view -l '?'; to send-keys -t o:view -l 'z?'; sleep 0.5; to capture-pane -p -t o:view > "$W/legend.txt"
 grep -q '› z?' "$W/legend.txt" || st_fail "B: ? after text is not part of the query: $(head -2 "$W/legend.txt")"
 to send-keys -t o:view BSpace BSpace; sleep 0.3
-# issue #3666: on the 已结束 heading → opens it, ← shuts it, ↵ still toggles. Walk
+# issue #3666: on the 已收起 heading → opens it, ← shuts it, ↵ still toggles. Walk
 # down pressing → until its row shows (→ on a session row does nothing).
 shot() { sleep 0.4; to capture-pane -p -t o:view > "$W/fold.txt"; }
-grep -q 'Old 做完的' "$W/popup.txt" && st_fail "B: 已结束 open before any key"
-ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
+grep -q 'Old 收起的' "$W/popup.txt" && st_fail "B: 已收起 open before any key"
+ok=''; for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
   to send-keys -t o:view Down; to send-keys -t o:view Right; shot
-  grep -q 'Old 做完的' "$W/fold.txt" && { ok=1; break; }
+  grep -q 'Old 收起的' "$W/fold.txt" && { ok=1; break; }
 done
-[ -n "$ok" ] || st_fail "B: → on the 已结束 heading did not open it: $(cat "$W/fold.txt")"
-grep -q '▾ 已结束' "$W/fold.txt" || st_fail "B: → opened 已结束 but its caret is not ▾: $(grep -F 已结束 "$W/fold.txt")"
+[ -n "$ok" ] || st_fail "B: → on the 已收起 heading did not open it: $(cat "$W/fold.txt")"
+grep -q '▾ 已收起' "$W/fold.txt" || st_fail "B: → opened 已收起 but its caret is not ▾: $(grep -F 已收起 "$W/fold.txt")"
 to send-keys -t o:view Right; shot
-grep -q 'Old 做完的' "$W/fold.txt" || st_fail "B: a second → shut 已结束"
+grep -q 'Old 收起的' "$W/fold.txt" || st_fail "B: a second → shut 已收起"
 to send-keys -t o:view Left; shot
-grep -q 'Old 做完的' "$W/fold.txt" && st_fail "B: ← on the open 已结束 heading did not shut it"
-grep -q '▸ 已结束' "$W/fold.txt" || st_fail "B: ← shut 已结束 but its caret is not ▸"
+grep -q 'Old 收起的' "$W/fold.txt" && st_fail "B: ← on the open 已收起 heading did not shut it"
+grep -q '▸ 已收起' "$W/fold.txt" || st_fail "B: ← shut 已收起 but its caret is not ▸"
 to send-keys -t o:view Left; shot
-grep -q 'Old 做完的' "$W/fold.txt" && st_fail "B: a second ← opened 已结束"
+grep -q 'Old 收起的' "$W/fold.txt" && st_fail "B: a second ← opened 已收起"
 to send-keys -t o:view Enter; shot
-grep -q 'Old 做完的' "$W/fold.txt" || st_fail "B: ↵ on the 已结束 heading no longer opens it"
+grep -q 'Old 收起的' "$W/fold.txt" || st_fail "B: ↵ on the 已收起 heading no longer opens it"
 to send-keys -t o:view Enter; shot
-grep -q 'Old 做完的' "$W/fold.txt" && st_fail "B: ↵ on the open 已结束 heading no longer shuts it"
-st_ok_all "B  ⌘P: → opens 已结束, ← shuts it, ↵ toggles it (#3666)"
-st_ok_all "B  ⌘P: the list in the 看台 (等你 first, glyphs, the question under its row, 已结束), nothing in a direct attach"
+grep -q 'Old 收起的' "$W/fold.txt" && st_fail "B: ↵ on the open 已收起 heading no longer shuts it"
+: > "$W/gone.txt"; : > "$W/g/view-gone.fl"
+st_ok_all "B  ⌘P: → opens 已收起, ← shuts it, ↵ toggles it (#3666)"
+st_ok_all "B  ⌘P: the list in the 看台 (等你 first, glyphs, the question under its row, 排队中 + its 收起 line, 已收起 folded), nothing in a direct attach"
 
 # --- C: ↵ on beta, here ------------------------------------------------------------------
 to pipe-pane -o -t o:view "cat > '$W/client.bytes'"
@@ -388,11 +395,12 @@ def run(repos):
     return fv.entries("v1")
 it = run(["o/claude-fleet"])
 heads = [e["group"] for e in it if e["kind"] == "hdr"]
-# plan B (T493): 刚落地 · 等合并 · a done row are one group, 做完待收
-assert heads == ["pin", "ask", "work", "done"], heads
+# 回收 D (T681): a done row and the producer's 已结束 are one group, 排队中
+assert heads == ["pin", "ask", "work", "queue"], heads
 grp = {e["target"]: e["group"] for e in it if e["kind"] == "sess"}
 assert grp == {"@1": "pin", "@3": "ask", "@4": "ask", "MU/far2": "ask", "@2": "work", "MU/far1": "work",
-               "@5": "done", "@6": "done", "@9": "ended"}, grp
+               "@5": "queue", "@6": "queue", "@9": "queue"}, grp
+assert [e["target"] for e in it if e.get("ended")] == ["@9"], it
 sym = {e["target"]: e["sym"] for e in it if e["kind"] == "sess"}
 assert sym["@3"] == "needs" and sym["@4"] == "fail" and sym["@2"] == "work" and sym["@5"] == "done" \
     and sym["@1"] == "idle" and sym["MU/far1"] == "lost", sym
@@ -446,7 +454,7 @@ lines = fv.paint(shown, at, 100, qo.cells, qo.clip)
 assert not any(st.startswith("c") for segs in lines for _, sty in segs for st in sty), "NO_COLOR left a colour"
 PYI
 ( unset NO_COLOR FLEET_COLOR FLEET_GLYPHS; python3 "$W/leg-i.py" "$BIN" ) || st_fail "I: the grouped list"
-st_ok_all "I  ⌘P grouped: 置顶 · 等你 · 在干活 · 刚落地 · 其他 · 已结束; six one-cell glyphs (ascii, NO_COLOR); the question under its row; tags; 「修 3164」"
+st_ok_all "I  ⌘P grouped: 置顶 · 等你 · 在干活 · 排队中 (· 已收起); six one-cell glyphs (ascii, NO_COLOR); the question under its row; tags; 「修 3164」"
 
 # --- J: the reaped sessions (issue #3286) -------------------------------------------------------
 mkdir -p "$W/jstub"
@@ -493,12 +501,12 @@ fv.produce = lambda fleet, **kw: open_rows
 fv.gone_text = lambda fleet: gone
 it = fv.entries("v1")
 sec = [e for e in it if e["kind"] == "sec"]
-# issue #3731: the open one under 已结束 · 还开着, the reaped ones under 已关闭
-assert [(e["sec"], e["n"]) for e in sec] == [("ended", 1), ("gone", 3)], sec
-ended = [e for e in it if e.get("sec") in ("ended", "gone") and e["kind"] == "sess"]
+# issue #3731, 回收 D: the open one in 排队中 (marked ended), the reaped ones under 已收起
+assert [(e["sec"], e["n"]) for e in sec] == [("gone", 3)], sec
+ended = [e for e in it if (e.get("ended") or e.get("sec") == "gone") and e["kind"] == "sess"]
 assert [e["target"] for e in ended] == ["@9", "landed:3278@o/claude-fleet", "landed:scratch:scratch-23@o/claude-fleet",
                                         "landed:issue:7@o/claude-fleet"], [e["target"] for e in ended]
-assert [e["sec"] for e in ended] == ["ended", "gone", "gone", "gone"], ended
+assert [e.get("sec") or e["group"] for e in ended] == ["queue", "gone", "gone", "gone"], ended
 g = ended[1]
 assert g["gone"] and g["text"] == "Mac 新登录租凭据 + 演练认看台" and g["issue"] == "#3276" and g["right"] == "32 mins", g
 assert g["sym"] == "done" and ended[2]["sym"] == "fail" and g["word"] == "已合并 · 窗口已回收", g
@@ -573,7 +581,7 @@ printf 'landed:2@o/r\037k\037y\n' > "$W/gone.txt"
 python3 "$BIN/fleet-quickopen.py" view-gone --view v1 || st_fail "J: view-gone"
 grep -q '^landed:2@o/r' "$G" || st_fail "J: view-gone did not read: $(cat "$G" 2>&1)"
 : > "$W/gone.txt"
-st_ok_all "J  已关闭 lists the reaped sessions (fleet-history.sh rows) below 已结束 · 还开着; Tab/↵ → 恢复 = fleet-restore-pick.sh --select; read cached in the background"
+st_ok_all "J  已收起 lists the reaped sessions (fleet-history.sh rows) below 排队中; Tab/↵ → 恢复 = fleet-restore-pick.sh --select; read cached in the background"
 
 # --- K: 已结束 · 还开着 and 已关闭 (issue #3731) ----------------------------------------
 mkdir -p "$W/kstub"
@@ -614,38 +622,39 @@ fv.windows = lambda fleet: {}
 fv.produce = lambda fleet, **kw: open_rows
 fv.gone_text = lambda fleet: gone
 os.environ.pop("FLEET_VIEW_CLOSED_HOURS", None)
-os.environ["FLEET_CONF_DIR"] = sys.argv[2]          # no fleet.conf there: the default, 48
+os.environ["FLEET_CONF_DIR"] = sys.argv[2]          # no fleet.conf there: the default, 168 (7 days)
 it = fv.entries("v1")
 sec = [e for e in it if e["kind"] == "sec"]
-assert [(e["sec"], e["n"]) for e in sec] == [("ended", 2), ("gone", 3)], sec
-assert sec[0]["text"] == "已结束 · 还开着 2 个" and sec[1]["text"] == "已关闭 3 个", sec
-assert sec[1]["older"] == 5, sec[1]
-# the order: the open ones (heading · rows · 回收 row) above the closed ones (heading ·
-# newest first · 更早的 5 个)
-tail = [(e["kind"], e.get("target") or e.get("cmd") or e.get("sec")) for e in it[it.index(sec[0]):]]
-assert tail == [("sec", "ended"), ("sess", "@8"), ("sess", "@9"), ("cmd", "reapall"),
+assert [(e["sec"], e["n"]) for e in sec] == [("gone", 5)], sec
+assert sec[0]["text"] == "已收起 5 个" and sec[0]["older"] == 3, sec
+# 回收 D: the producer's 已结束 rows sit in 排队中, its 收起 line last; 已收起 (heading
+# · newest first · 更早的 3 个) under it
+q = next(e for e in it if e["kind"] == "hdr" and e["group"] == "queue")
+tail = [(e["kind"], e.get("target") or e.get("cmd") or e.get("sec") or e.get("group")) for e in it[it.index(q):]]
+assert tail == [("hdr", "queue"), ("sess", "@8"), ("sess", "@9"), ("cmd", "reapall"),
                 ("sec", "gone"), ("sess", "landed:901@o/r"), ("sess", "landed:902@o/r"), ("sess", "landed:903@o/r"),
-                ("cmd", "history")], tail
+                ("sess", "landed:904@o/r"), ("sess", "landed:905@o/r"), ("cmd", "history")], tail
+assert q["text"] == "排队中 2", q
 more = it[-1]
-assert more["text"] == "更早的 5 个 → /fleet-history" and more["sec"] == "gone", more
+assert more["text"] == "更早的 3 个 → /fleet-history" and more["sec"] == "gone", more
 ra = next(e for e in it if e.get("cmd") == "reapall")
-assert ra["row"]["targets"] == ["@8", "@9"] and "回收这 2 个" in ra["text"], ra
+assert ra["row"]["targets"] == ["@8", "@9"] and "收起已结束的 2 个" in ra["text"] and "sec" not in ra, ra
 assert "Tab → 回收" in next(e for e in it if e.get("target") == "@8")["foot"]
-# folded by default: both headings, none of their rows; → opens one, ← shuts it
+# 已收起 folded by default: its heading, none of its rows; → opens it, ← shuts it
 v = fv.visible(it, "", set())
-assert [(e["kind"], e.get("sec")) for e in v if e.get("sec")] == [("sec", "ended"), ("sec", "gone")], v
+assert [(e["kind"], e.get("sec")) for e in v if e.get("sec")] == [("sec", "gone")], v
 assert all(e.get("closed") for e in v if e["kind"] == "sec")
+assert [e.get("target") for e in v if e.get("ended")] == ["@8", "@9"], v
 opened = fv.sec_fold(set(), "gone", True)
 v = fv.visible(it, "", opened)
 assert [e.get("target") or e.get("cmd") for e in v if e.get("sec") == "gone" and e["kind"] != "sec"] == \
-    ["landed:901@o/r", "landed:902@o/r", "landed:903@o/r", "history"], v
-assert not any(e.get("sec") == "ended" and e["kind"] != "sec" for e in v), v
+    ["landed:901@o/r", "landed:902@o/r", "landed:903@o/r", "landed:904@o/r", "landed:905@o/r", "history"], v
 assert fv.visible(it, "", fv.sec_fold(opened, "gone", False)) == fv.visible(it, "", set())
 # the panel (view-panel's rows): the same lines, ⚡ and ⏻ after them
 p = fv.panel_rows(it, "", {"ended", "gone"}, cmds=["new", "quit"])
 kinds = [e.get("cmd") or e.get("target") for e in p if e["kind"] in ("cmd", "sess")]
 h = kinds.index("history")
-assert kinds[h - 1:h + 2] == ["landed:903@o/r", "history", "new"] and kinds[-1] == "quit", kinds
+assert kinds[h - 1:h + 2] == ["landed:905@o/r", "history", "new"] and kinds[-1] == "quit", kinds
 # the window is a setting: 1.5 h ⇒ one listed, seven older; fleet.conf's line when no env
 Path(sys.argv[2], "fleet.conf").write_text("FLEET_VIEW_CLOSED_HOURS=1.5\n")
 it2 = fv.entries("v1")
@@ -656,12 +665,12 @@ s3 = [e for e in fv.entries("v1") if e["kind"] == "sec" and e["sec"] == "gone"][
 assert (s3["n"], s3["older"]) == (5, 3), s3
 os.environ.pop("FLEET_VIEW_CLOSED_HOURS")
 Path(sys.argv[2], "fleet.conf").unlink()
-# nothing older ⇒ no 更早 line; nothing closed ⇒ no 已关闭 heading
+# nothing older ⇒ no 更早 line; nothing closed ⇒ no 已收起 heading
 fv.gone_text = lambda fleet: "\n".join(gone.split("\n")[:3]) + "\n"
 it3 = fv.entries("v1")
 assert not any(e.get("cmd") == "history" for e in it3) and it3[-1]["target"] == "landed:903@o/r", it3[-1]
 fv.gone_text = lambda fleet: ""
-assert [e["sec"] for e in fv.entries("v1") if e["kind"] == "sec"] == ["ended"]
+assert [e["sec"] for e in fv.entries("v1") if e["kind"] == "sec"] == []
 # a copy written before the epoch rode along: the words, read as the least they mean
 assert fv.gone_age(None, "47 mins", now) == 47 * 60 and fv.gone_age(None, "1 day", now) == 86400
 assert fv.gone_age(None, "2 days", now) == 172800 and fv.gone_age(None, "now", now) == 0
@@ -679,7 +688,7 @@ assert "reapall" in fv.ROWLESS and "history" in fv.ROWLESS
 PYK
 mkdir -p "$W/kconf"
 ( KLOG="$W/k.log" FLEET_VIEW_ACT_BIN="$W/kstub" FLEET_UI_LANG=zh python3 "$W/leg-k.py" "$BIN" "$W/kconf" ) \
-  || st_fail "K: 已结束 · 还开着 / 已关闭"
+  || st_fail "K: 排队中's 收起 line / 已收起"
 # the helper itself: each target through dash-reap.sh --yes, one line for the person
 mkdir -p "$W/kreap"
 cp "$BIN/fleet-view-reap-all.sh" "$BIN/fleet-ui-lang.sh" "$W/kreap/"
@@ -705,6 +714,6 @@ out=$(KLOG2="$W/k2.log" FLEET_UI_LANG=zh bash "$W/kreap/fleet-view-reap-all.sh" 
 grep -qF '[ "${FLEET_HISTORY_EPOCH:-0}" = 1 ] && lbuf+="${US}${ep:-}"' "$BIN/fleet-history.sh" \
   || st_fail "K: fleet-history.sh rows no longer appends the close time under FLEET_HISTORY_EPOCH"
 grep -qF 'FLEET_HISTORY_EPOCH="1"' "$BIN/fleet_view.py" || st_fail "K: the 已回收 read does not ask for the close time"
-st_ok_all "K  已结束 · 还开着 (回收这 N 个 → fleet-view-reap-all.sh) above 已关闭 (last 48 h, 更早的 N 个 → /fleet-history), folded (#3731)"
+st_ok_all "K  排队中's 已结束 rows (收起这 N 个 → fleet-view-reap-all.sh) above 已收起 (last 7 days, 更早的 N 个 → /fleet-history), folded (#3731)"
 
 echo "fleet-view-selftest: all passed"

@@ -1,6 +1,6 @@
 #!/bin/bash
-# fleet-view-reap-all.sh <fleet> <target>... — the 看台 panel's 「回收这 N 个」 row
-# under 已结束 · 还开着 (issue #3731): every session of that group, one by one,
+# fleet-view-reap-all.sh <fleet> <target>... — the 看台 panel's 「收起已结束的 N 个」 row
+# at the end of 排队中 (issue #3731, 回收 D): every ended session there, one by one,
 # through the reap a row's own Tab → 回收 runs. Nothing here decides what is safe:
 #   a session here      dash-reap.sh <target> --yes — its own gate: a dirty
 #                       worktree is KEPT (only the window closes), a live / young

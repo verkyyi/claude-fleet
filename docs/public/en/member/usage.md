@@ -36,9 +36,9 @@ The panel looks roughly like this (sample data):
 ─ Working 2
   ↻ T131     Codex   Fix export timeout          web-app
   ↻          Claude  Weekly report data
-─ Done, to collect 1
-  ✓ T127     Claude  Upgrade dependencies        web-app
-▸ Ended · still open (4)
+─ Queued 1
+  ✓ T127     Claude  Upgrade dependencies        web-app  waiting for the release train
+▸ Folded away (4)
   ⚡ New session
 ↵ go  Tab act  ↑↓ pick  type to filter  ? legend  esc close  ↑ to ⚡
 ```
@@ -55,20 +55,21 @@ The repository and agent chosen in the box are stored privately on this machine 
 
 ### Session states
 
-The title counts open sessions and shows matched/total while searching. Folding and pinning do not change the total. Finished windows still open count; reaped records do not. `+?` marks an unconfirmed remote count. Selection changes the background while status glyphs and name columns stay fixed. Ctrl+T still pins or unpins. The footer contains shortcuts, the optional legend and brief feedback.
+The title counts open sessions and shows matched/total while searching. Folding and pinning do not change the total. Finished sessions whose window is still open count; folded-away ones do not. `+?` marks an unconfirmed remote count. Selection changes the background while status glyphs and name columns stay fixed. Ctrl+T still pins or unpins. The footer contains shortcuts, the optional legend and brief feedback.
 
-The panel groups sessions by what you should do:
+The panel puts sessions in five groups, by whether they need you:
 
 | Group | Meaning | What you do |
 |---|---|---|
 | **Pinned** | Ones you pinned yourself | — |
-| **Waiting on you** | The session stopped to ask you something, or is waiting for you to allow an action — or asked on its ticket and nobody has answered yet, even if it has stopped since; its words are on the next line | Switch to it and answer, or press Tab on its row → "Answer…" |
+| **Waiting on you** | The session stopped to ask you something, is waiting for you to allow an action, failed, its agent exited, or it sits idle waiting for your next word (a plan page waiting for your call, say) — or asked on its ticket and nobody has answered yet, even if it has stopped since; its words are on the next line | Switch to it and answer, or press Tab on its row → "Answer…" |
 | **Working** | Doing it now | Nothing |
-| **Done, to collect** | It handed in its result and its window is still open: the pull request checking, waiting to merge or ship, or merged | Look at the result; reap it when you are done |
-| **Other** | Idle, or no state to read | — |
-| **Ended** | Finished sessions: ones bound to no ticket, or whose ticket is closed and pull request merged more than a day ago; the ones still open first, the reaped ones under them, folded at the bottom | Still open: ↵ on the last row reaps them all; to carry on: pick it, ↵ "Restore" |
+| **Queued** | Waiting on something that is not you: it handed in its result and the pull request is checking, waiting to merge or ship, or it is done and about to be folded away (the row's end says which step) | Nothing; to fold the ended ones now, ↵ on the group's last row |
+| **Folded away** | Sessions whose window is closed, their conversation and copy of the code kept (the last 7 days), folded at the bottom as a count | → to open it, pick one, ↵ "Restore" to carry on in the same conversation |
 
-Every row has the same columns: state glyph · ID (the window's own short code `K3F9`, from the moment it opens until it closes) · Agent (Claude / Codex, its latest conversation's; a grey "unknown" when it cannot be read) · short name · repository (blank when it has none). The state comes from whether the window is up and the result it reported last: the newest of several wins, and a window closed without one is "exited". One conversation open in two windows makes both rows a red "waiting on you", the reason on the actions page. The glyphs: ↻ running · ! waiting on you · ✓ done · ✗ failed · ◌ exited (the agent quit, its window is still up — only under "Ended · still open") · ∙ idle · ? lost; only ! and ✗ are red. Press `?` for the legend.
+An EPIC batch's members hang under its driver's row, in whatever group the driver is in; the driver's row says done/total.
+
+Every row has the same columns: state glyph · ID (the window's own short code `K3F9`, from the moment it opens until it closes) · Agent (Claude / Codex, its latest conversation's; a grey "unknown" when it cannot be read) · short name · repository (blank when it has none). The state comes from whether the window is up and the result it reported last: the newest of several wins, and a window closed without one is "exited". One conversation open in two windows makes both rows a red "waiting on you", the reason on the actions page. The glyphs: ↻ running · ! waiting on you · ✓ done · ✗ failed · ◌ exited (the agent quit, its window is still up — under "Waiting on you") · ∙ idle · ? lost; only ! and ✗ are red. Press `?` for the legend.
 
 Ticket numbers, pull requests and machines are no longer on the row: pick a row and the second line from the bottom says how long it has been lost, whether its configuration needs a reopen (in red), its sub-task progress and its pull request's step. A ticket number is not shown but is searched — type `4539` or `#4539` and the session linked to that ticket — or dispatched with `#4539` in its words — is found, the bottom line saying "matched: linked issue #4539". When a machine cannot be reached, a red bar appears across the top of the panel and its rows turn grey with a ?; wait for it to come back — the sessions are not lost.
 
@@ -97,7 +98,7 @@ Each operation allows 16 files: 10 MiB per image, 100 MiB per other file, and 10
 
 ## Working in a code repository
 
-For a task in a repository, the session changes **its own copy of the code** and touches nobody else's; when it is done it opens a pull request, merges it itself once the checks pass, and then tells you the result. You see it under "Done, to collect" and read what changed on the PR.
+For a task in a repository, the session changes **its own copy of the code** and touches nobody else's; when it is done it opens a pull request, merges it itself once the checks pass, and then tells you the result. You see it under "Queued" and read what changed on the PR.
 
 You do not have to watch it. To stop it or change direction, switch to it and say so; when it is stuck it shows up under "Waiting on you".
 
@@ -120,7 +121,7 @@ With the fleet-epic plugin installed, say `/fleet-task-plan <subject>` in a sess
 
 ## Reaping: when a session closes
 
-A finished session is reaped automatically — no clean-up by hand. Before it goes its history is recorded and its copy of the code kept, and you can ↵ restore it any time from "Ended" in the panel. The default rules:
+A finished session is reaped automatically — no clean-up by hand. Before it goes its history is recorded and its copy of the code kept, and you can ↵ restore it any time from "Folded away" in the panel. The default rules:
 
 | Session | Closes by default |
 |---|---|
