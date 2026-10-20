@@ -214,25 +214,3 @@ def phone():
 
 def phone_extra():
     return setting("FLEET_KEYS_PHONE_EXTRA", default="")
-
-
-def old_presses(log, days=7):
-    """`<n> <key> <k> · …` — how often in the last `days` the keys issue #3328 folded
-    into ⌘P were pressed (their forwards' how=old:<action> lines in view-switch.ndjson),
-    most pressed first; `0 ` for none. The doctor's oldkeys row."""
-    import json
-    import time
-    since, by = time.time() - days * 86400, {}
-    try:
-        lines = open(log, encoding="utf-8").read().splitlines()
-    except OSError:
-        lines = []
-    for line in lines:
-        try:
-            r = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(r, dict) and str(r.get("how", "")).startswith("old:") and float(r.get("ts") or 0) >= since:
-            k = r.get("key") or r["how"][4:]
-            by[k] = by.get(k, 0) + 1
-    return "%d %s" % (sum(by.values()), " · ".join("%s %d" % kv for kv in sorted(by.items(), key=lambda kv: -kv[1])))

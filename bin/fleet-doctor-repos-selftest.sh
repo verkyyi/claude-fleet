@@ -10,11 +10,11 @@
 # an overlay for o/beta whose FLEET_MAIN does not exist; HOME inside the sandbox; a
 # PATH-shim `gh` that answers `repo view` offline. Pinned:
 #   1. a block header per hosted repo, conf repo first;
-#   2. o/alpha's main/base PASS, and the deploy + labels rows are per repo;
+#   2. o/alpha's main/base PASS, and the deploy row is per repo;
 #   3. o/beta's missing FLEET_MAIN is a WARN main row naming o/beta;
 #   4. the conf repo's scoped keys never leak into the overlay repo (o/beta's
 #      deploy row does NOT inherit o/alpha's FLEET_DEPLOY_CHECK);
-#   5. a repo missing fleet labels is named on a WARN labels row;
+#   5. no labels row: the doctor checks no labels (EPIC T605 C7);
 #   6. degenerate: no repos/ overlay → exactly one block.
 #   7. (issue #1044) a base checkout ON its base branch PASSes the checkout row; one
 #      left on a side branch is a WARN checkout row naming the branch + commits
@@ -58,15 +58,11 @@ FLEET_MODEL="opus"
 export FLEET_API_TOKEN="s3cr3t-beta"
 EOF
 
-# gh shim: `repo view <r> …` → default branch, then label names. o/alpha carries
-# every canonical label; o/beta only `bug`. Everything else succeeds silently.
-LABELS=$(bash -c '. "$1" >/dev/null 2>&1 && fleet_labels_allowed' _ "$BIN/fleet-lib.sh")
-printf '%s\n' "$LABELS" > "$WORK/labels"
+# gh shim: `repo view <r> …` → the default branch. Everything else succeeds silently.
 cat > "$WORK/shim/gh" <<EOF
 #!/bin/sh
 if [ "\$1 \$2" = "repo view" ]; then
   echo main
-  case "\$3" in o/alpha) cat "$WORK/labels" ;; *) echo bug ;; esac
 fi
 exit 0
 EOF
@@ -91,10 +87,9 @@ heads=$(grep -E '── fleet-t · ' "$WORK/stdout" | sed 's/.*── fleet-t ·
 [ "$heads" = "$(printf 'o/alpha\no/beta')" ] || fail "expected blocks o/alpha then o/beta, got: $heads"
 st_count
 
-# 2. the healthy repo passes main + base + labels, and gets its own deploy row
+# 2. the healthy repo passes main + base, and gets its own deploy row
 row PASS main  'o/alpha: ' || fail "o/alpha main did not PASS"
 row PASS base  'o/alpha: base "main" is the repo default' || fail "o/alpha base did not PASS"
-row PASS labels 'o/alpha: every fleet label is seeded' || fail "o/alpha labels did not PASS"
 row PASS deploy 'o/alpha: FLEET_DEPLOY_CHECK=actions' || fail "o/alpha deploy row missing"
 st_count
 
@@ -106,8 +101,8 @@ st_count
 row PASS deploy 'o/beta: no deploy state configured' || fail "o/beta inherited o/alpha's FLEET_DEPLOY_CHECK"
 st_count
 
-# 5. missing labels are named, per repo
-row WARN labels 'o/beta: missing fleet labels: enhancement' || fail "o/beta's missing labels were not reported"
+# 5. the labels row is gone (EPIC T605 C7)
+row '(PASS|WARN|FAIL|INFO)' labels '' && fail "a labels row is still printed"
 st_count
 
 # 9. (issue #1944) two repos: o/beta's own settings, the fleet value it shadows,

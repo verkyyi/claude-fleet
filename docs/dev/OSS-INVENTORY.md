@@ -131,7 +131,7 @@ tree: 7 个文件 · 19 处（允许清单另放过 60 个文件）
 | 23 | aws-access-token | `tokenledger/hub/api/fleet_client_settings_test.go:98`（be6677e9） | 测试假数据 | AKIA 加字母表 |
 | 24 | generic-api-key | `bin/fleet-hub-node-env-selftest.sh:53`（3b1dc054） | 测试假数据 | 值含 SECRET 与 abcdef |
 | 25 | generic-api-key | `bin/fleet-node-join-selftest.sh:13`（91498a7f） | 误报 | 注释里的环境变量名，没有值 |
-| 26 | generic-api-key | `bin/fleet-doctor-ingress-selftest.sh:71`（91c7b898，HEAD 里还在） | **真实主机公钥（非机密）** | 与一台托管机器的 ssh ed25519 主机公钥逐字相同。公钥不是凭据、不能登录、不用换；HEAD 里的由 C8 换成随机生成的假公钥，历史那条留在 allowlist |
+| 26 | generic-api-key | `bin/fleet-doctor-ingress-selftest.sh:71`（91c7b898；文件已随 EPIC T605 C7 删除） | **真实主机公钥（非机密）** | 与一台托管机器的 ssh ed25519 主机公钥逐字相同。公钥不是凭据、不能登录、不用换；HEAD 里的由 C8 换成随机生成的假公钥，历史那条留在 allowlist |
 | 27–28 | generic-api-key | `bin/fleet-issue-bridge-selftest.sh:183`（32ba5a80 · f6b6fd32） | 误报 | 环境变量名 + shell 变量（签名用测试密钥现算） |
 
 以后 `--history` 报出新的一条：先按形状判定；是真的就**立刻作废换新**（历史不改写，EPIC #3569 拍板 3），

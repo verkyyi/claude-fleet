@@ -123,7 +123,6 @@
 4.5 fleet-diskguard-selftest.sh
 2.3 fleet-doctor-conf-dir-selftest.sh
 44.0 fleet-doctor-host-selftest.sh
-37.6 fleet-doctor-ingress-selftest.sh
 26.9 fleet-doctor-machine-selftest.sh
 6.1 fleet-doctor-mcp-selftest.sh
 25.9 fleet-doctor-node-selftest.sh

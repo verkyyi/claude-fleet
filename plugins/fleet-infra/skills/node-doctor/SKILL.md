@@ -122,10 +122,8 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `hub-sessions` | node | [node-doctor] | 别的机器的会话不刷新：照行内修（入口在不在、令牌） |
 | `hubauth` | node | [mac-node-enroll] [login-lifecycle] | 入口不认这台的令牌：查 node.env，或 `fleet login` |
 | `icloud` | node | [mac-node-prep] | 退出 iCloud 或关同步 |
-| `ingress` | node | [runbook-door-down] | 系统 sshd 的公网转发探不通：查路由器转发与远程登录 |
 | `install` | node · machine | [release-rules] | 安装落后 / 有本地提交 / 分叉 stable：让 install-sync 跟上，不在会话里手同步 |
 | `key` | machine | [release-rules] [mac-node-enroll] | 发布签名钥匙没钉 / 对不上：`sudo fleet node install --release-key <file>` |
-| `labels` | node | [node-doctor] | 仓库缺 fleet 标签：每个缺的跑 `gh label create <name> --repo <repo>` |
 | `laptop` | node | [node-doctor] | 笔记本上的 iTerm2 插件缺 / 旧：在那台重跑 extras/iterm2/install.sh |
 | `launchd` | node | [mac-node-prep] | launchd 的 gui 域坏了：机器层面——注销重登或重启 |
 | `ledger` | node | [mac-node-enroll] | 守护没装上：重跑 `sudo fleet node install` |
@@ -142,7 +140,6 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `network` | node | [mac-node-prep] | 两块网卡在同一个子网：拔掉一条或改路由 |
 | `node` | node | [mac-node-enroll] [runbook-tcc-stuck] | 整机守护：令牌被拒 ⇒ `account adopt <login> --rejoin`；没有完全磁盘访问 / TCC 卡住 ⇒ 卡死手册 |
 | `nofile` | node | [mac-node-prep] | 只报状态：系统默认文件数上限 |
-| `oldkeys` | node | [node-doctor] | 只报状态：还在按退役的快捷键 |
 | `onboard` | node | [node-doctor] | 就绪探针没过：照行内修 |
 | `open` | node | [node-doctor] | open.secret 权限不是 0600：`chmod 600` |
 | `peerlink` | node | [node-doctor] | 机器间链路：`fleet-peerlink.py status` |

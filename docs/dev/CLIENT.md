@@ -23,9 +23,8 @@ shell or switch sessions. The current panel's steps and row actions are in
 
 **The keys that went (issue #3328, EPIC #3178 ⑤ — kept for good, #4790):** ⌘↓ ⌘↑ ⌘[
 ⌘] ⌘N ⌘K ⌘Q ⌃\ and the old popup's key still reach fleet: each opens the panel (a
-new task / blank session lit on ⚡) and says 「… 已并进 ⌘P」 the first time.
-`fleet doctor`'s `oldkeys` row counts how often they are still pressed
-(`logs/view-switch.ndjson`, `how=old:<action>`). They stay fleet's: given back to
+new task / blank session lit on ⚡) and says 「… 已并进 ⌘P」 the first time;
+each press is a line of `logs/view-switch.ndjson` (`how=old:<action>`). They stay fleet's: given back to
 iTerm2, ⌘Q would quit it.
 
 Want an old key back, or a different one? One line in `fleet.conf`
