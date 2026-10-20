@@ -294,6 +294,21 @@ fleet_node_pair() {
   _fleet_node_broker
 }
 
+# fleet_hub_sock → the running agent's local forwarder to the hub (issue T672,
+# tokenledger/shared/hubfwd), the first socket of $CCQUOTA_HUB_SOCK ("off" =
+# none), ~/.ccquota/hub.sock (a login's own agent), /var/db/fleet-node/hub.sock
+# (a managed machine's); nothing when there is none. A caller sends its own
+# signed request there with `X-Fleet-Hub: <hub url>` and goes direct when nobody
+# answers or the forwarder refuses (it serves one hub, /v1/node/ + /v1/fleet/).
+fleet_hub_sock() {
+  local p
+  case "${CCQUOTA_HUB_SOCK:-}" in off) return 0 ;; '') ;; *) [ -S "$CCQUOTA_HUB_SOCK" ] && printf '%s' "$CCQUOTA_HUB_SOCK"; return 0 ;; esac
+  for p in "$HOME/.ccquota/hub.sock" /var/db/fleet-node/hub.sock; do
+    [ -S "$p" ] && { printf '%s' "$p"; return 0; }
+  done
+  return 0
+}
+
 # fleet_node_is_self <name> — is <name> this machine? `local` / `here`, this
 # host's short name, or its FLEET_NODE_ALIASES alias (`mac-c=mac-b` → mac-b), any case.
 fleet_node_is_self() {

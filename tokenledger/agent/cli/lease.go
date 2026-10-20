@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/hubfwd"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/nodesig"
 )
 
@@ -98,7 +99,7 @@ Exit 0 granted/released, 3 held by another node, 1 hub unreachable, 2 usage.
 	// A dropped connection is retried (claude-fleet#4933): an acquire by the
 	// same worker_id re-grants its own lease, a release of a released one is
 	// NOT_HELD — the same answer either way.
-	resp, err := hubDo(&http.Client{Timeout: leaseTimeout}, build, "lease", stderr)
+	resp, err := hubDo(&http.Client{Timeout: leaseTimeout, Transport: hubfwd.Transport(*hub, nil)}, build, "lease", stderr)
 	if err != nil {
 		return 1, err
 	}

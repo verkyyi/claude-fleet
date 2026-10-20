@@ -6608,7 +6608,7 @@ fleet_hub_lease() {
 # trip, or refuses naming every machine), FLEET_PLACE_AS (`--as <agent file>`,
 # a shipped one) and FLEET_PLACE_BODY_FILE (a scratch's seed, `--body-file`).
 # Every ask is timed: one `place_ms=<n>` line on stderr and one row in
-# $FLEET_CONF_DIR/logs/hub-place.log (`<ts>\t<what>\t<node>\t<rc>\t<ms>\t<answer>\t<not here 0|1>`).
+# $FLEET_CONF_DIR/logs/hub-place.log (`<ts>\t<what>\t<node>\t<rc>\t<place ms>\t<answer>\t<not here 0|1>\t<total ms>`).
 fleet_hub_place() {
   local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" wait="${7:-}" acct="${8:-}" name="${9:-}" reap="${10:-}" cmd u pre='' out rc why ef what wid
   local nh="${FLEET_PLACE_NOT_HERE:-}" pas="${FLEET_PLACE_AS:-}" pbody="${FLEET_PLACE_BODY_FILE:-}" t0 pms
@@ -6639,7 +6639,10 @@ fleet_hub_place() {
         ${wait:+--wait "$wait"} ${acct:+--account "$acct"} ${name:+--name "$name"} ${reap:+--reap "$reap"} \
         ${nh:+--not-here "$nh"} ${pas:+--as "$pas"} ${pbody:+--body-file "$pbody"} "$repo" "$num" "$wid" </dev/null 2>"$ef"); rc=$?
   pms=$(( $(fleet_now_ms) - t0 ))
-  _fleet_place_log "$what" "$node" "$rc" "$pms" "${out%%$'\n'*}" "${nh:+1}"
+  # The hub's time after its decision (a remote start's opening) is not the
+  # placement's: place_ms is the wait for the hub's word (T672).
+  local ap; ap=$(sed -n 's/^ccquota place: after_pick_ms=\([0-9][0-9]*\)$/\1/p' "$ef" 2>/dev/null | tail -n 1)
+  _fleet_place_log "$what" "$node" "$rc" "$(( pms - ${ap:-0} > 0 ? pms - ${ap:-0} : 0 ))" "${out%%$'\n'*}" "${nh:+1}" "$pms"
   out=$(printf '%s\n' "$out" | head -n1 | awk -F'\t' -v al="${FLEET_NODE_ALIASES:-}" '
     BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
     { k = split($1, w, " ")
@@ -6679,16 +6682,18 @@ fleet_agent_file_travels() {
   [ -f "$_FLEET_LIB_DIR/../conf/agent-defaults/claude/agents/$1.md" ]
 }
 
-# _fleet_place_log <what> <node> <rc> <ms> <answer> [<not here>] — one row per hub
-# placement ask (issue T672): the place_ms the 1-second target is read off, on
-# stderr for whoever asked and in logs/hub-place.log (rotated past 1 MB).
+# _fleet_place_log <what> <node> <rc> <ms> <answer> [<not here>] [<total ms>] — one
+# row per hub placement ask (issue T672): place_ms — the wait for the hub's word,
+# a remote start's own opening left out — is what the 1-second target is read
+# off; on stderr for whoever asked and in logs/hub-place.log (rotated past 1 MB),
+# the whole wait beside it.
 _fleet_place_log() {
   local f="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/hub-place.log" a
   a=$(printf '%s' "${5:-}" | awk -F'\t' '{ print $1 }' | cut -c 1-120)
-  printf 'fleet: place_ms=%s (%s%s)\n' "$4" "${a:-rc $3}" "${6:+, 本机不收}" >&2
+  printf 'fleet: place_ms=%s (%s%s%s)\n' "$4" "${a:-rc $3}" "${6:+, 本机不收}" "${7:+, 共 ${7} ms}" >&2
   mkdir -p "${f%/*}" 2>/dev/null || return 0
   [ -f "$f" ] && [ "$(wc -c < "$f" | tr -d ' ')" -gt 1048576 ] && mv -f "$f" "$f.1" 2>/dev/null
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "$a" "${6:-0}" >> "$f" 2>/dev/null || :
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "$a" "${6:-0}" "${7:-$4}" >> "$f" 2>/dev/null || :
 }
 
 # fleet_hub_place_ms [<n>] — the last <n> (20) asks' place_ms on this login, and
@@ -8601,6 +8606,13 @@ EOF
 # fleet_session_cap_ok already treats a refusal as "retry later" (dispatch's next
 # tick, the epic run's next refill), so spawns resume when the reading drops.
 fleet_machine_admit() {
+  # The drill switch (issue T672): this one call reads «full» whatever the
+  # readings — set on ONE spawn to watch the hub hand it to another machine.
+  if [ "${FLEET_ADMIT_FORCE_FULL:-0}" = 1 ]; then
+    if [ "${1:-}" = --short ]; then printf '暂停开新：演练'; return 1; fi
+    printf 'machine held by the drill — 暂停开新：演练 (FLEET_ADMIT_FORCE_FULL=1): this spawn reads the machine as full'
+    return 1
+  fi
   [ "${FLEET_ADMIT:-1}" = 0 ] && return 0
   local short=0 free_min="${FLEET_ADMIT_MEM_FREE_PCT:-15}" pres="${FLEET_ADMIT_PRESSURE:-warn}"
   local lmax="${FLEET_ADMIT_LOAD_PER_CORE:-${FLEET_LOADGEN_LOAD_PER_CORE:-1.5}}" plim m lvl avail per pname

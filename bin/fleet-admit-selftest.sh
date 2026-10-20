@@ -82,6 +82,10 @@ case "$r" in 1\|*FLEET_ADMIT_LOAD_PER_CORE=1*) ;; *) st_fail "A load bound defau
 r=$(SHORT=--short admit 'echo 4 5 97 0' 'echo 0.5'); [ "$r" = "1|暂停开新：内存紧张" ] || st_fail "A --short memory tag (got '$r')"
 r=$(SHORT=--short admit 'echo 1 66 5 6' 'echo 9');   [ "$r" = "1|暂停开新：负载过高（负载 9/核）" ] || st_fail "A --short load tag names the reading (got '$r')"
 r=$(admit 'true' 'true');                          [ "$r" = "0|" ] || st_fail "A unreadable probes must admit (got '$r')"
+# the drill switch (T672): full whatever the readings, even with the gate off
+r=$(admit 'echo 1 66 5 6' 'echo 0.50' FLEET_ADMIT_FORCE_FULL=1 FLEET_ADMIT=0)
+case "$r" in 1\|*暂停开新：演练*FLEET_ADMIT_FORCE_FULL=1*) ;; *) st_fail "A FLEET_ADMIT_FORCE_FULL=1 holds, naming the drill (got '$r')" ;; esac
+r=$(SHORT=--short admit 'echo 1 66 5 6' 'echo 0.50' FLEET_ADMIT_FORCE_FULL=1); [ "$r" = "1|暂停开新：演练" ] || st_fail "A --short drill tag (got '$r')"
 r=$(admit 'echo 2 40 5 0' 'echo 0.5' FLEET_ADMIT_PRESSURE=critical); [ "$r" = "0|" ] || st_fail "A PRESSURE=critical admits a warn (got '$r')"
 r=$(admit 'echo 4 40 5 0' 'echo 0.5' FLEET_ADMIT_PRESSURE=off);      [ "$r" = "0|" ] || st_fail "A PRESSURE=off ignores the level (got '$r')"
 r=$(admit 'echo 1 10 5 0' 'echo 0.5' FLEET_ADMIT_MEM_FREE_PCT=0 FLEET_ADMIT_RESERVE_MB=0); [ "$r" = "0|" ] || st_fail "A MEM_FREE_PCT=0 + RESERVE_MB=0 turn the floor off (got '$r')"

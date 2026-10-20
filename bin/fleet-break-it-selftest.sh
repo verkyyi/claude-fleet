@@ -4262,8 +4262,14 @@ drill_place_slow_bypass() {
   grep -q '^fleet: place_ms=[0-9]* (LOCAL mac-b' "$d/err" || { WHY="the ask is not timed on stderr: $(cat "$d/err")"; return 1; }
   out=$(FLEET_CONF_DIR="$d/conf" bash -c '. "$1/fleet-lib.sh"; fleet_hub_place_ms 20' _ "$BIN")
   case "$out" in 'n=3 p50='*' p90='*) ;; *) WHY="fleet_hub_place_ms does not read the log: $out"; return 1 ;; esac
+  # the warm road: every hub caller tries the agent's forwarder first
+  grep -q 'hubfwd.Transport' "$ROOT/tokenledger/agent/cli/place.go" "$ROOT/tokenledger/agent/cli/lease.go" \
+    && grep -q 'fleet_hub_sock' "$BIN/fleet-task-record.sh" && grep -q 'def hub_sock' "$BIN/fleet_hub_rest.py" \
+    && grep -q 'serveHubFwd' "$ROOT/tokenledger/agent/agent.go" "$ROOT/tokenledger/agent/node_machine.go" \
+    || { WHY="a hub caller (place / lease / task-record / python) or the agent's forwarder lost the warm road"; return 1; }
+  go_half '^Test(ForwarderOneConnectionManyAsks|TransportFallsBackDirect|TransportHTTPSHubOverSocket)$' ./shared/hubfwd; [ $? = 1 ] && return 1
   SECS=$(since "$t0")
-  WHAT="带种子的会话（dispatch --spawn）与 --as fleet-worker 一样先问入口；每次放置记 place_ms，日志读 p90（${out}）"
+  WHAT="带种子的会话（dispatch --spawn）与 --as fleet-worker 一样先问入口；入口调用走 agent 保温的转发口（多次一条连接）；每次放置记 place_ms，日志读 p90（${out}）"
 }
 
 # ---- one primary state source (issue #2537, EPIC #2535 C2) ------------------------

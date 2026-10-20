@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/hubfwd"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/hubwire"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/nodesig"
 )
@@ -234,11 +235,18 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 		}
 		return req, nil
 	}
-	resp, err := hubDo(&http.Client{Timeout: timeout}, build, "place", stderr)
+	resp, err := hubDo(&http.Client{Timeout: timeout, Transport: hubfwd.Transport(*hub, nil)}, build, "place", stderr)
 	if err != nil {
 		return 1, err
 	}
 	defer resp.Body.Close()
+	// The hub's time after its decision (claude-fleet T672): the caller's
+	// place_ms leaves it out — the decision, not a remote window's opening.
+	if v := resp.Header.Get("X-Fleet-After-Pick-Ms"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			fmt.Fprintf(stderr, "ccquota place: after_pick_ms=%d\n", n)
+		}
+	}
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 	var out struct {
 		Local     *bool           `json:"local"`

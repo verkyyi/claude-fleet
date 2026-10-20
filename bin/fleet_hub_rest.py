@@ -12,9 +12,12 @@ The node token is read the way every hub caller reads it (`_fleet_hub_env`, issu
 export. Exit-code style errors: Fail(rc, msg) — 1 the hub refused · 2 a bad request
 or reference · 4 the hub is not reachable (no answer, or no node token).
 """
+import http.client
+import io
 import json
 import os
 import re
+import socket
 import subprocess
 import urllib.error
 import urllib.parse
@@ -76,6 +79,61 @@ def creds():
     return _CREDS
 
 
+def hub_sock():
+    """The running agent's local forwarder to the hub (issue T672,
+    tokenledger/shared/hubfwd; fleet_hub_sock in fleet-client-core.sh): the
+    first socket of $CCQUOTA_HUB_SOCK ("off" = none), ~/.ccquota/hub.sock,
+    /var/db/fleet-node/hub.sock — or None."""
+    env = os.environ.get('CCQUOTA_HUB_SOCK', '')
+    if env == 'off':
+        return None
+    cands = [env] if env else [os.path.expanduser('~/.ccquota/hub.sock'), '/var/db/fleet-node/hub.sock']
+    for p in cands:
+        try:
+            if p and os.path.exists(p) and (os.stat(p).st_mode & 0o170000) == 0o140000:
+                return p
+        except OSError:
+            pass
+    return None
+
+
+class _UnixConn(http.client.HTTPConnection):
+    def __init__(self, path, timeout):
+        super().__init__('localhost', timeout=timeout)
+        self._path = path
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self._path)
+
+
+def _via_sock(sock, req, hub):
+    """One request on the agent's warm road: (status, body), or None when nobody
+    answered there or the forwarder refused before forwarding — the caller then
+    goes direct. A request that may have been sent is never sent twice."""
+    u = urllib.parse.urlsplit(req.full_url)
+    conn = _UnixConn(sock, TIMEOUT)
+    try:
+        conn.connect()
+    except OSError:
+        return None
+    try:
+        hdrs = dict(req.header_items())
+        hdrs['Host'] = u.netloc
+        hdrs['X-Fleet-Hub'] = hub
+        conn.request(req.get_method(), u.path + ('?' + u.query if u.query else ''), body=req.data, headers=hdrs)
+        r = conn.getresponse()
+        raw = r.read()
+        if r.getheader('X-Fleet-Hubfwd') == 'refused':
+            return None
+        if r.getheader('X-Fleet-Hubfwd') == 'unreachable':
+            raise OSError(raw.decode('utf-8', 'replace').replace('hubfwd: ', '', 1).strip())
+        return r.status, raw
+    finally:
+        conn.close()
+
+
 def api(method, path, body=None, query=None, root='/v1/fleet'):
     url, tok = creds()
     # A task authority is a person's (issue #4901): /authority[/start] is
@@ -91,8 +149,14 @@ def api(method, path, body=None, query=None, root='/v1/fleet'):
     if data is not None:
         req.add_header('Content-Type', 'application/json')
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            raw = r.read()
+        got = _via_sock(hub_sock(), req, url) if hub_sock() else None
+        if got is not None:
+            st, raw = got
+            if st >= 400:
+                raise urllib.error.HTTPError(full, st, '', {}, io.BytesIO(raw))
+        else:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                raw = r.read()
     except urllib.error.HTTPError as e:
         raw = e.read() or b''
         try:
