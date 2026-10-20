@@ -89,9 +89,11 @@ that dies at the boundary. Therefore:
   `<简称>·批次` (issue #2544). A lease, not a lock — fresh 45 min, so a loop that
   dies leaves a mark that expires; the closing tick clears it (step 4).
 
-- **Each tick ends by writing what it did onto the parent task** — one progress
-  word, which the hub keeps as the parent's `progress` (the 任务 page and ⌘P show
-  it beside `T<n>`), never relayed to anyone:
+- **Each tick ends by writing what it did onto the parent** — one progress word,
+  never relayed to anyone. With the ID switch on (EPIC T497) it lands on this
+  window's own ID — the parent's ID — as a `progress` event on its ledger, pushed
+  to the hub mirror (`fleet-id.sh get <ID>` shows it); before the switch the hub
+  keeps it as the parent record's `progress`. Same command either way:
 
   ```sh
   python3 ~/.claude/fleet/bin/fleet_task_control.py progress --event "tick-<n>" --summary \
@@ -101,7 +103,9 @@ that dies at the boundary. Therefore:
   The `report:` field appears on the **closing** ticks only (step 4). It is the
   one piece of state that outlives the core going empty, so a session that picks
   this batch up after a handoff can tell «核心空了，报告还没跑» from «跑完了» by
-  reading `last_tick` instead of guessing (issue #852).
+  reading `last_tick` instead of guessing (issue #852) — the tick's read gives that
+  word's `report:` as `report` (`pending`, or the link), and `last_tick_src` says
+  where it came from (`id`, else `record`).
 
 - **Context full ⇒ `/fleet-handoff`, not a summary.** The handoff doc need only
   say *"driving EPIC $P, re-read it"*; everything else is on the hub.
@@ -244,8 +248,8 @@ red PR, one retry — goes on the tick and waits for morning.
 ## 5. Report (keep it short)
 
 One line per tick in the terminal: `fleet-epic-tick.py status --line`'s words. The
-durable record is the parent task's progress and its children's results on the
-hub — not the terminal scrollback.
+durable record is the parent's progress word (on its ID with the switch on, else
+its task record) and its children's results on the hub — not the terminal scrollback.
 
 ---
 

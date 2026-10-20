@@ -20,6 +20,11 @@
 #   E. an older hub that lists bare ids: the records alone, as before.
 #   F. the heartbeat: stamped by the ID code with --task, the record's older mark
 #      replaced, cleared by the record.
+#   G. the driver's progress word (EPIC T497 C12): before the switch last_tick is
+#      the record's; with the switch on `fleet_task_control.py progress` writes it
+#      on the driver's own ID (a retried --event writes nothing), the tick's
+#      last_tick is that word, and a closing tick's `report: pending` reads back
+#      as report=pending — then the link, once the report ran.
 # Hermetic: a sandbox FLEET_CONF_DIR, no tmux, no network, gh denied.
 set -uo pipefail
 
@@ -83,7 +88,10 @@ if meth == "GET" and path.endswith("/children"):
     p = path.split("/")[0]
     out(dict(parent=p, children=[t for t in st["tasks"].values() if t.get("parent_task") == p]))
 if meth == "GET" and path in st["tasks"]:
-    out(dict(task=st["tasks"][path], live=None, pr_state="none"))
+    got = dict(task=st["tasks"][path], live=None, pr_state="none")
+    if path in st.get("progress", {}):
+        got["progress"] = st["progress"][path]   # a tick the record kept before the switch
+    out(got)
 out({"error": "no route"}, 404)
 PY
 chmod +x "$WORK/hub"
@@ -201,6 +209,40 @@ has "F: the record beside it" "$(cat "$WORK/conf/global/epic-running.d/o-r-$DSHO
 has "F: cleared by the record" "$(bash "$BIN/fleet-epic-heartbeat.sh" --clear "$P")" "cleared"
 eq "F: nothing left" "" "$(ls "$WORK/conf/global/epic-running.d")"
 bash "$BIN/fleet-epic-heartbeat.sh" "T-ab!" >/dev/null 2>&1; eq "F: a bad code is refused" 2 "$?"
+
+# --- G. the driver's progress word, on its ID ------------------------------------
+python3 - "$P" <<'PY'
+import json, os, sys
+st = json.load(open(os.environ["STUB_STATE"]))
+st.setdefault("progress", {})[sys.argv[1]] = {"summary": "tick 28 · slots 1/2 · report: -"}
+json.dump(st, open(os.environ["STUB_STATE"], "w"))
+PY
+S=$(tick)
+eq "G: before the switch, the record's tick" "tick 28 · slots 1/2 · report: - record" \
+  "$(printf '%s' "$S" | jq_ 'd["last_tick"]+" "+d["last_tick_src"]')"
+# the driver's pane: a tmux that knows one window, the driver's
+printf '#!/bin/sh\ncase "$*" in *"#{@fleet_id}"*) echo "%s" ;; *) exit 1 ;; esac\n' "$DRV" > "$WORK/path/tmux"
+chmod +x "$WORK/path/tmux"
+prog() { FLEET_ID_SWITCH=on python3 "$BIN/fleet_task_control.py" progress --pane %1 --event "$1" --summary "$2"; }
+out=$(prog tick-29 "tick 29 · slots 0/2 · 合 C1 C2 · report: pending"); RC=$?
+eq "G: with the switch on, the word is the ID's" "0" "$RC"
+has "G: recorded on the driver's ID" "$out" "id: $DRV"
+prog tick-29 "tick 29 · again" >/dev/null
+eq "G: a retried tick writes nothing" 1 "$(grep -c '"ev":"progress"' "$WORK/conf/ids/$DRV.ndjson")"
+S=$(tick)
+eq "G: last_tick is the ID's word" "tick 29 · slots 0/2 · 合 C1 C2 · report: pending id" \
+  "$(printf '%s' "$S" | jq_ 'd["last_tick"]+" "+d["last_tick_src"]')"
+eq "G: the closing guard reads: core empty, report not run" "pending True" \
+  "$(printf '%s' "$S" | jq_ 'd["report"]+" "+str(d["done"])')"
+has "G: the line says write the report" "$(tick --line)" "该写报告"
+has "G: fleet-id.sh get shows it" "$(bash "$BIN/fleet-id.sh" get "$DRV")" "进度"
+prog report-1 "tick 30 · report: https://space.test/p/1" >/dev/null
+S=$(tick)
+eq "G: the report ran: its link" "https://space.test/p/1" "$(printf '%s' "$S" | jq_ 'd["report"]')"
+has "G: and the line says so" "$(tick --line)" "报告 https://space.test/p/1"
+rm -f "$WORK/path/tmux"
+out=$(FLEET_ID_SWITCH=off python3 "$BIN/fleet_task_control.py" progress --pane %1 --event tick-31 --summary x)
+eq "G: switch off: the ID's ledger is not written" 2 "$(grep -c '"ev":"progress"' "$WORK/conf/ids/$DRV.ndjson")"
 
 [ -e "$WORK/denied" ] && bad "gh ran: $(cat "$WORK/denied")" || ok
 [ "$BAD" = 0 ] && { printf 'fleet-epic-id-selftest: %d checks OK (a two-member batch by ID, one redone)\n' "$N"; exit 0; }

@@ -188,6 +188,25 @@ print("200")
         with patch.object(control, "context", return_value=c), self.assertRaises(ValueError):
             control.progress("@7", "  ", "waiting")
 
+    def test_progress_with_the_id_switch_goes_on_the_window_id(self):
+        # EPIC T497 C12: with the switch on, the tick is a `progress` event on the
+        # window's own ID's ledger — the task record is neither read nor written.
+        import fleet_id
+        fid = "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        with tempfile.TemporaryDirectory() as d, \
+             patch.dict(os.environ, FLEET_ID_SWITCH="on", FLEET_ID_DIR=d, FLEET_ID_PUSH="0"), \
+             patch.object(control, "call") as hub, patch.object(control.launch, "option", return_value=fid), \
+             contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(control.progress("@7", "tick 5 · report: pending", "waiting", "tick-5"), 0)
+            self.assertEqual(control.progress("@7", "tick 5 again", "waiting", "tick-5"), 0)
+            hub.assert_not_called()
+            pg = fleet_id.fold(fleet_id.read(fid))["progress"]
+            self.assertEqual((pg["summary"], pg["event"], pg["seq"]), ("tick 5 · report: pending", "tick-5", 1))
+        self.assertIn("id: " + fid, out.getvalue())
+        with patch.dict(os.environ, FLEET_ID_SWITCH="on"), patch.object(control.launch, "option", return_value=""), \
+             self.assertRaises(ValueError):
+            control.progress("@7", "tick 6", "waiting")
+
     def test_children_summary_counts_outcomes(self):
         kids = [dict(outcome="succeeded"), dict(outcome="failed"), dict(outcome=""), dict()]
         self.assertEqual(control.child_summary(dict(children=kids)),

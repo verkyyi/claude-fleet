@@ -205,3 +205,28 @@ func TestFleetIDReopened(t *testing.T) {
 		t.Fatalf("closed again = %+v", a)
 	}
 }
+
+// C12: a `progress` event is the ID's newest progress word — kept on the record,
+// never a result; a resend keeps the newest.
+func TestFleetIDProgress(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	evs := ledger(t,
+		`{"ev":"opened","agent":"claude","title":"EPIC driver","id":"`+idA+`","seq":1,"ts":1000}`,
+		`{"ev":"progress","state":"progress","summary":"tick 1 · 核心 3","id":"`+idA+`","seq":2,"ts":1001}`,
+		`{"ev":"progress","state":"progress","summary":"tick 2 · report: pending","id":"`+idA+`","seq":3,"ts":1002}`)
+	if _, err := push(t, st, "e1", idA, evs[:2]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := push(t, st, "e1", idA, evs); err != nil {
+		t.Fatal(err)
+	}
+	a, err := st.FleetIDOf("operator", idA)
+	if err != nil || a.Progress == nil || a.Progress.Summary != "tick 2 · report: pending" || a.Progress.Seq != 3 ||
+		a.Progress.At != 1002 || len(a.Results) != 0 {
+		t.Fatalf("progress = %+v %v", a.Progress, err)
+	}
+	b, err := st.FleetIDOf("operator", idA)
+	if err != nil || !reflect.DeepEqual(a, b) {
+		t.Fatalf("reread %+v %v", b, err)
+	}
+}

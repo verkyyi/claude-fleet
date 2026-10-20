@@ -10,6 +10,10 @@
 #                                            and stamps it on --window as @task_short
 #   fleet-id.sh native <ID> --agent a --native <sid> --source startup|resume|clear|compact [--hint handoff]
 #   fleet-id.sh result <ID> --state s [--summary …] [--pr N] [--agent a]
+#   fleet-id.sh progress <ID> --summary … [--state s] [--event e]
+#                                            one progress word (EPIC T497 C12): the newest
+#                                            is the ID's `progress` (get, family, the hub
+#                                            mirror); a repeated --event writes nothing
 #   fleet-id.sh close  <ID> [--reason r]
 #   fleet-id.sh get    <ID | T-code> [--json]  the ID, its segments (agent · native id ·
 #                                            start–end · trigger · compactions), results
@@ -84,7 +88,7 @@ esac
 # FLEET_ID_LIVE_CMD is the selftest's seam (prints the live IDs).
 live='' scanned=''
 case "$1" in
-  open|short|resolve|get|native|result|close|status|route|children|family|await|history|continue|reopen)
+  open|short|resolve|get|native|result|progress|close|status|route|children|family|await|history|continue|reopen)
     if [ -n "${FLEET_ID_LIVE_CMD:-}" ]; then live=$(eval "$FLEET_ID_LIVE_CMD") && scanned=1
     elif [ -n "${TMUX:-}" ]; then live=$(fleet_lw '#{@fleet_id}' 2>/dev/null) && scanned=1
     else

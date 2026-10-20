@@ -40,7 +40,7 @@ P=<the T<n> argument, or empty>
 [ -n "$P" ] || P=$(bash ~/.claude/fleet/bin/fleet-task-record.sh of) || P=''
 echo "parent=${P:-none}"
 python3 ~/.claude/fleet/bin/fleet-epic-tick.py status --task "$P"          # the members, their results, their PRs
-bash ~/.claude/fleet/bin/fleet-task-record.sh get "$P"                       # the charter (request_payload.body) + the last tick (progress)
+bash ~/.claude/fleet/bin/fleet-task-record.sh get "$P"                       # the charter (request_payload.body); the last tick is the status' last_tick
 ```
 
 - **`parent=none`** → ask which `T<n>` and stop; never guess.
@@ -51,7 +51,8 @@ bash ~/.claude/fleet/bin/fleet-task-record.sh get "$P"                       # t
 ## 1. Gather — seven sources, no invention
 
 - **The parent**: the charter (its record's dispatch body), its ticks — the
-  driver's progress words (the newest is `progress` on its record; each child's
+  driver's progress words (the newest is the status' `last_tick` — the parent ID's
+  progress word with the ID switch on, else `progress` on its record; each child's
   `[child-report]` and the ticks in this session's own scrollback when you are the
   driver), and the charter's 待决 section.
 - **The metric contract** (issue #839): the charter's **打算移动的指标** table —
@@ -287,7 +288,8 @@ The report goes to 活页 (issue #4957):
    parent stays the link.
 2. `mcp__space__push_to_wechat` — that `proposal_id`, `to` omitted (the operator
    only).
-3. **Write the link back onto the parent task** — one progress word (only from
+3. **Write the link back onto the parent** — one progress word, on the parent's
+   ID with the ID switch on, else its task record (only from
    the parent's own session, i.e. as the driver; run by hand elsewhere, put the
    link in step 5's line instead):
 
