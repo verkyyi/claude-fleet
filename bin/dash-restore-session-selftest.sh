@@ -48,6 +48,7 @@ NEWWIN_LOG="$WORK/newwin"; OPTS_LOG="$WORK/opts"; DISPLAY_LOG="$WORK/display"; S
 
 ln -s "$RST" "$WORK/bin/dash-restore-session.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
+ln -s "$BIN/fleet_notice.py" "$WORK/bin/fleet_notice.py"   # the one notice road (T675)
 
 # --- stub fleet-history.sh: emit the verdict the test wants (tab-delimited) ------
 cat > "$WORK/bin/fleet-history.sh" <<'HISTFAKE'

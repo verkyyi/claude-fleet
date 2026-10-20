@@ -246,7 +246,7 @@ chmod +x "$SB/fleet-daemon-watch.sh"
 cat > "$WORK/shim/tmux" <<EOF
 #!/bin/sh
 case "\$1" in
-  display-message) printf '%s\\n' "\$2" >> "$WORK/toasts" ;;
+  display-message) shift; printf '%s\\n' "\$*" >> "$WORK/toasts" ;;   # a notice's held line (T675): -d <ms> <text>
   run-shell) [ "\$2" = -b ] && { sh -c "\$3" </dev/null >/dev/null 2>&1 & } ;;
 esac
 exit 0
@@ -300,7 +300,7 @@ case "$out" in *"▲  fleet: a at 90% → benched; moving its sessions to b"*"�
 fev -L sB quota-benched 'fleet: a at 90% → benched; moving its sessions to b'   # the same news off another socket
 eq "11: the same kind + text within 60s is ONE event" 1 "$(grep -c 'quota-benched' "$EV")"
 fev -L sA disk-red 'fleet: b at 95% — nowhere to move'
-eq "11: a whitelisted kind flashes once on its socket" 1 "$(grep -c '^-L sA display-message fleet: b at 95% — nowhere to move$' "$WORK/calls11")"
+eq "11: a whitelisted kind flashes once on its socket, held (a notice — T675)" 1 "$(grep -c '^-L sA display-message -d 6000 .*fleet: b at 95% — nowhere to move' "$WORK/calls11")"
 grep -q 'disk-red	fleet: b at 95%' "$EV" || st_fail "11: …and is recorded too" "$(cat "$EV")"; st_count
 fa write
 eq "11: two events → ▲ 2" "0 2 0" "$(fa counts)"
@@ -409,7 +409,7 @@ case "$r14" in *'"detail":"codex ops@example.com needs re-login — run: codex l
 case "$r14" in *'"action":"relogin","healed_at":0,"target":"codex/work"'*) st_count ;; *) st_fail "14: ↵ must re-login codex/work (issue #1669)" "$r14" ;; esac
 case "$(head -n 1 "$G/account.reauth")" in [0-9]*"	checked") st_count ;; *) st_fail "14: the stamp has no checked header" "$(cat "$G/account.reauth")" ;; esac
 eq "14: a new dead profile is ONE account-reauth event" 1 "$(grep -c '	account-reauth	' "$G/alerts.events")"
-eq "14: …and it flashed once" 1 "$(grep -c 'display-message accounts: codex ops@example.com needs re-login' "$WORK/calls14")"
+eq "14: …and it flashed once" 1 "$(grep -c 'display-message -d [0-9]* .*accounts: codex ops@example.com needs re-login' "$WORK/calls14")"
 s14a=$(sed -n 's/.*"since":\([0-9]*\),.*/\1/p' <<< "$r14")
 sleep 1
 fa14 write
