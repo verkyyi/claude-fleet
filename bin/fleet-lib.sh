@@ -6508,6 +6508,19 @@ _fleet_hub_fail() {
   esac
 }
 
+# _fleet_ccquota → the `ccquota` the hub helpers run, as a command prefix (issue
+# T672): the release's own, beside these scripts ($BIN/ccquota on a managed
+# machine — it moves with every switch), else the one on PATH. A login's PATH
+# copy is not kept up to date (on 2026-10-20 one was 12 days old), and an
+# old one does not know a flag the scripts of this release pass (--not-here).
+_fleet_ccquota() {
+  case "$_FLEET_LIB_DIR" in *"'"*) ;; *)
+    [ -x "$_FLEET_LIB_DIR/ccquota" ] && { printf "'%s'" "$_FLEET_LIB_DIR/ccquota"; return 0; } ;;
+  esac
+  command -v ccquota >/dev/null 2>&1 && { printf 'ccquota'; return 0; }
+  return 1
+}
+
 # fleet_hub_lease acquire|release <sess> <repo> <issue> [--force] — the hub's
 # lease on (repo, issue) (issue #1422, EPIC #1419 C3): taken before a session is
 # opened so two machines can never both open one issue. Off unless CCQUOTA_FLEET=1.
@@ -6533,7 +6546,7 @@ fleet_hub_lease() {
   case "$num" in ''|*[!0-9]*) return 1 ;; esac
   cmd="${FLEET_HUB_LEASE_CMD:-}"
   if [ -z "$cmd" ]; then
-    if command -v ccquota >/dev/null 2>&1; then cmd='ccquota lease'
+    if cmd=$(_fleet_ccquota); then cmd="$cmd lease"
     else printf 'fleet: hub lease unavailable (no FLEET_HUB_LEASE_CMD, no ccquota on PATH) — no lease guards #%s\n' "$num" >&2; return 1; fi
     # ccquota acts as the agent: without its token it exits 1 「no hub configured」,
     # which read as 「hub unreachable」 until issue #1491. Say what is actually missing.
@@ -6616,7 +6629,7 @@ fleet_hub_place() {
   case "$num" in scratch) what='a scratch session' ;; ''|*[!0-9]*) return 1 ;; *) what="#$num" ;; esac
   cmd="${FLEET_HUB_PLACE_CMD:-}"
   if [ -z "$cmd" ]; then
-    if command -v ccquota >/dev/null 2>&1; then cmd='ccquota place'
+    if cmd=$(_fleet_ccquota); then cmd="$cmd place"
     else printf 'fleet: hub placement unavailable (no FLEET_HUB_PLACE_CMD, no ccquota on PATH) — opening %s here\n' "$what" >&2; return 11; fi
     if why=$(_fleet_hub_creds_missing); then
       printf 'fleet: %s — opening %s here\n' "$why" "$what" >&2; return 11
@@ -6726,7 +6739,7 @@ fleet_hub_move() {
   [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 10
   cmd="${FLEET_HUB_MOVE_CMD:-}"
   if [ -z "$cmd" ]; then
-    if command -v ccquota >/dev/null 2>&1; then cmd='ccquota move'
+    if cmd=$(_fleet_ccquota); then cmd="$cmd move"
     else printf 'fleet: hub move unavailable (no FLEET_HUB_MOVE_CMD, no ccquota on PATH)\n' >&2; return 1; fi
     if why=$(_fleet_hub_creds_missing); then
       printf 'fleet: %s — the move cannot be asked for\n' "$why" >&2; return 1

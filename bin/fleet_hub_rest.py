@@ -149,7 +149,8 @@ def api(method, path, body=None, query=None, root='/v1/fleet'):
     if data is not None:
         req.add_header('Content-Type', 'application/json')
     try:
-        got = _via_sock(hub_sock(), req, url) if hub_sock() else None
+        # only a remote https hub: a login's own broker is already local
+        got = _via_sock(hub_sock(), req, url) if url.startswith('https://') and hub_sock() else None
         if got is not None:
             st, raw = got
             if st >= 400:
