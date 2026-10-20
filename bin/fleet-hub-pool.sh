@@ -23,7 +23,7 @@
 # No hub configured (FLEET_HUB_URL / CCQUOTA_HUB_URL) ⇒ the file is removed and
 # everything reads as before. A hub out of reach, an answer with no `pool`, or a
 # value out of range ⇒ the file stays as it was (a bad value is dropped, named
-# on stderr). Called by the quotawatch tick (backgrounded, at most once per
+# on stderr). Called by the reconcile tick (backgrounded, at most once per
 # FLEET_HUB_POOL_SECS, default 300); never edit the file by hand.
 #
 # Usage:

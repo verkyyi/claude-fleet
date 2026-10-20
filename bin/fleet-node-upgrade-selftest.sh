@@ -267,7 +267,7 @@ grep -q prod-9b7e562 "$S/node root/current/bin/ccquota" || fail "K: the release'
 lacks "K: a3 not restarted" "$(cat "$S/launchctl.log")" "agent.a3"
 
 # ── H doctor `agent` line ───────────────────────────────────────────────────
-DFILES="fleet-doctor.sh fleet-account.sh fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-quotawatch.sh fleet-hub-node.sh fleet-daemon-lib.sh fleet-node-upgrade.sh fleet-conf.sh"
+DFILES="fleet-doctor.sh fleet-account.sh fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-hub-node.sh fleet-daemon-lib.sh fleet-node-upgrade.sh fleet-conf.sh"
 setup
 mkdir -p "$S/dbin" "$S/conf"
 printf 'FLEET_HOST=1\n' > "$S/conf/fleet.conf"   # it 承载: the row is a host's (issue #2716)

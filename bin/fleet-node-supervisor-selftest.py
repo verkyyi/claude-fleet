@@ -1368,7 +1368,7 @@ class H_Accounts(Sandbox):
         # the autofill dispatcher's template is gone (issue #3120): no account
         # runs it, and nothing keeps a unit the runtime no longer carries
         self.assertNotIn("dispatch", units)
-        for need in ("ledger-watch", "quotawatch", "reconcile", "cleanup",
+        for need in ("ledger-watch", "reconcile", "cleanup",
                      "worktree-autoclean", "spinner", "collect", "install-sync", "base-sync"):
             self.assertIn(need, units)
         # the GitHub daemons left with issue #4899

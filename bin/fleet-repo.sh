@@ -222,7 +222,7 @@ fold_count() {
 #               settles them; a moved worker files fresh ones under <sess>.
 #     restore   the legacy restore/<from>.map.
 #   delete   cache — $FLEET_C/global/*<from> runtime state (dash toggles, spawn
-#            debounce, quotawatch probe health) with nothing to preserve.
+#            debounce, model-cap probe health) with nothing to preserve.
 fold_side() {
   local f="$1" p q="$FLEET_CONF_DIR/handoffs/quota-requests" g="$FLEET_C/global"
   if [ -d "$q" ] && command -v python3 >/dev/null 2>&1; then
@@ -244,7 +244,8 @@ PY
   fi
   p="$FLEET_CONF_DIR/restore/$f.map"; [ -f "$p" ] && printf 'archive\trestore\t%s\n' "$p"
   for p in "$g/dash_view_$f" "$g/dash_fold_rows_$f" "$g/backlog_show_bound_$f" \
-           "$g/spawn_last_ms_$f" "$g/quotawatch.modelcap.$f" "$g/quotawatch.probe.trace.$f" \
+           "$g/spawn_last_ms_$f" "$g/reconcile.modelcap.$f" "$g/reconcile.modelcap.trace.$f" \
+           "$g/quotawatch.modelcap.$f" "$g/quotawatch.probe.trace.$f" \
            "$g/dash_fold_landed_$f" "$g/dash_fold_landed_$f".*; do
     [ -f "$p" ] && printf 'delete\tcache\t%s\n' "$p"
   done

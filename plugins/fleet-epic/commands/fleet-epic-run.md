@@ -184,16 +184,10 @@ succeeded. Outside the scope → 待决.
 
 ### d. Quota
 
-```sh
-bash ~/.claude/fleet/bin/fleet-account.sh quota    # label · 5h% · week% · …
-```
-
-No row is never silent (issue #2588): **4** nothing configured (write 「no pool」),
-**3** unknown right now (write 「unknown — <its words>」). Quota is a **rate
-limiter here, not a target**: an account near its ceiling → `fleet-account.sh
-migrate` moves work off it; **every account at the ceiling → wait, don't stop** —
-a 20–30 min tick until a 5h window refreshes. An empty read is unknown, never zero
-(issue #684): keep the previous decision and say so on the tick.
+Not the driver's to watch (T549): a full subscription is the credential pool's to
+change, and each session's own 剩余 % is on its window. If a member's session says
+it is out of quota, record it on the tick and keep going — never stop the batch
+for it, never move the session.
 
 ## 3. The loop
 

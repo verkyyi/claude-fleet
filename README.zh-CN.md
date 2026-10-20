@@ -217,15 +217,13 @@ token 保存在仓库外。详细步骤、指定账号子集和重置时间的�
 
 ```sh
 export CCQUOTA_HUB_URL="https://your-ccquota-hub.example"
-FLEET_ACCOUNT_WARN_PCT=70
 FLEET_ACCOUNT_CEILING=85
 FLEET_ACCOUNT_PICK=pace
-FLEET_ACCOUNT_PHASE_AUTO=0
 ```
 
 查看凭据可保存在 `~/.ccquota/viewer-token`。ccquota 中的账号名称应与 Fleet 的账号标签一致；也可在对应的 `<标签>.conf` 中设置 `CCQUOTA_ACCOUNT=<uuid>` 显式关联。没有读数的账号会显示为缺失，不会被当成「使用了 0%」，也不会作为额度触发迁移的接收目标。
 
-独立的额度监控服务约每 60 秒检查一次，读取跨设备的账号级 5 小时／7 天用量与重置时间；预警和轮换按账号、按重置窗口去重。新会话按各账号的**周额度进度**（相对于均匀消耗领先或落后多少点）排名，让几个账号的周额度一起消耗而不是先耗尽最紧的那个；监控还会把远超进度的账号上的空闲会话每次迁走一个（详见 [docs/dev/MULTI-ACCOUNT.md](docs/dev/MULTI-ACCOUNT.md#pacing-the-weekly-budget-across-the-pool-issue-1231)）。缺少可用数据时，提前处理策略退回到限额提示触发的路径，hub 暂时不可用不会直接阻止开发。
+新会话按各账号的**周额度进度**（相对于均匀消耗领先或落后多少点）排名，让几个账号的周额度一起消耗而不是先耗尽最紧的那个（详见 [docs/dev/MULTI-ACCOUNT.md](docs/dev/MULTI-ACCOUNT.md#pacing-the-weekly-budget-across-the-pool-issue-1231)）。没有每分钟的巡查去预警或挪动运行中的会话：订阅满了由凭据池换，每个会话自己的剩余 % 就在它的窗口上。hub 暂时不可用不会直接阻止开发。
 
 ### 可选：窗口错峰和远程开会话闸门
 
@@ -236,7 +234,7 @@ FLEET_ACCOUNT_PHASE_AUTO=0
 ~/.claude/fleet/bin/fleet-account.sh phase --plan --apply
 ```
 
-计划控制空闲账号的首次使用时机，不修改服务端的重置时间，也不会暂停已经进入窗口的账号。需要时会放宽等待安排，让新会话仍有账号可用。设置 `FLEET_ACCOUNT_PHASE_AUTO=1` 可自动重规划；`FLEET_ACCOUNT_PHASE=0` 则忽略已写入的计划。
+计划控制空闲账号的首次使用时机，不修改服务端的重置时间，也不会暂停已经进入窗口的账号。需要时会放宽等待安排，让新会话仍有账号可用。设置 `FLEET_ACCOUNT_PHASE=0` 则忽略已写入的计划。
 
 **远程开会话闸门与账号轮换是两项独立功能。** 想在额度接近阈值时暂停入口远程开会话，可在 `fleet.conf` 中设置：
 
@@ -255,14 +253,10 @@ FLEET_QUOTA_CEILING=90
 常用检查命令：
 
 ```sh
-~/.claude/fleet/bin/fleet-account.sh quota --refresh
-~/.claude/fleet/bin/fleet-quotawatch.sh --status
-~/.claude/fleet/bin/fleet-quotawatch.sh --dry-run
+~/.claude/fleet/bin/fleet-account.sh list
 ~/.claude/fleet/bin/fleet-quotaguard.sh --status
 sh ~/.claude/fleet/bin/fleet-doctor.sh
 ```
-
-`--status` 区分 `off`、`never`、`fresh`、`stale` 和 `blind`。默认超过 600 秒未更新会提示 `quota stale`；连续 3 次读取为空，即使时间戳很新，也会提示 `quota blind`。状态栏和 doctor 都会暴露这些问题。
 
 本地会话记录统计的 token 用量是**跨账号汇总的估算值**；ccquota 提供的账号级额度读数是另一类数据。二者都应与账单区分。完整机制、手动迁移和排错见[多账号文档](docs/dev/MULTI-ACCOUNT.md)。
 

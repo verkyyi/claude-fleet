@@ -81,7 +81,6 @@
 0.0 favicon-selftest.sh
 0.8 fleet-account-add-selftest.sh
 0.1 fleet-account-provider-selftest.py
-6.1 fleet-account-quota-why-selftest.sh
 8.0 fleet-account-selftest.sh
 13.6 fleet-admin-handover-selftest.py
 1.6 fleet-admin-seat-selftest.sh
@@ -181,7 +180,6 @@
 4.1 fleet-collect-guard-selftest.sh
 23.8 fleet-collect-issues-selftest.sh
 16.4 fleet-collect-phase-budget-selftest.sh
-2.2 fleet-collect-quotawatch-gate-selftest.sh
 0.8 fleet-collect-sessmap-guard-selftest.sh
 1.9 fleet-collect-stale-selftest.sh
 3.3 fleet-compose-selftest.sh
@@ -219,7 +217,6 @@
 5.6 fleet-doctor-mcp-selftest.sh
 30.4 fleet-doctor-node-selftest.sh
 4.0 fleet-doctor-onboard-selftest.sh
-16.6 fleet-doctor-quota-selftest.sh
 8.6 fleet-doctor-repos-selftest.sh
 0.2 fleet-down-selftest.sh
 0.2 fleet-durations-drift-selftest.sh
@@ -355,13 +352,8 @@
 5.5 fleet-pr-verdict-selftest.sh
 2.8 fleet-proxy-quota-selftest.sh
 3.9 fleet-quick-dispatch-selftest.sh
-5.2 fleet-quota-blind-selftest.sh
-12.2 fleet-quota-carry-selftest.sh
 3.3 fleet-quota-verdict-selftest.sh
 0.0 fleet-quotaguard-selftest.sh
-16.1 fleet-quotawatch-selftest.sh#1
-29.2 fleet-quotawatch-selftest.sh#2
-13.5 fleet-quotawatch-selftest.sh#3
 1.1 fleet-reap-live-selftest.py
 0.1 fleet-reap-overdue-selftest.py
 2.9 fleet-reap-shadow-selftest.sh

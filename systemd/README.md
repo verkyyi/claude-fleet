@@ -10,8 +10,7 @@ plus the `.timer` + `.service` pairs matching the launchd
 | `claude-fleet-memguard.service` | always-on (`Restart=always`), samples every 2s | `com.claude-fleet.memguard` (KeepAlive) | recommended (stops a fleet command whose memory spikes under pressure, reports memory-holding orphans; issue #1292) |
 | `claude-fleet-collect.timer` | every 60s, +10s after start | `com.claude-fleet.collect` | required |
 | `claude-fleet-diskguard.timer` | every 60s, +10s after start | `com.claude-fleet.diskguard` | recommended (disk gate + forensics; also the ON-by-default orphaned-runaway watchdog, issue #697 — a machine with no diskguard unit has no machine-level runaway defense) |
-| `claude-fleet-quotawatch.timer` | every 60s, +15s after start | `com.claude-fleet.quotawatch` | recommended with a ccquota hub (the pre-emptive account rotation's own tick, issue #551; no-op without `CCQUOTA_HUB_URL` + an accounts pool) |
-| `claude-fleet-reconcile.timer` | every 60s, +25s after start | `com.claude-fleet.reconcile` | required (session state reconcile — who is working, who is idle — plus the cfg-stale reopen; T544) |
+| `claude-fleet-reconcile.timer` | every 60s, +25s after start | `com.claude-fleet.reconcile` | required (session state reconcile — who is working, who is idle — plus the cfg-stale reopen, T544; and since T549 the model-cap sweep, the proxy quota push, the collector self-heal and the alerts write the retired quota watch ran) |
 | `claude-fleet-cleanup.timer` | every 60s, +25s after start | `com.claude-fleet.cleanup` | recommended (reap worktrees after merges — the worker does the merging, this only cleans up) |
 | `claude-fleet-ledger-watch.timer` | every 60s, +30s after start | `com.claude-fleet.ledger-watch` | recommended (index every closed worker session for `/fleet-history` resume) |
 | `claude-fleet-base-sync.timer` | every 60s, +35s after start | `com.claude-fleet.base-sync` | recommended (keep the local base fast-forwarded to the remote, merge-independent; ON per fleet unless `FLEET_BASE_SYNC=0`) |
@@ -38,7 +37,6 @@ systemctl --user enable --now claude-fleet-collect.timer
 systemctl --user enable --now claude-fleet-reconcile.timer  # session state reconcile (working / idle / looping) every 60s
 systemctl --user enable --now claude-fleet-diskguard.timer   # recommended: crash-guard
 systemctl --user enable --now claude-fleet-memguard.service # recommended: stop a memory spike within seconds (#1292)
-systemctl --user enable --now claude-fleet-quotawatch.timer  # with a ccquota hub: pre-emptive account rotation on its own 60s tick (#551)
 systemctl --user enable --now claude-fleet-cleanup.timer    # recommended: reap worktrees after merges (it merges nothing itself); ON per fleet unless FLEET_CLEANUP=0
 systemctl --user enable --now claude-fleet-ledger-watch.timer # recommended: index every closed worker session for resume; ON per fleet unless FLEET_LEDGER_WATCH=0
 systemctl --user enable --now claude-fleet-base-sync.timer  # recommended: keep the local base fast-forwarded to the remote (merge-independent); ON per fleet unless FLEET_BASE_SYNC=0

@@ -108,13 +108,12 @@ fleet_alerts_unstall() {
 # --- events (issue #1617) -----------------------------------------------------
 # The flash whitelist — THE one place it is written. Everything else a daemon,
 # hook or background helper has to say is recorded, never flashed:
-#   quota-nowhere  an account is at its ceiling and no other one can take its sessions
 #   hub-lost       the hub has not answered for FLEET_ALERTS_HUB_FLASH_SECS (5 min)
 #   disk-red       free disk is at the spawn-refusal floor
 #   account-reauth a profile's credential died and only a person signing in
 #                  fixes it (issue #1469, EPIC #1665 C2) — its standing row is
 #                  `▲ accounts · reauth`, this is the toast when it first happens
-FLEET_ALERT_FLASH_KINDS='quota-nowhere hub-lost disk-red account-reauth'
+FLEET_ALERT_FLASH_KINDS='hub-lost disk-red account-reauth'
 fleet_alerts_events_file() { printf '%s/alerts.events' "$(fleet_usage_cache_dir)"; }
 fleet_alert_flashes() { case " $FLEET_ALERT_FLASH_KINDS " in *" ${1:-} "*) return 0 ;; esac; return 1; }
 
@@ -339,52 +338,13 @@ _fa_machine() {
 # fleet_alerts_compute [--kick] — every alert that holds RIGHT NOW, as TSV rows
 # (since=0 means "carry it over from the previous file, or now"). A line
 # `#carry-needs` asks the writer to keep the previous file's needs rows: the
-# quota watch writes from outside tmux, where no window is visible.
+# reconcile tick writes from outside tmux, where no window is visible.
 fleet_alerts_compute() {
-  local kick=0 now qstale qblind qspread cstale ckick trace dn du dnames
-  local qcarry qcage qcrest qcwhy qcfor qcmin qbwhy qbtxt
+  local kick=0 now cstale ckick trace dn du dnames
   local dkick dtrace free floor target af at nf label rest model until fb seen
   [ "${1:-}" = --kick ] && kick=1
   now=$(fleet_now)
   trace="${FLEET_COLLECT_KICK_TRACE:-1800}"
-
-  # --- quota (issues #551, #684, #874, #1231) ---
-  qstale=$(fleet_quota_stale_age)
-  if [ -n "$qstale" ]; then
-    _fa_row quota-stale alarm quota stale "$(fleet_usage_human_secs "$qstale")" \
-      $(( now - qstale )) accounts 0 '' 'no quota-watch tick for this long: the pre-emptive rotation is blind'
-  else
-    # A reading carried over a refused / silent hub (issue #2465): the rotation
-    # keeps working on it, so a blip is no alarm — but a hub that REFUSES (401)
-    # for FLEET_QUOTA_REFUSED_ALARM (300 s) is a credential to fix, not a blip.
-    qcarry=$(fleet_quota_carry)
-    if [ -n "$qcarry" ]; then
-      qcage=${qcarry%%	*}; qcrest=${qcarry#*	}; qcwhy=${qcrest%%	*}; qcrest=${qcrest#*	}; qcfor=${qcrest%%	*}
-      qcmin="${FLEET_QUOTA_REFUSED_ALARM:-300}"; case "$qcmin" in ''|*[!0-9]*) qcmin=300 ;; esac
-      if [ "$qcwhy" = refused ] && [ "$qcfor" -ge "$qcmin" ]; then
-        _fa_row quota-refused alarm quota refused "$(fleet_usage_human_secs "$qcfor")" $(( now - qcfor )) accounts 0 '' \
-          "the hub refuses the quota read (401): carrying the reading from $(fleet_usage_human_secs "$qcage") ago"
-      fi
-    else
-      qblind=$(fleet_quota_blind)
-      if [ -n "$qblind" ]; then
-        qbwhy=$(fleet_quota_why); qbwhy=${qbwhy%%	*}
-        case "$qbwhy" in
-          refused)     qbtxt='the hub refuses the quota read (401): the rotation has nothing to act on' ;;
-          unreachable) qbtxt='the hub does not answer the quota read: the rotation has nothing to act on' ;;
-          *)           qbtxt='the hub answers with no rows: the rotation has nothing to act on' ;;
-        esac
-        _fa_row quota-unreadable alarm quota unreadable \
-          "$(fleet_usage_human_secs "${qblind#*	}")" $(( now - ${qblind#*	} )) accounts 0 '' "$qbtxt"
-      fi
-    fi
-  fi
-  qspread=$(fleet_quota_pace_spread)
-  if [ -n "$qspread" ]; then
-    rest=${qspread#*	}
-    _fa_row quota-uneven warning quota uneven "${qspread%%	*} pts" 0 accounts 0 '' \
-      "weekly quota drains unevenly: ${rest%%	*} is ahead, ${rest#*	} behind"
-  fi
 
   # --- dash = the collector (issue #636): the stale alarm, its self-heal, its trace.
   cstale=$(fleet_collect_stale_age)

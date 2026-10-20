@@ -495,7 +495,7 @@ cout=$(FLEET_CLAUDE_COMM='' PATH="$WORK/ps-shim:$PATH" LC_ALL=en_US.UTF-8 fleet_
 ok; [ "$cout" = "900 901" ] || fail "a non-UTF-8 argv elsewhere must not change the walk" "$cout"
 
 # --- the breadcrumb a tree-kill leaves behind (issue #706) -------------------
-# fleet-quotawatch runs this probe under fleet_timebox and kills the tree at the
+# the reconcile tick runs this probe under fleet_timebox and kills the tree at the
 # budget, so nothing the probe prints survives a timeout. The trace file is the
 # only thing that can answer "which step ate the 20s" — for 788 of 1136 live ticks
 # the answer was simply unavailable.

@@ -50,9 +50,8 @@
 #
 # So case 4 gives the wedge the WHOLE tick by construction: every phase ahead of it
 # runs UNBUDGETED (budget 0 ⇒ fleet_timebox runs the job inline — no poll, no 1s
-# floor — the same "0 = unbudgeted" every other budget knob here means), and the
-# in-tick quotawatch is gated off so its own internal timeboxes cannot spend the
-# tick either. The head then reads 0 0 0 0 in phases=, `git` starts with ~10s of
+# floor — the same "0 = unbudgeted" every other budget knob here means). The head
+# then reads 0 0 0 in phases=, `git` starts with ~10s of
 # room and is clamped to it, and `ctx` is the first phase that cannot start —
 # whatever the machine is doing. The assertion is unchanged: it is exact, and now
 # it is exact about the mechanism instead of about the runner. Same shape as #691:
@@ -61,7 +60,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-repo-fixture.sh"
-for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-account.sh fleet_iso.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-restore.sh; do
+for f in tmux-dash-collect.sh fleet-account.sh fleet_iso.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-restore.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
@@ -72,7 +71,7 @@ WORK="$(cd "$WORK" && pwd -P)"
 HANGMARK="collect-phase-budget-hang-$$"
 trap 'pkill -9 -f "$HANGMARK" >/dev/null 2>&1; rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/accounts" "$WORK/conf/fleets/sessA" "$WORK/.claude-dash/global"
-for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-account.sh fleet_iso.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-restore.sh; do
+for f in tmux-dash-collect.sh fleet-account.sh fleet_iso.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-restore.sh; do
   cp "$BIN/$f" "$WORK/bin/"
 done
 chmod +x "$WORK/bin/"*.sh
@@ -137,15 +136,14 @@ FAKE
 chmod +x "$WORK/fakepath/"*
 
 GH_LOG="$WORK/gh.log"
-# HEADFREE=1 — every phase AHEAD of the git wedge (quotawatch, sockets, sessmap,
-# issues) runs unbudgeted, and the in-tick quotawatch is gated off (issue #725; see
-# the header). The wedge then meets the tick with its budget intact instead of with
+# HEADFREE=1 — every phase AHEAD of the git wedge (sockets, sessmap, issues) runs
+# unbudgeted (issue #725; see the header). The wedge then meets the tick with its budget intact instead of with
 # whatever four 1s poll floors left of it. Case 4 only; the others run the head
 # exactly as production does.
 run_collector() {
   : > "$GH_LOG"
   local head=''
-  [ "${HEADFREE:-0}" = 1 ] && head='FLEET_COLLECT_QUOTAWATCH=never FLEET_COLLECT_QUOTAWATCH_BUDGET=0 FLEET_COLLECT_SOCKETS_BUDGET=0 FLEET_COLLECT_SESSMAP_BUDGET=0 FLEET_COLLECT_ISSUES_BUDGET=0'
+  [ "${HEADFREE:-0}" = 1 ] && head='FLEET_COLLECT_SOCKETS_BUDGET=0 FLEET_COLLECT_SESSMAP_BUDGET=0 FLEET_COLLECT_ISSUES_BUDGET=0'
   # shellcheck disable=SC2086  # $head is a deliberate word-split list of VAR=val
   env PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
   GH_TTL="${TTL:-0}" \
@@ -175,11 +173,11 @@ hang_survivors() { sleep 2; pgrep -f "$HANGMARK" 2>/dev/null | wc -l | tr -d ' '
 # 1. CLEAN TICK — every phase runs, in the historical order, nothing deferred ------
 run_collector || fail "1: a full tick must exit 0"
 [ "$(hbget phase)" = "done" ] || fail "1: the tick must reach phase=done"
-exp='quotawatch sockets guide sessmap issues git ctx usage scrape banner escalate agentcfg snapshot '
+exp='sockets guide sessmap issues git ctx usage scrape banner escalate agentcfg snapshot '
 [ "$(order)" = "$exp" ] || fail "1: phase order wrong.
   want: $exp
   got : $(order)"
-ok "a clean tick runs every phase, quotawatch first, in the historical order"
+ok "a clean tick runs every phase in the historical order"
 [ -z "$(hbget over)" ]    || fail "1: over= must be empty on a clean tick (got: $(hbget over))"
 [ -z "$(hbget skipped)" ] || fail "1: skipped= must be empty on a clean tick (got: $(hbget skipped))"
 [ -z "$(pcur)" ]          || fail "1: a completed tick must clear the phase cursor (got: $(pcur))"
@@ -241,7 +239,7 @@ ok "…and the wedge was clamped to the tick's room (${clamp}s of its own 20s), 
 TICK=120 run_collector || fail "5: the resuming tick must exit 0"
 # The deferred phases run FIRST, then the wrap picks up the ones this rotation has
 # not served yet — including `git`, which ran last tick and is now last in line.
-exp='quotawatch sockets ctx usage scrape banner escalate agentcfg snapshot guide sessmap issues git '
+exp='sockets ctx usage scrape banner escalate agentcfg snapshot guide sessmap issues git '
 [ "$(order)" = "$exp" ] || fail "5: the tick must resume at the cursor and wrap.
   want: $exp
   got : $(order)"

@@ -53,7 +53,6 @@
 0.9 epic-page-surface-selftest.sh
 1.0 fleet-account-add-selftest.sh
 0.1 fleet-account-provider-selftest.py
-1.4 fleet-account-quota-why-selftest.sh
 9.6 fleet-account-selftest.sh
 4.9 fleet-admit-selftest.sh
 16.7 fleet-agent-bundle-selftest.sh
@@ -107,7 +106,6 @@
 3.8 fleet-collect-guard-selftest.sh
 22.6 fleet-collect-issues-selftest.sh
 17.6 fleet-collect-phase-budget-selftest.sh
-3.0 fleet-collect-quotawatch-gate-selftest.sh
 1.0 fleet-collect-sessmap-guard-selftest.sh
 2.7 fleet-collect-stale-selftest.sh
 49.1 fleet-compose-selftest.sh
@@ -134,7 +132,6 @@
 6.1 fleet-doctor-mcp-selftest.sh
 25.9 fleet-doctor-node-selftest.sh
 2.6 fleet-doctor-onboard-selftest.sh
-11.1 fleet-doctor-quota-selftest.sh
 5.6 fleet-doctor-repos-selftest.sh
 0.2 fleet-down-selftest.sh
 2.6 fleet-emit-selftest.sh
@@ -217,11 +214,8 @@
 4.2 fleet-pr-verdict-selftest.sh
 2.6 fleet-proxy-quota-selftest.sh
 1.3 fleet-quick-dispatch-selftest.sh
-5.1 fleet-quota-blind-selftest.sh
-11.8 fleet-quota-carry-selftest.sh
 2.4 fleet-quota-verdict-selftest.sh
 0.0 fleet-quotaguard-selftest.sh
-60.2 fleet-quotawatch-selftest.sh#1
 1.1 fleet-reap-live-selftest.py
 0.1 fleet-reap-target-selftest.py
 2.5 fleet-relay-cred-selftest.sh

@@ -97,34 +97,34 @@ case "$(fa bar)" in *"✖ 99#"*) ok ;; *) fail "1: a count past 99 reads 99" "$(
 case "$(fa bar)" in *quota*|*stale*|*"·"*) fail "1: a sentence leaked onto the bar" "$(fa bar)" ;; *) ok ;; esac
 
 # ------------------------------------------------------------------ 2. quota ----
+# The quota watch retired (T549): a stale or empty quota cache raises nothing.
 rm -f "$G"/alerts.*
 export FLEET_ACCOUNTS_DIR="$WORK/acc" CCQUOTA_HUB_URL=http://127.0.0.1:9
-printf '%s\n' $(( $(now) - 1800 )) > "$G/account.quota.ts"      # no tick for 30m
-fa write
-eq "2: hub gone → one alarm" "1 0 0" "$(fa counts)"
-case "$(fa bar)" in *"✖ 1#"*) ok ;; *) fail "2: the bar does not read ✖ 1" "$(fa bar)" ;; esac
-first=$(fa list --plain | head -1 | cut -f2-)
-case "$first" in *"✖  quota · stale · 30m"*"see accounts"*) ok ;; *) fail "2: first popup row is not quota · stale" "$first" ;; esac
-printf '%s\n' "$(now)" > "$G/account.quota.ts"                    # the watch is back
-printf '0\t0\n' > "$G/account.quota.empty"
-fa write
-eq "2: recovered → nothing counted" "0 0 0" "$(fa counts)"
-case "$(fa list --plain)" in *"↻  quota · stale"*"healed"*) ok ;; *) fail "2: recovery left no ↻ trace" "$(fa list --plain)" ;; esac
-FLEET_ALERTS_TRACE=0 fa write
-eq "2: the trace ends at FLEET_ALERTS_TRACE" "" "$(fa list --plain)"
-unset FLEET_ACCOUNTS_DIR CCQUOTA_HUB_URL
-
-# ------------------------------------------------------------------ 3. since ----
-rm -f "$G"/alerts.*
+printf '%s\n' $(( $(now) - 1800 )) > "$G/account.quota.ts"      # no fetch for 30m
 printf 'a\t90\t40\tahead\nb\t10\t-5\tbehind\n' > "$G/quota.pace"
 fa write
-s1=$(sed -n 's/.*"id":"quota-uneven".*"since":\([0-9]*\).*/\1/p' "$G/alerts.ndjson")
-[ -n "$s1" ] || fail "3: the pace spread raised no quota-uneven row" "$(cat "$G/alerts.ndjson")"
+case "$(cat "$G/alerts.ndjson")" in *'"subject":"quota"'*) fail "2: a quota row was raised" "$(cat "$G/alerts.ndjson")" ;; *) ok ;; esac
+rm -f "$G/account.quota.ts" "$G/quota.pace"
+unset FLEET_ACCOUNTS_DIR CCQUOTA_HUB_URL
+
+# ------------------------------------------------------------- 3. since/heal ----
+rm -f "$G"/alerts.*
+export FLEET_STATUS_DISK=1 FLEET_DISK_FLOOR_GB=99999999
+fa write
+s1=$(sed -n 's/.*"id":"disk-low".*"since":\([0-9]*\).*/\1/p' "$G/alerts.ndjson")
+[ -n "$s1" ] || fail "3: the disk floor raised no disk-low row" "$(cat "$G/alerts.ndjson")"
 sed "s/\"since\":$s1/\"since\":$(( s1 - 600 ))/" "$G/alerts.ndjson" > "$G/x" && mv "$G/x" "$G/alerts.ndjson"
 fa write
 eq "3: a standing alert keeps its first-seen time" "$(( s1 - 600 ))" \
-  "$(sed -n 's/.*"id":"quota-uneven".*"since":\([0-9]*\).*/\1/p' "$G/alerts.ndjson")"
-case "$(fa list --plain)" in *"▲  quota · uneven · 45 pts"*"10m"*) ok ;; *) fail "3: row wording/duration" "$(fa list --plain)" ;; esac
+  "$(sed -n 's/.*"id":"disk-low".*"since":\([0-9]*\).*/\1/p' "$G/alerts.ndjson")"
+case "$(fa list --plain)" in *"✖  disk · low · "*"10m"*) ok ;; *) fail "3: row wording/duration" "$(fa list --plain)" ;; esac
+unset FLEET_DISK_FLOOR_GB
+fa write
+case "$(cat "$G/alerts.ndjson")" in *'"id":"disk-low"'*'"healed_at":0'*) fail "3: recovered disk-low still counted" "$(cat "$G/alerts.ndjson")" ;; *) ok ;; esac
+case "$(fa list --plain)" in *"↻  disk · low"*"healed"*) ok ;; *) fail "3: recovery left no ↻ trace" "$(fa list --plain)" ;; esac
+FLEET_ALERTS_TRACE=0 fa write
+case "$(fa list --plain)" in *"disk · low"*) fail "3: the trace ends at FLEET_ALERTS_TRACE" "$(fa list --plain)" ;; *) ok ;; esac
+export FLEET_STATUS_DISK=0
 
 # ------------------------------------------------------------------- 4. mute ----
 { row q1 alarm quota stale 5m "$(now)" accounts; row w1 warning quota uneven '37 pts' "$(now)" accounts; } > "$G/alerts.ndjson"
@@ -150,11 +150,11 @@ while IFS= read -r l; do
   case "$l" in *'"action":"accounts"'*|*'"action":"kick-collect"'*|*'"action":"kick-daemons"'*|*'"action":"disk"'*|*'"action":"jump"'*) ok ;;
     *) fail "5: unknown action" "$l" ;; esac
 done < "$G/alerts.ndjson"
-[ "$n" -ge 3 ] || fail "5: expected at least disk + uneven + all-capped rows" "$(cat "$G/alerts.ndjson")"
+[ "$n" -ge 2 ] || fail "5: expected at least disk + all-capped rows" "$(cat "$G/alerts.ndjson")"
 case "$(fa list --plain)" in *"✖  disk · low · "*" GB"*"see disk"*) ok ;; *) fail "5: disk under the floor is not an alarm" "$(fa list --plain)" ;; esac
 
 # --------------------------------------------------------------- 6. accounts ----
-rm -f "$G"/alerts.* "$G/quota.pace"
+rm -f "$G"/alerts.*
 if command -v python3 >/dev/null 2>&1; then
   FLEET_C="$WORK/.claude-dash" python3 - "$BIN" <<'PY' || fail "6: stamp_all_capped raised"
 import importlib.util, sys, time

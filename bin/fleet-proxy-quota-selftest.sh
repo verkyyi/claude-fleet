@@ -17,8 +17,7 @@
 #   E  a central-route session (fcp-h1. pass) is found through its qsid
 #   F  the proxy kicks FLEET_CRED_QUOTA_PUSH itself after a fresh reading
 #   G  revoke drops the session's reading
-#   H  degenerate: no proxy → push stamps nothing, exit 0; the quota watch's
-#      stamp line reads `proxy` as its own source (usage-lib fleet_quota_merge)
+#   H  degenerate: no proxy → push stamps nothing, exit 0
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d "${TMPDIR:-/tmp}/proxy-quota-st.XXXXXX")
@@ -215,10 +214,6 @@ before=$(opts "$WC")
 out=$(bash "$BIN/fleet-proxy-quota.sh" push --socket "$L"); rc=$?
 [ "$rc" = 0 ] && [ -z "$out" ] && [ "$(opts "$WC")" = "$before" ] && pass "H no proxy: push exits 0 and stamps nothing" \
   || fail "H no proxy: rc=$rc out=[$out]"
-m=$( . "$BIN/usage-lib.sh" 2>/dev/null; fleet_usage_now() { date +%s; }
-     fleet_quota_merge "" 0 "a1 $(date +%s) 30 88 1 2 proxy" | cut -f1,2,3,8)
-[ "$m" = "$(printf 'a1\t30\t88\tproxy')" ] && pass "H the quota watch's merge reads @rl_src proxy as source proxy" \
-  || fail "H merge: [$m]"
 
 [ "$FAIL" = 0 ] && echo "fleet-proxy-quota-selftest: OK" || echo "fleet-proxy-quota-selftest: FAILED"
 exit "$FAIL"

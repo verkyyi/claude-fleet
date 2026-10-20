@@ -159,7 +159,7 @@ printf '{"session": "%s", "window": "3", "state": "unsupported"}\n' "$B" > "$Q/u
 printf '{"session": "%s", "window": "3", "state": "unsupported"}\n' "$B-2" > "$Q/unsupported-$B-2-3.json"
 printf '{"next": 4}\n' > "$Q/$B.cursor.json"; printf '{"next": 1}\n' > "$Q/$A.cursor.json"
 printf 'FLEET\t%s\to/b\n' "$B" > "$FLEET_CONF_DIR/restore/$B.map"
-for f in "dash_view_$B" "dash_fold_landed_$B.x" "quotawatch.modelcap.$B" "dash_view_$B-2" "dash_view_$A"; do
+for f in "dash_view_$B" "dash_fold_landed_$B.x" "reconcile.modelcap.$B" "dash_view_$B-2" "dash_view_$A"; do
   : > "$G/$f"
 done
 # side_left <sess> → every seeded store still keyed by <sess> at its ORIGINAL place.
@@ -171,7 +171,7 @@ side_left() {
   [ -f "$Q/$1.cursor.json" ] && echo "$Q/$1.cursor.json"
   for p in "$FLEET_CONF_DIR/restore/$1.map" \
            "$G/dash_view_$1" \
-           "$G/dash_fold_landed_$1.x" "$G/quotawatch.modelcap.$1"; do
+           "$G/dash_fold_landed_$1.x" "$G/reconcile.modelcap.$1"; do
     [ -e "$p" ] && echo "$p"
   done
 }

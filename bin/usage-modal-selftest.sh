@@ -45,14 +45,9 @@ grep -Eq '^  migrate\)' "$BIN/fleet-account.sh" || fail "fleet-account.sh must d
 CHECKS=$((CHECKS + 1))
 [ -x "$BIN/fleet-migrate.sh" ] || fail "bin/fleet-migrate.sh missing or not executable"
 
-# --- the collector's once-per-reset-window quota markers compare with tolerance
-# (fleet_same_window): ccquota's resets_at jitters by ~1s between polls, and an
-# exact compare re-armed the 70% warning every tick (seven copies to one session).
-CHECKS=$((CHECKS + 1))
-# (The block moved out of the collector into bin/fleet-quotawatch.sh — its own
-# 60s tick — in issue #551; the marker contract is unchanged.)
-grep -q 'fleet_same_window "$mk" "$qreset" && continue' "$BIN/fleet-quotawatch.sh" \
-  || fail "the quota watch's markers must go through fleet_same_window"
+# --- once-per-reset-window markers compare with tolerance (fleet_same_window):
+# ccquota's resets_at jitters by ~1s between polls, and an exact compare re-armed
+# a once-per-window action every tick.
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 _t=$(mktemp); printf '1788375599' > "$_t"

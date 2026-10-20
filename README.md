@@ -419,7 +419,7 @@ process or its background agents. When no suitable migration destination exists,
 the fleet leaves the sessions in place instead of repeatedly restarting them
 onto another exhausted account.
 
-### Add account-wide quota readings and early rotation
+### Add account-wide quota readings
 
 Configure the `ccquota` CLI, its hub and viewer credential as described in the
 [install playbook](docs/dev/INSTALL.md), then set the hub URL in `fleet.conf` so the
@@ -427,10 +427,8 @@ background services inherit it. The remaining values below are the defaults:
 
 ```sh
 export CCQUOTA_HUB_URL="https://your-ccquota-hub.example"
-FLEET_ACCOUNT_WARN_PCT=70
 FLEET_ACCOUNT_CEILING=85
 FLEET_ACCOUNT_PICK=pace
-FLEET_ACCOUNT_PHASE_AUTO=0
 ```
 
 The viewer credential can live in `~/.ccquota/viewer-token`. Match each ccquota
@@ -439,16 +437,14 @@ companion `<label>.conf` file. Unreadable or unmapped accounts have **no quota
 reading**, rather than a misleading 0%; they are not destinations for a
 quota-triggered migration.
 
-The quota watch has its own roughly 60-second daemon, with a collector fallback.
-It reads each account's 5h/7d utilization and reset times across devices, sends a
-warning at the configured threshold, then rotates and migrates at the ceiling.
-Warnings and ceiling actions are deduplicated per account/reset window. New spawns
-rank the accounts by the **weekly pace** — how far ahead of or behind an even burn
-of its 7-day budget each account is — so the pool's weeks drain together instead
-of worst-first, and the watch moves one idle session at a time off an account
-that is far ahead ([details](docs/dev/MULTI-ACCOUNT.md#pacing-the-weekly-budget-across-the-pool-issue-1231)). With
-no usable quota data, the proactive policy falls back to banner-based handling;
-work is not blocked just because the optional hub is unavailable.
+New spawns rank the accounts by the **weekly pace** — how far ahead of or behind
+an even burn of its 7-day budget each account is — so the pool's weeks drain
+together instead of worst-first
+([details](docs/dev/MULTI-ACCOUNT.md#pacing-the-weekly-budget-across-the-pool-issue-1231)).
+Nothing watches the pool every minute to warn or move a running session: a full
+subscription is the credential pool's to change, and each session's own 剩余 %
+is on its window. Work is not blocked just because the optional hub is
+unavailable.
 
 For optional window staggering, inspect a plan before applying it:
 
@@ -459,8 +455,8 @@ For optional window staggering, inspect a plan before applying it:
 
 This schedules the first use of idle accounts; it does not change the provider's
 reset clock or hold an account already mid-window. A phase hold is relaxed when
-needed to keep an account available for a spawn. Set `FLEET_ACCOUNT_PHASE_AUTO=1`
-to replan automatically, or `FLEET_ACCOUNT_PHASE=0` to ignore a written plan.
+needed to keep an account available for a spawn. Set `FLEET_ACCOUNT_PHASE=0` to
+ignore a written plan.
 
 The **remote-start quota gate is separate from account rotation** and off by default:
 
@@ -487,17 +483,12 @@ context; an unverifiable switch falls back to restart + resume. New sessions use
 Use these commands to inspect the policy and data:
 
 ```sh
-~/.claude/fleet/bin/fleet-account.sh quota --refresh
-~/.claude/fleet/bin/fleet-quotawatch.sh --status
-~/.claude/fleet/bin/fleet-quotawatch.sh --dry-run
+~/.claude/fleet/bin/fleet-account.sh list
 ~/.claude/fleet/bin/fleet-quotaguard.sh --status
 sh ~/.claude/fleet/bin/fleet-doctor.sh
 ```
 
-`--status` distinguishes `off`, `never`, `fresh`, `stale` and `blind`. By default,
-readings older than 600 seconds raise `✖ quota · stale`; three consecutive empty
-fetches raise `✖ quota · unreadable` even if the fetch timestamp is recent. The status
-bar and doctor expose both failures. Full policies and recovery commands:
+Full policies and recovery commands:
 [docs/dev/MULTI-ACCOUNT.md](docs/dev/MULTI-ACCOUNT.md).
 
 ## Fleet commands (`/skill`s)

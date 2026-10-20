@@ -50,15 +50,6 @@
 #                          account, #1415, adds `· hub · expires in ~Nh`), then the
 #                          ccquota columns: 5h/7d %, the live 5h window, and the
 #                          weekly `pace ±N` (issue #1231; red = held, yellow = ahead)
-#   pace                 — the pool's weekly PACE table (issue #1231): label · 7d% ·
-#                          pace · held|ahead|ok · 7d-reset, one TSV row per account
-#                          with a ccquota row (cache only). pace = 7d% − ceiling ×
-#                          (fraction of the 7d window elapsed): + = ahead of an even
-#                          burn of the week, − = behind. The quota watch mirrors it
-#                          to global/quota.pace every tick (the status bar's
-#                          `▲ quota · uneven` alert), and moves ONE idle session off the
-#                          most-ahead account when it leads the current pick by
-#                          FLEET_ACCOUNT_PACE_REBALANCE points (see PICK_MODE below)
 #   inventory [--refresh] — provider-aware local subscriptions + ccquota readings
 #   target-auth --agent claude|codex [--label L] [--profile P] [--home H] [--account A]
 #                        — may THAT account start an agent? (issue #1667) JSON
@@ -283,8 +274,8 @@ PACE_MARGIN="${FLEET_ACCOUNT_PACE_MARGIN:-5}" # 7d within this of the ceiling �
 WEEK_SECS=604800                             # the 7d window, for the elapsed fraction
 # --- 5h-window phase stagger (issue #598) --------------------------------------
 # PHASE=0 is the kill switch: pick_active then ignores account.phase entirely, as
-# if no plan had ever been written. PHASE_AUTO is read by bin/fleet-quotawatch.sh,
-# not here — it decides whether the 60s watch re-plans on its own.
+# if no plan had ever been written. The plan is written only by hand (`phase
+# --plan --apply`); the watch that could re-plan on its own retired (T549).
 PHASE_ON="${FLEET_ACCOUNT_PHASE:-1}"
 PHASE_WINDOW="${FLEET_ACCOUNT_PHASE_WINDOW:-18000}"   # the rolling window being staggered (5h)
 STATE_PHASE="$STATE_DIR/account.phase"
@@ -913,48 +904,6 @@ quota_rows() {
 }
 # quota_field <rows> <label> <col> — one cell (cols: 2=5h 3=7d 4=headroom 5=5h-reset 6=7d-reset 7=%/h)
 quota_field() { printf '%s\n' "$1" | awk -F'\t' -v l="$2" -v c="$3" '$1==l{print $c; exit}'; }
-cmd_quota() {
-  local mode="" json=0 a
-  for a in "$@"; do case "$a" in --refresh) mode=refresh;; --cached) mode=cached;; --json) json=1;; esac; done
-  if [ "$json" = 1 ]; then
-    command -v "$CCQUOTA" >/dev/null 2>&1 && [ -n "$(quota_hub_url)" ] && quota_budget_json
-    return 0
-  fi
-  local rows; rows=$(quota_rows "$mode")
-  if printf '%s' "$rows" | grep -q .; then printf '%s\n' "$rows"; return 0; fi
-  quota_none_why
-}
-# quota_none_why — `quota` printed no row: say why on stderr and pick the exit
-# (issue #2588), so a caller can tell "nothing to read" from "cannot read it":
-#   4 — none configured: no pool account, or no ccquota hub at all
-#   3 — unknown: a pool and a hub, but no reading to show right now
-# No durations in the line: the quota watch logs its stderr only when it changes.
-quota_none_why() {
-  local w detail ra
-  if [ -z "$(acct_labels)" ]; then
-    echo "fleet-account: quota none — no pool account in $ACCT_DIR (nothing to read)" >&2; return 4
-  fi
-  if [ -z "$(quota_hub_url)" ]; then
-    echo "fleet-account: quota none — no ccquota hub configured (CCQUOTA_HUB_URL / FLEET_HUB_URL / node.env)" >&2; return 4
-  fi
-  if ! command -v "$CCQUOTA" >/dev/null 2>&1; then
-    echo "fleet-account: quota unknown — $CCQUOTA is not on PATH" >&2; return 3
-  fi
-  if [ -s "$STATE_QUOTA_WHY" ]; then
-    w=$(cut -f1 "$STATE_QUOTA_WHY"); detail=$(cut -f3- "$STATE_QUOTA_WHY")
-    echo "fleet-account: quota unknown — hub ${w:-unreachable}${detail:+: $detail}" >&2; return 3
-  fi
-  ra=$(quota_read_at)
-  if [ "$ra" -eq 0 ]; then
-    echo "fleet-account: quota unknown — no reading cached yet (\`quota --refresh\` fetches one)" >&2; return 3
-  fi
-  if [ "$QUOTA_STALE_OK" -gt 0 ] && [ $(( $(now) - ra )) -gt "$QUOTA_STALE_OK" ]; then
-    echo "fleet-account: quota unknown — the last reading is older than FLEET_QUOTA_STALE_OK (${QUOTA_STALE_OK}s)" >&2; return 3
-  fi
-  echo "fleet-account: quota unknown — the hub answered but no account maps to a pool label (\`ccquota name\` must equal the label, or set CCQUOTA_ACCOUNT= in <label>.conf)" >&2
-  return 3
-}
-
 # --- the single subscription-limit verdict (issue #874) --------------------------
 # Two writers used to decide "this account is out of quota": ccquota's reading, and
 # a scrape of the pane for a limit banner. The scrape is a guess at the same fact
@@ -1534,7 +1483,7 @@ cmd_model_limited() {   # <label> <model> [banner] → prints the until-epoch
 # per-model windows (issue #1073), so a cap is known BEFORE a session walks into
 # it: a spawn picks an account with headroom (pick_best's model pass, and the
 # inventory's model_primary), fleet-claude.sh launches on the fallback where
-# there is none, and quotawatch's `fleet-model-switch.sh --capped` flips idle
+# there is none, and the reconcile tick's `fleet-model-switch.sh --capped` flips idle
 # sessions on a newly capped account — none of which needs a banner any more.
 # Per (label, model) row from quota_models_parse:
 #   capped  → replace every row for that label whose model matches (either way,
@@ -1940,23 +1889,6 @@ $labels
 EOF
 }
 
-# pace — the pool's weekly pace table (issue #1231): label · 7d% · pace · verdict
-# (held|ahead|ok) · 7d-reset, one row per account with a ccquota row. Cache only
-# — the watch calls this once per tick right after its fetch and mirrors it to
-# global/quota.pace; the status bar reads that file, never this command.
-cmd_pace() {
-  local rows l u7 r7
-  rows=$(quota_rows cached); [ -n "$rows" ] || return 0
-  while IFS= read -r l; do
-    [ -n "$l" ] || continue
-    u7=$(quota_field "$rows" "$l" 3); [ -n "$u7" ] || continue
-    r7=$(quota_field "$rows" "$l" 6); case "$r7" in ''|*[!0-9]*) r7=0 ;; esac
-    printf '%s\t%s\t%s\t%s\t%s\n' "$l" "$u7" "$(pace_of "$u7" "$r7")" "$(pace_verdict "$rows" "$l")" "$r7"
-  done <<EOF
-$(acct_labels)
-EOF
-}
-
 # cmd_blind — the doctor's `account-pick` question (issue #2412): is the pick
 # BLIND? Every label out on its login AND no quota row: pick_active then keeps
 # account.active whatever it is spending, and nothing on any dial says so. A
@@ -1981,6 +1913,10 @@ case "${1:-active}" in
   # subscription is the pool's to change. compat-1v: 下一批删
   reconcile|failover-status)
     echo "fleet-account: $1 已不用：订阅由池子挑 · no longer used: the pool picks the subscription" >&2; exit 0 ;;
+  # The per-minute quota watch and its readings retired (T549): a session's own
+  # 剩余 % is on its window (@rl*). compat-1v: 下一批删
+  quota|pace)
+    echo "fleet-account: $1 已不用：会话自己的剩余额度在它的窗口上 · no longer used: each session's own quota is on its window" >&2; exit 0 ;;
   add)       shift; exec bash "$BIN/fleet-account-add.sh" "$@" ;;
   _claude-inventory) shift; cmd_claude_inventory "$@" ;;
   active)        cmd_active ;;
@@ -1995,10 +1931,8 @@ case "${1:-active}" in
   mark-reauth)   cmd_mark_reauth "${2:-}" "${3:-}" ;;
   clear-reauth)  cmd_clear_reauth "${2:-}" ;;
   reauth-since)  acct_reauth_since "${2:-}" ;;
-  quota)         shift; cmd_quota "$@" ;;
   quota-verdict) shift; cmd_quota_verdict "$@" ;;
   blind)         cmd_blind ;;
-  pace)          cmd_pace ;;
   bench)         cmd_bench "${2:-}" "${3:-}" "${4:-}" ;;
   model-limited) cmd_model_limited "${2:-}" "${3:-}" "${4:-}" ;;
   model-limited-until) acct_model_limited_until "${2:-}" "${3:-}" ;;
@@ -2007,6 +1941,6 @@ case "${1:-active}" in
   migrate)       shift; exec bash "$BIN/fleet-migrate.sh" "$@" ;;
   whoami)        shift; exec bash "$BIN/fleet-migrate.sh" whoami "$@" ;;
   phase)         shift; cmd_phase "$@" ;;
-  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|mark-reauth|clear-reauth|reauth-since|target-auth|quota|quota-verdict|blind|pace|bench|phase|model-limited|model-limited-until|model-clear|model-quota|migrate|whoami)" >&2; exit 2 ;;
+  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|mark-reauth|clear-reauth|reauth-since|target-auth|quota-verdict|blind|bench|phase|model-limited|model-limited-until|model-clear|model-quota|migrate|whoami)" >&2; exit 2 ;;
 esac
 fi
