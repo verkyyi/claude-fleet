@@ -37,8 +37,9 @@ cleanup() {
   rm -rf "$WORK" "$TT"
 }
 trap cleanup EXIT
-# the old client's own script: a loop, and a `quit` that returns at once
-printf '#!/bin/bash\n[ "$1" = quit ] && exit 0\nwhile :; do sleep 1; done\n' > "$C/bin/fleet-shell.sh"
+# a stand-in for any script of the old client's mirror (its fleet-shell.sh is gone
+# since #3008): a loop running from the cache's bin/, which is what stop looks for
+printf '#!/bin/bash\nwhile :; do sleep 1; done\n' > "$C/bin/old-client-loop.sh"
 alive() { local st; st=$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' '); case "$st" in ''|Z*) return 1 ;; esac; return 0; }
 gone() { local _; for _ in 1 2 3 4 5 6 7 8 9 10; do alive "$1" || return 0; sleep 0.5; done; return 1; }
 # old [stage-only] — the old client up: the stage server, the main server whose
@@ -51,7 +52,7 @@ old() {
     [ -n "$(tmux -L fleet-shell-stage list-clients -F x 2>/dev/null)" ] && break; sleep 0.3
   done
   [ -n "$(tmux -L fleet-shell-stage list-clients -F x 2>/dev/null)" ] || fail "the viewer never attached the stage"
-  bash "$C/bin/fleet-shell.sh" warm fleet-shell </dev/null >/dev/null 2>&1 & WP=$!
+  bash "$C/bin/old-client-loop.sh" warm fleet-shell </dev/null >/dev/null 2>&1 & WP=$!
   ( exec -a ssh perl -e 'sleep 600' -- -o "ControlPath=$C/tmp/warm/u-x@y.sock" -o ControlPersist=10m u-x ) & SP=$!
   disown "$WP" "$SP" 2>/dev/null
   PIDS="$PIDS $WP $SP"

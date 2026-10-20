@@ -52,7 +52,7 @@
 #                            the prompt's 题干; a row that asks nothing, none
 #
 # tmux only on isolated sockets. Drives: bin/fleet, bin/fleet-session-cli.py,
-# bin/fleet-shell.sh, bin/fleet-quickopen.py, bin/fleet-hub-write.sh,
+# bin/fleet-quickopen.py, bin/fleet-hub-write.sh,
 # bin/fleet-services.py.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"

@@ -274,7 +274,7 @@
 2.4 fleet-installs-selftest.sh
 0.4 fleet-intro-selftest.sh
 1.2 fleet-job-selftest.sh
-13.1 fleet-keys-selftest.sh
+13.1 dash-keymap-selftest.sh
 11.6 fleet-land-selftest.sh
 2.8 fleet-landed-selftest.sh
 0.1 fleet-lang-selftest.sh

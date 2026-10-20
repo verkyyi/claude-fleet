@@ -279,7 +279,6 @@
 1.0 probe-ignores-relay
 0.7 probe-stale-after-release
 2.9 provisioner-off-template
-0.6 q-leaves-issue
 0.2 quarantine-expired
 0.3 quarantine-one-red
 0.2 quarantine-pr-skips
@@ -309,7 +308,6 @@
 3.9 restore-peer-window
 1.3 restore-role-lost
 4.0 resume-fails-fast
-0.2 role-auto-reopen-off
 0.5 root-core-off-list
 0.8 root-core-seat-stage
 0.8 root-core-unsigned-switch

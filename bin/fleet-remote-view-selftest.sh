@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-remote-view-selftest.sh — the proxy window onto another machine's session
-# (issue #1424, EPIC #1419 C5): bin/fleet-remote-view.sh, the dash Enter on a
-# `wid:` row (dash-enter.sh), fleet-open.sh's proxy relay,
+# (issue #1424, EPIC #1419 C5): bin/fleet-remote-view.sh, a `wid:` row's go,
+# fleet-open.sh's proxy relay,
 # and the local rails that must skip a proxy window.
 #
 # Two ISOLATED tmux servers stand in for the two machines: LOCAL (`-L rvL<pid>`,

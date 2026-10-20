@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-keys-selftest.sh — the keys the fleet still binds, held to their one table.
+# dash-keymap-selftest.sh — the keys the fleet still binds, held to their one table.
 #
 # The keymap cheatsheet (fleet-keys.sh, issue #110) and the fzf panels it
 # described — the dash, the backlog, the config modal, with their ⌃-key tables

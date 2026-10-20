@@ -1,8 +1,8 @@
 #!/bin/bash
 # fleet-fold-selftest.sh — fleet-repo.sh fold (issue #796): move a one-repo fleet
 # into another, then retire it. Two sandbox fleets, each on its OWN socket:
-#   A (target, hosts o/a) and B (source, hosts o/b) with a dash panel, a warm-pool
-#   window, idle workers (issue-12, scratch-4, needs/blocked issue-15), a hibernating one (issue-14),
+#   A (target, hosts o/a) and B (source, hosts o/b) with a dash panel,
+#   idle workers (issue-12, scratch-4, needs/blocked issue-15), a hibernating one (issue-14),
 #   a busy one (issue-13) and a plain window with no worker binding.
 #   1. --dry-run prints the plan (carry / WARN / per-window action / retire: NO)
 #      and changes NOTHING: no overlay, no stop/restore/down call, B untouched.
@@ -14,7 +14,7 @@
 #   4. refusals: fold into itself, a 2-repo source, a stopped target with work.
 #   5. degenerate: a failed restore leaves the fleet un-retired (never a blind down).
 #   6. side state (issue #1014): every store keyed by B outside its conf dir —
-#      failover requests, the warm-pool dir, the legacy restore map, dash
+#      failover requests, the legacy restore map, dash
 #      caches — is listed by --dry-run, left alone until B retires, then
 #      archived under <archive>/side/ (caches deleted); a neighbour keyed by A or by
 #      a longer name (fb-2) is never touched, and after the retire no store is left
@@ -135,7 +135,6 @@ bwin() {  # bwin <name> <opt=val>... — a window of B, with its options
   for kv in "$@"; do TB set -w -t "$w" "${kv%%=*}" "${kv#*=}"; done
   printf '%s' "$w"
 }
-bwin pool-1 @pool=1 @raw=1 @worktree=/wt/b-scratch-9 >/dev/null
 bwin issue-12  @issue=12 @claude_state=done >/dev/null
 bwin scratch-4 @raw=1 @worktree=/wt/b-scratch-4 @claude_state=idle >/dev/null
 W13=$(bwin issue-13 @issue=13 @claude_state=working)
@@ -150,7 +149,7 @@ B_BEFORE=$(bnames)
 
 # ---- side state keyed by B (and neighbours that must stay) ----------------------
 Q="$FLEET_CONF_DIR/handoffs/quota-requests" G="$FLEET_C/global"
-mkdir -p "$Q" "$G" "$FLEET_CONF_DIR/fleets/$B-pool" "$FLEET_CONF_DIR/restore"
+mkdir -p "$Q" "$G" "$FLEET_CONF_DIR/restore"
 req() {  # req <dir> <session> <state>
   mkdir -p "$Q/$1"
   printf '{"source": {"session": "%s", "window": ""}, "state": "%s", "attempts": 99}\n' "$2" "$3" > "$Q/$1/request.json"
@@ -159,7 +158,6 @@ req rb1 "$B" ambiguous; req rb2 "$B" cancelled; req ra1 "$A" bound; req rn1 "$B-
 printf '{"session": "%s", "window": "3", "state": "unsupported"}\n' "$B" > "$Q/unsupported-$B-3.json"
 printf '{"session": "%s", "window": "3", "state": "unsupported"}\n' "$B-2" > "$Q/unsupported-$B-2-3.json"
 printf '{"next": 4}\n' > "$Q/$B.cursor.json"; printf '{"next": 1}\n' > "$Q/$A.cursor.json"
-printf 'FLEET\t%s-pool\to/b\t%s\tmain\n' "$B" "$WORK/mainB" > "$FLEET_CONF_DIR/fleets/$B-pool/restore.map"
 printf 'FLEET\t%s\to/b\n' "$B" > "$FLEET_CONF_DIR/restore/$B.map"
 for f in "dash_view_$B" "dash_fold_landed_$B.x" "quotawatch.modelcap.$B" "dash_view_$B-2" "dash_view_$A"; do
   : > "$G/$f"
@@ -171,14 +169,14 @@ side_left() {
     [ -f "$p" ] && grep -q "\"session\": \"$1\"" "$p" && echo "$p"
   done
   [ -f "$Q/$1.cursor.json" ] && echo "$Q/$1.cursor.json"
-  for p in "$FLEET_CONF_DIR/fleets/$1-pool" "$FLEET_CONF_DIR/restore/$1.map" \
+  for p in "$FLEET_CONF_DIR/restore/$1.map" \
            "$G/dash_view_$1" \
            "$G/dash_fold_landed_$1.x" "$G/quotawatch.modelcap.$1"; do
     [ -e "$p" ] && echo "$p"
   done
 }
 SIDE_B=$(side_left "$B" | grep -c .)
-eq "seeded side stores" "$SIDE_B" 9
+eq "seeded side stores" "$SIDE_B" 8
 
 # ---- 1. dry run: the plan, and nothing else --------------------------------
 dry=$(bash "$FR" fold "$B" --into "$A" --dry-run 2>&1); rc=$?
@@ -190,13 +188,12 @@ has "dry mcp"     "$dry" "carry:   FLEET_MCP_CONFIG=\"\""
 has "dry sleep"   "$dry" "carry:   FLEET_SLEEP_MCP_RESTARTABLE=\"plugin:playwright:playwright\""
 has "dry warn"    "$dry" "not carried: FLEET_MAX_SESSIONS: $B=\"4\" $A=\"8\""
 hasnt "dry same"  "$dry" "FLEET_SESSION_BANNER"
-for row in "panel    -           dash —" "pool     -           pool-1 —" "move     issue-12" \
+for row in "panel    -           dash —" "move     issue-12" \
            "move     scratch-4" "move     issue-15    issue-15 — needs/blocked" "left     issue-13" "wake     issue-14" "left     -           notes —"; do
   has "dry row [$row]" "$dry" "$row"
 done
 has "dry retire"  "$dry" "retire:  NO — 2 window(s) stay in $B"
 has "dry side failover" "$dry" "side:    archive 4 failover request(s)"
-has "dry side pool"     "$dry" "side:    archive 1 warm-pool dir fleets/$B-pool"
 has "dry side restore"  "$dry" "side:    archive 1 legacy restore map(s)"
 has "dry side cache"    "$dry" "side:    delete  3 runtime cache file(s)"
 eq "dry side untouched" "$(side_left "$B" | grep -c .)" "$SIDE_B"
@@ -216,7 +213,7 @@ eq "real fleet mcp kept" "$(fleet_repo_conf_get "$A" o/a FLEET_MCP_CONFIG)" "mcp
 eq "real overlay model get" "$(fleet_repo_conf_get "$A" o/b FLEET_MODEL)" "opus"
 eq "real fleet model kept" "$(fleet_repo_conf_get "$A" o/a FLEET_MODEL)" "fable"
 eq "A windows" "$(anames)" "dash| issue-12|o/b issue-14|o/b issue-15|o/b scratch-4|o/b "
-eq "B windows" "$(bnames)" "dash issue-13 notes pool-1 "
+eq "B windows" "$(bnames)" "dash issue-13 notes "
 has "wake before stop" "$(cat "$CALLS")" "sleep wake $B"
 has "restore scratch"  "$(cat "$CALLS")" "restore landed:scratch:scratch-4 $A --repo o/b"
 has "restore issue"    "$(cat "$CALLS")" "restore landed:issue:12 $A --repo o/b"
@@ -259,7 +256,7 @@ has "retired line" "$out" "fold: $B retired"
 has "side line" "$out" "fold: $B side state archived at $arch/side"
 eq "no store left keyed by B" "$(side_left "$B")" ""
 for p in failover/rb1/request.json failover/rb2/request.json "failover/unsupported-$B-3.json" \
-         "failover/$B.cursor.json" "pool/$B-pool/restore.map" "restore/$B.map"; do
+         "failover/$B.cursor.json" "restore/$B.map"; do
   [ -f "$arch/side/$p" ] || fail "side not archived: $p"
 done
 [ -e "$arch/side/cache" ] && fail "caches were archived, not deleted"

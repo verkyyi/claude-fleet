@@ -4,9 +4,7 @@
 # Real tmux on a private socket (a PATH shim pins every bare `tmux` to it), the
 # REAL fleet-restore-pick.sh → dash-restore-session.sh → fleet_bg chain, and three
 # stubs: fleet-history.sh (the landed rows + a RESUME verdict), fzf (picks the row
-# named by $PICK) and gh (a CLOSED PR for issue-5 when $CLOSED is set). The popup
-# half — ⌃o / ⌥o / the row menu open it, @popup_open rises and falls — is pinned
-# by fleet-sidebar-selftest.sh against an attached client.
+# named by $PICK) and gh (a CLOSED PR for issue-5 when $CLOSED is set).
 #
 #   A. a pick restores the session as a NEW window that is CURRENT (@restored 1)
 #   B. header / filler / nothing picked → no window

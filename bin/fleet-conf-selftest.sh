@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-conf-selftest.sh — a machine's ONE config file (issue #1623, EPIC #1615 C8):
 # bin/fleet-conf.sh migrate / host / set-hub, the readers that now take
-# $FLEET_CONF_DIR/fleet.conf (fleet-lib.sh, fleet-shell.sh's FLEET_SHELL guard,
+# $FLEET_CONF_DIR/fleet.conf (fleet-lib.sh, the client's FLEET_SHELL guard,
 # fleet_config_write.py, fleet-connect.py / fleet-login.py's hub address), and
 # fleet-doctor.sh's `能力` row (the `role` row before issue #1806) — on three
 # kinds of computer in a sandbox install. The one capability key is FLEET_HOST

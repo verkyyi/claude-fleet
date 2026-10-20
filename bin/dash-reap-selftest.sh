@@ -558,7 +558,7 @@ grep -qi 'MSG.*no issue' "$TMLOG" || fail "@raw=0 hub row should still refuse ('
 grep -q 'KILL' "$TMLOG" && fail "@raw=0 hub row must not kill a window"
 
 # --- D. the NON-INTERACTIVE entry (issue #596) --------------------------------
-# `dash-reap.sh <handle>` is documented as a script interface (fleet-keys.sh), but
+# `dash-reap.sh <handle>` is documented as a script interface, but
 # it used to answer a dirty/unmerged row by opening a confirm popup on whatever
 # client the operator was looking at and returning `exit 0` — so a script both
 # interrupted a human who had pressed nothing AND read "reaped" off a row that was

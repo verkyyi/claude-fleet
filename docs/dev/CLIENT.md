@@ -123,7 +123,7 @@ No terminal sends `ESC [ 92x ~` for a real key. `conf/tmux-view.conf` catches
 each as `user-keys[<code>]` → `User<code>`, bound to the same body as the prefix
 key. The one table is `bin/dash-keymap.sh --panel switch list` (action · ⌘ glyph
 · iTerm2 key · code · prefix key); the conf, the full sheet and the profile are
-all held to it by `bin/fleet-keys-selftest.sh` leg 10.
+all held to it by `bin/dash-keymap-selftest.sh` leg 10.
 
 The profile **adds** a profile and changes none: every other setting comes from
 its parent — the profile the window was in when it was written, else iTerm2's

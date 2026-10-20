@@ -86,7 +86,7 @@
 #
 # KEEP IN SYNC with launchd/*.plist.tmpl — bin/fleet-daemon-watch-selftest.sh
 # parses every template's StartInterval and fails if this table disagrees, so the
-# two cannot drift (the same lockstep rule fleet-keys-selftest.sh enforces).
+# two cannot drift (the same lockstep rule dash-keymap-selftest.sh enforces).
 fleet_daemon_units() {
   printf '%s\n' \
     'collect 60 hb:collect.heartbeat,pid:collect.pid' \
