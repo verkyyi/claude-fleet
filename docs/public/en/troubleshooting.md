@@ -861,8 +861,22 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: which repositories this fleet hosts. It only reports.
-- **On WARN / FAIL**: nothing to do; add a repository with ⌘P's **Add a repo…**.
+- **What it is**: which repositories this fleet hosts. On a managed node, a repository your other machines host and this one still lacks is listed at the end as 「缺（本人其它机器有）」 ("missing, your other machines have it"), and the row is a WARN.
+- **On WARN / FAIL**: the missing ones are added by themselves (see `跟仓库`); add a repository with ⌘P's **Add a repo…**.
+
+#### `跟仓库`
+
+From `fleet doctor`. (The row's name means "following the repos".)
+
+- **What it is**: a managed node adds every repository your other machines host (it only adds, never removes; checked about every 10 minutes). The row says whether this one has them all, which are missing and why one was not added; on a node that is not managed it says it does not follow.
+- **On WARN / FAIL**: it only reports (the gap's WARN is on the `repos` row). When one repository keeps failing, read the reason on the row — usually this machine's gh has no access, or the repository is not on GitHub; once fixed it is retried by itself. To opt out: `FLEET_REPO_FOLLOW=0` in fleet.conf.
+
+#### `分到`
+
+From `fleet doctor`. (The row's name means "assigned".)
+
+- **What it is**: how many sessions the hub sent to each of your machines in the last 24 hours. It only reports.
+- **On WARN / FAIL**: nothing to do; when one machine stays at 0, check whether it lacks repositories (the `repos` row) or is in maintenance.
 
 #### `repo`
 

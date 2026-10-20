@@ -184,6 +184,8 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `wtroot` | node | [node-doctor] | worktree 根目录：照行内修 |
 | `上游` | node | [node-doctor] | 本机凭据代理到上游的失败（重置 / 超时 / 拒连 / TLS / DNS / 429 / 5xx / 529）：`fleet-cred-proxy.sh upstream --since 24h` 看是哪一类、哪个账号、何时；连接类多是出口 / 网络，5xx / 529 是上游过载，429 是账号限流 |
 | `信任框` | node | [node-doctor] | 只报状态：没预信任时新会话会停在信任框 |
+| `分到` | node | [node-doctor] | 只报状态：近 24 小时入口把会话分到你各台机器各几个 |
 | `可信` | node | [login-lifecycle] | 这台不可信，入口不发订阅凭据：操作者 `fleet-node-trust.sh set <machine> trusted` |
 | `承载` | node | [mac-node-enroll] | 这台能不能跑会话：照行内修令牌 / 开关 |
 | `能力` | node | [release-rules] | 还在读旧配置文件：`fleet-conf.sh migrate` |
+| `跟仓库` | node | [node-doctor] | 托管节点补你其它机器有的仓库：缺的仓库 clone 失败看行内原因（多半是 gh 权限 / 不是 GitHub 仓库），会自动重试；`fleet-repo-follow.py status`；`FLEET_REPO_FOLLOW=0` 关 |

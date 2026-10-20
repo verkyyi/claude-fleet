@@ -102,6 +102,8 @@ var routeAccess = map[string]string{
 	// claude-fleet#2850: the pool manifest; #3826: which agents a login may
 	// start — any enrollment token, each.
 	NodePoolPath: accessSelf, NodeAgentsPath: accessSelf,
+	// claude-fleet T673: the repos the person's machines host between them.
+	NodeReposPath: accessSelf,
 	// The Singapore relay (claude-fleet#1974): a node token mints a pass;
 	// the check authenticates the pass the forwarder carries.
 	"/v1/node/relay-credential": accessSelf, RelayCheckPath: accessSelf,

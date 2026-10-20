@@ -196,6 +196,18 @@ linux-a）也连得上，认证仍是上面那张五分钟证书。fleet.conf �
 退回按需（只在有看台时连、看台走后 10 分钟关）。`fleet doctor` 的 `peerlink` 行逐台写 已连上 /
 重连中 / 连不上（原因），连不上报 WARN。
 
+**每台托管机器备齐你的仓库（T673，节点选择 C）。** 放置只在托管了这个仓库的机器里挑，所以只有一台
+托管的仓库没有第二个候选。每个登录的 base-sync 拍（`bin/fleet-base-sync.sh` 末尾，
+`bin/fleet-repo-follow.py tick`，每 `FLEET_REPO_FOLLOW_SECS`=600 秒问一次）用节点令牌问入口
+`GET /v1/node/repos`：同一个人各台机器 inventory 报的托管仓库的并集（客户端、退役登录、不再上报的
+fleet 不算）、调用方自己的角色、各台近 24 小时分到的会话数。入口说这台是 `managed`，就对本机缺的每个
+仓库跑 `fleet-repo.sh add <owner/repo>`（加进第一个 fleet）；某个 clone 失败记下原因、下轮重试、之后退避，
+不挡别的。**只增不删**：本机 `fleet-repo.sh remove` 不会传到别台——只要还有一台托管着，它会被补回来，
+要彻底拿掉得每台都删。客户端、未定型、没人认领的登录、没有入口 ⇒ 什么都不加；`FLEET_REPO_FOLLOW=0`
+关掉。记录在 `$FLEET_CONF_DIR/repo-follow.json`（`fleet-repo-follow.py status`）；`fleet doctor` 的
+`repos` 行末尾写「缺（本人其它机器有）：…」并 WARN，`跟仓库` 行写为什么还缺，`分到` 行写近 24 小时各台
+分到几个会话——体检只读这份记录，不问入口。
+
 ## 5¾. 入口断开：照常干活，接上自动恢复（#1630）
 
 入口（hub）重启、网络抖动、某台机器断网，都**不停任何会话**：入口只是看不见，不是指挥。

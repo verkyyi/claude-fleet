@@ -784,6 +784,9 @@ func (s *Server) routes() *routeMux {
 		// Which agents a login may start (claude-fleet#3826): the pickers grey
 		// one the allowlists leave nothing for — any enrollment token.
 		mux.HandleFunc(NodeAgentsPath, s.handleNodeAgents)
+		// The repos the person's machines host between them (claude-fleet
+		// T673): a managed node adds what it lacks — any enrollment token.
+		mux.HandleFunc(NodeReposPath, s.handleNodeRepos)
 		// The shared pool's manifest (claude-fleet#2850): fingerprint +
 		// expiry per pool token, never a secret — any enrollment token.
 		mux.HandleFunc(NodePoolPath, s.handleNodePool)

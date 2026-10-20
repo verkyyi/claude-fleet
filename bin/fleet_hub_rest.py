@@ -76,12 +76,13 @@ def creds():
     return _CREDS
 
 
-def api(method, path, body=None, query=None):
+def api(method, path, body=None, query=None, root='/v1/fleet'):
     url, tok = creds()
     # A task authority is a person's (issue #4901): /authority[/start] is
     # the hub's /v1/fleet/authority road (#4896); a repo= on it only names the
     # start or narrows the lists.
-    full = url + '/v1/fleet' + path
+    # root='/v1/node' is the node road (fleet-repo-follow.py's /v1/node/repos).
+    full = url + root + path
     if query:
         full += '?' + urllib.parse.urlencode({k: v for k, v in query.items() if v not in (None, '')})
     data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
