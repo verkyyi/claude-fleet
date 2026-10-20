@@ -2,7 +2,7 @@
 # selftest-parts: 4
 # selftest-part: 4 DoneNoPr.test_driver_scratch_closes_once_its_epic_is_closed DoneNoPr.test_recent_is_kept_and_said_once EmptyReap.test_closes_only_a_session_never_typed_into HomeReap.test_spawned_norepo_closes_on_its_policy_after_a_finished_turn
 # selftest-part: 5 PinIsOrder.test_a_pin_set_later_keeps_nothing PolicyGrammar.test_norm_default_label ReapPolicy.test_keep_and_merged_are_never_this_pass StuckReaps.test_the_agents_finished_word_outranks_a_looping_stamp
-# selftest-part: 6 TestIdentity.test_closes_a_test_session_past_its_policy_and_nothing_else
+# selftest-part: 6 TaskSession.test_other_policy_or_no_flow_takes_the_ordinary_roads
 # selftest-part: 7 RoundTrip.test_codex_unknown_or_active_native_turn_is_kept
 # selftest-part: 8 RoundTrip.test_real_close_and_restore
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
