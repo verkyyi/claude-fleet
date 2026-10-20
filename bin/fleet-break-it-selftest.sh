@@ -5188,9 +5188,11 @@ drill_codex_home_trust() {
 drill_transfer_norepo() {
   CAP=60
   local started; started=$(now)
-  suite_holds fleet-transfer-norepo-selftest.sh 'fleet-transfer-selftest.sh" --norepo' \
-    test_two_cron_jobs_deliver_independently_once_and_preserve_expiry || return 1
-  SECS=$(since "$started"); WHAT='managed HOME provenance; panel and busy refusals leave source alive (run for real by fleet-transfer-norepo-selftest.sh, held here by name)'
+  suite_holds 'fleet-transfer-selftest.sh#6' 'norepo_source 91' 'refusing a second writer' 'mixed cron ownership/delivery/rollback' || return 1
+  suite_holds fleet-loop-selftest.sh fleet-loop-selftest.py || return 1
+  grep -q test_two_cron_jobs_deliver_independently_once_and_preserve_expiry "$BIN/fleet-loop-selftest.py" \
+    || { WHY='fleet-loop-selftest.py no longer carries the independent cron delivery test'; return 1; }
+  SECS=$(since "$started"); WHAT='managed HOME provenance; panel refusals leave source alive (run for real by fleet-transfer-selftest.sh#6, held here by name)'
 }
 
 drill_transfer_preparation_retry() {
@@ -5236,7 +5238,7 @@ drill_transfer_proxy_home() {
   local started; started=$(now)
   python3 "$BIN/fleet-transfer-auth-selftest.py" ProxyHomeAuth >"$WORK/transfer-proxy-home.out" 2>&1 \
     || { WHY="$(tail -8 "$WORK/transfer-proxy-home.out" | tr '\n' ' ')"; return 1; }
-  bash "$BIN/fleet-transfer-proxy-home-selftest.sh" >>"$WORK/transfer-proxy-home.out" 2>&1 \
+  bash "$BIN/fleet-transfer-selftest.sh" --proxy-home >>"$WORK/transfer-proxy-home.out" 2>&1 \
     || { WHY="$(tail -8 "$WORK/transfer-proxy-home.out" | tr '\n' ' ')"; return 1; }
   SECS=$(since "$started"); WHAT='owned proxy mapping; forged/missing/unauthorized targets refuse; clean Stop then native successor bound'
 }
@@ -5244,7 +5246,7 @@ drill_transfer_proxy_home() {
 drill_transfer_proxy_auth() {
   CAP=10
   local started; started=$(now)
-  python3 "$BIN/fleet-transfer-auth-selftest.py" >"$WORK/transfer-auth.out" 2>&1 \
+  python3 "$BIN/fleet-transfer-auth-selftest.py" TransferAuth >"$WORK/transfer-auth.out" 2>&1 \
     || { WHY="$(tail -8 "$WORK/transfer-auth.out" | tr '\n' ' ')"; return 1; }
   SECS=$(since "$started"); WHAT='proxy lease checked; no local credentials; refusal leaves source untouched'
 }

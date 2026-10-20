@@ -414,14 +414,14 @@
 1.0 fleet-tls-selftest.sh
 1.0 fleet-train-ledger-selftest.sh
 3.2 fleet-train-quarantine-selftest.sh
-4.6 fleet-transfer-auth-selftest.sh
-40.2 fleet-transfer-norepo-selftest.sh
-7.0 fleet-transfer-proxy-home-selftest.sh
+4.6 fleet-transfer-auth-selftest.py
 19.9 fleet-transfer-selftest.sh#1
 47.6 fleet-transfer-selftest.sh#2
 23.1 fleet-transfer-selftest.sh#3
 19.5 fleet-transfer-selftest.sh#4
 30.8 fleet-transfer-selftest.sh#5
+40.2 fleet-transfer-selftest.sh#6
+7.0 fleet-transfer-selftest.sh#7
 0.3 fleet-trash-purge-selftest.sh
 4.6 fleet-trust-selftest.sh
 0.4 fleet-ui-fail-selftest.sh
