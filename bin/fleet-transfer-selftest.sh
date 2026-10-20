@@ -33,7 +33,7 @@ ok() { checks=$((checks+1)); }
 
 IBIN="$WORK/install/bin"; FB="$WORK/fakebin"
 mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/fleets/$LBL"
-for f in fleet_repo_authority.py fleet_native_proc.py fleet_hub_rest.py fleet-trust.sh fleet_codex_trust.py fleet-agent-defaults.py fleet_transfer_durable.py fleet_transfer_cron.py fleet_cron.py fleet_loop_mark.py .fleet-transfer-norepo.py fleet-session-wrap.sh fleet-agent-adapter.sh fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py fleet_transfer_source.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet_worker_life.py fleet_agent_argv.py fleet_agent_mcp.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet_iso.py fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
+for f in fleet_repo_authority.py fleet_native_proc.py fleet_hub_rest.py fleet-trust.sh fleet_codex_trust.py fleet-agent-defaults.py fleet_transfer_durable.py fleet_transfer_cron.py fleet_cron.py fleet_loop_mark.py .fleet-transfer-norepo.py fleet-session-wrap.sh fleet-agent-adapter.sh fleet_agent_adapter.py fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py fleet_transfer_source.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet_worker_life.py fleet_agent_argv.py fleet_agent_mcp.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet_iso.py fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
 cp "$BIN/fleet_needs_detail.py" "$IBIN/fleet_needs_detail.py"
 # The canonical pane→Claude walk is imported by fleet-lib (#4474). Keep this
@@ -955,7 +955,7 @@ for ((attempt=0; attempt<30; attempt++)); do
   sleep 0.1
 done
 ok; [ -n "$RECOVERED" ] && [ "$(fleet_cc_session_id "$RECOVERED")" = "$SID" ] && [ -z "$(field cc_agent)" ] \
-  || fail "manual recovery must resume Claude and clear the Codex stamp: $(TM capture-pane -p -t "$PANE")"
+  || fail "manual recovery must resume Claude and clear the Codex stamp: pid=${RECOVERED:-none} sid=$( [ -z "$RECOVERED" ] || fleet_cc_session_id "$RECOVERED") cc_agent=$(field cc_agent) · $(TM capture-pane -p -t "$PANE")"
 
 spawn 45 issue tool
 transfer && fail 'live tool after source exit must refuse respawn'; ok
@@ -1263,7 +1263,29 @@ assert m['target']['codex_home']==sys.argv[3] and m['workspace']['path']==sys.ar
 assert m['source_resume_argv'][4]==sys.argv[2]
 PYPROXY
   ok
-  printf 'fleet-transfer proxy-home selftest: PASS (%s checks; arm and native successor bound separately)\n' "$checks"
+  # The same drill from a CLAUDE source (T630, C7: BREAK-IT ④ both agents): the
+  # proxy mirror is only this login's CODEX_HOME, and the successor must still
+  # launch on the account's real home — never on the temporary mirror.
+  spawn 67 issue normal
+  SP=$(TM display-message -p -t "$PANE" '#{socket_path}')
+  TM set-option -w -t "$WIN" @claude_state working
+  OUT=$(TMUX="$SP,0,0" TMUX_PANE="$PANE" FLEET_TRANSFER_IDLE_WAIT=20 FLEET_HANDOFF_DEFER_SECS=0 \
+    bash "$IBIN/fleet-transfer.sh" --session "$LBL" --window "$PANE" --to codex \
+    --after-turn --handoff "$WORK/notes.md" 2>&1) || fail 'a Claude source must arm onto the proxy-homed Codex login'
+  REQUEST=$(printf '%s\n' "$OUT" | sed -n 's/^after-turn request: //p')
+  stop_turn
+  wait_request started; ok
+  fleet_pid_alive "$PID" && fail 'Claude source survived the clean handoff'
+  MANIFEST=$(field handoff_manifest)
+  python3 - "$MANIFEST" "$(field codex_identity)" "$MIRROR" "$REAL_HOME" "$SID" <<'PYPROXYC' || fail 'a Claude source handed the successor the proxy mirror'
+import json, sys
+m=json.load(open(sys.argv[1])); bound=json.loads(sys.argv[2] or '{}')
+assert m['source']['agent']=='claude' and m['source']['session_id']==sys.argv[5], m['source']
+assert m['target']['agent']=='codex' and m['target']['codex_home']==sys.argv[4]!=sys.argv[3], m['target']
+assert bound.get('home')==sys.argv[4], bound
+PYPROXYC
+  ok
+  printf 'fleet-transfer proxy-home selftest: PASS (%s checks; arm and native successor bound separately, Codex and Claude sources)\n' "$checks"
   exit 0
 fi
 spawn_codex 61
@@ -1312,7 +1334,7 @@ ok
 spawn_codex 64
 NEXT_HOME="$WORK/next Codex account"; mkdir -p "$NEXT_HOME"
 transfer --codex-home "$NEXT_HOME" || fail 'Codex account cutover'
-BUNDLE=$(packet)
+BUNDLE=$(packet); DIRS=("codex|codex|$SID|$BUNDLE")
 python3 - "$WORK/target-argv.json" "$BUNDLE" "$CHOME" "$NEXT_HOME" <<'PYROTATE' || fail 'account cutover lost source or target home'
 import json,pathlib,sys
 launch=json.load(open(sys.argv[1]));m=json.loads((pathlib.Path(sys.argv[2])/'manifest.json').read_text())
@@ -1351,7 +1373,7 @@ kill -0 "$PID" || fail 'failed cycle killed the original source'
 # Reverse handoff uses exact Claude registry readiness in the retained pane.
 spawn_codex 65
 OUT=$(bash "$IBIN/fleet-transfer.sh" --session "$LBL" --window "$PANE" --to claude 2>&1) || fail 'Codex to Claude cutover'
-BUNDLE=$(packet)
+BUNDLE=$(packet); DIRS+=("codex|claude|$SID|$BUNDLE")
 python3 - "$BUNDLE" "$SID" <<'PYREVERSE' || fail 'reverse handoff lost native target binding or source path'
 import json,pathlib,sys
 p=pathlib.Path(sys.argv[1]);m=json.loads((p/'manifest.json').read_text())
@@ -1364,7 +1386,7 @@ ok
 spawn 66 issue normal
 printf '1、做。2、' > "$WORK/unsent.txt"
 OUT=$(bash "$IBIN/fleet-transfer.sh" --session "$LBL" --window "$PANE" --to claude --native-resume --draft-file "$WORK/unsent.txt" 2>&1) || fail 'native Claude continuation'
-BUNDLE=$(packet)
+BUNDLE=$(packet); DIRS+=("claude|claude|$SID|$BUNDLE")
 python3 - "$BUNDLE" <<'PYNATIVE' || fail 'native UUID or unsent draft contract'
 import json,pathlib,sys
 p=pathlib.Path(sys.argv[1]);m=json.loads((p/'manifest.json').read_text())
@@ -1374,6 +1396,32 @@ assert pathlib.Path(m['draft']['path']).read_text()=='1、做。2、'
 assert '1、做。2、' not in (p/'pickup.md').read_text()
 PYNATIVE
 ok
+# The four directions are ONE road (T630, EPIC T580 C7): Claude→Claude,
+# Claude→Codex, Codex→Claude, Codex→Codex each run the same fleet-transfer.sh, and
+# each bundle says the same things — its source and target agent, the source's
+# own resume spelled by the adapter table (home_flag, resume_flag), a started
+# target. Claude→Codex here too, so the four sit in one sandbox.
+spawn 67 issue normal
+transfer || fail "Claude to Codex cutover: $OUT"
+DIRS+=("claude|codex|$SID|$(packet)")
+[ "${#DIRS[@]}" = 4 ] || fail "four directions expected, got ${#DIRS[@]}"
+for d in ${DIRS[@]+"${DIRS[@]}"}; do
+  IFS='|' read -r d_src d_to d_sid d_bundle <<< "$d"
+  set -- "$d_src" "$d_to" "$d_sid" "$d_bundle"
+  python3 - "$IBIN" "$@" <<'PYDIRS' || fail "direction $1 → $2 does not keep the one road's bundle"
+import json, pathlib, runpy, sys
+ibin, src, to, sid, bundle = sys.argv[1:]
+get = runpy.run_path(ibin + '/fleet_agent_adapter.py')['get']
+p = pathlib.Path(bundle); m = json.loads((p/'manifest.json').read_text())
+assert m['source']['agent'] == src and m['target']['agent'] == to and m['source']['session_id'] == sid, m
+argv = m['source_resume_argv']
+assert argv[1:3] == ['--agent', src] and argv[-2:] == [get(src, 'resume_flag'), sid], argv
+assert (get(src, 'home_flag') in argv) == bool(get(src, 'home_flag')), argv
+assert m['source']['transcript_path'] and pathlib.Path(m['source']['snapshot_path']).is_file(), m['source']
+assert json.loads((p/'state.json').read_text())['state'] == 'started', (p/'state.json').read_text()
+PYDIRS
+  ok
+done
 
 fi
 

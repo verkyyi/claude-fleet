@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Detached, bounded wait for /fleet-handoff --to codex's final Stop hook."""
+"""Detached, bounded wait for a /fleet-handoff transfer's final Stop hook (any agent pair)."""
 
 import argparse
 import json
@@ -11,6 +11,11 @@ import subprocess
 import sys
 import tempfile
 import time
+
+
+# The agent adapter table (T620, C4; C7's transfer_* columns): never a test of a name.
+_TABLE = runpy.run_path(str(Path(__file__).with_name('fleet_agent_adapter.py')))
+ADAPTER, AGENTS = _TABLE['get'], tuple(_TABLE['ADAPTERS'])
 
 
 def tm(session, *args):
@@ -36,14 +41,15 @@ def state(request, status, detail=""):
     save(request / "state.json", {"state": status, "detail": detail})
 
 
-def same_codex_source(r):
-    if r.get('source_agent') != 'codex':
+def same_thread_source(r):
+    """A thread-identity source (transfer_source=thread) still runs the armed thread."""
+    if ADAPTER(r.get('source_agent', 'claude'), 'transfer_source') != 'thread':
         return False
     try:
         identity = json.loads(option(r, '@codex_identity') or '{}')
         os.kill(r['pid'], 0)
         return (option(r, 'window_id') == r['window']
-                and option(r, '@cc_agent') == 'codex'
+                and option(r, '@cc_agent') == r['source_agent']
                 and option(r, '@cc_launcher_pid') == str(r['pid'])
                 and isinstance(identity, dict)
                 and identity.get('session_id') == r['sid']
@@ -59,7 +65,7 @@ def release(r, request, retry_source=False):
             # A failed cycle leaves the OLD context alive. Release its nudge
             # latch so the next real Stop may try again. Never unlatch a new
             # launcher/thread, even if it reused this window during the wait.
-            if retry_source and same_codex_source(r):
+            if retry_source and same_thread_source(r):
                 tm(r['session'], 'set-option', '-wu', '-t', r['window'], '@handoff_armed')
             for key in ("@agent_transfer_ready", "@agent_transfer_pending_until", "@agent_transfer_request"):
                 tm(r["session"], "set-option", "-wu", "-t", r["window"], key)
@@ -153,13 +159,14 @@ def wait(request):
                 reader['preparation_check'](r['session'], r['pane'], r['pid'], r['sid'], r['to'],
                                             r.get('preparation_id', ''), str(request/'notes.md'))
             os.kill(r["pid"], 0)
-            if r.get('source_agent', 'claude') == 'codex':
-                if not same_codex_source(r):
-                    raise ValueError('Codex source session changed after arming')
+            agent = r.get('source_agent', 'claude')
+            if ADAPTER(agent, 'transfer_source') == 'thread':
+                if not same_thread_source(r):
+                    raise ValueError('%s source session changed after arming' % agent)
             elif json.loads(Path(r["registry"]).read_text()).get("sessionId") != r["sid"]:
                 raise ValueError("source session changed after arming")
-            if r.get("source_agent", "claude") != "codex" and option(r, "@handoff_armed") == "1":
-                raise ValueError("a Claude context cycle became pending")
+            if ADAPTER(agent, 'armed_cycle') == '1' and option(r, "@handoff_armed") == "1":
+                raise ValueError("a %s context cycle became pending" % agent)
             ready = (option(r, "@agent_transfer_ready") == str(request)
                      and option(r, "@claude_state") == "done")
             if ready and r["defer"]:
@@ -225,7 +232,7 @@ def main():
     a = sub.add_parser("arm")
     for key in ("session", "window", "pane", "sid", "worktree", "main", "registry", "transcript", "notes", "conf-dir", "lock"):
         a.add_argument("--" + key, required=True)
-    a.add_argument("--source-agent", choices=("claude", "codex"), default="claude")
+    a.add_argument("--source-agent", choices=AGENTS, default="claude")
     a.add_argument("--pid", type=int, required=True)
     a.add_argument("--idle-wait", type=int, required=True)
     a.add_argument("--defer", type=int, required=True)
@@ -233,7 +240,7 @@ def main():
     a.add_argument('--identity', default='')
     a.add_argument('--preparation-id', default='')
     a.add_argument("--loop", default='')
-    a.add_argument('--to', choices=('claude', 'codex'), default='codex')
+    a.add_argument('--to', choices=AGENTS, default='codex')
     a.add_argument('--target-file', default=''); a.add_argument('--draft-file', default='')
     a.add_argument("--codex-home", default='')
     w = sub.add_parser("wait")

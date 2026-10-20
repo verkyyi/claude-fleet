@@ -10,6 +10,31 @@ Cross-agent transfers start a new conversation with provenance. Both
 worktree at a time. Claude account migration uses native `--resume`; Codex home
 migration uses the packet. Desktop-app sessions are outside this controller.
 
+## One road, four directions
+
+A handoff (same agent, a fresh context) and a switch (Claude ↔ Codex) run the
+same code (T630, EPIC T580 C7): Claude → Claude, Claude → Codex, Codex → Claude
+and Codex → Codex differ only in where the source is read and how the target is
+started, and both are columns of the agent adapter table
+(`bin/fleet_agent_adapter.py`, the shell copy `bin/fleet-agent-adapter.sh`), never
+a test of the agent's name:
+
+| column | what it says |
+|---|---|
+| `transfer_source` | `registry` (the process's session registry + its projects transcript) or `thread` (the native thread identity + rollout + account home); `.fleet-transfer.py source` is the one reader, its line `PID SID HOME TRANSCRIPT REGISTRY` |
+| `home_flag` · `resume_flag` | the source's own resume (`source_resume_argv`) and the target's account home |
+| `account_env` | the variable a pinned target account rides on |
+| `loop_settled` | when a `looping` source between rounds counts as idle |
+| `exit_paste` | `/exit` as one bracketed paste, or typed |
+| `armed_cycle` | whether a pending `@handoff_armed` is an in-place cycle a switch must wait for |
+| `native_cron` | whether the agent's own scheduler holds timers a no-repo switch carries |
+| `bind_proof` | what proves the target started: its native session, or its process |
+| `account_resume` | whether `--native-resume` may reopen the same conversation |
+
+`fleet-transfer-selftest.sh` part 5 runs all four directions in one sandbox and
+asserts each bundle the same way; the proxy-home drill (BREAK-IT
+`transfer-proxy-home`) runs from a Codex and from a Claude source.
+
 ## Use the existing fleet-handoff skill
 
 In the source conversation, select the target:
