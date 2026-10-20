@@ -27,6 +27,14 @@
 #      recycled); a closed ID no history row lists is a row of its own, with its Agent
 #   H  the read path with 200 closed IDs starts no process and asks no hub (records
 #      come off view-tasks.json, a detached filler fills it) and takes < 100 ms
+#   I  2 places (EPIC T644 C4): among 20 unfinished rows the two sharing their first
+#      2 show 3, the rest 2, the page keeps the written 4; once one ends its
+#      neighbour is 2 again; typing 2 lists both (an unfinished one first, never a
+#      pick), fleet_id.resolve_open says rc 2; ids/.open feeds the top bar and the
+#      notification title the same length; a row whose task record has ended is
+#      做完待收 even while its window still works (the operator's 2026-10-20 word)
+#      — fleet_id.py display_short / resolve_open / open_save, fleet-topbar.py ticket,
+#      fleet_notify.py subject
 # Exit 0 = pass.
 set -uo pipefail
 
@@ -142,7 +150,7 @@ it, by = read(STATES)
 assert by["@9"]["agent"] == "" and SPAWNED and "T901" in SPAWNED[-1], (by["@9"], SPAWNED)   # not waited for
 fv.task_cache_fill(SPAWNED[-1])
 it, by = read(STATES)
-code = lambda w: by[w]["id"]
+code = lambda w: by[w].get("code") or by[w]["id"]   # the WRITTEN code (≥ 4); `id` is what the column shows (C4)
 
 # --- A: the ID column
 for w in ("@1", "@4", "@5", "@6"):
@@ -153,11 +161,11 @@ assert len(code("@2")) == len(code("@3")) == 5 and code("@2")[:4] == code("@3")[
 assert code("@7") == "" and "T?" not in json.dumps([e.get("id") for e in by.values()]), code("@7")
 old2 = "T-" + fi.legacy_encode(F["@2"])[:5]
 assert by["@2"]["aliases"] == ["T367", old2], by["@2"]["aliases"]
-assert re.fullmatch(r"[A-Z]\w{3}", by["MU/" + FAR]["id"]), by["MU/" + FAR]["id"]
+assert re.fullmatch(r"[A-Z]\w{3}", by["MU/" + FAR]["code"]) and by["MU/" + FAR]["code"].startswith(by["MU/" + FAR]["id"]), by["MU/" + FAR]
 assert fi.resolve(code("@2"))[1] == [F["@2"]] and fi.resolve(code("@2")[:4])[0] == 2
 lines = fv.paint(fv.visible(it, "", set()), -1, 100, qo.cells, qo.clip)
 drawn = ["".join(t for t, _ in l) for l in lines]
-assert any(code("@2") + " " in d for d in drawn) and not any("T367" in d or "#4539" in d or old2 in d for d in drawn), drawn
+assert any(by["@2"]["id"] + " " in d for d in drawn) and not any("T367" in d or "#4539" in d or old2 in d for d in drawn), drawn
 
 # --- B: Agent
 assert by["@2"]["agent"] == "codex" and by["@1"]["agent"] == "claude", (by["@2"]["agent"], by["@1"]["agent"])
@@ -318,3 +326,92 @@ st_ok_all "E  search: 4539 / #4539 via the ID's issues, not 45390; code and alia
 st_ok_all "F  actions page: code + ID, aliases, segments, 未登记到 hub / refusal red, conflict reason"
 st_ok_all "G  repo: an EPIC driver's charter repo= (its relay too), a record's repo, none ⇒ blank; a closed row by its conversation, a closed ID alone is its own row (T593)"
 st_ok_all "H  read path, 200 closed IDs: no process, no hub call, < 100 ms (T593)"
+
+python3 - "$BIN" <<'PY' || st_fail "2 places"
+import importlib.util, json, os, re, sys, time, uuid
+B = sys.argv[1]
+sys.path.insert(0, B)
+def load(name, f):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(B, f))
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); return m
+fv = load("fleet_view", "fleet_view.py")
+tb = load("fleet_topbar", "fleet-topbar.py")
+import fleet_id as fi, fleet_notify
+US = "\x1f"
+now = int(time.time())
+# 20 unfinished IDs with 20 different first 2 places, and a 21st sharing its first 2
+# with the first one (and not its third)
+import hashlib
+mk = lambda n: str(uuid.UUID(bytes=hashlib.sha256(b"c4-%d" % n).digest()[:16], version=4))
+ids, seen, n = [], {}, 0
+while len(ids) < 20:
+    f = mk(n); n += 1
+    c = fi.encode(f)
+    if c[:2] not in seen:
+        seen[c[:2]] = f; ids.append(f)
+while True:
+    f = mk(n); n += 1
+    c = fi.encode(f)
+    if c[:2] == fi.encode(ids[0])[:2] and c[2] != fi.encode(ids[0])[2]:
+        CLASH = f; break
+DONE_T = mk(n + 1)
+for i, f in enumerate(ids + [CLASH, DONE_T]):
+    fi.append(f, {"ev": "opened", "agent": "claude", "key": "scratch-%d" % (100 + i), "title": "活 %d" % i,
+                  **({"task": "T950"} if f == DONE_T else {})})
+TG = os.path.join(os.environ["FLEET_CONF_DIR"], "taskget2")
+open(TG, "w").write('#!/bin/sh\n[ "$1" = T950 ] && echo \'{"task":{"id":"T950","outcome":"succeeded","authority_version":1}}\' && exit 0\necho \'{"task":{}}\'\n')
+os.chmod(TG, 0o755)
+os.environ["FLEET_VIEW_TASK_GET"] = TG
+fv.task_cache_spawn = lambda tasks: None
+fv.task_cache_fill(["T950"])
+W = {"@%d" % (i + 1): f for i, f in enumerate(ids + [CLASH, DONE_T])}
+def full(*f, task="", agent="claude", repo="o/claude-fleet"):
+    f = list(f) + [""] * (20 - len(f))
+    return US.join(f + ["", task, agent, repo])
+for k, v in dict(view_row=lambda vid: {}, view_fleet=lambda vid, row=None: "fl", here_label=lambda row: "nodeA",
+                 fleet_logins=lambda: {}, hub_view_request=lambda f: None, hub_fresh=lambda f: None,
+                 gone_text=lambda fleet: "", gone_rows=lambda text, _now=None: []).items():
+    setattr(fv, k, v)
+def read(wins):
+    fv.windows = lambda fleet: {w: (W[w], "worker", now - 60) for w in wins}
+    def produce(fleet, **kw):
+        out = [US.join(("hdr", "o/claude-fleet", "", "claude-fleet", " "))]
+        for w in wins:
+            out.append(full(w, "working", "⠹", "w" + w[1:], " ", "", "0", "", "", "", "—", "·", "ok", "活 " + w[1:],
+                            "merged", task="T950" if W[w] == DONE_T else ""))
+        return "\n".join(out) + "\n"
+    fv.produce = produce
+    it = fv.entries("v1", hub=False)
+    return it, {W[e["target"]]: e for e in it if e["kind"] == "sess" and e["target"] in W}
+it, by = read(list(W))
+A, C = fi.encode(ids[0]), fi.encode(CLASH)
+assert by[ids[0]]["id"] == A[:3] and by[CLASH]["id"] == C[:3], (by[ids[0]]["id"], by[CLASH]["id"])
+assert all(len(by[f]["id"]) == 2 for f in ids[1:]), [by[f]["id"] for f in ids[1:]]
+assert all(len(by[f]["code"]) >= 4 and by[f]["code"].startswith(by[f]["id"]) for f in ids), [by[f]["code"] for f in ids]
+assert any(t.strip().startswith("编号 " + by[ids[1]]["code"]) for t, _ in fv.id_page(by[ids[1]], 100)), fv.id_page(by[ids[1]], 100)
+# a record that has ended is 做完待收 even while its window works — and not unfinished
+d = by[DONE_T]
+assert d["group"] == "done" and d["sym"] == "done" and not d["open_id"] and len(d["id"]) >= 2, d
+assert fi.open_ids() == set(ids + [CLASH]), len(fi.open_ids())
+# typing 2: both unfinished ones, never a pick; 3 is the one
+sess = lambda q: [W.get(e["target"]) for e in fv.visible(it, q, set()) if e["kind"] == "sess"]
+assert sorted(sess(A[:2].lower())) == sorted([ids[0], CLASH]), sess(A[:2])
+assert sess(A[:3]) == [ids[0]] and sess("#" + by[ids[5]]["id"]) == [ids[5]], (sess(A[:3]), sess(by[ids[5]]["id"]))
+assert fi.resolve_open(A[:2], fi.open_ids()) == (2, sorted([ids[0], CLASH])), fi.resolve_open(A[:2], fi.open_ids())
+assert fi.resolve_open(A[:3], fi.open_ids()) == (0, [ids[0]])
+# a finished row's 2 places stay out while an unfinished one answers them
+dd = fi.encode(DONE_T)[:2]
+if not any(fi.encode(f).startswith(dd) for f in ids + [CLASH]):
+    assert sess(dd) == [DONE_T], sess(dd)
+# the top bar and the notification title: the same 2 or 3
+assert tb.ticket("", "T950", ids[3]) == by[ids[3]]["id"] and tb.ticket("", "", CLASH) == C[:3], tb.ticket("", "", CLASH)
+assert tb.ticket("4539", "", ids[3]) == "#4539" and tb.ticket("", "T12", "") == "T12"
+assert fleet_notify.subject({"wid": "U/" + ids[3], "name": "活"}) == by[ids[3]]["id"] + " · 活"
+assert fleet_notify.subject({"wid": "U/issue-7", "issue": 7}) == "#7"
+# the clash ends (its window gone): its neighbour is 2 again
+it, by = read([w for w in W if W[w] != CLASH])
+assert by[ids[0]]["id"] == A[:2], by[ids[0]]["id"]
+assert fi.resolve_open(A[:2], fi.open_ids()) == (0, [ids[0]]) and tb.ticket("", "", ids[0]) == A[:2]
+print("   2 places: %s · %s (clash) · %s … ; after: %s" % (A[:3], C[:3], by[ids[1]]["id"], by[ids[0]]["id"]))
+PY
+st_ok_all "I  2 places: a clash shows 3, the rest 2, the page the written 4; the clash ends ⇒ 2 again; 2 typed lists both, never a pick; top bar + notification the same; an ended record is 做完待收"

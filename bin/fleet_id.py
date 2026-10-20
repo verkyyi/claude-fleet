@@ -14,6 +14,13 @@ that ID, several ⇒ refused with the candidates (rc 2), never a pick. The old c
 `T-` + 5 lowercase (`T-hfkc7`, the ID's plain base32) still resolves for one version
 (compat-1v), and a ledger's stored `T-…` short is read as nothing.
 
+That 4-place code is the one WRITTEN down (details, copies, logs, reports). What a
+panel, ⌘P, the top bar and a notification title SHOW is shorter (EPIC T644 C4):
+display_short — at least 2, one longer for as long as another UNFINISHED ID shares
+the prefix (`K5`, `K5H` beside another open K5…). The unfinished set is the panel's
+(ids/.open, open_save); a typed prefix of 2+ is looked up there first, then in the
+whole history (resolve_open).
+
 The ledger is $FLEET_CONF_DIR/ids/<ID>.ndjson, one event a line, each with its
 (ID, seq): `opened` (the spawn: agent, window, repo, title …), `native` (a native
 session the window went through — a new segment, or `compact: true` counting one
@@ -49,6 +56,7 @@ ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"   # Crockford base32, lowercase �
 DIGITS = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"     # the display code: Crockford base32, uppercase
 LETTERS = "ABCDEFGHJKMNPQRSTVWXYZ"              # its first character: a letter, never a digit
 SHORT_MIN = 4
+DISPLAY_MIN = 2   # the code a panel shows (EPIC T644 C4): unique among the unfinished only
 ADDR_MIN = 4
 LEGACY_MIN = 4   # an old `T-` address's least length (compat-1v)
 CODE_SPAN = 22 * 32 ** 25   # 26 places: one letter, 25 base32 — more than 2^128, so no two IDs share a full code
@@ -89,10 +97,12 @@ def legacy_encode(fid):
     return "".join(ALPHABET[(n >> (5 * (25 - i))) & 31] for i in range(26))
 
 
-def parse_code(s):
+def parse_code(s, least=ADDR_MIN):
     """A typed code → (canonical code, legacy?) or None. `K3F9` / `#k3f9` / any case,
     Crockford's reading of I/L (1) and O (0), U no digit, the first character a letter;
-    `T-…` / `t-…` is the old lowercase code (compat-1v: 下一批删)."""
+    `T-…` / `t-…` is the old lowercase code (compat-1v: 下一批删). `least` is the
+    shortest a new code may be typed: ADDR_MIN, DISPLAY_MIN where only the
+    unfinished are searched (resolve_open, ⌘P)."""
     s = (s or "").strip()
     if s[:2] in ("T-", "t-"):
         s = s[2:].lower().replace("i", "1").replace("l", "1").replace("o", "0")
@@ -102,7 +112,7 @@ def parse_code(s):
     if s[:1] == "#":
         s = s[1:]
     s = s.upper().replace("I", "1").replace("L", "1").replace("O", "0")
-    if len(s) < ADDR_MIN or len(s) > 26 or s[0] not in LETTERS or any(c not in DIGITS for c in s):
+    if len(s) < least or len(s) > 26 or s[0] not in LETTERS or any(c not in DIGITS for c in s):
         return None
     return s, False
 
@@ -126,6 +136,54 @@ def short_for(fid, known):
     while n < 26 and any(o[:n] == me[:n] for o in others):
         n += 1
     return me[:n]
+
+
+def display_short(fid, open_ids):
+    """The code a panel, ⌘P, the top bar and a notification title SHOW (EPIC T644 C4,
+    convention 2): the shortest prefix (≥ DISPLAY_MIN) no other UNFINISHED ID
+    shares — `K5`, `K5H` while another open one starts K5, `K5` again once it ends.
+    Never written down: details, copies, logs and messages write short_for's."""
+    me = encode(fid)
+    others = [encode(k) for k in open_ids if is_fid(k) and k != fid]
+    n = DISPLAY_MIN
+    while n < 26 and any(o[:n] == me[:n] for o in others):
+        n += 1
+    return me[:n]
+
+
+def open_path():
+    """The unfinished IDs the panel last showed (C4): one ID a line — written by
+    fleet_view's frame (open_save), read by the top bar and the notifications so
+    every place shows the same length."""
+    return os.path.join(ids_dir(), ".open")
+
+
+def open_ids():
+    try:
+        with open(open_path(), encoding="utf-8") as fh:
+            return {line.strip() for line in fh if is_fid(line.strip())}
+    except OSError:
+        return set()
+
+
+def open_save(ids):
+    """Write the unfinished set when it changed (one rename); never raises."""
+    ids = {x for x in ids if is_fid(x)}
+    if ids == open_ids() and os.path.exists(open_path()):
+        return
+    try:
+        os.makedirs(ids_dir(), exist_ok=True)
+        tmp = "%s.%d" % (open_path(), os.getpid())
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("".join(x + "\n" for x in sorted(ids)))
+        os.replace(tmp, open_path())
+    except OSError:
+        pass
+
+
+def shown(fid, open_set=None):
+    """display_short over the unfinished book (open_ids), the ID itself counted."""
+    return display_short(fid, open_ids() if open_set is None else open_set) if is_fid(fid) else ""
 
 
 def hub_short(fid, s):
@@ -525,6 +583,18 @@ def resolve(addr, extra_known=()):
     if not hits:
         return 1, []
     return (0 if len(hits) == 1 else 2), hits
+
+
+def resolve_open(addr, open_set, extra_known=()):
+    """Convention 4 (EPIC T644): a typed prefix (≥ DISPLAY_MIN) is looked up among the
+    unfinished first — one ⇒ it, several ⇒ rc 2 with them, never a pick; none there
+    ⇒ the whole history (resolve: ≥ ADDR_MIN), same rule. (rc, [IDs])."""
+    p = parse_code(addr, DISPLAY_MIN)
+    if p is not None and not p[1]:
+        hits = sorted(f for f in open_set if is_fid(f) and encode(f).startswith(p[0]))
+        if hits:
+            return (0 if len(hits) == 1 else 2), hits
+    return resolve(addr, extra_known)
 
 
 # ---- results, parents, successors (EPIC T497 C4; design page §4.3–§4.5) ----------
@@ -1478,7 +1548,7 @@ def render(fid):
 
 def main(argv):
     if not argv:
-        print("usage: fleet_id.py short|open|native|result|progress|close|get|resolve|push|hook|status|route|children|await|history|continue|reopen|family|parents|backfill …", file=sys.stderr)
+        print("usage: fleet_id.py short|display|open|native|result|progress|close|get|resolve|push|hook|status|route|children|await|history|continue|reopen|family|parents|backfill …", file=sys.stderr)
         return 2
     cmd, args = argv[0], argv[1:]
     # Live windows' IDs ride in as FLEET_ID_LIVE (newline-separated): fleet-id.sh fills it.
@@ -1523,8 +1593,13 @@ def main(argv):
         if c:
             print(c)
         return 0 if c else 1
+    if cmd == "display" and args:
+        if not is_fid(args[0]):
+            return 2
+        print(shown(args[0]))
+        return 0
     if cmd == "resolve" and args:
-        rc, hits = resolve(args[0], live)
+        rc, hits = resolve_open(args[0], open_ids(), live)
         if rc == 0:
             print(hits[0])
         elif rc == 2:

@@ -19,7 +19,7 @@ fleet-quickopen.py (this module is its node half — the client never loads it):
                                               其他); 已结束 under them; ↵ goes there
     fleet-quickopen.py do next|prev|back|fwd --view <view>
                                               ⌘↓ ⌘↑ (the list's order) · ⌘[ ⌘] (history)
-    fleet-quickopen.py do new|quit|shell --view <view> [--target <session>]
+    fleet-quickopen.py do new|quit|shell|home --view <view> [--target <session>]
                                               C7 (issue #3004): ⌘N a new session (a
                                               no-repo one on this machine, #3119) ·
                                               ⌘Q OSC 7502 quit + detach · ⌃\ the
@@ -109,8 +109,11 @@ box (T652, EPIC T651 C1): 仓库 ‹›, Agent ‹›, 开 — three items, noth
 it opens on 开 with both chosen, so ↵ opens (bolt_argv → go_new, the one road:
 under hub authority a repo's blank session is a record titled 「新会话」, renamed
 by its first prompt). Tab / ↑↓ walk, ←→ change the lit value, ↵ on a value goes
-to 开. The repo and agent persist per view (panel-drafts; an older file's draft
-text is read and dropped — compat-1v: 下一批删).
+to 开. Its defaults (T670, EPIC T651 C2) are fleet-quick-dispatch.py's one reader
+(grid → defaults()): the repo of the session in view, else the last new
+session's (不绑仓库 counts), else the only one; the agent that repo last opened
+with, else the fleet's. Opening one records both (compose-state.json). ⌘N opens
+the box itself, esc closes it. panel-drafts is read no more.
 The footer contains keys, an optional glyph legend and transient feedback.
 FLEET_PANEL_COMMANDS still controls new/quit/landed through panel_rows().
 
@@ -185,16 +188,18 @@ US = "\x1f"
 VIEW_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 # The 看台's actions off dash-keymap.sh --panel switch: the verb each one runs.
 # ⌘N ⌘Q are C7's (issue #3004), bound only when the person names them (#3185);
+# ⌘N opens the 「新会话」 box, both values chosen (T670, EPIC T651 C2) — the panel's
+# forward of `new`, whether the default forward or a chord the person named;
 # zoom / fold stay caught by user-keys, bound to nothing (a 看台 has one pane a
 # window, and no list to fold). ⌘T's 派一件事 popup has no entry since issue #3328:
 # `dispatch` is the panel lit on its ⚡ row — the same send, one entry.
 VIEW_ACTIONS = {"next": "do next", "prev": "do prev", "back": "do back", "fwd": "do fwd",
                 "quickopen": "popup", "switcher": "popup",
-                "new": "do new", "quit": "do quit", "dispatch": "forward"}
+                "new": "forward", "quit": "do quit", "dispatch": "forward", "home": "do home"}
 PFX_KEY = "C-]"
 NARROW = 100      # a client narrower than this (a phone) gets the switcher full-screen (#3006)
-# ⌃\ (issue #3004, #2744's meaning): no ⌘ chord, so no row of the switch table —
-# the terminal sends the byte itself; ⌃] \ is the same on a keyboard with no ⌃\.
+# ⌃\ (issue #3004; EPIC T651 C3: ⌘\'s fallback, the home shell): the terminal
+# sends the byte itself; ⌃] \ is the same on a keyboard with no ⌃\.
 SHELL_KEY, SHELL_LETTER = "C-\\", "\\"
 HERE, ME = "here", "me"
 
@@ -1086,7 +1091,8 @@ def task_cache_file():
 
 
 def task_cache():
-    """The hub task records' panel words on disk, {T<n>: [read at, agent, repo]} —
+    """The hub task records' panel words on disk, {T<n>: [read at, agent, repo,
+    outcome]} (outcome since EPIC T644 C4; an older 3-long entry reads as open) —
     one file read per change (mtime), never a hub call (T593: a popup is a new
     process each time, so an in-process cache bought nothing and every ⌘P waited
     on the hub)."""
@@ -1109,18 +1115,32 @@ def task_cache():
 
 def hub_task(task):
     """What the panel knows of a hub task record — {agent: actual_agent, repo: its
-    repo, else the EPIC charter marker's `repo=` in its words (T593)}, off
+    repo, else the EPIC charter marker's `repo=` in its words (T593), outcome: its
+    end (succeeded / failed / cancelled / refused, '' while open — C4)}, off
     task_cache only. A task it lacks, or read longer ago than
     FLEET_VIEW_TASK_AGENT_SECS (300 s), is queued for task_cache_kick: a detached
     read fills it for the next frame."""
     if not re.match(r"^T[1-9][0-9]*$", task or ""):
         return {}
     hit = task_cache().get(task)
-    if not (isinstance(hit, list) and len(hit) == 3 and time.time() - (hit[0] or 0) < fenv("FLEET_VIEW_TASK_AGENT_SECS", 300)):
+    if not (isinstance(hit, list) and len(hit) >= 3 and time.time() - (hit[0] or 0) < fenv("FLEET_VIEW_TASK_AGENT_SECS", 300)):
         _ID_CACHE.setdefault("tasks_want", set()).add(task)
-    if not isinstance(hit, list) or len(hit) != 3:
+    if not isinstance(hit, list) or len(hit) < 3:
         return {}
-    return {"agent": hit[1] if hit[1] in AGENTS else "", "repo": hit[2] if SLUG_RE.match(hit[2] or "") else ""}
+    return {"agent": hit[1] if hit[1] in AGENTS else "", "repo": hit[2] if SLUG_RE.match(hit[2] or "") else "",
+            "outcome": hit[3] if len(hit) > 3 and hit[3] in TASK_ENDS else ""}
+
+
+# A task record's end (fleet_task_control.TERMINAL): a row whose record says one is
+# 做完待收 whatever its window still runs (EPIC T644 C4, the operator's 2026-10-20 word —
+# a Codex loop left running after the merge kept a closed task 在干活).
+TASK_ENDS = ("succeeded", "failed", "cancelled", "refused")
+
+
+def task_ended(e):
+    """The row's hub task record has ended (off task_cache — never a hub call)."""
+    o = (id_record(e.get("fid") or "") or {}).get("opened") or {}
+    return bool(hub_task(e.get("task") or o.get("task") or "").get("outcome"))
 
 
 def hub_task_agent(task):
@@ -1130,7 +1150,7 @@ def hub_task_agent(task):
 
 
 def task_read(task):
-    """One record off the hub → [now, agent, repo] (None unread). `fleet-task-record.sh
+    """One record off the hub → [now, agent, repo, outcome] (None unread). `fleet-task-record.sh
     get`, bounded by FLEET_VIEW_PR_TIMEOUT; FLEET_VIEW_TASK_GET (a command, the T<n>
     appended) is the selftest's seam. Only task_cache_fill calls it — never a frame."""
     secs = fenv("FLEET_VIEW_PR_TIMEOUT", 3)
@@ -1155,7 +1175,9 @@ def task_read(task):
                 pass
             m = EPIC_MARK_RE.search(words)
             repo = (re.search(r"\brepo=(\S+)", m.group(1)) or [None, ""])[1] if m else ""
-        return [time.time(), agent if agent in AGENTS else "", repo if SLUG_RE.match(repo) else ""]
+        outcome = str(t.get("outcome") or "")
+        return [time.time(), agent if agent in AGENTS else "", repo if SLUG_RE.match(repo) else "",
+                outcome if outcome in TASK_ENDS else ""]
     except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
         return None
 
@@ -1182,10 +1204,10 @@ def task_cache_fill(tasks):
     for t, v in got.items():
         if v:
             cur[t] = v
-        elif t in cur and isinstance(cur[t], list) and len(cur[t]) == 3:
+        elif t in cur and isinstance(cur[t], list) and len(cur[t]) >= 3:
             cur[t][0] = time.time()       # unread: tried again after the TTL, not every frame
         else:
-            cur[t] = [time.time(), "", ""]
+            cur[t] = [time.time(), "", "", ""]
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = Path(str(p) + ".%d" % os.getpid())
@@ -1308,6 +1330,31 @@ def id_apply(e, fid, known, live=True):
         e["word"] = say("view_legend_exited") if not res else e.get("word", "")
 
 
+def id_display(groups):
+    """The ID column shows the code that tells the UNFINISHED apart (EPIC T644 C4):
+    every row above 已结束 but 做完待收 is unfinished; each of those groups' rows shows
+    fleet_id.display_short over them (2 places, one more while another unfinished one
+    shares them) and keeps the written code (≥ 4) as `code` for its page. The set is
+    saved (ids/.open) for the top bar and the notifications; 已结束 and 已关闭 rows keep
+    the written code. Nothing to show ⇒ nothing changes."""
+    fi = fleet_id_mod()
+    if fi is None:
+        return
+    rows = [e for g in GROUPS for e in groups.get(g, ()) if fi.is_fid(e.get("fid") or "")]
+    live = {e["fid"] for e in rows if e.get("group") != "done"}
+    for e in rows:
+        e["code"] = e.get("id") or ""
+        e["open_id"] = e["fid"] in live
+        try:
+            e["id"] = fi.display_short(e["fid"], live)
+        except Exception:
+            pass
+    try:
+        fi.open_save(live)
+    except Exception:
+        pass
+
+
 def id_conflicts(rows):
     """S9: live rows sharing one native segment — each marked with the others' codes."""
     by = {}
@@ -1392,7 +1439,8 @@ def id_page(e, w):
     if not e.get("fid"):
         return []
     out = [("", ())]
-    out.append(("  " + say("view_id_head_fmt", e.get("id") or "", e["fid"]), ("dim",)))
+    # the WRITTEN code (≥ 4, EPIC T644 C4) — the column shows the shorter one
+    out.append(("  " + say("view_id_head_fmt", e.get("code") or e.get("id") or "", e["fid"]), ("dim",)))
     if e.get("aliases"):
         out.append(("  " + say("view_id_aliases_fmt", " ".join(e["aliases"])), ("dim",)))
     segs = e.get("segs") or []
@@ -1726,6 +1774,10 @@ def entries(vid, now=None, hub=True):
         id_apply(e, wins.get(target, ("", "", 0))[0] if local else target.rpartition("/")[2], known)
         if not e["repo"]:
             norepo.append(e)
+        if e["state"] in ("working", "looping", "idle") and task_ended(e):
+            # its record has ended: 做完待收, even with a loop still running in its window
+            e["state"], e["sym"] = "done", sym_of("done", e["lost"])
+            e["word"] = state_words("done")
         if e["state"] != state:
             grp = e["group"] = group_of(e["state"], section == "pin", landed, section == "ended", bool(pend), stage)
         if grp == "ended":
@@ -1814,6 +1866,7 @@ def entries(vid, now=None, hub=True):
             for e in moved:
                 e.pop("fold", None)
             groups["ask"] += moved
+    id_display(groups)
     multi = len(set(repos)) >= 2
     out = []
     for g in GROUPS:
@@ -1981,15 +2034,20 @@ def issue_hit(token, e):
 
 def id_code_hit(token, e):
     """A word written as the row's ID code (C11): `k3f9`, `#K3F9`, I/L/O read as 1/1/0,
-    a prefix of the row's code; the old `t-hfkc7` for one version. A number never is."""
+    a prefix of the row's code; the old `t-hfkc7` for one version. A number never is.
+    2 places are enough (EPIC T644 C4: the code a row shows); `visible` keeps a
+    finished row's code hit only while no unfinished row has one (convention 4)."""
     fi = fleet_id_mod()
     fid = e.get("fid") or ""
     if fi is None or not fi.is_fid(fid):
         return False
-    p = fi.parse_code(token)
+    p = fi.parse_code(token, fi.DISPLAY_MIN)
     if p is None:
         return False
     return (fi.legacy_encode(fid) if p[1] else fi.encode(fid)).startswith(p[0])
+
+
+CODE_HIT = 2100
 
 
 def score_token(token, e):
@@ -2002,8 +2060,13 @@ def score_token(token, e):
     if i >= 0:
         return 3000 - i + (200 if word_start(name, i) else 0)
     if id_code_hit(token, e):
-        return 2100
-    hay = " ".join(str(x) for x in [e.get("name"), e.get("id"), e.get("fid")] + list(e.get("aliases") or ()) if x).lower()
+        return CODE_HIT
+    # a code is a PREFIX (id_code_hit above), never a substring, and the full ID
+    # only for a word long enough to mean it: 2 typed places (C4) would light every
+    # row whose code or hex happens to hold them
+    fid = e.get("fid") or ""
+    hay = " ".join(str(x) for x in [e.get("name"), "" if fid else e.get("id"), fid if len(token) >= 8 else ""]
+                   + list(e.get("aliases") or ()) if x).lower()
     i = hay.find(token)
     if i >= 0:
         return 2000 - i
@@ -2060,6 +2123,11 @@ def visible(items, query, opened):
     asks = {e["of"]: e for e in items if e["kind"] == "ask"}
     if query.split():
         hits = [(score(query, e), i, e) for i, e in enumerate(items) if e["kind"] == "sess"]
+        toks = query.split()
+        # a typed code (EPIC T644 C4, convention 4): the unfinished first — while one
+        # of them answers, a finished row only its code would list stays out
+        if len(toks) == 1 and any(e.get("open_id") and id_code_hit(toks[0].lower(), e) for _, _, e in hits):
+            hits = [h for h in hits if h[2].get("open_id") or h[0] != CODE_HIT]
         out = []
         for _, _, e in sorted((h for h in hits if h[0] is not None), key=lambda h: (-h[0], h[1])):
             out.append(dict(e, depth=0))
@@ -2549,9 +2617,12 @@ def tell_cur(g):
 
 
 def do(qo, verb, vid, client="", target=None, new=None):
-    """⌘↓ ⌘↑ ⌘[ ⌘] in a 看台 — and C7's ⌘N (new) · ⌘Q (quit) · ⌃\\ (shell;
-    `--target <row>`: that session's, issue #3183). `new`: go_new's repo / agent /
-    prompt (⌘P's ⚡ row, issue #3327)."""
+    """⌘↓ ⌘↑ ⌘[ ⌘] in a 看台 — and C7's ⌘N (new) · ⌘Q (quit) · ⌃\\ (home: this
+    machine's command line, EPIC T651 C3; ⌘\\ too) · shell (`--target <row>`: that
+    session's, issue #3183). `new`: go_new's repo / agent / prompt (⌘P's ⚡ row,
+    issue #3327)."""
+    if verb == "home":
+        return open_home_shell(qo, vid, client)
     if verb == "new":
         return go_new(qo, vid, client, **(new or {}))
     if verb == "quit":
@@ -2628,6 +2699,7 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
         return bolt_blank(vid, client, repo, agent)
     seam = os.environ.get("FLEET_VIEW_NEW_CMD")
     argv = shlex.split(seam) if seam else ["bash", str(Path(__file__).absolute().parent / "dash-raw-session.sh")]
+    chosen = bool(agent)    # the box names both (T670): its choice is the next box's default
     if not agent:
         agent, why = new_agent(fleet, vid)
         if why:
@@ -2651,6 +2723,8 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
         rc, w, why = 1, "", str(error)
     clock.mark("start")
     if rc == 0 and re.fullmatch(r"@[0-9]+", w):
+        if chosen and not prompt:
+            new_remember(repo, agent)
         went = go(qo, vid, w, "new", client)
         clock.mark("go")
         if went == 0:
@@ -2662,6 +2736,18 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
     toast(client, said)
     print(said, file=sys.stderr, flush=True)
     return 3
+
+
+def new_remember(repo, agent):
+    """The box's session opened: its repo ("" = 不绑仓库) and agent are the next
+    box's defaults — written by fleet-quick-dispatch.py, their one reader (T670).
+    Under hub authority its own send remembers them."""
+    try:
+        subprocess.run([sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"),
+                        "remember", "--repo", repo or "", "--agent", agent], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def new_authority(fleet, vid, repo):
@@ -2801,8 +2887,8 @@ def open_shell(qo, vid, client="", target=None, meta=None):
     its shell the next ⌃\ is back on the session. Another machine's rides C5's
     standing link (`ssh -S <link> -tt … fleet-remote-view.sh shell-here <wid>`);
     a session reaped takes its shell along, never the other way. No session in
-    view: this machine's shell in $HOME. rc 0 · 3 that session is gone (a line on
-    the client)."""
+    view: the home shell (open_home_shell). rc 0 · 3 that session is gone (a line
+    on the client)."""
     row = view_row(vid)
     fleet = view_fleet(vid, row)
     if not fleet:
@@ -2855,8 +2941,36 @@ def open_shell(qo, vid, client="", target=None, meta=None):
         elif fid:
             m, l, wid, name, prog = here, me, w, TAG_RE.sub("", wname).strip() or w, "here"
         else:
-            m, l, wid, name, prog = here, me, "", "", "home"
-    key = "%s@%s:%s" % (m, l, wid) if wid else "local"
+            return open_home_shell(qo, vid, client)
+    return shell_window(qo, vid, client, fleet, g, prog, m, l, wid, name)
+
+
+def open_home_shell(qo, vid, client=""):
+    r"""⌘\ · ⌃\ (EPIC T651 C3): the command line of the machine this 看台 lives on —
+    this login's login shell in $HOME, from any screen, with no session and no
+    hub. ONE window of the 看台's group, marked `@view_shell home`: open ⇒ go to
+    it; on it ⇒ back to where you were. A web PTY's persistent home shell (C4)
+    keeps its own road (open_shell). rc 0 · 1 the window would not open · 2 no 看台."""
+    row = view_row(vid)
+    fleet = view_fleet(vid, row)
+    if not fleet:
+        return 2
+    g = "%s@view-%s" % (fleet, vid)
+    _, out = tm("display-message", "-p", "-t", "=" + g + ":", "#{@view_web_home}|#{@view_shell}")
+    web, vsh = (out.split("|") + [""])[:2]
+    if web:
+        return open_shell(qo, vid, client)
+    if vsh == "home":
+        code, _ = tm("last-window", "-t", "=" + g)
+        return 0 if code == 0 else 1
+    return shell_window(qo, vid, client, fleet, g, "home", here_label(row), getpass.getuser(), "", "")
+
+
+def shell_window(qo, vid, client, fleet, g, prog, m, l, wid, name):
+    r"""The ⌃\ window itself: the one already open for this key in this 看台, else a
+    new window running `view-shell <prog>` — a session's (`<machine>@<login>:<wid>`)
+    or the home shell (`home`)."""
+    key = "%s@%s:%s" % (m, l, wid) if wid else "home"
     _, lst = tm("list-windows", "-t", "=" + fleet, "-F", "#{window_id}|#{@view_shell}|#{@peer_view}")
     for line in lst.splitlines():
         sw, sk, sv = (line.split("|") + ["", ""])[:3]
@@ -3051,7 +3165,7 @@ def key_lines(me, extra=None, browser=False):
     popup = str(Path(me).parent / "dash-popup.sh")
 
     def cmd_of(action, forward=""):
-        verb = "do shell" if action == "shell" else VIEW_ACTIONS.get(action)
+        verb = "do " + action if action in fleet_keys.CODELESS else VIEW_ACTIONS.get(action)
         if verb == "forward":
             forward = forward or action
         if forward:
@@ -3080,7 +3194,8 @@ def key_lines(me, extra=None, browser=False):
 
     def bind_chord(chord, action):
         if fleet_keys.is_cmd(chord):
-            bind("fleet-view", "User%s" % codes[action] if action in codes else "", action)
+            # a code that is a byte (`x1c`, ⌘\ home) arrives as that key: bound below
+            bind("fleet-view", "User%s" % codes[action] if codes.get(action, "").isdigit() else "", action)
         else:
             tk = fleet_keys.tmux_key(chord)
             if tk and tk != ("fleet-view", PFX_KEY) and tk != ("fleet-view-pfx", PFX_KEY):
@@ -3088,7 +3203,7 @@ def key_lines(me, extra=None, browser=False):
 
     known = set(VIEW_ACTIONS) | set(fleet_keys.CODELESS)
     for action in defaults:                                   # ⌘P: User927, whatever chord the client picked
-        if action in VIEW_ACTIONS and action in codes:
+        if action in VIEW_ACTIONS and codes.get(action, "").isdigit():
             bind("fleet-view", "User%s" % codes[action], action)
     for chord in fleet_keys.phone():                          # ⌃空格 · F12 · ⌃] p
         bind_chord(chord, "quickopen")
@@ -3106,8 +3221,10 @@ def key_lines(me, extra=None, browser=False):
         bind_chord(chord, action)
     for action, chord in fleet_keys.pairs(fleet_keys.phone_extra(), known):
         bind_chord(chord, action)
-    shell_key = ("fleet-view", "C-\\")
-    fallback = binds.get(shell_key, "send-keys 'C-\\'")
+    # ⌃\ (EPIC T651 C3): ⌘\'s fallback, the home shell, unless the person bound it;
+    # a web PTY's persistent home shell (C4) keeps its own road
+    shell_key = fleet_keys.tmux_key(fleet_keys.HOME_CHORD)
+    fallback = binds.get(shell_key, cmd_of("home"))
     binds[shell_key] = "if-shell -F '#{@view_web_home}' { %s } { %s }" % (cmd_of("shell"), fallback)
     _OURS[0] = {tk for tk in binds if tk[0] == "fleet-view"}
     for (table, key), c in binds.items():
@@ -3774,14 +3891,17 @@ def landed_first(items):
 AGENTS = ("claude", "codex")
 
 
-def grid_read(vid):
-    """The ⚡ row's cells as fleet-quick-dispatch.py grid reads them — ⌘T's own
-    rules: {repos (every repo the hub names), last (the last send's, else the only
-    one), agent (the fleet's default), missing ({agent: why} this machine lacks, or
-    the admin has not opened — issue #3826), blocked (those last ones)}."""
-    g = {"repos": [], "last": "", "agent": "claude", "missing": {}, "blocked": []}
+def grid_read(vid, repo=""):
+    """The 「新会话」 box's values as fleet-quick-dispatch.py grid reads them — its
+    defaults() is the one reader (T670, EPIC T651 C2; the panel only shows):
+    {repos (every repo the hub names), last (the box's repo: `repo` — the session
+    in view's — else the last new session's), agent (the fleet's default), agents
+    ({repo: the agent it last opened with, else the default}), missing ({agent:
+    why} this machine lacks, or the admin has not opened — issue #3826), blocked
+    (those last ones)}."""
+    g = {"repos": [], "last": "", "agent": "claude", "agents": {}, "missing": {}, "blocked": []}
     argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"), "grid",
-            "--view", "%s@view-%s" % (view_fleet(vid), vid)]
+            "--view", "%s@view-%s" % (view_fleet(vid), vid)] + (["--repo", repo] if repo else [])
     try:
         out = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10).stdout
         got = json.loads((out.strip().splitlines() or ["{}"])[-1])
@@ -3792,13 +3912,27 @@ def grid_read(vid):
     return g
 
 
+def view_repo(vid, cur="", items=()):
+    """The repo of the session in view (`cur`, current()'s): a window here says
+    its @repo (owner/name); another machine's row its short name, which grid
+    resolves against the hub's list. "" when it has none."""
+    if not cur:
+        return ""
+    if cur.startswith("@"):
+        rc, out = tm("display-message", "-p", "-t", cur, "#{@repo}")
+        if rc == 0 and SLUG_RE.match(out.strip()):
+            return out.strip()
+    e = next((e for e in items if e.get("kind") == "sess" and e.get("target") == cur), None)
+    return (e or {}).get("repo") or ""
+
+
 def bolt_new(g=None):
     """The ⚡ row's state: the cells read (`g`), what the person changed — `repo`
     None is the pick (the last send's repo, else the only one), `agent` None is the
     fleet's default — and the cell Tab is on ('' · repo · agent).
     No `g` yet (the popup reads it off its thread): not `ready` — the repo cell
     says …, and a ↵ waits for the read rather than guess 不绑仓库."""
-    return {"g": g or {"repos": [], "last": "", "agent": "claude", "missing": {}, "blocked": []},
+    return {"g": g or {"repos": [], "last": "", "agent": "claude", "agents": {}, "missing": {}, "blocked": []},
             "repo": None, "agent": None, "focus": "", "ready": g is not None}
 
 
@@ -3822,8 +3956,9 @@ def bolt_usable(st):
 
 def bolt_agent(st):
     if st["agent"] is not None:
-        return st["agent"]    # a saved explicit selection is never silently reassigned
-    a = bolt_dflt(st)
+        return st["agent"]    # an explicit selection is never silently reassigned
+    # the repo's own (the agent it last opened with — T670), else the fleet's
+    a = (st["g"].get("agents") or {}).get(bolt_repo(st)) or bolt_dflt(st)
     use = bolt_usable(st)
     return a if a in use else use[0]
 
@@ -3956,9 +4091,9 @@ def panel_key(screen, timeout_ms, completed=None, inputs=None):
 
 # --- the keys issue #3328 folded into ⌘P (EPIC #3178 ⑤) ------------------------------------
 # ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘Q ⌘K ⌃\ open the panel instead (fleet_keys.FORWARD,
-# key_lines): ⌘N ⌘T lit on ⚡, and each says 「⌘T 已并进 ⌘P」 the first time — one
-# mark per key per login. Every press is a line of view-switch.ndjson, how=old:<action>.
-FORWARD_BOLT = ("new", "dispatch")
+# key_lines): ⌘T lit on ⚡, and each says 「⌘T 已并进 ⌘P」 the first time — one
+# mark per key per login. ⌘N opens the 「新会话」 box itself, no hint (T670). Every press is a line of view-switch.ndjson, how=old:<action>.
+FORWARD_BOLT = ("dispatch",)
 
 
 def forward_marks():
@@ -4054,7 +4189,7 @@ def popup(screen, qo, vid, client, forward=""):
 
 
 def _popup(screen, qo, vid, client, forward=""):
-    # raw: ⌃\ is a key here (a shell beside the lit row), never SIGQUIT
+    # raw: ⌃\ is a key here (the home shell), never SIGQUIT
     import fleet_panel as panel
     inputs = panel.Input()
     curses.raw()
@@ -4121,19 +4256,13 @@ def _popup(screen, qo, vid, client, forward=""):
     # the ⚡ row (issue #3327): its cells, read off the screen's thread (⌘T's rules);
     # `busy` while a ↵ runs, its outcome landing in `job`
     bolt, busy, job = bolt_new(), None, []
-    draft_key = hashlib.sha256((fleet + ":" + vid).encode()).hexdigest()[:32]
-    draft = panel.Draft(conf_dir() / "panel-drafts" / (draft_key + ".json"))
-    bolt.update(repo=draft.repo, agent=draft.agent)
+    # the box's defaults start from the session in view (T670, EPIC T651 C2)
+    vrepo = view_repo(vid, cur, items)
     page, follow_list, ask_focus = None, True, 0
     box = 2         # the 「新会话」 box's lit item: 0 仓库 · 1 Agent · 2 开 (T652)
 
-    def save_draft():
-        nonlocal msg
-        if not draft.save(bolt):
-            msg = say("view_draft_save_failed")
-
     def grid_load():
-        bolt["g"] = grid_read(vid)
+        bolt["g"] = grid_read(vid, vrepo)
         bolt["ready"] = True
     loader = threading.Thread(target=grid_load, daemon=True)
     loader.start()
@@ -4150,7 +4279,7 @@ def _popup(screen, qo, vid, client, forward=""):
               next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
                    next((i for i, e in enumerate(shown) if pickable(e)), 0)))
     # a key issue #3328 folded into ⌘P: ⌘N ⌘T open on ⚡, every one says so once
-    if forward:
+    if forward and forward != "new":
         if forward in FORWARD_BOLT and bolt_at() >= 0:
             at = bolt_at()
         msg = forward_note(vid, forward)
@@ -4171,7 +4300,6 @@ def _popup(screen, qo, vid, client, forward=""):
 
     def close_page():
         nonlocal mode, mrow, mitems, mat, pend, page, query, opened, at, top, shown, follow_list
-        save_draft()
         if page:
             query, opened, _, _ = page.snapshot
             shown = listing()
@@ -4230,7 +4358,6 @@ def _popup(screen, qo, vid, client, forward=""):
             bolt["repo"] = bolt_repo(bolt)
         mode, box = "compose", 2
         page.scroll, page.follow = 0, True
-        save_draft()
 
     def valid_row(r):
         # Frozen origin, fresh eligibility. Never use the currently selected row
@@ -4313,6 +4440,13 @@ def _popup(screen, qo, vid, client, forward=""):
         msg = say("view_act_failed_fmt", a["label"](r), say("view_act_nothing"))
         return False
 
+    # ⌘N (T670, EPIC T651 C2): straight into the 「新会话」 box, both values chosen —
+    # ↵ opens; esc closes the popup (there is no list it came from)
+    direct = forward == "new" and bolt_at() >= 0
+    if direct:
+        at = bolt_at()
+        compose(shown[at])
+
     while True:
         if msg_until and time.time() > msg_until:
             msg, msg_until = "", 0
@@ -4325,7 +4459,6 @@ def _popup(screen, qo, vid, client, forward=""):
             rc, said = job.pop(0)
             busy = None
             if rc == 0:
-                save_draft()
                 return 0
             msg = said or say("view_new_failed")
             shown = listing()
@@ -4443,8 +4576,7 @@ def _popup(screen, qo, vid, client, forward=""):
                 # the 「新会话」 box (T652): 仓库 ‹›, Agent ‹›, 开 — nothing to type
                 if bolt["ready"] and bolt["repo"] is None:
                     bolt["repo"] = bolt_repo(bolt)
-                if bolt["ready"] and bolt["agent"] is None:
-                    bolt["agent"] = bolt_agent(bolt)
+                # the agent is not pinned: untouched, it is the box's repo's own (T670)
                 cells, note = bolt_cells(bolt, "")
                 for k, label in enumerate([cells[0][0], cells[1][0], say("view_new_open")]):
                     controls[len(lines)] = k
@@ -4501,10 +4633,9 @@ def _popup(screen, qo, vid, client, forward=""):
             continue
         msg, msg_until = "", 0
         if ch in ("\x1b", "\x03"):
-            if page:
+            if page and not (direct and mode == "compose" and not stack):
                 back()
                 continue
-            save_draft()
             return 0
         if ch == curses.KEY_RESIZE:
             heal.resized(screen)
@@ -4514,6 +4645,13 @@ def _popup(screen, qo, vid, client, forward=""):
                 page.follow = False
             continue
         if busy:
+            continue
+        if ch == "\x1c":
+            # ⌘\ · ⌃\ (EPIC T651 C3): the home shell from every page — the list, a row's
+            # Tab page, the new-session box; a session's own is its Tab page's 命令行
+            if open_home_shell(qo, vid, client) == 0:
+                return 0
+            msg = say("view_shell_failed_fmt", here_label(view_row(vid)))
             continue
         if ch == curses.KEY_MOUSE:
             try:
@@ -4542,7 +4680,6 @@ def _popup(screen, qo, vid, client, forward=""):
                             bolt["focus"] = "repo" if box == 0 else "agent"
                             bolt_step(bolt, "", 1)
                         box = controls[i]
-                        save_draft()
                         continue
                     box = 2
                 elif mode == "ask":
@@ -4593,7 +4730,6 @@ def _popup(screen, qo, vid, client, forward=""):
                         continue
                     v, _, a, _ = mitems[mat]
                     if pick(a, mrow) if mode == "menu" else pick(a, pend[1], v):
-                        save_draft()
                         return 0
                 continue
             if mode == "ask":
@@ -4608,14 +4744,12 @@ def _popup(screen, qo, vid, client, forward=""):
                     if a.get("yes") and ch not in "yY":
                         back()
                     elif run(a, r, ch):
-                        save_draft()
                         return 0
                 elif ch in ("\n", "\r", curses.KEY_ENTER):
                     text = ("y" if a.get("yes") else "") if kind == "key" else line.text.strip()
                     if not text:
                         back()
                     elif run(a, r, pre + text):
-                        save_draft()
                         return 0
                 elif ask_focus == 0 and kind == "text":
                     line.key(ch)
@@ -4644,9 +4778,7 @@ def _popup(screen, qo, vid, client, forward=""):
                         continue
                     argv, title, where = bolt_argv(qo, vid, client, bolt)
                     busy = {"title": title, "where": where}
-                    save_draft()
                     bolt_run(argv, job)
-                save_draft()
                 continue
             continue
         sel = [i for i, e in enumerate(shown) if pickable(e)]
@@ -4746,7 +4878,6 @@ def _popup(screen, qo, vid, client, forward=""):
                 continue
             rc = go(qo, vid, target, "popup", client, e)
             if rc == 0:
-                save_draft()
                 return 0
             msg = say("view_far_fmt", e.get("machine") or "?") if rc == 3 else say("view_gone")
             continue
@@ -4758,18 +4889,6 @@ def _popup(screen, qo, vid, client, forward=""):
             anchor(e)
             if pick(ACTION["pin"], act_row(fleet, e)):
                 return 0
-            continue
-        if ch == "\x1c":
-            # ⌃\ (issue #3183): a shell beside the lit session, on screen or not —
-            # a new window of the 看台, in the directory its agent is in
-            e = shown[at] if 0 <= at < len(shown) else {}
-            if e.get("kind") != "sess" or not e.get("target"):
-                continue
-            rc = open_shell(qo, vid, client, e["target"], e)
-            if rc == 0:
-                save_draft()
-                return 0
-            msg = say("view_gone") if rc == 3 else say("view_shell_failed_fmt", e.get("machine") or "?")
             continue
         if ch == "?" and not query:
             # an empty query: `?` is the legend, not a letter (with text it is one)

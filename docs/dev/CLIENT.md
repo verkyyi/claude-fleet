@@ -23,8 +23,10 @@ shell or switch sessions. The current panel's steps and row actions are in
 [日常使用](../public/zh/member/usage.md#一个键总面板).
 
 **The keys that went (issue #3328, EPIC #3178 ⑤ — kept for good, #4790):** ⌘↓ ⌘↑ ⌘[
-⌘] ⌘N ⌘K ⌘Q ⌃\ and the old popup's key still reach fleet: each opens the panel (a
-new task / blank session lit on ⚡) and says 「… 已并进 ⌘P」 the first time;
+⌘] ⌘K ⌘Q ⌃\ and the old popup's key still reach fleet: each opens the panel (a
+new task / blank session lit on ⚡) and says 「… 已并进 ⌘P」 the first time; ⌘N
+opens the 「新会话」 box itself, both values chosen (T670, EPIC T651 C2 — the
+session in view's repo, else the last; that repo's last agent), esc closes it;
 each press is a line of `logs/view-switch.ndjson` (`how=old:<action>`). They stay fleet's: given back to
 iTerm2, ⌘Q would quit it.
 
@@ -114,6 +116,8 @@ A terminal sends nothing for ⌘ — macOS keeps it. So the client installs an
     ESC [ <code> ~        code 920 next · 921 prev · 922 back · 923 fwd ·
                                925 zoom · 927 quickopen · 928 new · 929 fold ·
                                931 quit · 932 dispatch
+                      ⌘\ (home, EPIC T651 C3) sends ⌃\'s own byte 0x1c instead:
+                      tmux drops a private code while a popup is up
 
 924 (⌘J), 926 (⌘/) and 930 (⌘K, issue #3185) are retired (issue #2362) and never reused: a profile
 written before the update still sends them, and the conf catches both and does

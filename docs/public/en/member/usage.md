@@ -23,6 +23,7 @@ Everything starts from one key. The tables below are generated from fleet's key 
 | `?` | legend |
 | `esc` | close |
 | `↑` | to ⚡ |
+| `⌘\` or `⌃\` | From any screen: the home machine's command line ($HOME), no session or hub needed; again to come back |
 <!-- /docs-gen:keys -->
 
 The panel looks roughly like this (sample data):
@@ -44,7 +45,7 @@ The panel looks roughly like this (sample data):
 
 ### Open a session
 
-- **Open a new session**: pick “⚡ New session” and press Enter (↑ from the top of the list gets there) to open the “New session” box: three items only — “Repo ‹›”, “Agent ‹›” and “Open ↵” — already chosen, with the cursor on “Open”, so another Enter opens it. To change one: ↑↓ or Tab moves between items, ←→ changes the repository or agent (“No repo” when you need none), and Enter on a value goes back to “Open”. There is nothing to write — say what to do inside the session once it opens; after your first message, its row in the list (and its task record) is renamed to that message's first line.
+- **Open a new session**: pick “⚡ New session” and press Enter (↑ from the top of the list gets there) to open the “New session” box: three items only — “Repo ‹›”, “Agent ‹›” and “Open ↵” — already chosen, with the cursor on “Open”, so another Enter opens it. To change one: ↑↓ or Tab moves between items, ←→ changes the repository or agent (“No repo” when you need none), and Enter on a value goes back to “Open”. The defaults: the repository of the session you are looking at (when it has none, the one you chose last time — “No repo” counts), and the agent that repository last opened with; `⌘N` opens this box directly, Enter then opens the session, Escape closes it. There is nothing to write — say what to do inside the session once it opens; after your first message, its row in the list (and its task record) is renamed to that message's first line.
 - **Switch sessions**: type part of a title or ticket number, select a session with ↑↓, and press Enter.
 
 The actions page, a question such as a rename, and the new-session box are whole pages: the list area is replaced, the top line names what it is about (the session, or “⚡ New session”), and below it one item a line — ↑↓ to pick, ↵ to run; there is no floating box. Escape goes back a level (from a rename to the actions page, then to the list), the list keeping its selection; another Escape closes the panel. Click to select a row, double-click to enter a session or open the new-session box; items on a page are clickable (click a repository or agent again for the next one, click “Open” to open).
@@ -155,7 +156,7 @@ The actions you can set (this table is generated too):
 | `prev` | the previous session | `⌘↑` | `⌃] b` |
 | `back` | back through the sessions you were on (no task list: the machine before) | `⌘[` | `⌃] h` |
 | `fwd` | forward again | `⌘]` | `⌃] l` |
-| `new` | new session: a no-repo session on your home machine, the cursor in its input | `⌘N` | `⌃] c` |
+| `new` | new session: straight to the “New session” box — the repo of the session you are looking at (else the last one used), the agent that repo last used; Enter opens | `⌘N` | `⌃] c` |
 | `dispatch` | dispatch: a title + a repo (the last one used) + optionally Codex, ↵ files it and starts its worker; from any window, no model on the way | `⌘T` | `⌃] t` |
 | `quit` | quit this client connection; sessions keep running on their machines; fleet opens it again | `⌘Q` | `⌃] q` |
 <!-- /docs-gen:keys-extra -->

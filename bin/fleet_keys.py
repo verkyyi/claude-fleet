@@ -32,20 +32,25 @@ import subprocess
 
 DEFAULT_PANEL = "cmd+p"
 DEFAULT_PHONE = "ctrl+space f12 ctrl+]p"
-# the actions with no switch-table code: bound only as a chord the terminal sends
+# the actions with no switch-table code: bound only as a chord the terminal sends.
+# `shell` (a session's own, in its directory) is reached from the row's Tab page.
 CODELESS = ("shell",)
+# `home` (EPIC T651 C3) is ⌃\ — and ⌘\, which the iTerm2 profile sends as ⌃\'s
+# byte (dash-keymap.sh: code `x1c`): this machine's command line in $HOME
+HOME_CHORD = "ctrl+\\"
 # The keys issue #3328 (EPIC #3178 ⑤, D3 · D4) folded into one key, ⌘P. Each still
-# reaches the 看台 and opens the panel (⌘N ⌘T lit on its ⚡ row) with a one-time
-# 「⌘T 已并进 ⌘P」 (fleet_view.forward_note) — kept for good (issue #4790: they are
+# reaches the 看台 and opens the panel (⌘T lit on its ⚡ row) with a one-time
+# 「⌘T 已并进 ⌘P」 (fleet_view.forward_note) — ⌘N opens the 「新会话」 box itself,
+# both values chosen, no hint (T670) — kept for good (issue #4790: they are
 # still pressed, and given back to iTerm2 ⌘Q would quit it): (action, chord, glyph,
 # code) — the code the iTerm2 row sends; ⌘K's is the retired 930 (an old profile
-# sent it for the same panel), ⌃\ has none (the terminal sends it). A chord the
-# person names in FLEET_KEYS_EXTRA / FLEET_KEY_PANEL is theirs, never a forward.
+# sent it for the same panel). ⌃\ is no forward any more: it is the home shell's
+# fallback (HOME_CHORD, EPIC T651 C3). A chord the person names in FLEET_KEYS_EXTRA /
+# FLEET_KEY_PANEL is theirs, never a forward.
 FORWARD = (("next", "cmd+down", "⌘↓", "920"), ("prev", "cmd+up", "⌘↑", "921"),
            ("back", "cmd+[", "⌘[", "922"), ("fwd", "cmd+]", "⌘]", "923"),
            ("new", "cmd+n", "⌘N", "928"), ("dispatch", "cmd+t", "⌘T", "932"),
-           ("quit", "cmd+q", "⌘Q", "931"), ("switcher", "cmd+k", "⌘K", "930"),
-           ("shell", "ctrl+\\", "⌃\\", ""))
+           ("quit", "cmd+q", "⌘Q", "931"), ("switcher", "cmd+k", "⌘K", "930"))
 
 MODS = {"cmd": 0x100000, "command": 0x100000, "ctrl": 0x40000, "control": 0x40000,
         "alt": 0x80000, "opt": 0x80000, "option": 0x80000, "shift": 0x20000}

@@ -75,5 +75,29 @@ row=$(printf '%s\n' "$OUT" | grep scratch-9)
 eq "F: the child key is field 4 with an empty repo" "scratch-9" "$(printf '%s' "$row" | awk -F$'\037' '{print $4}')"
 eq "F: agent · issue last" "codex|4539" "$(printf '%s' "$row" | awk -F$'\037' '{print $8 "|" $9}')"
 
+# --- G. count · once · redeliver · clear (T660) -------------------------------------
+f count; eq "G: count = the unread rows" "$(python3 "$R" list --max 1000 | grep -c .)" "$OUT"
+f once scratch-3; eq "G: once — the first push of a batch" 0 "$RC"
+f once scratch-3; eq "G: once — the same batch again: none" 1 "$RC"
+f once scratch-4; eq "G: once — another batch pushes" 0 "$RC"
+FLEET_ORPHAN_NOTIFY_SECS=0 f once scratch-3; eq "G: once — past the window it pushes again" 0 "$RC"
+TO=178b03b8-8fee-4762-b3f3-93bf497fe632
+printf '#!/bin/sh\nprintf "%%s\\n---\\n" "$*" >> "%s"\n' "$WORK/sent" > "$WORK/send.sh"
+f redeliver --to "$TO" --since $((NOW - 10)); has "G: redeliver lists first" "$OUT" "would redeliver"
+has "G: …today's row" "$OUT" "scratch-9"
+case "$OUT" in *issue-42*) bad "G: an older row is not redelivered" ;; *) ok ;; esac
+eq "G: …and sends nothing" no "$([ -e "$WORK/sent" ] && echo yes || echo no)"
+FLEET_ORPHAN_SEND="$WORK/send.sh" f redeliver --to "$TO" --since $((NOW - 10)) --apply
+has "G: --apply delivers" "$OUT" "redelivered"
+has "G: …to the ID" "$(cat "$WORK/sent")" "wid:$TO"
+has "G: …as a child-report envelope" "$(cat "$WORK/sent")" "[child-report] scratch-9"
+FLEET_ORPHAN_SEND="$WORK/send.sh" f redeliver --to "$TO" --since $((NOW - 10)) --apply
+eq "G: never twice" 1 "$(grep -c 'child-report' "$WORK/sent")"
+f list; case "$OUT" in *scratch-9*) bad "G: a redelivered row still listed" ;; *) ok ;; esac
+f redeliver --to nope; eq "G: a bad ID → exit 2" 2 "$RC"
+f clear --before $((NOW - 10)); has "G: clear lists first" "$OUT" "would clear"
+f clear --before $((NOW - 10)) --apply; has "G: clear --apply" "$OUT" "cleared"
+f count; eq "G: nothing left unread" 0 "$OUT"
+
 printf '%d checks, %d failed\n' "$N" "$BAD"
 [ "$BAD" = 0 ]

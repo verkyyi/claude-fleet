@@ -77,12 +77,16 @@ $ndiff"; }
   [ "$fv_copy" = "$(awk '$3 == "root" && !('"$fv_ours"') { $1 = $1; print }' "$KW/node.keys")" ] \
     || st_fail "8: the 看台's fleet-view is not a copy of the node's root: $(diff <(printf '%s\n' "$fv_copy") <(awk '$3 == "root" { $1 = $1; print }' "$KW/node.keys") | head -5)"
   # + the codes of the keys issue #3328 folded into ⌘P — ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘K ⌘Q ⌘T —
-  # and ⌃\, each the panel `--forward <action>`
+  # each the panel `--forward <action>`; + ⌃\ (⌘\ sends its byte), the home shell (EPIC T651 C3)
   fv_user=$(awk '$3 == "fleet-view" && $4 ~ /^User/ { print $4 }' "$KW/node.keys" | sort | tr '\n' ' ')
   [ "$fv_user" = "User920 User921 User922 User923 User927 User928 User930 User931 User932 " ] \
     || st_fail "8: by default the 看台 binds User927 (⌘P) + the forwarded codes of #3328 — got: $fv_user"
+  # ⌃\: the home shell too (a web PTY's own road first); never the panel any more
+  ckey=$(awk '$3 == "fleet-view" && $4 == "C-\\\\"' "$KW/node.keys")
+  case "$ckey" in *'@view_web_home'*'do shell'*'do home'*) ;; *) st_fail "8: ⌃\\ is not the home shell (web home first): $ckey" ;; esac
+  case "$ckey" in *--forward*) st_fail "8: ⌃\\ still forwards to the panel: $ckey" ;; esac
   awk '$3 == "fleet-view" && $4 == "User927"' "$KW/node.keys" | grep -q -- '--forward' && st_fail "8: ⌘P itself is a forward"
-  for kf in User920:next User921:prev User922:back User923:fwd User928:new User930:switcher User931:quit User932:dispatch 'C-\\\\:shell'; do   # awk -v unescapes: C-\\ as list-keys prints ⌃\
+  for kf in User920:next User921:prev User922:back User923:fwd User928:new User930:switcher User931:quit User932:dispatch; do
     awk -v k="${kf%%:*}" '$3 == "fleet-view" && $4 == k' "$KW/node.keys" | grep -q "dash-popup.sh.*--forward ${kf#*:} " \
       || st_fail "8: ${kf%%:*} does not open the panel as the forward of ${kf#*:}: $(awk -v k="${kf%%:*}" '$3 == "fleet-view" && $4 == k' "$KW/node.keys")"
   done
@@ -138,11 +142,14 @@ sw_table="$(bash "$KEYMAP" --panel switch list)" || st_fail "10: dash-keymap.sh 
 # `needs` (⌘J · 924 · prefix k) and `help` (⌘/ · 926 · prefix ?) went with issue #2362.
 # `quit` (⌘Q / prefix Q, issue #2349): 退出 fleet — 931.
 # `dispatch` (⌘T / prefix t, issue #2753): 派一件事 — 932.
-[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 10 ] || st_fail "10: the switch table is not #1903's 6 (less needs / help, #2362) + #1953's new + #2167's fold + #2349's quit + #2753's dispatch (less #2266's switcher, #3185): $sw_table"
-[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd zoom quickopen new fold quit dispatch " ] \
-  || st_fail "10: the switch actions are not next prev back fwd zoom quickopen new fold quit dispatch"
-# one action is bound by default (issue #3185): the panel
-[ "$(bash "$KEYMAP" --panel switch default | tr '\n' ' ')" = "quickopen " ] || st_fail "10: the default-bound column names more than quickopen"
+[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 11 ] || st_fail "10: the switch table is not #1903's 6 (less needs / help, #2362) + #1953's new + #2167's fold + #2349's quit + #2753's dispatch + T651 C3's home (less #2266's switcher, #3185): $sw_table"
+[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd zoom quickopen new fold quit dispatch home " ] \
+  || st_fail "10: the switch actions are not next prev back fwd zoom quickopen new fold quit dispatch home"
+# two actions are bound by default (issue #3185; EPIC T651 C3): the panel and the home shell
+[ "$(bash "$KEYMAP" --panel switch default | tr '\n' ' ')" = "quickopen home " ] || st_fail "10: the default-bound column is not quickopen + home"
+# ⌘\ sends ⌃\'s byte (x1c), never a private code: tmux drops a user key while a popup is up
+printf '%s\n' "$sw_table" | awk '$1 == "home" && $2 == "⌘\\" && $3 == "0x5c-0x100000" && $4 == "x1c"' | grep -q . \
+  || st_fail "10: home is not ⌘\\ · 0x5c-0x100000 · the byte x1c"
 [ "$(bash "$KEYMAP" --panel switch full | awk '{ print $1, $2, $3, $4, $5 }')" = "$sw_table" ] || st_fail "10: full's first five columns are not list"
 printf '%s\n' "$sw_table" | awk '$1 == "dispatch" && $2 == "⌘T" && $3 == "0x74-0x100000" && $4 == 932 && $5 == "t"' | grep -q . \
   || st_fail "10: dispatch is not ⌘T · 0x74-0x100000 · code 932 · prefix t"
@@ -170,11 +177,14 @@ SW_PROF=$(mktemp -d "${TMPDIR:-/tmp}/fkeys-iterm.XXXXXX") || st_fail "10: mktemp
 # FLEET_KEYS_EXTRA adds exactly what it names (a forward of the same chord goes)
 sw_map() { FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE='' FLEET_CONF_DIR="$SW_PROF/conf" "$@" python3 "$BIN/fleet-iterm-profile.py" json \
   | python3 -c 'import json,sys; m=json.load(sys.stdin)["Profiles"][0]["Keyboard Map"]; print(" ".join("%s=%s" % (k, m[k].get("Text")) for k in sorted(m)))'; }
-FWD="0x5b-0x100000=[922~ 0x5d-0x100000=[923~ 0x6b-0x100000=[930~ 0x6e-0x100000=[928~"
+FWD="0x5b-0x100000=[922~ 0x5c-0x100000=0x1c 0x5d-0x100000=[923~ 0x6b-0x100000=[930~ 0x6e-0x100000=[928~"
 FWD_T="0x71-0x100000=[931~ 0x74-0x100000=[932~"
 FWD_A="0xf700-0x300000=[921~ 0xf701-0x300000=[920~"
 [ "$(sw_map env)" = "$FWD 0x70-0x100000=[927~ $FWD_T 0xd-0x20000=0x0a $FWD_A" ] || st_fail "10: the default profile is not ⌘P + ⇧↵ + #3328's forwards: $(sw_map env)"
-[ "$(sw_map env FLEET_KEY_PANEL=off)" = "0xd-0x20000=0x0a" ] || st_fail "10: FLEET_KEY_PANEL=off still maps a ⌘ key: $(sw_map env FLEET_KEY_PANEL=off)"
+[ "$(sw_map env FLEET_KEY_PANEL=off)" = "0x5c-0x100000=0x1c 0xd-0x20000=0x0a" ] || st_fail "10: FLEET_KEY_PANEL=off maps more than ⌘\\ (home, not the panel): $(sw_map env FLEET_KEY_PANEL=off)"
+# a person's extra on ⌘\ takes the chord from home
+[ "$(sw_map env 'FLEET_KEYS_EXTRA=next=cmd+\' | tr ' ' '\n' | grep '^0x5c-')" = "0x5c-0x100000=[920~" ] \
+  || st_fail "10: FLEET_KEYS_EXTRA=next=cmd+\\ did not take ⌘\\: $(sw_map env 'FLEET_KEYS_EXTRA=next=cmd+\')"
 [ "$(sw_map env "FLEET_KEY_PANEL=cmd+'" 'FLEET_KEYS_EXTRA=next=cmd+down shell=ctrl+\ bogus=cmd+z')" = "0x27-0x100000=[927~ $FWD $FWD_T 0xd-0x20000=0x0a $FWD_A" ] \
   || st_fail "10: FLEET_KEY_PANEL=cmd+' + FLEET_KEYS_EXTRA=next=cmd+down is not ⌘' + ⌘↓: $(sw_map env "FLEET_KEY_PANEL=cmd+'" 'FLEET_KEYS_EXTRA=next=cmd+down shell=ctrl+\ bogus=cmd+z')"
 # read from fleet.conf's [client] section when the environment has none

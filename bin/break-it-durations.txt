@@ -334,6 +334,7 @@
 0.1 remove-pending-machine-gone
 13.8 repo-authority-case
 1.0 report-parent-cleared
+1.0 report-parent-key-reminted
 4.9 report-parent-gone
 0.2 restart-done-not-pinned
 3.5 restore-conversation-twice
