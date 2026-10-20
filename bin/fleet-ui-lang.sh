@@ -1228,6 +1228,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:topbar_ago_fmt)          printf '%s min ago' "${1:-}" ;;
     zh:topbar_today_fmt)        printf '今天 %s' "${1:-}" ;;
     en:topbar_today_fmt)        printf '%s today' "${1:-}" ;;
+    zh:topbar_orphan_fmt)       printf '有 %s 条无主回报' "${1:-}" ;;
+    en:topbar_orphan_fmt)       printf '%s unclaimed reports' "${1:-}" ;;
     zh:topbar_pr_merged)        printf 'PR 已合并' ;;
     en:topbar_pr_merged)        printf 'PR merged' ;;
     zh:topbar_pr_closed)        printf 'PR 已关闭' ;;

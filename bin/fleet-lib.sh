@@ -7328,8 +7328,13 @@ fleet_stamp_origin_gen() {
 # @origin / @origin_wid / @origin_gen are unset. It renders as a root, and its
 # report goes to the retired book (fleet-report-parent.sh). The new holder was
 # allocated a moment ago, so no window can be ITS child yet.
+# A child whose @origin_fid the ID ledger knows is NOT moved aside (T660): its
+# parent is that ID, so @origin names the ID itself (the form a keyless parent's
+# children carry) — never the new holder, never the retired book — and its report
+# finds the parent, its successor or its own parent by ID (fleet-report-parent.sh).
+# Moving it aside lost every batch report whose plan-page parent had closed.
 fleet_scratch_gen_new() {
-  local r key old sock w o al
+  local r key old sock w o of al idd
   [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
   r=$(fleet_worktree_repo "$1" "${3:-}"); r=${r%%$'\t'*}
   if [ -n "$r" ]; then key="$(fleet_slug "$r"):$2"
@@ -7342,8 +7347,14 @@ fleet_scratch_gen_new() {
   fleet_key_gen_new "$1" "$key" >/dev/null || return 0
   sock=$(fleet_socket "$1")
   [ -n "$sock" ] || return 0
-  fleet_lw '#{window_id}|#{@origin}' tmux -L "$sock" | while IFS='|' read -r w o; do
+  idd=${FLEET_ID_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/ids}
+  fleet_lw '#{window_id}|#{@origin}|#{@origin_fid}' tmux -L "$sock" | while IFS='|' read -r w o of; do
     [ -n "$w" ] && { [ "$o" = "$key" ] || { [ -n "$al" ] && [ "$o" = "$al" ]; }; } || continue
+    if fleet_is_fid "$of" && [ -f "$idd/$of.ndjson" ]; then
+      tmux -L "$sock" set-window-option -t "$w" @origin "$of" \; \
+        set-window-option -u -t "$w" @origin_gen >/dev/null 2>&1
+      continue
+    fi
     tmux -L "$sock" set-window-option -t "$w" @origin_retired "$key#$old" \; \
       set-window-option -u -t "$w" @origin \; \
       set-window-option -u -t "$w" @origin_wid \; \

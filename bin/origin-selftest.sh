@@ -324,6 +324,39 @@ not_contains "gen: (no .gen) the row has no gen field" "$last" '"gen"'
 not_contains "gen: (no .gen) …nor child_gen" "$last" 'child_gen'
 mv "$CDD/.gen.off" "$CDD/.gen"
 
+# T660: the parent closed, its key was given to a new session, the grandparent is
+# alive. A child whose @origin_fid the ID ledger knows is NOT moved aside at the
+# mint — its @origin becomes that ID — and its report reaches the grandparent by ID;
+# a child with no identity still goes to the retired book.
+export FLEET_ID_PUSH=0
+: > "$FLEET_CONF_DIR/fleets/fleetD/conf"
+gA=$(python3 -c 'import uuid; print(uuid.uuid4())'); gB=$(python3 -c 'import uuid; print(uuid.uuid4())')
+gpA=$(dwin gen-gpa); tmux set-window-option -t "$gpA" @fleet_id "$gA"
+python3 "$BIN/fleet_id.py" open "$gA" >/dev/null
+python3 "$BIN/fleet_id.py" open "$gB" --parent "$gA" >/dev/null
+python3 "$BIN/fleet_id.py" close "$gB" --reason exited >/dev/null
+gID=$(dwin gen-id 605); tmux set-window-option -t "$gID" @origin scratch-6; tmux set-window-option -t "$gID" @origin_fid "$gB"
+tmux set-window-option -t "$gID" @origin_gen "$GEN"
+gNO=$(dwin gen-noid 606); tmux set-window-option -t "$gNO" @origin scratch-6; tmux set-window-option -t "$gNO" @origin_gen "$GEN"
+( . "$LIB"; fleet_scratch_gen_new fleetD scratch-6 "" )
+st_eq "gen(T660): an identified child keeps its parent — by ID — at the re-mint" "$gB|" \
+  "$(tmux display-message -p -t "$gID" '#{@origin}|#{@origin_retired}')"
+st_eq "gen(T660): …its generation stamp goes with the key" "" "$(tmux display-message -p -t "$gID" '#{@origin_gen}')"
+contains "gen(T660): a child with no identity is still moved aside" \
+  "$(tmux display-message -p -t "$gNO" '#{@origin_retired}')" "scratch-6#$GEN"
+out=$(bash "$RP" -L fleetD --win "$gID" --state merged --summary "batch" --dry-run 2>&1)
+contains "gen(T660): …its report reaches the live grandparent by ID" "$out" "($gpA"
+not_contains "gen(T660): …not the person's reminder" "$out" "would file"
+gRT=$(dwin gen-rt 607); tmux set-window-option -t "$gRT" @origin_retired "scratch-6#$GEN"; tmux set-window-option -t "$gRT" @origin_fid "$gB"
+out=$(bash "$RP" -L fleetD --win "$gRT" --state merged --summary "batch" 2>&1)
+contains "gen(T660): a child moved aside before the fix reaches the grandparent by ID too" "$out" "($gpA"
+contains "gen(T660): …and still leaves its row in the retired book" "$(cat "$CDD/scratch-6.ndjson.$GEN" 2>/dev/null)" '"child": "issue-607"'
+out=$(bash "$RP" -L fleetD --win "$gNO" --state merged --summary "batch" 2>&1)
+contains "gen(T660): the identity-less child's report lands in the retired book" "$(cat "$CDD/scratch-6.ndjson.$GEN" 2>/dev/null)" '"child": "issue-606"'
+for k in 605 606 607; do not_contains "gen(T660): the new holder's live book never takes issue-$k" "$(cat "$CDD/scratch-6.ndjson" 2>/dev/null)" "issue-$k"; done
+GEN=$( . "$LIB"; fleet_key_gen fleetD scratch-6 )
+rm -f "$FLEET_CONF_DIR/fleets/fleetD/conf"
+
 # The map: issue-700 holds a link from the PREVIOUS scratch-6 (child_gen 1.1) and a
 # legacy row for scratch-8 (never re-minted ⇒ generation 0, kept).
 printf '%s\n' '{"seq":1,"child":"scratch-6","child_gen":"1.1","state":"MERGED"}' \
