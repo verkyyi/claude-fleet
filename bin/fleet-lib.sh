@@ -8606,6 +8606,13 @@ EOF
 # fleet_session_cap_ok already treats a refusal as "retry later" (dispatch's next
 # tick, the epic run's next refill), so spawns resume when the reading drops.
 fleet_machine_admit() {
+  # The drill switch (issue T672): this one call reads «full» whatever the
+  # readings — set on ONE spawn to watch the hub hand it to another machine.
+  if [ "${FLEET_ADMIT_FORCE_FULL:-0}" = 1 ]; then
+    if [ "${1:-}" = --short ]; then printf '暂停开新：演练'; return 1; fi
+    printf 'machine held by the drill — 暂停开新：演练 (FLEET_ADMIT_FORCE_FULL=1): this spawn reads the machine as full'
+    return 1
+  fi
   [ "${FLEET_ADMIT:-1}" = 0 ] && return 0
   local short=0 free_min="${FLEET_ADMIT_MEM_FREE_PCT:-15}" pres="${FLEET_ADMIT_PRESSURE:-warn}"
   local lmax="${FLEET_ADMIT_LOAD_PER_CORE:-${FLEET_LOADGEN_LOAD_PER_CORE:-1.5}}" plim m lvl avail per pname
