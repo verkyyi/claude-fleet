@@ -545,7 +545,7 @@ f = [e for e in s["f"] if e["c"] == "reset"]
 assert len(f) == 3 and all(e["sid"] == "s-up" and e["acct"] == "a1" and e["route"] for e in f), s["f"]
 ' 2>"$CD/chk.err" || { WHY="the stats do not hold the classes: $(tail -1 "$CD/chk.err") — $js"; return 1; }
   ! grep -rq 'sk-ant\|REAL-a1\|Bearer' "$us"/upstream-* || { WHY="a token or header reached the stats"; return 1; }
-  [ "$(stat -f %Lp "$us/upstream-now.json" 2>/dev/null || stat -c %a "$us/upstream-now.json")" = 644 ] \
+  [ "$(python3 -c 'import os, sys; print("%o" % (os.stat(sys.argv[1]).st_mode & 0o777))' "$us/upstream-now.json")" = 644 ] \
     || { WHY="upstream-now.json is not 0644: every login must read it"; return 1; }
   c=$(FLEET_UPSTREAM_STATS_DIR="$us" python3 -I "$BIN/fleet_upstream_stats.py" doctor)
   case "$c" in WARN*连接被重置\ 3*) ;; *) WHY="the doctor's 上游 row did not WARN naming the resets: $c"; return 1 ;; esac

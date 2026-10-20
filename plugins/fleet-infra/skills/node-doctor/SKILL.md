@@ -183,6 +183,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `image` | machine | [release-rules] | 运行时归镜像的 pod 落后 stable：本机不会自己追上，要把 pod 滚到 stable 的节点镜像（入口 roll-user-pod，或 render.py --image-patch + kubectl patch） |
 | `wallpaper` | node | [mac-node-prep] | 不接显示器的托管 Mac 还在跑动态桌面：守护每小时换一次（只换一次）；现在就换 `sudo ~/.claude/fleet/bin/fleet-wallpaper.sh off`，换回过的是人的选择 |
 | `wtroot` | node | [node-doctor] | worktree 根目录：照行内修 |
+| `上游` | node | [node-doctor] | 本机凭据代理到上游的失败（重置 / 超时 / 拒连 / TLS / DNS / 429 / 5xx / 529）：`fleet-cred-proxy.sh upstream --since 24h` 看是哪一类、哪个账号、何时；连接类多是出口 / 网络，5xx / 529 是上游过载，429 是账号限流 |
 | `信任框` | node | [node-doctor] | 只报状态：没预信任时新会话会停在信任框 |
 | `可信` | node | [login-lifecycle] | 这台不可信，入口不发订阅凭据：操作者 `fleet-node-trust.sh set <machine> trusted` |
 | `承载` | node | [mac-node-enroll] | 这台能不能跑会话：照行内修令牌 / 开关 |
