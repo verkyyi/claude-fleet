@@ -122,7 +122,7 @@ class MakeRoom(Rig):
                   '"$FLEET_HISTORY_LEDGER" 2>/dev/null; then echo "machine memory tight — 暂停开新：内存紧张 (test)"; '
                   'return 1; fi; return 0; }; fleet_admit_reserve() { :; }; '
                   'fleet_session_cap_ok "$2"; echo "|rc=$?"')
-        env = dict(self.env, FLEET_ADMIT_MAKE_ROOM_SETTLE="0")
+        env = dict(self.env, FLEET_ADMIT="1", FLEET_ADMIT_MAKE_ROOM_SETTLE="0")   # the gate pins FLEET_ADMIT=0
         p = subprocess.run(["bash", "-c", script, "t", str(self.ibin), self.label], env=env,
                            capture_output=True, text=True, timeout=120)
         self.assertIn("|rc=0", p.stdout, p.stdout + p.stderr)
