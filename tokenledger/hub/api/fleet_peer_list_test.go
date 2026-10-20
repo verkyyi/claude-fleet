@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"testing"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 )
 
 func peersGet(t *testing.T, h *harness, tok string) (int, PeersResponse, string) {
@@ -58,5 +60,29 @@ func TestNodePeersSamePersonOnly(t *testing.T) {
 	}
 	if st, _, _ := peersGet(t, h, ""); st != 401 {
 		t.Fatalf("no token: HTTP %d; want 401", st)
+	}
+}
+
+// A login typed client (a person's terminal, claude-fleet#4886) hosts no
+// session, so it is no peer: the keeper would only dial it and fail every
+// beat. Managed or untyped stays listed.
+func TestNodePeersSkipsClient(t *testing.T) {
+	h, _, n := peerHarness(t)
+
+	if err := h.srv.Store.SetEndpointRole(n["verk5"].id, store.NodeRoleManaged); err != nil {
+		t.Fatal(err)
+	}
+	if st, got, raw := peersGet(t, h, n["verk4"].token); st != 200 || len(got.Peers) != 1 || got.Peers[0].Hostname != "mac-e" {
+		t.Fatalf("frank@mac-c, mac-e managed: HTTP %d %+v %s; want frank on mac-e", st, got.Peers, raw)
+	}
+	if err := h.srv.Store.SetEndpointRole(n["verk5"].id, store.NodeRoleClient); err != nil {
+		t.Fatal(err)
+	}
+	if st, got, raw := peersGet(t, h, n["verk4"].token); st != 200 || len(got.Peers) != 0 {
+		t.Fatalf("frank@mac-c, mac-e a client: HTTP %d %+v %s; want none", st, got.Peers, raw)
+	}
+	// The client itself still sees the hosting machine.
+	if st, got, raw := peersGet(t, h, n["verk5"].token); st != 200 || len(got.Peers) != 1 || got.Peers[0].Hostname != "mac-e-mac-c" {
+		t.Fatalf("frank@mac-e (client): HTTP %d %+v %s; want frank on mac-e-mac-c", st, got.Peers, raw)
 	}
 }

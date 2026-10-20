@@ -20,7 +20,8 @@ import (
 // only its entry port (a cluster machine outside the tailnet) was never
 // reached. So the answer carries every way in — the machine's routes as
 // `fleet connect` sees them, the entry port the hub reached included
-// (withEntryReach) — and the keeper picks.
+// (withEntryReach) — and the keeper picks. A login whose endpoint is a
+// client (claude-fleet#4886) is never listed: a terminal hosts no session.
 
 // PeerLogin is one login of the caller's person on another machine.
 type PeerLogin struct {
@@ -94,6 +95,12 @@ func (s *Server) handleNodePeers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !mine {
+			continue
+		}
+		// A client is a person's terminal and runs no session
+		// (claude-fleet#4886): nothing there to look at, so it is no peer —
+		// dialling it only fails, every beat. Untyped stays listed.
+		if s.endpointRole(n.EndpointID) == store.NodeRoleClient {
 			continue
 		}
 		seen[k] = true

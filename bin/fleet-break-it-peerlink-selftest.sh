@@ -24,6 +24,9 @@
 #   peerlink-hostkey-unknown bin/fleet-peer-cert.sh (issue #3050): the other machine's
 #                          host key is in no known_hosts this login has — a REAL
 #                          BatchMode ssh to a REAL sshd (`sshd -i` as a ProxyCommand)
+#   peerlink-dials-client  tokenledger/hub/api/fleet_peer_list.go handleNodePeers (T608,
+#                          #4886): the hub lists a login typed client (a person's
+#                          terminal) — the keeper dials it every beat and fails
 #   peer-window-ssh-killed bin/fleet-peerlink.py pane (C4, issue #2751): the ssh under a
 #                          看台's window onto another machine dies with its link
 #   peer-window-left-behind bin/fleet-remote-view.sh rv_peer_sweep (C4): a 看台 reaped
@@ -433,6 +436,43 @@ drill_peer_window_left_behind() {
   pr_t home list-windows -t "=$PR_HS" -F '#{window_name}' | grep -qx l1 || { WHY="the fleet's own windows went too"; pw_end; return 1; }
   pw_end
   WHAT="看台过了保留期被收：它的两个别机窗口一起关，窗格里的 python / ssh / 远端 attach 全部退出，fleet 自己的窗口不动"
+}
+
+drill_peerlink_dials_client() {
+  CAP=8   # the list loses the client, the next beat closes its link
+  local t0 out f="$ROOT/tokenledger/hub/api/fleet_peer_list.go"
+  # the hub half: handleNodePeers skips an endpoint typed client
+  awk '/^func \(s \*Server\) handleNodePeers\(/{on=1} on && /endpointRole\(n\.EndpointID\) == store\.NodeRoleClient/{hit=1} on && /^}/{exit} END{exit !hit}' "$f" \
+    || { WHY="handleNodePeers (${f#$ROOT/}) lists a login typed client: the keeper dials a terminal every beat"; return 1; }
+  pl_box dc
+  mkdir -p "$B/fs/nodns"; : > "$B/fs/nodns/laptop"
+  export FLEET_PEERLINK_PEERS_SECS=1 FLEET_PEERLINK_BAD_WARN=1
+  # yesterday's way: the hub's list carried the person's laptop (a client) beside mac-b
+  printf '{"peers":[{"hostname":"laptop","login":"bob","routes":[]},{"hostname":"mac-b","login":"bob","routes":[]}]}\n' > "$B/peers.json"
+  pl_start
+  until_ok 8 sh -c 'out=$(python3 "$1" status --check); [ $? = 1 ] && printf %s "$out" | grep -q "laptop@bob 连不上"' _ "$PL" \
+    || { WHY="the client on the list did not fail as it does live: $(python3 "$PL" status --check)"; unset FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN; pl_stop; return 1; }
+  until_ok 8 pl_up mac-b@bob || { WHY="mac-b never came up"; unset FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN; pl_stop; return 1; }
+  # the fixed hub's answer: the client is not on it
+  t0=$(now)
+  printf '{"peers":[{"hostname":"mac-b","login":"bob","routes":[]}]}\n' > "$B/peers.json"
+  until_ok 8 sh -c '! python3 - "$1" <<"PY"
+import json, sys
+s = json.load(open(sys.argv[1]))
+sys.exit(0 if any(l["machine"] == "laptop" for l in s["links"]) else 1)
+PY' _ "$B/conf/peerlink/state.json" \
+    || { WHY="the laptop's link stayed in state.json once the hub dropped it"; unset FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN; pl_stop; return 1; }
+  SECS=$(since "$t0")
+  unset FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN
+  out=$(python3 "$PL" status --check) || { WHY="still WARN with the client gone: $out"; pl_stop; return 1; }
+  pl_up mac-b@bob || { WHY="mac-b's link went with it"; pl_stop; return 1; }
+  pl_stop
+  # and the hub's Go test, where a toolchain is
+  local gohalf="入口一半：此处没有 Go 工具链，由 Go 门跑 TestNodePeersSkipsClient"
+  grep -q '^func TestNodePeersSkipsClient(' "$ROOT/tokenledger/hub/api/fleet_peer_list_test.go" 2>/dev/null \
+    || { WHY="the hub half's test TestNodePeersSkipsClient is gone"; return 1; }
+  go_half '^TestNodePeersSkipsClient$' ./hub/api; case $? in 0) gohalf="入口一半：go test 客户端登录不进对端名单、托管 / 未定型照列" ;; 1) return 1 ;; esac
+  WHAT="入口的对端名单列了只是客户端的笔记本：每拍去连、每次连不上、doctor 一直红；修好的入口不列它，下一拍那条连线从 state.json 消失、mac-b 照常已连上；${gohalf}"
 }
 
 cred_run_drills "$0"
