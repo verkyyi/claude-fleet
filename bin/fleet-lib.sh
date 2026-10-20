@@ -5740,7 +5740,7 @@ _fleet_wfk_repo_ok() {
 # A bare key in a fleet of ONE repo is read as that repo's (issue #1939): it
 # matches the windows a qualified key would.
 fleet_win_for_key() {
-  local key="${1:-}" sock="${2:-}" wl line wid rest iss wt pth cand bn sn pre='' fleet hits='' n names
+  local key="${1:-}" sock="${2:-}" wl line wid rest iss wt pth cand bn sn pre='' wsess fleet hits='' n names
   # `<slug>:<key>` (issue #789): match the bare key, then require the window's repo.
   # `agent:<name>` (issue #4341): the session started from that agent file.
   case "$key" in agent:?*) fleet_win_for_agent "${key#agent:}" "$sock"; return $? ;; esac
@@ -5763,14 +5763,15 @@ fleet_win_for_key() {
   # window_name is NOT read here: the free-text field would have to ride the same
   # `|` separator (a tab/0x1f separator prints as a literal `\037` on tmux ≤3.4).
   if [ -n "$sock" ]; then
-    wl=$(fleet_lw '#{window_id}|#{@issue}|#{@worktree}|#{pane_current_path}' tmux -L "$sock")
+    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@issue}|#{@worktree}|#{pane_current_path}' tmux -L "$sock")
   else
-    wl=$(fleet_lw '#{window_id}|#{@issue}|#{@worktree}|#{pane_current_path}')
+    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@issue}|#{@worktree}|#{pane_current_path}')
   fi
   [ -n "$wl" ] || return 1
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     wid=${line%%|*};  rest=${line#*|}
+    wsess=${rest%%|*}; rest=${rest#*|}
     iss=${rest%%|*};  rest=${rest#*|}
     wt=${rest%%|*};   pth=${rest#*|}
     case "$key" in
