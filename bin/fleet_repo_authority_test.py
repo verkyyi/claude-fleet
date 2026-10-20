@@ -176,22 +176,6 @@ class RepoAuthorityTests(unittest.TestCase):
                 self.assertEqual(before, (root / "node-b/fleet.conf").read_bytes())
             print("two hosts of alice follow frozen/hub/legacy; bob's login on the same repo stays legacy; overlays and unknown untouched")
 
-    def test_sync_outvotes_an_old_overlay_line(self):
-        # compat-1v (issue #4901): an overlay still saying hub would fill the
-        # login's gap; a legacy answer then writes the login's line.
-        with tempfile.TemporaryDirectory() as tmp:
-            conf = Path(tmp)
-            repos = conf / "fleets/fixture/repos"
-            repos.mkdir(parents=True)
-            (repos / "org-a.conf").write_text('FLEET_REPO="org/a"\nFLEET_TASK_AUTHORITY="hub"\n')
-            out = io.StringIO()
-            with patch.dict(os.environ, dict(FLEET_CONF_DIR=str(conf))), \
-                    patch.object(migration.hubrest, "api", return_value=dict(owner="alice", mode="legacy", revision=0)), \
-                    contextlib.redirect_stdout(out):
-                migration.main(["--sync"])
-            self.assertEqual(json.loads(out.getvalue())["changed"], ["fleet.conf"])
-            self.assertIn('FLEET_TASK_AUTHORITY="legacy"', (conf / "fleet.conf").read_text())
-
     def test_forge_none_manifest_and_unknown_gate(self):
         with patch.object(migration, "login_settings", return_value=(dict(settings=dict(FLEET_TASK_AUTHORITY="")), Path("fleet.conf"))), \
                 patch.object(migration.hubrest, "api", return_value=dict(authority=dict(owner="alice", mode="legacy", revision=0))) as api:

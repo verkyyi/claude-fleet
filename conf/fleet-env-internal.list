@@ -563,7 +563,7 @@ FLEET_HUB_SESSIONS_STALE           knob: internal budget, seconds of hub silence
 FLEET_REMOTE_BIN                   knob: the fleet's bin/ on the other machine, default .claude/fleet/bin (fleet-peerlink.py, fleet-open.sh, fleet-session-cli.py, #1424)
 FLEET_REMOTE_SSH_CMD               seam: the ssh program another machine is reached with (fleet-peerlink.py, fleet-client-upload.py)
 FLEET_HUB_URL                      handoff: the hub URL `fleet connect` (fleet-connect.py) reads (#1424)
-FLEET_SHELL                        handoff: 1 in the shell's tmux server environment — fleet-remote-view.sh open starts `run --shell`, fleet-sidebar.sh runs without a fleet conf; 0 in a person's environment keeps `fleet` on the direct way in (bin/fleet, fleet-shell.sh, #1484)
+FLEET_SHELL                        handoff: 1 = a reader sourcing fleet.conf takes its [client] section, else [node] (fleet-conf.sh's guards; set for the read by fleet-client-update.sh, fleet-update.sh, fleet-release-lib.sh, fleet_keys.py, #1623)
 FLEET_SHELL_SESSION                knob: the shell's tmux session + socket label (fleet-shell.sh, fleet-shell, #1484)
 FLEET_SHELL_CACHE                  path: the shell's own cache root — its bin/ mirror, tmux.conf and $TMPDIR (fleet-shell.sh, ~/.cache/claude-fleet/shell, #1484)
 FLEET_HOME_FIRST_OPENING_MAX       knob: seconds first_session keeps waiting, uncounted, while the hub says the newcomer's login is opening (fleet-thin.py, 2400, #2941)

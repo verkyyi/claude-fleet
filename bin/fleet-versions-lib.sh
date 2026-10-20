@@ -121,8 +121,8 @@ for line in open(os.path.join(d, "installed.list")):
 # own unchanged copy (fleet_installed_owned) is copied into <to>, mode kept. A
 # file <to> also has is the new version's — <to> wins. The marks at the top
 # (.client-version, .staged, installed.list) are never carried. No list in
-# <from> ⇒ nothing carried (compat-1v: 下一批删 — the old rule, a hand edit is
-# gone at the switch). Prints each carried path.
+# <from> ⇒ nothing carried (nothing tells the person's files from the fleet's).
+# Prints each carried path.
 fleet_versions_carry() {
   [ -f "$1/installed.list" ] || return 0
   fleet_installed_owned "$1" | python3 -c 'import os, shutil, sys

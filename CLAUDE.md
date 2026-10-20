@@ -194,9 +194,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   session counts, snapshots and restore. **The full-screen list retired**
   (issue #1533): by default no `plan` window is built — a fleet's resting window
   is `home`, a plain shell the task list draws beside (the ⌂ / F9 / prefix g keys
-  that ended on it left the node with #1714; the old home/list scripts were deleted with #3732). `FLEET_DASH_WINDOW=1`
-  brings the old dash hub back for one batch; adding a panel name means adding
-  it everywhere `dash|plan|backlog` is spelled. **A window is told by its
+  that ended on it left the node with #1714; the old home/list scripts were deleted with #3732); adding a panel name means
+  adding it everywhere `dash|plan|backlog` is spelled. **A window is told by its
   `@fleet_role` (home | panel | worker), never its name** (issue #1844): the
   person may rename any window, so home's heal, "is this a fleet" and the
   session caps read `FLEET_ROLE_FMT` + `FLEET_ROLE_AWK` / `fleet_win_role` (an

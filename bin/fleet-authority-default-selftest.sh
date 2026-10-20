@@ -7,15 +7,12 @@
 #   B  a hub here: add still writes no line and asks the hub nothing; the repo
 #      already hosted keeps every byte (CLAUDE.md «adding a repo changes nothing
 #      for the others»)
-#   C  --authority hub|legacy|<anything> (read one version, # compat-1v): added,
-#      no line, nothing asked, one stderr line saying it is ignored
-#   D  `fleet_repo_authority.py --init-new` (an older caller): says legacy, asks nothing
-#   E  `fleet-conf.sh migrate` comments an overlay's old line out — the rest of
-#      the overlay byte for byte; until then fleet_task_authority reads it, and
-#      the login's fleet.conf [node] line wins over it
+#   C  an overlay's old line is read by nothing (fleet_task_authority is the
+#      login's fleet.conf [node] alone); `fleet-conf.sh migrate` comments it
+#      out — the rest of the overlay byte for byte
 #
 # The hub is a stand-in on 127.0.0.1 that logs every request; an authority one fails it.
-# Drives bin/fleet-repo.sh, bin/fleet_repo_authority.py (--init-new), bin/fleet-lib.sh
+# Drives bin/fleet-repo.sh, bin/fleet-lib.sh
 # (fleet_repo_register, fleet_task_authority, fleet_ticket_hub_ready), bin/fleet-conf.sh.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -67,7 +64,7 @@ mkrepo() {   # $1=dir $2=owner/name
     && g -C "$1" remote add origin "https://github.com/$2.git" \
     && g -C "$1" update-ref refs/remotes/origin/master HEAD
 }
-for r in a b c1 c2 c3; do mkrepo "$WORK/src/$r" "o/$r"; done
+for r in a b; do mkrepo "$WORK/src/$r" "o/$r"; done
 
 S=fa
 mkdir -p "$FLEET_CONF_DIR/fleets/$S"
@@ -95,33 +92,17 @@ chk "B …and the hub is not asked" "$(asked)" 0
 chk "B no FLEET_TICKETS line (the ticket store left, #4898)" "$(grep -c '^FLEET_TICKETS=' "$(conf b)")" 0
 cmp -s "$WORK/a.before" "$(conf a)" && ok "B o/a's conf unchanged by adding o/b" || fail "B o/a's conf changed"
 
-# ---- C: --authority is read one version and only said ----
-n=1
-for v in hub legacy maybe; do
-  out=$(add "o/c$n" "$WORK/src/c$n" --base master --authority "$v")
-  chk "C --authority $v ⇒ added" "$out" "added:o-c$n"
-  chk "C --authority $v ⇒ no line" "$(auth "c$n")" ""
-  grep -q 'ignored' "$WORK/add.err" && ok "C --authority $v ⇒ said" || fail "C stderr: $(cat "$WORK/add.err")"
-  n=$((n + 1))
-done
-chk "C …nothing asked" "$(asked)" 0
-
-# ---- D: an older caller's --init-new ----
-out=$(python3 "$BIN/fleet_repo_authority.py" o/new --init-new --tickets hub 2>/dev/null)
-chk "D --init-new says legacy" "$out" legacy
-chk "D …asking nothing" "$(asked)" 0
-
-# ---- E: migrate comments an overlay's old line out; the login's line wins ----
+# ---- C: an overlay's old line is read by nothing; migrate comments it out ----
 printf 'FLEET_TASK_AUTHORITY="hub"\n' >> "$(conf a)"
 ta() { bash -c '. "$1/fleet-lib.sh"; fleet_task_authority "$2" o/a' _ "$BIN" "$S"; }
-chk "E an old overlay line is read one version" "$(ta)" hub
-chk "E …the login's line wins over it" "$(FLEET_TASK_AUTHORITY=legacy ta)" legacy
+chk "C an old overlay line is read by nothing" "$(ta)" ""
+chk "C …the login's line is" "$(FLEET_TASK_AUTHORITY=legacy ta)" legacy
 bash "$BIN/fleet-conf.sh" migrate --quiet >/dev/null 2>&1
 grep -q '^# moved to fleet.conf \[node\] #4901: FLEET_TASK_AUTHORITY="hub"$' "$(conf a)" \
-  && ok "E migrate comments it out" || fail "E overlay: $(cat "$(conf a)")"
+  && ok "C migrate comments it out" || fail "C overlay: $(cat "$(conf a)")"
 head -n "$(wc -l < "$WORK/a.before")" "$(conf a)" | cmp -s - "$WORK/a.before" \
-  && ok "E …the rest of the overlay byte for byte" || fail "E overlay changed: $(cat "$(conf a)")"
-chk "E …and it is read no more" "$(ta)" ""
+  && ok "C …the rest of the overlay byte for byte" || fail "C overlay changed: $(cat "$(conf a)")"
+chk "C …and it is still read by nothing" "$(ta)" ""
 
 [ "$FAILS" = 0 ] && { echo "fleet-authority-default-selftest: PASS"; exit 0; }
 echo "fleet-authority-default-selftest: $FAILS failure(s)" >&2; exit 1

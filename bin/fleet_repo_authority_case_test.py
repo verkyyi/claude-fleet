@@ -212,7 +212,7 @@ exit 0
                 ("unknown", 200, "", "unknown")):
             with self.subTest(status=status, mode=mode):
                 self.mode, self.status, self.error = mode, status, reason
-                for script, args in (("dash-raw-session.sh", ["fixture", "--no-desk"]),
+                for script, args in (("dash-raw-session.sh", ["fixture"]),
                                      ("dash-issue-session.sh", ["7", "fixture"])):
                     result = self.run_command("bash", str(BIN / script), *args, "--repo", REGISTERED,
                                               "--origin", "hub", "--node", "local", "--agent", "claude")
@@ -256,7 +256,7 @@ exit 0
         other.write_text('FLEET_REPO="Other/Repo"\nFLEET_MAIN="/unused"\n')
         self.assertEqual(before, self.command("bash", "-c", script, "_", str(BIN), REGISTERED.upper()))
         self.command("bash", str(BIN / "dash-raw-session.sh"), "fixture", "--repo", CANONICAL,
-                     "--origin", "hub", "--node", "local", "--no-desk", "--agent", "claude")
+                     "--origin", "hub", "--node", "local", "--agent", "claude")
         self.command("bash", str(BIN / "dash-issue-session.sh"), "7", "fixture", "--repo", REGISTERED.upper(),
                      "--origin", "hub", "--node", "local", "--agent", "claude")
         self.assertIn(str(self.root / "Space-scratch-1"), self.windows.read_text())
@@ -361,7 +361,7 @@ exit 0
         self.assertNotIn("frozen", result.stderr)
         self.env["CCQUOTA_HUB_URL"] = "http://127.0.0.1:1"
         result = self.run_command("bash", str(BIN / "dash-raw-session.sh"), "fixture", "--repo", REGISTERED,
-                                  "--origin", "hub", "--node", "local", "--agent", "claude", "--no-desk")
+                                  "--origin", "hub", "--node", "local", "--agent", "claude")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("入口不通", fleet_view.new_why(result.stderr, result.returncode))
         self.assertNotIn("frozen", result.stderr)
@@ -372,7 +372,7 @@ exit 0
 
     def test_freeze_between_initial_and_final_gate_never_opens_window(self):
         self.freeze_on_finish = True
-        for script, args in (("dash-raw-session.sh", ["fixture", "--no-desk"]),
+        for script, args in (("dash-raw-session.sh", ["fixture"]),
                              ("dash-issue-session.sh", ["7", "fixture"])):
             self.requests.clear()
             self.mode = "legacy"

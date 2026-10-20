@@ -275,8 +275,8 @@ echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh,
 
 # --- 6d. ONLY THE POPUPS THAT NEED A SCREEN (issue #1620, EPIC #1615 C5) -------
 # The 「保留的弹窗个数」 reading: the distinct --title a popup is opened with,
-# anywhere in bin/ and conf/ — the retired full-screen hub (tmux-dashboard.sh,
-# FLEET_DASH_WINDOW=1 only) aside. Since the old client went (issue #3008, with
+# anywhere in bin/ and conf/ — the retired full-screen hub (tmux-dashboard.sh)
+# aside. Since the old client went (issue #3008, with
 # its quick open, dispatch, rescan, route and repo_add popups — the 看台 draws its
 # own, fleet_view.py), one is left: the backlog's keys sheet. The history: what fit one line asked on the sidebar's input
 # line (fleet_view.py `Ask`); what duplicated the sidebar is gone. Two stay

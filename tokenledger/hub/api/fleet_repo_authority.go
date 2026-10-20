@@ -277,11 +277,9 @@ func (s *Server) ownerAuthorityInventory(ctx context.Context, a store.OwnerAutho
 	return
 }
 
-// authorityChangeIn is a POST's body. legacy_tickets is what the old road's
-// freeze / init sent; it is accepted and ignored (# compat-1v: 下一批删).
+// authorityChangeIn is a POST's body.
 type authorityChangeIn struct {
 	store.OwnerAuthorityChange
-	LegacyTickets string `json:"legacy_tickets"`
 }
 
 // taskAuthority serves the road; a repo= narrows the manifest's lists.
@@ -378,12 +376,6 @@ func (s *Server) taskAuthority(w http.ResponseWriter, r *http.Request, c authori
 		return
 	}
 	change := in.OwnerAuthorityChange
-	if change.Action == "init" {
-		// # compat-1v: 下一批删 — an older node's fleet-repo.sh add asks this; it
-		// falls back to the gate read, which is the person's own mode.
-		httpError(w, 409, "task authority is a person's, not a repo's: a new repo selects nothing (claude-fleet#4896)")
-		return
-	}
 	if !idemRE.MatchString(change.Key) {
 		httpError(w, 400, "idempotency_key is required")
 		return

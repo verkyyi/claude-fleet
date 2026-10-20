@@ -81,8 +81,7 @@
 # A session the hub's task record owns (`--task T<n>`, issue #3325 — the hub's
 # start passes it) is stamped `@task T<n>`: the record is its ticket. (The desk
 # ticket of #2676 — a GitHub issue filed for a no-code session — left with issue
-# #4898; --desk / --no-desk are accepted and do nothing — the 看台's ⌘N stopped
-# passing --no-desk in T512, so a 看台 started before it still may. # compat-1v: 下一批删)
+# #4898, and its --desk / --no-desk with it.)
 #
 # --resume <sid> + --seed-file <f> [+ --worktree <dir>] (issue #3387): a PARKED
 # session with no issue coming back (a park's wake; the parker left with #4339) — the scratch
@@ -198,7 +197,6 @@ while [ "$#" -gt 0 ]; do
     # closed once done 10 minutes unless a --reap says otherwise; the person's
     # list hides it and `fleet ls` marks it.
     --test-identity) TEST_ID=1; shift ;;
-    --desk|--desk=*|--no-desk) shift ;;   # the retired desk ticket (#4898)
     # --task T<n> (issue #3325): the hub's task record this session belongs to —
     # stamped @task (the top bar's number when there is no issue); the record is
     # its ticket.

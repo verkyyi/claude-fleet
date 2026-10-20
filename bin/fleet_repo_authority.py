@@ -65,19 +65,6 @@ def login_settings():
                 base_sha256=hashlib.sha256(b"".join(rest)).hexdigest()), path
 
 
-def overlay_lines():
-    # compat-1v: 下一批删 — repo overlays still spelling the old per-repo line
-    # (fleet-conf.sh migrate comments them out; fleet_task_authority reads one).
-    found = []
-    for f in sorted(conf_dir().glob("fleets/*/repos/*.conf")):
-        try:
-            if any(AUTH_LINE.match(line) for line in f.read_bytes().splitlines()):
-                found.append(str(f))
-        except OSError:
-            pass
-    return found
-
-
 def manifest(repo=None):
     local, path = login_settings()
     query = {"rollback": "1"}
@@ -109,8 +96,8 @@ def sync(repo=None):
     # This login follows its person's selection (issues #4730, #4901): the hub
     # says "re-read" (once per repo a capable host hosts — any of them will do);
     # the mode is read back here with this node's own credential, never taken
-    # from the push. Unknown leaves the setting alone; legacy with no line (and
-    # no old overlay line to outvote) stays byte for byte.
+    # from the push. Unknown leaves the setting alone; legacy with no line stays
+    # byte for byte.
     a = hubrest.api("GET", "/authority", query={"gate": "1"})
     mode = a.get("mode") if isinstance(a, dict) else None
     if mode not in ("legacy", "frozen", "hub"):
@@ -120,7 +107,7 @@ def sync(repo=None):
         fcntl.flock(lock, fcntl.LOCK_EX)
         local, path = login_settings()
         current = local["settings"]["FLEET_TASK_AUTHORITY"]
-        if current != mode and not (mode == "legacy" and not current and not overlay_lines()):
+        if current != mode and not (mode == "legacy" and not current):
             update_local(mode)
             changed.append(path.name)
     print(json.dumps(dict(repo=repo_identity(repo) if repo else "", owner=a.get("owner", ""), mode=mode,
@@ -128,15 +115,6 @@ def sync(repo=None):
 
 
 NATIVE_KEYS = ("worker_id", "native_session", "pid", "birth", "executable")
-
-
-def init_new(repo):
-    # A new repo selects nothing any more (issue #4901): the authority is the
-    # person's. Kept one version for an older caller — says legacy, asks nothing.
-    # compat-1v: 下一批删
-    repo_identity(repo)
-    print("legacy")
-    print("task authority: a new repo selects nothing — it is this login's person's (issue #4901)", file=sys.stderr)
 
 
 def prove_stopped(proof):
@@ -456,8 +434,6 @@ def main(argv=None):
     for a in ("dry-run", "freeze", "apply", "rollback", "gate", "finish", "sync", "settle"):
         actions.add_argument("--" + a, action="store_true")
     actions.add_argument("--cancel-start", help="revoke one never-begun local reservation; a started/unknown native refuses")
-    actions.add_argument("--init-new", action="store_true", help=argparse.SUPPRESS)  # compat-1v: 下一批删
-    p.add_argument("--tickets", default="github", help=argparse.SUPPRESS)  # compat-1v: 下一批删
     p.add_argument("--manifest")
     argv = sys.argv[1:] if argv is None else list(argv)
     if "--settle" in argv:
@@ -470,7 +446,7 @@ def main(argv=None):
         return
     args = p.parse_args(argv)
     repo = repo_identity(args.repo) if args.repo else ""
-    if args.gate or args.finish or args.cancel_start or args.init_new:
+    if args.gate or args.finish or args.cancel_start:
         if not repo:
             raise ValueError("name the repo whose local start this is (owner/repo)")
     if args.gate or args.finish:
@@ -478,9 +454,6 @@ def main(argv=None):
         return
     if args.sync:
         sync(repo)
-        return
-    if args.init_new:
-        init_new(repo)
         return
     if args.cancel_start:
         print(json.dumps(start_call(repo, args.cancel_start, "cancel"), indent=2))
