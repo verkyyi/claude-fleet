@@ -56,7 +56,7 @@ class ModuleLoadingTest(unittest.TestCase):
 class WorkerMetadataTest(unittest.TestCase):
     def test_worker_metadata_uses_three_reads(self):
         with patch.object(LIB['Worker'], 'tm', side_effect=[
-                '@7|fixture', '%8  \n%9 1 ', '0|0||1|draft | name']) as read:
+                '@7|fixture', '%8  \n%9 1 ', '0||1|draft | name']) as read:
             worker = LIB['Worker']('fixture', '@7')
         self.assertEqual((worker.window, worker.pane), ('@7', '%8'))
         self.assertEqual(read.call_count, 3)
@@ -69,8 +69,8 @@ class WorkerMetadataTest(unittest.TestCase):
                     LIB['Worker']('fixture', '@7')
 
     def test_worker_exclusions_survive_batched_reads(self):
-        for metadata in ('1|0||1|task', '0|1||1|task', '0|0|||task',
-                         '0|0||1|home', '0|0||1|plan', 'incomplete'):
+        for metadata in ('1||1|task', '0|||task',
+                         '0||1|home', '0||1|plan', 'incomplete'):
             with self.subTest(metadata=metadata), patch.object(LIB['Worker'], 'tm',
                     side_effect=['@7|fixture', '%8  ', metadata]):
                 with self.assertRaises(ValueError):
