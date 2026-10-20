@@ -268,6 +268,15 @@ class Sandbox(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout.strip()
 
+    def follow(self, op, args):
+        """`call <op> <args> --follow` (the stand-in) -> (it, its first answer: ok with the job's pid)."""
+        p = subprocess.Popen([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "call", op, args, "--follow"],
+                             env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.procs.append(p)
+        first = json.loads(p.stdout.readline().decode())
+        self.assertTrue(first.get("ok") and first.get("pid"), first)
+        return p, first
+
     def log(self):
         try:
             return open(self.env["FLEET_NODE_CORE_LOG"]).read()
@@ -318,12 +327,7 @@ class C_RunAs(Sandbox):
         self.assertIn("op=run-as", self.log())
         # one copy: a long one running, a second start answers running
         open(os.path.join(self.d, "probe.long"), "w").close()
-        p = subprocess.Popen([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "call", "run-as",
-                              json.dumps({"login": "alice", "job": "probe"}), "--follow"], env=self.env,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.procs.append(p)
-        first = json.loads(p.stdout.readline().decode())
-        self.assertTrue(first.get("ok") and first.get("pid"), first)
+        p, first = self.follow("run-as", json.dumps({"login": "alice", "job": "probe"}))
         self.assertEqual(self.req("run-as", {"login": "alice", "job": "probe"}).get("error"), "running")
         # TERM to the stand-in stops the job, and the stand-in ends
         p.send_signal(signal.SIGTERM)
@@ -346,12 +350,7 @@ class C_RunAs(Sandbox):
             return [l.split()[:2] for l in out.splitlines() if script in l and "/bin/bash" in l]
 
         def start_one():
-            p = subprocess.Popen([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "call", "run-as",
-                                  json.dumps({"login": "alice", "job": "loop"}), "--follow"], env=self.env,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            self.procs.append(p)
-            first = json.loads(p.stdout.readline().decode())
-            self.assertTrue(first.get("ok") and first.get("pid"), first)
+            p, first = self.follow("run-as", json.dumps({"login": "alice", "job": "loop"}))
             return p, first["pid"]
 
         core = self.serve()
@@ -695,12 +694,7 @@ class K_Machine(Sandbox):
         self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
         self.assertIn("once %d HOME=%s" % (os.getuid(), os.path.join(self.state, "home")),
                       open(os.path.join(self.d, "log", "tasks", "once.log")).read())
-        p = subprocess.Popen([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "call", "machine",
-                              json.dumps({"job": "looper", "action": "start"}), "--follow"], env=self.env,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.procs.append(p)
-        first = json.loads(p.stdout.readline().decode())
-        self.assertTrue(first.get("ok") and first.get("pid"), first)
+        p, first = self.follow("machine", json.dumps({"job": "looper", "action": "start"}))
         self.assertEqual(self.req("machine", {"job": "looper", "action": "start"}).get("error"), "running")
         self.assertEqual(self.req("machine", {"job": "looper", "action": "held"}), {"ok": True, "held": ""})
         self.assertIn("refused", self.req("machine", {"job": "looper", "action": "hup"}))
