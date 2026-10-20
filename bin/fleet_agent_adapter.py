@@ -7,7 +7,7 @@ agents, and every reader asks the table instead of spelling an agent's name
 (`[ "$AGENT" = codex ]`). A step one agent does not have is a value saying so
 (empty / 0), and the caller takes the "none" road — never a branch on the name.
 The later members of T580 add their own columns here (C5 session_id/accept,
-C6 deliver, C7/C8 end); none starts a second file.
+C6 deliver, C7 transfer_*, C8 end); none starts a second file.
 
 Shell readers source bin/fleet-agent-adapter.sh, which is GENERATED from this
 table (`fleet_agent_adapter.py --emit-sh`, byte for byte; fleet-launch-lib-selftest.sh
@@ -63,6 +63,31 @@ Columns
                   ~/.claude/projects/<cwd>/<id>.jsonl (archivable); home = the
                   agent's own home, recorded on the history row (cols 12–14)
   from_pr_flag    reopen the conversation that made a PR; empty = none
+  The transfer columns (T630, C7) — a handoff (same agent, a fresh context) and a
+  switch (Claude <-> Codex) are one road, fleet-transfer.sh; these say only where
+  the source is read from and how the target is started:
+  transfer_source where the source conversation is read: registry = the process's
+                  session registry + its projects transcript (.fleet-transfer.py
+                  resolve); thread = the window's native thread identity + its
+                  rollout + its account home (fleet-codex-session.py identity)
+  home_flag       the launcher flag carrying an account home; empty = none
+  account_env     ENV:field — the variable a pinned target account rides on, and
+                  the target file's field naming it
+  loop_settled    a `looping` source between rounds is settled when: loop-mark = the
+                  Stop hook wrote it off the pane's own @loop (#1331); thread-idle =
+                  its native thread is idle with a completed last turn (#786)
+  exit_paste      1 = /exit goes in as one bracketed paste (an unbracketed burst
+                  absorbs the Enter as a newline); 0 = typed
+  armed_cycle     1 = a pending @handoff_armed is an in-place context cycle a switch
+                  must not overtake; 0 = its armed handoff is itself this transfer
+  native_cron     1 = the agent's own scheduler holds timers a no-repo switch must
+                  carry (a CronList plan); 0 = none (the fleet loop holds them)
+  bind_proof      what proves the target started: session = its native session
+                  bound in the pane (.fleet-transfer.py target-ready); process = a
+                  process of that name under the pane, unless a pinned target or a
+                  no-repo identity asks for the session
+  account_resume  1 = a cutover may reopen the SAME conversation under another
+                  account (--native-resume); 0 = not supported
 
 One reader for a window's CURRENT conversation id: session_id(agent, read) /
 fleet_agent_session_id <agent> <reader> [window|fallback] — sid_window, else
@@ -79,7 +104,9 @@ HERE = Path(__file__).resolve().parent
 COLUMNS = ("launcher", "model_env", "model_flag", "resume_flag", "fork_flag", "fork_replaces",
            "continue_flag", "preset_sid_flag", "sid_window", "sid_pending", "sid_thread",
            "seed", "seed_words", "park_resume", "ready_check", "trust", "mcp",
-           "deliver", "sid_source", "clear_said", "transcript", "from_pr_flag")
+           "deliver", "sid_source", "clear_said", "transcript", "from_pr_flag",
+           "transfer_source", "home_flag", "account_env", "loop_settled", "exit_paste",
+           "armed_cycle", "native_cron", "bind_proof", "account_resume")
 
 ADAPTERS = {
     "claude": {
@@ -92,6 +119,9 @@ ADAPTERS = {
         "ready_check": "", "trust": "claude-json", "mcp": "flags",
         "deliver": "inbox",
         "sid_source": "hook", "clear_said": "1", "transcript": "project", "from_pr_flag": "--from-pr",
+        "transfer_source": "registry", "home_flag": "", "account_env": "FLEET_ACCOUNT_LABEL:label",
+        "loop_settled": "loop-mark", "exit_paste": "0", "armed_cycle": "1", "native_cron": "1",
+        "bind_proof": "session", "account_resume": "1",
     },
     "codex": {
         "launcher": "fleet-codex.sh", "model_env": "FLEET_CODEX_MODEL", "model_flag": "-m",
@@ -102,6 +132,9 @@ ADAPTERS = {
         "ready_check": "fleet_codex_ready", "trust": "codex-toml", "mcp": "config",
         "deliver": "queue",
         "sid_source": "thread", "clear_said": "0", "transcript": "home", "from_pr_flag": "",
+        "transfer_source": "thread", "home_flag": "--codex-home", "account_env": "FLEET_CODEX_PROFILE:profile",
+        "loop_settled": "thread-idle", "exit_paste": "1", "armed_cycle": "0", "native_cron": "0",
+        "bind_proof": "process", "account_resume": "0",
     },
 }
 DEFAULT = "claude"

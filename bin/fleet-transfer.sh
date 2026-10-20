@@ -143,7 +143,7 @@ target_auth() {
     ok) TARGET_AUTH="ok · $(_json_field "$out" key)"
         # The one auth resolver validates proxy mirrors and returns the real
         # account home. Carry it into the arm, package and successor launch.
-        [ "$TO" != codex ] || [ -z "$TARGET_AUTH_HOME" ] || CODEX_TARGET_HOME="$TARGET_AUTH_HOME"
+        [ -z "$(fleet_agent_get "$TO" home_flag)" ] || [ -z "$TARGET_AUTH_HOME" ] || CODEX_TARGET_HOME="$TARGET_AUTH_HOME"
         return 0 ;;
     unknown) TARGET_AUTH="unknown · $reason"; return 0 ;;
     refuse) TARGET_AUTH_WHY="$reason"; return 1 ;;
@@ -214,7 +214,7 @@ if [ -n "$RETRY" ]; then
   retry_main "$RETRY"; exit $?
 fi
 [ -n "$TARGET" ] || { usage >&2; exit 2; }
-case "$TO" in claude|codex) ;; *) usage >&2; exit 2;; esac
+fleet_agent_known "$TO" || { usage >&2; exit 2; }
 [ "$((DRY + PREPARE + AFTER))" -le 1 ] || die '--dry-run, --prepare-only and --after-turn are mutually exclusive'
 [ "$AFTER" != 1 ] || [ -n "$NOTES" ] || die '--after-turn requires --handoff notes written by the source agent'
 [ "$NATIVE:$AFTER" != 1:1 ] || die '--native-resume is a controller-only immediate operation'
@@ -252,7 +252,7 @@ _source_meta=${_source_meta#*|}
 NOREPO=${_source_meta%%|*}; _source_meta=${_source_meta#*|}
 ISSUE=${_source_meta%%|*}; _source_meta=${_source_meta#*|}
 RAW=${_source_meta%%|*}; WT=${_source_meta#*|}
-case "$SOURCE_AGENT" in claude|codex) ;; *) die 'unsupported source agent' ;; esac
+fleet_agent_known "$SOURCE_AGENT" || die 'unsupported source agent'
 IDENTITY=''; LEASE_KEY=''
 if [ "$NOREPO" = 1 ]; then
   WT=$(opt '#{pane_current_path}')
@@ -283,18 +283,18 @@ git -C "$MAIN" worktree list --porcelain | grep -Fx "worktree $WT" >/dev/null ||
 fi
 LEASE_KEY=${LEASE_KEY:-$WT}
 scope_flags=(); [ "$NOREPO" != 1 ] || scope_flags+=(--exact)
-CODEX_SOURCE_HOME=''; REGISTRY=''
-if [ "$SOURCE_AGENT" = codex ]; then
-  RESOLVED=$(python3 "$HELPER" source-codex --pane "$PANE" --socket "$SOCK" --worktree "$WT" ${scope_flags[@]+"${scope_flags[@]}"}) || exit 1
-  IFS=$'\t' read -r PID SID CODEX_SOURCE_HOME TRANSCRIPT <<< "$RESOLVED"
-else
-PID=$(fleet_pane_claude_pid "$PANE" "$SOCK") || die 'no live Claude process in the source pane'
-REGISTRY=$(fleet_cc_session_json "$PID")
-[ -n "$REGISTRY" ] || die 'source process has no session registry; refusing to guess its transcript'
-PROJECTS="${FLEET_CC_PROJECTS_DIR:-${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}}"
-RESOLVED=$(python3 "$HELPER" resolve --registry "$REGISTRY" --projects "$PROJECTS" --worktree "$WT" ${scope_flags[@]+"${scope_flags[@]}"}) || exit 1
-SID=${RESOLVED%%$'\n'*}; TRANSCRIPT=${RESOLVED#*$'\n'}
-fi
+# source_read — the source conversation, ONE reader for every agent (T630, C7):
+# PID SID HOME TRANSCRIPT REGISTRY on one \037-separated line. The adapter's
+# transfer_source says where it is read (a session registry, or a native thread
+# identity); HOME / REGISTRY are empty for an agent without one. The cutover reads
+# it again after the lease and the rollback once its source is back: the same
+# line, or a different conversation.
+source_read() {
+  python3 "$HELPER" source --agent "$SOURCE_AGENT" --pane "$PANE" --socket "$SOCK" --worktree "$WT" \
+    ${scope_flags[@]+"${scope_flags[@]}"}
+}
+RESOLVED=$(source_read) || exit 1
+IFS=$'\037' read -r PID SID CODEX_SOURCE_HOME TRANSCRIPT REGISTRY <<< "$RESOLVED"
 [ -n "$CODEX_TARGET_HOME" ] || CODEX_TARGET_HOME="$CODEX_SOURCE_HOME"
 [ -z "$EXPECT" ] || [ "$EXPECT" = "$PANE:$PID:$SID" ] || die 'the armed source pane/process/session changed; leaving it alone'
 [ -z "$EXPECT_SID" ] || [ "$EXPECT_SID" = "$SID" ] || die "retry: the window now runs a different conversation ($SID, not $EXPECT_SID); not switching it"
@@ -321,12 +321,12 @@ source_ready() {
     # a screen-classifier read.
     case "$(opt '#{@claude_state}')" in
       done) return 0 ;;
-      looping) if [ "$SOURCE_AGENT" = codex ]; then
-                 python3 "$BIN/fleet_transfer_source.py" settled --session "$SESS" --pane "$PANE"
-               else
-                 [ -n "$(opt '#{@loop}')" ] \
-                   && python3 "$BIN/fleet_loop_mark.py" status --value "$(opt '#{@loop}')" >/dev/null 2>&1
-               fi ;;
+      looping) case "$(fleet_agent_get "$SOURCE_AGENT" loop_settled)" in
+                 thread-idle) python3 "$BIN/fleet_transfer_source.py" settled --session "$SESS" --pane "$PANE" ;;
+                 loop-mark) [ -n "$(opt '#{@loop}')" ] \
+                   && python3 "$BIN/fleet_loop_mark.py" status --value "$(opt '#{@loop}')" >/dev/null 2>&1 ;;
+                 *) return 1 ;;
+               esac ;;
       *) return 1 ;;
     esac
 }
@@ -383,8 +383,8 @@ printf 'fleet-transfer: %s/%s · %s → %s\nsource session: %s\nsource transcrip
 LAUNCH="$BIN/fleet-session-wrap.sh"
 target_support() {
   command -v "$TO" >/dev/null 2>&1 || die "$TO is not on PATH"
-  [ -x "$LAUNCH" ] && [ -x "$BIN/fleet-codex.sh" ] || die 'fleet Codex launcher is missing'
-  [ "$SOURCE_AGENT" = codex ] || [ "$(opt '#{@handoff_armed}')" != 1 ] || die 'a Claude auto-handoff is pending; finish it first'
+  [ -x "$LAUNCH" ] && [ -x "$BIN/$(fleet_agent_get "$TO" launcher)" ] || die "fleet $TO launcher is missing"
+  armed_cycle_free || die "a $SOURCE_AGENT auto-handoff is pending; finish it first"
   PENDING=$(opt '#{@agent_transfer_request}')
   if [ -n "$REQUEST" ]; then
     [ -n "$EXPECT" ] && [ "$PENDING" = "$REQUEST" ] \
@@ -395,19 +395,29 @@ target_support() {
   # This install must include the exit-hook exemption before it can cut over.
   grep -q '@agent_transfer_until' "$BIN/session-end-hook.sh" || die 'SessionEnd transfer support is missing'
   HOOKS=$(bash "$BIN/fleet-hooks-emit.sh" --target "$TO" --root "$BIN/..") || die 'cannot materialize target guard hooks'
-  case "$HOOKS" in *base-readonly-guard.py*bash-guard.py*|*bash-guard.py*base-readonly-guard.py*) : ;; *) die 'Codex guard hooks are incomplete' ;; esac
+  case "$HOOKS" in *base-readonly-guard.py*bash-guard.py*|*bash-guard.py*base-readonly-guard.py*) : ;; *) die "$TO guard hooks are incomplete" ;; esac
 }
+# armed_cycle_free — no in-place context cycle of the source is pending (the
+# adapter's armed_cycle: an agent whose armed handoff IS this transfer passes).
+armed_cycle_free() { [ "$(fleet_agent_get "$SOURCE_AGENT" armed_cycle)" != 1 ] || [ "$(opt '#{@handoff_armed}')" != 1 ]; }
+# target_trust [--apply] — the target's "trust this folder?" answer for a no-repo
+# HOME, where the adapter's trust column keeps it in the agent's own config.
+target_trust() {
+  [ "$(fleet_agent_get "$TO" trust)" = codex-toml ] || return 0
+  python3 "$BIN/.fleet-transfer-norepo.py" trust "${CODEX_TARGET_HOME:-${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}}" "$@"
+}
+NATIVE_CRON=$(fleet_agent_get "$SOURCE_AGENT" native_cron)
 INPUT_VIEW=''
 if [ "$NOREPO" = 1 ] && [ "$PREPARE" != 1 ]; then
   if ! target_auth; then
     [ "$DRY" != 1 ] || die "target-auth: $TARGET_AUTH_WHY"
     refuse_target
   fi
-  [ "$TO" != codex ] || [ -z "$TARGET_AUTH_HOME" ] || CODEX_TARGET_HOME="$TARGET_AUTH_HOME"
+  [ -z "$(fleet_agent_get "$TO" home_flag)" ] || [ -z "$TARGET_AUTH_HOME" ] || CODEX_TARGET_HOME="$TARGET_AUTH_HOME"
 fi
 if [ "$NOREPO" = 1 ]; then
   # A staged durable handover (issue #4280) needs its plan even with no @loop.
-  if [ "$SOURCE_AGENT" = claude ] && [ -z "$LOOP" ] && { [ -n "$(opt '#{@loop}')" ] \
+  if [ "$NATIVE_CRON" = 1 ] && [ -z "$LOOP" ] && { [ -n "$(opt '#{@loop}')" ] \
       || [ -s "$FLEET_CONF_DIR/transfer-durable/$(opt '#{@fleet_id}').json" ]; }; then
     _plan="$FLEET_CONF_DIR/transfer-plans/$(opt '#{@fleet_id}').json"
     [ ! -s "$_plan" ] || LOOP=$_plan
@@ -430,10 +440,10 @@ elif [ "$NOREPO" = 1 ] && [ "$AFTER" != 1 ]; then
   _ready_rc=0
   INPUT_VIEW=$(python3 "$BIN/.fleet-transfer-norepo.py" readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT") || _ready_rc=$?
   if [ "$_ready_rc" != 0 ]; then
-    if [ "$_ready_rc" = 4 ] && [ "$FROM_PANEL" = 1 ] && [ "$SOURCE_AGENT" = claude ]; then
+    if [ "$_ready_rc" = 4 ] && [ "$FROM_PANEL" = 1 ] && [ "$NATIVE_CRON" = 1 ]; then
       target_support
       source_ready || die 'source is not safely idle; finish its turn before requesting preparation'
-      [ "$TO" != codex ] || python3 "$BIN/.fleet-transfer-norepo.py" trust "${CODEX_TARGET_HOME:-${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}}" || exit 1
+      target_trust || exit 1
       if [ "$DRY" = 1 ]; then
         printf 'preparation-needed: request current CronList and handoff from the source; no exit until verified.\n'
         exit 0
@@ -445,9 +455,7 @@ elif [ "$NOREPO" = 1 ] && [ "$AFTER" != 1 ]; then
     exit 1
   fi
 fi
-if [ "$NOREPO" = 1 ] && [ "$TO" = codex ]; then
-  python3 "$BIN/.fleet-transfer-norepo.py" trust "${CODEX_TARGET_HOME:-${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}}" || exit 1
-fi
+[ "$NOREPO" != 1 ] || target_trust || exit 1
 if [ "$DRY" = 1 ]; then
   target_support
   [ "$IN_TURN" = 1 ] || source_ready || die 'source is not safely idle; finish/pause its turn before transferring'
@@ -499,7 +507,7 @@ if [ "$AFTER" = 1 ]; then
 fi
 
 # Road 2: stage the source's own durable tasks (inert) while it still runs.
-if [ "$TAKEOVER" = 1 ] && [ "$NOREPO" = 1 ] && [ "$SOURCE_AGENT" = claude ] && [ "$PREPARE" != 1 ]; then
+if [ "$TAKEOVER" = 1 ] && [ "$NOREPO" = 1 ] && [ "$NATIVE_CRON" = 1 ] && [ "$PREPARE" != 1 ]; then
   TAKEOVER_PLAN=$(python3 "$DURABLE" stage-takeover "$(opt '#{@fleet_id}')" "$HOME" "$PID" "$SID" "$TRANSCRIPT" "$$") \
     || die 'durable takeover refused; source and its tasks stay as they are'
   [ -z "$TAKEOVER_PLAN" ] || [ -z "$LOOP" ] \
@@ -577,19 +585,13 @@ TM set-option -w -t "$WIN" @agent_transfer_until "$(( $(date +%s) + 120 ))" || d
 TM set-option -p -t "$PANE" remain-on-exit on || die 'cannot retain source pane on exit'
 # Recheck identity and evidence AFTER exporting and acquiring the lease. A /clear,
 # new turn, or another process must not inherit an earlier session's handoff.
-if [ "$SOURCE_AGENT" = codex ]; then
-  [ "$(python3 "$HELPER" source-codex --pane "$PANE" --socket "$SOCK" --worktree "$WT" ${scope_flags[@]+"${scope_flags[@]}"})" = "$RESOLVED" ] \
-    || die 'Codex source changed while preparing the transfer'
-else
-  [ "$(fleet_pane_claude_pid "$PANE" "$SOCK")" = "$PID" ] && [ "$(fleet_cc_session_id "$PID")" = "$SID" ] \
-    && [ "$(opt '#{@handoff_armed}')" != 1 ] || die 'source changed while preparing the transfer'
-fi
+[ "$(source_read 2>/dev/null)" = "$RESOLVED" ] && armed_cycle_free || die 'source changed while preparing the transfer'
 source_ready || die 'source started another turn while preparing the transfer'
 if [ "$NOREPO" = 1 ]; then
   PREPARATION_ID=$(python3 "$BIN/.fleet-transfer-norepo.py" check-request "$SOCK" "$PANE" "$PID" "$SID" "$TO" "$PREPARATION_ID" "$NOTES") || die 'panel preparation is no longer valid'
   [ "$(python3 "$BIN/.fleet-transfer-norepo.py" readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT")" = "$INPUT_VIEW" ] || die 'source scheduler or unsent input changed'
   [ "$(python3 "$BIN/.fleet-transfer-norepo.py" identity "$SOCK" "$PANE" "$(opt '#{pane_current_path}')")" = "$IDENTITY" ] || die 'managed HOME identity changed'
-  [ "$TO" != codex ] || python3 "$BIN/.fleet-transfer-norepo.py" trust "${CODEX_TARGET_HOME:-${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}}" --apply || die 'target HOME trust changed'
+  target_trust --apply || die 'target HOME trust changed'
 fi
 # The last read before /exit (issue #1667): a login that went bad while the
 # package was written still finds the source running.
@@ -616,11 +618,11 @@ EXIT_SENT=1
 TM set-option -w -t "$PANE" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
 SK Escape || die 'cannot address source prompt'
 SK C-u || die 'cannot clear source prompt'
-if [ "$SOURCE_AGENT" = codex ]; then
-  # Codex's unbracketed paste detector can absorb a fast following Enter as a
-  # newline, leaving /exit UNSUBMITTED in the composer. Explicit paste framing
+if [ "$(fleet_agent_get "$SOURCE_AGENT" exit_paste)" = 1 ]; then
+  # An unbracketed paste detector (Codex's) can absorb a fast following Enter as
+  # a newline, leaving /exit UNSUBMITTED in the composer. Explicit paste framing
   # ends that burst before Enter; no timing guess or second submission needed.
-  SK -l $'\033[200~/exit\033[201~' || die 'cannot paste Codex source exit'
+  SK -l $'\033[200~/exit\033[201~' || die 'cannot paste source exit'
 else
   SK -l '/exit' || die 'cannot type source exit'
 fi
@@ -633,9 +635,7 @@ for ((i=0; i<EXIT_WAIT; i++)); do
   # Only the exact selected one-timer dialog may get ONE additional Enter.
   if [ -n "$LOOP" ] && [ "$EXIT_CONFIRMED" = 0 ] \
     && TM capture-pane -p -t "$PANE" | python3 "$HELPER" loop-exit-confirmation --bundle "$BUNDLE"; then
-    [ "$(fleet_pane_claude_pid "$PANE" "$SOCK")" = "$PID" ] \
-      && [ "$(fleet_cc_session_id "$PID")" = "$SID" ] \
-      || die 'source changed at the loop exit confirmation'
+    [ "$(source_read 2>/dev/null)" = "$RESOLVED" ] || die 'source changed at the loop exit confirmation'
     python3 "$HELPER" verify "$BUNDLE" || die 'source transcript changed at the loop exit confirmation'
     TM capture-pane -p -t "$PANE" > "$BUNDLE/loop-exit-confirmation.txt" || die 'cannot preserve loop exit confirmation'
     SK Enter || die 'cannot confirm stopping the source loop'
@@ -710,17 +710,13 @@ rollback() {
   fi
   if TM respawn-pane -k -t "$PANE" -c "$WT" "$cmd"; then
     for ((i=0; i<BOOT_WAIT; i++)); do
-      if [ "$SOURCE_AGENT" = codex ]; then
-        got=$(python3 "$HELPER" source-codex --pane "$PANE" --socket "$SOCK" --worktree "$WT" 2>/dev/null) \
-          && IFS=$'\t' read -r back rest <<< "$got" && [ "$(printf '%s' "$rest" | cut -f1)" = "$SID" ] && break
-      else
-        if back=$(fleet_pane_claude_pid "$PANE" "$SOCK" 2>/dev/null) && [ "$(fleet_cc_session_id "$back")" = "$SID" ]; then
-          if [ -z "$_recovery" ] || python3 "$HELPER" target-ready "$_recovery" "$SOCK" "$PANE" >/dev/null 2>&1; then
-            # The resumed source's Fleet loop carries the durable job now.
-            [ -z "$DFID" ] || [ -z "$_recovery" ] || python3 "$DURABLE" activate "$DFID" \
-              "{\"agent\":\"$SOURCE_AGENT\",\"rollback\":true,\"pid\":\"$back\"}" >/dev/null || :
-            break
-          fi
+      if got=$(source_read 2>/dev/null) && IFS=$'\037' read -r back rest <<< "$got" \
+          && [ "${rest%%$'\037'*}" = "$SID" ]; then
+        if [ -z "$_recovery" ] || python3 "$HELPER" target-ready "$_recovery" "$SOCK" "$PANE" >/dev/null 2>&1; then
+          # The resumed source's Fleet loop carries the durable job now.
+          [ -z "$DFID" ] || [ -z "$_recovery" ] || python3 "$DURABLE" activate "$DFID" \
+            "{\"agent\":\"$SOURCE_AGENT\",\"rollback\":true,\"pid\":\"$back\"}" >/dev/null || :
+          break
         fi
       fi
       back=''
@@ -781,10 +777,13 @@ python3 "$HELPER" state "$BUNDLE" starting || die 'cannot record target launch'
 TM respawn-pane -k -t "$PANE" -c "$WT" "$CMD" || rollback "could not launch $TO in the retained pane"
 CPID=''
 for ((i=0; i<BOOT_WAIT; i++)); do
-  if [ "$NOREPO" = 1 ] || [ -n "$TARGET_FILE" ] || [ "$TO" = claude ]; then
+  # The adapter's bind_proof: a native session bound in the pane, or (an agent
+  # whose session binds after its process starts, with no pin or no-repo identity
+  # asking for it) a process of that name under the pane.
+  if [ "$NOREPO" = 1 ] || [ -n "$TARGET_FILE" ] || [ "$(fleet_agent_get "$TO" bind_proof)" = session ]; then
     CPID=$(python3 "$HELPER" target-ready "$BUNDLE" "$SOCK" "$PANE" 2>/dev/null) && [ -n "$CPID" ] && break
   else
-    CPID=$(python3 "$HELPER" process codex "$(opt '#{pane_pid}')" 2>/dev/null) && [ -n "$CPID" ] && break
+    CPID=$(python3 "$HELPER" process "$TO" "$(opt '#{pane_pid}')" 2>/dev/null) && [ -n "$CPID" ] && break
   fi
   [ "$(opt '#{pane_dead}')" != 1 ] || break
   sleep 1

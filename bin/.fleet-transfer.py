@@ -20,6 +20,12 @@ import tempfile
 import time
 
 
+# The agent adapter table (T620, C4): every agent difference this helper honours
+# is a column there (C7's transfer_* columns), never a test of the agent's name.
+ADAPTER = runpy.run_path(str(Path(__file__).with_name('fleet_agent_adapter.py')))['get']
+SEP = '\x1f'   # the source line's separator: never whitespace, so an empty field stays a field
+
+
 def run(*argv):
     return subprocess.check_output(argv, stderr=subprocess.PIPE, timeout=20).decode("utf-8", "replace").rstrip("\n")
 
@@ -84,26 +90,43 @@ def adopt_transition(worktree, request):
                 owner.unlink(); path.rmdir()
 
 
-def resolve(registry, projects, worktree, exact=False):
+def registry_source(a):
+    """The source a session registry names (transfer_source=registry): the live
+    agent process under the pane, its registry record, its one projects transcript."""
+    lib = str(Path(__file__).with_name('fleet-lib.sh'))
+    found = subprocess.run(['bash', '-c', '. "$1"; p=$(fleet_pane_claude_pid "$2" "$3") || exit 3; '
+                            'r=$(fleet_cc_session_json "$p") || r=; printf "%s\\n%s" "$p" "$r"',
+                            'fleet-source', lib, a.pane, a.socket], capture_output=True, text=True)
+    if found.returncode == 3 or not found.stdout.strip():
+        raise ValueError('no live Claude process in the source pane')
+    if found.returncode:
+        raise ValueError('cannot read the source process')
+    pid, registry = (found.stdout.split('\n') + [''])[:2]
+    if not registry:
+        raise ValueError('source process has no session registry; refusing to guess its transcript')
     record = json.loads(Path(registry).read_text(encoding="utf-8"))
     sid = record.get("sessionId", "")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", sid):
         raise ValueError("the source process has no valid registered sessionId")
     cwd = record.get("cwd", "")
-    if not cwd or os.path.commonpath([Path(cwd).resolve(), worktree]) != worktree:
+    if not cwd or os.path.commonpath([Path(cwd).resolve(), a.worktree]) != a.worktree:
         raise ValueError("the registered Claude cwd does not belong to this worktree")
-    if exact and str(Path(cwd).resolve()) != worktree:
+    if a.exact and str(Path(cwd).resolve()) != a.worktree:
         raise ValueError('no-repo source registry must name the exact HOME')
+    projects = os.environ.get('FLEET_CC_PROJECTS_DIR') or os.environ.get('CLAUDE_PROJECTS_DIR') \
+        or str(Path.home() / '.claude/projects')
     matches = list(Path(projects).expanduser().glob("*/" + sid + ".jsonl"))
     if len(matches) != 1:
         raise ValueError("expected exactly one transcript for registered session " + sid)
     path = str(matches[0].resolve())
-    if "\n" in path or not os.access(path, os.R_OK):
-        raise ValueError("the source transcript path is unreadable or contains a newline")
-    print(sid + "\n" + path)
+    if not os.access(path, os.R_OK):
+        raise ValueError("the source transcript path is unreadable")
+    return [pid, sid, '', path, registry]
 
 
-def codex_source(a):
+def thread_source(a):
+    """The source a native thread identity names (transfer_source=thread): its
+    owner process under the pane, its rollout and its account home."""
     adapter = runpy.run_path(str(Path(__file__).with_name('fleet-codex-session.py')))
     data = adapter['identity'](a.pane, a.socket)
     if not data:
@@ -121,15 +144,33 @@ def codex_source(a):
     cwd = data.get('cwd', '')
     if not cwd or os.path.commonpath([str(Path(cwd).resolve()), a.worktree]) != a.worktree:
         raise ValueError('Codex identity belongs to another worktree')
-    if getattr(a, 'exact', False) and str(Path(cwd).resolve()) != a.worktree:
+    if a.exact and str(Path(cwd).resolve()) != a.worktree:
         raise ValueError('no-repo Codex source must name the exact HOME')
     path, _ = adapter['rollout'](data)
     if not path or not Path(data['home']).is_dir():
         raise ValueError('exact Codex rollout or account home is unavailable')
-    values = [str(owner), data['session_id'], data['home'], path]
-    if any(any(c in v for c in '\t\n\r') for v in values):
-        raise ValueError('invalid Codex source metadata')
-    print('\t'.join(values))
+    return [str(owner), data['session_id'], data['home'], path, '']
+
+
+SOURCES = {'registry': registry_source, 'thread': thread_source}
+
+
+def read_source(a):
+    """The ONE source reader (T630, C7): PID SID HOME TRANSCRIPT REGISTRY on one
+    line, whichever agent runs the pane — the adapter's transfer_source picks the
+    reader. HOME is empty for an agent with no account home, REGISTRY for one
+    with no session registry."""
+    values = SOURCES[ADAPTER(a.agent, 'transfer_source')](a)
+    if any(any(c in v for c in '\t\n\r' + SEP) for v in values):
+        raise ValueError('invalid source metadata')
+    print(SEP.join(values))
+
+
+def resume_argv(launcher, agent, home, sid):
+    """Reopen <sid> in <agent>: the launcher, its account home when the agent has
+    one (home_flag), then the agent's own resume spelling (resume_flag)."""
+    flag = ADAPTER(agent, 'home_flag')
+    return [launcher, '--agent', agent] + ([flag, home] if flag else []) + [ADAPTER(agent, 'resume_flag'), sid]
 
 
 def text_blocks(content):
@@ -226,7 +267,7 @@ def package(a):
             dest.write(line)
             digest.update(line)
             captured += len(line)
-            if a.source_agent == 'codex':
+            if ADAPTER(a.source_agent, 'transfer_source') == 'thread':   # a rollout's records
                 message = row.get('payload', {})
                 if row.get('type') == 'session_meta':
                     record_sessions.add(message.get('id', ''))
@@ -285,8 +326,7 @@ def package(a):
         "history_path": str(bundle / "history.md"),
         "previous_handoff": a.previous or None,
         "transfer_lock_path": str(transfer_lock),
-        "source_resume_argv": ([a.launcher, "--agent", "codex", "--codex-home", a.codex_home, "resume", a.sid]
-                               if a.source_agent == "codex" else [a.launcher, "--agent", "claude", "--resume", a.sid]),
+        "source_resume_argv": resume_argv(a.launcher, a.source_agent, a.codex_home, a.sid),
     }
     if a.norepo:
         manifest['fleet']['identity'] = json.loads(a.identity)
@@ -530,20 +570,21 @@ def launcher(bundle, launch):
         argv += ['--as', agent_def]
     if target.get('account'):
         env['FLEET_ACCOUNT_TARGET'] = json.dumps(target)
-    if target['agent'] == 'codex':
+    agent = target['agent']
+    home_flag = ADAPTER(agent, 'home_flag')
+    if home_flag:
         home = target.get('home') or target.get('codex_home') or m['source'].get('codex_home')
         if home:
-            argv += ['--codex-home', home]
-        if target.get('profile'):
-            env['FLEET_CODEX_PROFILE'] = target['profile']
-        if target.get('model'):
-            argv += ['-m',target['model']]
-    elif target.get('label'):
-        env['FLEET_ACCOUNT_LABEL'] = target['label']
+            argv += [home_flag, home]
+    account_var, account_field = ADAPTER(agent, 'account_env').split(':')
+    if target.get(account_field):
+        env[account_var] = target[account_field]
+    if target.get('model'):
+        argv += [ADAPTER(agent, 'model_flag'), target['model']]
     if m.get('native_resume'):
-        if m['source']['agent'] != 'claude' or target['agent'] != 'claude':
-            raise ValueError('native account resume is currently Claude-only')
-        argv += ['--resume', m['source']['session_id']]
+        if m['source']['agent'] != agent or ADAPTER(agent, 'account_resume') != '1':
+            raise ValueError('native account resume is supported for the same agent only, where account_resume says so')
+        argv += [ADAPTER(agent, 'resume_flag'), m['source']['session_id']]
     body = '#!/bin/bash\nset -uo pipefail\ncd %s || exit 1\n' % q(m['workspace']['path'])
     body += 'unset FLEET_CODEX_MANAGED FLEET_CODEX_SUBSCRIPTION FLEET_CODEX_PROFILE FLEET_CODEX_ACCOUNT FLEET_ACCOUNT_LABEL FLEET_ACCOUNT_TARGET FLEET_LOOP_RECORD FLEET_LOOP_SPEC FLEET_LOOP_AGENT\n'
     body += ''.join('export %s=%s\n' % (key, q(value)) for key, value in env.items())
@@ -586,7 +627,7 @@ def target_ready(bundle, socket_label, pane):
         reader = runpy.run_path(str(Path(__file__).with_name('.fleet-transfer-norepo.py')))
         if reader['identity'](socket_label, pane) != m['fleet']['identity']:
             raise ValueError('target changed lifelong identity, role or task routing')
-    if t['agent'] == 'codex':
+    if ADAPTER(t['agent'], 'transfer_source') == 'thread':
         adapter = runpy.run_path(str(Path(__file__).with_name('fleet-codex-session.py')))
         identity = adapter['identity'](pane, socket_label)
         if not identity or Path(identity.get('cwd', '')).resolve() != Path(m['workspace']['path']):
@@ -801,13 +842,9 @@ def main():
     c.add_argument('state', choices=('pending', 'done', 'failed', 'cancelled')); c.add_argument('detail', nargs='?', default='')
     c = sub.add_parser('retry-list'); c.add_argument('--wait', default='')
     c = sub.add_parser('retry-supersede'); c.add_argument('session'); c.add_argument('fid')
-    r = sub.add_parser("resolve")
-    for name in ("registry", "projects", "worktree"):
-        r.add_argument("--" + name, required=True)
-    r.add_argument("--exact", action="store_true")
-    c = sub.add_parser('source-codex')
+    c = sub.add_parser('source')
     c.add_argument("--exact", action="store_true")
-    for name in ('pane', 'socket', 'worktree'):
+    for name in ('agent', 'pane', 'socket', 'worktree'):
         c.add_argument('--' + name, required=True)
     p = sub.add_parser("package")
     for name in ("output", "main", "worktree", "sid", "transcript", "registry", "session", "window", "pane", "launcher"):
@@ -817,8 +854,9 @@ def main():
     p.add_argument('--lease-key', default='')
     p.add_argument('--input-view', default='')
     p.add_argument("--pid", type=int, required=True)
-    p.add_argument("--source-agent", choices=("claude", "codex"), default="claude")
-    p.add_argument('--to', choices=('claude', 'codex'), default='codex')
+    agents = tuple(runpy.run_path(str(Path(__file__).with_name('fleet_agent_adapter.py')))['ADAPTERS'])
+    p.add_argument("--source-agent", choices=agents, default="claude")
+    p.add_argument('--to', choices=agents, default='codex')
     p.add_argument('--native-resume', action='store_true')
     p.add_argument("--codex-home", default="")
     p.add_argument("--target-home", default="")
@@ -850,10 +888,8 @@ def main():
         retry_list(a.wait)
     elif a.command == 'retry-supersede':
         retry_supersede(a.session, a.fid)
-    elif a.command == "resolve":
-        resolve(a.registry, a.projects, a.worktree, a.exact)
-    elif a.command == "source-codex":
-        codex_source(a)
+    elif a.command == "source":
+        read_source(a)
     elif a.command == "package":
         package(a)
     elif a.command == "process":
