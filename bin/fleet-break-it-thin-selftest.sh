@@ -391,13 +391,13 @@ drill_inbox_orphan_unreachable() {
   PATH="$B/bin:$PATH" python3 "$BIN/fleet_notice.py" notify warn 'repro:issue-4789 REAPED — 派它的会话已不在' \
     --all --kind orphan --ref "$(python3 "$BIN/fleet-orphan-reports.py" list | cut -f1)" --sock fl
   # … and one another machine filed (the hub's cache, as fleet-hub-sessions.sh writes it)
-  printf '%s\n' "$(printf 'aaaaaaaaaaaa\037mini2\037online\037%s\037o/r\037T477\037SUCCEEDED\0374971\037merged\0370' "$(date +%s)")" \
+  printf '%s\n' "$(printf 'aaaaaaaaaaaa\037mac-b\037online\037%s\037o/r\037T477\037SUCCEEDED\0374971\037merged\0370' "$(date +%s)")" \
     > "$FLEET_STATUS_G/orphanrep_fl"
   [ "$(rows_of a)" = 2 ] && [ "$(rows_of b)" = 2 ] || { WHY="the result did not open every 看台's message row ($(rows_of a)/$(rows_of b))"; th_done; return 1; }
   until_ok 3 grep -aq '✦ 2' "$B/out-a" || { WHY="看台 a's terminal never drew 「✦ 2」"; th_done; return 1; }
   [ "$(python3 "$BIN/fleet_notice.py" unread)" = 2 ] || { WHY="消息 does not count both machines' results: $(python3 "$BIN/fleet_notice.py" unread)"; th_done; return 1; }
   page=$(FLEET_UI_LANG=zh python3 "$BIN/fleet_notice.py" page </dev/null)
-  case "$page" in *没人收的结果*4789*T477*mini2*|*没人收的结果*T477*mini2*4789*) ;;
+  case "$page" in *没人收的结果*4789*T477*mac-b*|*没人收的结果*T477*mac-b*4789*) ;;
     *) WHY="⌘P 消息's page does not list both under 没人收的结果: $page"; th_done; return 1 ;; esac
   case "$(TT show -qv -t 'fl@view-a:' 'status-format[0]')" in *orphan*) WHY="the top line still counts results"; th_done; return 1 ;; esac
   SECS=$(since "$t0")

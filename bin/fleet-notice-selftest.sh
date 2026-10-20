@@ -156,7 +156,7 @@ import fleet_hub_common as H
 n = H.notices_cell(sys.argv[2])
 print(len(n["rows"]), n["mark"])
 r = n["rows"][0]
-print("\x1f".join(str(v) for v in (r["id"], "mini2", n["mark"], r["ts"], r["level"], r["kind"], r["sub"], r["wid"], r["text"], "0")))
+print("\x1f".join(str(v) for v in (r["id"], "mac-b", n["mark"], r["ts"], r["level"], r["kind"], r["sub"], r["wid"], r["text"], "0")))
 PY2
 )
 [ "$(printf '%s\n' "$row" | sed -n 1p | cut -d' ' -f1)" = 4 ] || fail "E the cell carries the four unseen (no orphan)" "$row"
