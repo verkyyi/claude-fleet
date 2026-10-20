@@ -420,6 +420,150 @@ class Meter:
         except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
             return False
 
+TUI_ORIGINATOR = "codex-tui"
+# Nothing but thread/started is read off the follower's connection.
+FOLLOW_OPT_OUT = ('item/agentMessage/delta', 'item/reasoning/textDelta', 'item/reasoning/summaryTextDelta',
+                  'item/commandExecution/outputDelta', 'item/fileChange/outputDelta', 'item/plan/delta',
+                  'item/started', 'item/completed', 'turn/diff/updated', 'turn/plan/updated',
+                  'thread/tokenUsage/updated', 'hook/started', 'hook/completed', 'rawResponseItem/completed')
+
+
+class Held(ValueError):
+    """The message is not handed over (exit 4): every caller queues it for replay."""
+
+
+def created_ms(value):
+    """A Codex thread id is a UUIDv7: its first 48 bits are when it was made."""
+    try:
+        u = uuid.UUID(value)
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return u.int >> 80 if u.version == 7 else None
+
+
+def newer(a, b):
+    ta, tb = created_ms(a), created_ms(b)
+    return ta is not None and tb is not None and (ta, a) > (tb, b)
+
+
+def tui_root(thread):
+    """A thread the window's own TUI started: no parent (not a subagent), not
+    ephemeral, and — when the server says so — originated by codex-tui."""
+    return (isinstance(thread, dict) and valid_id(thread.get("id")) and not thread.get("parentThreadId")
+            and not thread.get("ephemeral") and thread.get("originator", TUI_ORIGINATOR) == TUI_ORIGINATOR)
+
+
+def current_thread(client, sid):
+    """'' when sid is still the TUI's current thread on this private server, else why
+    not. Codex 0.162 keeps the old thread LOADED after /clear or /new — a queue into
+    it is accepted and never shown (T540) — so being loaded is not enough: no newer
+    root thread of the TUI's may exist beside it."""
+    loaded = (client.call("thread/loaded/list", {}) or {}).get("data") or []
+    if sid not in loaded:
+        return "thread %s is not loaded on the window's server" % sid
+    for tid in loaded:
+        if tid == sid or not newer(tid, sid):
+            continue
+        thread = (client.call("thread/read", {"threadId": tid}) or {}).get("thread") or {}
+        if thread.get("id") == tid and tui_root(thread):
+            return "the window moved on to thread %s (a /clear or /new not yet followed)" % tid
+    return ""
+
+
+def check_current(remote, sid):
+    """current_thread() asked of the window's own server; unreachable raises."""
+    import runpy
+    client = runpy.run_path(str(Path(__file__).with_name("fleet-codex-rpc.py")))["Client"](remote, timeout=5)
+    try:
+        return current_thread(client, sid)
+    finally:
+        client.close()
+
+
+def follow(pane, owner, thread, socket=""):
+    """Re-point the window at the thread its TUI just started (T540). Codex 0.162 runs
+    SessionStart only at a thread's first turn, so after /clear (or /new) the
+    window's @codex_identity kept naming the old thread until the person spoke, and
+    every delivery in between went into a thread nobody sees. The private server
+    broadcasts thread/started at once; this takes it, compare-and-stamps the window
+    (same launcher, same old thread) and adds the ledger's segment. The first-turn
+    hook then finds the same thread and changes nothing. Returns the new id or ''."""
+    sid = thread.get("id") if isinstance(thread, dict) else None
+    data = identity(pane, socket)
+    if (not tui_root(thread) or not data or data.get("owner") != owner or not owner.isdigit()
+            or data.get("session_id") == sid or not newer(sid, data.get("session_id"))):
+        return ""
+    if tmux(["display-message", "-p", "-t", pane, "#{@authority_receipt}"], socket):
+        return ""  # a registered execution moves only through its own hook
+    old = data["session_id"]
+    data = dict(data, session_id=sid, transcript=thread.get("path") or "",
+                cwd=thread.get("cwd") or data.get("cwd", ""), model=thread.get("model") or data.get("model", ""))
+    cmds = [["set-option", "-w", "-t", pane, "@codex_identity", json.dumps(data, separators=(",", ":"))],
+            ["set-option", "-w", "-t", pane, "@codex_session_id", sid]]
+    test = ("#{&&:#{==:#{@cc_agent},codex},#{&&:#{==:#{@cc_launcher_pid}," + owner
+            + "},#{==:#{@codex_session_id}," + old + "}}}")
+    tmux(["if-shell", "-F", "-t", pane, test, " ; ".join(shlex.join(c) for c in cmds)], socket)
+    if identity(pane, socket).get("session_id") != sid:
+        return ""
+    if not socket and os.environ.get("TMUX_PANE") == pane:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import fleet_id
+            # /clear and /new both open a fresh thread in the same window; the
+            # hook's own `clear` reading is the one this segment takes.
+            fleet_id.hook(json.dumps({"hook_event_name": "SessionStart", "session_id": sid, "source": "clear"}))
+        except Exception:
+            pass  # the first-turn hook records it then
+    return sid
+
+
+class Follow:
+    """The runtime's thread follower (T540): one connection to the window's private
+    server, read once a second for thread/started. Never raises. Off under an
+    authority context (its receipt binds the thread) or FLEET_CODEX_FOLLOW=0 —
+    then delivery's own check holds what the old thread would have swallowed."""
+
+    def __init__(self, env, rpc_client=None):
+        self.pane, self.owner = env.get("TMUX_PANE", ""), env.get("FLEET_CODEX_LAUNCHER_PID", "")
+        self.remote = env.get("FLEET_CODEX_REMOTE", "")
+        self.off = bool(env.get("FLEET_AUTHORITY_CONTEXT")) or env.get("FLEET_CODEX_FOLLOW", "1") == "0"
+        self.rpc_client = rpc_client
+        self.client, self.retry_at = None, 0.0
+
+    def close(self):
+        if self.client is not None:
+            try:
+                self.client.close()
+            except OSError:
+                pass
+        self.client = None
+
+    def tick(self, now=None):
+        if self.off or not self.pane or not self.owner.isdigit() or not self.remote.startswith("unix:///"):
+            return ""
+        now = time.monotonic() if now is None else now
+        moved = ""
+        try:
+            if self.client is None:
+                if now < self.retry_at:
+                    return ""
+                if self.rpc_client is None:
+                    import runpy
+                    self.rpc_client = runpy.run_path(str(Path(__file__).with_name("fleet-codex-rpc.py")))["Client"]
+                self.client = self.rpc_client(self.remote, timeout=1, opt_out_notifications=FOLLOW_OPT_OUT)
+            self.client.deadline = time.monotonic() + .2
+            for _ in range(256):
+                event = self.client.events.pop(0) if self.client.events else self.client.receive(nonblocking=True)
+                if event is None:
+                    break
+                if isinstance(event, dict) and event.get("method") == "thread/started":
+                    moved = follow(self.pane, self.owner, (event.get("params") or {}).get("thread")) or moved
+        except Exception:
+            self.close()
+            self.retry_at = now + 5
+        return moved
+
+
 def context(args):
     data = identity(args.pane, args.socket) if args.pane else {}
     if args.session:
@@ -495,6 +639,13 @@ def send(args):
     text = sys.stdin.read()
     if not text.strip():
         raise ValueError("empty message")
+    # Delivered only into the thread the window shows now (T540): a /clear the
+    # follower has not stamped yet holds it — queued by the caller, replayed once
+    # the window names its new thread — never a false DELIVERED. The launch's
+    # pinned thread too: a /clear before its first turn leaves the pin behind.
+    why = check_current(remote, data["session_id"])
+    if why:
+        raise Held(why)
     env = dict(os.environ, CODEX_HOME=data["home"])
     p = subprocess.run([cli, "queue", "--remote", remote, "--thread", data["session_id"], "--message", text],
                        env=env, text=True, capture_output=True, timeout=15)
@@ -569,6 +720,12 @@ def main():
             print(path)
             return 0
         return context(args) if args.command == "context" else send(args)
+    except Held as exc:
+        print("fleet-codex-session: held, not delivered: " + str(exc), file=sys.stderr)
+        return 4
+    except EOFError as exc:
+        print("fleet-codex-session: the window's Codex server closed: " + str(exc), file=sys.stderr)
+        return 1
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
         if args.command == "hook":
             return 0  # telemetry must never fail a turn

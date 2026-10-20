@@ -442,6 +442,20 @@ case "$tgt" in
   *) [ -z "$EXPECT" ] || die 2 "--expect-issue needs an @<window-id> or %<pane-id> target" ;;
 esac
 
+# queue_here <why> — a WINDOW that cannot take it now (issue #1647): this fleet's
+# peer queue holds it for the window's lifelong @fleet_id, delivered on the cleanup
+# tick or its wake. A pid / session-uuid target has no identity to wait on: refused.
+queue_here() {
+  local s fid
+  case "$tgt" in @*|%*) ;; *) die 1 "$1" ;; esac
+  s=$("${tm[@]}" display-message -p -t "$tgt" "$FLEET_SESSION_FMT" 2>/dev/null)
+  [ -n "$s" ] || die 1 "$1"
+  fid=$(fleet_window_fid "$s" "$tgt" "$SOCK" 2>/dev/null) || die 1 "$1"
+  printf '%s' "$text" | bash "$BIN/fleet-peer-queue.sh" put -L "$s" --kind message \
+    --rid "local:peer#$(date +%s).$$" --to-fid "$fid" --to "${label:-$tgt}" >/dev/null || die 1 "$1"
+  echo "queued → $tgt${label:+ ($label)} — $1; delivered when it can take it"
+  exit 3
+}
 case "$tgt" in
   @*|%*)
     lifecycle=$("${tm[@]}" display-message -p -t "$tgt" '#{@worker_lifecycle}' 2>/dev/null)
@@ -460,6 +474,9 @@ case "$tgt" in
     agent=$("${tm[@]}" display-message -p -t "$tgt" '#{@cc_agent}' 2>/dev/null)
     if [ "$agent" = codex ]; then
       out=$(printf '%s' "$text" | python3 "$BIN/fleet-codex-session.py" send --pane "$tgt" --socket "$SOCK" 2>&1); rc=$?
+      # 4 = held (T540): the window is not on the thread it names (a /clear not
+      # followed yet) — queued for its identity, replayed, never «sent».
+      [ "$rc" -eq 4 ] && queue_here "${out#fleet-codex-session: }"
       [ "$rc" -eq 0 ] || die 1 "${out:-Codex queue to $tgt failed (exit $rc)}"
       echo "sent → codex ${out##* } ($label)"; exit 0
     fi ;;
@@ -474,20 +491,6 @@ case "$tgt" in
     esac ;;
   *) pid="$tgt" ;;
 esac
-# queue_here <why> — a WINDOW that cannot take it now (issue #1647): this fleet's
-# peer queue holds it for the window's lifelong @fleet_id, delivered on the cleanup
-# tick or its wake. A pid / session-uuid target has no identity to wait on: refused.
-queue_here() {
-  local s fid
-  case "$tgt" in @*|%*) ;; *) die 1 "$1" ;; esac
-  s=$("${tm[@]}" display-message -p -t "$tgt" "$FLEET_SESSION_FMT" 2>/dev/null)
-  [ -n "$s" ] || die 1 "$1"
-  fid=$(fleet_window_fid "$s" "$tgt" "$SOCK" 2>/dev/null) || die 1 "$1"
-  printf '%s' "$text" | bash "$BIN/fleet-peer-queue.sh" put -L "$s" --kind message \
-    --rid "local:peer#$(date +%s).$$" --to-fid "$fid" --to "${label:-$tgt}" >/dev/null || die 1 "$1"
-  echo "queued → $tgt${label:+ ($label)} — $1; delivered when it can take it"
-  exit 3
-}
 [ -n "$pid" ] || queue_here "no live Claude session for '$tgt'"
 kill -0 "$pid" 2>/dev/null || queue_here "pid $pid is not running"
 [ -n "$label" ] || label=$(fleet_cc_session_field "$pid" cwd 2>/dev/null || :)
