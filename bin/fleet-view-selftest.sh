@@ -301,11 +301,13 @@ ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 [ -n "$ok" ] || st_fail "G: ⌃] p opened no list at 40 columns: $(cat "$W/phone.txt")"
 python3 - "$W/phone.txt" <<'PY' || st_fail "G: the list is not the whole screen at 40 columns: $(cat "$W/phone.txt")"
-import sys
+import sys, unicodedata
 lines = open(sys.argv[1], encoding="utf-8").read().split("\n")
-# the popup's border at column 0 on the first row and the 40th column on a body row
+# the popup's border at column 0 on the first row and the 40th column (in display
+# cells — a row of CJK is fewer characters) on a body row
+cells = lambda t: sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in t)
 assert lines[0][:1] in "┌╭", lines[0]
-assert any(len(l) >= 40 and l[39] in "│┃" for l in lines[1:]), lines
+assert any(l.rstrip()[-1:] in "│┃" and cells(l.rstrip()) == 40 for l in lines[1:]), lines
 PY
 [ -n "${FLEET_VIEW_EVIDENCE_PHONE:-}" ] && cp "$W/phone.txt" "$FLEET_VIEW_EVIDENCE_PHONE"
 to send-keys -t o:view Escape
