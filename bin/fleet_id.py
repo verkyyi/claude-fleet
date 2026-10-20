@@ -1552,13 +1552,14 @@ def cached(fid):
     return hub_fold(fid, ans) if ans is not None else None
 
 
-def record(fid):
+def record(fid, cached_here=None):
     """fid's one record: this machine's ledger filled from the cache (the hub wins:
     an `opened` field the ledger lacks, a longer short), else the cache's record
-    (src=hub), else None. Every reader that shows an ID reads this."""
+    (src=hub), else None. Every reader that shows an ID reads this. cached_here:
+    the caller already knows whether the cache holds fid (False skips the read)."""
     have = os.path.exists(ledger_path(fid))
     rec = fold(read(fid)) if have else None
-    hub = cached(fid)
+    hub = cached(fid) if cached_here is not False else None
     if rec is None:
         return hub
     if hub is not None:

@@ -990,7 +990,8 @@ def id_record(fid):
     if fi is None or not fi.is_fid(fid):
         return None
     stamp = []
-    for path in (fi.ledger_path(fid), fi.cache_path(fid)):
+    incache = fid in id_cache_set()
+    for path in (fi.ledger_path(fid), fi.cache_path(fid) if incache else ""):
         try:
             st = os.stat(path)
             stamp.append((st.st_mtime_ns, st.st_size))
@@ -1005,11 +1006,26 @@ def id_record(fid):
     if hit and hit[0] == stamp:
         return hit[1]
     try:
-        rec = fi.record(fid)
+        rec = fi.record(fid, cached_here=stamp[1] is not None)
     except Exception:
         return None
     _ID_CACHE[key] = (stamp, rec)
     return rec
+
+
+def id_cache_set():
+    """The IDs the ID cache holds — its directory listed once per change (its
+    mtime), so a row whose ID is not there costs no stat of a missing file."""
+    fi = fleet_id_mod()
+    d = fi.cache_dir()
+    try:
+        m = os.stat(d).st_mtime_ns
+    except OSError:
+        return frozenset()
+    hit = _ID_CACHE.get("cache_set")
+    if not hit or hit[0] != m:
+        hit = _ID_CACHE["cache_set"] = (m, frozenset(fi.cache_ids()))
+    return hit[1]
 
 
 def far_fid(target):
