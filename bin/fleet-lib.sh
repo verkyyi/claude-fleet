@@ -6568,8 +6568,8 @@ fleet_hub_lease() {
 # fleet_ccquota_cmd — the ccquota a hub call runs, as a word for `bash -c` (T604):
 # the release's own copy beside these scripts (`<current>/bin/ccquota` — the one
 # the updater pins and moves with every switch) before whatever is first on PATH.
-# A login's ~/.local/bin/ccquota is no release's and goes stale: mini2's, left at
-# an Oct 8 build, sent every placement in a shape the hub refused (409). Prints
+# A login's ~/.local/bin/ccquota is no release's and goes stale: one left at an
+# old build sent every placement in a shape the hub refused (409). Prints
 # nothing (rc 1) when neither exists.
 fleet_ccquota_cmd() {
   local own="${_FLEET_LIB_DIR:-}/ccquota"
