@@ -134,6 +134,27 @@ def hub_short(fid, s):
     return s if is_short(s) else short_for(fid, known_ids([fid]))
 
 
+def task_codes_path():
+    """The book of task codes (EPIC T644 C3): `T<n>\t<code>\t<ID>` per task this
+    login heard a code for — fleet-task-record.sh writes it off every hub answer."""
+    return os.path.join(ids_dir(), "task-codes.tsv")
+
+
+def task_code(ref):
+    """A task's written code off the book (`T649` or its code → `K5H0`), or ""."""
+    want = (ref or "").strip().lstrip("#")
+    up = want.upper()
+    try:
+        with open(task_codes_path()) as f:
+            for line in f:
+                row = line.rstrip("\n").split("\t")
+                if len(row) >= 2 and (row[0] == want or row[1] == up):
+                    return row[1]
+    except OSError:
+        pass
+    return ""
+
+
 def tag(short):
     """A short code as a message writes it: `#K3F9` (bare in a panel's column)."""
     return "#" + short if short else ""
@@ -1497,6 +1518,11 @@ def main(argv):
         have = fold(read(args[0]))["opened"].get("short")
         print(have or short_for(args[0], known_ids(live)))
         return 0
+    if cmd == "task-code" and args:
+        c = task_code(args[0])
+        if c:
+            print(c)
+        return 0 if c else 1
     if cmd == "resolve" and args:
         rc, hits = resolve(args[0], live)
         if rc == 0:

@@ -224,6 +224,28 @@ out=$(bash "$BIN/fleet-peer-send.sh" "$s6" hello 2>&1); rc=$?
 st_count; { [ "$rc" = 3 ] || [ "$rc" = 0 ]; } && printf '%s' "$out" | grep -q "#$s6" \
   || st_miss "CODE: peer-send takes a code target to its window, the receipt naming #CODE" "rc=$rc $out"
 st_count; grep -qF '|#[A-Za-z][0-9A-Za-z]{3,25}|[A-Z][0-9A-Z]{3,25}' "$BIN/fleet-mcp.py" || st_miss "CODE: the MCP send tool lets a code through"
+# a TASK's code (EPIC T644 C3) no window's ID answers to: the hub's record names it
+# (resolve → code + T<n>) and the message goes to the live window bound to it
+# (@task); a T<n> the same way (one more version); a code naming two refuses.
+cat > "$WORK/taskrec" <<'TR'
+#!/bin/bash
+[ "$1" = resolve ] || exit 1
+case "$2" in KT88|kt88|T88) printf 'KT88\nT88\n' ;; KT|kt) echo 'fleet-task-record: KT88 · a · open' >&2; exit 2 ;; *) exit 1 ;; esac
+TR
+chmod +x "$WORK/taskrec"
+read -r WT _ <<EOF
+$(newwin "$(mkfid)")
+EOF
+tf set-window-option -t "$WT" @task T88
+for ref in KT88 '#kt88' T88; do
+  out=$(FLEET_TASK_RECORD="$WORK/taskrec" bash "$BIN/fleet-peer-send.sh" -L "$L" "$ref" hello 2>&1); rc=$?
+  st_count; { [ "$rc" = 3 ] || [ "$rc" = 0 ]; } && printf '%s' "$out" | grep -q "$WT" \
+    || st_miss "TASKCODE: peer-send takes a task's code ($ref) to the window bound to it" "rc=$rc $out"
+done
+out=$(FLEET_TASK_RECORD="$WORK/taskrec" bash "$BIN/fleet-peer-send.sh" -L "$L" '#KT' hello 2>&1); rc=$?
+st_count; [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'more than one task' \
+  || st_miss "TASKCODE: a code naming two tasks refuses, never a pick" "rc=$rc $out"
+tf set-window-option -u -t "$WT" @task
 
 # ---- HOOK · never blocks, never speaks ------------------------------------------
 n0=$(ls "$FLEET_CONF_DIR/ids" | wc -l | tr -d ' ')

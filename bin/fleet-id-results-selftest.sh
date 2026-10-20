@@ -34,8 +34,8 @@
 #   WIRE  the spawners open with --parent / --from-native / --worktree; the reap,
 #         cleanup, stop and exit closers pass a why; a report writes the ID's
 #         result and a queued one routes by ID (C8: no generation / native gate)
-#   NAMES (C11) a child report's header is `#CODE · …` (its ID's short code), a
-#         task window's T<n> only `(别名 T<n>)` after it
+#   NAMES (C11, EPIC T644 C3) a child report's header is `#CODE · …` — its task's
+#         code when the book holds one, else its ID's short code; never a T<n>
 # tmux / python3 / git absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -210,15 +210,20 @@ tf set-window-option -t "$WCH" @origin_fid "$PA"
 hook "$PPA" clear ffff0002       # the parent clears its conversation
 out=$(env "$INT" TMUX_PANE="$PCH" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary 'kid done' 2>&1)
 st_count; printf '%s' "$out" | grep -q "($WPA" || st_miss "CLEAR: after the parent's /clear the report still names its window" "$out"
-# NAMES (C11): the envelope names the child by its ID's code first; a task's T<n> rides
-# only as the alias note — never the header's subject
+# NAMES (C11, EPIC T644 C3): the envelope names the child by ONE code first — its
+# task's (the book), else its ID's; a T<n> is never on the header
 chc=$(fid short "$CH")
 st_count; printf '%s' "$out" | grep -q "^\[child-report\] #$chc · " || st_miss "NAMES: the child-report header leads with #CODE" "$out"
 tf set-window-option -t "$WCH" @task T777
 out=$(env "$INT" TMUX_PANE="$PCH" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary 'kid done' 2>&1)
-st_count; printf '%s' "$out" | grep "^\[child-report\] #$chc · " | grep -q "(别名 T777)$" \
-  || st_miss "NAMES: a task window's T<n> is only the alias note" "$out"
-st_count; ! printf '%s' "$out" | grep -q "^\[child-report\] T777" || st_miss "NAMES: T<n> never heads the report" "$out"
+st_count; printf '%s' "$out" | grep "^\[child-report\] #$chc · " | grep -vq "T777" \
+  || st_miss "NAMES: a task window with no code known: its ID's code, no T<n>" "$out"
+BOOK="${FLEET_ID_DIR:-$FLEET_CONF_DIR/ids}/task-codes.tsv"; mkdir -p "${BOOK%/*}"
+printf 'T777\tK7W0\t%s\n' "$CH" > "$BOOK"
+out=$(env "$INT" TMUX_PANE="$PCH" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary 'kid done' 2>&1)
+st_count; printf '%s' "$out" | grep "^\[child-report\] #K7W0 · " | grep -vq "T777" \
+  || st_miss "NAMES: a task window is named by its task's code (the book)" "$out"
+st_count; ! printf '%s' "$out" | grep -q "^\[child-report\].*T777" || st_miss "NAMES: T<n> never on the header" "$out"
 tf set-window-option -u -t "$WCH" @task
 # a report queued before C8 (fleet_task_control.py receive) and the `task` tool's
 # answer name the session the same way: its code, the record only the alias
@@ -226,8 +231,9 @@ r=$(python3 - "$BIN" "$CH" "$chc" <<'PY' 2>&1
 import importlib.util, sys
 sys.path.insert(0, sys.argv[1])
 import fleet_task_control as tc
-assert tc.child_label({"task": "T777", "worker_id": "u/" + sys.argv[2]}) == "#%s (别名 T777)" % sys.argv[3], tc.child_label({"task": "T777", "worker_id": "u/" + sys.argv[2]})
-assert tc.child_label({"task": "T777", "worker_id": "u/issue-4"}) == "T777"
+assert tc.child_label({"task": "T777", "worker_id": "u/" + sys.argv[2]}) == "#K7W0", tc.child_label({"task": "T777", "worker_id": "u/" + sys.argv[2]})
+assert tc.child_label({"task": "T776", "worker_id": "u/" + sys.argv[2]}) == "#" + sys.argv[3]
+assert tc.child_label({"task": "T776", "worker_id": "u/issue-4"}) == "T776"
 spec = importlib.util.spec_from_file_location("fleet_mcp", sys.argv[1] + "/fleet-mcp.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 m.run = lambda argv, **kw: type("R", (), {"returncode": 0, "stdout": "T777\nwindow @5\n", "stderr": ""})()
@@ -235,10 +241,18 @@ m.hub_env = lambda *a, **k: None
 m.tmux = lambda *a: "T776\tx\nT777\t" + sys.argv[2]
 out = m.tool_task({"title": "t", "repo": "o/r", "spawn": True})
 assert out["id"] == sys.argv[3] and out["alias"] == "T777" and out["session_id"] == sys.argv[2], out
+# a hub with task codes (EPIC T644 C3): `id` is the task's code, T<n> only the alias
+m.run = lambda argv, **kw: type("R", (), {"returncode": 0, "stdout": "K7W0\nT777\nwindow @5\n", "stderr": ""})()
+out = m.tool_task({"title": "t", "repo": "o/r", "spawn": True})
+assert out["id"] == "K7W0" and out["short"] == "K7W0" and out["alias"] == "T777" and out["task"] == "T777" \
+    and out["session_id"] == sys.argv[2], out
+out = m.tool_task({"title": "t", "repo": "o/r"})
+assert out["id"] == "K7W0" and "session_id" not in out, out
 print("ok")
 PY
 )
 st_count; [ "$r" = ok ] || st_miss "NAMES: receive's header and the task tool's answer lead with the code" "$r"
+rm -f "$BOOK"
 # the parent closes; a successor continues it — the report goes there
 lib fleet_win_retire "$WPA" "$L" exited; tf kill-window -t "$WPA"
 SU=$(mkfid)

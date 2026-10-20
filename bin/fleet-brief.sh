@@ -78,8 +78,24 @@ else
   printf 'merge=%s  (how you land: pr_merge on a READY verdict — %s --%s --delete-branch)\n' \
     "$(fleet_merge_method)" "$_gh_merge" "$(fleet_merge_method)"
 fi
+# The task is named by its code (EPIC T644 C3: the record's `short`), else its
+# T<n> (an older hub); its parent the same way. FLEET_TASK_RECORD is the selftest's
+# seam (a stub answering `get` / `code`).
+TREC="${FLEET_TASK_RECORD:-$BIN/fleet-task-record.sh}"
+tname=$at_task trec='' trc=1 pname=''
 if [ -n "$at_task" ]; then
-  printf 'task=%s  (the hub task record is the ticket)\n' "$at_task"
+  trec=$(bash "$TREC" get "$at_task" 2>/dev/null) && [ -n "$trec" ] && trc=0
+  tval() { printf '%s' "$trec" | python3 -c 'import json,sys
+try: print(((json.load(sys.stdin) or {}).get("task") or {}).get(sys.argv[1]) or "")
+except Exception: pass' "$1" 2>/dev/null; }
+  if [ "$trc" = 0 ]; then
+    _c=$(tval short); [ -n "$_c" ] && tname=$_c
+    pname=$(tval parent_task)
+    if [ -n "$pname" ]; then _c=$(bash "$TREC" code "$pname" 2>/dev/null | head -n 1); [ -n "$_c" ] && pname=$_c; fi
+  fi
+fi
+if [ -n "$at_task" ]; then
+  printf 'task=%s  (the hub task record is the ticket)\n' "$tname"
 else
   printf 'issue=%s  (a GitHub issue, read as words only: the fleet never claims, comments on or closes it — the PR'"'"'s `Closes #%s` does)\n' "$at_issue" "$at_issue"
 fi
@@ -93,11 +109,10 @@ fi
 
 rc=0
 if [ -n "$at_task" ]; then
-  printf '\n===== task %s · %s =====\n' "$at_task" "$repo"
-  # FLEET_TASK_RECORD is the selftest's seam (a stub answering `get`).
-  if trec=$(bash "${FLEET_TASK_RECORD:-$BIN/fleet-task-record.sh}" get "$at_task" 2>/dev/null) && [ -n "$trec" ]; then
-    printf '%s' "$trec" | python3 -c '
-import json, sys
+  printf '\n===== task %s · %s =====\n' "$tname" "$repo"
+  if [ "$trc" = 0 ]; then
+    printf '%s' "$trec" | BRIEF_PARENT="$pname" python3 -c '
+import json, os, sys
 t = (json.load(sys.stdin) or {}).get("task") or {}
 try:
     words = (json.loads(t.get("request_payload") or "{}") or {}).get("body") or ""
@@ -106,17 +121,17 @@ except ValueError:
 print("title: %s" % (t.get("title") or "-"))
 print("state: %s   outcome: %s   repo: %s" % (t.get("state") or "-", t.get("outcome") or "open", t.get("repo") or "-"))
 if t.get("parent_task") or t.get("parent_session"):
-    print("dispatched by: %s%s" % (t.get("parent_task") or "", (" · " + t["parent_session"]) if t.get("parent_session") else ""))
+    print("dispatched by: %s%s" % (os.environ.get("BRIEF_PARENT") or t.get("parent_task") or "", (" · " + t["parent_session"]) if t.get("parent_session") else ""))
 print("")
 print("----- the request -----")
 print(words.strip() or "(only the title — the first message is the person\x27s words)")
 ' 2>/dev/null || printf '(the record could not be rendered)\n'
   else
-    printf 'the hub did not answer for %s — the record could not be read (the rest is still valid)\n' "$at_task"
+    printf 'the hub did not answer for %s — the record could not be read (the rest is still valid)\n' "$tname"
     rc=5
   fi
-  names="the body names $at_task, no \`Closes #N\`"
-  closes="it closes $at_task and tells the dispatcher"
+  names="the body names $tname, no \`Closes #N\`"
+  closes="it closes $tname and tells the dispatcher"
 else
   names="the body carries \`Closes #$at_issue\`"
   closes="it tells whoever spawned you"
@@ -132,7 +147,8 @@ printf '%s\n' \
   "   Blocked: ask, then report (state: blocked). Then stop."
 
 printf '\n===== implementation directive · this fleet (issue #234) =====\n'
-printf '%s\n' "$(fleet_worker_prompt_body "${at_task:-$at_issue}" "$repo")"
+_pnum=$at_issue; [ -n "$at_task" ] && _pnum=$tname
+printf '%s\n' "$(fleet_worker_prompt_body "$_pnum" "$repo")"
 if [ -n "${FLEET_LANG_RULE_SEED:-}" ]; then
   printf '\n===== language · keep the session in ONE language (issue #620) =====\n'
   printf '%s\n' "$FLEET_LANG_RULE_SEED" \

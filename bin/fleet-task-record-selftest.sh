@@ -16,6 +16,11 @@
 #      a no-repo task opens a no-repo session with --task; no hub ⇒ exit 3, nothing
 #      opened, repo or not (issue #4898); --draft is an unknown option.
 #   E  epic-member is gone (issue #4957): an EPIC member is a child task, dispatched.
+#   F  one code (EPIC T644 C3): dispatch / set / attach print the task's code first;
+#      resolve → code + T<n> (by code, #code, T<n>; the book answers a T<n> it holds
+#      with no hub call), a code naming several → exit 2, candidates on stderr;
+#      code off the book even with no hub; children / mutate / set take a code; an
+#      older hub (no `short`) → T<n> alone, byte for byte.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -42,7 +47,10 @@ done
 if [[ "$body" == *'"authority_version": 1'* ]]; then
   python3 - "$body" <<'JSON'
 import json,sys
-x=json.loads(sys.argv[1]); print(json.dumps(dict(x,id="T5",generation=1,attempt_id="task:T5:g1")))
+import os
+x=json.loads(sys.argv[1]); x.update(id="T5",generation=1,attempt_id="task:T5:g1")
+if os.environ.get("STUB_SHORT"): x.update(short=os.environ["STUB_SHORT"], fid="3fa85f64-5717-4562-b3fc-2c963f66afa6")
+print(json.dumps(x))
 JSON
   printf '200'
   exit 0
@@ -201,6 +209,44 @@ printf 'x\n' | bash "$R" dispatch --title r --body-file - >/dev/null 2>&1; rc=$?
 
 # --- E: epic-member is gone (issue #4957): an EPIC's members are child tasks ------
 bash "$R" epic-member 3178 o/r 3330 x >/dev/null 2>&1; [ "$?" = 2 ] && ok "E epic-member is usage now" || st_miss "E epic-member still answers"
+
+# --- F: one code (EPIC T644 C3) ----------------------------------------------------
+BOOK="$FLEET_CONF_DIR/ids/task-codes.tsv"; rm -f "$BOOK"
+: > "$CURL_LOG"; rm -f "$WORK/calls"
+out=$(printf 'x\n' | STUB_SHORT=FF1W bash "$R" dispatch --title '修风扇' --body-file - --repo o/r --spawn 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$out" = "$(printf 'FF1W\nT5')" ] && grep -q -- '--task T5 ' "$WORK/calls" \
+  && ok "F dispatch: the task's code first, then T<n>; the session still binds T<n>" || st_miss "F dispatch: rc=$rc [$out]"
+grep -qx "$(printf 'T5\tFF1W\t3fa85f64-5717-4562-b3fc-2c963f66afa6')" "$BOOK" 2>/dev/null \
+  && ok "F …and the book holds T5 ↔ FF1W" || st_miss "F book: $(cat "$BOOK" 2>&1)"
+: > "$CURL_LOG"
+out=$(bash "$R" resolve T5 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$out" = "$(printf 'FF1W\nT5')" ] && [ ! -s "$CURL_LOG" ] \
+  && ok "F resolve T5 off the book: code + T<n>, no hub call" || st_miss "F resolve T5: rc=$rc [$out] $(cat "$CURL_LOG")"
+out=$(bash "$R" code T5); [ "$out" = FF1W ] && out=$(bash "$R" code '#ff1w') && [ "$out" = FF1W ] \
+  && ok "F code T5 / #ff1w → FF1W" || st_miss "F code: [$out]"
+echo '{"task":{"id":"T9","short":"K9QX","fid":"3fa85f64-5717-4562-b3fc-2c963f66afa7"}}' > "$ANS"; : > "$CURL_LOG"
+out=$(bash "$R" resolve '#k9'); rc=$?
+[ "$rc" = 0 ] && [ "$out" = "$(printf 'K9QX\nT9')" ] && grep -q -- '-X GET .*/v1/node/tasks/k9$' "$CURL_LOG" \
+  && ok "F resolve #k9 asks the hub, answers code + T<n>" || st_miss "F resolve #k9: rc=$rc [$out] $(cat "$CURL_LOG")"
+echo '{"code":"AMBIGUOUS","candidates":[{"short":"K9QX","title":"a","state":"open"},{"short":"K9R2","title":"b","state":"parked"}],"error":"x"}' > "$ANS"; echo 409 > "$CODE"
+out=$(bash "$R" resolve K9 2>"$WORK/err"); rc=$?
+[ "$rc" = 2 ] && [ -z "$out" ] && grep -q 'K9QX · a · open' "$WORK/err" && grep -q 'K9R2 · b · parked' "$WORK/err" \
+  && ok "F resolve: a code naming two → exit 2, both candidates on stderr, no pick" || st_miss "F ambiguous resolve: rc=$rc [$out] $(cat "$WORK/err")"
+bash "$R" get K9 >/dev/null 2>&1; [ "$?" = 2 ] && ok "F get: ambiguous exits 2 too" || st_miss "F get ambiguous rc"
+echo 404 > "$CODE"; echo '{"error":"no task"}' > "$ANS"
+bash "$R" resolve KZZZ >/dev/null 2>&1; [ "$?" = 1 ] && ok "F resolve: none → exit 1" || st_miss "F resolve none rc"
+rm -f "$CODE"
+echo '{"id":"T9","short":"K9QX"}' > "$ANS"; : > "$CURL_LOG"
+out=$(bash "$R" set k9qx --note n) && [ "$out" = K9QX ] && grep -q 'tasks/k9qx$' "$CURL_LOG" \
+  && ok "F set by code: POST /tasks/<code>, prints the code" || st_miss "F set by code: [$out] $(cat "$CURL_LOG")"
+echo '{"children":[]}' > "$ANS"; : > "$CURL_LOG"
+bash "$R" children '#K9QX' >/dev/null && grep -q 'tasks/K9QX/children$' "$CURL_LOG" \
+  && ok "F children by code" || st_miss "F children by code: $(cat "$CURL_LOG")"
+echo '{"id":"T5"}' > "$ANS"
+out=$(bash "$R" set T5 --note n) && [ "$out" = T5 ] && ok "F an older hub (no short): set prints T<n>" || st_miss "F old set: [$out]"
+rm -f "$ANS"
+out=$(env -u FLEET_HUB_CURL FLEET_CONF_DIR="$FLEET_CONF_DIR" HOME="$WORK" bash "$R" code T5 2>/dev/null); rc=$?
+[ "$rc" = 0 ] && [ "$out" = FF1W ] && ok "F code off the book needs no hub" || st_miss "F book without hub: rc=$rc [$out]"
 
 printf '%d checks, %d failed\n' "$CHECKS" "$FAIL"
 st_done

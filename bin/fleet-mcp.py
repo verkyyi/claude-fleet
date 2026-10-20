@@ -616,6 +616,17 @@ def child_keys():
     return keys
 
 
+def task_code(tref):
+    """A task as a person reads it (EPIC T644 C3): its code — the login's book, else
+    the hub (fleet-task-record.sh code) — else its T<n> (an older hub)."""
+    try:
+        r = run([str(BIN / "fleet-task-record.sh"), "code", tref], check=False, timeout=STATUS_TIMEOUT_S)
+        c = (r.stdout.splitlines() or [""])[0].strip()
+        return c if r.returncode == 0 and c else tref
+    except Exception:
+        return tref
+
+
 def id_code(fid):
     """A window's ID as a person reads it (EPIC T497 C11): its short code `K3F9`, or
     "" (no ID). bin/fleet_id.py is the one encoder."""
@@ -840,6 +851,9 @@ def tool_status(_args):
                       "window #{window_name} · issue=#{@issue} repo=#{@repo} state=#{@claude_state} "
                       "origin=#{@origin}"],
                      check=False, timeout=STATUS_TIMEOUT_S).stdout.strip() or None
+    task = pane_task()
+    if window and task:
+        window += " task=" + task_code(task)   # the task's code (EPIC T644 C3), else T<n>
     kids = script([str(BIN / "fleet-children.sh")], STATUS_TIMEOUT_S)
     repos, listed = hosted_repos()
     claims = CALLER["claims"]
@@ -875,7 +889,7 @@ def tool_set_reap(args):
 
 def tool_await(args):
     if sum(k in args for k in ("issue", "task", "id")) != 1:
-        raise Refused("await takes issue, id (a session's code K3F9) or task (T<n>, issue #3330) — exactly one")
+        raise Refused("await takes issue, id (a session's or a task's code K3F9) or task (a task's code, ID or T<n>) — exactly one")
     if ("task" in args or "id" in args) and "repo" in args:
         raise Refused("a task record or an ID names its own repo — drop repo")
     t = args.get("timeout", AWAIT_DEFAULT_S)
@@ -884,12 +898,36 @@ def tool_await(args):
         code = str(args["id"]).lstrip("#")
         if not (FID_RE.match(code) or re.match(r"^(?:[Tt]-)?[A-Za-z0-9]{4,26}$", code)):
             raise Refused("id is a session's short code (K3F9) or its full ID")
+        # One code for both (EPIC T644 C3): a code no window's ID here answers to is
+        # a task's — the task tool's `id` — and is waited on as one.
+        if not local_id(code):
+            return script([str(BIN / "fleet-await.sh"), "--task", code, "--timeout", str(t)], t + AWAIT_SLACK_S,
+                          env=hub_env(ASSERT_TTL_S))
         return script([str(BIN / "fleet-await.sh"), code, "--timeout", str(t)], t + AWAIT_SLACK_S,
                       env=hub_env(ASSERT_TTL_S))
-    repo = check_repo(args) if "task" in args else repo_or_caller(args)
-    target = args["task"] if "task" in args else str(args["issue"])
-    return script([str(BIN / "fleet-await.sh"), target, "--timeout", str(t)] + repo,
+    if "task" in args:
+        # a task's code, its ID or T<n> (one more version) — fleet-task-record.sh resolve reads it
+        return script([str(BIN / "fleet-await.sh"), "--task", str(args["task"]).lstrip("#"), "--timeout", str(t)]
+                      + check_repo(args), t + AWAIT_SLACK_S, env=hub_env(ASSERT_TTL_S))
+    return script([str(BIN / "fleet-await.sh"), str(args["issue"]), "--timeout", str(t)] + repo_or_caller(args),
                   t + AWAIT_SLACK_S, env=hub_env(ASSERT_TTL_S))
+
+
+def local_id(code):
+    """Does a window's ID on this login answer to `code`? (fleet_id.resolve: one or
+    several — an ambiguity is the ID road's to refuse). A full ID or an old `T-` code
+    always is the ID road."""
+    if FID_RE.match(code) or code[:2] in ("T-", "t-"):
+        return True
+    try:
+        sys.path.insert(0, str(BIN))
+        import fleet_id
+        live = [x for x in os.environ.get("FLEET_ID_LIVE", "").split() if fleet_id.is_fid(x)]
+        return fleet_id.resolve(code, live)[0] != 1
+    except Exception:
+        return True
+    finally:
+        sys.path.pop(0)
 
 
 def tool_task(args):
@@ -910,14 +948,23 @@ def tool_task(args):
     r = run(argv, input_text=args.get("body", ""), check=False, timeout=FILE_TIMEOUT_S + SPAWN_TIMEOUT_S,
             env=hub_env(ASSERT_TTL_S))
     out = {"command": "fleet-task-record.sh", "exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
-    # The session it opened is named by its ID (EPIC T497 C11): `id` = its short code,
-    # the record's T<n> only the `alias` (one version) — await / send take the code.
-    task = (r.stdout.splitlines() or [""])[0].strip()
-    if r.returncode == 0 and args.get("spawn") and re.match(r"^T[1-9][0-9]{0,9}$", task):
-        fid = task_window_fid(task)
-        code = id_code(fid)
-        if code:
-            out.update(id=code, session_id=fid, alias=task)
+    # ONE code names it (EPIC T644 C3): stdout is the task's code, then T<n> (an older
+    # hub: T<n> alone). `id` / `short` = the task's code — await / send / get take it;
+    # `task` / `alias` = T<n> (compat-1v: 下一批删). An older hub: `id` = the session's
+    # ID code, as before (EPIC T497 C11).
+    lines = [x.strip() for x in r.stdout.splitlines()[:2]]
+    task = next((x for x in lines if re.match(r"^T[1-9][0-9]{0,9}$", x)), "")
+    short = lines[0] if lines and task and lines[0] != task and re.match(r"^[A-Z][0-9A-Z]{1,25}$", lines[0]) else ""
+    if r.returncode == 0 and task:
+        if short:
+            out.update(id=short, short=short, task=task, alias=task)
+        if args.get("spawn"):
+            fid = task_window_fid(task)
+            code = id_code(fid)
+            if code:
+                out.update(session_id=fid, alias=task)
+                if not short:
+                    out.update(id=code)
     return out
 
 
@@ -1225,8 +1272,12 @@ REPO = {"type": "string", "pattern": r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
         "description": "owner/name of a repo THIS fleet hosts (the repos tool lists them). "
                        "Omit for your own window's repo, else the fleet's only one."}
 NO_ARGS = {"type": "object", "properties": {}, "additionalProperties": False}
-# A hub task record (issue #3325): T<n>.
-TASK_REF = {"type": "string", "pattern": "^T[1-9][0-9]{0,9}$", "description": "A hub task record, T<n>."}
+# A hub task record (issue #3325) by its code (K5H0, #k5 — EPIC T644 C3), its full ID,
+# or the old T<n> (read one more version; compat-1v: 下一批删).
+TASK_REF = {"type": "string",
+            "pattern": r"^(?:T[1-9][0-9]{0,9}|#?[A-Za-z][0-9A-Za-z]{1,25}"
+                       r"|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$",
+            "description": "A task by its code (K5H0 — the task tool's `id`), its full ID, or the old T<n>."}
 
 TOOLS = {
     "status": (tool_status, {
@@ -1281,27 +1332,27 @@ TOOLS = {
         "inputSchema": {"type": "object", "properties": {
             "issue": ISSUE, "repo": REPO,
             "id": {"type": "string", "pattern": "^#?[A-Za-z0-9-]{4,40}$",
-                   "description": "Wait on a session by its ID instead (EPIC T497 C11): its short code "
-                                  "K3F9 (the task tool's `id`) or full ID — until it has a result or closes "
-                                  "(MERGED / SUCCEEDED / FAILED / EXITED)."},
-            "task": dict(TASK_REF, description="Wait on a hub task record instead (issue #3330): until it is "
-                                               "closed — SUCCEEDED / FAILED / CANCELLED (a dispatched task, issue "
-                                               "#4897); an old record with no issue answers NO-WORKER naming its session; "
-                                               "one whose agent never came up or went down answers NOT-STARTED / "
-                                               "DROPPED at once (exit 1) with a hint that restarts it on the same record."),
+                   "description": "Wait on it by its code instead: a task's code K3F9 (the task tool's `id`) "
+                                  "until the task is closed, or a session's code / full ID until it has a "
+                                  "result or closes (MERGED / SUCCEEDED / FAILED / EXITED)."},
+            "task": dict(TASK_REF, description="Wait on a task by its code (K3F9), its ID or the old T<n>: "
+                                               "until it is closed — SUCCEEDED / FAILED / CANCELLED (a dispatched "
+                                               "task, issue #4897); the verdict names it by its code. One whose "
+                                               "agent never came up or went down answers NOT-STARTED / DROPPED at "
+                                               "once (exit 1) with a hint that restarts it on the same record."),
             "timeout": {"type": "integer", "minimum": 1, "maximum": AWAIT_MAX_S,
                         "description": "Seconds to wait before answering TIMEOUT (default %d, at most %d)."
                                        % (AWAIT_DEFAULT_S, AWAIT_MAX_S)}},
             "additionalProperties": False}}),
     "task": (tool_task, {
         "description": "派 — dispatch a piece of work RECORD FIRST (issue #3330, bin/fleet-task-record.sh "
-                       "dispatch): the hub writes task record T<n> (first stdout line); with repo — a "
+                       "dispatch): the hub writes the task record and the answer names it by ONE code, `id` "
+                       "(K3F9 — the first stdout line; await / send / get take it); with repo — a "
                        "development task — the record is its ticket, no issue (issue #4897): + spawn, its "
-                       "session opens in a worktree of that repo bound to T<n>, reads the record, opens its "
+                       "session opens in a worktree of that repo bound to the task, reads the record, opens its "
                        "PR, merges it on a green gate and closes the record with its report; without repo + "
                        "spawn a no-repo session is opened with the words. No hub here: exit 3, nothing made "
-                       "(issue #4898). + spawn, the answer names its session by ID: `id` (short code "
-                       "K3F9 — await / send take it), the record's T<n> only its `alias`.",
+                       "(issue #4898). The old T<n> rides only as `alias` (one more version).",
         "inputSchema": {"type": "object", "properties": {
             "title": {"type": "string", "description": "The task in one line (the person's words)."},
             "body": {"type": "string", "description": "The rest of the words (the issue body / the session's "

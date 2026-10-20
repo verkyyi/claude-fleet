@@ -514,12 +514,14 @@ step 2 '开单: the task record, for a repo with no GitHub'
 T=$(printf '在 NOTES 里加一行 hello。\n\n上线证据：`cat NOTES` 的输出\n' \
       | bash "$BIN/fleet-task-record.sh" dispatch --title '在 NOTES 里加一行 hello' --body-file - --repo "$R" 2>"$WORK/err") \
   || die 'the hub refused the task record' "$T $(cat "$WORK/err")"
-T=$(printf '%s\n' "$T" | head -1)
-case "$T" in T[1-9]*) ;; *) die 'the dispatch named no record' "$T $(cat "$WORK/err")" ;; esac
+# the task's code first, then T<n> (EPIC T644 C3); the window still binds T<n>
+OUT=$T; CODE=$(printf '%s\n' "$OUT" | head -1); T=$(printf '%s\n' "$OUT" | grep -E '^T[1-9][0-9]*$' | head -1)
+case "$T" in T[1-9]*) ;; *) die 'the dispatch named no record' "$OUT $(cat "$WORK/err")" ;; esac
+[ "$CODE" != "$T" ] || die 'the dispatch did not lead with the task code (a task_ids hub)' "$OUT"
 trec() { browse get "$HUB/v1/fleet/tasks" | tail -n +2 | jq -c --arg t "$T" '.tasks[] | select(.id == $t)' 2>/dev/null; }
 [ "$(trec | jq -r .repo 2>/dev/null)" = "$R" ] || die "the person's own browser does not list $T for $R (任务)" "$(browse get "$HUB/v1/fleet/tasks")"
 [ "$(ghcalls)" = 0 ] || die 'recording asked gh' "$(cat "$GHLOG")"
-ok "task $T for $R on the hub, in the WeChat person's own list · no issue filed · gh 0"
+ok "task $CODE ($T) for $R on the hub, in the WeChat person's own list · no issue filed · gh 0"
 passed
 
 # =============================================================================
@@ -531,7 +533,7 @@ step 3 '派活: a session opens on the record'
 waitfor 60 hosted || die "the hub never heard this machine host $R" "$(api "$HUB/v1/fleet/fleet_list" 2>&1 | head -c 600)"
 T2=$(printf '在 NOTES 里加一行 hello。\n\n上线证据：`cat NOTES` 的输出\n' \
       | FLEET_SESSION="$S" bash "$BIN/fleet-task-record.sh" dispatch --title '在 NOTES 里加一行 hello' --body-file - --repo "$R" --spawn \
-        2>"$WORK/err" | head -1)
+        2>"$WORK/err" | grep -E '^T[1-9][0-9]*$' | head -1)
 [ "$T2" = "$T" ] || die "the same words named another record ($T2, not $T)" "$(cat "$WORK/err")"
 W=$(tmux list-windows -t "$S" -F '#{window_id} #{@repo} #{@task}' | awk -v r="$R" -v t="$T" '$2==r && $3==t {print $1; exit}')
 [ -n "$W" ] || die "no window bound to $T" "$(tmux list-windows -t "$S" -F '#{window_id} #{window_name} #{@repo} #{@task}'; cat "$WORK/err")"
