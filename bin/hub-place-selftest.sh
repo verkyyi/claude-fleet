@@ -357,6 +357,11 @@ lease_has release                                && fail "REMOTE the lease is th
 head -n1 "$LEASE_LOG" | grep -q '^acquire' || fail "REMOTE the lease is taken BEFORE placing"
 ok "REMOTE mac-b busy → sent to mac-a with its reason; no window, no claim, lease kept"
 
+# an explicit --as of a file the release ships is still the hub's to place (T672)
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 --as fleet-worker
+[ "$(rc)" = 0 ] && place_has '--node auto ' && place_has '--as fleet-worker' \
+                                                 || fail "REMOTE --as fleet-worker still asks the hub (rc=$(rc))"
+
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 --origin issue-77
 place_has "--origin-wid $UUID/issue-77"          || fail "PARENT the parent's worker_id rides the placement"
 ok "PARENT a worker's child carries --origin-wid <fleet UUID>/issue-77"
@@ -867,6 +872,11 @@ PLACE_ANSWER="$REMOTE_LINE" INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_raw --pro
 # the shipped fleet-worker travels; a file only here does not (T672, T604)
 PLACE_ANSWER="$REMOTE_LINE" run_raw --node mac-a --as fleet-worker
 [ "$(rc)" = 0 ] && place_has '--as fleet-worker' || fail "SCRATCH-AS --as fleet-worker opens on another machine (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+# …and with no --node it is still the hub's to place — dispatch --spawn's road
+# (T672: an --as used to pin every spawn here)
+PLACE_ANSWER="$REMOTE_LINE" run_raw --as fleet-worker
+[ "$(rc)" = 0 ] && place_has '--node auto ' && place_has '--as fleet-worker' \
+                                                 || fail "SCRATCH-AS --as fleet-worker with no --node asks the hub (rc=$(rc))" "$(cat "$PLACE_LOG")"
 PLACE_ANSWER="$REMOTE_LINE" run_raw --node mac-a --no-repo
 [ "$(rc)" = 1 ] && err_has 'a no-repo scratch opens on this machine only' || fail "SCRATCH-NOREPO --no-repo + --node mac-a is refused (rc=$(rc))" "$(cat "$WORK/spawn.err")"
 [ -s "$PLACE_LOG" ]                              && fail "SCRATCH-NOREPO must not ask the hub"

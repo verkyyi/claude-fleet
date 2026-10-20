@@ -166,7 +166,10 @@ RESUME_SID=$(printf '%s' "$RESUME_SID" | LC_ALL=C tr -cd '0-9a-f-')
 case "$AS_ARG" in
   '') ;;
   *[!A-Za-z0-9_.:-]*|[!A-Za-z0-9]*) printf 'dash-issue-session: not an agent name: %s\n' "$AS_ARG" >&2; exit 1 ;;
-  *) [ -z "$NODE_ARG" ] && NODE_ARG=local ;;   # the agent file is on this machine
+  # the agent file is on this machine — unless the release ships it, then every
+  # machine has it and the hub may place it (T672, fleet_agent_file_travels)
+  *) [ -z "$NODE_ARG" ] && [ ! -f "$(cd "$(dirname "$0")" && pwd)/../conf/agent-defaults/claude/agents/$AS_ARG.md" ] \
+       && NODE_ARG=local ;;
 esac
 [ "$_want" != agent ] || { printf 'dash-issue-session: --agent needs a value\n' >&2; exit 2; }
 EXPLICIT_AGENT=$AGENT
