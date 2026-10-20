@@ -6497,7 +6497,7 @@ fleet_hub_lease() {
   case "$num" in ''|*[!0-9]*) return 1 ;; esac
   cmd="${FLEET_HUB_LEASE_CMD:-}"
   if [ -z "$cmd" ]; then
-    if command -v ccquota >/dev/null 2>&1; then cmd='ccquota lease'
+    if cmd=$(fleet_ccquota_cmd); then cmd="$cmd lease"
     else printf 'fleet: hub lease unavailable (no FLEET_HUB_LEASE_CMD, no ccquota on PATH) — no lease guards #%s\n' "$num" >&2; return 1; fi
     # ccquota acts as the agent: without its token it exits 1 「no hub configured」,
     # which read as 「hub unreachable」 until issue #1491. Say what is actually missing.
@@ -6565,13 +6565,28 @@ fleet_hub_lease() {
 # `<cmd> --node <node> [--origin-wid <wid>] [--agent <a>] [--account <c>] [--reap <p>] <repo> <issue> <worker_id>`
 # — for a scratch `[--name <n>] <repo> scratch <fleet UUID>` —
 # with the node token from node.env in ITS environment only (`_fleet_hub_env`).
+# fleet_ccquota_cmd — the ccquota a hub call runs, as a word for `bash -c` (T604):
+# the release's own copy beside these scripts (`<current>/bin/ccquota` — the one
+# the updater pins and moves with every switch) before whatever is first on PATH.
+# A login's ~/.local/bin/ccquota is no release's and goes stale: mini2's, left at
+# an Oct 8 build, sent every placement in a shape the hub refused (409). Prints
+# nothing (rc 1) when neither exists.
+fleet_ccquota_cmd() {
+  local own="${_FLEET_LIB_DIR:-}/ccquota"
+  if [ -n "${_FLEET_LIB_DIR:-}" ] && [ -x "$own" ] && [ ! -d "$own" ]; then
+    case "$own" in *"'"*) ;; *) printf "'%s'" "$own"; return 0 ;; esac
+  fi
+  command -v ccquota >/dev/null 2>&1 || return 1
+  printf 'ccquota'
+}
+
 # fleet_hub_place_askable <sess> — could fleet_hub_place ask the hub at all here
 # (T604)? 0 when a place command would run: FLEET_HUB_PLACE_CMD, else `ccquota` on
 # PATH with the node's credentials and this fleet's UUID. 1 = it would return 1
 # before sending anything — certain nothing was asked for.
 fleet_hub_place_askable() {
   [ -n "${FLEET_HUB_PLACE_CMD:-}" ] && return 0
-  command -v ccquota >/dev/null 2>&1 || return 1
+  fleet_ccquota_cmd >/dev/null || return 1
   _fleet_hub_creds_missing >/dev/null && return 1
   [ -n "$(fleet_uuid "${1:-}" 2>/dev/null)" ]
 }
@@ -6582,7 +6597,7 @@ fleet_hub_place() {
   case "$num" in scratch) what='a scratch session' ;; ''|*[!0-9]*) return 1 ;; *) what="#$num" ;; esac
   cmd="${FLEET_HUB_PLACE_CMD:-}"
   if [ -z "$cmd" ]; then
-    if command -v ccquota >/dev/null 2>&1; then cmd='ccquota place'
+    if cmd=$(fleet_ccquota_cmd); then cmd="$cmd place"
     else printf 'fleet: hub placement unavailable (no FLEET_HUB_PLACE_CMD, no ccquota on PATH) — opening %s here\n' "$what" >&2; return 1; fi
     if why=$(_fleet_hub_creds_missing); then
       printf 'fleet: %s — opening %s here\n' "$why" "$what" >&2; return 1
@@ -6641,7 +6656,7 @@ fleet_hub_move() {
   [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 10
   cmd="${FLEET_HUB_MOVE_CMD:-}"
   if [ -z "$cmd" ]; then
-    if command -v ccquota >/dev/null 2>&1; then cmd='ccquota move'
+    if cmd=$(fleet_ccquota_cmd); then cmd="$cmd move"
     else printf 'fleet: hub move unavailable (no FLEET_HUB_MOVE_CMD, no ccquota on PATH)\n' >&2; return 1; fi
     if why=$(_fleet_hub_creds_missing); then
       printf 'fleet: %s — the move cannot be asked for\n' "$why" >&2; return 1

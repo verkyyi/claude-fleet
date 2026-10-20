@@ -542,7 +542,13 @@ def validate_write(action, params):
             except (ValueError, TypeError, KeyError) as e:
                 raise Fault("INVALID_ARGUMENT", str(e)) from e
         elif params.get("dispatch", {}).get("task"):
-            raise Fault("INVALID_ARGUMENT", "accepted dispatch requires verified launch contract")
+            # With the hub's ID switch on (EPIC T497 C6) nothing claims a record:
+            # the hub sends a placed task start with no launch contract and the
+            # window's ID is the binding (T604: such a start was refused on every
+            # machine but the asker's). Off: the contract is still required.
+            from fleet_launch import id_switch_on
+            if not id_switch_on():
+                raise Fault("INVALID_ARGUMENT", "accepted dispatch requires verified launch contract")
         # kind (issue #1541): "issue" (the default — a worker on an issue, `issue`
         # required) or "scratch" (a raw scratch session: no issue, an optional
         # name — dash-raw-session.sh opens it). Held to the hub's own rule
