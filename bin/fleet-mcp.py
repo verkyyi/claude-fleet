@@ -1023,6 +1023,14 @@ def tool_answer_dialog(args):
     return script(argv, WRITE_TIMEOUT_S + 90)
 
 
+def tool_clear(args):
+    """清 — /clear another session by its ID, the guarded road (T592, bin/fleet-clear-send.sh)."""
+    argv = [str(BIN / "fleet-clear-send.sh"), args["id"]]
+    if args.get("timeout"):
+        argv += ["--timeout", str(args["timeout"])]
+    return script(argv, WRITE_TIMEOUT_S + 90)
+
+
 def tool_handoff(args):
     action = args["action"]
     if action == "arm":
@@ -1305,6 +1313,20 @@ TOOLS = {
                       "description": "Accepted for old callers and unused: nothing is decided by default any more."},
             "issue": dict(ISSUE, description="Accepted for old callers and unused (issue #4898).")},
             "required": ["question"], "additionalProperties": False}}),
+    "clear": (tool_clear, {
+        "description": "清 — run /clear in ANOTHER session, by its ID (bin/fleet-clear-send.sh, T592; the same as "
+                       "`fleet-id.sh clear`): only a session on THIS machine whose turn is over (done / idle — "
+                       "never working, a dialog open, a loop pending), never over a person typing there; through "
+                       "the mod's command inbox, else keystrokes (Claude and Codex alike); confirmed by a new "
+                       "native segment on the ID's ledger; one audit line in logs/clear-send.log. Exit 0 cleared "
+                       "· 1 no such ID / not on this machine · 2 ambiguous · 3 refused, not idle (nothing typed) "
+                       "· 4 sent, unconfirmed (never typed twice) · 5 a person is typing there.",
+        "inputSchema": {"type": "object", "properties": {
+            "id": {"type": "string", "pattern": "^[A-Za-z0-9-]{4,40}$",
+                   "description": "The session's ID: the full ID, T-<code>, or the bare code (any case)."},
+            "timeout": {"type": "integer", "minimum": 1, "maximum": 120,
+                        "description": "Seconds to wait for the new segment (default 30)."}},
+            "required": ["id"], "additionalProperties": False}}),
     "answer_dialog": (tool_answer_dialog, {
         "description": "答 — answer another session's open choice dialog (AskUserQuestion) for its person, through "
                        "the one guarded road (bin/fleet-dialog-answer.sh; issue #2958): only a window waiting on "
@@ -1441,7 +1463,7 @@ LEGACY = {
 # (a dispatch-group call it does not list is logged road=legacy) but LISTS only
 # CORE; `fleet-orch` lists and answers ORCH.
 ORCH_SERVER = "fleet-orch"
-ORCH_GROUP = ("spawn", "await", "children", "answer_dialog", "send", "task")
+ORCH_GROUP = ("spawn", "await", "children", "answer_dialog", "send", "task", "clear")
 CORE = {n: e for n, e in TOOLS.items() if n not in ORCH_GROUP}
 ORCH = {n: TOOLS[n] for n in ORCH_GROUP}
 # What `fleet` lists: CORE, unless this process took over (#1898) from a server of a

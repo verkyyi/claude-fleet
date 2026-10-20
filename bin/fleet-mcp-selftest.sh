@@ -60,7 +60,7 @@
 #      @fleet_id goes as wid:<uuid>; spawn / await with no repo take the caller's;
 #      a caller with no repo, or a one-repo fleet, hands the script no --repo
 #   Q  two groups (issue #3113, EPIC #3111 C2): `--group orch` is the server
-#      `fleet-orch` listing exactly spawn · await · children · answer_dialog · send · task
+#      `fleet-orch` listing exactly spawn · await · children · answer_dialog · send · task · clear (T592)
 #      `--list` prints each server's list; `fleet` still answers a dispatch-group
 #      call (an old session's, road=legacy in the call log); a server that took over
 #      from a pre-group version keeps listing all of them and hands that on; a session with
@@ -1063,7 +1063,8 @@ import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 assert rows[1]["serverInfo"]["name"] == "fleet-orch", rows[1]
 tools = {t["name"]: t for t in rows[2]["tools"]}
-assert sorted(tools) == ["answer_dialog", "await", "children", "send", "spawn", "task"], sorted(tools)
+assert sorted(tools) == ["answer_dialog", "await", "children", "clear", "send", "spawn", "task"], sorted(tools)
+assert tools["clear"]["inputSchema"]["required"] == ["id"]   # T592
 assert tools["task"]["inputSchema"]["required"] == ["title"]   # issue #3330
 assert "required" not in tools["await"]["inputSchema"]          # issue or task (#3330)
 assert tools["spawn"]["inputSchema"]["required"] == ["issue"]
@@ -1072,8 +1073,8 @@ for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
 PY
 cli "$WORK/q.l0" --list && cli "$WORK/q.l1" --group orch --list || fail "Q: --list exited non-zero" "$(cat "$WORK/q.l0.err" "$WORK/q.l1.err")"
-[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 15 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|task' "$WORK/q.l0" \
-  && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog await children send spawn task " ] \
+[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 15 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|task|clear' "$WORK/q.l0" \
+  && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog await children clear send spawn task " ] \
   || fail "Q: --list is not each server's list" "$(cat "$WORK/q.l0"; echo ---; cat "$WORK/q.l1")"
 cli "$WORK/q.bad" --group zz --list && fail "Q: --group zz was accepted"
 # An old session (its list had spawn) calls it on `fleet`: answered, logged road=legacy.
@@ -1110,10 +1111,10 @@ printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
 python3 - "$WORK/q4" <<'PY' || fail "Q: a takeover from a pre-group server dropped tools from its session's list" "$(cat "$WORK/q4")"
 import json, sys
 lists = [r["result"]["tools"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip()) if "id" in r]
-assert [len(x) for x in lists] == [21, 15, 21, 21], [len(x) for x in lists]   # + task (#3330), − #4904's four, − #4898's four
+assert [len(x) for x in lists] == [22, 15, 22, 22], [len(x) for x in lists]   # + task (#3330), − #4904's four, − #4898's four, + clear (T592)
 assert "spawn" in {t["name"] for t in lists[0]}
 names = {t["name"] for t in lists[3]}
-assert {"spawn", "await", "children", "answer_dialog", "send", "task"} <= names, sorted(names)
+assert {"spawn", "await", "children", "answer_dialog", "send", "task", "clear"} <= names, sorted(names)
 PY
 grep -q '"list": "all" if SERVING\["list_all"\]' "$WORK/bin/fleet-mcp.py" \
   && grep -q 'SELF\] + sys.argv\[1:\]' "$WORK/bin/fleet-mcp.py" \

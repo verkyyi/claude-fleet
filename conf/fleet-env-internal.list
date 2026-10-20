@@ -78,6 +78,8 @@ FLEET_CLAUDE_BIN                   path: the claude binary fleet_find_tool tries
 FLEET_CLAUDE_COMM                  seam: the process name pane scans treat as Claude
 FLEET_CLAUDE_INSTALL_CMD           seam: the Claude Code installer command (fleet-login-bootstrap.sh) — tests swap in a stub
 FLEET_CLAUDE_TMP_ROOT              seam: the Claude scratchpad root the listener sweep anchors on (selftest sandbox)
+FLEET_CLEAR_CODEX_GAP              knob: seconds fleet-clear-send.sh waits between /clear and Enter in a Codex pane (1, T592)
+FLEET_CLEAR_VERIFY_SECS            knob: how long fleet-clear-send.sh waits for the new ledger segment before rc 4 (30, T592)
 FLEET_CLIENT                       knob: thin = a bare `fleet` opens the thin client (bin/fleet → fleet-thin.py, #3003) — the person's opt-in until EPIC #2999 C10 makes it the default
 FLEET_CLIENT_BEHIND_SECS           knob: how long the hub's /version is kept for the 请更新客户端 check (fleet-client-behind.py, 600 s, #3826)
 FLEET_CLIENT_DIR                   path: the shell's state dir the action loop reads (lease, key, where; fleet-shell.sh sets it, #1717)

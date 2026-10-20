@@ -646,6 +646,18 @@ Keyed by socket label as well as pane id: a pane id is unique per tmux server on
 | 4 | not taken within `FLEET_MOD_TAKE_SECS` (5) — cancelled by the same rename, so a late mod can never run it | today's send-keys |
 | 5 | the engine refused it (`.done` ok=false, reason on stderr) | today's send-keys |
 
+**Making another session run a command — the sanctioned roads.** A raw
+`tmux send-keys` into a live fleet pane is refused by `hooks/bash-guard.py`; each
+of these finds the window, gates on it being idle, delivers (mod first) and checks:
+`/clear` — `fleet-id.sh clear <ID | T-code>` (`bin/fleet-clear-send.sh`, the
+`clear` tool of `fleet-orch`, T592: by ID, this machine only, refused unless the
+turn is over (done / idle) or while a person types there, confirmed by a new native
+segment on the ID's ledger, audited in `logs/clear-send.log`; Claude and Codex
+differ only in its keystroke adapter) · `/compact` — `fleet-compact-send.sh` ·
+`/model` — `fleet-model-switch.sh` · a dialog's answer — `answer_dialog`
+(`fleet-dialog-answer.sh`) · a message — `send` (`fleet-peer-send.sh`) · `/exit` —
+the worker stop / migrate / restore scripts.
+
 The callers' own gates (idle wait, the operator-typing hold, the handoff's
 fresh-session verify, the model switch's status-line verify) are unchanged and
 run on both paths. Logs: `handoff-cycle.log` (`/clear via mod`, `… pickup via
