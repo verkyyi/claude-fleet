@@ -96,6 +96,7 @@
 2.6 cred-pool-dup
 1.0 cred-pool-follows-hub
 0.3 cred-probe-wrong
+0.6 cred-proxy-restart-gap
 0.4 cred-relay-down
 11.0 cred-relay-hub-restart
 1.4 cred-revoked-still-works

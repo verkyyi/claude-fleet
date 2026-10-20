@@ -315,6 +315,10 @@ def shared():
     extra = " ".join(t["settings"].get("FLEET_CRED_ALLOW_HOSTS", "") for t in tenants).strip()
     if extra:
         env["FLEET_CRED_ALLOW_HOSTS"] = extra
+    if os.environ.get("FLEET_CRED_HANDOFF") == "1":
+        # the machine daemon's start (T595): the proxy holding the lock hands its
+        # listening sockets to this one instead of being stopped first
+        env["FLEET_CRED_HANDOFF"] = "1"
     if test:    # the sandbox's fake upstreams and its peer-uid seam
         env.update({k: v for k, v in os.environ.items()
                     if k.startswith("FLEET_CRED_") and k not in ("FLEET_CRED_PROXY_LOG",)})

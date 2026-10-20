@@ -1167,6 +1167,66 @@ class D_RestartKeepsState(Sandbox):
         self.assertTrue(until(10, lambda: (self.child("c").get("pid") or 0) not in (0, cpid)))
 
 
+class D2_NoGapRestart(Sandbox):
+    """T595: the shared credential proxy restarted on every release, and for its
+    seconds every session's request was ECONNREFUSED."""
+
+    def runtime(self, sha):
+        d = os.path.join(self.d, sha)
+        os.makedirs(d, exist_ok=True)
+        rt = self.env["FLEET_NODE_RUNTIME"]
+        if os.path.lexists(rt):
+            os.unlink(rt)
+        os.symlink(d, rt)
+
+    def test_release_restart_leaves_a_kept_child_for_the_next_daemon(self):
+        a, b = "a" * 40, "b" * 40
+        self.runtime(a)
+        self.table(children=[{"name": "k", "cmd": ["/bin/sleep", "300"], "keep_on_restart": True},
+                             {"name": "n", "cmd": ["/bin/sleep", "301"]}])
+        p = self.start()
+        kpid = until(10, lambda: self.child("k").get("pid"))
+        npid = until(10, lambda: self.child("n").get("pid"))
+        self.assertTrue(kpid and npid)
+        self.runtime(b)
+        put(os.path.join(self.d, "db", "update-restart.json"), {"to": b})
+        p.wait(timeout=30)
+        self.assertTrue(fns.pid_alive(kpid), "the kept child went down with the daemon's release restart")
+        self.assertFalse(fns.pid_alive(npid), "a child without keep_on_restart was left running")
+        self.assertEqual(self.child("k").get("pid"), kpid, "the kept child's pid was not left for the next daemon")
+        self.start()
+        self.assertTrue(until(10, lambda: (self.state().get("supervisor") or {}).get("starts") == 2))
+        time.sleep(0.5)
+        self.assertEqual(self.child("k")["pid"], kpid, "the next daemon did not adopt the kept child")
+        self.assertEqual(self.child("k").get("restarts") or 0, 0)
+        self.assertIn("left running (pid %d)" % kpid, open(os.path.join(self.d, "sup.err")).read())
+
+    def test_reload_starts_the_new_copy_before_the_old_one_goes(self):
+        r = os.path.join(self.d, "lib")
+        os.makedirs(r)
+        pids = os.path.join(self.d, "pids")
+        # each copy books itself; an old one goes ~1 s after a newer one came (its drain)
+        sh = self.script("h.sh", 'echo "$$ ${FLEET_CRED_HANDOFF:-}" >> %s\n'
+                                 'while sleep 0.1; do [ "$(tail -1 %s | cut -d" " -f1)" = "$$" ] '
+                                 '|| { sleep 1; exit 0; }; done\n' % (pids, pids))
+        self.table(children=[{"name": "h", "cmd": [sh], "reload": r, "handoff": True,
+                              "env": {"FLEET_CRED_HANDOFF": "1"}}])
+        self.start()
+        pid1 = until(10, lambda: self.child("h").get("pid"))
+        self.assertTrue(pid1)
+        put(os.path.join(r, "fleet-cred-proxy.py"), "new bytes\n")
+        pid2 = self.new_pid("h", pid1)
+        self.assertTrue(pid2, "the reload started no new copy")
+        self.assertTrue(fns.pid_alive(pid1), "the old copy was stopped before the new one took over")
+        self.assertTrue(until(10, lambda: not fns.pid_alive(pid1)), "the old copy never went")
+        log = os.path.join(self.d, "sup.err")
+        self.assertTrue(until(5, lambda: "pid %d drained and exited" % pid1 in open(log).read()))
+        self.assertEqual([l.split()[1:] for l in open(pids).read().splitlines()], [["1"], ["1"]],
+                         "the handoff switch did not reach the child")
+        self.assertTrue(fns.pid_alive(pid2))
+        self.assertEqual(self.child("h").get("restarts") or 0, 0, "the old copy's exit counted as a death")
+
+
 class E_Status(Sandbox):
     def test_check_codes_and_lines(self):
         sh = self.script("ok.sh", "exit 0\n")
