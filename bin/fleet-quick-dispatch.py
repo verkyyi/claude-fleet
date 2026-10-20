@@ -17,6 +17,11 @@ it — from any window of a thin client's 看台: a worker's, a no-repo session'
                                           it on; prints 「已发出：…」 or why not
                                           (⌘P's 「新任务」 row, issue #3180, sends
                                           through it — no second dialog)
+    fleet-quick-dispatch.py send --blank --repo R [--agent A] [--view V]
+                                          a BLANK session of R under hub authority
+                                          (T652, EPIC T651 C1): its record opens on
+                                          the placeholder 「新会话」 with no first
+                                          turn; the first prompt renames both, once
     fleet-quick-dispatch.py pick          the repo ⌘P's 「新任务」 sends to: line 1
                                           the pick (empty = ask), then every repo
     fleet-quick-dispatch.py grid [--view V]
@@ -274,6 +279,9 @@ def task_send(data, view="", client=""):
     goes to the window it opened. (ok, words)."""
     repo, fleet = data["repo"], fleet_of(view)
     title = data.get("draft") or data.get("title") or ""
+    blank = bool(data.get("blank"))
+    if blank:
+        title = tr("dispatch_new_title")
     host = socket.gethostname().split(".")[0]
     if repo.lower() not in hosted(fleet):
         failed(data, view, "not hosted here")
@@ -287,6 +295,7 @@ def task_send(data, view="", client=""):
         body = title
         title = head if len(head) <= TASK_TITLE_MAX else head[:TASK_TITLE_MAX - 1] + "…"
     argv += ["--title", title, "--repo", repo, "--spawn", "--origin", "hub", "--via", "⌘P", "--print"]
+    argv += ["--blank"] if blank else []
     argv += ["--body-file", "-"] if body is not None else []
     argv += ["--agent", data["agent"]] if data.get("agent") in AGENTS else []
     argv += ["--session", fleet] if fleet else []
@@ -545,6 +554,16 @@ def main(argv):
                          ensure_ascii=False))
         return 0
     o = opts(argv[1:] if argv[:1] in (["payload"], ["send"]) else argv)
+    if argv[:1] == ["send"] and o.get("--blank"):
+        # a blank session under hub authority (T652): a record, no words — go_new's road
+        if not o["--repo"]:
+            print(tr("dispatch_norepo"), file=sys.stderr)
+            return 2
+        data = {"repo": o["--repo"], "agent": o["--agent"] if o["--agent"] in AGENTS else None,
+                "blank": True, "via": "dispatch"}
+        ok, said = task_send(data, o["--view"], o["--client"])
+        print(said)
+        return 0 if ok else 1
     if argv[:1] in (["payload"], ["send"]):
         agent = o["--agent"] if o["--agent"] in AGENTS else None
         data = payload(o["--title"], o["--repo"] or repo_default(), bool(o.get("--codex")), agent)

@@ -38,19 +38,18 @@ The panel looks roughly like this (sample data):
 ─ Done, to collect 1
   ✓ T127     Claude  Upgrade dependencies        web-app
 ▸ Ended · still open (4)
-  ⚡ New session (blank)
+  ⚡ New session
 ↵ go  Tab act  ↑↓ pick  type to filter  ? legend  esc close  ↑ to ⚡
 ```
 
 ### Open a session
 
-- **Write a new task**: pick “⚡ New session (blank)” or “⚡ New task” below the search results, then press Enter or Tab to open the “⚡ New task” page: a multi-line draft on top, the repository, agent and buttons under it. Search text seeds an empty draft only. Enter in the editor adds a newline. Tab / Shift+Tab walks the editor, repository, agent and buttons; left/right changes the repository or agent. Only “Open with draft (not sent)” opens a session with your complete draft in its input. Review and send it from that session.
-- **Open a blank session**: choose “Open blank session” on the same page. It uses the selected repository and agent; choose “No repository” if you do not need one. Opening a blank session keeps the draft.
+- **Open a new session**: pick “⚡ New session” and press Enter (↑ from the top of the list gets there) to open the “New session” box: three items only — “Repo ‹›”, “Agent ‹›” and “Open ↵” — already chosen, with the cursor on “Open”, so another Enter opens it. To change one: ↑↓ or Tab moves between items, ←→ changes the repository or agent (“No repo” when you need none), and Enter on a value goes back to “Open”. There is nothing to write — say what to do inside the session once it opens; after your first message, its row in the list (and its task record) is renamed to that message's first line.
 - **Switch sessions**: type part of a title or ticket number, select a session with ↑↓, and press Enter.
 
-The actions page, a question such as a rename, and the new-task draft are whole pages: the list area is replaced, the top line names what it is about (the session, or “⚡ New task”), and below it one item a line — ↑↓ to pick, ↵ to run; there is no floating box. Escape goes back a level (from a rename to the actions page, then to the list), the list keeping its selection; another Escape closes the panel. Click to select a row, double-click to enter a session or open the new task; items on a page are clickable.
+The actions page, a question such as a rename, and the new-session box are whole pages: the list area is replaced, the top line names what it is about (the session, or “⚡ New session”), and below it one item a line — ↑↓ to pick, ↵ to run; there is no floating box. Escape goes back a level (from a rename to the actions page, then to the list), the list keeping its selection; another Escape closes the panel. Click to select a row, double-click to enter a session or open the new-session box; items on a page are clickable (click a repository or agent again for the next one, click “Open” to open).
 
-Draft text, repository, agent, caret and control focus are stored privately on this machine for this view. They survive going back and session switches. “Clear draft” or a confirmed successful draft opening clears the text; failures and unconfirmed openings retain it. Repository and agent remain selected. Resize preserves editor state and selection, clamping scroll ranges only where necessary. At least 48 columns is recommended; narrower terminals show a notice and keep Tab and Escape working. Long content scrolls inside the page.
+The repository and agent chosen in the box are stored privately on this machine for this view, and come back the next time it opens. Resize keeps the selection, clamping scroll ranges only where necessary. At least 48 columns is recommended; narrower terminals show a notice and keep Tab and Escape working. Long content scrolls inside the page.
 
 
 ### Session states

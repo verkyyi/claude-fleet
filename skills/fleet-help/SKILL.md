@@ -41,7 +41,7 @@ The question wins over the reading: «手机上怎么…» asked from the Mac is
 | former client keys (⌘↑↓ ⌘[ ⌘] ⌘↩ ⌘Q …), their current replacements or optional extras | `docs/dev/CLIENT.md` § 「One key + the panel」 · `docs/public/zh/member/usage.md` § 「一个键：总面板」 |
 | the phone's keys (⌃空格 · F12 · ⌃] p, the letters you can add), tapping them in Termius or Blink | `docs/dev/CLIENT.md` § 「The keys: one, to open the panel」 · `docs/dev/CLIENT.md` § 「Termius (iPhone)」 |
 | a new session | `docs/public/zh/member/usage.md` § 「开一个会话」 · `docs/dev/CLIENT.md` § 「A new session in one command」 |
-| 派一件事 / hand a task to a worker | `docs/public/zh/member/usage.md` § 「开一个会话」 (⚡ opens the editor; 「开窗预填（不发送）」 opens a session with the draft, then the person sends it) |
+| 派一件事 / hand a task to a worker | `docs/public/zh/member/usage.md` § 「开一个会话」 (⚡ opens the 「新会话」 box — 仓库 · Agent · 开, already chosen, ↵ opens; the person then says the task in the session) |
 | a session's state, who is waiting on them | `docs/public/zh/member/usage.md` § 「会话的状态」 · `docs/dev/STATE.md` § 「The states」 |
 | the session's shell | `docs/public/zh/member/usage.md` § 「一个会话能做的事」 (Tab → 「在它的目录开 shell」; open the panel again to return to the session) |
 | leaving, quitting, coming back to a session | `docs/dev/CLIENT.md` § 「放到后台 and 退出 fleet」 · `docs/dev/CLIENT.md` § 「会话结束了」 |

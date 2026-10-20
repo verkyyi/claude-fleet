@@ -116,7 +116,11 @@ set -uo pipefail
 # Args (order-independent): --name <n> / --name=<n> is the optional window name
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
-# below); the lone positional is the headless <fleet-session>.
+# below); the lone positional is the headless <fleet-session>. --placeholder
+# (T652, EPIC T651 C1): the --name is only a blank session's placeholder
+# (「新会话」) — never typed into its input; stamped `@title_pending` before the
+# agent starts, so its first prompt renames the window (and the record) once
+# (set-claude-state.sh's @task_line block).
 set_agent() {   # a row of the adapter table (bin/fleet_agent_adapter.py beside this script or its link's target, T620)
   local s=$0 d
   d=$(cd "$(dirname "$s")" && pwd); [ -f "$d/fleet_agent_adapter.py" ] || { [ -L "$s" ] && d=$(cd "$(dirname "$s")" && cd "$(dirname "$(readlink "$s")")" && pwd); }
@@ -125,7 +129,7 @@ set_agent() {   # a row of the adapter table (bin/fleet_agent_adapter.py beside 
   [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-raw-session: contradictory --agent values\n' >&2; exit 2; }
   AGENT=$1
 }
-NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; PREV_ID=""; REOPEN_FID=""; ID_TASK=""; ID_PARENT=""
+NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; PREV_ID=""; REOPEN_FID=""; ID_TASK=""; ID_PARENT=""; PLACEHOLDER=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -228,6 +232,7 @@ while [ "$#" -gt 0 ]; do
     --id-parent)   ID_PARENT="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --id-parent=*) ID_PARENT="${1#--id-parent=}"; shift ;;
     --fid=*)       REOPEN_FID="${1#--fid=}"; shift ;;
+    --placeholder) PLACEHOLDER=1; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
@@ -508,6 +513,7 @@ if [ "$BG" = 1 ]; then
   # canonical (checked above): no quote or space can be in it
   [ -n "$REAP" ] && owarg="$owarg --reap=$REAP"
   [ "$TEST_ID" = 1 ] && owarg="$owarg --test-identity"
+  [ "$PLACEHOLDER" = 1 ] && owarg="$owarg --placeholder"
   [ -n "$TASK_REF" ] && owarg="$owarg --task=$TASK_REF"   # T<n>, checked above
   [ -n "$RESUME_SID" ] && owarg="$owarg --resume=$RESUME_SID"   # hex + dashes, checked above
   case "$WT_ARG" in '') ;; *"'"*) refuse "raw: --worktree path has a quote"; exit 1 ;;
@@ -758,6 +764,8 @@ while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n 
   # A task's record rides on the window before its agent starts (EPIC T497 C8:
   # no claim, no launch binding — the window's ID is the session).
   [ -n "$TASK_REF" ] && stamp="$stamp$(fleet_win_stamp_cmd @task "$TASK_REF")"
+  # a blank session's placeholder name, renamed by its first prompt (T652)
+  [ "$PLACEHOLDER" = 1 ] && [ -n "$NAME" ] && stamp="$stamp$(fleet_win_stamp_cmd @title_pending "$NAME")"
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
     || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
          # Say WHY when it is the server (issue #2477): the line rides into
@@ -871,6 +879,7 @@ fleet_wid_stamp "$win" "$SOCK" >/dev/null 2>&1 || :
 # pane id now so a later split/focus change cannot redirect the draft elsewhere.
 # Explicit --prompt keeps its existing seeded behavior and takes precedence.
 INPUT_DRAFT=${DRAFT:-$NAME}
+[ "$PLACEHOLDER" = 1 ] && INPUT_DRAFT=$DRAFT   # a placeholder name is never typed in (T652)
 if [ -n "${INPUT_DRAFT//[[:space:]]/}" ] && [ -z "$PROMPT" ]; then
   df=$(mktemp "${TMPDIR:-/tmp}/scratch-draft.XXXXXX")
   pane=$(TM display-message -p -t "$win" '#{pane_id}' 2>/dev/null)

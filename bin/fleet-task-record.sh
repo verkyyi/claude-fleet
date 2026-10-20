@@ -71,7 +71,14 @@
 #                       it opens in, whose it is, its window receipt after the
 #                       T<n> line) — ⌘P's ⚡ row in a 看台 (issue #4965:
 #                       `--origin hub --via ⌘P`, the person's own task — no
-#                       parent session on the record).
+#                       parent session on the record). --blank (T652, EPIC
+#                       T651 C1): a blank new session — the title is only its
+#                       placeholder (「新会话」), no first turn is given, and each
+#                       one is its own record (the token carries a nonce).
+#   fleet-task-record.sh retitle T<n> --from F --title T
+#                     → a blank session's record renamed ONCE (T652): from its
+#                       placeholder F to its first prompt's first line T — the
+#                       hub compares on F, so a second rename changes nothing.
 #   fleet-task-record.sh respawn T<n> [--prev <ID>] [--origin O] [--print] [<session>]
 #                     → a record whose session never came up (or went down, its
 #                       window gone) opened again on the SAME record (T642): its
@@ -98,7 +105,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 die() { printf 'fleet-task-record: %s\n' "$2" >&2; exit "$1"; }
-usage() { die 2 "usage: fleet-task-record.sh new|get|resolve|code|set|attach|of|find-issue … (see the header)"; }
+usage() { die 2 "usage: fleet-task-record.sh new|get|resolve|code|set|retitle|attach|of|find-issue … (see the header)"; }
 
 TREF_RE='^T[1-9][0-9]{0,9}$'
 is_tref() { printf '%s' "${1:-}" | grep -Eq "$TREF_RE"; }
@@ -250,7 +257,7 @@ EOF
 esac
 
 if [ "$cmd" = dispatch ]; then
-  title='' bodyf='' repo='' spawn=0 reap='' agent='' as_agent='' tsess='' pwin='' origin='' via=编排
+  title='' bodyf='' repo='' spawn=0 reap='' agent='' as_agent='' tsess='' pwin='' origin='' via=编排 blank=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --title) title="${2:-}"; shift ;;
@@ -267,17 +274,21 @@ if [ "$cmd" = dispatch ]; then
       --origin) origin="${2:-}"; shift ;;
       --via) via="${2:-编排}"; shift ;;
       --print) pwin=--print ;;
+      --blank) blank=1 ;;
       *) usage ;;
     esac
     shift
   done
   [ -n "$title" ] || usage
+  [ "$blank" = 0 ] || [ -z "$bodyf" ] || die 2 "--blank takes no words"
   applicable || die 3 "no hub here: a task has nowhere to be recorded (issue #4898)"
   body=''
   if [ "$bodyf" = - ]; then body=$(cat); elif [ -n "$bodyf" ]; then body=$(cat "$bodyf") || die 2 "cannot read $bodyf"; fi
   # One token per (caller, words): a session asking twice is one record.
   okey=$(fleet_origin_key 2>/dev/null) || okey=''
   tok="orch:${okey:-hub}:$(printf '%s\n%s' "$title" "$body" | shasum 2>/dev/null | cut -c1-16)"
+  # a blank session's words are only its placeholder: every open is its own record
+  [ "$blank" = 0 ] || tok="$tok-$(date +%s)$$"
   # A development task's session starts as the worker template, as
   # dash-issue-session.sh gives an issue worker (#3122): the shipped fleet-worker
   # when this login has it, else a plain session (issue #4897).
@@ -341,16 +352,24 @@ JSON
   # record waits (await T<n> names it).
   if [ -n "$repo" ]; then
     [ "$spawn" = 1 ] || exit 0
-    pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
-    if [ -n "$body" ]; then printf '%s\n\n%s\n' "$title" "$body" > "$pf"; else printf '%s\n' "$title" > "$pf"; fi
+    pfa=--placeholder
+    if [ "$blank" = 0 ]; then
+      pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
+      if [ -n "$body" ]; then printf '%s\n\n%s\n' "$title" "$body" > "$pf"; else printf '%s\n' "$title" > "$pf"; fi
+      pfa="--prompt-file=$pf"
+    fi
     exec bash "$BIN/dash-raw-session.sh" --repo "$repo" --task "$t" --name "$title" --reap "${reap:-merged}" \
-      ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${origin:+--origin "$origin"} $pwin "--prompt-file=$pf" ${tsess:+"$tsess"}
+      ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${origin:+--origin "$origin"} $pwin ${pfa:+"$pfa"} ${tsess:+"$tsess"}
   fi
   [ "$spawn" = 1 ] || exit 0
-  pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
-  printf '%s\n' "${body:-$title}" > "$pf"
+  pfa=--placeholder
+  if [ "$blank" = 0 ]; then
+    pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
+    printf '%s\n' "${body:-$title}" > "$pf"
+    pfa="--prompt-file=$pf"
+  fi
   exec bash "$BIN/dash-raw-session.sh" --no-repo --task "$t" --name "$title" ${reap:+--reap "$reap"} \
-    ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${origin:+--origin "$origin"} $pwin "--prompt-file=$pf" ${tsess:+"$tsess"}
+    ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${origin:+--origin "$origin"} $pwin ${pfa:+"$pfa"} ${tsess:+"$tsess"}
 fi
 
 # respawn T<n> [--prev <ID>] [--origin O] [--print] [<fleet session>] (T642): a
@@ -528,6 +547,23 @@ case "$cmd" in
     [ "${#args[@]}" -gt 0 ] || usage
     out=$(call POST "/v1/node/tasks/$t" "$(json ${args[@]+"${args[@]}"})") || exit $?
     remember "$out"; code_line "$out" ;;
+  retitle)
+    # a blank session's record (T652): placeholder → its first prompt's first line, once
+    is_task_ref "${1:-}" || usage
+    t="${1#\#}"; shift
+    from='' to=''
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --from) from="${2:-}"; shift ;;
+        --title) to="${2:-}"; shift ;;
+        *) usage ;;
+      esac
+      shift
+    done
+    [ -n "$from" ] && [ -n "$to" ] || usage
+    call POST "/v1/node/tasks/$t" "$(python3 -c 'import json,sys
+print(json.dumps({"authority_version": 1, "mutation": {"kind": "retitle", "idempotency_key": "retitle-" + sys.argv[1],
+    "from": sys.argv[2], "title": sys.argv[3]}}, ensure_ascii=False))' "$t" "$from" "$to")" >/dev/null || exit 1 ;;
   attach)
     is_task_ref "${1:-}" || usage
     t="${1#\#}"

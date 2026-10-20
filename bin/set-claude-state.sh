@@ -364,13 +364,43 @@ if isinstance(p, str):
         sys.exit(0)
     sys.stdout.write(p if len(p) <= 40 else p[:39].rstrip() + "…")
 ' 2>/dev/null)
-    _soh=$(printf '\001')
+    _soh=$(printf '\001'); _tpeer=0
     case "$_tl" in "$_soh"*)
+      _tpeer=1
       _tw=${_tl#?}; _tb=${_tw#*"$_soh"}; _tw=${_tw%%"$_soh"*}
       _tl=$(sh "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/fleet-ui-lang.sh" t view_from_fmt "$_tw" "$_tb" 2>/dev/null)
       [ -n "$_tl" ] || _tl="来自 ${_tw}：${_tb}" ;;
     esac
-    [ -n "$_tl" ] && tmux set-window-option -t "$TMUX_PANE" @task_line "$_tl" 2>/dev/null ;;
+    [ -n "$_tl" ] && tmux set-window-option -t "$TMUX_PANE" @task_line "$_tl" 2>/dev/null
+    # A blank new session (T652, EPIC T651 C1) opened on a placeholder name
+    # (`@title_pending`, 「新会话」): its first prompt's first line (≤30 characters)
+    # becomes the window's name, its @task_line and its hub record's title — once
+    # (the stamp goes; the hub compares on the placeholder). A message from another
+    # session renames nothing.
+    _tp=$(tmux display-message -p -t "$TMUX_PANE" '#{@title_pending}' 2>/dev/null)
+    [ "$_tpeer" = 0 ] && [ -n "$_tl" ] || _tp=''
+    if [ -n "$_tp" ]; then
+      tmux set-window-option -u -t "$TMUX_PANE" @title_pending 2>/dev/null
+      _t1=$(printf '%s' "$_hp" | python3 -c '
+import json, re, sys
+try:
+    p = json.load(sys.stdin).get("prompt") or ""
+except (ValueError, AttributeError):
+    sys.exit(0)
+line = next((l for l in (re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", " ", x).strip() for x in str(p).splitlines()) if l), "")
+line = re.sub(r"\s+", " ", line)
+sys.stdout.write(line if len(line) <= 30 else line[:29].rstrip() + "…")
+' 2>/dev/null)
+      if [ -n "$_t1" ]; then
+        tmux rename-window -t "$TMUX_PANE" "$_t1" 2>/dev/null
+        tmux set-window-option -t "$TMUX_PANE" @task_line "$_t1" 2>/dev/null
+        _tk=$(tmux display-message -p -t "$TMUX_PANE" '#{@task}' 2>/dev/null)
+        case "$_tk" in T[1-9]*)
+          ( bash "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/fleet-task-record.sh" retitle "$_tk" \
+              --from "$_tp" --title "$_t1" </dev/null >/dev/null 2>&1 & ) ;;
+        esac
+      fi
+    fi ;;
   esac
 fi
 
