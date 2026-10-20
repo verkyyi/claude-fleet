@@ -294,11 +294,19 @@ NODE_FMT = "|".join(["#{@fleet_id}", "#{@peer_cur}", "#{@peer_node}", "#{@peer_l
 TASK_RE = re.compile(r"T[1-9][0-9]{0,17}")
 
 
-def ticket(issue, task):
-    """The number in the bar (issue #3325): the issue's #N when there is one,
-    else the hub's task record T<n> (@task), else nothing."""
+def ticket(issue, task, fid=""):
+    """The number in the bar (issue #3325): the issue's #N when there is one, else
+    the window's ID code as the panel shows it (EPIC T644 C4: 2 places, unique among
+    the unfinished — fleet_id.shown), else the hub's task record T<n> (@task, an
+    older window with no ID), else nothing."""
     if issue.isdigit():
         return "#" + issue
+    fi = FV.fleet_id_mod()
+    if fi is not None and fi.is_fid(fid or ""):
+        try:
+            return fi.shown(fid)
+        except Exception:
+            pass
     return task if TASK_RE.fullmatch(task or "") else ""
 
 
@@ -411,14 +419,14 @@ def node_record(kv):
         rec = {"state": state,
                "kind": ("perm" if q[9].startswith("perm") else "ask") if state == "needs" else "",
                "q": FV.one_line(q[27]) if state == "needs" else "",
-               "key": ticket(q[3], "" if peer else p[14]), "title": (q[16] or q[7]).strip(),
+               "key": ticket(q[3], "" if peer else p[14], q[0][4:].rpartition("/")[2]), "title": (q[16] or q[7]).strip(),
                "node": q[1].strip() or pnode or here, "lost": q[2] == "lost", "wid": q[0][4:]}
         rec.update(line_ctx(q))
     else:
         state = p[4] or "idle"
         rec = {"state": state,
                "kind": ("perm" if p[5].startswith("perm") else "ask") if state == "needs" else "",
-               "key": ticket(p[6], p[14]), "title": p[13].strip(),
+               "key": ticket(p[6], p[14], wid.rpartition("/")[2] or fid), "title": p[13].strip(),
                "node": pnode or here, "lost": False, "wid": wid}
     if not peer:
         rec.update(stamp_ctx(p))   # this machine's own window: its stamps are the freshest reading

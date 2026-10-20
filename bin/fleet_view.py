@@ -1086,7 +1086,8 @@ def task_cache_file():
 
 
 def task_cache():
-    """The hub task records' panel words on disk, {T<n>: [read at, agent, repo]} —
+    """The hub task records' panel words on disk, {T<n>: [read at, agent, repo,
+    outcome]} (outcome since EPIC T644 C4; an older 3-long entry reads as open) —
     one file read per change (mtime), never a hub call (T593: a popup is a new
     process each time, so an in-process cache bought nothing and every ⌘P waited
     on the hub)."""
@@ -1109,18 +1110,32 @@ def task_cache():
 
 def hub_task(task):
     """What the panel knows of a hub task record — {agent: actual_agent, repo: its
-    repo, else the EPIC charter marker's `repo=` in its words (T593)}, off
+    repo, else the EPIC charter marker's `repo=` in its words (T593), outcome: its
+    end (succeeded / failed / cancelled / refused, '' while open — C4)}, off
     task_cache only. A task it lacks, or read longer ago than
     FLEET_VIEW_TASK_AGENT_SECS (300 s), is queued for task_cache_kick: a detached
     read fills it for the next frame."""
     if not re.match(r"^T[1-9][0-9]*$", task or ""):
         return {}
     hit = task_cache().get(task)
-    if not (isinstance(hit, list) and len(hit) == 3 and time.time() - (hit[0] or 0) < fenv("FLEET_VIEW_TASK_AGENT_SECS", 300)):
+    if not (isinstance(hit, list) and len(hit) >= 3 and time.time() - (hit[0] or 0) < fenv("FLEET_VIEW_TASK_AGENT_SECS", 300)):
         _ID_CACHE.setdefault("tasks_want", set()).add(task)
-    if not isinstance(hit, list) or len(hit) != 3:
+    if not isinstance(hit, list) or len(hit) < 3:
         return {}
-    return {"agent": hit[1] if hit[1] in AGENTS else "", "repo": hit[2] if SLUG_RE.match(hit[2] or "") else ""}
+    return {"agent": hit[1] if hit[1] in AGENTS else "", "repo": hit[2] if SLUG_RE.match(hit[2] or "") else "",
+            "outcome": hit[3] if len(hit) > 3 and hit[3] in TASK_ENDS else ""}
+
+
+# A task record's end (fleet_task_control.TERMINAL): a row whose record says one is
+# 做完待收 whatever its window still runs (EPIC T644 C4, the operator's 2026-10-20 word —
+# a Codex loop left running after the merge kept a closed task 在干活).
+TASK_ENDS = ("succeeded", "failed", "cancelled", "refused")
+
+
+def task_ended(e):
+    """The row's hub task record has ended (off task_cache — never a hub call)."""
+    o = (id_record(e.get("fid") or "") or {}).get("opened") or {}
+    return bool(hub_task(e.get("task") or o.get("task") or "").get("outcome"))
 
 
 def hub_task_agent(task):
@@ -1130,7 +1145,7 @@ def hub_task_agent(task):
 
 
 def task_read(task):
-    """One record off the hub → [now, agent, repo] (None unread). `fleet-task-record.sh
+    """One record off the hub → [now, agent, repo, outcome] (None unread). `fleet-task-record.sh
     get`, bounded by FLEET_VIEW_PR_TIMEOUT; FLEET_VIEW_TASK_GET (a command, the T<n>
     appended) is the selftest's seam. Only task_cache_fill calls it — never a frame."""
     secs = fenv("FLEET_VIEW_PR_TIMEOUT", 3)
@@ -1155,7 +1170,9 @@ def task_read(task):
                 pass
             m = EPIC_MARK_RE.search(words)
             repo = (re.search(r"\brepo=(\S+)", m.group(1)) or [None, ""])[1] if m else ""
-        return [time.time(), agent if agent in AGENTS else "", repo if SLUG_RE.match(repo) else ""]
+        outcome = str(t.get("outcome") or "")
+        return [time.time(), agent if agent in AGENTS else "", repo if SLUG_RE.match(repo) else "",
+                outcome if outcome in TASK_ENDS else ""]
     except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
         return None
 
@@ -1182,10 +1199,10 @@ def task_cache_fill(tasks):
     for t, v in got.items():
         if v:
             cur[t] = v
-        elif t in cur and isinstance(cur[t], list) and len(cur[t]) == 3:
+        elif t in cur and isinstance(cur[t], list) and len(cur[t]) >= 3:
             cur[t][0] = time.time()       # unread: tried again after the TTL, not every frame
         else:
-            cur[t] = [time.time(), "", ""]
+            cur[t] = [time.time(), "", "", ""]
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = Path(str(p) + ".%d" % os.getpid())
@@ -1308,6 +1325,31 @@ def id_apply(e, fid, known, live=True):
         e["word"] = say("view_legend_exited") if not res else e.get("word", "")
 
 
+def id_display(groups):
+    """The ID column shows the code that tells the UNFINISHED apart (EPIC T644 C4):
+    every row above 已结束 but 做完待收 is unfinished; each of those groups' rows shows
+    fleet_id.display_short over them (2 places, one more while another unfinished one
+    shares them) and keeps the written code (≥ 4) as `code` for its page. The set is
+    saved (ids/.open) for the top bar and the notifications; 已结束 and 已关闭 rows keep
+    the written code. Nothing to show ⇒ nothing changes."""
+    fi = fleet_id_mod()
+    if fi is None:
+        return
+    rows = [e for g in GROUPS for e in groups.get(g, ()) if fi.is_fid(e.get("fid") or "")]
+    live = {e["fid"] for e in rows if e.get("group") != "done"}
+    for e in rows:
+        e["code"] = e.get("id") or ""
+        e["open_id"] = e["fid"] in live
+        try:
+            e["id"] = fi.display_short(e["fid"], live)
+        except Exception:
+            pass
+    try:
+        fi.open_save(live)
+    except Exception:
+        pass
+
+
 def id_conflicts(rows):
     """S9: live rows sharing one native segment — each marked with the others' codes."""
     by = {}
@@ -1392,7 +1434,8 @@ def id_page(e, w):
     if not e.get("fid"):
         return []
     out = [("", ())]
-    out.append(("  " + say("view_id_head_fmt", e.get("id") or "", e["fid"]), ("dim",)))
+    # the WRITTEN code (≥ 4, EPIC T644 C4) — the column shows the shorter one
+    out.append(("  " + say("view_id_head_fmt", e.get("code") or e.get("id") or "", e["fid"]), ("dim",)))
     if e.get("aliases"):
         out.append(("  " + say("view_id_aliases_fmt", " ".join(e["aliases"])), ("dim",)))
     segs = e.get("segs") or []
@@ -1726,6 +1769,10 @@ def entries(vid, now=None, hub=True):
         id_apply(e, wins.get(target, ("", "", 0))[0] if local else target.rpartition("/")[2], known)
         if not e["repo"]:
             norepo.append(e)
+        if e["state"] in ("working", "looping", "idle") and task_ended(e):
+            # its record has ended: 做完待收, even with a loop still running in its window
+            e["state"], e["sym"] = "done", sym_of("done", e["lost"])
+            e["word"] = state_words("done")
         if e["state"] != state:
             grp = e["group"] = group_of(e["state"], section == "pin", landed, section == "ended", bool(pend), stage)
         if grp == "ended":
@@ -1814,6 +1861,7 @@ def entries(vid, now=None, hub=True):
             for e in moved:
                 e.pop("fold", None)
             groups["ask"] += moved
+    id_display(groups)
     multi = len(set(repos)) >= 2
     out = []
     for g in GROUPS:
@@ -1981,15 +2029,20 @@ def issue_hit(token, e):
 
 def id_code_hit(token, e):
     """A word written as the row's ID code (C11): `k3f9`, `#K3F9`, I/L/O read as 1/1/0,
-    a prefix of the row's code; the old `t-hfkc7` for one version. A number never is."""
+    a prefix of the row's code; the old `t-hfkc7` for one version. A number never is.
+    2 places are enough (EPIC T644 C4: the code a row shows); `visible` keeps a
+    finished row's code hit only while no unfinished row has one (convention 4)."""
     fi = fleet_id_mod()
     fid = e.get("fid") or ""
     if fi is None or not fi.is_fid(fid):
         return False
-    p = fi.parse_code(token)
+    p = fi.parse_code(token, fi.DISPLAY_MIN)
     if p is None:
         return False
     return (fi.legacy_encode(fid) if p[1] else fi.encode(fid)).startswith(p[0])
+
+
+CODE_HIT = 2100
 
 
 def score_token(token, e):
@@ -2002,8 +2055,13 @@ def score_token(token, e):
     if i >= 0:
         return 3000 - i + (200 if word_start(name, i) else 0)
     if id_code_hit(token, e):
-        return 2100
-    hay = " ".join(str(x) for x in [e.get("name"), e.get("id"), e.get("fid")] + list(e.get("aliases") or ()) if x).lower()
+        return CODE_HIT
+    # a code is a PREFIX (id_code_hit above), never a substring, and the full ID
+    # only for a word long enough to mean it: 2 typed places (C4) would light every
+    # row whose code or hex happens to hold them
+    fid = e.get("fid") or ""
+    hay = " ".join(str(x) for x in [e.get("name"), "" if fid else e.get("id"), fid if len(token) >= 8 else ""]
+                   + list(e.get("aliases") or ()) if x).lower()
     i = hay.find(token)
     if i >= 0:
         return 2000 - i
@@ -2060,6 +2118,11 @@ def visible(items, query, opened):
     asks = {e["of"]: e for e in items if e["kind"] == "ask"}
     if query.split():
         hits = [(score(query, e), i, e) for i, e in enumerate(items) if e["kind"] == "sess"]
+        toks = query.split()
+        # a typed code (EPIC T644 C4, convention 4): the unfinished first — while one
+        # of them answers, a finished row only its code would list stays out
+        if len(toks) == 1 and any(e.get("open_id") and id_code_hit(toks[0].lower(), e) for _, _, e in hits):
+            hits = [h for h in hits if h[2].get("open_id") or h[0] != CODE_HIT]
         out = []
         for _, _, e in sorted((h for h in hits if h[0] is not None), key=lambda h: (-h[0], h[1])):
             out.append(dict(e, depth=0))

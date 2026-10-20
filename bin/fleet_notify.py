@@ -101,7 +101,23 @@ def classify(r):
 
 
 def subject(r):
-    return ("#%s" % r["issue"]) if r.get("issue") else (r.get("name") or r.get("wid") or "?")
+    """Who a title names: the issue's #N, else the session's ID code as the panel
+    shows it (EPIC T644 C4: `K5 · its name` — 2 places, unique among the
+    unfinished), else its name, else its worker id."""
+    if r.get("issue"):
+        return "#%s" % r["issue"]
+    name = r.get("name") or ""
+    code = ""
+    try:
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import fleet_id
+        code = fleet_id.shown((r.get("wid") or "").rpartition("/")[2])
+    except Exception:
+        code = ""
+    if code:
+        return code + (" · " + name if name else "")
+    return name or r.get("wid") or "?"
 
 
 def batch_of(r):

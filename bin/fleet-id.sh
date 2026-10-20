@@ -25,8 +25,12 @@
 #   fleet-id.sh get    <ID | code> [--json]  the ID, its segments (agent · native id ·
 #                                            start–end · trigger · compactions), results
 #   fleet-id.sh short  <ID>                  its short code, K3F9 (4+, letter first)
+#   fleet-id.sh display <ID>                 the code a panel SHOWS, K5 (2+, unique among
+#                                            the unfinished — ids/.open; EPIC T644 C4)
 #   fleet-id.sh resolve <ID | code>        → the full ID; rc 1 none, rc 2 ambiguous
-#                                            (the candidates on stderr — never a pick)
+#                                            (the candidates on stderr — never a pick); a
+#                                            2+ prefix is looked up among the unfinished
+#                                            first, then the whole history (4+)
 #   fleet-id.sh status <ID | code>         {state, label, result, conflict}: the one word a
 #                                            reader shows (EPIC T497 C4 — S2 / S7 / S9)
 #   fleet-id.sh route <ID | code>          who takes what was meant for it: `<ID>\t<how>`,
@@ -112,7 +116,7 @@ esac
 # start_word reads as 「窗口在、agent 不在」. FLEET_ID_NOAGENT_CMD is its seam.
 live='' scanned='' noagent=''
 case "$1" in
-  open|short|resolve|get|native|result|progress|start-word|of-task|close|status|route|children|family|await|history|continue|reopen)
+  open|short|display|resolve|get|native|result|progress|start-word|of-task|close|status|route|children|family|await|history|continue|reopen)
     rows=''
     if [ -n "${FLEET_ID_LIVE_CMD:-}" ]; then live=$(eval "$FLEET_ID_LIVE_CMD") && scanned=1
       [ -z "${FLEET_ID_NOAGENT_CMD:-}" ] || noagent=$(eval "$FLEET_ID_NOAGENT_CMD")
